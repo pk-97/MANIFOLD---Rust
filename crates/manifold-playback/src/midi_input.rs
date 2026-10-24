@@ -57,7 +57,10 @@ const MAX_NATIVE_CLOCK_EVENTS_PER_FRAME: usize = 512;
 /// Holds the live connection (dropping it closes the port) and the port name.
 struct MidiDevice {
     /// midir connection — kept alive by ownership.
-    #[expect(dead_code, reason = "ownership-only field (Drop closes the port); un-suppress: never — remove only if MidiDevice stops owning the connection")]
+    #[expect(
+        dead_code,
+        reason = "ownership-only field (Drop closes the port); un-suppress: never — remove only if MidiDevice stops owning the connection"
+    )]
     connection: midir::MidiInputConnection<()>,
     /// Display name of the port.
     name: String,
@@ -376,7 +379,8 @@ impl MidiInputController {
             // The note needs a layer that does not exist yet: it and every
             // later event wait for the layer command, then replay this tick.
             if live_clip_manager.take_dropped_note() {
-                self.replay.extend_from_slice(&self.native_event_buffer[i..]);
+                self.replay
+                    .extend_from_slice(&self.native_event_buffer[i..]);
                 break;
             }
         }
@@ -962,12 +966,12 @@ mod tests {
         controller.set_midi_channel(channel);
         let mut config = manifold_core::midi::MidiMappingConfig::default();
         config.mappings = vec![manifold_core::midi::MidiNoteMapping {
-                midi_note: 60,
-                video_clip_ids: vec!["clip".to_owned()],
-                target_layer_index: 0,
-                target_layer_id: None,
-                duration_mode: None,
-            }];
+            midi_note: 60,
+            video_clip_ids: vec!["clip".to_owned()],
+            target_layer_index: 0,
+            target_layer_id: None,
+            duration_mode: None,
+        }];
         config.rebuild_dictionary();
         controller.set_midi_config(config);
         controller
@@ -1002,17 +1006,19 @@ mod tests {
     #[test]
     fn channel_filter_rejects_note_on_and_off_but_omni_accepts_and_stops() {
         let mut project = Project::default();
-        project.video_library.add_clip(manifold_core::video::VideoClip {
-            id: "clip".into(),
-            file_path: String::new(),
-            relative_file_path: None,
-            file_name: "fixture".into(),
-            duration: 4.0,
-            resolution_width: 1,
-            resolution_height: 1,
-            file_size: 0,
-            last_modified_ticks: 0,
-        });
+        project
+            .video_library
+            .add_clip(manifold_core::video::VideoClip {
+                id: "clip".into(),
+                file_path: String::new(),
+                relative_file_path: None,
+                file_name: "fixture".into(),
+                duration: 4.0,
+                resolution_width: 1,
+                resolution_height: 1,
+                file_size: 0,
+                last_modified_ticks: 0,
+            });
         let mut launcher = ClipLauncher::new();
         let mut manager = LiveClipManager::new();
         let mut host = TestHost {
@@ -1114,20 +1120,24 @@ mod tests {
     #[test]
     fn missing_layer_note_replays_after_the_layer_command() {
         let mut project = Project::default();
-        project.video_library.add_clip(manifold_core::video::VideoClip {
-            id: "clip".into(),
-            file_path: String::new(),
-            relative_file_path: None,
-            file_name: "fixture".into(),
-            duration: 4.0,
-            resolution_width: 1,
-            resolution_height: 1,
-            file_size: 0,
-            last_modified_ticks: 0,
-        });
+        project
+            .video_library
+            .add_clip(manifold_core::video::VideoClip {
+                id: "clip".into(),
+                file_path: String::new(),
+                relative_file_path: None,
+                file_name: "fixture".into(),
+                duration: 4.0,
+                resolution_width: 1,
+                resolution_height: 1,
+                file_size: 0,
+                last_modified_ticks: 0,
+            });
         let mut launcher = ClipLauncher::new();
         let mut manager = LiveClipManager::new();
-        let mut host = TestHost { stopped: Vec::new() };
+        let mut host = TestHost {
+            stopped: Vec::new(),
+        };
         let mut controller = mapped_controller(-1);
         controller.inject_note(MidiNoteEvent {
             event_type: MidiNoteEventType::NoteOn,
@@ -1141,17 +1151,37 @@ mod tests {
 
         // One content tick: the note asks for the layer, the content thread
         // executes the command, then the note replays.
-        controller.update(ClockAuthority::Internal, &mut project, &mut launcher, &mut manager, &mut host, 1.0);
-        assert!(project.timeline.layers.is_empty(), "no write outside the gateway");
+        controller.update(
+            ClockAuthority::Internal,
+            &mut project,
+            &mut launcher,
+            &mut manager,
+            &mut host,
+            1.0,
+        );
+        assert!(
+            project.timeline.layers.is_empty(),
+            "no write outside the gateway"
+        );
         assert!(controller.has_replay());
         let mut editing = manifold_editing::service::EditingService::new();
         for cmd in manager.take_pending_commands() {
             editing.execute(cmd, &mut project);
         }
         assert_eq!(project.timeline.layers.len(), 1);
-        controller.update(ClockAuthority::Internal, &mut project, &mut launcher, &mut manager, &mut host, 1.0);
+        controller.update(
+            ClockAuthority::Internal,
+            &mut project,
+            &mut launcher,
+            &mut manager,
+            &mut host,
+            1.0,
+        );
 
         assert!(!controller.has_replay());
-        assert!(manager.live_slots().contains_key(&0), "the note's clip starts on the same tick");
+        assert!(
+            manager.live_slots().contains_key(&0),
+            "the note's clip starts on the same tick"
+        );
     }
 }

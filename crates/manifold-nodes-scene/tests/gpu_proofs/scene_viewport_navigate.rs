@@ -12,10 +12,18 @@
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::headless_readback::encode_rgba8_png;
-use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::scene::viewport_camera::ViewportCamera, manifold_nodes_scene::node_graph::viewport_overlay::ViewportOverlayConfig, manifold_nodes_scene::node_graph::viewport_overlay::build_overlay_lines, manifold_nodes_scene::node_graph::viewport_overlay::composite_overlay_lines_rgba8, manifold_nodes_scene::node_graph::viewport_render::override_camera_def, manifold_nodes_scene::node_graph::viewport_overlay::project_lines, manifold_nodes_scene::node_graph::viewport_render::render_viewport_frame};
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use {
+    manifold_node_engine::persistence::PrimitiveRegistry,
+    manifold_node_engine::scene::viewport_camera::ViewportCamera,
+    manifold_nodes_scene::node_graph::viewport_overlay::ViewportOverlayConfig,
+    manifold_nodes_scene::node_graph::viewport_overlay::build_overlay_lines,
+    manifold_nodes_scene::node_graph::viewport_overlay::composite_overlay_lines_rgba8,
+    manifold_nodes_scene::node_graph::viewport_overlay::project_lines,
+    manifold_nodes_scene::node_graph::viewport_render::override_camera_def,
+    manifold_nodes_scene::node_graph::viewport_render::render_viewport_frame,
+};
 
 /// Ground plane lit by one sun, wired to an `orbit_camera` (the SHOW
 /// camera) — deliberately simple, this proof is about the viewport's
@@ -68,10 +76,13 @@ fn scene_json() -> String {
         {"fromNode":5,"fromPort":"out","toNode":20,"toPort":"light_0"},
         {"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}
     ]}"#
-        .to_string()
+    .to_string()
 }
 
-fn ctx(h: &manifold_node_engine::testkit::gpu_harness::ParityHarness, frame_count: i64) -> PresetContext {
+fn ctx(
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
+    frame_count: i64,
+) -> PresetContext {
     PresetContext {
         time: 0.1,
         beat: 0.2,
@@ -99,7 +110,12 @@ fn render_show_frame(
     let mut enc = h.device.create_encoder("viewport-proof-show-enc");
     {
         let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-        runtime.render(&mut gpu, &target.texture, &c, &manifold_core::params::ParamManifest::default());
+        runtime.render(
+            &mut gpu,
+            &target.texture,
+            &c,
+            &manifold_core::params::ParamManifest::default(),
+        );
     }
     enc.commit_and_wait_completed();
     h.readback(&target.texture)
@@ -142,7 +158,7 @@ fn viewport_render_is_isolated_and_produces_overlay_png() {
         serde_json::from_str(&json).expect("parse scene def");
     let vp_cam = ViewportCamera {
         target: [0.0, 0.0, 0.0],
-        yaw: 2.1,   // a very different angle from the show's orbit_camera
+        yaw: 2.1, // a very different angle from the show's orbit_camera
         pitch: 0.5,
         distance: 12.0,
         fov_y: 1.0,
@@ -175,7 +191,10 @@ fn viewport_render_is_isolated_and_produces_overlay_png() {
         &[[4.0, 20.0, 3.0]],
     );
     let screen_lines = project_lines(&editor_cam, vw, vh, &world_lines);
-    assert!(!screen_lines.is_empty(), "at least some overlay lines must project on-screen");
+    assert!(
+        !screen_lines.is_empty(),
+        "at least some overlay lines must project on-screen"
+    );
     composite_overlay_lines_rgba8(&mut viewport_rgba, vw, vh, &screen_lines);
 
     let png = encode_rgba8_png(&viewport_rgba, vw, vh);

@@ -56,9 +56,13 @@ pub fn check(meta: &PresetMetadata) -> Vec<BindingIdentityError> {
     }
     let mut numeric: BTreeMap<&str, f32> = BTreeMap::new();
     for binding in &meta.bindings {
-        let first = *numeric.entry(binding.id.as_str()).or_insert(binding.default_value);
+        let first = *numeric
+            .entry(binding.id.as_str())
+            .or_insert(binding.default_value);
         if first.to_bits() != binding.default_value.to_bits() {
-            errors.insert(BindingIdentityError::NumericValuesDiffer { id: binding.id.clone() });
+            errors.insert(BindingIdentityError::NumericValuesDiffer {
+                id: binding.id.clone(),
+            });
         }
     }
     for (id, values) in string_values(meta) {
@@ -72,10 +76,18 @@ pub fn check(meta: &PresetMetadata) -> Vec<BindingIdentityError> {
 }
 
 /// Breaks in `after` that `before` did not have: what an edit added.
-pub fn added_errors(before: Option<&PresetMetadata>, after: Option<&PresetMetadata>) -> Vec<BindingIdentityError> {
-    let Some(after) = after else { return Vec::new() };
+pub fn added_errors(
+    before: Option<&PresetMetadata>,
+    after: Option<&PresetMetadata>,
+) -> Vec<BindingIdentityError> {
+    let Some(after) = after else {
+        return Vec::new();
+    };
     let before: BTreeSet<_> = before.map(check).unwrap_or_default().into_iter().collect();
-    check(after).into_iter().filter(|error| !before.contains(error)).collect()
+    check(after)
+        .into_iter()
+        .filter(|error| !before.contains(error))
+        .collect()
 }
 
 /// The string id a binding to `value` should use under `base`: the id that
@@ -88,14 +100,24 @@ pub fn string_id_for(
     template: &StringParamSpecDef,
 ) -> (String, Option<StringParamSpecDef>) {
     let Some(meta) = meta else {
-        return (base.to_string(), Some(spec_for(template, base, value, None)));
+        return (
+            base.to_string(),
+            Some(spec_for(template, base, value, None)),
+        );
     };
     let values = string_values(meta);
     let names_value = |id: &str| {
-        meta.string_params.iter().find(|spec| spec.id == id).is_some_and(|spec| spec.default_value == value)
-            && values.get(id).is_none_or(|set| set.iter().all(|v| *v == value))
+        meta.string_params
+            .iter()
+            .find(|spec| spec.id == id)
+            .is_some_and(|spec| spec.default_value == value)
+            && values
+                .get(id)
+                .is_none_or(|set| set.iter().all(|v| *v == value))
     };
-    for id in std::iter::once(base.to_string()).chain((2..).map(|n| format!("{base}_{n}")).take(4096)) {
+    for id in
+        std::iter::once(base.to_string()).chain((2..).map(|n| format!("{base}_{n}")).take(4096))
+    {
         if names_value(&id) {
             return (id, None);
         }
@@ -118,28 +140,43 @@ pub fn repair(meta: &mut PresetMetadata) -> Vec<String> {
     let before = meta.params.len();
     meta.params.retain(|spec| seen.insert(spec.id.clone()));
     let before_strings = meta.string_params.len();
-    meta.string_params.retain(|spec| seen.insert(spec.id.clone()));
+    meta.string_params
+        .retain(|spec| seen.insert(spec.id.clone()));
     let dropped = before - meta.params.len() + before_strings - meta.string_params.len();
     if dropped > 0 {
-        report.push(format!("{dropped} repeated card control(s) removed; the first of each kept"));
+        report.push(format!(
+            "{dropped} repeated card control(s) removed; the first of each kept"
+        ));
     }
 
     let split: Vec<String> = string_values(meta)
         .into_iter()
         .filter(|(id, values)| {
             let spec = meta.string_params.iter().find(|spec| spec.id == *id);
-            values.len() > 1 || spec.is_some_and(|spec| values.iter().any(|v| *v != spec.default_value))
+            values.len() > 1
+                || spec.is_some_and(|spec| values.iter().any(|v| *v != spec.default_value))
         })
         .map(|(id, _)| id.to_string())
         .collect();
     for id in split {
-        let Some(spec) = meta.string_params.iter().find(|spec| spec.id == id).cloned() else {
+        let Some(spec) = meta
+            .string_params
+            .iter()
+            .find(|spec| spec.id == id)
+            .cloned()
+        else {
             continue;
         };
         let mut minted: BTreeMap<String, String> = BTreeMap::new();
         let mut order = Vec::new();
-        for binding in meta.string_bindings.iter().filter(|binding| binding.id == id) {
-            if binding.default_value != spec.default_value && !minted.contains_key(&binding.default_value) {
+        for binding in meta
+            .string_bindings
+            .iter()
+            .filter(|binding| binding.id == id)
+        {
+            if binding.default_value != spec.default_value
+                && !minted.contains_key(&binding.default_value)
+            {
                 minted.insert(binding.default_value.clone(), String::new());
                 order.push(binding.default_value.clone());
             }
@@ -163,13 +200,24 @@ pub fn repair(meta: &mut PresetMetadata) -> Vec<String> {
             }
             minted.insert(value.clone(), new_id);
         }
-        for binding in meta.string_bindings.iter_mut().filter(|binding| binding.id == id) {
-            if let Some(new_id) = minted.get(&binding.default_value).filter(|new_id| !new_id.is_empty()) {
+        for binding in meta
+            .string_bindings
+            .iter_mut()
+            .filter(|binding| binding.id == id)
+        {
+            if let Some(new_id) = minted
+                .get(&binding.default_value)
+                .filter(|new_id| !new_id.is_empty())
+            {
                 binding.id = new_id.clone();
             }
         }
         for value in order {
-            report.push(format!("'{id}' split: {} now has its own '{}'", file_label(&value), minted[&value]));
+            report.push(format!(
+                "'{id}' split: {} now has its own '{}'",
+                file_label(&value),
+                minted[&value]
+            ));
         }
     }
     report
@@ -178,7 +226,10 @@ pub fn repair(meta: &mut PresetMetadata) -> Vec<String> {
 fn string_values(meta: &PresetMetadata) -> BTreeMap<&str, BTreeSet<&str>> {
     let mut values: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for binding in &meta.string_bindings {
-        values.entry(binding.id.as_str()).or_default().insert(binding.default_value.as_str());
+        values
+            .entry(binding.id.as_str())
+            .or_default()
+            .insert(binding.default_value.as_str());
     }
     values
 }
@@ -189,11 +240,20 @@ fn taken(meta: &PresetMetadata) -> BTreeSet<&str> {
         .map(|spec| spec.id.as_str())
         .chain(meta.string_params.iter().map(|spec| spec.id.as_str()))
         .chain(meta.bindings.iter().map(|binding| binding.id.as_str()))
-        .chain(meta.string_bindings.iter().map(|binding| binding.id.as_str()))
+        .chain(
+            meta.string_bindings
+                .iter()
+                .map(|binding| binding.id.as_str()),
+        )
         .collect()
 }
 
-fn spec_for(template: &StringParamSpecDef, id: &str, value: &str, suffix: Option<&str>) -> StringParamSpecDef {
+fn spec_for(
+    template: &StringParamSpecDef,
+    id: &str,
+    value: &str,
+    suffix: Option<&str>,
+) -> StringParamSpecDef {
     let mut spec = template.clone();
     spec.id = id.to_string();
     spec.default_value = value.to_string();
@@ -248,18 +308,34 @@ mod tests {
     #[test]
     fn check_flags_cliftest_and_passes_after_repair() {
         let mut meta = cliftest();
-        assert_eq!(check(&meta), vec![BindingIdentityError::StringValuesDiffer { id: "model_file".into() }]);
+        assert_eq!(
+            check(&meta),
+            vec![BindingIdentityError::StringValuesDiffer {
+                id: "model_file".into()
+            }]
+        );
         let report = repair(&mut meta);
         assert_eq!(report.len(), 2, "{report:?}");
         assert!(check(&meta).is_empty(), "{:?}", check(&meta));
         let id_of = |node: &str| {
-            meta.string_bindings.iter().find(|b| format!("{:?}", b.target).contains(node)).unwrap().id.clone()
+            meta.string_bindings
+                .iter()
+                .find(|b| format!("{:?}", b.target).contains(node))
+                .unwrap()
+                .id
+                .clone()
         };
         assert_eq!(id_of("mesh_0"), "model_file");
         assert_eq!(id_of("tex_1"), "model_file_2");
         assert_eq!(id_of("mesh_1"), "model_file_2");
         assert_eq!(id_of("mesh_2"), "model_file_3");
-        let spec = |id: &str| meta.string_params.iter().find(|s| s.id == id).unwrap().clone();
+        let spec = |id: &str| {
+            meta.string_params
+                .iter()
+                .find(|s| s.id == id)
+                .unwrap()
+                .clone()
+        };
         assert_eq!(spec("model_file").default_value, "/m/cliff.gltf");
         assert_eq!(spec("model_file_2").default_value, "/m/moss.glb");
         assert_eq!(spec("model_file_2").name, "Model File — moss");
@@ -270,7 +346,13 @@ mod tests {
 
     #[test]
     fn one_file_fan_out_is_valid() {
-        let meta = meta(&[("model_file", "/m/a.glb", "mesh_0"), ("model_file", "/m/a.glb", "tex_0")], "/m/a.glb");
+        let meta = meta(
+            &[
+                ("model_file", "/m/a.glb", "mesh_0"),
+                ("model_file", "/m/a.glb", "tex_0"),
+            ],
+            "/m/a.glb",
+        );
         assert!(check(&meta).is_empty());
     }
 
@@ -280,12 +362,18 @@ mod tests {
         let template = meta.string_params[0].clone();
         let mut fixed = meta.clone();
         repair(&mut fixed);
-        assert_eq!(string_id_for(Some(&fixed), "model_file", "/m/moss.glb", &template).0, "model_file_2");
+        assert_eq!(
+            string_id_for(Some(&fixed), "model_file", "/m/moss.glb", &template).0,
+            "model_file_2"
+        );
         let (id, spec) = string_id_for(Some(&fixed), "model_file", "/m/new.glb", &template);
         assert_eq!(id, "model_file_4");
         assert_eq!(spec.unwrap().default_value, "/m/new.glb");
         let (id, spec) = string_id_for(None, "model_file", "/m/new.glb", &template);
-        assert_eq!((id.as_str(), spec.unwrap().name.as_str()), ("model_file", "Model File"));
+        assert_eq!(
+            (id.as_str(), spec.unwrap().name.as_str()),
+            ("model_file", "Model File")
+        );
     }
 
     #[test]
@@ -294,7 +382,12 @@ mod tests {
         meta.string_bindings.clear();
         let spec = meta.string_params[0].clone();
         meta.string_params.push(spec);
-        assert_eq!(check(&meta), vec![BindingIdentityError::DuplicateSpec { id: "model_file".into() }]);
+        assert_eq!(
+            check(&meta),
+            vec![BindingIdentityError::DuplicateSpec {
+                id: "model_file".into()
+            }]
+        );
         assert_eq!(repair(&mut meta).len(), 1);
         assert!(check(&meta).is_empty());
 
@@ -306,7 +399,10 @@ mod tests {
             ],
         }))
         .unwrap();
-        assert_eq!(check(&numeric), vec![BindingIdentityError::NumericValuesDiffer { id: "x".into() }]);
+        assert_eq!(
+            check(&numeric),
+            vec![BindingIdentityError::NumericValuesDiffer { id: "x".into() }]
+        );
         numeric.bindings[1].default_value = 1.0;
         assert!(check(&numeric).is_empty());
     }

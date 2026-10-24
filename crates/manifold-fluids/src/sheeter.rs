@@ -40,7 +40,11 @@ fn dot(a: V, b: V) -> f32 {
     a[2].mul_add(b[2], a[0].mul_add(b[0], a[1] * b[1]))
 }
 fn cross(a: V, b: V) -> V {
-    [a[1].mul_add(b[2], -(a[2] * b[1])), a[2].mul_add(b[0], -(a[0] * b[2])), a[0].mul_add(b[1], -(a[1] * b[0]))]
+    [
+        a[1].mul_add(b[2], -(a[2] * b[1])),
+        a[2].mul_add(b[0], -(a[0] * b[2])),
+        a[0].mul_add(b[1], -(a[1] * b[0])),
+    ]
 }
 fn length(v: V) -> f32 {
     dot(v, v).sqrt()
@@ -69,7 +73,10 @@ struct Grid<T> {
 
 impl<T: Copy> Grid<T> {
     fn new(n: [i32; 3], fill: T) -> Self {
-        Self { n, data: vec![fill; (n[0] * n[1] * n[2]) as usize] }
+        Self {
+            n,
+            data: vec![fill; (n[0] * n[1] * n[2]) as usize],
+        }
     }
     fn in_range(&self, c: [i32; 3]) -> bool {
         (0..3).all(|a| c[a] >= 0 && c[a] < self.n[a])
@@ -161,7 +168,9 @@ struct Mask {
 
 impl Mask {
     fn bit(sub: Cell) -> u8 {
-        let case = (sub.0[0] % 2 == 1) as u8 | ((sub.0[1] % 2 == 1) as u8) << 1 | ((sub.0[2] % 2 == 1) as u8) << 2;
+        let case = (sub.0[0] % 2 == 1) as u8
+            | ((sub.0[1] % 2 == 1) as u8) << 1
+            | ((sub.0[2] % 2 == 1) as u8) << 2;
         1 << case
     }
     fn add(&mut self, p: V) {
@@ -259,24 +268,44 @@ pub fn trace_sheet_particles(
     dx: f64,
     fill_threshold: f32,
 ) -> Result<SheetTrace, FluidError> {
-    let mut trace = SheetTrace { thin: vec![false; positions.len()], kept: vec![false; positions.len()], ..Default::default() };
+    let mut trace = SheetTrace {
+        thin: vec![false; positions.len()],
+        kept: vec![false; positions.len()],
+        ..Default::default()
+    };
     if cells.iter().any(|&c| c == 0 || c > (i32::MAX / 2) as u32) || !dx.is_finite() || dx <= 0.0 {
-        return Err(FluidError::input("sheeter grid needs positive size and cell size"));
+        return Err(FluidError::input(
+            "sheeter grid needs positive size and cell size",
+        ));
     }
     let n = cells.map(|c| c as i32);
-    let count = cells.iter().try_fold(1usize, |a, &c| a.checked_mul(c as usize));
+    let count = cells
+        .iter()
+        .try_fold(1usize, |a, &c| a.checked_mul(c as usize));
     if count != Some(phi.len()) {
-        return Err(FluidError::input("sheeter level set length differs from the grid"));
+        return Err(FluidError::input(
+            "sheeter level set length differs from the grid",
+        ));
     }
     // The oracle's checks (bridge.cpp manifold_fluids_oracle_sheet_particles).
     if phi.iter().any(|v| !v.is_finite()) {
         return Err(FluidError::input("sheeter level set is not finite"));
     }
     if !fill_threshold.is_finite() || !(-1.0..=0.0).contains(&fill_threshold) {
-        return Err(FluidError::input("sheeter fill threshold must be in [-1, 0]"));
+        return Err(FluidError::input(
+            "sheeter fill threshold must be in [-1, 0]",
+        ));
     }
-    let level = Grid { n, data: phi.to_vec() };
-    let mut mask = Mask { dx, sub_dx: 0.5 * dx, n, bits: Grid::new(n, 0) };
+    let level = Grid {
+        n,
+        data: phi.to_vec(),
+    };
+    let mut mask = Mask {
+        dx,
+        sub_dx: 0.5 * dx,
+        n,
+        bits: Grid::new(n, 0),
+    };
     if positions.iter().any(|&p| !mask.in_grid(p)) {
         return Err(FluidError::input("sheeter marker outside the grid"));
     }
@@ -339,7 +368,14 @@ pub fn trace_sheet_particles(
                     if !seeds[sheet.index([i, j, k])] {
                         continue;
                     }
-                    for nb in [[i - 1, j, k], [i + 1, j, k], [i, j - 1, k], [i, j + 1, k], [i, j, k - 1], [i, j, k + 1]] {
+                    for nb in [
+                        [i - 1, j, k],
+                        [i + 1, j, k],
+                        [i, j - 1, k],
+                        [i, j + 1, k],
+                        [i, j, k - 1],
+                        [i, j, k + 1],
+                    ] {
                         if sheet.in_range(nb) {
                             sheet.set(nb, true);
                         }
@@ -352,7 +388,13 @@ pub fn trace_sheet_particles(
     for k in 0..n[2] {
         for j in 0..n[1] {
             for i in 0..n[0] {
-                if i < BORDER || j < BORDER || k < BORDER || i >= n[0] - BORDER || j >= n[1] - BORDER || k >= n[2] - BORDER {
+                if i < BORDER
+                    || j < BORDER
+                    || k < BORDER
+                    || i >= n[0] - BORDER
+                    || j >= n[1] - BORDER
+                    || k >= n[2] - BORDER
+                {
                     sheet.set([i, j, k], false);
                 }
             }
@@ -410,7 +452,12 @@ pub fn trace_sheet_particles(
     }
 
     let r = SHEET_SEARCH_RADIUS.ceil() as usize;
-    let sheet_buckets = Buckets::new(&sheet_particles, n, dx, r * r * r * MAX_SHEET_PARTICLES_PER_CELL as usize);
+    let sheet_buckets = Buckets::new(
+        &sheet_particles,
+        n,
+        dx,
+        r * r * r * MAX_SHEET_PARTICLES_PER_CELL as usize,
+    );
     let candidate_buckets = Buckets::new(&candidates, n, dx, r * r * r * 8);
     let max_radius = (SHEET_SEARCH_RADIUS as f64 * dx) as f32;
 
@@ -424,7 +471,9 @@ pub fn trace_sheet_particles(
     for bk in 0..bn[2] {
         for bj in 0..bn[1] {
             for bi in 0..bn[0] {
-                let Some(bucket) = candidate_buckets.at([bi, bj, bk]) else { continue };
+                let Some(bucket) = candidate_buckets.at([bi, bj, bk]) else {
+                    continue;
+                };
                 neighbours.clear();
                 for k in bk - 1..=bk + 1 {
                     for j in bj - 1..=bj + 1 {
@@ -441,7 +490,12 @@ pub fn trace_sheet_particles(
                 for &(candidate, identity) in bucket {
                     let p = candidate;
                     nearest.clear();
-                    nearest.extend(neighbours.iter().copied().filter(|&np| length(sub(np, p)) < max_radius));
+                    nearest.extend(
+                        neighbours
+                            .iter()
+                            .copied()
+                            .filter(|&np| length(sub(np, p)) < max_radius),
+                    );
                     trace.neighbours[identity] = nearest.len();
                     if nearest.len() < 3 {
                         continue;
@@ -531,8 +585,12 @@ pub mod fixtures {
         let m = M as usize;
         let phi: Vec<f32> = (0..m * m * m)
             .map(|index| {
-                let c = [index % m, (index / m) % m, index / (m * m)].map(|v| (v as f32 + 0.5) * H as f32);
-                let r = ((c[0] - centre[0]).powi(2) + (c[1] - centre[1]).powi(2) + (c[2] - centre[2]).powi(2)).sqrt();
+                let c = [index % m, (index / m) % m, index / (m * m)]
+                    .map(|v| (v as f32 + 0.5) * H as f32);
+                let r = ((c[0] - centre[0]).powi(2)
+                    + (c[1] - centre[1]).powi(2)
+                    + (c[2] - centre[2]).powi(2))
+                .sqrt();
                 let shell = (r - radius).abs() - T;
                 let sheet = (c[1] - ripple(c[0], c[2])).abs() - T;
                 shell.min(sheet)
@@ -564,14 +622,24 @@ pub mod fixtures {
         while markers.len() < 2500 {
             let d = direction(&mut uniform);
             let r = radius + T * 0.8 * (2.0 * uniform() - 1.0);
-            if shell_holes.iter().any(|h| d[0] * h[0] + d[1] * h[1] + d[2] * h[2] > 0.25f32.cos()) {
+            if shell_holes
+                .iter()
+                .any(|h| d[0] * h[0] + d[1] * h[1] + d[2] * h[2] > 0.25f32.cos())
+            {
                 continue;
             }
-            markers.push([centre[0] + r * d[0], centre[1] + r * d[1], centre[2] + r * d[2]]);
+            markers.push([
+                centre[0] + r * d[0],
+                centre[1] + r * d[1],
+                centre[2] + r * d[2],
+            ]);
         }
         while markers.len() < 4000 {
             let (x, z) = (1.5 + 7.0 * uniform(), 1.5 + 7.0 * uniform());
-            if sheet_holes.iter().any(|h| (x - h[0]).hypot(z - h[2]) < h[1]) {
+            if sheet_holes
+                .iter()
+                .any(|h| (x - h[0]).hypot(z - h[2]) < h[1])
+            {
                 continue;
             }
             markers.push([x, ripple(x, z) + T * 0.8 * (2.0 * uniform() - 1.0), z]);

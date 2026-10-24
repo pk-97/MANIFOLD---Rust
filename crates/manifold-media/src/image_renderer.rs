@@ -576,11 +576,15 @@ mod tests {
     fn fit_premultiplies_straight_alpha() {
         // 1x1 source, straight alpha. The compositor wants premultiplied alpha,
         // so RGB must come out scaled by alpha (else the background bleeds).
-        let native = NativeImage { width: 1, height: 1, rgba: vec![200, 100, 50, 128] };
+        let native = NativeImage {
+            width: 1,
+            height: 1,
+            rgba: vec![200, 100, 50, 128],
+        };
         let fit = fit_native(&native, 1, 1).unwrap();
         assert_eq!(fit.rgba[0], (200u16 * 128 / 255) as u8); // 100
         assert_eq!(fit.rgba[1], (100u16 * 128 / 255) as u8); // 50
-        assert_eq!(fit.rgba[2], (50u16 * 128 / 255) as u8);  // 25
+        assert_eq!(fit.rgba[2], (50u16 * 128 / 255) as u8); // 25
         assert_eq!(fit.rgba[3], 128, "alpha is preserved straight");
     }
 
@@ -624,7 +628,9 @@ mod tests {
     fn prewarm_layer_decodes_image_clips() {
         // Load-time image warmup should decode and cache the clip's source
         // so the first play is a cache hit instead of a disk decode.
-        let device = std::sync::Arc::new(manifold_gpu::GpuDevice::new_queued("media image_renderer test"));
+        let device = std::sync::Arc::new(manifold_gpu::GpuDevice::new_queued(
+            "media image_renderer test",
+        ));
         let mut renderer = ImageRenderer::new(device, 320, 180);
         let mut layer = Layer::new(
             "ImageWarmup".to_string(),
@@ -635,17 +641,17 @@ mod tests {
             "{}/../../tests/fixtures/gltf/goldens/triangle.png",
             env!("CARGO_MANIFEST_DIR")
         );
-        layer.clips.push(TimelineClip::new_image(
-            path,
-            Beats(0.0),
-            Beats(4.0),
-        ));
+        layer
+            .clips
+            .push(TimelineClip::new_image(path, Beats(0.0), Beats(4.0)));
 
         let mut pass = manifold_core::WarmupPass::new(
-            manifold_core::WarmupBudget::default(), std::time::Instant::now(),
+            manifold_core::WarmupBudget::default(),
+            std::time::Instant::now(),
         );
         let outcome = renderer.prewarm_layer(
-            &layer, pass.layer(&layer.layer_id, std::time::Instant::now()),
+            &layer,
+            pass.layer(&layer.layer_id, std::time::Instant::now()),
         );
         assert_eq!(outcome, manifold_core::WarmupOutcome::Quiescent);
 
@@ -658,7 +664,9 @@ mod tests {
         assert!(clip.native.is_some(), "native decode should be cached");
         assert!(clip.has_frame, "fitted texture should be uploaded");
         assert!(
-            renderer.get_clip_texture(layer.clips[0].id.as_str()).is_some(),
+            renderer
+                .get_clip_texture(layer.clips[0].id.as_str())
+                .is_some(),
             "get_clip_texture should return the warmed texture"
         );
     }

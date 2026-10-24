@@ -28,7 +28,12 @@ impl Executor {
             .pair_nodes_mut(pair.pair_index)
             .expect("compiled pair participants exist");
         if !complete {
-            behavior.before_first(first.node.as_mut(), second.node.as_mut(), None, self.sim_step);
+            behavior.before_first(
+                first.node.as_mut(),
+                second.node.as_mut(),
+                None,
+                self.sim_step,
+            );
             return;
         }
 
@@ -68,7 +73,14 @@ impl Executor {
             .unwrap_or(&second.params);
         let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, None)
             .with_sim_step(self.sim_step)
-            .with_sim_metrics(crate::exec::sim_metrics::SimMetricsSink::new(&self.sim_metrics));
-        behavior.before_first(first.node.as_mut(), second.node.as_mut(), Some(&mut ctx), self.sim_step);
+            .with_sim_metrics(crate::exec::sim_metrics::SimMetricsSink::new(
+                &self.sim_metrics,
+            ));
+        behavior.before_first(
+            first.node.as_mut(),
+            second.node.as_mut(),
+            Some(&mut ctx),
+            self.sim_step,
+        );
     }
 }

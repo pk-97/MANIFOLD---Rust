@@ -8,13 +8,15 @@
 //! lower hemisphere and passes the sky through, so reflections, the IBL
 //! prefilter and `node.camera_sky` all see one consistent sea horizon.
 
-use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
+use std::borrow::Cow;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::primitives::standalone_pipeline::{
+    dispatch_standalone_2d, standalone_pipeline,
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -106,8 +108,8 @@ mod gpu_tests {
     };
 
     use super::{SeaHorizonEnv, SeaHorizonUniforms};
-    use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
     use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
     #[test]
     fn sea_horizon_env_matches_cpu() {
@@ -129,14 +131,27 @@ mod gpu_tests {
             depth: 1,
             format: GpuTextureFormat::Rgba16Float,
             dimension: GpuTextureDimension::D2,
-            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
+            usage: GpuTextureUsage::CPU_UPLOAD
+                | GpuTextureUsage::SHADER_READ
+                | GpuTextureUsage::COPY_SRC,
             label: "sea-horizon-sky",
             mip_levels: 1,
         });
         let bytes = unsafe { std::slice::from_raw_parts(px.as_ptr().cast::<u8>(), px.len() * 2) };
         device.upload_texture(&sky, bytes);
-        let out = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "sea-horizon-out");
-        let u = SeaHorizonUniforms { ior: 1.333, water_r: 0.02, water_g: 0.05, water_b: 0.1 };
+        let out = RenderTarget::new(
+            &device,
+            w,
+            h,
+            GpuTextureFormat::Rgba16Float,
+            "sea-horizon-out",
+        );
+        let u = SeaHorizonUniforms {
+            ior: 1.333,
+            water_r: 0.02,
+            water_g: 0.05,
+            water_b: 0.1,
+        };
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
         let mut slot = None;
         let pipeline = standalone_pipeline::<SeaHorizonEnv>(&mut slot, &device);
@@ -144,10 +159,22 @@ mod gpu_tests {
         enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&u) },
-                GpuBinding::Texture { binding: 1, texture: &sky },
-                GpuBinding::Sampler { binding: 2, sampler: &sampler },
-                GpuBinding::Texture { binding: 3, texture: &out.texture },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&u),
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &sky,
+                },
+                GpuBinding::Sampler {
+                    binding: 2,
+                    sampler: &sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: &out.texture,
+                },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "sea-horizon",
@@ -158,14 +185,18 @@ mod gpu_tests {
         enc.copy_texture_to_buffer(&out.texture, &buf, w, h, w * 8);
         enc.commit_and_wait_completed();
         let ptr = buf.mapped_ptr().expect("shared readback");
-        let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+        let halves: &[u16] =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
 
         let f0 = ((1.333f64 - 1.0) / (1.333 + 1.0)).powi(2);
         let water = [0.02, 0.05, 0.1];
         let mut worst = 0.0f64;
         for y in 0..h {
             for x in 0..w {
-                let (uu, vv) = ((f64::from(x) + 0.5) / f64::from(w), (f64::from(y) + 0.5) / f64::from(h));
+                let (uu, vv) = (
+                    (f64::from(x) + 0.5) / f64::from(w),
+                    (f64::from(y) + 0.5) / f64::from(h),
+                );
                 let depression = (0.5 - vv) * std::f64::consts::PI;
                 let want = if depression <= 0.0 {
                     [uu, vv, 2.0]

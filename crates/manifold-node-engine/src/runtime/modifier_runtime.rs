@@ -5,8 +5,8 @@
 //! remain part of the same runtime type.
 
 use ahash::AHashMap;
-use manifold_core::effects::PresetInstance;
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
+use manifold_core::effects::PresetInstance;
 use manifold_core::params::ParamManifest;
 
 use super::{FrameContextInputs, JsonGeneratorLoadError, PresetIo, PresetRuntime};
@@ -58,8 +58,8 @@ impl PresetRuntime {
         // Old shapes migrate and retired params leave before anything reads
         // the authored graph: the scene-modifier expansion, its value writes
         // and the render def must all see the same nodes.
-        let mut doc =
-            crate::load::graph_loader::migrate_graph_shape(std::borrow::Cow::Owned(doc)).into_owned();
+        let mut doc = crate::load::graph_loader::migrate_graph_shape(std::borrow::Cow::Owned(doc))
+            .into_owned();
         crate::load::migration::prepare_stage(
             &mut doc,
             crate::load::migration::MigrationStage::BeforeSceneModifiers,
@@ -90,7 +90,14 @@ impl PresetRuntime {
                 let guards = crate::load::expand::PreparedModifierParameterGuards::prepare(&doc)?;
                 (
                     prepared.def,
-                    Some((doc, prepared.routes, sources, guards, prepared.event_routes, prepared.impulse_routes)),
+                    Some((
+                        doc,
+                        prepared.routes,
+                        sources,
+                        guards,
+                        prepared.event_routes,
+                        prepared.impulse_routes,
+                    )),
                 )
             } else {
                 (doc, None)
@@ -102,7 +109,9 @@ impl PresetRuntime {
         let prepared_extensions = super::extensions::prepare(
             &render_def,
             authoring.as_ref().map_or(&render_def, |(owner, ..)| owner),
-            authoring.as_ref().map_or(&[][..], |(_, _, _, _, _, routes)| routes.as_slice()),
+            authoring
+                .as_ref()
+                .map_or(&[][..], |(_, _, _, _, _, routes)| routes.as_slice()),
             registry,
         );
         let fused = if render_fused {
@@ -115,63 +124,66 @@ impl PresetRuntime {
         // `from_render_def` alongside `view.def`. An empty map is correct
         // only when fusion did not occur — an unfused render_def has no
         // sidecar by construction.
-        let mesh_rules = fused
-            .as_ref()
-            .map_or_else(crate::scene::mesh_change::PreparedMeshRules::default, |view| {
-                view.mesh_rules.clone()
-            });
+        let mesh_rules = fused.as_ref().map_or_else(
+            crate::scene::mesh_change::PreparedMeshRules::default,
+            |view| view.mesh_rules.clone(),
+        );
         let render_def = match &fused {
             Some(view) => (*view.def).clone(),
             None => render_def,
         };
-        let impulse_routes = authoring.as_ref().map_or(&[][..], |(_, _, _, _, _, routes)| routes.as_slice());
-        let mut runtime = Self::from_render_def(render_def, registry, manifest, &mesh_rules, impulse_routes)?;
+        let impulse_routes = authoring
+            .as_ref()
+            .map_or(&[][..], |(_, _, _, _, _, routes)| routes.as_slice());
+        let mut runtime =
+            Self::from_render_def(render_def, registry, manifest, &mesh_rules, impulse_routes)?;
         #[cfg(feature = "gpu-proofs")]
-        for install in prepared_extensions { install(&mut runtime); }
+        for install in prepared_extensions {
+            install(&mut runtime);
+        }
         runtime.effect_nodes[0].def_content_key = content_key;
         if let Some(view) = &fused {
             runtime.effect_nodes[0].bound.fused_retarget = view.retarget.clone();
         }
-        if let Some((canonical, routes, sources, guards, event_routes, impulse_routes)) = authoring {
+        if let Some((canonical, routes, sources, guards, event_routes, impulse_routes)) = authoring
+        {
             let (extensions, mut context) = runtime.extension_context();
             for extension in extensions {
                 extension.prepare_modifiers(&mut context, &canonical, &impulse_routes, registry)?;
             }
-            crate::load::expand::validate_modifier_runtime(
-                &canonical,
-                &runtime.graph,
-            )?;
+            crate::load::expand::validate_modifier_runtime(&canonical, &runtime.graph)?;
             let empty_members = ahash::AHashMap::default();
             let members = fused
                 .as_ref()
                 .map_or(&empty_members, |view| &view.node_retarget);
-            let budget =
-                crate::load::expand::PreparedModifierBufferBudget::prepare(
+            let budget = crate::load::expand::PreparedModifierBufferBudget::prepare(
+                &canonical,
+                &routes,
+                &runtime.graph,
+                members,
+            )?;
+            runtime.graph.set_modifier_buffer_budget(budget);
+            guards.install(&mut runtime.graph)?;
+            runtime.modifier_events = Some(crate::load::expand::PreparedModifierEvents::prepare(
+                &canonical,
+                &event_routes,
+                &runtime.graph,
+            )?);
+            runtime.modifier_control_state = Some(
+                crate::load::expand::PreparedModifierControlState::prepare_with_fusion(
                     &canonical,
                     &routes,
                     &runtime.graph,
                     members,
-                )?;
-            runtime.graph.set_modifier_buffer_budget(budget);
-            guards.install(&mut runtime.graph)?;
-            runtime.modifier_events = Some(
-                crate::load::expand::PreparedModifierEvents::prepare(
-                    &canonical,
-                    &event_routes,
-                    &runtime.graph,
                 )?,
             );
-            runtime.modifier_control_state = Some(crate::load::expand::PreparedModifierControlState::prepare_with_fusion(
-                &canonical, &routes, &runtime.graph, members,
-            )?);
             let segment = &mut runtime.effect_nodes[0];
-            let writes =
-                crate::load::expand::PreparedGraphValueWrites::prepare(
-                    &canonical,
-                    &routes,
-                    &runtime.graph,
-                    &segment.bound.fused_retarget,
-                )?;
+            let writes = crate::load::expand::PreparedGraphValueWrites::prepare(
+                &canonical,
+                &routes,
+                &runtime.graph,
+                &segment.bound.fused_retarget,
+            )?;
             segment.bound.install_prepared_routes(writes, sources)?;
             segment.group_preview_map =
                 manifold_core::flatten::group_output_producer_map(&canonical);
@@ -201,7 +213,8 @@ impl PresetRuntime {
             canvas,
             &AHashMap::default(),
         )?;
-        let usage = budget.account(&allocation)
+        let usage = budget
+            .account(&allocation)
             .map_err(crate::load::graph_loader::PreAllocationError::ModifierAdmission)?;
         Ok(Some(usage))
     }
@@ -248,33 +261,33 @@ impl PresetRuntime {
         self.pending_trigger_baseline.get_or_insert(previous_count);
     }
 
-manifold_core::testkit_visible! {
-    #[doc(hidden)]
-    pub(crate) fn carry_pending_trigger_from(&mut self, prior: &Self) {
-        self.pending_trigger_baseline = prior.pending_trigger_baseline;
+    manifold_core::testkit_visible! {
+        #[doc(hidden)]
+        pub(crate) fn carry_pending_trigger_from(&mut self, prior: &Self) {
+            self.pending_trigger_baseline = prior.pending_trigger_baseline;
+        }
     }
-}
 
-manifold_core::testkit_visible! {
-    pub(crate) fn carry_modifier_control_state_from(&mut self, prior: &mut Self) {
-        self.carry_pending_trigger_from(prior);
-        if let (Some(current), Some(previous)) = (&mut self.modifier_events, &prior.modifier_events)
-        {
-            current.carry_from(previous);
-        }
-        if let (Some(current), Some(previous)) =
-            (&self.modifier_control_state, &prior.modifier_control_state)
-        {
-            current.harvest_from(
-                previous,
-                &mut self.graph,
-                &mut prior.graph,
-                &mut self.state_store,
-                &mut prior.state_store,
-            );
+    manifold_core::testkit_visible! {
+        pub(crate) fn carry_modifier_control_state_from(&mut self, prior: &mut Self) {
+            self.carry_pending_trigger_from(prior);
+            if let (Some(current), Some(previous)) = (&mut self.modifier_events, &prior.modifier_events)
+            {
+                current.carry_from(previous);
+            }
+            if let (Some(current), Some(previous)) =
+                (&self.modifier_control_state, &prior.modifier_control_state)
+            {
+                current.harvest_from(
+                    previous,
+                    &mut self.graph,
+                    &mut prior.graph,
+                    &mut self.state_store,
+                    &mut prior.state_store,
+                );
+            }
         }
     }
-}
 
     /// Update the `system.generator_input` node's per-frame context. No-op on
     /// an effect-chain runtime.

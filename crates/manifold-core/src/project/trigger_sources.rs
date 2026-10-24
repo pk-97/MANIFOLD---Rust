@@ -7,7 +7,10 @@ use crate::types::LayerType;
 /// Authored timing dependency for a source, including its available session
 /// patterns. Launch cursors, meters, media settings and display metadata are
 /// deliberately absent. Streams directly into SHA-256 without allocating.
-pub fn clip_trigger_pattern_digest(layer: &Layer, session: &crate::session::SessionGrid) -> [u8; 32] {
+pub fn clip_trigger_pattern_digest(
+    layer: &Layer,
+    session: &crate::session::SessionGrid,
+) -> [u8; 32] {
     use sha2::{Digest, Sha256};
 
     fn text(hash: &mut Sha256, value: &str) {
@@ -30,7 +33,11 @@ pub fn clip_trigger_pattern_digest(layer: &Layer, session: &crate::session::Sess
     // Parent/group mute is not a control gate. Trigger mute is.
     hash.update([u8::from(layer.is_trigger() && layer.is_muted)]);
     clips(&mut hash, &layer.clips);
-    for slot in session.slots.iter().filter(|slot| slot.layer_id == layer.layer_id) {
+    for slot in session
+        .slots
+        .iter()
+        .filter(|slot| slot.layer_id == layer.layer_id)
+    {
         hash.update(b"slot");
         text(&mut hash, slot.scene_id.as_str());
         hash.update(slot.sequence.length_beats.0.to_le_bytes());
@@ -193,8 +200,8 @@ impl crate::project::Project {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::effects::PresetInstance;
     use crate::effect_graph_def::ParamSpecDef;
+    use crate::effects::PresetInstance;
     use crate::id::EffectId;
     use crate::layer::Layer;
     use crate::{Beats, PresetTypeId};
@@ -228,7 +235,11 @@ mod tests {
         layer.layer_id = LayerId::new(id);
         layer.layer_type = kind;
         layer.parent_layer_id = parent.map(LayerId::new);
-        layer.gen_params_mut().unwrap().params.push(param("clipFire"));
+        layer
+            .gen_params_mut()
+            .unwrap()
+            .params
+            .push(param("clipFire"));
         layer
     }
 
@@ -335,19 +346,43 @@ mod tests {
         let mut project = crate::project::Project::default();
         let mut owner = effect_layer("owner", LayerType::Video, None);
         owner.effects.as_mut().unwrap()[0].params = crate::params::ParamManifest::from_params(
-            [("numeric", false, false, false), ("fire", false, true, false),
-             ("toggle", true, false, false), ("gate", true, false, true)]
-                .into_iter().map(|(id, is_toggle, is_trigger, is_trigger_gate)| {
-                    crate::params::Param::bundled(ParamSpecDef {
-                        id: id.into(), is_toggle, is_trigger, is_trigger_gate, ..Default::default()
-                    })
-                }).collect(),
+            [
+                ("numeric", false, false, false),
+                ("fire", false, true, false),
+                ("toggle", true, false, false),
+                ("gate", true, false, true),
+            ]
+            .into_iter()
+            .map(|(id, is_toggle, is_trigger, is_trigger_gate)| {
+                crate::params::Param::bundled(ParamSpecDef {
+                    id: id.into(),
+                    is_toggle,
+                    is_trigger,
+                    is_trigger_gate,
+                    ..Default::default()
+                })
+            })
+            .collect(),
         );
         project.timeline.layers = vec![owner, trigger("lane", "owner")];
         let target = GraphTarget::Effect(EffectId::new("owner-effect"));
-        for (id, expected) in [("numeric", true), ("fire", true), ("toggle", false), ("gate", false)] {
-            assert_eq!(project.can_assign_clip_trigger_source(&target, id,
-                &ClipTriggerSource::Lane { layer_id: "lane".into() }), expected, "{id}");
+        for (id, expected) in [
+            ("numeric", true),
+            ("fire", true),
+            ("toggle", false),
+            ("gate", false),
+        ] {
+            assert_eq!(
+                project.can_assign_clip_trigger_source(
+                    &target,
+                    id,
+                    &ClipTriggerSource::Lane {
+                        layer_id: "lane".into()
+                    }
+                ),
+                expected,
+                "{id}"
+            );
         }
     }
 
@@ -371,21 +406,39 @@ mod tests {
         assert!(project.can_assign_clip_trigger_source(
             &target,
             "clipFire",
-            &ClipTriggerSource::Lane { layer_id: LayerId::new("owner-lane") }
+            &ClipTriggerSource::Lane {
+                layer_id: LayerId::new("owner-lane")
+            }
         ));
         assert!(project.can_assign_clip_trigger_source(
             &target,
             "clipFire",
-            &ClipTriggerSource::Lane { layer_id: LayerId::new("group-lane") }
+            &ClipTriggerSource::Lane {
+                layer_id: LayerId::new("group-lane")
+            }
         ));
         assert!(!project.can_assign_clip_trigger_source(
             &target,
             "clipFire",
-            &ClipTriggerSource::Lane { layer_id: LayerId::new("sibling-lane") }
+            &ClipTriggerSource::Lane {
+                layer_id: LayerId::new("sibling-lane")
+            }
         ));
-        assert!(project.can_assign_clip_trigger_source(&target, "clipFire", &ClipTriggerSource::OwnLayer));
-        assert!(project.can_assign_clip_trigger_source(&target, "clipFire", &ClipTriggerSource::Disabled));
-        assert!(!project.can_assign_clip_trigger_source(&target, "missing", &ClipTriggerSource::OwnLayer));
+        assert!(project.can_assign_clip_trigger_source(
+            &target,
+            "clipFire",
+            &ClipTriggerSource::OwnLayer
+        ));
+        assert!(project.can_assign_clip_trigger_source(
+            &target,
+            "clipFire",
+            &ClipTriggerSource::Disabled
+        ));
+        assert!(!project.can_assign_clip_trigger_source(
+            &target,
+            "missing",
+            &ClipTriggerSource::OwnLayer
+        ));
     }
 
     #[test]
@@ -394,7 +447,12 @@ mod tests {
         let mut owner = generator_layer("generator", LayerType::Generator, None);
         let generator_id = owner.layer_id.clone();
         let clip_effect = effect("clip-effect");
-        let mut clip = crate::clip::TimelineClip::new_video("media".into(), Beats::ZERO, Beats(1.0), crate::Seconds::ZERO);
+        let mut clip = crate::clip::TimelineClip::new_video(
+            "media".into(),
+            Beats::ZERO,
+            Beats(1.0),
+            crate::Seconds::ZERO,
+        );
         clip.effects.push(clip_effect);
         owner.clips.push(clip);
         let trigger_owner = effect_layer("trigger-owner", LayerType::Trigger, None);
@@ -403,15 +461,31 @@ mod tests {
         project.settings.master_effects.push(effect("master"));
 
         let generator_target = GraphTarget::Generator(generator_id);
-        assert!(project.clip_trigger_target_layer(&generator_target).is_some());
+        assert!(
+            project
+                .clip_trigger_target_layer(&generator_target)
+                .is_some()
+        );
         assert!(project.can_assign_clip_trigger_source(
             &generator_target,
             "clipFire",
             &ClipTriggerSource::OwnLayer
         ));
-        assert!(project.clip_trigger_target_layer(&GraphTarget::Effect(EffectId::new("clip-effect"))).is_none());
-        assert!(project.clip_trigger_target_layer(&GraphTarget::Effect(trigger_effect_id)).is_none());
-        assert!(project.clip_trigger_target_layer(&GraphTarget::Effect(EffectId::new("master"))).is_none());
+        assert!(
+            project
+                .clip_trigger_target_layer(&GraphTarget::Effect(EffectId::new("clip-effect")))
+                .is_none()
+        );
+        assert!(
+            project
+                .clip_trigger_target_layer(&GraphTarget::Effect(trigger_effect_id))
+                .is_none()
+        );
+        assert!(
+            project
+                .clip_trigger_target_layer(&GraphTarget::Effect(EffectId::new("master")))
+                .is_none()
+        );
     }
 
     #[test]
@@ -419,7 +493,13 @@ mod tests {
         let mut project = crate::project::Project::default();
         let mut gate = generator_layer("gate", LayerType::Generator, None);
         let gate_id = gate.layer_id.clone();
-        gate.gen_params_mut().unwrap().params.get_mut("clipFire").unwrap().spec.is_trigger_gate = true;
+        gate.gen_params_mut()
+            .unwrap()
+            .params
+            .get_mut("clipFire")
+            .unwrap()
+            .spec
+            .is_trigger_gate = true;
         project.timeline.layers.push(gate);
         assert!(!project.can_assign_clip_trigger_source(
             &GraphTarget::Generator(gate_id),
@@ -466,17 +546,24 @@ mod tests {
             };
             owner.index = (index * 2) as i32;
             project.timeline.layers.push(owner);
-            project.timeline.layers.push(trigger(&format!("{id}-lane"), id));
+            project
+                .timeline
+                .layers
+                .push(trigger(&format!("{id}-lane"), id));
         }
         let unrelated = LayerId::new("missing-parent-lane");
-        let mut missing_parent = Layer::new_trigger("missing-parent".into(), LayerId::new("ghost"), 99);
+        let mut missing_parent =
+            Layer::new_trigger("missing-parent".into(), LayerId::new("ghost"), 99);
         missing_parent.layer_id = unrelated.clone();
         project.timeline.layers.push(missing_parent);
 
         for (id, _) in kinds {
             let target = GraphTarget::Effect(EffectId::new(format!("{id}-effect")));
             let local = LayerId::new(format!("{id}-lane"));
-            assert_eq!(project.clip_trigger_source_options(&target), vec![local.clone()]);
+            assert_eq!(
+                project.clip_trigger_source_options(&target),
+                vec![local.clone()]
+            );
             assert!(project.can_assign_clip_trigger_source(
                 &target,
                 "clipFire",
@@ -485,11 +572,21 @@ mod tests {
             assert!(!project.can_assign_clip_trigger_source(
                 &target,
                 "clipFire",
-                &ClipTriggerSource::Lane { layer_id: unrelated.clone() }
+                &ClipTriggerSource::Lane {
+                    layer_id: unrelated.clone()
+                }
             ));
-            let other = if id == "video" { "generator-lane" } else { "video-lane" };
+            let other = if id == "video" {
+                "generator-lane"
+            } else {
+                "video-lane"
+            };
             assert!(!project.can_assign_clip_trigger_source(
-                &target, "clipFire", &ClipTriggerSource::Lane { layer_id: LayerId::new(other) }
+                &target,
+                "clipFire",
+                &ClipTriggerSource::Lane {
+                    layer_id: LayerId::new(other)
+                }
             ));
         }
         let target = GraphTarget::SceneModifier {

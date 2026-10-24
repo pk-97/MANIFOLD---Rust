@@ -320,9 +320,8 @@ struct RuntimeRegistry {
 }
 
 fn runtime_registry() -> &'static std::sync::RwLock<RuntimeRegistry> {
-    static MAP: std::sync::OnceLock<
-        std::sync::RwLock<RuntimeRegistry>,
-    > = std::sync::OnceLock::new();
+    static MAP: std::sync::OnceLock<std::sync::RwLock<RuntimeRegistry>> =
+        std::sync::OnceLock::new();
     MAP.get_or_init(|| {
         std::sync::RwLock::new(RuntimeRegistry {
             names: AHashMap::default(),

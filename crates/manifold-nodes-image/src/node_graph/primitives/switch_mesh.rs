@@ -68,11 +68,19 @@ manifold_node_engine::param_tooltips!("node.switch_mesh", {
 });
 
 impl Primitive for SwitchMesh {
-    fn selected_input_branch(&self, params: &ParamValues, wired_inputs: &[&str]) -> Option<&'static str> {
+    fn selected_input_branch(
+        &self,
+        params: &ParamValues,
+        wired_inputs: &[&str],
+    ) -> Option<&'static str> {
         selected_switch_input(params, wired_inputs)
     }
 
-    fn skip_passthrough(&self, params: &ParamValues, wired_inputs: &[&str]) -> Option<(&'static str, &'static str)> {
+    fn skip_passthrough(
+        &self,
+        params: &ParamValues,
+        wired_inputs: &[&str],
+    ) -> Option<(&'static str, &'static str)> {
         switch_passthrough(params, wired_inputs)
     }
 
@@ -90,34 +98,52 @@ impl Primitive for SwitchMesh {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        self.switch.run(ctx, std::mem::size_of::<MeshVertex>() as u64, "node.switch_mesh");
+        self.switch.run(
+            ctx,
+            std::mem::size_of::<MeshVertex>() as u64,
+            "node.switch_mesh",
+        );
     }
 }
 
 fn switch_port(selector: f32) -> &'static str {
-    SWITCH_INPUTS[selector.round().clamp(0.0, (SWITCH_INPUTS.len() - 1) as f32) as usize]
+    SWITCH_INPUTS[selector
+        .round()
+        .clamp(0.0, (SWITCH_INPUTS.len() - 1) as f32) as usize]
 }
 
 /// The chosen input when the selector is a param. A wired selector can
 /// change mid-frame, so every input stays live.
-pub(super) fn selected_switch_input(params: &ParamValues, wired_inputs: &[&str]) -> Option<&'static str> {
+pub(super) fn selected_switch_input(
+    params: &ParamValues,
+    wired_inputs: &[&str],
+) -> Option<&'static str> {
     if wired_inputs.contains(&"selector") {
         return None;
     }
-    let selector = params.get("selector").and_then(|v| v.as_scalar()).unwrap_or(0.0);
+    let selector = params
+        .get("selector")
+        .and_then(|v| v.as_scalar())
+        .unwrap_or(0.0);
     Some(switch_port(selector))
 }
 
 /// With a param selector, a wired choice passes through by alias: the executor
 /// points `out` at the chosen input's buffer and live extent for the frame
 /// and `run` does not execute. An unwired choice runs, to publish extent zero.
-pub(super) fn switch_passthrough(params: &ParamValues, wired_inputs: &[&str]) -> Option<(&'static str, &'static str)> {
+pub(super) fn switch_passthrough(
+    params: &ParamValues,
+    wired_inputs: &[&str],
+) -> Option<(&'static str, &'static str)> {
     let port = selected_switch_input(params, wired_inputs)?;
     wired_inputs.contains(&port).then_some((port, "out"))
 }
 
 /// `out` holds the larger wired input, so either choice fits.
-pub(super) fn switch_output_capacity(port_name: &str, input_capacities: &[(&str, u32)]) -> Option<u32> {
+pub(super) fn switch_output_capacity(
+    port_name: &str,
+    input_capacities: &[(&str, u32)],
+) -> Option<u32> {
     if port_name != "out" {
         return None;
     }
@@ -174,11 +200,24 @@ impl ArraySwitch {
                     buffer.zero_fill();
                     buffer
                 });
-                (0, LiveExtent { counts: counts.clone(), offset: 0, per_item: 1, bound: 0 }, false)
+                (
+                    0,
+                    LiveExtent {
+                        counts: counts.clone(),
+                        offset: 0,
+                        per_item: 1,
+                        bound: 0,
+                    },
+                    false,
+                )
             }
             (Some(src), Some(extent)) => {
                 let bound = u64::from(extent.bound).min(src.size / item).min(out_items) as u32;
-                (u64::from(bound) * item, LiveExtent { bound, ..extent }, true)
+                (
+                    u64::from(bound) * item,
+                    LiveExtent { bound, ..extent },
+                    true,
+                )
             }
             (Some(src), None) => {
                 let items = (src.size / item).min(out_items) as u32;
@@ -189,7 +228,16 @@ impl ArraySwitch {
                     self.fixed_counts = Some((items, buffer));
                 }
                 let counts = self.fixed_counts.as_ref().expect("set above").1.clone();
-                (u64::from(items) * item, LiveExtent { counts, offset: 0, per_item: 1, bound: items }, false)
+                (
+                    u64::from(items) * item,
+                    LiveExtent {
+                        counts,
+                        offset: 0,
+                        per_item: 1,
+                        bound: items,
+                    },
+                    false,
+                )
             }
         };
 
@@ -221,7 +269,9 @@ pub(super) mod tests {
     use manifold_node_engine::exec::execution::Executor;
     use manifold_node_engine::exec::execution_plan::compile;
     use manifold_node_engine::graph::Graph;
-    use manifold_node_engine::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+    use manifold_node_engine::ports::{
+        ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+    };
 
     use super::*;
 
@@ -229,23 +279,48 @@ pub(super) mod tests {
     fn ports_are_a_param_shadowed_selector_and_two_mesh_inputs() {
         let node = SwitchMesh::new();
         let mesh = PortType::Array(ArrayType::of_known::<MeshVertex>());
-        let inputs: Vec<_> = EffectNode::inputs(&node).iter().map(|p| (p.name.as_ref(), p.ty, p.required)).collect();
+        let inputs: Vec<_> = EffectNode::inputs(&node)
+            .iter()
+            .map(|p| (p.name.as_ref(), p.ty, p.required))
+            .collect();
         assert_eq!(
             inputs,
-            [("selector", PortType::Scalar(ScalarType::F32), true), ("in_0", mesh, false), ("in_1", mesh, false)]
+            [
+                ("selector", PortType::Scalar(ScalarType::F32), true),
+                ("in_0", mesh, false),
+                ("in_1", mesh, false)
+            ]
         );
-        let outputs: Vec<_> = EffectNode::outputs(&node).iter().map(|p| (p.name.as_ref(), p.ty)).collect();
+        let outputs: Vec<_> = EffectNode::outputs(&node)
+            .iter()
+            .map(|p| (p.name.as_ref(), p.ty))
+            .collect();
         assert_eq!(outputs, [("out", mesh)]);
-        assert!(EffectNode::parameters(&node).iter().any(|p| p.name == "selector"));
+        assert!(
+            EffectNode::parameters(&node)
+                .iter()
+                .any(|p| p.name == "selector")
+        );
     }
 
     #[test]
     fn param_selector_picks_a_rounded_clamped_input() {
         let node = SwitchMesh::new();
-        for (selector, port) in [(0.0, "in_0"), (0.4, "in_0"), (0.6, "in_1"), (1.0, "in_1"), (7.0, "in_1"), (-3.0, "in_0")] {
+        for (selector, port) in [
+            (0.0, "in_0"),
+            (0.4, "in_0"),
+            (0.6, "in_1"),
+            (1.0, "in_1"),
+            (7.0, "in_1"),
+            (-3.0, "in_0"),
+        ] {
             let mut params = ParamValues::default();
             params.insert(Cow::Borrowed("selector"), ParamValue::Float(selector));
-            assert_eq!(Primitive::selected_input_branch(&node, &params, &["in_0", "in_1"]), Some(port), "{selector}");
+            assert_eq!(
+                Primitive::selected_input_branch(&node, &params, &["in_0", "in_1"]),
+                Some(port),
+                "{selector}"
+            );
         }
     }
 
@@ -256,9 +331,15 @@ pub(super) mod tests {
         let node = SwitchMesh::new();
         let mut params = ParamValues::default();
         params.insert(Cow::Borrowed("selector"), ParamValue::Float(1.0));
-        assert_eq!(Primitive::skip_passthrough(&node, &params, &["in_0", "in_1"]), Some(("in_1", "out")));
+        assert_eq!(
+            Primitive::skip_passthrough(&node, &params, &["in_0", "in_1"]),
+            Some(("in_1", "out"))
+        );
         assert_eq!(Primitive::skip_passthrough(&node, &params, &["in_0"]), None);
-        assert_eq!(Primitive::skip_passthrough(&node, &params, &["selector", "in_0", "in_1"]), None);
+        assert_eq!(
+            Primitive::skip_passthrough(&node, &params, &["selector", "in_0", "in_1"]),
+            None
+        );
         assert_eq!(Primitive::variadic_skip_passthrough_out(&node), Some("out"));
     }
 
@@ -266,16 +347,28 @@ pub(super) mod tests {
     fn wired_selector_keeps_every_branch() {
         let node = SwitchMesh::new();
         let params = ParamValues::default();
-        assert_eq!(Primitive::selected_input_branch(&node, &params, &["selector", "in_0", "in_1"]), None);
+        assert_eq!(
+            Primitive::selected_input_branch(&node, &params, &["selector", "in_0", "in_1"]),
+            None
+        );
     }
 
     #[test]
     fn output_capacity_is_the_larger_wired_input() {
         let node = SwitchMesh::new();
         let params = ParamValues::default();
-        assert_eq!(Primitive::array_output_capacity(&node, "out", &params, &[("in_0", 5), ("in_1", 8)]), Some(8));
-        assert_eq!(Primitive::array_output_capacity(&node, "out", &params, &[("in_1", 3)]), Some(3));
-        assert_eq!(Primitive::array_output_capacity(&node, "out", &params, &[]), Some(1));
+        assert_eq!(
+            Primitive::array_output_capacity(&node, "out", &params, &[("in_0", 5), ("in_1", 8)]),
+            Some(8)
+        );
+        assert_eq!(
+            Primitive::array_output_capacity(&node, "out", &params, &[("in_1", 3)]),
+            Some(3)
+        );
+        assert_eq!(
+            Primitive::array_output_capacity(&node, "out", &params, &[]),
+            Some(1)
+        );
     }
 
     /// Records each evaluation by name.
@@ -289,10 +382,19 @@ pub(super) mod tests {
 
     impl LoggedArrayNode {
         fn port(name: &'static str, ty: PortType, kind: PortKind) -> NodePort {
-            NodePort { name: Cow::Borrowed(name), ty, kind, required: false }
+            NodePort {
+                name: Cow::Borrowed(name),
+                ty,
+                kind,
+                required: false,
+            }
         }
 
-        pub(in super::super) fn producer(name: &str, ty: PortType, log: &Arc<Mutex<Vec<String>>>) -> Self {
+        pub(in super::super) fn producer(
+            name: &str,
+            ty: PortType,
+            log: &Arc<Mutex<Vec<String>>>,
+        ) -> Self {
             Self {
                 type_id: EffectNodeType::new(name),
                 inputs: Vec::new(),
@@ -330,7 +432,10 @@ pub(super) mod tests {
             &[]
         }
         fn evaluate(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {
-            self.log.lock().unwrap().push(self.type_id.as_str().to_string());
+            self.log
+                .lock()
+                .unwrap()
+                .push(self.type_id.as_str().to_string());
         }
         fn is_liveness_root(&self) -> bool {
             self.root
@@ -339,13 +444,19 @@ pub(super) mod tests {
 
     /// Runs one frame of `a → in_0, b → in_1, switch → sink` with the
     /// selector param set, and returns which producers ran.
-    pub(in super::super) fn producers_run(switch: Box<dyn EffectNode>, ty: PortType, selector: f32) -> Vec<String> {
+    pub(in super::super) fn producers_run(
+        switch: Box<dyn EffectNode>,
+        ty: PortType,
+        selector: f32,
+    ) -> Vec<String> {
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut graph = Graph::new();
         let a = graph.add_node(Box::new(LoggedArrayNode::producer("a", ty, &log)));
         let b = graph.add_node(Box::new(LoggedArrayNode::producer("b", ty, &log)));
         let switch = graph.add_node(switch);
-        graph.set_param(switch, "selector", ParamValue::Float(selector)).unwrap();
+        graph
+            .set_param(switch, "selector", ParamValue::Float(selector))
+            .unwrap();
         let sink = graph.add_node(Box::new(LoggedArrayNode::sink(ty, &log)));
         graph.connect((a, "out"), (switch, "in_0")).unwrap();
         graph.connect((b, "out"), (switch, "in_1")).unwrap();
@@ -359,8 +470,13 @@ pub(super) mod tests {
         };
         Executor::with_mock().execute_frame(&mut graph, &plan, time);
         let ran = log.lock().unwrap().clone();
-        assert!(ran.contains(&"sink".to_string()), "the sink is a liveness root: {ran:?}");
-        ran.into_iter().filter(|name| name == "a" || name == "b").collect()
+        assert!(
+            ran.contains(&"sink".to_string()),
+            "the sink is a liveness root: {ran:?}"
+        );
+        ran.into_iter()
+            .filter(|name| name == "a" || name == "b")
+            .collect()
     }
 
     #[test]

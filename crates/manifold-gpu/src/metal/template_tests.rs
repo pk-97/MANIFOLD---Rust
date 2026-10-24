@@ -136,9 +136,17 @@ impl Kernels {
     fn new(device: &GpuDevice) -> Self {
         Self {
             mix: device.create_compute_pipeline(MIX_WGSL, "main", "template-proof mix"),
-            guarded: device.create_compute_pipeline(GUARDED_MIX_WGSL, "main", "template-proof guarded mix"),
+            guarded: device.create_compute_pipeline(
+                GUARDED_MIX_WGSL,
+                "main",
+                "template-proof guarded mix",
+            ),
             arm: device.create_compute_pipeline(ARM_WGSL, "main", "template-proof arm"),
-            countdown: device.create_compute_pipeline(COUNTDOWN_WGSL, "main", "template-proof countdown"),
+            countdown: device.create_compute_pipeline(
+                COUNTDOWN_WGSL,
+                "main",
+                "template-proof countdown",
+            ),
             texture: device.create_compute_pipeline(TEXTURE_WGSL, "main", "template-proof texture"),
         }
     }
@@ -157,7 +165,8 @@ fn write(buffer: &GpuBuffer, values: &[u32]) {
 fn read(buffer: &GpuBuffer) -> Vec<u32> {
     let ptr = buffer.mapped_ptr().expect("shared buffer");
     // Safety: a shared buffer of `size` bytes; the GPU work is done.
-    let words = unsafe { std::slice::from_raw_parts(ptr.cast::<u32>(), (buffer.size / 4) as usize) };
+    let words =
+        unsafe { std::slice::from_raw_parts(ptr.cast::<u32>(), (buffer.size / 4) as usize) };
     words.to_vec()
 }
 
@@ -176,7 +185,12 @@ impl Run {
     fn new(device: &GpuDevice) -> Self {
         let buffers = std::array::from_fn(|b| {
             let buffer = device.create_buffer_shared((N * 4) as u64);
-            write(&buffer, &(0..N as u32).map(|i| i.wrapping_mul(2654435761).wrapping_add(b as u32)).collect::<Vec<_>>());
+            write(
+                &buffer,
+                &(0..N as u32)
+                    .map(|i| i.wrapping_mul(2654435761).wrapping_add(b as u32))
+                    .collect::<Vec<_>>(),
+            );
             buffer
         });
         Self {
@@ -218,12 +232,28 @@ struct Spec {
 
 impl Default for Spec {
     fn default() -> Self {
-        Self { mixes: 4, declared: 5, copies: 13, live: 7, chunk: 4, first: 3, stride: 1, param_frame: 0, err: false, unrecordable: false }
+        Self {
+            mixes: 4,
+            declared: 5,
+            copies: 13,
+            live: 7,
+            chunk: 4,
+            first: 3,
+            stride: 1,
+            param_frame: 0,
+            err: false,
+            unrecordable: false,
+        }
     }
 }
 
 fn params(frame: u32, step: usize) -> [u32; 4] {
-    [1_664_525 + step as u32, frame.wrapping_mul(7) + step as u32, (step as u32 * 37 + frame) % N as u32, 0]
+    [
+        1_664_525 + step as u32,
+        frame.wrapping_mul(7) + step as u32,
+        (step as u32 * 37 + frame) % N as u32,
+        0,
+    ]
 }
 
 fn plain(enc: &mut GpuEncoder, k: &Kernels, run: &Run, frame: u32, step: usize) {
@@ -231,9 +261,20 @@ fn plain(enc: &mut GpuEncoder, k: &Kernels, run: &Run, frame: u32, step: usize) 
     enc.dispatch_compute(
         &k.mix,
         &[
-            GpuBinding::Buffer { binding: 0, buffer: &run.buffers[step % 3], offset: 0 },
-            GpuBinding::Buffer { binding: 1, buffer: &run.buffers[(step + 1) % 3], offset: 0 },
-            GpuBinding::Bytes { binding: 2, data: bytes(&p) },
+            GpuBinding::Buffer {
+                binding: 0,
+                buffer: &run.buffers[step % 3],
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &run.buffers[(step + 1) % 3],
+                offset: 0,
+            },
+            GpuBinding::Bytes {
+                binding: 2,
+                data: bytes(&p),
+            },
         ],
         GROUPS,
         "template-proof plain mix",
@@ -241,14 +282,38 @@ fn plain(enc: &mut GpuEncoder, k: &Kernels, run: &Run, frame: u32, step: usize) 
 }
 
 fn arm(enc: &mut GpuEncoder, k: &Kernels, run: &Run, spec: Spec) {
-    let a = [spec.live, spec.copies, spec.first, spec.stride, spec.declared, spec.chunk, GROUPS[0], 0];
+    let a = [
+        spec.live,
+        spec.copies,
+        spec.first,
+        spec.stride,
+        spec.declared,
+        spec.chunk,
+        GROUPS[0],
+        0,
+    ];
     enc.dispatch_compute(
         &k.arm,
         &[
-            GpuBinding::Buffer { binding: 0, buffer: &run.state, offset: 0 },
-            GpuBinding::Buffer { binding: 1, buffer: &run.args, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &run.ranges, offset: 0 },
-            GpuBinding::Bytes { binding: 3, data: bytes(&a) },
+            GpuBinding::Buffer {
+                binding: 0,
+                buffer: &run.state,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &run.args,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &run.ranges,
+                offset: 0,
+            },
+            GpuBinding::Bytes {
+                binding: 3,
+                data: bytes(&a),
+            },
         ],
         [1, 1, 1],
         "template-proof arm",
@@ -267,10 +332,25 @@ fn encode_reference(enc: &mut GpuEncoder, k: &Kernels, run: &Run, frame: u32, sp
             enc.dispatch_compute_indirect(
                 &k.guarded,
                 &[
-                    GpuBinding::Buffer { binding: 0, buffer: &run.buffers[i % 3], offset: 0 },
-                    GpuBinding::Buffer { binding: 1, buffer: &run.buffers[(i + 1) % 3], offset: 0 },
-                    GpuBinding::Bytes { binding: 2, data: bytes(&p) },
-                    GpuBinding::Buffer { binding: 3, buffer: &run.args, offset: 0 },
+                    GpuBinding::Buffer {
+                        binding: 0,
+                        buffer: &run.buffers[i % 3],
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: &run.buffers[(i + 1) % 3],
+                        offset: 0,
+                    },
+                    GpuBinding::Bytes {
+                        binding: 2,
+                        data: bytes(&p),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: &run.args,
+                        offset: 0,
+                    },
                 ],
                 &run.args,
                 0,
@@ -279,7 +359,18 @@ fn encode_reference(enc: &mut GpuEncoder, k: &Kernels, run: &Run, frame: u32, sp
         }
         enc.dispatch_compute_indirect(
             &k.countdown,
-            &[GpuBinding::Buffer { binding: 0, buffer: &run.state, offset: 0 }, GpuBinding::Buffer { binding: 1, buffer: &run.args, offset: 0 }],
+            &[
+                GpuBinding::Buffer {
+                    binding: 0,
+                    buffer: &run.state,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &run.args,
+                    offset: 0,
+                },
+            ],
             &run.args,
             12,
             "template-proof reference countdown",
@@ -290,7 +381,14 @@ fn encode_reference(enc: &mut GpuEncoder, k: &Kernels, run: &Run, frame: u32, sp
 
 /// The frame through the template. Prepared before anything encodes: a
 /// refused prepare returns with the encoder untouched.
-fn encode_template(enc: &mut GpuEncoder, k: &Kernels, run: &mut Run, frame: u32, spec: Spec, texture: Option<&GpuTexture>) -> Result<(), String> {
+fn encode_template(
+    enc: &mut GpuEncoder,
+    k: &Kernels,
+    run: &mut Run,
+    frame: u32,
+    spec: Spec,
+    texture: Option<&GpuTexture>,
+) -> Result<(), String> {
     let ticket = prepare_rounds(enc, k, run, spec, texture)?;
     plain(enc, k, run, frame, 0);
     plain(enc, k, run, frame, 1);
@@ -301,19 +399,51 @@ fn encode_template(enc: &mut GpuEncoder, k: &Kernels, run: &mut Run, frame: u32,
 }
 
 /// The rounds' prepare alone: the walk and the slot, nothing encoded.
-fn prepare_rounds(enc: &mut GpuEncoder, k: &Kernels, run: &mut Run, spec: Spec, texture: Option<&GpuTexture>) -> Result<TemplateTicket, String> {
-    let Run { buffers, state, args, ranges, store } = run;
-    let at = TemplateRanges { ranges, first: spec.first, stride: spec.stride, chunk: spec.chunk };
+fn prepare_rounds(
+    enc: &mut GpuEncoder,
+    k: &Kernels,
+    run: &mut Run,
+    spec: Spec,
+    texture: Option<&GpuTexture>,
+) -> Result<TemplateTicket, String> {
+    let Run {
+        buffers,
+        state,
+        args,
+        ranges,
+        store,
+    } = run;
+    let at = TemplateRanges {
+        ranges,
+        first: spec.first,
+        stride: spec.stride,
+        chunk: spec.chunk,
+    };
     enc.prepare_template(store, at, spec.declared, spec.copies, |rec| {
         for i in 0..spec.mixes as usize {
             let p = params(spec.param_frame, 100 + i);
             rec.dispatch_gated(
                 &k.guarded,
                 &[
-                    GpuBinding::Buffer { binding: 0, buffer: &buffers[i % 3], offset: 0 },
-                    GpuBinding::Buffer { binding: 1, buffer: &buffers[(i + 1) % 3], offset: 0 },
-                    GpuBinding::Bytes { binding: 2, data: bytes(&p) },
-                    GpuBinding::Buffer { binding: 3, buffer: args, offset: 0 },
+                    GpuBinding::Buffer {
+                        binding: 0,
+                        buffer: &buffers[i % 3],
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: &buffers[(i + 1) % 3],
+                        offset: 0,
+                    },
+                    GpuBinding::Bytes {
+                        binding: 2,
+                        data: bytes(&p),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: args,
+                        offset: 0,
+                    },
                 ],
                 GROUPS,
                 args,
@@ -328,7 +458,17 @@ fn prepare_rounds(enc: &mut GpuEncoder, k: &Kernels, run: &mut Run, spec: Spec, 
             let texture = texture.expect("a texture for the unrecordable dispatch");
             rec.dispatch_gated(
                 &k.texture,
-                &[GpuBinding::Texture { binding: 0, texture }, GpuBinding::Buffer { binding: 1, buffer: state, offset: 0 }],
+                &[
+                    GpuBinding::Texture {
+                        binding: 0,
+                        texture,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: state,
+                        offset: 0,
+                    },
+                ],
                 [1, 1, 1],
                 args,
                 0,
@@ -337,7 +477,18 @@ fn prepare_rounds(enc: &mut GpuEncoder, k: &Kernels, run: &mut Run, spec: Spec, 
         }
         rec.dispatch_gated(
             &k.countdown,
-            &[GpuBinding::Buffer { binding: 0, buffer: state, offset: 0 }, GpuBinding::Buffer { binding: 1, buffer: args, offset: 0 }],
+            &[
+                GpuBinding::Buffer {
+                    binding: 0,
+                    buffer: state,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: args,
+                    offset: 0,
+                },
+            ],
             [1, 1, 1],
             args,
             12,
@@ -357,14 +508,29 @@ enum Path {
 
 /// One template frame on `path`, committed and waited; the profile when
 /// profiled.
-fn template_frame(device: &GpuDevice, k: &Kernels, run: &mut Run, cache: &mut Option<GpuReplayCache>, frame: u32, spec: Spec, path: Path) -> Result<Option<GpuFrameProfile>, String> {
+fn template_frame(
+    device: &GpuDevice,
+    k: &Kernels,
+    run: &mut Run,
+    cache: &mut Option<GpuReplayCache>,
+    frame: u32,
+    spec: Spec,
+    path: Path,
+) -> Result<Option<GpuFrameProfile>, String> {
     let mut enc = device.create_encoder("template-proof");
     if let Path::Profiled(granularity) = path {
         // One sampler for the thread: Metal caps live counter sample buffers.
         thread_local! {
             static SAMPLER: std::cell::OnceCell<GpuTimestampSampler> = const { std::cell::OnceCell::new() };
         }
-        let sampler = SAMPLER.with(|s| s.get_or_init(|| device.create_timestamp_sampler(256).expect("timestamp sampling")).clone());
+        let sampler = SAMPLER.with(|s| {
+            s.get_or_init(|| {
+                device
+                    .create_timestamp_sampler(256)
+                    .expect("timestamp sampling")
+            })
+            .clone()
+        });
         enc.enable_profiling_at(sampler, device, granularity);
         enc.set_profile_tag("rounds-tag");
     }
@@ -400,18 +566,59 @@ fn reference_frame(device: &GpuDevice, k: &Kernels, run: &Run, frame: u32, spec:
 fn template_matches_the_unrolled_reference_on_every_path() {
     let device = GpuDevice::new();
     let k = Kernels::new(&device);
-    let base = Spec { copies: 40, chunk: 8, first: 0, ..Spec::default() };
-    let mut specs: Vec<Spec> = [0, 1, 2, 3, 4, 6, 7, 8, 14, 15, 16, 22, 23, 24, 30, 31, 32, 38, 39, 40]
-        .iter()
-        .map(|&live| Spec { live, ..base })
-        .collect();
-    specs.push(Spec { chunk: 4, live: 9, ..base });
-    specs.push(Spec { copies: 13, live: 13, ..base });
-    specs.push(Spec { copies: 13, chunk: 4, live: 7, ..base });
-    specs.push(Spec { copies: 9, chunk: 3, stride: 2, first: 5, live: 5, ..base });
-    specs.push(Spec { param_frame: 3, live: 11, ..base });
-    specs.push(Spec { copies: 1, chunk: 32, live: 1, ..base });
-    for path in [Path::NoSpan, Path::Span, Path::Profiled(ProfileGranularity::Tag), Path::Profiled(ProfileGranularity::Dispatch)] {
+    let base = Spec {
+        copies: 40,
+        chunk: 8,
+        first: 0,
+        ..Spec::default()
+    };
+    let mut specs: Vec<Spec> = [
+        0, 1, 2, 3, 4, 6, 7, 8, 14, 15, 16, 22, 23, 24, 30, 31, 32, 38, 39, 40,
+    ]
+    .iter()
+    .map(|&live| Spec { live, ..base })
+    .collect();
+    specs.push(Spec {
+        chunk: 4,
+        live: 9,
+        ..base
+    });
+    specs.push(Spec {
+        copies: 13,
+        live: 13,
+        ..base
+    });
+    specs.push(Spec {
+        copies: 13,
+        chunk: 4,
+        live: 7,
+        ..base
+    });
+    specs.push(Spec {
+        copies: 9,
+        chunk: 3,
+        stride: 2,
+        first: 5,
+        live: 5,
+        ..base
+    });
+    specs.push(Spec {
+        param_frame: 3,
+        live: 11,
+        ..base
+    });
+    specs.push(Spec {
+        copies: 1,
+        chunk: 32,
+        live: 1,
+        ..base
+    });
+    for path in [
+        Path::NoSpan,
+        Path::Span,
+        Path::Profiled(ProfileGranularity::Tag),
+        Path::Profiled(ProfileGranularity::Dispatch),
+    ] {
         let reference = Run::new(&device);
         let mut run = Run::new(&device);
         let mut cache = None;
@@ -419,22 +626,49 @@ fn template_matches_the_unrolled_reference_on_every_path() {
             let frame = frame as u32;
             reference_frame(&device, &k, &reference, frame, *spec);
             let before = run.store.stats();
-            let profile = template_frame(&device, &k, &mut run, &mut cache, frame, *spec, path).expect("the template frame encodes");
-            assert_eq!(reference.contents(), run.contents(), "{path:?} frame {frame} {spec:?}: the template diverged from the reference");
+            let profile = template_frame(&device, &k, &mut run, &mut cache, frame, *spec, path)
+                .expect("the template frame encodes");
+            assert_eq!(
+                reference.contents(),
+                run.contents(),
+                "{path:?} frame {frame} {spec:?}: the template diverged from the reference"
+            );
             let after = run.store.stats();
             let executes = template_chunks(spec.copies, spec.chunk).count() as u64;
-            assert_eq!((after.walks - before.walks, after.executes - before.executes), (1, executes), "{path:?} frame {frame}: one walk, one execute per chunk");
+            assert_eq!(
+                (after.walks - before.walks, after.executes - before.executes),
+                (1, executes),
+                "{path:?} frame {frame}: one walk, one execute per chunk"
+            );
             if let Some(profile) = profile {
-                let rounds: Vec<&GpuProfiledSpan> = profile.spans.iter().filter(|s| s.label == "pressure rounds").collect();
+                let rounds: Vec<&GpuProfiledSpan> = profile
+                    .spans
+                    .iter()
+                    .filter(|s| s.label == "pressure rounds")
+                    .collect();
                 let want = match path {
                     Path::Profiled(ProfileGranularity::Dispatch) => executes as usize,
                     _ => 1,
                 };
-                assert_eq!(rounds.len(), want, "{path:?} frame {frame}: the rounds' spans");
-                assert!(rounds.iter().all(|s| s.tag == "rounds-tag" && s.millis >= 0.0), "{path:?} frame {frame}: tagged, non-negative spans");
+                assert_eq!(
+                    rounds.len(),
+                    want,
+                    "{path:?} frame {frame}: the rounds' spans"
+                );
+                assert!(
+                    rounds
+                        .iter()
+                        .all(|s| s.tag == "rounds-tag" && s.millis >= 0.0),
+                    "{path:?} frame {frame}: tagged, non-negative spans"
+                );
                 // Each execute depends on the one before (the gate and the
                 // countdown state): it starts after that one ends.
-                assert!(rounds.windows(2).all(|w| w[1].start_ms + 1e-3 >= w[0].start_ms + w[0].millis), "{path:?} frame {frame}: an execute started before the one it depends on ended");
+                assert!(
+                    rounds
+                        .windows(2)
+                        .all(|w| w[1].start_ms + 1e-3 >= w[0].start_ms + w[0].millis),
+                    "{path:?} frame {frame}: an execute started before the one it depends on ended"
+                );
                 assert_eq!((profile.overflow, profile.failed_command_buffers), (0, 0));
             }
         }
@@ -456,17 +690,68 @@ fn template_warm_visits_write_nothing() {
         let before = run.store.stats();
         template_frame(&device, &k, run, cache, 0, spec, path).expect("encodes");
         let after = run.store.stats();
-        (after.walks - before.walks, after.hits - before.hits, after.builds - before.builds, after.command_writes - before.command_writes)
+        (
+            after.walks - before.walks,
+            after.hits - before.hits,
+            after.builds - before.builds,
+            after.command_writes - before.command_writes,
+        )
     };
-    assert_eq!(frame(&mut run, &mut cache, spec, Path::NoSpan), (1, 0, 1, u64::from(spec.declared * spec.chunk)), "cold: one build");
-    for path in [Path::NoSpan, Path::Span, Path::Span, Path::Profiled(ProfileGranularity::Tag)] {
-        assert_eq!(frame(&mut run, &mut cache, spec, path), (1, 1, 0, 0), "{path:?}: warm");
+    assert_eq!(
+        frame(&mut run, &mut cache, spec, Path::NoSpan),
+        (1, 0, 1, u64::from(spec.declared * spec.chunk)),
+        "cold: one build"
+    );
+    for path in [
+        Path::NoSpan,
+        Path::Span,
+        Path::Span,
+        Path::Profiled(ProfileGranularity::Tag),
+    ] {
+        assert_eq!(
+            frame(&mut run, &mut cache, spec, path),
+            (1, 1, 0, 0),
+            "{path:?}: warm"
+        );
     }
-    assert_eq!(frame(&mut run, &mut cache, Spec { live: 2, copies: 9, ..spec }, Path::NoSpan), (1, 1, 0, 0), "a changed stop and count reuse the slot");
-    let changed = Spec { param_frame: 5, ..spec };
-    assert_eq!(frame(&mut run, &mut cache, changed, Path::NoSpan), (1, 0, 1, u64::from(spec.declared * spec.chunk)), "changed bytes: one build");
+    assert_eq!(
+        frame(
+            &mut run,
+            &mut cache,
+            Spec {
+                live: 2,
+                copies: 9,
+                ..spec
+            },
+            Path::NoSpan
+        ),
+        (1, 1, 0, 0),
+        "a changed stop and count reuse the slot"
+    );
+    let changed = Spec {
+        param_frame: 5,
+        ..spec
+    };
+    assert_eq!(
+        frame(&mut run, &mut cache, changed, Path::NoSpan),
+        (1, 0, 1, u64::from(spec.declared * spec.chunk)),
+        "changed bytes: one build"
+    );
     assert_eq!(run.store.slots(), 1, "the idle slot was rebuilt in place");
-    assert_eq!(frame(&mut run, &mut cache, Spec { chunk: 8, ..changed }, Path::NoSpan).2, 1, "a changed chunk builds");
+    assert_eq!(
+        frame(
+            &mut run,
+            &mut cache,
+            Spec {
+                chunk: 8,
+                ..changed
+            },
+            Path::NoSpan
+        )
+        .2,
+        1,
+        "a changed chunk builds"
+    );
 }
 
 /// A refused prepare encodes nothing and leaves the built slot as it was:
@@ -488,19 +773,67 @@ fn template_refusals_are_atomic() {
     });
     let spec = Spec::default();
     let refusals: [(&str, Spec, bool); 6] = [
-        ("a body error after several dispatches", Spec { err: true, param_frame: 1, ..spec }, false),
-        ("too few dispatches", Spec { declared: 6, param_frame: 1, ..spec }, false),
-        ("too many dispatches", Spec { declared: 4, param_frame: 1, ..spec }, false),
-        ("an unrecordable dispatch", Spec { unrecordable: true, declared: 6, param_frame: 1, ..spec }, false),
-        ("storage allocation", Spec { param_frame: 1, ..spec }, true),
-        ("ranges past the buffer", Spec { first: ENTRIES, ..spec }, false),
+        (
+            "a body error after several dispatches",
+            Spec {
+                err: true,
+                param_frame: 1,
+                ..spec
+            },
+            false,
+        ),
+        (
+            "too few dispatches",
+            Spec {
+                declared: 6,
+                param_frame: 1,
+                ..spec
+            },
+            false,
+        ),
+        (
+            "too many dispatches",
+            Spec {
+                declared: 4,
+                param_frame: 1,
+                ..spec
+            },
+            false,
+        ),
+        (
+            "an unrecordable dispatch",
+            Spec {
+                unrecordable: true,
+                declared: 6,
+                param_frame: 1,
+                ..spec
+            },
+            false,
+        ),
+        (
+            "storage allocation",
+            Spec {
+                param_frame: 1,
+                ..spec
+            },
+            true,
+        ),
+        (
+            "ranges past the buffer",
+            Spec {
+                first: ENTRIES,
+                ..spec
+            },
+            false,
+        ),
     ];
     for (why, refused, fail_alloc) in refusals {
         let reference = Run::new(&device);
         let mut run = Run::new(&device);
         let mut cache = None;
         reference_frame(&device, &k, &reference, 0, spec);
-        template_frame(&device, &k, &mut run, &mut cache, 0, spec, Path::NoSpan).expect("the first visit builds");
+        template_frame(&device, &k, &mut run, &mut cache, 0, spec, Path::NoSpan)
+            .expect("the first visit builds");
         let built = run.store.stats();
         run.store.fail_next_alloc = fail_alloc;
         let mut enc = device.create_encoder("template-proof refused");
@@ -508,21 +841,43 @@ fn template_refusals_are_atomic() {
         assert!(result.is_err(), "{why}: refused");
         enc.commit_and_wait_completed();
         let after = run.store.stats();
-        assert_eq!((after.builds, after.command_writes, after.refused - built.refused), (built.builds, built.command_writes, 1), "{why}: nothing built");
+        assert_eq!(
+            (
+                after.builds,
+                after.command_writes,
+                after.refused - built.refused
+            ),
+            (built.builds, built.command_writes, 1),
+            "{why}: nothing built"
+        );
         assert_eq!(run.store.slots(), 1, "{why}: the built slot stays");
         // The failed visit encoded nothing at all.
-        assert_eq!(reference.contents(), run.contents(), "{why}: the refused frame encoded something");
+        assert_eq!(
+            reference.contents(),
+            run.contents(),
+            "{why}: the refused frame encoded something"
+        );
         reference_frame(&device, &k, &reference, 2, spec);
         let before = run.store.stats();
-        template_frame(&device, &k, &mut run, &mut cache, 2, spec, Path::NoSpan).expect("the next visit runs");
-        assert_eq!(run.store.stats().hits - before.hits, 1, "{why}: the old slot is found intact");
-        assert_eq!(reference.contents(), run.contents(), "{why}: the old slot still runs right");
+        template_frame(&device, &k, &mut run, &mut cache, 2, spec, Path::NoSpan)
+            .expect("the next visit runs");
+        assert_eq!(
+            run.store.stats().hits - before.hits,
+            1,
+            "{why}: the old slot is found intact"
+        );
+        assert_eq!(
+            reference.contents(),
+            run.contents(),
+            "{why}: the old slot still runs right"
+        );
     }
     // A chunk past the command bound, or wrapping u32, is refused.
     let mut run = Run::new(&device);
     for chunk in [super::template::MAX_TEMPLATE_COMMANDS, u32::MAX] {
         let mut enc = device.create_encoder("template-proof bound");
-        let err = encode_template(&mut enc, &k, &mut run, 0, Spec { chunk, ..spec }, None).expect_err("refused");
+        let err = encode_template(&mut enc, &k, &mut run, 0, Spec { chunk, ..spec }, None)
+            .expect_err("refused");
         assert!(err.contains("do not fit"), "chunk {chunk}: {err}");
         enc.commit_and_wait_completed();
     }
@@ -541,7 +896,19 @@ fn template_slots_in_flight_are_never_rewritten() {
     let device = GpuDevice::new();
     let k = Kernels::new(&device);
     let spec = Spec::default();
-    let frames: [Spec; 5] = [spec, spec, Spec { param_frame: 1, ..spec }, Spec { param_frame: 2, ..spec }, spec];
+    let frames: [Spec; 5] = [
+        spec,
+        spec,
+        Spec {
+            param_frame: 1,
+            ..spec
+        },
+        Spec {
+            param_frame: 2,
+            ..spec
+        },
+        spec,
+    ];
     let reference = Run::new(&device);
     let mut want = Vec::new();
     for (frame, s) in frames.iter().enumerate() {
@@ -551,7 +918,14 @@ fn template_slots_in_flight_are_never_rewritten() {
     let mut run = Run::new(&device);
     let mut cache = Some(GpuReplayCache::default());
     let gate = device.create_event();
-    let snapshots: Vec<Vec<GpuBuffer>> = frames.iter().map(|_| (0..4).map(|_| device.create_buffer_shared((N * 4) as u64)).collect()).collect();
+    let snapshots: Vec<Vec<GpuBuffer>> = frames
+        .iter()
+        .map(|_| {
+            (0..4)
+                .map(|_| device.create_buffer_shared((N * 4) as u64))
+                .collect()
+        })
+        .collect();
     for (frame, s) in frames.iter().enumerate() {
         let mut enc = device.create_encoder("template-proof held");
         enc.wait_event(&gate, 1);
@@ -570,16 +944,28 @@ fn template_slots_in_flight_are_never_rewritten() {
         enc.copy_buffer_to_buffer(&run.state, &snapshots[frame][3], run.state.size);
         enc.commit();
     }
-    assert!(cache.as_ref().expect("cache").stats().ring_busy > 0, "the frame-replay ring ran out of idle entries");
+    assert!(
+        cache.as_ref().expect("cache").stats().ring_busy > 0,
+        "the frame-replay ring ran out of idle entries"
+    );
     let users = run.store.users();
-    assert_eq!(users.len(), 3, "three keys in flight, three slots: frames 0, 1 and 4 share one");
+    assert_eq!(
+        users.len(),
+        3,
+        "three keys in flight, three slots: frames 0, 1 and 4 share one"
+    );
     assert!(users.iter().all(|&u| u > 0), "every slot is in flight");
     unsafe { gate.raw().setSignaledValue(1) };
-    device.create_encoder("template-proof drain").commit_and_wait_completed();
+    device
+        .create_encoder("template-proof drain")
+        .commit_and_wait_completed();
     for (frame, snapshot) in snapshots.iter().enumerate() {
         let mut got: Vec<Vec<u32>> = snapshot.iter().map(read).collect();
         got[3].truncate(2);
-        assert_eq!(got, want[frame], "frame {frame}: an in-flight slot was rewritten");
+        assert_eq!(
+            got, want[frame],
+            "frame {frame}: an in-flight slot was rewritten"
+        );
     }
     assert_eq!(run.store.users(), [0, 0, 0], "every user retired");
     // Dropping the store waits for committed users: run one, drop it in flight.
@@ -616,17 +1002,37 @@ fn template_tickets_name_their_store_and_build() {
     let mut enc = device.create_encoder("template-proof tickets");
     let a = prepare_rounds(&mut enc, &k, &mut run, spec, None).expect("prepares a");
     let again = prepare_rounds(&mut enc, &k, &mut run, spec, None).expect("an equal key hits");
-    let b = prepare_rounds(&mut enc, &k, &mut run, Spec { param_frame: 9, ..spec }, None).expect("prepares b");
+    let b = prepare_rounds(
+        &mut enc,
+        &k,
+        &mut run,
+        Spec {
+            param_frame: 9,
+            ..spec
+        },
+        None,
+    )
+    .expect("prepares b");
     assert_eq!(run.store.slots(), 1, "b rebuilt the idle slot a named");
     let before = run.contents();
-    let stale = enc.execute_template(&mut run.store, a).expect_err("a stale ticket");
+    let stale = enc
+        .execute_template(&mut run.store, a)
+        .expect_err("a stale ticket");
     assert!(stale.contains("rebuilt or freed"), "{stale}");
-    let stale = enc.execute_template(&mut run.store, again).expect_err("the equal-key ticket went with the build");
+    let stale = enc
+        .execute_template(&mut run.store, again)
+        .expect_err("the equal-key ticket went with the build");
     assert!(stale.contains("rebuilt or freed"), "{stale}");
-    let foreign = enc.execute_template(&mut other.store, b).expect_err("a ticket from another store");
+    let foreign = enc
+        .execute_template(&mut other.store, b)
+        .expect_err("a ticket from another store");
     assert!(foreign.contains("another store"), "{foreign}");
     enc.commit_and_wait_completed();
-    assert_eq!(run.contents(), before, "the refused executes encoded nothing");
+    assert_eq!(
+        run.contents(),
+        before,
+        "the refused executes encoded nothing"
+    );
 
     // Equal keys before a run: both tickets name the same build and run.
     let mut enc = device.create_encoder("template-proof equal tickets");
@@ -641,17 +1047,56 @@ fn template_tickets_name_their_store_and_build() {
     let mut tickets = Vec::new();
     for key in 0..6 {
         let mut enc = device.create_encoder("template-proof held");
-        tickets.push(prepare_rounds(&mut enc, &k, &mut run, Spec { param_frame: 100 + key, ..spec }, None).expect("prepares"));
-        let t = prepare_rounds(&mut enc, &k, &mut run, Spec { param_frame: 100 + key, ..spec }, None).expect("hits");
+        tickets.push(
+            prepare_rounds(
+                &mut enc,
+                &k,
+                &mut run,
+                Spec {
+                    param_frame: 100 + key,
+                    ..spec
+                },
+                None,
+            )
+            .expect("prepares"),
+        );
+        let t = prepare_rounds(
+            &mut enc,
+            &k,
+            &mut run,
+            Spec {
+                param_frame: 100 + key,
+                ..spec
+            },
+            None,
+        )
+        .expect("hits");
         enc.execute_template(&mut run.store, t).expect("runs");
         held.push(enc);
     }
     assert!(run.store.slots() >= 6, "six keys in flight hold six slots");
     drop(held);
     let mut enc = device.create_encoder("template-proof trim");
-    prepare_rounds(&mut enc, &k, &mut run, Spec { param_frame: 200, ..spec }, None).expect("prepares");
-    assert!(run.store.slots() <= 1 + 4, "idle slots past four were freed: {}", run.store.slots());
-    let freed = tickets.into_iter().filter_map(|t| enc.execute_template(&mut run.store, t).err()).count();
+    prepare_rounds(
+        &mut enc,
+        &k,
+        &mut run,
+        Spec {
+            param_frame: 200,
+            ..spec
+        },
+        None,
+    )
+    .expect("prepares");
+    assert!(
+        run.store.slots() <= 1 + 4,
+        "idle slots past four were freed: {}",
+        run.store.slots()
+    );
+    let freed = tickets
+        .into_iter()
+        .filter_map(|t| enc.execute_template(&mut run.store, t).err())
+        .count();
     assert!(freed >= 2, "tickets of freed builds are refused ({freed})");
     drop(enc);
 }
@@ -666,11 +1111,33 @@ fn template_abandoned_encoders_release_their_slots() {
     let mut run = Run::new(&device);
     for key in 0..12 {
         let mut enc = device.create_encoder("template-proof abandoned");
-        encode_template(&mut enc, &k, &mut run, key, Spec { param_frame: key, ..Spec::default() }, None).expect("encodes");
+        encode_template(
+            &mut enc,
+            &k,
+            &mut run,
+            key,
+            Spec {
+                param_frame: key,
+                ..Spec::default()
+            },
+            None,
+        )
+        .expect("encodes");
         drop(enc);
-        assert!(run.store.users().iter().all(|&u| u == 0), "frame {key}: an abandoned buffer still counts as a user");
-        assert_eq!(run.store.slots(), 1, "frame {key}: the abandoned slot is rebuilt in place, not stranded");
-        assert_eq!(run.store.tokens(), 1, "frame {key}: the liveness token is reused, not allocated");
+        assert!(
+            run.store.users().iter().all(|&u| u == 0),
+            "frame {key}: an abandoned buffer still counts as a user"
+        );
+        assert_eq!(
+            run.store.slots(),
+            1,
+            "frame {key}: the abandoned slot is rebuilt in place, not stranded"
+        );
+        assert_eq!(
+            run.store.tokens(),
+            1,
+            "frame {key}: the liveness token is reused, not allocated"
+        );
     }
     // Committed and waited frames reuse it too.
     for key in 0..4 {
@@ -686,9 +1153,17 @@ fn template_abandoned_encoders_release_their_slots() {
     let mut other = device.create_encoder("template-proof other");
     encode_template(&mut other, &k, &mut run, 1, Spec::default(), None).expect("encodes");
     assert_eq!(run.store.tokens(), 2, "two live encoders hold two tokens");
-    assert_eq!(run.store.users(), [2], "both unsent buffers are users while their encoders live");
+    assert_eq!(
+        run.store.users(),
+        [2],
+        "both unsent buffers are users while their encoders live"
+    );
     drop(other);
-    assert_eq!(run.store.users(), [1], "only the dropped encoder's buffer retires");
+    assert_eq!(
+        run.store.users(),
+        [1],
+        "only the dropped encoder's buffer retires"
+    );
     drop(held);
     assert_eq!(run.store.users(), [0]);
 }
@@ -713,16 +1188,33 @@ fn template_survives_buffer_replacement_and_split_buffers() {
     let builds = second.store.stats().builds;
     let mut enc = device.create_encoder("template-proof split");
     encode_template(&mut enc, &k, &mut second, 0, spec, None).expect("encodes");
-    assert_eq!(second.store.stats().builds - builds, 1, "replaced buffers are a new key");
+    assert_eq!(
+        second.store.stats().builds - builds,
+        1,
+        "replaced buffers are a new key"
+    );
     enc.commit_and_continue(&device);
-    encode_template(&mut enc, &k, &mut second, 1, spec, None).expect("encodes on the continued buffer");
-    assert_eq!(second.store.stats().builds - builds, 1, "the continued buffer runs the same build");
+    encode_template(&mut enc, &k, &mut second, 1, spec, None)
+        .expect("encodes on the continued buffer");
+    assert_eq!(
+        second.store.stats().builds - builds,
+        1,
+        "the continued buffer runs the same build"
+    );
     // The committed first buffer may already have completed and been pruned.
-    assert!(matches!(second.store.users()[..], [1] | [2]), "the continued buffer uses the slot: {:?}", second.store.users());
+    assert!(
+        matches!(second.store.users()[..], [1] | [2]),
+        "the continued buffer uses the slot: {:?}",
+        second.store.users()
+    );
     enc.commit_and_wait_completed();
     reference_frame(&device, &k, &reference, 0, spec);
     reference_frame(&device, &k, &reference, 1, spec);
-    assert_eq!(second.contents(), reference.contents(), "both executes ran in order");
+    assert_eq!(
+        second.contents(),
+        reference.contents(),
+        "both executes ran in order"
+    );
     assert_eq!(second.store.users(), [0]);
 }
 
@@ -732,17 +1224,29 @@ fn template_survives_buffer_replacement_and_split_buffers() {
 fn template_profiled_past_the_sampler_matches_the_reference() {
     let device = GpuDevice::new();
     let k = Kernels::new(&device);
-    let spec = Spec { copies: 120, chunk: 1, live: 90, first: 0, ..Spec::default() };
+    let spec = Spec {
+        copies: 120,
+        chunk: 1,
+        live: 90,
+        first: 0,
+        ..Spec::default()
+    };
     let mut big = Run::new(&device);
     big.ranges = device.create_buffer_shared(128 * crate::GATED_RANGE_BYTES);
     let mut reference = Run::new(&device);
     reference.ranges = device.create_buffer_shared(128 * crate::GATED_RANGE_BYTES);
     reference_frame(&device, &k, &reference, 0, spec);
     let mut enc = device.create_encoder("template-proof exhausted");
-    let sampler = device.create_timestamp_sampler(64).expect("timestamp sampling");
+    let sampler = device
+        .create_timestamp_sampler(64)
+        .expect("timestamp sampling");
     enc.enable_profiling_at(sampler, &device, ProfileGranularity::Dispatch);
     encode_template(&mut enc, &k, &mut big, 0, spec, None).expect("encodes");
     let profile = enc.commit_and_wait_profiled(&device);
     assert!(profile.overflow > 0, "the sampler ran out");
-    assert_eq!(big.contents(), reference.contents(), "unsampled executes still ran");
+    assert_eq!(
+        big.contents(),
+        reference.contents(),
+        "unsampled executes still ran"
+    );
 }

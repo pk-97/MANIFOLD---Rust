@@ -198,20 +198,42 @@ mod tests {
     #[test]
     fn cut_topology_resets_history_without_resetting_ordinary_motion() {
         let mut history = MeshTopologyHistory::default();
-        let revision = Some(ContentVersion::new(1, crate::exec::execution_plan::ResourceId(4), 1));
+        let revision = Some(ContentVersion::new(
+            1,
+            crate::exec::execution_plan::ResourceId(4),
+            1,
+        ));
         assert!(!history.update(1, [None, revision].into_iter()));
         // Deformation changes the mesh buffer, not this cut-map revision.
         assert!(!history.update(1, [None, revision].into_iter()));
-        assert!(history.update(
-            1,
-            [None, Some(ContentVersion::new(1, crate::exec::execution_plan::ResourceId(4), 2))]
+        assert!(
+            history.update(
+                1,
+                [
+                    None,
+                    Some(ContentVersion::new(
+                        1,
+                        crate::exec::execution_plan::ResourceId(4),
+                        2
+                    ))
+                ]
                 .into_iter(),
-        ));
-        assert!(!history.update(
-            1,
-            [None, Some(ContentVersion::new(1, crate::exec::execution_plan::ResourceId(4), 2))]
+            )
+        );
+        assert!(
+            !history.update(
+                1,
+                [
+                    None,
+                    Some(ContentVersion::new(
+                        1,
+                        crate::exec::execution_plan::ResourceId(4),
+                        2
+                    ))
+                ]
                 .into_iter(),
-        ));
+            )
+        );
         // Recycled resources, changed object order and removal also reset.
         assert!(history.update(2, [None, revision].into_iter()));
         assert!(history.update(2, [revision, None].into_iter()));
@@ -222,11 +244,7 @@ mod tests {
     #[test]
     fn general_topology_revision_resets_history_without_a_cut_map() {
         let mut history = MeshTopologyHistory::default();
-        let object = (
-            Some(Slot(4)),
-            Some(1_u64),
-            None::<ContentVersion>,
-        );
+        let object = (Some(Slot(4)), Some(1_u64), None::<ContentVersion>);
         assert!(!history.update(1, [object].into_iter()));
         assert!(!history.update(1, [object].into_iter()));
         assert!(history.update(1, [(object.0, Some(2_u64), object.2)].into_iter()));

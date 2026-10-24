@@ -15,8 +15,11 @@
 
 use manifold_foundation::scene_surface::Unit;
 
-use super::modifier::{ModifierTypeEntry, ON_IS_THE_TOGGLE, entry, held, join, live, mask, mask_centre, mask_radius, mask_rows};
 use super::PropertyRow;
+use super::modifier::{
+    ModifierTypeEntry, ON_IS_THE_TOGGLE, entry, held, join, live, mask, mask_centre, mask_radius,
+    mask_rows,
+};
 use crate::scene_doc::ModifierType;
 
 /// A performance row measured in the target's radius.
@@ -24,21 +27,49 @@ const fn radii(property: &'static str, order: u8) -> PropertyRow {
     live(property, order).unit(Unit::Radius)
 }
 
-pub static BEND_ROWS: [PropertyRow; 14] =
-    join([live("angle", 1), live("axis", 2), radii("center", 3), held("enabled", ON_IS_THE_TOGGLE)], mask_rows!(20));
-
-pub static TWIST_ROWS: [PropertyRow; 14] =
-    join([live("angle", 1), live("axis", 2), radii("center", 3), held("enabled", ON_IS_THE_TOGGLE)], mask_rows!(20));
-
-pub static TAPER_ROWS: [PropertyRow; 15] = join(
-    [live("taper", 1), live("axis", 2), radii("center", 3), radii("length", 4), held("enabled", ON_IS_THE_TOGGLE)],
+pub static BEND_ROWS: [PropertyRow; 14] = join(
+    [
+        live("angle", 1),
+        live("axis", 2),
+        radii("center", 3),
+        held("enabled", ON_IS_THE_TOGGLE),
+    ],
     mask_rows!(20),
 );
 
-pub static INFLATE_ROWS: [PropertyRow; 12] = join([radii("amount", 1), held("enabled", ON_IS_THE_TOGGLE)], mask_rows!(20));
+pub static TWIST_ROWS: [PropertyRow; 14] = join(
+    [
+        live("angle", 1),
+        live("axis", 2),
+        radii("center", 3),
+        held("enabled", ON_IS_THE_TOGGLE),
+    ],
+    mask_rows!(20),
+);
+
+pub static TAPER_ROWS: [PropertyRow; 15] = join(
+    [
+        live("taper", 1),
+        live("axis", 2),
+        radii("center", 3),
+        radii("length", 4),
+        held("enabled", ON_IS_THE_TOGGLE),
+    ],
+    mask_rows!(20),
+);
+
+pub static INFLATE_ROWS: [PropertyRow; 12] = join(
+    [radii("amount", 1), held("enabled", ON_IS_THE_TOGGLE)],
+    mask_rows!(20),
+);
 
 pub static ROTATE_ROWS: [PropertyRow; 14] = join(
-    [live("angle_x", 1), live("angle_y", 2), live("angle_z", 3), held("enabled", ON_IS_THE_TOGGLE)],
+    [
+        live("angle_x", 1),
+        live("angle_y", 2),
+        live("angle_z", 3),
+        held("enabled", ON_IS_THE_TOGGLE),
+    ],
     mask_rows!(20),
 );
 
@@ -57,34 +88,90 @@ pub static DISPLACE_TEXTURE_ROWS: [PropertyRow; 17] = join(
     mask_rows!(20),
 );
 
-pub static MORPH_ROWS: [PropertyRow; 12] = join([live("t", 1), held("enabled", ON_IS_THE_TOGGLE)], mask_rows!(20));
-
-pub static BOIL_ROWS: [PropertyRow; 14] =
-    join([radii("amount", 1), live("frequency", 2), live("speed", 3), held("enabled", ON_IS_THE_TOGGLE)], mask_rows!(20));
-
-pub static RIPPLE_ROWS: [PropertyRow; 15] = join(
-    [radii("amplitude", 1), live("frequency", 2), live("speed", 3), live("axis", 4), held("enabled", ON_IS_THE_TOGGLE)],
+pub static MORPH_ROWS: [PropertyRow; 12] = join(
+    [live("t", 1), held("enabled", ON_IS_THE_TOGGLE)],
     mask_rows!(20),
 );
 
-pub static MELT_ROWS: [PropertyRow; 14] =
-    join([radii("amount", 1), live("frequency", 2), live("seed", 3), held("enabled", ON_IS_THE_TOGGLE)], mask_rows!(20));
+pub static BOIL_ROWS: [PropertyRow; 14] = join(
+    [
+        radii("amount", 1),
+        live("frequency", 2),
+        live("speed", 3),
+        held("enabled", ON_IS_THE_TOGGLE),
+    ],
+    mask_rows!(20),
+);
 
-pub static GLITCH_JITTER_ROWS: [PropertyRow; 14] =
-    join([radii("amount", 1), live("rate", 2), live("seed", 3), held("enabled", ON_IS_THE_TOGGLE)], mask_rows!(20));
+pub static RIPPLE_ROWS: [PropertyRow; 15] = join(
+    [
+        radii("amplitude", 1),
+        live("frequency", 2),
+        live("speed", 3),
+        live("axis", 4),
+        held("enabled", ON_IS_THE_TOGGLE),
+    ],
+    mask_rows!(20),
+);
 
-pub static SHATTER_MESH_ROWS: [PropertyRow; 13] =
-    join([radii("amount", 1), live("seed", 2), held("enabled", ON_IS_THE_TOGGLE)], mask_rows!(20));
+pub static MELT_ROWS: [PropertyRow; 14] = join(
+    [
+        radii("amount", 1),
+        live("frequency", 2),
+        live("seed", 3),
+        held("enabled", ON_IS_THE_TOGGLE),
+    ],
+    mask_rows!(20),
+);
 
-pub static SLICE_ROWS: [PropertyRow; 13] =
-    join([live("axis", 1), radii("cut", 2), held("enabled", ON_IS_THE_TOGGLE)], mask_rows!(20));
+pub static GLITCH_JITTER_ROWS: [PropertyRow; 14] = join(
+    [
+        radii("amount", 1),
+        live("rate", 2),
+        live("seed", 3),
+        held("enabled", ON_IS_THE_TOGGLE),
+    ],
+    mask_rows!(20),
+);
 
-pub static VOXELIZE_ROWS: [PropertyRow; 13] =
-    join([live("amount", 1), radii("cell_size", 2), held("enabled", ON_IS_THE_TOGGLE)], mask_rows!(20));
+pub static SHATTER_MESH_ROWS: [PropertyRow; 13] = join(
+    [
+        radii("amount", 1),
+        live("seed", 2),
+        held("enabled", ON_IS_THE_TOGGLE),
+    ],
+    mask_rows!(20),
+);
 
-pub static FOLD_ROWS: [PropertyRow; 13] = join([live("axis", 1), live("amount", 2), held("enabled", ON_IS_THE_TOGGLE)], mask_rows!(20));
+pub static SLICE_ROWS: [PropertyRow; 13] = join(
+    [
+        live("axis", 1),
+        radii("cut", 2),
+        held("enabled", ON_IS_THE_TOGGLE),
+    ],
+    mask_rows!(20),
+);
 
-pub static FACET_NORMALS_ROWS: [PropertyRow; 11] = join([held("enabled", ON_IS_THE_TOGGLE)], mask_rows!(20));
+pub static VOXELIZE_ROWS: [PropertyRow; 13] = join(
+    [
+        live("amount", 1),
+        radii("cell_size", 2),
+        held("enabled", ON_IS_THE_TOGGLE),
+    ],
+    mask_rows!(20),
+);
+
+pub static FOLD_ROWS: [PropertyRow; 13] = join(
+    [
+        live("axis", 1),
+        live("amount", 2),
+        held("enabled", ON_IS_THE_TOGGLE),
+    ],
+    mask_rows!(20),
+);
+
+pub static FACET_NORMALS_ROWS: [PropertyRow; 11] =
+    join([held("enabled", ON_IS_THE_TOGGLE)], mask_rows!(20));
 
 pub static WAVE_SHEAR_ROWS: [PropertyRow; 17] = join(
     [
@@ -123,10 +210,41 @@ pub static SHAKE_ROWS: [PropertyRow; 5] = [
 /// The deformer types, in menu order.
 pub static DEFORMER_TYPES: [ModifierTypeEntry; 19] = [
     entry(ModifierType::Bend, "bend", "Bend", "Bend", true, &BEND_ROWS).smooth(),
-    entry(ModifierType::Twist, "twist", "Twist", "Twist", true, &TWIST_ROWS).smooth(),
-    entry(ModifierType::Taper, "taper", "Taper", "Taper", true, &TAPER_ROWS).smooth(),
-    entry(ModifierType::Inflate, "inflate", "Inflate", "Inflate", true, &INFLATE_ROWS).smooth(),
-    entry(ModifierType::Rotate, "rotate", "Rotate", "Rotate", false, &ROTATE_ROWS),
+    entry(
+        ModifierType::Twist,
+        "twist",
+        "Twist",
+        "Twist",
+        true,
+        &TWIST_ROWS,
+    )
+    .smooth(),
+    entry(
+        ModifierType::Taper,
+        "taper",
+        "Taper",
+        "Taper",
+        true,
+        &TAPER_ROWS,
+    )
+    .smooth(),
+    entry(
+        ModifierType::Inflate,
+        "inflate",
+        "Inflate",
+        "Inflate",
+        true,
+        &INFLATE_ROWS,
+    )
+    .smooth(),
+    entry(
+        ModifierType::Rotate,
+        "rotate",
+        "Rotate",
+        "Rotate",
+        false,
+        &ROTATE_ROWS,
+    ),
     entry(
         ModifierType::DisplaceByTexture,
         "displace_by_texture",
@@ -136,19 +254,91 @@ pub static DEFORMER_TYPES: [ModifierTypeEntry; 19] = [
         &DISPLACE_TEXTURE_ROWS,
     )
     .smooth(),
-    entry(ModifierType::Morph, "morph", "Morph", "Morph", false, &MORPH_ROWS),
+    entry(
+        ModifierType::Morph,
+        "morph",
+        "Morph",
+        "Morph",
+        false,
+        &MORPH_ROWS,
+    ),
     entry(ModifierType::Boil, "boil", "Boil", "Boil", true, &BOIL_ROWS).smooth(),
-    entry(ModifierType::Ripple, "ripple", "Ripple", "Ripple", true, &RIPPLE_ROWS).smooth(),
+    entry(
+        ModifierType::Ripple,
+        "ripple",
+        "Ripple",
+        "Ripple",
+        true,
+        &RIPPLE_ROWS,
+    )
+    .smooth(),
     entry(ModifierType::Melt, "melt", "Melt", "Melt", true, &MELT_ROWS).smooth(),
     // Each vertex jumps by its own stepped hash, so the glitch reads on the
     // shape's own vertices; split finer it only turns to fuzz.
-    entry(ModifierType::GlitchJitter, "glitch_jitter", "Glitch Jitter", "GlitchJitter", true, &GLITCH_JITTER_ROWS),
-    entry(ModifierType::ShatterMesh, "shatter_mesh", "Shatter Mesh", "ShatterMesh", true, &SHATTER_MESH_ROWS),
-    entry(ModifierType::Slice, "slice", "Slice", "Slice", true, &SLICE_ROWS),
-    entry(ModifierType::Voxelize, "voxelize", "Voxelize", "Voxelize", true, &VOXELIZE_ROWS),
+    entry(
+        ModifierType::GlitchJitter,
+        "glitch_jitter",
+        "Glitch Jitter",
+        "GlitchJitter",
+        true,
+        &GLITCH_JITTER_ROWS,
+    ),
+    entry(
+        ModifierType::ShatterMesh,
+        "shatter_mesh",
+        "Shatter Mesh",
+        "ShatterMesh",
+        true,
+        &SHATTER_MESH_ROWS,
+    ),
+    entry(
+        ModifierType::Slice,
+        "slice",
+        "Slice",
+        "Slice",
+        true,
+        &SLICE_ROWS,
+    ),
+    entry(
+        ModifierType::Voxelize,
+        "voxelize",
+        "Voxelize",
+        "Voxelize",
+        true,
+        &VOXELIZE_ROWS,
+    ),
     entry(ModifierType::Fold, "fold", "Fold", "Fold", true, &FOLD_ROWS).smooth(),
-    entry(ModifierType::FacetNormals, "facet_normals", "Facet Normals", "FacetNormals", false, &FACET_NORMALS_ROWS),
-    entry(ModifierType::WaveShear, "wave_shear", "Wave Shear", "WaveShear", true, &WAVE_SHEAR_ROWS).smooth(),
-    entry(ModifierType::CutOutBox, "cut_out_box", "Cut Out Box", "CutOutBox", true, &CUT_OUT_BOX_ROWS),
-    entry(ModifierType::Shake, "shake", "Shake", "Shake", false, &SHAKE_ROWS),
+    entry(
+        ModifierType::FacetNormals,
+        "facet_normals",
+        "Facet Normals",
+        "FacetNormals",
+        false,
+        &FACET_NORMALS_ROWS,
+    ),
+    entry(
+        ModifierType::WaveShear,
+        "wave_shear",
+        "Wave Shear",
+        "WaveShear",
+        true,
+        &WAVE_SHEAR_ROWS,
+    )
+    .smooth(),
+    entry(
+        ModifierType::CutOutBox,
+        "cut_out_box",
+        "Cut Out Box",
+        "CutOutBox",
+        true,
+        &CUT_OUT_BOX_ROWS,
+    ),
+    entry(
+        ModifierType::Shake,
+        "shake",
+        "Shake",
+        "Shake",
+        false,
+        &SHAKE_ROWS,
+    ),
 ];

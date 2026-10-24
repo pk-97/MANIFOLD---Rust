@@ -25,7 +25,10 @@ impl Percussive {
         let get = |name: &str| -> Result<usize, ContainerError> {
             match c.i64s(name, &[])?[0] {
                 v if v > 0 && v as usize <= MAX_WINDOW && v % 2 == 1 => Ok(v as usize),
-                _ => Err(ContainerError::WrongType { name: name.into(), want: "an odd window of at most 64" }),
+                _ => Err(ContainerError::WrongType {
+                    name: name.into(),
+                    want: "an odd window of at most 64",
+                }),
             }
         };
         Ok(Self {

@@ -47,11 +47,10 @@
 use half::f16;
 use manifold_gpu::{GpuTexture, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::scene::camera::Camera;
 
 const ORBIT0: f32 = 0.0;
 /// ~11.5 degrees — comfortably large enough to clear the BUG-136 gate's
@@ -79,8 +78,7 @@ const QUAD_SIZE: f32 = 0.35;
 /// z=0` at ANY `y` is on-axis (empirically confirmed: `(0, R, 0)` measured
 /// exactly zero motion, same as the excluded `(0,0,0)`). Every point here
 /// has nonzero `x` or `z`, so all four are genuinely off-axis.
-const WORLD_POINTS: [[f32; 3]; 4] =
-    [[R, 0.0, 0.0], [-R, 0.0, 0.0], [0.0, 0.0, R], [0.0, 0.0, -R]];
+const WORLD_POINTS: [[f32; 3]; 4] = [[R, 0.0, 0.0], [-R, 0.0, 0.0], [0.0, 0.0, R], [0.0, 0.0, -R]];
 
 /// `render_scene(4 objects, 0 lights, rt_enabled=true, depth/velocity
 /// UNWIRED)`. `cam.orbit` is port-shadowed by `ramp` (beat_ramp). Each
@@ -165,7 +163,10 @@ fn readback_rg16float(device: &manifold_gpu::GpuDevice, texture: &GpuTexture) ->
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");
     let bytes: &[u8] = unsafe {
-        std::slice::from_raw_parts(ptr.cast::<std::ffi::c_void>().cast::<u8>(), total_bytes as usize)
+        std::slice::from_raw_parts(
+            ptr.cast::<std::ffi::c_void>().cast::<u8>(),
+            total_bytes as usize,
+        )
     };
     bytes.to_vec()
 }
@@ -205,7 +206,12 @@ fn render_and_dump<'a>(
     let mut enc = h.device.create_encoder("rt-w0-gbuffer-enc");
     {
         let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-        runtime.render(&mut gpu, target, &ctx, &manifold_core::params::ParamManifest::default());
+        runtime.render(
+            &mut gpu,
+            target,
+            &ctx,
+            &manifold_core::params::ParamManifest::default(),
+        );
     }
     enc.commit_and_wait_completed();
 
@@ -285,17 +291,30 @@ fn rt_w0_forced_gbuffer_matches_orbit_oracle() {
     let depth_a = depth_a.unwrap_or_else(|| {
         panic!("D14: rt_enabled=true must force `depth` into consumed_outputs even unwired")
     });
-    assert_eq!(depth_a.format, GpuTextureFormat::R32Float, "depth format override");
+    assert_eq!(
+        depth_a.format,
+        GpuTextureFormat::R32Float,
+        "depth format override"
+    );
     let velocity_a = velocity_a.unwrap_or_else(|| {
         panic!("D14: rt_enabled=true must force `velocity` into consumed_outputs even unwired")
     });
-    assert_eq!(velocity_a.format, GpuTextureFormat::Rg16Float, "velocity format override");
+    assert_eq!(
+        velocity_a.format,
+        GpuTextureFormat::Rg16Float,
+        "velocity format override"
+    );
 
     // Measured frame B: orbit = ORBIT1. The real two-frame orbit.
-    let (_depth_b, velocity_b) = render_and_dump(&mut runtime, h, &target.texture, ORBIT1 as f64, 3);
+    let (_depth_b, velocity_b) =
+        render_and_dump(&mut runtime, h, &target.texture, ORBIT1 as f64, 3);
     let velocity_b = velocity_b.expect("velocity still forced-allocated on frame B");
     let (w, ht) = (velocity_b.width, velocity_b.height);
-    assert_eq!((w, ht), (h.width, h.height), "velocity dims must match the canvas");
+    assert_eq!(
+        (w, ht),
+        (h.width, h.height),
+        "velocity dims must match the canvas"
+    );
     let bytes = readback_rg16float(&h.device, velocity_b);
 
     let cam0 = Camera::orbit_perspective(ORBIT0, TILT, DISTANCE, FOV_Y, 0.0, 0.0, NEAR, FAR);
@@ -319,7 +338,10 @@ fn rt_w0_forced_gbuffer_matches_orbit_oracle() {
         let px = (proj1.px.floor() as i64).clamp(0, w as i64 - 1) as u32;
         let py = (proj1.py.floor() as i64).clamp(0, ht as i64 - 1) as u32;
         let (vx, vy) = sample_rg16float(&bytes, w, px, py);
-        assert!(vx.is_finite() && vy.is_finite(), "{p:?}: velocity not finite: ({vx}, {vy})");
+        assert!(
+            vx.is_finite() && vy.is_finite(),
+            "{p:?}: velocity not finite: ({vx}, {vy})"
+        );
 
         let measured_px_mag =
             ((vx * w as f32 / 2.0).powi(2) + (vy * ht as f32 / 2.0).powi(2)).sqrt();
@@ -431,19 +453,34 @@ fn rt_w0_default_scene_stays_lazy_no_forced_gbuffer() {
     let mut enc = h.device.create_encoder("rt-w0-default-lazy-enc");
     {
         let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-        runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+        runtime.render(
+            &mut gpu,
+            &target.texture,
+            &ctx,
+            &manifold_core::params::ParamManifest::default(),
+        );
     }
     enc.commit_and_wait_completed();
 
     let dumped = runtime.dump_textures_all();
     assert!(
-        !dumped.iter().any(|(node_id, port, _, _)| node_id == "scene" && port == "depth"),
+        !dumped
+            .iter()
+            .any(|(node_id, port, _, _)| node_id == "scene" && port == "depth"),
         "rt_enabled default (false/unset) must NOT force `depth` — dumped ports: {:?}",
-        dumped.iter().map(|(n, p, _, _)| format!("{n}.{p}")).collect::<Vec<_>>()
+        dumped
+            .iter()
+            .map(|(n, p, _, _)| format!("{n}.{p}"))
+            .collect::<Vec<_>>()
     );
     assert!(
-        !dumped.iter().any(|(node_id, port, _, _)| node_id == "scene" && port == "velocity"),
+        !dumped
+            .iter()
+            .any(|(node_id, port, _, _)| node_id == "scene" && port == "velocity"),
         "rt_enabled default (false/unset) must NOT force `velocity` — dumped ports: {:?}",
-        dumped.iter().map(|(n, p, _, _)| format!("{n}.{p}")).collect::<Vec<_>>()
+        dumped
+            .iter()
+            .map(|(n, p, _, _)| format!("{n}.{p}"))
+            .collect::<Vec<_>>()
     );
 }

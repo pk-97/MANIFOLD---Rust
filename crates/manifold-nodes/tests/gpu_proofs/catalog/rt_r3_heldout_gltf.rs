@@ -22,12 +22,14 @@
 //! graph.
 
 use manifold_core::flatten::flatten_groups;
-use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
+use manifold_gpu::{
+    GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 
 use manifold_nodes_scene::testkit::gpu_harness as harness;
 
@@ -87,15 +89,21 @@ fn non_black_fraction_rgbf32(px: &[f32]) -> f64 {
     non_black as f64 / n as f64
 }
 
-fn readback_rgba_f32(device: &manifold_gpu::GpuDevice, texture: &manifold_gpu::GpuTexture) -> Vec<f32> {
+fn readback_rgba_f32(
+    device: &manifold_gpu::GpuDevice,
+    texture: &manifold_gpu::GpuTexture,
+) -> Vec<f32> {
     let bytes_per_row = W * 8;
     let total = u64::from(H * bytes_per_row);
     let buf = device.create_buffer_shared(total);
     let mut enc = device.create_encoder("r3-heldout-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait_completed();
-    let ptr = buf.mapped_ptr().expect("shared readback buffer must expose mapped pointer");
-    let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (W * H * 4) as usize) };
+    let ptr = buf
+        .mapped_ptr()
+        .expect("shared readback buffer must expose mapped pointer");
+    let halves: &[u16] =
+        unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (W * H * 4) as usize) };
     let mut out = Vec::with_capacity((W * H * 4) as usize);
     for &v in halves {
         out.push(half::f16::from_bits(v).to_f32());
@@ -127,14 +135,20 @@ fn make_512_target(device: &GpuDevice, label: &str) -> manifold_gpu::GpuTexture 
 fn build_variant(
     h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     strip_mr_map: bool,
-) -> (PresetRuntime, manifold_gpu::GpuTexture, manifold_core::params::ParamManifest, bool) {
+) -> (
+    PresetRuntime,
+    manifold_gpu::GpuTexture,
+    manifold_core::params::ParamManifest,
+    bool,
+) {
     let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/khronos/DamagedHelmet.glb");
     assert!(glb.exists(), "held-out fixture missing: {glb:?}");
     let (def, report) = compile_model_scene(&glb).expect("import must succeed");
     eprintln!("[r3-heldout] import report: {report:?}");
 
-    let mut flat = flatten_groups(&def).expect("flatten_groups must succeed (no-op if already flat)");
+    let mut flat =
+        flatten_groups(&def).expect("flatten_groups must succeed (no-op if already flat)");
 
     // RT comes on through the outer-card manifest, never the `render_scene`
     // node params — see `harness::import_rt_manifest` for why the node-param
@@ -150,7 +164,10 @@ fn build_variant(
         .filter(|n| n.type_id == "node.scene_object")
         .map(|n| n.id)
         .collect();
-    assert!(!scene_object_ids.is_empty(), "imported def has no node.scene_object bind nodes");
+    assert!(
+        !scene_object_ids.is_empty(),
+        "imported def has no node.scene_object bind nodes"
+    );
     let mr_wire_count = flat
         .wires
         .iter()
@@ -179,7 +196,14 @@ fn build_variant(
     )
     .expect("imported def must build a runtime");
 
-    let target = make_512_target(&h.device, if strip_mr_map { "r3-heldout-stripped" } else { "r3-heldout-bound" });
+    let target = make_512_target(
+        &h.device,
+        if strip_mr_map {
+            "r3-heldout-stripped"
+        } else {
+            "r3-heldout-bound"
+        },
+    );
     (runtime, target, params, mr_wire_count > 0)
 }
 
@@ -211,7 +235,9 @@ fn render_until_lit(
             }
         }
     }
-    eprintln!("[r3-heldout] converged non-black fraction={best_frac:.4} (threshold={threshold:.4})");
+    eprintln!(
+        "[r3-heldout] converged non-black fraction={best_frac:.4} (threshold={threshold:.4})"
+    );
     best
 }
 
@@ -259,7 +285,9 @@ fn heldout_helmet_mr_map_changes_traced_reflection() {
         if baseline_frac > 0.01 {
             break;
         }
-        eprintln!("[r3-heldout] baseline attempt {attempt} read back black (frac={baseline_frac:.4}), retrying");
+        eprintln!(
+            "[r3-heldout] baseline attempt {attempt} read back black (frac={baseline_frac:.4}), retrying"
+        );
     }
     // Sanity, same discipline as `rt_r1_reflection.rs`'s vacuous-proofing
     // check: a baseline of exactly 0 makes `render_until_lit`'s threshold
@@ -274,8 +302,17 @@ fn heldout_helmet_mr_map_changes_traced_reflection() {
     );
 
     let (mut bound_runtime, bound_target, bound_params, mr_was_wired) = build_variant(h, false);
-    assert!(mr_was_wired, "structural proxy failed before any rendering — see assertion inside build_variant");
-    let bound_px = render_until_lit(h, &mut bound_runtime, &bound_target, &bound_params, baseline_frac);
+    assert!(
+        mr_was_wired,
+        "structural proxy failed before any rendering — see assertion inside build_variant"
+    );
+    let bound_px = render_until_lit(
+        h,
+        &mut bound_runtime,
+        &bound_target,
+        &bound_params,
+        baseline_frac,
+    );
     // The whole gate is about the RT kernel's reflection lobe, so prove the
     // kernel ran before believing any number below.
     harness::assert_rt_dispatched(
@@ -284,8 +321,13 @@ fn heldout_helmet_mr_map_changes_traced_reflection() {
     );
 
     let (mut stripped_runtime, stripped_target, stripped_params, _) = build_variant(h, true);
-    let stripped_px =
-        render_until_lit(h, &mut stripped_runtime, &stripped_target, &stripped_params, baseline_frac);
+    let stripped_px = render_until_lit(
+        h,
+        &mut stripped_runtime,
+        &stripped_target,
+        &stripped_params,
+        baseline_frac,
+    );
 
     let n = bound_px.len() / 4;
     let mut differing = 0usize;

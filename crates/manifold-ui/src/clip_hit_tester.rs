@@ -535,7 +535,11 @@ mod tests {
     fn clip_hit_targets_enumerates_every_visible_clip_with_a_payload_id() {
         let rects = vec![
             make_screen_rect("c1", "EXILE", crate::node::Rect::new(0.0, 0.0, 400.0, 60.0)),
-            make_screen_rect("c2", "RETURN", crate::node::Rect::new(400.0, 0.0, 300.0, 60.0)),
+            make_screen_rect(
+                "c2",
+                "RETURN",
+                crate::node::Rect::new(400.0, 0.0, 300.0, 60.0),
+            ),
         ];
         let targets = ClipHitTargets(&rects);
         assert_eq!(targets.surface_id(), "timeline_clips");

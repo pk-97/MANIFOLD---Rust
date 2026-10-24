@@ -140,8 +140,16 @@ impl Primitive for TransformShake {
         let amount_sq = amount * amount;
         let rot_gain = amount_sq * rotation_strength;
         let pos_gain = amount_sq * position_strength;
-        let rot_offset = [noise[0] * rot_gain, noise[1] * rot_gain, noise[2] * rot_gain];
-        let pos_offset = [noise[0] * pos_gain, noise[1] * pos_gain, noise[2] * pos_gain];
+        let rot_offset = [
+            noise[0] * rot_gain,
+            noise[1] * rot_gain,
+            noise[2] * rot_gain,
+        ];
+        let pos_offset = [
+            noise[0] * pos_gain,
+            noise[1] * pos_gain,
+            noise[2] * pos_gain,
+        ];
 
         // A camera wobbles about its own position, in its own axes, as a
         // handheld camera does; amount 0 leaves it exactly as it came.
@@ -210,13 +218,13 @@ fn shake_noise_vector(scaled_time: f32) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_node_engine::exec::backend::MockBackend;
-    use manifold_node_engine::exec::backend::Backend;
+    use manifold_core::{Beats, Seconds};
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::exec::backend::MockBackend;
     use manifold_node_engine::exec::effect_node::{FrameTime, ParamValues};
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::ports::PortType;
-    use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -260,7 +268,9 @@ mod tests {
         for &(name, value) in wires {
             let slot = backend.acquire(
                 ResourceId(next_id),
-                manifold_node_engine::ports::PortType::Scalar(manifold_node_engine::ports::ScalarType::F32),
+                manifold_node_engine::ports::PortType::Scalar(
+                    manifold_node_engine::ports::ScalarType::F32,
+                ),
                 None,
                 (0, 0),
             );
@@ -300,7 +310,9 @@ mod tests {
             backend.set_transform(slot, value);
         }
 
-        backend.transform(out_slot).expect("transform should be set")
+        backend
+            .transform(out_slot)
+            .expect("transform should be set")
     }
 
     #[test]
@@ -313,7 +325,10 @@ mod tests {
             ..Default::default()
         };
         let out = run_with_params_and_wires(input, &[("amount", 0.0)], &[]);
-        assert_eq!(out, input, "amount = 0 must pass the transform through unchanged");
+        assert_eq!(
+            out, input,
+            "amount = 0 must pass the transform through unchanged"
+        );
     }
 
     #[test]
@@ -336,11 +351,25 @@ mod tests {
 
         let noise = shake_noise_vector(time * frequency);
         let amount_sq = amount * amount;
-        let expected_rot = [noise[0] * amount_sq, noise[1] * amount_sq, noise[2] * amount_sq];
-        let expected_pos = [expected_rot[0] * 0.25, expected_rot[1] * 0.25, expected_rot[2] * 0.25];
+        let expected_rot = [
+            noise[0] * amount_sq,
+            noise[1] * amount_sq,
+            noise[2] * amount_sq,
+        ];
+        let expected_pos = [
+            expected_rot[0] * 0.25,
+            expected_rot[1] * 0.25,
+            expected_rot[2] * 0.25,
+        ];
 
-        assert_eq!(out.rot_euler, expected_rot, "rotational offset must match hand formula");
-        assert_eq!(out.pos, expected_pos, "positional offset must be 0.25 of rotational");
+        assert_eq!(
+            out.rot_euler, expected_rot,
+            "rotational offset must match hand formula"
+        );
+        assert_eq!(
+            out.pos, expected_pos,
+            "positional offset must be 0.25 of rotational"
+        );
         assert_eq!(out.scale, input.scale, "scale must pass through unchanged");
     }
 
@@ -362,6 +391,9 @@ mod tests {
         );
         // With time wired to 2.0, expected noise uses scaled_time = 2.0.
         let noise = shake_noise_vector(2.0);
-        assert_eq!(out.rot_euler[0], noise[0], "wired time should drive the noise");
+        assert_eq!(
+            out.rot_euler[0], noise[0],
+            "wired time should drive the noise"
+        );
     }
 }

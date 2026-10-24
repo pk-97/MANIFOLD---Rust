@@ -49,9 +49,13 @@ impl Primitive for TransformComponents {
         let components = if parent.is_none() && frame.is_none() {
             [transform.pos, transform.rot_euler, transform.scale]
         } else {
-            let world = parent.map_or(transform.world(), |parent| mat4_mul(parent.world(), transform.world()));
+            let world = parent.map_or(transform.world(), |parent| {
+                mat4_mul(parent.world(), transform.world())
+            });
             // A frame scaled to nothing has no space to measure in: read the world.
-            let seen = frame.and_then(|frame| inverse_affine(&frame.world())).map_or(world, |inverse| mat4_mul(inverse, world));
+            let seen = frame
+                .and_then(|frame| inverse_affine(&frame.world()))
+                .map_or(world, |inverse| mat4_mul(inverse, world));
             decompose(&seen)
         };
         let names = [
@@ -71,7 +75,8 @@ impl Primitive for TransformComponents {
 /// 3x3 part is singular.
 fn inverse_affine(m: &Mat4) -> Option<Mat4> {
     let a = |col: usize, row: usize| m[col][row];
-    let det = a(0, 0) * (a(1, 1) * a(2, 2) - a(2, 1) * a(1, 2)) - a(1, 0) * (a(0, 1) * a(2, 2) - a(2, 1) * a(0, 2))
+    let det = a(0, 0) * (a(1, 1) * a(2, 2) - a(2, 1) * a(1, 2))
+        - a(1, 0) * (a(0, 1) * a(2, 2) - a(2, 1) * a(0, 2))
         + a(2, 0) * (a(0, 1) * a(1, 2) - a(1, 1) * a(0, 2));
     if !det.is_finite() || det.abs() < 1e-12 {
         return None;
@@ -86,7 +91,9 @@ fn inverse_affine(m: &Mat4) -> Option<Mat4> {
         })
     });
     let t = [m[3][0], m[3][1], m[3][2]];
-    let moved: [f32; 3] = std::array::from_fn(|row| -(linear[0][row] * t[0] + linear[1][row] * t[1] + linear[2][row] * t[2]));
+    let moved: [f32; 3] = std::array::from_fn(|row| {
+        -(linear[0][row] * t[0] + linear[1][row] * t[1] + linear[2][row] * t[2])
+    });
     let mut out = IDENTITY_MAT4;
     for (column, values) in out.iter_mut().zip(linear.iter().chain([&moved])) {
         column[..3].copy_from_slice(values);
@@ -98,31 +105,54 @@ fn inverse_affine(m: &Mat4) -> Option<Mat4> {
 /// `T * R * S`.
 fn decompose(m: &Mat4) -> [[f32; 3]; 3] {
     let pos = [m[3][0], m[3][1], m[3][2]];
-    let scale: [f32; 3] = std::array::from_fn(|col| (m[col][0] * m[col][0] + m[col][1] * m[col][1] + m[col][2] * m[col][2]).sqrt());
-    let axis = |col: usize, row: usize| if scale[col] > 0.0 { m[col][row] / scale[col] } else { f32::from(u8::from(col == row)) };
-    let rot = rotation_to_render_scene_euler(std::array::from_fn(|row| std::array::from_fn(|col| axis(col, row))));
+    let scale: [f32; 3] = std::array::from_fn(|col| {
+        (m[col][0] * m[col][0] + m[col][1] * m[col][1] + m[col][2] * m[col][2]).sqrt()
+    });
+    let axis = |col: usize, row: usize| {
+        if scale[col] > 0.0 {
+            m[col][row] / scale[col]
+        } else {
+            f32::from(u8::from(col == row))
+        }
+    };
+    let rot = rotation_to_render_scene_euler(std::array::from_fn(|row| {
+        std::array::from_fn(|col| axis(col, row))
+    }));
     [pos, rot, scale]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_node_engine::exec::backend::Backend;
+    use manifold_core::{Beats, Seconds};
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs};
+    use manifold_node_engine::exec::backend::Backend;
     use manifold_node_engine::exec::effect_node::{FrameTime, ParamValues};
     use manifold_node_engine::scene::transform::Transform;
-    use manifold_node_engine::{exec::backend::MockBackend, ports::PortType, exec::execution_plan::ResourceId, ports::ScalarType};
-    use manifold_core::{Beats, Seconds};
+    use manifold_node_engine::{
+        exec::backend::MockBackend, exec::execution_plan::ResourceId, ports::PortType,
+        ports::ScalarType,
+    };
 
     fn run(input: Option<Transform>) -> Vec<(&'static str, f32)> {
-        run_wired(&input.map(|value| ("transform", value)).into_iter().collect::<Vec<_>>())
+        run_wired(
+            &input
+                .map(|value| ("transform", value))
+                .into_iter()
+                .collect::<Vec<_>>(),
+        )
     }
 
     fn run_wired(wired: &[(&'static str, Transform)]) -> Vec<(&'static str, f32)> {
         let mut backend = MockBackend::new();
         let mut input_bindings = Vec::new();
         for (index, (port, value)) in wired.iter().enumerate() {
-            let slot = backend.acquire(ResourceId(100 + index as u32), PortType::Transform, None, (0, 0));
+            let slot = backend.acquire(
+                ResourceId(100 + index as u32),
+                PortType::Transform,
+                None,
+                (0, 0),
+            );
             backend.set_transform(slot, *value);
             input_bindings.push((*port, slot));
         }
@@ -143,7 +173,8 @@ mod tests {
             })
             .collect();
         let inputs = NodeInputs::new(&input_bindings, &backend, &[]);
-        let (mut scalar, mut camera, mut light, mut material) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let (mut scalar, mut camera, mut light, mut material) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         let (mut transform, mut atmosphere, mut render_mode, mut object) =
             (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         let outputs = NodeOutputs::new(
@@ -173,7 +204,9 @@ mod tests {
             .iter()
             .map(|&(slot, ref value)| {
                 let name = output_bindings.iter().find(|(_, s)| *s == slot).unwrap().0;
-                let ParamValue::Float(value) = value else { panic!("scalar outputs are floats") };
+                let ParamValue::Float(value) = value else {
+                    panic!("scalar outputs are floats")
+                };
                 (name, *value)
             })
             .collect()
@@ -189,28 +222,54 @@ mod tests {
             ..Default::default()
         }));
         let expected = [
-            ("pos_x", 1.0), ("pos_y", -2.0), ("pos_z", 3.5),
-            ("rot_x", 0.25), ("rot_y", 0.5), ("rot_z", -0.75),
-            ("scale_x", 4.0), ("scale_y", 5.0), ("scale_z", 6.0),
+            ("pos_x", 1.0),
+            ("pos_y", -2.0),
+            ("pos_z", 3.5),
+            ("rot_x", 0.25),
+            ("rot_y", 0.5),
+            ("rot_z", -0.75),
+            ("scale_x", 4.0),
+            ("scale_y", 5.0),
+            ("scale_z", 6.0),
         ];
         assert_eq!(values, expected);
         let identity = run(None);
-        assert_eq!(identity[6..], [("scale_x", 1.0), ("scale_y", 1.0), ("scale_z", 1.0)]);
+        assert_eq!(
+            identity[6..],
+            [("scale_x", 1.0), ("scale_y", 1.0), ("scale_z", 1.0)]
+        );
         assert!(identity[..6].iter().all(|(_, value)| *value == 0.0));
 
         // A part placed in a turned, scaled group reads its own TRS back in
         // the group's frame, and its world place with no frame.
-        let part = Transform { pos: [1.0, -2.0, 3.5], rot_euler: [0.25, 0.5, -0.75], scale: [1.5, 0.5, 2.0], ..Default::default() };
-        let group = Transform { pos: [4.0, 1.0, -3.0], rot_euler: [0.0, 0.9, 0.3], scale: [2.0; 3], ..Default::default() };
+        let part = Transform {
+            pos: [1.0, -2.0, 3.5],
+            rot_euler: [0.25, 0.5, -0.75],
+            scale: [1.5, 0.5, 2.0],
+            ..Default::default()
+        };
+        let group = Transform {
+            pos: [4.0, 1.0, -3.0],
+            rot_euler: [0.0, 0.9, 0.3],
+            scale: [2.0; 3],
+            ..Default::default()
+        };
         let seen = run_wired(&[("transform", part), ("parent", group), ("frame", group)]);
         let own = [1.0, -2.0, 3.5, 0.25, 0.5, -0.75, 1.5, 0.5, 2.0];
         for ((name, value), expected) in seen.iter().zip(own) {
-            assert!((value - expected).abs() < 1e-4, "{name}: {value} != {expected}");
+            assert!(
+                (value - expected).abs() < 1e-4,
+                "{name}: {value} != {expected}"
+            );
         }
         let world = run_wired(&[("transform", part), ("parent", group)]);
-        let placed = manifold_node_engine::scene::transform::transform_point(&group.world(), part.pos);
+        let placed =
+            manifold_node_engine::scene::transform::transform_point(&group.world(), part.pos);
         for ((name, value), expected) in world.iter().zip(placed) {
-            assert!((value - expected).abs() < 1e-4, "{name}: {value} != {expected}");
+            assert!(
+                (value - expected).abs() < 1e-4,
+                "{name}: {value} != {expected}"
+            );
         }
     }
 }

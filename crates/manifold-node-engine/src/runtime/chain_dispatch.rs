@@ -19,10 +19,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use manifold_foundation::cold_touch::{ColdTouchKind, record_cold_touch};
 
-use crate::runtime::{ChainBuildInputs, PresetRuntime};
 use crate::gpu::gpu_encoder::GpuEncoder;
 use crate::persistence::PrimitiveRegistry;
 use crate::runtime::preset_context::{PresetContext, ProjectTempo};
+use crate::runtime::{ChainBuildInputs, PresetRuntime};
 use manifold_core::EffectId;
 use manifold_core::effects::{EffectGroup, PresetInstance};
 use manifold_gpu::GpuTexture;
@@ -149,7 +149,8 @@ fn failed_build_inputs(
 ) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = ahash::AHasher::default();
-    crate::runtime::chain_topology_hash(effects, groups, width, height, preview_effect).hash(&mut h);
+    crate::runtime::chain_topology_hash(effects, groups, width, height, preview_effect)
+        .hash(&mut h);
     for fx in effects {
         fx.graph_version.hash(&mut h);
     }
@@ -170,8 +171,15 @@ impl ChainBuildFailure {
             .rev()
             .find(|e| matches!(e, crate::runtime::ChainError::PreAllocationFailed { .. }))
             .map(ToString::to_string)
-            .unwrap_or_else(|| "The effects could not be built, so they are bypassed. The log names the cause.".into());
-        Self { inputs, memory, message: message.into() }
+            .unwrap_or_else(|| {
+                "The effects could not be built, so they are bypassed. The log names the cause."
+                    .into()
+            });
+        Self {
+            inputs,
+            memory,
+            message: message.into(),
+        }
     }
 
     /// The same build would fail the same way: no build input moved and the
@@ -180,7 +188,8 @@ impl ChainBuildFailure {
         let room_freed = match (self.memory, memory) {
             (Some(then), Some(now)) => {
                 now.recommended_max_working_set_bytes != then.recommended_max_working_set_bytes
-                    || now.current_allocated_bytes + RETRY_FREED_BYTES <= then.current_allocated_bytes
+                    || now.current_allocated_bytes + RETRY_FREED_BYTES
+                        <= then.current_allocated_bytes
             }
             (then, now) => then.is_some() != now.is_some(),
         };
@@ -432,8 +441,9 @@ pub fn dispatch_chain_with_scene_viewport<'a>(
             Ok(()) => *scene_viewport_error = None,
             Err(crate::scene::scene_viewport::SceneViewportError::TargetNotFound) => {}
             Err(error) => {
-                *scene_viewport_error =
-                    Some(crate::scene::scene_viewport::SceneViewportHostError::InvalidTarget(error));
+                *scene_viewport_error = Some(
+                    crate::scene::scene_viewport::SceneViewportHostError::InvalidTarget(error),
+                );
             }
         }
     }
@@ -476,26 +486,51 @@ mod tests {
     use manifold_gpu::GpuMemorySnapshot;
 
     fn in_use(bytes: u64) -> Option<GpuMemorySnapshot> {
-        Some(GpuMemorySnapshot { current_allocated_bytes: bytes, recommended_max_working_set_bytes: 30 << 30 })
+        Some(GpuMemorySnapshot {
+            current_allocated_bytes: bytes,
+            recommended_max_working_set_bytes: 30 << 30,
+        })
     }
 
     #[test]
     fn failed_build_holds_until_an_input_moves() {
-        let mut effects = vec![PresetInstance::new(manifold_core::PresetTypeId::COLOR_GRADE)];
+        let mut effects = vec![PresetInstance::new(
+            manifold_core::PresetTypeId::COLOR_GRADE,
+        )];
         let inputs = |fx: &[PresetInstance], w, h| failed_build_inputs(fx, &[], w, h, None);
         let full = 22 << 30;
-        let errors = [ChainError::PreAllocationFailed { reason: "The scene needs 900 MB.".into() }];
+        let errors = [ChainError::PreAllocationFailed {
+            reason: "The scene needs 900 MB.".into(),
+        }];
         let failure = ChainBuildFailure::new(inputs(&effects, 1920, 1080), in_use(full), &errors);
 
-        assert!(failure.still_holds(inputs(&effects, 1920, 1080), in_use(full)), "next frame, nothing moved");
-        assert!(failure.still_holds(inputs(&effects, 1920, 1080), in_use(full - (1 << 20))), "allocator jitter");
-        assert!(!failure.still_holds(inputs(&effects, 1280, 720), in_use(full)), "resolution changed");
-        assert!(!failure.still_holds(inputs(&effects, 1920, 1080), in_use(full - RETRY_FREED_BYTES)), "device freed room");
+        assert!(
+            failure.still_holds(inputs(&effects, 1920, 1080), in_use(full)),
+            "next frame, nothing moved"
+        );
+        assert!(
+            failure.still_holds(inputs(&effects, 1920, 1080), in_use(full - (1 << 20))),
+            "allocator jitter"
+        );
+        assert!(
+            !failure.still_holds(inputs(&effects, 1280, 720), in_use(full)),
+            "resolution changed"
+        );
+        assert!(
+            !failure.still_holds(
+                inputs(&effects, 1920, 1080),
+                in_use(full - RETRY_FREED_BYTES)
+            ),
+            "device freed room"
+        );
         assert!(failure.message().contains("The scene needs 900 MB."));
 
         // A value-only node edit (a smaller sim count) sizes buffers at build.
         effects[0].graph_version += 1;
         assert_eq!(effects[0].graph_structure_version, 0, "structure unchanged");
-        assert!(!failure.still_holds(inputs(&effects, 1920, 1080), in_use(full)), "graph value edit retries");
+        assert!(
+            !failure.still_holds(inputs(&effects, 1920, 1080), in_use(full)),
+            "graph value edit retries"
+        );
     }
 }

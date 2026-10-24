@@ -19,8 +19,8 @@
 //! overhead and lands the data in shared MTLBuffer for downstream
 //! same-frame readers.
 
-use manifold_node_engine::mesh::Vec4Vertex;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::Vec4Vertex;
 use manifold_node_engine::primitive::Primitive;
 
 manifold_node_engine::primitive! {
@@ -119,9 +119,7 @@ impl Primitive for PackVec4 {
             unsafe { std::slice::from_raw_parts(w_ptr as *const f32, w_cap as usize) };
 
         const SCRATCH_LEN: usize = 4096;
-        let mut scratch = [Vec4Vertex {
-            position: [0.0; 4],
-        }; SCRATCH_LEN];
+        let mut scratch = [Vec4Vertex { position: [0.0; 4] }; SCRATCH_LEN];
         let write_count = (count as usize).min(SCRATCH_LEN);
         for (i, slot) in scratch.iter_mut().take(write_count).enumerate() {
             *slot = Vec4Vertex {

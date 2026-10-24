@@ -9,7 +9,7 @@
 //! [`diff`]: crate::chrome::diff
 
 #[cfg(test)]
-use crate::{TransportAction};
+use crate::TransportAction;
 use crate::node::{Color32, FontWeight, TextAlign, UINodeType, UIStyle};
 use crate::panels::PanelAction;
 use crate::slider::SliderColors;
@@ -75,15 +75,30 @@ pub struct Pad {
 }
 
 impl Pad {
-    pub const ZERO: Pad = Pad { l: 0.0, t: 0.0, r: 0.0, b: 0.0 };
+    pub const ZERO: Pad = Pad {
+        l: 0.0,
+        t: 0.0,
+        r: 0.0,
+        b: 0.0,
+    };
 
     pub fn all(v: f32) -> Self {
-        Self { l: v, t: v, r: v, b: v }
+        Self {
+            l: v,
+            t: v,
+            r: v,
+            b: v,
+        }
     }
 
     /// Horizontal `x` on left+right, vertical `y` on top+bottom.
     pub fn xy(x: f32, y: f32) -> Self {
-        Self { l: x, t: y, r: x, b: y }
+        Self {
+            l: x,
+            t: y,
+            r: x,
+            b: y,
+        }
     }
 
     pub fn horizontal(&self) -> f32 {
@@ -534,7 +549,11 @@ mod tests {
         let v = View::row(4.0)
             .pad(Pad::all(8.0))
             .child(View::label("hi").fill_w())
-            .child(View::button("OK").fixed(40.0, 18.0).on_click(PanelAction::Transport(TransportAction::Stop)));
+            .child(
+                View::button("OK")
+                    .fixed(40.0, 18.0)
+                    .on_click(PanelAction::Transport(TransportAction::Stop)),
+            );
         assert_eq!(v.layout, Layout::Row);
         assert_eq!(v.gap, 4.0);
         assert_eq!(v.pad, Pad::all(8.0));
@@ -547,10 +566,16 @@ mod tests {
     fn validate_flags_unwired_button() {
         let v = View::column(2.0)
             .child(View::button("dead")) // no intent, not inert
-            .child(View::button("live").on_click(PanelAction::Transport(TransportAction::PlayPause)))
+            .child(
+                View::button("live").on_click(PanelAction::Transport(TransportAction::PlayPause)),
+            )
             .child(View::button("ok-inert").inert());
         let warnings = validate(&v);
-        assert_eq!(warnings.len(), 1, "exactly the unwired button warns: {warnings:?}");
+        assert_eq!(
+            warnings.len(),
+            1,
+            "exactly the unwired button warns: {warnings:?}"
+        );
         assert!(warnings[0].contains("dead"));
     }
 

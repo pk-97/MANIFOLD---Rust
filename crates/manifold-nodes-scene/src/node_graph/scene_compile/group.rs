@@ -83,7 +83,11 @@ fn emit(b: &mut Builder<'_>, item: &Item, outer: Option<&Frame>) -> Frame {
     let enclosing = outer.and_then(|outer| outer.copies);
     // A Swarm that draws this group as its particles lays it out instead
     // (its copies node, not a copies body).
-    let swarm = b.swarm_draws.get(&item.id).copied().filter(|_| enclosing.is_none());
+    let swarm = b
+        .swarm_draws
+        .get(&item.id)
+        .copied()
+        .filter(|_| enclosing.is_none());
     let own = match &item.fields {
         ItemFields::Group(_) if swarm.is_some() => {
             // With Copies on, the swarm carries the group's own layout.
@@ -100,8 +104,16 @@ fn emit(b: &mut Builder<'_>, item: &Item, outer: Option<&Frame>) -> Frame {
     b.group_visible.insert(item.id.clone(), visible);
     b.rows(item);
     match own {
-        Some(body) => Frame { transform: None, visible, copies: Some(body) },
-        None => Frame { transform: Some(transform), visible, copies: enclosing },
+        Some(body) => Frame {
+            transform: None,
+            visible,
+            copies: Some(body),
+        },
+        None => Frame {
+            transform: Some(transform),
+            visible,
+            copies: enclosing,
+        },
     }
 }
 
@@ -114,7 +126,10 @@ fn place_rigs(b: &mut Builder<'_>) {
             ItemFields::Camera(_) => "rig",
             _ => return,
         };
-        let frame = ancestors.iter().rev().find_map(|group| b.group_frames.get(&group.id).copied());
+        let frame = ancestors
+            .iter()
+            .rev()
+            .find_map(|group| b.group_frames.get(&group.id).copied());
         if let Some(frame) = frame {
             placed.push((item.id.clone(), role, frame));
         }

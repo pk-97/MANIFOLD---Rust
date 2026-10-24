@@ -38,12 +38,18 @@ impl std::ops::Add for ForceSample {
 
 impl ForceSample {
     pub const fn push(push: [f32; 3]) -> Self {
-        Self { push, drag: 0.0, drag_wind: [0.0; 3] }
+        Self {
+            push,
+            drag: 0.0,
+            drag_wind: [0.0; 3],
+        }
     }
 
     /// The acceleration at `velocity`.
     pub fn acceleration(&self, velocity: [f32; 3]) -> [f32; 3] {
-        std::array::from_fn(|axis| self.push[axis] + self.drag_wind[axis] - self.drag * velocity[axis])
+        std::array::from_fn(|axis| {
+            self.push[axis] + self.drag_wind[axis] - self.drag * velocity[axis]
+        })
     }
 
     /// `velocity` after `dt` under this sample held fixed, integrated
@@ -54,7 +60,9 @@ impl ForceSample {
         let x = self.drag * dt;
         let decay = (-x).exp();
         let reach = relaxation_reach(x) * dt;
-        std::array::from_fn(|axis| velocity[axis] * decay + (self.push[axis] + self.drag_wind[axis]) * reach)
+        std::array::from_fn(|axis| {
+            velocity[axis] * decay + (self.push[axis] + self.drag_wind[axis]) * reach
+        })
     }
 
     /// The velocity change drag alone makes over `dt` from `velocity`, under
@@ -76,13 +84,21 @@ impl ForceSample {
     }
 
     pub fn is_finite(&self) -> bool {
-        self.push.iter().chain(&self.drag_wind).all(|c| c.is_finite()) && self.drag.is_finite()
+        self.push
+            .iter()
+            .chain(&self.drag_wind)
+            .all(|c| c.is_finite())
+            && self.drag.is_finite()
     }
 }
 
 /// (1 − e^(−x)) / x, 1 at x = 0.
 fn relaxation_reach(x: f32) -> f32 {
-    if x.abs() < 1.0e-4 { 1.0 - 0.5 * x } else { -(-x).exp_m1() / x }
+    if x.abs() < 1.0e-4 {
+        1.0 - 0.5 * x
+    } else {
+        -(-x).exp_m1() / x
+    }
 }
 
 /// How a radial or vortex field's strength falls with distance from its
@@ -102,7 +118,11 @@ pub enum FalloffCurve {
 impl FalloffCurve {
     /// The curve a card's choice index names: 0 Edge, 1 Inverse.
     pub fn from_index(index: f32) -> Self {
-        if index.round() >= 1.0 { Self::Inverse } else { Self::Edge }
+        if index.round() >= 1.0 {
+            Self::Inverse
+        } else {
+            Self::Edge
+        }
     }
 
     pub fn index(self) -> u32 {
@@ -561,7 +581,9 @@ impl VectorField for SumField<'_> {
     fn sample_force(&self, position: [f32; 3]) -> ForceSample {
         self.fields
             .iter()
-            .fold(ForceSample::default(), |sum, field| sum + field.sample_force(position))
+            .fold(ForceSample::default(), |sum, field| {
+                sum + field.sample_force(position)
+            })
     }
 }
 

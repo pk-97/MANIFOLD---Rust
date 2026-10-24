@@ -1,5 +1,5 @@
-use super::*;
 use super::groups::{SplicedDef, splice_card_with_canonical_fallback};
+use super::*;
 use crate::scene::mesh_change::PreparedMeshRules;
 
 fn def(map_type: &str) -> EffectGraphDef {
@@ -44,7 +44,11 @@ fn failed_fused_splice_reports_canonical_fallback() {
     )
     .expect("the canonical def splices");
     assert_eq!(spliced, SplicedDef::CanonicalFallback);
-    assert!(errors.iter().any(|e| matches!(e, ChainError::DivergentGraphFellBack { .. })));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ChainError::DivergentGraphFellBack { .. }))
+    );
 
     let node_map: Vec<(NodeId, NodeInstanceId)> = splice
         .handles
@@ -56,7 +60,9 @@ fn failed_fused_splice_reports_canonical_fallback() {
         "the canonical binding's node is in the fallback graph",
     );
     assert!(
-        !node_map.iter().any(|(nid, _)| nid.as_str().starts_with("fused_region")),
+        !node_map
+            .iter()
+            .any(|(nid, _)| nid.as_str().starts_with("fused_region")),
         "a fused binding target does not exist in the fallback graph",
     );
 }

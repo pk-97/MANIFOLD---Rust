@@ -26,12 +26,12 @@ use manifold_gpu::{
     GpuAddressMode, GpuBinding, GpuFilterMode, GpuLoadAction, GpuSamplerDesc, GpuTextureFormat,
 };
 
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::mesh::pipeline::{look_at_rh, mat4_mul, ortho_rh};
-use manifold_node_engine::scene::camera::Camera;
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::camera::Camera;
 
 const CUBE_VERTEX_COUNT: u32 = 36;
 const SHADOW_MAP_SIZE: u32 = 2048;
@@ -135,9 +135,7 @@ manifold_node_engine::primitive! {
 
 impl DigitalPlantsRender {
     fn ensure_depth_texture(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
-        if self.depth_width == width
-            && self.depth_height == height
-            && self.depth_texture.is_some()
+        if self.depth_width == width && self.depth_height == height && self.depth_texture.is_some()
         {
             return;
         }
@@ -158,8 +156,14 @@ impl DigitalPlantsRender {
 
 impl Primitive for DigitalPlantsRender {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let instance_count = ctx.scalar_or_param("instance_count", 160_000.0).round().max(0.0) as u32;
-        let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
+        let instance_count = ctx
+            .scalar_or_param("instance_count", 160_000.0)
+            .round()
+            .max(0.0) as u32;
+        let cam = ctx
+            .inputs
+            .camera("camera")
+            .unwrap_or_else(Camera::default_perspective);
         let light_x = ctx.scalar_or_param("light_x", 8.0);
         let light_y = ctx.scalar_or_param("light_y", 20.0);
         let light_z = ctx.scalar_or_param("light_z", 8.0);
@@ -192,7 +196,11 @@ impl Primitive for DigitalPlantsRender {
 
         // Light VP — orthographic from light POV
         let light_proj = ortho_rh(-30.0, 30.0, -30.0, 30.0, 0.1, 200.0);
-        let light_view = look_at_rh([light_x, light_y, light_z], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+        let light_view = look_at_rh(
+            [light_x, light_y, light_z],
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        );
         let light_view_proj = mat4_mul(light_proj, light_view);
 
         let render_uniforms = RenderUniforms {
@@ -242,16 +250,17 @@ impl Primitive for DigitalPlantsRender {
             }));
         }
         if self.shadow_color_dummy.is_none() {
-            self.shadow_color_dummy = Some(gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
-                width: SHADOW_MAP_SIZE,
-                height: SHADOW_MAP_SIZE,
-                depth: 1,
-                format: GpuTextureFormat::Rgba16Float,
-                dimension: manifold_gpu::GpuTextureDimension::D2,
-                usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET,
-                label: "node.digital_plants_render shadow_color_dummy",
-                mip_levels: 1,
-            }));
+            self.shadow_color_dummy =
+                Some(gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
+                    width: SHADOW_MAP_SIZE,
+                    height: SHADOW_MAP_SIZE,
+                    depth: 1,
+                    format: GpuTextureFormat::Rgba16Float,
+                    dimension: manifold_gpu::GpuTextureDimension::D2,
+                    usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET,
+                    label: "node.digital_plants_render shadow_color_dummy",
+                    mip_levels: 1,
+                }));
         }
         if self.render_pipeline.is_none() {
             self.render_pipeline = Some(gpu.device.create_render_pipeline_depth(
@@ -400,20 +409,16 @@ mod tests {
 
         assert_eq!(DigitalPlantsRender::OUTPUTS.len(), 1);
         assert_eq!(DigitalPlantsRender::OUTPUTS[0].name, "color");
-        assert_eq!(
-            DigitalPlantsRender::OUTPUTS[0].ty,
-            PortType::Texture2D
-        );
+        assert_eq!(DigitalPlantsRender::OUTPUTS[0].ty, PortType::Texture2D);
     }
 
     #[test]
     fn digital_plants_render_has_light_params() {
-        let names: Vec<&str> = DigitalPlantsRender::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        for required in &[
-            "instance_count",
-            "light_x",
-            "light_intensity",
-        ] {
+        let names: Vec<&str> = DigitalPlantsRender::PARAMS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
+        for required in &["instance_count", "light_x", "light_intensity"] {
             assert!(names.contains(required), "missing param {}", required);
         }
     }

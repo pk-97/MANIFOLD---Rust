@@ -12,17 +12,17 @@ use manifold_gpu::{GpuBuffer, GpuTexture, GpuTextureFormat};
 
 use crate::bindings::Slot;
 use crate::exec::cpu_values::CpuWireValues;
-use crate::scene::camera::Camera;
 use crate::exec::execution_plan::ResourceId;
-use crate::scene::atmosphere::Atmosphere;
-use crate::scene::light::Light;
-use crate::scene::material::Material;
 use crate::parameters::ParamValue;
 use crate::ports::PortType;
-use crate::scene::scene_object::SceneObject;
-use crate::scene::render_mode::RenderMode;
-use crate::scene::transform::Transform;
+use crate::scene::atmosphere::Atmosphere;
+use crate::scene::camera::Camera;
+use crate::scene::light::Light;
+use crate::scene::material::Material;
 use crate::scene::mesh_source::MeshSource;
+use crate::scene::render_mode::RenderMode;
+use crate::scene::scene_object::SceneObject;
+use crate::scene::transform::Transform;
 
 /// Abstracts physical resource allocation behind the slot-based runtime.
 pub trait Backend: Send {
@@ -58,13 +58,19 @@ pub trait Backend: Send {
     /// Reserve a dedicated node-owned output without writable backing.
     /// Unsupported and host-prebound paths use ordinary acquisition.
     fn acquire_provided_texture(
-        &mut self, id: ResourceId, ty: PortType,
-        format: Option<GpuTextureFormat>, dims: (u32, u32),
+        &mut self,
+        id: ResourceId,
+        ty: PortType,
+        format: Option<GpuTextureFormat>,
+        dims: (u32, u32),
     ) -> Slot {
         self.acquire(id, ty, format, dims)
     }
 
-    fn provided_texture_descriptor(&self, _slot: Slot) -> Option<manifold_gpu::GpuTextureDesc<'static>> {
+    fn provided_texture_descriptor(
+        &self,
+        _slot: Slot,
+    ) -> Option<manifold_gpu::GpuTextureDesc<'static>> {
         None
     }
 
@@ -155,7 +161,9 @@ pub trait Backend: Send {
     /// buffer and the dynamic active-count via the runtime context.
     /// Replace dedicated array storage without changing its logical slot.
     /// Previously encoded work retains its original native resource.
-    fn install_array_buffer(&mut self, _slot: Slot, _buffer: GpuBuffer) -> bool { false }
+    fn install_array_buffer(&mut self, _slot: Slot, _buffer: GpuBuffer) -> bool {
+        false
+    }
 
     fn array_buffer(&self, _slot: Slot) -> Option<&GpuBuffer> {
         None
@@ -639,9 +647,24 @@ mod tests {
         // F32 and Vec3 scalars live in different physical-buffer kinds even
         // though they're both Scalar-flavoured.
         let mut b = MockBackend::new();
-        b.acquire(ResourceId(0), PortType::Scalar(ScalarType::F32), None, CANVAS);
-        b.release(ResourceId(0), PortType::Scalar(ScalarType::F32), None, CANVAS);
-        let s = b.acquire(ResourceId(1), PortType::Scalar(ScalarType::Vec3), None, CANVAS);
+        b.acquire(
+            ResourceId(0),
+            PortType::Scalar(ScalarType::F32),
+            None,
+            CANVAS,
+        );
+        b.release(
+            ResourceId(0),
+            PortType::Scalar(ScalarType::F32),
+            None,
+            CANVAS,
+        );
+        let s = b.acquire(
+            ResourceId(1),
+            PortType::Scalar(ScalarType::Vec3),
+            None,
+            CANVAS,
+        );
         assert_eq!(s.0, 1);
         assert_eq!(b.slot_count(), 2);
     }
@@ -683,7 +706,10 @@ mod tests {
             Some(GpuTextureFormat::Rgba32Float),
             CANVAS,
         );
-        assert_eq!(s1.0, 1, "different-format acquire must allocate a fresh slot");
+        assert_eq!(
+            s1.0, 1,
+            "different-format acquire must allocate a fresh slot"
+        );
         assert_eq!(b.slot_count(), 2);
     }
 
@@ -710,7 +736,10 @@ mod tests {
             None,
             CANVAS,
         );
-        assert_eq!(s.0, 0, "non-texture slots should recycle regardless of format hint");
+        assert_eq!(
+            s.0, 0,
+            "non-texture slots should recycle regardless of format hint"
+        );
     }
 
     #[test]

@@ -62,10 +62,22 @@ impl Primitive for Over {
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Texture { binding: 0, texture: top },
-                GpuBinding::Texture { binding: 1, texture: bottom },
-                GpuBinding::Sampler { binding: 2, sampler },
-                GpuBinding::Texture { binding: 3, texture: out },
+                GpuBinding::Texture {
+                    binding: 0,
+                    texture: top,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: bottom,
+                },
+                GpuBinding::Sampler {
+                    binding: 2,
+                    sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: out,
+                },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "node.over",
@@ -82,8 +94,8 @@ mod gpu_tests {
     };
 
     use super::Over;
-    use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
     use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
     fn upload(device: &GpuDevice, w: u32, h: u32, px: &[[f32; 4]]) -> GpuTexture {
         let halves: Vec<f16> = px.iter().flatten().map(|&v| f16::from_f32(v)).collect();
@@ -93,11 +105,14 @@ mod gpu_tests {
             depth: 1,
             format: GpuTextureFormat::Rgba16Float,
             dimension: GpuTextureDimension::D2,
-            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
+            usage: GpuTextureUsage::CPU_UPLOAD
+                | GpuTextureUsage::SHADER_READ
+                | GpuTextureUsage::COPY_SRC,
             label: "over-input",
             mip_levels: 1,
         });
-        let bytes = unsafe { std::slice::from_raw_parts(halves.as_ptr().cast::<u8>(), halves.len() * 2) };
+        let bytes =
+            unsafe { std::slice::from_raw_parts(halves.as_ptr().cast::<u8>(), halves.len() * 2) };
         device.upload_texture(&tex, bytes);
         tex
     }
@@ -116,7 +131,9 @@ mod gpu_tests {
                 [0.9 * a, (y / h as f32) * a, 0.2 * a, a]
             })
             .collect();
-        let bottom: Vec<[f32; 4]> = (0..n).map(|i| [0.1, 0.4 + (i % 7) as f32 * 0.05, 1.5, 1.0]).collect();
+        let bottom: Vec<[f32; 4]> = (0..n)
+            .map(|i| [0.1, 0.4 + (i % 7) as f32 * 0.05, 1.5, 1.0])
+            .collect();
         let (t, b) = (upload(&device, w, h, &top), upload(&device, w, h, &bottom));
         let out = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "over-out");
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
@@ -126,10 +143,22 @@ mod gpu_tests {
         enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Texture { binding: 0, texture: &t },
-                GpuBinding::Texture { binding: 1, texture: &b },
-                GpuBinding::Sampler { binding: 2, sampler: &sampler },
-                GpuBinding::Texture { binding: 3, texture: &out.texture },
+                GpuBinding::Texture {
+                    binding: 0,
+                    texture: &t,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &b,
+                },
+                GpuBinding::Sampler {
+                    binding: 2,
+                    sampler: &sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: &out.texture,
+                },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "over",
@@ -149,7 +178,10 @@ mod gpu_tests {
             for c in 0..4 {
                 let want = q(top[i][c]) + q(bottom[i][c]) * (1.0 - ta);
                 let got = f16::from_bits(halves[i * 4 + c]).to_f32();
-                assert!((got - want).abs() <= 2e-3 * want.abs().max(1.0), "texel {i} channel {c}: {got} vs {want}");
+                assert!(
+                    (got - want).abs() <= 2e-3 * want.abs().max(1.0),
+                    "texel {i} channel {c}: {got} vs {want}"
+                );
             }
         }
     }

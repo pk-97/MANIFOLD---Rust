@@ -1,6 +1,6 @@
 //! Buffer extent rule owned by this node.
-use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use crate::extent::whitewater_grid;
+use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn liquid_cells(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let (nodes, cells) = whitewater_grid(x)?;

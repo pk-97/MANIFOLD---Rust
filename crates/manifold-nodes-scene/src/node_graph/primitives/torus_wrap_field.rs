@@ -19,8 +19,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 

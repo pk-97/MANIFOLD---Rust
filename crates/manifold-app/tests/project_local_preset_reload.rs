@@ -34,12 +34,12 @@
 //! catalog-reading tests in a shared binary. Keep any future tests here
 //! behind a shared lock (see `project_preset_overlay.rs` in the renderer).
 
-use manifold_nodes as _;
 use manifold_core::PresetTypeId;
 use manifold_core::preset_def::PresetKind;
 use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset, Project};
 use manifold_core::types::LayerType;
 use manifold_node_engine::load::preset_loader::{clear_project_presets, set_project_presets};
+use manifold_nodes as _;
 
 /// Test-side mirror of the app's `install_embedded_presets` glue (manifold-app
 /// is bin-only, so the 5-line loop isn't linkable from an integration test):
@@ -54,7 +54,9 @@ fn install(presets: &[EmbeddedPreset]) {
         match p.kind {
             PresetKind::Effect => effect.push((id.as_str().to_string(), json, p.origin)),
             PresetKind::Generator => generator.push((id.as_str().to_string(), json, p.origin)),
-            PresetKind::SceneModifier => panic!("this standalone runtime fixture requires an effect or generator"),
+            PresetKind::SceneModifier => {
+                panic!("this standalone runtime fixture requires an effect or generator")
+            }
         }
     }
     set_project_presets(effect, generator, Vec::new());
@@ -126,8 +128,7 @@ fn project_local_generator_params_survive_reload() {
 
     // Backstop path (no pre-install hook): the params must still survive —
     // kept on placeholder specs, never silently dropped (the BUG-036 class).
-    let reloaded =
-        manifold_io::loader::load_project_from_json(&json).expect("reload without hook");
+    let reloaded = manifold_io::loader::load_project_from_json(&json).expect("reload without hook");
     {
         let gp = reloaded.timeline.layers[0]
             .gen_params()
@@ -178,8 +179,8 @@ fn project_local_generator_params_survive_reload() {
     // pre-P1: the old ordering lived entirely inside one pre-deserialize
     // hook, so install-after-the-fact had nothing left to retry against.
     clear_project_presets();
-    let mut reloaded = manifold_io::loader::load_project_from_json(&json)
-        .expect("bare reload, no installer");
+    let mut reloaded =
+        manifold_io::loader::load_project_from_json(&json).expect("bare reload, no installer");
     {
         let gp = reloaded.timeline.layers[0]
             .gen_params()

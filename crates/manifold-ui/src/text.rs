@@ -42,7 +42,12 @@ pub fn truncate_with_ellipsis(
     // counts finds the same prefix the old end-trim loop did in O(log n)
     // measures (`truncate_matches_linear_reference` proves it).
     let char_start = |k: usize| text.char_indices().nth(k).map_or(text.len(), |(i, _)| i);
-    let fits = |k: usize| measurer.measure_text(&text[..char_start(k)], font_size, weight).x <= target_w;
+    let fits = |k: usize| {
+        measurer
+            .measure_text(&text[..char_start(k)], font_size, weight)
+            .x
+            <= target_w
+    };
     let (mut lo, mut hi) = (0, text.chars().count());
     while hi - lo > 1 {
         let mid = lo + (hi - lo) / 2;
@@ -72,7 +77,11 @@ pub fn wrap_to_width(
     let mut lines = Vec::new();
     let mut line = String::new();
     for word in text.split_whitespace() {
-        let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+        let candidate = if line.is_empty() {
+            word.to_string()
+        } else {
+            format!("{line} {word}")
+        };
         if fits(&candidate) {
             line = candidate;
             continue;

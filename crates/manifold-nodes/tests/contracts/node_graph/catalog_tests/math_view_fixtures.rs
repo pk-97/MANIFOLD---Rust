@@ -20,10 +20,10 @@ pub(crate) fn test_owner_with(
     recipe: manifold_core::effect_graph_def::EffectGraphDef,
 ) -> manifold_core::effect_graph_def::EffectGraphDef {
     use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
-    use manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier;
     use manifold_core::scene_modifier_preset::{
         SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneTargetSelection,
     };
+    use manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier;
     let mut owner: EffectGraphDef = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
@@ -90,23 +90,29 @@ pub(crate) fn test_owner_with(
             frame_transform: None,
         });
     }
-    let owner = attach_scene_modifier(&owner, SceneModifierInstanceDef {
-        id: NodeId::new("vortex_a"),
-        scene: NodeId::new("scan_render"),
-        targets: SceneTargetSelection::AllObjects,
-        mesh_frames: frames.clone(),
-        legacy_math_view_carrier: None,
-        graph: Box::new(recipe),
-    })
+    let owner = attach_scene_modifier(
+        &owner,
+        SceneModifierInstanceDef {
+            id: NodeId::new("vortex_a"),
+            scene: NodeId::new("scan_render"),
+            targets: SceneTargetSelection::AllObjects,
+            mesh_frames: frames.clone(),
+            legacy_math_view_carrier: None,
+            graph: Box::new(recipe),
+        },
+    )
     .unwrap();
-    attach_scene_modifier(&owner, SceneModifierInstanceDef {
-        id: NodeId::new("math_view"),
-        scene: NodeId::new("scan_render"),
-        targets: SceneTargetSelection::AllObjects,
-        mesh_frames: frames,
-        legacy_math_view_carrier: None,
-        graph: Box::new(view_recipe),
-    })
+    attach_scene_modifier(
+        &owner,
+        SceneModifierInstanceDef {
+            id: NodeId::new("math_view"),
+            scene: NodeId::new("scan_render"),
+            targets: SceneTargetSelection::AllObjects,
+            mesh_frames: frames,
+            legacy_math_view_carrier: None,
+            graph: Box::new(view_recipe),
+        },
+    )
     .unwrap()
 }
 
@@ -136,18 +142,19 @@ pub(crate) fn test_owner_with_instance_echoes() -> manifold_core::effect_graph_d
             view.mesh_frames.clone(),
         )
     };
-    let mut owner = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(
-        &owner,
-        SceneModifierInstanceDef {
-            id: NodeId::new("spatial_echoes"),
-            scene: view_scene,
-            targets: view_targets,
-            mesh_frames: view_frames,
-            legacy_math_view_carrier: None,
-            graph: Box::new(echo_recipe),
-        },
-    )
-    .unwrap();
+    let mut owner =
+        manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(
+            &owner,
+            SceneModifierInstanceDef {
+                id: NodeId::new("spatial_echoes"),
+                scene: view_scene,
+                targets: view_targets,
+                mesh_frames: view_frames,
+                legacy_math_view_carrier: None,
+                graph: Box::new(echo_recipe),
+            },
+        )
+        .unwrap();
     // The echoes run between the vertex modifier and the view.
     let echoes = owner.scene_modifiers.pop().unwrap();
     owner.scene_modifiers.insert(1, echoes);
@@ -161,14 +168,23 @@ pub(crate) fn without_view(
 ) -> manifold_core::effect_graph_def::EffectGraphDef {
     use manifold_core::effect_graph_def::BindingTarget;
     let mut owner = owner.clone();
-    owner.scene_modifiers.retain(|instance| instance.id != NodeId::new("math_view"));
+    owner
+        .scene_modifiers
+        .retain(|instance| instance.id != NodeId::new("math_view"));
     let metadata = owner.preset_metadata.as_mut().unwrap();
-    metadata.bindings.retain(|binding| !matches!(
-        &binding.target,
-        BindingTarget::SceneModifier { modifier_id, .. } if modifier_id.as_str() == "math_view"
-    ));
-    let binding_ids: std::collections::HashSet<_> =
-        metadata.bindings.iter().map(|binding| binding.id.clone()).collect();
-    metadata.params.retain(|param| binding_ids.contains(&param.id));
+    metadata.bindings.retain(|binding| {
+        !matches!(
+            &binding.target,
+            BindingTarget::SceneModifier { modifier_id, .. } if modifier_id.as_str() == "math_view"
+        )
+    });
+    let binding_ids: std::collections::HashSet<_> = metadata
+        .bindings
+        .iter()
+        .map(|binding| binding.id.clone())
+        .collect();
+    metadata
+        .params
+        .retain(|param| binding_ids.contains(&param.id));
     owner
 }

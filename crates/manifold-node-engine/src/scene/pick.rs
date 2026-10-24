@@ -45,10 +45,22 @@ pub fn nearest_slot(ids: &[f32]) -> Option<u32> {
 /// centred on `uv` fills the whole target: x and y scale by the render size
 /// over the region, after moving the point to the centre (OpenGL's pick
 /// matrix). Column-major, like every scene matrix.
-pub fn pick_view_proj(view_proj: [[f32; 4]; 4], uv: [f32; 2], width: u32, height: u32) -> [[f32; 4]; 4] {
+pub fn pick_view_proj(
+    view_proj: [[f32; 4]; 4],
+    uv: [f32; 2],
+    width: u32,
+    height: u32,
+) -> [[f32; 4]; 4] {
     let n = PICK_REGION as f32;
     let (sx, sy) = (width.max(1) as f32 / n, height.max(1) as f32 / n);
     // The point in normalized device coordinates; y points up there.
     let (cx, cy) = (2.0 * uv[0] - 1.0, 1.0 - 2.0 * uv[1]);
-    view_proj.map(|col| [sx * (col[0] - cx * col[3]), sy * (col[1] - cy * col[3]), col[2], col[3]])
+    view_proj.map(|col| {
+        [
+            sx * (col[0] - cx * col[3]),
+            sy * (col[1] - cy * col[3]),
+            col[2],
+            col[3],
+        ]
+    })
 }

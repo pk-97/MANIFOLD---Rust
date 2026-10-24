@@ -293,7 +293,13 @@ impl OscSyncController {
     ///
     /// `at` = the receive thread's arrival stamp; `now` = the drain time,
     /// which drives the receive timeout.
-    pub fn on_timecode_received(&mut self, _address: &str, values: &[f64], at: Instant, now: Seconds) {
+    pub fn on_timecode_received(
+        &mut self,
+        _address: &str,
+        values: &[f64],
+        at: Instant,
+        now: Seconds,
+    ) {
         let frame;
         if values.len() >= 4 {
             let hours = values[0] as i32;
@@ -302,7 +308,8 @@ impl OscSyncController {
             let frames = values[3] as i32;
 
             self.pending_timecode_seconds = Seconds(
-                self.timecode_to_seconds(hours, minutes, seconds, frames) + f64::from(self.timecode_offset),
+                self.timecode_to_seconds(hours, minutes, seconds, frames)
+                    + f64::from(self.timecode_offset),
             );
             frame = Some(self.frame_seconds());
 
@@ -344,13 +351,21 @@ impl OscSyncController {
         }
 
         self.has_new_timecode = true;
-        self.pending_report = Some(TimecodeReport { seconds: self.pending_timecode_seconds.0, at, frame });
+        self.pending_report = Some(TimecodeReport {
+            seconds: self.pending_timecode_seconds.0,
+            at,
+            frame,
+        });
         self.last_timecode_received_time = now;
     }
 
     /// One timecode frame's length in seconds.
     fn frame_seconds(&self) -> f64 {
-        if self.drop_frame { 1001.0 / 30000.0 } else { 1.0 / f64::from(self.timecode_frame_rate) }
+        if self.drop_frame {
+            1001.0 / 30000.0
+        } else {
+            1.0 / f64::from(self.timecode_frame_rate)
+        }
     }
 
     // =================================================================
@@ -540,8 +555,7 @@ mod tests {
     #[test]
     fn drop_frame_skips_two_frame_numbers_at_non_tenth_minute_boundary() {
         let ctrl = OscSyncController::new(); // drop_frame: true by default
-        let one_frame =
-            ctrl.timecode_to_seconds(0, 0, 0, 1) - ctrl.timecode_to_seconds(0, 0, 0, 0);
+        let one_frame = ctrl.timecode_to_seconds(0, 0, 0, 1) - ctrl.timecode_to_seconds(0, 0, 0, 0);
 
         // SMPTE 12M: 00:00:59:29 is immediately followed by 00:01:00:02 —
         // display numbers 00:01:00:00 and 00:01:00:01 do not exist.
@@ -558,8 +572,7 @@ mod tests {
     #[test]
     fn drop_frame_does_not_skip_at_ten_minute_boundary() {
         let ctrl = OscSyncController::new();
-        let one_frame =
-            ctrl.timecode_to_seconds(0, 0, 0, 1) - ctrl.timecode_to_seconds(0, 0, 0, 0);
+        let one_frame = ctrl.timecode_to_seconds(0, 0, 0, 1) - ctrl.timecode_to_seconds(0, 0, 0, 0);
 
         // SMPTE 12M: every 10th minute is exempt from the 2-frame skip, so
         // 00:09:59:29 -> 00:10:00:00 is an ordinary single-frame advance
@@ -620,7 +633,13 @@ mod tests {
         let mut arb_target = FakeArbTarget::default();
         let mut arbiter = SyncArbiter::new();
         let mut tick = |ctrl: &mut OscSyncController, now: f64| {
-            ctrl.update(Seconds(now), &target, &mut arbiter, &mut arb_target, ClockAuthority::Osc);
+            ctrl.update(
+                Seconds(now),
+                &target,
+                &mut arbiter,
+                &mut arb_target,
+                ClockAuthority::Osc,
+            );
         };
 
         let at = Instant::now();
@@ -632,14 +651,29 @@ mod tests {
         assert!((label.frame.expect("a label has a frame") - 0.04).abs() < 1e-15);
 
         tick(&mut ctrl, 1.02);
-        assert_eq!(ctrl.timecode_report(), Some(label), "held until the next message");
+        assert_eq!(
+            ctrl.timecode_report(),
+            Some(label),
+            "held until the next message"
+        );
 
         let seconds = 3_600.123_456_789;
         ctrl.on_timecode_received("", &[seconds], at, Seconds(1.04));
         tick(&mut ctrl, 1.04);
-        assert_eq!(ctrl.timecode_report(), Some(TimecodeReport { seconds, at, frame: None }));
+        assert_eq!(
+            ctrl.timecode_report(),
+            Some(TimecodeReport {
+                seconds,
+                at,
+                frame: None
+            })
+        );
         tick(&mut ctrl, 1.6);
-        assert_eq!(ctrl.timecode_report(), None, "gone after the receive timeout");
+        assert_eq!(
+            ctrl.timecode_report(),
+            None,
+            "gone after the receive timeout"
+        );
     }
 
     // ── Seek-or-trim + transport-follow ─────────────────────────────────
@@ -706,7 +740,12 @@ mod tests {
         let mut arb_target = FakeArbTarget::default();
         let mut arbiter = SyncArbiter::new();
 
-        ctrl.sync_timecode_to_playback(&sync_target, &mut arbiter, &mut arb_target, ClockAuthority::Osc);
+        ctrl.sync_timecode_to_playback(
+            &sync_target,
+            &mut arbiter,
+            &mut arb_target,
+            ClockAuthority::Osc,
+        );
 
         assert_eq!(arb_target.seek_count, 0);
     }
@@ -725,7 +764,12 @@ mod tests {
         let mut arb_target = FakeArbTarget::default();
         let mut arbiter = SyncArbiter::new();
 
-        ctrl.sync_timecode_to_playback(&sync_target, &mut arbiter, &mut arb_target, ClockAuthority::Osc);
+        ctrl.sync_timecode_to_playback(
+            &sync_target,
+            &mut arbiter,
+            &mut arb_target,
+            ClockAuthority::Osc,
+        );
 
         assert_eq!(arb_target.seek_count, 1);
     }
@@ -744,7 +788,12 @@ mod tests {
         let mut arb_target = FakeArbTarget::default();
         let mut arbiter = SyncArbiter::new();
 
-        ctrl.sync_timecode_to_playback(&sync_target, &mut arbiter, &mut arb_target, ClockAuthority::Osc);
+        ctrl.sync_timecode_to_playback(
+            &sync_target,
+            &mut arbiter,
+            &mut arb_target,
+            ClockAuthority::Osc,
+        );
 
         assert_eq!(arb_target.seek_count, 0);
     }
@@ -765,7 +814,12 @@ mod tests {
         let mut arb_target = FakeArbTarget::default();
         let mut arbiter = SyncArbiter::new();
 
-        ctrl.sync_timecode_to_playback(&sync_target, &mut arbiter, &mut arb_target, ClockAuthority::Osc);
+        ctrl.sync_timecode_to_playback(
+            &sync_target,
+            &mut arbiter,
+            &mut arb_target,
+            ClockAuthority::Osc,
+        );
 
         assert_eq!(arb_target.seek_count, 1);
     }
@@ -784,7 +838,12 @@ mod tests {
         let mut arb_target = FakeArbTarget::default();
         let mut arbiter = SyncArbiter::new();
 
-        ctrl.sync_timecode_to_playback(&sync_target, &mut arbiter, &mut arb_target, ClockAuthority::Osc);
+        ctrl.sync_timecode_to_playback(
+            &sync_target,
+            &mut arbiter,
+            &mut arb_target,
+            ClockAuthority::Osc,
+        );
 
         assert_eq!(arb_target.seek_count, 0);
     }
@@ -812,7 +871,10 @@ mod tests {
             ClockAuthority::Osc,
         );
 
-        assert!(arb_target.played, "timecode arriving while stopped must play");
+        assert!(
+            arb_target.played,
+            "timecode arriving while stopped must play"
+        );
     }
 
     #[test]

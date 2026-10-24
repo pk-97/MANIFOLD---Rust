@@ -32,7 +32,10 @@ pub fn gradient(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
         mip_levels: 1,
     });
     let bytes = unsafe {
-        std::slice::from_raw_parts(px.as_ptr().cast::<u8>(), std::mem::size_of_val(px.as_slice()))
+        std::slice::from_raw_parts(
+            px.as_ptr().cast::<u8>(),
+            std::mem::size_of_val(px.as_slice()),
+        )
     };
     device.upload_texture(&tex, bytes);
     tex
@@ -55,11 +58,26 @@ pub fn dispatch_coincident(
     enc.dispatch_compute(
         &pipeline,
         &[
-            GpuBinding::Bytes { binding: 0, data: param_bytes },
-            GpuBinding::Texture { binding: 1, texture: a },
-            GpuBinding::Texture { binding: 2, texture: b },
-            GpuBinding::Sampler { binding: 3, sampler: &sampler },
-            GpuBinding::Texture { binding: 4, texture: &out.texture },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: param_bytes,
+            },
+            GpuBinding::Texture {
+                binding: 1,
+                texture: a,
+            },
+            GpuBinding::Texture {
+                binding: 2,
+                texture: b,
+            },
+            GpuBinding::Sampler {
+                binding: 3,
+                sampler: &sampler,
+            },
+            GpuBinding::Texture {
+                binding: 4,
+                texture: &out.texture,
+            },
         ],
         [w.div_ceil(16), h.div_ceil(16), 1],
         "codegen-test-mix",
@@ -94,7 +112,10 @@ pub fn gradient_b(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
         mip_levels: 1,
     });
     let bytes = unsafe {
-        std::slice::from_raw_parts(px.as_ptr().cast::<u8>(), std::mem::size_of_val(px.as_slice()))
+        std::slice::from_raw_parts(
+            px.as_ptr().cast::<u8>(),
+            std::mem::size_of_val(px.as_slice()),
+        )
     };
     device.upload_texture(&tex, bytes);
     tex
@@ -116,10 +137,22 @@ pub fn dispatch_pointwise(
     enc.dispatch_compute(
         &pipeline,
         &[
-            GpuBinding::Bytes { binding: 0, data: param_bytes },
-            GpuBinding::Texture { binding: 1, texture: input },
-            GpuBinding::Sampler { binding: 2, sampler: &sampler },
-            GpuBinding::Texture { binding: 3, texture: &out.texture },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: param_bytes,
+            },
+            GpuBinding::Texture {
+                binding: 1,
+                texture: input,
+            },
+            GpuBinding::Sampler {
+                binding: 2,
+                sampler: &sampler,
+            },
+            GpuBinding::Texture {
+                binding: 3,
+                texture: &out.texture,
+            },
         ],
         [w.div_ceil(16), h.div_ceil(16), 1],
         "codegen-test",
@@ -156,10 +189,22 @@ pub fn dispatch_two_texel(
     enc.dispatch_compute(
         &pipeline,
         &[
-            GpuBinding::Bytes { binding: 0, data: param_bytes },
-            GpuBinding::Texture { binding: 1, texture: a },
-            GpuBinding::Texture { binding: 2, texture: b },
-            GpuBinding::Texture { binding: 3, texture: &out.texture },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: param_bytes,
+            },
+            GpuBinding::Texture {
+                binding: 1,
+                texture: a,
+            },
+            GpuBinding::Texture {
+                binding: 2,
+                texture: b,
+            },
+            GpuBinding::Texture {
+                binding: 3,
+                texture: &out.texture,
+            },
         ],
         [w.div_ceil(16), h.div_ceil(16), 1],
         "codegen-test-dither",
@@ -181,10 +226,15 @@ pub fn dispatch_coincident_n(
     let pipeline = device.create_compute_pipeline(wgsl, ENTRY, "codegen-coincident-n");
     let sampler = device.create_sampler(&GpuSamplerDesc::default());
     let out = RenderTarget::new(device, w, h, FMT, "codegen-out-coincident-n");
-    let mut bindings: Vec<GpuBinding> =
-        vec![GpuBinding::Bytes { binding: 0, data: param_bytes }];
+    let mut bindings: Vec<GpuBinding> = vec![GpuBinding::Bytes {
+        binding: 0,
+        data: param_bytes,
+    }];
     for (i, t) in inputs.iter().enumerate() {
-        bindings.push(GpuBinding::Texture { binding: (i + 1) as u32, texture: t });
+        bindings.push(GpuBinding::Texture {
+            binding: (i + 1) as u32,
+            texture: t,
+        });
     }
     bindings.push(GpuBinding::Sampler {
         binding: (inputs.len() + 1) as u32,
@@ -220,9 +270,18 @@ pub fn dispatch_paramless_pointwise(
     enc.dispatch_compute(
         &pipeline,
         &[
-            GpuBinding::Texture { binding: 0, texture: input },
-            GpuBinding::Sampler { binding: 1, sampler: &sampler },
-            GpuBinding::Texture { binding: 2, texture: &out.texture },
+            GpuBinding::Texture {
+                binding: 0,
+                texture: input,
+            },
+            GpuBinding::Sampler {
+                binding: 1,
+                sampler: &sampler,
+            },
+            GpuBinding::Texture {
+                binding: 2,
+                texture: &out.texture,
+            },
         ],
         [w.div_ceil(16), h.div_ceil(16), 1],
         "codegen-paramless",
@@ -232,7 +291,12 @@ pub fn dispatch_paramless_pointwise(
 }
 
 /// Allocate an n×n×n 3D texture with the given usage.
-pub fn make_3d_texture(device: &GpuDevice, n: u32, usage: GpuTextureUsage, label: &'static str) -> GpuTexture {
+pub fn make_3d_texture(
+    device: &GpuDevice,
+    n: u32,
+    usage: GpuTextureUsage,
+    label: &'static str,
+) -> GpuTexture {
     device.create_texture(&GpuTextureDesc {
         width: n,
         height: n,
@@ -260,7 +324,10 @@ textureStore(vol, vec3<i32>(id), vec4<f32>(f.x, f.y, f.z, 0.5 + 0.5 * f.x));\n\
     let mut enc = device.create_encoder("vol-fill");
     enc.dispatch_compute(
         &pipeline,
-        &[GpuBinding::Texture { binding: 0, texture: vol }],
+        &[GpuBinding::Texture {
+            binding: 0,
+            texture: vol,
+        }],
         [n.div_ceil(4), n.div_ceil(4), n.div_ceil(4)],
         "vol-fill",
     );
@@ -297,9 +364,18 @@ pub fn dispatch_two_output_source(
     enc.dispatch_compute(
         &pipeline,
         &[
-            GpuBinding::Bytes { binding: 0, data: param_bytes },
-            GpuBinding::Texture { binding: 1, texture: &a.texture },
-            GpuBinding::Texture { binding: 2, texture: &b.texture },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: param_bytes,
+            },
+            GpuBinding::Texture {
+                binding: 1,
+                texture: &a.texture,
+            },
+            GpuBinding::Texture {
+                binding: 2,
+                texture: &b.texture,
+            },
         ],
         [w.div_ceil(16), h.div_ceil(16), 1],
         "codegen-multi-out",
@@ -322,10 +398,16 @@ pub fn dispatch_source(
     let mut bindings: Vec<GpuBinding> = Vec::new();
     let mut next = 0u32;
     if let Some(bytes) = param_bytes {
-        bindings.push(GpuBinding::Bytes { binding: 0, data: bytes });
+        bindings.push(GpuBinding::Bytes {
+            binding: 0,
+            data: bytes,
+        });
         next = 1;
     }
-    bindings.push(GpuBinding::Texture { binding: next, texture: &out.texture });
+    bindings.push(GpuBinding::Texture {
+        binding: next,
+        texture: &out.texture,
+    });
     let mut enc = device.create_encoder("codegen-source");
     enc.dispatch_compute(
         &pipeline,

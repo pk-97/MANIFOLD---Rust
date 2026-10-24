@@ -1,6 +1,6 @@
 //! Buffer extent rule owned by this node.
-use manifold_node_engine::exec::extent::ExtentRule;
 use crate::extent::whole;
+use manifold_node_engine::exec::extent::ExtentRule;
 
 inventory::submit! {
     ExtentRule { type_id: "node.upwind_distance", check: |x| {

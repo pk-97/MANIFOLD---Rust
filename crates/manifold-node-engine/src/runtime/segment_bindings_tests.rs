@@ -1,16 +1,19 @@
-use super::*;
 use super::segment_bindings::resolve_segment_bindings;
-use std::sync::Arc;
+use super::*;
 use crate::freeze::install::{self, SegmentLookup, SegmentView};
 use crate::param_binding::{ParamBinding, ParamConvert, ParamId, ParamTarget};
 use std::borrow::Cow;
+use std::sync::Arc;
 
 fn binding(id: &'static str, node: &str) -> ParamBinding {
     ParamBinding {
         id: ParamId::from(id),
         label: Cow::Borrowed("Param"),
         default_value: 0.0,
-        target: ParamTarget::Node { node_id: NodeId::new(node), param: Cow::Borrowed("gain") },
+        target: ParamTarget::Node {
+            node_id: NodeId::new(node),
+            param: Cow::Borrowed("gain"),
+        },
         convert: ParamConvert::Float,
         scale: 1.0,
         offset: 0.0,
@@ -59,20 +62,32 @@ fn unresolvable_member_binding_refuses_the_segment() {
     let node_map = vec![(NodeId::new("c0.map"), NodeInstanceId(0))];
     let mut view = SegmentView {
         def: passthrough_def("segment"),
-        card_bindings: vec![vec![binding("gain", "c0.map")], vec![binding("gain", "c1.map")]],
+        card_bindings: vec![
+            vec![binding("gain", "c0.map")],
+            vec![binding("gain", "c1.map")],
+        ],
         retarget: Default::default(),
         mesh_rules: Default::default(),
     };
 
     let err = resolve_segment_bindings(&view, &member_refs, &graph, &node_map)
         .expect_err("a member binding with no node must refuse the segment");
-    assert!(err.contains(members[1].id.as_str()), "refusal names the member: {err}");
-    assert!(!err.contains(members[0].id.as_str()), "only the broken member is named: {err}");
+    assert!(
+        err.contains(members[1].id.as_str()),
+        "refusal names the member: {err}"
+    );
+    assert!(
+        !err.contains(members[0].id.as_str()),
+        "only the broken member is named: {err}"
+    );
 
     view.card_bindings[1] = vec![binding("gain", "c0.map")];
     let resolved = resolve_segment_bindings(&view, &member_refs, &graph, &node_map)
         .expect("every binding resolves");
-    assert_eq!(resolved.iter().map(Vec::len).collect::<Vec<_>>(), vec![1, 1]);
+    assert_eq!(
+        resolved.iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![1, 1]
+    );
 
     let defs = [passthrough_def("refused-a"), passthrough_def("refused-b")];
     let cards: Vec<(EffectGraphDef, Arc<LoadedPresetView>)> = defs
@@ -83,7 +98,10 @@ fn unresolvable_member_binding_refuses_the_segment() {
     let refs: Vec<_> = cards.iter().map(|(d, v)| (d, v.as_ref())).collect();
     install::refuse_segment(install::segment_key(&refs));
     assert!(
-        matches!(install::fused_segment_view_for(&cards), SegmentLookup::Refused),
+        matches!(
+            install::fused_segment_view_for(&cards),
+            SegmentLookup::Refused
+        ),
         "a refused segment must build its cards one by one",
     );
 }

@@ -11,8 +11,8 @@
 // near-solid proof.
 
 use super::whitewater_particle_cpu::{Box3, face_index};
-use manifold_water_liquid::whitewater::{WHITEWATER_ID_LIMIT, WhitewaterParticle};
 use manifold_water_liquid::fluid_particles::WhitewaterSpawn;
+use manifold_water_liquid::whitewater::{WHITEWATER_ID_LIMIT, WhitewaterParticle};
 
 const BOX_INSET: f32 = 1.625;
 const BOX_EPSILON: f32 = 0.5e-6;
@@ -72,7 +72,9 @@ fn corner(c: usize) -> [i32; 3] {
 
 fn corner_weight(f: [f32; 3], c: usize) -> f32 {
     let o = corner(c);
-    (0..3).map(|a| if o[a] == 1 { f[a] } else { 1.0 - f[a] }).product()
+    (0..3)
+        .map(|a| if o[a] == 1 { f[a] } else { 1.0 - f[a] })
+        .product()
 }
 
 fn add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
@@ -131,7 +133,13 @@ fn corners(solid: &[f32], grid: &Box3, q: [f32; 3]) -> ([f32; 8], [f32; 3]) {
     let nodes = grid.cells.map(|c| c as i32 + 1);
     let lower = q.map(f32::floor);
     let f = std::array::from_fn(|a| q[a] - lower[a]);
-    let phi = std::array::from_fn(|c| node(solid, nodes, std::array::from_fn(|a| lower[a] as i32 + corner(c)[a])));
+    let phi = std::array::from_fn(|c| {
+        node(
+            solid,
+            nodes,
+            std::array::from_fn(|a| lower[a] as i32 + corner(c)[a]),
+        )
+    });
     (phi, f)
 }
 
@@ -145,9 +153,21 @@ fn solid_at(solid: &[f32], grid: &Box3, q: [f32; 3]) -> f32 {
 fn gradient(solid: &[f32], grid: &Box3, q: [f32; 3]) -> [f32; 3] {
     let (p, f) = corners(solid, grid, q);
     [
-        mix(mix(p[1] - p[0], p[3] - p[2], f[1]), mix(p[5] - p[4], p[7] - p[6], f[1]), f[2]),
-        mix(mix(p[2] - p[0], p[3] - p[1], f[0]), mix(p[6] - p[4], p[7] - p[5], f[0]), f[2]),
-        mix(mix(p[4] - p[0], p[5] - p[1], f[0]), mix(p[6] - p[2], p[7] - p[3], f[0]), f[1]),
+        mix(
+            mix(p[1] - p[0], p[3] - p[2], f[1]),
+            mix(p[5] - p[4], p[7] - p[6], f[1]),
+            f[2],
+        ),
+        mix(
+            mix(p[2] - p[0], p[3] - p[1], f[0]),
+            mix(p[6] - p[4], p[7] - p[5], f[0]),
+            f[2],
+        ),
+        mix(
+            mix(p[4] - p[0], p[5] - p[1], f[0]),
+            mix(p[6] - p[2], p[7] - p[3], f[0]),
+            f[1],
+        ),
     ]
 }
 
@@ -206,7 +226,9 @@ impl NearSolid {
 fn near_solid_cell(p: [f32; 3], grid: &Box3) -> Option<[i64; 3]> {
     let h = grid.cell_size();
     let g = p.map(|x| (x / (NEAR_SOLID as f32 * h)).floor() as i64);
-    (0..3).all(|a| g[a] >= 0 && g[a] < grid.cells[a].div_ceil(NEAR_SOLID) as i64).then_some(g)
+    (0..3)
+        .all(|a| g[a] >= 0 && g[a] < grid.cells[a].div_ceil(NEAR_SOLID) as i64)
+        .then_some(g)
 }
 
 /// The collision march and its resolve, local metres: the resolved position,
@@ -224,11 +246,16 @@ fn collide(
     let lo = [BOX_INSET * h + BOX_EPSILON; 3];
     let hi: [f32; 3] = std::array::from_fn(|a| grid.cells[a] as f32 * h - lo[a]);
     let inside = |x: [f32; 3]| (0..3).all(|a| x[a] >= lo[a] && x[a] < hi[a]);
-    let box_gap = |x: [f32; 3]| (0..3).map(|a| (x[a] - lo[a]).abs().min((x[a] - hi[a]).abs())).fold(f32::INFINITY, f32::min);
+    let box_gap = |x: [f32; 3]| {
+        (0..3)
+            .map(|a| (x[a] - lo[a]).abs().min((x[a] - hi[a]).abs()))
+            .fold(f32::INFINITY, f32::min)
+    };
     let solid = |x: [f32; 3]| solid_at(f.solid, grid, x.map(|c| c / h));
     let mut margin = f32::INFINITY;
     let travel = length(sub(nextp, p));
-    let (Some(old_cell), Some(new_cell)) = (near_solid_cell(p, grid), near_solid_cell(nextp, grid)) else {
+    let (Some(old_cell), Some(new_cell)) = (near_solid_cell(p, grid), near_solid_cell(nextp, grid))
+    else {
         return (nextp, None, margin);
     };
     if let Some(near) = near
@@ -249,7 +276,11 @@ fn collide(
     let mut current = p;
     let mut hit = None;
     for i in 0..steps {
-        current = if i == steps - 1 { nextp } else { add(p, scale(dir, (i + 1) as f32 * step)) };
+        current = if i == steps - 1 {
+            nextp
+        } else {
+            add(p, scale(dir, (i + 1) as f32 * step))
+        };
         let phi = solid(current);
         margin = margin.min(phi.abs()).min(box_gap(current));
         if phi < 0.0 || !inside(current) {
@@ -258,7 +289,9 @@ fn collide(
         }
         last = current;
     }
-    let Some(hit_phi) = hit else { return (nextp, None, margin) };
+    let Some(hit_phi) = hit else {
+        return (nextp, None, margin);
+    };
     let reach = MAX_RESOLVE * h;
     let grad = gradient(f.solid, grid, current.map(|c| c / h));
     let mut bounce = None;
@@ -273,7 +306,10 @@ fn collide(
             resolved = last;
         }
         let u = scale(n, dot(v, n));
-        bounce = Some(sub(scale(sub(v, u), 1.0 - s.spray_friction), scale(u, s.spray_restitution)));
+        bounce = Some(sub(
+            scale(sub(v, u), 1.0 - s.spray_friction),
+            scale(u, s.spray_restitution),
+        ));
     } else {
         resolved = last;
     }
@@ -306,7 +342,14 @@ pub(super) fn advect(
     }
     let h = grid.cell_size();
     let origin: [f32; 3] = std::array::from_fn(|a| grid.center[a] - 0.5 * grid.size[a]);
-    let p = sub([particle.position_lifetime[0], particle.position_lifetime[1], particle.position_lifetime[2]], origin);
+    let p = sub(
+        [
+            particle.position_lifetime[0],
+            particle.position_lifetime[1],
+            particle.position_lifetime[2],
+        ],
+        origin,
+    );
     let v = particle.velocity;
     let g = s.gravity;
     let spray = particle.kind == 2;
@@ -322,10 +365,13 @@ pub(super) fn advect(
             let f = particle.id as f32 / 255.0;
             let buoyancy = -2.0 - 4.0 * f;
             let drag = 0.375 + (1.0 - f) * 0.25;
-            let push: [f32; 3] = std::array::from_fn(|a| -buoyancy * g[a] + drag * (vmac[a] - v[a]) / s.dt);
+            let push: [f32; 3] =
+                std::array::from_fn(|a| -buoyancy * g[a] + drag * (vmac[a] - v[a]) / s.dt);
             add(v, scale(push, s.dt))
         } else if particle.kind == 0 {
-            let push: [f32; 3] = std::array::from_fn(|a| -s.bubble_buoyancy * g[a] + s.bubble_drag * (vmac[a] - v[a]) / s.dt);
+            let push: [f32; 3] = std::array::from_fn(|a| {
+                -s.bubble_buoyancy * g[a] + s.bubble_drag * (vmac[a] - v[a]) / s.dt
+            });
             add(v, scale(push, s.dt))
         } else {
             scale(vmac, s.foam_advection)
@@ -354,15 +400,31 @@ pub(super) fn advect(
 
 /// `node.retype_whitewater` for one slot, and the smallest gap between a
 /// deciding value and its threshold, in cells.
-pub(super) fn retype(particle: WhitewaterParticle, f: &Fields<'_>, distance: &[f32], cells: &[u32], grid: &Box3) -> (WhitewaterParticle, f32) {
+pub(super) fn retype(
+    particle: WhitewaterParticle,
+    f: &Fields<'_>,
+    distance: &[f32],
+    cells: &[u32],
+    grid: &Box3,
+) -> (WhitewaterParticle, f32) {
     let mut out = particle;
     if particle.kind > 2 {
         return (out, f32::INFINITY);
     }
     let h = grid.cell_size();
-    let q = grid.position([particle.position_lifetime[0], particle.position_lifetime[1], particle.position_lifetime[2]]);
+    let q = grid.position([
+        particle.position_lifetime[0],
+        particle.position_lifetime[1],
+        particle.position_lifetime[2],
+    ]);
     let lo = BOX_INSET + BOX_EPSILON / h;
-    let mut margin = (0..3).map(|a| (q[a] - lo).abs().min((q[a] - (grid.cells[a] as f32 - lo)).abs())).fold(f32::INFINITY, f32::min);
+    let mut margin = (0..3)
+        .map(|a| {
+            (q[a] - lo)
+                .abs()
+                .min((q[a] - (grid.cells[a] as f32 - lo)).abs())
+        })
+        .fold(f32::INFINITY, f32::min);
     let kind = if (0..3).any(|a| q[a] < lo || q[a] >= grid.cells[a] as f32 - lo) {
         2
     } else {
@@ -392,7 +454,11 @@ pub(super) fn retype(particle: WhitewaterParticle, f: &Fields<'_>, distance: &[f
         }
         if kind != 0 {
             let g = q.map(|v| v.floor() as i32);
-            margin = margin.min(q.iter().map(|v| (v - v.round()).abs()).fold(f32::INFINITY, f32::min));
+            margin = margin.min(
+                q.iter()
+                    .map(|v| (v - v.round()).abs())
+                    .fold(f32::INFINITY, f32::min),
+            );
             let air = (-1..=1).any(|dz| {
                 (-1..=1).any(|dy| {
                     (-1..=1).any(|dx| {
@@ -425,14 +491,22 @@ pub(super) struct Age {
 
 impl Age {
     pub fn flip() -> Self {
-        Self { dt: 1.0 / 60.0, bubble: 0.333, foam: 1.0, spray: 2.0 }
+        Self {
+            dt: 1.0 / 60.0,
+            bubble: 0.333,
+            foam: 1.0,
+            spray: 2.0,
+        }
     }
 }
 
 /// `node.age_whitewater` for one slot.
 pub(super) fn age(particle: WhitewaterParticle, s: Age) -> WhitewaterParticle {
     let mut out = particle;
-    if particle.kind == 4 { out.position_lifetime[3] -= s.dt; return out; }
+    if particle.kind == 4 {
+        out.position_lifetime[3] -= s.dt;
+        return out;
+    }
     if particle.kind == 3 || particle.kind > 4 {
         return out;
     }
@@ -452,7 +526,12 @@ pub(super) struct Preserve {
 
 impl Preserve {
     pub fn flip() -> Self {
-        Self { dt: 1.0 / 60.0, rate: 0.75, min_density: 20.0, max_density: 45.0 }
+        Self {
+            dt: 1.0 / 60.0,
+            rate: 0.75,
+            min_density: 20.0,
+            max_density: 45.0,
+        }
     }
 }
 
@@ -460,12 +539,22 @@ impl Preserve {
 /// cell of side `h` from `origin`, then each foam particle's gain. A position
 /// outside the `cells` grid or not finite counts nowhere and gains nothing
 /// (FLIP indexes past its grid there; the tick removes every such particle).
-pub(super) fn preserve(pool: &[WhitewaterParticle], origin: [f32; 3], h: f32, cells: [u32; 3], s: Preserve) -> Vec<WhitewaterParticle> {
+pub(super) fn preserve(
+    pool: &[WhitewaterParticle],
+    origin: [f32; 3],
+    h: f32,
+    cells: [u32; 3],
+    s: Preserve,
+) -> Vec<WhitewaterParticle> {
     let cell = |p: &WhitewaterParticle| -> Option<usize> {
-        let g: [f32; 3] = std::array::from_fn(|a| ((p.position_lifetime[a] - origin[a]) / h).floor());
+        let g: [f32; 3] =
+            std::array::from_fn(|a| ((p.position_lifetime[a] - origin[a]) / h).floor());
         (0..3)
             .all(|a| g[a].is_finite() && g[a] >= 0.0 && g[a] < cells[a] as f32)
-            .then(|| g[0] as usize + cells[0] as usize * (g[1] as usize + cells[1] as usize * g[2] as usize))
+            .then(|| {
+                g[0] as usize
+                    + cells[0] as usize * (g[1] as usize + cells[1] as usize * g[2] as usize)
+            })
     };
     let mut density = vec![0u32; (cells[0] * cells[1] * cells[2]) as usize];
     for p in pool.iter().filter(|p| p.kind == 1) {
@@ -495,7 +584,12 @@ pub(super) fn preserve(pool: &[WhitewaterParticle], origin: [f32; 3], h: f32, ce
 /// lifetime is at or below 0, its position is not finite, it sits outside
 /// the boundary box or inside the solid, or its cell already holds `cap`
 /// kept particles earlier in the pool.
-pub(super) fn keep(pool: &[WhitewaterParticle], solid: &[f32], grid: &Box3, cap: u32) -> (Vec<u32>, Vec<f32>) {
+pub(super) fn keep(
+    pool: &[WhitewaterParticle],
+    solid: &[f32],
+    grid: &Box3,
+    cap: u32,
+) -> (Vec<u32>, Vec<f32>) {
     let h = grid.cell_size();
     let origin: [f32; 3] = std::array::from_fn(|a| grid.center[a] - 0.5 * grid.size[a]);
     let lo = [BOX_INSET * h + BOX_EPSILON; 3];
@@ -512,15 +606,22 @@ pub(super) fn keep(pool: &[WhitewaterParticle], solid: &[f32], grid: &Box3, cap:
             continue;
         }
         let phi = solid_at(solid, grid, local.map(|c| c / h));
-        let box_gap = (0..3).map(|a| (local[a] - lo[a]).abs().min((local[a] - hi[a]).abs())).fold(f32::INFINITY, f32::min);
-        let face_gap = local.iter().map(|v| (v / h - (v / h).round()).abs() * h).fold(f32::INFINITY, f32::min);
+        let box_gap = (0..3)
+            .map(|a| (local[a] - lo[a]).abs().min((local[a] - hi[a]).abs()))
+            .fold(f32::INFINITY, f32::min);
+        let face_gap = local
+            .iter()
+            .map(|v| (v / h - (v / h).round()).abs() * h)
+            .fold(f32::INFINITY, f32::min);
         margins.push(box_gap.min(phi.abs()).min(face_gap));
         let inside = (0..3).all(|a| local[a] >= lo[a] && local[a] < hi[a]);
         if !inside || phi < 0.0 {
             flags.push(0);
             continue;
         }
-        let count = counts.entry(local.map(|v| (v / h).floor() as i64)).or_default();
+        let count = counts
+            .entry(local.map(|v| (v / h).floor() as i64))
+            .or_default();
         if *count >= cap {
             flags.push(0);
             continue;
@@ -533,7 +634,6 @@ pub(super) fn keep(pool: &[WhitewaterParticle], solid: &[f32], grid: &Box3, cap:
 
 /// An empty pool slot.
 use super::whitewater_step::empty_slot;
-
 
 /// What `node.whitewater_step` keeps across ticks beside the pool, as its
 /// `state` buffer holds it. pool_full, emitted and thinned count since the
@@ -552,7 +652,11 @@ pub(super) struct PoolState {
 /// The step's compaction: the kept slots in pool order, then empty slots.
 /// The first `front` slots hold this frame's overwrites, the newest, so the
 /// kept ones rotate behind the survivors to keep birth order.
-pub(super) fn compact(pool: &[WhitewaterParticle], flags: &[u32], state: &mut PoolState) -> Vec<WhitewaterParticle> {
+pub(super) fn compact(
+    pool: &[WhitewaterParticle],
+    flags: &[u32],
+    state: &mut PoolState,
+) -> Vec<WhitewaterParticle> {
     let front = (state.front as usize).min(pool.len());
     let kept = |range: std::ops::Range<usize>| -> Vec<WhitewaterParticle> {
         range.filter(|&i| flags[i] == 1).map(|i| pool[i]).collect()
@@ -576,7 +680,12 @@ pub(super) fn live_spawn(spawn: &WhitewaterSpawn) -> u32 {
 /// ones, then overwrite the oldest slots not yet overwritten this frame
 /// (from `front` on), each taking the next id. Spawns that met a full pool
 /// count as pool full; `emissions` past the spawn slots count as thinned.
-pub(super) fn append(pool: &mut [WhitewaterParticle], spawns: &[WhitewaterSpawn], emissions: u32, state: &mut PoolState) {
+pub(super) fn append(
+    pool: &mut [WhitewaterParticle],
+    spawns: &[WhitewaterSpawn],
+    emissions: u32,
+    state: &mut PoolState,
+) {
     let capacity = pool.len() as u32;
     let live: Vec<&WhitewaterSpawn> = spawns.iter().filter(|s| live_spawn(s) == 1).collect();
     let spawned = live.len() as u32;
@@ -585,7 +694,11 @@ pub(super) fn append(pool: &mut [WhitewaterParticle], spawns: &[WhitewaterSpawn]
     let over = (spawned - tail).min(old_live - state.front);
     for (k, spawn) in live.iter().take((tail + over) as usize).enumerate() {
         let k = k as u32;
-        let slot = if k < tail { old_live + k } else { state.front + (k - tail) };
+        let slot = if k < tail {
+            old_live + k
+        } else {
+            state.front + (k - tail)
+        };
         pool[slot as usize] = WhitewaterParticle {
             position_lifetime: spawn.position_lifetime,
             velocity: spawn.velocity,
@@ -619,7 +732,11 @@ pub(super) mod fixture {
     pub fn grid() -> Box3 {
         let cells = NODES.map(|n| n - 1);
         let size: [f32; 3] = std::array::from_fn(|a| cells[a] as f32 * H);
-        Box3 { cells, center: std::array::from_fn(|a| ORIGIN[a] + 0.5 * size[a]), size }
+        Box3 {
+            cells,
+            center: std::array::from_fn(|a| ORIGIN[a] + 0.5 * size[a]),
+            size,
+        }
     }
 
     /// A tank closed on every side, its walls one cell thick, with a ball
@@ -632,7 +749,9 @@ pub(super) mod fixture {
             for j in 0..NODES[1] {
                 for i in 0..NODES[0] {
                     let x = [i, j, k].map(|n| n as f32 * H);
-                    let wall = (0..3).map(|a| (x[a] - H).min(cells[a] as f32 * H - H - x[a])).fold(f32::INFINITY, f32::min);
+                    let wall = (0..3)
+                        .map(|a| (x[a] - H).min(cells[a] as f32 * H - H - x[a]))
+                        .fold(f32::INFINITY, f32::min);
                     solid.push(wall.min(length(sub(x, ball)) - 3.0 * H));
                 }
             }
@@ -642,7 +761,11 @@ pub(super) mod fixture {
 
     /// Face velocities up to `speed` either way.
     pub fn faces(rng: &mut Rng, speed: f32) -> [Vec<f32>; 3] {
-        std::array::from_fn(|axis| (0..face_len(FACE_CELLS, axis)).map(|_| speed * (2.0 * rng.unit() - 1.0)).collect())
+        std::array::from_fn(|axis| {
+            (0..face_len(FACE_CELLS, axis))
+                .map(|_| speed * (2.0 * rng.unit() - 1.0))
+                .collect()
+        })
     }
 
     /// Particles across the grid, a tenth of the slots empty, every type,
@@ -659,7 +782,11 @@ pub(super) mod fixture {
                 WhitewaterParticle {
                     position_lifetime: [p[0], p[1], p[2], lifetime],
                     velocity,
-                    kind: if empty { WHITEWATER_EMPTY } else { (rng.unit() * 3.0) as u32 % 3 },
+                    kind: if empty {
+                        WHITEWATER_EMPTY
+                    } else {
+                        (rng.unit() * 3.0) as u32 % 3
+                    },
                     id: (rng.unit() * WHITEWATER_ID_LIMIT as f32) as u32 % WHITEWATER_ID_LIMIT,
                     ..Default::default()
                 }
@@ -686,13 +813,25 @@ mod tests {
         let near = NearSolid::build(&solid, &g);
         let speed = 5.0 * H * 60.0;
         let faces = faces(&mut rng, speed / 3f32.sqrt());
-        let f = Fields { faces: faces.each_ref().map(Vec::as_slice), face_cells: FACE_CELLS, solid: &solid };
-        let settings = Advect { spray_drag: 0.5, spray_friction: 0.1, ..Advect::flip() };
+        let f = Fields {
+            faces: faces.each_ref().map(Vec::as_slice),
+            face_cells: FACE_CELLS,
+            solid: &solid,
+        };
+        let settings = Advect {
+            spray_drag: 0.5,
+            spray_friction: 0.1,
+            ..Advect::flip()
+        };
         let (mut skipped, mut moved, mut stopped) = (0, 0, 0);
         for particle in pool(&mut rng, 20_000, speed) {
             let (with, _) = advect(particle, &f, &g, settings, Some(&near));
             let (without, _) = advect(particle, &f, &g, settings, None);
-            assert_eq!(bytemuck::bytes_of(&with), bytemuck::bytes_of(&without), "{particle:?}");
+            assert_eq!(
+                bytemuck::bytes_of(&with),
+                bytemuck::bytes_of(&without),
+                "{particle:?}"
+            );
             if particle.kind > 2 {
                 continue;
             }
@@ -711,6 +850,9 @@ mod tests {
             stopped += usize::from(without.position_lifetime[3] == DEAD);
         }
         println!("{skipped} foam early-outs, {moved} moved half a cell, {stopped} killed");
-        assert!(skipped > 200 && moved > 2000 && stopped > 100, "{skipped} {moved} {stopped}");
+        assert!(
+            skipped > 200 && moved > 2000 && stopped > 100,
+            "{skipped} {moved} {stopped}"
+        );
     }
 }

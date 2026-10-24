@@ -3,9 +3,9 @@
 //! same GPU encoder.
 
 use crate::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
+use crate::mesh::MeshVertex;
 use crate::parameters::ParamDef;
 use crate::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
-use crate::mesh::MeshVertex;
 use std::borrow::Cow;
 
 pub struct MeshInput {

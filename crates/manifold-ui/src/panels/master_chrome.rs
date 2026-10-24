@@ -11,8 +11,8 @@
 //! slider drag never fight. The public interface is unchanged, so the inspector
 //! composite that drives this card is untouched. See `docs/CHROME_API_DESIGN.md`.
 
-use crate::ParamsAction;
 use super::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
+use crate::ParamsAction;
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View, components};
 use crate::color;
 use crate::node::*;
@@ -36,7 +36,6 @@ const LED_TOGGLE_W: f32 = 28.0;
 const LED_SLIDER_W: f32 = 80.0;
 const OPACITY_LABEL_W: f32 = 50.0;
 const FONT_SIZE: u16 = color::FONT_BODY;
-
 
 // Stable keys: chrome elements the panel resolves (clicks / overlay anchor) and
 // the slots the sliders drop into.
@@ -182,14 +181,18 @@ impl MasterChromePanel {
     }
 
     fn header_row(&self) -> View {
-        let chevron = View::button(if self.is_collapsed { "\u{25B6}" } else { "\u{25BC}" })
-            .fixed(CHEVRON_W, CHEVRON_H)
-            .style(UIStyle {
-                font_size: FONT_SIZE,
-                ..components::icon_button_style()
-            })
-            .inert() // click handled via handle_click (inspector routing kept)
-            .key(KEY_CHEVRON);
+        let chevron = View::button(if self.is_collapsed {
+            "\u{25B6}"
+        } else {
+            "\u{25BC}"
+        })
+        .fixed(CHEVRON_W, CHEVRON_H)
+        .style(UIStyle {
+            font_size: FONT_SIZE,
+            ..components::icon_button_style()
+        })
+        .inert() // click handled via handle_click (inspector routing kept)
+        .key(KEY_CHEVRON);
 
         // section 6d — title + chevron, then the opacity slider inline (was a separate
         // stacked row). The LED row stays below in `chrome_view`.
@@ -212,7 +215,10 @@ impl MasterChromePanel {
                     OPACITY_LABEL_W,
                     PanelAction::slider_reset(
                         PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Begin),
-                        PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Move(ScrubValue::Scalar(1.0))),
+                        PanelAction::Scrub(
+                            ValueRef::MasterOpacity,
+                            ScrubPhase::Move(ScrubValue::Scalar(1.0)),
+                        ),
                         PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Commit),
                     ),
                 ))
@@ -249,7 +255,10 @@ impl MasterChromePanel {
             0.0,
             PanelAction::slider_reset(
                 PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Begin),
-                PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Move(ScrubValue::Scalar(1.0))),
+                PanelAction::Scrub(
+                    ValueRef::LedBrightness,
+                    ScrubPhase::Move(ScrubValue::Scalar(1.0)),
+                ),
                 PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Commit),
             ),
         ))
@@ -276,7 +285,12 @@ impl MasterChromePanel {
     fn chrome_view(&self) -> View {
         let root = View::column(0.0)
             .fill()
-            .pad(Pad { l: PAD_H, t: PAD_V, r: PAD_H, b: PAD_V })
+            .pad(Pad {
+                l: PAD_H,
+                t: PAD_V,
+                r: PAD_H,
+                b: PAD_V,
+            })
             .child(self.header_row());
         let root = self.chain_error.add_rows(root);
         if self.is_collapsed {
@@ -377,13 +391,19 @@ impl MasterChromePanel {
         if let Some(val) = self.opacity.try_start_drag(node_id, pos.x) {
             return vec![
                 PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Begin),
-                PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Move(ScrubValue::Scalar(val))),
+                PanelAction::Scrub(
+                    ValueRef::MasterOpacity,
+                    ScrubPhase::Move(ScrubValue::Scalar(val)),
+                ),
             ];
         }
         if let Some(val) = self.led_brightness.try_start_drag(node_id, pos.x) {
             return vec![
                 PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Begin),
-                PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Move(ScrubValue::Scalar(val))),
+                PanelAction::Scrub(
+                    ValueRef::LedBrightness,
+                    ScrubPhase::Move(ScrubValue::Scalar(val)),
+                ),
             ];
         }
         Vec::new()
@@ -391,20 +411,32 @@ impl MasterChromePanel {
 
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
         if let Some(val) = self.opacity.apply_drag(pos.x, tree, &fmt_opacity) {
-            return vec![PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Move(ScrubValue::Scalar(val)))];
+            return vec![PanelAction::Scrub(
+                ValueRef::MasterOpacity,
+                ScrubPhase::Move(ScrubValue::Scalar(val)),
+            )];
         }
         if let Some(val) = self.led_brightness.apply_drag(pos.x, tree, &fmt_opacity) {
-            return vec![PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Move(ScrubValue::Scalar(val)))];
+            return vec![PanelAction::Scrub(
+                ValueRef::LedBrightness,
+                ScrubPhase::Move(ScrubValue::Scalar(val)),
+            )];
         }
         Vec::new()
     }
 
     pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
         if self.opacity.end_drag() {
-            return vec![PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Commit)];
+            return vec![PanelAction::Scrub(
+                ValueRef::MasterOpacity,
+                ScrubPhase::Commit,
+            )];
         }
         if self.led_brightness.end_drag() {
-            return vec![PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Commit)];
+            return vec![PanelAction::Scrub(
+                ValueRef::LedBrightness,
+                ScrubPhase::Commit,
+            )];
         }
         Vec::new()
     }
@@ -431,14 +463,19 @@ pub(super) mod tests {
     /// below reads exit path, toggle, brightness.
     #[test]
     fn slots_keep_their_rows_and_order() {
-        use crate::panels::layout_order::{assert_left_to_right, assert_one_row, assert_top_to_bottom};
+        use crate::panels::layout_order::{
+            assert_left_to_right, assert_one_row, assert_top_to_bottom,
+        };
         let mut tree = UITree::new();
         let mut panel = MasterChromePanel::new();
         let rect = Rect::new(0.0, 0.0, 280.0, 200.0);
         panel.build(&mut tree, rect);
         let at = |key| tree.get_bounds(panel.host.node_id_for_key(key).unwrap());
 
-        let header = [("chevron", at(KEY_CHEVRON)), ("opacity", at(KEY_OPACITY_SLOT))];
+        let header = [
+            ("chevron", at(KEY_CHEVRON)),
+            ("opacity", at(KEY_OPACITY_SLOT)),
+        ];
         assert_one_row(&header);
         assert_left_to_right(&header, rect);
 
@@ -461,7 +498,10 @@ pub(super) mod tests {
         assert!(panel.host.is_built());
         assert!(panel.opacity.ids().is_some());
         assert!(panel.led_brightness.ids().is_some());
-        assert!(panel.node_count > panel.host.node_count(), "slider nodes appended after chrome");
+        assert!(
+            panel.node_count > panel.host.node_count(),
+            "slider nodes appended after chrome"
+        );
         assert!(panel.host.node_id_for_key(KEY_CHEVRON).is_some());
     }
 
@@ -477,7 +517,10 @@ pub(super) mod tests {
         panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 200.0));
 
         assert!(panel.compute_height() < expanded_h);
-        assert!(panel.opacity.ids().is_none(), "no opacity slider when collapsed");
+        assert!(
+            panel.opacity.ids().is_none(),
+            "no opacity slider when collapsed"
+        );
         assert!(panel.host.node_id_for_key(KEY_OPACITY_SLOT).is_none());
     }
 
@@ -490,8 +533,15 @@ pub(super) mod tests {
 
         panel.sync_exit_path(&mut tree, "Additive");
         let exit = panel.host.node_id_for_key(KEY_EXIT_PATH).unwrap();
-        assert_eq!(tree.get_node(exit).unwrap().text.as_deref(), Some("Additive"));
-        assert_eq!(tree.structure_version(), sv, "value change must not rebuild");
+        assert_eq!(
+            tree.get_node(exit).unwrap().text.as_deref(),
+            Some("Additive")
+        );
+        assert_eq!(
+            tree.structure_version(),
+            sv,
+            "value change must not rebuild"
+        );
     }
 
     #[test]
@@ -505,14 +555,20 @@ pub(super) mod tests {
         let mid_x = track_rect.x + track_rect.width * 0.5;
 
         let actions = panel.handle_pointer_down(track_id, Vec2::new(mid_x, 10.0));
-        assert!(matches!(actions[0], PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Begin)));
+        assert!(matches!(
+            actions[0],
+            PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Begin)
+        ));
         assert!(panel.is_dragging());
 
         let actions = panel.handle_drag(Vec2::new(mid_x + 10.0, 10.0), &mut tree);
         assert_eq!(actions.len(), 1);
 
         let actions = panel.handle_drag_end(&mut tree);
-        assert!(matches!(actions[0], PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Commit)));
+        assert!(matches!(
+            actions[0],
+            PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Commit)
+        ));
         assert!(!panel.is_dragging());
     }
 

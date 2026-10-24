@@ -38,7 +38,10 @@ impl Spectrum {
         let ks = c.i64s("net.k", &[BANDS])?;
         let frame_hop = c.i64s("net.frame_hop", &[])?[0];
         if frame_hop <= 0 || ks.iter().any(|&k| k <= 0) {
-            return Err(ContainerError::WrongType { name: "net.k/net.frame_hop".into(), want: "positive lengths" });
+            return Err(ContainerError::WrongType {
+                name: "net.k/net.frame_hop".into(),
+                want: "positive lengths",
+            });
         }
         let mut s = Self {
             b: [[[0.0; BANDS]; 3]; SECTIONS],

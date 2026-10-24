@@ -268,15 +268,33 @@ fn build(actions: &mut HashMap<MenuId, MenuAction>) -> (Menu, Submenu, Submenu) 
 
     // ── File ───────────────────────────────────────────────────────────────
     let file_m = Submenu::new("File", true);
-    let _ = file_m.append(&item(actions, "file.new", MenuAction::New, "New", Some("CmdOrCtrl+N")));
-    let _ = file_m.append(&item(actions, "file.open", MenuAction::Open, "Open…", Some("CmdOrCtrl+O")));
+    let _ = file_m.append(&item(
+        actions,
+        "file.new",
+        MenuAction::New,
+        "New",
+        Some("CmdOrCtrl+N"),
+    ));
+    let _ = file_m.append(&item(
+        actions,
+        "file.open",
+        MenuAction::Open,
+        "Open…",
+        Some("CmdOrCtrl+O"),
+    ));
     // "Open Recent" is a submenu populated at runtime from the recent-projects
     // list (see `AppMenu::set_recent_projects`). Returned to the caller so it can
     // refresh it after each project open / save.
     let recent_m = Submenu::with_id("file.recent", "Open Recent", true);
     let _ = file_m.append(&recent_m);
     let _ = file_m.append(&PredefinedMenuItem::separator());
-    let _ = file_m.append(&item(actions, "file.save", MenuAction::Save, "Save", Some("CmdOrCtrl+S")));
+    let _ = file_m.append(&item(
+        actions,
+        "file.save",
+        MenuAction::Save,
+        "Save",
+        Some("CmdOrCtrl+S"),
+    ));
     let _ = file_m.append(&item(
         actions,
         "file.saveas",
@@ -304,7 +322,13 @@ fn build(actions: &mut HashMap<MenuId, MenuAction>) -> (Menu, Submenu, Submenu) 
         "Import Video…",
         Some("CmdOrCtrl+I"),
     ));
-    let _ = file_m.append(&item(actions, "file.export", MenuAction::ExportVideo, "Export Video…", None));
+    let _ = file_m.append(&item(
+        actions,
+        "file.export",
+        MenuAction::ExportVideo,
+        "Export Video…",
+        None,
+    ));
     let _ = file_m.append(&item(
         actions,
         "file.exportframe",
@@ -324,10 +348,34 @@ fn build(actions: &mut HashMap<MenuId, MenuAction>) -> (Menu, Submenu, Submenu) 
 
     // ── View ─────────────────────────────────────────────────────────────────
     let view_m = Submenu::new("View", true);
-    let _ = view_m.append(&item(actions, "view.perform", MenuAction::Perform, "Perform Mode", None));
-    let _ = view_m.append(&item(actions, "view.monitor", MenuAction::Monitor, "Monitor", None));
-    let _ = view_m.append(&item(actions, "view.audio", MenuAction::Audio, "Audio", None));
-    let _ = view_m.append(&item(actions, "view.scene", MenuAction::Scene, "Scene", None));
+    let _ = view_m.append(&item(
+        actions,
+        "view.perform",
+        MenuAction::Perform,
+        "Perform Mode",
+        None,
+    ));
+    let _ = view_m.append(&item(
+        actions,
+        "view.monitor",
+        MenuAction::Monitor,
+        "Monitor",
+        None,
+    ));
+    let _ = view_m.append(&item(
+        actions,
+        "view.audio",
+        MenuAction::Audio,
+        "Audio",
+        None,
+    ));
+    let _ = view_m.append(&item(
+        actions,
+        "view.scene",
+        MenuAction::Scene,
+        "Scene",
+        None,
+    ));
 
     let _ = menu.append(&app_m);
     let _ = menu.append(&file_m);

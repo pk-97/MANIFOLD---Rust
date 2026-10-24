@@ -191,18 +191,20 @@ impl Project {
                     sensitivity: route.sensitivity,
                     ..crate::audio_mod::AudioModShape::default()
                 };
-                layer.clip_triggers.push(crate::audio_trigger::LayerClipTrigger {
-                    enabled: route.enabled,
-                    source: crate::audio_mod::AudioModSource {
-                        send_id: send_id.clone(),
-                        feature: crate::audio_mod::AudioFeature::new(
-                            crate::audio_mod::AudioFeatureKind::Transients,
-                            route.source,
-                        ),
-                    },
-                    shape,
-                    one_shot_beats: route.one_shot_beats,
-                });
+                layer
+                    .clip_triggers
+                    .push(crate::audio_trigger::LayerClipTrigger {
+                        enabled: route.enabled,
+                        source: crate::audio_mod::AudioModSource {
+                            send_id: send_id.clone(),
+                            feature: crate::audio_mod::AudioFeature::new(
+                                crate::audio_mod::AudioFeatureKind::Transients,
+                                route.source,
+                            ),
+                        },
+                        shape,
+                        one_shot_beats: route.one_shot_beats,
+                    });
             }
         }
         if dropped > 0 {
@@ -230,7 +232,9 @@ impl Project {
     fn clear_legacy_rate_on_flags(&mut self) {
         let mut cleared = 0usize;
         self.for_each_preset_instance_mut(|fx| {
-            let Some(mods) = fx.audio_mods.as_mut() else { return };
+            let Some(mods) = fx.audio_mods.as_mut() else {
+                return;
+            };
             for m in mods.iter_mut() {
                 if m.shape.rate_of_change {
                     m.shape.rate_of_change = false;
@@ -263,7 +267,9 @@ impl Project {
     fn migrate_step_random_audio_mods_to_envelopes(&mut self) {
         let mut migrated = 0usize;
         self.for_each_preset_instance_mut(|fx| {
-            let Some(mods) = fx.audio_mods.as_mut() else { return };
+            let Some(mods) = fx.audio_mods.as_mut() else {
+                return;
+            };
             let existing_env_params: std::collections::HashSet<_> = fx
                 .envelopes
                 .iter()
@@ -278,9 +284,7 @@ impl Project {
             }
             let mut moves: Vec<Move> = Vec::new();
             mods.retain(|m| {
-                let wants_clip = m
-                    .trigger_mode
-                    .is_some_and(|mode| mode.wants_clip_edge());
+                let wants_clip = m.trigger_mode.is_some_and(|mode| mode.wants_clip_edge());
                 let step_random = !matches!(m.action, crate::audio_mod::TriggerAction::Continuous);
                 if !wants_clip || !step_random {
                     return true;
@@ -306,7 +310,10 @@ impl Project {
             }
             // If we kept the mod (Both), narrow its trigger mode to Transient.
             for m in mods.iter_mut() {
-                if moves.iter().any(|mv| mv.param_id == m.param_id && mv.keep_mod_as_transient) {
+                if moves
+                    .iter()
+                    .any(|mv| mv.param_id == m.param_id && mv.keep_mod_as_transient)
+                {
                     m.trigger_mode = Some(crate::audio_trigger::TriggerFireMode::Transient);
                 }
             }
@@ -844,8 +851,8 @@ impl Project {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::test_support::*;
+    use super::*;
     use crate::PresetTypeId;
     use crate::effects::{ParameterDriver, PresetInstance};
     use crate::types::{BeatDivision, DriverWaveform};
@@ -977,8 +984,10 @@ mod tests {
 
         p.resolve_legacy_param_ids();
 
-        let env =
-            &p.timeline.layers[0].effects.as_ref().unwrap()[0].envelopes.as_ref().unwrap()[0];
+        let env = &p.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .envelopes
+            .as_ref()
+            .unwrap()[0];
         assert_eq!(env.param_id, "amount");
         assert_eq!(env.legacy_param_index, None);
     }
@@ -1183,7 +1192,10 @@ mod tests {
         p.normalize_override_node_ids();
 
         let nodes = &p.settings.master_effects[0].graph.as_ref().unwrap().nodes;
-        assert_eq!(nodes[0].node_id, "softblur", "handled node id defaults to handle");
+        assert_eq!(
+            nodes[0].node_id, "softblur",
+            "handled node id defaults to handle"
+        );
         assert!(
             nodes[1].node_id.is_empty(),
             "anonymous node left empty — never a binding target"
@@ -1232,13 +1244,19 @@ mod tests {
 
         p.migrate_legacy_clip_triggers();
 
-        assert!(p.audio_setup.sends[0].triggers.is_empty(), "legacy storage drained");
+        assert!(
+            p.audio_setup.sends[0].triggers.is_empty(),
+            "legacy storage drained"
+        );
         let (_, layer) = p.timeline.find_layer_by_id(&target_id).unwrap();
         assert_eq!(layer.clip_triggers.len(), 1);
         let cfg = &layer.clip_triggers[0];
         assert!(cfg.enabled);
         assert_eq!(cfg.source.send_id, send_id);
-        assert_eq!(cfg.shape.sensitivity, 0.8, "U5-verbatim sensitivity-to-Amount mapping");
+        assert_eq!(
+            cfg.shape.sensitivity, 0.8,
+            "U5-verbatim sensitivity-to-Amount mapping"
+        );
     }
 
     #[test]
@@ -1279,7 +1297,10 @@ mod tests {
 
         p.migrate_legacy_clip_triggers();
 
-        assert!(p.audio_setup.sends[0].triggers.is_empty(), "drained even when unresolvable");
+        assert!(
+            p.audio_setup.sends[0].triggers.is_empty(),
+            "drained even when unresolvable"
+        );
         assert!(p.timeline.layers.is_empty());
     }
 
@@ -1370,7 +1391,9 @@ mod tests {
         let mut reloaded: Project = serde_json::from_str(&json).expect("deserialize");
         reloaded.on_after_deserialize();
         assert!(
-            !reloaded.timeline.layers[0].clip_triggers[0].shape.rate_of_change,
+            !reloaded.timeline.layers[0].clip_triggers[0]
+                .shape
+                .rate_of_change,
             "round trip must not resurrect rate_of_change"
         );
     }
@@ -1387,7 +1410,10 @@ mod tests {
                 crate::audio_mod::AudioBand::Full,
             ),
         );
-        m.action = crate::audio_mod::TriggerAction::Step { amount: 0.25, wrap: crate::audio_mod::WrapMode::Clamp };
+        m.action = crate::audio_mod::TriggerAction::Step {
+            amount: 0.25,
+            wrap: crate::audio_mod::WrapMode::Clamp,
+        };
         m.trigger_mode = Some(crate::audio_trigger::TriggerFireMode::ClipEdge);
         fx.audio_mods = Some(vec![m]);
         p.settings.master_effects.push(fx);
@@ -1395,13 +1421,22 @@ mod tests {
         p.migrate_step_random_audio_mods_to_envelopes();
 
         let fx = &p.settings.master_effects[0];
-        assert!(fx.audio_mods.as_ref().unwrap().is_empty(), "ClipEdge-only mod is removed");
+        assert!(
+            fx.audio_mods.as_ref().unwrap().is_empty(),
+            "ClipEdge-only mod is removed"
+        );
         let envs = fx.envelopes.as_ref().unwrap();
         assert_eq!(envs.len(), 1);
         assert_eq!(envs[0].param_id, "amount");
         assert!(envs[0].enabled);
         assert!(
-            matches!(envs[0].action, crate::audio_mod::TriggerAction::Step { amount: 0.25, wrap: crate::audio_mod::WrapMode::Clamp }),
+            matches!(
+                envs[0].action,
+                crate::audio_mod::TriggerAction::Step {
+                    amount: 0.25,
+                    wrap: crate::audio_mod::WrapMode::Clamp
+                }
+            ),
             "envelope carries the mod's action over"
         );
     }
@@ -1428,11 +1463,18 @@ mod tests {
         let fx = &p.settings.master_effects[0];
         let mods = fx.audio_mods.as_ref().unwrap();
         assert_eq!(mods.len(), 1);
-        assert_eq!(mods[0].trigger_mode, Some(crate::audio_trigger::TriggerFireMode::Transient), "Both narrows to Transient");
+        assert_eq!(
+            mods[0].trigger_mode,
+            Some(crate::audio_trigger::TriggerFireMode::Transient),
+            "Both narrows to Transient"
+        );
         let envs = fx.envelopes.as_ref().unwrap();
         assert_eq!(envs.len(), 1);
         assert_eq!(envs[0].param_id, "amount");
-        assert!(matches!(envs[0].action, crate::audio_mod::TriggerAction::Random));
+        assert!(matches!(
+            envs[0].action,
+            crate::audio_mod::TriggerAction::Random
+        ));
     }
 
     #[test]
@@ -1447,7 +1489,10 @@ mod tests {
                 crate::audio_mod::AudioBand::Full,
             ),
         );
-        m.action = crate::audio_mod::TriggerAction::Step { amount: 0.25, wrap: crate::audio_mod::WrapMode::Clamp };
+        m.action = crate::audio_mod::TriggerAction::Step {
+            amount: 0.25,
+            wrap: crate::audio_mod::WrapMode::Clamp,
+        };
         m.trigger_mode = Some(crate::audio_trigger::TriggerFireMode::Transient);
         fx.audio_mods = Some(vec![m]);
         p.settings.master_effects.push(fx);
@@ -1455,8 +1500,15 @@ mod tests {
         p.migrate_step_random_audio_mods_to_envelopes();
 
         let fx = &p.settings.master_effects[0];
-        assert_eq!(fx.audio_mods.as_ref().unwrap().len(), 1, "Transient-only mod stays");
-        assert!(fx.envelopes.is_none() || fx.envelopes.as_ref().unwrap().is_empty(), "no envelope created");
+        assert_eq!(
+            fx.audio_mods.as_ref().unwrap().len(),
+            1,
+            "Transient-only mod stays"
+        );
+        assert!(
+            fx.envelopes.is_none() || fx.envelopes.as_ref().unwrap().is_empty(),
+            "no envelope created"
+        );
     }
 
     #[test]
@@ -1478,7 +1530,14 @@ mod tests {
         p.migrate_step_random_audio_mods_to_envelopes();
 
         let fx = &p.settings.master_effects[0];
-        assert_eq!(fx.audio_mods.as_ref().unwrap().len(), 1, "Continuous mod stays");
-        assert!(fx.envelopes.is_none() || fx.envelopes.as_ref().unwrap().is_empty(), "no envelope created for Continuous");
+        assert_eq!(
+            fx.audio_mods.as_ref().unwrap().len(),
+            1,
+            "Continuous mod stays"
+        );
+        assert!(
+            fx.envelopes.is_none() || fx.envelopes.as_ref().unwrap().is_empty(),
+            "no envelope created for Continuous"
+        );
     }
 }

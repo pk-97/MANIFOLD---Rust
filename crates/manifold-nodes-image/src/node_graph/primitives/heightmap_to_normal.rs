@@ -25,11 +25,12 @@
 
 use std::borrow::Cow;
 
-
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::primitives::standalone_pipeline::{
+    dispatch_standalone_2d, standalone_pipeline,
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -171,9 +172,9 @@ mod gpu_tests {
 
     use super::{HeightmapNormalUniforms, HeightmapToNormal};
     use manifold_node_engine::freeze::classify::{FusionKind, InputAccess};
-    use manifold_node_engine::freeze::codegen::{generate_standalone, StandaloneKernelSpec, ENTRY};
-    use manifold_node_engine::primitive::PrimitiveSpec;
+    use manifold_node_engine::freeze::codegen::{ENTRY, StandaloneKernelSpec, generate_standalone};
     use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     /// Verbatim copy of the pre-conversion `heightmap_to_normal_body.wgsl` —
     /// frozen here ONLY as an old-vs-new comparison fixture, never used as a
@@ -270,7 +271,12 @@ fn body(tex_in: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, 
         h: u32,
     ) {
         let mut enc = device.create_encoder("surface-bumps-dispatch");
-        enc.dispatch_compute(pipeline, bindings, [w.div_ceil(16), h.div_ceil(16), 1], "test");
+        enc.dispatch_compute(
+            pipeline,
+            bindings,
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "test",
+        );
         enc.commit_and_wait_completed();
     }
 
@@ -328,34 +334,60 @@ fn body(tex_in: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, 
             &device,
             &old_pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytes },
-                GpuBinding::Texture { binding: 1, texture: &height_tex },
-                GpuBinding::Sampler { binding: 2, sampler: &sampler },
-                GpuBinding::Texture { binding: 3, texture: &old_out.texture },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytes,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &height_tex,
+                },
+                GpuBinding::Sampler {
+                    binding: 2,
+                    sampler: &sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: &old_out.texture,
+                },
             ],
             w,
             h,
         );
         let old_pixels = readback_rgba(&device, &old_out.texture, w, h);
 
-        let new_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<HeightmapToNormal>()
-            .expect("new GatherTexel standalone codegen");
+        let new_wgsl =
+            manifold_node_engine::freeze::codegen::standalone_for_spec::<HeightmapToNormal>()
+                .expect("new GatherTexel standalone codegen");
         let new_pipeline = device.create_compute_pipeline(&new_wgsl, ENTRY, "surface-bumps-new");
         let new_out = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "new-out");
         dispatch_uniform(
             &device,
             &new_pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytes },
-                GpuBinding::Texture { binding: 1, texture: &height_tex },
-                GpuBinding::Texture { binding: 2, texture: &new_out.texture },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytes,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &height_tex,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: &new_out.texture,
+                },
             ],
             w,
             h,
         );
         let new_pixels = readback_rgba(&device, &new_out.texture, w, h);
 
-        assert_pixels_close(&old_pixels, &new_pixels, 1e-4, "old Gather vs new GatherTexel");
+        assert_pixels_close(
+            &old_pixels,
+            &new_pixels,
+            1e-4,
+            "old Gather vs new GatherTexel",
+        );
     }
-
 }

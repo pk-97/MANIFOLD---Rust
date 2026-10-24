@@ -31,8 +31,7 @@
 //! helper `trace_shadow_rays` calls internally for its AO/GI-normal fetch
 //! and its GI-bounce hit-normal fetch.
 
-use manifold_gpu::raytrace::{ensure_normal_sources, MetalShadowRayTracer, RtObjectGeometry};
-
+use manifold_gpu::raytrace::{MetalShadowRayTracer, RtObjectGeometry, ensure_normal_sources};
 
 /// Flat (non-indexed) vertex layout: 12-byte position, 12-byte normal, no
 /// padding — `packed_float3` mandatory (P0 section 5.1 kernel lesson), stride 24.
@@ -50,7 +49,10 @@ const IDENTITY: [[f32; 4]; 4] = [
     [0.0, 0.0, 0.0, 1.0],
 ];
 
-fn write_shared_buffer<T: Copy>(device: &manifold_gpu::GpuDevice, data: &[T]) -> manifold_gpu::GpuBuffer {
+fn write_shared_buffer<T: Copy>(
+    device: &manifold_gpu::GpuDevice,
+    data: &[T],
+) -> manifold_gpu::GpuBuffer {
     let bytes = std::mem::size_of_val(data) as u64;
     let buf = device.create_buffer_shared(bytes.max(16));
     let ptr = buf
@@ -79,16 +81,36 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
     let device = &h.device;
 
     let verts = [
-        PackedVertexN { pos: [-1.0, -1.0, 0.0], normal: [0.0, 0.0, 1.0] }, // tri0 v0
-        PackedVertexN { pos: [1.0, -1.0, 0.0], normal: [0.0, 0.0, 1.0] },  // tri0 v1
-        PackedVertexN { pos: [1.0, 1.0, 0.0], normal: [0.0, 1.0, 0.0] },   // tri0 v2
-        PackedVertexN { pos: [-1.0, -1.0, 0.0], normal: [0.0, 0.0, 1.0] }, // tri1 v0 (dup of vert 0)
-        PackedVertexN { pos: [1.0, 1.0, 0.0], normal: [0.0, 1.0, 0.0] },   // tri1 v1 (dup of vert 2)
-        PackedVertexN { pos: [-1.0, 1.0, 0.0], normal: [1.0, 0.0, 0.0] },  // tri1 v2
+        PackedVertexN {
+            pos: [-1.0, -1.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+        }, // tri0 v0
+        PackedVertexN {
+            pos: [1.0, -1.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+        }, // tri0 v1
+        PackedVertexN {
+            pos: [1.0, 1.0, 0.0],
+            normal: [0.0, 1.0, 0.0],
+        }, // tri0 v2
+        PackedVertexN {
+            pos: [-1.0, -1.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+        }, // tri1 v0 (dup of vert 0)
+        PackedVertexN {
+            pos: [1.0, 1.0, 0.0],
+            normal: [0.0, 1.0, 0.0],
+        }, // tri1 v1 (dup of vert 2)
+        PackedVertexN {
+            pos: [-1.0, 1.0, 0.0],
+            normal: [1.0, 0.0, 0.0],
+        }, // tri1 v2
     ];
     let vertex_buffer = write_shared_buffer(device, &verts);
 
-    let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+    let objects = [RtObjectGeometry {
+        instance_inner: RtObjectGeometry::NO_INNER,
+        material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexN>() as u32,
         vertex_offset: 0,
@@ -105,10 +127,10 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
         base_color_texture: None,
         mr_texture: None,
         normal_texture: None,
-                    emissive_texture: None,
+        emissive_texture: None,
         extra_material_textures: [None; 15],
-                    emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
-                    emissive_uv_t: [0.0, 0.0],
+        emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
+        emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
         instances_addr: 0,
         instances_buffer: None,
@@ -125,7 +147,12 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
 
     let mut normal_sources_slot = None;
     let mut normal_sources_capacity = 0usize;
-    ensure_normal_sources(&mut normal_sources_slot, &mut normal_sources_capacity, device, &objects);
+    ensure_normal_sources(
+        &mut normal_sources_slot,
+        &mut normal_sources_capacity,
+        device,
+        &objects,
+    );
     let normal_sources = normal_sources_slot.expect("ensure_normal_sources must allocate");
 
     let tracer = MetalShadowRayTracer::new(device);
@@ -138,14 +165,28 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
     // slot-row base as production params (the object count) — it reads the
     // slot region [N, N+Σ), not the canonical rows.
     let slot_row_base = objects.len() as u32;
-    let got0 = tracer.debug_fetch_interpolated_normal(device, &normal_sources, 0, 0, [0.5, 0.25], slot_row_base);
+    let got0 = tracer.debug_fetch_interpolated_normal(
+        device,
+        &normal_sources,
+        0,
+        0,
+        [0.5, 0.25],
+        slot_row_base,
+    );
     assert_close(got0, [0.0, 0.3162_2777, 0.9486_833], "triangle 0");
 
     // Triangle 1, barycentric (u=0.25, v=0.5) => w0=0.25 (vtx0=dup of
     // vert0), w1=0.25 (vtx1=dup of vert2), w2=0.5 (vtx2). CPU oracle:
     // normalize(0.25*(0,0,1) + 0.25*(0,1,0) + 0.5*(1,0,0))
     //   = (0.8164965809277261, 0.4082482904638631, 0.4082482904638631).
-    let got1 = tracer.debug_fetch_interpolated_normal(device, &normal_sources, 0, 1, [0.25, 0.5], slot_row_base);
+    let got1 = tracer.debug_fetch_interpolated_normal(
+        device,
+        &normal_sources,
+        0,
+        1,
+        [0.25, 0.5],
+        slot_row_base,
+    );
     assert_close(got1, [0.8164_966, 0.4082_483, 0.4082_483], "triangle 1");
 }
 
@@ -154,9 +195,18 @@ fn fetch_interpolated_normal_uses_inverse_transpose_for_nonuniform_scale() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
     let verts = [
-        PackedVertexN { pos: [-1.0, -1.0, 0.0], normal: [1.0, 1.0, 1.0] },
-        PackedVertexN { pos: [1.0, -1.0, 0.0], normal: [1.0, 1.0, 1.0] },
-        PackedVertexN { pos: [0.0, 1.0, 0.0], normal: [1.0, 1.0, 1.0] },
+        PackedVertexN {
+            pos: [-1.0, -1.0, 0.0],
+            normal: [1.0, 1.0, 1.0],
+        },
+        PackedVertexN {
+            pos: [1.0, -1.0, 0.0],
+            normal: [1.0, 1.0, 1.0],
+        },
+        PackedVertexN {
+            pos: [0.0, 1.0, 0.0],
+            normal: [1.0, 1.0, 1.0],
+        },
     ];
     let vertex_buffer = write_shared_buffer(device, &verts);
     let nonuniform_scale = [
@@ -201,7 +251,12 @@ fn fetch_interpolated_normal_uses_inverse_transpose_for_nonuniform_scale() {
     }];
     let mut normal_sources_slot = None;
     let mut normal_sources_capacity = 0usize;
-    ensure_normal_sources(&mut normal_sources_slot, &mut normal_sources_capacity, device, &objects);
+    ensure_normal_sources(
+        &mut normal_sources_slot,
+        &mut normal_sources_capacity,
+        device,
+        &objects,
+    );
     let normal_sources = normal_sources_slot.expect("ensure_normal_sources must allocate");
     let tracer = MetalShadowRayTracer::new(device);
     let got = tracer.debug_fetch_interpolated_normal(
@@ -213,5 +268,9 @@ fn fetch_interpolated_normal_uses_inverse_transpose_for_nonuniform_scale() {
         objects.len() as u32,
     );
     // inverse-transpose([2,3,4]) * (1,1,1) = (1/2,1/3,1/4), normalized.
-    assert_close(got, [0.768_221_26, 0.512_147_5, 0.384_110_63], "nonuniform inverse-transpose");
+    assert_close(
+        got,
+        [0.768_221_26, 0.512_147_5, 0.384_110_63],
+        "nonuniform inverse-transpose",
+    );
 }

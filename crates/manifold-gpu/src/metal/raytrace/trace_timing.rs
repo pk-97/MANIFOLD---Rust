@@ -129,7 +129,9 @@ impl TraceTiming {
             }
             None => {
                 let index = self.slots.iter().position(|s| !s.used).unwrap_or_else(|| {
-                    (0..BUDGET_SLOTS).min_by_key(|&i| self.slots[i].last_dispatch).unwrap_or(0)
+                    (0..BUDGET_SLOTS)
+                        .min_by_key(|&i| self.slots[i].last_dispatch)
+                        .unwrap_or(0)
                 });
                 let slot = &mut self.slots[index];
                 slot.key = key;
@@ -173,7 +175,9 @@ impl TraceTiming {
         for entry in &mut self.pending {
             let Some(pending) = entry else { continue };
             let status = unsafe { pending.buffer.status() };
-            if status != MTLCommandBufferStatus::Completed && status != MTLCommandBufferStatus::Error {
+            if status != MTLCommandBufferStatus::Completed
+                && status != MTLCommandBufferStatus::Error
+            {
                 continue;
             }
             let pending = entry.take().expect("checked above");
@@ -215,7 +219,7 @@ impl TraceTiming {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trace_planner::{TRACE_RESTART_PIXELS_PER_TILE, DEFAULT_TRACE_WORK_LIMITS};
+    use crate::trace_planner::{DEFAULT_TRACE_WORK_LIMITS, TRACE_RESTART_PIXELS_PER_TILE};
 
     /// The restart request is process-wide; these tests take turns so one
     /// test's request cannot land inside another's assertions.
@@ -242,8 +246,14 @@ mod tests {
         grown(&mut timing, lighting);
         assert_eq!(timing.begin(1), (mask, DEFAULT_TRACE_WORK_LIMITS));
         timing.restart_all();
-        assert_eq!(timing.begin(2).1.max_pixels_per_tile, TRACE_RESTART_PIXELS_PER_TILE);
-        assert_eq!(timing.begin(1).1.max_pixels_per_tile, TRACE_RESTART_PIXELS_PER_TILE);
+        assert_eq!(
+            timing.begin(2).1.max_pixels_per_tile,
+            TRACE_RESTART_PIXELS_PER_TILE
+        );
+        assert_eq!(
+            timing.begin(1).1.max_pixels_per_tile,
+            TRACE_RESTART_PIXELS_PER_TILE
+        );
     }
 
     #[test]
@@ -252,19 +262,27 @@ mod tests {
         let (slot, _) = timing.begin(7);
         grown(&mut timing, slot);
         request_conservative_trace_tiles();
-        assert_eq!(timing.begin(7).1.max_pixels_per_tile, TRACE_RESTART_PIXELS_PER_TILE);
+        assert_eq!(
+            timing.begin(7).1.max_pixels_per_tile,
+            TRACE_RESTART_PIXELS_PER_TILE
+        );
         grown(&mut timing, slot);
         for key in 0..STALE_DISPATCHES + 1 {
             timing.begin(100 + key % 2);
         }
-        assert_eq!(timing.begin(7).1.max_pixels_per_tile, TRACE_RESTART_PIXELS_PER_TILE,
-            "a shape unused for over STALE_DISPATCHES dispatches starts small again");
+        assert_eq!(
+            timing.begin(7).1.max_pixels_per_tile,
+            TRACE_RESTART_PIXELS_PER_TILE,
+            "a shape unused for over STALE_DISPATCHES dispatches starts small again"
+        );
     }
 
     #[test]
     fn a_new_shape_evicts_the_least_recently_used_slot() {
         let (_serial, mut timing) = timing();
-        let slots: Vec<usize> = (0..BUDGET_SLOTS as u64).map(|key| timing.begin(key).0).collect();
+        let slots: Vec<usize> = (0..BUDGET_SLOTS as u64)
+            .map(|key| timing.begin(key).0)
+            .collect();
         let (evicting, limits) = timing.begin(99);
         assert_eq!(evicting, slots[0]);
         assert_eq!(limits.max_pixels_per_tile, TRACE_RESTART_PIXELS_PER_TILE);

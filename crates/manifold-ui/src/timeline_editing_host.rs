@@ -346,7 +346,13 @@ pub trait TimelineEditingHost {
     /// Remove the breakpoint at `beat` (double-click or Delete key). Looks up
     /// the point's current index within the lane at call time. No-op if no
     /// point exists at that beat. Executes + sends immediately.
-    fn remove_automation_point(&mut self, target: &UiGraphTarget, param_id: &ParamId, beat: Beats, value_norm: f32);
+    fn remove_automation_point(
+        &mut self,
+        target: &UiGraphTarget,
+        param_id: &ParamId,
+        beat: Beats,
+        value_norm: f32,
+    );
 
     // ── Automation lane editing — segment gestures (P4 Unit B,
     // `docs/AUTOMATION_LANES_DESIGN.md` section 7's "drag a segment" / "modifier-drag
@@ -404,10 +410,7 @@ pub trait TimelineEditingHost {
     /// the host uses it to remove all selected sources and destination
     /// collisions atomically before inserting the moved points. Already
     /// applied live through whole-lane previews.
-    fn commit_automation_group_move(
-        &mut self,
-        moves: Vec<AutomationPointMove>,
-    );
+    fn commit_automation_group_move(&mut self, moves: Vec<AutomationPointMove>);
 
     // ── Automation lane editing — draw/pencil mode (P4 Unit B, section 7's
     // "Draw mode") ────────────────────────────────────────────────────

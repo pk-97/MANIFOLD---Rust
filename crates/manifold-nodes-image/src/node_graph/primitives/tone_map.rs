@@ -25,14 +25,11 @@ use manifold_gpu::GpuSamplerDesc;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::primitives::standalone_pipeline::{
+    dispatch_standalone_2d, standalone_pipeline,
+};
 
-pub const TONE_MAP_CURVES: &[&str] = &[
-    "Narkowicz ACES",
-    "Hill ACES",
-    "AgX",
-    "Khronos PBR Neutral",
-];
+pub const TONE_MAP_CURVES: &[&str] = &["Narkowicz ACES", "Hill ACES", "AgX", "Khronos PBR Neutral"];
 
 pub const TONE_MAP_MODES: &[&str] = &["SDR", "PQ", "EDR", "EDR Passthrough"];
 

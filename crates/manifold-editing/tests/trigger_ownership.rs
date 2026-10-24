@@ -1,8 +1,8 @@
-use manifold_core::layer::Layer;
-use manifold_core::project::Project;
 use manifold_core::effect_graph_def::ParamSpecDef;
 use manifold_core::effects::{ParamEnvelope, PresetInstance};
+use manifold_core::layer::Layer;
 use manifold_core::params::{ClipTriggerSource, Param, ParamManifest};
+use manifold_core::project::Project;
 use manifold_core::session::{ClipSequence, Scene, SessionSlot};
 use manifold_core::types::LayerType;
 use manifold_core::{LayerId, PresetTypeId, SceneId};
@@ -42,9 +42,21 @@ fn creating_trigger_children_accepts_all_non_trigger_owner_types() {
         assert!(command.rejection_reason().is_none());
 
         command.undo(&mut project);
-        assert!(!project.timeline.layers.iter().any(|layer| layer.layer_id == trigger_id));
+        assert!(
+            !project
+                .timeline
+                .layers
+                .iter()
+                .any(|layer| layer.layer_id == trigger_id)
+        );
         command.execute(&mut project);
-        assert!(project.timeline.layers.iter().any(|layer| layer.layer_id == trigger_id));
+        assert!(
+            project
+                .timeline
+                .layers
+                .iter()
+                .any(|layer| layer.layer_id == trigger_id)
+        );
     }
 }
 
@@ -69,7 +81,10 @@ fn prepared_layer_insertion_preserves_id_parent_and_generator_instance() {
         .find(|layer| layer.layer_id == layer_id)
         .expect("prepared layer inserted");
     assert_eq!(inserted.parent_layer_id, Some(group_id));
-    assert_eq!(serde_json::to_value(inserted.gen_params()).unwrap(), generator);
+    assert_eq!(
+        serde_json::to_value(inserted.gen_params()).unwrap(),
+        generator
+    );
     command.undo(&mut project);
     command.execute(&mut project);
     let redone = project
@@ -78,7 +93,10 @@ fn prepared_layer_insertion_preserves_id_parent_and_generator_instance() {
         .iter()
         .find(|layer| layer.layer_id == layer_id)
         .expect("prepared layer redone");
-    assert_eq!(serde_json::to_value(redone.gen_params()).unwrap(), generator);
+    assert_eq!(
+        serde_json::to_value(redone.gen_params()).unwrap(),
+        generator
+    );
 }
 
 #[test]
@@ -114,13 +132,8 @@ fn trigger_creation_rejects_root_missing_and_trigger_parents() {
 #[test]
 fn ordinary_root_and_group_children_remain_accepted() {
     let mut project = Project::default();
-    let mut root_command = AddLayerCommand::new(
-        "Root".into(),
-        LayerType::Video,
-        PresetTypeId::NONE,
-        0,
-        None,
-    );
+    let mut root_command =
+        AddLayerCommand::new("Root".into(), LayerType::Video, PresetTypeId::NONE, 0, None);
     root_command.execute(&mut project);
     assert!(root_command.was_applied());
 
@@ -207,7 +220,10 @@ fn deleting_each_non_trigger_owner_removes_direct_trigger_and_slots() {
             name: "Scene".into(),
             color: None,
         });
-        project.timeline.layers.extend([owner.clone(), trigger, unrelated]);
+        project
+            .timeline
+            .layers
+            .extend([owner.clone(), trigger, unrelated]);
         add_session_slot(&mut project, owner_id.clone(), &scene_id);
         add_session_slot(&mut project, unrelated_id.clone(), &scene_id);
         add_session_slot(&mut project, trigger_id.clone(), &scene_id);
@@ -216,15 +232,39 @@ fn deleting_each_non_trigger_owner_removes_direct_trigger_and_slots() {
 
         let mut command = DeleteLayerCommand::new(owner);
         command.execute(&mut project);
-        assert!(!project.timeline.layers.iter().any(|layer| layer.layer_id == owner_id));
-        assert!(!project.timeline.layers.iter().any(|layer| layer.layer_id == trigger_id));
+        assert!(
+            !project
+                .timeline
+                .layers
+                .iter()
+                .any(|layer| layer.layer_id == owner_id)
+        );
+        assert!(
+            !project
+                .timeline
+                .layers
+                .iter()
+                .any(|layer| layer.layer_id == trigger_id)
+        );
         assert_eq!(slot_layer_ids(&project), vec![unrelated_id.clone()]);
 
         command.undo(&mut project);
         assert_eq!(layer_ids(&project), original_layers);
         assert_eq!(slot_layer_ids(&project), original_slots);
-        assert!(project.timeline.layers.iter().any(|layer| layer.layer_id == owner_id));
-        assert!(project.timeline.layers.iter().any(|layer| layer.layer_id == trigger_id));
+        assert!(
+            project
+                .timeline
+                .layers
+                .iter()
+                .any(|layer| layer.layer_id == owner_id)
+        );
+        assert!(
+            project
+                .timeline
+                .layers
+                .iter()
+                .any(|layer| layer.layer_id == trigger_id)
+        );
 
         command.execute(&mut project);
         assert_eq!(slot_layer_ids(&project), vec![unrelated_id.clone()]);
@@ -234,7 +274,16 @@ fn deleting_each_non_trigger_owner_removes_direct_trigger_and_slots() {
     }
 }
 
-fn grouped_project() -> (Project, LayerId, LayerId, LayerId, LayerId, LayerId, LayerId, SceneId) {
+fn grouped_project() -> (
+    Project,
+    LayerId,
+    LayerId,
+    LayerId,
+    LayerId,
+    LayerId,
+    LayerId,
+    SceneId,
+) {
     let mut project = Project::default();
     let group = Layer::new("Group".into(), LayerType::Group, 0);
     let group_id = group.layer_id.clone();
@@ -268,17 +317,14 @@ fn grouped_project() -> (Project, LayerId, LayerId, LayerId, LayerId, LayerId, L
         name: "Scene".into(),
         color: None,
     });
-    project
-        .timeline
-        .layers
-        .extend([
-            group,
-            content,
-            nested_trigger,
-            direct_trigger,
-            direct_trigger_b,
-            unrelated,
-        ]);
+    project.timeline.layers.extend([
+        group,
+        content,
+        nested_trigger,
+        direct_trigger,
+        direct_trigger_b,
+        unrelated,
+    ]);
     project.timeline.enforce_tree_order();
     for id in [
         group_id.clone(),
@@ -339,10 +385,33 @@ fn deleting_group_preserves_content_children_and_their_triggers() {
 
     let mut command = DeleteLayerCommand::new(group);
     command.execute(&mut project);
-    assert!(!project.timeline.layers.iter().any(|layer| layer.layer_id == group_id));
-    assert!(!project.timeline.layers.iter().any(|layer| layer.layer_id == direct_trigger_id));
-    assert!(!project.timeline.layers.iter().any(|layer| layer.layer_id == direct_trigger_b_id));
-    let content = project.timeline.layers.iter().find(|layer| layer.layer_id == content_id).unwrap();
+    assert!(
+        !project
+            .timeline
+            .layers
+            .iter()
+            .any(|layer| layer.layer_id == group_id)
+    );
+    assert!(
+        !project
+            .timeline
+            .layers
+            .iter()
+            .any(|layer| layer.layer_id == direct_trigger_id)
+    );
+    assert!(
+        !project
+            .timeline
+            .layers
+            .iter()
+            .any(|layer| layer.layer_id == direct_trigger_b_id)
+    );
+    let content = project
+        .timeline
+        .layers
+        .iter()
+        .find(|layer| layer.layer_id == content_id)
+        .unwrap();
     assert!(content.parent_layer_id.is_none());
     assert_eq!(
         content_trigger_source(&project, &content_id),
@@ -350,18 +419,40 @@ fn deleting_group_preserves_content_children_and_their_triggers() {
             layer_id: direct_trigger_id.clone(),
         }
     );
-    assert!(project.timeline.layers.iter().any(|layer| layer.layer_id == nested_trigger_id));
-    assert!(project.timeline.layers.iter().any(|layer| layer.layer_id == unrelated_id));
+    assert!(
+        project
+            .timeline
+            .layers
+            .iter()
+            .any(|layer| layer.layer_id == nested_trigger_id)
+    );
+    assert!(
+        project
+            .timeline
+            .layers
+            .iter()
+            .any(|layer| layer.layer_id == unrelated_id)
+    );
     assert_eq!(
         slot_layer_ids(&project),
-        vec![content_id.clone(), nested_trigger_id.clone(), unrelated_id.clone()]
+        vec![
+            content_id.clone(),
+            nested_trigger_id.clone(),
+            unrelated_id.clone()
+        ]
     );
 
     command.undo(&mut project);
     assert_eq!(layer_ids(&project), original_layers);
     assert_eq!(slot_layer_ids(&project), original_slots);
     assert_eq!(
-        project.timeline.layers.iter().find(|layer| layer.layer_id == content_id).unwrap().parent_layer_id,
+        project
+            .timeline
+            .layers
+            .iter()
+            .find(|layer| layer.layer_id == content_id)
+            .unwrap()
+            .parent_layer_id,
         Some(group_id.clone())
     );
     assert_eq!(
@@ -393,7 +484,8 @@ fn grouping_owner_with_trigger_keeps_trigger_parent_and_roundtrips() {
     project.timeline.layers.extend([owner, trigger]);
     let original = project.timeline.layers.clone();
     let before = serde_json::to_value(&project).unwrap();
-    let mut command = GroupLayersCommand::new(vec![owner_id.clone(), trigger_id.clone()], original.clone());
+    let mut command =
+        GroupLayersCommand::new(vec![owner_id.clone(), trigger_id.clone()], original.clone());
 
     command.execute(&mut project);
     assert!(command.was_applied());
@@ -405,14 +497,38 @@ fn grouping_owner_with_trigger_keeps_trigger_parent_and_roundtrips() {
         .unwrap()
         .layer_id
         .clone();
-    assert_eq!(project.timeline.find_layer_by_id(&owner_id).unwrap().1.parent_layer_id, Some(group_id));
-    assert_eq!(project.timeline.find_layer_by_id(&trigger_id).unwrap().1.parent_layer_id, Some(owner_id.clone()));
+    assert_eq!(
+        project
+            .timeline
+            .find_layer_by_id(&owner_id)
+            .unwrap()
+            .1
+            .parent_layer_id,
+        Some(group_id)
+    );
+    assert_eq!(
+        project
+            .timeline
+            .find_layer_by_id(&trigger_id)
+            .unwrap()
+            .1
+            .parent_layer_id,
+        Some(owner_id.clone())
+    );
     let after = serde_json::to_value(&project).unwrap();
     command.undo(&mut project);
     assert_eq!(serde_json::to_value(&project).unwrap(), before);
     command.execute(&mut project);
     assert!(command.was_applied());
-    assert_eq!(project.timeline.find_layer_by_id(&trigger_id).unwrap().1.parent_layer_id, Some(owner_id));
+    assert_eq!(
+        project
+            .timeline
+            .find_layer_by_id(&trigger_id)
+            .unwrap()
+            .1
+            .parent_layer_id,
+        Some(owner_id)
+    );
     assert_eq!(serde_json::to_value(&project).unwrap(), after);
 }
 
@@ -429,8 +545,14 @@ fn grouping_selected_ancestors_keeps_the_existing_subtree_intact() {
     let mut command = GroupLayersCommand::new(ids.clone(), project.timeline.layers.clone());
     command.execute(&mut project);
     assert!(command.was_applied());
-    assert_eq!(project.timeline.layers[2].parent_layer_id.as_ref(), Some(&ids[0]));
-    assert_eq!(project.timeline.layers[3].parent_layer_id.as_ref(), Some(&ids[1]));
+    assert_eq!(
+        project.timeline.layers[2].parent_layer_id.as_ref(),
+        Some(&ids[0])
+    );
+    assert_eq!(
+        project.timeline.layers[3].parent_layer_id.as_ref(),
+        Some(&ids[1])
+    );
     let after = serde_json::to_value(&project).unwrap();
     command.undo(&mut project);
     assert_eq!(serde_json::to_value(&project).unwrap(), before);
@@ -447,14 +569,18 @@ fn trigger_only_or_missing_group_selection_is_rejected_without_mutation() {
     let trigger_id = trigger.layer_id.clone();
     project.timeline.layers.extend([owner, trigger]);
     let original = layer_ids(&project);
-    let mut trigger_only = GroupLayersCommand::new(vec![trigger_id], project.timeline.layers.clone());
+    let mut trigger_only =
+        GroupLayersCommand::new(vec![trigger_id], project.timeline.layers.clone());
     trigger_only.execute(&mut project);
     assert!(!trigger_only.was_applied());
     assert!(trigger_only.rejection_reason().is_some());
     trigger_only.undo(&mut project);
     assert_eq!(layer_ids(&project), original);
 
-    let mut missing = GroupLayersCommand::new(vec![LayerId::new("missing")], project.timeline.layers.clone());
+    let mut missing = GroupLayersCommand::new(
+        vec![LayerId::new("missing")],
+        project.timeline.layers.clone(),
+    );
     missing.execute(&mut project);
     assert!(!missing.was_applied());
     assert!(missing.rejection_reason().is_some());
@@ -477,15 +603,31 @@ fn reorder_preserves_owner_when_candidate_trigger_parent_is_overridden() {
         project.timeline.layers[0].clone(),
         project.timeline.layers[1].clone(),
     ];
-    let old_parents = old.iter().map(|layer| (layer.layer_id.clone(), layer.parent_layer_id.clone())).collect::<std::collections::HashMap<_, _>>();
+    let old_parents = old
+        .iter()
+        .map(|layer| (layer.layer_id.clone(), layer.parent_layer_id.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
     let mut new_parents = old_parents.clone();
     new_parents.insert(trigger_id.clone(), Some(other_id));
     let mut command = ReorderLayerCommand::new(old.clone(), new, old_parents, new_parents);
     command.execute(&mut project);
     assert!(command.was_applied());
-    assert_eq!(project.timeline.find_layer_by_id(&trigger_id).unwrap().1.parent_layer_id, Some(owner_id));
+    assert_eq!(
+        project
+            .timeline
+            .find_layer_by_id(&trigger_id)
+            .unwrap()
+            .1
+            .parent_layer_id,
+        Some(owner_id)
+    );
     command.undo(&mut project);
-    assert_eq!(layer_ids(&project), old.iter().map(|layer| layer.layer_id.clone()).collect::<Vec<_>>());
+    assert_eq!(
+        layer_ids(&project),
+        old.iter()
+            .map(|layer| layer.layer_id.clone())
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -505,7 +647,10 @@ fn reorder_resolves_live_layers_without_replaying_stale_runtime_state() {
         effect.envelopes_mut().first_mut().unwrap().step_value = Some(0.4);
     }
     let old = project.timeline.layers.clone();
-    let original_ids = old.iter().map(|layer| layer.layer_id.clone()).collect::<Vec<_>>();
+    let original_ids = old
+        .iter()
+        .map(|layer| layer.layer_id.clone())
+        .collect::<Vec<_>>();
     let mut new = old.clone();
     let unrelated = new
         .iter()
@@ -595,7 +740,10 @@ fn reorder_undo_rejects_changed_membership_without_dropping_live_layers() {
     command.execute(&mut project);
     assert!(command.was_applied());
 
-    project.timeline.layers.push(Layer::new_video("added".into(), 2));
+    project
+        .timeline
+        .layers
+        .push(Layer::new_video("added".into(), 2));
     let current = layer_ids(&project);
     command.undo(&mut project);
     assert!(command.was_applied());
@@ -611,13 +759,17 @@ fn reorder_rejects_invalid_changed_parent_and_membership_without_mutation() {
     project.timeline.layers.extend([first, second]);
     let old = project.timeline.layers.clone();
     let old_ids = layer_ids(&project);
-    let old_parents = old.iter().map(|layer| (layer.layer_id.clone(), layer.parent_layer_id.clone())).collect::<std::collections::HashMap<_, _>>();
+    let old_parents = old
+        .iter()
+        .map(|layer| (layer.layer_id.clone(), layer.parent_layer_id.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
 
     let missing_parent = old.clone();
     let first_id = missing_parent[0].layer_id.clone();
     let mut parents = old_parents.clone();
     parents.insert(first_id, Some(LayerId::new("missing")));
-    let mut command = ReorderLayerCommand::new(old.clone(), missing_parent, old_parents.clone(), parents);
+    let mut command =
+        ReorderLayerCommand::new(old.clone(), missing_parent, old_parents.clone(), parents);
     command.execute(&mut project);
     assert!(!command.was_applied());
     assert!(command.rejection_reason().is_some());
@@ -640,7 +792,12 @@ fn reorder_rejects_invalid_changed_parent_and_membership_without_mutation() {
     assert_eq!(layer_ids(&project), current_ids);
 
     let duplicate = vec![old[0].clone(), old[0].clone()];
-    let mut command = ReorderLayerCommand::new(duplicate.clone(), duplicate, old_parents.clone(), old_parents);
+    let mut command = ReorderLayerCommand::new(
+        duplicate.clone(),
+        duplicate,
+        old_parents.clone(),
+        old_parents,
+    );
     command.execute(&mut project);
     assert!(!command.was_applied());
     assert!(command.rejection_reason().is_some());
@@ -661,8 +818,14 @@ fn reorder_rejects_invalid_changed_parent_and_membership_without_mutation() {
     cycle_new[0].parent_layer_id = Some(group_b_id);
     cycle_new[1].parent_layer_id = Some(group_a_id);
     let mut cycle_parent_map = cycle_parents.clone();
-    cycle_parent_map.insert(cycle_new[0].layer_id.clone(), cycle_new[0].parent_layer_id.clone());
-    cycle_parent_map.insert(cycle_new[1].layer_id.clone(), cycle_new[1].parent_layer_id.clone());
+    cycle_parent_map.insert(
+        cycle_new[0].layer_id.clone(),
+        cycle_new[0].parent_layer_id.clone(),
+    );
+    cycle_parent_map.insert(
+        cycle_new[1].layer_id.clone(),
+        cycle_new[1].parent_layer_id.clone(),
+    );
     let mut cycle_command = ReorderLayerCommand::new(
         cycle_old.clone(),
         cycle_new,
@@ -781,16 +944,59 @@ fn ungroup_reuses_owner_deletion_and_restores_exactly_on_repeat() {
     );
 
     command.execute(&mut project);
-    assert!(!project.timeline.layers.iter().any(|layer| layer.layer_id == group_id));
-    assert!(!project.timeline.layers.iter().any(|layer| layer.layer_id == direct_trigger_id));
-    assert!(!project.timeline.layers.iter().any(|layer| layer.layer_id == direct_trigger_b_id));
-    assert!(project.timeline.layers.iter().any(|layer| layer.layer_id == nested_trigger_id));
-    assert!(project.timeline.layers.iter().any(|layer| layer.layer_id == unrelated_id));
+    assert!(
+        !project
+            .timeline
+            .layers
+            .iter()
+            .any(|layer| layer.layer_id == group_id)
+    );
+    assert!(
+        !project
+            .timeline
+            .layers
+            .iter()
+            .any(|layer| layer.layer_id == direct_trigger_id)
+    );
+    assert!(
+        !project
+            .timeline
+            .layers
+            .iter()
+            .any(|layer| layer.layer_id == direct_trigger_b_id)
+    );
+    assert!(
+        project
+            .timeline
+            .layers
+            .iter()
+            .any(|layer| layer.layer_id == nested_trigger_id)
+    );
+    assert!(
+        project
+            .timeline
+            .layers
+            .iter()
+            .any(|layer| layer.layer_id == unrelated_id)
+    );
     assert_eq!(
         slot_layer_ids(&project),
-        vec![content_id.clone(), nested_trigger_id.clone(), unrelated_id.clone()]
+        vec![
+            content_id.clone(),
+            nested_trigger_id.clone(),
+            unrelated_id.clone()
+        ]
     );
-    assert!(project.timeline.layers.iter().find(|layer| layer.layer_id == content_id).unwrap().parent_layer_id.is_none());
+    assert!(
+        project
+            .timeline
+            .layers
+            .iter()
+            .find(|layer| layer.layer_id == content_id)
+            .unwrap()
+            .parent_layer_id
+            .is_none()
+    );
     assert_eq!(
         content_trigger_source(&project, &content_id),
         ClipTriggerSource::Lane {
@@ -799,7 +1005,13 @@ fn ungroup_reuses_owner_deletion_and_restores_exactly_on_repeat() {
     );
 
     command.undo(&mut project);
-    assert_eq!(layer_ids(&project), original_layers.iter().map(|layer| layer.layer_id.clone()).collect::<Vec<_>>());
+    assert_eq!(
+        layer_ids(&project),
+        original_layers
+            .iter()
+            .map(|layer| layer.layer_id.clone())
+            .collect::<Vec<_>>()
+    );
     assert_eq!(slot_layer_ids(&project), original_slots);
     assert_eq!(
         content_trigger_source(&project, &content_id),

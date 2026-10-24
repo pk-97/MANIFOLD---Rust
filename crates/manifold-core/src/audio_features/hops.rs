@@ -180,7 +180,10 @@ impl<T: AudioHopSample> AudioHopBatch<T> {
             || stamp.timeline_time.is_some_and(|time| !time.0.is_finite())
             || !hop.is_finite()
             || self.last_end.is_some_and(|end| stamp.end_sample <= end)
-            || self.last_source_time.zip(stamp.source_time).is_some_and(|(last, time)| time <= last)
+            || self
+                .last_source_time
+                .zip(stamp.source_time)
+                .is_some_and(|(last, time)| time <= last)
         {
             Some(AudioHopError::InvalidInput)
         } else if self.hops.len() == self.limit {
@@ -193,7 +196,9 @@ impl<T: AudioHopSample> AudioHopBatch<T> {
             return Err(error);
         }
         self.last_end = Some(stamp.end_sample);
-        if let Some(time) = stamp.source_time { self.last_source_time = Some(time); }
+        if let Some(time) = stamp.source_time {
+            self.last_source_time = Some(time);
+        }
         self.sample_rate = Some(stamp.sample_rate);
         self.hops.push(hop);
         Ok(())

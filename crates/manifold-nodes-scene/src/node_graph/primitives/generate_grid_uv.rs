@@ -183,14 +183,20 @@ mod tests {
         );
 
         let mut custom = ParamValues::default();
-        custom.insert(std::borrow::Cow::Borrowed("grid_size"), ParamValue::Float(16.0));
+        custom.insert(
+            std::borrow::Cow::Borrowed("grid_size"),
+            ParamValue::Float(16.0),
+        );
         assert_eq!(
             Primitive::array_output_capacity(&prim, "u_values", &custom, &[]),
             Some(16 * 16),
         );
 
         let mut huge = ParamValues::default();
-        huge.insert(std::borrow::Cow::Borrowed("grid_size"), ParamValue::Float(128.0));
+        huge.insert(
+            std::borrow::Cow::Borrowed("grid_size"),
+            ParamValue::Float(128.0),
+        );
         assert_eq!(
             Primitive::array_output_capacity(&prim, "u_values", &huge, &[]),
             Some(GRID_UV_MAX_SIZE * GRID_UV_MAX_SIZE),

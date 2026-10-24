@@ -22,24 +22,25 @@ use manifold_core::scene_schema::SPEED_RANGE;
 use manifold_core::scene_surface::{
     PHYSICS_WORLD_DEFAULT_BODIES, PHYSICS_WORLD_DEFAULT_COPY_GROUPS,
 };
+use manifold_node_engine::bindings::NodeInputs;
 use manifold_node_engine::exec::effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
 };
-use manifold_node_engine::bindings::NodeInputs;
 use manifold_node_engine::exec::instance_upload::InstanceSnapshotUpload;
 use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use manifold_node_engine::ports::{
+    NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+};
 use manifold_node_engine::scene::transform::Transform;
 use manifold_physics::FieldValue;
 
 use crate::coupled_frame::CoupledRigidFrame;
 use crate::node::{PhysicsNode, PhysicsNodeRegistration};
 use crate::physics::{
-    MAX_COPIES, ResolvedRigidImpulse, RigidSceneInputs,
-    RigidSceneObservation, RigidSimulation,
+    MAX_COPIES, ResolvedRigidImpulse, RigidSceneInputs, RigidSceneObservation, RigidSimulation,
 };
-use crate::physics_events::{map_rigid_receipt, ResolvedNodeImpulse};
+use crate::physics_events::{ResolvedNodeImpulse, map_rigid_receipt};
 
 pub const PHYSICS_WORLD_TYPE_ID: &str = "node.physics_world";
 
@@ -73,32 +74,114 @@ impl PortNames {
         grow(&mut self.body_acceleration, "body_acceleration_", bodies);
         grow(&mut self.pose, "pose_", bodies);
         grow(&mut self.copies, "copies_", groups);
-        grow(&mut self.copies_acceleration, "copies_acceleration_", groups);
+        grow(
+            &mut self.copies_acceleration,
+            "copies_acceleration_",
+            groups,
+        );
         grow(&mut self.instances, "instances_", groups);
         grow(&mut self.active_count, "active_count_", groups);
     }
 }
 
-const SCALAR_INPUTS: [&str; 7] = ["gravity_x", "gravity_y", "gravity_z", "speed", "reset", "air_drag", "air_resistance"];
+const SCALAR_INPUTS: [&str; 7] = [
+    "gravity_x",
+    "gravity_y",
+    "gravity_z",
+    "speed",
+    "reset",
+    "air_drag",
+    "air_resistance",
+];
 
 static PARAMS: [ParamDef; 9] = [
-    ParamDef { name: Cow::Borrowed("gravity_x"), label: "Gravity X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
-    ParamDef { name: Cow::Borrowed("gravity_y"), label: "Gravity Y", ty: ParamType::Float, default: ParamValue::Float(-9.81), range: Some((-20.0, 20.0)), enum_values: &[] },
-    ParamDef { name: Cow::Borrowed("gravity_z"), label: "Gravity Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
-    ParamDef { name: Cow::Borrowed("speed"), label: "Speed", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
-    ParamDef { name: Cow::Borrowed("reset"), label: "Reset", ty: ParamType::Trigger, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
-    ParamDef { name: Cow::Borrowed("air_drag"), label: "Air Drag", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
-    ParamDef { name: Cow::Borrowed("air_resistance"), label: "Air Resistance", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 4.0)), enum_values: &[] },
-    ParamDef { name: Cow::Borrowed("bodies"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(PHYSICS_WORLD_DEFAULT_BODIES as f32), range: None, enum_values: &[] },
-    ParamDef { name: Cow::Borrowed("copy_groups"), label: "Copy Groups", ty: ParamType::Int, default: ParamValue::Float(PHYSICS_WORLD_DEFAULT_COPY_GROUPS as f32), range: None, enum_values: &[] },
+    ParamDef {
+        name: Cow::Borrowed("gravity_x"),
+        label: "Gravity X",
+        ty: ParamType::Float,
+        default: ParamValue::Float(0.0),
+        range: Some((-20.0, 20.0)),
+        enum_values: &[],
+    },
+    ParamDef {
+        name: Cow::Borrowed("gravity_y"),
+        label: "Gravity Y",
+        ty: ParamType::Float,
+        default: ParamValue::Float(-9.81),
+        range: Some((-20.0, 20.0)),
+        enum_values: &[],
+    },
+    ParamDef {
+        name: Cow::Borrowed("gravity_z"),
+        label: "Gravity Z",
+        ty: ParamType::Float,
+        default: ParamValue::Float(0.0),
+        range: Some((-20.0, 20.0)),
+        enum_values: &[],
+    },
+    ParamDef {
+        name: Cow::Borrowed("speed"),
+        label: "Speed",
+        ty: ParamType::Float,
+        default: ParamValue::Float(1.0),
+        range: Some((0.0, 4.0)),
+        enum_values: &[],
+    },
+    ParamDef {
+        name: Cow::Borrowed("reset"),
+        label: "Reset",
+        ty: ParamType::Trigger,
+        default: ParamValue::Float(0.0),
+        range: Some((0.0, 1.0)),
+        enum_values: &[],
+    },
+    ParamDef {
+        name: Cow::Borrowed("air_drag"),
+        label: "Air Drag",
+        ty: ParamType::Float,
+        default: ParamValue::Float(1.0),
+        range: Some((0.0, 4.0)),
+        enum_values: &[],
+    },
+    ParamDef {
+        name: Cow::Borrowed("air_resistance"),
+        label: "Air Resistance",
+        ty: ParamType::Float,
+        default: ParamValue::Float(0.0),
+        range: Some((0.0, 4.0)),
+        enum_values: &[],
+    },
+    ParamDef {
+        name: Cow::Borrowed("bodies"),
+        label: "Bodies",
+        ty: ParamType::Int,
+        default: ParamValue::Float(PHYSICS_WORLD_DEFAULT_BODIES as f32),
+        range: None,
+        enum_values: &[],
+    },
+    ParamDef {
+        name: Cow::Borrowed("copy_groups"),
+        label: "Copy Groups",
+        ty: ParamType::Int,
+        default: ParamValue::Float(PHYSICS_WORLD_DEFAULT_COPY_GROUPS as f32),
+        range: None,
+        enum_values: &[],
+    },
 ];
 
 fn port(name: impl Into<Cow<'static, str>>, ty: PortType, kind: PortKind) -> NodePort {
-    NodePort { name: name.into(), ty, kind, required: false }
+    NodePort {
+        name: name.into(),
+        ty,
+        kind,
+        required: false,
+    }
 }
 
 fn instances_type() -> PortType {
-    PortType::Array(manifold_node_engine::ports::ArrayType::of_known::<InstanceTransform>())
+    PortType::Array(manifold_node_engine::ports::ArrayType::of_known::<
+        InstanceTransform,
+    >())
 }
 
 pub struct InstanceUploadState {
@@ -157,7 +240,8 @@ impl InstanceUploadState {
         let Some(gpu) = ctx.gpu.as_deref_mut() else {
             return Ok(());
         };
-        self.upload(gpu, out, poses.len(), version, retained).map(|_| ())
+        self.upload(gpu, out, poses.len(), version, retained)
+            .map(|_| ())
     }
 }
 
@@ -212,7 +296,10 @@ impl PhysicsWorldNode {
             refusal_rows: Vec::new(),
             refusals_shown: Vec::new(),
         };
-        node.rebuild(PHYSICS_WORLD_DEFAULT_BODIES as usize, PHYSICS_WORLD_DEFAULT_COPY_GROUPS as usize);
+        node.rebuild(
+            PHYSICS_WORLD_DEFAULT_BODIES as usize,
+            PHYSICS_WORLD_DEFAULT_COPY_GROUPS as usize,
+        );
         node
     }
 
@@ -257,22 +344,57 @@ impl PhysicsWorldNode {
         let field = PortType::VectorField;
         let scalar = PortType::Scalar(ScalarType::F32);
         self.inputs.clear();
-        self.inputs.extend(names.body[..bodies].iter().map(|name| port(name.clone(), PortType::RigidBody, PortKind::Input)));
-        self.inputs.extend(names.copies[..groups].iter().map(|name| port(name.clone(), PortType::RigidBody, PortKind::Input)));
-        self.inputs.extend(SCALAR_INPUTS.iter().map(|name| port(*name, scalar, PortKind::Input)));
-        self.inputs.push(port("acceleration_field", field, PortKind::Input));
-        self.inputs.extend(names.body_acceleration[..bodies].iter().map(|name| port(name.clone(), field, PortKind::Input)));
-        self.inputs.extend(names.copies_acceleration[..groups].iter().map(|name| port(name.clone(), field, PortKind::Input)));
+        self.inputs.extend(
+            names.body[..bodies]
+                .iter()
+                .map(|name| port(name.clone(), PortType::RigidBody, PortKind::Input)),
+        );
+        self.inputs.extend(
+            names.copies[..groups]
+                .iter()
+                .map(|name| port(name.clone(), PortType::RigidBody, PortKind::Input)),
+        );
+        self.inputs.extend(
+            SCALAR_INPUTS
+                .iter()
+                .map(|name| port(*name, scalar, PortKind::Input)),
+        );
+        self.inputs
+            .push(port("acceleration_field", field, PortKind::Input));
+        self.inputs.extend(
+            names.body_acceleration[..bodies]
+                .iter()
+                .map(|name| port(name.clone(), field, PortKind::Input)),
+        );
+        self.inputs.extend(
+            names.copies_acceleration[..groups]
+                .iter()
+                .map(|name| port(name.clone(), field, PortKind::Input)),
+        );
         self.outputs.clear();
-        self.outputs.extend(names.pose[..bodies].iter().map(|name| port(name.clone(), PortType::Transform, PortKind::Output)));
+        self.outputs.extend(
+            names.pose[..bodies]
+                .iter()
+                .map(|name| port(name.clone(), PortType::Transform, PortKind::Output)),
+        );
         for group in 0..groups {
-            self.outputs.push(port(names.instances[group].clone(), instances_type(), PortKind::Output));
-            self.outputs.push(port(names.active_count[group].clone(), scalar, PortKind::Output));
+            self.outputs.push(port(
+                names.instances[group].clone(),
+                instances_type(),
+                PortKind::Output,
+            ));
+            self.outputs.push(port(
+                names.active_count[group].clone(),
+                scalar,
+                PortKind::Output,
+            ));
         }
-        self.outputs.push(port("physics_ms", scalar, PortKind::Output));
+        self.outputs
+            .push(port("physics_ms", scalar, PortKind::Output));
         self.bodies = bodies;
         self.groups = groups;
-        self.uploads.resize_with(groups, InstanceUploadState::default);
+        self.uploads
+            .resize_with(groups, InstanceUploadState::default);
         self.observation.inputs.resize(bodies, groups);
         self.observation_valid = false;
         if let Some(frame) = self.coupled_frame.as_mut() {
@@ -296,15 +418,28 @@ impl PhysicsWorldNode {
     ) -> Result<(), String> {
         let names = &self.names;
         let inputs = &mut self.observation.inputs;
-        for (body, port) in inputs.bodies.iter_mut().zip(&names.body).chain(inputs.groups.iter_mut().zip(&names.copies)) {
+        for (body, port) in inputs
+            .bodies
+            .iter_mut()
+            .zip(&names.body)
+            .chain(inputs.groups.iter_mut().zip(&names.copies))
+        {
             latest(body, &ctx.inputs, port);
         }
-        latest(&mut inputs.acceleration_field, &ctx.inputs, "acceleration_field");
+        latest(
+            &mut inputs.acceleration_field,
+            &ctx.inputs,
+            "acceleration_field",
+        );
         let bodies = self.bodies;
         let targeted_ports = names.body_acceleration[..bodies]
             .iter()
             .zip(&names.body)
-            .chain(names.copies_acceleration[..self.groups].iter().zip(&names.copies));
+            .chain(
+                names.copies_acceleration[..self.groups]
+                    .iter()
+                    .zip(&names.copies),
+            );
         for (field, (port, matching)) in inputs.targeted_fields.iter_mut().zip(targeted_ports) {
             if ctx.inputs.slot(port).is_none() {
                 *field = None;
@@ -322,9 +457,17 @@ impl PhysicsWorldNode {
         // once, through the global field (D-114).
         let air_drag = ctx.scalar_or_param("air_drag", 1.0);
         let air_resistance = ctx.scalar_or_param("air_resistance", 0.0);
-        let felt = |field: FieldValue| field.with_air_drag(air_drag).map_err(|error| format!("Physics World: {error}"));
-        let acceleration_field = FieldValue::felt_in_still_air(inputs.acceleration_field.as_ref(), air_resistance, air_drag)
-            .map_err(|error| format!("Physics World: {error}"))?;
+        let felt = |field: FieldValue| {
+            field
+                .with_air_drag(air_drag)
+                .map_err(|error| format!("Physics World: {error}"))
+        };
+        let acceleration_field = FieldValue::felt_in_still_air(
+            inputs.acceleration_field.as_ref(),
+            air_resistance,
+            air_drag,
+        )
+        .map_err(|error| format!("Physics World: {error}"))?;
         inputs.acceleration_field = acceleration_field;
         for field in &mut inputs.targeted_fields {
             if let Some(value) = field.take() {
@@ -336,7 +479,9 @@ impl PhysicsWorldNode {
             ctx.scalar_or_param("gravity_y", -9.81),
             ctx.scalar_or_param("gravity_z", 0.0),
         ];
-        let speed = ctx.scalar_or_param("speed", 1.0).clamp(SPEED_RANGE.0, SPEED_RANGE.1);
+        let speed = ctx
+            .scalar_or_param("speed", 1.0)
+            .clamp(SPEED_RANGE.0, SPEED_RANGE.1);
         let reset = ctx.scalar_or_param("reset", 0.0);
         if validate_controls
             && (!ctx.played().is_finite()
@@ -369,7 +514,8 @@ impl PhysicsWorldNode {
         } else {
             0
         };
-        ctx.sim_metrics.record_frame(0.0, (body_count + frame.copies.len()) as u32, 0.0);
+        ctx.sim_metrics
+            .record_frame(0.0, (body_count + frame.copies.len()) as u32, 0.0);
         ctx.outputs.set_scalar("physics_ms", ParamValue::Float(0.0));
         let names = &self.names;
         for (port, pose) in names.pose.iter().zip(&frame.poses) {
@@ -377,7 +523,10 @@ impl PhysicsWorldNode {
         }
         for (group, upload) in self.uploads.iter_mut().enumerate() {
             let copies = frame.group(group);
-            ctx.outputs.set_scalar(&names.active_count[group], ParamValue::Float(copies.len() as f32));
+            ctx.outputs.set_scalar(
+                &names.active_count[group],
+                ParamValue::Float(copies.len() as f32),
+            );
             if let Err(error) = upload.publish(ctx, &names.instances[group], copies) {
                 ctx.error(error.to_string());
                 ctx.mark_outputs_pending();
@@ -509,7 +658,12 @@ impl EffectNode for PhysicsWorldNode {
         );
         self.sync_refusal_rows();
         ctx.sim_metrics.merge(&self.simulation.take_metrics());
-        if result.is_ok() && self.simulation.impulse_stamp(self.observation.transport, 0).is_ok() {
+        if result.is_ok()
+            && self
+                .simulation
+                .impulse_stamp(self.observation.transport, 0)
+                .is_ok()
+        {
             self.observation_valid = true;
         }
         if ctx.sim_step.authored_sample_only {
@@ -536,7 +690,10 @@ impl EffectNode for PhysicsWorldNode {
         }
         for (group, upload) in self.uploads.iter_mut().enumerate() {
             let copies = self.simulation.group_poses(group);
-            ctx.outputs.set_scalar(&names.active_count[group], ParamValue::Float(copies.len() as f32));
+            ctx.outputs.set_scalar(
+                &names.active_count[group],
+                ParamValue::Float(copies.len() as f32),
+            );
             if let Err(error) = upload.publish(ctx, &names.instances[group], copies) {
                 self.observation_valid = false;
                 ctx.error(error.to_string());
@@ -564,7 +721,12 @@ impl PhysicsNode for PhysicsWorldNode {
     }
 
     // A coupled world steps inside its liquid, on the liquid's samples.
-    fn request_physics_samples(&mut self, from: manifold_core::PlayedTime, until: manifold_core::PlayedTime, out: &mut Vec<manifold_core::PlayedTime>) {
+    fn request_physics_samples(
+        &mut self,
+        from: manifold_core::PlayedTime,
+        until: manifold_core::PlayedTime,
+        out: &mut Vec<manifold_core::PlayedTime>,
+    ) {
         if !self.coupled_mode {
             self.simulation.request_samples(from, until, out);
         }
@@ -595,7 +757,10 @@ impl PhysicsNode for PhysicsWorldNode {
         if !self.observation_valid {
             return 0;
         }
-        let not_made = crate::physics::copy_pool_each(self.observation.inputs.groups.iter().map(Option::as_ref), |_| {});
+        let not_made = crate::physics::copy_pool_each(
+            self.observation.inputs.groups.iter().map(Option::as_ref),
+            |_| {},
+        );
         u32::try_from(not_made).unwrap_or(u32::MAX)
     }
 
@@ -631,7 +796,9 @@ impl PhysicsNode for PhysicsWorldNode {
         impulse: ResolvedNodeImpulse,
     ) -> Result<manifold_physics::TickStamp, String> {
         if self.coupled_mode {
-            return Err("Physics World coupled mode routes impulses through the paired fluid worker".into());
+            return Err(
+                "Physics World coupled mode routes impulses through the paired fluid worker".into(),
+            );
         }
         let ImpulseTarget::Rigid(targets) = impulse.target else {
             return Err("Physics World cannot accept a fluid impulse".into());
@@ -647,9 +814,7 @@ impl PhysicsNode for PhysicsWorldNode {
 
     fn drain_physics_impulses(
         &mut self,
-        consume: &mut dyn FnMut(
-            manifold_physics::input::AppliedEvent<ResolvedNodeImpulse>,
-        ),
+        consume: &mut dyn FnMut(manifold_physics::input::AppliedEvent<ResolvedNodeImpulse>),
     ) {
         if self.coupled_mode {
             return;
@@ -730,17 +895,17 @@ inventory::submit! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_core::PlayedTime;
-    use manifold_node_engine::exec::backend::{Backend, MockBackend};
-    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
-    use manifold_node_engine::exec::effect_node::{EffectNode, FrameTime, ParamValues};
-    use manifold_node_engine::exec::execution_plan::ResourceId;
-    use manifold_core::scene_impulse::RigidImpulseTargets;
     use crate::physics::RigidBody;
     use crate::physics::SimStep;
     use crate::physics_events::ResolvedNodeImpulse;
-    use manifold_node_engine::ports::{PortType, ScalarType};
+    use manifold_core::PlayedTime;
+    use manifold_core::scene_impulse::RigidImpulseTargets;
     use manifold_core::{Beats, Seconds};
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::backend::{Backend, MockBackend};
+    use manifold_node_engine::exec::effect_node::{EffectNode, FrameTime, ParamValues};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::ports::{PortType, ScalarType};
     use manifold_physics::input::EventStamp;
     use std::borrow::Cow;
 
@@ -772,7 +937,15 @@ mod tests {
         invalid_speed: bool,
         coupled: bool,
     ) -> Option<RigidSceneObservation> {
-        evaluate_mock_world_under(node, transport, body_shape, field_state, invalid_speed, coupled, SimStep::default())
+        evaluate_mock_world_under(
+            node,
+            transport,
+            body_shape,
+            field_state,
+            invalid_speed,
+            coupled,
+            SimStep::default(),
+        )
     }
 
     fn evaluate_mock_world_under(
@@ -806,7 +979,13 @@ mod tests {
         backend.cpu_values_mut().set(body_slot, body.clone());
         let mut prototype = body.clone();
         prototype.transform.pos = [4.0, 8.0, 0.0];
-        prototype.spawn = crate::physics::CopySpawn { count: 2.0, spacing: 2.0, columns: 2.0, layout: 1.0, turn: [0.0; 3] };
+        prototype.spawn = crate::physics::CopySpawn {
+            count: 2.0,
+            spacing: 2.0,
+            columns: 2.0,
+            layout: 1.0,
+            turn: [0.0; 3],
+        };
         let prototype_slot = acquire_mock_wire(
             &mut backend,
             &mut wire_slots,
@@ -906,7 +1085,8 @@ mod tests {
             delta: Seconds(1.0 / 60.0),
             frame_count: 0,
         };
-        let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None).with_sim_step(step);
+        let mut ctx =
+            EffectNodeContext::new(time, &params, inputs, outputs, None).with_sim_step(step);
         let graph_node: &mut dyn EffectNode = node;
         if coupled {
             let native = crate::node::get_mut(graph_node)
@@ -923,14 +1103,12 @@ mod tests {
 
     fn evaluate_coupled_outputs(
         node: &mut PhysicsWorldNode,
-    ) -> (Option<manifold_node_engine::scene::transform::Transform>, Option<ParamValue>) {
+    ) -> (
+        Option<manifold_node_engine::scene::transform::Transform>,
+        Option<ParamValue>,
+    ) {
         let mut backend = MockBackend::new();
-        let pose_slot = backend.acquire(
-            ResourceId(10_000),
-            PortType::Transform,
-            None,
-            (0, 0),
-        );
+        let pose_slot = backend.acquire(ResourceId(10_000), PortType::Transform, None, (0, 0));
         let active_slot = backend.acquire(
             ResourceId(10_001),
             PortType::Scalar(ScalarType::F32),
@@ -988,7 +1166,9 @@ mod tests {
         node.observation_valid = true;
         node.observation = RigidSceneObservation {
             inputs: RigidSceneInputs {
-                targeted_fields: vec![Some(FieldValue::uniform([1.0, 2.0, 3.0]).expect("finite test field"))],
+                targeted_fields: vec![Some(
+                    FieldValue::uniform([1.0, 2.0, 3.0]).expect("finite test field"),
+                )],
                 ..RigidSceneInputs::default()
             },
             transport: PlayedTime::ZERO,
@@ -1002,15 +1182,8 @@ mod tests {
     #[test]
     fn effect_node_observation_captures_fields_controls_and_single_native_force() {
         let mut node = PhysicsWorldNode::new();
-        let first = evaluate_mock_world(
-            &mut node,
-            0.0,
-            1,
-            MockFieldState::Complete,
-            false,
-            false,
-        )
-        .expect("initial complete rigid observation");
+        let first = evaluate_mock_world(&mut node, 0.0, 1, MockFieldState::Complete, false, false)
+            .expect("initial complete rigid observation");
         let second = evaluate_mock_world(
             &mut node,
             1.0 / 60.0,
@@ -1021,17 +1194,38 @@ mod tests {
         )
         .expect("fixed tick complete rigid observation");
 
-        assert_eq!(first.inputs.bodies[0].as_ref().unwrap().collider, Some(crate::physics::platonic_solid(1)));
-        assert_eq!(first.inputs.groups[0].as_ref().unwrap().collider, Some(crate::physics::platonic_solid(1)));
+        assert_eq!(
+            first.inputs.bodies[0].as_ref().unwrap().collider,
+            Some(crate::physics::platonic_solid(1))
+        );
+        assert_eq!(
+            first.inputs.groups[0].as_ref().unwrap().collider,
+            Some(crate::physics::platonic_solid(1))
+        );
         assert_eq!(
             first.inputs.groups[0].as_ref().unwrap().spawn,
-            crate::physics::CopySpawn { count: 2.0, spacing: 2.0, columns: 2.0, layout: 1.0, turn: [0.0; 3] },
+            crate::physics::CopySpawn {
+                count: 2.0,
+                spacing: 2.0,
+                columns: 2.0,
+                layout: 1.0,
+                turn: [0.0; 3]
+            },
             "the copies body carries its spawner to the world"
         );
         assert_eq!(first.inputs.gravity, [0.0; 3]);
-        assert_eq!(first.inputs.acceleration_field, Some(FieldValue::uniform([1.0, 0.0, 0.0]).unwrap()));
-        assert_eq!(first.inputs.targeted_fields[0], Some(FieldValue::uniform([2.0, 0.0, 0.0]).unwrap()));
-        assert_eq!(first.inputs.targeted_fields[node.body_count()], Some(FieldValue::uniform([0.5, 0.0, 0.0]).unwrap()));
+        assert_eq!(
+            first.inputs.acceleration_field,
+            Some(FieldValue::uniform([1.0, 0.0, 0.0]).unwrap())
+        );
+        assert_eq!(
+            first.inputs.targeted_fields[0],
+            Some(FieldValue::uniform([2.0, 0.0, 0.0]).unwrap())
+        );
+        assert_eq!(
+            first.inputs.targeted_fields[node.body_count()],
+            Some(FieldValue::uniform([0.5, 0.0, 0.0]).unwrap())
+        );
         assert_eq!(second.transport, PlayedTime::from_played(1.0 / 60.0));
         assert_eq!(second.speed, 1.0);
         assert_eq!(second.reset, 0.0);
@@ -1039,113 +1233,139 @@ mod tests {
         let mut expected = RigidSimulation::default();
         for (observation, now) in [(&first, Seconds::ZERO), (&second, Seconds(1.0 / 60.0))] {
             expected
-                .advance_scene(&observation.inputs, PlayedTime::from_played(now.0), observation.speed, observation.reset)
+                .advance_scene(
+                    &observation.inputs,
+                    PlayedTime::from_played(now.0),
+                    observation.speed,
+                    observation.reset,
+                )
                 .expect("ordinary rigid advancement baseline");
         }
         let position = node.simulation.poses[0].pos[0];
-        assert!(position > 0.0, "captured acceleration must move the native body");
+        assert!(
+            position > 0.0,
+            "captured acceleration must move the native body"
+        );
         assert_eq!(node.simulation.poses[0], expected.poses[0]);
-        let handle = node
-            .simulation
-            .native_handles()[0]
-            .expect("native dynamic body handle");
+        let handle = node.simulation.native_handles()[0].expect("native dynamic body handle");
         let actual_velocity = node
             .simulation
             .native_world()
             .expect("native world")
             .linear_velocity(handle)
             .expect("native velocity");
-        let expected_handle = expected
-            .native_handles()[0]
-            .expect("baseline dynamic body handle");
+        let expected_handle = expected.native_handles()[0].expect("baseline dynamic body handle");
         let expected_velocity = expected
             .native_world()
             .expect("baseline native world")
             .linear_velocity(expected_handle)
             .expect("baseline velocity");
-        assert_eq!(actual_velocity, expected_velocity, "captured force should be applied once");
+        assert_eq!(
+            actual_velocity, expected_velocity,
+            "captured force should be applied once"
+        );
     }
 
     #[test]
     fn effect_node_observation_keeps_late_fields_and_clears_for_invalid_controls() {
         for field_state in [MockFieldState::MissingTarget, MockFieldState::PendingGlobal] {
             let mut node = PhysicsWorldNode::new();
-            let complete = evaluate_mock_world(&mut node, 0.0, 1, MockFieldState::Complete, false, false)
-                .expect("complete rigid observation");
+            let complete =
+                evaluate_mock_world(&mut node, 0.0, 1, MockFieldState::Complete, false, false)
+                    .expect("complete rigid observation");
             let late = evaluate_mock_world(&mut node, 1.0 / 60.0, 1, field_state, false, false)
                 .expect("a late field never stops the world");
-            assert_eq!(late.inputs.acceleration_field, complete.inputs.acceleration_field, "a late field keeps its last value");
-            assert_eq!(late.inputs.targeted_fields, complete.inputs.targeted_fields, "a late field keeps its last value");
+            assert_eq!(
+                late.inputs.acceleration_field, complete.inputs.acceleration_field,
+                "a late field keeps its last value"
+            );
+            assert_eq!(
+                late.inputs.targeted_fields, complete.inputs.targeted_fields,
+                "a late field keeps its last value"
+            );
         }
         let mut node = PhysicsWorldNode::new();
-        assert!(evaluate_mock_world(&mut node, 0.0, 1, MockFieldState::Complete, false, false).is_some());
-        assert!(evaluate_mock_world(&mut node, 1.0 / 60.0, 1, MockFieldState::Complete, true, false).is_none());
+        assert!(
+            evaluate_mock_world(&mut node, 0.0, 1, MockFieldState::Complete, false, false)
+                .is_some()
+        );
+        assert!(
+            evaluate_mock_world(
+                &mut node,
+                1.0 / 60.0,
+                1,
+                MockFieldState::Complete,
+                true,
+                false
+            )
+            .is_none()
+        );
     }
 
     #[test]
     fn authored_withheld_topology_sample_does_not_publish_observation() {
         let mut node = PhysicsWorldNode::new();
-        assert!(evaluate_mock_world(
-            &mut node,
-            0.0,
-            1,
-            MockFieldState::Complete,
-            false,
-            false,
-        )
-        .is_some());
-        assert!(evaluate_mock_world_under(
-            &mut node,
-            0.0,
-            0,
-            MockFieldState::Complete,
-            false,
-            false,
-            SimStep::default().authored_sample(),
-        )
-        .is_none());
+        assert!(
+            evaluate_mock_world(&mut node, 0.0, 1, MockFieldState::Complete, false, false,)
+                .is_some()
+        );
+        assert!(
+            evaluate_mock_world_under(
+                &mut node,
+                0.0,
+                0,
+                MockFieldState::Complete,
+                false,
+                false,
+                SimStep::default().authored_sample(),
+            )
+            .is_none()
+        );
     }
 
     #[test]
     fn coupled_capture_has_no_native_owner_keeps_late_fields_and_clears_invalid_observations() {
         let mut node = PhysicsWorldNode::new();
-        let observation = evaluate_mock_world(
-            &mut node,
-            0.0,
-            1,
-            MockFieldState::Complete,
-            false,
-            true,
-        )
-        .expect("coupled capture observation");
+        let observation =
+            evaluate_mock_world(&mut node, 0.0, 1, MockFieldState::Complete, false, true)
+                .expect("coupled capture observation");
         assert_eq!(observation.transport, PlayedTime::ZERO);
         assert!(node.simulation.native_world().is_none());
         let graph_node: &mut dyn EffectNode = &mut node;
         let native = crate::node::get(graph_node)
             .expect("PhysicsWorldNode has a native PhysicsNode registration");
         assert!(native.physics_impulse_epoch().is_none());
-        assert!(native
-            .physics_impulse_stamp(PlayedTime::ZERO, 0, Default::default())
-            .is_err());
+        assert!(
+            native
+                .physics_impulse_stamp(PlayedTime::ZERO, 0, Default::default())
+                .is_err()
+        );
 
-        assert!(evaluate_mock_world(
-            &mut node,
-            1.0 / 60.0,
-            1,
-            MockFieldState::PendingGlobal,
-            false,
-            true,
-        )
-        .is_some_and(|late| late.inputs.acceleration_field == observation.inputs.acceleration_field), "a late field keeps its last value");
-        assert!(evaluate_mock_world(
-            &mut node,
-            1.0 / 60.0,
-            1,
-            MockFieldState::Complete,
-            true,
-            true,
-        )
-        .is_none());
+        assert!(
+            evaluate_mock_world(
+                &mut node,
+                1.0 / 60.0,
+                1,
+                MockFieldState::PendingGlobal,
+                false,
+                true,
+            )
+            .is_some_and(
+                |late| late.inputs.acceleration_field == observation.inputs.acceleration_field
+            ),
+            "a late field keeps its last value"
+        );
+        assert!(
+            evaluate_mock_world(
+                &mut node,
+                1.0 / 60.0,
+                1,
+                MockFieldState::Complete,
+                true,
+                true,
+            )
+            .is_none()
+        );
         assert!(PhysicsNode::rigid_scene_observation(&node).is_none());
     }
 
@@ -1162,15 +1382,18 @@ mod tests {
         assert_eq!(capacity, MAX_COPIES);
         assert!(!node.coupled_frame_ready);
         assert_eq!(evaluate_coupled_outputs(&mut node), (None, None));
-        assert!(evaluate_mock_world(
-            &mut node,
-            0.0,
-            1,
-            MockFieldState::PendingGlobal,
-            false,
-            true,
-        )
-        .is_some_and(|first| first.inputs.acceleration_field.is_none()), "a field never seen is absent");
+        assert!(
+            evaluate_mock_world(
+                &mut node,
+                0.0,
+                1,
+                MockFieldState::PendingGlobal,
+                false,
+                true,
+            )
+            .is_some_and(|first| first.inputs.acceleration_field.is_none()),
+            "a field never seen is absent"
+        );
         let retained = node.coupled_frame.as_ref().expect("retained storage");
         assert_eq!(retained.copies.capacity(), capacity);
         assert!(!node.coupled_frame_ready);
@@ -1180,26 +1403,22 @@ mod tests {
     #[test]
     fn coupled_accept_publishes_supplied_pose_and_retained_copies() {
         let mut node = PhysicsWorldNode::new();
-        evaluate_mock_world(
-            &mut node,
-            0.0,
-            1,
-            MockFieldState::Complete,
-            false,
-            true,
-        )
-        .expect("coupled capture observation");
+        evaluate_mock_world(&mut node, 0.0, 1, MockFieldState::Complete, false, true)
+            .expect("coupled capture observation");
         let mut frame = CoupledRigidFrame {
             stamp: manifold_physics::TickStamp { epoch: 9, tick: 4 },
             ..CoupledRigidFrame::default()
         };
-        frame.poses = vec![manifold_node_engine::scene::transform::Transform::default(); node.body_count()];
+        frame.poses =
+            vec![manifold_node_engine::scene::transform::Transform::default(); node.body_count()];
         frame.poses[0].pos = [7.0, 8.0, 9.0];
         frame.group_copies = vec![1];
-        frame.copies.push(manifold_node_engine::scene::transform::Transform {
-            pos: [2.0, 3.0, 4.0],
-            ..manifold_node_engine::scene::transform::Transform::default()
-        });
+        frame
+            .copies
+            .push(manifold_node_engine::scene::transform::Transform {
+                pos: [2.0, 3.0, 4.0],
+                ..manifold_node_engine::scene::transform::Transform::default()
+            });
         let graph_node: &mut dyn EffectNode = &mut node;
         crate::node::get_mut(graph_node)
             .expect("PhysicsWorldNode has a native PhysicsNode registration")
@@ -1216,17 +1435,12 @@ mod tests {
     #[test]
     fn coupled_clear_state_retains_grouped_mode_without_private_owner() {
         let mut node = PhysicsWorldNode::new();
-        evaluate_mock_world(
-            &mut node,
-            0.0,
-            1,
-            MockFieldState::Complete,
-            false,
-            true,
-        )
-        .expect("coupled capture observation");
+        evaluate_mock_world(&mut node, 0.0, 1, MockFieldState::Complete, false, true)
+            .expect("coupled capture observation");
         let mut frame = CoupledRigidFrame::default();
-        frame.copies.push(manifold_node_engine::scene::transform::Transform::default());
+        frame
+            .copies
+            .push(manifold_node_engine::scene::transform::Transform::default());
         frame.group_copies.push(1);
         PhysicsNode::accept_coupled_rigid_frame(&mut node, Some(&frame));
         EffectNode::clear_state(&mut node);
@@ -1266,10 +1480,12 @@ mod tests {
             let graph_node: &mut dyn EffectNode = &mut node;
             let native = crate::node::get_mut(graph_node)
                 .expect("PhysicsWorldNode has a native PhysicsNode registration");
-            assert!(native
-                .enqueue_physics_impulse(stamp, wrong)
-                .expect_err("wrong target must be rejected before queue admission")
-                .contains("fluid"));
+            assert!(
+                native
+                    .enqueue_physics_impulse(stamp, wrong)
+                    .expect_err("wrong target must be rejected before queue admission")
+                    .contains("fluid")
+            );
             assert_eq!(
                 native
                     .enqueue_physics_impulse(stamp, valid)
@@ -1279,7 +1495,13 @@ mod tests {
         }
 
         node.simulation
-            .advance(&bodies, [0.0; 3], PlayedTime::from_played(1.0 / 60.0), 1.0, 0.0)
+            .advance(
+                &bodies,
+                [0.0; 3],
+                PlayedTime::from_played(1.0 / 60.0),
+                1.0,
+                0.0,
+            )
             .expect("native rigid tick");
 
         let mut receipts = Vec::new();
@@ -1290,7 +1512,10 @@ mod tests {
         assert_eq!(receipts.len(), 1);
         let receipt = receipts.pop().expect("one rigid receipt");
         assert_eq!(receipt.source, stamp);
-        assert_eq!(receipt.applied, manifold_physics::TickStamp { epoch, tick: 0 });
+        assert_eq!(
+            receipt.applied,
+            manifold_physics::TickStamp { epoch, tick: 0 }
+        );
         assert_eq!(receipt.lateness, Seconds::ZERO);
         assert_eq!(receipt.value.field, field);
         assert_eq!(
@@ -1413,15 +1638,25 @@ mod port_tests {
         assert!(has_output(&node, "pose_255") && has_output(&node, "instances_31"));
         assert_eq!(node.observation.inputs.bodies.len(), 256);
         assert_eq!(node.observation.inputs.targeted_fields.len(), 288);
-        assert_eq!(node.array_output_capacity("instances_31", &ParamValues::default(), &[]), Some(MAX_COPIES as u32));
+        assert_eq!(
+            node.array_output_capacity("instances_31", &ParamValues::default(), &[]),
+            Some(MAX_COPIES as u32)
+        );
 
         node.reconfigure(&counts(9_999.0, 999.0));
-        assert_eq!((node.body_count(), node.copy_group_count()), (9_999, 999), "no count is capped");
+        assert_eq!(
+            (node.body_count(), node.copy_group_count()),
+            (9_999, 999),
+            "no count is capped"
+        );
         assert!(has_input(&node, "body_9998") && has_output(&node, "instances_998"));
 
         node.reconfigure(&counts(3.0, 0.0));
         assert_eq!((node.body_count(), node.copy_group_count()), (3, 0));
         assert!(!has_input(&node, "body_3") && !has_output(&node, "instances_0"));
-        assert_eq!(node.array_output_capacity("instances_0", &ParamValues::default(), &[]), None);
+        assert_eq!(
+            node.array_output_capacity("instances_0", &ParamValues::default(), &[]),
+            None
+        );
     }
 }

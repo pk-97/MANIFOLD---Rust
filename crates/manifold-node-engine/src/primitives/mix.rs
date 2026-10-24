@@ -10,10 +10,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
+use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 use crate::exec::effect_node::EffectNodeContext;
 use crate::parameters::{ParamDef, ParamType, ParamValue};
 use crate::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 // =====================================================================
 // Mix — combine A and B with a blend mode, crossfaded by amount.
@@ -153,18 +153,21 @@ mod gpu_tests {
     //! pipeline compilation failures, missing usages) and prove pixel
     //! correctness — bugs that mock-backend tests can't see.
 
-    
-
     use half::f16;
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
-    use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::exec::backend::Backend;
     use crate::bindings::Slot;
+    use crate::exec::backend::Backend;
     use crate::exec::execution_plan::ResourceId;
-    use crate::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, scene::boundary_nodes::Source, exec::execution_plan::compile, primitives::mix::Mix};
+    use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use crate::gpu::render_target::RenderTarget;
+    use crate::{
+        exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+        exec::execution_plan::ExecutionPlan, exec::execution_plan::compile,
+        exec::metal_backend::MetalBackend, graph::Graph, parameters::ParamValue,
+        primitives::mix::Mix, scene::boundary_nodes::FinalOutput, scene::boundary_nodes::Source,
+    };
 
     fn frame_time() -> FrameTime {
         FrameTime {

@@ -62,8 +62,13 @@ pub fn prewarm_pipeline(purpose: PipelinePrewarmPurpose, device: &GpuDevice) {
     let mut entries = inventory::iter::<PipelinePrewarm>
         .into_iter()
         .filter(|entry| entry.purpose == purpose);
-    let entry = entries.next().expect("pipeline prewarm provider must be linked");
-    assert!(entries.next().is_none(), "duplicate pipeline prewarm provider");
+    let entry = entries
+        .next()
+        .expect("pipeline prewarm provider must be linked");
+    assert!(
+        entries.next().is_none(),
+        "duplicate pipeline prewarm provider"
+    );
     (entry.run)(device);
 }
 
@@ -104,8 +109,7 @@ mod tests {
     /// new non-decomposed plugin effect lands, add it here.
     #[test]
     fn plugin_using_effects_all_have_prewarm_submissions() {
-        let registered: std::collections::HashSet<PresetTypeId> =
-            prewarm_ids().cloned().collect();
+        let registered: std::collections::HashSet<PresetTypeId> = prewarm_ids().cloned().collect();
         let expected: [PresetTypeId; 0] = [];
         for id in expected {
             assert!(

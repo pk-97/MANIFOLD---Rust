@@ -110,7 +110,8 @@ impl ToastPanel {
 
     /// Start the timeline, holding as long as this message takes to read.
     fn fire(&mut self) {
-        self.hold_ms = (READ_MS_PER_CHAR * self.message.chars().count() as f32).clamp(HOLD_MS, MAX_HOLD_MS);
+        self.hold_ms =
+            (READ_MS_PER_CHAR * self.message.chars().count() as f32).clamp(HOLD_MS, MAX_HOLD_MS);
         self.transient.fire(ENTER_MS + self.hold_ms + FADE_MS);
     }
 
@@ -151,7 +152,9 @@ impl ToastPanel {
     /// The toast in flight, if any: its message and accent. What the freshness
     /// check compares, since the tree dump cannot see an unbuilt toast.
     pub fn pending(&self) -> Option<(&str, Option<Color32>)> {
-        self.transient.progress().map(|_| (self.message.as_str(), self.accent))
+        self.transient
+            .progress()
+            .map(|_| (self.message.as_str(), self.accent))
     }
 
     /// Eased 0..1 alpha for the transient's current progress: ramps 0→1 over
@@ -203,7 +206,8 @@ impl ToastPanel {
         tree.set_style(bg, bg_style);
         for &text in &self.text_ids {
             if let Some(mut style) = tree.get_node(text).map(|n| n.style) {
-                style.text_color = with_alpha(self.accent.unwrap_or(color::TEXT_PRIMARY_C32), 255.0 * a);
+                style.text_color =
+                    with_alpha(self.accent.unwrap_or(color::TEXT_PRIMARY_C32), 255.0 * a);
                 tree.set_style(text, style);
             }
         }
@@ -254,7 +258,11 @@ fn message_lines<'a>(tree: &UITree, message: &'a str, max_width: f32) -> Vec<&'a
             }
             // Always advance, even if a very narrow viewport cannot fit a glyph.
             if end == 0 {
-                end = rest.chars().next().expect("nonempty overflowing line").len_utf8();
+                end = rest
+                    .chars()
+                    .next()
+                    .expect("nonempty overflowing line")
+                    .len_utf8();
             }
             if let Some(space) = rest[..end].rfind(char::is_whitespace).filter(|&i| i > 0) {
                 end = space;
@@ -326,7 +334,10 @@ impl Overlay for ToastPanel {
                 LINE_HEIGHT,
                 line,
                 UIStyle {
-                    text_color: with_alpha(self.accent.unwrap_or(color::TEXT_PRIMARY_C32), 255.0 * a),
+                    text_color: with_alpha(
+                        self.accent.unwrap_or(color::TEXT_PRIMARY_C32),
+                        255.0 * a,
+                    ),
                     font_size: FONT,
                     font_weight: WEIGHT,
                     text_align: TextAlign::Center,
@@ -358,7 +369,11 @@ mod tests {
         let mut toast = ToastPanel::new();
         toast.show("Undo");
         assert!(toast.is_open());
-        assert_eq!(toast.alpha(), 0.0, "just fired — at the very start of the ramp-in");
+        assert_eq!(
+            toast.alpha(),
+            0.0,
+            "just fired — at the very start of the ramp-in"
+        );
 
         toast.tick(ENTER_MS * 0.5);
         let mid = toast.alpha();
@@ -399,10 +414,16 @@ mod tests {
         assert!(!toast.is_animating(), "idle before any show()");
 
         toast.show("Undo");
-        assert!(toast.is_animating(), "just fired — still has enter/hold/fade to run");
+        assert!(
+            toast.is_animating(),
+            "just fired — still has enter/hold/fade to run"
+        );
 
         toast.tick(ENTER_MS + HOLD_MS + FADE_MS); // run the whole timeline out
-        assert!(!toast.is_animating(), "settled back to idle once the timeline elapses");
+        assert!(
+            !toast.is_animating(),
+            "settled back to idle once the timeline elapses"
+        );
     }
 
     #[test]
@@ -412,7 +433,11 @@ mod tests {
         toast.tick(ENTER_MS + HOLD_MS * 0.5); // mid-hold
         toast.show("Redo: Move Clip"); // latest wins — restarts the timeline
         assert_eq!(toast.message, "Redo: Move Clip");
-        assert_eq!(toast.alpha(), 0.0, "replacing restarts the ramp-in, not the hold");
+        assert_eq!(
+            toast.alpha(),
+            0.0,
+            "replacing restarts the ramp-in, not the hold"
+        );
     }
 
     /// Reproduces the BUG-028-class crash: undo fires the toast the same frame
@@ -456,7 +481,10 @@ mod tests {
         toast.tick(ENTER_MS * 0.5);
         toast.refresh("2 hits refused", Some(color::RED_BASE));
         let easing = toast.alpha();
-        assert!(easing > 0.0 && easing < 1.0, "mid ease-in keeps easing: {easing}");
+        assert!(
+            easing > 0.0 && easing < 1.0,
+            "mid ease-in keeps easing: {easing}"
+        );
         toast.tick(ENTER_MS * 0.5 + HOLD_MS * 0.9);
         toast.refresh("3 hits refused", Some(color::RED_BASE));
         assert_eq!(toast.message, "3 hits refused");

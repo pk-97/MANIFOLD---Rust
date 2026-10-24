@@ -29,11 +29,17 @@ use std::borrow::Cow;
 use std::sync::OnceLock;
 
 use manifold_gpu::{GpuBinding, GpuComputePipeline};
-use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
+use manifold_node_engine::exec::effect_node::{
+    EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
+};
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-use manifold_node_engine::scene::mesh_change::{MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule};
+use manifold_node_engine::ports::{
+    ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+};
+use manifold_node_engine::scene::mesh_change::{
+    MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule,
+};
 use manifold_node_engine::scene::transform::Mat4;
 
 use crate::node_graph::gltf_load::{MAT4_IDENTITY, cross3, mat4_mul};
@@ -56,7 +62,14 @@ fn mesh_type() -> PortType {
 static OUTPUTS: OnceLock<[NodeOutput; 1]> = OnceLock::new();
 
 fn outputs() -> &'static [NodeOutput; 1] {
-    OUTPUTS.get_or_init(|| [NodePort { name: Cow::Borrowed("vertices"), ty: mesh_type(), kind: PortKind::Output, required: false }])
+    OUTPUTS.get_or_init(|| {
+        [NodePort {
+            name: Cow::Borrowed("vertices"),
+            ty: mesh_type(),
+            kind: PortKind::Output,
+            required: false,
+        }]
+    })
 }
 
 const PARAMS: [ParamDef; 1] = [ParamDef {
@@ -92,25 +105,44 @@ pub struct MergeMeshes {
 
 impl MergeMeshes {
     pub fn new() -> Self {
-        let mut node = Self { inputs: Vec::new(), topology: Vec::new(), pipeline: None, last_reset_trigger: None };
+        let mut node = Self {
+            inputs: Vec::new(),
+            topology: Vec::new(),
+            pipeline: None,
+            last_reset_trigger: None,
+        };
         node.rebuild_ports(DEFAULT_PARTS);
         node
     }
 
     fn rebuild_ports(&mut self, parts: usize) {
-        let port = |name: Cow<'static, str>, ty| NodePort { name, ty, kind: PortKind::Input, required: false };
+        let port = |name: Cow<'static, str>, ty| NodePort {
+            name,
+            ty,
+            kind: PortKind::Input,
+            required: false,
+        };
         self.inputs = vec![
             port(Cow::Borrowed("frame"), PortType::Transform),
             port(Cow::Borrowed("frame_within"), PortType::Transform),
-            port(Cow::Borrowed("reset_trigger"), PortType::Scalar(ScalarType::F32)),
+            port(
+                Cow::Borrowed("reset_trigger"),
+                PortType::Scalar(ScalarType::F32),
+            ),
         ];
         for k in 0..parts.max(1) {
-            self.inputs.push(port(Cow::Owned(format!("mesh_{k}")), mesh_type()));
-            self.inputs.push(port(Cow::Owned(format!("place_{k}")), PortType::Transform));
-            self.inputs.push(port(Cow::Owned(format!("within_{k}")), PortType::Transform));
+            self.inputs
+                .push(port(Cow::Owned(format!("mesh_{k}")), mesh_type()));
+            self.inputs
+                .push(port(Cow::Owned(format!("place_{k}")), PortType::Transform));
+            self.inputs
+                .push(port(Cow::Owned(format!("within_{k}")), PortType::Transform));
         }
         self.topology = (0..parts.max(1))
-            .map(|k| MeshDependency { input: Cow::Owned(format!("mesh_{k}")), aspect: MeshAspect::Topology })
+            .map(|k| MeshDependency {
+                input: Cow::Owned(format!("mesh_{k}")),
+                aspect: MeshAspect::Topology,
+            })
             .collect();
     }
 
@@ -144,7 +176,10 @@ fn inverse_rows(m: &Mat4) -> Option<[[f32; 3]; 3]> {
     let [a, b, c] = [0, 1, 2].map(|i| column(m, i));
     let rows = [cross3(b, c), cross3(c, a), cross3(a, b)];
     let det = dot(a, rows[0]);
-    let size = [a, b, c].iter().map(|v| dot(*v, *v).sqrt()).product::<f32>();
+    let size = [a, b, c]
+        .iter()
+        .map(|v| dot(*v, *v).sqrt())
+        .product::<f32>();
     (det.is_finite() && det.abs() > 1e-6 * size).then(|| rows.map(|row| row.map(|v| v / det)))
 }
 
@@ -160,7 +195,6 @@ fn affine_inverse(m: &Mat4) -> Option<Mat4> {
         [moved[0], moved[1], moved[2], 1.0],
     ])
 }
-
 
 impl EffectNode for MergeMeshes {
     fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
@@ -193,7 +227,10 @@ impl EffectNode for MergeMeshes {
     }
 
     fn mesh_output_rule(&self, _port: &str) -> MeshOutputRule<'_> {
-        MeshOutputRule { topology: MeshRevisionRule::Dependencies(&self.topology), positions: MeshRevisionRule::Written }
+        MeshOutputRule {
+            topology: MeshRevisionRule::Dependencies(&self.topology),
+            positions: MeshRevisionRule::Written,
+        }
     }
 
     fn parameters(&self) -> &[ParamDef] {
@@ -201,23 +238,36 @@ impl EffectNode for MergeMeshes {
     }
 
     fn reconfigure(&mut self, params: &ParamValues) {
-        let parts = params.get("parts").and_then(|v| v.as_scalar()).map_or(DEFAULT_PARTS, |f| f.round().max(1.0) as usize);
+        let parts = params
+            .get("parts")
+            .and_then(|v| v.as_scalar())
+            .map_or(DEFAULT_PARTS, |f| f.round().max(1.0) as usize);
         if parts != self.parts() {
             self.rebuild_ports(parts);
         }
     }
 
     /// Every part's vertices, back to back.
-    fn array_output_capacity(&self, port_name: &str, _params: &ParamValues, input_capacities: &[(&str, u32)]) -> Option<u32> {
+    fn array_output_capacity(
+        &self,
+        port_name: &str,
+        _params: &ParamValues,
+        input_capacities: &[(&str, u32)],
+    ) -> Option<u32> {
         (port_name == "vertices").then(|| {
-            let total: u64 =
-                input_capacities.iter().filter(|(port, _)| port.starts_with("mesh_")).map(|&(_, n)| u64::from(n)).sum();
+            let total: u64 = input_capacities
+                .iter()
+                .filter(|(port, _)| port.starts_with("mesh_"))
+                .map(|&(_, n)| u64::from(n))
+                .sum();
             total.clamp(1, u64::from(u32::MAX)) as u32
         })
     }
 
     fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
-        self.pipeline.get_or_insert_with(|| device.create_compute_pipeline(SHADER, "cs_main", "node.merge_meshes"));
+        self.pipeline.get_or_insert_with(|| {
+            device.create_compute_pipeline(SHADER, "cs_main", "node.merge_meshes")
+        });
     }
 
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -232,8 +282,13 @@ impl EffectNode for MergeMeshes {
                 return;
             }
         }
-        let placed = |port: &str| ctx.inputs.transform(port).map_or(MAT4_IDENTITY, |t| t.world());
-        let Some(to_frame) = affine_inverse(&mat4_mul(&placed("frame_within"), &placed("frame"))) else {
+        let placed = |port: &str| {
+            ctx.inputs
+                .transform(port)
+                .map_or(MAT4_IDENTITY, |t| t.world())
+        };
+        let Some(to_frame) = affine_inverse(&mat4_mul(&placed("frame_within"), &placed("frame")))
+        else {
             ctx.error("Merge Meshes: the frame must be finite with no zero scale".to_string());
             return;
         };
@@ -247,7 +302,10 @@ impl EffectNode for MergeMeshes {
         let Some(gpu) = ctx.gpu.as_deref_mut() else {
             return;
         };
-        let pipeline = self.pipeline.get_or_insert_with(|| gpu.device.create_compute_pipeline(SHADER, "cs_main", "node.merge_meshes"));
+        let pipeline = self.pipeline.get_or_insert_with(|| {
+            gpu.device
+                .create_compute_pipeline(SHADER, "cs_main", "node.merge_meshes")
+        });
         let mut offset = 0u32;
         for ports in self.inputs[FIXED_INPUTS..].chunks_exact(PART_PORTS) {
             let Some(part) = ctx.inputs.array(&ports[0].name) else {
@@ -257,18 +315,37 @@ impl EffectNode for MergeMeshes {
             if count == 0 {
                 continue;
             }
-            let world = |port: &NodeInput| ctx.inputs.transform(&port.name).map_or(MAT4_IDENTITY, |t| t.world());
+            let world = |port: &NodeInput| {
+                ctx.inputs
+                    .transform(&port.name)
+                    .map_or(MAT4_IDENTITY, |t| t.world())
+            };
             let place = mat4_mul(&world(&ports[2]), &world(&ports[1]));
             let matrix = mat4_mul(&to_frame, &place);
-            let normals = inverse_rows(&matrix).map_or([[0.0; 4]; 3], |rows| rows.map(|r| [r[0], r[1], r[2], 0.0]));
-            let uniforms = PartUniforms { matrix, normals, offset, count, clear: 0, _pad: 0 };
+            let normals = inverse_rows(&matrix)
+                .map_or([[0.0; 4]; 3], |rows| rows.map(|r| [r[0], r[1], r[2], 0.0]));
+            let uniforms = PartUniforms {
+                matrix,
+                normals,
+                offset,
+                count,
+                clear: 0,
+                _pad: 0,
+            };
             dispatch(gpu, pipeline, &uniforms, part, out);
             offset += count;
         }
         // A part smaller than planned leaves a tail: zeroed, so it adds no
         // area, volume or stale vertex.
         if offset < capacity {
-            let uniforms = PartUniforms { matrix: MAT4_IDENTITY, normals: [[0.0; 4]; 3], offset, count: capacity - offset, clear: 1, _pad: 0 };
+            let uniforms = PartUniforms {
+                matrix: MAT4_IDENTITY,
+                normals: [[0.0; 4]; 3],
+                offset,
+                count: capacity - offset,
+                clear: 1,
+                _pad: 0,
+            };
             dispatch(gpu, pipeline, &uniforms, out, out);
         }
     }
@@ -284,9 +361,20 @@ fn dispatch(
     gpu.native_enc.dispatch_compute(
         pipeline,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: part, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: out, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: part,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: out,
+                offset: 0,
+            },
         ],
         [uniforms.count.div_ceil(64), 1, 1],
         "node.merge_meshes",
@@ -317,19 +405,27 @@ mod tests {
         assert_eq!(node.parts(), 300);
         assert_eq!(node.inputs().last().unwrap().name, "within_299");
         let capacities = [("mesh_0", 36), ("mesh_7", 100), ("frame", 1)];
-        assert_eq!(node.array_output_capacity("vertices", &params, &capacities), Some(136));
+        assert_eq!(
+            node.array_output_capacity("vertices", &params, &capacities),
+            Some(136)
+        );
     }
 
     #[test]
     fn affine_inverse_undoes_a_turned_scaled_moved_frame() {
-        let frame = manifold_node_engine::scene::transform::trs_matrix([1.0, -2.0, 3.0], [0.3, -0.7, 1.1], [2.0, 0.5, 3.0]);
+        let frame = manifold_node_engine::scene::transform::trs_matrix(
+            [1.0, -2.0, 3.0],
+            [0.3, -0.7, 1.1],
+            [2.0, 0.5, 3.0],
+        );
         let back = mat4_mul(&affine_inverse(&frame).unwrap(), &frame);
         for (c, col) in back.iter().enumerate() {
             for (r, v) in col.iter().enumerate() {
                 assert!((v - MAT4_IDENTITY[c][r]).abs() < 1e-5, "{back:?}");
             }
         }
-        let flat = manifold_node_engine::scene::transform::trs_matrix([0.0; 3], [0.0; 3], [1.0, 0.0, 1.0]);
+        let flat =
+            manifold_node_engine::scene::transform::trs_matrix([0.0; 3], [0.0; 3], [1.0, 0.0, 1.0]);
         assert!(affine_inverse(&flat).is_none());
     }
 }
@@ -358,15 +454,49 @@ mod gpu_tests {
     #[test]
     fn parts_land_at_their_places_in_the_frame() {
         let mut h = Harness::new();
-        let a: Vec<MeshVertex> = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]].map(vertex).to_vec();
-        let b: Vec<MeshVertex> = [[0.0, 0.0, 1.0], [0.0, 2.0, 0.0], [3.0, 0.0, 0.0], [1.0, 1.0, 1.0], [0.5, 0.5, 0.5], [0.0, 0.0, -1.0]]
+        let a: Vec<MeshVertex> = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
             .map(vertex)
             .to_vec();
-        let place_a = Transform { pos: [2.0, 0.0, 0.0], rot_euler: [0.0, 0.0, 0.0], scale: [1.0; 3], ..Default::default() };
-        let place_b = Transform { pos: [0.0, 1.0, -4.0], rot_euler: [0.0, 1.2, 0.4], scale: [2.0; 3], ..Default::default() };
-        let within_b = Transform { pos: [-1.0, 0.5, 0.0], rot_euler: [0.7, 0.0, 0.0], scale: [1.5; 3], ..Default::default() };
-        let frame = Transform { pos: [5.0, 0.0, 0.0], rot_euler: [0.0, 0.0, 0.5], scale: [0.5; 3], ..Default::default() };
-        let frame_within = Transform { pos: [0.0, -1.0, 2.0], rot_euler: [0.3, 0.0, 0.0], scale: [1.0, 2.0, 1.0], ..Default::default() };
+        let b: Vec<MeshVertex> = [
+            [0.0, 0.0, 1.0],
+            [0.0, 2.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [1.0, 1.0, 1.0],
+            [0.5, 0.5, 0.5],
+            [0.0, 0.0, -1.0],
+        ]
+        .map(vertex)
+        .to_vec();
+        let place_a = Transform {
+            pos: [2.0, 0.0, 0.0],
+            rot_euler: [0.0, 0.0, 0.0],
+            scale: [1.0; 3],
+            ..Default::default()
+        };
+        let place_b = Transform {
+            pos: [0.0, 1.0, -4.0],
+            rot_euler: [0.0, 1.2, 0.4],
+            scale: [2.0; 3],
+            ..Default::default()
+        };
+        let within_b = Transform {
+            pos: [-1.0, 0.5, 0.0],
+            rot_euler: [0.7, 0.0, 0.0],
+            scale: [1.5; 3],
+            ..Default::default()
+        };
+        let frame = Transform {
+            pos: [5.0, 0.0, 0.0],
+            rot_euler: [0.0, 0.0, 0.5],
+            scale: [0.5; 3],
+            ..Default::default()
+        };
+        let frame_within = Transform {
+            pos: [0.0, -1.0, 2.0],
+            rot_euler: [0.3, 0.0, 0.0],
+            scale: [1.0, 2.0, 1.0],
+            ..Default::default()
+        };
         let (mesh_a, _) = h.array(&a, a.len());
         let (mesh_b, _) = h.array(&b, b.len());
         let (out, _) = h.array::<MeshVertex>(&[], a.len() + b.len() + 3);
@@ -380,22 +510,39 @@ mod gpu_tests {
             ("within_1", h.transform_input(within_b)),
         ];
         let mut node = MergeMeshes::new();
-        let (_, errors) = h.run(&mut node, &slots, &[("vertices", out)], &ParamValues::default());
+        let (_, errors) = h.run(
+            &mut node,
+            &slots,
+            &[("vertices", out)],
+            &ParamValues::default(),
+        );
         assert!(errors.is_empty(), "{errors:?}");
         let merged: Vec<MeshVertex> = read(&h.buffer(out), a.len() + b.len() + 3);
         let to_frame = affine_inverse(&mat4_mul(&frame_within.world(), &frame.world())).unwrap();
         let world_a = place_a.world();
         let world_b = mat4_mul(&within_b.world(), &place_b.world());
-        let expected = a.iter().map(|v| (world_a, v)).chain(b.iter().map(|v| (world_b, v)));
+        let expected = a
+            .iter()
+            .map(|v| (world_a, v))
+            .chain(b.iter().map(|v| (world_b, v)));
         for (i, (place, source)) in expected.enumerate() {
             let want = transform_point(&mat4_mul(&to_frame, &place), source.position);
             let got = merged[i].position;
-            assert!((0..3).all(|d| (got[d] - want[d]).abs() < 1e-4), "vertex {i}: {got:?} want {want:?}");
-            assert!((dot(merged[i].normal, merged[i].normal) - 1.0).abs() < 1e-4, "vertex {i} normal stays unit");
+            assert!(
+                (0..3).all(|d| (got[d] - want[d]).abs() < 1e-4),
+                "vertex {i}: {got:?} want {want:?}"
+            );
+            assert!(
+                (dot(merged[i].normal, merged[i].normal) - 1.0).abs() < 1e-4,
+                "vertex {i} normal stays unit"
+            );
             assert_eq!(merged[i].uv, source.uv);
         }
         for tail in &merged[a.len() + b.len()..] {
-            assert_eq!(tail.position, [0.0; 3], "the tail past every part is zeroed");
+            assert_eq!(
+                tail.position, [0.0; 3],
+                "the tail past every part is zeroed"
+            );
         }
     }
 }

@@ -11,11 +11,11 @@
 
 use std::borrow::Cow;
 
-use manifold_node_engine::mesh::{EdgePair, PLATONIC_MAX_EDGES, PLATONIC_SHAPES, platonic_edges};
+use crate::node_graph::primitives::polytope_vertices::read_shape;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::{EdgePair, PLATONIC_MAX_EDGES, PLATONIC_SHAPES, platonic_edges};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use crate::node_graph::primitives::polytope_vertices::read_shape;
 
 manifold_node_engine::primitive! {
     name: PolytopeEdges,
@@ -108,11 +108,11 @@ mod tests {
     #[test]
     fn platonic_edges_counts_match_each_shape() {
         let expected = [
-            (0u32, 6),  // Tetra
-            (1, 12),    // Cube
-            (2, 12),    // Octa
-            (3, 30),    // Icosa
-            (4, 30),    // Dodeca
+            (0u32, 6), // Tetra
+            (1, 12),   // Cube
+            (2, 12),   // Octa
+            (3, 30),   // Icosa
+            (4, 30),   // Dodeca
         ];
         for (shape, count) in expected {
             assert_eq!(
@@ -128,8 +128,7 @@ mod tests {
     /// produce a tetrahedron with the wrong connections.
     #[test]
     fn tetra_edges_match_canonical_topology() {
-        let expected: &[(u32, u32)] =
-            &[(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)];
+        let expected: &[(u32, u32)] = &[(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)];
         let edges = platonic_edges(0);
         assert_eq!(edges.len(), expected.len());
         for (i, &(a, b)) in expected.iter().enumerate() {

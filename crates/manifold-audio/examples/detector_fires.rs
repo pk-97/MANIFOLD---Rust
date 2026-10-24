@@ -44,7 +44,9 @@ fn runners(rate: u32) -> Vec<Runner> {
     let mut kick = detector(EventKind::Kick, rate);
     let mut out = Vec::new();
     for kind in EventKind::ALL.into_iter().filter(|k| *k != EventKind::Kick) {
-        let Some(d) = detector(kind, rate) else { continue };
+        let Some(d) = detector(kind, rate) else {
+            continue;
+        };
         if d.wants_kick().is_none() {
             out.push(Runner::Alone(Box::new(d)));
             continue;
@@ -74,13 +76,27 @@ fn run(mono: &[f32], rate: u32) -> Vec<Hit> {
             match &mut r {
                 Runner::Alone(d) => {
                     let kind = d.kind();
-                    d.push_with(block, |f| hits.push(Hit { kind, cand_hop: f.cand_hop, sample: f.sample }));
+                    d.push_with(block, |f| {
+                        hits.push(Hit {
+                            kind,
+                            cand_hop: f.cand_hop,
+                            sample: f.sample,
+                        })
+                    });
                 }
                 Runner::Fed(pair) => {
                     let reader = pair.reader().kind();
                     pair.push_traced(block, |side, _, fire| {
-                        let kind = if side == Side::Kick { EventKind::Kick } else { reader };
-                        hits.extend(fire.map(|f| Hit { kind, cand_hop: f.cand_hop, sample: f.sample }));
+                        let kind = if side == Side::Kick {
+                            EventKind::Kick
+                        } else {
+                            reader
+                        };
+                        hits.extend(fire.map(|f| Hit {
+                            kind,
+                            cand_hop: f.cand_hop,
+                            sample: f.sample,
+                        }));
                     });
                 }
             }
@@ -118,18 +134,38 @@ fn main() {
     };
     let golden = input
         .ends_with(".mkick")
-        .then(|| std::fs::read(&input).map_err(|e| e.to_string()).and_then(|b| Container::parse(&b).map_err(|e| format!("{e:?}"))))
+        .then(|| {
+            std::fs::read(&input)
+                .map_err(|e| e.to_string())
+                .and_then(|b| Container::parse(&b).map_err(|e| format!("{e:?}")))
+        })
         .map(|g| g.unwrap_or_else(|e| fail(format!("{input}: {e}"))));
     let (mono, rate) = match &golden {
         Some(g) => {
-            let n = g.shape("audio_i16").unwrap_or_else(|e| fail(format!("{e:?}")))[0];
-            let pcm = g.i16s("audio_i16", &[n]).unwrap_or_else(|e| fail(format!("{e:?}")));
-            (pcm.iter().map(|&v| v as f32 / 32768.0).collect::<Vec<f32>>(), MODEL_RATE)
+            let n = g
+                .shape("audio_i16")
+                .unwrap_or_else(|e| fail(format!("{e:?}")))[0];
+            let pcm = g
+                .i16s("audio_i16", &[n])
+                .unwrap_or_else(|e| fail(format!("{e:?}")));
+            (
+                pcm.iter()
+                    .map(|&v| v as f32 / 32768.0)
+                    .collect::<Vec<f32>>(),
+                MODEL_RATE,
+            )
         }
         None => {
-            let d = manifold_playback::audio_decoder::decode_audio_to_pcm(&input).unwrap_or_else(|e| fail(e));
+            let d = manifold_playback::audio_decoder::decode_audio_to_pcm(&input)
+                .unwrap_or_else(|e| fail(e));
             let ch = d.channels.max(1);
-            (d.samples.chunks_exact(ch).map(|f| f.iter().sum::<f32>() / ch as f32).collect(), d.sample_rate)
+            (
+                d.samples
+                    .chunks_exact(ch)
+                    .map(|f| f.iter().sum::<f32>() / ch as f32)
+                    .collect(),
+                d.sample_rate,
+            )
         }
     };
 
@@ -141,7 +177,10 @@ fn main() {
     for h in &hits {
         let onset_s = ((h.cand_hop + 1) * MODEL_HOP) as f64 / MODEL_RATE as f64;
         let emit_s = h.sample as f64 / rate as f64;
-        println!("{{\"family\":\"{}\",\"onset_s\":{onset_s:.6},\"emit_s\":{emit_s:.6}}}", h.kind.name());
+        println!(
+            "{{\"family\":\"{}\",\"onset_s\":{onset_s:.6},\"emit_s\":{emit_s:.6}}}",
+            h.kind.name()
+        );
     }
     let count = |k: EventKind| hits.iter().filter(|h| h.kind == k).count();
     eprintln!(
@@ -149,27 +188,49 @@ fn main() {
         mono.len() as f64 / rate as f64,
         count(EventKind::Kick),
         count(EventKind::Snare),
-        if check { " (matches send_detectors)" } else { " (send_detectors check skipped)" }
+        if check {
+            " (matches send_detectors)"
+        } else {
+            " (send_detectors check skipped)"
+        }
     );
 
     if let Some(g) = &golden {
-        let id = g.text("train_id").unwrap_or_else(|e| fail(format!("{e:?}")));
+        let id = g
+            .text("train_id")
+            .unwrap_or_else(|e| fail(format!("{e:?}")));
         let Some(kind) = EventKind::ALL.into_iter().find(|&k| build_id(k) == id) else {
             fail(format!("golden train_id {id} is no shipped model"));
         };
         let nf = g.shape("fires").unwrap_or_else(|e| fail(format!("{e:?}")))[0];
-        let k = g.shape("cand_hop").unwrap_or_else(|e| fail(format!("{e:?}")))[0];
-        let cand = g.i64s("cand_hop", &[k]).unwrap_or_else(|e| fail(format!("{e:?}")));
-        let onset = g.f64s("onset_s", &[k]).unwrap_or_else(|e| fail(format!("{e:?}")));
+        let k = g
+            .shape("cand_hop")
+            .unwrap_or_else(|e| fail(format!("{e:?}")))[0];
+        let cand = g
+            .i64s("cand_hop", &[k])
+            .unwrap_or_else(|e| fail(format!("{e:?}")));
+        let onset = g
+            .f64s("onset_s", &[k])
+            .unwrap_or_else(|e| fail(format!("{e:?}")));
         let worst = hits
             .iter()
             .filter(|h| h.kind == kind)
-            .filter_map(|h| cand.iter().position(|&c| c as u64 == h.cand_hop).map(|i| (onset[i] - ((h.cand_hop + 1) * MODEL_HOP) as f64 / MODEL_RATE as f64).abs()))
+            .filter_map(|h| {
+                cand.iter().position(|&c| c as u64 == h.cand_hop).map(|i| {
+                    (onset[i] - ((h.cand_hop + 1) * MODEL_HOP) as f64 / MODEL_RATE as f64).abs()
+                })
+            })
             .fold(0.0f64, f64::max);
-        eprintln!("golden ({}): {nf} fires expected, {} here; max onset_s difference {worst:.2e} s", kind.name(), count(kind));
+        eprintln!(
+            "golden ({}): {nf} fires expected, {} here; max onset_s difference {worst:.2e} s",
+            kind.name(),
+            count(kind)
+        );
     }
 }
 
 fn build_id(kind: EventKind) -> String {
-    detector(kind, MODEL_RATE).map(|d| d.train_id().to_owned()).unwrap_or_default()
+    detector(kind, MODEL_RATE)
+        .map(|d| d.train_id().to_owned())
+        .unwrap_or_default()
 }

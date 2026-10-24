@@ -9,15 +9,17 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_water_liquid::float_param;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::freeze::classify::FusedOutputCapacity;
-use manifold_nodes_physics::force_lattice::{ForceLatticeBinding, FORCE_LATTICE};
-use manifold_water_liquid::grid::{LIQUID_FACES, face_len};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_water_liquid::whitewater::{WHITEWATER_COMMON, WhitewaterParticle, cell_total, face_offset, particle_grid};
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_nodes_physics::force_lattice::{FORCE_LATTICE, ForceLatticeBinding};
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::grid::{LIQUID_FACES, face_len};
+use manifold_water_liquid::whitewater::{
+    WHITEWATER_COMMON, WhitewaterParticle, cell_total, face_offset, particle_grid,
+};
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`;
 /// 32 words, already a multiple of 16 bytes.
@@ -151,13 +153,27 @@ manifold_node_engine::primitive! {
 }
 
 impl Primitive for AdvectWhitewater {
-    fn array_output_capacity(&self, port: &str, _params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
-        (port == "out").then(|| inputs.iter().find(|(name, _)| *name == "pool").map(|&(_, n)| n)).flatten()
+    fn array_output_capacity(
+        &self,
+        port: &str,
+        _params: &ParamValues,
+        inputs: &[(&str, u32)],
+    ) -> Option<u32> {
+        (port == "out")
+            .then(|| {
+                inputs
+                    .iter()
+                    .find(|(name, _)| *name == "pool")
+                    .map(|&(_, n)| n)
+            })
+            .flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let face_cells = ["face_cells_x", "face_cells_y", "face_cells_z"].map(|name| ctx.scalar_or_param(name, 64.0).round().max(0.0) as u32);
-        let placed = particle_grid(ctx).and_then(|grid| face_offset(grid.nodes, face_cells).map(|_| grid));
+        let face_cells = ["face_cells_x", "face_cells_y", "face_cells_z"]
+            .map(|name| ctx.scalar_or_param(name, 64.0).round().max(0.0) as u32);
+        let placed =
+            particle_grid(ctx).and_then(|grid| face_offset(grid.nodes, face_cells).map(|_| grid));
         let grid = match placed {
             Ok(grid) => grid,
             Err(refusal) => {
@@ -165,14 +181,21 @@ impl Primitive for AdvectWhitewater {
                 return;
             }
         };
-        let gravity = [("gravity_x", 0.0), ("gravity_y", -9.81), ("gravity_z", 0.0)].map(|(name, default)| ctx.scalar_or_param(name, default));
+        let gravity = [("gravity_x", 0.0), ("gravity_y", -9.81), ("gravity_z", 0.0)]
+            .map(|(name, default)| ctx.scalar_or_param(name, default));
         let dt = ctx.scalar_or_param("dt", 1.0 / 60.0);
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(pool), Some(solid), Some(out)) = (ctx.inputs.array("pool"), ctx.inputs.array("solid"), ctx.outputs.array("out")) else {
+        let (Some(pool), Some(solid), Some(out)) = (
+            ctx.inputs.array("pool"),
+            ctx.inputs.array("solid"),
+            ctx.outputs.array("out"),
+        ) else {
             return;
         };
-        let [Some(u), Some(v), Some(w)] = FACE_PORTS.map(|port| ctx.inputs.array(port)) else { return };
+        let [Some(u), Some(v), Some(w)] = FACE_PORTS.map(|port| ctx.inputs.array(port)) else {
+            return;
+        };
         for (axis, buffer) in [u, v, w].into_iter().enumerate() {
             if buffer.size < face_len(face_cells, axis) * 4 {
                 ctx.error(format!(
@@ -184,10 +207,14 @@ impl Primitive for AdvectWhitewater {
             }
         }
         if cell_total(grid.nodes) * 4 > solid.size {
-            ctx.error(format!("Advect Whitewater: solid holds fewer than the {:?}-node lattice", grid.nodes));
+            ctx.error(format!(
+                "Advect Whitewater: solid holds fewer than the {:?}-node lattice",
+                grid.nodes
+            ));
             return;
         }
-        let count = (pool.size.min(out.size) / std::mem::size_of::<WhitewaterParticle>() as u64) as u32;
+        let count =
+            (pool.size.min(out.size) / std::mem::size_of::<WhitewaterParticle>() as u64) as u32;
         if count == 0 {
             return;
         }
@@ -196,9 +223,17 @@ impl Primitive for AdvectWhitewater {
         let [nodes_x, nodes_y, nodes_z] = grid.nodes.map(|n| n as f32);
         let [face_cells_x, face_cells_y, face_cells_z] = face_cells.map(|n| n as f32);
         let [gravity_x, gravity_y, gravity_z] = gravity;
-        let field = match ForceLatticeBinding::read(ctx, ctx.inputs.array("forces"), ctx.inputs.array("impulses"), "Advect Whitewater") {
+        let field = match ForceLatticeBinding::read(
+            ctx,
+            ctx.inputs.array("forces"),
+            ctx.inputs.array("impulses"),
+            "Advect Whitewater",
+        ) {
             Ok(field) => field,
-            Err(error) => { ctx.error(error); return; }
+            Err(error) => {
+                ctx.error(error);
+                return;
+            }
         };
         let uniforms = AdvectUniforms {
             center_x,
@@ -236,31 +271,97 @@ impl Primitive for AdvectWhitewater {
         };
         let steps = uniforms.substep_count as u64;
         if steps > 0 {
-            for (name, bytes) in [("substep_schedule", steps * 16), ("substep_u", steps * face_len(face_cells,0)*4),
-                ("substep_v", steps * face_len(face_cells,1)*4), ("substep_w", steps * face_len(face_cells,2)*4)] {
+            for (name, bytes) in [
+                ("substep_schedule", steps * 16),
+                ("substep_u", steps * face_len(face_cells, 0) * 4),
+                ("substep_v", steps * face_len(face_cells, 1) * 4),
+                ("substep_w", steps * face_len(face_cells, 2) * 4),
+            ] {
                 if ctx.inputs.array(name).is_none_or(|b| b.size < bytes) {
-                    ctx.error(format!("Advect Whitewater: {name} does not cover {steps} accepted substep slots")); return;
+                    ctx.error(format!(
+                        "Advect Whitewater: {name} does not cover {steps} accepted substep slots"
+                    ));
+                    return;
                 }
             }
         }
-        let extra = ["substep_schedule", "substep_u", "substep_v", "substep_w", "forces", "impulses"].map(|name| ctx.inputs.array(name).unwrap_or(solid));
+        let extra = [
+            "substep_schedule",
+            "substep_u",
+            "substep_v",
+            "substep_w",
+            "forces",
+            "impulses",
+        ]
+        .map(|name| ctx.inputs.array(name).unwrap_or(solid));
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: pool, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: u, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: v, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: w, offset: 0 },
-                GpuBinding::Buffer { binding: 5, buffer: solid, offset: 0 },
-                GpuBinding::Buffer { binding: 6, buffer: extra[0], offset: 0 },
-                GpuBinding::Buffer { binding: 7, buffer: extra[1], offset: 0 },
-                GpuBinding::Buffer { binding: 8, buffer: extra[2], offset: 0 },
-                GpuBinding::Buffer { binding: 9, buffer: extra[3], offset: 0 },
-                GpuBinding::Buffer { binding: 10, buffer: extra[4], offset: 0 },
-                GpuBinding::Buffer { binding: 11, buffer: extra[5], offset: 0 },
-                GpuBinding::Buffer { binding: 12, buffer: out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: pool,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: u,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: v,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: w,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: solid,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 6,
+                    buffer: extra[0],
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 7,
+                    buffer: extra[1],
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 8,
+                    buffer: extra[2],
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 9,
+                    buffer: extra[3],
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 10,
+                    buffer: extra[4],
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 11,
+                    buffer: extra[5],
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 12,
+                    buffer: out,
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256), 1, 1],
             "node.advect_whitewater",

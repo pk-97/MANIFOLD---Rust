@@ -41,10 +41,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::content_revision::ContentVersion;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::freeze::classify::FusedOutputCapacity;
+use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
@@ -224,9 +224,13 @@ impl Primitive for ReflectArray {
             rebuild_epoch: ctx.rebuild_epoch,
         };
         let wired_unknown = ctx.inputs.slot("in").is_some() && stasis.in_content.is_none();
-        let content_unchanged = !wired_unknown && self.stasis_key.is_some_and(|previous| {
-            ReflectStasisKey { out_identity: stasis.out_identity, ..previous } == stasis
-        });
+        let content_unchanged = !wired_unknown
+            && self.stasis_key.is_some_and(|previous| {
+                ReflectStasisKey {
+                    out_identity: stasis.out_identity,
+                    ..previous
+                } == stasis
+            });
         if content_unchanged && self.stasis_key == Some(stasis) && ctx.outputs_retained() {
             ctx.mark_outputs_unchanged();
             return;
@@ -237,12 +241,14 @@ impl Primitive for ReflectArray {
             // Single-source: kernel generated from the wgsl_body (buffer
             // standalone codegen). Bindings match: uniform(0), buf_in(1),
             // buf_out(2).
-            self.pipeline = Some(gpu.device.create_compute_pipeline(
-                &manifold_node_engine::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.reflect_array standalone codegen"),
-                manifold_node_engine::freeze::codegen::ENTRY,
-                "node.reflect_array",
-            ));
+            self.pipeline = Some(
+                gpu.device.create_compute_pipeline(
+                    &manifold_node_engine::freeze::codegen::standalone_for_spec::<Self>()
+                        .expect("node.reflect_array standalone codegen"),
+                    manifold_node_engine::freeze::codegen::ENTRY,
+                    "node.reflect_array",
+                ),
+            );
         }
 
         // `in` is optional: unwired means one identity instance at the
@@ -255,9 +261,8 @@ impl Primitive for ReflectArray {
                 pos_scale: [0.0, 0.0, 0.0, 1.0],
                 rot_pad: [0.0; 4],
             };
-            let ptr = buf
-                .mapped_ptr()
-                .expect("shared identity fallback buffer") as *mut InstanceTransform;
+            let ptr = buf.mapped_ptr().expect("shared identity fallback buffer")
+                as *mut InstanceTransform;
             unsafe { ptr.write(ident) };
             self.identity_fallback = Some(buf);
         }
@@ -303,7 +308,9 @@ impl Primitive for ReflectArray {
             "node.reflect_array",
         );
         self.stasis_key = Some(stasis);
-        if content_unchanged { ctx.mark_output_content_unchanged(); }
+        if content_unchanged {
+            ctx.mark_output_content_unchanged();
+        }
     }
 }
 
@@ -374,7 +381,6 @@ fn conjugate_euler(angles: [f32; 3], axis: u32) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn euler_conjugation_matches_mrm_for_all_six_axes() {
@@ -449,11 +455,7 @@ mod tests {
             let mut a = [0.0f32; 3];
             a[c] = s * d; // plane point d a
             let true_mirror = {
-                let rel = [
-                    world[0] - a[0],
-                    world[1] - a[1],
-                    world[2] - a[2],
-                ];
+                let rel = [world[0] - a[0], world[1] - a[1], world[2] - a[2]];
                 let refl = mat_vec(&m, rel);
                 [refl[0] + a[0], refl[1] + a[1], refl[2] + a[2]]
             };
@@ -508,10 +510,10 @@ mod tests {
     /// gpu_tests module's `fused_region_matches_unfused_chain`.
     #[test]
     fn reflect_array_enters_a_fused_region_with_widened_count() {
+        use manifold_core::effect_graph_def::EffectGraphDef;
         use manifold_node_engine::freeze::classify::CapacityExpr;
         use manifold_node_engine::freeze::region::partition_regions;
         use manifold_node_engine::persistence::PrimitiveRegistry;
-        use manifold_core::effect_graph_def::EffectGraphDef;
 
         let json = r#"{
             "version": 1, "name": "mirror", "nodes": [
@@ -637,9 +639,20 @@ mod gpu_tests {
         enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: in_buf, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: out_buf, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: in_buf,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: out_buf,
+                    offset: 0,
+                },
             ],
             [out_cap.div_ceil(256), 1, 1],
             "reflect_array_test",
@@ -703,7 +716,9 @@ mod gpu_tests {
         let out_buf = device.create_buffer_shared(out_cap as u64 * 32);
 
         for axis in 0u32..6u32 {
-            dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, axis, 2.25, 1.0, ALL);
+            dispatch(
+                &device, &pipeline, &in_buf, &out_buf, out_cap, axis, 2.25, 1.0, ALL,
+            );
             let gpu_data = read_back(&out_buf, out_cap);
             let expected = cpu_reflect(&input, axis, 2.25, 1.0, ALL);
             assert_matches_cpu(&gpu_data, &expected, "axis {axis}");
@@ -732,7 +747,9 @@ mod gpu_tests {
         let out_cap = (input.len() * 2) as u32;
         let out_buf = device.create_buffer_shared(out_cap as u64 * 32);
 
-        dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, 2, 1.5, 0.0, ALL);
+        dispatch(
+            &device, &pipeline, &in_buf, &out_buf, out_cap, 2, 1.5, 0.0, ALL,
+        );
         let gpu_data = read_back(&out_buf, out_cap);
 
         let expected = cpu_reflect(&input, 2, 1.5, 0.0, ALL);
@@ -746,12 +763,20 @@ mod gpu_tests {
             );
             assert_eq!(
                 t.rot_pad,
-                [input[i].rot_pad[0], input[i].rot_pad[1], input[i].rot_pad[2], 0.0],
+                [
+                    input[i].rot_pad[0],
+                    input[i].rot_pad[1],
+                    input[i].rot_pad[2],
+                    0.0
+                ],
                 "original slot {i} rotation must pass through, marker 0"
             );
         }
         for (i, t) in gpu_data[input.len()..].iter().enumerate() {
-            assert_eq!(t.pos_scale, [0.0; 4], "mirrored slot {i} must be zero at off");
+            assert_eq!(
+                t.pos_scale, [0.0; 4],
+                "mirrored slot {i} must be zero at off"
+            );
             assert_eq!(t.rot_pad, [0.0; 4], "mirrored slot {i} must be zero at off");
         }
     }
@@ -779,7 +804,9 @@ mod gpu_tests {
         let out_buf = device.create_buffer_shared(out_cap as u64 * 32);
 
         for axis in 0u32..6u32 {
-            dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, axis, 0.75, 1.0, ALL);
+            dispatch(
+                &device, &pipeline, &in_buf, &out_buf, out_cap, axis, 0.75, 1.0, ALL,
+            );
             let gpu_data = read_back(&out_buf, out_cap);
             let want = (axis / 2) as f32 + 1.0;
             for (i, t) in gpu_data[..input.len()].iter().enumerate() {
@@ -816,23 +843,47 @@ mod gpu_tests {
         let out_buf = device.create_buffer_shared(out_cap as u64 * 32);
 
         // Gate on, offset 1.0.
-        dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, 2, 1.0, 1.0, ALL);
+        dispatch(
+            &device, &pipeline, &in_buf, &out_buf, out_cap, 2, 1.0, 1.0, ALL,
+        );
         let gpu_data = read_back(&out_buf, out_cap);
-        assert_matches_cpu(&gpu_data, &cpu_reflect(&input, 2, 1.0, 1.0, ALL), "offset 1 on");
+        assert_matches_cpu(
+            &gpu_data,
+            &cpu_reflect(&input, 2, 1.0, 1.0, ALL),
+            "offset 1 on",
+        );
 
         // Live writes, same buffers: offset moves, gate flips off, back on
         // at a new offset. Nothing is reallocated between dispatches.
-        dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, 2, 4.0, 1.0, ALL);
+        dispatch(
+            &device, &pipeline, &in_buf, &out_buf, out_cap, 2, 4.0, 1.0, ALL,
+        );
         let gpu_data = read_back(&out_buf, out_cap);
-        assert_matches_cpu(&gpu_data, &cpu_reflect(&input, 2, 4.0, 1.0, ALL), "offset 4 on");
+        assert_matches_cpu(
+            &gpu_data,
+            &cpu_reflect(&input, 2, 4.0, 1.0, ALL),
+            "offset 4 on",
+        );
 
-        dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, 2, 4.0, 0.0, ALL);
+        dispatch(
+            &device, &pipeline, &in_buf, &out_buf, out_cap, 2, 4.0, 0.0, ALL,
+        );
         let gpu_data = read_back(&out_buf, out_cap);
-        assert_matches_cpu(&gpu_data, &cpu_reflect(&input, 2, 4.0, 0.0, ALL), "offset 4 off");
+        assert_matches_cpu(
+            &gpu_data,
+            &cpu_reflect(&input, 2, 4.0, 0.0, ALL),
+            "offset 4 off",
+        );
 
-        dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, 4, -2.0, 1.0, ALL);
+        dispatch(
+            &device, &pipeline, &in_buf, &out_buf, out_cap, 4, -2.0, 1.0, ALL,
+        );
         let gpu_data = read_back(&out_buf, out_cap);
-        assert_matches_cpu(&gpu_data, &cpu_reflect(&input, 4, -2.0, 1.0, ALL), "axis +Z off -2");
+        assert_matches_cpu(
+            &gpu_data,
+            &cpu_reflect(&input, 4, -2.0, 1.0, ALL),
+            "axis +Z off -2",
+        );
     }
 
     /// INV-MR5: a mirrored copy exists iff its source slot has nonzero
@@ -865,7 +916,9 @@ mod gpu_tests {
         let out_cap = (input.len() * 2) as u32;
         let out_buf = device.create_buffer_shared(out_cap as u64 * 32);
 
-        dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, 3, 1.25, 1.0, ALL);
+        dispatch(
+            &device, &pipeline, &in_buf, &out_buf, out_cap, 3, 1.25, 1.0, ALL,
+        );
         let gpu_data = read_back(&out_buf, out_cap);
         assert_matches_cpu(&gpu_data, &cpu_reflect(&input, 3, 1.25, 1.0, ALL), "masked");
 
@@ -925,7 +978,11 @@ mod gpu_tests {
             [src.rot_pad[0], src.rot_pad[1], src.rot_pad[2]],
             2,
         ));
-        let t_prime = [src.pos_scale[0], 2.0 * d - src.pos_scale[1], src.pos_scale[2]];
+        let t_prime = [
+            src.pos_scale[0],
+            2.0 * d - src.pos_scale[1],
+            src.pos_scale[2],
+        ];
         for &(vx, vy, vz) in &[
             (0.4f32, -0.9, 1.2),
             (-1.1, 0.3, 0.7),
@@ -934,14 +991,29 @@ mod gpu_tests {
         ] {
             // Stored path: flip the y component, scale, rotate, translate.
             let stored = {
-                let sv = [vx * src.pos_scale[3], -vy * src.pos_scale[3], vz * src.pos_scale[3]];
+                let sv = [
+                    vx * src.pos_scale[3],
+                    -vy * src.pos_scale[3],
+                    vz * src.pos_scale[3],
+                ];
                 let rv = mat_vec(&r_prime, sv);
                 [rv[0] + t_prime[0], rv[1] + t_prime[1], rv[2] + t_prime[2]]
             };
             // True path: rotate, scale, translate, reflect about y = d.
             let truth = {
-                let rv = mat_vec(&r, [vx * src.pos_scale[3], vy * src.pos_scale[3], vz * src.pos_scale[3]]);
-                let world = [rv[0] + src.pos_scale[0], rv[1] + src.pos_scale[1], rv[2] + src.pos_scale[2]];
+                let rv = mat_vec(
+                    &r,
+                    [
+                        vx * src.pos_scale[3],
+                        vy * src.pos_scale[3],
+                        vz * src.pos_scale[3],
+                    ],
+                );
+                let world = [
+                    rv[0] + src.pos_scale[0],
+                    rv[1] + src.pos_scale[1],
+                    rv[2] + src.pos_scale[2],
+                ];
                 let refl = mat_vec(&m, [world[0], world[1] - d, world[2]]);
                 [refl[0], refl[1] + d, refl[2]]
             };
@@ -956,7 +1028,10 @@ mod gpu_tests {
         // And the buffer itself carries the stored transform verbatim.
         let expected = cpu_reflect(&[src], 2, d, 1.0, ALL);
         assert_matches_cpu(&gpu_data, &expected, "floor mirror");
-        assert_eq!(gpu_data[1].pos_scale[3], src.pos_scale[3], "scale stays positive");
+        assert_eq!(
+            gpu_data[1].pos_scale[3], src.pos_scale[3],
+            "scale stays positive"
+        );
         assert_eq!(gpu_data[1].rot_pad[3], 2.0, "marker = plane component + 1");
     }
 
@@ -985,11 +1060,27 @@ mod gpu_tests {
         // -Y floor at d = 3: mirrored identity sits at y = -2 d = -6.
         dispatch(&device, &pipeline, &in_buf, &out_buf, 2, 3, 3.0, 1.0, ALL);
         let gpu_data = read_back(&out_buf, 2);
-        assert_matches_cpu(&gpu_data, &cpu_reflect(&identity, 3, 3.0, 1.0, ALL), "unwired");
-        assert_eq!(gpu_data[0].pos_scale, [0.0, 0.0, 0.0, 1.0], "original identity");
+        assert_matches_cpu(
+            &gpu_data,
+            &cpu_reflect(&identity, 3, 3.0, 1.0, ALL),
+            "unwired",
+        );
+        assert_eq!(
+            gpu_data[0].pos_scale,
+            [0.0, 0.0, 0.0, 1.0],
+            "original identity"
+        );
         assert_eq!(gpu_data[0].rot_pad, [0.0; 4], "original identity, marker 0");
-        assert_eq!(gpu_data[1].pos_scale, [0.0, -6.0, 0.0, 1.0], "mirrored identity");
-        assert_eq!(gpu_data[1].rot_pad, [0.0, 0.0, 0.0, 2.0], "plane comp + 1 marker");
+        assert_eq!(
+            gpu_data[1].pos_scale,
+            [0.0, -6.0, 0.0, 1.0],
+            "mirrored identity"
+        );
+        assert_eq!(
+            gpu_data[1].rot_pad,
+            [0.0, 0.0, 0.0, 2.0],
+            "plane comp + 1 marker"
+        );
     }
 
     /// BUG-orm4 mandatory fused-vs-unfused numerical proof: a fused region
@@ -1003,7 +1094,9 @@ mod gpu_tests {
     fn fused_region_matches_unfused_chain() {
         use manifold_node_engine::exec::effect_node::NodeInstanceId;
         use manifold_node_engine::freeze::classify::CapacityExpr;
-        use manifold_node_engine::freeze::codegen::{FusionRegion, InputSource, RegionNode, generate_fused};
+        use manifold_node_engine::freeze::codegen::{
+            FusionRegion, InputSource, RegionNode, generate_fused,
+        };
         use manifold_node_engine::primitive::PrimitiveSpec;
 
         let id = NodeInstanceId;
@@ -1069,7 +1162,10 @@ mod gpu_tests {
             live_instance([-4.0, 0.5, 2.5], 0.7, [-1.9, 0.3, 0.6]),
             // A dead slot (scene_array surplus mask): no mirrored copy, and
             // its original is zeroed (INV-MR5) — the fused path must keep it.
-            InstanceTransform { pos_scale: [9.0, 9.0, 9.0, 0.0], rot_pad: [7.0; 4] },
+            InstanceTransform {
+                pos_scale: [9.0, 9.0, 9.0, 0.0],
+                rot_pad: [7.0; 4],
+            },
             live_instance([0.0, -3.0, 1.0], 2.0, [2.4, 1.1, -0.5]),
         ];
         let in_buf = upload(&device, &input);
@@ -1079,14 +1175,30 @@ mod gpu_tests {
         // Fused Params layout: n0_axis: u32, n0_plane_offset: f32,
         // n0_enabled: f32, n0_live_count: f32 (16 bytes, no pad).
         let (axis, plane_offset, enabled) = (3u32, 3.0f32, 1.0f32);
-        let uniforms: [u32; 4] = [axis, plane_offset.to_bits(), enabled.to_bits(), ALL.to_bits()];
+        let uniforms: [u32; 4] = [
+            axis,
+            plane_offset.to_bits(),
+            enabled.to_bits(),
+            ALL.to_bits(),
+        ];
         let mut enc = device.create_encoder("reflect_fused_test");
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: &in_buf, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: &out_buf, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &in_buf,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: &out_buf,
+                    offset: 0,
+                },
             ],
             [out_cap.div_ceil(256), 1, 1],
             "reflect_fused_test",
@@ -1102,10 +1214,19 @@ mod gpu_tests {
         // The proof's teeth, spelled out: every mirrored slot past the input
         // length was written by THIS dispatch (the dead slot's mirror stays
         // zero by INV-MR5, the live ones carry the plane marker).
-        assert_eq!(gpu_data[4].rot_pad[3], 2.0, "mirrored slot 0 written, marker");
-        assert_eq!(gpu_data[5].rot_pad[3], 2.0, "mirrored slot 1 written, marker");
+        assert_eq!(
+            gpu_data[4].rot_pad[3], 2.0,
+            "mirrored slot 0 written, marker"
+        );
+        assert_eq!(
+            gpu_data[5].rot_pad[3], 2.0,
+            "mirrored slot 1 written, marker"
+        );
         assert_eq!(gpu_data[6].pos_scale, [0.0; 4], "dead slot gets no mirror");
-        assert_eq!(gpu_data[7].rot_pad[3], 2.0, "mirrored slot 3 written, marker");
+        assert_eq!(
+            gpu_data[7].rot_pad[3], 2.0,
+            "mirrored slot 3 written, marker"
+        );
     }
 
     /// BUG-lkb56: a Copies count of n draws n instances of a buffer sized for
@@ -1122,21 +1243,36 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "reflect_array_test",
         );
-        let input: Vec<InstanceTransform> =
-            (0..6).map(|i| live_instance([i as f32, 1.0 + i as f32, 0.5], 1.0, [0.1, 0.2, 0.3])).collect();
+        let input: Vec<InstanceTransform> = (0..6)
+            .map(|i| live_instance([i as f32, 1.0 + i as f32, 0.5], 1.0, [0.1, 0.2, 0.3]))
+            .collect();
         let in_buf = upload(&device, &input);
         let out_cap = (input.len() * 2) as u32;
         let out_buf = device.create_buffer_shared(out_cap as u64 * 32);
         for live in [0.0f32, 2.0, 3.6, 6.0] {
-            dispatch(&device, &pipeline, &in_buf, &out_buf, out_cap, 2, 0.0, 1.0, live);
+            dispatch(
+                &device, &pipeline, &in_buf, &out_buf, out_cap, 2, 0.0, 1.0, live,
+            );
             let gpu_data = read_back(&out_buf, out_cap);
-            assert_matches_cpu(&gpu_data, &cpu_reflect(&input, 2, 0.0, 1.0, live), "live count");
+            assert_matches_cpu(
+                &gpu_data,
+                &cpu_reflect(&input, 2, 0.0, 1.0, live),
+                "live count",
+            );
             let n = live as usize;
             for (k, slot) in gpu_data.iter().enumerate() {
                 let drawn = k < 2 * n;
-                assert_eq!(slot.pos_scale[3] != 0.0, drawn, "live {live}: slot {k} drawn iff below 2n");
+                assert_eq!(
+                    slot.pos_scale[3] != 0.0,
+                    drawn,
+                    "live {live}: slot {k} drawn iff below 2n"
+                );
                 if drawn {
-                    assert_eq!(slot.rot_pad[3], if k < n { 0.0 } else { 2.0 }, "live {live}: slot {k} marker");
+                    assert_eq!(
+                        slot.rot_pad[3],
+                        if k < n { 0.0 } else { 2.0 },
+                        "live {live}: slot {k} marker"
+                    );
                 }
             }
         }

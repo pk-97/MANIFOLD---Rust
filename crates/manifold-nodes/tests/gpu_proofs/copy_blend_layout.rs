@@ -6,7 +6,9 @@
 
 use manifold_core::copy_layout::{Arrangement, CopyLayout};
 use manifold_core::layer::Layer;
-use manifold_core::scene_doc::{Item, ItemFields, ItemId, ItemKind, ModifierFields, ModifierTargets, ModifierType, SceneDoc};
+use manifold_core::scene_doc::{
+    Item, ItemFields, ItemId, ItemKind, ModifierFields, ModifierTargets, ModifierType, SceneDoc,
+};
 use manifold_core::{PresetTypeId, Seconds};
 use manifold_gpu::{GpuBuffer, GpuTextureFormat};
 use manifold_node_engine::exec::effect_node::{NodeInstanceId, SimStep};
@@ -26,7 +28,11 @@ const COLUMNS: usize = 3;
 
 fn scene() -> SceneDoc {
     let mut doc = SceneDoc::base();
-    if let Some(Item { fields: ItemFields::Object(cube), .. }) = doc.find_mut(&ItemId::new("cube")) {
+    if let Some(Item {
+        fields: ItemFields::Object(cube),
+        ..
+    }) = doc.find_mut(&ItemId::new("cube"))
+    {
         cube.copies = true;
     }
     let mut card = ItemFields::default_for(ItemKind::Modifier);
@@ -39,7 +45,8 @@ fn scene() -> SceneDoc {
         };
     }
     let end = doc.items.len();
-    doc.insert(None, end, Item::new(ItemId::new("blend"), "blend", card)).unwrap();
+    doc.insert(None, end, Item::new(ItemId::new("blend"), "blend", card))
+        .unwrap();
     doc
 }
 
@@ -52,8 +59,13 @@ struct Run {
 impl Run {
     /// The copies on a Line, blended `mix` of the way to a Grid.
     fn new(mix: f32) -> Self {
-        let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::from_string("Scene".into()), 0);
-        layer.gen_params_mut().unwrap().install_scene_document(scene()).unwrap();
+        let mut layer =
+            Layer::new_generator("Scene".into(), PresetTypeId::from_string("Scene".into()), 0);
+        layer
+            .gen_params_mut()
+            .unwrap()
+            .install_scene_document(scene())
+            .unwrap();
         let mut fx = layer.gen_params().unwrap().clone();
         for (id, value) in [
             ("cube.count", COUNT as f32),
@@ -65,16 +77,37 @@ impl Run {
         ] {
             assert!(fx.set_base_param(id, value), "the scene has a {id} row");
         }
-        let device = std::sync::Arc::clone(&manifold_node_engine::testkit::gpu_harness::shared().device);
+        let device =
+            std::sync::Arc::clone(&manifold_node_engine::testkit::gpu_harness::shared().device);
         let registry = PrimitiveRegistry::with_builtin();
-        let mut runtime = PresetRuntime::from_def_for_render(fx.graph.clone().unwrap(), &registry, Some(&fx.params), false)
-            .expect("the scene builds")
-            .with_generator_device(std::sync::Arc::clone(&device), WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float)
-            .expect("the scene installs on the device");
+        let mut runtime = PresetRuntime::from_def_for_render(
+            fx.graph.clone().unwrap(),
+            &registry,
+            Some(&fx.params),
+            false,
+        )
+        .expect("the scene builds")
+        .with_generator_device(
+            std::sync::Arc::clone(&device),
+            WIDTH,
+            HEIGHT,
+            GpuTextureFormat::Rgba16Float,
+        )
+        .expect("the scene installs on the device");
         runtime.apply_param_values(&fx.params);
         runtime.set_dump_all(true);
-        let target = RenderTarget::new(&device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "copy-blend-layout");
-        let mut run = Self { device, runtime, target };
+        let target = RenderTarget::new(
+            &device,
+            WIDTH,
+            HEIGHT,
+            GpuTextureFormat::Rgba16Float,
+            "copy-blend-layout",
+        );
+        let mut run = Self {
+            device,
+            runtime,
+            target,
+        };
         for frame in 0..4 {
             run.frame(frame, &fx.params);
         }
@@ -98,26 +131,49 @@ impl Run {
             trigger_count: 0,
         };
         self.runtime.set_dump_all(true);
-        self.runtime.set_sim_step(SimStep::live(Seconds(1.0 / 60.0)));
+        self.runtime
+            .set_sim_step(SimStep::live(Seconds(1.0 / 60.0)));
         let mut encoder = self.device.create_encoder("copy-blend-layout");
-        self.runtime.render(&mut GpuEncoder::new(&mut encoder, &self.device), &self.target.texture, &context, params);
+        self.runtime.render(
+            &mut GpuEncoder::new(&mut encoder, &self.device),
+            &self.target.texture,
+            &context,
+            params,
+        );
         encoder.commit_and_wait_completed();
     }
 
     fn type_of(&self, node: NodeInstanceId) -> String {
-        self.runtime.graph.get_node(node).map(|n| n.node.type_id().as_str().to_string()).unwrap_or_default()
+        self.runtime
+            .graph
+            .get_node(node)
+            .map(|n| n.node.type_id().as_str().to_string())
+            .unwrap_or_default()
     }
 
     /// The resource on the blend's `port`: `a` the copies, `b` the target,
     /// `out` the blend.
     fn blend(&self, port: &str) -> ResourceId {
-        let step = self.runtime.plan.steps().iter().find(|s| self.type_of(s.node) == "node.blend_copies").expect("a Copy Blend step");
-        step.inputs.iter().chain(&step.outputs).find(|(p, _)| *p == port).map(|&(_, r)| r).expect("blend port")
+        let step = self
+            .runtime
+            .plan
+            .steps()
+            .iter()
+            .find(|s| self.type_of(s.node) == "node.blend_copies")
+            .expect("a Copy Blend step");
+        step.inputs
+            .iter()
+            .chain(&step.outputs)
+            .find(|(p, _)| *p == port)
+            .map(|&(_, r)| r)
+            .expect("blend port")
     }
 
     fn read(&self, res: ResourceId) -> Vec<InstanceTransform> {
         let backend = self.runtime.backend_for_test();
-        let buffer: &GpuBuffer = backend.array_buffer(backend.slot_for(res).expect("resource bound")).expect("array resource");
+        let buffer: &GpuBuffer = backend
+            .array_buffer(backend.slot_for(res).expect("resource bound"))
+            .expect("array resource");
         let bytes = (COUNT * std::mem::size_of::<InstanceTransform>()) as u64;
         let shared = self.device.create_buffer_shared(bytes);
         let mut encoder = self.device.create_encoder("copy-blend-readback");
@@ -140,7 +196,11 @@ fn copy_blend_sends_copy_i_to_slot_i_of_the_copies_own_layout() {
     let blended = run.read(run.blend("out"));
 
     // The copies' own Line: copy i is i steps along X from the first.
-    let origin = [copies[0].pos_scale[0], copies[0].pos_scale[1], copies[0].pos_scale[2]];
+    let origin = [
+        copies[0].pos_scale[0],
+        copies[0].pos_scale[1],
+        copies[0].pos_scale[2],
+    ];
     let step = copies[1].pos_scale[0] - copies[0].pos_scale[0];
     assert!(step > 0.0, "the copies lie on a Line, step {step}");
     let spacing = manifold_core::copies_body::SIZE_SPACING_DEFAULT;
@@ -157,9 +217,18 @@ fn copy_blend_sends_copy_i_to_slot_i_of_the_copies_own_layout() {
     for i in 0..COUNT {
         let slot = grid.rest([width; 3], i).position;
         let expected = [slot[0], slot[1], slot[2], copies[i].pos_scale[3]];
-        assert!(close(target[i].pos_scale, expected), "copy {i} aims at Grid slot {i} {expected:?}, got {:?}", target[i].pos_scale);
-        let midway: [f32; 4] = std::array::from_fn(|k| 0.5 * (copies[i].pos_scale[k] + target[i].pos_scale[k]));
-        assert!(close(blended[i].pos_scale, midway), "copy {i} sits halfway at Mix 0.5: {midway:?}, got {:?}", blended[i].pos_scale);
+        assert!(
+            close(target[i].pos_scale, expected),
+            "copy {i} aims at Grid slot {i} {expected:?}, got {:?}",
+            target[i].pos_scale
+        );
+        let midway: [f32; 4] =
+            std::array::from_fn(|k| 0.5 * (copies[i].pos_scale[k] + target[i].pos_scale[k]));
+        assert!(
+            close(blended[i].pos_scale, midway),
+            "copy {i} sits halfway at Mix 0.5: {midway:?}, got {:?}",
+            blended[i].pos_scale
+        );
     }
 
     let png = readback_to_srgb_png(&run.device, &run.target.texture, WIDTH, HEIGHT);

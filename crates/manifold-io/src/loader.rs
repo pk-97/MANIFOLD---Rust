@@ -110,8 +110,7 @@ pub fn load_project_snapshot_with(
     register_embedded_presets: impl FnOnce(&[EmbeddedPreset]),
 ) -> Result<Project, LoadError> {
     let path_str = archive_path.to_string_lossy().to_string();
-    let json =
-        crate::archive::read_history_snapshot(&path_str, hash).map_err(LoadError::Io)?;
+    let json = crate::archive::read_history_snapshot(&path_str, hash).map_err(LoadError::Io)?;
 
     let mut project = load_project_from_json_with(&json, register_embedded_presets)?;
     log::info!(
@@ -283,15 +282,17 @@ pub fn load_project_from_json_with(
 }
 
 fn project_contains_retired_cpu_flip_content(project: &Project) -> bool {
-    let graph_is_retired = |generator_type: &manifold_core::PresetTypeId,
-                            graph: &manifold_core::effect_graph_def::EffectGraphDef| {
-        manifold_core::retired_cpu_flip::preserve_authored_cpu_flip_graph(generator_type, graph)
-    };
+    let graph_is_retired =
+        |generator_type: &manifold_core::PresetTypeId,
+         graph: &manifold_core::effect_graph_def::EffectGraphDef| {
+            manifold_core::retired_cpu_flip::preserve_authored_cpu_flip_graph(generator_type, graph)
+        };
 
     if project.embedded_presets.iter().any(|preset| {
-        preset.id().is_some_and(|id| {
-            manifold_core::retired_cpu_flip::is_retired_cpu_flip_preset(id)
-        }) || manifold_core::retired_cpu_flip::graph_contains_retired_cpu_flip_node(&preset.def)
+        preset
+            .id()
+            .is_some_and(|id| manifold_core::retired_cpu_flip::is_retired_cpu_flip_preset(id))
+            || manifold_core::retired_cpu_flip::graph_contains_retired_cpu_flip_node(&preset.def)
     }) {
         return true;
     }
@@ -353,7 +354,10 @@ fn project_retired_cpu_flip_node_identities(project: &Project) -> Vec<String> {
         if let Some(effects) = layer.effects.as_ref() {
             for (effect_index, effect) in effects.iter().enumerate() {
                 if let Some(graph) = effect.graph.as_ref() {
-                    collect(format!("layer[{layer_index}]/effect[{effect_index}]"), graph);
+                    collect(
+                        format!("layer[{layer_index}]/effect[{effect_index}]"),
+                        graph,
+                    );
                 }
             }
         }
@@ -374,9 +378,9 @@ fn project_retired_cpu_flip_node_identities(project: &Project) -> Vec<String> {
 fn migrate_phong_graphs(project: &mut Project) {
     let migrate = |graph: &mut manifold_core::effect_graph_def::EffectGraphDef,
                    generator_type: Option<&manifold_core::PresetTypeId>| {
-        let is_retired = generator_type.is_some_and(|id| {
-            manifold_core::retired_cpu_flip::is_retired_cpu_flip_preset(id)
-        }) || manifold_core::retired_cpu_flip::graph_contains_retired_cpu_flip_node(graph);
+        let is_retired = generator_type
+            .is_some_and(|id| manifold_core::retired_cpu_flip::is_retired_cpu_flip_preset(id))
+            || manifold_core::retired_cpu_flip::graph_contains_retired_cpu_flip_node(graph);
         if !is_retired {
             manifold_core::phong_migration::migrate_phong_to_pbr(graph);
         }
@@ -486,9 +490,7 @@ pub fn run_post_load_validation(project: &mut Project) {
     // readable name once here so old projects still read cleanly.
     let backfilled = project.backfill_legacy_fork_display_names();
     if backfilled > 0 {
-        log::info!(
-            "[Loader] Backfilled {backfilled} legacy fork preset display name(s)"
-        );
+        log::info!("[Loader] Backfilled {backfilled} legacy fork preset display name(s)");
     }
 
     // Step 10: Repair pre-existing clip overlaps.
@@ -563,7 +565,9 @@ pub enum LoadError {
     },
     /// The file's project format is below
     /// [`manifold_core::project::OLDEST_LOADABLE_PROJECT_VERSION`].
-    TooOld { file_version: String },
+    TooOld {
+        file_version: String,
+    },
 }
 
 impl std::fmt::Display for LoadError {
@@ -594,9 +598,9 @@ impl std::error::Error for LoadError {}
 #[cfg(test)]
 mod retired_cpu_flip_compat_tests {
     use super::*;
+    use manifold_core::PresetTypeId;
     use manifold_core::effect_graph_def::EffectGraphDef;
     use manifold_core::layer::Layer;
-    use manifold_core::PresetTypeId;
 
     fn retired_graph() -> EffectGraphDef {
         serde_json::from_value(serde_json::json!({
@@ -639,10 +643,8 @@ mod retired_cpu_flip_compat_tests {
         layer.gen_params_mut().unwrap().graph = Some(graph);
         project.timeline.layers.push(layer);
 
-        let root = std::env::temp_dir().join(format!(
-            "manifold-retired-cpu-flip-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("manifold-retired-cpu-flip-{}", std::process::id()));
         let path = root.join("retired.manifold");
         crate::saver::save_project(&mut project, &path, None, false)
             .expect("retired project saves");
@@ -652,9 +654,7 @@ mod retired_cpu_flip_compat_tests {
             assert!(notice.contains(retired_id), "notice omitted {retired_id}");
         }
         assert!(notice.contains("layer[0]/generator/retired-group/retired-fluid"));
-        assert!(notice.contains(
-            manifold_core::retired_cpu_flip::RETIRED_CPU_FLIP_NODE_TYPE_ID
-        ));
+        assert!(notice.contains(manifold_core::retired_cpu_flip::RETIRED_CPU_FLIP_NODE_TYPE_ID));
 
         let mut loaded = loaded;
         crate::saver::save_project(&mut loaded, &path, None, false)
@@ -681,11 +681,13 @@ mod retired_cpu_flip_compat_tests {
         ));
         let source = serde_json::to_string(&project).unwrap();
         let loaded = load_project_from_json(&source).expect("ordinary project loads");
-        assert!(loaded
-            .load_report
-            .human_lines()
-            .iter()
-            .all(|line| !line.contains("CPU FLIP retirement")));
+        assert!(
+            loaded
+                .load_report
+                .human_lines()
+                .iter()
+                .all(|line| !line.contains("CPU FLIP retirement"))
+        );
     }
 }
 
@@ -762,7 +764,11 @@ mod legacy_clip_trigger_migration_tests {
             "legacy storage drained on load"
         );
         let (_, layer) = loaded.timeline.find_layer_by_id(&layer_id).unwrap();
-        assert_eq!(layer.clip_triggers.len(), 1, "migration produced exactly one config");
+        assert_eq!(
+            layer.clip_triggers.len(),
+            1,
+            "migration produced exactly one config"
+        );
         let cfg = layer.clip_triggers[0].clone();
         assert!(cfg.enabled);
         assert_eq!(cfg.source.send_id, loaded.audio_setup.sends[0].id);
@@ -773,7 +779,10 @@ mod legacy_clip_trigger_migration_tests {
                 AudioBand::Low
             )
         );
-        assert_eq!(cfg.shape.sensitivity, 0.8, "U5-verbatim sensitivity-to-Amount mapping");
+        assert_eq!(
+            cfg.shape.sensitivity, 0.8,
+            "U5-verbatim sensitivity-to-Amount mapping"
+        );
         assert_eq!(cfg.one_shot_beats, Beats(2.0));
 
         // ── Save: `skip_serializing` proof — the legacy field never comes
@@ -781,14 +790,20 @@ mod legacy_clip_trigger_migration_tests {
         let resaved = serde_json::to_string(&loaded).unwrap();
         let resaved_value: serde_json::Value = serde_json::from_str(&resaved).unwrap();
         assert!(
-            resaved_value["audioSetup"]["sends"][0].get("triggers").is_none(),
+            resaved_value["audioSetup"]["sends"][0]
+                .get("triggers")
+                .is_none(),
             "triggers key must be entirely ABSENT from the saved JSON, not merely an empty array"
         );
 
         // ── Reload: the round trip. Create-path green is half a gate. ──
         let reloaded = load_project_from_json(&resaved).expect("re-saved project reloads");
         let (_, layer2) = reloaded.timeline.find_layer_by_id(&layer_id).unwrap();
-        assert_eq!(layer2.clip_triggers.len(), 1, "clip trigger survives save -> reload");
+        assert_eq!(
+            layer2.clip_triggers.len(),
+            1,
+            "clip trigger survives save -> reload"
+        );
         assert_eq!(
             layer2.clip_triggers[0], cfg,
             "the config is byte-identical after a full save/reload cycle — nothing about \
@@ -803,15 +818,25 @@ mod legacy_clip_trigger_migration_tests {
 
         let loaded = load_project_from_json(&legacy_json).expect("legacy project loads");
         let (_, layer) = loaded.timeline.find_layer_by_id(&layer_id).unwrap();
-        assert_eq!(layer.clip_triggers.len(), 1, "resolved by case-insensitive name match");
+        assert_eq!(
+            layer.clip_triggers.len(),
+            1,
+            "resolved by case-insensitive name match"
+        );
         assert!(loaded.audio_setup.sends[0].triggers.is_empty());
     }
 
     #[test]
     fn legacy_route_with_no_resolvable_target_is_dropped_but_still_drains() {
         // Label "Ghost" has no name-matching layer and no explicit target.
-        let (legacy_json, _unrelated_layer_id) =
-            legacy_json_with_route("Ghost", "Some Other Layer", AudioBand::Full, 0.5, 1.0, false);
+        let (legacy_json, _unrelated_layer_id) = legacy_json_with_route(
+            "Ghost",
+            "Some Other Layer",
+            AudioBand::Full,
+            0.5,
+            1.0,
+            false,
+        );
 
         let loaded = load_project_from_json(&legacy_json).expect("legacy project still loads");
         assert!(
@@ -819,7 +844,11 @@ mod legacy_clip_trigger_migration_tests {
             "drained even though the route was unresolvable — never silently kept"
         );
         assert!(
-            loaded.timeline.layers.iter().all(|l| l.clip_triggers.is_empty()),
+            loaded
+                .timeline
+                .layers
+                .iter()
+                .all(|l| l.clip_triggers.is_empty()),
             "no layer received a config it wasn't targeted for"
         );
     }
@@ -856,10 +885,7 @@ mod layer_led_flag_round_trip_tests {
 
         let reloaded = load_project_from_json(&saved).expect("re-saved project reloads");
         let (_, layer) = reloaded.timeline.find_layer_by_id(&layer_id).unwrap();
-        assert!(
-            layer.blit_to_led,
-            "blit_to_led must survive save -> reload"
-        );
+        assert!(layer.blit_to_led, "blit_to_led must survive save -> reload");
     }
 }
 
@@ -974,8 +1000,7 @@ mod phong_graph_migration_tests {
         let resaved = serde_json::to_string(&loaded).unwrap();
         let reloaded = load_project_from_json(&resaved).expect("migrated project reloads");
         assert_eq!(
-            reloaded.embedded_presets[0].def,
-            loaded.embedded_presets[0].def,
+            reloaded.embedded_presets[0].def, loaded.embedded_presets[0].def,
             "the one-shot migration must be stable across save and reload"
         );
     }
@@ -1005,16 +1030,34 @@ mod sim_rate_tests {
         for missing in ["rate", "physics", "settings"] {
             let mut json = serde_json::to_value(&project).unwrap();
             match missing {
-                "rate" => { json["settings"]["physics"].as_object_mut().unwrap().remove("simRate"); }
-                "physics" => { json["settings"].as_object_mut().unwrap().remove("physics"); }
-                _ => { json.as_object_mut().unwrap().remove("settings"); }
+                "rate" => {
+                    json["settings"]["physics"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("simRate");
+                }
+                "physics" => {
+                    json["settings"].as_object_mut().unwrap().remove("physics");
+                }
+                _ => {
+                    json.as_object_mut().unwrap().remove("settings");
+                }
             }
             let json = serde_json::to_string(&json).unwrap();
             std::fs::write(&path, &json).unwrap();
-            assert_eq!(load_project(&path).unwrap().settings.physics.sim_rate, SimRate::Hz60, "{missing}");
+            assert_eq!(
+                load_project(&path).unwrap().settings.physics.sim_rate,
+                SimRate::Hz60,
+                "{missing}"
+            );
             std::fs::remove_file(&path).unwrap();
-            crate::archive::save_v2_archive(&json, "Legacy", path.to_str().unwrap(), None, false).unwrap();
-            assert_eq!(load_project(&path).unwrap().settings.physics.sim_rate, SimRate::Hz60, "{missing}");
+            crate::archive::save_v2_archive(&json, "Legacy", path.to_str().unwrap(), None, false)
+                .unwrap();
+            assert_eq!(
+                load_project(&path).unwrap().settings.physics.sim_rate,
+                SimRate::Hz60,
+                "{missing}"
+            );
             std::fs::remove_file(&path).unwrap();
         }
         std::fs::remove_dir_all(root).unwrap();

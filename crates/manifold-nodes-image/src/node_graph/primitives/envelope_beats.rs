@@ -18,7 +18,7 @@ use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
-use manifold_node_engine::runtime::beat_envelope::{BeatEnvelopeState, BeatEnvelopeDurations};
+use manifold_node_engine::runtime::beat_envelope::{BeatEnvelopeDurations, BeatEnvelopeState};
 
 const DEFAULT_WINDOW_BEATS: f32 = 0.25;
 
@@ -134,7 +134,9 @@ mod tests {
 
     use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeType, FrameTime};
     use manifold_node_engine::exec::execution_plan::compile;
-    use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+    use manifold_node_engine::ports::{
+        NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+    };
     use manifold_node_engine::{exec::execution::Executor, graph::Graph};
 
     struct ScalarSink {
@@ -203,8 +205,9 @@ mod tests {
             initial_count: Option<f32>,
         ) -> Self {
             let mut graph = Graph::new();
-            let trigger =
-                graph.add_node(Box::new(manifold_node_engine::primitives::value::Value::new()));
+            let trigger = graph.add_node(Box::new(
+                manifold_node_engine::primitives::value::Value::new(),
+            ));
             let envelope = graph.add_node(Box::new(EnvelopeBeats::new()));
             let seen = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(f32::NAN.to_bits()));
             let elapsed_seen =
@@ -236,8 +239,9 @@ mod tests {
                 .connect((trigger, "out"), (envelope, "trigger"))
                 .unwrap();
             if let Some(value) = initial_count {
-                let source =
-                    graph.add_node(Box::new(manifold_node_engine::primitives::value::Value::new()));
+                let source = graph.add_node(Box::new(
+                    manifold_node_engine::primitives::value::Value::new(),
+                ));
                 graph
                     .set_param(source, "value", ParamValue::Float(value))
                     .unwrap();

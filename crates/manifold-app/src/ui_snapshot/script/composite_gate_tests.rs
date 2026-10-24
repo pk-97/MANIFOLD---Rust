@@ -1,7 +1,10 @@
 use super::*;
 
 fn flow(name: &str) -> Vec<AutomationAction> {
-    let path = format!("{}/../../scripts/ui-flows/{name}.json", env!("CARGO_MANIFEST_DIR"));
+    let path = format!(
+        "{}/../../scripts/ui-flows/{name}.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
     serde_json::from_str(&std::fs::read_to_string(path).expect("read flow")).expect("parse flow")
 }
 
@@ -35,7 +38,10 @@ fn step_composites_and_tiles_every_frame() {
     let actions = [AutomationAction::Dump, AutomationAction::Step { frames: 5 }];
     // Seed + the Dump frame are owed but folded into the first Step frame.
     assert_eq!(composites_for(&actions), (5, 5));
-    let actions = [AutomationAction::Step { frames: 3 }, AutomationAction::Step { frames: 2 }];
+    let actions = [
+        AutomationAction::Step { frames: 3 },
+        AutomationAction::Step { frames: 2 },
+    ];
     assert_eq!(composites_for(&actions), (5, 5));
 }
 

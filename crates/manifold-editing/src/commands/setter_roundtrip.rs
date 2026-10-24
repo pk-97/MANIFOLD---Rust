@@ -71,12 +71,21 @@ fn first_difference(a: &Value, b: &Value, path: &mut String) -> Option<String> {
 
 /// The parts a step changed outside what the command declares. Execute's set
 /// is read after execute (it may depend on what execute found); undo's before.
-pub fn undeclared(step: &str, before: &audit::Fingerprint, project: &Project, declared: ChangeSet) -> Result<(), String> {
+pub fn undeclared(
+    step: &str,
+    before: &audit::Fingerprint,
+    project: &Project,
+    declared: ChangeSet,
+) -> Result<(), String> {
     let extra = audit::changed(before, &audit::fingerprint(project)).minus(declared);
     if extra.is_empty() {
         return Ok(());
     }
-    Err(format!("{step} changed undeclared parts {:?} (declared {:?})", extra.parts().collect::<Vec<_>>(), declared.parts().collect::<Vec<_>>()))
+    Err(format!(
+        "{step} changed undeclared parts {:?} (declared {:?})",
+        extra.parts().collect::<Vec<_>>(),
+        declared.parts().collect::<Vec<_>>()
+    ))
 }
 
 fn check(case: &SetterCase, fresh: fn() -> Project) -> Result<(), String> {
@@ -118,7 +127,16 @@ fn check(case: &SetterCase, fresh: fn() -> Project) -> Result<(), String> {
 pub fn assert_setter_cases(fresh: fn() -> Project, cases: &[SetterCase]) {
     let failures: Vec<String> = cases
         .iter()
-        .filter_map(|case| check(case, fresh).err().map(|e| format!("{}: {e}", case.name)))
+        .filter_map(|case| {
+            check(case, fresh)
+                .err()
+                .map(|e| format!("{}: {e}", case.name))
+        })
         .collect();
-    assert!(failures.is_empty(), "{} case(s) failed:\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} case(s) failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }

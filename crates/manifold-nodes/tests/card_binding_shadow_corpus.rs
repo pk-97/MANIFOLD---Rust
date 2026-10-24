@@ -17,7 +17,18 @@
 //! two.
 
 use manifold_core::preset_def::PresetKind;
-use {manifold_node_engine::graph::Graph, manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::param_binding::ResolvedBinding, manifold_node_engine::exec::bound_graph::ShadowedDefParam, manifold_nodes::bundled_presets::bundled_preset_def, manifold_nodes::bundled_presets::bundled_preset_type_ids, manifold_node_engine::exec::bound_graph::find_shadowed_def_params, manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id, manifold_node_engine::exec::bound_graph::shadow_baseline_entries, manifold_node_engine::load::chain_spec::splice_def_into_chain, manifold_node_engine::exec::bound_graph::unretarget_shadow};
+use {
+    manifold_node_engine::exec::bound_graph::ShadowedDefParam,
+    manifold_node_engine::exec::bound_graph::find_shadowed_def_params,
+    manifold_node_engine::exec::bound_graph::shadow_baseline_entries,
+    manifold_node_engine::exec::bound_graph::unretarget_shadow, manifold_node_engine::graph::Graph,
+    manifold_node_engine::load::chain_spec::splice_def_into_chain,
+    manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id,
+    manifold_node_engine::param_binding::ResolvedBinding,
+    manifold_node_engine::persistence::PrimitiveRegistry,
+    manifold_nodes::bundled_presets::bundled_preset_def,
+    manifold_nodes::bundled_presets::bundled_preset_type_ids,
+};
 
 /// Effects splice into a chain, so build the graph the way the chain builder
 /// does — a bare `Source` upstream, then the canonical def — and resolve the
@@ -38,7 +49,8 @@ fn effect_findings(type_id: &manifold_core::PresetTypeId) -> Vec<ShadowedDefPara
         (source, "out"),
         &view.canonical_def,
         &primitives,
-    &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()) else {
+        &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+    ) else {
         panic!("{}: canonical def must splice", type_id.as_str());
     };
     let node_map: Vec<_> = splice
@@ -62,9 +74,11 @@ fn generator_findings(type_id: &manifold_core::PresetTypeId) -> Vec<ShadowedDefP
         return Vec::new();
     };
     let primitives = PrimitiveRegistry::with_builtin();
-    let Ok(runtime) =
-        manifold_node_engine::runtime::PresetRuntime::from_def(def.as_ref().clone(), &primitives, None)
-    else {
+    let Ok(runtime) = manifold_node_engine::runtime::PresetRuntime::from_def(
+        def.as_ref().clone(),
+        &primitives,
+        None,
+    ) else {
         // Load failures are another test's business.
         return Vec::new();
     };
@@ -142,10 +156,9 @@ fn fused_effect_shadow_findings_map_back_to_the_baseline() {
         let Some(base) = loaded_preset_view_by_id(&id) else {
             continue;
         };
-        let Some(fused) = manifold_node_engine::freeze::install::fused_view_for(
-            &base.canonical_def,
-            &base,
-        ) else {
+        let Some(fused) =
+            manifold_node_engine::freeze::install::fused_view_for(&base.canonical_def, &base)
+        else {
             continue; // doesn't fuse — the unfused sweep above covers it
         };
         let mut graph = Graph::new();
@@ -158,13 +171,18 @@ fn fused_effect_shadow_findings_map_back_to_the_baseline() {
             (source, "out"),
             &fused.canonical_def,
             &primitives,
-        &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()) else {
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        ) else {
             panic!("{}: fused def must splice", id.as_str());
         };
         let node_map: Vec<_> = splice
             .handles
             .iter()
-            .filter_map(|(_, hid)| graph.get_node(*hid).map(|inst| (inst.node_id.clone(), *hid)))
+            .filter_map(|(_, hid)| {
+                graph
+                    .get_node(*hid)
+                    .map(|inst| (inst.node_id.clone(), *hid))
+            })
             .collect();
         let bindings: Vec<ResolvedBinding> = fused
             .bindings

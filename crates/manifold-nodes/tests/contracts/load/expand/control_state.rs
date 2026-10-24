@@ -1,15 +1,13 @@
 mod tests {
+    use manifold_core::NodeId;
+    use manifold_core::effect_graph_def::EffectGraphDef;
+    use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, SceneTargetSelection};
     use manifold_node_engine::graph::Graph;
     use manifold_node_engine::load::expand::{
         PreparedModifierControlState, SceneModifierNodeCopy, SceneModifierNodeRoute,
     };
     use manifold_node_engine::persistence::{EffectGraphDefExt, PrimitiveRegistry};
     use manifold_node_engine::state_store::{NodeState, StateStore};
-    use manifold_core::NodeId;
-    use manifold_core::effect_graph_def::EffectGraphDef;
-    use manifold_core::scene_modifier_preset::{
-        SceneModifierInstanceDef, SceneTargetSelection,
-    };
 
     fn local_graph(enable: bool) -> EffectGraphDef {
         serde_json::from_value(serde_json::json!({
@@ -65,8 +63,11 @@ mod tests {
             "wires": []
         }))
         .expect("runtime graph parses");
-        def.into_graph(&PrimitiveRegistry::with_builtin(), &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
-            .expect("runtime graph builds")
+        def.into_graph(
+            &PrimitiveRegistry::with_builtin(),
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("runtime graph builds")
     }
 
     fn routes(modifiers: &[(&str, &[&str])]) -> Vec<SceneModifierNodeRoute> {
@@ -196,7 +197,8 @@ mod tests {
         let prepared = PreparedModifierControlState::prepare(&owner, &routes, &graph).unwrap();
         assert_eq!(prepared.node_types_for_test(0).len(), 2);
         assert!(
-            prepared.node_types_for_test(0)
+            prepared
+                .node_types_for_test(0)
                 .all(|node| node == "node.trigger_gate")
         );
     }

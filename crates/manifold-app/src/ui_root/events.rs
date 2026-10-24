@@ -2,8 +2,8 @@
 //! `process_events` drain-and-route loop, and viewport-event stashing. Moved
 //! verbatim from ui_root/mod.rs (UI_FUNNEL_DECOMPOSITION P-F2a, pure move).
 
-use manifold_ui::{RootAction};
 use super::*;
+use manifold_ui::RootAction;
 
 impl UIRoot {
     /// Clear and repopulate node-intent dispatch from every panel's currently
@@ -19,15 +19,19 @@ impl UIRoot {
         use manifold_ui::panels::Panel;
         self.intents.clear();
         let mut dead = 0usize;
-        let mut note = |intents: &manifold_ui::intent::IntentRegistry, tree: &UITree, panel: &str| {
-            if cfg!(debug_assertions) {
-                let now = intents.dead_entry_count(tree);
-                if now > dead {
-                    log::debug!("[intents] {panel} registered {} stale node id(s)", now - dead);
+        let mut note =
+            |intents: &manifold_ui::intent::IntentRegistry, tree: &UITree, panel: &str| {
+                if cfg!(debug_assertions) {
+                    let now = intents.dead_entry_count(tree);
+                    if now > dead {
+                        log::debug!(
+                            "[intents] {panel} registered {} stale node id(s)",
+                            now - dead
+                        );
+                    }
+                    dead = now;
                 }
-                dead = now;
-            }
-        };
+            };
         self.transport.register_intents(&mut self.intents);
         note(&self.intents, &self.tree, "transport");
         self.header.register_intents(&mut self.intents);
@@ -57,12 +61,19 @@ impl UIRoot {
         };
         let action = self.intents.resolve(&self.tree, node_id, gesture)?;
         Some(match action {
-            PanelAction::Root(RootAction::AudioDrawerClick(target, param_id, click)) =>
-                node_id.map(|node| self.inspector.audio_drawer_intent(&self.tree, node, target, &param_id, click)).unwrap_or_default(),
-            PanelAction::Root(RootAction::ClipTriggerDrawerClick(layer, row, click)) =>
-                self.inspector.clip_trigger_drawer_intent(&layer, row, &click),
+            PanelAction::Root(RootAction::AudioDrawerClick(target, param_id, click)) => node_id
+                .map(|node| {
+                    self.inspector
+                        .audio_drawer_intent(&self.tree, node, target, &param_id, click)
+                })
+                .unwrap_or_default(),
+            PanelAction::Root(RootAction::ClipTriggerDrawerClick(layer, row, click)) => self
+                .inspector
+                .clip_trigger_drawer_intent(&layer, row, &click),
             action => vec![match node_id {
-                Some(node) => self.inspector.refresh_driver_period_intent(node, &self.tree, action),
+                Some(node) => self
+                    .inspector
+                    .refresh_driver_period_intent(node, &self.tree, action),
                 None => action,
             }],
         })
@@ -125,7 +136,11 @@ impl UIRoot {
             // the panel's device/send list unpopulated. Handled before overlay
             // routing so an open modal can't capture the keystroke and block it
             // from toggling shut.
-            if let UIEvent::KeyDown { key: Key::A, modifiers, .. } = event
+            if let UIEvent::KeyDown {
+                key: Key::A,
+                modifiers,
+                ..
+            } = event
                 && modifiers.command
                 && modifiers.shift
             {
@@ -157,7 +172,13 @@ impl UIRoot {
             // gets Escape first) and routed through the same `OpenAudioSetup`
             // toggle the header button and the × use.
             if self.audio_setup_panel.is_open()
-                && matches!(event, UIEvent::KeyDown { key: Key::Escape, .. })
+                && matches!(
+                    event,
+                    UIEvent::KeyDown {
+                        key: Key::Escape,
+                        ..
+                    }
+                )
             {
                 actions.push(PanelAction::Root(RootAction::OpenAudioSetup));
                 continue;
@@ -166,7 +187,13 @@ impl UIRoot {
             // Escape leaves the Scene tab — the same toggle as the header
             // button and the panel close button (SCENE_SURFACES D16).
             if self.scene_setup_panel.is_open()
-                && matches!(event, UIEvent::KeyDown { key: Key::Escape, .. })
+                && matches!(
+                    event,
+                    UIEvent::KeyDown {
+                        key: Key::Escape,
+                        ..
+                    }
+                )
             {
                 actions.push(PanelAction::Root(RootAction::OpenSceneSetup));
                 continue;
@@ -192,7 +219,8 @@ impl UIRoot {
 
             // Scene tab panel — mirror of the Audio Setup routing above.
             if self.scene_setup_panel.is_open() {
-                let (consumed, mut acts) = self.scene_setup_panel.handle_event(event, &mut self.tree);
+                let (consumed, mut acts) =
+                    self.scene_setup_panel.handle_event(event, &mut self.tree);
                 actions.append(&mut acts);
                 if consumed {
                     continue;
@@ -251,7 +279,9 @@ impl UIRoot {
         // timeline's terminal `DragEnd` is still routed to it (BUG-075).
         for (event_idx, event) in events.iter().enumerate() {
             match event {
-                UIEvent::DragBegin { node_id, origin, .. } => {
+                UIEvent::DragBegin {
+                    node_id, origin, ..
+                } => {
                     // Effect card drag handle — try to start card reorder drag
                     self.inspector.try_begin_card_drag(*node_id, &mut self.tree);
                     // Layer header drag handle — needs &mut tree for dim/indicator
@@ -267,7 +297,8 @@ impl UIRoot {
                             self.inspector.update_card_drag(*pos, &mut self.tree);
                         } else if self.inspector.has_pressed_target() {
                             let mut drag_actions =
-                                self.inspector.handle_drag(*pos, &mut self.tree, modifiers.shift);
+                                self.inspector
+                                    .handle_drag(*pos, &mut self.tree, modifiers.shift);
                             actions.append(&mut drag_actions);
                         }
                     }
@@ -317,7 +348,8 @@ impl UIRoot {
             // A popup must not leak its clicks to the timeline. The release
             // of a press that started on the timeline still finishes or
             // cancels that owned gesture, even when released over a popup.
-            let owned_release = matches!(event, UIEvent::PointerUp { .. }) && self.tracks_press_active;
+            let owned_release =
+                matches!(event, UIEvent::PointerUp { .. }) && self.tracks_press_active;
             let stash = (!overlay_consumed[event_idx] || owned_release)
                 && self.should_stash_for_tracks(event);
             if matches!(event, UIEvent::PointerDown { .. }) {

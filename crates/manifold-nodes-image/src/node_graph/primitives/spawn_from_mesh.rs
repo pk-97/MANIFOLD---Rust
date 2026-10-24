@@ -39,13 +39,13 @@
 //! (a particle's place depends on its slot and `frame_seed`, never on the
 //! count), so a live Count adds particles without moving the others.
 
-use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
+use std::borrow::Cow;
 
-use manifold_node_engine::particles::Particle;
-use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::Particle;
 use manifold_node_engine::primitive::Primitive;
 
 const SPAWN_MODES: &[&str] = &["vertices", "surface", "volume"];
@@ -241,8 +241,7 @@ impl Primitive for SpawnFromMesh {
         // still gets a valid binding); unused by vertices_main but always
         // bound (same "bind everything, each pass uses its subset" shape as
         // seed_particles_from_texture.rs).
-        let needs_alloc =
-            self.cumulative.is_none() || self.cached_triangle_count != triangle_count;
+        let needs_alloc = self.cumulative.is_none() || self.cached_triangle_count != triangle_count;
         if needs_alloc {
             let bytes = u64::from(triangle_count.max(1)) * 4;
             self.cumulative = Some(gpu.device.create_buffer(bytes));
@@ -353,7 +352,7 @@ mod gpu_tests {
             tangent: [0.0; 4],
             color: [1.0; 4],
         }
-}
+    }
 
     #[allow(clippy::too_many_arguments)]
     fn dispatch_spawn(
@@ -372,7 +371,8 @@ mod gpu_tests {
         unsafe {
             vbuf.write(0, bytemuck::cast_slice(vertices));
         }
-        let pbuf = device.create_buffer_shared(capacity as u64 * std::mem::size_of::<Particle>() as u64);
+        let pbuf =
+            device.create_buffer_shared(capacity as u64 * std::mem::size_of::<Particle>() as u64);
         let cumulative = device.create_buffer_shared(u64::from(triangle_count.max(1)) * 4);
 
         let uniforms = SpawnFromMeshUniforms {
@@ -387,24 +387,49 @@ mod gpu_tests {
         };
 
         let bindings = [
-            GpuBinding::Buffer { binding: 0, buffer: &pbuf, offset: 0 },
-            GpuBinding::Bytes { binding: 1, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 2, buffer: &vbuf, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &cumulative, offset: 0 },
+            GpuBinding::Buffer {
+                binding: 0,
+                buffer: &pbuf,
+                offset: 0,
+            },
+            GpuBinding::Bytes {
+                binding: 1,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &vbuf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &cumulative,
+                offset: 0,
+            },
         ];
 
         let mut enc = device.create_encoder("spawn-from-mesh-test");
         if mode >= 1 {
             if triangle_count > 0 {
                 let area = device.create_compute_pipeline(wgsl, "area_main", "spawn-area-test");
-                enc.dispatch_compute(&area, &bindings, [triangle_count.div_ceil(64), 1, 1], "area");
+                enc.dispatch_compute(
+                    &area,
+                    &bindings,
+                    [triangle_count.div_ceil(64), 1, 1],
+                    "area",
+                );
                 enc.compute_memory_barrier_buffers();
                 let scan = device.create_compute_pipeline(wgsl, "scan_main", "spawn-scan-test");
                 enc.dispatch_compute(&scan, &bindings, [1, 1, 1], "scan");
                 enc.compute_memory_barrier_buffers();
             }
             let place = device.create_compute_pipeline(wgsl, "place_main", "spawn-place-test");
-            enc.dispatch_compute(&place, &bindings, [active_count.div_ceil(256), 1, 1], "place");
+            enc.dispatch_compute(
+                &place,
+                &bindings,
+                [active_count.div_ceil(256), 1, 1],
+                "place",
+            );
         } else {
             let verts_pipeline =
                 device.create_compute_pipeline(wgsl, "vertices_main", "spawn-vertices-test");
@@ -468,8 +493,10 @@ mod gpu_tests {
             // u = d.x / 4, v = d.y / 3 directly.
             let u = d[0] / 4.0;
             let v = d[1] / 3.0;
-            assert!(u >= -1e-4 && v >= -1e-4 && u + v <= 1.0 + 1e-4,
-                "particle {i} barycentric (u={u}, v={v}) outside the triangle");
+            assert!(
+                u >= -1e-4 && v >= -1e-4 && u + v <= 1.0 + 1e-4,
+                "particle {i} barycentric (u={u}, v={v}) outside the triangle"
+            );
         }
     }
 
@@ -482,23 +509,47 @@ mod gpu_tests {
         // size = 1.0) — 6 faces × 2 triangles × 3 vertices, 8 distinct corners.
         const CUBE_POSITIONS: [[f32; 3]; 36] = [
             // Front face (+Z)
-            [-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5],
-            [-0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5],
+            [-0.5, -0.5, 0.5],
+            [0.5, -0.5, 0.5],
+            [0.5, 0.5, 0.5],
+            [-0.5, -0.5, 0.5],
+            [0.5, 0.5, 0.5],
+            [-0.5, 0.5, 0.5],
             // Back face (-Z)
-            [0.5, -0.5, -0.5], [-0.5, -0.5, -0.5], [-0.5, 0.5, -0.5],
-            [0.5, -0.5, -0.5], [-0.5, 0.5, -0.5], [0.5, 0.5, -0.5],
+            [0.5, -0.5, -0.5],
+            [-0.5, -0.5, -0.5],
+            [-0.5, 0.5, -0.5],
+            [0.5, -0.5, -0.5],
+            [-0.5, 0.5, -0.5],
+            [0.5, 0.5, -0.5],
             // Right face (+X)
-            [0.5, -0.5, 0.5], [0.5, -0.5, -0.5], [0.5, 0.5, -0.5],
-            [0.5, -0.5, 0.5], [0.5, 0.5, -0.5], [0.5, 0.5, 0.5],
+            [0.5, -0.5, 0.5],
+            [0.5, -0.5, -0.5],
+            [0.5, 0.5, -0.5],
+            [0.5, -0.5, 0.5],
+            [0.5, 0.5, -0.5],
+            [0.5, 0.5, 0.5],
             // Left face (-X)
-            [-0.5, -0.5, -0.5], [-0.5, -0.5, 0.5], [-0.5, 0.5, 0.5],
-            [-0.5, -0.5, -0.5], [-0.5, 0.5, 0.5], [-0.5, 0.5, -0.5],
+            [-0.5, -0.5, -0.5],
+            [-0.5, -0.5, 0.5],
+            [-0.5, 0.5, 0.5],
+            [-0.5, -0.5, -0.5],
+            [-0.5, 0.5, 0.5],
+            [-0.5, 0.5, -0.5],
             // Top face (+Y)
-            [-0.5, 0.5, 0.5], [0.5, 0.5, 0.5], [0.5, 0.5, -0.5],
-            [-0.5, 0.5, 0.5], [0.5, 0.5, -0.5], [-0.5, 0.5, -0.5],
+            [-0.5, 0.5, 0.5],
+            [0.5, 0.5, 0.5],
+            [0.5, 0.5, -0.5],
+            [-0.5, 0.5, 0.5],
+            [0.5, 0.5, -0.5],
+            [-0.5, 0.5, -0.5],
             // Bottom face (-Y)
-            [-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [0.5, -0.5, 0.5],
-            [-0.5, -0.5, -0.5], [0.5, -0.5, 0.5], [-0.5, -0.5, 0.5],
+            [-0.5, -0.5, -0.5],
+            [0.5, -0.5, -0.5],
+            [0.5, -0.5, 0.5],
+            [-0.5, -0.5, -0.5],
+            [0.5, -0.5, 0.5],
+            [-0.5, -0.5, 0.5],
         ];
         let vertices: Vec<MeshVertex> = CUBE_POSITIONS.iter().map(|p| mk_vertex(*p)).collect();
 
@@ -510,20 +561,26 @@ mod gpu_tests {
         for (i, p) in particles.iter().enumerate() {
             if i < 36 {
                 assert_eq!(p.life, 1.0, "particle {i} should be alive");
-                if !distinct
-                    .iter()
-                    .any(|q| (q[0] - p.position[0]).abs() < 1e-6
+                if !distinct.iter().any(|q| {
+                    (q[0] - p.position[0]).abs() < 1e-6
                         && (q[1] - p.position[1]).abs() < 1e-6
-                        && (q[2] - p.position[2]).abs() < 1e-6)
-                {
+                        && (q[2] - p.position[2]).abs() < 1e-6
+                }) {
                     distinct.push(p.position);
                 }
             } else {
-                assert_eq!(p.life, 0.0, "particle {i} past vertex_count should be parked dead");
+                assert_eq!(
+                    p.life, 0.0,
+                    "particle {i} past vertex_count should be parked dead"
+                );
             }
         }
 
-        assert_eq!(distinct.len(), 8, "cube corners should dedup to exactly 8 distinct positions");
+        assert_eq!(
+            distinct.len(),
+            8,
+            "cube corners should dedup to exactly 8 distinct positions"
+        );
         assert!(distinct.len() <= capacity as usize);
     }
 
@@ -540,7 +597,14 @@ mod gpu_tests {
                     p[v] = b;
                     mk_vertex(p)
                 };
-                out.extend([corner(-half, -half), corner(half, -half), corner(half, half), corner(-half, -half), corner(half, half), corner(-half, half)]);
+                out.extend([
+                    corner(-half, -half),
+                    corner(half, -half),
+                    corner(half, half),
+                    corner(-half, -half),
+                    corner(half, half),
+                    corner(-half, half),
+                ]);
             }
         }
         out
@@ -561,19 +625,34 @@ mod gpu_tests {
         let mut mean = [0.0f64; 3];
         for (i, p) in particles.iter().enumerate() {
             assert_eq!(p.life, 1.0, "particle {i} should be alive");
-            assert!(p.position.iter().all(|c| c.abs() <= 2.0 + 1e-4), "particle {i} at {:?} outside the cube", p.position);
+            assert!(
+                p.position.iter().all(|c| c.abs() <= 2.0 + 1e-4),
+                "particle {i} at {:?} outside the cube",
+                p.position
+            );
             inner += usize::from(p.position.iter().all(|c| c.abs() < 1.0));
             for (total, c) in mean.iter_mut().zip(p.position) {
                 *total += f64::from(c.abs()) / f64::from(count);
             }
         }
         let inner = inner as f64 / f64::from(count);
-        assert!((inner - 0.125).abs() < 0.02, "inner cube holds {inner} of the particles, not an eighth");
+        assert!(
+            (inner - 0.125).abs() < 0.02,
+            "inner cube holds {inner} of the particles, not an eighth"
+        );
         for (axis, m) in mean.iter().enumerate() {
-            assert!((m - 1.0).abs() < 0.05, "mean |{axis}| is {m}, not a quarter of the side");
+            assert!(
+                (m - 1.0).abs() < 0.05,
+                "mean |{axis}| is {m}, not a quarter of the side"
+            );
         }
 
         let shell = dispatch_spawn(&device, wgsl, &vertices, count, count, 1, 7);
-        assert!(shell.iter().all(|p| p.position.iter().any(|c| (c.abs() - 2.0).abs() < 1e-4)), "surface mode stays on the faces");
+        assert!(
+            shell
+                .iter()
+                .all(|p| p.position.iter().any(|c| (c.abs() - 2.0).abs() < 1e-4)),
+            "surface mode stays on the faces"
+        );
     }
 }

@@ -86,7 +86,8 @@ fn trigger_source_project() -> (Project, LayerId, LayerId, LayerId, SceneId) {
     });
 
     owner
-        .gen_params_mut().unwrap()
+        .gen_params_mut()
+        .unwrap()
         .params
         .get_mut("level")
         .unwrap()
@@ -217,7 +218,11 @@ fn source_switch_cuts_old_starts_preserves_phase_and_accepts_new_same_beat_launc
     // A seek drops the live step: beat 0 shows what it showed the first time.
     engine.seek_to(Seconds::ZERO);
     tick(&mut engine);
-    assert_eq!(step_value(&engine, &owner_id), Some(1.0), "seek returns to the timeline's count");
+    assert_eq!(
+        step_value(&engine, &owner_id),
+        Some(1.0),
+        "seek returns to the timeline's count"
+    );
 
     // Keep the command target live and prove the stable IDs survived engine
     // initialization and all source edits.
@@ -327,8 +332,13 @@ fn direct_backward_clock_clears_pending_fire_without_retriggering_active_clip() 
         );
         response.trigger_mode = Some(TriggerFireMode::ClipEdge);
         instance.audio_mods_mut().push(response);
-        instance.params.get_mut("level").unwrap().clip_trigger_source =
-            ClipTriggerSource::Lane { layer_id: source_b_id.clone() };
+        instance
+            .params
+            .get_mut("level")
+            .unwrap()
+            .clip_trigger_source = ClipTriggerSource::Lane {
+            layer_id: source_b_id.clone(),
+        };
 
         let mut engine = PlaybackEngine::new(Vec::new());
         engine.initialize(project);
@@ -336,8 +346,18 @@ fn direct_backward_clock_clears_pending_fire_without_retriggering_active_clip() 
         clock_jumps_to(&mut engine, Beats::ZERO);
         engine.sync_clips_to_time();
         tick(&mut engine);
-        assert_eq!(engine.project().unwrap().graph_target_owner(&GraphTarget::Generator(owner_id.clone())).unwrap()
-            .params.get("level").unwrap().value, 1.0);
+        assert_eq!(
+            engine
+                .project()
+                .unwrap()
+                .graph_target_owner(&GraphTarget::Generator(owner_id.clone()))
+                .unwrap()
+                .params
+                .get("level")
+                .unwrap()
+                .value,
+            1.0
+        );
         let transport_epoch = engine.transport_epoch();
 
         clock_jumps_to(&mut engine, Beats(2.0));
@@ -351,22 +371,47 @@ fn direct_backward_clock_clears_pending_fire_without_retriggering_active_clip() 
         engine.sync_clips_to_time();
         tick(&mut engine);
 
-        assert_eq!(engine.with_trigger_pulses(|pulses, _, _| pulses.len()), Some(0));
+        assert_eq!(
+            engine.with_trigger_pulses(|pulses, _, _| pulses.len()),
+            Some(0)
+        );
         assert_eq!(engine.transport_epoch(), transport_epoch);
-        assert_eq!(engine.project().unwrap().graph_target_owner(&GraphTarget::Generator(owner_id.clone())).unwrap()
-            .params.get("level").unwrap().value, 1.0);
+        assert_eq!(
+            engine
+                .project()
+                .unwrap()
+                .graph_target_owner(&GraphTarget::Generator(owner_id.clone()))
+                .unwrap()
+                .params
+                .get("level")
+                .unwrap()
+                .value,
+            1.0
+        );
 
         clock_jumps_to(&mut engine, Beats(4.0));
         engine.sync_clips_to_time();
         tick(&mut engine);
-        assert_eq!(engine.project().unwrap().graph_target_owner(&GraphTarget::Generator(owner_id)).unwrap()
-            .params.get("level").unwrap().value, 2.0);
-        engine.with_trigger_pulses(|pulses, _, _| {
-            assert_eq!(pulses.len(), 1);
-            assert!(matches!(&pulses[0].pulse.source_stamp,
+        assert_eq!(
+            engine
+                .project()
+                .unwrap()
+                .graph_target_owner(&GraphTarget::Generator(owner_id))
+                .unwrap()
+                .params
+                .get("level")
+                .unwrap()
+                .value,
+            2.0
+        );
+        engine
+            .with_trigger_pulses(|pulses, _, _| {
+                assert_eq!(pulses.len(), 1);
+                assert!(matches!(&pulses[0].pulse.source_stamp,
                 TriggerSourceStamp::Clip { layer_id, beat, .. }
                 if *layer_id == source_b_id && *beat == Beats(4.0)));
-        }).unwrap();
+            })
+            .unwrap();
     }
 }
 
@@ -433,8 +478,15 @@ fn backward_clock_clears_unevaluated_later_step_start() {
 fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
     const PARAM_ID: &str = "roundtrip_level";
     fn assert_value(engine: &PlaybackEngine, owner: &LayerId, expected: f32) {
-        let value = engine.project().unwrap().graph_target_owner(&GraphTarget::Generator(owner.clone()))
-            .unwrap().params.get(PARAM_ID).unwrap().value;
+        let value = engine
+            .project()
+            .unwrap()
+            .graph_target_owner(&GraphTarget::Generator(owner.clone()))
+            .unwrap()
+            .params
+            .get(PARAM_ID)
+            .unwrap()
+            .value;
         assert_eq!(value, expected);
     }
 
@@ -660,6 +712,13 @@ fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
 fn run(engine: &mut PlaybackEngine, command: &mut dyn Command, undo: bool) {
     let edit = engine.project_edit().expect("project");
     manifold_editing::service::EditingService::new().mutate_with_history(edit, |p, _| {
-        ((), if undo { command.undo(p) } else { command.execute(p) })
+        (
+            (),
+            if undo {
+                command.undo(p)
+            } else {
+                command.execute(p)
+            },
+        )
     });
 }

@@ -18,7 +18,9 @@
 use std::borrow::Cow;
 use std::sync::OnceLock;
 
-use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues, intern_name};
+use manifold_node_engine::exec::effect_node::{
+    EffectNode, EffectNodeContext, EffectNodeType, ParamValues, intern_name,
+};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use manifold_node_engine::scene::camera::Camera;
@@ -42,14 +44,18 @@ pub fn camera_switch_input(index: usize) -> String {
 /// The `select` labels the graph editor shows for the first inputs; a pick
 /// past them is still a valid index.
 const SELECT_LABELS: [&str; 26] = [
-    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V",
-    "W", "X", "Y", "Z",
+    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S",
+    "T", "U", "V", "W", "X", "Y", "Z",
 ];
 
 const DEFAULT_INPUTS: usize = 2;
 
-const OUTPUTS: [NodeOutput; 1] =
-    [NodePort { name: Cow::Borrowed("out"), ty: PortType::Camera, kind: PortKind::Output, required: false }];
+const OUTPUTS: [NodeOutput; 1] = [NodePort {
+    name: Cow::Borrowed("out"),
+    ty: PortType::Camera,
+    kind: PortKind::Output,
+    required: false,
+}];
 
 const PARAMS: [ParamDef; 2] = [
     ParamDef {
@@ -79,17 +85,27 @@ pub struct CameraSwitch {
 
 impl CameraSwitch {
     pub fn new() -> Self {
-        let mut node = Self { inputs: Vec::new(), names: Vec::new() };
+        let mut node = Self {
+            inputs: Vec::new(),
+            names: Vec::new(),
+        };
         node.rebuild_ports(DEFAULT_INPUTS);
         node
     }
 
     fn rebuild_ports(&mut self, n: usize) {
-        self.names = (0..n.max(1)).map(|k| intern_name(&Cow::Owned(camera_switch_input(k)))).collect();
+        self.names = (0..n.max(1))
+            .map(|k| intern_name(&Cow::Owned(camera_switch_input(k))))
+            .collect();
         self.inputs = self
             .names
             .iter()
-            .map(|&name| NodePort { name: Cow::Borrowed(name), ty: PortType::Camera, kind: PortKind::Input, required: false })
+            .map(|&name| NodePort {
+                name: Cow::Borrowed(name),
+                ty: PortType::Camera,
+                kind: PortKind::Input,
+                required: false,
+            })
             .collect();
     }
 
@@ -139,7 +155,10 @@ impl EffectNode for CameraSwitch {
     }
 
     fn reconfigure(&mut self, params: &ParamValues) {
-        let n = params.get("num_inputs").and_then(|v| v.as_scalar()).map_or(DEFAULT_INPUTS, |f| f.round().max(1.0) as usize);
+        let n = params
+            .get("num_inputs")
+            .and_then(|v| v.as_scalar())
+            .map_or(DEFAULT_INPUTS, |f| f.round().max(1.0) as usize);
         if n != self.inputs.len() {
             self.rebuild_ports(n);
         }
@@ -147,7 +166,11 @@ impl EffectNode for CameraSwitch {
 
     /// The picked input's producers run; the others are skipped. An unwired
     /// pick keeps every input live, since the fallback may need any of them.
-    fn selected_input_branch(&self, params: &ParamValues, wired_inputs: &[&str]) -> Option<&'static str> {
+    fn selected_input_branch(
+        &self,
+        params: &ParamValues,
+        wired_inputs: &[&str],
+    ) -> Option<&'static str> {
         let picked = self.picked(params);
         wired_inputs.contains(&picked).then_some(picked)
     }
@@ -158,12 +181,22 @@ impl EffectNode for CameraSwitch {
             .inputs
             .camera(picked)
             .map(|camera| (picked, camera))
-            .or_else(|| self.inputs.iter().find_map(|port| ctx.inputs.camera(&port.name).map(|camera| (&*port.name, camera))));
+            .or_else(|| {
+                self.inputs.iter().find_map(|port| {
+                    ctx.inputs
+                        .camera(&port.name)
+                        .map(|camera| (&*port.name, camera))
+                })
+            });
         let camera = match used {
             Some((port, mut camera)) => {
                 // A different input is a different shot: the renderer resets
                 // its temporal history on the frame it changes.
-                let index = self.inputs.iter().position(|input| input.name == port).unwrap_or(0) as u64;
+                let index = self
+                    .inputs
+                    .iter()
+                    .position(|input| input.name == port)
+                    .unwrap_or(0) as u64;
                 camera.shot = camera.shot.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (index + 1);
                 camera
             }
@@ -194,7 +227,10 @@ mod tests {
 
     #[test]
     fn inputs_have_no_cap_and_keep_their_names() {
-        assert_eq!([0, 25, 26, 31, 701, 702].map(camera_switch_input), ["a", "z", "aa", "af", "zz", "aaa"]);
+        assert_eq!(
+            [0, 25, 26, 31, 701, 702].map(camera_switch_input),
+            ["a", "z", "aa", "af", "zz", "aaa"]
+        );
         let mut node = CameraSwitch::new();
         let mut params = ParamValues::default();
         params.insert(Cow::Borrowed("num_inputs"), ParamValue::Float(40.0));

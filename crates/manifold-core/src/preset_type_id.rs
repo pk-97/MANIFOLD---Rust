@@ -343,25 +343,55 @@ mod tests {
 
     #[test]
     fn legacy_effect_discriminant() {
-        assert_eq!(PresetTypeId::from_legacy_effect_discriminant(0), PresetTypeId::TRANSFORM);
-        assert_eq!(PresetTypeId::from_legacy_effect_discriminant(12), PresetTypeId::BLOOM);
-        assert_eq!(PresetTypeId::from_legacy_effect_discriminant(36), PresetTypeId::CORRUPTION);
-        assert_eq!(PresetTypeId::from_legacy_effect_discriminant(999), PresetTypeId::UNKNOWN);
+        assert_eq!(
+            PresetTypeId::from_legacy_effect_discriminant(0),
+            PresetTypeId::TRANSFORM
+        );
+        assert_eq!(
+            PresetTypeId::from_legacy_effect_discriminant(12),
+            PresetTypeId::BLOOM
+        );
+        assert_eq!(
+            PresetTypeId::from_legacy_effect_discriminant(36),
+            PresetTypeId::CORRUPTION
+        );
+        assert_eq!(
+            PresetTypeId::from_legacy_effect_discriminant(999),
+            PresetTypeId::UNKNOWN
+        );
     }
 
     #[test]
     fn legacy_generator_discriminant() {
-        assert_eq!(PresetTypeId::from_legacy_generator_discriminant(0), PresetTypeId::NONE);
-        assert_eq!(PresetTypeId::from_legacy_generator_discriminant(6), PresetTypeId::PLASMA);
-        assert_eq!(PresetTypeId::from_legacy_generator_discriminant(24), PresetTypeId::OILY_FLUID);
-        assert_eq!(PresetTypeId::from_legacy_generator_discriminant(999), PresetTypeId::NONE);
+        assert_eq!(
+            PresetTypeId::from_legacy_generator_discriminant(0),
+            PresetTypeId::NONE
+        );
+        assert_eq!(
+            PresetTypeId::from_legacy_generator_discriminant(6),
+            PresetTypeId::PLASMA
+        );
+        assert_eq!(
+            PresetTypeId::from_legacy_generator_discriminant(24),
+            PresetTypeId::OILY_FLUID
+        );
+        assert_eq!(
+            PresetTypeId::from_legacy_generator_discriminant(999),
+            PresetTypeId::NONE
+        );
     }
 
     #[test]
     fn legacy_discriminant_overlap_is_kind_specific() {
         // 10 means Feedback (effect) but Wireframe (generator).
-        assert_eq!(PresetTypeId::from_legacy_effect_discriminant(10), PresetTypeId::FEEDBACK);
-        assert_eq!(PresetTypeId::from_legacy_generator_discriminant(10), PresetTypeId::WIREFRAME_ZOO);
+        assert_eq!(
+            PresetTypeId::from_legacy_effect_discriminant(10),
+            PresetTypeId::FEEDBACK
+        );
+        assert_eq!(
+            PresetTypeId::from_legacy_generator_discriminant(10),
+            PresetTypeId::WIREFRAME_ZOO
+        );
     }
 
     #[test]
@@ -376,9 +406,15 @@ mod tests {
     #[test]
     fn deserialize_with_helpers_decode_legacy_int() {
         let mut de = serde_json::Deserializer::from_str("12");
-        assert_eq!(deserialize_effect_type(&mut de).unwrap(), PresetTypeId::BLOOM);
+        assert_eq!(
+            deserialize_effect_type(&mut de).unwrap(),
+            PresetTypeId::BLOOM
+        );
         let mut de = serde_json::Deserializer::from_str("6");
-        assert_eq!(deserialize_generator_type(&mut de).unwrap(), PresetTypeId::PLASMA);
+        assert_eq!(
+            deserialize_generator_type(&mut de).unwrap(),
+            PresetTypeId::PLASMA
+        );
     }
 
     #[test]
@@ -394,8 +430,7 @@ mod tests {
     /// uses), and both kind-specific helpers.
     #[test]
     fn general_migration_table_applies_via_plain_deserialize() {
-        let back: PresetTypeId =
-            serde_json::from_str("\"__vocab_migration_test_old__\"").unwrap();
+        let back: PresetTypeId = serde_json::from_str("\"__vocab_migration_test_old__\"").unwrap();
         assert_eq!(back.as_str(), "__vocab_migration_test_new__");
     }
 

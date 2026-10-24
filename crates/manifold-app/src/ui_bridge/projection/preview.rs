@@ -7,7 +7,7 @@
 
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
-use manifold_core::work_count::{record_work, WorkKind};
+use manifold_core::work_count::{WorkKind, record_work};
 
 use super::timeline::{audio_waveform_breakpoints_into, clip_base_color};
 use crate::gesture_preview::GesturePreview;
@@ -17,7 +17,11 @@ use crate::ui_root::UIRoot;
 /// viewport entry. A layer change moves the entry to the new layer's bucket
 /// and recomputes its colour; an audio clip refills its waveform breakpoints.
 /// The name is never recomputed.
-pub(crate) fn project_clip_preview(ui: &mut UIRoot, project: &Project, preview: &GesturePreview) -> bool {
+pub(crate) fn project_clip_preview(
+    ui: &mut UIRoot,
+    project: &Project,
+    preview: &GesturePreview,
+) -> bool {
     // A clip the viewport does not hold (a region-move split) is a structural
     // change this path cannot show.
     let total: usize = project.timeline.layers.iter().map(|l| l.clips.len()).sum();
@@ -90,9 +94,15 @@ pub(crate) fn project_lane_preview(
         };
         let target = crate::editing_host::to_ui_graph_target(&rec.target);
         let mut points_ok = true;
-        let held = ui.viewport.update_automation_lane(&target, &rec.param_id, |entry| {
-            points_ok = crate::ui_translate::preview_lane_points_into(instance, lane, &mut entry.points);
-        });
+        let held = ui
+            .viewport
+            .update_automation_lane(&target, &rec.param_id, |entry| {
+                points_ok = crate::ui_translate::preview_lane_points_into(
+                    instance,
+                    lane,
+                    &mut entry.points,
+                );
+            });
         if !held || !points_ok {
             return false;
         }
@@ -118,12 +128,21 @@ mod tests {
                 LayerType::Video,
                 manifold_core::PresetTypeId::from_string("Video".to_string()),
             );
-            project.timeline.layers[i].layer_color =
-                manifold_core::color::Color { r: 0.1 + 0.4 * i as f32, g: 0.3, b: 0.6, a: 1.0 };
+            project.timeline.layers[i].layer_color = manifold_core::color::Color {
+                r: 0.1 + 0.4 * i as f32,
+                g: 0.3,
+                b: 0.6,
+                a: 1.0,
+            };
         }
         for i in 0..clips {
-            let (mut create, _) =
-                EditingService::create_clip_at_position(&mut project, Beats(i as f64 * 2.0), 0, Beats(1.0)).unwrap();
+            let (mut create, _) = EditingService::create_clip_at_position(
+                &mut project,
+                Beats(i as f64 * 2.0),
+                0,
+                Beats(1.0),
+            )
+            .unwrap();
             create.execute(&mut project);
         }
         project
@@ -131,13 +150,19 @@ mod tests {
 
     fn shown(ui: &UIRoot) -> Vec<String> {
         (0..ui.viewport.layer_count())
-            .flat_map(|l| ui.viewport.clips_for_layer(l).iter().map(|c| format!("{c:?}")))
+            .flat_map(|l| {
+                ui.viewport
+                    .clips_for_layer(l)
+                    .iter()
+                    .map(|c| format!("{c:?}"))
+            })
             .collect()
     }
 
     fn projected(project: &Project) -> UIRoot {
         let mut ui = UIRoot::new();
-        ui.viewport.set_tracks(vec![TrackInfo::default(); project.timeline.layers.len()]);
+        ui.viewport
+            .set_tracks(vec![TrackInfo::default(); project.timeline.layers.len()]);
         super::super::timeline::sync_clip_positions(&mut ui, project);
         ui
     }
@@ -171,7 +196,10 @@ mod tests {
         let changed: Vec<usize> = (0..500).filter(|&i| before[i] != after[i]).collect();
         assert_eq!(changed, vec![250], "exactly the dragged clip changed");
         let entry = ui.viewport.preview_clip(&id).unwrap();
-        assert_eq!((entry.start_beat, entry.duration_beats), (Beats(701.0), Beats(3.0)));
+        assert_eq!(
+            (entry.start_beat, entry.duration_beats),
+            (Beats(701.0), Beats(3.0))
+        );
 
         // A second step of the same drag writes the entry in place without
         // allocating (counted when the `work-trace` allocator is on).
@@ -184,13 +212,22 @@ mod tests {
         assert!(project_clip_preview(&mut ui, &project, &preview));
         let steady = thread_work_snapshot().since(&work);
         assert_eq!(steady.get(WorkKind::ClipPreviewUpdate), 1);
-        assert_eq!(steady.get(WorkKind::FrameAlloc), 0, "a steady clip drag allocates nothing");
+        assert_eq!(
+            steady.get(WorkKind::FrameAlloc),
+            0,
+            "a steady clip drag allocates nothing"
+        );
         let after = shown(&ui);
 
         // A second call with nothing new to write does no work.
         let work = thread_work_snapshot();
         assert!(project_clip_preview(&mut ui, &project, &preview));
-        assert_eq!(thread_work_snapshot().since(&work).get(WorkKind::ClipPreviewUpdate), 0);
+        assert_eq!(
+            thread_work_snapshot()
+                .since(&work)
+                .get(WorkKind::ClipPreviewUpdate),
+            0
+        );
 
         // The in-place result is what a whole projection shows.
         let whole = projected(&project);
@@ -224,7 +261,10 @@ mod tests {
         assert_eq!(entry.name, name_before, "the name is never recomputed");
         let layer = &project.timeline.layers[1];
         let clip = &layer.clips[0];
-        assert_eq!(entry.color, super::super::timeline::clip_base_color(layer, clip, 0.86));
+        assert_eq!(
+            entry.color,
+            super::super::timeline::clip_base_color(layer, clip, 0.86)
+        );
         let others_after: Vec<String> = shown(&ui)
             .into_iter()
             .filter(|s| !s.contains(id.as_str()))
@@ -238,12 +278,18 @@ mod tests {
         // Every later preview write still finds every clip where the index says.
         let other: ClipId = project.timeline.layers[0].clips[3].id.clone();
         {
-            let clip = project.timeline.find_clip_by_id_mut(other.as_str()).unwrap();
+            let clip = project
+                .timeline
+                .find_clip_by_id_mut(other.as_str())
+                .unwrap();
             clip.start_beat = Beats(900.0);
         }
         preview.record_clip(&project, other.as_str());
         assert!(project_clip_preview(&mut ui, &project, &preview));
-        assert_eq!(ui.viewport.preview_clip(&other).unwrap().start_beat, Beats(900.0));
+        assert_eq!(
+            ui.viewport.preview_clip(&other).unwrap().start_beat,
+            Beats(900.0)
+        );
         assert_eq!(shown(&projected(&project)).len(), shown(&ui).len());
     }
 
@@ -253,7 +299,9 @@ mod tests {
     fn an_added_clip_falls_back_to_the_whole_projection() {
         let mut project = video_project(1, 3);
         let mut ui = projected(&project);
-        let (mut create, _) = EditingService::create_clip_at_position(&mut project, Beats(50.0), 0, Beats(1.0)).unwrap();
+        let (mut create, _) =
+            EditingService::create_clip_at_position(&mut project, Beats(50.0), 0, Beats(1.0))
+                .unwrap();
         create.execute(&mut project);
         let id = project.timeline.layers[0].clips[0].id.clone();
         let mut preview = GesturePreview::default();
@@ -284,7 +332,13 @@ mod tests {
         preview.reapply(&mut fresh);
         let work = thread_work_snapshot();
         assert!(project_clip_preview(&mut ui, &fresh, &preview));
-        assert_eq!(thread_work_snapshot().since(&work).get(WorkKind::ClipPreviewUpdate), 0, "already shown");
+        assert_eq!(
+            thread_work_snapshot()
+                .since(&work)
+                .get(WorkKind::ClipPreviewUpdate),
+            0,
+            "already shown"
+        );
         assert_eq!(shown(&ui), shown_before);
     }
 
@@ -303,8 +357,16 @@ mod tests {
                 param_id: "amount".into(),
                 enabled: true,
                 points: vec![
-                    AutomationPoint { beat: Beats(4.0), value: 0.5, shape: SegmentShape::Linear },
-                    AutomationPoint { beat: Beats(8.0), value: 0.8, shape: SegmentShape::Linear },
+                    AutomationPoint {
+                        beat: Beats(4.0),
+                        value: 0.5,
+                        shape: SegmentShape::Linear,
+                    },
+                    AutomationPoint {
+                        beat: Beats(8.0),
+                        value: 0.8,
+                        shape: SegmentShape::Linear,
+                    },
                 ],
             }]);
             targets.push(GraphTarget::Effect(fx.id.clone()));
@@ -318,21 +380,27 @@ mod tests {
         let mut ui = UIRoot::new();
         ui.viewport.set_tracks(vec![TrackInfo::default()]);
         ui.viewport.set_automation_lane_layout(&[vec![112.0; 3]]);
-        ui.viewport.rebuild_mapper_layout(&[manifold_ui::view::UiLayer {
-            layer_id: project.timeline.layers[0].layer_id.clone(),
-            parent_layer_id: None,
-            layer_type: manifold_ui::types::LayerType::Video,
-            is_collapsed: false,
-            automation_lane_count: 3,
-        }]);
-        ui.viewport.prepare_layout(&manifold_ui::layout::ScreenLayout::new(1920.0, 1080.0));
+        ui.viewport
+            .rebuild_mapper_layout(&[manifold_ui::view::UiLayer {
+                layer_id: project.timeline.layers[0].layer_id.clone(),
+                parent_layer_id: None,
+                layer_type: manifold_ui::types::LayerType::Video,
+                is_collapsed: false,
+                automation_lane_count: 3,
+            }]);
+        ui.viewport
+            .prepare_layout(&manifold_ui::layout::ScreenLayout::new(1920.0, 1080.0));
         let lanes = targets
             .iter()
             .map(|t| {
                 let instance = project.preset_instance(t).unwrap();
                 let lane = &instance.automation_lanes.as_ref().unwrap()[0];
                 let mut points = Vec::new();
-                assert!(crate::ui_translate::preview_lane_points_into(instance, lane, &mut points));
+                assert!(crate::ui_translate::preview_lane_points_into(
+                    instance,
+                    lane,
+                    &mut points
+                ));
                 ViewportAutomationLane {
                     layer_index: 0,
                     lane: manifold_ui::view::UiAutomationLane {
@@ -361,12 +429,23 @@ mod tests {
         let (mut project, targets) = three_lane_project();
         let mut ui = lane_ui(&project, &targets);
         let screens = |ui: &UIRoot| -> Vec<String> {
-            ui.viewport.automation_lane_screens().iter().map(|s| format!("{s:?}")).collect()
+            ui.viewport
+                .automation_lane_screens()
+                .iter()
+                .map(|s| format!("{s:?}"))
+                .collect()
         };
         let before = screens(&ui);
         assert_eq!(before.len(), 3, "three lane strips are on screen");
 
-        project.preset_instance_mut(&targets[1]).unwrap().automation_lanes.as_mut().unwrap()[0].points[1].value = 0.1;
+        project
+            .preset_instance_mut(&targets[1])
+            .unwrap()
+            .automation_lanes
+            .as_mut()
+            .unwrap()[0]
+            .points[1]
+            .value = 0.1;
         let mut preview = GesturePreview::default();
         preview.record_lane(&project, &targets[1], "amount");
 
@@ -383,14 +462,29 @@ mod tests {
         let dragged = &ui.viewport.automation_lane_screens()[1];
         assert!((dragged.dots[1].value_norm - 0.1).abs() < 1e-6);
         // A second step refills the same buffers: no allocation.
-        project.preset_instance_mut(&targets[1]).unwrap().automation_lanes.as_mut().unwrap()[0].points[1].value = 0.2;
+        project
+            .preset_instance_mut(&targets[1])
+            .unwrap()
+            .automation_lanes
+            .as_mut()
+            .unwrap()[0]
+            .points[1]
+            .value = 0.2;
         preview.record_lane(&project, &targets[1], "amount");
         let work = thread_work_snapshot();
         assert!(project_lane_preview(&mut ui, &project, &preview, true));
         let steady = thread_work_snapshot().since(&work);
         assert_eq!(steady.get(WorkKind::LanePreviewUpdate), 1);
-        assert_eq!(steady.get(WorkKind::FrameAlloc), 0, "a steady lane drag allocates nothing");
+        assert_eq!(
+            steady.get(WorkKind::FrameAlloc),
+            0,
+            "a steady lane drag allocates nothing"
+        );
         let rebuilt = lane_ui(&project, &targets);
-        assert_eq!(screens(&ui), screens(&rebuilt), "the in-place result is what a whole rebuild makes");
+        assert_eq!(
+            screens(&ui),
+            screens(&rebuilt),
+            "the in-place result is what a whole rebuild makes"
+        );
     }
 }

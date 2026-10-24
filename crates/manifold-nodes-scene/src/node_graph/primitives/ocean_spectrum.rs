@@ -96,7 +96,11 @@ pub fn spectrum_len(n: u32) -> u32 {
     OCEAN_FIELDS * n * (n / 2 + 1)
 }
 
-fn param_f32(params: &manifold_node_engine::exec::effect_node::ParamValues, name: &str, default: f32) -> f32 {
+fn param_f32(
+    params: &manifold_node_engine::exec::effect_node::ParamValues,
+    name: &str,
+    default: f32,
+) -> f32 {
     match params.get(name) {
         Some(ParamValue::Float(v)) => *v,
         _ => default,
@@ -110,13 +114,18 @@ impl Primitive for OceanSpectrum {
         params: &manifold_node_engine::exec::effect_node::ParamValues,
         _inputs: &[(&str, u32)],
     ) -> Option<u32> {
-        (port == "spectrum").then(|| valid_size(param_f32(params, "size", 256.0))).flatten().map(spectrum_len)
+        (port == "spectrum")
+            .then(|| valid_size(param_f32(params, "size", 256.0)))
+            .flatten()
+            .map(spectrum_len)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let size = param_f32(ctx.params, "size", 256.0);
         let Some(n) = valid_size(size) else {
-            ctx.error(format!("Ocean Spectrum: Size must be a power of two in 16..1024 (got {size})"));
+            ctx.error(format!(
+                "Ocean Spectrum: Size must be a power of two in 16..1024 (got {size})"
+            ));
             return;
         };
         let time = match ctx.inputs.scalar("time") {
@@ -149,8 +158,15 @@ impl Primitive for OceanSpectrum {
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: out,
+                    offset: 0,
+                },
             ],
             [uniforms.dispatch_count.div_ceil(256), 1, 1],
             "node.ocean_spectrum",
@@ -191,7 +207,10 @@ pub(crate) mod reference {
         let u1 = (f64::from(c >> 8) + 0.5) / 16_777_216.0;
         let u2 = (f64::from(d >> 8) + 0.5) / 16_777_216.0;
         let r = (-2.0 * u1.ln()).sqrt();
-        (r * (std::f64::consts::TAU * u2).cos(), r * (std::f64::consts::TAU * u2).sin())
+        (
+            r * (std::f64::consts::TAU * u2).cos(),
+            r * (std::f64::consts::TAU * u2).sin(),
+        )
     }
 
     /// The directional spectrum density S_k at wavevector k, before the band cut.
@@ -204,7 +223,8 @@ pub(crate) mod reference {
         let wp = 22.0 * (G * G / (u * fetch)).powf(1.0 / 3.0);
         let sigma = if omega <= wp { 0.07 } else { 0.09 };
         let r = (-(omega - wp).powi(2) / (2.0 * sigma * sigma * wp * wp)).exp();
-        let s_omega = alpha * G * G / omega.powi(5) * (-1.25 * (wp / omega).powi(4)).exp() * 3.3f64.powf(r);
+        let s_omega =
+            alpha * G * G / omega.powi(5) * (-1.25 * (wp / omega).powi(4)).exp() * 3.3f64.powf(r);
         let rho = omega / wp;
         let beta = if rho < 0.95 {
             2.61 * rho.powf(1.3)
@@ -216,7 +236,11 @@ pub(crate) mod reference {
         let pi = std::f64::consts::PI;
         let mut theta = kz.atan2(kx) - s.wind_direction_deg.to_radians();
         theta -= 2.0 * pi * ((theta + pi) / (2.0 * pi)).floor();
-        let spread = if beta < 1e-4 { 0.5 / pi } else { beta / (2.0 * (beta * pi).tanh()) / (beta * theta).cosh().powi(2) };
+        let spread = if beta < 1e-4 {
+            0.5 / pi
+        } else {
+            beta / (2.0 * (beta * pi).tanh()) / (beta * theta).cosh().powi(2)
+        };
         s_omega * spread * (G / (2.0 * omega)) / k
     }
 
@@ -304,7 +328,10 @@ mod tests {
     fn field_variance_matches_jonswap() {
         let n = 64;
         let half = (n / 2) as i32;
-        let base = Spectrum { tile_size: 1000.0, ..sea(n, 0) };
+        let base = Spectrum {
+            tile_size: 1000.0,
+            ..sea(n, 0)
+        };
         let dk = std::f64::consts::TAU / base.tile_size;
         let mut expected = 0.0;
         for iz in -half + 1..half {
@@ -328,7 +355,10 @@ mod tests {
         }
         measured /= f64::from(seeds);
         let ratio = measured / expected;
-        assert!((ratio - 1.0).abs() < 0.05, "variance ratio {ratio} (measured {measured}, JONSWAP {expected})");
+        assert!(
+            (ratio - 1.0).abs() < 0.05,
+            "variance ratio {ratio} (measured {measured}, JONSWAP {expected})"
+        );
     }
 
     /// Invariant 3: one wave along +x sharpens its crest and runs downwind.
@@ -341,11 +371,14 @@ mod tests {
         let dk = std::f64::consts::TAU / s.tile_size;
         let k = f64::from(ix) * dk;
         let pair = |f: u32, x: f64, t: f64| {
-            [(ix, iz), (-ix, -iz)].iter().map(|&(a, b)| {
-                let (re, im) = field(&s, f, a, b, t);
-                let ph = dk * (f64::from(a) * x);
-                re * ph.cos() - im * ph.sin()
-            }).sum::<f64>()
+            [(ix, iz), (-ix, -iz)]
+                .iter()
+                .map(|&(a, b)| {
+                    let (re, im) = field(&s, f, a, b, t);
+                    let ph = dk * (f64::from(a) * x);
+                    re * ph.cos() - im * ph.sin()
+                })
+                .sum::<f64>()
         };
         // Find the crest at t = 0, then check Dx vanishes there with negative slope.
         let samples = 4096;
@@ -356,9 +389,17 @@ mod tests {
             .unwrap();
         let amp = pair(0, crest, 0.0);
         assert!(amp > 0.0);
-        assert!(pair(1, crest, 0.0).abs() < 1e-3 * amp, "Dx at the crest {}", pair(1, crest, 0.0));
+        assert!(
+            pair(1, crest, 0.0).abs() < 1e-3 * amp,
+            "Dx at the crest {}",
+            pair(1, crest, 0.0)
+        );
         let dxx = pair(3, crest, 0.0);
-        assert!((dxx + amp * k).abs() < 1e-3 * amp * k, "Dxx at crest {dxx}, expected {}", -amp * k);
+        assert!(
+            (dxx + amp * k).abs() < 1e-3 * amp * k,
+            "Dxx at crest {dxx}, expected {}",
+            -amp * k
+        );
         // A tenth of a period later the crest has moved toward +x.
         let omega = (G * k).sqrt();
         let t = 0.1 * std::f64::consts::TAU / omega;
@@ -367,7 +408,10 @@ mod tests {
             .max_by(|a, b| pair(0, *a, t).total_cmp(&pair(0, *b, t)))
             .unwrap();
         let expected = crest + omega * t / k;
-        assert!((moved - expected).abs() < wavelength / 200.0, "crest moved to {moved}, expected {expected}");
+        assert!(
+            (moved - expected).abs() < wavelength / 200.0,
+            "crest moved to {moved}, expected {expected}"
+        );
     }
 
     /// Invariant 4: the preset's three bands partition every wavenumber.
@@ -375,13 +419,21 @@ mod tests {
     fn cascade_bands_partition_k() {
         let tiles = [1000.0f64, 167.0, 27.0];
         let edge = |l: f64| 6.0 * std::f64::consts::TAU / l;
-        let bands = [(0.0, edge(tiles[1])), (edge(tiles[1]), edge(tiles[2])), (edge(tiles[2]), 0.0)];
+        let bands = [
+            (0.0, edge(tiles[1])),
+            (edge(tiles[1]), edge(tiles[2])),
+            (edge(tiles[2]), 0.0),
+        ];
         for i in 1..200_000 {
             let k = f64::from(i) * 1e-3;
             let hits = bands
                 .iter()
                 .filter(|&&(lo, hi)| {
-                    let s = Spectrum { band_low: lo, band_high: hi, ..sea(16, 0) };
+                    let s = Spectrum {
+                        band_low: lo,
+                        band_high: hi,
+                        ..sea(16, 0)
+                    };
                     in_band(&s, k)
                 })
                 .count();
@@ -413,8 +465,13 @@ mod gpu_tests {
     }
 
     fn dispatch(device: &manifold_gpu::GpuDevice, s: &Spectrum, t: f32) -> manifold_gpu::GpuBuffer {
-        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<OceanSpectrum>().expect("ocean_spectrum codegen");
-        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "ocean-spectrum-test");
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<OceanSpectrum>()
+            .expect("ocean_spectrum codegen");
+        let pipeline = device.create_compute_pipeline(
+            &wgsl,
+            manifold_node_engine::freeze::codegen::ENTRY,
+            "ocean-spectrum-test",
+        );
         let len = spectrum_len(N);
         let out = device.create_buffer_shared(u64::from(len) * 8);
         let uniforms = SpectrumUniforms {
@@ -435,8 +492,15 @@ mod gpu_tests {
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: &out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &out,
+                    offset: 0,
+                },
             ],
             [len.div_ceil(256), 1, 1],
             "ocean-spectrum-test",
@@ -471,7 +535,10 @@ mod gpu_tests {
         let device = manifold_gpu::testkit::test_device();
         let s = sea();
         let t = 2.5;
-        let got = read(&dispatch(&device, &s, t as f32), spectrum_len(N) as usize * 2);
+        let got = read(
+            &dispatch(&device, &s, t as f32),
+            spectrum_len(N) as usize * 2,
+        );
         let h = N / 2 + 1;
         let scale = f64::from(N * N);
         let mut peak = 0.0f64;
@@ -479,16 +546,25 @@ mod gpu_tests {
         for f in 0..OCEAN_FIELDS {
             for m in 0..N {
                 for col in 0..h {
-                    let iz = if m >= N / 2 { m as i32 - N as i32 } else { m as i32 };
+                    let iz = if m >= N / 2 {
+                        m as i32 - N as i32
+                    } else {
+                        m as i32
+                    };
                     let (re, im) = field(&s, f, col as i32, iz, t);
                     let i = (((f * N + m) * h + col) * 2) as usize;
                     peak = peak.max((re * scale).abs()).max((im * scale).abs());
-                    worst = worst.max((f64::from(got[i]) - re * scale).abs()).max((f64::from(got[i + 1]) - im * scale).abs());
+                    worst = worst
+                        .max((f64::from(got[i]) - re * scale).abs())
+                        .max((f64::from(got[i + 1]) - im * scale).abs());
                 }
             }
         }
         assert!(peak > 0.0);
-        assert!(worst <= 1e-4 * peak, "worst error {worst} against peak {peak}");
+        assert!(
+            worst <= 1e-4 * peak,
+            "worst error {worst} against peak {peak}"
+        );
     }
 
     /// Invariant 1: spectrum → GPU inverse equals the direct sum, and the
@@ -506,11 +582,19 @@ mod gpu_tests {
                 let a = ((f * N as usize + m) * h) * 2;
                 let b = ((f * N as usize + (N as usize - m)) * h) * 2;
                 let mag = spec[a].abs().max(spec[a + 1].abs()).max(1e-6);
-                assert!((spec[a] - spec[b]).abs() <= 1e-5 * mag && (spec[a + 1] + spec[b + 1]).abs() <= 1e-5 * mag,
-                    "field {f} row {m}: column 0 is not conjugate");
+                assert!(
+                    (spec[a] - spec[b]).abs() <= 1e-5 * mag
+                        && (spec[a + 1] + spec[b + 1]).abs() <= 1e-5 * mag,
+                    "field {f} row {m}: column 0 is not conjugate"
+                );
             }
         }
-        let fft = manifold_gpu::GpuFft::new_nd(&device, manifold_gpu::FftKind::HermiteanToReal, &[6, N as usize, N as usize], &[1, 2]);
+        let fft = manifold_gpu::GpuFft::new_nd(
+            &device,
+            manifold_gpu::FftKind::HermiteanToReal,
+            &[6, N as usize, N as usize],
+            &[1, 2],
+        );
         let field = device.create_buffer_shared(fft.output_len_bytes());
         let mut enc = device.create_encoder("ocean-ifft-test");
         fft.encode(&mut enc, &spectrum, &field);
@@ -521,7 +605,10 @@ mod gpu_tests {
             let mut worst = 0.0f64;
             for j in 0..N {
                 for i in 0..N {
-                    let (x, z) = (f64::from(i) * s.tile_size / f64::from(N), f64::from(j) * s.tile_size / f64::from(N));
+                    let (x, z) = (
+                        f64::from(i) * s.tile_size / f64::from(N),
+                        f64::from(j) * s.tile_size / f64::from(N),
+                    );
                     let want = direct_sum(&s, f, x, z, t);
                     let have = f64::from(got[((f * N + j) * N + i) as usize]);
                     peak = peak.max(want.abs());
@@ -529,7 +616,10 @@ mod gpu_tests {
                 }
             }
             assert!(peak > 0.0, "field {f} is empty");
-            assert!(worst <= 1e-4 * peak, "field {f}: worst error {worst} against peak {peak}");
+            assert!(
+                worst <= 1e-4 * peak,
+                "field {f}: worst error {worst} against peak {peak}"
+            );
         }
     }
 }

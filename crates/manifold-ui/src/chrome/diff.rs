@@ -19,7 +19,7 @@
 //!   same way it already handles a collapse or drawer toggle.
 
 #[cfg(test)]
-use crate::{TransportAction};
+use crate::TransportAction;
 use crate::chrome::layout::{self, LaidNode};
 use crate::chrome::view::View;
 #[cfg(debug_assertions)]
@@ -179,7 +179,13 @@ impl ChromeHost {
     }
 
     /// Materialize beneath an existing parent, preserving inherited widget identity.
-    pub fn build_under(&mut self, tree: &mut UITree, root: &View, rect: Rect, parent: Option<NodeId>) {
+    pub fn build_under(
+        &mut self,
+        tree: &mut UITree,
+        root: &View,
+        rect: Rect,
+        parent: Option<NodeId>,
+    ) {
         layout::solve_into(root, rect, tree.measurer(), &mut self.scratch);
 
         #[cfg(debug_assertions)]
@@ -272,7 +278,9 @@ impl ChromeHost {
     /// In-place update if the structure is unchanged; otherwise
     /// [`Reconcile::NeedsRebuild`] with the tree left untouched.
     pub fn update(&mut self, tree: &mut UITree, root: &View, rect: Rect) -> Reconcile {
-        manifold_foundation::work_count::record_work(manifold_foundation::work_count::WorkKind::ChromeLayout);
+        manifold_foundation::work_count::record_work(
+            manifold_foundation::work_count::WorkKind::ChromeLayout,
+        );
         layout::solve_into(root, rect, tree.measurer(), &mut self.scratch);
 
         if !self.built
@@ -300,7 +308,8 @@ impl ChromeHost {
         // A materialised slider sits on top of its slot, outside the laid
         // nodes; it moves with the slot. Holders re-read `slider_ids`.
         for i in 0..self.scratch.len() {
-            let (Some(spec), Some(key)) = (self.scratch[i].slider.as_ref(), self.scratch[i].key) else {
+            let (Some(spec), Some(key)) = (self.scratch[i].slider.as_ref(), self.scratch[i].key)
+            else {
                 continue;
             };
             let rect = self.scratch[i].rect;
@@ -351,7 +360,11 @@ impl ChromeHost {
     }
 
     pub fn first_node(&self) -> usize {
-        if self.built { self.first_node } else { usize::MAX }
+        if self.built {
+            self.first_node
+        } else {
+            usize::MAX
+        }
     }
 
     pub fn node_count(&self) -> usize {
@@ -573,7 +586,10 @@ mod tests {
 
         let button_id = host.node_id(2).unwrap();
         let action = reg.resolve(&t, Some(button_id), Gesture::Click);
-        assert!(matches!(action, Some(PanelAction::Transport(TransportAction::Stop))));
+        assert!(matches!(
+            action,
+            Some(PanelAction::Transport(TransportAction::Stop))
+        ));
     }
 
     #[test]
@@ -626,13 +642,22 @@ mod tests {
             .fill_w()
             .h(Sizing::Fixed(20.0))
             .child(View::label(name))
-            .child(View::slider_row(spec).fill_w().h(Sizing::Fixed(20.0)).key(7))
+            .child(
+                View::slider_row(spec)
+                    .fill_w()
+                    .h(Sizing::Fixed(20.0))
+                    .key(7),
+            )
     }
 
     #[test]
     fn an_in_place_update_moves_a_slider_with_its_slot() {
         let bounds = |t: &UITree, ids: SliderNodeIds| {
-            [ids.label.map(|l| t.get_bounds(l)), Some(t.get_bounds(ids.track)), Some(t.get_bounds(ids.value_text))]
+            [
+                ids.label.map(|l| t.get_bounds(l)),
+                Some(t.get_bounds(ids.track)),
+                Some(t.get_bounds(ids.value_text)),
+            ]
         };
         let mut fresh_tree = tree();
         let mut fresh = ChromeHost::new();
@@ -642,7 +667,10 @@ mod tests {
         let mut t = tree();
         let mut host = ChromeHost::new();
         host.build(&mut t, &slider_row("ab"), rect());
-        assert_eq!(host.update(&mut t, &slider_row("a longer name"), rect()), Reconcile::Updated);
+        assert_eq!(
+            host.update(&mut t, &slider_row("a longer name"), rect()),
+            Reconcile::Updated
+        );
         let ids = host.slider_ids(7).unwrap();
         assert_eq!(bounds(&t, ids), want);
         assert_eq!(ids.track_span, fresh.slider_ids(7).unwrap().track_span);

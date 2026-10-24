@@ -72,7 +72,10 @@ fn worker_loop(shared: Arc<AnalyzerGuiShared>, shutdown: Arc<AtomicBool>) {
             history.set_epoch(shared.loudness_reset_epoch());
             drained |= history.push(block);
         }
-        if !drained { thread::sleep(IDLE_SLEEP); continue; }
+        if !drained {
+            thread::sleep(IDLE_SLEEP);
+            continue;
+        }
         let (integrated, lra) = history.compute();
         shared.publish_slow_loudness(history.epoch, integrated, lra);
     }
@@ -85,13 +88,22 @@ struct LoudnessHistory {
 }
 impl LoudnessHistory {
     fn new(epoch: u32) -> Self {
-        Self { epoch, blocks: Vec::with_capacity(PRESIZE_BINS), scratch: IntegratedScratch::default() }
+        Self {
+            epoch,
+            blocks: Vec::with_capacity(PRESIZE_BINS),
+            scratch: IntegratedScratch::default(),
+        }
     }
     fn set_epoch(&mut self, epoch: u32) {
-        if self.epoch != epoch { self.epoch = epoch; self.blocks.clear(); }
+        if self.epoch != epoch {
+            self.epoch = epoch;
+            self.blocks.clear();
+        }
     }
     fn push(&mut self, block: manifold_analyzer_dsp::LoudnessBlock) -> bool {
-        if block.generation != self.epoch { return false; }
+        if block.generation != self.epoch {
+            return false;
+        }
         self.blocks.push(block.mean_square);
         true
     }
@@ -109,15 +121,28 @@ mod tests {
     fn reset_rejects_pending_old_blocks_and_old_results() {
         let shared = AnalyzerGuiShared::new(48000.0, 4096);
         let mut history = LoudnessHistory::new(0);
-        for _ in 0..10 { history.push(LoudnessBlock { generation: 0, mean_square: 1.0 }); }
+        for _ in 0..10 {
+            history.push(LoudnessBlock {
+                generation: 0,
+                mean_square: 1.0,
+            });
+        }
         let old = history.compute();
         shared.request_loudness_reset();
         history.set_epoch(shared.loudness_reset_epoch());
-        assert!(!history.push(LoudnessBlock { generation: 0, mean_square: 1.0 }));
+        assert!(!history.push(LoudnessBlock {
+            generation: 0,
+            mean_square: 1.0
+        }));
         shared.publish_slow_loudness(0, old.0, old.1);
         assert_eq!(shared.integrated_lufs(), -120.0);
         assert_eq!(shared.loudness().lra_lu, 0.0);
-        for _ in 0..10 { history.push(LoudnessBlock { generation: 1, mean_square: 0.01 }); }
+        for _ in 0..10 {
+            history.push(LoudnessBlock {
+                generation: 1,
+                mean_square: 0.01,
+            });
+        }
         let fresh = history.compute();
         shared.publish_slow_loudness(1, fresh.0, fresh.1);
         assert!((shared.integrated_lufs() + 20.691).abs() < 0.001);

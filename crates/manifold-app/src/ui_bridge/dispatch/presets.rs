@@ -117,9 +117,10 @@ pub(crate) fn dispatch_preset(
                     }
                 }
             } else {
-                ctx.project
-                    .instance_preset_id(&target)
-                    .and_then(|id| manifold_nodes::bundled_presets::bundled_preset_def(&id).map(|def| (*def).clone()))
+                ctx.project.instance_preset_id(&target).and_then(|id| {
+                    manifold_nodes::bundled_presets::bundled_preset_def(&id)
+                        .map(|def| (*def).clone())
+                })
             };
             let mut command = RevertToLibraryCommand::new(target.clone(), resolved.is_some());
             if let Some(def) = resolved {

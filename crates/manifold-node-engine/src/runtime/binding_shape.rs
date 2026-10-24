@@ -31,7 +31,9 @@ pub(crate) fn binding_shapes(
         return out;
     };
     for saved in &meta.params {
-        let Some(d) = declared.spec(&saved.id) else { continue };
+        let Some(d) = declared.spec(&saved.id) else {
+            continue;
+        };
         let live = manifest.and_then(|m| m.get(&saved.id)).map(|p| &p.spec);
         out.insert(
             saved.id.clone(),
@@ -51,7 +53,9 @@ pub(crate) fn binding_shapes(
 mod tests {
     use super::*;
     use manifold_core::PresetTypeId;
-    use manifold_core::effect_graph_def::{BindingDef, BindingTarget, ParamSpecDef, PresetMetadata};
+    use manifold_core::effect_graph_def::{
+        BindingDef, BindingTarget, ParamSpecDef, PresetMetadata,
+    };
     use manifold_core::effects::ParamConvert;
     use manifold_core::params::{Param, ParamChoices};
 
@@ -81,7 +85,9 @@ mod tests {
                     id: "amount".into(),
                     label: String::new(),
                     default_value: 0.5,
-                    target: BindingTarget::Composite { outer_name: "amount".into() },
+                    target: BindingTarget::Composite {
+                        outer_name: "amount".into(),
+                    },
                     convert: ParamConvert::Float,
                     user_added: false,
                     scale: 1.0,
@@ -118,7 +124,10 @@ mod tests {
         assert_eq!(param.slider_span(), (-3.0, 7.0));
         let built = binding_shapes(&doc, Some(&ParamManifest::from_params(vec![param])));
         assert_eq!((built["amount"].min, built["amount"].max), (0.0, 1.0));
-        assert!(built["amount"].invert, "invert is the user's choice and reaches the reshape");
+        assert!(
+            built["amount"].invert,
+            "invert is the user's choice and reaches the reshape"
+        );
     }
 
     /// A user's slider range is display only: the manifest build reshapes
@@ -126,7 +135,10 @@ mod tests {
     #[test]
     fn standalone_build_reshape_matches_manifest_build() {
         let doc = doc();
-        let choices = ParamChoices { slider: Some((0.0, 10.0)), ..ParamChoices::default() };
+        let choices = ParamChoices {
+            slider: Some((0.0, 10.0)),
+            ..ParamChoices::default()
+        };
         let mut spec = doc.preset_metadata.as_ref().unwrap().params[0].clone();
         choices.apply(&mut spec);
         let mut param = Param::bundled(spec);

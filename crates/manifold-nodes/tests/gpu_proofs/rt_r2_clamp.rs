@@ -39,7 +39,6 @@
 
 use manifold_gpu::raytrace::MetalShadowRayTracer;
 
-
 const TOLERANCE: f32 = 1e-4;
 /// Wider tolerance for cases where the clamp box's own width is near-zero
 /// in mapped space (flat neighborhood: true sigma is 0; HDR: sigma is
@@ -105,7 +104,8 @@ fn clamp_refl_history_noisy_neighborhood_keeps_history_inside_box() {
 
     // Checkerboard 0.2/0.8, same value on every channel, alpha unused.
     let samples = [0.2f32, 0.8, 0.2, 0.8, 0.2, 0.8, 0.2, 0.8, 0.2];
-    let neighborhood: [[f32; 4]; 9] = std::array::from_fn(|i| [samples[i], samples[i], samples[i], 1.0]);
+    let neighborhood: [[f32; 4]; 9] =
+        std::array::from_fn(|i| [samples[i], samples[i], samples[i], 1.0]);
 
     // BUG-axe9: box is built in MAPPED space now — map the 9 samples first
     // (each channel equal, so scalar mean/sigma applies to every channel).
@@ -124,7 +124,12 @@ fn clamp_refl_history_noisy_neighborhood_keeps_history_inside_box() {
     let history = [history_scalar; 3];
 
     let got = tracer.debug_clamp_refl_history(device, &neighborhood, history);
-    assert_close(got, history, TOLERANCE, "noisy neighborhood, history inside mapped box");
+    assert_close(
+        got,
+        history,
+        TOLERANCE,
+        "noisy neighborhood, history inside mapped box",
+    );
 }
 
 #[test]
@@ -147,7 +152,12 @@ fn clamp_refl_history_flat_neighborhood_collapses_to_mean() {
 
     let history = [5.0f32; 3];
     let got = tracer.debug_clamp_refl_history(device, &neighborhood, history);
-    assert_close(got, expected, MAPPED_ROUNDTRIP_TOLERANCE, "flat neighborhood collapses to mean");
+    assert_close(
+        got,
+        expected,
+        MAPPED_ROUNDTRIP_TOLERANCE,
+        "flat neighborhood collapses to mean",
+    );
 }
 
 /// BUG-axe9: the streak scenario — one hot HDR texel next to black
@@ -163,7 +173,8 @@ fn clamp_refl_history_hdr_neighborhood_engages_in_mapped_space() {
 
     // 8 texels at 0.0, 1 at 100.0 (alpha 1.0, unused by the kernel).
     let samples = [0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 100.0];
-    let neighborhood: [[f32; 4]; 9] = std::array::from_fn(|i| [samples[i], samples[i], samples[i], 1.0]);
+    let neighborhood: [[f32; 4]; 9] =
+        std::array::from_fn(|i| [samples[i], samples[i], samples[i], 1.0]);
     let history = [20.0f32; 3];
 
     // Sanity: LINEAR-space clamp would have passed history through with
@@ -200,5 +211,10 @@ fn clamp_refl_history_hdr_neighborhood_engages_in_mapped_space() {
          mapped clamp expected={expected_scalar:.6}, got={:.6}",
         got[0]
     );
-    assert_close(got, expected, MAPPED_ROUNDTRIP_TOLERANCE, "HDR neighborhood, mapped-space clamp engages");
+    assert_close(
+        got,
+        expected,
+        MAPPED_ROUNDTRIP_TOLERANCE,
+        "HDR neighborhood, mapped-space clamp engages",
+    );
 }

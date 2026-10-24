@@ -70,8 +70,14 @@ fn fragment_reads_storage_buffer_via_bytes_binding() {
         &pipeline,
         &target.texture,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&bias) },
-            GpuBinding::Bytes { binding: 8, data: bytemuck::cast_slice(&vals) },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&bias),
+            },
+            GpuBinding::Bytes {
+                binding: 8,
+                data: bytemuck::cast_slice(&vals),
+            },
         ],
         true,
         true,
@@ -86,8 +92,7 @@ fn fragment_reads_storage_buffer_via_bytes_binding() {
     rb.commit_and_wait_completed();
 
     let ptr = buf.mapped_ptr().expect("shared readback buffer");
-    let halves: &[u16] =
-        unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * 4) as usize) };
+    let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * 4) as usize) };
 
     for px in 0..w as usize {
         for ch in 0..4 {

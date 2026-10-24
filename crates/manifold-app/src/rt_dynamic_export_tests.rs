@@ -112,9 +112,13 @@ fn fixture_project() -> Project {
         0,
     );
     layer.gen_params_mut().unwrap().graph = Some(graph);
-    layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
+    layer
+        .gen_params_mut()
+        .unwrap()
+        .refresh_manifest_from_graph();
     let metadata = layer
-        .gen_params_mut().unwrap()
+        .gen_params_mut()
+        .unwrap()
         .graph_def()
         .as_ref()
         .and_then(|graph| graph.preset_metadata.as_ref())
@@ -134,7 +138,8 @@ fn fixture_project() -> Project {
         "RT cut size must be an exposed production binding"
     );
     layer
-        .gen_params_mut().unwrap()
+        .gen_params_mut()
+        .unwrap()
         .drivers_mut()
         .push(ParameterDriver::new(
             ParamId::from("phase"),
@@ -152,7 +157,8 @@ fn fixture_project() -> Project {
     topology_driver.trim_min = 0.0001;
     topology_driver.trim_max = 0.0008;
     layer
-        .gen_params_mut().unwrap()
+        .gen_params_mut()
+        .unwrap()
         .drivers_mut()
         .push(topology_driver);
     layer
@@ -395,7 +401,12 @@ fn rt_dynamic_export_first_frame_and_state_steps() {
             .iter()
             .any(|state| !state.export_finished.is_empty())
     );
-    assert!(observation.states.iter().any(|state| state.export_run_finished));
+    assert!(
+        observation
+            .states
+            .iter()
+            .any(|state| state.export_run_finished)
+    );
     assert_eq!(observation.frames.len(), 12);
     for (index, frame) in observation.frames.iter().enumerate() {
         assert_eq!(frame.frame_idx as usize, index);
@@ -562,12 +573,12 @@ fn rt_dynamic_export_fault_before_encode() {
                 ExportTestFault::GpuFault | ExportTestFault::IgnoredSubmission
             )
         );
-        assert!(observation.states.iter().any(|state| {
-            state
-                .export_finished
+        assert!(
+            observation
+                .states
                 .iter()
-                .any(|event| !event.success)
-        }));
+                .any(|state| { state.export_finished.iter().any(|event| !event.success) })
+        );
         assert!(
             !path.exists(),
             "a pre-encode failure must not create an output file"
@@ -606,7 +617,12 @@ fn rt_dynamic_export_hang_retry_succeeds() {
     use crate::content_export::ExportTestFault;
     let dir = output_dir("rt_dynamic_export_hang_retry_succeeds");
     let clean_path = dir.join("clean.mp4");
-    let clean = run_export(plain_generator_project(), config(&clean_path, WIDTH, HEIGHT, false, false), false, None);
+    let clean = run_export(
+        plain_generator_project(),
+        config(&clean_path, WIDTH, HEIGHT, false, false),
+        false,
+        None,
+    );
     assert!(clean.output.is_some());
     for failing_attempts in [1u32, 2] {
         let path = dir.join(format!("hang-{failing_attempts}.mp4"));
@@ -617,9 +633,15 @@ fn rt_dynamic_export_hang_retry_succeeds() {
             false,
             Some((2, fault)),
         );
-        assert!(hung.output.is_some(), "a retried hang must still finish the export");
+        assert!(
+            hung.output.is_some(),
+            "a retried hang must still finish the export"
+        );
         assert!(!hung.gpu_abort_requested);
-        assert_eq!(hung.render_attempts, clean.render_attempts + failing_attempts);
+        assert_eq!(
+            hung.render_attempts,
+            clean.render_attempts + failing_attempts
+        );
         assert_eq!(hung.frames.len(), clean.frames.len());
         for (a, b) in hung.frames.iter().zip(&clean.frames) {
             assert_eq!(
@@ -645,9 +667,17 @@ fn rt_dynamic_export_hang_retries_exhausted_fails_cleanly() {
         plain_generator_project(),
         config(&path, WIDTH, HEIGHT, false, false),
         false,
-        Some((2, ExportTestFault::Hang { failing_attempts: 3 })),
+        Some((
+            2,
+            ExportTestFault::Hang {
+                failing_attempts: 3,
+            },
+        )),
     );
-    assert!(!observation.gpu_abort_requested, "a hang must never abort the app");
+    assert!(
+        !observation.gpu_abort_requested,
+        "a hang must never abort the app"
+    );
     assert!(observation.output.is_none());
     let event = observation
         .states
@@ -658,7 +688,10 @@ fn rt_dynamic_export_hang_retries_exhausted_fails_cleanly() {
     assert!(event.message.contains("frame 2"), "{}", event.message);
     assert!(event.message.contains("GPU hang"), "{}", event.message);
     assert!(event.message.contains("2 retries"), "{}", event.message);
-    assert!(!path.exists() && !video_only.exists(), "partial files must be deleted");
+    assert!(
+        !path.exists() && !video_only.exists(),
+        "partial files must be deleted"
+    );
 }
 
 /// A page fault leaves the device untrustworthy: still the fatal path, no retry.

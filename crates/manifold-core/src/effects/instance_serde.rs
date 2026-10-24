@@ -61,7 +61,11 @@ pub(super) struct ParamEntryWire {
     /// The user's choices (SCENE_SURFACES_DESIGN.md D7 (one saved choice set)).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     rename: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", with = "section_choice")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "section_choice"
+    )]
     section: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pin: Option<manifold_foundation::scene_surface::CardPin>,
@@ -102,7 +106,7 @@ impl ParamEntryWire {
             }),
             spec: ((inline_graph_spec && p.source != crate::params::SpecSource::Lookup)
                 || matches!(p.origin, crate::params::ParamOrigin::UserAdded))
-                .then(|| p.spec.clone()),
+            .then(|| p.spec.clone()),
             clip_trigger_source: p.clip_trigger_source.clone(),
             rename: p.choices.rename.clone(),
             section: p.choices.section.clone(),
@@ -180,11 +184,15 @@ impl Serialize for ManifestSer<'_> {
             // template. The param map is decoded before the embedded graph;
             // inline its spec so the value survives that first load pass.
             let inline_graph_spec = self.graph.is_some_and(|graph| {
-                graph.preset_metadata.as_ref().is_some_and(|meta| {
-                    meta.params.iter().any(|spec| spec.id == p.id())
-                })
+                graph
+                    .preset_metadata
+                    .as_ref()
+                    .is_some_and(|meta| meta.params.iter().any(|spec| spec.id == p.id()))
             }) && template.as_ref().is_none_or(|definition| {
-                !definition.param_defs.iter().any(|def| def.spec.id == p.id())
+                !definition
+                    .param_defs
+                    .iter()
+                    .any(|def| def.spec.id == p.id())
             });
             map.serialize_entry(
                 p.id(),
@@ -223,7 +231,11 @@ impl Serialize for GraphWithDerivedParams<'_> {
             // No metadata to derive onto — serialize the graph as-is.
             return self.graph.serialize(serializer);
         };
-        if meta.params.iter().all(|p| self.manifest.get(&p.id).is_none()) {
+        if meta
+            .params
+            .iter()
+            .all(|p| self.manifest.get(&p.id).is_none())
+        {
             // Nothing on this graph resolves against the manifest (e.g. a
             // fused/frozen def with no matching live instance) — nothing to
             // derive; avoid the clone.
@@ -237,7 +249,10 @@ impl Serialize for GraphWithDerivedParams<'_> {
         let join = crate::param_lookup::Join::new(self.preset, self.graph);
         let lookup_names = |id: &str| {
             self.joined
-                && self.manifest.get(id).is_some_and(|p| p.source == crate::params::SpecSource::Lookup)
+                && self
+                    .manifest
+                    .get(id)
+                    .is_some_and(|p| p.source == crate::params::SpecSource::Lookup)
                 && join.lookup_names(id)
         };
         if let Some(meta) = derived.preset_metadata.as_mut() {
@@ -261,7 +276,10 @@ impl Serialize for GraphWithDerivedParams<'_> {
             }
             for b in meta.bindings.iter_mut() {
                 if lookup_names(&b.id)
-                    && !matches!(b.target, crate::effect_graph_def::BindingTarget::Composite { .. })
+                    && !matches!(
+                        b.target,
+                        crate::effect_graph_def::BindingTarget::Composite { .. }
+                    )
                 {
                     b.label.clear();
                 }
@@ -314,10 +332,7 @@ fn spec_from_binding(
 /// unresolvable at load (see `build_param_manifest`'s keep-don't-drop
 /// branch): identity + state preserved, range 0..1 unless the entry carries
 /// a calibration block (which `apply_to` overlays afterward).
-fn placeholder_spec(
-    id: &str,
-    entry: &ParamEntryWire,
-) -> crate::effect_graph_def::ParamSpecDef {
+fn placeholder_spec(id: &str, entry: &ParamEntryWire) -> crate::effect_graph_def::ParamSpecDef {
     crate::effect_graph_def::ParamSpecDef {
         tooltip: None,
         id: id.to_string(),
@@ -386,7 +401,12 @@ fn gather_known_params(
                 let user = meta.bindings.iter().any(|b| b.user_added && b.id == s.id);
                 if user {
                     let choices = join.user_choices(s);
-                    (s.clone(), ParamOrigin::UserAdded, SpecSource::Authored, choices)
+                    (
+                        s.clone(),
+                        ParamOrigin::UserAdded,
+                        SpecSource::Authored,
+                        choices,
+                    )
                 } else {
                     let (spec, source, choices) = join.join_control(s);
                     (spec, ParamOrigin::Bundled, source, choices)
@@ -402,7 +422,12 @@ fn gather_known_params(
         let mut specs: Vec<_> = def.param_defs.iter().map(|pd| pd.spec.clone()).collect();
         crate::param_lookup::fill_template_scene_facts(effect_type, &mut specs);
         for spec in specs {
-            out.push((spec, ParamOrigin::Bundled, SpecSource::Lookup, ParamChoices::default()));
+            out.push((
+                spec,
+                ParamOrigin::Bundled,
+                SpecSource::Lookup,
+                ParamChoices::default(),
+            ));
         }
     }
     if let Some(meta) = meta {
@@ -413,7 +438,12 @@ fn gather_known_params(
                 .find(|p| p.id == b.id)
                 .cloned()
                 .unwrap_or_else(|| spec_from_binding(b));
-            out.push((spec, ParamOrigin::UserAdded, SpecSource::Authored, ParamChoices::default()));
+            out.push((
+                spec,
+                ParamOrigin::UserAdded,
+                SpecSource::Authored,
+                ParamChoices::default(),
+            ));
         }
     }
     out
@@ -440,9 +470,15 @@ fn compiled_scene_params(
             meta.params
                 .iter()
                 .map(|spec| {
-                    let user = meta.bindings.iter().any(|binding| binding.user_added && binding.id == spec.id);
-                    let (origin, source) =
-                        if user { (ParamOrigin::UserAdded, SpecSource::Authored) } else { (ParamOrigin::Bundled, SpecSource::Lookup) };
+                    let user = meta
+                        .bindings
+                        .iter()
+                        .any(|binding| binding.user_added && binding.id == spec.id);
+                    let (origin, source) = if user {
+                        (ParamOrigin::UserAdded, SpecSource::Authored)
+                    } else {
+                        (ParamOrigin::Bundled, SpecSource::Lookup)
+                    };
                     (spec.clone(), origin, source, ParamChoices::default())
                 })
                 .collect()
@@ -508,7 +544,12 @@ pub(super) fn build_param_manifest(
     let known = if scene {
         compiled_scene_params(graph)
     } else {
-        gather_known_params(is_generator, effect_type, graph, pass != ManifestPass::Refresh)
+        gather_known_params(
+            is_generator,
+            effect_type,
+            graph,
+            pass != ManifestPass::Refresh,
+        )
     };
     let mut entries: Vec<Param> = known
         .into_iter()
@@ -613,7 +654,10 @@ pub(super) fn build_param_manifest(
         choices.apply(&mut p.spec);
         p.choices = choices;
     }
-    (crate::params::ParamManifest::from_params(entries), base_tracked)
+    (
+        crate::params::ParamManifest::from_params(entries),
+        base_tracked,
+    )
 }
 
 /// Make the graph's `meta.params` what the manifest says, so the in-memory
@@ -735,7 +779,12 @@ impl Serialize for PresetInstance {
         if let Some(graph) = &self.graph {
             s.serialize_field(
                 "graph",
-                &GraphWithDerivedParams { preset: &self.effect_type, graph, manifest: &self.params, joined: self.is_generator() },
+                &GraphWithDerivedParams {
+                    preset: &self.effect_type,
+                    graph,
+                    manifest: &self.params,
+                    joined: self.is_generator(),
+                },
             )?;
         }
         if !self.folded_sections.is_empty() {
@@ -843,8 +892,14 @@ impl<'de> Deserialize<'de> for PresetInstance {
         // whatever registry state exists once the project's own embedded
         // presets have been installed.
         let pending_wire = raw.params.clone();
-        let (params, base_tracked) =
-            build_param_manifest(false, false, &raw.effect_type, &raw.graph, raw.params, ManifestPass::Deserialize);
+        let (params, base_tracked) = build_param_manifest(
+            false,
+            false,
+            &raw.effect_type,
+            &raw.graph,
+            raw.params,
+            ManifestPass::Deserialize,
+        );
 
         let mut audio_mods = raw.audio_mods;
         if let Some(legacy) = raw.legacy_audio_trigger {
@@ -933,10 +988,24 @@ impl GeneratorInstanceRaw {
             crate::scene_node::check_saved(graph)?;
         }
         let user = |id: &str| {
-            self.graph.as_ref().and_then(|graph| graph.preset_metadata.as_ref()).is_some_and(|meta| meta.bindings.iter().any(|binding| binding.user_added && binding.id == id))
+            self.graph
+                .as_ref()
+                .and_then(|graph| graph.preset_metadata.as_ref())
+                .is_some_and(|meta| {
+                    meta.bindings
+                        .iter()
+                        .any(|binding| binding.user_added && binding.id == id)
+                })
         };
-        if let Some(id) = self.params.iter().flatten().find_map(|(id, entry)| (entry.has_spec() && !user(id)).then_some(id)) {
-            return Err(format!("scene param {id:?} carries a description; a scene layer's params are described by its kind tables"));
+        if let Some(id) = self
+            .params
+            .iter()
+            .flatten()
+            .find_map(|(id, entry)| (entry.has_spec() && !user(id)).then_some(id))
+        {
+            return Err(format!(
+                "scene param {id:?} carries a description; a scene layer's params are described by its kind tables"
+            ));
         }
         Ok(())
     }
@@ -949,9 +1018,19 @@ impl GeneratorInstanceRaw {
         let pending_wire = self.params.clone();
         // A scene layer's saved graph describes no params; its manifest waits
         // for the compile (`PresetInstance::reconcile_manifest`).
-        let described = if self.scene.is_some() { &None } else { &self.graph };
-        let (params, base_tracked) =
-            build_param_manifest(true, self.scene.is_some(), &self.generator_type, described, self.params, ManifestPass::Deserialize);
+        let described = if self.scene.is_some() {
+            &None
+        } else {
+            &self.graph
+        };
+        let (params, base_tracked) = build_param_manifest(
+            true,
+            self.scene.is_some(),
+            &self.generator_type,
+            described,
+            self.params,
+            ManifestPass::Deserialize,
+        );
         normalize_meta_params(&mut self.graph, &params);
         let mut audio_mods = self.audio_mods;
         if let Some(legacy) = self.legacy_audio_trigger {

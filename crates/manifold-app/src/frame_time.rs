@@ -51,7 +51,7 @@ use manifold_node_engine::exec::sim_metrics::ClockMetrics;
 use manifold_node_engine::exec::sim_metrics::{ClockRecord, MAX_CLOCK_RECORDS};
 
 use crate::content_command::ContentCommand;
-use crate::perf_soak::{prepare_project_edited, PreparedProject};
+use crate::perf_soak::{PreparedProject, prepare_project_edited};
 
 const GENERATOR: &str = "WaterDamBreakGpuFlip";
 const RESOLUTION_PARAM: &str = "resolution";
@@ -94,12 +94,17 @@ fn granularity(s: Option<&str>) -> Result<ProfileGranularity, String> {
     match s {
         None | Some("dispatch") => Ok(ProfileGranularity::Dispatch),
         Some("node") => Ok(ProfileGranularity::Tag),
-        Some(other) => Err(format!("--stamp-granularity must be dispatch or node, not {other}")),
+        Some(other) => Err(format!(
+            "--stamp-granularity must be dispatch or node, not {other}"
+        )),
     }
 }
 
 fn value(args: &[String], flag: &str) -> Option<String> {
-    args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned()
+    args.iter()
+        .position(|a| a == flag)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
 }
 
 fn parse(args: &[String]) -> Args {
@@ -109,21 +114,30 @@ fn parse(args: &[String]) -> Args {
     };
     let number = |flag: &str, default: Option<usize>| -> usize {
         match value(args, flag) {
-            Some(s) => s.parse().unwrap_or_else(|_| usage_exit(&format!("{flag} must be a whole number"))),
+            Some(s) => s
+                .parse()
+                .unwrap_or_else(|_| usage_exit(&format!("{flag} must be a whole number"))),
             None => default.unwrap_or_else(|| usage_exit(&format!("{flag} is required"))),
         }
     };
     let frames = number("--frames", None);
     let frame_clock = args.iter().any(|arg| arg == "--frame-clock");
     let stamp_every = number("--stamp-every", Some(5)).max(1);
-    let granularity = granularity(value(args, "--stamp-granularity").as_deref()).unwrap_or_else(|e| usage_exit(&e));
+    let granularity = granularity(value(args, "--stamp-granularity").as_deref())
+        .unwrap_or_else(|e| usage_exit(&e));
     let splash_frames = number("--splash-frames", Some(frames / 2));
-    let resolution = value(args, "--resolution")
-        .map(|s| s.parse::<f32>().unwrap_or_else(|_| usage_exit("--resolution must be a number")));
-    let solve_level = value(args, "--solve-level")
-        .map(|s| s.parse::<f32>().unwrap_or_else(|_| usage_exit("--solve-level must be a number")));
+    let resolution = value(args, "--resolution").map(|s| {
+        s.parse::<f32>()
+            .unwrap_or_else(|_| usage_exit("--resolution must be a number"))
+    });
+    let solve_level = value(args, "--solve-level").map(|s| {
+        s.parse::<f32>()
+            .unwrap_or_else(|_| usage_exit("--solve-level must be a number"))
+    });
     let sim_rate = value(args, "--sim-rate").map(|s| {
-        s.parse::<u32>().ok().and_then(|hz| manifold_core::settings::SimRate::try_from(hz).ok())
+        s.parse::<u32>()
+            .ok()
+            .and_then(|hz| manifold_core::settings::SimRate::try_from(hz).ok())
             .unwrap_or_else(|| usage_exit("--sim-rate must be 15, 20, 30 or 60"))
     });
     let png = match (value(args, "--png-frame"), value(args, "--png")) {
@@ -132,11 +146,23 @@ fn parse(args: &[String]) -> Args {
         (Some(_), Some(path)) => Some((number("--png-frame", None), path)),
     };
     let transport_log = value(args, "--transport-log");
-    let pre_play_delay_seed = value(args, "--pre-play-delay-seed")
-        .map(|s| s.parse::<u64>().unwrap_or_else(|_| usage_exit("--pre-play-delay-seed must be a whole number")));
+    let pre_play_delay_seed = value(args, "--pre-play-delay-seed").map(|s| {
+        s.parse::<u64>()
+            .unwrap_or_else(|_| usage_exit("--pre-play-delay-seed must be a whole number"))
+    });
     Args {
-        project, frames, frame_clock, resolution, solve_level, sim_rate, stamp_every, granularity, splash_frames, png,
-        transport_log, pre_play_delay_seed,
+        project,
+        frames,
+        frame_clock,
+        resolution,
+        solve_level,
+        sim_rate,
+        stamp_every,
+        granularity,
+        splash_frames,
+        png,
+        transport_log,
+        pre_play_delay_seed,
     }
 }
 
@@ -180,7 +206,10 @@ mod tests {
 
     #[test]
     fn frame_clock_flag_defaults_off_and_parses() {
-        let mut args: Vec<String> = ["frame-time", "water.manifold", "--frames", "2"].into_iter().map(str::to_owned).collect();
+        let mut args: Vec<String> = ["frame-time", "water.manifold", "--frames", "2"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
         assert!(!parse(&args).frame_clock);
         args.push("--frame-clock".into());
         assert!(parse(&args).frame_clock);
@@ -188,22 +217,43 @@ mod tests {
 
     #[test]
     fn transport_log_flags_parse_and_delay_stays_within_two_frames() {
-        let mut args: Vec<String> = ["frame-time", "x.manifold", "--frames", "2"].into_iter().map(str::to_owned).collect();
+        let mut args: Vec<String> = ["frame-time", "x.manifold", "--frames", "2"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
         let parsed = parse(&args);
         assert!(parsed.transport_log.is_none() && parsed.pre_play_delay_seed.is_none());
-        args.extend(["--transport-log", "/tmp/a.log", "--pre-play-delay-seed", "7"].map(str::to_owned));
+        args.extend(
+            [
+                "--transport-log",
+                "/tmp/a.log",
+                "--pre-play-delay-seed",
+                "7",
+            ]
+            .map(str::to_owned),
+        );
         let parsed = parse(&args);
         assert_eq!(parsed.transport_log.as_deref(), Some("/tmp/a.log"));
         assert_eq!(parsed.pre_play_delay_seed, Some(7));
         let delays: Vec<Duration> = (0..64).map(|seed| pre_play_delay(seed, 60.0)).collect();
-        assert!(delays.iter().all(|d| *d < Duration::from_secs_f64(2.0 / 60.0)));
-        assert_ne!(delays[1], delays[2], "different seeds press Play at different phases");
+        assert!(
+            delays
+                .iter()
+                .all(|d| *d < Duration::from_secs_f64(2.0 / 60.0))
+        );
+        assert_ne!(
+            delays[1], delays[2],
+            "different seeds press Play at different phases"
+        );
     }
 
     #[test]
     fn stamp_granularity_flag_parses() {
         assert_eq!(granularity(None), Ok(ProfileGranularity::Dispatch));
-        assert_eq!(granularity(Some("dispatch")), Ok(ProfileGranularity::Dispatch));
+        assert_eq!(
+            granularity(Some("dispatch")),
+            Ok(ProfileGranularity::Dispatch)
+        );
         assert_eq!(granularity(Some("node")), Ok(ProfileGranularity::Tag));
         assert!(granularity(Some("step")).is_err());
     }
@@ -218,16 +268,29 @@ mod tests {
             start_ms: 0.0,
             threadgroup_bytes: 0,
         };
-        let profiles = [("Generators", GpuFrameProfile { spans: vec![span], ..GpuFrameProfile::default() })];
+        let profiles = [(
+            "Generators",
+            GpuFrameProfile {
+                spans: vec![span],
+                ..GpuFrameProfile::default()
+            },
+        )];
         let split = split_profiles(&[], &profiles, ProfileGranularity::Tag);
         assert_eq!(split.per_type[STEP], 2.5);
         assert_eq!(split.per_step_label["gpu_flip.stage.pressure"], 2.5);
-        assert!(split.compute_dispatches.is_none(), "a stage span is not one dispatch");
+        assert!(
+            split.compute_dispatches.is_none(),
+            "a stage span is not one dispatch"
+        );
     }
 
     fn record(id: u64, accepted: u32, due: u32, reanchored: bool) -> ClockRecord {
         ClockRecord {
-            id, accepted, due, live_cap: 2, reanchored,
+            id,
+            accepted,
+            due,
+            live_cap: 2,
+            reanchored,
             fresh_dropped_seconds: if reanchored { 0.05 } else { 0.0 },
             ..ClockRecord::default()
         }
@@ -247,28 +310,48 @@ mod tests {
     #[test]
     fn no_tick_frames_are_classified_from_the_clock_decisions() {
         let clock = |accepted, due, reanchored| clocks(&[record(1, accepted, due, reanchored)]);
-        let restart = clocks(&[ClockRecord { restarted: true, ..record(1, 0, 0, false) }]);
-        let held = clocks(&[ClockRecord { held: true, ..record(1, 0, 0, false) }]);
+        let restart = clocks(&[ClockRecord {
+            restarted: true,
+            ..record(1, 0, 0, false)
+        }]);
+        let held = clocks(&[ClockRecord {
+            held: true,
+            ..record(1, 0, 0, false)
+        }]);
         let frames = [
             restart,
             clock(1, 1, false),
-            clock(0, 0, false),        // no boundary
-            clock(2, 4, true),         // overload: drop and reanchor
-            clock(0, 0, false),        // no boundary, following the reanchor
-            clock(0, 0, false),        // no boundary
+            clock(0, 0, false), // no boundary
+            clock(2, 4, true),  // overload: drop and reanchor
+            clock(0, 0, false), // no boundary, following the reanchor
+            clock(0, 0, false), // no boundary
             clock(1, 1, false),
-            clock(1, 3, true),         // late-frame cap of one, reanchor
-            clock(1, 1, false),        // ticked: the mark clears
+            clock(1, 3, true),  // late-frame cap of one, reanchor
+            clock(1, 1, false), // ticked: the mark clears
             clock(0, 0, false),
             held,
             ClockMetrics::default(),
             clock(0, 1, false),
         ];
         use NoTick::*;
-        assert_eq!(attribute(&frames), [
-            Some(Restart), None, Some(NoBoundary), None, Some(NoBoundaryAfterReanchor), Some(NoBoundary),
-            None, None, None, Some(NoBoundary), Some(Held), Some(NoClock), Some(Other),
-        ]);
+        assert_eq!(
+            attribute(&frames),
+            [
+                Some(Restart),
+                None,
+                Some(NoBoundary),
+                None,
+                Some(NoBoundaryAfterReanchor),
+                Some(NoBoundary),
+                None,
+                None,
+                None,
+                Some(NoBoundary),
+                Some(Held),
+                Some(NoClock),
+                Some(Other),
+            ]
+        );
 
         let mut phase = Phase::default();
         for (clock, no_tick) in frames.iter().zip(attribute(&frames)) {
@@ -294,7 +377,10 @@ mod tests {
     /// ticks is a tick frame, and a reanchor marks only its own clock.
     #[test]
     fn mixed_clock_frames_keep_per_clock_identity() {
-        let restart = ClockRecord { restarted: true, ..record(1, 0, 0, false) };
+        let restart = ClockRecord {
+            restarted: true,
+            ..record(1, 0, 0, false)
+        };
         let frames = [
             clocks(&[restart, record(2, 1, 1, false)]),
             clocks(&[record(1, 1, 1, true), record(2, 1, 1, false)]),
@@ -305,13 +391,24 @@ mod tests {
             clocks(&[record(1, 0, 0, false), record(2, 0, 0, false)]),
         ];
         use NoTick::*;
-        assert_eq!(attribute(&frames), [
-            None, None, Some(NoBoundaryAfterReanchor), Some(NoBoundary), None,
-            Some(NoBoundaryAfterReanchor), Some(NoBoundary),
-        ]);
+        assert_eq!(
+            attribute(&frames),
+            [
+                None,
+                None,
+                Some(NoBoundaryAfterReanchor),
+                Some(NoBoundary),
+                None,
+                Some(NoBoundaryAfterReanchor),
+                Some(NoBoundary),
+            ]
+        );
         let mut phase = Phase::default();
         for clock in &frames {
-            phase.add(&Frame { clock: *clock, ..Frame::default() });
+            phase.add(&Frame {
+                clock: *clock,
+                ..Frame::default()
+            });
         }
         assert_eq!(phase.reanchors, 2);
 
@@ -330,18 +427,25 @@ mod tests {
         }
         let mut no_tick_overflow = idle;
         no_tick_overflow.push(record(98, 0, 0, false));
-        assert_eq!(attribute(&[full, no_tick_overflow, idle]), [
-            None, Some(NoTick::Indeterminate), Some(NoTick::NoBoundary),
-        ]);
+        assert_eq!(
+            attribute(&[full, no_tick_overflow, idle]),
+            [None, Some(NoTick::Indeterminate), Some(NoTick::NoBoundary),]
+        );
     }
 
     #[test]
     fn stage_coverage_compares_stage_spans_to_the_step_span() {
         let mut split = Split::default();
         split.per_type.insert(STEP.into(), 10.0);
-        split.per_step_label.insert("gpu_flip.stage.pressure".into(), 6.0);
-        split.per_step_label.insert("gpu_flip.stage.move".into(), 3.6);
-        split.per_step_label.insert("flip-clock-schedule".into(), 0.4);
+        split
+            .per_step_label
+            .insert("gpu_flip.stage.pressure".into(), 6.0);
+        split
+            .per_step_label
+            .insert("gpu_flip.stage.move".into(), 3.6);
+        split
+            .per_step_label
+            .insert("flip-clock-schedule".into(), 0.4);
         assert!((stage_coverage(&split).unwrap() - 0.96).abs() < 1e-12);
         assert_eq!(stage_coverage(&Split::default()), None);
     }
@@ -351,35 +455,65 @@ mod tests {
         use manifold_gpu::GpuProfiledSpan;
         use manifold_node_engine::exec::effect_node::NodeInstanceId;
 
-        let steps: Vec<_> = [1_000_000, 2_000_000].into_iter().map(|cpu_nanos| StepProfile {
-            step_idx: 0,
-            node: NodeInstanceId(1),
-            type_id: STEP.into(),
-            cpu_nanos,
-            tag: "water:s0".into(),
-        }).collect();
-        let spans = [GpuWorkKind::Compute, GpuWorkKind::Compute, GpuWorkKind::Blit].into_iter().map(|kind| GpuProfiledSpan {
+        let steps: Vec<_> = [1_000_000, 2_000_000]
+            .into_iter()
+            .map(|cpu_nanos| StepProfile {
+                step_idx: 0,
+                node: NodeInstanceId(1),
+                type_id: STEP.into(),
+                cpu_nanos,
+                tag: "water:s0".into(),
+            })
+            .collect();
+        let spans = [
+            GpuWorkKind::Compute,
+            GpuWorkKind::Compute,
+            GpuWorkKind::Blit,
+        ]
+        .into_iter()
+        .map(|kind| GpuProfiledSpan {
             tag: "water:s0".into(),
             label: "pass".into(),
             kind,
             threadgroup_bytes: 0,
             start_ms: 0.0,
             millis: 0.5,
-        }).collect();
-        let profiles = [("Generators", GpuFrameProfile { total_ms: 2.0, spans, invalid: 1, ..GpuFrameProfile::default() })];
+        })
+        .collect();
+        let profiles = [(
+            "Generators",
+            GpuFrameProfile {
+                total_ms: 2.0,
+                spans,
+                invalid: 1,
+                ..GpuFrameProfile::default()
+            },
+        )];
         let dispatch = split_profiles(&steps, &profiles, ProfileGranularity::Dispatch);
         assert_eq!(dispatch.per_type_cpu_ms[STEP], 3.0);
         assert_eq!(dispatch.per_type[STEP], 1.5);
         assert_eq!(dispatch.compute_dispatches.as_ref().unwrap()[STEP], 2);
         assert_eq!(dispatch.invalid, 1);
         let mut phase = Phase::default();
-        phase.add(&Frame { interval_ms: 4.0, fence_ms: 0.0, plain_gpu_ms: None, split: Some(dispatch), ..Frame::default() });
+        phase.add(&Frame {
+            interval_ms: 4.0,
+            fence_ms: 0.0,
+            plain_gpu_ms: None,
+            split: Some(dispatch),
+            ..Frame::default()
+        });
         assert_eq!(phase.per_type_cpu_ms[STEP], vec![3.0]);
         assert_eq!(phase.compute_dispatches[STEP], vec![2.0]);
         assert_eq!(phase.dispatch_frames, 1);
         assert_eq!(phase.invalid, 1);
         let idle = split_profiles(&steps, &[], ProfileGranularity::Dispatch);
-        phase.add(&Frame { interval_ms: 4.0, fence_ms: 0.0, plain_gpu_ms: None, split: Some(idle), ..Frame::default() });
+        phase.add(&Frame {
+            interval_ms: 4.0,
+            fence_ms: 0.0,
+            plain_gpu_ms: None,
+            split: Some(idle),
+            ..Frame::default()
+        });
         assert_eq!(phase.compute_dispatches[STEP], vec![2.0, 0.0]);
         assert_eq!(phase.dispatch_frames, 2);
 
@@ -388,7 +522,13 @@ mod tests {
         assert_eq!(tagged.per_type[STEP], 1.5);
         assert!(tagged.compute_dispatches.is_none());
         let mut phase = Phase::default();
-        phase.add(&Frame { interval_ms: 4.0, fence_ms: 0.0, plain_gpu_ms: None, split: Some(tagged), ..Frame::default() });
+        phase.add(&Frame {
+            interval_ms: 4.0,
+            fence_ms: 0.0,
+            plain_gpu_ms: None,
+            split: Some(tagged),
+            ..Frame::default()
+        });
         assert_eq!(phase.per_type_cpu_ms[STEP], vec![3.0]);
         assert!(phase.compute_dispatches.is_empty());
         assert_eq!(phase.dispatch_frames, 0);
@@ -453,48 +593,53 @@ impl NoTick {
 /// order. A clock's reanchor marks only its own next no-tick decision.
 fn attribute(frames: &[ClockMetrics]) -> Vec<Option<NoTick>> {
     let mut after_reanchor: BTreeMap<u64, bool> = BTreeMap::new();
-    frames.iter().map(|frame| {
-        let records = frame.records();
-        let ticked = frame.accepted_total > 0;
-        let mut verdict: Option<NoTick> = None;
-        for clock in records {
-            let pending = after_reanchor.entry(clock.id).or_default();
-            let own = if clock.accepted > 0 {
+    frames
+        .iter()
+        .map(|frame| {
+            let records = frame.records();
+            let ticked = frame.accepted_total > 0;
+            let mut verdict: Option<NoTick> = None;
+            for clock in records {
+                let pending = after_reanchor.entry(clock.id).or_default();
+                let own = if clock.accepted > 0 {
+                    None
+                } else if clock.restarted {
+                    Some(NoTick::Restart)
+                } else if clock.held {
+                    Some(NoTick::Held)
+                } else if clock.due > 0 {
+                    Some(NoTick::Other)
+                } else if *pending {
+                    Some(NoTick::NoBoundaryAfterReanchor)
+                } else {
+                    Some(NoTick::NoBoundary)
+                };
+                *pending = clock.reanchored;
+                verdict = match (verdict, own) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
+            }
+            if ticked {
                 None
-            } else if clock.restarted {
-                Some(NoTick::Restart)
-            } else if clock.held {
-                Some(NoTick::Held)
-            } else if clock.due > 0 {
-                Some(NoTick::Other)
-            } else if *pending {
-                Some(NoTick::NoBoundaryAfterReanchor)
+            } else if frame.overflow > 0 {
+                Some(NoTick::Indeterminate)
+            } else if records.is_empty() {
+                Some(NoTick::NoClock)
             } else {
-                Some(NoTick::NoBoundary)
-            };
-            *pending = clock.reanchored;
-            verdict = match (verdict, own) {
-                (Some(a), Some(b)) => Some(a.min(b)),
-                (a, b) => a.or(b),
-            };
-        }
-        if ticked {
-            None
-        } else if frame.overflow > 0 {
-            Some(NoTick::Indeterminate)
-        } else if records.is_empty() {
-            Some(NoTick::NoClock)
-        } else {
-            verdict
-        }
-    }).collect()
+                verdict
+            }
+        })
+        .collect()
 }
 
 /// The solver's stage spans as a fraction of the whole step span in one
 /// timestamped frame. None when the frame stamped no step work.
 fn stage_coverage(split: &Split) -> Option<f64> {
     let step = split.per_type.get(STEP).copied().filter(|ms| *ms > 0.0)?;
-    let stages: f64 = split.per_step_label.iter()
+    let stages: f64 = split
+        .per_step_label
+        .iter()
         .filter(|(label, _)| label.starts_with(STAGE_PREFIX))
         .map(|(_, ms)| ms)
         .sum();
@@ -519,7 +664,8 @@ impl Span {
     }
 
     fn ms(&self) -> f64 {
-        self.first_start.map_or(0.0, |start| (self.last_end - start).max(0.0) * 1e3)
+        self.first_start
+            .map_or(0.0, |start| (self.last_end - start).max(0.0) * 1e3)
     }
 }
 
@@ -636,9 +782,13 @@ impl Phase {
                 samples.push(0.0);
             }
             for (name, count) in counts {
-                let samples = self.compute_dispatches.entry(name.clone())
+                let samples = self
+                    .compute_dispatches
+                    .entry(name.clone())
                     .or_insert_with(|| vec![0.0; self.dispatch_frames]);
-                *samples.last_mut().expect("the current dispatch frame has a count slot") = *count as f64;
+                *samples
+                    .last_mut()
+                    .expect("the current dispatch frame has a count slot") = *count as f64;
             }
         }
     }
@@ -647,19 +797,36 @@ impl Phase {
     /// tick and no-tick frames, and the stage spans' share of the step span.
     fn report_ticks(&self) {
         let quiet: usize = self.no_tick.values().sum();
-        let reasons: Vec<String> = self.no_tick.iter().map(|(reason, n)| format!("{reason}: {n}")).collect();
+        let reasons: Vec<String> = self
+            .no_tick
+            .iter()
+            .map(|(reason, n)| format!("{reason}: {n}"))
+            .collect();
         println!(
             "  solver ticks: {} frames ticked, {quiet} did not, classified by this rule over the clock decisions: {} | reanchors {} | fresh dropped {:.4} s simulated",
             self.wall_by_tick[0].len(),
-            if reasons.is_empty() { "none".to_owned() } else { reasons.join(", ") },
+            if reasons.is_empty() {
+                "none".to_owned()
+            } else {
+                reasons.join(", ")
+            },
             self.reanchors,
             self.fresh_dropped_seconds,
         );
         if self.overflowed > 0 {
-            println!("  WARNING: {} clock records did not fit the fixed storage; their decisions are missing", self.overflowed);
+            println!(
+                "  WARNING: {} clock records did not fit the fixed storage; their decisions are missing",
+                self.overflowed
+            );
         }
-        let row = |label: &str, samples: &[f64]| format!(
-            "{label} ({}) p50 {:.2} p95 {:.2}", samples.len(), percentile(samples, 0.5), percentile(samples, 0.95));
+        let row = |label: &str, samples: &[f64]| {
+            format!(
+                "{label} ({}) p50 {:.2} p95 {:.2}",
+                samples.len(),
+                percentile(samples, 0.5),
+                percentile(samples, 0.95)
+            )
+        };
         println!(
             "  wall interval ms by tick: {} | {}",
             row("tick", &self.wall_by_tick[0]),
@@ -684,7 +851,11 @@ impl Phase {
                 "  gpu_flip stage spans / step span over {} frames: p50 {:.3} min {low:.3} max {high:.3} ({})",
                 self.stage_coverage.len(),
                 percentile(&self.stage_coverage, 0.5),
-                if (low - 1.0).abs() <= 0.05 && (high - 1.0).abs() <= 0.05 { "within 5%" } else { "OUTSIDE 5%" },
+                if (low - 1.0).abs() <= 0.05 && (high - 1.0).abs() <= 0.05 {
+                    "within 5%"
+                } else {
+                    "OUTSIDE 5%"
+                },
             );
         }
     }
@@ -692,9 +863,17 @@ impl Phase {
     fn report(&self, name: &str, frame_clock: bool) {
         println!("== {name} ==");
         let (wall_label, wait_label, rate_note) = if frame_clock {
-            ("tick + GPU fence", "post-tick GPU completion wait", String::new())
+            (
+                "tick + GPU fence",
+                "post-tick GPU completion wait",
+                String::new(),
+            )
         } else {
-            ("tick interval", "GPU surface wait", format!(" (fps p50 {:.1})", 1000.0 / percentile(&self.interval, 0.5)))
+            (
+                "tick interval",
+                "GPU surface wait",
+                format!(" (fps p50 {:.1})", 1000.0 / percentile(&self.interval, 0.5)),
+            )
         };
         println!(
             "  frames ({}): {wall_label} p50 {:.2} ms p95 {:.2} ms{rate_note} | {wait_label} p50 {:.2} ms p95 {:.2} ms",
@@ -726,32 +905,50 @@ impl Phase {
         if self.overflow > 0 || self.invalid > 0 {
             println!(
                 "  WARNING: {} spans did not fit the sampler and {} spans had invalid samples; GPU span timing and dispatch-count tables below are incomplete",
-                self.overflow,
-                self.invalid,
+                self.overflow, self.invalid,
             );
         }
         self.report_ticks();
         print_split("per node type", &self.per_type);
         let (step_title, whitewater_title) = if self.dispatch_frames > 0 {
-            ("gpu_flip_step per dispatch label", "whitewater_step per dispatch label")
+            (
+                "gpu_flip_step per dispatch label",
+                "whitewater_step per dispatch label",
+            )
         } else {
-            ("gpu_flip_step grouped encoder labels", "whitewater_step grouped encoder labels")
+            (
+                "gpu_flip_step grouped encoder labels",
+                "whitewater_step grouped encoder labels",
+            )
         };
         print_split(step_title, &self.per_step);
         print_split(whitewater_title, &self.per_whitewater);
         print_split("render_scene per pass label", &self.per_render);
-        println!("  profiled CPU preparation per node type (acquire, encode, scalar drains; timestamped frames):");
+        println!(
+            "  profiled CPU preparation per node type (acquire, encode, scalar drains; timestamped frames):"
+        );
         let mut cpu_rows: Vec<_> = self.per_type_cpu_ms.iter().collect();
         cpu_rows.sort_by(|a, b| percentile(b.1, 0.5).total_cmp(&percentile(a.1, 0.5)));
         for (name, samples) in cpu_rows {
-            println!("    {name:<56} p50 {:>8.3} ms  p95 {:>8.3} ms", percentile(samples, 0.5), percentile(samples, 0.95));
+            println!(
+                "    {name:<56} p50 {:>8.3} ms  p95 {:>8.3} ms",
+                percentile(samples, 0.5),
+                percentile(samples, 0.95)
+            );
         }
         if self.dispatch_frames > 0 {
-            println!("  sampled compute dispatch counts per node type ({} dispatch-granularity frames):", self.dispatch_frames);
+            println!(
+                "  sampled compute dispatch counts per node type ({} dispatch-granularity frames):",
+                self.dispatch_frames
+            );
             let mut count_rows: Vec<_> = self.compute_dispatches.iter().collect();
             count_rows.sort_by(|a, b| percentile(b.1, 0.5).total_cmp(&percentile(a.1, 0.5)));
             for (name, samples) in count_rows {
-                println!("    {name:<56} p50 {:>8.0} dispatches  p95 {:>8.0} dispatches", percentile(samples, 0.5), percentile(samples, 0.95));
+                println!(
+                    "    {name:<56} p50 {:>8.0} dispatches  p95 {:>8.0} dispatches",
+                    percentile(samples, 0.5),
+                    percentile(samples, 0.95)
+                );
             }
         }
     }
@@ -762,8 +959,8 @@ fn set_profiling(ct: &mut crate::content_thread::ContentThread, on: bool) {
     for renderer in ct.engine.renderers_mut() {
         if let Some(generator) = renderer
             .as_any_mut()
-            .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>()
-        {
+            .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>(
+        ) {
             generator.set_profiling(on);
         }
     }
@@ -776,8 +973,8 @@ fn split(ct: &mut crate::content_thread::ContentThread, granularity: ProfileGran
     for renderer in ct.engine.renderers_mut() {
         if let Some(generator) = renderer
             .as_any_mut()
-            .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>()
-        {
+            .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>(
+        ) {
             steps.extend(generator.take_step_profiles());
         }
     }
@@ -795,7 +992,10 @@ fn split_profiles(
     };
     let mut types = BTreeMap::new();
     for step in steps {
-        *split.per_type_cpu_ms.entry(step.type_id.clone()).or_insert(0.0) += step.cpu_nanos as f64 / 1e6;
+        *split
+            .per_type_cpu_ms
+            .entry(step.type_id.clone())
+            .or_insert(0.0) += step.cpu_nanos as f64 / 1e6;
         types.insert(step.tag.as_str(), step.type_id.as_str());
     }
     for (buffer, profile) in gpu_profiles {
@@ -805,11 +1005,18 @@ fn split_profiles(
         for span in &profile.spans {
             // GPU FLIP's step subdivides its node tag into stage tags.
             let stage = span.tag.starts_with(STAGE_PREFIX);
-            let type_id = if stage { STEP.to_owned() } else {
-                types.get(span.tag.as_str()).map_or_else(|| format!("(untagged, {buffer})"), |type_id| (*type_id).to_owned())
+            let type_id = if stage {
+                STEP.to_owned()
+            } else {
+                types.get(span.tag.as_str()).map_or_else(
+                    || format!("(untagged, {buffer})"),
+                    |type_id| (*type_id).to_owned(),
+                )
             };
             *split.per_type.entry(type_id.clone()).or_insert(0.0) += span.millis;
-            if span.kind == GpuWorkKind::Compute && let Some(counts) = &mut split.compute_dispatches {
+            if span.kind == GpuWorkKind::Compute
+                && let Some(counts) = &mut split.compute_dispatches
+            {
                 *counts.entry(type_id.clone()).or_insert(0) += 1;
             }
             let labelled = match type_id.as_str() {
@@ -819,7 +1026,13 @@ fn split_profiles(
                 _ => None,
             };
             if let Some(labelled) = labelled {
-                let key = if stage { span.tag.clone() } else if type_id == RENDER { format!("{:?} {}", span.kind, span.label) } else { span.label.clone() };
+                let key = if stage {
+                    span.tag.clone()
+                } else if type_id == RENDER {
+                    format!("{:?} {}", span.kind, span.label)
+                } else {
+                    span.label.clone()
+                };
                 *labelled.entry(key).or_insert(0.0) += span.millis;
             }
         }
@@ -834,7 +1047,12 @@ fn write_png(ct: &mut crate::content_thread::ContentThread, path: &str) {
     };
     let texture = ct.content_pipeline.export_output_texture();
     // The graph tone-maps in-graph (node.tone_map), so display-encode only.
-    let png = manifold_node_engine::gpu::headless_readback::readback_to_srgb_png_linear(&device, texture, texture.width, texture.height);
+    let png = manifold_node_engine::gpu::headless_readback::readback_to_srgb_png_linear(
+        &device,
+        texture,
+        texture.width,
+        texture.height,
+    );
     match std::fs::write(path, png) {
         Ok(()) => eprintln!("frame-time: wrote {path}"),
         Err(e) => eprintln!("frame-time: write {path}: {e}"),
@@ -842,7 +1060,8 @@ fn write_png(ct: &mut crate::content_thread::ContentThread, path: &str) {
 }
 
 pub fn run(args: &[String]) -> ! {
-    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).try_init();
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
+        .try_init();
     let args = parse(args);
     match probe(&args) {
         Ok(()) => std::process::exit(0),
@@ -857,35 +1076,60 @@ fn probe(args: &Args) -> Result<(), String> {
     let initial_faults = manifold_gpu::gpu_fault::mark();
     let mut overridden = 0usize;
     let mut sim_rate = manifold_core::settings::SimRate::default();
-    let PreparedProject { mut ct, cmd_tx, cmd_rx, state_tx, drain, width, height, frame_rate, .. } =
-        prepare_project_edited(&args.project, "frame-time", &mut |project| {
-            if let Some(rate) = args.sim_rate {
-                project.settings.physics.sim_rate = rate;
+    let PreparedProject {
+        mut ct,
+        cmd_tx,
+        cmd_rx,
+        state_tx,
+        drain,
+        width,
+        height,
+        frame_rate,
+        ..
+    } = prepare_project_edited(&args.project, "frame-time", &mut |project| {
+        if let Some(rate) = args.sim_rate {
+            project.settings.physics.sim_rate = rate;
+        }
+        sim_rate = project.settings.physics.sim_rate;
+        let overrides = [
+            (RESOLUTION_PARAM, args.resolution),
+            (SOLVE_LEVEL_PARAM, args.solve_level),
+        ];
+        for layer in &mut project.timeline.layers {
+            if !layer.hosts_generator() || layer.generator_type().as_str() != GENERATOR {
+                continue;
             }
-            sim_rate = project.settings.physics.sim_rate;
-            let overrides = [(RESOLUTION_PARAM, args.resolution), (SOLVE_LEVEL_PARAM, args.solve_level)];
-            for layer in &mut project.timeline.layers {
-                if !layer.hosts_generator() || layer.generator_type().as_str() != GENERATOR {
-                    continue;
-                }
-                let Some(params) = layer.gen_params_mut() else { continue };
-                for (name, value) in overrides {
-                    if let Some(value) = value
-                        && params.set_base_param(name, value)
-                    {
-                        overridden += 1;
-                    }
+            let Some(params) = layer.gen_params_mut() else {
+                continue;
+            };
+            for (name, value) in overrides {
+                if let Some(value) = value
+                    && params.set_base_param(name, value)
+                {
+                    overridden += 1;
                 }
             }
-        })?;
+        }
+    })?;
     let asked = usize::from(args.resolution.is_some()) + usize::from(args.solve_level.is_some());
     if asked > 0 && overridden < asked {
-        return Err(format!("a {GENERATOR} layer took {overridden} of the {asked} overrides (resolution, solve level)"));
+        return Err(format!(
+            "a {GENERATOR} layer took {overridden} of the {asked} overrides (resolution, solve level)"
+        ));
     }
-    let resolution_note = args.resolution.map_or("the file's resolution".to_owned(), |r| format!("resolution {r}"))
-        + &args.solve_level.map_or(String::new(), |l| format!(", solve level {l}"))
+    let resolution_note = args
+        .resolution
+        .map_or("the file's resolution".to_owned(), |r| {
+            format!("resolution {r}")
+        })
+        + &args
+            .solve_level
+            .map_or(String::new(), |l| format!(", solve level {l}"))
         + &format!(", sim rate {} Hz", sim_rate.hz());
-    let device_name = ct.content_pipeline.native_device().map_or("unknown".to_owned(), |d| d.device_name());
+    let device_name = ct
+        .content_pipeline
+        .native_device()
+        .map_or("unknown".to_owned(), |d| d.device_name());
     let mode = if args.frame_clock {
         "frame clock, no pacing, completion wait every frame; wall = tick + GPU fence"
     } else {
@@ -902,13 +1146,17 @@ fn probe(args: &Args) -> Result<(), String> {
         },
         args.splash_frames
     );
-    ct.content_pipeline.set_profiling_granularity(args.granularity);
+    ct.content_pipeline
+        .set_profiling_granularity(args.granularity);
 
     ct.timer.set_frame_clocked(args.frame_clock);
     ct.timer.resume_after_load();
     if let Some(seed) = args.pre_play_delay_seed {
         let delay = pre_play_delay(seed, f64::from(ct.engine.frame_rate()));
-        println!("frame-time: pre-play delay {:.3} ms (seed {seed})", delay.as_secs_f64() * 1e3);
+        println!(
+            "frame-time: pre-play delay {:.3} ms (seed {seed})",
+            delay.as_secs_f64() * 1e3
+        );
         std::thread::sleep(delay);
     }
     ct.handle_command(ContentCommand::Play);
@@ -934,7 +1182,9 @@ fn probe(args: &Args) -> Result<(), String> {
             ct.content_pipeline.wait_for_render_complete();
             // The live waiter may time out or wake early. Reuse the existing
             // checked fence before accepting an equal-progress sample.
-            ct.content_pipeline.wait_for_export_complete(&initial_faults).map_err(|failure| failure.message)?;
+            ct.content_pipeline
+                .wait_for_export_complete(&initial_faults)
+                .map_err(|failure| failure.message)?;
             let fence_ms = fence_start.elapsed().as_secs_f64() * 1e3;
             (start.elapsed().as_secs_f64() * 1e3, fence_ms)
         } else {
@@ -952,14 +1202,24 @@ fn probe(args: &Args) -> Result<(), String> {
             && let Some(project) = ct.engine.project()
         {
             use std::io::Write;
-            writeln!(log, "{} {:#018x} {:#018x}", ct.engine.transport_frame(), ct.engine.current_beat_f64().to_bits(), automation_hash(project))
-                .map_err(|e| format!("--transport-log: {e}"))?;
+            writeln!(
+                log,
+                "{} {:#018x} {:#018x}",
+                ct.engine.transport_frame(),
+                ct.engine.current_beat_f64().to_bits(),
+                automation_hash(project)
+            )
+            .map_err(|e| format!("--transport-log: {e}"))?;
         }
         let frame_split = stamped.then(|| split(&mut ct, args.granularity));
-        if args.frame_clock && let Some(split) = &frame_split
+        if args.frame_clock
+            && let Some(split) = &frame_split
             && (split.invalid != 0 || split.overflow != 0)
         {
-            return Err(format!("frame {index}: incomplete GPU attribution ({} invalid, {} overflow)", split.invalid, split.overflow));
+            return Err(format!(
+                "frame {index}: incomplete GPU attribution ({} invalid, {} overflow)",
+                split.invalid, split.overflow
+            ));
         }
         if let Some((at, path)) = &args.png
             && *at == index
@@ -967,14 +1227,28 @@ fn probe(args: &Args) -> Result<(), String> {
             write_png(&mut ct, path);
         }
         let clock = ct.physics_metrics.clock;
-        frames.push(Frame { interval_ms, fence_ms, plain_gpu_ms: None, split: frame_split, clock, no_tick: None });
+        frames.push(Frame {
+            interval_ms,
+            fence_ms,
+            plain_gpu_ms: None,
+            split: frame_split,
+            clock,
+            no_tick: None,
+        });
     }
     if let Some(mut log) = transport_log.take() {
         use std::io::Write;
         log.flush().map_err(|e| format!("--transport-log: {e}"))?;
     }
-    let histogram: Vec<String> = frames_histogram.iter().map(|(n, ticks)| format!("{n}: {ticks}")).collect();
-    let multi: usize = frames_histogram.iter().filter(|(n, _)| **n > 1).map(|(_, ticks)| ticks).sum();
+    let histogram: Vec<String> = frames_histogram
+        .iter()
+        .map(|(n, ticks)| format!("{n}: {ticks}"))
+        .collect();
+    let multi: usize = frames_histogram
+        .iter()
+        .filter(|(n, _)| **n > 1)
+        .map(|(_, ticks)| ticks)
+        .sum();
     println!(
         "frame-time: grid frames per tick over {} ticks: {} | ticks with frames > 1: {multi}",
         args.frames,
@@ -988,7 +1262,9 @@ fn probe(args: &Args) -> Result<(), String> {
     ct.content_pipeline.wait_for_render_complete();
     ct.content_pipeline.set_gpu_time_tap(None);
     drop(state_tx);
-    drain.join().map_err(|_| "drain thread panicked".to_string())?;
+    drain
+        .join()
+        .map_err(|_| "drain thread panicked".to_string())?;
 
     // Completion handlers fire in submission order; the plain frames took
     // them in that same order. A frame is every Generators chunk, then every
@@ -1012,48 +1288,103 @@ fn probe(args: &Args) -> Result<(), String> {
             frame.plain_gpu_ms = Some((generators.ms(), compositor.ms()));
             (generators, compositor) = (Span::default(), Span::default());
         }
-        if is_generators { &mut generators } else { &mut compositor }.cover(start, end);
+        if is_generators {
+            &mut generators
+        } else {
+            &mut compositor
+        }
+        .cover(start, end);
     }
-    if compositor.seen() && let Some(frame) = plain.next() {
+    if compositor.seen()
+        && let Some(frame) = plain.next()
+    {
         frame.plain_gpu_ms = Some((generators.ms(), compositor.ms()));
     }
-    let unpaired = frames.iter().filter(|f| f.split.is_none() && f.plain_gpu_ms.is_none()).count();
+    let unpaired = frames
+        .iter()
+        .filter(|f| f.split.is_none() && f.plain_gpu_ms.is_none())
+        .count();
     if unpaired > 0 {
         if args.frame_clock {
-            return Err(format!("{unpaired} fixed-clock frames got no GPU completion time"));
+            return Err(format!(
+                "{unpaired} fixed-clock frames got no GPU completion time"
+            ));
         }
         println!("  WARNING: {unpaired} plain frames got no GPU completion time");
     }
 
-    let wall_label = if args.frame_clock { "tick + GPU fence" } else { "wall interval" };
-    println!("  per frame: {wall_label} ms / measured command-buffer GPU span sum ms (* = timestamped, replay off, profiling changes its numbers; no plain GPU time)");
-    println!("    per clock: #id, ticks accepted/due/live cap, ticks accepted this epoch [GPU-completed where tracked], epoch, transport s, R = reanchor, H = held, S = restart, drop = fresh dropped simulated ms, no-tick verdict");
+    let wall_label = if args.frame_clock {
+        "tick + GPU fence"
+    } else {
+        "wall interval"
+    };
+    println!(
+        "  per frame: {wall_label} ms / measured command-buffer GPU span sum ms (* = timestamped, replay off, profiling changes its numbers; no plain GPU time)"
+    );
+    println!(
+        "    per clock: #id, ticks accepted/due/live cap, ticks accepted this epoch [GPU-completed where tracked], epoch, transport s, R = reanchor, H = held, S = restart, drop = fresh dropped simulated ms, no-tick verdict"
+    );
     for (index, f) in frames.iter().enumerate() {
         let gpu = match f.plain_gpu_ms {
             Some((g, c)) => format!("{:>6.1} ", g + c),
             None => "     * ".to_owned(),
         };
-        let clocks: Vec<String> = f.clock.records().iter().map(|c| {
-            let completed = c.completed_ticks.map_or(String::new(), |done| format!(" [{done}]"));
-            let flags: String = [(c.reanchored, 'R'), (c.held, 'H'), (c.restarted, 'S')]
-                .into_iter().filter_map(|(on, flag)| on.then_some(flag)).collect();
-            format!(
-                "#{} {}/{}/{} thru {}{completed} ep {} t {:.4} {flags:<2} drop {:.1}",
-                c.id, c.accepted, c.due, c.live_cap, c.accepted_through, c.epoch, c.transport,
-                c.fresh_dropped_seconds * 1e3,
-            )
-        }).collect();
-        let overflow = if f.clock.overflow > 0 { format!(" +{} unrecorded", f.clock.overflow) } else { String::new() };
-        let verdict = f.no_tick.map_or(String::new(), |reason| format!(" | no tick: {}", reason.label()));
-        println!("    {index:>4} {:>6.1} /{gpu}| {}{overflow}{verdict}", f.interval_ms, clocks.join("; "));
+        let clocks: Vec<String> = f
+            .clock
+            .records()
+            .iter()
+            .map(|c| {
+                let completed = c
+                    .completed_ticks
+                    .map_or(String::new(), |done| format!(" [{done}]"));
+                let flags: String = [(c.reanchored, 'R'), (c.held, 'H'), (c.restarted, 'S')]
+                    .into_iter()
+                    .filter_map(|(on, flag)| on.then_some(flag))
+                    .collect();
+                format!(
+                    "#{} {}/{}/{} thru {}{completed} ep {} t {:.4} {flags:<2} drop {:.1}",
+                    c.id,
+                    c.accepted,
+                    c.due,
+                    c.live_cap,
+                    c.accepted_through,
+                    c.epoch,
+                    c.transport,
+                    c.fresh_dropped_seconds * 1e3,
+                )
+            })
+            .collect();
+        let overflow = if f.clock.overflow > 0 {
+            format!(" +{} unrecorded", f.clock.overflow)
+        } else {
+            String::new()
+        };
+        let verdict = f.no_tick.map_or(String::new(), |reason| {
+            format!(" | no tick: {}", reason.label())
+        });
+        println!(
+            "    {index:>4} {:>6.1} /{gpu}| {}{overflow}{verdict}",
+            f.interval_ms,
+            clocks.join("; ")
+        );
     }
     let (mut whole, mut splash, mut calm) = (Phase::default(), Phase::default(), Phase::default());
     for (index, frame) in frames.iter().enumerate() {
         whole.add(frame);
-        if index < args.splash_frames { splash.add(frame) } else { calm.add(frame) }
+        if index < args.splash_frames {
+            splash.add(frame)
+        } else {
+            calm.add(frame)
+        }
     }
     whole.report("whole run", args.frame_clock);
-    splash.report(&format!("splash (frames 0..{})", args.splash_frames), args.frame_clock);
-    calm.report(&format!("calm (frames {}..{})", args.splash_frames, args.frames), args.frame_clock);
+    splash.report(
+        &format!("splash (frames 0..{})", args.splash_frames),
+        args.frame_clock,
+    );
+    calm.report(
+        &format!("calm (frames {}..{})", args.splash_frames, args.frames),
+        args.frame_clock,
+    );
     Ok(())
 }

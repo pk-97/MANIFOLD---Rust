@@ -7,7 +7,9 @@ use std::cell::Cell;
 use std::ffi::c_void;
 use std::marker::PhantomData;
 
-use crate::{FluidError, NativeWhitewaterParticle, WhitewaterParticle, decode_whitewater, native_result};
+use crate::{
+    FluidError, NativeWhitewaterParticle, WhitewaterParticle, decode_whitewater, native_result,
+};
 
 /// One whitewater particle to hand the lifecycle. Shared with the GPU spawn
 /// atoms, which write it.
@@ -104,7 +106,9 @@ unsafe extern "C" {
 
 /// Faces of `axis` over `cells`: one more along `axis`.
 fn face_len(cells: [u32; 3], axis: usize) -> usize {
-    (0..3).map(|b| cells[b] as usize + usize::from(b == axis)).product()
+    (0..3)
+        .map(|b| cells[b] as usize + usize::from(b == axis))
+        .product()
 }
 
 /// Owns one native `DiffuseParticleSimulation` and the grids it reads.
@@ -125,7 +129,9 @@ impl WhitewaterLifecycle {
     /// A lifecycle holding at most `capacity` particles, its RNG seeded with `seed`.
     pub fn new(grid: WhitewaterGrid, capacity: u32, seed: u64) -> Result<Self, FluidError> {
         if !(grid.cell_size.is_finite() && grid.cell_size > 0.0) {
-            return Err(FluidError::input("whitewater cell size must be finite and positive"));
+            return Err(FluidError::input(
+                "whitewater cell size must be finite and positive",
+            ));
         }
         let mut native = std::ptr::null_mut();
         // SAFETY: `origin` is three floats; the out pointer is valid.
@@ -142,7 +148,13 @@ impl WhitewaterLifecycle {
             )
         };
         native_result(ok, "creating the whitewater lifecycle")?;
-        Ok(Self { native, grid, capacity, scratch: Vec::new(), _not_sync: PhantomData })
+        Ok(Self {
+            native,
+            grid,
+            capacity,
+            scratch: Vec::new(),
+            _not_sync: PhantomData,
+        })
     }
 
     pub fn grid(&self) -> WhitewaterGrid {
@@ -170,13 +182,20 @@ impl WhitewaterLifecycle {
     /// against the grid first.
     pub fn set_fields(&mut self, fields: &WhitewaterFields<'_>) -> Result<(), FluidError> {
         let cells = self.grid.cells;
-        if (0..3).any(|a| fields.face_cells[a] == 0 || u64::from(fields.face_cells[a]) + u64::from(fields.face_offset[a]) > u64::from(cells[a])) {
+        if (0..3).any(|a| {
+            fields.face_cells[a] == 0
+                || u64::from(fields.face_cells[a]) + u64::from(fields.face_offset[a])
+                    > u64::from(cells[a])
+        }) {
             return Err(FluidError::input(format!(
                 "a {:?}-cell face grid at {:?} does not sit inside the {cells:?}-cell whitewater grid",
                 fields.face_cells, fields.face_offset
             )));
         }
-        for (axis, faces) in [fields.face_u, fields.face_v, fields.face_w].into_iter().enumerate() {
+        for (axis, faces) in [fields.face_u, fields.face_v, fields.face_w]
+            .into_iter()
+            .enumerate()
+        {
             let wanted = face_len(fields.face_cells, axis);
             if faces.len() != wanted {
                 return Err(FluidError::input(format!(
@@ -223,7 +242,13 @@ impl WhitewaterLifecycle {
         let (mut loaded, mut thinned) = (0u32, 0u32);
         // SAFETY: `spawns` holds `len` records laid out as the bridge's.
         let ok = unsafe {
-            manifold_fluids_whitewater_load(self.native, spawns.as_ptr(), spawns.len(), &mut loaded, &mut thinned)
+            manifold_fluids_whitewater_load(
+                self.native,
+                spawns.as_ptr(),
+                spawns.len(),
+                &mut loaded,
+                &mut thinned,
+            )
         };
         native_result(ok, "loading whitewater spawns")?;
         Ok((loaded, thinned))
@@ -252,11 +277,17 @@ impl WhitewaterLifecycle {
     /// The population in scene space, replacing `out`.
     pub fn particles(&mut self, out: &mut Vec<WhitewaterParticle>) -> Result<(), FluidError> {
         let count = self.len()?;
-        self.scratch.resize(count, NativeWhitewaterParticle::default());
+        self.scratch
+            .resize(count, NativeWhitewaterParticle::default());
         let mut copied = 0usize;
         // SAFETY: `scratch` holds `count` records.
         let ok = unsafe {
-            manifold_fluids_whitewater_particles(self.native, self.scratch.as_mut_ptr(), self.scratch.len(), &mut copied)
+            manifold_fluids_whitewater_particles(
+                self.native,
+                self.scratch.as_mut_ptr(),
+                self.scratch.len(),
+                &mut copied,
+            )
         };
         native_result(ok, "reading whitewater particles")?;
         decode_whitewater(&self.scratch[..copied], out)
@@ -289,7 +320,11 @@ mod tests {
     const FLOOR: f32 = ORIGIN[1] + 6.0 * H;
 
     fn grid() -> WhitewaterGrid {
-        WhitewaterGrid { cells: [N; 3], cell_size: H, origin: ORIGIN }
+        WhitewaterGrid {
+            cells: [N; 3],
+            cell_size: H,
+            origin: ORIGIN,
+        }
     }
 
     /// Scene height of cell row `j`'s centre.
@@ -310,10 +345,18 @@ mod tests {
             let face_cells = [N - 2 * PAD; 3];
             let faces = std::array::from_fn(|axis| vec![0.0; face_len(face_cells, axis)]);
             let cells = N as usize;
-            let level = (0..cells.pow(3)).map(|i| level(cell_y(((i / cells) % cells) as u32))).collect();
+            let level = (0..cells.pow(3))
+                .map(|i| level(cell_y(((i / cells) % cells) as u32)))
+                .collect();
             let nodes = cells + 1;
-            let solid = (0..nodes.pow(3)).map(|i| ORIGIN[1] + ((i / nodes) % nodes) as f32 * H - FLOOR).collect();
-            Self { faces, level, solid }
+            let solid = (0..nodes.pow(3))
+                .map(|i| ORIGIN[1] + ((i / nodes) % nodes) as f32 * H - FLOOR)
+                .collect();
+            Self {
+                faces,
+                level,
+                solid,
+            }
         }
 
         fn fields(&self) -> WhitewaterFields<'_> {
@@ -330,7 +373,12 @@ mod tests {
         }
     }
 
-    fn spawn(position: [f32; 3], velocity: [f32; 3], lifetime: f32, kind: WhitewaterKind) -> WhitewaterSpawn {
+    fn spawn(
+        position: [f32; 3],
+        velocity: [f32; 3],
+        lifetime: f32,
+        kind: WhitewaterKind,
+    ) -> WhitewaterSpawn {
         WhitewaterSpawn {
             position_lifetime: [position[0], position[1], position[2], lifetime],
             velocity,
@@ -341,7 +389,10 @@ mod tests {
     fn lifecycle(scene: &Scene, spawns: &[WhitewaterSpawn]) -> WhitewaterLifecycle {
         let mut lifecycle = WhitewaterLifecycle::new(grid(), 1000, 7).expect("lifecycle");
         lifecycle.set_fields(&scene.fields()).expect("fields");
-        assert_eq!(lifecycle.load(spawns).expect("load"), (spawns.len() as u32, 0));
+        assert_eq!(
+            lifecycle.load(spawns).expect("load"),
+            (spawns.len() as u32, 0)
+        );
         lifecycle
     }
 
@@ -374,18 +425,40 @@ mod tests {
         lifecycle.step(DT).expect("step");
         let after = population(&mut lifecycle);
         assert_eq!(after.len(), 2);
-        let rebound = after.iter().find(|p| p.position[0] > 0.05).expect("rebounding spray");
+        let rebound = after
+            .iter()
+            .find(|p| p.position[0] > 0.05)
+            .expect("rebounding spray");
         let expected = 0.2 * 2.0 + G * DT as f32;
-        assert!(close(rebound.velocity[1], expected, 1e-5), "rebound speed {} against {expected}", rebound.velocity[1]);
-        assert!(close(rebound.position[1], FLOOR + 0.25 * H, 1e-5), "rebound rests a quarter cell up: {}", rebound.position[1]);
+        assert!(
+            close(rebound.velocity[1], expected, 1e-5),
+            "rebound speed {} against {expected}",
+            rebound.velocity[1]
+        );
+        assert!(
+            close(rebound.position[1], FLOOR + 0.25 * H, 1e-5),
+            "rebound rests a quarter cell up: {}",
+            rebound.position[1]
+        );
         assert_eq!(rebound.kind, WhitewaterKind::Spray);
         for _ in 1..5 {
             lifecycle.step(DT).expect("step");
         }
-        let falling = population(&mut lifecycle).into_iter().find(|p| p.position[0].abs() < 1e-6).expect("falling spray");
+        let falling = population(&mut lifecycle)
+            .into_iter()
+            .find(|p| p.position[0].abs() < 1e-6)
+            .expect("falling spray");
         let t = DT as f32;
-        assert!(close(falling.velocity[1], 5.0 * G * t, 1e-4), "{}", falling.velocity[1]);
-        assert!(close(falling.position[1], high[1] + G * t * t * 15.0, 1e-5), "{}", falling.position[1]);
+        assert!(
+            close(falling.velocity[1], 5.0 * G * t, 1e-4),
+            "{}",
+            falling.velocity[1]
+        );
+        assert!(
+            close(falling.position[1], high[1] + G * t * t * 15.0, 1e-5),
+            "{}",
+            falling.position[1]
+        );
     }
 
     /// A bubble in still liquid rises: buoyancy 4 g, drag 1 toward the
@@ -394,14 +467,29 @@ mod tests {
     fn whitewater_lifecycle_bubble_rises() {
         let scene = Scene::new(|_| -1.0);
         let start = [0.0, FLOOR + 6.0 * H, 0.0];
-        let mut lifecycle = lifecycle(&scene, &[spawn(start, [0.0; 3], 5.0, WhitewaterKind::Bubble)]);
+        let mut lifecycle = lifecycle(
+            &scene,
+            &[spawn(start, [0.0; 3], 5.0, WhitewaterKind::Bubble)],
+        );
         let t = DT as f32;
         for step in 1..=3 {
             lifecycle.step(DT).expect("step");
             let bubble = population(&mut lifecycle)[0];
             assert_eq!(bubble.kind, WhitewaterKind::Bubble);
-            assert!(close(bubble.velocity[1], -4.0 * G * t, 1e-4), "{}", bubble.velocity[1]);
-            assert!(close(bubble.position[1], start[1] - 4.0 * G * t * t * step as f32, 1e-5), "{}", bubble.position[1]);
+            assert!(
+                close(bubble.velocity[1], -4.0 * G * t, 1e-4),
+                "{}",
+                bubble.velocity[1]
+            );
+            assert!(
+                close(
+                    bubble.position[1],
+                    start[1] - 4.0 * G * t * t * step as f32,
+                    1e-5
+                ),
+                "{}",
+                bubble.position[1]
+            );
         }
     }
 
@@ -413,7 +501,11 @@ mod tests {
         let mut scene = Scene::new(|y| y - surface);
         let face_cells = [N - 2 * PAD; 3];
         let a = 4.0;
-        let dims = [face_cells[0] as usize + 1, face_cells[1] as usize, face_cells[2] as usize];
+        let dims = [
+            face_cells[0] as usize + 1,
+            face_cells[1] as usize,
+            face_cells[2] as usize,
+        ];
         for (index, u) in scene.faces[0].iter_mut().enumerate() {
             let j = (index / dims[0]) % dims[1];
             *u = a * (j as f32 + 0.5) * H;
@@ -426,9 +518,17 @@ mod tests {
             lifecycle.step(DT).expect("step");
             let foam = population(&mut lifecycle)[0];
             assert_eq!(foam.kind, WhitewaterKind::Foam);
-            assert!(close(foam.velocity[0], speed, 1e-4), "{} against {speed}", foam.velocity[0]);
+            assert!(
+                close(foam.velocity[0], speed, 1e-4),
+                "{} against {speed}",
+                foam.velocity[0]
+            );
             assert!(close(foam.velocity[1], 0.0, 1e-6) && close(foam.velocity[2], 0.0, 1e-6));
-            assert!(close(foam.position[0], start[0] + speed * t * step as f32, 1e-5), "{}", foam.position[0]);
+            assert!(
+                close(foam.position[0], start[0] + speed * t * step as f32, 1e-5),
+                "{}",
+                foam.position[0]
+            );
             assert!(close(foam.position[1], surface, 1e-6));
         }
     }
@@ -442,19 +542,49 @@ mod tests {
         let mut lifecycle = lifecycle(
             &scene,
             &[
-                spawn([0.0, surface + 6.0 * H, 0.0], [0.0; 3], 3.0, WhitewaterKind::Spray),
-                spawn([0.2, surface - 4.0 * H, 0.0], [0.0; 3], 3.0, WhitewaterKind::Bubble),
+                spawn(
+                    [0.0, surface + 6.0 * H, 0.0],
+                    [0.0; 3],
+                    3.0,
+                    WhitewaterKind::Spray,
+                ),
+                spawn(
+                    [0.2, surface - 4.0 * H, 0.0],
+                    [0.0; 3],
+                    3.0,
+                    WhitewaterKind::Bubble,
+                ),
                 spawn([-0.2, surface, 0.0], [0.0; 3], 3.0, WhitewaterKind::Foam),
-                spawn([0.0, surface + 6.0 * H, 0.2], [0.0; 3], 0.02, WhitewaterKind::Spray),
+                spawn(
+                    [0.0, surface + 6.0 * H, 0.2],
+                    [0.0; 3],
+                    0.02,
+                    WhitewaterKind::Spray,
+                ),
             ],
         );
         lifecycle.step(DT).expect("step");
         let after = population(&mut lifecycle);
-        assert_eq!(after.len(), 3, "the short-lived spray is removed: {after:?}");
+        assert_eq!(
+            after.len(),
+            3,
+            "the short-lived spray is removed: {after:?}"
+        );
         let t = DT as f32;
-        for (kind, rate) in [(WhitewaterKind::Spray, 2.0), (WhitewaterKind::Bubble, 0.333), (WhitewaterKind::Foam, 1.0)] {
-            let particle = after.iter().find(|p| p.kind == kind).unwrap_or_else(|| panic!("{kind:?} kept"));
-            assert!(close(particle.lifetime, 3.0 - rate * t, 1e-6), "{kind:?}: {}", particle.lifetime);
+        for (kind, rate) in [
+            (WhitewaterKind::Spray, 2.0),
+            (WhitewaterKind::Bubble, 0.333),
+            (WhitewaterKind::Foam, 1.0),
+        ] {
+            let particle = after
+                .iter()
+                .find(|p| p.kind == kind)
+                .unwrap_or_else(|| panic!("{kind:?} kept"));
+            assert!(
+                close(particle.lifetime, 3.0 - rate * t, 1e-6),
+                "{kind:?}: {}",
+                particle.lifetime
+            );
         }
     }
 
@@ -466,12 +596,31 @@ mod tests {
         let surface = cell_y(12);
         let scene = Scene::new(|y| y - surface);
         let spawns = [
-            spawn([0.0, surface + 6.0 * H, 0.0], [0.0; 3], 3.0, WhitewaterKind::Spray),
-            spawn([0.2, surface - 4.0 * H, 0.0], [0.0; 3], 3.0, WhitewaterKind::Bubble),
-            spawn([-0.2, surface, 0.0], [0.5, 0.0, 0.0], 3.0, WhitewaterKind::Foam),
+            spawn(
+                [0.0, surface + 6.0 * H, 0.0],
+                [0.0; 3],
+                3.0,
+                WhitewaterKind::Spray,
+            ),
+            spawn(
+                [0.2, surface - 4.0 * H, 0.0],
+                [0.0; 3],
+                3.0,
+                WhitewaterKind::Bubble,
+            ),
+            spawn(
+                [-0.2, surface, 0.0],
+                [0.5, 0.0, 0.0],
+                3.0,
+                WhitewaterKind::Foam,
+            ),
         ];
         let mut lifecycle = lifecycle(&scene, &spawns);
-        assert_eq!(lifecycle.len().expect("count"), 3, "loaded spawns are counted at once");
+        assert_eq!(
+            lifecycle.len().expect("count"),
+            3,
+            "loaded spawns are counted at once"
+        );
         let before = population(&mut lifecycle);
         lifecycle.step(DT).expect("step");
         let after = population(&mut lifecycle);
@@ -481,7 +630,10 @@ mod tests {
         }
         assert!(after[0].position[1] < before[0].position[1], "spray fell");
         assert!(after[1].position[1] > before[1].position[1], "bubble rose");
-        assert!(after[2].velocity[0].abs() < 1e-6, "foam took the still faces' velocity");
+        assert!(
+            after[2].velocity[0].abs() < 1e-6,
+            "foam took the still faces' velocity"
+        );
     }
 
     /// I10: past the room left, a load keeps a uniform stride of the live
@@ -492,21 +644,44 @@ mod tests {
         let mut lifecycle = WhitewaterLifecycle::new(grid(), 10, 7).expect("lifecycle");
         lifecycle.set_fields(&scene.fields()).expect("fields");
         let x = |i: usize| -0.5 + 0.03 * i as f32;
-        let mut spawns: Vec<WhitewaterSpawn> =
-            (0..25).map(|i| spawn([x(i), FLOOR + 8.0 * H, 0.0], [0.0; 3], 5.0, WhitewaterKind::Spray)).collect();
+        let mut spawns: Vec<WhitewaterSpawn> = (0..25)
+            .map(|i| {
+                spawn(
+                    [x(i), FLOOR + 8.0 * H, 0.0],
+                    [0.0; 3],
+                    5.0,
+                    WhitewaterKind::Spray,
+                )
+            })
+            .collect();
         for gap in [3, 9, 14, 20, 26] {
             spawns.insert(gap, WhitewaterSpawn::default());
         }
         assert_eq!(lifecycle.load(&spawns).expect("load"), (10, 15));
-        let mut kept: Vec<f32> = population(&mut lifecycle).iter().map(|p| p.position[0]).collect();
+        let mut kept: Vec<f32> = population(&mut lifecycle)
+            .iter()
+            .map(|p| p.position[0])
+            .collect();
         kept.sort_by(f32::total_cmp);
         let expected: Vec<f32> = (0..10).map(|j| x(j * 25 / 10)).collect();
-        let same = kept.len() == expected.len() && kept.iter().zip(&expected).all(|(&k, &e)| close(k, e, 1e-6));
-        assert!(same, "live record floor(j * 25 / 10) for slot j: kept {kept:?}, expected {expected:?}");
-        assert_eq!(lifecycle.load(&spawns[..5]).expect("load"), (0, 4), "no room left: every live record is thinned");
+        let same = kept.len() == expected.len()
+            && kept.iter().zip(&expected).all(|(&k, &e)| close(k, e, 1e-6));
+        assert!(
+            same,
+            "live record floor(j * 25 / 10) for slot j: kept {kept:?}, expected {expected:?}"
+        );
+        assert_eq!(
+            lifecycle.load(&spawns[..5]).expect("load"),
+            (0, 4),
+            "no room left: every live record is thinned"
+        );
         lifecycle.clear(8).expect("clear");
         assert!(lifecycle.is_empty().expect("count"));
-        assert_eq!(lifecycle.load(&spawns[..5]).expect("load"), (4, 0), "clear makes room");
+        assert_eq!(
+            lifecycle.load(&spawns[..5]).expect("load"),
+            (4, 0),
+            "clear makes room"
+        );
     }
 
     /// Fields that don't fit the grid are refused by name before any copy.
@@ -516,15 +691,49 @@ mod tests {
         let mut lifecycle = WhitewaterLifecycle::new(grid(), 10, 7).expect("lifecycle");
         let mut fields = scene.fields();
         fields.face_offset = [PAD + 4, PAD, PAD];
-        assert!(lifecycle.set_fields(&fields).unwrap_err().to_string().contains("does not sit inside"));
+        assert!(
+            lifecycle
+                .set_fields(&fields)
+                .unwrap_err()
+                .to_string()
+                .contains("does not sit inside")
+        );
         let mut fields = scene.fields();
         fields.level = &scene.level[1..];
-        assert!(lifecycle.set_fields(&fields).unwrap_err().to_string().contains("whitewater level holds"));
+        assert!(
+            lifecycle
+                .set_fields(&fields)
+                .unwrap_err()
+                .to_string()
+                .contains("whitewater level holds")
+        );
         let mut fields = scene.fields();
         fields.face_v = &scene.faces[1][1..];
-        assert!(lifecycle.set_fields(&fields).unwrap_err().to_string().contains("face axis 1"));
-        assert!(lifecycle.step(DT).unwrap_err().to_string().contains("needs fields first"));
-        assert!(WhitewaterLifecycle::new(WhitewaterGrid { cells: [2, N, N], ..grid() }, 10, 7).is_err());
+        assert!(
+            lifecycle
+                .set_fields(&fields)
+                .unwrap_err()
+                .to_string()
+                .contains("face axis 1")
+        );
+        assert!(
+            lifecycle
+                .step(DT)
+                .unwrap_err()
+                .to_string()
+                .contains("needs fields first")
+        );
+        assert!(
+            WhitewaterLifecycle::new(
+                WhitewaterGrid {
+                    cells: [2, N, N],
+                    ..grid()
+                },
+                10,
+                7
+            )
+            .is_err()
+        );
         assert!(WhitewaterLifecycle::new(grid(), 0, 7).is_err());
     }
 }

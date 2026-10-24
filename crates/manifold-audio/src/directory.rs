@@ -135,7 +135,9 @@ impl Subscription {
 
     /// Wrap a teardown closure run on drop.
     pub(crate) fn new(cancel: impl FnOnce() + Send + 'static) -> Self {
-        Self { cancel: Some(Box::new(cancel)) }
+        Self {
+            cancel: Some(Box::new(cancel)),
+        }
     }
 }
 
@@ -236,9 +238,15 @@ mod tests {
 
     #[test]
     fn channel_display_name_falls_back_to_1_based() {
-        let named = ChannelInfo { index: 0, name: Some("BH_IN_L".into()) };
+        let named = ChannelInfo {
+            index: 0,
+            name: Some("BH_IN_L".into()),
+        };
         assert_eq!(named.display_name(), "BH_IN_L");
-        let bare = ChannelInfo { index: 2, name: None };
+        let bare = ChannelInfo {
+            index: 2,
+            name: None,
+        };
         assert_eq!(bare.display_name(), "Channel 3");
     }
 
@@ -246,7 +254,10 @@ mod tests {
     fn resolve_prefers_uid_then_name() {
         let dir = system_directory();
         // Resolving nonsense yields nothing (and must not panic on any host).
-        assert!(dir.resolve(Some("no-such-uid"), Some("no-such-device")).is_none());
+        assert!(
+            dir.resolve(Some("no-such-uid"), Some("no-such-device"))
+                .is_none()
+        );
     }
 
     #[test]

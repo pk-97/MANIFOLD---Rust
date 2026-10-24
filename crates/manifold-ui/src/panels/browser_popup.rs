@@ -24,7 +24,6 @@
 //! Keyboard nav moves in grid geometry with scroll reveal; the wheel only
 //! scrolls the grid when it's over the grid.
 
-use crate::{BrowserAction, ParamsAction, ProjectAction};
 use super::InspectorTab;
 use super::PanelAction;
 use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
@@ -35,6 +34,7 @@ use crate::input::{Key, UIEvent};
 use crate::node::Color32;
 use crate::node::*;
 use crate::tree::UITree;
+use crate::{BrowserAction, ParamsAction, ProjectAction};
 use manifold_foundation::LayerId;
 
 // ── Layout constants ──
@@ -373,7 +373,9 @@ impl BrowserPopupPanel {
     /// of [`Self::set_category`] — lane-scoped opens (LED_STRIPS_DESIGN
     /// MVP-P3c) and tests assert through it.
     pub fn active_category(&self) -> Option<&str> {
-        self.session.as_ref().and_then(|s| s.picker.active_category())
+        self.session
+            .as_ref()
+            .and_then(|s| s.picker.active_category())
     }
 
     /// Read-only reach to the session's picker — the item list, the chip
@@ -388,9 +390,7 @@ impl BrowserPopupPanel {
     pub fn persistent_actions_layer(&self) -> Option<&LayerId> {
         self.session
             .as_ref()
-            .filter(|session| {
-                session.mode == BrowserPopupMode::Actions && session.list.keep_open
-            })
+            .filter(|session| session.mode == BrowserPopupMode::Actions && session.list.keep_open)
             .and_then(|session| session.layer_id.as_ref())
     }
 
@@ -421,7 +421,9 @@ impl BrowserPopupPanel {
     ) {
         debug_assert_eq!(req.mode, BrowserPopupMode::Actions);
         debug_assert_eq!(req.items.len(), actions.len());
-        debug_assert!(list.secondary_actions.is_empty() || list.secondary_actions.len() == req.items.len());
+        debug_assert!(
+            list.secondary_actions.is_empty() || list.secondary_actions.len() == req.items.len()
+        );
         self.open_with_actions(req, Some(actions), list);
     }
 
@@ -556,7 +558,11 @@ impl BrowserPopupPanel {
         };
         let cell_h = grid_cell_h(mode, caption_lines);
         session.layout.cell_h = cell_h;
-        let cell_w = if mode == BrowserPopupMode::Actions { 360.0_f32.min((screen_w - SCREEN_MARGIN * 2.0).max(1.0)) } else { CELL_W };
+        let cell_w = if mode == BrowserPopupMode::Actions {
+            360.0_f32.min((screen_w - SCREEN_MARGIN * 2.0).max(1.0))
+        } else {
+            CELL_W
+        };
 
         // ── Width: content-sized, screen-clamped ──
         //
@@ -572,7 +578,11 @@ impl BrowserPopupPanel {
         let full_count = session.picker.all_items().count();
         // Never more columns than items (content-sized) and never more than
         // MAX_COLUMNS — 6-8 columns at 1080p-class windows (D12).
-        let width_columns = if mode == BrowserPopupMode::Actions { 1 } else { cols_fit.min(MAX_COLUMNS).min(full_count.max(1)) };
+        let width_columns = if mode == BrowserPopupMode::Actions {
+            1
+        } else {
+            cols_fit.min(MAX_COLUMNS).min(full_count.max(1))
+        };
         let inner_w =
             width_columns as f32 * cell_w + width_columns.saturating_sub(1) as f32 * CELL_SPACING;
         let popup_w = (inner_w + chrome_w).min(screen_w);
@@ -600,10 +610,7 @@ impl BrowserPopupPanel {
         } else {
             Vec::new()
         };
-        let source_widths: Vec<f32> = source_labels
-            .iter()
-            .map(|l| chip_width(tree, l))
-            .collect();
+        let source_widths: Vec<f32> = source_labels.iter().map(|l| chip_width(tree, l)).collect();
         let chip_widths: Vec<f32> = if has_chips {
             std::iter::once(chip_width(tree, "All"))
                 .chain(category_names.iter().map(|c| chip_width(tree, c)))
@@ -717,7 +724,11 @@ impl BrowserPopupPanel {
         session.layout.source_all_id = None;
         if has_source_row {
             let active: Vec<bool> = std::iter::once(active_source.is_none())
-                .chain(SOURCE_CHIPS.iter().map(|(src, _)| active_source == Some(*src)))
+                .chain(
+                    SOURCE_CHIPS
+                        .iter()
+                        .map(|(src, _)| active_source == Some(*src)),
+                )
                 .collect();
             let (all_id, ids) = build_chip_group(
                 tree,
@@ -792,7 +803,11 @@ impl BrowserPopupPanel {
                 vp_top,
                 content_w,
                 vp_h,
-                if mode == BrowserPopupMode::Actions { session.list.empty_label } else { "No presets match" },
+                if mode == BrowserPopupMode::Actions {
+                    session.list.empty_label
+                } else {
+                    "No presets match"
+                },
                 UIStyle {
                     font_size: CELL_FONT,
                     text_color: TEXT_DIM,
@@ -849,7 +864,15 @@ impl BrowserPopupPanel {
             let has_caption = caption_lines > 0;
             if let Some(path) = item.thumbnail.as_deref() {
                 let handle = crate::node::texture_handle_for_key(path);
-                tree.add_image(clip_parent, cell_x, cell_y, cell_w, CELL_H, CELL_RADIUS, handle);
+                tree.add_image(
+                    clip_parent,
+                    cell_x,
+                    cell_y,
+                    cell_w,
+                    CELL_H,
+                    CELL_RADIUS,
+                    handle,
+                );
             }
 
             if has_caption {
@@ -903,7 +926,11 @@ impl BrowserPopupPanel {
                 cell_h,
                 UIStyle {
                     bg_color: if has_image {
-                        if is_cursor { CELL_HOVER_OVER_IMAGE } else { Color32::TRANSPARENT }
+                        if is_cursor {
+                            CELL_HOVER_OVER_IMAGE
+                        } else {
+                            Color32::TRANSPARENT
+                        }
                     } else if is_cursor {
                         CELL_HOVER
                     } else if is_current {
@@ -911,11 +938,27 @@ impl BrowserPopupPanel {
                     } else {
                         CELL_NORMAL
                     },
-                    hover_bg_color: if has_image { CELL_HOVER_OVER_IMAGE } else { CELL_HOVER },
-                    pressed_bg_color: if has_image { CELL_PRESSED_OVER_IMAGE } else { CELL_PRESSED },
+                    hover_bg_color: if has_image {
+                        CELL_HOVER_OVER_IMAGE
+                    } else {
+                        CELL_HOVER
+                    },
+                    pressed_bg_color: if has_image {
+                        CELL_PRESSED_OVER_IMAGE
+                    } else {
+                        CELL_PRESSED
+                    },
                     corner_radius: CELL_RADIUS,
-                    font_size: if own_font { FONT_PREVIEW_SIZE } else { CELL_FONT },
-                    text_color: if is_current { color::DROPDOWN_CHECK_COLOR } else { TEXT_PRIMARY },
+                    font_size: if own_font {
+                        FONT_PREVIEW_SIZE
+                    } else {
+                        CELL_FONT
+                    },
+                    text_color: if is_current {
+                        color::DROPDOWN_CHECK_COLOR
+                    } else {
+                        TEXT_PRIMARY
+                    },
                     text_inset_x: CAPTION_PAD_X,
                     ..UIStyle::default()
                 },
@@ -1019,12 +1062,13 @@ impl BrowserPopupPanel {
                 Hit::Chip(i)
             } else if layout.source_all_id == Some(node_id) {
                 Hit::SourceAll
-            } else if let Some(i) = layout.source_chip_ids.iter().position(|&id| id == node_id)
-            {
+            } else if let Some(i) = layout.source_chip_ids.iter().position(|&id| id == node_id) {
                 Hit::Source(i)
             } else if let Some(i) = layout.cell_ids.iter().position(|(id, _)| *id == node_id) {
                 Hit::Cell(i)
-            } else if let Some((_, item_index)) = layout.secondary_ids.iter().find(|(id, _)| *id == node_id) {
+            } else if let Some((_, item_index)) =
+                layout.secondary_ids.iter().find(|(id, _)| *id == node_id)
+            {
                 Hit::Secondary(*item_index)
             } else if layout.paste_id == Some(node_id) {
                 Hit::Paste
@@ -1078,17 +1122,23 @@ impl BrowserPopupPanel {
                             .map(BrowserPopupAction::ActionSelected)?;
                         (action, session.list.keep_open)
                     } else if session.mode == BrowserPopupMode::Node {
-                        (BrowserPopupAction::NodeSelected {
-                            type_id: meta.type_id.clone(),
-                            graph_pos: session.pending_spawn_graph_pos.unwrap_or((0.0, 0.0)),
-                        }, false)
+                        (
+                            BrowserPopupAction::NodeSelected {
+                                type_id: meta.type_id.clone(),
+                                graph_pos: session.pending_spawn_graph_pos.unwrap_or((0.0, 0.0)),
+                            },
+                            false,
+                        )
                     } else {
-                        (BrowserPopupAction::Selected {
-                            type_id: meta.type_id.clone(),
-                            mode: session.mode,
-                            tab: session.tab,
-                            layer_id: session.layer_id.clone(),
-                        }, false)
+                        (
+                            BrowserPopupAction::Selected {
+                                type_id: meta.type_id.clone(),
+                                mode: session.mode,
+                                tab: session.tab,
+                                layer_id: session.layer_id.clone(),
+                            },
+                            false,
+                        )
                     }
                 };
                 if !keep_open {
@@ -1125,10 +1175,17 @@ impl BrowserPopupPanel {
     /// inspector.
     pub fn handle_right_click(&self, node_id: NodeId) -> Option<BrowserCellContext> {
         let session = self.session.as_ref()?;
-        if matches!(session.mode, BrowserPopupMode::Node | BrowserPopupMode::Actions) {
+        if matches!(
+            session.mode,
+            BrowserPopupMode::Node | BrowserPopupMode::Actions
+        ) {
             return None;
         }
-        let (_, meta) = session.layout.cell_ids.iter().find(|(id, _)| *id == node_id)?;
+        let (_, meta) = session
+            .layout
+            .cell_ids
+            .iter()
+            .find(|(id, _)| *id == node_id)?;
         match meta.source {
             Some(source @ (Source::MyLibrary | Source::Project)) => Some(BrowserCellContext {
                 mode: session.mode,
@@ -1301,8 +1358,16 @@ fn build_chip_group(
             w,
             CHIP_ROW_HEIGHT,
             UIStyle {
-                bg_color: if is_active { color::ACCENT_BLUE } else { CHIP_INACTIVE },
-                hover_bg_color: if is_active { color::ACCENT_BLUE } else { CHIP_HOVER },
+                bg_color: if is_active {
+                    color::ACCENT_BLUE
+                } else {
+                    CHIP_INACTIVE
+                },
+                hover_bg_color: if is_active {
+                    color::ACCENT_BLUE
+                } else {
+                    CHIP_HOVER
+                },
                 corner_radius: CHIP_ROW_HEIGHT * 0.5,
                 font_size: CELL_FONT,
                 text_color: if is_active { Color32::WHITE } else { TEXT_DIM },
@@ -1377,16 +1442,17 @@ impl Overlay for BrowserPopupPanel {
         }
         match event {
             UIEvent::KeyDown {
-                key: key @ (Key::Escape
-                | Key::Up
-                | Key::Down
-                | Key::Left
-                | Key::Right
-                | Key::Home
-                | Key::End
-                | Key::PageUp
-                | Key::PageDown
-                | Key::Enter),
+                key:
+                    key @ (Key::Escape
+                    | Key::Up
+                    | Key::Down
+                    | Key::Left
+                    | Key::Right
+                    | Key::Home
+                    | Key::End
+                    | Key::PageUp
+                    | Key::PageDown
+                    | Key::Enter),
                 ..
             } => match self.handle_key_nav(*key) {
                 Some(BrowserPopupAction::ActionSelected(action)) => {
@@ -1409,10 +1475,12 @@ impl Overlay for BrowserPopupPanel {
                             layer_id,
                             preset: crate::types::PresetTypeId::from_string(type_id),
                         }),
-                        BrowserPopupMode::Generator => PanelAction::Project(ProjectAction::SetGenType(
-                            layer_id,
-                            crate::types::PresetTypeId::from_string(type_id),
-                        )),
+                        BrowserPopupMode::Generator => {
+                            PanelAction::Project(ProjectAction::SetGenType(
+                                layer_id,
+                                crate::types::PresetTypeId::from_string(type_id),
+                            ))
+                        }
                         BrowserPopupMode::Actions => return OverlayResponse::Consumed(Vec::new()),
                         // Node mode is editor-window only; never reached on
                         // the main-window overlay path.
@@ -1428,7 +1496,9 @@ impl Overlay for BrowserPopupPanel {
             },
             UIEvent::Click { node_id, .. } => {
                 if self.is_search_bar(*node_id) {
-                    return OverlayResponse::Consumed(vec![PanelAction::Params(ParamsAction::BrowserSearchClicked)]);
+                    return OverlayResponse::Consumed(vec![PanelAction::Params(
+                        ParamsAction::BrowserSearchClicked,
+                    )]);
                 }
                 match self.handle_click(*node_id) {
                     Some(BrowserPopupAction::ActionSelected(action)) => {
@@ -1441,17 +1511,21 @@ impl Overlay for BrowserPopupPanel {
                         layer_id,
                     }) => {
                         let action = match mode {
-                            BrowserPopupMode::Effect => PanelAction::Params(ParamsAction::AddEffect {
-                                tab,
-                                // Same atomic layer_id as the keyboard arm
-                                // above (PRESET_BROWSER_AUDITION D2).
-                                layer_id,
-                                preset: crate::types::PresetTypeId::from_string(type_id),
-                            }),
-                            BrowserPopupMode::Generator => PanelAction::Project(ProjectAction::SetGenType(
-                                layer_id,
-                                crate::types::PresetTypeId::from_string(type_id),
-                            )),
+                            BrowserPopupMode::Effect => {
+                                PanelAction::Params(ParamsAction::AddEffect {
+                                    tab,
+                                    // Same atomic layer_id as the keyboard arm
+                                    // above (PRESET_BROWSER_AUDITION D2).
+                                    layer_id,
+                                    preset: crate::types::PresetTypeId::from_string(type_id),
+                                })
+                            }
+                            BrowserPopupMode::Generator => {
+                                PanelAction::Project(ProjectAction::SetGenType(
+                                    layer_id,
+                                    crate::types::PresetTypeId::from_string(type_id),
+                                ))
+                            }
                             BrowserPopupMode::Actions => {
                                 return OverlayResponse::Consumed(Vec::new());
                             }
@@ -1464,7 +1538,9 @@ impl Overlay for BrowserPopupPanel {
                         OverlayResponse::Consumed(vec![action])
                     }
                     Some(BrowserPopupAction::Paste) => {
-                        OverlayResponse::Consumed(vec![PanelAction::Params(ParamsAction::PasteEffects)])
+                        OverlayResponse::Consumed(vec![PanelAction::Params(
+                            ParamsAction::PasteEffects,
+                        )])
                     }
                     // Dismissed (incl. backdrop), or an internal chip/category
                     // click that needs a rebuild — consume so the modal swallows
@@ -1497,7 +1573,11 @@ impl Overlay for BrowserPopupPanel {
                 ..
             } => {
                 let action = self.handle_right_click(*node_id).map(|ctx| {
-                    PanelAction::Browser(BrowserAction::BrowserCellRightClicked(ctx.mode, ctx.type_id, ctx.source))
+                    PanelAction::Browser(BrowserAction::BrowserCellRightClicked(
+                        ctx.mode,
+                        ctx.type_id,
+                        ctx.source,
+                    ))
                 });
                 OverlayResponse::Consumed(action.into_iter().collect())
             }
@@ -1590,13 +1670,35 @@ mod tests {
         let thumb = Rect::new(0.0, 0.0, CELL_W, CELL_H);
         for item in &items {
             let wrapped = caption_wrap(m, &item.label);
-            assert!(wrapped.len() <= lines, "{}: {} lines > reserved {lines}", item.label, wrapped.len());
-            assert_eq!(wrapped.join(" "), item.label, "wrap must keep the full name");
+            assert!(
+                wrapped.len() <= lines,
+                "{}: {} lines > reserved {lines}",
+                item.label,
+                wrapped.len()
+            );
+            assert_eq!(
+                wrapped.join(" "),
+                item.label,
+                "wrap must keep the full name"
+            );
             for (text, r) in wrapped.iter().zip(caption_line_rects(0.0, 0.0, lines)) {
-                assert!(!rects_overlap(r, thumb), "{}: caption over thumbnail", item.label);
-                assert!(r.y + r.height <= cell_h, "{}: caption past cell bottom", item.label);
+                assert!(
+                    !rects_overlap(r, thumb),
+                    "{}: caption over thumbnail",
+                    item.label
+                );
+                assert!(
+                    r.y + r.height <= cell_h,
+                    "{}: caption past cell bottom",
+                    item.label
+                );
                 let w = m.measure_text(text, CELL_LABEL_FONT, FontWeight::Regular).x;
-                assert!(w <= r.width, "{}: line {text:?} {w}px > {}px", item.label, r.width);
+                assert!(
+                    w <= r.width,
+                    "{}: line {text:?} {w}px > {}px",
+                    item.label,
+                    r.width
+                );
                 assert!(r.x >= 0.0 && r.x + r.width <= CELL_W);
             }
         }
@@ -1647,13 +1749,16 @@ mod tests {
             ActionListOptions::default(),
         );
         popup.set_filter("density".to_string());
-        let Some(BrowserPopupAction::ActionSelected(selected)) = popup.handle_key_nav(Key::Enter) else {
+        let Some(BrowserPopupAction::ActionSelected(selected)) = popup.handle_key_nav(Key::Enter)
+        else {
             panic!("filtered action picker should select its first action");
         };
-        assert!(matches!(selected, PanelAction::Params(ParamsAction::ShowAutomation(
+        assert!(
+            matches!(selected, PanelAction::Params(ParamsAction::ShowAutomation(
             crate::panels::GraphParamTarget::Generator,
             ref param,
-        )) if param.as_ref() == "density"));
+        )) if param.as_ref() == "density")
+        );
         assert!(!popup.is_open());
     }
 
@@ -1709,7 +1814,9 @@ mod tests {
             actions_request(&["Check"]),
             vec![PanelAction::Params(ParamsAction::PasteEffects)],
             ActionListOptions {
-                secondary_actions: vec![Some(PanelAction::Params(ParamsAction::BrowserSearchClicked))],
+                secondary_actions: vec![Some(PanelAction::Params(
+                    ParamsAction::BrowserSearchClicked,
+                ))],
                 ..ActionListOptions::default()
             },
         );
@@ -1742,8 +1849,20 @@ mod tests {
         popup.set_filter("".to_string());
         popup.set_category(Some("Checks".to_string()));
         popup.handle_key_nav(Key::Down);
-        popup.session.as_mut().unwrap().picker.scroll.set_content_height(100.0);
-        popup.session.as_mut().unwrap().picker.scroll.set_scroll_offset(12.0);
+        popup
+            .session
+            .as_mut()
+            .unwrap()
+            .picker
+            .scroll
+            .set_content_height(100.0);
+        popup
+            .session
+            .as_mut()
+            .unwrap()
+            .picker
+            .scroll
+            .set_scroll_offset(12.0);
 
         assert!(popup.refresh_actions(
             actions_request(&["B", "A", "C"]).items,

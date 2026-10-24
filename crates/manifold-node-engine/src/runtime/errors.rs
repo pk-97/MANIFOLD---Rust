@@ -138,7 +138,10 @@ impl std::fmt::Display for ChainError {
                 )
             }
             Self::PreAllocationFailed { reason } => {
-                write!(f, "The effects could not get their GPU memory, so they are bypassed. {reason}")
+                write!(
+                    f,
+                    "The effects could not get their GPU memory, so they are bypassed. {reason}"
+                )
             }
             Self::TriggerShadowsContinuousBinding {
                 node_id,

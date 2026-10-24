@@ -19,9 +19,13 @@
 
 use std::borrow::Cow;
 
-use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, NodeRequires};
+use manifold_node_engine::exec::effect_node::{
+    EffectNode, EffectNodeContext, EffectNodeType, NodeRequires,
+};
 use manifold_node_engine::parameters::{ParamDef, ParamValue};
-use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use manifold_node_engine::ports::{
+    NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+};
 use manifold_node_engine::state_store::NodeState;
 
 pub const SAMPLE_AND_HOLD_TYPE_ID: &str = "node.sample_and_hold";
@@ -227,14 +231,14 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod trigger_latch_release_tests {
     use super::*;
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_core::{Beats, Seconds};
     use manifold_node_engine::exec::effect_node::FrameTime;
+    use manifold_node_engine::exec::execution::Executor;
     use manifold_node_engine::exec::execution_plan::compile;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use manifold_node_engine::graph::Graph;
     use manifold_node_engine::primitives::value::Value;
     use manifold_node_engine::state_store::StateStore;
-    use manifold_node_engine::exec::execution::Executor;
-    use manifold_core::{Beats, Seconds};
     use std::sync::{Arc, Mutex};
 
     fn frame_time() -> FrameTime {
@@ -251,7 +255,9 @@ mod trigger_latch_release_tests {
         seen: Arc<Mutex<Option<f32>>>,
     }
     impl EffectNode for Capture {
-        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+            manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+        } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -290,7 +296,8 @@ mod trigger_latch_release_tests {
             seen: seen.clone(),
         }));
         g.set_param(value, "value", ParamValue::Float(1.0)).unwrap();
-        g.set_param(trigger, "value", ParamValue::Float(0.0)).unwrap();
+        g.set_param(trigger, "value", ParamValue::Float(0.0))
+            .unwrap();
         g.connect((value, "out"), (sh, "value")).unwrap();
         g.connect((trigger, "out"), (sh, "trigger")).unwrap();
         g.connect((sh, "out"), (sink, "in")).unwrap();

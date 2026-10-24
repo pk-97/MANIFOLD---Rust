@@ -9,7 +9,6 @@
 
 use std::borrow::Cow;
 
-
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
@@ -259,9 +258,9 @@ mod gpu_tests {
 
     use super::{GradientCentralDiff, GradientUniforms};
     use manifold_node_engine::freeze::classify::{FusionKind, InputAccess};
-    use manifold_node_engine::freeze::codegen::{generate_standalone, StandaloneKernelSpec, ENTRY};
-    use manifold_node_engine::primitive::PrimitiveSpec;
+    use manifold_node_engine::freeze::codegen::{ENTRY, StandaloneKernelSpec, generate_standalone};
     use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     /// Verbatim copy of the pre-conversion `gradient_central_diff_body.wgsl`
     /// — frozen here ONLY as an old-vs-new comparison fixture, never used as
@@ -364,7 +363,12 @@ fn body(in_tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, 
         h: u32,
     ) {
         let mut enc = device.create_encoder("edge-slope-dispatch");
-        enc.dispatch_compute(pipeline, bindings, [w.div_ceil(16), h.div_ceil(16), 1], "test");
+        enc.dispatch_compute(
+            pipeline,
+            bindings,
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "test",
+        );
         enc.commit_and_wait_completed();
     }
 
@@ -397,7 +401,12 @@ fn body(in_tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, 
             ..Default::default()
         });
 
-        let uniforms = GradientUniforms { channel: 0, scale_mode: 1, wrap_mode, _pad0: 0 };
+        let uniforms = GradientUniforms {
+            channel: 0,
+            scale_mode: 1,
+            wrap_mode,
+            _pad0: 0,
+        };
         let bytes = bytemuck::bytes_of(&uniforms);
 
         let old_wgsl = generate_standalone(&StandaloneKernelSpec {
@@ -418,10 +427,22 @@ fn body(in_tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, 
             &device,
             &old_pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytes },
-                GpuBinding::Texture { binding: 1, texture: &field_tex },
-                GpuBinding::Sampler { binding: 2, sampler: &sampler },
-                GpuBinding::Texture { binding: 3, texture: &old_out.texture },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytes,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &field_tex,
+                },
+                GpuBinding::Sampler {
+                    binding: 2,
+                    sampler: &sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: &old_out.texture,
+                },
             ],
             w,
             h,
@@ -437,9 +458,18 @@ fn body(in_tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, 
             &device,
             &new_pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytes },
-                GpuBinding::Texture { binding: 1, texture: &field_tex },
-                GpuBinding::Texture { binding: 2, texture: &new_out.texture },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytes,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &field_tex,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: &new_out.texture,
+                },
             ],
             w,
             h,
@@ -451,7 +481,11 @@ fn body(in_tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, 
 
     #[test]
     fn gather_texel_conversion_is_value_preserving_clamp() {
-        assert_old_matches_new(GpuAddressMode::ClampToEdge, 0, "old Clamp-sampler vs new GatherTexel+clamp");
+        assert_old_matches_new(
+            GpuAddressMode::ClampToEdge,
+            0,
+            "old Clamp-sampler vs new GatherTexel+clamp",
+        );
     }
 
     /// The load-bearing case: FluidSim2D.json ships `node.edge_slope` with
@@ -460,7 +494,10 @@ fn body(in_tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, 
     /// silently broken.
     #[test]
     fn gather_texel_conversion_is_value_preserving_repeat() {
-        assert_old_matches_new(GpuAddressMode::Repeat, 1, "old Repeat-sampler vs new GatherTexel+modulo");
+        assert_old_matches_new(
+            GpuAddressMode::Repeat,
+            1,
+            "old Repeat-sampler vs new GatherTexel+modulo",
+        );
     }
-
 }

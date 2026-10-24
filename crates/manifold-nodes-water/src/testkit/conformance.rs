@@ -6,19 +6,19 @@
 //! keeps red in checks it still runs. The GPU checks read this table
 //! in `tests/gpu_proofs/liquid_conformance.rs`; the CPU checks live here.
 
-#[cfg(any(test, feature = "testkit"))]
-use serde_json::Value;
-use manifold_water_liquid::testkit::CUBE_EDGE_PER_SCALE;
 use manifold_core::effect_graph_def::{
     BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
 };
 use manifold_core::id::NodeId;
+use manifold_water_liquid::testkit::CUBE_EDGE_PER_SCALE;
+#[cfg(any(test, feature = "testkit"))]
+use serde_json::Value;
 
+use manifold_water_gpu_mpm::matter::{MatterGridNode, MatterTickStats};
+use manifold_water_liquid::WATER_DENSITY;
 use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::grid::{face_coords, face_len};
-use manifold_water_liquid::WATER_DENSITY;
 use manifold_water_liquid::lattice::PADDING_NODES;
-use manifold_water_gpu_mpm::matter::{MatterGridNode, MatterTickStats};
 use manifold_water_liquid::primitives::liquid_stats::LiquidTickStats;
 
 /// A scene the checks run on.
@@ -113,12 +113,19 @@ pub enum Check {
 }
 
 /// The floating rest boxes: foam-light, and half the liquid's density.
-const FLOATING_REST: &[Fixture] = &[Fixture::FloatingAt { density_ratio: 0.05 }, Fixture::FloatingAt { density_ratio: 0.5 }];
+const FLOATING_REST: &[Fixture] = &[
+    Fixture::FloatingAt {
+        density_ratio: 0.05,
+    },
+    Fixture::FloatingAt { density_ratio: 0.5 },
+];
 
 const BOX_FALLS: &[Fixture] = &[
     Fixture::Collision { density_ratio: 0.1 },
     Fixture::Collision { density_ratio: 1.0 },
-    Fixture::Collision { density_ratio: 10.0 },
+    Fixture::Collision {
+        density_ratio: 10.0,
+    },
 ];
 
 impl Check {
@@ -171,15 +178,26 @@ impl Check {
             Check::CoupledWorldStepsOnce | Check::FloatingDraft => &[Fixture::FloatingBox],
             Check::CollisionMomentum | Check::CollisionEnergy => BOX_FALLS,
             Check::FloatingRest => FLOATING_REST,
-            Check::RestingContact => &[Fixture::Resting { density_ratio: 2.0, tilt: 0.0 }],
+            Check::RestingContact => &[Fixture::Resting {
+                density_ratio: 2.0,
+                tilt: 0.0,
+            }],
             // On an edge, so water reaches under it: a box flat on the
             // floor has no water cell beneath it and feels no lift.
-            Check::LiftOff => &[Fixture::Resting { density_ratio: 0.3, tilt: 0.3 }],
+            Check::LiftOff => &[Fixture::Resting {
+                density_ratio: 0.3,
+                tilt: 0.3,
+            }],
             Check::SubmergedStack => &[Fixture::Stack],
             Check::HandoverAgreement => &[
-                Fixture::FloatingAt { density_ratio: 0.05 },
+                Fixture::FloatingAt {
+                    density_ratio: 0.05,
+                },
                 Fixture::FloatingAt { density_ratio: 0.5 },
-                Fixture::Resting { density_ratio: 0.3, tilt: 0.3 },
+                Fixture::Resting {
+                    density_ratio: 0.3,
+                    tilt: 0.3,
+                },
             ],
             Check::HydrostaticLift => &[Fixture::SubmergedBox],
             Check::FreeFlight => &[Fixture::Collision { density_ratio: 1.0 }],
@@ -310,11 +328,17 @@ pub struct KnownRed {
 
 impl LiquidSolverRow {
     pub fn exemption(&self, check: Check) -> Option<&'static str> {
-        self.exempt.iter().find(|(exempt, _)| *exempt == check).map(|(_, reason)| *reason)
+        self.exempt
+            .iter()
+            .find(|(exempt, _)| *exempt == check)
+            .map(|(_, reason)| *reason)
     }
 
     pub fn known_red(&self, check: Check, miss: &str) -> Option<&'static str> {
-        self.known_red.iter().find(|known| known.check == check && known.miss == miss).map(|known| known.reason)
+        self.known_red
+            .iter()
+            .find(|known| known.check == check && known.miss == miss)
+            .map(|known| known.reason)
     }
 }
 
@@ -329,18 +353,6 @@ fn liquid_totals(words: &[u32]) -> LiquidTotals {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
 /// GPU FLIP's faces: component `axis` of the FaceSample lattice's padded cell,
 /// (cells + 1)³ records x fastest; 0 where no weight reached the face.
 pub fn gpu_flip_faces(bytes: &[u8], cells: [u32; 3]) -> [Vec<f32>; 3] {
@@ -351,7 +363,11 @@ pub fn gpu_flip_faces(bytes: &[u8], cells: [u32; 3]) -> [Vec<f32>; 3] {
             .map(|index| {
                 let f = face_coords(cells, axis, index).map(|n| n as usize);
                 let sample = lattice[f[0] + m[0] * (f[1] + m[1] * f[2])];
-                if sample.weight[axis] > 0.0 { sample.velocity[axis] } else { 0.0 }
+                if sample.weight[axis] > 0.0 {
+                    sample.velocity[axis]
+                } else {
+                    0.0
+                }
             })
             .collect()
     })
@@ -472,7 +488,10 @@ impl BoxScene {
                     ..Self::rest_tank()
                 })
             }
-            Fixture::Resting { density_ratio, tilt } => {
+            Fixture::Resting {
+                density_ratio,
+                tilt,
+            } => {
                 let edge = REST_EDGE;
                 let half = 0.5 * REST_DOMAIN;
                 // Half its extent along x and y once turned about z.
@@ -509,29 +528,66 @@ impl BoxScene {
             return def;
         }
         let id_of = |def: &EffectGraphDef, name: &str| {
-            def.nodes.iter().find(|node| node.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}")).id
+            def.nodes
+                .iter()
+                .find(|node| node.node_id.as_str() == name)
+                .unwrap_or_else(|| panic!("no node {name}"))
+                .id
         };
-        let (world, material, render) = (id_of(&def, "box_world"), id_of(&def, "box_material"), id_of(&def, "scene"));
+        let (world, material, render) = (
+            id_of(&def, "box_world"),
+            id_of(&def, "box_material"),
+            id_of(&def, "scene"),
+        );
         for level in 1..STACK_HEIGHT {
-            let next = def.nodes.iter().map(|node| node.id).max().expect("a scene has nodes") + 1;
+            let next = def
+                .nodes
+                .iter()
+                .map(|node| node.id)
+                .max()
+                .expect("a scene has nodes")
+                + 1;
             let mut ids = [0u32; 4];
-            for (i, name) in ["box_start", "box_body", "box_mesh", "box_object"].into_iter().enumerate() {
-                let source = def.nodes.iter().find(|node| node.node_id.as_str() == name).expect("the box").clone();
+            for (i, name) in ["box_start", "box_body", "box_mesh", "box_object"]
+                .into_iter()
+                .enumerate()
+            {
+                let source = def
+                    .nodes
+                    .iter()
+                    .find(|node| node.node_id.as_str() == name)
+                    .expect("the box")
+                    .clone();
                 ids[i] = next + i as u32;
-                let handle = source.handle.as_ref().map(|handle| format!("{handle} {}", level + 1));
-                def.nodes.push(EffectGraphNode { id: ids[i], node_id: NodeId::new(format!("{name}_{level}")), handle, ..source });
+                let handle = source
+                    .handle
+                    .as_ref()
+                    .map(|handle| format!("{handle} {}", level + 1));
+                def.nodes.push(EffectGraphNode {
+                    id: ids[i],
+                    node_id: NodeId::new(format!("{name}_{level}")),
+                    handle,
+                    ..source
+                });
             }
             let [start, body, mesh, object] = ids;
-            let slot = match def.nodes.iter().find(|node| node.id == render).and_then(|node| node.params.get("objects")) {
+            let slot = match def
+                .nodes
+                .iter()
+                .find(|node| node.id == render)
+                .and_then(|node| node.params.get("objects"))
+            {
                 Some(SerializedParamValue::Float { value }) => *value as u32,
                 Some(SerializedParamValue::Int { value }) => *value as u32,
                 other => panic!("the render scene has no object count: {other:?}"),
             };
-            let wire = |from_node: u32, from_port: String, to_node: u32, to_port: String| EffectGraphWire {
-                from_node,
-                from_port,
-                to_node,
-                to_port,
+            let wire = |from_node: u32, from_port: String, to_node: u32, to_port: String| {
+                EffectGraphWire {
+                    from_node,
+                    from_port,
+                    to_node,
+                    to_port,
+                }
             };
             def.wires.extend([
                 wire(start, "transform".into(), body, "transform".into()),
@@ -542,10 +598,24 @@ impl BoxScene {
                 wire(body, "pose".into(), object, "transform".into()),
                 wire(object, "object".into(), render, format!("object_{slot}")),
             ]);
-            let scene = def.nodes.iter_mut().find(|node| node.id == render).expect("the render scene");
-            scene.params.insert("objects".into(), SerializedParamValue::Float { value: (slot + 1) as f32 });
+            let scene = def
+                .nodes
+                .iter_mut()
+                .find(|node| node.id == render)
+                .expect("the render scene");
+            scene.params.insert(
+                "objects".into(),
+                SerializedParamValue::Float {
+                    value: (slot + 1) as f32,
+                },
+            );
             let y = self.centre[1] + level as f32 * (self.edge + 1e-3);
-            set_node_param(&mut def, &format!("box_start_{level}"), "pos_y", SerializedParamValue::Float { value: y });
+            set_node_param(
+                &mut def,
+                &format!("box_start_{level}"),
+                "pos_y",
+                SerializedParamValue::Float { value: y },
+            );
         }
         def
     }
@@ -579,8 +649,22 @@ impl BoxScene {
     /// The prepared Floating Box definition set to this scene; its domain is `type_id`,
     /// its box the `box_start` transform and `box_body` body.
     pub fn apply(self, mut def: EffectGraphDef, type_id: &str) -> EffectGraphDef {
-        for face in ["closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z"] {
-            set_type_param(&mut def, type_id, face, SerializedParamValue::Bool { value: !self.open_faces });
+        for face in [
+            "closed_neg_x",
+            "closed_pos_x",
+            "closed_neg_y",
+            "closed_pos_y",
+            "closed_neg_z",
+            "closed_pos_z",
+        ] {
+            set_type_param(
+                &mut def,
+                type_id,
+                face,
+                SerializedParamValue::Bool {
+                    value: !self.open_faces,
+                },
+            );
         }
         self.set(def, type_id)
     }
@@ -589,26 +673,42 @@ impl BoxScene {
     fn set(self, mut def: EffectGraphDef, type_id: &str) -> EffectGraphDef {
         let float = |value: f32| SerializedParamValue::Float { value };
         set_type_param(&mut def, type_id, "domain_size", float(self.domain_size));
-        set_type_param(&mut def, type_id, "resolution", SerializedParamValue::Int { value: self.resolution });
+        set_type_param(
+            &mut def,
+            type_id,
+            "resolution",
+            SerializedParamValue::Int {
+                value: self.resolution,
+            },
+        );
         set_type_param(&mut def, type_id, "fill_height", float(self.fill));
         set_type_param(&mut def, type_id, "gravity", float(self.liquid_gravity));
         let scale = self.edge / CUBE_EDGE_PER_SCALE;
         for (axis, i) in [("x", 0), ("y", 1), ("z", 2)] {
-            set_node_param(&mut def, "box_start", &format!("pos_{axis}"), float(self.centre[i]));
-            set_node_param(&mut def, "box_start", &format!("rot_{axis}"), float(self.rotation[i]));
-            set_node_param(&mut def, "box_start", &format!("scale_{axis}"), float(scale));
+            set_node_param(
+                &mut def,
+                "box_start",
+                &format!("pos_{axis}"),
+                float(self.centre[i]),
+            );
+            set_node_param(
+                &mut def,
+                "box_start",
+                &format!("rot_{axis}"),
+                float(self.rotation[i]),
+            );
+            set_node_param(
+                &mut def,
+                "box_start",
+                &format!("scale_{axis}"),
+                float(scale),
+            );
         }
         // The body takes its mass in kg.
         set_node_param(&mut def, "box_body", "mass", float(self.mass));
         def
     }
 }
-
-
-
-
-
-
 
 fn for_each_node<F: FnMut(&mut EffectGraphNode)>(nodes: &mut [EffectGraphNode], visit: &mut F) {
     for node in nodes {
@@ -638,7 +738,12 @@ pub fn json_node_mut<'a>(value: &'a mut Value, node_id: &str) -> Option<&'a mut 
 
 /// Set `param` on the node whose stable id is `node_id`, and on any card
 /// bound to it, so the card does not put the old value back at build.
-pub fn set_node_param(def: &mut EffectGraphDef, node_id: &str, param: &str, value: SerializedParamValue) {
+pub fn set_node_param(
+    def: &mut EffectGraphDef,
+    node_id: &str,
+    param: &str,
+    value: SerializedParamValue,
+) {
     let card = match &value {
         SerializedParamValue::Float { value } => *value,
         SerializedParamValue::Int { value } => *value as f32,
@@ -654,21 +759,33 @@ pub fn set_node_param(def: &mut EffectGraphDef, node_id: &str, param: &str, valu
         }
     });
     assert!(found, "no node {node_id}");
-    let Some(metadata) = def.preset_metadata.as_mut() else { return };
+    let Some(metadata) = def.preset_metadata.as_mut() else {
+        return;
+    };
     let mut cards = Vec::new();
     for binding in &mut metadata.bindings {
-        if matches!(&binding.target, BindingTarget::Node { node_id: id, param: p } if id.as_str() == node_id && p == param) {
+        if matches!(&binding.target, BindingTarget::Node { node_id: id, param: p } if id.as_str() == node_id && p == param)
+        {
             binding.default_value = card;
             cards.push(binding.id.clone());
         }
     }
-    for spec in metadata.params.iter_mut().filter(|spec| cards.contains(&spec.id)) {
+    for spec in metadata
+        .params
+        .iter_mut()
+        .filter(|spec| cards.contains(&spec.id))
+    {
         spec.default_value = card;
     }
 }
 
 /// Set `param` on every node of `type_id` and the cards bound to it.
-pub fn set_type_param(def: &mut EffectGraphDef, type_id: &str, param: &str, value: SerializedParamValue) {
+pub fn set_type_param(
+    def: &mut EffectGraphDef,
+    type_id: &str,
+    param: &str,
+    value: SerializedParamValue,
+) {
     let mut ids = Vec::new();
     for_each_node(&mut def.nodes, &mut |node| {
         if node.type_id == type_id {
@@ -685,33 +802,68 @@ pub fn set_type_param(def: &mut EffectGraphDef, type_id: &str, param: &str, valu
 /// source wired into it.
 fn initial_fill(def: &mut EffectGraphDef, type_id: &str) -> (u32, u32) {
     *def = manifold_core::flatten::flatten_groups(def).expect("a liquid preset flattens");
-    let domain = def.nodes.iter().find(|node| node.type_id == type_id).unwrap_or_else(|| panic!("no {type_id} node")).id;
+    let domain = def
+        .nodes
+        .iter()
+        .find(|node| node.type_id == type_id)
+        .unwrap_or_else(|| panic!("no {type_id} node"))
+        .id;
     let is_fill = |id: u32| {
-        def.nodes.iter().find(|node| node.id == id).is_some_and(|node| {
-            node.type_id == manifold_core::initial_fill::FLUID_ROLE_SOURCE_TYPE_ID
-                && matches!(node.params.get("role"), Some(SerializedParamValue::Enum { value: 0 }))
-        })
+        def.nodes
+            .iter()
+            .find(|node| node.id == id)
+            .is_some_and(|node| {
+                node.type_id == manifold_core::initial_fill::FLUID_ROLE_SOURCE_TYPE_ID
+                    && matches!(
+                        node.params.get("role"),
+                        Some(SerializedParamValue::Enum { value: 0 })
+                    )
+            })
     };
-    let fill = def.wires.iter().find(|wire| wire.to_node == domain && wire.to_port.starts_with("role_") && is_fill(wire.from_node));
-    (domain, fill.unwrap_or_else(|| panic!("{type_id} has no Initial Fill")).from_node)
+    let fill = def.wires.iter().find(|wire| {
+        wire.to_node == domain && wire.to_port.starts_with("role_") && is_fill(wire.from_node)
+    });
+    (
+        domain,
+        fill.unwrap_or_else(|| panic!("{type_id} has no Initial Fill"))
+            .from_node,
+    )
 }
 
 /// Set `param` on the transform placing the domain's Initial Fill. The def
 /// is flattened first, so the wires are direct.
 fn set_fill_param(def: &mut EffectGraphDef, type_id: &str, param: &str, value: f32) {
     let (_, fill) = initial_fill(def, type_id);
-    let from = def.wires.iter().find(|wire| wire.to_node == fill && wire.to_port == "transform").expect("the fill is placed").from_node;
-    let source = def.nodes.iter().find(|node| node.id == from).expect("the wire's source");
-    assert_eq!(source.type_id, "node.transform_3d", "the Initial Fill is placed by a transform");
+    let from = def
+        .wires
+        .iter()
+        .find(|wire| wire.to_node == fill && wire.to_port == "transform")
+        .expect("the fill is placed")
+        .from_node;
+    let source = def
+        .nodes
+        .iter()
+        .find(|node| node.id == from)
+        .expect("the wire's source");
+    assert_eq!(
+        source.type_id, "node.transform_3d",
+        "the Initial Fill is placed by a transform"
+    );
     let node_id = source.node_id.clone();
-    set_node_param(def, node_id.as_str(), param, SerializedParamValue::Float { value });
+    set_node_param(
+        def,
+        node_id.as_str(),
+        param,
+        SerializedParamValue::Float { value },
+    );
 }
 
 /// Unwire the domain's Initial Fill, so the water starts from its fill
 /// height alone.
 fn drop_fill(def: &mut EffectGraphDef, type_id: &str) {
     let (domain, fill) = initial_fill(def, type_id);
-    def.wires.retain(|wire| !(wire.to_node == domain && wire.from_node == fill));
+    def.wires
+        .retain(|wire| !(wire.to_node == domain && wire.from_node == fill));
 }
 
 #[cfg(test)]
@@ -725,9 +877,16 @@ mod tests {
                 "group": {"nodes": [{"nodeId": "inner"}]}
             }]
         });
-        assert_eq!(json_node_mut(&mut graph, "inner").expect("nested node")["nodeId"], "inner");
-        json_node_mut(&mut graph, "inner").expect("nested node")["nodeId"] = serde_json::json!("changed");
-        assert_eq!(json_node_mut(&mut graph, "changed").expect("renamed node")["nodeId"], "changed");
+        assert_eq!(
+            json_node_mut(&mut graph, "inner").expect("nested node")["nodeId"],
+            "inner"
+        );
+        json_node_mut(&mut graph, "inner").expect("nested node")["nodeId"] =
+            serde_json::json!("changed");
+        assert_eq!(
+            json_node_mut(&mut graph, "changed").expect("renamed node")["nodeId"],
+            "changed"
+        );
         assert!(json_node_mut(&mut graph, "missing").is_none());
     }
 }

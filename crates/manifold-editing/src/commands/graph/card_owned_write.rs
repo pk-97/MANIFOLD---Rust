@@ -355,23 +355,37 @@ mod tests {
 
         let mut choice = set("select", SerializedParamValue::Enum { value: 1 });
         choice.execute(&mut project);
-        assert_eq!(choice.touches(), rows_set, "a switch selection decides rows");
+        assert_eq!(
+            choice.touches(),
+            rows_set,
+            "a switch selection decides rows"
+        );
 
-        project.find_effect_by_id_mut(&fx).unwrap().params.get_mut("amount").unwrap().spec.scene =
-            Some(SceneParamDesc {
-                role: SurfaceRole::Setup,
-                group: ControlGroup::DepthOfField,
-                band: None,
-                card_order: 0,
-                card_label: CardLabel::Param,
-                gate: None,
-                switch: Some(Feature::DepthOfField),
-                colour: None,
-            });
+        project
+            .find_effect_by_id_mut(&fx)
+            .unwrap()
+            .params
+            .get_mut("amount")
+            .unwrap()
+            .spec
+            .scene = Some(SceneParamDesc {
+            role: SurfaceRole::Setup,
+            group: ControlGroup::DepthOfField,
+            band: None,
+            card_order: 0,
+            card_label: CardLabel::Param,
+            gate: None,
+            switch: Some(Feature::DepthOfField),
+            colour: None,
+        });
         // The card slot carries the inverse of out = v*2: 1.6 lands 0.8 on the
         // card, which turns the feature on.
         let mut switch = set("amount", SerializedParamValue::Float { value: 1.6 });
-        assert_eq!(switch.execute(&mut project), rows_set, "bound to a card feature switch");
+        assert_eq!(
+            switch.execute(&mut project),
+            rows_set,
+            "bound to a card feature switch"
+        );
         assert_eq!(switch.undo(&mut project), rows_set, "undo agrees");
     }
 

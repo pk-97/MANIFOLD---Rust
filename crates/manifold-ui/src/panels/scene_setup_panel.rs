@@ -10,15 +10,16 @@
 //! and structural field rows are the shared card rows, dispatched through the
 //! same `RowHost` every card uses.
 
-#[path = "scene_setup_panel/outliner.rs"]
-mod outliner;
 #[path = "scene_setup_panel/item_header.rs"]
 mod item_header;
 #[path = "scene_setup_panel/keyboard.rs"]
 mod keyboard;
+#[path = "scene_setup_panel/outliner.rs"]
+mod outliner;
 pub use keyboard::SceneItemAddress;
 #[path = "scene_setup_panel/material_block.rs"]
 mod material_block;
+mod panes;
 #[path = "scene_setup_panel/parameter_navigation.rs"]
 mod parameter_navigation;
 #[path = "scene_setup_panel/properties.rs"]
@@ -27,7 +28,6 @@ mod properties;
 mod scale_link;
 #[path = "scene_setup_panel/value_sync.rs"]
 mod value_sync;
-mod panes;
 mod view_model;
 pub use view_model::*;
 #[cfg(test)]
@@ -46,13 +46,15 @@ use manifold_foundation::{ItemId, LayerId};
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_card::{RowGeometry, RowMod};
 use super::param_slider_shared::{
-    AudioRowState, ModTab, ParamModState, RowHost, RowInteraction, build_button_row, build_colour_row,
-    build_param_row, param_row_key_base, toggle_btn_style,
+    AudioRowState, ModTab, ParamModState, RowHost, RowInteraction, build_button_row,
+    build_colour_row, build_param_row, param_row_key_base, toggle_btn_style,
 };
 use super::{GraphParamTarget, PanelAction, ParamsAction};
 use crate::param_surface::{ParamRow, ParamSurface, RowKind, RowMapping, RowRole, RowSpec};
 use crate::slider::GAP;
-use manifold_foundation::scene_surface::{ControlGroup, Feature, Gate, GizmoDrawMode, ItemKind, SurfaceRole};
+use manifold_foundation::scene_surface::{
+    ControlGroup, Feature, Gate, GizmoDrawMode, ItemKind, SurfaceRole,
+};
 
 // ── Stable keys ──
 const KEY_BG: u64 = 80_001;
@@ -148,28 +150,51 @@ impl SceneCardState {
         self.resize(n);
         self.rows = retained.iter().map(|&i| config.rows[i].clone()).collect();
         self.row_host.index_swatches(&self.rows);
-        self.current_values = retained.iter().map(|&i| config.rows[i].value.base).collect();
+        self.current_values = retained
+            .iter()
+            .map(|&i| config.rows[i].value.base)
+            .collect();
         self.last_pushed_values = self
             .rows
             .iter()
-            .map(|row| prev_index.get(row.id.as_ref()).map(|&j| prev_pushed[j]).unwrap_or(f32::NAN))
+            .map(|row| {
+                prev_index
+                    .get(row.id.as_ref())
+                    .map(|&j| prev_pushed[j])
+                    .unwrap_or(f32::NAN)
+            })
             .collect();
         self.mod_active_tab = self
             .rows
             .iter()
-            .map(|row| prev_index.get(row.id.as_ref()).and_then(|&j| prev_tabs.get(j).copied()).unwrap_or(ModTab::Driver))
+            .map(|row| {
+                prev_index
+                    .get(row.id.as_ref())
+                    .and_then(|&j| prev_tabs.get(j).copied())
+                    .unwrap_or(ModTab::Driver)
+            })
             .collect();
 
         self.row_id_index.clear();
         self.row_id_index.reserve(n);
         for (i, row) in self.rows.iter().enumerate() {
             let prev = self.row_id_index.insert(row.id.to_string(), i);
-            debug_assert!(prev.is_none(), "BUG-313: duplicate param id {:?} in scene properties rows", row.id);
+            debug_assert!(
+                prev.is_none(),
+                "BUG-313: duplicate param id {:?} in scene properties rows",
+                row.id
+            );
         }
 
-        let mods: Vec<RowMod> = retained.iter().map(|&i| config.rows[i].modulation.clone()).collect();
+        let mods: Vec<RowMod> = retained
+            .iter()
+            .map(|&i| config.rows[i].modulation.clone())
+            .collect();
         self.mod_state.sync_from_config(n, &mods);
-        self.mod_state.sync_audio(self.rows.iter().map(|row| row.audio.clone()), &config.audio_sends);
+        self.mod_state.sync_audio(
+            self.rows.iter().map(|row| row.audio.clone()),
+            &config.audio_sends,
+        );
     }
 
     fn restore_live(&mut self, target: &GraphParamTarget) {
@@ -183,7 +208,13 @@ impl SceneCardState {
         self.row_host.restore_live(ctx);
     }
 
-    fn handle_pointer_down(&mut self, node: NodeId, pos: Vec2, tree: &mut UITree, target: &GraphParamTarget) -> Vec<PanelAction> {
+    fn handle_pointer_down(
+        &mut self,
+        node: NodeId,
+        pos: Vec2,
+        tree: &mut UITree,
+        target: &GraphParamTarget,
+    ) -> Vec<PanelAction> {
         let ctx = RowInteraction {
             target,
             rows: &mut self.rows,
@@ -194,7 +225,13 @@ impl SceneCardState {
         self.row_host.handle_pointer_down(node, pos, tree, ctx)
     }
 
-    fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree, fine: bool, target: &GraphParamTarget) -> Vec<PanelAction> {
+    fn handle_drag(
+        &mut self,
+        pos: Vec2,
+        tree: &mut UITree,
+        fine: bool,
+        target: &GraphParamTarget,
+    ) -> Vec<PanelAction> {
         let ctx = RowInteraction {
             target,
             rows: &mut self.rows,
@@ -232,11 +269,21 @@ fn placeholder_param_info() -> ParamRow {
             scene: None,
             limit: Default::default(),
         },
-        value: crate::param_surface::RowValue { base: 0.0, effective: 0.0, exposed: false, driven: false },
+        value: crate::param_surface::RowValue {
+            base: 0.0,
+            effective: 0.0,
+            exposed: false,
+            driven: false,
+        },
         audio: AudioRowState::default(),
         clip_trigger: None,
         modulation: RowMod::default(),
-        mapping: RowMapping { osc_address: None, ableton_display: None, ableton_range: None, mappable: false },
+        mapping: RowMapping {
+            osc_address: None,
+            ableton_display: None,
+            ableton_range: None,
+            mappable: false,
+        },
         rgb_members: None,
         modulator_stored: false,
         affordance: None,
@@ -408,7 +455,11 @@ impl ScenePanel {
         self.properties_card.row_host.register_intents(intents);
         // The one param menu, addressed at this panel's own layer (BUG-292).
         let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
-        self.properties_card.row_host.register_param_menus(&self.properties_card.rows, &target, intents);
+        self.properties_card.row_host.register_param_menus(
+            &self.properties_card.rows,
+            &target,
+            intents,
+        );
     }
 
     pub fn open(&mut self) {
@@ -478,11 +529,11 @@ impl ScenePanel {
     /// The scene's Render Mode row, drawn in the header beside Show gizmos
     /// instead of under World.
     pub(super) fn render_mode_row(&self) -> Option<&ParamRow> {
-        self.full_params
-            .as_ref()?
-            .rows
-            .iter()
-            .find(|row| row.spec.scene.is_some_and(|scene| scene.group == ControlGroup::RenderMode))
+        self.full_params.as_ref()?.rows.iter().find(|row| {
+            row.spec
+                .scene
+                .is_some_and(|scene| scene.group == ControlGroup::RenderMode)
+        })
     }
 
     /// The header button's text for the Render Mode row's current value.
@@ -490,7 +541,10 @@ impl ScenePanel {
         let row = self.render_mode_row()?;
         let labels = row.spec.value_labels.as_deref().unwrap_or(&[]);
         let index = (row.value.base - row.spec.min).round().max(0.0) as usize;
-        Some(format!("Render: {}", labels.get(index).map_or("Rendered", String::as_str)))
+        Some(format!(
+            "Render: {}",
+            labels.get(index).map_or("Rendered", String::as_str)
+        ))
     }
 
     /// The scene layer whose gizmos draw over the output preview: the one
@@ -508,11 +562,11 @@ impl ScenePanel {
         }
     }
 
-
     /// Every selected item of the scene this panel shows, in selection
     /// order, the active one last when it is selected.
     pub fn live_selected(&self) -> &[SceneSelection] {
-        self.live_layer_id().map_or(&[], |layer| self.selected_of(layer))
+        self.live_layer_id()
+            .map_or(&[], |layer| self.selected_of(layer))
     }
 
     /// Every selected item of `layer`'s scene, in selection order.
@@ -557,8 +611,12 @@ impl ScenePanel {
 
     fn build_nodes(&mut self, tree: &mut UITree, x: f32, y: f32, panel_h: f32) {
         let chrome = self.chrome_view();
-        self.host.build(tree, &chrome, Rect::new(x, y, self.panel_w, panel_h));
-        self.bg_id = self.host.node_id_for_key(KEY_BG).unwrap_or(NodeId::PLACEHOLDER);
+        self.host
+            .build(tree, &chrome, Rect::new(x, y, self.panel_w, panel_h));
+        self.bg_id = self
+            .host
+            .node_id_for_key(KEY_BG)
+            .unwrap_or(NodeId::PLACEHOLDER);
         self.panel_rect = Rect::new(x, y, self.panel_w, panel_h);
         // Reset every dynamic control id — repopulated by whichever `build_*`
         // branch below actually builds this frame.
@@ -584,22 +642,61 @@ impl ScenePanel {
     }
 
     /// `sentence` wrapped to the pane's width, one label per line.
-    fn build_sentence(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32, sentence: &str) -> f32 {
+    fn build_sentence(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+        sentence: &str,
+    ) -> f32 {
         let style = label_style();
-        let width = tree.text_width(sentence, style.font_size, style.font_weight).max(1.0);
+        let width = tree
+            .text_width(sentence, style.font_size, style.font_weight)
+            .max(1.0);
         let max_chars = (sentence.chars().count() as f32 * inner_w / width).floor() as usize;
         for line in crate::graph_canvas::wrap_text(sentence, max_chars) {
-            tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, &line, style);
+            tree.add_label(
+                Some(self.content_parent),
+                inner_x,
+                cy,
+                inner_w,
+                ROW_H,
+                &line,
+                style,
+            );
             cy += ROW_H;
         }
         cy + ROW_GAP
     }
 
-    fn build_no_scene(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32) -> f32 {
-        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "This layer has no 3D scene yet.", label_style());
+    fn build_no_scene(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+    ) -> f32 {
+        tree.add_label(
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            inner_w,
+            ROW_H,
+            "This layer has no 3D scene yet.",
+            label_style(),
+        );
         cy += ROW_H + ROW_GAP * 2.0;
-        self.new_scene_id =
-            Some(tree.add_button_keyed(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, btn_style(), "New 3D Scene", KEY_NEW_SCENE));
+        self.new_scene_id = Some(tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            inner_w,
+            ROW_H,
+            btn_style(),
+            "New 3D Scene",
+            KEY_NEW_SCENE,
+        ));
         cy + ROW_H + ROW_GAP
     }
 
@@ -628,7 +725,11 @@ impl ScenePanel {
     /// The set keeps each item as picked, a light included, so its gizmo
     /// handle shows; the card shows the last one as the tab shows it.
     pub fn select_items(&mut self, layer_id: LayerId, items: Vec<SceneSelection>) {
-        match items.last().cloned().map(|last| self.shown(&layer_id, last)) {
+        match items
+            .last()
+            .cloned()
+            .map(|last| self.shown(&layer_id, last))
+        {
             None => {
                 self.selected.insert(layer_id.clone(), items);
                 self.note_selection(&layer_id);
@@ -704,7 +805,11 @@ impl ScenePanel {
     /// selection differs from the last noted one, or a focus was cleared
     /// since the last note.
     pub(crate) fn note_selection(&mut self, layer_id: &LayerId) {
-        let current = (layer_id.clone(), self.selection.get(layer_id).cloned(), self.selected.get(layer_id).cloned());
+        let current = (
+            layer_id.clone(),
+            self.selection.get(layer_id).cloned(),
+            self.selected.get(layer_id).cloned(),
+        );
         let cleared = std::mem::take(&mut self.focus_cleared);
         if cleared || self.noted_selection.as_ref() != Some(&current) {
             self.noted_selection = Some(current);
@@ -715,10 +820,13 @@ impl ScenePanel {
     /// Capture the destination before a keyboard shortcut can overtake the
     /// queued click.
     pub fn select_outliner_node(&mut self, node_id: NodeId) -> bool {
-        let Some((_, selection)) = self.outliner_row_ids.iter().find(|(id, _)| *id == node_id) else {
+        let Some((_, selection)) = self.outliner_row_ids.iter().find(|(id, _)| *id == node_id)
+        else {
             return false;
         };
-        let SceneSetupState::Live(vm) = &self.state else { return false };
+        let SceneSetupState::Live(vm) = &self.state else {
+            return false;
+        };
         let (layer_id, selection) = (vm.layer_id.clone(), selection.clone());
         self.clear_item_focus();
         self.selected.remove(&layer_id);
@@ -732,7 +840,11 @@ impl ScenePanel {
     /// persisting the resolved value back so a later lookup this same frame
     /// sees the same answer the build used.
     fn resolve_selection(&mut self, vm: &SceneSetupVm) -> SceneSelection {
-        let current = self.selection.get(&vm.layer_id).cloned().map(|sel| sel.shown(vm));
+        let current = self
+            .selection
+            .get(&vm.layer_id)
+            .cloned()
+            .map(|sel| sel.shown(vm));
         let resolved = match current {
             Some(sel) if Self::selection_exists(vm, &sel) => sel,
             _ => Self::default_selection(vm),
@@ -765,7 +877,9 @@ impl ScenePanel {
             .iter()
             .find(|item| item.kind == ItemKind::Object)
             .or_else(|| vm.items.first())
-            .map_or(SceneSelection::Lighting, |item| SceneSelection::Item(item.id.clone()))
+            .map_or(SceneSelection::Lighting, |item| {
+                SceneSelection::Item(item.id.clone())
+            })
     }
 
     /// The docked body's view version: scroll and fold frames.
@@ -782,13 +896,17 @@ impl ScenePanel {
     /// The menu of one tree section's +: the Add menu entries of its menu
     /// sections, a separator between sections.
     fn add_menu_items(&self, section: outliner::TreeSection) -> Vec<super::dropdown::DropdownItem> {
-        let Some(vm) = self.state.as_live() else { return Vec::new() };
+        let Some(vm) = self.state.as_live() else {
+            return Vec::new();
+        };
         // Under Objects an entry goes inside the selected item when that item
         // can hold it (a Group holds anything, a Water its sources), else at
         // the top; one that can only sit inside something it is not offered.
         // Every other section adds at the top, where its row lists it.
         let selected = match self.selection.get(&vm.layer_id) {
-            Some(SceneSelection::Item(id)) if section == outliner::TreeSection::Objects => vm.item(id),
+            Some(SceneSelection::Item(id)) if section == outliner::TreeSection::Objects => {
+                vm.item(id)
+            }
             _ => None,
         };
         let groups = section.groups();
@@ -796,10 +914,12 @@ impl ScenePanel {
             .add_entries
             .iter()
             .filter(|entry| groups.contains(&entry.group.as_str()))
-            .filter_map(|entry| match selected.filter(|item| entry.holders.contains(&item.kind)) {
-                Some(holder) => Some((entry, Some(holder.id.clone()))),
-                None => entry.top_level.then_some((entry, None)),
-            })
+            .filter_map(
+                |entry| match selected.filter(|item| entry.holders.contains(&item.kind)) {
+                    Some(holder) => Some((entry, Some(holder.id.clone()))),
+                    None => entry.top_level.then_some((entry, None)),
+                },
+            )
             .collect();
         entries.sort_by_key(|(entry, _)| groups.iter().position(|group| *group == entry.group));
         let selected_items = self.selected_scene_items();
@@ -825,7 +945,9 @@ impl ScenePanel {
                 parent: parent.clone(),
                 selected: selected_items.clone(),
             }));
-            item.separator_after = entries.get(index + 1).is_some_and(|(next, _)| next.group != entry.group);
+            item.separator_after = entries
+                .get(index + 1)
+                .is_some_and(|(next, _)| next.group != entry.group);
             items.push(item);
         }
         items
@@ -840,13 +962,21 @@ impl ScenePanel {
             return handled;
         }
         match event {
-            UIEvent::RightClick { node_id: Some(node_id), .. } if self.select_outliner_node(*node_id) => {
+            UIEvent::RightClick {
+                node_id: Some(node_id),
+                ..
+            } if self.select_outliner_node(*node_id) => {
                 if let Some(layer_id) = self.state.as_live().map(|vm| vm.layer_id.clone()) {
                     self.note_selection(&layer_id);
                 }
-                (true, vec![PanelAction::Root(RootAction::SceneItemRightClicked)])
+                (
+                    true,
+                    vec![PanelAction::Root(RootAction::SceneItemRightClicked)],
+                )
             }
-            UIEvent::Click { node_id, modifiers, .. } => {
+            UIEvent::Click {
+                node_id, modifiers, ..
+            } => {
                 if self.show_gizmos_id == Some(*node_id) {
                     self.show_gizmos = !self.show_gizmos;
                     self.view_version += 1;
@@ -858,16 +988,30 @@ impl ScenePanel {
                     return (true, Vec::new());
                 }
                 if self.render_mode_id == Some(*node_id) {
-                    return (true, self.render_mode_pick_list(*node_id).into_iter().collect());
+                    return (
+                        true,
+                        self.render_mode_pick_list(*node_id).into_iter().collect(),
+                    );
                 }
                 if self.reset_view_id == Some(*node_id) {
-                    return (true, vec![PanelAction::Root(RootAction::SceneResetPreviewView)]);
+                    return (
+                        true,
+                        vec![PanelAction::Root(RootAction::SceneResetPreviewView)],
+                    );
                 }
-                if let Some((_, group)) = self.group_toggle_ids.iter().find(|(id, _)| *id == *node_id).cloned() {
+                if let Some((_, group)) = self
+                    .group_toggle_ids
+                    .iter()
+                    .find(|(id, _)| *id == *node_id)
+                    .cloned()
+                {
                     let Some(vm) = self.state.as_live() else {
                         return (true, Vec::new());
                     };
-                    let collapsed = self.collapsed_groups.entry(vm.layer_id.clone()).or_default();
+                    let collapsed = self
+                        .collapsed_groups
+                        .entry(vm.layer_id.clone())
+                        .or_default();
                     let collapsing = collapsed.insert(group.clone());
                     if !collapsing {
                         collapsed.remove(&group);
@@ -876,7 +1020,9 @@ impl ScenePanel {
                         // If the selection is a descendant of the collapsed group,
                         // move it onto the group so the user never keeps a hidden
                         // selected item.
-                        if let Some(SceneSelection::Item(sel_id)) = self.selection.get(&layer_id).cloned() {
+                        if let Some(SceneSelection::Item(sel_id)) =
+                            self.selection.get(&layer_id).cloned()
+                        {
                             let mut cur = Some(sel_id.clone());
                             let mut is_descendant = false;
                             while let Some(id) = cur {
@@ -887,18 +1033,23 @@ impl ScenePanel {
                                 cur = vm.item(&id).and_then(|it| it.parent.clone());
                             }
                             if is_descendant && sel_id != group {
-                                self.selection.insert(layer_id.clone(), SceneSelection::Item(group.clone()));
+                                self.selection
+                                    .insert(layer_id.clone(), SceneSelection::Item(group.clone()));
                                 self.selected.remove(&layer_id);
                                 self.note_selection(&layer_id);
                             }
                         }
                     }
-                    return (true, vec![PanelAction::Params(ParamsAction::SectionFoldToggled)]);
+                    return (
+                        true,
+                        vec![PanelAction::Params(ParamsAction::SectionFoldToggled)],
+                    );
                 }
                 // An outliner row click sets the UI-local selection — no
                 // command, no undo unit. The noted selection version
                 // re-projects Properties THIS frame.
-                if let Some((_, sel)) = self.outliner_row_ids.iter().find(|(id, _)| *id == *node_id) {
+                if let Some((_, sel)) = self.outliner_row_ids.iter().find(|(id, _)| *id == *node_id)
+                {
                     if let SceneSetupState::Live(vm) = &self.state {
                         let (layer_id, sel) = (vm.layer_id.clone(), sel.clone());
                         if modifiers.shift {
@@ -909,13 +1060,22 @@ impl ScenePanel {
                             self.selected.remove(&layer_id);
                             self.note_selection(&layer_id);
                         }
-                        return (true, vec![PanelAction::Root(RootAction::SceneSetupSelectionChanged(layer_id))]);
+                        return (
+                            true,
+                            vec![PanelAction::Root(RootAction::SceneSetupSelectionChanged(
+                                layer_id,
+                            ))],
+                        );
                     }
                     return (true, Vec::new());
                 }
                 // A swarm's look link selects the item it draws, unfolding
                 // the groups above it so its row shows.
-                if let Some((_, look)) = self.header_buttons.look.clone().filter(|(id, _)| id == node_id)
+                if let Some((_, look)) = self
+                    .header_buttons
+                    .look
+                    .clone()
+                    .filter(|(id, _)| id == node_id)
                     && let Some(vm) = self.state.as_live()
                 {
                     let layer_id = vm.layer_id.clone();
@@ -929,39 +1089,83 @@ impl ScenePanel {
                         self.unfold(layer_id.clone(), parent);
                     }
                     self.clear_item_focus();
-                    self.selection.insert(layer_id.clone(), SceneSelection::Item(look));
+                    self.selection
+                        .insert(layer_id.clone(), SceneSelection::Item(look));
                     self.selected.remove(&layer_id);
                     self.note_selection(&layer_id);
-                    return (true, vec![PanelAction::Root(RootAction::SceneSetupSelectionChanged(layer_id))]);
+                    return (
+                        true,
+                        vec![PanelAction::Root(RootAction::SceneSetupSelectionChanged(
+                            layer_id,
+                        ))],
+                    );
                 }
-                if let Some((row, _)) = self.properties_card.row_host.row_index.get(tree.widget_of(*node_id))
+                if let Some((row, _)) = self
+                    .properties_card
+                    .row_host
+                    .row_index
+                    .get(tree.widget_of(*node_id))
                     && self.scale_link_click(row)
                 {
-                    return (true, vec![PanelAction::Params(ParamsAction::SectionFoldToggled)]);
+                    return (
+                        true,
+                        vec![PanelAction::Params(ParamsAction::SectionFoldToggled)],
+                    );
                 }
                 let mut actions = Vec::new();
                 if let SceneSetupState::Live(vm) = &self.state {
-                    if let Some(param) = self.outliner_eye_ids.iter().find(|(id, _, _)| *id == *node_id).map(|(_, param, _)| param.clone()) {
+                    if let Some(param) = self
+                        .outliner_eye_ids
+                        .iter()
+                        .find(|(id, _, _)| *id == *node_id)
+                        .map(|(_, param, _)| param.clone())
+                    {
                         // The eye is the item's Visible switch: the same
                         // toggle every switch row sends.
                         let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
-                        actions.push(PanelAction::Params(ParamsAction::ParamToggle(target, manifold_foundation::ParamId::from(param))));
-                    } else if let Some(&(_, section)) = self.add_buttons.iter().find(|(id, _)| id == node_id) {
+                        actions.push(PanelAction::Params(ParamsAction::ParamToggle(
+                            target,
+                            manifold_foundation::ParamId::from(param),
+                        )));
+                    } else if let Some(&(_, section)) =
+                        self.add_buttons.iter().find(|(id, _)| id == node_id)
+                    {
                         let mut items = self.add_menu_items(section);
                         // A menu of one thing is no choice: the + adds it.
                         match items.as_mut_slice() {
                             [only] if only.enabled => actions.extend(only.action.take()),
-                            _ => actions.push(PanelAction::Root(RootAction::SceneSetupActionMenuClicked { button_node_id: *node_id, items })),
+                            _ => actions.push(PanelAction::Root(
+                                RootAction::SceneSetupActionMenuClicked {
+                                    button_node_id: *node_id,
+                                    items,
+                                },
+                            )),
                         }
-                    } else if let Some(act) = self.item_header_click(*node_id, vm).or_else(|| self.material_click(*node_id, vm)) {
+                    } else if let Some(act) = self
+                        .item_header_click(*node_id, vm)
+                        .or_else(|| self.material_click(*node_id, vm))
+                    {
                         actions.push(act);
-                    } else if let Some(row_role) = self.properties_card.row_host.row_index.get(tree.widget_of(*node_id)) {
+                    } else if let Some(row_role) = self
+                        .properties_card
+                        .row_host
+                        .row_index
+                        .get(tree.widget_of(*node_id))
+                    {
                         let (row, role) = row_role;
                         let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
-                        for mut action in self.properties_row_action(tree, row, role, *node_id, target) {
-                            if let PanelAction::Root(RootAction::BeginDriverPeriodTextInput { anchor, value, .. }) = &mut action {
+                        for mut action in
+                            self.properties_row_action(tree, row, role, *node_id, target)
+                        {
+                            if let PanelAction::Root(RootAction::BeginDriverPeriodTextInput {
+                                anchor,
+                                value,
+                                ..
+                            }) = &mut action
+                            {
                                 *anchor = tree.get_bounds(*node_id);
-                                *value = self.properties_card.mod_state.driver_effective_period(row);
+                                *value =
+                                    self.properties_card.mod_state.driver_effective_period(row);
                             }
                             actions.push(action);
                         }
@@ -970,7 +1174,9 @@ impl ScenePanel {
                 if let SceneSetupState::NoScene { layer_id } = &self.state
                     && self.new_scene_id == Some(*node_id)
                 {
-                    actions.push(PanelAction::Project(ProjectAction::SceneNew(layer_id.clone())));
+                    actions.push(PanelAction::Project(ProjectAction::SceneNew(
+                        layer_id.clone(),
+                    )));
                 }
                 (!actions.is_empty(), actions)
             }
@@ -979,17 +1185,28 @@ impl ScenePanel {
             // `ParamCardPanel` uses; target is the panel's own bound layer
             // (BUG-292).
             UIEvent::DoubleClick { node_id, .. } => {
-                if let (Some(item), SceneSetupState::Live(vm)) = (self.tree_item_row(*node_id), &self.state)
+                if let (Some(item), SceneSetupState::Live(vm)) =
+                    (self.tree_item_row(*node_id), &self.state)
                     && let Some(row) = vm.item(item)
                 {
-                    let action = RootAction::SceneRenameClicked(vm.layer_id.clone(), item.clone(), row.name.clone());
+                    let action = RootAction::SceneRenameClicked(
+                        vm.layer_id.clone(),
+                        item.clone(),
+                        row.name.clone(),
+                    );
                     self.tree_rename = Some(item.clone());
                     return (true, vec![PanelAction::Root(action)]);
                 }
                 if let SceneSetupState::Live(vm) = &self.state {
                     let card = &self.properties_card;
                     let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
-                    if let Some(action) = card.row_host.value_cell_typein(*node_id, tree, &card.rows, &card.current_values, target) {
+                    if let Some(action) = card.row_host.value_cell_typein(
+                        *node_id,
+                        tree,
+                        &card.rows,
+                        &card.current_values,
+                        target,
+                    ) {
                         return (true, vec![action]);
                     }
                 }
@@ -999,19 +1216,37 @@ impl ScenePanel {
                 if let SceneSetupState::Live(vm) = &self.state {
                     let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
                     let was_dragging = self.properties_card.row_host.is_dragging();
-                    let actions = self.properties_card.handle_pointer_down(*node_id, *pos, tree, &target);
+                    let actions = self
+                        .properties_card
+                        .handle_pointer_down(*node_id, *pos, tree, &target);
                     let actions = self.rewrite_drag_actions(actions);
-                    if was_dragging || self.properties_card.row_host.is_dragging() || !actions.is_empty() {
+                    if was_dragging
+                        || self.properties_card.row_host.is_dragging()
+                        || !actions.is_empty()
+                    {
                         return (true, actions);
                     }
                 }
-                (self.owns_node(*node_id) || self.point_in_panel(*pos), Vec::new())
+                (
+                    self.owns_node(*node_id) || self.point_in_panel(*pos),
+                    Vec::new(),
+                )
             }
-            UIEvent::DragBegin { node_id: Some(node_id), .. } if self.chain_rows.iter().any(|(row, _)| row == node_id) => {
-                self.chain_drag = self.chain_rows.iter().find(|(row, _)| row == node_id).map(|(_, card)| card.clone());
+            UIEvent::DragBegin {
+                node_id: Some(node_id),
+                ..
+            } if self.chain_rows.iter().any(|(row, _)| row == node_id) => {
+                self.chain_drag = self
+                    .chain_rows
+                    .iter()
+                    .find(|(row, _)| row == node_id)
+                    .map(|(_, card)| card.clone());
                 (true, Vec::new())
             }
-            UIEvent::DragBegin { node_id: Some(node_id), .. } if self.tree_item_row(*node_id).is_some() => {
+            UIEvent::DragBegin {
+                node_id: Some(node_id),
+                ..
+            } if self.tree_item_row(*node_id).is_some() => {
                 self.tree_drag = self.tree_item_row(*node_id).cloned();
                 (true, Vec::new())
             }
@@ -1024,7 +1259,11 @@ impl ScenePanel {
             }
             UIEvent::Drag { pos, .. } if self.chain_drag.is_some() => {
                 // The line moves only when the landing place does.
-                let to = self.chain_drag.as_ref().and_then(|card| self.chain_landing(tree, card, pos.y)).map(|(_, to)| to);
+                let to = self
+                    .chain_drag
+                    .as_ref()
+                    .and_then(|card| self.chain_landing(tree, card, pos.y))
+                    .map(|(_, to)| to);
                 if to != self.chain_drop_at {
                     self.chain_drop_at = to;
                     self.view_version += 1;
@@ -1037,17 +1276,25 @@ impl ScenePanel {
                 if self.chain_drop_at.take().is_some() {
                     self.view_version += 1;
                 }
-                (true, self.chain_drop(tree, &card, pos.y).into_iter().collect())
+                (
+                    true,
+                    self.chain_drop(tree, &card, pos.y).into_iter().collect(),
+                )
             }
             UIEvent::DragEnd { pos, .. } if self.tree_drag.is_some() => {
                 let item = self.tree_drag.take().expect("a tree drag");
-                (true, self.tree_drop(tree, &item, *pos).into_iter().collect())
+                (
+                    true,
+                    self.tree_drop(tree, &item, *pos).into_iter().collect(),
+                )
             }
             UIEvent::Drag { pos, modifiers, .. } => {
                 if let SceneSetupState::Live(vm) = &self.state {
                     let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
                     let was_dragging = self.properties_card.row_host.is_dragging();
-                    let actions = self.properties_card.handle_drag(*pos, tree, modifiers.shift, &target);
+                    let actions =
+                        self.properties_card
+                            .handle_drag(*pos, tree, modifiers.shift, &target);
                     let actions = self.rewrite_drag_actions(actions);
                     if was_dragging || !actions.is_empty() {
                         return (true, actions);
@@ -1071,7 +1318,11 @@ impl ScenePanel {
         let vm = self.state.as_live()?;
         let (from, to) = self.chain_landing(tree, card, y)?;
         (to != from).then(|| {
-            PanelAction::Project(ProjectAction::SceneChainMove { layer_id: vm.layer_id.clone(), item: card.clone(), to })
+            PanelAction::Project(ProjectAction::SceneChainMove {
+                layer_id: vm.layer_id.clone(),
+                item: card.clone(),
+                to,
+            })
         })
     }
 
@@ -1079,7 +1330,10 @@ impl ScenePanel {
     /// released at height `y`: the count of other cards whose middle sits
     /// above `y`.
     fn chain_landing(&self, tree: &UITree, card: &ItemId, y: f32) -> Option<(usize, usize)> {
-        let from = self.chain_rows.iter().position(|(_, row_card)| row_card == card)?;
+        let from = self
+            .chain_rows
+            .iter()
+            .position(|(_, row_card)| row_card == card)?;
         let to = self
             .chain_rows
             .iter()
@@ -1106,27 +1360,42 @@ impl ScenePanel {
     /// The app's text-input anchor lookup.
     pub fn item_name_rect(&self, tree: &UITree, item: &ItemId) -> Option<Rect> {
         let in_tree = self.tree_rename.as_ref() == Some(item);
-        let row = self.outliner_row_ids.iter().find(|(_, sel)| in_tree && matches!(sel, SceneSelection::Item(id) if id == item));
+        let row = self
+            .outliner_row_ids
+            .iter()
+            .find(|(_, sel)| in_tree && matches!(sel, SceneSelection::Item(id) if id == item));
         if let Some((row, _)) = row {
             return Some(tree.get_bounds(*row));
         }
-        let (_, node_id, _) = self.header_buttons.names.iter().find(|(row, _, _)| row == item)?;
+        let (_, node_id, _) = self
+            .header_buttons
+            .names
+            .iter()
+            .find(|(row, _, _)| row == item)?;
         Some(tree.get_bounds(*node_id))
     }
 
     /// The item whose tree row is `node`, if it is one.
     fn tree_item_row(&self, node: NodeId) -> Option<&ItemId> {
-        self.outliner_row_ids.iter().find(|(row, _)| *row == node).and_then(|(_, sel)| match sel {
-            SceneSelection::Item(id) => Some(id),
-            SceneSelection::Lighting => None,
-        })
+        self.outliner_row_ids
+            .iter()
+            .find(|(row, _)| *row == node)
+            .and_then(|(_, sel)| match sel {
+                SceneSelection::Item(id) => Some(id),
+                SceneSelection::Lighting => None,
+            })
     }
 
     /// Where a tree row dropped at `pos` goes: into a Group when it lands on
     /// the middle of the Group's row, else before or after the row it lands
     /// on, as that row's sibling; below the last row, the end of the top
     /// level. A drop outside the panel cancels.
-    fn tree_drop(&self, tree: &UITree, item: &ItemId, pos: crate::node::Vec2) -> Option<PanelAction> {
+    fn tree_drop(
+        &self,
+        tree: &UITree,
+        item: &ItemId,
+        pos: crate::node::Vec2,
+    ) -> Option<PanelAction> {
         let vm = self.state.as_live()?;
         if !self.point_in_panel(pos) {
             return None;
@@ -1161,7 +1430,12 @@ impl ScenePanel {
                 }
             }
         };
-        Some(PanelAction::Project(ProjectAction::SceneTreeMove { layer_id: vm.layer_id.clone(), item: item.clone(), parent, before }))
+        Some(PanelAction::Project(ProjectAction::SceneTreeMove {
+            layer_id: vm.layer_id.clone(),
+            item: item.clone(),
+            parent,
+            before,
+        }))
     }
 }
 
@@ -1169,7 +1443,11 @@ impl ScenePanel {
 fn next_sibling(vm: &SceneSetupVm, item: &ItemId) -> Option<ItemId> {
     let at = vm.items.iter().position(|row| row.id == *item)?;
     let depth = vm.items[at].depth;
-    vm.items[at + 1..].iter().take_while(|row| row.depth >= depth).find(|row| row.depth == depth).map(|row| row.id.clone())
+    vm.items[at + 1..]
+        .iter()
+        .take_while(|row| row.depth >= depth)
+        .find(|row| row.depth == depth)
+        .map(|row| row.id.clone())
 }
 
 fn scrollbar_style() -> ScrollbarStyle {
@@ -1182,7 +1460,10 @@ fn scrollbar_style() -> ScrollbarStyle {
 }
 
 pub(crate) fn btn_style() -> UIStyle {
-    UIStyle { font_size: color::FONT_LABEL, ..crate::chrome::components::segment_style(false) }
+    UIStyle {
+        font_size: color::FONT_LABEL,
+        ..crate::chrome::components::segment_style(false)
+    }
 }
 
 pub(crate) fn label_style() -> UIStyle {
@@ -1216,4 +1497,3 @@ fn drag_value_style() -> UIStyle {
         ..UIStyle::default()
     }
 }
-

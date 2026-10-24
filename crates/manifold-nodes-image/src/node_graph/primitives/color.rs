@@ -90,9 +90,10 @@ impl Primitive for Brightness {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let sampler = self
-            .sampler
-            .get_or_insert_with(|| gpu.device.create_sampler(&manifold_gpu::GpuSamplerDesc::default()));
+        let sampler = self.sampler.get_or_insert_with(|| {
+            gpu.device
+                .create_sampler(&manifold_gpu::GpuSamplerDesc::default())
+        });
 
         dispatch_standalone_2d(
             gpu,
@@ -199,9 +200,10 @@ impl Primitive for ChannelMix {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let sampler = self
-            .sampler
-            .get_or_insert_with(|| gpu.device.create_sampler(&manifold_gpu::GpuSamplerDesc::default()));
+        let sampler = self.sampler.get_or_insert_with(|| {
+            gpu.device
+                .create_sampler(&manifold_gpu::GpuSamplerDesc::default())
+        });
 
         dispatch_standalone_2d(
             gpu,
@@ -289,9 +291,10 @@ impl Primitive for ColorRamp {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let sampler = self
-            .sampler
-            .get_or_insert_with(|| gpu.device.create_sampler(&manifold_gpu::GpuSamplerDesc::default()));
+        let sampler = self.sampler.get_or_insert_with(|| {
+            gpu.device
+                .create_sampler(&manifold_gpu::GpuSamplerDesc::default())
+        });
 
         dispatch_standalone_2d(
             gpu,
@@ -315,12 +318,16 @@ mod channel_mix_gpu_tests {
     use manifold_gpu::GpuTextureFormat;
 
     use super::ChannelMix;
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use manifold_node_engine::exec::execution_plan::{ExecutionPlan, ResourceId, compile};
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_node_engine::graph::Graph;
     use manifold_node_engine::parameters::ParamValue;
-    use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, scene::boundary_nodes::Source};
-    use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::{
+        exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+        exec::metal_backend::MetalBackend, scene::boundary_nodes::FinalOutput,
+        scene::boundary_nodes::Source,
+    };
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -451,10 +458,20 @@ mod channel_mix_gpu_tests {
             [0.0, 0.0, 0.0, 0.0], // B = 0
             [0.0, 0.0, 0.0, 1.0], // A = src.a (passthrough)
         );
-        assert!((out[0] - src[3]).abs() < 0.02, "R should equal src.a: out.r={}, src.a={}", out[0], src[3]);
+        assert!(
+            (out[0] - src[3]).abs() < 0.02,
+            "R should equal src.a: out.r={}, src.a={}",
+            out[0],
+            src[3]
+        );
         assert!(out[1].abs() < 0.02, "G should be zero: {}", out[1]);
         assert!(out[2].abs() < 0.02, "B should be zero: {}", out[2]);
-        assert!((out[3] - src[3]).abs() < 0.02, "A should pass through: out.a={}, src.a={}", out[3], src[3]);
+        assert!(
+            (out[3] - src[3]).abs() < 0.02,
+            "A should pass through: out.a={}, src.a={}",
+            out[3],
+            src[3]
+        );
     }
 
     /// Luma drop: each output channel = Rec.709 luma of input RGB.
@@ -462,13 +479,7 @@ mod channel_mix_gpu_tests {
     fn luma_matrix_grayscales() {
         let src = [1.0_f32, 0.0, 0.0, 1.0]; // pure red
         let luma_row = [0.2126, 0.7152, 0.0722, 0.0];
-        let out = run_channel_mix(
-            src,
-            luma_row,
-            luma_row,
-            luma_row,
-            [0.0, 0.0, 0.0, 1.0],
-        );
+        let out = run_channel_mix(src, luma_row, luma_row, luma_row, [0.0, 0.0, 0.0, 1.0]);
         let expected = 0.2126_f32;
         for (i, &val) in out.iter().enumerate().take(3) {
             assert!(
@@ -479,4 +490,3 @@ mod channel_mix_gpu_tests {
         assert!((out[3] - 1.0).abs() < 0.02, "alpha passthrough: {}", out[3]);
     }
 }
-

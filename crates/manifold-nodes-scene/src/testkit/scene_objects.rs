@@ -4,7 +4,7 @@
 //! port per object; [`bundle_scene_objects`] gives each object a
 //! `node.scene_object` carrying those parts, as the scene compile wires one.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// `graph` with every renderer's per-object part wires moved onto one
 /// `node.scene_object` per object, wired into its `object_i` port.
@@ -16,12 +16,24 @@ pub fn bundle_scene_objects(graph: &str) -> String {
         .filter(|node| node["typeId"] == "node.render_scene")
         .filter_map(|node| node["id"].as_u64())
         .collect();
-    let mut next = nodes.iter().filter_map(|node| node["id"].as_u64()).max().unwrap_or(0) + 1;
+    let mut next = nodes
+        .iter()
+        .filter_map(|node| node["id"].as_u64())
+        .max()
+        .unwrap_or(0)
+        + 1;
     let mut objects: Vec<((u64, u64), u64)> = Vec::new();
     let (mut added_nodes, mut added_wires) = (Vec::new(), Vec::new());
-    for wire in def["wires"].as_array_mut().expect("a proof graph has wires") {
-        let Some(renderer) = wire["toNode"].as_u64().filter(|to| renderers.contains(to)) else { continue };
-        let Some((part, index)) = wire["toPort"].as_str().and_then(object_part) else { continue };
+    for wire in def["wires"]
+        .as_array_mut()
+        .expect("a proof graph has wires")
+    {
+        let Some(renderer) = wire["toNode"].as_u64().filter(|to| renderers.contains(to)) else {
+            continue;
+        };
+        let Some((part, index)) = wire["toPort"].as_str().and_then(object_part) else {
+            continue;
+        };
         let object = match objects.iter().find(|(key, _)| *key == (renderer, index)) {
             Some(&(_, object)) => object,
             None => {
@@ -40,8 +52,14 @@ pub fn bundle_scene_objects(graph: &str) -> String {
         wire["toNode"] = json!(object);
         wire["toPort"] = json!(part);
     }
-    def["nodes"].as_array_mut().expect("nodes").extend(added_nodes);
-    def["wires"].as_array_mut().expect("wires").extend(added_wires);
+    def["nodes"]
+        .as_array_mut()
+        .expect("nodes")
+        .extend(added_nodes);
+    def["wires"]
+        .as_array_mut()
+        .expect("wires")
+        .extend(added_wires);
     def.to_string()
 }
 

@@ -213,9 +213,15 @@ mod gpu_tests {
         let r = differ.compare(&device, &a.texture, &b.texture, 1e-4, 1e-3);
 
         assert_eq!(r.total, w * h);
-        assert_eq!(r.over_count, 0, "identical clears must not exceed tolerance");
+        assert_eq!(
+            r.over_count, 0,
+            "identical clears must not exceed tolerance"
+        );
         assert!(r.max_abs < 1e-4, "max_abs should be ~0, got {}", r.max_abs);
-        assert!(r.passes(0.0), "identical textures must pass at zero fraction");
+        assert!(
+            r.passes(0.0),
+            "identical textures must pass at zero fraction"
+        );
     }
 
     #[test]
@@ -237,7 +243,10 @@ mod gpu_tests {
         );
         // Every texel differs and 0.25 >> both tolerances → all fail both.
         assert_eq!(r.over_count, w * h, "every texel should exceed tolerance");
-        assert!(!r.passes(0.01), "a 0.25 delta everywhere must fail the verdict");
+        assert!(
+            !r.passes(0.01),
+            "a 0.25 delta everywhere must fail the verdict"
+        );
     }
 
     #[test]
@@ -272,14 +281,32 @@ mod gpu_tests {
         let (w, h) = (16u32, 16u32);
         // Both sides Inf on R — the fused kernel reproduced the oracle's
         // non-finite result. Agreement, not a regression: not counted.
-        let a = cleared(&device, w, h, [f64::INFINITY, 0.25, 0.5, 1.0], "diff-inf2-a");
-        let b = cleared(&device, w, h, [f64::INFINITY, 0.25, 0.5, 1.0], "diff-inf2-b");
+        let a = cleared(
+            &device,
+            w,
+            h,
+            [f64::INFINITY, 0.25, 0.5, 1.0],
+            "diff-inf2-a",
+        );
+        let b = cleared(
+            &device,
+            w,
+            h,
+            [f64::INFINITY, 0.25, 0.5, 1.0],
+            "diff-inf2-b",
+        );
 
         let differ = TextureDiff::new(&device);
         let r = differ.compare(&device, &a.texture, &b.texture, 1e-3, 1e-3);
 
-        assert_eq!(r.special_count, 0, "matching Inf is agreement, not divergence");
-        assert!(r.passes(0.0), "both sides identical (incl. the Inf) must pass");
+        assert_eq!(
+            r.special_count, 0,
+            "matching Inf is agreement, not divergence"
+        );
+        assert!(
+            r.passes(0.0),
+            "both sides identical (incl. the Inf) must pass"
+        );
     }
 
     #[test]

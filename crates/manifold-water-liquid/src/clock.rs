@@ -56,13 +56,27 @@ mod tests {
         let out = run(&mut clock, &frames, false);
         assert!(out[0].restarted);
         assert!(out[1..].iter().all(|f| f.ticks == 1 && !f.restarted));
-        let stalled = clock.advance(PlayedTime::from_played(10.0 * TICK + 1.0), TICK, 1.0, 0.0, false, false);
+        let stalled = clock.advance(
+            PlayedTime::from_played(10.0 * TICK + 1.0),
+            TICK,
+            1.0,
+            0.0,
+            false,
+            false,
+        );
         assert_eq!(stalled.ticks, 2);
         assert!(stalled.reanchored);
         assert!((stalled.dropped_seconds - (1.0 - 2.0 * TICK)).abs() < 1e-12);
         assert!((stalled.plan.end.0 - stalled.plan.start.0 - 2.0 * TICK).abs() < 1e-12);
         assert_eq!(stalled.simulation_time, stalled.target_time);
-        let next = clock.advance(PlayedTime::from_played(11.0 * TICK + 1.0), TICK, 1.0, 0.0, false, false);
+        let next = clock.advance(
+            PlayedTime::from_played(11.0 * TICK + 1.0),
+            TICK,
+            1.0,
+            0.0,
+            false,
+            false,
+        );
         assert_eq!(next.ticks, 1);
         assert!(!next.reanchored);
         assert_eq!(next.plan.start, stalled.plan.end);
@@ -91,28 +105,69 @@ mod tests {
         assert!(held.held);
         assert_eq!(held.simulation_time, a.simulation_time);
         // Speed 0 holds while transport runs.
-        assert!(clock.advance(PlayedTime::from_played(2.0 * TICK), TICK, 0.0, 0.0, false, false).held);
+        assert!(
+            clock
+                .advance(
+                    PlayedTime::from_played(2.0 * TICK),
+                    TICK,
+                    0.0,
+                    0.0,
+                    false,
+                    false
+                )
+                .held
+        );
         // Speed 0.5 runs each fixed transport tick at half duration. A speed
         // edit applies from the interval after the frame that sees it, so the
         // first of these frames still advances at speed 0.
         let frames: Vec<_> = (3..8)
-            .map(|i| clock.advance(PlayedTime::from_played(i as f64 * TICK), TICK, 0.5, 0.0, false, false))
+            .map(|i| {
+                clock.advance(
+                    PlayedTime::from_played(i as f64 * TICK),
+                    TICK,
+                    0.5,
+                    0.0,
+                    false,
+                    false,
+                )
+            })
             .collect();
         assert_eq!(frames.iter().map(|f| f.ticks).sum::<u32>(), 4);
-        assert!((frames.iter().map(|f| f.duration().0).sum::<f64>() - 2.0*TICK).abs() < 1e-12);
+        assert!((frames.iter().map(|f| f.duration().0).sum::<f64>() - 2.0 * TICK).abs() < 1e-12);
         assert!(frames.iter().all(|f| !f.held));
         // A changed reset counter restarts in a new epoch.
-        let reset = clock.advance(PlayedTime::from_played(8.0 * TICK), TICK, 1.0, 1.0, false, false);
+        let reset = clock.advance(
+            PlayedTime::from_played(8.0 * TICK),
+            TICK,
+            1.0,
+            1.0,
+            false,
+            false,
+        );
         assert!(reset.restarted);
         assert!(!reset.held);
         assert_eq!(reset.epoch, 2);
         assert_eq!(reset.ticks, 0);
         // Seeking backwards restarts too.
-        let seek = clock.advance(PlayedTime::from_played(2.0 * TICK), TICK, 1.0, 1.0, false, false);
+        let seek = clock.advance(
+            PlayedTime::from_played(2.0 * TICK),
+            TICK,
+            1.0,
+            1.0,
+            false,
+            false,
+        );
         assert!(seek.restarted);
         assert_eq!(seek.epoch, 3);
         // Display sits one tick behind the target.
-        let next = clock.advance(PlayedTime::from_played(3.0 * TICK), TICK, 1.0, 1.0, false, false);
+        let next = clock.advance(
+            PlayedTime::from_played(3.0 * TICK),
+            TICK,
+            1.0,
+            1.0,
+            false,
+            false,
+        );
         assert!((next.display_time - 0.0).abs() < 1e-12);
         assert_eq!(next.ticks, 1);
     }
@@ -129,18 +184,33 @@ mod tests {
             paused.advance(PlayedTime::from_played(t), TICK, 1.0, 0.0, false, false);
             straight.advance(PlayedTime::from_played(t), TICK, 1.0, 0.0, false, false);
         }
-        let before = paused.advance(PlayedTime::from_played(10.0 * TICK), TICK, 1.0, 0.0, false, false);
+        let before = paused.advance(
+            PlayedTime::from_played(10.0 * TICK),
+            TICK,
+            1.0,
+            0.0,
+            false,
+            false,
+        );
         // The host keeps drawing with real frame deltas while the transport
         // stands still, including a long stall.
         for _ in 0..6 {
-            let held = paused.advance(PlayedTime::from_played(10.0 * TICK), TICK, 1.0, 0.0, false, false);
+            let held = paused.advance(
+                PlayedTime::from_played(10.0 * TICK),
+                TICK,
+                1.0,
+                0.0,
+                false,
+                false,
+            );
             assert_eq!(held.ticks, 0);
             assert_eq!(held, before);
         }
         for i in 11..=20 {
             let t = i as f64 * TICK;
             let resumed = paused.advance(PlayedTime::from_played(t), TICK, 1.0, 0.0, false, false);
-            let reference = straight.advance(PlayedTime::from_played(t), TICK, 1.0, 0.0, false, false);
+            let reference =
+                straight.advance(PlayedTime::from_played(t), TICK, 1.0, 0.0, false, false);
             assert!(!resumed.restarted);
             assert_eq!(resumed, reference, "frame {i} after resume");
         }
@@ -164,7 +234,10 @@ mod tests {
                     false,
                     false,
                 );
-                assert_eq!(frame.plan.start.0, previous_end, "{fps} fps frame {frame_index}");
+                assert_eq!(
+                    frame.plan.start.0, previous_end,
+                    "{fps} fps frame {frame_index}"
+                );
                 assert!(frame.ticks <= 2);
                 assert_eq!(frame.first_sequence, sequence);
                 let mut endpoint = previous_end;
@@ -192,7 +265,11 @@ mod tests {
             let t = i as f64 * TICK;
             let a = live.advance(PlayedTime::from_played(t), TICK, 1.0, 0.0, false, false);
             let b = offline.advance(PlayedTime::from_played(t), TICK, 1.0, 0.0, false, true);
-            assert_eq!(a.simulation_time.to_bits(), b.simulation_time.to_bits(), "frame {i}");
+            assert_eq!(
+                a.simulation_time.to_bits(),
+                b.simulation_time.to_bits(),
+                "frame {i}"
+            );
         }
     }
 
@@ -205,7 +282,14 @@ mod tests {
             let mut completed = 0.0;
             let mut dropped = 0.0;
             for frame in 0..=fps {
-                let out = clock.advance(PlayedTime::from_played(frame as f64 / fps as f64), TICK, 1.0, 0.0, false, false);
+                let out = clock.advance(
+                    PlayedTime::from_played(frame as f64 / fps as f64),
+                    TICK,
+                    1.0,
+                    0.0,
+                    false,
+                    false,
+                );
                 assert!(out.ticks <= 2);
                 assert_eq!(out.plan.start.0, completed);
                 completed = out.plan.end.0;
@@ -229,10 +313,23 @@ mod tests {
             let ticks_per_frame = (60 / fps).min(2);
             clock.advance(PlayedTime::from_played(0.0), TICK, 1.0, 0.0, false, false);
             for frame in 1..=fps {
-                let out = clock.advance(PlayedTime::from_played(f64::from(frame) / f64::from(fps)), TICK, 1.0, 0.0, false, false);
-                assert_eq!(out.ticks, ticks_per_frame, "{fps} fps frame {frame}: accepted interval count");
+                let out = clock.advance(
+                    PlayedTime::from_played(f64::from(frame) / f64::from(fps)),
+                    TICK,
+                    1.0,
+                    0.0,
+                    false,
+                    false,
+                );
+                assert_eq!(
+                    out.ticks, ticks_per_frame,
+                    "{fps} fps frame {frame}: accepted interval count"
+                );
                 let boundary = f64::from(frame * ticks_per_frame) * TICK;
-                assert!((out.simulation_time - boundary).abs() < 1e-9, "{fps} fps frame {frame}: lost simulation time");
+                assert!(
+                    (out.simulation_time - boundary).abs() < 1e-9,
+                    "{fps} fps frame {frame}: lost simulation time"
+                );
             }
         }
     }
@@ -243,25 +340,47 @@ mod tests {
     fn liquid_clock_target_never_regresses_under_live_jitter() {
         let mut clock = LiquidClock::default();
         let mut transport = 0.0;
-        let intervals = [12.5, 8.5, 2.5, 0.07, 0.2, 1.9, 2.5, 0.1, 3.0, 0.05, 2.5, 2.5];
-        let mut previous = clock.advance(PlayedTime::from_played(0.0), TICK, 1.0, 0.0, false, false);
+        let intervals = [
+            12.5, 8.5, 2.5, 0.07, 0.2, 1.9, 2.5, 0.1, 3.0, 0.05, 2.5, 2.5,
+        ];
+        let mut previous =
+            clock.advance(PlayedTime::from_played(0.0), TICK, 1.0, 0.0, false, false);
         for step in 0..400 {
             let interval = TICK * intervals[step % intervals.len()];
             transport += interval;
-            let frame = clock.advance(PlayedTime::from_played(transport), TICK, 1.0, 0.0, false, false);
+            let frame = clock.advance(
+                PlayedTime::from_played(transport),
+                TICK,
+                1.0,
+                0.0,
+                false,
+                false,
+            );
             assert!(!frame.restarted, "frame {step}");
-            assert!(frame.target_time >= previous.target_time - 1e-12, "frame {step}: target went back");
-            assert!(frame.target_time <= transport + 1e-9, "frame {step}: target ran ahead of transport");
+            assert!(
+                frame.target_time >= previous.target_time - 1e-12,
+                "frame {step}: target went back"
+            );
+            assert!(
+                frame.target_time <= transport + 1e-9,
+                "frame {step}: target ran ahead of transport"
+            );
             assert_eq!(frame.plan.start, previous.plan.end);
             assert!(frame.ticks <= 2, "frame {step}: live cap");
-            assert!((frame.plan.end.0 - frame.plan.start.0 - f64::from(frame.ticks) * TICK).abs() < 1e-12);
+            assert!(
+                (frame.plan.end.0 - frame.plan.start.0 - f64::from(frame.ticks) * TICK).abs()
+                    < 1e-12
+            );
             assert!(frame.dropped_seconds >= previous.dropped_seconds);
             if frame.reanchored {
                 assert_eq!(frame.ticks, 2);
                 assert!(frame.dropped_seconds > previous.dropped_seconds);
             }
             assert!((frame.target_time + frame.dropped_seconds - transport).abs() < 1e-9);
-            assert!(frame.plan.end.0 <= transport + 1e-9, "frame {step}: plan ran ahead");
+            assert!(
+                frame.plan.end.0 <= transport + 1e-9,
+                "frame {step}: plan ran ahead"
+            );
             previous = frame;
         }
         assert!(previous.dropped_seconds > 0.0);
@@ -273,13 +392,34 @@ mod tests {
     fn liquid_clock_restart_starts_a_new_epoch() {
         let mut clock = LiquidClock::default();
         clock.advance(PlayedTime::from_played(0.0), TICK, 1.0, 0.0, false, true);
-        let played = clock.advance(PlayedTime::from_played(10.0 * TICK), TICK, 1.0, 0.0, false, true);
+        let played = clock.advance(
+            PlayedTime::from_played(10.0 * TICK),
+            TICK,
+            1.0,
+            0.0,
+            false,
+            true,
+        );
         clock.restart();
-        let restarted = clock.advance(PlayedTime::from_played(11.0 * TICK), TICK, 1.0, 0.0, false, true);
+        let restarted = clock.advance(
+            PlayedTime::from_played(11.0 * TICK),
+            TICK,
+            1.0,
+            0.0,
+            false,
+            true,
+        );
         assert!(restarted.restarted);
         assert_eq!(restarted.epoch, played.epoch + 1);
         assert_eq!((restarted.ticks, restarted.simulation_time), (0, 0.0));
-        let next = clock.advance(PlayedTime::from_played(12.0 * TICK), TICK, 1.0, 0.0, false, true);
+        let next = clock.advance(
+            PlayedTime::from_played(12.0 * TICK),
+            TICK,
+            1.0,
+            0.0,
+            false,
+            true,
+        );
         assert!(!next.restarted);
         assert_eq!((next.epoch, next.ticks), (restarted.epoch, 1));
     }

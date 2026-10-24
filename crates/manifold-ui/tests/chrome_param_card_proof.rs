@@ -15,14 +15,14 @@
 //! needs a runtime visual pass); this proves the foundation is correct on the
 //! hardest real card shape first. See `docs/CHROME_API_DESIGN.md`.
 
-use manifold_ui::{ModulationAction, ParamsAction};
-use manifold_ui::chrome::{validate, Align, ChromeHost, Pad, Reconcile, Sizing, View};
+use manifold_foundation::ParamId;
+use manifold_ui::chrome::{Align, ChromeHost, Pad, Reconcile, Sizing, View, validate};
 use manifold_ui::intent::{Gesture, IntentRegistry};
 use manifold_ui::node::{Color32, FontWeight, Rect, UIFlags, UINodeType, Vec2};
 use manifold_ui::text::TextMeasure;
 use manifold_ui::tree::{UITree, ZTier};
 use manifold_ui::{GraphParamTarget, PanelAction};
-use manifold_foundation::ParamId;
+use manifold_ui::{ModulationAction, ParamsAction};
 
 // ── Layout constants (param-card feel) ──────────────────────────────
 const CARD_PAD: f32 = 4.0;
@@ -55,7 +55,10 @@ struct ProofCard {
 
 impl ProofCard {
     fn target(&self) -> GraphParamTarget {
-        GraphParamTarget::Effect(manifold_foundation::EffectId::new(format!("fx-{}", self.effect_index)))
+        GraphParamTarget::Effect(manifold_foundation::EffectId::new(format!(
+            "fx-{}",
+            self.effect_index
+        )))
     }
 
     /// The whole card, described once. This is the method a migrated panel
@@ -66,7 +69,9 @@ impl ProofCard {
             .pad(Pad::all(CARD_PAD))
             .bg(Color32::new(28, 28, 30, 255))
             .claims_area()
-            .on_right_click(PanelAction::Params(ParamsAction::CardRightClicked(target.clone())))
+            .on_right_click(PanelAction::Params(ParamsAction::CardRightClicked(
+                target.clone(),
+            )))
             .child(self.header_view());
         for (pi, p) in self.params.iter().enumerate() {
             col = col.child(self.param_row_view(target.clone(), pi, p));
@@ -79,7 +84,11 @@ impl ProofCard {
             .h(Sizing::Fixed(HEADER_H))
             .cross_align(Align::Center)
             // Drag handle — decorative; the reorder drag lives in handle_event.
-            .child(View::panel().fixed(14.0, 14.0).bg(Color32::new(80, 80, 84, 255)))
+            .child(
+                View::panel()
+                    .fixed(14.0, 14.0)
+                    .bg(Color32::new(80, 80, 84, 255)),
+            )
             // Name fills the gap and clips so a long name never spills into badges.
             .child(
                 View::label(self.name.clone())
@@ -99,39 +108,53 @@ impl ProofCard {
             .child(
                 View::button(if self.enabled { "ON" } else { "OFF" })
                     .fixed(36.0, 18.0)
-                    .on_click(PanelAction::Params(ParamsAction::EffectToggle(self.effect_index))),
+                    .on_click(PanelAction::Params(ParamsAction::EffectToggle(
+                        self.effect_index,
+                    ))),
             )
     }
 
     fn param_row_view(&self, target: GraphParamTarget, _pi: usize, p: &ProofParam) -> View {
         let pid: ParamId = ParamId::from(p.id);
-        let mut row_col = View::column(0.0)
-            .claims_area()
-            .on_right_click(PanelAction::Params(ParamsAction::ParamLabelRightClick(target.clone(), pid.clone())))
-            .child(
-                View::row(4.0)
-                    .h(Sizing::Fixed(ROW_H))
-                    .cross_align(Align::Center)
-                    .child(View::label(p.label).w(Sizing::Fixed(LABEL_W)).h(Sizing::Fixed(16.0)))
-                    // Slider drag lives in handle_event → inert (no intent needed).
-                    .child(View::slider().fill_w().h(Sizing::Fixed(TRACK_H)).inert())
-                    .child(
-                        View::label(format!("{:.2}", p.value))
-                            .w(Sizing::Fixed(VALUE_W))
-                            .h(Sizing::Fixed(16.0))
-                            .align_text(manifold_ui::node::TextAlign::Right),
-                    )
-                    .child(
-                        View::button("D")
-                            .fixed(BTN, BTN)
-                            .on_click(PanelAction::Modulation(ModulationAction::DriverToggle(target.clone(), pid.clone()))),
-                    )
-                    .child(
-                        View::button("E")
-                            .fixed(BTN, BTN)
-                            .on_click(PanelAction::Modulation(ModulationAction::EnvelopeToggle(target.clone(), pid.clone()))),
-                    ),
-            );
+        let mut row_col =
+            View::column(0.0)
+                .claims_area()
+                .on_right_click(PanelAction::Params(ParamsAction::ParamLabelRightClick(
+                    target.clone(),
+                    pid.clone(),
+                )))
+                .child(
+                    View::row(4.0)
+                        .h(Sizing::Fixed(ROW_H))
+                        .cross_align(Align::Center)
+                        .child(
+                            View::label(p.label)
+                                .w(Sizing::Fixed(LABEL_W))
+                                .h(Sizing::Fixed(16.0)),
+                        )
+                        // Slider drag lives in handle_event → inert (no intent needed).
+                        .child(View::slider().fill_w().h(Sizing::Fixed(TRACK_H)).inert())
+                        .child(
+                            View::label(format!("{:.2}", p.value))
+                                .w(Sizing::Fixed(VALUE_W))
+                                .h(Sizing::Fixed(16.0))
+                                .align_text(manifold_ui::node::TextAlign::Right),
+                        )
+                        .child(
+                            View::button("D")
+                                .fixed(BTN, BTN)
+                                .on_click(PanelAction::Modulation(ModulationAction::DriverToggle(
+                                    target.clone(),
+                                    pid.clone(),
+                                ))),
+                        )
+                        .child(View::button("E").fixed(BTN, BTN).on_click(
+                            PanelAction::Modulation(ModulationAction::EnvelopeToggle(
+                                target.clone(),
+                                pid.clone(),
+                            )),
+                        )),
+                );
         if p.driver_open {
             row_col = row_col.child(self.driver_drawer_view(target, pid));
         }
@@ -152,15 +175,13 @@ impl ProofCard {
                         DriverConfigAction::BeatDiv(2),
                     ))),
             )
-            .child(
-                View::button("sine")
-                    .fixed(34.0, DRAWER_BTN_H)
-                    .on_click(PanelAction::Modulation(ModulationAction::DriverConfig(
-                        target,
-                        pid,
-                        DriverConfigAction::Wave(0),
-                    ))),
-            )
+            .child(View::button("sine").fixed(34.0, DRAWER_BTN_H).on_click(
+                PanelAction::Modulation(ModulationAction::DriverConfig(
+                    target,
+                    pid,
+                    DriverConfigAction::Wave(0),
+                )),
+            ))
     }
 
     fn build(&mut self, tree: &mut UITree, rect: Rect) {
@@ -198,8 +219,18 @@ fn fixture(driver_open: bool) -> ProofCard {
         enabled: true,
         has_drv: false,
         params: vec![
-            ProofParam { label: "Radius", id: "blur.radius", value: 1.0, driver_open },
-            ProofParam { label: "Sigma", id: "blur.sigma", value: 0.5, driver_open: false },
+            ProofParam {
+                label: "Radius",
+                id: "blur.radius",
+                value: 1.0,
+                driver_open,
+            },
+            ProofParam {
+                label: "Sigma",
+                id: "blur.sigma",
+                value: 0.5,
+                driver_open: false,
+            },
         ],
         host: ChromeHost::new(),
     }
@@ -302,7 +333,11 @@ fn opening_drawer_rebuilds_then_grows() {
     // Open param 0's driver drawer — adds nodes → structural.
     card.params[0].driver_open = true;
     assert_eq!(card.update(&mut t, rect()), Reconcile::NeedsRebuild);
-    assert_eq!(t.count(), count_before, "NeedsRebuild leaves the tree untouched");
+    assert_eq!(
+        t.count(),
+        count_before,
+        "NeedsRebuild leaves the tree untouched"
+    );
 
     // The app re-runs build() for the panel range (here: fresh tree).
     let mut t2 = tree();

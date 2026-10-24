@@ -7,8 +7,8 @@
 use manifold_node_engine::scene::transform::rotation_to_render_scene_euler;
 
 use super::{
-    GizmoAxis, GizmoHandle, GizmoMode, GizmoTarget, GizmoTargetId, HandleWrite, IDENTITY_AXES, ShapeOutline, cross3, dot3,
-    gizmo_targets, model_matrix, normalized, rotate_about, sub3,
+    GizmoAxis, GizmoHandle, GizmoMode, GizmoTarget, GizmoTargetId, HandleWrite, IDENTITY_AXES,
+    ShapeOutline, cross3, dot3, gizmo_targets, model_matrix, normalized, rotate_about, sub3,
 };
 use crate::node_graph::scene_vm::{SceneVm, ShapeParamVm};
 
@@ -32,7 +32,11 @@ impl GizmoSelection {
             [one] => Some(one.clone()),
             many => GizmoTarget::selection(many),
         };
-        Self { targets: gizmo_targets(scene).collect(), selected, handles }
+        Self {
+            targets: gizmo_targets(scene).collect(),
+            selected,
+            handles,
+        }
     }
 
     pub fn is_selected(&self, id: &GizmoTargetId) -> bool {
@@ -49,20 +53,33 @@ impl GizmoTarget {
     pub fn selection(members: &[GizmoTarget]) -> Option<GizmoTarget> {
         let first = members.first()?;
         let takes = |mode: GizmoMode| {
-            members.iter().filter(|member| !member.unplaced).any(|member| {
-                // Every placed member's centre moves, turns and scales about the
-                // selection's centre, so a free move handle takes all three.
-                member.handles.iter().any(|handle| !handle.write.locked() && (handle.mode == GizmoMode::Move || handle.mode == mode))
-            })
+            members
+                .iter()
+                .filter(|member| !member.unplaced)
+                .any(|member| {
+                    // Every placed member's centre moves, turns and scales about the
+                    // selection's centre, so a free move handle takes all three.
+                    member.handles.iter().any(|handle| {
+                        !handle.write.locked()
+                            && (handle.mode == GizmoMode::Move || handle.mode == mode)
+                    })
+                })
         };
         let mut handles = Vec::new();
         for (mode, axes) in [
             (GizmoMode::Move, &GizmoAxis::XYZ[..]),
             (GizmoMode::Rotate, &GizmoAxis::XYZ[..]),
-            (GizmoMode::Scale, &[GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z, GizmoAxis::Uniform][..]),
+            (
+                GizmoMode::Scale,
+                &[GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z, GizmoAxis::Uniform][..],
+            ),
         ] {
             let locked = !takes(mode);
-            handles.extend(axes.iter().map(|&axis| GizmoHandle { mode, axis, write: HandleWrite::Selection { locked } }));
+            handles.extend(axes.iter().map(|&axis| GizmoHandle {
+                mode,
+                axis,
+                write: HandleWrite::Selection { locked },
+            }));
         }
         Some(GizmoTarget {
             id: first.id.clone(),
@@ -105,14 +122,28 @@ pub struct SelectionWrite {
 ///
 /// A turned box scales along its own axes, not the world's (Blender shears
 /// it instead).
-pub fn selection_writes(members: &[GizmoTarget], mode: GizmoMode, axis: GizmoAxis, amount: f32, out: &mut Vec<SelectionWrite>) {
+pub fn selection_writes(
+    members: &[GizmoTarget],
+    mode: GizmoMode,
+    axis: GizmoAxis,
+    amount: f32,
+    out: &mut Vec<SelectionWrite>,
+) {
     out.clear();
     let pivot = centre(members);
     let unit = axis.unit();
-    for (member, target) in members.iter().enumerate().filter(|(_, target)| !target.unplaced) {
+    for (member, target) in members
+        .iter()
+        .enumerate()
+        .filter(|(_, target)| !target.unplaced)
+    {
         let mut write = |param: &ShapeParamVm, value: f32| {
             if !param.wired && value.is_finite() {
-                out.push(SelectionWrite { member, param: param.clone(), value });
+                out.push(SelectionWrite {
+                    member,
+                    param: param.clone(),
+                    value,
+                });
             }
         };
         let from = sub3(target.origin, pivot);
@@ -121,12 +152,26 @@ pub fn selection_writes(members: &[GizmoTarget], mode: GizmoMode, axis: GizmoAxi
             GizmoMode::Rotate => rotate_about(from, unit, amount),
             GizmoMode::Scale => std::array::from_fn(|i| match axis {
                 GizmoAxis::Uniform => from[i] * amount,
-                GizmoAxis::X | GizmoAxis::Y | GizmoAxis::Z => if unit[i] > 0.5 { from[i] * amount } else { from[i] },
+                GizmoAxis::X | GizmoAxis::Y | GizmoAxis::Z => {
+                    if unit[i] > 0.5 {
+                        from[i] * amount
+                    } else {
+                        from[i]
+                    }
+                }
             }),
         };
         if let Some(moved) = in_param_units(target.world_axes, sub3(to, from)) {
-            for handle in target.handles.iter().filter(|handle| handle.mode == GizmoMode::Move) {
-                let (HandleWrite::Linear { param, .. }, Some(k)) = (&handle.write, axis_index(handle.axis)) else { continue };
+            for handle in target
+                .handles
+                .iter()
+                .filter(|handle| handle.mode == GizmoMode::Move)
+            {
+                let (HandleWrite::Linear { param, .. }, Some(k)) =
+                    (&handle.write, axis_index(handle.axis))
+                else {
+                    continue;
+                };
                 if moved[k] != 0.0 {
                     write(param, param.value + moved[k]);
                 }
@@ -136,15 +181,30 @@ pub fn selection_writes(members: &[GizmoTarget], mode: GizmoMode, axis: GizmoAxi
             GizmoMode::Move => {}
             GizmoMode::Rotate => turn_with(target, unit, amount, &mut write),
             GizmoMode::Scale => {
-                for handle in target.handles.iter().filter(|handle| handle.mode == GizmoMode::Scale) {
+                for handle in target
+                    .handles
+                    .iter()
+                    .filter(|handle| handle.mode == GizmoMode::Scale)
+                {
                     match &handle.write {
-                        HandleWrite::Linear { param, limit } if axis == GizmoAxis::Uniform || handle.axis == axis => {
-                            write(param, limit.clamp_input(param.value * amount, (f32::NEG_INFINITY, f32::INFINITY)));
+                        HandleWrite::Linear { param, limit }
+                            if axis == GizmoAxis::Uniform || handle.axis == axis =>
+                        {
+                            write(
+                                param,
+                                limit.clamp_input(
+                                    param.value * amount,
+                                    (f32::NEG_INFINITY, f32::INFINITY),
+                                ),
+                            );
                         }
                         // A uniform scale takes only the uniform handle, and
                         // all three params move to one value.
                         HandleWrite::Uniform { params, limit } if axis == GizmoAxis::Uniform => {
-                            let value = limit.clamp_input(params[0].value * amount, (f32::NEG_INFINITY, f32::INFINITY));
+                            let value = limit.clamp_input(
+                                params[0].value * amount,
+                                (f32::NEG_INFINITY, f32::INFINITY),
+                            );
                             for param in params {
                                 write(param, value);
                             }
@@ -184,18 +244,27 @@ fn in_param_units(axes: [[f32; 3]; 3], delta: [f32; 3]) -> Option<[f32; 3]> {
 /// Turn `target`'s own orientation by `angle` about the world `unit` axis:
 /// a box's rotation angles, recomposed in `render_scene`'s Euler order and
 /// kept within a half turn of where they were, or a declared direction.
-fn turn_with(target: &GizmoTarget, unit: [f32; 3], angle: f32, write: &mut impl FnMut(&ShapeParamVm, f32)) {
+fn turn_with(
+    target: &GizmoTarget,
+    unit: [f32; 3],
+    angle: f32,
+    write: &mut impl FnMut(&ShapeParamVm, f32),
+) {
     let angles: [Option<&ShapeParamVm>; 3] = std::array::from_fn(|k| {
-        target.handles.iter().find_map(|handle| match (&handle.write, axis_index(handle.axis)) {
-            (HandleWrite::Angle(param), Some(axis)) if axis == k => Some(param),
-            _ => None,
-        })
+        target
+            .handles
+            .iter()
+            .find_map(|handle| match (&handle.write, axis_index(handle.axis)) {
+                (HandleWrite::Angle(param), Some(axis)) if axis == k => Some(param),
+                _ => None,
+            })
     });
     if angles.iter().any(Option::is_some) {
         let rot = angles.map(|param| param.map_or(0.0, |param| param.value));
         // Column-major: `m[col][row]`.
         let m = model_matrix([0.0; 3], rot, [1.0; 3]);
-        let turn: [[f32; 3]; 3] = std::array::from_fn(|col| rotate_about(IDENTITY_AXES[col], unit, angle));
+        let turn: [[f32; 3]; 3] =
+            std::array::from_fn(|col| rotate_about(IDENTITY_AXES[col], unit, angle));
         let rows: [[f32; 3]; 3] = std::array::from_fn(|i| {
             std::array::from_fn(|j| (0..3).map(|k| turn[k][i] * m[j][k]).sum::<f32>())
         });
@@ -207,13 +276,23 @@ fn turn_with(target: &GizmoTarget, unit: [f32; 3], angle: f32, write: &mut impl 
             }
         }
     }
-    let direction = target.handles.iter().find_map(|handle| match &handle.write {
-        HandleWrite::Direction { params, normalize } => Some((params, *normalize)),
-        HandleWrite::Linear { .. } | HandleWrite::Angle(_) | HandleWrite::Uniform { .. } | HandleWrite::Selection { .. } => None,
-    });
+    let direction = target
+        .handles
+        .iter()
+        .find_map(|handle| match &handle.write {
+            HandleWrite::Direction { params, normalize } => Some((params, *normalize)),
+            HandleWrite::Linear { .. }
+            | HandleWrite::Angle(_)
+            | HandleWrite::Uniform { .. }
+            | HandleWrite::Selection { .. } => None,
+        });
     if let Some((params, normalize)) = direction {
         let turned = rotate_about(params.each_ref().map(|param| param.value), unit, angle);
-        if let Some(turned) = if normalize { normalized(turned) } else { Some(turned) } {
+        if let Some(turned) = if normalize {
+            normalized(turned)
+        } else {
+            Some(turned)
+        } {
             for (param, value) in params.iter().zip(turned) {
                 write(param, value);
             }

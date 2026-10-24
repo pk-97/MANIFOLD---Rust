@@ -32,7 +32,10 @@ impl TempoMap {
     pub fn same_timing_as(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.points, &other.points)
             || (self.points.len() == other.points.len()
-                && self.points.iter().zip(other.points.iter())
+                && self
+                    .points
+                    .iter()
+                    .zip(other.points.iter())
                     .all(|(a, b)| a.beat == b.beat && a.bpm == b.bpm))
     }
 
@@ -147,7 +150,12 @@ impl TempoMap {
 
         // Kept sorted at write time, so readers can take a shared borrow (D13).
         let points = Arc::make_mut(&mut self.points);
-        let point = TempoPoint { beat, bpm, source, recorded_at_seconds };
+        let point = TempoPoint {
+            beat,
+            bpm,
+            source,
+            recorded_at_seconds,
+        };
         if self.is_sorted || points.is_empty() {
             let at = points.partition_point(|p| p.beat < beat);
             points.insert(at, point);
@@ -209,8 +217,16 @@ pub struct SourceClock<'a> {
 }
 
 impl<'a> SourceClock<'a> {
-    pub fn new(tempo_map: &'a TempoMap, fallback_bpm: Bpm, project_recorded_bpm: Option<Bpm>) -> Self {
-        Self { tempo_map, fallback_bpm, project_recorded_bpm }
+    pub fn new(
+        tempo_map: &'a TempoMap,
+        fallback_bpm: Bpm,
+        project_recorded_bpm: Option<Bpm>,
+    ) -> Self {
+        Self {
+            tempo_map,
+            fallback_bpm,
+            project_recorded_bpm,
+        }
     }
 
     /// Source position beneath a timeline beat, including the clip's trim.
@@ -224,18 +240,30 @@ impl<'a> SourceClock<'a> {
     }
 
     /// Media seconds `clip` advances while the timeline moves `from` → `to`.
-    pub fn source_seconds(&self, clip: &crate::clip::TimelineClip, from: Beats, to: Beats) -> Seconds {
+    pub fn source_seconds(
+        &self,
+        clip: &crate::clip::TimelineClip,
+        from: Beats,
+        to: Beats,
+    ) -> Seconds {
         let recorded_bpm = clip.resolve_recorded_bpm(self.project_recorded_bpm);
         if recorded_bpm > 0.0 {
             return Seconds((to - from).0 * 60.0 / f64::from(recorded_bpm));
         }
-        let at = |beat| TempoMapConverter::beat_to_seconds_immut(self.tempo_map, beat, self.fallback_bpm);
+        let at = |beat| {
+            TempoMapConverter::beat_to_seconds_immut(self.tempo_map, beat, self.fallback_bpm)
+        };
         at(to) - at(from)
     }
 
     /// Inverse of [`Self::source_seconds`]: how many beats past `from` it
     /// takes `clip` to play `seconds` of media.
-    pub fn beats_for_source(&self, clip: &crate::clip::TimelineClip, from: Beats, seconds: Seconds) -> Beats {
+    pub fn beats_for_source(
+        &self,
+        clip: &crate::clip::TimelineClip,
+        from: Beats,
+        seconds: Seconds,
+    ) -> Beats {
         let recorded_bpm = clip.resolve_recorded_bpm(self.project_recorded_bpm);
         if recorded_bpm > 0.0 {
             return Beats(seconds.0 * f64::from(recorded_bpm) / 60.0);
@@ -245,8 +273,10 @@ impl<'a> SourceClock<'a> {
 
     /// Native-speed source span, including tempo changes inside the interval.
     pub fn beats_for_unwarped_source(&self, from: Beats, seconds: Seconds) -> Beats {
-        let start = TempoMapConverter::beat_to_seconds_immut(self.tempo_map, from, self.fallback_bpm);
-        TempoMapConverter::seconds_to_beat_immut(self.tempo_map, start + seconds, self.fallback_bpm) - from
+        let start =
+            TempoMapConverter::beat_to_seconds_immut(self.tempo_map, from, self.fallback_bpm);
+        TempoMapConverter::seconds_to_beat_immut(self.tempo_map, start + seconds, self.fallback_bpm)
+            - from
     }
 }
 
@@ -432,7 +462,10 @@ mod tests {
     fn source_clock_warped_clip_runs_at_its_recorded_tempo() {
         let map = slowing_map();
         let clock = SourceClock::new(&map, Bpm(120.0), None);
-        let clip = TimelineClip { recorded_bpm: 100.0, ..Default::default() };
+        let clip = TimelineClip {
+            recorded_bpm: 100.0,
+            ..Default::default()
+        };
         // 2 beats at 100 BPM = 1.2 s, wherever on the tempo map they sit.
         let secs = clock.source_seconds(&clip, Beats(3.0), Beats(5.0));
         assert!((secs.0 - 1.2).abs() < 1e-9);
@@ -462,8 +495,14 @@ mod tests {
     fn source_clock_project_recorded_tempo_warps_video_but_never_audio() {
         let map = TempoMap::default();
         let clock = SourceClock::new(&map, Bpm(120.0), Some(Bpm(90.0)));
-        let video = TimelineClip { video_clip_id: "v".into(), ..Default::default() };
-        let audio = TimelineClip { audio_file_path: "a.wav".into(), ..Default::default() };
+        let video = TimelineClip {
+            video_clip_id: "v".into(),
+            ..Default::default()
+        };
+        let audio = TimelineClip {
+            audio_file_path: "a.wav".into(),
+            ..Default::default()
+        };
         // Video falls back to the recorded 90 BPM: 3 beats = 2 s.
         assert!((clock.source_seconds(&video, Beats(0.0), Beats(3.0)).0 - 2.0).abs() < 1e-9);
         // Audio with no tempo of its own stays unwarped at project 120 BPM.

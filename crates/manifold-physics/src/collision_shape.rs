@@ -32,8 +32,13 @@ use std::sync::{Arc, OnceLock};
 
 use manifold_foundation::mesh_partition::partition;
 
-use crate::sdf::{DistanceLattice, MAX_LATTICE_NODES, signed_distance_union_within, union_lattice_nodes};
-use crate::{BodyConfig, BodyHandle, CookedSolid, PhysicsError, PhysicsWorld, TriangleMesh, closed_triangles, cook_hull, cook_hull_mesh};
+use crate::sdf::{
+    DistanceLattice, MAX_LATTICE_NODES, signed_distance_union_within, union_lattice_nodes,
+};
+use crate::{
+    BodyConfig, BodyHandle, CookedSolid, PhysicsError, PhysicsWorld, TriangleMesh,
+    closed_triangles, cook_hull, cook_hull_mesh,
+};
 
 /// The farthest any position or hull point may sit from the origin, in
 /// metres. Box3D treats bounds past 100 km as corrupt; this keeps every
@@ -88,14 +93,26 @@ pub struct ShapeKey {
 impl ShapeKey {
     /// The key for `shape` at `scale`, for a solver with cells `cell_size`
     /// metres across (water) or none (Box3D).
-    pub fn new(shape: &CollisionShape, scale: [f32; 3], cell_size: Option<f32>) -> Result<Self, PhysicsError> {
+    pub fn new(
+        shape: &CollisionShape,
+        scale: [f32; 3],
+        cell_size: Option<f32>,
+    ) -> Result<Self, PhysicsError> {
         validate_scale(scale)?;
         let cell = match cell_size {
             None => 0,
             Some(cell) if cell.is_finite() && cell > 0.0 => cell.to_bits(),
-            Some(_) => return Err(PhysicsError::InvalidInput("a water cell size must be finite and positive")),
+            Some(_) => {
+                return Err(PhysicsError::InvalidInput(
+                    "a water cell size must be finite and positive",
+                ));
+            }
         };
-        Ok(Self { content: shape.content, scale: scale.map(step), cell })
+        Ok(Self {
+            content: shape.content,
+            scale: scale.map(step),
+            cell,
+        })
     }
 }
 
@@ -113,7 +130,9 @@ pub struct CollisionShape {
 impl CollisionShape {
     /// A shape from unindexed triangle lists, one per part (a compound body's
     /// parts each split on their own). Exactly equal positions weld.
-    pub fn from_triangle_lists<'a>(parts: impl IntoIterator<Item = &'a [[f32; 3]]>) -> Result<Self, PhysicsError> {
+    pub fn from_triangle_lists<'a>(
+        parts: impl IntoIterator<Item = &'a [[f32; 3]]>,
+    ) -> Result<Self, PhysicsError> {
         let welded = parts.into_iter().map(weld).collect::<Result<Vec<_>, _>>()?;
         Self::new(welded)
     }
@@ -130,8 +149,15 @@ impl CollisionShape {
             for vertex in &part.vertices {
                 validate_position(*vertex)?;
             }
-            if part.triangles.iter().flatten().any(|&index| index as usize >= part.vertices.len()) {
-                return Err(PhysicsError::InvalidInput("a mesh triangle index is out of range"));
+            if part
+                .triangles
+                .iter()
+                .flatten()
+                .any(|&index| index as usize >= part.vertices.len())
+            {
+                return Err(PhysicsError::InvalidInput(
+                    "a mesh triangle index is out of range",
+                ));
             }
             let floor = zero_area_floor(&part.vertices);
             part.triangles.retain(|triangle| {
@@ -156,9 +182,13 @@ impl CollisionShape {
             kept.push(part);
         }
         if kept.is_empty() {
-            return Err(PhysicsError::InvalidInput("the mesh has no triangle with area"));
+            return Err(PhysicsError::InvalidInput(
+                "the mesh has no triangle with area",
+            ));
         }
-        let longest = (0..3).map(|axis| max[axis] - min[axis]).fold(0.0f32, f32::max);
+        let longest = (0..3)
+            .map(|axis| max[axis] - min[axis])
+            .fold(0.0f32, f32::max);
         if longest.is_nan() || longest <= 0.0 {
             return Err(PhysicsError::InvalidInput("the mesh has no extent"));
         }
@@ -169,7 +199,13 @@ impl CollisionShape {
                 vertex.map(f32::to_bits).hash(&mut hasher);
             }
         }
-        Ok(Self { parts: kept, content: hasher.finish(), min, max, open: OnceLock::new() })
+        Ok(Self {
+            parts: kept,
+            content: hasher.finish(),
+            min,
+            max,
+            open: OnceLock::new(),
+        })
     }
 
     /// The hash of the loaded content [`ShapeKey`] carries.
@@ -197,14 +233,23 @@ impl CollisionShape {
 
     /// Every part in one indexed mesh: the exact surface a static collider is.
     pub fn exact_mesh(&self) -> TriangleMesh {
-        let mut vertices = Vec::with_capacity(self.parts.iter().map(|part| part.vertices.len()).sum());
-        let mut triangles = Vec::with_capacity(self.parts.iter().map(|part| part.triangles.len()).sum());
+        let mut vertices =
+            Vec::with_capacity(self.parts.iter().map(|part| part.vertices.len()).sum());
+        let mut triangles =
+            Vec::with_capacity(self.parts.iter().map(|part| part.triangles.len()).sum());
         for part in &self.parts {
             let base = vertices.len() as u32;
             vertices.extend_from_slice(&part.vertices);
-            triangles.extend(part.triangles.iter().map(|triangle| triangle.map(|index| index + base)));
+            triangles.extend(
+                part.triangles
+                    .iter()
+                    .map(|triangle| triangle.map(|index| index + base)),
+            );
         }
-        TriangleMesh { vertices, triangles }
+        TriangleMesh {
+            vertices,
+            triangles,
+        }
     }
 
     /// Convex hulls for a moving body at `scale`, in the local frame: each
@@ -216,14 +261,22 @@ impl CollisionShape {
     pub fn body_hulls(&self, scale: [f32; 3]) -> Result<Vec<Vec<[f32; 3]>>, PhysicsError> {
         validate_scale(scale)?;
         let thickness = self.extent().into_iter().fold(0.0f32, f32::max) * SHELL_FRACTION;
-        let counts: Vec<usize> = self.parts.iter().map(|part| automatic_pieces(part, scale)).collect::<Result<_, _>>()?;
+        let counts: Vec<usize> = self
+            .parts
+            .iter()
+            .map(|part| automatic_pieces(part, scale))
+            .collect::<Result<_, _>>()?;
         let mut hulls = Vec::with_capacity(counts.iter().sum());
         for (part, count) in self.parts.iter().zip(counts) {
             let closed = closed_triangles(part).is_ok_and(|flags| !flags.contains(&false));
-            for piece in partition(&part.vertices, &part.triangles, count).map_err(|_| PhysicsError::InvalidInput("the mesh could not be split into hulls"))? {
+            for piece in partition(&part.vertices, &part.triangles, count)
+                .map_err(|_| PhysicsError::InvalidInput("the mesh could not be split into hulls"))?
+            {
                 // A piece of a closed part keeps its exact points unless it is
                 // flat; an open surface always gets the shell.
-                let exact = closed.then(|| piece_hull(part, &piece.triangle_ids, 0.0, scale).ok()).flatten();
+                let exact = closed
+                    .then(|| piece_hull(part, &piece.triangle_ids, 0.0, scale).ok())
+                    .flatten();
                 let hull = match exact {
                     Some(hull) => hull,
                     None => piece_hull(part, &piece.triangle_ids, thickness, scale)?,
@@ -236,7 +289,12 @@ impl CollisionShape {
 
     /// The lattice plan water with cells `cell_size` metres across uses for
     /// this shape at `scale`, cropped to `domain`; see [`water_plan`].
-    pub fn water_plan(&self, cell_size: f32, scale: [f32; 3], domain: Option<[[f32; 3]; 2]>) -> Result<LatticePlan, PhysicsError> {
+    pub fn water_plan(
+        &self,
+        cell_size: f32,
+        scale: [f32; 3],
+        domain: Option<[[f32; 3]; 2]>,
+    ) -> Result<LatticePlan, PhysicsError> {
         water_plan(&self.parts, self.has_open_parts(), cell_size, scale, domain)
     }
 
@@ -248,21 +306,34 @@ impl CollisionShape {
 
 /// The cooked hull of `triangle_ids` of `part`, each corner pushed half of
 /// `thickness` out and in along its triangle's normal, checked at `scale`.
-fn piece_hull(part: &TriangleMesh, triangle_ids: &[usize], thickness: f32, scale: [f32; 3]) -> Result<Vec<[f32; 3]>, PhysicsError> {
+fn piece_hull(
+    part: &TriangleMesh,
+    triangle_ids: &[usize],
+    thickness: f32,
+    scale: [f32; 3],
+) -> Result<Vec<[f32; 3]>, PhysicsError> {
     let mut points = Vec::with_capacity(triangle_ids.len() * 6);
     for &triangle in triangle_ids {
         let corners = part.triangles[triangle].map(|index| part.vertices[index as usize]);
         let normal = cross(sub64(corners[1], corners[0]), sub64(corners[2], corners[0]));
         let length = norm2(normal).sqrt();
         let shell: [f32; 3] = std::array::from_fn(|axis| {
-            if length > 0.0 { (normal[axis] / length) as f32 * thickness * 0.5 } else { 0.0 }
+            if length > 0.0 {
+                (normal[axis] / length) as f32 * thickness * 0.5
+            } else {
+                0.0
+            }
         });
         for corner in corners {
             points.push(std::array::from_fn(|axis| corner[axis] + shell[axis]));
             points.push(std::array::from_fn(|axis| corner[axis] - shell[axis]));
         }
     }
-    points.sort_unstable_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])).then(a[2].total_cmp(&b[2])));
+    points.sort_unstable_by(|a, b| {
+        a[0].total_cmp(&b[0])
+            .then(a[1].total_cmp(&b[1]))
+            .then(a[2].total_cmp(&b[2]))
+    });
     points.dedup();
     let hull = cook_hull(&points)?;
     validate_hull(&scaled(&hull, scale))?;
@@ -283,7 +354,9 @@ fn automatic_pieces(part: &TriangleMesh, scale: [f32; 3]) -> Result<usize, Physi
             max[axis] = max[axis].max(vertex[axis]);
         }
     }
-    let longest = (0..3).map(|axis| (max[axis] - min[axis]) * scale[axis].abs()).fold(0.0f32, f32::max);
+    let longest = (0..3)
+        .map(|axis| (max[axis] - min[axis]) * scale[axis].abs())
+        .fold(0.0f32, f32::max);
     let by_size = (longest / METRES_PER_HULL).ceil().max(1.0) as usize;
     let by_detail = (triangles as f32).sqrt().ceil() as usize;
     Ok(by_detail.min(by_size).max(1).min(triangles))
@@ -291,12 +364,16 @@ fn automatic_pieces(part: &TriangleMesh, scale: [f32; 3]) -> Result<usize, Physi
 
 /// Whether `part` is one closed volume its convex hull barely exceeds.
 fn convex_closed(part: &TriangleMesh) -> bool {
-    let Ok(closed) = closed_triangles(part) else { return false };
+    let Ok(closed) = closed_triangles(part) else {
+        return false;
+    };
     if closed.contains(&false) {
         return false;
     }
     let volume = mesh_volume(part).abs();
-    let Ok(hull) = cook_hull_mesh(&part.vertices) else { return false };
+    let Ok(hull) = cook_hull_mesh(&part.vertices) else {
+        return false;
+    };
     volume > 0.0 && mesh_volume(&hull).abs() <= volume * CONVEX_VOLUME_RATIO
 }
 
@@ -312,7 +389,9 @@ fn mesh_volume(mesh: &TriangleMesh) -> f64 {
 }
 
 fn any_open(meshes: &[TriangleMesh]) -> bool {
-    meshes.iter().any(|mesh| closed_triangles(mesh).is_ok_and(|closed| closed.contains(&false)))
+    meshes
+        .iter()
+        .any(|mesh| closed_triangles(mesh).is_ok_and(|closed| closed.contains(&false)))
 }
 
 /// The lattice water builds for one shape: local spacing and shell
@@ -372,7 +451,9 @@ pub fn water_plan(
     let extent: [f32; 3] = std::array::from_fn(|axis| max[axis] - min[axis]);
     let longest = extent.into_iter().fold(0.0f32, f32::max);
     if !(longest.is_finite() && longest > 0.0) {
-        return Err(PhysicsError::InvalidInput("the mesh has no extent for a distance lattice"));
+        return Err(PhysicsError::InvalidInput(
+            "the mesh has no extent for a distance lattice",
+        ));
     }
     // The sampled part: the domain clamped onto the mesh's bounds. A domain
     // clear of the mesh leaves a flat box on its nearest face, so the lattice
@@ -380,11 +461,18 @@ pub fn water_plan(
     let sampled = match domain {
         None => [min, max],
         Some([low, high]) => {
-            if low.iter().chain(&high).any(|value| !value.is_finite()) || (0..3).any(|axis| high[axis] < low[axis]) {
-                return Err(PhysicsError::InvalidInput("a water domain crop must be finite, min under max"));
+            if low.iter().chain(&high).any(|value| !value.is_finite())
+                || (0..3).any(|axis| high[axis] < low[axis])
+            {
+                return Err(PhysicsError::InvalidInput(
+                    "a water domain crop must be finite, min under max",
+                ));
             }
             let clamp = |value: f32, axis: usize| value.max(min[axis]).min(max[axis]);
-            [std::array::from_fn(|axis| clamp(low[axis], axis)), std::array::from_fn(|axis| clamp(high[axis], axis))]
+            [
+                std::array::from_fn(|axis| clamp(low[axis], axis)),
+                std::array::from_fn(|axis| clamp(high[axis], axis)),
+            ]
         }
     };
     let sampled_extent: [f32; 3] = std::array::from_fn(|axis| sampled[1][axis] - sampled[0][axis]);
@@ -395,35 +483,73 @@ pub fn water_plan(
     // The crop reaches the padding past the sampled part that the build
     // gives the whole mesh, so the gradient at the domain's edge is exact.
     let crop = |pad: f32| {
-        domain.map(|_| [sampled[0].map(|value| value - pad), sampled[1].map(|value| value + pad)])
+        domain.map(|_| {
+            [
+                sampled[0].map(|value| value - pad),
+                sampled[1].map(|value| value + pad),
+            ]
+        })
     };
     let coarse = sampled_longest / DISTANCE_NODES_ALONG_LONGEST;
     if !open {
-        return Ok(LatticePlan { spacing: coarse, shell_thickness: 0.0, open, capped: false, extent, crop: crop(2.0 * coarse) });
+        return Ok(LatticePlan {
+            spacing: coarse,
+            shell_thickness: 0.0,
+            open,
+            capped: false,
+            extent,
+            crop: crop(2.0 * coarse),
+        });
     }
     validate_scale(scale)?;
     if !(cell_size.is_finite() && cell_size > 0.0) {
-        return Err(PhysicsError::InvalidInput("a water cell size must be finite and positive"));
+        return Err(PhysicsError::InvalidInput(
+            "a water cell size must be finite and positive",
+        ));
     }
-    let [smallest, largest] = scale_steps(scale).map(|step| (step as f32 / SCALE_STEPS_PER_OCTAVE).exp2());
+    let [smallest, largest] =
+        scale_steps(scale).map(|step| (step as f32 / SCALE_STEPS_PER_OCTAVE).exp2());
     let world_longest = sampled_longest * largest;
     // One water cell each side of the surface: a shell thinner than two
     // cells is one the water's grid cannot see, and liquid leaks through.
     let shell_thickness = (2.0 * cell_size).max(SHELL_FRACTION * world_longest) / smallest;
     let wanted = coarse.min(cell_size / largest);
     let mut spacing = wanted;
-    while union_lattice_nodes(sampled_extent, spacing, 2.0 * spacing, shell_thickness, true) > MAX_LATTICE_NODES {
+    while union_lattice_nodes(
+        sampled_extent,
+        spacing,
+        2.0 * spacing,
+        shell_thickness,
+        true,
+    ) > MAX_LATTICE_NODES
+    {
         spacing *= 1.125;
     }
     let pad = 2.0 * spacing + (0.5 * shell_thickness).max(spacing);
-    Ok(LatticePlan { spacing, shell_thickness, open, capped: spacing > wanted, extent, crop: crop(pad) })
+    Ok(LatticePlan {
+        spacing,
+        shell_thickness,
+        open,
+        capped: spacing > wanted,
+        extent,
+        crop: crop(pad),
+    })
 }
 
 /// One lattice over every mesh to `plan`: closed parts solid, open parts
 /// shells, only the nodes inside the plan's crop when it has one. Costs
 /// nodes × triangles; never on the content thread.
-pub fn water_lattice(meshes: &[TriangleMesh], plan: &LatticePlan) -> Result<DistanceLattice, PhysicsError> {
-    signed_distance_union_within(meshes, plan.spacing, 2.0 * plan.spacing, plan.shell_thickness, plan.crop)
+pub fn water_lattice(
+    meshes: &[TriangleMesh],
+    plan: &LatticePlan,
+) -> Result<DistanceLattice, PhysicsError> {
+    signed_distance_union_within(
+        meshes,
+        plan.spacing,
+        2.0 * plan.spacing,
+        plan.shell_thickness,
+        plan.crop,
+    )
 }
 
 /// The form a body takes in Box3D.
@@ -459,9 +585,13 @@ impl Solid {
     pub fn validate_at(&self, scale: [f32; 3]) -> Result<(), PhysicsError> {
         validate_scale(scale)?;
         let mut far = false;
-        self.for_each_point(|point| far |= validate_position(std::array::from_fn(|axis| point[axis] * scale[axis])).is_err());
+        self.for_each_point(|point| {
+            far |= validate_position(std::array::from_fn(|axis| point[axis] * scale[axis])).is_err()
+        });
         if far {
-            return Err(PhysicsError::InvalidInput("at this scale the shape reaches past 10 km from the origin, outside the solver's world"));
+            return Err(PhysicsError::InvalidInput(
+                "at this scale the shape reaches past 10 km from the origin, outside the solver's world",
+            ));
         }
         if let Some(hulls) = self.hulls() {
             let scaled = scaled_hulls(hulls, scale);
@@ -490,7 +620,12 @@ impl Solid {
     }
 
     /// Install this solid at `scale` as one body, through [`Self::cook`].
-    pub fn install(&self, world: &mut PhysicsWorld, scale: [f32; 3], config: BodyConfig) -> Result<BodyHandle, PhysicsError> {
+    pub fn install(
+        &self,
+        world: &mut PhysicsWorld,
+        scale: [f32; 3],
+        config: BodyConfig,
+    ) -> Result<BodyHandle, PhysicsError> {
         world.add_cooked(&self.cook(scale)?, config)
     }
 
@@ -498,19 +633,31 @@ impl Solid {
     /// through the same gate: its pose, its velocity and every other body
     /// stay as they are. The body must already be the same form (hulls or
     /// exact mesh).
-    pub fn replace(&self, world: &mut PhysicsWorld, handle: BodyHandle, scale: [f32; 3], config: BodyConfig) -> Result<(), PhysicsError> {
+    pub fn replace(
+        &self,
+        world: &mut PhysicsWorld,
+        handle: BodyHandle,
+        scale: [f32; 3],
+        config: BodyConfig,
+    ) -> Result<(), PhysicsError> {
         world.replace_cooked(handle, &self.cook(scale)?, config)
     }
 
     /// Whether `self` and `other` install as the same form, so one can
     /// replace the other in place ([`Self::replace`]).
     pub fn same_form(&self, other: &Self) -> bool {
-        matches!((self, other), (Self::Hulls(_), Self::Hulls(_)) | (Self::Mesh(_), Self::Mesh(_)))
+        matches!(
+            (self, other),
+            (Self::Hulls(_), Self::Hulls(_)) | (Self::Mesh(_), Self::Mesh(_))
+        )
     }
 }
 
 fn scaled(points: &[[f32; 3]], scale: [f32; 3]) -> Vec<[f32; 3]> {
-    points.iter().map(|point| std::array::from_fn(|axis| point[axis] * scale[axis])).collect()
+    points
+        .iter()
+        .map(|point| std::array::from_fn(|axis| point[axis] * scale[axis]))
+        .collect()
 }
 
 fn scaled_hulls(hulls: &[Vec<[f32; 3]>], scale: [f32; 3]) -> Vec<Vec<[f32; 3]>> {
@@ -530,7 +677,10 @@ pub fn scaled_mesh(mesh: &TriangleMesh, scale: [f32; 3]) -> TriangleMesh {
     } else {
         mesh.triangles.clone()
     };
-    TriangleMesh { vertices: scaled(&mesh.vertices, scale), triangles }
+    TriangleMesh {
+        vertices: scaled(&mesh.vertices, scale),
+        triangles,
+    }
 }
 
 /// A scale is finite and not zero on any axis. Mirrored is a scale; what
@@ -540,16 +690,23 @@ pub fn validate_scale(scale: [f32; 3]) -> Result<(), PhysicsError> {
     if scale.iter().all(|s| s.is_finite() && *s != 0.0) {
         Ok(())
     } else {
-        Err(PhysicsError::InvalidInput("scale must be finite and not zero on any axis"))
+        Err(PhysicsError::InvalidInput(
+            "scale must be finite and not zero on any axis",
+        ))
     }
 }
 
 /// A position is finite and within [`MAX_COORDINATE`] of the origin.
 pub fn validate_position(position: [f32; 3]) -> Result<(), PhysicsError> {
-    if position.iter().all(|value| value.is_finite() && value.abs() <= MAX_COORDINATE) {
+    if position
+        .iter()
+        .all(|value| value.is_finite() && value.abs() <= MAX_COORDINATE)
+    {
         Ok(())
     } else {
-        Err(PhysicsError::InvalidInput("positions must be finite and within 10 km of the origin"))
+        Err(PhysicsError::InvalidInput(
+            "positions must be finite and within 10 km of the origin",
+        ))
     }
 }
 
@@ -561,14 +718,18 @@ pub fn validate_hull(points: &[[f32; 3]]) -> Result<(), PhysicsError> {
     if points.len() < 4 {
         return Err(PhysicsError::InvalidInput("a hull needs at least 4 points"));
     }
-    points.iter().try_for_each(|point| validate_position(*point))
+    points
+        .iter()
+        .try_for_each(|point| validate_position(*point))
 }
 
 /// Weld an unindexed triangle list by exactly equal coordinates (signed zero
 /// is one coordinate); no tolerance merges distinct points.
 pub fn weld(triangles: &[[f32; 3]]) -> Result<TriangleMesh, PhysicsError> {
     if triangles.is_empty() || !triangles.len().is_multiple_of(3) {
-        return Err(PhysicsError::InvalidInput("a mesh must be a nonempty triangle list"));
+        return Err(PhysicsError::InvalidInput(
+            "a mesh must be a nonempty triangle list",
+        ));
     }
     let mut indices = std::collections::HashMap::<[u32; 3], u32>::new();
     let mut vertices = Vec::new();
@@ -587,7 +748,10 @@ pub fn weld(triangles: &[[f32; 3]]) -> Result<TriangleMesh, PhysicsError> {
     if vertices.len() > u32::MAX as usize {
         return Err(PhysicsError::InvalidInput("a mesh has too many vertices"));
     }
-    Ok(TriangleMesh { vertices, triangles: indexed })
+    Ok(TriangleMesh {
+        vertices,
+        triangles: indexed,
+    })
 }
 
 /// The squared doubled area under which a triangle counts as zero area,
@@ -601,7 +765,9 @@ fn zero_area_floor(vertices: &[[f32; 3]]) -> f64 {
             max[axis] = max[axis].max(f64::from(vertex[axis]));
         }
     }
-    let size = (0..3).map(|axis| max[axis] - min[axis]).fold(1.0f64, f64::max);
+    let size = (0..3)
+        .map(|axis| max[axis] - min[axis])
+        .fold(1.0f64, f64::max);
     1.0e-24 * size.powi(4)
 }
 
@@ -614,7 +780,11 @@ fn sub64(a: [f32; 3], b: [f32; 3]) -> [f64; 3] {
 }
 
 fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -631,10 +801,25 @@ mod tests {
 
     fn cube_list(half: f32) -> Vec<[f32; 3]> {
         let corners: [[f32; 3]; 8] = std::array::from_fn(|i| {
-            [if i & 1 == 0 { -half } else { half }, if i & 2 == 0 { -half } else { half }, if i & 4 == 0 { -half } else { half }]
+            [
+                if i & 1 == 0 { -half } else { half },
+                if i & 2 == 0 { -half } else { half },
+                if i & 4 == 0 { -half } else { half },
+            ]
         });
-        const FACES: [[usize; 4]; 6] = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
-        FACES.iter().flat_map(|f| [f[0], f[1], f[2], f[0], f[2], f[3]]).map(|i| corners[i]).collect()
+        const FACES: [[usize; 4]; 6] = [
+            [0, 2, 3, 1],
+            [4, 5, 7, 6],
+            [0, 1, 5, 4],
+            [2, 6, 7, 3],
+            [0, 4, 6, 2],
+            [1, 3, 7, 5],
+        ];
+        FACES
+            .iter()
+            .flat_map(|f| [f[0], f[1], f[2], f[0], f[2], f[3]])
+            .map(|i| corners[i])
+            .collect()
     }
 
     /// Fundamental 7 (SCENE_DOCUMENT_DESIGN.md section 10 (Testing)): the
@@ -645,10 +830,22 @@ mod tests {
         let shape = CollisionShape::from_triangle_lists([cube_list(0.5).as_slice()]).unwrap();
         let key = |scale, cell| ShapeKey::new(&shape, scale, cell).unwrap();
         assert_eq!(key([1.0; 3], None), key([1.0; 3], None));
-        assert_ne!(key([1.0; 3], None), key([2.0, 1.0, 1.0], None), "a scale edit must refresh the shape");
-        assert_ne!(key([1.0; 3], Some(0.1)), key([1.0; 3], Some(0.05)), "a finer water must refresh its lattice");
+        assert_ne!(
+            key([1.0; 3], None),
+            key([2.0, 1.0, 1.0], None),
+            "a scale edit must refresh the shape"
+        );
+        assert_ne!(
+            key([1.0; 3], Some(0.1)),
+            key([1.0; 3], Some(0.05)),
+            "a finer water must refresh its lattice"
+        );
         let other = CollisionShape::from_triangle_lists([cube_list(0.6).as_slice()]).unwrap();
-        assert_ne!(key([1.0; 3], None), ShapeKey::new(&other, [1.0; 3], None).unwrap(), "new content is a new key");
+        assert_ne!(
+            key([1.0; 3], None),
+            ShapeKey::new(&other, [1.0; 3], None).unwrap(),
+            "new content is a new key"
+        );
         assert!(ShapeKey::new(&shape, [f32::NAN, 1.0, 1.0], None).is_err());
     }
 }

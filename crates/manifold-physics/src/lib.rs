@@ -5,23 +5,23 @@
 //! mutex. `PhysicsWorld` owns its world and handles exclusively, and carries a
 //! non-`Sync` marker so it may move between threads but cannot be shared there.
 
-pub use manifold_foundation::{PlayedTime, Seconds};
 pub use manifold_foundation::settings::{PhysicsSettings, SimRate};
+pub use manifold_foundation::{PlayedTime, Seconds};
 /// Identity of the compiled native solver and Rust adapter sources.
 pub const SOURCE_IDENTITY: &str = env!("MANIFOLD_PHYSICS_SOURCE_IDENTITY");
 
-pub mod input;
-pub mod interaction;
-pub mod stepping;
 pub mod clock;
-pub mod particle_duration;
 pub mod coupled_motion;
 mod field_value;
 pub mod force_lattice;
-pub mod tick_samples;
+pub mod input;
+pub mod interaction;
+pub mod particle_duration;
+pub mod stepping;
 pub mod tick_hits;
+pub mod tick_samples;
 pub mod turbulence;
-use coupled_motion::{SupportCount, SupportPoint, MAX_SUPPORT_POINTS};
+use coupled_motion::{MAX_SUPPORT_POINTS, SupportCount, SupportPoint};
 pub use field_value::{FarShape, FarTerm, FieldLeaf, FieldValue, sample_far};
 pub use interaction::{
     FalloffCurve, FieldInput, ForceSample, RadialField, SampledField, ScaledField, SumField,
@@ -29,13 +29,13 @@ pub use interaction::{
 };
 pub use turbulence::{TurbulenceDrift, TurbulenceField};
 mod mesh;
-pub use mesh::{closed_triangles, cook_hull_mesh, validate_closed_mesh, TriangleMesh};
-pub mod sdf;
+pub use mesh::{TriangleMesh, closed_triangles, cook_hull_mesh, validate_closed_mesh};
 pub mod collision_shape;
+pub mod sdf;
 use collision_shape::validate_position;
 mod cooked;
-pub use cooked::CookedSolid;
 use cooked::CookedForm;
+pub use cooked::CookedSolid;
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -87,7 +87,11 @@ mod ffi {
             friction: f32,
             restitution: f32,
         ) -> u64;
-        pub fn manifold_box3d_keep_mesh_triangles(vertices: *const f32, indices: *mut i32, triangle_count: i32) -> i32;
+        pub fn manifold_box3d_keep_mesh_triangles(
+            vertices: *const f32,
+            indices: *mut i32,
+            triangle_count: i32,
+        ) -> i32;
         pub fn manifold_box3d_cook_mesh(
             vertices: *const f32,
             vertex_count: i32,
@@ -134,7 +138,12 @@ mod ffi {
             friction: f32,
             restitution: f32,
         ) -> i32;
-        pub fn manifold_box3d_body_replace_cooked_mesh(body: u64, mesh: usize, friction: f32, restitution: f32) -> i32;
+        pub fn manifold_box3d_body_replace_cooked_mesh(
+            body: u64,
+            mesh: usize,
+            friction: f32,
+            restitution: f32,
+        ) -> i32;
         pub fn manifold_box3d_body_set_bullet(body: u64, enabled: i32) -> i32;
         pub fn manifold_box3d_body_set_wall(body: u64, wall: i32) -> i32;
         pub fn manifold_box3d_body_set_enabled(body: u64, enabled: i32) -> i32;
@@ -149,10 +158,7 @@ mod ffi {
             pz: f32,
             velocity_out: *mut f32,
         ) -> i32;
-        pub fn manifold_box3d_body_local_center_of_mass(
-            body: u64,
-            center_out: *mut f32,
-        ) -> i32;
+        pub fn manifold_box3d_body_local_center_of_mass(body: u64, center_out: *mut f32) -> i32;
         pub fn manifold_box3d_body_set_velocity(
             body: u64,
             linear_x: f32,
@@ -415,7 +421,10 @@ pub fn cook_hull(points: &[[f32; 3]]) -> Result<Vec<[f32; 3]>, PhysicsError> {
     if points.len() < 4 {
         return Err(PhysicsError::InvalidInput("hull needs at least 4 points"));
     }
-    if points.iter().any(|point| !point.iter().all(|value| value.is_finite())) {
+    if points
+        .iter()
+        .any(|point| !point.iter().all(|value| value.is_finite()))
+    {
         return Err(PhysicsError::InvalidInput("hull points must be finite"));
     }
     let point_count = i32::try_from(points.len())
@@ -438,11 +447,7 @@ pub fn cook_hull(points: &[[f32; 3]]) -> Result<Vec<[f32; 3]>, PhysicsError> {
     }
     let mut cooked = vec![[0.0; 3]; count as usize];
     let copied = unsafe {
-        ffi::manifold_box3d_hull_copy_points(
-            hull,
-            cooked.as_mut_ptr().cast::<f32>(),
-            count,
-        )
+        ffi::manifold_box3d_hull_copy_points(hull, cooked.as_mut_ptr().cast::<f32>(), count)
     };
     unsafe { ffi::manifold_box3d_destroy_hull(hull) };
     if copied != count {
@@ -567,7 +572,11 @@ impl PhysicsWorld {
 
     /// Add a body whose shape is `solid`, cooked once and shared with every
     /// other body installed from it. A mesh solid takes only a fixed body.
-    pub fn add_cooked(&mut self, solid: &Arc<CookedSolid>, config: BodyConfig) -> Result<BodyHandle, PhysicsError> {
+    pub fn add_cooked(
+        &mut self,
+        solid: &Arc<CookedSolid>,
+        config: BodyConfig,
+    ) -> Result<BodyHandle, PhysicsError> {
         let config = validate_config(config)?;
         let index = self.bodies.len();
         if index > u32::MAX as usize {
@@ -596,9 +605,15 @@ impl PhysicsWorld {
                         config.restitution,
                     )
                 },
-                CookedForm::Mesh { mesh, center, unit_inertia } => {
+                CookedForm::Mesh {
+                    mesh,
+                    center,
+                    unit_inertia,
+                } => {
                     if config.kind != BodyKind::Fixed {
-                        return Err(PhysicsError::InvalidInput("triangle meshes only support fixed bodies"));
+                        return Err(PhysicsError::InvalidInput(
+                            "triangle meshes only support fixed bodies",
+                        ));
                     }
                     let inertia = unit_inertia.map(|value| value * config.mass);
                     unsafe {
@@ -641,7 +656,8 @@ impl PhysicsWorld {
             .reserve(self.bodies.len().saturating_sub(self.field_scratch.len()));
         self.impulse_scratch
             .reserve(self.bodies.len().saturating_sub(self.impulse_scratch.len()));
-        self.reaction_awake.reserve(self.bodies.len().saturating_sub(self.reaction_awake.len()));
+        self.reaction_awake
+            .reserve(self.bodies.len().saturating_sub(self.reaction_awake.len()));
         Ok(BodyHandle {
             provenance: self.provenance,
             index: index as u32,
@@ -759,7 +775,9 @@ impl PhysicsWorld {
     pub fn apply_fields_each(
         &mut self,
         dt: Seconds,
-        each: impl FnOnce(&mut dyn FnMut(BodyHandle, &[FieldInput<'_>]) -> Result<(), PhysicsError>) -> Result<(), PhysicsError>,
+        each: impl FnOnce(
+            &mut dyn FnMut(BodyHandle, &[FieldInput<'_>]) -> Result<(), PhysicsError>,
+        ) -> Result<(), PhysicsError>,
     ) -> Result<(), PhysicsError> {
         let dt_f32 = dt.0 as f32;
         if !dt.0.is_finite() || dt.0 <= 0.0 || !dt_f32.is_finite() || dt_f32 <= 0.0 {
@@ -793,7 +811,12 @@ impl PhysicsWorld {
 
     /// Sample one target's fields at its centre of mass into the pending
     /// applications. The caller holds the native lock.
-    fn sample_field_target(&mut self, handle: BodyHandle, fields: &[FieldInput<'_>], dt_f32: f32) -> Result<(), PhysicsError> {
+    fn sample_field_target(
+        &mut self,
+        handle: BodyHandle,
+        fields: &[FieldInput<'_>],
+        dt_f32: f32,
+    ) -> Result<(), PhysicsError> {
         for input in fields {
             validate_field_input(*input)?;
         }
@@ -824,9 +847,7 @@ impl PhysicsWorld {
         if body_type != BodyKind::Dynamic.native_value() || enabled == 0 {
             return Ok(());
         }
-        if !center.iter().all(|component| component.is_finite())
-            || !mass.is_finite()
-            || mass <= 0.0
+        if !center.iter().all(|component| component.is_finite()) || !mass.is_finite() || mass <= 0.0
         {
             return Err(PhysicsError::NativeFailure);
         }
@@ -837,7 +858,12 @@ impl PhysicsWorld {
         for input in fields {
             let force = input.field.sample_force(center);
             let sample = force.push;
-            air = air + ForceSample { push: [0.0; 3], ..force }.scaled(input.acceleration);
+            air = air
+                + ForceSample {
+                    push: [0.0; 3],
+                    ..force
+                }
+                .scaled(input.acceleration);
             if !sample.iter().all(|component| component.is_finite()) {
                 return Err(PhysicsError::InvalidInput("field sample must be finite"));
             }
@@ -859,7 +885,9 @@ impl PhysicsWorld {
         }
         if air.drag > 0.0 {
             let mut velocity = [0.0; 3];
-            if unsafe { ffi::manifold_box3d_body_linear_velocity(native, velocity.as_mut_ptr()) } != 0 {
+            if unsafe { ffi::manifold_box3d_body_linear_velocity(native, velocity.as_mut_ptr()) }
+                != 0
+            {
                 return Err(PhysicsError::NativeFailure);
             }
             let drag = air.drag_delta_velocity(velocity, dt_f32);
@@ -893,9 +921,7 @@ impl PhysicsWorld {
         move_pose: bool,
     ) -> Result<(), PhysicsError> {
         let config = validate_config(config)?;
-        if self.body_record(handle)?.geometry.is_mesh()
-            && config.kind != BodyKind::Fixed
-        {
+        if self.body_record(handle)?.geometry.is_mesh() && config.kind != BodyKind::Fixed {
             return Err(PhysicsError::InvalidInput(
                 "triangle meshes only support fixed bodies",
             ));
@@ -937,7 +963,9 @@ impl PhysicsWorld {
     ) -> Result<(), PhysicsError> {
         validate_config(config)?;
         if self.body_record(handle)?.geometry.is_mesh() {
-            return Err(PhysicsError::InvalidInput("only a hull body can have its hulls replaced"));
+            return Err(PhysicsError::InvalidInput(
+                "only a hull body can have its hulls replaced",
+            ));
         }
         let hull_refs: Vec<&[[f32; 3]]> = hulls.iter().map(Vec::as_slice).collect();
         self.replace_cooked(handle, &CookedSolid::hulls(&hull_refs, 128)?, config)
@@ -955,10 +983,14 @@ impl PhysicsWorld {
     ) -> Result<(), PhysicsError> {
         let config = validate_config(config)?;
         if config.kind != BodyKind::Fixed {
-            return Err(PhysicsError::InvalidInput("triangle meshes only support fixed bodies"));
+            return Err(PhysicsError::InvalidInput(
+                "triangle meshes only support fixed bodies",
+            ));
         }
         if !self.body_record(handle)?.geometry.is_mesh() {
-            return Err(PhysicsError::InvalidInput("only a mesh body can have its mesh replaced"));
+            return Err(PhysicsError::InvalidInput(
+                "only a mesh body can have its mesh replaced",
+            ));
         }
         self.replace_cooked(handle, &CookedSolid::mesh(vertices, triangles)?, config)
     }
@@ -967,10 +999,17 @@ impl PhysicsWorld {
     /// mesh): its pose, its velocity and every other body stay as they are,
     /// and a moving body takes `config.mass` over its new shape. On `Err`
     /// the body keeps its old shape.
-    pub fn replace_cooked(&mut self, handle: BodyHandle, solid: &Arc<CookedSolid>, config: BodyConfig) -> Result<(), PhysicsError> {
+    pub fn replace_cooked(
+        &mut self,
+        handle: BodyHandle,
+        solid: &Arc<CookedSolid>,
+        config: BodyConfig,
+    ) -> Result<(), PhysicsError> {
         let config = validate_config(config)?;
         if self.body_record(handle)?.geometry.is_mesh() != solid.is_mesh() {
-            return Err(PhysicsError::InvalidInput("a body's shape is swapped only for one of the same form"));
+            return Err(PhysicsError::InvalidInput(
+                "a body's shape is swapped only for one of the same form",
+            ));
         }
         let native = self.native_body(handle)?;
         let old = {
@@ -988,9 +1027,18 @@ impl PhysicsWorld {
                 },
                 CookedForm::Mesh { mesh, .. } => {
                     if config.kind != BodyKind::Fixed {
-                        return Err(PhysicsError::InvalidInput("triangle meshes only support fixed bodies"));
+                        return Err(PhysicsError::InvalidInput(
+                            "triangle meshes only support fixed bodies",
+                        ));
                     }
-                    unsafe { ffi::manifold_box3d_body_replace_cooked_mesh(native, *mesh, config.friction, config.restitution) }
+                    unsafe {
+                        ffi::manifold_box3d_body_replace_cooked_mesh(
+                            native,
+                            *mesh,
+                            config.friction,
+                            config.restitution,
+                        )
+                    }
                 }
             };
             if result != 0 {
@@ -1207,7 +1255,11 @@ impl PhysicsWorld {
     /// (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D17). Box3D clears forces after
     /// every step, so a tick split into several steps queues before each and
     /// still delivers J and L in all. Validated as [`Self::apply_impulses`].
-    pub fn queue_reaction_over_step(&mut self, reactions: &[BodyImpulse], dt: Seconds) -> Result<(), PhysicsError> {
+    pub fn queue_reaction_over_step(
+        &mut self,
+        reactions: &[BodyImpulse],
+        dt: Seconds,
+    ) -> Result<(), PhysicsError> {
         let dt_f32 = dt.0 as f32;
         if !dt.0.is_finite() || dt.0 <= 0.0 || !dt_f32.is_finite() || dt_f32 <= 0.0 {
             return Err(PhysicsError::InvalidInput("dt must be finite and positive"));
@@ -1220,7 +1272,11 @@ impl PhysicsWorld {
     /// [`MAX_SUPPORT_POINTS`]. A full `out` still holds a point of every
     /// support: the bridge takes every contact's first touching point before
     /// any second.
-    pub fn support_points(&self, body: BodyHandle, out: &mut [SupportPoint]) -> Result<SupportCount, PhysicsError> {
+    pub fn support_points(
+        &self,
+        body: BodyHandle,
+        out: &mut [SupportPoint],
+    ) -> Result<SupportCount, PhysicsError> {
         let native = self.native_body(body)?;
         let capacity = out.len().min(MAX_SUPPORT_POINTS);
         let mut raw = [[0.0f32; 20]; MAX_SUPPORT_POINTS];
@@ -1253,12 +1309,20 @@ impl PhysicsWorld {
                 patch_velocity: [raw[16], raw[17], raw[18]],
             };
         }
-        Ok(SupportCount { kept: kept as usize, found: found as usize, unread: unread as usize })
+        Ok(SupportCount {
+            kept: kept as usize,
+            found: found as usize,
+            unread: unread as usize,
+        })
     }
 
     /// Impulses applied at once, or spread as force over a step of `over`
     /// seconds.
-    fn deliver_impulses(&mut self, impulses: &[BodyImpulse], over: Option<f32>) -> Result<(), PhysicsError> {
+    fn deliver_impulses(
+        &mut self,
+        impulses: &[BodyImpulse],
+        over: Option<f32>,
+    ) -> Result<(), PhysicsError> {
         self.field_seen.fill(false);
         self.impulse_scratch.clear();
         let result = (|| {
@@ -1328,11 +1392,18 @@ impl PhysicsWorld {
                 // L/dt, checked here so no body is touched when one overflows.
                 let (linear, angular) = match over {
                     None => (impulse.linear, impulse.angular),
-                    Some(dt) => (impulse.linear.map(|j| j / dt), impulse.angular.map(|l| l / dt)),
+                    Some(dt) => (
+                        impulse.linear.map(|j| j / dt),
+                        impulse.angular.map(|l| l / dt),
+                    ),
                 };
                 validate_vec3(linear, "reaction force")?;
                 validate_vec3(angular, "reaction torque")?;
-                self.impulse_scratch.push(ImpulseApplication { native, linear, angular });
+                self.impulse_scratch.push(ImpulseApplication {
+                    native,
+                    linear,
+                    angular,
+                });
             }
 
             for application in &self.impulse_scratch {
@@ -1401,9 +1472,8 @@ impl PhysicsWorld {
         let native = self.native_body(handle)?;
         let mut center = [0.0; 3];
         let _lock = native_lock();
-        let result = unsafe {
-            ffi::manifold_box3d_body_local_center_of_mass(native, center.as_mut_ptr())
-        };
+        let result =
+            unsafe { ffi::manifold_box3d_body_local_center_of_mass(native, center.as_mut_ptr()) };
         if result == 0 {
             Ok(center)
         } else {
@@ -1616,7 +1686,10 @@ mod tests {
         let theta = tan.atan();
         let g = 9.81;
         let mut world = PhysicsWorld::new([g * theta.sin(), -g * theta.cos(), 0.0]).unwrap();
-        let slab: Vec<[f32; 3]> = cube(0.5).iter().map(|p| [p[0] * 20.0, p[1], p[2] * 4.0]).collect();
+        let slab: Vec<[f32; 3]> = cube(0.5)
+            .iter()
+            .map(|p| [p[0] * 20.0, p[1], p[2] * 4.0])
+            .collect();
         world
             .add_hull(
                 &slab,
@@ -1632,7 +1705,11 @@ mod tests {
         let cube = world
             .add_hull(
                 &cube(0.5),
-                BodyConfig { position: [0.0, 0.5, 0.0], friction: 0.2, ..BodyConfig::default() },
+                BodyConfig {
+                    position: [0.0, 0.5, 0.0],
+                    friction: 0.2,
+                    ..BodyConfig::default()
+                },
             )
             .unwrap();
         for _ in 0..120 {
@@ -1645,15 +1722,27 @@ mod tests {
     /// ticks on `workers` threads: every pose, bit for bit.
     fn collapse_on(workers: u32) -> Vec<[u32; 7]> {
         let mut world = PhysicsWorld::with_workers([0.0, -9.81, 0.0], workers).unwrap();
-        let floor: Vec<[f32; 3]> = cube(0.5).iter().map(|p| [p[0] * 60.0, p[1], p[2] * 60.0]).collect();
-        let floor_config = BodyConfig { kind: BodyKind::Fixed, position: [0.0, -0.5, 0.0], wall: true, ..BodyConfig::default() };
+        let floor: Vec<[f32; 3]> = cube(0.5)
+            .iter()
+            .map(|p| [p[0] * 60.0, p[1], p[2] * 60.0])
+            .collect();
+        let floor_config = BodyConfig {
+            kind: BodyKind::Fixed,
+            position: [0.0, -0.5, 0.0],
+            wall: true,
+            ..BodyConfig::default()
+        };
         world.add_hull(&floor, floor_config).unwrap();
         let (sin, cos) = 0.3f32.sin_cos();
         let bodies: Vec<BodyHandle> = (0..600)
             .map(|index| {
                 let (x, z, y) = (index % 10, (index / 10) % 10, index / 100);
                 let config = BodyConfig {
-                    position: [x as f32 * 0.9 - 4.0, 0.6 + y as f32 * 1.05, z as f32 * 0.9 - 4.0 + 0.1 * y as f32],
+                    position: [
+                        x as f32 * 0.9 - 4.0,
+                        0.6 + y as f32 * 1.05,
+                        z as f32 * 0.9 - 4.0 + 0.1 * y as f32,
+                    ],
                     rotation: [0.0, sin, 0.0, cos],
                     friction: 0.2 + 0.1 * (index % 5) as f32,
                     restitution: 0.1,
@@ -1680,10 +1769,15 @@ mod tests {
     fn a_world_steps_the_same_on_one_thread_and_on_eight() {
         let one = collapse_on(1);
         assert!(
-            one[500..].iter().all(|pose| f32::from_bits(pose[1]) < 0.6 + 5.0 * 1.05 - 0.5),
+            one[500..]
+                .iter()
+                .all(|pose| f32::from_bits(pose[1]) < 0.6 + 5.0 * 1.05 - 0.5),
             "the top layer settles onto the ones below, so contacts were solved"
         );
-        assert!(one == collapse_on(8), "600 ticks on eight threads give the same poses as on one");
+        assert!(
+            one == collapse_on(8),
+            "600 ticks on eight threads give the same poses as on one"
+        );
     }
 
     /// A wall-tagged shape gives the touching body its own friction; two
@@ -1693,9 +1787,18 @@ mod tests {
         let wall_steep = slide_on_slab(true, 0.26);
         let plain_steep = slide_on_slab(false, 0.26);
         let wall_shallow = slide_on_slab(true, 0.15);
-        assert!(wall_steep > 0.5, "wall at tan 0.26 should slide past μ = 0.2: {wall_steep}");
-        assert!(plain_steep.abs() < 0.01, "plain pair at tan 0.26 should stick under √0.1: {plain_steep}");
-        assert!(wall_shallow.abs() < 0.01, "wall at tan 0.15 should stick under μ = 0.2: {wall_shallow}");
+        assert!(
+            wall_steep > 0.5,
+            "wall at tan 0.26 should slide past μ = 0.2: {wall_steep}"
+        );
+        assert!(
+            plain_steep.abs() < 0.01,
+            "plain pair at tan 0.26 should stick under √0.1: {plain_steep}"
+        );
+        assert!(
+            wall_shallow.abs() < 0.01,
+            "wall at tan 0.15 should stick under μ = 0.2: {wall_shallow}"
+        );
     }
 
     /// Retagging a slab under a resting cube takes effect on the live
@@ -1704,7 +1807,10 @@ mod tests {
     fn retagging_a_live_contact_changes_its_friction() {
         let theta = 0.26f32.atan();
         let mut world = PhysicsWorld::new([9.81 * theta.sin(), -9.81 * theta.cos(), 0.0]).unwrap();
-        let slab: Vec<[f32; 3]> = cube(0.5).iter().map(|p| [p[0] * 40.0, p[1], p[2] * 4.0]).collect();
+        let slab: Vec<[f32; 3]> = cube(0.5)
+            .iter()
+            .map(|p| [p[0] * 40.0, p[1], p[2] * 4.0])
+            .collect();
         let slab_config = |wall| BodyConfig {
             kind: BodyKind::Fixed,
             position: [0.0, -0.5, 0.0],
@@ -1714,7 +1820,14 @@ mod tests {
         };
         let slab_handle = world.add_hull(&slab, slab_config(false)).unwrap();
         let cube = world
-            .add_hull(&cube(0.5), BodyConfig { position: [0.0, 0.5, 0.0], friction: 0.2, ..BodyConfig::default() })
+            .add_hull(
+                &cube(0.5),
+                BodyConfig {
+                    position: [0.0, 0.5, 0.0],
+                    friction: 0.2,
+                    ..BodyConfig::default()
+                },
+            )
             .unwrap();
         let run = |world: &mut PhysicsWorld, ticks| {
             let start = world.pose(cube).unwrap().position[0];
@@ -1725,14 +1838,27 @@ mod tests {
         };
         run(&mut world, 30);
         let held = run(&mut world, 60);
-        assert!(held.abs() < 0.01, "untagged pair should stick under √0.1: {held}");
-        world.update_body(slab_handle, slab_config(true), false).unwrap();
+        assert!(
+            held.abs() < 0.01,
+            "untagged pair should stick under √0.1: {held}"
+        );
+        world
+            .update_body(slab_handle, slab_config(true), false)
+            .unwrap();
         let slid = run(&mut world, 60);
-        assert!(slid > 0.2, "tagging the live slab should let the cube slide at μ = 0.2: {slid}");
-        world.update_body(slab_handle, slab_config(false), false).unwrap();
+        assert!(
+            slid > 0.2,
+            "tagging the live slab should let the cube slide at μ = 0.2: {slid}"
+        );
+        world
+            .update_body(slab_handle, slab_config(false), false)
+            .unwrap();
         run(&mut world, 120);
         let stopped = run(&mut world, 60);
-        assert!(stopped.abs() < 0.01, "untagging the live slab should stop the cube again: {stopped}");
+        assert!(
+            stopped.abs() < 0.01,
+            "untagging the live slab should stop the cube again: {stopped}"
+        );
     }
 
     /// Retagging drops and rebuilds a body's contacts; a moving body keeps
@@ -1741,24 +1867,41 @@ mod tests {
     fn retagging_keeps_a_moving_bodys_velocity() {
         let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
         let dynamic = world.add_hull(&cube(0.5), BodyConfig::default()).unwrap();
-        world.set_velocity(dynamic, [1.0, 2.0, 3.0], [0.5, -0.25, 0.75]).unwrap();
+        world
+            .set_velocity(dynamic, [1.0, 2.0, 3.0], [0.5, -0.25, 0.75])
+            .unwrap();
         let animated_config = |position, wall| BodyConfig {
             kind: BodyKind::Animated,
             position,
             wall,
             ..BodyConfig::default()
         };
-        let animated = world.add_hull(&cube(0.5), animated_config([5.0, 0.0, 0.0], false)).unwrap();
+        let animated = world
+            .add_hull(&cube(0.5), animated_config([5.0, 0.0, 0.0], false))
+            .unwrap();
         world
-            .set_animated_target(animated, animated_config([6.0, 0.0, 0.0], false), Seconds(1.0))
+            .set_animated_target(
+                animated,
+                animated_config([6.0, 0.0, 0.0], false),
+                Seconds(1.0),
+            )
             .unwrap();
         for (handle, config) in [
-            (dynamic, BodyConfig { wall: true, ..BodyConfig::default() }),
+            (
+                dynamic,
+                BodyConfig {
+                    wall: true,
+                    ..BodyConfig::default()
+                },
+            ),
             (animated, animated_config([5.0, 0.0, 0.0], true)),
         ] {
             let linear = world.linear_velocity(handle).unwrap();
             let angular = world.angular_velocity(handle).unwrap();
-            assert!(linear.iter().any(|v| v.abs() > 0.1), "the body should be moving: {linear:?}");
+            assert!(
+                linear.iter().any(|v| v.abs() > 0.1),
+                "the body should be moving: {linear:?}"
+            );
             world.update_body(handle, config, false).unwrap();
             assert_eq!(world.linear_velocity(handle).unwrap(), linear);
             assert_eq!(world.angular_velocity(handle).unwrap(), angular);
@@ -1868,9 +2011,23 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!(world.add_hulls(&[vec![[0.0; 3]; 3]], BodyConfig::default()).is_err());
-        let past_the_stack = BodyConfig { kind: BodyKind::Fixed, mass: 0.0, position: [50.0, 0.0, 0.0], ..BodyConfig::default() };
-        assert!(world.add_hulls(&vec![cube(0.1); 65], past_the_stack).is_ok(), "a body takes any number of hulls");
+        assert!(
+            world
+                .add_hulls(&[vec![[0.0; 3]; 3]], BodyConfig::default())
+                .is_err()
+        );
+        let past_the_stack = BodyConfig {
+            kind: BodyKind::Fixed,
+            mass: 0.0,
+            position: [50.0, 0.0, 0.0],
+            ..BodyConfig::default()
+        };
+        assert!(
+            world
+                .add_hulls(&vec![cube(0.1); 65], past_the_stack)
+                .is_ok(),
+            "a body takes any number of hulls"
+        );
 
         let left = cube(0.5)
             .into_iter()
@@ -1893,7 +2050,10 @@ mod tests {
             world.step(Seconds(1.0 / 60.0), 4).unwrap();
         }
         let pose = world.pose(body).unwrap();
-        assert!((pose.position[1] - 1.0).abs() < 0.08, "body settled at {pose:?}");
+        assert!(
+            (pose.position[1] - 1.0).abs() < 0.08,
+            "body settled at {pose:?}"
+        );
     }
 
     #[test]
@@ -2658,7 +2818,8 @@ mod tests {
         for component in 0..3 {
             let light_displacement = light_pose.position[component] - [-2.0, 10.0, 0.0][component];
             let heavy_displacement = heavy_pose.position[component] - [2.0, 10.0, 0.0][component];
-            let gravity_displacement = gravity_pose.position[component] - [-2.0, 10.0, 0.0][component];
+            let gravity_displacement =
+                gravity_pose.position[component] - [-2.0, 10.0, 0.0][component];
             assert!((light_displacement - heavy_displacement).abs() < 1.0e-4);
             assert!((light_displacement - gravity_displacement).abs() < 1.0e-4);
             assert!((light_velocity[component] - heavy_velocity[component]).abs() < 1.0e-4);
@@ -2738,7 +2899,12 @@ mod tests {
             .unwrap();
         world.set_enabled(disabled, false).unwrap();
         let bodies = [fixed, animated, disabled];
-        let before = bodies.map(|body| (world.pose(body).unwrap(), world.linear_velocity(body).unwrap()));
+        let before = bodies.map(|body| {
+            (
+                world.pose(body).unwrap(),
+                world.linear_velocity(body).unwrap(),
+            )
+        });
         let field = UniformField::new([10.0, -4.0, 2.0]).unwrap();
         let input = FieldInput {
             field: &field,
@@ -2795,52 +2961,64 @@ mod tests {
             delta_velocity: 0.0,
         };
         let before = world.linear_velocity(first).unwrap();
-        assert!(world
-            .apply_fields(
-                &[first, second],
-                &[FieldInput {
-                    field: &NonFiniteOnPositiveX,
-                    ..valid_input
-                }],
-                Seconds(1.0 / 60.0),
-            )
-            .is_err());
+        assert!(
+            world
+                .apply_fields(
+                    &[first, second],
+                    &[FieldInput {
+                        field: &NonFiniteOnPositiveX,
+                        ..valid_input
+                    }],
+                    Seconds(1.0 / 60.0),
+                )
+                .is_err()
+        );
         assert_eq!(world.linear_velocity(first).unwrap(), before);
 
-        assert!(world
-            .apply_fields(
-                &[first, second],
-                &[FieldInput {
-                    acceleration: f32::NAN,
-                    ..valid_input
-                }],
-                Seconds(1.0 / 60.0),
-            )
-            .is_err());
+        assert!(
+            world
+                .apply_fields(
+                    &[first, second],
+                    &[FieldInput {
+                        acceleration: f32::NAN,
+                        ..valid_input
+                    }],
+                    Seconds(1.0 / 60.0),
+                )
+                .is_err()
+        );
         assert_eq!(world.linear_velocity(first).unwrap(), before);
 
-        assert!(world
-            .apply_fields(
-                &[first, second],
-                &[FieldInput {
-                    delta_velocity: f32::INFINITY,
-                    ..valid_input
-                }],
-                Seconds(1.0 / 60.0),
-            )
-            .is_err());
+        assert!(
+            world
+                .apply_fields(
+                    &[first, second],
+                    &[FieldInput {
+                        delta_velocity: f32::INFINITY,
+                        ..valid_input
+                    }],
+                    Seconds(1.0 / 60.0),
+                )
+                .is_err()
+        );
         assert_eq!(world.linear_velocity(first).unwrap(), before);
 
-        assert!(world
-            .apply_fields(&[first, first], &[valid_input], Seconds(1.0 / 60.0))
-            .is_err());
+        assert!(
+            world
+                .apply_fields(&[first, first], &[valid_input], Seconds(1.0 / 60.0))
+                .is_err()
+        );
         assert_eq!(world.linear_velocity(first).unwrap(), before);
 
         let mut foreign_world = PhysicsWorld::new([0.0; 3]).unwrap();
-        let foreign = foreign_world.add_hull(&cube(0.5), BodyConfig::default()).unwrap();
-        assert!(world
-            .apply_fields(&[first, foreign], &[valid_input], Seconds(1.0 / 60.0))
-            .is_err());
+        let foreign = foreign_world
+            .add_hull(&cube(0.5), BodyConfig::default())
+            .unwrap();
+        assert!(
+            world
+                .apply_fields(&[first, foreign], &[valid_input], Seconds(1.0 / 60.0))
+                .is_err()
+        );
         assert_eq!(world.linear_velocity(first).unwrap(), before);
     }
 
@@ -2873,8 +3051,14 @@ mod tests {
         assert_eq!(world.field_scratch.capacity(), prepared_capacity);
         assert_eq!(world.field_seen.capacity(), seen_capacity);
         // A rejected prefix must not contaminate the next recipient set.
-        assert!(world.apply_fields(&[bodies[0], bodies[0]], &[], Seconds(1.0 / 60.0)).is_err());
-        world.apply_fields(&bodies, &[], Seconds(1.0 / 60.0)).unwrap();
+        assert!(
+            world
+                .apply_fields(&[bodies[0], bodies[0]], &[], Seconds(1.0 / 60.0))
+                .is_err()
+        );
+        world
+            .apply_fields(&bodies, &[], Seconds(1.0 / 60.0))
+            .unwrap();
         assert_eq!(world.field_seen.capacity(), seen_capacity);
     }
 
@@ -3009,15 +3193,17 @@ mod tests {
             acceleration: 1.0,
             delta_velocity: 0.0,
         }];
-        assert!(world
-            .apply_fields_by_target(
-                [
-                    (first, first_fields.as_slice()),
-                    (second, second_fields.as_slice()),
-                ],
-                Seconds(1.0 / 60.0),
-            )
-            .is_err());
+        assert!(
+            world
+                .apply_fields_by_target(
+                    [
+                        (first, first_fields.as_slice()),
+                        (second, second_fields.as_slice()),
+                    ],
+                    Seconds(1.0 / 60.0),
+                )
+                .is_err()
+        );
         world.step(Seconds(1.0 / 60.0), 4).unwrap();
         assert_eq!(world.linear_velocity(first).unwrap(), [0.0, 0.0, 0.0]);
     }
@@ -3041,23 +3227,29 @@ mod tests {
             acceleration: 0.0,
             delta_velocity: 1.0,
         }];
-        assert!(world
-            .apply_fields_by_target(
-                [(first, inputs.as_slice()), (first, inputs.as_slice())],
-                Seconds(1.0 / 60.0),
-            )
-            .is_err());
+        assert!(
+            world
+                .apply_fields_by_target(
+                    [(first, inputs.as_slice()), (first, inputs.as_slice())],
+                    Seconds(1.0 / 60.0),
+                )
+                .is_err()
+        );
         world.step(Seconds(1.0 / 60.0), 4).unwrap();
         assert_eq!(world.linear_velocity(first).unwrap(), [0.0, 0.0, 0.0]);
 
         let mut foreign_world = PhysicsWorld::new([0.0; 3]).unwrap();
-        let foreign = foreign_world.add_hull(&cube(0.5), BodyConfig::default()).unwrap();
-        assert!(world
-            .apply_fields_by_target(
-                [(second, inputs.as_slice()), (foreign, inputs.as_slice())],
-                Seconds(1.0 / 60.0),
-            )
-            .is_err());
+        let foreign = foreign_world
+            .add_hull(&cube(0.5), BodyConfig::default())
+            .unwrap();
+        assert!(
+            world
+                .apply_fields_by_target(
+                    [(second, inputs.as_slice()), (foreign, inputs.as_slice())],
+                    Seconds(1.0 / 60.0),
+                )
+                .is_err()
+        );
         assert_eq!(world.linear_velocity(second).unwrap(), [0.0, 0.0, 0.0]);
     }
 
@@ -3089,13 +3281,19 @@ mod tests {
         assert_eq!(world.field_scratch.capacity(), prepared_capacity);
         assert_eq!(world.field_seen.capacity(), seen_capacity);
         let valid_field = UniformField::new([1.0, 0.0, 0.0]).unwrap();
-        assert!(world
-            .apply_fields(&[], &[FieldInput {
-                field: &valid_field,
-                acceleration: f32::NAN,
-                delta_velocity: 0.0,
-            }], Seconds(1.0 / 60.0))
-            .is_err());
+        assert!(
+            world
+                .apply_fields(
+                    &[],
+                    &[FieldInput {
+                        field: &valid_field,
+                        acceleration: f32::NAN,
+                        delta_velocity: 0.0,
+                    }],
+                    Seconds(1.0 / 60.0)
+                )
+                .is_err()
+        );
     }
 
     #[test]

@@ -12,13 +12,15 @@
 //! in-kernel; this atom is the same decision as a composable step for
 //! chains that have no resolve stage.
 
-use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
+use std::borrow::Cow;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::primitives::standalone_pipeline::{
+    dispatch_standalone_2d, standalone_pipeline,
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -86,7 +88,12 @@ impl Primitive for SetAlpha {
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
 
-        let uniforms = SetAlphaUniforms { alpha, _pad0: 0.0, _pad1: 0.0, _pad2: 0.0 };
+        let uniforms = SetAlphaUniforms {
+            alpha,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
+        };
 
         dispatch_standalone_2d(
             gpu,
@@ -99,4 +106,3 @@ impl Primitive for SetAlpha {
         );
     }
 }
-

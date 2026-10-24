@@ -25,8 +25,11 @@ const ROWS: u32 = 360;
 const DIALS: [&str; 4] = ["wind_speed", "wind_direction", "wave_size", "swell_speed"];
 
 /// The cascades, swell first: the role of each spectrum and of its field.
-const CASCADES: [(&str, &str); 3] =
-    [("swell_spectrum", "swell_field"), ("chop_spectrum", "chop_field"), ("ripple_spectrum", "ripple_field")];
+const CASCADES: [(&str, &str); 3] = [
+    ("swell_spectrum", "swell_field"),
+    ("chop_spectrum", "chop_field"),
+    ("ripple_spectrum", "ripple_field"),
+];
 
 /// Emit the chain for `item`; the returned `node.make_triangles` is the
 /// Ocean's vertices. `None` when the scene has no camera to cast the grid from.
@@ -48,8 +51,18 @@ pub(crate) fn emit_surface(b: &mut Builder<'_>, item: &Item) -> Option<u32> {
     b.wire(grid, "vertices", displace, "mesh");
     b.wire(camera, "out", displace, "camera");
     let triangles = b.add(owner, "triangles", "node.make_triangles");
-    b.set(triangles, "src_cols", SerializedParamValue::Int { value: COLUMNS as i32 });
-    b.set(triangles, "src_rows", SerializedParamValue::Int { value: ROWS as i32 });
+    b.set(
+        triangles,
+        "src_cols",
+        SerializedParamValue::Int {
+            value: COLUMNS as i32,
+        },
+    );
+    b.set(
+        triangles,
+        "src_rows",
+        SerializedParamValue::Int { value: ROWS as i32 },
+    );
     b.wire(displace, "out", triangles, "in");
     Some(triangles)
 }

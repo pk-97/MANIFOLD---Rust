@@ -7,10 +7,13 @@
 
 #![allow(clippy::too_many_arguments)]
 
-use manifold_node_engine::mesh::{MeshVertex, Vec4Vertex};
-use manifold_node_engine::freeze::codegen::{ENTRY, standalone_for_spec};
-use manifold_nodes_scene::node_graph::primitives::{mesh_spatial_mask::MeshSpatialMask, mesh_stagger_envelope::MeshStaggerEnvelope, morph_mesh::MorphMesh, remap_cut_weights::RemapCutWeights, remap_mesh_cut::RemapMeshCut};
 use manifold_gpu::GpuBinding;
+use manifold_node_engine::freeze::codegen::{ENTRY, standalone_for_spec};
+use manifold_node_engine::mesh::{MeshVertex, Vec4Vertex};
+use manifold_nodes_scene::node_graph::primitives::{
+    mesh_spatial_mask::MeshSpatialMask, mesh_stagger_envelope::MeshStaggerEnvelope,
+    morph_mesh::MorphMesh, remap_cut_weights::RemapCutWeights, remap_mesh_cut::RemapMeshCut,
+};
 use serde_json::Value;
 
 #[repr(C)]
@@ -543,24 +546,34 @@ fn assert_continuous_after_morph(
 const MASK_STOCKS: &[(&str, &str)] = &[
     (
         "OrderedRecon",
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/scene-modifier-presets/OrderedRecon.json")),
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/scene-modifier-presets/OrderedRecon.json"
+        )),
     ),
     (
         "SurfacePeel",
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/scene-modifier-presets/SurfacePeel.json")),
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/scene-modifier-presets/SurfacePeel.json"
+        )),
     ),
     (
         "VortexFragments",
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/scene-modifier-presets/VortexFragments.json")),
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/scene-modifier-presets/VortexFragments.json"
+        )),
     ),
 ];
 
-const RECON_STOCKS: &[(&str, &str)] = &[
-    (
-        "OrderedRecon",
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/scene-modifier-presets/OrderedRecon.json")),
-    ),
-];
+const RECON_STOCKS: &[(&str, &str)] = &[(
+    "OrderedRecon",
+    include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/scene-modifier-presets/OrderedRecon.json"
+    )),
+)];
 
 #[test]
 fn stock_fragment_masks_are_vertex_continuous_through_cut_remap_and_morph() {

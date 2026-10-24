@@ -24,16 +24,16 @@
 //! particle jitter, mask-driven turbulence.
 
 use manifold_gpu::{
-    GpuBinding, GpuSamplerDesc, GpuTexture, GpuTextureDesc, GpuTextureDimension,
-    GpuTextureFormat, GpuTextureUsage,
+    GpuBinding, GpuSamplerDesc, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
+    GpuTextureUsage,
 };
 
-use manifold_node_engine::particles::Particle;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::Particle;
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{active_elements, standalone_pipeline};
 use std::borrow::Cow;
-use manifold_node_engine::primitives::standalone_pipeline::{standalone_pipeline, active_elements};
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`strength`
 /// f32, `active_count` Int → i32), then the derived `frame_count` (u32), then the
@@ -139,7 +139,10 @@ impl Primitive for AntiClumpParticles {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let strength = ctx.scalar_or_param("strength", 0.0);
-        let active_count = ctx.scalar_or_param("active_count", 100_000.0).round().max(0.0) as u32;
+        let active_count = ctx
+            .scalar_or_param("active_count", 100_000.0)
+            .round()
+            .max(0.0) as u32;
 
         let Some(particles) = ctx.inputs.array("in") else {
             return;
@@ -228,4 +231,3 @@ impl Primitive for AntiClumpParticles {
         );
     }
 }
-

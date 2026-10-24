@@ -15,48 +15,52 @@ pub mod fft;
 pub mod metalfx;
 pub mod metalfx_m4; // RAYTRACING_DESIGN.md section 17.7 DN-K
 
+pub mod defer_drop;
 mod device;
 mod encoder;
+pub mod firmware_reports;
 mod format;
 mod frame_fence;
 pub mod gpu_fault;
-pub mod firmware_reports;
 mod msl_cache;
 mod profiling;
-mod residency;
 pub mod raytrace;
 mod replay;
-mod template;
+mod residency;
 mod retire;
 mod shader_compiler;
 mod span_timer;
 mod spirv_msl_fixup;
 pub mod surface;
+mod template;
 mod texture_pool;
-pub mod defer_drop;
 mod types;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod pipeline_cache_tests;
-#[cfg(test)]
-mod workgroup_zeroing_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod replay_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod template_tests;
+#[cfg(test)]
+mod workgroup_zeroing_tests;
 
 // Re-export all public types so external code paths remain identical.
 pub use device::GpuDevice;
-pub use replay::GpuReplayCache;
-pub use template::{GatedRecorder, GpuTemplateStats, GpuTemplateStore, TemplateRanges, TemplateTicket};
 pub use encoder::{AuxColorAttachment, DepthMsaaDraw, DepthMsaaPassDesc, DrawCount, GpuEncoder};
 pub use fft::{FftKind, GpuFft};
 pub use frame_fence::FrameFence;
-pub use profiling::{GpuFrameProfile, GpuProfiledSpan, GpuTimestampSampler, GpuWorkKind, ProfileGranularity};
+pub use profiling::{
+    GpuFrameProfile, GpuProfiledSpan, GpuTimestampSampler, GpuWorkKind, ProfileGranularity,
+};
+pub use replay::GpuReplayCache;
 pub use residency::{GpuResidencyManager, GpuResidencyStats};
 pub use retire::{FrameClock, RetireMark, RetireQueue, RetireSender};
 pub use span_timer::GpuSpanTimer;
 pub use surface::{GpuDrawable, GpuSurface, set_presented_observer};
+pub use template::{
+    GatedRecorder, GpuTemplateStats, GpuTemplateStore, TemplateRanges, TemplateTicket,
+};
 pub use texture_pool::TexturePool;
 pub use types::{
     GpuBuffer, GpuComputePipeline, GpuDepthStencilState, GpuEvent, GpuFenceWaiter,
@@ -112,12 +116,20 @@ impl SlotMap {
     /// Whether every binding is a buffer: Metal refuses indirect-command
     /// support for a function that binds a texture or sampler directly.
     pub(crate) fn buffers_only(&self) -> bool {
-        self.slots.iter().flatten().all(|slot| slot.kind == SlotKind::Buffer)
+        self.slots
+            .iter()
+            .flatten()
+            .all(|slot| slot.kind == SlotKind::Buffer)
     }
 
     /// The WGSL bindings the entry point references, the sizes buffer
     /// (bound by the encoder itself) left out.
     pub fn bindings(&self) -> impl Iterator<Item = u32> + '_ {
-        self.slots.iter().enumerate().filter(|(_, s)| s.is_some()).map(|(b, _)| b as u32).filter(|&b| b != SIZES_BUFFER_BINDING)
+        self.slots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.is_some())
+            .map(|(b, _)| b as u32)
+            .filter(|&b| b != SIZES_BUFFER_BINDING)
     }
 }

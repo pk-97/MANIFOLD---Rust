@@ -10,7 +10,10 @@ mod on {
     pub(crate) struct Window(audit::Fingerprint, u64);
 
     pub(crate) fn open(project: &Project) -> Window {
-        Window(audit::fingerprint(project), manifold_core::change::row_facts_key(project))
+        Window(
+            audit::fingerprint(project),
+            manifold_core::change::row_facts_key(project),
+        )
     }
 
     /// Row facts are measured, not declared: the outermost write's walk

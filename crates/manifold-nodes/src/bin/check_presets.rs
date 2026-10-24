@@ -28,7 +28,10 @@ use std::time::Instant;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_gpu::GpuDevice;
-use manifold_node_engine::{persistence::PrimitiveRegistry, validate::ValidateKind, validate::ValidationReport, validate::validate_def};
+use manifold_node_engine::{
+    persistence::PrimitiveRegistry, validate::ValidateKind, validate::ValidationReport,
+    validate::validate_def,
+};
 use manifold_nodes::scene_modifier_qualify::{mushroom_host, qualify_scene_modifier};
 
 const EFFECT_SUBDIR: &str = "assets/effect-presets";
@@ -75,12 +78,10 @@ fn main() {
         .iter()
         .any(|kind| matches!(kind, RequestedKind::SceneModifier))
     {
-        Some(
-            mushroom_host().unwrap_or_else(|error| {
-                eprintln!("error: {error}");
-                std::process::exit(2);
-            }),
-        )
+        Some(mushroom_host().unwrap_or_else(|error| {
+            eprintln!("error: {error}");
+            std::process::exit(2);
+        }))
     } else {
         None
     };
@@ -219,6 +220,11 @@ fn parse_and_validate_scene_modifier(
 ) -> Result<ValidationReport, String> {
     let bytes = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
     let recipe: EffectGraphDef = serde_json::from_str(&bytes).map_err(|e| format!("parse: {e}"))?;
-    qualify_scene_modifier(&recipe, &path.display().to_string(), registry, mushroom_host)?;
+    qualify_scene_modifier(
+        &recipe,
+        &path.display().to_string(),
+        registry,
+        mushroom_host,
+    )?;
     Ok(ValidationReport::default())
 }

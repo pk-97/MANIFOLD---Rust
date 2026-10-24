@@ -407,7 +407,8 @@ pub fn registered_assets_root() -> Option<PathBuf> {
             .into_iter()
             .map(|root| root.dir)
             .collect(),
-    ).map(PathBuf::from)
+    )
+    .map(PathBuf::from)
 }
 
 manifold_core::testkit_visible! {
@@ -517,8 +518,7 @@ fn load_catalog(dirs: &KindDirs) -> Arc<PresetCatalog> {
              build, ensure presets were copied into \
              `<App>.app/Contents/Resources/presets/{}/`. For a dev build, ensure \
              the registered assets root contains `{}` (see the resolved paths above).",
-            dirs.bundle_subdir,
-            dirs.dev_subdir,
+            dirs.bundle_subdir, dirs.dev_subdir,
         ),
     }
 }
@@ -834,9 +834,16 @@ fn apply_reload() -> u64 {
     // metadata. The metadata loaders read the current (just-swapped)
     // catalog snapshot.
     let effect_meta = manifold_core::preset_definition_registry::effect::load_preset_metadata();
-    let generator_meta = manifold_core::preset_definition_registry::generator::load_preset_metadata();
-    let scene_modifier_meta = manifold_core::preset_definition_registry::scene_modifier::load_preset_metadata();
-    publish_reloaded_metadata(effect_meta, generator_meta, scene_modifier_meta, bump_catalog_generation)
+    let generator_meta =
+        manifold_core::preset_definition_registry::generator::load_preset_metadata();
+    let scene_modifier_meta =
+        manifold_core::preset_definition_registry::scene_modifier::load_preset_metadata();
+    publish_reloaded_metadata(
+        effect_meta,
+        generator_meta,
+        scene_modifier_meta,
+        bump_catalog_generation,
+    )
 }
 
 fn publish_reloaded_metadata(
@@ -846,8 +853,12 @@ fn publish_reloaded_metadata(
     advance_generation: impl FnOnce() -> u64,
 ) -> u64 {
     publish_metadata_for_catalogs(
-        effect_meta, generator_meta, scene_modifier_meta,
-        &EFFECT_CATALOG.load(), &GENERATOR_CATALOG.load(), advance_generation,
+        effect_meta,
+        generator_meta,
+        scene_modifier_meta,
+        &EFFECT_CATALOG.load(),
+        &GENERATOR_CATALOG.load(),
+        advance_generation,
     )
 }
 
@@ -944,11 +955,23 @@ pub fn start_preset_watcher() {
 
 #[cfg(any(test, feature = "testkit"))]
 impl KindDirs {
-    pub fn for_test(label: &'static str, bundle_subdir: &'static str, dev_subdir: &'static str) -> Self {
-        Self { label, bundle_subdir, dev_subdir }
+    pub fn for_test(
+        label: &'static str,
+        bundle_subdir: &'static str,
+        dev_subdir: &'static str,
+    ) -> Self {
+        Self {
+            label,
+            bundle_subdir,
+            dev_subdir,
+        }
     }
-    pub fn bundle_subdir_for_test(&self) -> &'static str { self.bundle_subdir }
-    pub fn dev_subdir_for_test(&self) -> &'static str { self.dev_subdir }
+    pub fn bundle_subdir_for_test(&self) -> &'static str {
+        self.bundle_subdir
+    }
+    pub fn dev_subdir_for_test(&self) -> &'static str {
+        self.dev_subdir
+    }
 }
 
 #[cfg(test)]
@@ -963,10 +986,14 @@ mod tests {
             serde_json::from_value(serde_json::json!({
                 "id": id, "displayName": format!("publication-order:{id}"),
                 "category": "Test", "oscPrefix": id, "params": [], "bindings": []
-            })).unwrap()
+            }))
+            .unwrap()
         };
         let effects = vec![fixture("fixture_effect"), fixture("fixture_hidden_effect")];
-        let generators = vec![fixture("fixture_generator"), fixture("fixture_hidden_generator")];
+        let generators = vec![
+            fixture("fixture_generator"),
+            fixture("fixture_hidden_generator"),
+        ];
         let modifiers = vec![fixture("fixture_modifier")];
         let catalog = |id: &str| PresetCatalog {
             entries: Vec::new(),
@@ -974,24 +1001,39 @@ mod tests {
         };
         let effect_catalog = catalog("fixture_effect");
         let generator_catalog = catalog("fixture_generator");
-        let ids: Vec<_> = effects.iter().chain(&generators).chain(&modifiers)
-            .map(|metadata| (metadata.id.clone(), metadata.display_name.clone())).collect();
+        let ids: Vec<_> = effects
+            .iter()
+            .chain(&generators)
+            .chain(&modifiers)
+            .map(|metadata| (metadata.id.clone(), metadata.display_name.clone()))
+            .collect();
         let visible = [ids[0].clone(), ids[2].clone()];
         let before = catalog_generation();
-        let after = publish_metadata_for_catalogs(effects, generators, modifiers, &effect_catalog, &generator_catalog, || {
-            assert_eq!(catalog_generation(), before);
-            for (id, name) in &ids {
-                assert_eq!(&definitions::get(id).display_name, name);
-            }
-            for (id, name) in &visible {
-                assert_eq!(manifold_core::preset_type_registry::display_name(id), name);
-            }
-            let browser = manifold_core::preset_type_registry::all();
-            for id in ["fixture_hidden_effect", "fixture_hidden_generator", "fixture_modifier"] {
-                assert!(!browser.iter().any(|entry| entry.id.as_str() == id));
-            }
-            bump_catalog_generation()
-        });
+        let after = publish_metadata_for_catalogs(
+            effects,
+            generators,
+            modifiers,
+            &effect_catalog,
+            &generator_catalog,
+            || {
+                assert_eq!(catalog_generation(), before);
+                for (id, name) in &ids {
+                    assert_eq!(&definitions::get(id).display_name, name);
+                }
+                for (id, name) in &visible {
+                    assert_eq!(manifold_core::preset_type_registry::display_name(id), name);
+                }
+                let browser = manifold_core::preset_type_registry::all();
+                for id in [
+                    "fixture_hidden_effect",
+                    "fixture_hidden_generator",
+                    "fixture_modifier",
+                ] {
+                    assert!(!browser.iter().any(|entry| entry.id.as_str() == id));
+                }
+                bump_catalog_generation()
+            },
+        );
         assert_eq!(after, before + 1);
         assert_eq!(catalog_generation(), after);
     }
@@ -1199,10 +1241,6 @@ mod tests {
 
         let _ = fs::remove_dir_all(&stock);
     }
-
-
-
-
 
     #[test]
     fn mask_blob_invalid_shared_source_returns_catalog_error() {

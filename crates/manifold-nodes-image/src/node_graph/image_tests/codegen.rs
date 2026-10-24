@@ -1,14 +1,13 @@
 use manifold_node_engine::exec::effect_node::NodeInstanceId;
 
-use manifold_node_engine::freeze::codegen::generate_fused;
-use manifold_node_engine::freeze::codegen::{generate_standalone, StandaloneKernelSpec};
-use manifold_node_engine::freeze::codegen::{FusedVirtualChain, FusionRegion, InputSource, RegionNode, ENTRY};
+use manifold_gpu::{GpuBinding, GpuSamplerDesc, GpuTexture, GpuTextureFormat, GpuTextureUsage};
 use manifold_node_engine::freeze::TextureDiff;
-use manifold_node_engine::gpu::render_target::RenderTarget;
-use manifold_gpu::{
-    GpuBinding, GpuSamplerDesc, GpuTexture,
-    GpuTextureFormat, GpuTextureUsage,
+use manifold_node_engine::freeze::codegen::generate_fused;
+use manifold_node_engine::freeze::codegen::{
+    ENTRY, FusedVirtualChain, FusionRegion, InputSource, RegionNode,
 };
+use manifold_node_engine::freeze::codegen::{StandaloneKernelSpec, generate_standalone};
+use manifold_node_engine::gpu::render_target::RenderTarget;
 
 const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 
@@ -25,7 +24,10 @@ use manifold_node_engine::testkit::codegen_support::*;
 #[test]
 fn fused_texture_region_carries_and_dedups_wgsl_includes() {
     use manifold_node_engine::primitive::PrimitiveSpec;
-    use {crate::node_graph::primitives::coc_from_depth::CocFromDepth, manifold_node_engine::primitives::gain::Gain};
+    use {
+        crate::node_graph::primitives::coc_from_depth::CocFromDepth,
+        manifold_node_engine::primitives::gain::Gain,
+    };
     let id = NodeInstanceId;
     let region = FusionRegion {
         nodes: vec![
@@ -93,10 +95,6 @@ fn fused_texture_region_carries_and_dedups_wgsl_includes() {
     );
 }
 
-
-
-
-
 /// STENCIL tier — a virtual chain emits `n{i}_vsrc_<port>` (per-corner
 /// address wrap + chain bodies over textureLoad'ed externals + q16 tail) and
 /// `n{i}_fetch_<port>` (manual f32 bilinear over four corners); the chain
@@ -106,7 +104,9 @@ fn fused_texture_region_carries_and_dedups_wgsl_includes() {
 #[test]
 fn fused_virtual_chain_emits_fetch_and_skips_cs_main() {
     use manifold_node_engine::primitive::PrimitiveSpec;
-    use {manifold_node_engine::primitives::gain::Gain, crate::node_graph::primitives::GaussianBlur};
+    use {
+        crate::node_graph::primitives::GaussianBlur, manifold_node_engine::primitives::gain::Gain,
+    };
     let id = NodeInstanceId;
     let region = FusionRegion {
         nodes: vec![
@@ -120,7 +120,9 @@ fn fused_virtual_chain_emits_fetch_and_skips_cs_main() {
                 node_inputs: GaussianBlur::INPUTS,
                 node_outputs: GaussianBlur::OUTPUTS,
                 node_includes: &[],
-                derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
+                derived_uniforms: &[],
+                type_id: String::new(),
+                derived_camera_ext: None,
                 output_storage: "rgba16float",
                 stencil_fetch: true,
                 quantize_f16: false,
@@ -135,7 +137,9 @@ fn fused_virtual_chain_emits_fetch_and_skips_cs_main() {
                 node_inputs: Gain::INPUTS,
                 node_outputs: Gain::OUTPUTS,
                 node_includes: &[],
-                derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
+                derived_uniforms: &[],
+                type_id: String::new(),
+                derived_camera_ext: None,
                 output_storage: "rgba16float",
                 stencil_fetch: false,
                 quantize_f16: false,
@@ -152,8 +156,9 @@ fn fused_virtual_chain_emits_fetch_and_skips_cs_main() {
             members: vec![1],
             output: 1,
         }],
-        sampled_externals: Vec::new(), camera_externals: 0,
-    output_capacity: None,
+        sampled_externals: Vec::new(),
+        camera_externals: 0,
+        output_capacity: None,
     };
     let g = generate_fused(&region).expect("virtual-chain region fuses");
     assert!(
@@ -161,17 +166,36 @@ fn fused_virtual_chain_emits_fetch_and_skips_cs_main() {
         "fused stencil kernel parses:\n{}",
         g.wgsl
     );
-    assert!(g.wgsl.contains("fn n0_vsrc_in"), "per-corner chain evaluator emitted");
+    assert!(
+        g.wgsl.contains("fn n0_vsrc_in"),
+        "per-corner chain evaluator emitted"
+    );
     assert!(g.wgsl.contains("fn n0_fetch_in"), "bilinear fetch emitted");
     assert!(
-        g.wgsl.contains("let v1 = n1_body(textureSampleLevel(src_0, samp, vuv, 0.0)"),
+        g.wgsl
+            .contains("let v1 = n1_body(textureSampleLevel(src_0, samp, vuv, 0.0)"),
         "chain external sampled at the corner uv (resolution-robust, like the unfused atom)"
     );
-    assert!(g.wgsl.contains("return q16(v1)"), "chain output reproduces the f16 store");
-    assert!(!g.wgsl.contains("let r1 ="), "the chain member is not evaluated by cs_main");
-    assert!(g.wgsl.contains("params.n1_gain"), "the chain member's param stays a live uniform field");
-    assert!(g.wgsl.contains("textureStore(dst, coord, r0);"), "the blur register is the region output");
-    assert!(g.wgsl.contains("var samp"), "chain external reads bind the shared sampler");
+    assert!(
+        g.wgsl.contains("return q16(v1)"),
+        "chain output reproduces the f16 store"
+    );
+    assert!(
+        !g.wgsl.contains("let r1 ="),
+        "the chain member is not evaluated by cs_main"
+    );
+    assert!(
+        g.wgsl.contains("params.n1_gain"),
+        "the chain member's param stays a live uniform field"
+    );
+    assert!(
+        g.wgsl.contains("textureStore(dst, coord, r0);"),
+        "the blur register is the region output"
+    );
+    assert!(
+        g.wgsl.contains("var samp"),
+        "chain external reads bind the shared sampler"
+    );
 }
 
 /// Tier 3 — a gather input binds a sampler and is passed to the body as a
@@ -181,9 +205,9 @@ fn fused_virtual_chain_emits_fetch_and_skips_cs_main() {
 /// `let ext_0`, and threads sharpen's register into invert.
 #[test]
 fn fused_gather_binds_sampler_and_passes_texture() {
+    use crate::node_graph::primitives::{invert::Invert, sharpen::Sharpen};
     use manifold_node_engine::freeze::classify::InputAccess;
     use manifold_node_engine::primitive::PrimitiveSpec;
-    use crate::node_graph::primitives::{invert::Invert, sharpen::Sharpen};
     let id = NodeInstanceId;
     let region = FusionRegion {
         nodes: vec![
@@ -197,7 +221,9 @@ fn fused_gather_binds_sampler_and_passes_texture() {
                 node_inputs: &[],
                 node_outputs: &[],
                 node_includes: &[],
-                derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
+                derived_uniforms: &[],
+                type_id: String::new(),
+                derived_camera_ext: None,
                 output_storage: "rgba16float",
                 stencil_fetch: false,
                 quantize_f16: false,
@@ -212,7 +238,9 @@ fn fused_gather_binds_sampler_and_passes_texture() {
                 node_inputs: &[],
                 node_outputs: &[],
                 node_includes: &[],
-                derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
+                derived_uniforms: &[],
+                type_id: String::new(),
+                derived_camera_ext: None,
                 output_storage: "rgba16float",
                 stencil_fetch: false,
                 quantize_f16: false,
@@ -224,11 +252,15 @@ fn fused_gather_binds_sampler_and_passes_texture() {
         sampler_address_mode: "clamp",
         dispatch_count_field: None,
         virtual_chains: Vec::new(),
-        sampled_externals: Vec::new(), camera_externals: 0,
-    output_capacity: None,
+        sampled_externals: Vec::new(),
+        camera_externals: 0,
+        output_capacity: None,
     };
     let g = generate_fused(&region).expect("gather region fuses");
-    assert!(g.wgsl.contains("var samp: sampler"), "a sampler is bound for the gather");
+    assert!(
+        g.wgsl.contains("var samp: sampler"),
+        "a sampler is bound for the gather"
+    );
     assert!(
         g.wgsl.contains("n0_body(src_0, samp,"),
         "sharpen receives the texture + shared sampler and samples it itself"
@@ -237,7 +269,10 @@ fn fused_gather_binds_sampler_and_passes_texture() {
         !g.wgsl.contains("let ext_0 ="),
         "a gather-only external is never pre-read into a register"
     );
-    assert!(g.wgsl.contains("fn n1_body"), "invert namespaced + threads sharpen's register");
+    assert!(
+        g.wgsl.contains("fn n1_body"),
+        "invert namespaced + threads sharpen's register"
+    );
 }
 
 /// Fan-out — a region with two escaping members emits two `dst_<k>` storage
@@ -248,7 +283,11 @@ fn fused_gather_binds_sampler_and_passes_texture() {
 #[test]
 fn fused_fanout_emits_two_dst_bindings() {
     use manifold_node_engine::primitive::PrimitiveSpec;
-    use {crate::node_graph::primitives::contrast::Contrast, manifold_node_engine::primitives::gain::Gain, crate::node_graph::primitives::invert::Invert};
+    use {
+        crate::node_graph::primitives::contrast::Contrast,
+        crate::node_graph::primitives::invert::Invert,
+        manifold_node_engine::primitives::gain::Gain,
+    };
     let id = NodeInstanceId;
     let region = FusionRegion {
         nodes: vec![
@@ -262,7 +301,9 @@ fn fused_fanout_emits_two_dst_bindings() {
                 node_inputs: &[],
                 node_outputs: &[],
                 node_includes: &[],
-                derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
+                derived_uniforms: &[],
+                type_id: String::new(),
+                derived_camera_ext: None,
                 output_storage: "rgba16float",
                 stencil_fetch: false,
                 quantize_f16: false,
@@ -277,7 +318,9 @@ fn fused_fanout_emits_two_dst_bindings() {
                 node_inputs: &[],
                 node_outputs: &[],
                 node_includes: &[],
-                derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
+                derived_uniforms: &[],
+                type_id: String::new(),
+                derived_camera_ext: None,
                 output_storage: "rgba16float",
                 stencil_fetch: false,
                 quantize_f16: false,
@@ -292,7 +335,9 @@ fn fused_fanout_emits_two_dst_bindings() {
                 node_inputs: &[],
                 node_outputs: &[],
                 node_includes: &[],
-                derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
+                derived_uniforms: &[],
+                type_id: String::new(),
+                derived_camera_ext: None,
                 output_storage: "rgba16float",
                 stencil_fetch: false,
                 quantize_f16: false,
@@ -304,20 +349,30 @@ fn fused_fanout_emits_two_dst_bindings() {
         sampler_address_mode: "clamp",
         dispatch_count_field: None,
         virtual_chains: Vec::new(),
-        sampled_externals: Vec::new(), camera_externals: 0,
-    output_capacity: None,
+        sampled_externals: Vec::new(),
+        camera_externals: 0,
+        output_capacity: None,
     };
     let g = generate_fused(&region).expect("fan-out region fuses");
     assert!(g.wgsl.contains("var dst_0:"), "first output binding");
     assert!(g.wgsl.contains("var dst_1:"), "second output binding");
-    assert!(!g.wgsl.contains("var dst:"), "no single-output `dst` in a fan-out kernel");
+    assert!(
+        !g.wgsl.contains("var dst:"),
+        "no single-output `dst` in a fan-out kernel"
+    );
     assert!(
         g.wgsl.contains("textureDimensions(dst_0)"),
         "dims come from the first output (all outputs are coincident)"
     );
     // invert = output 0 (register r1), contrast = output 1 (register r2).
-    assert!(g.wgsl.contains("textureStore(dst_0, coord, r1)"), "invert → dst_0");
-    assert!(g.wgsl.contains("textureStore(dst_1, coord, r2)"), "contrast → dst_1");
+    assert!(
+        g.wgsl.contains("textureStore(dst_0, coord, r1)"),
+        "invert → dst_0"
+    );
+    assert!(
+        g.wgsl.contains("textureStore(dst_1, coord, r2)"),
+        "contrast → dst_1"
+    );
 }
 
 /// 1b safety gate: every remaining pointwise ColorGrade atom's GENERATED
@@ -331,13 +386,19 @@ fn generated_pointwise_atoms_match_originals() {
     let (w, h) = (128u32, 128u32);
     let input = gradient(&device, w, h);
     let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
-    let shaders_dir =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
+    let shaders_dir = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/node_graph/primitives/shaders"
+    );
 
     // (type_id, original shader file, representative non-identity params).
     let cases: &[(&str, &str, &[f32])] = &[
         ("node.saturation", "saturation.wgsl", &[1.4]),
-        ("node.hue_saturation", "hue_saturation.wgsl", &[30.0, 1.3, 0.9]),
+        (
+            "node.hue_saturation",
+            "hue_saturation.wgsl",
+            &[30.0, 1.3, 0.9],
+        ),
         ("node.contrast", "contrast.wgsl", &[1.5]),
         ("node.colorize", "colorize.wgsl", &[0.5, 200.0, 0.7, 0.6]),
         ("node.clamp", "clamp_texture.wgsl", &[0.1, 0.8]),
@@ -353,9 +414,17 @@ fn generated_pointwise_atoms_match_originals() {
         // Math/convert pointwise atoms (overnight vocabulary sweep).
         ("node.wrap", "fract_texture.wgsl", &[3.0]),
         ("node.power", "power_texture.wgsl", &[2.5]),
-        ("node.scale_offset_image", "scale_offset_texture.wgsl", &[1.5, -0.25]),
+        (
+            "node.scale_offset_image",
+            "scale_offset_texture.wgsl",
+            &[1.5, -0.25],
+        ),
         ("node.smoothstep", "smoothstep_texture.wgsl", &[0.2, 0.8]),
-        ("node.field_combine", "field_combine.wgsl", &[1.5, -0.5, 0.25]),
+        (
+            "node.field_combine",
+            "field_combine.wgsl",
+            &[1.5, -0.5, 0.25],
+        ),
     ];
     let differ = TextureDiff::new(&device);
     for (type_id, shader_file, params) in cases {
@@ -422,7 +491,10 @@ fn generated_vignette_matches_original() {
         includes: &[],
     })
     .expect("vignette generates");
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/vignette.wgsl"));
+    let original = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-node-engine/src/primitives/shaders/vignette.wgsl"
+    ));
     let differ = TextureDiff::new(&device);
 
     // (shape, size, softness, strength): Circle (aspect-sensitive) + Rectangle.
@@ -506,7 +578,10 @@ fn generated_dither_matches_original() {
         "both dither inputs must be textureLoad'd:\n{generated}"
     );
 
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/dither.wgsl"));
+    let original = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-node-engine/src/primitives/shaders/dither.wgsl"
+    ));
     let mut bytes = [0u8; 16];
     bytes[0..4].copy_from_slice(&0.5f32.to_le_bytes()); // amount
 
@@ -539,8 +614,10 @@ fn generated_coincident_atoms_match_originals() {
     let ga = gradient(&device, w, h);
     let gb = gradient_b(&device, w, h);
     let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
-    let shaders_dir =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
+    let shaders_dir = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/node_graph/primitives/shaders"
+    );
     let differ = TextureDiff::new(&device);
 
     // (type_id, hand shader, #texture inputs, f32 params in PARAMS order).
@@ -566,8 +643,9 @@ fn generated_coincident_atoms_match_originals() {
         .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
         let original = std::fs::read_to_string(format!("{shaders_dir}/{shader_file}"))
             .unwrap_or_else(|e| panic!("read {shader_file}: {e}"));
-        let texs: Vec<&GpuTexture> =
-            (0..*n_inputs).map(|i| if i % 2 == 0 { &ga } else { &gb }).collect();
+        let texs: Vec<&GpuTexture> = (0..*n_inputs)
+            .map(|i| if i % 2 == 0 { &ga } else { &gb })
+            .collect();
         let bytes = pack_f32(params);
         let from_original = dispatch_coincident_n(&device, &original, &texs, &bytes);
         let from_generated = dispatch_coincident_n(&device, &generated, &texs, &bytes);
@@ -596,8 +674,10 @@ fn generated_enum_pointwise_atoms_match_originals() {
     let (w, h) = (128u32, 128u32);
     let input = gradient(&device, w, h);
     let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
-    let shaders_dir =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
+    let shaders_dir = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/node_graph/primitives/shaders"
+    );
     let differ = TextureDiff::new(&device);
 
     // flash: amount=0.7 (f32), mode=2 Gain (u32), pad to 16.
@@ -641,9 +721,21 @@ fn generated_enum_pointwise_atoms_match_originals() {
     }
     let cases: &[(&str, &str, &[u8])] = &[
         ("node.flash", "flash.wgsl", flash_bytes.as_slice()),
-        ("node.reinhard_tone_map", "reinhard_tone_map.wgsl", reinhard_bytes.as_slice()),
-        ("node.reinhard_tone_map", "reinhard_tone_map.wgsl", reinhard_log_bytes.as_slice()),
-        ("node.chroma_key", "chroma_key.wgsl", chroma_bytes.as_slice()),
+        (
+            "node.reinhard_tone_map",
+            "reinhard_tone_map.wgsl",
+            reinhard_bytes.as_slice(),
+        ),
+        (
+            "node.reinhard_tone_map",
+            "reinhard_tone_map.wgsl",
+            reinhard_log_bytes.as_slice(),
+        ),
+        (
+            "node.chroma_key",
+            "chroma_key.wgsl",
+            chroma_bytes.as_slice(),
+        ),
     ];
     for (type_id, shader_file, bytes) in cases {
         let node = registry.construct(type_id).unwrap();
@@ -712,7 +804,10 @@ fn generated_paramless_atom_matches_original() {
         "paramless tex must start at binding 0:\n{generated}"
     );
 
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/abs_texture.wgsl"));
+    let original = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-node-engine/src/primitives/shaders/abs_texture.wgsl"
+    ));
     let from_original = dispatch_paramless_pointwise(&device, original, &input);
     let from_generated = dispatch_paramless_pointwise(&device, &generated, &input);
     let differ = TextureDiff::new(&device);
@@ -779,7 +874,10 @@ fn generated_remap_matches_original() {
         "a Gather input must not be pre-sampled into a register:\n{generated}"
     );
 
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/remap.wgsl"));
+    let original = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-node-engine/src/primitives/shaders/remap.wgsl"
+    ));
     // wrap=2 (Mirror), mode=0 (Absolute).
     let mut bytes = [0u8; 16];
     bytes[0..4].copy_from_slice(&2u32.to_le_bytes());
@@ -793,11 +891,26 @@ fn generated_remap_matches_original() {
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: &bytes },
-                GpuBinding::Texture { binding: 1, texture: &source },
-                GpuBinding::Sampler { binding: 2, sampler: &sampler },
-                GpuBinding::Texture { binding: 3, texture: &field },
-                GpuBinding::Texture { binding: 4, texture: &hand_out.texture },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: &bytes,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &source,
+                },
+                GpuBinding::Sampler {
+                    binding: 2,
+                    sampler: &sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: &field,
+                },
+                GpuBinding::Texture {
+                    binding: 4,
+                    texture: &hand_out.texture,
+                },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "remap-hand",
@@ -812,11 +925,26 @@ fn generated_remap_matches_original() {
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: &bytes },
-                GpuBinding::Texture { binding: 1, texture: &source },
-                GpuBinding::Texture { binding: 2, texture: &field },
-                GpuBinding::Sampler { binding: 3, sampler: &sampler },
-                GpuBinding::Texture { binding: 4, texture: &gen_out.texture },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: &bytes,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &source,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: &field,
+                },
+                GpuBinding::Sampler {
+                    binding: 3,
+                    sampler: &sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 4,
+                    texture: &gen_out.texture,
+                },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "remap-gen",
@@ -845,8 +973,10 @@ fn generated_gather_atoms_match_originals() {
     let ga = gradient(&device, w, h);
     let gb = gradient_b(&device, w, h);
     let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
-    let shaders_dir =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
+    let shaders_dir = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/node_graph/primitives/shaders"
+    );
     let differ = TextureDiff::new(&device);
 
     // color_lut: `in` coincident (a = the centre sample) + `lut` gathered
@@ -854,10 +984,18 @@ fn generated_gather_atoms_match_originals() {
     // crossfade; the LUT texture is just gradient_b sampled at y=0.5.
     let cases: &[(&str, &str, &[f32])] = &[
         ("node.rgb_split", "chromatic_displace.wgsl", &[2.0]),
-        ("node.uv_displace_by_flow", "uv_displace_by_flow.wgsl", &[0.05, 0.5]),
+        (
+            "node.uv_displace_by_flow",
+            "uv_displace_by_flow.wgsl",
+            &[0.05, 0.5],
+        ),
         ("node.color_lut", "lut1d.wgsl", &[0.5, 1.5]),
         // slope_displace: base (a) + image (b) both gathered; strength/step/weight.
-        ("node.slope_displace", "slope_displace.wgsl", &[5.0, 5.0, 0.001]),
+        (
+            "node.slope_displace",
+            "slope_displace.wgsl",
+            &[5.0, 5.0, 0.001],
+        ),
         // texture_advect: in (a) gathered at adv_uv + velocity (b) coincident;
         // dt + boundary(0=Repeat, body ignores it — the test sampler is Clamp,
         // but adv samples land in-bounds for this velocity so wrap is moot).
@@ -912,8 +1050,10 @@ fn generated_single_input_gather_atoms_match_originals() {
     let input = gradient(&device, w, h);
     let texel = 1.0f32 / 128.0;
     let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
-    let shaders_dir =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
+    let shaders_dir = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/node_graph/primitives/shaders"
+    );
     let differ = TextureDiff::new(&device);
 
     // sharpen PARAMS: [amount]. edge_detect PARAMS: [amount, threshold]; its
@@ -946,11 +1086,27 @@ fn generated_single_input_gather_atoms_match_originals() {
     let heightmap_bytes = pack_f32(&[0.5, 1.0, 0.0]);
     let cases: &[(&str, &str, &[u8])] = &[
         ("node.sharpen", "sharpen.wgsl", sharpen_bytes.as_slice()),
-        ("node.edge_detect", "edge_detect.wgsl", edge_bytes.as_slice()),
-        ("node.edge_slope", "gradient_central_diff.wgsl", grad_bytes.as_slice()),
-        ("node.custom_convolution", "convolution_2d_9tap.wgsl", conv_bytes.as_slice()),
+        (
+            "node.edge_detect",
+            "edge_detect.wgsl",
+            edge_bytes.as_slice(),
+        ),
+        (
+            "node.edge_slope",
+            "gradient_central_diff.wgsl",
+            grad_bytes.as_slice(),
+        ),
+        (
+            "node.custom_convolution",
+            "convolution_2d_9tap.wgsl",
+            conv_bytes.as_slice(),
+        ),
         ("node.flip", "mirror_axis.wgsl", mirror_bytes.as_slice()),
-        ("node.surface_bumps", "heightmap_to_normal.wgsl", heightmap_bytes.as_slice()),
+        (
+            "node.surface_bumps",
+            "heightmap_to_normal.wgsl",
+            heightmap_bytes.as_slice(),
+        ),
     ];
     for (type_id, shader_file, bytes) in cases {
         let node = registry.construct(type_id).unwrap();
@@ -1026,7 +1182,10 @@ fn generated_separable_gaussian_matches_original() {
         !generated.contains("let c_in"),
         "a Gather input must not be pre-sampled:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/separable_gaussian.wgsl"));
+    let original = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-node-engine/src/primitives/shaders/separable_gaussian.wgsl"
+    ));
 
     let pack_hand = |ks: u32, axis: u32, step: f32, rmode: u32, radius: f32| -> Vec<u8> {
         let mut b = vec![0u8; 32];
@@ -1107,22 +1266,26 @@ fn generated_basic_shape_matches_original() {
         includes: &[],
     })
     .expect("basic_shape generates");
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/basic_shape.wgsl"));
+    let original = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-node-engine/src/primitives/shaders/basic_shape.wgsl"
+    ));
 
     // Hand layout: {aspect, line, uv_scale=1/scale, shape_idx(f32), is_wireframe
     // (thresholded 0/1), rotation, _pad, _pad}.
-    let pack_hand = |shape: u32, aspect: f32, scale: f32, line: f32, rot: f32, wf: f32| -> Vec<u8> {
-        let uv_scale = if scale > 0.0 { 1.0 / scale } else { 1.0 };
-        let wf_flag = if wf > 0.5 { 1.0f32 } else { 0.0 };
-        let mut b = vec![0u8; 32];
-        b[0..4].copy_from_slice(&aspect.to_le_bytes());
-        b[4..8].copy_from_slice(&line.to_le_bytes());
-        b[8..12].copy_from_slice(&uv_scale.to_le_bytes());
-        b[12..16].copy_from_slice(&(shape as f32).to_le_bytes());
-        b[16..20].copy_from_slice(&wf_flag.to_le_bytes());
-        b[20..24].copy_from_slice(&rot.to_le_bytes());
-        b
-    };
+    let pack_hand =
+        |shape: u32, aspect: f32, scale: f32, line: f32, rot: f32, wf: f32| -> Vec<u8> {
+            let uv_scale = if scale > 0.0 { 1.0 / scale } else { 1.0 };
+            let wf_flag = if wf > 0.5 { 1.0f32 } else { 0.0 };
+            let mut b = vec![0u8; 32];
+            b[0..4].copy_from_slice(&aspect.to_le_bytes());
+            b[4..8].copy_from_slice(&line.to_le_bytes());
+            b[8..12].copy_from_slice(&uv_scale.to_le_bytes());
+            b[12..16].copy_from_slice(&(shape as f32).to_le_bytes());
+            b[16..20].copy_from_slice(&wf_flag.to_le_bytes());
+            b[20..24].copy_from_slice(&rot.to_le_bytes());
+            b
+        };
     // Generated layout: {shape(u32), aspect, scale, line, rotation, is_wireframe
     // (raw), _pad, _pad}.
     let pack_gen = |shape: u32, aspect: f32, scale: f32, line: f32, rot: f32, wf: f32| -> Vec<u8> {
@@ -1138,9 +1301,9 @@ fn generated_basic_shape_matches_original() {
 
     // (shape, aspect, scale, line, rotation, is_wireframe).
     let sets: &[(u32, f32, f32, f32, f32, f32)] = &[
-        (0, 1.0, 1.0, 0.015, 0.0, 0.0),  // Square, solid
-        (1, 1.5, 0.8, 0.02, 0.5, 1.0),   // Diamond, wireframe, rotated, aspect
-        (2, 1.0, 1.2, 0.01, -0.3, 0.0),  // Octagon, solid, rotated, scaled
+        (0, 1.0, 1.0, 0.015, 0.0, 0.0), // Square, solid
+        (1, 1.5, 0.8, 0.02, 0.5, 1.0),  // Diamond, wireframe, rotated, aspect
+        (2, 1.0, 1.2, 0.01, -0.3, 0.0), // Octagon, solid, rotated, scaled
     ];
     for &(shape, aspect, scale, line, rot, wf) in sets {
         let hand_bytes = pack_hand(shape, aspect, scale, line, rot, wf);
@@ -1200,7 +1363,10 @@ fn generated_gradient_ramp_matches_original() {
         generated.contains("stops: array<vec4<f32>, 16>"),
         "table array missing:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/gradient_ramp.wgsl"));
+    let original = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-node-engine/src/primitives/shaders/gradient_ramp.wgsl"
+    ));
 
     let count: u32 = 3;
     let domain: f32 = 2.0;
@@ -1277,7 +1443,10 @@ fn generated_downsample_matches_original() {
         !generated.contains("let c_in"),
         "a Gather input must not be pre-sampled:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/downsample.wgsl"));
+    let original = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-node-engine/src/primitives/shaders/downsample.wgsl"
+    ));
 
     let dispatch = |wgsl: &str| -> RenderTarget {
         let pipeline = device.create_compute_pipeline(wgsl, ENTRY, "codegen-downsample");
@@ -1289,10 +1458,22 @@ fn generated_downsample_matches_original() {
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: &bytes },
-                GpuBinding::Texture { binding: 1, texture: &input },
-                GpuBinding::Sampler { binding: 2, sampler: &sampler },
-                GpuBinding::Texture { binding: 3, texture: &out.texture },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: &bytes,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &input,
+                },
+                GpuBinding::Sampler {
+                    binding: 2,
+                    sampler: &sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: &out.texture,
+                },
             ],
             [64u32.div_ceil(16), 64u32.div_ceil(16), 1],
             "codegen-downsample",
@@ -1351,8 +1532,10 @@ fn generated_gaussian_blur_variable_width_matches_original() {
         !generated.contains("let c_in") && !generated.contains("let c_width"),
         "both gather inputs must avoid pre-sampling:\n{generated}"
     );
-    let original =
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/gaussian_blur_variable_width.wgsl"));
+    let original = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-node-engine/src/primitives/shaders/gaussian_blur_variable_width.wgsl"
+    ));
 
     // {direction (0=H), max_radius, _pad, _pad}; the body reads only these two.
     let mut bytes = [0u8; 16];
@@ -1371,11 +1554,26 @@ fn generated_gaussian_blur_variable_width_matches_original() {
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: &bytes },
-                GpuBinding::Texture { binding: 1, texture: &src },
-                GpuBinding::Texture { binding: 2, texture: &width },
-                GpuBinding::Sampler { binding: 3, sampler: &sampler },
-                GpuBinding::Texture { binding: 4, texture: &out.texture },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: &bytes,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &src,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: &width,
+                },
+                GpuBinding::Sampler {
+                    binding: 3,
+                    sampler: &sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 4,
+                    texture: &out.texture,
+                },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "vbw-test",
@@ -1438,8 +1636,10 @@ fn generated_blur_3d_separable_matches_original() {
         generated.contains("@compute @workgroup_size(4, 4, 4)"),
         "3D workgroup missing:\n{generated}"
     );
-    let original =
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/shaders/fluid_blur_3d.wgsl"));
+    let original = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-node-engine/src/shaders/fluid_blur_3d.wgsl"
+    ));
 
     // Fill the input volume with a 3D gradient (varies along every axis).
     let input = make_3d_texture(
@@ -1462,7 +1662,10 @@ textureStore(vol, vec3<i32>(id), vec4<f32>(f.x, f.y, f.z, 0.5 + 0.5 * f.x));\n\
         let mut enc = device.create_encoder("blur3d-fill");
         enc.dispatch_compute(
             &pipeline,
-            &[GpuBinding::Texture { binding: 0, texture: &input }],
+            &[GpuBinding::Texture {
+                binding: 0,
+                texture: &input,
+            }],
             [n.div_ceil(4), n.div_ceil(4), n.div_ceil(4)],
             "blur3d-fill",
         );
@@ -1482,10 +1685,22 @@ textureStore(vol, vec3<i32>(id), vec4<f32>(f.x, f.y, f.z, 0.5 + 0.5 * f.x));\n\
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: param_bytes },
-                GpuBinding::Texture { binding: 1, texture: &input },
-                GpuBinding::Sampler { binding: 2, sampler: &sampler },
-                GpuBinding::Texture { binding: 3, texture: &out },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: param_bytes,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &input,
+                },
+                GpuBinding::Sampler {
+                    binding: 2,
+                    sampler: &sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: &out,
+                },
             ],
             [n.div_ceil(4), n.div_ceil(4), n.div_ceil(4)],
             "blur3d",
@@ -1566,7 +1781,10 @@ fn generated_gradient_central_diff_3d_matches_original() {
         generated.contains("var tex_density: texture_3d<f32>"),
         "3D sampled input missing:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/gradient_central_diff_3d.wgsl"));
+    let original = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-node-engine/src/primitives/shaders/gradient_central_diff_3d.wgsl"
+    ));
 
     let density = make_3d_texture(
         &device,
@@ -1593,9 +1811,18 @@ fn generated_gradient_central_diff_3d_matches_original() {
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: &bytes },
-                GpuBinding::Texture { binding: 1, texture: &density },
-                GpuBinding::Texture { binding: 2, texture: &out },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: &bytes,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &density,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: &out,
+                },
             ],
             [n.div_ceil(4), n.div_ceil(4), n.div_ceil(4)],
             "grad3d",
@@ -1646,7 +1873,10 @@ fn generated_curl_slope_force_3d_matches_original() {
         !generated.contains("var samp: sampler"),
         "a CoincidentTexel input binds no sampler:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/curl_slope_force_3d.wgsl"));
+    let original = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-node-engine/src/primitives/shaders/curl_slope_force_3d.wgsl"
+    ));
 
     let gradient = make_3d_texture(
         &device,
@@ -1658,7 +1888,9 @@ fn generated_curl_slope_force_3d_matches_original() {
 
     // Pre-normalized ref_axis (CPU), curl=2, slope=-1.
     let raw = [0.3f32, 0.8, 0.5];
-    let inv = (raw[0] * raw[0] + raw[1] * raw[1] + raw[2] * raw[2]).sqrt().recip();
+    let inv = (raw[0] * raw[0] + raw[1] * raw[1] + raw[2] * raw[2])
+        .sqrt()
+        .recip();
     let ax = [raw[0] * inv, raw[1] * inv, raw[2] * inv];
     let (curl, slope) = (2.0f32, -1.0f32);
 
@@ -1693,9 +1925,18 @@ fn generated_curl_slope_force_3d_matches_original() {
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytes },
-                GpuBinding::Texture { binding: 1, texture: &gradient },
-                GpuBinding::Texture { binding: 2, texture: &out },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytes,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &gradient,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: &out,
+                },
             ],
             [n.div_ceil(4), n.div_ceil(4), n.div_ceil(4)],
             "curl3d",
@@ -1729,8 +1970,10 @@ fn generated_vector_op_atoms_match_originals() {
     let (w, h) = (128u32, 128u32);
     let input = gradient(&device, w, h); // .rg = (x/w, y/h)
     let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
-    let shaders_dir =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
+    let shaders_dir = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/node_graph/primitives/shaders"
+    );
     let differ = TextureDiff::new(&device);
 
     // Paramless vector ops.
@@ -1836,7 +2079,10 @@ fn generated_hash_field_by_seed_matches_original() {
         !generated.contains("var samp: sampler"),
         "a CoincidentTexel input binds no sampler:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/hash_field_by_seed.wgsl"));
+    let original = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-node-engine/src/primitives/shaders/hash_field_by_seed.wgsl"
+    ));
 
     // {seed, seed_x, seed_y, mode} = 16B; mode=0 (Hash2).
     let mut bytes = [0u8; 16];
@@ -1851,9 +2097,18 @@ fn generated_hash_field_by_seed_matches_original() {
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: &bytes },
-                GpuBinding::Texture { binding: 1, texture: &input },
-                GpuBinding::Texture { binding: 2, texture: &out.texture },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: &bytes,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &input,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: &out.texture,
+                },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "hashseed",
@@ -1911,7 +2166,10 @@ fn generated_pack_channels_matches_original() {
         generated.contains("use_r: u32"),
         "optional-input use flag missing:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/pack_channels.wgsl"));
+    let original = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-node-engine/src/primitives/shaders/pack_channels.wgsl"
+    ));
 
     let use_flags = [1u32, 0, 1, 1]; // g unwired → falls back to default_g
     let defaults = [0.1f32, 0.5, 0.2, 1.0];
@@ -1983,7 +2241,10 @@ fn generated_trig_texture_matches_original() {
         generated.contains("use_freq_tex: u32") && generated.contains("use_phase_tex: u32"),
         "optional-input use flags missing:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/trig_texture.wgsl"));
+    let original = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-node-engine/src/primitives/shaders/trig_texture.wgsl"
+    ));
 
     // {freq, phase, mode, use_freq_tex, use_phase_tex, _pad×3} = 32B.
     let mut bytes = vec![0u8; 32];
@@ -2004,12 +2265,30 @@ fn generated_trig_texture_matches_original() {
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: &bytes },
-                GpuBinding::Texture { binding: 1, texture: &in_tex },
-                GpuBinding::Sampler { binding: 2, sampler: &sampler },
-                GpuBinding::Texture { binding: 3, texture: &out.texture },
-                GpuBinding::Texture { binding: 4, texture: &freq_t },
-                GpuBinding::Texture { binding: 5, texture: &phase_t },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: &bytes,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &in_tex,
+                },
+                GpuBinding::Sampler {
+                    binding: 2,
+                    sampler: &sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: &out.texture,
+                },
+                GpuBinding::Texture {
+                    binding: 4,
+                    texture: &freq_t,
+                },
+                GpuBinding::Texture {
+                    binding: 5,
+                    texture: &phase_t,
+                },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "trig-hand",
@@ -2061,7 +2340,10 @@ fn generated_block_displace_field_matches_original() {
         generated.contains("struct BodyOutputs") && generated.contains("write_offset: u32"),
         "multi-output struct/flags missing:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/block_displace_field.wgsl"));
+    let original = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-node-engine/src/primitives/shaders/block_displace_field.wgsl"
+    ));
 
     let (amount, block_size, speed, time) = (0.8f32, 16.0f32, 2.0f32, 1.0f32);
     let mut hand = vec![0u8; 16];
@@ -2117,7 +2399,10 @@ fn generated_lic_integrate_matches_original() {
         includes: &[],
     })
     .expect("lic_integrate generates");
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/lic_integrate.wgsl"));
+    let original = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-node-engine/src/primitives/shaders/lic_integrate.wgsl"
+    ));
 
     let mut bytes = [0u8; 16];
     bytes[0..4].copy_from_slice(&16i32.to_le_bytes()); // steps
@@ -2173,7 +2458,10 @@ fn generated_sample_volume_2d_matches_original() {
         generated.contains("var dst: texture_storage_2d<rgba16float, write>"),
         "2D output binding missing:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/sample_volume_2d.wgsl"));
+    let original = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-node-engine/src/primitives/shaders/sample_volume_2d.wgsl"
+    ));
 
     let volume = make_3d_texture(
         &device,
@@ -2196,10 +2484,22 @@ fn generated_sample_volume_2d_matches_original() {
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: &bytes },
-                GpuBinding::Texture { binding: 1, texture: &volume },
-                GpuBinding::Sampler { binding: 2, sampler: &sampler },
-                GpuBinding::Texture { binding: 3, texture: &out.texture },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: &bytes,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &volume,
+                },
+                GpuBinding::Sampler {
+                    binding: 2,
+                    sampler: &sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: &out.texture,
+                },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "svol",
@@ -2261,13 +2561,22 @@ fn generated_voronoi_2d_matches_original() {
         generated.contains("var dst_cell_id: texture_storage_2d<rgba16float, write>"),
         "dst_cell_id binding missing:\n{generated}"
     );
-    assert!(generated.contains("struct BodyOutputs"), "struct missing:\n{generated}");
-    assert!(generated.contains("write_out: u32"), "write_out flag missing:\n{generated}");
+    assert!(
+        generated.contains("struct BodyOutputs"),
+        "struct missing:\n{generated}"
+    );
+    assert!(
+        generated.contains("write_out: u32"),
+        "write_out flag missing:\n{generated}"
+    );
     assert!(
         generated.contains("write_cell_id: u32"),
         "write_cell_id flag missing:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/voronoi_2d.wgsl"));
+    let original = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../manifold-node-engine/src/primitives/shaders/voronoi_2d.wgsl"
+    ));
 
     // {scale, offset_x, offset_y, jitter, out_scale, write_out, write_cell_id, _pad}.
     let mut bytes = vec![0u8; 32];
@@ -2302,8 +2611,10 @@ fn generated_source_atoms_match_originals() {
     let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
     let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
-    let shaders_dir =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
+    let shaders_dir = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/node_graph/primitives/shaders"
+    );
     let differ = TextureDiff::new(&device);
 
     // checkerboard PARAMS: [scale, offset_x, offset_y].
@@ -2387,28 +2698,100 @@ fn generated_source_atoms_match_originals() {
     // exercises the domain warp; resolution slot ignored by the body.
     let flow_bytes = pack_f32(&[1.0, 0.01, 0.5, 0.0]);
     let cases: &[(&str, &str, Option<&[u8]>)] = &[
-        ("node.checkerboard", "checkerboard.wgsl", Some(checker_bytes.as_slice())),
+        (
+            "node.checkerboard",
+            "checkerboard.wgsl",
+            Some(checker_bytes.as_slice()),
+        ),
         ("node.uv_field", "uv_field.wgsl", None),
-        ("node.centered_uv", "centered_uv.wgsl", Some(centered_bytes.as_slice())),
-        ("node.linear_gradient", "linear_gradient.wgsl", Some(lg_bytes.as_slice())),
-        ("node.distance_to_point", "distance_to_point.wgsl", Some(dist_bytes.as_slice())),
-        ("node.polar_field", "polar_field.wgsl", Some(polar_bytes.as_slice())),
-        ("node.rectangle_mask", "box_mask.wgsl", Some(box_bytes.as_slice())),
-        ("node.mirror", "mirror_fold_uv.wgsl", Some(mirror_bytes.as_slice())),
-        ("node.kaleidoscope", "radial_fold_uv.wgsl", Some(radial_bytes.as_slice())),
-        ("node.circle_mask", "ellipse_mask.wgsl", Some(ellipse_bytes.as_slice())),
-        ("node.dither_pattern", "dither_pattern.wgsl", Some(dither_pat_bytes.as_slice())),
-        ("node.simplex_field_2d", "simplex_field_2d.wgsl", Some(simplex_bytes.as_slice())),
+        (
+            "node.centered_uv",
+            "centered_uv.wgsl",
+            Some(centered_bytes.as_slice()),
+        ),
+        (
+            "node.linear_gradient",
+            "linear_gradient.wgsl",
+            Some(lg_bytes.as_slice()),
+        ),
+        (
+            "node.distance_to_point",
+            "distance_to_point.wgsl",
+            Some(dist_bytes.as_slice()),
+        ),
+        (
+            "node.polar_field",
+            "polar_field.wgsl",
+            Some(polar_bytes.as_slice()),
+        ),
+        (
+            "node.rectangle_mask",
+            "box_mask.wgsl",
+            Some(box_bytes.as_slice()),
+        ),
+        (
+            "node.mirror",
+            "mirror_fold_uv.wgsl",
+            Some(mirror_bytes.as_slice()),
+        ),
+        (
+            "node.kaleidoscope",
+            "radial_fold_uv.wgsl",
+            Some(radial_bytes.as_slice()),
+        ),
+        (
+            "node.circle_mask",
+            "ellipse_mask.wgsl",
+            Some(ellipse_bytes.as_slice()),
+        ),
+        (
+            "node.dither_pattern",
+            "dither_pattern.wgsl",
+            Some(dither_pat_bytes.as_slice()),
+        ),
+        (
+            "node.simplex_field_2d",
+            "simplex_field_2d.wgsl",
+            Some(simplex_bytes.as_slice()),
+        ),
         ("node.noise", "noise.wgsl", Some(noise_perlin.as_slice())),
         ("node.noise", "noise.wgsl", Some(noise_simplex.as_slice())),
         ("node.noise", "noise.wgsl", Some(noise_random.as_slice())),
-        ("node.radial_offset_field", "radial_offset_field.wgsl", Some(radial_offset_bytes.as_slice())),
-        ("node.edge_stretch", "uv_strip_clamp.wgsl", Some(strip_bytes.as_slice())),
-        ("node.scanline_jitter_field", "scanline_jitter_field.wgsl", Some(scanline_tear.as_slice())),
-        ("node.scanline_jitter_field", "scanline_jitter_field.wgsl", Some(scanline_shear.as_slice())),
-        ("node.scanline_jitter_field", "scanline_jitter_field.wgsl", Some(scanline_split.as_slice())),
-        ("node.scanline_jitter_field", "scanline_jitter_field.wgsl", Some(scanline_split_45.as_slice())),
-        ("node.flow_field_noise", "flow_field_noise.wgsl", Some(flow_bytes.as_slice())),
+        (
+            "node.radial_offset_field",
+            "radial_offset_field.wgsl",
+            Some(radial_offset_bytes.as_slice()),
+        ),
+        (
+            "node.edge_stretch",
+            "uv_strip_clamp.wgsl",
+            Some(strip_bytes.as_slice()),
+        ),
+        (
+            "node.scanline_jitter_field",
+            "scanline_jitter_field.wgsl",
+            Some(scanline_tear.as_slice()),
+        ),
+        (
+            "node.scanline_jitter_field",
+            "scanline_jitter_field.wgsl",
+            Some(scanline_shear.as_slice()),
+        ),
+        (
+            "node.scanline_jitter_field",
+            "scanline_jitter_field.wgsl",
+            Some(scanline_split.as_slice()),
+        ),
+        (
+            "node.scanline_jitter_field",
+            "scanline_jitter_field.wgsl",
+            Some(scanline_split_45.as_slice()),
+        ),
+        (
+            "node.flow_field_noise",
+            "flow_field_noise.wgsl",
+            Some(flow_bytes.as_slice()),
+        ),
     ];
     for (type_id, shader_file, bytes) in cases {
         let node = registry.construct(type_id).unwrap();

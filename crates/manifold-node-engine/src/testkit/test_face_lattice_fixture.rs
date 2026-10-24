@@ -16,9 +16,9 @@ use std::borrow::Cow;
 use std::sync::OnceLock;
 
 use crate::exec::effect_node::{EffectNodeContext, EffectNodeType, ParamValues};
-use crate::particles::Particle;
 use crate::freeze::classify::{FusedOutputCapacity, FusionKind, InputAccess};
 use crate::parameters::{ParamDef, ParamType, ParamValue};
+use crate::particles::Particle;
 use crate::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::primitive::{Primitive, PrimitiveSpec};
 
@@ -77,9 +77,12 @@ impl PrimitiveSpec for TestFaceLattice {
     const DEPTH_RULE: crate::scene::depth_rule::DepthRule =
         crate::scene::depth_rule::DepthRule::Terminal;
     const WGSL_BODY: Option<&'static str> = Some(WGSL_BODY);
-    const INPUT_ACCESS: &'static [InputAccess] = &[InputAccess::Coincident, InputAccess::BufferGather];
-    const FUSED_OUTPUT_CAPACITY: FusedOutputCapacity =
-        FusedOutputCapacity::ParamProduct { params: &LATTICE_PARAMS, plus: 1 };
+    const INPUT_ACCESS: &'static [InputAccess] =
+        &[InputAccess::Coincident, InputAccess::BufferGather];
+    const FUSED_OUTPUT_CAPACITY: FusedOutputCapacity = FusedOutputCapacity::ParamProduct {
+        params: &LATTICE_PARAMS,
+        plus: 1,
+    };
 
     fn cached_type_id() -> &'static EffectNodeType {
         static CELL: OnceLock<EffectNodeType> = OnceLock::new();
@@ -88,12 +91,19 @@ impl PrimitiveSpec for TestFaceLattice {
 }
 
 impl Primitive for TestFaceLattice {
-    fn array_output_capacity(&self, port: &str, params: &ParamValues, _inputs: &[(&str, u32)]) -> Option<u32> {
+    fn array_output_capacity(
+        &self,
+        port: &str,
+        params: &ParamValues,
+        _inputs: &[(&str, u32)],
+    ) -> Option<u32> {
         let side = |name: &str| match params.get(name) {
             Some(ParamValue::Float(n)) => Some(n.round() as u32 + 1),
             _ => None,
         };
-        let faces = LATTICE_PARAMS.iter().try_fold(1u32, |product, name| product.checked_mul(side(name)?));
+        let faces = LATTICE_PARAMS
+            .iter()
+            .try_fold(1u32, |product, name| product.checked_mul(side(name)?));
         (port == "out").then_some(faces).flatten()
     }
 

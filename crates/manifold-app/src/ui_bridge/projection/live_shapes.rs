@@ -86,31 +86,47 @@ pub fn sync_live_shapes(ui: &mut UIRoot, project: &Project, active_layer: Option
     }
     if let Some(layer) = layer {
         let mut sensitivities = layer.clip_triggers.iter().map(|t| t.shape.sensitivity);
-        ui.inspector
-            .audio_trigger_section_mut()
-            .sync_sensitivities(tree, &layer.layer_id, &mut sensitivities);
+        ui.inspector.audio_trigger_section_mut().sync_sensitivities(
+            tree,
+            &layer.layer_id,
+            &mut sensitivities,
+        );
     }
-    if let Some((_, scene_layer)) = ui.scene_setup_panel.live_layer_id()
+    if let Some((_, scene_layer)) = ui
+        .scene_setup_panel
+        .live_layer_id()
         .and_then(|id| project.timeline.find_layer_by_id(id))
         && let Some(gp) = scene_layer.gen_params()
     {
-        ui.scene_setup_panel.sync_live_shapes(tree, &mut |id| row_shapes(gp, id));
+        ui.scene_setup_panel
+            .sync_live_shapes(tree, &mut |id| row_shapes(gp, id));
     }
 
-    let mut gains = project.timeline.layers.iter().map(|l| (l.layer_id.as_str(), l.audio_gain_db));
+    let mut gains = project
+        .timeline
+        .layers
+        .iter()
+        .map(|l| (l.layer_id.as_str(), l.audio_gain_db));
     ui.layer_headers.sync_audio_gains(tree, &mut gains);
     let mut send_gains = project.audio_setup.sends.iter().map(|s| (&s.id, s.gain_db));
     ui.audio_setup_panel.sync_send_gains(tree, &mut send_gains);
 
-    ui.inspector.macros_panel_mut().sync_ableton_ranges(tree, &macro_ableton_ranges(project));
+    ui.inspector
+        .macros_panel_mut()
+        .sync_ableton_ranges(tree, &macro_ableton_ranges(project));
 }
 
 /// Each macro slot's Ableton range. Which slots have one is membership: the
 /// inspector projection hands it to the macros panel before its build.
-pub(crate) fn macro_ableton_ranges(project: &Project) -> [Option<(f32, f32)>; manifold_core::MACRO_COUNT] {
+pub(crate) fn macro_ableton_ranges(
+    project: &Project,
+) -> [Option<(f32, f32)>; manifold_core::MACRO_COUNT] {
     let mut ranges = [None; manifold_core::MACRO_COUNT];
     for (range, slot) in ranges.iter_mut().zip(&project.settings.macro_bank.slots) {
-        *range = slot.ableton_mapping.as_ref().map(|m| (m.range_min, m.range_max));
+        *range = slot
+            .ableton_mapping
+            .as_ref()
+            .map(|m| (m.range_min, m.range_max));
     }
     ranges
 }

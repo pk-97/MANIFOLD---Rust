@@ -30,7 +30,10 @@ fn runtime_node(
         .iter()
         .find(|node| node.node_id == *node_id)
         .ok_or_else(|| missing("prepared coupled node is missing from the instantiated def"))?;
-    id_map.get(&doc.id).copied().ok_or_else(|| missing("prepared coupled node has no runtime mapping"))
+    id_map
+        .get(&doc.id)
+        .copied()
+        .ok_or_else(|| missing("prepared coupled node has no runtime mapping"))
 }
 
 fn install_coupled_scenes(
@@ -60,7 +63,8 @@ fn install_coupled_scenes(
         for binding in bindings {
             let fluid = runtime_node(def, id_map, &binding.fluid)?;
             let rigid = runtime_node(def, id_map, &binding.rigid)?;
-            crate::physics_scene::add_coupled_scene(graph, fluid, rigid, binding.colliders).map_err(failed)?;
+            crate::physics_scene::add_coupled_scene(graph, fluid, rigid, binding.colliders)
+                .map_err(failed)?;
             for observer in &binding.observers {
                 let observer = runtime_node(def, id_map, observer)?;
                 crate::physics_scene::add_shared_solids(graph, fluid, observer).map_err(failed)?;

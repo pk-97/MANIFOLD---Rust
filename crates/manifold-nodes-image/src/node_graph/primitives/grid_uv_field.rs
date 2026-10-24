@@ -132,16 +132,21 @@ mod tests {
         use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = GridUvField::new();
         let mut params = ParamValues::default();
-        params.insert(std::borrow::Cow::Borrowed("grid_size"), ParamValue::Float(400.0));
+        params.insert(
+            std::borrow::Cow::Borrowed("grid_size"),
+            ParamValue::Float(400.0),
+        );
         assert_eq!(
             Primitive::array_output_capacity(&prim, "uv", &params, &[]),
             Some(160_000),
         );
-        params.insert(std::borrow::Cow::Borrowed("grid_size"), ParamValue::Float(64.0));
+        params.insert(
+            std::borrow::Cow::Borrowed("grid_size"),
+            ParamValue::Float(64.0),
+        );
         assert_eq!(
             Primitive::array_output_capacity(&prim, "uv", &params, &[]),
             Some(4_096),
         );
     }
 }
-

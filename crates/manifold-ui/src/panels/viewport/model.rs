@@ -328,7 +328,8 @@ pub const AUTOMATION_TITLE_VALUE_GAP: f32 = 12.0;
 
 /// The second title line shows the value only when the strip has room.
 pub fn automation_title_has_value_line(strip: Rect) -> bool {
-    strip.height >= AUTOMATION_TITLE_PAD_TOP + AUTOMATION_TITLE_NAME_H + AUTOMATION_TITLE_VALUE_H + 4.0
+    strip.height
+        >= AUTOMATION_TITLE_PAD_TOP + AUTOMATION_TITLE_NAME_H + AUTOMATION_TITLE_VALUE_H + 4.0
 }
 
 /// The effect or section prefix of `label` ("Mirror" for "Mirror: Amount").
@@ -349,7 +350,10 @@ fn automation_value_reserve(
     let weight = FontWeight::Medium;
     let display = &lane.display;
     if let Some(labels) = display.value_labels.as_deref() {
-        labels.iter().map(|l| measure.measure_text(l, font, weight).x).fold(0.0, f32::max)
+        labels
+            .iter()
+            .map(|l| measure.measure_text(l, font, weight).x)
+            .fold(0.0, f32::max)
     } else {
         let mut buf = crate::panels::param_slider_shared::ParamValueText::default();
         let mut widest = 0.0_f32;
@@ -372,18 +376,30 @@ pub(crate) fn automation_title_rect(
     lane: &UiAutomationLane,
 ) -> (Rect, f32) {
     let name = automation_title_name(&lane.label, &lane.display);
-    let prefix_w = automation_label_prefix(&lane.label, &lane.display.param_name).map_or(0.0, |p| {
-        measure.measure_text(p, color::AUTOMATION_TITLE_VALUE_FONT, FontWeight::Medium).x
-            + AUTOMATION_TITLE_VALUE_GAP
-    });
+    let prefix_w =
+        automation_label_prefix(&lane.label, &lane.display.param_name).map_or(0.0, |p| {
+            measure
+                .measure_text(p, color::AUTOMATION_TITLE_VALUE_FONT, FontWeight::Medium)
+                .x
+                + AUTOMATION_TITLE_VALUE_GAP
+        });
     let name_w = prefix_w
         + measure
             .measure_text(name, color::AUTOMATION_TITLE_FONT, FontWeight::Bold)
             .x;
     let value_line = automation_title_has_value_line(strip);
     let value_w = automation_value_reserve(measure, lane);
-    let width = if value_line { name_w.max(value_w) } else { name_w };
-    let height = AUTOMATION_TITLE_NAME_H + if value_line { AUTOMATION_TITLE_VALUE_H } else { 0.0 };
+    let width = if value_line {
+        name_w.max(value_w)
+    } else {
+        name_w
+    };
+    let height = AUTOMATION_TITLE_NAME_H
+        + if value_line {
+            AUTOMATION_TITLE_VALUE_H
+        } else {
+            0.0
+        };
     let width = width.min((strip.width - 2.0 * AUTOMATION_TITLE_PAD_X).max(0.0));
     let rect = Rect::new(
         strip.x_max() - AUTOMATION_TITLE_PAD_X - width,
@@ -395,8 +411,15 @@ pub(crate) fn automation_title_rect(
 }
 
 /// The big title text: the parameter's name, else the full lane label.
-pub fn automation_title_name<'a>(label: &'a str, display: &'a crate::view::UiLaneDisplay) -> &'a str {
-    if display.param_name.is_empty() { label } else { &display.param_name }
+pub fn automation_title_name<'a>(
+    label: &'a str,
+    display: &'a crate::view::UiLaneDisplay,
+) -> &'a str {
+    if display.param_name.is_empty() {
+        label
+    } else {
+        &display.param_name
+    }
 }
 
 impl AutomationLaneScreen {
@@ -416,8 +439,15 @@ impl AutomationLaneScreen {
     }
 
     pub fn curve_rect_for(strip: Rect) -> Rect {
-        let pad = color::AUTOMATION_CURVE_PAD_Y.min(strip.height * 0.15).max(0.0);
-        Rect::new(strip.x, strip.y + pad, strip.width, (strip.height - 2.0 * pad).max(1.0))
+        let pad = color::AUTOMATION_CURVE_PAD_Y
+            .min(strip.height * 0.15)
+            .max(0.0);
+        Rect::new(
+            strip.x,
+            strip.y + pad,
+            strip.width,
+            (strip.height - 2.0 * pad).max(1.0),
+        )
     }
 
     /// The title's own name, else the lane label.
@@ -491,7 +521,16 @@ pub(crate) fn build_automation_polyline(
     pixels_per_beat: f32,
 ) -> Vec<(f32, f32)> {
     let mut out = Vec::new();
-    build_automation_polyline_into(&mut out, lane, min_beat, max_beat, x0, x1, graph, pixels_per_beat);
+    build_automation_polyline_into(
+        &mut out,
+        lane,
+        min_beat,
+        max_beat,
+        x0,
+        x1,
+        graph,
+        pixels_per_beat,
+    );
     out
 }
 
@@ -509,17 +548,23 @@ pub(crate) fn build_automation_polyline_into(
     pixels_per_beat: f32,
 ) {
     out.clear();
-    if !min_beat.is_finite() || !max_beat.is_finite() || max_beat < min_beat
-        || x1 < x0 || !pixels_per_beat.is_finite() || pixels_per_beat <= 0.0
+    if !min_beat.is_finite()
+        || !max_beat.is_finite()
+        || max_beat < min_beat
+        || x1 < x0
+        || !pixels_per_beat.is_finite()
+        || pixels_per_beat <= 0.0
     {
         return;
     }
     let min = f64::from(min_beat);
     let max = f64::from(max_beat);
-    let screen = |beat: f64, norm: f32| (
-        x0 + (beat as f32 - min_beat) * pixels_per_beat,
-        graph.y + graph.height * (1.0 - norm.clamp(0.0, 1.0)),
-    );
+    let screen = |beat: f64, norm: f32| {
+        (
+            x0 + (beat as f32 - min_beat) * pixels_per_beat,
+            graph.y + graph.height * (1.0 - norm.clamp(0.0, 1.0)),
+        )
+    };
     if lane.points.len() < 2
         || lane.points.first().is_some_and(|p| p.beat.0 > min)
         || lane.points.last().is_some_and(|p| p.beat.0 < min)
@@ -528,18 +573,25 @@ pub(crate) fn build_automation_polyline_into(
     }
     // Keep one adjacent endpoint on each side; work scales with the visible
     // interval, not the length of an entire performance envelope.
-    let lower = lane.points.partition_point(|p| p.beat.0 < min).saturating_sub(1);
+    let lower = lane
+        .points
+        .partition_point(|p| p.beat.0 < min)
+        .saturating_sub(1);
     let upper = (lane.points.partition_point(|p| p.beat.0 <= max) + 1).min(lane.points.len());
     for pair in lane.points[lower..upper].windows(2) {
         let (a, b) = (pair[0], pair[1]);
         let (start, end) = (a.beat.0, b.beat.0);
-        if end < min || start > max { continue; }
+        if end < min || start > max {
+            continue;
+        }
         if end == start {
             push_curve_point(out, screen(start, a.value_norm));
             push_curve_point(out, screen(end, b.value_norm));
             continue;
         }
-        if end < start { continue; }
+        if end < start {
+            continue;
+        }
         let from = start.max(min);
         let to = end.min(max);
         let t0 = ((from - start) / (end - start)) as f32;
@@ -547,11 +599,17 @@ pub(crate) fn build_automation_polyline_into(
         if a.shape == UiSegmentShape::Hold {
             push_curve_point(out, screen(from, a.value_norm));
             push_curve_point(out, screen(to, a.value_norm));
-            if to == end { push_curve_point(out, screen(end, b.value_norm)); }
+            if to == end {
+                push_curve_point(out, screen(end, b.value_norm));
+            }
         } else {
             let sample = |t: f32| {
-                if t == 0.0 { return screen(start, a.value_norm); }
-                if t == 1.0 { return screen(end, b.value_norm); }
+                if t == 0.0 {
+                    return screen(start, a.value_norm);
+                }
+                if t == 1.0 {
+                    return screen(end, b.value_norm);
+                }
                 screen(
                     start + f64::from(t) * (end - start),
                     a.value_norm + (b.value_norm - a.value_norm) * a.shape.sample(t),
@@ -571,7 +629,9 @@ pub(crate) fn build_automation_polyline_into(
 }
 
 fn push_curve_point(out: &mut Vec<(f32, f32)>, point: (f32, f32)) {
-    if out.last() != Some(&point) { out.push(point); }
+    if out.last() != Some(&point) {
+        out.push(point);
+    }
 }
 
 fn curve_chord_error_sq(point: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
@@ -579,7 +639,9 @@ fn curve_chord_error_sq(point: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 
     let len_sq = dx * dx + dy * dy;
     let t = if len_sq > 0.0 {
         (((point.0 - a.0) * dx + (point.1 - a.1) * dy) / len_sq).clamp(0.0, 1.0)
-    } else { 0.0 };
+    } else {
+        0.0
+    };
     (point.0 - a.0 - t * dx).powi(2) + (point.1 - a.1 - t * dy).powi(2)
 }
 
@@ -588,14 +650,18 @@ fn curve_chord_error_sq(point: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 
 fn append_curve_segment(
     out: &mut Vec<(f32, f32)>,
     sample: &impl Fn(f32) -> (f32, f32),
-    t0: f32, t1: f32,
-    p0: (f32, f32), p1: (f32, f32),
+    t0: f32,
+    t1: f32,
+    p0: (f32, f32),
+    p1: (f32, f32),
     depth: u8,
 ) {
     let mid = (t0 + t1) * 0.5;
     let pm = sample(mid);
     let error = [sample((t0 + mid) * 0.5), pm, sample((mid + t1) * 0.5)]
-        .into_iter().map(|p| curve_chord_error_sq(p, p0, p1)).fold(0.0_f32, f32::max);
+        .into_iter()
+        .map(|p| curve_chord_error_sq(p, p0, p1))
+        .fold(0.0_f32, f32::max);
     if depth >= 14 || error <= 0.15 * 0.15 {
         push_curve_point(out, p1);
     } else {
@@ -709,7 +775,10 @@ mod automation_lane_geometry_tests {
             // A short strip gives up at most 15% of its height to each pad.
             let pad = color::AUTOMATION_CURVE_PAD_Y.min(height * 0.15);
             assert!((curve.y - strip.y - pad).abs() < 1e-4, "height {height}");
-            assert!((strip.y_max() - curve.y_max() - pad).abs() < 1e-4, "height {height}");
+            assert!(
+                (strip.y_max() - curve.y_max() - pad).abs() < 1e-4,
+                "height {height}"
+            );
         }
     }
 
@@ -719,7 +788,8 @@ mod automation_lane_geometry_tests {
         let mut lane = ui_lane(Vec::new());
         lane.label = "Mirror: Mode".into();
         lane.display.param_name = "Mode".into();
-        lane.display.value_labels = Some(vec!["Identity".to_string(), "QuadMirror".to_string()].into());
+        lane.display.value_labels =
+            Some(vec!["Identity".to_string(), "QuadMirror".to_string()].into());
         lane.param_max = 1.0;
         lane.whole_numbers = true;
         let strip = Rect::new(120.0, 40.0, 800.0, 60.0);
@@ -730,14 +800,29 @@ mod automation_lane_geometry_tests {
         use crate::text::TextMeasure;
         let line1 = measure.measure_text("Mirror", font, FontWeight::Medium).x
             + AUTOMATION_TITLE_VALUE_GAP
-            + measure.measure_text("Mode", color::AUTOMATION_TITLE_FONT, FontWeight::Bold).x;
-        assert_eq!(value_w, measure.measure_text("QuadMirror", font, FontWeight::Medium).x);
-        assert!((rect.width - line1.max(value_w)).abs() < 0.001, "{} vs {line1}", rect.width);
-        assert_eq!(rect.height, AUTOMATION_TITLE_NAME_H + AUTOMATION_TITLE_VALUE_H);
+            + measure
+                .measure_text("Mode", color::AUTOMATION_TITLE_FONT, FontWeight::Bold)
+                .x;
+        assert_eq!(
+            value_w,
+            measure
+                .measure_text("QuadMirror", font, FontWeight::Medium)
+                .x
+        );
+        assert!(
+            (rect.width - line1.max(value_w)).abs() < 0.001,
+            "{} vs {line1}",
+            rect.width
+        );
+        assert_eq!(
+            rect.height,
+            AUTOMATION_TITLE_NAME_H + AUTOMATION_TITLE_VALUE_H
+        );
         // The block covers the right end of the strip only.
         assert!(rect.width < strip.width / 4.0);
         // A strip too short for the value line keeps only the name.
-        let (short, _) = automation_title_rect(&measure, Rect::new(120.0, 40.0, 800.0, 30.0), &lane);
+        let (short, _) =
+            automation_title_rect(&measure, Rect::new(120.0, 40.0, 800.0, 30.0), &lane);
         assert_eq!(short.height, AUTOMATION_TITLE_NAME_H);
     }
 
@@ -804,16 +889,40 @@ mod automation_lane_geometry_tests {
     #[test]
     fn automation_polyline_connects_both_sides_of_same_time_points() {
         let lane = ui_lane(vec![
-            UiAutomationPoint { beat: Beats(1.0), value_norm: 0.2, shape: UiSegmentShape::Linear, past_end: false },
-            UiAutomationPoint { beat: Beats(1.0), value_norm: 0.8, shape: UiSegmentShape::Linear, past_end: false },
-            UiAutomationPoint { beat: Beats(3.0), value_norm: 0.8, shape: UiSegmentShape::Linear, past_end: false },
+            UiAutomationPoint {
+                beat: Beats(1.0),
+                value_norm: 0.2,
+                shape: UiSegmentShape::Linear,
+                past_end: false,
+            },
+            UiAutomationPoint {
+                beat: Beats(1.0),
+                value_norm: 0.8,
+                shape: UiSegmentShape::Linear,
+                past_end: false,
+            },
+            UiAutomationPoint {
+                beat: Beats(3.0),
+                value_norm: 0.8,
+                shape: UiSegmentShape::Linear,
+                past_end: false,
+            },
         ]);
         for min in [0.0, 1.0] {
-            let points = build_automation_polyline(&lane, min, 4.0, 0.0, 200.0,
-                Rect::new(0.0, 0.0, 200.0, 100.0), 50.0);
+            let points = build_automation_polyline(
+                &lane,
+                min,
+                4.0,
+                0.0,
+                200.0,
+                Rect::new(0.0, 0.0, 200.0, 100.0),
+                50.0,
+            );
             let x = (1.0 - min) * 50.0;
-            assert!(points.windows(2).any(|p| p[0].0 == x && p[1].0 == x
-                && (p[0].1 - 80.0).abs() < 0.001 && (p[1].1 - 20.0).abs() < 0.001));
+            assert!(points.windows(2).any(|p| p[0].0 == x
+                && p[1].0 == x
+                && (p[0].1 - 80.0).abs() < 0.001
+                && (p[1].1 - 20.0).abs() < 0.001));
             assert!(points.windows(2).all(|p| p[0].0 <= p[1].0));
         }
     }
@@ -823,17 +932,39 @@ mod automation_lane_geometry_tests {
         for bend in [-1.0, -0.2, 0.2, 1.0] {
             for width in [12.0, 1200.0] {
                 let lane = ui_lane(vec![
-                    UiAutomationPoint { beat: Beats(0.0), value_norm: 0.0, shape: UiSegmentShape::Curved(bend), past_end: false },
-                    UiAutomationPoint { beat: Beats(4.0), value_norm: 1.0, shape: UiSegmentShape::Linear, past_end: false },
+                    UiAutomationPoint {
+                        beat: Beats(0.0),
+                        value_norm: 0.0,
+                        shape: UiSegmentShape::Curved(bend),
+                        past_end: false,
+                    },
+                    UiAutomationPoint {
+                        beat: Beats(4.0),
+                        value_norm: 1.0,
+                        shape: UiSegmentShape::Linear,
+                        past_end: false,
+                    },
                 ]);
-                let points = build_automation_polyline(&lane, 0.0, 4.0, 0.0, width,
-                    Rect::new(0.0, 0.0, width, 160.0), width / 4.0);
+                let points = build_automation_polyline(
+                    &lane,
+                    0.0,
+                    4.0,
+                    0.0,
+                    width,
+                    Rect::new(0.0, 0.0, width, 160.0),
+                    width / 4.0,
+                );
                 for step in 0..=1000 {
                     let t = step as f32 / 1000.0;
                     let sample = (width * t, 160.0 * (1.0 - lane.points[0].shape.sample(t)));
-                    let error = points.windows(2).map(|p| curve_chord_error_sq(sample, p[0], p[1]))
+                    let error = points
+                        .windows(2)
+                        .map(|p| curve_chord_error_sq(sample, p[0], p[1]))
                         .fold(f32::INFINITY, f32::min);
-                    assert!(error < 0.25 * 0.25, "bend {bend}, width {width}, t {t}, error {error}");
+                    assert!(
+                        error < 0.25 * 0.25,
+                        "bend {bend}, width {width}, t {t}, error {error}"
+                    );
                 }
             }
         }
@@ -869,5 +1000,4 @@ mod clip_overlap_tests {
         assert!(!clip_overlaps_region(&region, 0, 6.0, 7.0));
         assert!(!clip_overlaps_region(&region, 4, 6.0, 7.0));
     }
-
 }

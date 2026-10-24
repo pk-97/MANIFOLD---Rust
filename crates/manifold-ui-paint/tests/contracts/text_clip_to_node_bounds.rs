@@ -15,10 +15,10 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
-use manifold_ui_paint::native_text::CachedTextMeasure;
-use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_ui::node::{Color32, TextAlign, UIStyle};
 use manifold_ui::{Rect, UIFlags, UITree, ZTier};
+use manifold_ui_paint::native_text::CachedTextMeasure;
+use manifold_ui_paint::ui_renderer::UIRenderer;
 
 // W*4 must be 256-byte aligned for the texture→buffer readback copy.
 const W: u32 = 640;
@@ -74,10 +74,14 @@ fn overlong_label_stays_inside_button() {
     assert!(drew, "fixture produced no draw commands");
 
     let target = device.create_texture(&manifold_gpu::GpuTextureDesc {
-        width: W, height: H, depth: 1, format: FORMAT,
+        width: W,
+        height: H,
+        depth: 1,
+        format: FORMAT,
         dimension: manifold_gpu::GpuTextureDimension::D2,
         usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-        label: "text-clip-proof", mip_levels: 1,
+        label: "text-clip-proof",
+        mip_levels: 1,
     });
     {
         let mut enc = device.create_encoder("text-clip-render");
@@ -112,7 +116,10 @@ fn overlong_label_stays_inside_button() {
             }
         }
     }
-    assert!(inside > 20, "label never drew inside the button ({inside} px)");
+    assert!(
+        inside > 20,
+        "label never drew inside the button ({inside} px)"
+    );
 
     // 2. The invariant: nothing painted outside the button rect — and
     //    overrunning text also respects the horizontal comfort pad
@@ -213,10 +220,14 @@ fn flush_fit_label_keeps_edge_glyphs() {
     assert!(drew, "fixture produced no draw commands");
 
     let target = device.create_texture(&manifold_gpu::GpuTextureDesc {
-        width: W, height: H, depth: 1, format: FORMAT,
+        width: W,
+        height: H,
+        depth: 1,
+        format: FORMAT,
         dimension: manifold_gpu::GpuTextureDimension::D2,
         usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-        label: "flush-fit-proof", mip_levels: 1,
+        label: "flush-fit-proof",
+        mip_levels: 1,
     });
     {
         let mut enc = device.create_encoder("flush-fit-render");

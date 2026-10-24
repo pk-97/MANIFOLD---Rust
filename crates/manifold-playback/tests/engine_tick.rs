@@ -20,10 +20,12 @@ fn project_with_clip_at_beat_zero() -> manifold_core::project::Project {
         manifold_core::types::LayerType::Video,
         0,
     );
-    layer.clips.push(manifold_core::clip::TimelineClip::new_generator(
-        manifold_core::Beats::ZERO,
-        manifold_core::Beats(4.0),
-    ));
+    layer
+        .clips
+        .push(manifold_core::clip::TimelineClip::new_generator(
+            manifold_core::Beats::ZERO,
+            manifold_core::Beats(4.0),
+        ));
     project.timeline.layers.push(layer);
     project
 }
@@ -37,16 +39,21 @@ fn project_with_draggable_clip() -> manifold_core::project::Project {
         manifold_core::types::LayerType::Video,
         0,
     );
-    layer0.clips.push(manifold_core::clip::TimelineClip::new_generator(
-        manifold_core::Beats::ZERO,
-        manifold_core::Beats(4.0),
-    ));
+    layer0
+        .clips
+        .push(manifold_core::clip::TimelineClip::new_generator(
+            manifold_core::Beats::ZERO,
+            manifold_core::Beats(4.0),
+        ));
     project.timeline.layers.push(layer0);
-    project.timeline.layers.push(manifold_core::layer::Layer::new(
-        "Layer 1".to_string(),
-        manifold_core::types::LayerType::Video,
-        1,
-    ));
+    project
+        .timeline
+        .layers
+        .push(manifold_core::layer::Layer::new(
+            "Layer 1".to_string(),
+            manifold_core::types::LayerType::Video,
+            1,
+        ));
     project
 }
 
@@ -114,11 +121,22 @@ fn drag_active_clip_across_layers_rebinds() {
         "the heal start carries fire_clip_edge=false — a drag is not a trigger"
     );
     assert!(
-        engine.clip_controls().view(&engine.project().unwrap().timeline.layers[1].layer_id).unwrap().starts.is_empty(),
+        engine
+            .clip_controls()
+            .view(&engine.project().unwrap().timeline.layers[1].layer_id)
+            .unwrap()
+            .starts
+            .is_empty(),
         "heals emit no clip-edge for modulation"
     );
     assert_eq!(
-        engine.clip_controls().view(&engine.project().unwrap().timeline.layers[1].layer_id).unwrap().spans.last().map(|span| span.clip_id.as_str()),
+        engine
+            .clip_controls()
+            .view(&engine.project().unwrap().timeline.layers[1].layer_id)
+            .unwrap()
+            .spans
+            .last()
+            .map(|span| span.clip_id.as_str()),
         Some(clip_id.as_str()),
         "the destination layer's edge-diff state updates silently"
     );
@@ -136,10 +154,7 @@ fn drag_active_clip_across_layers_rebinds_while_playing() {
     tick_once(engine, 2.0 / 60.0, 2);
 
     assert_eq!(stub_gen(engine).start_count_for(&clip_id), 2);
-    assert_eq!(
-        stub_gen(engine).last_edge_flag_for(&clip_id),
-        Some(false)
-    );
+    assert_eq!(stub_gen(engine).last_edge_flag_for(&clip_id), Some(false));
 }
 
 /// P3: an undragged active clip never heals — the reconcile stays a no-op.
@@ -148,12 +163,7 @@ fn active_clip_without_layer_change_does_not_heal() {
     let engine = &mut create_engine();
     engine.initialize(project_with_draggable_clip());
     tick_once(engine, 0.0, 0);
-    let clip_id = engine
-        .project()
-        .unwrap()
-        .timeline
-        .layers[0]
-        .clips[0]
+    let clip_id = engine.project().unwrap().timeline.layers[0].clips[0]
         .id
         .clone();
 
@@ -201,7 +211,10 @@ fn project_with_clip_trigger(sensitivity: f32) -> manifold_core::project::Projec
 fn hot_snapshot() -> manifold_core::audio_features::AudioFeatureSnapshot {
     let mut f = manifold_core::SendFeatures::default();
     f.bands[manifold_core::audio_mod::AudioBand::Full.index()].transients = 0.9;
-    manifold_core::audio_features::AudioFeatureSnapshot { sends: vec![f], ..Default::default() }
+    manifold_core::audio_features::AudioFeatureSnapshot {
+        sends: vec![f],
+        ..Default::default()
+    }
 }
 
 /// BUG-109 section 7.1 item 1: P3c's per-branch `FireMeterCapture` reset ran AFTER
@@ -321,10 +334,7 @@ fn trigger_child_is_excluded_from_renderer_admission_for_every_owner_kind() {
         };
 
         let mut trigger = Layer::new_trigger("Trigger".into(), owner.layer_id.clone(), 1);
-        let mut clip = manifold_core::clip::TimelineClip::new_trigger(
-            Beats::ZERO,
-            Beats(4.0),
-        );
+        let mut clip = manifold_core::clip::TimelineClip::new_trigger(Beats::ZERO, Beats(4.0));
         clip.layer_id = owner.layer_id.clone();
         clip.video_clip_id = "misleading-trigger-media-id".to_string();
         let clip_id = clip.id.clone();
@@ -380,10 +390,12 @@ fn project_with_two_video_layers() -> manifold_core::project::Project {
             manifold_core::types::LayerType::Video,
             i,
         );
-        layer.clips.push(manifold_core::clip::TimelineClip::new_generator(
-            manifold_core::Beats::ZERO,
-            manifold_core::Beats(4.0),
-        ));
+        layer
+            .clips
+            .push(manifold_core::clip::TimelineClip::new_generator(
+                manifold_core::Beats::ZERO,
+                manifold_core::Beats(4.0),
+            ));
         project.timeline.layers.push(layer);
     }
     project
@@ -394,24 +406,25 @@ fn project_with_audio_and_video_layers() -> manifold_core::project::Project {
     let mut project = manifold_core::project::Project::default();
 
     let mut audio = manifold_core::layer::Layer::new_audio("Audio".into(), 0);
-    audio.clips.push(manifold_core::clip::TimelineClip::new_audio(
-        "dummy.wav".to_string(),
-        manifold_core::Beats::ZERO,
-        manifold_core::Beats(4.0),
-        manifold_core::Seconds::ZERO,
-        manifold_core::Seconds(4.0),
-    ));
+    audio
+        .clips
+        .push(manifold_core::clip::TimelineClip::new_audio(
+            "dummy.wav".to_string(),
+            manifold_core::Beats::ZERO,
+            manifold_core::Beats(4.0),
+            manifold_core::Seconds::ZERO,
+            manifold_core::Seconds(4.0),
+        ));
     project.timeline.layers.push(audio);
 
-    let mut video = manifold_core::layer::Layer::new(
-        "Video".into(),
-        manifold_core::types::LayerType::Video,
-        1,
-    );
-    video.clips.push(manifold_core::clip::TimelineClip::new_generator(
-        manifold_core::Beats::ZERO,
-        manifold_core::Beats(4.0),
-    ));
+    let mut video =
+        manifold_core::layer::Layer::new("Video".into(), manifold_core::types::LayerType::Video, 1);
+    video
+        .clips
+        .push(manifold_core::clip::TimelineClip::new_generator(
+            manifold_core::Beats::ZERO,
+            manifold_core::Beats(4.0),
+        ));
     project.timeline.layers.push(video);
 
     project
@@ -507,10 +520,12 @@ fn stopped_engine_shows_gap_at_lone_end_boundary() {
         manifold_core::types::LayerType::Video,
         0,
     );
-    layer.clips.push(manifold_core::clip::TimelineClip::new_generator(
-        manifold_core::Beats::ZERO,
-        manifold_core::Beats(8.0),
-    ));
+    layer
+        .clips
+        .push(manifold_core::clip::TimelineClip::new_generator(
+            manifold_core::Beats::ZERO,
+            manifold_core::Beats(8.0),
+        ));
     project.timeline.layers.push(layer);
 
     let mut engine = create_engine();
@@ -541,10 +556,12 @@ fn stopped_engine_starts_clip_with_sub_frame_remaining() {
         manifold_core::types::LayerType::Video,
         0,
     );
-    layer.clips.push(manifold_core::clip::TimelineClip::new_generator(
-        manifold_core::Beats::ZERO,
-        manifold_core::Beats(8.0),
-    ));
+    layer
+        .clips
+        .push(manifold_core::clip::TimelineClip::new_generator(
+            manifold_core::Beats::ZERO,
+            manifold_core::Beats(8.0),
+        ));
     project.timeline.layers.push(layer);
 
     let mut engine = create_engine();
@@ -575,10 +592,12 @@ fn stopped_engine_keeps_clip_active_at_start_boundary() {
         manifold_core::types::LayerType::Video,
         0,
     );
-    layer.clips.push(manifold_core::clip::TimelineClip::new_generator(
-        manifold_core::Beats(8.0),
-        manifold_core::Beats(8.0),
-    ));
+    layer
+        .clips
+        .push(manifold_core::clip::TimelineClip::new_generator(
+            manifold_core::Beats(8.0),
+            manifold_core::Beats(8.0),
+        ));
     project.timeline.layers.push(layer);
 
     let mut engine = create_engine();
@@ -607,14 +626,18 @@ fn stopped_engine_prefers_later_clip_at_adjacent_boundary() {
         manifold_core::types::LayerType::Video,
         0,
     );
-    layer.clips.push(manifold_core::clip::TimelineClip::new_generator(
-        manifold_core::Beats::ZERO,
-        manifold_core::Beats(8.0),
-    ));
-    layer.clips.push(manifold_core::clip::TimelineClip::new_generator(
-        manifold_core::Beats(8.0),
-        manifold_core::Beats(8.0),
-    ));
+    layer
+        .clips
+        .push(manifold_core::clip::TimelineClip::new_generator(
+            manifold_core::Beats::ZERO,
+            manifold_core::Beats(8.0),
+        ));
+    layer
+        .clips
+        .push(manifold_core::clip::TimelineClip::new_generator(
+            manifold_core::Beats(8.0),
+            manifold_core::Beats(8.0),
+        ));
     project.timeline.layers.push(layer);
 
     let mut engine = create_engine();

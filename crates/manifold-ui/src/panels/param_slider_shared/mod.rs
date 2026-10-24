@@ -5,33 +5,33 @@
 //! builders, and formatting helpers across both kinds. This module is the
 //! single source of truth for them.
 
-use crate::RootAction;
 use super::DriverConfigAction;
 use super::TrimKind;
 use super::param_card::RowMod;
-use crate::param_surface::ParamRow;
 use super::{AudioShapeParam, GraphParamTarget, PanelAction, ScrubPhase, ScrubValue, ValueRef};
+use crate::RootAction;
 use crate::chrome::{Theme, View};
 use crate::color;
 use crate::node::*;
+use crate::param_surface::ParamRow;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
 use crate::tree::UITree;
 pub use crate::types::AbletonMappingStatus;
 use manifold_foundation::LayerId;
 
 mod builders;
-mod state;
-mod routing;
-mod geometry;
-mod row_host;
 mod colour_row;
+mod geometry;
+mod routing;
+mod row_host;
+mod state;
 pub(crate) use builders::*;
 pub(crate) use colour_row::*;
 pub use colour_row::{colour_hex, colour_hex_into};
-pub use state::*;
-pub(crate) use routing::*;
 pub(crate) use geometry::*;
+pub(crate) use routing::*;
 pub(crate) use row_host::*;
+pub use state::*;
 
 // ── Shared layout constants ─────────────────────────────────────
 
@@ -163,8 +163,9 @@ pub(crate) const BEAT_DIV_LABELS: [&str; BEAT_DIV_COUNT] = [
 /// `BeatDivision::from_button_index(idx).beats()` (the UI carries only the button
 /// index, not the core enum). Quarter ("1/4") = 1 beat; "1" = a whole note = 4
 /// beats. Used to prefill the Free type-in with the current sync period.
-pub(crate) const BEAT_DIV_BEATS: [f32; BEAT_DIV_COUNT] =
-    [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0];
+pub(crate) const BEAT_DIV_BEATS: [f32; BEAT_DIV_COUNT] = [
+    0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0,
+];
 
 /// Number of feature kinds / bands exposed in the drawer.
 pub(crate) const AUDIO_KIND_COUNT: usize = crate::types::AudioFeatureKind::ALL.len();
@@ -212,7 +213,11 @@ mod length_row_tests {
         assert_eq!(length_option_index(0.9), 2, "0.9 nearer to 1.0 than 0.5");
         assert_eq!(length_option_index(0.6), 1, "0.6 nearer to 0.5 than 1.0");
         assert_eq!(length_option_index(0.4), 1, "0.4 nearer to 0.5 than 0.25");
-        assert_eq!(length_option_index(100.0), 5, "clamps to the largest option");
+        assert_eq!(
+            length_option_index(100.0),
+            5,
+            "clamps to the largest option"
+        );
         assert_eq!(length_option_index(0.0), 0, "clamps to the smallest option");
     }
 }

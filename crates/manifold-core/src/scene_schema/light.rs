@@ -3,7 +3,9 @@
 //! is a field, so a row a type does not read does not exist for it.
 
 use manifold_foundation::param_range::HardLimit;
-use manifold_foundation::scene_surface::{CardBand, CardLabel, ControlGroup, Feature, Gate, Modes, RgbChannel, Unit};
+use manifold_foundation::scene_surface::{
+    CardBand, CardLabel, ControlGroup, Feature, Gate, Modes, RgbChannel, Unit,
+};
 
 use super::fields::{Choice, FieldControl, FieldRow, FieldValue, enabled, wrong_value};
 use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, perform, row, setup};
@@ -31,7 +33,10 @@ fn light_type(fields: &ItemFields) -> Option<&LightType> {
 }
 
 fn lamp(fields: &ItemFields) -> bool {
-    matches!(light_type(fields), Some(LightType::Sun | LightType::Point | LightType::Spot))
+    matches!(
+        light_type(fields),
+        Some(LightType::Sun | LightType::Point | LightType::Spot)
+    )
 }
 
 fn point_or_spot(fields: &ItemFields) -> bool {
@@ -62,16 +67,26 @@ fn softbox(fields: &ItemFields) -> bool {
 fn hdri(fields: &ItemFields) -> bool {
     matches!(
         light_type(fields),
-        Some(LightType::Environment { source: EnvironmentSource::Hdri { .. } | EnvironmentSource::SeaHorizon { .. } })
+        Some(LightType::Environment {
+            source: EnvironmentSource::Hdri { .. } | EnvironmentSource::SeaHorizon { .. }
+        })
     )
 }
 
 fn sea_horizon(fields: &ItemFields) -> bool {
-    matches!(light_type(fields), Some(LightType::Environment { source: EnvironmentSource::SeaHorizon { .. } }))
+    matches!(
+        light_type(fields),
+        Some(LightType::Environment {
+            source: EnvironmentSource::SeaHorizon { .. }
+        })
+    )
 }
 
 const fn metres(property: &'static str) -> PropertyRow {
-    row(property, LIGHT, Light, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited).when(lamp)
+    row(property, LIGHT, Light, setup())
+        .unit(Unit::Metres)
+        .limit(HardLimit::Unlimited)
+        .when(lamp)
 }
 
 const fn softbox_row(property: &'static str) -> PropertyRow {
@@ -81,7 +96,14 @@ const fn softbox_row(property: &'static str) -> PropertyRow {
 pub static LIGHT_ROWS: [PropertyRow; 48] = [
     // Sun, Point, Spot. A new light starts where the compiler's lamp body
     // puts it (`scene_compile::light::lamp_params`).
-    row("light_type", LIGHT, Light, Exposure::Automatic("the light's type")).param("mode").when(lamp),
+    row(
+        "light_type",
+        LIGHT,
+        Light,
+        Exposure::Automatic("the light's type"),
+    )
+    .param("mode")
+    .when(lamp),
     row("intensity", LIGHT, Light, perform(CardBand::Lighting, 2))
         .label(CardLabel::ItemName)
         .limit(AT_LEAST_ZERO)
@@ -92,11 +114,23 @@ pub static LIGHT_ROWS: [PropertyRow; 48] = [
     metres("aim_x"),
     metres("aim_y"),
     metres("aim_z"),
-    row("range", LIGHT, Light, setup()).unit(Unit::Metres).limit(AT_LEAST_ZERO).when(lamp),
-    row("light_size", LIGHT, Light, setup()).unit(Unit::Metres).limit(AT_LEAST_ZERO).when(lamp),
-    row("color_r", LIGHT, Light, setup()).colour(RgbChannel::R).when(lamp),
-    row("color_g", LIGHT, Light, setup()).colour(RgbChannel::G).when(lamp),
-    row("color_b", LIGHT, Light, setup()).colour(RgbChannel::B).when(lamp),
+    row("range", LIGHT, Light, setup())
+        .unit(Unit::Metres)
+        .limit(AT_LEAST_ZERO)
+        .when(lamp),
+    row("light_size", LIGHT, Light, setup())
+        .unit(Unit::Metres)
+        .limit(AT_LEAST_ZERO)
+        .when(lamp),
+    row("color_r", LIGHT, Light, setup())
+        .colour(RgbChannel::R)
+        .when(lamp),
+    row("color_g", LIGHT, Light, setup())
+        .colour(RgbChannel::G)
+        .when(lamp),
+    row("color_b", LIGHT, Light, setup())
+        .colour(RgbChannel::B)
+        .when(lamp),
     row("falloff", LIGHT, Light, setup()).when(point_or_spot),
     row("inner_cone_angle", LIGHT, Light, setup()).when(spot),
     row("outer_cone_angle", LIGHT, Light, setup()).when(spot),
@@ -105,21 +139,50 @@ pub static LIGHT_ROWS: [PropertyRow; 48] = [
     row("shadow_bias", LIGHT, ShadowsAdvanced, setup()).when(lamp),
     row("shadow_resolution", LIGHT, ShadowsAdvanced, setup()).when(lamp),
     // Environment.
-    row("exposure", Reach::EveryCameraLens, Lens, perform(CardBand::Lighting, 0))
-        .param("exposure_ev")
-        .unit(Unit::Ev)
-        .limit(HardLimit::Unlimited)
-        .when(environment),
-    row("env_intensity", ENV, Environment, perform(CardBand::Lighting, 1))
-        .param("intensity")
-        .label(CardLabel::GroupName)
-        .limit(AT_LEAST_ZERO)
-        .when(environment),
-    row("env_mode", ENV, Environment, Exposure::Automatic("the Environment source field")).param("mode").when(environment),
-    row("bake_width", ENV, Environment, Exposure::Automatic("bake size is automatic")).param("width").when(environment),
-    row("bake_height", ENV, Environment, Exposure::Automatic("bake size is automatic"))
-        .param("height")
-        .when(environment),
+    row(
+        "exposure",
+        Reach::EveryCameraLens,
+        Lens,
+        perform(CardBand::Lighting, 0),
+    )
+    .param("exposure_ev")
+    .unit(Unit::Ev)
+    .limit(HardLimit::Unlimited)
+    .when(environment),
+    row(
+        "env_intensity",
+        ENV,
+        Environment,
+        perform(CardBand::Lighting, 1),
+    )
+    .param("intensity")
+    .label(CardLabel::GroupName)
+    .limit(AT_LEAST_ZERO)
+    .when(environment),
+    row(
+        "env_mode",
+        ENV,
+        Environment,
+        Exposure::Automatic("the Environment source field"),
+    )
+    .param("mode")
+    .when(environment),
+    row(
+        "bake_width",
+        ENV,
+        Environment,
+        Exposure::Automatic("bake size is automatic"),
+    )
+    .param("width")
+    .when(environment),
+    row(
+        "bake_height",
+        ENV,
+        Environment,
+        Exposure::Automatic("bake size is automatic"),
+    )
+    .param("height")
+    .when(environment),
     row("horizon_strength", ENV, Environment, setup()).when(gradient),
     row("azimuth_variation", ENV, Environment, setup()).when(gradient),
     softbox_row("emitter_count"),
@@ -129,48 +192,154 @@ pub static LIGHT_ROWS: [PropertyRow; 48] = [
     softbox_row("sun_disc_intensity"),
     softbox_row("sun_disc_size"),
     softbox_row("fill").default(0.3),
-    row("white_furnace", ENV, Environment, Exposure::Internal("White Furnace is a lighting test, not a look"))
-        .param("uniform")
-        .when(environment),
-    row("hdri_file", HDRI, Environment, Exposure::Automatic("the HDRI file field")).param("path").when(hdri),
+    row(
+        "white_furnace",
+        ENV,
+        Environment,
+        Exposure::Internal("White Furnace is a lighting test, not a look"),
+    )
+    .param("uniform")
+    .when(environment),
+    row(
+        "hdri_file",
+        HDRI,
+        Environment,
+        Exposure::Automatic("the HDRI file field"),
+    )
+    .param("path")
+    .when(hdri),
     // Turns the HDRI about the up axis: its lighting, reflections and the
     // background behind the scene together. Each lookup turns, so the baked
     // map and its lighting convolution never rebuild for it.
-    row("hdri_rotation", Reach::OwnAndScene("bg_sky", "render"), Environment, perform(CardBand::Lighting, 3))
-        .param("env_rotation")
-        .limit(HardLimit::Unlimited)
+    row(
+        "hdri_rotation",
+        Reach::OwnAndScene("bg_sky", "render"),
+        Environment,
+        perform(CardBand::Lighting, 3),
+    )
+    .param("env_rotation")
+    .limit(HardLimit::Unlimited)
+    .when(hdri),
+    row(
+        "hdri_width",
+        HDRI,
+        Environment,
+        Exposure::Internal("the HDRI is read at 2048 by 1024"),
+    )
+    .param("width")
+    .when(hdri),
+    row(
+        "hdri_height",
+        HDRI,
+        Environment,
+        Exposure::Internal("the HDRI is read at 2048 by 1024"),
+    )
+    .param("height")
+    .when(hdri),
+    row("bg_enabled", BG_SELECT, Environment, setup())
+        .param("selector")
+        .switch(Feature::Background)
+        .toggle()
+        .default(0.0)
         .when(hdri),
-    row("hdri_width", HDRI, Environment, Exposure::Internal("the HDRI is read at 2048 by 1024")).param("width").when(hdri),
-    row("hdri_height", HDRI, Environment, Exposure::Internal("the HDRI is read at 2048 by 1024")).param("height").when(hdri),
-    row("bg_enabled", BG_SELECT, Environment, setup()).param("selector").switch(Feature::Background).toggle().default(0.0).when(hdri),
-    row("bg_blur", BG_BLUR, Environment, setup()).param("radius").range(0.0, 64.0).limit(AT_LEAST_ZERO).gate(BACKGROUND_ON).default(0.0).when(hdri),
-    row("bg_blur_mode", BG_BLUR, Environment, Exposure::Internal("the background blur is the node's default kind")).param("mode").when(hdri),
-    row("bg_brightness", BG_GAIN, Environment, setup()).param("gain").range(0.0, 4.0).limit(AT_LEAST_ZERO).gate(BACKGROUND_ON).default(1.0).when(hdri),
+    row("bg_blur", BG_BLUR, Environment, setup())
+        .param("radius")
+        .range(0.0, 64.0)
+        .limit(AT_LEAST_ZERO)
+        .gate(BACKGROUND_ON)
+        .default(0.0)
+        .when(hdri),
+    row(
+        "bg_blur_mode",
+        BG_BLUR,
+        Environment,
+        Exposure::Internal("the background blur is the node's default kind"),
+    )
+    .param("mode")
+    .when(hdri),
+    row("bg_brightness", BG_GAIN, Environment, setup())
+        .param("gain")
+        .range(0.0, 4.0)
+        .limit(AT_LEAST_ZERO)
+        .gate(BACKGROUND_ON)
+        .default(1.0)
+        .when(hdri),
     // Sea Horizon: the lower half of the HDRI is open water (`node.sea_horizon_env`).
-    row("sea_ior", SEA, Environment, setup()).param("ior").when(sea_horizon),
-    row("water_r", SEA, Environment, setup()).name("Water Colour").colour(RgbChannel::R).when(sea_horizon),
-    row("water_g", SEA, Environment, setup()).colour(RgbChannel::G).when(sea_horizon),
-    row("water_b", SEA, Environment, setup()).colour(RgbChannel::B).when(sea_horizon),
-    row("bg_inputs", BG_SELECT, Environment, Exposure::Automatic("two pictures: the scene, and the scene over the sky")).param("num_inputs").when(hdri),
+    row("sea_ior", SEA, Environment, setup())
+        .param("ior")
+        .when(sea_horizon),
+    row("water_r", SEA, Environment, setup())
+        .name("Water Colour")
+        .colour(RgbChannel::R)
+        .when(sea_horizon),
+    row("water_g", SEA, Environment, setup())
+        .colour(RgbChannel::G)
+        .when(sea_horizon),
+    row("water_b", SEA, Environment, setup())
+        .colour(RgbChannel::B)
+        .when(sea_horizon),
+    row(
+        "bg_inputs",
+        BG_SELECT,
+        Environment,
+        Exposure::Automatic("two pictures: the scene, and the scene over the sky"),
+    )
+    .param("num_inputs")
+    .when(hdri),
 ];
 
 const LAMPS: &[Choice] = &[
-    Choice { key: "sun", label: "Sun" },
-    Choice { key: "point", label: "Point" },
-    Choice { key: "spot", label: "Spot" },
+    Choice {
+        key: "sun",
+        label: "Sun",
+    },
+    Choice {
+        key: "point",
+        label: "Point",
+    },
+    Choice {
+        key: "spot",
+        label: "Spot",
+    },
 ];
 
 const SOURCES: &[Choice] = &[
-    Choice { key: "sky", label: "Sky" },
-    Choice { key: "hdri", label: "HDRI File" },
-    Choice { key: "sea_horizon", label: "Sea Horizon" },
-    Choice { key: "none", label: "None" },
+    Choice {
+        key: "sky",
+        label: "Sky",
+    },
+    Choice {
+        key: "hdri",
+        label: "HDRI File",
+    },
+    Choice {
+        key: "sea_horizon",
+        label: "Sea Horizon",
+    },
+    Choice {
+        key: "none",
+        label: "None",
+    },
 ];
 
-const SKIES: &[Choice] = &[Choice { key: "gradient", label: "Gradient" }, Choice { key: "softbox", label: "Softbox" }];
+const SKIES: &[Choice] = &[
+    Choice {
+        key: "gradient",
+        label: "Gradient",
+    },
+    Choice {
+        key: "softbox",
+        label: "Softbox",
+    },
+];
 
 fn sky_selected(fields: &ItemFields) -> bool {
-    matches!(light_type(fields), Some(LightType::Environment { source: EnvironmentSource::Sky { .. } }))
+    matches!(
+        light_type(fields),
+        Some(LightType::Environment {
+            source: EnvironmentSource::Sky { .. }
+        })
+    )
 }
 
 pub static LIGHT_FIELDS: [FieldRow; 4] = [
@@ -214,29 +383,49 @@ pub static LIGHT_FIELDS: [FieldRow; 4] = [
         read: |fields| {
             FieldValue::Choice(
                 match light_type(fields) {
-                    Some(LightType::Environment { source: EnvironmentSource::Hdri { .. } }) => "hdri",
-                    Some(LightType::Environment { source: EnvironmentSource::SeaHorizon { .. } }) => "sea_horizon",
-                    Some(LightType::Environment { source: EnvironmentSource::None }) => "none",
+                    Some(LightType::Environment {
+                        source: EnvironmentSource::Hdri { .. },
+                    }) => "hdri",
+                    Some(LightType::Environment {
+                        source: EnvironmentSource::SeaHorizon { .. },
+                    }) => "sea_horizon",
+                    Some(LightType::Environment {
+                        source: EnvironmentSource::None,
+                    }) => "none",
                     _ => "sky",
                 }
                 .to_owned(),
             )
         },
         write: |fields, value| {
-            let (ItemFields::Light(crate::scene_doc::LightFields { light: LightType::Environment { source } }), FieldValue::Choice(key)) =
-                (fields, value)
+            let (
+                ItemFields::Light(crate::scene_doc::LightFields {
+                    light: LightType::Environment { source },
+                }),
+                FieldValue::Choice(key),
+            ) = (fields, value)
             else {
                 return Err(wrong_value("environment_source", value));
             };
             *source = match (key.as_str(), &*source) {
                 ("sky", EnvironmentSource::Sky { .. }) => source.clone(),
-                ("sky", _) => EnvironmentSource::Sky { style: SkyStyle::default() },
+                ("sky", _) => EnvironmentSource::Sky {
+                    style: SkyStyle::default(),
+                },
                 ("hdri", EnvironmentSource::Hdri { .. }) => source.clone(),
-                ("hdri", EnvironmentSource::SeaHorizon { file }) => EnvironmentSource::Hdri { file: file.clone() },
-                ("hdri", _) => EnvironmentSource::Hdri { file: String::new() },
+                ("hdri", EnvironmentSource::SeaHorizon { file }) => {
+                    EnvironmentSource::Hdri { file: file.clone() }
+                }
+                ("hdri", _) => EnvironmentSource::Hdri {
+                    file: String::new(),
+                },
                 ("sea_horizon", EnvironmentSource::SeaHorizon { .. }) => source.clone(),
-                ("sea_horizon", EnvironmentSource::Hdri { file }) => EnvironmentSource::SeaHorizon { file: file.clone() },
-                ("sea_horizon", _) => EnvironmentSource::SeaHorizon { file: String::new() },
+                ("sea_horizon", EnvironmentSource::Hdri { file }) => {
+                    EnvironmentSource::SeaHorizon { file: file.clone() }
+                }
+                ("sea_horizon", _) => EnvironmentSource::SeaHorizon {
+                    file: String::new(),
+                },
                 ("none", _) => EnvironmentSource::None,
                 _ => return Err(wrong_value("environment_source", value)),
             };
@@ -253,15 +442,24 @@ pub static LIGHT_FIELDS: [FieldRow; 4] = [
         read: |fields| {
             FieldValue::Choice(
                 match light_type(fields) {
-                    Some(LightType::Environment { source: EnvironmentSource::Sky { style: SkyStyle::Gradient } }) => "gradient",
+                    Some(LightType::Environment {
+                        source:
+                            EnvironmentSource::Sky {
+                                style: SkyStyle::Gradient,
+                            },
+                    }) => "gradient",
                     _ => "softbox",
                 }
                 .to_owned(),
             )
         },
         write: |fields, value| {
-            let (ItemFields::Light(crate::scene_doc::LightFields { light: LightType::Environment { source } }), FieldValue::Choice(key)) =
-                (fields, value)
+            let (
+                ItemFields::Light(crate::scene_doc::LightFields {
+                    light: LightType::Environment { source },
+                }),
+                FieldValue::Choice(key),
+            ) = (fields, value)
             else {
                 return Err(wrong_value("sky_style", value));
             };
@@ -279,23 +477,31 @@ pub static LIGHT_FIELDS: [FieldRow; 4] = [
         id: "hdri_file",
         label: "HDRI File",
         section: Environment,
-        control: FieldControl::File { extensions: &["exr"] },
+        control: FieldControl::File {
+            extensions: &["exr"],
+        },
         applies: hdri,
         disabled: enabled,
         read: |fields| match light_type(fields) {
-            Some(LightType::Environment { source: EnvironmentSource::Hdri { file } | EnvironmentSource::SeaHorizon { file } }) => {
-                FieldValue::File(file.clone())
-            }
+            Some(LightType::Environment {
+                source: EnvironmentSource::Hdri { file } | EnvironmentSource::SeaHorizon { file },
+            }) => FieldValue::File(file.clone()),
             _ => FieldValue::File(String::new()),
         },
         write: |fields, value| {
-            let (ItemFields::Light(crate::scene_doc::LightFields { light: LightType::Environment { source } }), FieldValue::File(path)) =
-                (fields, value)
+            let (
+                ItemFields::Light(crate::scene_doc::LightFields {
+                    light: LightType::Environment { source },
+                }),
+                FieldValue::File(path),
+            ) = (fields, value)
             else {
                 return Err(wrong_value("hdri_file", value));
             };
             *source = match source {
-                EnvironmentSource::SeaHorizon { .. } => EnvironmentSource::SeaHorizon { file: path.clone() },
+                EnvironmentSource::SeaHorizon { .. } => {
+                    EnvironmentSource::SeaHorizon { file: path.clone() }
+                }
                 _ => EnvironmentSource::Hdri { file: path.clone() },
             };
             Ok(())

@@ -13,8 +13,8 @@
 
 use crate::NodeId;
 use crate::effect_graph_def::{
-    EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GroupDef,
-    GroupInterface, InterfacePortDef, PresetMetadata,
+    EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID,
+    GroupDef, GroupInterface, InterfacePortDef, PresetMetadata,
 };
 
 /// Type id of the sealed Scene node. Its body is the compiled scene.
@@ -43,8 +43,7 @@ const RENDER_SCENE_TYPE_ID: &str = crate::effect_graph_def::RENDER_SCENE_TYPE_ID
 /// User-visible reasons for refused edits on a scene layer's graph.
 pub const INSIDE_SCENE_NODE: &str =
     "The Scene node is built from the Scene panel; edit the scene there.";
-pub const SCENE_NODE_STAYS: &str =
-    "The Scene node is the scene itself: it can be moved and wired from, not deleted, grouped or renamed.";
+pub const SCENE_NODE_STAYS: &str = "The Scene node is the scene itself: it can be moved and wired from, not deleted, grouped or renamed.";
 pub const SCENE_NODE_NOT_COPIED: &str =
     "The Scene node belongs to its scene layer and can't be copied into a graph.";
 
@@ -56,7 +55,11 @@ pub fn is_scene_node(node: &EffectGraphNode) -> bool {
 /// Whether any node in `nodes`, or in a group body below them, is a Scene node.
 pub fn contains_scene_node(nodes: &[EffectGraphNode]) -> bool {
     nodes.iter().any(|node| {
-        is_scene_node(node) || node.group.as_deref().is_some_and(|body| contains_scene_node(&body.nodes))
+        is_scene_node(node)
+            || node
+                .group
+                .as_deref()
+                .is_some_and(|body| contains_scene_node(&body.nodes))
     })
 }
 
@@ -87,7 +90,9 @@ pub fn scene_node(graph: &EffectGraphDef) -> Option<&EffectGraphNode> {
 /// Whether the Scene node holds a compiled scene (a loaded file holds an
 /// empty one until its document compiles).
 pub fn is_filled(graph: &EffectGraphDef) -> bool {
-    scene_node(graph).and_then(|node| node.group.as_deref()).is_some_and(|body| !body.nodes.is_empty())
+    scene_node(graph)
+        .and_then(|node| node.group.as_deref())
+        .is_some_and(|body| !body.nodes.is_empty())
 }
 
 /// Put a freshly compiled scene into the layer graph `layer`, leaving every
@@ -99,26 +104,54 @@ pub fn is_filled(graph: &EffectGraphDef) -> bool {
 /// that reads the frame size ([`SCENE_INPUTS`]) takes it through Scene node
 /// inputs wired from the layer input; any other read of the layer input is
 /// refused.
-pub fn seal(compiled: EffectGraphDef, layer: Option<&EffectGraphDef>) -> Result<EffectGraphDef, String> {
-    let EffectGraphDef { version, name, description, preset_metadata, scene_modifiers, nodes, wires } = compiled;
+pub fn seal(
+    compiled: EffectGraphDef,
+    layer: Option<&EffectGraphDef>,
+) -> Result<EffectGraphDef, String> {
+    let EffectGraphDef {
+        version,
+        name,
+        description,
+        preset_metadata,
+        scene_modifiers,
+        nodes,
+        wires,
+    } = compiled;
     let find = |type_id: &str| -> Result<u32, String> {
-        let mut found = nodes.iter().filter(|node| node.type_id == type_id).map(|node| node.id);
-        let id = found.next().ok_or_else(|| format!("the compiled scene has no {type_id}"))?;
+        let mut found = nodes
+            .iter()
+            .filter(|node| node.type_id == type_id)
+            .map(|node| node.id);
+        let id = found
+            .next()
+            .ok_or_else(|| format!("the compiled scene has no {type_id}"))?;
         match found.next() {
             Some(_) => Err(format!("the compiled scene has two {type_id} nodes")),
             None => Ok(id),
         }
     };
-    let (input, output, render) =
-        (find(GENERATOR_INPUT_TYPE_ID)?, find(FINAL_OUTPUT_TYPE_ID)?, find(RENDER_SCENE_TYPE_ID)?);
+    let (input, output, render) = (
+        find(GENERATOR_INPUT_TYPE_ID)?,
+        find(FINAL_OUTPUT_TYPE_ID)?,
+        find(RENDER_SCENE_TYPE_ID)?,
+    );
     // Only the frame size crosses in: a scene that sees the layer's pixels
     // would stop being the sealed render the Scene panel describes.
-    if wires.iter().any(|wire| wire.from_node == input && !SCENE_INPUTS.contains(&wire.from_port.as_str())) {
-        return Err("the compiled scene reads the layer input, which the Scene node does not take".into());
+    if wires
+        .iter()
+        .any(|wire| wire.from_node == input && !SCENE_INPUTS.contains(&wire.from_port.as_str()))
+    {
+        return Err(
+            "the compiled scene reads the layer input, which the Scene node does not take".into(),
+        );
     }
     let inputs: Vec<&str> = SCENE_INPUTS
         .into_iter()
-        .filter(|port| wires.iter().any(|wire| wire.from_node == input && wire.from_port == *port))
+        .filter(|port| {
+            wires
+                .iter()
+                .any(|wire| wire.from_node == input && wire.from_port == *port)
+        })
         .collect();
     let picture = wires
         .iter()
@@ -136,7 +169,12 @@ pub fn seal(compiled: EffectGraphDef, layer: Option<&EffectGraphDef>) -> Result<
             body_nodes.push(node);
         }
     }
-    body_nodes.push(bare(boundary_id, NodeId::default(), GROUP_OUTPUT_TYPE_ID, None));
+    body_nodes.push(bare(
+        boundary_id,
+        NodeId::default(),
+        GROUP_OUTPUT_TYPE_ID,
+        None,
+    ));
     let size_in = boundary_id + 1;
     if !inputs.is_empty() {
         body_nodes.push(bare(size_in, NodeId::default(), GROUP_INPUT_TYPE_ID, None));
@@ -144,21 +182,45 @@ pub fn seal(compiled: EffectGraphDef, layer: Option<&EffectGraphDef>) -> Result<
     let mut body_wires: Vec<EffectGraphWire> = wires
         .into_iter()
         .filter(|wire| wire.to_node != output)
-        .map(|wire| if wire.from_node == input { EffectGraphWire { from_node: size_in, ..wire } } else { wire })
+        .map(|wire| {
+            if wire.from_node == input {
+                EffectGraphWire {
+                    from_node: size_in,
+                    ..wire
+                }
+            } else {
+                wire
+            }
+        })
         .collect();
-    let sources = [picture, (render, "depth".to_owned()), (render, "velocity".to_owned())];
+    let sources = [
+        picture,
+        (render, "depth".to_owned()),
+        (render, "velocity".to_owned()),
+    ];
     for (port, (from_node, from_port)) in SCENE_OUTPUTS.iter().zip(sources) {
-        body_wires.push(EffectGraphWire { from_node, from_port, to_node: boundary_id, to_port: (*port).to_owned() });
+        body_wires.push(EffectGraphWire {
+            from_node,
+            from_port,
+            to_node: boundary_id,
+            to_port: (*port).to_owned(),
+        });
     }
     let body = GroupDef {
         interface: GroupInterface {
             inputs: inputs
                 .iter()
-                .map(|port| InterfacePortDef { name: (*port).to_owned(), port_type: "Scalar(F32)".to_owned() })
+                .map(|port| InterfacePortDef {
+                    name: (*port).to_owned(),
+                    port_type: "Scalar(F32)".to_owned(),
+                })
                 .collect(),
             outputs: SCENE_OUTPUTS
                 .iter()
-                .map(|port| InterfacePortDef { name: (*port).to_owned(), port_type: "Texture2D".to_owned() })
+                .map(|port| InterfacePortDef {
+                    name: (*port).to_owned(),
+                    port_type: "Texture2D".to_owned(),
+                })
                 .collect(),
             params: Vec::new(),
         },
@@ -184,11 +246,20 @@ pub fn seal(compiled: EffectGraphDef, layer: Option<&EffectGraphDef>) -> Result<
         (compiled, user) => compiled.or(user),
     };
     graph.scene_modifiers = scene_modifiers;
-    let node = graph.nodes.iter_mut().find(|node| is_scene_node(node)).expect("the layer graph has its Scene node");
+    let node = graph
+        .nodes
+        .iter_mut()
+        .find(|node| is_scene_node(node))
+        .expect("the layer graph has its Scene node");
     *node = EffectGraphNode {
         group: Some(Box::new(body)),
         title: Some("Scene".to_owned()),
-        ..bare(node.id, NodeId::new(SCENE_NODE_ID), SCENE_NODE_TYPE_ID, node.editor_pos)
+        ..bare(
+            node.id,
+            NodeId::new(SCENE_NODE_ID),
+            SCENE_NODE_TYPE_ID,
+            node.editor_pos,
+        )
     };
     node.handle = Some(SCENE_NODE_ID.to_owned());
     let scene = node.id;
@@ -199,7 +270,9 @@ pub fn seal(compiled: EffectGraphDef, layer: Option<&EffectGraphDef>) -> Result<
 /// Wire the layer input's frame size into the Scene node's size `inputs`, and
 /// drop size wires the scene no longer reads.
 fn wire_frame_size(graph: &mut EffectGraphDef, scene: u32, inputs: &[&str]) -> Result<(), String> {
-    graph.wires.retain(|wire| !(wire.to_node == scene && SCENE_INPUTS.contains(&wire.to_port.as_str())));
+    graph
+        .wires
+        .retain(|wire| !(wire.to_node == scene && SCENE_INPUTS.contains(&wire.to_port.as_str())));
     if inputs.is_empty() {
         return Ok(());
     }
@@ -237,7 +310,12 @@ fn default_layer_graph(boundary: Vec<EffectGraphNode>) -> Result<EffectGraphDef,
         }
         nodes.push(node);
     }
-    nodes.push(bare(SCENE, NodeId::new(SCENE_NODE_ID), SCENE_NODE_TYPE_ID, Some((0.0, 0.0))));
+    nodes.push(bare(
+        SCENE,
+        NodeId::new(SCENE_NODE_ID),
+        SCENE_NODE_TYPE_ID,
+        Some((0.0, 0.0)),
+    ));
     let output = output.ok_or("the compiled scene has no output")?;
     Ok(EffectGraphDef {
         version: 0,
@@ -255,7 +333,12 @@ fn default_layer_graph(boundary: Vec<EffectGraphNode>) -> Result<EffectGraphDef,
     })
 }
 
-fn bare(id: u32, node_id: NodeId, type_id: &str, editor_pos: Option<(f32, f32)>) -> EffectGraphNode {
+fn bare(
+    id: u32,
+    node_id: NodeId,
+    type_id: &str,
+    editor_pos: Option<(f32, f32)>,
+) -> EffectGraphNode {
     EffectGraphNode {
         id,
         node_id,
@@ -289,10 +372,20 @@ pub fn saved(graph: &EffectGraphDef) -> EffectGraphDef {
     };
     for node in &graph.nodes {
         if is_scene_node(node) {
-            let mut sealed = bare(node.id, node.node_id.clone(), SCENE_NODE_TYPE_ID, node.editor_pos);
+            let mut sealed = bare(
+                node.id,
+                node.node_id.clone(),
+                SCENE_NODE_TYPE_ID,
+                node.editor_pos,
+            );
             sealed.handle.clone_from(&node.handle);
             sealed.group = node.group.as_deref().map(|body| {
-                Box::new(GroupDef { interface: body.interface.clone(), nodes: Vec::new(), wires: Vec::new(), tint: None })
+                Box::new(GroupDef {
+                    interface: body.interface.clone(),
+                    nodes: Vec::new(),
+                    wires: Vec::new(),
+                    tint: None,
+                })
             });
             saved.nodes.push(sealed);
         } else {
@@ -312,13 +405,28 @@ pub fn check_saved(graph: &EffectGraphDef) -> Result<(), String> {
     if scenes.next().is_some() {
         return Err("a scene layer's graph has two Scene nodes".into());
     }
-    if scene.group.as_deref().is_none_or(|body| !body.nodes.is_empty() || !body.wires.is_empty()) {
-        return Err("a scene layer saves its document; its compiled Scene node is never saved".into());
+    if scene
+        .group
+        .as_deref()
+        .is_none_or(|body| !body.nodes.is_empty() || !body.wires.is_empty())
+    {
+        return Err(
+            "a scene layer saves its document; its compiled Scene node is never saved".into(),
+        );
     }
-    let nested = graph.nodes.iter().filter_map(|node| node.group.as_deref()).any(|body| contains_scene_node(&body.nodes));
-    let compiled_meta = graph.preset_metadata.as_ref().is_some_and(|meta| user_controls(meta).as_ref() != Some(meta));
+    let nested = graph
+        .nodes
+        .iter()
+        .filter_map(|node| node.group.as_deref())
+        .any(|body| contains_scene_node(&body.nodes));
+    let compiled_meta = graph
+        .preset_metadata
+        .as_ref()
+        .is_some_and(|meta| user_controls(meta).as_ref() != Some(meta));
     if nested || compiled_meta || !graph.scene_modifiers.is_empty() {
-        return Err("a scene layer's saved graph carries what only the scene compiler writes".into());
+        return Err(
+            "a scene layer's saved graph carries what only the scene compiler writes".into(),
+        );
     }
     Ok(())
 }
@@ -327,11 +435,21 @@ pub fn check_saved(graph: &EffectGraphDef) -> Result<(), String> {
 /// user-added bindings and their params, and nothing the compiler writes.
 /// `None` when there are none.
 pub fn user_controls(meta: &PresetMetadata) -> Option<PresetMetadata> {
-    let bindings: Vec<_> = meta.bindings.iter().filter(|binding| binding.user_added).cloned().collect();
+    let bindings: Vec<_> = meta
+        .bindings
+        .iter()
+        .filter(|binding| binding.user_added)
+        .cloned()
+        .collect();
     if bindings.is_empty() {
         return None;
     }
-    let params = meta.params.iter().filter(|spec| bindings.iter().any(|binding| binding.id == spec.id)).cloned().collect();
+    let params = meta
+        .params
+        .iter()
+        .filter(|spec| bindings.iter().any(|binding| binding.id == spec.id))
+        .cloned()
+        .collect();
     Some(PresetMetadata {
         params,
         bindings,
@@ -350,7 +468,12 @@ mod tests {
     use super::*;
 
     fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectGraphWire {
-        EffectGraphWire { from_node, from_port: from_port.to_owned(), to_node, to_port: to_port.to_owned() }
+        EffectGraphWire {
+            from_node,
+            from_port: from_port.to_owned(),
+            to_node,
+            to_port: to_port.to_owned(),
+        }
     }
 
     /// A compiled scene: layer input, a grid reading `read` from it, the
@@ -377,24 +500,55 @@ mod tests {
         let graph = seal(compiled("output_width"), None).expect("the frame size seals");
         let scene = scene_node(&graph).unwrap();
         let body = scene.group.as_deref().unwrap();
-        assert_eq!(body.interface.inputs.iter().map(|port| port.name.as_str()).collect::<Vec<_>>(), ["output_width"]);
-        let size_in = body.nodes.iter().find(|node| node.type_id == GROUP_INPUT_TYPE_ID).expect("a size input inside").id;
-        assert!(body.wires.contains(&wire(size_in, "output_width", 2, "width")));
-        let layer_input = graph.nodes.iter().find(|node| node.type_id == GENERATOR_INPUT_TYPE_ID).unwrap().id;
-        assert!(graph.wires.contains(&wire(layer_input, "output_width", scene.id, "output_width")));
+        assert_eq!(
+            body.interface
+                .inputs
+                .iter()
+                .map(|port| port.name.as_str())
+                .collect::<Vec<_>>(),
+            ["output_width"]
+        );
+        let size_in = body
+            .nodes
+            .iter()
+            .find(|node| node.type_id == GROUP_INPUT_TYPE_ID)
+            .expect("a size input inside")
+            .id;
+        assert!(
+            body.wires
+                .contains(&wire(size_in, "output_width", 2, "width"))
+        );
+        let layer_input = graph
+            .nodes
+            .iter()
+            .find(|node| node.type_id == GENERATOR_INPUT_TYPE_ID)
+            .unwrap()
+            .id;
+        assert!(
+            graph
+                .wires
+                .contains(&wire(layer_input, "output_width", scene.id, "output_width"))
+        );
 
         // A reseal wires the size once; a recompile that no longer reads it
         // drops the wire.
         let plain = seal(compiled("output_width"), Some(&graph)).unwrap();
-        assert_eq!(plain.wires.iter().filter(|w| w.to_node == scene.id).count(), 1);
+        assert_eq!(
+            plain.wires.iter().filter(|w| w.to_node == scene.id).count(),
+            1
+        );
         let mut none = compiled("output_width");
         none.wires.retain(|w| w.from_node != 1);
         let unsized_graph = seal(none, Some(&plain)).unwrap();
         assert!(unsized_graph.wires.iter().all(|w| w.to_node != scene.id));
 
         for picture in ["out", "time"] {
-            let refused = seal(compiled(picture), None).expect_err("only the frame size crosses in");
-            assert!(refused.contains("reads the layer input"), "{picture}: {refused}");
+            let refused =
+                seal(compiled(picture), None).expect_err("only the frame size crosses in");
+            assert!(
+                refused.contains("reads the layer input"),
+                "{picture}: {refused}"
+            );
         }
     }
 }

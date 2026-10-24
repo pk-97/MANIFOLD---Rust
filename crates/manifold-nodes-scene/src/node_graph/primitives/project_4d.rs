@@ -9,8 +9,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::{CurvePoint, Vec4Vertex};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::{CurvePoint, Vec4Vertex};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
@@ -81,7 +81,10 @@ impl Primitive for Project4D {
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {
-            input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)
+            input_capacities
+                .iter()
+                .find(|(p, _)| *p == "in")
+                .map(|(_, n)| *n)
         } else {
             None
         }
@@ -159,13 +162,21 @@ mod gpu_tests {
     use manifold_gpu::GpuTextureFormat;
 
     use crate::generators::generator_math::project_4d as legacy_project_4d;
-    use manifold_node_engine::mesh::{CurvePoint, Vec4Vertex};
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
+    use manifold_node_engine::exec::effect_node::{
+        EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
+    };
     use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::mesh::{CurvePoint, Vec4Vertex};
     use manifold_node_engine::parameters::ParamDef;
-    use manifold_node_engine::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
-    use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::execution_plan::compile};
+    use manifold_node_engine::ports::{
+        ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType,
+    };
+    use manifold_node_engine::{
+        exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+        exec::execution_plan::ExecutionPlan, exec::execution_plan::compile,
+        exec::metal_backend::MetalBackend, graph::Graph, parameters::ParamValue,
+    };
 
     use super::Project4D;
 
@@ -197,7 +208,9 @@ mod gpu_tests {
     }
 
     impl EffectNode for Vec4Source {
-        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+            manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+        } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -251,7 +264,9 @@ mod gpu_tests {
     }
 
     impl EffectNode for CurvePointSink {
-        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+            manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+        } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -279,10 +294,19 @@ mod gpu_tests {
         }
     }
 
-    fn resource_for(plan: &ExecutionPlan, node: NodeInstanceId, port: &str, is_input: bool) -> ResourceId {
+    fn resource_for(
+        plan: &ExecutionPlan,
+        node: NodeInstanceId,
+        port: &str,
+        is_input: bool,
+    ) -> ResourceId {
         for step in plan.steps() {
             if step.node == node {
-                let pool = if is_input { &step.inputs } else { &step.outputs };
+                let pool = if is_input {
+                    &step.inputs
+                } else {
+                    &step.outputs
+                };
                 for &(name, id) in pool {
                     if name == port {
                         return id;
@@ -290,7 +314,10 @@ mod gpu_tests {
                 }
             }
         }
-        panic!("no {} port `{port}` on node {node:?}", if is_input { "input" } else { "output" });
+        panic!(
+            "no {} port `{port}` on node {node:?}",
+            if is_input { "input" } else { "output" }
+        );
     }
 
     /// Run Project4D standalone with the given 4D input vertices and
@@ -312,8 +339,10 @@ mod gpu_tests {
         let src = g.add_node(Box::new(Vec4Source::new()));
         let pj = g.add_node(Box::new(Project4D::new()));
         g.connect((src, "out"), (pj, "in")).unwrap();
-        g.set_param(pj, "proj_scale", ParamValue::Float(proj_scale)).unwrap();
-        g.set_param(pj, "proj_dist", ParamValue::Float(proj_dist)).unwrap();
+        g.set_param(pj, "proj_scale", ParamValue::Float(proj_scale))
+            .unwrap();
+        g.set_param(pj, "proj_dist", ParamValue::Float(proj_dist))
+            .unwrap();
         let sink = g.add_node(Box::new(CurvePointSink::new()));
         g.connect((pj, "out"), (sink, "in")).unwrap();
         let plan = compile(&g).unwrap();
@@ -366,14 +395,30 @@ mod gpu_tests {
         // Includes signs, off-axis, and a couple near the W-camera
         // singularity for f-clamp coverage.
         let verts = vec![
-            Vec4Vertex { position: [0.25, 0.0, 0.0, 0.0] },
-            Vec4Vertex { position: [0.0, 0.25, 0.0, 0.0] },
-            Vec4Vertex { position: [0.1, -0.1, 0.1, 0.1] },
-            Vec4Vertex { position: [-0.2, 0.2, -0.2, 0.2] },
-            Vec4Vertex { position: [0.25, 0.25, 0.25, -0.25] },
-            Vec4Vertex { position: [-0.25, -0.25, 0.0, 0.25] },
-            Vec4Vertex { position: [0.0, 0.0, 0.5, 0.0] },
-            Vec4Vertex { position: [0.3, 0.2, 0.1, 0.4] },
+            Vec4Vertex {
+                position: [0.25, 0.0, 0.0, 0.0],
+            },
+            Vec4Vertex {
+                position: [0.0, 0.25, 0.0, 0.0],
+            },
+            Vec4Vertex {
+                position: [0.1, -0.1, 0.1, 0.1],
+            },
+            Vec4Vertex {
+                position: [-0.2, 0.2, -0.2, 0.2],
+            },
+            Vec4Vertex {
+                position: [0.25, 0.25, 0.25, -0.25],
+            },
+            Vec4Vertex {
+                position: [-0.25, -0.25, 0.0, 0.25],
+            },
+            Vec4Vertex {
+                position: [0.0, 0.0, 0.5, 0.0],
+            },
+            Vec4Vertex {
+                position: [0.3, 0.2, 0.1, 0.4],
+            },
         ];
         let proj_scale = 0.25;
         let proj_dist = 3.0;
@@ -383,7 +428,11 @@ mod gpu_tests {
         let tol = 1e-5_f32;
         for (i, v) in verts.iter().enumerate() {
             let (px, py, _pz) = legacy_project_4d(
-                v.position[0], v.position[1], v.position[2], v.position[3], proj_dist,
+                v.position[0],
+                v.position[1],
+                v.position[2],
+                v.position[3],
+                proj_dist,
             );
             // Legacy already bakes PROJ_SCALE = 0.25 into the return,
             // so when proj_scale == 0.25 (the default the WGSL uses)
@@ -427,4 +476,3 @@ mod gpu_tests {
         }
     }
 }
-

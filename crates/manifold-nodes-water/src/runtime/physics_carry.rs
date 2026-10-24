@@ -1,10 +1,10 @@
 //! Preserve native physics through compatible generator presentation rebuilds.
+use manifold_node_engine::ports::PortType;
 #[cfg(test)]
 use manifold_node_engine::runtime::*;
-use manifold_node_engine::ports::PortType;
-use manifold_water_rigid::physics::RigidBody;
-use manifold_water_liquid::fluid_role::FluidRole;
 use manifold_physics::FieldValue;
+use manifold_water_liquid::fluid_role::FluidRole;
+use manifold_water_rigid::physics::RigidBody;
 
 #[cfg(test)]
 mod tests;
@@ -24,8 +24,7 @@ impl super::WaterRuntime<'_> {
         {
             return;
         }
-        let (Some(mask), Some(old_mask)) =
-            (&self.water.sample_steps, &prior.water.sample_steps)
+        let (Some(mask), Some(old_mask)) = (&self.water.sample_steps, &prior.water.sample_steps)
         else {
             return;
         };
@@ -71,24 +70,23 @@ impl super::WaterRuntime<'_> {
             // worlds it feeds, so a rebuild never jumps it back to zero.
             if matches!(
                 new.node.type_id().as_str(),
-                "node.physics_world"
-                    | "node.rigid_body"
-                    | "node.fluid_role_source"
+                "node.physics_world" | "node.rigid_body" | "node.fluid_role_source"
             ) || new.node.integrates_time()
             {
                 let old = prior.graph.get_node_mut(old_id).expect("compiled node");
                 new.adopt_node(old);
             }
         }
-        if let (Some(inputs), Some(old_inputs)) = (
-            &mut self.water.input_snapshot,
-            &prior.water.input_snapshot,
-        ) {
+        if let (Some(inputs), Some(old_inputs)) =
+            (&mut self.water.input_snapshot, &prior.water.input_snapshot)
+        {
             inputs.carry_from(old_inputs, &steps);
         }
         self.water.last_frame_time = prior.water.last_frame_time;
         self.water.replay_from = prior.water.replay_from;
-        self.water.project_tempo.clone_from(&prior.water.project_tempo);
+        self.water
+            .project_tempo
+            .clone_from(&prior.water.project_tempo);
 
         // Setup and event wires are intentionally outside historical sampling.
         // Retain their last available CPU values under the new resource IDs so

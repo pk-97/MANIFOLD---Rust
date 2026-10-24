@@ -16,7 +16,9 @@ use manifold_audio::trained::{Decision, Fire, TrainedDetector};
 const SETS: [&str; 4] = ["cover_kick", "cover_snare", "kick", "snare"];
 
 fn fixtures(set: &str) -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/detectors").join(set)
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/detectors")
+        .join(set)
 }
 
 fn read(path: &std::path::Path) -> Container {
@@ -32,7 +34,10 @@ fn first_clip(set: &str) -> String {
         .filter(|n| n.starts_with("clip_") && n.ends_with(".mkick"))
         .collect();
     names.sort();
-    names.into_iter().next().unwrap_or_else(|| panic!("no clip goldens in {}", dir.display()))
+    names
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("no clip goldens in {}", dir.display()))
 }
 
 enum Run {
@@ -46,8 +51,12 @@ impl Run {
         if det.wants_kick().is_none() {
             return Self::Alone(Box::new(det));
         }
-        let kick = TrainedDetector::from_container(&read(&fixtures("kick").join("model.mkick")), 48_000).unwrap();
-        Self::Fed(Box::new(KickFed::new(kick, det).expect("the kick set is the kick this model reads")))
+        let kick =
+            TrainedDetector::from_container(&read(&fixtures("kick").join("model.mkick")), 48_000)
+                .unwrap();
+        Self::Fed(Box::new(
+            KickFed::new(kick, det).expect("the kick set is the kick this model reads"),
+        ))
     }
 
     fn det(&self) -> &TrainedDetector {
@@ -57,7 +66,11 @@ impl Run {
         }
     }
 
-    fn push_traced(&mut self, samples: &[f32], mut on_decision: impl FnMut(&Decision<'_>, Option<Fire>)) {
+    fn push_traced(
+        &mut self,
+        samples: &[f32],
+        mut on_decision: impl FnMut(&Decision<'_>, Option<Fire>),
+    ) {
         match self {
             Self::Alone(d) => d.push_traced(samples, on_decision),
             Self::Fed(f) => f.push_traced(samples, |side, d, fire| {
@@ -75,7 +88,12 @@ fn main() {
         let name = first_clip(set);
         let g = read(&fixtures(set).join(&name));
         let n = g.shape("audio_i16").unwrap()[0];
-        let pcm: Vec<f32> = g.i16s("audio_i16", &[n]).unwrap().iter().map(|&v| v as f32 / 32768.0).collect();
+        let pcm: Vec<f32> = g
+            .i16s("audio_i16", &[n])
+            .unwrap()
+            .iter()
+            .map(|&v| v as f32 / 32768.0)
+            .collect();
         let mut run = Run::new(&m);
         let mut fires = Vec::with_capacity(4096);
         let t0 = std::time::Instant::now();
@@ -89,7 +107,11 @@ fn main() {
             t0.elapsed().as_secs_f64() / secs * 1e3,
             det.decided() as f64 / secs,
             det.spec().net.as_ref().map_or(0, |n| n.count),
-            if det.wants_kick().is_some() { ", the kick it reads included" } else { "" }
+            if det.wants_kick().is_some() {
+                ", the kick it reads included"
+            } else {
+                ""
+            }
         );
     }
 }

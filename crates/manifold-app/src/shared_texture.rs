@@ -17,9 +17,9 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use core_foundation::base::TCFType;
 use core_foundation::dictionary::CFMutableDictionary;
-use std::sync::atomic::AtomicBool;
 use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
+use std::sync::atomic::AtomicBool;
 
 /// Number of IOSurface buffers (triple-buffered).
 /// 3 surfaces allow 2 content frames in flight while the UI reads a third.
@@ -167,7 +167,11 @@ fn create_rgba16f_io_surface(width: u32, height: u32) -> io_surface::IOSurface {
     create_io_surface(width, height, manifold_gpu::GpuTextureFormat::Rgba16Float)
 }
 
-fn create_io_surface(width: u32, height: u32, format: manifold_gpu::GpuTextureFormat) -> io_surface::IOSurface {
+fn create_io_surface(
+    width: u32,
+    height: u32,
+    format: manifold_gpu::GpuTextureFormat,
+) -> io_surface::IOSurface {
     let (bpp, pixel_format) = surface_layout(format);
     // Align bytes_per_row to 256 bytes — Metal validation rejects IOSurface-backed
     // textures whose stride doesn't meet the GPU's minimum linear texture alignment.
@@ -189,10 +193,7 @@ fn create_io_surface(width: u32, height: u32, format: manifold_gpu::GpuTextureFo
         props.set(key_height, CFNumber::from(height as i64));
         props.set(key_bytes_per_row, CFNumber::from(bytes_per_row as i64));
         props.set(key_bytes_per_elem, CFNumber::from(bpp as i64));
-        props.set(
-            key_pixel_format,
-            CFNumber::from(pixel_format as i64),
-        );
+        props.set(key_pixel_format, CFNumber::from(pixel_format as i64));
         props.set(key_alloc_size, CFNumber::from(total_bytes as i64));
 
         let surface_ref = io_surface::IOSurfaceCreate(props.as_concrete_TypeRef() as *mut _);
@@ -207,7 +208,12 @@ fn create_io_surface(width: u32, height: u32, format: manifold_gpu::GpuTextureFo
 /// publishing and every surface it holds is stale) AND no claimed read is
 /// still in flight on the GPU. Reads always gate: only the front-pin is
 /// bypassable.
-fn slot_reusable(published: bool, front_is_slot: bool, reads_in_flight: u64, quiet_bypass: bool) -> bool {
+fn slot_reusable(
+    published: bool,
+    front_is_slot: bool,
+    reads_in_flight: u64,
+    quiet_bypass: bool,
+) -> bool {
     (quiet_bypass || !published || !front_is_slot) && reads_in_flight == 0
 }
 
@@ -219,7 +225,8 @@ impl SharedTextureBridge {
 
     /// A bridge of `format` surfaces (`Rgba16Float` or `R8Unorm`).
     pub fn with_format(width: u32, height: u32, format: manifold_gpu::GpuTextureFormat) -> Self {
-        let [surface_a, surface_b, surface_c] = std::array::from_fn(|_| create_io_surface(width, height, format));
+        let [surface_a, surface_b, surface_c] =
+            std::array::from_fn(|_| create_io_surface(width, height, format));
 
         log::info!(
             "[SharedTextureBridge] created {}x IOSurface {}x{} {:?} ({} bytes each)",
@@ -236,7 +243,11 @@ impl SharedTextureBridge {
             width: AtomicU32::new(width),
             height: AtomicU32::new(height),
             front_index: AtomicU32::new(0),
-            published: [AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false)],
+            published: [
+                AtomicBool::new(false),
+                AtomicBool::new(false),
+                AtomicBool::new(false),
+            ],
             published_frames: std::array::from_fn(|_| AtomicU64::new(0)),
             generation: AtomicU64::new(0),
             reads_in_flight: [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)],
@@ -286,7 +297,8 @@ impl SharedTextureBridge {
     /// Both devices must re-import their textures after this call
     /// (detected via generation counter).
     pub fn resize(&self, width: u32, height: u32) {
-        let [surface_a, surface_b, surface_c] = std::array::from_fn(|_| create_io_surface(width, height, self.format));
+        let [surface_a, surface_b, surface_c] =
+            std::array::from_fn(|_| create_io_surface(width, height, self.format));
         {
             let mut guard = self.io_surfaces.write();
             // Update dimensions while holding the write lock so that
@@ -352,7 +364,8 @@ impl SharedTextureBridge {
     /// Read only while holding the lease. The slot cannot be reused until
     /// that lease retires, so its image and frame stamp stay paired.
     pub fn leased_frame(&self, lease: BridgeReadLease) -> Option<u64> {
-        self.published[lease.slot].load(Ordering::Acquire)
+        self.published[lease.slot]
+            .load(Ordering::Acquire)
             .then(|| self.published_frames[lease.slot].load(Ordering::Acquire))
     }
 

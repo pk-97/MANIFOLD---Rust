@@ -148,11 +148,11 @@ mod tests {
             param_key: key,
             source_stamp: TriggerSourceStamp::Audio {
                 stamp: AudioHopStamp {
-                epoch: 7,
-                end_sample: sample,
-                sample_rate: 48_000,
-                source_time: None,
-                timeline_time: None,
+                    epoch: 7,
+                    end_sample: sample,
+                    sample_rate: 48_000,
+                    source_time: None,
+                    timeline_time: None,
                 },
                 time: manifold_core::Seconds::ZERO,
             },

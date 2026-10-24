@@ -1,9 +1,12 @@
 //! FLIP InfluenceGrid decay and source application (spread is disabled in the engine).
 //! Ported from FLIP Fluids (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
-use manifold_water_liquid::float_param;
 use super::whitewater_obstacle_source::WhitewaterSource;
-use manifold_node_engine::{exec::effect_node::EffectNodeContext, exec::effect_node::ParamValues, parameters::ParamDef, parameters::ParamType, parameters::ParamValue, primitive::Primitive};
+use manifold_node_engine::{
+    exec::effect_node::EffectNodeContext, exec::effect_node::ParamValues, parameters::ParamDef,
+    parameters::ParamType, parameters::ParamValue, primitive::Primitive,
+};
+use manifold_water_liquid::float_param;
 use std::borrow::Cow;
 
 manifold_node_engine::primitive! {

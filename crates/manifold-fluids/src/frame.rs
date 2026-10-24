@@ -78,11 +78,7 @@ impl FluidFrame<'_> {
     /// Replace the force fields for the next owned portion of a live frame.
     /// Native field storage is copied immediately, so the caller may rebuild
     /// the borrowed evaluators at each accepted event boundary.
-    pub fn set_fields(
-        &mut self,
-        dt: Seconds,
-        fields: &[FieldInput<'_>],
-    ) -> Result<(), FluidError> {
+    pub fn set_fields(&mut self, dt: Seconds, fields: &[FieldInput<'_>]) -> Result<(), FluidError> {
         if self.live {
             self.world.prepare_live_step_fields(dt, fields)
         } else {

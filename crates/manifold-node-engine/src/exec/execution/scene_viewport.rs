@@ -17,7 +17,9 @@ impl Executor {
         {
             *current = config;
         } else {
-            let Some(mut pass) = make() else { return false; };
+            let Some(mut pass) = make() else {
+                return false;
+            };
             pass.set_selection_mask(&self.scene_viewport_selection);
             pass.set_gizmo_depth(self.scene_viewport_gizmo_depth);
             self.scene_viewport = Some((node, config, pass));
@@ -39,7 +41,8 @@ impl Executor {
     }
 
     pub(crate) fn scene_viewport_texture(&self) -> Option<&manifold_gpu::GpuTexture> {
-        self.scene_viewport.as_ref()
+        self.scene_viewport
+            .as_ref()
             .filter(|_| self.scene_viewport_captured)
             .and_then(|(_, _, pass)| pass.texture())
     }
@@ -57,7 +60,8 @@ impl Executor {
     }
 
     pub(crate) fn scene_viewport_selection_mask(&self) -> Option<&manifold_gpu::GpuTexture> {
-        self.scene_viewport.as_ref()
+        self.scene_viewport
+            .as_ref()
             .filter(|_| self.scene_viewport_captured)
             .and_then(|(_, _, pass)| pass.selection_mask())
     }
@@ -70,7 +74,9 @@ impl Executor {
     }
 
     pub(crate) fn take_scene_viewport_pick(&mut self) -> Option<crate::scene::pick::PickHit> {
-        self.scene_viewport.as_mut().and_then(|(_, _, pass)| pass.take_pick())
+        self.scene_viewport
+            .as_mut()
+            .and_then(|(_, _, pass)| pass.take_pick())
     }
 
     /// Whether the viewport's scene depth is kept for gizmo lines.
@@ -85,21 +91,29 @@ impl Executor {
     }
 
     pub(crate) fn scene_viewport_gizmo_depth(&self) -> Option<&manifold_gpu::GpuTexture> {
-        self.scene_viewport.as_ref()
+        self.scene_viewport
+            .as_ref()
             .filter(|_| self.scene_viewport_captured)
             .and_then(|(_, _, pass)| pass.gizmo_depth())
     }
 
-    pub(crate) fn scene_viewport_status(&self) -> Option<crate::runtime::frame_status::FrameRenderStatus> {
+    pub(crate) fn scene_viewport_status(
+        &self,
+    ) -> Option<crate::runtime::frame_status::FrameRenderStatus> {
         self.scene_viewport.as_ref().map(|(_, _, pass)| {
-            if self.scene_viewport_captured { pass.status() }
-            else { crate::runtime::frame_status::FrameRenderStatus::PendingGeometry }
+            if self.scene_viewport_captured {
+                pass.status()
+            } else {
+                crate::runtime::frame_status::FrameRenderStatus::PendingGeometry
+            }
         })
     }
 
     pub(crate) fn scene_viewport_errors(&self) -> &[String] {
-        self.scene_viewport.as_ref()
+        self.scene_viewport
+            .as_ref()
             .filter(|_| self.scene_viewport_captured)
-            .map(|(_, _, pass)| pass.errors()).unwrap_or(&[])
+            .map(|(_, _, pass)| pass.errors())
+            .unwrap_or(&[])
     }
 }

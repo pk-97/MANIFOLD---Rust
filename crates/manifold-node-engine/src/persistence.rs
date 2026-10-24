@@ -37,11 +37,11 @@ use std::collections::BTreeMap;
 
 use ahash::AHashMap;
 
+#[cfg(test)]
+use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION_WITH_METADATA;
 use manifold_core::effect_graph_def::{
     EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, EffectGraphWire,
 };
-#[cfg(test)]
-use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION_WITH_METADATA;
 
 use crate::exec::effect_node::EffectNode;
 use crate::graph::Graph;
@@ -101,9 +101,7 @@ impl From<SerializedParamValue> for ParamValue {
                 // 1×1 zero table — the load path already logs invalid
                 // params; we don't want to crash a partially-valid graph.
                 let data = crate::parameters::TableData::new(rows)
-                    .unwrap_or_else(|| {
-                        crate::parameters::TableData::new(vec![vec![0.0]]).unwrap()
-                    });
+                    .unwrap_or_else(|| crate::parameters::TableData::new(vec![vec![0.0]]).unwrap());
                 Self::Table(std::sync::Arc::new(data))
             }
             SerializedParamValue::String { value } => Self::String(std::sync::Arc::new(value)),
@@ -230,11 +228,17 @@ fn register_builtin(r: &mut PrimitiveRegistry) {
 pub enum LoadError {
     SceneModifier(crate::load::expand::SceneModifierExpandError),
     /// Document `version` is newer than this binary understands.
-    UnsupportedVersion { found: u32, max: u32 },
+    UnsupportedVersion {
+        found: u32,
+        max: u32,
+    },
     /// Two nodes share the same document id.
     DuplicateNodeId(u32),
     /// Node's `type_id` isn't registered in the [`PrimitiveRegistry`].
-    UnknownTypeId { node_id: u32, type_id: String },
+    UnknownTypeId {
+        node_id: u32,
+        type_id: String,
+    },
     /// Wire references a node id that doesn't exist in the document.
     UnknownNodeRef {
         wire_index: usize,
@@ -257,10 +261,17 @@ pub enum LoadError {
         got: &'static str,
     },
     /// A material feature mode enum is outside the persisted From/Off/On range.
-    InvalidMaterialFeatureMode { node_id: u32, param: String, value: u32 },
+    InvalidMaterialFeatureMode {
+        node_id: u32,
+        param: String,
+        value: u32,
+    },
     /// Wire targets a port that doesn't exist or has the wrong kind /
     /// type on the receiving node.
-    InvalidWire { wire_index: usize, reason: String },
+    InvalidWire {
+        wire_index: usize,
+        reason: String,
+    },
     /// An `outputFormats` entry references a format string this build
     /// doesn't know about. The set of valid strings tracks
     /// [`manifold_gpu::GpuTextureFormat`] — see [`format_from_str`].
@@ -526,8 +537,9 @@ impl EffectGraphDefExt for EffectGraphDef {
                     if let Some(fmt) = inst.node.output_format(out.name.as_ref()) {
                         output_formats.insert(out.name.to_string(), format_to_str(fmt).to_string());
                     }
-                    if let Some((num, denom)) =
-                        inst.node.output_canvas_scale(out.name.as_ref(), &inst.params)
+                    if let Some((num, denom)) = inst
+                        .node
+                        .output_canvas_scale(out.name.as_ref(), &inst.params)
                     {
                         // Persist only non-default scales (i.e. nodes
                         // that actually report something — most won't).
@@ -630,8 +642,8 @@ impl EffectGraphDefExt for EffectGraphDef {
         // (rename aliasing, exposure stripping) and forcing a hard
         // error here would refuse to load otherwise-valid documents.
         if let Some(meta) = self.preset_metadata.as_ref() {
-            use manifold_core::effect_graph_def::BindingTarget;
             use crate::param_binding::convert_param_value;
+            use manifold_core::effect_graph_def::BindingTarget;
             for binding in &meta.bindings {
                 let BindingTarget::Node { node_id, param } = &binding.target else {
                     continue;
@@ -679,13 +691,8 @@ impl EffectGraphDefExt for EffectGraphDef {
         // own source of truth. At that point this backfill becomes a
         // no-op (the explicit set wins), so a user's UNCHECK on a
         // preset-bound param sticks across save/reload.
-        let has_explicit_exposures = self
-            .nodes
-            .iter()
-            .any(|n| !n.exposed_params.is_empty());
-        if !has_explicit_exposures
-            && let Some(meta) = self.preset_metadata.as_ref()
-        {
+        let has_explicit_exposures = self.nodes.iter().any(|n| !n.exposed_params.is_empty());
+        if !has_explicit_exposures && let Some(meta) = self.preset_metadata.as_ref() {
             use manifold_core::effect_graph_def::BindingTarget;
             for binding in &meta.bindings {
                 if let BindingTarget::Node { node_id, param } = &binding.target
@@ -866,8 +873,6 @@ mod tests {
         PrimitiveRegistry::with_builtin()
     }
 
-
-
     /// End-to-end: a JSON document containing a node group flattens and loads
     /// through the real `into_graph` against the builtin registry — proving the
     /// rewired wires type-check against real primitive ports, the boundary
@@ -917,7 +922,10 @@ mod tests {
 
         let doc: GraphDocument = serde_json::from_str(json).expect("grouped doc parses");
         let g = doc
-            .into_graph(&crate::testkit::document_fixtures::registry(), &crate::scene::mesh_change::PreparedMeshRules::default())
+            .into_graph(
+                &crate::testkit::document_fixtures::registry(),
+                &crate::scene::mesh_change::PreparedMeshRules::default(),
+            )
             .expect("grouped document flattens and loads");
 
         // Boundary + group nodes folded away: only source, so1, so2, final.
@@ -933,12 +941,22 @@ mod tests {
 
         // The interface param routed onto so2.scale; so1 kept its default.
         assert_eq!(
-            g.get_node(so2).unwrap().params.get("scale").cloned().unwrap(),
+            g.get_node(so2)
+                .unwrap()
+                .params
+                .get("scale")
+                .cloned()
+                .unwrap(),
             ParamValue::Float(0.25),
             "amount override routed to so2.scale"
         );
         assert_eq!(
-            g.get_node(so1).unwrap().params.get("scale").cloned().unwrap(),
+            g.get_node(so1)
+                .unwrap()
+                .params
+                .get("scale")
+                .cloned()
+                .unwrap(),
             ParamValue::Float(1.0),
             "so1.scale untouched at its declared default"
         );
@@ -946,10 +964,6 @@ mod tests {
         // Three concrete wires survived: source->so1, so1->so2, so2->final.
         assert_eq!(g.wires().len(), 3);
     }
-
-
-
-
 
     /// WGSL escape-hatch primitives round-trip their `wgsl_source` field
     /// through the JSON document — the field is identity-level config of
@@ -982,7 +996,12 @@ mod tests {
             "JSON must carry the wgslSource field; got: {json}"
         );
         let parsed: GraphDocument = serde_json::from_str(&json).unwrap();
-        let g2 = parsed.into_graph(&registry(), &crate::scene::mesh_change::PreparedMeshRules::default()).unwrap();
+        let g2 = parsed
+            .into_graph(
+                &registry(),
+                &crate::scene::mesh_change::PreparedMeshRules::default(),
+            )
+            .unwrap();
 
         // Source survives the round trip.
         let kernel_id = g2.node_id_by_handle("kernel").expect("handle survived");
@@ -1035,7 +1054,12 @@ mod tests {
 
         // Load → install on the live instance's `title`.
         let parsed: GraphDocument = serde_json::from_str(&json).unwrap();
-        let g = parsed.into_graph(&registry(), &crate::scene::mesh_change::PreparedMeshRules::default()).unwrap();
+        let g = parsed
+            .into_graph(
+                &registry(),
+                &crate::scene::mesh_change::PreparedMeshRules::default(),
+            )
+            .unwrap();
         let kernel_id = g.node_id_by_handle("simulate").expect("handle survived");
         let inst = g.get_node(kernel_id).unwrap();
         assert_eq!(
@@ -1096,7 +1120,10 @@ mod tests {
             }],
             wires: vec![],
         };
-        let err = expect_err(doc.into_graph(&registry(), &crate::scene::mesh_change::PreparedMeshRules::default()));
+        let err = expect_err(doc.into_graph(
+            &registry(),
+            &crate::scene::mesh_change::PreparedMeshRules::default(),
+        ));
         match err {
             LoadError::UnknownOutputFormat { format, port, .. } => {
                 assert_eq!(format, "made_up_format");
@@ -1133,7 +1160,10 @@ mod tests {
             }],
             wires: vec![],
         };
-        let err = expect_err(doc.into_graph(&registry(), &crate::scene::mesh_change::PreparedMeshRules::default()));
+        let err = expect_err(doc.into_graph(
+            &registry(),
+            &crate::scene::mesh_change::PreparedMeshRules::default(),
+        ));
         match err {
             LoadError::UnknownTypeId { node_id, type_id } => {
                 assert_eq!(node_id, 0);
@@ -1198,13 +1228,12 @@ mod tests {
                 to_port: "in".to_string(),
             }],
         };
-        let err = expect_err(doc.into_graph(&registry(), &crate::scene::mesh_change::PreparedMeshRules::default()));
+        let err = expect_err(doc.into_graph(
+            &registry(),
+            &crate::scene::mesh_change::PreparedMeshRules::default(),
+        ));
         assert!(matches!(err, LoadError::InvalidWire { .. }), "got {err:?}");
     }
-
-
-
-
 
     #[test]
     fn future_version_is_rejected() {
@@ -1217,7 +1246,10 @@ mod tests {
             nodes: vec![],
             wires: vec![],
         };
-        let err = expect_err(doc.into_graph(&registry(), &crate::scene::mesh_change::PreparedMeshRules::default()));
+        let err = expect_err(doc.into_graph(
+            &registry(),
+            &crate::scene::mesh_change::PreparedMeshRules::default(),
+        ));
         assert!(matches!(err, LoadError::UnsupportedVersion { .. }));
     }
 
@@ -1236,7 +1268,10 @@ mod tests {
             nodes: vec![],
             wires: vec![],
         };
-        let result = doc.into_graph(&registry(), &crate::scene::mesh_change::PreparedMeshRules::default());
+        let result = doc.into_graph(
+            &registry(),
+            &crate::scene::mesh_change::PreparedMeshRules::default(),
+        );
         assert!(result.is_ok(), "v1 doc should load: {:?}", result.err());
     }
 
@@ -1251,7 +1286,10 @@ mod tests {
             nodes: vec![],
             wires: vec![],
         };
-        let result = doc.into_graph(&registry(), &crate::scene::mesh_change::PreparedMeshRules::default());
+        let result = doc.into_graph(
+            &registry(),
+            &crate::scene::mesh_change::PreparedMeshRules::default(),
+        );
         assert!(result.is_ok(), "v2 doc should load: {:?}", result.err());
     }
 
@@ -1265,11 +1303,9 @@ mod tests {
     /// dead-state-param bug class. Pin the fence here.
     #[test]
     fn binding_convert_type_mismatch_surfaces_as_load_error() {
-        use manifold_core::effect_graph_def::{
-            BindingDef, BindingTarget, PresetMetadata,
-        };
-        use manifold_core::effects::ParamConvert;
         use manifold_core::PresetTypeId;
+        use manifold_core::effect_graph_def::{BindingDef, BindingTarget, PresetMetadata};
+        use manifold_core::effects::ParamConvert;
 
         let preset_metadata = Some(PresetMetadata {
             shape: None,
@@ -1280,7 +1316,7 @@ mod tests {
             legacy_discriminant: None,
             available: true,
             is_line_based: false,
-                layer_types: None,
+            layer_types: None,
             params: vec![],
             bindings: vec![BindingDef {
                 id: "bad".into(),
@@ -1327,7 +1363,10 @@ mod tests {
             }],
             wires: vec![],
         };
-        let err = expect_err(doc.into_graph(&crate::testkit::document_fixtures::registry(), &crate::scene::mesh_change::PreparedMeshRules::default()));
+        let err = expect_err(doc.into_graph(
+            &crate::testkit::document_fixtures::registry(),
+            &crate::scene::mesh_change::PreparedMeshRules::default(),
+        ));
         match err {
             LoadError::BindingConvertTypeMismatch {
                 binding_id,
@@ -1345,8 +1384,6 @@ mod tests {
             other => panic!("expected BindingConvertTypeMismatch, got {other:?}"),
         }
     }
-
-
 
     #[test]
     fn name_and_description_round_trip() {
@@ -1367,11 +1404,9 @@ mod tests {
 
     #[test]
     fn serialized_param_value_round_trips_every_variant() {
-        let table = crate::parameters::TableData::new(vec![
-            vec![1.0, 2.0, 3.0],
-            vec![4.0, 5.0, 6.0],
-        ])
-        .unwrap();
+        let table =
+            crate::parameters::TableData::new(vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]])
+                .unwrap();
         let cases: Vec<ParamValue> = vec![
             ParamValue::Float(0.5),
             ParamValue::Float(7.0),

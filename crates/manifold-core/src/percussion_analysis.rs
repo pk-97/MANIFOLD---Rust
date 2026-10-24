@@ -561,8 +561,11 @@ impl ClipDetectionAnchor {
 
     pub fn from_clip(clip: &crate::clip::TimelineClip, project: &crate::project::Project) -> Self {
         let mut anchor = Self::new(
-            clip.start_beat, clip.duration_beats, clip.in_point,
-            clip.recorded_bpm_resolved(), project.settings.bpm,
+            clip.start_beat,
+            clip.duration_beats,
+            clip.in_point,
+            clip.recorded_bpm_resolved(),
+            project.settings.bpm,
         );
         if clip.recorded_bpm_resolved() <= 0.0 {
             anchor.tempo_map = Some(project.tempo_map.clone());
@@ -902,13 +905,8 @@ mod tests {
     fn anchor_warp_on_locks_source_beats_to_timeline() {
         // 120-BPM clip on a 128-BPM project: a hit 0.5s into the file is 1
         // source-beat in, which warp places at timeline beat 1 (start + 1).
-        let anchor = ClipDetectionAnchor::new(
-            Beats::ZERO,
-            Beats(8.0),
-            Seconds::ZERO,
-            120.0,
-            Bpm(128.0),
-        );
+        let anchor =
+            ClipDetectionAnchor::new(Beats::ZERO, Beats(8.0), Seconds::ZERO, 120.0, Bpm(128.0));
         let beat = anchor.map_source_seconds(Seconds(0.5)).unwrap();
         assert!((beat.0 - 1.0).abs() < 1e-6);
     }
@@ -953,13 +951,33 @@ mod audio_anchor_tempo_tests {
     fn native_detection_uses_the_same_tempo_map_as_playback() {
         let mut project = crate::project::Project::default();
         project.settings.bpm = Bpm(120.0);
-        project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), crate::types::TempoPointSource::Manual, 0.001);
-        project.tempo_map.add_or_replace_point(Beats(4.0), Bpm(60.0), crate::types::TempoPointSource::Manual, 0.001);
-        let clip = crate::clip::TimelineClip::new_audio("a.wav".into(), Beats(2.0), Beats(8.0), Seconds(1.0), Seconds(10.0));
+        project.tempo_map.add_or_replace_point(
+            Beats::ZERO,
+            Bpm(120.0),
+            crate::types::TempoPointSource::Manual,
+            0.001,
+        );
+        project.tempo_map.add_or_replace_point(
+            Beats(4.0),
+            Bpm(60.0),
+            crate::types::TempoPointSource::Manual,
+            0.001,
+        );
+        let clip = crate::clip::TimelineClip::new_audio(
+            "a.wav".into(),
+            Beats(2.0),
+            Beats(8.0),
+            Seconds(1.0),
+            Seconds(10.0),
+        );
         let anchor = ClipDetectionAnchor::from_clip(&clip, &project);
         // Start at t=1, source t=1; two source seconds later is timeline t=3 / beat 5.
         assert!((anchor.map_source_seconds(Seconds(3.0)).unwrap().0 - 5.0).abs() < 1e-6);
-        let roundtrip: ClipDetectionAnchor = serde_json::from_str(&serde_json::to_string(&anchor).unwrap()).unwrap();
-        assert_eq!(roundtrip.map_source_seconds(Seconds(3.0)), anchor.map_source_seconds(Seconds(3.0)));
+        let roundtrip: ClipDetectionAnchor =
+            serde_json::from_str(&serde_json::to_string(&anchor).unwrap()).unwrap();
+        assert_eq!(
+            roundtrip.map_source_seconds(Seconds(3.0)),
+            anchor.map_source_seconds(Seconds(3.0))
+        );
     }
 }

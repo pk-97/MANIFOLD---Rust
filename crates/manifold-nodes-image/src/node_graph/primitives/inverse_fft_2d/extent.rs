@@ -6,7 +6,9 @@ fn inverse_fft_2d(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let batch = x.param("batch", 6.0).round();
     let n = size as u32;
     if !(16.0..=1024.0).contains(&size) || !n.is_power_of_two() || !(1.0..=16.0).contains(&batch) {
-        return Err(Verdict::Refused(format!("Inverse FFT 2D: Size must be a power of two in 16..1024 and Batch 1..16 (got {size}, {batch})")));
+        return Err(Verdict::Refused(format!(
+            "Inverse FFT 2D: Size must be a power of two in 16..1024 and Batch 1..16 (got {size}, {batch})"
+        )));
     }
     let (n, batch) = (u64::from(n), batch as u64);
     // The MPSGraph transform reads B half spectra and writes B real fields.

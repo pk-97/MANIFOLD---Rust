@@ -3,13 +3,13 @@
 //! The generic checker and its shared rules live in the exec extent module;
 //! this module supplies liquid-specific storage, lattice, and whitewater rules.
 
-use std::mem::size_of;
-use crate::fluid_particles::{bin_counts, searched_bins, CellRange};
-use manifold_node_engine::particles::FluidParticle;
-use crate::grid::{face_len, FACE_GRID_PORTS, FACE_INPUT_PORTS};
+use crate::fluid_particles::{CellRange, bin_counts, searched_bins};
+use crate::grid::{FACE_GRID_PORTS, FACE_INPUT_PORTS, face_len};
 use crate::lattice::LiquidLattice;
-use crate::whitewater::{cell_total, face_offset, grid_cells, KnownValue};
+use crate::whitewater::{KnownValue, cell_total, face_offset, grid_cells};
 use manifold_node_engine::exec::extent::{AtomExtent, Verdict};
+use manifold_node_engine::particles::FluidParticle;
+use std::mem::size_of;
 
 // ── Rules ──────────────────────────────────────────────────────────────────
 
@@ -33,10 +33,14 @@ pub fn liquid_lattice(x: &AtomExtent<'_>) -> Result<LiquidLattice, Verdict> {
 /// Field reads clamp to the field lattices the scalars name, so the wired
 /// buffers must hold them.
 pub fn field_reads(x: &AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = ["field_nodes_x", "field_nodes_y", "field_nodes_z"].map(|name| whole(x, name, 2.0).max(2));
+    let nodes =
+        ["field_nodes_x", "field_nodes_y", "field_nodes_z"].map(|name| whole(x, name, 2.0).max(2));
     let node_count = nodes.iter().map(|&n| u64::from(n)).product::<u64>();
     let force_bytes = node_count * manifold_physics::force_lattice::FORCE_NODE_FLOATS as u64 * 4;
-    x.covers_if_bound("forces", u64::from(whole(x, "force_lattices", 0.0)) * force_bytes)?;
+    x.covers_if_bound(
+        "forces",
+        u64::from(whole(x, "force_lattices", 0.0)) * force_bytes,
+    )?;
     x.covers_if_bound("impulses", node_count * 16)
 }
 
@@ -45,7 +49,10 @@ pub fn field_reads(x: &AtomExtent<'_>) -> Result<(), Verdict> {
 /// the rule, since consumers size from it.
 pub fn provide_frame_faces(x: &mut AtomExtent<'_>, cells: [u32; 3], valid_layers: f32) {
     let published = FACE_INPUT_PORTS.iter().all(|port| x.wired(port));
-    x.publish(FACE_GRID_PORTS[6], if published { valid_layers } else { 0.0 });
+    x.publish(
+        FACE_GRID_PORTS[6],
+        if published { valid_layers } else { 0.0 },
+    );
     for axis in 0..3 {
         let bytes = face_len(cells, axis) * 4;
         if x.wired(FACE_INPUT_PORTS[axis]) {
@@ -74,10 +81,14 @@ pub fn cover_frame_faces(x: &AtomExtent<'_>, cells: [u32; 3]) -> Result<(), Verd
 /// The sort's bin grid is searched with exactly the ranges it allocates, and
 /// its last bin index stays inside them in i32.
 pub fn search_fits(x: &AtomExtent<'_>, bins: [u32; 3], range_bytes: u64) -> Result<(), Verdict> {
-    let searched = searched_bins(bins.map(|n| n as f32), range_bytes, "search").map_err(|error| x.uncovered(error))?;
+    let searched = searched_bins(bins.map(|n| n as f32), range_bytes, "search")
+        .map_err(|error| x.uncovered(error))?;
     let [bx, by, bz] = bins.map(u64::from);
     let last = (bx - 1) + bx * ((by - 1) + by * (bz - 1));
-    if searched != bins || last >= range_bytes / size_of::<CellRange>() as u64 || last > i32::MAX as u64 {
+    if searched != bins
+        || last >= range_bytes / size_of::<CellRange>() as u64
+        || last > i32::MAX as u64
+    {
         return Err(x.uncovered(format!("bin {last} of {bins:?} lies past the ranges")));
     }
     Ok(())
@@ -88,7 +99,9 @@ pub fn search_fits(x: &AtomExtent<'_>, bins: [u32; 3], range_bytes: u64) -> Resu
 pub fn searched(x: &AtomExtent<'_>) -> Result<[u32; 3], Verdict> {
     let ports = ["bins_x", "bins_y", "bins_z"];
     let bins = ports.map(|port| x.scalar(port, 0.0));
-    let ranges = x.bytes("cell_ranges").ok_or_else(|| x.uncovered("cell_ranges is unbound".into()))?;
+    let ranges = x
+        .bytes("cell_ranges")
+        .ok_or_else(|| x.uncovered("cell_ranges is unbound".into()))?;
     let bins = if bins == [0.0; 3] && ports.iter().all(|port| !x.wired(port)) {
         let size = ["size_x", "size_y", "size_z"].map(|name| x.scalar(name, 4.0));
         bin_counts(size, x.scalar("cell_size", 0.0625)).map(|n| n as f32)
@@ -100,13 +113,17 @@ pub fn searched(x: &AtomExtent<'_>) -> Result<[u32; 3], Verdict> {
 
 pub fn required_blob_bounds(x: &AtomExtent<'_>) -> Result<(), Verdict> {
     if x.bytes("bounds") != Some(8) {
-        return Err(x.uncovered("bounds must contain exactly two f32 words from Blob Bounds".into()));
+        return Err(
+            x.uncovered("bounds must contain exactly two f32 words from Blob Bounds".into())
+        );
     }
     Ok(())
 }
 
 pub fn brick_schedule(x: &AtomExtent<'_>, nodes: [u32; 3]) -> Result<(), Verdict> {
-    if !x.wired("bricks") { return Ok(()); }
+    if !x.wired("bricks") {
+        return Ok(());
+    }
     let words = crate::primitives::liquid_bricks::schedule_words(nodes)
         .ok_or_else(|| x.uncovered("brick schedule size overflow".into()))?;
     x.covers("bricks", words * 4)
@@ -120,9 +137,13 @@ pub fn surface_mesh_pass(x: &mut AtomExtent<'_>, output: &str) -> Result<(), Ver
     brick_schedule(x, nodes.map(|n| n as u32))?;
     x.covers("levelset", nodes_total(nodes) * 4)?;
     x.covers("scan", nodes_total(nodes.map(|n| n - 1.0)) * 4)?;
-    if x.wired("edge_scan") { x.covers("edge_scan", nodes_total(nodes) * 4)?; }
+    if x.wired("edge_scan") {
+        x.covers("edge_scan", nodes_total(nodes) * 4)?;
+    }
     // Cell-owned intervals and neighbour reads lie below the checked live total.
-    let vertices = x.bytes("vertices").ok_or_else(|| x.uncovered("vertices is unbound".into()))?;
+    let vertices = x
+        .bytes("vertices")
+        .ok_or_else(|| x.uncovered("vertices is unbound".into()))?;
     x.covers(output, vertices)
 }
 
@@ -138,7 +159,9 @@ pub const PARTICLE: u64 = size_of::<FluidParticle>() as u64;
 pub fn body_rows(x: &AtomExtent<'_>) -> Result<u64, Verdict> {
     let rows = x.scalar("rows", 0.0);
     if !(rows >= 0.0 && rows.fract() == 0.0) {
-        return Err(Verdict::Refused(format!("{rows} body rows is not a whole count")));
+        return Err(Verdict::Refused(format!(
+            "{rows} body rows is not a whole count"
+        )));
     }
     Ok(rows as u64)
 }
@@ -150,9 +173,16 @@ pub fn body_rows(x: &AtomExtent<'_>) -> Result<u64, Verdict> {
 // rule asks that no output is the smaller one.
 
 /// The whitewater grid's solid nodes and cells, as `grid_nodes` reads them.
-pub fn whitewater_lattice(x: &AtomExtent<'_>, names: [&str; 3]) -> Result<([u32; 3], [u32; 3]), Verdict> {
+pub fn whitewater_lattice(
+    x: &AtomExtent<'_>,
+    names: [&str; 3],
+) -> Result<([u32; 3], [u32; 3]), Verdict> {
     let nodes = names.map(|name| whole(x, name, 71.0));
-    let cells = grid_cells(nodes).ok_or_else(|| Verdict::Refused(format!("a {nodes:?} solid lattice has too few or too many nodes")))?;
+    let cells = grid_cells(nodes).ok_or_else(|| {
+        Verdict::Refused(format!(
+            "a {nodes:?} solid lattice has too few or too many nodes"
+        ))
+    })?;
     Ok((nodes, cells))
 }
 
@@ -163,7 +193,11 @@ pub fn whitewater_grid(x: &AtomExtent<'_>) -> Result<(u64, u64), Verdict> {
 
 /// The face grid, placed centred in the whitewater grid, and each face
 /// array covering its axis.
-pub fn whitewater_faces(x: &AtomExtent<'_>, nodes: [u32; 3], names: [&str; 3]) -> Result<[u32; 3], Verdict> {
+pub fn whitewater_faces(
+    x: &AtomExtent<'_>,
+    nodes: [u32; 3],
+    names: [&str; 3],
+) -> Result<[u32; 3], Verdict> {
     let face_cells = names.map(|name| whole(x, name, 64.0));
     face_offset(nodes, face_cells).map_err(Verdict::Refused)?;
     for (axis, port) in ["face_u", "face_v", "face_w"].into_iter().enumerate() {
@@ -190,11 +224,26 @@ pub fn particle_values(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 pub fn walked_roles(
     x: &AtomExtent<'_>,
     solver: &str,
-) -> Result<(Option<manifold_node_engine::scene::transform::Transform>, Vec<crate::fluid_role::FluidRoleKind>), Verdict> {
+) -> Result<
+    (
+        Option<manifold_node_engine::scene::transform::Transform>,
+        Vec<crate::fluid_role::FluidRoleKind>,
+    ),
+    Verdict,
+> {
     use crate::fluid_role::{FluidRoleKind, initial_fill};
-    let objects: Vec<_> = (0..crate::role_count(x.params())).filter_map(|index| x.object(&format!("role_{index}"))).collect();
-    let kinds: Vec<_> = objects.iter().filter_map(|(kind, _)| FluidRoleKind::from_index(*kind)).collect();
-    let fills = objects.iter().filter(|(kind, _)| *kind == FluidRoleKind::InitialFill.index()).map(|(_, placed)| *placed);
-    let fill = initial_fill(fills).map_err(|reason| Verdict::Refused(format!("{solver}: {reason}")))?;
+    let objects: Vec<_> = (0..crate::role_count(x.params()))
+        .filter_map(|index| x.object(&format!("role_{index}")))
+        .collect();
+    let kinds: Vec<_> = objects
+        .iter()
+        .filter_map(|(kind, _)| FluidRoleKind::from_index(*kind))
+        .collect();
+    let fills = objects
+        .iter()
+        .filter(|(kind, _)| *kind == FluidRoleKind::InitialFill.index())
+        .map(|(_, placed)| *placed);
+    let fill =
+        initial_fill(fills).map_err(|reason| Verdict::Refused(format!("{solver}: {reason}")))?;
     Ok((fill, kinds))
 }

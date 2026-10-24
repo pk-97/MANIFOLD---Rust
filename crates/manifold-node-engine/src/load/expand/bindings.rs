@@ -125,7 +125,12 @@ pub(super) fn expand_bindings_with_sources(
         let is_declared_impulse = local_metadata
             .scene_modifier
             .as_ref()
-            .is_some_and(|recipe| recipe.impulses.iter().any(|impulse| impulse.param_id == *param_id));
+            .is_some_and(|recipe| {
+                recipe
+                    .impulses
+                    .iter()
+                    .any(|impulse| impulse.param_id == *param_id)
+            });
         if is_declared_impulse {
             if binding.convert != ParamConvert::Float
                 || binding.scale != 1.0
@@ -305,9 +310,18 @@ pub(super) fn seed_local_defaults(
         };
         let spec = metadata.params.iter().find(|spec| spec.id == binding.id);
         let value = if let Some(spec) = spec {
-            manifold_core::effects::apply_card_reshape(binding.default_value,
-                spec.min, spec.max, spec.invert, spec.curve, binding.scale, binding.offset)
-        } else { binding.default_value * binding.scale + binding.offset };
+            manifold_core::effects::apply_card_reshape(
+                binding.default_value,
+                spec.min,
+                spec.max,
+                spec.invert,
+                spec.curve,
+                binding.scale,
+                binding.offset,
+            )
+        } else {
+            binding.default_value * binding.scale + binding.offset
+        };
         if !value.is_finite() {
             return Err(invalid_binding(
                 &binding.id,
@@ -315,8 +329,7 @@ pub(super) fn seed_local_defaults(
             ));
         }
         let node = unique_node_mut(&mut seeded.nodes, target.0, &binding.id)?;
-        let converted =
-            crate::param_binding::convert_param_value(binding.convert, value);
+        let converted = crate::param_binding::convert_param_value(binding.convert, value);
         node.params
             .insert(target.1.clone(), SerializedParamValue::from(converted));
     }
@@ -604,10 +617,7 @@ mod tests {
             expanded.bindings[1].default_value * expanded.bindings[1].scale
                 + expanded.bindings[1].offset,
         );
-        assert_eq!(
-            applied,
-            crate::parameters::ParamValue::Float(10.0)
-        );
+        assert_eq!(applied, crate::parameters::ParamValue::Float(10.0));
     }
 
     #[test]
@@ -707,8 +717,12 @@ mod tests {
                 value: "from-binding".into()
             }
         );
-        let untouched = seed_local_defaults(&local, &|id| id.as_str() == "leaf").expect("host seed");
-        assert_eq!(untouched.nodes[0].params, local.nodes[0].params, "host nodes are never seeded");
+        let untouched =
+            seed_local_defaults(&local, &|id| id.as_str() == "leaf").expect("host seed");
+        assert_eq!(
+            untouched.nodes[0].params, local.nodes[0].params,
+            "host nodes are never seeded"
+        );
 
         let binding = &mut seeded.preset_metadata.as_mut().expect("metadata").bindings[0];
         binding.default_mirrors_node_param = true;
@@ -731,7 +745,13 @@ mod tests {
         }]);
         let local: EffectGraphDef = serde_json::from_value(raw).unwrap();
         let seeded = seed_local_defaults(&local, &|_| false).unwrap();
-        assert_eq!(seeded.nodes[0].params["amount"], SerializedParamValue::Float { value: 2.0 });
-        assert_ne!(seeded.nodes[0].params["amount"], local.nodes[0].params["amount"]);
+        assert_eq!(
+            seeded.nodes[0].params["amount"],
+            SerializedParamValue::Float { value: 2.0 }
+        );
+        assert_ne!(
+            seeded.nodes[0].params["amount"],
+            local.nodes[0].params["amount"]
+        );
     }
 }

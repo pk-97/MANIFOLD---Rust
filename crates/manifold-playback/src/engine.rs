@@ -6,11 +6,11 @@ use manifold_core::tempo::TempoMapConverter;
 use manifold_core::types::{PlaybackState, TempoPointSource};
 use manifold_core::{Beats, Bpm, GraphTarget, LayerId, SceneId, Seconds};
 
+use crate::external_follow::{ExternalFollower, ExternalSample, FollowEvent, FollowProfile};
 use crate::live_clip_manager::LiveClipManager;
 use crate::renderer::ClipRenderer;
 use crate::scheduler::{ActiveClipRef, ClipScheduler};
 use crate::session_state::SessionRuntime;
-use crate::external_follow::{ExternalFollower, ExternalSample, FollowEvent, FollowProfile};
 use crate::transport_clock::TransportClock;
 
 use ahash::{AHashMap, AHashSet};
@@ -151,7 +151,13 @@ pub enum TempoSource {
 /// A clip's start time for video elapsed time: `None` reads the map live
 /// (under the map a past beat converts exactly); `Some` is latched on the
 /// activation frame under a follower, so it never rescales (D8).
-fn clip_start_latch(tempo: TempoSource, follower: &ExternalFollower, time: Seconds, frame_beat: f64, start: Beats) -> Option<Seconds> {
+fn clip_start_latch(
+    tempo: TempoSource,
+    follower: &ExternalFollower,
+    time: Seconds,
+    frame_beat: f64,
+    start: Beats,
+) -> Option<Seconds> {
     match tempo {
         TempoSource::Map { .. } => None,
         TempoSource::Follow => Some(time - follower.duration(start, Beats(frame_beat))),
@@ -618,12 +624,17 @@ impl PlaybackEngine {
     /// one tick; never a write path. False when no project is loaded.
     #[cfg(feature = "project-lend")]
     pub fn swap_project(&mut self, project: &mut Project) -> bool {
-        self.project.as_mut().map(|own| std::mem::swap(own, project)).is_some()
+        self.project
+            .as_mut()
+            .map(|own| std::mem::swap(own, project))
+            .is_some()
     }
     /// The only public mutable entry into the project (D13): every write goes
     /// through `EditingService` or `tick_write`.
     pub fn project_edit(&mut self) -> Option<manifold_editing::edit::ProjectEdit<'_>> {
-        self.project.as_mut().map(manifold_editing::edit::ProjectEdit::new)
+        self.project
+            .as_mut()
+            .map(manifold_editing::edit::ProjectEdit::new)
     }
     /// Clip-control bindings are stale: the next reconcile walks once. Called
     /// by the content reaction pass when Layers, Clips, Effects or Session
@@ -637,7 +648,10 @@ impl PlaybackEngine {
     /// Structural commands the live-clip path queued (recorded takes, missing
     /// layers), for the content thread to execute through `EditingService`.
     pub fn take_live_commits(&mut self) -> Vec<Box<dyn manifold_editing::command::Command>> {
-        self.live_clip_manager.as_mut().map(LiveClipManager::take_pending_commands).unwrap_or_default()
+        self.live_clip_manager
+            .as_mut()
+            .map(LiveClipManager::take_pending_commands)
+            .unwrap_or_default()
     }
     pub fn compositor_dirty_deadline(&self) -> f64 {
         self.compositor_dirty_deadline
@@ -669,17 +683,22 @@ impl PlaybackEngine {
         // frame's beat, so the cutoff is the same hair before the frame (D14).
         let frame_floor = self.clock.frame_floor_time().0;
         if let Some(project) = &mut self.project {
-            manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ClipBindingReconcile);
+            manifold_core::work_count::record_work(
+                manifold_core::work_count::WorkKind::ClipBindingReconcile,
+            );
             let floor_beat = Beats(TempoMapConverter::seconds_to_beat_f64(
                 &mut project.tempo_map,
                 frame_floor,
                 project.settings.bpm,
             ));
             let delivery = &mut self.trigger_delivery;
-            self.clip_controls.reconcile_bindings(project, floor_beat, |owner, param| {
-                delivery.cancel_clip_parameter(owner,
-                    manifold_core::audio_trigger::fire_meter_key_for_param("", param));
-            });
+            self.clip_controls
+                .reconcile_bindings(project, floor_beat, |owner, param| {
+                    delivery.cancel_clip_parameter(
+                        owner,
+                        manifold_core::audio_trigger::fire_meter_key_for_param("", param),
+                    );
+                });
         }
         self.clip_bindings_dirty = false;
     }
@@ -703,8 +722,16 @@ impl PlaybackEngine {
     /// Renderers and the project through the gateway, for the resize validator.
     pub fn split_renderer_project_edit(
         &mut self,
-    ) -> (&mut Vec<Box<dyn ClipRenderer>>, Option<manifold_editing::edit::ProjectEdit<'_>>) {
-        (&mut self.renderers, self.project.as_mut().map(manifold_editing::edit::ProjectEdit::new))
+    ) -> (
+        &mut Vec<Box<dyn ClipRenderer>>,
+        Option<manifold_editing::edit::ProjectEdit<'_>>,
+    ) {
+        (
+            &mut self.renderers,
+            self.project
+                .as_mut()
+                .map(manifold_editing::edit::ProjectEdit::new),
+        )
     }
 
     /// Mutable access to renderers for re-notification (e.g. after MutateProject).
@@ -769,7 +796,9 @@ impl PlaybackEngine {
         // Port of C# PlaybackController.LoadProject → renderer.OnProjectLoaded().
         if let Some(ref project) = self.project {
             for renderer in &mut self.renderers {
-                manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::RendererReload);
+                manifold_core::work_count::record_work(
+                    manifold_core::work_count::WorkKind::RendererReload,
+                );
                 renderer.on_project_loaded(project);
             }
         }
@@ -924,20 +953,27 @@ impl PlaybackEngine {
                 if let Some(p) = &self.project {
                     for (start, latch) in self.clip_starts.values_mut() {
                         latch.get_or_insert_with(|| {
-                            TempoMapConverter::beat_to_seconds_immut(&p.tempo_map, Beats(start.0 - beat_offset), p.settings.bpm)
+                            TempoMapConverter::beat_to_seconds_immut(
+                                &p.tempo_map,
+                                Beats(start.0 - beat_offset),
+                                p.settings.bpm,
+                            )
                         });
                     }
                 }
                 let t = self.clock.time();
                 let map_beat = self.map_beat_at(t);
                 let bpm = self.map_bpm_at_beat(Beats(map_beat));
-                self.follower = ExternalFollower::starting_at(profile, t, Beats(self.frame_beat), bpm);
+                self.follower =
+                    ExternalFollower::starting_at(profile, t, Beats(self.frame_beat), bpm);
                 self.tempo = TempoSource::Follow;
             }
             (TempoSource::Follow, Some(profile)) => self.follower.hand_over(profile),
             (TempoSource::Follow, None) => {
                 let map_beat = self.map_beat_at(self.clock.time());
-                self.tempo = TempoSource::Map { beat_offset: self.frame_beat - map_beat };
+                self.tempo = TempoSource::Map {
+                    beat_offset: self.frame_beat - map_beat,
+                };
             }
             (TempoSource::Map { .. }, None) => {}
         }
@@ -971,7 +1007,9 @@ impl PlaybackEngine {
     /// re-latches the clip starts only.
     fn seeded(&mut self, before: f64) {
         let after = self.follower.beat_at(self.clock.time()).0;
-        let moved = self.follower.duration(Beats(before.min(after)), Beats(before.max(after)));
+        let moved = self
+            .follower
+            .duration(Beats(before.min(after)), Beats(before.max(after)));
         if moved.0 > 0.5 * self.clock.step().0 {
             let old_beat = self.begin_seek();
             self.refresh_beat();
@@ -995,16 +1033,26 @@ impl PlaybackEngine {
     /// the beat, so the map edit moves nothing (D8).
     pub fn reconcile_tempo_edit(&mut self, old_map: &manifold_core::tempo::TempoMap, old_bpm: Bpm) {
         manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::TempoReconcile);
-        let TempoSource::Map { beat_offset } = self.tempo else { return };
-        let Some(project) = &mut self.project else { return };
+        let TempoSource::Map { beat_offset } = self.tempo else {
+            return;
+        };
+        let Some(project) = &mut self.project else {
+            return;
+        };
         if project.tempo_map.same_timing_as(old_map) && project.settings.bpm == old_bpm {
             return;
         }
         // The frame's exact time, not the D14 sample instant: the round trip
         // through an unchanged stretch of the map must land on the same frame.
         let mut old_map = old_map.clone();
-        let beat = TempoMapConverter::seconds_to_beat_f64(&mut old_map, self.clock.time().0, old_bpm) + beat_offset;
-        let t = TempoMapConverter::beat_to_seconds(&mut project.tempo_map, Beats(beat), project.settings.bpm);
+        let beat =
+            TempoMapConverter::seconds_to_beat_f64(&mut old_map, self.clock.time().0, old_bpm)
+                + beat_offset;
+        let t = TempoMapConverter::beat_to_seconds(
+            &mut project.tempo_map,
+            Beats(beat),
+            project.settings.bpm,
+        );
         self.tempo = TempoSource::Map { beat_offset: 0.0 };
         // The beat stays and its seconds move: no jump, so physics continues.
         let before = self.clock.time().0;
@@ -1012,7 +1060,9 @@ impl PlaybackEngine {
         // Live hop clocks map audio onto transport time. They move with the
         // transport, so a hop keeps its played time across the edit.
         let moved = self.clock.time().0 - before;
-        if moved != 0.0 && let Some(project) = &mut self.project {
+        if moved != 0.0
+            && let Some(project) = &mut self.project
+        {
             project.for_each_preset_instance_mut(|instance| {
                 for m in instance.audio_mods.iter_mut().flatten() {
                     if let Some(clock) = &mut m.hop_timeline.clock {
@@ -1030,24 +1080,39 @@ impl PlaybackEngine {
     }
 
     pub fn set_export_mode(&mut self, value: bool) {
-        if value == self.is_export_mode { return; }
+        if value == self.is_export_mode {
+            return;
+        }
         if value {
             self.queue_finished_automation();
             self.clear_automation_previews();
             self.export_param_values.clear();
             if let Some(project) = &self.project {
                 let saved = &mut self.export_param_values;
-                let mut capture = |target: GraphTarget, fx: &manifold_core::effects::PresetInstance| {
-                    for p in fx.params.iter() {
-                        saved.push((target.clone(), p.id().to_owned().into(), p.base, p.value, p.touched));
-                    }
-                };
-                for fx in &project.settings.master_effects { capture(GraphTarget::Effect(fx.id.clone()), fx); }
+                let mut capture =
+                    |target: GraphTarget, fx: &manifold_core::effects::PresetInstance| {
+                        for p in fx.params.iter() {
+                            saved.push((
+                                target.clone(),
+                                p.id().to_owned().into(),
+                                p.base,
+                                p.value,
+                                p.touched,
+                            ));
+                        }
+                    };
+                for fx in &project.settings.master_effects {
+                    capture(GraphTarget::Effect(fx.id.clone()), fx);
+                }
                 for layer in &project.timeline.layers {
                     if let Some(effects) = &layer.effects {
-                        for fx in effects { capture(GraphTarget::Effect(fx.id.clone()), fx); }
+                        for fx in effects {
+                            capture(GraphTarget::Effect(fx.id.clone()), fx);
+                        }
                     }
-                    if let Some(fx) = layer.gen_params() { capture(GraphTarget::Generator(layer.layer_id.clone()), fx); }
+                    if let Some(fx) = layer.gen_params() {
+                        capture(GraphTarget::Generator(layer.layer_id.clone()), fx);
+                    }
                 }
             }
         } else {
@@ -1055,7 +1120,11 @@ impl PlaybackEngine {
                 for (target, id, base, value, touched) in self.export_param_values.drain(..) {
                     if let Some(fx) = project.preset_instance_mut(&target)
                         && let Some(p) = fx.params.get_mut(id.as_ref())
-                    { p.base = base; p.value = value; p.touched = touched; }
+                    {
+                        p.base = base;
+                        p.value = value;
+                        p.touched = touched;
+                    }
                 }
             }
             self.end_export_clock();
@@ -1096,7 +1165,10 @@ impl PlaybackEngine {
         if let Some(TempoSource::Follow) = self.export_tempo.take() {
             self.tempo = TempoSource::Follow;
         }
-        let fps = self.project.as_ref().map_or(self.clock.fps(), |p| p.settings.frame_rate);
+        let fps = self
+            .project
+            .as_ref()
+            .map_or(self.clock.fps(), |p| p.settings.frame_rate);
         self.place(|clock| clock.end_export(fps));
         self.anchor_follower_on_map();
         if self.tempo == TempoSource::Follow {
@@ -1108,7 +1180,10 @@ impl PlaybackEngine {
     /// Where the transport goes back to after an export: the frame's exact
     /// beat, which snaps back to the same frame, and the state.
     pub fn export_restore_point(&self) -> ExportRestore {
-        ExportRestore { beat: Beats(self.frame_beat), state: self.current_state }
+        ExportRestore {
+            beat: Beats(self.frame_beat),
+            state: self.current_state,
+        }
     }
 
     /// Export's clock sequence, the one production and the tests run (D9):
@@ -1116,7 +1191,12 @@ impl PlaybackEngine {
     /// export frame numbering from the start's grid frame. `warm_up` may tick
     /// the engine (`export_warm_up_tick`) and returns whether it did; the
     /// transport then seeks back to `start`.
-    pub fn begin_export_run(&mut self, fps: f32, start: Seconds, warm_up: impl FnOnce(&mut Self) -> bool) {
+    pub fn begin_export_run(
+        &mut self,
+        fps: f32,
+        start: Seconds,
+        warm_up: impl FnOnce(&mut Self) -> bool,
+    ) {
         self.begin_export_clock(fps);
         self.seek_to(start);
         self.play();
@@ -1129,7 +1209,11 @@ impl PlaybackEngine {
     /// One export-grid frame of decoder warm-up, before frame numbering
     /// starts. True when every active clip is ready.
     pub fn export_warm_up_tick(&mut self) -> bool {
-        let result = self.tick(TickContext { frames: 1, realtime_now: Seconds::ZERO, frame_count: u64::MAX });
+        let result = self.tick(TickContext {
+            frames: 1,
+            realtime_now: Seconds::ZERO,
+            frame_count: u64::MAX,
+        });
         self.reclaim_tick_result(result);
         self.all_active_clips_ready()
     }
@@ -1137,7 +1221,11 @@ impl PlaybackEngine {
     /// Export frame `k`'s tick: frame 0 renders the start and does not
     /// advance, so dt-driven state starts there; every later frame is one.
     pub fn export_frame_context(k: u32, realtime_now: Seconds) -> TickContext {
-        TickContext { frames: u32::from(k != 0), realtime_now, frame_count: u64::from(k) }
+        TickContext {
+            frames: u32::from(k != 0),
+            realtime_now,
+            frame_count: u64::from(k),
+        }
     }
 
     /// Leave export: the project rate, the saved position and state.
@@ -1172,7 +1260,13 @@ impl PlaybackEngine {
         }
         let time = Seconds(time.0.max(0.0));
         let playing = self.is_playing();
-        self.place(|clock| if playing { clock.seek_playing(time) } else { clock.locate(time) });
+        self.place(|clock| {
+            if playing {
+                clock.seek_playing(time)
+            } else {
+                clock.locate(time)
+            }
+        });
         self.anchor_follower_on_map();
         self.finish_seek(old_beat)
     }
@@ -1337,7 +1431,9 @@ impl PlaybackEngine {
             Err(self.trigger_delivery.reject_input_overflow())
         } else {
             self.trigger_delivery.append_batch(
-                pulses.pulses_mut(), self.clock.time(), Beats(self.current_beat),
+                pulses.pulses_mut(),
+                self.clock.time(),
+                Beats(self.current_beat),
             )
         };
         if let Err(error) = result {
@@ -1401,12 +1497,11 @@ impl PlaybackEngine {
         //    the follower measures this tick's sample against the shown
         //    frame; a lasting error past the row's bound is a seek (D6).
         if let Some(first) = self.export_first_index {
-            self.clock.set_export_frame(first, u32::try_from(ctx.frame_count).unwrap_or(u32::MAX));
+            self.clock
+                .set_export_frame(first, u32::try_from(ctx.frame_count).unwrap_or(u32::MAX));
         } else {
             self.clock.advance(ctx.frames);
-            if self.tempo == TempoSource::Follow
-                && sample.is_none()
-            {
+            if self.tempo == TempoSource::Follow && sample.is_none() {
                 self.follower.free_wheel(self.clock.time());
             } else if self.tempo == TempoSource::Follow
                 && let Some(sample) = sample
@@ -1460,24 +1555,27 @@ impl PlaybackEngine {
         //     carries one `CommitRecordedGestureCommand` per gesture that
         //     closed this tick, for the content thread to run through
         //     `EditingService` right after this tick returns.
-        let (automation_dirty, mut pending_gesture_commits) = if let Some(project) = &mut self.project
-        {
-            crate::automation::evaluate_all_automation_at(
-                project,
-                Beats(self.current_beat),
-                Beats(self.frame_beat),
-                &mut self.automation_latches,
-                crate::automation::AutomationWrite {
-                    armed: self.automation_armed,
-                    holds: &self.automation_holds,
-                },
-                &mut self.automation_gestures,
-                if self.is_export_mode { crate::automation::AutomationSamplingMode::Export }
-                else { crate::automation::AutomationSamplingMode::Playback },
-            )
-        } else {
-            (false, Vec::new())
-        };
+        let (automation_dirty, mut pending_gesture_commits) =
+            if let Some(project) = &mut self.project {
+                crate::automation::evaluate_all_automation_at(
+                    project,
+                    Beats(self.current_beat),
+                    Beats(self.frame_beat),
+                    &mut self.automation_latches,
+                    crate::automation::AutomationWrite {
+                        armed: self.automation_armed,
+                        holds: &self.automation_holds,
+                    },
+                    &mut self.automation_gestures,
+                    if self.is_export_mode {
+                        crate::automation::AutomationSamplingMode::Export
+                    } else {
+                        crate::automation::AutomationSamplingMode::Playback
+                    },
+                )
+            } else {
+                (false, Vec::new())
+            };
         let preview_dirty = if let Some(project) = &mut self.project {
             crate::automation::evaluate_automation_previews(
                 project,
@@ -1686,8 +1784,9 @@ impl PlaybackEngine {
                 }
                 let layer_index = clip.layer_index as usize;
                 layers.get(layer_index).is_some_and(|layer| {
-                    let parent = manifold_core::layer::Layer::find_parent_layer(layers, layer_index)
-                        .map(|(_, p)| p);
+                    let parent =
+                        manifold_core::layer::Layer::find_parent_layer(layers, layer_index)
+                            .map(|(_, p)| p);
                     !layer.is_hidden(parent, any_solo_video)
                 })
             })
@@ -1700,7 +1799,9 @@ impl PlaybackEngine {
         TickResult {
             ready_clips: ready,
             compositor_dirty,
-            should_clear_compositor: !compositor_dirty && !has_visible_ready && !self.has_pending_clip_state(),
+            should_clear_compositor: !compositor_dirty
+                && !has_visible_ready
+                && !self.has_pending_clip_state(),
             should_clear_feedback_buffer: false,
             modulation_active: modulation_dirty,
             stopped_clips: Vec::new(), // Populated by tick() after this returns
@@ -1753,11 +1854,13 @@ impl PlaybackEngine {
                     continue;
                 }
                 if let Some(clip) = layer.clips.get(*ci) {
-                    let cutoff = self.session_runtime.pending_arrangement_end(
-                        &layer.layer_id, Beats(self.current_beat),
-                    );
+                    let cutoff = self
+                        .session_runtime
+                        .pending_arrangement_end(&layer.layer_id, Beats(self.current_beat));
                     let end = cutoff.map_or(clip.end_beat(), |beat| clip.end_beat().min(beat));
-                    let control_from = self.session_runtime.arrangement_control_from(&layer.layer_id)
+                    let control_from = self
+                        .session_runtime
+                        .arrangement_control_from(&layer.layer_id)
                         .map_or(clip.start_beat, |beat| clip.start_beat.max(beat));
                     if end <= control_from || end <= from {
                         continue;
@@ -1826,8 +1929,15 @@ impl PlaybackEngine {
             if success {
                 self.active_clip_renderers.insert(clip.id.clone(), idx);
                 self.active_clip_ids.insert(clip.id.clone());
-                let latch = clip_start_latch(self.tempo, &self.follower, self.clock.time(), self.frame_beat, clip.start_beat);
-                self.clip_starts.insert(clip.id.clone(), (clip.start_beat, latch));
+                let latch = clip_start_latch(
+                    self.tempo,
+                    &self.follower,
+                    self.clock.time(),
+                    self.frame_beat,
+                    clip.start_beat,
+                );
+                self.clip_starts
+                    .insert(clip.id.clone(), (clip.start_beat, latch));
                 // The realized layer is the layer the clip was started ON
                 // (authoritative container), never `clip.layer_id` — a dragged
                 // clip's own field is exactly what may be stale (P3).
@@ -1984,11 +2094,13 @@ impl PlaybackEngine {
             // position cannot leak into the earlier interval.
             self.reset_trigger_delivery();
         }
-        let from = self.clip_control_cursor.filter(|previous| {
-            self.is_playing() && *previous <= current_beat
-        });
+        let from = self
+            .clip_control_cursor
+            .filter(|previous| self.is_playing() && *previous <= current_beat);
         let sample_from = from.map_or(current_beat, |previous| {
-            self.clip_control_sample_start.unwrap_or(previous).min(previous)
+            self.clip_control_sample_start
+                .unwrap_or(previous)
+                .min(previous)
         });
         if from.is_none() {
             self.clip_control_sample_start = Some(current_beat);
@@ -2035,7 +2147,8 @@ impl PlaybackEngine {
                 true
             }
         });
-        self.timeline_control_scratch.extend(self.completed_control_scratch.iter().cloned());
+        self.timeline_control_scratch
+            .extend(self.completed_control_scratch.iter().cloned());
 
         let sync_result = self.scheduler.compute_sync(
             self.clock.time(),
@@ -2074,14 +2187,19 @@ impl PlaybackEngine {
                     self.session_runtime.arrangement_stopped_at(&layer.layer_id),
                 );
             }
-            for entry in sync_result.should_be_active.iter()
+            for entry in sync_result
+                .should_be_active
+                .iter()
                 .chain(&self.timeline_control_scratch)
                 .filter(|entry| entry.is_muted)
             {
-                if project.timeline.layer_index_for_id(&entry.layer_id)
+                if project
+                    .timeline
+                    .layer_index_for_id(&entry.layer_id)
                     .is_some_and(|index| project.timeline.layers[index].is_trigger())
                 {
-                    self.clip_controls.suppress_clip(&entry.layer_id, &entry.clip_id);
+                    self.clip_controls
+                        .suppress_clip(&entry.layer_id, &entry.clip_id);
                 }
             }
         }
@@ -2237,9 +2355,17 @@ impl PlaybackEngine {
     /// must never reach `start_clip`/video-time math directly).
     fn resolve_session_clip_for_start(&self, entry: &ActiveClipRef) -> Option<TimelineClip> {
         let project = self.project.as_ref()?;
-        let layer_id = &project.timeline.layers.get(entry.layer_index as usize)?.layer_id;
-        self.session_runtime
-            .resolve_clip_for_start(&project.session, layer_id, &entry.clip_id, entry.start_beat)
+        let layer_id = &project
+            .timeline
+            .layers
+            .get(entry.layer_index as usize)?
+            .layer_id;
+        self.session_runtime.resolve_clip_for_start(
+            &project.session,
+            layer_id,
+            &entry.clip_id,
+            entry.start_beat,
+        )
     }
 
     // ─── Session mode commands (P2, section 5) ───
@@ -2275,7 +2401,8 @@ impl PlaybackEngine {
             self.session_runtime
                 .launch_slot(layer_id, scene_id, current_beat, immediate);
         } else {
-            self.session_runtime.stop_slot(layer_id, current_beat, immediate);
+            self.session_runtime
+                .stop_slot(layer_id, current_beat, immediate);
         }
         if immediate {
             self.play();
@@ -2292,7 +2419,8 @@ impl PlaybackEngine {
     /// the arrangement.
     pub fn session_stop_slot(&mut self, layer_id: LayerId) {
         let current_beat = self.session_press_beat(false);
-        self.session_runtime.stop_slot(layer_id, current_beat, false);
+        self.session_runtime
+            .stop_slot(layer_id, current_beat, false);
         self.sync_clips_to_time();
     }
 
@@ -2329,7 +2457,8 @@ impl PlaybackEngine {
     pub fn session_back_to_arrangement(&mut self, layer_id: Option<LayerId>) {
         // Retain the final session interval before clearing its authority.
         self.sync_clips_to_time();
-        self.session_runtime.back_to_arrangement(layer_id.as_ref(), Beats(self.frame_beat));
+        self.session_runtime
+            .back_to_arrangement(layer_id.as_ref(), Beats(self.frame_beat));
         self.sync_clips_to_time();
     }
 
@@ -2353,13 +2482,22 @@ impl PlaybackEngine {
     }
 
     /// Restore only the addressed lane; another manually overridden control stays live.
-    pub fn automation_resume_parameter(&mut self, target: &GraphTarget, param_id: &manifold_core::effects::ParamId) {
-        let id = self.project().and_then(|p| p.preset_instance(target)).map(|instance| instance.id.clone());
+    pub fn automation_resume_parameter(
+        &mut self,
+        target: &GraphTarget,
+        param_id: &manifold_core::effects::ParamId,
+    ) {
+        let id = self
+            .project()
+            .and_then(|p| p.preset_instance(target))
+            .map(|instance| instance.id.clone());
         if let Some(id) = id {
             self.automation_latches.remove(&(id, param_id.clone()));
             if let Some(project) = self.project_mut() {
                 project.with_preset_graph_mut(target, |instance| {
-                    if let Some(param) = instance.params.get_mut(param_id.as_ref()) { param.touched = false; }
+                    if let Some(param) = instance.params.get_mut(param_id.as_ref()) {
+                        param.touched = false;
+                    }
                 });
             }
         }
@@ -2449,19 +2587,33 @@ impl PlaybackEngine {
     /// Capture any last unsampled touch and close pending takes before a
     /// transport or persistence boundary. The content thread executes these
     /// commands through EditingService; no lane mutation occurs here.
-    pub fn finish_automation_recording(&mut self) -> Vec<Box<dyn manifold_editing::command::Command>> {
+    pub fn finish_automation_recording(
+        &mut self,
+    ) -> Vec<Box<dyn manifold_editing::command::Command>> {
         let mut commands = self.take_finished_automation();
-        if self.is_playing() && self.automation_armed && !self.is_export_mode
+        if self.is_playing()
+            && self.automation_armed
+            && !self.is_export_mode
             && let Some(project) = &mut self.project
         {
-            let write = crate::automation::AutomationWrite { armed: true, holds: &self.automation_holds };
+            let write = crate::automation::AutomationWrite {
+                armed: true,
+                holds: &self.automation_holds,
+            };
             let (_, expired) = crate::automation::evaluate_all_automation_at(
-                project, Beats(self.current_beat), Beats(self.frame_beat), &mut self.automation_latches,
-                write, &mut self.automation_gestures, crate::automation::AutomationSamplingMode::Playback,
+                project,
+                Beats(self.current_beat),
+                Beats(self.frame_beat),
+                &mut self.automation_latches,
+                write,
+                &mut self.automation_gestures,
+                crate::automation::AutomationSamplingMode::Playback,
             );
             commands.extend(expired);
         }
-        commands.extend(crate::automation::finish_all_gestures(&mut self.automation_gestures));
+        commands.extend(crate::automation::finish_all_gestures(
+            &mut self.automation_gestures,
+        ));
         commands
     }
 
@@ -2488,7 +2640,9 @@ impl PlaybackEngine {
     /// handled directly on the content thread, same shape as
     /// `automation_back_to_arrangement`).
     pub fn set_automation_armed(&mut self, armed: bool) {
-        if self.automation_armed && !armed { self.end_automation_session(); }
+        if self.automation_armed && !armed {
+            self.end_automation_session();
+        }
         self.automation_armed = armed;
     }
 
@@ -2509,7 +2663,11 @@ impl PlaybackEngine {
     ) {
         for (other_target, other_param) in self.automation_holds.drain(..) {
             if !(held && other_target == target && other_param == param_id) {
-                crate::automation::release_hold(&mut self.automation_gestures, &other_target, &other_param);
+                crate::automation::release_hold(
+                    &mut self.automation_gestures,
+                    &other_target,
+                    &other_param,
+                );
             }
         }
         if held {
@@ -2551,7 +2709,9 @@ impl PlaybackEngine {
             TempoSource::Map { beat_offset } => {
                 let b = Beats(beat.0 - *beat_offset);
                 match &mut self.project {
-                    Some(p) => TempoMapConverter::beat_to_seconds(&mut p.tempo_map, b, p.settings.bpm),
+                    Some(p) => {
+                        TempoMapConverter::beat_to_seconds(&mut p.tempo_map, b, p.settings.bpm)
+                    }
                     None => Seconds(b.0 * 0.5),
                 }
             }
@@ -2585,13 +2745,15 @@ impl PlaybackEngine {
 
     /// The map's beat at `t`, without any hand-back offset.
     fn map_beat_at(&mut self, t: Seconds) -> f64 {
-        self.project
-            .as_mut()
-            .map_or(t.0 * 2.0, |p| TempoMapConverter::seconds_to_beat_f64(&mut p.tempo_map, t.0, p.settings.bpm))
+        self.project.as_mut().map_or(t.0 * 2.0, |p| {
+            TempoMapConverter::seconds_to_beat_f64(&mut p.tempo_map, t.0, p.settings.bpm)
+        })
     }
 
     fn map_bpm_at_beat(&mut self, beat: Beats) -> Bpm {
-        self.project.as_mut().map_or(Bpm::DEFAULT, |p| p.tempo_map.get_bpm_at_beat(beat, p.settings.bpm))
+        self.project.as_mut().map_or(Bpm::DEFAULT, |p| {
+            p.tempo_map.get_bpm_at_beat(beat, p.settings.bpm)
+        })
     }
 
     /// Under the follower, a placement the source didn't make (a user seek,
@@ -2944,7 +3106,8 @@ impl PlaybackEngine {
     /// Get clip duration in timeline seconds, from the beat difference (D8).
     /// Port of C# PlaybackEngine.GetClipDurationSeconds (lines 1463-1468).
     pub fn get_clip_duration_seconds(&mut self, clip: &TimelineClip) -> Seconds {
-        self.converter_duration(clip.start_beat, clip.end_beat()).max(Seconds::ZERO)
+        self.converter_duration(clip.start_beat, clip.end_beat())
+            .max(Seconds::ZERO)
     }
 
     /// Get clip loop duration in timeline seconds, from the beat difference (D8).
@@ -2959,9 +3122,15 @@ impl PlaybackEngine {
             return 0.0;
         }
         if self.tempo == TempoSource::Follow {
-            return self.follower.duration(t.start_beat, t.start_beat + t.loop_duration_beats).as_f32().max(0.0);
+            return self
+                .follower
+                .duration(t.start_beat, t.start_beat + t.loop_duration_beats)
+                .as_f32()
+                .max(0.0);
         }
-        let loop_end = self.converter_time_at(t.start_beat + t.loop_duration_beats).as_f32();
+        let loop_end = self
+            .converter_time_at(t.start_beat + t.loop_duration_beats)
+            .as_f32();
         let loop_start = self.converter_time_at(t.start_beat).as_f32();
         (loop_end - loop_start).max(0.0)
     }
@@ -3071,8 +3240,7 @@ impl PlaybackEngine {
         if t.is_looping && media_length > 0.01 {
             let source_available = (media_length - in_point).max(0.0);
             let loop_len_sec = if t.loop_duration_beats > Beats::ZERO {
-                self.timing_source_loop_duration(t)
-                    .min(source_available)
+                self.timing_source_loop_duration(t).min(source_available)
             } else {
                 media_length
             };
@@ -3142,7 +3310,11 @@ impl PlaybackEngine {
             // transport jumped while it opened seeks, and is hidden again
             // until the seek lands, because a seek keeps the old frame up.
             let position = self.renderers[renderer_idx].get_clip_playback_time(clip_id);
-            let lag_at_start = self.preparing_clips.get(clip_id).copied().unwrap_or(f32::INFINITY);
+            let lag_at_start = self
+                .preparing_clips
+                .get(clip_id)
+                .copied()
+                .unwrap_or(f32::INFINITY);
             if (timing.in_point - position).abs() > PREPARE_SEEK_TOLERANCE
                 || lag_at_start > DRIFT_CORRECTION_THRESHOLD
             {
@@ -3489,8 +3661,11 @@ impl PlaybackEngine {
                     .is_some_and(|mgr| mgr.is_live_slot_clip(&entry.clip_id));
                 let end_beat = entry.end_beat();
                 let clip_end_time = self.converter_time_at(end_beat);
-                if self.should_exclude_recently_started(&self.compositor_fallback_clips[i].clip_id, clip_end_time, is_live_clip)
-                {
+                if self.should_exclude_recently_started(
+                    &self.compositor_fallback_clips[i].clip_id,
+                    clip_end_time,
+                    is_live_clip,
+                ) {
                     continue;
                 }
             }
@@ -3559,8 +3734,8 @@ impl PlaybackEngine {
                 if !layer.layer_type.supports_clip_playback() {
                     continue;
                 }
-                let parent = manifold_core::layer::Layer::find_parent_layer(layers, li)
-                    .map(|(_, p)| p);
+                let parent =
+                    manifold_core::layer::Layer::find_parent_layer(layers, li).map(|(_, p)| p);
                 let hidden = layer.is_hidden(parent, any_solo_video);
 
                 for clip in &layer.clips {
@@ -3591,15 +3766,14 @@ impl PlaybackEngine {
 
         // Rank visible-first so a muted layer's earlier clip can't evict a
         // visible layer's next clip from the prewarm cap (D7b).
-        self.prewarm_candidates.sort_unstable_by(|(a, a_hidden), (b, b_hidden)| {
-            a_hidden
-                .cmp(b_hidden)
-                .then_with(|| {
+        self.prewarm_candidates
+            .sort_unstable_by(|(a, a_hidden), (b, b_hidden)| {
+                a_hidden.cmp(b_hidden).then_with(|| {
                     a.start_beat
                         .partial_cmp(&b.start_beat)
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
-        });
+            });
 
         // Build prewarm set from candidates
         let mut prewarm_set: HashMap<String, crate::video_time::PrewarmCandidate> = HashMap::new();
@@ -3833,7 +4007,9 @@ mod tests {
     use manifold_core::project::Project;
     use manifold_core::{Beats, PresetTypeId};
 
-    fn trigger_source_engine(owner_type: manifold_core::types::LayerType) -> (PlaybackEngine, LayerId) {
+    fn trigger_source_engine(
+        owner_type: manifold_core::types::LayerType,
+    ) -> (PlaybackEngine, LayerId) {
         let mut project = Project::default();
         let mut group = Layer::new("Group".into(), manifold_core::types::LayerType::Group, 0);
         group.is_muted = true;
@@ -3842,8 +4018,12 @@ mod tests {
         owner.is_muted = true;
         let mut source = Layer::new_trigger("Pattern".into(), owner.layer_id.clone(), 2);
         let source_id = source.layer_id.clone();
-        source.clips.push(TimelineClip::new_trigger(Beats::ZERO, Beats(4.0)));
-        source.clips.push(TimelineClip::new_trigger(Beats(4.0), Beats(4.0)));
+        source
+            .clips
+            .push(TimelineClip::new_trigger(Beats::ZERO, Beats(4.0)));
+        source
+            .clips
+            .push(TimelineClip::new_trigger(Beats(4.0), Beats(4.0)));
         project.timeline.layers = vec![group, owner, source];
         let mut engine = PlaybackEngine::new(Vec::new());
         engine.initialize(project);
@@ -3855,14 +4035,23 @@ mod tests {
     #[test]
     fn trigger_source_ignores_parent_and_group_mute_for_every_owner_kind() {
         use manifold_core::types::LayerType;
-        for owner_type in [LayerType::Video, LayerType::Generator, LayerType::Audio, LayerType::Dmx, LayerType::Group] {
+        for owner_type in [
+            LayerType::Video,
+            LayerType::Generator,
+            LayerType::Audio,
+            LayerType::Dmx,
+            LayerType::Group,
+        ] {
             let (mut engine, source) = trigger_source_engine(owner_type);
             engine.sync_clips_to_time();
             let view = engine.clip_controls().view(&source).unwrap();
             assert_eq!(view.spans.len(), 1, "owner {owner_type:?}");
             assert_eq!(view.starts.len(), 1, "owner {owner_type:?}");
             assert_eq!(view.spans[0].start_beat, Beats::ZERO);
-            assert!(engine.active_clip_ids.is_empty(), "trigger acquired a renderer");
+            assert!(
+                engine.active_clip_ids.is_empty(),
+                "trigger acquired a renderer"
+            );
         }
     }
 
@@ -3870,10 +4059,15 @@ mod tests {
     fn trigger_source_mute_cancels_pending_output_and_unmute_resumes_without_replay() {
         use manifold_core::params::ClipTriggerSource;
         for mute_clip in [false, true] {
-            let (mut engine, source) = trigger_source_engine(manifold_core::types::LayerType::Generator);
+            let (mut engine, source) =
+                trigger_source_engine(manifold_core::types::LayerType::Generator);
             engine.sync_clips_to_time();
             let layer = &mut engine.project_mut().unwrap().timeline.layers[2];
-            if mute_clip { layer.clips[0].is_muted = true; } else { layer.is_muted = true; }
+            if mute_clip {
+                layer.clips[0].is_muted = true;
+            } else {
+                layer.is_muted = true;
+            }
             engine.sync_clips_to_time();
             let view = engine.clip_controls().view(&source).unwrap();
             assert!(view.starts.is_empty());
@@ -3884,11 +4078,28 @@ mod tests {
             layer.is_muted = false;
             engine.current_beat = 2.0;
             engine.sync_clips_to_time();
-            assert!(engine.clip_controls().view(&source).unwrap().starts.is_empty());
-            assert_eq!(engine.clip_controls().elapsed(&ClipTriggerSource::OwnLayer, Some(&source), Beats(2.0)), Some(Beats(2.0)));
+            assert!(
+                engine
+                    .clip_controls()
+                    .view(&source)
+                    .unwrap()
+                    .starts
+                    .is_empty()
+            );
+            assert_eq!(
+                engine.clip_controls().elapsed(
+                    &ClipTriggerSource::OwnLayer,
+                    Some(&source),
+                    Beats(2.0)
+                ),
+                Some(Beats(2.0))
+            );
             engine.current_beat = 4.0;
             engine.sync_clips_to_time();
-            assert_eq!(engine.clip_controls().view(&source).unwrap().starts.len(), 1);
+            assert_eq!(
+                engine.clip_controls().view(&source).unwrap().starts.len(),
+                1
+            );
         }
     }
 
@@ -3897,7 +4108,10 @@ mod tests {
         use manifold_core::params::ClipTriggerSource;
         let mut project = Project::default();
         project.settings.quantize_mode = manifold_core::types::QuantizeMode::Off;
-        project.timeline.layers.push(Layer::new_video("Live".into(), 0));
+        project
+            .timeline
+            .layers
+            .push(Layer::new_video("Live".into(), 0));
         let owner = project.timeline.layers[0].layer_id.clone();
         let mut engine = PlaybackEngine::new(Vec::new());
         engine.initialize(project);
@@ -3907,13 +4121,30 @@ mod tests {
 
         let mut project = engine.project.take().unwrap();
         let mut manager = LiveClipManager::new();
-        let clip = manager.trigger_live_clip(
-            &mut project, &engine, "test-video".into(), 0, 2.0, 0.0,
-            None, 24, false, 0.0, 60,
-        ).unwrap();
+        let clip = manager
+            .trigger_live_clip(
+                &mut project,
+                &engine,
+                "test-video".into(),
+                0,
+                2.0,
+                0.0,
+                None,
+                24,
+                false,
+                0.0,
+                60,
+            )
+            .unwrap();
         manager.commit_live_clip(
-            &mut project, &mut engine, 0, Some(clip.id.as_str()),
-            None, 30, 0.125, 60,
+            &mut project,
+            &mut engine,
+            0,
+            Some(clip.id.as_str()),
+            None,
+            30,
+            0.125,
+            60,
         );
         engine.project = Some(project);
         engine.set_live_clip_manager(manager);
@@ -3925,11 +4156,22 @@ mod tests {
             assert_eq!(starts.len(), 1);
             assert_eq!(starts[0].clip_id, clip.id);
             assert_eq!(starts[0].beat, Beats(1.0));
-            assert_eq!(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(1.125)), Some(Beats(0.125)));
-            assert_eq!(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(1.25)), None);
+            assert_eq!(
+                controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(1.125)),
+                Some(Beats(0.125))
+            );
+            assert_eq!(
+                controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(1.25)),
+                None
+            );
         }
         engine.seek_to(Seconds::ZERO);
-        assert!(engine.clip_controls().starts(&ClipTriggerSource::OwnLayer, Some(&owner)).is_empty());
+        assert!(
+            engine
+                .clip_controls()
+                .starts(&ClipTriggerSource::OwnLayer, Some(&owner))
+                .is_empty()
+        );
     }
 
     fn trigger_delivery_tick(engine: &mut PlaybackEngine) {
@@ -3946,10 +4188,7 @@ mod tests {
         snapshot
     }
 
-    fn trigger_delivery_retained_snapshot(
-        transient: f32,
-        end_sample: u64,
-    ) -> AudioFeatureSnapshot {
+    fn trigger_delivery_retained_snapshot(transient: f32, end_sample: u64) -> AudioFeatureSnapshot {
         let mut snapshot = trigger_delivery_audio_snapshot(transient);
         let mut batch = AudioHopBatch::with_capacity(1);
         batch.begin(23);
@@ -4078,17 +4317,25 @@ mod tests {
             *engine.audio_snapshot_mut() = trigger_delivery_retained_snapshot(transient, sample);
             trigger_delivery_tick(&mut engine);
         }
-        engine.with_trigger_pulses(|pulses, _, _| {
-            assert_eq!(pulses.len(), 2);
-            for (pulse, sample) in pulses.iter().zip([512, 1536]) {
-                assert_eq!(pulse.pulse.kind, crate::modulation::TriggerPulseKind::Parameter);
-                assert_eq!(pulse.pulse.owner_id, owner);
-                assert_eq!(pulse.pulse.layer_id, None);
-                assert_eq!(pulse.pulse.audio_stamp().unwrap().end_sample, sample);
-            }
-        }).unwrap();
+        engine
+            .with_trigger_pulses(|pulses, _, _| {
+                assert_eq!(pulses.len(), 2);
+                for (pulse, sample) in pulses.iter().zip([512, 1536]) {
+                    assert_eq!(
+                        pulse.pulse.kind,
+                        crate::modulation::TriggerPulseKind::Parameter
+                    );
+                    assert_eq!(pulse.pulse.owner_id, owner);
+                    assert_eq!(pulse.pulse.layer_id, None);
+                    assert_eq!(pulse.pulse.audio_stamp().unwrap().end_sample, sample);
+                }
+            })
+            .unwrap();
         trigger_delivery_tick(&mut engine);
-        assert_eq!(engine.with_trigger_pulses(|pulses, _, _| pulses.len()), Some(0));
+        assert_eq!(
+            engine.with_trigger_pulses(|pulses, _, _| pulses.len()),
+            Some(0)
+        );
     }
 
     #[test]
@@ -4106,7 +4353,8 @@ mod tests {
         let mut batch = AudioHopBatch::with_capacity(4);
         batch.begin(23);
         for (transient, sample) in [(0.0, 1024), (0.99, 1536), (0.0, 2048), (0.99, 2560)] {
-            let hop = trigger_delivery_retained_snapshot(transient, sample).hop_batches[0].hops()[0];
+            let hop =
+                trigger_delivery_retained_snapshot(transient, sample).hop_batches[0].hops()[0];
             batch.push(hop).unwrap();
         }
         snapshot.hop_batches.push(batch);
@@ -4114,11 +4362,17 @@ mod tests {
         trigger_delivery_tick(&mut engine);
 
         let failure = engine.trigger_delivery_failure().unwrap();
-        assert_eq!(failure.kind, trigger_delivery::TriggerDeliveryError::CapacityOverflow);
+        assert_eq!(
+            failure.kind,
+            trigger_delivery::TriggerDeliveryError::CapacityOverflow
+        );
         assert_eq!(engine.trigger_delivery.as_slice(), accepted);
         assert_eq!(engine.modulation_trigger_scratch.capacity(), capacity);
         assert!(engine.modulation_trigger_scratch.is_empty());
-        assert_eq!(engine.with_trigger_pulses(|_, _, _| panic!("partial input consumed")), None::<()>);
+        assert_eq!(
+            engine.with_trigger_pulses(|_, _, _| panic!("partial input consumed")),
+            None::<()>
+        );
         engine.stop();
         assert!(engine.trigger_delivery_failure().is_none());
         assert_eq!(engine.modulation_trigger_scratch.capacity(), capacity);
@@ -4136,13 +4390,21 @@ mod tests {
         let scratch_capacity = engine.modulation_trigger_scratch.capacity();
         engine.pause();
         engine.set_follow_authority(Some(FollowProfile::FAST));
-        engine.set_external_sample(ExternalSample { beat: 0.2, bpm: 120.0, fresh: true, exact: false });
+        engine.set_external_sample(ExternalSample {
+            beat: 0.2,
+            bpm: 120.0,
+            fresh: true,
+            exact: false,
+        });
         trigger_delivery_tick(&mut engine);
         assert_eq!(engine.trigger_delivery.as_slice(), captured);
         engine.play();
         engine.with_trigger_pulses(|pulses, _, _| assert_eq!(pulses, captured));
         assert!(engine.trigger_delivery.as_slice().is_empty());
-        assert_eq!(engine.modulation_trigger_scratch.capacity(), scratch_capacity);
+        assert_eq!(
+            engine.modulation_trigger_scratch.capacity(),
+            scratch_capacity
+        );
     }
 
     #[test]
@@ -4155,11 +4417,16 @@ mod tests {
             let old_epoch = engine.trigger_delivery.as_slice()[0].epoch;
             match boundary {
                 0 => engine.stop(),
-                1 => { engine.seek_to(Seconds(0.25)); }
+                1 => {
+                    engine.seek_to(Seconds(0.25));
+                }
                 2 => engine.initialize(trigger_delivery_project()),
                 _ => engine.shutdown(),
             }
-            assert_eq!(engine.with_trigger_pulses(|pulses, _, _| pulses.len()), Some(0));
+            assert_eq!(
+                engine.with_trigger_pulses(|pulses, _, _| pulses.len()),
+                Some(0)
+            );
             if boundary == 3 {
                 engine.initialize(trigger_delivery_project());
             }
@@ -4185,20 +4452,28 @@ mod tests {
             trigger_delivery_tick(&mut engine);
         }
         let failure = engine.trigger_delivery_failure().unwrap();
-        assert_eq!(failure.kind, trigger_delivery::TriggerDeliveryError::CapacityOverflow);
+        assert_eq!(
+            failure.kind,
+            trigger_delivery::TriggerDeliveryError::CapacityOverflow
+        );
         assert_eq!(engine.trigger_delivery.as_slice().len(), 1);
         assert!(engine.modulation_trigger_scratch.is_empty());
-        assert_eq!(engine.with_trigger_pulses(|_, _, _| panic!("failed prefix consumed")), None::<()>);
+        assert_eq!(
+            engine.with_trigger_pulses(|_, _, _| panic!("failed prefix consumed")),
+            None::<()>
+        );
         engine.stop();
         assert!(engine.trigger_delivery_failure().is_none());
         for (transient, sample) in [(0.0, 2048), (0.99, 2560)] {
             *engine.audio_snapshot_mut() = trigger_delivery_retained_snapshot(transient, sample);
             trigger_delivery_tick(&mut engine);
         }
-        engine.with_trigger_pulses(|pulses, _, _| {
-            assert_eq!(pulses.len(), 1);
-            assert!(pulses[0].epoch > failure.epoch);
-        }).unwrap();
+        engine
+            .with_trigger_pulses(|pulses, _, _| {
+                assert_eq!(pulses.len(), 1);
+                assert!(pulses[0].epoch > failure.epoch);
+            })
+            .unwrap();
     }
 
     /// Seek then Play in one tick: the seek's target reaches the first frame
@@ -4213,12 +4488,27 @@ mod tests {
             engine.initialize(project);
             engine.seek_to(Seconds(TARGET.seconds()));
             engine.play();
-            let result = engine.tick(TickContext { frames: 1, realtime_now: Seconds::ZERO, frame_count: 0 });
+            let result = engine.tick(TickContext {
+                frames: 1,
+                realtime_now: Seconds::ZERO,
+                frame_count: 0,
+            });
             engine.reclaim_tick_result(result);
-            assert!(engine.current_time_double() > TARGET.seconds(), "{fps} fps: the frame is past the one the seek landed on");
-            assert_eq!(engine.played_target(), Some(TARGET), "{fps} fps: play lost the seek's target");
+            assert!(
+                engine.current_time_double() > TARGET.seconds(),
+                "{fps} fps: the frame is past the one the seek landed on"
+            );
+            assert_eq!(
+                engine.played_target(),
+                Some(TARGET),
+                "{fps} fps: play lost the seek's target"
+            );
             assert_eq!(engine.take_played_target(), Some(TARGET), "{fps} fps");
-            assert_eq!(engine.played_target(), None, "{fps} fps: the rendered frame took it");
+            assert_eq!(
+                engine.played_target(),
+                None,
+                "{fps} fps: the rendered frame took it"
+            );
         }
     }
 
@@ -4230,8 +4520,17 @@ mod tests {
         engine.play();
         let running = engine.transport_epoch();
         let tick_with = |engine: &mut PlaybackEngine, beat: f64| {
-            engine.set_external_sample(ExternalSample { beat, bpm: 120.0, fresh: true, exact: false });
-            let result = engine.tick(TickContext { frames: 1, realtime_now: Seconds::ZERO, frame_count: 0 });
+            engine.set_external_sample(ExternalSample {
+                beat,
+                bpm: 120.0,
+                fresh: true,
+                exact: false,
+            });
+            let result = engine.tick(TickContext {
+                frames: 1,
+                realtime_now: Seconds::ZERO,
+                frame_count: 0,
+            });
             engine.reclaim_tick_result(result);
         };
         // The seed lands on the frame's own beat (one frame at 120 BPM), then
@@ -4245,7 +4544,11 @@ mod tests {
         engine.play();
         let replayed = engine.transport_epoch();
         tick_with(&mut engine, 5.0);
-        assert_eq!(engine.transport_epoch(), replayed.wrapping_add(1), "a seed that moves the beat bumps the epoch once");
+        assert_eq!(
+            engine.transport_epoch(),
+            replayed.wrapping_add(1),
+            "a seed that moves the beat bumps the epoch once"
+        );
         let running = engine.transport_epoch();
         engine.seek_to(Seconds(0.11));
         assert_ne!(engine.transport_epoch(), running);
@@ -4296,11 +4599,7 @@ mod tests {
             realtime_now: Seconds(1.0),
             ..TickContext::default()
         });
-        let amount = engine
-            .project()
-            .unwrap()
-            .timeline
-            .layers[0]
+        let amount = engine.project().unwrap().timeline.layers[0]
             .effects
             .as_ref()
             .unwrap()[0]
@@ -4318,11 +4617,7 @@ mod tests {
             realtime_now: Seconds(2.0),
             ..TickContext::default()
         });
-        let amount = engine
-            .project()
-            .unwrap()
-            .timeline
-            .layers[0]
+        let amount = engine.project().unwrap().timeline.layers[0]
             .effects
             .as_ref()
             .unwrap()[0]
@@ -4342,15 +4637,25 @@ mod tests {
             let mut fx = create_default(&PresetTypeId::new("TestAutomationFx"));
             ids.push(fx.id.clone());
             fx.automation_lanes = Some(vec![AutomationLane {
-                param_id: "amount".into(), enabled: true,
-                points: vec![AutomationPoint { beat: Beats(0.0), value: 0.2, shape: SegmentShape::Linear }],
+                param_id: "amount".into(),
+                enabled: true,
+                points: vec![AutomationPoint {
+                    beat: Beats(0.0),
+                    value: 0.2,
+                    shape: SegmentShape::Linear,
+                }],
             }]);
             project.settings.master_effects.push(fx);
         }
         let mut engine = PlaybackEngine::new(Vec::new());
         engine.initialize(project);
         for id in &ids {
-            engine.project_mut().unwrap().find_effect_by_id_mut(id).unwrap().set_base_param("amount", 0.8);
+            engine
+                .project_mut()
+                .unwrap()
+                .find_effect_by_id_mut(id)
+                .unwrap()
+                .set_base_param("amount", 0.8);
         }
         let _ = engine.tick(TickContext::default());
         assert_eq!(engine.automation_latches.len(), 2);
@@ -4358,8 +4663,20 @@ mod tests {
         let _ = engine.tick(TickContext::default());
         assert_eq!(engine.automation_latches.len(), 1);
         let project = engine.project().unwrap();
-        assert_eq!(project.find_effect_by_id(&ids[0]).unwrap().get_base_param("amount"), 0.2);
-        assert_eq!(project.find_effect_by_id(&ids[1]).unwrap().get_base_param("amount"), 0.8);
+        assert_eq!(
+            project
+                .find_effect_by_id(&ids[0])
+                .unwrap()
+                .get_base_param("amount"),
+            0.2
+        );
+        assert_eq!(
+            project
+                .find_effect_by_id(&ids[1])
+                .unwrap()
+                .get_base_param("amount"),
+            0.8
+        );
     }
 
     #[test]
@@ -4387,11 +4704,7 @@ mod tests {
         );
 
         let result = engine.tick(TickContext::default());
-        let amount = engine
-            .project()
-            .unwrap()
-            .timeline
-            .layers[0]
+        let amount = engine.project().unwrap().timeline.layers[0]
             .effects
             .as_ref()
             .unwrap()[0]
@@ -4403,11 +4716,7 @@ mod tests {
         assert!(result.modulation_active);
 
         engine.clear_automation_previews();
-        let amount = engine
-            .project()
-            .unwrap()
-            .timeline
-            .layers[0]
+        let amount = engine.project().unwrap().timeline.layers[0]
             .effects
             .as_ref()
             .unwrap()[0]
@@ -4459,11 +4768,7 @@ mod tests {
         );
         let _ = engine.tick(TickContext::default());
 
-        let fx = &engine
-            .project()
-            .unwrap()
-            .timeline
-            .layers[0]
+        let fx = &engine.project().unwrap().timeline.layers[0]
             .effects
             .as_ref()
             .unwrap()[0];
@@ -4497,11 +4802,7 @@ mod tests {
 
         let mut engine = PlaybackEngine::new(Vec::new());
         engine.initialize(project);
-        engine
-            .project_mut()
-            .unwrap()
-            .timeline
-            .layers[0]
+        engine.project_mut().unwrap().timeline.layers[0]
             .effects
             .as_mut()
             .unwrap()[0]
@@ -4518,11 +4819,7 @@ mod tests {
         let _ = engine.tick(TickContext::default());
         engine.clear_automation_previews();
 
-        let amount = engine
-            .project()
-            .unwrap()
-            .timeline
-            .layers[0]
+        let amount = engine.project().unwrap().timeline.layers[0]
             .effects
             .as_ref()
             .unwrap()[0]
@@ -4539,10 +4836,22 @@ mod tests {
             let mut fx = create_default(&PresetTypeId::new("TestAutomationFx"));
             let id = fx.id.clone();
             let original = vec![
-                AutomationPoint { beat: Beats(0.0), value: 0.2, shape: SegmentShape::Linear },
-                AutomationPoint { beat: Beats(4.0), value: 0.8, shape: SegmentShape::Linear },
+                AutomationPoint {
+                    beat: Beats(0.0),
+                    value: 0.2,
+                    shape: SegmentShape::Linear,
+                },
+                AutomationPoint {
+                    beat: Beats(4.0),
+                    value: 0.8,
+                    shape: SegmentShape::Linear,
+                },
             ];
-            fx.automation_lanes = Some(vec![AutomationLane { param_id: "amount".into(), enabled: true, points: original.clone() }]);
+            fx.automation_lanes = Some(vec![AutomationLane {
+                param_id: "amount".into(),
+                enabled: true,
+                points: original.clone(),
+            }]);
             let mut project = Project::default();
             project.settings.master_effects.push(fx);
             let mut engine = PlaybackEngine::new(Vec::new());
@@ -4553,26 +4862,51 @@ mod tests {
             // holds through its sampled beat, where replay reads it (D14).
             let (touch_beat, replay_beat) = (engine.frame_beat(), engine.current_beat());
             engine.set_automation_armed(true);
-            engine.project_mut().unwrap().find_effect_by_id_mut(&id).unwrap().set_base_param("amount", 0.9);
+            engine
+                .project_mut()
+                .unwrap()
+                .find_effect_by_id_mut(&id)
+                .unwrap()
+                .set_base_param("amount", 0.9);
             // No tick between the final input and the boundary: the last touch
             // must still reach the take at beat 2, before stop/seek resets time.
             match boundary {
                 0 => engine.stop(),
                 1 => engine.pause(),
                 2 => engine.set_automation_armed(false),
-                _ => { engine.seek_to(Seconds(3.0)); }
+                _ => {
+                    engine.seek_to(Seconds(3.0));
+                }
             }
             let mut commands = engine.take_finished_automation();
             assert_eq!(commands.len(), 1, "boundary {boundary}");
             assert!(engine.finish_automation_recording().is_empty());
             commands[0].execute(engine.project_mut().unwrap());
-            let lane = &engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap()[0];
+            let lane = &engine
+                .project()
+                .unwrap()
+                .find_effect_by_id(&id)
+                .unwrap()
+                .automation_lanes
+                .as_ref()
+                .unwrap()[0];
             assert_eq!(lane.value_at(touch_beat), 0.9);
             assert_eq!(lane.value_at(replay_beat), 0.9);
             assert_eq!(touch_beat, Beats(2.0));
             assert!((lane.value_at(Beats(1.0)) - 0.35).abs() < 1e-6);
             commands[0].undo(engine.project_mut().unwrap());
-            assert_eq!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap()[0].points, original);
+            assert_eq!(
+                engine
+                    .project()
+                    .unwrap()
+                    .find_effect_by_id(&id)
+                    .unwrap()
+                    .automation_lanes
+                    .as_ref()
+                    .unwrap()[0]
+                    .points,
+                original
+            );
             engine.initialize(Project::default());
             assert!(!engine.automation_armed());
             assert!(engine.automation_latches.is_empty() && engine.automation_gestures.is_empty());
@@ -4586,10 +4920,22 @@ mod tests {
         for boundary in 0..3 {
             let mut fx = create_default(&PresetTypeId::new("TestAutomationFx"));
             let id = fx.id.clone();
-            fx.automation_lanes = Some(vec![AutomationLane { param_id: "amount".into(), enabled: true, points: vec![
-                AutomationPoint { beat: Beats(0.0), value: 0.2, shape: SegmentShape::Linear },
-                AutomationPoint { beat: Beats(8.0), value: 0.8, shape: SegmentShape::Linear },
-            ] }]);
+            fx.automation_lanes = Some(vec![AutomationLane {
+                param_id: "amount".into(),
+                enabled: true,
+                points: vec![
+                    AutomationPoint {
+                        beat: Beats(0.0),
+                        value: 0.2,
+                        shape: SegmentShape::Linear,
+                    },
+                    AutomationPoint {
+                        beat: Beats(8.0),
+                        value: 0.8,
+                        shape: SegmentShape::Linear,
+                    },
+                ],
+            }]);
             let mut project = Project::default();
             project.settings.master_effects.push(fx);
             let mut engine = PlaybackEngine::new(Vec::new());
@@ -4610,9 +4956,20 @@ mod tests {
             engine.locate(Seconds(1.0));
             let tick = engine.tick(TickContext::default());
             assert!(tick.pending_gesture_commits.is_empty());
-            assert!(engine.automation_gestures.is_empty(), "boundary {boundary}: no take without a hand");
-            let amount = engine.project().unwrap().find_effect_by_id(&id).unwrap().get_base_param("amount");
-            assert!((amount - 0.35).abs() < 1e-6, "boundary {boundary}: the lane plays, got {amount}");
+            assert!(
+                engine.automation_gestures.is_empty(),
+                "boundary {boundary}: no take without a hand"
+            );
+            let amount = engine
+                .project()
+                .unwrap()
+                .find_effect_by_id(&id)
+                .unwrap()
+                .get_base_param("amount");
+            assert!(
+                (amount - 0.35).abs() < 1e-6,
+                "boundary {boundary}: the lane plays, got {amount}"
+            );
         }
     }
 
@@ -4620,15 +4977,32 @@ mod tests {
     fn recording_export_samples_arrangement_and_restores_manual_base() {
         let mut fx = create_default(&PresetTypeId::new("TestAutomationFx"));
         let id = fx.id.clone();
-        fx.automation_lanes = Some(vec![AutomationLane { param_id: "amount".into(), enabled: true, points: vec![
-            AutomationPoint { beat: Beats(0.0), value: 0.2, shape: SegmentShape::Linear },
-            AutomationPoint { beat: Beats(4.0), value: 0.8, shape: SegmentShape::Linear },
-        ] }]);
+        fx.automation_lanes = Some(vec![AutomationLane {
+            param_id: "amount".into(),
+            enabled: true,
+            points: vec![
+                AutomationPoint {
+                    beat: Beats(0.0),
+                    value: 0.2,
+                    shape: SegmentShape::Linear,
+                },
+                AutomationPoint {
+                    beat: Beats(4.0),
+                    value: 0.8,
+                    shape: SegmentShape::Linear,
+                },
+            ],
+        }]);
         let mut project = Project::default();
         project.settings.master_effects.push(fx);
         let mut engine = PlaybackEngine::new(Vec::new());
         engine.initialize(project);
-        engine.project_mut().unwrap().find_effect_by_id_mut(&id).unwrap().set_base_param("amount", 0.42);
+        engine
+            .project_mut()
+            .unwrap()
+            .find_effect_by_id_mut(&id)
+            .unwrap()
+            .set_base_param("amount", 0.42);
         let _ = engine.tick(TickContext::default());
         assert_eq!(engine.automation_latches.len(), 1);
         engine.set_automation_armed(true);
@@ -4637,10 +5011,28 @@ mod tests {
         engine.locate(Seconds(1.0));
         let tick = engine.tick(TickContext::default());
         assert!(tick.pending_gesture_commits.is_empty());
-        assert!((engine.project().unwrap().find_effect_by_id(&id).unwrap().get_base_param("amount") - 0.5).abs() < 1e-6);
+        assert!(
+            (engine
+                .project()
+                .unwrap()
+                .find_effect_by_id(&id)
+                .unwrap()
+                .get_base_param("amount")
+                - 0.5)
+                .abs()
+                < 1e-6
+        );
         engine.stop();
         engine.set_export_mode(false);
-        assert_eq!(engine.project().unwrap().find_effect_by_id(&id).unwrap().get_base_param("amount"), 0.42);
+        assert_eq!(
+            engine
+                .project()
+                .unwrap()
+                .find_effect_by_id(&id)
+                .unwrap()
+                .get_base_param("amount"),
+            0.42
+        );
         assert!(engine.automation_armed());
         assert_eq!(engine.automation_latches.len(), 1);
         assert!(engine.finish_automation_recording().is_empty());
@@ -4669,11 +5061,7 @@ mod tests {
         engine.initialize(project);
         engine.set_automation_armed(true);
         engine.set_state(PlaybackState::Playing);
-        engine
-            .project_mut()
-            .unwrap()
-            .timeline
-            .layers[0]
+        engine.project_mut().unwrap().timeline.layers[0]
             .effects
             .as_mut()
             .unwrap()[0]
@@ -4690,11 +5078,7 @@ mod tests {
         let _ = engine.tick(TickContext::default());
         engine.clear_automation_previews();
 
-        let amount = engine
-            .project()
-            .unwrap()
-            .timeline
-            .layers[0]
+        let amount = engine.project().unwrap().timeline.layers[0]
             .effects
             .as_ref()
             .unwrap()[0]

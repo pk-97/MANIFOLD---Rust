@@ -32,9 +32,9 @@ use arc_swap::ArcSwap;
 
 use crate::effect_graph_def::{AliasEntry, PresetMetadata, ValueAliasEntry};
 use crate::effect_registration::{ParamAlias, ParamValueAlias};
-use crate::preset_type_id::PresetTypeId;
 use crate::effects::RegistryParamDef;
 use crate::preset_def::{PresetDef, PresetKind};
+use crate::preset_type_id::PresetTypeId;
 
 // ─── StringParamDef ───
 //
@@ -332,8 +332,12 @@ pub use crate::effect_registration::resolve_param_alias;
 /// holding the `Arc` keeps the looked-up def alive across a concurrent
 /// rebuild. Not a per-frame hot path.
 pub fn get(type_id: &PresetTypeId) -> Arc<PresetDef> {
-    try_get(type_id)
-        .unwrap_or_else(|| panic!("PresetDefinitionRegistry: unknown PresetTypeId '{}'", type_id))
+    try_get(type_id).unwrap_or_else(|| {
+        panic!(
+            "PresetDefinitionRegistry: unknown PresetTypeId '{}'",
+            type_id
+        )
+    })
 }
 
 /// Try to get the definition for a preset type (either kind).
@@ -454,20 +458,24 @@ fn load_metadata_sources(
 ) -> Vec<PresetMetadata> {
     let mut sources: Vec<_> = sources.into_iter().collect();
     sources.sort_unstable_by_key(|(name, _)| *name);
-    assert!(sources.windows(2).all(|pair| pair[0].0 != pair[1].0),
-        "duplicate metadata provider name");
+    assert!(
+        sources.windows(2).all(|pair| pair[0].0 != pair[1].0),
+        "duplicate metadata provider name"
+    );
     let mut owners = HashMap::new();
     let mut all = Vec::new();
     for (name, load) in sources {
         for metadata in load() {
-            assert!(owners.insert(metadata.id.clone(), name).is_none(),
-                "duplicate preset type id across metadata providers: {}", metadata.id);
+            assert!(
+                owners.insert(metadata.id.clone(), name).is_none(),
+                "duplicate preset type id across metadata providers: {}",
+                metadata.id
+            );
             all.push(metadata);
         }
     }
     all
 }
-
 
 pub mod effect {
     use super::*;
@@ -483,8 +491,11 @@ pub mod effect {
 
     /// Invoke every provider afresh, in stable provider-name order.
     pub fn load_preset_metadata() -> Vec<PresetMetadata> {
-        load_metadata_sources(inventory::iter::<PresetSource>.into_iter()
-            .map(|source| (source.name, source.load)))
+        load_metadata_sources(
+            inventory::iter::<PresetSource>
+                .into_iter()
+                .map(|source| (source.name, source.load)),
+        )
     }
 
     /// Inventory submission point for JSON-loaded **effect** preset
@@ -527,8 +538,11 @@ pub mod generator {
 
     /// Invoke every provider afresh, in stable provider-name order.
     pub fn load_preset_metadata() -> Vec<PresetMetadata> {
-        load_metadata_sources(inventory::iter::<PresetSource>.into_iter()
-            .map(|source| (source.name, source.load)))
+        load_metadata_sources(
+            inventory::iter::<PresetSource>
+                .into_iter()
+                .map(|source| (source.name, source.load)),
+        )
     }
 
     /// Inventory submission point for JSON-loaded **generator** preset
@@ -557,9 +571,11 @@ pub mod scene_modifier {
 
     /// Invoke every provider afresh, in stable provider-name order.
     pub fn load_preset_metadata() -> Vec<PresetMetadata> {
-        load_metadata_sources(inventory::iter::<
-            crate::effect_registration::LoadedSceneModifierPresetSource,
-        >.into_iter().map(|source| (source.name, source.load)))
+        load_metadata_sources(
+            inventory::iter::<crate::effect_registration::LoadedSceneModifierPresetSource>
+                .into_iter()
+                .map(|source| (source.name, source.load)),
+        )
     }
 }
 
@@ -828,7 +844,10 @@ mod tests {
             spec: spec.clone(),
             contract: None,
         };
-        assert_eq!(seeded.spec, spec, "the spec must survive the registry wrap whole");
+        assert_eq!(
+            seeded.spec, spec,
+            "the spec must survive the registry wrap whole"
+        );
     }
 
     // ── ParamAlias resolution (step 15) ────────────────────────────
@@ -918,7 +937,7 @@ mod tests {
             scene_bounds: None,
             available: true,
             is_line_based: false,
-                layer_types: None,
+            layer_types: None,
             params: vec![ParamSpecDef {
                 tooltip: None,
                 id: "amount".to_string(),
@@ -996,8 +1015,9 @@ mod tests {
     /// equivalent `EffectDef`s for the same effect shape.
     #[test]
     fn preset_metadata_and_effect_metadata_produce_equivalent_def() {
-        static INV_PARAMS: [ParamSpec; 1] =
-            [ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", "")];
+        static INV_PARAMS: [ParamSpec; 1] = [ParamSpec::continuous(
+            "amount", "Amount", 0.0, 1.0, 0.5, "F2", "",
+        )];
         let inv_meta = EffectMetadata {
             id: PresetTypeId::new("ParityCheck"),
             display_name: "Parity Check",
@@ -1020,7 +1040,7 @@ mod tests {
             scene_bounds: None,
             available: true,
             is_line_based: false,
-                layer_types: None,
+            layer_types: None,
             params: vec![ParamSpecDef {
                 tooltip: None,
                 id: "amount".to_string(),
@@ -1132,7 +1152,11 @@ mod tests {
             scene_bounds: None,
             scene_modifier: None,
         };
-        let _ = build_preset_definitions(std::slice::from_ref(&metadata), &[], std::slice::from_ref(&metadata));
+        let _ = build_preset_definitions(
+            std::slice::from_ref(&metadata),
+            &[],
+            std::slice::from_ref(&metadata),
+        );
     }
 
     // ── Generator-side tests ───────────────────────────────────────
@@ -1163,7 +1187,8 @@ mod metadata_source_tests {
         serde_json::from_value(serde_json::json!({
             "id": id, "displayName": id, "category": "Test", "oscPrefix": id,
             "params": [], "bindings": []
-        })).unwrap()
+        }))
+        .unwrap()
     }
 
     fn first() -> Vec<PresetMetadata> {
@@ -1176,7 +1201,10 @@ mod metadata_source_tests {
 
     #[test]
     fn metadata_providers_sort_by_name_and_preserve_each_provider_order() {
-        let sources = [("z", second as MetadataLoader), ("a", first as MetadataLoader)];
+        let sources = [
+            ("z", second as MetadataLoader),
+            ("a", first as MetadataLoader),
+        ];
         let expected = vec![metadata("first_b"), metadata("first_a"), metadata("second")];
         assert_eq!(load_metadata_sources(sources), expected);
         assert_eq!(load_metadata_sources(sources), expected);
@@ -1185,6 +1213,9 @@ mod metadata_source_tests {
     #[test]
     #[should_panic(expected = "duplicate preset type id across metadata providers")]
     fn duplicate_metadata_type_id_across_providers_is_rejected() {
-        load_metadata_sources([("a", first as MetadataLoader), ("b", first as MetadataLoader)]);
+        load_metadata_sources([
+            ("a", first as MetadataLoader),
+            ("b", first as MetadataLoader),
+        ]);
     }
 }

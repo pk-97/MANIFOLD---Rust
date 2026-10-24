@@ -36,12 +36,8 @@ struct AudioObjectPropertyAddress {
     element: AudioObjectPropertyElement,
 }
 
-type ListenerProc = extern "C" fn(
-    AudioObjectID,
-    u32,
-    *const AudioObjectPropertyAddress,
-    *mut c_void,
-) -> OSStatus;
+type ListenerProc =
+    extern "C" fn(AudioObjectID, u32, *const AudioObjectPropertyAddress, *mut c_void) -> OSStatus;
 
 #[link(name = "CoreAudio", kind = "framework")]
 unsafe extern "C" {
@@ -113,7 +109,11 @@ const PROP_PROCESS_BUNDLE_ID: u32 = fourcc(b"pbid"); // kAudioProcessPropertyBun
 const PROP_PROCESS_RUNNING_OUTPUT: u32 = fourcc(b"piro"); // kAudioProcessPropertyIsRunningOutput
 
 const fn addr(selector: u32, scope: u32) -> AudioObjectPropertyAddress {
-    AudioObjectPropertyAddress { selector, scope, element: ELEMENT_MAIN }
+    AudioObjectPropertyAddress {
+        selector,
+        scope,
+        element: ELEMENT_MAIN,
+    }
 }
 
 const DEVICES_ADDR: AudioObjectPropertyAddress = addr(PROP_DEVICES, SCOPE_GLOBAL);
@@ -125,9 +125,7 @@ const PROCESS_LIST_ADDR: AudioObjectPropertyAddress = addr(PROP_PROCESS_LIST, SC
 /// Byte size of a property, or `None` if the device doesn't expose it.
 fn property_size(obj: AudioObjectID, a: &AudioObjectPropertyAddress) -> Option<usize> {
     let mut size: u32 = 0;
-    let status = unsafe {
-        AudioObjectGetPropertyDataSize(obj, a, 0, std::ptr::null(), &mut size)
-    };
+    let status = unsafe { AudioObjectGetPropertyDataSize(obj, a, 0, std::ptr::null(), &mut size) };
     (status == 0).then_some(size as usize)
 }
 
@@ -310,14 +308,17 @@ fn device_info(obj: AudioObjectID, default_input: AudioObjectID) -> Option<Devic
         return None; // not an input device
     }
     let uid = property_cfstring(obj, &addr(PROP_UID, SCOPE_GLOBAL))?;
-    let name = property_cfstring(obj, &addr(PROP_NAME, SCOPE_GLOBAL))
-        .unwrap_or_else(|| uid.clone());
+    let name =
+        property_cfstring(obj, &addr(PROP_NAME, SCOPE_GLOBAL)).unwrap_or_else(|| uid.clone());
     let is_alive = property_pod::<u32>(obj, &addr(PROP_IS_ALIVE, SCOPE_GLOBAL))
         .map(|v| v != 0)
         .unwrap_or(true);
 
     let channels = (0..channel_count)
-        .map(|index| ChannelInfo { index, name: channel_name(obj, index) })
+        .map(|index| ChannelInfo {
+            index,
+            name: channel_name(obj, index),
+        })
         .collect();
 
     // Only present subdevice grouping if it exactly accounts for every input
@@ -375,9 +376,12 @@ fn all_process_ids() -> Vec<AudioObjectID> {
 fn app_source(process_obj: AudioObjectID) -> Option<AppAudioSource> {
     let bundle_id = property_cfstring(process_obj, &addr(PROP_PROCESS_BUNDLE_ID, SCOPE_GLOBAL))?;
     let pid = property_pod::<i32>(process_obj, &addr(PROP_PROCESS_PID, SCOPE_GLOBAL)).unwrap_or(-1);
-    let is_alive = property_pod::<u32>(process_obj, &addr(PROP_PROCESS_RUNNING_OUTPUT, SCOPE_GLOBAL))
-        .map(|v| v != 0)
-        .unwrap_or(false);
+    let is_alive = property_pod::<u32>(
+        process_obj,
+        &addr(PROP_PROCESS_RUNNING_OUTPUT, SCOPE_GLOBAL),
+    )
+    .map(|v| v != 0)
+    .unwrap_or(false);
     let name = app_display_name(pid).unwrap_or_else(|| bundle_id.clone());
     Some(AppAudioSource {
         bundle_id,
@@ -488,12 +492,17 @@ impl AudioDeviceDirectory for CoreAudioDirectory {
     fn tap_capabilities(&self) -> TapCapabilities {
         // Both modes ride the same process-tap API; if it's present, both work.
         let supported = crate::capture::tap_supported();
-        TapCapabilities { system_audio: supported, app_audio: supported }
+        TapCapabilities {
+            system_audio: supported,
+            app_audio: supported,
+        }
     }
 
     fn list_audio_apps(&self) -> Vec<AppAudioSource> {
-        let mut apps: Vec<AppAudioSource> =
-            all_process_ids().into_iter().filter_map(app_source).collect();
+        let mut apps: Vec<AppAudioSource> = all_process_ids()
+            .into_iter()
+            .filter_map(app_source)
+            .collect();
         // Stable, friendly order: live (currently producing) first, then by name.
         apps.sort_by(|a, b| {
             b.is_alive
@@ -516,12 +525,7 @@ impl AudioDeviceDirectory for CoreAudioDirectory {
         let addrs = [DEVICES_ADDR, DEFAULT_INPUT_ADDR];
         for a in &addrs {
             unsafe {
-                AudioObjectAddPropertyListener(
-                    SYSTEM_OBJECT,
-                    a,
-                    listener_proc,
-                    ctx as *mut c_void,
-                );
+                AudioObjectAddPropertyListener(SYSTEM_OBJECT, a, listener_proc, ctx as *mut c_void);
             }
         }
         Subscription::new(move || {
@@ -630,13 +634,20 @@ mod tests {
         for d in dir.list_input_devices() {
             eprintln!(
                 "DEVICE uid={} name={:?} default={} alive={} ch={}",
-                d.uid, d.name, d.is_default, d.is_alive, d.channels.len()
+                d.uid,
+                d.name,
+                d.is_default,
+                d.is_alive,
+                d.channels.len()
             );
             for c in &d.channels {
                 eprintln!("    ch{} -> {}", c.index, c.display_name());
             }
             for g in &d.subdevices {
-                eprintln!("    SUB {:?} start={} count={}", g.name, g.channel_start, g.channel_count);
+                eprintln!(
+                    "    SUB {:?} start={} count={}",
+                    g.name, g.channel_start, g.channel_count
+                );
             }
         }
     }

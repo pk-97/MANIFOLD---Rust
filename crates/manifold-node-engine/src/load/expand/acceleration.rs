@@ -145,7 +145,10 @@ fn trace(
             })
             && let Some(body) = index.by_id.get(&body.from_node)
         {
-            candidates.push(Candidate { node: body.clone(), port: ACCELERATION_ALIAS.into() });
+            candidates.push(Candidate {
+                node: body.clone(),
+                port: ACCELERATION_ALIAS.into(),
+            });
             continue;
         }
         let mut primitive = registry.construct(&def.type_id).ok_or_else(|| {
@@ -161,7 +164,10 @@ fn trace(
         // A node that declares where scene forces enter (a swarm's forces
         // node) ends the trace there.
         if let Some(input) = primitive.acceleration_input() {
-            candidates.push(Candidate { node, port: input.into() });
+            candidates.push(Candidate {
+                node,
+                port: input.into(),
+            });
             continue;
         }
         let Some(output) = primitive
@@ -184,7 +190,8 @@ fn trace(
         let captures = primitive.state_capture_input_ports();
         for input in primitive.inputs().iter().filter(|input| {
             let name = input.name.as_ref();
-            sources.map_or(input.ty == output.ty, |sources| sources.contains(&name)) && !captures.contains(&name)
+            sources.map_or(input.ty == output.ty, |sources| sources.contains(&name))
+                && !captures.contains(&name)
         }) {
             let Some(wire) = index.input(&node, input.name.as_ref())? else {
                 continue;
@@ -317,7 +324,9 @@ pub fn impulse_recipients_with_index(
                 .by_ref
                 .get(&recipient.node)
                 .and_then(|flat| world_member(&index.flat.nodes, &index.flat.wires, *flat))
-                .ok_or_else(|| unsupported(&recipient.port, "rigid body is not in a Physics World"))?;
+                .ok_or_else(|| {
+                    unsupported(&recipient.port, "rigid body is not in a Physics World")
+                })?;
             let world = index
                 .flat
                 .nodes
@@ -349,9 +358,14 @@ pub fn impulse_recipients_with_index(
         } else if whole {
             ImpulseTarget::Swarm
         } else {
-            return Err(unsupported(&recipient.port, "invalid rigid impulse recipient"));
+            return Err(unsupported(
+                &recipient.port,
+                "invalid rigid impulse recipient",
+            ));
         };
-        worlds.entry(node.node_id.as_str().to_owned()).or_insert(target);
+        worlds
+            .entry(node.node_id.as_str().to_owned())
+            .or_insert(target);
     }
     Ok(worlds
         .into_iter()

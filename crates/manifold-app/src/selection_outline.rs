@@ -35,21 +35,35 @@ pub(crate) struct OutlineMasks {
 impl OutlineMasks {
     pub fn install(&mut self, device: &GpuDevice, bridge: Arc<SharedTextureBridge>) {
         // SAFETY: `self.bridge` keeps the IOSurfaces alive as long as the textures.
-        self.textures = std::array::from_fn(|i| Some(unsafe { bridge.import_texture_native(device, i) }));
+        self.textures =
+            std::array::from_fn(|i| Some(unsafe { bridge.import_texture_native(device, i) }));
         self.bridge = Some(bridge);
     }
 
     /// Copy this frame's `mask` into surface `slot`, resizing the bridge to
     /// it first. The bridge generation the frame records, or `None` when
     /// there is no mask.
-    pub fn write(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, slot: usize, mask: Option<&GpuTexture>) -> Option<u64> {
+    pub fn write(
+        &mut self,
+        device: &GpuDevice,
+        enc: &mut GpuEncoder,
+        slot: usize,
+        mask: Option<&GpuTexture>,
+    ) -> Option<u64> {
         let (mask, bridge) = (mask?, self.bridge.as_ref()?);
         if bridge.width() != mask.width || bridge.height() != mask.height {
             bridge.resize(mask.width, mask.height);
             // SAFETY: as in `install`.
-            self.textures = std::array::from_fn(|i| Some(unsafe { bridge.import_texture_native(device, i) }));
+            self.textures =
+                std::array::from_fn(|i| Some(unsafe { bridge.import_texture_native(device, i) }));
         }
-        enc.copy_texture_to_texture(mask, self.textures[slot].as_ref()?, mask.width, mask.height, 1);
+        enc.copy_texture_to_texture(
+            mask,
+            self.textures[slot].as_ref()?,
+            mask.width,
+            mask.height,
+            1,
+        );
         Some(bridge.generation())
     }
 }
@@ -135,7 +149,14 @@ impl SelectionOutline {
 
     /// Outline `mask` over the picture at `viewport` (physical pixels) in
     /// `target`, `scale` physical pixels per point.
-    pub fn draw(&self, encoder: &mut GpuEncoder, target: &GpuTexture, mask: &GpuTexture, viewport: (f32, f32, f32, f32), scale: f32) {
+    pub fn draw(
+        &self,
+        encoder: &mut GpuEncoder,
+        target: &GpuTexture,
+        mask: &GpuTexture,
+        viewport: (f32, f32, f32, f32),
+        scale: f32,
+    ) {
         let (_, _, width, height) = viewport;
         if width < 1.0 || height < 1.0 {
             return;
@@ -150,9 +171,18 @@ impl SelectionOutline {
             &self.pipeline,
             target,
             &[
-                GpuBinding::Texture { binding: 0, texture: mask },
-                GpuBinding::Sampler { binding: 1, sampler: &self.sampler },
-                GpuBinding::Bytes { binding: 2, data: bytemuck::bytes_of(&uniforms) },
+                GpuBinding::Texture {
+                    binding: 0,
+                    texture: mask,
+                },
+                GpuBinding::Sampler {
+                    binding: 1,
+                    sampler: &self.sampler,
+                },
+                GpuBinding::Bytes {
+                    binding: 2,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
             ],
             viewport,
             manifold_gpu::GpuLoadAction::Load,
@@ -265,7 +295,9 @@ impl OutlineCapture {
 /// The slots `request` asks of `layer`: none when it was read from another.
 #[cfg(target_os = "macos")]
 fn slots_on<'a>(request: Option<&'a OutlineSlots>, layer: &manifold_core::LayerId) -> &'a [u32] {
-    request.filter(|request| &request.layer == layer).map_or(&[], |request| &request.slots)
+    request
+        .filter(|request| &request.layer == layer)
+        .map_or(&[], |request| &request.slots)
 }
 
 /// The mask beside surface `slot` of a picture whose frame stamped mask
@@ -306,20 +338,32 @@ impl crate::app::Application {
                 .map(|(ed, layer)| (layer, ed.viewport_outline.as_slice()))
         };
         let (sent_output, sent_viewport) = &self.ws.outline_sent;
-        if same_request(sent_output.as_ref(), output) && same_request(sent_viewport.as_ref(), viewport) {
+        if same_request(sent_output.as_ref(), output)
+            && same_request(sent_viewport.as_ref(), viewport)
+        {
             return;
         }
         let request = |wanted: Option<(&manifold_core::LayerId, &[u32])>| {
-            wanted.filter(|(_, slots)| !slots.is_empty()).map(|(layer, slots)| OutlineSlots { layer: layer.clone(), slots: slots.to_vec() })
+            wanted
+                .filter(|(_, slots)| !slots.is_empty())
+                .map(|(layer, slots)| OutlineSlots {
+                    layer: layer.clone(),
+                    slots: slots.to_vec(),
+                })
         };
         self.ws.outline_sent = (request(output), request(viewport));
         let (output, viewport) = self.ws.outline_sent.clone();
-        self.send_content_cmd(crate::content_command::ContentCommand::SetSelectionOutline { output, viewport });
+        self.send_content_cmd(
+            crate::content_command::ContentCommand::SetSelectionOutline { output, viewport },
+        );
     }
 }
 
 /// `sent` is the request `wanted` makes; no slots is no request.
-fn same_request(sent: Option<&OutlineSlots>, wanted: Option<(&manifold_core::LayerId, &[u32])>) -> bool {
+fn same_request(
+    sent: Option<&OutlineSlots>,
+    wanted: Option<(&manifold_core::LayerId, &[u32])>,
+) -> bool {
     match (sent, wanted.filter(|(_, slots)| !slots.is_empty())) {
         (None, None) => true,
         (Some(sent), Some((layer, slots))) => &sent.layer == layer && sent.slots == slots,
@@ -351,10 +395,17 @@ mod tests {
     }
 
     fn slots(layer: &LayerId, slots: &[u32]) -> Option<OutlineSlots> {
-        Some(OutlineSlots { layer: layer.clone(), slots: slots.to_vec() })
+        Some(OutlineSlots {
+            layer: layer.clone(),
+            slots: slots.to_vec(),
+        })
     }
 
-    fn applied(capture: &mut OutlineCapture, output: Option<&LayerId>, viewport: Option<&LayerId>) -> Vec<(bool, LayerId, Vec<u32>)> {
+    fn applied(
+        capture: &mut OutlineCapture,
+        output: Option<&LayerId>,
+        viewport: Option<&LayerId>,
+    ) -> Vec<(bool, LayerId, Vec<u32>)> {
         let mut masks = Recorded::default();
         capture.apply(&mut masks, output, viewport);
         masks.0
@@ -365,21 +416,42 @@ mod tests {
         let (a, b) = (LayerId::new("a"), LayerId::new("b"));
         let mut capture = OutlineCapture::default();
         capture.set(slots(&a, &[2]), slots(&a, &[2]));
-        assert_eq!(applied(&mut capture, Some(&a), Some(&a)), [(false, a.clone(), vec![2]), (true, a.clone(), vec![2])]);
-        assert_eq!(applied(&mut capture, Some(&a), Some(&a)).len(), 2, "a standing request is set every frame");
+        assert_eq!(
+            applied(&mut capture, Some(&a), Some(&a)),
+            [(false, a.clone(), vec![2]), (true, a.clone(), vec![2])]
+        );
+        assert_eq!(
+            applied(&mut capture, Some(&a), Some(&a)).len(),
+            2,
+            "a standing request is set every frame"
+        );
 
         // The picture moves to layer b before the UI has read b's selection:
         // a is cleared, and b's scene gets nothing from a's slots.
         assert_eq!(
             applied(&mut capture, Some(&b), None),
-            [(false, a.clone(), vec![]), (true, a.clone(), vec![]), (false, b.clone(), vec![])],
+            [
+                (false, a.clone(), vec![]),
+                (true, a.clone(), vec![]),
+                (false, b.clone(), vec![])
+            ],
         );
-        assert!(applied(&mut capture, Some(&b), None).is_empty(), "nothing standing, nothing sent");
+        assert!(
+            applied(&mut capture, Some(&b), None).is_empty(),
+            "nothing standing, nothing sent"
+        );
 
         capture.set(slots(&b, &[0, 3]), None);
-        assert_eq!(applied(&mut capture, Some(&b), None), [(false, b.clone(), vec![0, 3])]);
+        assert_eq!(
+            applied(&mut capture, Some(&b), None),
+            [(false, b.clone(), vec![0, 3])]
+        );
         capture.set(None, None);
-        assert_eq!(applied(&mut capture, Some(&b), None), [(false, b.clone(), vec![])], "a deselect clears the mask");
+        assert_eq!(
+            applied(&mut capture, Some(&b), None),
+            [(false, b.clone(), vec![])],
+            "a deselect clears the mask"
+        );
         assert!(applied(&mut capture, Some(&b), None).is_empty());
     }
 
@@ -392,10 +464,19 @@ mod tests {
         capture.set(slots(&a, &[1]), slots(&a, &[4]));
         applied(&mut capture, Some(&a), Some(&a));
         let (output, viewport) = capture.take();
-        assert_eq!((output.clone(), viewport.clone()), (slots(&a, &[1]), slots(&a, &[4])));
-        assert_eq!(applied(&mut capture, Some(&a), Some(&a)), [(false, a.clone(), vec![]), (true, a.clone(), vec![])]);
+        assert_eq!(
+            (output.clone(), viewport.clone()),
+            (slots(&a, &[1]), slots(&a, &[4]))
+        );
+        assert_eq!(
+            applied(&mut capture, Some(&a), Some(&a)),
+            [(false, a.clone(), vec![]), (true, a.clone(), vec![])]
+        );
         assert!(applied(&mut capture, Some(&a), Some(&a)).is_empty());
         capture.set(output, viewport);
-        assert_eq!(applied(&mut capture, Some(&a), Some(&a)), [(false, a.clone(), vec![1]), (true, a.clone(), vec![4])]);
+        assert_eq!(
+            applied(&mut capture, Some(&a), Some(&a)),
+            [(false, a.clone(), vec![1]), (true, a.clone(), vec![4])]
+        );
     }
 }

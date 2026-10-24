@@ -114,7 +114,13 @@ fn snap_hue(channel: f32) -> f32 {
 /// (Softbox mode, white furnace off, `sun_disc_intensity > 0`, a Sun light
 /// on `sun`), so a moving light only re-bakes while its disc is visible.
 /// Moving it then re-bakes every frame it moves, by design: the sky follows.
-fn sun_uniform(light: Option<Light>, mode: u32, uniform_mode: u32, disc_intensity: f32, disc_size: f32) -> ([f32; 3], [f32; 3], f32, f32) {
+fn sun_uniform(
+    light: Option<Light>,
+    mode: u32,
+    uniform_mode: u32,
+    disc_intensity: f32,
+    disc_size: f32,
+) -> ([f32; 3], [f32; 3], f32, f32) {
     let drawn = mode == 1 && uniform_mode == 0 && disc_intensity > 0.0;
     match sun_from_light(light).filter(|_| drawn) {
         Some((dir, hue)) => (dir, hue, disc_intensity, disc_size),
@@ -359,17 +365,29 @@ impl Primitive for BakeEquirectEnvmap {
         let emitter_elevation = read_float("emitter_elevation", 0.15);
         let emitter_width = read_float("emitter_width", 0.05);
         let fill_intensity = read_float("fill", 0.0);
-        let uniform_mode = u32::from(matches!(ctx.params.get("uniform"), Some(ParamValue::Bool(true))));
-        let ([sun_x, sun_y, sun_z], [sun_r, sun_g, sun_b], sun_disc_intensity, sun_disc_size) = sun_uniform(
-            ctx.inputs.light("sun"),
-            mode,
-            uniform_mode,
-            read_float("sun_disc_intensity", 0.0),
-            read_float("sun_disc_size", 0.0),
-        );
+        let uniform_mode = u32::from(matches!(
+            ctx.params.get("uniform"),
+            Some(ParamValue::Bool(true))
+        ));
+        let ([sun_x, sun_y, sun_z], [sun_r, sun_g, sun_b], sun_disc_intensity, sun_disc_size) =
+            sun_uniform(
+                ctx.inputs.light("sun"),
+                mode,
+                uniform_mode,
+                read_float("sun_disc_intensity", 0.0),
+                read_float("sun_disc_size", 0.0),
+            );
 
-        let hdri = if mode == MODE_HDRI { ctx.inputs.texture_2d("hdri") } else { None };
-        let hdri_version = if hdri.is_some() { ctx.inputs.content_version("hdri") } else { None };
+        let hdri = if mode == MODE_HDRI {
+            ctx.inputs.texture_2d("hdri")
+        } else {
+            None
+        };
+        let hdri_version = if hdri.is_some() {
+            ctx.inputs.content_version("hdri")
+        } else {
+            None
+        };
         let Some(envmap) = ctx.outputs.texture_2d("envmap") else {
             return;
         };
@@ -410,10 +428,10 @@ impl Primitive for BakeEquirectEnvmap {
         // slot must be re-baked even with identical params, the same
         // precedent `gltf_texture_source`'s `last_mip_identity` established.
         let output_identity = envmap.identity_key();
-        let hdri_unchanged = hdri.is_none() || (hdri_version.is_some() && self.last_hdri_version == hdri_version);
+        let hdri_unchanged =
+            hdri.is_none() || (hdri_version.is_some() && self.last_hdri_version == hdri_version);
         let content_unchanged = self.last_uniforms == Some(uniforms) && hdri_unchanged;
-        let unchanged =
-            content_unchanged && self.last_output_identity == Some(output_identity);
+        let unchanged = content_unchanged && self.last_output_identity == Some(output_identity);
 
         if unchanged && ctx.outputs_retained() {
             ctx.mark_outputs_unchanged();
@@ -422,7 +440,12 @@ impl Primitive for BakeEquirectEnvmap {
 
         let gpu = ctx.gpu_encoder();
         if let Some(hdri) = hdri {
-            let copy = HdriCopyUniforms { intensity, _pad0: 0.0, _pad1: 0.0, _pad2: 0.0 };
+            let copy = HdriCopyUniforms {
+                intensity,
+                _pad0: 0.0,
+                _pad1: 0.0,
+                _pad2: 0.0,
+            };
             let pipeline = self.hdri_pipeline.get_or_insert_with(|| {
                 gpu.device.create_compute_pipeline(
                     include_str!("shaders/bake_environment_hdri.wgsl"),
@@ -433,9 +456,18 @@ impl Primitive for BakeEquirectEnvmap {
             gpu.native_enc.dispatch_compute(
                 pipeline,
                 &[
-                    GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&copy) },
-                    GpuBinding::Texture { binding: 1, texture: envmap },
-                    GpuBinding::Texture { binding: 2, texture: hdri },
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&copy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: envmap,
+                    },
+                    GpuBinding::Texture {
+                        binding: 2,
+                        texture: hdri,
+                    },
                 ],
                 [tex_width.div_ceil(16), tex_height.div_ceil(16), 1],
                 "node.bake_environment.hdri",
@@ -483,8 +515,14 @@ mod tests {
 
     fn params_at(width: f32, height: f32) -> ParamValues {
         let mut p = ahash::AHashMap::default();
-        p.insert(std::borrow::Cow::Borrowed("width"), ParamValue::Float(width));
-        p.insert(std::borrow::Cow::Borrowed("height"), ParamValue::Float(height));
+        p.insert(
+            std::borrow::Cow::Borrowed("width"),
+            ParamValue::Float(width),
+        );
+        p.insert(
+            std::borrow::Cow::Borrowed("height"),
+            ParamValue::Float(height),
+        );
         p
     }
 
@@ -509,12 +547,20 @@ mod tests {
     #[test]
     fn uniform_param_defaults_to_off() {
         let defaults = BakeEquirectEnvmap::PARAMS;
-        let uniform_def = defaults.iter().find(|p| p.name == "uniform").expect("uniform param declared");
+        let uniform_def = defaults
+            .iter()
+            .find(|p| p.name == "uniform")
+            .expect("uniform param declared");
         assert_eq!(uniform_def.default, ParamValue::Bool(false));
     }
 
     fn light(mode: LightMode, aim_from_pos: [f32; 3], color: [f32; 4]) -> Light {
-        Light { mode, dir: aim_from_pos, color, ..Light::default_sun() }
+        Light {
+            mode,
+            dir: aim_from_pos,
+            color,
+            ..Light::default_sun()
+        }
     }
 
     /// The disc sits where the light shines from (opposite its travel
@@ -522,14 +568,21 @@ mod tests {
     #[test]
     fn sun_disc_follows_a_sun_light() {
         let sun = light(LightMode::Sun, [0.0, -0.6, -0.8], [7.0, 3.5, 0.0, 1.0]);
-        assert_eq!(sun_from_light(Some(sun)), Some(([0.0, 0.6, 0.8], [1.0, 0.5, 0.0])));
+        assert_eq!(
+            sun_from_light(Some(sun)),
+            Some(([0.0, 0.6, 0.8], [1.0, 0.5, 0.0]))
+        );
     }
 
     #[test]
     fn sun_disc_is_off_without_a_sun_light() {
         assert_eq!(sun_from_light(None), None);
         for mode in [LightMode::Point, LightMode::Spot] {
-            assert_eq!(sun_from_light(Some(light(mode, [0.0, -1.0, 0.0], [1.0; 4]))), None, "{mode:?}");
+            assert_eq!(
+                sun_from_light(Some(light(mode, [0.0, -1.0, 0.0], [1.0; 4]))),
+                None,
+                "{mode:?}"
+            );
         }
         let black = light(LightMode::Sun, [0.0, -1.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
         assert_eq!(sun_from_light(Some(black)), None);
@@ -544,10 +597,21 @@ mod tests {
         let at = |dir| Some(light(LightMode::Sun, dir, [3.5, 3.5, 3.5, 1.0]));
         let (a, b) = (at([0.0, -0.6, -0.8]), at([-0.8, -0.6, 0.0]));
         for (mode, furnace, disc) in [(1, 0, 0.0), (0, 0, 4.0), (1, 1, 4.0)] {
-            assert_eq!(sun_uniform(a, mode, furnace, disc, 0.1), sun_uniform(b, mode, furnace, disc, 0.1), "{mode} {furnace} {disc}");
-            assert_eq!(sun_uniform(a, mode, furnace, disc, 0.1), ([0.0; 3], [0.0; 3], 0.0, 0.0));
+            assert_eq!(
+                sun_uniform(a, mode, furnace, disc, 0.1),
+                sun_uniform(b, mode, furnace, disc, 0.1),
+                "{mode} {furnace} {disc}"
+            );
+            assert_eq!(
+                sun_uniform(a, mode, furnace, disc, 0.1),
+                ([0.0; 3], [0.0; 3], 0.0, 0.0)
+            );
         }
-        assert_ne!(sun_uniform(a, 1, 0, 4.0, 0.1), sun_uniform(b, 1, 0, 4.0, 0.1), "a drawn disc follows the light");
+        assert_ne!(
+            sun_uniform(a, 1, 0, 4.0, 0.1),
+            sun_uniform(b, 1, 0, 4.0, 0.1),
+            "a drawn disc follows the light"
+        );
     }
 
     /// An audio-reactive sun (only its intensity moving) with the disc on
@@ -557,7 +621,14 @@ mod tests {
         let base = [1.0f32, 0.6, 0.3];
         let hue_at = |i: f32| {
             let color = [base[0] * i, base[1] * i, base[2] * i, 1.0];
-            sun_uniform(Some(light(LightMode::Sun, [0.0, -1.0, 0.0], color)), 1, 0, 4.0, 0.1).1
+            sun_uniform(
+                Some(light(LightMode::Sun, [0.0, -1.0, 0.0], color)),
+                1,
+                0,
+                4.0,
+                0.1,
+            )
+            .1
         };
         let first = hue_at(0.01);
         for step in 1..2000 {
@@ -572,7 +643,10 @@ mod tests {
         let node: &dyn EffectNode = &prim;
         assert!(node.inputs().iter().any(|p| p.name == "sun"));
         for gone in ["sun_x", "sun_y", "sun_z"] {
-            assert!(BakeEquirectEnvmap::PARAMS.iter().all(|p| p.name != gone), "{gone}");
+            assert!(
+                BakeEquirectEnvmap::PARAMS.iter().all(|p| p.name != gone),
+                "{gone}"
+            );
         }
     }
 
@@ -581,8 +655,14 @@ mod tests {
     #[test]
     fn sky_sun_light_defaults_match_the_light_node() {
         use manifold_core::sky_sun::{LIGHT_DEFAULT_AIM, LIGHT_DEFAULT_POS};
-        let default = |name: &str| match super::super::light::LightNode::PARAMS.iter().find(|p| p.name == name) {
-            Some(ParamDef { default: ParamValue::Float(v), .. }) => *v,
+        let default = |name: &str| match super::super::light::LightNode::PARAMS
+            .iter()
+            .find(|p| p.name == name)
+        {
+            Some(ParamDef {
+                default: ParamValue::Float(v),
+                ..
+            }) => *v,
             other => panic!("{name}: {other:?}"),
         };
         assert_eq!(["pos_x", "pos_y", "pos_z"].map(default), LIGHT_DEFAULT_POS);
@@ -592,7 +672,10 @@ mod tests {
     #[test]
     fn mode_param_defaults_to_gradient() {
         let defaults = BakeEquirectEnvmap::PARAMS;
-        let mode_def = defaults.iter().find(|p| p.name == "mode").expect("mode param declared");
+        let mode_def = defaults
+            .iter()
+            .find(|p| p.name == "mode")
+            .expect("mode param declared");
         assert_eq!(mode_def.default, ParamValue::Enum(0));
         assert_eq!(mode_def.enum_values, &["Gradient", "Softbox", "HDRI"]);
     }
@@ -610,16 +693,29 @@ mod tests {
         let prim = BakeEquirectEnvmap::new();
         let node: &dyn EffectNode = &prim;
         let wired = [("hdri", (4096, 2048))];
-        assert_eq!(node.output_dims("envmap", (1920, 1080), &wired, &params_with_mode(2)), Some((4096, 2048)));
-        assert_eq!(node.output_dims("envmap", (1920, 1080), &wired, &params_with_mode(1)), Some((512, 256)));
-        assert_eq!(node.output_dims("envmap", (1920, 1080), &[], &params_with_mode(2)), Some((512, 256)));
+        assert_eq!(
+            node.output_dims("envmap", (1920, 1080), &wired, &params_with_mode(2)),
+            Some((4096, 2048))
+        );
+        assert_eq!(
+            node.output_dims("envmap", (1920, 1080), &wired, &params_with_mode(1)),
+            Some((512, 256))
+        );
+        assert_eq!(
+            node.output_dims("envmap", (1920, 1080), &[], &params_with_mode(2)),
+            Some((512, 256))
+        );
     }
 
     #[test]
     fn the_hdri_input_is_optional() {
         let prim = BakeEquirectEnvmap::new();
         let node: &dyn EffectNode = &prim;
-        let hdri = node.inputs().iter().find(|p| p.name == "hdri").expect("hdri input");
+        let hdri = node
+            .inputs()
+            .iter()
+            .find(|p| p.name == "hdri")
+            .expect("hdri input");
         assert!(!hdri.required);
     }
 }
@@ -647,7 +743,8 @@ mod gpu_tests {
         enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
         enc.commit_and_wait_completed();
         let ptr = readback.mapped_ptr().expect("shared readback buffer");
-        let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+        let halves: &[u16] =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
         (0..(w * h) as usize)
             .map(|i| {
                 let o = i * 4;
@@ -682,8 +779,11 @@ mod gpu_tests {
         fill_intensity: f32,
         uniform_mode: u32,
     ) -> Vec<[f32; 4]> {
-        let pipeline =
-            device.create_compute_pipeline(include_str!("shaders/bake_equirect_envmap.wgsl"), "cs_main", "bake-env-test");
+        let pipeline = device.create_compute_pipeline(
+            include_str!("shaders/bake_equirect_envmap.wgsl"),
+            "cs_main",
+            "bake-env-test",
+        );
         let out = RenderTarget::new(device, w, h, GpuTextureFormat::Rgba16Float, "bake-env-out");
         let uniforms = EnvmapUniforms {
             width: w,
@@ -712,8 +812,14 @@ mod gpu_tests {
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Texture { binding: 1, texture: &out.texture },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &out.texture,
+                },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "bake-env-dispatch",
@@ -802,7 +908,26 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // New shader, mode=0 (gradient) — dispatched via the same `bake()`
         // helper every other test in this module uses.
-        let new_px = bake(&device, w, h, 0, horizon_strength, azimuth_variation, intensity, 3, 6.0, 0.15, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0);
+        let new_px = bake(
+            &device,
+            w,
+            h,
+            0,
+            horizon_strength,
+            azimuth_variation,
+            intensity,
+            3,
+            6.0,
+            0.15,
+            0.05,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0,
+        );
 
         // Build-of-record shader, dispatched directly with its own (32-byte)
         // uniform layout.
@@ -818,16 +943,37 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             _pad1: f32,
             _pad2: f32,
         }
-        let legacy_pipeline = device.create_compute_pipeline(LEGACY_GRADIENT_WGSL, "cs_main", "bake-env-legacy-test");
-        let legacy_out = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "bake-env-legacy-out");
-        let legacy_uniforms =
-            LegacyUniforms { width: w, height: h, horizon_strength, azimuth_variation, intensity, _pad0: 0.0, _pad1: 0.0, _pad2: 0.0 };
+        let legacy_pipeline =
+            device.create_compute_pipeline(LEGACY_GRADIENT_WGSL, "cs_main", "bake-env-legacy-test");
+        let legacy_out = RenderTarget::new(
+            &device,
+            w,
+            h,
+            GpuTextureFormat::Rgba16Float,
+            "bake-env-legacy-out",
+        );
+        let legacy_uniforms = LegacyUniforms {
+            width: w,
+            height: h,
+            horizon_strength,
+            azimuth_variation,
+            intensity,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
+        };
         let mut enc = device.create_encoder("bake-env-legacy-dispatch");
         enc.dispatch_compute(
             &legacy_pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&legacy_uniforms) },
-                GpuBinding::Texture { binding: 1, texture: &legacy_out.texture },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&legacy_uniforms),
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &legacy_out.texture,
+                },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "bake-env-legacy-dispatch",
@@ -836,7 +982,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let legacy_px = readback_rgba16f(&device, &legacy_out.texture, w, h);
 
         for (i, (got, expected)) in new_px.iter().zip(legacy_px.iter()).enumerate() {
-            assert_eq!(got, expected, "texel {i}: new mode=0 output must be byte-identical to build-of-record");
+            assert_eq!(
+                got, expected,
+                "texel {i}: new mode=0 output must be byte-identical to build-of-record"
+            );
         }
     }
 
@@ -846,7 +995,26 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let (w, h) = (64u32, 64u32);
         let emitter_elevation = 0.15;
         let emitter_width = 0.03; // half_width; falloff band = ±0.03 in "up"
-        let px = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 6.0, emitter_elevation, emitter_width, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0);
+        let px = bake(
+            &device,
+            w,
+            h,
+            1,
+            1.0,
+            0.12,
+            1.0,
+            1u32,
+            6.0,
+            emitter_elevation,
+            emitter_width,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0,
+        );
 
         use std::f32::consts::PI;
         let mut max_luminance_outside_band: f32 = 0.0;
@@ -868,9 +1036,15 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 max_luminance_outside_band = max_luminance_outside_band.max(luminance);
             }
         }
-        assert!(any_outside, "test fixture must sample rows outside the strip band");
+        assert!(
+            any_outside,
+            "test fixture must sample rows outside the strip band"
+        );
         // D7: pure-black base — EXACTLY 0.0, not merely small.
-        assert_eq!(max_luminance_outside_band, 0.0, "softbox base must be exact zero outside strips");
+        assert_eq!(
+            max_luminance_outside_band, 0.0,
+            "softbox base must be exact zero outside strips"
+        );
     }
 
     /// F-P7 dome fill. Three contracts: (a) fill 0 keeps the D7 pure-black
@@ -887,7 +1061,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let (w, h) = (64u32, 64u32);
 
         // (b) fill only (strip intensity 0): every texel strictly positive.
-        let filled = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 3u32, 0.0, 0.15, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8, 0);
+        let filled = bake(
+            &device, w, h, 1, 1.0, 0.12, 1.0, 3u32, 0.0, 0.15, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8,
+            0,
+        );
         let min_luminance = filled
             .iter()
             .fold(f32::INFINITY, |m, p| m.min(p[0].max(p[1]).max(p[2])));
@@ -902,8 +1079,14 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // by masking the strip band out of the comparison instead: cheaper
         // and exact — bake twice with strip intensity 0 and 9 and assert the
         // OUTSIDE-band texels are bit-identical.
-        let with_strips = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 9.0, 0.15, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8, 0);
-        let no_strips = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 0.0, 0.15, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8, 0);
+        let with_strips = bake(
+            &device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 9.0, 0.15, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8,
+            0,
+        );
+        let no_strips = bake(
+            &device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 0.0, 0.15, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8,
+            0,
+        );
         use std::f32::consts::PI;
         for y in 0..h {
             let v_coord = y as f32 / h as f32;
@@ -925,9 +1108,17 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     fn softbox_emitter_rows_exceed_hdr_one() {
         let device = manifold_gpu::testkit::test_device();
         let (w, h) = (32u32, 64u32);
-        let px = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 6.0, 0.15, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0);
-        let max_channel = px.iter().fold(0.0f32, |m, p| m.max(p[0]).max(p[1]).max(p[2]));
-        assert!(max_channel > 1.0, "emitter strip must exceed 1.0 (HDR): max={max_channel}");
+        let px = bake(
+            &device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 6.0, 0.15, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0,
+        );
+        let max_channel = px
+            .iter()
+            .fold(0.0f32, |m, p| m.max(p[0]).max(p[1]).max(p[2]));
+        assert!(
+            max_channel > 1.0,
+            "emitter strip must exceed 1.0 (HDR): max={max_channel}"
+        );
     }
 
     #[test]
@@ -951,11 +1142,23 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             bands
         }
 
-        let px1 = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 6.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0);
-        assert_eq!(count_bands(&px1, w, h), 1, "emitter_count=1 must bake exactly one strip");
+        let px1 = bake(
+            &device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 6.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0,
+        );
+        assert_eq!(
+            count_bands(&px1, w, h),
+            1,
+            "emitter_count=1 must bake exactly one strip"
+        );
 
-        let px3 = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 3u32, 6.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0);
-        assert_eq!(count_bands(&px3, w, h), 3, "emitter_count=3 must bake exactly three strips");
+        let px3 = bake(
+            &device, w, h, 1, 1.0, 0.12, 1.0, 3u32, 6.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0,
+        );
+        assert_eq!(
+            count_bands(&px3, w, h),
+            3,
+            "emitter_count=3 must bake exactly three strips"
+        );
     }
 
     #[test]
@@ -1011,11 +1214,22 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Direction IS set, but intensity is 0 — must be byte-identical to
         // the direction being unset entirely (D7: "sun_disc_intensity = 0
         // is byte-identical to no-disc").
-        let with_direction_zero_intensity = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 2u32, 6.0, 0.1, 0.04, 0.5, 0.5, 0.5, 0.0, 0.2, 0.0, 0);
-        let no_direction_zero_intensity = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 2u32, 6.0, 0.1, 0.04, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0);
+        let with_direction_zero_intensity = bake(
+            &device, w, h, 1, 1.0, 0.12, 1.0, 2u32, 6.0, 0.1, 0.04, 0.5, 0.5, 0.5, 0.0, 0.2, 0.0, 0,
+        );
+        let no_direction_zero_intensity = bake(
+            &device, w, h, 1, 1.0, 0.12, 1.0, 2u32, 6.0, 0.1, 0.04, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0,
+        );
 
-        for (i, (a, b)) in with_direction_zero_intensity.iter().zip(no_direction_zero_intensity.iter()).enumerate() {
-            assert_eq!(a, b, "texel {i}: sun_disc_intensity=0 must be byte-identical regardless of direction");
+        for (i, (a, b)) in with_direction_zero_intensity
+            .iter()
+            .zip(no_direction_zero_intensity.iter())
+            .enumerate()
+        {
+            assert_eq!(
+                a, b,
+                "texel {i}: sun_disc_intensity=0 must be byte-identical regardless of direction"
+            );
         }
     }
 }
@@ -1027,24 +1241,32 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gate_gpu_tests {
     use super::*;
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use manifold_node_engine::exec::backend::Backend;
-    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
-    use manifold_node_engine::exec::execution_plan::ResourceId;
-    use manifold_node_engine::exec::{effect_node::FrameTime, metal_backend::MetalBackend};
-    use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::exec::{effect_node::FrameTime, metal_backend::MetalBackend};
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn frame_time() -> FrameTime {
-        FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }
+        FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        }
     }
 
     fn params_at(horizon_strength: f32, w: f32, h: f32) -> ParamValues {
         let mut p = ahash::AHashMap::default();
         p.insert(std::borrow::Cow::Borrowed("width"), ParamValue::Float(w));
         p.insert(std::borrow::Cow::Borrowed("height"), ParamValue::Float(h));
-        p.insert(std::borrow::Cow::Borrowed("horizon_strength"), ParamValue::Float(horizon_strength));
+        p.insert(
+            std::borrow::Cow::Borrowed("horizon_strength"),
+            ParamValue::Float(horizon_strength),
+        );
         p
     }
 
@@ -1094,7 +1316,13 @@ mod gate_gpu_tests {
         unchanged
     }
 
-    fn readback(device: &manifold_gpu::GpuDevice, backend: &MetalBackend, slot: Slot, w: u32, h: u32) -> Vec<u8> {
+    fn readback(
+        device: &manifold_gpu::GpuDevice,
+        backend: &MetalBackend,
+        slot: Slot,
+        w: u32,
+        h: u32,
+    ) -> Vec<u8> {
         let tex = backend.texture_2d(slot).expect("texture retained");
         let bytes_per_row = w * 8; // Rgba16Float
         let total = u64::from(h * bytes_per_row);
@@ -1122,14 +1350,37 @@ mod gate_gpu_tests {
 
         let params = params_at(1.0, w as f32, h as f32);
         let mut prim = BakeEquirectEnvmap::new();
-        let unchanged1 = run_once(&mut prim, &backend, &device, &output_scratch, &params, frame_time());
-        assert!(!unchanged1, "first frame must actually bake (no prior state)");
+        let unchanged1 = run_once(
+            &mut prim,
+            &backend,
+            &device,
+            &output_scratch,
+            &params,
+            frame_time(),
+        );
+        assert!(
+            !unchanged1,
+            "first frame must actually bake (no prior state)"
+        );
         let frame1 = readback(&device, &backend, out_slot, w, h);
 
-        let unchanged2 = run_once(&mut prim, &backend, &device, &output_scratch, &params, frame_time());
-        assert!(unchanged2, "static param frame must declare mark_outputs_unchanged");
+        let unchanged2 = run_once(
+            &mut prim,
+            &backend,
+            &device,
+            &output_scratch,
+            &params,
+            frame_time(),
+        );
+        assert!(
+            unchanged2,
+            "static param frame must declare mark_outputs_unchanged"
+        );
         let frame2 = readback(&device, &backend, out_slot, w, h);
-        assert_eq!(frame1, frame2, "frame 2 must be bit-identical to frame 1 on unchanged params");
+        assert_eq!(
+            frame1, frame2,
+            "frame 2 must be bit-identical to frame 1 on unchanged params"
+        );
     }
 
     /// D7/I2: a param change (the sun-coherence gesture, stood in here by
@@ -1148,11 +1399,28 @@ mod gate_gpu_tests {
         let scratch_a: Vec<(&'static str, Slot)> = vec![("envmap", slot_a)];
         let params_1 = params_at(1.0, w as f32, h as f32);
         let mut prim_a = BakeEquirectEnvmap::new();
-        run_once(&mut prim_a, &backend_a, &device, &scratch_a, &params_1, frame_time());
+        run_once(
+            &mut prim_a,
+            &backend_a,
+            &device,
+            &scratch_a,
+            &params_1,
+            frame_time(),
+        );
 
         let params_2 = params_at(3.0, w as f32, h as f32);
-        let unchanged = run_once(&mut prim_a, &backend_a, &device, &scratch_a, &params_2, frame_time());
-        assert!(!unchanged, "a horizon_strength change must NOT be gated as unchanged");
+        let unchanged = run_once(
+            &mut prim_a,
+            &backend_a,
+            &device,
+            &scratch_a,
+            &params_2,
+            frame_time(),
+        );
+        assert!(
+            !unchanged,
+            "a horizon_strength change must NOT be gated as unchanged"
+        );
         let changed_output = readback(&device, &backend_a, slot_a, w, h);
 
         let mut backend_b = MetalBackend::new(device.arc(), w, h, format);
@@ -1160,7 +1428,14 @@ mod gate_gpu_tests {
         let slot_b = backend_b.pre_bind_texture_2d(r_out, target_b);
         let scratch_b: Vec<(&'static str, Slot)> = vec![("envmap", slot_b)];
         let mut prim_b = BakeEquirectEnvmap::new();
-        run_once(&mut prim_b, &backend_b, &device, &scratch_b, &params_2, frame_time());
+        run_once(
+            &mut prim_b,
+            &backend_b,
+            &device,
+            &scratch_b,
+            &params_2,
+            frame_time(),
+        );
         let fresh_output = readback(&device, &backend_b, slot_b, w, h);
 
         assert_eq!(
@@ -1176,14 +1451,23 @@ mod hdri_gpu_tests {
     //! times the intensity, alpha 1.
 
     use half::f16;
-    use manifold_gpu::{GpuBinding, GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
+    use manifold_gpu::{
+        GpuBinding, GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
+        GpuTextureUsage,
+    };
 
     use super::HdriCopyUniforms;
     use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn source(device: &GpuDevice, w: u32, h: u32) -> (GpuTexture, Vec<[f32; 3]>) {
         let texels: Vec<[f32; 3]> = (0..w * h)
-            .map(|i| [(i % w) as f32 * 0.25, (i / w) as f32 * 0.5, 40.0 + i as f32 * 0.125])
+            .map(|i| {
+                [
+                    (i % w) as f32 * 0.25,
+                    (i / w) as f32 * 0.5,
+                    40.0 + i as f32 * 0.125,
+                ]
+            })
             .collect();
         let mut bytes = Vec::with_capacity((w * h * 8) as usize);
         for t in &texels {
@@ -1210,21 +1494,41 @@ mod hdri_gpu_tests {
         let device = manifold_gpu::testkit::test_device();
         let (w, h) = (64u32, 32u32);
         let (src, texels) = source(&device, w, h);
-        let out = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "bake-env-hdri-out");
+        let out = RenderTarget::new(
+            &device,
+            w,
+            h,
+            GpuTextureFormat::Rgba16Float,
+            "bake-env-hdri-out",
+        );
         let pipeline = device.create_compute_pipeline(
             include_str!("shaders/bake_environment_hdri.wgsl"),
             "cs_main",
             "bake-env-hdri-test",
         );
         let intensity = 2.0f32;
-        let uniforms = HdriCopyUniforms { intensity, _pad0: 0.0, _pad1: 0.0, _pad2: 0.0 };
+        let uniforms = HdriCopyUniforms {
+            intensity,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
+        };
         let mut enc = device.create_encoder("bake-env-hdri");
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Texture { binding: 1, texture: &out.texture },
-                GpuBinding::Texture { binding: 2, texture: &src },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &out.texture,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: &src,
+                },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "bake-env-hdri",
@@ -1236,12 +1540,17 @@ mod hdri_gpu_tests {
         enc.copy_texture_to_buffer(&out.texture, &readback, w, h, w * 8);
         enc.commit_and_wait_completed();
         let ptr = readback.mapped_ptr().expect("shared readback");
-        let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+        let halves: &[u16] =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
         for (i, t) in texels.iter().enumerate() {
             let got: [f32; 4] = std::array::from_fn(|k| f16::from_bits(halves[i * 4 + k]).to_f32());
             for k in 0..3 {
                 let want = f16::from_f32(t[k]).to_f32() * intensity;
-                assert!((got[k] - want).abs() <= want.abs() * 2e-3 + 1e-3, "texel {i} channel {k}: {} vs {want}", got[k]);
+                assert!(
+                    (got[k] - want).abs() <= want.abs() * 2e-3 + 1e-3,
+                    "texel {i} channel {k}: {} vs {want}",
+                    got[k]
+                );
             }
             assert_eq!(got[3], 1.0, "alpha is opaque");
         }

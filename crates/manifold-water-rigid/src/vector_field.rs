@@ -28,8 +28,12 @@ impl VectorField for ContinuousField<'_> {
 
     fn sample_force(&self, position: [f32; 3]) -> ForceSample {
         let position = std::array::from_fn(|axis| position[axis] + self.origin[axis]);
-        let before = self.before.map_or_else(ForceSample::default, |field| field.sample_force(position));
-        let after = self.after.map_or_else(ForceSample::default, |field| field.sample_force(position));
+        let before = self
+            .before
+            .map_or_else(ForceSample::default, |field| field.sample_force(position));
+        let after = self
+            .after
+            .map_or_else(ForceSample::default, |field| field.sample_force(position));
         // Avoid an unused endpoint contaminating the exact boundary with NaN.
         if self.alpha <= 0.0 {
             before
@@ -40,7 +44,9 @@ impl VectorField for ContinuousField<'_> {
             ForceSample {
                 push: std::array::from_fn(|axis| lerp(before.push[axis], after.push[axis])),
                 drag: lerp(before.drag, after.drag),
-                drag_wind: std::array::from_fn(|axis| lerp(before.drag_wind[axis], after.drag_wind[axis])),
+                drag_wind: std::array::from_fn(|axis| {
+                    lerp(before.drag_wind[axis], after.drag_wind[axis])
+                }),
             }
         }
     }
@@ -50,9 +56,15 @@ impl VectorField for ContinuousField<'_> {
 mod tests {
     use manifold_physics::{FieldValue, VectorField};
 
-    use manifold_node_engine::{exec::backend::Backend, exec::backend::MockBackend, exec::cpu_values::CpuWireWrites, bindings::NodeInputs, bindings::NodeOutputs, ports::PortType, exec::execution_plan::ResourceId};
+    use manifold_node_engine::{
+        bindings::NodeInputs, bindings::NodeOutputs, exec::backend::Backend,
+        exec::backend::MockBackend, exec::cpu_values::CpuWireWrites,
+        exec::execution_plan::ResourceId, ports::PortType,
+    };
 
-    use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, FrameTime};
+    use manifold_node_engine::exec::effect_node::{
+        EffectNode, EffectNodeContext, EffectNodeType, FrameTime,
+    };
     use manifold_node_engine::exec::execution::Executor;
     use manifold_node_engine::exec::execution_plan::compile;
     use manifold_node_engine::graph::Graph;
@@ -102,7 +114,8 @@ mod tests {
         fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
             ctx.outputs.set_cpu_value(
                 "field",
-                manifold_physics::FieldValue::uniform([1.0, -2.0, 3.0]).expect("finite uniform field"),
+                manifold_physics::FieldValue::uniform([1.0, -2.0, 3.0])
+                    .expect("finite uniform field"),
             );
         }
     }
@@ -111,22 +124,42 @@ mod tests {
     fn external_field_output_survives_cpu_execute_frame() {
         use manifold_physics::VectorField;
         let mut graph = Graph::new();
-        let image = graph.add_node(Box::new(manifold_node_engine::scene::boundary_nodes::Source::new()));
-        let out = graph.add_node(Box::new(manifold_node_engine::scene::boundary_nodes::FinalOutput::new()));
+        let image = graph.add_node(Box::new(
+            manifold_node_engine::scene::boundary_nodes::Source::new(),
+        ));
+        let out = graph.add_node(Box::new(
+            manifold_node_engine::scene::boundary_nodes::FinalOutput::new(),
+        ));
         graph.connect((image, "out"), (out, "in")).unwrap();
         let source = graph.add_node(Box::new(ExternalFieldNode::new()));
-        assert!(compile(&graph).unwrap().steps().iter().all(|step| step.node != source));
+        assert!(
+            compile(&graph)
+                .unwrap()
+                .steps()
+                .iter()
+                .all(|step| step.node != source)
+        );
         graph.add_external_output(source, "field").unwrap();
         let plan = compile(&graph).unwrap();
-        let resource = plan.steps().iter().find(|step| step.node == source).unwrap().outputs[0].1;
+        let resource = plan
+            .steps()
+            .iter()
+            .find(|step| step.node == source)
+            .unwrap()
+            .outputs[0]
+            .1;
 
         let mut executor = Executor::with_mock();
-        executor.execute_frame(&mut graph, &plan, FrameTime {
-            beats: manifold_core::Beats(0.0),
-            seconds: manifold_core::Seconds(0.0),
-            delta: manifold_core::Seconds(1.0 / 60.0),
-            frame_count: 0,
-        });
+        executor.execute_frame(
+            &mut graph,
+            &plan,
+            FrameTime {
+                beats: manifold_core::Beats(0.0),
+                seconds: manifold_core::Seconds(0.0),
+                delta: manifold_core::Seconds(1.0 / 60.0),
+                frame_count: 0,
+            },
+        );
 
         let slot = executor
             .backend()

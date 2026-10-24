@@ -16,10 +16,10 @@ use manifold_core::effect_graph_def::ParamSpecDef;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
-use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 const W: u32 = 256;
 const H: u32 = 256;
@@ -50,7 +50,11 @@ fn render_generator_at(preset_id: &'static str, param_id: &str, value: f32) -> V
     let params: Vec<Param> = specs
         .iter()
         .map(|s| {
-            let v = if s.id == param_id { value } else { s.default_value };
+            let v = if s.id == param_id {
+                value
+            } else {
+                s.default_value
+            };
             slot(s, v)
         })
         .collect();
@@ -107,7 +111,12 @@ fn render_generator_at(preset_id: &'static str, param_id: &str, value: f32) -> V
                 let ldr = (v / (1.0 + v)).clamp(0.0, 1.0);
                 (ldr * 255.0).round() as u8
             };
-            [tonemap(px[0]), tonemap(px[1]), tonemap(px[2]), tonemap(px[3])]
+            [
+                tonemap(px[0]),
+                tonemap(px[1]),
+                tonemap(px[2]),
+                tonemap(px[3]),
+            ]
         })
         .collect()
 }

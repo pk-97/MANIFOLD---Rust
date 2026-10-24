@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use manifold_audio::capture::{audio_stream, AudioStreamProducer};
+use manifold_audio::capture::{AudioStreamProducer, audio_stream};
 use manifold_gpu::{GpuDevice, GpuTexture};
 use manifold_recording::proofs::{self, PatternWriter};
 use manifold_recording::{AudioCodec, AudioFeed, LiveRecordingConfig, LiveRecordingSession};
@@ -141,7 +141,8 @@ impl Args {
 }
 
 fn next_value(iter: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
-    iter.next().ok_or_else(|| format!("{flag} requires a value"))
+    iter.next()
+        .ok_or_else(|| format!("{flag} requires a value"))
 }
 
 fn next_parsed<T: std::str::FromStr>(
@@ -198,7 +199,13 @@ fn execute(args: &Args) -> i32 {
     };
 
     // -- Pre-flight: disk space --
-    let estimated_bytes = estimate_bytes(args.width, args.height, total_frames, duration_s, args.audio);
+    let estimated_bytes = estimate_bytes(
+        args.width,
+        args.height,
+        total_frames,
+        duration_s,
+        args.audio,
+    );
     let required_bytes = (estimated_bytes as f64 * 1.5).ceil() as u64;
     match free_disk_bytes(&output_path) {
         Ok(free) if free >= required_bytes => {}
@@ -379,7 +386,9 @@ fn execute(args: &Args) -> i32 {
         }
     };
 
-    let file_bytes = std::fs::metadata(&output_path).map(|m| m.len()).unwrap_or(0);
+    let file_bytes = std::fs::metadata(&output_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
     let gb = file_bytes as f64 / GIB;
 
     if !report.codec.contains("prores") {
@@ -624,8 +633,7 @@ fn push_realtime_audio_chunk(
     if to_push == 0 {
         return;
     }
-    let accepted_samples =
-        push_audio_chunk(producer, phase, sample_rate, channels, to_push as u32);
+    let accepted_samples = push_audio_chunk(producer, phase, sample_rate, channels, to_push as u32);
     let accepted_frames = accepted_samples as u64 / channels as u64;
     *pushed_frames += accepted_frames;
 }
@@ -721,15 +729,23 @@ fn resolve_output_path(args: &Args) -> Result<PathBuf, String> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("could not create output directory {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "could not create output directory {}: {e}",
+                parent.display()
+            )
+        })?;
     }
     Ok(path)
 }
 
 fn estimate_bytes(width: u32, height: u32, total_frames: u32, duration_s: f64, audio: bool) -> u64 {
     let video_bits = width as f64 * height as f64 * total_frames as f64 * PRORES_BITS_PER_PIXEL;
-    let audio_bits = if audio { duration_s * AUDIO_BITS_PER_SECOND } else { 0.0 };
+    let audio_bits = if audio {
+        duration_s * AUDIO_BITS_PER_SECOND
+    } else {
+        0.0
+    };
     ((video_bits + audio_bits) / 8.0).ceil() as u64
 }
 
@@ -750,7 +766,10 @@ fn free_disk_bytes(path: &Path) -> Result<u64, String> {
         .output()
         .map_err(|e| format!("df spawn failed: {e}"))?;
     if !output.status.success() {
-        return Err(format!("df failed: {}", String::from_utf8_lossy(&output.stderr)));
+        return Err(format!(
+            "df failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
     }
     let text = String::from_utf8_lossy(&output.stdout);
     let data_line = text

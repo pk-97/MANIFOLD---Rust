@@ -289,7 +289,11 @@ impl Spectrogram {
             db_max: self.db_max,
             band_lo_y: band_ys[0],
             band_hi_y: band_ys[1],
-            tilt_slope: if freq_log_ratio > 0.0 { self.tilt_slope } else { 0.0 },
+            tilt_slope: if freq_log_ratio > 0.0 {
+                self.tilt_slope
+            } else {
+                0.0
+            },
             freq_log_ratio,
             cursor_y,
             hovered_divider,
@@ -314,9 +318,20 @@ impl Spectrogram {
             &self.pipeline,
             target,
             &[
-                GpuBinding::Buffer { binding: 0, buffer: buf, offset: 0 },
-                GpuBinding::Bytes { binding: 1, data: param_bytes },
-                GpuBinding::Buffer { binding: 2, buffer: scalar_buf, offset: 0 },
+                GpuBinding::Buffer {
+                    binding: 0,
+                    buffer: buf,
+                    offset: 0,
+                },
+                GpuBinding::Bytes {
+                    binding: 1,
+                    data: param_bytes,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: scalar_buf,
+                    offset: 0,
+                },
             ],
             true, // clear
             true, // store
@@ -366,7 +381,13 @@ mod gpu_tests {
                     *lane = 1.0;
                 }
             }
-            spec.push_column(&silence, ScopeColumn { centroids: [-1.0; 4], onsets });
+            spec.push_column(
+                &silence,
+                ScopeColumn {
+                    centroids: [-1.0; 4],
+                    onsets,
+                },
+            );
         }
 
         let target = device.create_texture(&GpuTextureDesc {
@@ -422,7 +443,10 @@ mod gpu_tests {
         // A column that never fired stays background-dark across every lane.
         for i in 0..ScopeOnsets::COUNT as u32 {
             let got = at(50, lane_center_y(i));
-            assert!(got.iter().all(|&c| c < 25), "unfired col 50 lane {i} lit: {got:?}");
+            assert!(
+                got.iter().all(|&c| c < 25),
+                "unfired col 50 lane {i} lit: {got:?}"
+            );
         }
     }
 
@@ -437,8 +461,15 @@ mod gpu_tests {
         const COLS: u32 = 32;
         const H: u32 = 256;
         let device = GpuDevice::new_queued("spectral gpu-proofs");
-        let mut spec =
-            Spectrogram::new(&device, 64, COLS as usize, GpuTextureFormat::Rgba8Unorm, -59.0, 0.0, 0.0);
+        let mut spec = Spectrogram::new(
+            &device,
+            64,
+            COLS as usize,
+            GpuTextureFormat::Rgba8Unorm,
+            -59.0,
+            0.0,
+            0.0,
+        );
 
         // Unit magnitude -> power 1 -> db 0 -> norm 1.0 -> colormap(1.0) =
         // white, uniformly, so any darkening is unambiguously the dim pass.
@@ -460,7 +491,15 @@ mod gpu_tests {
         let mut enc = device.create_encoder("scope-gpu-proof-dim");
         // Dividers/tilt/cursor/hover off; kept band (0.3, 0.7) — everything
         // above or below darkens.
-        spec.render(&mut enc, &target, [-1.0, -1.0], 0.0, -1.0, -1.0, Some((0.3, 0.7)));
+        spec.render(
+            &mut enc,
+            &target,
+            [-1.0, -1.0],
+            0.0,
+            -1.0,
+            -1.0,
+            Some((0.3, 0.7)),
+        );
         enc.commit_and_wait_completed();
 
         let bytes_per_row = COLS * 4;
@@ -479,13 +518,19 @@ mod gpu_tests {
 
         // Inside the kept band: full brightness, untouched by the dim pass.
         let kept = at(16, row_for_y_from_bottom(0.5));
-        assert!(kept.iter().all(|&c| c > 235), "kept-band pixel dimmed unexpectedly: {kept:?}");
+        assert!(
+            kept.iter().all(|&c| c > 235),
+            "kept-band pixel dimmed unexpectedly: {kept:?}"
+        );
 
         // Outside on both sides: darkened toward the shader's 0.28x multiplier.
         let above = at(16, row_for_y_from_bottom(0.9));
         let below = at(16, row_for_y_from_bottom(0.1));
         for (label, got) in [("above", above), ("below", below)] {
-            assert!(got.iter().all(|&c| c < 100), "{label}-band pixel not dimmed: {got:?}");
+            assert!(
+                got.iter().all(|&c| c < 100),
+                "{label}-band pixel not dimmed: {got:?}"
+            );
         }
     }
 }
@@ -502,8 +547,7 @@ mod tests {
     /// the mismatch at runtime with no compile-time signal.
     #[test]
     fn shader_parses_and_validates() {
-        let module =
-            naga::front::wgsl::parse_str(SHADER).expect("spectrogram WGSL should parse");
+        let module = naga::front::wgsl::parse_str(SHADER).expect("spectrogram WGSL should parse");
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
@@ -512,7 +556,9 @@ mod tests {
         .expect("spectrogram WGSL should validate");
 
         let mut layouter = naga::proc::Layouter::default();
-        layouter.update(module.to_ctx()).expect("layout should resolve");
+        layouter
+            .update(module.to_ctx())
+            .expect("layout should resolve");
         let (handle, _) = module
             .types
             .iter()

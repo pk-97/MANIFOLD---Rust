@@ -129,10 +129,18 @@ impl Marker {
             Marker::Pure => "// @pure".to_string(),
             Marker::Fusion { kind } => format!("// @fusion: {kind}"),
             Marker::CameraExternal { name } => format!("// @camera_external: {name}"),
-            Marker::DerivedUniformMember { first_field, words, type_id, camera_port, array_ports } => {
+            Marker::DerivedUniformMember {
+                first_field,
+                words,
+                type_id,
+                camera_port,
+                array_ports,
+            } => {
                 let mut s = match camera_port {
                     Some(cp) => {
-                        format!("// @derived_uniform_member: {first_field} words={words} {type_id} {cp}")
+                        format!(
+                            "// @derived_uniform_member: {first_field} words={words} {type_id} {cp}"
+                        )
                     }
                     None => {
                         format!("// @derived_uniform_member: {first_field} words={words} {type_id}")
@@ -178,40 +186,55 @@ impl Marker {
         }
         if let Some(rest) = c.strip_prefix("@dispatch_count_param:") {
             let name = rest.trim();
-            return (!name.is_empty())
-                .then(|| Marker::DispatchCountParam { field: name.to_string() });
+            return (!name.is_empty()).then(|| Marker::DispatchCountParam {
+                field: name.to_string(),
+            });
         }
         if let Some(rest) = c.strip_prefix("@sampler_address_mode:") {
             let mode = rest.trim();
-            return (!mode.is_empty())
-                .then(|| Marker::SamplerAddressMode { mode: mode.to_string() });
+            return (!mode.is_empty()).then(|| Marker::SamplerAddressMode {
+                mode: mode.to_string(),
+            });
         }
         if let Some(rest) = c.strip_prefix("@fusion:") {
             let kind = rest.trim();
             return match kind {
-                "pointwise" | "source" => Some(Marker::Fusion { kind: kind.to_string() }),
+                "pointwise" | "source" => Some(Marker::Fusion {
+                    kind: kind.to_string(),
+                }),
                 _ => None,
             };
         }
         if let Some(rest) = c.strip_prefix("@camera_external:") {
             let name = rest.trim();
-            return (!name.is_empty()).then(|| Marker::CameraExternal { name: name.to_string() });
+            return (!name.is_empty()).then(|| Marker::CameraExternal {
+                name: name.to_string(),
+            });
         }
         if let Some(rest) = c.strip_prefix("@input_access:") {
             let mut parts = rest.split_whitespace();
             let port = parts.next()?;
             let token = parts.next()?;
-            return matches!(token, "coincident" | "coincident_texel" | "gather" | "gather_texel")
-                .then(|| Marker::InputAccess { port: port.to_string(), token: token.to_string() });
+            return matches!(
+                token,
+                "coincident" | "coincident_texel" | "gather" | "gather_texel"
+            )
+            .then(|| Marker::InputAccess {
+                port: port.to_string(),
+                token: token.to_string(),
+            });
         }
         if let Some(rest) = c.strip_prefix("@precision_critical:") {
             let name = rest.trim();
-            return (!name.is_empty())
-                .then(|| Marker::PrecisionCritical { port: name.to_string() });
+            return (!name.is_empty()).then(|| Marker::PrecisionCritical {
+                port: name.to_string(),
+            });
         }
         if let Some(rest) = c.strip_prefix("@bool_uniform:") {
             let field = rest.trim();
-            return (!field.is_empty()).then(|| Marker::BoolUniform { field: field.to_string() });
+            return (!field.is_empty()).then(|| Marker::BoolUniform {
+                field: field.to_string(),
+            });
         }
         if let Some(rest) = c.strip_prefix("@fused_output_capacity:") {
             let expr = CapacityExpr::parse_marker_payload(rest)?;
@@ -262,21 +285,35 @@ mod tests {
     fn marker_roundtrip_every_variant() {
         let variants = vec![
             Marker::FusedOutput,
-            Marker::DispatchCountParam { field: "n0_active_count".to_string() },
+            Marker::DispatchCountParam {
+                field: "n0_active_count".to_string(),
+            },
             Marker::FusedOutputCapacity {
                 expr: CapacityExpr::Min(vec![
                     CapacityExpr::Mul(2, Box::new(CapacityExpr::Slot(0))),
                     CapacityExpr::Slot(1),
                 ]),
             },
-            Marker::SamplerAddressMode { mode: "repeat".to_string() },
-            Marker::SamplerAddressMode { mode: "mirror".to_string() },
+            Marker::SamplerAddressMode {
+                mode: "repeat".to_string(),
+            },
+            Marker::SamplerAddressMode {
+                mode: "mirror".to_string(),
+            },
             Marker::ResetGated,
             Marker::Pure,
-            Marker::Fusion { kind: "pointwise".to_string() },
-            Marker::Fusion { kind: "source".to_string() },
-            Marker::CameraExternal { name: "camera_ext_0".to_string() },
-            Marker::BoolUniform { field: "n0_enabled".to_string() },
+            Marker::Fusion {
+                kind: "pointwise".to_string(),
+            },
+            Marker::Fusion {
+                kind: "source".to_string(),
+            },
+            Marker::CameraExternal {
+                name: "camera_ext_0".to_string(),
+            },
+            Marker::BoolUniform {
+                field: "n0_enabled".to_string(),
+            },
             Marker::DerivedUniformMember {
                 first_field: "n0_dt_scaled".to_string(),
                 words: 1,
@@ -327,7 +364,9 @@ mod tests {
         let line = "@group(0) @binding(3) var samp: sampler; // @sampler_address_mode: repeat";
         assert_eq!(
             Marker::parse(line),
-            Some(Marker::SamplerAddressMode { mode: "repeat".to_string() })
+            Some(Marker::SamplerAddressMode {
+                mode: "repeat".to_string()
+            })
         );
     }
 
@@ -391,7 +430,9 @@ mod tests {
             })
         );
         assert_eq!(
-            Marker::parse("// @derived_uniform_member: n1_weights_len words=1 node.morph_mesh =src_0"),
+            Marker::parse(
+                "// @derived_uniform_member: n1_weights_len words=1 node.morph_mesh =src_0"
+            ),
             None
         );
     }
@@ -416,7 +457,9 @@ mod tests {
     /// `walkdir`, no shelling out to `rg`/`find`; same convention as
     /// `manifold-core/tests/docs_index_sync.rs`).
     fn rust_files_under(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
             if path.is_dir() {
@@ -445,10 +488,16 @@ mod tests {
         for path in &files {
             // Only this file (`freeze/markers.rs`) may contain the
             // literal wire-format prefix.
-            if path.to_string_lossy().replace('\\', "/").ends_with("freeze/markers.rs") {
+            if path
+                .to_string_lossy()
+                .replace('\\', "/")
+                .ends_with("freeze/markers.rs")
+            {
                 continue;
             }
-            let Ok(text) = std::fs::read_to_string(path) else { continue };
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
             for (i, line) in text.lines().enumerate() {
                 if line.contains("\"// @") {
                     violations.push(format!("{}:{}: {}", path.display(), i + 1, line.trim()));
@@ -463,10 +512,4 @@ mod tests {
             violations.join("\n")
         );
     }
-
-
-
-
-
-
 }

@@ -31,8 +31,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuLoadAction};
 
-use manifold_node_engine::mesh::{EdgePair, CurvePoint};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::{CurvePoint, EdgePair};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
@@ -240,10 +240,7 @@ manifold_node_engine::primitive! {
 
 impl RenderLines {
     fn ensure_msaa_texture(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
-        if self.msaa_width == width
-            && self.msaa_height == height
-            && self.msaa_texture.is_some()
-        {
+        if self.msaa_width == width && self.msaa_height == height && self.msaa_texture.is_some() {
             return;
         }
         self.msaa_texture = Some(device.create_texture_msaa_memoryless(
@@ -315,8 +312,7 @@ impl RenderLines {
             if self.anim_progress < 0.0 {
                 self.anim_progress += total;
             }
-            let window_edges =
-                ((segments_total as f32 * window).ceil() as usize).max(1);
+            let window_edges = ((segments_total as f32 * window).ceil() as usize).max(1);
             let window_start = self.anim_progress.floor() as usize % segments_total as usize;
             let fract = self.anim_progress.fract();
 
@@ -680,8 +676,8 @@ impl Primitive for RenderLines {
         // Metal requires a valid buffer at every declared binding, so
         // the unwired case binds the 4-byte dummy; `has_widths = 0`
         // guarantees the shader never reads it.
-        let widths_buf = widths_input
-            .unwrap_or_else(|| self.dummy_widths.as_ref().expect("just ensured"));
+        let widths_buf =
+            widths_input.unwrap_or_else(|| self.dummy_widths.as_ref().expect("just ensured"));
 
         gpu.native_enc.draw_instanced_msaa(
             pipeline,
@@ -726,8 +722,13 @@ mod tests {
     fn non_animated_closed_loop_emits_full_strip() {
         let mut prim = RenderLines::new();
         let (edges, dots) = prim.build_instances(
-            5, /*closed_loop*/ true, /*animate*/ false, 1.0, 0.1,
-            /*show_verts*/ false, 1.0 / 60.0,
+            5,
+            /*closed_loop*/ true,
+            /*animate*/ false,
+            1.0,
+            0.1,
+            /*show_verts*/ false,
+            1.0 / 60.0,
         );
         assert_eq!(edges, 5);
         assert_eq!(dots, 0);
@@ -744,7 +745,13 @@ mod tests {
     fn non_animated_open_strip_drops_wrap_segment() {
         let mut prim = RenderLines::new();
         let (edges, _) = prim.build_instances(
-            4, /*closed_loop*/ false, /*animate*/ false, 1.0, 0.1, false, 1.0 / 60.0,
+            4,
+            /*closed_loop*/ false,
+            /*animate*/ false,
+            1.0,
+            0.1,
+            false,
+            1.0 / 60.0,
         );
         assert_eq!(edges, 3);
         assert_eq!(prim.cpu_instances[2].a, 2);
@@ -757,7 +764,13 @@ mod tests {
     fn show_verts_appends_one_dot_per_vertex() {
         let mut prim = RenderLines::new();
         let (edges, dots) = prim.build_instances(
-            4, true, false, 1.0, 0.1, /*show_verts*/ true, 1.0 / 60.0,
+            4,
+            true,
+            false,
+            1.0,
+            0.1,
+            /*show_verts*/ true,
+            1.0 / 60.0,
         );
         assert_eq!(edges, 4);
         assert_eq!(dots, 4);
@@ -776,7 +789,13 @@ mod tests {
         let mut prim = RenderLines::new();
         prim.anim_progress = 0.0;
         let (edges, _) = prim.build_instances(
-            10, true, /*animate*/ true, 1.0, /*window*/ 0.5, false, 1.0 / 60.0,
+            10,
+            true,
+            /*animate*/ true,
+            1.0,
+            /*window*/ 0.5,
+            false,
+            1.0 / 60.0,
         );
         // window_edges = ceil(10 * 0.5) = 5, plus one fading-in
         // edge at the leading position → 6 instances total. The
@@ -793,7 +812,10 @@ mod tests {
             .map(|e| f32::from_bits(e.alpha_bits))
             .collect();
         for pair in alphas.windows(2) {
-            assert!(pair[0] >= pair[1], "alphas must monotonically fade: {alphas:?}");
+            assert!(
+                pair[0] >= pair[1],
+                "alphas must monotonically fade: {alphas:?}"
+            );
         }
     }
 
@@ -810,7 +832,13 @@ mod tests {
             EdgePair::SENTINEL,
         ];
         let (n_edges, n_dots) = prim.build_instances_from_edges(
-            &edges, 3, /*animate*/ false, 1.0, 0.1, /*show_verts*/ false, 1.0 / 60.0,
+            &edges,
+            3,
+            /*animate*/ false,
+            1.0,
+            0.1,
+            /*show_verts*/ false,
+            1.0 / 60.0,
         );
         assert_eq!(n_edges, 3, "three valid pairs, two sentinels");
         assert_eq!(n_dots, 0);
@@ -833,7 +861,13 @@ mod tests {
             EdgePair { a: 5, b: 6 }, // out of range for num_points=3
         ];
         let (n_edges, _) = prim.build_instances_from_edges(
-            &edges, 3, /*animate*/ false, 1.0, 0.1, /*show_verts*/ false, 1.0 / 60.0,
+            &edges,
+            3,
+            /*animate*/ false,
+            1.0,
+            0.1,
+            /*show_verts*/ false,
+            1.0 / 60.0,
         );
         assert_eq!(n_edges, 1, "only the in-range pair survives");
     }
@@ -846,12 +880,15 @@ mod tests {
         let mut prim = RenderLines::new();
         // 4 vertices, but only 0–1–2 form a connected component;
         // vertex 3 is isolated.
-        let edges = [
-            EdgePair { a: 0, b: 1 },
-            EdgePair { a: 1, b: 2 },
-        ];
+        let edges = [EdgePair { a: 0, b: 1 }, EdgePair { a: 1, b: 2 }];
         let (n_edges, n_dots) = prim.build_instances_from_edges(
-            &edges, 4, /*animate*/ false, 1.0, 0.1, /*show_verts*/ true, 1.0 / 60.0,
+            &edges,
+            4,
+            /*animate*/ false,
+            1.0,
+            0.1,
+            /*show_verts*/ true,
+            1.0 / 60.0,
         );
         assert_eq!(n_edges, 2);
         assert_eq!(n_dots, 3, "three connected vertices, vertex 3 stays hidden");
@@ -869,7 +906,13 @@ mod tests {
         let mut prim = RenderLines::new();
         prim.anim_progress = 0.0;
         let (edges, dots) = prim.build_instances(
-            20, true, true, 1.0, /*window*/ 0.1, /*show_verts*/ true, 1.0 / 60.0,
+            20,
+            true,
+            true,
+            1.0,
+            /*window*/ 0.1,
+            /*show_verts*/ true,
+            1.0 / 60.0,
         );
         assert!(dots > 0, "must emit at least one dot");
         assert!(
@@ -909,11 +952,19 @@ mod tests {
         // 12 edges forming an icosahedron-shaped topology (just enough
         // to make a 0.1 window pick out a small subset).
         let edges: Vec<EdgePair> = (0..12)
-            .map(|i| EdgePair { a: i, b: (i + 1) % 6 })
+            .map(|i| EdgePair {
+                a: i,
+                b: (i + 1) % 6,
+            })
             .collect();
         let (n_edges, n_dots) = prim.build_instances_from_edges(
-            &edges, 6, /*animate*/ true, /*speed*/ 1.0, /*window*/ 0.1,
-            /*show_verts*/ false, 1.0 / 60.0,
+            &edges,
+            6,
+            /*animate*/ true,
+            /*speed*/ 1.0,
+            /*window*/ 0.1,
+            /*show_verts*/ false,
+            1.0 / 60.0,
         );
         assert!(
             n_edges < 12,
@@ -942,22 +993,23 @@ mod tests {
     fn edges_wired_animate_advances_anim_progress_each_frame() {
         let mut prim = RenderLines::new();
         prim.anim_progress = 0.0;
-        let edges: Vec<EdgePair> =
-            (0..10).map(|i| EdgePair { a: i, b: (i + 1) % 5 }).collect();
+        let edges: Vec<EdgePair> = (0..10)
+            .map(|i| EdgePair {
+                a: i,
+                b: (i + 1) % 5,
+            })
+            .collect();
         let dt = 1.0 / 60.0;
 
-        let _ = prim.build_instances_from_edges(
-            &edges, 5, true, /*speed*/ 2.0, 0.2, false, dt,
-        );
+        let _ =
+            prim.build_instances_from_edges(&edges, 5, true, /*speed*/ 2.0, 0.2, false, dt);
         let progress_after_one_frame = prim.anim_progress;
         assert!(
             progress_after_one_frame > 0.0,
             "anim_progress must advance on the first animated frame, got {progress_after_one_frame}",
         );
 
-        let _ = prim.build_instances_from_edges(
-            &edges, 5, true, 2.0, 0.2, false, dt,
-        );
+        let _ = prim.build_instances_from_edges(&edges, 5, true, 2.0, 0.2, false, dt);
         let progress_after_two_frames = prim.anim_progress;
         assert!(
             progress_after_two_frames > progress_after_one_frame,
@@ -979,7 +1031,13 @@ mod tests {
             EdgePair { a: 3, b: 0 },
         ];
         let (n_edges, _) = prim.build_instances_from_edges(
-            &edges, 4, /*animate*/ false, 1.0, 0.1, false, 1.0 / 60.0,
+            &edges,
+            4,
+            /*animate*/ false,
+            1.0,
+            0.1,
+            false,
+            1.0 / 60.0,
         );
         assert_eq!(n_edges, 4);
         for i in 0..4 {

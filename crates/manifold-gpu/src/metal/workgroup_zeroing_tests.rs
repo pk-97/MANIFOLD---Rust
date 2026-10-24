@@ -103,9 +103,18 @@ const ENTRIES: [&str; 4] = ["dirty", "read_arg", "read_struct", "read_none"];
 fn translated_kernels_have_no_one_thread_zeroing() {
     for entry in ENTRIES {
         let (_, msl, _, _) = compile_wgsl_to_msl(SHAPES_WGSL, entry, entry, false);
-        assert!(!msl.contains("spvArrayCopyFromConstantToThreadGroup("), "{entry}: one-thread array copy left in:\n{msl}");
-        assert!(!msl.contains("all(gl_LocalInvocationID == uint3(0u))"), "{entry}: invocation-0 guard left in:\n{msl}");
-        assert!(msl.contains("threadgroup_barrier(mem_flags::mem_threadgroup)"), "{entry}: no barrier after the zeroing:\n{msl}");
+        assert!(
+            !msl.contains("spvArrayCopyFromConstantToThreadGroup("),
+            "{entry}: one-thread array copy left in:\n{msl}"
+        );
+        assert!(
+            !msl.contains("all(gl_LocalInvocationID == uint3(0u))"),
+            "{entry}: invocation-0 guard left in:\n{msl}"
+        );
+        assert!(
+            msl.contains("threadgroup_barrier(mem_flags::mem_threadgroup)"),
+            "{entry}: no barrier after the zeroing:\n{msl}"
+        );
     }
 }
 
@@ -122,20 +131,35 @@ fn workgroup_memory_reads_zero_after_a_dirty_kernel() {
     let out = device.create_buffer_shared(u64::from(GROUPS) * 4);
     let pipelines: Vec<_> = ENTRIES
         .iter()
-        .map(|entry| (*entry, device.create_compute_pipeline(SHAPES_WGSL, entry, entry)))
+        .map(|entry| {
+            (
+                *entry,
+                device.create_compute_pipeline(SHAPES_WGSL, entry, entry),
+            )
+        })
         .collect();
     for (entry, pipeline) in &pipelines[1..] {
         for round in 0..4 {
             let mut enc = device.create_encoder("workgroup-zeroing-proof");
-            let bindings = [GpuBinding::Buffer { binding: 0, buffer: &out, offset: 0 }];
+            let bindings = [GpuBinding::Buffer {
+                binding: 0,
+                buffer: &out,
+                offset: 0,
+            }];
             enc.dispatch_compute(&pipelines[0].1, &bindings, [GROUPS, 1, 1], "dirty");
             enc.dispatch_compute(pipeline, &bindings, [GROUPS, 1, 1], entry);
             enc.commit_and_wait_completed();
             let words = unsafe {
-                std::slice::from_raw_parts(out.mapped_ptr().expect("shared").cast::<u32>(), GROUPS as usize)
+                std::slice::from_raw_parts(
+                    out.mapped_ptr().expect("shared").cast::<u32>(),
+                    GROUPS as usize,
+                )
             };
             let dirty = words.iter().filter(|&&w| w != 0).count();
-            assert_eq!(dirty, 0, "{entry} round {round}: {dirty} of {GROUPS} workgroups read non-zero workgroup memory");
+            assert_eq!(
+                dirty, 0,
+                "{entry} round {round}: {dirty} of {GROUPS} workgroups read non-zero workgroup memory"
+            );
         }
     }
 }

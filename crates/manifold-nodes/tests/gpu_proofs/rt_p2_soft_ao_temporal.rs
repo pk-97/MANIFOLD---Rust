@@ -106,7 +106,9 @@ fn upload_irr(device: &GpuDevice, r: f32, g: f32, b: f32, label: &str) -> GpuTex
         depth: 1,
         format: manifold_gpu::GpuTextureFormat::Rgba16Float,
         dimension: GpuTextureDimension::D2,
-        usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
+        usage: GpuTextureUsage::CPU_UPLOAD
+            | GpuTextureUsage::SHADER_READ
+            | GpuTextureUsage::COPY_SRC,
         label,
         mip_levels: 1,
     });
@@ -123,7 +125,9 @@ fn upload_sv(device: &GpuDevice, r: f32, g: f32, b: f32, label: &str) -> GpuText
         depth: 1,
         format: manifold_gpu::GpuTextureFormat::Rgba16Float,
         dimension: GpuTextureDimension::D2Array,
-        usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
+        usage: GpuTextureUsage::CPU_UPLOAD
+            | GpuTextureUsage::SHADER_READ
+            | GpuTextureUsage::COPY_SRC,
         label,
         mip_levels: 1,
     });
@@ -138,7 +142,9 @@ fn make_sv_history(device: &GpuDevice, label: &str) -> GpuTexture {
         depth: 1,
         format: manifold_gpu::GpuTextureFormat::Rgba16Float,
         dimension: GpuTextureDimension::D2Array,
-        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
+        usage: GpuTextureUsage::SHADER_WRITE
+            | GpuTextureUsage::SHADER_READ
+            | GpuTextureUsage::COPY_SRC,
         label,
         mip_levels: 1,
     })
@@ -154,7 +160,9 @@ fn make_history(device: &GpuDevice, label: &str) -> GpuTexture {
         depth: 1,
         format: manifold_gpu::GpuTextureFormat::Rgba16Float,
         dimension: GpuTextureDimension::D2,
-        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
+        usage: GpuTextureUsage::SHADER_WRITE
+            | GpuTextureUsage::SHADER_READ
+            | GpuTextureUsage::COPY_SRC,
         label,
         mip_levels: 1,
     })
@@ -183,7 +191,12 @@ fn make_depth_at(device: &GpuDevice, z: f32, label: &str) -> GpuTexture {
         mip_levels: 1,
     });
     let pixels = vec![z; (W * H) as usize];
-    let bytes: &[u8] = unsafe { std::slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(&pixels[..])) };
+    let bytes: &[u8] = unsafe {
+        std::slice::from_raw_parts(
+            pixels.as_ptr().cast::<u8>(),
+            std::mem::size_of_val(&pixels[..]),
+        )
+    };
     device.upload_texture(&texture, bytes);
     texture
 }
@@ -228,7 +241,11 @@ fn make_object_normal(device: &GpuDevice, n: [f32; 3], label: &str) -> GpuTextur
 /// used as a strict ping-pong pair — `SHADER_READ` when it's this frame's
 /// read source, `SHADER_WRITE` when it's this frame's write target, never
 /// both roles on the same texture in the same dispatch.
-fn make_history_side_channel(device: &GpuDevice, format: GpuTextureFormat, label: &str) -> GpuTexture {
+fn make_history_side_channel(
+    device: &GpuDevice,
+    format: GpuTextureFormat,
+    label: &str,
+) -> GpuTexture {
     device.create_texture(&GpuTextureDesc {
         width: W,
         height: H,
@@ -282,16 +299,40 @@ impl HistorySet {
                 make_history(device, &format!("{label}-irr-b")),
             ],
             depth: [
-                make_history_side_channel(device, GpuTextureFormat::R32Float, &format!("{label}-depth-a")),
-                make_history_side_channel(device, GpuTextureFormat::R32Float, &format!("{label}-depth-b")),
+                make_history_side_channel(
+                    device,
+                    GpuTextureFormat::R32Float,
+                    &format!("{label}-depth-a"),
+                ),
+                make_history_side_channel(
+                    device,
+                    GpuTextureFormat::R32Float,
+                    &format!("{label}-depth-b"),
+                ),
             ],
             normal: [
-                make_history_side_channel(device, GpuTextureFormat::Rgba16Float, &format!("{label}-normal-a")),
-                make_history_side_channel(device, GpuTextureFormat::Rgba16Float, &format!("{label}-normal-b")),
+                make_history_side_channel(
+                    device,
+                    GpuTextureFormat::Rgba16Float,
+                    &format!("{label}-normal-a"),
+                ),
+                make_history_side_channel(
+                    device,
+                    GpuTextureFormat::Rgba16Float,
+                    &format!("{label}-normal-b"),
+                ),
             ],
             moments: [
-                make_history_side_channel(device, GpuTextureFormat::Rgba32Float, &format!("{label}-moments-a")),
-                make_history_side_channel(device, GpuTextureFormat::Rgba32Float, &format!("{label}-moments-b")),
+                make_history_side_channel(
+                    device,
+                    GpuTextureFormat::Rgba32Float,
+                    &format!("{label}-moments-a"),
+                ),
+                make_history_side_channel(
+                    device,
+                    GpuTextureFormat::Rgba32Float,
+                    &format!("{label}-moments-b"),
+                ),
             ],
             // RT-R2 (RD6): inert pass-through refl history pair — same
             // Rgba16Float format as irr history.
@@ -419,7 +460,8 @@ fn readback_rgba_f32(texture: &GpuTexture) -> Vec<f32> {
     let ptr = buf
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");
-    let f16s: &[f16] = unsafe { std::slice::from_raw_parts(ptr.cast::<f16>(), (W * H * 4) as usize) };
+    let f16s: &[f16] =
+        unsafe { std::slice::from_raw_parts(ptr.cast::<f16>(), (W * H * 4) as usize) };
     f16s.iter().map(|v| v.to_f32()).collect()
 }
 
@@ -481,8 +523,19 @@ fn run_accumulate_with_motion(
     // pass-through sv is the honest inert input.
     let hi_sv_lit = upload_sv(device, 1.0, 1.0, 1.0, "p2-hi-sv-lit");
     run_accumulate_with_sv(
-        device, tracer, hi_irr, depth_tex, hi_normal, history, alpha, reset, obj_count,
-        obj_motion, prev_view_proj, &hi_sv_lit, label,
+        device,
+        tracer,
+        hi_irr,
+        depth_tex,
+        hi_normal,
+        history,
+        alpha,
+        reset,
+        obj_count,
+        obj_motion,
+        prev_view_proj,
+        &hi_sv_lit,
+        label,
     );
 }
 
@@ -505,10 +558,17 @@ fn run_accumulate_with_sv(
     hi_sv: &GpuTexture,
     label: &str,
 ) {
-    let params_buffer =
-        device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
-    let params =
-        AccumulateParams::new([W, H], alpha, reset, obj_count, [0.0; 3], 0.0, IDENTITY, prev_view_proj);
+    let params_buffer = device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
+    let params = AccumulateParams::new(
+        [W, H],
+        alpha,
+        reset,
+        obj_count,
+        [0.0; 3],
+        0.0,
+        IDENTITY,
+        prev_view_proj,
+    );
     let obj_motion_buffer =
         device.create_buffer_shared(std::mem::size_of::<[[f32; 4]; 4]>() as u64);
     {
@@ -559,7 +619,9 @@ fn run_accumulate_with_sv(
             history.write_sv_m2(),
             history.read_sv_hold(),
             history.write_sv_hold(),
-            &svt_dummy, &svt_dummy, &svt_sink,
+            &svt_dummy,
+            &svt_dummy,
+            &svt_sink,
             label,
         );
     }
@@ -586,10 +648,17 @@ fn run_accumulate_with_svt(
     hi_svt: &GpuTexture,
     label: &str,
 ) {
-    let params_buffer =
-        device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
-    let params =
-        AccumulateParams::new([W, H], alpha, reset, obj_count, [0.0; 3], 0.0, IDENTITY, prev_view_proj);
+    let params_buffer = device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
+    let params = AccumulateParams::new(
+        [W, H],
+        alpha,
+        reset,
+        obj_count,
+        [0.0; 3],
+        0.0,
+        IDENTITY,
+        prev_view_proj,
+    );
     let obj_motion_buffer =
         device.create_buffer_shared(std::mem::size_of::<[[f32; 4]; 4]>() as u64);
     {
@@ -658,7 +727,17 @@ fn cut_plus_one_matches_cold_start_within_epsilon() {
     // Scene A: warm a history texture over several steady frames.
     let scene_a = upload_irr(&h.device, 0.8, 0.2, 0.1, "scene-a-irr");
     let mut history = HistorySet::new(&h.device, "p2-warmed-history");
-    run_accumulate(&h.device, &tracer, &scene_a, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, true, "p2-warm-frame-0");
+    run_accumulate(
+        &h.device,
+        &tracer,
+        &scene_a,
+        &depth_tex,
+        &hi_normal,
+        &mut history,
+        TEST_ALPHA,
+        true,
+        "p2-warm-frame-0",
+    );
     for i in 1..8 {
         run_accumulate(
             &h.device,
@@ -679,13 +758,33 @@ fn cut_plus_one_matches_cold_start_within_epsilon() {
     // this test drives it directly to isolate the accumulate kernel's own
     // reset behavior.
     let scene_b = upload_irr(&h.device, 0.1, 0.6, 0.9, "scene-b-irr");
-    run_accumulate(&h.device, &tracer, &scene_b, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, true, "p2-cut-plus-one");
+    run_accumulate(
+        &h.device,
+        &tracer,
+        &scene_b,
+        &depth_tex,
+        &hi_normal,
+        &mut history,
+        TEST_ALPHA,
+        true,
+        "p2-cut-plus-one",
+    );
     let cut_plus_one = readback_rgba_f32(history.current_irr());
 
     // Cold start: a FRESH history set's very first frame, same scene B
     // content, also reset=true.
     let mut cold_history = HistorySet::new(&h.device, "p2-cold-history");
-    run_accumulate(&h.device, &tracer, &scene_b, &depth_tex, &hi_normal, &mut cold_history, TEST_ALPHA, true, "p2-cold-start");
+    run_accumulate(
+        &h.device,
+        &tracer,
+        &scene_b,
+        &depth_tex,
+        &hi_normal,
+        &mut cold_history,
+        TEST_ALPHA,
+        true,
+        "p2-cold-start",
+    );
     let cold_start = readback_rgba_f32(cold_history.current_irr());
 
     let diff = mean_abs_diff_rgb(&cut_plus_one, &cold_start);
@@ -707,7 +806,17 @@ fn strobe_retains_history_exceeds_epsilon() {
     // clip, same owner_key in the real `render_scene.rs` integration).
     let scene_a = upload_irr(&h.device, 0.8, 0.2, 0.1, "scene-a-irr-strobe");
     let mut history = HistorySet::new(&h.device, "p2-strobe-history");
-    run_accumulate(&h.device, &tracer, &scene_a, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, true, "p2-strobe-warm-0");
+    run_accumulate(
+        &h.device,
+        &tracer,
+        &scene_a,
+        &depth_tex,
+        &hi_normal,
+        &mut history,
+        TEST_ALPHA,
+        true,
+        "p2-strobe-warm-0",
+    );
     for i in 1..8 {
         run_accumulate(
             &h.device,
@@ -728,14 +837,34 @@ fn strobe_retains_history_exceeds_epsilon() {
     // same-clip intensity change, so product code passes `reset: false`
     // here too).
     let flipped = upload_irr(&h.device, 0.05, 0.05, 0.95, "scene-a-flipped-irr");
-    run_accumulate(&h.device, &tracer, &flipped, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, false, "p2-strobe-plus-one");
+    run_accumulate(
+        &h.device,
+        &tracer,
+        &flipped,
+        &depth_tex,
+        &hi_normal,
+        &mut history,
+        TEST_ALPHA,
+        false,
+        "p2-strobe-plus-one",
+    );
     let strobe_plus_one = readback_rgba_f32(history.current_irr());
 
     // Cold start: a FRESH history set seeing the flipped value for the
     // first time (reset=true) — what the strobed frame would look like
     // WITHOUT retained history.
     let mut cold_history = HistorySet::new(&h.device, "p2-strobe-cold-history");
-    run_accumulate(&h.device, &tracer, &flipped, &depth_tex, &hi_normal, &mut cold_history, TEST_ALPHA, true, "p2-strobe-cold-start");
+    run_accumulate(
+        &h.device,
+        &tracer,
+        &flipped,
+        &depth_tex,
+        &hi_normal,
+        &mut cold_history,
+        TEST_ALPHA,
+        true,
+        "p2-strobe-cold-start",
+    );
     let cold_start = readback_rgba_f32(cold_history.current_irr());
 
     let diff = mean_abs_diff_rgb(&strobe_plus_one, &cold_start);
@@ -786,12 +915,32 @@ fn object_motion_reprojection_retains_history_where_camera_only_rejects() {
     // Leg 1: object motion supplied — history must survive the move.
     let mut history = HistorySet::new(&h.device, "t2c-history");
     run_accumulate_with_motion(
-        &h.device, &tracer, &irr_a, &depth_far, &hi_normal, &mut history, TEST_ALPHA, true, 1,
-        IDENTITY, IDENTITY, "t2c-warm",
+        &h.device,
+        &tracer,
+        &irr_a,
+        &depth_far,
+        &hi_normal,
+        &mut history,
+        TEST_ALPHA,
+        true,
+        1,
+        IDENTITY,
+        IDENTITY,
+        "t2c-warm",
     );
     run_accumulate_with_motion(
-        &h.device, &tracer, &irr_b, &depth_near, &hi_normal, &mut history, TEST_ALPHA, false, 1,
-        delta_z, IDENTITY, "t2c-moved",
+        &h.device,
+        &tracer,
+        &irr_b,
+        &depth_near,
+        &hi_normal,
+        &mut history,
+        TEST_ALPHA,
+        false,
+        1,
+        delta_z,
+        IDENTITY,
+        "t2c-moved",
     );
     let with_motion = readback_rgba_f32(history.current_irr());
 
@@ -799,22 +948,42 @@ fn object_motion_reprojection_retains_history_where_camera_only_rejects() {
     // mismatch must reject history (pre-T2-C behavior).
     let mut control = HistorySet::new(&h.device, "t2c-control-history");
     run_accumulate_with_motion(
-        &h.device, &tracer, &irr_a, &depth_far, &hi_normal, &mut control, TEST_ALPHA, true, 0,
-        IDENTITY, IDENTITY, "t2c-control-warm",
+        &h.device,
+        &tracer,
+        &irr_a,
+        &depth_far,
+        &hi_normal,
+        &mut control,
+        TEST_ALPHA,
+        true,
+        0,
+        IDENTITY,
+        IDENTITY,
+        "t2c-control-warm",
     );
     run_accumulate_with_motion(
-        &h.device, &tracer, &irr_b, &depth_near, &hi_normal, &mut control, TEST_ALPHA, false, 0,
-        IDENTITY, IDENTITY, "t2c-control-moved",
+        &h.device,
+        &tracer,
+        &irr_b,
+        &depth_near,
+        &hi_normal,
+        &mut control,
+        TEST_ALPHA,
+        false,
+        0,
+        IDENTITY,
+        IDENTITY,
+        "t2c-control-moved",
     );
     let camera_only = readback_rgba_f32(control.current_irr());
 
     let expected_retained = 1.0 - SECOND_FRAME_ALPHA;
-    let mean_r = |px: &[f32]| {
-        px.iter().step_by(4).sum::<f32>() / (px.len() / 4) as f32
-    };
+    let mean_r = |px: &[f32]| px.iter().step_by(4).sum::<f32>() / (px.len() / 4) as f32;
     let with_r = mean_r(&with_motion);
     let control_r = mean_r(&camera_only);
-    eprintln!("[T2-C] with-motion mean r = {with_r} (expect ~{expected_retained}), camera-only mean r = {control_r} (expect ~0.0)");
+    eprintln!(
+        "[T2-C] with-motion mean r = {with_r} (expect ~{expected_retained}), camera-only mean r = {control_r} (expect ~0.0)"
+    );
     assert!(
         (with_r - expected_retained).abs() < RESET_EPSILON,
         "object-motion reprojection did NOT retain the moved object's history (mean r {with_r}, expected {expected_retained})"
@@ -829,7 +998,14 @@ fn object_motion_reprojection_retains_history_where_camera_only_rejects() {
 /// `CPU_UPLOAD | SHADER_READ` usage as `upload_irr` but preserving the
 /// `.a` channel (irr alpha is unused so `upload_irr` writes 0.0; refl's
 /// `.a` carries hit distance).
-fn make_upload_rgba_f16(device: &GpuDevice, r: f32, g: f32, b: f32, a: f32, label: &str) -> GpuTexture {
+fn make_upload_rgba_f16(
+    device: &GpuDevice,
+    r: f32,
+    g: f32,
+    b: f32,
+    a: f32,
+    label: &str,
+) -> GpuTexture {
     let texture = device.create_texture(&GpuTextureDesc {
         width: W,
         height: H,
@@ -950,8 +1126,11 @@ fn refl_channel_blends_history_and_current() {
     // kernel's `1/n` blend weight lands on exactly 1/10 = 0.1, the weight
     // every expectation below is computed against.
     let normal_history = make_upload_rgba_f16(device, 0.0, 1.0, 0.0, 9.0, "bisect-normal-history");
-    let normal_output =
-        make_history_side_channel(device, GpuTextureFormat::Rgba16Float, "bisect-normal-output");
+    let normal_output = make_history_side_channel(
+        device,
+        GpuTextureFormat::Rgba16Float,
+        "bisect-normal-output",
+    );
 
     // Irradiance channel — valid bindings only.
     let irr_history = make_history(device, "bisect-irr-history");
@@ -959,10 +1138,16 @@ fn refl_channel_blends_history_and_current() {
 
     // Moments channel — valid bindings only (Rgba32Float since ED2: `.b`
     // carries the accumulated ao).
-    let moments_history =
-        make_history_side_channel(device, GpuTextureFormat::Rgba32Float, "bisect-moments-history");
-    let moments_output =
-        make_history_side_channel(device, GpuTextureFormat::Rgba32Float, "bisect-moments-output");
+    let moments_history = make_history_side_channel(
+        device,
+        GpuTextureFormat::Rgba32Float,
+        "bisect-moments-history",
+    );
+    let moments_output = make_history_side_channel(
+        device,
+        GpuTextureFormat::Rgba32Float,
+        "bisect-moments-output",
+    );
 
     // ── Reflection channel ────────────────────────────────────────────
     // H = (1.0, 0.0, 0.0, 5.0): history seed, .a = 5.0 is a valid hit distance.
@@ -977,8 +1162,7 @@ fn refl_channel_blends_history_and_current() {
     let refl_output = make_history(device, "bisect-refl-output");
 
     // ── Buffers ───────────────────────────────────────────────────────
-    let params_buffer =
-        device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
+    let params_buffer = device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
     let obj_motion_buffer =
         device.create_buffer_shared(std::mem::size_of::<[[f32; 4]; 4]>() as u64);
     let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
@@ -997,7 +1181,8 @@ fn refl_channel_blends_history_and_current() {
     let svt_dummy = make_history(device, "bisect-svt-dummy");
 
     // ── Leg 1: reset = false — history must blend toward current ──────
-    let blend_params = AccumulateParams::new([W, H], 0.1, false, 0, [0.0; 3], 0.0, IDENTITY, IDENTITY);
+    let blend_params =
+        AccumulateParams::new([W, H], 0.1, false, 0, [0.0; 3], 0.0, IDENTITY, IDENTITY);
     {
         let mut enc = device.create_encoder("bisect-blend");
         let gpu = RendererGpuEncoder::new(&mut enc, device);
@@ -1030,7 +1215,9 @@ fn refl_channel_blends_history_and_current() {
             &sv_m2_out,
             &sv_hold_in,
             &sv_hold_out,
-            &svt_dummy, &svt_dummy, &svt_sink,
+            &svt_dummy,
+            &svt_dummy,
+            &svt_sink,
             "bisect-blend",
         );
         enc.commit_and_wait_completed();
@@ -1070,9 +1257,9 @@ fn refl_channel_blends_history_and_current() {
     let b3 = [REFL_B[0], REFL_B[1], REFL_B[2]];
     let neighborhood: [[f32; 3]; 9] = [
         a3, a3, a3, a3, // (0,0) x4
-        b3, b3,         // (1,0) x2
-        b3, b3,         // (0,1) x2
-        a3,             // (1,1) x1
+        b3, b3, // (1,0) x2
+        b3, b3, // (0,1) x2
+        a3, // (1,1) x1
     ];
     let mapped: Vec<[f32; 3]> = neighborhood.iter().map(|&c| tonemap(c)).collect();
     let n = mapped.len() as f32;
@@ -1122,7 +1309,8 @@ fn refl_channel_blends_history_and_current() {
 
     // ── Leg 2: reset = true — output must equal C exactly ─────────────
     let refl_output_reset = make_history(device, "bisect-refl-output-reset");
-    let reset_params = AccumulateParams::new([W, H], 0.1, true, 0, [0.0; 3], 0.0, IDENTITY, IDENTITY);
+    let reset_params =
+        AccumulateParams::new([W, H], 0.1, true, 0, [0.0; 3], 0.0, IDENTITY, IDENTITY);
     {
         let mut enc = device.create_encoder("bisect-reset");
         let gpu = RendererGpuEncoder::new(&mut enc, device);
@@ -1155,7 +1343,9 @@ fn refl_channel_blends_history_and_current() {
             &sv_m2_out,
             &sv_hold_in,
             &sv_hold_out,
-            &svt_dummy, &svt_dummy, &svt_sink,
+            &svt_dummy,
+            &svt_dummy,
+            &svt_sink,
             "bisect-reset",
         );
         enc.commit_and_wait_completed();
@@ -1259,12 +1449,32 @@ fn fractional_camera_reprojection_blends_and_rejects_per_tap() {
 
     let mut history = HistorySet::new(&h.device, "ukg-history");
     run_accumulate_with_motion(
-        &h.device, &tracer, &irr_hist, &depth_warm, &normal, &mut history, TEST_ALPHA, true, 0,
-        IDENTITY, IDENTITY, "ukg-warm",
+        &h.device,
+        &tracer,
+        &irr_hist,
+        &depth_warm,
+        &normal,
+        &mut history,
+        TEST_ALPHA,
+        true,
+        0,
+        IDENTITY,
+        IDENTITY,
+        "ukg-warm",
     );
     run_accumulate_with_motion(
-        &h.device, &tracer, &irr_black, &depth_flat, &normal, &mut history, TEST_ALPHA, false, 0,
-        IDENTITY, frac_shift, "ukg-frac-shift",
+        &h.device,
+        &tracer,
+        &irr_black,
+        &depth_flat,
+        &normal,
+        &mut history,
+        TEST_ALPHA,
+        false,
+        0,
+        IDENTITY,
+        frac_shift,
+        "ukg-frac-shift",
     );
     let out = readback_rgba_f32(history.current_irr());
     let red = |x: u32, y: u32| out[((y * W + x) * 4) as usize];
@@ -1355,12 +1565,32 @@ fn rotating_object_retains_history_when_normals_are_compared_in_one_orientation(
 
     let mut history = HistorySet::new(&h.device, "t322-history");
     run_accumulate_with_motion(
-        &h.device, &tracer, &irr_a, &depth, &normal_prev, &mut history, TEST_ALPHA, true, 1,
-        IDENTITY, IDENTITY, "t322-warm",
+        &h.device,
+        &tracer,
+        &irr_a,
+        &depth,
+        &normal_prev,
+        &mut history,
+        TEST_ALPHA,
+        true,
+        1,
+        IDENTITY,
+        IDENTITY,
+        "t322-warm",
     );
     run_accumulate_with_motion(
-        &h.device, &tracer, &irr_b, &depth, &normal_cur, &mut history, TEST_ALPHA, false, 1,
-        rot_z, IDENTITY, "t322-rotated",
+        &h.device,
+        &tracer,
+        &irr_b,
+        &depth,
+        &normal_cur,
+        &mut history,
+        TEST_ALPHA,
+        false,
+        1,
+        rot_z,
+        IDENTITY,
+        "t322-rotated",
     );
     let out = readback_rgba_f32(history.current_irr());
 
@@ -1381,7 +1611,9 @@ fn rotating_object_retains_history_when_normals_are_compared_in_one_orientation(
         }
     }
     let mean_r = acc / n as f32;
-    eprintln!("[BUG-322] rotating-object mean r = {mean_r} (expect ~{expected} = history retained)");
+    eprintln!(
+        "[BUG-322] rotating-object mean r = {mean_r} (expect ~{expected} = history retained)"
+    );
     assert!(
         (mean_r - expected).abs() < RESET_EPSILON,
         "BUG-322: a rotating object lost its temporal history (mean r {mean_r}, expected \
@@ -1419,17 +1651,38 @@ fn lighting_cue_snaps_at_low_signal_magnitude_too() {
 
     let mut history = HistorySet::new(&h.device, "dim-cue-history");
     run_accumulate(
-        &h.device, &tracer, &scene_a, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, true,
+        &h.device,
+        &tracer,
+        &scene_a,
+        &depth_tex,
+        &hi_normal,
+        &mut history,
+        TEST_ALPHA,
+        true,
         "dim-cue-warm-0",
     );
     for i in 1..6 {
         run_accumulate(
-            &h.device, &tracer, &scene_a, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, false,
+            &h.device,
+            &tracer,
+            &scene_a,
+            &depth_tex,
+            &hi_normal,
+            &mut history,
+            TEST_ALPHA,
+            false,
             &format!("dim-cue-warm-{i}"),
         );
     }
     run_accumulate(
-        &h.device, &tracer, &scene_b, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, false,
+        &h.device,
+        &tracer,
+        &scene_b,
+        &depth_tex,
+        &hi_normal,
+        &mut history,
+        TEST_ALPHA,
+        false,
         "dim-cue-step",
     );
 
@@ -1484,17 +1737,38 @@ fn hard_lighting_change_snaps_instead_of_averaging_in() {
 
     let mut history = HistorySet::new(&h.device, "cue-history");
     run_accumulate(
-        &h.device, &tracer, &scene_a, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, true,
+        &h.device,
+        &tracer,
+        &scene_a,
+        &depth_tex,
+        &hi_normal,
+        &mut history,
+        TEST_ALPHA,
+        true,
         "cue-warm-0",
     );
     for i in 1..6 {
         run_accumulate(
-            &h.device, &tracer, &scene_a, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, false,
+            &h.device,
+            &tracer,
+            &scene_a,
+            &depth_tex,
+            &hi_normal,
+            &mut history,
+            TEST_ALPHA,
+            false,
             &format!("cue-warm-{i}"),
         );
     }
     run_accumulate(
-        &h.device, &tracer, &scene_b, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, false,
+        &h.device,
+        &tracer,
+        &scene_b,
+        &depth_tex,
+        &hi_normal,
+        &mut history,
+        TEST_ALPHA,
+        false,
         "cue-step",
     );
 
@@ -1549,8 +1823,18 @@ fn sv_channel_converges_under_max_amplitude_flicker() {
     for frame in 0..22 {
         let sv = if frame % 2 == 0 { &sv_lo } else { &sv_hi };
         run_accumulate_with_sv(
-            &h.device, &tracer, &hi_irr, &depth_tex, &hi_normal, &mut history,
-            TEST_ALPHA, frame == 0, 0, [[0.0; 4]; 4], IDENTITY, sv,
+            &h.device,
+            &tracer,
+            &hi_irr,
+            &depth_tex,
+            &hi_normal,
+            &mut history,
+            TEST_ALPHA,
+            frame == 0,
+            0,
+            [[0.0; 4]; 4],
+            IDENTITY,
+            sv,
             &format!("sv-accum-frame-{frame}"),
         );
         if frame == 19 {
@@ -1561,7 +1845,9 @@ fn sv_channel_converges_under_max_amplitude_flicker() {
 
     let mean = (v19 + v21) / 2.0;
     let delta = (v21 - v19).abs();
-    eprintln!("[sv-accum] converged mean = {mean} (expect ~0.5), late frame-to-frame delta = {delta} (raw input swings 0.4)");
+    eprintln!(
+        "[sv-accum] converged mean = {mean} (expect ~0.5), late frame-to-frame delta = {delta} (raw input swings 0.4)"
+    );
     assert!(
         (mean - 0.5).abs() < 0.06,
         "sv channel did not converge to the input mean (mean {mean}, expected ~0.5) — \
@@ -1588,14 +1874,34 @@ fn sv_channel_reset_cold_starts_from_current_frame() {
     let mut history = HistorySet::new(&h.device, "sv-reset-history");
     for frame in 0..6 {
         run_accumulate_with_sv(
-            &h.device, &tracer, &hi_irr, &depth_tex, &hi_normal, &mut history,
-            TEST_ALPHA, frame == 0, 0, [[0.0; 4]; 4], IDENTITY, &sv_lit,
+            &h.device,
+            &tracer,
+            &hi_irr,
+            &depth_tex,
+            &hi_normal,
+            &mut history,
+            TEST_ALPHA,
+            frame == 0,
+            0,
+            [[0.0; 4]; 4],
+            IDENTITY,
+            &sv_lit,
             &format!("sv-reset-warm-{frame}"),
         );
     }
     run_accumulate_with_sv(
-        &h.device, &tracer, &hi_irr, &depth_tex, &hi_normal, &mut history,
-        TEST_ALPHA, true, 0, [[0.0; 4]; 4], IDENTITY, &sv_quarter,
+        &h.device,
+        &tracer,
+        &hi_irr,
+        &depth_tex,
+        &hi_normal,
+        &mut history,
+        TEST_ALPHA,
+        true,
+        0,
+        [[0.0; 4]; 4],
+        IDENTITY,
+        &sv_quarter,
         "sv-reset-cut",
     );
     let got = readback_rgba_f32(history.current_sv())[(((H / 2) * W + W / 2) * 4) as usize];
@@ -1628,16 +1934,36 @@ fn sv_channel_snaps_when_shadow_arrives() {
     let mut history = HistorySet::new(&h.device, "sv-snap-history");
     for frame in 0..6 {
         run_accumulate_with_sv(
-            &h.device, &tracer, &hi_irr, &depth_tex, &hi_normal, &mut history,
-            TEST_ALPHA, frame == 0, 0, [[0.0; 4]; 4], IDENTITY, &sv_lit,
+            &h.device,
+            &tracer,
+            &hi_irr,
+            &depth_tex,
+            &hi_normal,
+            &mut history,
+            TEST_ALPHA,
+            frame == 0,
+            0,
+            [[0.0; 4]; 4],
+            IDENTITY,
+            &sv_lit,
             &format!("sv-snap-warm-{frame}"),
         );
     }
     let mut last = 1.0f32;
     for frame in 0..6 {
         run_accumulate_with_sv(
-            &h.device, &tracer, &hi_irr, &depth_tex, &hi_normal, &mut history,
-            TEST_ALPHA, false, 0, [[0.0; 4]; 4], IDENTITY, &sv_dark,
+            &h.device,
+            &tracer,
+            &hi_irr,
+            &depth_tex,
+            &hi_normal,
+            &mut history,
+            TEST_ALPHA,
+            false,
+            0,
+            [[0.0; 4]; 4],
+            IDENTITY,
+            &sv_dark,
             &format!("sv-snap-dark-{frame}"),
         );
         last = readback_rgba_f32(history.current_sv())[(((H / 2) * W + W / 2) * 4) as usize];
@@ -1691,38 +2017,92 @@ fn svt_history_reset_writes_current_tint_verbatim() {
 
     // Leg 1: warm with tint A for 8 frames (reset=true on first frame).
     run_accumulate_with_svt(
-        &h.device, &tracer, &hi_irr_a, &depth_tex, &hi_normal, &mut history,
-        TEST_ALPHA, true, 0, [[0.0; 4]; 4], IDENTITY, &hi_sv_lit, &hi_svt_a,
+        &h.device,
+        &tracer,
+        &hi_irr_a,
+        &depth_tex,
+        &hi_normal,
+        &mut history,
+        TEST_ALPHA,
+        true,
+        0,
+        [[0.0; 4]; 4],
+        IDENTITY,
+        &hi_sv_lit,
+        &hi_svt_a,
         "p2-svt-reset-warm-0",
     );
     for i in 1..8 {
         run_accumulate_with_svt(
-            &h.device, &tracer, &hi_irr_a, &depth_tex, &hi_normal, &mut history,
-            TEST_ALPHA, false, 0, [[0.0; 4]; 4], IDENTITY, &hi_sv_lit, &hi_svt_a,
+            &h.device,
+            &tracer,
+            &hi_irr_a,
+            &depth_tex,
+            &hi_normal,
+            &mut history,
+            TEST_ALPHA,
+            false,
+            0,
+            [[0.0; 4]; 4],
+            IDENTITY,
+            &hi_sv_lit,
+            &hi_svt_a,
             &format!("p2-svt-reset-warm-{i}"),
         );
     }
     let warmed = center_pixel_rgb_f32(history.current_svt());
     // After 8 blend frames, the history should be close to tint A.
     let eps = 0.05;
-    assert!((warmed[0] - 0.8).abs() < eps, "warmed svt r: expected 0.8, got {}", warmed[0]);
-    assert!((warmed[1] - 0.1).abs() < eps, "warmed svt g: expected 0.1, got {}", warmed[1]);
-    assert!((warmed[2] - 0.1).abs() < eps, "warmed svt b: expected 0.1, got {}", warmed[2]);
+    assert!(
+        (warmed[0] - 0.8).abs() < eps,
+        "warmed svt r: expected 0.8, got {}",
+        warmed[0]
+    );
+    assert!(
+        (warmed[1] - 0.1).abs() < eps,
+        "warmed svt g: expected 0.1, got {}",
+        warmed[1]
+    );
+    assert!(
+        (warmed[2] - 0.1).abs() < eps,
+        "warmed svt b: expected 0.1, got {}",
+        warmed[2]
+    );
 
     // Leg 2: reset=true with tint B → history should read B exactly
     // (no ghost of A).
     run_accumulate_with_svt(
-        &h.device, &tracer, &hi_irr_b, &depth_tex, &hi_normal, &mut history,
-        TEST_ALPHA, true, 0, [[0.0; 4]; 4], IDENTITY, &hi_sv_lit, &hi_svt_b,
+        &h.device,
+        &tracer,
+        &hi_irr_b,
+        &depth_tex,
+        &hi_normal,
+        &mut history,
+        TEST_ALPHA,
+        true,
+        0,
+        [[0.0; 4]; 4],
+        IDENTITY,
+        &hi_sv_lit,
+        &hi_svt_b,
         "p2-svt-reset-reset",
     );
     let after_reset = center_pixel_rgb_f32(history.current_svt());
-    assert!((after_reset[0] - 0.1).abs() < eps,
-        "post-reset svt r: expected 0.1 (tint B), got {} — ghost of A?", after_reset[0]);
-    assert!((after_reset[1] - 0.1).abs() < eps,
-        "post-reset svt g: expected 0.1, got {}", after_reset[1]);
-    assert!((after_reset[2] - 0.8).abs() < eps,
-        "post-reset svt b: expected 0.8, got {}", after_reset[2]);
+    assert!(
+        (after_reset[0] - 0.1).abs() < eps,
+        "post-reset svt r: expected 0.1 (tint B), got {} — ghost of A?",
+        after_reset[0]
+    );
+    assert!(
+        (after_reset[1] - 0.1).abs() < eps,
+        "post-reset svt g: expected 0.1, got {}",
+        after_reset[1]
+    );
+    assert!(
+        (after_reset[2] - 0.8).abs() < eps,
+        "post-reset svt b: expected 0.8, got {}",
+        after_reset[2]
+    );
 }
 
 /// Warm svt history on tint A, then run one reset=false frame with tint B
@@ -1747,26 +2127,67 @@ fn svt_history_blends_toward_changed_tint_by_running_mean() {
 
     // Leg 1: warm with tint A for 8 frames.
     run_accumulate_with_svt(
-        &h.device, &tracer, &hi_irr_a, &depth_tex, &hi_normal, &mut history,
-        TEST_ALPHA, true, 0, [[0.0; 4]; 4], IDENTITY, &hi_sv_lit, &hi_svt_a,
+        &h.device,
+        &tracer,
+        &hi_irr_a,
+        &depth_tex,
+        &hi_normal,
+        &mut history,
+        TEST_ALPHA,
+        true,
+        0,
+        [[0.0; 4]; 4],
+        IDENTITY,
+        &hi_sv_lit,
+        &hi_svt_a,
         "p2-svt-blend-warm-0",
     );
     for i in 1..8 {
         run_accumulate_with_svt(
-            &h.device, &tracer, &hi_irr_a, &depth_tex, &hi_normal, &mut history,
-            TEST_ALPHA, false, 0, [[0.0; 4]; 4], IDENTITY, &hi_sv_lit, &hi_svt_a,
+            &h.device,
+            &tracer,
+            &hi_irr_a,
+            &depth_tex,
+            &hi_normal,
+            &mut history,
+            TEST_ALPHA,
+            false,
+            0,
+            [[0.0; 4]; 4],
+            IDENTITY,
+            &hi_sv_lit,
+            &hi_svt_a,
             &format!("p2-svt-blend-warm-{i}"),
         );
     }
     let warmed = center_pixel_rgb_f32(history.current_svt());
     let eps = 0.05;
-    assert!((warmed[0] - 0.9).abs() < eps, "warmed r: expected 0.9, got {}", warmed[0]);
-    assert!((warmed[1] - 0.05).abs() < eps, "warmed g: expected 0.05, got {}", warmed[1]);
+    assert!(
+        (warmed[0] - 0.9).abs() < eps,
+        "warmed r: expected 0.9, got {}",
+        warmed[0]
+    );
+    assert!(
+        (warmed[1] - 0.05).abs() < eps,
+        "warmed g: expected 0.05, got {}",
+        warmed[1]
+    );
 
     // Leg 2: one reset=false frame with tint B.
     run_accumulate_with_svt(
-        &h.device, &tracer, &hi_irr_b, &depth_tex, &hi_normal, &mut history,
-        TEST_ALPHA, false, 0, [[0.0; 4]; 4], IDENTITY, &hi_sv_lit, &hi_svt_b,
+        &h.device,
+        &tracer,
+        &hi_irr_b,
+        &depth_tex,
+        &hi_normal,
+        &mut history,
+        TEST_ALPHA,
+        false,
+        0,
+        [[0.0; 4]; 4],
+        IDENTITY,
+        &hi_sv_lit,
+        &hi_svt_b,
         "p2-svt-blend-frame",
     );
     let blended = center_pixel_rgb_f32(history.current_svt());
@@ -1788,16 +2209,33 @@ fn svt_history_blends_toward_changed_tint_by_running_mean() {
     // + 7 warm frames), and the blend uses 1/n which isn't a fixed alpha.
     // The salient assertion: the blend moved from A TOWARD B (r fell, g rose).
     let blend_eps = 0.15;
-    assert!((blended[0] - expected_r).abs() < blend_eps,
-        "blended r: expected ≈{expected_r}, got {} — did not move toward tint B", blended[0]);
-    assert!((blended[1] - expected_g).abs() < blend_eps,
-        "blended g: expected ≈{expected_g}, got {} — did not move toward tint B", blended[1]);
-    assert!((blended[2] - expected_b).abs() < blend_eps,
-        "blended b: expected ≈{expected_b}, got {}", blended[2]);
+    assert!(
+        (blended[0] - expected_r).abs() < blend_eps,
+        "blended r: expected ≈{expected_r}, got {} — did not move toward tint B",
+        blended[0]
+    );
+    assert!(
+        (blended[1] - expected_g).abs() < blend_eps,
+        "blended g: expected ≈{expected_g}, got {} — did not move toward tint B",
+        blended[1]
+    );
+    assert!(
+        (blended[2] - expected_b).abs() < blend_eps,
+        "blended b: expected ≈{expected_b}, got {}",
+        blended[2]
+    );
 
     // Qualitative check: r moved DOWN, g moved UP relative to warmed.
-    assert!(blended[0] < warmed[0] - 0.02,
-        "r should have fallen from {} toward tint B, got {}", warmed[0], blended[0]);
-    assert!(blended[1] > warmed[1] + 0.02,
-        "g should have risen from {} toward tint B, got {}", warmed[1], blended[1]);
+    assert!(
+        blended[0] < warmed[0] - 0.02,
+        "r should have fallen from {} toward tint B, got {}",
+        warmed[0],
+        blended[0]
+    );
+    assert!(
+        blended[1] > warmed[1] + 0.02,
+        "g should have risen from {} toward tint B, got {}",
+        warmed[1],
+        blended[1]
+    );
 }

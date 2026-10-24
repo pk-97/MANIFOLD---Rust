@@ -22,9 +22,8 @@ use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 /// A 1-entry `Array<InstanceTransform>` producer: one Grid copy on the
 /// origin at scale 1. `rot_x` turns the copy (e.g. to face a camera) while
@@ -111,7 +110,10 @@ fn luma(bytes: &[u8]) -> (f64, f32) {
         let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
         let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
         let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-        assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+        assert!(
+            r.is_finite() && g.is_finite() && b.is_finite(),
+            "non-finite pixel"
+        );
         sum += (0.2126 * r + 0.7152 * g + 0.0722 * b) as f64;
         peak = peak.max(r.max(g).max(b));
     }
@@ -130,7 +132,10 @@ fn mean_rgb_center(bytes: &[u8], w: u32, h: u32, half_extent: u32) -> (f64, f64,
             let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
             let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
             let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-            assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+            assert!(
+                r.is_finite() && g.is_finite() && b.is_finite(),
+                "non-finite pixel"
+            );
             sr += r as f64;
             sg += g as f64;
             sb += b as f64;
@@ -184,10 +189,14 @@ fn identity_parity_scene_json(wired: bool) -> String {
     if wired {
         nodes.push(',');
         nodes.push_str(&identity_instance_node(30, "ident", 0.0));
-        wires.push_str(r#",{"fromNode":30,"fromPort":"instances","toNode":20,"toPort":"instances_0"}"#);
+        wires.push_str(
+            r#",{"fromNode":30,"fromPort":"instances","toNode":20,"toPort":"instances_0"}"#,
+        );
     }
 
-    format!(r#"{{"version":2,"name":"RenderSceneInstanceIdentityParity","nodes":[{nodes}],"wires":[{wires}]}}"#)
+    format!(
+        r#"{{"version":2,"name":"RenderSceneInstanceIdentityParity","nodes":[{nodes}],"wires":[{wires}]}}"#
+    )
 }
 
 #[test]
@@ -195,11 +204,24 @@ fn wired_identity_instance_buffer_renders_byte_identical_to_unwired() {
     let (wired_bytes, w, h) = render_readback(&identity_parity_scene_json(true));
     let (unwired_bytes, _, _) = render_readback(&identity_parity_scene_json(false));
 
-    write_png(&wired_bytes, w, h, "/tmp/render_scene_instances_identity_wired.png");
-    write_png(&unwired_bytes, w, h, "/tmp/render_scene_instances_identity_unwired.png");
+    write_png(
+        &wired_bytes,
+        w,
+        h,
+        "/tmp/render_scene_instances_identity_wired.png",
+    );
+    write_png(
+        &unwired_bytes,
+        w,
+        h,
+        "/tmp/render_scene_instances_identity_unwired.png",
+    );
 
     let (_, peak) = luma(&wired_bytes);
-    assert!(peak > 0.05, "identity-instance scene should not be blank (peak {peak})");
+    assert!(
+        peak > 0.05,
+        "identity-instance scene should not be blank (peak {peak})"
+    );
     assert_eq!(
         wired_bytes, unwired_bytes,
         "a wired 1-entry identity instances_n buffer must render byte-identical \
@@ -278,7 +300,9 @@ fn occlusion_scene_json(marker_z: f32) -> String {
         {"fromNode":10,"fromPort":"transform","toNode":20,"toPort":"transform_1"},
         {"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}"#;
 
-    format!(r#"{{"version":2,"name":"RenderSceneInstanceOcclusion","nodes":[{nodes}],"wires":[{wires}]}}"#)
+    format!(
+        r#"{{"version":2,"name":"RenderSceneInstanceOcclusion","nodes":[{nodes}],"wires":[{wires}]}}"#
+    )
 }
 
 #[test]
@@ -286,12 +310,24 @@ fn instance_fully_behind_an_occluder_contributes_no_pixels() {
     let (near_bytes, w, h) = render_readback(&occlusion_scene_json(1.5));
     let (far_bytes, _, _) = render_readback(&occlusion_scene_json(-1.5));
 
-    write_png(&near_bytes, w, h, "/tmp/render_scene_instances_occlusion_near.png");
-    write_png(&far_bytes, w, h, "/tmp/render_scene_instances_occlusion_far.png");
+    write_png(
+        &near_bytes,
+        w,
+        h,
+        "/tmp/render_scene_instances_occlusion_near.png",
+    );
+    write_png(
+        &far_bytes,
+        w,
+        h,
+        "/tmp/render_scene_instances_occlusion_far.png",
+    );
 
     let (nr, ng, nb) = mean_rgb_center(&near_bytes, w, h, 15);
     let (fr, fg, fb) = mean_rgb_center(&far_bytes, w, h, 15);
-    eprintln!("occlusion near-center rgb=({nr:.3},{ng:.3},{nb:.3}) far-center rgb=({fr:.3},{fg:.3},{fb:.3})");
+    eprintln!(
+        "occlusion near-center rgb=({nr:.3},{ng:.3},{nb:.3}) far-center rgb=({fr:.3},{fg:.3},{fb:.3})"
+    );
 
     // In front of the occluder: the red marker instance wins the depth
     // test and dominates the frame centre — red clearly above green/blue.
@@ -392,13 +428,21 @@ fn instanced_occluder_still_casts_a_shadow_that_darkens_the_ground() {
     let (off_bytes, _, _) = render_readback(&shadow_instanced_scene_json(false));
 
     write_png(&on_bytes, w, h, "/tmp/render_scene_instances_shadow_on.png");
-    write_png(&off_bytes, w, h, "/tmp/render_scene_instances_shadow_off.png");
+    write_png(
+        &off_bytes,
+        w,
+        h,
+        "/tmp/render_scene_instances_shadow_off.png",
+    );
 
     let (sum_on, peak_on) = luma(&on_bytes);
     let (sum_off, peak_off) = luma(&off_bytes);
 
     assert!(peak_on > 0.2, "shadowed frame is unlit (peak {peak_on})");
-    assert!(peak_off > 0.2, "unshadowed frame is unlit (peak {peak_off})");
+    assert!(
+        peak_off > 0.2,
+        "unshadowed frame is unlit (peak {peak_off})"
+    );
 
     let drop = (sum_off - sum_on) / sum_off;
     eprintln!(
@@ -482,10 +526,14 @@ fn fog_instanced_scene_json(fog: Option<(f32, f32, f32, f32)>) -> String {
                 "fog_density":{{"type":"Float","value":{density}}},
                 "height_falloff":{{"type":"Float","value":0.0}}}}}}"#,
         ));
-        wires.push_str(r#",{"fromNode":41,"fromPort":"atmosphere","toNode":20,"toPort":"atmosphere"}"#);
+        wires.push_str(
+            r#",{"fromNode":41,"fromPort":"atmosphere","toNode":20,"toPort":"atmosphere"}"#,
+        );
     }
 
-    format!(r#"{{"version":2,"name":"RenderSceneInstanceFog","nodes":[{nodes}],"wires":[{wires}]}}"#)
+    format!(
+        r#"{{"version":2,"name":"RenderSceneInstanceFog","nodes":[{nodes}],"wires":[{wires}]}}"#
+    )
 }
 
 /// Mean (r, g, b) over lit (non-black) pixels — same shape as
@@ -496,7 +544,10 @@ fn mean_lit_rgb(bytes: &[u8]) -> (f64, f64, f64) {
         let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
         let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
         let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-        assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+        assert!(
+            r.is_finite() && g.is_finite() && b.is_finite(),
+            "non-finite pixel"
+        );
         if r + g + b > 0.02 {
             sr += r as f64;
             sg += g as f64;
@@ -514,13 +565,23 @@ fn far_instance_shifts_toward_the_fog_color() {
     let (clear_bytes, _, _) = render_readback(&fog_instanced_scene_json(None));
 
     write_png(&fog_bytes, w, h, "/tmp/render_scene_instances_fog_on.png");
-    write_png(&clear_bytes, w, h, "/tmp/render_scene_instances_fog_off.png");
+    write_png(
+        &clear_bytes,
+        w,
+        h,
+        "/tmp/render_scene_instances_fog_off.png",
+    );
 
     let (fr, fg, fb) = mean_lit_rgb(&fog_bytes);
     let (cr, cg, cb) = mean_lit_rgb(&clear_bytes);
-    eprintln!("instanced fog mean rgb = ({fr:.3},{fg:.3},{fb:.3}), clear = ({cr:.3},{cg:.3},{cb:.3})");
+    eprintln!(
+        "instanced fog mean rgb = ({fr:.3},{fg:.3},{fb:.3}), clear = ({cr:.3},{cg:.3},{cb:.3})"
+    );
 
-    assert!(cr > 0.2 && (cr - cb).abs() < 0.05, "clear instanced scene should be ~neutral white");
+    assert!(
+        cr > 0.2 && (cr - cb).abs() < 0.05,
+        "clear instanced scene should be ~neutral white"
+    );
     assert!(
         fb > fr + 0.05 && fb > fg + 0.02,
         "blue fog on an instanced object must make blue the dominant channel: fog rgb=({fr:.3},{fg:.3},{fb:.3})"

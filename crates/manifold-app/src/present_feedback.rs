@@ -23,7 +23,11 @@ pub fn install(tx: &Sender<ContentCommand>) {
 #[cfg(target_os = "macos")]
 fn on_presented(drawable_id: u64, presented_s: f64) {
     use manifold_playback::rig_log;
-    rig_log::emit(rig_log::RigRecord::Presented { drawable_id, presented_s, at_ns: rig_log::now_ns() });
+    rig_log::emit(rig_log::RigRecord::Presented {
+        drawable_id,
+        presented_s,
+        at_ns: rig_log::now_ns(),
+    });
     if let (Some(tx), Some(at)) = (TX.get(), host_time::instant_of(presented_s)) {
         let _ = tx.send(ContentCommand::FramePresented { drawable_id, at });
     }

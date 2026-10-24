@@ -9,13 +9,13 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuComputePipeline};
 
-use manifold_node_engine::primitives::standalone_pipeline::active_elements;
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_water_liquid::fluid_particles::CellRange;
-use manifold_water_liquid::lattice::LiquidLattice;
 use crate::matter::{MatterPoint, grid_accum_bytes, lattice_nodes, momentum_unit_fits};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::active_elements;
+use manifold_water_liquid::fluid_particles::CellRange;
+use manifold_water_liquid::lattice::LiquidLattice;
 
 const SHADER: &str = include_str!("shaders/matter_to_grid.wgsl");
 
@@ -106,7 +106,8 @@ manifold_node_engine::primitive! {
 impl Primitive for MatterToGrid {
     fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.kernel.is_none() {
-            self.kernel = Some(device.create_compute_pipeline(SHADER, "scatter_main", "node.matter_to_grid"));
+            self.kernel =
+                Some(device.create_compute_pipeline(SHADER, "scatter_main", "node.matter_to_grid"));
         }
     }
 
@@ -117,7 +118,12 @@ impl Primitive for MatterToGrid {
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         (port_name == "accum_out")
-            .then(|| input_capacities.iter().find(|(p, _)| *p == "accum").map(|&(_, n)| n))
+            .then(|| {
+                input_capacities
+                    .iter()
+                    .find(|(p, _)| *p == "accum")
+                    .map(|&(_, n)| n)
+            })
             .flatten()
     }
 
@@ -129,7 +135,8 @@ impl Primitive for MatterToGrid {
         let Some(lattice) = LiquidLattice::from_wires(ctx, "Matter to Grid") else {
             return;
         };
-        let count = |name: &str, default: f32| ctx.scalar_or_param(name, default).round().max(0.0) as u32;
+        let count =
+            |name: &str, default: f32| ctx.scalar_or_param(name, default).round().max(0.0) as u32;
         let step_dt = ctx.scalar_or_param("step_dt", 4.9e-4);
         let lambda = ctx.scalar_or_param("lambda", 1.111e6);
         let cohesion = ctx.scalar_or_param("cohesion", 0.0);
@@ -138,13 +145,20 @@ impl Primitive for MatterToGrid {
         let tick_index = count("tick_index", 0.0);
         let substep_in_tick = count("substep_in_tick", 0.0);
         let momentum_unit = ctx.scalar_or_param("momentum_unit", 128.0);
-        let blocks = [count("blocks_x", 18.0), count("blocks_y", 18.0), count("blocks_z", 18.0)];
+        let blocks = [
+            count("blocks_x", 18.0),
+            count("blocks_y", 18.0),
+            count("blocks_z", 18.0),
+        ];
         // In place on the accumulator input; the GPU is touched on every path.
         let points = ctx.inputs.array("points");
         let accum = ctx.inputs.array("accum");
         let sorted = ctx.inputs.array("order").zip(ctx.inputs.array("ranges"));
         let gpu = ctx.gpu_encoder();
-        let kernel = self.kernel.as_ref().expect("matter to grid kernel built by prepare_pipelines at install");
+        let kernel = self
+            .kernel
+            .as_ref()
+            .expect("matter to grid kernel built by prepare_pipelines at install");
         let (Some(points), Some(accum)) = (points, accum) else {
             return;
         };
@@ -203,13 +217,33 @@ impl Primitive for MatterToGrid {
             None => (accum, accum, active.div_ceil(256)),
         };
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: points, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: accum, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: order, offset: 0 },
-            GpuBinding::Buffer { binding: 4, buffer: ranges, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: points,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: accum,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: order,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: ranges,
+                offset: 0,
+            },
         ];
-        gpu.native_enc.dispatch_compute(kernel, &bindings, [groups, 1, 1], "node.matter_to_grid");
+        gpu.native_enc
+            .dispatch_compute(kernel, &bindings, [groups, 1, 1], "node.matter_to_grid");
     }
 }
 
@@ -231,9 +265,15 @@ mod tests {
         assert!(SHADER.contains("let to_mass = 65536.0 * inv_mass_unit;"));
         assert_eq!(MOMENTUM_SCALE, 134_217_728.0);
         // `matter_momentum_unit_round_trips` runs this arithmetic in f32.
-        assert!(SHADER.contains("let to_momentum = 134217728.0 / params.momentum_unit * inv_mass_unit;"));
+        assert!(
+            SHADER
+                .contains("let to_momentum = 134217728.0 / params.momentum_unit * inv_mass_unit;")
+        );
         assert_eq!(mass_unit(2.0), 125.0 * 8.0);
-        assert!(SHADER.contains("let inv_mass_unit = 1.0 / (125.0 * cell_size * cell_size * cell_size);"));
+        assert!(
+            SHADER
+                .contains("let inv_mass_unit = 1.0 / (125.0 * cell_size * cell_size * cell_size);")
+        );
         for line in [
             "x = x ^ (x >> 16u);",
             "x = x * 0x7feb352du;",

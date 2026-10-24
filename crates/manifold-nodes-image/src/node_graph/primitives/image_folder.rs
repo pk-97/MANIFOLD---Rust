@@ -169,8 +169,7 @@ manifold_node_engine::primitive! {
 /// `.Png`, etc. all match. Sort happens after filtering so the order
 /// matches `ls` (alphabetical). TIFF decodes on the dedicated `tiff`
 /// path (bit-exact MRI grayscale); the rest go through the `image` crate.
-const IMAGE_EXTENSIONS: &[&str] =
-    &["tiff", "tif", "png", "jpg", "jpeg", "webp", "bmp", "gif"];
+const IMAGE_EXTENSIONS: &[&str] = &["tiff", "tif", "png", "jpg", "jpeg", "webp", "bmp", "gif"];
 
 impl Primitive for ImageFolder {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -198,8 +197,10 @@ impl Primitive for ImageFolder {
         // Emit the trigger_count scalar with the current value up front;
         // the bump in step 2 will overwrite with the new value if a slice
         // lands this frame. Covers every early-return path below.
-        ctx.outputs
-            .set_scalar("trigger_count", ParamValue::Float(self.trigger_count as f32));
+        ctx.outputs.set_scalar(
+            "trigger_count",
+            ParamValue::Float(self.trigger_count as f32),
+        );
 
         let Some(out) = ctx.outputs.texture_2d("out") else {
             return;
@@ -216,9 +217,13 @@ impl Primitive for ImageFolder {
                 Ok(Ok(slice)) => {
                     self.ensure_texture(ctx, slice.width, slice.height);
                     if let Some(tex) = &self.slice_texture {
-                        ctx.gpu_encoder()
-                            .native_enc
-                            .upload_texture(tex, slice.width, slice.height, 1, &slice.rgba);
+                        ctx.gpu_encoder().native_enc.upload_texture(
+                            tex,
+                            slice.width,
+                            slice.height,
+                            1,
+                            &slice.rgba,
+                        );
                     }
                     self.tex_width = slice.width;
                     self.tex_height = slice.height;
@@ -423,8 +428,7 @@ fn load_image(path: &Path) -> Result<DecodedSlice, String> {
         return load_tiff_slice(path);
     }
 
-    let img = image::open(path)
-        .map_err(|e| format!("decode {}: {}", path.display(), e))?;
+    let img = image::open(path).map_err(|e| format!("decode {}: {}", path.display(), e))?;
     let rgba = img.to_rgba8();
     Ok(DecodedSlice {
         width: rgba.width(),
@@ -438,8 +442,7 @@ fn load_image(path: &Path) -> Result<DecodedSlice, String> {
 /// range — matches the legacy `mri_volume_loader::load_tiff_slice`
 /// behaviour so MRI scans render identically.
 fn load_tiff_slice(path: &Path) -> Result<DecodedSlice, String> {
-    let file = std::fs::File::open(path)
-        .map_err(|e| format!("open {}: {}", path.display(), e))?;
+    let file = std::fs::File::open(path).map_err(|e| format!("open {}: {}", path.display(), e))?;
     let mut decoder = tiff::decoder::Decoder::new(file)
         .map_err(|e| format!("TIFF decode {}: {}", path.display(), e))?;
 

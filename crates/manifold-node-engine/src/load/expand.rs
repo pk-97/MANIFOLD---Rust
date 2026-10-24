@@ -23,8 +23,8 @@ pub(crate) mod compiler;
 }
 mod control_state;
 pub use control_state::PreparedModifierControlState;
-mod frames;
 mod fragment_cuts;
+mod frames;
 pub use fragment_cuts::contains_fragments;
 mod namespace;
 mod parameter_guards;
@@ -41,7 +41,10 @@ pub use compiler::{
 };
 pub use routes::{PreparedSceneModifierGraph, SceneModifierNodeCopy, SceneModifierNodeRoute};
 
-pub use frames::{TargetPlacement, capture_mesh_frames, resolve_modifier_mesh_frames, validate_modifier_mesh_frames};
+pub use frames::{
+    TargetPlacement, capture_mesh_frames, resolve_modifier_mesh_frames,
+    validate_modifier_mesh_frames,
+};
 
 use manifold_core::scene_modifier_preset::SceneModifierSchemaError;
 

@@ -1,18 +1,20 @@
-use manifold_node_engine::freeze::TextureDiff;
-use manifold_node_engine::freeze::markers::Marker;
-use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::exec::execution_plan::compile;
-use manifold_node_engine::graph::Graph;
-use manifold_node_engine::parameters::ParamValue;
-use manifold_node_engine::{persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, state_store::StateStore};
-use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
+use manifold_node_engine::exec::execution_plan::compile;
+use manifold_node_engine::freeze::TextureDiff;
+use manifold_node_engine::freeze::markers::Marker;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_node_engine::graph::Graph;
+use manifold_node_engine::parameters::ParamValue;
+use manifold_node_engine::{
+    exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+    exec::metal_backend::MetalBackend, persistence::EffectGraphDefExt,
+    persistence::PrimitiveRegistry, state_store::StateStore,
+};
 
 const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
-
-
 
 /// The section 7.4 "out-of-loop ≈ulp" precision-contract tolerance (freeze section 7,
 /// `docs/FREEZE_COMPILER_MAP.md`): the shared per-texel (abs, rel) bound for
@@ -54,7 +56,10 @@ fn fused_gain_chain_matches_unfused_within_tolerance() {
         "the only diff should be sub-tolerance f16 accumulation, got max_abs={}",
         r.max_abs
     );
-    assert!(r.passes(0.0), "correct fusion must pass the verdict at zero fraction");
+    assert!(
+        r.passes(0.0),
+        "correct fusion must pass the verdict at zero fraction"
+    );
 }
 
 #[test]
@@ -74,7 +79,9 @@ fn oracle_catches_wrong_fusion() {
     assert!(
         r.over_count > 0,
         "oracle must flag a wrong fusion (max_abs={}, over={}/{})",
-        r.max_abs, r.over_count, r.total
+        r.max_abs,
+        r.over_count,
+        r.total
     );
     assert!(
         !r.passes(0.01),
@@ -110,7 +117,9 @@ fn camera_derived_pointwise_atom_fuses_and_matches_unfused() {
     // doc comment) so `catalog_gen`'s completeness tests never see it — build
     // a registry that adds it on top of the real builtins for this test only.
     let mut registry = PrimitiveRegistry::with_builtin();
-    registry.register("test.camera_pointwise", || Box::new(TestCameraPointwise::new()));
+    registry.register("test.camera_pointwise", || {
+        Box::new(TestCameraPointwise::new())
+    });
     let (w, h) = (64u32, 64u32);
     let input = gradient_input(&device, w, h);
 
@@ -137,7 +146,13 @@ fn camera_derived_pointwise_atom_fuses_and_matches_unfused() {
     let gain = 1.4f32;
 
     // ── Unfused: the canonical graph, params set by node id. ──
-    let mut unfused_graph = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused_graph = def
+        .clone()
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("unfused graph");
     let set_by_node_id = |g: &mut Graph, node_id: &str, param: &str, v: f32| {
         let id = g
             .node_id_by_handle(node_id)
@@ -149,23 +164,47 @@ fn camera_derived_pointwise_atom_fuses_and_matches_unfused() {
     set_by_node_id(&mut unfused_graph, "cam", "pos_x", cam_pos_x);
     set_by_node_id(&mut unfused_graph, "cam_atom", "gain", gain);
     let unfused_plan = compile(&unfused_graph).expect("compile unfused");
-    let u_src = resource_for_output(&unfused_plan, find_node(&unfused_graph, "system.source"), "out");
-    let u_out =
-        resource_for_output(&unfused_plan, find_node(&unfused_graph, "node.invert"), "out");
-    let unfused = render_graph(&device.arc(), &mut unfused_graph, &unfused_plan, u_src, &input, u_out);
+    let u_src = resource_for_output(
+        &unfused_plan,
+        find_node(&unfused_graph, "system.source"),
+        "out",
+    );
+    let u_out = resource_for_output(
+        &unfused_plan,
+        find_node(&unfused_graph, "node.invert"),
+        "out",
+    );
+    let unfused = render_graph(
+        &device.arc(),
+        &mut unfused_graph,
+        &unfused_plan,
+        u_src,
+        &input,
+        u_out,
+    );
 
     // ── Fused: cam_atom + invert must collapse into ONE node.wgsl_compute,
     // with `cam` surviving as a boundary (a Camera producer never fuses) and
     // its output routed onto the fused node's synthesized `camera_ext_0`. ──
-    let FusedDef { def: fused_def, retarget, .. } =
-        fuse_canonical_def(&def, &registry).expect("cam_atom + invert is one fusable region");
+    let FusedDef {
+        def: fused_def,
+        retarget,
+        ..
+    } = fuse_canonical_def(&def, &registry).expect("cam_atom + invert is one fusable region");
     assert_eq!(
-        fused_def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").count(),
+        fused_def
+            .nodes
+            .iter()
+            .filter(|n| n.type_id == "node.wgsl_compute")
+            .count(),
         1,
         "cam_atom and invert must collapse to exactly one fused node"
     );
     assert!(
-        fused_def.nodes.iter().any(|n| n.type_id == "node.free_camera"),
+        fused_def
+            .nodes
+            .iter()
+            .any(|n| n.type_id == "node.free_camera"),
         "the camera producer must survive as a boundary, not fuse away"
     );
     assert!(
@@ -180,7 +219,12 @@ fn camera_derived_pointwise_atom_fuses_and_matches_unfused() {
          derived-uniform recompute), not just fuse structurally"
     );
 
-    let mut fused_graph = fused_def.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused_graph = fused_def
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("fused graph builds");
     set_by_node_id(&mut fused_graph, "cam", "pos_x", cam_pos_x);
     let fused_node = find_node(&fused_graph, "node.wgsl_compute");
     let (_, gain_field) = retarget
@@ -192,12 +236,25 @@ fn camera_derived_pointwise_atom_fuses_and_matches_unfused() {
     let fused_plan = compile(&fused_graph).expect("compile fused");
     let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");
     let f_out = resource_for_output(&fused_plan, fused_node, "dst");
-    let fused = render_graph(&device.arc(), &mut fused_graph, &fused_plan, f_src, &input, f_out);
+    let fused = render_graph(
+        &device.arc(),
+        &mut fused_graph,
+        &fused_plan,
+        f_src,
+        &input,
+        f_out,
+    );
 
     let differ = TextureDiff::new(&device);
     // Out-of-loop texture tier (freeze section 7.4): ≈1 f16 ULP, same tolerance band
     // the ColorGrade proof above uses.
-    let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
+    let r = differ.compare(
+        &device,
+        &unfused.texture,
+        &fused.texture,
+        OUT_OF_LOOP_ULP_ABS_TOL,
+        OUT_OF_LOOP_ULP_REL_TOL,
+    );
     assert!(
         r.passes(0.005) && r.over_count < 64,
         "camera-derived pointwise fusion must match unfused within the \
@@ -253,7 +310,13 @@ fn fused_wgsl_compute_fragment_matches_unfused() {
     let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
 
     // Unfused: all three atoms dispatch; the fragment runs its synthesized kernel.
-    let mut unfused = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused = def
+        .clone()
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
@@ -266,14 +329,25 @@ fn fused_wgsl_compute_fragment_matches_unfused() {
         !fdef.nodes.iter().any(|n| n.type_id == "node.exposure"),
         "gain must be absorbed into the fused kernel"
     );
-    let mut fused = fdef.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused = fdef
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("fused graph builds");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
     let f_out = resource_for_output(&f_plan, find_node(&fused, "node.wgsl_compute"), "dst");
     let f_img = render_graph(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
-    let r = differ.compare(&device, &u_img.texture, &f_img.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
+    let r = differ.compare(
+        &device,
+        &u_img.texture,
+        &f_img.texture,
+        OUT_OF_LOOP_ULP_ABS_TOL,
+        OUT_OF_LOOP_ULP_REL_TOL,
+    );
     assert!(
         r.passes(0.005),
         "fused fragment region must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
@@ -300,7 +374,9 @@ fn fused_wgsl_compute_fragment_matches_unfused() {
 #[test]
 fn atomic_side_output_atom_cuts_fusion_and_matches_unfused() {
     use manifold_node_engine::freeze::install::fuse_generator_view;
-    use manifold_node_engine::load::graph_loader::{BoundaryHandling, HandleScope, instantiate_def, pre_allocate_resources};
+    use manifold_node_engine::load::graph_loader::{
+        BoundaryHandling, HandleScope, instantiate_def, pre_allocate_resources,
+    };
     use manifold_node_engine::scene::mesh_change::PreparedMeshRules;
     use manifold_node_engine::testkit::test_multi_output_atomic_fixture::{
         MOMENTUM_WORDS, TYPE_ID as FIXTURE, TestMultiOutputAtomic,
@@ -357,8 +433,15 @@ fn atomic_side_output_atom_cuts_fusion_and_matches_unfused() {
     let fused_view = fuse_generator_view(&def, &registry).expect("the particle regions fuse");
     let fused_def: &EffectGraphDef = &fused_view.def;
     // Non-vacuous: both neighbouring regions fused, the atom did not.
-    let fused_kernels = fused_def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").count();
-    assert_eq!(fused_kernels, 2, "kick+wrap on each side of the atom must fuse into its own kernel");
+    let fused_kernels = fused_def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "node.wgsl_compute")
+        .count();
+    assert_eq!(
+        fused_kernels, 2,
+        "kick+wrap on each side of the atom must fuse into its own kernel"
+    );
     for gone in ["node.spread_out", "node.wrap_around"] {
         assert!(
             !fused_def.nodes.iter().any(|n| n.type_id == gone),
@@ -366,7 +449,11 @@ fn atomic_side_output_atom_cuts_fusion_and_matches_unfused() {
         );
     }
     assert_eq!(
-        fused_def.nodes.iter().filter(|n| n.type_id == FIXTURE).count(),
+        fused_def
+            .nodes
+            .iter()
+            .filter(|n| n.type_id == FIXTURE)
+            .count(),
         1,
         "the atomic-side-output atom must stay a standalone node (region cut)"
     );
@@ -385,13 +472,20 @@ fn atomic_side_output_atom_cuts_fusion_and_matches_unfused() {
         )
         .expect("instantiate");
         let node_of = |type_id: &str| -> NodeInstanceId {
-            let id = def.nodes.iter().find(|n| n.type_id == type_id).map(|n| n.id).unwrap();
+            let id = def
+                .nodes
+                .iter()
+                .find(|n| n.type_id == type_id)
+                .map(|n| n.id)
+                .unwrap();
             *inst.id_map.get(&id).unwrap()
         };
         let atom = node_of(FIXTURE);
         // No atom on main reads an i32 array yet; the test is the reader, so
         // the side output is an external output (else it gets no resource).
-        graph.add_external_output(atom, "momentum").expect("momentum is an output");
+        graph
+            .add_external_output(atom, "momentum")
+            .expect("momentum is an output");
         let plan = compile(&graph).expect("compile");
         let resolve = node_of("node.resolve_scatter");
         let gen_in = node_of("system.generator_input");
@@ -405,7 +499,9 @@ fn atomic_side_output_atom_cuts_fusion_and_matches_unfused() {
         for i in 0..2u32 {
             let t = f64::from(i) / 60.0;
             for (name, v) in [("output_width", w as f32), ("output_height", h as f32)] {
-                graph.set_param(gen_in, name, ParamValue::Float(v)).expect("host param");
+                graph
+                    .set_param(gen_in, name, ParamValue::Float(v))
+                    .expect("host param");
             }
             let ft = FrameTime {
                 seconds: Seconds(t),
@@ -421,18 +517,26 @@ fn atomic_side_output_atom_cuts_fusion_and_matches_unfused() {
             enc.commit_and_wait_completed();
         }
 
-        let slot = exec.backend().slot_for(momentum_res).expect("momentum slot");
+        let slot = exec
+            .backend()
+            .slot_for(momentum_res)
+            .expect("momentum slot");
         let buf = exec.backend().array_buffer(slot).expect("momentum buffer");
         let momentum = unsafe {
             std::slice::from_raw_parts(
-                buf.mapped_ptr().expect("shared momentum buffer").cast::<i32>(),
+                buf.mapped_ptr()
+                    .expect("shared momentum buffer")
+                    .cast::<i32>(),
                 MOMENTUM_WORDS as usize,
             )
         }
         .to_vec();
 
         let res = exec.preview_resource().expect("preview resource");
-        let tex = exec.backend().texture_2d(exec.backend().slot_for(res).unwrap()).unwrap();
+        let tex = exec
+            .backend()
+            .texture_2d(exec.backend().slot_for(res).unwrap())
+            .unwrap();
         let out = RenderTarget::new(&device, tex.width, tex.height, tex.format, "agfh-capture");
         let mut enc = device.create_encoder("agfh-copy");
         {
@@ -450,7 +554,10 @@ fn atomic_side_output_atom_cuts_fusion_and_matches_unfused() {
         u_momentum.iter().any(|&m| m != 0),
         "the atom must accumulate non-zero momentum (non-vacuous): {u_momentum:?}"
     );
-    assert_eq!(f_momentum, u_momentum, "atomic side output must match unfused word for word");
+    assert_eq!(
+        f_momentum, u_momentum,
+        "atomic side output must match unfused word for word"
+    );
 
     let differ = TextureDiff::new(&device);
     let r = differ.compare(&device, &u_img.texture, &f_img.texture, 0.0, 0.0);

@@ -30,8 +30,14 @@ pub enum ContentCommand {
         param_id: manifold_core::effects::ParamId,
     },
     /// Publish selection only after this insertion succeeds on the content thread.
-    ExecuteSelecting(Box<dyn Command + Send>, crate::edit_selection::SelectAfterEdit),
-    ChangeGeneratorType { layer_id: LayerId, new_type: manifold_core::PresetTypeId },
+    ExecuteSelecting(
+        Box<dyn Command + Send>,
+        crate::edit_selection::SelectAfterEdit,
+    ),
+    ChangeGeneratorType {
+        layer_id: LayerId,
+        new_type: manifold_core::PresetTypeId,
+    },
     GraphEditRejected(String),
     ExecuteBatch(Vec<Box<dyn Command>>, String),
     /// Runtime envelope preview; never installs points into the project.
@@ -98,17 +104,24 @@ pub enum ContentCommand {
     /// case launches immediately rather than waiting for a quantize
     /// boundary. Not undoable — a performance gesture, like a MIDI trigger.
     #[allow(dead_code)]
-    SessionLaunchSlot { layer_id: LayerId, scene_id: SceneId },
+    SessionLaunchSlot {
+        layer_id: LayerId,
+        scene_id: SceneId,
+    },
     /// Quantized stop for one layer's session slot. `session_override`
     /// persists — the layer goes black, it does not fall back to the
     /// arrangement.
     #[allow(dead_code)]
-    SessionStopSlot { layer_id: LayerId },
+    SessionStopSlot {
+        layer_id: LayerId,
+    },
     /// Launch every slot in a scene; layers currently playing a session slot
     /// with no slot in this scene get a quantized stop (Ableton "stop other
     /// tracks" default).
     #[allow(dead_code)]
-    SessionLaunchScene { scene_id: SceneId },
+    SessionLaunchScene {
+        scene_id: SceneId,
+    },
     /// Quantized stop of every currently-playing (or about-to-play) session
     /// slot. Distinct from a full transport stop: `session_override` is
     /// untouched.
@@ -118,10 +131,14 @@ pub enum ContentCommand {
     /// (or every layer if `None`) and stops its playing slot. Timeline
     /// clips resume immediately.
     #[allow(dead_code)]
-    SessionBackToArrangement { layer_id: Option<LayerId> },
+    SessionBackToArrangement {
+        layer_id: Option<LayerId>,
+    },
     /// Set the global session launch quantize (0 = launch immediately).
     #[allow(dead_code)]
-    SessionSetQuantize { beats: Beats },
+    SessionSetQuantize {
+        beats: Beats,
+    },
 
     // ── Automation lanes (P1/P4, docs/AUTOMATION_LANES_DESIGN.md section 4/section 6/section 7) ──
     /// Automation lanes' "Back to Arrangement": clears every override latch
@@ -300,13 +317,19 @@ pub enum ContentCommand {
     SurfaceReady,
     /// The stage output's drawable went on screen at `at` (Metal's presented
     /// handler, host time mapped to `Instant`). Feeds the screen delay (D19).
-    FramePresented { drawable_id: u64, at: std::time::Instant },
+    FramePresented {
+        drawable_id: u64,
+        at: std::time::Instant,
+    },
 
     // ── Sync calibration (D19) ────────────────────────────────────
     /// Stored values from `UserPrefs`, sent before the first tick: the hidden
     /// extra output delay in ms, and the learned offsets in ms for MIDI
     /// clock, AbletonOSC and timecode (NaN where none is stored).
-    SetSyncCalibration { extra_delay_ms: f64, offsets_ms: [f64; 3] },
+    SetSyncCalibration {
+        extra_delay_ms: f64,
+        offsets_ms: [f64; 3],
+    },
 
     // ── Editor canvas ─────────────────────────────────────────────
     /// Tell the content thread which effect instance's internal graph
@@ -400,7 +423,8 @@ pub mod touch {
     /// card-owned param redirects to the card value (Values).
     pub const GRAPH_LIVE: ChangeSet = ChangeSet::of(&[Part::Shapes, Part::Values]);
     /// The first move of that edit may also materialize the override (D21).
-    pub const OVERRIDES_SHAPES: ChangeSet = ChangeSet::of(&[Part::Overrides, Part::Shapes, Part::Values]);
+    pub const OVERRIDES_SHAPES: ChangeSet =
+        ChangeSet::of(&[Part::Overrides, Part::Shapes, Part::Values]);
     pub const MAPPING_RANGES: ChangeSet = ChangeSet::of(&[Part::MappingRanges]);
     pub const MAPPINGS: ChangeSet = ChangeSet::of(&[Part::Mappings]);
     pub const LAYERS: ChangeSet = ChangeSet::of(&[Part::Layers]);
@@ -415,7 +439,11 @@ pub mod touch {
     /// `OVERRIDES_SHAPES` when `graph_absent` (the write may materialize the
     /// override), else `GRAPH_LIVE`.
     pub fn shapes_first_move(graph_absent: bool) -> ChangeSet {
-        if graph_absent { OVERRIDES_SHAPES } else { GRAPH_LIVE }
+        if graph_absent {
+            OVERRIDES_SHAPES
+        } else {
+            GRAPH_LIVE
+        }
     }
 }
 
@@ -429,11 +457,19 @@ impl ContentCommand {
 
     /// A `MutateProject` writing `touches`.
     pub fn mutate(touches: ChangeSet, f: Box<dyn FnOnce(&mut Project) + Send>) -> Self {
-        ContentCommand::MutateProject { touches, f, gesture: false }
+        ContentCommand::MutateProject {
+            touches,
+            f,
+            gesture: false,
+        }
     }
 
     /// A gesture's live move writing `touches`; its commit reports rows.
     pub fn gesture_move(touches: ChangeSet, f: Box<dyn FnOnce(&mut Project) + Send>) -> Self {
-        ContentCommand::MutateProject { touches, f, gesture: true }
+        ContentCommand::MutateProject {
+            touches,
+            f,
+            gesture: true,
+        }
     }
 }

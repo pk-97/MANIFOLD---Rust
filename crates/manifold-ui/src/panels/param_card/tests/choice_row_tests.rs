@@ -27,20 +27,35 @@ fn row_kind_follows_the_declared_kind() {
     assert_eq!(choice.kind(true), RowKind::Choice);
     assert_eq!(float_switch.kind(true), RowKind::Switch);
     assert_eq!(toggle.kind(true), RowKind::Switch);
-    assert_eq!(toggle.kind(false), RowKind::Switch, "a toggle is a switch on every card");
-    assert_eq!(choice.kind(false), RowKind::Number, "off a scene a labelled row keeps its slider");
+    assert_eq!(
+        toggle.kind(false),
+        RowKind::Switch,
+        "a toggle is a switch on every card"
+    );
+    assert_eq!(
+        choice.kind(false),
+        RowKind::Number,
+        "off a scene a labelled row keeps its slider"
+    );
     assert_eq!(float_switch.kind(false), RowKind::Number);
     let mut trigger = toggle.clone();
     (trigger.spec.is_toggle, trigger.spec.is_trigger) = (false, true);
     assert_eq!(trigger.kind(true), RowKind::Trigger);
     let mut driven = choice.clone();
     driven.modulation.driver_active = true;
-    assert_eq!(driven.kind(true), RowKind::Number, "a driven choice keeps the slider that shows its driver");
+    assert_eq!(
+        driven.kind(true),
+        RowKind::Number,
+        "a driven choice keeps the slider that shows its driver"
+    );
     let mut three_label_float = float_switch.clone();
     three_label_float.spec.value_labels = Some(vec!["Low".into(), "Mid".into(), "High".into()]);
     assert_eq!(three_label_float.kind(true), RowKind::Number);
     assert!(!choice.grows_drawer(true) && !float_switch.grows_drawer(true));
-    assert!(choice.grows_drawer(false), "the slider it stays off a scene keeps its drawer");
+    assert!(
+        choice.grows_drawer(false),
+        "the slider it stays off a scene keeps its drawer"
+    );
 }
 
 /// A scene card draws a choice as a pick list showing its label and an
@@ -69,35 +84,59 @@ fn scene_card_draws_choices_as_pick_lists_and_switches() {
     let text = |tree: &UITree, id| tree.get_node(id).unwrap().text.clone();
 
     assert!(panel.row_host.slider_ids[0].is_none());
-    let pick = panel.row_host.toggle_ids[0].as_ref().expect("the choice is a button row");
+    let pick = panel.row_host.toggle_ids[0]
+        .as_ref()
+        .expect("the choice is a button row");
     let pick_button = pick.button_id;
     assert_eq!(pick.kind, RowKind::Choice);
     assert_eq!(text(&tree, pick_button).as_deref(), Some("Spot"));
     assert_eq!(tree.name_of(pick_button), Some("param_row.speed"));
 
-    let switch = panel.row_host.toggle_ids[2].as_ref().expect("the Off/On float is a button row");
+    let switch = panel.row_host.toggle_ids[2]
+        .as_ref()
+        .expect("the Off/On float is a button row");
     let switch_button = switch.button_id;
     assert_eq!(switch.kind, RowKind::Switch);
     assert_eq!(text(&tree, switch_button).as_deref(), Some("ON"));
 
     use crate::view::UiParamSlot as Slot;
-    let choice_slot = Slot { min: 0.0, max: 2.0, ..Slot::exposed(1.0) };
-    panel.sync_values_positional(&mut tree, &[choice_slot, Slot::exposed(1.0), Slot::exposed(0.0)]);
+    let choice_slot = Slot {
+        min: 0.0,
+        max: 2.0,
+        ..Slot::exposed(1.0)
+    };
+    panel.sync_values_positional(
+        &mut tree,
+        &[choice_slot, Slot::exposed(1.0), Slot::exposed(0.0)],
+    );
     assert_eq!(text(&tree, pick_button).as_deref(), Some("Point"));
     assert_eq!(text(&tree, switch_button).as_deref(), Some("OFF"));
 
     match panel.handle_click(pick_button, &tree).as_slice() {
-        [PanelAction::Root(RootAction::ParamEnumDropdown { param_id, labels, current_index, cell_node_id, .. })] => {
+        [
+            PanelAction::Root(RootAction::ParamEnumDropdown {
+                param_id,
+                labels,
+                current_index,
+                cell_node_id,
+                ..
+            }),
+        ] => {
             assert_eq!(param_id.as_ref(), "speed");
             assert_eq!(labels, &["Sun", "Point", "Spot"]);
             assert_eq!(*current_index, 1, "checked at the live value, Point");
-            assert_eq!(*cell_node_id, pick_button, "the list opens under the pick list");
+            assert_eq!(
+                *cell_node_id, pick_button,
+                "the list opens under the pick list"
+            );
         }
         other => panic!("expected the shared dropdown, got {other:?}"),
     }
 
     match panel.handle_click(switch_button, &tree).as_slice() {
-        [PanelAction::Params(ParamsAction::ParamToggle(_, param_id))] => assert_eq!(param_id.as_ref(), "scale"),
+        [PanelAction::Params(ParamsAction::ParamToggle(_, param_id))] => {
+            assert_eq!(param_id.as_ref(), "scale")
+        }
         other => panic!("expected ParamToggle, got {other:?}"),
     }
 }
@@ -120,22 +159,36 @@ fn pick_list_rows_keep_their_modulation_lane() {
         (panel, tree)
     };
     let (mut panel, tree) = build(&config);
-    assert_eq!(panel.row_host.toggle_ids[0].as_ref().map(|ids| ids.kind), Some(RowKind::Choice));
+    assert_eq!(
+        panel.row_host.toggle_ids[0].as_ref().map(|ids| ids.kind),
+        Some(RowKind::Choice)
+    );
     let driver = panel.row_host.driver_btn_ids[0].expect("the pick list has a D button");
     assert_eq!(tree.name_of(driver), Some("param_row.speed.driver_btn"));
     match panel.handle_click(driver, &tree).as_slice() {
-        [PanelAction::Modulation(ModulationAction::DriverToggle(_, id))] => assert_eq!(id.as_ref(), "speed"),
+        [PanelAction::Modulation(ModulationAction::DriverToggle(_, id))] => {
+            assert_eq!(id.as_ref(), "speed")
+        }
         other => panic!("expected DriverToggle, got {other:?}"),
     }
     let envelope = panel.row_host.envelope_btn_ids[0].expect("the pick list has a T button");
     assert!(matches!(panel.handle_click(envelope, &tree).as_slice(),
         [PanelAction::Modulation(ModulationAction::EnvelopeToggle(_, id))] if id.as_ref() == "speed"));
-    assert!(panel.row_host.audio_btn_ids[0].is_some(), "the pick list has an A button");
-    assert!(panel.row_host.driver_btn_ids[2].is_none(), "a switch keeps no lane");
+    assert!(
+        panel.row_host.audio_btn_ids[0].is_some(),
+        "the pick list has an A button"
+    );
+    assert!(
+        panel.row_host.driver_btn_ids[2].is_none(),
+        "a switch keeps no lane"
+    );
 
     config.rows[0].modulation.driver_active = true;
     let (panel, _) = build(&config);
-    assert!(panel.row_host.slider_ids[0].is_some(), "the driven row is the slider that shows its driver");
+    assert!(
+        panel.row_host.slider_ids[0].is_some(),
+        "the driven row is the slider that shows its driver"
+    );
     assert!(config.rows[0].grows_drawer(true));
 }
 
@@ -171,12 +224,24 @@ fn button_rows_open_the_mapping_menu_on_right_click() {
     let mut reg = crate::intent::IntentRegistry::new();
     panel.register_intents(&mut reg);
     let menu_for = |node| match reg.resolve(&tree, Some(node), crate::intent::Gesture::RightClick) {
-        Some(PanelAction::Params(ParamsAction::ParamLabelRightClick(_, param_id))) => Some(param_id.to_string()),
+        Some(PanelAction::Params(ParamsAction::ParamLabelRightClick(_, param_id))) => {
+            Some(param_id.to_string())
+        }
         _ => None,
     };
     for (row, param) in [(0, "speed"), (1, "invert"), (2, "scale")] {
-        let ids = panel.row_host.toggle_ids[row].as_ref().expect("a button row");
-        assert_eq!(menu_for(ids.button_id).as_deref(), Some(param), "{param} button");
-        assert_eq!(menu_for(ids.label_id.expect("label")).as_deref(), Some(param), "{param} label");
+        let ids = panel.row_host.toggle_ids[row]
+            .as_ref()
+            .expect("a button row");
+        assert_eq!(
+            menu_for(ids.button_id).as_deref(),
+            Some(param),
+            "{param} button"
+        );
+        assert_eq!(
+            menu_for(ids.label_id.expect("label")).as_deref(),
+            Some(param),
+            "{param} label"
+        );
     }
 }

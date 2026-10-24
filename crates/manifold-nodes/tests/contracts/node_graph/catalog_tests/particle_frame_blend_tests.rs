@@ -1,11 +1,17 @@
 //! P3 cross-atom proofs. CPU tests exercise the real preset partitioner;
 //! device tests compare generated fused and standalone presentation paths.
 
-use {manifold_nodes_image::node_graph::primitives::interpolate_particle_frames::InterpolateParticleFrames, manifold_nodes_scene::node_graph::primitives::particles_to_copies::ParticlesToCopies, manifold_water_gpu_flip::primitives::push_out_of_solid::PushOutOfSolid};
 use manifold_node_engine::exec::effect_node::NodeInstanceId;
 use manifold_node_engine::freeze::classify::CapacityExpr;
-use manifold_node_engine::freeze::codegen::{FusionRegion, InputSource, RegionNode, generate_fused};
+use manifold_node_engine::freeze::codegen::{
+    FusionRegion, InputSource, RegionNode, generate_fused,
+};
 use manifold_node_engine::primitive::PrimitiveSpec;
+use {
+    manifold_nodes_image::node_graph::primitives::interpolate_particle_frames::InterpolateParticleFrames,
+    manifold_nodes_scene::node_graph::primitives::particles_to_copies::ParticlesToCopies,
+    manifold_water_gpu_flip::primitives::push_out_of_solid::PushOutOfSolid,
+};
 
 fn member<P: PrimitiveSpec>(id: u32, inputs: Vec<InputSource>) -> RegionNode<'static> {
     RegionNode {
@@ -98,7 +104,11 @@ pub(super) mod publication_contract {
     }
 
     pub(crate) fn publish(state: &[FluidParticle], capacity: usize) -> (Vec<FluidParticle>, usize) {
-        let mut frame: Vec<_> = state.iter().copied().filter(|p| p.position_radius[3] > 0.0).collect();
+        let mut frame: Vec<_> = state
+            .iter()
+            .copied()
+            .filter(|p| p.position_radius[3] > 0.0)
+            .collect();
         frame.sort_unstable_by_key(|p| p.id);
         let count = frame.len();
         assert!(count <= capacity);
@@ -109,9 +119,13 @@ pub(super) mod publication_contract {
 
     fn valid_publication(frame: &[FluidParticle], count: usize) -> bool {
         count <= frame.len()
-            && frame[..count].iter().all(|p| p.id != 0 && p.position_radius[3] > 0.0)
+            && frame[..count]
+                .iter()
+                .all(|p| p.id != 0 && p.position_radius[3] > 0.0)
             && frame[..count].windows(2).all(|p| p[0].id < p[1].id)
-            && frame[count..].iter().all(|p| *p == FluidParticle::default())
+            && frame[count..]
+                .iter()
+                .all(|p| *p == FluidParticle::default())
     }
 
     #[test]
@@ -123,14 +137,19 @@ pub(super) mod publication_contract {
         // Changing working slots never changes a surviving birth identity.
         for _ in 0..3 {
             state.reverse();
-            for p in &mut state { p.position_radius[0] += 0.25; }
+            for p in &mut state {
+                p.position_radius[0] += 0.25;
+            }
         }
         state.retain(|p| p.id != 2);
         ids.emit(&mut state, &[30.0, 40.0]);
         let working = state.clone();
         let (b, b_count) = publish(&state, 8);
         assert_eq!(state, working, "publication must not reorder solver state");
-        assert_eq!(b[..b_count].iter().map(|p| p.id).collect::<Vec<_>>(), [1, 3, 4, 5]);
+        assert_eq!(
+            b[..b_count].iter().map(|p| p.id).collect::<Vec<_>>(),
+            [1, 3, 4, 5]
+        );
         for p in &b[..b_count] {
             if let Ok(i) = a[..a_count].binary_search_by_key(&p.id, |p| p.id) {
                 assert_eq!(p.position_radius[0], a[i].position_radius[0] + 0.75);
@@ -141,7 +160,10 @@ pub(super) mod publication_contract {
         assert_eq!(ids.epoch, 7);
         state.clear();
         ids.emit(&mut state, &[50.0]);
-        assert_eq!(state[0].id, 6, "empty pool must not reset the birth counter");
+        assert_eq!(
+            state[0].id, 6,
+            "empty pool must not reset the birth counter"
+        );
     }
 
     #[test]
@@ -153,26 +175,44 @@ pub(super) mod publication_contract {
         state.reverse();
         let (frame, count) = publish(&state, 8);
         assert_eq!(count, 3);
-        assert_eq!(frame[..count].iter().map(|p| p.id).collect::<Vec<_>>(), [1, 3, 4]);
+        assert_eq!(
+            frame[..count].iter().map(|p| p.id).collect::<Vec<_>>(),
+            [1, 3, 4]
+        );
         let mut corrupt = frame.clone();
         corrupt.swap(0, 1);
-        assert!(!valid_publication(&corrupt, count), "cell order is not publication order");
+        assert!(
+            !valid_publication(&corrupt, count),
+            "cell order is not publication order"
+        );
         corrupt = frame.clone();
         corrupt[1].id = corrupt[0].id;
-        assert!(!valid_publication(&corrupt, count), "duplicate identity must fail");
+        assert!(
+            !valid_publication(&corrupt, count),
+            "duplicate identity must fail"
+        );
         corrupt = frame.clone();
         corrupt[0].id = 0;
-        assert!(!valid_publication(&corrupt, count), "id-zero is not an identity frame");
+        assert!(
+            !valid_publication(&corrupt, count),
+            "id-zero is not an identity frame"
+        );
         corrupt = frame.clone();
         corrupt[count] = frame[0];
-        assert!(!valid_publication(&corrupt, count), "retired capacity cannot remain visible");
+        assert!(
+            !valid_publication(&corrupt, count),
+            "retired capacity cannot remain visible"
+        );
         assert!(!valid_publication(&frame, frame.len() + 1));
         assert_eq!(publish(&[], 8), (vec![FluidParticle::default(); 8], 0));
     }
 
     #[test]
     fn particle_identity_rollover_changes_epoch_before_reusing_ids() {
-        let mut ids = ReferenceIds { next: u64::from(u32::MAX), epoch: 12 };
+        let mut ids = ReferenceIds {
+            next: u64::from(u32::MAX),
+            epoch: 12,
+        };
         let mut state = Vec::new();
         ids.emit(&mut state, &[10.0]);
         assert_eq!(state[0].id, u32::MAX);
@@ -180,7 +220,10 @@ pub(super) mod publication_contract {
         ids.emit(&mut state, &[20.0, 30.0]);
         let (b, count) = publish(&state, 4);
         assert_eq!(ids.epoch, 13);
-        assert_eq!(b[..count].iter().map(|p| p.id).collect::<Vec<_>>(), [1, 2, 3]);
+        assert_eq!(
+            b[..count].iter().map(|p| p.id).collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
         assert_eq!(a[0].position_radius, b[0].position_radius);
         assert_ne!(a[0].id, b[0].id);
         // The frame ring must collapse/reset before matching this new epoch.
@@ -189,8 +232,8 @@ pub(super) mod publication_contract {
 
 #[test]
 fn fluid_particle_blend_presets_share_display_clock_and_fuse() {
-    use manifold_node_engine::{persistence::PrimitiveRegistry, freeze::fusion_report};
     use manifold_core::effect_graph_def::EffectGraphDef;
+    use manifold_node_engine::{freeze::fusion_report, persistence::PrimitiveRegistry};
     let registry = PrimitiveRegistry::with_builtin();
     for text in [
         include_str!("../../../fixtures/presets/WaterDamBreakGpuFlip.json"),
@@ -264,32 +307,61 @@ fn fluid_particle_blend_presets_share_display_clock_and_fuse() {
                 .id
         };
         let frame = id("frame");
-        for display in ["particle_blend", "foam_blend", "bubble_blend", "spray_blend"] {
+        for display in [
+            "particle_blend",
+            "foam_blend",
+            "bubble_blend",
+            "spray_blend",
+        ] {
             assert!(has(frame, "blend", id(display), "blend"));
             assert!(has(frame, "span", id(display), "span"));
         }
-        assert!(has(id("solid_blend"), "out", id("particle_push_out"), "solid"));
-        assert!(has(id("particle_blend"), "out", id("particle_push_out"), "particles"));
-        for (display, copies) in [("foam_blend", "foam_copies"), ("bubble_blend", "bubble_copies"), ("spray_blend", "spray_copies")] {
+        assert!(has(
+            id("solid_blend"),
+            "out",
+            id("particle_push_out"),
+            "solid"
+        ));
+        assert!(has(
+            id("particle_blend"),
+            "out",
+            id("particle_push_out"),
+            "particles"
+        ));
+        for (display, copies) in [
+            ("foam_blend", "foam_copies"),
+            ("bubble_blend", "bubble_copies"),
+            ("spray_blend", "spray_copies"),
+        ] {
             assert!(has(id(display), "out", id(copies), "particles"));
         }
         if json["presetMetadata"]["id"] == "WaterDamBreakGpuFlip" {
             assert!(has(id("state"), "identity", frame, "identity"));
         } else {
-            assert!(has(id("particle_push_out"), "out", id("liquid_particle_copies"), "particles"));
-            assert!(has(id("liquid_particle_copies"), "copies", id("water_object"), "instances"));
+            assert!(has(
+                id("particle_push_out"),
+                "out",
+                id("liquid_particle_copies"),
+                "particles"
+            ));
+            assert!(has(
+                id("liquid_particle_copies"),
+                "copies",
+                id("water_object"),
+                "instances"
+            ));
         }
     }
 }
 
 #[cfg(feature = "gpu-proofs")]
 mod gpu_tests {
-    use manifold_node_engine::testkit::array_harness::{Harness, params, read};
     use crate::contracts::node_graph::catalog_tests::particle_frame_blend_tests::*;
+    use manifold_gpu::GpuBinding;
+    use manifold_node_engine::freeze::codegen::ENTRY;
     use manifold_node_engine::mesh::InstanceTransform;
     use manifold_node_engine::particles::FluidParticle;
-    use manifold_node_engine::freeze::codegen::ENTRY;
-    use manifold_gpu::GpuBinding;
+    use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 
     #[test]
     fn fluid_particle_blend_fused_matches_unfused() {

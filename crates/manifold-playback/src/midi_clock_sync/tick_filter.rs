@@ -73,7 +73,11 @@ impl TickFilter {
         Self {
             k0: k,
             t0: at,
-            period: clamp_period(if period.is_finite() && period > 0.0 { period } else { period_of_bpm(120.0) }),
+            period: clamp_period(if period.is_finite() && period > 0.0 {
+                period
+            } else {
+                period_of_bpm(120.0)
+            }),
             last_arrival: at,
             pending: None,
             misses: [(0, 0.0, 0.0); REFIT_RUN],
@@ -298,11 +302,17 @@ impl ClockTracker {
     /// The beat at `r` from the filter (D7): none while stopped, before the
     /// first tick after a seed point, or after four periods with no tick.
     pub fn sample_at(&self, r: f64) -> Option<ClockSample> {
-        let filter = self.filter.as_ref().filter(|_| self.playing && !self.seed_due)?;
+        let filter = self
+            .filter
+            .as_ref()
+            .filter(|_| self.playing && !self.seed_due)?;
         if !r.is_finite() || r - self.last_tick_at > STALE_PERIODS * filter.period() {
             return None;
         }
         let ticks = filter.k0 as f64 + (r - filter.t0) / filter.period();
-        Some(ClockSample { beat: ticks / TICKS_PER_BEAT, bpm: filter.bpm() })
+        Some(ClockSample {
+            beat: ticks / TICKS_PER_BEAT,
+            bpm: filter.bpm(),
+        })
     }
 }

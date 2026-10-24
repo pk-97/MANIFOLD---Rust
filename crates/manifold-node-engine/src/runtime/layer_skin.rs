@@ -108,13 +108,19 @@ impl LayerSkinRegistry {
                 label: "Layer source snapshot",
                 mip_levels: 1,
             });
-            self.textures.insert(layer_id.clone(), LayerSkin {
-                texture,
-                owned_snapshot: true,
-                visible: true,
-            });
+            self.textures.insert(
+                layer_id.clone(),
+                LayerSkin {
+                    texture,
+                    owned_snapshot: true,
+                    visible: true,
+                },
+            );
         }
-        let entry = self.textures.get_mut(layer_id).expect("snapshot storage exists");
+        let entry = self
+            .textures
+            .get_mut(layer_id)
+            .expect("snapshot storage exists");
         gpu.copy_texture_to_texture(source, &entry.texture, source.width, source.height);
         entry.visible = true;
     }
@@ -138,7 +144,8 @@ impl LayerSkinRegistry {
     /// a missing layer must trigger snapshotting at the next publish.
     pub fn get(&self, layer_id: &LayerId) -> &GpuTexture {
         self.reads.borrow_mut().insert(layer_id.clone());
-        self.textures.get(layer_id)
+        self.textures
+            .get(layer_id)
             .filter(|entry| entry.visible)
             .map_or(&self.fallback, |entry| &entry.texture)
     }
@@ -293,7 +300,13 @@ mod tests {
         let device = test_device();
         let id = LayerId::new("reused-source");
         let mut registry = LayerSkinRegistry::new(&device, GpuTextureFormat::Rgba16Float);
-        let target = crate::gpu::render_target::RenderTarget::new(&device, 4, 4, GpuTextureFormat::Rgba16Float, "reused source");
+        let target = crate::gpu::render_target::RenderTarget::new(
+            &device,
+            4,
+            4,
+            GpuTextureFormat::Rgba16Float,
+            "reused source",
+        );
         let mut encoder = device.create_encoder("previous frame source proof");
         {
             let mut gpu = crate::gpu::gpu_encoder::GpuEncoder::new(&mut encoder, &device);
@@ -306,7 +319,10 @@ mod tests {
         encoder.commit_and_wait_completed();
         let raw = crate::testkit::gpu::readback_raw_halves(&device, registry.get(&id), 4, 4);
         let red = half::f16::from_bits(u16::from_le_bytes([raw[0], raw[1]])).to_f32();
-        assert!((red - 0.25).abs() < 0.001, "published frame changed when source was reused: {red}");
+        assert!(
+            (red - 0.25).abs() < 0.001,
+            "published frame changed when source was reused: {red}"
+        );
     }
 
     #[test]
@@ -314,7 +330,13 @@ mod tests {
         let device = test_device();
         let id = LayerId::new("unread-layer");
         let mut registry = LayerSkinRegistry::new(&device, GpuTextureFormat::Rgba16Float);
-        let source = crate::gpu::render_target::RenderTarget::new(&device, 4, 4, GpuTextureFormat::Rgba16Float, "unread source");
+        let source = crate::gpu::render_target::RenderTarget::new(
+            &device,
+            4,
+            4,
+            GpuTextureFormat::Rgba16Float,
+            "unread source",
+        );
         // Publish cycle with no recorded reads → nothing snapshotted.
         let mut encoder = device.create_encoder("unread layer proof");
         {
@@ -324,7 +346,11 @@ mod tests {
             registry.finish_snapshots();
         }
         encoder.commit_and_wait_completed();
-        assert_eq!(registry.get(&id).width, 1, "unreferenced layer must serve the fallback");
+        assert_eq!(
+            registry.get(&id).width,
+            1,
+            "unreferenced layer must serve the fallback"
+        );
         assert_eq!(registry.len(), 0);
 
         // A recorded read + publish → real pixels.
@@ -342,8 +368,11 @@ mod tests {
         // A cycle with no reads clears the set and drops the stale entry.
         registry.begin_snapshots();
         registry.finish_snapshots();
-        assert_eq!(registry.len(), 0, "stale snapshot must drop when not re-published");
+        assert_eq!(
+            registry.len(),
+            0,
+            "stale snapshot must drop when not re-published"
+        );
         assert_eq!(registry.get(&id).width, 1);
     }
-
 }

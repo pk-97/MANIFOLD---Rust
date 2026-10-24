@@ -9,9 +9,9 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuEvent};
 
-use manifold_node_engine::mesh::{MeshVertex, Vec4Vertex};
 use manifold_node_engine::content_revision::ContentVersion;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::{MeshVertex, Vec4Vertex};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
@@ -128,7 +128,6 @@ inventory::submit! {
         bytes: scratch_bytes,
     }
 }
-
 
 fn scratch_words(candidate_count: u32) -> Option<u64> {
     let blocks = u64::from(candidate_count)
@@ -325,7 +324,8 @@ fn run_cut_map(
     }
     // A wired mesh with no buffer yet (or no GPU) waits, as the cut's
     // remaps and fragments do.
-    let (Some(reference), Some(map)) = (ctx.inputs.array("reference"), ctx.outputs.array("map")) else {
+    let (Some(reference), Some(map)) = (ctx.inputs.array("reference"), ctx.outputs.array("map"))
+    else {
         ctx.mark_outputs_pending();
         return;
     };
@@ -333,7 +333,11 @@ fn run_cut_map(
     if live_output.is_none() && state.fallback_live_count.is_none() {
         state.fallback_live_count = Some(ctx.gpu_encoder().device.create_buffer_shared(4));
     }
-    let fallback_live_count = if live_output.is_none() { state.fallback_live_count.clone() } else { None };
+    let fallback_live_count = if live_output.is_none() {
+        state.fallback_live_count.clone()
+    } else {
+        None
+    };
     let Some(live_count) = live_output.or(fallback_live_count.as_ref()) else {
         return;
     };
@@ -392,20 +396,23 @@ fn run_cut_map(
     let candidate_count = triangle_count;
     let reference_wired = ctx.inputs.slot("reference").is_some();
     let reference_content = ctx.inputs.content_version("reference");
-    let key = hash_key(&[
-        mode as u64,
-        bands as u64,
-        cell_size.to_bits() as u64,
-        scale.to_bits() as u64,
-        source_offset[0].to_bits() as u64,
-        source_offset[1].to_bits() as u64,
-        source_offset[2].to_bits() as u64,
-        direction[0].to_bits() as u64,
-        direction[1].to_bits() as u64,
-        direction[2].to_bits() as u64,
-        output_capacity as u64,
-        ctx.rebuild_epoch,
-    ], reference_content);
+    let key = hash_key(
+        &[
+            mode as u64,
+            bands as u64,
+            cell_size.to_bits() as u64,
+            scale.to_bits() as u64,
+            source_offset[0].to_bits() as u64,
+            source_offset[1].to_bits() as u64,
+            source_offset[2].to_bits() as u64,
+            direction[0].to_bits() as u64,
+            direction[1].to_bits() as u64,
+            direction[2].to_bits() as u64,
+            output_capacity as u64,
+            ctx.rebuild_epoch,
+        ],
+        reference_content,
+    );
     let content_known = !reference_wired || reference_content.is_some();
     let content_unchanged = controls_valid && content_known && state.last_key == Some(key);
     if content_unchanged && ctx.outputs_retained() {
@@ -459,7 +466,9 @@ fn run_cut_map(
     }
     if candidate_count == 0 {
         state.last_key = Some(key);
-        if content_unchanged { ctx.mark_output_content_unchanged(); }
+        if content_unchanged {
+            ctx.mark_output_content_unchanged();
+        }
         return;
     }
     let Some(scratch_words) = scratch_words(candidate_count) else {
@@ -568,7 +577,9 @@ fn run_cut_map(
         &bindings,
     );
     state.last_key = Some(key);
-    if content_unchanged { ctx.mark_output_content_unchanged(); }
+    if content_unchanged {
+        ctx.mark_output_content_unchanged();
+    }
 }
 
 fn cut_map_capacity(port_name: &str, input_capacities: &[(&str, u32)]) -> Option<u32> {
@@ -830,8 +841,8 @@ mod tests {
                 uv: [0.0; 2],
                 _pad2: [0.0; 2],
                 tangent: [0.0; 4],
-                    color: [1.0; 4],
-},
+                color: [1.0; 4],
+            },
             MeshVertex {
                 position: [1.0, 0.0, 0.0],
                 _pad0: 0.0,
@@ -840,8 +851,8 @@ mod tests {
                 uv: [0.0; 2],
                 _pad2: [0.0; 2],
                 tangent: [0.0; 4],
-                    color: [1.0; 4],
-},
+                color: [1.0; 4],
+            },
             MeshVertex {
                 position: [0.0, 1.0, 0.0],
                 _pad0: 0.0,
@@ -850,8 +861,8 @@ mod tests {
                 uv: [0.0; 2],
                 _pad2: [0.0; 2],
                 tangent: [0.0; 4],
-                    color: [1.0; 4],
-},
+                color: [1.0; 4],
+            },
         ];
         let (output, status) = dispatch_shader(&vertices, 0, 1, 3);
         assert_eq!(status[1], 0);
@@ -872,8 +883,8 @@ mod tests {
                 uv: [0.0; 2],
                 _pad2: [0.0; 2],
                 tangent: [0.0; 4],
-                    color: [1.0; 4],
-},
+                color: [1.0; 4],
+            },
             MeshVertex {
                 position: [1.0, 0.0, 0.0],
                 _pad0: 0.0,
@@ -882,8 +893,8 @@ mod tests {
                 uv: [0.0; 2],
                 _pad2: [0.0; 2],
                 tangent: [0.0; 4],
-                    color: [1.0; 4],
-},
+                color: [1.0; 4],
+            },
             MeshVertex {
                 position: [0.0, 1.0, 0.0],
                 _pad0: 0.0,
@@ -892,8 +903,8 @@ mod tests {
                 uv: [0.0; 2],
                 _pad2: [0.0; 2],
                 tangent: [0.0; 4],
-                    color: [1.0; 4],
-},
+                color: [1.0; 4],
+            },
         ];
         let (output, status) = dispatch_shader(&vertices, 0, 1, 2);
         assert_eq!(status[1], 1);
@@ -912,8 +923,8 @@ mod tests {
                 uv: [0.0; 2],
                 _pad2: [0.0; 2],
                 tangent: [0.0; 4],
-                    color: [1.0; 4],
-},
+                color: [1.0; 4],
+            },
             MeshVertex {
                 position: [1.0, 1.0, 0.0],
                 _pad0: 0.0,
@@ -922,8 +933,8 @@ mod tests {
                 uv: [0.0; 2],
                 _pad2: [0.0; 2],
                 tangent: [0.0; 4],
-                    color: [1.0; 4],
-},
+                color: [1.0; 4],
+            },
             MeshVertex {
                 position: [-1.0, 1.0, 0.0],
                 _pad0: 0.0,
@@ -932,8 +943,8 @@ mod tests {
                 uv: [0.0; 2],
                 _pad2: [0.0; 2],
                 tangent: [0.0; 4],
-                    color: [1.0; 4],
-},
+                color: [1.0; 4],
+            },
         ];
         let (output, status) = dispatch_shader(&vertices, 0, 2, 12);
         assert_eq!(status[1], 0);
@@ -1042,11 +1053,22 @@ mod tests {
         for triangle in 0..triangles {
             // From slivers inside one band to triangles across all of them.
             let size = 0.002 + 2.0 * (triangle as f32 / triangles as f32).powi(3);
-            let centre = [hash(triangle * 7), hash(triangle * 7 + 1), hash(triangle * 7 + 2)];
+            let centre = [
+                hash(triangle * 7),
+                hash(triangle * 7 + 1),
+                hash(triangle * 7 + 2),
+            ];
             for corner in 0..3 {
                 let offset = |axis: u32| hash(triangle * 7 + 3 + corner * 3 + axis) * size;
-                let position = [centre[0] + offset(0), centre[1] + offset(1), centre[2] + offset(2)];
-                vertices.push(MeshVertex { position, ..bytemuck::Zeroable::zeroed() });
+                let position = [
+                    centre[0] + offset(0),
+                    centre[1] + offset(1),
+                    centre[2] + offset(2),
+                ];
+                vertices.push(MeshVertex {
+                    position,
+                    ..bytemuck::Zeroable::zeroed()
+                });
             }
         }
         let bands = 64;
@@ -1060,16 +1082,32 @@ mod tests {
             let [a, b, c] = [0, 1, 2].map(|k| glam::Vec3::from_slice(&record[k].position[..3]));
             covered[triangle] += (b - a).cross(c - a).length() / 2.0;
             // Projected along y, the fragment stays inside one band.
-            let corners = [0, 1, 2].map(|k| glam::Vec3::from_slice(&vertices[triangle * 3 + k].position));
-            let ys = [a, b, c].map(|bary| (corners[0] * bary.x + corners[1] * bary.y + corners[2] * bary.z).y);
-            let (low, high) = (ys.iter().copied().fold(f32::INFINITY, f32::min), ys.iter().copied().fold(f32::NEG_INFINITY, f32::max));
-            let band_of = |y: f32| ((0.5 + 0.5 * y) * bands as f32).floor().clamp(0.0, bands as f32 - 1.0);
+            let corners =
+                [0, 1, 2].map(|k| glam::Vec3::from_slice(&vertices[triangle * 3 + k].position));
+            let ys = [a, b, c]
+                .map(|bary| (corners[0] * bary.x + corners[1] * bary.y + corners[2] * bary.z).y);
+            let (low, high) = (
+                ys.iter().copied().fold(f32::INFINITY, f32::min),
+                ys.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+            );
+            let band_of = |y: f32| {
+                ((0.5 + 0.5 * y) * bands as f32)
+                    .floor()
+                    .clamp(0.0, bands as f32 - 1.0)
+            };
             if high - low > 2e-4 {
-                assert_eq!(band_of(low + 1e-4), band_of(high - 1e-4), "triangle {triangle}: a fragment spans two bands");
+                assert_eq!(
+                    band_of(low + 1e-4),
+                    band_of(high - 1e-4),
+                    "triangle {triangle}: a fragment spans two bands"
+                );
             }
         }
         for (triangle, area) in covered.iter().enumerate() {
-            assert!((area - full).abs() < 1e-3, "triangle {triangle}: fragments cover {area} of {full}");
+            assert!(
+                (area - full).abs() < 1e-3,
+                "triangle {triangle}: fragments cover {area} of {full}"
+            );
         }
     }
 
@@ -1081,12 +1119,20 @@ mod tests {
     fn gpu_scan_orders_a_photoscan_and_reports_its_time() {
         let device = manifold_gpu::testkit::test_device();
         for triangles in [131_072u32, 1_048_576] {
-            let vertex = |position| MeshVertex { position, ..bytemuck::Zeroable::zeroed() };
+            let vertex = |position| MeshVertex {
+                position,
+                ..bytemuck::Zeroable::zeroed()
+            };
             let mut vertices = Vec::with_capacity(triangles as usize * 3);
             for _ in 0..triangles {
-                vertices.extend([vertex([0.0, 0.0, 0.0]), vertex([1.0, 0.0, 0.0]), vertex([0.0, 1.0, 0.0])]);
+                vertices.extend([
+                    vertex([0.0, 0.0, 0.0]),
+                    vertex([1.0, 0.0, 0.0]),
+                    vertex([0.0, 1.0, 0.0]),
+                ]);
             }
-            let reference = device.create_buffer_shared(std::mem::size_of_val(vertices.as_slice()) as u64);
+            let reference =
+                device.create_buffer_shared(std::mem::size_of_val(vertices.as_slice()) as u64);
             unsafe { reference.write(0, bytemuck::cast_slice(&vertices)) };
             let blocks = triangles.div_ceil(256);
             let words = u64::from(triangles + blocks);
@@ -1112,15 +1158,46 @@ mod tests {
                 _pad2: 0.0,
             };
             let pipeline = |entry| device.create_compute_pipeline(SHADER, entry, entry);
-            let (count, scan, emit) = (pipeline("count_main"), pipeline("scan_main"), pipeline("emit_main"));
+            let (count, scan, emit) = (
+                pipeline("count_main"),
+                pipeline("scan_main"),
+                pipeline("emit_main"),
+            );
             let bindings = [
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: &reference, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: &counts, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: &prefix, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: &status, offset: 0 },
-                GpuBinding::Buffer { binding: 5, buffer: &map, offset: 0 },
-                GpuBinding::Buffer { binding: 6, buffer: &live, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &reference,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: &counts,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: &prefix,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: &status,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: &map,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 6,
+                    buffer: &live,
+                    offset: 0,
+                },
             ];
             // The scan overwrites the block tails it reads, so each timed
             // scan follows a fresh count.
@@ -1143,16 +1220,23 @@ mod tests {
                 "CUT_MAP_SCAN triangles={triangles} blocks={blocks} scan_ms={:.4} count_ms={:.4} emit_ms={emit_ms:.4}",
                 times[4], count_times[4]
             );
-            let status = unsafe { *(status.mapped_ptr().expect("shared status") as *const [u32; 4]) };
+            let status =
+                unsafe { *(status.mapped_ptr().expect("shared status") as *const [u32; 4]) };
             assert_eq!(status[1], 0, "no error");
             assert_eq!(status[0], output_capacity, "every triangle is counted");
             let live = unsafe { *(live.mapped_ptr().expect("shared live count") as *const u32) };
             assert_eq!(live, output_capacity);
             let records = unsafe {
-                std::slice::from_raw_parts(map.mapped_ptr().expect("shared map") as *const Vec4Vertex, output_capacity as usize)
+                std::slice::from_raw_parts(
+                    map.mapped_ptr().expect("shared map") as *const Vec4Vertex,
+                    output_capacity as usize,
+                )
             };
             for (triangle, record) in records.chunks_exact(3).enumerate() {
-                assert!(record.iter().all(|r| r.position[3] == triangle as f32), "triangle {triangle} sits at its own place");
+                assert!(
+                    record.iter().all(|r| r.position[3] == triangle as f32),
+                    "triangle {triangle} sits at its own place"
+                );
             }
         }
     }
@@ -1183,7 +1267,8 @@ mod scratch_source_tests {
     #[test]
     fn array_scratch_registration_preserves_checked_sizing() {
         for type_id in ["node.cut_mesh_bands", "node.cut_mesh_cells"] {
-            let scratch = manifold_node_engine::exec::resource_allocation::array_scratch(type_id).unwrap();
+            let scratch =
+                manifold_node_engine::exec::resource_allocation::array_scratch(type_id).unwrap();
             assert_eq!(scratch.port, "map");
             let bytes = scratch.bytes;
             for records in [0, 196_608, 196_611, u64::MAX] {

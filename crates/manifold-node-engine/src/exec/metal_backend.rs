@@ -22,15 +22,15 @@ use ahash::{AHashMap, AHashSet};
 use manifold_gpu::{GpuBuffer, GpuDevice, GpuTexture, GpuTextureFormat, TexturePool};
 use std::sync::Arc;
 
+use crate::bindings::Slot;
 use crate::exec::backend::Backend;
 use crate::exec::cpu_values::CpuWireValues;
-use crate::bindings::Slot;
-use crate::exec::execution_plan::ResourceId;
 use crate::exec::execution_plan::ExecutionPlan;
-use crate::parameters::ParamValue;
-use crate::ports::PortType;
+use crate::exec::execution_plan::ResourceId;
 use crate::gpu::render_target::RenderTarget;
 use crate::gpu::render_target_pool::RenderTargetPool;
+use crate::parameters::ParamValue;
+use crate::ports::PortType;
 
 /// A dedicated slot whose storage is supplied by its producer. The descriptor
 /// exists before the image does; no duplicate writable render target is needed.
@@ -594,7 +594,9 @@ impl MetalBackend {
                 let dims = crate::exec::execution::resolve_dims(plan, resource, (width, height));
                 let mip_levels = if self.mipmapped_ids.contains(&resource) {
                     manifold_gpu::GpuTextureDesc::max_mip_levels(dims.0, dims.1)
-                } else { 1 };
+                } else {
+                    1
+                };
                 if provided.dims != dims || provided.mip_levels != mip_levels {
                     provided.dims = dims;
                     provided.mip_levels = mip_levels;
@@ -615,20 +617,35 @@ impl MetalBackend {
         for (slot, old) in &self.textures_2d {
             let mut groups: AHashMap<((u32, u32), bool), Vec<ResourceId>> = AHashMap::default();
             for (&resource, &bound_slot) in &self.bound {
-                if bound_slot == *slot && plan.resource_type(resource).is_some_and(|ty| ty.is_texture_2d()) {
-                    let dims = crate::exec::execution::resolve_dims(plan, resource, (width, height));
-                    groups.entry((dims, self.mipmapped_ids.contains(&resource))).or_default().push(resource);
+                if bound_slot == *slot
+                    && plan
+                        .resource_type(resource)
+                        .is_some_and(|ty| ty.is_texture_2d())
+                {
+                    let dims =
+                        crate::exec::execution::resolve_dims(plan, resource, (width, height));
+                    groups
+                        .entry((dims, self.mipmapped_ids.contains(&resource)))
+                        .or_default()
+                        .push(resource);
                 }
             }
             let mut first = true;
             for ((dims, mipmapped), resources) in groups {
-                let new_slot = if first { first = false; *slot } else {
+                let new_slot = if first {
+                    first = false;
+                    *slot
+                } else {
                     let new_slot = Slot(candidate.next_slot);
                     candidate.next_slot += 1;
                     new_slot
                 };
-                candidate.textures_2d.insert(new_slot, allocate(dims, mipmapped, old.format)?);
-                for resource in resources { candidate.bound.insert(resource, new_slot); }
+                candidate
+                    .textures_2d
+                    .insert(new_slot, allocate(dims, mipmapped, old.format)?);
+                for resource in resources {
+                    candidate.bound.insert(resource, new_slot);
+                }
             }
         }
         // Free slots have no current logical binding. Derive their possible new
@@ -642,22 +659,43 @@ impl MetalBackend {
             let mut dimensions = AHashSet::default();
             for raw in 0..plan.resource_count() {
                 let resource = ResourceId(raw as u32);
-                if plan.resource_type(resource).is_some_and(|ty| ty.is_texture_2d())
-                    && crate::exec::execution::resolve_dims(plan, resource, (self.width, self.height)) == old_dims
-                    && self.mipmapped_ids.contains(&resource) == mipmapped {
-                    dimensions.insert(crate::exec::execution::resolve_dims(plan, resource, (width, height)));
+                if plan
+                    .resource_type(resource)
+                    .is_some_and(|ty| ty.is_texture_2d())
+                    && crate::exec::execution::resolve_dims(
+                        plan,
+                        resource,
+                        (self.width, self.height),
+                    ) == old_dims
+                    && self.mipmapped_ids.contains(&resource) == mipmapped
+                {
+                    dimensions.insert(crate::exec::execution::resolve_dims(
+                        plan,
+                        resource,
+                        (width, height),
+                    ));
                 }
             }
             for slot in slots {
                 let mut first = true;
                 for &dims in &dimensions {
-                    let new_slot = if first { first = false; *slot } else {
+                    let new_slot = if first {
+                        first = false;
+                        *slot
+                    } else {
                         let new_slot = Slot(candidate.next_slot);
                         candidate.next_slot += 1;
                         new_slot
                     };
-                    candidate.textures_2d.insert(new_slot, allocate(dims, mipmapped, format.unwrap_or(self.format))?);
-                    candidate.free_by_type.entry((port_type, format, dims, mipmapped)).or_default().push(new_slot);
+                    candidate.textures_2d.insert(
+                        new_slot,
+                        allocate(dims, mipmapped, format.unwrap_or(self.format))?,
+                    );
+                    candidate
+                        .free_by_type
+                        .entry((port_type, format, dims, mipmapped))
+                        .or_default()
+                        .push(new_slot);
                 }
             }
         }
@@ -689,7 +727,9 @@ impl Backend for MetalBackend {
     }
 
     fn install_array_buffer(&mut self, slot: Slot, buffer: GpuBuffer) -> bool {
-        let Some(current) = self.buffers_array.get_mut(&slot) else { return false; };
+        let Some(current) = self.buffers_array.get_mut(&slot) else {
+            return false;
+        };
         *current = buffer;
         true
     }
@@ -699,33 +739,51 @@ impl Backend for MetalBackend {
     }
 
     fn acquire_provided_texture(
-        &mut self, id: ResourceId, ty: PortType,
-        format: Option<GpuTextureFormat>, dims: (u32, u32),
+        &mut self,
+        id: ResourceId,
+        ty: PortType,
+        format: Option<GpuTextureFormat>,
+        dims: (u32, u32),
     ) -> Slot {
-        if self.pinned.contains(&id) { return self.acquire(id, ty, format, dims); }
+        if self.pinned.contains(&id) {
+            return self.acquire(id, ty, format, dims);
+        }
         assert!(ty.is_texture_2d());
         if let Some(&slot) = self.bound.get(&id) {
-            assert!(self.provided_2d.contains_key(&slot), "provided output changed ownership without a rebuild");
+            assert!(
+                self.provided_2d.contains_key(&slot),
+                "provided output changed ownership without a rebuild"
+            );
             return slot;
         }
         let slot = Slot(self.next_slot);
         self.next_slot += 1;
         self.bound.insert(id, slot);
-        self.provided_2d.insert(slot, ProvidedTexture {
-            dims,
-            format: format.unwrap_or(self.format),
-            mip_levels: if self.mipmapped_ids.contains(&id) {
-                manifold_gpu::GpuTextureDesc::max_mip_levels(dims.0, dims.1)
-            } else { 1 },
-            texture: None,
-        });
+        self.provided_2d.insert(
+            slot,
+            ProvidedTexture {
+                dims,
+                format: format.unwrap_or(self.format),
+                mip_levels: if self.mipmapped_ids.contains(&id) {
+                    manifold_gpu::GpuTextureDesc::max_mip_levels(dims.0, dims.1)
+                } else {
+                    1
+                },
+                texture: None,
+            },
+        );
         slot
     }
 
-    fn provided_texture_descriptor(&self, slot: Slot) -> Option<manifold_gpu::GpuTextureDesc<'static>> {
+    fn provided_texture_descriptor(
+        &self,
+        slot: Slot,
+    ) -> Option<manifold_gpu::GpuTextureDesc<'static>> {
         let provided = self.provided_2d.get(&slot)?;
         Some(manifold_gpu::GpuTextureDesc {
-            width: provided.dims.0, height: provided.dims.1, depth: 1,
+            width: provided.dims.0,
+            height: provided.dims.1,
+            depth: 1,
             format: provided.format,
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
@@ -735,11 +793,18 @@ impl Backend for MetalBackend {
     }
 
     fn install_provided_texture(&mut self, slot: Slot, texture: &GpuTexture) {
-        let provided = self.provided_2d.get_mut(&slot).expect("reserved output slot");
+        let provided = self
+            .provided_2d
+            .get_mut(&slot)
+            .expect("reserved output slot");
         assert_eq!((texture.width, texture.height), provided.dims);
         assert_eq!(texture.format, provided.format);
         assert_eq!(texture.mip_level_count(), provided.mip_levels);
-        if provided.texture.as_ref().is_none_or(|old| !old.ptr_eq(texture)) {
+        if provided
+            .texture
+            .as_ref()
+            .is_none_or(|old| !old.ptr_eq(texture))
+        {
             provided.texture = Some(texture.clone());
         }
     }
@@ -790,9 +855,14 @@ impl Backend for MetalBackend {
             );
             let device: &GpuDevice = &device;
             let alloc_format = format.unwrap_or(self.format);
-            let rt = self
-                .pool
-                .get(device, dims.0, dims.1, alloc_format, mipmapped, "node_graph");
+            let rt = self.pool.get(
+                device,
+                dims.0,
+                dims.1,
+                alloc_format,
+                mipmapped,
+                "node_graph",
+            );
             e.insert(rt);
         }
 
@@ -811,7 +881,11 @@ impl Backend for MetalBackend {
         if self.pinned.contains(&id) {
             return;
         }
-        if self.bound.get(&id).is_some_and(|slot| self.provided_2d.contains_key(slot)) {
+        if self
+            .bound
+            .get(&id)
+            .is_some_and(|slot| self.provided_2d.contains_key(slot))
+        {
             return;
         }
         if let Some(slot) = self.bound.remove(&id) {
@@ -951,11 +1025,7 @@ impl Backend for MetalBackend {
         self.mesh_sources.get(&slot).cloned()
     }
 
-    fn set_mesh_source(
-        &mut self,
-        slot: Slot,
-        value: crate::scene::mesh_source::MeshSource,
-    ) {
+    fn set_mesh_source(&mut self, slot: Slot, value: crate::scene::mesh_source::MeshSource) {
         self.mesh_sources.insert(slot, value);
     }
 
@@ -988,7 +1058,9 @@ impl Backend for MetalBackend {
     }
 
     fn alias_2d(&mut self, src_slot: Slot, dst_slot: Slot) -> bool {
-        if self.provided_2d.contains_key(&dst_slot) { return false; }
+        if self.provided_2d.contains_key(&dst_slot) {
+            return false;
+        }
         // Refuse to touch a slot that has a host-installed borrow we
         // don't own (e.g. StylizedFeedback's inner output slot points
         // at the outer chain's target via `replace_texture_2d`). The
@@ -1027,7 +1099,10 @@ impl Backend for MetalBackend {
     fn alias_array(&mut self, src_slot: Slot, dst_slot: Slot) -> bool {
         // Resolve first, so a switch reading another switch aliases the root.
         let src = self.array_source(src_slot);
-        if src == dst_slot || !self.buffers_array.contains_key(&src) || !self.buffers_array.contains_key(&dst_slot) {
+        if src == dst_slot
+            || !self.buffers_array.contains_key(&src)
+            || !self.buffers_array.contains_key(&dst_slot)
+        {
             return false;
         }
         self.array_aliases.insert(dst_slot, src);
@@ -1132,23 +1207,32 @@ mod array_buffer_tests {
         let texture = target.texture.clone();
         let id = ResourceId(0);
         let slot = backend.pre_bind_texture_2d(id, target);
-        assert_eq!(backend.acquire_provided_texture(id, PortType::Texture2D, None, (8, 8)), slot);
+        assert_eq!(
+            backend.acquire_provided_texture(id, PortType::Texture2D, None, (8, 8)),
+            slot
+        );
         assert!(backend.provided_texture_descriptor(slot).is_none());
         assert!(backend.texture_2d(slot).unwrap().ptr_eq(&texture));
     }
 
     #[test]
     fn provided_texture_resize_preserves_fixed_images_without_writable_allocations() {
-        use crate::{graph::Graph, exec::execution_plan::compile};
         use crate::scene::boundary_nodes::FinalOutput;
         use crate::testkit::graph::GraphFixture;
+        use crate::{exec::execution_plan::compile, graph::Graph};
         let (device, mut backend) = make_backend();
         let mut graph = Graph::new();
         let source = graph.add_node(Box::new(GraphFixture::provided_texture()));
         let output = graph.add_node(Box::new(FinalOutput::new()));
         graph.connect((source, "out"), (output, "in")).unwrap();
         let plan = compile(&graph).unwrap();
-        let resource = plan.steps().iter().find(|step| step.node == source).unwrap().outputs[0].1;
+        let resource = plan
+            .steps()
+            .iter()
+            .find(|step| step.node == source)
+            .unwrap()
+            .outputs[0]
+            .1;
         backend.declare_mipmapped(plan.mipmapped_resources());
         let dims = crate::exec::execution::resolve_dims(&plan, resource, (16, 16));
         let slot = backend.acquire_provided_texture(resource, PortType::Texture2D, None, dims);
@@ -1156,7 +1240,13 @@ mod array_buffer_tests {
         backend.install_provided_texture(slot, &texture);
         let prepared = backend.prepare_resize(&plan, &device, 32, 64).unwrap();
         assert!(prepared.candidate.textures_2d.is_empty());
-        assert!(prepared.candidate.texture_2d(slot).unwrap().ptr_eq(&texture));
+        assert!(
+            prepared
+                .candidate
+                .texture_2d(slot)
+                .unwrap()
+                .ptr_eq(&texture)
+        );
         assert!(backend.texture_2d(slot).unwrap().ptr_eq(&texture));
         backend.commit_resize(prepared);
         assert!(backend.texture_2d(slot).unwrap().ptr_eq(&texture));
@@ -1189,7 +1279,11 @@ mod array_buffer_tests {
             "flat acquire must not recycle a mip-chained slot"
         );
         let flat_tex = Backend::texture_2d(&b, flat_slot).expect("real texture");
-        assert_eq!(flat_tex.mip_level_count(), 1, "undeclared resource stays flat");
+        assert_eq!(
+            flat_tex.mip_level_count(),
+            1,
+            "undeclared resource stays flat"
+        );
 
         // And the declared id, re-acquired, DOES recycle its own bucket.
         let reacquired = b.acquire(ResourceId(0), PortType::Texture2D, None, (64, 64));
@@ -1360,10 +1454,7 @@ mod array_buffer_tests {
 
         b.drop_all_resources();
 
-        assert!(
-            b.texture_3d(slot).is_none(),
-            "3D texture should be dropped",
-        );
+        assert!(b.texture_3d(slot).is_none(), "3D texture should be dropped",);
     }
 
     #[test]
@@ -1541,20 +1632,38 @@ mod alias_tests {
         let src_key = b.array_buffer(src).unwrap().identity_key();
         let dst_key = b.array_buffer(dst).unwrap().identity_key();
         let counts = buffer(4);
-        let extent = |bound| crate::scene::live_extent::LiveExtent { counts: counts.clone(), offset: 0, per_item: 3, bound };
+        let extent = |bound| crate::scene::live_extent::LiveExtent {
+            counts: counts.clone(),
+            offset: 0,
+            per_item: 3,
+            bound,
+        };
         b.set_live_extent(src, extent(7));
         b.set_live_extent(dst, extent(0));
 
         assert!(b.alias_array(src, dst));
-        assert_eq!(Backend::array_buffer(&b, dst).unwrap().identity_key(), src_key);
+        assert_eq!(
+            Backend::array_buffer(&b, dst).unwrap().identity_key(),
+            src_key
+        );
         assert_eq!(b.array_buffer(dst).unwrap().identity_key(), src_key);
         let seen = b.live_extent(dst).expect("src extent");
-        assert_eq!((seen.counts.identity_key(), seen.per_item, seen.bound), (counts.identity_key(), 3, 7));
+        assert_eq!(
+            (seen.counts.identity_key(), seen.per_item, seen.bound),
+            (counts.identity_key(), 3, 7)
+        );
 
         assert!(b.alias_array(dst, next), "a switch reading a switch");
-        assert_eq!(b.array_buffer(next).unwrap().identity_key(), src_key, "resolves to the root");
+        assert_eq!(
+            b.array_buffer(next).unwrap().identity_key(),
+            src_key,
+            "resolves to the root"
+        );
         assert!(!b.alias_array(src, src));
-        assert!(!b.alias_array(src, Slot(999)), "no alias onto an unbound slot");
+        assert!(
+            !b.alias_array(src, Slot(999)),
+            "no alias onto an unbound slot"
+        );
 
         b.clear_skip_aliases();
         assert_eq!(b.array_buffer(dst).unwrap().identity_key(), dst_key);

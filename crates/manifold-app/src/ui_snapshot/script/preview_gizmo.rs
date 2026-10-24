@@ -32,17 +32,31 @@ impl RunnerGizmo {
         self.overlay.set_layer(gizmo_layer.clone());
         if gizmo_layer.is_some() {
             self.overlay_frame += 1;
-            self.overlay.record(0, self.overlay_frame, |_, _, _, _| Some((manifold_core::NodeId::new("scene"), stand_in_camera())));
+            self.overlay.record(0, self.overlay_frame, |_, _, _, _| {
+                Some((manifold_core::NodeId::new("scene"), stand_in_camera()))
+            });
         }
         data.content.physics_overlay_frames = self.overlay.frames.clone();
     }
 
     /// The preview host's present-time read of the report: no bridge here,
     /// so the newest entry is the one shown.
-    pub(super) fn present(&mut self, ui: &UIRoot, data: &SceneData, stamps: &manifold_core::change::PartStamps) {
-        self.host.show(data.content.physics_overlay_frames[0].as_ref(), preview_dims(&data.project), None);
-        let _ = self.host.refresh(&data.project, &ui.scene_setup_panel, stamps);
-        self.grips = preview_fit(ui, &data.project).map_or_else(Vec::new, |fit| self.host.grips(fit));
+    pub(super) fn present(
+        &mut self,
+        ui: &UIRoot,
+        data: &SceneData,
+        stamps: &manifold_core::change::PartStamps,
+    ) {
+        self.host.show(
+            data.content.physics_overlay_frames[0].as_ref(),
+            preview_dims(&data.project),
+            None,
+        );
+        let _ = self
+            .host
+            .refresh(&data.project, &ui.scene_setup_panel, stamps);
+        self.grips =
+            preview_fit(ui, &data.project).map_or_else(Vec::new, |fit| self.host.grips(fit));
     }
 }
 
@@ -58,7 +72,11 @@ impl Runner {
     ) -> bool {
         let fit = preview_fit(ui, &data.project);
         let mut dctx = crate::ui_bridge::DispatchCtx {
-            project: crate::ui_bridge::ProjectRef::new(&mut data.project, &mut self.edits, &self.content_tx),
+            project: crate::ui_bridge::ProjectRef::new(
+                &mut data.project,
+                &mut self.edits,
+                &self.content_tx,
+            ),
             content_tx: &self.content_tx,
             content_state: &self.content_state,
             ui: &mut *ui,
@@ -76,7 +94,10 @@ impl Runner {
 /// The render size the preview shows: the project's output, as the App's
 /// content pipeline renders it.
 fn preview_dims(project: &Project) -> (u32, u32) {
-    (project.settings.output_width.max(1) as u32, project.settings.output_height.max(1) as u32)
+    (
+        project.settings.output_width.max(1) as u32,
+        project.settings.output_height.max(1) as u32,
+    )
 }
 
 /// Where the show picture sits in the main window, fitted as the App's

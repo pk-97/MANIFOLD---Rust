@@ -1,5 +1,5 @@
 use super::*;
-use manifold_physics::{input::EventStamp, TickStamp};
+use manifold_physics::{TickStamp, input::EventStamp};
 
 fn bodies() -> Vec<Option<RigidBody>> {
     let mut bodies = vec![None; 64];
@@ -15,7 +15,23 @@ fn advance<C: StepCoupling>(
 ) -> Result<(), String> {
     let mut targeted: Vec<Option<FieldValue>> = vec![None; 65];
     targeted[0] = Some(FieldValue::uniform([0.0, 0.0, 4.0]).unwrap());
-    simulation.advance_with_coupling(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0, -2.0, 0.0], Some(FieldValue::uniform([3.0, 0.0, 0.0]).unwrap()), &targeted), PlayedTime::from_played(time), 1.0, 0.0, coupling)
+    simulation.advance_with_coupling(
+        &copies_scene(
+            &bodies,
+            None,
+            0.0,
+            1.25,
+            16.0,
+            0.0,
+            [0.0, -2.0, 0.0],
+            Some(FieldValue::uniform([3.0, 0.0, 0.0]).unwrap()),
+            &targeted,
+        ),
+        PlayedTime::from_played(time),
+        1.0,
+        0.0,
+        coupling,
+    )
 }
 
 struct Probe {
@@ -159,7 +175,13 @@ fn advance_capture<C: StepCoupling>(
     speed: f32,
     coupling: &mut C,
 ) -> Result<(), String> {
-    simulation.advance_with_coupling(&copies_scene(&bodies, prototype, 2.0, 1.25, 2.0, 0.0, [0.0; 3], None, &[]), PlayedTime::from_played(time), speed, 0.0, coupling)
+    simulation.advance_with_coupling(
+        &copies_scene(&bodies, prototype, 2.0, 1.25, 2.0, 0.0, [0.0; 3], None, &[]),
+        PlayedTime::from_played(time),
+        speed,
+        0.0,
+        coupling,
+    )
 }
 
 fn fixture() -> (RigidSimulation, Probe) {
@@ -221,10 +243,12 @@ fn scene_physics_coupled_substeps_reuse_forces_and_consume_edge_once() {
             .collect::<Vec<_>>(),
         [0, 1]
     );
-    assert!(probe
-        .stamps
-        .iter()
-        .all(|stamp| Some(stamp.epoch) == simulation.impulse_epoch()));
+    assert!(
+        probe
+            .stamps
+            .iter()
+            .all(|stamp| Some(stamp.epoch) == simulation.impulse_epoch())
+    );
     assert_eq!(simulation.impulse_receipts.len(), 1);
     assert_eq!(simulation.physics_time, FIXED_TICK.0 * 2.0);
 }
@@ -253,7 +277,10 @@ fn scene_physics_coupling_capture_publishes_accepted_span_and_paused_edit() {
     let mut bodies = vec![None; 64];
     let animated = RigidBody {
         kind: 2,
-        transform: Transform { pos: [-2.0, 0.0, 0.0], ..Transform::default() },
+        transform: Transform {
+            pos: [-2.0, 0.0, 0.0],
+            ..Transform::default()
+        },
         ..RigidBody::default()
     };
     bodies[0] = Some(animated.clone());
@@ -271,7 +298,8 @@ fn scene_physics_coupling_capture_publishes_accepted_span_and_paused_edit() {
     )
     .unwrap();
     let body = simulation.handles[0].unwrap();
-    let copies: Vec<_> = simulation.native_copy_handles(0)
+    let copies: Vec<_> = simulation
+        .native_copy_handles(0)
         .iter()
         .copied()
         .flatten()
@@ -357,8 +385,10 @@ fn scene_physics_coupling_capture_publishes_accepted_span_and_paused_edit() {
     assert_eq!(capture.publications.len(), 3);
     assert_eq!(capture.publications[2].stamp.tick, 2);
     assert_eq!(simulation.pending_time, Seconds::ZERO);
-    assert_eq!(simulation.physics_time,
-        FIXED_TICK.0 * 2.0 + (FIXED_TICK.0 * 4.0 - FIXED_TICK.0 * 3.0));
+    assert_eq!(
+        simulation.physics_time,
+        FIXED_TICK.0 * 2.0 + (FIXED_TICK.0 * 4.0 - FIXED_TICK.0 * 3.0)
+    );
     assert!((capture.publications[2].body_position[0] - 5.0).abs() < 1.0e-5);
     for (captured, expected) in capture.publications[2]
         .copy_positions
@@ -509,7 +539,12 @@ fn fluid_trace(times: &[f64], origin: [f32; 3]) -> (Transform, [f32; 3]) {
     });
     let mut simulation = RigidSimulation::default();
     simulation
-        .advance_scene(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], None, &[]), PlayedTime::ZERO, 1.0, 0.0)
+        .advance_scene(
+            &copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], None, &[]),
+            PlayedTime::ZERO,
+            1.0,
+            0.0,
+        )
         .unwrap();
     let handle = simulation.handles[0].unwrap();
     let world = simulation.world.as_ref().unwrap();
@@ -577,7 +612,13 @@ fn fluid_trace(times: &[f64], origin: [f32; 3]) -> (Transform, [f32; 3]) {
         .unwrap();
     for &time in times {
         simulation
-            .advance_with_coupling(&copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], None, &[]), PlayedTime::from_played(time), 1.0, 0.0, &mut companion)
+            .advance_with_coupling(
+                &copies_scene(&bodies, None, 0.0, 1.25, 16.0, 0.0, [0.0; 3], None, &[]),
+                PlayedTime::from_played(time),
+                1.0,
+                0.0,
+                &mut companion,
+            )
             .unwrap();
     }
     assert_eq!(companion.stamps.len(), 3);

@@ -1,8 +1,8 @@
 //! Buffer extent rule owned by this node.
+use crate::extent::PARTICLE;
 use crate::primitives::liquid_stats::LIQUID_STATS_WORDS;
 use crate::primitives::liquid_stats::partial_bytes;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::extent::PARTICLE;
 
 fn liquid_stats(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let count = x.count("count", 0.0)?;

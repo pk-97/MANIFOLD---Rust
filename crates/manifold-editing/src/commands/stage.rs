@@ -31,7 +31,9 @@ impl AddDisplayPlacementCommand {
 }
 
 impl Command for AddDisplayPlacementCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Led])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         project
             .settings
@@ -69,7 +71,9 @@ impl RemoveDisplayPlacementCommand {
 }
 
 impl Command for RemoveDisplayPlacementCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Led])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let placements = &mut project.settings.stage_layout.placements;
         if let Some(pos) = placements.iter().position(|p| p.id == self.id) {
@@ -110,7 +114,9 @@ impl RenameDisplayPlacementCommand {
 }
 
 impl Command for RenameDisplayPlacementCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Led])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.name = self.new_name.clone();
@@ -158,7 +164,9 @@ impl SetDisplayPlacementTransformCommand {
 }
 
 impl Command for SetDisplayPlacementTransformCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Led])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.position_mm = self.new_position_mm;
@@ -198,7 +206,9 @@ impl SetDisplayPhysicalSizeCommand {
 }
 
 impl Command for SetDisplayPhysicalSizeCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Led])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.physical_size_mm = self.new_size_mm;
@@ -235,7 +245,9 @@ impl SetDisplayNativeResolutionCommand {
 }
 
 impl Command for SetDisplayNativeResolutionCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Led])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.native_resolution = self.new_resolution;
@@ -273,7 +285,9 @@ impl SetDisplayEnabledCommand {
 }
 
 impl Command for SetDisplayEnabledCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Led])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.enabled = self.new_enabled;
@@ -315,7 +329,9 @@ impl SetDisplayIdentityCommand {
 }
 
 impl Command for SetDisplayIdentityCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Led])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.identity = self.new_identity.clone();
@@ -350,7 +366,9 @@ impl SetDisplayAdvancedCommand {
 }
 
 impl Command for SetDisplayAdvancedCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Led])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.advanced = self.new.clone();
@@ -421,7 +439,11 @@ mod tests {
 
     fn one_placement() -> Project {
         let mut project = Project::default();
-        project.settings.stage_layout.placements.push(sample_placement(0));
+        project
+            .settings
+            .stage_layout
+            .placements
+            .push(sample_placement(0));
         project
     }
 
@@ -432,51 +454,97 @@ mod tests {
     #[test]
     fn placement_setters_undo_and_redo_restore_the_whole_project() {
         use crate::commands::setter_roundtrip::{SetterCase, assert_setter_cases};
-        assert_setter_cases(one_placement, &[
-            SetterCase {
-                name: "rename",
-                build: |_| Box::new(RenameDisplayPlacementCommand::new(ID, "Totem 0".into(), "Totem L".into())),
-                applied: |p| placement(p).name == "Totem L",
-            },
-            SetterCase {
-                name: "transform",
-                build: |_| Box::new(SetDisplayPlacementTransformCommand::new(
-                    ID, [0.0, 0.0], Rotation::R0, [3500.0, 0.0], Rotation::R90,
-                )),
-                applied: |p| placement(p).position_mm == [3500.0, 0.0] && placement(p).rotation == Rotation::R90,
-            },
-            SetterCase {
-                name: "physical size",
-                build: |_| Box::new(SetDisplayPhysicalSizeCommand::new(ID, [500.0, 1000.0], [540.0, 960.0])),
-                applied: |p| placement(p).physical_size_mm == [540.0, 960.0],
-            },
-            SetterCase {
-                name: "native resolution",
-                build: |_| Box::new(SetDisplayNativeResolutionCommand::new(ID, [1080, 1920], [2160, 3840])),
-                applied: |p| placement(p).native_resolution == [2160, 3840],
-            },
-            SetterCase {
-                name: "enabled",
-                build: |_| Box::new(SetDisplayEnabledCommand::new(ID, true, false)),
-                applied: |p| !placement(p).enabled,
-            },
-            SetterCase {
-                name: "identity",
-                build: |_| Box::new(SetDisplayIdentityCommand::new(ID, None, Some(DisplayIdentity {
-                    uuid: Some("ABC-123".into()),
-                    name: "Totem L".into(),
-                }))),
-                applied: |p| placement(p).identity.as_ref().is_some_and(|i| i.name == "Totem L"),
-            },
-            SetterCase {
-                name: "advanced",
-                build: |_| Box::new(SetDisplayAdvancedCommand::new(
-                    ID,
-                    OutputAdvanced::default(),
-                    OutputAdvanced { density_cap_px_per_mm: Some(2.0), ..Default::default() },
-                )),
-                applied: |p| placement(p).advanced.density_cap_px_per_mm == Some(2.0),
-            },
-        ]);
+        assert_setter_cases(
+            one_placement,
+            &[
+                SetterCase {
+                    name: "rename",
+                    build: |_| {
+                        Box::new(RenameDisplayPlacementCommand::new(
+                            ID,
+                            "Totem 0".into(),
+                            "Totem L".into(),
+                        ))
+                    },
+                    applied: |p| placement(p).name == "Totem L",
+                },
+                SetterCase {
+                    name: "transform",
+                    build: |_| {
+                        Box::new(SetDisplayPlacementTransformCommand::new(
+                            ID,
+                            [0.0, 0.0],
+                            Rotation::R0,
+                            [3500.0, 0.0],
+                            Rotation::R90,
+                        ))
+                    },
+                    applied: |p| {
+                        placement(p).position_mm == [3500.0, 0.0]
+                            && placement(p).rotation == Rotation::R90
+                    },
+                },
+                SetterCase {
+                    name: "physical size",
+                    build: |_| {
+                        Box::new(SetDisplayPhysicalSizeCommand::new(
+                            ID,
+                            [500.0, 1000.0],
+                            [540.0, 960.0],
+                        ))
+                    },
+                    applied: |p| placement(p).physical_size_mm == [540.0, 960.0],
+                },
+                SetterCase {
+                    name: "native resolution",
+                    build: |_| {
+                        Box::new(SetDisplayNativeResolutionCommand::new(
+                            ID,
+                            [1080, 1920],
+                            [2160, 3840],
+                        ))
+                    },
+                    applied: |p| placement(p).native_resolution == [2160, 3840],
+                },
+                SetterCase {
+                    name: "enabled",
+                    build: |_| Box::new(SetDisplayEnabledCommand::new(ID, true, false)),
+                    applied: |p| !placement(p).enabled,
+                },
+                SetterCase {
+                    name: "identity",
+                    build: |_| {
+                        Box::new(SetDisplayIdentityCommand::new(
+                            ID,
+                            None,
+                            Some(DisplayIdentity {
+                                uuid: Some("ABC-123".into()),
+                                name: "Totem L".into(),
+                            }),
+                        ))
+                    },
+                    applied: |p| {
+                        placement(p)
+                            .identity
+                            .as_ref()
+                            .is_some_and(|i| i.name == "Totem L")
+                    },
+                },
+                SetterCase {
+                    name: "advanced",
+                    build: |_| {
+                        Box::new(SetDisplayAdvancedCommand::new(
+                            ID,
+                            OutputAdvanced::default(),
+                            OutputAdvanced {
+                                density_cap_px_per_mm: Some(2.0),
+                                ..Default::default()
+                            },
+                        ))
+                    },
+                    applied: |p| placement(p).advanced.density_cap_px_per_mm == Some(2.0),
+                },
+            ],
+        );
     }
 }

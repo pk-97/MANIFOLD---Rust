@@ -20,10 +20,20 @@ pub enum PhysicsGizmoFamily {
 pub enum PhysicsGizmoShape {
     /// An oriented box: centre, half extents, and the unit quaternion (xyzw)
     /// that turns its local axes into world ones.
-    Box { center: [f32; 3], half: [f32; 3], rotation: [f32; 4] },
+    Box {
+        center: [f32; 3],
+        half: [f32; 3],
+        rotation: [f32; 4],
+    },
     /// A sphere around a position marker.
-    Sphere { center: [f32; 3], radius: f32 },
-    Arrow { from: [f32; 3], to: [f32; 3] },
+    Sphere {
+        center: [f32; 3],
+        radius: f32,
+    },
+    Arrow {
+        from: [f32; 3],
+        to: [f32; 3],
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -37,6 +47,13 @@ impl PhysicsGizmo {
     pub fn aabb(family: PhysicsGizmoFamily, min: [f32; 3], max: [f32; 3]) -> Self {
         let center = std::array::from_fn(|i| 0.5 * (min[i] + max[i]));
         let half = std::array::from_fn(|i| 0.5 * (max[i] - min[i]));
-        Self { family, shape: PhysicsGizmoShape::Box { center, half, rotation: [0.0, 0.0, 0.0, 1.0] } }
+        Self {
+            family,
+            shape: PhysicsGizmoShape::Box {
+                center,
+                half,
+                rotation: [0.0, 0.0, 0.0, 1.0],
+            },
+        }
     }
 }

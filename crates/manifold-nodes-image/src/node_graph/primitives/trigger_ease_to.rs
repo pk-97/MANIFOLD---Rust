@@ -32,9 +32,13 @@
 
 use std::borrow::Cow;
 
-use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, NodeRequires};
+use manifold_node_engine::exec::effect_node::{
+    EffectNode, EffectNodeContext, EffectNodeType, NodeRequires,
+};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use manifold_node_engine::ports::{
+    NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+};
 use manifold_node_engine::state_store::NodeState;
 
 pub const TRIGGER_EASE_TO_TYPE_ID: &str = "node.trigger_ease_to";
@@ -277,15 +281,17 @@ mod tests {
     use super::*;
     use std::borrow::Cow;
 
-    use manifold_node_engine::exec::backend::Backend;
+    use manifold_core::{Beats, Seconds};
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs};
-    use manifold_node_engine::exec::effect_node::{EffectNode, FrameTime, NodeInstanceId, ParamValues, RtQuality};
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::exec::backend::MockBackend;
+    use manifold_node_engine::exec::effect_node::{
+        EffectNode, FrameTime, NodeInstanceId, ParamValues, RtQuality,
+    };
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::parameters::ParamValue;
     use manifold_node_engine::ports::PortType;
     use manifold_node_engine::state_store::StateStore;
-    use manifold_node_engine::exec::backend::MockBackend;
-    use manifold_core::{Beats, Seconds};
 
     fn frame_time(beat: f32) -> FrameTime {
         FrameTime {

@@ -45,10 +45,10 @@
 
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 
 use manifold_nodes_scene::testkit::gpu_harness as harness;
 
@@ -171,7 +171,9 @@ fn render_until_lit(
     let mut frac = 0.0f64;
     // Frames rendered while the rerun build is in flight don't count toward
     // the budget: that window's length depends on machine load.
-    let wait = manifold_node_engine::testkit::gpu_harness::BackgroundWait::new(format!("bug-majv {phase}"));
+    let wait = manifold_node_engine::testkit::gpu_harness::BackgroundWait::new(format!(
+        "bug-majv {phase}"
+    ));
     let mut settled = 0;
     let mut next = start_frame;
     while settled < POLL_BUDGET_FRAMES {
@@ -189,7 +191,9 @@ fn render_until_lit(
             if frac >= LIT_FRACTION_THRESHOLD {
                 eprintln!(
                     "[bug-majv] {phase}: frame={f}, lit={frac:.4}, luma={:.4}, io_pending={}, warmup_pending={}",
-                    mean_luma(&px), runtime.io_pending(), runtime.warmup_pending(),
+                    mean_luma(&px),
+                    runtime.io_pending(),
+                    runtime.warmup_pending(),
                 );
                 return (px, f);
             }
@@ -229,7 +233,10 @@ fn rt_kernel_toggle_sequence_preserves_raster_base() {
         Some(&manifest),
     )
     .expect("helmet def must build a runtime");
-    manifold_node_engine::testkit::gpu_harness::assert_no_shadowed_def_params(&runtime, "bug-majv helmet import");
+    manifold_node_engine::testkit::gpu_harness::assert_no_shadowed_def_params(
+        &runtime,
+        "bug-majv helmet import",
+    );
 
     let target = h.make_target("bugmajv-helmet");
     // Converge the RT accumulation with all kernels on at view A.
@@ -246,7 +253,8 @@ fn rt_kernel_toggle_sequence_preserves_raster_base() {
     let mut settled = 0;
     while settled < POLL_BUDGET_FRAMES {
         f += 1;
-        let caps = harness::capture_rt_channels(|| frame(&mut runtime, h, &target.texture, f, &manifest));
+        let caps =
+            harness::capture_rt_channels(|| frame(&mut runtime, h, &target.texture, f, &manifest));
         if !caps.is_empty() {
             dispatched = true;
             break;
@@ -276,19 +284,41 @@ fn rt_kernel_toggle_sequence_preserves_raster_base() {
 
     // All four comparisons happen at view B. RT on + kernels off must be
     // exactly the raster image, before and after the off→on cycle.
-    let (kernels_off, next) = render_until_lit(&mut runtime, h, &target.texture, &manifest, f, "kernels_off");
+    let (kernels_off, next) = render_until_lit(
+        &mut runtime,
+        h,
+        &target.texture,
+        &manifest,
+        f,
+        "kernels_off",
+    );
     f = next + 1;
 
     set_card(&mut manifest, ".rt_enabled", false);
-    let (raster_ref, next) = render_until_lit(&mut runtime, h, &target.texture, &manifest, f, "raster_ref");
+    let (raster_ref, next) =
+        render_until_lit(&mut runtime, h, &target.texture, &manifest, f, "raster_ref");
     f = next + 1;
 
     set_card(&mut manifest, ".rt_enabled", true);
-    let (resurrected, next) = render_until_lit(&mut runtime, h, &target.texture, &manifest, f, "resurrected");
+    let (resurrected, next) = render_until_lit(
+        &mut runtime,
+        h,
+        &target.texture,
+        &manifest,
+        f,
+        "resurrected",
+    );
     f = next + 1;
 
     set_card(&mut manifest, ".rt_enabled", false);
-    let (raster_ref2, _next) = render_until_lit(&mut runtime, h, &target.texture, &manifest, f, "raster_ref2");
+    let (raster_ref2, _next) = render_until_lit(
+        &mut runtime,
+        h,
+        &target.texture,
+        &manifest,
+        f,
+        "raster_ref2",
+    );
 
     let luma_ref = mean_luma(&raster_ref);
     let luma_ref2 = mean_luma(&raster_ref2);
@@ -304,8 +334,14 @@ fn rt_kernel_toggle_sequence_preserves_raster_base() {
         "[bug-majv] luma: raster_ref {luma_ref:.4}, kernels_off {luma_kernels_off:.4}, resurrected {luma_resurrected:.4}, raster_ref2 {luma_ref2:.4}; \
          diff: kernels_off {diff_kernels_off:.4}, resurrected {diff_resurrected:.4}"
     );
-    assert!(luma_ref > 1e-3, "raster reference must not be black ({luma_ref})");
-    assert!(luma_ref2 > 1e-3, "second raster reference must not be black ({luma_ref2})");
+    assert!(
+        luma_ref > 1e-3,
+        "raster reference must not be black ({luma_ref})"
+    );
+    assert!(
+        luma_ref2 > 1e-3,
+        "second raster reference must not be black ({luma_ref2})"
+    );
     for (label, luma, reference) in [
         ("kernels_off", luma_kernels_off, luma_ref),
         ("resurrected", luma_resurrected, luma_ref2),
@@ -321,7 +357,10 @@ fn rt_kernel_toggle_sequence_preserves_raster_base() {
     // image of the current view. Catches any regression where a dead
     // (zeroed/unwritten) channel is read; the stale-but-valid case is
     // second-order by design (module doc's discrimination note).
-    for (label, diff) in [("kernels_off", diff_kernels_off), ("resurrected", diff_resurrected)] {
+    for (label, diff) in [
+        ("kernels_off", diff_kernels_off),
+        ("resurrected", diff_resurrected),
+    ] {
         assert!(
             diff < 0.02,
             "BUG-majv: {label} frame is not the raster image — mean_abs_diff vs same-view raster {diff:.4}; \

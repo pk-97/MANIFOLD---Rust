@@ -56,18 +56,32 @@ impl FrameRing {
     /// replaced with fresh shared storage (capture and look metrics read
     /// frames back), and the previous frame then counts as empty. A ring the
     /// device cannot give is refused and the old slots stay.
-    pub fn begin(&mut self, device: &GpuDevice, bytes: u64, epoch: u32) -> Result<RingWrite, String> {
+    pub fn begin(
+        &mut self,
+        device: &GpuDevice,
+        bytes: u64,
+        epoch: u32,
+    ) -> Result<RingWrite, String> {
         let mut grown = false;
         if self.slots.len() < RING || self.slots.iter().any(|s| s.size < bytes) {
-            manifold_node_engine::load::expand::admit_candidate_bytes(device.modifier_memory_snapshot(), RING as u64 * bytes)
-                .map_err(|error| error.to_string())?;
-            self.slots = (0..RING).map(|_| device.try_create_buffer_shared(bytes)).collect::<Result<_, _>>()?;
+            manifold_node_engine::load::expand::admit_candidate_bytes(
+                device.modifier_memory_snapshot(),
+                RING as u64 * bytes,
+            )
+            .map_err(|error| error.to_string())?;
+            self.slots = (0..RING)
+                .map(|_| device.try_create_buffer_shared(bytes))
+                .collect::<Result<_, _>>()?;
             self.counts = [0; RING];
             self.epoch = None;
             grown = true;
         }
         let write = (0..RING).find(|&i| i != self.a && i != self.b).unwrap_or(0);
-        let write = if self.a == self.b { (self.b + 1) % RING } else { write };
+        let write = if self.a == self.b {
+            (self.b + 1) % RING
+        } else {
+            write
+        };
         let previous = self.b;
         Ok(RingWrite {
             write,
@@ -88,7 +102,14 @@ impl FrameRing {
         self.finish_identity(write, count, epoch, epoch, simulation_time);
     }
 
-    pub fn finish_identity(&mut self, write: RingWrite, count: u32, epoch: u32, identity: u32, simulation_time: f64) {
+    pub fn finish_identity(
+        &mut self,
+        write: RingWrite,
+        count: u32,
+        epoch: u32,
+        identity: u32,
+        simulation_time: f64,
+    ) {
         let identity_changed = self.identities[self.b] != identity;
         self.counts[write.write] = count;
         self.identities[write.write] = identity;
@@ -105,8 +126,16 @@ impl FrameRing {
     }
 
     /// Rejected work never advances the accepted timestamp or pair.
-    pub fn retire(&mut self, write: RingWrite, metadata: &[u32], epoch: u32, simulation_time: f64) -> bool {
-        if metadata[2] == 0 { return false; }
+    pub fn retire(
+        &mut self,
+        write: RingWrite,
+        metadata: &[u32],
+        epoch: u32,
+        simulation_time: f64,
+    ) -> bool {
+        if metadata[2] == 0 {
+            return false;
+        }
         self.finish_identity(write, metadata[0], epoch, metadata[1], simulation_time);
         true
     }
@@ -136,8 +165,12 @@ impl FrameRing {
         self.counts[self.b]
     }
 
-    pub fn identity_a(&self) -> u32 { self.identities[self.a] }
-    pub fn identity_b(&self) -> u32 { self.identities[self.b] }
+    pub fn identity_a(&self) -> u32 {
+        self.identities[self.a]
+    }
+    pub fn identity_b(&self) -> u32 {
+        self.identities[self.b]
+    }
 
     /// The display blend and span at `display_time` (surface design D10).
     pub fn blend(&self, display_time: f64) -> (f32, f32) {
@@ -205,17 +238,35 @@ mod tests {
         let mut ring = FrameRing::default();
         publish(&mut ring, 1.0, 7, 3, true);
         publish(&mut ring, 2.0, 7, 4, false);
-        let write = RingWrite { write: 0, previous: ring.b(), previous_count: 4, grown: false, restarted: false };
+        let write = RingWrite {
+            write: 0,
+            previous: ring.b(),
+            previous_count: 4,
+            grown: false,
+            restarted: false,
+        };
         ring.finish_identity(write, 2, 7, 8, 3.0);
         assert_eq!(ring.a(), ring.b());
         assert_eq!((ring.identity_a(), ring.identity_b()), (8, 8));
         assert_eq!(ring.blend(2.5), (1.0, 0.0));
-        let write = RingWrite { write: 1, previous: ring.b(), previous_count: 2, grown: false, restarted: false };
+        let write = RingWrite {
+            write: 1,
+            previous: ring.b(),
+            previous_count: 2,
+            grown: false,
+            restarted: false,
+        };
         ring.finish_identity(write, 3, 7, 8, 4.0);
         assert_ne!(ring.a(), ring.b());
         assert_eq!(ring.blend(3.5), (0.5, 1.0));
         assert_eq!((ring.count_a(), ring.count_b()), (2, 3));
-        let rejected = RingWrite { write: 2, previous: ring.b(), previous_count: 3, grown: false, restarted: false };
+        let rejected = RingWrite {
+            write: 2,
+            previous: ring.b(),
+            previous_count: 3,
+            grown: false,
+            restarted: false,
+        };
         assert!(!ring.retire(rejected, &[9, 8, 0, 0], 7, 5.0));
         assert_eq!(ring.blend(3.5), (0.5, 1.0));
         assert!(ring.wants_tick(7, 5.0));

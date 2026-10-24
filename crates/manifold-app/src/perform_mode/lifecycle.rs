@@ -31,10 +31,17 @@ impl Application {
                     self.open_output_window(event_loop, "Output", display_index, false);
                 }
                 if self.window_registry.has_output_window() {
-                    let held_pointer = self.mouse_pressed.then_some((self.cursor_pos, self.time_since_start));
+                    let held_pointer = self
+                        .mouse_pressed
+                        .then_some((self.cursor_pos, self.time_since_start));
                     self.release_preview_pointer();
                     // Entry clears the HUD's shown inputs, so its first frame draws.
-                    super::frame::enter(&mut self.perform, &mut self.ws.ui_root, &mut self.text_input, held_pointer);
+                    super::frame::enter(
+                        &mut self.perform,
+                        &mut self.ws.ui_root,
+                        &mut self.text_input,
+                        held_pointer,
+                    );
                     // Entry switched Show gizmos off; the content thread stops reporting.
                     self.sync_gizmo_layer();
                     self.mouse_pressed = false;
@@ -47,7 +54,11 @@ impl Application {
             }
         }
 
-        if super::frame::take_pending_exit(&mut self.perform, &mut self.ws.ui_root, self.ui_cache_manager.as_mut()) {
+        if super::frame::take_pending_exit(
+            &mut self.perform,
+            &mut self.ws.ui_root,
+            self.ui_cache_manager.as_mut(),
+        ) {
             // The planner compares against the last normal frame's inputs,
             // so whatever moved during the set re-projects on the first frame
             // back; the exit marks the whole tree dirty, so that frame

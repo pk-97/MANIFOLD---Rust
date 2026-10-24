@@ -33,10 +33,10 @@
 
 use std::borrow::Cow;
 
-use manifold_node_engine::scene::camera::{Camera, LensParams};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::camera::{Camera, LensParams};
 
 manifold_node_engine::primitive! {
     name: CameraLens,
@@ -145,13 +145,13 @@ mod run_tests {
     //! (shutter 180 default), (c) a wired scalar overrides its same-named
     //! param (port-shadow precedence, D4).
     use super::*;
-    use manifold_node_engine::exec::backend::MockBackend;
-    use manifold_node_engine::exec::backend::Backend;
+    use manifold_core::{Beats, Seconds};
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::exec::backend::MockBackend;
     use manifold_node_engine::exec::effect_node::{FrameTime, ParamValues};
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::ports::PortType;
-    use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -198,7 +198,9 @@ mod run_tests {
         for &(name, value) in wires {
             let slot = backend.acquire(
                 ResourceId(next_id),
-                manifold_node_engine::ports::PortType::Scalar(manifold_node_engine::ports::ScalarType::F32),
+                manifold_node_engine::ports::PortType::Scalar(
+                    manifold_node_engine::ports::ScalarType::F32,
+                ),
                 None,
                 (0, 0),
             );
@@ -293,7 +295,10 @@ mod run_tests {
         // (port-shadows-param, D4).
         let input_cam = Camera::default_perspective();
         let out = run_camera_lens(input_cam, &[("exposure_ev", 1.0)], &[("exposure_ev", 3.0)]);
-        assert_eq!(out.lens.exposure_ev, 3.0, "wired exposure_ev should override the param");
+        assert_eq!(
+            out.lens.exposure_ev, 3.0,
+            "wired exposure_ev should override the param"
+        );
         // Untouched siblings keep their param/default values.
         assert_eq!(out.lens.focus_distance, 0.0);
         assert_eq!(out.lens.shutter_angle, 180.0);
@@ -303,6 +308,9 @@ mod run_tests {
     fn wired_f_stop_overrides_its_same_named_param() {
         let input_cam = Camera::default_perspective();
         let out = run_camera_lens(input_cam, &[("f_stop", 4.0)], &[("f_stop", 22.0)]);
-        assert_eq!(out.lens.f_stop, 22.0, "wired f_stop should override the param");
+        assert_eq!(
+            out.lens.f_stop, 22.0,
+            "wired f_stop should override the param"
+        );
     }
 }

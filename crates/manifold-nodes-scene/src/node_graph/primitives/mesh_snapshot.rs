@@ -11,17 +11,23 @@
 //! pattern later phases reuse.
 
 use manifold_core::{Beats, Seconds};
-use manifold_gpu::{
-    GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+use manifold_gpu::{GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
+
+use manifold_node_engine::exec::execution_plan::ResourceId;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::{
+    exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+    exec::execution_plan::compile, exec::metal_backend::MetalBackend, graph::Graph,
+    parameters::ParamValue, scene::boundary_nodes::FinalOutput,
 };
 
-use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::mesh::MeshVertex;
-use manifold_node_engine::exec::execution_plan::ResourceId;
-use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::execution_plan::compile};
-use manifold_node_engine::gpu::render_target::RenderTarget;
-
-use crate::node_graph::primitives::{bake_equirect_envmap::BakeEquirectEnvmap, camera_orbit::CameraOrbit, generate_cube_mesh::GenerateCubeMesh, light::LightNode, pbr_material::PbrMaterial, render_3d_mesh::Render3DMesh};
+use crate::node_graph::primitives::{
+    bake_equirect_envmap::BakeEquirectEnvmap, camera_orbit::CameraOrbit,
+    generate_cube_mesh::GenerateCubeMesh, light::LightNode, pbr_material::PbrMaterial,
+    render_3d_mesh::Render3DMesh,
+};
 
 fn frame_time() -> FrameTime {
     FrameTime {
@@ -58,11 +64,7 @@ fn half_to_f32(h: u16) -> f32 {
     let mag = if exp == 0 {
         (mant as f32) * 2f32.powi(-24)
     } else if exp == 0x1f {
-        if mant == 0 {
-            f32::INFINITY
-        } else {
-            f32::NAN
-        }
+        if mant == 0 { f32::INFINITY } else { f32::NAN }
     } else {
         (1.0 + (mant as f32) / 1024.0) * 2f32.powi(exp as i32 - 15)
     };
@@ -77,12 +79,17 @@ fn half_to_f32(h: u16) -> f32 {
 // can assert on values, not just non-blackness.
 // ============================================================================
 
-use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
+use crate::node_graph::primitives::scene_object::SceneObjectNode;
+use crate::node_graph::primitives::{
+    cel_material::CelMaterial, render_scene::RenderScene, transform_3d::Transform3D,
+    unlit_material::UnlitMaterial,
+};
+use manifold_node_engine::exec::effect_node::{
+    EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
+};
 use manifold_node_engine::parameters::ParamDef;
 use manifold_node_engine::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use manifold_node_engine::scene::boundary_nodes::Source;
-use crate::node_graph::primitives::scene_object::SceneObjectNode;
-use crate::node_graph::primitives::{cel_material::CelMaterial, render_scene::RenderScene, transform_3d::Transform3D, unlit_material::UnlitMaterial};
 
 /// `Graph::connect` needs a `&'static str` port name; these helpers only
 /// ever address the first handful of scene objects, so a small literal
@@ -106,7 +113,8 @@ fn object_port_name(index: usize) -> &'static str {
 /// of directly into `render`.
 fn add_scene_object(g: &mut Graph, render: NodeInstanceId, index: usize) -> NodeInstanceId {
     let obj = g.add_node(Box::new(SceneObjectNode::new()));
-    g.connect((obj, "object"), (render, object_port_name(index))).unwrap();
+    g.connect((obj, "object"), (render, object_port_name(index)))
+        .unwrap();
     obj
 }
 
@@ -118,7 +126,8 @@ fn add_scene_object(g: &mut Graph, render: NodeInstanceId, index: usize) -> Node
 fn wire_pos_x(g: &mut Graph, scene_object: NodeInstanceId, pos_x: f32) {
     let t = g.add_node(Box::new(Transform3D::new()));
     g.set_param(t, "pos_x", ParamValue::Float(pos_x)).unwrap();
-    g.connect((t, "transform"), (scene_object, "transform")).unwrap();
+    g.connect((t, "transform"), (scene_object, "transform"))
+        .unwrap();
 }
 
 /// Test-only no-op source for `Array<MeshVertex>`. The caller pre-binds a
@@ -147,7 +156,9 @@ impl MeshSource {
 }
 
 impl EffectNode for MeshSource {
-        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+    } // test fixture
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }
@@ -183,8 +194,8 @@ fn quad_verts() -> Vec<MeshVertex> {
         uv: [u, w],
         _pad2: [0.0, 0.0],
         tangent: [0.0; 4],
-            color: [1.0; 4],
-};
+        color: [1.0; 4],
+    };
     vec![
         v(-1.0, -1.0, 0.0, 0.0),
         v(1.0, -1.0, 1.0, 0.0),
@@ -209,8 +220,8 @@ fn back_facing_tri() -> Vec<MeshVertex> {
         uv: [0.5, 0.5],
         _pad2: [0.0, 0.0],
         tangent: [0.0; 4],
-            color: [1.0; 4],
-};
+        color: [1.0; 4],
+    };
     vec![v(-1.0, -1.0), v(1.0, -1.0), v(0.0, 1.0)]
 }
 
@@ -289,7 +300,10 @@ fn render_mesh_scene(
     verts: &[MeshVertex],
     orbit: f32,
     distance: f32,
-    build: impl FnOnce(&mut Graph, NodeInstanceId) -> (NodeInstanceId, Option<(NodeInstanceId, RenderTarget)>),
+    build: impl FnOnce(
+        &mut Graph,
+        NodeInstanceId,
+    ) -> (NodeInstanceId, Option<(NodeInstanceId, RenderTarget)>),
 ) -> Vec<[f32; 4]> {
     let device = manifold_gpu::testkit::test_device();
     let format = GpuTextureFormat::Rgba16Float;
@@ -299,7 +313,8 @@ fn render_mesh_scene(
     let cam = g.add_node(Box::new(CameraOrbit::new()));
     g.set_param(cam, "orbit", ParamValue::Float(orbit)).unwrap();
     g.set_param(cam, "tilt", ParamValue::Float(0.0)).unwrap();
-    g.set_param(cam, "distance", ParamValue::Float(distance)).unwrap();
+    g.set_param(cam, "distance", ParamValue::Float(distance))
+        .unwrap();
     g.set_param(cam, "fov_y", ParamValue::Float(1.0)).unwrap();
     let render = g.add_node(Box::new(Render3DMesh::new()));
     let env = g.add_node(Box::new(BakeEquirectEnvmap::new()));
@@ -374,24 +389,32 @@ fn alpha_mask_cutout_discards_transparent_texels() {
         let device = manifold_gpu::testkit::test_device();
         let map = upload_f16_rgba(&device, cw, ch, &checker);
         drop(device);
-        render_mesh_scene(w, h, &quad_verts(), std::f32::consts::FRAC_PI_2, 4.0, move |g, render| {
-            let mat = g.add_node(Box::new(UnlitMaterial::new()));
-            g.set_param(mat, "color_r", ParamValue::Float(1.0)).unwrap();
-            g.set_param(mat, "color_g", ParamValue::Float(1.0)).unwrap();
-            g.set_param(mat, "color_b", ParamValue::Float(1.0)).unwrap();
-            g.set_param(
-                mat,
-                "alpha_mode",
-                ParamValue::Enum(if mask { 1 } else { 0 }),
-            )
-            .unwrap();
-            g.set_param(mat, "alpha_cutoff", ParamValue::Float(0.5)).unwrap();
-            g.connect((mat, "out"), (render, "material")).unwrap();
+        render_mesh_scene(
+            w,
+            h,
+            &quad_verts(),
+            std::f32::consts::FRAC_PI_2,
+            4.0,
+            move |g, render| {
+                let mat = g.add_node(Box::new(UnlitMaterial::new()));
+                g.set_param(mat, "color_r", ParamValue::Float(1.0)).unwrap();
+                g.set_param(mat, "color_g", ParamValue::Float(1.0)).unwrap();
+                g.set_param(mat, "color_b", ParamValue::Float(1.0)).unwrap();
+                g.set_param(
+                    mat,
+                    "alpha_mode",
+                    ParamValue::Enum(if mask { 1 } else { 0 }),
+                )
+                .unwrap();
+                g.set_param(mat, "alpha_cutoff", ParamValue::Float(0.5))
+                    .unwrap();
+                g.connect((mat, "out"), (render, "material")).unwrap();
 
-            let src = g.add_node(Box::new(Source::new()));
-            g.connect((src, "out"), (render, "base_color_map")).unwrap();
-            (mat, Some((src, map)))
-        })
+                let src = g.add_node(Box::new(Source::new()));
+                g.connect((src, "out"), (render, "base_color_map")).unwrap();
+                (mat, Some((src, map)))
+            },
+        )
     };
 
     let opaque = render_mode(false);
@@ -416,7 +439,10 @@ fn alpha_mask_cutout_discards_transparent_texels() {
         }
     }
 
-    assert!(footprint > 200, "quad should cover a real area, got {footprint}");
+    assert!(
+        footprint > 200,
+        "quad should cover a real area, got {footprint}"
+    );
     assert!(
         saw_transparent_texel,
         "no transparent texel discarded — cutout did not fire"
@@ -447,17 +473,27 @@ fn base_color_map_modulates_albedo() {
     let map = upload_f16_rgba(&device, 2, 2, &[texel; 4]);
     drop(device);
 
-    let out = render_mesh_scene(w, h, &quad_verts(), std::f32::consts::FRAC_PI_2, 4.0, move |g, render| {
-        let mat = g.add_node(Box::new(UnlitMaterial::new()));
-        g.set_param(mat, "color_r", ParamValue::Float(base[0])).unwrap();
-        g.set_param(mat, "color_g", ParamValue::Float(base[1])).unwrap();
-        g.set_param(mat, "color_b", ParamValue::Float(base[2])).unwrap();
-        g.set_param(mat, "color_a", ParamValue::Float(1.0)).unwrap();
-        g.connect((mat, "out"), (render, "material")).unwrap();
-        let src = g.add_node(Box::new(Source::new()));
-        g.connect((src, "out"), (render, "base_color_map")).unwrap();
-        (mat, Some((src, map)))
-    });
+    let out = render_mesh_scene(
+        w,
+        h,
+        &quad_verts(),
+        std::f32::consts::FRAC_PI_2,
+        4.0,
+        move |g, render| {
+            let mat = g.add_node(Box::new(UnlitMaterial::new()));
+            g.set_param(mat, "color_r", ParamValue::Float(base[0]))
+                .unwrap();
+            g.set_param(mat, "color_g", ParamValue::Float(base[1]))
+                .unwrap();
+            g.set_param(mat, "color_b", ParamValue::Float(base[2]))
+                .unwrap();
+            g.set_param(mat, "color_a", ParamValue::Float(1.0)).unwrap();
+            g.connect((mat, "out"), (render, "material")).unwrap();
+            let src = g.add_node(Box::new(Source::new()));
+            g.connect((src, "out"), (render, "base_color_map")).unwrap();
+            (mat, Some((src, map)))
+        },
+    );
 
     // Average the covered pixels (uniform map → all equal) and compare.
     let mut sum = [0.0f64; 3];
@@ -519,11 +555,13 @@ fn back_face_lit_by_two_sided_normal_faces_viewer() {
         g.set_param(light, "mode", ParamValue::Enum(0)).unwrap(); // Sun
         g.set_param(light, "pos_x", ParamValue::Float(0.0)).unwrap();
         g.set_param(light, "pos_y", ParamValue::Float(0.0)).unwrap();
-        g.set_param(light, "pos_z", ParamValue::Float(-10.0)).unwrap();
+        g.set_param(light, "pos_z", ParamValue::Float(-10.0))
+            .unwrap();
         g.set_param(light, "aim_x", ParamValue::Float(0.0)).unwrap();
         g.set_param(light, "aim_y", ParamValue::Float(0.0)).unwrap();
         g.set_param(light, "aim_z", ParamValue::Float(0.0)).unwrap();
-        g.set_param(light, "intensity", ParamValue::Float(1.0)).unwrap();
+        g.set_param(light, "intensity", ParamValue::Float(1.0))
+            .unwrap();
         g.connect((light, "out"), (render, "light")).unwrap();
         (mat, None)
     });
@@ -584,24 +622,35 @@ fn render_scene_occlusion_frame(w: u32, h: u32, offset: f32) -> Vec<[f32; 4]> {
     let cam = g.add_node(Box::new(CameraOrbit::new()));
     g.set_param(cam, "orbit", ParamValue::Float(0.0)).unwrap();
     g.set_param(cam, "tilt", ParamValue::Float(0.0)).unwrap();
-    g.set_param(cam, "distance", ParamValue::Float(8.0)).unwrap();
+    g.set_param(cam, "distance", ParamValue::Float(8.0))
+        .unwrap();
     g.set_param(cam, "fov_y", ParamValue::Float(0.9)).unwrap();
 
     let mat0 = g.add_node(Box::new(UnlitMaterial::new()));
-    g.set_param(mat0, "color_r", ParamValue::Float(1.0)).unwrap();
-    g.set_param(mat0, "color_g", ParamValue::Float(0.0)).unwrap();
-    g.set_param(mat0, "color_b", ParamValue::Float(0.0)).unwrap();
-    g.set_param(mat0, "color_a", ParamValue::Float(1.0)).unwrap();
+    g.set_param(mat0, "color_r", ParamValue::Float(1.0))
+        .unwrap();
+    g.set_param(mat0, "color_g", ParamValue::Float(0.0))
+        .unwrap();
+    g.set_param(mat0, "color_b", ParamValue::Float(0.0))
+        .unwrap();
+    g.set_param(mat0, "color_a", ParamValue::Float(1.0))
+        .unwrap();
 
     let mat1 = g.add_node(Box::new(UnlitMaterial::new()));
-    g.set_param(mat1, "color_r", ParamValue::Float(0.0)).unwrap();
-    g.set_param(mat1, "color_g", ParamValue::Float(1.0)).unwrap();
-    g.set_param(mat1, "color_b", ParamValue::Float(0.0)).unwrap();
-    g.set_param(mat1, "color_a", ParamValue::Float(1.0)).unwrap();
+    g.set_param(mat1, "color_r", ParamValue::Float(0.0))
+        .unwrap();
+    g.set_param(mat1, "color_g", ParamValue::Float(1.0))
+        .unwrap();
+    g.set_param(mat1, "color_b", ParamValue::Float(0.0))
+        .unwrap();
+    g.set_param(mat1, "color_a", ParamValue::Float(1.0))
+        .unwrap();
 
     let render = g.add_node(Box::new(RenderScene::new()));
-    g.set_param(render, "objects", ParamValue::Float(2.0)).unwrap();
-    g.set_param(render, "lights", ParamValue::Float(0.0)).unwrap();
+    g.set_param(render, "objects", ParamValue::Float(2.0))
+        .unwrap();
+    g.set_param(render, "lights", ParamValue::Float(0.0))
+        .unwrap();
     let obj0 = add_scene_object(&mut g, render, 0);
     let obj1 = add_scene_object(&mut g, render, 1);
     wire_pos_x(&mut g, obj1, -offset);
@@ -675,19 +724,24 @@ fn render_scene_cel_quad_frame(w: u32, h: u32, num_lights: u32) -> Vec<[f32; 4]>
     g.set_param(cam, "orbit", ParamValue::Float(std::f32::consts::FRAC_PI_2))
         .unwrap();
     g.set_param(cam, "tilt", ParamValue::Float(0.0)).unwrap();
-    g.set_param(cam, "distance", ParamValue::Float(4.0)).unwrap();
+    g.set_param(cam, "distance", ParamValue::Float(4.0))
+        .unwrap();
     g.set_param(cam, "fov_y", ParamValue::Float(1.0)).unwrap();
 
     let mat = g.add_node(Box::new(CelMaterial::new()));
     g.set_param(mat, "color_r", ParamValue::Float(1.0)).unwrap();
     g.set_param(mat, "color_g", ParamValue::Float(1.0)).unwrap();
     g.set_param(mat, "color_b", ParamValue::Float(1.0)).unwrap();
-    g.set_param(mat, "cel_bands", ParamValue::Float(4.0)).unwrap();
-    g.set_param(mat, "band_low", ParamValue::Float(0.0)).unwrap();
-    g.set_param(mat, "band_high", ParamValue::Float(1.0)).unwrap();
+    g.set_param(mat, "cel_bands", ParamValue::Float(4.0))
+        .unwrap();
+    g.set_param(mat, "band_low", ParamValue::Float(0.0))
+        .unwrap();
+    g.set_param(mat, "band_high", ParamValue::Float(1.0))
+        .unwrap();
 
     let render = g.add_node(Box::new(RenderScene::new()));
-    g.set_param(render, "objects", ParamValue::Float(1.0)).unwrap();
+    g.set_param(render, "objects", ParamValue::Float(1.0))
+        .unwrap();
     g.set_param(render, "lights", ParamValue::Float(num_lights as f32))
         .unwrap();
     let obj0 = add_scene_object(&mut g, render, 0);
@@ -707,25 +761,39 @@ fn render_scene_cel_quad_frame(w: u32, h: u32, num_lights: u32) -> Vec<[f32; 4]>
     // the (unflipped) normal exactly, N·L == 1 everywhere it's lit.
     let light0 = g.add_node(Box::new(LightNode::new()));
     g.set_param(light0, "mode", ParamValue::Enum(0)).unwrap();
-    g.set_param(light0, "pos_x", ParamValue::Float(0.0)).unwrap();
-    g.set_param(light0, "pos_y", ParamValue::Float(0.0)).unwrap();
-    g.set_param(light0, "pos_z", ParamValue::Float(10.0)).unwrap();
-    g.set_param(light0, "aim_x", ParamValue::Float(0.0)).unwrap();
-    g.set_param(light0, "aim_y", ParamValue::Float(0.0)).unwrap();
-    g.set_param(light0, "aim_z", ParamValue::Float(0.0)).unwrap();
-    g.set_param(light0, "intensity", ParamValue::Float(1.0)).unwrap();
+    g.set_param(light0, "pos_x", ParamValue::Float(0.0))
+        .unwrap();
+    g.set_param(light0, "pos_y", ParamValue::Float(0.0))
+        .unwrap();
+    g.set_param(light0, "pos_z", ParamValue::Float(10.0))
+        .unwrap();
+    g.set_param(light0, "aim_x", ParamValue::Float(0.0))
+        .unwrap();
+    g.set_param(light0, "aim_y", ParamValue::Float(0.0))
+        .unwrap();
+    g.set_param(light0, "aim_z", ParamValue::Float(0.0))
+        .unwrap();
+    g.set_param(light0, "intensity", ParamValue::Float(1.0))
+        .unwrap();
     g.connect((light0, "out"), (render, "light_0")).unwrap();
 
     if num_lights == 2 {
         let light1 = g.add_node(Box::new(LightNode::new()));
         g.set_param(light1, "mode", ParamValue::Enum(0)).unwrap();
-        g.set_param(light1, "pos_x", ParamValue::Float(0.0)).unwrap();
-        g.set_param(light1, "pos_y", ParamValue::Float(0.0)).unwrap();
-        g.set_param(light1, "pos_z", ParamValue::Float(10.0)).unwrap();
-        g.set_param(light1, "aim_x", ParamValue::Float(0.0)).unwrap();
-        g.set_param(light1, "aim_y", ParamValue::Float(0.0)).unwrap();
-        g.set_param(light1, "aim_z", ParamValue::Float(0.0)).unwrap();
-        g.set_param(light1, "intensity", ParamValue::Float(1.0)).unwrap();
+        g.set_param(light1, "pos_x", ParamValue::Float(0.0))
+            .unwrap();
+        g.set_param(light1, "pos_y", ParamValue::Float(0.0))
+            .unwrap();
+        g.set_param(light1, "pos_z", ParamValue::Float(10.0))
+            .unwrap();
+        g.set_param(light1, "aim_x", ParamValue::Float(0.0))
+            .unwrap();
+        g.set_param(light1, "aim_y", ParamValue::Float(0.0))
+            .unwrap();
+        g.set_param(light1, "aim_z", ParamValue::Float(0.0))
+            .unwrap();
+        g.set_param(light1, "intensity", ParamValue::Float(1.0))
+            .unwrap();
         g.connect((light1, "out"), (render, "light_1")).unwrap();
     }
 
@@ -776,7 +844,10 @@ fn render_scene_multi_light_accumulates_diffuse_linearly() {
     let p2 = two[center_idx];
     println!("render_scene multi-light: 1-light = {p1:?}, 2-light = {p2:?}");
 
-    assert!(p1[0] > 0.1, "1-light centre pixel should be lit, got {p1:?}");
+    assert!(
+        p1[0] > 0.1,
+        "1-light centre pixel should be lit, got {p1:?}"
+    );
     for c in 0..3 {
         assert!(
             (p2[c] - 2.0 * p1[c]).abs() < 0.05,
@@ -793,7 +864,14 @@ fn render_scene_multi_light_accumulates_diffuse_linearly() {
 /// placeholder node, pre-bound the same way `render_mesh_scene`'s optional
 /// `bcmap` wiring works for `node.render_mesh`. Mirrors
 /// `render_scene_cel_quad_frame`'s camera/mesh setup, minus lights.
-fn render_scene_bcmap_quad_frame(w: u32, h: u32, mask: bool, checker: &[[f32; 4]], cw: u32, ch: u32) -> Vec<[f32; 4]> {
+fn render_scene_bcmap_quad_frame(
+    w: u32,
+    h: u32,
+    mask: bool,
+    checker: &[[f32; 4]],
+    cw: u32,
+    ch: u32,
+) -> Vec<[f32; 4]> {
     let device = manifold_gpu::testkit::test_device();
     let format = GpuTextureFormat::Rgba16Float;
     let map = upload_f16_rgba(&device, cw, ch, checker);
@@ -804,7 +882,8 @@ fn render_scene_bcmap_quad_frame(w: u32, h: u32, mask: bool, checker: &[[f32; 4]
     g.set_param(cam, "orbit", ParamValue::Float(std::f32::consts::FRAC_PI_2))
         .unwrap();
     g.set_param(cam, "tilt", ParamValue::Float(0.0)).unwrap();
-    g.set_param(cam, "distance", ParamValue::Float(4.0)).unwrap();
+    g.set_param(cam, "distance", ParamValue::Float(4.0))
+        .unwrap();
     g.set_param(cam, "fov_y", ParamValue::Float(1.0)).unwrap();
 
     let mat = g.add_node(Box::new(UnlitMaterial::new()));
@@ -817,11 +896,14 @@ fn render_scene_bcmap_quad_frame(w: u32, h: u32, mask: bool, checker: &[[f32; 4]
         ParamValue::Enum(if mask { 1 } else { 0 }),
     )
     .unwrap();
-    g.set_param(mat, "alpha_cutoff", ParamValue::Float(0.5)).unwrap();
+    g.set_param(mat, "alpha_cutoff", ParamValue::Float(0.5))
+        .unwrap();
 
     let render = g.add_node(Box::new(RenderScene::new()));
-    g.set_param(render, "objects", ParamValue::Float(1.0)).unwrap();
-    g.set_param(render, "lights", ParamValue::Float(0.0)).unwrap();
+    g.set_param(render, "objects", ParamValue::Float(1.0))
+        .unwrap();
+    g.set_param(render, "lights", ParamValue::Float(0.0))
+        .unwrap();
     let obj0 = add_scene_object(&mut g, render, 0);
 
     let src = g.add_node(Box::new(Source::new()));
@@ -907,7 +989,10 @@ fn render_scene_base_color_map_alpha_cutout_discards() {
     println!(
         "render_scene base_color_map cutout: discarded={discarded} shaded={shaded} footprint={footprint}"
     );
-    assert!(footprint > 200, "quad should cover a real area, got {footprint}");
+    assert!(
+        footprint > 200,
+        "quad should cover a real area, got {footprint}"
+    );
     assert!(
         discarded * 5 > footprint && shaded * 5 > footprint,
         "expected a roughly balanced cutout gated on sampled base_color_map alpha: discarded={discarded} shaded={shaded} footprint={footprint}"

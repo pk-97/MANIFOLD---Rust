@@ -92,7 +92,15 @@ impl ViewportCamera {
             CameraMode::Perspective { fov_y } => fov_y,
             CameraMode::Orthographic { .. } => defaults.fov_y,
         };
-        Self { target, yaw, pitch, distance, fov_y, near: camera.near, far: camera.far }
+        Self {
+            target,
+            yaw,
+            pitch,
+            distance,
+            fov_y,
+            near: camera.near,
+            far: camera.far,
+        }
     }
 
     /// LMB-drag orbit. `dx`/`dy` are screen-pixel deltas; `sensitivity` is
@@ -227,7 +235,11 @@ mod tests {
             + (pos[1] - vp.target[1]).powi(2)
             + (pos[2] - vp.target[2]).powi(2))
         .sqrt();
-        assert!((d - vp.distance).abs() < 1e-4, "expected distance {}, got {d}", vp.distance);
+        assert!(
+            (d - vp.distance).abs() < 1e-4,
+            "expected distance {}, got {d}",
+            vp.distance
+        );
     }
 
     #[test]
@@ -236,7 +248,10 @@ mod tests {
         let (yaw0, pitch0) = (vp.yaw, vp.pitch);
         vp.orbit(10.0, 5.0, 0.01);
         assert!(vp.yaw > yaw0);
-        assert!(vp.pitch < pitch0, "drag down should look down (pitch decreases)");
+        assert!(
+            vp.pitch < pitch0,
+            "drag down should look down (pitch decreases)"
+        );
     }
 
     #[test]
@@ -272,7 +287,16 @@ mod tests {
 
     #[test]
     fn seeded_navigation_reproduces_the_seed_camera() {
-        let show = ViewportCamera { target: [1.0, 0.5, -2.0], yaw: -0.8, pitch: 0.3, distance: 6.0, fov_y: 0.7, near: 0.1, far: 300.0 }.to_camera();
+        let show = ViewportCamera {
+            target: [1.0, 0.5, -2.0],
+            yaw: -0.8,
+            pitch: 0.3,
+            distance: 6.0,
+            fov_y: 0.7,
+            near: 0.1,
+            far: 300.0,
+        }
+        .to_camera();
         let seeded = ViewportCamera::seeded_from(&show).to_camera();
         for i in 0..3 {
             assert!((seeded.pos[i] - show.pos[i]).abs() < 1e-4, "position {i}");
@@ -293,7 +317,10 @@ mod tests {
             for _ in 0..notches as usize {
                 step.dolly(1.0, sens);
             }
-            assert!((vp.distance - step.distance).abs() <= d0 * 1e-4, "{notches} notches at once must equal {notches} single notches");
+            assert!(
+                (vp.distance - step.distance).abs() <= d0 * 1e-4,
+                "{notches} notches at once must equal {notches} single notches"
+            );
             let expected = d0 * (-notches * sens).exp();
             assert!((vp.distance - expected).abs() <= d0 * 1e-4);
         }
@@ -301,9 +328,15 @@ mod tests {
         let d0 = one.distance;
         one.dolly(1.0, sens);
         let ratio = one.distance / d0;
-        assert!(ratio > 0.9 && ratio < 0.95, "one notch in moves about 8%, got {ratio}");
+        assert!(
+            ratio > 0.9 && ratio < 0.95,
+            "one notch in moves about 8%, got {ratio}"
+        );
         one.dolly(-1.0, sens);
-        assert!((one.distance - d0).abs() <= d0 * 1e-5, "in then out returns to the start");
+        assert!(
+            (one.distance - d0).abs() <= d0 * 1e-5,
+            "in then out returns to the start"
+        );
     }
 
     #[test]
@@ -341,8 +374,15 @@ mod tests {
             far: 300.0,
         };
         let cam = vp.to_camera();
-        let expected =
-            Camera::from_pos_euler(vp.position(), vp.yaw, vp.pitch, 0.0, vp.fov_y, vp.near, vp.far);
+        let expected = Camera::from_pos_euler(
+            vp.position(),
+            vp.yaw,
+            vp.pitch,
+            0.0,
+            vp.fov_y,
+            vp.near,
+            vp.far,
+        );
         assert_eq!(cam, expected);
     }
 }

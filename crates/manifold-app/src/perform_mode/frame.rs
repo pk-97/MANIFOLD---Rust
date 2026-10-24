@@ -25,7 +25,7 @@ use manifold_ui::text::TextMeasure;
 use manifold_ui_paint::ui_cache_manager::UICacheManager;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 
-use super::{cue, macros as perform_macros, render, tracks, PerformModeState};
+use super::{PerformModeState, cue, macros as perform_macros, render, tracks};
 use crate::content_state::ContentState;
 use crate::text_input::TextInputState;
 use crate::ui_root::UIRoot;
@@ -119,7 +119,12 @@ impl HitTargets for PerformHitTargets {
     }
 
     fn enumerate(&self, out: &mut Vec<HitTargetEntry>) {
-        out.push(HitTargetEntry { kind: "button", label: "Exit".into(), rect: self.0, payload: "exit".into() });
+        out.push(HitTargetEntry {
+            kind: "button",
+            label: "Exit".into(),
+            rect: self.0,
+            payload: "exit".into(),
+        });
     }
 }
 
@@ -137,7 +142,11 @@ impl PerformLayout {
         let (lw, lh) = (logical_w as f32, logical_h as f32);
         let (btn_w, btn_h) = (180.0_f32, 36.0_f32);
         let exit_button = Rect::new((lw - btn_w) * 0.5, lh - btn_h - 24.0, btn_w, btn_h);
-        Self { logical_w, logical_h, exit_button }
+        Self {
+            logical_w,
+            logical_h,
+            exit_button,
+        }
     }
 }
 
@@ -178,8 +187,14 @@ impl PerformIntake {
     fn take_clock_text(&mut self, content_state: &ContentState) {
         let mut moved = false;
         for (held, sent) in [
-            (&mut self.clock_device, &content_state.midi_clock_device_name),
-            (&mut self.clock_position, &content_state.midi_clock_position_display),
+            (
+                &mut self.clock_device,
+                &content_state.midi_clock_device_name,
+            ),
+            (
+                &mut self.clock_position,
+                &content_state.midi_clock_position_display,
+            ),
         ] {
             if !held.as_ref().is_some_and(|h| Arc::ptr_eq(h, sent)) {
                 *held = Some(Arc::clone(sent));
@@ -286,12 +301,19 @@ impl PerformHudInputs {
         let next = cues.iter().position(|c| c.time > beat);
         let analysis = cue::analyze(cues, beat);
         let now_tracks = match analysis.current {
-            Some(cur) => ShownTracks::of(session, cur.time, analysis.next.map_or(f64::INFINITY, |c| c.time)),
+            Some(cur) => ShownTracks::of(
+                session,
+                cur.time,
+                analysis.next.map_or(f64::INFINITY, |c| c.time),
+            ),
             None => ShownTracks::default(),
         };
         let next_tracks = match analysis.next {
             Some(n) => {
-                let end = cues.iter().find(|c| c.time > n.time).map_or(f64::INFINITY, |c| c.time);
+                let end = cues
+                    .iter()
+                    .find(|c| c.time > n.time)
+                    .map_or(f64::INFINITY, |c| c.time);
                 ShownTracks::of(session, n.time, end)
             }
             None => ShownTracks::default(),
@@ -329,15 +351,20 @@ impl PerformHudInputs {
 
 /// The project parts the macro column reads: which params are mapped to
 /// Ableton macros, on which effects and layers.
-pub(crate) const HUD_PROJECT_PARTS: manifold_core::change::ChangeSet = manifold_core::change::ChangeSet::of(&[
-    manifold_core::change::Part::Mappings,
-    manifold_core::change::Part::Effects,
-    manifold_core::change::Part::Layers,
-]);
+pub(crate) const HUD_PROJECT_PARTS: manifold_core::change::ChangeSet =
+    manifold_core::change::ChangeSet::of(&[
+        manifold_core::change::Part::Mappings,
+        manifold_core::change::Part::Effects,
+        manifold_core::change::Part::Layers,
+    ]);
 
 /// Whether the HUD must be drawn this frame: its inputs moved since the
 /// frame on screen, or `force` (a fresh reference frame).
-pub(crate) fn hud_moved(perform: &PerformModeState, inputs: &PerformHudInputs, force: bool) -> bool {
+pub(crate) fn hud_moved(
+    perform: &PerformModeState,
+    inputs: &PerformHudInputs,
+    force: bool,
+) -> bool {
     force || perform.shown.as_ref() != Some(inputs)
 }
 
@@ -406,7 +433,10 @@ impl<'a> PerformHud<'a> {
                 .unwrap_or_default()
         };
         let now_section_tracks = match analysis.current {
-            Some(cur) => section_tracks(cur.time, analysis.next.map(|c| c.time).unwrap_or(f64::INFINITY)),
+            Some(cur) => section_tracks(
+                cur.time,
+                analysis.next.map(|c| c.time).unwrap_or(f64::INFINITY),
+            ),
             None => Vec::new(),
         };
         // The next section ends at the cue after `next`, or never.
@@ -424,7 +454,9 @@ impl<'a> PerformHud<'a> {
         Self {
             current_name: analysis.current.map(|c| c.name.as_str()).unwrap_or("—"),
             next_name: analysis.next.map(|c| c.name.as_str()).unwrap_or("—"),
-            countdown: analysis.beats_to_next.map(|b| cue::format_countdown(b, beats_per_bar)),
+            countdown: analysis
+                .beats_to_next
+                .map(|b| cue::format_countdown(b, beats_per_bar)),
             section_progress: cue::section_progress(analysis.current, analysis.next, current_beat),
             bar_beat: cue::format_bar_beat(current_beat, beats_per_bar),
             now_section_tracks,
@@ -486,7 +518,14 @@ mod tests {
     use super::*;
 
     fn inputs(perform: &PerformModeState, content: &ContentState) -> PerformHudInputs {
-        PerformHudInputs::derive(perform, content, None, 0, &PerformLayout::compute(1920, 1080), preview_aspect(None))
+        PerformHudInputs::derive(
+            perform,
+            content,
+            None,
+            0,
+            &PerformLayout::compute(1920, 1080),
+            preview_aspect(None),
+        )
     }
 
     #[test]
@@ -497,7 +536,10 @@ mod tests {
         assert!(hud_moved(&perform, &first, false), "the first frame draws");
         perform.shown = Some(first);
         assert!(!hud_moved(&perform, &inputs(&perform, &content), false));
-        assert!(hud_moved(&perform, &inputs(&perform, &content), true), "a fresh reference always draws");
+        assert!(
+            hud_moved(&perform, &inputs(&perform, &content), true),
+            "a fresh reference always draws"
+        );
     }
 
     #[test]

@@ -23,11 +23,11 @@
 //! shader is a `wang_hash` chain seeded from `(instance index, seed)`, no
 //! true randomness anywhere.
 
-use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
+use std::borrow::Cow;
 
-use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
@@ -180,7 +180,10 @@ impl Primitive for ScatterOnMesh {
         let seed = ctx.scalar_or_param("seed", 0.0).round() as u32;
         let scale_min = ctx.scalar_or_param("scale_min", 0.8);
         let scale_max = ctx.scalar_or_param("scale_max", 1.2);
-        let align_to_normal = matches!(ctx.params.get("align_to_normal"), Some(ParamValue::Bool(true)));
+        let align_to_normal = matches!(
+            ctx.params.get("align_to_normal"),
+            Some(ParamValue::Bool(true))
+        );
 
         let Some(src) = ctx.inputs.array("vertices") else {
             return;
@@ -227,8 +230,7 @@ impl Primitive for ScatterOnMesh {
         }
 
         // Lazy-allocate / realloc the per-triangle cumulative-area scratch.
-        let needs_alloc =
-            self.cumulative.is_none() || self.cached_triangle_count != triangle_count;
+        let needs_alloc = self.cumulative.is_none() || self.cached_triangle_count != triangle_count;
         if needs_alloc {
             let bytes = u64::from(triangle_count.max(1)) * 4;
             self.cumulative = Some(gpu.device.create_buffer(bytes));
@@ -338,7 +340,10 @@ mod tests {
         let mut params: ParamValues = ParamValues::default();
         params.insert(Cow::Borrowed("count"), ParamValue::Float(18.0));
         params.insert(Cow::Borrowed("max_capacity"), ParamValue::Float(64.0));
-        assert_eq!(node.array_output_capacity("instances", &params, &[]), Some(64));
+        assert_eq!(
+            node.array_output_capacity("instances", &params, &[]),
+            Some(64)
+        );
         params.insert(Cow::Borrowed("max_capacity"), ParamValue::Float(0.0));
         assert_eq!(
             node.array_output_capacity("instances", &params, &[]),
@@ -380,7 +385,7 @@ mod gpu_tests {
             tangent: [0.0; 4],
             color: [1.0; 4],
         }
-}
+    }
 
     #[allow(clippy::too_many_arguments)]
     fn dispatch_scatter(
@@ -401,8 +406,9 @@ mod gpu_tests {
         unsafe {
             vbuf.write(0, bytemuck::cast_slice(vertices));
         }
-        let ibuf = device
-            .create_buffer_shared(capacity as u64 * std::mem::size_of::<InstanceTransform>() as u64);
+        let ibuf = device.create_buffer_shared(
+            capacity as u64 * std::mem::size_of::<InstanceTransform>() as u64,
+        );
         let cumulative = device.create_buffer_shared(u64::from(triangle_count.max(1)) * 4);
 
         let uniforms = ScatterOnMeshUniforms {
@@ -417,16 +423,36 @@ mod gpu_tests {
         };
 
         let bindings = [
-            GpuBinding::Buffer { binding: 0, buffer: &ibuf, offset: 0 },
-            GpuBinding::Bytes { binding: 1, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 2, buffer: &vbuf, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &cumulative, offset: 0 },
+            GpuBinding::Buffer {
+                binding: 0,
+                buffer: &ibuf,
+                offset: 0,
+            },
+            GpuBinding::Bytes {
+                binding: 1,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &vbuf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &cumulative,
+                offset: 0,
+            },
         ];
 
         let mut enc = device.create_encoder("scatter-on-mesh-test");
         if triangle_count > 0 {
             let area = device.create_compute_pipeline(wgsl, "area_main", "scatter-area-test");
-            enc.dispatch_compute(&area, &bindings, [triangle_count.div_ceil(64), 1, 1], "area");
+            enc.dispatch_compute(
+                &area,
+                &bindings,
+                [triangle_count.div_ceil(64), 1, 1],
+                "area",
+            );
             enc.compute_memory_barrier_buffers();
             let scan = device.create_compute_pipeline(wgsl, "scan_main", "scatter-scan-test");
             enc.dispatch_compute(&scan, &bindings, [1, 1, 1], "scan");
@@ -449,8 +475,12 @@ mod gpu_tests {
         let c = [4.0f32, 0.0, 4.0];
         let d = [0.0f32, 0.0, 4.0];
         vec![
-            mk_vertex(a), mk_vertex(b), mk_vertex(c),
-            mk_vertex(a), mk_vertex(c), mk_vertex(d),
+            mk_vertex(a),
+            mk_vertex(b),
+            mk_vertex(c),
+            mk_vertex(a),
+            mk_vertex(c),
+            mk_vertex(d),
         ]
     }
 
@@ -461,12 +491,22 @@ mod gpu_tests {
         let vertices = quad_mesh();
         let capacity = 128u32;
 
-        let run1 = dispatch_scatter(&device, wgsl, &vertices, capacity, capacity, 42, 0.8, 1.2, false);
-        let run2 = dispatch_scatter(&device, wgsl, &vertices, capacity, capacity, 42, 0.8, 1.2, false);
+        let run1 = dispatch_scatter(
+            &device, wgsl, &vertices, capacity, capacity, 42, 0.8, 1.2, false,
+        );
+        let run2 = dispatch_scatter(
+            &device, wgsl, &vertices, capacity, capacity, 42, 0.8, 1.2, false,
+        );
 
         for (i, (a, b)) in run1.iter().zip(run2.iter()).enumerate() {
-            assert_eq!(a.pos_scale, b.pos_scale, "instance {i} pos_scale differs across identical runs");
-            assert_eq!(a.rot_pad, b.rot_pad, "instance {i} rot_pad differs across identical runs");
+            assert_eq!(
+                a.pos_scale, b.pos_scale,
+                "instance {i} pos_scale differs across identical runs"
+            );
+            assert_eq!(
+                a.rot_pad, b.rot_pad,
+                "instance {i} rot_pad differs across identical runs"
+            );
         }
     }
 
@@ -477,14 +517,21 @@ mod gpu_tests {
         let vertices = quad_mesh();
         let capacity = 128u32;
 
-        let run_a = dispatch_scatter(&device, wgsl, &vertices, capacity, capacity, 1, 0.8, 1.2, false);
-        let run_b = dispatch_scatter(&device, wgsl, &vertices, capacity, capacity, 2, 0.8, 1.2, false);
+        let run_a = dispatch_scatter(
+            &device, wgsl, &vertices, capacity, capacity, 1, 0.8, 1.2, false,
+        );
+        let run_b = dispatch_scatter(
+            &device, wgsl, &vertices, capacity, capacity, 2, 0.8, 1.2, false,
+        );
 
         let any_differ = run_a
             .iter()
             .zip(run_b.iter())
             .any(|(a, b)| a.pos_scale != b.pos_scale || a.rot_pad != b.rot_pad);
-        assert!(any_differ, "different seeds should not produce an identical placement");
+        assert!(
+            any_differ,
+            "different seeds should not produce an identical placement"
+        );
     }
 
     #[test]
@@ -494,18 +541,38 @@ mod gpu_tests {
         let vertices = quad_mesh();
         let capacity = 64u32;
 
-        let instances = dispatch_scatter(&device, wgsl, &vertices, capacity, capacity, 7, 0.5, 1.5, false);
+        let instances = dispatch_scatter(
+            &device, wgsl, &vertices, capacity, capacity, 7, 0.5, 1.5, false,
+        );
         for (i, inst) in instances.iter().enumerate() {
             let [x, y, z, scale] = inst.pos_scale;
-            assert!(y.abs() < 1e-4, "instance {i} y={y} should be on the y=0 quad plane");
-            assert!((-1e-3..=4.0 + 1e-3).contains(&x), "instance {i} x={x} outside quad bounds");
-            assert!((-1e-3..=4.0 + 1e-3).contains(&z), "instance {i} z={z} outside quad bounds");
-            assert!((0.5 - 1e-4..=1.5 + 1e-4).contains(&scale), "instance {i} scale={scale} outside [0.5, 1.5]");
+            assert!(
+                y.abs() < 1e-4,
+                "instance {i} y={y} should be on the y=0 quad plane"
+            );
+            assert!(
+                (-1e-3..=4.0 + 1e-3).contains(&x),
+                "instance {i} x={x} outside quad bounds"
+            );
+            assert!(
+                (-1e-3..=4.0 + 1e-3).contains(&z),
+                "instance {i} z={z} outside quad bounds"
+            );
+            assert!(
+                (0.5 - 1e-4..=1.5 + 1e-4).contains(&scale),
+                "instance {i} scale={scale} outside [0.5, 1.5]"
+            );
             // rot_pad.y (yaw) should vary; rot_pad.x/z stay 0 when
             // align_to_normal is off (flat quad normal is world-up anyway,
             // but this exercises the "off" branch specifically).
-            assert_eq!(inst.rot_pad[0], 0.0, "instance {i} pitch should be 0 with align_to_normal off");
-            assert_eq!(inst.rot_pad[2], 0.0, "instance {i} roll should be 0 with align_to_normal off");
+            assert_eq!(
+                inst.rot_pad[0], 0.0,
+                "instance {i} pitch should be 0 with align_to_normal off"
+            );
+            assert_eq!(
+                inst.rot_pad[2], 0.0,
+                "instance {i} roll should be 0 with align_to_normal off"
+            );
         }
     }
 
@@ -523,7 +590,9 @@ mod gpu_tests {
         let vertices = vec![mk_vertex(v0), mk_vertex(v1), mk_vertex(v2)];
         let capacity = 32u32;
 
-        let instances = dispatch_scatter(&device, wgsl, &vertices, capacity, capacity, 3, 1.0, 1.0, true);
+        let instances = dispatch_scatter(
+            &device, wgsl, &vertices, capacity, capacity, 3, 1.0, 1.0, true,
+        );
 
         // Face normal of this triangle.
         let e1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
@@ -555,11 +624,7 @@ mod gpu_tests {
             // render_instanced_3d_mesh.wgsl's euler_xyz composition),
             // verified numerically against a full matrix expansion in the
             // P4 worklog.
-            let mapped_up = [
-                -cz * sy * sx - sz * cx,
-                -sz * sy * sx + cz * cx,
-                cy * sx,
-            ];
+            let mapped_up = [-cz * sy * sx - sz * cx, -sz * sy * sx + cz * cx, cy * sx];
             for k in 0..3 {
                 assert!(
                     (mapped_up[k] - n[k]).abs() < 1e-3,
@@ -579,12 +644,17 @@ mod gpu_tests {
 
         // First fill every slot at full count, then re-run with count=10 —
         // the tail must be parked, not left stale.
-        let _full = dispatch_scatter(&device, wgsl, &vertices, capacity, capacity, 5, 1.0, 1.0, false);
+        let _full = dispatch_scatter(
+            &device, wgsl, &vertices, capacity, capacity, 5, 1.0, 1.0, false,
+        );
         let low = dispatch_scatter(&device, wgsl, &vertices, 10, capacity, 5, 1.0, 1.0, false);
 
         for (i, inst) in low.iter().enumerate() {
             if i < 10 {
-                assert!(inst.pos_scale[3] > 0.0, "instance {i} below count should be live");
+                assert!(
+                    inst.pos_scale[3] > 0.0,
+                    "instance {i} below count should be live"
+                );
             } else {
                 assert_eq!(
                     inst.pos_scale[3], 0.0,
@@ -605,7 +675,9 @@ mod gpu_tests {
         let vertices = quad_mesh();
         let capacity = 256u32;
 
-        let instances = dispatch_scatter(&device, wgsl, &vertices, capacity, capacity, 11, 1.0, 1.0, true);
+        let instances = dispatch_scatter(
+            &device, wgsl, &vertices, capacity, capacity, 11, 1.0, 1.0, true,
+        );
 
         for (i, inst) in instances.iter().enumerate() {
             for (k, v) in inst.pos_scale.iter().chain(inst.rot_pad.iter()).enumerate() {
@@ -615,13 +687,11 @@ mod gpu_tests {
             let (cx, sx) = (rx.cos(), rx.sin());
             let (cy, sy) = (ry.cos(), ry.sin());
             let (cz, sz) = (rz.cos(), rz.sin());
-            let mapped_up = [
-                -cz * sy * sx - sz * cx,
-                -sz * sy * sx + cz * cx,
-                cy * sx,
-            ];
+            let mapped_up = [-cz * sy * sx - sz * cx, -sz * sy * sx + cz * cx, cy * sx];
             assert!(
-                (mapped_up[0].abs() < 1e-3) && ((mapped_up[1] - 1.0).abs() < 1e-3) && (mapped_up[2].abs() < 1e-3),
+                (mapped_up[0].abs() < 1e-3)
+                    && ((mapped_up[1] - 1.0).abs() < 1e-3)
+                    && (mapped_up[2].abs() < 1e-3),
                 "instance {i}: flat ground must keep instances upright, got up={mapped_up:?} from euler=({rx}, {ry}, {rz})"
             );
         }

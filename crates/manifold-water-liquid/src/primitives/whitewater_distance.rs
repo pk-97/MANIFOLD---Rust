@@ -1,8 +1,11 @@
 //! Engine whitewater surface distance orchestration. The stencil is the
 //! registered codegen atom UpwindDistance; reduction is stage-local.
 //! FLIP Fluids particlelevelset.cpp / levelsetsolver.cpp, MIT; see notices.
-use {manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline, super::upwind_distance::UpwindDistance, super::upwind_distance::UpwindUniforms};
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
+use {
+    super::upwind_distance::UpwindDistance, super::upwind_distance::UpwindUniforms,
+    manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline,
+};
 
 /// gpu_flip_step.wgsl `ClockPlan`.
 const PLAN_BYTES: u64 = 48;
@@ -91,7 +94,13 @@ impl SurfaceDistance {
     /// inactive slot (live clock, zero step) leaves the output and every
     /// field and state word as they were, and only rewrites the sweep grid
     /// to zero groups.
-    pub fn encode_gated(&self, enc: &mut GpuEncoder, source: &GpuBuffer, h: f32, plan: &GpuBuffer) -> &GpuBuffer {
+    pub fn encode_gated(
+        &self,
+        enc: &mut GpuEncoder,
+        source: &GpuBuffer,
+        h: f32,
+        plan: &GpuBuffer,
+    ) -> &GpuBuffer {
         let [current, candidate, valid, blocks, state, args, _] =
             self.buffers.as_ref().expect("distance reserved");
         let [nx, ny, nz] = self.cells;

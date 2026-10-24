@@ -8,8 +8,8 @@ use manifold_core::liquid_domain::liquid_domain_of;
 use manifold_core::scene_index::FlatSceneIndex;
 use manifold_core::scene_modifier_preset::SceneTargetSelection;
 
-use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_core::scene_impulse::{ImpulseTarget, RigidImpulseTargets};
+use manifold_node_engine::persistence::PrimitiveRegistry;
 
 use manifold_node_engine::load::expand::SceneModifierExpandError;
 use manifold_node_engine::load::expand::impulse_recipients_with_index;
@@ -69,7 +69,9 @@ pub fn prepare_coupled_scenes(
                 ImpulseTarget::Rigid(targets) => {
                     rigids
                         .entry(node.as_str().to_owned())
-                        .and_modify(|existing| *existing = std::mem::take(existing).union(targets.clone()))
+                        .and_modify(|existing| {
+                            *existing = std::mem::take(existing).union(targets.clone())
+                        })
                         .or_insert(targets);
                 }
                 ImpulseTarget::FluidAndRigid(_) => {
@@ -85,7 +87,13 @@ pub fn prepare_coupled_scenes(
             continue;
         }
         if rigids.len() != 1 {
-            return Err(ambiguous(&scene, format!("scene must contain one rigid world (found {})", rigids.len())));
+            return Err(ambiguous(
+                &scene,
+                format!(
+                    "scene must contain one rigid world (found {})",
+                    rigids.len()
+                ),
+            ));
         }
 
         // The rigid world steps inside one domain, so the first water drawn
@@ -132,12 +140,14 @@ pub fn prepare_coupled_scenes(
 
     Ok(pairs
         .into_iter()
-        .map(|((fluid, rigid), (colliders, observers))| CoupledSceneBinding {
-            fluid: NodeId::new(fluid),
-            rigid: NodeId::new(rigid),
-            colliders,
-            observers: observers.into_iter().map(NodeId::new).collect(),
-        })
+        .map(
+            |((fluid, rigid), (colliders, observers))| CoupledSceneBinding {
+                fluid: NodeId::new(fluid),
+                rigid: NodeId::new(rigid),
+                colliders,
+                observers: observers.into_iter().map(NodeId::new).collect(),
+            },
+        )
         .collect())
 }
 

@@ -539,16 +539,27 @@ fn cold_touch_summary() -> serde_json::Value {
 /// done, then runs paced paused frames for `seconds` and counts the work
 /// each frame did on the content thread. Returns whether every frame was
 /// zero. `MANIFOLD_WORK_TRACE=1` prints each frame that did work.
-fn run_work_idle(project_path_str: &str, seconds: f64, start_beats: Option<f64>) -> Result<bool, String> {
-    use manifold_core::work_count::{thread_work_snapshot, WorkTrace};
+fn run_work_idle(
+    project_path_str: &str,
+    seconds: f64,
+    start_beats: Option<f64>,
+) -> Result<bool, String> {
+    use manifold_core::work_count::{WorkTrace, thread_work_snapshot};
     // Work counts do not depend on the output size, and a 4K show's
     // simulation buffers can exceed what a headless device grants beside
     // other lanes, so the run renders at 1080p.
-    let PreparedProject { mut ct, cmd_tx, cmd_rx, state_tx, drain, frame_rate, .. } =
-        prepare_project_edited(project_path_str, "work-idle", &mut |p| {
-            p.settings.output_width = p.settings.output_width.min(1920);
-            p.settings.output_height = p.settings.output_height.min(1080);
-        })?;
+    let PreparedProject {
+        mut ct,
+        cmd_tx,
+        cmd_rx,
+        state_tx,
+        drain,
+        frame_rate,
+        ..
+    } = prepare_project_edited(project_path_str, "work-idle", &mut |p| {
+        p.settings.output_width = p.settings.output_width.min(1920);
+        p.settings.output_height = p.settings.output_height.min(1080);
+    })?;
     if let Some(beats) = start_beats {
         ct.handle_command(ContentCommand::SeekToBeat(manifold_core::Beats(beats)));
     }
@@ -606,8 +617,13 @@ fn run_work_idle(project_path_str: &str, seconds: f64, start_beats: Option<f64>)
     }
     let total = thread_work_snapshot().since(&start);
     drop(state_tx);
-    drain.join().map_err(|_| "drain thread panicked".to_string())?;
-    let summary: Vec<String> = total.nonzero().map(|(k, n)| format!("{}={n}", k.name())).collect();
+    drain
+        .join()
+        .map_err(|_| "drain thread panicked".to_string())?;
+    let summary: Vec<String> = total
+        .nonzero()
+        .map(|(k, n)| format!("{}={n}", k.name()))
+        .collect();
     eprintln!(
         "perf-soak --work-idle: {frames} paused frames, {busy} did work{}{}",
         if summary.is_empty() { "" } else { ": " },
@@ -615,7 +631,10 @@ fn run_work_idle(project_path_str: &str, seconds: f64, start_beats: Option<f64>)
     );
     // Idle pool textures still count as device allocation, which is what a
     // chain's memory admission reads.
-    let memory = ct.content_pipeline.native_device().and_then(|d| d.modifier_memory_snapshot());
+    let memory = ct
+        .content_pipeline
+        .native_device()
+        .and_then(|d| d.modifier_memory_snapshot());
     if let (Some(m), Some((count, bytes))) = (memory, ct.content_pipeline.cached_texture_memory()) {
         eprintln!(
             "perf-soak --work-idle: device {} MB allocated of {} MB recommended; free texture pool {count} textures, {} MB",
@@ -854,7 +873,9 @@ fn run_soak(
         let cold_touches = manifold_core::cold_touch::total_cold_touches();
         if cold_touches > 0 {
             let mut reasons = evaluation.reasons;
-            reasons.push(format!("{cold_touches} cold touches during playback; the warmup missed them"));
+            reasons.push(format!(
+                "{cold_touches} cold touches during playback; the warmup missed them"
+            ));
             evaluation = Evaluation::failed(reasons);
         }
         let identity_errors = identity_availability_errors(&identity);

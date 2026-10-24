@@ -62,7 +62,12 @@ impl Clip {
 }
 
 /// Replica of `band_edges` in analysis.rs (private there).
-fn band_edges(cfg: &SpectrogramConfig, num_bins: usize, low_hz: f32, mid_hz: f32) -> (usize, usize) {
+fn band_edges(
+    cfg: &SpectrogramConfig,
+    num_bins: usize,
+    low_hz: f32,
+    mid_hz: f32,
+) -> (usize, usize) {
     let nb = num_bins.max(1);
     let fmin = cfg.fmin.max(1.0);
     let bpo = cfg.bpo as f32;
@@ -112,7 +117,14 @@ fn build_clip(mono: &[f32], sr: u32, low_hz: f32, mid_hz: f32) -> Clip {
             *o = if c < lin_floor { 0.0 } else { c };
         }
     }
-    Clip { num_bins, low_bin, mid_bin, n_hops, hop, cols }
+    Clip {
+        num_bins,
+        low_bin,
+        mid_bin,
+        n_hops,
+        hop,
+        cols,
+    }
 }
 
 // ── Causal estimates the masks read ─────────────────────────────────────────
@@ -193,7 +205,11 @@ enum Mask {
     /// filter sweeps, riser, dense beds) keep their floored flux continuous,
     /// so their own recent max suppresses them; a kick is an impulse over a
     /// bass-free floor.
-    OrFloor { margin_db: f32, delta: f32, h: usize },
+    OrFloor {
+        margin_db: f32,
+        delta: f32,
+        h: usize,
+    },
     /// Round 4 — the mechanism the PICTURE showed (bad_guy mix PNG): a mix
     /// kick's surviving low-band evidence is its descending FM sweep
     /// (120→45 Hz over ~90 ms ≈ 2 bins/hop), which SuperFlux's max-filter
@@ -219,7 +235,12 @@ enum Mask {
     /// fire on `dive`'s spectrum-wide descent. Replaces the masked-novelty
     /// criterion, it does not stack with it: the base path here is plain
     /// SuperFlux (clean tracks) OR the ridge event (bass-heavy tracks).
-    RidgeTrack { drop_bins: f32, win: usize, step_max: f32, min_peak: f32 },
+    RidgeTrack {
+        drop_bins: f32,
+        win: usize,
+        step_max: f32,
+        min_peak: f32,
+    },
     /// Round 6 — RidgeTrack + a birth-attack gate, hunting the short-window
     /// false-fire cost. Short confirmation windows (w6-7) halve the fire
     /// latency and lift ±35 ms recall ~37→53, but admit fast wobble-bass
@@ -231,7 +252,13 @@ enum Mask {
     /// ≥ `gate` within its first ~3 hops (±2 hops of birth for VQT smear).
     /// `gate` is in ODF units (band positive-dB sum: attacks are tens to
     /// hundreds, wobble under the max-filter is near zero).
-    RidgeGate { drop_bins: f32, win: usize, step_max: f32, min_peak: f32, gate: f32 },
+    RidgeGate {
+        drop_bins: f32,
+        win: usize,
+        step_max: f32,
+        min_peak: f32,
+        gate: f32,
+    },
 }
 
 impl Mask {
@@ -242,19 +269,39 @@ impl Mask {
             Mask::Gate { beta, h } => format!("G b={beta:.1} H={h}"),
             Mask::Wiener { h, p } => format!("W H={h} P={p}"),
             Mask::NovFloor { margin_db, h } => format!("N m={margin_db:.1} H={h}"),
-            Mask::OrFloor { margin_db, delta, h } => format!("O m={margin_db:.1} d={delta:.0} H={h}"),
-            Mask::Sweep { drop_bins, step_max } => format!("K d={drop_bins:.0} s={step_max:.0}"),
-            Mask::RidgeTrack { drop_bins, win, step_max, min_peak } => {
+            Mask::OrFloor {
+                margin_db,
+                delta,
+                h,
+            } => format!("O m={margin_db:.1} d={delta:.0} H={h}"),
+            Mask::Sweep {
+                drop_bins,
+                step_max,
+            } => format!("K d={drop_bins:.0} s={step_max:.0}"),
+            Mask::RidgeTrack {
+                drop_bins,
+                win,
+                step_max,
+                min_peak,
+            } => {
                 format!("R d={drop_bins:.0} w={win} s={step_max:.0} p={min_peak:.2}")
             }
-            Mask::RidgeGate { drop_bins, win, gate, .. } => {
+            Mask::RidgeGate {
+                drop_bins,
+                win,
+                gate,
+                ..
+            } => {
                 format!("RG d={drop_bins:.0} w={win} g={gate:.0}")
             }
         }
     }
     fn h_window(self) -> Option<usize> {
         match self {
-            Mask::Baseline | Mask::Sweep { .. } | Mask::RidgeTrack { .. } | Mask::RidgeGate { .. } => None,
+            Mask::Baseline
+            | Mask::Sweep { .. }
+            | Mask::RidgeTrack { .. }
+            | Mask::RidgeGate { .. } => None,
             Mask::Sub { h, .. }
             | Mask::Gate { h, .. }
             | Mask::Wiener { h, .. }
@@ -270,7 +317,10 @@ impl Mask {
     }
     fn sweep_params(self) -> Option<(f32, f32)> {
         match self {
-            Mask::Sweep { drop_bins, step_max } => Some((drop_bins, step_max)),
+            Mask::Sweep {
+                drop_bins,
+                step_max,
+            } => Some((drop_bins, step_max)),
             _ => None,
         }
     }
@@ -304,12 +354,19 @@ impl Mask {
     /// (drop_bins, win, step_max, min_peak, attack_gate); gate 0.0 = ungated.
     fn ridge_params(self) -> Option<(f32, usize, f32, f32, f32)> {
         match self {
-            Mask::RidgeTrack { drop_bins, win, step_max, min_peak } => {
-                Some((drop_bins, win, step_max, min_peak, 0.0))
-            }
-            Mask::RidgeGate { drop_bins, win, step_max, min_peak, gate } => {
-                Some((drop_bins, win, step_max, min_peak, gate))
-            }
+            Mask::RidgeTrack {
+                drop_bins,
+                win,
+                step_max,
+                min_peak,
+            } => Some((drop_bins, win, step_max, min_peak, 0.0)),
+            Mask::RidgeGate {
+                drop_bins,
+                win,
+                step_max,
+                min_peak,
+                gate,
+            } => Some((drop_bins, win, step_max, min_peak, gate)),
             _ => None,
         }
     }
@@ -452,8 +509,7 @@ static RIDGE_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 /// asymmetric gate lets a track random-walk DOWNWARD — at short confirmation
 /// windows that walk reaches drop_bins and false-fires (riser Low 2→13 at
 /// d10/w6). 0/-1 demand a never-rising / strictly-falling ridge. `--stepup`.
-static RIDGE_STEP_UP: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(0x3F80_0000); // 1.0f32
+static RIDGE_STEP_UP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3F80_0000); // 1.0f32
 
 /// Absolute peak floor (tilted-column units; default 0 = off, `--absfloor`).
 /// The relative floor (`min_peak` × band max) scales DOWN in quiet passages —
@@ -529,7 +585,9 @@ fn replay_fires_dump(
             for (bi, &(lo, hi)) in bands.iter().enumerate() {
                 let odf = if let Mask::NovFloor { margin_db, .. } = mask {
                     let h_row = &h_arr.unwrap()[i * nb..(i + 1) * nb];
-                    superflux_floor(&cur_perc, &prev_perc, h_row, margin_db, lo, hi, db_min, db_max)
+                    superflux_floor(
+                        &cur_perc, &prev_perc, h_row, margin_db, lo, hi, db_min, db_max,
+                    )
                 } else {
                     superflux(&cur_perc, &prev_perc, lo, hi, db_min, db_max)
                 };
@@ -540,27 +598,38 @@ fn replay_fires_dump(
                 let median = sorted[ODF_MEDIAN_HOPS / 2];
                 let threshold = median * SUPERFLUX_THRESH_FACTOR + SUPERFLUX_DELTA;
                 let lookback_lo = ODF_MEDIAN_HOPS - 1 - ODF_PEAK_LOOKBACK;
-                let past_max =
-                    h[lookback_lo..ODF_MEDIAN_HOPS - 1].iter().copied().fold(0.0f32, f32::max);
+                let past_max = h[lookback_lo..ODF_MEDIAN_HOPS - 1]
+                    .iter()
+                    .copied()
+                    .fold(0.0f32, f32::max);
                 let is_peak = candidate >= past_max && odf <= candidate;
-                let novelty_ref =
-                    h[ODF_NOVELTY_LO..ODF_NOVELTY_HI].iter().copied().fold(0.0f32, f32::max);
+                let novelty_ref = h[ODF_NOVELTY_LO..ODF_NOVELTY_HI]
+                    .iter()
+                    .copied()
+                    .fold(0.0f32, f32::max);
                 let novel =
                     candidate > novelty_ref * SUPERFLUX_NOVELTY_FACTOR + SUPERFLUX_NOVELTY_DELTA;
                 let mut fired = is_peak && refractory[bi] == 0 && (candidate > threshold || novel);
                 // OrFloor third criterion, on the floored curve's own terms.
-                if let Mask::OrFloor { margin_db, delta, .. } = mask {
+                if let Mask::OrFloor {
+                    margin_db, delta, ..
+                } = mask
+                {
                     let h_row = &h_arr.unwrap()[i * nb..(i + 1) * nb];
                     let fodf = superflux_floor(
                         &cur_perc, &prev_perc, h_row, margin_db, lo, hi, db_min, db_max,
                     );
                     let fh = &fhist[bi];
                     let fcand = fh[ODF_MEDIAN_HOPS - 1];
-                    let fpast_max =
-                        fh[lookback_lo..ODF_MEDIAN_HOPS - 1].iter().copied().fold(0.0f32, f32::max);
+                    let fpast_max = fh[lookback_lo..ODF_MEDIAN_HOPS - 1]
+                        .iter()
+                        .copied()
+                        .fold(0.0f32, f32::max);
                     let f_is_peak = fcand >= fpast_max && fodf <= fcand;
-                    let f_ref =
-                        fh[ODF_NOVELTY_LO..ODF_NOVELTY_HI].iter().copied().fold(0.0f32, f32::max);
+                    let f_ref = fh[ODF_NOVELTY_LO..ODF_NOVELTY_HI]
+                        .iter()
+                        .copied()
+                        .fold(0.0f32, f32::max);
                     let f_novel = fcand > f_ref * SUPERFLUX_NOVELTY_FACTOR + delta;
                     fired = fired || (f_is_peak && refractory[bi] == 0 && f_novel);
                     let fm = &mut fhist[bi];
@@ -609,8 +678,9 @@ fn replay_fires_dump(
                     mask.ridge_params().filter(|_| bi == 1)
                 {
                     {
-                        let step_up =
-                            f32::from_bits(RIDGE_STEP_UP.load(std::sync::atomic::Ordering::Relaxed));
+                        let step_up = f32::from_bits(
+                            RIDGE_STEP_UP.load(std::sync::atomic::Ordering::Relaxed),
+                        );
                         let col = clip.col(i);
                         // Peak-pick: local maxima above a fraction of the band max.
                         let band_max = col[lo..hi].iter().copied().fold(0.0f32, f32::max);
@@ -671,7 +741,10 @@ fn replay_fires_dump(
                         let age_cap = win + 6;
                         let mut ridge_fire = false;
                         for tk in tks.iter_mut() {
-                            if tk.fired || tk.gap != 0 || tk.bins.len() < win || i - tk.birth > age_cap
+                            if tk.fired
+                                || tk.gap != 0
+                                || tk.bins.len() < win
+                                || i - tk.birth > age_cap
                             {
                                 continue;
                             }
@@ -685,11 +758,9 @@ fn replay_fires_dump(
                             if front - back < drop_bins {
                                 continue;
                             }
-                            let coherent = (1..tk.bins.len())
-                                .all(|w| {
-                                    (-step_max..=step_up)
-                                        .contains(&(tk.bins[w] - tk.bins[w - 1]))
-                                });
+                            let coherent = (1..tk.bins.len()).all(|w| {
+                                (-step_max..=step_up).contains(&(tk.bins[w] - tk.bins[w - 1]))
+                            });
                             if coherent {
                                 tk.fired = true;
                                 ridge_fire = true;
@@ -710,8 +781,9 @@ fn replay_fires_dump(
                         // Birth attack: current hop's ODF plus the two before it
                         // (hist push happens after this block, so 15/14 are the
                         // previous two hops).
-                        let birth_attack =
-                            odf.max(hist[bi][ODF_MEDIAN_HOPS - 1]).max(hist[bi][ODF_MEDIAN_HOPS - 2]);
+                        let birth_attack = odf
+                            .max(hist[bi][ODF_MEDIAN_HOPS - 1])
+                            .max(hist[bi][ODF_MEDIAN_HOPS - 2]);
                         for (j, &pk) in peaks.iter().enumerate() {
                             if !consumed[j] {
                                 let mut b = VecDeque::with_capacity(win);
@@ -753,8 +825,7 @@ fn replay_fires_dump(
                             // already give one fire per descent.
                             fired = ridge_fire && refractory[bi] == 0;
                         } else {
-                            let recent_fire =
-                                fired || (i as i64 - last_fire[bi]) < win as i64 + 3;
+                            let recent_fire = fired || (i as i64 - last_fire[bi]) < win as i64 + 3;
                             if ridge_fire && refractory[bi] == 0 && !recent_fire {
                                 fired = true;
                             }
@@ -823,7 +894,9 @@ fn load_labels(track: &str) -> (Vec<f32>, Vec<f32>) {
     let (mut mix, mut drums) = (Vec::new(), Vec::new());
     for line in text.lines().skip(1) {
         let mut it = line.split(',');
-        let (Some(m), Some(d)) = (it.next(), it.next()) else { continue };
+        let (Some(m), Some(d)) = (it.next(), it.next()) else {
+            continue;
+        };
         if let (Ok(m), Ok(d)) = (m.trim().parse::<f32>(), d.trim().parse::<f32>()) {
             mix.push(m);
             drums.push(d);
@@ -835,9 +908,18 @@ fn load_labels(track: &str) -> (Vec<f32>, Vec<f32>) {
 /// Grade fire times against label times: (recovered@±35ms, recovered@±70ms,
 /// spurious = fires >±70ms from any label). Precision/recall derive from these.
 fn grade(fires: &[f32], labels: &[f32]) -> (usize, usize, usize) {
-    let rec35 = labels.iter().filter(|&&l| matched_within(l, fires, 0.035)).count();
-    let rec70 = labels.iter().filter(|&&l| matched_within(l, fires, 0.070)).count();
-    let spurious = fires.iter().filter(|&&f| !matched_within(f, labels, 0.070)).count();
+    let rec35 = labels
+        .iter()
+        .filter(|&&l| matched_within(l, fires, 0.035))
+        .count();
+    let rec70 = labels
+        .iter()
+        .filter(|&&l| matched_within(l, fires, 0.070))
+        .count();
+    let spurious = fires
+        .iter()
+        .filter(|&&f| !matched_within(f, labels, 0.070))
+        .count();
     (rec35, rec70, spurious)
 }
 
@@ -904,7 +986,10 @@ fn classify_miss(hop_l: f32, diags: &[RidgeDiag], drop_bins: f32, win: usize, ga
     } else if bd < drop_bins {
         format!("shallow (drop {bd:.0} < {drop_bins:.0}, len {len})")
     } else if gate > 0.0 && best.attack < gate {
-        format!("gated (attack {:.0} < {gate:.0}, drop {bd:.0})", best.attack)
+        format!(
+            "gated (attack {:.0} < {gate:.0}, drop {bd:.0})",
+            best.attack
+        )
     } else {
         format!("swallowed (drop {bd:.0} reached; latch/refractory/age-cap)")
     }
@@ -972,7 +1057,11 @@ fn synth_busy_pad() -> Vec<f32> {
 }
 
 fn synth_kicks(base: Vec<f32>) -> Vec<f32> {
-    let mut out = if base.is_empty() { selftest_buf() } else { base };
+    let mut out = if base.is_empty() {
+        selftest_buf()
+    } else {
+        base
+    };
     let n = out.len();
     let srf = SELFTEST_SR as f32;
     for k in 0..(2 * SELFTEST_SECS) {
@@ -1099,8 +1188,11 @@ fn decode_mono(path: &str) -> Option<(Vec<f32>, u32)> {
         }
     };
     let ch = decoded.channels.max(1);
-    let mono: Vec<f32> =
-        decoded.samples.chunks_exact(ch).map(|f| f.iter().sum::<f32>() / ch as f32).collect();
+    let mono: Vec<f32> = decoded
+        .samples
+        .chunks_exact(ch)
+        .map(|f| f.iter().sum::<f32>() / ch as f32)
+        .collect();
     Some((mono, decoded.sample_rate))
 }
 
@@ -1198,7 +1290,11 @@ fn main() {
             for &h in &[16usize, 32] {
                 for &margin_db in &[3.0f32, 4.5, 6.0] {
                     for &delta in &[80.0f32, 125.0, 200.0] {
-                        masks.push(Mask::OrFloor { margin_db, delta, h });
+                        masks.push(Mask::OrFloor {
+                            margin_db,
+                            delta,
+                            h,
+                        });
                     }
                 }
             }
@@ -1208,7 +1304,11 @@ fn main() {
         // its low side before it ships as a constant.
         if family == "or-plateau" {
             for &delta in &[40.0f32, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0] {
-                masks.push(Mask::OrFloor { margin_db: 3.0, delta, h: 16 });
+                masks.push(Mask::OrFloor {
+                    margin_db: 3.0,
+                    delta,
+                    h: 16,
+                });
             }
         }
         // The shipping config (BUG-046 partial, Peter-approved 2026-07-06):
@@ -1216,12 +1316,19 @@ fn main() {
         // integration must reproduce (the prototype is the reference
         // implementation — the integration gate is an EXACT match).
         if family == "or-final" {
-            masks.push(Mask::OrFloor { margin_db: 3.0, delta: 80.0, h: 16 });
+            masks.push(Mask::OrFloor {
+                margin_db: 3.0,
+                delta: 80.0,
+                h: 16,
+            });
         }
         if all || family == "sweep" {
             for &drop_bins in &[6.0f32, 8.0, 12.0] {
                 for &step_max in &[4.0f32, 6.0] {
-                    masks.push(Mask::Sweep { drop_bins, step_max });
+                    masks.push(Mask::Sweep {
+                        drop_bins,
+                        step_max,
+                    });
                 }
             }
         }
@@ -1236,7 +1343,12 @@ fn main() {
             for &drop_bins in &[14.0f32, 18.0, 22.0] {
                 for &win in &[10usize, 14] {
                     for &min_peak in &[0.06f32, 0.12] {
-                        masks.push(Mask::RidgeTrack { drop_bins, win, step_max: 4.0, min_peak });
+                        masks.push(Mask::RidgeTrack {
+                            drop_bins,
+                            win,
+                            step_max: 4.0,
+                            min_peak,
+                        });
                     }
                 }
             }
@@ -1246,7 +1358,12 @@ fn main() {
         // bass-false-fire cost; all guards green. Prints the exact per-band fire
         // counts the runtime integration must reproduce (exact-match gate).
         if family == "ridge-final" {
-            masks.push(Mask::RidgeTrack { drop_bins: 14.0, win: 10, step_max: 4.0, min_peak: 0.12 });
+            masks.push(Mask::RidgeTrack {
+                drop_bins: 14.0,
+                win: 10,
+                step_max: 4.0,
+                min_peak: 0.12,
+            });
         }
         // Any single ridge config from the command line (pairs with --miss-audit):
         // `--family ridge-one --drop 8 --win 7`.
@@ -1266,9 +1383,20 @@ fn main() {
             );
             let gate = get("--gate", 0.0);
             masks.push(if gate > 0.0 {
-                Mask::RidgeGate { drop_bins, win, step_max, min_peak, gate }
+                Mask::RidgeGate {
+                    drop_bins,
+                    win,
+                    step_max,
+                    min_peak,
+                    gate,
+                }
             } else {
-                Mask::RidgeTrack { drop_bins, win, step_max, min_peak }
+                Mask::RidgeTrack {
+                    drop_bins,
+                    win,
+                    step_max,
+                    min_peak,
+                }
             });
         }
         // Round 6: the birth-attack gate over the short-window frontier.
@@ -1276,7 +1404,13 @@ fn main() {
         if family == "ridge-gate" {
             for &(win, drop_bins) in &[(6usize, 8.0f32), (7, 8.0), (6, 10.0), (7, 10.0)] {
                 for &gate in &[10.0f32, 20.0, 40.0, 80.0] {
-                    masks.push(Mask::RidgeGate { drop_bins, win, step_max: 4.0, min_peak: 0.12, gate });
+                    masks.push(Mask::RidgeGate {
+                        drop_bins,
+                        win,
+                        step_max: 4.0,
+                        min_peak: 0.12,
+                        gate,
+                    });
                 }
             }
         }
@@ -1288,7 +1422,12 @@ fn main() {
         if family == "ridge-sweep" {
             for &drop_bins in &[10.0f32, 12.0, 14.0, 16.0, 18.0, 20.0] {
                 for &win in &[8usize, 10, 12] {
-                    masks.push(Mask::RidgeTrack { drop_bins, win, step_max: 4.0, min_peak: 0.12 });
+                    masks.push(Mask::RidgeTrack {
+                        drop_bins,
+                        win,
+                        step_max: 4.0,
+                        min_peak: 0.12,
+                    });
                 }
             }
         }
@@ -1308,7 +1447,12 @@ fn main() {
                 (10, &[12.0, 14.0][..]),
             ] {
                 for &drop_bins in drops {
-                    masks.push(Mask::RidgeTrack { drop_bins, win, step_max: 4.0, min_peak: 0.12 });
+                    masks.push(Mask::RidgeTrack {
+                        drop_bins,
+                        win,
+                        step_max: 4.0,
+                        min_peak: 0.12,
+                    });
                 }
             }
         }
@@ -1331,9 +1475,21 @@ fn main() {
     }
     // Guard scenarios (fire-gated selftest subset), same soft_clip as the harness.
     jobs.push(("guard/dive".into(), soft_clip(synth_dive()), SELFTEST_SR));
-    jobs.push(("guard/kicks".into(), soft_clip(synth_kicks(Vec::new())), SELFTEST_SR));
-    jobs.push(("guard/busymix".into(), soft_clip(synth_kicks(synth_busy_pad())), SELFTEST_SR));
-    jobs.push(("guard/densemix".into(), soft_clip(synth_kicks(synth_dense_bed())), SELFTEST_SR));
+    jobs.push((
+        "guard/kicks".into(),
+        soft_clip(synth_kicks(Vec::new())),
+        SELFTEST_SR,
+    ));
+    jobs.push((
+        "guard/busymix".into(),
+        soft_clip(synth_kicks(synth_busy_pad())),
+        SELFTEST_SR,
+    ));
+    jobs.push((
+        "guard/densemix".into(),
+        soft_clip(synth_kicks(synth_dense_bed())),
+        SELFTEST_SR,
+    ));
     jobs.push(("guard/riser".into(), soft_clip(synth_riser()), SELFTEST_SR));
     jobs.push(("guard/growl".into(), soft_clip(synth_growl()), SELFTEST_SR));
 
@@ -1355,8 +1511,10 @@ fn main() {
     for (label, mono, sr) in &jobs {
         let clip = build_clip(mono, *sr, low_hz, mid_hz);
         let est = Estimates::build(&clip, &masks);
-        let per_mask: Vec<[Vec<usize>; 4]> =
-            masks.iter().map(|&m| replay_fires(&clip, m, &est)).collect();
+        let per_mask: Vec<[Vec<usize>; 4]> = masks
+            .iter()
+            .map(|&m| replay_fires(&clip, m, &est))
+            .collect();
         if dump_label.as_deref() == Some(label.as_str()) {
             std::fs::create_dir_all("/tmp/hpss_dump").unwrap();
             for &m in &masks {
@@ -1389,7 +1547,13 @@ fn main() {
     println!("\n== VALIDATION (baseline fire counts, all hops: full/low/mid/high) ==");
     for (label, _, _) in &clip_meta {
         let f = &results[label][0];
-        println!("{label}: {} {} {} {}", f[0].len(), f[1].len(), f[2].len(), f[3].len());
+        println!(
+            "{label}: {} {} {} {}",
+            f[0].len(),
+            f[1].len(),
+            f[2].len(),
+            f[3].len()
+        );
     }
     if validate_only {
         return;
@@ -1397,10 +1561,19 @@ fn main() {
     // Single-config runs (e.g. --family or-final): print that config's full
     // per-band fire counts in the same format — the integration's reference.
     if masks.len() == 2 {
-        println!("\n== REFERENCE ({}, fire counts, all hops: full/low/mid/high) ==", masks[1].name());
+        println!(
+            "\n== REFERENCE ({}, fire counts, all hops: full/low/mid/high) ==",
+            masks[1].name()
+        );
         for (label, _, _) in &clip_meta {
             let f = &results[label][1];
-            println!("{label}: {} {} {} {}", f[0].len(), f[1].len(), f[2].len(), f[3].len());
+            println!(
+                "{label}: {} {} {} {}",
+                f[0].len(),
+                f[1].len(),
+                f[2].len(),
+                f[3].len()
+            );
         }
     }
 
@@ -1451,13 +1624,21 @@ fn main() {
             let mut alibi = times(&drums, 0, 0); // baseline drums Full ∪ Low
             alibi.extend_from_slice(&gt);
             let mix_low = times(&mix, mi, 1);
-            let recovered = gt.iter().filter(|&&g| matched_within(g, &mix_low, 0.035)).count();
+            let recovered = gt
+                .iter()
+                .filter(|&&g| matched_within(g, &mix_low, 0.035))
+                .count();
             // Second tolerance: low-band VQT kernels smear a mix kick's rise
             // vs the dry stem's, so a fire can land a few hops late — ±70 ms
             // separates "missing" from "late".
-            let rec70 = gt.iter().filter(|&&g| matched_within(g, &mix_low, 0.070)).count();
-            let spurious =
-                mix_low.iter().filter(|&&m| !matched_within(m, &alibi, 0.050)).count();
+            let rec70 = gt
+                .iter()
+                .filter(|&&g| matched_within(g, &mix_low, 0.070))
+                .count();
+            let spurious = mix_low
+                .iter()
+                .filter(|&&m| !matched_within(m, &alibi, 0.050))
+                .count();
             cells.push(format!(
                 "{}:{}({})/{} sp{}",
                 &t[..4.min(t.len())],
@@ -1519,7 +1700,9 @@ fn main() {
             let (b35, b70, bsp) = grade(&drums_low, dl);
             let bass = mix_low
                 .iter()
-                .filter(|&&f| !matched_within(f, ml, 0.070) && !matched_within(f, &drum_alibi, 0.070))
+                .filter(|&&f| {
+                    !matched_within(f, ml, 0.070) && !matched_within(f, &drum_alibi, 0.070)
+                })
                 .count();
             mr35 += a35;
             mr70 += a70;
@@ -1562,8 +1745,7 @@ fn main() {
             }
         }
         let lat = |v: Vec<f32>| {
-            latency_stats(v)
-                .map_or("lat -/-".into(), |(m, p)| format!("lat {m:+.0}/{p:+.0}ms"))
+            latency_stats(v).map_or("lat -/-".into(), |(m, p)| format!("lat {m:+.0}/{p:+.0}ms"))
         };
         println!(
             "{:22} | guards {} k{kicks_l} | MIX {mr35}({mr70})/{mn} sp{msp} bass{mbass} {} | DRUMS {dr35}({dr70})/{dn} sp{dsp} {} | sp: echo{echo} bass{nbass} drum{ndrum} oth{nother} ?{unexpl}",
@@ -1578,7 +1760,10 @@ fn main() {
     // ── Retention detail: per-clip Low fire counts, baseline vs each config —
     //    read this for the winner before proposing constants. ────────────────
     println!("\n== RETENTION (Low-band fires per clip, baseline first) ==");
-    for (label, _, _) in clip_meta.iter().filter(|(l, _, _)| !l.starts_with("guard/")) {
+    for (label, _, _) in clip_meta
+        .iter()
+        .filter(|(l, _, _)| !l.starts_with("guard/"))
+    {
         let row: Vec<String> = masks
             .iter()
             .enumerate()
@@ -1586,29 +1771,42 @@ fn main() {
             .collect();
         println!("{label}: {}", row.join(" "));
     }
-    println!("\ncolumns: {}", masks.iter().map(|m| m.name()).collect::<Vec<_>>().join(" | "));
+    println!(
+        "\ncolumns: {}",
+        masks
+            .iter()
+            .map(|m| m.name())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
 
     // ── MISS AUDIT: classify every label the single ridge config missed ──────
     if miss_audit && !ridge_diags.is_empty() {
         let (drop_bins, win, _, _, gate) = masks[1].ridge_params().unwrap();
-        println!("\n== MISS AUDIT ({}, missed labels @±70ms) ==", masks[1].name());
+        println!(
+            "\n== MISS AUDIT ({}, missed labels @±70ms) ==",
+            masks[1].name()
+        );
         let mut buckets: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
         for t in TRACKS {
             let (ml, dl) = &labels[t];
             for (stem, lab) in [("mix", ml), ("drums", dl)] {
                 let clip_label = format!("{t}/{stem}");
-                let Some(diags) = ridge_diags.get(&clip_label) else { continue };
+                let Some(diags) = ridge_diags.get(&clip_label) else {
+                    continue;
+                };
                 let fires = times(&clip_label, 1, 1);
-                let (_, sr, hop) =
-                    clip_meta.iter().find(|(l, _, _)| l == &clip_label).unwrap();
+                let (_, sr, hop) = clip_meta.iter().find(|(l, _, _)| l == &clip_label).unwrap();
                 for &l in lab {
                     if matched_within(l, &fires, 0.070) {
                         continue;
                     }
                     let hop_l = l * *sr as f32 / *hop as f32;
                     let class = classify_miss(hop_l, diags, drop_bins, win, gate);
-                    *buckets.entry(class.split(' ').next().unwrap().into()).or_default() += 1;
+                    *buckets
+                        .entry(class.split(' ').next().unwrap().into())
+                        .or_default() += 1;
                     println!("{clip_label} @{l:.3}s: {class}");
                 }
             }
@@ -1618,7 +1816,11 @@ fn main() {
         let total: usize = counts.iter().map(|(_, n)| n).sum();
         println!(
             "buckets ({total} misses): {}",
-            counts.iter().map(|(k, n)| format!("{k} {n}")).collect::<Vec<_>>().join(" · ")
+            counts
+                .iter()
+                .map(|(k, n)| format!("{k} {n}"))
+                .collect::<Vec<_>>()
+                .join(" · ")
         );
     }
 }

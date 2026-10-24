@@ -46,12 +46,15 @@ impl PresetRuntime {
         let io = backend.as_ref().map(|prepared| {
             let candidate = prepared.candidate();
             match self.io {
-                PresetIo::Generate { generator_input_id, final_output_input_resource, .. } => {
-                    PresetIo::Generate {
-                        generator_input_id, final_output_input_resource,
-                        final_output_slot: candidate.slot_for(final_output_input_resource),
-                    }
-                }
+                PresetIo::Generate {
+                    generator_input_id,
+                    final_output_input_resource,
+                    ..
+                } => PresetIo::Generate {
+                    generator_input_id,
+                    final_output_input_resource,
+                    final_output_slot: candidate.slot_for(final_output_input_resource),
+                },
                 PresetIo::Transform { source_slot, .. } => {
                     let source = source_slot.map(|source_slot| {
                         let old = self.executor.backend();
@@ -60,20 +63,33 @@ impl PresetRuntime {
                             .find(|&id| old.slot_for(id) == Some(source_slot))
                             .expect("transform source resource")
                     });
-                    let output = self.plan.steps().iter()
-                        .find(|step| self.graph.get_node(step.node)
-                            .is_some_and(|node| node.node.type_id().as_str() == FINAL_OUTPUT_TYPE_ID))
-                        .and_then(|step| step.inputs.first()).map(|(_, id)| *id)
+                    let output = self
+                        .plan
+                        .steps()
+                        .iter()
+                        .find(|step| {
+                            self.graph.get_node(step.node).is_some_and(|node| {
+                                node.node.type_id().as_str() == FINAL_OUTPUT_TYPE_ID
+                            })
+                        })
+                        .and_then(|step| step.inputs.first())
+                        .map(|(_, id)| *id)
                         .expect("transform final output input");
                     PresetIo::Transform {
-                        source_slot: source.map(|source| candidate.slot_for(source).expect("prepared source")),
+                        source_slot: source
+                            .map(|source| candidate.slot_for(source).expect("prepared source")),
                         output_slot: candidate.slot_for(output).expect("prepared output"),
                         output_resource: output,
                     }
                 }
             }
         });
-        Ok(PreparedRuntimeResize { width, height, backend, io })
+        Ok(PreparedRuntimeResize {
+            width,
+            height,
+            backend,
+            io,
+        })
     }
 
     /// Publish a previously prepared resize.  All fallible work has already
@@ -90,7 +106,9 @@ impl PresetRuntime {
                 .expect("prepared resize belongs to a MetalBackend");
             metal.commit_resize(prepared_backend);
         }
-        if let Some(io) = prepared.io { self.io = io; }
+        if let Some(io) = prepared.io {
+            self.io = io;
+        }
         self.executor.reset_after_resource_replacement();
         for inst in self.graph.nodes_mut() {
             inst.node.clear_state();
@@ -111,5 +129,4 @@ impl PresetRuntime {
         self.commit_resize(prepared);
         Ok(())
     }
-
 }

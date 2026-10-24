@@ -48,7 +48,10 @@ pub fn average(logits: &[f32], clip: f64) -> f64 {
     if let [z] = logits {
         return probability(*z);
     }
-    let sum: f64 = logits.iter().map(|&z| logit(probability(z).clamp(clip, 1.0 - clip))).sum();
+    let sum: f64 = logits
+        .iter()
+        .map(|&z| logit(probability(z).clamp(clip, 1.0 - clip)))
+        .sum();
     expit(sum / logits.len() as f64)
 }
 
@@ -58,20 +61,33 @@ impl Net {
         let scalar_i = |name: &str| -> Result<i64, ContainerError> {
             let v = c.i64s(name, &[])?[0];
             if v <= 0 {
-                return Err(ContainerError::WrongType { name: name.into(), want: "positive i64" });
+                return Err(ContainerError::WrongType {
+                    name: name.into(),
+                    want: "positive i64",
+                });
             }
             Ok(v)
         };
         let slice = scalar_i("net.slice")? as usize;
         let span = scalar_i("net.span")? as usize;
         if span > MAX_SPAN {
-            return Err(ContainerError::WrongShape { name: "net.span".into(), want: vec![MAX_SPAN], got: vec![span] });
+            return Err(ContainerError::WrongShape {
+                name: "net.span".into(),
+                want: vec![MAX_SPAN],
+                got: vec![span],
+            });
         }
         // The oldest frame a candidate reads must still be held, with room for emission lag.
         if slice + span > HISTORY / 2 {
-            return Err(ContainerError::WrongShape { name: "net.slice".into(), want: vec![HISTORY / 2], got: vec![slice + span] });
+            return Err(ContainerError::WrongShape {
+                name: "net.slice".into(),
+                want: vec![HISTORY / 2],
+                got: vec![slice + span],
+            });
         }
-        let cnns = (0..count).map(|k| Cnn::new(c, &format!("net.{k}."), slice)).collect::<Result<Vec<_>, _>>()?;
+        let cnns = (0..count)
+            .map(|k| Cnn::new(c, &format!("net.{k}."), slice))
+            .collect::<Result<Vec<_>, _>>()?;
         let channels = cnns.first().map_or(0, Cnn::channels);
         Ok(Self {
             spec: Box::new(Spectrum::new(c)?),
@@ -134,7 +150,13 @@ impl Net {
 
     /// Every net's logit into `out` (one per net). NaN when a spectrum or extra frame the slice reads is
     /// not held, or when `extra` does not supply exactly the model's extra channels.
-    pub fn logits(&mut self, cand_hop: u64, emit_hop: u64, extra: &dyn FrameSource, out: &mut [f32]) {
+    pub fn logits(
+        &mut self,
+        cand_hop: u64,
+        emit_hop: u64,
+        extra: &dyn FrameSource,
+        out: &mut [f32],
+    ) {
         debug_assert_eq!(out.len(), self.cnns.len());
         if self.fill(cand_hop, emit_hop, extra) {
             for (o, cnn) in out.iter_mut().zip(&mut self.cnns) {
@@ -154,15 +176,23 @@ impl Net {
         let Anchors { end, on } = self.anchors(cand_hop, emit_hop);
         let first = end + 1 - self.slice as u64;
         let oldest = on.saturating_sub(self.span as u64 - 1).min(first);
-        if [end, on, oldest].iter().any(|&f| self.spec.frame(f).is_none()) {
+        if [end, on, oldest]
+            .iter()
+            .any(|&f| self.spec.frame(f).is_none())
+        {
             return false;
         }
-        if (0..extra.channels()).any(|ch| extra.frame(ch, first).is_none() || extra.frame(ch, end).is_none()) {
+        if (0..extra.channels())
+            .any(|ch| extra.frame(ch, first).is_none() || extra.frame(ch, end).is_none())
+        {
             return false;
         }
         let mut peak = f32::NEG_INFINITY;
         for t in 0..self.slice {
-            let row = self.spec.frame(first + t as u64).expect("held: checked above");
+            let row = self
+                .spec
+                .frame(first + t as u64)
+                .expect("held: checked above");
             self.window[t * BANDS..][..BANDS].copy_from_slice(row);
             peak = row.iter().copied().fold(peak, f32::max);
         }
@@ -188,7 +218,9 @@ impl Net {
         }
         for ch in 0..extra.channels() {
             for t in 0..frames {
-                let Some(row) = extra.frame(ch, first + t as u64) else { return false };
+                let Some(row) = extra.frame(ch, first + t as u64) else {
+                    return false;
+                };
                 for (band, &v) in row[..BANDS].iter().enumerate() {
                     self.input[cnn::input_at(frames, ch + 2, band, t)] = v / 20.0;
                 }

@@ -1,18 +1,16 @@
 use crate::ports::PortType;
 
-use super::types::{is_texture_input, wgsl_storage_token, CodegenError};
 use super::standalone::{
-    generate_standalone, generate_standalone_buffer_with_options,
+    StandaloneKernelSpec, generate_standalone, generate_standalone_buffer_with_options,
     generate_standalone_resolve,
-    StandaloneKernelSpec,
 };
+use super::types::{CodegenError, is_texture_input, wgsl_storage_token};
 
 /// Generate the standalone kernel for a primitive type — the single-source
 /// `run()` path. Reads the body + classification + ports/params off the type's
 /// `PrimitiveSpec` consts. Deterministic, so `create_compute_pipeline` caches
 /// the result across instances and sessions (the WGSL text is the cache key).
-pub fn standalone_for_spec<P: crate::primitive::PrimitiveSpec>(
-) -> Result<String, CodegenError> {
+pub fn standalone_for_spec<P: crate::primitive::PrimitiveSpec>() -> Result<String, CodegenError> {
     let body = P::WGSL_BODY.ok_or(CodegenError::NoBody)?;
     let spec = StandaloneKernelSpec {
         fusion_kind: P::FUSION_KIND,
@@ -28,7 +26,10 @@ pub fn standalone_for_spec<P: crate::primitive::PrimitiveSpec>(
     // Buffer atoms (Array output) route directly so they can carry
     // `DERIVED_UNIFORMS` (frame-derived non-param uniform fields). The texture
     // path's public `generate_standalone` signature stays untouched.
-    if P::OUTPUTS.iter().any(|o| matches!(o.ty, PortType::Array(_))) {
+    if P::OUTPUTS
+        .iter()
+        .any(|o| matches!(o.ty, PortType::Array(_)))
+    {
         return generate_standalone_buffer_with_options(
             &spec,
             P::ATOMIC_OUTPUTS,
@@ -48,9 +49,7 @@ pub fn standalone_for_spec<P: crate::primitive::PrimitiveSpec>(
 
 /// Boundary atoms need an emission shape because their declared fusion kind
 /// does not describe texture-input arity.
-fn emission_shape_for(
-    inputs: &[crate::ports::NodePort],
-) -> crate::freeze::classify::FusionKind {
+fn emission_shape_for(inputs: &[crate::ports::NodePort]) -> crate::freeze::classify::FusionKind {
     use crate::freeze::classify::FusionKind;
     match inputs.iter().filter(|i| is_texture_input(i)).count() {
         0 => FusionKind::Source,
@@ -71,8 +70,8 @@ fn emission_shape_for(
 ///
 /// Guards against misuse on fusable atoms: `standalone_for_spec` is the
 /// entry for anything that can fuse.
-pub fn standalone_for_boundary_spec<P: crate::primitive::PrimitiveSpec>(
-) -> Result<String, CodegenError> {
+pub fn standalone_for_boundary_spec<P: crate::primitive::PrimitiveSpec>()
+-> Result<String, CodegenError> {
     use crate::freeze::classify::FusionKind;
     assert_eq!(
         P::FUSION_KIND,
@@ -150,7 +149,11 @@ pub fn standalone_for_node(
         stencil_fetch: node.stencil_fetch(),
         includes: node.wgsl_includes(),
     };
-    if node.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
+    if node
+        .outputs()
+        .iter()
+        .any(|o| matches!(o.ty, PortType::Array(_)))
+    {
         return generate_standalone_buffer_with_options(
             &spec,
             node.atomic_outputs(),
@@ -158,7 +161,10 @@ pub fn standalone_for_node(
             node.buffer_index(),
         );
     }
-    if node.inputs().iter().any(|i| matches!(i.ty, PortType::Array(_)))
+    if node
+        .inputs()
+        .iter()
+        .any(|i| matches!(i.ty, PortType::Array(_)))
         && !node.inputs().iter().any(is_texture_input)
     {
         return generate_standalone_resolve(body, node.inputs(), node.parameters(), node.outputs());

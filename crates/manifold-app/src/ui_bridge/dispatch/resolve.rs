@@ -125,7 +125,10 @@ pub(crate) fn resolve_graph_target(
         }
         GraphParamTarget::Generator => {
             if let Some(editor_target) = editor_target
-                && matches!(editor_target, manifold_core::GraphTarget::SceneModifier { .. })
+                && matches!(
+                    editor_target,
+                    manifold_core::GraphTarget::SceneModifier { .. }
+                )
             {
                 let owner = editor_target.host_target()?;
                 project.graph_for_target(editor_target, None)?;
@@ -140,7 +143,10 @@ pub(crate) fn resolve_graph_target(
         // even when it isn't the app's active layer.
         GraphParamTarget::GeneratorOf(lid) => {
             if let Some(editor_target) = editor_target
-                && matches!(editor_target, manifold_core::GraphTarget::SceneModifier { .. })
+                && matches!(
+                    editor_target,
+                    manifold_core::GraphTarget::SceneModifier { .. }
+                )
             {
                 let owner = editor_target.host_target()?;
                 project.graph_for_target(editor_target, None)?;
@@ -177,9 +183,19 @@ pub(crate) fn resolve_mod_target(
     selection: &SelectionState,
     _materialize: bool,
 ) -> Option<(manifold_core::GraphTarget, manifold_core::effects::ParamId)> {
-    let target = resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)?;
+    let target = resolve_graph_target(
+        gpt,
+        editor_target,
+        effective_tab,
+        active_layer,
+        selection,
+        project,
+    )?;
     if let Some(editor_target) = editor_target
-        && matches!(editor_target, manifold_core::GraphTarget::SceneModifier { .. })
+        && matches!(
+            editor_target,
+            manifold_core::GraphTarget::SceneModifier { .. }
+        )
     {
         crate::graph_target::modifier_host_binding(
             project,
@@ -213,11 +229,13 @@ pub(crate) fn ableton_mapping_target(
                     effect_type,
                     param_id: param_id.clone(),
                 }),
-                InspectorTab::Layer | InspectorTab::Group | InspectorTab::Scene => Some(T::LayerEffect {
-                    layer_id: active_layer.clone()?,
-                    effect_type,
-                    param_id: param_id.clone(),
-                }),
+                InspectorTab::Layer | InspectorTab::Group | InspectorTab::Scene => {
+                    Some(T::LayerEffect {
+                        layer_id: active_layer.clone()?,
+                        effect_type,
+                        param_id: param_id.clone(),
+                    })
+                }
                 InspectorTab::Clip => None,
             }
         }
@@ -255,8 +273,14 @@ pub(crate) fn macro_mapping_target(
 /// Whether `param_id` is a manifest param of `target`. Only those can be
 /// mapped: a scene item's structural field row carries an id like
 /// `cube#physics` that no manifest holds (SCENE_DOCUMENT_DESIGN.md ruling 3).
-pub(crate) fn manifest_holds(project: &Project, target: &manifold_core::GraphTarget, param_id: &str) -> bool {
-    project.with_preset_graph(target, |inst| inst.params.get(param_id).is_some()).unwrap_or(false)
+pub(crate) fn manifest_holds(
+    project: &Project,
+    target: &manifold_core::GraphTarget,
+    param_id: &str,
+) -> bool {
+    project
+        .with_preset_graph(target, |inst| inst.params.get(param_id).is_some())
+        .unwrap_or(false)
 }
 
 /// The slider range of `param_id` on `inst` (the user's choice, else the
@@ -282,8 +306,10 @@ pub(crate) fn preset_source_def(
     manifold_core::PresetTypeId,
 )> {
     if matches!(target, GraphTarget::SceneModifier { .. }) {
-        return Some((crate::modifier_preset::export_def(project, target)?,
-            project.instance_preset_id(target)?));
+        return Some((
+            crate::modifier_preset::export_def(project, target)?,
+            project.instance_preset_id(target)?,
+        ));
     }
     let inst = project.preset_instance(target)?;
     let preset_id = inst.effect_type().clone();
@@ -302,8 +328,12 @@ pub(crate) fn preset_source_def(
 /// Preset actions retain the local authored target; parameter actions address
 /// its host controls. An explicitly carried different layer still rejects.
 pub(crate) fn resolve_preset_target(
-    gpt: &GraphParamTarget, editor_target: Option<&GraphTarget>, tab: InspectorTab,
-    active_layer: &Option<LayerId>, selection: &SelectionState, project: &Project,
+    gpt: &GraphParamTarget,
+    editor_target: Option<&GraphTarget>,
+    tab: InspectorTab,
+    active_layer: &Option<LayerId>,
+    selection: &SelectionState,
+    project: &Project,
 ) -> Option<GraphTarget> {
     let host = resolve_graph_target(gpt, editor_target, tab, active_layer, selection, project)?;
     if let Some(local @ GraphTarget::SceneModifier { .. }) = editor_target
@@ -398,13 +428,28 @@ mod tests {
             &project,
         );
         assert_eq!(resolved, Some(GraphTarget::Generator(layer_a.clone())));
-        assert_eq!(resolve_graph_target(
-            &GraphParamTarget::GeneratorOf(layer_b.clone()), Some(&target),
-            InspectorTab::Layer, &Some(layer_a.clone()), &selection, &project), None);
-        assert_eq!(resolve_graph_target(
-            &GraphParamTarget::GeneratorOf(layer_a.clone()), Some(&target),
-            InspectorTab::Layer, &Some(layer_b.clone()), &selection, &project),
-            Some(GraphTarget::Generator(layer_a.clone())));
+        assert_eq!(
+            resolve_graph_target(
+                &GraphParamTarget::GeneratorOf(layer_b.clone()),
+                Some(&target),
+                InspectorTab::Layer,
+                &Some(layer_a.clone()),
+                &selection,
+                &project
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_graph_target(
+                &GraphParamTarget::GeneratorOf(layer_a.clone()),
+                Some(&target),
+                InspectorTab::Layer,
+                &Some(layer_b.clone()),
+                &selection,
+                &project
+            ),
+            Some(GraphTarget::Generator(layer_a.clone()))
+        );
         assert_eq!(
             super::super::editor_dispatch_context(
                 Some(&target),
@@ -424,46 +469,52 @@ mod tests {
             owner: Box::new(target.host_target().unwrap().clone()),
             modifier_id: "missing".into(),
         };
-        assert!(resolve_graph_target(
-            &GraphParamTarget::Generator,
-            Some(&invalid),
-            InspectorTab::Layer,
-            &Some(layer_b.clone()),
-            &selection,
-            &project,
-        )
-        .is_none());
+        assert!(
+            resolve_graph_target(
+                &GraphParamTarget::Generator,
+                Some(&invalid),
+                InspectorTab::Layer,
+                &Some(layer_b.clone()),
+                &selection,
+                &project,
+            )
+            .is_none()
+        );
 
         let (tx, _) = crossbeam_channel::unbounded();
         let ui = UIRoot::new();
         let param = manifold_core::effects::ParamId::from("a_gain");
-        assert!(resolve_mod_target(
-            &ui,
-            &project,
-            &tx,
-            &GraphParamTarget::Generator,
-            &param,
-            Some(&target),
-            InspectorTab::Layer,
-            &Some(layer_b.clone()),
-            &selection,
-            false,
-        )
-        .is_some());
+        assert!(
+            resolve_mod_target(
+                &ui,
+                &project,
+                &tx,
+                &GraphParamTarget::Generator,
+                &param,
+                Some(&target),
+                InspectorTab::Layer,
+                &Some(layer_b.clone()),
+                &selection,
+                false,
+            )
+            .is_some()
+        );
         let prep_only = manifold_core::effects::ParamId::from("enabled");
-        assert!(resolve_mod_target(
-            &ui,
-            &project,
-            &tx,
-            &GraphParamTarget::Generator,
-            &prep_only,
-            Some(&target),
-            InspectorTab::Layer,
-            &Some(layer_b),
-            &selection,
-            false,
-        )
-        .is_none());
+        assert!(
+            resolve_mod_target(
+                &ui,
+                &project,
+                &tx,
+                &GraphParamTarget::Generator,
+                &prep_only,
+                Some(&target),
+                InspectorTab::Layer,
+                &Some(layer_b),
+                &selection,
+                false,
+            )
+            .is_none()
+        );
     }
 
     /// A chain reorder between the scrub's Begin and its Moves must not send
@@ -491,14 +542,30 @@ mod tests {
             )
         };
 
-        assert_eq!(resolve(&project, &b_id), Some(manifold_core::GraphTarget::Effect(b_id.clone())));
+        assert_eq!(
+            resolve(&project, &b_id),
+            Some(manifold_core::GraphTarget::Effect(b_id.clone()))
+        );
 
         project.settings.master_effects.swap(0, 1);
-        assert_eq!(project.settings.master_effects[0].id, b_id, "the reorder happened");
-        assert_eq!(resolve(&project, &b_id), Some(manifold_core::GraphTarget::Effect(b_id.clone())));
-        assert_eq!(resolve(&project, &a_id), Some(manifold_core::GraphTarget::Effect(a_id.clone())));
+        assert_eq!(
+            project.settings.master_effects[0].id, b_id,
+            "the reorder happened"
+        );
+        assert_eq!(
+            resolve(&project, &b_id),
+            Some(manifold_core::GraphTarget::Effect(b_id.clone()))
+        );
+        assert_eq!(
+            resolve(&project, &a_id),
+            Some(manifold_core::GraphTarget::Effect(a_id.clone()))
+        );
 
         project.settings.master_effects.retain(|fx| fx.id != b_id);
-        assert_eq!(resolve(&project, &b_id), None, "a removed effect must not fall through to another");
+        assert_eq!(
+            resolve(&project, &b_id),
+            None,
+            "a removed effect must not fall through to another"
+        );
     }
 }

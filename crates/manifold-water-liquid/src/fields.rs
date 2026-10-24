@@ -28,7 +28,7 @@
 use manifold_gpu::GpuBuffer;
 use manifold_nodes_physics::force_lattice::{LatticeBuffers, LatticeUpload};
 use manifold_physics::input::{AppliedEvent, EventStamp};
-use manifold_physics::tick_hits::{Admission, TickHits, HIT_CAPACITY};
+use manifold_physics::tick_hits::{Admission, HIT_CAPACITY, TickHits};
 use manifold_physics::{FieldValue, PlayedTime, TickStamp, VectorField};
 
 use crate::clock::{ClockFrame, LiquidClock};
@@ -61,7 +61,10 @@ impl FieldFrame {
             ("field_nodes_z", z),
             ("field_spacing", self.lattice.spacing()),
             ("force_lattices", self.force_lattices as f32),
-            ("impulse_tick", self.impulse_tick.map_or(-1.0, |tick| tick as f32)),
+            (
+                "impulse_tick",
+                self.impulse_tick.map_or(-1.0, |tick| tick as f32),
+            ),
         ]
     }
 }
@@ -85,7 +88,10 @@ pub struct LiquidImpulses {
 
 impl Default for LiquidImpulses {
     fn default() -> Self {
-        Self { hits: TickHits::new("Liquid impulses"), combined: Vec::new() }
+        Self {
+            hits: TickHits::new("Liquid impulses"),
+            combined: Vec::new(),
+        }
     }
 }
 
@@ -136,7 +142,9 @@ impl LiquidImpulses {
     ) -> Result<TickStamp, String> {
         let rigid = match (impulse.target.rigid_targets(), rigid) {
             (Some(targets), Some(owner)) => Some((targets, owner)),
-            (Some(_), None) => return Err("Liquid impulses: rigid targets need a coupled rigid world".into()),
+            (Some(_), None) => {
+                return Err("Liquid impulses: rigid targets need a coupled rigid world".into());
+            }
             (None, _) => None,
         };
         if let Admission::Discarded(next) = self.hits.admit(stamp, self.combined.len())? {
@@ -144,10 +152,15 @@ impl LiquidImpulses {
         }
         let mut planned = None;
         if let Some((targets, owner)) = rigid {
-            let rigid_stamp = owner.rigid().worker_impulse_stamp(owner.completed_time(), stamp.sequence)?;
+            let rigid_stamp = owner
+                .rigid()
+                .worker_impulse_stamp(owner.completed_time(), stamp.sequence)?;
             planned = Some(owner.rigid_mut().enqueue_impulse(
                 rigid_stamp,
-                ResolvedRigidImpulse { field: impulse.field.clone(), targets },
+                ResolvedRigidImpulse {
+                    field: impulse.field.clone(),
+                    targets,
+                },
             )?);
         }
         if !impulse.target.affects_fluid() {
@@ -157,7 +170,10 @@ impl LiquidImpulses {
         if planned.is_some() {
             self.combined.push(stamp.sequence);
         }
-        Ok(self.hits.take(stamp, Some(impulse))?.expect("a liquid hit is queued"))
+        Ok(self
+            .hits
+            .take(stamp, Some(impulse))?
+            .expect("a liquid hit is queued"))
     }
 
     /// Receipts of committed frames: the liquid's, then the rigid owner's that
@@ -171,7 +187,10 @@ impl LiquidImpulses {
         let Some(owner) = rigid else { return };
         let combined = &mut self.combined;
         for event in owner.rigid_mut().drain_applied_impulses() {
-            if let Some(index) = combined.iter().position(|&sequence| sequence == event.source.sequence) {
+            if let Some(index) = combined
+                .iter()
+                .position(|&sequence| sequence == event.source.sequence)
+            {
                 combined.swap_remove(index);
                 continue;
             }
@@ -183,16 +202,29 @@ impl LiquidImpulses {
     /// then the rigid owner's. A hit both halves discarded reads once.
     /// Returns the count of further discards past either bounded receipt
     /// list: discarded hits with no stamp.
-    pub fn drain_discarded(&mut self, consume: &mut dyn FnMut(EventStamp), rigid: Option<&mut LiquidRigidOwner>) -> u64 {
+    pub fn drain_discarded(
+        &mut self,
+        consume: &mut dyn FnMut(EventStamp),
+        rigid: Option<&mut LiquidRigidOwner>,
+    ) -> u64 {
         let Some(owner) = rigid else {
             return self.hits.drain_discarded(consume);
         };
         let rigid = owner.rigid_mut();
         for stamp in rigid.drain_discarded_impulses() {
-            if let Some(index) = self.combined.iter().position(|&sequence| sequence == stamp.sequence) {
+            if let Some(index) = self
+                .combined
+                .iter()
+                .position(|&sequence| sequence == stamp.sequence)
+            {
                 self.combined.swap_remove(index);
             }
-            if !self.hits.discarded().iter().any(|liquid| liquid.sequence == stamp.sequence) {
+            if !self
+                .hits
+                .discarded()
+                .iter()
+                .any(|liquid| liquid.sequence == stamp.sequence)
+            {
                 consume(stamp);
             }
         }
@@ -228,7 +260,9 @@ pub struct LiquidFields {
 }
 
 impl LiquidFields {
-    pub fn split_live_hits(&mut self) { self.split_live_hits = true; }
+    pub fn split_live_hits(&mut self) {
+        self.split_live_hits = true;
+    }
 
     /// Lay each of the frame's ticks' fields onto its lattice and sample the
     /// frame's hits. Call right after `clock` advanced to `frame`; `field` is
@@ -256,61 +290,106 @@ impl LiquidFields {
 
     /// The played times the history replay must sample before the next
     /// frame: each boundary a tick may start at under `clock`, in `(from, until]`.
-    pub fn request_samples(&mut self, clock: &LiquidClock, from: PlayedTime, until: PlayedTime, out: &mut Vec<PlayedTime>) {
+    pub fn request_samples(
+        &mut self,
+        clock: &LiquidClock,
+        from: PlayedTime,
+        until: PlayedTime,
+        out: &mut Vec<PlayedTime>,
+    ) {
         self.forces.request_samples(clock, from, until, out);
     }
 
     /// A history replay sample of the field at played time `now`, after `clock`
     /// observed this sample's Speed.
-    pub fn observe_sample(&mut self, clock: &LiquidClock, now: PlayedTime, field: Option<&FieldValue>) {
+    pub fn observe_sample(
+        &mut self,
+        clock: &LiquidClock,
+        now: PlayedTime,
+        field: Option<&FieldValue>,
+    ) {
         self.forces.observe_sample(clock, now, field);
     }
 
-    fn finish(&mut self, lattice: ForceLattice, impulses: &LiquidImpulses) -> Result<FieldFrame, String> {
+    fn finish(
+        &mut self,
+        lattice: ForceLattice,
+        impulses: &LiquidImpulses,
+    ) -> Result<FieldFrame, String> {
         let mut impulse_tick = impulses.impulse_tick();
         self.live_hits.clear();
         let events = impulses.frame_events();
         let count = lattice.node_count();
-        let lattice_count = if self.live_frame.is_some() { events.len().max(1) } else { self.frame_ticks.max(1) as usize };
+        let lattice_count = if self.live_frame.is_some() {
+            events.len().max(1)
+        } else {
+            self.frame_ticks.max(1) as usize
+        };
         self.impulses.resize(count * lattice_count, [0.0; 4]);
         if impulse_tick.is_some() {
             if let Some(frame) = &self.live_frame {
                 let mut first = 0;
                 while first < events.len() {
                     let tick = events[first].applied.tick;
-                    let interval = frame.interval(tick - frame.first_sequence).expect("event belongs to accepted interval");
+                    let interval = frame
+                        .interval(tick - frame.first_sequence)
+                        .expect("event belongs to accepted interval");
                     let start = interval.start.0;
                     let relative = (events[first].source.time.0 - start).max(0.0) as f32;
                     let mut end = first + 1;
-                    while end < events.len() && events[end].applied.tick == tick && ((events[end].source.time.0 - start).max(0.0) as f32).to_bits() == relative.to_bits() {
+                    while end < events.len()
+                        && events[end].applied.tick == tick
+                        && ((events[end].source.time.0 - start).max(0.0) as f32).to_bits()
+                            == relative.to_bits()
+                    {
                         end += 1;
                     }
                     let index = self.live_hits.len();
-                    self.live_hits.push([relative.to_bits(), index as u32, tick as u32, 0]);
-                    lattice.fill(&mut self.impulses[index * count..(index + 1) * count], |x| {
-                        let mut sum = [0.0; 3];
-                        for event in &events[first..end] {
-                            if event.value.target.affects_fluid() {
-                                let value = event.value.field.sample(x);
-                                for axis in 0..3 { sum[axis] += value[axis]; }
-                            }
-                        }
-                        sum
-                    }).map_err(|_| "Liquid impulses: the impulse field is not finite inside the domain".to_string())?;
+                    self.live_hits
+                        .push([relative.to_bits(), index as u32, tick as u32, 0]);
+                    lattice
+                        .fill(
+                            &mut self.impulses[index * count..(index + 1) * count],
+                            |x| {
+                                let mut sum = [0.0; 3];
+                                for event in &events[first..end] {
+                                    if event.value.target.affects_fluid() {
+                                        let value = event.value.field.sample(x);
+                                        for axis in 0..3 {
+                                            sum[axis] += value[axis];
+                                        }
+                                    }
+                                }
+                                sum
+                            },
+                        )
+                        .map_err(|_| {
+                            "Liquid impulses: the impulse field is not finite inside the domain"
+                                .to_string()
+                        })?;
                     first = end;
                 }
             } else {
                 impulse_tick = Some(self.frame_first);
                 for (ordinal, values) in self.impulses.chunks_exact_mut(count).enumerate() {
-                let tick = self.frame_first + ordinal as u64;
-                lattice.fill(values, |x| {
-                    let mut sum = [0.0f32; 3];
-                    for event in events.iter().filter(|event| event.applied.tick == tick && event.value.target.affects_fluid()) {
-                        let v = event.value.field.sample(x);
-                        for axis in 0..3 { sum[axis] += v[axis]; }
-                    }
-                    sum
-                }).map_err(|_| "Liquid impulses: the impulse field is not finite inside the domain".to_string())?;
+                    let tick = self.frame_first + ordinal as u64;
+                    lattice
+                        .fill(values, |x| {
+                            let mut sum = [0.0f32; 3];
+                            for event in events.iter().filter(|event| {
+                                event.applied.tick == tick && event.value.target.affects_fluid()
+                            }) {
+                                let v = event.value.field.sample(x);
+                                for axis in 0..3 {
+                                    sum[axis] += v[axis];
+                                }
+                            }
+                            sum
+                        })
+                        .map_err(|_| {
+                            "Liquid impulses: the impulse field is not finite inside the domain"
+                                .to_string()
+                        })?;
                 }
             }
             self.impulses_dirty = true;
@@ -331,7 +410,9 @@ impl LiquidFields {
         &self.impulses
     }
 
-    pub fn live_hit_count(&self) -> usize { self.live_hits.len() }
+    pub fn live_hit_count(&self) -> usize {
+        self.live_hits.len()
+    }
 
     pub fn live_hits_buffer(&self) -> Option<&GpuBuffer> {
         self.gpu.hits()
@@ -347,8 +428,14 @@ impl LiquidFields {
 
     /// Copy what changed into the stable buffers, in encoder order. Live never
     /// waits for a staging slot; offline waits for the oldest.
-    pub fn upload(&mut self, gpu: &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder<'_>, offline: bool) -> Result<(), String> {
-        let Some(lattice) = self.lattice else { return Ok(()) };
+    pub fn upload(
+        &mut self,
+        gpu: &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder<'_>,
+        offline: bool,
+    ) -> Result<(), String> {
+        let Some(lattice) = self.lattice else {
+            return Ok(());
+        };
         let data = LatticeUpload {
             lattice,
             forces: self.forces.forces(),

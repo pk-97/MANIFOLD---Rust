@@ -17,11 +17,13 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use manifold_node_engine::scene::camera::{Camera, CameraMode};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::primitives::standalone_pipeline::{
+    dispatch_standalone_2d, standalone_pipeline,
+};
+use manifold_node_engine::scene::camera::{Camera, CameraMode};
 
 /// Generated layout: the one param, then the ten derived fields in
 /// declaration order, padded to 16 bytes.
@@ -99,8 +101,32 @@ inventory::submit! {
 }
 
 fn uniforms(cam: &Camera, env_rotation: f32) -> CameraSkyUniforms {
-    let [fwd_x, fwd_y, fwd_z, right_x, right_y, right_z, up_x, up_y, up_z, tan_y] = derive(cam);
-    CameraSkyUniforms { env_rotation, fwd_x, fwd_y, fwd_z, right_x, right_y, right_z, up_x, up_y, up_z, tan_y, _pad0: 0.0 }
+    let [
+        fwd_x,
+        fwd_y,
+        fwd_z,
+        right_x,
+        right_y,
+        right_z,
+        up_x,
+        up_y,
+        up_z,
+        tan_y,
+    ] = derive(cam);
+    CameraSkyUniforms {
+        env_rotation,
+        fwd_x,
+        fwd_y,
+        fwd_z,
+        right_x,
+        right_y,
+        right_z,
+        up_x,
+        up_y,
+        up_z,
+        tan_y,
+        _pad0: 0.0,
+    }
 }
 
 impl Primitive for CameraSky {
@@ -117,7 +143,10 @@ impl Primitive for CameraSky {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
+        let cam = ctx
+            .inputs
+            .camera("camera")
+            .unwrap_or_else(Camera::default_perspective);
         let env_rotation = match ctx.params.get("env_rotation") {
             Some(ParamValue::Float(turn)) => *turn,
             _ => 0.0,
@@ -152,10 +181,10 @@ impl Primitive for CameraSky {
 #[cfg(test)]
 mod tests {
     use super::CameraSky;
+    use crate::node_graph::primitives::{free_camera::FreeCamera, hdri_source::HdriSource};
     use manifold_node_engine::exec::execution_plan::compile;
     use manifold_node_engine::graph::Graph;
     use manifold_node_engine::parameters::ParamValue;
-    use crate::node_graph::primitives::{free_camera::FreeCamera, hdri_source::HdriSource};
     use manifold_node_engine::scene::boundary_nodes::FinalOutput;
 
     /// A 2:1 HDRI feeding the sky must not size it: the output is the frame.
@@ -166,14 +195,26 @@ mod tests {
         let camera = g.add_node(Box::new(FreeCamera::new()));
         let sky = g.add_node(Box::new(CameraSky::new()));
         let out = g.add_node(Box::new(FinalOutput::new()));
-        g.set_param(hdri, "width", ParamValue::Float(4096.0)).unwrap();
-        g.set_param(hdri, "height", ParamValue::Float(2048.0)).unwrap();
+        g.set_param(hdri, "width", ParamValue::Float(4096.0))
+            .unwrap();
+        g.set_param(hdri, "height", ParamValue::Float(2048.0))
+            .unwrap();
         g.connect((hdri, "out"), (sky, "sky")).unwrap();
         g.connect((camera, "out"), (sky, "camera")).unwrap();
         g.connect((sky, "out"), (out, "in")).unwrap();
         let plan = compile(&g).unwrap();
-        let hdri_out = plan.steps().iter().find(|s| s.node == hdri).unwrap().outputs[0].1;
-        assert_eq!(plan.resource_dims(hdri_out), Some((4096, 2048)), "the HDRI is concrete");
+        let hdri_out = plan
+            .steps()
+            .iter()
+            .find(|s| s.node == hdri)
+            .unwrap()
+            .outputs[0]
+            .1;
+        assert_eq!(
+            plan.resource_dims(hdri_out),
+            Some((4096, 2048)),
+            "the HDRI is concrete"
+        );
         let sky_out = plan.steps().iter().find(|s| s.node == sky).unwrap().outputs[0].1;
         assert_eq!(plan.resource_dims(sky_out), None);
         assert_eq!(plan.resource_canvas_scale(sky_out), Some((1, 1)));
@@ -194,9 +235,9 @@ mod gpu_tests {
     };
 
     use super::{CameraSky, uniforms};
-    use manifold_node_engine::scene::camera::{Camera, CameraMode};
-    use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
     use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+    use manifold_node_engine::scene::camera::{Camera, CameraMode};
 
     fn uv_sky(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
         let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
@@ -215,11 +256,18 @@ mod gpu_tests {
             depth: 1,
             format: GpuTextureFormat::Rgba16Float,
             dimension: GpuTextureDimension::D2,
-            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
+            usage: GpuTextureUsage::CPU_UPLOAD
+                | GpuTextureUsage::SHADER_READ
+                | GpuTextureUsage::COPY_SRC,
             label: "camera-sky-uv",
             mip_levels: 1,
         });
-        let bytes = unsafe { std::slice::from_raw_parts(px.as_ptr().cast::<u8>(), std::mem::size_of_val(px.as_slice())) };
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                px.as_ptr().cast::<u8>(),
+                std::mem::size_of_val(px.as_slice()),
+            )
+        };
         device.upload_texture(&tex, bytes);
         tex
     }
@@ -230,12 +278,20 @@ mod gpu_tests {
         enc.copy_texture_to_buffer(tex, &buf, w, h, w * 8);
         enc.commit_and_wait_completed();
         let ptr = buf.mapped_ptr().expect("shared readback");
-        let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
-        halves.chunks_exact(4).map(|c| std::array::from_fn(|k| f16::from_bits(c[k]).to_f32())).collect()
+        let halves: &[u16] =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+        halves
+            .chunks_exact(4)
+            .map(|c| std::array::from_fn(|k| f16::from_bits(c[k]).to_f32()))
+            .collect()
     }
 
     fn camera(yaw: f32, pitch: f32) -> Camera {
-        let fwd = [pitch.cos() * yaw.sin(), pitch.sin(), -pitch.cos() * yaw.cos()];
+        let fwd = [
+            pitch.cos() * yaw.sin(),
+            pitch.sin(),
+            -pitch.cos() * yaw.cos(),
+        ];
         let right = [yaw.cos(), 0.0, yaw.sin()];
         let up = [
             right[1] * fwd[2] - right[2] * fwd[1],
@@ -252,18 +308,25 @@ mod gpu_tests {
 
     /// CPU reference: the env uv this pixel's ray looks up.
     fn expected_uv(cam: &Camera, x: u32, y: u32, w: u32, h: u32) -> [f32; 2] {
-        let CameraMode::Perspective { fov_y } = cam.mode else { unreachable!() };
+        let CameraMode::Perspective { fov_y } = cam.mode else {
+            unreachable!()
+        };
         let t = (0.5 * fov_y as f64).tan();
         let uv = [(x as f64 + 0.5) / w as f64, (y as f64 + 0.5) / h as f64];
         let ndc = [uv[0] * 2.0 - 1.0, 1.0 - uv[1] * 2.0];
         let aspect = w as f64 / h as f64;
         let d: [f64; 3] = std::array::from_fn(|i| {
-            cam.fwd[i] as f64 + ndc[0] * t * aspect * cam.right[i] as f64 + ndc[1] * t * cam.up[i] as f64
+            cam.fwd[i] as f64
+                + ndc[0] * t * aspect * cam.right[i] as f64
+                + ndc[1] * t * cam.up[i] as f64
         });
         let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
         let d = d.map(|c| c / len);
         let pi = std::f64::consts::PI;
-        [((d[2].atan2(d[0]) / (2.0 * pi) + 0.5).rem_euclid(1.0)) as f32, ((d[1].asin()) / pi + 0.5) as f32]
+        [
+            ((d[2].atan2(d[0]) / (2.0 * pi) + 0.5).rem_euclid(1.0)) as f32,
+            ((d[1].asin()) / pi + 0.5) as f32,
+        ]
     }
 
     #[test]
@@ -280,16 +343,34 @@ mod gpu_tests {
         // steeply — none of them crosses the u seam at −x.
         for (yaw, pitch) in [(std::f32::consts::FRAC_PI_2, 0.0), (0.0, 0.5), (0.9, -1.0)] {
             let cam = camera(yaw, pitch);
-            let out = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "camera-sky-out");
+            let out = RenderTarget::new(
+                &device,
+                w,
+                h,
+                GpuTextureFormat::Rgba16Float,
+                "camera-sky-out",
+            );
             let u = uniforms(&cam, 0.0);
             let mut enc = device.create_encoder("camera-sky");
             enc.dispatch_compute(
                 pipeline,
                 &[
-                    GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&u) },
-                    GpuBinding::Texture { binding: 1, texture: &sky },
-                    GpuBinding::Sampler { binding: 2, sampler: &sampler },
-                    GpuBinding::Texture { binding: 3, texture: &out.texture },
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&u),
+                    },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: &sky,
+                    },
+                    GpuBinding::Sampler {
+                        binding: 2,
+                        sampler: &sampler,
+                    },
+                    GpuBinding::Texture {
+                        binding: 3,
+                        texture: &out.texture,
+                    },
                 ],
                 [w.div_ceil(16), h.div_ceil(16), 1],
                 "camera-sky",
@@ -306,7 +387,10 @@ mod gpu_tests {
                     assert!((px[2] - 0.5).abs() < 1e-3);
                 }
             }
-            assert!(worst < 2e-3, "yaw {yaw} pitch {pitch}: worst uv error {worst}");
+            assert!(
+                worst < 2e-3,
+                "yaw {yaw} pitch {pitch}: worst uv error {worst}"
+            );
         }
     }
 }

@@ -6,9 +6,11 @@
 //! the render settings (the scene's `node.render_scene`).
 
 use manifold_foundation::param_range::HardLimit;
-use manifold_foundation::scene_surface::{CardBand, ControlGroup, Feature, Gate, Modes, RgbChannel, Unit};
+use manifold_foundation::scene_surface::{
+    CardBand, ControlGroup, Feature, Gate, Modes, RgbChannel, Unit,
+};
 
-use super::fields::{FieldRow, enabled, is_on, on_off, parse_on, always, wrong_value};
+use super::fields::{FieldRow, always, enabled, is_on, on_off, parse_on, wrong_value};
 use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, perform, row, setup};
 use crate::scene_doc::{CAMERA_PICK, ItemFields};
 
@@ -40,7 +42,9 @@ const LINES: Gate = Gate::Only(Feature::RenderMode, Modes(0b1100));
 const POINTS: Gate = Gate::Only(Feature::RenderMode, Modes(0b1000));
 
 const fn gravity(property: &'static str) -> PropertyRow {
-    row(property, PHYSICS, PhysicsWorld, setup()).unit(Unit::MetresPerSecondSquared).limit(HardLimit::Unlimited)
+    row(property, PHYSICS, PhysicsWorld, setup())
+        .unit(Unit::MetresPerSecondSquared)
+        .limit(HardLimit::Unlimited)
 }
 
 const fn fog(property: &'static str) -> PropertyRow {
@@ -55,7 +59,12 @@ const fn ray_traced(property: &'static str) -> PropertyRow {
     ray_tracing(property).gate(Gate::Dim(Feature::RayTracing))
 }
 
-const fn look(property: &'static str, reach: Reach, section: ControlGroup, order: u8) -> PropertyRow {
+const fn look(
+    property: &'static str,
+    reach: Reach,
+    section: ControlGroup,
+    order: u8,
+) -> PropertyRow {
     row(property, reach, section, perform(CardBand::Look, order))
 }
 
@@ -64,21 +73,62 @@ pub static WORLD_ROWS: [PropertyRow; 57] = [
     // its frame and never recompiles; the choices are the cameras by name.
     // No top limit: a recorded cut past the highest live number is a
     // deleted camera's and shows the first camera, not the last.
-    row(CAMERA_PICK, CUT, Camera, perform(CardBand::Scene, 0)).param("select").name("Camera").limit(AT_LEAST_ZERO),
-    row("camera_count", CUT, Camera, Exposure::Automatic("the cameras in the scene")).param("num_inputs"),
-    row("camera_cut", CUT_IMAGE, Camera, Exposure::Automatic("follows the Camera row")).param("selector"),
-    row("camera_cut_count", CUT_IMAGE, Camera, Exposure::Automatic("the cameras in the scene")).param("num_inputs"),
+    row(CAMERA_PICK, CUT, Camera, perform(CardBand::Scene, 0))
+        .param("select")
+        .name("Camera")
+        .limit(AT_LEAST_ZERO),
+    row(
+        "camera_count",
+        CUT,
+        Camera,
+        Exposure::Automatic("the cameras in the scene"),
+    )
+    .param("num_inputs"),
+    row(
+        "camera_cut",
+        CUT_IMAGE,
+        Camera,
+        Exposure::Automatic("follows the Camera row"),
+    )
+    .param("selector"),
+    row(
+        "camera_cut_count",
+        CUT_IMAGE,
+        Camera,
+        Exposure::Automatic("the cameras in the scene"),
+    )
+    .param("num_inputs"),
     gravity("gravity_x"),
     gravity("gravity_y").default(-9.81),
     gravity("gravity_z"),
-    row("speed", PHYSICS, PhysicsWorld, setup()).limit(HardLimit::Between(SPEED_RANGE.0, SPEED_RANGE.1)),
+    row("speed", PHYSICS, PhysicsWorld, setup())
+        .limit(HardLimit::Between(SPEED_RANGE.0, SPEED_RANGE.1)),
     row("reset", PHYSICS, PhysicsWorld, perform(CardBand::Scene, 1)),
-    row("air_resistance", PHYSICS, PhysicsWorld, setup()).unit(Unit::PerSecond).limit(AT_LEAST_ZERO),
-    row("air_drag", PHYSICS, PhysicsWorld, Exposure::Internal("drag is each item's own; the World has Air Resistance")),
-    row("bodies", PHYSICS, PhysicsWorld, Exposure::Automatic("the bodies in the scene")),
-    row("copy_groups", PHYSICS, PhysicsWorld, Exposure::Automatic("the copy groups in the scene")),
+    row("air_resistance", PHYSICS, PhysicsWorld, setup())
+        .unit(Unit::PerSecond)
+        .limit(AT_LEAST_ZERO),
+    row(
+        "air_drag",
+        PHYSICS,
+        PhysicsWorld,
+        Exposure::Internal("drag is each item's own; the World has Air Resistance"),
+    ),
+    row(
+        "bodies",
+        PHYSICS,
+        PhysicsWorld,
+        Exposure::Automatic("the bodies in the scene"),
+    ),
+    row(
+        "copy_groups",
+        PHYSICS,
+        PhysicsWorld,
+        Exposure::Automatic("the copy groups in the scene"),
+    ),
     // Fog: a light haze when switched on.
-    look("fog_density", FOG, Fog, 0).default(0.02).limit(AT_LEAST_ZERO),
+    look("fog_density", FOG, Fog, 0)
+        .default(0.02)
+        .limit(AT_LEAST_ZERO),
     fog("height_falloff").limit(AT_LEAST_ZERO),
     fog("shaft_intensity").limit(AT_LEAST_ZERO),
     fog("fog_color_r"),
@@ -90,36 +140,142 @@ pub static WORLD_ROWS: [PropertyRow; 57] = [
     fog("shaft_anisotropy"),
     fog("shaft_quality"),
     // Render mode, and the colours each mode draws in.
-    row("render_mode", MODE, RenderMode, setup()).param("mode").switch(Feature::RenderMode),
-    look("clay_color_r", MODE, Shading, 10).colour(RgbChannel::R).gate(SOLID),
-    look("clay_color_g", MODE, Shading, 11).colour(RgbChannel::G).gate(SOLID),
-    look("clay_color_b", MODE, Shading, 12).colour(RgbChannel::B).gate(SOLID),
-    look("line_color_r", MODE, Shading, 13).colour(RgbChannel::R).gate(LINES),
-    look("line_color_g", MODE, Shading, 14).colour(RgbChannel::G).gate(LINES),
-    look("line_color_b", MODE, Shading, 15).colour(RgbChannel::B).gate(LINES),
+    row("render_mode", MODE, RenderMode, setup())
+        .param("mode")
+        .switch(Feature::RenderMode),
+    look("clay_color_r", MODE, Shading, 10)
+        .colour(RgbChannel::R)
+        .gate(SOLID),
+    look("clay_color_g", MODE, Shading, 11)
+        .colour(RgbChannel::G)
+        .gate(SOLID),
+    look("clay_color_b", MODE, Shading, 12)
+        .colour(RgbChannel::B)
+        .gate(SOLID),
+    look("line_color_r", MODE, Shading, 13)
+        .colour(RgbChannel::R)
+        .gate(LINES),
+    look("line_color_g", MODE, Shading, 14)
+        .colour(RgbChannel::G)
+        .gate(LINES),
+    look("line_color_b", MODE, Shading, 15)
+        .colour(RgbChannel::B)
+        .gate(LINES),
     look("line_brightness", MODE, Shading, 16).gate(LINES),
-    look("point_size", MODE, Shading, 17).unit(Unit::Pixels).gate(POINTS),
-    row("scene_render_mode", RENDER, RenderMode, Exposure::Internal("the World's render mode node drives the render"))
-        .param("render_mode"),
+    look("point_size", MODE, Shading, 17)
+        .unit(Unit::Pixels)
+        .gate(POINTS),
+    row(
+        "scene_render_mode",
+        RENDER,
+        RenderMode,
+        Exposure::Internal("the World's render mode node drives the render"),
+    )
+    .param("render_mode"),
     // Ambient occlusion: contact shadows from the depth buffer, averaged over
     // past frames, denoised by a depth-aware blur and multiplied onto the
     // picture where the surface takes it (`ao_mask`: lit raster surfaces,
     // never under ray tracing).
-    look("ao_strength", AO, AmbientOcclusion, 20).param("intensity").name("Strength").limit(AT_LEAST_ZERO),
-    row("ao_distance", AO, AmbientOcclusion, setup()).param("radius").name("Distance").unit(Unit::Metres).limit(HardLimit::AtLeast(0.01)),
-    row("ao_slices", AO, AmbientOcclusion, Exposure::Internal("the sampling quality main shipped")).param("slices"),
-    row("ao_steps", AO, AmbientOcclusion, Exposure::Internal("the sampling quality main shipped")).param("steps"),
-    row("ao_projection", AO, AmbientOcclusion, Exposure::Internal("a scene reads its depth through the camera, never as a height field")).param("projection"),
-    row("ao_relief", AO, AmbientOcclusion, Exposure::Internal("read only by the height field projection")).param("relief"),
-    row("ao_noise_per_frame", AO, AmbientOcclusion, Exposure::Automatic("on, so the history averages a pattern that moves")).param("noise_per_frame"),
-    row("ao_history_frames", AO_HISTORY, AmbientOcclusion, Exposure::Internal("eight past frames settle a change in about eight frames")).param("frames"),
-    row("ao_blur_h_axis", AO_BLUR_H, AmbientOcclusion, Exposure::Automatic("the horizontal pass")).param("axis"),
-    row("ao_blur_h_sigma", AO_BLUR_H, AmbientOcclusion, Exposure::Internal("the denoise main shipped")).param("depth_sigma"),
-    row("ao_blur_v_axis", AO_BLUR_V, AmbientOcclusion, Exposure::Automatic("the vertical pass")).param("axis"),
-    row("ao_blur_v_sigma", AO_BLUR_V, AmbientOcclusion, Exposure::Internal("the denoise main shipped")).param("depth_sigma"),
-    row("ao_multiply_amount", AO_MULTIPLY, AmbientOcclusion, Exposure::Automatic("the whole occlusion")).param("amount"),
-    row("ao_multiply_mode", AO_MULTIPLY, AmbientOcclusion, Exposure::Automatic("multiplied onto the picture")).param("mode"),
-    row("ao_mask_amount", AO_MASK, AmbientOcclusion, Exposure::Internal("the render's ao mask decides where it lands")).param("amount"),
+    look("ao_strength", AO, AmbientOcclusion, 20)
+        .param("intensity")
+        .name("Strength")
+        .limit(AT_LEAST_ZERO),
+    row("ao_distance", AO, AmbientOcclusion, setup())
+        .param("radius")
+        .name("Distance")
+        .unit(Unit::Metres)
+        .limit(HardLimit::AtLeast(0.01)),
+    row(
+        "ao_slices",
+        AO,
+        AmbientOcclusion,
+        Exposure::Internal("the sampling quality main shipped"),
+    )
+    .param("slices"),
+    row(
+        "ao_steps",
+        AO,
+        AmbientOcclusion,
+        Exposure::Internal("the sampling quality main shipped"),
+    )
+    .param("steps"),
+    row(
+        "ao_projection",
+        AO,
+        AmbientOcclusion,
+        Exposure::Internal("a scene reads its depth through the camera, never as a height field"),
+    )
+    .param("projection"),
+    row(
+        "ao_relief",
+        AO,
+        AmbientOcclusion,
+        Exposure::Internal("read only by the height field projection"),
+    )
+    .param("relief"),
+    row(
+        "ao_noise_per_frame",
+        AO,
+        AmbientOcclusion,
+        Exposure::Automatic("on, so the history averages a pattern that moves"),
+    )
+    .param("noise_per_frame"),
+    row(
+        "ao_history_frames",
+        AO_HISTORY,
+        AmbientOcclusion,
+        Exposure::Internal("eight past frames settle a change in about eight frames"),
+    )
+    .param("frames"),
+    row(
+        "ao_blur_h_axis",
+        AO_BLUR_H,
+        AmbientOcclusion,
+        Exposure::Automatic("the horizontal pass"),
+    )
+    .param("axis"),
+    row(
+        "ao_blur_h_sigma",
+        AO_BLUR_H,
+        AmbientOcclusion,
+        Exposure::Internal("the denoise main shipped"),
+    )
+    .param("depth_sigma"),
+    row(
+        "ao_blur_v_axis",
+        AO_BLUR_V,
+        AmbientOcclusion,
+        Exposure::Automatic("the vertical pass"),
+    )
+    .param("axis"),
+    row(
+        "ao_blur_v_sigma",
+        AO_BLUR_V,
+        AmbientOcclusion,
+        Exposure::Internal("the denoise main shipped"),
+    )
+    .param("depth_sigma"),
+    row(
+        "ao_multiply_amount",
+        AO_MULTIPLY,
+        AmbientOcclusion,
+        Exposure::Automatic("the whole occlusion"),
+    )
+    .param("amount"),
+    row(
+        "ao_multiply_mode",
+        AO_MULTIPLY,
+        AmbientOcclusion,
+        Exposure::Automatic("multiplied onto the picture"),
+    )
+    .param("mode"),
+    row(
+        "ao_mask_amount",
+        AO_MASK,
+        AmbientOcclusion,
+        Exposure::Internal("the render's ao mask decides where it lands"),
+    )
+    .param("amount"),
     // Render. Each ray-traced term does nothing while Ray Tracing is off.
     ray_tracing("rt_enabled").switch(Feature::RayTracing),
     ray_tracing("temporal_upscale"),
@@ -128,8 +284,18 @@ pub static WORLD_ROWS: [PropertyRow; 57] = [
     // Its own name: the Ambient Occlusion section below is the screen-space kind.
     ray_traced("rt_ao").name("Ray-Traced Occlusion"),
     ray_traced("rt_gi"),
-    row("rt_firefly_clamp", RENDER, RayTracing, Exposure::Internal("always on; it only guards against fireflies")),
-    row("rt_denoise_feed", RENDER, RayTracing, Exposure::Internal("a debug view of the denoiser input")),
+    row(
+        "rt_firefly_clamp",
+        RENDER,
+        RayTracing,
+        Exposure::Internal("always on; it only guards against fireflies"),
+    ),
+    row(
+        "rt_denoise_feed",
+        RENDER,
+        RayTracing,
+        Exposure::Internal("a debug view of the denoiser input"),
+    ),
 ];
 
 pub static WORLD_FIELDS: [FieldRow; 2] = [

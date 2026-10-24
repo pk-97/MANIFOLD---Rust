@@ -1,8 +1,8 @@
+use manifold_core::{Beats, Seconds};
 use manifold_node_engine::exec::effect_node::FrameTime;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::{ChainError, FrameContextInputs, PresetRuntime};
-use manifold_core::{Beats, Seconds};
 
 fn trigger_graph(wire_initial_count: bool) -> String {
     let initial_wire = if wire_initial_count {
@@ -224,11 +224,11 @@ fn pending_trigger_baseline_carries_across_same_generator_rebuild() {
 
 #[test]
 fn modifier_control_state_runtime_preserves_gate_when_another_modifier_is_removed() {
-    use manifold_node_engine::load::expand::{PreparedModifierControlState, SceneModifierNodeCopy, SceneModifierNodeRoute};
     use manifold_core::NodeId;
     use manifold_core::effect_graph_def::EffectGraphDef;
-    use manifold_core::scene_modifier_preset::{
-        SceneModifierInstanceDef, SceneTargetSelection,
+    use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, SceneTargetSelection};
+    use manifold_node_engine::load::expand::{
+        PreparedModifierControlState, SceneModifierNodeCopy, SceneModifierNodeRoute,
     };
     let local: EffectGraphDef = serde_json::from_str(&trigger_graph(true)).unwrap();
     let instance = SceneModifierInstanceDef {

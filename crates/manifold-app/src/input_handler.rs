@@ -45,12 +45,33 @@ impl InputHandler {
         }
 
         if self.inspector_has_focus {
-            if (m.is_none() || m.is_command_only()) && matches!(logical_key, Key::Named(NamedKey::ArrowUp | NamedKey::ArrowDown)) {
-                let delta = if matches!(logical_key, Key::Named(NamedKey::ArrowUp)) { -1 } else { 1 };
-                if host.navigate_scene_selection(delta, m.is_command_only()) { return true; }
+            if (m.is_none() || m.is_command_only())
+                && matches!(
+                    logical_key,
+                    Key::Named(NamedKey::ArrowUp | NamedKey::ArrowDown)
+                )
+            {
+                let delta = if matches!(logical_key, Key::Named(NamedKey::ArrowUp)) {
+                    -1
+                } else {
+                    1
+                };
+                if host.navigate_scene_selection(delta, m.is_command_only()) {
+                    return true;
+                }
             }
-            if m.is_none() && matches!(logical_key, Key::Named(NamedKey::F2 | NamedKey::Enter)) && host.rename_scene_selection() { return true; }
-            if m.is_none() && matches!(logical_key, Key::Character(c) if c.as_str().eq_ignore_ascii_case("f")) && host.frame_scene_selection() { return true; }
+            if m.is_none()
+                && matches!(logical_key, Key::Named(NamedKey::F2 | NamedKey::Enter))
+                && host.rename_scene_selection()
+            {
+                return true;
+            }
+            if m.is_none()
+                && matches!(logical_key, Key::Character(c) if c.as_str().eq_ignore_ascii_case("f"))
+                && host.frame_scene_selection()
+            {
+                return true;
+            }
         }
 
         // ── Backtick — toggle performance HUD (Unity line 217) ──
@@ -160,7 +181,9 @@ impl InputHandler {
             if self.inspector_has_focus && host.handle_effect_select_all() {
                 return true;
             }
-            if host.select_all_automation() { return true; }
+            if host.select_all_automation() {
+                return true;
+            }
             host.select_all_clips();
             return true;
         }
@@ -229,7 +252,9 @@ impl InputHandler {
         // ── Duplicate: Cmd+D (Unity line 316) ──
         // Context-sensitive: clips take priority; layers if no clips selected.
         if matches!(logical_key, Key::Character(c) if c.as_str() == "d") && m.is_command_only() {
-            if self.inspector_has_focus && host.handle_effect_duplicate() { return true; }
+            if self.inspector_has_focus && host.handle_effect_duplicate() {
+                return true;
+            }
             if host.has_automation_selection() {
                 host.duplicate_selected_automation();
                 return true;
@@ -448,12 +473,11 @@ impl InputHandler {
                         // B14: Up/Down move the selection across layers, one
                         // undo entry per press.
                         let ids: Vec<ClipId> = host.get_selected_clip_ids();
-                        let layer_delta =
-                            if matches!(logical_key, Key::Named(NamedKey::ArrowUp)) {
-                                -1
-                            } else {
-                                1
-                            };
+                        let layer_delta = if matches!(logical_key, Key::Named(NamedKey::ArrowUp)) {
+                            -1
+                        } else {
+                            1
+                        };
                         host.move_selection_across_layers(&ids, layer_delta);
                     }
                     _ => {}
@@ -571,11 +595,26 @@ mod b14_keyboard_layer_tests {
 
     impl TimelineInputHost for MockHost {
         fn navigate_scene_selection(&mut self, delta: i32, reorder: bool) -> bool {
-            if !self.scene_focus { return false; }
-            self.scene_navigation.push((delta, reorder)); true
+            if !self.scene_focus {
+                return false;
+            }
+            self.scene_navigation.push((delta, reorder));
+            true
         }
-        fn rename_scene_selection(&mut self) -> bool { if !self.scene_focus { return false; } self.scene_rename += 1; true }
-        fn frame_scene_selection(&mut self) -> bool { if !self.scene_focus { return false; } self.scene_frame += 1; true }
+        fn rename_scene_selection(&mut self) -> bool {
+            if !self.scene_focus {
+                return false;
+            }
+            self.scene_rename += 1;
+            true
+        }
+        fn frame_scene_selection(&mut self) -> bool {
+            if !self.scene_focus {
+                return false;
+            }
+            self.scene_frame += 1;
+            true
+        }
 
         fn handle_inspector_keyboard(&mut self) -> bool {
             false
@@ -763,7 +802,9 @@ mod b14_keyboard_layer_tests {
             self.automation_duplicate_calls += 1;
         }
         fn nudge_selected_automation(&mut self, beat_delta: f32, value_steps: f32) -> bool {
-            if !self.automation_selection { return false; }
+            if !self.automation_selection {
+                return false;
+            }
             self.automation_nudge_calls.push((beat_delta, value_steps));
             true
         }
@@ -998,7 +1039,10 @@ mod b14_keyboard_layer_tests {
     fn arrows_nudge_selected_automation_points_instead_of_clips() {
         let (mut handler, mut host) = selected_host();
         host.automation_selection = true;
-        let shift = Modifiers { shift: true, ..Modifiers::NONE };
+        let shift = Modifiers {
+            shift: true,
+            ..Modifiers::NONE
+        };
         for (key, m) in [
             (NamedKey::ArrowLeft, Modifiers::NONE),
             (NamedKey::ArrowRight, Modifiers::NONE),
@@ -1011,7 +1055,14 @@ mod b14_keyboard_layer_tests {
         }
         assert_eq!(
             host.automation_nudge_calls,
-            vec![(-0.25, 0.0), (0.25, 0.0), (0.0, 1.0), (0.0, -1.0), (0.0, 0.1), (0.0, -0.1)]
+            vec![
+                (-0.25, 0.0),
+                (0.25, 0.0),
+                (0.0, 1.0),
+                (0.0, -1.0),
+                (0.0, 0.1),
+                (0.0, -0.1)
+            ]
         );
         assert!(host.nudge_calls.is_empty(), "clips must not move");
         assert!(host.move_layer_calls.is_empty());
@@ -1020,7 +1071,11 @@ mod b14_keyboard_layer_tests {
     #[test]
     fn arrows_still_nudge_clips_without_automation_selection() {
         let (mut handler, mut host) = selected_host();
-        handler.handle_keyboard_input(&Key::Named(NamedKey::ArrowRight), Modifiers::NONE, &mut host);
+        handler.handle_keyboard_input(
+            &Key::Named(NamedKey::ArrowRight),
+            Modifiers::NONE,
+            &mut host,
+        );
         assert!(host.automation_nudge_calls.is_empty());
         assert_eq!(host.nudge_calls.len(), 1);
     }
@@ -1029,11 +1084,26 @@ mod b14_keyboard_layer_tests {
     fn automation_copy_cut_and_duplicate_precede_clip_selection() {
         let (mut handler, mut host) = selected_host();
         host.automation_selection = true;
-        let cmd = Modifiers { command: true, ..Modifiers::NONE };
+        let cmd = Modifiers {
+            command: true,
+            ..Modifiers::NONE
+        };
 
-        handler.handle_keyboard_input(&Key::Character(winit::keyboard::SmolStr::new("c")), cmd, &mut host);
-        handler.handle_keyboard_input(&Key::Character(winit::keyboard::SmolStr::new("x")), cmd, &mut host);
-        handler.handle_keyboard_input(&Key::Character(winit::keyboard::SmolStr::new("d")), cmd, &mut host);
+        handler.handle_keyboard_input(
+            &Key::Character(winit::keyboard::SmolStr::new("c")),
+            cmd,
+            &mut host,
+        );
+        handler.handle_keyboard_input(
+            &Key::Character(winit::keyboard::SmolStr::new("x")),
+            cmd,
+            &mut host,
+        );
+        handler.handle_keyboard_input(
+            &Key::Character(winit::keyboard::SmolStr::new("d")),
+            cmd,
+            &mut host,
+        );
 
         assert_eq!(host.automation_copy_calls, 1);
         assert_eq!(host.automation_cut_calls, 1);
@@ -1049,7 +1119,11 @@ mod b14_keyboard_layer_tests {
         host.automation_selection = true;
         assert!(handler.handle_keyboard_input(
             &Key::Character(winit::keyboard::SmolStr::new("d")),
-            Modifiers { command: true, ..Modifiers::NONE }, &mut host,
+            Modifiers {
+                command: true,
+                ..Modifiers::NONE
+            },
+            &mut host,
         ));
         assert_eq!(host.effect_duplicate_calls, 1);
         assert_eq!(host.automation_duplicate_calls, 0);
@@ -1082,9 +1156,16 @@ mod b14_keyboard_layer_tests {
         host.automation_paste_target = true;
         host.pasteboard_files_val = vec![std::path::PathBuf::from("/tmp/song.wav")];
         host.pasteboard_change_count_val = 9;
-        let cmd = Modifiers { command: true, ..Modifiers::NONE };
+        let cmd = Modifiers {
+            command: true,
+            ..Modifiers::NONE
+        };
 
-        handler.handle_keyboard_input(&Key::Character(winit::keyboard::SmolStr::new("v")), cmd, &mut host);
+        handler.handle_keyboard_input(
+            &Key::Character(winit::keyboard::SmolStr::new("v")),
+            cmd,
+            &mut host,
+        );
         assert_eq!(host.automation_paste_calls, vec![0.0]);
         assert!(host.paste_pasteboard_files_calls.is_empty());
         assert!(host.paste_clips_calls.is_empty());
@@ -1094,10 +1175,17 @@ mod b14_keyboard_layer_tests {
         let (mut handler, mut host) = selected_host();
         handler.inspector_has_focus = true;
         host.scene_focus = true;
-        let command = Modifiers { command: true, ..Modifiers::NONE };
-        for (key, modifiers) in [(Key::Named(NamedKey::ArrowUp), Modifiers::NONE),
-            (Key::Named(NamedKey::ArrowDown), command), (Key::Named(NamedKey::F2), Modifiers::NONE),
-            (Key::Named(NamedKey::Enter), Modifiers::NONE), (Key::Character("f".into()), Modifiers::NONE)] {
+        let command = Modifiers {
+            command: true,
+            ..Modifiers::NONE
+        };
+        for (key, modifiers) in [
+            (Key::Named(NamedKey::ArrowUp), Modifiers::NONE),
+            (Key::Named(NamedKey::ArrowDown), command),
+            (Key::Named(NamedKey::F2), Modifiers::NONE),
+            (Key::Named(NamedKey::Enter), Modifiers::NONE),
+            (Key::Character("f".into()), Modifiers::NONE),
+        ] {
             assert!(handler.handle_keyboard_input(&key, modifiers, &mut host));
         }
         assert_eq!(host.scene_navigation, vec![(-1, false), (1, true)]);
@@ -1108,5 +1196,4 @@ mod b14_keyboard_layer_tests {
         assert_eq!(host.scene_navigation.len(), 2);
         assert!(!host.move_layer_calls.is_empty());
     }
-
 }

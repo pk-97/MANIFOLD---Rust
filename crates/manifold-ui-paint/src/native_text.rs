@@ -183,8 +183,11 @@ impl FontManager {
         let font = core_text::font::new_from_name(name, physical_size as f64)
             .ok()
             .filter(|f| f.symbolic_traits() & kCTFontClassMaskTrait != kCTFontSymbolicClass)
-            .unwrap_or_else(|| core_text::font::new_from_CGFont(&self.regular, physical_size as f64));
-        self.family_fonts.insert((family_id, size_x10), font.clone());
+            .unwrap_or_else(|| {
+                core_text::font::new_from_CGFont(&self.regular, physical_size as f64)
+            });
+        self.family_fonts
+            .insert((family_id, size_x10), font.clone());
         font
     }
 
@@ -198,7 +201,9 @@ impl FontManager {
         let mut hasher = ahash::AHasher::default();
         font.postscript_name().hash(&mut hasher);
         let key = hasher.finish();
-        self.fallback_fonts.entry(key).or_insert_with(|| font.clone());
+        self.fallback_fonts
+            .entry(key)
+            .or_insert_with(|| font.clone());
         key
     }
 
@@ -306,7 +311,9 @@ impl GlyphAtlas {
                     // is unreached in practice. Degrade to the base weight
                     // rather than panic — one glyph mis-renders instead of
                     // the renderer crashing.
-                    font_mgr.get_ct_font(physical_size, FontWeight::Regular).clone()
+                    font_mgr
+                        .get_ct_font(physical_size, FontWeight::Regular)
+                        .clone()
                 }
             },
         };
@@ -591,7 +598,9 @@ fn generate_scene_mesh_icon() -> Vec<u8> {
 /// Plane — a flat quad seen in perspective.
 fn generate_scene_plane_icon() -> Vec<u8> {
     let (a, b, c, d) = ((0.14, 0.70), (0.38, 0.34), (0.86, 0.34), (0.62, 0.70));
-    supersample_icon(move |nx, ny| point_in_triangle((nx, ny), a, b, c) || point_in_triangle((nx, ny), a, c, d))
+    supersample_icon(move |nx, ny| {
+        point_in_triangle((nx, ny), a, b, c) || point_in_triangle((nx, ny), a, c, d)
+    })
 }
 
 /// Water — three stacked waves.
@@ -640,8 +649,18 @@ fn generate_scene_material_icon() -> Vec<u8> {
 
 /// Swarm — a loose scatter of dots.
 fn generate_scene_swarm_icon() -> Vec<u8> {
-    const DOTS: [(f32, f32); 6] = [(0.28, 0.30), (0.62, 0.24), (0.78, 0.52), (0.44, 0.50), (0.24, 0.72), (0.64, 0.76)];
-    supersample_icon(move |nx, ny| DOTS.iter().any(|&(cx, cy)| (nx - cx) * (nx - cx) + (ny - cy) * (ny - cy) <= 0.075 * 0.075))
+    const DOTS: [(f32, f32); 6] = [
+        (0.28, 0.30),
+        (0.62, 0.24),
+        (0.78, 0.52),
+        (0.44, 0.50),
+        (0.24, 0.72),
+        (0.64, 0.76),
+    ];
+    supersample_icon(move |nx, ny| {
+        DOTS.iter()
+            .any(|&(cx, cy)| (nx - cx) * (nx - cx) + (ny - cy) * (ny - cy) <= 0.075 * 0.075)
+    })
 }
 
 /// World — a globe: outline, equator and one meridian.
@@ -808,9 +827,8 @@ fn generate_level_bars_icon() -> Vec<u8> {
     const BASELINE: f32 = 0.74;
     let bars = [(0.30f32, 0.50f32), (0.50f32, 0.26f32), (0.70f32, 0.42f32)];
     supersample_icon(move |nx, ny| {
-        bars.iter().any(|&(cx, top)| {
-            (nx - cx).abs() <= BAR_HALF_W && ny >= top && ny <= BASELINE
-        })
+        bars.iter()
+            .any(|&(cx, top)| (nx - cx).abs() <= BAR_HALF_W && ny >= top && ny <= BASELINE)
     })
 }
 
@@ -1153,7 +1171,18 @@ impl NativeTextRenderer {
                 id
             }
         };
-        self.push_text(x, y, text, font_size, color, FontWeight::Regular, Some(id), clip_bounds, depth, transform);
+        self.push_text(
+            x,
+            y,
+            text,
+            font_size,
+            color,
+            FontWeight::Regular,
+            Some(id),
+            clip_bounds,
+            depth,
+            transform,
+        );
     }
 
     /// Queue a text draw command.
@@ -1170,7 +1199,18 @@ impl NativeTextRenderer {
         depth: Depth,
         transform: Affine2,
     ) {
-        self.push_text(x, y, text, font_size, color, font_weight, None, clip_bounds, depth, transform);
+        self.push_text(
+            x,
+            y,
+            text,
+            font_size,
+            color,
+            font_weight,
+            None,
+            clip_bounds,
+            depth,
+            transform,
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1281,17 +1321,21 @@ impl NativeTextRenderer {
             // intern any fallback fonts it discovers (BUG-107).
             let (ct_font, base_weight): (CTFont, Option<FontWeight>) = match cmd.family {
                 Some(id) => (
-                    self.font_manager
-                        .get_family_font(id, &self.families[id as usize], physical_size),
+                    self.font_manager.get_family_font(
+                        id,
+                        &self.families[id as usize],
+                        physical_size,
+                    ),
                     None,
                 ),
                 None => (
-                    self.font_manager.get_ct_font(physical_size, cmd.font_weight).clone(),
+                    self.font_manager
+                        .get_ct_font(physical_size, cmd.font_weight)
+                        .clone(),
                     Some(cmd.font_weight),
                 ),
             };
-            let Some(runs) = shape_line(&mut self.font_manager, base_weight, &ct_font, text)
-            else {
+            let Some(runs) = shape_line(&mut self.font_manager, base_weight, &ct_font, text) else {
                 continue;
             };
 
@@ -1321,8 +1365,7 @@ impl NativeTextRenderer {
                         size_x10,
                         font: run.font,
                     };
-                    let Some(info) = self.atlas.rasterize_glyph(&mut self.font_manager, key)
-                    else {
+                    let Some(info) = self.atlas.rasterize_glyph(&mut self.font_manager, key) else {
                         continue;
                     };
 
@@ -1424,9 +1467,7 @@ impl NativeTextRenderer {
             if added > 0 {
                 match self.text_depth_ranges.last_mut() {
                     Some((d, _, count)) if *d == cmd.depth => *count += added,
-                    _ => self
-                        .text_depth_ranges
-                        .push((cmd.depth, range_start, added)),
+                    _ => self.text_depth_ranges.push((cmd.depth, range_start, added)),
                 }
             }
         }
@@ -1527,17 +1568,17 @@ impl NativeTextRenderer {
             if added > 0 {
                 match self.icon_depth_ranges.last_mut() {
                     Some((d, _, count)) if *d == cmd.depth => *count += added,
-                    _ => self
-                        .icon_depth_ranges
-                        .push((cmd.depth, range_start, added)),
+                    _ => self.icon_depth_ranges.push((cmd.depth, range_start, added)),
                 }
             }
         }
 
         // Union of text and icon depths, ascending — handed to the UIRenderer
         // so it visits every depth that carries glyphs.
-        self.depths.extend(self.text_depth_ranges.iter().map(|r| r.0));
-        self.depths.extend(self.icon_depth_ranges.iter().map(|r| r.0));
+        self.depths
+            .extend(self.text_depth_ranges.iter().map(|r| r.0));
+        self.depths
+            .extend(self.icon_depth_ranges.iter().map(|r| r.0));
         self.depths.sort_unstable();
         self.depths.dedup();
 
@@ -1787,7 +1828,9 @@ impl TextMeasure for CachedTextMeasure {
         if cache.entries.len() >= MAX_MEASURE_CACHE {
             cache.entries.clear();
         }
-        cache.entries.insert(hash, (text.into(), font_size, font_weight, size));
+        cache
+            .entries
+            .insert(hash, (text.into(), font_size, font_weight, size));
         size
     }
 }
@@ -1886,7 +1929,11 @@ fn shape_line(
         });
     }
 
-    if result.is_empty() { None } else { Some(result) }
+    if result.is_empty() {
+        None
+    } else {
+        Some(result)
+    }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -1994,20 +2041,40 @@ mod tests {
         let georgia = fm.get_family_font(0, "Georgia", 24.0);
         assert_eq!(georgia.family_name(), "Georgia", "Georgia ships with macOS");
         let runs = shape_line(&mut fm, None, &georgia, "Hg").expect("shapes");
-        assert!(runs.iter().all(|r| matches!(r.font, GlyphFont::Fallback(_))));
+        assert!(
+            runs.iter()
+                .all(|r| matches!(r.font, GlyphFont::Fallback(_)))
+        );
 
         let mut atlas = GlyphAtlas::new_cpu_only();
         let font = runs[0].font;
         let glyph_id = runs[0].glyphs[0];
         let small = atlas
-            .rasterize_glyph(&mut fm, GlyphKey { glyph_id, size_x10: 120, font })
+            .rasterize_glyph(
+                &mut fm,
+                GlyphKey {
+                    glyph_id,
+                    size_x10: 120,
+                    font,
+                },
+            )
             .map(|g| g.pixel_h)
             .expect("small");
         let large = atlas
-            .rasterize_glyph(&mut fm, GlyphKey { glyph_id, size_x10: 480, font })
+            .rasterize_glyph(
+                &mut fm,
+                GlyphKey {
+                    glyph_id,
+                    size_x10: 480,
+                    font,
+                },
+            )
             .map(|g| g.pixel_h)
             .expect("large");
-        assert!(large > small * 3, "48px glyph ({large}) must be ~4x the 12px one ({small})");
+        assert!(
+            large > small * 3,
+            "48px glyph ({large}) must be ~4x the 12px one ({small})"
+        );
     }
 
     /// A symbol font's name would draw as pictures, so the picker shows it
@@ -2017,9 +2084,16 @@ mod tests {
         let mut fm = FontManager::new();
         for (id, name) in ["Wingdings", "Zapf Dingbats"].into_iter().enumerate() {
             let f = fm.get_family_font(id as u16, name, 24.0);
-            assert!(f.family_name().starts_with("Inter"), "{name} resolved to {}", f.family_name());
+            assert!(
+                f.family_name().starts_with("Inter"),
+                "{name} resolved to {}",
+                f.family_name()
+            );
         }
-        assert_eq!(fm.get_family_font(9, "Georgia", 24.0).family_name(), "Georgia");
+        assert_eq!(
+            fm.get_family_font(9, "Georgia", 24.0).family_name(),
+            "Georgia"
+        );
     }
 
     /// A cache hit returns exactly what CoreText returned on the miss, for
@@ -2032,8 +2106,16 @@ mod tests {
             for size in [9_u16, 11, 13, 24] {
                 for weight in [FontWeight::Regular, FontWeight::Medium, FontWeight::Bold] {
                     let direct = measure_text_ct(&mut fm, text, size as f32, weight);
-                    assert_eq!(m.measure_text(text, size, weight), direct, "{text:?} {size} {weight:?}");
-                    assert_eq!(m.measure_text(text, size, weight), direct, "hit {text:?} {size} {weight:?}");
+                    assert_eq!(
+                        m.measure_text(text, size, weight),
+                        direct,
+                        "{text:?} {size} {weight:?}"
+                    );
+                    assert_eq!(
+                        m.measure_text(text, size, weight),
+                        direct,
+                        "hit {text:?} {size} {weight:?}"
+                    );
                 }
             }
         }

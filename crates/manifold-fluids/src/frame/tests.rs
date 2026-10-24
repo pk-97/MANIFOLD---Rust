@@ -227,9 +227,16 @@ fn live_owner_frame_event_split_retains_the_numerical_offer() {
     let mut frame = world.begin_live_frame(DT).unwrap();
     let offered = frame.next_substep().unwrap().unwrap();
     let first = Seconds(offered.0 * 0.5);
-    frame.set_fields(first, &[FieldInput {
-        field: &clear, acceleration: 1.0, delta_velocity: 0.0,
-    }]).unwrap();
+    frame
+        .set_fields(
+            first,
+            &[FieldInput {
+                field: &clear,
+                acceleration: 1.0,
+                delta_velocity: 0.0,
+            }],
+        )
+        .unwrap();
     frame.advance(first).unwrap();
     let retained = frame.next_substep().unwrap().unwrap();
     assert!((first.0 + retained.0 - offered.0).abs() < 1e-12);
@@ -239,7 +246,10 @@ fn live_owner_frame_event_split_retains_the_numerical_offer() {
     frame.advance(remainder).unwrap();
     assert_eq!(frame.next_substep().unwrap(), None);
     let stats = frame.finish().unwrap();
-    assert_eq!(stats.substeps, 3, "two numerical offers plus one event split");
+    assert_eq!(
+        stats.substeps, 3,
+        "two numerical offers plus one event split"
+    );
     assert!(stats.cap_hit);
 }
 
@@ -277,7 +287,11 @@ fn live_span_removes_only_the_markers_its_configured_interval_removes() {
     );
     let mut world = scene(1, 6, [0.0; 3]);
     for invalid in [0.0, -DT.0, f64::NAN, f64::INFINITY] {
-        assert!(world.set_speed_limit_interval(Some(Seconds(invalid))).is_err());
+        assert!(
+            world
+                .set_speed_limit_interval(Some(Seconds(invalid)))
+                .is_err()
+        );
     }
 }
 

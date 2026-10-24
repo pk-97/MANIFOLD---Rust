@@ -29,8 +29,10 @@ use manifold_core::params::Param;
 use manifold_core::project::Project;
 use std::collections::BTreeMap;
 
-use manifold_core::scene_doc::{ItemFields, ItemId, SceneDoc, SceneEditError, param_id, split_param_id};
 use manifold_core::LayerId;
+use manifold_core::scene_doc::{
+    ItemFields, ItemId, SceneDoc, SceneEditError, param_id, split_param_id,
+};
 
 use crate::commands::graph::prune_instance_params;
 
@@ -67,7 +69,12 @@ pub struct ParamSlice {
 }
 
 fn kept<T: Clone>(values: &Option<Vec<T>>, keep: impl Fn(&T) -> bool) -> Vec<T> {
-    values.iter().flatten().filter(|value| keep(value)).cloned().collect()
+    values
+        .iter()
+        .flatten()
+        .filter(|value| keep(value))
+        .cloned()
+        .collect()
 }
 
 fn extended<T>(values: &mut Option<Vec<T>>, more: Vec<T>) {
@@ -80,7 +87,12 @@ impl ParamSlice {
     fn capture(instance: &PresetInstance, ids: &[String]) -> Self {
         let wanted = |id: &str| ids.iter().any(|want| want == id);
         Self {
-            params: instance.params.iter().filter(|p| wanted(p.id())).cloned().collect(),
+            params: instance
+                .params
+                .iter()
+                .filter(|p| wanted(p.id()))
+                .cloned()
+                .collect(),
             drivers: kept(&instance.drivers, |d| wanted(&d.param_id)),
             envelopes: kept(&instance.envelopes, |e| wanted(&e.param_id)),
             ableton_mappings: kept(&instance.ableton_mappings, |m| wanted(&m.param_id)),
@@ -127,8 +139,11 @@ impl ParamSlice {
             let copy = param_id(map.get(item)?, property);
             instance.params.contains(&copy).then_some(copy)
         };
-        let values: Vec<(String, f32, f32)> =
-            self.params.iter().filter_map(|p| Some((to(p.id())?, p.value, p.base))).collect();
+        let values: Vec<(String, f32, f32)> = self
+            .params
+            .iter()
+            .filter_map(|p| Some((to(p.id())?, p.value, p.base)))
+            .collect();
         let drivers = repointed(&self.drivers, &to, |d| &mut d.param_id);
         let envelopes = repointed(&self.envelopes, &to, |e| &mut e.param_id);
         let ableton_mappings = repointed(&self.ableton_mappings, &to, |m| &mut m.param_id);
@@ -166,12 +181,17 @@ fn repointed<T: Clone>(
 }
 
 /// The scene layer's generator instance.
-fn scene_instance<'p>(project: &'p mut Project, layer: &LayerId) -> Result<&'p mut PresetInstance, String> {
+fn scene_instance<'p>(
+    project: &'p mut Project,
+    layer: &LayerId,
+) -> Result<&'p mut PresetInstance, String> {
     let (_, layer_ref) = project
         .timeline
         .find_layer_by_id_mut(layer.as_str())
         .ok_or_else(|| format!("no layer {layer}"))?;
-    let instance = layer_ref.gen_params_mut().ok_or_else(|| format!("layer {layer} has no generator"))?;
+    let instance = layer_ref
+        .gen_params_mut()
+        .ok_or_else(|| format!("layer {layer} has no generator"))?;
     if instance.scene.is_none() {
         return Err(format!("layer {layer} is not a scene layer"));
     }
@@ -189,7 +209,12 @@ pub(crate) fn apply(
     let instance = scene_instance(project, layer)?;
     let doc = instance.scene.clone().expect("scene layer");
     let mut edited = doc.clone();
-    let values = |id: &str| instance.params.contains(id).then(|| instance.get_base_param(id));
+    let values = |id: &str| {
+        instance
+            .params
+            .contains(id)
+            .then(|| instance.get_base_param(id))
+    };
     edit(&mut edited, &values).map_err(|error| error.to_string())?;
     // A swapped Modifier card's rows start at the new type's defaults
     // (section 7.19), even where the two types share a property name. A row
@@ -198,12 +223,18 @@ pub(crate) fn apply(
     let old_ids: Vec<String> = instance.params.iter().map(|p| p.id().to_owned()).collect();
     let reset: Vec<String> = old_ids
         .iter()
-        .filter(|id| split_param_id(id).is_some_and(|(item, _)| swapped.iter().any(|card| card.as_str() == item)))
+        .filter(|id| {
+            split_param_id(id)
+                .is_some_and(|(item, _)| swapped.iter().any(|card| card.as_str() == item))
+        })
         .cloned()
         .collect();
     let mut held = ParamSlice::capture(instance, &old_ids);
     instance.install_scene_document(edited)?;
-    let gone: Vec<String> = old_ids.into_iter().filter(|id| instance.params.get(id).is_none()).collect();
+    let gone: Vec<String> = old_ids
+        .into_iter()
+        .filter(|id| instance.params.get(id).is_none())
+        .collect();
     prune_instance_params(instance, &gone);
     if !reset.is_empty() {
         for id in &reset {
@@ -212,7 +243,11 @@ pub(crate) fn apply(
         instance.refresh_manifest_from_graph();
     }
     held = ParamSlice::capture_kept(held, &gone, &reset);
-    Ok(Before { doc, removed: held, written: Vec::new() })
+    Ok(Before {
+        doc,
+        removed: held,
+        written: Vec::new(),
+    })
 }
 
 impl ParamSlice {
@@ -222,12 +257,36 @@ impl ParamSlice {
     fn capture_kept(slice: Self, gone: &[String], reset: &[String]) -> Self {
         let wanted = |id: &str| gone.iter().any(|want| want == id);
         Self {
-            params: slice.params.into_iter().filter(|p| wanted(p.id()) || reset.iter().any(|want| want == p.id())).collect(),
-            drivers: slice.drivers.into_iter().filter(|d| wanted(&d.param_id)).collect(),
-            envelopes: slice.envelopes.into_iter().filter(|e| wanted(&e.param_id)).collect(),
-            ableton_mappings: slice.ableton_mappings.into_iter().filter(|m| wanted(&m.param_id)).collect(),
-            audio_mods: slice.audio_mods.into_iter().filter(|a| wanted(&a.param_id)).collect(),
-            automation_lanes: slice.automation_lanes.into_iter().filter(|l| wanted(&l.param_id)).collect(),
+            params: slice
+                .params
+                .into_iter()
+                .filter(|p| wanted(p.id()) || reset.iter().any(|want| want == p.id()))
+                .collect(),
+            drivers: slice
+                .drivers
+                .into_iter()
+                .filter(|d| wanted(&d.param_id))
+                .collect(),
+            envelopes: slice
+                .envelopes
+                .into_iter()
+                .filter(|e| wanted(&e.param_id))
+                .collect(),
+            ableton_mappings: slice
+                .ableton_mappings
+                .into_iter()
+                .filter(|m| wanted(&m.param_id))
+                .collect(),
+            audio_mods: slice
+                .audio_mods
+                .into_iter()
+                .filter(|a| wanted(&a.param_id))
+                .collect(),
+            automation_lanes: slice
+                .automation_lanes
+                .into_iter()
+                .filter(|l| wanted(&l.param_id))
+                .collect(),
         }
     }
 }
@@ -242,7 +301,9 @@ fn swapped_cards(before: &SceneDoc, after: &SceneDoc) -> Vec<ItemId> {
         .items
         .iter()
         .filter(|item| matches!(item.fields, ItemFields::Modifier(_)))
-        .filter(|item| type_of(before, &item.id).is_some_and(|old| Some(old) != type_of(after, &item.id)))
+        .filter(|item| {
+            type_of(before, &item.id).is_some_and(|old| Some(old) != type_of(after, &item.id))
+        })
         .map(|item| item.id.clone())
         .collect()
 }
@@ -262,7 +323,10 @@ pub(crate) fn restore(project: &mut Project, layer: &LayerId, before: Before) {
     if let Err(error) = instance.install_scene_document(doc) {
         eprintln!("[manifold-editing] scene undo did not compile: {error}");
     }
-    let added: Vec<String> = ids.into_iter().filter(|id| instance.params.get(id).is_none()).collect();
+    let added: Vec<String> = ids
+        .into_iter()
+        .filter(|id| instance.params.get(id).is_none())
+        .collect();
     prune_instance_params(instance, &added);
     before.removed.restore(instance);
     for (id, value, base) in before.written.into_iter().rev() {

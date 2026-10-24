@@ -6,11 +6,11 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use crate::NodeId;
 use crate::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID,
 };
 use crate::flatten::flatten_groups;
-use crate::NodeId;
 
 const MAX_AUTHORED_NODES: usize = 65_536;
 const MAX_AUTHORED_WIRES: usize = 262_144;
@@ -90,10 +90,7 @@ impl FlatSceneIndex {
                 ));
             };
             if by_ref.insert(leaf.clone(), flat_id).is_some() {
-                return Err(duplicate(
-                    &leaf,
-                    "stable path resolves more than once",
-                ));
+                return Err(duplicate(&leaf, "stable path resolves more than once"));
             }
             by_id.insert(flat_id, leaf);
         }
@@ -143,10 +140,7 @@ impl FlatSceneIndex {
         Ok(Some(wire))
     }
 
-    pub fn scene_objects(
-        &self,
-        reference: &NodeId,
-    ) -> Result<Vec<NodeId>, SceneIndexError> {
+    pub fn scene_objects(&self, reference: &NodeId) -> Result<Vec<NodeId>, SceneIndexError> {
         let scene_id = self.flat_id(reference)?;
         let scene = self
             .flat
@@ -201,7 +195,8 @@ impl FlatSceneIndex {
         let Some(wire) = self.input(scene, &format!("object_{slot}"))? else {
             return Ok(None);
         };
-        self.scene_object_producer(scene, wire).map(|object| Some(object.clone()))
+        self.scene_object_producer(scene, wire)
+            .map(|object| Some(object.clone()))
     }
 
     fn scene_object_producer(
@@ -221,13 +216,18 @@ impl FlatSceneIndex {
         if producer.type_id != "node.scene_object" {
             return Err(SceneIndexError::MissingTarget {
                 path: scene.to_string(),
-                detail: format!("object wire '{}' is produced by '{}'", wire.to_port, producer.type_id),
+                detail: format!(
+                    "object wire '{}' is produced by '{}'",
+                    wire.to_port, producer.type_id
+                ),
             });
         }
-        self.by_id.get(&producer.id).ok_or_else(|| SceneIndexError::MissingTarget {
-            path: scene.to_string(),
-            detail: format!("scene object {} has no stable reference", producer.id),
-        })
+        self.by_id
+            .get(&producer.id)
+            .ok_or_else(|| SceneIndexError::MissingTarget {
+                path: scene.to_string(),
+                detail: format!("scene object {} has no stable reference", producer.id),
+            })
     }
 
     fn flat_id(&self, reference: &NodeId) -> Result<u32, SceneIndexError> {
@@ -297,19 +297,10 @@ fn inspect_scope(
                     "group scope has no stable node id",
                 ));
             }
-            node.handle.as_deref().ok_or_else(|| {
-                invalid(
-                    node.node_id.as_str(),
-                    "group has no handle",
-                )
-            })?;
-            inspect_scope(
-                &group.nodes,
-                &group.wires,
-                depth + 1,
-                counts,
-                leaves,
-            )?;
+            node.handle
+                .as_deref()
+                .ok_or_else(|| invalid(node.node_id.as_str(), "group has no handle"))?;
+            inspect_scope(&group.nodes, &group.wires, depth + 1, counts, leaves)?;
         } else if !node.node_id.is_empty() {
             leaves.push(node.node_id.clone());
         }
@@ -374,10 +365,7 @@ mod tests {
             .expect("group outputs should route");
         assert_eq!(
             objects,
-            vec![
-                reference("left_object"),
-                reference("right_object"),
-            ]
+            vec![reference("left_object"), reference("right_object"),]
         );
         assert_eq!(
             index.node(&scene).expect("scene target").type_id,
@@ -415,10 +403,7 @@ mod tests {
             index
                 .scene_objects(&reference("scan_render"))
                 .expect("renamed group outputs should route"),
-            vec![
-                reference("left_object"),
-                reference("right_object"),
-            ]
+            vec![reference("left_object"), reference("right_object"),]
         );
     }
 

@@ -126,14 +126,14 @@ impl Primitive for TriggerGate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_node_engine::exec::backend::MockBackend;
-    use manifold_node_engine::exec::backend::Backend;
+    use manifold_core::{Beats, Seconds};
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs};
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::exec::backend::MockBackend;
     use manifold_node_engine::exec::effect_node::{FrameTime, ParamValues};
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::ports::{PortType, ScalarType};
     use manifold_node_engine::primitive::PrimitiveSpec;
-    use manifold_core::{Beats, Seconds};
 
     #[test]
     fn declares_single_enable_param_defaulting_true() {

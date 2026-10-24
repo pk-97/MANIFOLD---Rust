@@ -27,8 +27,8 @@
 //! starvation" question the frame-pacing investigations turn on is unchanged.
 //! See `ui_frame.rs` module doc deviation #6.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use ahash::AHashMap;
@@ -181,7 +181,11 @@ impl UiFrameProfile {
         // True GPU execution time of the UI offscreen "Frame" buffer (async).
         let g_us = self.gpu_us.load(Ordering::Relaxed);
         let g_n = self.gpu_samples.load(Ordering::Relaxed);
-        let gpu_avg = if g_n > 0 { g_us as f64 / 1000.0 / g_n as f64 } else { 0.0 };
+        let gpu_avg = if g_n > 0 {
+            g_us as f64 / 1000.0 / g_n as f64
+        } else {
+            0.0
+        };
 
         eprintln!(
             "\n[ui-profile] {} frames | display link {:.1}Hz | dt {:.2}ms ({:.0} fps, max {:.2}) | cpu {:.2}ms (max {:.2}) | UI offscreen GPU {:.2}ms ({} samples) | vsync/idle wait {:.2}ms | budget 8.33ms@120 / 16.67ms@60",
@@ -198,7 +202,11 @@ impl UiFrameProfile {
         );
 
         // Ordered labels first, then any stragglers not in ORDER.
-        let mut labels: Vec<&str> = ORDER.iter().copied().filter(|l| self.sum.contains_key(l)).collect();
+        let mut labels: Vec<&str> = ORDER
+            .iter()
+            .copied()
+            .filter(|l| self.sum.contains_key(l))
+            .collect();
         for &label in self.sum.keys() {
             if !ORDER.contains(&label) {
                 labels.push(label);
@@ -208,14 +216,25 @@ impl UiFrameProfile {
             let d = self.sum[label];
             let a = avg(d);
             let mx = self.max.get(label).copied().unwrap_or_default();
-            let pct = if cpu_avg > 0.0 { a / cpu_avg * 100.0 } else { 0.0 };
-            eprintln!("  {label:<34} {a:>7.3}ms  {pct:>4.0}%   max {:>6.3}ms", ms(mx));
+            let pct = if cpu_avg > 0.0 {
+                a / cpu_avg * 100.0
+            } else {
+                0.0
+            };
+            eprintln!(
+                "  {label:<34} {a:>7.3}ms  {pct:>4.0}%   max {:>6.3}ms",
+                ms(mx)
+            );
         }
         eprintln!(
             "  {:<34} {:>7.3}ms  {:>4.0}%   (sum of passes; gap vs cpu = unmeasured)",
             "= attributed",
             attributed,
-            if cpu_avg > 0.0 { attributed / cpu_avg * 100.0 } else { 0.0 },
+            if cpu_avg > 0.0 {
+                attributed / cpu_avg * 100.0
+            } else {
+                0.0
+            },
         );
     }
 

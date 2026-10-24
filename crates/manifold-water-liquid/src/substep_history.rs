@@ -5,8 +5,8 @@
 //! rows do not publish faces; consumers must skip them before reading a grid.
 use super::grid::face_len;
 use crate::primitives::face_sample_component::FaceSampleComponent;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 const ARGUMENT_BYTES: u64 = 3 * 3 * 4;
 // Adapt the solver plan once, then let the existing component primitive
@@ -53,7 +53,11 @@ impl SubstepHistory {
     pub fn prepare(&mut self, device: &GpuDevice) {
         standalone_pipeline::<FaceSampleComponent>(&mut self.component, device);
         self.capture_schedule.get_or_insert_with(|| {
-            device.create_compute_pipeline(CAPTURE_SHADER, "capture_schedule", "liquid.substep_history.schedule")
+            device.create_compute_pipeline(
+                CAPTURE_SHADER,
+                "capture_schedule",
+                "liquid.substep_history.schedule",
+            )
         });
     }
     pub fn reserve(
@@ -87,7 +91,13 @@ impl SubstepHistory {
     }
     /// GPU FLIP adapts its scheduler and native face records here. Consumers
     /// never see either solver-private layout.
-    pub fn capture(&mut self, enc: &mut GpuEncoder, index: u32, plan: &GpuBuffer, faces: &GpuBuffer) {
+    pub fn capture(
+        &mut self,
+        enc: &mut GpuEncoder,
+        index: u32,
+        plan: &GpuBuffer,
+        faces: &GpuBuffer,
+    ) {
         let (cells, slots) = self.shape.expect("history reserved");
         assert!(index < slots);
         let schedule = self.schedule.as_ref().expect("schedule reserved");
@@ -107,10 +117,25 @@ impl SubstepHistory {
         enc.dispatch_compute(
             self.capture_schedule.as_ref().expect("capture prepared"),
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::cast_slice(&dispatch) },
-                GpuBinding::Buffer { binding: 1, buffer: plan, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: schedule, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: arguments, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::cast_slice(&dispatch),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: plan,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: schedule,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: arguments,
+                    offset: 0,
+                },
             ],
             [1, 1, 1],
             "liquid.substep_history.schedule",
@@ -167,7 +192,8 @@ mod tests {
     use super::*;
     #[test]
     fn liquid_substep_history_capture_shader_validates() {
-        let module = naga::front::wgsl::parse_str(CAPTURE_SHADER).expect("history capture WGSL parses");
+        let module =
+            naga::front::wgsl::parse_str(CAPTURE_SHADER).expect("history capture WGSL parses");
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),

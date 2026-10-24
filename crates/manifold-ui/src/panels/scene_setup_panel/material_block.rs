@@ -6,7 +6,9 @@
 
 use super::*;
 use crate::panels::dropdown::DropdownItem;
-use crate::param_surface::{MATERIAL_FEATURES, MaterialFeature, MaterialGroup, MaterialLook, MaterialParamRole};
+use crate::param_surface::{
+    MATERIAL_FEATURES, MaterialFeature, MaterialGroup, MaterialLook, MaterialParamRole,
+};
 
 /// The block's buttons built this frame, cleared on every rebuild.
 #[derive(Default)]
@@ -58,12 +60,18 @@ pub(super) fn row_feature(row: &ParamRow) -> Option<MaterialFeature> {
 /// the Material's order, then Advanced and the dormant texture rows.
 pub(super) fn material_bucket(row: &ParamRow, features: &[MaterialFeature]) -> usize {
     if let Some(feature) = row_feature(row) {
-        return 2 + features.iter().position(|candidate| *candidate == feature).unwrap_or(features.len() + feature as usize);
+        return 2 + features
+            .iter()
+            .position(|candidate| *candidate == feature)
+            .unwrap_or(features.len() + feature as usize);
     }
     match row.spec.material_role {
-        Some(MaterialParamRole::Scalar(MaterialGroup::Surface)) | Some(MaterialParamRole::Colour(MaterialGroup::Surface, ..)) => 0,
-        Some(MaterialParamRole::Scalar(MaterialGroup::Opacity)) | Some(MaterialParamRole::Colour(MaterialGroup::Opacity, ..)) => 1,
-        Some(MaterialParamRole::Placement(family, ..)) | Some(MaterialParamRole::Sampler(family, ..)) => 30 + family as usize,
+        Some(MaterialParamRole::Scalar(MaterialGroup::Surface))
+        | Some(MaterialParamRole::Colour(MaterialGroup::Surface, ..)) => 0,
+        Some(MaterialParamRole::Scalar(MaterialGroup::Opacity))
+        | Some(MaterialParamRole::Colour(MaterialGroup::Opacity, ..)) => 1,
+        Some(MaterialParamRole::Placement(family, ..))
+        | Some(MaterialParamRole::Sampler(family, ..)) => 30 + family as usize,
         _ => 20,
     }
 }
@@ -73,23 +81,34 @@ impl ScenePanel {
     /// its inspector group; every other row by its control group.
     pub(super) fn material_section_name(&self, row: &ParamRow) -> Option<String> {
         let Some(role) = row.spec.material_role else {
-            return Some(self.lighting_section_title(row).unwrap_or(self.property_group(row).title()).to_string());
+            return Some(
+                self.lighting_section_title(row)
+                    .unwrap_or(self.property_group(row).title())
+                    .to_string(),
+            );
         };
         let name = match role {
-            MaterialParamRole::Placement(..) | MaterialParamRole::Sampler(..) => "Advanced \u{b7} Textures".to_string(),
+            MaterialParamRole::Placement(..) | MaterialParamRole::Sampler(..) => {
+                "Advanced \u{b7} Textures".to_string()
+            }
             MaterialParamRole::FeatureMode(feature) => feature_label(feature).to_string(),
-            MaterialParamRole::Scalar(group) | MaterialParamRole::Colour(group, ..) => match group {
-                MaterialGroup::Surface => "Surface".to_string(),
-                MaterialGroup::Opacity => "Opacity & Cutout".to_string(),
-                MaterialGroup::Feature(feature) => feature_label(feature).to_string(),
-                MaterialGroup::Advanced => "Advanced".to_string(),
-            },
+            MaterialParamRole::Scalar(group) | MaterialParamRole::Colour(group, ..) => {
+                match group {
+                    MaterialGroup::Surface => "Surface".to_string(),
+                    MaterialGroup::Opacity => "Opacity & Cutout".to_string(),
+                    MaterialGroup::Feature(feature) => feature_label(feature).to_string(),
+                    MaterialGroup::Advanced => "Advanced".to_string(),
+                }
+            }
         };
         Some(name)
     }
 
     pub(super) fn material_section_folded(&self, name: &str) -> bool {
-        self.section_folded.get(name).copied().unwrap_or_else(|| name == "Advanced" || name.starts_with("Advanced \u{b7} "))
+        self.section_folded
+            .get(name)
+            .copied()
+            .unwrap_or_else(|| name == "Advanced" || name.starts_with("Advanced \u{b7} "))
     }
 
     /// "Used by N" and, for an item that draws with a shared Material, Make
@@ -107,14 +126,33 @@ impl ScenePanel {
     ) -> f32 {
         let (text, button) = match block {
             Some(block) if owner.id == block.item => (format!("Used by {}", block.used_by), None),
-            Some(block) if block.used_by > 1 => (format!("{} \u{b7} used by {}", block.name, block.used_by), Some("Make Unique")),
+            Some(block) if block.used_by > 1 => (
+                format!("{} \u{b7} used by {}", block.name, block.used_by),
+                Some("Make Unique"),
+            ),
             // A Material only this item uses is part of its card: no name row.
-            Some(block) => return self.build_material_look(tree, inner_x, cy, block, (label_width, slider_w)),
+            Some(block) => {
+                return self.build_material_look(tree, inner_x, cy, block, (label_width, slider_w));
+            }
             None => ("Default".to_owned(), Some("New Material")),
         };
-        let button_w = button.map_or(0.0, |label| tree.text_width(label, color::FONT_LABEL, crate::node::FontWeight::Regular) + 16.0);
-        let label_w = if button.is_some() { inner_w - button_w - GAP } else { inner_w };
-        let label = tree.add_label(Some(self.content_parent), inner_x, cy, label_w.max(0.0), ROW_H, &text, label_style());
+        let button_w = button.map_or(0.0, |label| {
+            tree.text_width(label, color::FONT_LABEL, crate::node::FontWeight::Regular) + 16.0
+        });
+        let label_w = if button.is_some() {
+            inner_w - button_w - GAP
+        } else {
+            inner_w
+        };
+        let label = tree.add_label(
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            label_w.max(0.0),
+            ROW_H,
+            &text,
+            label_style(),
+        );
         tree.set_name(label, "scene_setup.material.used_by");
         if let Some(button) = button {
             let id = tree.add_button_keyed(
@@ -127,24 +165,48 @@ impl ScenePanel {
                 button,
                 crate::param_surface::stable_key(&format!("scene.material.unique.{}", owner.id)),
             );
-            tree.set_name(id, if block.is_some() { "scene_setup.material.make_unique" } else { "scene_setup.material.new" });
+            tree.set_name(
+                id,
+                if block.is_some() {
+                    "scene_setup.material.make_unique"
+                } else {
+                    "scene_setup.material.new"
+                },
+            );
             self.material_block.unique = Some((id, owner.id.clone()));
         }
         cy += ROW_H + ROW_GAP;
         match block {
-            Some(block) => self.build_material_look(tree, inner_x, cy, block, (label_width, slider_w)),
+            Some(block) => {
+                self.build_material_look(tree, inner_x, cy, block, (label_width, slider_w))
+            }
             None => cy,
         }
     }
 
     /// The Preset row: the look the Material matches, or Custom; a click
     /// lists every look. Only a PBR Material has looks.
-    fn build_material_look(&mut self, tree: &mut UITree, inner_x: f32, cy: f32, block: &MaterialBlockVm, (label_width, slider_w): (f32, f32)) -> f32 {
+    fn build_material_look(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        cy: f32,
+        block: &MaterialBlockVm,
+        (label_width, slider_w): (f32, f32),
+    ) -> f32 {
         use crate::panels::param_slider_shared::TOGGLE_BTN_H;
         if !block.pbr {
             return cy;
         }
-        tree.add_label(Some(self.content_parent), inner_x, cy, label_width, ROW_H, "Preset", label_style());
+        tree.add_label(
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            label_width,
+            ROW_H,
+            "Preset",
+            label_style(),
+        );
         let start = label_width.min(slider_w);
         let current = block.look.map_or("Custom", MaterialLook::label);
         let id = tree.add_button_keyed(
@@ -163,7 +225,14 @@ impl ScenePanel {
     }
 
     /// A feature section's "×", at the right end of its header row.
-    pub(super) fn build_feature_remove(&mut self, tree: &mut UITree, x: f32, cy: f32, material: &ItemId, feature: MaterialFeature) {
+    pub(super) fn build_feature_remove(
+        &mut self,
+        tree: &mut UITree,
+        x: f32,
+        cy: f32,
+        material: &ItemId,
+        feature: MaterialFeature,
+    ) {
         let remove = tree.add_button_keyed(
             Some(self.content_parent),
             x,
@@ -172,16 +241,33 @@ impl ScenePanel {
             ROW_H,
             btn_style(),
             "\u{d7}",
-            crate::param_surface::stable_key(&format!("scene.material.remove.{material}.{feature:?}")),
+            crate::param_surface::stable_key(&format!(
+                "scene.material.remove.{material}.{feature:?}"
+            )),
         );
-        tree.set_name(remove, format!("material.feature.remove.{}", feature_label(feature)));
-        self.material_block.remove.push((remove, material.clone(), feature));
+        tree.set_name(
+            remove,
+            format!("material.feature.remove.{}", feature_label(feature)),
+        );
+        self.material_block
+            .remove
+            .push((remove, material.clone(), feature));
     }
 
     /// "+ Add feature": one button; its menu lists the features the Material
     /// lacks.
-    pub(super) fn build_add_feature(&mut self, tree: &mut UITree, (inner_x, inner_w): (f32, f32), cy: f32, block: &MaterialBlockVm) -> f32 {
-        if !block.pbr || MATERIAL_FEATURES.iter().all(|feature| block.features.contains(feature)) {
+    pub(super) fn build_add_feature(
+        &mut self,
+        tree: &mut UITree,
+        (inner_x, inner_w): (f32, f32),
+        cy: f32,
+        block: &MaterialBlockVm,
+    ) -> f32 {
+        if !block.pbr
+            || MATERIAL_FEATURES
+                .iter()
+                .all(|feature| block.features.contains(feature))
+        {
             return cy;
         }
         let id = tree.add_button_keyed(
@@ -202,7 +288,12 @@ impl ScenePanel {
     /// A click on one of the block's buttons.
     pub(super) fn material_click(&self, node_id: NodeId, vm: &SceneSetupVm) -> Option<PanelAction> {
         let layer = || vm.layer_id.clone();
-        if let Some((_, material, feature)) = self.material_block.remove.iter().find(|(button, _, _)| *button == node_id) {
+        if let Some((_, material, feature)) = self
+            .material_block
+            .remove
+            .iter()
+            .find(|(button, _, _)| *button == node_id)
+        {
             return Some(PanelAction::Project(ProjectAction::SceneMaterialFeature {
                 layer_id: layer(),
                 material: material.clone(),
@@ -210,23 +301,53 @@ impl ScenePanel {
                 add: false,
             }));
         }
-        if let Some((_, item)) = self.material_block.unique.as_ref().filter(|(button, _)| *button == node_id) {
-            return Some(PanelAction::Project(ProjectAction::SceneMakeMaterialUnique(layer(), item.clone())));
+        if let Some((_, item)) = self
+            .material_block
+            .unique
+            .as_ref()
+            .filter(|(button, _)| *button == node_id)
+        {
+            return Some(PanelAction::Project(
+                ProjectAction::SceneMakeMaterialUnique(layer(), item.clone()),
+            ));
         }
-        if let Some((_, material, current)) = self.material_block.look.as_ref().filter(|(button, ..)| *button == node_id) {
+        if let Some((_, material, current)) = self
+            .material_block
+            .look
+            .as_ref()
+            .filter(|(button, ..)| *button == node_id)
+        {
             let items = MaterialLook::ALL
                 .into_iter()
                 .map(|look| {
-                    DropdownItem::new(look.label()).with_check(Some(look) == *current).with_action(PanelAction::Project(
-                        ProjectAction::SceneMaterialLook { layer_id: layer(), material: material.clone(), look },
-                    ))
+                    DropdownItem::new(look.label())
+                        .with_check(Some(look) == *current)
+                        .with_action(PanelAction::Project(ProjectAction::SceneMaterialLook {
+                            layer_id: layer(),
+                            material: material.clone(),
+                            look,
+                        }))
                 })
                 .collect();
-            return Some(PanelAction::Root(RootAction::SceneSetupActionMenuClicked { button_node_id: node_id, items }));
+            return Some(PanelAction::Root(RootAction::SceneSetupActionMenuClicked {
+                button_node_id: node_id,
+                items,
+            }));
         }
-        let (_, material) = self.material_block.add.as_ref().filter(|(button, _)| *button == node_id)?;
-        let present: &[MaterialFeature] =
-            vm.items.iter().find_map(|item| item.material.as_ref().filter(|block| &block.item == material)).map_or(&[], |block| &block.features);
+        let (_, material) = self
+            .material_block
+            .add
+            .as_ref()
+            .filter(|(button, _)| *button == node_id)?;
+        let present: &[MaterialFeature] = vm
+            .items
+            .iter()
+            .find_map(|item| {
+                item.material
+                    .as_ref()
+                    .filter(|block| &block.item == material)
+            })
+            .map_or(&[], |block| &block.features);
         let items = MATERIAL_FEATURES
             .iter()
             .filter(|feature| !present.contains(feature))
@@ -241,10 +362,16 @@ impl ScenePanel {
                 item
             })
             .collect();
-        Some(PanelAction::Root(RootAction::SceneSetupActionMenuClicked { button_node_id: node_id, items }))
+        Some(PanelAction::Root(RootAction::SceneSetupActionMenuClicked {
+            button_node_id: node_id,
+            items,
+        }))
     }
 
-    fn material_rgb_members_for_param(&self, param_id: &manifold_foundation::ParamId) -> Option<[manifold_foundation::ParamId; 3]> {
+    fn material_rgb_members_for_param(
+        &self,
+        param_id: &manifold_foundation::ParamId,
+    ) -> Option<[manifold_foundation::ParamId; 3]> {
         self.properties_card.rows.iter().find_map(|row| {
             row.rgb_members
                 .as_ref()
@@ -263,7 +390,11 @@ impl ScenePanel {
     ) -> Option<[f32; 3]> {
         let mut values = [0.0; 3];
         for (index, id) in members.iter().enumerate() {
-            let row = self.properties_card.row_id_index.get(id.as_ref()).copied()?;
+            let row = self
+                .properties_card
+                .row_id_index
+                .get(id.as_ref())
+                .copied()?;
             values[index] = self.properties_card.current_values.get(row).copied()?;
         }
         let channel = members.iter().position(|id| id == changed_id)?;
@@ -273,28 +404,42 @@ impl ScenePanel {
 
     /// A colour channel's scrub, rewritten as the colour's one three-channel
     /// gesture, so a drag on one channel of a grouped colour is one undo step.
-    pub(super) fn rewrite_material_rgb_actions(&self, actions: Vec<PanelAction>) -> Vec<PanelAction> {
+    pub(super) fn rewrite_material_rgb_actions(
+        &self,
+        actions: Vec<PanelAction>,
+    ) -> Vec<PanelAction> {
         actions
             .into_iter()
             .map(|action| {
-                let PanelAction::Scrub(crate::ValueRef::Param(target, param_id), phase) = action else {
+                let PanelAction::Scrub(crate::ValueRef::Param(target, param_id), phase) = action
+                else {
                     return action;
                 };
                 let Some(members) = self.material_rgb_members_for_param(&param_id) else {
                     return PanelAction::Scrub(crate::ValueRef::Param(target, param_id), phase);
                 };
                 match phase {
-                    crate::ScrubPhase::Begin => PanelAction::Scrub(crate::ValueRef::ParamRgb(target, members), crate::ScrubPhase::Begin),
+                    crate::ScrubPhase::Begin => PanelAction::Scrub(
+                        crate::ValueRef::ParamRgb(target, members),
+                        crate::ScrubPhase::Begin,
+                    ),
                     crate::ScrubPhase::Move(crate::ScrubValue::Scalar(value)) => {
-                        let Some(values) = self.material_rgb_values(&members, &param_id, value) else {
+                        let Some(values) = self.material_rgb_values(&members, &param_id, value)
+                        else {
                             return PanelAction::Scrub(
                                 crate::ValueRef::Param(target, param_id),
                                 crate::ScrubPhase::Move(crate::ScrubValue::Scalar(value)),
                             );
                         };
-                        PanelAction::Scrub(crate::ValueRef::ParamRgb(target, members), crate::ScrubPhase::Move(crate::ScrubValue::Rgb(values)))
+                        PanelAction::Scrub(
+                            crate::ValueRef::ParamRgb(target, members),
+                            crate::ScrubPhase::Move(crate::ScrubValue::Rgb(values)),
+                        )
                     }
-                    crate::ScrubPhase::Commit => PanelAction::Scrub(crate::ValueRef::ParamRgb(target, members), crate::ScrubPhase::Commit),
+                    crate::ScrubPhase::Commit => PanelAction::Scrub(
+                        crate::ValueRef::ParamRgb(target, members),
+                        crate::ScrubPhase::Commit,
+                    ),
                     other => PanelAction::Scrub(crate::ValueRef::Param(target, param_id), other),
                 }
             })
@@ -306,7 +451,16 @@ impl ScenePanel {
             .row_id_index
             .get(id.as_ref())
             .and_then(|&slot| self.properties_card.current_values.get(slot).copied())
-            .or_else(|| self.full_params.as_ref().and_then(|surface| surface.rows.get(*self.full_param_id_index.get(id.as_ref())?)).map(|row| row.value.base))
+            .or_else(|| {
+                self.full_params
+                    .as_ref()
+                    .and_then(|surface| {
+                        surface
+                            .rows
+                            .get(*self.full_param_id_index.get(id.as_ref())?)
+                    })
+                    .map(|row| row.value.base)
+            })
             .unwrap_or(0.0)
             .clamp(0.0, 1.0)
     }

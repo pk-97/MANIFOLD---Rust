@@ -22,18 +22,16 @@ pub(super) fn dispatch_layer(
     selection: &mut SelectionState,
     active_layer: &mut Option<LayerId>,
 ) -> DispatchResult {
-    
     match action {
         // ── Layer operations ───────────────────────────────────────
         LayerAction::ToggleMute(id) => {
             // If the clicked layer is part of a multi-selection, apply to all selected layers
-            let target_ids: Vec<LayerId> = if selection.selected_layer_ids().len() > 1
-                && selection.is_layer_selected(id)
-            {
-                selection.selected_layer_ids().iter().cloned().collect()
-            } else {
-                vec![id.clone()]
-            };
+            let target_ids: Vec<LayerId> =
+                if selection.selected_layer_ids().len() > 1 && selection.is_layer_selected(id) {
+                    selection.selected_layer_ids().iter().cloned().collect()
+                } else {
+                    vec![id.clone()]
+                };
             // Determine new mute state from clicked layer (toggle)
             let new_muted = project
                 .timeline
@@ -53,13 +51,12 @@ pub(super) fn dispatch_layer(
             // Audio "analysis-only" output: silent to master, still feeding the
             // send. Direct dual-write (local + content thread) like mute/solo —
             // a live perform toggle, not an undo step. Multi-select aware.
-            let target_ids: Vec<LayerId> = if selection.selected_layer_ids().len() > 1
-                && selection.is_layer_selected(id)
-            {
-                selection.selected_layer_ids().iter().cloned().collect()
-            } else {
-                vec![id.clone()]
-            };
+            let target_ids: Vec<LayerId> =
+                if selection.selected_layer_ids().len() > 1 && selection.is_layer_selected(id) {
+                    selection.selected_layer_ids().iter().cloned().collect()
+                } else {
+                    vec![id.clone()]
+                };
             let new_analysis = project
                 .timeline
                 .find_layer_by_id(id)
@@ -75,13 +72,12 @@ pub(super) fn dispatch_layer(
             DispatchResult::handled()
         }
         LayerAction::ToggleSolo(id) => {
-            let target_ids: Vec<LayerId> = if selection.selected_layer_ids().len() > 1
-                && selection.is_layer_selected(id)
-            {
-                selection.selected_layer_ids().iter().cloned().collect()
-            } else {
-                vec![id.clone()]
-            };
+            let target_ids: Vec<LayerId> =
+                if selection.selected_layer_ids().len() > 1 && selection.is_layer_selected(id) {
+                    selection.selected_layer_ids().iter().cloned().collect()
+                } else {
+                    vec![id.clone()]
+                };
             let new_solo = project
                 .timeline
                 .find_layer_by_id(id)
@@ -109,13 +105,12 @@ pub(super) fn dispatch_layer(
             {
                 return DispatchResult::handled();
             }
-            let target_ids: Vec<LayerId> = if selection.selected_layer_ids().len() > 1
-                && selection.is_layer_selected(id)
-            {
-                selection.selected_layer_ids().iter().cloned().collect()
-            } else {
-                vec![id.clone()]
-            };
+            let target_ids: Vec<LayerId> =
+                if selection.selected_layer_ids().len() > 1 && selection.is_layer_selected(id) {
+                    selection.selected_layer_ids().iter().cloned().collect()
+                } else {
+                    vec![id.clone()]
+                };
             let new_led = project
                 .timeline
                 .find_layer_by_id(id)
@@ -159,13 +154,12 @@ pub(super) fn dispatch_layer(
             DispatchResult::handled()
         }
         LayerAction::ChevronClicked(id) => {
-            let target_ids: Vec<LayerId> = if selection.selected_layer_ids().len() > 1
-                && selection.is_layer_selected(id)
-            {
-                selection.selected_layer_ids().iter().cloned().collect()
-            } else {
-                vec![id.clone()]
-            };
+            let target_ids: Vec<LayerId> =
+                if selection.selected_layer_ids().len() > 1 && selection.is_layer_selected(id) {
+                    selection.selected_layer_ids().iter().cloned().collect()
+                } else {
+                    vec![id.clone()]
+                };
             let new_collapsed = project
                 .timeline
                 .find_layer_by_id(id)
@@ -219,13 +213,12 @@ pub(super) fn dispatch_layer(
         LayerAction::ExpandLayer(id) => {
             // Collapse/expand is a view-state toggle (MutateProject, not undoable),
             // multi-select aware — same pattern as ChevronClicked.
-            let target_ids: Vec<LayerId> = if selection.selected_layer_ids().len() > 1
-                && selection.is_layer_selected(id)
-            {
-                selection.selected_layer_ids().iter().cloned().collect()
-            } else {
-                vec![id.clone()]
-            };
+            let target_ids: Vec<LayerId> =
+                if selection.selected_layer_ids().len() > 1 && selection.is_layer_selected(id) {
+                    selection.selected_layer_ids().iter().cloned().collect()
+                } else {
+                    vec![id.clone()]
+                };
             project.mutate(crate::content_command::touch::LAYERS, move |p| {
                 for lid in &target_ids {
                     if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
@@ -238,13 +231,12 @@ pub(super) fn dispatch_layer(
         LayerAction::CollapseLayer(id) => {
             // Collapse/expand is a view-state toggle (MutateProject, not undoable),
             // multi-select aware — same pattern as ChevronClicked.
-            let target_ids: Vec<LayerId> = if selection.selected_layer_ids().len() > 1
-                && selection.is_layer_selected(id)
-            {
-                selection.selected_layer_ids().iter().cloned().collect()
-            } else {
-                vec![id.clone()]
-            };
+            let target_ids: Vec<LayerId> =
+                if selection.selected_layer_ids().len() > 1 && selection.is_layer_selected(id) {
+                    selection.selected_layer_ids().iter().cloned().collect()
+                } else {
+                    vec![id.clone()]
+                };
             project.mutate(crate::content_command::touch::LAYERS, move |p| {
                 for lid in &target_ids {
                     if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
@@ -426,16 +418,10 @@ pub(super) fn dispatch_layer(
             {
                 let count = project.timeline.layers.len();
                 let name = format!("Layer {}", count + 1);
-                let cmd = AddLayerCommand::new(
-                    name,
-                    LayerType::Video,
-                    PresetTypeId::NONE,
-                    count,
-                    None,
-                );
+                let cmd =
+                    AddLayerCommand::new(name, LayerType::Video, PresetTypeId::NONE, count, None);
                 {
-                    let boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(cmd);
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                     project.execute(boxed);
                 }
             }
@@ -463,6 +449,5 @@ pub(super) fn dispatch_layer(
             }
             DispatchResult::handled()
         }
-
     }
 }

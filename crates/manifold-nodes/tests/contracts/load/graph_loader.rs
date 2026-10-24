@@ -2,10 +2,10 @@ mod tests {
     use manifold_core::effect_graph_def::EffectGraphDef;
     use manifold_node_engine::graph::Graph;
     use manifold_node_engine::load::graph_loader::{
-        has_retired_params, instantiate_def, BoundaryHandling, GraphBuildError, HandleScope,
+        BoundaryHandling, GraphBuildError, HandleScope, has_retired_params, instantiate_def,
     };
-    use manifold_node_engine::persistence::PrimitiveRegistry;
     use manifold_node_engine::parameters::ParamValue;
+    use manifold_node_engine::persistence::PrimitiveRegistry;
     use manifold_node_engine::scene::boundary_nodes::{FinalOutput, Source};
     use manifold_node_engine::scene::mesh_change::PreparedMeshRules;
 
@@ -52,7 +52,11 @@ mod tests {
             &PreparedMeshRules::default(),
         )
         .expect("grouped scene object gets an explicit environment");
-        assert!(graph.node_id_by_handle("render_scene_phong_environment").is_some());
+        assert!(
+            graph
+                .node_id_by_handle("render_scene_phong_environment")
+                .is_some()
+        );
     }
 
     #[test]
@@ -135,7 +139,8 @@ mod tests {
             BoundaryHandling::Splice {
                 source_endpoint: (host_source, "out"),
             },
-        &PreparedMeshRules::default());
+            &PreparedMeshRules::default(),
+        );
         assert!(
             matches!(result, Err(GraphBuildError::ParamTypeMismatch { .. })),
             "splice should reject param type mismatch; got {result:?}",
@@ -173,7 +178,8 @@ mod tests {
             BoundaryHandling::Splice {
                 source_endpoint: (host_source, "out"),
             },
-        &PreparedMeshRules::default())
+            &PreparedMeshRules::default(),
+        )
         .expect("splice instantiates cleanly");
 
         // The two boundary nodes were folded.
@@ -183,11 +189,7 @@ mod tests {
         // The threshold is the output endpoint.
         let (endpoint_node, endpoint_port) = inst.output_endpoint.expect("splice has endpoint");
         assert_eq!(endpoint_port, "out");
-        let thresh_id = inst
-            .id_map
-            .get(&1)
-            .copied()
-            .expect("threshold id mapped");
+        let thresh_id = inst.id_map.get(&1).copied().expect("threshold id mapped");
         assert_eq!(endpoint_node, thresh_id);
 
         // Handle was returned locally, NOT registered on the graph.
@@ -198,7 +200,9 @@ mod tests {
         // Wire host_source.out → thresh.source connected.
         let wires = graph.wires();
         assert!(
-            wires.iter().any(|w| w.from.0 == host_source && w.to.0 == thresh_id),
+            wires
+                .iter()
+                .any(|w| w.from.0 == host_source && w.to.0 == thresh_id),
             "source re-anchor wire missing; got wires: {wires:?}"
         );
 
@@ -242,7 +246,8 @@ mod tests {
             BoundaryHandling::Splice {
                 source_endpoint: (host_source, "out"),
             },
-        &PreparedMeshRules::default());
+            &PreparedMeshRules::default(),
+        );
         assert!(
             matches!(
                 result,
@@ -274,7 +279,8 @@ mod tests {
             &registry(),
             HandleScope::Global,
             BoundaryHandling::Standalone,
-        &PreparedMeshRules::default())
+            &PreparedMeshRules::default(),
+        )
         .expect("standalone instantiates cleanly");
         assert!(inst.generator_input_id.is_some());
         assert!(inst.final_output_id.is_some());
@@ -316,12 +322,19 @@ mod tests {
             &registry(),
             HandleScope::Global,
             BoundaryHandling::Standalone,
-        &PreparedMeshRules::default())
+            &PreparedMeshRules::default(),
+        )
         .expect("old id + stale `bias` param must still load after the D9(b) rename");
 
-        let ssao_id = graph.node_id_by_handle("ssao").expect("ssao handle present");
+        let ssao_id = graph
+            .node_id_by_handle("ssao")
+            .expect("ssao handle present");
         let inst = graph.get_node(ssao_id).expect("node exists");
-        assert_eq!(inst.node.type_id().as_str(), "node.ssao_gtao", "resolves to the new atom");
+        assert_eq!(
+            inst.node.type_id().as_str(),
+            "node.ssao_gtao",
+            "resolves to the new atom"
+        );
 
         assert!(
             inst.node.parameters().iter().any(|p| p.name == "radius"),
@@ -374,7 +387,9 @@ mod tests {
             &PreparedMeshRules::default(),
         )
         .expect("standalone legacy material loads through the migration");
-        let id = graph.node_id_by_handle("material").expect("material handle");
+        let id = graph
+            .node_id_by_handle("material")
+            .expect("material handle");
         let node = graph.get_node(id).expect("material node");
         assert_eq!(node.node.type_id().as_str(), "node.pbr_material");
         assert!(node.params.get("roughness").is_some());
@@ -408,7 +423,9 @@ mod tests {
             &PreparedMeshRules::default(),
         )
         .expect("legacy Phong render graph gets an explicit neutral environment");
-        let material_id = graph.node_id_by_handle("material").expect("material handle");
+        let material_id = graph
+            .node_id_by_handle("material")
+            .expect("material handle");
         assert_eq!(
             graph.get_node(material_id).unwrap().node.type_id().as_str(),
             "node.pbr_material"
@@ -417,7 +434,12 @@ mod tests {
             .node_id_by_handle("render_phong_environment")
             .expect("migration-added environment handle");
         assert_eq!(
-            graph.get_node(environment_id).unwrap().node.type_id().as_str(),
+            graph
+                .get_node(environment_id)
+                .unwrap()
+                .node
+                .type_id()
+                .as_str(),
             "node.bake_environment"
         );
     }
@@ -457,43 +479,76 @@ mod tests {
             .unwrap();
             assert!(manifold_core::sky_sun::carries_world_sun(&def));
             let mut graph = Graph::new();
-            instantiate_def(&mut graph, &def, &registry(), HandleScope::Global, BoundaryHandling::Standalone,
-                &PreparedMeshRules::default())
-                .unwrap_or_else(|e| panic!("library preset with a World sun must load: {e:?}"));
+            instantiate_def(
+                &mut graph,
+                &def,
+                &registry(),
+                HandleScope::Global,
+                BoundaryHandling::Standalone,
+                &PreparedMeshRules::default(),
+            )
+            .unwrap_or_else(|e| panic!("library preset with a World sun must load: {e:?}"));
             let id = |handle: &str| graph.node_id_by_handle(handle).unwrap();
             let envmap = graph.get_node(id("envmap")).unwrap();
             for gone in ["sun_x", "sun_y", "sun_z"] {
                 assert!(envmap.params.get(gone).is_none(), "{gone}");
             }
-            assert_eq!(envmap.params.get("sun_disc_intensity"), Some(&ParamValue::Float(5.0)));
-            let feeds: Vec<_> = graph.wires().iter().filter(|w| w.to == (id("envmap"), "sun")).map(|w| w.from.0).collect();
+            assert_eq!(
+                envmap.params.get("sun_disc_intensity"),
+                Some(&ParamValue::Float(5.0))
+            );
+            let feeds: Vec<_> = graph
+                .wires()
+                .iter()
+                .filter(|w| w.to == (id("envmap"), "sun"))
+                .map(|w| w.from.0)
+                .collect();
             (feeds, id("sun"), id("lamp"))
         };
 
         let (feeds, sun, _) = scene(None);
         assert_eq!(feeds, vec![sun], "the scene's Sun light feeds the sky");
 
-        let user_wire = serde_json::json!({"fromNode": 9, "fromPort": "out", "toNode": 1, "toPort": "sun"});
+        let user_wire =
+            serde_json::json!({"fromNode": 9, "fromPort": "out", "toNode": 1, "toPort": "sun"});
         let (feeds, _, lamp) = scene(Some(user_wire));
-        assert_eq!(feeds, vec![lamp], "an already-wired sun input is never overwritten");
+        assert_eq!(
+            feeds,
+            vec![lamp],
+            "an already-wired sun input is never overwritten"
+        );
     }
 
     #[test]
     fn retired_params_saved_nondefault_values_load() {
         let registry = registry();
         for &(type_id, param) in manifold_core::type_id_migration::RETIRED_PARAMS {
-            let declared = registry.construct(type_id).expect("retired params belong to a live node type");
-            assert!(declared.parameters().iter().all(|p| p.name != param), "{type_id}.{param} is still declared");
+            let declared = registry
+                .construct(type_id)
+                .expect("retired params belong to a live node type");
+            assert!(
+                declared.parameters().iter().all(|p| p.name != param),
+                "{type_id}.{param} is still declared"
+            );
             let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
                 "version": 1, "nodes": [{"id": 1, "nodeId": "n", "typeId": type_id, "handle": "n",
                     "params": {param: {"type": "Float", "value": 137.0}}}], "wires": []
-            })).unwrap();
+            }))
+            .unwrap();
             assert!(has_retired_params(&def));
             let mut graph = Graph::new();
-            instantiate_def(&mut graph, &def, &registry, HandleScope::Global,
-                BoundaryHandling::Standalone, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
-                .unwrap_or_else(|e| panic!("{type_id}.{param}: saved retired value must load: {e:?}"));
-            let node = graph.get_node(graph.node_id_by_handle("n").unwrap()).unwrap();
+            instantiate_def(
+                &mut graph,
+                &def,
+                &registry,
+                HandleScope::Global,
+                BoundaryHandling::Standalone,
+                &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+            )
+            .unwrap_or_else(|e| panic!("{type_id}.{param}: saved retired value must load: {e:?}"));
+            let node = graph
+                .get_node(graph.node_id_by_handle("n").unwrap())
+                .unwrap();
             assert!(node.params.get(param).is_none(), "{type_id}.{param}");
         }
     }
@@ -514,7 +569,8 @@ mod tests {
         let mut saved = 0;
         while let Some(value) = stack.pop() {
             if value["typeId"] == manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID {
-                value["params"]["particle_capacity"] = serde_json::json!({"type": "Int", "value": 5000});
+                value["params"]["particle_capacity"] =
+                    serde_json::json!({"type": "Int", "value": 5000});
                 value["exposedParams"] = serde_json::json!(["particle_capacity"]);
                 saved += 1;
             }
@@ -529,9 +585,21 @@ mod tests {
         assert!(has_retired_params(&def));
         let runtime = PresetRuntime::from_def_for_render(def, &registry(), None, false)
             .unwrap_or_else(|e| panic!("an old GPU FLIP show must build: {e:?}"));
-        let domains: Vec<_> = runtime.graph.nodes().filter(|node| node.node_id.as_str() == "domain").collect();
+        let domains: Vec<_> = runtime
+            .graph
+            .nodes()
+            .filter(|node| node.node_id.as_str() == "domain")
+            .collect();
         assert_eq!(domains.len(), 1);
-        assert!(domains[0].params.get("particle_capacity").is_none(), "Max Particles is gone");
-        assert!(domains[0].exposed_params.iter().all(|param| &**param != "particle_capacity"));
+        assert!(
+            domains[0].params.get("particle_capacity").is_none(),
+            "Max Particles is gone"
+        );
+        assert!(
+            domains[0]
+                .exposed_params
+                .iter()
+                .all(|param| &**param != "particle_capacity")
+        );
     }
 }

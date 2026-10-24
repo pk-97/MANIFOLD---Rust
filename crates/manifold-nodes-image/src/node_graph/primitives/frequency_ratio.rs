@@ -123,10 +123,13 @@ impl Primitive for FrequencyRatio {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::{Beats, Seconds};
     use manifold_node_engine::exec::effect_node::EffectNode;
     use manifold_node_engine::primitives::value::Value;
-    use manifold_node_engine::{exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::execution_plan::compile};
-    use manifold_core::{Beats, Seconds};
+    use manifold_node_engine::{
+        exec::effect_node::FrameTime, exec::execution::Executor, exec::execution_plan::compile,
+        graph::Graph,
+    };
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -138,7 +141,9 @@ mod tests {
     }
 
     use manifold_node_engine::exec::effect_node::EffectNodeType;
-    use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+    use manifold_node_engine::ports::{
+        NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+    };
 
     /// Scalar sink that captures the last value seen on its `in` port.
     struct Capture {
@@ -146,9 +151,9 @@ mod tests {
         seen: std::sync::Arc<std::sync::Mutex<Option<ParamValue>>>,
     }
     impl EffectNode for Capture {
-    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
-        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
-    }
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+            manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+        }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -187,7 +192,8 @@ mod tests {
             type_id: EffectNodeType::new("test.cap_b"),
             seen: seen_b.clone(),
         }));
-        g.set_param(ratio, "index", ParamValue::Float(index as f32)).unwrap();
+        g.set_param(ratio, "index", ParamValue::Float(index as f32))
+            .unwrap();
         g.connect((ratio, "a"), (sink_a, "in")).unwrap();
         g.connect((ratio, "b"), (sink_b, "in")).unwrap();
         let plan = compile(&g).unwrap();
@@ -283,7 +289,10 @@ mod tests {
             Some(ParamValue::Float(f)) => f,
             v => panic!("a did not emit a Float: {v:?}"),
         };
-        assert_eq!(a, 2.0, "wired index=2 should select row 2 (a=2.0), not param=7 (a=5.0)");
+        assert_eq!(
+            a, 2.0,
+            "wired index=2 should select row 2 (a=2.0), not param=7 (a=5.0)"
+        );
     }
 
     /// BUG-104 — proves `clear_state()` (what `PresetRuntime::

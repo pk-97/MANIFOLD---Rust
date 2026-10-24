@@ -30,12 +30,12 @@
 //! double-duties as a hazard barrier between previous-frame work and
 //! the current compact pass).
 
-use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuSamplerDesc};
+use std::borrow::Cow;
 
-use manifold_node_engine::particles::Particle;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::Particle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::active_elements;
 
@@ -190,8 +190,8 @@ impl Primitive for SeedParticlesFromTexture {
         // bright_list capacity always covers worst-case (every texel
         // bright) and block_data covers every 256-texel block. Counter is
         // always 4 bytes; allocated alongside for symmetric lifetime.
-        let needs_alloc = self.bright_list.is_none()
-            || self.cached_mask_dims != (mask_width, mask_height);
+        let needs_alloc =
+            self.bright_list.is_none() || self.cached_mask_dims != (mask_width, mask_height);
         if needs_alloc {
             let total_texels = u64::from(mask_width) * u64::from(mask_height);
             let list_bytes = total_texels.max(1) * 8; // vec2<f32> stride
@@ -213,8 +213,7 @@ impl Primitive for SeedParticlesFromTexture {
 
         // Lazy-compile the four entry points (count → scan → compact →
         // place), all in the same WGSL source. `self.pipeline` holds count_main.
-        const SHADER_SRC: &str =
-            include_str!("shaders/seed_particles_from_texture.wgsl");
+        const SHADER_SRC: &str = include_str!("shaders/seed_particles_from_texture.wgsl");
         if self.pipeline.is_none() {
             self.pipeline = Some(gpu.device.create_compute_pipeline(
                 SHADER_SRC,

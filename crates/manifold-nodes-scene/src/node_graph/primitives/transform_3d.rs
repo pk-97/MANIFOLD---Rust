@@ -154,7 +154,10 @@ impl Primitive for Transform3D {
             rot_euler: [rot_x, rot_y, rot_z],
             scale: [scale_x, scale_y, scale_z],
             billboard,
-            parent: ctx.inputs.transform("parent").map_or(IDENTITY_MAT4, |parent| parent.world()),
+            parent: ctx
+                .inputs
+                .transform("parent")
+                .map_or(IDENTITY_MAT4, |parent| parent.world()),
         };
 
         ctx.outputs.set_transform("transform", transform);
@@ -164,13 +167,13 @@ impl Primitive for Transform3D {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_node_engine::exec::backend::MockBackend;
-    use manifold_node_engine::exec::backend::Backend;
+    use manifold_core::{Beats, Seconds};
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::exec::backend::MockBackend;
     use manifold_node_engine::exec::effect_node::{FrameTime, ParamValues};
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::ports::{PortType, ScalarType};
-    use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -273,7 +276,9 @@ mod tests {
             backend.set_transform(slot, value);
         }
 
-        backend.transform(out_slot).expect("transform should be set")
+        backend
+            .transform(out_slot)
+            .expect("transform should be set")
     }
 
     #[test]
@@ -305,7 +310,10 @@ mod tests {
         // Param says 10.0; the wire says 99.0 — the wire must win
         // (port-shadows-param).
         let t = run_with_params_and_wires(&[("pos_x", 10.0)], &[("pos_x", 99.0)], false, None);
-        assert_eq!(t.pos[0], 99.0, "wired pos_x should override the pos_x param");
+        assert_eq!(
+            t.pos[0], 99.0,
+            "wired pos_x should override the pos_x param"
+        );
         // Untouched siblings keep their param/default values.
         assert_eq!(t.pos[1], 0.0);
         assert_eq!(t.pos[2], 0.0);
@@ -314,7 +322,10 @@ mod tests {
     #[test]
     fn wired_rot_y_overrides_its_same_named_param() {
         let t = run_with_params_and_wires(&[("rot_y", 1.0)], &[("rot_y", 2.5)], false, None);
-        assert_eq!(t.rot_euler[1], 2.5, "wired rot_y should override the rot_y param");
+        assert_eq!(
+            t.rot_euler[1], 2.5,
+            "wired rot_y should override the rot_y param"
+        );
         assert_eq!(t.rot_euler[0], 0.0);
         assert_eq!(t.rot_euler[2], 0.0);
     }
@@ -322,7 +333,10 @@ mod tests {
     #[test]
     fn wired_scale_z_overrides_its_same_named_param() {
         let t = run_with_params_and_wires(&[("scale_z", 3.0)], &[("scale_z", 7.0)], false, None);
-        assert_eq!(t.scale[2], 7.0, "wired scale_z should override the scale_z param");
+        assert_eq!(
+            t.scale[2], 7.0,
+            "wired scale_z should override the scale_z param"
+        );
         assert_eq!(t.scale[0], 1.0);
         assert_eq!(t.scale[1], 1.0);
     }
@@ -347,15 +361,36 @@ mod tests {
 
     #[test]
     fn a_wired_parent_places_the_trs_inside_the_parents_world() {
-        let grandparent = Transform { pos: [0.0, 1.0, 0.0], scale: [2.0, 1.0, 1.0], ..Transform::default() };
-        let parent = Transform { pos: [1.0, 0.0, 0.0], rot_euler: [0.0, 0.5, 0.0], parent: grandparent.world(), ..Transform::default() };
+        let grandparent = Transform {
+            pos: [0.0, 1.0, 0.0],
+            scale: [2.0, 1.0, 1.0],
+            ..Transform::default()
+        };
+        let parent = Transform {
+            pos: [1.0, 0.0, 0.0],
+            rot_euler: [0.0, 0.5, 0.0],
+            parent: grandparent.world(),
+            ..Transform::default()
+        };
         let t = run_with_params_and_wires(&[("pos_z", 3.0)], &[], false, Some(parent));
-        assert_eq!(t.pos, [0.0, 0.0, 3.0], "the node's own params stay its own TRS");
-        assert_eq!(t.parent, parent.world(), "the parent frame is the whole chain above");
+        assert_eq!(
+            t.pos,
+            [0.0, 0.0, 3.0],
+            "the node's own params stay its own TRS"
+        );
+        assert_eq!(
+            t.parent,
+            parent.world(),
+            "the parent frame is the whole chain above"
+        );
         // The local TRS composes after the chain, in the renderer's own
         // model matrix.
-        let local = crate::node_graph::primitives::render_scene::model_matrix(t.pos, t.rot_euler, t.scale);
-        assert_eq!(t.world(), manifold_node_engine::mesh::pipeline::mat4_mul(parent.world(), local));
+        let local =
+            crate::node_graph::primitives::render_scene::model_matrix(t.pos, t.rot_euler, t.scale);
+        assert_eq!(
+            t.world(),
+            manifold_node_engine::mesh::pipeline::mat4_mul(parent.world(), local)
+        );
     }
 
     #[test]
@@ -365,7 +400,12 @@ mod tests {
         let renderer = crate::node_graph::primitives::render_scene::model_matrix(pos, rot, scale);
         for c in 0..4 {
             for r in 0..4 {
-                assert!((engine[c][r] - renderer[c][r]).abs() < 1e-6, "[{c}][{r}]: {} vs {}", engine[c][r], renderer[c][r]);
+                assert!(
+                    (engine[c][r] - renderer[c][r]).abs() < 1e-6,
+                    "[{c}][{r}]: {} vs {}",
+                    engine[c][r],
+                    renderer[c][r]
+                );
             }
         }
     }

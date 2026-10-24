@@ -23,7 +23,12 @@ fn create_engine() -> PlaybackEngine {
     PlaybackEngine::new(renderers)
 }
 
-fn tick(engine: &mut PlaybackEngine, realtime: &mut f64, frame: &mut u64, frames: u32) -> manifold_playback::engine::TickResult {
+fn tick(
+    engine: &mut PlaybackEngine,
+    realtime: &mut f64,
+    frame: &mut u64,
+    frames: u32,
+) -> manifold_playback::engine::TickResult {
     let ctx = TickContext {
         frames,
         realtime_now: Seconds(*realtime),
@@ -290,7 +295,10 @@ struct DeferredReadyVideo {
 
 impl DeferredReadyVideo {
     fn new() -> Self {
-        Self { inner: StubRenderer::new_video(), held: std::collections::HashSet::new() }
+        Self {
+            inner: StubRenderer::new_video(),
+            held: std::collections::HashSet::new(),
+        }
     }
 }
 
@@ -307,7 +315,8 @@ impl ClipRenderer for DeferredReadyVideo {
         fire_clip_edge: bool,
     ) -> bool {
         self.held.insert(clip.id.clone());
-        self.inner.start_clip(clip, current_time, layers, layer_index, fire_clip_edge)
+        self.inner
+            .start_clip(clip, current_time, layers, layer_index, fire_clip_edge)
     }
     fn stop_clip(&mut self, clip_id: &str) {
         self.held.remove(clip_id);
@@ -382,8 +391,10 @@ fn new_video_clip_seeks_to_in_point_when_ready() {
     project.timeline.layers[0].clips[0].in_point = Seconds(in_point as f64);
     let clip_id = project.timeline.layers[0].clips[0].id.clone();
 
-    let renderers: Vec<Box<dyn ClipRenderer>> =
-        vec![Box::new(StubRenderer::new_generator()), Box::new(DeferredReadyVideo::new())];
+    let renderers: Vec<Box<dyn ClipRenderer>> = vec![
+        Box::new(StubRenderer::new_generator()),
+        Box::new(DeferredReadyVideo::new()),
+    ];
     let mut engine = PlaybackEngine::new(renderers);
     engine.initialize(project);
     engine.set_state(PlaybackState::Playing);
@@ -393,7 +404,10 @@ fn new_video_clip_seeks_to_in_point_when_ready() {
     for _ in 0..10 {
         tick(&mut engine, &mut realtime, &mut frame, 1);
     }
-    assert!(engine.renderers_mut()[1].is_active(&clip_id), "the clip under the playhead must have started");
+    assert!(
+        engine.renderers_mut()[1].is_active(&clip_id),
+        "the clip under the playhead must have started"
+    );
 
     // The decoder finishes opening; the next tick must seek the player.
     engine.renderers_mut()[1]
@@ -419,8 +433,10 @@ fn untrimmed_clip_ready_and_visible_times(hold_ticks: u32) -> (f64, f64) {
     let project = single_video_clip_project(120.0);
     let clip_id = project.timeline.layers[0].clips[0].id.clone();
 
-    let renderers: Vec<Box<dyn ClipRenderer>> =
-        vec![Box::new(StubRenderer::new_generator()), Box::new(DeferredReadyVideo::new())];
+    let renderers: Vec<Box<dyn ClipRenderer>> = vec![
+        Box::new(StubRenderer::new_generator()),
+        Box::new(DeferredReadyVideo::new()),
+    ];
     let mut engine = PlaybackEngine::new(renderers);
     engine.initialize(project);
     engine.set_state(PlaybackState::Playing);
@@ -434,7 +450,10 @@ fn untrimmed_clip_ready_and_visible_times(hold_ticks: u32) -> (f64, f64) {
             "a clip whose decoder is still opening must not reach the compositor"
         );
     }
-    assert!(engine.renderers_mut()[1].is_active(&clip_id), "the clip under the playhead must have started");
+    assert!(
+        engine.renderers_mut()[1].is_active(&clip_id),
+        "the clip under the playhead must have started"
+    );
 
     engine.renderers_mut()[1]
         .as_any_mut()
@@ -482,8 +501,10 @@ fn untrimmed_clip_started_mid_way_seeks_when_ready() {
     let project = single_video_clip_project(120.0);
     let clip_id = project.timeline.layers[0].clips[0].id.clone();
 
-    let renderers: Vec<Box<dyn ClipRenderer>> =
-        vec![Box::new(StubRenderer::new_generator()), Box::new(DeferredReadyVideo::new())];
+    let renderers: Vec<Box<dyn ClipRenderer>> = vec![
+        Box::new(StubRenderer::new_generator()),
+        Box::new(DeferredReadyVideo::new()),
+    ];
     let mut engine = PlaybackEngine::new(renderers);
     engine.initialize(project);
     engine.set_state(PlaybackState::Playing);
@@ -494,7 +515,10 @@ fn untrimmed_clip_started_mid_way_seeks_when_ready() {
     for _ in 0..10 {
         tick(&mut engine, &mut realtime, &mut frame, 1);
     }
-    assert!(engine.renderers_mut()[1].is_active(&clip_id), "the clip under the playhead must have started");
+    assert!(
+        engine.renderers_mut()[1].is_active(&clip_id),
+        "the clip under the playhead must have started"
+    );
 
     engine.renderers_mut()[1]
         .as_any_mut()

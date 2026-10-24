@@ -29,7 +29,13 @@ pub struct SceneData {
 /// command into a brand-new `Project`, so no flow sees another's edits.
 #[derive(Default)]
 pub struct FixtureCache {
-    imports: ahash::AHashMap<std::path::PathBuf, (manifold_core::scene_doc::ImportedModel, manifold_core::scene_doc::ModelFacts)>,
+    imports: ahash::AHashMap<
+        std::path::PathBuf,
+        (
+            manifold_core::scene_doc::ImportedModel,
+            manifold_core::scene_doc::ModelFacts,
+        ),
+    >,
 }
 
 impl FixtureCache {
@@ -39,13 +45,25 @@ impl FixtureCache {
         self.imports.len()
     }
 
-    fn import_model(&mut self, path: &std::path::Path, scene_name: &str) -> (manifold_core::scene_doc::ImportedModel, manifold_core::scene_doc::ModelFacts) {
+    fn import_model(
+        &mut self,
+        path: &std::path::Path,
+        scene_name: &str,
+    ) -> (
+        manifold_core::scene_doc::ImportedModel,
+        manifold_core::scene_doc::ModelFacts,
+    ) {
         self.imports
             .entry(path.to_path_buf())
             .or_insert_with(|| {
                 manifold_nodes_scene::node_graph::gltf_import::read_model(path)
                     .map(|read| (read.model, read.facts))
-                    .unwrap_or_else(|e| panic!("ui-snap {scene_name}: import_model({}) failed: {e}", path.display()))
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "ui-snap {scene_name}: import_model({}) failed: {e}",
+                            path.display()
+                        )
+                    })
             })
             .clone()
     }
@@ -64,7 +82,14 @@ pub fn build_cached(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> 
     }
     match scene {
         "gltfscene" => return Some(gltf_scene_cached(cache)),
-        "mushroomscene" => return Some(imported_gltf_scene(&mushroom_path(), "mushroomscene", "Mushroom", cache)),
+        "mushroomscene" => {
+            return Some(imported_gltf_scene(
+                &mushroom_path(),
+                "mushroomscene",
+                "Mushroom",
+                cache,
+            ));
+        }
         _ => {}
     }
     match scene {
@@ -116,9 +141,13 @@ pub fn build_cached(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> 
             let mut scene = inspector_scene();
             // Duplicate source names must remain distinguishable in the mask picker.
             scene.project.timeline.layers[2].name = "GLOW".into();
-            let target = manifold_editing::commands::effect_target::EffectTarget::Layer { layer_id: lid("glow") };
+            let target = manifold_editing::commands::effect_target::EffectTarget::Layer {
+                layer_id: lid("glow"),
+            };
             let mut command = manifold_editing::commands::effect_groups::GroupEffectsCommand::new(
-                target, vec![0, 1], "Modifier Group".into(),
+                target,
+                vec![0, 1],
+                "Modifier Group".into(),
             );
             manifold_editing::command::Command::execute(&mut command, &mut scene.project);
             Some(scene)
@@ -144,7 +173,8 @@ pub fn build_cached(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> 
         // An older project on System Default (device absent) with one plain source.
         "audiosendsdefault" => {
             let mut scene = audio_sends_scene();
-            scene.project.audio_setup.sends = vec![manifold_core::audio_setup::AudioSend::new("Master")];
+            scene.project.audio_setup.sends =
+                vec![manifold_core::audio_setup::AudioSend::new("Master")];
             Some(scene)
         }
         "audiosendsone" => {
@@ -169,8 +199,7 @@ pub fn build_cached(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> 
 /// process-global preset registry). `script::run_batch` runs these scenes
 /// last; a scene missing from this list is caught there and rerun solo.
 pub fn installs_preset_overlay(scene: &str) -> bool {
-    scene.starts_with("project:")
-        || matches!(scene, "gltfscene" | "mushroomscene")
+    scene.starts_with("project:") || matches!(scene, "gltfscene" | "mushroomscene")
 }
 
 /// Zero-layer scene: what a user sees on File → New before doing anything.
@@ -178,7 +207,12 @@ pub fn installs_preset_overlay(scene: &str) -> bool {
 /// affordance points at creating the first layer).
 fn empty_scene() -> SceneData {
     let project = Project::default();
-    SceneData { project, content: ContentState::default(), active: None, selection: UIState::default() }
+    SceneData {
+        project,
+        content: ContentState::default(),
+        active: None,
+        selection: UIState::default(),
+    }
 }
 
 /// Real-project scene (`project:<abs-or-relative-path>`): loads an actual
@@ -207,7 +241,12 @@ fn project_scene(path: &str) -> Option<SceneData> {
     for notice in crate::project_io::prepare_loaded_project(&mut project) {
         eprintln!("ui-snap: load notice: {notice}");
     }
-    Some(SceneData { project, content: ContentState::default(), active: None, selection: UIState::default() })
+    Some(SceneData {
+        project,
+        content: ContentState::default(),
+        active: None,
+        selection: UIState::default(),
+    })
 }
 
 /// `gltfscene`: a fresh glTF import (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md
@@ -240,13 +279,20 @@ fn new_scene(preset: &'static str, name: &str) -> SceneData {
     manifold_nodes::engine_scenes::install();
     let mut project = Project::default();
     let mut layer = Layer::new_generator(name.into(), PresetTypeId::new(preset), 0);
-    layer.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(32.0)));
+    layer
+        .clips
+        .push(TimelineClip::new_generator(Beats(0.0), Beats(32.0)));
     let id = layer.layer_id.clone();
     project.timeline.layers.push(layer);
     project.reconcile_param_manifests();
     let mut selection = UIState::default();
     selection.select_layer(id);
-    SceneData { project, content: ContentState::default(), active: Some(0), selection }
+    SceneData {
+        project,
+        content: ContentState::default(),
+        active: Some(0),
+        selection,
+    }
 }
 
 /// The card a performer builds: every performance control shown on it, as
@@ -255,12 +301,16 @@ fn new_scene(preset: &'static str, name: &str) -> SceneData {
 fn set_up_scene_cards(project: &mut Project) {
     use manifold_core::scene_surface::{CardPin, Gate, SurfaceRole};
     for layer in &mut project.timeline.layers {
-        let Some(host) = layer.gen_params_mut() else { continue };
+        let Some(host) = layer.gen_params_mut() else {
+            continue;
+        };
         if host.scene.is_none() {
             continue;
         }
         for param in host.params.iter_mut() {
-            let wanted = param.spec.scene.is_some_and(|scene| scene.role == SurfaceRole::Performance && !matches!(scene.gate, Some(Gate::Fold(_))));
+            let wanted = param.spec.scene.is_some_and(|scene| {
+                scene.role == SurfaceRole::Performance && !matches!(scene.gate, Some(Gate::Fold(_)))
+            });
             if wanted && param.choices.pin.is_none() {
                 param.choices.pin = Some(CardPin::Shown);
             }
@@ -272,7 +322,8 @@ fn set_up_scene_cards(project: &mut Project) {
 /// scene-modifier authoring flow. Keep this separate from `gltfscene`, whose
 /// azalea asset is also used by the broader scene setup flows.
 fn mushroom_path() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf/cc0___mushroom.glb")
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/cc0___mushroom.glb")
 }
 
 fn imported_gltf_scene(
@@ -285,7 +336,11 @@ fn imported_gltf_scene(
     use manifold_editing::commands::layer::ImportModelLayerCommand;
 
     let (model, facts) = cache.import_model(path, scene_name);
-    let display_name = if model.name.is_empty() { fallback_name.to_string() } else { model.name.clone() };
+    let display_name = if model.name.is_empty() {
+        fallback_name.to_string()
+    } else {
+        model.name.clone()
+    };
     let file = path.to_string_lossy();
     let mut doc = model.scene_doc(&file, manifold_core::scene_doc::ItemId::new("model"));
     doc.models.insert(file.into_owned(), facts);
@@ -300,7 +355,12 @@ fn imported_gltf_scene(
     let mut selection = UIState::default();
     selection.select_layer(lid);
 
-    SceneData { project, content: ContentState::default(), active: Some(0), selection }
+    SceneData {
+        project,
+        content: ContentState::default(),
+        active: Some(0),
+        selection,
+    }
 }
 
 /// A fully-initialized effect-kind `PresetInstance` of `type_id`, params seeded
@@ -356,16 +416,41 @@ fn timeline_scene() -> SceneData {
     // 0: TEXT BOT L — text lane (modelled as a video lane carrying named clips).
     let mut text = Layer::new("TEXT BOT L".into(), LayerType::Video, 0);
     text.layer_id = lid("text-bot-l");
-    text.clips.push(TimelineClip::new_video("EXILE".into(), Beats(0.0), Beats(16.0), Seconds::ZERO));
-    text.clips.push(TimelineClip::new_video("RETURN".into(), Beats(16.0), Beats(12.0), Seconds::ZERO));
-    text.clips.push(TimelineClip::new_video("HORIZON".into(), Beats(28.0), Beats(20.0), Seconds::ZERO));
+    text.clips.push(TimelineClip::new_video(
+        "EXILE".into(),
+        Beats(0.0),
+        Beats(16.0),
+        Seconds::ZERO,
+    ));
+    text.clips.push(TimelineClip::new_video(
+        "RETURN".into(),
+        Beats(16.0),
+        Beats(12.0),
+        Seconds::ZERO,
+    ));
+    text.clips.push(TimelineClip::new_video(
+        "HORIZON".into(),
+        Beats(28.0),
+        Beats(20.0),
+        Seconds::ZERO,
+    ));
     layers.push(text);
 
     // 1: FLOWERS — video, two clips.
     let mut flowers = Layer::new("FLOWERS".into(), LayerType::Video, 1);
     flowers.layer_id = lid("flowers");
-    flowers.clips.push(TimelineClip::new_video("flowers_loop_A.mov".into(), Beats(0.0), Beats(28.0), Seconds::ZERO));
-    flowers.clips.push(TimelineClip::new_video("flowers_loop_B.mov".into(), Beats(28.0), Beats(20.0), Seconds::ZERO));
+    flowers.clips.push(TimelineClip::new_video(
+        "flowers_loop_A.mov".into(),
+        Beats(0.0),
+        Beats(28.0),
+        Seconds::ZERO,
+    ));
+    flowers.clips.push(TimelineClip::new_video(
+        "flowers_loop_B.mov".into(),
+        Beats(28.0),
+        Beats(20.0),
+        Seconds::ZERO,
+    ));
     layers.push(flowers);
 
     // 2: PLASMA — generator, the SELECTED layer. `new_generator` (not `new`)
@@ -376,7 +461,9 @@ fn timeline_scene() -> SceneData {
     // instead (`docs/TIMELINE_LAYOUT_P0_SPEC.md` P0.5).
     let mut plasma = Layer::new_generator("PLASMA".into(), PresetTypeId::PLASMA, 2);
     plasma.layer_id = lid("plasma");
-    plasma.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(48.0)));
+    plasma
+        .clips
+        .push(TimelineClip::new_generator(Beats(0.0), Beats(48.0)));
     layers.push(plasma);
 
     // 3: BG STACK — group parent.
@@ -388,15 +475,27 @@ fn timeline_scene() -> SceneData {
     let mut clouds = Layer::new("CLOUDS".into(), LayerType::Video, 4);
     clouds.layer_id = lid("clouds");
     clouds.parent_layer_id = Some(lid("bg-stack"));
-    clouds.clips.push(TimelineClip::new_video("clouds_slow.mov".into(), Beats(0.0), Beats(24.0), Seconds::ZERO));
-    clouds.clips.push(TimelineClip::new_video("clouds_fast.mov".into(), Beats(24.0), Beats(24.0), Seconds::ZERO));
+    clouds.clips.push(TimelineClip::new_video(
+        "clouds_slow.mov".into(),
+        Beats(0.0),
+        Beats(24.0),
+        Seconds::ZERO,
+    ));
+    clouds.clips.push(TimelineClip::new_video(
+        "clouds_fast.mov".into(),
+        Beats(24.0),
+        Beats(24.0),
+        Seconds::ZERO,
+    ));
     layers.push(clouds);
 
     // 5: NOISE FIELD — generator child of BG STACK.
     let mut noise = Layer::new("NOISE FIELD".into(), LayerType::Generator, 5);
     noise.layer_id = lid("noise-field");
     noise.parent_layer_id = Some(lid("bg-stack"));
-    noise.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(48.0)));
+    noise
+        .clips
+        .push(TimelineClip::new_generator(Beats(0.0), Beats(48.0)));
     layers.push(noise);
 
     // 6: KICK — audio.
@@ -416,11 +515,20 @@ fn timeline_scene() -> SceneData {
     let mut project = Project::default();
     project.timeline.layers = layers;
 
-    let content = ContentState { current_beat: Beats(20.0), is_playing: false, ..Default::default() };
+    let content = ContentState {
+        current_beat: Beats(20.0),
+        is_playing: false,
+        ..Default::default()
+    };
 
     // No selection by default — `--interact select:<layer>` makes the ring appear,
     // so base-vs-after renders/dumps differ measurably.
-    SceneData { project, content, active: None, selection: UIState::default() }
+    SceneData {
+        project,
+        content,
+        active: None,
+        selection: UIState::default(),
+    }
 }
 
 /// P0.0 evidence scene for `docs/TIMELINE_LAYOUT_P0_SPEC.md`'s RC1 (dual scroll
@@ -439,16 +547,30 @@ fn scroll_shrink_scene() -> SceneData {
         let id = format!("stack-{i}");
         let mut l = Layer::new(format!("LAYER {i}"), LayerType::Video, i);
         l.layer_id = lid(&id);
-        l.clips.push(TimelineClip::new_video(format!("{id}.mov"), Beats(0.0), Beats(48.0), Seconds::ZERO));
+        l.clips.push(TimelineClip::new_video(
+            format!("{id}.mov"),
+            Beats(0.0),
+            Beats(48.0),
+            Seconds::ZERO,
+        ));
         layers.push(l);
     }
 
     let mut project = Project::default();
     project.timeline.layers = layers;
 
-    let content = ContentState { current_beat: Beats(0.0), is_playing: false, ..Default::default() };
+    let content = ContentState {
+        current_beat: Beats(0.0),
+        is_playing: false,
+        ..Default::default()
+    };
 
-    SceneData { project, content, active: None, selection: UIState::default() }
+    SceneData {
+        project,
+        content,
+        active: None,
+        selection: UIState::default(),
+    }
 }
 
 /// P4a evidence scene (`docs/AUTOMATION_LANES_DESIGN.md` section 7): the same layer
@@ -484,9 +606,21 @@ fn automation_scene() -> SceneData {
         param_id: mirror_param.into(),
         enabled: true,
         points: vec![
-            AutomationPoint { beat: Beats(0.0), value: 0.1, shape: SegmentShape::Linear },
-            AutomationPoint { beat: Beats(16.0), value: 0.9, shape: SegmentShape::Curved(0.6) },
-            AutomationPoint { beat: Beats(32.0), value: 0.3, shape: SegmentShape::Linear },
+            AutomationPoint {
+                beat: Beats(0.0),
+                value: 0.1,
+                shape: SegmentShape::Linear,
+            },
+            AutomationPoint {
+                beat: Beats(16.0),
+                value: 0.9,
+                shape: SegmentShape::Curved(0.6),
+            },
+            AutomationPoint {
+                beat: Beats(32.0),
+                value: 0.3,
+                shape: SegmentShape::Linear,
+            },
         ],
     }]);
 
@@ -502,8 +636,16 @@ fn automation_scene() -> SceneData {
         param_id: bloom_param.clone().into(),
         enabled: true,
         points: vec![
-            AutomationPoint { beat: Beats(0.0), value: 0.5, shape: SegmentShape::Hold },
-            AutomationPoint { beat: Beats(20.0), value: 4.5, shape: SegmentShape::Linear },
+            AutomationPoint {
+                beat: Beats(0.0),
+                value: 0.5,
+                shape: SegmentShape::Hold,
+            },
+            AutomationPoint {
+                beat: Beats(20.0),
+                value: 4.5,
+                shape: SegmentShape::Linear,
+            },
         ],
     }]);
     let bloom_id = bloom.id.clone();
@@ -534,9 +676,21 @@ fn automation_enum_scene() -> SceneData {
         param_id: "mode".into(),
         enabled: true,
         points: vec![
-            AutomationPoint { beat: Beats(0.0), value: 1.0, shape: SegmentShape::Hold },
-            AutomationPoint { beat: Beats(6.0), value: 5.0, shape: SegmentShape::Hold },
-            AutomationPoint { beat: Beats(10.0), value: 7.0, shape: SegmentShape::Hold },
+            AutomationPoint {
+                beat: Beats(0.0),
+                value: 1.0,
+                shape: SegmentShape::Hold,
+            },
+            AutomationPoint {
+                beat: Beats(6.0),
+                value: 5.0,
+                shape: SegmentShape::Hold,
+            },
+            AutomationPoint {
+                beat: Beats(10.0),
+                value: 7.0,
+                shape: SegmentShape::Hold,
+            },
         ],
     });
     data
@@ -638,13 +792,11 @@ fn audio_sends_scene() -> SceneData {
         .expect("Bloom has at least one param");
     // `ParameterAudioMod::new` defaults `enabled: true` (audio_mod.rs) — no
     // separate enable step needed.
-    bloom
-        .audio_mods_mut()
-        .push(ParameterAudioMod::new(
-            bloom_param.clone().into(),
-            send_a_id.clone(),
-            AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Full),
-        ));
+    bloom.audio_mods_mut().push(ParameterAudioMod::new(
+        bloom_param.clone().into(),
+        send_a_id.clone(),
+        AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Full),
+    ));
     bloom_layer.effects = Some(vec![bloom]);
 
     let mut layers = vec![kick, bloom_layer, strobe_layer];
@@ -677,8 +829,17 @@ fn audio_sends_scene() -> SceneData {
 
     project.timeline.layers = layers;
 
-    let content = ContentState { current_beat: Beats(0.0), is_playing: false, ..Default::default() };
-    SceneData { project, content, active: Some(1), selection: UIState::default() }
+    let content = ContentState {
+        current_beat: Beats(0.0),
+        is_playing: false,
+        ..Default::default()
+    };
+    SceneData {
+        project,
+        content,
+        active: Some(1),
+        selection: UIState::default(),
+    }
 }
 
 /// P0.3 evidence scene for `docs/TIMELINE_LAYOUT_P0_SPEC.md`: one lane of many
@@ -694,17 +855,29 @@ fn hairline_clips_scene() -> SceneData {
     trigs.layer_id = lid("triggers");
     for i in 0..200 {
         let start = Beats(i as f64 * 4.0);
-        trigs
-            .clips
-            .push(TimelineClip::new_video(format!("trig_{i}"), start, Beats(0.5), Seconds::ZERO));
+        trigs.clips.push(TimelineClip::new_video(
+            format!("trig_{i}"),
+            start,
+            Beats(0.5),
+            Seconds::ZERO,
+        ));
     }
 
     let mut project = Project::default();
     project.timeline.layers = vec![trigs];
 
-    let content = ContentState { current_beat: Beats(0.0), is_playing: false, ..Default::default() };
+    let content = ContentState {
+        current_beat: Beats(0.0),
+        is_playing: false,
+        ..Default::default()
+    };
 
-    SceneData { project, content, active: None, selection: UIState::default() }
+    SceneData {
+        project,
+        content,
+        active: None,
+        selection: UIState::default(),
+    }
 }
 
 /// P1.0 evidence scene for `docs/TIMELINE_INTERACTION_P1_SPEC.md`'s S1/S3:
@@ -734,14 +907,25 @@ fn selection_clips_scene() -> SceneData {
 
     let mut other = Layer::new("OTHER LANE".into(), LayerType::Video, 1);
     other.layer_id = lid("other-lane");
-    other.clips.push(clip("other-clip", "other_clip", 0.0, 32.0));
+    other
+        .clips
+        .push(clip("other-clip", "other_clip", 0.0, 32.0));
 
     let mut project = Project::default();
     project.timeline.layers = vec![clips_layer, other];
 
-    let content = ContentState { current_beat: Beats(0.0), is_playing: false, ..Default::default() };
+    let content = ContentState {
+        current_beat: Beats(0.0),
+        is_playing: false,
+        ..Default::default()
+    };
 
-    SceneData { project, content, active: None, selection: UIState::default() }
+    SceneData {
+        project,
+        content,
+        active: None,
+        selection: UIState::default(),
+    }
 }
 
 /// Inspector-focused scene: a selected video layer carrying a real effect chain
@@ -782,17 +966,29 @@ fn inspector_scene() -> SceneData {
     // bleed under the inspector the way the old 48-beat clips did.
     let mut text = Layer::new("TEXT BOT L".into(), LayerType::Video, 0);
     text.layer_id = lid("text-bot-l");
-    text.clips
-        .push(TimelineClip::new_video("EXILE".into(), Beats(0.0), Beats(10.0), Seconds::ZERO));
-    text.clips
-        .push(TimelineClip::new_video("RETURN".into(), Beats(10.0), Beats(10.0), Seconds::ZERO));
+    text.clips.push(TimelineClip::new_video(
+        "EXILE".into(),
+        Beats(0.0),
+        Beats(10.0),
+        Seconds::ZERO,
+    ));
+    text.clips.push(TimelineClip::new_video(
+        "RETURN".into(),
+        Beats(10.0),
+        Beats(10.0),
+        Seconds::ZERO,
+    ));
 
     // The subject: a video layer with a three-effect chain. Selected, so the
     // inspector shows its layer card + the Mirror, Bloom, and Strobe cards.
     let mut glow = Layer::new("GLOW".into(), LayerType::Video, 1);
     glow.layer_id = lid("glow");
-    glow.clips
-        .push(TimelineClip::new_video("glow_loop.mov".into(), Beats(0.0), Beats(20.0), Seconds::ZERO));
+    glow.clips.push(TimelineClip::new_video(
+        "glow_loop.mov".into(),
+        Beats(0.0),
+        Beats(20.0),
+        Seconds::ZERO,
+    ));
     let mut mirror = effect("Mirror");
     arm_lfo(&mut mirror); // arms the driver on Mirror's FIRST param.
     // The automation lane goes on a DIFFERENT param (second, if Mirror has
@@ -810,9 +1006,21 @@ fn inspector_scene() -> SceneData {
         param_id: mirror_param.into(),
         enabled: true,
         points: vec![
-            AutomationPoint { beat: Beats(0.0), value: 0.1, shape: SegmentShape::Linear },
-            AutomationPoint { beat: Beats(16.0), value: 0.9, shape: SegmentShape::Curved(0.6) },
-            AutomationPoint { beat: Beats(32.0), value: 0.3, shape: SegmentShape::Linear },
+            AutomationPoint {
+                beat: Beats(0.0),
+                value: 0.1,
+                shape: SegmentShape::Linear,
+            },
+            AutomationPoint {
+                beat: Beats(16.0),
+                value: 0.9,
+                shape: SegmentShape::Curved(0.6),
+            },
+            AutomationPoint {
+                beat: Beats(32.0),
+                value: 0.3,
+                shape: SegmentShape::Linear,
+            },
         ],
     }]);
 
@@ -824,8 +1032,16 @@ fn inspector_scene() -> SceneData {
         param_id: bloom_param.clone().into(),
         enabled: true,
         points: vec![
-            AutomationPoint { beat: Beats(0.0), value: 0.5, shape: SegmentShape::Hold },
-            AutomationPoint { beat: Beats(20.0), value: 4.5, shape: SegmentShape::Linear },
+            AutomationPoint {
+                beat: Beats(0.0),
+                value: 0.5,
+                shape: SegmentShape::Hold,
+            },
+            AutomationPoint {
+                beat: Beats(20.0),
+                value: 4.5,
+                shape: SegmentShape::Linear,
+            },
         ],
     }]);
     let bloom_id = bloom.id.clone();
@@ -873,7 +1089,9 @@ fn inspector_scene() -> SceneData {
     // section 9 U3) — drawer open, badge reads "Both".
     let mut plasma = Layer::new_generator("PLASMA".into(), manifold_core::PresetTypeId::PLASMA, 2);
     plasma.layer_id = lid("plasma");
-    plasma.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(20.0)));
+    plasma
+        .clips
+        .push(TimelineClip::new_generator(Beats(0.0), Beats(20.0)));
     let mut plasma_trigger = ParameterAudioMod::new(
         "clip_trigger".into(),
         kick_send_id,
@@ -886,13 +1104,22 @@ fn inspector_scene() -> SceneData {
     project.audio_setup.sends.push(kick_send);
     project.timeline.layers = vec![text, glow, plasma];
 
-    let mut content = ContentState { current_beat: Beats(8.0), is_playing: false, ..Default::default() };
+    let mut content = ContentState {
+        current_beat: Beats(8.0),
+        is_playing: false,
+        ..Default::default()
+    };
     content.automation_latched_params = vec![(bloom_id, bloom_param.into())];
 
     let mut selection = UIState::default();
     selection.select_layer(lid("glow"));
 
-    SceneData { project, content, active: Some(1), selection }
+    SceneData {
+        project,
+        content,
+        active: Some(1),
+        selection,
+    }
 }
 
 /// `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` P1 gate scene: BUG-060 (inspector
@@ -916,8 +1143,12 @@ fn bug060_scene() -> SceneData {
 
     let mut glow = Layer::new("GLOW".into(), LayerType::Video, 0);
     glow.layer_id = lid("glow");
-    glow.clips
-        .push(TimelineClip::new_video("glow_loop.mov".into(), Beats(0.0), Beats(48.0), Seconds::ZERO));
+    glow.clips.push(TimelineClip::new_video(
+        "glow_loop.mov".into(),
+        Beats(0.0),
+        Beats(48.0),
+        Seconds::ZERO,
+    ));
 
     let mut effects = Vec::new();
 
@@ -961,12 +1192,21 @@ fn bug060_scene() -> SceneData {
     project.audio_setup.sends.push(kick_send);
     project.timeline.layers = vec![glow];
 
-    let content = ContentState { current_beat: Beats(8.0), is_playing: false, ..Default::default() };
+    let content = ContentState {
+        current_beat: Beats(8.0),
+        is_playing: false,
+        ..Default::default()
+    };
 
     let mut selection = UIState::default();
     selection.select_layer(lid("glow"));
 
-    SceneData { project, content, active: Some(0), selection }
+    SceneData {
+        project,
+        content,
+        active: Some(0),
+        selection,
+    }
 }
 
 /// `UI_HARNESS_UNIFICATION_DESIGN.md` P0 (D7): Peter's stated BUG-060
@@ -1009,7 +1249,9 @@ fn bug060heavy_scene() -> SceneData {
 
     let mut plasma = Layer::new_generator("PLASMA".into(), PresetTypeId::PLASMA, 0);
     plasma.layer_id = lid("plasma-heavy");
-    plasma.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(48.0)));
+    plasma
+        .clips
+        .push(TimelineClip::new_generator(Beats(0.0), Beats(48.0)));
 
     let mut effects = Vec::new();
 
@@ -1058,12 +1300,21 @@ fn bug060heavy_scene() -> SceneData {
     project.audio_setup.sends.push(kick_send);
     project.timeline.layers = vec![plasma];
 
-    let content = ContentState { current_beat: Beats(8.0), is_playing: false, ..Default::default() };
+    let content = ContentState {
+        current_beat: Beats(8.0),
+        is_playing: false,
+        ..Default::default()
+    };
 
     let mut selection = UIState::default();
     selection.select_layer(lid("plasma-heavy"));
 
-    SceneData { project, content, active: Some(0), selection }
+    SceneData {
+        project,
+        content,
+        active: Some(0),
+        selection,
+    }
 }
 
 /// `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` P1 gate scene: BUG-047 (Audio Setup
@@ -1114,10 +1365,19 @@ fn bug047_scene() -> SceneData {
 
     project.timeline.layers = layers;
 
-    let content = ContentState { current_beat: Beats(0.0), is_playing: false, ..Default::default() };
+    let content = ContentState {
+        current_beat: Beats(0.0),
+        is_playing: false,
+        ..Default::default()
+    };
     // Active = the first target layer (index 1: layers are [SRC0, TGT0, …]) so
     // the inspector renders TGT 0's Bloom params.
-    SceneData { project, content, active: Some(1), selection: UIState::default() }
+    SceneData {
+        project,
+        content,
+        active: Some(1),
+        selection: UIState::default(),
+    }
 }
 
 /// PARAM_STEP_ACTIONS P3 evidence scene: the drawer's D8 Action/Amount/Wrap
@@ -1156,8 +1416,12 @@ fn param_steps_scene() -> SceneData {
 
     let mut glow = Layer::new("GLOW".into(), LayerType::Video, 0);
     glow.layer_id = lid("glow");
-    glow.clips
-        .push(TimelineClip::new_video("glow_loop.mov".into(), Beats(0.0), Beats(48.0), Seconds::ZERO));
+    glow.clips.push(TimelineClip::new_video(
+        "glow_loop.mov".into(),
+        Beats(0.0),
+        Beats(48.0),
+        Seconds::ZERO,
+    ));
 
     let mut bloom = effect("Bloom");
     let bloom_amount_mod = ParameterAudioMod::new(
@@ -1170,25 +1434,39 @@ fn param_steps_scene() -> SceneData {
 
     let mut plasma = Layer::new_generator("PLASMA".into(), manifold_core::PresetTypeId::PLASMA, 1);
     plasma.layer_id = lid("plasma");
-    plasma.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(48.0)));
+    plasma
+        .clips
+        .push(TimelineClip::new_generator(Beats(0.0), Beats(48.0)));
     let mut pattern_step = ParameterAudioMod::new(
         "pattern".into(),
         kick_send_id.clone(),
         AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Low),
     );
-    pattern_step.action = TriggerAction::Step { amount: 1.0, wrap: WrapMode::Wrap };
+    pattern_step.action = TriggerAction::Step {
+        amount: 1.0,
+        wrap: WrapMode::Wrap,
+    };
     plasma.gen_params_mut().unwrap().audio_mods = Some(vec![pattern_step]);
 
     let mut project = Project::default();
     project.audio_setup.sends.push(kick_send);
     project.timeline.layers = vec![glow, plasma];
 
-    let content = ContentState { current_beat: Beats(8.0), is_playing: false, ..Default::default() };
+    let content = ContentState {
+        current_beat: Beats(8.0),
+        is_playing: false,
+        ..Default::default()
+    };
 
     let mut selection = UIState::default();
     selection.select_layer(lid("plasma"));
 
-    SceneData { project, content, active: Some(1), selection }
+    SceneData {
+        project,
+        content,
+        active: Some(1),
+        selection,
+    }
 }
 
 /// BUG-234 acceptance scene (`scripts/ui-flows/envelope-modulation.json`):
@@ -1209,8 +1487,12 @@ fn param_steps_scene() -> SceneData {
 fn envelope_modulation_scene() -> SceneData {
     let mut glow = Layer::new("GLOW".into(), LayerType::Video, 0);
     glow.layer_id = lid("glow");
-    glow.clips
-        .push(TimelineClip::new_video("glow_loop.mov".into(), Beats(0.0), Beats(64.0), Seconds::ZERO));
+    glow.clips.push(TimelineClip::new_video(
+        "glow_loop.mov".into(),
+        Beats(0.0),
+        Beats(64.0),
+        Seconds::ZERO,
+    ));
 
     let mut bloom = effect("Bloom");
     // Pin the envelope probe's base; preset defaults can change independently.
@@ -1221,12 +1503,21 @@ fn envelope_modulation_scene() -> SceneData {
     let mut project = Project::default();
     project.timeline.layers = vec![glow];
 
-    let content = ContentState { current_beat: Beats(0.0), is_playing: false, ..Default::default() };
+    let content = ContentState {
+        current_beat: Beats(0.0),
+        is_playing: false,
+        ..Default::default()
+    };
 
     let mut selection = UIState::default();
     selection.select_layer(lid("glow"));
 
-    SceneData { project, content, active: Some(0), selection }
+    SceneData {
+        project,
+        content,
+        active: Some(0),
+        selection,
+    }
 }
 
 /// LED_STRIPS_DESIGN MVP-P3c L3 evidence scene (`scripts/ui-flows/led-
@@ -1244,7 +1535,12 @@ fn dmxcard_scene() -> SceneData {
     // constraint, same as `inspector_scene`).
     let mut flowers = Layer::new("FLOWERS".into(), LayerType::Video, 0);
     flowers.layer_id = lid("flowers");
-    flowers.clips.push(TimelineClip::new_video("flowers_loop_A.mov".into(), Beats(0.0), Beats(20.0), Seconds::ZERO));
+    flowers.clips.push(TimelineClip::new_video(
+        "flowers_loop_A.mov".into(),
+        Beats(0.0),
+        Beats(20.0),
+        Seconds::ZERO,
+    ));
     layers.push(flowers);
 
     // 1: LED 1 — the SUBJECT. `new_generator` then the type flip, matching
@@ -1252,7 +1548,8 @@ fn dmxcard_scene() -> SceneData {
     let mut led = Layer::new_generator("LED 1".into(), PresetTypeId::new("LED Fill"), 1);
     led.layer_id = lid("led-1");
     led.layer_type = LayerType::Dmx;
-    led.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(20.0)));
+    led.clips
+        .push(TimelineClip::new_generator(Beats(0.0), Beats(20.0)));
     layers.push(led);
 
     let mut project = Project::default();
@@ -1308,7 +1605,12 @@ fn dmxcard_scene() -> SceneData {
     let mut selection = UIState::default();
     selection.select_layer(lid("led-1"));
 
-    SceneData { project, content, active: Some(1), selection }
+    SceneData {
+        project,
+        content,
+        active: Some(1),
+        selection,
+    }
 }
 
 /// One layer per state, so a single real render shows the whole state matrix in
@@ -1317,8 +1619,12 @@ fn states_scene() -> SceneData {
     fn vid(name: &str, id: &str, index: i32) -> Layer {
         let mut l = Layer::new(name.into(), LayerType::Video, index);
         l.layer_id = lid(id);
-        l.clips
-            .push(TimelineClip::new_video(format!("{id}.mov"), Beats(0.0), Beats(40.0), Seconds::ZERO));
+        l.clips.push(TimelineClip::new_video(
+            format!("{id}.mov"),
+            Beats(0.0),
+            Beats(40.0),
+            Seconds::ZERO,
+        ));
         l
     }
 
@@ -1334,17 +1640,28 @@ fn states_scene() -> SceneData {
     // A generator layer shows the expanded routing form.
     let mut expanded = Layer::new("EXPANDED".into(), LayerType::Generator, 5);
     expanded.layer_id = lid("expanded");
-    expanded.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(40.0)));
+    expanded
+        .clips
+        .push(TimelineClip::new_generator(Beats(0.0), Beats(40.0)));
 
     let mut project = Project::default();
     project.timeline.layers = vec![normal, selected, muted, solo, collapsed, expanded];
 
-    let content = ContentState { current_beat: Beats(10.0), is_playing: false, ..Default::default() };
+    let content = ContentState {
+        current_beat: Beats(10.0),
+        is_playing: false,
+        ..Default::default()
+    };
 
     let mut selection = UIState::default();
     selection.select_layer(lid("selected"));
 
-    SceneData { project, content, active: Some(1), selection }
+    SceneData {
+        project,
+        content,
+        active: Some(1),
+        selection,
+    }
 }
 
 /// Fixture for the `editor` scene: a single generator layer carrying `preset`
@@ -1354,8 +1671,9 @@ fn states_scene() -> SceneData {
 /// arm today; an effect needs a chain to live in, which this fixture doesn't build).
 pub fn generator_editor_fixture(preset: &str) -> Option<(Project, GraphTarget, UIState)> {
     let pid = PresetTypeId::from_string(preset.to_string());
-    let is_generator = manifold_nodes::bundled_presets::bundled_preset_type_ids(PresetKind::Generator)
-        .any(|id| id == pid);
+    let is_generator =
+        manifold_nodes::bundled_presets::bundled_preset_type_ids(PresetKind::Generator)
+            .any(|id| id == pid);
     if !is_generator {
         return None;
     }
@@ -1364,12 +1682,18 @@ pub fn generator_editor_fixture(preset: &str) -> Option<(Project, GraphTarget, U
     let layer_id = lid("editor-preview");
     layer.layer_id = layer_id.clone();
     layer.change_generator_type(pid);
-    layer.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(48.0)));
+    layer
+        .clips
+        .push(TimelineClip::new_generator(Beats(0.0), Beats(48.0)));
 
     let mut project = Project::default();
     project.timeline.layers = vec![layer];
 
-    Some((project, GraphTarget::Generator(layer_id), UIState::default()))
+    Some((
+        project,
+        GraphTarget::Generator(layer_id),
+        UIState::default(),
+    ))
 }
 
 #[cfg(test)]
@@ -1394,10 +1718,9 @@ mod tests {
     /// reruns flows solo (slow) or orders them wrongly.
     #[test]
     fn installs_preset_overlay_matches_what_each_flow_scene_does() {
-        let manifest: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../scripts/ui-flows/manifest.json"
-        ))
-        .expect("manifest parses");
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../scripts/ui-flows/manifest.json"))
+                .expect("manifest parses");
         let mut scenes: Vec<&str> = manifest["flows"]
             .as_object()
             .expect("flows map")
@@ -1409,7 +1732,8 @@ mod tests {
         for scene in scenes {
             let before = manifold_node_engine::load::preset_loader::catalog_generation();
             assert!(super::build(scene).is_some(), "unknown flow scene {scene}");
-            let installed = manifold_node_engine::load::preset_loader::catalog_generation() != before;
+            let installed =
+                manifold_node_engine::load::preset_loader::catalog_generation() != before;
             assert_eq!(
                 installed,
                 super::installs_preset_overlay(scene),

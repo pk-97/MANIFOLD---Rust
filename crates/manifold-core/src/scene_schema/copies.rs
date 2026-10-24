@@ -45,7 +45,9 @@ pub const SURFACE_ROLE: &str = "surface";
 const SURFACE: Reach = Reach::Own(SURFACE_ROLE);
 
 const fn surface(property: &'static str, param: &'static str, exposure: Exposure) -> PropertyRow {
-    row(property, SURFACE, C, exposure).param(param).when(on_surface)
+    row(property, SURFACE, C, exposure)
+        .param(param)
+        .when(on_surface)
 }
 
 const FROM_MESH: &str = "the shape comes from the item's mesh";
@@ -63,25 +65,75 @@ const fn internal(property: &'static str, param: &'static str, why: &'static str
 }
 
 pub static COPIES_ROWS: [PropertyRow; 32] = [
-    card("count", "copy_count", perform(CardBand::Scene, 0)).default(START_COUNT).tip(crate::copies_body::MAX_COPIES_REASON),
+    card("count", "copy_count", perform(CardBand::Scene, 0))
+        .default(START_COUNT)
+        .tip(crate::copies_body::MAX_COPIES_REASON),
     card("layout", "copy_layout", perform(CardBand::Scene, 1)).when(laid_out),
-    card("spacing", "copy_size_spacing", perform(CardBand::Scene, 2)).unit(Unit::SizeMultiple).limit(HardLimit::AtLeast(SPACING_MIN)).when(laid_out),
+    card("spacing", "copy_size_spacing", perform(CardBand::Scene, 2))
+        .unit(Unit::SizeMultiple)
+        .limit(HardLimit::AtLeast(SPACING_MIN))
+        .when(laid_out),
     card("columns", "copy_columns", setup()).when(laid_out),
-    card("turn_x", "copy_turn_x", setup()).limit(HardLimit::Unlimited).when(laid_out),
-    card("turn_y", "copy_turn_y", setup()).limit(HardLimit::Unlimited).when(laid_out),
-    card("turn_z", "copy_turn_z", setup()).limit(HardLimit::Unlimited).when(laid_out),
+    card("turn_x", "copy_turn_x", setup())
+        .limit(HardLimit::Unlimited)
+        .when(laid_out),
+    card("turn_y", "copy_turn_y", setup())
+        .limit(HardLimit::Unlimited)
+        .when(laid_out),
+    card("turn_z", "copy_turn_z", setup())
+        .limit(HardLimit::Unlimited)
+        .when(laid_out),
     surface("surface_seed", "seed", perform(CardBand::Scene, 3)).name("Seed"),
-    surface("surface_align", "align_to_normal", perform(CardBand::Scene, 4)).name("Align to Surface"),
-    surface("surface_scale_min", "scale_min", perform(CardBand::Scene, 5)).name("Size Min"),
-    surface("surface_scale_max", "scale_max", perform(CardBand::Scene, 6)).name("Size Max"),
-    surface("surface_count", "count", Exposure::Automatic("the Copies section's Count")),
-    surface("surface_capacity", "max_capacity", Exposure::Internal("the most copies one world makes")),
-    auto("copies_enabled", "enabled", "the physics setting: off while it is None, so the copies rest in their layout"),
-    auto("copies_motion", "motion", "the physics setting: Fixed for a Collider, Moving for a Body"),
+    surface(
+        "surface_align",
+        "align_to_normal",
+        perform(CardBand::Scene, 4),
+    )
+    .name("Align to Surface"),
+    surface(
+        "surface_scale_min",
+        "scale_min",
+        perform(CardBand::Scene, 5),
+    )
+    .name("Size Min"),
+    surface(
+        "surface_scale_max",
+        "scale_max",
+        perform(CardBand::Scene, 6),
+    )
+    .name("Size Max"),
+    surface(
+        "surface_count",
+        "count",
+        Exposure::Automatic("the Copies section's Count"),
+    ),
+    surface(
+        "surface_capacity",
+        "max_capacity",
+        Exposure::Internal("the most copies one world makes"),
+    ),
+    auto(
+        "copies_enabled",
+        "enabled",
+        "the physics setting: off while it is None, so the copies rest in their layout",
+    ),
+    auto(
+        "copies_motion",
+        "motion",
+        "the physics setting: Fixed for a Collider, Moving for a Body",
+    ),
     auto("copies_mass", "mass", "the Physics section's Mass"),
-    auto("copies_friction", "friction", "the Physics section's Friction"),
+    auto(
+        "copies_friction",
+        "friction",
+        "the Physics section's Friction",
+    ),
     auto("copies_bounce", "bounce", "the Physics section's Bounce"),
-    internal("copies_release_count", "release_count", "Break Apart is not a Copies control"),
+    internal(
+        "copies_release_count",
+        "release_count",
+        "Break Apart is not a Copies control",
+    ),
     internal("copies_path", "path", FROM_MESH),
     internal("copies_mesh_index", "mesh_index", FROM_MESH),
     internal("copies_primitive_index", "primitive_index", FROM_MESH),
@@ -91,9 +143,21 @@ pub static COPIES_ROWS: [PropertyRow; 32] = [
     internal("copies_translate_x", "translate_x", FROM_MESH),
     internal("copies_translate_y", "translate_y", FROM_MESH),
     internal("copies_translate_z", "translate_z", FROM_MESH),
-    internal("copies_fragment_count", "fragment_count", "copies are whole solids"),
-    internal("copies_fragment_index", "fragment_index", "copies are whole solids"),
-    internal("copies_fragment_parent", "fragment_parent", "copies are whole solids"),
+    internal(
+        "copies_fragment_count",
+        "fragment_count",
+        "copies are whole solids",
+    ),
+    internal(
+        "copies_fragment_index",
+        "fragment_index",
+        "copies are whole solids",
+    ),
+    internal(
+        "copies_fragment_parent",
+        "fragment_parent",
+        "copies are whole solids",
+    ),
     auto("copies_parts", "parts", "the objects inside a copied group"),
 ];
 
@@ -117,7 +181,9 @@ fn copied_parts(items: &[Item]) -> usize {
 /// Why `item` cannot take Copies, for the disabled switch's hover text.
 pub fn copies_unavailable(item: &Item) -> Option<&'static str> {
     match &item.fields {
-        ItemFields::Object(object) if !can_copy(&object.shape) => Some("An Ocean surface cannot be copied"),
+        ItemFields::Object(object) if !can_copy(&object.shape) => {
+            Some("An Ocean surface cannot be copied")
+        }
         ItemFields::Group(_) => match copied_parts(&item.children) {
             0 => Some("Nothing in this group has a shape to copy"),
             _ => None,
@@ -128,7 +194,9 @@ pub fn copies_unavailable(item: &Item) -> Option<&'static str> {
 
 /// Why physics cannot move an item's copies: they sit on a surface.
 pub fn surface_holds_copies(item: &Item) -> Option<&'static str> {
-    item.fields.copies_surface().map(|_| "Copies on a surface stay on it: physics does not move them")
+    item.fields
+        .copies_surface()
+        .map(|_| "Copies on a surface stay on it: physics does not move them")
 }
 
 /// On Surface: the item the copies sit on, in place of a Layout. None lays
@@ -137,7 +205,10 @@ pub(super) const COPIES_SURFACE: FieldRow = FieldRow {
     id: "copies_surface",
     label: "On Surface",
     section: C,
-    control: FieldControl::Item { items: is_object_or_group, none: "None" },
+    control: FieldControl::Item {
+        items: is_object_or_group,
+        none: "None",
+    },
     applies: on,
     disabled: enabled,
     read: |fields| {
@@ -210,7 +281,9 @@ pub static COPY_BLEND_ROWS: [PropertyRow; 4] = [
 
 /// Whether a Modifier type acts on an item's copies rather than its mesh.
 pub fn acts_on_copies(modifier: ModifierType) -> bool {
-    COPY_FIELD_TYPES.iter().any(|entry| entry.modifier == modifier)
+    COPY_FIELD_TYPES
+        .iter()
+        .any(|entry| entry.modifier == modifier)
 }
 
 /// Why a copy Modifier is not offered for a target (SCENE_REFINEMENT_DESIGN
@@ -234,21 +307,58 @@ pub fn copies_refused(doc: &SceneDoc, targets: &ModifierTargets) -> Option<&'sta
 
 /// Why the card `item` cannot swap to the copy type `key`: its targets have
 /// no copies to move.
-pub(super) fn type_moves_no_copies(doc: &SceneDoc, item: &Item, field: &str, key: &str) -> Option<&'static str> {
-    let ItemFields::Modifier(card) = &item.fields else { return None };
+pub(super) fn type_moves_no_copies(
+    doc: &SceneDoc,
+    item: &Item,
+    field: &str,
+    key: &str,
+) -> Option<&'static str> {
+    let ItemFields::Modifier(card) = &item.fields else {
+        return None;
+    };
     if field != "modifier_type" {
         return None;
     }
-    COPY_FIELD_TYPES.iter().find(|entry| entry.key == key && entry.modifier != card.modifier)?;
+    COPY_FIELD_TYPES
+        .iter()
+        .find(|entry| entry.key == key && entry.modifier != card.modifier)?;
     copies_refused(doc, &card.targets)
 }
 
 /// The copy field Modifier types, in menu order.
 pub(super) const COPY_FIELD_TYPES: [ModifierTypeEntry; 4] = [
-    entry(ModifierType::CopyWave, "copy_wave", "Copy Wave", "CopyWave", false, &COPY_WAVE_ROWS),
-    entry(ModifierType::CopyJitter, "copy_jitter", "Copy Jitter", "CopyJitter", false, &COPY_JITTER_ROWS),
-    entry(ModifierType::CopyNoise, "copy_noise", "Copy Noise", "CopyNoise", false, &COPY_NOISE_ROWS),
-    entry(ModifierType::CopyBlend, "copy_blend", "Copy Blend", "CopyBlend", false, &COPY_BLEND_ROWS),
+    entry(
+        ModifierType::CopyWave,
+        "copy_wave",
+        "Copy Wave",
+        "CopyWave",
+        false,
+        &COPY_WAVE_ROWS,
+    ),
+    entry(
+        ModifierType::CopyJitter,
+        "copy_jitter",
+        "Copy Jitter",
+        "CopyJitter",
+        false,
+        &COPY_JITTER_ROWS,
+    ),
+    entry(
+        ModifierType::CopyNoise,
+        "copy_noise",
+        "Copy Noise",
+        "CopyNoise",
+        false,
+        &COPY_NOISE_ROWS,
+    ),
+    entry(
+        ModifierType::CopyBlend,
+        "copy_blend",
+        "Copy Blend",
+        "CopyBlend",
+        false,
+        &COPY_BLEND_ROWS,
+    ),
 ];
 
 #[cfg(test)]
@@ -262,7 +372,14 @@ mod tests {
     #[test]
     fn copy_types_need_copies_on_their_targets() {
         let scene = |copies: bool| {
-            let cube = Item::new(ItemId::new("cube"), "Cube", ItemFields::Object(ObjectFields { copies, ..ObjectFields::default() }));
+            let cube = Item::new(
+                ItemId::new("cube"),
+                "Cube",
+                ItemFields::Object(ObjectFields {
+                    copies,
+                    ..ObjectFields::default()
+                }),
+            );
             let card = Item::new(
                 ItemId::new("card"),
                 "Bend",
@@ -272,16 +389,31 @@ mod tests {
                     ..ModifierFields::default()
                 }),
             );
-            SceneDoc { items: vec![cube, card], ..SceneDoc::default() }
+            SceneDoc {
+                items: vec![cube, card],
+                ..SceneDoc::default()
+            }
         };
         let without = scene(false);
         let card = without.find(&ItemId::new("card")).unwrap();
-        assert_eq!(super::super::choice_disabled(&without, card, "modifier_type", "copy_wave"), Some(TURN_ON_COPIES));
-        assert_eq!(super::super::choice_disabled(&without, card, "modifier_type", "twist"), None);
-        assert_eq!(copies_refused(&without, &ModifierTargets::Scene), Some(TURN_ON_COPIES));
+        assert_eq!(
+            super::super::choice_disabled(&without, card, "modifier_type", "copy_wave"),
+            Some(TURN_ON_COPIES)
+        );
+        assert_eq!(
+            super::super::choice_disabled(&without, card, "modifier_type", "twist"),
+            None
+        );
+        assert_eq!(
+            copies_refused(&without, &ModifierTargets::Scene),
+            Some(TURN_ON_COPIES)
+        );
         let with = scene(true);
         let card = with.find(&ItemId::new("card")).unwrap();
-        assert_eq!(super::super::choice_disabled(&with, card, "modifier_type", "copy_wave"), None);
+        assert_eq!(
+            super::super::choice_disabled(&with, card, "modifier_type", "copy_wave"),
+            None
+        );
         assert_eq!(copies_refused(&with, &ModifierTargets::Scene), None);
     }
 }

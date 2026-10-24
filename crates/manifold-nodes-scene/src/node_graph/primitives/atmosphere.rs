@@ -15,10 +15,10 @@
 
 use std::borrow::Cow;
 
-use manifold_node_engine::scene::atmosphere::Atmosphere;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::atmosphere::Atmosphere;
 
 /// `shaft_quality` enum labels, index = `Atmosphere::shaft_quality`
 /// (VOLUMETRIC_LIGHT_DESIGN.md D1: `0` Low/16 steps, `1` Med/24 (default),
@@ -171,7 +171,9 @@ impl Primitive for AtmosphereNode {
             height_falloff: ctx.scalar_or_param("height_falloff", 0.0).max(0.0),
             ambient_tint,
             shaft_intensity: ctx.scalar_or_param("shaft_intensity", 0.0).max(0.0),
-            shaft_anisotropy: ctx.scalar_or_param("shaft_anisotropy", 0.6).clamp(-0.9, 0.9),
+            shaft_anisotropy: ctx
+                .scalar_or_param("shaft_anisotropy", 0.6)
+                .clamp(-0.9, 0.9),
             shaft_quality,
         };
         ctx.outputs.set_atmosphere("atmosphere", atmosphere);
@@ -181,13 +183,13 @@ impl Primitive for AtmosphereNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_node_engine::exec::backend::MockBackend;
-    use manifold_node_engine::exec::backend::Backend;
+    use manifold_core::{Beats, Seconds};
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::exec::backend::MockBackend;
     use manifold_node_engine::exec::effect_node::{FrameTime, ParamValues};
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::ports::PortType;
-    use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -258,7 +260,9 @@ mod tests {
         for (slot, value) in atmosphere_scratch.drain(..) {
             backend.set_atmosphere(slot, value);
         }
-        backend.atmosphere(out_slot).expect("atmosphere should be set")
+        backend
+            .atmosphere(out_slot)
+            .expect("atmosphere should be set")
     }
 
     #[test]
@@ -287,7 +291,10 @@ mod tests {
     #[test]
     fn negative_density_is_clamped_to_zero() {
         let a = run_with_params(&[("fog_density", -1.0)]);
-        assert_eq!(a.fog_density, 0.0, "density must never go negative (exp would blow up)");
+        assert_eq!(
+            a.fog_density, 0.0,
+            "density must never go negative (exp would blow up)"
+        );
     }
 
     #[test]
@@ -295,13 +302,19 @@ mod tests {
         let a = run_with_params(&[("shaft_intensity", 1.5), ("shaft_anisotropy", -0.3)]);
         assert_eq!(a.shaft_intensity, 1.5);
         assert_eq!(a.shaft_anisotropy, -0.3);
-        assert_eq!(a.shaft_quality, 1, "no shaft_quality override -> default Med (1)");
+        assert_eq!(
+            a.shaft_quality, 1,
+            "no shaft_quality override -> default Med (1)"
+        );
     }
 
     #[test]
     fn negative_shaft_intensity_is_clamped_to_zero() {
         let a = run_with_params(&[("shaft_intensity", -2.0)]);
-        assert_eq!(a.shaft_intensity, 0.0, "shaft_intensity must never go negative");
+        assert_eq!(
+            a.shaft_intensity, 0.0,
+            "shaft_intensity must never go negative"
+        );
     }
 
     #[test]
@@ -348,7 +361,9 @@ mod tests {
         for (slot, value) in atmosphere_scratch.drain(..) {
             backend.set_atmosphere(slot, value);
         }
-        let a = backend.atmosphere(out_slot).expect("atmosphere should be set");
+        let a = backend
+            .atmosphere(out_slot)
+            .expect("atmosphere should be set");
         assert_eq!(a.shaft_quality, 2, "High (index 2) must read back exactly");
     }
 }

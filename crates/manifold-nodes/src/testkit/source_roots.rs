@@ -43,7 +43,8 @@ pub fn primitive_source_roots() -> Result<Vec<PathBuf>, String> {
         .map(|relative| {
             let path = manifest.join(relative);
             if path.is_dir() {
-                path.canonicalize().map_err(|e| format!("{}: {e}", path.display()))
+                path.canonicalize()
+                    .map_err(|e| format!("{}: {e}", path.display()))
             } else {
                 Err(format!("missing ABI source root: {}", path.display()))
             }
@@ -53,9 +54,7 @@ pub fn primitive_source_roots() -> Result<Vec<PathBuf>, String> {
 
 fn collect_wgsl_roots(dir: &Path, roots: &mut Vec<PathBuf>) -> Result<(), String> {
     for entry in std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
-        let path = entry
-            .map_err(|e| format!("{}: {e}", dir.display()))?
-            .path();
+        let path = entry.map_err(|e| format!("{}: {e}", dir.display()))?.path();
         if path.is_dir() {
             collect_wgsl_roots(&path, roots)?;
         } else if path.extension().is_some_and(|ext| ext == "wgsl")

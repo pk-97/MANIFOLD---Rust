@@ -21,10 +21,10 @@
 
 use std::borrow::Cow;
 
-use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::camera::Camera;
 
 /// Single source of truth for `near`'s default (also the `ParamDef` default
 /// below) — `gltf_import.rs` reads this to scale the clip plane for
@@ -149,7 +149,9 @@ impl Primitive for CameraOrbit {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let orbit = ctx.scalar_or_param("orbit", 0.7);
         let tilt = ctx.scalar_or_param("tilt", 0.3);
-        let distance = ctx.scalar_or_param("distance", 4.0).max(manifold_core::scene_schema::ORBIT_CLOSEST);
+        let distance = ctx
+            .scalar_or_param("distance", 4.0)
+            .max(manifold_core::scene_schema::ORBIT_CLOSEST);
         let fov_y = ctx.scalar_or_param("fov_y", 0.9).max(0.01);
         let look_y = ctx.scalar_or_param("look_y", 0.0);
         let roll = ctx.scalar_or_param("roll", 0.0);

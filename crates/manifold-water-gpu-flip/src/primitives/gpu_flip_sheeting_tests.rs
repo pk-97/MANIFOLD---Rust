@@ -1,19 +1,24 @@
 //! GPU sheeting against `manifold_fluids::sheeter` (the CPU port proven
 //! against FLIP's own sheeter) on the same level set and ordered markers.
-use super::gpu_flip_sheeting_cpu_tests::bucket_fixture;
 use super::gpu_flip_sheeting::{FILL_THRESHOLD, GpuSheeting, SheetInputs};
-use manifold_node_engine::testkit::array_harness::read;
-use manifold_water_liquid::primitives::sort_particles_into_cells::{LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels};
-use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
-use manifold_water_liquid::testkit::marker_phi::marker_phi;
-use manifold_node_engine::particles::FluidParticle;
+use super::gpu_flip_sheeting_cpu_tests::bucket_fixture;
 use manifold_fluids::sheeter;
 use manifold_gpu::{GpuBuffer, GpuDevice};
+use manifold_node_engine::particles::FluidParticle;
+use manifold_node_engine::testkit::array_harness::read;
+use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
+use manifold_water_liquid::primitives::sort_particles_into_cells::{
+    LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels,
+};
+use manifold_water_liquid::testkit::marker_phi::marker_phi;
 
 const LABELS: SortLabels = SortLabels {
     clear: "sheeting proof sort clear",
     count: "sheeting proof sort count",
-    scan: ScanLabels { blocks: "sheeting proof scan blocks", add: "sheeting proof scan add" },
+    scan: ScanLabels {
+        blocks: "sheeting proof scan blocks",
+        add: "sheeting proof scan add",
+    },
     ranges: "sheeting proof sort ranges",
     tail: "sheeting proof sort tail",
     scatter: "sheeting proof sort scatter",
@@ -56,7 +61,11 @@ fn sort(device: &GpuDevice, markers: &[[f32; 3]], cells: [u32; 3], h: f32) -> So
     let records: Vec<FluidParticle> = markers
         .iter()
         .enumerate()
-        .map(|(i, p)| FluidParticle { position_radius: [p[0], p[1], p[2], 0.1], velocity: [0.0; 3], id: i as u32 + 1 })
+        .map(|(i, p)| FluidParticle {
+            position_radius: [p[0], p[1], p[2], 0.1],
+            velocity: [0.0; 3],
+            id: i as u32 + 1,
+        })
         .collect();
     let source = shared(device, bytemuck::cast_slice(&records));
     let particles = device.create_buffer_shared(source.size);
@@ -85,7 +94,12 @@ fn sort(device: &GpuDevice, markers: &[[f32; 3]], cells: [u32; 3], h: f32) -> So
         )
         .expect("sort");
     enc.commit_and_wait_completed();
-    Sorted { particles, order, sorter, count: records.len() as u32 }
+    Sorted {
+        particles,
+        order,
+        sorter,
+        count: records.len() as u32,
+    }
 }
 
 struct Run {
@@ -100,7 +114,14 @@ struct Run {
     claims: Vec<u32>,
 }
 
-fn run(device: &GpuDevice, stage: &GpuSheeting, sorted: &Sorted, phi: &GpuBuffer, h: f32, plan: Option<&GpuBuffer>) -> Run {
+fn run(
+    device: &GpuDevice,
+    stage: &GpuSheeting,
+    sorted: &Sorted,
+    phi: &GpuBuffer,
+    h: f32,
+    plan: Option<&GpuBuffer>,
+) -> Run {
     let inputs = SheetInputs {
         particles: &sorted.particles,
         order: &sorted.order,
@@ -121,7 +142,10 @@ fn run(device: &GpuDevice, stage: &GpuSheeting, sorted: &Sorted, phi: &GpuBuffer
     let words = copy_out(device, count);
     let births: Vec<u32> = copy_out(device, births);
     Run {
-        births: births.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]).collect(),
+        births: births
+            .chunks_exact(4)
+            .map(|c| [c[0], c[1], c[2], c[3]])
+            .collect(),
         count: words[0],
         unresolved: words[1],
         flags: copy_out(device, &stage.scratch()[6]),
@@ -150,8 +174,16 @@ fn rank_of(site: usize, cells: [u32; 3]) -> u32 {
 
 /// GPU against the CPU port on one fixture: births, claimants (more than
 /// births when projections compete), cells holding several thin markers.
-fn matches_port(device: &GpuDevice, name: &str, markers: &[[f32; 3]], phi: &[f32], cells: [u32; 3], h: f32) -> (u32, u32, usize) {
-    let trace = sheeter::trace_sheet_particles(markers, phi, cells, f64::from(h), FILL_THRESHOLD).expect("port");
+fn matches_port(
+    device: &GpuDevice,
+    name: &str,
+    markers: &[[f32; 3]],
+    phi: &[f32],
+    cells: [u32; 3],
+    h: f32,
+) -> (u32, u32, usize) {
+    let trace = sheeter::trace_sheet_particles(markers, phi, cells, f64::from(h), FILL_THRESHOLD)
+        .expect("port");
     let sorted = sort(device, markers, cells, h);
     let phi_buffer = shared(device, bytemuck::cast_slice(phi));
     let mut stage = GpuSheeting::default();
@@ -162,31 +194,55 @@ fn matches_port(device: &GpuDevice, name: &str, markers: &[[f32; 3]], phi: &[f32
     // Candidates by identity. The port lists them as generated; the engine
     // visits them bucket by bucket (k, j, i) in that order within a bucket,
     // which is ascending rank when each bucket's ranks rise as generated.
-    let want_sites: Vec<usize> = trace.candidates.iter().map(|&p| site_of(p, cells, h)).collect();
+    let want_sites: Vec<usize> = trace
+        .candidates
+        .iter()
+        .map(|&p| site_of(p, cells, h))
+        .collect();
     let mut last = std::collections::HashMap::new();
     for &s in &want_sites {
         let rank = rank_of(s, cells);
         let previous = last.insert(rank / 64, rank);
-        assert!(previous.is_none_or(|p| p < rank), "{name}: rank {rank} out of the engine's order in its bucket");
+        assert!(
+            previous.is_none_or(|p| p < rank),
+            "{name}: rank {rank} out of the engine's order in its bucket"
+        );
     }
-    let mut got_sites: Vec<usize> = (0..8 * gpu.flags.len()).filter(|&s| gpu.flags[s / 8] & (1 << (s % 8)) != 0).collect();
+    let mut got_sites: Vec<usize> = (0..8 * gpu.flags.len())
+        .filter(|&s| gpu.flags[s / 8] & (1 << (s % 8)) != 0)
+        .collect();
     let mut sorted_want = want_sites.clone();
     sorted_want.sort_unstable();
     got_sites.sort_unstable();
     assert_eq!(got_sites, sorted_want, "{name}: candidate sites differ");
 
     // The accepted set by source candidate, and the births' positions.
-    let want: Vec<(u32, [f32; 3])> =
-        trace.seed_candidates.iter().zip(&trace.seeds).map(|(&c, &p)| (rank_of(site_of(trace.candidates[c], cells, h), cells), p)).collect();
+    let want: Vec<(u32, [f32; 3])> = trace
+        .seed_candidates
+        .iter()
+        .zip(&trace.seeds)
+        .map(|(&c, &p)| (rank_of(site_of(trace.candidates[c], cells, h), cells), p))
+        .collect();
     // The port seeds in visiting order, ascending rank; the GPU list is in
     // that order too, unsorted.
-    assert!(want.windows(2).all(|w| w[0].0 < w[1].0), "{name}: the port seeds out of rank order");
-    assert_eq!(gpu.count as usize, want.len(), "{name}: birth counts differ");
+    assert!(
+        want.windows(2).all(|w| w[0].0 < w[1].0),
+        "{name}: the port seeds out of rank order"
+    );
+    assert_eq!(
+        gpu.count as usize,
+        want.len(),
+        "{name}: birth counts differ"
+    );
     let got: Vec<(u32, [f32; 3])> = gpu.births[..gpu.count as usize]
         .iter()
         .map(|b| (b[3], [b[0], b[1], b[2]].map(f32::from_bits)))
         .collect();
-    assert_eq!(got.iter().map(|g| g.0).collect::<Vec<_>>(), want.iter().map(|w| w.0).collect::<Vec<_>>(), "{name}: births differ in identity or order");
+    assert_eq!(
+        got.iter().map(|g| g.0).collect::<Vec<_>>(),
+        want.iter().map(|w| w.0).collect::<Vec<_>>(),
+        "{name}: births differ in identity or order"
+    );
     // Every winning claim resolves exactly once, into its own sub-cell.
     assert_eq!(gpu.unresolved, 0, "{name}: a recomputed claim failed");
     let inv_sub = 1.0 / (0.5 * f64::from(h));
@@ -195,24 +251,42 @@ fn matches_port(device: &GpuDevice, name: &str, markers: &[[f32; 3]], phi: &[f32
         let s = p.map(|c| (f64::from(c) * inv_sub).floor() as usize);
         let cell = s[0] / 2 + cells[0] as usize * (s[1] / 2 + cells[1] as usize * (s[2] / 2));
         let index = 8 * cell + (s[0] & 1) + 2 * (s[1] & 1) + 4 * (s[2] & 1);
-        assert_eq!(gpu.claims[index], *rank, "{name}: birth {rank} does not hold its sub-cell");
+        assert_eq!(
+            gpu.claims[index], *rank,
+            "{name}: birth {rank} does not hold its sub-cell"
+        );
         assert!(held.insert(index), "{name}: two births in one sub-cell");
     }
     // And the other way: every sub-cell a claim won holds a birth of that
     // rank, so no winner is lost between the claim and the births.
-    let claimed: std::collections::HashSet<usize> = (0..gpu.claims.len()).filter(|&i| gpu.claims[i] != u32::MAX).collect();
-    assert_eq!(claimed.len(), got.len(), "{name}: claims won and births differ in number");
+    let claimed: std::collections::HashSet<usize> = (0..gpu.claims.len())
+        .filter(|&i| gpu.claims[i] != u32::MAX)
+        .collect();
+    assert_eq!(
+        claimed.len(),
+        got.len(),
+        "{name}: claims won and births differ in number"
+    );
     assert!(claimed == held, "{name}: a won claim has no birth");
     let claimants: u32 = gpu.flags.iter().map(|f| (f >> 8).count_ones()).sum();
     // Several markers of one cell passing the depth walk: detect's shared flag.
     let mut thin_per_cell = std::collections::HashMap::new();
     for (_, p) in markers.iter().enumerate().filter(|(m, _)| trace.thin[*m]) {
-        *thin_per_cell.entry(p.map(|c| (f64::from(c) / f64::from(h)).floor() as i64)).or_insert(0) += 1;
+        *thin_per_cell
+            .entry(p.map(|c| (f64::from(c) / f64::from(h)).floor() as i64))
+            .or_insert(0) += 1;
     }
     let shared_cells = thin_per_cell.values().filter(|&&n| n > 1).count();
-    let worst = got.iter().zip(&want).flat_map(|(g, w)| (0..3).map(move |a| (g.1[a] - w.1[a]).abs())).fold(0.0f32, f32::max);
+    let worst = got
+        .iter()
+        .zip(&want)
+        .flat_map(|(g, w)| (0..3).map(move |a| (g.1[a] - w.1[a]).abs()))
+        .fold(0.0f32, f32::max);
     // The port fuses multiply-adds as the engine build does; Metal fuses its own way.
-    assert!(worst < 1e-5 * h, "{name}: birth positions differ by {worst}");
+    assert!(
+        worst < 1e-5 * h,
+        "{name}: birth positions differ by {worst}"
+    );
     assert!(gpu.count > 0, "{name}: no births");
     eprintln!(
         "SHEETING {name}: {} candidates, {claimants} claimants, {} births, {shared_cells} cells with several thin markers, worst position difference {worst:e} m",
@@ -244,7 +318,10 @@ fn matches_port(device: &GpuDevice, name: &str, markers: &[[f32; 3]], phi: &[f32
         times.push(rx.recv().expect("GPU time"));
     }
     times.sort_by(f64::total_cmp);
-    eprintln!("SHEETING {name}: GPU time median {:.3} ms over 5", times[2] * 1e3);
+    eprintln!(
+        "SHEETING {name}: GPU time median {:.3} ms over 5",
+        times[2] * 1e3
+    );
     (gpu.count, claimants, shared_cells)
 }
 
@@ -253,10 +330,21 @@ fn gpu_flip_sheeting_matches_the_port_on_a_splash() {
     let device = manifold_gpu::testkit::test_device();
     let (markers, analytic, cells, dx) = sheeter::fixtures::splash();
     let h = dx as f32;
-    let (births, claimants, shared) = matches_port(&device, "analytic", &markers, &analytic, cells, h);
-    assert!(claimants > births, "projections compete for sub-cells: {claimants} claimants, {births} births");
+    let (births, claimants, shared) =
+        matches_port(&device, "analytic", &markers, &analytic, cells, h);
+    assert!(
+        claimants > births,
+        "projections compete for sub-cells: {claimants} claimants, {births} births"
+    );
     assert!(shared > 0, "several thin markers share a cell");
-    matches_port(&device, "markers", &markers, &marker_phi(&markers, cells, h), cells, h);
+    matches_port(
+        &device,
+        "markers",
+        &markers,
+        &marker_phi(&markers, cells, h),
+        cells,
+        h,
+    );
 }
 
 /// An inactive clock slot leaves every buffer the stage owns as the last
@@ -272,27 +360,64 @@ fn gpu_flip_sheeting_inactive_slot_and_capacity() {
     let mut stage = GpuSheeting::default();
     stage.prepare(&device);
     stage.reserve(&device, cells, 1 << 16).unwrap();
-    let full = run(&device, &stage, &sorted, &phi_buffer, h, Some(&live_plan(&device, 0.01)));
+    let full = run(
+        &device,
+        &stage,
+        &sorted,
+        &phi_buffer,
+        h,
+        Some(&live_plan(&device, 0.01)),
+    );
     assert!(full.count > 3);
     let snapshot = |stage: &GpuSheeting| -> Vec<Vec<u32>> {
-        stage.scratch()[..9].iter().chain([stage.winners()]).map(|b| copy_out(&device, b)).collect()
+        stage.scratch()[..9]
+            .iter()
+            .chain([stage.winners()])
+            .map(|b| copy_out(&device, b))
+            .collect()
     };
     let before = snapshot(&stage);
     let other: Vec<f32> = phi.iter().map(|v| -v).collect();
     let other = shared(&device, bytemuck::cast_slice(&other));
-    run(&device, &stage, &sorted, &other, h, Some(&live_plan(&device, 0.0)));
-    assert!(before == snapshot(&stage), "an inactive slot wrote to the stage");
+    run(
+        &device,
+        &stage,
+        &sorted,
+        &other,
+        h,
+        Some(&live_plan(&device, 0.0)),
+    );
+    assert!(
+        before == snapshot(&stage),
+        "an inactive slot wrote to the stage"
+    );
     let again = run(&device, &stage, &sorted, &phi_buffer, h, None);
-    assert!(again.births == full.births && again.count == full.count, "a rerun changed the births");
+    assert!(
+        again.births == full.births && again.count == full.count,
+        "a rerun changed the births"
+    );
 
     let mut short = GpuSheeting::default();
     short.prepare(&device);
     short.reserve(&device, cells, 3).unwrap();
     let three = run(&device, &short, &sorted, &phi_buffer, h, None);
-    assert_eq!(three.count, full.count, "a short list still counts every birth");
-    assert_eq!(three.births[..3], full.births[..3], "a short list keeps the engine's first births");
-    let ranks: Vec<u32> = full.births[..full.count as usize].iter().map(|b| b[3]).collect();
-    assert!(ranks.windows(2).all(|w| w[0] < w[1]), "births in rank order");
+    assert_eq!(
+        three.count, full.count,
+        "a short list still counts every birth"
+    );
+    assert_eq!(
+        three.births[..3],
+        full.births[..3],
+        "a short list keeps the engine's first births"
+    );
+    let ranks: Vec<u32> = full.births[..full.count as usize]
+        .iter()
+        .map(|b| b[3])
+        .collect();
+    assert!(
+        ranks.windows(2).all(|w| w[0] < w[1]),
+        "births in rank order"
+    );
 }
 
 /// Cell and half-cell indices are the engine's f64 floor at non-binary
@@ -320,25 +445,44 @@ fn gpu_flip_sheeting_indexing_is_the_engine_floor_at_non_binary_spacing() {
         }
         // Interpolation and the depth walk index points below the grid's low
         // faces: the same faces mirrored, down to a few cells under zero.
-        let negative: Vec<f32> = points.iter().filter(|&&x| x < 4.0 * h).map(|&x| -x).collect();
+        let negative: Vec<f32> = points
+            .iter()
+            .filter(|&&x| x < 4.0 * h)
+            .map(|&x| -x)
+            .collect();
         points.extend(negative);
         points.extend([-1.5 * h, -0.5 * h, -f32::MIN_POSITIVE, -1e-30]);
         // Past the exact range and non-finite: clamped to +-2^30, NaN to +2^30.
         let limit = (1u64 << 30) as f32 * h;
-        for x in [4294967296.0f32, 1073741824.0, limit, limit.next_down(), limit.next_up(), 1e30, f32::MAX, f32::INFINITY] {
+        for x in [
+            4294967296.0f32,
+            1073741824.0,
+            limit,
+            limit.next_down(),
+            limit.next_up(),
+            1e30,
+            f32::MAX,
+            f32::INFINITY,
+        ] {
             points.extend([x, -x]);
         }
         points.push(f32::NAN);
         let markers: Vec<[f32; 3]> = points.iter().map(|&x| [x, x, x]).collect();
         let records: Vec<FluidParticle> = markers
             .iter()
-            .map(|p| FluidParticle { position_radius: [p[0], p[1], p[2], 0.1], velocity: [0.0; 3], id: 1 })
+            .map(|p| FluidParticle {
+                position_radius: [p[0], p[1], p[2], 0.1],
+                velocity: [0.0; 3],
+                id: 1,
+            })
             .collect();
         let particles = shared(&device, bytemuck::cast_slice(&records));
         let zeros = shared(&device, &vec![0u8; 4 * 64000]);
         let mut stage = GpuSheeting::default();
         stage.prepare(&device);
-        stage.reserve(&device, cells, 2 * records.len() as u32).unwrap();
+        stage
+            .reserve(&device, cells, 2 * records.len() as u32)
+            .unwrap();
         let mut enc = device.create_encoder("sheeting index probe");
         let inputs = SheetInputs {
             particles: &particles,
@@ -359,7 +503,11 @@ fn gpu_flip_sheeting_indexing_is_the_engine_floor_at_non_binary_spacing() {
         for (s, &x) in points.iter().enumerate() {
             let engine = |inv: f64| {
                 let f = (f64::from(x) * inv).floor();
-                if f.is_nan() { 1 << 30 } else { f.clamp(-1073741824.0, 1073741824.0) as i32 }
+                if f.is_nan() {
+                    1 << 30
+                } else {
+                    f.clamp(-1073741824.0, 1073741824.0) as i32
+                }
             };
             let (cell, sub) = (engine(1.0 / dx), engine(1.0 / (0.5 * dx)));
             assert_eq!(words[8 * s] as i32, cell, "h {h}: cell of {x}");
@@ -377,7 +525,10 @@ fn gpu_flip_sheeting_indexing_is_the_engine_floor_at_non_binary_spacing() {
         );
         assert!(policy > 0, "the probe covers the clamp policy");
         if h == 0.3 {
-            assert!(naive_wrong > 0, "the probe must be able to see the f32 error");
+            assert!(
+                naive_wrong > 0,
+                "the probe must be able to see the f32 error"
+            );
         }
     }
 }
@@ -411,7 +562,14 @@ fn gpu_flip_sheeting_matches_the_port_at_non_binary_spacing() {
                 }
             }
         }
-        matches_port(&device, &format!("lattice h {h}"), &sheet, &lattice_phi, [n as u32; 3], h);
+        matches_port(
+            &device,
+            &format!("lattice h {h}"),
+            &sheet,
+            &lattice_phi,
+            [n as u32; 3],
+            h,
+        );
     }
 }
 
@@ -429,40 +587,64 @@ fn gpu_flip_sheeting_depth_walk_below_zero_matches_the_port() {
     let cells = [16u32; 3];
     for h in [1.0f32, 0.3] {
         let n = 16usize;
-        let phi: Vec<f32> = (0..n * n * n).map(|i| 0.3 * ((i % n) as f32 + 0.5 - 5.0) * h).collect();
-        let markers: Vec<[f32; 3]> = (0..48)
-            .map(|k| [(0.02 + 0.072 * k as f32) * h, (2 + k % 12) as f32 * h + 0.5 * h, (2 + k / 12) as f32 * h + 0.5 * h])
+        let phi: Vec<f32> = (0..n * n * n)
+            .map(|i| 0.3 * ((i % n) as f32 + 0.5 - 5.0) * h)
             .collect();
-        let trace = sheeter::trace_sheet_particles(&markers, &phi, cells, f64::from(h), FILL_THRESHOLD).expect("port");
+        let markers: Vec<[f32; 3]> = (0..48)
+            .map(|k| {
+                [
+                    (0.02 + 0.072 * k as f32) * h,
+                    (2 + k % 12) as f32 * h + 0.5 * h,
+                    (2 + k / 12) as f32 * h + 0.5 * h,
+                ]
+            })
+            .collect();
+        let trace =
+            sheeter::trace_sheet_particles(&markers, &phi, cells, f64::from(h), FILL_THRESHOLD)
+                .expect("port");
         let cell = |p: &[f32; 3]| {
             let c = p.map(|v| (f64::from(v) * (1.0 / f64::from(h))).floor() as usize);
             c[0] + n * (c[1] + n * c[2])
         };
-        let mut want: Vec<usize> = markers.iter().zip(&trace.thin).filter(|(_, t)| **t).map(|(p, _)| cell(p)).collect();
+        let mut want: Vec<usize> = markers
+            .iter()
+            .zip(&trace.thin)
+            .filter(|(_, t)| **t)
+            .map(|(p, _)| cell(p))
+            .collect();
         want.sort_unstable();
         let thin = want.len();
-        assert!(thin > 0 && thin < markers.len(), "h {h}: the sweep crosses the walk's decision ({thin} thin)");
+        assert!(
+            thin > 0 && thin < markers.len(),
+            "h {h}: the sweep crosses the walk's decision ({thin} thin)"
+        );
         let sorted = sort(&device, &markers, cells, h);
         let phi_buffer = shared(&device, bytemuck::cast_slice(&phi));
         let mut stage = GpuSheeting::default();
         stage.prepare(&device);
         stage.reserve(&device, cells, 16).unwrap();
         let mut enc = device.create_encoder("sheeting detect");
-        stage.encode_detect(&mut enc, &SheetInputs {
-            particles: &sorted.particles,
-            order: &sorted.order,
-            ranges: sorted.sorter.ranges().unwrap(),
-            count: sorted.count,
-            phi: &phi_buffer,
-            origin: [0.0; 3],
-            h,
-            threshold: FILL_THRESHOLD,
-        });
+        stage.encode_detect(
+            &mut enc,
+            &SheetInputs {
+                particles: &sorted.particles,
+                order: &sorted.order,
+                ranges: sorted.sorter.ranges().unwrap(),
+                count: sorted.count,
+                phi: &phi_buffer,
+                origin: [0.0; 3],
+                h,
+                threshold: FILL_THRESHOLD,
+            },
+        );
         enc.commit_and_wait_completed();
         let flags = copy_out(&device, &stage.scratch()[0]);
         let got: Vec<usize> = (0..flags.len()).filter(|&c| flags[c] != 0).collect();
         assert_eq!(got, want, "h {h}: thin cells differ");
-        eprintln!("SHEETING WALK h {h}: {thin} of {} markers thin, cells agree", markers.len());
+        eprintln!(
+            "SHEETING WALK h {h}: {thin} of {} markers thin, cells agree",
+            markers.len()
+        );
     }
 }
 
@@ -479,11 +661,21 @@ fn gpu_flip_sheeting_bucket_rows_match_cpu_merge() {
             let segments = shared(&device, bytemuck::cast_slice(&fixture.segments));
             let dummy = shared(&device, &[0; 32]);
             let inputs = SheetInputs {
-                particles: &dummy, order: &dummy, ranges: &dummy, count: 0,
-                phi: &dummy, origin: [0.0; 3], h: 1.0, threshold: FILL_THRESHOLD,
+                particles: &dummy,
+                order: &dummy,
+                ranges: &dummy,
+                count: 0,
+                phi: &dummy,
+                origin: [0.0; 3],
+                h: 1.0,
+                threshold: FILL_THRESHOLD,
             };
             let mut enc = device.create_encoder("sheeting bucket proof");
-            enc.copy_buffer_to_buffer(&counts, &stage.scratch()[3], 4 * fixture.counts.len() as u64);
+            enc.copy_buffer_to_buffer(
+                &counts,
+                &stage.scratch()[3],
+                4 * fixture.counts.len() as u64,
+            );
             enc.copy_buffer_to_buffer(&segments, &stage.scratch()[4], segments.size);
             stage.encode_buckets(&mut enc, &inputs);
             enc.commit_and_wait_completed();
@@ -492,7 +684,11 @@ fn gpu_flip_sheeting_bucket_rows_match_cpu_merge() {
             for (r, want) in fixture.merged.iter().enumerate() {
                 assert_eq!(lengths[r] as usize, want.len(), "{cells:?}, row {r}");
                 let want: &[u32] = bytemuck::cast_slice(want);
-                assert_eq!(&rows[128 * r..128 * r + want.len()], want, "{cells:?}, row {r}");
+                assert_eq!(
+                    &rows[128 * r..128 * r + want.len()],
+                    want,
+                    "{cells:?}, row {r}"
+                );
             }
         }
     }
@@ -513,9 +709,11 @@ fn gpu_flip_sheeting_odd_grid_rows_match_old_gpu_under_replay_and_fractional_rat
 
 fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
     use super::gpu_flip_sheeting::StepBirths;
-    use manifold_water_liquid::primitives::particle_identity::{BirthReservation, ParticleIdentity};
-    use manifold_water_liquid::fluid_particles::FaceSample;
     use manifold_gpu::GpuReplayCache;
+    use manifold_water_liquid::fluid_particles::FaceSample;
+    use manifold_water_liquid::primitives::particle_identity::{
+        BirthReservation, ParticleIdentity,
+    };
 
     let device = manifold_gpu::testkit::test_device();
     let (mut markers, mut analytic, mut cells, dx) = sheeter::fixtures::splash();
@@ -525,13 +723,17 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
         let old_cells = cells;
         cells = [39, 41, 37];
         markers.retain(|p| (0..3).all(|axis| p[axis] < cells[axis] as f32 * dx as f32));
-        analytic = (0..cells.iter().product()).map(|i| {
-            let x = i % cells[0];
-            let y = (i / cells[0]) % cells[1];
-            let z = i / (cells[0] * cells[1]);
-            if y >= old_cells[1] { return 1.0; }
-            analytic[(x + old_cells[0] * (y + old_cells[1] * z)) as usize]
-        }).collect();
+        analytic = (0..cells.iter().product())
+            .map(|i| {
+                let x = i % cells[0];
+                let y = (i / cells[0]) % cells[1];
+                let z = i / (cells[0] * cells[1]);
+                if y >= old_cells[1] {
+                    return 1.0;
+                }
+                analytic[(x + old_cells[0] * (y + old_cells[1] * z)) as usize]
+            })
+            .collect();
     }
     // Break spatial input order without changing the geometry.
     let mut rng = 0x0005_1eed_u32;
@@ -547,29 +749,56 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
     initial[..original.len()].copy_from_slice(&original);
     let ranges = sorted.sorter.ranges().unwrap();
     let phi = shared(&device, bytemuck::cast_slice(&analytic));
-    let faces = vec![FaceSample { velocity: [0.3, -0.2, 0.1, 0.0], weight: [1.0; 4] };
-        cells.into_iter().map(|n| (n + 1) as usize).product()];
+    let faces = vec![
+        FaceSample {
+            velocity: [0.3, -0.2, 0.1, 0.0],
+            weight: [1.0; 4]
+        };
+        cells.into_iter().map(|n| (n + 1) as usize).product()
+    ];
     let old = shared(&device, bytemuck::cast_slice(&faces));
     let plan = live_plan(&device, 0.01);
     let mut ids = ParticleIdentity::default();
     ids.prepare(&device);
     // Reference/direct, rows/direct, rows/replayed, reference/replayed.
-    let mut lanes: Vec<_> = (0..4).map(|lane| {
-        let mut stage = GpuSheeting::default();
-        if lane == 0 || lane == 3 { stage.prepare_reference(&device); } else { stage.prepare(&device); }
-        stage.reserve(&device, cells, capacity).unwrap();
-        (stage, shared(&device, bytemuck::cast_slice(&initial)),
-            shared(&device, bytemuck::cast_slice(&[5000u32, 1, 0, 0])),
-            (lane >= 2).then(GpuReplayCache::default))
-    }).collect();
+    let mut lanes: Vec<_> = (0..4)
+        .map(|lane| {
+            let mut stage = GpuSheeting::default();
+            if lane == 0 || lane == 3 {
+                stage.prepare_reference(&device);
+            } else {
+                stage.prepare(&device);
+            }
+            stage.reserve(&device, cells, capacity).unwrap();
+            (
+                stage,
+                shared(&device, bytemuck::cast_slice(&initial)),
+                shared(&device, bytemuck::cast_slice(&[5000u32, 1, 0, 0])),
+                (lane >= 2).then(GpuReplayCache::default),
+            )
+        })
+        .collect();
     let mut full_count = 0;
-    for (tick, &(rate, active)) in [(1.0, true), (0.25, true), (0.75, true), (0.5, false),
-        (0.5, true), (1.0, true), (0.25, true), (0.75, true)].iter().enumerate() {
+    for (tick, &(rate, active)) in [
+        (1.0, true),
+        (0.25, true),
+        (0.75, true),
+        (0.5, false),
+        (0.5, true),
+        (1.0, true),
+        (0.25, true),
+        (0.75, true),
+    ]
+    .iter()
+    .enumerate()
+    {
         let mut clock = [0u32; 12];
         clock[0] = if active { 0.01f32.to_bits() } else { 0 };
         clock[11] = 1;
         // SAFETY: shared plan, all previous command buffers completed.
-        unsafe { plan.write(0, bytemuck::cast_slice(&clock)); }
+        unsafe {
+            plan.write(0, bytemuck::cast_slice(&clock));
+        }
         let mut outputs = Vec::new();
         for (stage, particles, identity, cache) in &mut lanes {
             // Same sorted input on every encode isolates this stage from later
@@ -579,18 +808,43 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
                 particles.write(0, bytemuck::cast_slice(&initial));
                 identity.write(0, bytemuck::cast_slice(&[5000u32, 1, 0, 0]));
             }
-            let inputs = SheetInputs { particles, order: &sorted.order, ranges, count: sorted.count,
-                phi: &phi, origin: [0.0; 3], h, threshold: FILL_THRESHOLD };
-            let births = StepBirths { old: &old, identity, slots: capacity, rate,
-                tick: tick as u32, substep: (tick % 3) as u32 };
+            let inputs = SheetInputs {
+                particles,
+                order: &sorted.order,
+                ranges,
+                count: sorted.count,
+                phi: &phi,
+                origin: [0.0; 3],
+                h,
+                threshold: FILL_THRESHOLD,
+            };
+            let births = StepBirths {
+                old: &old,
+                identity,
+                slots: capacity,
+                rate,
+                tick: tick as u32,
+                substep: (tick % 3) as u32,
+            };
             let mut enc = device.create_encoder("sheeting old GPU parity");
             let replay = cache.take().map(|c| enc.begin_replay(&device, c)).is_some();
             stage.encode_draw(&mut enc, &inputs, &plan, &births);
-            ids.reserve(&mut enc, BirthReservation { particles, identity, ranges, scan: stage.winners(), plan: &plan,
-                params: [capacity, cells.iter().product(), stage.ranks(), 1] });
+            ids.reserve(
+                &mut enc,
+                BirthReservation {
+                    particles,
+                    identity,
+                    ranges,
+                    scan: stage.winners(),
+                    plan: &plan,
+                    params: [capacity, cells.iter().product(), stage.ranks(), 1],
+                },
+            );
             enc.compute_memory_barrier_buffers();
             stage.encode_write(&mut enc, &inputs, &plan, &births);
-            if replay { *cache = Some(enc.end_replay()); }
+            if replay {
+                *cache = Some(enc.end_replay());
+            }
             enc.commit_and_wait_completed();
             let mut count = copy_out(&device, stage.births().1);
             count.truncate(2); // Only these words are defined by the stage.
@@ -599,17 +853,29 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
                 full_count = count[0];
                 assert!(full_count > 100, "fixture must seed sheets");
             } else if active && rate < 1.0 {
-                assert!(count[0] > 0 && count[0] < full_count, "fractional draw must retain and reject births");
+                assert!(
+                    count[0] > 0 && count[0] < full_count,
+                    "fractional draw must retain and reject births"
+                );
             }
             let births = copy_out(&device, stage.births().0);
-            outputs.push(vec![copy_out(&device, particles), copy_out(&device, identity),
-                copy_out(&device, stage.stats()), copy_out(&device, stage.winners()),
+            outputs.push(vec![
+                copy_out(&device, particles),
+                copy_out(&device, identity),
+                copy_out(&device, stage.stats()),
+                copy_out(&device, stage.winners()),
                 copy_out(&device, &stage.scratch()[3]),
-                copy_out(&device, &stage.scratch()[5]), copy_out(&device, &stage.scratch()[6]),
-                births[..4 * count[0].min(capacity) as usize].to_vec(), count]);
+                copy_out(&device, &stage.scratch()[5]),
+                copy_out(&device, &stage.scratch()[6]),
+                births[..4 * count[0].min(capacity) as usize].to_vec(),
+                count,
+            ]);
         }
         for lane in 1..outputs.len() {
-            assert!(outputs[lane] == outputs[0], "tick {tick}, rate {rate}, active {active}, lane {lane}: output words differ");
+            assert!(
+                outputs[lane] == outputs[0],
+                "tick {tick}, rate {rate}, active {active}, lane {lane}: output words differ"
+            );
         }
     }
     for (_, _, _, cache) in &lanes[2..] {

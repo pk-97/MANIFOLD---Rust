@@ -8,8 +8,8 @@
 //! (id minted at construction) so execute/undo are deterministic.
 
 use crate::command::Command;
-use manifold_core::change::{ChangeSet, Part};
 use manifold_core::audio_setup::{AudioDeviceRef, AudioSend, SendAnalysisConfig};
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::id::{AudioSendId, LayerId};
 use manifold_core::project::Project;
 
@@ -27,7 +27,9 @@ impl SetAudioInputDeviceCommand {
 }
 
 impl Command for SetAudioInputDeviceCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::AudioSetup])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         project.audio_setup.device = self.new.clone();
     }
@@ -54,7 +56,9 @@ impl AddAudioSendCommand {
 }
 
 impl Command for AddAudioSendCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup, Part::Shapes]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::AudioSetup, Part::Shapes])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         project.audio_setup.sends.push(self.send.clone());
     }
@@ -88,7 +92,9 @@ impl RemoveAudioSendCommand {
 }
 
 impl Command for RemoveAudioSendCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup, Part::Shapes]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::AudioSetup, Part::Shapes])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let sends = &mut project.audio_setup.sends;
         if let Some(pos) = sends.iter().position(|s| s.id == self.id) {
@@ -120,12 +126,18 @@ pub struct RenameAudioSendCommand {
 
 impl RenameAudioSendCommand {
     pub fn new(id: AudioSendId, old_label: String, new_label: String) -> Self {
-        Self { id, old_label, new_label }
+        Self {
+            id,
+            old_label,
+            new_label,
+        }
     }
 }
 
 impl Command for RenameAudioSendCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::AudioSetup])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
             s.label = self.new_label.clone();
@@ -158,7 +170,9 @@ impl SetAudioSendChannelsCommand {
 }
 
 impl Command for SetAudioSendChannelsCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::AudioSetup])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
             s.channels = self.new.clone();
@@ -230,7 +244,9 @@ impl SetAudioSendFloorCommand {
 }
 
 impl Command for SetAudioSendFloorCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::AudioSetup])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
             s.floor_db = self.new_db;
@@ -299,7 +315,9 @@ impl SetAudioSendAnalysisCommand {
 }
 
 impl Command for SetAudioSendAnalysisCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::AudioSetup])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
             s.analysis = self.new.clone();
@@ -339,12 +357,19 @@ pub struct SetLayerAudioSendCommand {
 
 impl SetLayerAudioSendCommand {
     pub fn new(layer: LayerId, new_send: Option<AudioSendId>) -> Self {
-        Self { layer, new_send, old_send: None, captured: false }
+        Self {
+            layer,
+            new_send,
+            old_send: None,
+            captured: false,
+        }
     }
 }
 
 impl Command for SetLayerAudioSendCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::AudioSetup])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let setup = &mut project.audio_setup;
         if !self.captured {
@@ -381,7 +406,11 @@ mod tests {
 
     #[test]
     fn adding_a_send_never_touches_the_device() {
-        for device in [None, Some(AudioDeviceRef::none()), Some(AudioDeviceRef::new("uid", "Mic"))] {
+        for device in [
+            None,
+            Some(AudioDeviceRef::none()),
+            Some(AudioDeviceRef::new("uid", "Mic")),
+        ] {
             let mut project = Project::default();
             project.audio_setup.device = device.clone();
             let mut cmd = AddAudioSendCommand::new(AudioSend::new("A"));
@@ -454,17 +483,35 @@ mod tests {
         // stay; the two are summed).
         let mut c1 = SetLayerAudioSendCommand::new(layer.clone(), Some(a_id.clone()));
         c1.execute(&mut project);
-        assert!(project.audio_setup.find_send(&a_id).unwrap().feeds_from_layer(&layer));
+        assert!(
+            project
+                .audio_setup
+                .find_send(&a_id)
+                .unwrap()
+                .feeds_from_layer(&layer)
+        );
 
         // Route it to B — A loses the layer, B gains it.
         let mut c2 = SetLayerAudioSendCommand::new(layer.clone(), Some(b_id.clone()));
         c2.execute(&mut project);
-        assert!(project.audio_setup.find_send(&b_id).unwrap().feeds_from_layer(&layer));
+        assert!(
+            project
+                .audio_setup
+                .find_send(&b_id)
+                .unwrap()
+                .feeds_from_layer(&layer)
+        );
         assert!(!project.audio_setup.find_send(&a_id).unwrap().is_layer_fed());
 
         // Undo c2 restores the layer to A.
         c2.undo(&mut project);
-        assert!(project.audio_setup.find_send(&a_id).unwrap().feeds_from_layer(&layer));
+        assert!(
+            project
+                .audio_setup
+                .find_send(&a_id)
+                .unwrap()
+                .feeds_from_layer(&layer)
+        );
         assert!(!project.audio_setup.find_send(&b_id).unwrap().is_layer_fed());
 
         // Route to None detaches entirely.
@@ -486,36 +533,68 @@ mod tests {
     #[test]
     fn send_setters_undo_and_redo_restore_the_whole_project() {
         use crate::commands::setter_roundtrip::{SetterCase, assert_setter_cases};
-        assert_setter_cases(one_send, &[
-            SetterCase {
-                name: "gain",
-                build: |p| Box::new(SetAudioSendGainCommand::new(send(p).id.clone(), 0.0, 6.0)),
-                applied: |p| send(p).gain_db == 6.0,
-            },
-            SetterCase {
-                name: "rename",
-                build: |p| Box::new(RenameAudioSendCommand::new(send(p).id.clone(), "Old".into(), "New".into())),
-                applied: |p| send(p).label == "New",
-            },
-            SetterCase {
-                name: "channels",
-                build: |p| Box::new(SetAudioSendChannelsCommand::new(send(p).id.clone(), send(p).channels.clone(), vec![2, 3])),
-                applied: |p| send(p).channels == [2, 3],
-            },
-            SetterCase {
-                name: "analysis",
-                build: |p| {
-                    let old = send(p).analysis.clone();
-                    let new = SendAnalysisConfig { onset: old.onset, pitch: !old.pitch };
-                    Box::new(SetAudioSendAnalysisCommand::new(send(p).id.clone(), old, new))
+        assert_setter_cases(
+            one_send,
+            &[
+                SetterCase {
+                    name: "gain",
+                    build: |p| Box::new(SetAudioSendGainCommand::new(send(p).id.clone(), 0.0, 6.0)),
+                    applied: |p| send(p).gain_db == 6.0,
                 },
-                applied: |p| send(p).analysis.pitch,
-            },
-            SetterCase {
-                name: "input device",
-                build: |p| Box::new(SetAudioInputDeviceCommand::new(p.audio_setup.device.clone(), Some(AudioDeviceRef::new("uid-1", "Mic")))),
-                applied: |p| p.audio_setup.device.as_ref().is_some_and(|d| d.uid == "uid-1"),
-            },
-        ]);
+                SetterCase {
+                    name: "rename",
+                    build: |p| {
+                        Box::new(RenameAudioSendCommand::new(
+                            send(p).id.clone(),
+                            "Old".into(),
+                            "New".into(),
+                        ))
+                    },
+                    applied: |p| send(p).label == "New",
+                },
+                SetterCase {
+                    name: "channels",
+                    build: |p| {
+                        Box::new(SetAudioSendChannelsCommand::new(
+                            send(p).id.clone(),
+                            send(p).channels.clone(),
+                            vec![2, 3],
+                        ))
+                    },
+                    applied: |p| send(p).channels == [2, 3],
+                },
+                SetterCase {
+                    name: "analysis",
+                    build: |p| {
+                        let old = send(p).analysis.clone();
+                        let new = SendAnalysisConfig {
+                            onset: old.onset,
+                            pitch: !old.pitch,
+                        };
+                        Box::new(SetAudioSendAnalysisCommand::new(
+                            send(p).id.clone(),
+                            old,
+                            new,
+                        ))
+                    },
+                    applied: |p| send(p).analysis.pitch,
+                },
+                SetterCase {
+                    name: "input device",
+                    build: |p| {
+                        Box::new(SetAudioInputDeviceCommand::new(
+                            p.audio_setup.device.clone(),
+                            Some(AudioDeviceRef::new("uid-1", "Mic")),
+                        ))
+                    },
+                    applied: |p| {
+                        p.audio_setup
+                            .device
+                            .as_ref()
+                            .is_some_and(|d| d.uid == "uid-1")
+                    },
+                },
+            ],
+        );
     }
 }

@@ -35,7 +35,15 @@ impl UnboundNodeParamDrag {
         pre_drag_value: Option<SerializedParamValue>,
         current_value: SerializedParamValue,
     ) -> Self {
-        Self { target, node_id, param_name, scope_path, catalog_default, pre_drag_value, current_value }
+        Self {
+            target,
+            node_id,
+            param_name,
+            scope_path,
+            catalog_default,
+            pre_drag_value,
+            current_value,
+        }
     }
 
     /// The live, non-undoable write of the current value.
@@ -121,7 +129,10 @@ mod unbound_node_param_drag_tests {
         let mut fx = PresetInstance::new(PresetTypeId::new("Test"));
         let effect_id = fx.id.clone();
         let mut params = BTreeMap::new();
-        params.insert("amount".to_string(), SerializedParamValue::Float { value: initial });
+        params.insert(
+            "amount".to_string(),
+            SerializedParamValue::Float { value: initial },
+        );
         let mut def = empty_def();
         def.nodes.push(EffectGraphNode {
             id: 1,
@@ -186,7 +197,9 @@ mod unbound_node_param_drag_tests {
             target,
             1,
             "amount".to_string(),
-            SerializedParamValue::Float { value: last_tick_value },
+            SerializedParamValue::Float {
+                value: last_tick_value,
+            },
             empty_def(),
         )
         .with_previous(pre_drag_value);

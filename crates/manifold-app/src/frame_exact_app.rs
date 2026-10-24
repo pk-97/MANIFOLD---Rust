@@ -48,7 +48,11 @@ impl Rng {
 }
 
 fn point(beat: f64, value: f32, shape: SegmentShape) -> AutomationPoint {
-    AutomationPoint { beat: Beats(beat), value, shape }
+    AutomationPoint {
+        beat: Beats(beat),
+        value,
+        shape,
+    }
 }
 
 /// One Plasma layer. 150 BPM to beat 8 (frame 192), 128 to beat 32 (frame
@@ -60,22 +64,41 @@ fn plasma_project() -> Project {
     project.settings.bpm = Bpm(150.0);
     project.settings.frame_rate = FPS;
     for (beat, bpm) in [(0.0, 150.0), (8.0, 128.0), (32.0, 141.0)] {
-        project.tempo_map.add_or_replace_point(Beats(beat), Bpm(bpm), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(
+            Beats(beat),
+            Bpm(bpm),
+            TempoPointSource::Manual,
+            0.001,
+        );
     }
     let mut layer = Layer::new_generator("Plasma frame-exact".into(), PresetTypeId::PLASMA, 0);
     let gp = layer.gen_params_mut().expect("generator params");
     let ids: Vec<String> = gp
         .params
         .iter()
-        .filter(|p| !p.spec.is_toggle && !p.spec.is_trigger && !p.spec.whole_numbers && p.spec.max > p.spec.min)
+        .filter(|p| {
+            !p.spec.is_toggle
+                && !p.spec.is_trigger
+                && !p.spec.whole_numbers
+                && p.spec.max > p.spec.min
+        })
         .map(|p| p.spec.id.clone())
         .take(3)
         .collect();
-    assert_eq!(ids.len(), 3, "Plasma must expose three continuous params: {ids:?}");
-    let mut free = ParameterDriver::new(ids[1].clone(), BeatDivision::Quarter, DriverWaveform::Sine);
+    assert_eq!(
+        ids.len(),
+        3,
+        "Plasma must expose three continuous params: {ids:?}"
+    );
+    let mut free =
+        ParameterDriver::new(ids[1].clone(), BeatDivision::Quarter, DriverWaveform::Sine);
     free.free_period_beats = Some(1.37);
     gp.drivers = Some(vec![
-        ParameterDriver::new(ids[0].clone(), BeatDivision::Sixteenth, DriverWaveform::Sine),
+        ParameterDriver::new(
+            ids[0].clone(),
+            BeatDivision::Sixteenth,
+            DriverWaveform::Sine,
+        ),
         free,
     ]);
     gp.automation_lanes = Some(vec![AutomationLane {
@@ -93,7 +116,12 @@ fn plasma_project() -> Project {
         ],
     }]);
     let mut spans: Vec<(f64, f64)> = (0..16).map(|i| (i as f64 * 0.5, 0.375)).collect();
-    spans.extend([8.3, 9.17, 11.05, 13.333, 17.71, 21.9, 26.41, 30.07, 32.0, 33.13].map(|s| (s, 0.6)));
+    spans.extend(
+        [
+            8.3, 9.17, 11.05, 13.333, 17.71, 21.9, 26.41, 30.07, 32.0, 33.13,
+        ]
+        .map(|s| (s, 0.6)),
+    );
     layer.clips = spans
         .into_iter()
         .map(|(start, length)| TimelineClip::new_generator(Beats(start), Beats(length)))
@@ -140,7 +168,11 @@ impl Event {
 }
 
 fn offset(base: Instant, seconds: f64) -> Instant {
-    if seconds >= 0.0 { base + Duration::from_secs_f64(seconds) } else { base - Duration::from_secs_f64(-seconds) }
+    if seconds >= 0.0 {
+        base + Duration::from_secs_f64(seconds)
+    } else {
+        base - Duration::from_secs_f64(-seconds)
+    }
 }
 
 /// Without a seed every tick sits on its deadline and Play follows the last
@@ -160,7 +192,11 @@ fn schedule(anchor: Instant, seed: Option<u64>) -> Vec<Event> {
     let phase = seed.map_or(0.0, |s| Rng(s ^ 0xA5A5).unit() * step);
     events.push(Event::Press(offset(grid.deadline(deadline), phase)));
     for tick in 0..PLAYING_TICKS {
-        deadline += if seed.is_some() && tick == STALL_AT_TICK { 4 } else { 1 };
+        deadline += if seed.is_some() && tick == STALL_AT_TICK {
+            4
+        } else {
+            1
+        };
         events.push(Event::Tick(offset(grid.deadline(deadline), jitter())));
     }
     events.sort_by_key(Event::at);
@@ -181,14 +217,22 @@ fn wait_for_surface(ct: &ContentThread) {
 /// tick with the transport frame index it rendered. The content thread's own
 /// grid timer, anchored where the schedule's grid is, counts each tick's
 /// frames; the index is the engine clock's.
-fn drive(ct: &mut ContentThread, anchor: Instant, events: &[Event], mut on_frame: impl FnMut(&ContentThread, i64)) {
+fn drive(
+    ct: &mut ContentThread,
+    anchor: Instant,
+    events: &[Event],
+    mut on_frame: impl FnMut(&ContentThread, i64),
+) {
     let (state_tx, state_rx) = crate::content_state::state_channel();
     ct.timer.reanchor_grid_at(anchor);
     let mut presented = 0u64;
     for event in events {
         let now = match event {
             Event::Press(_) => {
-                assert!(!ct.handle_command(ContentCommand::Play), "Play must not shut down");
+                assert!(
+                    !ct.handle_command(ContentCommand::Play),
+                    "Play must not shut down"
+                );
                 continue;
             }
             Event::Tick(now) => *now,
@@ -198,20 +242,33 @@ fn drive(ct: &mut ContentThread, anchor: Instant, events: &[Event], mut on_frame
         ct.tick_frame_at(now, &state_tx);
         // D19: sources are read for the frame's screen instant, the tick's
         // deadline plus the measured delay, not when the tick woke.
-        let deadline = ct.timer.tick_deadline().expect("a ticked frame has a deadline");
+        let deadline = ct
+            .timer
+            .tick_deadline()
+            .expect("a ticked frame has a deadline");
         let read_at = deadline + Duration::from_secs_f64(ct.calibration.read_delay());
-        assert_eq!(ct.link_sample_at, read_at, "the read instant is the deadline plus L");
+        assert_eq!(
+            ct.link_sample_at, read_at,
+            "the read instant is the deadline plus L"
+        );
         // The headless pipeline has no stage window: stand in for Metal's
         // presented handler, each frame on screen 25 ms after its deadline.
         presented += 1;
         let drawable_id = presented;
         ct.issued_presents.record(drawable_id, deadline);
         let at = deadline + Duration::from_millis(SCREEN_DELAY_MS);
-        assert!(!ct.handle_command(ContentCommand::FramePresented { drawable_id, at }), "a present must not shut down");
+        assert!(
+            !ct.handle_command(ContentCommand::FramePresented { drawable_id, at }),
+            "a present must not shut down"
+        );
         while state_rx.try_recv().is_ok() {}
         // D5: graphs get the tick's grid frames as dt, never wall time.
         let grid_dt = f64::from(ct.engine.tick_frames()) * ct.engine.transport_clock().step().0;
-        assert_eq!(ct.content_pipeline.last_render_dt().to_bits(), grid_dt.to_bits(), "render dt is whole grid frames");
+        assert_eq!(
+            ct.content_pipeline.last_render_dt().to_bits(),
+            grid_dt.to_bits(),
+            "render dt is whole grid frames"
+        );
         if playing {
             on_frame(ct, ct.engine.transport_frame());
         }
@@ -229,7 +286,11 @@ fn run(seed: Option<u64>) -> BTreeMap<i64, Frame> {
     // D19: the presents reached the calibration, and the read instant moved
     // from the 17 ms default to what they measured.
     let measured = ct.calibration.present_delay();
-    assert!((measured - SCREEN_DELAY_MS as f64 / 1000.0).abs() < 1e-6, "the measured screen delay: {:.3} ms", measured * 1000.0);
+    assert!(
+        (measured - SCREEN_DELAY_MS as f64 / 1000.0).abs() < 1e-6,
+        "the measured screen delay: {:.3} ms",
+        measured * 1000.0
+    );
     frames
 }
 
@@ -238,20 +299,45 @@ fn seconds(bits: u64) -> String {
 }
 
 fn first_divergence(a: &BTreeMap<i64, Frame>, b: &BTreeMap<i64, Frame>) -> Option<String> {
-    let (index, fa, fb) = a.iter().filter_map(|(i, fa)| b.get(i).map(|fb| (i, fa, fb))).find(|(_, fa, fb)| fa != fb)?;
+    let (index, fa, fb) = a
+        .iter()
+        .filter_map(|(i, fa)| b.get(i).map(|fb| (i, fa, fb)))
+        .find(|(_, fa, fb)| fa != fb)?;
     let field = if fa.time_bits != fb.time_bits {
-        format!("time {} vs {}", seconds(fa.time_bits), seconds(fb.time_bits))
+        format!(
+            "time {} vs {}",
+            seconds(fa.time_bits),
+            seconds(fb.time_bits)
+        )
     } else if fa.beat_bits != fb.beat_bits {
-        format!("beat {} vs {}", seconds(fa.beat_bits), seconds(fb.beat_bits))
+        format!(
+            "beat {} vs {}",
+            seconds(fa.beat_bits),
+            seconds(fb.beat_bits)
+        )
     } else if fa.active_clips != fb.active_clips {
         format!("active clips {} vs {}", fa.active_clips, fb.active_clips)
     } else {
-        let p = fa.param_bits.iter().zip(&fb.param_bits).position(|(x, y)| x != y).unwrap_or(0);
-        format!("param {p}: {} vs {}", f32::from_bits(fa.param_bits[p]), f32::from_bits(fb.param_bits[p]))
+        let p = fa
+            .param_bits
+            .iter()
+            .zip(&fb.param_bits)
+            .position(|(x, y)| x != y)
+            .unwrap_or(0);
+        format!(
+            "param {p}: {} vs {}",
+            f32::from_bits(fa.param_bits[p]),
+            f32::from_bits(fb.param_bits[p])
+        )
     };
     let shared = a.keys().filter(|i| b.contains_key(i)).count();
-    let differing = a.iter().filter(|(i, fa)| b.get(i).is_some_and(|fb| fb != *fa)).count();
-    Some(format!("{differing} of {shared} shared transport frames differ; the first is frame {index}: {field}"))
+    let differing = a
+        .iter()
+        .filter(|(i, fa)| b.get(i).is_some_and(|fb| fb != *fa))
+        .count();
+    Some(format!(
+        "{differing} of {shared} shared transport frames differ; the first is frame {index}: {field}"
+    ))
 }
 
 fn distinct<T: PartialEq + Copy>(values: impl Iterator<Item = T>) -> usize {
@@ -269,17 +355,37 @@ fn same_values_per_index_through_content_thread() {
     let steady = run(None);
     assert_eq!(steady.len(), PLAYING_TICKS, "one frame per steady tick");
     let last = steady.values().next_back().expect("frames");
-    assert!(f64::from_bits(last.beat_bits) > 33.0, "the run must cross the 141 BPM change at beat 32");
-    let moving = (0..last.param_bits.len()).filter(|&p| distinct(steady.values().map(|f| f.param_bits[p])) >= 8).count();
-    assert!(moving >= 3, "both LFOs and the automation lane must move: {moving} params moved");
+    assert!(
+        f64::from_bits(last.beat_bits) > 33.0,
+        "the run must cross the 141 BPM change at beat 32"
+    );
+    let moving = (0..last.param_bits.len())
+        .filter(|&p| distinct(steady.values().map(|f| f.param_bits[p])) >= 8)
+        .count();
+    assert!(
+        moving >= 3,
+        "both LFOs and the automation lane must move: {moving} params moved"
+    );
     let memberships = distinct(steady.values().map(|f| f.active_clips));
-    assert!(memberships >= 2, "clips must start and stop: {memberships} membership sizes");
-    assert_eq!(first_divergence(&steady, &run(None)), None, "the steady run must repeat bit for bit");
+    assert!(
+        memberships >= 2,
+        "clips must start and stop: {memberships} membership sizes"
+    );
+    assert_eq!(
+        first_divergence(&steady, &run(None)),
+        None,
+        "the steady run must repeat bit for bit"
+    );
 
     let jittered = run(Some(SEED));
     let shared = steady.keys().filter(|i| jittered.contains_key(i)).count();
-    assert!(shared + 3 >= PLAYING_TICKS, "the jittered run must render all but the stalled frames: {shared}");
+    assert!(
+        shared + 3 >= PLAYING_TICKS,
+        "the jittered run must render all but the stalled frames: {shared}"
+    );
     if let Some(divergence) = first_divergence(&steady, &jittered) {
-        panic!("same arrangement through the content thread, different values per transport frame: {divergence}");
+        panic!(
+            "same arrangement through the content thread, different values per transport frame: {divergence}"
+        );
     }
 }

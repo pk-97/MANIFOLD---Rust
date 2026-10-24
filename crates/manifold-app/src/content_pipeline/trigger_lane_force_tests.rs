@@ -126,7 +126,9 @@ fn insert_uniform_force(mut owner: EffectGraphDef, id: &str, target: &str) -> Ef
             },
         )
         .expect("prepare UniformForce through production authoring seam");
-    owner = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(&owner, instance)
+    owner = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(
+        &owner, instance,
+    )
     .expect("insert UniformForce through production graph edit");
     owner
 }
@@ -142,7 +144,10 @@ fn project_fixture() -> (Project, LayerId, LayerId, LayerId, String, String) {
     graph = insert_uniform_force(graph, "force_b", "part_b");
     parent.gen_params_mut().unwrap().graph = Some(graph.clone());
     parent.gen_params_mut().unwrap().params = Default::default();
-    parent.gen_params_mut().unwrap().refresh_manifest_from_graph();
+    parent
+        .gen_params_mut()
+        .unwrap()
+        .refresh_manifest_from_graph();
     let strength_a_alias = modifier_alias(&graph, "force_a", "strength");
     let strength_b_alias = modifier_alias(&graph, "force_b", "strength");
     let parent_params = parent.gen_params_mut().unwrap();
@@ -188,7 +193,10 @@ fn project_fixture() -> (Project, LayerId, LayerId, LayerId, String, String) {
             .params
             .get(&alias)
             .expect("public UniformForce Impulse parameter");
-        assert!(param.spec.is_trigger, "UniformForce Impulse must be a trigger");
+        assert!(
+            param.spec.is_trigger,
+            "UniformForce Impulse must be a trigger"
+        );
         assert_eq!(
             param.spec.name, "Impulse",
             "force trigger keeps its exposed name"
@@ -472,7 +480,11 @@ fn trigger_lane_force_mixed_audio_timing_acceptance() {
         send_id,
         AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Full),
     );
-    parent.gen_params_mut().unwrap().audio_mods_mut().push(audio_mod);
+    parent
+        .gen_params_mut()
+        .unwrap()
+        .audio_mods_mut()
+        .push(audio_mod);
 
     let sample_count = SAMPLE_RATE as usize * AUDIO_SECONDS;
     let master_mono = (0..sample_count)
@@ -618,7 +630,13 @@ impl DirectFire {
         ))]);
         engine.initialize(project);
         engine.set_state(PlaybackState::Playing);
-        Self { device, engine, parent, fire, frame: 0 }
+        Self {
+            device,
+            engine,
+            parent,
+            fire,
+            frame: 0,
+        }
     }
 
     fn fire(&mut self) -> Result<bool, String> {
@@ -630,7 +648,12 @@ impl DirectFire {
         };
         let (renderers, project) = self.engine.split_renderer_project();
         let project = project.expect("project installed");
-        let layer = project.timeline.layers.iter().find(|layer| layer.layer_id == self.parent).expect("scene layer");
+        let layer = project
+            .timeline
+            .layers
+            .iter()
+            .find(|layer| layer.layer_id == self.parent)
+            .expect("scene layer");
         let tempo = ProjectTempo::new(&project.tempo_map, project.settings.bpm);
         renderers
             .iter_mut()
@@ -655,19 +678,36 @@ impl DirectFire {
         self.frame += 1;
         let (layers, tempo) = {
             let project = self.engine.project().expect("project installed");
-            (project.timeline.layers.clone(), ProjectTempo::new(&project.tempo_map, project.settings.bpm))
+            (
+                project.timeline.layers.clone(),
+                ProjectTempo::new(&project.tempo_map, project.settings.bpm),
+            )
         };
         let mut command_buffer = self.device.create_encoder("scene impulse fire proof");
         let mut gpu = GpuEncoder::new(&mut command_buffer, &self.device);
-        let (time, beat) = (self.engine.current_time_double(), self.engine.current_beat_f64());
+        let (time, beat) = (
+            self.engine.current_time_double(),
+            self.engine.current_beat_f64(),
+        );
         let skipped: &[i32] = if skip { &[0] } else { &[] };
-        generator(&mut self.engine).render_all(&mut gpu, time, beat, dt as f32, &layers, DATA_VERSION, skipped, Some(&tempo));
+        generator(&mut self.engine).render_all(
+            &mut gpu,
+            time,
+            beat,
+            dt as f32,
+            &layers,
+            DATA_VERSION,
+            skipped,
+            Some(&tempo),
+        );
         command_buffer.commit_and_wait_completed();
         self.engine.reclaim_tick_result(result);
     }
 
     fn diagnostics(&mut self) -> manifold_core::scene_impulse::SceneImpulseDiagnostics {
-        generator(&mut self.engine).scene_impulse_diagnostics().clone()
+        generator(&mut self.engine)
+            .scene_impulse_diagnostics()
+            .clone()
     }
 }
 
@@ -681,7 +721,15 @@ fn scene_impulse_fired_before_its_scene_renders_lands_once_after() {
         scene.render(false);
     }
     let diagnostics = scene.diagnostics();
-    assert_eq!((diagnostics.started, diagnostics.refused, diagnostics.discarded), (1, 0, 0), "{diagnostics:?}");
+    assert_eq!(
+        (
+            diagnostics.started,
+            diagnostics.refused,
+            diagnostics.discarded
+        ),
+        (1, 0, 0),
+        "{diagnostics:?}"
+    );
 }
 
 /// A burst of Fires past the hit history grows it: nothing is refused,
@@ -700,7 +748,11 @@ fn a_burst_of_scene_impulses_past_the_history_lands_whole() {
     scene.render(false);
     scene.render(false);
     let diagnostics = scene.diagnostics();
-    assert_eq!((diagnostics.started, diagnostics.refused), (301, 0), "{diagnostics:?}");
+    assert_eq!(
+        (diagnostics.started, diagnostics.refused),
+        (301, 0),
+        "{diagnostics:?}"
+    );
 }
 
 /// A Fire waiting for a scene that then stops playing (the playhead left its
@@ -717,8 +769,17 @@ fn scene_impulse_waiting_for_an_unrendered_scene_is_refused_once() {
         scene.render(false);
     }
     let diagnostics = scene.diagnostics();
-    assert_eq!((diagnostics.started, diagnostics.refused), (0, 1), "{diagnostics:?}");
-    assert!(diagnostics.last_refusal.as_deref().is_some_and(|reason| reason.contains("stopped rendering")));
+    assert_eq!(
+        (diagnostics.started, diagnostics.refused),
+        (0, 1),
+        "{diagnostics:?}"
+    );
+    assert!(
+        diagnostics
+            .last_refusal
+            .as_deref()
+            .is_some_and(|reason| reason.contains("stopped rendering"))
+    );
 }
 
 /// A scene hidden behind an opaque layer is still playing: its waiting Fire
@@ -729,12 +790,20 @@ fn scene_impulse_waiting_for_an_occluded_scene_lands_once() {
     assert_eq!(scene.fire(), Ok(true));
     scene.render(true);
     scene.render(true);
-    assert_eq!(scene.diagnostics().refused, 0, "an occluded scene is not a stopped one");
+    assert_eq!(
+        scene.diagnostics().refused,
+        0,
+        "an occluded scene is not a stopped one"
+    );
     for _ in 0..3 {
         scene.render(false);
     }
     let diagnostics = scene.diagnostics();
-    assert_eq!((diagnostics.started, diagnostics.refused), (1, 0), "{diagnostics:?}");
+    assert_eq!(
+        (diagnostics.started, diagnostics.refused),
+        (1, 0),
+        "{diagnostics:?}"
+    );
 }
 
 /// A waiting Fire is refused once it has waited more than 100 ms on the
@@ -748,15 +817,31 @@ fn scene_impulse_waiting_more_than_100_ms_is_refused_at_any_frame_rate() {
             scene.render_step(true, 1.0 / fps);
         }
         let diagnostics = scene.diagnostics();
-        assert_eq!(diagnostics.refused, 0, "{fps} fps: still within 100 ms: {diagnostics:?}");
+        assert_eq!(
+            diagnostics.refused, 0,
+            "{fps} fps: still within 100 ms: {diagnostics:?}"
+        );
         scene.render_step(true, 1.0 / fps);
         let diagnostics = scene.diagnostics();
-        assert_eq!((diagnostics.started, diagnostics.refused), (0, 1), "{fps} fps: {diagnostics:?}");
-        assert!(diagnostics.last_refusal.as_deref().is_some_and(|reason| reason.contains("100 ms")));
+        assert_eq!(
+            (diagnostics.started, diagnostics.refused),
+            (0, 1),
+            "{fps} fps: {diagnostics:?}"
+        );
+        assert!(
+            diagnostics
+                .last_refusal
+                .as_deref()
+                .is_some_and(|reason| reason.contains("100 ms"))
+        );
         for _ in 0..3 {
             scene.render(false);
         }
-        assert_eq!(scene.diagnostics().started, 0, "{fps} fps: a refused hit never lands late");
+        assert_eq!(
+            scene.diagnostics().started,
+            0,
+            "{fps} fps: a refused hit never lands late"
+        );
     }
 }
 
@@ -767,8 +852,12 @@ fn scene_impulse_waiting_more_than_100_ms_is_refused_at_any_frame_rate() {
 fn scene_impulse_waiting_through_a_reset_is_refused_never_landed() {
     type Reset = fn(&mut DirectFire);
     let resets: [(&str, Reset); 3] = [
-        ("export restart", |scene| generator(&mut scene.engine).reset_all_generator_state()),
-        ("stop", |scene| generator(&mut scene.engine).clear_all_trigger_state()),
+        ("export restart", |scene| {
+            generator(&mut scene.engine).reset_all_generator_state()
+        }),
+        ("stop", |scene| {
+            generator(&mut scene.engine).clear_all_trigger_state()
+        }),
         ("project switch", |scene| {
             let project = scene.engine.project().expect("project installed").clone();
             scene.engine.initialize(project);
@@ -780,12 +869,22 @@ fn scene_impulse_waiting_through_a_reset_is_refused_never_landed() {
         reset(&mut scene);
         let diagnostics = scene.diagnostics();
         assert_eq!(diagnostics.refused, 1, "{path}: {diagnostics:?}");
-        assert!(diagnostics.last_refusal.as_deref().is_some_and(|reason| reason.contains("reset")), "{path}");
+        assert!(
+            diagnostics
+                .last_refusal
+                .as_deref()
+                .is_some_and(|reason| reason.contains("reset")),
+            "{path}"
+        );
         for _ in 0..3 {
             scene.render(false);
         }
         let diagnostics = scene.diagnostics();
-        assert_eq!((diagnostics.started, diagnostics.refused), (0, 1), "{path}: {diagnostics:?}");
+        assert_eq!(
+            (diagnostics.started, diagnostics.refused),
+            (0, 1),
+            "{path}: {diagnostics:?}"
+        );
     }
 }
 
@@ -799,7 +898,12 @@ fn scene_impulse_fired_after_a_forward_seek_in_the_same_drain_lands_once() {
     use crate::headless_harness::headless_content_thread;
     let (mut project, parent, _, _, fire, _) = project_fixture();
     // The scene plays past the seek: twenty minutes at 240 BPM.
-    let scene = project.timeline.layers.iter_mut().find(|layer| layer.layer_id == parent).expect("scene layer");
+    let scene = project
+        .timeline
+        .layers
+        .iter_mut()
+        .find(|layer| layer.layer_id == parent)
+        .expect("scene layer");
     scene.clips[0].duration_beats = Beats(4_800.0);
     let mut thread = headless_content_thread(project, WIDTH, HEIGHT);
     thread.timer.set_frame_clocked(true);
@@ -809,7 +913,9 @@ fn scene_impulse_fired_after_a_forward_seek_in_the_same_drain_lands_once() {
     for _ in 0..40 {
         thread.tick_frame(&state_tx);
     }
-    let before = generator(&mut thread.engine).scene_impulse_diagnostics().clone();
+    let before = generator(&mut thread.engine)
+        .scene_impulse_diagnostics()
+        .clone();
     assert_eq!((before.refused, before.discarded), (0, 0), "{before:?}");
     thread.handle_command(ContentCommand::SeekTo(Seconds(600.0)));
     thread.handle_command(ContentCommand::FireParameter {
@@ -819,9 +925,15 @@ fn scene_impulse_fired_after_a_forward_seek_in_the_same_drain_lands_once() {
     for _ in 0..4 {
         thread.tick_frame(&state_tx);
     }
-    let after = generator(&mut thread.engine).scene_impulse_diagnostics().clone();
+    let after = generator(&mut thread.engine)
+        .scene_impulse_diagnostics()
+        .clone();
     assert_eq!(
-        (after.started - before.started, after.refused, after.discarded),
+        (
+            after.started - before.started,
+            after.refused,
+            after.discarded
+        ),
         (1, 0, 0),
         "{after:?}"
     );
@@ -830,7 +942,10 @@ fn scene_impulse_fired_after_a_forward_seek_in_the_same_drain_lands_once() {
 /// The scene's native physics epoch: it changes only when the world reseeds.
 fn world_epoch(engine: &mut PlaybackEngine, parent: &LayerId) -> Option<u64> {
     let state = generator(engine).layer_generators.get(parent)?;
-    let instance = state.generator.graph.instance_by_node_id(&NodeId::new("world"))?;
+    let instance = state
+        .generator
+        .graph
+        .instance_by_node_id(&NodeId::new("world"))?;
     let node = state.generator.graph.get_node(instance)?;
     manifold_water_rigid::node::get(node.node.as_ref())?.physics_impulse_epoch()
 }
@@ -838,12 +953,23 @@ fn world_epoch(engine: &mut PlaybackEngine, parent: &LayerId) -> Option<u64> {
 /// The world kept its epoch (no reseed) and the frame rendered without a
 /// node error (a physics history moved backward fails it).
 #[track_caller]
-fn assert_world_holds(thread: &mut crate::content_thread::ContentThread, parent: &LayerId, epoch: u64) {
+fn assert_world_holds(
+    thread: &mut crate::content_thread::ContentThread,
+    parent: &LayerId,
+    epoch: u64,
+) {
     let time = thread.engine.current_time_double();
-    assert_eq!(world_epoch(&mut thread.engine, parent), Some(epoch), "at {time} s the world reseeded");
+    assert_eq!(
+        world_epoch(&mut thread.engine, parent),
+        Some(epoch),
+        "at {time} s the world reseeded"
+    );
     let status = thread.content_pipeline.frame_render_status();
     assert!(
-        !matches!(status, manifold_node_engine::runtime::frame_status::FrameRenderStatus::Failed(_)),
+        !matches!(
+            status,
+            manifold_node_engine::runtime::frame_status::FrameRenderStatus::Failed(_)
+        ),
         "at {time} s the frame failed: {status:?}"
     );
 }
@@ -852,7 +978,12 @@ fn assert_world_holds(thread: &mut crate::content_thread::ContentThread, parent:
 /// minutes at 240 BPM.
 fn long_scene_thread() -> (crate::content_thread::ContentThread, LayerId, String) {
     let (mut project, parent, _, _, fire, _) = project_fixture();
-    let scene = project.timeline.layers.iter_mut().find(|layer| layer.layer_id == parent).expect("scene layer");
+    let scene = project
+        .timeline
+        .layers
+        .iter_mut()
+        .find(|layer| layer.layer_id == parent)
+        .expect("scene layer");
     scene.clips[0].duration_beats = Beats(4_800.0);
     let mut thread = crate::headless_harness::headless_content_thread(project, WIDTH, HEIGHT);
     thread.timer.set_frame_clocked(true);
@@ -861,8 +992,13 @@ fn long_scene_thread() -> (crate::content_thread::ContentThread, LayerId, String
 
 /// A BPM edit through the editing service, as the tempo field sends it.
 fn change_bpm(thread: &mut crate::content_thread::ContentThread, bpm: f32) {
-    let command = manifold_editing::commands::settings::ChangeBpmCommand::master(thread.engine.project().expect("project installed"), Bpm(bpm));
-    thread.handle_command(crate::content_command::ContentCommand::Execute(Box::new(command)));
+    let command = manifold_editing::commands::settings::ChangeBpmCommand::master(
+        thread.engine.project().expect("project installed"),
+        Bpm(bpm),
+    );
+    thread.handle_command(crate::content_command::ContentCommand::Execute(Box::new(
+        command,
+    )));
 }
 
 /// A Fire waiting for its scene's first render, the first frame after Play,
@@ -887,8 +1023,18 @@ fn a_waiting_fire_across_a_bpm_up_edit_lands_once_without_reseeding() {
         thread.tick_frame(&state_tx);
         assert_world_holds(&mut thread, &parent, first);
     }
-    let diagnostics = generator(&mut thread.engine).scene_impulse_diagnostics().clone();
-    assert_eq!((diagnostics.started, diagnostics.refused, diagnostics.discarded), (1, 0, 0), "{diagnostics:?}");
+    let diagnostics = generator(&mut thread.engine)
+        .scene_impulse_diagnostics()
+        .clone();
+    assert_eq!(
+        (
+            diagnostics.started,
+            diagnostics.refused,
+            diagnostics.discarded
+        ),
+        (1, 0, 0),
+        "{diagnostics:?}"
+    );
 }
 
 /// Lane pulses fired while the BPM is dragged down and back up, one edit a
@@ -903,13 +1049,27 @@ fn lane_pulses_across_a_bpm_drag_land_once_without_reseeding() {
     let first = world_epoch(&mut thread.engine, &parent).expect("the world renders");
     // The lanes fire at beats 0.4 to 1.2: the drag spans them.
     for frame in 1..40 {
-        let bpm = if frame < 20 { 240.0 - 6.0 * frame as f32 } else { 126.0 + 8.0 * (frame - 20) as f32 };
+        let bpm = if frame < 20 {
+            240.0 - 6.0 * frame as f32
+        } else {
+            126.0 + 8.0 * (frame - 20) as f32
+        };
         change_bpm(&mut thread, bpm);
         thread.tick_frame(&state_tx);
         assert_world_holds(&mut thread, &parent, first);
     }
-    let diagnostics = generator(&mut thread.engine).scene_impulse_diagnostics().clone();
-    assert_eq!((diagnostics.started, diagnostics.refused, diagnostics.discarded), (5, 0, 0), "{diagnostics:?}");
+    let diagnostics = generator(&mut thread.engine)
+        .scene_impulse_diagnostics()
+        .clone();
+    assert_eq!(
+        (
+            diagnostics.started,
+            diagnostics.refused,
+            diagnostics.discarded
+        ),
+        (5, 0, 0),
+        "{diagnostics:?}"
+    );
 }
 
 /// A Fire waiting behind an opaque layer across a BPM-up edit lands once,
@@ -919,8 +1079,16 @@ fn lane_pulses_across_a_bpm_drag_land_once_without_reseeding() {
 fn a_fire_waiting_for_an_occluded_scene_across_a_bpm_up_edit_never_lands_ahead() {
     use crate::content_command::ContentCommand;
     let (mut project, parent, lane_a, lane_b, fire, _) = project_fixture();
-    project.timeline.layers.retain(|layer| layer.layer_id != lane_a && layer.layer_id != lane_b);
-    let scene = project.timeline.layers.iter_mut().find(|layer| layer.layer_id == parent).expect("scene layer");
+    project
+        .timeline
+        .layers
+        .retain(|layer| layer.layer_id != lane_a && layer.layer_id != lane_b);
+    let scene = project
+        .timeline
+        .layers
+        .iter_mut()
+        .find(|layer| layer.layer_id == parent)
+        .expect("scene layer");
     scene.clips[0].duration_beats = Beats(4_800.0);
     // The scene sits under an opaque cover for its first two beats.
     let mut cover = Layer::new_generator("Cover".into(), PresetTypeId::new("Scene"), 0);
@@ -928,7 +1096,12 @@ fn a_fire_waiting_for_an_occluded_scene_across_a_bpm_up_edit_never_lands_ahead()
     params.graph = Some(scene_fixture());
     params.refresh_manifest_from_graph();
     cover.default_blend_mode = manifold_core::types::BlendMode::Opaque;
-    cover.clips.push(manifold_core::clip::TimelineClip::new_generator(Beats::ZERO, Beats(2.0)));
+    cover
+        .clips
+        .push(manifold_core::clip::TimelineClip::new_generator(
+            Beats::ZERO,
+            Beats(2.0),
+        ));
     project.timeline.layers.insert(0, cover);
     for (index, layer) in project.timeline.layers.iter_mut().enumerate() {
         layer.index = index as i32;
@@ -940,7 +1113,10 @@ fn a_fire_waiting_for_an_occluded_scene_across_a_bpm_up_edit_never_lands_ahead()
     while thread.engine.current_beat_f64() < 1.8 {
         thread.tick_frame(&state_tx);
     }
-    assert!(world_epoch(&mut thread.engine, &parent).is_none(), "the covered scene has not rendered");
+    assert!(
+        world_epoch(&mut thread.engine, &parent).is_none(),
+        "the covered scene has not rendered"
+    );
     thread.handle_command(ContentCommand::FireParameter {
         target: GraphTarget::Generator(parent.clone()),
         param_id: manifold_core::effects::ParamId::from(fire),
@@ -959,6 +1135,16 @@ fn a_fire_waiting_for_an_occluded_scene_across_a_bpm_up_edit_never_lands_ahead()
         thread.tick_frame(&state_tx);
         assert_world_holds(&mut thread, &parent, first);
     }
-    let diagnostics = generator(&mut thread.engine).scene_impulse_diagnostics().clone();
-    assert_eq!((diagnostics.started, diagnostics.refused, diagnostics.discarded), (1, 0, 0), "{diagnostics:?}");
+    let diagnostics = generator(&mut thread.engine)
+        .scene_impulse_diagnostics()
+        .clone();
+    assert_eq!(
+        (
+            diagnostics.started,
+            diagnostics.refused,
+            diagnostics.discarded
+        ),
+        (1, 0, 0),
+        "{diagnostics:?}"
+    );
 }

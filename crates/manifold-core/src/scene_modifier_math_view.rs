@@ -7,9 +7,9 @@
 //! Fragments); load-time migration strips those and moves the host bindings
 //! onto a standalone instance (see `project_io::migrate_project_scene_graphs`).
 
+use crate::NodeId;
 use crate::effect_graph_def::{BindingTarget, EffectGraphDef};
 use crate::effects::ParamConvert;
-use crate::NodeId;
 
 /// Bundled recipe id of the standalone Math View modifier.
 pub const MATH_VIEW_RECIPE_ID: &str = "MathView";
@@ -53,7 +53,10 @@ fn control_node_id(suffix: &str) -> NodeId {
     NodeId::new(format!("__math_view_{suffix}"))
 }
 
-fn visit(nodes: &[crate::effect_graph_def::EffectGraphNode], f: &mut impl FnMut(&crate::effect_graph_def::EffectGraphNode)) {
+fn visit(
+    nodes: &[crate::effect_graph_def::EffectGraphNode],
+    f: &mut impl FnMut(&crate::effect_graph_def::EffectGraphNode),
+) {
     for node in nodes {
         f(node);
         if let Some(group) = &node.group {
@@ -230,7 +233,14 @@ pub fn upgrade_math_view_instance(graph: &mut EffectGraphDef) -> bool {
     let rank = |id: &str| -> usize {
         id.strip_prefix(CONTROL_PREFIX)
             .and_then(|suffix| CONTROLS.iter().position(|(s, ..)| *s == suffix))
-            .map_or(if id.starts_with(CONTROL_PREFIX) { CONTROLS.len() + 1 } else { 0 }, |at| at + 1)
+            .map_or(
+                if id.starts_with(CONTROL_PREFIX) {
+                    CONTROLS.len() + 1
+                } else {
+                    0
+                },
+                |at| at + 1,
+            )
     };
     let order: Vec<String> = metadata.params.iter().map(|p| p.id.clone()).collect();
     metadata.params.sort_by_key(|spec| rank(&spec.id));
@@ -265,7 +275,11 @@ pub fn retarget_math_view_bindings(
     };
     let mut moved = 0;
     for binding in &mut metadata.bindings {
-        let BindingTarget::SceneModifier { modifier_id, param_id } = &mut binding.target else {
+        let BindingTarget::SceneModifier {
+            modifier_id,
+            param_id,
+        } = &mut binding.target
+        else {
             continue;
         };
         if modifier_id == from
@@ -420,7 +434,9 @@ pub fn carrier_has_authored_math_view_content(
 /// These are the values a save carried when no host binding was minted for a
 /// control; load migration copies them onto the standalone view so they are
 /// not lost (host bindings still win where they exist).
-pub fn legacy_embedded_control_values(graph: &EffectGraphDef) -> std::collections::BTreeMap<String, f32> {
+pub fn legacy_embedded_control_values(
+    graph: &EffectGraphDef,
+) -> std::collections::BTreeMap<String, f32> {
     let mut values = std::collections::BTreeMap::new();
     visit(&graph.nodes, &mut |node| {
         let Some(suffix) = node.node_id.as_str().strip_prefix("__math_view_") else {
@@ -456,13 +472,11 @@ pub fn legacy_bound_control_suffixes(
                             if modifier_id == carrier && param_id.starts_with(CONTROL_PREFIX)
                     )
                 })
-                .filter_map(|binding| {
-                    match &binding.target {
-                        BindingTarget::SceneModifier { param_id, .. } => param_id
-                            .strip_prefix(CONTROL_PREFIX)
-                            .map(str::to_string),
-                        _ => None,
+                .filter_map(|binding| match &binding.target {
+                    BindingTarget::SceneModifier { param_id, .. } => {
+                        param_id.strip_prefix(CONTROL_PREFIX).map(str::to_string)
                     }
+                    _ => None,
                 })
                 .collect()
         })
@@ -522,8 +536,10 @@ pub fn reusable_math_view_for_carrier(
         let Some(suffix) = node.node_id.as_str().strip_prefix("__math_view_") else {
             return;
         };
-        if let (Some(default), Some(crate::effect_graph_def::SerializedParamValue::Float { value })) =
-            (defaults.get(suffix), node.params.get("value"))
+        if let (
+            Some(default),
+            Some(crate::effect_graph_def::SerializedParamValue::Float { value }),
+        ) = (defaults.get(suffix), node.params.get("value"))
         {
             default_content &= value == default;
         }
@@ -546,7 +562,13 @@ mod tests {
     use crate::effects::ParamConvert;
     use crate::scene_modifier_preset::SceneModifierInstanceDef;
 
-    fn control_entry(suffix: &str) -> (ParamSpecDef, BindingDef, crate::effect_graph_def::EffectGraphNode) {
+    fn control_entry(
+        suffix: &str,
+    ) -> (
+        ParamSpecDef,
+        BindingDef,
+        crate::effect_graph_def::EffectGraphNode,
+    ) {
         let id = format!("{CONTROL_PREFIX}{suffix}");
         let nid = control_node_id(suffix);
         (
@@ -591,18 +613,15 @@ mod tests {
     }
 
     /// A minimal legacy carrier: qualified Vortex recipe plus every control.
-    fn legacy_carrier() -> EffectGraphDef {        let mut graph: EffectGraphDef = serde_json::from_value(serde_json::json!({
+    fn legacy_carrier() -> EffectGraphDef {
+        let mut graph: EffectGraphDef = serde_json::from_value(serde_json::json!({
             "version":3,
             "presetMetadata":{"id":"VortexFragments","displayName":"Vortex","category":"Geometry","oscPrefix":"vortex","params":[],"bindings":[{"id":"orbit","label":"Orbit","defaultValue":1,"target":{"kind":"node","nodeId":"patch","param":"orbit"}}]},
             "nodes":[{"id":1,"nodeId":"stage","typeId":"group","group":{"interface":{"inputs":[],"outputs":[]},"nodes":[{"id":2,"nodeId":"patch","typeId":"node.transform_mesh_patches","params":{"orbit":{"type":"Float","value":1}}}],"wires":[]}}],"wires":[]
         }))
         .unwrap();
         let mut next = 10;
-        for suffix in CONTROLS
-            .iter()
-            .map(|(suffix, ..)| *suffix)
-            .chain(["scope"])
-        {
+        for suffix in CONTROLS.iter().map(|(suffix, ..)| *suffix).chain(["scope"]) {
             let (param, binding, mut node) = control_entry(suffix);
             node.id = next;
             next += 1;
@@ -644,10 +663,20 @@ mod tests {
         // Strip is idempotent and keeps the authored deformation intact.
         assert!(!strip_legacy_math_view_controls(&mut stripped));
         let metadata = stripped.preset_metadata.as_ref().unwrap();
-        assert!(metadata.bindings.iter().any(|binding| binding.id == "orbit"));
+        assert!(
+            metadata
+                .bindings
+                .iter()
+                .any(|binding| binding.id == "orbit")
+        );
         assert!(metadata.params.is_empty());
         assert!(stripped.nodes.iter().any(|node| node.node_id == "stage"));
-        assert!(!stripped.nodes.iter().any(|node| node.node_id.as_str().starts_with("__math_view_")));
+        assert!(
+            !stripped
+                .nodes
+                .iter()
+                .any(|node| node.node_id.as_str().starts_with("__math_view_"))
+        );
     }
 
     #[test]
@@ -765,8 +794,13 @@ mod tests {
             vec!["sceneModifier:[\"vortex_a\",\"math_view_scope\"]".to_string()]
         );
         let metadata = owner.preset_metadata.as_ref().unwrap();
-        assert!(metadata.bindings.iter().all(|binding| matches!(&binding.target,
-            BindingTarget::SceneModifier { modifier_id, .. } if modifier_id == &view)));
+        assert!(
+            metadata
+                .bindings
+                .iter()
+                .all(|binding| matches!(&binding.target,
+            BindingTarget::SceneModifier { modifier_id, .. } if modifier_id == &view))
+        );
         assert!(!metadata.params.iter().any(|p| p.id == removed[0]));
 
         // A second carrier's bindings drop with their host params.
@@ -791,7 +825,10 @@ mod tests {
             default_mirrors_node_param: false,
         });
         let removed = drop_math_view_bindings(&mut owner, &NodeId::new("vortex_b"));
-        assert_eq!(removed, vec!["sceneModifier:[\"vortex_b\",\"math_view_mode\"]".to_string()]);
+        assert_eq!(
+            removed,
+            vec!["sceneModifier:[\"vortex_b\",\"math_view_mode\"]".to_string()]
+        );
         let metadata = owner.preset_metadata.as_ref().unwrap();
         assert!(!metadata.params.iter().any(|p| p.id == removed[0]));
         assert!(!metadata.bindings.iter().any(|b| b.id == removed[0]));
@@ -942,12 +979,13 @@ mod tests {
             offset: 0.0,
             default_mirrors_node_param: false,
         });
-        host.params.push(crate::params::Param::user_added(ParamSpecDef {
-            id: macro_id.clone(),
-            name: local.into(),
-            default_value: default,
-            ..Default::default()
-        }));
+        host.params
+            .push(crate::params::Param::user_added(ParamSpecDef {
+                id: macro_id.clone(),
+                name: local.into(),
+                default_value: default,
+                ..Default::default()
+            }));
         host.refresh_manifest_from_graph();
         macro_id
     }
@@ -971,10 +1009,9 @@ mod tests {
             .iter_mut()
             .find(|node| node.node_id == "__math_view_density")
             .expect("density control node");
-        density.params.insert(
-            "value".into(),
-            SerializedParamValue::Float { value: 5.0 },
-        );
+        density
+            .params
+            .insert("value".into(), SerializedParamValue::Float { value: 5.0 });
         let host = host_with_carrier(carrier);
         assert!(carrier_has_authored_math_view_content(
             &host,

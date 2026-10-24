@@ -53,23 +53,34 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 use ahash::{AHashMap, AHashSet};
-use manifold_core::PresetTypeId;
 use manifold_core::NodeId;
+use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef, EffectGraphNode,
     EffectGraphWire, SerializedParamValue,
 };
 
 use crate::exec::effect_node::NodeInstanceId;
-use {crate::freeze::codegen, crate::freeze::codegen::FusionRegion, crate::freeze::codegen::InputSource, crate::freeze::codegen::RegionNode};
 use crate::freeze::markers::Marker;
-use crate::freeze::region::{Region, RegionInput, RegionMember, partition_regions, region_port_is_member};
+use crate::freeze::region::{
+    Region, RegionInput, RegionMember, partition_regions, region_port_is_member,
+};
 use crate::freeze::space::{ElementSpace, resolve_output_spaces, space_of};
-use crate::scene::mesh_change::{MeshAspect, MeshDependency, MeshRevisionRule, PreparedMeshOutputRule, PreparedMeshRevisionRule, PreparedMeshRules};
-use crate::ports::PortType;
-use crate::parameters::{ParamType, ParamValue};
 use crate::param_binding::ParamConvert;
-use crate::{load::loaded_preset_view::LoadedPresetView, param_binding::ParamBinding, param_binding::ParamTarget, persistence::PrimitiveRegistry};
+use crate::parameters::{ParamType, ParamValue};
+use crate::ports::PortType;
+use crate::scene::mesh_change::{
+    MeshAspect, MeshDependency, MeshRevisionRule, PreparedMeshOutputRule, PreparedMeshRevisionRule,
+    PreparedMeshRules,
+};
+use crate::{
+    load::loaded_preset_view::LoadedPresetView, param_binding::ParamBinding,
+    param_binding::ParamTarget, persistence::PrimitiveRegistry,
+};
+use {
+    crate::freeze::codegen, crate::freeze::codegen::FusionRegion,
+    crate::freeze::codegen::InputSource, crate::freeze::codegen::RegionNode,
+};
 
 /// Whether fusion is enabled this process. Default ON — the freeze compiler is
 /// the main render path (Peter's request). The `MANIFOLD_FREEZE` env var is the
@@ -80,7 +91,10 @@ use crate::{load::loaded_preset_view::LoadedPresetView, param_binding::ParamBind
 pub fn freeze_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| match std::env::var("MANIFOLD_FREEZE") {
-        Ok(v) => !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off" | "no"),
+        Ok(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "off" | "no"
+        ),
         Err(_) => true,
     })
 }
@@ -341,7 +355,11 @@ impl<V: Clone> LruCache<V> {
     fn insert(&mut self, key: u64, value: V) {
         if !self.entries.contains_key(&key)
             && self.entries.len() >= self.cap
-            && let Some(evict_key) = self.last_hit.iter().min_by_key(|(_, t)| **t).map(|(k, _)| *k)
+            && let Some(evict_key) = self
+                .last_hit
+                .iter()
+                .min_by_key(|(_, t)| **t)
+                .map(|(k, _)| *k)
         {
             self.entries.remove(&evict_key);
             self.last_hit.remove(&evict_key);
@@ -398,7 +416,10 @@ pub fn fused_effect_cache_len_for_test() -> usize {
 /// for an edited def these still address inner nodes by stable NodeId, and the
 /// fuse retargets them onto the fused nodes (refusing, → `None` → unfused, if one
 /// would strand). Selection reads only this; the blocking is just memoize-on-miss.
-pub fn fused_view_for(def: &EffectGraphDef, base: &LoadedPresetView) -> Option<Arc<LoadedPresetView>> {
+pub fn fused_view_for(
+    def: &EffectGraphDef,
+    base: &LoadedPresetView,
+) -> Option<Arc<LoadedPresetView>> {
     let key = fused_effect_cache_key(def, base);
     if let Some(cached) = FUSED_EFFECT_CACHE.with(|c| c.borrow_mut().get(key)) {
         return cached;
@@ -412,10 +433,12 @@ pub fn fused_view_for(def: &EffectGraphDef, base: &LoadedPresetView) -> Option<A
 /// to carry. No device, no UI state, no thread assumption — the unit
 /// that relocates to a background worker later. `None` when the def has no
 /// fusable region or a binding would strand.
-fn compile_fused_view(def: &EffectGraphDef, base: &LoadedPresetView) -> Option<Arc<LoadedPresetView>> {
+fn compile_fused_view(
+    def: &EffectGraphDef,
+    base: &LoadedPresetView,
+) -> Option<Arc<LoadedPresetView>> {
     let registry = PrimitiveRegistry::with_builtin();
-    let fused =
-        fuse_view_parts(def, &base.bindings, &base.type_id, &registry, None)?;
+    let fused = fuse_view_parts(def, &base.bindings, &base.type_id, &registry, None)?;
     Some(Arc::new(fused))
 }
 
@@ -473,8 +496,10 @@ pub fn select_card_fused_view(
     // just the effective def to fuse. The fused view keeps the same outer-card
     // params + bindings, so the chain build's splice / outer_param_index /
     // bindings lines are shape-identical either way.
-    let effective_def: &EffectGraphDef =
-        fx.graph.as_ref().unwrap_or(base_view.canonical_def.as_ref());
+    let effective_def: &EffectGraphDef = fx
+        .graph
+        .as_ref()
+        .unwrap_or(base_view.canonical_def.as_ref());
     if !should_render_fused(is_watched) {
         return (None, false);
     }
@@ -513,8 +538,7 @@ pub enum FusedEffectLookup {
 /// A chain runtime built while any card was `Pending` records the generation it
 /// saw; the dispatcher rebuilds it when this advances (the fused swap-in
 /// trigger — the per-card analog of [`segment_generation`]).
-static FUSED_EFFECT_GENERATION: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static FUSED_EFFECT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn fused_effect_generation() -> u64 {
     FUSED_EFFECT_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
@@ -562,7 +586,11 @@ pub fn fused_effect_view_for(def: &EffectGraphDef, base: &LoadedPresetView) -> F
                 bindings: base.bindings.clone(),
                 type_id: base.type_id.clone(),
             };
-            if segment_worker().tx.send(FusionJob::Effect(Box::new(job))).is_err() {
+            if segment_worker()
+                .tx
+                .send(FusionJob::Effect(Box::new(job)))
+                .is_err()
+            {
                 // Worker died (startup panic) — refuse rather than wedge Pending.
                 FUSED_EFFECT_PENDING.with(|p| {
                     p.borrow_mut().remove(&key);
@@ -586,13 +614,7 @@ fn compile_effect_view_panic_safe(
     registry: &PrimitiveRegistry,
 ) -> Option<Arc<LoadedPresetView>> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        fuse_view_parts(
-            &job.def,
-            &job.bindings,
-            &job.type_id,
-            registry,
-            None,
-        )
+        fuse_view_parts(&job.def, &job.bindings, &job.type_id, registry, None)
     })) {
         Ok(view) => view.map(Arc::new),
         Err(_) => {
@@ -685,9 +707,10 @@ pub fn chain_fusion_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     freeze_enabled()
         && *ENABLED.get_or_init(|| match std::env::var("MANIFOLD_CHAIN_FUSION") {
-            Ok(v) => {
-                !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off" | "no")
-            }
+            Ok(v) => !matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "off" | "no"
+            ),
             Err(_) => true,
         })
 }
@@ -879,9 +902,7 @@ fn prewarm_fused_pipelines(def: &EffectGraphDef) {
         let Some(source) = node.wgsl_source.as_deref() else {
             continue;
         };
-        let Some(entry) =
-            crate::primitives::wgsl_compute::select_compute_entry_name(source)
-        else {
+        let Some(entry) = crate::primitives::wgsl_compute::select_compute_entry_name(source) else {
             continue;
         };
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1000,7 +1021,9 @@ fn expire_stale_segment_pending(now: std::time::Instant) {
         }
         pending
             .iter()
-            .filter(|(_, enqueued)| now.saturating_duration_since(**enqueued) >= SEGMENT_COMPILE_DEADLINE)
+            .filter(|(_, enqueued)| {
+                now.saturating_duration_since(**enqueued) >= SEGMENT_COMPILE_DEADLINE
+            })
             .map(|(k, _)| *k)
             .collect()
     });
@@ -1017,9 +1040,7 @@ fn expire_stale_segment_pending(now: std::time::Instant) {
 /// enqueue on the worker and report `Pending` (the chain splices per-card this
 /// build). Content thread only. `cards` carries owned defs and the view
 /// references for bindings.
-pub fn fused_segment_view_for(
-    cards: &[(EffectGraphDef, Arc<LoadedPresetView>)],
-) -> SegmentLookup {
+pub fn fused_segment_view_for(cards: &[(EffectGraphDef, Arc<LoadedPresetView>)]) -> SegmentLookup {
     let card_refs: Vec<(&EffectGraphDef, &LoadedPresetView)> =
         cards.iter().map(|(d, v)| (d, v.as_ref())).collect();
     let key = segment_key(&card_refs);
@@ -1048,7 +1069,10 @@ pub fn fused_segment_view_for(
         if newly_queued {
             let job = SegmentJob {
                 key,
-                cards: cards.iter().map(|(d, v)| (d.clone(), Arc::clone(v))).collect(),
+                cards: cards
+                    .iter()
+                    .map(|(d, v)| (d.clone(), Arc::clone(v)))
+                    .collect(),
             };
             if segment_worker().tx.send(FusionJob::Segment(job)).is_err() {
                 // Worker died (startup panic) — refuse rather than wedge Pending.
@@ -1124,7 +1148,12 @@ pub(crate) fn compile_segment_view(
     let spans_seam = {
         let regions = partition_regions(&concat, registry);
         let prefix_of = |doc_id: u32| -> Option<&str> {
-            let nid = concat.nodes.iter().find(|n| n.id == doc_id)?.node_id.as_str();
+            let nid = concat
+                .nodes
+                .iter()
+                .find(|n| n.id == doc_id)?
+                .node_id
+                .as_str();
             nid.split_once('.').map(|(p, _)| p)
         };
         regions.iter().any(|r| {
@@ -1183,7 +1212,12 @@ pub(crate) fn compile_segment_view(
         card_bindings.push(retarget_bindings(&prefixed, &fused.retarget, &surviving)?);
     }
 
-    let FusedDef { def, retarget, mesh_rules, .. } = fused;
+    let FusedDef {
+        def,
+        retarget,
+        mesh_rules,
+        ..
+    } = fused;
     Some(Arc::new(SegmentView {
         def,
         card_bindings,
@@ -1419,7 +1453,10 @@ fn resolve_output_storage(
         .iter()
         .find(|o| matches!(o.ty, PortType::Texture2D))
         .map(|o| o.name.clone());
-    match tex_out.as_ref().and_then(|name| doc_node.output_formats.get(name.as_ref())) {
+    match tex_out
+        .as_ref()
+        .and_then(|name| doc_node.output_formats.get(name.as_ref()))
+    {
         Some(s) if s.contains("32float") => "rgba32float",
         _ => "rgba16float",
     }
@@ -1545,7 +1582,10 @@ fn external_is_inplace_loop(
         };
         // A substep boundary's state port is the same kind of loop buffer:
         // its region body mutates it in place every iteration, unfused.
-        if prim.substep_boundary().is_some_and(|ports| ports.state == port) {
+        if prim
+            .substep_boundary()
+            .is_some_and(|ports| ports.state == port)
+        {
             return true;
         }
         // Follow the aliased pair whose OUTPUT is the port we arrived on, back to
@@ -1676,7 +1716,14 @@ fn substitute_mesh_rule(
                         arr[0].to_string()
                     }
                 };
-                match expand_member_aspect(all_members, node_keepalive, is_buffer, pidx, &port_name, dep.aspect) {
+                match expand_member_aspect(
+                    all_members,
+                    node_keepalive,
+                    is_buffer,
+                    pidx,
+                    &port_name,
+                    dep.aspect,
+                ) {
                     PreparedMeshRevisionRule::Written => return PreparedMeshRevisionRule::Written,
                     PreparedMeshRevisionRule::Fixed => {}
                     PreparedMeshRevisionRule::Dependencies(inner) => leaves.extend(inner),
@@ -1752,7 +1799,9 @@ fn compose_region_mesh_rules(
         let Some(spec) = node.outputs().iter().find(|p| p.name == out_port.as_str()) else {
             continue;
         };
-        let PortType::Array(arr) = &spec.ty else { continue };
+        let PortType::Array(arr) = &spec.ty else {
+            continue;
+        };
         if arr.specs != <crate::mesh::MeshVertex as crate::ports::KnownItem>::SPECS {
             continue;
         }
@@ -1764,8 +1813,20 @@ fn compose_region_mesh_rules(
         };
         rules.push(PreparedMeshOutputRule {
             output,
-            topology: substitute_mesh_rule(all_members, node_keepalive, is_buffer, idx, &declared.topology),
-            positions: substitute_mesh_rule(all_members, node_keepalive, is_buffer, idx, &declared.positions),
+            topology: substitute_mesh_rule(
+                all_members,
+                node_keepalive,
+                is_buffer,
+                idx,
+                &declared.topology,
+            ),
+            positions: substitute_mesh_rule(
+                all_members,
+                node_keepalive,
+                is_buffer,
+                idx,
+                &declared.positions,
+            ),
         });
     }
     rules
@@ -1807,7 +1868,9 @@ pub(crate) fn fuse_canonical_def_masked(
     let def = if manifold_core::scene_modifier_preset::has_scene_modifier_data(def) {
         prepared = crate::load::expand::expand_scene_modifiers(def, registry).ok()?;
         &prepared
-    } else { def };
+    } else {
+        def
+    };
     // The finder operates on a FLATTENED graph: `partition_regions` refuses any
     // def still carrying a group node (group boundary nodes would fragment every
     // region), and the live loader (`graph_loader`) flattens before building. So
@@ -1925,11 +1988,7 @@ pub(crate) fn fuse_canonical_def_masked(
             let (body, derived, includes) = if let Some(dense) = dense {
                 // Join before namespacing: shared element helpers reference the
                 // member's gathered buffers, so they cannot be global includes.
-                (
-                    dense.body_fragments.join("\n"),
-                    &[][..],
-                    &[][..],
-                )
+                (dense.body_fragments.join("\n"), &[][..], &[][..])
             } else {
                 (
                     super::region::substituted_body(node.as_ref(), doc_node)?.into_owned(),
@@ -1937,10 +1996,17 @@ pub(crate) fn fuse_canonical_def_masked(
                     node.wgsl_includes(),
                 )
             };
-            let omit = |name: &str| dense.is_some_and(|dense| dense.schedule_inputs.contains(&name));
-            let node_inputs = node.inputs().iter()
-                .filter(|input| !omit(&input.name)).cloned().collect();
-            let omitted_inputs = node.inputs().iter()
+            let omit =
+                |name: &str| dense.is_some_and(|dense| dense.schedule_inputs.contains(&name));
+            let node_inputs = node
+                .inputs()
+                .iter()
+                .filter(|input| !omit(&input.name))
+                .cloned()
+                .collect();
+            let omitted_inputs = node
+                .inputs()
+                .iter()
                 .filter(|input| matches!(input.ty, PortType::Array(_)))
                 .enumerate()
                 .filter_map(|(idx, input)| omit(&input.name).then_some(idx))
@@ -1968,9 +2034,7 @@ pub(crate) fn fuse_canonical_def_masked(
             // (an unrecognized name used to `return None`; an unregistered
             // type_id does the same now, data-driven instead of name-matched).
             if !effective_derived.is_empty()
-                && !crate::freeze::derived_uniform_registry::has_recompute(
-                    &doc_node.type_id,
-                )
+                && !crate::freeze::derived_uniform_registry::has_recompute(&doc_node.type_id)
             {
                 return None;
             }
@@ -1997,17 +2061,25 @@ pub(crate) fn fuse_canonical_def_masked(
                             return None; // camera producer fused away — can't route it
                         }
                         let key = (cw.from_node, cw.from_port.clone());
-                        let idx = camera_ext_producers.iter().position(|e| *e == key).unwrap_or_else(|| {
-                            camera_ext_producers.push(key.clone());
-                            camera_ext_producers.len() - 1
-                        });
+                        let idx = camera_ext_producers
+                            .iter()
+                            .position(|e| *e == key)
+                            .unwrap_or_else(|| {
+                                camera_ext_producers.push(key.clone());
+                                camera_ext_producers.len() - 1
+                            });
                         Some(idx)
                     }
                     None => None,
                 }
             };
             built.push(BuiltMember {
-                body, derived_camera_ext, effective_derived, node_inputs, omitted_inputs, includes,
+                body,
+                derived_camera_ext,
+                effective_derived,
+                node_inputs,
+                omitted_inputs,
+                includes,
             });
             node_keepalive.push(node);
         }
@@ -2038,7 +2110,10 @@ pub(crate) fn fuse_canonical_def_masked(
                 body: built[idx].body.as_ref(),
                 params: node.parameters(),
                 inputs,
-                input_access: member.input_access.iter().enumerate()
+                input_access: member
+                    .input_access
+                    .iter()
+                    .enumerate()
                     .filter_map(|(input_idx, access)| {
                         (!built[idx].omitted_inputs.contains(&input_idx)).then_some(*access)
                     })
@@ -2151,7 +2226,11 @@ pub(crate) fn fuse_canonical_def_masked(
                 // has a derived-uniform field instead, refreshed every frame. A
                 // WIRED declared frame-time input never reaches this branch because
                 // `effective_derived` excluded it.
-                if built[idx].effective_derived.iter().any(|d| *d == p.name.as_ref()) {
+                if built[idx]
+                    .effective_derived
+                    .iter()
+                    .any(|d| *d == p.name.as_ref())
+                {
                     continue;
                 }
 
@@ -2176,7 +2255,10 @@ pub(crate) fn fuse_canonical_def_masked(
                     // producer into one of these param types today (they're
                     // static colour/vector knobs), so this is not expected to
                     // ever fire; it exists as a fail-closed guard.
-                    if def.wires.iter().any(|w| w.to_node == member.doc_id && w.to_port == p.name)
+                    if def
+                        .wires
+                        .iter()
+                        .any(|w| w.to_node == member.doc_id && w.to_port == p.name)
                     {
                         return None;
                     }
@@ -2185,8 +2267,10 @@ pub(crate) fn fuse_canonical_def_masked(
                             effective_param_vec3(doc_node.params.get(p.name.as_ref()), &p.default)?
                                 .to_vec()
                         }
-                        _ => effective_param_vec4(doc_node.params.get(p.name.as_ref()), &p.default)?
-                            .to_vec(),
+                        _ => {
+                            effective_param_vec4(doc_node.params.get(p.name.as_ref()), &p.default)?
+                                .to_vec()
+                        }
                     };
                     for (comp, suffix) in comps.iter().zip(["_x", "_y", "_z", "_w"]) {
                         fused_params.insert(
@@ -2202,10 +2286,12 @@ pub(crate) fn fuse_canonical_def_masked(
                     (fused_id.clone(), field.clone()),
                 );
                 if p.ty == ParamType::Bool {
-                    let value = effective_param_bool(doc_node.params.get(p.name.as_ref()), &p.default)?;
+                    let value =
+                        effective_param_bool(doc_node.params.get(p.name.as_ref()), &p.default)?;
                     fused_params.insert(field.clone(), SerializedParamValue::Bool { value });
                 } else {
-                    let value = effective_param_f32(doc_node.params.get(p.name.as_ref()), &p.default)?;
+                    let value =
+                        effective_param_f32(doc_node.params.get(p.name.as_ref()), &p.default)?;
                     fused_params.insert(field.clone(), SerializedParamValue::Float { value });
                 }
 
@@ -2268,7 +2354,11 @@ pub(crate) fn fuse_canonical_def_masked(
         {
             let multi = region.outputs.len() > 1;
             for (k, _) in region.outputs.iter().enumerate() {
-                let port = if multi { format!("dst_{k}") } else { "dst".to_string() };
+                let port = if multi {
+                    format!("dst_{k}")
+                } else {
+                    "dst".to_string()
+                };
                 if let ElementSpace::Scaled(num, den) = space {
                     output_canvas_scales.insert(port.clone(), [num, den]);
                 }
@@ -2308,8 +2398,12 @@ pub(crate) fn fuse_canonical_def_masked(
                     .map(|i| i.name.as_ref())
                     .collect();
                 for (idx, ri) in member.inputs.iter().enumerate() {
-                    let RegionInput::External(e) = ri else { continue };
-                    let Some(port_name) = tex_ports.get(idx).copied() else { continue };
+                    let RegionInput::External(e) = ri else {
+                        continue;
+                    };
+                    let Some(port_name) = tex_ports.get(idx).copied() else {
+                        continue;
+                    };
                     let access = member.input_access.get(idx).copied().unwrap_or_default();
                     slot_access[*e] = Some(match slot_access[*e] {
                         Some(prev) if prev.is_filtering_sampler() => prev,
@@ -2334,13 +2428,19 @@ pub(crate) fn fuse_canonical_def_masked(
                     _ => continue, // buffer-domain accesses never name a src texture
                 };
                 markers.push_str(
-                    &Marker::InputAccess { port: format!("src_{e}"), token: token.to_string() }
-                        .emit(),
+                    &Marker::InputAccess {
+                        port: format!("src_{e}"),
+                        token: token.to_string(),
+                    }
+                    .emit(),
                 );
                 markers.push('\n');
                 if slot_pc[e] {
                     markers.push_str(
-                        &Marker::PrecisionCritical { port: format!("src_{e}") }.emit(),
+                        &Marker::PrecisionCritical {
+                            port: format!("src_{e}"),
+                        }
+                        .emit(),
                     );
                     markers.push('\n');
                 }
@@ -2497,7 +2597,13 @@ pub(crate) fn fuse_canonical_def_masked(
         wires: new_wires,
     };
 
-    Some(FusedDef { def: fused_def, retarget, node_retarget, expected_spaces, mesh_rules })
+    Some(FusedDef {
+        def: fused_def,
+        retarget,
+        node_retarget,
+        expected_spaces,
+        mesh_rules,
+    })
 }
 
 /// Defense in depth: a fused def must BUILD, not just contain valid WGSL. The
@@ -2661,10 +2767,7 @@ mod tests {
         let default = ParamValue::Bool(true);
         assert_eq!(effective_param_bool(None, &default), Some(true));
         assert_eq!(
-            effective_param_bool(
-                Some(&SerializedParamValue::Float { value: 0.5 }),
-                &default,
-            ),
+            effective_param_bool(Some(&SerializedParamValue::Float { value: 0.5 }), &default,),
             Some(false),
             "seeded numeric Bool values use strict BoolThreshold semantics"
         );
@@ -2673,8 +2776,6 @@ mod tests {
             ParamValue::Bool(true)
         );
     }
-
-
 
     /// A region mask leaves the disabled region's nodes as ordinary surviving
     /// nodes: source → gain → contrast → threshold(boundary) → saturation →
@@ -2707,14 +2808,22 @@ mod tests {
 
         let full = fuse_canonical_def(&def, &reg).expect("both regions fuse unmasked");
         assert_eq!(
-            full.def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").count(),
+            full.def
+                .nodes
+                .iter()
+                .filter(|n| n.type_id == "node.wgsl_compute")
+                .count(),
             2
         );
 
         let half = fuse_canonical_def_masked(&def, &reg, Some(&[true, false]))
             .expect("one enabled region still fuses");
         assert_eq!(
-            half.def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").count(),
+            half.def
+                .nodes
+                .iter()
+                .filter(|n| n.type_id == "node.wgsl_compute")
+                .count(),
             1,
             "only the enabled region becomes a fused node"
         );
@@ -2770,8 +2879,15 @@ mod tests {
         // Refresh key 1 with a new value — key 1 was already present, so
         // this must not evict key 2 even though the cache is at cap.
         cache.insert(1, 11);
-        assert_eq!(cache.len(), 2, "refreshing a present key must not grow past cap");
-        assert!(cache.contains_key(2), "refresh must not evict the other entry");
+        assert_eq!(
+            cache.len(),
+            2,
+            "refreshing a present key must not grow past cap"
+        );
+        assert!(
+            cache.contains_key(2),
+            "refresh must not evict the other entry"
+        );
         assert_eq!(cache.get(1), Some(11), "refresh must update the value");
     }
 
@@ -2789,7 +2905,6 @@ mod tests {
         // Watched → never fused.
         assert!(!should_render_fused(true));
     }
-
 
     /// A minimal three-node def (source → gain → final_output) used by the
     /// content-key cosmetic-field tests below.
@@ -2873,18 +2988,31 @@ mod tests {
         topology_edited.wires.clear();
         let key_topology = def_content_key(&topology_edited);
 
-        assert_ne!(key_original, key_wire, "a wire edit must change the content key");
-        assert_ne!(key_original, key_param, "a baked param edit must change the content key");
-        assert_ne!(key_original, key_topology, "a topology edit must change the content key");
-        assert_ne!(key_wire, key_param, "distinct edits must not collide on the same key");
-        assert_ne!(key_wire, key_topology, "distinct edits must not collide on the same key");
-        assert_ne!(key_param, key_topology, "distinct edits must not collide on the same key");
+        assert_ne!(
+            key_original, key_wire,
+            "a wire edit must change the content key"
+        );
+        assert_ne!(
+            key_original, key_param,
+            "a baked param edit must change the content key"
+        );
+        assert_ne!(
+            key_original, key_topology,
+            "a topology edit must change the content key"
+        );
+        assert_ne!(
+            key_wire, key_param,
+            "distinct edits must not collide on the same key"
+        );
+        assert_ne!(
+            key_wire, key_topology,
+            "distinct edits must not collide on the same key"
+        );
+        assert_ne!(
+            key_param, key_topology,
+            "distinct edits must not collide on the same key"
+        );
     }
-
-
-
-
-
 
     /// A true boundary in the middle splits the card into TWO fused nodes — the
     /// headline generalisation past whole-card fusion. source → gain → contrast
@@ -2923,7 +3051,11 @@ mod tests {
             .collect();
         assert_eq!(wgsl_nodes.len(), 2, "two fused regions");
         assert!(
-            fused.def.nodes.iter().any(|n| n.type_id == "test.fusion_boundary"),
+            fused
+                .def
+                .nodes
+                .iter()
+                .any(|n| n.type_id == "test.fusion_boundary"),
             "the threshold boundary survives between the two fused nodes"
         );
 
@@ -2935,25 +3067,38 @@ mod tests {
                 .map(|(id, _)| id.as_str().to_string())
         };
         assert_eq!(region_of("gain", "gain").as_deref(), Some("fused_region_0"));
-        assert_eq!(region_of("contrast", "gain").as_deref(), Some("fused_region_0"));
+        assert_eq!(
+            region_of("contrast", "gain").as_deref(),
+            Some("fused_region_0")
+        );
         assert_eq!(region_of("sat", "gain").as_deref(), Some("fused_region_1"));
-        assert_eq!(region_of("clamp", "gain").as_deref(), Some("fused_region_1"));
+        assert_eq!(
+            region_of("clamp", "gain").as_deref(),
+            Some("fused_region_1")
+        );
 
         // The chain reconnects: source → r0, r0 → threshold, threshold → r1 → final.
-        let id_of =
-            |nid: &str| fused.def.nodes.iter().find(|n| n.node_id.as_str() == nid).map(|n| n.id);
+        let id_of = |nid: &str| {
+            fused
+                .def
+                .nodes
+                .iter()
+                .find(|n| n.node_id.as_str() == nid)
+                .map(|n| n.id)
+        };
         let thresh = id_of("thresh").unwrap();
         let r0 = id_of("fused_region_0").unwrap();
         let r1 = id_of("fused_region_1").unwrap();
-        let has_wire =
-            |from: u32, to: u32| fused.def.wires.iter().any(|w| w.from_node == from && w.to_node == to);
+        let has_wire = |from: u32, to: u32| {
+            fused
+                .def
+                .wires
+                .iter()
+                .any(|w| w.from_node == from && w.to_node == to)
+        };
         assert!(has_wire(r0, thresh), "fused_region_0 feeds the threshold");
         assert!(has_wire(thresh, r1), "the threshold feeds fused_region_1");
     }
-
-
-
-
 
     /// An effect with no fusable node has no region — left entirely unfused, safe
     /// by construction. `node.threshold` is a Boundary, so a single-threshold
@@ -3015,19 +3160,34 @@ mod tests {
 
         // Exactly one fused node (gain+invert+contrast), both thresholds + the mix
         // survive.
-        let wgsl_nodes: Vec<_> =
-            fused.def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").collect();
+        let wgsl_nodes: Vec<_> = fused
+            .def
+            .nodes
+            .iter()
+            .filter(|n| n.type_id == "node.wgsl_compute")
+            .collect();
         assert_eq!(wgsl_nodes.len(), 1, "the fork is one fused node");
         let fused_doc = wgsl_nodes[0].id;
         assert_eq!(
-            fused.def.nodes.iter().filter(|n| n.type_id == "test.fusion_boundary").count(),
+            fused
+                .def
+                .nodes
+                .iter()
+                .filter(|n| n.type_id == "test.fusion_boundary")
+                .count(),
             2,
             "both router boundaries survive"
         );
 
         // The fused node exposes two outputs, each routed to its member's boundary.
-        let id_of =
-            |nid: &str| fused.def.nodes.iter().find(|n| n.node_id.as_str() == nid).map(|n| n.id);
+        let id_of = |nid: &str| {
+            fused
+                .def
+                .nodes
+                .iter()
+                .find(|n| n.node_id.as_str() == nid)
+                .map(|n| n.id)
+        };
         let thr_a = id_of("thr_a").unwrap();
         let thr_b = id_of("thr_b").unwrap();
         let port_into = |to: u32| -> Option<String> {
@@ -3039,16 +3199,33 @@ mod tests {
                 .map(|w| w.from_port.clone())
         };
         // invert(2) < contrast(3) by doc-id, so invert → dst_0, contrast → dst_1.
-        assert_eq!(port_into(thr_a).as_deref(), Some("dst_0"), "invert's output drives thr_a via dst_0");
-        assert_eq!(port_into(thr_b).as_deref(), Some("dst_1"), "contrast's output drives thr_b via dst_1");
+        assert_eq!(
+            port_into(thr_a).as_deref(),
+            Some("dst_0"),
+            "invert's output drives thr_a via dst_0"
+        );
+        assert_eq!(
+            port_into(thr_b).as_deref(),
+            Some("dst_1"),
+            "contrast's output drives thr_b via dst_1"
+        );
 
         // Retarget still routes both members' params onto the one fused node.
         let region_of = |nid: &str, p: &str| {
-            fused.retarget.get(&(nid.into(), p.into())).map(|(id, _)| id.as_str().to_string())
+            fused
+                .retarget
+                .get(&(nid.into(), p.into()))
+                .map(|(id, _)| id.as_str().to_string())
         };
         assert_eq!(region_of("gain", "gain").as_deref(), Some("fused_region_0"));
-        assert_eq!(region_of("invert", "gain").as_deref(), Some("fused_region_0"));
-        assert_eq!(region_of("contrast", "gain").as_deref(), Some("fused_region_0"));
+        assert_eq!(
+            region_of("invert", "gain").as_deref(),
+            Some("fused_region_0")
+        );
+        assert_eq!(
+            region_of("contrast", "gain").as_deref(),
+            Some("fused_region_0")
+        );
     }
 
     /// A control wire driving a fused-away atom's param is re-anchored onto the
@@ -3074,10 +3251,20 @@ mod tests {
         }"#;
         let def: EffectGraphDef = serde_json::from_str(json).unwrap();
         let fused = fuse_canonical_def(&def, &registry()).expect("the control-wired region fuses");
-        let fused_doc =
-            fused.def.nodes.iter().find(|n| n.type_id == "node.wgsl_compute").unwrap().id;
-        let dims_doc =
-            fused.def.nodes.iter().find(|n| n.type_id == "node.texture_size").unwrap().id;
+        let fused_doc = fused
+            .def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.wgsl_compute")
+            .unwrap()
+            .id;
+        let dims_doc = fused
+            .def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.texture_size")
+            .unwrap()
+            .id;
         let cw = fused
             .def
             .wires
@@ -3085,7 +3272,10 @@ mod tests {
             .find(|w| w.from_node == dims_doc && w.to_node == fused_doc)
             .expect("texture_dimensions still drives the fused node");
         assert_eq!(cw.from_port, "aspect", "the producer's aspect output");
-        assert_eq!(cw.to_port, "n0_gain", "re-anchored onto gain's shadow field (member 0)");
+        assert_eq!(
+            cw.to_port, "n0_gain",
+            "re-anchored onto gain's shadow field (member 0)"
+        );
         // The fused WgslCompute must actually expose that shadow port.
         use crate::exec::effect_node::EffectNode;
         use crate::primitives::wgsl_compute::WgslCompute;
@@ -3104,8 +3294,6 @@ mod tests {
         );
     }
 
-
-
     /// The effect-side (`ParamBinding`) twin of the rewrite: retargeting maps
     /// `EnumRound → IntRound`, while a binding left on a surviving boundary
     /// node keeps its `EnumRound` untouched (the real node still declares a
@@ -3117,7 +3305,10 @@ mod tests {
             id: ParamId::from("m"),
             label: "Mode".into(),
             default_value: 0.0,
-            target: ParamTarget::Node { node_id: NodeId::new(node), param: std::borrow::Cow::Borrowed(param) },
+            target: ParamTarget::Node {
+                node_id: NodeId::new(node),
+                param: std::borrow::Cow::Borrowed(param),
+            },
             convert: ParamConvert::EnumRound,
             scale: 1.0,
             offset: 0.0,
@@ -3128,13 +3319,23 @@ mod tests {
             default_mirrors_node_param: false,
         };
         let mut retarget: AHashMap<(String, String), (NodeId, String)> = AHashMap::default();
-        retarget
-            .insert(("mix".into(), "mode".into()), (NodeId::new("fused_region_0"), "n2_mode".into()));
+        retarget.insert(
+            ("mix".into(), "mode".into()),
+            (NodeId::new("fused_region_0"), "n2_mode".into()),
+        );
         let surviving: AHashSet<String> = ["boundary".to_string()].into_iter().collect();
 
-        let out = retarget_bindings(&[mk("mix", "mode"), mk("boundary", "mode")], &retarget, &surviving)
-            .expect("both bindings route");
-        assert_eq!(out[0].convert, ParamConvert::IntRound, "repointed → rewritten");
+        let out = retarget_bindings(
+            &[mk("mix", "mode"), mk("boundary", "mode")],
+            &retarget,
+            &surviving,
+        )
+        .expect("both bindings route");
+        assert_eq!(
+            out[0].convert,
+            ParamConvert::IntRound,
+            "repointed → rewritten"
+        );
         match &out[0].target {
             ParamTarget::Node { node_id, param } => {
                 assert_eq!(node_id.as_str(), "fused_region_0");
@@ -3149,7 +3350,6 @@ mod tests {
              declares a real Enum param"
         );
     }
-
 
     /// BUG-j8gy machinery: a `Pending` effect key that outlives the compile
     /// deadline expires into the negative cache (`Refused`) — the
@@ -3244,14 +3444,19 @@ mod tests {
         let view = result.expect(
             "compile_segment_view_panic_safe must itself never unwind — it is the containment",
         );
-        assert!(view.is_none(), "a panicking compile refuses (None), it doesn't propagate");
+        assert!(
+            view.is_none(),
+            "a panicking compile refuses (None), it doesn't propagate"
+        );
     }
 
     /// Recursively collect every `.rs` file under `dir` (std::fs only — no
     /// `walkdir`, no shelling out to `rg`/`find`; same convention as
     /// `freeze/markers.rs`'s `marker_literals_live_in_one_module`).
     fn rust_files_under(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -3277,11 +3482,13 @@ mod tests {
     #[test]
     fn freeze_has_no_leaks() {
         // CARGO_MANIFEST_DIR points at the crate that owns this compiler.
-        let freeze_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("src/freeze");
+        let freeze_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/freeze");
         let mut files = Vec::new();
         rust_files_under(&freeze_dir, &mut files);
-        assert!(!files.is_empty(), "freeze/ file walk found nothing — path broke");
+        assert!(
+            !files.is_empty(),
+            "freeze/ file walk found nothing — path broke"
+        );
 
         // Assembled from fragments, none of which is the leak-call name
         // itself, so this file's own source never contains the searched-for
@@ -3292,7 +3499,9 @@ mod tests {
         let needle = format!("{leak_type}::{leak_fn}");
         let mut violations = Vec::new();
         for path in &files {
-            let Ok(text) = std::fs::read_to_string(path) else { continue };
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
             for (i, line) in text.lines().enumerate() {
                 if line.contains(&needle) {
                     violations.push(format!("{}:{}: {}", path.display(), i + 1, line.trim()));
@@ -3306,10 +3515,6 @@ mod tests {
             violations.join("\n")
         );
     }
-
-
-
-
 }
 
 #[cfg(any(test, feature = "testkit"))]

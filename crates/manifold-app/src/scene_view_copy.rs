@@ -11,10 +11,15 @@ use manifold_node_engine::scene::viewport_camera::ViewportCamera;
 const NO_VIEWPORT: &str = "Open this scene in the 3D viewport first";
 
 /// The viewport camera, when the open viewport shows `layer_id`'s scene.
-pub(crate) fn live_view(ws: &crate::workspace::Workspace, layer_id: &LayerId) -> Option<ViewportCamera> {
+pub(crate) fn live_view(
+    ws: &crate::workspace::Workspace,
+    layer_id: &LayerId,
+) -> Option<ViewportCamera> {
     let session = ws.viewport_session.as_ref()?;
     match &ws.viewport_target {
-        Some((GraphTarget::Generator(layer), _)) if layer == layer_id => Some(session.config.camera),
+        Some((GraphTarget::Generator(layer), _)) if layer == layer_id => {
+            Some(session.config.camera)
+        }
         _ => None,
     }
 }

@@ -6,8 +6,8 @@
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
-use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use crate::bodies::{BodySupports, LiquidBodies, LiquidBody, LiquidShape};
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 
 const UPLOAD_SHADER: &str = include_str!("primitives/shaders/liquid_body_upload.wgsl");
 /// 16-byte groups one inline upload carries (setBytes stays under 4 KB).
@@ -83,27 +83,59 @@ impl LiquidBodyBuffers {
     /// shapes and atlas, and when `rows_fresh` this frame's body and region
     /// rows are written in encoder order. `label` names the dispatches for
     /// the profiler.
-    pub fn upload(&mut self, gpu: &mut GpuEncoder<'_>, bodies: &LiquidBodies, rows_fresh: bool, label: &'static str) {
+    pub fn upload(
+        &mut self,
+        gpu: &mut GpuEncoder<'_>,
+        bodies: &LiquidBodies,
+        rows_fresh: bool,
+        label: &'static str,
+    ) {
         let row_bytes = std::mem::size_of_val(bodies.last_rows());
         let region_bytes = std::mem::size_of_val(bodies.last_region_rows());
-        let needs_bodies = self.stored.as_ref().is_none_or(|stored| stored.bodies.size < row_bytes as u64);
+        let needs_bodies = self
+            .stored
+            .as_ref()
+            .is_none_or(|stored| stored.bodies.size < row_bytes as u64);
         let contact_bytes = std::mem::size_of_val(bodies.last_contacts());
-        let needs_contacts = self.stored.as_ref().is_none_or(|stored| stored.contacts.size < contact_bytes as u64);
-        let needs_regions = self.stored.as_ref().is_none_or(|stored| stored.regions.size < region_bytes as u64);
+        let needs_contacts = self
+            .stored
+            .as_ref()
+            .is_none_or(|stored| stored.contacts.size < contact_bytes as u64);
+        let needs_regions = self
+            .stored
+            .as_ref()
+            .is_none_or(|stored| stored.regions.size < region_bytes as u64);
         let obstacle_bytes = std::mem::size_of_val(bodies.clock_obstacles());
         let source_bytes = std::mem::size_of_val(bodies.clock_sources());
-        let needs_clock = self.stored.as_ref().is_none_or(|s| s.clock_obstacles.size < obstacle_bytes as u64 || s.clock_sources.size < source_bytes as u64);
+        let needs_clock = self.stored.as_ref().is_none_or(|s| {
+            s.clock_obstacles.size < obstacle_bytes as u64
+                || s.clock_sources.size < source_bytes as u64
+        });
         let version = bodies.version;
-        if self.stored.as_ref().is_none_or(|stored| stored.version != version) || needs_bodies || needs_contacts || needs_regions || needs_clock {
+        if self
+            .stored
+            .as_ref()
+            .is_none_or(|stored| stored.version != version)
+            || needs_bodies
+            || needs_contacts
+            || needs_regions
+            || needs_clock
+        {
             let fresh = |bytes: &[u8], least: usize| {
-                let buffer = gpu.device.create_buffer_shared(bytes.len().max(least) as u64);
+                let buffer = gpu
+                    .device
+                    .create_buffer_shared(bytes.len().max(least) as u64);
                 // SAFETY: new shared buffer, not yet visible to the GPU.
                 unsafe { buffer.write(0, bytes) };
                 buffer
             };
             let row = std::mem::size_of::<LiquidBody>();
             let (old_bodies, old_contacts, old_regions) = match self.stored.take() {
-                Some(stored) => (Some(stored.bodies), Some(stored.contacts), Some(stored.regions)),
+                Some(stored) => (
+                    Some(stored.bodies),
+                    Some(stored.contacts),
+                    Some(stored.regions),
+                ),
                 None => (None, None, None),
             };
             let keep = |old: Option<GpuBuffer>, needs: bool, bytes: usize| match old {
@@ -114,12 +146,19 @@ impl LiquidBodyBuffers {
                 bodies: keep(old_bodies, needs_bodies, row_bytes),
                 contacts: match old_contacts {
                     Some(buffer) if !needs_contacts => buffer,
-                    _ => gpu.device.create_buffer_shared(contact_bytes.max(std::mem::size_of::<BodySupports>()) as u64),
+                    _ => gpu.device.create_buffer_shared(
+                        contact_bytes.max(std::mem::size_of::<BodySupports>()) as u64,
+                    ),
                 },
                 regions: keep(old_regions, needs_regions, region_bytes),
-                shapes: fresh(bytemuck::cast_slice(bodies.shapes()), std::mem::size_of::<LiquidShape>()),
+                shapes: fresh(
+                    bytemuck::cast_slice(bodies.shapes()),
+                    std::mem::size_of::<LiquidShape>(),
+                ),
                 atlas: fresh(bytemuck::cast_slice(bodies.atlas()), 4),
-                clock_obstacles: gpu.device.create_buffer_shared(obstacle_bytes.max(96) as u64),
+                clock_obstacles: gpu
+                    .device
+                    .create_buffer_shared(obstacle_bytes.max(96) as u64),
                 clock_sources: gpu.device.create_buffer_shared(source_bytes.max(96) as u64),
                 version,
             });
@@ -127,28 +166,56 @@ impl LiquidBodyBuffers {
         if !rows_fresh {
             return;
         }
-        let pipeline = self
-            .upload
-            .get_or_insert_with(|| gpu.device.create_compute_pipeline(UPLOAD_SHADER, "cs_main", label));
+        let pipeline = self.upload.get_or_insert_with(|| {
+            gpu.device
+                .create_compute_pipeline(UPLOAD_SHADER, "cs_main", label)
+        });
         let stored = self.stored.as_ref().expect("allocated above");
         for (target, groups) in [
-            (&stored.bodies, bytemuck::cast_slice::<_, [u32;4]>(bodies.last_rows())),
-            (&stored.contacts, bytemuck::cast_slice(bodies.last_contacts())),
-            (&stored.regions, bytemuck::cast_slice(bodies.last_region_rows())),
-            (&stored.clock_obstacles, bytemuck::cast_slice(bodies.clock_obstacles())),
-            (&stored.clock_sources, bytemuck::cast_slice(bodies.clock_sources())),
+            (
+                &stored.bodies,
+                bytemuck::cast_slice::<_, [u32; 4]>(bodies.last_rows()),
+            ),
+            (
+                &stored.contacts,
+                bytemuck::cast_slice(bodies.last_contacts()),
+            ),
+            (
+                &stored.regions,
+                bytemuck::cast_slice(bodies.last_region_rows()),
+            ),
+            (
+                &stored.clock_obstacles,
+                bytemuck::cast_slice(bodies.clock_obstacles()),
+            ),
+            (
+                &stored.clock_sources,
+                bytemuck::cast_slice(bodies.clock_sources()),
+            ),
         ] {
             for (chunk_index, chunk) in groups.chunks(UPLOAD_GROUPS).enumerate() {
                 let mut params: UploadParams = bytemuck::Zeroable::zeroed();
-                let UploadParams { start, count, words, .. } = &mut params;
+                let UploadParams {
+                    start,
+                    count,
+                    words,
+                    ..
+                } = &mut params;
                 *start = (chunk_index * UPLOAD_GROUPS) as u32;
                 *count = chunk.len() as u32;
                 words[..chunk.len()].copy_from_slice(chunk);
                 gpu.native_enc.dispatch_compute(
                     pipeline,
                     &[
-                        GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
-                        GpuBinding::Buffer { binding: 1, buffer: target, offset: 0 },
+                        GpuBinding::Bytes {
+                            binding: 0,
+                            data: bytemuck::bytes_of(&params),
+                        },
+                        GpuBinding::Buffer {
+                            binding: 1,
+                            buffer: target,
+                            offset: 0,
+                        },
                     ],
                     [(chunk.len() as u32).div_ceil(64), 1, 1],
                     label,

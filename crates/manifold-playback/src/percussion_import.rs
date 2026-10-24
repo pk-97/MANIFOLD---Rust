@@ -7,6 +7,7 @@ use manifold_core::{Beats, ClipId, Seconds};
 use std::collections::HashSet;
 
 use manifold_core::PresetTypeId;
+use manifold_core::audio_clip_detection::DetectionConfig;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_core::math::{BeatQuantizer, MathUtils};
@@ -14,8 +15,9 @@ use manifold_core::percussion_analysis::{
     ClipDetectionAnchor, PercussionAnalysisData, PercussionClipBinding, PercussionImportOptions,
     PercussionPlacementPlan, PercussionTriggerType,
 };
-use manifold_core::audio_clip_detection::DetectionConfig;
-use manifold_core::percussion_settings::{PercussionImportOptionsFactory, PercussionPipelineSettings};
+use manifold_core::percussion_settings::{
+    PercussionImportOptionsFactory, PercussionPipelineSettings,
+};
 use manifold_core::project::Project;
 use manifold_core::types::{LayerType, TempoPointSource};
 
@@ -534,11 +536,9 @@ pub fn build_clip_detection_options(
 
     // Keep only instruments the clip has enabled, and apply per-instrument
     // sensitivity as the confidence gate.
-    options.bindings.retain(|b| {
-        config
-            .instrument(b.trigger_type)
-            .is_some_and(|i| i.enabled)
-    });
+    options
+        .bindings
+        .retain(|b| config.instrument(b.trigger_type).is_some_and(|i| i.enabled));
     for binding in options.bindings.iter_mut() {
         if let Some(instrument) = config.instrument(binding.trigger_type) {
             binding.minimum_confidence = instrument.min_confidence();
@@ -650,7 +650,10 @@ mod tests {
             let mut foreign = TimelineClip::new_generator(Beats::from_f32(10.0), Beats(0.25));
             foreign.detection_source = Some(foreign_id.clone());
             layer.restore_clip(foreign);
-            layer.restore_clip(TimelineClip::new_generator(Beats::from_f32(20.0), Beats(0.25)));
+            layer.restore_clip(TimelineClip::new_generator(
+                Beats::from_f32(20.0),
+                Beats(0.25),
+            ));
         }
         project.timeline.mark_clip_lookup_dirty();
 
@@ -674,7 +677,11 @@ mod tests {
         );
 
         let clips = &project.timeline.layers[idx].clips;
-        assert_eq!(clips.len(), 3, "foreign + hand-placed preserved, audioA replaced");
+        assert_eq!(
+            clips.len(),
+            3,
+            "foreign + hand-placed preserved, audioA replaced"
+        );
         let own = clips
             .iter()
             .filter(|c| c.detection_source.as_ref() == Some(&clip_id))
@@ -698,10 +705,9 @@ mod tests {
         // A Kick binding routed explicitly to "Drums" must land on "Drums" and
         // must NOT rename it to "Kick".
         let mut project = Project::default();
-        let drums_idx =
-            project
-                .timeline
-                .add_layer("Drums", LayerType::Generator, gen_type());
+        let drums_idx = project
+            .timeline
+            .add_layer("Drums", LayerType::Generator, gen_type());
         let drums_lid = project.timeline.layers[drums_idx].layer_id.clone();
         project
             .timeline
@@ -720,8 +726,15 @@ mod tests {
         );
 
         assert!(result.success);
-        assert_eq!(project.timeline.layers[drums_idx].clips.len(), 1, "routed to Drums");
-        assert_eq!(project.timeline.layers[drums_idx].name, "Drums", "user layer not renamed");
+        assert_eq!(
+            project.timeline.layers[drums_idx].clips.len(),
+            1,
+            "routed to Drums"
+        );
+        assert_eq!(
+            project.timeline.layers[drums_idx].name, "Drums",
+            "user layer not renamed"
+        );
     }
 
     #[test]
@@ -755,7 +768,10 @@ mod tests {
             .iter()
             .find(|b| b.trigger_type == PercussionTriggerType::Kick)
             .expect("enabled Kick survives");
-        assert!(kick.minimum_confidence.abs() < 1e-6, "max sensitivity -> 0 threshold");
+        assert!(
+            kick.minimum_confidence.abs() < 1e-6,
+            "max sensitivity -> 0 threshold"
+        );
         assert!(
             !options
                 .bindings

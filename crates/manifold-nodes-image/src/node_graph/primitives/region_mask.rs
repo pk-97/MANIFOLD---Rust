@@ -9,10 +9,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuTextureFormat};
 
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 pub const REGION_MASK_SELECTIONS: &[&str] = &["All", "Largest"];
 
@@ -213,7 +213,9 @@ mod tests {
         assert_eq!(read_selection_from_params(&params), 0);
     }
 
-    fn read_selection_from_params(params: &manifold_node_engine::exec::effect_node::ParamValues) -> u32 {
+    fn read_selection_from_params(
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
+    ) -> u32 {
         let value = match params.get("selection") {
             Some(ParamValue::Enum(value)) => *value as f32,
             Some(ParamValue::Float(value)) => *value,
@@ -231,13 +233,15 @@ mod tests {
 mod gpu_tests {
     use super::super::region_types::TrackRecord as Track;
     use super::*;
-    use manifold_node_engine::exec::effect_node::NodeInstanceId;
-    use manifold_node_engine::freeze::classify::FusionKind;
-    use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused, standalone_for_spec};
-    use manifold_node_engine::primitive::PrimitiveSpec;
-    use manifold_node_engine::gpu::render_target::RenderTarget;
     use half::f16;
     use manifold_gpu::{GpuBinding, GpuTextureDesc, GpuTextureDimension, GpuTextureUsage};
+    use manifold_node_engine::exec::effect_node::NodeInstanceId;
+    use manifold_node_engine::freeze::classify::FusionKind;
+    use manifold_node_engine::freeze::codegen::{
+        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused, standalone_for_spec,
+    };
+    use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     fn upload_labels(
         device: &manifold_gpu::GpuDevice,
@@ -528,18 +532,36 @@ mod gpu_tests {
         let largest_full = dispatch_shape(&device, &labels, &track_buffer, 1, 1.0);
 
         for (index, pixel) in all_half.iter().enumerate() {
-            let expected = if [0, 2, 5, 7].contains(&index) { 1.0 } else { 0.5 };
-            assert!((pixel[0] - expected).abs() < 0.01, "All half pixel {index}: {pixel:?}");
+            let expected = if [0, 2, 5, 7].contains(&index) {
+                1.0
+            } else {
+                0.5
+            };
+            assert!(
+                (pixel[0] - expected).abs() < 0.01,
+                "All half pixel {index}: {pixel:?}"
+            );
         }
         for (index, pixel) in all_full.iter().enumerate() {
-            assert!((pixel[0] - 1.0).abs() < 0.01, "All full pixel {index}: {pixel:?}");
+            assert!(
+                (pixel[0] - 1.0).abs() < 0.01,
+                "All full pixel {index}: {pixel:?}"
+            );
         }
         for (index, pixel) in largest_full.iter().enumerate() {
-            let expected = if [2, 3, 6, 7].contains(&index) { 1.0 } else { 0.0 };
-            assert!((pixel[0] - expected).abs() < 0.01, "Largest full pixel {index}: {pixel:?}");
+            let expected = if [2, 3, 6, 7].contains(&index) {
+                1.0
+            } else {
+                0.0
+            };
+            assert!(
+                (pixel[0] - expected).abs() < 0.01,
+                "Largest full pixel {index}: {pixel:?}"
+            );
         }
 
-        let standalone = standalone_for_spec::<RegionMask>().expect("region mask standalone codegen");
+        let standalone =
+            standalone_for_spec::<RegionMask>().expect("region mask standalone codegen");
         let fused = fused_shader();
         for selection in [0, 1] {
             for shape in [0.0, 0.5, 1.0] {
@@ -585,13 +607,22 @@ mod gpu_tests {
         let labels = upload_labels(&device, &[1, 0, 0, 0], 4, 1);
         let mut tracks = [Track::default(); 32];
         tracks[0] = Track {
-            id: 7, label: 1, observed: 1, area: 0.2,
-            width: 0.5, height: 1.0,
+            id: 7,
+            label: 1,
+            observed: 1,
+            area: 0.2,
+            width: 0.5,
+            height: 1.0,
             ..Track::default()
         };
         tracks[1] = Track {
-            id: 1, label: 2, observed: 0, area: 1.0,
-            x: 0.5, width: 0.5, height: 1.0,
+            id: 1,
+            label: 2,
+            observed: 0,
+            area: 1.0,
+            x: 0.5,
+            width: 0.5,
+            height: 1.0,
             ..Track::default()
         };
         let track_buffer = upload_tracks(&device, &tracks);

@@ -18,11 +18,12 @@ pub mod transform;
 mod tree;
 
 pub use base::{BASE_CUBE, BASE_CUBE_MATERIAL};
-pub use manifold_foundation::id::ItemId;
 pub use import::{
-    ImportedCamera, ImportedLight, ImportedMaterial, ImportedModel, ImportedNode, ImportedTransform, camera_item, import_child_id, import_placement_id,
-    is_import_child, light_item, material_item, node_item,
+    ImportedCamera, ImportedLight, ImportedMaterial, ImportedModel, ImportedNode,
+    ImportedTransform, camera_item, import_child_id, import_placement_id, is_import_child,
+    light_item, material_item, node_item,
 };
+pub use manifold_foundation::id::ItemId;
 pub use models::{ModelFacts, SceneModels};
 pub use tree::{ONE_ENVIRONMENT, ONE_FILL, SceneEditError, can_hold, draws_with_material};
 
@@ -105,7 +106,10 @@ impl ItemFields {
             ItemKind::Material => ItemFields::Material(MaterialFields::default()),
             ItemKind::Water => ItemFields::Water(WaterFields::default()),
             // An Inflow, so a new source never makes a second Fill; Add sets its role next.
-            ItemKind::WaterSource => ItemFields::WaterSource(WaterSourceFields { role: SourceRole::Inflow, ..WaterSourceFields::default() }),
+            ItemKind::WaterSource => ItemFields::WaterSource(WaterSourceFields {
+                role: SourceRole::Inflow,
+                ..WaterSourceFields::default()
+            }),
             ItemKind::Swarm => ItemFields::Swarm(SwarmFields::default()),
             ItemKind::Force => ItemFields::Force(ForceFields::default()),
             ItemKind::Modifier => ItemFields::Modifier(ModifierFields::default()),
@@ -218,7 +222,9 @@ pub enum Shape {
     },
     /// A built-in curve spun around the vertical axis (Blender's Screw).
     #[serde(rename_all = "camelCase")]
-    Revolve { curve: Curve },
+    Revolve {
+        curve: Curve,
+    },
     /// A tube swept along a built-in curve (Blender's curve Bevel depth).
     /// `caps` is Fill Caps: an open path's two ends are closed.
     #[serde(rename_all = "camelCase")]
@@ -251,7 +257,9 @@ impl Shape {
     /// The built-in curve a curve shape is made from.
     pub fn curve(&self) -> Option<Curve> {
         match self {
-            Shape::Extrude { curve, .. } | Shape::Revolve { curve } | Shape::Tube { curve, .. } => Some(*curve),
+            Shape::Extrude { curve, .. } | Shape::Revolve { curve } | Shape::Tube { curve, .. } => {
+                Some(*curve)
+            }
             _ => None,
         }
     }
@@ -262,8 +270,12 @@ impl Shape {
     /// no single inside to fill, and a closed path has no ends.
     pub fn can_cap(&self) -> bool {
         match self {
-            Shape::Extrude { curve, .. } => matches!(curve, Curve::Circle | Curve::Polygon | Curve::Star),
-            Shape::Tube { curve, .. } => matches!(curve, Curve::Spiral | Curve::Helix | Curve::Wave),
+            Shape::Extrude { curve, .. } => {
+                matches!(curve, Curve::Circle | Curve::Polygon | Curve::Star)
+            }
+            Shape::Tube { curve, .. } => {
+                matches!(curve, Curve::Spiral | Curve::Helix | Curve::Wave)
+            }
             _ => false,
         }
     }
@@ -365,7 +377,9 @@ pub enum LightType {
     Point,
     Spot,
     #[serde(rename_all = "camelCase")]
-    Environment { source: EnvironmentSource },
+    Environment {
+        source: EnvironmentSource,
+    },
 }
 
 /// Where the environment light comes from (section 7.5): a procedural sky,
@@ -376,17 +390,25 @@ pub enum LightType {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub enum EnvironmentSource {
     #[serde(rename_all = "camelCase")]
-    Sky { style: SkyStyle },
+    Sky {
+        style: SkyStyle,
+    },
     #[serde(rename_all = "camelCase")]
-    Hdri { file: String },
+    Hdri {
+        file: String,
+    },
     #[serde(rename_all = "camelCase")]
-    SeaHorizon { file: String },
+    SeaHorizon {
+        file: String,
+    },
     None,
 }
 
 impl Default for EnvironmentSource {
     fn default() -> Self {
-        EnvironmentSource::Sky { style: SkyStyle::Softbox }
+        EnvironmentSource::Sky {
+            style: SkyStyle::Softbox,
+        }
     }
 }
 
@@ -476,7 +498,10 @@ impl FeatureSetting {
     pub const REMOVED: u32 = 3;
 
     pub fn on(feature: MaterialFeature) -> Self {
-        Self { feature, mode: Self::ON }
+        Self {
+            feature,
+            mode: Self::ON,
+        }
     }
 
     pub fn removed(&self) -> bool {
@@ -702,7 +727,10 @@ impl ModifierType {
     /// Whether the type always acts on the whole scene, so its card has no
     /// Targets row (ruling 21).
     pub const fn scene_wide(self) -> bool {
-        matches!(self, ModifierType::SceneLoop | ModifierType::MathView | ModifierType::SceneMirror)
+        matches!(
+            self,
+            ModifierType::SceneLoop | ModifierType::MathView | ModifierType::SceneMirror
+        )
     }
 }
 
@@ -728,7 +756,10 @@ pub struct WorldFields {
 
 impl Default for WorldFields {
     fn default() -> Self {
-        Self { fog: false, ambient_occlusion: true }
+        Self {
+            fog: false,
+            ambient_occlusion: true,
+        }
     }
 }
 

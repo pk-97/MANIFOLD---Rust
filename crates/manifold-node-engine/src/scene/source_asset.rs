@@ -1,7 +1,7 @@
 //! Read-only provenance of the asset snapshot actually held by a node.
 //! Loading and hashing belong to existing source workers, never frame sampling.
 
-use crate::{parameters::ParamValue, exec::effect_node::ParamValues};
+use crate::{exec::effect_node::ParamValues, parameters::ParamValue};
 
 /// Family implementation inputs that invalidate recorded simulation results.
 #[cfg(feature = "gpu-proofs")]

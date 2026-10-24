@@ -15,13 +15,21 @@ use manifold_gpu::GpuSamplerDesc;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::primitives::standalone_pipeline::{
+    dispatch_standalone_2d, standalone_pipeline,
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ConvUniforms {
-    k0: f32, k1: f32, k2: f32, k3: f32,
-    k4: f32, k5: f32, k6: f32, k7: f32,
+    k0: f32,
+    k1: f32,
+    k2: f32,
+    k3: f32,
+    k4: f32,
+    k5: f32,
+    k6: f32,
+    k7: f32,
     k8: f32,
     bias: f32,
     normalise: u32,
@@ -120,7 +128,15 @@ impl Primitive for Convolution2D9Tap {
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
 
         let uniforms = ConvUniforms {
-            k0, k1, k2, k3, k4, k5, k6, k7, k8,
+            k0,
+            k1,
+            k2,
+            k3,
+            k4,
+            k5,
+            k6,
+            k7,
+            k8,
             bias,
             normalise: if normalise { 1 } else { 0 },
             _pad0: 0,

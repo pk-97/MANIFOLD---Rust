@@ -38,7 +38,10 @@ use std::process::ExitCode;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_gpu::GpuDevice;
-use manifold_node_engine::{persistence::PrimitiveRegistry, validate::ValidateKind, freeze::fusion_report, validate::validate_def};
+use manifold_node_engine::{
+    freeze::fusion_report, persistence::PrimitiveRegistry, validate::ValidateKind,
+    validate::validate_def,
+};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -384,10 +387,7 @@ fn run_fusion(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn print_fusion_human(
-    file: &std::path::Path,
-    report: &manifold_node_engine::freeze::FusionReport,
-) {
+fn print_fusion_human(file: &std::path::Path, report: &manifold_node_engine::freeze::FusionReport) {
     println!(
         "{}: {} node(s), {} region(s), estimated {} dispatch(es)",
         file.display(),
@@ -478,7 +478,11 @@ fn run_migrate(args: &[String]) -> ExitCode {
         eprintln!(
             "{}: {}",
             file.display(),
-            if changed { "migrated" } else { "no legacy wires — unchanged" }
+            if changed {
+                "migrated"
+            } else {
+                "no legacy wires — unchanged"
+            }
         );
     } else {
         println!("{out}");

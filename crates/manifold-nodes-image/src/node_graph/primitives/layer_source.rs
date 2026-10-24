@@ -100,7 +100,8 @@ impl Primitive for LayerSource {
         if self.source_id.as_ref().map(|id| id.as_str()) != layer_name {
             self.source_id = layer_name.map(LayerId::new);
         }
-        let source = self.source_id
+        let source = self
+            .source_id
             .as_ref()
             .and_then(|id| ctx.layer_skin_registry.map(|registry| registry.get(id)));
 
@@ -201,7 +202,8 @@ mod tests {
         });
         let mut encoder = device.create_encoder("fallback proof");
         {
-            let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut encoder, &device);
+            let mut gpu =
+                manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut encoder, &device);
             registry.begin_snapshots();
             registry.publish_snapshot(&mut gpu, &LayerId::new("layer-a"), &published);
             registry.finish_snapshots();

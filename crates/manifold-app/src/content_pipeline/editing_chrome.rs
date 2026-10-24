@@ -21,7 +21,10 @@ impl ContentPipeline {
     }
 
     /// The clicks answered since the last call, with the item drawn at each.
-    pub fn take_scene_picks(&mut self, project: Option<&manifold_core::project::Project>) -> Vec<crate::scene_pick::PickedItem> {
+    pub fn take_scene_picks(
+        &mut self,
+        project: Option<&manifold_core::project::Project>,
+    ) -> Vec<crate::scene_pick::PickedItem> {
         self.scene_picks.take_answered(project)
     }
 
@@ -48,7 +51,11 @@ mod outline {
     impl ContentPipeline {
         /// The selection outline's render slots for the output and the scene
         /// viewport.
-        pub fn set_selection_outline(&mut self, output: Option<OutlineSlots>, viewport: Option<OutlineSlots>) {
+        pub fn set_selection_outline(
+            &mut self,
+            output: Option<OutlineSlots>,
+            viewport: Option<OutlineSlots>,
+        ) {
             self.outline.set(output, viewport);
         }
 
@@ -60,8 +67,14 @@ mod outline {
 
         /// Install the outline mask bridges: the output preview's and the
         /// scene viewport's.
-        pub fn set_outline_bridges(&mut self, output: Arc<SharedTextureBridge>, viewport: Arc<SharedTextureBridge>) {
-            let Some(device) = self.native_device.clone() else { return };
+        pub fn set_outline_bridges(
+            &mut self,
+            output: Arc<SharedTextureBridge>,
+            viewport: Arc<SharedTextureBridge>,
+        ) {
+            let Some(device) = self.native_device.clone() else {
+                return;
+            };
             self.outline.output_masks.install(&device, output);
             self.outline.viewport_masks.install(&device, viewport);
         }
@@ -83,11 +96,15 @@ mod outline {
             overlay: &mut PhysicsOverlayObservations,
             viewport: &mut SceneViewportCapture,
         ) -> Option<ViewportCopy> {
-            let mask = generators.zip(overlay.layer()).and_then(|(g, layer)| g.selection_mask(layer));
+            let mask = generators
+                .zip(overlay.layer())
+                .and_then(|(g, layer)| g.selection_mask(layer));
             let stamp = self.output_masks.write(device, enc, slot, mask);
             overlay.set_outline(slot, stamp);
             let copy = viewport.observe_generator(generators, slot, frame)?;
-            let stamp = self.viewport_masks.write(device, enc, slot, viewport.generator_mask(generators));
+            let stamp =
+                self.viewport_masks
+                    .write(device, enc, slot, viewport.generator_mask(generators));
             viewport.observations.set_outline(slot, stamp);
             Some(copy)
         }
@@ -126,11 +143,23 @@ mod gizmos {
         /// Draw this export frame's gizmos over the finished frame, before
         /// it is mapped for the encoder.
         pub fn draw_export_gizmos(&mut self) {
-            let Some(device) = self.native_device.clone() else { return };
-            let Some(frame) = self.physics_overlay.frames.iter().flatten().max_by_key(|frame| frame.frame).cloned() else { return };
+            let Some(device) = self.native_device.clone() else {
+                return;
+            };
+            let Some(frame) = self
+                .physics_overlay
+                .frames
+                .iter()
+                .flatten()
+                .max_by_key(|frame| frame.frame)
+                .cloned()
+            else {
+                return;
+            };
             let target = self.compositor.output_texture().clone();
             let mut enc = device.create_encoder("Export gizmos");
-            self.gizmos.draw_export(&device, &mut enc, &target, Some(&frame));
+            self.gizmos
+                .draw_export(&device, &mut enc, &target, Some(&frame));
             enc.commit();
         }
     }

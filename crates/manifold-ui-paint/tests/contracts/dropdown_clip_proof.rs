@@ -18,12 +18,12 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
-use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_ui::color;
 use manifold_ui::node::{UIFlags, Vec2};
 use manifold_ui::panels::dropdown::{DropdownItem, DropdownPanel};
 use manifold_ui::panels::overlay::{Overlay, OverlayPlacement};
 use manifold_ui::{Rect, UITree, ZTier};
+use manifold_ui_paint::ui_renderer::UIRenderer;
 
 // W*4 must be 256-byte aligned for the texture→buffer readback copy.
 // 640*4 = 2560 = 10*256. H is unconstrained.
@@ -52,11 +52,7 @@ fn open_menu(
 /// `open_at` build's own container-sized region masks overflow, so clear the
 /// overlay region and re-mint under a full-screen region, exactly like the
 /// overlay region's rebuild.
-fn rebuild_emulating_overlay_driver(
-    dd: &mut DropdownPanel,
-    tree: &mut UITree,
-    screen: Vec2,
-) {
+fn rebuild_emulating_overlay_driver(dd: &mut DropdownPanel, tree: &mut UITree, screen: Vec2) {
     tree.clear_region(tree.overlay_region());
     let region = tree.begin_region_in(
         tree.overlay_region(),
@@ -82,12 +78,19 @@ fn render(tree: &UITree, h: u32) -> Vec<u8> {
     let mut ui = UIRenderer::new(&device, FORMAT);
     ui.begin_frame();
     ui.render_tree(tree, None);
-    assert!(ui.prepare(&device, W, h, 1.0), "dropdown produced no draw commands");
+    assert!(
+        ui.prepare(&device, W, h, 1.0),
+        "dropdown produced no draw commands"
+    );
     let target = device.create_texture(&manifold_gpu::GpuTextureDesc {
-        width: W, height: h, depth: 1, format: FORMAT,
+        width: W,
+        height: h,
+        depth: 1,
+        format: FORMAT,
         dimension: manifold_gpu::GpuTextureDimension::D2,
         usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-        label: "dropdown-render", mip_levels: 1,
+        label: "dropdown-render",
+        mip_levels: 1,
     });
     {
         let mut enc = device.create_encoder("dropdown-render");
@@ -172,7 +175,10 @@ fn overflowing_menu_caps_at_screen_and_scrolls() {
         .collect();
     let mut dd = open_menu(items, Vec2::new(100.0, 40.0), screen, &mut tree);
     rebuild_emulating_overlay_driver(&mut dd, &mut tree, screen);
-    assert!(dd.is_open(), "the overlay-driver rebuild keeps the menu open");
+    assert!(
+        dd.is_open(),
+        "the overlay-driver rebuild keeps the menu open"
+    );
     let container = dd.container_bounds();
     assert!(
         container.height <= H as f32 + 0.01,
@@ -209,7 +215,10 @@ fn overflowing_menu_caps_at_screen_and_scrolls() {
             break;
         }
     }
-    assert!(edge_paints, "the capped menu's bottom edge shows clipped content");
+    assert!(
+        edge_paints,
+        "the capped menu's bottom edge shows clipped content"
+    );
 
     // Wheel to the bottom: the last swatch becomes reachable and paints
     // inside the container.

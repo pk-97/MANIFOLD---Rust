@@ -80,16 +80,14 @@ fn count_raw_calls(text: &str) -> usize {
 
 #[test]
 fn tree_render_call_sites_are_allowlisted() {
-    let allowlist: BTreeMap<&str, usize> = BTreeMap::from([
-        ("tree_passes.rs", 2),
-        ("ui_snapshot/mod.rs", 2),
-    ]);
+    let allowlist: BTreeMap<&str, usize> =
+        BTreeMap::from([("tree_passes.rs", 2), ("ui_snapshot/mod.rs", 2)]);
 
     let mut violations = Vec::new();
 
     for (rel, path) in all_src_files() {
-        let text = fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+        let text =
+            fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
         let found = count_raw_calls(&text);
         let expected = allowlist.get(rel.as_str()).copied().unwrap_or(0);
         if found != expected {

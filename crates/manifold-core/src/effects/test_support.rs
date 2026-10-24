@@ -122,4 +122,3 @@ pub(super) fn pt(beat: f64, value: f32, shape: SegmentShape) -> AutomationPoint 
         shape,
     }
 }
-

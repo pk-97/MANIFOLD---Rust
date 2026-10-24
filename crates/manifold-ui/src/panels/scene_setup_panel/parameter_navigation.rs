@@ -16,7 +16,10 @@ impl ScenePanel {
     /// owner is read off the id, and a light shows as Lighting.
     fn owner_selection(vm: &SceneSetupVm, id: &str) -> Option<SceneSelection> {
         let (item, _) = split_param_id(id)?;
-        let item = vm.items.iter().find(|candidate| candidate.id.as_str() == item)?;
+        let item = vm
+            .items
+            .iter()
+            .find(|candidate| candidate.id.as_str() == item)?;
         Some(SceneSelection::Item(item.id.clone()).shown(vm))
     }
 
@@ -33,14 +36,22 @@ impl ScenePanel {
     /// active response tab and scroll it into view on the next build.
     /// Ownership comes from the param's id (SCENE_SURFACES_DESIGN.md D10).
     /// Changes no authored state; `false` leaves the selection as it was.
-    pub fn reveal_param(&mut self, target: &UiGraphTarget, param: &manifold_foundation::ParamId) -> bool {
+    pub fn reveal_param(
+        &mut self,
+        target: &UiGraphTarget,
+        param: &manifold_foundation::ParamId,
+    ) -> bool {
         if !self.target_matches_scene(target) || !self.has_param(param) {
             return false;
         }
         let Some(layer_id) = self.live_layer_id().cloned() else {
             return false;
         };
-        let Some(selection) = self.state.as_live().and_then(|vm| Self::owner_selection(vm, param.as_ref())) else {
+        let Some(selection) = self
+            .state
+            .as_live()
+            .and_then(|vm| Self::owner_selection(vm, param.as_ref()))
+        else {
             return false;
         };
         self.set_selection(layer_id, selection);
@@ -52,21 +63,33 @@ impl ScenePanel {
     /// A card section title's reveal (SCENE_SURFACES_DESIGN.md D10): the
     /// section's first row owned by Lighting or an object, else its first
     /// row. So the card's Lighting title opens Lighting.
-    pub fn reveal_section(&mut self, target: &UiGraphTarget, params: &[manifold_foundation::ParamId]) -> bool {
+    pub fn reveal_section(
+        &mut self,
+        target: &UiGraphTarget,
+        params: &[manifold_foundation::ParamId],
+    ) -> bool {
         let item_owned = |panel: &Self, param: &manifold_foundation::ParamId| {
             panel.state.as_live().is_some_and(|vm| {
-                matches!(Self::owner_selection(vm, param.as_ref()), Some(SceneSelection::Lighting))
-                    || Self::owner_selection(vm, param.as_ref())
-                        .and_then(|selection| selection.item().and_then(|id| vm.item(id)))
-                        .is_some_and(|item| item.kind == ItemKind::Object)
+                matches!(
+                    Self::owner_selection(vm, param.as_ref()),
+                    Some(SceneSelection::Lighting)
+                ) || Self::owner_selection(vm, param.as_ref())
+                    .and_then(|selection| selection.item().and_then(|id| vm.item(id)))
+                    .is_some_and(|item| item.kind == ItemKind::Object)
             })
         };
-        let pick = params.iter().find(|param| item_owned(self, param)).or(params.first()).cloned();
+        let pick = params
+            .iter()
+            .find(|param| item_owned(self, param))
+            .or(params.first())
+            .cloned();
         pick.is_some_and(|param| self.reveal_param(target, &param))
     }
 
     pub(super) fn property_explicitly_revealed(&self, row: &ParamRow) -> bool {
-        self.revealed_property.as_ref().is_some_and(|(target, param)| self.target_matches_scene(target) && row.id == *param)
+        self.revealed_property
+            .as_ref()
+            .is_some_and(|(target, param)| self.target_matches_scene(target) && row.id == *param)
     }
 
     /// Prepare an ordinary scene row for the pending reveal after the filtered
@@ -78,16 +101,30 @@ impl ScenePanel {
         if !self.target_matches_scene(target) {
             return;
         }
-        let Some(index) = self.properties_card.rows.iter().position(|row| row.id == *param) else {
+        let Some(index) = self
+            .properties_card
+            .rows
+            .iter()
+            .position(|row| row.id == *param)
+        else {
             return;
         };
         let section = self.material_section_name(&self.properties_card.rows[index]);
         if let Some(section) = section {
             self.section_folded.insert(section, false);
         }
-        self.properties_card.row_host.open_colour_of(&self.properties_card.rows, param.as_ref());
-        let active = active_mod_tabs(&self.properties_card.mod_state, &self.properties_card.rows[index], index);
-        if let Some(tab) = [ModTab::Envelope, ModTab::Audio].into_iter().find(|tab| active.contains(tab)) {
+        self.properties_card
+            .row_host
+            .open_colour_of(&self.properties_card.rows, param.as_ref());
+        let active = active_mod_tabs(
+            &self.properties_card.mod_state,
+            &self.properties_card.rows[index],
+            index,
+        );
+        if let Some(tab) = [ModTab::Envelope, ModTab::Audio]
+            .into_iter()
+            .find(|tab| active.contains(tab))
+        {
             self.properties_card.mod_active_tab[index] = tab;
         }
     }
@@ -110,7 +147,13 @@ impl ScenePanel {
         let Some(mut rect) = self.properties_card.row_host.param_row_rect(tree, index) else {
             return;
         };
-        rect.height += row_drawer_height(false, &self.properties_card.mod_state, &self.properties_card.mod_active_tab, row, index);
+        rect.height += row_drawer_height(
+            false,
+            &self.properties_card.mod_state,
+            &self.properties_card.mod_active_tab,
+            row,
+            index,
+        );
         self.scroll.reveal_rect(tree, rect);
         self.pending_parameter_reveal = None;
     }
@@ -120,7 +163,9 @@ impl ScenePanel {
         if self
             .revealed_property
             .as_ref()
-            .is_some_and(|(target, param)| !self.target_matches_scene(target) || !self.has_param(param))
+            .is_some_and(|(target, param)| {
+                !self.target_matches_scene(target) || !self.has_param(param)
+            })
         {
             self.revealed_property = None;
         }
@@ -129,7 +174,10 @@ impl ScenePanel {
         };
         let valid = self.target_matches_scene(target)
             && self.has_param(param)
-            && self.state.as_live().is_some_and(|vm| Self::owner_selection(vm, param.as_ref()).is_some());
+            && self
+                .state
+                .as_live()
+                .is_some_and(|vm| Self::owner_selection(vm, param.as_ref()).is_some());
         if !valid {
             self.pending_parameter_reveal = None;
         }

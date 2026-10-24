@@ -23,7 +23,6 @@ pub struct DecodedAudio {
     pub channels: usize,
 }
 
-
 /// Decode an audio file into raw interleaved PCM f32 samples.
 ///
 /// Supports WAV, AIFF, FLAC, MP3, AAC, OGG via symphonia.

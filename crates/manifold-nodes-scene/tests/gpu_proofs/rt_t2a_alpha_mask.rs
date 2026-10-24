@@ -34,12 +34,13 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    ensure_normal_sources, GiMaterial, MetalShadowRayTracer, RtMaterialAttributes,
-    RtObjectGeometry,
-    ShadowRayParams, ShadowRayTracer,
+    GiMaterial, MetalShadowRayTracer, RtMaterialAttributes, RtObjectGeometry, ShadowRayParams,
+    ShadowRayTracer, ensure_normal_sources,
+};
+use manifold_gpu::{
+    GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 use manifold_gpu::{ShadowCaster, upload_shadow_casters};
-use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
 use manifold_nodes_scene::testkit::gpu_harness as harness;
 
@@ -88,8 +89,9 @@ fn upload_texture_f32(
         label,
         mip_levels: 1,
     });
-    let bytes =
-        unsafe { slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels)) };
+    let bytes = unsafe {
+        slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels))
+    };
     device.upload_texture(&texture, bytes);
     texture
 }
@@ -130,8 +132,16 @@ fn run_fixture_with_metadata(
 ) -> [f32; 2] {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     run_fixture_on(
-        &MetalShadowRayTracer::new(&h.device), alpha_mask, base_color_alpha, texture_enabled,
-        uv_set, uv_transform, wrap, linear, vertex_alpha, alpha_cutoff,
+        &MetalShadowRayTracer::new(&h.device),
+        alpha_mask,
+        base_color_alpha,
+        texture_enabled,
+        uv_set,
+        uv_transform,
+        wrap,
+        linear,
+        vertex_alpha,
+        alpha_cutoff,
     )
 }
 
@@ -153,12 +163,42 @@ fn run_fixture_on(
 
     // ─── Occluder: one quad at z=1, x,y in [-1,1], u=(x+1)/2 ──
     let verts = [
-        PackedVertexUV { pos: [-1.0, -1.0, 1.0], uv: [0.0, 0.0], uv1: [1.0, 0.0], color: [1.0, 1.0, 1.0, vertex_alpha] },
-        PackedVertexUV { pos: [1.0, -1.0, 1.0], uv: [1.0, 0.0], uv1: [0.0, 0.0], color: [1.0, 1.0, 1.0, vertex_alpha] },
-        PackedVertexUV { pos: [1.0, 1.0, 1.0], uv: [1.0, 1.0], uv1: [0.0, 1.0], color: [1.0, 1.0, 1.0, vertex_alpha] },
-        PackedVertexUV { pos: [-1.0, -1.0, 1.0], uv: [0.0, 0.0], uv1: [1.0, 0.0], color: [1.0, 1.0, 1.0, vertex_alpha] },
-        PackedVertexUV { pos: [1.0, 1.0, 1.0], uv: [1.0, 1.0], uv1: [0.0, 1.0], color: [1.0, 1.0, 1.0, vertex_alpha] },
-        PackedVertexUV { pos: [-1.0, 1.0, 1.0], uv: [0.0, 1.0], uv1: [1.0, 1.0], color: [1.0, 1.0, 1.0, vertex_alpha] },
+        PackedVertexUV {
+            pos: [-1.0, -1.0, 1.0],
+            uv: [0.0, 0.0],
+            uv1: [1.0, 0.0],
+            color: [1.0, 1.0, 1.0, vertex_alpha],
+        },
+        PackedVertexUV {
+            pos: [1.0, -1.0, 1.0],
+            uv: [1.0, 0.0],
+            uv1: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, vertex_alpha],
+        },
+        PackedVertexUV {
+            pos: [1.0, 1.0, 1.0],
+            uv: [1.0, 1.0],
+            uv1: [0.0, 1.0],
+            color: [1.0, 1.0, 1.0, vertex_alpha],
+        },
+        PackedVertexUV {
+            pos: [-1.0, -1.0, 1.0],
+            uv: [0.0, 0.0],
+            uv1: [1.0, 0.0],
+            color: [1.0, 1.0, 1.0, vertex_alpha],
+        },
+        PackedVertexUV {
+            pos: [1.0, 1.0, 1.0],
+            uv: [1.0, 1.0],
+            uv1: [0.0, 1.0],
+            color: [1.0, 1.0, 1.0, vertex_alpha],
+        },
+        PackedVertexUV {
+            pos: [-1.0, 1.0, 1.0],
+            uv: [0.0, 1.0],
+            uv1: [1.0, 1.0],
+            color: [1.0, 1.0, 1.0, vertex_alpha],
+        },
     ];
     let vertex_buffer = write_shared_buffer(device, &verts);
 
@@ -168,7 +208,14 @@ fn run_fixture_on(
         0.0, 0.0, 0.0, 0.0, // texel 0: rgba, alpha=0.0
         1.0, 1.0, 1.0, 1.0, // texel 1: rgba, alpha=1.0
     ];
-    let base_color_tex = upload_texture_f32(device, 2, 1, GpuTextureFormat::Rgba32Float, &tex_px, "rt-t2a-basecolor");
+    let base_color_tex = upload_texture_f32(
+        device,
+        2,
+        1,
+        GpuTextureFormat::Rgba32Float,
+        &tex_px,
+        "rt-t2a-basecolor",
+    );
 
     let material_attributes = RtMaterialAttributes {
         uv1_offset: UV1_OFFSET,
@@ -215,10 +262,10 @@ fn run_fixture_on(
         base_color_texture: texture_enabled.then_some(&base_color_tex),
         mr_texture: None,
         normal_texture: None,
-                    emissive_texture: None,
+        emissive_texture: None,
         extra_material_textures: [None; 15],
-                    emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
-                    emissive_uv_t: [0.0, 0.0],
+        emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
+        emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
         instances_addr: 0,
         instances_buffer: None,
@@ -235,20 +282,36 @@ fn run_fixture_on(
 
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
     // below (built before the trace dispatch on the same command buffer).
-    let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
+    let plan = tracer
+        .plan_accel(device, None, &objects)
+        .expect("plan accel");
     let mut accel_slot = None;
-    tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+    tracer
+        .prepare_accel(device, &mut accel_slot, plan)
+        .expect("prepare accel");
     let mut accel = accel_slot.unwrap();
 
     let mut normal_sources_slot = None;
     let mut normal_sources_capacity = 0usize;
-    let alpha_textures = ensure_normal_sources(&mut normal_sources_slot, &mut normal_sources_capacity, device, &objects);
+    let alpha_textures = ensure_normal_sources(
+        &mut normal_sources_slot,
+        &mut normal_sources_capacity,
+        device,
+        &objects,
+    );
     let normal_sources_buffer = normal_sources_slot.expect("ensure_normal_sources must allocate");
 
     // ─── Depth fixture: 2x1, both texels valid (depth=0.3) — identical to
     // rt_p1_shadow.rs's fixture ──
     let depth_px: [f32; 2] = [0.3, 0.3];
-    let depth_tex = upload_texture_f32(device, 2, 1, GpuTextureFormat::Depth32Float, &depth_px, "rt-t2a-depth");
+    let depth_tex = upload_texture_f32(
+        device,
+        2,
+        1,
+        GpuTextureFormat::Depth32Float,
+        &depth_px,
+        "rt-t2a-depth",
+    );
 
     let out_sv = device.create_texture(&GpuTextureDesc {
         width: 2,
@@ -305,7 +368,12 @@ fn run_fixture_on(
 
     // Multi-caster shadow fix: a single sun caster in slot 0 — same
     // `sun_dir`/`sun_cone` this proof always used.
-    let casters = [ShadowCaster::traced([0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 0.0], 0)];
+    let casters = [ShadowCaster::traced(
+        [0.0, 0.0, 1.0],
+        0.0,
+        [0.0, 0.0, 0.0],
+        0,
+    )];
     let caster_list: &[ShadowCaster] = &casters;
     let caster_buffer = upload_shadow_casters(device, caster_list);
     let params = ShadowRayParams::new(
@@ -320,9 +388,9 @@ fn run_fixture_on(
         0,
         [0.0, 0.0, 0.0],
         IDENTITY,
-        0,           // refl_spp — 0, reflections skipped in this fixture
-        0.6,         // refl_max_roughness — RT_REFLECTION_MAX_ROUGHNESS
-        0.1,         // refl_rough_band — blend band width
+        0,   // refl_spp — 0, reflections skipped in this fixture
+        0.6, // refl_max_roughness — RT_REFLECTION_MAX_ROUGHNESS
+        0.1, // refl_rough_band — blend band width
         manifold_gpu::raytrace::SVT_SLOT_NONE,
     );
     let dummy_emissive = harness::dummy_emissive_buffer(device);
@@ -330,15 +398,21 @@ fn run_fixture_on(
     // P4a: the GPU emissive preparation indexes one material row per
     // object — this fixture has no emissive geometry, so zeroed rows
     // (luma 0 → zero stats, the old "no emissive table" behavior).
-    let materials = vec![
-        GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]);
-        objects.len()
-    ];
+    let materials = vec![GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]); objects.len()];
 
     let mut encoder = device.create_encoder("rt-t2a-shadow-proof");
     let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
     tracer
-        .encode_accel_update(device, &mut encoder, &mut accel, &objects, &changes, &materials, true, true)
+        .encode_accel_update(
+            device,
+            &mut encoder,
+            &mut accel,
+            &objects,
+            &changes,
+            &materials,
+            true,
+            true,
+        )
         .expect("encode accel update");
     let out_svt = device.create_texture(&GpuTextureDesc {
         width: 1,
@@ -425,12 +499,24 @@ fn alpha_opaque_mode_ignores_texture_stays_fully_shadowed() {
 #[test]
 fn alpha_factor_applies_without_texture() {
     let [transparent0, transparent1] = run_fixture(true, 0.0, false);
-    assert_eq!(transparent0, 1.0, "base alpha factor 0 must pass both rays without a texture");
-    assert_eq!(transparent1, 1.0, "base alpha factor 0 must pass both rays without a texture");
+    assert_eq!(
+        transparent0, 1.0,
+        "base alpha factor 0 must pass both rays without a texture"
+    );
+    assert_eq!(
+        transparent1, 1.0,
+        "base alpha factor 0 must pass both rays without a texture"
+    );
 
     let [opaque0, opaque1] = run_fixture(true, 1.0, false);
-    assert_eq!(opaque0, 0.0, "base alpha factor 1 must block both rays without a texture");
-    assert_eq!(opaque1, 0.0, "base alpha factor 1 must block both rays without a texture");
+    assert_eq!(
+        opaque0, 0.0,
+        "base alpha factor 1 must block both rays without a texture"
+    );
+    assert_eq!(
+        opaque1, 0.0,
+        "base alpha factor 1 must block both rays without a texture"
+    );
 }
 
 #[test]
@@ -446,7 +532,11 @@ fn alpha_metadata_selects_uv1_transform_and_addressing() {
         1.0,
         0.5,
     );
-    assert_eq!(uv1, [0.0, 1.0], "UV1 should select the inverted fixture coordinates");
+    assert_eq!(
+        uv1,
+        [0.0, 1.0],
+        "UV1 should select the inverted fixture coordinates"
+    );
 
     let transformed = run_fixture_with_metadata(
         true,
@@ -459,7 +549,11 @@ fn alpha_metadata_selects_uv1_transform_and_addressing() {
         1.0,
         0.5,
     );
-    assert_eq!(transformed, [0.0, 1.0], "base UV transform should mirror the sampled alpha");
+    assert_eq!(
+        transformed,
+        [0.0, 1.0],
+        "base UV transform should mirror the sampled alpha"
+    );
 
     let clamped = run_fixture_with_metadata(
         true,
@@ -472,7 +566,11 @@ fn alpha_metadata_selects_uv1_transform_and_addressing() {
         1.0,
         0.5,
     );
-    assert_eq!(clamped, [0.0, 0.0], "clamp addressing should use the opaque edge texel");
+    assert_eq!(
+        clamped,
+        [0.0, 0.0],
+        "clamp addressing should use the opaque edge texel"
+    );
 
     let repeated = run_fixture_with_metadata(
         true,
@@ -485,7 +583,11 @@ fn alpha_metadata_selects_uv1_transform_and_addressing() {
         1.0,
         0.5,
     );
-    assert_eq!(repeated, [1.0, 0.0], "repeat addressing should wrap back to the original texels");
+    assert_eq!(
+        repeated,
+        [1.0, 0.0],
+        "repeat addressing should wrap back to the original texels"
+    );
 
     let mirrored = run_fixture_with_metadata(
         true,
@@ -498,7 +600,11 @@ fn alpha_metadata_selects_uv1_transform_and_addressing() {
         1.0,
         0.5,
     );
-    assert_eq!(mirrored, [0.0, 1.0], "mirror addressing should reflect the wrapped texels");
+    assert_eq!(
+        mirrored,
+        [0.0, 1.0],
+        "mirror addressing should reflect the wrapped texels"
+    );
 }
 
 #[test]
@@ -525,8 +631,16 @@ fn alpha_metadata_linear_filter_and_vertex_color_multiply() {
         1.0,
         0.8,
     );
-    assert_eq!(nearest, [0.0, 0.0], "nearest alpha should select the opaque texel");
-    assert_eq!(linear, [1.0, 0.0], "linear alpha should blend below the raised cutoff");
+    assert_eq!(
+        nearest,
+        [0.0, 0.0],
+        "nearest alpha should select the opaque texel"
+    );
+    assert_eq!(
+        linear,
+        [1.0, 0.0],
+        "linear alpha should blend below the raised cutoff"
+    );
 
     let vertex_transparent = run_fixture_with_metadata(
         true,
@@ -539,7 +653,11 @@ fn alpha_metadata_linear_filter_and_vertex_color_multiply() {
         0.0,
         0.5,
     );
-    assert_eq!(vertex_transparent, [1.0, 1.0], "vertex alpha must pass both rays without a map");
+    assert_eq!(
+        vertex_transparent,
+        [1.0, 1.0],
+        "vertex alpha must pass both rays without a map"
+    );
 
     let vertex_transparent_with_map = run_fixture_with_metadata(
         true,
@@ -552,7 +670,11 @@ fn alpha_metadata_linear_filter_and_vertex_color_multiply() {
         0.0,
         0.5,
     );
-    assert_eq!(vertex_transparent_with_map, [1.0, 1.0], "vertex alpha must multiply mapped alpha");
+    assert_eq!(
+        vertex_transparent_with_map,
+        [1.0, 1.0],
+        "vertex alpha must multiply mapped alpha"
+    );
 }
 
 /// BUG-k1n2w: the candidate-walk cap never engages on this fixture, so the
@@ -562,12 +684,27 @@ fn alpha_walk_cap_matches_unbounded_walk() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let capped = MetalShadowRayTracer::new(&h.device);
     let unbounded = MetalShadowRayTracer::with_walk_cap_for_proof(&h.device, u32::MAX);
-    for (alpha_mask, linear, cutoff) in [(true, false, 0.5), (false, false, 0.5), (true, true, 0.8)] {
-        let run = |tracer| run_fixture_on(
-            tracer, alpha_mask, 1.0, true, 0, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [1, 1], linear, 1.0, cutoff,
-        );
+    for (alpha_mask, linear, cutoff) in [(true, false, 0.5), (false, false, 0.5), (true, true, 0.8)]
+    {
+        let run = |tracer| {
+            run_fixture_on(
+                tracer,
+                alpha_mask,
+                1.0,
+                true,
+                0,
+                [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                [1, 1],
+                linear,
+                1.0,
+                cutoff,
+            )
+        };
         let (with_cap, without_cap) = (run(&capped), run(&unbounded));
-        assert_eq!(with_cap.map(f32::to_bits), without_cap.map(f32::to_bits),
-            "mask={alpha_mask} linear={linear} cutoff={cutoff}: {with_cap:?} vs {without_cap:?}");
+        assert_eq!(
+            with_cap.map(f32::to_bits),
+            without_cap.map(f32::to_bits),
+            "mask={alpha_mask} linear={linear} cutoff={cutoff}: {with_cap:?} vs {without_cap:?}"
+        );
     }
 }

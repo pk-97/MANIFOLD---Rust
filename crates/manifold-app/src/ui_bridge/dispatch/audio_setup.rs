@@ -29,11 +29,11 @@ use super::resolve::audio_setup_command;
 pub(crate) const AUDIO_SEND_GAIN_MIN_DB: f32 = -24.0;
 pub(crate) const AUDIO_SEND_GAIN_MAX_DB: f32 = 24.0;
 
-pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
-    
-
+pub(crate) fn dispatch_audio_setup(
+    action: &AudioSetupAction,
+    ctx: &mut super::super::DispatchCtx,
+) -> DispatchResult {
     match action {
-
         // ── Layer-owned clip triggers (P3b, AUDIO_SETUP_DOCK_AND_TRIGGER_
         // UNIFICATION_DESIGN.md D2/D5) — the inspector's AUDIO TRIGGERS
         // section. Addressed directly by `LayerId` + index (no
@@ -46,7 +46,9 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
             DispatchResult::handled()
         }
         AudioSetupAction::AudioTriggerRowExpandToggle(_layer_id, index) => {
-            ctx.ui.inspector.toggle_fold(InspectorFold::AudioTriggerRow(*index));
+            ctx.ui
+                .inspector
+                .toggle_fold(InspectorFold::AudioTriggerRow(*index));
             DispatchResult::handled()
         }
         AudioSetupAction::AudioTriggerAdd(layer_id) => {
@@ -67,7 +69,8 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                     },
                 );
                 trigger.enabled = true;
-                let new_index = ctx.project
+                let new_index = ctx
+                    .project
                     .timeline
                     .find_layer_by_id(layer_id)
                     .map(|(_, l)| l.clip_triggers.len());
@@ -77,7 +80,10 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                 // Open the new row's drawer so its (now minimal) tuning is
                 // immediately visible.
                 if let Some(index) = new_index {
-                    ctx.ui.inspector.audio_trigger_section_mut().expand_row(index);
+                    ctx.ui
+                        .inspector
+                        .audio_trigger_section_mut()
+                        .expand_row(index);
                 }
             }
             DispatchResult::handled()
@@ -89,7 +95,8 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
             DispatchResult::handled()
         }
         AudioSetupAction::AudioTriggerEnabledToggle(layer_id, index) => {
-            let old = ctx.project
+            let old = ctx
+                .project
                 .timeline
                 .find_layer_by_id(layer_id)
                 .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
@@ -104,7 +111,8 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
             DispatchResult::handled()
         }
         AudioSetupAction::AudioTriggerSetSource(layer_id, index, send_id, feature) => {
-            let old = ctx.project
+            let old = ctx
+                .project
                 .timeline
                 .find_layer_by_id(layer_id)
                 .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
@@ -127,7 +135,8 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
         // the address, the whole shape is the restore payload, and Commit emits
         // `SetLayerClipTriggerCommand`.
         AudioSetupAction::AudioTriggerSetLength(layer_id, index, beats) => {
-            let old = ctx.project
+            let old = ctx
+                .project
                 .timeline
                 .find_layer_by_id(layer_id)
                 .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
@@ -151,7 +160,9 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                 &mut ctx.project,
                 Box::new(SetAudioInputDeviceCommand::new(
                     old,
-                    device.as_ref().map(crate::ui_translate::audio_device_ref_to_core),
+                    device
+                        .as_ref()
+                        .map(crate::ui_translate::audio_device_ref_to_core),
                 )),
             )
         }
@@ -167,7 +178,8 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
             Box::new(RemoveAudioSendCommand::new(id.clone())),
         ),
         AudioSetupAction::AudioRenameSend(id, label) => {
-            let old = ctx.project
+            let old = ctx
+                .project
                 .audio_setup
                 .find_send(id)
                 .map(|s| s.label.clone())
@@ -184,7 +196,8 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
             // The project is the source of truth: read current gain, apply the
             // delta, clamp to a sensible trim range, commit old→new. Capture
             // restart is avoided — the worker reads gain live (AudioModRuntime).
-            let old = ctx.project
+            let old = ctx
+                .project
                 .audio_setup
                 .find_send(id)
                 .map(|s| s.gain_db)
@@ -209,7 +222,12 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
         // to exceed `AUDIO_SEND_GAIN_MIN_DB`/`MAX_DB` (PARAM_RANGE_CONTRACT
         // P1: those are the stepper's display travel, not a hard limit).
         AudioSetupAction::AudioSendGainSetTyped(id, new_db) => {
-            let old = ctx.project.audio_setup.find_send(id).map(|s| s.gain_db).unwrap_or(0.0);
+            let old = ctx
+                .project
+                .audio_setup
+                .find_send(id)
+                .map(|s| s.gain_db)
+                .unwrap_or(0.0);
             if (new_db - old).abs() < f32::EPSILON {
                 return DispatchResult::handled();
             }
@@ -225,7 +243,8 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
             const FLOOR_MIN_DB: f32 = -100.0;
             const FLOOR_MAX_DB: f32 = -6.0;
             let off = manifold_core::audio_setup::FLOOR_DB_OFF;
-            let old = ctx.project
+            let old = ctx
+                .project
                 .audio_setup
                 .find_send(id)
                 .map(|s| s.floor_db)
@@ -234,7 +253,11 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                 if *delta_db > 0.0 { FLOOR_MIN_DB } else { off }
             } else {
                 let v = old + *delta_db;
-                if v < FLOOR_MIN_DB { off } else { v.min(FLOOR_MAX_DB) }
+                if v < FLOOR_MIN_DB {
+                    off
+                } else {
+                    v.min(FLOOR_MAX_DB)
+                }
             };
             if (new - old).abs() < f32::EPSILON {
                 return DispatchResult::handled();
@@ -243,19 +266,17 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                 &mut ctx.project,
                 Box::new(SetAudioSendFloorCommand::new(id.clone(), old, new)),
             )
-        }
-        // The Audio Setup Triggers matrix's dispatch arms (AudioTriggerToggled,
-        // AudioTriggerSensitivityStep, AudioSendSensitivityDragBegin/Changed/
-        // Commit, AudioTriggerLengthStep, AudioTriggerSetLayer,
-        // AudioTriggerLayerClicked) are deleted with the matrix (P3, D2). Clip
-        // triggers are authored on the layer only (`LayerClipTrigger`, P2).
-        // `AudioSendAddLayerClicked` (Inputs section "+ Layer") is deleted
-        // with the section's authoring (section 7.2 item 7, P8, 2026-07-11).
-        // Band-divider (crossover) drag trio migrated to the unified
-        // `PanelAction::Scrub` wire (`ValueRef::AudioCrossover`, P-I / D4): the
-        // dragged `BandDivider` rides the address, that line's raw Hz rides
-        // `ScrubValue::Scalar` (Move clamps via `clamp_crossovers` + live-edits
-        // both lines), Commit emits `SetAudioCrossoversCommand`.
-
+        } // The Audio Setup Triggers matrix's dispatch arms (AudioTriggerToggled,
+          // AudioTriggerSensitivityStep, AudioSendSensitivityDragBegin/Changed/
+          // Commit, AudioTriggerLengthStep, AudioTriggerSetLayer,
+          // AudioTriggerLayerClicked) are deleted with the matrix (P3, D2). Clip
+          // triggers are authored on the layer only (`LayerClipTrigger`, P2).
+          // `AudioSendAddLayerClicked` (Inputs section "+ Layer") is deleted
+          // with the section's authoring (section 7.2 item 7, P8, 2026-07-11).
+          // Band-divider (crossover) drag trio migrated to the unified
+          // `PanelAction::Scrub` wire (`ValueRef::AudioCrossover`, P-I / D4): the
+          // dragged `BandDivider` rides the address, that line's raw Hz rides
+          // `ScrubValue::Scalar` (Move clamps via `clamp_crossovers` + live-edits
+          // both lines), Commit emits `SetAudioCrossoversCommand`.
     }
 }

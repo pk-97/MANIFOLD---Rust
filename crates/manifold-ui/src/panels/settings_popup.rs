@@ -13,29 +13,31 @@
 //! only by the video-export encoder — live on-screen HDR is automatic, driven by
 //! the display's EDR headroom.
 
-use crate::{ProjectAction, RootAction, TransportAction};
 use crate::chrome::{ChromeHost, Pad, Sizing, SliderSpec, View, components};
 use crate::color;
 use crate::input::{Key, UIEvent};
 use crate::node::*;
+use crate::slider::{SliderColors, SliderDragState};
 use crate::tree::UITree;
 use crate::types::TonemapCurve;
-use crate::slider::{SliderColors, SliderDragState};
+use crate::{ProjectAction, RootAction, TransportAction};
 use manifold_foundation::settings::SimRate;
 
 use super::PanelAction;
-use super::overlay::{
-    Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse, SizePolicy,
-};
+use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse, SizePolicy};
 
 // Stable keys for the host-owned modal chrome (background + title strip).
 const KEY_BG: u64 = 71_001;
 const KEY_CLOSE: u64 = 71_002;
 const KEY_SIM_RATE: u64 = 71_003;
-const SIM_RATE_TOOLTIP: &str = "Simulation updates per second. Hits land up to one update late; kicks are read at this rate.";
+const SIM_RATE_TOOLTIP: &str =
+    "Simulation updates per second. Hits land up to one update late; kicks are read at this rate.";
 
 fn sim_rate_text(index: f32) -> String {
-    format!("{} Hz", SimRate::ALL[index.round().clamp(0.0, 3.0) as usize].hz())
+    format!(
+        "{} Hz",
+        SimRate::ALL[index.round().clamp(0.0, 3.0) as usize].hz()
+    )
 }
 
 // ── Layout ──
@@ -164,7 +166,10 @@ impl SettingsPopup {
     pub fn sync_sim_rate(&mut self, tree: &mut UITree, rate: SimRate) {
         self.sim_rate = rate;
         if !self.sim_rate_drag.is_dragging() {
-            let index = SimRate::ALL.iter().position(|r| *r == rate).expect("rate choice");
+            let index = SimRate::ALL
+                .iter()
+                .position(|r| *r == rate)
+                .expect("rate choice");
             self.sim_rate_drag.sync(tree, index as f32, &sim_rate_text);
         }
     }
@@ -214,17 +219,28 @@ impl SettingsPopup {
                             .key(KEY_CLOSE),
                     ),
             )
-            .child(View::spacer().h(Sizing::Fixed(SECTION_GAP + SECTION_H + (ROW_COUNT - 1.0) * (ROW_H + ROW_GAP))))
-            .child(View::slider_row(SliderSpec {
-                label: Some("Sim Rate".into()),
-                value: SimRate::ALL.iter().position(|rate| *rate == self.sim_rate).expect("rate choice") as f32 / 3.0,
-                default: 2.0 / 3.0,
-                value_text: format!("{} Hz", self.sim_rate.hz()),
-                colors: SliderColors::default_slider(),
-                font_size: BTN_FONT,
-                label_width: LABEL_W,
-                reset: PanelAction::Project(ProjectAction::SetSimRate(SimRate::Hz30)),
-            }).fill_w().h(Sizing::Fixed(ROW_H)).key(KEY_SIM_RATE))
+            .child(View::spacer().h(Sizing::Fixed(
+                SECTION_GAP + SECTION_H + (ROW_COUNT - 1.0) * (ROW_H + ROW_GAP),
+            )))
+            .child(
+                View::slider_row(SliderSpec {
+                    label: Some("Sim Rate".into()),
+                    value: SimRate::ALL
+                        .iter()
+                        .position(|rate| *rate == self.sim_rate)
+                        .expect("rate choice") as f32
+                        / 3.0,
+                    default: 2.0 / 3.0,
+                    value_text: format!("{} Hz", self.sim_rate.hz()),
+                    colors: SliderColors::default_slider(),
+                    font_size: BTN_FONT,
+                    label_width: LABEL_W,
+                    reset: PanelAction::Project(ProjectAction::SetSimRate(SimRate::Hz30)),
+                })
+                .fill_w()
+                .h(Sizing::Fixed(ROW_H))
+                .key(KEY_SIM_RATE),
+            )
     }
 
     fn build_nodes(&mut self, tree: &mut UITree, x: f32, y: f32) {
@@ -234,14 +250,20 @@ impl SettingsPopup {
         let chrome = self.chrome_view();
         self.host
             .build(tree, &chrome, Rect::new(x, y, PANEL_W, self.body_height()));
-        self.bg_id = self.host.node_id_for_key(KEY_BG).unwrap_or(NodeId::PLACEHOLDER);
+        self.bg_id = self
+            .host
+            .node_id_for_key(KEY_BG)
+            .unwrap_or(NodeId::PLACEHOLDER);
         self.close_id = self
             .host
             .node_id_for_key(KEY_CLOSE)
             .unwrap_or(NodeId::PLACEHOLDER);
 
         if let Some(ids) = self.host.slider_ids(KEY_SIM_RATE) {
-            for id in [ids.label, Some(ids.track), Some(ids.value_text)].into_iter().flatten() {
+            for id in [ids.label, Some(ids.track), Some(ids.value_text)]
+                .into_iter()
+                .flatten()
+            {
                 if let Some(node) = tree.get_node_mut(id) {
                     node.tooltip = Some(SIM_RATE_TOOLTIP.into());
                 }
@@ -277,7 +299,10 @@ impl SettingsPopup {
             components::dropdown_trigger_style(BTN_FONT),
             &self.resolution_text,
         );
-        self.actions.push((res_id, PanelAction::Transport(TransportAction::ResolutionClicked)));
+        self.actions.push((
+            res_id,
+            PanelAction::Transport(TransportAction::ResolutionClicked),
+        ));
         cy += ROW_H + ROW_GAP;
 
         // Render scale: 1× / 75% / 50% segmented.
@@ -287,8 +312,19 @@ impl SettingsPopup {
         for (i, (label, scale)) in scales.iter().enumerate() {
             let sx = ctrl_x + i as f32 * (seg_w + SEG_GAP);
             let active = (scale - self.render_scale).abs() < 0.01;
-            let id = tree.add_button(Some(self.bg_id), sx, cy, seg_w, ROW_H, btn_style(active), label);
-            self.actions.push((id, PanelAction::Project(ProjectAction::SetRenderScale(*scale))));
+            let id = tree.add_button(
+                Some(self.bg_id),
+                sx,
+                cy,
+                seg_w,
+                ROW_H,
+                btn_style(active),
+                label,
+            );
+            self.actions.push((
+                id,
+                PanelAction::Project(ProjectAction::SetRenderScale(*scale)),
+            ));
         }
         cy += ROW_H + ROW_GAP;
 
@@ -318,8 +354,19 @@ impl SettingsPopup {
         for (i, (label, curve)) in curves.iter().enumerate() {
             let sx = ctrl_x + (i as f32 + 1.0) * (seg_w + SEG_GAP);
             let active = self.tonemap_enabled && *curve == self.tonemap;
-            let id = tree.add_button(Some(self.bg_id), sx, cy, seg_w, ROW_H, btn_style(active), label);
-            self.actions.push((id, PanelAction::Project(ProjectAction::SetTonemapCurve(*curve))));
+            let id = tree.add_button(
+                Some(self.bg_id),
+                sx,
+                cy,
+                seg_w,
+                ROW_H,
+                btn_style(active),
+                label,
+            );
+            self.actions.push((
+                id,
+                PanelAction::Project(ProjectAction::SetTonemapCurve(*curve)),
+            ));
         }
         cy += ROW_H + ROW_GAP;
 
@@ -355,7 +402,8 @@ impl SettingsPopup {
             toggle_style(self.hdr_on),
             if self.hdr_on { "On" } else { "Off" },
         );
-        self.actions.push((hdr_id, PanelAction::Project(ProjectAction::ToggleHdr)));
+        self.actions
+            .push((hdr_id, PanelAction::Project(ProjectAction::ToggleHdr)));
         cy += ROW_H + ROW_GAP;
 
         // Split at markers — one export file per marker inside the export range
@@ -371,7 +419,10 @@ impl SettingsPopup {
             toggle_style(self.split_sections),
             if self.split_sections { "On" } else { "Off" },
         );
-        self.actions.push((split_id, PanelAction::Project(ProjectAction::ToggleSplitSections)));
+        self.actions.push((
+            split_id,
+            PanelAction::Project(ProjectAction::ToggleSplitSections),
+        ));
         cy += ROW_H + ROW_GAP;
 
         // Include the Scene panel's gizmos in the exported video, in the draw
@@ -386,7 +437,10 @@ impl SettingsPopup {
             toggle_style(self.export_gizmos),
             if self.export_gizmos { "On" } else { "Off" },
         );
-        self.actions.push((gizmos_id, PanelAction::Project(ProjectAction::ToggleExportGizmos)));
+        self.actions.push((
+            gizmos_id,
+            PanelAction::Project(ProjectAction::ToggleExportGizmos),
+        ));
         cy += ROW_H + ROW_GAP;
 
         // RT Quality… opens the floating RT tier panel (RT_QUALITY_SETTINGS_DESIGN.md).
@@ -400,7 +454,8 @@ impl SettingsPopup {
             components::dropdown_trigger_style(BTN_FONT),
             "Configure…",
         );
-        self.actions.push((rt_id, PanelAction::Root(RootAction::OpenRtQuality)));
+        self.actions
+            .push((rt_id, PanelAction::Root(RootAction::OpenRtQuality)));
     }
 
     fn row_label(&self, tree: &mut UITree, x: f32, y: f32, text: &str) {
@@ -415,8 +470,13 @@ impl SettingsPopup {
     }
 
     fn owns_node(&self, id: NodeId) -> bool {
-        id == self.bg_id || id == self.close_id || self.actions.iter().any(|(n, _)| *n == id)
-            || self.sim_rate_drag.ids().is_some_and(|ids| id == ids.track || id == ids.value_text || ids.label == Some(id))
+        id == self.bg_id
+            || id == self.close_id
+            || self.actions.iter().any(|(n, _)| *n == id)
+            || self
+                .sim_rate_drag
+                .ids()
+                .is_some_and(|ids| id == ids.track || id == ids.value_text || ids.label == Some(id))
     }
 }
 
@@ -426,7 +486,9 @@ impl Overlay for SettingsPopup {
     }
 
     fn modality(&self) -> Modality {
-        Modality::Modal { dim_background: true }
+        Modality::Modal {
+            dim_background: true,
+        }
     }
 
     fn anchor(&self) -> Anchor {
@@ -451,7 +513,8 @@ impl Overlay for SettingsPopup {
     fn on_event(&mut self, event: &UIEvent, tree: &mut UITree) -> OverlayResponse {
         match event {
             UIEvent::PointerDown { node_id, pos, .. }
-                if self.sim_rate_drag.try_start_drag(*node_id, pos.x).is_some() => {
+                if self.sim_rate_drag.try_start_drag(*node_id, pos.x).is_some() =>
+            {
                 self.sim_rate_drag.apply_drag(pos.x, tree, &sim_rate_text);
                 OverlayResponse::Consumed(Vec::new())
             }
@@ -459,14 +522,24 @@ impl Overlay for SettingsPopup {
                 self.sim_rate_drag.apply_drag(pos.x, tree, &sim_rate_text);
                 OverlayResponse::Consumed(Vec::new())
             }
-            UIEvent::PointerUp { .. } | UIEvent::DragEnd { .. } if self.sim_rate_drag.end_drag() => {
+            UIEvent::PointerUp { .. } | UIEvent::DragEnd { .. }
+                if self.sim_rate_drag.end_drag() =>
+            {
                 let rate = SimRate::ALL[self.sim_rate_drag.cached_value() as usize];
-                OverlayResponse::Consumed(vec![PanelAction::Project(ProjectAction::SetSimRate(rate))])
+                OverlayResponse::Consumed(vec![PanelAction::Project(ProjectAction::SetSimRate(
+                    rate,
+                ))])
             }
-            UIEvent::RightClick { node_id: Some(id), .. } if self.sim_rate_drag.track_id() == Some(*id) => {
-                OverlayResponse::Consumed(vec![PanelAction::Project(ProjectAction::SetSimRate(SimRate::Hz30))])
+            UIEvent::RightClick {
+                node_id: Some(id), ..
+            } if self.sim_rate_drag.track_id() == Some(*id) => {
+                OverlayResponse::Consumed(vec![PanelAction::Project(ProjectAction::SetSimRate(
+                    SimRate::Hz30,
+                ))])
             }
-            UIEvent::KeyDown { key: Key::Escape, .. } => {
+            UIEvent::KeyDown {
+                key: Key::Escape, ..
+            } => {
                 self.open = false;
                 OverlayResponse::Consumed(Vec::new())
             }
@@ -544,7 +617,10 @@ mod tests {
                 _ => {}
             }
         }
-        (display.expect("Display preview segment"), sdr.expect("SDR preview segment"))
+        (
+            display.expect("Display preview segment"),
+            sdr.expect("SDR preview segment"),
+        )
     }
 
     #[test]

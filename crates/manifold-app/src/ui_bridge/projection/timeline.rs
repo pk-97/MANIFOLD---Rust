@@ -2,18 +2,18 @@
 //! clip-name/colour/waveform helpers, and lightweight per-frame clip position
 //! sync. Moved from state_sync.rs (P-P, UI_FUNNEL_DECOMPOSITION_DESIGN.md).
 
-use manifold_core::project::Project;
-use manifold_core::types::LayerType;
-use manifold_core::work_count::{record_work, WorkKind};
-#[cfg(test)]
-use manifold_core::Beats;
-use manifold_ui::panels::layer_header::LayerInfo;
-use manifold_ui::panels::viewport::TrackInfo;
-use manifold_ui::panels::picker_core::PickerItem;
-use manifold_ui::{PanelAction, ParamsAction};
+use super::trigger_routing::TriggerRoutingCatalog;
 use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
-use super::trigger_routing::TriggerRoutingCatalog;
+#[cfg(test)]
+use manifold_core::Beats;
+use manifold_core::project::Project;
+use manifold_core::types::LayerType;
+use manifold_core::work_count::{WorkKind, record_work};
+use manifold_ui::panels::layer_header::LayerInfo;
+use manifold_ui::panels::picker_core::PickerItem;
+use manifold_ui::panels::viewport::TrackInfo;
+use manifold_ui::{PanelAction, ParamsAction};
 
 /// Remember strip positions while placeholders still have their pre-edit
 /// location. This is session UI state; creating a lane never changes its rank.
@@ -25,13 +25,19 @@ pub fn sync_automation_lane_order(project: &Project, selection: &mut SelectionSt
         if let Some(effects) = &layer.effects {
             for effect in effects {
                 for param in effect.params.iter() {
-                    live.insert((manifold_ui::view::UiGraphTarget::Effect(effect.id.clone()), param.id().to_string().into()));
+                    live.insert((
+                        manifold_ui::view::UiGraphTarget::Effect(effect.id.clone()),
+                        param.id().to_string().into(),
+                    ));
                 }
             }
         }
         if let Some(generator) = layer.gen_params() {
             for param in generator.params.iter() {
-                live.insert((manifold_ui::view::UiGraphTarget::Generator(layer.layer_id.clone()), param.id().to_string().into()));
+                live.insert((
+                    manifold_ui::view::UiGraphTarget::Generator(layer.layer_id.clone()),
+                    param.id().to_string().into(),
+                ));
             }
         }
         for lane in crate::ui_translate::layer_automation_lanes_to_ui_with_view(
@@ -50,10 +56,10 @@ pub fn sync_automation_lane_order(project: &Project, selection: &mut SelectionSt
 #[cfg(test)]
 mod automation_order_tests {
     use super::*;
-    use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
-    use manifold_core::preset_definition_registry::create_default;
-    use manifold_core::layer::Layer;
     use manifold_core::PresetTypeId;
+    use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
+    use manifold_core::layer::Layer;
+    use manifold_core::preset_definition_registry::create_default;
     use manifold_ui::view::UiGraphTarget;
 
     #[test]
@@ -64,28 +70,56 @@ mod automation_order_tests {
         let target = UiGraphTarget::Effect(mirror.id.clone());
         let mut bloom = create_default(&PresetTypeId::new("Bloom"));
         bloom.automation_lanes = Some(vec![AutomationLane {
-            param_id: "amount".into(), enabled: true,
-            points: vec![AutomationPoint { beat: Beats::ZERO, value: 0.2, shape: SegmentShape::Linear }],
+            param_id: "amount".into(),
+            enabled: true,
+            points: vec![AutomationPoint {
+                beat: Beats::ZERO,
+                value: 0.2,
+                shape: SegmentShape::Linear,
+            }],
         }]);
         layer.effects = Some(vec![mirror, bloom]);
         let mut selection = SelectionState::new();
-        selection.set_chosen_automation_param(layer.layer_id.clone(), target.clone(), "amount".into());
+        selection.set_chosen_automation_param(
+            layer.layer_id.clone(),
+            target.clone(),
+            "amount".into(),
+        );
         project.timeline.layers.push(layer);
         sync_automation_lane_order(&project, &mut selection);
         let before = selection.automation_lane_order().to_vec();
         assert_eq!(before.len(), 2);
-        assert_eq!(before[0], (target, "amount".into()), "chosen lane goes on top");
-        project.timeline.layers[0].effects.as_mut().unwrap()[0].automation_lanes = Some(vec![AutomationLane {
-            param_id: "amount".into(), enabled: true,
-            points: vec![AutomationPoint { beat: Beats(4.0), value: 0.6, shape: SegmentShape::Linear }],
-        }]);
+        assert_eq!(
+            before[0],
+            (target, "amount".into()),
+            "chosen lane goes on top"
+        );
+        project.timeline.layers[0].effects.as_mut().unwrap()[0].automation_lanes =
+            Some(vec![AutomationLane {
+                param_id: "amount".into(),
+                enabled: true,
+                points: vec![AutomationPoint {
+                    beat: Beats(4.0),
+                    value: 0.6,
+                    shape: SegmentShape::Linear,
+                }],
+            }]);
         sync_automation_lane_order(&project, &mut selection);
         assert_eq!(selection.automation_lane_order(), before);
         let lanes = crate::ui_translate::layer_automation_lanes_to_ui_with_view(
-            &project.timeline.layers[0], selection.chosen_automation_params().values().next(),
-            selection.automation_lane_order(), selection.hidden_automation_lanes(), selection.pinned_automation_lanes(),
+            &project.timeline.layers[0],
+            selection.chosen_automation_params().values().next(),
+            selection.automation_lane_order(),
+            selection.hidden_automation_lanes(),
+            selection.pinned_automation_lanes(),
         );
-        assert_eq!(lanes.iter().map(|lane| (lane.target.clone(), lane.param_id.clone())).collect::<Vec<_>>(), before);
+        assert_eq!(
+            lanes
+                .iter()
+                .map(|lane| (lane.target.clone(), lane.param_id.clone()))
+                .collect::<Vec<_>>(),
+            before
+        );
     }
 }
 
@@ -106,15 +140,26 @@ pub fn sync_track_layout(ui: &mut UIRoot, project: &Project, selection: &Selecti
         selection.hidden_automation_lanes(),
         selection.pinned_automation_lanes(),
     );
-    let lane_heights: Vec<Vec<f32>> = project.timeline.layers.iter().map(|layer| {
-        if !selection.automation_mode_visible() || layer.is_collapsed || layer.is_group() { return Vec::new(); }
-        crate::ui_translate::layer_automation_lanes_to_ui_with_view(
-            layer, selection.chosen_automation_params().get(&layer.layer_id),
-            selection.automation_lane_order(),
-            selection.hidden_automation_lanes(),
-            selection.pinned_automation_lanes(),
-        ).iter().map(|lane| selection.automation_lane_height(&lane.target, &lane.param_id)).collect()
-    }).collect();
+    let lane_heights: Vec<Vec<f32>> = project
+        .timeline
+        .layers
+        .iter()
+        .map(|layer| {
+            if !selection.automation_mode_visible() || layer.is_collapsed || layer.is_group() {
+                return Vec::new();
+            }
+            crate::ui_translate::layer_automation_lanes_to_ui_with_view(
+                layer,
+                selection.chosen_automation_params().get(&layer.layer_id),
+                selection.automation_lane_order(),
+                selection.hidden_automation_lanes(),
+                selection.pinned_automation_lanes(),
+            )
+            .iter()
+            .map(|lane| selection.automation_lane_height(&lane.target, &lane.param_id))
+            .collect()
+        })
+        .collect();
     ui.viewport.set_automation_lane_layout(&lane_heights);
     ui.viewport.rebuild_mapper_layout(&layout_layers);
 }
@@ -132,7 +177,8 @@ pub fn sync_trigger_catalog(ui: &mut UIRoot, project: &Project) {
         .layers
         .iter()
         .map(|l| (l.layer_id.as_str(), routing.targets_label(&l.layer_id)));
-    ui.layer_headers.sync_trigger_labels(&mut ui.tree, &mut labels);
+    ui.layer_headers
+        .sync_trigger_labels(&mut ui.tree, &mut labels);
     ui.refresh_trigger_target_picker();
 }
 
@@ -140,11 +186,7 @@ pub fn sync_trigger_catalog(ui: &mut UIRoot, project: &Project) {
 /// harness and editor-window setup): the catalog, the structure, the
 /// clips and lanes the frame plan re-projects on its own. The selection push
 /// (`push_selection`) is separate.
-pub fn sync_project_all(
-    ui: &mut UIRoot,
-    project: &Project,
-    selection: &SelectionState,
-) {
+pub fn sync_project_all(ui: &mut UIRoot, project: &Project, selection: &SelectionState) {
     sync_trigger_catalog(ui, project);
     sync_project_data(ui, project, selection);
     sync_clip_positions(ui, project);
@@ -159,11 +201,7 @@ pub fn sync_project_all(
     );
 }
 
-pub fn sync_project_data(
-    ui: &mut UIRoot,
-    project: &Project,
-    selection: &SelectionState,
-) {
+pub fn sync_project_data(ui: &mut UIRoot, project: &Project, selection: &SelectionState) {
     record_work(WorkKind::ProjectSync);
     // Keep the chooser catalog beside the manifest projection. It is rebuilt
     // only with structural project data, so opening/searching the popup does
@@ -172,7 +210,8 @@ pub fn sync_project_data(
     // (`sync_trigger_catalog`), which runs first.
     ui.automation_chooser_candidates = automation_chooser_candidates(project);
     ui.pinned_automation_lanes.clear();
-    ui.pinned_automation_lanes.extend_from_slice(selection.pinned_automation_lanes());
+    ui.pinned_automation_lanes
+        .extend_from_slice(selection.pinned_automation_lanes());
     {
         // The mapper's Y layout first, so layer headers and viewport share the
         // same Y offsets.
@@ -184,9 +223,13 @@ pub fn sync_project_data(
             let height = ui.viewport.mapper().get_layer_height(index);
             let visible = ui.viewport.tracks_rect().height;
             let current = ui.viewport.scroll_y_px();
-            let scroll = if top < current || height > visible { top }
-                else { current.max(top + height - visible) };
-            ui.viewport.set_scroll(ui.viewport.scroll_x_beats().as_f32(), scroll);
+            let scroll = if top < current || height > visible {
+                top
+            } else {
+                current.max(top + height - visible)
+            };
+            ui.viewport
+                .set_scroll(ui.viewport.scroll_x_beats().as_f32(), scroll);
         }
 
         // Layer data → LayerHeaderPanel. Y offset/height are NOT copied here —
@@ -206,21 +249,23 @@ pub fn sync_project_data(
                     is_generator: layer.layer_type == LayerType::Generator,
                     is_audio: layer.is_audio(),
                     is_muted: layer.is_muted
-                        || !layer.is_trigger() && layer.parent_layer_id.as_ref().is_some_and(|pid| {
-                            project
-                                .timeline
-                                .layers
-                                .iter()
-                                .any(|l| l.layer_id == *pid && l.is_muted)
-                        }),
+                        || !layer.is_trigger()
+                            && layer.parent_layer_id.as_ref().is_some_and(|pid| {
+                                project
+                                    .timeline
+                                    .layers
+                                    .iter()
+                                    .any(|l| l.layer_id == *pid && l.is_muted)
+                            }),
                     is_solo: layer.is_solo
-                        || !layer.is_trigger() && layer.parent_layer_id.as_ref().is_some_and(|pid| {
-                            project
-                                .timeline
-                                .layers
-                                .iter()
-                                .any(|l| l.layer_id == *pid && l.is_solo)
-                        }),
+                        || !layer.is_trigger()
+                            && layer.parent_layer_id.as_ref().is_some_and(|pid| {
+                                project
+                                    .timeline
+                                    .layers
+                                    .iter()
+                                    .any(|l| l.layer_id == *pid && l.is_solo)
+                            }),
                     analysis_only: layer.analysis_only,
                     is_trigger: layer.is_trigger(),
                     trigger_targets_label: ui.trigger_routing.targets_label(&layer.layer_id),
@@ -319,10 +364,10 @@ pub fn sync_project_data(
 
         // (CoordinateMapper Y-layout already rebuilt above, before layer headers)
 
-
         // Timeline markers → viewport
-        ui.viewport
-            .set_markers(crate::ui_translate::markers_to_ui(&project.timeline.markers));
+        ui.viewport.set_markers(crate::ui_translate::markers_to_ui(
+            &project.timeline.markers,
+        ));
         ui.viewport
             .set_selected_marker_ids(selection.selected_marker_ids().iter().cloned().collect());
 
@@ -336,10 +381,16 @@ fn automation_chooser_candidates(
     project: &Project,
 ) -> Vec<crate::ui_root::AutomationChooserCandidate> {
     let mut candidates = Vec::new();
-    for layer in project.timeline.layers.iter().filter(|layer| !layer.is_group()) {
+    for layer in project
+        .timeline
+        .layers
+        .iter()
+        .filter(|layer| !layer.is_group())
+    {
         if let Some(effects) = &layer.effects {
             for (effect_index, effect) in effects.iter().enumerate() {
-                let effect_name = manifold_core::preset_type_registry::display_name(effect.effect_type());
+                let effect_name =
+                    manifold_core::preset_type_registry::display_name(effect.effect_type());
                 for param in effect.params.iter() {
                     let param_id = param.id().to_string();
                     let key = format!("{}:effect:{effect_index}:{param_id}", layer.layer_id);
@@ -349,7 +400,10 @@ fn automation_chooser_candidates(
                             label: format!("{effect_name} · {}", param.spec.name),
                             type_id: key,
                             category: Some(format!("Effect · {effect_name} {}", effect_index + 1)),
-                            search_text: Some(format!("{effect_name} {} {param_id}", param.spec.name)),
+                            search_text: Some(format!(
+                                "{effect_name} {} {param_id}",
+                                param.spec.name
+                            )),
                             source: None,
                             thumbnail: None,
                         },
@@ -362,7 +416,8 @@ fn automation_chooser_candidates(
             }
         }
         if let Some(generator) = layer.gen_params() {
-            let generator_name = manifold_core::preset_type_registry::display_name(generator.effect_type());
+            let generator_name =
+                manifold_core::preset_type_registry::display_name(generator.effect_type());
             for param in generator.params.iter() {
                 let param_id = param.id().to_string();
                 let key = format!("{}:generator:{param_id}", layer.layer_id);
@@ -372,7 +427,10 @@ fn automation_chooser_candidates(
                         label: format!("{generator_name} · {}", param.spec.name),
                         type_id: key,
                         category: Some(format!("Generator · {generator_name}")),
-                        search_text: Some(format!("{generator_name} {} {param_id}", param.spec.name)),
+                        search_text: Some(format!(
+                            "{generator_name} {} {param_id}",
+                            param.spec.name
+                        )),
                         source: None,
                         thumbnail: None,
                     },
@@ -522,8 +580,9 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
 /// moves a marker the clip sync's stale check can miss (it compares the
 /// count and the last marker only).
 pub fn sync_markers(ui: &mut UIRoot, project: &Project) {
-    ui.viewport
-        .set_markers(crate::ui_translate::markers_to_ui(&project.timeline.markers));
+    ui.viewport.set_markers(crate::ui_translate::markers_to_ui(
+        &project.timeline.markers,
+    ));
 }
 
 /// Re-projects `viewport`'s automation lane geometry from the live project:
@@ -537,7 +596,10 @@ pub fn sync_automation_lane_geometry(
     automation_visible: bool,
     chosen_automation_params: &std::collections::HashMap<
         manifold_core::LayerId,
-        (manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId),
+        (
+            manifold_ui::view::UiGraphTarget,
+            manifold_core::effects::ParamId,
+        ),
     >,
     lane_order: &[manifold_ui::ui_state::AutomationLaneKey],
     hidden_lanes: &std::collections::HashSet<manifold_ui::ui_state::AutomationLaneKey>,
@@ -563,12 +625,14 @@ pub fn sync_automation_lane_geometry(
             hidden_lanes,
             pinned_lanes,
         ) {
-            viewport_lanes.push(ViewportAutomationLane { layer_index: i, lane });
+            viewport_lanes.push(ViewportAutomationLane {
+                layer_index: i,
+                lane,
+            });
         }
     }
     ui.viewport.set_automation_lanes(viewport_lanes);
 }
-
 
 /// Beat-anchored beat→file-seconds breakpoints for an audio clip's waveform.
 ///
@@ -644,9 +708,12 @@ mod audio_waveform_breakpoints_tests {
     fn single_tempo_point_unwarped_clip() {
         let mut project = Project::default();
         project.settings.bpm = Bpm(140.0);
-        project
-            .tempo_map
-            .add_or_replace_point(Beats::ZERO, Bpm(140.0), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(
+            Beats::ZERO,
+            Bpm(140.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
 
         let clip = TimelineClip::new_audio(
             "song.wav".to_string(),
@@ -657,8 +724,16 @@ mod audio_waveform_breakpoints_tests {
         );
 
         let bp = audio_waveform_breakpoints(&clip, &project);
-        assert_eq!(bp.len(), 2, "constant tempo must yield exactly 2 breakpoints");
-        assert_eq!(bp[0], (0.0, 1.5), "clip start maps to in_point with no elapsed beats");
+        assert_eq!(
+            bp.len(),
+            2,
+            "constant tempo must yield exactly 2 breakpoints"
+        );
+        assert_eq!(
+            bp[0],
+            (0.0, 1.5),
+            "clip start maps to in_point with no elapsed beats"
+        );
 
         let expected_win_secs = 4.0 * (60.0 / 140.0_f32); // warp off (recorded_bpm unset) → project spb
         assert!(
@@ -681,13 +756,19 @@ mod audio_waveform_breakpoints_tests {
     fn tempo_map_step_unwarped_clip() {
         let mut project = Project::default();
         project.settings.bpm = Bpm(120.0);
-        project
-            .tempo_map
-            .add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(
+            Beats::ZERO,
+            Bpm(120.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
         // Tempo halves to 60 BPM at beat 10 — inside the clip (beats 8..16).
-        project
-            .tempo_map
-            .add_or_replace_point(Beats::from_f32(10.0), Bpm(60.0), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(
+            Beats::from_f32(10.0),
+            Bpm(60.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
 
         let clip = TimelineClip::new_audio(
             "song.wav".to_string(),
@@ -698,17 +779,37 @@ mod audio_waveform_breakpoints_tests {
         );
 
         let bp = audio_waveform_breakpoints(&clip, &project);
-        assert_eq!(bp.len(), 3, "one tempo point strictly inside the clip → 3 breakpoints");
+        assert_eq!(
+            bp.len(),
+            3,
+            "one tempo point strictly inside the clip → 3 breakpoints"
+        );
 
         // x_frac of the tempo-change beat (10) within the clip (8..16): 2/8 = 0.25.
-        assert!((bp[1].0 - 0.25).abs() < 1e-6, "tempo point x_frac, got {}", bp[1].0);
+        assert!(
+            (bp[1].0 - 0.25).abs() < 1e-6,
+            "tempo point x_frac, got {}",
+            bp[1].0
+        );
 
-        let start_secs =
-            TempoMapConverter::beat_to_seconds_immut(&project.tempo_map, Beats::from_f32(8.0), Bpm(120.0)).0;
-        let mid_secs =
-            TempoMapConverter::beat_to_seconds_immut(&project.tempo_map, Beats::from_f32(10.0), Bpm(120.0)).0;
-        let end_secs =
-            TempoMapConverter::beat_to_seconds_immut(&project.tempo_map, Beats::from_f32(16.0), Bpm(120.0)).0;
+        let start_secs = TempoMapConverter::beat_to_seconds_immut(
+            &project.tempo_map,
+            Beats::from_f32(8.0),
+            Bpm(120.0),
+        )
+        .0;
+        let mid_secs = TempoMapConverter::beat_to_seconds_immut(
+            &project.tempo_map,
+            Beats::from_f32(10.0),
+            Bpm(120.0),
+        )
+        .0;
+        let end_secs = TempoMapConverter::beat_to_seconds_immut(
+            &project.tempo_map,
+            Beats::from_f32(16.0),
+            Bpm(120.0),
+        )
+        .0;
 
         // Unwarped clip (recorded_bpm unset): file_secs is the tempo-map-integrated
         // elapsed seconds since clip start.
@@ -733,9 +834,12 @@ mod audio_waveform_breakpoints_tests {
     fn in_point_offsets_every_breakpoint() {
         let mut project = Project::default();
         project.settings.bpm = Bpm(120.0);
-        project
-            .tempo_map
-            .add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(
+            Beats::ZERO,
+            Bpm(120.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
 
         let clip_no_offset = TimelineClip::new_audio(
             "song.wav".to_string(),
@@ -756,7 +860,10 @@ mod audio_waveform_breakpoints_tests {
         let bp_offset = audio_waveform_breakpoints(&clip_with_offset, &project);
         assert_eq!(bp_plain.len(), bp_offset.len());
         for (plain, offset) in bp_plain.iter().zip(bp_offset.iter()) {
-            assert!((plain.0 - offset.0).abs() < 1e-6, "x_frac must be unaffected by in_point");
+            assert!(
+                (plain.0 - offset.0).abs() < 1e-6,
+                "x_frac must be unaffected by in_point"
+            );
             assert!(
                 (offset.1 - (plain.1 + 3.0)).abs() < 1e-4,
                 "file_secs must be shifted by exactly in_point: {} vs {} + 3.0",
@@ -781,13 +888,19 @@ mod audio_waveform_breakpoints_tests {
     fn warped_clip_ignores_tempo_map() {
         let mut project = Project::default();
         project.settings.bpm = Bpm(140.0);
-        project
-            .tempo_map
-            .add_or_replace_point(Beats::ZERO, Bpm(140.0), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(
+            Beats::ZERO,
+            Bpm(140.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
         // Tempo change mid-clip at beat 10 (inside clip 8..16)
-        project
-            .tempo_map
-            .add_or_replace_point(Beats::from_f32(10.0), Bpm(60.0), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(
+            Beats::from_f32(10.0),
+            Bpm(60.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
 
         let mut clip = TimelineClip::new_audio(
             "song.wav".to_string(),
@@ -799,7 +912,11 @@ mod audio_waveform_breakpoints_tests {
         clip.set_recorded_bpm(120.0); // Warped: recorded at 120 BPM
 
         let bp = audio_waveform_breakpoints(&clip, &project);
-        assert_eq!(bp.len(), 2, "warped clips ignore tempo map → exactly 2 breakpoints");
+        assert_eq!(
+            bp.len(),
+            2,
+            "warped clips ignore tempo map → exactly 2 breakpoints"
+        );
         assert_eq!(bp[0], (0.0, 2.0), "clip start at in_point");
         // Warped: pos(beat) = in_point + (beat - start_beat) × (60 / recorded_bpm)
         // 8 beats × (60/120) = 4 seconds of source
@@ -815,9 +932,12 @@ mod audio_waveform_breakpoints_tests {
     fn warped_clip_constant_tempo() {
         let mut project = Project::default();
         project.settings.bpm = Bpm(140.0);
-        project
-            .tempo_map
-            .add_or_replace_point(Beats::ZERO, Bpm(140.0), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(
+            Beats::ZERO,
+            Bpm(140.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
 
         let mut clip = TimelineClip::new_audio(
             "song.wav".to_string(),

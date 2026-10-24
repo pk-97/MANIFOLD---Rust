@@ -12,11 +12,10 @@
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    ensure_normal_sources, ensure_normal_sources_snapshot, DebugRayQueryHit, DebugRayQueryRay,
-    MetalShadowRayTracer, RtObjectGeometry, ShadowRayTracer, DEBUG_RAY_INVALID,
+    DEBUG_RAY_INVALID, DebugRayQueryHit, DebugRayQueryRay, MetalShadowRayTracer, RtObjectGeometry,
+    ShadowRayTracer, ensure_normal_sources, ensure_normal_sources_snapshot,
 };
 use manifold_gpu::{GpuBuffer, GpuDevice};
-
 
 /// `pos` (16 bytes) + `normal` (16 bytes) + `uv` (8 bytes) interleaved
 /// vertex — the same field offsets render_scene's `MeshVertex` carries
@@ -45,22 +44,34 @@ const IDENTITY: [[f32; 4]; 4] = [
 /// not just present.
 fn triangle_at(cx: f32) -> [PackedVertex; 3] {
     [
-        PackedVertex { pos: [cx - 0.25, -0.25, 0.0, 0.0], normal: [0.0, 0.0, 1.0, 0.0], uv: [0.0, 0.0] },
-        PackedVertex { pos: [cx + 0.25, -0.25, 0.0, 0.0], normal: [0.0, 0.0, 1.0, 0.0], uv: [1.0, 0.0] },
-        PackedVertex { pos: [cx, 0.25, 0.0, 0.0], normal: [0.0, 0.0, 1.0, 0.0], uv: [0.5, 1.0] },
+        PackedVertex {
+            pos: [cx - 0.25, -0.25, 0.0, 0.0],
+            normal: [0.0, 0.0, 1.0, 0.0],
+            uv: [0.0, 0.0],
+        },
+        PackedVertex {
+            pos: [cx + 0.25, -0.25, 0.0, 0.0],
+            normal: [0.0, 0.0, 1.0, 0.0],
+            uv: [1.0, 0.0],
+        },
+        PackedVertex {
+            pos: [cx, 0.25, 0.0, 0.0],
+            normal: [0.0, 0.0, 1.0, 0.0],
+            uv: [0.5, 1.0],
+        },
     ]
 }
 
 fn write_vertices(device: &GpuDevice, verts: &[PackedVertex]) -> GpuBuffer {
     let buffer = device.create_buffer_shared(std::mem::size_of_val(verts) as u64);
-    let ptr = buffer.mapped_ptr().expect("fixture vertex buffer must be CPU-mapped");
+    let ptr = buffer
+        .mapped_ptr()
+        .expect("fixture vertex buffer must be CPU-mapped");
     unsafe {
         std::ptr::copy_nonoverlapping(verts.as_ptr(), ptr as *mut PackedVertex, verts.len());
     }
     buffer
 }
-
-
 
 /// A ray aimed from z=+2 straight at the centroid of `triangle_at(cx)`:
 /// hits at distance 2 with barycentrics (1/3, 1/3) — minimum barycentric
@@ -138,7 +149,10 @@ fn compare_hit_to_oracle(
             }
             let tol = 1e-4f32.max(1e-4 * t.abs());
             if (hit.distance - t).abs() > tol {
-                problems.push_str(&format!(" distance {} vs oracle {t} (tol {tol});", hit.distance));
+                problems.push_str(&format!(
+                    " distance {} vs oracle {t} (tol {tol});",
+                    hit.distance
+                ));
             }
             for (got, want, name) in [(hit.bary[0], u, "bary.u"), (hit.bary[1], v, "bary.v")] {
                 if (got - want).abs() > 2e-4 {
@@ -149,13 +163,28 @@ fn compare_hit_to_oracle(
             if !(hit.normal[0].abs() <= 2e-4 && hit.normal[1].abs() <= 2e-4 && dot >= 0.9999) {
                 problems.push_str(&format!(" normal {:?} not (0,0,1);", hit.normal));
             }
-            for (got, want, name) in [(hit.uv[0], expected_uv[0], "uv.x"), (hit.uv[1], expected_uv[1], "uv.y")] {
+            for (got, want, name) in [
+                (hit.uv[0], expected_uv[0], "uv.x"),
+                (hit.uv[1], expected_uv[1], "uv.y"),
+            ] {
                 if (got - want).abs() > 2e-4 {
                     problems.push_str(&format!(" {name} {got} vs {want};"));
                 }
             }
-            for value in [hit.distance, hit.bary[0], hit.bary[1], hit.normal[0], hit.normal[1], hit.normal[2], hit.uv[0], hit.uv[1]] {
-                assert!(value.is_finite(), "{context}: non-finite channel in hit record");
+            for value in [
+                hit.distance,
+                hit.bary[0],
+                hit.bary[1],
+                hit.normal[0],
+                hit.normal[1],
+                hit.normal[2],
+                hit.uv[0],
+                hit.uv[1],
+            ] {
+                assert!(
+                    value.is_finite(),
+                    "{context}: non-finite channel in hit record"
+                );
             }
         }
         None => {
@@ -203,7 +232,9 @@ mod rt_dynamic_oracle {
         let state_b = triangle_at(STATE_B_X);
         let vertex_buffer = write_vertices(device, &state_a);
 
-        let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+        let objects = [RtObjectGeometry {
+            instance_inner: RtObjectGeometry::NO_INNER,
+            material_attributes: Default::default(),
             vertex_buffer: &vertex_buffer,
             vertex_stride: VERTEX_STRIDE,
             vertex_offset: 0,
@@ -219,7 +250,7 @@ mod rt_dynamic_oracle {
             mr_texture: None,
             normal_texture: None,
             emissive_texture: None,
-        extra_material_textures: [None; 15],
+            extra_material_textures: [None; 15],
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -239,17 +270,28 @@ mod rt_dynamic_oracle {
         // P3 seam: plan/prepare allocate; the encode rides the first
         // query's encoder below (built before the ray query on the same
         // command buffer).
-        let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
+        let plan = tracer
+            .plan_accel(device, None, &objects)
+            .expect("plan accel");
         let mut accel_slot = None;
-        tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+        tracer
+            .prepare_accel(device, &mut accel_slot, plan)
+            .expect("prepare accel");
         let mut accel = accel_slot.unwrap();
         as_builds += 1;
 
         let mut normal_sources_slot = None;
         let mut normal_sources_capacity = 0usize;
-        let material_textures =
-            ensure_normal_sources(&mut normal_sources_slot, &mut normal_sources_capacity, device, &objects);
-        assert!(material_textures.is_empty(), "fixture binds no material textures");
+        let material_textures = ensure_normal_sources(
+            &mut normal_sources_slot,
+            &mut normal_sources_capacity,
+            device,
+            &objects,
+        );
+        assert!(
+            material_textures.is_empty(),
+            "fixture binds no material textures"
+        );
         let normal_sources = normal_sources_slot.expect("ensure_normal_sources must allocate");
         let normal_sources = &normal_sources;
 
@@ -261,7 +303,16 @@ mod rt_dynamic_oracle {
         let mut enc = device.create_encoder("rt-dynamic-baseline-a");
         let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
         tracer
-            .encode_accel_update(device, &mut enc, &mut accel, &objects, &changes, &[], true, true)
+            .encode_accel_update(
+                device,
+                &mut enc,
+                &mut accel,
+                &objects,
+                &changes,
+                &[],
+                true,
+                true,
+            )
             .expect("encode accel update");
         let hits_a_buf = tracer.debug_ray_query(
             device,
@@ -282,7 +333,8 @@ mod rt_dynamic_oracle {
         assert_eq!(hit_a.primitive_id, 0, "single fixture triangle");
         assert_eq!(hit_a.coverage, 1.0, "accepted hit coverage is 1.0 pre-P4b");
         let oracle_a = moller_trumbore(&ray_a, &state_a);
-        let report = compare_hit_to_oracle(hit_a, oracle_a, CENTROID_UV, "state-A helper validation");
+        let report =
+            compare_hit_to_oracle(hit_a, oracle_a, CENTROID_UV, "state-A helper validation");
         assert!(report.is_empty(), "{report}");
 
         // ── Step 2: oracle self-checks. It must distinguish the two
@@ -299,7 +351,8 @@ mod rt_dynamic_oracle {
         );
         let wrong = oracle_a.map(|(t, u, v)| (t + 0.5, u, v));
         assert!(
-            !compare_hit_to_oracle(hit_a, wrong, CENTROID_UV, "deliberately wrong distance").is_empty(),
+            !compare_hit_to_oracle(hit_a, wrong, CENTROID_UV, "deliberately wrong distance")
+                .is_empty(),
             "comparison must reject a deliberately wrong expected distance"
         );
         let wrong_uv = [CENTROID_UV[0] + 0.1, CENTROID_UV[1]];
@@ -309,7 +362,6 @@ mod rt_dynamic_oracle {
         );
 
         assert_eq!(as_builds, 1);
-
     }
 }
 
@@ -323,8 +375,8 @@ mod rt_dynamic_ordering {
     use std::sync::Arc;
     use std::sync::atomic::Ordering;
 
-    use manifold_gpu::raytrace::{RtAccelError, RtGeometryChange};
     use manifold_gpu::GpuBinding;
+    use manifold_gpu::raytrace::{RtAccelError, RtGeometryChange};
 
     use super::*;
 
@@ -475,7 +527,9 @@ fn cs_main() {
         index_buffer: Option<&'a GpuBuffer>,
         transform: [[f32; 4]; 4],
     ) -> RtObjectGeometry<'a> {
-        RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+        RtObjectGeometry {
+            instance_inner: RtObjectGeometry::NO_INNER,
+            material_attributes: Default::default(),
             vertex_buffer,
             vertex_stride: VERTEX_STRIDE,
             vertex_offset: 0,
@@ -491,7 +545,7 @@ fn cs_main() {
             mr_texture: None,
             normal_texture: None,
             emissive_texture: None,
-        extra_material_textures: [None; 15],
+            extra_material_textures: [None; 15],
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -529,9 +583,13 @@ fn cs_main() {
         const FRAMES: u32 = 8;
         let indexed = index_buffer.is_some();
         let objects = [triangle_object(vertex_buffer, index_buffer, IDENTITY)];
-        let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
+        let plan = tracer
+            .plan_accel(device, None, &objects)
+            .expect("plan accel");
         let mut accel_slot = None;
-        tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+        tracer
+            .prepare_accel(device, &mut accel_slot, plan)
+            .expect("prepare accel");
         let mut accel = accel_slot.unwrap();
 
         let mut normal_sources_slot = None;
@@ -542,13 +600,24 @@ fn cs_main() {
             device,
             &objects,
         );
-        assert!(material_textures.is_empty(), "fixture binds no material textures");
+        assert!(
+            material_textures.is_empty(),
+            "fixture binds no material textures"
+        );
         let normal_sources = normal_sources_slot.unwrap();
 
         for frame in 0..FRAMES {
             // Even frames place the triangle at x=-0.75, odd at +0.75.
-            let cx = if frame % 2 == 0 { STATE_LEFT_X } else { STATE_RIGHT_X };
-            let prev_cx = if frame % 2 == 0 { STATE_RIGHT_X } else { STATE_LEFT_X };
+            let cx = if frame % 2 == 0 {
+                STATE_LEFT_X
+            } else {
+                STATE_RIGHT_X
+            };
+            let prev_cx = if frame % 2 == 0 {
+                STATE_RIGHT_X
+            } else {
+                STATE_LEFT_X
+            };
             let mut enc = device.create_encoder("rt-ordering-same-frame");
             // 1) this frame's geometry bytes, written GPU-side.
             let write_uniform = if indexed {
@@ -557,17 +626,42 @@ fn cs_main() {
                 uniform_bytes([cx.to_bits(), 0, 0, 0])
             };
             let mut bindings = vec![
-                GpuBinding::Bytes { binding: 0, data: &write_uniform },
-                GpuBinding::Buffer { binding: 1, buffer: vertex_buffer, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: &write_uniform,
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: vertex_buffer,
+                    offset: 0,
+                },
             ];
             if let Some(ib) = index_buffer {
-                bindings.push(GpuBinding::Buffer { binding: 2, buffer: ib, offset: 0 });
+                bindings.push(GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: ib,
+                    offset: 0,
+                });
             }
-            enc.dispatch_compute(write_pipe, &bindings, [1, 1, 1], "rt-ordering-geometry-write");
+            enc.dispatch_compute(
+                write_pipe,
+                &bindings,
+                [1, 1, 1],
+                "rt-ordering-geometry-write",
+            );
             // 2) the accel update on the SAME command buffer.
             let changes = [RtGeometryChange::Rebuild];
             let update = tracer
-                .encode_accel_update(device, &mut enc, &mut accel, &objects, &changes, &[], true, true)
+                .encode_accel_update(
+                    device,
+                    &mut enc,
+                    &mut accel,
+                    &objects,
+                    &changes,
+                    &[],
+                    true,
+                    true,
+                )
                 .unwrap_or_else(|e| panic!("frame {frame} accel update: {e:?}"));
             // 3) two analytical rays, same command buffer, then the frame's
             // single commit+wait — no intermediate commit anywhere above.
@@ -592,26 +686,38 @@ fn cs_main() {
             if frame == 0 {
                 assert_eq!(update.tlas_builds, 1, "frame 0 builds the TLAS");
             } else {
-                assert_eq!(update.tlas_refits, 1, "frame {frame}: a BLAS rebuild refits the TLAS");
+                assert_eq!(
+                    update.tlas_refits, 1,
+                    "frame {frame}: a BLAS rebuild refits the TLAS"
+                );
             }
 
             let hits = read_hits(&hits_buf, 2);
-            assert_eq!(hits[0].hit, 1, "frame {frame}: current-side ray ({cx}) must hit — RT dispatched");
+            assert_eq!(
+                hits[0].hit, 1,
+                "frame {frame}: current-side ray ({cx}) must hit — RT dispatched"
+            );
             assert_eq!(hits[0].object_id, 0, "single fixture object");
             assert_eq!(hits[0].instance_id, 0, "unwired object commits slot 0");
             assert_eq!(hits[0].primitive_id, 0, "active triangle is primitive 0");
-            assert_eq!(hits[0].coverage, 1.0, "accepted hit coverage is 1.0 pre-P4b");
+            assert_eq!(
+                hits[0].coverage, 1.0,
+                "accepted hit coverage is 1.0 pre-P4b"
+            );
             let tri = triangle_at(cx);
-            let report =
-                compare_hit_to_oracle(&hits[0], moller_trumbore(&ray_cur, &tri), CENTROID_UV, "same-frame current-side");
+            let report = compare_hit_to_oracle(
+                &hits[0],
+                moller_trumbore(&ray_cur, &tri),
+                CENTROID_UV,
+                "same-frame current-side",
+            );
             assert!(report.is_empty(), "frame {frame}: {report}");
             assert_eq!(
                 hits[1].hit, 0,
                 "frame {frame}: previous-side ray ({prev_cx}) must miss the current bytes"
             );
             assert_eq!(
-                hits[1].object_id,
-                DEBUG_RAY_INVALID,
+                hits[1].object_id, DEBUG_RAY_INVALID,
                 "frame {frame}: a miss carries the invalid sentinel"
             );
         }
@@ -650,7 +756,13 @@ fn cs_main() {
         // (6 u32 index slots every frame, one dead-degenerate slot).
         let vertex_buffer = device.create_buffer_shared(6 * u64::from(VERTEX_STRIDE));
         let index_buffer = device.create_buffer_shared(6 * 4);
-        run_same_frame_loop(&tracer, device, &indexed_pipe, &vertex_buffer, Some(&index_buffer));
+        run_same_frame_loop(
+            &tracer,
+            device,
+            &indexed_pipe,
+            &vertex_buffer,
+            Some(&index_buffer),
+        );
     }
 
     /// `rt_dynamic_unsubmitted_teardown_and_multiframe` (A2): three
@@ -680,18 +792,34 @@ fn cs_main() {
             device,
             &objects,
         );
-        assert!(material_textures.is_empty(), "fixture binds no material textures");
+        assert!(
+            material_textures.is_empty(),
+            "fixture binds no material textures"
+        );
         let normal_sources = normal_sources_slot.unwrap();
-        let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
+        let plan = tracer
+            .plan_accel(device, None, &objects)
+            .expect("plan accel");
         let mut accel_slot = None;
-        tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+        tracer
+            .prepare_accel(device, &mut accel_slot, plan)
+            .expect("prepare accel");
         let mut accel = accel_slot.unwrap();
 
         let ray = centroid_ray(STATE_LEFT_X);
         let mut enc = device.create_encoder("rt-ordering-teardown");
         let changes = [RtGeometryChange::Rebuild];
         tracer
-            .encode_accel_update(device, &mut enc, &mut accel, &objects, &changes, &[], true, true)
+            .encode_accel_update(
+                device,
+                &mut enc,
+                &mut accel,
+                &objects,
+                &changes,
+                &[],
+                true,
+                true,
+            )
             .expect("encode accel update");
         let hits_buf = tracer.debug_ray_query(
             device,
@@ -708,7 +836,10 @@ fn cs_main() {
         drop(vertex_buffer);
         enc.commit_and_wait_completed();
         let hits = read_hits(&hits_buf, 1);
-        assert_eq!(hits[0].hit, 1, "the query must survive owner teardown before commit");
+        assert_eq!(
+            hits[0].hit, 1,
+            "the query must survive owner teardown before commit"
+        );
         let report = compare_hit_to_oracle(
             &hits[0],
             moller_trumbore(&ray, &state),
@@ -733,7 +864,9 @@ fn cs_main() {
         let local = triangle_at(0.0);
         let vertex_buffer = write_vertices(device, &local);
         let instances_buffer = device.create_buffer_shared(32);
-        let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+        let objects = [RtObjectGeometry {
+            instance_inner: RtObjectGeometry::NO_INNER,
+            material_attributes: Default::default(),
             vertex_buffer: &vertex_buffer,
             vertex_stride: VERTEX_STRIDE,
             vertex_offset: 0,
@@ -749,7 +882,7 @@ fn cs_main() {
             mr_texture: None,
             normal_texture: None,
             emissive_texture: None,
-        extra_material_textures: [None; 15],
+            extra_material_textures: [None; 15],
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -765,9 +898,13 @@ fn cs_main() {
             base_color_alpha: 1.0,
             tangent_offset: u32::MAX,
         }];
-        let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
+        let plan = tracer
+            .plan_accel(device, None, &objects)
+            .expect("plan accel");
         let mut accel_slot = None;
-        tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+        tracer
+            .prepare_accel(device, &mut accel_slot, plan)
+            .expect("prepare accel");
         let mut accel = accel_slot.unwrap();
 
         let mut normal_sources_slot = None;
@@ -778,7 +915,10 @@ fn cs_main() {
             device,
             &objects,
         );
-        assert!(material_textures.is_empty(), "fixture binds no material textures");
+        assert!(
+            material_textures.is_empty(),
+            "fixture binds no material textures"
+        );
         let normal_sources = normal_sources_slot.unwrap();
 
         let instance_pipe = device.create_compute_pipeline(
@@ -799,8 +939,15 @@ fn cs_main() {
             enc.dispatch_compute(
                 &instance_pipe,
                 &[
-                    GpuBinding::Bytes { binding: 0, data: &write_uniform },
-                    GpuBinding::Buffer { binding: 1, buffer: &instances_buffer, offset: 0 },
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: &write_uniform,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: &instances_buffer,
+                        offset: 0,
+                    },
                 ],
                 [1, 1, 1],
                 "rt-ordering-instance-write",
@@ -822,8 +969,14 @@ fn cs_main() {
             if i == 0 {
                 assert_eq!(update.tlas_builds, 1, "snapshot 0 builds the TLAS");
             } else {
-                assert_eq!(update.blas_builds, 0, "snapshot {i}: a transform-only change builds no BLAS");
-                assert_eq!(update.tlas_refits, 1, "snapshot {i}: a transform-only change refits the TLAS");
+                assert_eq!(
+                    update.blas_builds, 0,
+                    "snapshot {i}: a transform-only change builds no BLAS"
+                );
+                assert_eq!(
+                    update.tlas_refits, 1,
+                    "snapshot {i}: a transform-only change refits the TLAS"
+                );
             }
             hit_bufs.push(tracer.debug_ray_query(
                 device,
@@ -844,7 +997,10 @@ fn cs_main() {
         for (i, buf) in hit_bufs.iter().enumerate() {
             let hits = read_hits(buf, 2);
             let dx = offsets[i];
-            assert_eq!(hits[0].hit, 1, "snapshot {i}: own-side ray at x={dx} must hit");
+            assert_eq!(
+                hits[0].hit, 1,
+                "snapshot {i}: own-side ray at x={dx} must hit"
+            );
             let ray = centroid_ray(dx);
             let report = compare_hit_to_oracle(
                 &hits[0],
@@ -868,7 +1024,11 @@ fn cs_main() {
         let local = triangle_at(0.0);
         let vertex_buffer = write_vertices(device, &local);
         let plan = tracer
-            .plan_accel(device, None, &[triangle_object(&vertex_buffer, None, IDENTITY)])
+            .plan_accel(
+                device,
+                None,
+                &[triangle_object(&vertex_buffer, None, IDENTITY)],
+            )
             .expect("plan uninstanced multiframe accel");
         let mut accel_slot = None;
         tracer
@@ -895,7 +1055,10 @@ fn cs_main() {
                 &mut enc,
                 &objects,
             );
-            assert!(material_textures.is_empty(), "fixture binds no material textures");
+            assert!(
+                material_textures.is_empty(),
+                "fixture binds no material textures"
+            );
             let normal_sources = normal_destination
                 .as_ref()
                 .expect("normal snapshot destination");
@@ -919,8 +1082,14 @@ fn cs_main() {
             if i == 0 {
                 assert_eq!(update.tlas_builds, 1, "snapshot 0 builds the TLAS");
             } else {
-                assert_eq!(update.blas_builds, 0, "snapshot {i}: transform-only update has no BLAS build");
-                assert_eq!(update.tlas_refits, 1, "snapshot {i}: transform-only update refits the TLAS");
+                assert_eq!(
+                    update.blas_builds, 0,
+                    "snapshot {i}: transform-only update has no BLAS build"
+                );
+                assert_eq!(
+                    update.tlas_refits, 1,
+                    "snapshot {i}: transform-only update refits the TLAS"
+                );
             }
             let ray = centroid_ray(dx);
             hit_bufs.push(tracer.debug_ray_query(
@@ -945,7 +1114,10 @@ fn cs_main() {
         for (i, buf) in hit_bufs.iter().enumerate() {
             let dx = offsets[i];
             let hits = read_hits(buf, 1);
-            assert_eq!(hits[0].hit, 1, "uninstanced snapshot {i}: ray at x={dx} must hit");
+            assert_eq!(
+                hits[0].hit, 1,
+                "uninstanced snapshot {i}: ray at x={dx} must hit"
+            );
             let ray = centroid_ray(dx);
             let expected = triangle_at(dx);
             let report = compare_hit_to_oracle(
@@ -967,14 +1139,25 @@ fn cs_main() {
         let objects_a = [triangle_object(&vertex_a, None, IDENTITY)];
         let plan_a = tracer.plan_accel(device, None, &objects_a).expect("plan A");
         let mut resident = None;
-        tracer.prepare_accel(device, &mut resident, plan_a).expect("prepare A");
+        tracer
+            .prepare_accel(device, &mut resident, plan_a)
+            .expect("prepare A");
         let mut accel_a = resident.take().expect("A resident");
         let ready_a = Arc::clone(&accel_a.ready);
 
         let mut enc_a = device.create_encoder("rt-ordering-ready-a");
         let changes = [RtGeometryChange::Rebuild];
         tracer
-            .encode_accel_update(device, &mut enc_a, &mut accel_a, &objects_a, &changes, &[], true, true)
+            .encode_accel_update(
+                device,
+                &mut enc_a,
+                &mut accel_a,
+                &objects_a,
+                &changes,
+                &[],
+                true,
+                true,
+            )
             .expect("encode A");
 
         // Replacement: a buffer-identity move is a full structural
@@ -982,21 +1165,36 @@ fn cs_main() {
         let state_b = triangle_at(STATE_RIGHT_X);
         let vertex_b = write_vertices(device, &state_b);
         let objects_b = [triangle_object(&vertex_b, None, IDENTITY)];
-        let plan_b = tracer.plan_accel(device, Some(&accel_a), &objects_b).expect("plan B");
+        let plan_b = tracer
+            .plan_accel(device, Some(&accel_a), &objects_b)
+            .expect("plan B");
         assert!(
             plan_b.additional_peak_bytes() > 0,
             "a buffer-identity move charges the full old/new overlap peak"
         );
         resident = Some(accel_a);
-        tracer.prepare_accel(device, &mut resident, plan_b).expect("prepare B replaces A");
+        tracer
+            .prepare_accel(device, &mut resident, plan_b)
+            .expect("prepare B replaces A");
         assert!(
-            !resident.as_ref().expect("B resident").ready.load(Ordering::Acquire),
+            !resident
+                .as_ref()
+                .expect("B resident")
+                .ready
+                .load(Ordering::Acquire),
             "B starts not-ready"
         );
         enc_a.commit_and_wait_completed();
-        assert!(ready_a.load(Ordering::Acquire), "A's own completion flips A's flag");
         assert!(
-            !resident.as_ref().expect("B resident").ready.load(Ordering::Acquire),
+            ready_a.load(Ordering::Acquire),
+            "A's own completion flips A's flag"
+        );
+        assert!(
+            !resident
+                .as_ref()
+                .expect("B resident")
+                .ready
+                .load(Ordering::Acquire),
             "A's completion must NOT flip B's flag — readiness belongs to the resource set"
         );
 
@@ -1005,13 +1203,24 @@ fn cs_main() {
         let mut accel_b = resident.take().expect("B resident");
         let mut slot = None;
         let mut capacity = 0usize;
-        let material_textures =
-            ensure_normal_sources(&mut slot, &mut capacity, device, &objects_b);
-        assert!(material_textures.is_empty(), "fixture binds no material textures");
+        let material_textures = ensure_normal_sources(&mut slot, &mut capacity, device, &objects_b);
+        assert!(
+            material_textures.is_empty(),
+            "fixture binds no material textures"
+        );
         let normal_sources = slot.unwrap();
         let mut enc_b = device.create_encoder("rt-ordering-ready-b");
         let update_b = tracer
-            .encode_accel_update(device, &mut enc_b, &mut accel_b, &objects_b, &changes, &[], true, true)
+            .encode_accel_update(
+                device,
+                &mut enc_b,
+                &mut accel_b,
+                &objects_b,
+                &changes,
+                &[],
+                true,
+                true,
+            )
             .expect("encode B");
         assert_eq!(update_b.blas_builds, 1);
         let ray_b = centroid_ray(STATE_RIGHT_X);
@@ -1026,7 +1235,10 @@ fn cs_main() {
             0,
         );
         enc_b.commit_and_wait_completed();
-        assert!(accel_b.ready.load(Ordering::Acquire), "B's own completion flips B's flag");
+        assert!(
+            accel_b.ready.load(Ordering::Acquire),
+            "B's own completion flips B's flag"
+        );
         let hits = read_hits(&hits_buf, 1);
         assert_eq!(hits[0].hit, 1, "B must trace the replaced geometry");
         let report = compare_hit_to_oracle(
@@ -1081,7 +1293,9 @@ fn cs_main() {
             "sizing must be deterministic across identical plans"
         );
         let mut resident = None;
-        tracer.prepare_accel(device, &mut resident, plan).expect("prepare at exact peak");
+        tracer
+            .prepare_accel(device, &mut resident, plan)
+            .expect("prepare at exact peak");
         let mut accel = resident.take().expect("resident after admitted prepare");
         let mut normal_sources_slot = None;
         let mut normal_sources_capacity = 0usize;
@@ -1091,12 +1305,24 @@ fn cs_main() {
             device,
             &objects,
         );
-        assert!(material_textures.is_empty(), "fixture binds no material textures");
+        assert!(
+            material_textures.is_empty(),
+            "fixture binds no material textures"
+        );
         let normal_sources = normal_sources_slot.unwrap();
         let mut enc = device.create_encoder("rt-ordering-admission");
         let changes = [RtGeometryChange::Rebuild];
         let update = tracer
-            .encode_accel_update(device, &mut enc, &mut accel, &objects, &changes, &[], true, true)
+            .encode_accel_update(
+                device,
+                &mut enc,
+                &mut accel,
+                &objects,
+                &changes,
+                &[],
+                true,
+                true,
+            )
             .expect("encode at admitted peak");
         assert_eq!(update.blas_builds, 1);
         let ray = centroid_ray(STATE_LEFT_X);
@@ -1112,12 +1338,17 @@ fn cs_main() {
         );
         enc.commit_and_wait_completed();
         let hits = read_hits(&hits_buf, 1);
-        assert_eq!(hits[0].hit, 1, "an admitted candidate must prepare, encode and trace");
+        assert_eq!(
+            hits[0].hit, 1,
+            "an admitted candidate must prepare, encode and trace"
+        );
 
         // Planned bytes == prepared reality: the identical scene re-planned
         // against the resident set charges zero additional bytes (the
         // rt_dynamic_ordering half of the plan/prepared agreement gate).
-        let replan = tracer.plan_accel(device, Some(&accel), &objects).expect("replan resident");
+        let replan = tracer
+            .plan_accel(device, Some(&accel), &objects)
+            .expect("replan resident");
         assert_eq!(
             replan.additional_peak_bytes(),
             0,
@@ -1128,26 +1359,43 @@ fn cs_main() {
         // ── Section 2: negative/overflow geometry fails plan_accel with
         // InvalidGeometry before any GPU encode (plan takes no encoder and
         // validates every object before sizing anything).
-        let expect_invalid = |obj: RtObjectGeometry<'_>, case: &str| {
-            match tracer.plan_accel(device, None, std::slice::from_ref(&obj)) {
-                Err(RtAccelError::InvalidGeometry { object, reason }) => {
-                    assert_eq!(object, 0, "{case}: the error must name the offending object");
-                    assert!(!reason.is_empty(), "{case}: the error must carry a reason");
-                }
-                Ok(_) => panic!("{case}: expected InvalidGeometry, plan succeeded"),
-                Err(other) => panic!("{case}: expected InvalidGeometry, got {other:?}"),
+        let expect_invalid = |obj: RtObjectGeometry<'_>, case: &str| match tracer.plan_accel(
+            device,
+            None,
+            std::slice::from_ref(&obj),
+        ) {
+            Err(RtAccelError::InvalidGeometry { object, reason }) => {
+                assert_eq!(
+                    object, 0,
+                    "{case}: the error must name the offending object"
+                );
+                assert!(!reason.is_empty(), "{case}: the error must carry a reason");
             }
+            Ok(_) => panic!("{case}: expected InvalidGeometry, plan succeeded"),
+            Err(other) => panic!("{case}: expected InvalidGeometry, got {other:?}"),
         };
         expect_invalid(
-            RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(), triangle_count: 0, ..triangle_object(&vertex_buffer, None, IDENTITY) },
+            RtObjectGeometry {
+                instance_inner: RtObjectGeometry::NO_INNER,
+                material_attributes: Default::default(),
+                triangle_count: 0,
+                ..triangle_object(&vertex_buffer, None, IDENTITY)
+            },
             "zero triangles",
         );
         expect_invalid(
-            RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(), vertex_stride: 4, ..triangle_object(&vertex_buffer, None, IDENTITY) },
+            RtObjectGeometry {
+                instance_inner: RtObjectGeometry::NO_INNER,
+                material_attributes: Default::default(),
+                vertex_stride: 4,
+                ..triangle_object(&vertex_buffer, None, IDENTITY)
+            },
             "absurd vertex stride",
         );
         expect_invalid(
-            RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+            RtObjectGeometry {
+                instance_inner: RtObjectGeometry::NO_INNER,
+                material_attributes: Default::default(),
                 triangle_count: 1_000_000,
                 ..triangle_object(&vertex_buffer, None, IDENTITY)
             },
@@ -1155,7 +1403,9 @@ fn cs_main() {
         );
         let tiny_index = device.create_buffer_shared(4);
         expect_invalid(
-            RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+            RtObjectGeometry {
+                instance_inner: RtObjectGeometry::NO_INNER,
+                material_attributes: Default::default(),
                 index_buffer: Some(&tiny_index),
                 triangle_count: 2,
                 ..triangle_object(&vertex_buffer, None, IDENTITY)
@@ -1169,7 +1419,9 @@ fn cs_main() {
         // pure shape change, not a capacity problem.
         let verts_a = device.create_buffer_shared(2 * 3 * u64::from(VERTEX_STRIDE));
         {
-            let ptr = verts_a.mapped_ptr().expect("fixture vertex buffer must be CPU-mapped");
+            let ptr = verts_a
+                .mapped_ptr()
+                .expect("fixture vertex buffer must be CPU-mapped");
             unsafe {
                 std::ptr::copy_nonoverlapping(state.as_ptr(), ptr as *mut PackedVertex, 3);
             }
@@ -1183,20 +1435,27 @@ fn cs_main() {
             .plan_accel(device, Some(&accel), &objects2)
             .expect("plan two-object scene");
         let peak2 = plan2.additional_peak_bytes();
-        assert!(peak2 > 0, "a structural replacement charges the old/new overlap");
+        assert!(
+            peak2 > 0,
+            "a structural replacement charges the old/new overlap"
+        );
         // One byte under: rejected — the CURRENT resident (scene 1) must
         // remain resident, valid, and untouched.
         assert!(peak2 - 1 < plan2.additional_peak_bytes());
         drop(plan2);
         assert!(
-            accel.check_topology(std::slice::from_ref(&objects[0])).is_ok(),
+            accel
+                .check_topology(std::slice::from_ref(&objects[0]))
+                .is_ok(),
             "a rejected admission must leave the resident topology intact"
         );
         let plan2 = tracer
             .plan_accel(device, Some(&accel), &objects2)
             .expect("re-plan two-object scene");
         let mut resident2 = Some(accel);
-        tracer.prepare_accel(device, &mut resident2, plan2).expect("prepare two-object scene");
+        tracer
+            .prepare_accel(device, &mut resident2, plan2)
+            .expect("prepare two-object scene");
         let mut accel2 = resident2.take().expect("resident two-object scene");
 
         // A change list shorter than the object list fails structured.
@@ -1213,7 +1472,10 @@ fn cs_main() {
             true,
         ) {
             Err(RtAccelError::Encode(reason)) => {
-                assert!(reason.contains("mismatch"), "unexpected encode error: {reason}")
+                assert!(
+                    reason.contains("mismatch"),
+                    "unexpected encode error: {reason}"
+                )
             }
             other => panic!("short change list must fail with Encode, got {other:?}"),
         }
@@ -1225,7 +1487,10 @@ fn cs_main() {
         let mut capacity2 = 0usize;
         let material_textures =
             ensure_normal_sources(&mut slot2, &mut capacity2, device, &objects2);
-        assert!(material_textures.is_empty(), "fixture binds no material textures");
+        assert!(
+            material_textures.is_empty(),
+            "fixture binds no material textures"
+        );
         let normal_sources2 = slot2.unwrap();
         let mut enc3 = device.create_encoder("rt-ordering-resident-valid");
         let changes2 = [RtGeometryChange::Reuse, RtGeometryChange::Reuse];
@@ -1272,7 +1537,12 @@ fn cs_main() {
         // re-prepare fails NeedsPreparation; both rejections leave the
         // resident set valid.
         let objects_big = [
-            RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(), triangle_count: 2, ..triangle_object(&verts_a, None, IDENTITY) },
+            RtObjectGeometry {
+                instance_inner: RtObjectGeometry::NO_INNER,
+                material_attributes: Default::default(),
+                triangle_count: 2,
+                ..triangle_object(&verts_a, None, IDENTITY)
+            },
             triangle_object(&verts_b, None, IDENTITY),
         ];
         let mut enc4 = device.create_encoder("rt-ordering-shape-change");

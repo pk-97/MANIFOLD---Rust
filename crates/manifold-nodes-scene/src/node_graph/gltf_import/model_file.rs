@@ -32,10 +32,18 @@ pub(crate) struct ClipDurations {
 pub(crate) enum Rig {
     /// Skinned against glTF skin `skin_index`; `node_index` is the skinned
     /// mesh's own node.
-    Skin { node_index: u32, skin_index: u32, joint_count: u32, clips: ClipDurations },
+    Skin {
+        node_index: u32,
+        skin_index: u32,
+        joint_count: u32,
+        clips: ClipDurations,
+    },
     /// Not skinned, but its node or an ancestor animates: the node's whole
     /// chain drives it as a one-slot palette.
-    Chain { node_index: u32, clips: ClipDurations },
+    Chain {
+        node_index: u32,
+        clips: ClipDurations,
+    },
 }
 
 /// One part's morph targets.
@@ -68,7 +76,10 @@ impl NodeFacts {
     }
 
     pub(crate) fn morph(&self, material: Option<u32>) -> Option<&Morph> {
-        self.morphs.iter().find(|(key, _)| *key == material).map(|(_, morph)| morph)
+        self.morphs
+            .iter()
+            .find(|(key, _)| *key == material)
+            .map(|(_, morph)| morph)
     }
 }
 
@@ -90,7 +101,9 @@ pub(crate) struct ModelFile {
 impl ModelFile {
     /// The material `material` (`None` the glTF default material).
     pub(crate) fn material(&self, material: Option<u32>) -> &GltfMaterialInfo {
-        material.and_then(|index| self.materials.get(index as usize)).unwrap_or(&self.default_material)
+        material
+            .and_then(|index| self.materials.get(index as usize))
+            .unwrap_or(&self.default_material)
     }
 }
 
@@ -104,20 +117,34 @@ pub fn world_bounds(facts: &ModelFacts) -> Option<([f32; 3], [f32; 3])> {
     let mut bounds: Option<([f32; 3], [f32; 3])> = None;
     for node in facts.nodes.values() {
         for part in &node.parts {
-            if !part.center.iter().chain(part.half_extent.iter()).all(|v| v.is_finite()) {
+            if !part
+                .center
+                .iter()
+                .chain(part.half_extent.iter())
+                .all(|v| v.is_finite())
+            {
                 continue;
             }
-            let (lo, hi) = ([0, 1, 2].map(|axis| part.center[axis] - part.half_extent[axis]), [0, 1, 2].map(|axis| part.center[axis] + part.half_extent[axis]));
+            let (lo, hi) = (
+                [0, 1, 2].map(|axis| part.center[axis] - part.half_extent[axis]),
+                [0, 1, 2].map(|axis| part.center[axis] + part.half_extent[axis]),
+            );
             bounds = Some(match bounds {
                 None => (lo, hi),
-                Some((grown_lo, grown_hi)) => {
-                    ([0, 1, 2].map(|axis| grown_lo[axis].min(lo[axis])), [0, 1, 2].map(|axis| grown_hi[axis].max(hi[axis])))
-                }
+                Some((grown_lo, grown_hi)) => (
+                    [0, 1, 2].map(|axis| grown_lo[axis].min(lo[axis])),
+                    [0, 1, 2].map(|axis| grown_hi[axis].max(hi[axis])),
+                ),
             });
         }
     }
     // As the parts carry their boxes: a centre and a half extent.
-    bounds.map(|(lo, hi)| ([0, 1, 2].map(|axis| (lo[axis] + hi[axis]) * 0.5), [0, 1, 2].map(|axis| (hi[axis] - lo[axis]) * 0.5)))
+    bounds.map(|(lo, hi)| {
+        (
+            [0, 1, 2].map(|axis| (lo[axis] + hi[axis]) * 0.5),
+            [0, 1, 2].map(|axis| (hi[axis] - lo[axis]) * 0.5),
+        )
+    })
 }
 
 /// The facts of the model at `path` the document carries, if they have
@@ -142,7 +169,10 @@ pub(crate) struct PictureSize(pub u32, pub u32);
 
 /// The size of the picture at `path` the document carries, if it has arrived.
 pub(crate) fn picture_size(doc: &SceneDoc, path: &str) -> Option<(u32, u32)> {
-    doc.models.get(path)?.get::<PictureSize>().map(|size| (size.0, size.1))
+    doc.models
+        .get(path)?
+        .get::<PictureSize>()
+        .map(|size| (size.0, size.1))
 }
 
 /// Read the facts of a file a document names: a picture's size, or a
@@ -151,27 +181,45 @@ pub fn read_file_facts(path: &Path) -> Result<(ModelFacts, Vec<String>), String>
     if image::ImageFormat::from_path(path).is_err() {
         return read_facts(path);
     }
-    let (width, height) = gltf_load::picture_file_dims(path).ok_or_else(|| format!("{} is not a picture this can read", path.display()))?;
+    let (width, height) = gltf_load::picture_file_dims(path)
+        .ok_or_else(|| format!("{} is not a picture this can read", path.display()))?;
     Ok((ModelFacts::new(PictureSize(width, height)), Vec::new()))
 }
 
 /// The facts of a parsed model file, and its material report lines.
-pub(crate) fn facts_of(path: &Path, document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> (ModelFile, Vec<String>) {
+pub(crate) fn facts_of(
+    path: &Path,
+    document: &gltf::Document,
+    buffers: &[gltf::buffer::Data],
+) -> (ModelFile, Vec<String>) {
     let mut report = Vec::new();
     let materials = document
         .materials()
         .map(|m| {
-            let label = m.name().map_or_else(|| format!("material {}", m.index().unwrap_or(0)), str::to_owned);
+            let label = m.name().map_or_else(
+                || format!("material {}", m.index().unwrap_or(0)),
+                str::to_owned,
+            );
             gltf_load::material_info(document, &m, &label, &mut report)
         })
         .collect();
     let radius = gltf_load::file_bounds(document, buffers).map_or(1e-3, |(lo, hi)| {
-        let diagonal = (0..3).map(|axis| (hi[axis] - lo[axis]).powi(2)).sum::<f32>().sqrt();
+        let diagonal = (0..3)
+            .map(|axis| (hi[axis] - lo[axis]).powi(2))
+            .sum::<f32>()
+            .sqrt();
         (diagonal * 0.5).max(1e-3)
     });
     let animations = gltf_load::parse_animations(document, buffers);
-    let by_clip: Vec<BTreeMap<usize, GltfNodeAnimation>> =
-        animations.iter().map(|clip| clip.nodes.iter().map(|n| (n.node_index, n.clone())).collect()).collect();
+    let by_clip: Vec<BTreeMap<usize, GltfNodeAnimation>> = animations
+        .iter()
+        .map(|clip| {
+            clip.nodes
+                .iter()
+                .map(|n| (n.node_index, n.clone()))
+                .collect()
+        })
+        .collect();
     let skins = gltf_load::parse_skins(document, buffers);
     let mut nodes = HashMap::new();
     let tree = gltf_load::file_node_tree(document, buffers);
@@ -207,15 +255,27 @@ fn collect(
                     joint_count: info.joint_node_indices.len() as u32,
                     clips: skeleton_pose_clip_durations(info, by_clip),
                 }),
-                None => chain_animated(&chain, by_clip)
-                    .then(|| Rig::Chain { node_index: file_node.index as u32, clips: rigid_clip_durations(by_clip) }),
+                None => chain_animated(&chain, by_clip).then(|| Rig::Chain {
+                    node_index: file_node.index as u32,
+                    clips: rigid_clip_durations(by_clip),
+                }),
             };
             let morphs = file_node
                 .parts
                 .iter()
-                .filter_map(|part| morph_of(&node, file_node.index, part.material, by_clip).map(|m| (part.material, m)))
+                .filter_map(|part| {
+                    morph_of(&node, file_node.index, part.material, by_clip)
+                        .map(|m| (part.material, m))
+                })
                 .collect();
-            out.insert(file_node.path.clone(), NodeFacts { parts: file_node.parts.clone(), rig, morphs });
+            out.insert(
+                file_node.path.clone(),
+                NodeFacts {
+                    parts: file_node.parts.clone(),
+                    rig,
+                    morphs,
+                },
+            );
         }
         collect(&file_node.children, &chain, document, skins, by_clip, out);
     }
@@ -226,8 +286,9 @@ fn collect(
 fn chain_animated(chain: &[usize], by_clip: &[BTreeMap<usize, GltfNodeAnimation>]) -> bool {
     chain.iter().any(|node| {
         by_clip.iter().any(|clip| {
-            clip.get(node)
-                .is_some_and(|anim| anim.translation.is_some() || anim.rotation.is_some() || anim.scale.is_some())
+            clip.get(node).is_some_and(|anim| {
+                anim.translation.is_some() || anim.rotation.is_some() || anim.scale.is_some()
+            })
         })
     })
 }
@@ -246,8 +307,9 @@ fn morph_of(
         .find(|p| p.material().index().map(|i| i as u32) == material && p.morph_targets().len() > 0)
         .map(|p| p.morph_targets().len())?;
     let weights = mesh.weights().unwrap_or(&[]);
-    let static_weights =
-        (0..target_count).map(|i| vec![i as f32, weights.get(i).copied().unwrap_or(0.0)]).collect();
+    let static_weights = (0..target_count)
+        .map(|i| vec![i as f32, weights.get(i).copied().unwrap_or(0.0)])
+        .collect();
     Some(Morph {
         node_index: node_index as u32,
         target_count: target_count as u32,
@@ -258,7 +320,10 @@ fn morph_of(
 
 /// Per-clip durations of a skin: the last keyframe of any joint channel,
 /// floored at 1 ms. A file with no clips is one static clip 0.
-fn skeleton_pose_clip_durations(skin: &GltfSkinInfo, by_clip: &[BTreeMap<usize, GltfNodeAnimation>]) -> ClipDurations {
+fn skeleton_pose_clip_durations(
+    skin: &GltfSkinInfo,
+    by_clip: &[BTreeMap<usize, GltfNodeAnimation>],
+) -> ClipDurations {
     durations(by_clip, |clip| {
         skin.joint_node_indices
             .iter()
@@ -281,9 +346,14 @@ fn rigid_clip_durations(by_clip: &[BTreeMap<usize, GltfNodeAnimation>]) -> ClipD
 
 /// Per-clip durations of a morph: the last keyframe of the node's weights
 /// channel.
-fn morph_clip_durations(node_index: usize, by_clip: &[BTreeMap<usize, GltfNodeAnimation>]) -> ClipDurations {
+fn morph_clip_durations(
+    node_index: usize,
+    by_clip: &[BTreeMap<usize, GltfNodeAnimation>],
+) -> ClipDurations {
     durations(by_clip, |clip| {
-        clip.get(&node_index).and_then(|anim| anim.weights.as_ref()).map_or(0.0, |w| last(&w.times))
+        clip.get(&node_index)
+            .and_then(|anim| anim.weights.as_ref())
+            .map_or(0.0, |w| last(&w.times))
     })
 }
 
@@ -293,7 +363,12 @@ fn durations(
 ) -> ClipDurations {
     let empty = BTreeMap::new();
     let rows: Vec<Vec<f32>> = (0..by_clip.len().max(1))
-        .map(|c| vec![c as f32, duration_of(by_clip.get(c).unwrap_or(&empty)).max(1e-3)])
+        .map(|c| {
+            vec![
+                c as f32,
+                duration_of(by_clip.get(c).unwrap_or(&empty)).max(1e-3),
+            ]
+        })
         .collect();
     let first = rows[0][1];
     ClipDurations { rows, first }

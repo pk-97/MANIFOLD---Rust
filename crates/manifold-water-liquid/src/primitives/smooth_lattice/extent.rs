@@ -1,6 +1,6 @@
 //! Buffer extent rule owned by this node.
-use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use crate::extent::{brick_schedule, nodes_total};
+use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn smooth_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let nodes = x.nodes(["nodes_x", "nodes_y", "nodes_z"]);

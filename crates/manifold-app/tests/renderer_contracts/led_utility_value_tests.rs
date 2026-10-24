@@ -16,19 +16,19 @@ use manifold_nodes as _;
 use std::sync::Arc;
 
 use half::f16;
+use manifold_compositor::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
+use manifold_compositor::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
+use manifold_compositor::tonemap::TonemapSettings;
 use manifold_core::effect_graph_def::{EffectGraphDef, ParamSpecDef};
 use manifold_core::params::{Param, ParamManifest};
 use manifold_core::{BlendMode, LayerId, LayerType};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
-use manifold_compositor::compositor::{Compositor, CompositeLayerDescriptor, CompositorFrame};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
-use manifold_compositor::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
-use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
-use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
-use manifold_compositor::tonemap::TonemapSettings;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 const LED_W: u32 = 8;
 const LED_H: u32 = 120;
@@ -62,8 +62,9 @@ struct LedUtilityFixture {
 fn preset_def(id: &str) -> EffectGraphDef {
     // Filename stem = preset id (the bundle contract). Read from disk rather
     // than the catalog so the test pins exactly what ships in this tree.
-    let path = (manifold_nodes::testkit::assets::CATALOG_ASSETS_ROOT.to_owned() + "/generator-presets/")
-    .to_string()
+    let path = (manifold_nodes::testkit::assets::CATALOG_ASSETS_ROOT.to_owned()
+        + "/generator-presets/")
+        .to_string()
         + id
         + ".json";
     let json = std::fs::read_to_string(&path)
@@ -308,7 +309,14 @@ fn studio_light_luminance_scales_with_brightness() {
     let mut fx = LedUtilityFixture::new("LED Studio Light");
     let tint = tint_rgb(200.0, 1.0);
     for brightness in [0.2f32, 0.5, 1.0] {
-        let px = fx.render_led(0.0, &[("brightness", brightness), ("hue", 200.0), ("saturation", 1.0)]);
+        let px = fx.render_led(
+            0.0,
+            &[
+                ("brightness", brightness),
+                ("hue", 200.0),
+                ("saturation", 1.0),
+            ],
+        );
         let mean = mean_rgb(&px);
         for (chan, &t) in tint.iter().enumerate() {
             let want = t * brightness;

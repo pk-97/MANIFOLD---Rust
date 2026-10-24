@@ -37,7 +37,11 @@ pub struct HopClock {
 
 impl HopClock {
     pub fn anchored(epoch: u64, sample_rate: u32, end_sample: u64, time: f64) -> Self {
-        let mut clock = Self { epoch, sample_rate, offset: 0.0 };
+        let mut clock = Self {
+            epoch,
+            sample_rate,
+            offset: 0.0,
+        };
         clock.offset = time - clock.time_of(end_sample);
         clock
     }
@@ -73,8 +77,12 @@ pub enum AudioBand {
 
 impl AudioBand {
     /// All bands in [`crate::audio_features::SendFeatures::bands`] order.
-    pub const ALL: [AudioBand; 4] =
-        [AudioBand::Full, AudioBand::Low, AudioBand::Mid, AudioBand::High];
+    pub const ALL: [AudioBand; 4] = [
+        AudioBand::Full,
+        AudioBand::Low,
+        AudioBand::Mid,
+        AudioBand::High,
+    ];
 
     /// Index into [`crate::audio_features::SendFeatures::bands`].
     pub fn index(self) -> usize {
@@ -229,7 +237,10 @@ impl<'de> Deserialize<'de> for AudioFeature {
 enum AudioFeatureRepr {
     /// Current shape — both keys required (no defaults), so the legacy object
     /// form (`{ "bandEnergy": … }`) can't accidentally match here.
-    Matrix { kind: AudioFeatureKind, band: AudioBand },
+    Matrix {
+        kind: AudioFeatureKind,
+        band: AudioBand,
+    },
     /// Legacy flat enum.
     Legacy(LegacyAudioFeature),
 }
@@ -387,7 +398,11 @@ impl AudioModShape {
 
         // One-pole follower: separate attack/release time constants. A
         // non-positive tau snaps instantly (no smoothing).
-        let tau_ms = if target > *smoothed { self.attack_ms } else { self.release_ms };
+        let tau_ms = if target > *smoothed {
+            self.attack_ms
+        } else {
+            self.release_ms
+        };
         let coeff = if tau_ms <= 0.0 {
             1.0
         } else {
@@ -507,7 +522,11 @@ impl WrapMode {
 /// the user sets `amount` this is never consulted again; the stored value is
 /// whatever they left it at.
 pub fn default_step_amount(min: f32, max: f32, whole_numbers: bool) -> f32 {
-    if whole_numbers { 1.0 } else { (max - min) / 8.0 }
+    if whole_numbers {
+        1.0
+    } else {
+        (max - min) / 8.0
+    }
 }
 
 /// D7: a deterministic pseudo-random step value keyed by `ordinal` (the
@@ -532,7 +551,11 @@ pub fn random_step_value(
             // shift the bucket index past it so every other value is
             // reachable and the current one never repeats back-to-back.
             let bucket = crate::effects::hash_u32(ordinal) % (n - 1);
-            let idx = if bucket >= current_index { bucket + 1 } else { bucket };
+            let idx = if bucket >= current_index {
+                bucket + 1
+            } else {
+                bucket
+            };
             min + idx as f32
         }
         // n <= 1: nothing to randomize between (a single-value discrete
@@ -717,10 +740,23 @@ mod tests {
         use AudioFeatureKind::*;
         let f = SendFeatures {
             bands: [
-                BandFeatures { amplitude: 0.42, ..Default::default() }, // Full
-                BandFeatures { amplitude: 0.1, ..Default::default() },  // Low
-                BandFeatures { brightness: 0.55, ..Default::default() }, // Mid
-                BandFeatures { liveliness: 1.7, transients: 0.9, ..Default::default() }, // High
+                BandFeatures {
+                    amplitude: 0.42,
+                    ..Default::default()
+                }, // Full
+                BandFeatures {
+                    amplitude: 0.1,
+                    ..Default::default()
+                }, // Low
+                BandFeatures {
+                    brightness: 0.55,
+                    ..Default::default()
+                }, // Mid
+                BandFeatures {
+                    liveliness: 1.7,
+                    transients: 0.9,
+                    ..Default::default()
+                }, // High
             ],
             ..Default::default()
         };
@@ -738,8 +774,16 @@ mod tests {
         use AudioFeatureKind::*;
         let f = SendFeatures {
             bands: [
-                BandFeatures { pitch: 0.61, presence: 0.9, ..Default::default() }, // Full
-                BandFeatures { pitch: 0.25, presence: 0.4, ..Default::default() }, // Low
+                BandFeatures {
+                    pitch: 0.61,
+                    presence: 0.9,
+                    ..Default::default()
+                }, // Full
+                BandFeatures {
+                    pitch: 0.25,
+                    presence: 0.4,
+                    ..Default::default()
+                }, // Low
                 BandFeatures::default(),
                 BandFeatures::default(),
             ],
@@ -755,8 +799,16 @@ mod tests {
     fn legacy_flat_feature_migrates_to_matrix() {
         // Old flat-enum JSON forms must load onto the { kind, band } matrix.
         let cases = [
-            ("\"amplitude\"", AudioFeatureKind::Amplitude, AudioBand::Full),
-            ("{\"bandEnergy\":\"low\"}", AudioFeatureKind::Amplitude, AudioBand::Low),
+            (
+                "\"amplitude\"",
+                AudioFeatureKind::Amplitude,
+                AudioBand::Full,
+            ),
+            (
+                "{\"bandEnergy\":\"low\"}",
+                AudioFeatureKind::Amplitude,
+                AudioBand::Low,
+            ),
             ("\"centroid\"", AudioFeatureKind::Centroid, AudioBand::Full),
             ("\"flatness\"", AudioFeatureKind::Noisiness, AudioBand::Full),
             ("\"flux\"", AudioFeatureKind::Flux, AudioBand::Full),
@@ -775,11 +827,19 @@ mod tests {
         for kind in AudioFeatureKind::ALL {
             let cur = AudioFeature::new(kind, AudioBand::High);
             let json = serde_json::to_string(&cur).unwrap();
-            assert_eq!(serde_json::from_str::<AudioFeature>(&json).unwrap(), cur, "round-trip {json}");
+            assert_eq!(
+                serde_json::from_str::<AudioFeature>(&json).unwrap(),
+                cur,
+                "round-trip {json}"
+            );
         }
         assert!(
-            serde_json::to_string(&AudioFeatureKind::Pitch).unwrap().contains("pitch")
-                && serde_json::to_string(&AudioFeatureKind::Presence).unwrap().contains("presence")
+            serde_json::to_string(&AudioFeatureKind::Pitch)
+                .unwrap()
+                .contains("pitch")
+                && serde_json::to_string(&AudioFeatureKind::Presence)
+                    .unwrap()
+                    .contains("presence")
                 && serde_json::to_string(&AudioFeatureKind::Kick).unwrap() == "\"kick\""
                 && serde_json::to_string(&AudioFeatureKind::Snare).unwrap() == "\"snare\"",
             "serde names are the file-format contract"
@@ -798,7 +858,10 @@ mod tests {
         // One 16 ms step toward 1.0 should move partway, not all the way.
         let out = shape.apply(1.0, 0.016, &mut s, &mut p);
         assert!(s > 0.0 && s < 1.0, "partial rise, got {s}");
-        assert!((out - s).abs() < 1e-6, "linear curve, full range → out == smoothed");
+        assert!(
+            (out - s).abs() < 1e-6,
+            "linear curve, full range → out == smoothed"
+        );
 
         // Many steps converge to ~1.0.
         for _ in 0..100 {
@@ -821,7 +884,10 @@ mod tests {
         let mut p = 0.0;
         // raw 1.0 → smoothed 1.0 → invert → 0.0 → range map → 0.2.
         let out = shape.apply(1.0, 0.016, &mut s, &mut p);
-        assert!((out - 0.2).abs() < 1e-6, "inverted full signal maps to range floor, got {out}");
+        assert!(
+            (out - 0.2).abs() < 1e-6,
+            "inverted full signal maps to range floor, got {out}"
+        );
     }
 
     #[test]
@@ -837,12 +903,21 @@ mod tests {
         // Steady level (same raw twice) → no change → centered at 0.5.
         shape.apply(0.7, 0.016, &mut s, &mut prev);
         let steady = shape.apply(0.7, 0.016, &mut s, &mut prev);
-        assert!((steady - 0.5).abs() < 1e-6, "no change reads mid-range, got {steady}");
+        assert!(
+            (steady - 0.5).abs() < 1e-6,
+            "no change reads mid-range, got {steady}"
+        );
         // A rise pushes above 0.5; a fall pushes below.
         let rising = shape.apply(0.9, 0.016, &mut s, &mut prev);
-        assert!(rising > 0.5, "rising feature pushes above center, got {rising}");
+        assert!(
+            rising > 0.5,
+            "rising feature pushes above center, got {rising}"
+        );
         let falling = shape.apply(0.5, 0.016, &mut s, &mut prev);
-        assert!(falling < 0.5, "falling feature pushes below center, got {falling}");
+        assert!(
+            falling < 0.5,
+            "falling feature pushes below center, got {falling}"
+        );
     }
 
     #[test]
@@ -855,23 +930,43 @@ mod tests {
             let mut s = 0.4;
             let mut prev = 0.3;
             let out = shape.condition(raw, 0.016, &mut s, &mut prev);
-            assert!(out.is_finite(), "non-finite raw must not propagate, got {out}");
+            assert!(
+                out.is_finite(),
+                "non-finite raw must not propagate, got {out}"
+            );
             assert!(s.is_finite(), "follower must survive, smoothed = {s}");
             assert_eq!(prev, 0.0, "sanitized raw reads as silence");
             // And the follower keeps working on the next honest value.
             let after = shape.condition(0.8, 0.016, &mut s, &mut prev);
-            assert!(after.is_finite() && after > 0.0, "follower must recover, got {after}");
+            assert!(
+                after.is_finite() && after > 0.0,
+                "follower must recover, got {after}"
+            );
         }
     }
 
     #[test]
-    fn map_range_of_condition_equals_apply() {        // condition() then map_range() must reproduce apply() exactly, for a
+    fn map_range_of_condition_equals_apply() {
+        // condition() then map_range() must reproduce apply() exactly, for a
         // handful of shapes/raws — the split is a pure refactor.
         let shapes = [
             AudioModShape::default(),
-            AudioModShape { range_min: 0.2, range_max: 0.8, ..Default::default() },
-            AudioModShape { invert: true, range_min: 0.1, range_max: 0.4, ..Default::default() },
-            AudioModShape { rate_of_change: true, sensitivity: 2.0, ..Default::default() },
+            AudioModShape {
+                range_min: 0.2,
+                range_max: 0.8,
+                ..Default::default()
+            },
+            AudioModShape {
+                invert: true,
+                range_min: 0.1,
+                range_max: 0.4,
+                ..Default::default()
+            },
+            AudioModShape {
+                rate_of_change: true,
+                sensitivity: 2.0,
+                ..Default::default()
+            },
         ];
         for shape in shapes {
             for raw in [0.0_f32, 0.3, 0.5, 0.7, 1.0] {
@@ -888,8 +983,14 @@ mod tests {
                     (apply_out - mapped).abs() < 1e-6,
                     "apply({raw}) = {apply_out}, map_range(condition({raw})) = {mapped}"
                 );
-                assert_eq!(s1, s2, "condition() must advance smoothed identically to apply()");
-                assert_eq!(p1, p2, "condition() must advance prev_raw identically to apply()");
+                assert_eq!(
+                    s1, s2,
+                    "condition() must advance smoothed identically to apply()"
+                );
+                assert_eq!(
+                    p1, p2,
+                    "condition() must advance prev_raw identically to apply()"
+                );
             }
         }
     }
@@ -909,17 +1010,27 @@ mod tests {
         let mut s = 0.0;
         let mut p = 0.0;
         let conditioned = shape.condition(1.0, 0.016, &mut s, &mut p);
-        assert!((conditioned - 1.0).abs() < 1e-6, "conditioned signal ignores the range map, got {conditioned}");
+        assert!(
+            (conditioned - 1.0).abs() < 1e-6,
+            "conditioned signal ignores the range map, got {conditioned}"
+        );
 
         let mut s2 = 0.0;
         let mut p2 = 0.0;
         let applied = shape.apply(1.0, 0.016, &mut s2, &mut p2);
-        assert!((applied - 0.8).abs() < 1e-6, "apply() caps at the range ceiling, got {applied}");
+        assert!(
+            (applied - 0.8).abs() < 1e-6,
+            "apply() caps at the range ceiling, got {applied}"
+        );
     }
 
     #[test]
     fn zone_maps_range_handles_into_param_units() {
-        let shape = AudioModShape { range_min: 0.2, range_max: 0.8, ..Default::default() };
+        let shape = AudioModShape {
+            range_min: 0.2,
+            range_max: 0.8,
+            ..Default::default()
+        };
         let (lo, hi) = shape.zone(0.0, 10.0);
         assert!((lo - 2.0).abs() < 1e-6, "lo = {lo}");
         assert!((hi - 8.0).abs() < 1e-6, "hi = {hi}");
@@ -929,9 +1040,16 @@ mod tests {
     fn zone_swaps_crossed_handles() {
         // Defensive: a crossed range_min > range_max must not produce an
         // inverted (lo > hi) zone.
-        let shape = AudioModShape { range_min: 0.9, range_max: 0.1, ..Default::default() };
+        let shape = AudioModShape {
+            range_min: 0.9,
+            range_max: 0.1,
+            ..Default::default()
+        };
         let (lo, hi) = shape.zone(0.0, 10.0);
-        assert!(lo <= hi, "zone() must never return an inverted (lo > hi) pair, got ({lo}, {hi})");
+        assert!(
+            lo <= hi,
+            "zone() must never return an inverted (lo > hi) pair, got ({lo}, {hi})"
+        );
         assert!((lo - 1.0).abs() < 1e-6);
         assert!((hi - 9.0).abs() < 1e-6);
     }
@@ -1018,7 +1136,10 @@ mod tests {
         let json = serde_json::to_string(&m).unwrap();
         assert!(json.contains("triggerMode"));
         let back: ParameterAudioMod = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.trigger_mode, Some(crate::audio_trigger::TriggerFireMode::Both));
+        assert_eq!(
+            back.trigger_mode,
+            Some(crate::audio_trigger::TriggerFireMode::Both)
+        );
     }
 
     // ── PARAM_STEP_ACTIONS D2/D7 pure helpers ───────────────────────────────
@@ -1042,7 +1163,10 @@ mod tests {
         // reachable — see `step_wrap_mode_cycles_past_max_to_min_for_
         // discrete_param` in `modulation.rs`.)
         let (v, _) = WrapMode::Wrap.advance(0.0, -1.0, 1.0, 0.0, 10.0);
-        assert_eq!(v, 9.0, "one step before the bottom wraps to just under the top");
+        assert_eq!(
+            v, 9.0,
+            "one step before the bottom wraps to just under the top"
+        );
     }
 
     #[test]
@@ -1075,7 +1199,10 @@ mod tests {
             for ordinal in 0..500u32 {
                 let v = random_step_value(ordinal, 0.0, 3.0, Some(4), current_index);
                 let idx = v.round() as u32;
-                assert_ne!(idx, current_index, "ordinal {ordinal} picked the excluded current index");
+                assert_ne!(
+                    idx, current_index,
+                    "ordinal {ordinal} picked the excluded current index"
+                );
                 assert!(idx < 4, "index {idx} out of range");
             }
         }

@@ -11,14 +11,14 @@
 //! through [`EditorCommitCtx`]; the runner has neither and passes
 //! [`EditorCommitCtx::none`], so those commits are no-ops there.
 
-use manifold_core::project::Project;
 use manifold_core::Bpm;
+use manifold_core::project::Project;
 use manifold_ui::input::Modifiers;
 use manifold_ui::node::Vec2;
 use manifold_ui::panels::browser_popup::BrowserPopupAction;
 use manifold_ui::panels::{
-    AudioSetupAction, ClipAction, LayerAction, MarkerAction, ModulationAction, PanelAction, ParamsAction,
-    ProjectAction, RootAction, TransportAction,
+    AudioSetupAction, ClipAction, LayerAction, MarkerAction, ModulationAction, PanelAction,
+    ParamsAction, ProjectAction, RootAction, TransportAction,
 };
 use manifold_ui::tree::UITree;
 
@@ -139,7 +139,10 @@ pub(crate) fn begin_for_action(
 ) -> bool {
     match action {
         PanelAction::Root(RootAction::SceneRenameClicked(layer_id, item, name)) => {
-            if let Some(r) = ui_root.scene_setup_panel.item_name_rect(&ui_root.tree, item) {
+            if let Some(r) = ui_root
+                .scene_setup_panel
+                .item_name_rect(&ui_root.tree, item)
+            {
                 text_input.scene_object_layer_id = Some(layer_id.clone());
                 text_input.scene_item_ref = Some(item.clone());
                 text_input.begin(TextInputField::SceneItemRename, name, anchor_of(r), 11.0);
@@ -160,36 +163,81 @@ pub(crate) fn begin_for_action(
                 Some(id) => ui_root.tree.get_bounds(id),
                 None => manifold_ui::node::Rect::new(100.0, 100.0, 120.0, 20.0),
             };
-            text_input.begin(TextInputField::Bpm, &format!("{:.1}", project.settings.bpm.0), anchor_of(r), 14.0);
+            text_input.begin(
+                TextInputField::Bpm,
+                &format!("{:.1}", project.settings.bpm.0),
+                anchor_of(r),
+                14.0,
+            );
         }
         PanelAction::Transport(TransportAction::FpsFieldClicked) => {
             let r = match ui_root.footer.fps_field_id() {
                 Some(id) => ui_root.tree.get_bounds(id),
                 None => manifold_ui::node::Rect::new(100.0, 100.0, 120.0, 20.0),
             };
-            text_input.begin(TextInputField::Fps, &format!("{:.0}", project.settings.frame_rate), anchor_of(r), 11.0);
+            text_input.begin(
+                TextInputField::Fps,
+                &format!("{:.0}", project.settings.frame_rate),
+                anchor_of(r),
+                11.0,
+            );
         }
-        PanelAction::Root(RootAction::BeginColourTextInput { target, param_ids, anchor, value }) => {
+        PanelAction::Root(RootAction::BeginColourTextInput {
+            target,
+            param_ids,
+            anchor,
+            value,
+        }) => {
             let initial = crate::text_input::format_material_colour_hex(*value);
-            text_input.begin(TextInputField::MaterialColour, &initial, anchor_of(*anchor), 11.0);
-            text_input.material_colour =
-                Some(MaterialColourCtx { target: target.clone(), param_ids: param_ids.clone() });
+            text_input.begin(
+                TextInputField::MaterialColour,
+                &initial,
+                anchor_of(*anchor),
+                11.0,
+            );
+            text_input.material_colour = Some(MaterialColourCtx {
+                target: target.clone(),
+                param_ids: param_ids.clone(),
+            });
         }
-        PanelAction::Root(RootAction::AudioSendGainBeginTextInput(send_id, value, cell_node_id)) => {
+        PanelAction::Root(RootAction::AudioSendGainBeginTextInput(
+            send_id,
+            value,
+            cell_node_id,
+        )) => {
             let r = ui_root.tree.get_bounds(*cell_node_id);
-            text_input.begin(TextInputField::AudioSendGainParam, &format!("{value:.1}"), anchor_of(r), 11.0);
-            text_input.audio_send_gain_param = Some(AudioSendGainParamCtx { send_id: send_id.clone() });
+            text_input.begin(
+                TextInputField::AudioSendGainParam,
+                &format!("{value:.1}"),
+                anchor_of(r),
+                11.0,
+            );
+            text_input.audio_send_gain_param = Some(AudioSendGainParamCtx {
+                send_id: send_id.clone(),
+            });
         }
-        PanelAction::Root(RootAction::BeginDriverPeriodTextInput { target, param_id, anchor, value }) => {
+        PanelAction::Root(RootAction::BeginDriverPeriodTextInput {
+            target,
+            param_id,
+            anchor,
+            value,
+        }) => {
             // Whole beats show without a decimal.
             let initial = if value.fract().abs() < 1e-3 {
                 format!("{}", value.round() as i64)
             } else {
                 format!("{value:.2}")
             };
-            text_input.begin(TextInputField::DriverFreePeriod, &initial, anchor_of(*anchor), 11.0);
-            text_input.driver_free_period =
-                Some(DriverFreePeriodCtx { target: target.clone(), param_id: param_id.clone() });
+            text_input.begin(
+                TextInputField::DriverFreePeriod,
+                &initial,
+                anchor_of(*anchor),
+                11.0,
+            );
+            text_input.driver_free_period = Some(DriverFreePeriodCtx {
+                target: target.clone(),
+                param_id: param_id.clone(),
+            });
         }
         PanelAction::Layer(LayerAction::LayerDoubleClicked(id)) => {
             // The commit re-resolves the layer by id (BUG-031); the row index
@@ -235,31 +283,54 @@ pub(crate) fn begin_for_action(
                         }
                     })
                     .unwrap_or_else(|| "Auto".to_string());
-                let r = ui_root.inspector.clip_chrome_mut().bpm_button_rect(&ui_root.tree);
+                let r = ui_root
+                    .inspector
+                    .clip_chrome_mut()
+                    .bpm_button_rect(&ui_root.tree);
                 text_input.begin(TextInputField::ClipBpm, &bpm_text, anchor_of(r), 10.0);
             }
         }
         PanelAction::Params(ParamsAction::GenStringParamClicked(sp_idx)) => {
             let entry = ui_root.inspector.gen_params().and_then(|gp| {
-                Some((gp.string_param(*sp_idx)?.value.clone(), gp.string_param_rect(&ui_root.tree, *sp_idx)?))
+                Some((
+                    gp.string_param(*sp_idx)?.value.clone(),
+                    gp.string_param_rect(&ui_root.tree, *sp_idx)?,
+                ))
             });
             if let Some((value, r)) = entry {
-                text_input.begin(TextInputField::GenStringParam(*sp_idx), &value, anchor_of(r), 11.0);
+                text_input.begin(
+                    TextInputField::GenStringParam(*sp_idx),
+                    &value,
+                    anchor_of(r),
+                    11.0,
+                );
             }
         }
         PanelAction::Root(RootAction::AudioSendLabelClicked(send_id)) => {
             if let Some(send) = project.audio_setup.find_send(send_id)
-                && let Some(r) = ui_root.audio_setup_panel.send_label_rect(&ui_root.tree, send_id)
+                && let Some(r) = ui_root
+                    .audio_setup_panel
+                    .send_label_rect(&ui_root.tree, send_id)
             {
                 text_input.audio_send_id = Some(send_id.clone());
-                text_input.begin(TextInputField::AudioSendLabel, &send.label, anchor_of(r), 11.0);
+                text_input.begin(
+                    TextInputField::AudioSendLabel,
+                    &send.label,
+                    anchor_of(r),
+                    11.0,
+                );
             }
         }
         PanelAction::Params(ParamsAction::MacroLabelRename(idx)) => {
             if let Some(slot) = project.settings.macro_bank.slots.get(*idx)
                 && let Some(r) = ui_root.inspector.macro_label_rect(&ui_root.tree, *idx)
             {
-                text_input.begin(TextInputField::MacroLabel(*idx), &slot.label, anchor_of(r), 11.0);
+                text_input.begin(
+                    TextInputField::MacroLabel(*idx),
+                    &slot.label,
+                    anchor_of(r),
+                    11.0,
+                );
             }
         }
         _ => return false,
@@ -281,7 +352,13 @@ pub(crate) fn begin_inspector_entry(
 ) -> bool {
     match action {
         PanelAction::Root(RootAction::BeginParamTextInput {
-            target, param_id, anchor, value, whole_numbers, degrees, ..
+            target,
+            param_id,
+            anchor,
+            value,
+            whole_numbers,
+            degrees,
+            ..
         }) => {
             let display = if *degrees { value.to_degrees() } else { *value };
             let initial = if *whole_numbers {
@@ -290,7 +367,11 @@ pub(crate) fn begin_inspector_entry(
                 format!("{display:.3}")
             };
             text_input.begin(
-                if in_editor { TextInputField::EditorInspectorParam } else { TextInputField::InspectorParam },
+                if in_editor {
+                    TextInputField::EditorInspectorParam
+                } else {
+                    TextInputField::InspectorParam
+                },
                 &initial,
                 anchor_of(*anchor),
                 11.0,
@@ -302,16 +383,37 @@ pub(crate) fn begin_inspector_entry(
                 degrees: *degrees,
             });
         }
-        PanelAction::Root(RootAction::BeginSliderRangeInput { target, param_id, anchor }) => {
-            let param = crate::ui_bridge::resolve_graph_target(target, None, tab, active_layer, selection, project)
-                .and_then(|owner| project.graph_target_owner(&owner)?.params.get(param_id.as_ref()).cloned());
+        PanelAction::Root(RootAction::BeginSliderRangeInput {
+            target,
+            param_id,
+            anchor,
+        }) => {
+            let param = crate::ui_bridge::resolve_graph_target(
+                target,
+                None,
+                tab,
+                active_layer,
+                selection,
+                project,
+            )
+            .and_then(|owner| {
+                project
+                    .graph_target_owner(&owner)?
+                    .params
+                    .get(param_id.as_ref())
+                    .cloned()
+            });
             // A param that no longer resolves opens nothing.
             let Some(param) = param else { return true };
             let degrees = param.spec.is_angle;
             let (lo, hi) = param.slider_span();
             let shown = |v: f32| if degrees { v.to_degrees() } else { v };
             text_input.begin(
-                if in_editor { TextInputField::EditorSliderRange } else { TextInputField::SliderRange },
+                if in_editor {
+                    TextInputField::EditorSliderRange
+                } else {
+                    TextInputField::SliderRange
+                },
                 &format!("{} to {}", shown(lo), shown(hi)),
                 anchor_of(*anchor),
                 11.0,
@@ -337,13 +439,20 @@ fn with_measure<R>(
 ) -> Option<R> {
     let tree = tree?;
     let fs = text_input.font_size as u16;
-    Some(f(text_input, &mut |s| tree.text_width(s, fs, manifold_ui::FontWeight::Medium)))
+    Some(f(text_input, &mut |s| {
+        tree.text_width(s, fs, manifold_ui::FontWeight::Medium)
+    }))
 }
 
 /// Arrow keys in a session, both windows. Left/Right step a char (Option: a
 /// word); Cmd+Left/Right go to the visual line's start/end; Up/Down move a
 /// visual line; Cmd+Up/Down go to the text's start/end. Shift extends.
-pub(crate) fn arrow(text_input: &mut TextInputState, tree: Option<&UITree>, arrow: Arrow, mods: Modifiers) {
+pub(crate) fn arrow(
+    text_input: &mut TextInputState,
+    tree: Option<&UITree>,
+    arrow: Arrow,
+    mods: Modifiers,
+) {
     let (select, word, cmd) = (mods.shift, mods.alt, mods.command);
     match (arrow, cmd) {
         (Arrow::Left, false) => text_input.move_left(select, word),
@@ -390,7 +499,10 @@ pub(crate) fn main_window_key(
             } else if is_search {
                 // Type-and-enter picks straight from the picker; a pick that
                 // closes the popup ends the session through the pump.
-                if let Some(action) = ui_root.browser_popup.handle_key_nav(manifold_ui::input::Key::Enter) {
+                if let Some(action) = ui_root
+                    .browser_popup
+                    .handle_key_nav(manifold_ui::input::Key::Enter)
+                {
                     stash_browser_pick(ui_root, action);
                 }
             } else {
@@ -401,10 +513,14 @@ pub(crate) fn main_window_key(
         TextKey::Backspace => text_input.backspace(),
         TextKey::Delete => text_input.delete(),
         TextKey::Arrow(Arrow::Up) if is_search => {
-            ui_root.browser_popup.handle_key_nav(manifold_ui::input::Key::Up);
+            ui_root
+                .browser_popup
+                .handle_key_nav(manifold_ui::input::Key::Up);
         }
         TextKey::Arrow(Arrow::Down) if is_search => {
-            ui_root.browser_popup.handle_key_nav(manifold_ui::input::Key::Down);
+            ui_root
+                .browser_popup
+                .handle_key_nav(manifold_ui::input::Key::Down);
         }
         TextKey::Arrow(dir) => arrow(text_input, measurable.then_some(&ui_root.tree), dir, mods),
         TextKey::Space => text_input.insert_char(' '),
@@ -458,7 +574,13 @@ pub(crate) fn stash_browser_pick(ui_root: &mut UIRoot, action: BrowserPopupActio
         }
         action => action,
     };
-    if let BrowserPopupAction::Selected { type_id, mode, tab, layer_id } = action {
+    if let BrowserPopupAction::Selected {
+        type_id,
+        mode,
+        tab,
+        layer_id,
+    } = action
+    {
         let panel_action = match mode {
             // The layer captured at open rides the pick (PRESET_BROWSER_AUDITION D2).
             BrowserPopupMode::Effect => PanelAction::Params(ParamsAction::AddEffect {
@@ -490,8 +612,11 @@ pub(crate) fn pointer_down(
     if !text_input.active {
         return PointerDown::Idle;
     }
-    let inside = with_measure(text_input, tree, |ti, m| ti.overlay_geometry(&mut Vec::new(), m).contains(pos.x, pos.y))
-        .unwrap_or(false);
+    let inside = with_measure(text_input, tree, |ti, m| {
+        ti.overlay_geometry(&mut Vec::new(), m)
+            .contains(pos.x, pos.y)
+    })
+    .unwrap_or(false);
     if !inside {
         let (field, text) = text_input.commit();
         return PointerDown::Committed(field, text);
@@ -499,7 +624,8 @@ pub(crate) fn pointer_down(
     let byte = byte_at(text_input, tree, pos);
     let is_double_click = text_input.last_press.is_some_and(|(t, px, py)| {
         (now - t) < manifold_ui::color::DOUBLE_CLICK_TIME_SEC
-            && (pos.x - px).powi(2) + (pos.y - py).powi(2) < manifold_ui::color::DOUBLE_CLICK_RADIUS_PX.powi(2)
+            && (pos.x - px).powi(2) + (pos.y - py).powi(2)
+                < manifold_ui::color::DOUBLE_CLICK_RADIUS_PX.powi(2)
     });
     text_input.last_press = Some((now, pos.x, pos.y));
     if is_double_click {
@@ -513,7 +639,11 @@ pub(crate) fn pointer_down(
 
 /// Pointer motion while a session's drag is armed extends the selection.
 /// False (not consumed) when no drag is armed.
-pub(crate) fn pointer_move(text_input: &mut TextInputState, tree: Option<&UITree>, pos: Vec2) -> bool {
+pub(crate) fn pointer_move(
+    text_input: &mut TextInputState,
+    tree: Option<&UITree>,
+    pos: Vec2,
+) -> bool {
     if !text_input.active || !text_input.dragging {
         return false;
     }
@@ -545,11 +675,21 @@ pub(crate) struct EditorCommitCtx<'a> {
 impl EditorCommitCtx<'_> {
     #[cfg(any(test, feature = "ui-snapshot"))]
     pub(crate) const fn none() -> Self {
-        EditorCommitCtx { target: None, catalog_default: None, scope: &[], gpu: None }
+        EditorCommitCtx {
+            target: None,
+            catalog_default: None,
+            scope: &[],
+            gpu: None,
+        }
     }
 
     /// The watched target and its catalog default, both or neither.
-    fn graph(&self) -> Option<(manifold_core::GraphTarget, manifold_core::effect_graph_def::EffectGraphDef)> {
+    fn graph(
+        &self,
+    ) -> Option<(
+        manifold_core::GraphTarget,
+        manifold_core::effect_graph_def::EffectGraphDef,
+    )> {
         Some((self.target?.clone(), self.catalog_default?.clone()))
     }
 }
@@ -569,18 +709,26 @@ pub(crate) fn commit<'a>(
             if let Ok(new_bpm) = text.parse::<f32>() {
                 let new_bpm = Bpm(new_bpm.clamp(20.0, 300.0));
                 if (cx.project.settings.bpm.0 - new_bpm.0).abs() >= 0.01 {
-                    let cmd = manifold_editing::commands::settings::ChangeBpmCommand::master(&cx.project, new_bpm);
-                    ContentCommand::send(cx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
+                    let cmd = manifold_editing::commands::settings::ChangeBpmCommand::master(
+                        &cx.project,
+                        new_bpm,
+                    );
+                    ContentCommand::send(
+                        cx.content_tx,
+                        ContentCommand::ExecuteOnContent(Box::new(cmd)),
+                    );
                 }
             }
         }
         TextInputField::Fps => {
             if let Ok(fps) = text.parse::<f32>() {
                 let fps = fps.clamp(1.0, 240.0);
-                cx.execute(Box::new(manifold_editing::commands::settings::ChangeFrameRateCommand::new(
-                    cx.project.settings.frame_rate,
-                    fps,
-                )));
+                cx.execute(Box::new(
+                    manifold_editing::commands::settings::ChangeFrameRateCommand::new(
+                        cx.project.settings.frame_rate,
+                        fps,
+                    ),
+                ));
                 // The content thread renders at project FPS; the UI runs at display rate.
                 ContentCommand::send(cx.content_tx, ContentCommand::SetFrameRate(fps as f64));
             }
@@ -593,7 +741,11 @@ pub(crate) fn commit<'a>(
                     let stored = |v| crate::text_input::degrees_commit_value(v, ctx.degrees);
                     (stored(lo), stored(hi))
                 });
-                let action = PanelAction::Params(ParamsAction::SetSliderRange(ctx.target, ctx.param_id, range));
+                let action = PanelAction::Params(ParamsAction::SetSliderRange(
+                    ctx.target,
+                    ctx.param_id,
+                    range,
+                ));
                 let _ = crate::ui_bridge::dispatch(&action, cx);
             }
         }
@@ -610,12 +762,18 @@ pub(crate) fn commit<'a>(
                 // The slider drag's own scrub wire, so the entry is one undo step.
                 use manifold_ui::panels::{ScrubPhase, ScrubValue, ValueRef};
                 for act in [
-                    PanelAction::Scrub(ValueRef::Param(ctx.target.clone(), ctx.param_id.clone()), ScrubPhase::Begin),
+                    PanelAction::Scrub(
+                        ValueRef::Param(ctx.target.clone(), ctx.param_id.clone()),
+                        ScrubPhase::Begin,
+                    ),
                     PanelAction::Scrub(
                         ValueRef::Param(ctx.target.clone(), ctx.param_id.clone()),
                         ScrubPhase::Move(ScrubValue::Scalar(v)),
                     ),
-                    PanelAction::Scrub(ValueRef::Param(ctx.target, ctx.param_id), ScrubPhase::Commit),
+                    PanelAction::Scrub(
+                        ValueRef::Param(ctx.target, ctx.param_id),
+                        ScrubPhase::Commit,
+                    ),
                 ] {
                     let _ = crate::ui_bridge::dispatch(&act, cx);
                 }
@@ -635,7 +793,10 @@ pub(crate) fn commit<'a>(
             if let Some(ctx) = text_input.audio_send_gain_param.take()
                 && let Some(parsed) = crate::text_input::parse_lenient_numeric(text)
             {
-                let act = PanelAction::AudioSetup(AudioSetupAction::AudioSendGainSetTyped(ctx.send_id, parsed));
+                let act = PanelAction::AudioSetup(AudioSetupAction::AudioSendGainSetTyped(
+                    ctx.send_id,
+                    parsed,
+                ));
                 let _ = crate::ui_bridge::dispatch(&act, cx);
             }
         }
@@ -663,11 +824,13 @@ pub(crate) fn commit<'a>(
                 && layer.name != text
             {
                 let old_name = layer.name.clone();
-                cx.execute(Box::new(manifold_editing::commands::layer::RenameLayerCommand::new(
-                    layer_id,
-                    old_name,
-                    text.to_string(),
-                )));
+                cx.execute(Box::new(
+                    manifold_editing::commands::layer::RenameLayerCommand::new(
+                        layer_id,
+                        old_name,
+                        text.to_string(),
+                    ),
+                ));
             }
         }
         TextInputField::ClipBpm => {
@@ -687,11 +850,17 @@ pub(crate) fn commit<'a>(
                 let old_bpm = clip.map(|c| c.recorded_bpm).unwrap_or(0.0);
                 let enabling = new_bpm > 0.0
                     && clip.is_some_and(|clip| {
-                        clip.is_audio() && (!clip.is_audio_warp_enabled() || clip.audio_bpm_automatic)
+                        clip.is_audio()
+                            && (!clip.is_audio_warp_enabled() || clip.audio_bpm_automatic)
                     });
                 if (old_bpm - new_bpm).abs() >= 0.01 || enabling {
-                    let cmd = manifold_editing::commands::clip::ChangeClipRecordedBpmCommand::new(clip_id, old_bpm, new_bpm);
-                    ContentCommand::send(cx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
+                    let cmd = manifold_editing::commands::clip::ChangeClipRecordedBpmCommand::new(
+                        clip_id, old_bpm, new_bpm,
+                    );
+                    ContentCommand::send(
+                        cx.content_tx,
+                        ContentCommand::ExecuteOnContent(Box::new(cmd)),
+                    );
                 }
             }
         }
@@ -701,9 +870,11 @@ pub(crate) fn commit<'a>(
                 && slot.label != new_label
             {
                 let old_label = slot.label.clone();
-                cx.execute(Box::new(manifold_editing::commands::settings::RenameMacroLabelCommand::new(
-                    idx, old_label, new_label,
-                )));
+                cx.execute(Box::new(
+                    manifold_editing::commands::settings::RenameMacroLabelCommand::new(
+                        idx, old_label, new_label,
+                    ),
+                ));
             }
         }
         TextInputField::GenStringParam(sp_idx) => {
@@ -714,7 +885,8 @@ pub(crate) fn commit<'a>(
                 .as_ref()
                 .and_then(|id| cx.project.timeline.find_layer_by_id(id))
                 .map(|(_, l)| l)
-                && let Some(def) = manifold_core::preset_definition_registry::try_get(layer.generator_type())
+                && let Some(def) =
+                    manifold_core::preset_definition_registry::try_get(layer.generator_type())
                 && let Some(sp_def) = def.string_param_defs.get(sp_idx)
             {
                 let key = sp_def.key.to_string();
@@ -725,12 +897,19 @@ pub(crate) fn commit<'a>(
                     .and_then(|sel_id| layer.clips.iter().find(|c| c.id == *sel_id))
                     .or_else(|| layer.clips.first());
                 let (clip_id, old_value) = clip
-                    .map(|c| (c.id.clone(), c.string_params.as_ref().and_then(|m| m.get(&key)).cloned()))
+                    .map(|c| {
+                        (
+                            c.id.clone(),
+                            c.string_params.as_ref().and_then(|m| m.get(&key)).cloned(),
+                        )
+                    })
                     .unwrap_or_default();
                 if old_value != new_value {
-                    cx.execute(Box::new(manifold_editing::commands::clip::SetClipStringParamCommand::new(
-                        clip_id, key, old_value, new_value,
-                    )));
+                    cx.execute(Box::new(
+                        manifold_editing::commands::clip::SetClipStringParamCommand::new(
+                            clip_id, key, old_value, new_value,
+                        ),
+                    ));
                 }
             }
         }
@@ -740,25 +919,38 @@ pub(crate) fn commit<'a>(
         }
         TextInputField::MarkerName => {
             if let Some(marker_id) = text_input.marker_id.take() {
-                let old_name = cx.project.timeline.find_marker(&marker_id).map(|m| m.name.clone()).unwrap_or_default();
+                let old_name = cx
+                    .project
+                    .timeline
+                    .find_marker(&marker_id)
+                    .map(|m| m.name.clone())
+                    .unwrap_or_default();
                 if old_name != text {
-                    cx.execute(Box::new(manifold_editing::commands::marker::RenameMarkerCommand::new(
-                        marker_id,
-                        old_name,
-                        text.to_string(),
-                    )));
+                    cx.execute(Box::new(
+                        manifold_editing::commands::marker::RenameMarkerCommand::new(
+                            marker_id,
+                            old_name,
+                            text.to_string(),
+                        ),
+                    ));
                 }
             }
         }
         TextInputField::AudioSendLabel => {
             if let Some(send_id) = text_input.audio_send_id.take() {
                 let new_label = text.trim().to_string();
-                let old_label =
-                    cx.project.audio_setup.find_send(&send_id).map(|s| s.label.clone()).unwrap_or_default();
+                let old_label = cx
+                    .project
+                    .audio_setup
+                    .find_send(&send_id)
+                    .map(|s| s.label.clone())
+                    .unwrap_or_default();
                 if !new_label.is_empty() && old_label != new_label {
-                    cx.execute(Box::new(manifold_editing::commands::audio_setup::RenameAudioSendCommand::new(
-                        send_id, old_label, new_label,
-                    )));
+                    cx.execute(Box::new(
+                        manifold_editing::commands::audio_setup::RenameAudioSendCommand::new(
+                            send_id, old_label, new_label,
+                        ),
+                    ));
                 }
             }
         }
@@ -767,9 +959,15 @@ pub(crate) fn commit<'a>(
                 && let Some(item) = text_input.scene_item_ref.take()
             {
                 match crate::scene_edit::rename(&cx.project, &layer_id, &item, text) {
-                    Ok(Some(edit)) => ContentCommand::send(cx.content_tx, ContentCommand::ExecuteOnContent(edit.command)),
+                    Ok(Some(edit)) => ContentCommand::send(
+                        cx.content_tx,
+                        ContentCommand::ExecuteOnContent(edit.command),
+                    ),
                     Ok(None) => {}
-                    Err(reason) => ContentCommand::send(cx.content_tx, ContentCommand::GraphEditRejected(reason)),
+                    Err(reason) => ContentCommand::send(
+                        cx.content_tx,
+                        ContentCommand::GraphEditRejected(reason),
+                    ),
                 }
             }
         }
@@ -785,7 +983,9 @@ pub(crate) fn commit<'a>(
                     use manifold_ui::panels::picker_core::Source;
                     match ctx.source {
                         Source::MyLibrary => {
-                            if let Err(e) = crate::user_library::UserLibrary::new().rename(ctx.kind, &ctx.id, typed) {
+                            if let Err(e) = crate::user_library::UserLibrary::new()
+                                .rename(ctx.kind, &ctx.id, typed)
+                            {
                                 log::error!("[preset] rename failed: {e}");
                             }
                         }
@@ -795,7 +995,9 @@ pub(crate) fn commit<'a>(
                                 typed.to_string(),
                             )));
                         }
-                        Source::Factory => log::error!("[preset] rename requested for a Factory id — unreachable"),
+                        Source::Factory => {
+                            log::error!("[preset] rename requested for a Factory id — unreachable")
+                        }
                     }
                 }
             }
@@ -826,7 +1028,9 @@ pub(crate) fn commit<'a>(
                     target,
                     node_id,
                     param_name,
-                    manifold_core::effect_graph_def::SerializedParamValue::String { value: text.to_string() },
+                    manifold_core::effect_graph_def::SerializedParamValue::String {
+                        value: text.to_string(),
+                    },
                     default,
                 )
                 .with_scope(ed.scope.to_vec());
@@ -864,14 +1068,23 @@ pub(crate) fn commit<'a>(
                         // param's own path, the same dispatch
                         // `GraphEditCommand::SetOuterParam` uses.
                         if let Some(target) = ed.target {
-                            use manifold_ui::panels::{GraphParamTarget, ScrubPhase, ScrubValue, ValueRef};
+                            use manifold_ui::panels::{
+                                GraphParamTarget, ScrubPhase, ScrubValue, ValueRef,
+                            };
                             let gpt = match target {
-                                manifold_core::GraphTarget::Effect(eid) => GraphParamTarget::Effect(eid.clone()),
+                                manifold_core::GraphTarget::Effect(eid) => {
+                                    GraphParamTarget::Effect(eid.clone())
+                                }
                                 manifold_core::GraphTarget::Generator(_)
-                                | manifold_core::GraphTarget::SceneModifier { .. } => GraphParamTarget::Generator,
+                                | manifold_core::GraphTarget::SceneModifier { .. } => {
+                                    GraphParamTarget::Generator
+                                }
                             };
                             let action = PanelAction::Scrub(
-                                ValueRef::Param(gpt, manifold_core::effects::ParamId::from(outer_param_id)),
+                                ValueRef::Param(
+                                    gpt,
+                                    manifold_core::effects::ParamId::from(outer_param_id),
+                                ),
                                 ScrubPhase::Move(ScrubValue::Scalar(v)),
                             );
                             let prev = cx.editor_target.replace(target);
@@ -883,7 +1096,9 @@ pub(crate) fn commit<'a>(
                             target,
                             node_id,
                             ctx.param_name,
-                            manifold_core::effect_graph_def::SerializedParamValue::Float { value: v },
+                            manifold_core::effect_graph_def::SerializedParamValue::Float {
+                                value: v,
+                            },
                             default,
                         )
                         .with_scope(ed.scope.to_vec());
@@ -926,14 +1141,20 @@ pub(crate) fn commit<'a>(
             if let Some(ctx) = text_input.save_preset.take() {
                 let typed = text.trim();
                 if typed.is_empty() {
-                    log::warn!("[preset] Save to {:?} cancelled: empty name", ctx.destination);
+                    log::warn!(
+                        "[preset] Save to {:?} cancelled: empty name",
+                        ctx.destination
+                    );
                 } else {
                     match ctx.destination {
                         crate::text_input::SavePresetDestination::Library => {
                             let lib = crate::user_library::UserLibrary::new();
                             match lib.save(ctx.kind, typed, &ctx.def) {
                                 Ok(id) => {
-                                    log::info!("[preset] saved '{}' to the user library", id.as_str());
+                                    log::info!(
+                                        "[preset] saved '{}' to the user library",
+                                        id.as_str()
+                                    );
                                     // The only thumbnail render: save-time, once. The
                                     // browser reads this PNG back off disk.
                                     if let Some(gpu) = ed.gpu {
@@ -958,7 +1179,11 @@ pub(crate) fn commit<'a>(
                             if let Some(meta) = def.preset_metadata.as_mut() {
                                 meta.display_name = typed.to_string();
                             }
-                            cx.execute(Box::new(manifold_editing::commands::preset::SaveToProjectCommand::new(ctx.kind, def)));
+                            cx.execute(Box::new(
+                                manifold_editing::commands::preset::SaveToProjectCommand::new(
+                                    ctx.kind, def,
+                                ),
+                            ));
                         }
                     }
                 }
@@ -981,13 +1206,33 @@ mod tests {
         let mut selection = SelectionState::default();
         let mut text_input = TextInputState::new();
         let action = PanelAction::Transport(TransportAction::BpmFieldClicked);
-        assert!(begin_for_action(&mut text_input, &mut ui, &project, &selection, &action));
+        assert!(begin_for_action(
+            &mut text_input,
+            &mut ui,
+            &project,
+            &selection,
+            &action
+        ));
         assert_eq!(text_input.field, TextInputField::Bpm);
         for c in ["1", "3", "0"] {
-            assert!(matches!(main_window_key(&mut text_input, &mut ui, TextKey::Chars(c), Modifiers::NONE, false), KeyOutcome::Consumed));
+            assert!(matches!(
+                main_window_key(
+                    &mut text_input,
+                    &mut ui,
+                    TextKey::Chars(c),
+                    Modifiers::NONE,
+                    false
+                ),
+                KeyOutcome::Consumed
+            ));
         }
-        let KeyOutcome::Committed(field, text) = main_window_key(&mut text_input, &mut ui, TextKey::Enter, Modifiers::NONE, false)
-        else {
+        let KeyOutcome::Committed(field, text) = main_window_key(
+            &mut text_input,
+            &mut ui,
+            TextKey::Enter,
+            Modifiers::NONE,
+            false,
+        ) else {
             panic!("Enter commits a plain field");
         };
         assert_eq!((field, text.as_str()), (TextInputField::Bpm, "130"));
@@ -1011,8 +1256,17 @@ mod tests {
             scrub: &mut scrub,
             dialogs: Default::default(),
         };
-        commit(&mut text_input, field, &text, &mut cx, &EditorCommitCtx::none());
-        assert!(matches!(rx.try_recv(), Ok(ContentCommand::ExecuteOnContent(_))));
+        commit(
+            &mut text_input,
+            field,
+            &text,
+            &mut cx,
+            &EditorCommitCtx::none(),
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ContentCommand::ExecuteOnContent(_))
+        ));
     }
 
     /// Escape cancels without a commit; with no session keys pass through.
@@ -1020,9 +1274,27 @@ mod tests {
     fn escape_cancels_and_idle_keys_pass_through() {
         let mut ui = UIRoot::new();
         let mut text_input = TextInputState::new();
-        assert!(matches!(main_window_key(&mut text_input, &mut ui, TextKey::Escape, Modifiers::NONE, false), KeyOutcome::NotTyping));
+        assert!(matches!(
+            main_window_key(
+                &mut text_input,
+                &mut ui,
+                TextKey::Escape,
+                Modifiers::NONE,
+                false
+            ),
+            KeyOutcome::NotTyping
+        ));
         text_input.begin(TextInputField::MarkerName, "Drop", AnchorRect::zero(), 9.0);
-        assert!(matches!(main_window_key(&mut text_input, &mut ui, TextKey::Escape, Modifiers::NONE, false), KeyOutcome::Consumed));
+        assert!(matches!(
+            main_window_key(
+                &mut text_input,
+                &mut ui,
+                TextKey::Escape,
+                Modifiers::NONE,
+                false
+            ),
+            KeyOutcome::Consumed
+        ));
         assert!(!text_input.active);
     }
 
@@ -1031,9 +1303,14 @@ mod tests {
     #[test]
     fn press_outside_commits() {
         let mut text_input = TextInputState::new();
-        assert!(matches!(pointer_down(&mut text_input, None, Vec2::ZERO, 0.0, false), PointerDown::Idle));
+        assert!(matches!(
+            pointer_down(&mut text_input, None, Vec2::ZERO, 0.0, false),
+            PointerDown::Idle
+        ));
         text_input.begin(TextInputField::LayerName, "Bass", AnchorRect::zero(), 11.0);
-        let PointerDown::Committed(field, text) = pointer_down(&mut text_input, None, Vec2::ZERO, 0.0, false) else {
+        let PointerDown::Committed(field, text) =
+            pointer_down(&mut text_input, None, Vec2::ZERO, 0.0, false)
+        else {
             panic!("a press outside commits");
         };
         assert_eq!((field, text.as_str()), (TextInputField::LayerName, "Bass"));
@@ -1080,11 +1357,18 @@ mod tests {
         target: &'a manifold_core::GraphTarget,
         default: &'a manifold_core::effect_graph_def::EffectGraphDef,
     ) -> EditorCommitCtx<'a> {
-        EditorCommitCtx { target: Some(target), catalog_default: Some(default), scope: &[], gpu: None }
+        EditorCommitCtx {
+            target: Some(target),
+            catalog_default: Some(default),
+            scope: &[],
+            gpu: None,
+        }
     }
 
     fn executes(cmds: &[ContentCommand]) -> usize {
-        cmds.iter().filter(|c| matches!(c, ContentCommand::Execute(_))).count()
+        cmds.iter()
+            .filter(|c| matches!(c, ContentCommand::Execute(_)))
+            .count()
     }
 
     /// Each graph-editor field commits exactly one `Execute` to the content
@@ -1098,17 +1382,41 @@ mod tests {
         let mut project = Project::default();
 
         let mut ti = TextInputState::new();
-        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::GraphGroupRename(3), " Core ", &ed);
+        let (cmds, ..) = commit_collect(
+            &mut ti,
+            &mut project,
+            TextInputField::GraphGroupRename(3),
+            " Core ",
+            &ed,
+        );
         assert_eq!(executes(&cmds), 1, "group rename");
-        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::GraphGroupRename(3), "   ", &ed);
+        let (cmds, ..) = commit_collect(
+            &mut ti,
+            &mut project,
+            TextInputField::GraphGroupRename(3),
+            "   ",
+            &ed,
+        );
         assert!(cmds.is_empty(), "an empty rename sends nothing");
 
         ti.graph_param_name = Some("label".into());
-        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::GraphStringParam(3), "hi", &ed);
+        let (cmds, ..) = commit_collect(
+            &mut ti,
+            &mut project,
+            TextInputField::GraphStringParam(3),
+            "hi",
+            &ed,
+        );
         assert_eq!(executes(&cmds), 1, "string param");
         assert!(ti.graph_param_name.is_none(), "the param name is taken");
 
-        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::GraphWgsl(3), "fn main() {}", &ed);
+        let (cmds, ..) = commit_collect(
+            &mut ti,
+            &mut project,
+            TextInputField::GraphWgsl(3),
+            "fn main() {}",
+            &ed,
+        );
         assert_eq!(executes(&cmds), 1, "wgsl source");
 
         ti.graph_numeric_param = Some(GraphNumericParamCtx {
@@ -1118,7 +1426,13 @@ mod tests {
             whole_numbers: false,
             outer_param_id: None,
         });
-        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::GraphNumericParam(3), "0.5x", &ed);
+        let (cmds, ..) = commit_collect(
+            &mut ti,
+            &mut project,
+            TextInputField::GraphNumericParam(3),
+            "0.5x",
+            &ed,
+        );
         assert_eq!(executes(&cmds), 1, "numeric param keeps its numeric head");
 
         ti.graph_table_edit = Some(TableCellEdit {
@@ -1128,7 +1442,13 @@ mod tests {
             col: 1,
             rows: vec![vec![0.0, 1.0]],
         });
-        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::GraphTableCell, "1.0", &ed);
+        let (cmds, ..) = commit_collect(
+            &mut ti,
+            &mut project,
+            TextInputField::GraphTableCell,
+            "1.0",
+            &ed,
+        );
         assert!(cmds.is_empty(), "an unchanged cell pushes no undo step");
         ti.graph_table_edit = Some(TableCellEdit {
             node_id: 3,
@@ -1137,12 +1457,22 @@ mod tests {
             col: 1,
             rows: vec![vec![0.0, 1.0]],
         });
-        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::GraphTableCell, "2.0", &ed);
+        let (cmds, ..) = commit_collect(
+            &mut ti,
+            &mut project,
+            TextInputField::GraphTableCell,
+            "2.0",
+            &ed,
+        );
         assert_eq!(executes(&cmds), 1, "table cell");
 
         let none = EditorCommitCtx::none();
         ti.graph_param_name = Some("label".into());
-        for field in [TextInputField::GraphGroupRename(3), TextInputField::GraphStringParam(3), TextInputField::GraphWgsl(3)] {
+        for field in [
+            TextInputField::GraphGroupRename(3),
+            TextInputField::GraphStringParam(3),
+            TextInputField::GraphWgsl(3),
+        ] {
             let (cmds, ..) = commit_collect(&mut ti, &mut project, field, "x", &none);
             assert!(cmds.is_empty(), "{field:?} without a watched graph");
         }
@@ -1154,7 +1484,13 @@ mod tests {
     fn graph_node_search_commits_nothing() {
         let mut project = Project::default();
         let mut ti = TextInputState::new();
-        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::GraphNodeSearch, "blur", &EditorCommitCtx::none());
+        let (cmds, ..) = commit_collect(
+            &mut ti,
+            &mut project,
+            TextInputField::GraphNodeSearch,
+            "blur",
+            &EditorCommitCtx::none(),
+        );
         assert!(cmds.is_empty());
     }
 
@@ -1171,12 +1507,31 @@ mod tests {
             destination: SavePresetDestination::Project,
         };
         ti.save_preset = Some(ctx());
-        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::SavePresetName, "  ", &EditorCommitCtx::none());
-        assert!(cmds.is_empty() && project.embedded_presets.is_empty(), "empty name cancels");
+        let (cmds, ..) = commit_collect(
+            &mut ti,
+            &mut project,
+            TextInputField::SavePresetName,
+            "  ",
+            &EditorCommitCtx::none(),
+        );
+        assert!(
+            cmds.is_empty() && project.embedded_presets.is_empty(),
+            "empty name cancels"
+        );
         ti.save_preset = Some(ctx());
-        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::SavePresetName, "My Look", &EditorCommitCtx::none());
+        let (cmds, ..) = commit_collect(
+            &mut ti,
+            &mut project,
+            TextInputField::SavePresetName,
+            "My Look",
+            &EditorCommitCtx::none(),
+        );
         assert_eq!(executes(&cmds), 1);
-        assert_eq!(project.embedded_presets.len(), 1, "the local project is written too");
+        assert_eq!(
+            project.embedded_presets.len(),
+            1,
+            "the local project is written too"
+        );
         assert!(ti.save_preset.is_none());
     }
 
@@ -1186,14 +1541,20 @@ mod tests {
     #[test]
     fn automation_point_fields_commit_through_the_seam() {
         use crate::text_input::AutomationPointEditCtx;
-        use manifold_core::effects::{AutomationLane, AutomationPoint, PresetInstance, SegmentShape};
         use manifold_core::Beats;
+        use manifold_core::effects::{
+            AutomationLane, AutomationPoint, PresetInstance, SegmentShape,
+        };
 
         let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("Mirror"));
         fx.init_defaults();
         let target = manifold_ui::view::UiGraphTarget::Effect(fx.id.clone());
         let (min, max) = fx.params.get("amount").unwrap().slider_span();
-        let at = |beat: f64, value: f32| AutomationPoint { beat: Beats(beat), value, shape: SegmentShape::Linear };
+        let at = |beat: f64, value: f32| AutomationPoint {
+            beat: Beats(beat),
+            value,
+            shape: SegmentShape::Linear,
+        };
         fx.automation_lanes = Some(vec![AutomationLane {
             param_id: "amount".into(),
             enabled: true,
@@ -1215,21 +1576,50 @@ mod tests {
                 beats_per_bar: 4,
             });
         };
-        let lane_points = |p: &Project| p.settings.master_effects[0].automation_lanes.as_ref().unwrap()[0].points.clone();
+        let lane_points = |p: &Project| {
+            p.settings.master_effects[0]
+                .automation_lanes
+                .as_ref()
+                .unwrap()[0]
+                .points
+                .clone()
+        };
         let none = EditorCommitCtx::none();
 
         let mut ti = TextInputState::new();
         open(&mut ti, TextInputField::AutomationPointValue);
-        let (cmds, ..) = commit_collect(&mut ti, &mut project, TextInputField::AutomationPointValue, "nope", &none);
-        assert!(cmds.is_empty() && ti.active && ti.automation_point_edit.is_some(), "bad value reopens the field");
+        let (cmds, ..) = commit_collect(
+            &mut ti,
+            &mut project,
+            TextInputField::AutomationPointValue,
+            "nope",
+            &none,
+        );
+        assert!(
+            cmds.is_empty() && ti.active && ti.automation_point_edit.is_some(),
+            "bad value reopens the field"
+        );
         assert_eq!(lane_points(&project)[1].beat, Beats(4.0));
 
         ti.cancel();
         open(&mut ti, TextInputField::AutomationPointTime);
-        let (cmds, _, selection) = commit_collect(&mut ti, &mut project, TextInputField::AutomationPointTime, "3.1.000", &none);
+        let (cmds, _, selection) = commit_collect(
+            &mut ti,
+            &mut project,
+            TextInputField::AutomationPointTime,
+            "3.1.000",
+            &none,
+        );
         assert_eq!(executes(&cmds), 1, "time commit");
-        assert_eq!(lane_points(&project)[1].beat, Beats(8.0), "bar 3 beat 1 at 4/4");
-        assert_eq!(selection.selected_automation_point.as_ref().map(|p| p.beat), Some(Beats(8.0)));
+        assert_eq!(
+            lane_points(&project)[1].beat,
+            Beats(8.0),
+            "bar 3 beat 1 at 4/4"
+        );
+        assert_eq!(
+            selection.selected_automation_point.as_ref().map(|p| p.beat),
+            Some(Beats(8.0))
+        );
         assert!(ti.automation_point_edit.is_none());
     }
 }

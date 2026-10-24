@@ -4,7 +4,9 @@ use manifold_water_liquid::extent::{particle_map, whitewater_grid};
 
 fn whitewater_emitter_velocity(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let (_, cells) = whitewater_grid(x)?;
-    for p in ["distance", "cells"] { x.covers(p, cells * 4)?; }
+    for p in ["distance", "cells"] {
+        x.covers(p, cells * 4)?;
+    }
     particle_map(x)
 }
 inventory::submit! {

@@ -1,6 +1,6 @@
 use crate::effect_graph_def::EffectGraphDef;
-use crate::preset_type_id::PresetTypeId;
 use crate::id::{EffectGroupId, EffectId, NodeId};
+use crate::preset_type_id::PresetTypeId;
 use crate::types::{BeatDivision, DriverWaveform};
 use serde::{Deserialize, Serialize};
 
@@ -30,16 +30,20 @@ mod scene_install;
 #[cfg(test)]
 mod test_support;
 
-pub use automation::{automated_base, AutomationLane, AutomationPoint, RemovedAutomation, SegmentShape};
-pub use bindings::{CardSlotWrite, apply_card_reshape, binding_id_for_node_param_in, card_slot_for_node_param, invert_card_reshape, serialized_value_as_f32, ParamConvert, RemovedExposure, UserParamBinding};
-pub use driver::{hash_to_float, hash_u32, ParameterDriver};
-pub use envelope::{ParamEnvelope, DEFAULT_ENVELOPE_DECAY_BEATS};
+pub use automation::{
+    AutomationLane, AutomationPoint, RemovedAutomation, SegmentShape, automated_base,
+};
+pub use bindings::{
+    CardSlotWrite, ParamConvert, RemovedExposure, UserParamBinding, apply_card_reshape,
+    binding_id_for_node_param_in, card_slot_for_node_param, invert_card_reshape,
+    serialized_value_as_f32,
+};
+pub use driver::{ParameterDriver, hash_to_float, hash_u32};
+pub use envelope::{DEFAULT_ENVELOPE_DECAY_BEATS, ParamEnvelope};
 pub use group::EffectGroup;
 pub use instance::PresetInstance;
 pub use instance_serde::{deserialize_generator_instance, deserialize_opt_generator_instance};
 pub use param_defs::{RangeContract, RangeReason, RegistryParamDef};
-
-
 
 /// serde `skip_serializing_if` for [`crate::effect_graph_def::ParamSpecDef::curve`].
 pub fn curve_is_linear(c: &crate::macro_bank::MacroCurve) -> bool {
@@ -83,12 +87,6 @@ pub trait ParamSource {
     fn remove_driver(&mut self, param_id: &str);
 }
 
-
-
-
-
-
-
 // ─── Default helpers ───
 
 fn default_true() -> bool {
@@ -100,4 +98,3 @@ fn default_one() -> f32 {
 fn generate_effect_id() -> EffectId {
     EffectId::new(crate::math::short_id())
 }
-

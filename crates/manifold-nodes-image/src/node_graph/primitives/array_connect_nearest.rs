@@ -11,8 +11,8 @@
 //! Reusable for particle proximity graphs, constellation effects,
 //! sparse-detection neighbour viz.
 
-use manifold_node_engine::mesh::EdgePair;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::EdgePair;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use std::borrow::Cow;
@@ -141,9 +141,8 @@ impl Primitive for ArrayConnectNearest {
         let out_ptr = out_buf
             .mapped_ptr()
             .expect("array_connect_nearest: output must be shared-memory");
-        let out_edges: &mut [EdgePair] = unsafe {
-            std::slice::from_raw_parts_mut(out_ptr as *mut EdgePair, out_capacity)
-        };
+        let out_edges: &mut [EdgePair] =
+            unsafe { std::slice::from_raw_parts_mut(out_ptr as *mut EdgePair, out_capacity) };
 
         // For each item, find its nearest unvisited neighbour within
         // threshold. Same algorithm as legacy compute_connections.

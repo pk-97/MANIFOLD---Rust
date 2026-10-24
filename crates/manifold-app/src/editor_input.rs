@@ -64,7 +64,11 @@ impl EditorPointer<'_> {
     /// The pointer position the canvas tracks; every button and wheel event
     /// reads it, since winit gives those no position.
     fn cursor(&self) -> Vec2 {
-        let (x, y) = self.canvas.as_ref().map(|c| c.cursor()).unwrap_or((0.0, 0.0));
+        let (x, y) = self
+            .canvas
+            .as_ref()
+            .map(|c| c.cursor())
+            .unwrap_or((0.0, 0.0));
         Vec2::new(x, y)
     }
 
@@ -73,7 +77,11 @@ impl EditorPointer<'_> {
     /// hit regions with the paint.
     fn columns(&self) -> (f32, f32, CanvasRect) {
         let r = self.ws.dock.rects(self.area);
-        (r.left.width, r.right.x, CanvasRect::new(r.canvas.x, r.canvas.y, r.canvas.width, r.canvas.height))
+        (
+            r.left.width,
+            r.right.x,
+            CanvasRect::new(r.canvas.x, r.canvas.y, r.canvas.width, r.canvas.height),
+        )
     }
 }
 
@@ -101,7 +109,10 @@ pub(crate) fn cursor_moved(cx: &mut EditorPointer<'_>, pos: Vec2) -> Moved {
         ws.dock.set_hover_from(cx.area, pos);
         false
     };
-    let mut moved = Moved { cursor: ws.dock.cursor().unwrap_or(TimelineCursor::Default), gizmo_move: None };
+    let mut moved = Moved {
+        cursor: ws.dock.cursor().unwrap_or(TimelineCursor::Default),
+        gizmo_move: None,
+    };
     if dock_dragging {
         return moved;
     }
@@ -113,7 +124,9 @@ pub(crate) fn cursor_moved(cx: &mut EditorPointer<'_>, pos: Vec2) -> Moved {
         let bottom = ws.dock.rects(cx.area).bottom;
         let total = cx.project.timeline.duration_beats().as_f32();
         let beat = manifold_ui::MiniTimeline::beat_at_x(bottom, total, pos.x);
-        cx.send(ContentCommand::SeekToBeat(manifold_core::Beats::from_f32(beat)));
+        cx.send(ContentCommand::SeekToBeat(manifold_core::Beats::from_f32(
+            beat,
+        )));
         return moved;
     }
 
@@ -132,7 +145,8 @@ pub(crate) fn cursor_moved(cx: &mut EditorPointer<'_>, pos: Vec2) -> Moved {
         let (dx, dy) = (pos.x - last_x, pos.y - last_y);
         ws.viewport_drag = Some((button, pos.x, pos.y));
         if let Some(session) = ws.viewport_session.as_mut()
-            && let Some(gesture) = crate::viewport_input::classify_mouse_drag(button, cx.modifiers.shift, dx, dy)
+            && let Some(gesture) =
+                crate::viewport_input::classify_mouse_drag(button, cx.modifiers.shift, dx, dy)
         {
             crate::viewport_input::apply(
                 session.camera_mut(),
@@ -159,7 +173,9 @@ pub(crate) fn cursor_moved(cx: &mut EditorPointer<'_>, pos: Vec2) -> Moved {
     let in_panel = pos.x < preview_width || pos.x >= card_x;
     let ui_root = &mut cx.ws.ui_root;
     if in_panel || ui_root.browser_popup.is_open() || ui_root.input.pressed_widget().is_some() {
-        ui_root.input.process_pointer(&mut ui_root.tree, pos, PointerAction::Move, cx.time);
+        ui_root
+            .input
+            .process_pointer(&mut ui_root.tree, pos, PointerAction::Move, cx.time);
     }
     moved
 }
@@ -191,7 +207,11 @@ pub(crate) fn arm_viewport_drag(ws: &mut Workspace, button: MouseButton, pos: Ve
 /// `MouseInput` in the editor window: the node picker is modal; then the dock
 /// dividers, the mini-timeline, the 3D viewport, and finally the mapping
 /// drawer, the canvas popover, the side columns and the canvas.
-pub(crate) fn button(cx: &mut EditorPointer<'_>, button: MouseButton, state: ElementState) -> Button {
+pub(crate) fn button(
+    cx: &mut EditorPointer<'_>,
+    button: MouseButton,
+    state: ElementState,
+) -> Button {
     let mut out = Button::default();
     let pos = cx.cursor();
     // The node picker claims every click in the window; its backdrop and
@@ -205,7 +225,9 @@ pub(crate) fn button(cx: &mut EditorPointer<'_>, button: MouseButton, state: Ele
             // The picker is overlay-tree content: a press or release dirties
             // its nodes, which the composite reads.
             let ui_root = &mut cx.ws.ui_root;
-            ui_root.input.process_pointer(&mut ui_root.tree, pos, action, cx.time);
+            ui_root
+                .input
+                .process_pointer(&mut ui_root.tree, pos, action, cx.time);
         }
         return out;
     }
@@ -237,13 +259,20 @@ pub(crate) fn button(cx: &mut EditorPointer<'_>, button: MouseButton, state: Ele
         match state {
             ElementState::Pressed => {
                 if manifold_ui::MiniTimeline::hit_play(bottom, pos) {
-                    cx.send(if cx.is_playing { ContentCommand::Pause } else { ContentCommand::Play });
+                    cx.send(if cx.is_playing {
+                        ContentCommand::Pause
+                    } else {
+                        ContentCommand::Play
+                    });
                     return out;
                 }
                 // The same pick a main-timeline layer-header click makes, so
                 // the editor's mirrored inspector follows it too.
-                if let Some(row) = manifold_ui::MiniTimeline::row_at_y(bottom, cx.project.timeline.layers.len(), pos)
-                    && let Some(layer) = cx.project.timeline.layers.get(row)
+                if let Some(row) = manifold_ui::MiniTimeline::row_at_y(
+                    bottom,
+                    cx.project.timeline.layers.len(),
+                    pos,
+                ) && let Some(layer) = cx.project.timeline.layers.get(row)
                 {
                     let layer_id = layer.layer_id.clone();
                     *cx.active_layer = Some(layer_id.clone());
@@ -253,7 +282,9 @@ pub(crate) fn button(cx: &mut EditorPointer<'_>, button: MouseButton, state: Ele
                 if manifold_ui::MiniTimeline::body_rect(bottom).contains(pos) {
                     let total = cx.project.timeline.duration_beats().as_f32();
                     let beat = manifold_ui::MiniTimeline::beat_at_x(bottom, total, pos.x);
-                    cx.send(ContentCommand::SeekToBeat(manifold_core::Beats::from_f32(beat)));
+                    cx.send(ContentCommand::SeekToBeat(manifold_core::Beats::from_f32(
+                        beat,
+                    )));
                     cx.ws.timeline_scrubbing = true;
                     return out;
                 }
@@ -293,7 +324,9 @@ pub(crate) fn button(cx: &mut EditorPointer<'_>, button: MouseButton, state: Ele
         return out;
     }
     let (preview_width, card_x, viewport) = cx.columns();
-    let Some(canvas) = cx.canvas.as_deref_mut() else { return out };
+    let Some(canvas) = cx.canvas.as_deref_mut() else {
+        return out;
+    };
     // Both side columns live in the editor tree; the canvas only sees clicks
     // in the centre.
     let in_panel = pos.x < preview_width || pos.x >= card_x;
@@ -315,7 +348,9 @@ pub(crate) fn button(cx: &mut EditorPointer<'_>, button: MouseButton, state: Ele
                 // A card click retargets the canvas through the card-clicked
                 // dispatch; sliders, tabs and drags resolve in the inspector.
                 let ui_root = &mut cx.ws.ui_root;
-                ui_root.input.process_pointer(&mut ui_root.tree, pos, PointerAction::Down, cx.time);
+                ui_root
+                    .input
+                    .process_pointer(&mut ui_root.tree, pos, PointerAction::Down, cx.time);
             } else {
                 canvas.on_left_button_down(viewport, pos.x, pos.y, cx.time, cx.modifiers.shift);
             }
@@ -326,7 +361,9 @@ pub(crate) fn button(cx: &mut EditorPointer<'_>, button: MouseButton, state: Ele
             canvas.popover_on_left_release();
             let ui_root = &mut cx.ws.ui_root;
             if ui_pointer_owned(in_panel, ui_root.input.pressed_widget().is_some()) {
-                ui_root.input.process_pointer(&mut ui_root.tree, pos, PointerAction::Up, cx.time);
+                ui_root
+                    .input
+                    .process_pointer(&mut ui_root.tree, pos, PointerAction::Up, cx.time);
             }
             // The canvas owns its captured drag and its release is idempotent,
             // so it always gets the terminal event.
@@ -338,14 +375,44 @@ pub(crate) fn button(cx: &mut EditorPointer<'_>, button: MouseButton, state: Ele
             if !in_panel
                 && let Some((node_id, pi)) = canvas.on_right_button_down(viewport, pos.x, pos.y)
                 && let Some(inner_param) = canvas.param_name_at(node_id, pi)
-                && let Some((binding_id, label, min, max, invert, curve, scale, offset, range, is_angle, section)) =
-                    crate::app_render::resolve_canvas_binding(cx.graph, cx.watched, cx.project, node_id, &inner_param)
+                && let Some((
+                    binding_id,
+                    label,
+                    min,
+                    max,
+                    invert,
+                    curve,
+                    scale,
+                    offset,
+                    range,
+                    is_angle,
+                    section,
+                )) = crate::app_render::resolve_canvas_binding(
+                    cx.graph,
+                    cx.watched,
+                    cx.project,
+                    node_id,
+                    &inner_param,
+                )
             {
                 canvas.open_mapping_popover(
-                    crate::editing_host::to_ui_graph_target(cx.watched.expect("resolved binding has a graph target")),
-                    viewport, node_id, pi, binding_id, label, min, max, invert,
-                    crate::ui_translate::macro_curve_to_ui(curve), scale, offset, range,
-                    is_angle, section,
+                    crate::editing_host::to_ui_graph_target(
+                        cx.watched.expect("resolved binding has a graph target"),
+                    ),
+                    viewport,
+                    node_id,
+                    pi,
+                    binding_id,
+                    label,
+                    min,
+                    max,
+                    invert,
+                    crate::ui_translate::macro_curve_to_ui(curve),
+                    scale,
+                    offset,
+                    range,
+                    is_angle,
+                    section,
                 );
             }
         }
@@ -391,7 +458,9 @@ pub(crate) fn wheel(cx: &mut EditorPointer<'_>, delta: MouseScrollDelta) -> bool
         }
         return true;
     }
-    let Some(canvas) = cx.canvas.as_deref_mut() else { return false };
+    let Some(canvas) = cx.canvas.as_deref_mut() else {
+        return false;
+    };
     let (_, dy) = crate::window_input::normalize_scroll_delta(delta);
     canvas.on_scroll(CanvasRect::new(0.0, 0.0, cx.area.width, cx.area.height), dy);
     true
@@ -400,13 +469,21 @@ pub(crate) fn wheel(cx: &mut EditorPointer<'_>, delta: MouseScrollDelta) -> bool
 /// A pinch zooms the canvas at the cursor; the 3D viewport and the card lane
 /// ignore it.
 pub(crate) fn pinch(cx: &mut EditorPointer<'_>, magnification: f32) {
-    let Some(canvas) = cx.canvas.as_deref_mut() else { return };
+    let Some(canvas) = cx.canvas.as_deref_mut() else {
+        return;
+    };
     let (x, y) = canvas.cursor();
-    let over_viewport = cx.ws.viewport_rect.is_some_and(|rect| rect.contains(Vec2::new(x, y)));
+    let over_viewport = cx
+        .ws
+        .viewport_rect
+        .is_some_and(|rect| rect.contains(Vec2::new(x, y)));
     if over_viewport || x >= cx.ws.dock.rects(cx.area).right.x {
         return;
     }
-    canvas.on_pinch(CanvasRect::new(0.0, 0.0, cx.area.width, cx.area.height), magnification);
+    canvas.on_pinch(
+        CanvasRect::new(0.0, 0.0, cx.area.width, cx.area.height),
+        magnification,
+    );
 }
 
 /// What cancelling the editor's pointer capture asks of the caller.
@@ -430,9 +507,15 @@ pub(crate) fn cancel_capture(cx: &mut EditorPointer<'_>) -> Cancelled {
     let ui_dragging = cx.ws.ui_root.input.is_dragging();
     let cursor = cx.cursor();
     let had_mapping = cx.mapping.is_open();
-    let had_canvas_popover = cx.canvas.as_ref().is_some_and(|canvas| canvas.popover_open());
+    let had_canvas_popover = cx
+        .canvas
+        .as_ref()
+        .is_some_and(|canvas| canvas.popover_open());
     let (_, _, viewport) = cx.columns();
-    let canvas_capture = cx.canvas.as_deref_mut().is_some_and(|canvas| canvas.finish_pointer_capture(viewport));
+    let canvas_capture = cx
+        .canvas
+        .as_deref_mut()
+        .is_some_and(|canvas| canvas.finish_pointer_capture(viewport));
     // Cancel the mapping surfaces before the release path, whose `on_release`
     // would otherwise commit a live scrub.
     cx.mapping.close();
@@ -442,16 +525,26 @@ pub(crate) fn cancel_capture(cx: &mut EditorPointer<'_>) -> Cancelled {
         canvas.close_mapping_popover();
     }
     if ui_pressed {
-        let terminal = if ui_dragging { cursor } else { Vec2::new(-1.0, -1.0) };
+        let terminal = if ui_dragging {
+            cursor
+        } else {
+            Vec2::new(-1.0, -1.0)
+        };
         let ui_root = &mut cx.ws.ui_root;
-        ui_root.input.process_pointer(&mut ui_root.tree, terminal, PointerAction::Up, cx.time);
+        ui_root
+            .input
+            .process_pointer(&mut ui_root.tree, terminal, PointerAction::Up, cx.time);
     }
     // The single terminal paths for canvas and viewport gestures; both are
     // idempotent when nothing is active.
     let gizmo_release = button(cx, MouseButton::Left, ElementState::Released).gizmo_release;
     button(cx, MouseButton::Middle, ElementState::Released);
     Cancelled {
-        any: canvas_capture || ui_pressed || had_mapping || had_canvas_popover || gizmo_release.is_some(),
+        any: canvas_capture
+            || ui_pressed
+            || had_mapping
+            || had_canvas_popover
+            || gizmo_release.is_some(),
         gizmo_release,
     }
 }
@@ -487,7 +580,9 @@ pub(crate) fn popover_key(
             TextKey::Escape => canvas.popover_cancel_edit(),
             TextKey::Backspace => canvas.popover_on_backspace(),
             TextKey::Space if typing => canvas.popover_on_text_char(' '),
-            TextKey::Chars(text) if typing => text.chars().for_each(|ch| canvas.popover_on_text_char(ch)),
+            TextKey::Chars(text) if typing => {
+                text.chars().for_each(|ch| canvas.popover_on_text_char(ch))
+            }
             _ => {}
         }
     } else {
@@ -536,7 +631,9 @@ pub(crate) fn drain(
         if ed.ui_root.browser_popup.is_open() {
             use manifold_ui::panels::browser_popup::BrowserPopupAction;
             for event in events {
-                let UIEvent::Click { node_id, .. } = event else { continue };
+                let UIEvent::Click { node_id, .. } = event else {
+                    continue;
+                };
                 if ed.ui_root.browser_popup.is_search_bar(node_id) {
                     // Already focused on open; a click re-focuses.
                     let r = ed.ui_root.browser_popup.search_bar_rect(&ed.ui_root.tree);
@@ -555,14 +652,21 @@ pub(crate) fn drain(
                 // open set, which the editor's plan rebuilds.
                 let was_open = ed.ui_root.browser_popup.is_open();
                 if let Some(action) = ed.ui_root.browser_popup.handle_click(node_id) {
-                    ed.ui_root.note_overlay_closed_if(OverlayId::BrowserPopup, was_open);
+                    ed.ui_root
+                        .note_overlay_closed_if(OverlayId::BrowserPopup, was_open);
                     // `graph_pos` is the canvas position captured at open,
                     // passed straight through.
                     if let BrowserPopupAction::NodeSelected { type_id, graph_pos } = action {
-                        out.graph_edits.push(GraphEditCommand::AddGraphNodeAt { type_id, graph_pos });
+                        out.graph_edits
+                            .push(GraphEditCommand::AddGraphNodeAt { type_id, graph_pos });
                     }
-                } else if ed.ui_root.browser_popup.contains_node(&ed.ui_root.tree, node_id) {
-                    ed.ui_root.note_overlay_closed_if(OverlayId::BrowserPopup, was_open);
+                } else if ed
+                    .ui_root
+                    .browser_popup
+                    .contains_node(&ed.ui_root.tree, node_id)
+                {
+                    ed.ui_root
+                        .note_overlay_closed_if(OverlayId::BrowserPopup, was_open);
                     // An internal click (category chip, background) does not
                     // leak to the canvas. A chip changes what the popup
                     // lists, which shows only after the overlays rebuild.
@@ -582,13 +686,17 @@ pub(crate) fn drain(
             }
             for event in &events {
                 if let UIEvent::Click { node_id, .. } = event
-                    && let Some(cmd) =
-                        toggle.intents.resolve(&ed.ui_root.tree, Some(*node_id), manifold_ui::intent::Gesture::Click)
+                    && let Some(cmd) = toggle.intents.resolve(
+                        &ed.ui_root.tree,
+                        Some(*node_id),
+                        manifold_ui::intent::Gesture::Click,
+                    )
                 {
                     out.graph_edits.push(cmd);
                 }
             }
-            out.card_actions.extend(ed.ui_root.route_inspector_events(&events));
+            out.card_actions
+                .extend(ed.ui_root.route_inspector_events(&events));
         }
         // The node picker's search session follows the popup's real search
         // bar; it opened anchored at zero, before the popup's tree existed.
@@ -613,7 +721,6 @@ pub(crate) fn drain(
     out
 }
 
-
 /// Opens the text session a card-lane action asks for, against the editor's
 /// own inspector tab, and returns the mapping drawers the lane asked for. The
 /// caller opens those (it watches the drawer's graph first) before
@@ -630,10 +737,23 @@ pub(crate) fn card_lane_entries<'x>(
     for action in actions {
         let tab = ws.ui_root.inspector.last_effect_tab();
         // The opened field is a live surface of the editor's composite.
-        if crate::text_session::begin_inspector_entry(text_input, action, true, tab, active_layer, selection, project) {
+        if crate::text_session::begin_inspector_entry(
+            text_input,
+            action,
+            true,
+            tab,
+            active_layer,
+            selection,
+            project,
+        ) {
             continue;
         }
-        if let PanelAction::Root(manifold_ui::RootAction::OpenCardMapping { target, param_id, anchor_node_id }) = action {
+        if let PanelAction::Root(manifold_ui::RootAction::OpenCardMapping {
+            target,
+            param_id,
+            anchor_node_id,
+        }) = action
+        {
             mappings.push((target, param_id.as_ref(), *anchor_node_id));
         }
     }
@@ -673,12 +793,17 @@ pub(crate) struct CardLaneOutcome {
 /// mirrors the main window's selection and active layer, so param edits
 /// resolve identically, and only the editor's transient visuals (collapse,
 /// highlight, card drag) land on its tree.
-pub(crate) fn dispatch_card_lane(mut lane: CardLane<'_>, actions: &[PanelAction]) -> CardLaneOutcome {
+pub(crate) fn dispatch_card_lane(
+    mut lane: CardLane<'_>,
+    actions: &[PanelAction],
+) -> CardLaneOutcome {
     use manifold_ui::panels::ParamsAction;
     let mut out = CardLaneOutcome::default();
     for action in actions {
         match action {
-            PanelAction::Params(ParamsAction::EffectCardClicked(ei)) => out.retarget_effect = Some(*ei),
+            PanelAction::Params(ParamsAction::EffectCardClicked(ei)) => {
+                out.retarget_effect = Some(*ei)
+            }
             PanelAction::Params(ParamsAction::GenCardClicked) => out.retarget_generator = true,
             _ => {}
         }

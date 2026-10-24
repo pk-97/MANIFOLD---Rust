@@ -1,13 +1,12 @@
 use crate::exec::effect_node::NodeInstanceId;
 
-use crate::freeze::codegen::generate_fused;
-use crate::freeze::codegen::{generate_standalone, StandaloneKernelSpec};
-use crate::freeze::codegen::{FusionRegion, InputSource, RegionNode, ENTRY};
 use crate::exec::effect_node::EffectNode;
 use crate::freeze::TextureDiff;
+use crate::freeze::codegen::generate_fused;
+use crate::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode};
+use crate::freeze::codegen::{StandaloneKernelSpec, generate_standalone};
 use crate::primitives::gain::Gain;
 use manifold_gpu::GpuBinding;
-
 
 use crate::testkit::codegen_support::*;
 /// Determinism (design section 12.3): the generator emits byte-identical WGSL
@@ -16,11 +15,36 @@ use crate::testkit::codegen_support::*;
 fn generated_wgsl_is_deterministic() {
     let g = Gain::new();
     let body = g.wgsl_body().unwrap();
-    let a = generate_standalone(&StandaloneKernelSpec { fusion_kind: g.fusion_kind(), body, inputs: g.inputs(), params: g.parameters(), input_access: g.input_access(), derived_uniforms: g.derived_uniforms(), outputs: g.outputs(), stencil_fetch: false, includes: &[] }).unwrap();
-    let b = generate_standalone(&StandaloneKernelSpec { fusion_kind: g.fusion_kind(), body, inputs: g.inputs(), params: g.parameters(), input_access: g.input_access(), derived_uniforms: g.derived_uniforms(), outputs: g.outputs(), stencil_fetch: false, includes: &[] }).unwrap();
+    let a = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: g.fusion_kind(),
+        body,
+        inputs: g.inputs(),
+        params: g.parameters(),
+        input_access: g.input_access(),
+        derived_uniforms: g.derived_uniforms(),
+        outputs: g.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
+    .unwrap();
+    let b = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: g.fusion_kind(),
+        body,
+        inputs: g.inputs(),
+        params: g.parameters(),
+        input_access: g.input_access(),
+        derived_uniforms: g.derived_uniforms(),
+        outputs: g.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
+    .unwrap();
     assert_eq!(a, b, "codegen must be deterministic");
     assert!(a.contains("fn cs_main"), "must emit the cs_main entry");
-    assert!(!a.contains("cs_main_"), "no symbol may have cs_main as a prefix");
+    assert!(
+        !a.contains("cs_main_"),
+        "no symbol may have cs_main as a prefix"
+    );
 }
 
 /// Regression for the NV_EPS-class bug: a body declaring a top-level `const`
@@ -45,7 +69,9 @@ fn fused_prelude_carries_and_dedups_top_level_consts() {
                 node_inputs: &[],
                 node_outputs: &[],
                 node_includes: &[],
-                derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
+                derived_uniforms: &[],
+                type_id: String::new(),
+                derived_camera_ext: None,
                 output_storage: "rgba16float",
                 stencil_fetch: false,
                 quantize_f16: false,
@@ -60,7 +86,9 @@ fn fused_prelude_carries_and_dedups_top_level_consts() {
                 node_inputs: &[],
                 node_outputs: &[],
                 node_includes: &[],
-                derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
+                derived_uniforms: &[],
+                type_id: String::new(),
+                derived_camera_ext: None,
                 output_storage: "rgba16float",
                 stencil_fetch: false,
                 quantize_f16: false,
@@ -72,8 +100,9 @@ fn fused_prelude_carries_and_dedups_top_level_consts() {
         sampler_address_mode: "clamp",
         dispatch_count_field: None,
         virtual_chains: Vec::new(),
-        sampled_externals: Vec::new(), camera_externals: 0,
-    output_capacity: None,
+        sampled_externals: Vec::new(),
+        camera_externals: 0,
+        output_capacity: None,
     };
     let g = generate_fused(&region).expect("a region whose body declares a const fuses");
     assert_eq!(
@@ -113,7 +142,9 @@ fn cross_resolution_external_sampled_at_uv() {
                 node_inputs: &[],
                 node_outputs: &[],
                 node_includes: &[],
-                derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
+                derived_uniforms: &[],
+                type_id: String::new(),
+                derived_camera_ext: None,
                 output_storage: "rgba16float",
                 stencil_fetch: false,
                 quantize_f16: false,
@@ -128,7 +159,9 @@ fn cross_resolution_external_sampled_at_uv() {
                 node_inputs: &[],
                 node_outputs: &[],
                 node_includes: &[],
-                derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
+                derived_uniforms: &[],
+                type_id: String::new(),
+                derived_camera_ext: None,
                 output_storage: "rgba16float",
                 stencil_fetch: false,
                 quantize_f16: false,
@@ -140,8 +173,9 @@ fn cross_resolution_external_sampled_at_uv() {
         sampler_address_mode: "clamp",
         dispatch_count_field: None,
         virtual_chains: Vec::new(),
-        sampled_externals: vec![1], camera_externals: 0,
-    output_capacity: None,
+        sampled_externals: vec![1],
+        camera_externals: 0,
+        output_capacity: None,
     };
     let g = generate_fused(&region).expect("cross-res region fuses");
     assert!(
@@ -151,7 +185,8 @@ fn cross_resolution_external_sampled_at_uv() {
     );
     // The cross-res external is sampled at uv; the same-space one is loaded.
     assert!(
-        g.wgsl.contains("let ext_1 = textureSampleLevel(src_1, samp, uv, 0.0);"),
+        g.wgsl
+            .contains("let ext_1 = textureSampleLevel(src_1, samp, uv, 0.0);"),
         "cross-res external sampled at uv:\n{}",
         g.wgsl
     );
@@ -161,7 +196,11 @@ fn cross_resolution_external_sampled_at_uv() {
         g.wgsl
     );
     // The sampler must exist even with no gather member.
-    assert!(g.wgsl.contains("var samp: sampler;"), "shared sampler bound:\n{}", g.wgsl);
+    assert!(
+        g.wgsl.contains("var samp: sampler;"),
+        "shared sampler bound:\n{}",
+        g.wgsl
+    );
 }
 
 /// The generated standalone gain kernel reproduces the hand-written
@@ -197,7 +236,13 @@ fn generated_gain_matches_original() {
     let from_generated = dispatch_pointwise(&device, &generated, &input, &bytes);
 
     let differ = TextureDiff::new(&device);
-    let r = differ.compare(&device, &from_original.texture, &from_generated.texture, 1e-5, 1e-5);
+    let r = differ.compare(
+        &device,
+        &from_original.texture,
+        &from_generated.texture,
+        1e-5,
+        1e-5,
+    );
     assert_eq!(
         r.over_count, 0,
         "generated gain must reproduce gain.wgsl (max_abs={}, max_rel={})",
@@ -245,13 +290,23 @@ fn generated_mix_matches_original() {
     let from_generated = dispatch_coincident(&device, &generated, &a, &b, &bytes);
 
     let differ = TextureDiff::new(&device);
-    let r = differ.compare(&device, &from_original.texture, &from_generated.texture, 1e-5, 1e-5);
+    let r = differ.compare(
+        &device,
+        &from_original.texture,
+        &from_generated.texture,
+        1e-5,
+        1e-5,
+    );
     assert_eq!(
         r.over_count, 0,
         "generated mix must reproduce mix.wgsl (max_abs={}, max_rel={})",
         r.max_abs, r.max_rel
     );
-    assert!(r.max_abs < 1e-5, "coincident path should be ~bit-identical, got {}", r.max_abs);
+    assert!(
+        r.max_abs < 1e-5,
+        "coincident path should be ~bit-identical, got {}",
+        r.max_abs
+    );
 }
 
 /// BUG-agfh (Codegen: buffer atom with several outputs, one atomic): the
@@ -268,7 +323,7 @@ fn generated_mix_matches_original() {
 fn generated_atomic_side_output_matches_cpu_reference() {
     use crate::particles::Particle;
     use crate::testkit::test_multi_output_atomic_fixture::{
-        cpu_reference, TestMultiOutputAtomic, Uniforms, MOMENTUM_WORDS,
+        MOMENTUM_WORDS, TestMultiOutputAtomic, Uniforms, cpu_reference,
     };
 
     let device = manifold_gpu::testkit::test_device();
@@ -316,15 +371,35 @@ fn generated_atomic_side_output_matches_cpu_reference() {
         );
     }
 
-    let uniforms = Uniforms { drag, fixed_point_scale: scale, dispatch_count: N as u32, _pad0: 0 };
+    let uniforms = Uniforms {
+        drag,
+        fixed_point_scale: scale,
+        dispatch_count: N as u32,
+        _pad0: 0,
+    };
     let mut enc = device.create_encoder("agfh-multi-output-atomic");
     enc.dispatch_compute(
         &pipeline,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: &points_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &points_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &momentum_buf, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &points_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &points_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &momentum_buf,
+                offset: 0,
+            },
         ],
         [(N as u32).div_ceil(256), 1, 1],
         "agfh-multi-output-atomic",
@@ -343,7 +418,10 @@ fn generated_atomic_side_output_matches_cpu_reference() {
     }
     .to_vec();
 
-    assert_eq!(got_momentum, expected_momentum, "atomic fixed-point sums must match exactly");
+    assert_eq!(
+        got_momentum, expected_momentum,
+        "atomic fixed-point sums must match exactly"
+    );
     // Field bits only: std430 padding words carry no data and the kernel's
     // struct store need not preserve them.
     let bits = |p: &Particle| -> Vec<u32> {

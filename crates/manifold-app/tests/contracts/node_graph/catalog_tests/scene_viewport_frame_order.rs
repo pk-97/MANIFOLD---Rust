@@ -36,16 +36,27 @@ fn navigated_frame_warms_up_under_the_pipeline_frame_order() {
     );
     let layer = &mut project.timeline.layers[index];
     layer.gen_params_mut().unwrap().graph = Some(rt_scene());
-    layer.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(16.0)));
+    layer
+        .clips
+        .push(TimelineClip::new_generator(Beats(0.0), Beats(16.0)));
     let layer_id = layer.layer_id.clone();
     let clip = layer.clips[0].clone();
     assert!(
-        renderer.start_clip(&clip, Seconds(0.0), &project.timeline.layers, index as i32, true),
+        renderer.start_clip(
+            &clip,
+            Seconds(0.0),
+            &project.timeline.layers,
+            index as i32,
+            true
+        ),
         "the scene layer starts"
     );
 
     let config = SceneViewportConfig {
-        camera: ViewportCamera { pitch: -0.45, ..Default::default() },
+        camera: ViewportCamera {
+            pitch: -0.45,
+            ..Default::default()
+        },
         width: W,
         height: H,
     };
@@ -84,11 +95,16 @@ fn navigated_frame_warms_up_under_the_pipeline_frame_order() {
                 presented = renderer
                     .scene_viewport_texture(&layer_id)
                     .map(|texture| texture.raw_ptr());
-                assert!(presented.is_some(), "a complete viewport frame is presentable");
+                assert!(
+                    presented.is_some(),
+                    "a complete viewport frame is presentable"
+                );
             }
             (None, FrameRenderStatus::PendingGeometry) => {}
             (Some(at), FrameRenderStatus::Complete) => assert_eq!(
-                renderer.scene_viewport_texture(&layer_id).map(|texture| texture.raw_ptr()),
+                renderer
+                    .scene_viewport_texture(&layer_id)
+                    .map(|texture| texture.raw_ptr()),
                 presented,
                 "frame {frame}: the viewport pass was rebuilt after it completed at frame {at}"
             ),
@@ -98,15 +114,22 @@ fn navigated_frame_warms_up_under_the_pipeline_frame_order() {
     let at = first_complete.expect("the navigated frame never finished its ray-traced warmup");
     // A fresh pass's first frame waits on its acceleration build, so a pass
     // rebuilt every frame could never reach Complete: this proof can fail.
-    assert!(at > 0, "the ray-traced warmup must take a pending frame for this proof to bite");
-    assert!(at < FRAMES - 4, "warmup finished too late to see the pass kept (frame {at})");
+    assert!(
+        at > 0,
+        "the ray-traced warmup must take a pending frame for this proof to bite"
+    );
+    assert!(
+        at < FRAMES - 4,
+        "warmup finished too late to see the pass kept (frame {at})"
+    );
 }
 
 /// A lit ground plane rendered through `render_scene` with ray tracing on,
 /// so the viewport pass has an asynchronous acceleration build to finish.
 fn rt_scene() -> EffectGraphDef {
-    serde_json::from_str(&manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(
-        r#"{"version":2,"name":"PreviewNavigationScene","nodes":[
+    serde_json::from_str(
+        &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(
+            r#"{"version":2,"name":"PreviewNavigationScene","nodes":[
         {"id":0,"typeId":"system.generator_input","nodeId":"input"},
         {"id":1,"typeId":"node.grid_mesh","nodeId":"ground_grid","params":{
             "max_capacity":{"type":"Int","value":8192},
@@ -145,6 +168,7 @@ fn rt_scene() -> EffectGraphDef {
         {"fromNode":5,"fromPort":"out","toNode":20,"toPort":"light_0"},
         {"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}
     ]}"#,
-    ))
+        ),
+    )
     .expect("viewport frame-order scene parses")
 }

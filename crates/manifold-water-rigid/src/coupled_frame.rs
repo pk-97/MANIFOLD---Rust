@@ -29,7 +29,9 @@ impl CoupledRigidInputs<'_> {
         }
         for group in self.colliders.groups() {
             if self.scene.groups.get(group).is_none_or(Option::is_none) {
-                return Err(format!("Fluid coupling: copy group {group} has no copies body"));
+                return Err(format!(
+                    "Fluid coupling: copy group {group} has no copies body"
+                ));
             }
         }
         Ok(())
@@ -121,7 +123,10 @@ impl CoupledRigidLayout {
             authored: initial
                 .bodies
                 .iter()
-                .map(|body| body.as_ref().map_or(Transform::default(), |body| body.transform))
+                .map(|body| {
+                    body.as_ref()
+                        .map_or(Transform::default(), |body| body.transform)
+                })
                 .collect(),
             copies,
             group_copies,

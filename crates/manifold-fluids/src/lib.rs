@@ -26,10 +26,10 @@ pub use coupling::{CoupledFluidFrame, RigidBodyState, RigidFluidCoupling, RigidR
 mod whitewater;
 pub use whitewater::{WhitewaterFields, WhitewaterGrid, WhitewaterLifecycle, WhitewaterSpawn};
 #[cfg(feature = "whitewater-oracle")]
-pub mod whitewater_oracle;
-#[cfg(feature = "whitewater-oracle")]
 pub mod sheet_oracle;
 pub mod sheeter;
+#[cfg(feature = "whitewater-oracle")]
+pub mod whitewater_oracle;
 
 pub const UPSTREAM_REVISION: &str = "70a0e954018fe39e1f9c3631264989569752bb7a";
 /// Bump when local numerical changes alter recorded-take replay semantics.
@@ -642,7 +642,10 @@ impl FluidWorld {
     /// a live frame spanning several Sim Rate intervals removes only the
     /// markers one interval's limit removes. Substep selection still divides
     /// the whole frame. `None` measures the whole frame, as upstream does.
-    pub fn set_speed_limit_interval(&mut self, interval: Option<Seconds>) -> Result<(), FluidError> {
+    pub fn set_speed_limit_interval(
+        &mut self,
+        interval: Option<Seconds>,
+    ) -> Result<(), FluidError> {
         let dt = match interval {
             None => 0.0,
             Some(interval) if interval.0.is_finite() && interval.0 > 0.0 => interval.0,
@@ -907,9 +910,7 @@ impl FluidWorld {
     ) -> Result<FrameStats, FluidError> {
         self.prepare_live_step_fields(dt, fields)?;
         let mut native_stats = NativeFrameStats::default();
-        let ok = unsafe {
-            manifold_fluids_world_step_live(self.native, dt.0, &mut native_stats)
-        };
+        let ok = unsafe { manifold_fluids_world_step_live(self.native, dt.0, &mut native_stats) };
         native_result(ok, "stepping the live fluid world")?;
         Ok(native_stats.into())
     }
@@ -978,12 +979,10 @@ fn validate_config(config: Config) -> Result<(), FluidError> {
     if !config.cell_size.is_finite() || config.cell_size <= 0.0 {
         return Err(FluidError::input("cell_size must be finite and positive"));
     }
-    if config
-        .cells
-        .iter()
-        .any(|&cells| cells < 8)
-    {
-        return Err(FluidError::input("each native cell count must be at least 8"));
+    if config.cells.iter().any(|&cells| cells < 8) {
+        return Err(FluidError::input(
+            "each native cell count must be at least 8",
+        ));
     }
     let total = u64::from(config.cells[0])
         .checked_mul(u64::from(config.cells[1]))
@@ -994,7 +993,9 @@ fn validate_config(config: Config) -> Result<(), FluidError> {
         total.checked_mul((u64::from(*n) * subdivision).checked_add(1)?)
     });
     if total > i32::MAX as u64 || surface_nodes.is_none_or(|n| n > i32::MAX as u64) {
-        return Err(FluidError::input("expanded grid exceeds native signed 32-bit indexing"));
+        return Err(FluidError::input(
+            "expanded grid exceeds native signed 32-bit indexing",
+        ));
     }
     Ok(())
 }
@@ -1071,8 +1072,9 @@ fn decode_surface(
     if bytes.len().saturating_sub(cursor) < vertex_bytes {
         return Err(FluidError::native("surface vertex data is truncated"));
     }
-    vertices.try_reserve(vertex_count)
-        .map_err(|error| FluidError::native(format!("surface vertex allocation failed: {error}")))?;
+    vertices.try_reserve(vertex_count).map_err(|error| {
+        FluidError::native(format!("surface vertex allocation failed: {error}"))
+    })?;
     for _ in 0..vertex_count {
         let position = [
             read_f32(bytes, &mut cursor, "surface vertex")?,
@@ -1099,10 +1101,12 @@ fn decode_surface(
     if bytes.len().saturating_sub(cursor) < triangle_bytes {
         return Err(FluidError::native("surface triangle data is truncated"));
     }
-    triangles.try_reserve(triangle_count)
-        .map_err(|error| FluidError::native(format!("surface triangle allocation failed: {error}")))?;
-    normals.try_reserve(vertex_count)
-        .map_err(|error| FluidError::native(format!("surface normal allocation failed: {error}")))?;
+    triangles.try_reserve(triangle_count).map_err(|error| {
+        FluidError::native(format!("surface triangle allocation failed: {error}"))
+    })?;
+    normals.try_reserve(vertex_count).map_err(|error| {
+        FluidError::native(format!("surface normal allocation failed: {error}"))
+    })?;
     normals.resize(vertex_count, [0.0; 3]);
     for _ in 0..triangle_count {
         let indices = [
@@ -1138,8 +1142,11 @@ fn decode_surface(
     if cursor != bytes.len() {
         return Err(FluidError::native("surface data has trailing bytes"));
     }
-    output.try_reserve(triangle_count.saturating_mul(3))
-        .map_err(|error| FluidError::native(format!("surface output allocation failed: {error}")))?;
+    output
+        .try_reserve(triangle_count.saturating_mul(3))
+        .map_err(|error| {
+            FluidError::native(format!("surface output allocation failed: {error}"))
+        })?;
     for indices in triangles.iter().copied() {
         for index in indices {
             let normal = normalize_normal(normals[index as usize]);
@@ -1612,7 +1619,13 @@ mod tests {
             apic: false,
         };
         super::validate_config(config).unwrap();
-        assert!(super::validate_config(Config { cells: [2048; 3], ..config }).is_err());
+        assert!(
+            super::validate_config(Config {
+                cells: [2048; 3],
+                ..config
+            })
+            .is_err()
+        );
         assert!(
             super::validate_config(Config {
                 cells: [513, 8, 8],

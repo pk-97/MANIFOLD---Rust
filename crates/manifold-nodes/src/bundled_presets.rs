@@ -33,8 +33,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::preset_def::PresetKind;
 
 use manifold_node_engine::load::preset_loader::{
-    EFFECT_CATALOG, GENERATOR_CATALOG, PresetCatalog, SCENE_MODIFIER_CATALOG,
-    catalog_generation,
+    EFFECT_CATALOG, GENERATOR_CATALOG, PresetCatalog, SCENE_MODIFIER_CATALOG, catalog_generation,
 };
 
 inventory::submit! {
@@ -45,7 +44,6 @@ inventory::submit! {
         visit: |kind, visitor| bundled_preset_type_ids(kind).for_each(visitor),
     }
 }
-
 
 /// Raw JSON for the bundled preset of `preset_type` (any kind), or
 /// `None` if no preset has that type id.
@@ -58,9 +56,13 @@ inventory::submit! {
 /// than a `&'static` borrow — a concurrent reload can swap the snapshot
 /// without invalidating a value the caller already holds.
 pub fn bundled_preset_json(preset_type: &PresetTypeId) -> Option<Arc<str>> {
-    [PresetKind::Effect, PresetKind::Generator, PresetKind::SceneModifier]
-        .into_iter()
-        .find_map(|kind| catalog_for_kind(kind).load().json(preset_type.as_str()))
+    [
+        PresetKind::Effect,
+        PresetKind::Generator,
+        PresetKind::SceneModifier,
+    ]
+    .into_iter()
+    .find_map(|kind| catalog_for_kind(kind).load().json(preset_type.as_str()))
 }
 
 /// Return the live catalog for one preset kind.
@@ -79,7 +81,8 @@ pub(crate) fn parse_bundled_preset(kind: PresetKind, id: &str, json: &str) -> Ef
     let mut def: EffectGraphDef = serde_json::from_str(json)
         .unwrap_or_else(|e| panic!("bundled {kind:?} preset {id}: parse failed: {e}"));
     if !kind.is_scene_modifier()
-        && let Err(error) = manifold_nodes_scene::node_graph::scene_camera::prepare_camera_effects(&mut def)
+        && let Err(error) =
+            manifold_nodes_scene::node_graph::scene_camera::prepare_camera_effects(&mut def)
     {
         log::warn!("Scene camera setup for {id}: {error}");
     }
@@ -113,7 +116,10 @@ fn rebuild_def_cache(generation: u64) -> Arc<DefCache> {
         (PresetKind::SceneModifier, &*scene_modifier_catalog),
     ] {
         for (id, json) in catalog.entries() {
-            map.insert(id.to_string(), Arc::new(parse_bundled_preset(kind, &id, &json)));
+            map.insert(
+                id.to_string(),
+                Arc::new(parse_bundled_preset(kind, &id, &json)),
+            );
         }
     }
     let cache = Arc::new(DefCache { generation, map });
@@ -130,7 +136,10 @@ pub fn bundled_preset_def(preset_type: &PresetTypeId) -> Option<Arc<EffectGraphD
     if cache.generation == generation {
         cache.map.get(preset_type.as_str()).cloned()
     } else {
-        rebuild_def_cache(generation).map.get(preset_type.as_str()).cloned()
+        rebuild_def_cache(generation)
+            .map
+            .get(preset_type.as_str())
+            .cloned()
     }
 }
 
@@ -161,8 +170,8 @@ pub fn loaded_presets_from_bundled() -> Vec<manifold_core::effect_graph_def::Pre
 }
 
 /// Loader for the dedicated scene-modifier metadata inventory bucket.
-pub fn loaded_scene_modifier_presets_from_bundled(
-) -> Vec<manifold_core::effect_graph_def::PresetMetadata> {
+pub fn loaded_scene_modifier_presets_from_bundled()
+-> Vec<manifold_core::effect_graph_def::PresetMetadata> {
     loaded_preset_metadata(PresetKind::SceneModifier)
 }
 
@@ -198,9 +207,9 @@ inventory::submit! {
 mod tests {
     use super::*;
 
+    use manifold_node_engine::exec::execution_plan::compile;
     use manifold_node_engine::persistence::{EffectGraphDefExt, PrimitiveRegistry};
     use manifold_node_engine::validation::validate;
-    use manifold_node_engine::exec::execution_plan::compile;
 
     /// Regression guard: every bundled preset must surface in the
     /// picker via `effect_type_registry`. The picker's data source
@@ -249,12 +258,23 @@ mod tests {
         ) {
             for node in nodes {
                 // A group's port stubs carry no controls.
-                let port_stub = matches!(node.type_id.as_str(), "system.group_input" | "system.group_output");
+                let port_stub = matches!(
+                    node.type_id.as_str(),
+                    "system.group_input" | "system.group_output"
+                );
                 if node.node_id.is_empty() {
-                    if port_stub { continue; }
-                    faults.push(format!("{preset}: node {} ({}) has no stable id", node.id, node.type_id));
+                    if port_stub {
+                        continue;
+                    }
+                    faults.push(format!(
+                        "{preset}: node {} ({}) has no stable id",
+                        node.id, node.type_id
+                    ));
                 } else if !seen.insert(node.node_id.as_str()) {
-                    faults.push(format!("{preset}: stable id {} repeats", node.node_id.as_str()));
+                    faults.push(format!(
+                        "{preset}: stable id {} repeats",
+                        node.node_id.as_str()
+                    ));
                 }
                 if let Some(group) = node.group.as_deref() {
                     collect(&group.nodes, seen, preset, faults);
@@ -263,7 +283,11 @@ mod tests {
         }
         fn has_render_scene(nodes: &[manifold_core::effect_graph_def::EffectGraphNode]) -> bool {
             nodes.iter().any(|node| {
-                node.type_id == "node.render_scene" || node.group.as_deref().is_some_and(|group| has_render_scene(&group.nodes))
+                node.type_id == "node.render_scene"
+                    || node
+                        .group
+                        .as_deref()
+                        .is_some_and(|group| has_render_scene(&group.nodes))
             })
         }
         let mut scenes = 0;
@@ -275,7 +299,12 @@ mod tests {
                     continue;
                 }
                 scenes += 1;
-                collect(&def.nodes, &mut ahash::AHashSet::default(), type_id.as_str(), &mut faults);
+                collect(
+                    &def.nodes,
+                    &mut ahash::AHashSet::default(),
+                    type_id.as_str(),
+                    &mut faults,
+                );
             }
         }
         assert!(scenes > 20, "only {scenes} scene documents checked");
@@ -289,12 +318,25 @@ mod tests {
             .iter()
             .find(|m| m.id.as_str() == "Scene")
             .expect("Scene is a bundled generator");
-        assert!(scene.available, "the generator browser lists only available presets");
+        assert!(
+            scene.available,
+            "the generator browser lists only available presets"
+        );
         let scene_ids: Vec<_> = bundled_preset_type_ids(PresetKind::Generator)
-            .filter(|id| bundled_preset_def(id).is_some_and(|def| def.nodes.iter().any(|node| node.type_id == "node.render_scene")))
+            .filter(|id| {
+                bundled_preset_def(id).is_some_and(|def| {
+                    def.nodes
+                        .iter()
+                        .any(|node| node.type_id == "node.render_scene")
+                })
+            })
             .map(|id| id.as_str().to_owned())
             .collect();
-        assert_eq!(scene_ids, ["Scene"], "only the base Scene ships; engine scenes live in tests/fixtures/presets");
+        assert_eq!(
+            scene_ids,
+            ["Scene"],
+            "only the base Scene ships; engine scenes live in tests/fixtures/presets"
+        );
     }
 
     #[test]
@@ -304,15 +346,35 @@ mod tests {
             .collect();
         assert!(ids.iter().any(|id| id == "ElasticSculpture"));
         assert!(ids.iter().any(|id| id == "SceneFog"));
-        for expected in ["SurfaceWaves", "OrderedRecon", "SpatialEchoes", "SurfacePeel"] {
+        for expected in [
+            "SurfaceWaves",
+            "OrderedRecon",
+            "SpatialEchoes",
+            "SurfacePeel",
+        ] {
             assert!(ids.iter().any(|id| id == expected), "missing {expected}");
         }
         let metadata = loaded_scene_modifier_presets_from_bundled();
         // The one hidden recipe is the Scene Loop's stage for objects with copies.
-        let hidden: Vec<&str> = metadata.iter().filter(|m| !m.available).map(|m| m.id.as_str()).collect();
+        let hidden: Vec<&str> = metadata
+            .iter()
+            .filter(|m| !m.available)
+            .map(|m| m.id.as_str())
+            .collect();
         assert_eq!(hidden, ["SceneLoopCopies"]);
-        for id in ["SurfacePeel", "OrderedRecon", "SurfaceWaves", "SpatialEchoes"] {
-            assert!(metadata.iter().find(|m| m.id.as_str() == id).unwrap().available);
+        for id in [
+            "SurfacePeel",
+            "OrderedRecon",
+            "SurfaceWaves",
+            "SpatialEchoes",
+        ] {
+            assert!(
+                metadata
+                    .iter()
+                    .find(|m| m.id.as_str() == id)
+                    .unwrap()
+                    .available
+            );
         }
     }
 
@@ -322,12 +384,24 @@ mod tests {
         for type_id in bundled_preset_type_ids(PresetKind::Effect) {
             let def = bundled_preset_def(&type_id)
                 .expect("registered preset must have a parsed def")
-                .as_ref().clone();
-            let graph = def.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).unwrap_or_else(|e| {
-                panic!("bundled preset {}: into_graph failed: {e}", type_id.as_str())
-            });
+                .as_ref()
+                .clone();
+            let graph = def
+                .into_graph(
+                    &registry,
+                    &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+                )
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "bundled preset {}: into_graph failed: {e}",
+                        type_id.as_str()
+                    )
+                });
             validate(&graph).unwrap_or_else(|e| {
-                panic!("bundled preset {}: validate failed: {e:?}", type_id.as_str())
+                panic!(
+                    "bundled preset {}: validate failed: {e:?}",
+                    type_id.as_str()
+                )
             });
             compile(&graph).unwrap_or_else(|e| {
                 panic!("bundled preset {}: compile failed: {e:?}", type_id.as_str())
@@ -346,12 +420,18 @@ mod tests {
         let id = PresetTypeId::new("LED Fill");
         let def = bundled_preset_def(&id)
             .expect("LED Fill must be a bundled generator (filename stem = preset id)")
-            .as_ref().clone();
+            .as_ref()
+            .clone();
         assert!(
             def.preset_metadata.is_some(),
             "LED Fill must carry presetMetadata so the picker/inspector can show its params",
         );
-        let graph = def.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("LED Fill must build a graph");
+        let graph = def
+            .into_graph(
+                &registry,
+                &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+            )
+            .expect("LED Fill must build a graph");
         validate(&graph).expect("LED Fill graph must validate");
         compile(&graph).expect("LED Fill graph must compile");
     }
@@ -371,16 +451,22 @@ mod tests {
     /// chain-grafting code that the runtime actually calls.
     #[test]
     fn every_bundled_preset_splices_into_a_chain() {
-        use manifold_node_engine::scene::boundary_nodes::Source;
-        use manifold_node_engine::load::chain_spec::splice_def_into_chain;
         use manifold_node_engine::graph::Graph;
+        use manifold_node_engine::load::chain_spec::splice_def_into_chain;
+        use manifold_node_engine::scene::boundary_nodes::Source;
 
         let registry = PrimitiveRegistry::with_builtin();
         for type_id in bundled_preset_type_ids(PresetKind::Effect) {
             let def = bundled_preset_def(&type_id).expect("registered");
             let mut chain = Graph::new();
             let src = chain.add_node(Box::new(Source::new()));
-            let result = splice_def_into_chain(&mut chain, (src, "out"), &def, &registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default());
+            let result = splice_def_into_chain(
+                &mut chain,
+                (src, "out"),
+                &def,
+                &registry,
+                &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+            );
             assert!(
                 result.is_some(),
                 "bundled preset {} failed to splice into a chain — preset and chain runtime have \
@@ -412,17 +498,17 @@ mod tests {
     /// once.
     #[test]
     fn every_bundled_preset_executes_one_frame() {
-        use manifold_node_engine::scene::boundary_nodes::{FinalOutput, Source};
-        use manifold_node_engine::load::chain_spec::splice_def_into_chain;
+        use manifold_core::{Beats, Seconds};
+        use manifold_gpu::GpuTextureFormat;
         use manifold_node_engine::exec::effect_node::FrameTime;
         use manifold_node_engine::exec::execution::Executor;
         use manifold_node_engine::exec::execution_plan::compile;
-        use manifold_node_engine::graph::Graph;
         use manifold_node_engine::exec::metal_backend::MetalBackend;
-        use manifold_node_engine::state_store::StateStore;
         use manifold_node_engine::gpu::render_target::RenderTarget;
-        use manifold_core::{Beats, Seconds};
-        use manifold_gpu::GpuTextureFormat;
+        use manifold_node_engine::graph::Graph;
+        use manifold_node_engine::load::chain_spec::splice_def_into_chain;
+        use manifold_node_engine::scene::boundary_nodes::{FinalOutput, Source};
+        use manifold_node_engine::state_store::StateStore;
 
         let device = manifold_gpu::testkit::test_device();
         let registry = PrimitiveRegistry::with_builtin();
@@ -449,9 +535,13 @@ mod tests {
             // validate is satisfied.
             let mut chain = Graph::new();
             let src = chain.add_node(Box::new(Source::new()));
-            let Some(result) =
-                splice_def_into_chain(&mut chain, (src, "out"), &def, &registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
-            else {
+            let Some(result) = splice_def_into_chain(
+                &mut chain,
+                (src, "out"),
+                &def,
+                &registry,
+                &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+            ) else {
                 failures.push(format!("{preset_id}: splice failed"));
                 continue;
             };
@@ -482,8 +572,7 @@ mod tests {
                 .map(|(_, id)| *id);
             let mut backend = MetalBackend::new(device.arc(), w, h, format);
             if let Some(r_src) = r_src {
-                let src_target =
-                    RenderTarget::new(&device, w, h, format, "first-frame-test-src");
+                let src_target = RenderTarget::new(&device, w, h, format, "first-frame-test-src");
                 backend.pre_bind_texture_2d(r_src, src_target);
             }
 
@@ -491,20 +580,14 @@ mod tests {
             let mut state = StateStore::new();
 
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let mut native_enc =
-                    device.create_encoder("effect-first-frame-test");
+                let mut native_enc = device.create_encoder("effect-first-frame-test");
                 {
                     let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(
                         &mut native_enc,
                         &device,
                     );
                     exec.execute_frame_with_state(
-                        &mut chain,
-                        &plan,
-                        frame_time,
-                        &mut gpu,
-                        &mut state,
-                        0,
+                        &mut chain, &plan, frame_time, &mut gpu, &mut state, 0,
                     );
                 }
                 native_enc.commit_and_wait_completed();
@@ -537,9 +620,9 @@ mod tests {
     /// doesn't resolve, etc.).
     #[test]
     fn color_compass_splice_preserves_translate_and_time_constant_wires() {
-        use manifold_node_engine::scene::boundary_nodes::Source;
-        use manifold_node_engine::load::chain_spec::splice_def_into_chain;
         use manifold_node_engine::graph::Graph;
+        use manifold_node_engine::load::chain_spec::splice_def_into_chain;
+        use manifold_node_engine::scene::boundary_nodes::Source;
 
         let registry = PrimitiveRegistry::with_builtin();
         let id = PresetTypeId::new("ColorCompass");
@@ -547,12 +630,21 @@ mod tests {
 
         let mut chain = Graph::new();
         let src = chain.add_node(Box::new(Source::new()));
-        let result = splice_def_into_chain(&mut chain, (src, "out"), &def, &registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
-            .expect("Color Compass splices");
+        let result = splice_def_into_chain(
+            &mut chain,
+            (src, "out"),
+            &def,
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("Color Compass splices");
 
         // Resolve handle → chain-node-id map for the inner nodes the
         // assertions need.
-        let mut handle_map = ahash::AHashMap::<&str, manifold_node_engine::exec::effect_node::NodeInstanceId>::default();
+        let mut handle_map = ahash::AHashMap::<
+            &str,
+            manifold_node_engine::exec::effect_node::NodeInstanceId,
+        >::default();
         for (name, id) in &result.handles {
             handle_map.insert(name.as_ref(), *id);
         }
@@ -576,8 +668,10 @@ mod tests {
         // response despite the JSON declaring it.
         let wire_exists = |from_node, from_port: &str, to_node, to_port: &str| -> bool {
             chain.wires().iter().any(|w| {
-                w.from.0 == from_node && w.from.1 == from_port
-                    && w.to.0 == to_node && w.to.1 == to_port
+                w.from.0 == from_node
+                    && w.from.1 == from_port
+                    && w.to.0 == to_node
+                    && w.to.1 == to_port
             })
         };
         assert!(
@@ -609,18 +703,22 @@ mod tests {
     // high-frequency content produce near-zero asymmetry).
     #[cfg(any())]
     fn color_compass_responds_to_half_bright_source() {
-        use manifold_node_engine::scene::boundary_nodes::{FinalOutput, Source};
-        use manifold_node_engine::load::chain_spec::splice_def_into_chain;
-        use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId};
-        use manifold_node_engine::exec::execution_plan::{ResourceId, compile};
-        use manifold_node_engine::graph::Graph;
-        use manifold_node_engine::parameters::{ParamDef, ParamValue};
-        use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-        use manifold_node_engine::state_store::StateStore;
-        use manifold_node_engine::exec::{execution::Executor, metal_backend::MetalBackend};
-        use manifold_node_engine::gpu::render_target::RenderTarget;
         use manifold_core::{Beats, Seconds};
         use manifold_gpu::GpuTextureFormat;
+        use manifold_node_engine::exec::effect_node::{
+            EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId,
+        };
+        use manifold_node_engine::exec::execution_plan::{ResourceId, compile};
+        use manifold_node_engine::exec::{execution::Executor, metal_backend::MetalBackend};
+        use manifold_node_engine::gpu::render_target::RenderTarget;
+        use manifold_node_engine::graph::Graph;
+        use manifold_node_engine::load::chain_spec::splice_def_into_chain;
+        use manifold_node_engine::parameters::{ParamDef, ParamValue};
+        use manifold_node_engine::ports::{
+            NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+        };
+        use manifold_node_engine::scene::boundary_nodes::{FinalOutput, Source};
+        use manifold_node_engine::state_store::StateStore;
 
         fn frame_time() -> FrameTime {
             FrameTime {
@@ -699,22 +797,22 @@ mod tests {
                 }
             }
         }
-        let raw_bytes: Vec<u8> = pixels
-            .iter()
-            .flat_map(|p| p.to_le_bytes())
-            .collect();
+        let raw_bytes: Vec<u8> = pixels.iter().flat_map(|p| p.to_le_bytes()).collect();
 
-        let src_target = RenderTarget::view_of(device.create_texture(&manifold_gpu::GpuTextureDesc {
-            width: w,
-            height: h,
-            depth: 1,
-            format,
-            dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL
-                | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
-            label: "compass-source",
-            mip_levels: 1,
-        }), "compass-source");
+        let src_target = RenderTarget::view_of(
+            device.create_texture(&manifold_gpu::GpuTextureDesc {
+                width: w,
+                height: h,
+                depth: 1,
+                format,
+                dimension: manifold_gpu::GpuTextureDimension::D2,
+                usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL
+                    | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
+                label: "compass-source",
+                mip_levels: 1,
+            }),
+            "compass-source",
+        );
         device.upload_texture(&src_target.texture, &raw_bytes);
 
         let registry = PrimitiveRegistry::with_builtin();
@@ -723,8 +821,14 @@ mod tests {
 
         let mut chain = Graph::new();
         let src = chain.add_node(Box::new(Source::new()));
-        let result = splice_def_into_chain(&mut chain, (src, "out"), &def, &registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
-            .expect("splice ok");
+        let result = splice_def_into_chain(
+            &mut chain,
+            (src, "out"),
+            &def,
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("splice ok");
 
         // Look up smoothing_y (vertical axis = N-S compass).
         let smoothing_y = result
@@ -770,8 +874,10 @@ mod tests {
         for _ in 0..60 {
             let mut native_enc = device.create_encoder("compass-diag");
             {
-                let mut gpu =
-                    manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native_enc, &device);
+                let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(
+                    &mut native_enc,
+                    &device,
+                );
                 exec.execute_frame_with_state(
                     &mut chain,
                     &plan,
@@ -804,23 +910,43 @@ mod catalog_source_tests {
     #[test]
     fn preset_catalog_providers_have_disjoint_type_ids() {
         let mut ids = std::collections::HashSet::new();
-        for kind in [PresetKind::Effect, PresetKind::Generator, PresetKind::SceneModifier] {
-            manifold_node_engine::load::catalog_source::visit_presets(kind, &mut |id| assert!(ids.insert(id.clone()), "duplicate preset type id: {id}"));
+        for kind in [
+            PresetKind::Effect,
+            PresetKind::Generator,
+            PresetKind::SceneModifier,
+        ] {
+            manifold_node_engine::load::catalog_source::visit_presets(kind, &mut |id| {
+                assert!(ids.insert(id.clone()), "duplicate preset type id: {id}")
+            });
         }
-        assert!(!ids.is_empty(), "catalog census requires linked family presets");
+        assert!(
+            !ids.is_empty(),
+            "catalog census requires linked family presets"
+        );
     }
 
     #[test]
     fn preset_catalog_registration_preserves_json_and_cached_def() {
-        for kind in [PresetKind::Effect, PresetKind::Generator, PresetKind::SceneModifier] {
+        for kind in [
+            PresetKind::Effect,
+            PresetKind::Generator,
+            PresetKind::SceneModifier,
+        ] {
             let direct: Vec<_> = bundled_preset_type_ids(kind).collect();
-            let registered: Vec<_> = manifold_node_engine::load::catalog_source::preset_type_ids(kind).collect();
+            let registered: Vec<_> =
+                manifold_node_engine::load::catalog_source::preset_type_ids(kind).collect();
             assert_eq!(direct, registered);
             for id in direct {
-                assert_eq!(bundled_preset_json(&id), manifold_node_engine::load::catalog_source::preset_json(&id));
-                match (bundled_preset_def(&id), manifold_node_engine::load::catalog_source::preset_def(&id)) {
+                assert_eq!(
+                    bundled_preset_json(&id),
+                    manifold_node_engine::load::catalog_source::preset_json(&id)
+                );
+                match (
+                    bundled_preset_def(&id),
+                    manifold_node_engine::load::catalog_source::preset_def(&id),
+                ) {
                     (Some(a), Some(b)) => assert!(Arc::ptr_eq(&a, &b)),
-                    (None, None) => {},
+                    (None, None) => {}
                     _ => panic!("catalog definition mismatch: {id}"),
                 }
             }
@@ -834,33 +960,63 @@ mod metadata_source_tests {
 
     #[test]
     fn registered_metadata_preserves_legacy_published_order() {
-        use manifold_core::preset_definition_registry::{self as definitions, effect, generator, scene_modifier};
-        let direct = [loaded_presets_from_bundled(),
+        use manifold_core::preset_definition_registry::{
+            self as definitions, effect, generator, scene_modifier,
+        };
+        let direct = [
+            loaded_presets_from_bundled(),
             crate::bundled_generator_presets::loaded_generator_presets_from_bundled(),
-            loaded_scene_modifier_presets_from_bundled()];
-        let registered = [effect::load_preset_metadata(), generator::load_preset_metadata(),
-            scene_modifier::load_preset_metadata()];
+            loaded_scene_modifier_presets_from_bundled(),
+        ];
+        let registered = [
+            effect::load_preset_metadata(),
+            generator::load_preset_metadata(),
+            scene_modifier::load_preset_metadata(),
+        ];
         assert_eq!(direct, registered);
-        assert!(registered.iter().all(|metadata| !metadata.is_empty()), "shipping metadata providers must be nonempty");
+        assert!(
+            registered.iter().all(|metadata| !metadata.is_empty()),
+            "shipping metadata providers must be nonempty"
+        );
         let mut ids = std::collections::HashSet::new();
         for metadata in registered.iter().flatten() {
-            assert!(ids.insert(metadata.id.clone()), "duplicate metadata preset id: {}", metadata.id);
+            assert!(
+                ids.insert(metadata.id.clone()),
+                "duplicate metadata preset id: {}",
+                metadata.id
+            );
         }
         // Publish through the former direct-loader path, including browser filtering.
         definitions::rebuild_preset_definitions(&direct[0], &direct[1], &direct[2]);
-        let effects: Vec<_> = direct[0].iter()
-            .filter(|m| EFFECT_CATALOG.load().is_browser_visible(m.id.as_str())).cloned().collect();
-        let generators: Vec<_> = direct[1].iter()
-            .filter(|m| GENERATOR_CATALOG.load().is_browser_visible(m.id.as_str())).cloned().collect();
+        let effects: Vec<_> = direct[0]
+            .iter()
+            .filter(|m| EFFECT_CATALOG.load().is_browser_visible(m.id.as_str()))
+            .cloned()
+            .collect();
+        let generators: Vec<_> = direct[1]
+            .iter()
+            .filter(|m| GENERATOR_CATALOG.load().is_browser_visible(m.id.as_str()))
+            .cloned()
+            .collect();
         manifold_core::preset_type_registry::rebuild(&effects, &generators);
-        let published_order = || manifold_core::preset_type_registry::all().into_iter()
-            .map(|entry| (entry.id, entry.kind, entry.display_name)).collect::<Vec<_>>();
+        let published_order = || {
+            manifold_core::preset_type_registry::all()
+                .into_iter()
+                .map(|entry| (entry.id, entry.kind, entry.display_name))
+                .collect::<Vec<_>>()
+        };
         let before = published_order();
         let generation = catalog_generation();
-        assert_eq!(manifold_node_engine::load::preset_loader::clear_project_presets(), generation + 1);
+        assert_eq!(
+            manifold_node_engine::load::preset_loader::clear_project_presets(),
+            generation + 1
+        );
         assert_eq!(published_order(), before);
         for metadata in direct.iter().flatten() {
-            assert_eq!(definitions::get(&metadata.id).display_name, metadata.display_name);
+            assert_eq!(
+                definitions::get(&metadata.id).display_name,
+                metadata.display_name
+            );
         }
     }
 }

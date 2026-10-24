@@ -59,7 +59,9 @@ impl TimelineViewportPanel {
         // The playhead keys on the pixel it lands on, not the beat: playback
         // moves the beat every frame but the strip pixel rarely.
         let playhead_px = if self.overview_max_beat > 0.0 {
-            ((playhead / self.overview_max_beat) * tex_w as f32).round().clamp(0.0, tex_w as f32) as i32
+            ((playhead / self.overview_max_beat) * tex_w as f32)
+                .round()
+                .clamp(0.0, tex_w as f32) as i32
         } else {
             -1
         };
@@ -480,7 +482,10 @@ impl TimelineViewportPanel {
                 tree.set_visible(separator_id, false);
             }
 
-            self.track_bg_groups.push(TrackBgGroup { bg_id, separator_id });
+            self.track_bg_groups.push(TrackBgGroup {
+                bg_id,
+                separator_id,
+            });
         }
 
         // The top separator and the grid lines are GPU lines in the grid pass
@@ -495,10 +500,25 @@ impl TimelineViewportPanel {
         self.ruler_tick_ids.clear();
         self.ruler_label_ids.clear();
         for _ in 0..MAX_RULER_TICKS {
-            let tick = tree.add_panel(self.viewport_clip_id, 0.0, 0.0, 0.0, 0.0, UIStyle::default());
+            let tick = tree.add_panel(
+                self.viewport_clip_id,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                UIStyle::default(),
+            );
             tree.set_visible(tick, false);
             self.ruler_tick_ids.push(tick);
-            let label = tree.add_label(self.viewport_clip_id, 0.0, 0.0, 0.0, 0.0, "", Self::ruler_label_style(false));
+            let label = tree.add_label(
+                self.viewport_clip_id,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                "",
+                Self::ruler_label_style(false),
+            );
             tree.set_visible(label, false);
             self.ruler_label_ids.push(label);
         }
@@ -508,7 +528,11 @@ impl TimelineViewportPanel {
 
     fn ruler_label_style(is_bar: bool) -> UIStyle {
         UIStyle {
-            text_color: if is_bar { color::TEXT_NORMAL } else { color::TEXT_DIMMED },
+            text_color: if is_bar {
+                color::TEXT_NORMAL
+            } else {
+                color::TEXT_DIMMED
+            },
             font_size: RULER_FONT_SIZE,
             text_align: TextAlign::Left,
             ..UIStyle::default()
@@ -594,8 +618,17 @@ impl TimelineViewportPanel {
 
                 // Tick mark (bottom-aligned)
                 let tick = self.ruler_tick_ids[count];
-                tree.set_bounds(tick, Rect::new(px, ruler_bottom - tick_h, RULER_TICK_W, tick_h));
-                tree.set_style(tick, UIStyle { bg_color: tick_color, ..UIStyle::default() });
+                tree.set_bounds(
+                    tick,
+                    Rect::new(px, ruler_bottom - tick_h, RULER_TICK_W, tick_h),
+                );
+                tree.set_style(
+                    tick,
+                    UIStyle {
+                        bg_color: tick_color,
+                        ..UIStyle::default()
+                    },
+                );
                 tree.set_visible(tick, true);
 
                 // Labels sit at label_step intervals; a named marker's beat
@@ -614,7 +647,10 @@ impl TimelineViewportPanel {
                     } else {
                         let _ = write!(text, "{bar_num}.{beat_in_bar}");
                     }
-                    tree.set_bounds(label, Rect::new(px + 2.0, label_y, RULER_LABEL_W, RULER_LABEL_H));
+                    tree.set_bounds(
+                        label,
+                        Rect::new(px + 2.0, label_y, RULER_LABEL_W, RULER_LABEL_H),
+                    );
                     tree.set_text(label, &text);
                     tree.set_style(label, Self::ruler_label_style(is_bar));
                     tree.set_visible(label, true);
@@ -874,7 +910,9 @@ impl TimelineViewportPanel {
         // call is cheap (a value comparison) every frame; `format!` itself
         // only runs when position/duration/time-signature actually changed.
         let beats_per_bar = self.beats_per_bar;
-        let text = self.drag_readout_cache.text(position, duration, beats_per_bar);
+        let text = self
+            .drag_readout_cache
+            .text(position, duration, beats_per_bar);
 
         let id = tree.add_label(
             self.viewport_clip_id,
@@ -998,10 +1036,7 @@ impl TimelineViewportPanel {
                 } else {
                     mc
                 };
-                tree.set_bounds(
-                    group.flag_id,
-                    Rect::new(flag_x, flag_y, flag_w, flag_h),
-                );
+                tree.set_bounds(group.flag_id, Rect::new(flag_x, flag_y, flag_w, flag_h));
                 tree.set_style(
                     group.flag_id,
                     UIStyle {
@@ -1085,10 +1120,7 @@ impl TimelineViewportPanel {
             // Background
             tree.set_visible(group.bg_id, visible);
             if visible {
-                tree.set_bounds(
-                    group.bg_id,
-                    Rect::new(tr_x, clamped_y, tr_w, clamped_h),
-                );
+                tree.set_bounds(group.bg_id, Rect::new(tr_x, clamped_y, tr_w, clamped_h));
             }
 
             // Separator

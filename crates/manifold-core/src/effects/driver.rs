@@ -2,12 +2,12 @@
 //! deterministic integer hash, and the beat-division helpers. Extracted
 //! from effects.rs (P2-E, design D4).
 
-use std::borrow::Cow;
-use serde::{Deserialize, Serialize};
-use crate::types::{BeatDivision, DriverWaveform};
-use crate::units::{Beats, Bpm, Seconds};
 use super::ParamId;
 use super::{default_one, default_true};
+use crate::types::{BeatDivision, DriverWaveform};
+use crate::units::{Beats, Bpm, Seconds};
+use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 // ─── Parameter Driver (LFO) ───
 
@@ -166,18 +166,29 @@ impl ParameterDriver {
     /// Invalid timing has no representable period. Ties round to the longer period.
     pub fn effective_period_frames(&self, bpm: Bpm, frame_rate: f32) -> Option<u32> {
         let period = self.period_beats() as f64;
-        if !period.is_finite() || period <= 0.0 || !bpm.0.is_finite() || bpm.0 <= 0.0
-            || !frame_rate.is_finite() || frame_rate <= 0.0
+        if !period.is_finite()
+            || period <= 0.0
+            || !bpm.0.is_finite()
+            || bpm.0 <= 0.0
+            || !frame_rate.is_finite()
+            || frame_rate <= 0.0
         {
             return None;
         }
         let requested = period * 60.0 / bpm.0 as f64 * frame_rate as f64;
         let frames = match self.waveform {
-            DriverWaveform::Square => ((requested / 2.0).round().max(1.0)
-                .min((u32::MAX / 2) as f64) as u32) * 2,
+            DriverWaveform::Square => {
+                ((requested / 2.0)
+                    .round()
+                    .max(1.0)
+                    .min((u32::MAX / 2) as f64) as u32)
+                    * 2
+            }
             // Two opposite sine samples can both be zero crossings.
             DriverWaveform::Sine => (requested.round() as u32).max(3),
-            DriverWaveform::Triangle | DriverWaveform::Sawtooth => (requested.round() as u32).max(2),
+            DriverWaveform::Triangle | DriverWaveform::Sawtooth => {
+                (requested.round() as u32).max(2)
+            }
             DriverWaveform::Random => (requested.round() as u32).max(1),
         };
         Some(frames)
@@ -187,8 +198,12 @@ impl ParameterDriver {
     /// Seeks and export starts do not reset phase; rate changes may change phase.
     /// Invalid timing returns neutral 0.5, like the invalid beat-period evaluator.
     pub fn evaluate_frame_aligned(&self, time: Seconds, bpm: Bpm, frame_rate: f32) -> f32 {
-        let Some(frames) = self.effective_period_frames(bpm, frame_rate) else { return 0.5 };
-        if !time.0.is_finite() { return 0.5; }
+        let Some(frames) = self.effective_period_frames(bpm, frame_rate) else {
+            return 0.5;
+        };
+        if !time.0.is_finite() {
+            return 0.5;
+        }
         // Tolerance is one ten-millionth of a frame, solely for f64 boundary error.
         let frame = (time.0 * frame_rate as f64 + 1.0e-7).floor() as i64;
         let frames = i64::from(frames);
@@ -295,7 +310,10 @@ mod hash_tests {
     fn hash_to_float_stays_in_unit_range() {
         for seed in 0..2000u32 {
             let f = hash_to_float(seed);
-            assert!((0.0..1.0).contains(&f), "seed {seed} produced out-of-range {f}");
+            assert!(
+                (0.0..1.0).contains(&f),
+                "seed {seed} produced out-of-range {f}"
+            );
         }
     }
 
@@ -390,8 +408,8 @@ impl<'de> Deserialize<'de> for ParameterDriver {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::*;
+    use super::*;
     use crate::units::Beats;
 
     #[test]
@@ -598,7 +616,10 @@ mod tests {
             "reversed": false
         }"#;
         let d: ParameterDriver = serde_json::from_str(json).unwrap();
-        assert_eq!(d.free_period_beats, None, "legacy driver must default to sync mode");
+        assert_eq!(
+            d.free_period_beats, None,
+            "legacy driver must default to sync mode"
+        );
         assert_eq!(d.period_beats(), BeatDivision::Quarter.beats());
     }
 
@@ -622,9 +643,11 @@ mod tests {
             d.phase,
         );
         assert!(v0.abs() < 1e-6, "phase 0 at beat 0");
-        assert!((v_half - 0.5).abs() < 1e-6, "half phase at beat 1.5 over 3-beat period");
+        assert!(
+            (v_half - 0.5).abs() < 1e-6,
+            "half phase at beat 1.5 over 3-beat period"
+        );
     }
-
 }
 
 #[cfg(test)]
@@ -642,13 +665,17 @@ mod frame_alignment_tests {
         let d = square();
         assert_eq!(d.effective_period_frames(Bpm(164.0), 24.0), Some(2));
         for start in [0.0, 56.0 * 60.0 / 164.0, 3000.0] {
-            let values: Vec<_> = (0..1000).map(|i|
-                d.evaluate_frame_aligned(Seconds(start + i as f64 / 24.0), Bpm(164.0), 24.0)
-            ).collect();
+            let values: Vec<_> = (0..1000)
+                .map(|i| {
+                    d.evaluate_frame_aligned(Seconds(start + i as f64 / 24.0), Bpm(164.0), 24.0)
+                })
+                .collect();
             assert!(values.windows(2).all(|v| v[0] != v[1]));
             for i in [700, 1, 999, 0] {
-                assert_eq!(values[i], d.evaluate_frame_aligned(
-                    Seconds(start + i as f64 / 24.0), Bpm(164.0), 24.0));
+                assert_eq!(
+                    values[i],
+                    d.evaluate_frame_aligned(Seconds(start + i as f64 / 24.0), Bpm(164.0), 24.0)
+                );
             }
         }
     }
@@ -661,8 +688,13 @@ mod frame_alignment_tests {
         d.free_period_beats = Some(4.9);
         assert_eq!(d.effective_period_frames(Bpm(60.0), 1.0), Some(4));
         d.free_period_beats = Some(0.001);
-        for (wave, minimum) in [(DriverWaveform::Square, 2), (DriverWaveform::Sine, 3),
-            (DriverWaveform::Triangle, 2), (DriverWaveform::Sawtooth, 2), (DriverWaveform::Random, 1)] {
+        for (wave, minimum) in [
+            (DriverWaveform::Square, 2),
+            (DriverWaveform::Sine, 3),
+            (DriverWaveform::Triangle, 2),
+            (DriverWaveform::Sawtooth, 2),
+            (DriverWaveform::Random, 1),
+        ] {
             d.waveform = wave;
             assert_eq!(d.effective_period_frames(Bpm(164.0), 24.0), Some(minimum));
         }
@@ -673,19 +705,37 @@ mod frame_alignment_tests {
     #[test]
     fn frame_align_holds_until_boundary_and_honors_phase() {
         let mut d = square();
-        assert_eq!(d.evaluate_frame_aligned(Seconds(0.9 / 24.0), Bpm(164.0), 24.0), 1.0);
-        assert_eq!(d.evaluate_frame_aligned(Seconds(1.0 / 24.0), Bpm(164.0), 24.0), 0.0);
+        assert_eq!(
+            d.evaluate_frame_aligned(Seconds(0.9 / 24.0), Bpm(164.0), 24.0),
+            1.0
+        );
+        assert_eq!(
+            d.evaluate_frame_aligned(Seconds(1.0 / 24.0), Bpm(164.0), 24.0),
+            0.0
+        );
         d.phase = 0.5;
-        assert_eq!(d.evaluate_frame_aligned(Seconds(1.0 / 24.0), Bpm(164.0), 24.0), 1.0);
+        assert_eq!(
+            d.evaluate_frame_aligned(Seconds(1.0 / 24.0), Bpm(164.0), 24.0),
+            1.0
+        );
     }
 
     #[test]
     fn frame_align_random_changes_by_cycle_and_replays() {
         let mut d = square();
         d.waveform = DriverWaveform::Random;
-        assert_eq!(d.evaluate_frame_aligned(Seconds(0.0), Bpm(164.0), 24.0), hash_to_float(0));
-        assert_eq!(d.evaluate_frame_aligned(Seconds(1.0 / 24.0), Bpm(164.0), 24.0), hash_to_float(0));
-        assert_eq!(d.evaluate_frame_aligned(Seconds(2.0 / 24.0), Bpm(164.0), 24.0), hash_to_float(1));
+        assert_eq!(
+            d.evaluate_frame_aligned(Seconds(0.0), Bpm(164.0), 24.0),
+            hash_to_float(0)
+        );
+        assert_eq!(
+            d.evaluate_frame_aligned(Seconds(1.0 / 24.0), Bpm(164.0), 24.0),
+            hash_to_float(0)
+        );
+        assert_eq!(
+            d.evaluate_frame_aligned(Seconds(2.0 / 24.0), Bpm(164.0), 24.0),
+            hash_to_float(1)
+        );
     }
 
     #[test]
@@ -693,10 +743,19 @@ mod frame_alignment_tests {
         let d = square();
         let mut value = serde_json::to_value(&d).unwrap();
         assert_eq!(value["frameAligned"], true);
-        assert!(serde_json::from_value::<ParameterDriver>(value.clone()).unwrap().frame_aligned);
+        assert!(
+            serde_json::from_value::<ParameterDriver>(value.clone())
+                .unwrap()
+                .frame_aligned
+        );
         value.as_object_mut().unwrap().remove("frameAligned");
         let legacy: ParameterDriver = serde_json::from_value(value).unwrap();
         assert!(!legacy.frame_aligned);
-        assert!(serde_json::to_value(legacy).unwrap().get("frameAligned").is_none());
+        assert!(
+            serde_json::to_value(legacy)
+                .unwrap()
+                .get("frameAligned")
+                .is_none()
+        );
     }
 }

@@ -15,21 +15,21 @@ use objc2_foundation::NSArray;
 use objc2_foundation::NSString;
 use objc2_metal::{
     MTLAccelerationStructure, MTLAccelerationStructureCommandEncoder,
-    MTLAccelerationStructureGeometryDescriptor,
-    MTLAccelerationStructureInstanceDescriptor, MTLAccelerationStructureInstanceOptions,
+    MTLAccelerationStructureGeometryDescriptor, MTLAccelerationStructureInstanceDescriptor,
+    MTLAccelerationStructureInstanceOptions, MTLAccelerationStructureSizes,
     MTLAccelerationStructureTriangleGeometryDescriptor, MTLAccelerationStructureUsage,
     MTLAttributeFormat, MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLDevice, MTLInstanceAccelerationStructureDescriptor,
-    MTLIndexType, MTLPackedFloat3, MTLPackedFloat4x3, MTLAccelerationStructureSizes,
-    MTLPrimitiveAccelerationStructureDescriptor, MTLResourceUsage, MTLSize,
+    MTLComputeCommandEncoder, MTLDevice, MTLIndexType, MTLInstanceAccelerationStructureDescriptor,
+    MTLPackedFloat3, MTLPackedFloat4x3, MTLPrimitiveAccelerationStructureDescriptor,
+    MTLResourceUsage, MTLSize,
 };
 
 use super::super::device::GpuDevice;
 use super::super::types::{GpuBuffer, GpuTexture};
 use super::{
-    EmissiveLightTable, GiMaterial, MAX_RT_MATERIAL_TEXTURES, RT_MATERIAL_TEX_INDEX_NONE, RtInstanceBuildObj,
-    RT_INSTANCE_TRANSFORM_BYTES, RtNormalSource, SHADOW_WORKGROUP, EmissiveScratch,
-    effective_instance_slots, write_instance_obj_params,
+    EmissiveLightTable, EmissiveScratch, GiMaterial, MAX_RT_MATERIAL_TEXTURES,
+    RT_INSTANCE_TRANSFORM_BYTES, RT_MATERIAL_TEX_INDEX_NONE, RtInstanceBuildObj, RtNormalSource,
+    SHADOW_WORKGROUP, effective_instance_slots, write_instance_obj_params,
 };
 
 /// Fixed-capacity texture list returned by the normal-source table builder.
@@ -64,7 +64,10 @@ pub(crate) struct Blas {
     /// Retained per the §4.2 contract (every Blas retains its triangle
     /// descriptor); the primitive descriptor's geometry array already owns
     /// it, so nothing reads this field directly today.
-    #[allow(dead_code, reason = "§4.2 retention contract; un-suppress when a rebuild/refit path reads the triangle descriptor directly")]
+    #[allow(
+        dead_code,
+        reason = "§4.2 retention contract; un-suppress when a rebuild/refit path reads the triangle descriptor directly"
+    )]
     pub(crate) tri: Retained<MTLAccelerationStructureTriangleGeometryDescriptor>,
     pub(crate) build_scratch: GpuBuffer,
     pub(crate) refit_scratch: GpuBuffer,
@@ -177,36 +180,152 @@ pub struct RtAccel {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct RtGeometryTopology { vertex: usize, vertex_offset: u32, vertex_stride: u32, triangle_count: u32, index: Option<usize>, normal_offset: u32, uv_offset: u32, instance_slots: u32, wired: bool, nonopaque: bool, appearance_weights: Option<usize> }
-impl RtGeometryTopology { fn from_geometry(o: &RtObjectGeometry<'_>) -> Self { Self { vertex: o.vertex_buffer.identity_key(), vertex_offset: o.vertex_offset, vertex_stride: o.vertex_stride, triangle_count: o.triangle_count, index: o.index_buffer.map(|b| b.identity_key()), normal_offset: o.normal_offset, uv_offset: o.uv_offset, instance_slots: effective_instance_slots(o), wired: o.instances_addr != 0, nonopaque: blas_geometry_nonopaque(o), appearance_weights: o.appearance_weights.map(|b| b.identity_key()) } } }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum RtTopologyMismatchCategory { ObjectCount, DescriptorMode, Vertex, Index, NormalUv, InstanceSlots, NonOpaque, AppearanceWeights, SlotOverflow }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct RtTopologyMismatch { pub object: usize, pub category: RtTopologyMismatchCategory }
-fn check_topology_records<I: ExactSizeIterator<Item = RtGeometryTopology>>(resident: &[RtGeometryTopology], resident_instanced: bool, resident_slots: u32, current: I) -> Result<(), RtTopologyMismatch> {
-    if resident.len() != current.len() { return Err(RtTopologyMismatch { object: resident.len().min(current.len()), category: RtTopologyMismatchCategory::ObjectCount }); }
-    let mut slots = 0u32; let mut instanced = false;
+pub(crate) struct RtGeometryTopology {
+    vertex: usize,
+    vertex_offset: u32,
+    vertex_stride: u32,
+    triangle_count: u32,
+    index: Option<usize>,
+    normal_offset: u32,
+    uv_offset: u32,
+    instance_slots: u32,
+    wired: bool,
+    nonopaque: bool,
+    appearance_weights: Option<usize>,
+}
+impl RtGeometryTopology {
+    fn from_geometry(o: &RtObjectGeometry<'_>) -> Self {
+        Self {
+            vertex: o.vertex_buffer.identity_key(),
+            vertex_offset: o.vertex_offset,
+            vertex_stride: o.vertex_stride,
+            triangle_count: o.triangle_count,
+            index: o.index_buffer.map(|b| b.identity_key()),
+            normal_offset: o.normal_offset,
+            uv_offset: o.uv_offset,
+            instance_slots: effective_instance_slots(o),
+            wired: o.instances_addr != 0,
+            nonopaque: blas_geometry_nonopaque(o),
+            appearance_weights: o.appearance_weights.map(|b| b.identity_key()),
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RtTopologyMismatchCategory {
+    ObjectCount,
+    DescriptorMode,
+    Vertex,
+    Index,
+    NormalUv,
+    InstanceSlots,
+    NonOpaque,
+    AppearanceWeights,
+    SlotOverflow,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RtTopologyMismatch {
+    pub object: usize,
+    pub category: RtTopologyMismatchCategory,
+}
+fn check_topology_records<I: ExactSizeIterator<Item = RtGeometryTopology>>(
+    resident: &[RtGeometryTopology],
+    resident_instanced: bool,
+    resident_slots: u32,
+    current: I,
+) -> Result<(), RtTopologyMismatch> {
+    if resident.len() != current.len() {
+        return Err(RtTopologyMismatch {
+            object: resident.len().min(current.len()),
+            category: RtTopologyMismatchCategory::ObjectCount,
+        });
+    }
+    let mut slots = 0u32;
+    let mut instanced = false;
     for (i, (a, b)) in resident.iter().zip(current).enumerate() {
-        instanced |= b.wired; slots = slots.checked_add(b.instance_slots).ok_or(RtTopologyMismatch { object: i, category: RtTopologyMismatchCategory::SlotOverflow })?;
-        if a.vertex != b.vertex || a.vertex_offset != b.vertex_offset || a.vertex_stride != b.vertex_stride || a.triangle_count != b.triangle_count { return Err(RtTopologyMismatch { object: i, category: RtTopologyMismatchCategory::Vertex }); }
-        if a.index != b.index { return Err(RtTopologyMismatch { object: i, category: RtTopologyMismatchCategory::Index }); }
-        if a.normal_offset != b.normal_offset || a.uv_offset != b.uv_offset { return Err(RtTopologyMismatch { object: i, category: RtTopologyMismatchCategory::NormalUv }); }
-        if a.instance_slots != b.instance_slots || a.wired != b.wired { return Err(RtTopologyMismatch { object: i, category: RtTopologyMismatchCategory::InstanceSlots }); }
+        instanced |= b.wired;
+        slots = slots
+            .checked_add(b.instance_slots)
+            .ok_or(RtTopologyMismatch {
+                object: i,
+                category: RtTopologyMismatchCategory::SlotOverflow,
+            })?;
+        if a.vertex != b.vertex
+            || a.vertex_offset != b.vertex_offset
+            || a.vertex_stride != b.vertex_stride
+            || a.triangle_count != b.triangle_count
+        {
+            return Err(RtTopologyMismatch {
+                object: i,
+                category: RtTopologyMismatchCategory::Vertex,
+            });
+        }
+        if a.index != b.index {
+            return Err(RtTopologyMismatch {
+                object: i,
+                category: RtTopologyMismatchCategory::Index,
+            });
+        }
+        if a.normal_offset != b.normal_offset || a.uv_offset != b.uv_offset {
+            return Err(RtTopologyMismatch {
+                object: i,
+                category: RtTopologyMismatchCategory::NormalUv,
+            });
+        }
+        if a.instance_slots != b.instance_slots || a.wired != b.wired {
+            return Err(RtTopologyMismatch {
+                object: i,
+                category: RtTopologyMismatchCategory::InstanceSlots,
+            });
+        }
         // §5.2 (P4b): the descriptor nonopaque property (alpha mask,
         // translucency, wired weights, nonunit gain) is baked into the BLAS
         // at build — a flip rebuilds the affected BLAS. A fractional-to-
         // fractional gain change leaves this bool untouched and rides the
         // per-frame normal-source table rewrite only.
-        if a.nonopaque != b.nonopaque { return Err(RtTopologyMismatch { object: i, category: RtTopologyMismatchCategory::NonOpaque }); }
+        if a.nonopaque != b.nonopaque {
+            return Err(RtTopologyMismatch {
+                object: i,
+                category: RtTopologyMismatchCategory::NonOpaque,
+            });
+        }
         // P4b: weights buffer identity — the resident pin set and
         // useResource declarations reference the planned buffers
         // (§4.3), so a rewired weights buffer is a replacement, same
         // discipline as the vertex/index identity keys.
-        if a.appearance_weights != b.appearance_weights { return Err(RtTopologyMismatch { object: i, category: RtTopologyMismatchCategory::AppearanceWeights }); }
+        if a.appearance_weights != b.appearance_weights {
+            return Err(RtTopologyMismatch {
+                object: i,
+                category: RtTopologyMismatchCategory::AppearanceWeights,
+            });
+        }
     }
-    if instanced != resident_instanced { return Err(RtTopologyMismatch { object: 0, category: RtTopologyMismatchCategory::DescriptorMode }); }
-    if slots != resident_slots { return Err(RtTopologyMismatch { object: resident.len(), category: RtTopologyMismatchCategory::InstanceSlots }); }
+    if instanced != resident_instanced {
+        return Err(RtTopologyMismatch {
+            object: 0,
+            category: RtTopologyMismatchCategory::DescriptorMode,
+        });
+    }
+    if slots != resident_slots {
+        return Err(RtTopologyMismatch {
+            object: resident.len(),
+            category: RtTopologyMismatchCategory::InstanceSlots,
+        });
+    }
     Ok(())
 }
-impl RtAccel { pub fn check_topology(&self, objects: &[RtObjectGeometry<'_>]) -> Result<(), RtTopologyMismatch> { check_topology_records(&self.topology, self.instanced, self.instance_slot_total, objects.iter().map(RtGeometryTopology::from_geometry)) } }
+impl RtAccel {
+    pub fn check_topology(
+        &self,
+        objects: &[RtObjectGeometry<'_>],
+    ) -> Result<(), RtTopologyMismatch> {
+        check_topology_records(
+            &self.topology,
+            self.instanced,
+            self.instance_slot_total,
+            objects.iter().map(RtGeometryTopology::from_geometry),
+        )
+    }
+}
 
 /// BUG-84fv class, root fix: an RtAccel must NEVER free its Metal objects
 /// while a previously-committed command buffer could still reference them
@@ -226,11 +345,16 @@ impl Drop for RtAccel {
             self.structure.clone(),
             self.descriptor.clone(),
             self.refit_scratch.raw.clone(),
-            self.blas.iter().map(|b| b.structure.clone()).collect::<Vec<_>>(),
+            self.blas
+                .iter()
+                .map(|b| b.structure.clone())
+                .collect::<Vec<_>>(),
             self.instance_buffer.raw.clone(),
             self.instance_buffer_scratch.raw.clone(),
             self.instance_obj_params.as_ref().map(|p| p.raw.clone()),
-            self.instance_obj_params_scratch.as_ref().map(|p| p.raw.clone()),
+            self.instance_obj_params_scratch
+                .as_ref()
+                .map(|p| p.raw.clone()),
             self.geometry_buffers.clone(),
             self.emissive_table.as_ref().map(|t| {
                 (
@@ -430,8 +554,12 @@ pub struct RtObjectGeometry<'a> {
 
 impl RtObjectGeometry<'_> {
     /// The Object-space `instance_inner`: the identity.
-    pub const NO_INNER: [[f32; 4]; 4] =
-        [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+    pub const NO_INNER: [[f32; 4]; 4] = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
 }
 
 /// Column-major `a · b`.
@@ -445,7 +573,10 @@ fn mat4_mul(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
     out
 }
 
-pub(crate) fn validate_instance_source_address(instances_addr: u64, source_address: Option<u64>) -> Result<(), &'static str> {
+pub(crate) fn validate_instance_source_address(
+    instances_addr: u64,
+    source_address: Option<u64>,
+) -> Result<(), &'static str> {
     if instances_addr == 0 {
         return Ok(());
     }
@@ -474,7 +605,10 @@ pub const RT_MASK_SHADOW_CASTER: u32 = 0x02;
 /// nonunit appearance gain — the design's descriptor-nonopaque property.
 /// Anything else keeps the hardware early-termination fast path.
 pub(crate) fn blas_geometry_nonopaque(obj: &RtObjectGeometry) -> bool {
-    obj.alpha_mask || obj.translucent || obj.appearance_weights.is_some() || obj.appearance_gain != 1.0
+    obj.alpha_mask
+        || obj.translucent
+        || obj.appearance_weights.is_some()
+        || obj.appearance_gain != 1.0
 }
 
 /// Encode this object's BLAS build onto an ALREADY-OPEN acceleration-
@@ -496,8 +630,13 @@ fn blas_descriptors(
     Retained<MTLPrimitiveAccelerationStructureDescriptor>,
 ) {
     if std::env::var("MANIFOLD_PROBE_RT_ACCEL").is_ok() {
-        eprintln!("MANIFOLD_PROBE_RT_ACCEL: blas_descriptors triangle_count={}, vertex_buffer_size={}, vertex_stride={}, vertex_offset={}",
-            obj.triangle_count, obj.vertex_buffer.size(), obj.vertex_stride, obj.vertex_offset);
+        eprintln!(
+            "MANIFOLD_PROBE_RT_ACCEL: blas_descriptors triangle_count={}, vertex_buffer_size={}, vertex_stride={}, vertex_offset={}",
+            obj.triangle_count,
+            obj.vertex_buffer.size(),
+            obj.vertex_stride,
+            obj.vertex_offset
+        );
     }
     let tri_desc = MTLAccelerationStructureTriangleGeometryDescriptor::descriptor();
     tri_desc.setVertexBuffer(Some(obj.vertex_buffer.raw()));
@@ -529,12 +668,19 @@ fn blas_descriptors(
 }
 
 /// Metal's reported sizes for one BLAS descriptor set.
-fn blas_sizes(device: &GpuDevice, descriptor: &MTLPrimitiveAccelerationStructureDescriptor) -> MTLAccelerationStructureSizes {
-    let sizes = device.raw_device().accelerationStructureSizesWithDescriptor(descriptor);
+fn blas_sizes(
+    device: &GpuDevice,
+    descriptor: &MTLPrimitiveAccelerationStructureDescriptor,
+) -> MTLAccelerationStructureSizes {
+    let sizes = device
+        .raw_device()
+        .accelerationStructureSizesWithDescriptor(descriptor);
     if crate::metal::device::alloc_log_enabled() {
         eprintln!(
             "[gpu-alloc] blas-plan struct={} build_scratch={} refit_scratch={}",
-            sizes.accelerationStructureSize, sizes.buildScratchBufferSize, sizes.refitScratchBufferSize
+            sizes.accelerationStructureSize,
+            sizes.buildScratchBufferSize,
+            sizes.refitScratchBufferSize
         );
         crate::metal::device::alloc_log_backtrace();
     }
@@ -580,7 +726,9 @@ fn encode_descriptor_build(
         let total_slots: u32 = objects.iter().map(|o| effective_instance_slots(o)).sum();
         eprintln!(
             "MANIFOLD_PROBE_RT_ACCEL: descriptor-build dispatch objects={} total_slots={} max_slots={}",
-            objects.len(), total_slots, max_slots
+            objects.len(),
+            total_slots,
+            max_slots
         );
     }
     let enc: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> = cb
@@ -618,7 +766,12 @@ fn encode_descriptor_build(
 /// Every instance always carries [`RT_MASK_VISIBLE`]; [`RT_MASK_SHADOW_CASTER`]
 /// is added only when the object's `cast_shadows` is on.
 fn instance_mask(cast_shadows: bool) -> u32 {
-    RT_MASK_VISIBLE | if cast_shadows { RT_MASK_SHADOW_CASTER } else { 0 }
+    RT_MASK_VISIBLE
+        | if cast_shadows {
+            RT_MASK_SHADOW_CASTER
+        } else {
+            0
+        }
 }
 
 // ─── P3: caller-ordered acceleration (SCENE_MODIFIER_RT_DESIGN.md §4) ─────
@@ -661,7 +814,10 @@ pub fn encode_inline_copy(
         encoder.dispatch_compute(
             pipeline,
             &[
-                crate::GpuBinding::Bytes { binding: 0, data: chunk },
+                crate::GpuBinding::Bytes {
+                    binding: 0,
+                    data: chunk,
+                },
                 crate::GpuBinding::Buffer {
                     binding: 1,
                     buffer: dst,
@@ -677,7 +833,6 @@ pub fn encode_inline_copy(
         );
     }
 }
-
 
 /// Per-object geometry change class for [`encode_accel_update`] — the
 /// caller's dirty decision from its revision metadata (§4.1).
@@ -709,12 +864,18 @@ pub struct RtAccelUpdate {
 /// every variant is returned BEFORE any GPU work is encoded.
 #[derive(Debug)]
 pub enum RtAccelError {
-    InvalidGeometry { object: usize, reason: String },
+    InvalidGeometry {
+        object: usize,
+        reason: String,
+    },
     /// The resident set cannot express the requested change — the caller
     /// must run plan/prepare first (object count, capacity, or a Rebuild
     /// whose new shape exceeds the resident storage).
     NeedsPreparation,
-    Allocation { bytes: u64, resource: &'static str },
+    Allocation {
+        bytes: u64,
+        resource: &'static str,
+    },
     Encode(&'static str),
 }
 
@@ -723,7 +884,10 @@ pub enum RtAccelError {
 /// completion callbacks — no per-frame pin assembly, no mutex. Fields are
 /// never read on the CPU; the set exists to be HELD until the consuming
 /// command buffer completes (drop releases the pins).
-#[allow(dead_code, reason = "fields are held for completion-pin lifetime only; un-suppress when a debug inspector or validator reads them")]
+#[allow(
+    dead_code,
+    reason = "fields are held for completion-pin lifetime only; un-suppress when a debug inspector or validator reads them"
+)]
 pub(crate) struct AccelPins {
     tlas: Retained<ProtocolObject<dyn MTLAccelerationStructure>>,
     blas: Vec<Retained<ProtocolObject<dyn MTLAccelerationStructure>>>,
@@ -789,10 +953,16 @@ impl RtAccelPlan {
 /// preparation failures instead of encoding known-bad descriptors.
 fn validate_object_geometry(index: usize, o: &RtObjectGeometry) -> Result<(), RtAccelError> {
     if o.triangle_count == 0 {
-        return Err(RtAccelError::InvalidGeometry { object: index, reason: "zero triangles".into() });
+        return Err(RtAccelError::InvalidGeometry {
+            object: index,
+            reason: "zero triangles".into(),
+        });
     }
     if o.vertex_stride < 12 {
-        return Err(RtAccelError::InvalidGeometry { object: index, reason: format!("vertex stride {} < 12 (float3 position)", o.vertex_stride) });
+        return Err(RtAccelError::InvalidGeometry {
+            object: index,
+            reason: format!("vertex stride {} < 12 (float3 position)", o.vertex_stride),
+        });
     }
     match o.index_buffer {
         None => {
@@ -800,18 +970,33 @@ fn validate_object_geometry(index: usize, o: &RtObjectGeometry) -> Result<(), Rt
                 .checked_mul(3)
                 .and_then(|v| v.checked_mul(u64::from(o.vertex_stride)))
                 .and_then(|v| v.checked_add(u64::from(o.vertex_offset)))
-                .ok_or_else(|| RtAccelError::InvalidGeometry { object: index, reason: "flat vertex byte count overflows".into() })?;
+                .ok_or_else(|| RtAccelError::InvalidGeometry {
+                    object: index,
+                    reason: "flat vertex byte count overflows".into(),
+                })?;
             if needed > o.vertex_buffer.size() {
-                return Err(RtAccelError::InvalidGeometry { object: index, reason: format!("flat geometry needs {needed} bytes, buffer has {}", o.vertex_buffer.size()) });
+                return Err(RtAccelError::InvalidGeometry {
+                    object: index,
+                    reason: format!(
+                        "flat geometry needs {needed} bytes, buffer has {}",
+                        o.vertex_buffer.size()
+                    ),
+                });
             }
         }
         Some(ib) => {
             let needed = u64::from(o.triangle_count)
                 .checked_mul(3)
                 .and_then(|v| v.checked_mul(4))
-                .ok_or_else(|| RtAccelError::InvalidGeometry { object: index, reason: "index byte count overflows".into() })?;
+                .ok_or_else(|| RtAccelError::InvalidGeometry {
+                    object: index,
+                    reason: "index byte count overflows".into(),
+                })?;
             if needed > ib.size() {
-                return Err(RtAccelError::InvalidGeometry { object: index, reason: format!("index read needs {needed} bytes, buffer has {}", ib.size()) });
+                return Err(RtAccelError::InvalidGeometry {
+                    object: index,
+                    reason: format!("index read needs {needed} bytes, buffer has {}", ib.size()),
+                });
             }
         }
     }
@@ -822,7 +1007,12 @@ fn validate_object_geometry(index: usize, o: &RtObjectGeometry) -> Result<(), Rt
         let vertex_count = mesh_vertex_count(o);
         let weight_count = weights.size() / 4;
         if weight_count < u64::from(vertex_count) {
-            return Err(RtAccelError::InvalidGeometry { object: index, reason: format!("appearance weights hold {weight_count} floats, mesh has {vertex_count} vertices") });
+            return Err(RtAccelError::InvalidGeometry {
+                object: index,
+                reason: format!(
+                    "appearance weights hold {weight_count} floats, mesh has {vertex_count} vertices"
+                ),
+            });
         }
     }
     Ok(())
@@ -835,7 +1025,10 @@ fn validate_object_geometry(index: usize, o: &RtObjectGeometry) -> Result<(), Rt
 /// indices, so garbage reaching the builder shows up frame by frame.
 fn log_geometry_health(index: usize, o: &RtObjectGeometry) {
     let Some(base) = o.vertex_buffer.mapped_ptr() else {
-        log::info!("[RT-GEOM] object={index} tris={} vertices=private", o.triangle_count);
+        log::info!(
+            "[RT-GEOM] object={index} tris={} vertices=private",
+            o.triangle_count
+        );
         return;
     };
     let vertex_count = mesh_vertex_count(o);
@@ -845,7 +1038,10 @@ fn log_geometry_health(index: usize, o: &RtObjectGeometry) {
     };
     let (mut nonfinite, mut first_bad, mut max_abs) = (0u32, None, 0.0f32);
     let mut bad_indices = 0u32;
-    let check = |v: u32, nonfinite: &mut u32, first_bad: &mut Option<(u32, [f32; 3])>, max_abs: &mut f32| {
+    let check = |v: u32,
+                 nonfinite: &mut u32,
+                 first_bad: &mut Option<(u32, [f32; 3])>,
+                 max_abs: &mut f32| {
         let p = position(v);
         if p.iter().all(|c| c.is_finite()) {
             *max_abs = p.iter().fold(*max_abs, |m, c| m.max(c.abs()));
@@ -856,22 +1052,33 @@ fn log_geometry_health(index: usize, o: &RtObjectGeometry) {
     };
     match o.index_buffer.and_then(|ib| ib.mapped_ptr()) {
         Some(ib) => {
-            let count = (o.triangle_count as usize * 3).min(o.index_buffer.map_or(0, |b| b.size() as usize / 4));
+            let count = (o.triangle_count as usize * 3)
+                .min(o.index_buffer.map_or(0, |b| b.size() as usize / 4));
             let indices = unsafe { std::slice::from_raw_parts(ib.cast::<u32>(), count) };
             for &v in indices {
-                if v >= vertex_count { bad_indices += 1; } else { check(v, &mut nonfinite, &mut first_bad, &mut max_abs); }
+                if v >= vertex_count {
+                    bad_indices += 1;
+                } else {
+                    check(v, &mut nonfinite, &mut first_bad, &mut max_abs);
+                }
             }
         }
         None if o.index_buffer.is_some() => {
-            log::info!("[RT-GEOM] object={index} tris={} indices=private", o.triangle_count);
+            log::info!(
+                "[RT-GEOM] object={index} tris={} indices=private",
+                o.triangle_count
+            );
         }
         None => {
-            for v in 0..(o.triangle_count * 3).min(vertex_count) { check(v, &mut nonfinite, &mut first_bad, &mut max_abs); }
+            for v in 0..(o.triangle_count * 3).min(vertex_count) {
+                check(v, &mut nonfinite, &mut first_bad, &mut max_abs);
+            }
         }
     }
     log::info!(
         "[RT-GEOM] object={index} tris={} vertices={vertex_count} indexed={} max_abs={max_abs:e} nonfinite={nonfinite} bad_indices={bad_indices} first_bad={first_bad:?}",
-        o.triangle_count, o.index_buffer.is_some()
+        o.triangle_count,
+        o.index_buffer.is_some()
     );
 }
 
@@ -879,7 +1086,10 @@ fn log_geometry_health(index: usize, o: &RtObjectGeometry) {
 /// count `RtNormalSource::vertex_count` carries and the appearance-weights
 /// check validates against.
 pub(crate) fn mesh_vertex_count(o: &RtObjectGeometry) -> u32 {
-    (o.vertex_buffer.size().saturating_sub(u64::from(o.vertex_offset)) / u64::from(o.vertex_stride)) as u32
+    (o.vertex_buffer
+        .size()
+        .saturating_sub(u64::from(o.vertex_offset))
+        / u64::from(o.vertex_stride)) as u32
 }
 
 /// The worst-case emissive table charge (§4.1): the 4096-entry cap over
@@ -926,16 +1136,17 @@ fn blas_storage_compatible(resident: &RtGeometryTopology, current: &RtGeometryTo
 /// thread-safe, so the marker gap is nominal — same discipline as
 /// `CompletionPins`.
 pub(crate) struct ProbeBlas(
-    #[allow(dead_code, reason = "the vertex buffer backs the probe descriptor's address; never read directly")]
+    #[allow(
+        dead_code,
+        reason = "the vertex buffer backs the probe descriptor's address; never read directly"
+    )]
     pub(crate) GpuBuffer,
     pub(crate) Retained<ProtocolObject<dyn MTLAccelerationStructure>>,
 );
 unsafe impl Send for ProbeBlas {}
 unsafe impl Sync for ProbeBlas {}
 
-pub(crate) fn tlas_probe_structure(
-    device: &GpuDevice,
-) -> ProbeBlas {
+pub(crate) fn tlas_probe_structure(device: &GpuDevice) -> ProbeBlas {
     let verts = device.create_buffer(3 * 12);
     let obj = RtObjectGeometry {
         instance_inner: RtObjectGeometry::NO_INNER,
@@ -944,7 +1155,12 @@ pub(crate) fn tlas_probe_structure(
         vertex_offset: 0,
         index_buffer: None,
         triangle_count: 1,
-        transform: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
+        transform: [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
         normal_offset: 0,
         uv_offset: 0,
         alpha_mask: false,
@@ -1000,9 +1216,16 @@ pub(crate) fn plan_accel(
     for (i, o) in objects.iter().enumerate() {
         validate_object_geometry(i, o)?;
     }
-    let topology: Vec<_> = objects.iter().map(RtGeometryTopology::from_geometry).collect();
+    let topology: Vec<_> = objects
+        .iter()
+        .map(RtGeometryTopology::from_geometry)
+        .collect();
     let instanced = objects.iter().any(|o| o.instances_addr != 0);
-    let total_slots: u32 = topology.iter().map(|t| t.instance_slots).sum::<u32>().max(1);
+    let total_slots: u32 = topology
+        .iter()
+        .map(|t| t.instance_slots)
+        .sum::<u32>()
+        .max(1);
 
     let mut blas = Vec::with_capacity(objects.len());
     for o in objects {
@@ -1019,18 +1242,19 @@ pub(crate) fn plan_accel(
 
     let tlas_descriptor = MTLInstanceAccelerationStructureDescriptor::descriptor();
     tlas_descriptor.setInstanceCount(total_slots as usize);
-    let probe_array = NSArray::from_retained_slice(&vec![
-        tlas_probe.clone();
-        total_slots as usize
-    ]);
+    let probe_array = NSArray::from_retained_slice(&vec![tlas_probe.clone(); total_slots as usize]);
     tlas_descriptor.setInstancedAccelerationStructures(Some(&probe_array));
     tlas_descriptor.setUsage(MTLAccelerationStructureUsage::Refit);
-    let tlas_sizes = device.raw_device().accelerationStructureSizesWithDescriptor(&tlas_descriptor);
+    let tlas_sizes = device
+        .raw_device()
+        .accelerationStructureSizesWithDescriptor(&tlas_descriptor);
     if crate::metal::device::alloc_log_enabled() {
         eprintln!(
             "[gpu-alloc] tlas-plan instances={} struct={} build_scratch={} refit_scratch={}",
-            total_slots, tlas_sizes.accelerationStructureSize,
-            tlas_sizes.buildScratchBufferSize, tlas_sizes.refitScratchBufferSize
+            total_slots,
+            tlas_sizes.accelerationStructureSize,
+            tlas_sizes.buildScratchBufferSize,
+            tlas_sizes.refitScratchBufferSize
         );
     }
 
@@ -1062,7 +1286,8 @@ pub(crate) fn plan_accel(
             && acc.topology == topology
     });
 
-    let descriptor_bytes = u64::from(total_slots) * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64;
+    let descriptor_bytes = u64::from(total_slots)
+        * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64;
     let obj_params_bytes = if instanced {
         objects.len() as u64 * std::mem::size_of::<RtInstanceBuildObj>() as u64
     } else {
@@ -1135,46 +1360,72 @@ pub(crate) fn prepare_accel(
     for b in &plan.blas {
         let structure = raw_device
             .newAccelerationStructureWithSize(b.struct_bytes as usize)
-            .ok_or(RtAccelError::Allocation { bytes: b.struct_bytes, resource: "BLAS structure" })?;
+            .ok_or(RtAccelError::Allocation {
+                bytes: b.struct_bytes,
+                resource: "BLAS structure",
+            })?;
         device.record_accel_allocation();
         blas_out.push(Blas {
             structure,
             descriptor: b.descriptor.clone(),
             tri: b.tri.clone(),
-            build_scratch: device
-                .try_create_buffer(b.build_scratch)
-                .map_err(|_| RtAccelError::Allocation { bytes: b.build_scratch, resource: "BLAS build scratch" })?,
-            refit_scratch: device
-                .try_create_buffer(b.refit_scratch)
-                .map_err(|_| RtAccelError::Allocation { bytes: b.refit_scratch, resource: "BLAS refit scratch" })?,
+            build_scratch: device.try_create_buffer(b.build_scratch).map_err(|_| {
+                RtAccelError::Allocation {
+                    bytes: b.build_scratch,
+                    resource: "BLAS build scratch",
+                }
+            })?,
+            refit_scratch: device.try_create_buffer(b.refit_scratch).map_err(|_| {
+                RtAccelError::Allocation {
+                    bytes: b.refit_scratch,
+                    resource: "BLAS refit scratch",
+                }
+            })?,
             built: false,
         });
     }
     let tlas_structure = raw_device
         .newAccelerationStructureWithSize(plan.tlas_struct_bytes as usize)
-        .ok_or(RtAccelError::Allocation { bytes: plan.tlas_struct_bytes, resource: "TLAS structure" })?;
+        .ok_or(RtAccelError::Allocation {
+            bytes: plan.tlas_struct_bytes,
+            resource: "TLAS structure",
+        })?;
     device.record_accel_allocation();
     let tlas_build_scratch = device
         .try_create_buffer(plan.tlas_build_scratch)
-        .map_err(|_| RtAccelError::Allocation { bytes: plan.tlas_build_scratch, resource: "TLAS build scratch" })?;
+        .map_err(|_| RtAccelError::Allocation {
+            bytes: plan.tlas_build_scratch,
+            resource: "TLAS build scratch",
+        })?;
     let tlas_refit_scratch = device
         .try_create_buffer(plan.tlas_refit_scratch)
-        .map_err(|_| RtAccelError::Allocation { bytes: plan.tlas_refit_scratch, resource: "TLAS refit scratch" })?;
+        .map_err(|_| RtAccelError::Allocation {
+            bytes: plan.tlas_refit_scratch,
+            resource: "TLAS refit scratch",
+        })?;
 
     let (instance_buffer, instance_buffer_scratch) = if plan.instanced {
         (
-            device.try_create_buffer(
-                u64::from(plan.total_slots) * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64,
-            ).map_err(|_| RtAccelError::Allocation {
-                bytes: u64::from(plan.total_slots) * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64,
-                resource: "instance descriptor buffer",
-            })?,
-            device.try_create_buffer_shared(
-                u64::from(plan.total_slots) * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64,
-            ).map_err(|_| RtAccelError::Allocation {
-                bytes: u64::from(plan.total_slots) * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64,
-                resource: "instance descriptor scratch",
-            })?,
+            device
+                .try_create_buffer(
+                    u64::from(plan.total_slots)
+                        * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64,
+                )
+                .map_err(|_| RtAccelError::Allocation {
+                    bytes: u64::from(plan.total_slots)
+                        * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64,
+                    resource: "instance descriptor buffer",
+                })?,
+            device
+                .try_create_buffer_shared(
+                    u64::from(plan.total_slots)
+                        * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64,
+                )
+                .map_err(|_| RtAccelError::Allocation {
+                    bytes: u64::from(plan.total_slots)
+                        * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64,
+                    resource: "instance descriptor scratch",
+                })?,
         )
     } else {
         // Non-instanced fast path: CPU-authored descriptors are staged in a
@@ -1183,18 +1434,25 @@ pub(crate) fn prepare_accel(
         build_instance_buffer_from_plan(device, &plan)?
     };
     let instance_obj_params = if plan.instanced {
-        Some(device.try_create_buffer(
-            (plan.topology.len() * std::mem::size_of::<RtInstanceBuildObj>()) as u64,
-        ).map_err(|_| RtAccelError::Allocation {
-            bytes: (plan.topology.len() * std::mem::size_of::<RtInstanceBuildObj>()) as u64,
-            resource: "instance build params",
-        })?)
+        Some(
+            device
+                .try_create_buffer(
+                    (plan.topology.len() * std::mem::size_of::<RtInstanceBuildObj>()) as u64,
+                )
+                .map_err(|_| RtAccelError::Allocation {
+                    bytes: (plan.topology.len() * std::mem::size_of::<RtInstanceBuildObj>()) as u64,
+                    resource: "instance build params",
+                })?,
+        )
     } else {
         None
     };
     let instance_obj_params_scratch = match instance_obj_params.as_ref() {
         Some(params) => Some(device.try_create_buffer_shared(params.size).map_err(|_| {
-            RtAccelError::Allocation { bytes: params.size, resource: "instance build params scratch" }
+            RtAccelError::Allocation {
+                bytes: params.size,
+                resource: "instance build params scratch",
+            }
         })?),
         None => None,
     };
@@ -1205,7 +1463,8 @@ pub(crate) fn prepare_accel(
     let tlas_descriptor = plan.tlas_descriptor.clone();
     let blas_structures: Vec<Retained<ProtocolObject<dyn MTLAccelerationStructure>>> =
         blas_out.iter().map(|b| b.structure.clone()).collect();
-    tlas_descriptor.setInstancedAccelerationStructures(Some(&NSArray::from_retained_slice(&blas_structures)));
+    tlas_descriptor
+        .setInstancedAccelerationStructures(Some(&NSArray::from_retained_slice(&blas_structures)));
     tlas_descriptor.setInstanceCount(plan.total_slots.max(1) as usize);
 
     let pins = Arc::new(AccelPins {
@@ -1268,14 +1527,27 @@ fn build_instance_buffer_from_plan(
     let size = (stride * plan.topology.len().max(1)) as u64;
     let destination = device
         .try_create_buffer(size)
-        .map_err(|_| RtAccelError::Allocation { bytes: size, resource: "instance descriptor buffer" })?;
+        .map_err(|_| RtAccelError::Allocation {
+            bytes: size,
+            resource: "instance descriptor buffer",
+        })?;
     let scratch = device
         .try_create_buffer_shared(size)
-        .map_err(|_| RtAccelError::Allocation { bytes: size, resource: "instance descriptor scratch" })?;
-    let ptr = scratch.mapped_ptr().expect("RT instance-descriptor scratch must be CPU-mapped");
+        .map_err(|_| RtAccelError::Allocation {
+            bytes: size,
+            resource: "instance descriptor scratch",
+        })?;
+    let ptr = scratch
+        .mapped_ptr()
+        .expect("RT instance-descriptor scratch must be CPU-mapped");
     for i in 0..plan.topology.len() {
         let desc = MTLAccelerationStructureInstanceDescriptor {
-            transformationMatrix: to_packed_4x3([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]),
+            transformationMatrix: to_packed_4x3([
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]),
             options: MTLAccelerationStructureInstanceOptions::None,
             mask: 0,
             intersectionFunctionTableOffset: 0,
@@ -1335,12 +1607,12 @@ pub(crate) fn encode_accel_update(
     for (i, (o, change)) in objects.iter().zip(changes).enumerate() {
         validate_object_geometry(i, o)?;
         let current = RtGeometryTopology::from_geometry(o);
-        slot_total = slot_total.checked_add(current.instance_slots).ok_or_else(|| {
-            RtAccelError::InvalidGeometry {
+        slot_total = slot_total
+            .checked_add(current.instance_slots)
+            .ok_or_else(|| RtAccelError::InvalidGeometry {
                 object: i,
                 reason: "instance slot count overflows u32".into(),
-            }
-        })?;
+            })?;
         if !accel.blas[i].built {
             blas_builds += 1;
             continue;
@@ -1349,9 +1621,7 @@ pub(crate) fn encode_accel_update(
         // the OLD buffers, and the resident pin set holds them. Any identity
         // move needs prepare (full replacement retargets and repins) — never
         // encode against stale handles.
-        if accel.topology[i].vertex != current.vertex
-            || accel.topology[i].index != current.index
-        {
+        if accel.topology[i].vertex != current.vertex || accel.topology[i].index != current.index {
             return Err(RtAccelError::NeedsPreparation);
         }
         match change {
@@ -1383,7 +1653,8 @@ pub(crate) fn encode_accel_update(
     }
     let tlas_build = accel.tlas_needs_build;
     let tlas_refit = !tlas_build && (blas_builds > 0 || blas_refits > 0 || instance_data_changed);
-    if blas_builds == 0 && blas_refits == 0 && !tlas_build && !tlas_refit && !emissive_data_changed {
+    if blas_builds == 0 && blas_refits == 0 && !tlas_build && !tlas_refit && !emissive_data_changed
+    {
         return Ok(RtAccelUpdate::default());
     }
 
@@ -1427,14 +1698,13 @@ pub(crate) fn encode_accel_update(
         for (i, obj) in objects.iter().enumerate() {
             unsafe {
                 let field_ptr = scratch.add(i * stride) as *mut MTLPackedFloat4x3;
-                field_ptr.write_unaligned(to_packed_4x3(mat4_mul(obj.transform, obj.instance_inner)));
+                field_ptr
+                    .write_unaligned(to_packed_4x3(mat4_mul(obj.transform, obj.instance_inner)));
                 let mask_ptr = scratch.add(i * stride + mask_offset) as *mut u32;
                 mask_ptr.write_unaligned(instance_mask(obj.cast_shadows));
             }
         }
-        let bytes = unsafe {
-            std::slice::from_raw_parts(scratch, objects.len() * stride)
-        };
+        let bytes = unsafe { std::slice::from_raw_parts(scratch, objects.len() * stride) };
         encode_inline_copy(device, encoder, &accel.instance_buffer, 0, bytes);
     }
 
@@ -1451,7 +1721,12 @@ pub(crate) fn encode_accel_update(
                 objects,
                 &accel.instance_buffer,
                 obj_params,
-                accel.topology.iter().map(|t| t.instance_slots).max().unwrap_or(1),
+                accel
+                    .topology
+                    .iter()
+                    .map(|t| t.instance_slots)
+                    .max()
+                    .unwrap_or(1),
             );
         }
     }
@@ -1507,13 +1782,18 @@ pub(crate) fn encode_accel_update(
     if tlas_build || tlas_refit {
         unsafe {
             for b in &accel.blas {
-                let () = msg_send![&*enc, useResource: &*b.structure, usage: MTLResourceUsage::Read];
+                let () =
+                    msg_send![&*enc, useResource: &*b.structure, usage: MTLResourceUsage::Read];
             }
         }
         if tlas_build {
-            accel.descriptor.setInstanceCount(accel.instance_slot_total.max(1) as usize);
+            accel
+                .descriptor
+                .setInstanceCount(accel.instance_slot_total.max(1) as usize);
             unsafe {
-                accel.descriptor.setInstanceDescriptorBuffer(Some(accel.instance_buffer.raw()));
+                accel
+                    .descriptor
+                    .setInstanceDescriptorBuffer(Some(accel.instance_buffer.raw()));
             }
             enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
                 &accel.structure,
@@ -1562,7 +1842,6 @@ pub(crate) fn encode_accel_update(
     Ok(update)
 }
 
-
 /// Register a completion handler on `cb` that flips `ready` once the GPU
 /// finishes, keeping `keep_alive` (the build's scratch buffers) referenced
 /// until then — they're read by the GPU for the build's whole async
@@ -1589,37 +1868,34 @@ fn add_ready_completion_handler<T: Send + 'static>(
 ) {
     use block2::RcBlock;
     use objc2_metal::MTLCommandBufferStatus;
-    let block = RcBlock::new(move |buf: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
-        let _keep_alive = &keep_alive;
-        let cb = unsafe { buf.as_ref() };
-        if unsafe { cb.status() } == MTLCommandBufferStatus::Error {
-            let (code, desc) = match unsafe { cb.error() } {
-                None => (-1i64, String::from("(nil)")),
-                Some(err) => {
-                    super::super::gpu_fault::log_error_diagnostics(&err, label);
-                    (err.code() as i64, err.localizedDescription().to_string())
-                },
-            };
-            super::super::gpu_fault::record_fault(code, &desc);
-            log::error!("[GPU] Command buffer '{label}' error (code={code}): {desc}");
-            // BUG-84fv: a failed build/refit must NOT flip ready — tracing
-            // a structure the GPU faulted while writing sends hardware
-            // traversal into garbage and can hang the device. Leaving
-            // ready false keeps the caller on the raster fallback; the
-            // error above is the loud signal.
-            return;
-        }
-        ready.store(true, Ordering::Release);
-    });
+    let block = RcBlock::new(
+        move |buf: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+            let _keep_alive = &keep_alive;
+            let cb = unsafe { buf.as_ref() };
+            if unsafe { cb.status() } == MTLCommandBufferStatus::Error {
+                let (code, desc) = match unsafe { cb.error() } {
+                    None => (-1i64, String::from("(nil)")),
+                    Some(err) => {
+                        super::super::gpu_fault::log_error_diagnostics(&err, label);
+                        (err.code() as i64, err.localizedDescription().to_string())
+                    }
+                };
+                super::super::gpu_fault::record_fault(code, &desc);
+                log::error!("[GPU] Command buffer '{label}' error (code={code}): {desc}");
+                // BUG-84fv: a failed build/refit must NOT flip ready — tracing
+                // a structure the GPU faulted while writing sends hardware
+                // traversal into garbage and can hang the device. Leaving
+                // ready false keeps the caller on the raster fallback; the
+                // error above is the loud signal.
+                return;
+            }
+            ready.store(true, Ordering::Release);
+        },
+    );
     unsafe {
         cb.addCompletedHandler(RcBlock::as_ptr(&block));
     }
 }
-
-
-
-
-
 
 /// Column-major `[[f32; 4]; 4]` model matrix -> its upper-left 3x3.
 fn model_matrix_from_transform(m: [[f32; 4]; 4]) -> [[f32; 3]; 3] {
@@ -1747,7 +2023,9 @@ pub fn ensure_normal_sources<'a>(
     // D11: canonical rows [0, N) + slot rows [N, N+Σ) in one buffer.
     let needed = normal_source_row_count(objects);
     if slot.is_none() || *capacity < needed {
-        *slot = Some(device.create_buffer_shared((needed * std::mem::size_of::<RtNormalSource>()) as u64));
+        *slot = Some(
+            device.create_buffer_shared((needed * std::mem::size_of::<RtNormalSource>()) as u64),
+        );
         *capacity = needed;
     }
     let buf = slot.as_ref().expect("just ensured above");
@@ -1764,8 +2042,12 @@ pub fn ensure_normal_sources<'a>(
             match register_material_texture(&mut material_textures, obj.base_color_texture) {
                 Some(index) => index,
                 None if obj.base_color_texture.is_some() => {
-                    log::warn!("RT alpha-mask texture table full ({} bound, {} cap) — object {} degraded to always-pass",
-                        material_textures.len(), MAX_RT_MATERIAL_TEXTURES, i);
+                    log::warn!(
+                        "RT alpha-mask texture table full ({} bound, {} cap) — object {} degraded to always-pass",
+                        material_textures.len(),
+                        MAX_RT_MATERIAL_TEXTURES,
+                        i
+                    );
                     RT_MATERIAL_TEX_INDEX_NONE
                 }
                 None => RT_MATERIAL_TEX_INDEX_NONE,
@@ -1773,11 +2055,18 @@ pub fn ensure_normal_sources<'a>(
         } else {
             RT_MATERIAL_TEX_INDEX_NONE
         };
-        let base_color_tex_index = match register_material_texture(&mut material_textures, obj.base_color_texture) {
+        let base_color_tex_index = match register_material_texture(
+            &mut material_textures,
+            obj.base_color_texture,
+        ) {
             Some(index) => index,
             None if obj.base_color_texture.is_some() => {
-                log::warn!("RT material-texture table full ({} bound, {} cap) — object {} base-color degraded to flat albedo",
-                    material_textures.len(), MAX_RT_MATERIAL_TEXTURES, i);
+                log::warn!(
+                    "RT material-texture table full ({} bound, {} cap) — object {} base-color degraded to flat albedo",
+                    material_textures.len(),
+                    MAX_RT_MATERIAL_TEXTURES,
+                    i
+                );
                 RT_MATERIAL_TEX_INDEX_NONE
             }
             None => RT_MATERIAL_TEX_INDEX_NONE,
@@ -1790,8 +2079,12 @@ pub fn ensure_normal_sources<'a>(
         let mr_tex_index = match register_material_texture(&mut material_textures, obj.mr_texture) {
             Some(index) => index,
             None if obj.mr_texture.is_some() => {
-                log::warn!("RT material-texture table full ({} bound, {} cap) — object {} MR map degraded to flat metallic_roughness factor",
-                    material_textures.len(), MAX_RT_MATERIAL_TEXTURES, i);
+                log::warn!(
+                    "RT material-texture table full ({} bound, {} cap) — object {} MR map degraded to flat metallic_roughness factor",
+                    material_textures.len(),
+                    MAX_RT_MATERIAL_TEXTURES,
+                    i
+                );
                 RT_MATERIAL_TEX_INDEX_NONE
             }
             None => RT_MATERIAL_TEX_INDEX_NONE,
@@ -1800,11 +2093,18 @@ pub fn ensure_normal_sources<'a>(
         // `material_textures`, cap-check, and log-warn-on-full pattern as
         // `mr_tex_index` above — the normal map rides the one general
         // material-texture cap, no separate table.
-        let normal_tex_index = match register_material_texture(&mut material_textures, obj.normal_texture) {
+        let normal_tex_index = match register_material_texture(
+            &mut material_textures,
+            obj.normal_texture,
+        ) {
             Some(index) => index,
             None if obj.normal_texture.is_some() => {
-                log::warn!("RT material-texture table full ({} bound, {} cap) — object {} normal map degraded to vertex normal",
-                    material_textures.len(), MAX_RT_MATERIAL_TEXTURES, i);
+                log::warn!(
+                    "RT material-texture table full ({} bound, {} cap) — object {} normal map degraded to vertex normal",
+                    material_textures.len(),
+                    MAX_RT_MATERIAL_TEXTURES,
+                    i
+                );
                 RT_MATERIAL_TEX_INDEX_NONE
             }
             None => RT_MATERIAL_TEX_INDEX_NONE,
@@ -1813,22 +2113,37 @@ pub fn ensure_normal_sources<'a>(
         // `material_textures`, cap-check, and log-warn-on-full pattern as
         // `normal_tex_index` above — the emissive map rides the one general
         // material-texture cap, no separate table.
-        let emissive_tex_index = match register_material_texture(&mut material_textures, obj.emissive_texture) {
+        let emissive_tex_index = match register_material_texture(
+            &mut material_textures,
+            obj.emissive_texture,
+        ) {
             Some(index) => index,
             None if obj.emissive_texture.is_some() => {
-                log::warn!("RT material-texture table full ({} bound, {} cap) — object {} emissive map degraded to flat emissive factor",
-                    material_textures.len(), MAX_RT_MATERIAL_TEXTURES, i);
+                log::warn!(
+                    "RT material-texture table full ({} bound, {} cap) — object {} emissive map degraded to flat emissive factor",
+                    material_textures.len(),
+                    MAX_RT_MATERIAL_TEXTURES,
+                    i
+                );
                 RT_MATERIAL_TEX_INDEX_NONE
             }
             None => RT_MATERIAL_TEX_INDEX_NONE,
         };
         let mut extra_tex_indices = [RT_MATERIAL_TEX_INDEX_NONE; 15];
         for (map_index, texture) in obj.extra_material_textures.iter().copied().enumerate() {
-            extra_tex_indices[map_index] = match register_material_texture(&mut material_textures, texture) {
+            extra_tex_indices[map_index] = match register_material_texture(
+                &mut material_textures,
+                texture,
+            ) {
                 Some(index) => index,
                 None if texture.is_some() => {
-                    log::warn!("RT material-texture table full ({} bound, {} cap) — object {} extension map {} degraded to factor",
-                        material_textures.len(), MAX_RT_MATERIAL_TEXTURES, i, map_index);
+                    log::warn!(
+                        "RT material-texture table full ({} bound, {} cap) — object {} extension map {} degraded to factor",
+                        material_textures.len(),
+                        MAX_RT_MATERIAL_TEXTURES,
+                        i,
+                        map_index
+                    );
                     RT_MATERIAL_TEX_INDEX_NONE
                 }
                 None => RT_MATERIAL_TEX_INDEX_NONE,
@@ -1878,7 +2193,10 @@ pub fn ensure_normal_sources<'a>(
         };
         // D11: canonical row at [0, N).
         unsafe {
-            std::ptr::write_unaligned(ptr.add(i * std::mem::size_of::<RtNormalSource>()) as *mut _, src);
+            std::ptr::write_unaligned(
+                ptr.add(i * std::mem::size_of::<RtNormalSource>()) as *mut _,
+                src,
+            );
         }
         // D11: slot rows at [N, N+Σ) duplicate the row; only instance_addr
         // varies (object_index already names this object).
@@ -1889,7 +2207,11 @@ pub fn ensure_normal_sources<'a>(
                 0
             };
             unsafe {
-                std::ptr::write_unaligned(ptr.add((object_count + slot_row) * std::mem::size_of::<RtNormalSource>()) as *mut _, src);
+                std::ptr::write_unaligned(
+                    ptr.add((object_count + slot_row) * std::mem::size_of::<RtNormalSource>())
+                        as *mut _,
+                    src,
+                );
             }
             slot_row += 1;
         }
@@ -1932,9 +2254,7 @@ pub fn ensure_normal_sources_snapshot<'a>(
     let source_ptr = source
         .mapped_ptr()
         .expect("normal-source scratch must be CPU-mapped");
-    let source_bytes = unsafe {
-        std::slice::from_raw_parts(source_ptr, bytes as usize)
-    };
+    let source_bytes = unsafe { std::slice::from_raw_parts(source_ptr, bytes as usize) };
     encode_inline_copy(
         device,
         encoder,
@@ -1952,19 +2272,70 @@ mod tests {
     use super::*;
 
     fn topo(id: usize, slots: u32, wired: bool) -> RtGeometryTopology {
-        RtGeometryTopology { vertex: id, vertex_offset: 4, vertex_stride: 32, triangle_count: 3, index: Some(id + 100), normal_offset: 12, uv_offset: 24, instance_slots: slots, wired, nonopaque: false, appearance_weights: None }
+        RtGeometryTopology {
+            vertex: id,
+            vertex_offset: 4,
+            vertex_stride: 32,
+            triangle_count: 3,
+            index: Some(id + 100),
+            normal_offset: 12,
+            uv_offset: 24,
+            instance_slots: slots,
+            wired,
+            nonopaque: false,
+            appearance_weights: None,
+        }
     }
 
     #[test]
     fn topology_records_cover_order_layout_slots_and_global_wiring() {
         let resident = [topo(1, 1, false), topo(2, 3, false)];
         assert!(check_topology_records(&resident, false, 4, resident.into_iter()).is_ok());
-        assert!(check_topology_records(&resident, false, 4, [topo(2, 3, false), topo(1, 1, false)].into_iter()).is_err());
-        assert!(check_topology_records(&resident, false, 4, [topo(1, 2, false), topo(2, 2, false)].into_iter()).is_err());
-        assert!(check_topology_records(&resident, false, 4, [RtGeometryTopology { nonopaque: true, ..resident[0] }, resident[1]].into_iter()).is_err());
+        assert!(
+            check_topology_records(
+                &resident,
+                false,
+                4,
+                [topo(2, 3, false), topo(1, 1, false)].into_iter()
+            )
+            .is_err()
+        );
+        assert!(
+            check_topology_records(
+                &resident,
+                false,
+                4,
+                [topo(1, 2, false), topo(2, 2, false)].into_iter()
+            )
+            .is_err()
+        );
+        assert!(
+            check_topology_records(
+                &resident,
+                false,
+                4,
+                [
+                    RtGeometryTopology {
+                        nonopaque: true,
+                        ..resident[0]
+                    },
+                    resident[1]
+                ]
+                .into_iter()
+            )
+            .is_err()
+        );
         let mixed = [topo(1, 2, true), topo(2, 1, false)];
         assert!(check_topology_records(&mixed, true, 3, mixed.into_iter()).is_ok());
         assert!(check_topology_records(&mixed, false, 3, mixed.into_iter()).is_err());
-        assert!(check_topology_records(&[topo(1, u32::MAX, false)], false, u32::MAX, [topo(1, u32::MAX, false), topo(2, 1, false)].into_iter()).is_err());
+        assert!(
+            check_topology_records(
+                &[topo(1, u32::MAX, false)],
+                false,
+                u32::MAX,
+                [topo(1, u32::MAX, false), topo(2, 1, false)].into_iter()
+            )
+            .is_err()
+        );
     }
 }

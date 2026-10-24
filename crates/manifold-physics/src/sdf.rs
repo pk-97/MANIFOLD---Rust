@@ -42,7 +42,12 @@ pub fn signed_distance_lattice(
     padding: f32,
     shell_thickness: f32,
 ) -> Result<DistanceLattice, PhysicsError> {
-    signed_distance_union(std::slice::from_ref(mesh), spacing, padding, shell_thickness)
+    signed_distance_union(
+        std::slice::from_ref(mesh),
+        spacing,
+        padding,
+        shell_thickness,
+    )
 }
 
 /// The solid of several meshes on one lattice, nodes `spacing` apart over
@@ -117,7 +122,11 @@ pub fn signed_distance_union_within(
         let mut open_part = Vec::new();
         for (triangle, closed) in mesh.triangles.iter().zip(closed) {
             let corners = triangle.map(|i| mesh.vertices[i as usize].map(f64::from));
-            if closed { closed_part.push(corners) } else { open_part.push(corners) }
+            if closed {
+                closed_part.push(corners)
+            } else {
+                open_part.push(corners)
+            }
         }
         for vertex in &mesh.vertices {
             for axis in 0..3 {
@@ -137,17 +146,25 @@ pub fn signed_distance_union_within(
     let mut end: [f32; 3] = std::array::from_fn(|axis| max[axis] + padding);
     if let Some([low, high]) = crop {
         if low.iter().chain(&high).any(|value| !value.is_finite()) {
-            return Err(PhysicsError::InvalidInput("a distance lattice crop must be finite"));
+            return Err(PhysicsError::InvalidInput(
+                "a distance lattice crop must be finite",
+            ));
         }
         for axis in 0..3 {
             origin[axis] = origin[axis].max(low[axis]);
             end[axis] = end[axis].min(high[axis]);
         }
         if (0..3).any(|axis| end[axis] < origin[axis]) {
-            return Err(PhysicsError::InvalidInput("the mesh lies outside the distance lattice crop"));
+            return Err(PhysicsError::InvalidInput(
+                "the mesh lies outside the distance lattice crop",
+            ));
         }
     }
-    let dims = lattice_dims(std::array::from_fn(|axis| end[axis] - origin[axis]), spacing, 0.0);
+    let dims = lattice_dims(
+        std::array::from_fn(|axis| end[axis] - origin[axis]),
+        spacing,
+        0.0,
+    );
     let total = dims.iter().map(|&n| u64::from(n)).product::<u64>();
     if total > MAX_LATTICE_NODES {
         return Err(PhysicsError::InvalidInput(
@@ -182,7 +199,11 @@ pub fn signed_distance_union_within(
                         // Winding number ΣΩ / 4π is 1 inside an outward-wound
                         // volume and −1 inside an inside-out one; both are solid.
                         let inside = solid_angle.abs() > 2.0 * std::f64::consts::PI;
-                        let volume = if inside { -nearest.sqrt() } else { nearest.sqrt() };
+                        let volume = if inside {
+                            -nearest.sqrt()
+                        } else {
+                            nearest.sqrt()
+                        };
                         let index = lattice.index([i, j, k]);
                         lattice.values[index] = lattice.values[index].min(volume as f32);
                     }
@@ -199,8 +220,16 @@ pub fn signed_distance_union_within(
             // A node farther than `reach` from the triangle's box is farther
             // than that from the triangle.
             let range = |axis: usize| {
-                let low = triangle.iter().map(|v| v[axis]).fold(f64::INFINITY, f64::min) - reach;
-                let high = triangle.iter().map(|v| v[axis]).fold(f64::NEG_INFINITY, f64::max) + reach;
+                let low = triangle
+                    .iter()
+                    .map(|v| v[axis])
+                    .fold(f64::INFINITY, f64::min)
+                    - reach;
+                let high = triangle
+                    .iter()
+                    .map(|v| v[axis])
+                    .fold(f64::NEG_INFINITY, f64::max)
+                    + reach;
                 let node = |x: f64| (x - f64::from(origin[axis])) / f64::from(spacing);
                 let first = node(low).floor().max(0.0) as u32;
                 let last = (node(high).ceil().max(0.0) as u32).min(dims[axis] - 1);
@@ -211,7 +240,8 @@ pub fn signed_distance_union_within(
                 for j in ys.clone() {
                     for i in xs.clone() {
                         let p = lattice.node_position([i, j, k]).map(f64::from);
-                        let shell = (distance_squared_to_triangle(p, triangle).sqrt() - half_shell) as f32;
+                        let shell =
+                            (distance_squared_to_triangle(p, triangle).sqrt() - half_shell) as f32;
                         let index = lattice.index([i, j, k]);
                         lattice.values[index] = lattice.values[index].min(shell);
                     }
@@ -233,9 +263,22 @@ fn lattice_dims(extent: [f32; 3], spacing: f32, padding: f32) -> [u32; 3] {
 /// How many nodes [`signed_distance_union`] builds for meshes whose joint
 /// bounds span `extent`, so a caller can pick a spacing under
 /// [`MAX_LATTICE_NODES`] before paying for the build.
-pub fn union_lattice_nodes(extent: [f32; 3], spacing: f32, padding: f32, shell_thickness: f32, any_open: bool) -> u64 {
-    let padding = if any_open { padding + (0.5 * shell_thickness).max(spacing) } else { padding };
-    lattice_dims(extent, spacing, padding).iter().map(|&n| u64::from(n)).product()
+pub fn union_lattice_nodes(
+    extent: [f32; 3],
+    spacing: f32,
+    padding: f32,
+    shell_thickness: f32,
+    any_open: bool,
+) -> u64 {
+    let padding = if any_open {
+        padding + (0.5 * shell_thickness).max(spacing)
+    } else {
+        padding
+    };
+    lattice_dims(extent, spacing, padding)
+        .iter()
+        .map(|&n| u64::from(n))
+        .product()
 }
 
 fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
@@ -247,7 +290,11 @@ fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
 }
 
 fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 fn length(a: [f64; 3]) -> f64 {
@@ -309,7 +356,9 @@ pub fn distance_squared_to_triangle(p: [f64; 3], [a, b, c]: &[[f64; 3]; 3]) -> f
     let denominator = 1.0 / (va + vb + vc);
     let v = vb * denominator;
     let w = vc * denominator;
-    closest(std::array::from_fn(|axis| a[axis] + ab[axis] * v + ac[axis] * w))
+    closest(std::array::from_fn(|axis| {
+        a[axis] + ab[axis] * v + ac[axis] * w
+    }))
 }
 
 #[cfg(test)]
@@ -319,17 +368,36 @@ mod tests {
     /// An axis-aligned box, outward wound.
     fn cuboid(min: [f32; 3], max: [f32; 3]) -> TriangleMesh {
         let v = |x: usize, y: usize, z: usize| {
-            [[min[0], max[0]][x], [min[1], max[1]][y], [min[2], max[2]][z]]
+            [
+                [min[0], max[0]][x],
+                [min[1], max[1]][y],
+                [min[2], max[2]][z],
+            ]
         };
         TriangleMesh {
             vertices: vec![
-                v(0, 0, 0), v(1, 0, 0), v(1, 1, 0), v(0, 1, 0),
-                v(0, 0, 1), v(1, 0, 1), v(1, 1, 1), v(0, 1, 1),
+                v(0, 0, 0),
+                v(1, 0, 0),
+                v(1, 1, 0),
+                v(0, 1, 0),
+                v(0, 0, 1),
+                v(1, 0, 1),
+                v(1, 1, 1),
+                v(0, 1, 1),
             ],
             triangles: vec![
-                [0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7],
-                [0, 1, 5], [0, 5, 4], [2, 3, 7], [2, 7, 6],
-                [1, 2, 6], [1, 6, 5], [0, 4, 7], [0, 7, 3],
+                [0, 2, 1],
+                [0, 3, 2],
+                [4, 5, 6],
+                [4, 6, 7],
+                [0, 1, 5],
+                [0, 5, 4],
+                [2, 3, 7],
+                [2, 7, 6],
+                [1, 2, 6],
+                [1, 6, 5],
+                [0, 4, 7],
+                [0, 7, 3],
             ],
         }
     }
@@ -338,8 +406,24 @@ mod tests {
     /// (2,1) (1,1) (1,3) (0,3) extruded over z ∈ [0, 1]. The notch between the
     /// posts, x ∈ (1, 2), y ∈ (1, 3), is outside.
     fn bowl() -> TriangleMesh {
-        let outline = [[0.0, 0.0], [3.0, 0.0], [3.0, 3.0], [2.0, 3.0], [2.0, 1.0], [1.0, 1.0], [1.0, 3.0], [0.0, 3.0]];
-        let caps = [[0, 1, 4], [1, 2, 4], [2, 3, 4], [0, 4, 5], [0, 5, 6], [0, 6, 7]];
+        let outline = [
+            [0.0, 0.0],
+            [3.0, 0.0],
+            [3.0, 3.0],
+            [2.0, 3.0],
+            [2.0, 1.0],
+            [1.0, 1.0],
+            [1.0, 3.0],
+            [0.0, 3.0],
+        ];
+        let caps = [
+            [0, 1, 4],
+            [1, 2, 4],
+            [2, 3, 4],
+            [0, 4, 5],
+            [0, 5, 6],
+            [0, 6, 7],
+        ];
         let n = outline.len() as u32;
         let mut vertices: Vec<[f32; 3]> = outline.iter().map(|&[x, y]| [x, y, 0.0]).collect();
         vertices.extend(outline.iter().map(|&[x, y]| [x, y, 1.0]));
@@ -353,7 +437,10 @@ mod tests {
             triangles.push([i, j, j + n]);
             triangles.push([i, j + n, i + n]);
         }
-        TriangleMesh { vertices, triangles }
+        TriangleMesh {
+            vertices,
+            triangles,
+        }
     }
 
     fn box_distance(p: [f32; 3], half: f32) -> f32 {
@@ -386,7 +473,10 @@ mod tests {
         for triangle in &mut inward.triangles {
             triangle.swap(1, 2);
         }
-        assert_eq!(signed_distance_lattice(&inward, 0.1, 0.3, 0.5).unwrap(), lattice);
+        assert_eq!(
+            signed_distance_lattice(&inward, 0.1, 0.3, 0.5).unwrap(),
+            lattice
+        );
         assert_eq!(
             union_lattice_nodes([1.0; 3], 0.1, 0.3, 0.5, false),
             lattice.values.len() as u64
@@ -399,7 +489,9 @@ mod tests {
         crate::validate_closed_mesh(&mesh).expect("the bowl is closed and outward wound");
         let lattice = signed_distance_lattice(&mesh, 0.25, 0.5, 0.0).unwrap();
         let at = |p: [f32; 3]| {
-            let node = std::array::from_fn(|axis| ((p[axis] - lattice.origin[axis]) / lattice.spacing).round() as u32);
+            let node = std::array::from_fn(|axis| {
+                ((p[axis] - lattice.origin[axis]) / lattice.spacing).round() as u32
+            });
             assert_eq!(lattice.node_position(node), p, "{p:?} is a node");
             lattice.value(node)
         };
@@ -416,7 +508,12 @@ mod tests {
     /// The unit square in the z = 0 plane, one-sided: an open surface.
     fn open_quad() -> TriangleMesh {
         TriangleMesh {
-            vertices: vec![[-0.5, -0.5, 0.0], [0.5, -0.5, 0.0], [0.5, 0.5, 0.0], [-0.5, 0.5, 0.0]],
+            vertices: vec![
+                [-0.5, -0.5, 0.0],
+                [0.5, -0.5, 0.0],
+                [0.5, 0.5, 0.0],
+                [-0.5, 0.5, 0.0],
+            ],
             triangles: vec![[0, 1, 2], [0, 2, 3]],
         }
     }
@@ -438,7 +535,11 @@ mod tests {
             let half = 0.5 * thickness;
             let lattice = signed_distance_lattice(&open_quad(), 0.05, 0.1, thickness).unwrap();
             // The lattice grows by half the shell beyond the padding.
-            assert!((lattice.origin[2] + 0.1 + half).abs() < 1e-6, "{:?}", lattice.origin);
+            assert!(
+                (lattice.origin[2] + 0.1 + half).abs() < 1e-6,
+                "{:?}",
+                lattice.origin
+            );
             assert_eq!(
                 union_lattice_nodes([1.0, 1.0, 0.0], 0.05, 0.1, thickness, true),
                 lattice.values.len() as u64
@@ -449,20 +550,35 @@ mod tests {
                     for i in 0..lattice.dims[0] {
                         let p = lattice.node_position([i, j, k]);
                         let distance = quad_distance(p);
-                        let expected = if distance <= half + 0.1 { distance - half } else { 0.1 };
+                        let expected = if distance <= half + 0.1 {
+                            distance - half
+                        } else {
+                            0.1
+                        };
                         worst = worst.max((lattice.value([i, j, k]) - expected).abs());
                     }
                 }
             }
             assert!(worst < 1e-5, "thickness {thickness}: worst error {worst}");
-            let centre: [u32; 3] = std::array::from_fn(|axis| (-lattice.origin[axis] / 0.05).round() as u32);
+            let centre: [u32; 3] =
+                std::array::from_fn(|axis| (-lattice.origin[axis] / 0.05).round() as u32);
             assert!(lattice.node_position(centre).iter().all(|v| v.abs() < 1e-6));
             assert!((lattice.value(centre) + half).abs() < 1e-5);
             for side in [-1i32, 1] {
                 let inside = [centre[0], centre[1], (centre[2] as i32 + side) as u32];
-                assert!(lattice.value(inside) < 0.0, "0.05 m from the surface is in the shell");
-                let beyond = [centre[0], centre[1], (centre[2] as i32 + side * (1 + (half / 0.05).round() as i32)) as u32];
-                assert!(lattice.value(beyond) > 0.0, "past half the thickness is outside");
+                assert!(
+                    lattice.value(inside) < 0.0,
+                    "0.05 m from the surface is in the shell"
+                );
+                let beyond = [
+                    centre[0],
+                    centre[1],
+                    (centre[2] as i32 + side * (1 + (half / 0.05).round() as i32)) as u32,
+                ];
+                assert!(
+                    lattice.value(beyond) > 0.0,
+                    "past half the thickness is outside"
+                );
             }
         }
     }
@@ -480,7 +596,10 @@ mod tests {
         let mut vertices = Vec::new();
         for j in 0..=side {
             for i in 0..=side {
-                let (x, z) = (10.0 * i as f32 / side as f32 - 5.0, 10.0 * j as f32 / side as f32 - 5.0);
+                let (x, z) = (
+                    10.0 * i as f32 / side as f32 - 5.0,
+                    10.0 * j as f32 / side as f32 - 5.0,
+                );
                 vertices.push([x, height(x, z), z]);
             }
         }
@@ -493,11 +612,17 @@ mod tests {
             }
         }
         assert!(triangles.len() > 200_000);
-        let terrain = TriangleMesh { vertices, triangles };
+        let terrain = TriangleMesh {
+            vertices,
+            triangles,
+        };
         let started = std::time::Instant::now();
         let lattice = signed_distance_lattice(&terrain, 0.05, 0.1, 0.1).unwrap();
         let took = started.elapsed();
-        assert!(took < std::time::Duration::from_secs(20), "the band took {took:?}");
+        assert!(
+            took < std::time::Duration::from_secs(20),
+            "the band took {took:?}"
+        );
         let corners: Vec<[[f64; 3]; 3]> = terrain
             .triangles
             .iter()
@@ -506,12 +631,21 @@ mod tests {
         for (x, z) in [(0.3f32, -1.7f32), (-4.2, 2.9), (3.33, 0.01)] {
             for dy in [-0.3f32, -0.12, -0.04, 0.0, 0.06, 0.13, 0.4] {
                 let node: [u32; 3] = std::array::from_fn(|axis| {
-                    (([x, height(x, z) + dy, z][axis] - lattice.origin[axis]) / lattice.spacing).round() as u32
+                    (([x, height(x, z) + dy, z][axis] - lattice.origin[axis]) / lattice.spacing)
+                        .round() as u32
                 });
                 let p = lattice.node_position(node).map(f64::from);
-                let nearest = corners.iter().map(|t| distance_squared_to_triangle(p, t)).fold(f64::INFINITY, f64::min).sqrt();
+                let nearest = corners
+                    .iter()
+                    .map(|t| distance_squared_to_triangle(p, t))
+                    .fold(f64::INFINITY, f64::min)
+                    .sqrt();
                 let expected = if nearest <= 0.15 { nearest - 0.05 } else { 0.1 };
-                assert!((f64::from(lattice.value(node)) - expected).abs() < 1e-5, "{p:?}: {} against {expected}", lattice.value(node));
+                assert!(
+                    (f64::from(lattice.value(node)) - expected).abs() < 1e-5,
+                    "{p:?}: {} against {expected}",
+                    lattice.value(node)
+                );
             }
         }
     }
@@ -533,11 +667,15 @@ mod tests {
         let mut mesh = cuboid([-0.5; 3], [0.5; 3]);
         let quad = open_quad();
         let base = mesh.vertices.len() as u32;
-        mesh.vertices.extend(quad.vertices.iter().map(|v| [v[0] + 3.0, v[1], v[2]]));
-        mesh.triangles.extend(quad.triangles.iter().map(|t| t.map(|i| i + base)));
+        mesh.vertices
+            .extend(quad.vertices.iter().map(|v| [v[0] + 3.0, v[1], v[2]]));
+        mesh.triangles
+            .extend(quad.triangles.iter().map(|t| t.map(|i| i + base)));
         let lattice = signed_distance_lattice(&mesh, 0.1, 0.3, 0.4).unwrap();
         let node = |p: [f32; 3]| -> [u32; 3] {
-            std::array::from_fn(|axis| ((p[axis] - lattice.origin[axis]) / lattice.spacing).round() as u32)
+            std::array::from_fn(|axis| {
+                ((p[axis] - lattice.origin[axis]) / lattice.spacing).round() as u32
+            })
         };
         let cube_centre = node([0.0; 3]);
         assert!((lattice.value(cube_centre) + 0.5).abs() < 1e-5);

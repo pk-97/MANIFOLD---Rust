@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
 use super::{
-    BodyHandle, COOKED_HULL_MAX_VERTICES, CookedForm, PhysicsError, PhysicsWorld, ffi,
-    native_lock,
+    BodyHandle, COOKED_HULL_MAX_VERTICES, CookedForm, PhysicsError, PhysicsWorld, ffi, native_lock,
 };
 
 /// An owned indexed triangle surface shared by physics adapters.
@@ -122,7 +121,10 @@ fn copy_hull_mesh(hull: usize) -> Result<TriangleMesh, PhysicsError> {
 /// Checks that a mesh bounds only closed, outward-wound volumes. The native
 /// FLIP solver needs it: it signs its mesh level set by ray-crossing parity.
 pub fn validate_closed_mesh(mesh: &TriangleMesh) -> Result<(), PhysicsError> {
-    if part_windings(mesh)?.iter().any(|&winding| winding != Winding::Outward) {
+    if part_windings(mesh)?
+        .iter()
+        .any(|&winding| winding != Winding::Outward)
+    {
         return Err(PhysicsError::InvalidInput(
             "mesh must be closed, manifold and outward oriented",
         ));
@@ -140,7 +142,10 @@ pub fn validate_closed_mesh(mesh: &TriangleMesh) -> Result<(), PhysicsError> {
 /// non-finite vertices, out-of-range indices, degenerate or zero-area
 /// triangles.
 pub fn closed_triangles(mesh: &TriangleMesh) -> Result<Vec<bool>, PhysicsError> {
-    Ok(part_windings(mesh)?.into_iter().map(|winding| winding != Winding::Open).collect())
+    Ok(part_windings(mesh)?
+        .into_iter()
+        .map(|winding| winding != Winding::Open)
+        .collect())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -182,10 +187,14 @@ fn part_windings(mesh: &TriangleMesh) -> Result<Vec<Winding>, PhysicsError> {
             .iter()
             .any(|&index| index as usize >= mesh.vertices.len())
         {
-            return Err(PhysicsError::InvalidInput("mesh triangle index is out of range"));
+            return Err(PhysicsError::InvalidInput(
+                "mesh triangle index is out of range",
+            ));
         }
         if a == b || b == c || c == a {
-            return Err(PhysicsError::InvalidInput("mesh contains a degenerate triangle"));
+            return Err(PhysicsError::InvalidInput(
+                "mesh contains a degenerate triangle",
+            ));
         }
         let va = mesh.vertices[a as usize];
         let vb = mesh.vertices[b as usize];
@@ -207,7 +216,9 @@ fn part_windings(mesh: &TriangleMesh) -> Result<Vec<Winding>, PhysicsError> {
         ];
         let area2 = cross.iter().map(|value| value * value).sum::<f64>();
         if !area2.is_finite() || area2 <= 1.0e-24 * scale.max(1.0).powi(4) {
-            return Err(PhysicsError::InvalidInput("mesh contains a zero-area triangle"));
+            return Err(PhysicsError::InvalidInput(
+                "mesh contains a zero-area triangle",
+            ));
         }
         for (from, to) in [(a, b), (b, c), (c, a)] {
             edges
@@ -626,9 +637,18 @@ mod tests {
         TriangleMesh {
             vertices: cube(),
             triangles: vec![
-                [0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7],
-                [0, 1, 5], [0, 5, 4], [2, 3, 7], [2, 7, 6],
-                [1, 2, 6], [1, 6, 5], [0, 4, 7], [0, 7, 3],
+                [0, 2, 1],
+                [0, 3, 2],
+                [4, 5, 6],
+                [4, 6, 7],
+                [0, 1, 5],
+                [0, 5, 4],
+                [2, 3, 7],
+                [2, 7, 6],
+                [1, 2, 6],
+                [1, 6, 5],
+                [0, 4, 7],
+                [0, 7, 3],
             ],
         }
     }
@@ -650,11 +670,20 @@ mod tests {
         for triangle in &mut inward.triangles {
             triangle.swap(1, 2);
         }
-        assert_eq!(closed_triangles(&inward).unwrap(), vec![true; 12], "an inside-out cube is still sealed");
-        assert!(validate_closed_mesh(&inward).is_err(), "the native solver still needs outward winding");
+        assert_eq!(
+            closed_triangles(&inward).unwrap(),
+            vec![true; 12],
+            "an inside-out cube is still sealed"
+        );
+        assert!(
+            validate_closed_mesh(&inward).is_err(),
+            "the native solver still needs outward winding"
+        );
 
         let mut mixed = cube.clone();
-        mixed.vertices.extend([[2.0, 0.0, 0.0], [3.0, 0.0, 0.0], [2.0, 1.0, 0.0]]);
+        mixed
+            .vertices
+            .extend([[2.0, 0.0, 0.0], [3.0, 0.0, 0.0], [2.0, 1.0, 0.0]]);
         mixed.triangles.push([8, 9, 10]);
         let flags = closed_triangles(&mixed).unwrap();
         assert!(flags[..12].iter().all(|&closed| closed));
@@ -663,10 +692,23 @@ mod tests {
         let mut fin = cube;
         fin.vertices.push([0.0, 0.0, 2.0]);
         fin.triangles.push([6, 7, 8]);
-        assert_eq!(closed_triangles(&fin).unwrap(), vec![false; 13], "a fin on an edge opens its part");
+        assert_eq!(
+            closed_triangles(&fin).unwrap(),
+            vec![false; 13],
+            "a fin on an edge opens its part"
+        );
 
-        let unusable = TriangleMesh { vertices: vec![[0.0; 3], [1.0, 0.0, 0.0], [f32::NAN, 0.0, 0.0]], triangles: vec![[0, 1, 2]] };
+        let unusable = TriangleMesh {
+            vertices: vec![[0.0; 3], [1.0, 0.0, 0.0], [f32::NAN, 0.0, 0.0]],
+            triangles: vec![[0, 1, 2]],
+        };
         assert!(closed_triangles(&unusable).is_err());
-        assert!(closed_triangles(&TriangleMesh { vertices: self::cube(), triangles: Vec::new() }).is_err());
+        assert!(
+            closed_triangles(&TriangleMesh {
+                vertices: self::cube(),
+                triangles: Vec::new()
+            })
+            .is_err()
+        );
     }
 }

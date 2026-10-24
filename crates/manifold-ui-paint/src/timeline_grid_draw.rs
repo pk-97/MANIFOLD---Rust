@@ -15,7 +15,14 @@ use crate::ui_renderer::UIRenderer;
 /// A line that would start left of the tracks is dropped whole rather than clipped
 /// to its second pixel: the grid has always started at the first column.
 fn grid_line_xs(view: &TimelineGridView) -> impl Iterator<Item = (f32, TimingGridLineKind)> {
-    let TimelineGridView { tracks, min_beat, logical_ppb: ppb, beats_per_bar: bpb, render_scale: scale, .. } = *view;
+    let TimelineGridView {
+        tracks,
+        min_beat,
+        logical_ppb: ppb,
+        beats_per_bar: bpb,
+        render_scale: scale,
+        ..
+    } = *view;
     let valid = ppb.is_finite()
         && ppb > 0.0
         && scale.is_finite()
@@ -24,7 +31,11 @@ fn grid_line_xs(view: &TimelineGridView) -> impl Iterator<Item = (f32, TimingGri
         && bpb.is_finite()
         && bpb >= 1.0
         && tracks.width > 0.0;
-    let visible_end = if valid { min_beat + tracks.width / ppb } else { min_beat };
+    let visible_end = if valid {
+        min_beat + tracks.width / ppb
+    } else {
+        min_beat
+    };
     // An invalid view walks from NaN, which yields nothing.
     let walk_start = if valid { min_beat } else { f32::NAN };
     let scaled_ppb = ppb * scale;
@@ -37,7 +48,11 @@ fn grid_line_xs(view: &TimelineGridView) -> impl Iterator<Item = (f32, TimingGri
 /// Queue the grid lines and the layer-0 top separator. The caller wraps this
 /// in `lane_content_scissor(view.tracks)` and runs its own prepare/render
 /// cycle before the clip bodies.
-pub fn emit_timeline_grid(ui: &mut UIRenderer, view: &TimelineGridView, rows: impl Iterator<Item = (f32, f32)>) {
+pub fn emit_timeline_grid(
+    ui: &mut UIRenderer,
+    view: &TimelineGridView,
+    rows: impl Iterator<Item = (f32, f32)>,
+) {
     for (top, bottom) in rows {
         for (x, kind) in grid_line_xs(view) {
             ui.draw_grid_line(x, top, x, bottom, kind);
@@ -48,7 +63,13 @@ pub fn emit_timeline_grid(ui: &mut UIRenderer, view: &TimelineGridView, rows: im
     {
         // Above the lines: a rect and a line at one depth draw rect first.
         ui.push_depth(ui.current_depth().above(1));
-        ui.draw_rect(view.tracks.x, top, view.tracks.width, color::TRACK_SEPARATOR_HEIGHT, color::SEPARATOR_COLOR);
+        ui.draw_rect(
+            view.tracks.x,
+            top,
+            view.tracks.width,
+            color::TRACK_SEPARATOR_HEIGHT,
+            color::SEPARATOR_COLOR,
+        );
         ui.pop_depth();
     }
 }
@@ -81,11 +102,26 @@ mod tests {
     #[test]
     fn degenerate_views_walk_no_lines() {
         for bad in [
-            TimelineGridView { logical_ppb: f32::NAN, ..view() },
-            TimelineGridView { logical_ppb: 0.0, ..view() },
-            TimelineGridView { beats_per_bar: 0.0, ..view() },
-            TimelineGridView { render_scale: 0.0, ..view() },
-            TimelineGridView { min_beat: f32::NAN, ..view() },
+            TimelineGridView {
+                logical_ppb: f32::NAN,
+                ..view()
+            },
+            TimelineGridView {
+                logical_ppb: 0.0,
+                ..view()
+            },
+            TimelineGridView {
+                beats_per_bar: 0.0,
+                ..view()
+            },
+            TimelineGridView {
+                render_scale: 0.0,
+                ..view()
+            },
+            TimelineGridView {
+                min_beat: f32::NAN,
+                ..view()
+            },
         ] {
             assert_eq!(grid_line_xs(&bad).count(), 0, "{bad:?}");
         }

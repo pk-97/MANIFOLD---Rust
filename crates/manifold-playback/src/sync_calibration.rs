@@ -61,7 +61,13 @@ struct PresentDelay {
 
 impl PresentDelay {
     fn new() -> Self {
-        Self { ring: [0.0; PRESENT_WINDOW], head: 0, len: 0, current: DEFAULT_PRESENT_DELAY, last_recompute: f64::NEG_INFINITY }
+        Self {
+            ring: [0.0; PRESENT_WINDOW],
+            head: 0,
+            len: 0,
+            current: DEFAULT_PRESENT_DELAY,
+            last_recompute: f64::NEG_INFINITY,
+        }
     }
 
     fn presented(&mut self, delay: f64, now: f64) {
@@ -86,7 +92,11 @@ impl PresentDelay {
         let n = sorted.len();
         let median = 0.5 * (sorted[(n - 1) / 2] + sorted[n / 2]);
         if (median - self.current).abs() > PRESENT_ADOPT_STEP {
-            log::info!("[Transport] screen delay {:.1} ms (was {:.1})", median * 1000.0, self.current * 1000.0);
+            log::info!(
+                "[Transport] screen delay {:.1} ms (was {:.1})",
+                median * 1000.0,
+                self.current * 1000.0
+            );
             self.current = median;
         }
     }
@@ -144,7 +154,10 @@ impl OffsetLearner {
     fn observe(&mut self, now: f64, difference: f64, steady: bool) -> Option<f64> {
         let gap = now - self.last_seen;
         self.last_seen = now;
-        if !(steady && difference.is_finite() && now.is_finite()) || difference.abs() >= LEARN_MAX_DIFFERENCE || gap > LEARN_MAX_GAP {
+        if !(steady && difference.is_finite() && now.is_finite())
+            || difference.abs() >= LEARN_MAX_DIFFERENCE
+            || gap > LEARN_MAX_GAP
+        {
             self.restart();
             return None;
         }
@@ -164,7 +177,11 @@ impl OffsetLearner {
         if self.len < BUCKETS {
             return None;
         }
-        let total = self.ring.iter().fold(Bucket::default(), |a, b| Bucket { n: a.n + b.n, sum: a.sum + b.sum, sum_sq: a.sum_sq + b.sum_sq });
+        let total = self.ring.iter().fold(Bucket::default(), |a, b| Bucket {
+            n: a.n + b.n,
+            sum: a.sum + b.sum,
+            sum_sq: a.sum_sq + b.sum_sq,
+        });
         let n = f64::from(total.n.max(1));
         let mean = total.sum / n;
         let spread = (total.sum_sq / n - mean * mean).max(0.0).sqrt();
@@ -192,7 +209,15 @@ impl Default for SyncCalibration {
 
 impl SyncCalibration {
     pub fn new() -> Self {
-        Self { present: PresentDelay::new(), extra: 0.0, learners: [OffsetLearner::new(), OffsetLearner::new(), OffsetLearner::new()] }
+        Self {
+            present: PresentDelay::new(),
+            extra: 0.0,
+            learners: [
+                OffsetLearner::new(),
+                OffsetLearner::new(),
+                OffsetLearner::new(),
+            ],
+        }
     }
 
     /// `L`: from the frame's deadline to the moment it is on screen.
@@ -244,10 +269,19 @@ impl SyncCalibration {
     /// One tick with Link and `source` both live. `difference` is
     /// `difference_seconds(...)` of the two reads; `steady` is false while a
     /// catch-up window is open. Returns the newly adopted offset.
-    pub fn observe_offset(&mut self, source: CalibratedSource, now: f64, difference: f64, steady: bool) -> Option<f64> {
+    pub fn observe_offset(
+        &mut self,
+        source: CalibratedSource,
+        now: f64,
+        difference: f64,
+        steady: bool,
+    ) -> Option<f64> {
         let adopted = self.learners[source as usize].observe(now, difference, steady);
         if let Some(offset) = adopted {
-            log::info!("[Transport] {source:?} offset against Link {:.1} ms", offset * 1000.0);
+            log::info!(
+                "[Transport] {source:?} offset against Link {:.1} ms",
+                offset * 1000.0
+            );
         }
         adopted
     }

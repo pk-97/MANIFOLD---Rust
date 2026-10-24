@@ -12,13 +12,17 @@ use manifold_gpu::{
 
 use manifold_compositor::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
 use manifold_compositor::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
-use manifold_node_engine::exec::backend::Backend;
-use manifold_node_engine::bindings::Slot;
-use manifold_node_engine::exec::execution_plan::{ExecutionPlan, ResourceId};
-use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, scene::boundary_nodes::Source, exec::execution_plan::compile};
-use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_compositor::tonemap::{TonemapMode, TonemapSettings};
 use manifold_core::{BlendMode, LayerId, LayerType};
+use manifold_node_engine::bindings::Slot;
+use manifold_node_engine::exec::backend::Backend;
+use manifold_node_engine::exec::execution_plan::{ExecutionPlan, ResourceId};
+use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_node_engine::{
+    exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+    exec::execution_plan::compile, exec::metal_backend::MetalBackend, graph::Graph,
+    parameters::ParamValue, scene::boundary_nodes::FinalOutput, scene::boundary_nodes::Source,
+};
 
 use manifold_nodes_image::node_graph::primitives::bokeh_gather::{BokehGather, BokehSettings};
 
@@ -953,9 +957,13 @@ fn blur_alpha_true_stays_premultiplied_through_layer_compositor() {
         gathered.iter().any(|p| (p[3] - 0.5).abs() < 0.08),
         "coverage edge lost the half-alpha side"
     );
-    assert!(gathered.iter().enumerate().any(|(i, p)| {
-        source_pixels[i].rgba[3] == 0.0 && p[3] > 0.01 && p[3] < 0.1
-    }), "fixture must exercise faint coverage outside the original silhouette");
+    assert!(
+        gathered
+            .iter()
+            .enumerate()
+            .any(|(i, p)| { source_pixels[i].rgba[3] == 0.0 && p[3] > 0.01 && p[3] < 0.1 }),
+        "fixture must exercise faint coverage outside the original silhouette"
+    );
 
     for background in [[0.0, 0.0, 0.0], [0.1, 0.35, 0.7]] {
         let composited = composite_over_background(&device, &gathered_texture, background);
@@ -1599,7 +1607,10 @@ fn small_alpha_blur_monotonically_sheds_high_frequency_detail() {
         if local_radius == 0.5 {
             focused_detail = detail;
         } else if local_radius == 0.75 {
-            assert!(detail < focused_detail * 0.99, "subpixel defocus remained sharp");
+            assert!(
+                detail < focused_detail * 0.99,
+                "subpixel defocus remained sharp"
+            );
         }
         assert!(
             detail <= previous + 0.001,
@@ -1792,14 +1803,16 @@ fn bounded_gpu_benchmark_1080p_and_4k() {
         };
         for _ in 0..3 {
             let mut native = device.create_encoder("bokeh-proof-benchmark-warmup");
-            let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native, &device);
+            let mut gpu =
+                manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native, &device);
             gather.encode(&mut gpu, &src, &width, &out, settings);
             native.commit_and_wait_completed();
         }
         let mut samples = Vec::with_capacity(10);
         for _ in 0..10 {
             let mut native = device.create_encoder("bokeh-proof-benchmark-steady");
-            let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native, &device);
+            let mut gpu =
+                manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native, &device);
             gather.encode(&mut gpu, &src, &width, &out, settings);
             samples.push(native.commit_and_wait_completed_timed() * 1000.0);
         }

@@ -12,8 +12,10 @@
 
 use std::borrow::Cow;
 
-use manifold_gpu::{GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuLoadAction,
-    GpuRenderPipeline, GpuTextureFormat};
+use manifold_gpu::{
+    GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuLoadAction, GpuRenderPipeline,
+    GpuTextureFormat,
+};
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
@@ -212,7 +214,10 @@ impl Primitive for RenderFilledRects {
                     offset: 0,
                 },
             ],
-            manifold_gpu::DrawCount::Direct { vertices: 6, instances: rect_count },
+            manifold_gpu::DrawCount::Direct {
+                vertices: 6,
+                instances: rect_count,
+            },
             GpuLoadAction::Load,
             "node.draw_rectangles",
         );

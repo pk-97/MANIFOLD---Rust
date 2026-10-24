@@ -373,11 +373,11 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use crate::tonemap::{TonemapMode, TonemapPipeline, TonemapSettings};
     use half::f16;
     use manifold_core::TonemapCurve;
     use manifold_gpu::{GpuTextureDesc, GpuTextureDimension, GpuTextureUsage};
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 
     const W: u32 = 1;
     const H: u32 = 1;
@@ -574,12 +574,14 @@ mod gpu_tests {
         for (index, output) in outputs.iter().enumerate() {
             for channel in 0..3 {
                 assert!(
-                    output[channel].is_finite()
-                        && (0.0..=1.0).contains(&output[channel]),
+                    output[channel].is_finite() && (0.0..=1.0).contains(&output[channel]),
                     "selected SDR curve {index} escaped finite bounds: {output:?}"
                 );
             }
-            assert_eq!(output[3], input[3], "curve {index} changed alpha: {output:?}");
+            assert_eq!(
+                output[3], input[3],
+                "curve {index} changed alpha: {output:?}"
+            );
             for other in outputs.iter().skip(index + 1) {
                 let distance = output[..3]
                     .iter()
@@ -616,9 +618,16 @@ mod gpu_tests {
                     "HDR-capable display activated {curve:?} at headroom 1: {output:?} vs {baseline:?}"
                 );
             }
-            assert!(output[..3].iter().all(|value| value.is_finite() && *value <= 1.0));
+            assert!(
+                output[..3]
+                    .iter()
+                    .all(|value| value.is_finite() && *value <= 1.0)
+            );
         }
-        assert!((baseline[0] - 1.0).abs() < 0.001, "white changed: {baseline:?}");
+        assert!(
+            (baseline[0] - 1.0).abs() < 0.001,
+            "white changed: {baseline:?}"
+        );
     }
 
     #[test]
@@ -692,18 +701,8 @@ mod gpu_tests {
             PotentialHeadroom::new(8.0).unwrap(),
             CurrentHeadroom::new(4.0).unwrap(),
         );
-        let low = run_presentation(
-            &device,
-            [0.001, 0.001, 0.001, 1.0],
-            caps,
-            None,
-        );
-        let high = run_presentation(
-            &device,
-            [0.002, 0.002, 0.002, 1.0],
-            caps,
-            None,
-        );
+        let low = run_presentation(&device, [0.001, 0.001, 0.001, 1.0], caps, None);
+        let high = run_presentation(&device, [0.002, 0.002, 0.002, 1.0], caps, None);
         assert!(
             low[0] > 0.0 && high[0] > low[0],
             "float shadow detail collapsed: low={low:?} high={high:?}"

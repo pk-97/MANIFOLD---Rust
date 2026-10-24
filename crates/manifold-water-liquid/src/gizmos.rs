@@ -31,7 +31,9 @@ impl SetupReport {
     /// size as this frame ran them.
     pub fn accept(&mut self, fit: SetupFit, column: Option<([f32; 3], [f32; 3])>) {
         self.fit = fit;
-        self.column_box = column.filter(|_| fit.column != ColumnOutcome::Fits).map(|(pos, scale)| column_box(pos, scale));
+        self.column_box = column
+            .filter(|_| fit.column != ColumnOutcome::Fits)
+            .map(|(pos, scale)| column_box(pos, scale));
         self.refusal = None;
     }
 
@@ -86,7 +88,10 @@ pub fn write_liquid_gizmos(
     let Some(field) = field else { return };
     let centre: [f32; 3] = std::array::from_fn(|i| layout.min[i] + 0.5 * layout.size[i]);
     let arrow = UNIFORM_ARROW_SHARE * layout.size.iter().copied().fold(f32::INFINITY, f32::min);
-    let force = |shape| PhysicsGizmo { family: PhysicsGizmoFamily::Force, shape };
+    let force = |shape| PhysicsGizmo {
+        family: PhysicsGizmoFamily::Force,
+        shape,
+    };
     field.for_each_leaf(|leaf, scale| match leaf {
         FieldLeaf::Uniform(uniform) => {
             let v = uniform.vector().map(|c| c * scale);
@@ -97,7 +102,10 @@ pub fn write_liquid_gizmos(
             }
         }
         FieldLeaf::Radial(radial) => {
-            out.push(force(PhysicsGizmoShape::Sphere { center: radial.center(), radius: radial.radius() }));
+            out.push(force(PhysicsGizmoShape::Sphere {
+                center: radial.center(),
+                radius: radial.radius(),
+            }));
         }
         FieldLeaf::Vortex(vortex) => {
             let (center, radius) = (vortex.center(), vortex.radius());
@@ -123,20 +131,50 @@ mod tests {
     /// by the negative strength.
     #[test]
     fn forces_draw_where_the_field_acts() {
-        let layout = FluidDomainLayout { min: [-2.0, 0.0, -2.0], size: [4.0, 2.0, 4.0], cells: [32, 16, 32], cell_size: 0.125 };
+        let layout = FluidDomainLayout {
+            min: [-2.0, 0.0, -2.0],
+            size: [4.0, 2.0, 4.0],
+            cells: [32, 16, 32],
+            cell_size: 0.125,
+        };
         let wind = FieldValue::uniform([0.0, 0.0, 3.0]).unwrap();
-        let attractor = FieldValue::radial([1.0, 1.0, 0.0], 0.75, 1.0).unwrap().scaled(-4.0).unwrap();
-        let vortex = FieldValue::vortex([0.0, 0.5, 0.0], [0.0, 1.0, 0.0], 1.5, 1.0).unwrap().scaled(-2.0).unwrap();
+        let attractor = FieldValue::radial([1.0, 1.0, 0.0], 0.75, 1.0)
+            .unwrap()
+            .scaled(-4.0)
+            .unwrap();
+        let vortex = FieldValue::vortex([0.0, 0.5, 0.0], [0.0, 1.0, 0.0], 1.5, 1.0)
+            .unwrap()
+            .scaled(-2.0)
+            .unwrap();
         let field = wind.sum(&attractor).unwrap().sum(&vortex).unwrap();
         let mut out = Vec::new();
         write_liquid_gizmos(&layout, &LiquidBodies::default(), Some(&field), &mut out);
-        let shapes: Vec<_> = out.iter().inspect(|gizmo| assert_eq!(gizmo.family, PhysicsGizmoFamily::Force)).map(|gizmo| gizmo.shape).collect();
-        assert_eq!(shapes, [
-            PhysicsGizmoShape::Arrow { from: [0.0, 1.0, 0.0], to: [0.0, 1.0, 0.5] },
-            PhysicsGizmoShape::Sphere { center: [1.0, 1.0, 0.0], radius: 0.75 },
-            PhysicsGizmoShape::Sphere { center: [0.0, 0.5, 0.0], radius: 1.5 },
-            PhysicsGizmoShape::Arrow { from: [0.0, 0.5, 0.0], to: [0.0, -1.0, 0.0] },
-        ]);
+        let shapes: Vec<_> = out
+            .iter()
+            .inspect(|gizmo| assert_eq!(gizmo.family, PhysicsGizmoFamily::Force))
+            .map(|gizmo| gizmo.shape)
+            .collect();
+        assert_eq!(
+            shapes,
+            [
+                PhysicsGizmoShape::Arrow {
+                    from: [0.0, 1.0, 0.0],
+                    to: [0.0, 1.0, 0.5]
+                },
+                PhysicsGizmoShape::Sphere {
+                    center: [1.0, 1.0, 0.0],
+                    radius: 0.75
+                },
+                PhysicsGizmoShape::Sphere {
+                    center: [0.0, 0.5, 0.0],
+                    radius: 1.5
+                },
+                PhysicsGizmoShape::Arrow {
+                    from: [0.0, 0.5, 0.0],
+                    to: [0.0, -1.0, 0.0]
+                },
+            ]
+        );
         out.clear();
         write_liquid_gizmos(&layout, &LiquidBodies::default(), None, &mut out);
         assert!(out.is_empty(), "no field, no force gizmos");
@@ -144,8 +182,15 @@ mod tests {
 
     #[test]
     fn a_domain_is_ready_only_once_accepted_and_running() {
-        let layout = Some(FluidDomainLayout { min: [0.0; 3], size: [1.0; 3], cells: [8; 3], cell_size: 0.125 });
-        let state = |accepted, failed, pending| domain_snapshot(accepted, failed, pending, 1, &SetupReport::default(), 0).state;
+        let layout = Some(FluidDomainLayout {
+            min: [0.0; 3],
+            size: [1.0; 3],
+            cells: [8; 3],
+            cell_size: 0.125,
+        });
+        let state = |accepted, failed, pending| {
+            domain_snapshot(accepted, failed, pending, 1, &SetupReport::default(), 0).state
+        };
         assert_eq!(state(layout, false, false), FluidDomainState::Ready);
         assert_eq!(state(None, false, false), FluidDomainState::Initializing);
         assert_eq!(state(layout, false, true), FluidDomainState::PendingInputs);
@@ -156,19 +201,39 @@ mod tests {
     fn a_refusal_clears_the_last_fit_and_keeps_its_text() {
         let snapshot = |report: &SetupReport| domain_snapshot(None, false, false, 1, report, 0);
         let mut report = SetupReport::default();
-        let clipped = SetupFit { fill_capped: true, column: ColumnOutcome::Clipped, pool_full: false };
+        let clipped = SetupFit {
+            fill_capped: true,
+            column: ColumnOutcome::Clipped,
+            pool_full: false,
+        };
         report.accept(clipped, Some(([2.0, 1.0, 0.0], [2.0, 1.0, 1.0])));
         let taken = snapshot(&report);
         assert_eq!(taken.fit, clipped);
-        assert_eq!(taken.column_box, Some(([1.0, 0.5, -0.5], [3.0, 1.5, 0.5])), "the column as it ran");
+        assert_eq!(
+            taken.column_box,
+            Some(([1.0, 0.5, -0.5], [3.0, 1.5, 0.5])),
+            "the column as it ran"
+        );
         report.refuse("Fluid: too big");
         let refused = snapshot(&report);
-        assert!(refused.fit.is_clean() && refused.column_box.is_none(), "a refused domain shows no old cap");
+        assert!(
+            refused.fit.is_clean() && refused.column_box.is_none(),
+            "a refused domain shows no old cap"
+        );
         report.refuse("Fluid: too big");
         let again = snapshot(&report);
-        assert!(Arc::ptr_eq(refused.refusal.as_ref().unwrap(), again.refusal.as_ref().unwrap()), "the same refusal reuses its text");
+        assert!(
+            Arc::ptr_eq(
+                refused.refusal.as_ref().unwrap(),
+                again.refusal.as_ref().unwrap()
+            ),
+            "the same refusal reuses its text"
+        );
         report.accept(SetupFit::default(), Some(([0.0; 3], [1.0; 3])));
         let fits = snapshot(&report);
-        assert!(fits.refusal.is_none() && fits.column_box.is_none(), "a fitting column has no warning box");
+        assert!(
+            fits.refusal.is_none() && fits.column_box.is_none(),
+            "a fitting column has no warning box"
+        );
     }
 }

@@ -3,14 +3,19 @@
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::liquid_domain::is_liquid_domain;
-use manifold_node_engine::exec::execution_plan::{compile, ExecutionPlan};
-use manifold_node_engine::exec::extent::{check_graph, ExtentError, ExtentReport, ExtentRule, EXTENT_RULES};
+use manifold_node_engine::exec::execution_plan::{ExecutionPlan, compile};
+use manifold_node_engine::exec::extent::{
+    EXTENT_RULES, ExtentError, ExtentReport, ExtentRule, check_graph,
+};
 use manifold_node_engine::graph::Graph;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::persistence::{EffectGraphDefExt, PrimitiveRegistry};
 
 /// Build a preset at one resolution of its liquid domain and walk it.
-pub fn check_preset_extents(def: &EffectGraphDef, resolution: u32) -> Result<ExtentReport, ExtentError> {
+pub fn check_preset_extents(
+    def: &EffectGraphDef,
+    resolution: u32,
+) -> Result<ExtentReport, ExtentError> {
     let mut preset = LiquidPreset::build(def)?;
     preset.check(resolution)
 }
@@ -30,38 +35,67 @@ impl LiquidPreset {
 
     /// Build with an explicitly selected primitive registry, for proofs that
     /// register their own probe nodes. Product callers use [`Self::build`].
-    pub fn build_with_registry(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> Result<Self, ExtentError> {
+    pub fn build_with_registry(
+        def: &EffectGraphDef,
+        registry: &PrimitiveRegistry,
+    ) -> Result<Self, ExtentError> {
         let build = |error: String| ExtentError::Build(error);
         // Old shapes migrate while the groups are still groups: `into_graph`
         // migrates too, but a flattened document's handles carry group paths
         // that a group added by a migration could not be flattened with.
-        let def = manifold_node_engine::load::graph_loader::migrate_graph_shape(std::borrow::Cow::Borrowed(def));
+        let def = manifold_node_engine::load::graph_loader::migrate_graph_shape(
+            std::borrow::Cow::Borrowed(def),
+        );
         let expanded = manifold_node_engine::load::expand::expand_scene_modifiers(&def, registry)
             .map_err(|error| build(error.to_string()))?;
-        let flat = manifold_core::flatten::flatten_groups(&expanded).map_err(|error| build(error.to_string()))?;
-        let graph = flat.into_graph(registry, &Default::default()).map_err(|error| build(format!("{error:?}")))?;
+        let flat = manifold_core::flatten::flatten_groups(&expanded)
+            .map_err(|error| build(error.to_string()))?;
+        let graph = flat
+            .into_graph(registry, &Default::default())
+            .map_err(|error| build(format!("{error:?}")))?;
         let plan = compile(&graph).map_err(|error| build(format!("{error:?}")))?;
-        let domains: Vec<_> = graph.nodes().filter(|node| is_liquid_domain(node.node.type_id().as_str())).map(|node| node.id).collect();
+        let domains: Vec<_> = graph
+            .nodes()
+            .filter(|node| is_liquid_domain(node.node.type_id().as_str()))
+            .map(|node| node.id)
+            .collect();
         if domains.is_empty() {
             return Err(build("no liquid domain".into()));
         }
         for step in plan.steps() {
-            if domains.contains(&step.node) && step.inputs.iter().any(|(port, _)| *port == "resolution") {
-                return Err(build("a liquid domain's resolution is wired; the walk sets the param".into()));
+            if domains.contains(&step.node)
+                && step.inputs.iter().any(|(port, _)| *port == "resolution")
+            {
+                return Err(build(
+                    "a liquid domain's resolution is wired; the walk sets the param".into(),
+                ));
             }
         }
-        Ok(Self { graph, plan, domains })
+        Ok(Self {
+            graph,
+            plan,
+            domains,
+        })
     }
 
     /// Every resolution the domains' Resolution control admits.
     pub fn resolutions(&self) -> std::ops::RangeInclusive<u32> {
         let range = |id| {
             let node = self.graph.get_node(id).expect("domain");
-            let def = node.node.parameters().iter().find(|p| p.name == "resolution").expect("a Resolution control");
+            let def = node
+                .node
+                .parameters()
+                .iter()
+                .find(|p| p.name == "resolution")
+                .expect("a Resolution control");
             let (low, high) = def.range.expect("Resolution has a range");
             (low as u32, high as u32)
         };
-        let (low, high) = self.domains.iter().map(|&id| range(id)).fold((0, u32::MAX), |(a, b), (c, d)| (a.max(c), b.min(d)));
+        let (low, high) = self
+            .domains
+            .iter()
+            .map(|&id| range(id))
+            .fold((0, u32::MAX), |(a, b), (c, d)| (a.max(c), b.min(d)));
         low..=high
     }
 
@@ -85,7 +119,11 @@ impl LiquidPreset {
             .iter()
             .map(|&id| {
                 let node = self.graph.get_node(id).expect("domain");
-                let resolution = node.params.get("resolution").and_then(ParamValue::as_scalar).unwrap_or(0.0);
+                let resolution = node
+                    .params
+                    .get("resolution")
+                    .and_then(ParamValue::as_scalar)
+                    .unwrap_or(0.0);
                 (node.node.type_id().as_str(), resolution.round() as u32)
             })
             .collect()

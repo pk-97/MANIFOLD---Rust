@@ -49,11 +49,10 @@
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::scene::camera::Camera;
 
 const ORBIT: f32 = 0.7;
 const TILT: f32 = 0.95;
@@ -75,7 +74,14 @@ fn scene_json(
     point_intensity: f32,
     point_cast_shadows: bool,
 ) -> String {
-    scene_json_sun_shadow(sun_pos, sun_intensity, true, point_pos, point_intensity, point_cast_shadows)
+    scene_json_sun_shadow(
+        sun_pos,
+        sun_intensity,
+        true,
+        point_pos,
+        point_intensity,
+        point_cast_shadows,
+    )
 }
 
 /// Same fixture as [`scene_json`], with the sun's `cast_shadows` also
@@ -246,7 +252,10 @@ fn region_luma(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> f
             let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
             let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
             let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-            assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+            assert!(
+                r.is_finite() && g.is_finite() && b.is_finite(),
+                "non-finite pixel"
+            );
             sum += (0.2126 * r + 0.7152 * g + 0.0722 * b) as f64;
             n += 1;
         }

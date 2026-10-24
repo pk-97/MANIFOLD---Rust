@@ -4,7 +4,6 @@ use manifold_node_engine::freeze::markers::Marker;
 use manifold_node_engine::freeze::codegen::generate_fused;
 use manifold_node_engine::freeze::codegen::{FusionRegion, InputSource, RegionNode};
 
-
 /// Buffer-domain multi-atom fusion: a chain of two per-element instance atoms
 /// fuses into one `var<storage>` kernel. The element struct is synthesized,
 /// every input and the output bind as storage arrays, the dispatch is a 1D
@@ -39,15 +38,19 @@ fn fused_buffer_region_threads_element_registers() {
         quantize_f16: false,
     };
     let region = FusionRegion {
-        nodes: vec![mk(0, InputSource::External(0)), mk(1, InputSource::Node(id(0)))],
+        nodes: vec![
+            mk(0, InputSource::External(0)),
+            mk(1, InputSource::Node(id(0))),
+        ],
         num_external_inputs: 1,
         outputs: vec![(id(1), "out".to_string())],
         in_place_alias: None,
         sampler_address_mode: "clamp",
         dispatch_count_field: None,
         virtual_chains: Vec::new(),
-        sampled_externals: Vec::new(), camera_externals: 0,
-    output_capacity: None,
+        sampled_externals: Vec::new(),
+        camera_externals: 0,
+        output_capacity: None,
     };
     let g = generate_fused(&region).expect("buffer region fuses");
     assert!(
@@ -63,17 +66,35 @@ fn fused_buffer_region_threads_element_registers() {
         "external input bound read-only:\n{}",
         g.wgsl
     );
-    assert!(g.wgsl.contains(&Marker::FusedOutput.emit()), "fresh output tagged @fused_output");
+    assert!(
+        g.wgsl.contains(&Marker::FusedOutput.emit()),
+        "fresh output tagged @fused_output"
+    );
     assert!(
         g.wgsl.contains("var<storage, read_write> dst:"),
         "fresh dst output array declared:\n{}",
         g.wgsl
     );
-    assert!(g.wgsl.contains("arrayLength(&src_0)"), "1D dispatch keyed on an input array length");
-    assert!(g.wgsl.contains("let e_0 = src_0[idx];"), "external element pre-read once");
-    assert!(g.wgsl.contains("let r0 = n0_body"), "first member's element register");
-    assert!(g.wgsl.contains("let r1 = n1_body"), "second member threads r0");
-    assert!(g.wgsl.contains("dst[idx] = r1;"), "region result written to the fresh output");
+    assert!(
+        g.wgsl.contains("arrayLength(&src_0)"),
+        "1D dispatch keyed on an input array length"
+    );
+    assert!(
+        g.wgsl.contains("let e_0 = src_0[idx];"),
+        "external element pre-read once"
+    );
+    assert!(
+        g.wgsl.contains("let r0 = n0_body"),
+        "first member's element register"
+    );
+    assert!(
+        g.wgsl.contains("let r1 = n1_body"),
+        "second member threads r0"
+    );
+    assert!(
+        g.wgsl.contains("dst[idx] = r1;"),
+        "region result written to the fresh output"
+    );
 }
 
 /// BUG-008: a buffer region with TWO array externals pre-reads BOTH at `[idx]`.
@@ -110,8 +131,9 @@ fn fused_buffer_region_two_array_externals_bounds_count_by_min() {
         sampler_address_mode: "clamp",
         dispatch_count_field: None,
         virtual_chains: Vec::new(),
-        sampled_externals: Vec::new(), camera_externals: 0,
-    output_capacity: None,
+        sampled_externals: Vec::new(),
+        camera_externals: 0,
+        output_capacity: None,
     };
     let g = generate_fused(&region).expect("two-external buffer region fuses");
     assert!(

@@ -10,7 +10,10 @@ impl RenderScene {
     /// the light ring write). Sets temporal_upscale_active/denoise_active
     /// exactly as the inline code did; rt_irr_needs_reset |= irr_reallocated
     /// stays the one reset-production site in this block.
-    #[allow(clippy::too_many_arguments, reason = "BUG-trh7 stage 2 pass method: args are the evaluate() locals the inline block used — destructuring at call sites is the approved shape")]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "BUG-trh7 stage 2 pass method: args are the evaluate() locals the inline block used — destructuring at call sites is the approved shape"
+    )]
     pub(super) fn ensure_gpu_resources<'ctx, 'gpu>(
         &mut self,
         ctx: &mut EffectNodeContext<'ctx, 'gpu>,
@@ -22,18 +25,33 @@ impl RenderScene {
         rt_ready: bool,
     ) {
         let FramePrelude {
-            ref casters, ref light_data, ref shadow_casters,
-            depth_wired, wants_shafts_now, velocity_wired, ao_mask_wired,
-            denoise_feed, temporal_upscale, native_width, native_height,
-            width, height, rt_enabled, rt_shadows_enabled, rt_trace_w, rt_trace_h,
-            denoise_aux_ready, ..
+            ref casters,
+            ref light_data,
+            ref shadow_casters,
+            depth_wired,
+            wants_shafts_now,
+            velocity_wired,
+            ao_mask_wired,
+            denoise_feed,
+            temporal_upscale,
+            native_width,
+            native_height,
+            width,
+            height,
+            rt_enabled,
+            rt_shadows_enabled,
+            rt_trace_w,
+            rt_trace_h,
+            denoise_aux_ready,
+            ..
         } = *pre;
         let preparing = ctx.gpu.as_ref().is_some_and(|gpu| gpu.preparing);
         let rt_enabled = rt_enabled || preparing;
         let has_subsurface = draws.iter().any(|draw| draw.subsurface_binding[0] > 0.0);
         // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: peek color format BEFORE the gpu_encoder block below borrows ctx.
-        let opaque_scene_color_target_format =
-            has_transmission.then(|| ctx.outputs.texture_2d("color").map(|t| t.format)).flatten();
+        let opaque_scene_color_target_format = has_transmission
+            .then(|| ctx.outputs.texture_2d("color").map(|t| t.format))
+            .flatten();
         let has_casters = !casters.is_empty();
         {
             let gpu = ctx.gpu_encoder();
@@ -109,8 +127,13 @@ impl RenderScene {
             // mismatch.
             if temporal_upscale {
                 self.ensure_rt_temporal_color_scratch(gpu.device, width, height);
-                *temporal_upscale_active =
-                    self.ensure_rt_temporal_upscaler(gpu.device, width, height, native_width, native_height);
+                *temporal_upscale_active = self.ensure_rt_temporal_upscaler(
+                    gpu.device,
+                    width,
+                    height,
+                    native_width,
+                    native_height,
+                );
             }
             // RAYTRACING_DESIGN.md section 17.5 DN-F/DN-G: denoiser takes
             // priority over the plain temporal scaler on RT scenes (DN2).
@@ -120,7 +143,8 @@ impl RenderScene {
             // When the denoiser is active but temporal_upscale is off (1:1
             // denoise), the forward pass renders into a native-res scratch
             // so the denoiser's input and output don't alias.
-            let denoise_wanted = rt_enabled && rt_ready && denoise_aux_ready && denoiser_available();
+            let denoise_wanted =
+                rt_enabled && rt_ready && denoise_aux_ready && denoiser_available();
             // Gate-block diagnostic (2026-08-08, Peter's "does nothing"
             // report): the conditions fail silently — name the blocker
             // once per transition instead of leaving the feature inert.
@@ -169,18 +193,22 @@ impl RenderScene {
             // whether `envmap` is wired this frame.
             self.ensure_ibl_resources(gpu.device);
             if self.prefiltered_sheen.is_none()
-                && draws.iter().any(|d| d.uniforms.sheen_params[..3].iter().any(|v| *v > 0.0))
+                && draws
+                    .iter()
+                    .any(|d| d.uniforms.sheen_params[..3].iter().any(|v| *v > 0.0))
             {
-                self.prefiltered_sheen = Some(gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
-                    width: PREFILTER_BASE_WIDTH,
-                    height: PREFILTER_BASE_HEIGHT,
-                    depth: 1,
-                    format: manifold_gpu::GpuTextureFormat::Rgba16Float,
-                    dimension: manifold_gpu::GpuTextureDimension::D2,
-                    usage: manifold_gpu::GpuTextureUsage::SHADER_READ | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
-                    label: "node.render_scene sheen environment",
-                    mip_levels: PREFILTER_MIP_COUNT,
-                }));
+                self.prefiltered_sheen =
+                    Some(gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
+                        width: PREFILTER_BASE_WIDTH,
+                        height: PREFILTER_BASE_HEIGHT,
+                        depth: 1,
+                        format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+                        dimension: manifold_gpu::GpuTextureDimension::D2,
+                        usage: manifold_gpu::GpuTextureUsage::SHADER_READ
+                            | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
+                        label: "node.render_scene sheen environment",
+                        mip_levels: PREFILTER_MIP_COUNT,
+                    }));
             }
             // Identity instance stub (D11) — bound to any object's
             // instances_n when unwired, both in the main pass and every
@@ -191,8 +219,10 @@ impl RenderScene {
             // in a scene with no casters. The shadow *pipeline* + per-caster
             // maps are created only when a caster exists (unwired = zero cost).
             self.ensure_shadow_binding_stubs(gpu.device);
-            if has_casters && (!(rt_enabled && rt_ready && rt_shadows_enabled)
-                || draws.iter().any(ObjectDraw::routes_to_transparent)) {
+            if has_casters
+                && (!(rt_enabled && rt_ready && rt_shadows_enabled)
+                    || draws.iter().any(ObjectDraw::routes_to_transparent))
+            {
                 self.ensure_shadow_pass(gpu.device);
                 self.ensure_shadow_maps(gpu.device, casters);
             } else if has_transmission || rt_enabled || has_subsurface {
@@ -218,14 +248,15 @@ impl RenderScene {
                 self.ensure_opaque_depth_snapshot(gpu.device, width, height);
             }
             if has_transmission {
-                self.transmissive_depth_error = self.ensure_transmissive_depth_scratch(gpu.device, width, height).err();
+                self.transmissive_depth_error = self
+                    .ensure_transmissive_depth_scratch(gpu.device, width, height)
+                    .err();
             }
             if has_subsurface {
-                self.subsurface_pass.ensure(gpu.device, width, height, draws.len());
+                self.subsurface_pass
+                    .ensure(gpu.device, width, height, draws.len());
             }
-            if has_transmission
-                && let Some(format) = opaque_scene_color_target_format
-            {
+            if has_transmission && let Some(format) = opaque_scene_color_target_format {
                 self.ensure_opaque_scene_color(gpu.device, width, height, format);
             }
             // BUG-310: the tracer's 3 raw-MSL pipeline compiles (~30ms)
@@ -239,10 +270,18 @@ impl RenderScene {
             // irradiance targets, ensured here for the same NLL borrow
             // reason as above.
             if rt_enabled {
-                self.ensure_rt_visibility(gpu.device, rt_trace_w, rt_trace_h, width, height, casters.len());
+                self.ensure_rt_visibility(
+                    gpu.device,
+                    rt_trace_w,
+                    rt_trace_h,
+                    width,
+                    height,
+                    casters.len(),
+                );
                 self.ensure_rt_masks(gpu.device, rt_trace_w, rt_trace_h, width, height);
                 self.ensure_rt_params_buffer(gpu.device);
-                let irr_reallocated = self.ensure_rt_irradiance(gpu.device, rt_trace_w, rt_trace_h, width, height);
+                let irr_reallocated =
+                    self.ensure_rt_irradiance(gpu.device, rt_trace_w, rt_trace_h, width, height);
                 self.ensure_rt_accumulate_params_buffer(gpu.device);
                 self.ensure_rt_atrous_params_buffer(gpu.device);
                 // The firefly resolve aliases reflection prefilter scratch,
@@ -300,7 +339,9 @@ impl RenderScene {
                 // texel 0, which the shaders read as unshadowed, and one
                 // asking for more than the array side renders and samples
                 // at the side.
-                let (side, layers) = self.shadow_maps.as_ref()
+                let (side, layers) = self
+                    .shadow_maps
+                    .as_ref()
                     .map_or((0, 0), |maps| (maps.side, maps.layers.len()));
                 for (slot, caster) in shadow_casters.iter().enumerate() {
                     let mut entry = *caster;
@@ -309,7 +350,10 @@ impl RenderScene {
                     } else {
                         0.0
                     };
-                    ring.write(caster_offset + caster_size * slot as u64, bytemuck::bytes_of(&entry));
+                    ring.write(
+                        caster_offset + caster_size * slot as u64,
+                        bytemuck::bytes_of(&entry),
+                    );
                 }
             }
         }
@@ -333,7 +377,13 @@ impl RenderScene {
     ///   Points is on: MSAA color+depth traffic transits real memory — the
     ///   audit-mode tax, accepted; flipping back to any triangle mode
     ///   recreates the memoryless pair on the next frame.
-    pub(super) fn ensure_msaa_targets(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32, points_active: bool) {
+    pub(super) fn ensure_msaa_targets(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        width: u32,
+        height: u32,
+        points_active: bool,
+    ) {
         if self.depth_width == width
             && self.depth_height == height
             && self.depth_texture.is_some()
@@ -378,8 +428,17 @@ impl RenderScene {
         self.depth_height = height;
     }
 
-    pub(super) fn ensure_depth_resolve_scratch(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
-        if self.depth_resolve_scratch.as_ref().is_some_and(|t| t.width == width && t.height == height) {
+    pub(super) fn ensure_depth_resolve_scratch(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        width: u32,
+        height: u32,
+    ) {
+        if self
+            .depth_resolve_scratch
+            .as_ref()
+            .is_some_and(|t| t.width == width && t.height == height)
+        {
             return;
         }
         self.depth_resolve_scratch = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
@@ -388,7 +447,8 @@ impl RenderScene {
             depth: 1,
             format: manifold_gpu::GpuTextureFormat::Depth32Float,
             dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET | manifold_gpu::GpuTextureUsage::SHADER_READ,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+                | manifold_gpu::GpuTextureUsage::SHADER_READ,
             label: "node.render_scene native depth resolve",
             mip_levels: 1,
         }));
@@ -466,32 +526,37 @@ impl RenderScene {
             return;
         }
         self.denoise_normals_msaa = Some(device.create_texture_msaa_memoryless(
-            width, height,
+            width,
+            height,
             manifold_gpu::GpuTextureFormat::Rgba16Float,
             MSAA_SAMPLES,
             "node.render_scene msaa denoise normals",
         ));
         self.denoise_roughness_msaa = Some(device.create_texture_msaa_memoryless(
-            width, height,
+            width,
+            height,
             manifold_gpu::GpuTextureFormat::R16Float,
             MSAA_SAMPLES,
             "node.render_scene msaa denoise roughness",
         ));
         self.denoise_diffuse_albedo_msaa = Some(device.create_texture_msaa_memoryless(
-            width, height,
+            width,
+            height,
             manifold_gpu::GpuTextureFormat::Rgba16Float,
             MSAA_SAMPLES,
             "node.render_scene msaa denoise diffuse_albedo",
         ));
         self.denoise_specular_albedo_msaa = Some(device.create_texture_msaa_memoryless(
-            width, height,
+            width,
+            height,
             manifold_gpu::GpuTextureFormat::Rgba16Float,
             MSAA_SAMPLES,
             "node.render_scene msaa denoise specular_albedo",
         ));
         // DN-L (section 17.7): reactive mask — R16Float like roughness.
         self.denoise_reactive_msaa = Some(device.create_texture_msaa_memoryless(
-            width, height,
+            width,
+            height,
             manifold_gpu::GpuTextureFormat::R16Float,
             MSAA_SAMPLES,
             "node.render_scene msaa denoise reactive_mask",
@@ -570,13 +635,19 @@ impl RenderScene {
     /// asset, plus DamagedHelmet's UV range [1.0, 2.0] that motivated the
     /// original fix) gets byte-identical sampler behavior to before this
     /// phase — the striped-helmet regression `85b5bb9d` fixed stays fixed.
-    pub(super) fn ensure_material_sampler(&mut self, device: &manifold_gpu::GpuDevice, desc: MapSamplerDesc) {
+    pub(super) fn ensure_material_sampler(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        desc: MapSamplerDesc,
+    ) {
         let key = Self::sampler_cache_key(desc);
         self.material_samplers.entry(key).or_insert_with(|| {
             device.create_sampler(&manifold_gpu::GpuSamplerDesc {
                 mag_filter: desc.mag_filter,
                 min_filter: desc.min_filter,
-                mip_filter: desc.mip_filter.unwrap_or(manifold_gpu::GpuFilterMode::Nearest),
+                mip_filter: desc
+                    .mip_filter
+                    .unwrap_or(manifold_gpu::GpuFilterMode::Nearest),
                 address_mode_u: desc.wrap_u,
                 address_mode_v: desc.wrap_v,
                 address_mode_w: manifold_gpu::GpuAddressMode::Repeat,
@@ -587,8 +658,17 @@ impl RenderScene {
                 // other sampler in this file keeps the field's default (1).
                 max_anisotropy: if desc.min_filter == manifold_gpu::GpuFilterMode::Linear
                     && desc.mag_filter == manifold_gpu::GpuFilterMode::Linear
-                    && desc.mip_filter == Some(manifold_gpu::GpuFilterMode::Linear) { 8 } else { 1 },
-                lod_max_clamp: if desc.mip_filter.is_none() { 0.0 } else { f32::MAX },
+                    && desc.mip_filter == Some(manifold_gpu::GpuFilterMode::Linear)
+                {
+                    8
+                } else {
+                    1
+                },
+                lod_max_clamp: if desc.mip_filter.is_none() {
+                    0.0
+                } else {
+                    f32::MAX
+                },
             })
         });
     }
@@ -621,12 +701,15 @@ impl RenderScene {
         if self.dummy_emissive_buffer.is_none() {
             // Metal validates one complete pointee even when entry_count=0
             // skips the sampler block. Size from both shared GPU ABI types.
-            let bytes = std::mem::size_of::<manifold_gpu::raytrace::EmissiveTriangleGpu>()
-                .max(std::mem::size_of::<manifold_gpu::raytrace::EmissiveAliasEntry>());
+            let bytes = std::mem::size_of::<manifold_gpu::raytrace::EmissiveTriangleGpu>().max(
+                std::mem::size_of::<manifold_gpu::raytrace::EmissiveAliasEntry>(),
+            );
             let buf = device.create_buffer_shared(bytes as u64);
             // The newly allocated buffer is exclusively owned and not yet
             // submitted, and the write covers exactly its allocation.
-            unsafe { std::ptr::write_bytes(buf.mapped_ptr().expect("shared buffer"), 0, bytes); }
+            unsafe {
+                std::ptr::write_bytes(buf.mapped_ptr().expect("shared buffer"), 0, bytes);
+            }
             self.dummy_emissive_buffer = Some(buf);
         }
     }
@@ -730,8 +813,14 @@ impl RenderScene {
         device: &manifold_gpu::GpuDevice,
         casters: &[manifold_node_engine::scene::light::Light],
     ) {
-        let side = casters.iter().map(|l| shadow_map_resolution(l.shadow_resolution)).max().unwrap_or(256);
-        let (have_side, have_layers) = self.shadow_maps.as_ref()
+        let side = casters
+            .iter()
+            .map(|l| shadow_map_resolution(l.shadow_resolution))
+            .max()
+            .unwrap_or(256);
+        let (have_side, have_layers) = self
+            .shadow_maps
+            .as_ref()
             .map_or((0, 0), |maps| (maps.side, maps.layers.len()));
         if side <= have_side && casters.len() <= have_layers {
             return;
@@ -739,7 +828,10 @@ impl RenderScene {
         let side = side.max(have_side);
         let layers = casters.len().max(have_layers);
         // A refused size is not retried every frame; a smaller request is.
-        if self.shadow_maps_refused.is_some_and(|(s, l)| side >= s && layers >= l) {
+        if self
+            .shadow_maps_refused
+            .is_some_and(|(s, l)| side >= s && layers >= l)
+        {
             return;
         }
         let texture = match device.try_create_texture(&manifold_gpu::GpuTextureDesc {
@@ -766,11 +858,18 @@ impl RenderScene {
                 return;
             }
         };
-        let layers = (0..layers as u32).map(|layer| texture.layer_view(layer)).collect();
-        self.shadow_maps = Some(ShadowMapArray { side, texture, layers });
+        let layers = (0..layers as u32)
+            .map(|layer| texture.layer_view(layer))
+            .collect();
+        self.shadow_maps = Some(ShadowMapArray {
+            side,
+            texture,
+            layers,
+        });
         self.shadow_maps_refused = None;
         self.shadow_cache_keys.clear();
-        self.shadow_cache_keys.resize(casters.len().max(have_layers), None);
+        self.shadow_cache_keys
+            .resize(casters.len().max(have_layers), None);
     }
 
     /// VOLUMETRIC_LIGHT_DESIGN.md D3 (P2): ensure the half-res
@@ -778,7 +877,12 @@ impl RenderScene {
     /// textures match `half_w x half_h`, recreating on resize. Same
     /// `ensure_shadow_map` lazy pattern — called ONLY when [`wants_shafts`]
     /// is true this frame.
-    pub(super) fn ensure_shaft_half_res(&mut self, device: &manifold_gpu::GpuDevice, half_w: u32, half_h: u32) {
+    pub(super) fn ensure_shaft_half_res(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        half_w: u32,
+        half_h: u32,
+    ) {
         if self.shaft_half_width == half_w
             && self.shaft_half_height == half_h
             && self.shaft_inscatter.is_some()
@@ -818,7 +922,12 @@ impl RenderScene {
     /// internal Sample0 depth resolve even when `depth` is unwired" (D3).
     /// The native depth resolve is converted into this R32Float texture by
     /// compute, then read by the shaft downsample kernel.
-    pub(super) fn ensure_shaft_depth_internal(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+    pub(super) fn ensure_shaft_depth_internal(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        width: u32,
+        height: u32,
+    ) {
         if self.shaft_depth_internal_width == width
             && self.shaft_depth_internal_height == height
             && self.shaft_depth_internal.is_some()
@@ -890,30 +999,36 @@ impl RenderScene {
     /// (the resolve write) + `SHADER_READ` (MetalFX Temporal samples it as
     /// the `color` input) usage — same idiom as every other scratch target
     /// in this file (`ensure_opaque_scene_color` above).
-    pub(super) fn ensure_rt_temporal_color_scratch(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+    pub(super) fn ensure_rt_temporal_color_scratch(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        width: u32,
+        height: u32,
+    ) {
         if self.rt_temporal_color_scratch_width == width
             && self.rt_temporal_color_scratch_height == height
             && self.rt_temporal_color_scratch.is_some()
         {
             return;
         }
-        self.rt_temporal_color_scratch = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
-            width,
-            height,
-            depth: 1,
-            format: manifold_gpu::GpuTextureFormat::Rgba16Float,
-            dimension: manifold_gpu::GpuTextureDimension::D2,
-            // RT-Stage-3 P1 (BUG-mkgh): `SHADER_WRITE` added so the firefly
-            // clamp can write its result into this scratch (the clamp's
-            // `dst` when `temporal_upscale` is on); harmless otherwise —
-            // it only widens the usage of a texture MetalFX already reads
-            // and the MSAA resolve already writes.
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
-                | manifold_gpu::GpuTextureUsage::SHADER_READ
-                | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
-            label: "node.render_scene RT temporal-upscale render-res color scratch (D22)",
-            mip_levels: 1,
-        }));
+        self.rt_temporal_color_scratch =
+            Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+                width,
+                height,
+                depth: 1,
+                format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+                dimension: manifold_gpu::GpuTextureDimension::D2,
+                // RT-Stage-3 P1 (BUG-mkgh): `SHADER_WRITE` added so the firefly
+                // clamp can write its result into this scratch (the clamp's
+                // `dst` when `temporal_upscale` is on); harmless otherwise —
+                // it only widens the usage of a texture MetalFX already reads
+                // and the MSAA resolve already writes.
+                usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+                    | manifold_gpu::GpuTextureUsage::SHADER_READ
+                    | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
+                label: "node.render_scene RT temporal-upscale render-res color scratch (D22)",
+                mip_levels: 1,
+            }));
         self.rt_temporal_color_scratch_width = width;
         self.rt_temporal_color_scratch_height = height;
     }
@@ -988,9 +1103,8 @@ impl RenderScene {
         }
         // Dimensions changed or first creation — replace.
         self.denoiser = None;
-        match crate::denoiser::Denoiser::new(
-            device, render_w, render_h, native_w, native_h, false,
-        ) {
+        match crate::denoiser::Denoiser::new(device, render_w, render_h, native_w, native_h, false)
+        {
             Some(d) => {
                 self.denoiser = Some(d);
                 self.denoiser_unavailable_logged = false;
@@ -1013,7 +1127,12 @@ impl RenderScene {
     /// written by a depth-only render pass and never sampled (E2a proves
     /// only the depth-test plumbing; nothing reads this texture in a
     /// shader this phase).
-    pub(super) fn ensure_opaque_depth_snapshot(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+    pub(super) fn ensure_opaque_depth_snapshot(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        width: u32,
+        height: u32,
+    ) {
         if self.opaque_depth_snapshot_width == width
             && self.opaque_depth_snapshot_height == height
             && self.opaque_depth_snapshot.is_some()
@@ -1056,18 +1175,22 @@ impl RenderScene {
             return Ok(());
         }
         manifold_node_engine::load::expand::admit_candidate_bytes(
-            device.modifier_memory_snapshot(), u64::from(width) * u64::from(height) * 4,
-        ).map_err(|error| format!("Glass depth resource admission failed: {error}"))?;
-        self.transmissive_depth_scratch = Some(device.try_create_texture(&manifold_gpu::GpuTextureDesc {
-            width,
-            height,
-            depth: 1,
-            format: manifold_gpu::GpuTextureFormat::Depth32Float,
-            dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET | manifold_gpu::GpuTextureUsage::COPY_DST,
-            label: "node.render_scene transmissive depth scratch (E2b)",
-            mip_levels: 1,
-        })?);
+            device.modifier_memory_snapshot(),
+            u64::from(width) * u64::from(height) * 4,
+        )
+        .map_err(|error| format!("Glass depth resource admission failed: {error}"))?;
+        self.transmissive_depth_scratch =
+            Some(device.try_create_texture(&manifold_gpu::GpuTextureDesc {
+                width,
+                height,
+                depth: 1,
+                format: manifold_gpu::GpuTextureFormat::Depth32Float,
+                dimension: manifold_gpu::GpuTextureDimension::D2,
+                usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+                    | manifold_gpu::GpuTextureUsage::COPY_DST,
+                label: "node.render_scene transmissive depth scratch (E2b)",
+                mip_levels: 1,
+            })?);
         self.transmissive_depth_scratch_width = width;
         self.transmissive_depth_scratch_height = height;
         Ok(())
@@ -1091,9 +1214,23 @@ impl RenderScene {
     /// (`rt_sv_needs_reset`). If the GPU refuses a larger set the old
     /// arrays stay, casters past them go unshadowed, and the refusal is
     /// logged once per size.
-    pub(super) fn ensure_rt_visibility(&mut self, device: &manifold_gpu::GpuDevice, trace_w: u32, trace_h: u32, full_w: u32, full_h: u32, casters: usize) {
-        let same_size = self.rt_mask_half.as_ref().is_some_and(|t| t.width == trace_w && t.height == trace_h)
-            && self.rt_mask_full.as_ref().is_some_and(|t| t.width == full_w && t.height == full_h);
+    pub(super) fn ensure_rt_visibility(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        trace_w: u32,
+        trace_h: u32,
+        full_w: u32,
+        full_h: u32,
+        casters: usize,
+    ) {
+        let same_size = self
+            .rt_mask_half
+            .as_ref()
+            .is_some_and(|t| t.width == trace_w && t.height == trace_h)
+            && self
+                .rt_mask_full
+                .as_ref()
+                .is_some_and(|t| t.width == full_w && t.height == full_h);
         let have = self.rt_mask_full.as_ref().map_or(0, |t| t.depth);
         let want = (casters.div_ceil(4).max(1) as u32).max(have);
         if same_size && want <= have {
@@ -1105,7 +1242,12 @@ impl RenderScene {
         if self.rt_sv_refused.is_some_and(|refused| want >= refused) {
             return;
         }
-        let make = |w: u32, h: u32, layers: u32, format: manifold_gpu::GpuTextureFormat, usage: manifold_gpu::GpuTextureUsage, label: &'static str| {
+        let make = |w: u32,
+                    h: u32,
+                    layers: u32,
+                    format: manifold_gpu::GpuTextureFormat,
+                    usage: manifold_gpu::GpuTextureUsage,
+                    label: &'static str| {
             device.try_create_texture(&manifold_gpu::GpuTextureDesc {
                 width: w,
                 height: h,
@@ -1127,20 +1269,97 @@ impl RenderScene {
         let r16 = manifold_gpu::GpuTextureFormat::R16Float;
         let build = |layers: u32| -> Result<[manifold_gpu::GpuTexture; 11], String> {
             Ok([
-                make(trace_w, trace_h, layers, rgba16, plain, "node.render_scene rt_mask_half (RT-D3/RT-P2 vis)")?,
-                make(full_w, full_h, layers, rgba16, plain, "node.render_scene rt_mask_full (RT-D3/RT-P2 vis)")?,
+                make(
+                    trace_w,
+                    trace_h,
+                    layers,
+                    rgba16,
+                    plain,
+                    "node.render_scene rt_mask_half (RT-D3/RT-P2 vis)",
+                )?,
+                make(
+                    full_w,
+                    full_h,
+                    layers,
+                    rgba16,
+                    plain,
+                    "node.render_scene rt_mask_full (RT-D3/RT-P2 vis)",
+                )?,
                 // RT-T1-D: à-trous ping-pong scratch.
-                make(full_w, full_h, layers, rgba16, plain, "node.render_scene rt_mask_full_b (RT-T1-D atrous)")?,
+                make(
+                    full_w,
+                    full_h,
+                    layers,
+                    rgba16,
+                    plain,
+                    "node.render_scene rt_mask_full_b (RT-T1-D atrous)",
+                )?,
                 // SV-ACCUM history pair: same ping clock as rt_irr_history.
-                make(full_w, full_h, layers, rgba16, plain, "node.render_scene rt_sv_history_a (SV-ACCUM)")?,
-                make(full_w, full_h, layers, rgba16, plain, "node.render_scene rt_sv_history_b (SV-ACCUM)")?,
+                make(
+                    full_w,
+                    full_h,
+                    layers,
+                    rgba16,
+                    plain,
+                    "node.render_scene rt_sv_history_a (SV-ACCUM)",
+                )?,
+                make(
+                    full_w,
+                    full_h,
+                    layers,
+                    rgba16,
+                    plain,
+                    "node.render_scene rt_sv_history_b (SV-ACCUM)",
+                )?,
                 // Per-channel first/second visibility moments.
-                make(full_w, full_h, layers, rgba16, plain, "node.render_scene rt_sv_m1_a (SV-ACCUM)")?,
-                make(full_w, full_h, layers, rgba16, plain, "node.render_scene rt_sv_m1_b (SV-ACCUM)")?,
-                make(full_w, full_h, layers, rgba16, plain, "node.render_scene rt_sv_m2_a (SV-ACCUM)")?,
-                make(full_w, full_h, layers, rgba16, plain, "node.render_scene rt_sv_m2_b (SV-ACCUM)")?,
-                make(full_w, full_h, layers, r16, renderable, "node.render_scene rt_sv_hold_a (SV-ACCUM)")?,
-                make(full_w, full_h, layers, r16, renderable, "node.render_scene rt_sv_hold_b (SV-ACCUM)")?,
+                make(
+                    full_w,
+                    full_h,
+                    layers,
+                    rgba16,
+                    plain,
+                    "node.render_scene rt_sv_m1_a (SV-ACCUM)",
+                )?,
+                make(
+                    full_w,
+                    full_h,
+                    layers,
+                    rgba16,
+                    plain,
+                    "node.render_scene rt_sv_m1_b (SV-ACCUM)",
+                )?,
+                make(
+                    full_w,
+                    full_h,
+                    layers,
+                    rgba16,
+                    plain,
+                    "node.render_scene rt_sv_m2_a (SV-ACCUM)",
+                )?,
+                make(
+                    full_w,
+                    full_h,
+                    layers,
+                    rgba16,
+                    plain,
+                    "node.render_scene rt_sv_m2_b (SV-ACCUM)",
+                )?,
+                make(
+                    full_w,
+                    full_h,
+                    layers,
+                    r16,
+                    renderable,
+                    "node.render_scene rt_sv_hold_a (SV-ACCUM)",
+                )?,
+                make(
+                    full_w,
+                    full_h,
+                    layers,
+                    r16,
+                    renderable,
+                    "node.render_scene rt_sv_hold_b (SV-ACCUM)",
+                )?,
             ])
         };
         let set = match build(want) {
@@ -1175,7 +1394,19 @@ impl RenderScene {
                 }
             }
         };
-        let [mask_half, mask_full, mask_full_b, h_a, h_b, m1_a, m1_b, m2_a, m2_b, hold_a, hold_b] = set;
+        let [
+            mask_half,
+            mask_full,
+            mask_full_b,
+            h_a,
+            h_b,
+            m1_a,
+            m1_b,
+            m2_a,
+            m2_b,
+            hold_a,
+            hold_b,
+        ] = set;
         self.rt_mask_half = Some(mask_half);
         self.rt_mask_full = Some(mask_full);
         self.rt_mask_full_b = Some(mask_full_b);
@@ -1191,7 +1422,14 @@ impl RenderScene {
     /// Trace-res and full-res sun-transmission tint targets plus the tint
     /// à-trous scratch, resized with the scene's own output resolution.
     /// Shadow visibility lives in `ensure_rt_visibility`.
-    pub(super) fn ensure_rt_masks(&mut self, device: &manifold_gpu::GpuDevice, trace_w: u32, trace_h: u32, full_w: u32, full_h: u32) {
+    pub(super) fn ensure_rt_masks(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        trace_w: u32,
+        trace_h: u32,
+        full_w: u32,
+        full_h: u32,
+    ) {
         if self.rt_mask_width == full_w
             && self.rt_mask_height == full_h
             && self.rt_mask_trace_w == trace_w
@@ -1217,10 +1455,22 @@ impl RenderScene {
         };
         // RT-TL-C (section 16 TL5): sun-transmission tint, written by the
         // mask dispatch.
-        self.rt_svt_half = Some(make(trace_w, trace_h, "node.render_scene rt_svt_half (RT-TL-C)"));
-        self.rt_svt_full = Some(make(full_w, full_h, "node.render_scene rt_svt_full (RT-TL-C)"));
+        self.rt_svt_half = Some(make(
+            trace_w,
+            trace_h,
+            "node.render_scene rt_svt_half (RT-TL-C)",
+        ));
+        self.rt_svt_full = Some(make(
+            full_w,
+            full_h,
+            "node.render_scene rt_svt_full (RT-TL-C)",
+        ));
         // RT-TL-C: à-trous ping-pong scratch — mirrors rt_mask_full_b.
-        self.rt_svt_full_b = Some(make(full_w, full_h, "node.render_scene rt_svt_full_b (RT-TL-C atrous)"));
+        self.rt_svt_full_b = Some(make(
+            full_w,
+            full_h,
+            "node.render_scene rt_svt_full_b (RT-TL-C atrous)",
+        ));
         self.rt_mask_width = full_w;
         self.rt_mask_height = full_h;
         self.rt_mask_trace_w = trace_w;
@@ -1235,7 +1485,14 @@ impl RenderScene {
     /// undefined until the caller's next `accumulate_irradiance` call,
     /// which MUST pass `reset: true` in that case (a dimension change is
     /// itself a discontinuity, same as a cut).
-    pub(super) fn ensure_rt_irradiance(&mut self, device: &manifold_gpu::GpuDevice, trace_w: u32, trace_h: u32, full_w: u32, full_h: u32) -> bool {
+    pub(super) fn ensure_rt_irradiance(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        trace_w: u32,
+        trace_h: u32,
+        full_w: u32,
+        full_h: u32,
+    ) -> bool {
         if self.rt_irr_width == full_w
             && self.rt_irr_height == full_h
             && self.rt_irr_trace_w == trace_w
@@ -1260,33 +1517,59 @@ impl RenderScene {
             })
         };
         // Reflection scratch also serves as the later MSAA scene-color resolve.
-        let make_renderable = |w: u32, h: u32, format: manifold_gpu::GpuTextureFormat, label: &'static str| {
-            device.create_texture(&manifold_gpu::GpuTextureDesc {
-                width: w,
-                height: h,
-                depth: 1,
-                format,
-                dimension: manifold_gpu::GpuTextureDimension::D2,
-                usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
-                    | manifold_gpu::GpuTextureUsage::SHADER_WRITE
-                    | manifold_gpu::GpuTextureUsage::SHADER_READ
-                    | manifold_gpu::GpuTextureUsage::COPY_SRC,
-                label,
-                mip_levels: 1,
-            })
-        };
+        let make_renderable =
+            |w: u32, h: u32, format: manifold_gpu::GpuTextureFormat, label: &'static str| {
+                device.create_texture(&manifold_gpu::GpuTextureDesc {
+                    width: w,
+                    height: h,
+                    depth: 1,
+                    format,
+                    dimension: manifold_gpu::GpuTextureDimension::D2,
+                    usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+                        | manifold_gpu::GpuTextureUsage::SHADER_WRITE
+                        | manifold_gpu::GpuTextureUsage::SHADER_READ
+                        | manifold_gpu::GpuTextureUsage::COPY_SRC,
+                    label,
+                    mip_levels: 1,
+                })
+            };
         let rgba16 = manifold_gpu::GpuTextureFormat::Rgba16Float;
         // Lighting textures (irradiance, reflection, normal) at trace resolution.
-        self.rt_irr_half = Some(make(trace_w, trace_h, rgba16, "node.render_scene rt_irr_half (RT-P2)"));
-        self.rt_irr_full = Some(make(full_w, full_h, rgba16, "node.render_scene rt_irr_full (RT-P2)"));
+        self.rt_irr_half = Some(make(
+            trace_w,
+            trace_h,
+            rgba16,
+            "node.render_scene rt_irr_half (RT-P2)",
+        ));
+        self.rt_irr_full = Some(make(
+            full_w,
+            full_h,
+            rgba16,
+            "node.render_scene rt_irr_full (RT-P2)",
+        ));
         // RT-R1 (section 9.3): trace-res reflection-radiance output — same lifecycle
         // as `rt_irr_half` (the dispatch writes it; T5's kernel is the writer;
         // inert/bind-only until then).
-        self.rt_refl_half = Some(make(trace_w, trace_h, rgba16, "node.render_scene rt_refl_half (RT-R1)"));
+        self.rt_refl_half = Some(make(
+            trace_w,
+            trace_h,
+            rgba16,
+            "node.render_scene rt_refl_half (RT-R1)",
+        ));
         // RT-R1 (section 9.3): full-res reflection-radiance output target & atrous
         // scratch (mirror `rt_irr_full`/`rt_irr_full_b`). Inert until T5.
-        self.rt_refl_full = Some(make(full_w, full_h, rgba16, "node.render_scene rt_refl_full (RT-R1)"));
-        self.rt_refl_full_b = Some(make_renderable(full_w, full_h, rgba16, "node.render_scene reflection/firefly scratch"));
+        self.rt_refl_full = Some(make(
+            full_w,
+            full_h,
+            rgba16,
+            "node.render_scene rt_refl_full (RT-R1)",
+        ));
+        self.rt_refl_full_b = Some(make_renderable(
+            full_w,
+            full_h,
+            rgba16,
+            "node.render_scene reflection/firefly scratch",
+        ));
         // The second prefilter pass finishes reading this backing before
         // Pass 2 resolves scene color into it. Neither the accumulator nor
         // the post-filter reads reflection scratch, and there is no CPU
@@ -1294,43 +1577,113 @@ impl RenderScene {
         self.rt_firefly_scratch = self.rt_refl_full_b.clone();
         // RT-T1-C: current-frame primary-hit normal, same half/full
         // lifecycle as irradiance above (not persistent history).
-        self.rt_normal_half = Some(make(trace_w, trace_h, rgba16, "node.render_scene rt_normal_half (RT-T1-C)"));
-        self.rt_normal_full = Some(make(full_w, full_h, rgba16, "node.render_scene rt_normal_full (RT-T1-C)"));
+        self.rt_normal_half = Some(make(
+            trace_w,
+            trace_h,
+            rgba16,
+            "node.render_scene rt_normal_half (RT-T1-C)",
+        ));
+        self.rt_normal_full = Some(make(
+            full_w,
+            full_h,
+            rgba16,
+            "node.render_scene rt_normal_full (RT-T1-C)",
+        ));
         // RT-T1-D: second full-res scratch set for the à-trous filter's
         // ping-pong (same lifecycle as irradiance/normal above — not
         // persistent history, rewritten fresh every RT-ready frame).
-        self.rt_irr_full_b = Some(make(full_w, full_h, rgba16, "node.render_scene rt_irr_full_b (RT-T1-D atrous)"));
-        self.rt_normal_full_b = Some(make(full_w, full_h, rgba16, "node.render_scene rt_normal_full_b (RT-T1-D atrous)"));
+        self.rt_irr_full_b = Some(make(
+            full_w,
+            full_h,
+            rgba16,
+            "node.render_scene rt_irr_full_b (RT-T1-D atrous)",
+        ));
+        self.rt_normal_full_b = Some(make(
+            full_w,
+            full_h,
+            rgba16,
+            "node.render_scene rt_normal_full_b (RT-T1-D atrous)",
+        ));
         // RT-T1-C: ping-pong history pairs (irradiance, depth, normal) —
         // see this struct's field doc comment for why two textures each.
         self.rt_irr_history = [
-            make(full_w, full_h, rgba16, "node.render_scene rt_irr_history_a (RT-T1-C)"),
-            make(full_w, full_h, rgba16, "node.render_scene rt_irr_history_b (RT-T1-C)"),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_irr_history_a (RT-T1-C)",
+            ),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_irr_history_b (RT-T1-C)",
+            ),
         ]
         .map(Some);
         // RT-R2 (RD6): specular history ping-pong pair — same lifecycle +
         // same reset rule as rt_irr_history (I-R2: one reset path, one flip).
         self.rt_refl_history = [
-            make(full_w, full_h, rgba16, "node.render_scene rt_refl_history_a (RT-R2)"),
-            make(full_w, full_h, rgba16, "node.render_scene rt_refl_history_b (RT-R2)"),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_refl_history_a (RT-R2)",
+            ),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_refl_history_b (RT-R2)",
+            ),
         ]
         .map(Some);
         // RT-TL-C (section 16 TL8): sun-transmission tint history pair —
         // same lifecycle, reset rule, and ping clock as rt_irr_history.
         // Full res, Rgba16Float (the scalar hold pairs are R16Float).
         self.rt_svt_history = [
-            make(full_w, full_h, rgba16, "node.render_scene rt_svt_history_a (RT-TL-C)"),
-            make(full_w, full_h, rgba16, "node.render_scene rt_svt_history_b (RT-TL-C)"),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_svt_history_a (RT-TL-C)",
+            ),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_svt_history_b (RT-TL-C)",
+            ),
         ]
         .map(Some);
         self.rt_depth_history = [
-            make(full_w, full_h, manifold_gpu::GpuTextureFormat::R32Float, "node.render_scene rt_depth_history_a (RT-T1-C)"),
-            make(full_w, full_h, manifold_gpu::GpuTextureFormat::R32Float, "node.render_scene rt_depth_history_b (RT-T1-C)"),
+            make(
+                full_w,
+                full_h,
+                manifold_gpu::GpuTextureFormat::R32Float,
+                "node.render_scene rt_depth_history_a (RT-T1-C)",
+            ),
+            make(
+                full_w,
+                full_h,
+                manifold_gpu::GpuTextureFormat::R32Float,
+                "node.render_scene rt_depth_history_b (RT-T1-C)",
+            ),
         ]
         .map(Some);
         self.rt_normal_history = [
-            make(full_w, full_h, rgba16, "node.render_scene rt_normal_history_a (RT-T1-C)"),
-            make(full_w, full_h, rgba16, "node.render_scene rt_normal_history_b (RT-T1-C)"),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_normal_history_a (RT-T1-C)",
+            ),
+            make(
+                full_w,
+                full_h,
+                rgba16,
+                "node.render_scene rt_normal_history_b (RT-T1-C)",
+            ),
         ]
         .map(Some);
         // RT-T1-D (BUG-312): luminance-moments ping-pong history — `Rgba32Float`
@@ -1341,8 +1694,18 @@ impl RenderScene {
         // temporally-accumulated ao (`accumulate_irradiance`'s `history_write.a`
         // is the frame count, so the ao rides here).
         self.rt_moments_history = [
-            make(full_w, full_h, manifold_gpu::GpuTextureFormat::Rgba32Float, "node.render_scene rt_moments_history_a (RT-T1-D)"),
-            make(full_w, full_h, manifold_gpu::GpuTextureFormat::Rgba32Float, "node.render_scene rt_moments_history_b (RT-T1-D)"),
+            make(
+                full_w,
+                full_h,
+                manifold_gpu::GpuTextureFormat::Rgba32Float,
+                "node.render_scene rt_moments_history_a (RT-T1-D)",
+            ),
+            make(
+                full_w,
+                full_h,
+                manifold_gpu::GpuTextureFormat::Rgba32Float,
+                "node.render_scene rt_moments_history_b (RT-T1-D)",
+            ),
         ]
         .map(Some);
         // RT-Stage-3 P4 (BUG-eytk): the pre-accumulation à-trous passes
@@ -1371,20 +1734,20 @@ impl RenderScene {
     /// the light data a later frame's draw call might still be reading).
     pub(super) fn ensure_rt_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.rt_params_buffer.is_none() {
-            self.rt_params_buffer = Some(device.create_buffer_shared(
-                std::mem::size_of::<manifold_gpu::raytrace::ShadowRayParams>() as u64,
-            ));
+            self.rt_params_buffer = Some(device.create_buffer_shared(std::mem::size_of::<
+                manifold_gpu::raytrace::ShadowRayParams,
+            >() as u64));
         }
     }
-
 
     /// RT-P2: CPU-mapped `AccumulateParams` upload buffer — separate from
     /// `rt_params_buffer` (see the field's doc comment).
     pub(super) fn ensure_rt_accumulate_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.rt_accumulate_params_buffer.is_none() {
-            self.rt_accumulate_params_buffer = Some(device.create_buffer_shared(
-                std::mem::size_of::<manifold_gpu::raytrace::AccumulateParams>() as u64,
-            ));
+            self.rt_accumulate_params_buffer =
+                Some(device.create_buffer_shared(std::mem::size_of::<
+                    manifold_gpu::raytrace::AccumulateParams,
+                >() as u64));
         }
     }
 
@@ -1392,9 +1755,10 @@ impl RenderScene {
     /// the other two params buffers above (same non-clobbering reason).
     pub(super) fn ensure_rt_atrous_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.rt_atrous_params_buffer.is_none() {
-            self.rt_atrous_params_buffer = Some(device.create_buffer_shared(
-                std::mem::size_of::<manifold_gpu::raytrace::AtrousParams>() as u64,
-            ));
+            self.rt_atrous_params_buffer =
+                Some(device.create_buffer_shared(std::mem::size_of::<
+                    manifold_gpu::raytrace::AtrousParams,
+                >() as u64));
         }
     }
 
@@ -1403,9 +1767,10 @@ impl RenderScene {
     /// non-clobbering reason).
     pub(super) fn ensure_rt_firefly_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.rt_firefly_params_buffer.is_none() {
-            self.rt_firefly_params_buffer = Some(device.create_buffer_shared(
-                std::mem::size_of::<manifold_gpu::raytrace::FireflyClampParams>() as u64,
-            ));
+            self.rt_firefly_params_buffer =
+                Some(device.create_buffer_shared(std::mem::size_of::<
+                    manifold_gpu::raytrace::FireflyClampParams,
+                >() as u64));
         }
     }
 
@@ -1414,9 +1779,10 @@ impl RenderScene {
     /// reason).
     pub(super) fn ensure_rt_atrous_post_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.rt_atrous_post_params_buffer.is_none() {
-            self.rt_atrous_post_params_buffer = Some(device.create_buffer_shared(
-                std::mem::size_of::<manifold_gpu::raytrace::AtrousPostParams>() as u64,
-            ));
+            self.rt_atrous_post_params_buffer =
+                Some(device.create_buffer_shared(std::mem::size_of::<
+                    manifold_gpu::raytrace::AtrousPostParams,
+                >() as u64));
         }
     }
 
@@ -1476,8 +1842,7 @@ impl RenderScene {
                 pos_scale: [0.0, 0.0, 0.0, 1.0],
                 rot_pad: [0.0, 0.0, 0.0, 0.0],
             };
-            let buf =
-                device.create_buffer_shared(std::mem::size_of::<InstanceTransform>() as u64);
+            let buf = device.create_buffer_shared(std::mem::size_of::<InstanceTransform>() as u64);
             unsafe {
                 buf.write(0, bytemuck::bytes_of(&stub));
             }
@@ -1495,17 +1860,18 @@ impl RenderScene {
     /// whether `envmap` is wired or any object is PBR.
     pub(super) fn ensure_ibl_resources(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.prefiltered_specular.is_none() {
-            self.prefiltered_specular = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
-                width: PREFILTER_BASE_WIDTH,
-                height: PREFILTER_BASE_HEIGHT,
-                depth: 1,
-                format: manifold_gpu::GpuTextureFormat::Rgba16Float,
-                dimension: manifold_gpu::GpuTextureDimension::D2,
-                usage: manifold_gpu::GpuTextureUsage::SHADER_READ
-                    | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
-                label: "node.render_scene ibl prefiltered specular",
-                mip_levels: PREFILTER_MIP_COUNT,
-            }));
+            self.prefiltered_specular =
+                Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+                    width: PREFILTER_BASE_WIDTH,
+                    height: PREFILTER_BASE_HEIGHT,
+                    depth: 1,
+                    format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+                    dimension: manifold_gpu::GpuTextureDimension::D2,
+                    usage: manifold_gpu::GpuTextureUsage::SHADER_READ
+                        | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
+                    label: "node.render_scene ibl prefiltered specular",
+                    mip_levels: PREFILTER_MIP_COUNT,
+                }));
         }
         if self.irradiance_map.is_none() {
             self.irradiance_map = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
@@ -1566,6 +1932,5 @@ impl RenderScene {
                 "node.render_scene ibl brdf lut",
             ));
         }
-
     }
 }

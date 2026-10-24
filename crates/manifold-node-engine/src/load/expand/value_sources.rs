@@ -178,12 +178,10 @@ fn walk_nodes(
                     "group stable id is empty or duplicated",
                 ));
             }
-            let group_handle = node.handle.clone().ok_or_else(|| {
-                structural(
-                    &node.node_id.clone(),
-                    "group has no handle",
-                )
-            })?;
+            let group_handle = node
+                .handle
+                .clone()
+                .ok_or_else(|| structural(&node.node_id.clone(), "group has no handle"))?;
             let mut group_path = handles.to_vec();
             group_path.push(group_handle);
             let mut child_scope = scope.to_vec();

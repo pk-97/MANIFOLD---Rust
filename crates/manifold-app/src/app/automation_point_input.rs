@@ -7,8 +7,8 @@
 use manifold_core::effects::{AutomationPoint, ParamId};
 use manifold_core::{Beats, GraphTarget};
 use manifold_editing::commands::automation::MoveAutomationPointCommand;
-use manifold_ui::view::{UiGraphTarget, UiLaneDisplay};
 use manifold_ui::slider::BitmapSlider;
+use manifold_ui::view::{UiGraphTarget, UiLaneDisplay};
 
 use crate::app::Application;
 use crate::text_input::{AnchorRect, AutomationPointEditCtx, TextInputField, TextInputState};
@@ -26,7 +26,10 @@ pub(crate) fn begin_value(
     value_norm: f32,
 ) {
     let Some((point, param)) = point_and_param(app, target, param_id, beat, value_norm) else {
-        invalid(&mut app.ws.ui_root, "Automation point is no longer available");
+        invalid(
+            &mut app.ws.ui_root,
+            "Automation point is no longer available",
+        );
         return;
     };
     let ctx = AutomationPointEditCtx {
@@ -48,12 +51,8 @@ pub(crate) fn begin_value(
         invalid(&mut app.ws.ui_root, "Automation point is off-screen");
         return;
     };
-    app.text_input.begin(
-        TextInputField::AutomationPointValue,
-        &initial,
-        anchor,
-        11.0,
-    );
+    app.text_input
+        .begin(TextInputField::AutomationPointValue, &initial, anchor, 11.0);
     app.text_input.automation_point_edit = Some(ctx);
 }
 
@@ -66,7 +65,10 @@ pub(crate) fn begin_time(
     value_norm: f32,
 ) {
     let Some((_, param)) = point_and_param(app, target, param_id, beat, value_norm) else {
-        invalid(&mut app.ws.ui_root, "Automation point is no longer available");
+        invalid(
+            &mut app.ws.ui_root,
+            "Automation point is no longer available",
+        );
         return;
     };
     let bpb = beats_per_bar(app);
@@ -85,12 +87,8 @@ pub(crate) fn begin_time(
         invalid(&mut app.ws.ui_root, "Automation point is off-screen");
         return;
     };
-    app.text_input.begin(
-        TextInputField::AutomationPointTime,
-        &initial,
-        anchor,
-        11.0,
-    );
+    app.text_input
+        .begin(TextInputField::AutomationPointTime, &initial, anchor, 11.0);
     app.text_input.automation_point_edit = Some(ctx);
 }
 
@@ -108,7 +106,13 @@ pub(crate) fn commit(
     };
     let new_value = if field == TextInputField::AutomationPointValue {
         let display = lane_display(cx.ui, &ctx.target, &ctx.param_id);
-        match parse_value(text, ctx.param_min, ctx.param_max, ctx.whole_numbers, &display) {
+        match parse_value(
+            text,
+            ctx.param_min,
+            ctx.param_max,
+            ctx.whole_numbers,
+            &display,
+        ) {
             Ok(value) => value,
             Err(reason) => {
                 reject_edit(text_input, cx.ui, field, text, ctx, reason);
@@ -127,8 +131,17 @@ pub(crate) fn commit(
     };
 
     let graph_target = crate::editing_host::to_graph_target(&ctx.target);
-    let Some(old_point) = find_point(&cx.project, &graph_target, &ctx.param_id, ctx.original_beat, ctx.original_value_norm) else {
-        invalid(cx.ui, "Automation point moved before the edit was committed");
+    let Some(old_point) = find_point(
+        &cx.project,
+        &graph_target,
+        &ctx.param_id,
+        ctx.original_beat,
+        ctx.original_value_norm,
+    ) else {
+        invalid(
+            cx.ui,
+            "Automation point moved before the edit was committed",
+        );
         return;
     };
     let new_beat = if field == TextInputField::AutomationPointValue {
@@ -156,7 +169,10 @@ pub(crate) fn commit(
         return;
     }
     cx.execute(Box::new(MoveAutomationPointCommand::new(
-        graph_target, ctx.param_id.as_ref(), old_point, new_point,
+        graph_target,
+        ctx.param_id.as_ref(),
+        old_point,
+        new_point,
     )));
     let new_value_norm = BitmapSlider::value_to_normalized(value, ctx.param_min, ctx.param_max);
     cx.selection.selected_automation_point = Some(manifold_ui::view::UiAutomationPointRef {
@@ -186,7 +202,11 @@ fn point_and_param<'a>(
     let param = inst.params.get(param_id.as_ref())?;
     let point = lane.points.iter().find(|point| {
         point.beat == beat
-            && BitmapSlider::value_to_normalized(point.value, param.slider_span().0, param.slider_span().1) == value_norm
+            && BitmapSlider::value_to_normalized(
+                point.value,
+                param.slider_span().0,
+                param.slider_span().1,
+            ) == value_norm
     })?;
     Some((point, param))
 }
@@ -200,27 +220,58 @@ fn find_point(
 ) -> Option<AutomationPoint> {
     let inst = project.preset_instance(target)?;
     let param = inst.params.get(param_id.as_ref())?;
-    inst
-        .automation_lanes
+    inst.automation_lanes
         .as_ref()?
         .iter()
         .find(|lane| lane.param_id.as_ref() == param_id.as_ref())?
         .points
         .iter()
-        .find(|point| point.beat == beat && BitmapSlider::value_to_normalized(point.value, param.slider_span().0, param.slider_span().1) == value_norm)
+        .find(|point| {
+            point.beat == beat
+                && BitmapSlider::value_to_normalized(
+                    point.value,
+                    param.slider_span().0,
+                    param.slider_span().1,
+                ) == value_norm
+        })
         .copied()
 }
 
-fn point_anchor(app: &Application, target: &UiGraphTarget, param_id: &ParamId, beat: Beats, value_norm: f32) -> Option<AnchorRect> {
-    let dot = app.ws.ui_root.viewport.automation_lane_screens()
+fn point_anchor(
+    app: &Application,
+    target: &UiGraphTarget,
+    param_id: &ParamId,
+    beat: Beats,
+    value_norm: f32,
+) -> Option<AnchorRect> {
+    let dot = app
+        .ws
+        .ui_root
+        .viewport
+        .automation_lane_screens()
         .iter()
         .find(|lane| lane.target == *target && lane.param_id == *param_id)
-        .and_then(|lane| lane.dots.iter().find(|dot| dot.beat == beat && dot.value_norm == value_norm).copied())?;
+        .and_then(|lane| {
+            lane.dots
+                .iter()
+                .find(|dot| dot.beat == beat && dot.value_norm == value_norm)
+                .copied()
+        })?;
     let layout = &app.ws.ui_root.layout;
-    Some(anchor_next_to_point(dot.x, dot.y, layout.screen_width, layout.screen_height))
+    Some(anchor_next_to_point(
+        dot.x,
+        dot.y,
+        layout.screen_width,
+        layout.screen_height,
+    ))
 }
 
-fn anchor_next_to_point(point_x: f32, point_y: f32, screen_width: f32, screen_height: f32) -> AnchorRect {
+fn anchor_next_to_point(
+    point_x: f32,
+    point_y: f32,
+    screen_width: f32,
+    screen_height: f32,
+) -> AnchorRect {
     let x = if point_x + 8.0 + INPUT_WIDTH <= screen_width {
         (point_x + 8.0).max(0.0)
     } else {
@@ -288,7 +339,8 @@ pub(crate) fn parse_bar_beat(text: &str, beats_per_bar: u32) -> Result<Beats, &'
 
 /// How the lane prints this parameter; plain numbers when the lane is gone.
 fn lane_display(ui: &UIRoot, target: &UiGraphTarget, param_id: &ParamId) -> UiLaneDisplay {
-    ui.viewport.automation_lane_screens()
+    ui.viewport
+        .automation_lane_screens()
         .iter()
         .find(|lane| &lane.target == target && lane.param_id == *param_id)
         .map(|lane| lane.display.clone())
@@ -309,16 +361,19 @@ pub(crate) fn parse_value(
         return Err("Automation parameter range is invalid");
     }
     let text = text.trim();
-    if let Some(index) = display
-        .value_labels
-        .as_deref()
-        .and_then(|labels| labels.iter().position(|label| label.eq_ignore_ascii_case(text)))
-    {
+    if let Some(index) = display.value_labels.as_deref().and_then(|labels| {
+        labels
+            .iter()
+            .position(|label| label.eq_ignore_ascii_case(text))
+    }) {
         return Ok((min + index as f32).clamp(min, max));
     }
     let mut number = text;
     if let Some(unit) = display.unit {
-        number = number.strip_suffix(unit.suffix().trim()).unwrap_or(number).trim();
+        number = number
+            .strip_suffix(unit.suffix().trim())
+            .unwrap_or(number)
+            .trim();
     }
     if display.is_angle {
         number = number.strip_suffix('°').unwrap_or(number).trim();
@@ -330,7 +385,11 @@ pub(crate) fn parse_value(
         return Err("Automation value must be finite");
     }
     // Angles are shown and typed in degrees, stored in radians.
-    let parsed = if display.is_angle { parsed.to_radians() } else { parsed };
+    let parsed = if display.is_angle {
+        parsed.to_radians()
+    } else {
+        parsed
+    };
     Ok(if whole_numbers {
         manifold_ui::automation_drag::quantise_whole_number(parsed, min, max)
     } else {
@@ -339,7 +398,8 @@ pub(crate) fn parse_value(
 }
 
 fn invalid(ui: &mut UIRoot, message: impl Into<String>) {
-    ui.toast.show_with_accent(message.into(), manifold_ui::color::RED_BASE);
+    ui.toast
+        .show_with_accent(message.into(), manifold_ui::color::RED_BASE);
     ui.mark_overlay_dirty();
 }
 
@@ -401,18 +461,36 @@ mod tests {
         use manifold_core::scene_surface::Unit;
         let mut buf = manifold_ui::panels::param_slider_shared::ParamValueText::default();
         let labels = UiLaneDisplay {
-            value_labels: Some(vec!["Identity".to_string(), "Mirror".to_string(), "FoldX".to_string()].into()),
+            value_labels: Some(
+                vec![
+                    "Identity".to_string(),
+                    "Mirror".to_string(),
+                    "FoldX".to_string(),
+                ]
+                .into(),
+            ),
             ..UiLaneDisplay::default()
         };
         assert_eq!(labels.format_value(&mut buf, 2.0, 0.0, true), "FoldX");
         assert_eq!(parse_value("FoldX", 0.0, 2.0, true, &labels).unwrap(), 2.0);
         assert_eq!(parse_value("mirror", 0.0, 2.0, true, &labels).unwrap(), 1.0);
-        let seconds = UiLaneDisplay { unit: Some(Unit::Seconds), ..UiLaneDisplay::default() };
+        let seconds = UiLaneDisplay {
+            unit: Some(Unit::Seconds),
+            ..UiLaneDisplay::default()
+        };
         let shown = seconds.format_value(&mut buf, 1.25, 0.0, false).to_owned();
         assert_eq!(shown, "1.25 s");
-        assert_eq!(parse_value(&shown, 0.0, 4.0, false, &seconds).unwrap(), 1.25);
-        let angle = UiLaneDisplay { is_angle: true, ..UiLaneDisplay::default() };
-        let shown = angle.format_value(&mut buf, std::f32::consts::FRAC_PI_2, 0.0, false).to_owned();
+        assert_eq!(
+            parse_value(&shown, 0.0, 4.0, false, &seconds).unwrap(),
+            1.25
+        );
+        let angle = UiLaneDisplay {
+            is_angle: true,
+            ..UiLaneDisplay::default()
+        };
+        let shown = angle
+            .format_value(&mut buf, std::f32::consts::FRAC_PI_2, 0.0, false)
+            .to_owned();
         assert_eq!(shown, "90°");
         let parsed = parse_value(&shown, 0.0, 4.0, false, &angle).unwrap();
         assert!((parsed - std::f32::consts::FRAC_PI_2).abs() < 1e-5);

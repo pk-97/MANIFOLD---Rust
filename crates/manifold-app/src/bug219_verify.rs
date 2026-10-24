@@ -59,8 +59,8 @@
 #![cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use manifold_core::Seconds;
 use manifold_playback::engine::TickContext;
@@ -139,9 +139,7 @@ fn headless_application() -> Application {
     // Leak the receiver's ownership into a background drain thread so sent
     // commands don't pile up unread (cosmetic only — `import_model_file`
     // never blocks on drain either way since the channel is unbounded).
-    std::thread::spawn(move || {
-        while rx.recv().is_ok() {}
-    });
+    std::thread::spawn(move || while rx.recv().is_ok() {});
     app.content_tx = Some(tx);
     app.user_prefs = UserPrefs::for_test();
     app
@@ -282,7 +280,9 @@ fn bug219_interactive_import_with_existing_gpu_context_reuses_device() {
     let mut app = headless_application();
     // Seed `self.gpu` the way `resumed()` would have by the time a real
     // window can receive a drop — this is the case D2/P2 optimizes for.
-    app.gpu = Some(manifold_node_engine::gpu::context::GpuContext::new_queued("bug219 verify"));
+    app.gpu = Some(manifold_node_engine::gpu::context::GpuContext::new_queued(
+        "bug219 verify",
+    ));
     log_rss("before any import (gpu context pre-populated)");
 
     for i in 1..=3u32 {

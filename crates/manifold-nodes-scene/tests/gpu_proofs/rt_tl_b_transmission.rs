@@ -39,11 +39,13 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    ensure_normal_sources, GiMaterial, MetalShadowRayTracer, RtObjectGeometry,
-    ShadowRayParams, ShadowRayTracer,
+    GiMaterial, MetalShadowRayTracer, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
+    ensure_normal_sources,
+};
+use manifold_gpu::{
+    GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 use manifold_gpu::{ShadowCaster, upload_shadow_casters};
-use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
 use manifold_nodes_scene::testkit::gpu_harness as harness;
 
@@ -87,8 +89,9 @@ fn upload_texture_f32(
         label,
         mip_levels: 1,
     });
-    let bytes =
-        unsafe { slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels)) };
+    let bytes = unsafe {
+        slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels))
+    };
     device.upload_texture(&texture, bytes);
     texture
 }
@@ -104,12 +107,30 @@ const IDENTITY: [[f32; 4]; 4] = [
 /// alpha-mask template.
 fn quad_verts_z(z: f32) -> [PackedVertexUV; 6] {
     [
-        PackedVertexUV { pos: [-1.0, -1.0, z], uv: [0.0, 0.0] },
-        PackedVertexUV { pos: [1.0, -1.0, z], uv: [1.0, 0.0] },
-        PackedVertexUV { pos: [1.0, 1.0, z], uv: [1.0, 1.0] },
-        PackedVertexUV { pos: [-1.0, -1.0, z], uv: [0.0, 0.0] },
-        PackedVertexUV { pos: [1.0, 1.0, z], uv: [1.0, 1.0] },
-        PackedVertexUV { pos: [-1.0, 1.0, z], uv: [0.0, 1.0] },
+        PackedVertexUV {
+            pos: [-1.0, -1.0, z],
+            uv: [0.0, 0.0],
+        },
+        PackedVertexUV {
+            pos: [1.0, -1.0, z],
+            uv: [1.0, 0.0],
+        },
+        PackedVertexUV {
+            pos: [1.0, 1.0, z],
+            uv: [1.0, 1.0],
+        },
+        PackedVertexUV {
+            pos: [-1.0, -1.0, z],
+            uv: [0.0, 0.0],
+        },
+        PackedVertexUV {
+            pos: [1.0, 1.0, z],
+            uv: [1.0, 1.0],
+        },
+        PackedVertexUV {
+            pos: [-1.0, 1.0, z],
+            uv: [0.0, 1.0],
+        },
     ]
 }
 
@@ -126,9 +147,13 @@ fn run_tl_fixture(
     let tracer = MetalShadowRayTracer::new(device);
     // P3 seam: plan/prepare allocate; the encode rides the dispatch
     // encoder below (no separate async build command buffer anymore).
-    let plan = tracer.plan_accel(device, None, objects).expect("plan accel");
+    let plan = tracer
+        .plan_accel(device, None, objects)
+        .expect("plan accel");
     let mut accel_slot = None;
-    tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+    tracer
+        .prepare_accel(device, &mut accel_slot, plan)
+        .expect("prepare accel");
     let mut accel = accel_slot.unwrap();
 
     // Upload gi_materials — real entries, unlike the template's zeroed dummy.
@@ -148,7 +173,14 @@ fn run_tl_fixture(
 
     // Depth fixture: 2x1, both texels at depth 0.3.
     let depth_px: [f32; 2] = [0.3, 0.3];
-    let depth_tex = upload_texture_f32(device, 2, 1, GpuTextureFormat::Depth32Float, &depth_px, "rt-tlb-depth");
+    let depth_tex = upload_texture_f32(
+        device,
+        2,
+        1,
+        GpuTextureFormat::Depth32Float,
+        &depth_px,
+        "rt-tlb-depth",
+    );
 
     let out_sv = device.create_texture(&GpuTextureDesc {
         width: 2,
@@ -216,45 +248,67 @@ fn run_tl_fixture(
         if let Some(tex) = base_color_tex {
             vec![tex]
         } else {
-            owned_dummy = upload_texture_f32(device, 1, 1, GpuTextureFormat::Rgba32Float, &[1.0, 1.0, 1.0, 1.0], "rt-tlb-tex-dummy");
+            owned_dummy = upload_texture_f32(
+                device,
+                1,
+                1,
+                GpuTextureFormat::Rgba32Float,
+                &[1.0, 1.0, 1.0, 1.0],
+                "rt-tlb-tex-dummy",
+            );
             vec![&owned_dummy]
         }
     };
 
     // Single sun caster, same as the template.
-    let casters = [ShadowCaster::traced([0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 0.0], 0)];
+    let casters = [ShadowCaster::traced(
+        [0.0, 0.0, 1.0],
+        0.0,
+        [0.0, 0.0, 0.0],
+        0,
+    )];
     let caster_list: &[ShadowCaster] = &casters;
     let caster_buffer = upload_shadow_casters(device, caster_list);
     let params = ShadowRayParams::new(
         caster_list.len() as u32,
         caster_buffer.gpu_address(),
-        1,       // shadow_spp
-        0,       // frame_index
-        [2, 1],  // trace_size
-        [2, 1],  // gbuffer_size
-        0.0,     // ao_radius
-        0,       // ao_spp
-        0,       // gi_spp
+        1,               // shadow_spp
+        0,               // frame_index
+        [2, 1],          // trace_size
+        [2, 1],          // gbuffer_size
+        0.0,             // ao_radius
+        0,               // ao_spp
+        0,               // gi_spp
         [0.0, 0.0, 0.0], // camera_pos
         IDENTITY,
-        0,       // refl_spp
-        0.6,     // refl_max_roughness
-        0.1,     // refl_rough_band
+        0,   // refl_spp
+        0.6, // refl_max_roughness
+        0.1, // refl_rough_band
         manifold_gpu::raytrace::SVT_SLOT_NONE,
     );
     let dummy_emissive = harness::dummy_emissive_buffer(device);
     // P4a: the GPU emissive preparation indexes one material row per
     // object — this fixture has no emissive geometry, so zeroed rows
     // (luma 0 → zero stats, the old "no emissive table" behavior).
-    let materials = vec![
-        manifold_gpu::raytrace::GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]);
-        objects.len()
-    ];
+    let materials =
+        vec![
+            manifold_gpu::raytrace::GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]);
+            objects.len()
+        ];
 
     let mut encoder = device.create_encoder("rt-tlb-transmission-proof");
     let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
     tracer
-        .encode_accel_update(device, &mut encoder, &mut accel, objects, &changes, &materials, true, true)
+        .encode_accel_update(
+            device,
+            &mut encoder,
+            &mut accel,
+            objects,
+            &changes,
+            &materials,
+            true,
+            true,
+        )
         .expect("encode accel update");
     let out_svt = device.create_texture(&GpuTextureDesc {
         width: 1,
@@ -318,7 +372,9 @@ fn single_translucent_occluder_attenuates_half() {
     let verts = quad_verts_z(1.0);
     let vertex_buffer = write_shared_buffer(device, &verts);
 
-    let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+    let objects = [RtObjectGeometry {
+        instance_inner: RtObjectGeometry::NO_INNER,
+        material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
@@ -376,7 +432,9 @@ fn factor_zero_control_stays_fully_shadowed() {
     let verts = quad_verts_z(1.0);
     let vertex_buffer = write_shared_buffer(device, &verts);
 
-    let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+    let objects = [RtObjectGeometry {
+        instance_inner: RtObjectGeometry::NO_INNER,
+        material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
@@ -437,7 +495,9 @@ fn stacked_petals_compound_to_quarter() {
     let vertex_buffer2 = write_shared_buffer(device, &verts2);
 
     let objects = [
-        RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+        RtObjectGeometry {
+            instance_inner: RtObjectGeometry::NO_INNER,
+            material_attributes: Default::default(),
             vertex_buffer: &vertex_buffer1,
             vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
             vertex_offset: 0,
@@ -453,7 +513,7 @@ fn stacked_petals_compound_to_quarter() {
             mr_texture: None,
             normal_texture: None,
             emissive_texture: None,
-        extra_material_textures: [None; 15],
+            extra_material_textures: [None; 15],
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -469,7 +529,9 @@ fn stacked_petals_compound_to_quarter() {
             base_color_alpha: 1.0,
             tangent_offset: u32::MAX,
         },
-        RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+        RtObjectGeometry {
+            instance_inner: RtObjectGeometry::NO_INNER,
+            material_attributes: Default::default(),
             vertex_buffer: &vertex_buffer2,
             vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
             vertex_offset: 0,
@@ -485,7 +547,7 @@ fn stacked_petals_compound_to_quarter() {
             mr_texture: None,
             normal_texture: None,
             emissive_texture: None,
-        extra_material_textures: [None; 15],
+            extra_material_textures: [None; 15],
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -531,9 +593,18 @@ fn cutout_texel_passes_unattenuated_accepted_texel_attenuates() {
         0.0, 0.0, 0.0, 0.0, // texel 0: transparent
         1.0, 1.0, 1.0, 1.0, // texel 1: opaque white
     ];
-    let base_color_tex = upload_texture_f32(device, 2, 1, GpuTextureFormat::Rgba32Float, &tex_px, "rt-tlb-cutout-tex");
+    let base_color_tex = upload_texture_f32(
+        device,
+        2,
+        1,
+        GpuTextureFormat::Rgba32Float,
+        &tex_px,
+        "rt-tlb-cutout-tex",
+    );
 
-    let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+    let objects = [RtObjectGeometry {
+        instance_inner: RtObjectGeometry::NO_INNER,
+        material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
@@ -593,7 +664,9 @@ fn transmission_colour_is_independent_of_albedo() {
     let verts = quad_verts_z(1.0);
     let vertex_buffer = write_shared_buffer(device, &verts);
 
-    let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+    let objects = [RtObjectGeometry {
+        instance_inner: RtObjectGeometry::NO_INNER,
+        material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,

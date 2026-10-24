@@ -263,7 +263,8 @@ pub struct ContentState {
     /// so the UI can observe it once without relying on `data_version`.
     pub graph_edit_diagnostic: Option<Arc<GraphEditDiagnostic>>,
     /// Latched trigger delivery failure; Stop, seek or project load resets it.
-    pub trigger_delivery_failure: Option<manifold_playback::engine::trigger_delivery::TriggerDeliveryFailure>,
+    pub trigger_delivery_failure:
+        Option<manifold_playback::engine::trigger_delivery::TriggerDeliveryFailure>,
     /// Scene impulse counts since launch: hits started, discarded (paused or
     /// Speed 0) and refused, with the newest refusal. The UI shows each
     /// increase once.
@@ -446,14 +447,23 @@ impl ModulationSnapshot {
     /// and clones no id; the content thread clones the snapshot only when this
     /// returns true.
     pub fn capture_into(&mut self, project: &Project) -> bool {
-        let mut w = CaptureWriter { snap: self, value: 0, block: 0, changed: false };
+        let mut w = CaptureWriter {
+            snap: self,
+            value: 0,
+            block: 0,
+            changed: false,
+        };
 
         // Macros — no ParamManifest; guarded per-slot on apply, so its
         // topology slot is a sentinel that's never consulted.
         for slot in &project.settings.macro_bank.slots {
             w.value(slot.value);
         }
-        w.block(project.settings.macro_bank.slots.len(), 0, &BlockOwnerRef::Macros);
+        w.block(
+            project.settings.macro_bank.slots.len(),
+            0,
+            &BlockOwnerRef::Macros,
+        );
 
         // Master effects — pack only `.value` from each ParamSlot;
         // exposure isn't a modulation concern and must not round-trip
@@ -462,7 +472,11 @@ impl ModulationSnapshot {
             for p in fx.params.iter() {
                 w.value(p.value);
             }
-            w.block(fx.params.len(), fx.params.topology(), &BlockOwnerRef::Effect(&fx.id));
+            w.block(
+                fx.params.len(),
+                fx.params.topology(),
+                &BlockOwnerRef::Effect(&fx.id),
+            );
         }
 
         // Per-layer: effects + optional gen params
@@ -474,7 +488,11 @@ impl ModulationSnapshot {
                     for p in fx.params.iter() {
                         w.value(p.value);
                     }
-                    w.block(fx.params.len(), fx.params.topology(), &BlockOwnerRef::Effect(&fx.id));
+                    w.block(
+                        fx.params.len(),
+                        fx.params.topology(),
+                        &BlockOwnerRef::Effect(&fx.id),
+                    );
                 }
             }
 
@@ -482,7 +500,11 @@ impl ModulationSnapshot {
                 for p in gp.params.iter() {
                     w.value(p.value);
                 }
-                w.block(gp.params.len(), gp.params.topology(), &BlockOwnerRef::GenParams(&layer.layer_id));
+                w.block(
+                    gp.params.len(),
+                    gp.params.topology(),
+                    &BlockOwnerRef::GenParams(&layer.layer_id),
+                );
             }
         }
         w.finish()
@@ -666,8 +688,7 @@ impl Default for ContentState {
             sync_offsets: [0.0; 3],
             ableton_connected: false,
             ableton_transport_enabled: false,
-            ableton_sync_status:
-                manifold_playback::transport_sync::TransportSyncStatus::Locked,
+            ableton_sync_status: manifold_playback::transport_sync::TransportSyncStatus::Locked,
             osc_sync_mode: OscSyncMode::M4L,
             rt_quality: manifold_core::settings::RtQualitySettings::default(),
             project_snapshot: None,
@@ -708,7 +729,9 @@ pub(crate) fn append_spectrogram(
     if num_bins == 0 {
         return;
     }
-    let excess = pending_cols.len().saturating_sub(MAX_PENDING_SPECTROGRAM_COLS * num_bins);
+    let excess = pending_cols
+        .len()
+        .saturating_sub(MAX_PENDING_SPECTROGRAM_COLS * num_bins);
     if excess > 0 {
         pending_cols.drain(0..excess);
         let records = (excess / num_bins).min(pending_scalars.len());
@@ -722,7 +745,13 @@ pub(crate) fn append_spectrogram(
 /// stalled UI (a native dialog, a window drag) holds one state, not a queue.
 pub(crate) fn state_channel() -> (StateTx, crossbeam_channel::Receiver<ContentState>) {
     let (tx, rx) = crossbeam_channel::bounded(1);
-    (StateTx { tx, slot: rx.clone() }, rx)
+    (
+        StateTx {
+            tx,
+            slot: rx.clone(),
+        },
+        rx,
+    )
 }
 
 /// The publishing end of [`state_channel`]. Cloned to every thread that
@@ -928,11 +957,11 @@ impl CaptureWriter<'_> {
 #[cfg(test)]
 mod modulation_topology_guard_tests {
     use super::*;
+    use manifold_core::PresetTypeId;
     use manifold_core::effect_graph_def::ParamSpecDef;
     use manifold_core::effects::PresetInstance;
     use manifold_core::layer::Layer;
     use manifold_core::params::{Param, ParamManifest};
-    use manifold_core::PresetTypeId;
 
     fn spec(id: &str) -> ParamSpecDef {
         ParamSpecDef {
@@ -1218,10 +1247,17 @@ mod modulation_topology_guard_tests {
         let held = pool.publish(&scratch);
         let released = Arc::as_ptr(&pool.publish(&scratch));
 
-        project.settings.master_effects[0].params.iter_mut().for_each(|p| p.value = 0.9);
+        project.settings.master_effects[0]
+            .params
+            .iter_mut()
+            .for_each(|p| p.value = 0.9);
         scratch.capture_into(&project);
         let next = pool.publish(&scratch);
-        assert_eq!(Arc::as_ptr(&next), released, "the released buffer is reused");
+        assert_eq!(
+            Arc::as_ptr(&next),
+            released,
+            "the released buffer is reused"
+        );
         assert_eq!(next.values.last(), Some(&0.9));
         assert_eq!(held.values.last(), Some(&0.30), "a held copy never changes");
     }
@@ -1266,7 +1302,10 @@ mod handoff_tests {
             project_snapshot: Some(snapshot.clone()),
             stamps: edited,
             data_version: 3,
-            undo_redo_event: Some(UndoRedoEvent { is_redo: false, description: "Move Clip".into() }),
+            undo_redo_event: Some(UndoRedoEvent {
+                is_redo: false,
+                description: "Move Clip".into(),
+            }),
             spectrogram_columns: vec![1.0, 2.0],
             spectrogram_num_bins: 2,
             ..tick(1.0)
@@ -1282,12 +1321,21 @@ mod handoff_tests {
         let state = rx.try_recv().expect("one state waits");
         assert!(rx.try_recv().is_err(), "the handoff holds one state");
         assert_eq!(state.current_beat, Beats(2.0), "the newest values win");
-        assert!(Arc::ptr_eq(state.project_snapshot.as_ref().expect("snapshot kept"), &snapshot));
+        assert!(Arc::ptr_eq(
+            state.project_snapshot.as_ref().expect("snapshot kept"),
+            &snapshot
+        ));
         let mut ui = crate::frame_plan::UiStamps::default();
         ui.fold_snapshot(&base);
-        assert_eq!(ui.fold_snapshot(&state.stamps), ChangeSet::of(&[Part::Clips]));
+        assert_eq!(
+            ui.fold_snapshot(&state.stamps),
+            ChangeSet::of(&[Part::Clips])
+        );
         assert_eq!(state.data_version, 3);
-        assert_eq!(state.undo_redo_event.map(|e| e.description).as_deref(), Some("Move Clip"));
+        assert_eq!(
+            state.undo_redo_event.map(|e| e.description).as_deref(),
+            Some("Move Clip")
+        );
         assert_eq!(state.spectrogram_columns, [1.0, 2.0, 3.0, 4.0]);
     }
 
@@ -1298,12 +1346,23 @@ mod handoff_tests {
     fn warmup_over_a_notice_keeps_the_snapshot() {
         let (tx, rx) = state_channel();
         let snapshot = Arc::new(Project::default());
-        tx.publish(ContentState { project_snapshot: Some(snapshot.clone()), data_version: 4, ..tick(1.0) });
+        tx.publish(ContentState {
+            project_snapshot: Some(snapshot.clone()),
+            data_version: 4,
+            ..tick(1.0)
+        });
         tx.publish(finished("Exported"));
-        tx.publish(ContentState { body: true, warmup: None, ..ContentState::default() });
+        tx.publish(ContentState {
+            body: true,
+            warmup: None,
+            ..ContentState::default()
+        });
         let state = rx.try_recv().expect("one state waits");
         assert!(!state.is_bare_notice());
-        assert!(Arc::ptr_eq(state.project_snapshot.as_ref().expect("snapshot kept"), &snapshot));
+        assert!(Arc::ptr_eq(
+            state.project_snapshot.as_ref().expect("snapshot kept"),
+            &snapshot
+        ));
         assert_eq!(state.export_finished.len(), 1);
 
         let notice_with_snapshot = ContentState {
@@ -1332,7 +1391,10 @@ mod handoff_tests {
             stamps: newer_stamps,
             ..tick(2.0)
         });
-        assert!(Arc::ptr_eq(state.project_snapshot.as_ref().expect("snapshot kept"), &newer));
+        assert!(Arc::ptr_eq(
+            state.project_snapshot.as_ref().expect("snapshot kept"),
+            &newer
+        ));
         assert_eq!(state.data_version, 2);
         assert_eq!(state.stamps, newer_stamps);
     }
@@ -1343,10 +1405,21 @@ mod handoff_tests {
         let (tx, rx) = state_channel();
         let older = Arc::new(Project::default());
         let newer = Arc::new(Project::default());
-        tx.publish(ContentState { project_snapshot: Some(older), data_version: 1, ..tick(1.0) });
-        tx.publish(ContentState { project_snapshot: Some(newer.clone()), data_version: 2, ..tick(2.0) });
+        tx.publish(ContentState {
+            project_snapshot: Some(older),
+            data_version: 1,
+            ..tick(1.0)
+        });
+        tx.publish(ContentState {
+            project_snapshot: Some(newer.clone()),
+            data_version: 2,
+            ..tick(2.0)
+        });
         let state = rx.try_recv().expect("one state waits");
-        assert!(Arc::ptr_eq(state.project_snapshot.as_ref().unwrap(), &newer));
+        assert!(Arc::ptr_eq(
+            state.project_snapshot.as_ref().unwrap(),
+            &newer
+        ));
         assert_eq!(state.data_version, 2);
     }
 
@@ -1358,7 +1431,10 @@ mod handoff_tests {
         tx.publish(tick(1.0));
         tx.publish(finished("Exported"));
         let state = rx.try_recv().expect("one state waits");
-        assert!(!state.is_bare_notice(), "the tick's body survives a newer notice");
+        assert!(
+            !state.is_bare_notice(),
+            "the tick's body survives a newer notice"
+        );
         assert_eq!(state.current_beat, Beats(1.0));
         assert_eq!(state.export_finished.len(), 1);
 
@@ -1367,7 +1443,11 @@ mod handoff_tests {
         let state = rx.try_recv().expect("one state waits");
         assert!(!state.is_bare_notice());
         assert_eq!(state.current_beat, Beats(2.0));
-        assert_eq!(state.export_finished.len(), 1, "the notice survives a newer tick");
+        assert_eq!(
+            state.export_finished.len(),
+            1,
+            "the notice survives a newer tick"
+        );
     }
 
     /// Two notices: the newest progress, the older file result, the run end.
@@ -1375,7 +1455,10 @@ mod handoff_tests {
     fn export_notices_fold() {
         let (tx, rx) = state_channel();
         tx.publish(finished("Section 1"));
-        tx.publish(ContentState { export_run_finished: true, ..ContentState::default() });
+        tx.publish(ContentState {
+            export_run_finished: true,
+            ..ContentState::default()
+        });
         tx.publish(ContentState {
             is_exporting: true,
             export_progress: 0.5,

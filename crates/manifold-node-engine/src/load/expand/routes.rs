@@ -349,10 +349,7 @@ mod tests {
         )]);
         let target_maps = BTreeMap::from([(
             "modifier".to_string(),
-            vec![
-                NodeId::new("obj-a"),
-                NodeId::new("obj-b"),
-            ],
+            vec![NodeId::new("obj-a"), NodeId::new("obj-b")],
         )]);
         (owner, expanded, leaf_maps, target_maps)
     }

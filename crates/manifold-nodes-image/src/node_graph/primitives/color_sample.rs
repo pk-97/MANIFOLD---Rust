@@ -177,14 +177,20 @@ mod gpu_tests {
     use manifold_gpu::GpuTextureFormat;
 
     use super::ColorSample;
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId};
+    use manifold_node_engine::exec::effect_node::{
+        EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId,
+    };
     use manifold_node_engine::exec::execution_plan::{ExecutionPlan, ResourceId, compile};
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_node_engine::graph::Graph;
     use manifold_node_engine::parameters::{ParamDef, ParamValue};
-    use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-    use manifold_node_engine::{exec::execution::Executor, exec::metal_backend::MetalBackend, scene::boundary_nodes::Source};
-    use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::ports::{
+        NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+    };
+    use manifold_node_engine::{
+        exec::execution::Executor, exec::metal_backend::MetalBackend, scene::boundary_nodes::Source,
+    };
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -213,7 +219,9 @@ mod gpu_tests {
         seen: std::sync::Arc<std::sync::Mutex<Option<[f32; 3]>>>,
     }
     impl EffectNode for Capture {
-        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+            manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+        } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -244,7 +252,9 @@ mod gpu_tests {
         seen: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
     }
     impl EffectNode for CaptureFloat {
-        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+            manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+        } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }

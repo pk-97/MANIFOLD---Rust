@@ -85,12 +85,24 @@ impl Primitive for NestCopies {
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
-        (port == "copies").then_some(self.storage.as_ref()).flatten()
+        (port == "copies")
+            .then_some(self.storage.as_ref())
+            .flatten()
     }
 
     /// Planned at the outer capacity; the storage it provides grows past it.
-    fn array_output_capacity(&self, port_name: &str, _params: &ParamValues, input_capacities: &[(&str, u32)]) -> Option<u32> {
-        (port_name == "copies").then(|| input_capacities.iter().find(|(port, _)| *port == "outer").map_or(1, |&(_, n)| n.max(1)))
+    fn array_output_capacity(
+        &self,
+        port_name: &str,
+        _params: &ParamValues,
+        input_capacities: &[(&str, u32)],
+    ) -> Option<u32> {
+        (port_name == "copies").then(|| {
+            input_capacities
+                .iter()
+                .find(|(port, _)| *port == "outer")
+                .map_or(1, |&(_, n)| n.max(1))
+        })
     }
 
     // Hand WGSL, blocked not exempt: the output domain is the live outer × inner
@@ -101,15 +113,21 @@ impl Primitive for NestCopies {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let (Some(outer), Some(inner)) = (ctx.inputs.array("outer"), ctx.inputs.array("inner")) else {
+        let (Some(outer), Some(inner)) = (ctx.inputs.array("outer"), ctx.inputs.array("inner"))
+        else {
             ctx.outputs.set_scalar("count", ParamValue::Float(0.0));
             return;
         };
         let outer_copies = outer.size / COPY_BYTES;
         let live_outer = ctx.scalar_or_param("outer_count", -1.0).round();
-        let outer_copies = if live_outer < 0.0 { outer_copies } else { (live_outer as u64).min(outer_copies) };
+        let outer_copies = if live_outer < 0.0 {
+            outer_copies
+        } else {
+            (live_outer as u64).min(outer_copies)
+        };
         let inner_copies = inner.size / COPY_BYTES;
-        let inner_count = (ctx.scalar_or_param("inner_count", 1.0).round().max(0.0) as u64).min(inner_copies);
+        let inner_count =
+            (ctx.scalar_or_param("inner_count", 1.0).round().max(0.0) as u64).min(inner_copies);
         let mut wanted = outer_copies * inner_count;
         let mut refusal = None;
         ctx.mark_gpu_accessed();
@@ -122,7 +140,10 @@ impl Primitive for NestCopies {
             let memory = gpu.device.modifier_memory_snapshot();
             let fits = |copies: u64| {
                 memory.as_ref().is_none_or(|memory| {
-                    memory.current_allocated_bytes.saturating_add(copies * COPY_BYTES) <= memory.recommended_max_working_set_bytes
+                    memory
+                        .current_allocated_bytes
+                        .saturating_add(copies * COPY_BYTES)
+                        <= memory.recommended_max_working_set_bytes
                 })
             };
             if let Some(copies) = grown(self.storage_copies, wanted, fits) {
@@ -147,9 +168,16 @@ impl Primitive for NestCopies {
         };
         let total = wanted.min(u64::from(u32::MAX)) as u32;
         if total > 0 {
-            nest(gpu, &mut self.pipeline, [outer, inner, storage], inner_count as u32, total);
+            nest(
+                gpu,
+                &mut self.pipeline,
+                [outer, inner, storage],
+                inner_count as u32,
+                total,
+            );
         }
-        ctx.outputs.set_scalar("count", ParamValue::Float(total as f32));
+        ctx.outputs
+            .set_scalar("count", ParamValue::Float(total as f32));
         if let Some(error) = refusal {
             ctx.error(error);
         }
@@ -157,7 +185,11 @@ impl Primitive for NestCopies {
 }
 
 pub(crate) fn nest_pipeline(device: &GpuDevice) -> GpuComputePipeline {
-    device.create_compute_pipeline(include_str!("shaders/nest_copies.wgsl"), "cs_main", "node.nest_copies")
+    device.create_compute_pipeline(
+        include_str!("shaders/nest_copies.wgsl"),
+        "cs_main",
+        "node.nest_copies",
+    )
 }
 
 /// One dispatch of the nest kernel: the first `total` copies of `nested`
@@ -172,14 +204,34 @@ pub(crate) fn nest(
     total: u32,
 ) {
     let pipeline = pipeline.get_or_insert_with(|| nest_pipeline(gpu.device));
-    let uniforms = NestUniforms { inner_count, total, _pad0: 0, _pad1: 0 };
+    let uniforms = NestUniforms {
+        inner_count,
+        total,
+        _pad0: 0,
+        _pad1: 0,
+    };
     gpu.native_enc.dispatch_compute(
         pipeline,
         &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: outer, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: inner, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: nested, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: outer,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: inner,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: nested,
+                offset: 0,
+            },
         ],
         [total.div_ceil(256), 1, 1],
         "node.nest_copies",
@@ -222,7 +274,11 @@ mod tests {
             held = next;
         }
         assert_eq!(allocations, 3, "5k to 10k, 20k, 40k");
-        assert_eq!(grown(held, 10, any), Some(held), "a falling count keeps the storage");
+        assert_eq!(
+            grown(held, 10, any),
+            Some(held),
+            "a falling count keeps the storage"
+        );
         // Past memory, doubling falls back to the exact need, then to a refusal.
         let under = |copies: u64| copies <= 50_000;
         assert_eq!(grown(40_000, 45_000, under), Some(45_000));
@@ -235,18 +291,31 @@ mod gpu_tests {
     //! The kernel through the node against the same composition done on the
     //! CPU with the renderer's Euler convention.
     use super::*;
-    use manifold_node_engine::scene::transform::{rotation_to_render_scene_euler, trs_matrix, transform_point};
+    use manifold_node_engine::scene::transform::{
+        rotation_to_render_scene_euler, transform_point, trs_matrix,
+    };
     use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 
     fn copy(pos: [f32; 3], scale: f32, rot: [f32; 3]) -> InstanceTransform {
-        InstanceTransform { pos_scale: [pos[0], pos[1], pos[2], scale], rot_pad: [rot[0], rot[1], rot[2], 0.0] }
+        InstanceTransform {
+            pos_scale: [pos[0], pos[1], pos[2], scale],
+            rot_pad: [rot[0], rot[1], rot[2], 0.0],
+        }
     }
 
     #[test]
     fn every_inner_copy_rides_every_outer_copy() {
         let mut h = Harness::new();
-        let outer = [copy([1.0, 2.0, 3.0], 2.0, [0.0, 0.0, 0.0]), copy([-4.0, 0.0, 1.0], 0.5, [0.3, -0.6, 1.0]), copy([9.0; 3], 0.0, [0.0; 3])];
-        let mut inner = [copy([1.0, 0.0, 0.0], 1.0, [0.0, 0.0, 0.0]), copy([0.0, 1.0, -2.0], 3.0, [0.2, 0.4, -0.1]), copy([5.0; 3], 1.0, [0.0; 3])];
+        let outer = [
+            copy([1.0, 2.0, 3.0], 2.0, [0.0, 0.0, 0.0]),
+            copy([-4.0, 0.0, 1.0], 0.5, [0.3, -0.6, 1.0]),
+            copy([9.0; 3], 0.0, [0.0; 3]),
+        ];
+        let mut inner = [
+            copy([1.0, 0.0, 0.0], 1.0, [0.0, 0.0, 0.0]),
+            copy([0.0, 1.0, -2.0], 3.0, [0.2, 0.4, -0.1]),
+            copy([5.0; 3], 1.0, [0.0; 3]),
+        ];
         // The second inner copy is a Scene Mirror reflection across Y.
         inner[1].rot_pad[3] = 2.0;
         let (outer_slot, _) = h.array(&outer, outer.len());
@@ -256,9 +325,20 @@ mod gpu_tests {
         let inputs = [("outer", outer_slot), ("inner", inner_slot)];
         let mut node = NestCopies::new();
         // Two of the three inner copies are live.
-        let (scalars, errors) = h.run(&mut node, &inputs, &[("copies", out), ("count", count)], &params(&[("inner_count", 2.0)]));
+        let (scalars, errors) = h.run(
+            &mut node,
+            &inputs,
+            &[("copies", out), ("count", count)],
+            &params(&[("inner_count", 2.0)]),
+        );
         assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(scalars.iter().find(|(slot, _)| *slot == count).map(|(_, v)| v.clone()), Some(ParamValue::Float(6.0)));
+        assert_eq!(
+            scalars
+                .iter()
+                .find(|(slot, _)| *slot == count)
+                .map(|(_, v)| v.clone()),
+            Some(ParamValue::Float(6.0))
+        );
         let nested: Vec<InstanceTransform> = read(&h.buffer(out), 6);
         for (k, got) in nested.iter().enumerate() {
             let (a, b) = (outer[k / 2], inner[k % 2]);
@@ -268,17 +348,37 @@ mod gpu_tests {
                 continue;
             }
             // The composed copy draws a point where outer ∘ inner draws it.
-            let trs = |c: InstanceTransform| trs_matrix([c.pos_scale[0], c.pos_scale[1], c.pos_scale[2]], [c.rot_pad[0], c.rot_pad[1], c.rot_pad[2]], [c.pos_scale[3]; 3]);
+            let trs = |c: InstanceTransform| {
+                trs_matrix(
+                    [c.pos_scale[0], c.pos_scale[1], c.pos_scale[2]],
+                    [c.rot_pad[0], c.rot_pad[1], c.rot_pad[2]],
+                    [c.pos_scale[3]; 3],
+                )
+            };
             let probe = [0.3, -0.7, 1.1];
             let want = transform_point(&trs(a), transform_point(&trs(b), probe));
             let have = transform_point(&trs(*got), probe);
-            assert!((0..3).all(|d| (want[d] - have[d]).abs() < 1e-4), "copy {k}: {have:?} want {want:?}");
+            assert!(
+                (0..3).all(|d| (want[d] - have[d]).abs() < 1e-4),
+                "copy {k}: {have:?} want {want:?}"
+            );
             assert!((got.pos_scale[3] - scale).abs() < 1e-6);
-            assert_eq!(got.rot_pad[3], b.rot_pad[3], "copy {k} keeps its mirror marker");
+            assert_eq!(
+                got.rot_pad[3], b.rot_pad[3],
+                "copy {k} keeps its mirror marker"
+            );
         }
         // The rotation helper the shader mirrors round-trips the renderer's matrix.
         let r = trs_matrix([0.0; 3], [0.2, 0.4, -0.1], [1.0; 3]);
-        let back = rotation_to_render_scene_euler([[r[0][0], r[1][0], r[2][0]], [r[0][1], r[1][1], r[2][1]], [r[0][2], r[1][2], r[2][2]]]);
-        assert!((back[0] - 0.2).abs() < 1e-5 && (back[1] - 0.4).abs() < 1e-5 && (back[2] + 0.1).abs() < 1e-5);
+        let back = rotation_to_render_scene_euler([
+            [r[0][0], r[1][0], r[2][0]],
+            [r[0][1], r[1][1], r[2][1]],
+            [r[0][2], r[1][2], r[2][2]],
+        ]);
+        assert!(
+            (back[0] - 0.2).abs() < 1e-5
+                && (back[1] - 0.4).abs() < 1e-5
+                && (back[2] + 0.1).abs() < 1e-5
+        );
     }
 }

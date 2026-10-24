@@ -19,22 +19,37 @@ pub struct ViewportSelection {
 impl ViewportSelection {
     /// The selection of `items` over `scene`, rebuilt into `cache` when
     /// either changed. `None` when the viewport has no scene.
-    pub fn refresh<'a>(cache: &'a mut Option<Self>, scene: Option<&Arc<SceneVm>>, items: &[SceneSelection]) -> Option<&'a Self> {
+    pub fn refresh<'a>(
+        cache: &'a mut Option<Self>,
+        scene: Option<&Arc<SceneVm>>,
+        items: &[SceneSelection],
+    ) -> Option<&'a Self> {
         let Some(scene) = scene else {
             *cache = None;
             return None;
         };
-        let stale = cache.as_ref().is_none_or(|shown| !Arc::ptr_eq(&shown.scene, scene) || shown.items != items);
+        let stale = cache
+            .as_ref()
+            .is_none_or(|shown| !Arc::ptr_eq(&shown.scene, scene) || shown.items != items);
         if stale {
-            let selection = GizmoSelection::new(scene, crate::scene_gizmo::selected_targets(scene, items));
-            *cache = Some(Self { scene: scene.clone(), items: items.to_vec(), selection });
+            let selection =
+                GizmoSelection::new(scene, crate::scene_gizmo::selected_targets(scene, items));
+            *cache = Some(Self {
+                scene: scene.clone(),
+                items: items.to_vec(),
+                selection,
+            });
         }
         cache.as_ref()
     }
 
     /// The outline slots of every selected scene object.
     pub fn outline(&self, out: &mut Vec<u32>) {
-        let objects = self.selection.selected.iter().filter_map(|target| crate::scene_gizmo::selected_object(target));
+        let objects = self
+            .selection
+            .selected
+            .iter()
+            .filter_map(|target| crate::scene_gizmo::selected_object(target));
         self.scene.outline_slots(objects, out);
     }
 }

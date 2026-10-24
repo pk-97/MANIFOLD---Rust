@@ -198,7 +198,9 @@ impl TimelineClip {
     /// state from whether a source BPM is known.
     pub fn is_audio_warp_enabled(&self) -> bool {
         self.is_audio()
-            && self.audio_warp_enabled.unwrap_or(self.source_bpm_resolved() > 0.0)
+            && self
+                .audio_warp_enabled
+                .unwrap_or(self.source_bpm_resolved() > 0.0)
             && self.source_bpm_resolved() > 0.0
     }
 
@@ -496,7 +498,8 @@ mod tests {
             audio_file_path: "song.wav".into(),
             recorded_bpm: 128.0,
             ..Default::default()
-        }).unwrap();
+        })
+        .unwrap();
         let fields = legacy_json.as_object_mut().unwrap();
         fields.remove("audioWarpEnabled");
         fields.remove("audioBpmAutomatic");
@@ -606,7 +609,11 @@ mod tests {
 
         // A non-audio clip must not emit the key (byte-identical legacy fixtures).
         let video = TimelineClip::new_video("v1".into(), Beats(0.0), Beats(1.0), Seconds(0.0));
-        assert!(!serde_json::to_string(&video).unwrap().contains("audioFilePath"));
+        assert!(
+            !serde_json::to_string(&video)
+                .unwrap()
+                .contains("audioFilePath")
+        );
     }
 
     #[test]

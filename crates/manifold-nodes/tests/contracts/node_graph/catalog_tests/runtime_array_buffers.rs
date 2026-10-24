@@ -1,17 +1,20 @@
 //! Array-buffer allocation, aliasing, and live resize regressions.
+use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::exec::effect_node::NodeInstanceId;
 use manifold_node_engine::exec::execution_plan::ResourceId;
 use manifold_node_engine::gpu::render_target::RenderTarget;
-use manifold_gpu::GpuTextureFormat;
-use manifold_node_engine::runtime::*;
 use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::*;
 
 #[cfg(feature = "gpu-proofs")]
 #[test]
 fn resize_re_pre_allocates_array_buffers() {
     use manifold_node_engine::{exec::backend::Backend, ports::PortType};
     let device = manifold_gpu::testkit::test_device();
-    let json = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/Lissajous.json"));
+    let json = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/generator-presets/Lissajous.json"
+    ));
     let mut g = PresetRuntime::from_json_str_with_device(
         json,
         &PrimitiveRegistry::with_builtin(),
@@ -45,15 +48,24 @@ fn resize_re_pre_allocates_array_buffers() {
         }
     }
 
-    let old_buffers = array_resources.iter().map(|&id| {
-        let backend = g.backend_for_test();
-        backend.array_buffer(backend.slot_for(id).unwrap()).unwrap().clone()
-    }).collect::<Vec<_>>();
+    let old_buffers = array_resources
+        .iter()
+        .map(|&id| {
+            let backend = g.backend_for_test();
+            backend
+                .array_buffer(backend.slot_for(id).unwrap())
+                .unwrap()
+                .clone()
+        })
+        .collect::<Vec<_>>();
     g.resize(&device, 1280, 720).unwrap();
     for (&id, before) in array_resources.iter().zip(&old_buffers) {
         let backend = g.backend_for_test();
         let after = backend.array_buffer(backend.slot_for(id).unwrap()).unwrap();
-        assert!(before.ptr_eq(after), "resolution-independent arrays must keep physical storage");
+        assert!(
+            before.ptr_eq(after),
+            "resolution-independent arrays must keep physical storage"
+        );
     }
 
     let metal = manifold_node_engine::runtime::testkit::metal_backend(&mut g);
@@ -80,12 +92,21 @@ fn resize_re_pre_allocates_array_buffers() {
 fn cymatics_survives_live_resize() {
     use manifold_node_engine::runtime::preset_context::PresetContext;
     let device = manifold_gpu::testkit::test_device();
-    let json = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/Cymatics.json"));
+    let json = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/generator-presets/Cymatics.json"
+    ));
     let registry = PrimitiveRegistry::with_builtin();
     let format = GpuTextureFormat::Rgba16Float;
     let (w0, h0) = (512u32, 512u32);
     let mut g = PresetRuntime::from_json_str_with_device(
-        json, &registry, device.arc(), w0, h0, format, None,
+        json,
+        &registry,
+        device.arc(),
+        w0,
+        h0,
+        format,
+        None,
     )
     .expect("Cymatics preset must load");
 
@@ -109,7 +130,8 @@ fn cymatics_survives_live_resize() {
             };
             let mut enc = device.create_encoder("cymatics-resize-frame");
             {
-                let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut enc, &device);
+                let mut gpu =
+                    manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut enc, &device);
                 g.render(
                     &mut gpu,
                     &target.texture,
@@ -154,7 +176,10 @@ fn cymatics_survives_live_resize() {
 fn aliased_array_io_routes_in_and_out_to_one_physical_slot() {
     use manifold_node_engine::exec::backend::Backend;
     let device = manifold_gpu::testkit::test_device();
-    let json = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/StrangeAttractor.json"));
+    let json = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/generator-presets/StrangeAttractor.json"
+    ));
     let mut g = PresetRuntime::from_json_str_with_device(
         json,
         &PrimitiveRegistry::with_builtin(),
@@ -181,7 +206,11 @@ fn aliased_array_io_routes_in_and_out_to_one_physical_slot() {
     let resource_for = |node: NodeInstanceId, port: &str, is_input: bool| -> ResourceId {
         for step in g.plan.steps() {
             if step.node == node {
-                let ports = if is_input { &step.inputs } else { &step.outputs };
+                let ports = if is_input {
+                    &step.inputs
+                } else {
+                    &step.outputs
+                };
                 for &(name, id) in ports {
                     if name == port {
                         return id;
@@ -201,11 +230,20 @@ fn aliased_array_io_routes_in_and_out_to_one_physical_slot() {
 
     let metal = manifold_node_engine::runtime::testkit::metal_backend(&mut g);
 
-    let in_slot = metal.slot_for(integrate_in_res).expect("integrate.in bound");
-    let out_slot = metal.slot_for(integrate_out_res).expect("integrate.out bound");
-    let scatter_slot = metal.slot_for(scatter_in_res).expect("scatter.particles bound");
+    let in_slot = metal
+        .slot_for(integrate_in_res)
+        .expect("integrate.in bound");
+    let out_slot = metal
+        .slot_for(integrate_out_res)
+        .expect("integrate.out bound");
+    let scatter_slot = metal
+        .slot_for(scatter_in_res)
+        .expect("scatter.particles bound");
 
-    assert_eq!(in_slot, out_slot, "aliased_array_io in→out must share a slot");
+    assert_eq!(
+        in_slot, out_slot,
+        "aliased_array_io in→out must share a slot"
+    );
     assert_eq!(
         out_slot, scatter_slot,
         "integrate.out and scatter.particles must resolve to the same slot",
@@ -221,7 +259,10 @@ fn aliased_array_io_routes_in_and_out_to_one_physical_slot() {
 fn canvas_sized_array_outputs_scale_buffer_with_backend_canvas_dims() {
     use manifold_node_engine::exec::backend::Backend;
     let device = manifold_gpu::testkit::test_device();
-    let json = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/StrangeAttractor.json"));
+    let json = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/generator-presets/StrangeAttractor.json"
+    ));
 
     let cases = [(1280u32, 720u32), (3840u32, 2160u32)];
     for (w, h) in cases {

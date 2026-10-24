@@ -3,11 +3,11 @@ use std::borrow::Cow;
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuBuffer, GpuTextureFormat};
 
-use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use crate::exec::backend::Backend;
 use crate::bindings::{NodeInputs, NodeOutputs, Slot};
+use crate::exec::backend::Backend;
 use crate::exec::effect_node::{EffectNode, EffectNodeContext, FrameTime, ParamValues, SimStep};
 use crate::exec::execution_plan::ResourceId;
+use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use crate::parameters::ParamValue;
 use crate::ports::{ArrayType, KnownItem};
 use crate::{exec::metal_backend::MetalBackend, ports::PortType, ports::ScalarType};
@@ -23,14 +23,22 @@ pub struct Harness {
 }
 
 impl Default for Harness {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Harness {
     pub fn new() -> Self {
         let device = manifold_gpu::testkit::test_device();
         let backend = MetalBackend::new(device.arc(), 1, 1, GpuTextureFormat::Rgba8Unorm);
-        Self { device, backend, next: 0, layouts: Vec::new(), live_extents: Vec::new() }
+        Self {
+            device,
+            backend,
+            next: 0,
+            layouts: Vec::new(),
+            live_extents: Vec::new(),
+        }
     }
 
     pub fn array<T: KnownItem>(&mut self, values: &[T], capacity: usize) -> (Slot, GpuBuffer) {
@@ -41,7 +49,9 @@ impl Harness {
             // SAFETY: shared buffer sized for `values`; no GPU work in flight.
             unsafe { buffer.write(0, bytemuck::cast_slice(values)) };
         }
-        let slot = self.backend.pre_bind_array(ResourceId(self.next), buffer.clone());
+        let slot = self
+            .backend
+            .pre_bind_array(ResourceId(self.next), buffer.clone());
         self.next += 1;
         self.layouts.push((slot, ArrayType::of_known::<T>()));
         (slot, buffer)
@@ -67,7 +77,9 @@ impl Harness {
 
     /// A wired transform input holding `value`.
     pub fn transform_input(&mut self, value: crate::scene::transform::Transform) -> Slot {
-        let slot = self.backend.acquire(ResourceId(self.next), PortType::Transform, None, (0, 0));
+        let slot = self
+            .backend
+            .acquire(ResourceId(self.next), PortType::Transform, None, (0, 0));
         self.next += 1;
         Backend::set_transform(&mut self.backend, slot, value);
         slot
@@ -76,7 +88,9 @@ impl Harness {
     /// A wired CPU value input (a vector field, say) holding `value`; replace
     /// it between runs through `backend.cpu_values_mut()`.
     pub fn cpu_input<T: Clone + Send + 'static>(&mut self, ty: PortType, value: T) -> Slot {
-        let slot = self.backend.acquire(ResourceId(self.next), ty, None, (0, 0));
+        let slot = self
+            .backend
+            .acquire(ResourceId(self.next), ty, None, (0, 0));
         self.next += 1;
         Backend::cpu_values_mut(&mut self.backend).set(slot, value);
         slot
@@ -108,7 +122,10 @@ impl Harness {
         let layouts: Vec<(&'static str, ArrayType)> = inputs
             .iter()
             .filter_map(|&(port, slot)| {
-                self.layouts.iter().find(|(s, _)| *s == slot).map(|&(_, layout)| (port, layout))
+                self.layouts
+                    .iter()
+                    .find(|(s, _)| *s == slot)
+                    .map(|&(_, layout)| (port, layout))
             })
             .collect();
         let mut scalars = Vec::new();
@@ -117,9 +134,11 @@ impl Harness {
         {
             let (mut camera, mut light, mut material, mut transform) =
                 (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-            let (mut atmosphere, mut render_mode, mut object) = (Vec::new(), Vec::new(), Vec::new());
+            let (mut atmosphere, mut render_mode, mut object) =
+                (Vec::new(), Vec::new(), Vec::new());
             let backend: &dyn Backend = &self.backend;
-            let node_inputs = NodeInputs::new(inputs, backend, &generations).with_array_layouts(&layouts);
+            let node_inputs =
+                NodeInputs::new(inputs, backend, &generations).with_array_layouts(&layouts);
             let node_outputs = NodeOutputs::new(
                 outputs,
                 backend,
@@ -142,9 +161,10 @@ impl Harness {
                     delta: Seconds(1.0 / 60.0),
                     frame_count: 0,
                 };
-                let mut ctx = EffectNodeContext::new(time, params, node_inputs, node_outputs, Some(&mut gpu))
-                    .with_sim_step(step)
-                    .with_errors(&mut errors);
+                let mut ctx =
+                    EffectNodeContext::new(time, params, node_inputs, node_outputs, Some(&mut gpu))
+                        .with_sim_step(step)
+                        .with_errors(&mut errors);
                 prim.evaluate(&mut ctx);
             }
             native.commit_and_wait_completed();
@@ -154,7 +174,10 @@ impl Harness {
             if prim.provides_array_output(port)
                 && let Some(buffer) = prim.provided_array_output(port)
             {
-                assert!(Backend::install_array_buffer(&mut self.backend, slot, buffer.clone()), "{port}: install");
+                assert!(
+                    Backend::install_array_buffer(&mut self.backend, slot, buffer.clone()),
+                    "{port}: install"
+                );
             }
         }
         (scalars, errors)

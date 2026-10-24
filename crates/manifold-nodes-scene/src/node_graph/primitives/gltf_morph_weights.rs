@@ -34,9 +34,11 @@
 use std::borrow::Cow;
 use std::sync::{Arc, mpsc};
 
-use super::gltf_anim_shared::{LOOP_MODES, LoopMode, TriggerLatch, clip_duration, resolve_progress, sample_weight_slice};
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use super::gltf_anim_shared::{
+    LOOP_MODES, LoopMode, TriggerLatch, clip_duration, resolve_progress, sample_weight_slice,
+};
 use crate::node_graph::gltf_anim_cache::{ChannelKind, LoadedAnimSet, spawn_load};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue, TableData};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::source_asset::loaded_identity;
@@ -222,7 +224,12 @@ pub(crate) fn sample_morph_weights(
         let default = static_weight(static_weights, i);
         let w = match channel {
             Some(c) => {
-                let ChannelKind::Weights { target_count: stride } = c.kind else { unreachable!() };
+                let ChannelKind::Weights {
+                    target_count: stride,
+                } = c.kind
+                else {
+                    unreachable!()
+                };
                 sample_weight_slice(&c.times, &c.values, stride as usize, i, t, default)
             }
             None => default,
@@ -256,7 +263,10 @@ impl Primitive for GltfMorphWeights {
         let rate = ctx.param_f32("rate", 1.0);
 
         let loop_mode = LoopMode::from_enum_index(
-            ctx.params.get("loop_mode").and_then(ParamValue::as_scalar).unwrap_or(0.0),
+            ctx.params
+                .get("loop_mode")
+                .and_then(ParamValue::as_scalar)
+                .unwrap_or(0.0),
         );
         let clip_index = ctx
             .inputs
@@ -271,7 +281,11 @@ impl Primitive for GltfMorphWeights {
             .inputs
             .scalar("trigger_count")
             .and_then(|v| v.as_scalar())
-            .or_else(|| ctx.params.get("trigger_count").and_then(ParamValue::as_scalar));
+            .or_else(|| {
+                ctx.params
+                    .get("trigger_count")
+                    .and_then(ParamValue::as_scalar)
+            });
         self.trigger_latch.update(trigger_count, ctx.time.beats.0);
 
         let target_count = match ctx.params.get("target_count") {
@@ -302,7 +316,11 @@ impl Primitive for GltfMorphWeights {
             self.pending_load = None;
             self.load_error = None;
         }
-        if self.anim_set.is_none() && self.pending_load.is_none() && self.load_error.is_none() && !path.is_empty() {
+        if self.anim_set.is_none()
+            && self.pending_load.is_none()
+            && self.load_error.is_none()
+            && !path.is_empty()
+        {
             self.pending_load = Some(spawn_load(std::path::Path::new(&path)));
         }
         if let Some(rx) = &self.pending_load {
@@ -389,7 +407,13 @@ impl Primitive for GltfMorphWeights {
         &self,
         params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> manifold_node_engine::scene::source_asset::SourceAssetIdentity<'_> {
-        loaded_identity(params, "path", &self.last_path, self.anim_set.as_deref(), self.load_error.as_deref())
+        loaded_identity(
+            params,
+            "path",
+            &self.last_path,
+            self.anim_set.as_deref(),
+            self.load_error.as_deref(),
+        )
     }
 
     fn is_trigger_latch(&self) -> bool {
@@ -404,20 +428,25 @@ mod tests {
 
     fn identity_params(path: &str) -> manifold_node_engine::exec::effect_node::ParamValues {
         let mut params = manifold_node_engine::exec::effect_node::ParamValues::default();
-        params.insert(Cow::Borrowed("path"), ParamValue::String(Arc::new(path.to_owned())));
+        params.insert(
+            Cow::Borrowed("path"),
+            ParamValue::String(Arc::new(path.to_owned())),
+        );
         params
     }
 
     #[test]
     fn source_identity_tracks_ready_pending_failed_and_reset_states() {
         let mut prim = GltfMorphWeights::new();
-        let loaded: Arc<LoadedAnimSet> = Arc::new(GltfAnimSet {
-            clips: Vec::new(),
-            skins: Vec::new(),
-            node_parents: Vec::new(),
-            node_bind_trs: Vec::new(),
-        }
-        .into());
+        let loaded: Arc<LoadedAnimSet> = Arc::new(
+            GltfAnimSet {
+                clips: Vec::new(),
+                skins: Vec::new(),
+                node_parents: Vec::new(),
+                node_bind_trs: Vec::new(),
+            }
+            .into(),
+        );
         let fingerprint = loaded.identity();
         prim.last_path = "morph-a.glb".to_owned();
         prim.anim_set = Some(loaded);
@@ -434,12 +463,17 @@ mod tests {
         prim.load_error = Some("morph load failed".to_owned());
         assert_eq!(
             Primitive::source_asset_identity(&prim, &identity_params("morph-a.glb")),
-            manifold_node_engine::scene::source_asset::SourceAssetIdentity::Failed("morph load failed")
+            manifold_node_engine::scene::source_asset::SourceAssetIdentity::Failed(
+                "morph load failed"
+            )
         );
 
         Primitive::clear_state(&mut prim);
         assert!(prim.load_error.is_none());
-        assert_eq!(prim.anim_set.as_ref().map(|set| set.identity()), Some(fingerprint));
+        assert_eq!(
+            prim.anim_set.as_ref().map(|set| set.identity()),
+            Some(fingerprint)
+        );
         assert_eq!(
             Primitive::source_asset_identity(&prim, &identity_params("morph-a.glb")),
             manifold_node_engine::scene::source_asset::SourceAssetIdentity::Ready(fingerprint)
@@ -455,11 +489,19 @@ mod tests {
         let table = static_weights_table(vec![(0, 0.5), (1, 0.25)]);
         assert_eq!(static_weight(Some(&table), 0), 0.5);
         assert_eq!(static_weight(Some(&table), 1), 0.25);
-        assert_eq!(static_weight(Some(&table), 5), 0.0, "no row for target 5 -> 0.0");
+        assert_eq!(
+            static_weight(Some(&table), 5),
+            0.0,
+            "no row for target 5 -> 0.0"
+        );
         assert_eq!(static_weight(None, 0), 0.0, "no table -> 0.0");
     }
 
-    fn weights_channel(node: u32, target_count: u32, keys: &[(f32, Vec<f32>)]) -> crate::node_graph::gltf_anim_cache::Channel {
+    fn weights_channel(
+        node: u32,
+        target_count: u32,
+        keys: &[(f32, Vec<f32>)],
+    ) -> crate::node_graph::gltf_anim_cache::Channel {
         crate::node_graph::gltf_anim_cache::Channel {
             target_node: node,
             kind: ChannelKind::Weights { target_count },
@@ -474,9 +516,16 @@ mod tests {
     #[test]
     fn animated_target_lerps_between_bracketing_keyframes() {
         let channel = weights_channel(0, 1, &[(0.0, vec![0.0]), (1.0, vec![1.0])]);
-        let clip = crate::node_graph::gltf_anim_cache::AnimClip { duration_s: 1.0, channels: vec![channel] };
+        let clip = crate::node_graph::gltf_anim_cache::AnimClip {
+            duration_s: 1.0,
+            channels: vec![channel],
+        };
         let out = sample_morph_weights(Some(&clip), 0, None, 1, 0.5);
-        assert!((out[0] - 0.5).abs() < 1e-4, "expected the halfway-lerped weight, got {}", out[0]);
+        assert!(
+            (out[0] - 0.5).abs() < 1e-4,
+            "expected the halfway-lerped weight, got {}",
+            out[0]
+        );
     }
 
     /// `MorphPrimitivesTest.glb`'s documented case: a static
@@ -485,17 +534,27 @@ mod tests {
     /// 0.0.
     #[test]
     fn target_with_no_channel_falls_back_to_static_weights() {
-        let clip = crate::node_graph::gltf_anim_cache::AnimClip { duration_s: 1.0, channels: Vec::new() };
+        let clip = crate::node_graph::gltf_anim_cache::AnimClip {
+            duration_s: 1.0,
+            channels: Vec::new(),
+        };
         let static_weights = static_weights_table(vec![(0, 0.5)]);
         let out = sample_morph_weights(Some(&clip), 0, Some(&static_weights), 1, 0.73);
-        assert_eq!(out[0], 0.5, "no channel for this target -> static_weights fallback, not 0.0");
+        assert_eq!(
+            out[0], 0.5,
+            "no channel for this target -> static_weights fallback, not 0.0"
+        );
     }
 
     #[test]
     fn no_clip_falls_back_to_static_weights_for_every_target() {
         let static_weights = static_weights_table(vec![(0, 0.1), (1, 0.2)]);
         let out = sample_morph_weights(None, 0, Some(&static_weights), 2, 0.5);
-        assert_eq!(out, vec![0.1, 0.2], "out-of-range clip_index -> every target falls back");
+        assert_eq!(
+            out,
+            vec![0.1, 0.2],
+            "out-of-range clip_index -> every target falls back"
+        );
     }
 
     #[test]
@@ -504,9 +563,20 @@ mod tests {
         // target 1 rises 0.0->0.4 — proves the stride-2 SoA extraction
         // reads the RIGHT column per target, not just the right row.
         let channel = weights_channel(0, 2, &[(0.0, vec![0.0, 0.0]), (1.0, vec![1.0, 0.4])]);
-        let clip = crate::node_graph::gltf_anim_cache::AnimClip { duration_s: 1.0, channels: vec![channel] };
+        let clip = crate::node_graph::gltf_anim_cache::AnimClip {
+            duration_s: 1.0,
+            channels: vec![channel],
+        };
         let out = sample_morph_weights(Some(&clip), 0, None, 2, 0.5);
-        assert!((out[0] - 0.5).abs() < 1e-4, "target 0 halfway: got {}", out[0]);
-        assert!((out[1] - 0.2).abs() < 1e-4, "target 1 halfway: got {}", out[1]);
+        assert!(
+            (out[0] - 0.5).abs() < 1e-4,
+            "target 0 halfway: got {}",
+            out[0]
+        );
+        assert!(
+            (out[1] - 0.2).abs() < 1e-4,
+            "target 1 halfway: got {}",
+            out[1]
+        );
     }
 }

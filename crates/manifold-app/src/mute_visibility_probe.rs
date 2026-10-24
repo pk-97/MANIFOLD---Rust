@@ -15,7 +15,6 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
@@ -52,7 +51,9 @@ fn probe_project() -> (Project, LayerId, ClipId) {
         PresetTypeId::from_string("Plasma".to_string()),
         0,
     );
-    bottom.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(8.0)));
+    bottom
+        .clips
+        .push(TimelineClip::new_generator(Beats(0.0), Beats(8.0)));
     project.timeline.layers.push(bottom);
 
     let mut top = Layer::new_generator(
@@ -60,7 +61,8 @@ fn probe_project() -> (Project, LayerId, ClipId) {
         PresetTypeId::from_string("BasicShapes".to_string()),
         1,
     );
-    top.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(8.0)));
+    top.clips
+        .push(TimelineClip::new_generator(Beats(0.0), Beats(8.0)));
     let top_layer_id = top.layer_id.clone();
     let top_clip_id = top.clips[0].id.clone();
     project.timeline.layers.push(top);
@@ -93,7 +95,9 @@ fn read_png_rgba8(path: &str) -> (u32, u32, Vec<u8>) {
     let file = std::fs::File::open(path).unwrap_or_else(|e| panic!("open {}: {}", path, e));
     let reader = std::io::BufReader::new(file);
     let decoder = png::Decoder::new(reader);
-    let mut reader = decoder.read_info().unwrap_or_else(|e| panic!("decode {}: {}", path, e));
+    let mut reader = decoder
+        .read_info()
+        .unwrap_or_else(|e| panic!("decode {}: {}", path, e));
     let info = reader.info();
     let (w, h) = (info.width, info.height);
     let mut buf = vec![0u8; reader.output_buffer_size().unwrap()];
@@ -160,11 +164,14 @@ fn mute_visibility_pixel_probe() {
 
     // B: mute the top layer.
     let top_layer_id_mute = top_layer_id.clone();
-    ct.handle_command(ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |p| {
-        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&top_layer_id_mute) {
-            layer.is_muted = true;
-        }
-    })));
+    ct.handle_command(ContentCommand::mutate(
+        crate::content_command::touch::LAYERS,
+        Box::new(move |p| {
+            if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&top_layer_id_mute) {
+                layer.is_muted = true;
+            }
+        }),
+    ));
     drive_frames(&mut ct, 5, &state_tx);
     request_export(&mut ct, PATH_B);
     drive_frames(&mut ct, 4, &state_tx);
@@ -172,11 +179,14 @@ fn mute_visibility_pixel_probe() {
 
     // C: remove the top layer's clip entirely.
     let top_layer_id2 = top_layer_id.clone();
-    ct.handle_command(ContentCommand::mutate(manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Clips]), Box::new(move |p| {
-        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&top_layer_id2) {
-            layer.clips.retain(|c| c.id != top_clip_id);
-        }
-    })));
+    ct.handle_command(ContentCommand::mutate(
+        manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Clips]),
+        Box::new(move |p| {
+            if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&top_layer_id2) {
+                layer.clips.retain(|c| c.id != top_clip_id);
+            }
+        }),
+    ));
     drive_frames(&mut ct, 5, &state_tx);
     request_export(&mut ct, PATH_C);
     drive_frames(&mut ct, 4, &state_tx);
@@ -257,7 +267,9 @@ fn clip_mute_opaque_layer_pixel_probe() {
         PresetTypeId::from_string("Plasma".to_string()),
         0,
     );
-    bottom.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(8.0)));
+    bottom
+        .clips
+        .push(TimelineClip::new_generator(Beats(0.0), Beats(8.0)));
     project.timeline.layers.push(bottom);
 
     // Middle: second always-visible layer, so the frame keeps 2+ visible-clip
@@ -267,7 +279,9 @@ fn clip_mute_opaque_layer_pixel_probe() {
         PresetTypeId::from_string("Lissajous".to_string()),
         1,
     );
-    middle.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(8.0)));
+    middle
+        .clips
+        .push(TimelineClip::new_generator(Beats(0.0), Beats(8.0)));
     project.timeline.layers.push(middle);
 
     // Top: solid shape, OPAQUE blend, one enabled layer effect (takes the
@@ -279,10 +293,9 @@ fn clip_mute_opaque_layer_pixel_probe() {
         2,
     );
     top.default_blend_mode = manifold_core::BlendMode::Opaque;
-    top.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(8.0)));
-    let mut fx = manifold_core::preset_definition_registry::create_default(
-        &PresetTypeId::MIRROR,
-    );
+    top.clips
+        .push(TimelineClip::new_generator(Beats(0.0), Beats(8.0)));
+    let mut fx = manifold_core::preset_definition_registry::create_default(&PresetTypeId::MIRROR);
     if let Some(p) = fx.params.iter_mut().next() {
         p.value = 1.0;
     }
@@ -304,15 +317,18 @@ fn clip_mute_opaque_layer_pixel_probe() {
     // E: mute the top layer's CLIP.
     let id = top_layer_id.clone();
     let cid = top_clip_id.clone();
-    ct.handle_command(ContentCommand::mutate(manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Clips]), Box::new(move |p| {
-        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&id) {
-            for c in &mut layer.clips {
-                if c.id == cid {
-                    c.is_muted = true;
+    ct.handle_command(ContentCommand::mutate(
+        manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Clips]),
+        Box::new(move |p| {
+            if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&id) {
+                for c in &mut layer.clips {
+                    if c.id == cid {
+                        c.is_muted = true;
+                    }
                 }
             }
-        }
-    })));
+        }),
+    ));
     drive_frames(&mut ct, 5, &state_tx);
     request_export(&mut ct, PATH_E);
     drive_frames(&mut ct, 4, &state_tx);
@@ -320,11 +336,14 @@ fn clip_mute_opaque_layer_pixel_probe() {
 
     // F: delete the top clip outright.
     let id2 = top_layer_id.clone();
-    ct.handle_command(ContentCommand::mutate(manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Clips]), Box::new(move |p| {
-        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&id2) {
-            layer.clips.retain(|c| c.id != top_clip_id);
-        }
-    })));
+    ct.handle_command(ContentCommand::mutate(
+        manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Clips]),
+        Box::new(move |p| {
+            if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&id2) {
+                layer.clips.retain(|c| c.id != top_clip_id);
+            }
+        }),
+    ));
     drive_frames(&mut ct, 5, &state_tx);
     request_export(&mut ct, PATH_F);
     drive_frames(&mut ct, 4, &state_tx);

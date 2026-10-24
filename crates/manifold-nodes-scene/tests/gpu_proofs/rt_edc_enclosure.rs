@@ -80,11 +80,11 @@
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::scene::camera::Camera;
-use manifold_node_engine::runtime::preset_context::PresetContext;
-use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::scene::camera::Camera;
 
 use manifold_nodes_scene::testkit::gpu_harness as harness;
 
@@ -214,7 +214,10 @@ fn region_luma(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> f
             let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
             let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
             let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-            assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+            assert!(
+                r.is_finite() && g.is_finite() && b.is_finite(),
+                "non-finite pixel"
+            );
             sum += (0.2126 * r + 0.7152 * g + 0.0722 * b) as f64;
             n += 1;
         }
@@ -225,9 +228,15 @@ fn region_luma(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> f
 
 /// Region-mean irradiance from the captured RT irradiance channel ("irr_full").
 /// Irradiance channel is RGBA16Float: RGB = env+GI gather, A unused.
-fn region_irradiance(channels: &[manifold_nodes_scene::node_graph::primitives::render_scene::RtCaptureSlot], cx: f32, cy: f32, radius: i32) -> f64 {
+fn region_irradiance(
+    channels: &[manifold_nodes_scene::node_graph::primitives::render_scene::RtCaptureSlot],
+    cx: f32,
+    cy: f32,
+    radius: i32,
+) -> f64 {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
-    let irr_channel = channels.iter()
+    let irr_channel = channels
+        .iter()
         .find(|c| c.label == "irr_full")
         .expect("RT irradiance channel 'irr_full' must be captured");
     let irr_pixels = harness::read_rt_channel(&h.device, irr_channel);
@@ -247,7 +256,10 @@ fn region_irradiance(channels: &[manifold_nodes_scene::node_graph::primitives::r
             let r = irr_pixels[idx];
             let g = irr_pixels[idx + 1];
             let b = irr_pixels[idx + 2];
-            assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite irradiance pixel");
+            assert!(
+                r.is_finite() && g.is_finite() && b.is_finite(),
+                "non-finite irradiance pixel"
+            );
             // Irradiance is monochromatic (env+GI gather), average RGB
             sum += ((r + g + b) / 3.0) as f64;
             n += 1;
@@ -421,10 +433,13 @@ fn white_enclosure_returns_the_field_radiance_within_the_truncation_budget() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let (mut runtime, target) = build_runtime(&json);
     let mut ready_frame: Option<i64> = None;
-    let mut ref_channels: Option<Vec<manifold_nodes_scene::node_graph::primitives::render_scene::RtCaptureSlot>> = None;
+    let mut ref_channels: Option<
+        Vec<manifold_nodes_scene::node_graph::primitives::render_scene::RtCaptureSlot>,
+    > = None;
 
     for frame in 0..(DISPATCH_HEADROOM + REFERENCE_SETTLE_FRAMES) {
-        let dispatched = harness::capture_rt_channels(|| render_frame(&mut runtime, &target, frame));
+        let dispatched =
+            harness::capture_rt_channels(|| render_frame(&mut runtime, &target, frame));
         if !dispatched.is_empty() && ready_frame.is_none() {
             ready_frame = Some(frame);
         }
@@ -443,15 +458,23 @@ fn white_enclosure_returns_the_field_radiance_within_the_truncation_budget() {
 
     let ref_bytes = h.readback(&target.texture);
     let ref_channels = ref_channels.expect("RT channels must be captured after settling");
-    write_png(&ref_bytes, h.width, h.height, "/tmp/rt_edc_enclosure_reference.png");
+    write_png(
+        &ref_bytes,
+        h.width,
+        h.height,
+        "/tmp/rt_edc_enclosure_reference.png",
+    );
 
     // Leg 2: the shipping path + RT channel capture.
     let (mut ship_runtime, ship_target) = build_runtime(&json);
     let mut ship_ready_frame: Option<i64> = None;
-    let mut ship_channels: Option<Vec<manifold_nodes_scene::node_graph::primitives::render_scene::RtCaptureSlot>> = None;
+    let mut ship_channels: Option<
+        Vec<manifold_nodes_scene::node_graph::primitives::render_scene::RtCaptureSlot>,
+    > = None;
 
     for frame in 0..(DISPATCH_HEADROOM + SHIPPING_SETTLE_FRAMES) {
-        let dispatched = harness::capture_rt_channels(|| render_frame(&mut ship_runtime, &ship_target, frame));
+        let dispatched =
+            harness::capture_rt_channels(|| render_frame(&mut ship_runtime, &ship_target, frame));
         if !dispatched.is_empty() && ship_ready_frame.is_none() {
             ship_ready_frame = Some(frame);
         }
@@ -462,7 +485,8 @@ fn white_enclosure_returns_the_field_radiance_within_the_truncation_budget() {
             break;
         }
     }
-    let ship_ready = ship_ready_frame.expect("RT kernel must dispatch within the dispatch headroom");
+    let ship_ready =
+        ship_ready_frame.expect("RT kernel must dispatch within the dispatch headroom");
     assert!(
         ship_ready <= DISPATCH_HEADROOM,
         "I-ED5 shipping: the RT kernel never dispatched within {DISPATCH_HEADROOM} frames."
@@ -483,8 +507,22 @@ fn white_enclosure_returns_the_field_radiance_within_the_truncation_budget() {
     let ship_irradiance = region_irradiance(&ship_channels, center_px.px, center_px.py, RADIUS);
 
     // SANITY ONLY: shaded pixel readback (kd_ibl * estimator, not the estimator itself)
-    let ref_shaded = region_luma(&ref_bytes, h.width, h.height, center_px.px, center_px.py, RADIUS);
-    let ship_shaded = region_luma(&ship_bytes, h.width, h.height, center_px.px, center_px.py, RADIUS);
+    let ref_shaded = region_luma(
+        &ref_bytes,
+        h.width,
+        h.height,
+        center_px.px,
+        center_px.py,
+        RADIUS,
+    );
+    let ship_shaded = region_luma(
+        &ship_bytes,
+        h.width,
+        h.height,
+        center_px.px,
+        center_px.py,
+        RADIUS,
+    );
 
     eprintln!("RT-EDC enclosure irradiance (estimator):");
     eprintln!("  reference (long accumulation) = {ref_irradiance:.5}");

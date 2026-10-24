@@ -18,7 +18,7 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::sync::{mpsc, Arc, Weak};
+use std::sync::{Arc, Weak, mpsc};
 
 use ahash::AHashMap;
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -28,9 +28,9 @@ use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 mod texture_jobs;
-use texture_jobs::{DecodedTexture, LoadReceiver};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use texture_jobs::{DecodedTexture, LoadReceiver};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SourceTextureKey {
@@ -558,7 +558,9 @@ impl GltfTextureSource {
                 .and_then(Weak::upgrade)
                 .filter(|bundle| bundle.ready.is_done(1))
         });
-        let own_ready = own_bundle.as_ref().is_some_and(|bundle| bundle.ready.is_done(1));
+        let own_ready = own_bundle
+            .as_ref()
+            .is_some_and(|bundle| bundle.ready.is_done(1));
         let bundle = if let Some(cached) = ready_cached {
             self.awaiting_canonical = false;
             cached
@@ -604,9 +606,9 @@ impl GltfTextureSource {
                         "node.gltf_texture_source",
                     )
                 });
-                let sampler = self.sampler.get_or_insert_with(|| {
-                    gpu.device.create_sampler(&GpuSamplerDesc::default())
-                });
+                let sampler = self
+                    .sampler
+                    .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
                 let uniforms = GltfTextureBlitUniforms {
                     out_width: desc.width as f32,
                     out_height: desc.height as f32,
@@ -727,8 +729,14 @@ mod tests {
 
     fn params_at(width: f32, height: f32) -> ParamValues {
         let mut p = ahash::AHashMap::default();
-        p.insert(std::borrow::Cow::Borrowed("width"), ParamValue::Float(width));
-        p.insert(std::borrow::Cow::Borrowed("height"), ParamValue::Float(height));
+        p.insert(
+            std::borrow::Cow::Borrowed("width"),
+            ParamValue::Float(width),
+        );
+        p.insert(
+            std::borrow::Cow::Borrowed("height"),
+            ParamValue::Float(height),
+        );
         p
     }
 
@@ -757,7 +765,10 @@ mod tests {
         let prim = GltfTextureSource::new();
         let node: &dyn EffectNode = &prim;
         let params = params_at(1024.0, 1024.0);
-        assert_eq!(node.output_dims("nonexistent", (1920, 1080), &[], &params), None);
+        assert_eq!(
+            node.output_dims("nonexistent", (1920, 1080), &[], &params),
+            None
+        );
     }
 }
 
@@ -771,28 +782,40 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use manifold_node_engine::exec::backend::Backend;
-    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
-    use manifold_node_engine::exec::execution_plan::ResourceId;
-    use manifold_node_engine::exec::{effect_node::FrameTime, metal_backend::MetalBackend};
-    use manifold_node_engine::ports::PortType;
-    use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::exec::{effect_node::FrameTime, metal_backend::MetalBackend};
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::ports::PortType;
 
     fn frame_time() -> FrameTime {
-        FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }
+        FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        }
     }
 
     fn helmet_fixture_path() -> std::path::PathBuf {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf/DamagedHelmet.glb")
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/DamagedHelmet.glb")
     }
 
     fn params_at(path: &str, texture_index: f32, mode: u32, w: f32, h: f32) -> ParamValues {
         let mut p = ahash::AHashMap::default();
-        p.insert(Cow::Borrowed("path"), ParamValue::String(path.to_string().into()));
-        p.insert(Cow::Borrowed("texture_index"), ParamValue::Float(texture_index));
+        p.insert(
+            Cow::Borrowed("path"),
+            ParamValue::String(path.to_string().into()),
+        );
+        p.insert(
+            Cow::Borrowed("texture_index"),
+            ParamValue::Float(texture_index),
+        );
         p.insert(Cow::Borrowed("color_space"), ParamValue::Enum(0));
         p.insert(Cow::Borrowed("width"), ParamValue::Float(w));
         p.insert(Cow::Borrowed("height"), ParamValue::Float(h));
@@ -899,7 +922,8 @@ mod gpu_tests {
         let mut native_enc = device.create_encoder("gltf-texture-source-pending-test");
         {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, device);
-            let mut ctx = EffectNodeContext::new(frame_time(), params, inputs, outputs, Some(&mut gpu));
+            let mut ctx =
+                EffectNodeContext::new(frame_time(), params, inputs, outputs, Some(&mut gpu));
             prim.run(&mut ctx);
         }
         native_enc
@@ -911,22 +935,12 @@ mod gpu_tests {
         h: u32,
         mipmapped: bool,
     ) -> (MetalBackend, Slot) {
-        let mut backend = MetalBackend::new(
-            device.arc(),
-            w,
-            h,
-            GpuTextureFormat::Rgba16Float,
-        );
+        let mut backend = MetalBackend::new(device.arc(), w, h, GpuTextureFormat::Rgba16Float);
         let id = ResourceId(0);
         if mipmapped {
             backend.declare_mipmapped(&[id]);
         }
-        let slot = backend.acquire_provided_texture(
-            id,
-            PortType::Texture2D,
-            None,
-            (w, h),
-        );
+        let slot = backend.acquire_provided_texture(id, PortType::Texture2D, None, (w, h));
         (backend, slot)
     }
 
@@ -949,7 +963,10 @@ mod gpu_tests {
     }
 
     fn read_texture_bytes(
-        device: &manifold_gpu::GpuDevice, tex: &manifold_gpu::GpuTexture, w: u32, h: u32,
+        device: &manifold_gpu::GpuDevice,
+        tex: &manifold_gpu::GpuTexture,
+        w: u32,
+        h: u32,
     ) -> Vec<u8> {
         let bytes_per_row = w * tex.format.bytes_per_pixel();
         let total = u64::from(h * bytes_per_row);
@@ -961,18 +978,20 @@ mod gpu_tests {
         unsafe { std::slice::from_raw_parts(ptr, total as usize) }.to_vec()
     }
 
-    fn overwrite_output(
-        device: &manifold_gpu::GpuDevice,
-        backend: &MetalBackend,
-        slot: Slot,
-    ) {
+    fn overwrite_output(device: &manifold_gpu::GpuDevice, backend: &MetalBackend, slot: Slot) {
         let texture = backend.texture_2d(slot).expect("output texture retained");
         let mut enc = device.create_encoder("gltf-texture-source-tenant-overwrite");
         enc.clear_texture(texture, 1.0, 0.0, 1.0, 1.0);
         enc.commit_and_wait_completed();
     }
 
-    fn readback(device: &manifold_gpu::GpuDevice, backend: &MetalBackend, slot: Slot, w: u32, h: u32) -> Vec<u8> {
+    fn readback(
+        device: &manifold_gpu::GpuDevice,
+        backend: &MetalBackend,
+        slot: Slot,
+        w: u32,
+        h: u32,
+    ) -> Vec<u8> {
         let tex = backend.texture_2d(slot).expect("texture retained");
         let bytes_per_row = w * 4; // Rgba8Unorm[Srgb]
         let total = u64::from(h * bytes_per_row);
@@ -1028,7 +1047,13 @@ mod gpu_tests {
         assert_eq!(rgba.len(), (w * h * 4) as usize);
         prim.last_key = (String::new(), 0);
         let rgba8_sha256: [u8; 32] = Sha256::digest(&rgba).into();
-        prim.pending_upload = Some(Arc::new(DecodedTexture { width: w, height: h, rgba, rgba8_sha256, warning: None }));
+        prim.pending_upload = Some(Arc::new(DecodedTexture {
+            width: w,
+            height: h,
+            rgba,
+            rgba8_sha256,
+            warning: None,
+        }));
     }
 
     #[test]
@@ -1060,12 +1085,8 @@ mod gpu_tests {
         );
         install_provided(&provided, &mut provided_backend, provided_slot);
 
-        let mut writable_backend = MetalBackend::new(
-            device.arc(),
-            w,
-            h,
-            GpuTextureFormat::Rgba16Float,
-        );
+        let mut writable_backend =
+            MetalBackend::new(device.arc(), w, h, GpuTextureFormat::Rgba16Float);
         let writable_slot = writable_backend.pre_bind_texture_2d(
             ResourceId(0),
             RenderTarget::new_mipmapped(
@@ -1095,14 +1116,37 @@ mod gpu_tests {
         // Compare the actual mip pixels and repeat after a repack-mode edit.
         for mode in [0, 1] {
             let params = synthetic_params(w, h, 0, mode);
-            run_once(&mut provided, &provided_backend, &device, &provided_scratch, &params, frame_time());
-            run_once(&mut writable, &writable_backend, &device, &writable_scratch, &params, frame_time());
+            run_once(
+                &mut provided,
+                &provided_backend,
+                &device,
+                &provided_scratch,
+                &params,
+                frame_time(),
+            );
+            run_once(
+                &mut writable,
+                &writable_backend,
+                &device,
+                &writable_scratch,
+                &params,
+                frame_time(),
+            );
             install_provided(&provided, &mut provided_backend, provided_slot);
             for level in 0..3 {
                 let side = w >> level;
-                let actual = provided_backend.texture_2d(provided_slot).unwrap().mip_level_view(level, side, side);
-                let expected = writable_backend.texture_2d(writable_slot).unwrap().mip_level_view(level, side, side);
-                assert_eq!(read_texture_bytes(&device, &actual, side, side), read_texture_bytes(&device, &expected, side, side));
+                let actual = provided_backend
+                    .texture_2d(provided_slot)
+                    .unwrap()
+                    .mip_level_view(level, side, side);
+                let expected = writable_backend
+                    .texture_2d(writable_slot)
+                    .unwrap()
+                    .mip_level_view(level, side, side);
+                assert_eq!(
+                    read_texture_bytes(&device, &actual, side, side),
+                    read_texture_bytes(&device, &expected, side, side)
+                );
             }
         }
     }
@@ -1125,23 +1169,16 @@ mod gpu_tests {
         inject_upload(&mut source_a, w, h, rgba.clone());
         inject_upload(&mut source_b, w, h, rgba);
 
-        let encoder_a = run_once_uncommitted(
-            &mut source_a,
-            &backend_a,
-            &device,
-            &scratch_a,
-            &params,
-        );
-        let encoder_b = run_once_uncommitted(
-            &mut source_b,
-            &backend_b,
-            &device,
-            &scratch_b,
-            &params,
-        );
+        let encoder_a =
+            run_once_uncommitted(&mut source_a, &backend_a, &device, &scratch_a, &params);
+        let encoder_b =
+            run_once_uncommitted(&mut source_b, &backend_b, &device, &scratch_b, &params);
         let output_a = source_a.provided_texture_output("out").unwrap().clone();
         let output_b = source_b.provided_texture_output("out").unwrap().clone();
-        assert!(!output_a.ptr_eq(&output_b), "pending conversion must not be shared");
+        assert!(
+            !output_a.ptr_eq(&output_b),
+            "pending conversion must not be shared"
+        );
         assert!(source_b.awaiting_canonical);
         assert!(source_b.warmup_pending());
 
@@ -1158,7 +1195,14 @@ mod gpu_tests {
         );
         assert!(!source_b.warmup_pending());
         encoder_a.commit_and_wait_completed();
-        run_once(&mut source_a, &backend_a, &device, &scratch_a, &params, frame_time());
+        run_once(
+            &mut source_a,
+            &backend_a,
+            &device,
+            &scratch_a,
+            &params,
+            frame_time(),
+        );
         let converged = source_a.provided_texture_output("out").unwrap();
         assert!(
             output_b.ptr_eq(converged),
@@ -1202,10 +1246,12 @@ mod gpu_tests {
             &synthetic_params(2, 2, 0, 1),
             frame_time(),
         );
-        assert!(!source_a
-            .provided_texture_output("out")
-            .unwrap()
-            .ptr_eq(source_mode.provided_texture_output("out").unwrap()));
+        assert!(
+            !source_a
+                .provided_texture_output("out")
+                .unwrap()
+                .ptr_eq(source_mode.provided_texture_output("out").unwrap())
+        );
 
         let (mut backend_dims, slot_dims) = provided_backend(&device, 4, 1, false);
         let scratch_dims = vec![("out", slot_dims)];
@@ -1219,10 +1265,12 @@ mod gpu_tests {
             &synthetic_params(4, 1, 0, 0),
             frame_time(),
         );
-        assert!(!source_a
-            .provided_texture_output("out")
-            .unwrap()
-            .ptr_eq(source_dims.provided_texture_output("out").unwrap()));
+        assert!(
+            !source_a
+                .provided_texture_output("out")
+                .unwrap()
+                .ptr_eq(source_dims.provided_texture_output("out").unwrap())
+        );
 
         let (mut backend_black, slot_black) = provided_backend(&device, 2, 2, false);
         let scratch_black = vec![("out", slot_black)];
@@ -1236,17 +1284,26 @@ mod gpu_tests {
             frame_time(),
         );
         assert!(source_black.source_texture.is_none());
-        assert!(!source_a
-            .provided_texture_output("out")
-            .unwrap()
-            .ptr_eq(source_black.provided_texture_output("out").unwrap()));
+        assert!(
+            !source_a
+                .provided_texture_output("out")
+                .unwrap()
+                .ptr_eq(source_black.provided_texture_output("out").unwrap())
+        );
         assert!(source_black.provided_texture_output("out").is_some());
         install_provided(&source_mode, &mut backend_mode, slot_mode);
         install_provided(&source_dims, &mut backend_dims, slot_dims);
         install_provided(&source_black, &mut backend_black, slot_black);
         let expected_black: Vec<u8> = [0u16, 0, 0, half::f16::ONE.to_bits()]
-            .into_iter().flat_map(u16::to_ne_bytes).cycle().take(2 * 2 * 8).collect();
-        assert_eq!(readback_texture(&device, &backend_black, slot_black, 2, 2), expected_black);
+            .into_iter()
+            .flat_map(u16::to_ne_bytes)
+            .cycle()
+            .take(2 * 2 * 8)
+            .collect();
+        assert_eq!(
+            readback_texture(&device, &backend_black, slot_black, 2, 2),
+            expected_black
+        );
     }
 
     #[test]
@@ -1304,14 +1361,18 @@ mod gpu_tests {
         ));
         assert_ne!(source_a.converted_key, source_b.converted_key);
         assert_eq!(source_a.converted_key, source_c.converted_key);
-        assert!(!source_a
-            .provided_texture_output("out")
-            .unwrap()
-            .ptr_eq(source_b.provided_texture_output("out").unwrap()));
-        assert!(source_a
-            .provided_texture_output("out")
-            .unwrap()
-            .ptr_eq(source_c.provided_texture_output("out").unwrap()));
+        assert!(
+            !source_a
+                .provided_texture_output("out")
+                .unwrap()
+                .ptr_eq(source_b.provided_texture_output("out").unwrap())
+        );
+        assert!(
+            source_a
+                .provided_texture_output("out")
+                .unwrap()
+                .ptr_eq(source_c.provided_texture_output("out").unwrap())
+        );
         install_provided(&source_a, &mut backend_a, slot_a);
         install_provided(&source_b, &mut backend_b, slot_b);
         install_provided(&source_c, &mut backend_c, slot_c);
@@ -1325,28 +1386,50 @@ mod gpu_tests {
 
     #[test]
     fn provided_outputs_share_through_executors_and_layer_edits_preserve_peer_pixels() {
-        use manifold_node_engine::{graph::Graph, exec::execution::Executor, exec::execution_plan::compile};
         use manifold_node_engine::scene::boundary_nodes::FinalOutput;
+        use manifold_node_engine::{
+            exec::execution::Executor, exec::execution_plan::compile, graph::Graph,
+        };
         CONVERTED_TEXTURE_CACHE.with(|cache| cache.borrow_mut().clear());
         let device = manifold_gpu::testkit::test_device();
-        let pixels = vec![40, 80, 160, 64, 90, 50, 20, 128, 200, 30, 10, 200, 7, 110, 220, 255];
+        let pixels = vec![
+            40, 80, 160, 64, 90, 50, 20, 128, 200, 30, 10, 200, 7, 110, 220, 255,
+        ];
         let build = || {
             let mut source = GltfTextureSource::new();
             inject_upload(&mut source, 2, 2, pixels.clone());
             let mut graph = Graph::new();
             let source = graph.add_node(Box::new(source));
-            graph.set_param(source, "width", ParamValue::Float(2.0)).unwrap();
-            graph.set_param(source, "height", ParamValue::Float(2.0)).unwrap();
+            graph
+                .set_param(source, "width", ParamValue::Float(2.0))
+                .unwrap();
+            graph
+                .set_param(source, "height", ParamValue::Float(2.0))
+                .unwrap();
             let output = graph.add_node(Box::new(FinalOutput::new()));
             graph.connect((source, "out"), (output, "in")).unwrap();
             let plan = compile(&graph).unwrap();
-            let resource = plan.steps().iter().find(|step| step.node == source).unwrap().outputs[0].1;
+            let resource = plan
+                .steps()
+                .iter()
+                .find(|step| step.node == source)
+                .unwrap()
+                .outputs[0]
+                .1;
             let backend = MetalBackend::new(device.arc(), 2, 2, GpuTextureFormat::Rgba16Float);
-            (graph, plan, Executor::new(Box::new(backend)), source, resource)
+            (
+                graph,
+                plan,
+                Executor::new(Box::new(backend)),
+                source,
+                resource,
+            )
         };
         let (mut a, plan_a, mut exec_a, source_a, resource_a) = build();
         let (mut b, plan_b, mut exec_b, _, resource_b) = build();
-        let run = |graph: &mut Graph, plan: &manifold_node_engine::exec::execution_plan::ExecutionPlan, exec: &mut Executor| {
+        let run = |graph: &mut Graph,
+                   plan: &manifold_node_engine::exec::execution_plan::ExecutionPlan,
+                   exec: &mut Executor| {
             let mut native = device.create_encoder("provided-output-executor");
             let mut gpu = RendererGpuEncoder::new(&mut native, &device);
             exec.execute_frame_with_gpu(graph, plan, frame_time(), &mut gpu);
@@ -1357,23 +1440,57 @@ mod gpu_tests {
         let slot_a = exec_a.backend().slot_for(resource_a).unwrap();
         let slot_b = exec_b.backend().slot_for(resource_b).unwrap();
         let original = exec_b.backend().texture_2d(slot_b).unwrap().clone();
-        assert!(exec_a.backend().texture_2d(slot_a).unwrap().ptr_eq(&original));
+        assert!(
+            exec_a
+                .backend()
+                .texture_2d(slot_a)
+                .unwrap()
+                .ptr_eq(&original)
+        );
         let peer_before = readback_texture(&device, exec_b.backend(), slot_b, 2, 2);
         // Repeated frames exercise retained-output reporting and held slots.
         run(&mut a, &plan_a, &mut exec_a);
         a.set_param(source_a, "mode", ParamValue::Enum(1)).unwrap();
         run(&mut a, &plan_a, &mut exec_a);
         run(&mut b, &plan_b, &mut exec_b);
-        assert!(!exec_a.backend().texture_2d(slot_a).unwrap().ptr_eq(&original));
-        assert!(exec_b.backend().texture_2d(slot_b).unwrap().ptr_eq(&original));
-        assert_eq!(readback_texture(&device, exec_b.backend(), slot_b, 2, 2), peer_before);
-        assert_ne!(readback_texture(&device, exec_a.backend(), slot_a, 2, 2), peer_before);
-        let key = CONVERTED_TEXTURE_CACHE.with(|cache| *cache.borrow().iter().find(|(_, value)| {
-            value.upgrade().is_some_and(|bundle| bundle.texture.ptr_eq(&original))
-        }).unwrap().0);
+        assert!(
+            !exec_a
+                .backend()
+                .texture_2d(slot_a)
+                .unwrap()
+                .ptr_eq(&original)
+        );
+        assert!(
+            exec_b
+                .backend()
+                .texture_2d(slot_b)
+                .unwrap()
+                .ptr_eq(&original)
+        );
+        assert_eq!(
+            readback_texture(&device, exec_b.backend(), slot_b, 2, 2),
+            peer_before
+        );
+        assert_ne!(
+            readback_texture(&device, exec_a.backend(), slot_a, 2, 2),
+            peer_before
+        );
+        let key = CONVERTED_TEXTURE_CACHE.with(|cache| {
+            *cache
+                .borrow()
+                .iter()
+                .find(|(_, value)| {
+                    value
+                        .upgrade()
+                        .is_some_and(|bundle| bundle.texture.ptr_eq(&original))
+                })
+                .unwrap()
+                .0
+        });
         drop(b);
         drop(exec_b);
-        CONVERTED_TEXTURE_CACHE.with(|cache| assert!(cache.borrow().get(&key).unwrap().upgrade().is_none()));
+        CONVERTED_TEXTURE_CACHE
+            .with(|cache| assert!(cache.borrow().get(&key).unwrap().upgrade().is_none()));
     }
 
     fn cache_key(
@@ -1459,16 +1576,24 @@ mod gpu_tests {
         let output_a_after = readback(&device, &backend_a, slot_a, w, h);
         overwrite_output(&device, &backend_b, slot_b);
         run_once_with_retention(
-            &mut source_b, &backend_b, &device, &scratch_b, &params, frame_time(), false,
+            &mut source_b,
+            &backend_b,
+            &device,
+            &scratch_b,
+            &params,
+            frame_time(),
+            false,
         );
         let output_b_after = readback(&device, &backend_b, slot_b, w, h);
         assert_ne!(output_a_before, output_a_after);
         assert_eq!(output_b_before, output_b_after);
-        assert!(!source_a
-            .source_texture
-            .as_ref()
-            .expect("source A replacement uploaded")
-            .ptr_eq(source_b.source_texture.as_ref().expect("source B retained")));
+        assert!(
+            !source_a
+                .source_texture
+                .as_ref()
+                .expect("source A replacement uploaded")
+                .ptr_eq(source_b.source_texture.as_ref().expect("source B retained"))
+        );
     }
 
     #[test]
@@ -1538,24 +1663,28 @@ mod gpu_tests {
             &linear_params,
             frame_time(),
         );
-        assert!(!source_shape
-            .source_texture
-            .as_ref()
-            .unwrap()
-            .ptr_eq(source_format.source_texture.as_ref().unwrap()));
-        let format_key = cache_key(
-            &device,
-            w,
-            h,
-            GpuTextureFormat::Rgba8Unorm,
-            &rgba,
+        assert!(
+            !source_shape
+                .source_texture
+                .as_ref()
+                .unwrap()
+                .ptr_eq(source_format.source_texture.as_ref().unwrap())
         );
+        let format_key = cache_key(&device, w, h, GpuTextureFormat::Rgba8Unorm, &rgba);
 
-        let second_device = Arc::new(manifold_gpu::GpuDevice::new_queued("gltf_texture_source tests"));
+        let second_device = Arc::new(manifold_gpu::GpuDevice::new_queued(
+            "gltf_texture_source tests",
+        ));
         let mut backend_scope = MetalBackend::new(Arc::clone(&second_device), w, h, format);
         let slot_scope = backend_scope.pre_bind_texture_2d(
             ResourceId(0),
-            RenderTarget::new(second_device.as_ref(), w, h, format, "gltf-source-key-scope"),
+            RenderTarget::new(
+                second_device.as_ref(),
+                w,
+                h,
+                format,
+                "gltf-source-key-scope",
+            ),
         );
         let scratch_scope = vec![("out", slot_scope)];
         let mut source_scope = GltfTextureSource::new();
@@ -1572,21 +1701,18 @@ mod gpu_tests {
             device.resource_scope_id(),
             second_device.resource_scope_id()
         );
-        assert!(!source_shape
-            .source_texture
-            .as_ref()
-            .unwrap()
-            .ptr_eq(source_scope.source_texture.as_ref().unwrap()));
-        let scope_key = cache_key(
-            second_device.as_ref(),
-            w,
-            h,
-            format,
-            &rgba,
+        assert!(
+            !source_shape
+                .source_texture
+                .as_ref()
+                .unwrap()
+                .ptr_eq(source_scope.source_texture.as_ref().unwrap())
         );
+        let scope_key = cache_key(second_device.as_ref(), w, h, format, &rgba);
 
         let shape_4x1 = (4u32, 1u32);
-        let mut backend_dimensions = MetalBackend::new(device.arc(), shape_4x1.0, shape_4x1.1, format);
+        let mut backend_dimensions =
+            MetalBackend::new(device.arc(), shape_4x1.0, shape_4x1.1, format);
         let slot_dimensions = backend_dimensions.pre_bind_texture_2d(
             ResourceId(0),
             RenderTarget::new(
@@ -1599,7 +1725,12 @@ mod gpu_tests {
         );
         let scratch_dimensions = vec![("out", slot_dimensions)];
         let mut source_dimensions = GltfTextureSource::new();
-        inject_upload(&mut source_dimensions, shape_4x1.0, shape_4x1.1, rgba.clone());
+        inject_upload(
+            &mut source_dimensions,
+            shape_4x1.0,
+            shape_4x1.1,
+            rgba.clone(),
+        );
         let dimensions_params = synthetic_params(shape_4x1.0, shape_4x1.1, 0, 0);
         run_once(
             &mut source_dimensions,
@@ -1609,11 +1740,13 @@ mod gpu_tests {
             &dimensions_params,
             frame_time(),
         );
-        assert!(!source_shape
-            .source_texture
-            .as_ref()
-            .unwrap()
-            .ptr_eq(source_dimensions.source_texture.as_ref().unwrap()));
+        assert!(
+            !source_shape
+                .source_texture
+                .as_ref()
+                .unwrap()
+                .ptr_eq(source_dimensions.source_texture.as_ref().unwrap())
+        );
 
         drop(source_shape);
         drop(source_shape_b);
@@ -1648,10 +1781,12 @@ mod gpu_tests {
             assert!(!cache.contains_key(&shape_key));
             assert!(!cache.contains_key(&format_key));
             assert!(!cache.contains_key(&scope_key));
-            assert!(cache
-                .get(&cache_key(&device, shape_4x1.0, shape_4x1.1, format, &rgba))
-                .and_then(Weak::upgrade)
-                .is_some());
+            assert!(
+                cache
+                    .get(&cache_key(&device, shape_4x1.0, shape_4x1.1, format, &rgba))
+                    .and_then(Weak::upgrade)
+                    .is_some()
+            );
         });
     }
 
@@ -1701,7 +1836,10 @@ mod gpu_tests {
     fn frame2_matches_frame1_on_static_asset_and_declares_unchanged() {
         let path = helmet_fixture_path();
         if !path.exists() {
-            println!("frame2_matches_frame1_on_static_asset_and_declares_unchanged: fixture not found at {}, skipping", path.display());
+            println!(
+                "frame2_matches_frame1_on_static_asset_and_declares_unchanged: fixture not found at {}, skipping",
+                path.display()
+            );
             return;
         }
         let device = manifold_gpu::testkit::test_device();
@@ -1718,11 +1856,27 @@ mod gpu_tests {
         settle(&mut prim, &backend, &device, &output_scratch, &params);
         let frame1 = readback(&device, &backend, out_slot, w, h);
 
-        let result = run_once(&mut prim, &backend, &device, &output_scratch, &params, frame_time());
-        assert!(result.storage_unchanged, "settled static frame must declare mark_outputs_unchanged");
-        assert!(result.content_unchanged, "a physical no-op also preserves logical content");
+        let result = run_once(
+            &mut prim,
+            &backend,
+            &device,
+            &output_scratch,
+            &params,
+            frame_time(),
+        );
+        assert!(
+            result.storage_unchanged,
+            "settled static frame must declare mark_outputs_unchanged"
+        );
+        assert!(
+            result.content_unchanged,
+            "a physical no-op also preserves logical content"
+        );
         let frame2 = readback(&device, &backend, out_slot, w, h);
-        assert_eq!(frame1, frame2, "frame 2 must be bit-identical to frame 1 on a static asset");
+        assert_eq!(
+            frame1, frame2,
+            "frame 2 must be bit-identical to frame 1 on a static asset"
+        );
     }
 
     /// A recycled destination has a different physical identity, so the
@@ -1733,7 +1887,11 @@ mod gpu_tests {
     #[test]
     fn recycled_output_is_rewritten_with_stable_content() {
         let path = helmet_fixture_path();
-        assert!(path.exists(), "required glTF fixture missing: {}", path.display());
+        assert!(
+            path.exists(),
+            "required glTF fixture missing: {}",
+            path.display()
+        );
         let device = manifold_gpu::testkit::test_device();
         let (w, h) = (64u32, 64u32);
         let format = GpuTextureFormat::Rgba8UnormSrgb;
@@ -1754,13 +1912,7 @@ mod gpu_tests {
         let old_target = backend
             .swap_texture_2d(
                 out_slot,
-                RenderTarget::new(
-                    &device,
-                    w,
-                    h,
-                    format,
-                    "gltf-texture-source-recycle-b",
-                ),
+                RenderTarget::new(&device, w, h, format, "gltf-texture-source-recycle-b"),
             )
             .expect("first output target retained");
         let recycled = run_once_with_retention(
@@ -1772,8 +1924,14 @@ mod gpu_tests {
             frame_time(),
             false,
         );
-        assert!(!recycled.storage_unchanged, "a recycled destination must be physically rewritten");
-        assert!(recycled.content_unchanged, "recopying identical pixels must preserve logical content");
+        assert!(
+            !recycled.storage_unchanged,
+            "a recycled destination must be physically rewritten"
+        );
+        assert!(
+            recycled.content_unchanged,
+            "recopying identical pixels must preserve logical content"
+        );
         assert_eq!(expected, readback(&device, &backend, out_slot, w, h));
 
         let recycled_target = backend
@@ -1788,8 +1946,14 @@ mod gpu_tests {
             frame_time(),
             false,
         );
-        assert!(!recycled_again.storage_unchanged, "returning to a prior destination still requires a physical rewrite");
-        assert!(recycled_again.content_unchanged, "alternating destinations must retain logical content");
+        assert!(
+            !recycled_again.storage_unchanged,
+            "returning to a prior destination still requires a physical rewrite"
+        );
+        assert!(
+            recycled_again.content_unchanged,
+            "alternating destinations must retain logical content"
+        );
         assert_eq!(expected, readback(&device, &backend, out_slot, w, h));
         drop(recycled_target);
     }
@@ -1801,7 +1965,11 @@ mod gpu_tests {
     #[test]
     fn overwritten_same_output_identity_forces_refresh() {
         let path = helmet_fixture_path();
-        assert!(path.exists(), "required glTF fixture missing: {}", path.display());
+        assert!(
+            path.exists(),
+            "required glTF fixture missing: {}",
+            path.display()
+        );
         let device = manifold_gpu::testkit::test_device();
         let (w, h) = (64u32, 64u32);
         let format = GpuTextureFormat::Rgba8UnormSrgb;
@@ -1829,8 +1997,14 @@ mod gpu_tests {
             frame_time(),
             false,
         );
-        assert!(!result.storage_unchanged, "an in-place overwrite by another tenant invalidates the physical no-op declaration");
-        assert!(result.content_unchanged, "restoring identical pixels must preserve logical content");
+        assert!(
+            !result.storage_unchanged,
+            "an in-place overwrite by another tenant invalidates the physical no-op declaration"
+        );
+        assert!(
+            result.content_unchanged,
+            "restoring identical pixels must preserve logical content"
+        );
         assert_eq!(expected, readback(&device, &backend, out_slot, w, h));
     }
 
@@ -1841,7 +2015,10 @@ mod gpu_tests {
     fn mode_flip_matches_fresh_executor() {
         let path = helmet_fixture_path();
         if !path.exists() {
-            println!("mode_flip_matches_fresh_executor: fixture not found at {}, skipping", path.display());
+            println!(
+                "mode_flip_matches_fresh_executor: fixture not found at {}, skipping",
+                path.display()
+            );
             return;
         }
         let device = manifold_gpu::testkit::test_device();
@@ -1861,10 +2038,23 @@ mod gpu_tests {
         let pass_output = readback(&device, &backend_a, slot_a, w, h);
 
         let params_flipped = params_at(path.to_str().unwrap(), 0.0, 1, w as f32, h as f32);
-        let result = run_once(&mut prim_a, &backend_a, &device, &scratch_a, &params_flipped, frame_time());
-        assert!(!result.storage_unchanged, "a mode flip must NOT be gated as unchanged");
+        let result = run_once(
+            &mut prim_a,
+            &backend_a,
+            &device,
+            &scratch_a,
+            &params_flipped,
+            frame_time(),
+        );
+        assert!(
+            !result.storage_unchanged,
+            "a mode flip must NOT be gated as unchanged"
+        );
         let flipped_output = readback(&device, &backend_a, slot_a, w, h);
-        assert_ne!(flipped_output, pass_output, "mode change must alter the emitted pixels");
+        assert_ne!(
+            flipped_output, pass_output,
+            "mode change must alter the emitted pixels"
+        );
 
         // Fresh executor: mode=gloss_to_roughness baked in from the start.
         let mut backend_b = MetalBackend::new(device.arc(), w, h, format);
@@ -1872,7 +2062,13 @@ mod gpu_tests {
         let slot_b = backend_b.pre_bind_texture_2d(r_out, target_b);
         let scratch_b: Vec<(&'static str, Slot)> = vec![("out", slot_b)];
         let mut prim_b = GltfTextureSource::new();
-        settle(&mut prim_b, &backend_b, &device, &scratch_b, &params_flipped);
+        settle(
+            &mut prim_b,
+            &backend_b,
+            &device,
+            &scratch_b,
+            &params_flipped,
+        );
         assert!(Arc::ptr_eq(
             prim_a.source_texture.as_ref().expect("source A uploaded"),
             prim_b.source_texture.as_ref().expect("source B uploaded"),

@@ -5,9 +5,8 @@
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 fn identity_instances(id: u32) -> String {
     format!(
@@ -158,10 +157,20 @@ fn legacy_mesh_and_identity_copies_match_shared_scene_materials() {
     let mesh = render_readback(&render_graph("mesh"));
     let copies = render_readback(&render_graph("copies"));
     let scene = render_readback(&render_graph("scene"));
-    assert!(scene.chunks_exact(8).any(|p| half::f16::from_le_bytes([p[2], p[3]]).to_f32() > 0.03),
-        "control must shade visible geometry, not an empty or error clear");
-    assert!(mesh == scene, "render_mesh differs from shared scene at byte {:?}",
-        mesh.iter().zip(&scene).position(|(a,b)| a != b));
-    assert!(copies == scene, "identity render_copies differs from shared scene at byte {:?}",
-        copies.iter().zip(&scene).position(|(a,b)| a != b));
+    assert!(
+        scene
+            .chunks_exact(8)
+            .any(|p| half::f16::from_le_bytes([p[2], p[3]]).to_f32() > 0.03),
+        "control must shade visible geometry, not an empty or error clear"
+    );
+    assert!(
+        mesh == scene,
+        "render_mesh differs from shared scene at byte {:?}",
+        mesh.iter().zip(&scene).position(|(a, b)| a != b)
+    );
+    assert!(
+        copies == scene,
+        "identity render_copies differs from shared scene at byte {:?}",
+        copies.iter().zip(&scene).position(|(a, b)| a != b)
+    );
 }

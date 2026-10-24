@@ -22,12 +22,17 @@ use manifold_gpu::{
     GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 
-use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::{persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, exec::execution_plan::compile};
-use manifold_node_engine::runtime::preset_context::PresetContext;
-use manifold_node_engine::runtime::PresetRuntime;
 use manifold_core::params::ParamManifest;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::{
+    exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+    exec::execution_plan::ResourceId, exec::execution_plan::compile,
+    exec::metal_backend::MetalBackend, persistence::EffectGraphDefExt,
+    persistence::PrimitiveRegistry, state_store::StateStore,
+};
 
 /// Thumbnail dimensions (STATIC_THUMBNAILS_DESIGN §3.1): 16:9, matching the
 /// browser cells (170×96).
@@ -122,9 +127,11 @@ fn factory_thumbnail_root(kind: PresetKind) -> Option<PathBuf> {
             return Some(bundle);
         }
     }
-    Some(manifold_node_engine::load::preset_loader::registered_assets_root()?
-        .join("preset-thumbnails")
-        .join(subdir))
+    Some(
+        manifold_node_engine::load::preset_loader::registered_assets_root()?
+            .join("preset-thumbnails")
+            .join(subdir),
+    )
 }
 
 /// Path a factory preset's committed thumbnail lives at for `id`. The caller
@@ -179,10 +186,12 @@ fn thumbnail_audio_visuals(
 ) -> Option<manifold_core::audio_visual::AudioVisualRegistry> {
     graph
         .nodes()
-        .any(|node| matches!(
-            node.node.type_id().as_str(),
-            "node.audio_waveform" | "node.audio_spectrum"
-        ))
+        .any(|node| {
+            matches!(
+                node.node.type_id().as_str(),
+                "node.audio_waveform" | "node.audio_spectrum"
+            )
+        })
         .then(|| {
             let mut audio = manifold_core::audio_visual::AudioVisualRegistry::new();
             let send = manifold_core::AudioSendId::new("thumbnail-audio");
@@ -199,10 +208,8 @@ fn thumbnail_audio_visuals(
                 let mut column = [0.0; 128];
                 for (bin, magnitude) in column.iter_mut().enumerate() {
                     let center = 30.0 + 12.0 * (t as f32 * 0.03).sin();
-                    *magnitude = 0.7
-                        * (-((bin as f32 - center) / 3.0).powi(2)).exp()
-                        + 0.2
-                            * (-((bin as f32 - center - 24.0) / 5.0).powi(2)).exp();
+                    *magnitude = 0.7 * (-((bin as f32 - center) / 3.0).powi(2)).exp()
+                        + 0.2 * (-((bin as f32 - center - 24.0) / 5.0).powi(2)).exp();
                 }
                 audio.feed_spectrum(&send, &column);
             }
@@ -239,17 +246,16 @@ fn render_generator(
 ) -> Result<Vec<u8>, String> {
     let registry = PrimitiveRegistry::with_builtin();
     let format = GpuTextureFormat::Rgba16Float;
-    let mut runtime =
-        PresetRuntime::from_def_with_device(
-            def.clone(),
-            &registry,
-            std::sync::Arc::clone(device),
-            width,
-            height,
-            format,
-            None,
-        )
-        .map_err(|e| format!("generator build failed: {e}"))?;
+    let mut runtime = PresetRuntime::from_def_with_device(
+        def.clone(),
+        &registry,
+        std::sync::Arc::clone(device),
+        width,
+        height,
+        format,
+        None,
+    )
+    .map_err(|e| format!("generator build failed: {e}"))?;
     let audio_preview = thumbnail_audio_visuals(&runtime.graph);
 
     let target = RenderTarget::new(device, width, height, format, "preset-thumb-gen-target");
@@ -281,11 +287,21 @@ fn render_generator(
         }
     };
 
-    pump_warmup_frames(device, WARMUP_FRAMES, audio_preview.as_ref(), |frame, gpu| {
-        // Thumbnails render every binding at its declared default — no card
-        // overrides — so an empty manifest is exactly right.
-        runtime.render(gpu, &target.texture, &make_ctx(frame), &ParamManifest::default());
-    });
+    pump_warmup_frames(
+        device,
+        WARMUP_FRAMES,
+        audio_preview.as_ref(),
+        |frame, gpu| {
+            // Thumbnails render every binding at its declared default — no card
+            // overrides — so an empty manifest is exactly right.
+            runtime.render(
+                gpu,
+                &target.texture,
+                &make_ctx(frame),
+                &ParamManifest::default(),
+            );
+        },
+    );
 
     // The fixed 60-frame warm-up is enough to trigger background initialization
     // (GLB mesh parse, texture decode, HDRI upload, etc.), but a heavy decode can
@@ -325,9 +341,19 @@ fn render_generator(
     }
 
     let mut rgba = if linear {
-        manifold_node_engine::gpu::headless_readback::readback_srgb_rgba8(device, &target.texture, width, height)
+        manifold_node_engine::gpu::headless_readback::readback_srgb_rgba8(
+            device,
+            &target.texture,
+            width,
+            height,
+        )
     } else {
-        manifold_node_engine::gpu::headless_readback::readback_tonemapped_rgba8(device, &target.texture, width, height)
+        manifold_node_engine::gpu::headless_readback::readback_tonemapped_rgba8(
+            device,
+            &target.texture,
+            width,
+            height,
+        )
     };
     flatten_over_black(&mut rgba);
     Ok(manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, width, height))
@@ -421,12 +447,17 @@ pub(crate) fn build_test_card_input(
         depth: 1,
         format,
         dimension: GpuTextureDimension::D2,
-        usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
+        usage: GpuTextureUsage::CPU_UPLOAD
+            | GpuTextureUsage::SHADER_READ
+            | GpuTextureUsage::COPY_SRC,
         label: "preset-thumb-test-card-input",
         mip_levels: 1,
     });
     let bytes = unsafe {
-        std::slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels.as_slice()))
+        std::slice::from_raw_parts(
+            pixels.as_ptr().cast::<u8>(),
+            std::mem::size_of_val(pixels.as_slice()),
+        )
     };
     device.upload_texture(&tex, bytes);
     RenderTarget::view_of(tex, "preset-thumb-test-card-input")
@@ -436,7 +467,11 @@ pub(crate) fn build_test_card_input(
 /// produced. Small plan-walk helper, duplicated (not shared) across this
 /// crate's headless-render call sites — same rationale `preset_runtime.rs`'s
 /// own copy states: a 5-line utility, not worth a cross-module dependency.
-pub(crate) fn output_resource(plan: &manifold_node_engine::exec::execution_plan::ExecutionPlan, node: NodeInstanceId, port: &str) -> Option<ResourceId> {
+pub(crate) fn output_resource(
+    plan: &manifold_node_engine::exec::execution_plan::ExecutionPlan,
+    node: NodeInstanceId,
+    port: &str,
+) -> Option<ResourceId> {
     for step in plan.steps() {
         if step.node == node {
             for &(name, id) in &step.outputs {
@@ -465,18 +500,26 @@ fn render_effect(
 
     let mut graph = def
         .clone()
-        .into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
         .map_err(|e| format!("graph load failed: {e}"))?;
     let plan = compile(&graph).map_err(|e| format!("compile failed: {e:?}"))?;
 
     let source_id = graph
         .nodes()
-        .find(|n| n.node.type_id().as_str() == manifold_node_engine::scene::boundary_nodes::SOURCE_TYPE_ID)
+        .find(|n| {
+            n.node.type_id().as_str() == manifold_node_engine::scene::boundary_nodes::SOURCE_TYPE_ID
+        })
         .map(|n| n.id)
         .ok_or_else(|| "preset has no system.source node".to_string())?;
     let final_id = graph
         .nodes()
-        .find(|n| n.node.type_id().as_str() == manifold_node_engine::scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID)
+        .find(|n| {
+            n.node.type_id().as_str()
+                == manifold_node_engine::scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID
+        })
         .map(|n| n.id)
         .ok_or_else(|| "preset has no system.final_output node".to_string())?;
 
@@ -505,8 +548,13 @@ fn render_effect(
         backend.pre_bind_texture_2d(final_in, out_target)
     };
 
-    manifold_node_engine::load::graph_loader::pre_allocate_resources(&mut graph, &plan, device, &mut backend)
-        .map_err(|error| format!("effect resource allocation failed: {error:?}"))?;
+    manifold_node_engine::load::graph_loader::pre_allocate_resources(
+        &mut graph,
+        &plan,
+        device,
+        &mut backend,
+    )
+    .map_err(|error| format!("effect resource allocation failed: {error:?}"))?;
 
     let audio_preview = thumbnail_audio_visuals(&graph);
 
@@ -517,25 +565,34 @@ fn render_effect(
     // persists across the pumped frames — that persistence IS the warm-up.
     let mut state_store = StateStore::new();
     let mut exec = Executor::new(Box::new(backend));
-    pump_warmup_frames(device, WARMUP_FRAMES, audio_preview.as_ref(), |frame, gpu| {
-        let (time, beats) = warmup_time(frame);
-        let frame_time = FrameTime {
-            beats: manifold_core::Beats(beats),
-            seconds: manifold_core::Seconds(time),
-            delta: manifold_core::Seconds(f64::from(WARMUP_DT)),
-            frame_count: frame as i64,
-        };
-        exec.execute_frame_with_state(&mut graph, &plan, frame_time, gpu, &mut state_store, 0);
-    });
+    pump_warmup_frames(
+        device,
+        WARMUP_FRAMES,
+        audio_preview.as_ref(),
+        |frame, gpu| {
+            let (time, beats) = warmup_time(frame);
+            let frame_time = FrameTime {
+                beats: manifold_core::Beats(beats),
+                seconds: manifold_core::Seconds(time),
+                delta: manifold_core::Seconds(f64::from(WARMUP_DT)),
+                frame_count: frame as i64,
+            };
+            exec.execute_frame_with_state(&mut graph, &plan, frame_time, gpu, &mut state_store, 0);
+        },
+    );
 
     let tex = exec
         .backend()
         .texture_2d(output_slot)
         .ok_or_else(|| "output texture missing after execute".to_string())?;
     let mut rgba = if linear {
-        manifold_node_engine::gpu::headless_readback::readback_srgb_rgba8(device, tex, width, height)
+        manifold_node_engine::gpu::headless_readback::readback_srgb_rgba8(
+            device, tex, width, height,
+        )
     } else {
-        manifold_node_engine::gpu::headless_readback::readback_tonemapped_rgba8(device, tex, width, height)
+        manifold_node_engine::gpu::headless_readback::readback_tonemapped_rgba8(
+            device, tex, width, height,
+        )
     };
     flatten_over_black(&mut rgba);
     Ok(manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, width, height))
@@ -573,7 +630,10 @@ mod tests {
         const H: u32 = 144;
         // Left third, off-center: the diagonal gradient (B is the channel mean).
         let g = test_card_pixel(10, 40, W, H);
-        assert!(g[0] < 0.1 && g[1] > 0.2 && g[1] < 0.4, "gradient region wrong: {g:?}");
+        assert!(
+            g[0] < 0.1 && g[1] > 0.2 && g[1] < 0.4,
+            "gradient region wrong: {g:?}"
+        );
         assert!((g[2] - (g[0] + g[1]) * 0.5).abs() < 1e-6);
         // Middle third: a hue bar — saturated (max-min large), gray floor 0.1.
         let bar = test_card_pixel(W / 3 + 5, H / 2, W, H);
@@ -584,8 +644,14 @@ mod tests {
         let s0 = test_card_pixel(W - 5, 4, W, H);
         let s1 = test_card_pixel(W - 5, 5, W, H);
         let s2 = test_card_pixel(W - 5, 6, W, H);
-        assert!(s0 == s1 && s0 != s2, "stripes must hold for 2 rows then flip: {s0:?} {s1:?} {s2:?}");
-        assert!(s0[0] == 0.0 || s0[0] == 1.0, "stripes must be black/white: {s0:?}");
+        assert!(
+            s0 == s1 && s0 != s2,
+            "stripes must hold for 2 rows then flip: {s0:?} {s1:?} {s2:?}"
+        );
+        assert!(
+            s0[0] == 0.0 || s0[0] == 1.0,
+            "stripes must be black/white: {s0:?}"
+        );
         // Right bottom: 8px checker — neighbors 8 px apart in x differ.
         let c0 = test_card_pixel(W - 80, H - 10, W, H);
         let c1 = test_card_pixel(W - 80 + 8, H - 10, W, H);
@@ -597,5 +663,4 @@ mod tests {
         let outside = test_card_pixel(W / 2, H / 2 - (H as f32 * 0.2) as u32, W, H);
         assert!(outside[0] < 0.9, "circle radius wrong: {outside:?}");
     }
-
 }

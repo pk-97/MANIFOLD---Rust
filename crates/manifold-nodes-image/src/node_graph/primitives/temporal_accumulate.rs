@@ -28,7 +28,9 @@
 
 use std::borrow::Cow;
 
-use manifold_gpu::{GpuBinding, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
+use manifold_gpu::{
+    GpuBinding, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
@@ -143,14 +145,32 @@ impl History {
 /// A periodic camera compares against the copy of the world it last saw.
 fn prev_depth_row(prev: &Camera, camera: &Camera) -> [f32; 4] {
     let offset = camera.previous_world_offset(prev.pos, prev.world_period);
-    let prev_pos = [prev.pos[0] - offset[0], prev.pos[1] - offset[1], prev.pos[2] - offset[2]];
+    let prev_pos = [
+        prev.pos[0] - offset[0],
+        prev.pos[1] - offset[1],
+        prev.pos[2] - offset[2],
+    ];
     let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     let f = prev.fwd;
-    let shift = [camera.pos[0] - prev_pos[0], camera.pos[1] - prev_pos[1], camera.pos[2] - prev_pos[2]];
-    [dot(camera.right, f), dot(camera.up, f), dot(camera.fwd, f), dot(shift, f)]
+    let shift = [
+        camera.pos[0] - prev_pos[0],
+        camera.pos[1] - prev_pos[1],
+        camera.pos[2] - prev_pos[2],
+    ];
+    [
+        dot(camera.right, f),
+        dot(camera.up, f),
+        dot(camera.fwd, f),
+        dot(shift, f),
+    ]
 }
 
-fn history_texture(device: &manifold_gpu::GpuDevice, width: u32, height: u32, label: &'static str) -> GpuTexture {
+fn history_texture(
+    device: &manifold_gpu::GpuDevice,
+    width: u32,
+    height: u32,
+    label: &'static str,
+) -> GpuTexture {
     device.create_texture(&GpuTextureDesc {
         width,
         height,
@@ -191,7 +211,10 @@ impl Primitive for TemporalAccumulate {
         if w == 0 || h == 0 {
             return;
         }
-        let camera = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
+        let camera = ctx
+            .inputs
+            .camera("camera")
+            .unwrap_or_else(Camera::default_perspective);
         let [fov_y, near, far] = derive_view_scalars(&camera);
         let (cold, prev_depth) = self.history.begin_frame(&camera, (w, h));
         let basis = |v: [f32; 3]| [v[0], v[1], v[2], 0.0];
@@ -213,30 +236,64 @@ impl Primitive for TemporalAccumulate {
         let gpu = ctx.gpu_encoder();
         let device = gpu.device;
         self.prepare_pipelines(device);
-        if self.textures.as_ref().is_none_or(|t| (t.width, t.height) != (w, h)) {
+        if self
+            .textures
+            .as_ref()
+            .is_none_or(|t| (t.width, t.height) != (w, h))
+        {
             self.textures = Some(HistoryTextures {
                 width: w,
                 height: h,
-                color: [0, 1].map(|_| history_texture(device, w, h, "node.temporal_accumulate.color")),
-                meta: [0, 1].map(|_| history_texture(device, w, h, "node.temporal_accumulate.meta")),
+                color: [0, 1]
+                    .map(|_| history_texture(device, w, h, "node.temporal_accumulate.color")),
+                meta: [0, 1]
+                    .map(|_| history_texture(device, w, h, "node.temporal_accumulate.meta")),
             });
         }
-        let (Some(pipeline), Some(textures)) = (self.pipeline.as_ref(), self.textures.as_ref()) else {
+        let (Some(pipeline), Some(textures)) = (self.pipeline.as_ref(), self.textures.as_ref())
+        else {
             return;
         };
         let (write, read) = (self.history.written, self.history.written ^ 1);
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Texture { binding: 1, texture: in_tex },
-                GpuBinding::Texture { binding: 2, texture: depth_tex },
-                GpuBinding::Texture { binding: 3, texture: velocity_tex },
-                GpuBinding::Texture { binding: 4, texture: &textures.color[read] },
-                GpuBinding::Texture { binding: 5, texture: &textures.meta[read] },
-                GpuBinding::Texture { binding: 6, texture: out_tex },
-                GpuBinding::Texture { binding: 7, texture: &textures.color[write] },
-                GpuBinding::Texture { binding: 8, texture: &textures.meta[write] },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: in_tex,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: depth_tex,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: velocity_tex,
+                },
+                GpuBinding::Texture {
+                    binding: 4,
+                    texture: &textures.color[read],
+                },
+                GpuBinding::Texture {
+                    binding: 5,
+                    texture: &textures.meta[read],
+                },
+                GpuBinding::Texture {
+                    binding: 6,
+                    texture: out_tex,
+                },
+                GpuBinding::Texture {
+                    binding: 7,
+                    texture: &textures.color[write],
+                },
+                GpuBinding::Texture {
+                    binding: 8,
+                    texture: &textures.meta[write],
+                },
             ],
             [w.div_ceil(8), h.div_ceil(8), 1],
             "node.temporal_accumulate",
@@ -262,11 +319,20 @@ mod tests {
         let start = orbit(0.0, 10.0);
         let dims = (64, 32);
         let step = |history: &mut History, cam: &Camera, dims| history.begin_frame(cam, dims).0;
-        assert!(step(&mut history, &start, dims), "first frame has no history");
+        assert!(
+            step(&mut history, &start, dims),
+            "first frame has no history"
+        );
         assert!(!step(&mut history, &start, dims));
         let moved = orbit(0.2, 9.0);
-        assert!(!step(&mut history, &moved, dims), "camera motion keeps history");
-        assert!(!step(&mut history, &start, dims), "a loop point keeps history");
+        assert!(
+            !step(&mut history, &moved, dims),
+            "camera motion keeps history"
+        );
+        assert!(
+            !step(&mut history, &start, dims),
+            "a loop point keeps history"
+        );
 
         let mut cut = moved;
         cut.shot = 7;
@@ -275,7 +341,10 @@ mod tests {
         assert!(step(&mut history, &cut, (128, 64)), "a resize starts over");
         assert!(!step(&mut history, &cut, (128, 64)));
         history.cleared = true;
-        assert!(step(&mut history, &cut, (128, 64)), "clear_state starts over");
+        assert!(
+            step(&mut history, &cut, (128, 64)),
+            "clear_state starts over"
+        );
         assert!(!step(&mut history, &cut, (128, 64)));
     }
 
@@ -288,13 +357,30 @@ mod tests {
         let row = prev_depth_row(&prev, &cam);
         let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
         for world in [[0.0, 0.0, 0.0], [1.0, 0.5, -2.0], [-3.0, 0.2, 1.5]] {
-            let rel = [world[0] - cam.pos[0], world[1] - cam.pos[1], world[2] - cam.pos[2]];
+            let rel = [
+                world[0] - cam.pos[0],
+                world[1] - cam.pos[1],
+                world[2] - cam.pos[2],
+            ];
             let v = [dot(rel, cam.right), dot(rel, cam.up), dot(rel, cam.fwd)];
-            let expected = dot([world[0] - prev.pos[0], world[1] - prev.pos[1], world[2] - prev.pos[2]], prev.fwd);
+            let expected = dot(
+                [
+                    world[0] - prev.pos[0],
+                    world[1] - prev.pos[1],
+                    world[2] - prev.pos[2],
+                ],
+                prev.fwd,
+            );
             let got = dot([row[0], row[1], row[2]], v) + row[3];
-            assert!((got - expected).abs() < 1e-4, "{world:?}: {got} vs {expected}");
+            assert!(
+                (got - expected).abs() < 1e-4,
+                "{world:?}: {got} vs {expected}"
+            );
         }
-        assert_eq!(prev_depth_row(&cam, &cam).map(|x| (x * 1e5).round() / 1e5), [0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(
+            prev_depth_row(&cam, &cam).map(|x| (x * 1e5).round() / 1e5),
+            [0.0, 0.0, 1.0, 0.0]
+        );
     }
 }
 
@@ -305,7 +391,10 @@ mod gpu_tests {
     //! dropped at once.
     use half::f16;
 
-    use manifold_gpu::{GpuBinding, GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
+    use manifold_gpu::{
+        GpuBinding, GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
+        GpuTextureUsage,
+    };
     use manifold_node_engine::gpu::render_target::RenderTarget;
 
     use super::{Uniforms, history_texture, shader_source};
@@ -314,18 +403,28 @@ mod gpu_tests {
     const H: u32 = 8;
 
     fn upload(device: &GpuDevice, value: impl Fn(u32, u32) -> [f32; 4]) -> GpuTexture {
-        let px: Vec<f16> = (0..H).flat_map(|y| (0..W).map(move |x| (x, y))).flat_map(|(x, y)| value(x, y).map(f16::from_f32)).collect();
+        let px: Vec<f16> = (0..H)
+            .flat_map(|y| (0..W).map(move |x| (x, y)))
+            .flat_map(|(x, y)| value(x, y).map(f16::from_f32))
+            .collect();
         let tex = device.create_texture(&GpuTextureDesc {
             width: W,
             height: H,
             depth: 1,
             format: GpuTextureFormat::Rgba16Float,
             dimension: GpuTextureDimension::D2,
-            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
+            usage: GpuTextureUsage::CPU_UPLOAD
+                | GpuTextureUsage::SHADER_READ
+                | GpuTextureUsage::COPY_SRC,
             label: "temporal-accumulate-input",
             mip_levels: 1,
         });
-        let bytes = unsafe { std::slice::from_raw_parts(px.as_ptr().cast::<u8>(), std::mem::size_of_val(px.as_slice())) };
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                px.as_ptr().cast::<u8>(),
+                std::mem::size_of_val(px.as_slice()),
+            )
+        };
         device.upload_texture(&tex, bytes);
         tex
     }
@@ -337,8 +436,11 @@ mod gpu_tests {
         enc.copy_texture_to_buffer(tex, &readback, W, H, bytes_per_row);
         enc.commit_and_wait_completed();
         let ptr = readback.mapped_ptr().expect("shared readback buffer");
-        let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (W * H * 4) as usize) };
-        (0..(W * H) as usize).map(|i| f16::from_bits(halves[i * 4]).to_f32()).collect()
+        let halves: &[u16] =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (W * H * 4) as usize) };
+        (0..(W * H) as usize)
+            .map(|i| f16::from_bits(halves[i * 4]).to_f32())
+            .collect()
     }
 
     struct Rig {
@@ -354,12 +456,27 @@ mod gpu_tests {
     impl Rig {
         fn new() -> Self {
             let device = manifold_gpu::testkit::test_device();
-            let pipeline = device.create_compute_pipeline(&shader_source(), "cs_main", "temporal-accumulate");
+            let pipeline =
+                device.create_compute_pipeline(&shader_source(), "cs_main", "temporal-accumulate");
             let velocity = upload(&device, |_, _| [0.0; 4]);
             let color = [0, 1].map(|_| history_texture(&device, W, H, "history-color"));
             let meta = [0, 1].map(|_| history_texture(&device, W, H, "history-meta"));
-            let out = RenderTarget::new(&device, W, H, GpuTextureFormat::Rgba16Float, "temporal-accumulate-out");
-            Self { device, pipeline, velocity, color, meta, out, frame: 0 }
+            let out = RenderTarget::new(
+                &device,
+                W,
+                H,
+                GpuTextureFormat::Rgba16Float,
+                "temporal-accumulate-out",
+            );
+            Self {
+                device,
+                pipeline,
+                velocity,
+                color,
+                meta,
+                out,
+                frame: 0,
+            }
         }
 
         /// One frame on a still camera; returns `out.r` per texel.
@@ -383,15 +500,42 @@ mod gpu_tests {
             enc.dispatch_compute(
                 &self.pipeline,
                 &[
-                    GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                    GpuBinding::Texture { binding: 1, texture: input },
-                    GpuBinding::Texture { binding: 2, texture: depth },
-                    GpuBinding::Texture { binding: 3, texture: &self.velocity },
-                    GpuBinding::Texture { binding: 4, texture: &self.color[read] },
-                    GpuBinding::Texture { binding: 5, texture: &self.meta[read] },
-                    GpuBinding::Texture { binding: 6, texture: &self.out.texture },
-                    GpuBinding::Texture { binding: 7, texture: &self.color[write] },
-                    GpuBinding::Texture { binding: 8, texture: &self.meta[write] },
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: input,
+                    },
+                    GpuBinding::Texture {
+                        binding: 2,
+                        texture: depth,
+                    },
+                    GpuBinding::Texture {
+                        binding: 3,
+                        texture: &self.velocity,
+                    },
+                    GpuBinding::Texture {
+                        binding: 4,
+                        texture: &self.color[read],
+                    },
+                    GpuBinding::Texture {
+                        binding: 5,
+                        texture: &self.meta[read],
+                    },
+                    GpuBinding::Texture {
+                        binding: 6,
+                        texture: &self.out.texture,
+                    },
+                    GpuBinding::Texture {
+                        binding: 7,
+                        texture: &self.color[write],
+                    },
+                    GpuBinding::Texture {
+                        binding: 8,
+                        texture: &self.meta[write],
+                    },
                 ],
                 [W.div_ceil(8), H.div_ceil(8), 1],
                 "temporal-accumulate",
@@ -406,7 +550,11 @@ mod gpu_tests {
     /// noise that moves every frame.
     fn checker(device: &GpuDevice, phase: u32) -> GpuTexture {
         upload(device, move |x, y| {
-            let v = if (x + y + phase).is_multiple_of(2) { 0.2 } else { 0.8 };
+            let v = if (x + y + phase).is_multiple_of(2) {
+                0.2
+            } else {
+                0.8
+            };
             [v, v, v, 1.0]
         })
     }
@@ -417,27 +565,42 @@ mod gpu_tests {
         let near_wall = upload(&rig.device, |_, _| [0.01; 4]);
         let frames = [checker(&rig.device, 0), checker(&rig.device, 1)];
         let first = rig.step(&frames[0], &near_wall);
-        assert!((first[0] - 0.2).abs() < 1e-3 && (first[1] - 0.8).abs() < 1e-3, "no history: out is in, got {:?}", &first[..2]);
+        assert!(
+            (first[0] - 0.2).abs() < 1e-3 && (first[1] - 0.8).abs() < 1e-3,
+            "no history: out is in, got {:?}",
+            &first[..2]
+        );
         let mut out = first;
         for i in 1..40 {
             out = rig.step(&frames[i % 2], &near_wall);
         }
         for (i, v) in out.iter().enumerate() {
-            assert!((v - 0.5).abs() < 0.06, "texel {i}: flipping noise must average to about 0.5, got {v}");
+            assert!(
+                (v - 0.5).abs() < 0.06,
+                "texel {i}: flipping noise must average to about 0.5, got {v}"
+            );
         }
 
         // The left half is now a surface ten times farther away: its history
         // belongs to something else and is dropped; the right half keeps it.
-        let split = upload(&rig.device, |x, _| [if x < W / 2 { 0.001 } else { 0.01 }; 4]);
+        let split = upload(&rig.device, |x, _| {
+            [if x < W / 2 { 0.001 } else { 0.01 }; 4]
+        });
         let out = rig.step(&frames[0], &split);
         for y in 0..H {
             for x in 0..W {
                 let v = out[(y * W + x) as usize];
                 let input = if (x + y) % 2 == 0 { 0.2 } else { 0.8 };
                 if x < W / 2 - 1 {
-                    assert!((v - input).abs() < 1e-3, "({x},{y}) moved surface must restart from this frame: {v} vs {input}");
+                    assert!(
+                        (v - input).abs() < 1e-3,
+                        "({x},{y}) moved surface must restart from this frame: {v} vs {input}"
+                    );
                 } else if x > W / 2 {
-                    assert!((v - 0.5).abs() < 0.12, "({x},{y}) unchanged surface keeps its average: {v}");
+                    assert!(
+                        (v - 0.5).abs() < 0.12,
+                        "({x},{y}) unchanged surface keeps its average: {v}"
+                    );
                 }
             }
         }
@@ -462,7 +625,10 @@ mod gpu_tests {
             for x in [W / 2 - 1, W / 2] {
                 let v = out[(y * W + x) as usize];
                 let input = if (x + y) % 2 == 0 { 0.2 } else { 0.8 };
-                assert!((v - input).abs() < 1e-3, "({x},{y}) a turned surface must restart from this frame: {v} vs {input}");
+                assert!(
+                    (v - input).abs() < 1e-3,
+                    "({x},{y}) a turned surface must restart from this frame: {v} vs {input}"
+                );
             }
         }
     }

@@ -164,16 +164,20 @@ pub(crate) fn apply_update(
             match picked.item.as_ref().filter(|item| doc.find(item).is_some()) {
                 Some(item) => {
                     reveal(ui, doc, layer_id, item);
-                    let picked_item = manifold_ui::panels::scene_setup_panel::SceneSelection::Item(item.clone());
+                    let picked_item =
+                        manifold_ui::panels::scene_setup_panel::SceneSelection::Item(item.clone());
                     if picked.pick.extend {
                         ui.scene_setup_panel.toggle_selected(layer_id, picked_item);
                     } else {
-                        ui.scene_setup_panel.select_items(layer_id.clone(), vec![picked_item]);
+                        ui.scene_setup_panel
+                            .select_items(layer_id.clone(), vec![picked_item]);
                     }
                 }
                 // Empty space clears the selection, as in Blender; Shift on
                 // empty space keeps it.
-                None if !picked.pick.extend => ui.scene_setup_panel.clear_selected(layer_id.clone()),
+                None if !picked.pick.extend => {
+                    ui.scene_setup_panel.clear_selected(layer_id.clone())
+                }
                 None => {}
             }
         }
@@ -205,7 +209,12 @@ pub(crate) fn select_import_root(
 }
 
 /// Unfold every group above `item`, so its row shows in the tree.
-fn reveal(ui: &mut crate::ui_root::UIRoot, doc: &manifold_core::scene_doc::SceneDoc, layer_id: &LayerId, item: &ItemId) {
+fn reveal(
+    ui: &mut crate::ui_root::UIRoot,
+    doc: &manifold_core::scene_doc::SceneDoc,
+    layer_id: &LayerId,
+    item: &ItemId,
+) {
     let mut parents = Vec::new();
     doc.walk(|found, ancestors| {
         if &found.id == item {

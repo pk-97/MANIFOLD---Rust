@@ -23,18 +23,18 @@
 //! same Reinhard-tonemapped, straight-alpha-over-black PNG convention the
 //! save-time thumbnail path uses (linear HDR graph output → viewable PNG).
 
-use std::path::PathBuf;
 use manifold_nodes as _;
+use std::path::PathBuf;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::GpuDevice;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::headless_readback::{readback_raw_halves, readback_to_srgb_png};
-use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
-use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 struct Args {
     preset: String,
@@ -117,7 +117,11 @@ fn parse_args() -> Result<Args, String> {
                     let (f, rest) = value
                         .split_once(':')
                         .ok_or_else(|| format!("--string-at wants FRAME:key=value, got {value}"))?;
-                    (f.parse().map_err(|e| format!("bad frame in {value}: {e}"))?, rest)
+                    (
+                        f.parse()
+                            .map_err(|e| format!("bad frame in {value}: {e}"))?,
+                        rest,
+                    )
                 } else {
                     (0, value.as_str())
                 };
@@ -139,7 +143,8 @@ fn with_modifier(def: &EffectGraphDef, name: &str, index: usize) -> EffectGraphD
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("assets/scene-modifier-presets")
         .join(format!("{name}.json"));
-    let source = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let source =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let recipe: EffectGraphDef = serde_json::from_str(&source).expect("parse modifier JSON");
     let scene = def
         .nodes
@@ -148,14 +153,15 @@ fn with_modifier(def: &EffectGraphDef, name: &str, index: usize) -> EffectGraphD
         .expect("--add-modifier needs a top-level render scene");
     let scene = scene.node_id.clone();
     let id = manifold_core::NodeId::new(format!("render-{name}-{index}"));
-    let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
-        def,
-        &recipe,
-        id,
-        scene,
-        SceneTargetSelection::AllObjects,
-    )
-    .unwrap_or_else(|error| panic!("{name} prepares on every object: {error}"));
+    let instance =
+        manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+            def,
+            &recipe,
+            id,
+            scene,
+            SceneTargetSelection::AllObjects,
+        )
+        .unwrap_or_else(|error| panic!("{name} prepares on every object: {error}"));
     manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(def, instance)
         .unwrap_or_else(|error| panic!("{name} attaches: {error}"))
 }
@@ -215,13 +221,7 @@ fn main() {
     )
     .expect("generator build failed");
 
-    let target = RenderTarget::new(
-        &device,
-        args.width,
-        args.height,
-        format,
-        "look-dev-target",
-    );
+    let target = RenderTarget::new(&device, args.width, args.height, format, "look-dev-target");
 
     // BUG-117: async-loading primitives (large glTF, image_folder, DNN
     // plugins) leave the pre-bound output untouched until their background
@@ -240,7 +240,11 @@ fn main() {
     let mut stable_count = 0u32;
     let mut converged = false;
     for frame in 0..max_frames {
-        let time = if args.hold_time { 0.0 } else { frame as f64 * DT as f64 };
+        let time = if args.hold_time {
+            0.0
+        } else {
+            frame as f64 * DT as f64
+        };
         let ctx = PresetContext {
             time,
             beat: time * 2.0, // 120 bpm
@@ -308,5 +312,11 @@ fn main() {
     // — never a local Reinhard implementation here.
     let png = readback_to_srgb_png(&device, &target.texture, args.width, args.height);
     std::fs::write(&args.out, &png).unwrap_or_else(|e| panic!("write {}: {e}", args.out.display()));
-    println!("OK {} ({}x{}, {} frames)", args.out.display(), args.width, args.height, args.frames);
+    println!(
+        "OK {} ({}x{}, {} frames)",
+        args.out.display(),
+        args.width,
+        args.height,
+        args.frames
+    );
 }

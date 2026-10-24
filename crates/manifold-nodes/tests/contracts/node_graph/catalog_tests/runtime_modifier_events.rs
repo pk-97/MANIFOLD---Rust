@@ -181,9 +181,8 @@ fn control_runtime_for(
     owner: EffectGraphDef,
 ) -> (PresetRuntime, EffectGraphDef, Vec<SceneModifierEventRoute>) {
     let registry = PrimitiveRegistry::with_builtin();
-    let prepared =
-        manifold_node_engine::load::expand::prepare_scene_modifiers(&owner, &registry)
-            .expect("canonical event host prepares");
+    let prepared = manifold_node_engine::load::expand::prepare_scene_modifiers(&owner, &registry)
+        .expect("canonical event host prepares");
     let routes = prepared.event_routes.clone();
     let control = extract_control_graph(&prepared.def, &routes);
     let mut runtime = PresetRuntime::from_def_for_render(control, &registry, None, false)
@@ -396,8 +395,7 @@ fn scene_modifier_event_runtime_loads_canonical_in_both_modes() {
     let owner = canonical_owner();
     let registry = PrimitiveRegistry::with_builtin();
     let prepared =
-        manifold_node_engine::load::expand::prepare_scene_modifiers(&owner, &registry)
-            .unwrap();
+        manifold_node_engine::load::expand::prepare_scene_modifiers(&owner, &registry).unwrap();
     for fused in [false, true] {
         let mut runtime =
             PresetRuntime::from_def_for_render(owner.clone(), &registry, None, fused).unwrap();
@@ -423,7 +421,9 @@ fn scene_modifier_event_runtime_loads_canonical_in_both_modes() {
             };
             assert_eq!(
                 runtime.graph.get_node(id).unwrap().params.get("value"),
-                Some(&manifold_node_engine::parameters::ParamValue::Float(expected))
+                Some(&manifold_node_engine::parameters::ParamValue::Float(
+                    expected
+                ))
             );
         }
     }

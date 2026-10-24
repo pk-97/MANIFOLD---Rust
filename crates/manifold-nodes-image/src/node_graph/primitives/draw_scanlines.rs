@@ -4,13 +4,15 @@
 //! not a per-object marker), so it has no skip contract. Math ported
 //! verbatim from the Blob Track HUD's `scanline` wgsl_compute kernel.
 
-use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
+use std::borrow::Cow;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::primitives::standalone_pipeline::{
+    dispatch_standalone_2d, standalone_pipeline,
+};
 
 /// Generated-codegen uniform layout: PARAMS order — `color` (Color param → 4
 /// consecutive f32 fields, reassembled as `vec4<f32>` at the body call
@@ -118,7 +120,13 @@ impl Primitive for DrawScanlines {
         // Uniform layout matches the generated Params struct: PARAMS order
         // (color → vec4, alpha, period_px, intensity) — 7 header words + 1
         // pad = 8 words.
-        let uniforms = ScanlinesUniforms { color, alpha, period_px, intensity, _pad0: 0 };
+        let uniforms = ScanlinesUniforms {
+            color,
+            alpha,
+            period_px,
+            intensity,
+            _pad0: 0,
+        };
 
         // Bindings match the generated standalone layout: uniform(0),
         // texture input `in`(1), sampler(2), output(3) — no array input.
@@ -133,4 +141,3 @@ impl Primitive for DrawScanlines {
         );
     }
 }
-

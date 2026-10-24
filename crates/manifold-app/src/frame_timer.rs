@@ -211,7 +211,9 @@ impl FrameTimer {
     fn should_tick_at(&self, now: Instant) -> bool {
         match &self.grid {
             Some(grid) => now >= grid.next_deadline(),
-            None => now.saturating_duration_since(self.last_tick_time) >= self.target_frame_duration,
+            None => {
+                now.saturating_duration_since(self.last_tick_time) >= self.target_frame_duration
+            }
         }
     }
 
@@ -219,8 +221,12 @@ impl FrameTimer {
     /// Returns Duration::ZERO if already past the deadline.
     pub fn time_until_next_tick(&self) -> Duration {
         match &self.grid {
-            Some(grid) => grid.next_deadline().saturating_duration_since(Instant::now()),
-            None => self.target_frame_duration.saturating_sub(self.last_tick_time.elapsed()),
+            Some(grid) => grid
+                .next_deadline()
+                .saturating_duration_since(Instant::now()),
+            None => self
+                .target_frame_duration
+                .saturating_sub(self.last_tick_time.elapsed()),
         }
     }
 
@@ -448,7 +454,9 @@ impl FrameTimer {
     /// Wall bookkeeping shared by both consume paths: returns the wall
     /// interval and the free-running dt (fixed when `frame_clocked`).
     fn record_tick(&mut self, now: Instant) -> (f64, f64) {
-        let wall_dt = now.saturating_duration_since(self.last_tick_time).as_secs_f64();
+        let wall_dt = now
+            .saturating_duration_since(self.last_tick_time)
+            .as_secs_f64();
         #[cfg(any(feature = "profiling", test))]
         {
             self.last_wall_interval = self.has_previous_tick.then_some(wall_dt);
@@ -748,13 +756,22 @@ mod tests {
         let late = after(anchor, 1.4, 60.0);
         let ticked = grid.consume_frames_at(late);
         assert_eq!(ticked.frames, 1);
-        assert_eq!(ticked.wall_dt, Seconds(late.duration_since(anchor).as_secs_f64()));
-        assert_eq!(grid.grid.as_ref().unwrap().next_deadline(), grid.grid.as_ref().unwrap().deadline(2));
+        assert_eq!(
+            ticked.wall_dt,
+            Seconds(late.duration_since(anchor).as_secs_f64())
+        );
+        assert_eq!(
+            grid.grid.as_ref().unwrap().next_deadline(),
+            grid.grid.as_ref().unwrap().deadline(2)
+        );
 
         let mut ui = FrameTimer::new(60.0);
         ui.last_tick_time = anchor;
         ui.consume_tick_at(late);
-        assert_eq!(ui.last_tick_time, late, "the UI timer's next deadline is one period after this tick");
+        assert_eq!(
+            ui.last_tick_time, late,
+            "the UI timer's next deadline is one period after this tick"
+        );
         assert!(ui.grid.is_none());
     }
 
@@ -765,16 +782,30 @@ mod tests {
         let mut timer = FrameTimer::new_grid(60.0);
         timer.reanchor_grid_at(Instant::now() - Duration::from_secs(20));
         timer.resume_after_load();
-        assert_eq!(timer.consume_frames_at(Instant::now()).frames, 1, "load time leaked into frames");
+        assert_eq!(
+            timer.consume_frames_at(Instant::now()).frames,
+            1,
+            "load time leaked into frames"
+        );
 
         timer.reanchor_grid_at(Instant::now() - Duration::from_secs(20));
         timer.set_target_fps(30.0);
-        assert_eq!(timer.consume_frames_at(Instant::now()).frames, 1, "old deadlines leaked into frames");
+        assert_eq!(
+            timer.consume_frames_at(Instant::now()).frames,
+            1,
+            "old deadlines leaked into frames"
+        );
         let grid = timer.grid.as_ref().unwrap();
-        assert_eq!(grid.deadline(1) - grid.deadline(0), Duration::from_secs_f64(1.0 / 30.0));
+        assert_eq!(
+            grid.deadline(1) - grid.deadline(0),
+            Duration::from_secs_f64(1.0 / 30.0)
+        );
         timer.reanchor_grid_at(Instant::now() - Duration::from_secs(20));
         timer.set_target_fps(30.0);
-        assert!(timer.consume_frames_at(Instant::now()).frames > 500, "an unchanged rate keeps the grid");
+        assert!(
+            timer.consume_frames_at(Instant::now()).frames > 500,
+            "an unchanged rate keeps the grid"
+        );
     }
 
     #[test]

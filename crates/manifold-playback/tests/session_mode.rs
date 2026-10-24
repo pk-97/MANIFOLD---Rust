@@ -31,11 +31,17 @@ fn make_project() -> Project {
     project
 }
 
-fn add_session_slot(project: &mut Project, layer_id: &LayerId, scene_id: &SceneId, seq: ClipSequence) {
-    project
-        .session
-        .scenes
-        .push(Scene { id: scene_id.clone(), name: "Scene".into(), color: None });
+fn add_session_slot(
+    project: &mut Project,
+    layer_id: &LayerId,
+    scene_id: &SceneId,
+    seq: ClipSequence,
+) {
+    project.session.scenes.push(Scene {
+        id: scene_id.clone(),
+        name: "Scene".into(),
+        color: None,
+    });
     project.session.slots.push(SessionSlot {
         layer_id: layer_id.clone(),
         scene_id: scene_id.clone(),
@@ -66,7 +72,10 @@ fn assert_elapsed(actual: Option<Beats>, expected: Option<f64>, context: &str) {
 fn one_clip_sequence(length_beats: f64, clip_id: &str) -> ClipSequence {
     let mut clip = TimelineClip::new_generator(Beats(0.0), Beats(length_beats));
     clip.id = ClipId::new(clip_id);
-    ClipSequence { length_beats: Beats(length_beats), clips: vec![clip] }
+    ClipSequence {
+        length_beats: Beats(length_beats),
+        clips: vec![clip],
+    }
 }
 
 #[test]
@@ -74,7 +83,12 @@ fn launch_slot_from_stopped_starts_transport_and_plays_immediately() {
     let mut project = make_project();
     let layer_id = project.timeline.layers[0].layer_id.clone();
     let scene_id = SceneId::new("scene-a");
-    add_session_slot(&mut project, &layer_id, &scene_id, one_clip_sequence(4.0, "c1"));
+    add_session_slot(
+        &mut project,
+        &layer_id,
+        &scene_id,
+        one_clip_sequence(4.0, "c1"),
+    );
 
     let mut engine = create_engine();
     engine.initialize(project);
@@ -86,7 +100,11 @@ fn launch_slot_from_stopped_starts_transport_and_plays_immediately() {
     // not a dead click waiting for a quantize boundary that will never arrive
     // while stopped.
     assert_eq!(engine.current_state(), PlaybackState::Playing);
-    assert_eq!(engine.active_clip_count(), 1, "session clip should be active immediately");
+    assert_eq!(
+        engine.active_clip_count(),
+        1,
+        "session clip should be active immediately"
+    );
     assert!(engine.session_runtime().is_playing_layer(&layer_id));
     assert!(engine.session_runtime().is_overridden(&layer_id));
 }
@@ -101,7 +119,12 @@ fn session_override_suppresses_timeline_clip_on_same_layer() {
     project.timeline.layers[0].clips.push(tl_clip);
 
     let scene_id = SceneId::new("scene-a");
-    add_session_slot(&mut project, &layer_id, &scene_id, one_clip_sequence(4.0, "session-clip"));
+    add_session_slot(
+        &mut project,
+        &layer_id,
+        &scene_id,
+        one_clip_sequence(4.0, "session-clip"),
+    );
 
     let mut engine = create_engine();
     engine.initialize(project);
@@ -118,7 +141,11 @@ fn session_override_suppresses_timeline_clip_on_same_layer() {
     engine.session_launch_slot(layer_id.clone(), scene_id.clone());
     engine.sync_clips_to_time();
 
-    assert_eq!(engine.active_clip_count(), 1, "exactly one clip active — session, not both");
+    assert_eq!(
+        engine.active_clip_count(),
+        1,
+        "exactly one clip active — session, not both"
+    );
 
     // Back to arrangement: the timeline clip resumes, session content stops.
     engine.session_back_to_arrangement(Some(layer_id.clone()));
@@ -132,7 +159,12 @@ fn transport_stop_clears_session_playback_but_not_override() {
     let mut project = make_project();
     let layer_id = project.timeline.layers[0].layer_id.clone();
     let scene_id = SceneId::new("scene-a");
-    add_session_slot(&mut project, &layer_id, &scene_id, one_clip_sequence(4.0, "c1"));
+    add_session_slot(
+        &mut project,
+        &layer_id,
+        &scene_id,
+        one_clip_sequence(4.0, "c1"),
+    );
 
     let mut engine = create_engine();
     engine.initialize(project);
@@ -157,7 +189,12 @@ fn back_to_arrangement_preserves_control_history_and_phase() {
     arrangement.id = ClipId::new("arrangement");
     project.timeline.layers[0].clips.push(arrangement);
     let scene = SceneId::new("session");
-    add_session_slot(&mut project, &layer_id, &scene, one_clip_sequence(6.0, "session-clip"));
+    add_session_slot(
+        &mut project,
+        &layer_id,
+        &scene,
+        one_clip_sequence(6.0, "session-clip"),
+    );
     let mut engine = create_engine();
     engine.initialize(project);
     engine.session_set_quantize(Beats::ZERO);
@@ -171,17 +208,41 @@ fn back_to_arrangement_preserves_control_history_and_phase() {
         engine.sync_clips_to_time();
         let controls = engine.clip_controls();
         for (beat, elapsed) in [(0.5, 0.5), (1.5, 0.5), (back.0, back.0)] {
-            assert_elapsed(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(beat)), Some(elapsed), &format!("at beat {beat}"));
+            assert_elapsed(
+                controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(beat)),
+                Some(elapsed),
+                &format!("at beat {beat}"),
+            );
         }
-        assert_eq!(controls.starts(&ClipTriggerSource::OwnLayer, Some(&layer_id)).iter()
-            .filter(|start| start.clip_id.as_str() == "arrangement").count(), 1);
+        assert_eq!(
+            controls
+                .starts(&ClipTriggerSource::OwnLayer, Some(&layer_id))
+                .iter()
+                .filter(|start| start.clip_id.as_str() == "arrangement")
+                .count(),
+            1
+        );
     }
     locate_beat(&mut engine, Beats(3.0));
     engine.session_launch_slot(layer_id.clone(), scene.clone());
     let back = locate_beat(&mut engine, Beats(4.0));
     engine.session_back_to_arrangement(Some(layer_id.clone()));
-    for (beat, elapsed) in [(0.5, 0.5), (1.5, 0.5), (2.75, 2.75), (3.5, 0.5), (back.0, back.0)] {
-        assert_elapsed(engine.clip_controls().elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(beat)), Some(elapsed), &format!("after second return at beat {beat}"));
+    for (beat, elapsed) in [
+        (0.5, 0.5),
+        (1.5, 0.5),
+        (2.75, 2.75),
+        (3.5, 0.5),
+        (back.0, back.0),
+    ] {
+        assert_elapsed(
+            engine.clip_controls().elapsed(
+                &ClipTriggerSource::OwnLayer,
+                Some(&layer_id),
+                Beats(beat),
+            ),
+            Some(elapsed),
+            &format!("after second return at beat {beat}"),
+        );
     }
     locate_beat(&mut engine, Beats(5.0));
     engine.session_launch_slot(layer_id.clone(), scene);
@@ -190,11 +251,29 @@ fn back_to_arrangement_preserves_control_history_and_phase() {
     let back = locate_beat(&mut engine, Beats(6.0));
     engine.session_back_to_arrangement(None);
     let controls = engine.clip_controls();
-    assert_elapsed(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(5.25)), Some(0.25), "5.25");
-    assert_elapsed(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(5.75)), None, "5.75");
-    assert_elapsed(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), back), Some(back.0), "at the return");
+    assert_elapsed(
+        controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(5.25)),
+        Some(0.25),
+        "5.25",
+    );
+    assert_elapsed(
+        controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(5.75)),
+        None,
+        "5.75",
+    );
+    assert_elapsed(
+        controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), back),
+        Some(back.0),
+        "at the return",
+    );
     engine.seek_to(Seconds(1.0));
-    assert_elapsed(engine.clip_controls().elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(2.0)), Some(2.0), "after seek");
+    assert_elapsed(
+        engine
+            .clip_controls()
+            .elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(2.0)),
+        Some(2.0),
+        "after seek",
+    );
 }
 
 #[test]
@@ -232,7 +311,10 @@ fn scene_launch_and_stop_matrix_end_to_end() {
     assert!(engine.session_runtime().is_playing_layer(&l0));
     assert_eq!(engine.session_runtime().playing_scene(&l0), Some(&scene_b));
     assert!(!engine.session_runtime().is_playing_layer(&l1));
-    assert!(engine.session_runtime().is_overridden(&l1), "l1 goes black, no arrangement fallback");
+    assert!(
+        engine.session_runtime().is_overridden(&l1),
+        "l1 goes black, no arrangement fallback"
+    );
 
     engine.session_stop_all();
     let next_bar = engine.current_beat() + Beats(4.0);
@@ -246,7 +328,12 @@ fn tick_does_not_panic_with_session_runtime_wired() {
     let mut project = make_project();
     let layer_id = project.timeline.layers[0].layer_id.clone();
     let scene_id = SceneId::new("scene-a");
-    add_session_slot(&mut project, &layer_id, &scene_id, one_clip_sequence(1.0, "c1"));
+    add_session_slot(
+        &mut project,
+        &layer_id,
+        &scene_id,
+        one_clip_sequence(1.0, "c1"),
+    );
 
     let mut engine = create_engine();
     engine.initialize(project);
@@ -265,5 +352,9 @@ fn tick_does_not_panic_with_session_runtime_wired() {
         let _ = engine.tick(ctx);
         realtime += dt;
     }
-    assert_eq!(engine.active_clip_count(), 1, "the looping session clip stays active across wraps");
+    assert_eq!(
+        engine.active_clip_count(),
+        1,
+        "the looping session clip stays active across wraps"
+    );
 }

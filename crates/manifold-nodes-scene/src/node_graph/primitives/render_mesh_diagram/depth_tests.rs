@@ -6,12 +6,14 @@
 //! is non-empty.
 
 use super::*;
-use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, readback_raw_halves, readback_srgb_rgba8};
-use manifold_node_engine::scene::camera::Camera;
 use manifold_gpu::{
-    GpuBinding, GpuLoadAction, GpuTextureDesc,
-    GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+    GpuBinding, GpuLoadAction, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
+    GpuTextureUsage,
 };
+use manifold_node_engine::gpu::headless_readback::{
+    encode_rgba8_png, readback_raw_halves, readback_srgb_rgba8,
+};
+use manifold_node_engine::scene::camera::Camera;
 
 const W: u32 = 128;
 const H: u32 = 128;
@@ -345,10 +347,18 @@ fn math_view_axes_follow_representative_faces_and_toggle_without_hiding_outlines
     let device = guard.arc();
     let camera = Camera::look_at([0.0, 0.0, 5.0], [0.0; 3], [0.0, 1.0, 0.0], 1.0, 0.05, 100.0);
     let target = manifold_node_engine::gpu::render_target::RenderTarget::new(
-        &device, W, H, GpuTextureFormat::Rgba16Float, "math-axes-proof",
+        &device,
+        W,
+        H,
+        GpuTextureFormat::Rgba16Float,
+        "math-axes-proof",
     );
     let msaa = device.create_texture_msaa_memoryless(
-        W, H, GpuTextureFormat::Rgba16Float, MSAA_SAMPLE_COUNT, "math-axes-proof",
+        W,
+        H,
+        GpuTextureFormat::Rgba16Float,
+        MSAA_SAMPLE_COUNT,
+        "math-axes-proof",
     );
     let far = texture_f32(&device, 0.0, "math-axes-far-depth");
     let sampler = device.create_sampler(&GpuSamplerDesc::default());
@@ -370,8 +380,16 @@ fn math_view_axes_follow_representative_faces_and_toggle_without_hiding_outlines
         let buffer = vertices_buffer(&device, &vertices);
         for occlusion in [0, 1] {
             let pipeline = device.create_render_pipeline_msaa(
-                SHADER, "vs_main", if occlusion == 0 { "fs_main" } else { "fs_depth_color" },
-                GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND), MSAA_SAMPLE_COUNT,
+                SHADER,
+                "vs_main",
+                if occlusion == 0 {
+                    "fs_main"
+                } else {
+                    "fs_depth_color"
+                },
+                GpuTextureFormat::Rgba16Float,
+                Some(DIAGRAM_BLEND),
+                MSAA_SAMPLE_COUNT,
                 "math-axes-proof",
             );
             for axes in [1, 0] {
@@ -380,38 +398,65 @@ fn math_view_axes_follow_representative_faces_and_toggle_without_hiding_outlines
                 u.radius = 2.0;
                 u.line_width = 1.0;
                 u.geometry_hue = 0.5;
-                u.model = super::super::render_scene::model_matrix([offset, 0.0, 0.0], [0.0; 3], [1.0; 3]);
+                u.model = super::super::render_scene::model_matrix(
+                    [offset, 0.0, 0.0],
+                    [0.0; 3],
+                    [1.0; 3],
+                );
                 let b = bindings(&u, &buffer, &far, &sampler);
                 let mut encoder = device.create_encoder("math-axes-proof");
                 encoder.draw_instanced_msaa(
-                    &pipeline, &msaa, &target.texture,
+                    &pipeline,
+                    &msaa,
+                    &target.texture,
                     if occlusion == 0 { &b[..6] } else { &b },
-                    18, 1 + 9 * 4 + 3 + 3 * 3, GpuLoadAction::Clear, "math-axes-proof",
+                    18,
+                    1 + 9 * 4 + 3 + 3 * 3,
+                    GpuLoadAction::Clear,
+                    "math-axes-proof",
                 );
                 encoder.commit_and_wait_completed();
                 let pixels = readback_srgb_rgba8(&device, &target.texture, W, H);
                 let red_near = |position| {
                     let p = camera.project_to_pixel(position, W, H).unwrap();
                     let (x, y) = (p.px.round() as i32, p.py.round() as i32);
-                    ((y - 2)..=(y + 2)).any(|py| ((x - 2)..=(x + 2)).any(|px| {
-                        if px < 0 || py < 0 || px >= W as i32 || py >= H as i32 { return false; }
-                        let i = ((py as u32 * W + px as u32) * 4) as usize;
-                        let c = &pixels[i..i + 3];
-                        c[0] > 100 && u16::from(c[0]) > u16::from(c[1]) * 3 / 2
-                            && u16::from(c[0]) > u16::from(c[2]) * 3 / 2
-                    }))
+                    ((y - 2)..=(y + 2)).any(|py| {
+                        ((x - 2)..=(x + 2)).any(|px| {
+                            if px < 0 || py < 0 || px >= W as i32 || py >= H as i32 {
+                                return false;
+                            }
+                            let i = ((py as u32 * W + px as u32) * 4) as usize;
+                            let c = &pixels[i..i + 3];
+                            c[0] > 100
+                                && u16::from(c[0]) > u16::from(c[1]) * 3 / 2
+                                && u16::from(c[0]) > u16::from(c[2]) * 3 / 2
+                        })
+                    })
                 };
                 for y in [-0.8, 0.0, 0.8] {
-                    assert_eq!(red_near([offset + 0.15, y, 0.0]), axes != 0,
-                        "representative frame missing or Axes Off ignored: object={object}, y={y}, depth={occlusion}");
+                    assert_eq!(
+                        red_near([offset + 0.15, y, 0.0]),
+                        axes != 0,
+                        "representative frame missing or Axes Off ignored: object={object}, y={y}, depth={occlusion}"
+                    );
                 }
-                assert!(!red_near([0.15, 1.8, 0.0]), "axes still attached to the shared first face");
-                assert!(pixels.chunks_exact(4).filter(|c| c[1] > 100 && c[2] > 100 && c[0] < 50).count() > 10,
-                    "Axes toggle must retain cyan fragment outlines");
+                assert!(
+                    !red_near([0.15, 1.8, 0.0]),
+                    "axes still attached to the shared first face"
+                );
+                assert!(
+                    pixels
+                        .chunks_exact(4)
+                        .filter(|c| c[1] > 100 && c[2] > 100 && c[0] < 50)
+                        .count()
+                        > 10,
+                    "Axes toggle must retain cyan fragment outlines"
+                );
                 if occlusion == 1 {
                     for y in 0..H as usize {
                         let destination = ((object * H as usize + y) * (W * 2) as usize
-                            + (1 - axes) as usize * W as usize) * 4;
+                            + (1 - axes) as usize * W as usize)
+                            * 4;
                         let source = y * W as usize * 4;
                         preview[destination..destination + W as usize * 4]
                             .copy_from_slice(&pixels[source..source + W as usize * 4]);
@@ -433,14 +478,27 @@ fn math_view_marks_grow_small_faces_and_keep_big_ones() {
     let device = guard.arc();
     let camera = Camera::look_at([0.0, 0.0, 5.0], [0.0; 3], [0.0, 1.0, 0.0], 1.0, 0.05, 100.0);
     let target = manifold_node_engine::gpu::render_target::RenderTarget::new(
-        &device, W, H, GpuTextureFormat::Rgba16Float, "math-mark-size",
+        &device,
+        W,
+        H,
+        GpuTextureFormat::Rgba16Float,
+        "math-mark-size",
     );
     let msaa = device.create_texture_msaa_memoryless(
-        W, H, GpuTextureFormat::Rgba16Float, MSAA_SAMPLE_COUNT, "math-mark-size",
+        W,
+        H,
+        GpuTextureFormat::Rgba16Float,
+        MSAA_SAMPLE_COUNT,
+        "math-mark-size",
     );
     let pipeline = device.create_render_pipeline_msaa(
-        SHADER, "vs_main", "fs_main", GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND),
-        MSAA_SAMPLE_COUNT, "math-mark-size",
+        SHADER,
+        "vs_main",
+        "fs_main",
+        GpuTextureFormat::Rgba16Float,
+        Some(DIAGRAM_BLEND),
+        MSAA_SAMPLE_COUNT,
+        "math-mark-size",
     );
     let far = texture_f32(&device, 0.0, "math-mark-size-depth");
     let sampler = device.create_sampler(&GpuSamplerDesc::default());
@@ -451,20 +509,35 @@ fn math_view_marks_grow_small_faces_and_keep_big_ones() {
     let minimum = radius * MARK_SIZE / 1.2;
     let draw = |scale: f32| {
         let buffer = vertices_buffer(&device, &face.map(|p| vertex(p.map(|c| c * scale))));
-        let u = DiagramUniforms { radius, geometry_hue: 0.5, ..uniforms(&camera, 1, 3, 0, 1.0) };
+        let u = DiagramUniforms {
+            radius,
+            geometry_hue: 0.5,
+            ..uniforms(&camera, 1, 3, 0, 1.0)
+        };
         let b = bindings(&u, &buffer, &far, &sampler);
         let mut encoder = device.create_encoder("math-mark-size");
-        encoder.draw_instanced_msaa(&pipeline, &msaa, &target.texture, &b[..6], 18, 2, GpuLoadAction::Clear, "math-mark-size");
+        encoder.draw_instanced_msaa(
+            &pipeline,
+            &msaa,
+            &target.texture,
+            &b[..6],
+            18,
+            2,
+            GpuLoadAction::Clear,
+            "math-mark-size",
+        );
         encoder.commit_and_wait_completed();
         readback_srgb_rgba8(&device, &target.texture, W, H)
     };
     let lit = |pixels: &[u8], point: [f32; 3]| {
         let p = camera.project_to_pixel(point, W, H).unwrap();
         let (x, y) = (p.px.round() as i32, p.py.round() as i32);
-        ((y - 1)..=(y + 1)).any(|py| ((x - 1)..=(x + 1)).any(|px| {
-            let i = ((py as u32 * W + px as u32) * 4) as usize;
-            pixels[i + 1] > 100 && pixels[i + 2] > 100
-        }))
+        ((y - 1)..=(y + 1)).any(|py| {
+            ((x - 1)..=(x + 1)).any(|px| {
+                let i = ((py as u32 * W + px as u32) * 4) as usize;
+                pixels[i + 1] > 100 && pixels[i + 2] > 100
+            })
+        })
     };
     // Bottom-edge and left-edge midpoints of `face` drawn at `scale`.
     let edges = |scale: f32| [[0.0, -0.6 * scale, 0.0], [-0.5 * scale, 0.3 * scale, 0.0]];
@@ -472,14 +545,26 @@ fn math_view_marks_grow_small_faces_and_keep_big_ones() {
     // A millimetre face grows to the minimum mark.
     let small = draw(0.001);
     for point in edges(minimum) {
-        assert!(lit(&small, point), "a small face grows to the minimum mark: {point:?} dark");
+        assert!(
+            lit(&small, point),
+            "a small face grows to the minimum mark: {point:?} dark"
+        );
     }
-    assert!(!lit(&small, [0.0; 3]), "the grown mark is an outline, not a dot");
+    assert!(
+        !lit(&small, [0.0; 3]),
+        "the grown mark is an outline, not a dot"
+    );
 
     // A face bigger than the minimum keeps its own corners.
     let big = draw(2.0);
     for point in edges(2.0) {
-        assert!(lit(&big, point), "a big face draws at its own size: {point:?} dark");
+        assert!(
+            lit(&big, point),
+            "a big face draws at its own size: {point:?} dark"
+        );
     }
-    assert!(!lit(&big, edges(minimum)[0]), "a big face never shrinks to the minimum mark");
+    assert!(
+        !lit(&big, edges(minimum)[0]),
+        "a big face never shrinks to the minimum mark"
+    );
 }

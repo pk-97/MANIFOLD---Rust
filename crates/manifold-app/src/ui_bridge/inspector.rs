@@ -32,9 +32,9 @@ mod scene_card_convergence_tests {
     use manifold_core::LayerId;
     use manifold_core::PresetTypeId;
     use manifold_core::effect_graph_def::ParamSpecDef;
-    use manifold_core::params::Param;
     use manifold_core::effects::ParameterDriver;
     use manifold_core::effects::PresetInstance;
+    use manifold_core::params::Param;
     use manifold_core::project::Project;
     use manifold_core::types::LayerType;
     use manifold_core::types::{BeatDivision, DriverWaveform};
@@ -142,12 +142,20 @@ mod scene_card_convergence_tests {
 
     fn material_colour_fixture() -> (Project, LayerId, [manifold_core::effects::ParamId; 3]) {
         let mut project = Project::default();
-        let index = project.timeline.add_layer("Material test", LayerType::Generator, PresetTypeId::SCENE);
+        let index =
+            project
+                .timeline
+                .add_layer("Material test", LayerType::Generator, PresetTypeId::SCENE);
         let layer_id = project.timeline.layers[index].layer_id.clone();
-        let mut edit = crate::scene_edit::add(&project, &layer_id, "material", None, &[]).expect("a material adds to the base scene");
+        let mut edit = crate::scene_edit::add(&project, &layer_id, "material", None, &[])
+            .expect("a material adds to the base scene");
         manifold_editing::command::Command::execute(&mut *edit.command, &mut project);
         let material = edit.select.expect("the add selects the new material");
-        let ids = ["color_r", "color_g", "color_b"].map(|name| manifold_core::effects::ParamId::from(manifold_core::scene_doc::param_id(&material, name)));
+        let ids = ["color_r", "color_g", "color_b"].map(|name| {
+            manifold_core::effects::ParamId::from(manifold_core::scene_doc::param_id(
+                &material, name,
+            ))
+        });
         (project, layer_id, ids)
     }
 
@@ -343,14 +351,28 @@ mod scene_card_convergence_tests {
             manifold_ui::GraphParamTarget::GeneratorOf(layer_id),
             ids[0].clone(),
         );
-        h.dispatch(&PanelAction::Scrub(value_ref.clone(), ScrubPhase::Begin), &mut project);
-        assert!(h.drain().iter().any(|c| matches!(c, ContentCommand::AutomationHold { held: true, .. })));
+        h.dispatch(
+            &PanelAction::Scrub(value_ref.clone(), ScrubPhase::Begin),
+            &mut project,
+        );
+        assert!(
+            h.drain()
+                .iter()
+                .any(|c| matches!(c, ContentCommand::AutomationHold { held: true, .. }))
+        );
 
         project.with_preset_graph_mut(&target, |inst| {
             let graph = inst.graph.as_mut().unwrap();
-            let source = graph.preset_metadata.as_ref().unwrap().bindings.iter()
+            let source = graph
+                .preset_metadata
+                .as_ref()
+                .unwrap()
+                .bindings
+                .iter()
                 .find_map(|b| match &b.target {
-                    BindingTarget::Node { node_id, .. } if b.id == ids[0].as_ref() => Some(node_id.clone()),
+                    BindingTarget::Node { node_id, .. } if b.id == ids[0].as_ref() => {
+                        Some(node_id.clone())
+                    }
                     _ => None,
                 })
                 .unwrap();
@@ -374,11 +396,20 @@ mod scene_card_convergence_tests {
             };
             graph.scene_modifiers.push(modifier);
         });
-        assert!(crate::graph_target::macro_parameter_lock_reason(&project, &target, &ids[0]).is_some());
+        assert!(
+            crate::graph_target::macro_parameter_lock_reason(&project, &target, &ids[0]).is_some()
+        );
 
-        h.dispatch(&PanelAction::Scrub(value_ref, ScrubPhase::Commit), &mut project);
+        h.dispatch(
+            &PanelAction::Scrub(value_ref, ScrubPhase::Commit),
+            &mut project,
+        );
         let commands = h.drain();
-        assert!(commands.iter().any(|c| matches!(c, ContentCommand::AutomationHold { held: false, .. })));
+        assert!(
+            commands
+                .iter()
+                .any(|c| matches!(c, ContentCommand::AutomationHold { held: false, .. }))
+        );
         assert!(h.scrub.active.is_none());
     }
 
@@ -450,11 +481,20 @@ mod scene_card_convergence_tests {
         use crate::ui_bridge::projection::cards::{SurfaceVisibility, gen_params_to_surface};
         use manifold_editing::service::EditingService;
         let mut project = Project::default();
-        project.timeline.add_layer("Lights", LayerType::Generator, PresetTypeId::SCENE);
+        project
+            .timeline
+            .add_layer("Lights", LayerType::Generator, PresetTypeId::SCENE);
         project.reconcile_param_manifests();
         // The user put the light faders on the card.
-        for param in project.timeline.layers[0].gen_params_mut().unwrap().params.iter_mut() {
-            if param.spec.scene.is_some_and(|scene| scene.card_label == manifold_core::scene_surface::CardLabel::ItemName) {
+        for param in project.timeline.layers[0]
+            .gen_params_mut()
+            .unwrap()
+            .params
+            .iter_mut()
+        {
+            if param.spec.scene.is_some_and(|scene| {
+                scene.card_label == manifold_core::scene_surface::CardLabel::ItemName
+            }) {
                 param.choices.pin = Some(manifold_core::scene_surface::CardPin::Shown);
             }
         }
@@ -471,16 +511,28 @@ mod scene_card_convergence_tests {
         .rows;
         let light_rows: Vec<_> = rows
             .iter()
-            .filter(|row| row.rgb_members.as_ref().is_some_and(|m| m.group == manifold_ui::ColourGroup::Light))
+            .filter(|row| {
+                row.rgb_members
+                    .as_ref()
+                    .is_some_and(|m| m.group == manifold_ui::ColourGroup::Light)
+            })
             .collect();
-        assert!(!light_rows.is_empty(), "a light's card row carries its colour swatch");
         assert!(
-            light_rows.iter().all(|row| row.spec.section.as_deref() == Some("Lighting")),
+            !light_rows.is_empty(),
+            "a light's card row carries its colour swatch"
+        );
+        assert!(
+            light_rows
+                .iter()
+                .all(|row| row.spec.section.as_deref() == Some("Lighting")),
             "only light faders carry a light swatch"
         );
         let members = light_rows[0].rgb_members.clone().unwrap();
         let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-        let baseline = members.ids.each_ref().map(|id| project.preset_instance(&target).unwrap().get_base_param(id));
+        let baseline = members
+            .ids
+            .each_ref()
+            .map(|id| project.preset_instance(&target).unwrap().get_base_param(id));
         assert_eq!(members.values, baseline);
 
         let mut h = Harness::new(Some(layer_id.clone()));
@@ -489,7 +541,10 @@ mod scene_card_convergence_tests {
             param_ids: members.ids.clone(),
             value: members.values,
         });
-        assert!(h.ui.try_open_dropdown(&open, None), "the swatch opens the colour menu");
+        assert!(
+            h.ui.try_open_dropdown(&open, None),
+            "the swatch opens the colour menu"
+        );
         assert!(h.ui.dropdown.is_open());
         let picked = manifold_ui::color::COLOR_GRID[3];
         let picked = [picked.r, picked.g, picked.b].map(|c| f32::from(c) / 255.0);
@@ -512,20 +567,33 @@ mod scene_card_convergence_tests {
                 ContentCommand::Execute(command) => {
                     assert_eq!(
                         command.touches(),
-                        manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Values])
+                        manifold_core::change::ChangeSet::of(&[
+                            manifold_core::change::Part::Values
+                        ])
                     );
                     service.execute(command, &mut content_project);
                     writes += 1;
                 }
-                ContentCommand::GraphEditRejected(reason) => panic!("the pick was refused: {reason}"),
+                ContentCommand::GraphEditRejected(reason) => {
+                    panic!("the pick was refused: {reason}")
+                }
                 _ => {}
             }
         }
         assert_eq!(writes, 1, "one pick is one undoable write");
-        let values = |p: &Project| members.ids.each_ref().map(|id| p.preset_instance(&target).unwrap().get_base_param(id));
+        let values = |p: &Project| {
+            members
+                .ids
+                .each_ref()
+                .map(|id| p.preset_instance(&target).unwrap().get_base_param(id))
+        };
         assert_eq!(values(&content_project), picked);
         assert!(service.undo(&mut content_project));
-        assert_eq!(values(&content_project), baseline, "one undo restores all three channels");
+        assert_eq!(
+            values(&content_project),
+            baseline,
+            "one undo restores all three channels"
+        );
     }
 
     /// Undo-race repro (param-feed regression, 2026-07-18): since
@@ -695,10 +763,11 @@ mod scene_card_convergence_tests {
                     match c {
                         ContentCommand::FireParameter { target, param_id } => {
                             self.service.execute(
-                                Box::new(manifold_editing::commands::effects::FireGraphParamCommand::new(
-                                    target,
-                                    param_id,
-                                )),
+                                Box::new(
+                                    manifold_editing::commands::effects::FireGraphParamCommand::new(
+                                        target, param_id,
+                                    ),
+                                ),
                                 &mut self.project,
                             );
                             if self.service.take_rejection().is_none() {
@@ -834,13 +903,19 @@ mod scene_card_convergence_tests {
             project: &mut Project,
             layer_id: &LayerId,
         ) -> manifold_core::effects::ParamId {
-            let real = manifold_core::scene_doc::param_id(&manifold_core::scene_doc::ItemId::new("cube"), "pos_x");
+            let real = manifold_core::scene_doc::param_id(
+                &manifold_core::scene_doc::ItemId::new("cube"),
+                "pos_x",
+            );
             let (_, layer) = project
                 .timeline
                 .find_layer_by_id_mut(layer_id)
                 .expect("layer resolves");
             let inst = layer.gen_params_mut().unwrap();
-            assert!(inst.params.contains(&real), "the base scene's cube has a position row");
+            assert!(
+                inst.params.contains(&real),
+                "the base scene's cube has a position row"
+            );
             if inst.drivers.as_ref().is_none_or(|ds| ds.is_empty()) {
                 inst.drivers = Some(vec![manifold_core::effects::ParameterDriver {
                     param_id: std::borrow::Cow::Owned(real.clone()),
@@ -981,7 +1056,11 @@ mod scene_card_convergence_tests {
                     .unwrap()
                     .is_empty()
             );
-            assert!(!h.selection.chosen_automation_params().contains_key(&layer_a));
+            assert!(
+                !h.selection
+                    .chosen_automation_params()
+                    .contains_key(&layer_a)
+            );
             assert!(h.ui.pending_automation_reveal.is_none());
             let mut commands = h.drain();
             assert_eq!(commands.len(), 2);
@@ -1049,7 +1128,12 @@ mod scene_card_convergence_tests {
                     .1
                     .is_collapsed
             );
-            project.timeline.find_layer_by_id_mut(&layer_id).unwrap().1.is_collapsed = true;
+            project
+                .timeline
+                .find_layer_by_id_mut(&layer_id)
+                .unwrap()
+                .1
+                .is_collapsed = true;
             let commands = h.drain();
             assert_eq!(commands.len(), 1);
             for command in commands {
@@ -2321,7 +2405,9 @@ mod scene_card_convergence_tests {
         /// roll: a Setup control, off the card until a modulator attaches.
         fn roll_rig() -> (Project, LayerId, manifold_core::effects::ParamId) {
             let mut project = Project::default();
-            project.timeline.add_layer("Scene", LayerType::Generator, PresetTypeId::SCENE);
+            project
+                .timeline
+                .add_layer("Scene", LayerType::Generator, PresetTypeId::SCENE);
             project.reconcile_param_manifests();
             with_send(&mut project);
             let layer_id = project.timeline.layers[0].layer_id.clone();
@@ -2330,7 +2416,9 @@ mod scene_card_convergence_tests {
                 .iter()
                 .find(|param| {
                     param.spec.name == "Roll"
-                        && param.spec.scene.is_some_and(|scene| scene.role == manifold_core::scene_surface::SurfaceRole::Setup)
+                        && param.spec.scene.is_some_and(|scene| {
+                            scene.role == manifold_core::scene_surface::SurfaceRole::Setup
+                        })
                 })
                 .map(|param| std::borrow::Cow::Owned(param.spec.id.clone()))
                 .expect("an orbit camera roll");
@@ -2364,7 +2452,10 @@ mod scene_card_convergence_tests {
         fn modulating_roll_keeps_it_on_the_card() {
             use manifold_ui::{ModulationAction::*, PanelAction::Modulation};
             let (project, layer_id, roll) = roll_rig();
-            assert!(!on_card(&project, &layer_id, &roll), "roll starts off the card");
+            assert!(
+                !on_card(&project, &layer_id, &roll),
+                "roll starts off the card"
+            );
             let mut side = ContentSide::new(&project);
             let mut h = Harness::new(Some(layer_id.clone()));
             let steps = [
@@ -2374,16 +2465,32 @@ mod scene_card_convergence_tests {
                 ("delete audio mod", AudioModRemove(gpt(), roll.clone())),
             ];
             for (label, action) in steps {
-                assert_eq!(land(&mut side, &mut h, Modulation(action)), 1, "{label}: one undo unit");
-                assert!(on_card(&side.project, &layer_id, &roll), "{label}: roll stays on the card");
+                assert_eq!(
+                    land(&mut side, &mut h, Modulation(action)),
+                    1,
+                    "{label}: one undo unit"
+                );
+                assert!(
+                    on_card(&side.project, &layer_id, &roll),
+                    "{label}: roll stays on the card"
+                );
             }
             let inst = gen_inst(&side.project, &layer_id);
-            assert!(inst.drivers.iter().flatten().all(|d| !d.enabled) && inst.find_audio_mod(&roll).is_none());
+            assert!(
+                inst.drivers.iter().flatten().all(|d| !d.enabled)
+                    && inst.find_audio_mod(&roll).is_none()
+            );
             for _ in 0..4 {
                 assert!(side.service.undo(&mut side.project));
             }
-            assert!(!gen_inst(&side.project, &layer_id).modulates(&roll), "undo removes every modulator");
-            assert!(!on_card(&side.project, &layer_id, &roll), "undo back to the start takes roll off the card");
+            assert!(
+                !gen_inst(&side.project, &layer_id).modulates(&roll),
+                "undo removes every modulator"
+            );
+            assert!(
+                !on_card(&side.project, &layer_id, &roll),
+                "undo back to the start takes roll off the card"
+            );
         }
 
         /// A macro mapped after the driver pinned roll has no undo of its
@@ -2397,10 +2504,20 @@ mod scene_card_convergence_tests {
             let arm = PanelAction::Modulation(ModulationAction::DriverToggle(gpt(), roll.clone()));
             assert_eq!(land(&mut side, &mut h, arm), 1);
             let map = PanelAction::Mapping(MappingAction::MapParamToMacro(gpt(), roll.clone(), 0));
-            assert_eq!(land(&mut side, &mut h, map), 0, "a macro mapping records no undo");
+            assert_eq!(
+                land(&mut side, &mut h, map),
+                0,
+                "a macro mapping records no undo"
+            );
             assert!(side.service.undo(&mut side.project));
-            assert!(!gen_inst(&side.project, &layer_id).modulates(&roll), "the driver is gone");
-            assert!(on_card(&side.project, &layer_id, &roll), "the macro keeps roll on the card");
+            assert!(
+                !gen_inst(&side.project, &layer_id).modulates(&roll),
+                "the driver is gone"
+            );
+            assert!(
+                on_card(&side.project, &layer_id, &roll),
+                "the macro keeps roll on the card"
+            );
         }
 
         /// A scene item's field id (`cube#physics`) is no manifest param:
@@ -2413,12 +2530,23 @@ mod scene_card_convergence_tests {
             let field = manifold_core::effects::ParamId::from("cube#physics");
             let map = PanelAction::Mapping(MappingAction::MapParamToMacro(gpt(), field.clone(), 0));
             land(&mut side, &mut h, map);
-            assert!(side.project.settings.macro_bank.slots[0].mappings.is_empty(), "a field id mapped to a macro");
+            assert!(
+                side.project.settings.macro_bank.slots[0]
+                    .mappings
+                    .is_empty(),
+                "a field id mapped to a macro"
+            );
             let mut local = side.project.clone();
-            let ableton = PanelAction::Mapping(MappingAction::MapParamToAbleton(gpt(), field, Default::default()));
+            let ableton = PanelAction::Mapping(MappingAction::MapParamToAbleton(
+                gpt(),
+                field,
+                Default::default(),
+            ));
             h.dispatch(&ableton, &mut local);
             assert!(
-                !h.drain().iter().any(|command| matches!(command, ContentCommand::AbletonMapParam { .. })),
+                !h.drain()
+                    .iter()
+                    .any(|command| matches!(command, ContentCommand::AbletonMapParam { .. })),
                 "a field id mapped to an Ableton macro"
             );
         }
@@ -2830,7 +2958,11 @@ mod scene_card_convergence_tests {
             let mut prefs = crate::user_prefs::UserPrefs::for_test();
             crate::ui_bridge::editing::dispatch_editing(
                 &EditingAction::ContextDeleteClip(clip_id.to_string()),
-                &mut crate::ui_bridge::ProjectRef::new(&mut rig.project, &mut Default::default(), &rig.tx),
+                &mut crate::ui_bridge::ProjectRef::new(
+                    &mut rig.project,
+                    &mut Default::default(),
+                    &rig.tx,
+                ),
                 &rig.tx,
                 &rig.content_state,
                 &mut ui,
@@ -2894,7 +3026,8 @@ mod scene_card_convergence_tests {
             ) -> (PresetInstance, manifold_core::effects::ParamId) {
                 let mut fx = PresetInstance::new(effect_type);
                 fx.init_defaults();
-                let pid: manifold_core::effects::ParamId = std::borrow::Cow::Owned("test.fire".to_string());
+                let pid: manifold_core::effects::ParamId =
+                    std::borrow::Cow::Owned("test.fire".to_string());
                 fx.params.push(Param::bundled(ParamSpecDef {
                     id: pid.to_string(),
                     name: "Fire".to_string(),
@@ -3026,7 +3159,9 @@ mod scene_card_convergence_tests {
             /// The card-side address for the effect the editor `target` names.
             fn fx_gpt(target: &manifold_core::GraphTarget) -> manifold_ui::GraphParamTarget {
                 match target {
-                    manifold_core::GraphTarget::Effect(id) => manifold_ui::GraphParamTarget::Effect(id.clone()),
+                    manifold_core::GraphTarget::Effect(id) => {
+                        manifold_ui::GraphParamTarget::Effect(id.clone())
+                    }
                     other => panic!("not an effect target: {other:?}"),
                 }
             }
@@ -3082,7 +3217,11 @@ mod scene_card_convergence_tests {
             fn driver_toggle_on_both_scopes() {
                 for (scope, layer) in [("master", false), ("layer", true)] {
                     let s = two_scopes("Bloom");
-                    let target = if layer { s.layer_target.clone() } else { s.master_target.clone() };
+                    let target = if layer {
+                        s.layer_target.clone()
+                    } else {
+                        s.master_target.clone()
+                    };
                     let pid = s.pid.clone();
                     let t = target.clone();
                     scope_atomic(
@@ -3096,7 +3235,9 @@ mod scene_card_convergence_tests {
                         move |p| {
                             p.preset_instance(&t)
                                 .and_then(|inst| inst.drivers.as_ref())
-                                .and_then(|ds| ds.iter().find(|d| d.param_id == pid).map(|d| d.enabled))
+                                .and_then(|ds| {
+                                    ds.iter().find(|d| d.param_id == pid).map(|d| d.enabled)
+                                })
                         },
                         None,
                         Some(true),
@@ -3117,15 +3258,21 @@ mod scene_card_convergence_tests {
                     s.project,
                     &s.layer_target,
                     PanelAction::Modulation(ModulationAction::AudioModToggle(
-                        fx_gpt(&target), pid.clone(),
+                        fx_gpt(&target),
+                        pid.clone(),
                     )),
                     move |project| {
-                        project.preset_instance(&target)
+                        project
+                            .preset_instance(&target)
                             .and_then(|instance| instance.find_audio_mod(pid.as_ref()))
                             .map(|m| (m.trigger_mode, m.source.send_id.is_empty(), m.enabled))
                     },
                     None,
-                    Some((Some(manifold_core::audio_trigger::TriggerFireMode::ClipEdge), true, true)),
+                    Some((
+                        Some(manifold_core::audio_trigger::TriggerFireMode::ClipEdge),
+                        true,
+                        true,
+                    )),
                 );
             }
 
@@ -3139,11 +3286,15 @@ mod scene_card_convergence_tests {
                     s.project,
                     &s.master_target,
                     PanelAction::Modulation(ModulationAction::AudioModToggle(
-                        fx_gpt(&target), pid.clone(),
+                        fx_gpt(&target),
+                        pid.clone(),
                     )),
-                    move |project| project.preset_instance(&target)
-                        .and_then(|instance| instance.find_audio_mod(pid.as_ref()))
-                        .map(|m| m.enabled),
+                    move |project| {
+                        project
+                            .preset_instance(&target)
+                            .and_then(|instance| instance.find_audio_mod(pid.as_ref()))
+                            .map(|m| m.enabled)
+                    },
                 );
             }
 
@@ -3151,7 +3302,11 @@ mod scene_card_convergence_tests {
             fn audio_mod_toggle_on_both_scopes() {
                 for (scope, layer) in [("master", false), ("layer", true)] {
                     let mut s = two_scopes("Bloom");
-                    let target = if layer { s.layer_target.clone() } else { s.master_target.clone() };
+                    let target = if layer {
+                        s.layer_target.clone()
+                    } else {
+                        s.master_target.clone()
+                    };
                     with_send(&mut s.project);
                     let pid = s.pid.clone();
                     let t = target.clone();
@@ -3230,7 +3385,11 @@ mod scene_card_convergence_tests {
             fn param_toggle_on_both_scopes() {
                 for (scope, layer) in [("master", false), ("layer", true)] {
                     let s = two_scopes("Bloom");
-                    let target = if layer { s.layer_target.clone() } else { s.master_target.clone() };
+                    let target = if layer {
+                        s.layer_target.clone()
+                    } else {
+                        s.master_target.clone()
+                    };
                     let pid = s.pid.clone();
                     let t = target.clone();
                     let before = s
@@ -3258,7 +3417,11 @@ mod scene_card_convergence_tests {
             fn param_fire_on_both_scopes() {
                 for (scope, layer) in [("master", false), ("layer", true)] {
                     let s = trigger_scopes("Bloom");
-                    let target = if layer { s.layer_target.clone() } else { s.master_target.clone() };
+                    let target = if layer {
+                        s.layer_target.clone()
+                    } else {
+                        s.master_target.clone()
+                    };
                     let pid = s.pid.clone();
                     let t = target.clone();
                     let before = s
@@ -3270,10 +3433,7 @@ mod scene_card_convergence_tests {
                         &format!("param_fire_{scope}"),
                         s.project,
                         &target,
-                        PanelAction::Params(ParamsAction::ParamFire(
-                            fx_gpt(&target),
-                            pid.clone(),
-                        )),
+                        PanelAction::Params(ParamsAction::ParamFire(fx_gpt(&target), pid.clone())),
                         move |p| p.preset_instance(&t).unwrap().get_base_param(pid.as_ref()),
                         before,
                         before + 1.0,
@@ -3289,34 +3449,48 @@ mod scene_card_convergence_tests {
                 let mut project = s.project;
                 let mut h = Harness::new(None);
                 let ui_snapshot = serde_json::to_value(&project).unwrap();
-                let action = PanelAction::Params(ParamsAction::ParamFire(
-                    fx_gpt(&target),
-                    pid.clone(),
-                ));
+                let action =
+                    PanelAction::Params(ParamsAction::ParamFire(fx_gpt(&target), pid.clone()));
                 h.dispatch_with_editor(&action, &mut project, Some(&target));
                 h.dispatch_with_editor(&action, &mut project, Some(&target));
-                assert_eq!(serde_json::to_value(&project).unwrap(), ui_snapshot, "ParamFire must not mutate the UI project");
+                assert_eq!(
+                    serde_json::to_value(&project).unwrap(),
+                    ui_snapshot,
+                    "ParamFire must not mutate the UI project"
+                );
 
                 let mut side = ContentSide::new(&project);
                 assert_eq!(side.apply(h.drain()), 2);
                 assert_eq!(
-                    side.project.preset_instance(&target).unwrap().get_base_param(pid.as_ref()),
+                    side.project
+                        .preset_instance(&target)
+                        .unwrap()
+                        .get_base_param(pid.as_ref()),
                     2.0
                 );
                 assert!(side.service.undo(&mut side.project));
                 assert_eq!(
-                    side.project.preset_instance(&target).unwrap().get_base_param(pid.as_ref()),
+                    side.project
+                        .preset_instance(&target)
+                        .unwrap()
+                        .get_base_param(pid.as_ref()),
                     1.0
                 );
                 assert!(side.service.undo(&mut side.project));
                 assert_eq!(
-                    side.project.preset_instance(&target).unwrap().get_base_param(pid.as_ref()),
+                    side.project
+                        .preset_instance(&target)
+                        .unwrap()
+                        .get_base_param(pid.as_ref()),
                     0.0
                 );
                 assert!(side.service.redo(&mut side.project));
                 assert!(side.service.redo(&mut side.project));
                 assert_eq!(
-                    side.project.preset_instance(&target).unwrap().get_base_param(pid.as_ref()),
+                    side.project
+                        .preset_instance(&target)
+                        .unwrap()
+                        .get_base_param(pid.as_ref()),
                     2.0
                 );
             }
@@ -3327,7 +3501,11 @@ mod scene_card_convergence_tests {
             fn driver_config_beat_div_on_both_scopes() {
                 for (scope, layer) in [("master", false), ("layer", true)] {
                     let mut s = two_scopes("Bloom");
-                    let target = if layer { s.layer_target.clone() } else { s.master_target.clone() };
+                    let target = if layer {
+                        s.layer_target.clone()
+                    } else {
+                        s.master_target.clone()
+                    };
                     arm_driver(&mut s.project, &target, &s.pid);
                     let pid = s.pid.clone();
                     let t = target.clone();
@@ -3359,7 +3537,11 @@ mod scene_card_convergence_tests {
             fn driver_config_frame_align_on_both_scopes() {
                 for (scope, layer) in [("master", false), ("layer", true)] {
                     let mut s = two_scopes("Bloom");
-                    let target = if layer { s.layer_target.clone() } else { s.master_target.clone() };
+                    let target = if layer {
+                        s.layer_target.clone()
+                    } else {
+                        s.master_target.clone()
+                    };
                     arm_driver(&mut s.project, &target, &s.pid);
                     let pid = s.pid.clone();
                     let t = target.clone();
@@ -3411,10 +3593,7 @@ mod scene_card_convergence_tests {
                 let mut side = ContentSide::new(&project);
                 let mut h = Harness::new(None);
                 h.dispatch_with_editor(
-                    &PanelAction::Mapping(MappingAction::AbletonInvertToggle(
-                        fx_gpt(target),
-                        pid,
-                    )),
+                    &PanelAction::Mapping(MappingAction::AbletonInvertToggle(fx_gpt(target), pid)),
                     &mut project,
                     Some(target),
                 );
@@ -3442,10 +3621,19 @@ mod scene_card_convergence_tests {
             fn ableton_invert_toggle_on_both_scopes() {
                 for (scope, layer) in [("master", false), ("layer", true)] {
                     let mut s = two_scopes("Bloom");
-                    let target = if layer { s.layer_target.clone() } else { s.master_target.clone() };
+                    let target = if layer {
+                        s.layer_target.clone()
+                    } else {
+                        s.master_target.clone()
+                    };
                     arm_ableton_mapping(&mut s.project, &target, &s.pid);
                     let pid = s.pid.clone();
-                    ableton_invert_case(&format!("ableton_invert_{scope}"), s.project, &target, pid);
+                    ableton_invert_case(
+                        &format!("ableton_invert_{scope}"),
+                        s.project,
+                        &target,
+                        pid,
+                    );
                 }
             }
         }
@@ -3550,10 +3738,16 @@ mod scene_card_convergence_tests {
                 ),
             ];
             for (name, active, read, want) in cases {
-                let scrub = ScrubState { active: Some(active) };
+                let scrub = ScrubState {
+                    active: Some(active),
+                };
                 let mut stomped = project.clone();
                 scrub.restore_dragged(&mut stomped);
-                assert_eq!(read(reshape(&stomped, &binding_id)), want, "{name} drag restored after stomp");
+                assert_eq!(
+                    read(reshape(&stomped, &binding_id)),
+                    want,
+                    "{name} drag restored after stomp"
+                );
             }
         }
     }

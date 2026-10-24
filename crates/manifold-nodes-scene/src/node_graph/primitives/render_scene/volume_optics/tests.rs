@@ -175,7 +175,12 @@ fn uniforms_for_camera(
         eye: [0.0, 0.0, 0.0, 1.0],
         parameters: [multiplier, 0.0, 0.0, 0.0],
         appearance: [1.0, 0.0, 0.0, 0.0],
-        instance_inner: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
+        instance_inner: [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
     }
 }
 
@@ -317,7 +322,10 @@ fn render_path_with_camera(
         &pipeline,
         &path,
         &bindings,
-        manifold_gpu::DrawCount::Direct { vertices: vertices.len() as u32, instances: 1 },
+        manifold_gpu::DrawCount::Direct {
+            vertices: vertices.len() as u32,
+            instances: 1,
+        },
         GpuLoadAction::Clear,
         "volume optics path",
     );
@@ -424,7 +432,13 @@ fn volume_path_matches_one_slab_thickness() {
 fn volume_path_excludes_air_between_separated_slabs() {
     let mut vertices = cube(0.2, 0.4);
     vertices.extend(cube(0.7, 0.9));
-    let value = render_path(&manifold_gpu::testkit::test_device(), &vertices, identity(), 1.0, None);
+    let value = render_path(
+        &manifold_gpu::testkit::test_device(),
+        &vertices,
+        identity(),
+        1.0,
+        None,
+    );
     assert!((value - 0.4).abs() < 0.00001, "path={value}");
 }
 

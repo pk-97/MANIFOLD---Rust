@@ -91,7 +91,9 @@ pub fn sheet_particles(
     let mut seeds = vec![[0.0; 3]; count];
     let again = sheet_particles_into(positions, phi, cells, dx, fill_threshold, &mut seeds)?;
     if again != count {
-        return Err(FluidError::input(format!("oracle sheet gave {count} then {again} seeds")));
+        return Err(FluidError::input(format!(
+            "oracle sheet gave {count} then {again} seeds"
+        )));
     }
     Ok(seeds)
 }
@@ -113,7 +115,9 @@ mod tests {
 
     fn field(phi_at_centre_y: impl Fn(f32) -> f32) -> Vec<f32> {
         let n = N as usize;
-        (0..n * n * n).map(|index| phi_at_centre_y(((index / n) % n) as f32 + 0.5)).collect()
+        (0..n * n * n)
+            .map(|index| phi_at_centre_y(((index / n) % n) as f32 + 0.5))
+            .collect()
     }
 
     /// Four markers per cell (a 2×2 lattice at sub-cell centres in x and z)
@@ -159,15 +163,25 @@ mod tests {
     #[test]
     fn oracle_sheet_seeds_fill_a_hole_in_a_thin_sheet() {
         let (markers, phi, removed) = holed_sheet();
-        assert_eq!(removed.len(), 12, "the hole removes the 12 markers within 1 m");
-        let seeds = sheet_particles(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD).expect("oracle");
+        assert_eq!(
+            removed.len(),
+            12,
+            "the hole removes the 12 markers within 1 m"
+        );
+        let seeds =
+            sheet_particles(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD).expect("oracle");
         assert!(!seeds.is_empty(), "a hole in a thin sheet seeds");
         for s in &seeds {
             assert!(
-                removed.iter().any(|r| (r[0] - s[0]).abs() < 1e-5 && (r[2] - s[2]).abs() < 1e-5),
+                removed
+                    .iter()
+                    .any(|r| (r[0] - s[0]).abs() < 1e-5 && (r[2] - s[2]).abs() < 1e-5),
                 "{s:?} is not over a removed marker"
             );
-            assert!((8.0..8.5).contains(&s[1]), "{s:?} is not projected into the sheet's sub-layer");
+            assert!(
+                (8.0..8.5).contains(&s[1]),
+                "{s:?} is not projected into the sheet's sub-layer"
+            );
         }
     }
 
@@ -181,15 +195,23 @@ mod tests {
     #[test]
     fn oracle_sheet_seeds_one_per_sub_cell() {
         let (markers, phi, _) = holed_sheet();
-        let strict = sheet_particles(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD).expect("oracle");
+        let strict =
+            sheet_particles(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD).expect("oracle");
         let loose = sheet_particles(&markers, &phi, CELLS, DX, 0.0).expect("oracle");
         assert!(!strict.is_empty());
         let column = |p: &[f32; 3]| [(p[0] / 0.5).floor() as i32, (p[2] / 0.5).floor() as i32];
         for s in &strict {
-            assert!((s[1] - 8.1375).abs() < 1e-4, "{s:?} is not the y 8.25 candidate");
+            assert!(
+                (s[1] - 8.1375).abs() < 1e-4,
+                "{s:?} is not the y 8.25 candidate"
+            );
             let here: Vec<_> = loose.iter().filter(|t| column(t) == column(s)).collect();
             assert_eq!(here.len(), 1, "column of {s:?} seeded {here:?}");
-            assert!((here[0][1] - 8.0125).abs() < 1e-4, "{:?} is not the y 7.75 candidate", here[0]);
+            assert!(
+                (here[0][1] - 8.0125).abs() < 1e-4,
+                "{:?} is not the y 7.75 candidate",
+                here[0]
+            );
         }
         let sub = |p: &[f32; 3]| p.map(|c| (c / 0.5).floor() as i32);
         for (a, s) in loose.iter().enumerate() {
@@ -207,7 +229,8 @@ mod tests {
     fn oracle_sheet_still_pool_seeds_nothing() {
         let phi = field(|y| y - 8.0);
         let markers = lattice(&[6.3, 7.3]);
-        let seeds = sheet_particles(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD).expect("oracle");
+        let seeds =
+            sheet_particles(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD).expect("oracle");
         assert!(seeds.is_empty(), "a still pool seeded {seeds:?}");
     }
 
@@ -219,25 +242,46 @@ mod tests {
     /// with -ffp-contract=on (build.rs pins it) on arm64, where every
     /// contraction is a hardware fma.
     fn contracted_build() {
-        assert_eq!(env!("MANIFOLD_FLUIDS_ORACLE_CC"), "clang", "the sheeter port mirrors a clang build");
+        assert_eq!(
+            env!("MANIFOLD_FLUIDS_ORACLE_CC"),
+            "clang",
+            "the sheeter port mirrors a clang build"
+        );
         // A runtime refusal, so other targets still build the tests.
-        #[allow(clippy::assertions_on_constants, reason = "fails at test time on a non-arm64 build")]
+        #[allow(
+            clippy::assertions_on_constants,
+            reason = "fails at test time on a non-arm64 build"
+        )]
         {
-            assert!(cfg!(target_arch = "aarch64"), "the sheeter port mirrors an arm64 build");
+            assert!(
+                cfg!(target_arch = "aarch64"),
+                "the sheeter port mirrors an arm64 build"
+            );
         }
     }
 
-    fn port_matches(markers: &[[f32; 3]], phi: &[f32], cells: [u32; 3], dx: f64, threshold: f32) -> usize {
+    fn port_matches(
+        markers: &[[f32; 3]],
+        phi: &[f32],
+        cells: [u32; 3],
+        dx: f64,
+        threshold: f32,
+    ) -> usize {
         contracted_build();
         let native = sheet_particles(markers, phi, cells, dx, threshold).expect("oracle");
-        let trace = crate::sheeter::trace_sheet_particles(markers, phi, cells, dx, threshold).expect("port");
+        let trace = crate::sheeter::trace_sheet_particles(markers, phi, cells, dx, threshold)
+            .expect("port");
         assert_eq!(native.len(), trace.seeds.len(), "seed counts differ");
         let near = |a: &[f32; 3], b: &[f32; 3]| (0..3).all(|c| a[c].to_bits() == b[c].to_bits());
         for (i, seed) in native.iter().enumerate() {
             let sources: Vec<usize> = (0..trace.candidates.len())
                 .filter(|&j| trace.projections[j].is_some_and(|p| near(&p, seed)))
                 .collect();
-            assert_eq!(sources, vec![trace.seed_candidates[i]], "native seed {i} {seed:?} is not the port's seed {i}");
+            assert_eq!(
+                sources,
+                vec![trace.seed_candidates[i]],
+                "native seed {i} {seed:?} is not the port's seed {i}"
+            );
         }
         native.len()
     }
@@ -249,27 +293,47 @@ mod tests {
 
     /// The two adjacent floats in [lo, hi] where `observe` (the port's
     /// decisions) changes, by bisection; the observable differs at the ends.
-    fn knife_edge<T: PartialEq>(mut lo: f32, mut hi: f32, observe: impl Fn(f32) -> T) -> (f32, f32) {
+    fn knife_edge<T: PartialEq>(
+        mut lo: f32,
+        mut hi: f32,
+        observe: impl Fn(f32) -> T,
+    ) -> (f32, f32) {
         let low = observe(lo);
-        assert!(observe(hi) != low, "the decision does not change over [{lo}, {hi}]");
+        assert!(
+            observe(hi) != low,
+            "the decision does not change over [{lo}, {hi}]"
+        );
         loop {
             let mid = 0.5 * (lo + hi);
             if mid == lo || mid == hi {
                 return (lo, hi);
             }
-            if observe(mid) == low { lo = mid } else { hi = mid }
+            if observe(mid) == low {
+                lo = mid
+            } else {
+                hi = mid
+            }
         }
     }
 
     /// Native and port agree by identity on the two floats either side of a
     /// decision edge and one ulp beyond each.
-    fn agree_across(edge: (f32, f32), fixture: impl Fn(f32) -> (Vec<[f32; 3]>, Vec<f32>, f64, f32)) {
+    fn agree_across(
+        edge: (f32, f32),
+        fixture: impl Fn(f32) -> (Vec<[f32; 3]>, Vec<f32>, f64, f32),
+    ) {
         // Native exposes only its seeds: an edge none of them sees proves nothing.
-        assert!(seeds_across(edge, fixture) > 0, "no seeds either side of the edge");
+        assert!(
+            seeds_across(edge, fixture) > 0,
+            "no seeds either side of the edge"
+        );
     }
 
     /// Seeds native and port agree on across the edge, summed.
-    fn seeds_across(edge: (f32, f32), fixture: impl Fn(f32) -> (Vec<[f32; 3]>, Vec<f32>, f64, f32)) -> usize {
+    fn seeds_across(
+        edge: (f32, f32),
+        fixture: impl Fn(f32) -> (Vec<[f32; 3]>, Vec<f32>, f64, f32),
+    ) -> usize {
         assert_eq!(edge.0.next_up(), edge.1, "not adjacent");
         let mut seeds = 0;
         for x in [ulp_step(edge.0, -1), edge.0, edge.1, ulp_step(edge.1, 1)] {
@@ -281,20 +345,47 @@ mod tests {
 
     fn shifted_sheet(shift: f32) -> (Vec<[f32; 3]>, Vec<f32>, f64, f32) {
         let (markers, phi, _) = holed_sheet();
-        (markers, phi.iter().map(|v| v + shift).collect(), DX, DEFAULT_FILL_THRESHOLD)
+        (
+            markers,
+            phi.iter().map(|v| v + shift).collect(),
+            DX,
+            DEFAULT_FILL_THRESHOLD,
+        )
     }
 
     /// Candidates need φ < 0: the shift where the y 7.75 candidates sample 0.
     #[test]
     fn port_matches_oracle_where_candidates_reach_the_surface() {
-        let observe = |s| crate::sheeter::trace_sheet_particles(&shifted_sheet(s).0, &shifted_sheet(s).1, CELLS, DX, DEFAULT_FILL_THRESHOLD).unwrap().candidates.len();
+        let observe = |s| {
+            crate::sheeter::trace_sheet_particles(
+                &shifted_sheet(s).0,
+                &shifted_sheet(s).1,
+                CELLS,
+                DX,
+                DEFAULT_FILL_THRESHOLD,
+            )
+            .unwrap()
+            .candidates
+            .len()
+        };
         agree_across(knife_edge(0.1, 0.15, observe), shifted_sheet);
     }
 
     /// Candidates need φ ≥ −dx: the shift where the y 8.25 candidates sample −1.
     #[test]
     fn port_matches_oracle_at_the_candidate_depth() {
-        let observe = |s| crate::sheeter::trace_sheet_particles(&shifted_sheet(s).0, &shifted_sheet(s).1, CELLS, DX, DEFAULT_FILL_THRESHOLD).unwrap().candidates.len();
+        let observe = |s| {
+            crate::sheeter::trace_sheet_particles(
+                &shifted_sheet(s).0,
+                &shifted_sheet(s).1,
+                CELLS,
+                DX,
+                DEFAULT_FILL_THRESHOLD,
+            )
+            .unwrap()
+            .candidates
+            .len()
+        };
         agree_across(knife_edge(-0.7, -0.55, observe), shifted_sheet);
     }
 
@@ -304,8 +395,21 @@ mod tests {
     /// is all this edge shows of it.
     #[test]
     fn port_matches_oracle_at_the_marker_band() {
-        let observe = |s| crate::sheeter::trace_sheet_particles(&shifted_sheet(s).0, &shifted_sheet(s).1, CELLS, DX, DEFAULT_FILL_THRESHOLD).unwrap().thin;
-        assert_eq!(seeds_across(knife_edge(-1.8, -1.6, observe), shifted_sheet), 0);
+        let observe = |s| {
+            crate::sheeter::trace_sheet_particles(
+                &shifted_sheet(s).0,
+                &shifted_sheet(s).1,
+                CELLS,
+                DX,
+                DEFAULT_FILL_THRESHOLD,
+            )
+            .unwrap()
+            .thin
+        };
+        assert_eq!(
+            seeds_across(knife_edge(-1.8, -1.6, observe), shifted_sheet),
+            0
+        );
     }
 
     /// Neighbours count within 2dx, strictly: one ring marker slid toward the
@@ -316,30 +420,44 @@ mod tests {
     fn port_matches_oracle_at_the_search_radius() {
         let fixture = |t: f32| {
             let (mut markers, phi, _) = holed_sheet();
-            let m = markers.iter().position(|p| *p == [9.75, SHEET_Y, 8.25]).expect("ring marker");
+            let m = markers
+                .iter()
+                .position(|p| *p == [9.75, SHEET_Y, 8.25])
+                .expect("ring marker");
             markers[m][0] -= t;
             (markers, phi, DX, DEFAULT_FILL_THRESHOLD)
         };
         let trace = |t| {
             let (m, p, ..) = fixture(t);
-            crate::sheeter::trace_sheet_particles(&m, &p, CELLS, DX, DEFAULT_FILL_THRESHOLD).unwrap()
+            crate::sheeter::trace_sheet_particles(&m, &p, CELLS, DX, DEFAULT_FILL_THRESHOLD)
+                .unwrap()
         };
         // Only candidates that reach the score: an unscored one's count has no
         // consequence native could show.
-        let scored: Vec<usize> = (0..trace(0.0).mindots.len()).filter(|&c| trace(0.0).mindots[c].is_some()).collect();
+        let scored: Vec<usize> = (0..trace(0.0).mindots.len())
+            .filter(|&c| trace(0.0).mindots[c].is_some())
+            .collect();
         let observe = |t| {
             let n = trace(t).neighbours;
             scored.iter().map(|&c| n[c]).collect::<Vec<_>>()
         };
         let edge = knife_edge(0.0, 0.5, observe);
         let (outside, inside) = (trace(edge.0), trace(edge.1));
-        let entered: Vec<usize> = (0..outside.neighbours.len()).filter(|&c| outside.neighbours[c] != inside.neighbours[c]).collect();
+        let entered: Vec<usize> = (0..outside.neighbours.len())
+            .filter(|&c| outside.neighbours[c] != inside.neighbours[c])
+            .collect();
         assert!(!entered.is_empty());
         for &c in &entered {
-            assert_eq!(inside.neighbours[c], outside.neighbours[c] + 1, "candidate {c}: one marker enters");
+            assert_eq!(
+                inside.neighbours[c],
+                outside.neighbours[c] + 1,
+                "candidate {c}: one marker enters"
+            );
         }
         assert!(
-            entered.iter().any(|&c| inside.mindots[c].is_some() && outside.mindots[c] != inside.mindots[c]),
+            entered
+                .iter()
+                .any(|&c| inside.mindots[c].is_some() && outside.mindots[c] != inside.mindots[c]),
             "the entering marker changes a scored candidate's score"
         );
         agree_across(edge, fixture);
@@ -350,13 +468,23 @@ mod tests {
     #[test]
     fn port_matches_oracle_at_the_fill_threshold() {
         let (markers, phi, _) = holed_sheet();
-        let trace = crate::sheeter::trace_sheet_particles(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD).unwrap();
+        let trace = crate::sheeter::trace_sheet_particles(
+            &markers,
+            &phi,
+            CELLS,
+            DX,
+            DEFAULT_FILL_THRESHOLD,
+        )
+        .unwrap();
         let score = trace.mindots[trace.seed_candidates[0]].expect("a seed has a score");
         let fixture = |t: f32| (markers.clone(), phi.clone(), DX, t);
         agree_across((score.next_down(), score), fixture);
         let at = port_matches(&markers, &phi, CELLS, DX, score);
         let above = port_matches(&markers, &phi, CELLS, DX, score.next_up());
-        assert!(at < above, "the seed's own score must reject it ({at} vs {above})");
+        assert!(
+            at < above,
+            "the seed's own score must reject it ({at} vs {above})"
+        );
     }
 
     /// A projection lands on a half-cell boundary: the marker layer height
@@ -365,7 +493,15 @@ mod tests {
     fn port_matches_oracle_at_a_half_cell_boundary() {
         let fixture = |y: f32| {
             let (markers, phi, _) = holed_sheet();
-            (markers.into_iter().map(|p| [p[0], y, p[2]]).collect::<Vec<_>>(), phi, DX, 0.0f32)
+            (
+                markers
+                    .into_iter()
+                    .map(|p| [p[0], y, p[2]])
+                    .collect::<Vec<_>>(),
+                phi,
+                DX,
+                0.0f32,
+            )
         };
         let observe = |y| {
             let (m, p, ..) = fixture(y);
@@ -399,38 +535,64 @@ mod tests {
     #[test]
     fn oracle_sheet_is_isolated_from_concurrent_native_work() {
         let (markers, phi, _) = holed_sheet();
-        let want = sheet_particles(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD).expect("oracle");
+        let want =
+            sheet_particles(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD).expect("oracle");
         std::thread::scope(|scope| {
             for _ in 0..4 {
                 scope.spawn(|| {
                     for _ in 0..25 {
-                        assert_eq!(sheet_particles(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD).expect("oracle"), want);
+                        assert_eq!(
+                            sheet_particles(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD)
+                                .expect("oracle"),
+                            want
+                        );
                     }
                 });
             }
             for _ in 0..2 {
                 scope.spawn(|| {
                     for _ in 0..10 {
-                        let world = crate::FluidWorld::new(crate::Config { cells: [8; 3], cell_size: 0.5, surface_subdivisions: 0, apic: false });
+                        let world = crate::FluidWorld::new(crate::Config {
+                            cells: [8; 3],
+                            cell_size: 0.5,
+                            surface_subdivisions: 0,
+                            apic: false,
+                        });
                         drop(world.expect("world"));
                     }
                 });
             }
         });
-        assert_eq!(super::thread_count().expect("count"), 4, "the oracle restored a stale thread count");
+        assert_eq!(
+            super::thread_count().expect("count"),
+            4,
+            "the oracle restored a stale thread count"
+        );
     }
 
     #[test]
     fn port_matches_oracle_on_the_holed_sheet() {
         let (markers, phi, _) = holed_sheet();
-        assert_eq!(port_matches(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD), 8);
+        assert_eq!(
+            port_matches(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD),
+            8
+        );
         assert_eq!(port_matches(&markers, &phi, CELLS, DX, 0.0), 8);
     }
 
     #[test]
     fn port_matches_oracle_on_the_still_pool() {
         let phi = field(|y| y - 8.0);
-        assert_eq!(port_matches(&lattice(&[6.3, 7.3]), &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD), 0);
+        assert_eq!(
+            port_matches(
+                &lattice(&[6.3, 7.3]),
+                &phi,
+                CELLS,
+                DX,
+                DEFAULT_FILL_THRESHOLD
+            ),
+            0
+        );
     }
 
     #[test]
@@ -438,7 +600,10 @@ mod tests {
         let (markers, phi, cells, dx) = crate::sheeter::fixtures::splash();
         let strict = port_matches(&markers, &phi, cells, dx, DEFAULT_FILL_THRESHOLD);
         let loose = port_matches(&markers, &phi, cells, dx, -0.5);
-        assert!(strict >= 20 && loose > strict, "the splash seeds {strict} at -0.95 and {loose} at -0.5");
+        assert!(
+            strict >= 20 && loose > strict,
+            "the splash seeds {strict} at -0.95 and {loose} at -0.5"
+        );
     }
 
     /// A short buffer gets the first seeds and the true count, never a
@@ -446,16 +611,38 @@ mod tests {
     #[test]
     fn oracle_sheet_reports_the_true_count() {
         let (markers, phi, _) = holed_sheet();
-        let all = sheet_particles(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD).expect("oracle");
-        assert!(all.len() >= 2, "the fixture needs two or more seeds, got {}", all.len());
+        let all =
+            sheet_particles(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD).expect("oracle");
+        assert!(
+            all.len() >= 2,
+            "the fixture needs two or more seeds, got {}",
+            all.len()
+        );
         let mut one = [[0.0f32; 3]; 1];
-        let count = sheet_particles_into(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD, &mut one).expect("oracle");
+        let count =
+            sheet_particles_into(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD, &mut one)
+                .expect("oracle");
         assert_eq!(count, all.len());
         assert_eq!(one[0], all[0]);
-        assert_eq!(sheet_particles(&[], &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD).expect("empty"), Vec::<[f32; 3]>::new());
-        assert!(sheet_particles(&markers, &phi[1..], CELLS, DX, DEFAULT_FILL_THRESHOLD).is_err(), "short field");
-        assert!(sheet_particles(&[[16.5, 8.0, 8.0]], &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD).is_err(), "outside the grid");
-        assert!(sheet_particles(&markers, &phi, CELLS, 0.0, DEFAULT_FILL_THRESHOLD).is_err(), "zero dx");
-        assert!(sheet_particles(&markers, &phi, CELLS, DX, 0.5).is_err(), "threshold out of range");
+        assert_eq!(
+            sheet_particles(&[], &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD).expect("empty"),
+            Vec::<[f32; 3]>::new()
+        );
+        assert!(
+            sheet_particles(&markers, &phi[1..], CELLS, DX, DEFAULT_FILL_THRESHOLD).is_err(),
+            "short field"
+        );
+        assert!(
+            sheet_particles(&[[16.5, 8.0, 8.0]], &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD).is_err(),
+            "outside the grid"
+        );
+        assert!(
+            sheet_particles(&markers, &phi, CELLS, 0.0, DEFAULT_FILL_THRESHOLD).is_err(),
+            "zero dx"
+        );
+        assert!(
+            sheet_particles(&markers, &phi, CELLS, DX, 0.5).is_err(),
+            "threshold out of range"
+        );
     }
 }

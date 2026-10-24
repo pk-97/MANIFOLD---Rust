@@ -46,7 +46,9 @@ impl std::ops::Deref for ResolvedGraph<'_> {
     fn deref(&self) -> &Self::Target {
         match self {
             Self::Project(graph) => graph,
-            Self::Catalog(graph, target) => target.graph_in(graph).expect("validated catalog target"),
+            Self::Catalog(graph, target) => {
+                target.graph_in(graph).expect("validated catalog target")
+            }
         }
     }
 }
@@ -61,11 +63,14 @@ pub(crate) fn resolve<'a>(
     if let Some(graph) = owner.graph.as_ref() {
         return target.graph_in(graph).map(ResolvedGraph::Project);
     }
-    if let Some(default) = manifold_nodes::bundled_presets::bundled_preset_def(owner.effect_type()) {
+    if let Some(default) = manifold_nodes::bundled_presets::bundled_preset_def(owner.effect_type())
+    {
         target.graph_in(&default)?;
         return Some(ResolvedGraph::Catalog(default, target));
     }
-    project.graph_for_target(target, None).map(ResolvedGraph::Project)
+    project
+        .graph_for_target(target, None)
+        .map(ResolvedGraph::Project)
 }
 
 /// Derived editor routes keep the authored local nodes while addressing the
@@ -137,7 +142,8 @@ pub(crate) fn catalog_default(project: &Project, target: &GraphTarget) -> Option
         Some(owner)
     } else {
         let owner = project.graph_target_owner(target)?;
-        manifold_nodes::bundled_presets::bundled_preset_def(owner.effect_type()).map(|def| (*def).clone())
+        manifold_nodes::bundled_presets::bundled_preset_def(owner.effect_type())
+            .map(|def| (*def).clone())
     }
 }
 

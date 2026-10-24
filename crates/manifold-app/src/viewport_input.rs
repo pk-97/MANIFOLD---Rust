@@ -98,7 +98,12 @@ pub enum ViewportGesture {
 /// button (right, forward/back) isn't a viewport gesture — `None`, so the
 /// caller's existing right-click handling (context menus etc.) is
 /// untouched.
-pub fn classify_mouse_drag(button: MouseButton, shift_held: bool, dx: f32, dy: f32) -> Option<ViewportGesture> {
+pub fn classify_mouse_drag(
+    button: MouseButton,
+    shift_held: bool,
+    dx: f32,
+    dy: f32,
+) -> Option<ViewportGesture> {
     match button {
         MouseButton::Left if shift_held => Some(ViewportGesture::Pan { dx, dy }),
         MouseButton::Left => Some(ViewportGesture::Orbit { dx, dy }),
@@ -125,14 +130,22 @@ pub const MAX_DOLLY_NOTCHES_PER_EVENT: f32 = 5.0;
 /// is clamped to [`MAX_DOLLY_NOTCHES_PER_EVENT`]. `None` for a zero delta,
 /// which moves nothing and must not start navigation. A trackpad pinch is a
 /// separate `PinchGesture` event and never arrives here.
-pub fn classify_wheel(delta: winit::event::MouseScrollDelta, ctrl_held: bool) -> Option<ViewportGesture> {
+pub fn classify_wheel(
+    delta: winit::event::MouseScrollDelta,
+    ctrl_held: bool,
+) -> Option<ViewportGesture> {
     let dolly = |notches: f32| {
-        (notches != 0.0 && notches.is_finite())
-            .then(|| classify_scroll(notches.clamp(-MAX_DOLLY_NOTCHES_PER_EVENT, MAX_DOLLY_NOTCHES_PER_EVENT)))
+        (notches != 0.0 && notches.is_finite()).then(|| {
+            classify_scroll(
+                notches.clamp(-MAX_DOLLY_NOTCHES_PER_EVENT, MAX_DOLLY_NOTCHES_PER_EVENT),
+            )
+        })
     };
     match delta {
         winit::event::MouseScrollDelta::LineDelta(_, y) => dolly(y),
-        winit::event::MouseScrollDelta::PixelDelta(p) if ctrl_held => dolly(p.y as f32 / crate::window_input::LINE_DELTA_PX),
+        winit::event::MouseScrollDelta::PixelDelta(p) if ctrl_held => {
+            dolly(p.y as f32 / crate::window_input::LINE_DELTA_PX)
+        }
         winit::event::MouseScrollDelta::PixelDelta(p) => {
             let (dx, dy) = (p.x as f32, p.y as f32);
             (dx != 0.0 || dy != 0.0).then(|| classify_trackpad_pan(dx, dy))
@@ -150,7 +163,11 @@ pub fn classify_trackpad_pan(dx: f32, dy: f32) -> ViewportGesture {
 /// Apply a classified gesture to the requested navigation camera. The
 /// displayed frame remains immutable here; content receives a new request on
 /// the next editor redraw.
-pub fn apply(camera: &mut ViewportCamera, gesture: ViewportGesture, sens: &ViewportInputSensitivity) {
+pub fn apply(
+    camera: &mut ViewportCamera,
+    gesture: ViewportGesture,
+    sens: &ViewportInputSensitivity,
+) {
     match gesture {
         ViewportGesture::Orbit { dx, dy } => camera.orbit(dx, dy, sens.orbit),
         ViewportGesture::Pan { dx, dy } => camera.pan(dx, dy, sens.pan),
@@ -167,12 +184,27 @@ mod tests {
     #[test]
     fn gizmo_pointer_uses_dock_origin_and_actual_texture_scale() {
         let rect = manifold_ui::Rect::new(12.0, 150.0, 200.0, 100.0);
-        assert_eq!(gizmo_point(rect, (400, 200), (112.0, 200.0)), Some((200.0, 100.0)));
-        assert_eq!(gizmo_point(rect, (200, 100), (112.0, 200.0)), Some((100.0, 50.0)));
-        assert_eq!(gizmo_point(rect, (400, 200), (-8.0, 140.0)), Some((-40.0, -20.0)));
+        assert_eq!(
+            gizmo_point(rect, (400, 200), (112.0, 200.0)),
+            Some((200.0, 100.0))
+        );
+        assert_eq!(
+            gizmo_point(rect, (200, 100), (112.0, 200.0)),
+            Some((100.0, 50.0))
+        );
+        assert_eq!(
+            gizmo_point(rect, (400, 200), (-8.0, 140.0)),
+            Some((-40.0, -20.0))
+        );
         assert_eq!(gizmo_point(rect, (400, 200), (f32::NAN, 200.0)), None);
-        assert_eq!(gizmo_point(manifold_ui::Rect::new(0.0, 0.0, 0.0, 100.0),
-            (400, 200), (20.0, 20.0)), None);
+        assert_eq!(
+            gizmo_point(
+                manifold_ui::Rect::new(0.0, 0.0, 0.0, 100.0),
+                (400, 200),
+                (20.0, 20.0)
+            ),
+            None
+        );
     }
 
     /// The view the pointer maps into carries render pixels per point: 1 at
@@ -180,11 +212,19 @@ mod tests {
     #[test]
     fn gizmo_pointer_carries_render_pixels_per_point() {
         let camera = manifold_node_engine::scene::camera::Camera::default_perspective();
-        for ((w, h), rect_h, want) in [((640, 360), 360.0, 1.0), ((1280, 720), 360.0, 2.0), ((3840, 2160), 458.0, 2160.0 / 458.0)] {
+        for ((w, h), rect_h, want) in [
+            ((640, 360), 360.0, 1.0),
+            ((1280, 720), 360.0, 2.0),
+            ((3840, 2160), 458.0, 2160.0 / 458.0),
+        ] {
             let rect = manifold_ui::Rect::new(10.0, 20.0, rect_h * 16.0 / 9.0, rect_h);
             let view = crate::scene_gizmo::GizmoView::new(camera, w, h);
             let (view, _) = gizmo_pointer(rect, view, (30.0, 40.0)).expect("inside");
-            assert!((view.px_per_point - want).abs() < 1e-4, "{w}x{h} in {rect_h} pt: {}", view.px_per_point);
+            assert!(
+                (view.px_per_point - want).abs() < 1e-4,
+                "{w}x{h} in {rect_h} pt: {}",
+                view.px_per_point
+            );
         }
     }
 
@@ -218,7 +258,10 @@ mod tests {
 
     #[test]
     fn right_drag_is_not_a_viewport_gesture() {
-        assert_eq!(classify_mouse_drag(MouseButton::Right, false, 1.0, 1.0), None);
+        assert_eq!(
+            classify_mouse_drag(MouseButton::Right, false, 1.0, 1.0),
+            None
+        );
     }
 
     #[test]
@@ -251,14 +294,26 @@ mod tests {
     #[test]
     fn wheel_notches_dolly_a_bounded_proportional_amount() {
         let one = dolly_ratio(line(1.0), false);
-        assert!(one > 0.9 && one < 0.95, "one notch in moves about 8%, got {one}");
+        assert!(
+            one > 0.9 && one < 0.95,
+            "one notch in moves about 8%, got {one}"
+        );
         let out = dolly_ratio(line(-1.0), false);
-        assert!(out > 1.05 && out < 1.1, "one notch out moves about 8%, got {out}");
+        assert!(
+            out > 1.05 && out < 1.1,
+            "one notch out moves about 8%, got {out}"
+        );
         for n in [2.0_f32, 3.0, MAX_DOLLY_NOTCHES_PER_EVENT] {
-            assert!((dolly_ratio(line(n), false) - one.powf(n)).abs() < 1e-4, "{n} notches is one notch applied {n} times");
+            assert!(
+                (dolly_ratio(line(n), false) - one.powf(n)).abs() < 1e-4,
+                "{n} notches is one notch applied {n} times"
+            );
         }
-        assert_eq!(dolly_ratio(line(40.0), false), dolly_ratio(line(MAX_DOLLY_NOTCHES_PER_EVENT), false),
-            "an accelerated wheel is clamped to one event's bound");
+        assert_eq!(
+            dolly_ratio(line(40.0), false),
+            dolly_ratio(line(MAX_DOLLY_NOTCHES_PER_EVENT), false),
+            "an accelerated wheel is clamped to one event's bound"
+        );
     }
 
     /// Ctrl + two-finger scroll reports pixels: 20 px is one wheel notch and
@@ -267,14 +322,30 @@ mod tests {
     #[test]
     fn ctrl_pixel_scroll_dollies_by_notches_and_stays_bounded() {
         let one = dolly_ratio(line(1.0), false);
-        assert!((dolly_ratio(pixels(crate::window_input::LINE_DELTA_PX as f64), true) - one).abs() < 1e-6,
-            "20 px is one notch");
+        assert!(
+            (dolly_ratio(pixels(crate::window_input::LINE_DELTA_PX as f64), true) - one).abs()
+                < 1e-6,
+            "20 px is one notch"
+        );
         let flick = dolly_ratio(pixels(100.0), true);
-        assert!((flick - one.powf(5.0)).abs() < 1e-4, "100 px is five notches, got {flick}");
+        assert!(
+            (flick - one.powf(5.0)).abs() < 1e-4,
+            "100 px is five notches, got {flick}"
+        );
         let bound = one.powf(MAX_DOLLY_NOTCHES_PER_EVENT);
-        assert!(dolly_ratio(pixels(2000.0), true) >= bound - 1e-6, "a long flick is clamped");
-        assert!(bound > 0.6, "one event never moves more than about a third of the way in");
-        assert_eq!(dolly_ratio(pixels(100.0), false), 1.0, "without Ctrl the same scroll pans");
+        assert!(
+            dolly_ratio(pixels(2000.0), true) >= bound - 1e-6,
+            "a long flick is clamped"
+        );
+        assert!(
+            bound > 0.6,
+            "one event never moves more than about a third of the way in"
+        );
+        assert_eq!(
+            dolly_ratio(pixels(100.0), false),
+            1.0,
+            "without Ctrl the same scroll pans"
+        );
     }
 
     #[test]

@@ -8,16 +8,42 @@ use std::ffi::c_void;
 use crate::{FluidError, WhitewaterLifecycle, native_result};
 
 unsafe extern "C" {
-    fn manifold_fluids_oracle_turbulence(lifecycle: *mut c_void, values: *mut f32,
-        positions: *const f32, count: usize, samples: *mut f32) -> i32;
-    fn manifold_fluids_oracle_emission_options(lifecycle: *mut c_void,
-        wavecrest: f64, turbulence: f64, minimum: f64, maximum: f64,
-        generation: f64, speed: f64, influence: f64) -> i32;
-    fn manifold_fluids_oracle_emit_configured(lifecycle: *mut c_void,
-        curvature: *const f32, positions: *const f32, count: usize, dt: f64) -> i32;
-    fn manifold_fluids_oracle_emit_engine(lifecycle: *mut c_void, positions: *const f32, count: usize,
-        dt: f64, influence_base: f64, influence_decay: f64, surface_out: *mut f32,
-        curvature_out: *mut f32, influence_out: *mut f32, emitted_out: *mut u32) -> i32;
+    fn manifold_fluids_oracle_turbulence(
+        lifecycle: *mut c_void,
+        values: *mut f32,
+        positions: *const f32,
+        count: usize,
+        samples: *mut f32,
+    ) -> i32;
+    fn manifold_fluids_oracle_emission_options(
+        lifecycle: *mut c_void,
+        wavecrest: f64,
+        turbulence: f64,
+        minimum: f64,
+        maximum: f64,
+        generation: f64,
+        speed: f64,
+        influence: f64,
+    ) -> i32;
+    fn manifold_fluids_oracle_emit_configured(
+        lifecycle: *mut c_void,
+        curvature: *const f32,
+        positions: *const f32,
+        count: usize,
+        dt: f64,
+    ) -> i32;
+    fn manifold_fluids_oracle_emit_engine(
+        lifecycle: *mut c_void,
+        positions: *const f32,
+        count: usize,
+        dt: f64,
+        influence_base: f64,
+        influence_decay: f64,
+        surface_out: *mut f32,
+        curvature_out: *mut f32,
+        influence_out: *mut f32,
+        emitted_out: *mut u32,
+    ) -> i32;
     fn manifold_fluids_oracle_curvature(
         phi: *const f32,
         isize: u32,
@@ -50,41 +76,93 @@ pub struct EmissionOptions {
 
 impl Default for EmissionOptions {
     fn default() -> Self {
-        Self { wavecrest: 175.0, turbulence: 175.0, minimum: 100.0, maximum: 200.0,
-            generation: 1.0, speed: 1.0, influence: 1.0 }
+        Self {
+            wavecrest: 175.0,
+            turbulence: 175.0,
+            minimum: 100.0,
+            maximum: 200.0,
+            generation: 1.0,
+            speed: 1.0,
+            influence: 1.0,
+        }
     }
 }
 
 /// The vendored turbulence lattice and its trilinear samples on the last fields.
-pub fn turbulence(lifecycle: &mut WhitewaterLifecycle, positions: &[[f32; 3]]) -> Result<(Vec<f32>, Vec<f32>), FluidError> {
+pub fn turbulence(
+    lifecycle: &mut WhitewaterLifecycle,
+    positions: &[[f32; 3]],
+) -> Result<(Vec<f32>, Vec<f32>), FluidError> {
     let mut values = vec![0.0; lifecycle.grid().cell_count()];
     let mut samples = vec![0.0; positions.len()];
     // SAFETY: live handle, correctly sized lattice and matching sample slices.
-    let ok = unsafe { manifold_fluids_oracle_turbulence(lifecycle.native_handle(), values.as_mut_ptr(),
-        positions.as_ptr().cast(), positions.len(), samples.as_mut_ptr()) };
+    let ok = unsafe {
+        manifold_fluids_oracle_turbulence(
+            lifecycle.native_handle(),
+            values.as_mut_ptr(),
+            positions.as_ptr().cast(),
+            positions.len(),
+            samples.as_mut_ptr(),
+        )
+    };
     native_result(ok, "oracle turbulence")?;
     Ok((values, samples))
 }
 
 /// Run the engine emitter with explicit controls, then its lifecycle.
-pub fn emit_configured(lifecycle: &mut WhitewaterLifecycle, curvature: &[f32], positions: &[[f32; 3]],
-    dt: f64, options: EmissionOptions) -> Result<(), FluidError> {
+pub fn emit_configured(
+    lifecycle: &mut WhitewaterLifecycle,
+    curvature: &[f32],
+    positions: &[[f32; 3]],
+    dt: f64,
+    options: EmissionOptions,
+) -> Result<(), FluidError> {
     if curvature.len() != lifecycle.grid().cell_count() {
-        return Err(FluidError::input("oracle curvature length differs from grid"));
+        return Err(FluidError::input(
+            "oracle curvature length differs from grid",
+        ));
     }
-    if ![options.wavecrest, options.turbulence, options.minimum, options.maximum,
-        options.generation, options.speed, options.influence].iter().all(|x| x.is_finite() && *x >= 0.0)
-        || options.maximum <= options.minimum || options.generation > 1.0 || options.speed < 1.0 {
+    if ![
+        options.wavecrest,
+        options.turbulence,
+        options.minimum,
+        options.maximum,
+        options.generation,
+        options.speed,
+        options.influence,
+    ]
+    .iter()
+    .all(|x| x.is_finite() && *x >= 0.0)
+        || options.maximum <= options.minimum
+        || options.generation > 1.0
+        || options.speed < 1.0
+    {
         return Err(FluidError::input("invalid oracle emission controls"));
     }
     // SAFETY: live handle; scalar options are consumed synchronously.
-    let ok = unsafe { manifold_fluids_oracle_emission_options(lifecycle.native_handle(),
-        options.wavecrest, options.turbulence, options.minimum, options.maximum,
-        options.generation, options.speed, options.influence) };
+    let ok = unsafe {
+        manifold_fluids_oracle_emission_options(
+            lifecycle.native_handle(),
+            options.wavecrest,
+            options.turbulence,
+            options.minimum,
+            options.maximum,
+            options.generation,
+            options.speed,
+            options.influence,
+        )
+    };
     native_result(ok, "oracle emission options")?;
     // SAFETY: curvature covers the grid; positions is a slice of triples.
-    let ok = unsafe { manifold_fluids_oracle_emit_configured(lifecycle.native_handle(),
-        curvature.as_ptr(), positions.as_ptr().cast(), positions.len(), dt) };
+    let ok = unsafe {
+        manifold_fluids_oracle_emit_configured(
+            lifecycle.native_handle(),
+            curvature.as_ptr(),
+            positions.as_ptr().cast(),
+            positions.len(),
+            dt,
+        )
+    };
     native_result(ok, "oracle configured emit")
 }
 
@@ -93,10 +171,18 @@ pub fn emit_configured(lifecycle: &mut WhitewaterLifecycle, curvature: &[f32], p
 /// `curvature` (cell centres, x fastest) its curvature grid, with turbulence
 /// emission and lifetime variance 0. The population then holds what FLIP
 /// emitted, advanced, retyped and aged once.
-pub fn emit(lifecycle: &mut WhitewaterLifecycle, curvature: &[f32], positions: &[[f32; 3]], dt: f64) -> Result<(), FluidError> {
+pub fn emit(
+    lifecycle: &mut WhitewaterLifecycle,
+    curvature: &[f32],
+    positions: &[[f32; 3]],
+    dt: f64,
+) -> Result<(), FluidError> {
     let cells = lifecycle.grid().cell_count();
     if curvature.len() != cells {
-        return Err(FluidError::input(format!("oracle curvature holds {} values; the grid has {cells} cells", curvature.len())));
+        return Err(FluidError::input(format!(
+            "oracle curvature holds {} values; the grid has {cells} cells",
+            curvature.len()
+        )));
     }
     // SAFETY: the handle is live; `curvature` covers the grid's cells and
     // `positions` holds `len` triples.
@@ -137,8 +223,13 @@ pub struct EngineEmitFields {
 /// objects, where the engine installs a domain object and resets boundary
 /// nodes to the base each step, so obstacle sources and a changed base do
 /// not reach the boundary as they do in the engine.
-pub fn emit_engine(lifecycle: &mut WhitewaterLifecycle, positions: &[[f32; 3]], dt: f64,
-    influence_base: f64, influence_decay: f64) -> Result<EngineEmitFields, FluidError> {
+pub fn emit_engine(
+    lifecycle: &mut WhitewaterLifecycle,
+    positions: &[[f32; 3]],
+    dt: f64,
+    influence_base: f64,
+    influence_decay: f64,
+) -> Result<EngineEmitFields, FluidError> {
     let cells = lifecycle.grid().cell_count();
     let c = lifecycle.grid().cells.map(|n| n as usize + 1);
     let mut fields = EngineEmitFields {
@@ -148,19 +239,42 @@ pub fn emit_engine(lifecycle: &mut WhitewaterLifecycle, positions: &[[f32; 3]], 
         emitted: 0,
     };
     // SAFETY: live handle; outputs cover the grid's cells and nodes, positions holds `len` triples.
-    let ok = unsafe { manifold_fluids_oracle_emit_engine(lifecycle.native_handle(), positions.as_ptr().cast(),
-        positions.len(), dt, influence_base, influence_decay, fields.surface.as_mut_ptr(),
-        fields.curvature.as_mut_ptr(), fields.influence.as_mut_ptr(), &mut fields.emitted) };
+    let ok = unsafe {
+        manifold_fluids_oracle_emit_engine(
+            lifecycle.native_handle(),
+            positions.as_ptr().cast(),
+            positions.len(),
+            dt,
+            influence_base,
+            influence_decay,
+            fields.surface.as_mut_ptr(),
+            fields.curvature.as_mut_ptr(),
+            fields.influence.as_mut_ptr(),
+            &mut fields.emitted,
+        )
+    };
     native_result(ok, "oracle engine emit")?;
     Ok(fields)
 }
 
 /// The emitter's rates for [`emit_engine`]; `options.influence` is unused there.
-pub fn set_emission_rates(lifecycle: &mut WhitewaterLifecycle, options: EmissionOptions) -> Result<(), FluidError> {
+pub fn set_emission_rates(
+    lifecycle: &mut WhitewaterLifecycle,
+    options: EmissionOptions,
+) -> Result<(), FluidError> {
     // SAFETY: live handle; scalar options are consumed synchronously.
-    let ok = unsafe { manifold_fluids_oracle_emission_options(lifecycle.native_handle(),
-        options.wavecrest, options.turbulence, options.minimum, options.maximum,
-        options.generation, options.speed, options.influence) };
+    let ok = unsafe {
+        manifold_fluids_oracle_emission_options(
+            lifecycle.native_handle(),
+            options.wavecrest,
+            options.turbulence,
+            options.minimum,
+            options.maximum,
+            options.generation,
+            options.speed,
+            options.influence,
+        )
+    };
     native_result(ok, "oracle emission options")
 }
 
@@ -202,7 +316,10 @@ pub fn curvature(phi: &[f32], cells: [u32; 3], dx: f64) -> Result<OracleCurvatur
         )
     };
     native_result(ok, "oracle curvature")?;
-    Ok(OracleCurvature { surface_phi, curvature })
+    Ok(OracleCurvature {
+        surface_phi,
+        curvature,
+    })
 }
 
 #[cfg(test)]
@@ -218,9 +335,15 @@ mod tests {
     fn oracle_emit_spawns_at_a_rising_crest() {
         const N: u32 = 12;
         const H: f32 = 0.25;
-        let grid = WhitewaterGrid { cells: [N; 3], cell_size: H, origin: [0.0; 3] };
+        let grid = WhitewaterGrid {
+            cells: [N; 3],
+            cell_size: H,
+            origin: [0.0; 3],
+        };
         let n = N as usize;
-        let level: Vec<f32> = (0..n * n * n).map(|i| ((i / n) % n) as f32 * H + 0.5 * H - 1.5).collect();
+        let level: Vec<f32> = (0..n * n * n)
+            .map(|i| ((i / n) % n) as f32 * H + 0.5 * H - 1.5)
+            .collect();
         let solid = vec![10.0f32; (n + 1).pow(3)];
         let u = vec![0.0f32; (n + 1) * n * n];
         let v = vec![5.0f32; n * (n + 1) * n];
@@ -237,19 +360,30 @@ mod tests {
         };
         let mut lifecycle = WhitewaterLifecycle::new(grid, 100_000, 7).expect("lifecycle");
         lifecycle.set_fields(&fields).expect("fields");
-        let surface: Vec<[f32; 3]> =
-            (0..8).flat_map(|x| (0..8).map(move |z| [1.0 + 0.125 * x as f32, 1.4, 1.0 + 0.125 * z as f32])).collect();
+        let surface: Vec<[f32; 3]> = (0..8)
+            .flat_map(|x| {
+                (0..8).map(move |z| [1.0 + 0.125 * x as f32, 1.4, 1.0 + 0.125 * z as f32])
+            })
+            .collect();
         let deep: Vec<[f32; 3]> = (0..8).map(|x| [1.0 + 0.125 * x as f32, 0.5, 1.5]).collect();
         let positions: Vec<[f32; 3]> = surface.iter().chain(&deep).copied().collect();
         let curvature = vec![3.0 / H; n * n * n];
         super::emit(&mut lifecycle, &curvature, &positions, 1.0 / 60.0).expect("oracle emit");
         let mut out = Vec::new();
         lifecycle.particles(&mut out).expect("particles");
-        assert!((surface.len() / 2..=surface.len()).contains(&out.len()), "{} of {} surface emitters emitted", out.len(), surface.len());
+        assert!(
+            (surface.len() / 2..=surface.len()).contains(&out.len()),
+            "{} of {} surface emitters emitted",
+            out.len(),
+            surface.len()
+        );
         let energy = (0.5 * 25.0 - 0.1) / 59.9;
         for p in &out {
             assert!(p.position[1] > 1.0, "{p:?} emitted from deep in the liquid");
-            assert!(p.lifetime > 7.0 * energy - 0.1 && p.lifetime <= 7.0 * energy, "{p:?}");
+            assert!(
+                p.lifetime > 7.0 * energy - 0.1 && p.lifetime <= 7.0 * energy,
+                "{p:?}"
+            );
             assert!(p.kind != WhitewaterKind::Bubble, "{p:?}");
         }
     }
@@ -267,13 +401,26 @@ mod tests {
             })
             .collect();
         let oracle = super::curvature(&phi, cells, dx).expect("oracle");
-        assert!(oracle.curvature.iter().all(|k| k.abs() < 1e-4), "a plane is flat");
-        let near: Vec<usize> = (0..phi.len()).filter(|&i| phi[i].abs() < 2.0 * dx as f32).collect();
+        assert!(
+            oracle.curvature.iter().all(|k| k.abs() < 1e-4),
+            "a plane is flat"
+        );
+        let near: Vec<usize> = (0..phi.len())
+            .filter(|&i| phi[i].abs() < 2.0 * dx as f32)
+            .collect();
         assert!(!near.is_empty());
         for i in near {
-            assert!((oracle.surface_phi[i] - phi[i]).abs() < 1e-4, "node {i}: {} against {}", oracle.surface_phi[i], phi[i]);
+            assert!(
+                (oracle.surface_phi[i] - phi[i]).abs() < 1e-4,
+                "node {i}: {} against {}",
+                oracle.surface_phi[i],
+                phi[i]
+            );
         }
-        assert!(super::curvature(&phi[1..], cells, dx).is_err(), "a short field is refused");
+        assert!(
+            super::curvature(&phi[1..], cells, dx).is_err(),
+            "a short field is refused"
+        );
     }
 
     /// The engine-as-configured variant on a sheared, rising slab: it emits
@@ -286,46 +433,86 @@ mod tests {
         const H: f32 = 0.25;
         const DT: f64 = 1.0 / 60.0;
         let n = N as usize;
-        let grid = WhitewaterGrid { cells: [N; 3], cell_size: H, origin: [0.0; 3] };
+        let grid = WhitewaterGrid {
+            cells: [N; 3],
+            cell_size: H,
+            origin: [0.0; 3],
+        };
         // Liquid below y = 2.6, a dome on top so the crest curves.
-        let level: Vec<f32> = (0..n * n * n).map(|i| {
-            let (x, y, z) = (i % n, (i / n) % n, i / (n * n));
-            let (px, py, pz) = ((x as f32 + 0.5) * H, (y as f32 + 0.5) * H, (z as f32 + 0.5) * H);
-            let r = ((px - 2.0).powi(2) + (pz - 2.0).powi(2)).sqrt();
-            py - (2.6 + 0.6 * (-r * r).exp())
-        }).collect();
+        let level: Vec<f32> = (0..n * n * n)
+            .map(|i| {
+                let (x, y, z) = (i % n, (i / n) % n, i / (n * n));
+                let (px, py, pz) = (
+                    (x as f32 + 0.5) * H,
+                    (y as f32 + 0.5) * H,
+                    (z as f32 + 0.5) * H,
+                );
+                let r = ((px - 2.0).powi(2) + (pz - 2.0).powi(2)).sqrt();
+                py - (2.6 + 0.6 * (-r * r).exp())
+            })
+            .collect();
         // A floor a cell down: solid nodes inside the influence band, which
         // the engine variant must take without mesh objects.
-        let solid: Vec<f32> = (0..(n + 1).pow(3)).map(|i| ((i / (n + 1)) % (n + 1)) as f32 * H - H).collect();
+        let solid: Vec<f32> = (0..(n + 1).pow(3))
+            .map(|i| ((i / (n + 1)) % (n + 1)) as f32 * H - H)
+            .collect();
         // A hash-noise shear so the liquid holds turbulence for bubbles.
-        let noise = |i: usize, salt: usize| (((i * 2_654_435_761 + salt * 40_503) % 1000) as f32 / 500.0) - 1.0;
+        let noise = |i: usize, salt: usize| {
+            (((i * 2_654_435_761 + salt * 40_503) % 1000) as f32 / 500.0) - 1.0
+        };
         let u: Vec<f32> = (0..(n + 1) * n * n).map(|i| 30.0 * noise(i, 1)).collect();
-        let v: Vec<f32> = (0..n * (n + 1) * n).map(|i| 6.0 + 30.0 * noise(i, 2)).collect();
+        let v: Vec<f32> = (0..n * (n + 1) * n)
+            .map(|i| 6.0 + 30.0 * noise(i, 2))
+            .collect();
         let w: Vec<f32> = (0..n * n * (n + 1)).map(|i| 30.0 * noise(i, 3)).collect();
         let fields = WhitewaterFields {
-            face_u: &u, face_v: &v, face_w: &w, face_cells: [N; 3], face_offset: [0; 3],
-            level: &level, solid: &solid, gravity: [0.0, -9.81, 0.0],
+            face_u: &u,
+            face_v: &v,
+            face_w: &w,
+            face_cells: [N; 3],
+            face_offset: [0; 3],
+            level: &level,
+            solid: &solid,
+            gravity: [0.0, -9.81, 0.0],
         };
         let mut lifecycle = WhitewaterLifecycle::new(grid, 200_000, 11).expect("lifecycle");
         lifecycle.set_fields(&fields).expect("fields");
         // Eight markers a cell in the liquid, as FLIP seeds them.
         let mut markers = Vec::new();
         for (i, &phi) in level.iter().enumerate() {
-            if phi >= 0.0 { continue; }
+            if phi >= 0.0 {
+                continue;
+            }
             let (x, y, z) = (i % n, (i / n) % n, i / (n * n));
             for s in 0..8 {
-                let o = [(s & 1) as f32, ((s >> 1) & 1) as f32, ((s >> 2) & 1) as f32].map(|b| (0.25 + 0.5 * b) * H);
-                markers.push([x as f32 * H + o[0], y as f32 * H + o[1], z as f32 * H + o[2]]);
+                let o = [(s & 1) as f32, ((s >> 1) & 1) as f32, ((s >> 2) & 1) as f32]
+                    .map(|b| (0.25 + 0.5 * b) * H);
+                markers.push([
+                    x as f32 * H + o[0],
+                    y as f32 * H + o[1],
+                    z as f32 * H + o[2],
+                ]);
             }
         }
-        super::set_emission_rates(&mut lifecycle, super::EmissionOptions::default()).expect("rates");
+        super::set_emission_rates(&mut lifecycle, super::EmissionOptions::default())
+            .expect("rates");
         let first = super::emit_engine(&mut lifecycle, &markers, DT, 1.0, 2.0).expect("first tick");
         let mut out = Vec::new();
         lifecycle.particles(&mut out).expect("particles");
-        let kinds = [WhitewaterKind::Foam, WhitewaterKind::Bubble, WhitewaterKind::Spray]
-            .map(|k| out.iter().filter(|p| p.kind == k).count());
-        println!("engine oracle tick 1: foam/bubble/spray {kinds:?} of {} markers", markers.len());
-        assert!(kinds.iter().all(|&c| c > 0), "every type must emit: {kinds:?}");
+        let kinds = [
+            WhitewaterKind::Foam,
+            WhitewaterKind::Bubble,
+            WhitewaterKind::Spray,
+        ]
+        .map(|k| out.iter().filter(|p| p.kind == k).count());
+        println!(
+            "engine oracle tick 1: foam/bubble/spray {kinds:?} of {} markers",
+            markers.len()
+        );
+        assert!(
+            kinds.iter().all(|&c| c > 0),
+            "every type must emit: {kinds:?}"
+        );
 
         // (a) Without variance a lifetime is 7 times an energy of at most 1,
         // so only the engine's variance of 3 lifts one past 7.
@@ -333,18 +520,36 @@ mod tests {
         assert!(hi > 7.0, "longest lifetime {hi}: no variance");
 
         // (c) The surface is calculateCurvatureGrid's on the level set.
-        let reference = super::curvature(&level, [N; 3], f64::from(H)).expect("reference curvature");
-        assert_eq!(first.surface, reference.surface_phi, "surface is not calculateCurvatureGrid's");
-        assert_eq!(first.curvature, reference.curvature, "curvature is not calculateCurvatureGrid's");
-        assert!(first.surface.iter().zip(&level).any(|(a, b)| (a - b).abs() > 1e-3), "surface is the raw level set");
+        let reference =
+            super::curvature(&level, [N; 3], f64::from(H)).expect("reference curvature");
+        assert_eq!(
+            first.surface, reference.surface_phi,
+            "surface is not calculateCurvatureGrid's"
+        );
+        assert_eq!(
+            first.curvature, reference.curvature,
+            "curvature is not calculateCurvatureGrid's"
+        );
+        assert!(
+            first
+                .surface
+                .iter()
+                .zip(&level)
+                .any(|(a, b)| (a - b).abs() > 1e-3),
+            "surface is the raw level set"
+        );
 
         // (b) Influence starts at base 1; with the base lowered to 0.5 it
         // relaxes by decay · dt a tick, where a constant fill would jump. The
         // engine's domain object resets nodes within its 3-cell band of the
         // walls to the new base, which this oracle does not model, so only
         // nodes clear of that band are held to the decay.
-        assert!(first.influence.iter().all(|&x| (x - 1.0).abs() < 1e-6), "first tick influence is the base");
-        let second = super::emit_engine(&mut lifecycle, &markers, DT, 0.5, 2.0).expect("second tick");
+        assert!(
+            first.influence.iter().all(|&x| (x - 1.0).abs() < 1e-6),
+            "first tick influence is the base"
+        );
+        let second =
+            super::emit_engine(&mut lifecycle, &markers, DT, 0.5, 2.0).expect("second tick");
         let expected = 1.0 - 2.0 * DT as f32;
         let side = n + 1;
         let clear = |i: usize| (4..side - 4).contains(&i);
@@ -353,12 +558,19 @@ mod tests {
             .map(|i| second.influence[i])
             .collect();
         assert!(!interior.is_empty());
-        assert!(interior.iter().all(|&x| (x - expected).abs() < 1e-5), "influence did not decay at 2/s: {:?}", &interior[..4]);
+        assert!(
+            interior.iter().all(|&x| (x - expected).abs() < 1e-5),
+            "influence did not decay at 2/s: {:?}",
+            &interior[..4]
+        );
 
         // The count is taken before the lifecycle step: on a fresh pool it
         // is at least what survives one update (here the floor solid and
         // the lifecycle remove about a sixth).
         let (counted, live) = (first.emitted as usize, out.len());
-        assert!(counted >= live && live > 0, "counted {counted} emitted against {live} live after one update");
+        assert!(
+            counted >= live && live > 0,
+            "counted {counted} emitted against {live} live after one update"
+        );
     }
 }

@@ -18,8 +18,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::{CurvePoint, MeshVertex};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::{CurvePoint, MeshVertex};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
@@ -116,7 +116,11 @@ impl Primitive for TubeFromPath {
             _ => 8,
         };
         let caps = matches!(params.get("caps"), Some(ParamValue::Bool(true)));
-        Some(path_len.saturating_add(if caps { 4 } else { 0 }).saturating_mul(sides + 1))
+        Some(
+            path_len
+                .saturating_add(if caps { 4 } else { 0 })
+                .saturating_mul(sides + 1),
+        )
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -126,7 +130,10 @@ impl Primitive for TubeFromPath {
             _ => 8,
         };
 
-        let caps = u32::from(matches!(ctx.params.get("caps"), Some(ParamValue::Bool(true))));
+        let caps = u32::from(matches!(
+            ctx.params.get("caps"),
+            Some(ParamValue::Bool(true))
+        ));
         let Some(path) = ctx.inputs.array("path") else {
             return;
         };
@@ -279,9 +286,8 @@ mod gpu_tests {
             None => (device.create_buffer_shared(4), 0),
         };
 
-        let dst_buf = device.create_buffer_shared(
-            dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64,
-        );
+        let dst_buf =
+            device.create_buffer_shared(dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64);
 
         let uniforms = TubeFromPathUniforms {
             radius,
@@ -295,20 +301,43 @@ mod gpu_tests {
         };
 
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: &path_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &lift_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &rs_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 4, buffer: &dst_buf, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &path_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &lift_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &rs_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: &dst_buf,
+                offset: 0,
+            },
         ];
         let mut enc = device.create_encoder("tube-from-path-test");
-        enc.dispatch_compute(&pipeline, &bindings, [dst_cap.div_ceil(256), 1, 1], "tube-from-path-test");
+        enc.dispatch_compute(
+            &pipeline,
+            &bindings,
+            [dst_cap.div_ceil(256), 1, 1],
+            "tube-from-path-test",
+        );
         enc.commit_and_wait_completed();
 
         let ptr = dst_buf.mapped_ptr().expect("shared dst buffer");
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, dst_cap as usize) }.to_vec()
     }
-
 
     #[test]
     fn short_lift_and_radius_scale_degrade_to_identity_for_the_tail() {
@@ -321,7 +350,14 @@ mod gpu_tests {
         let dst_cap = 8 * 5;
 
         let out = dispatch_tube(
-            &device, &gen_wgsl, &path, Some(&lift), Some(&rscale), dst_cap, 1.0, SIDES,
+            &device,
+            &gen_wgsl,
+            &path,
+            Some(&lift),
+            Some(&rscale),
+            dst_cap,
+            1.0,
+            SIDES,
         );
         // Row 5 (past both short buffers) should have lift=0 (y of the
         // centerline-ish column col=0 should equal path y=0, not 5.0) and

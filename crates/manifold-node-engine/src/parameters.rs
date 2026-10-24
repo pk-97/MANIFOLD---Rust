@@ -204,8 +204,7 @@ impl ParamValue {
     /// One helper, one truth, no `Int` branch to forget.
     #[inline]
     pub fn as_u32_clamped(&self, min: u32) -> Option<u32> {
-        self.as_scalar()
-            .map(|f| f.round().max(min as f32) as u32)
+        self.as_scalar().map(|f| f.round().max(min as f32) as u32)
     }
 
     /// Borrow as a table. Returns `None` for non-Table variants.

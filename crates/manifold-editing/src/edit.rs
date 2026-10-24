@@ -101,7 +101,10 @@ pub mod tick_audit {
                 TickSlot::TempoMap => has(TickField::SessionTempoPoints),
                 TickSlot::RecordingProvenance => has(TickField::RecordingProvenance),
             };
-            assert!(allowed, "tick audit: {slot:?} changed without an audited tick write");
+            assert!(
+                allowed,
+                "tick audit: {slot:?} changed without an audited tick write"
+            );
         }
     }
 }

@@ -4,9 +4,9 @@
 //! The definition and type registries collect these at startup.
 
 use crate::effects::RegistryParamDef;
+use crate::preset_def::{PresetDef, PresetKind};
 use crate::preset_type_id::PresetTypeId;
 use crate::preset_type_registry::PresetTypeRegistration;
-use crate::preset_def::{PresetDef, PresetKind};
 
 /// Static parameter specification — all fields are `'static` so the struct
 /// can live in `inventory::submit!` blocks without allocation.
@@ -138,11 +138,7 @@ impl ParamSpec {
     /// `u32` counter held as `f32`; each outer-card click increments by
     /// one. Consuming primitives detect rising edges (cold-start absorbs
     /// the initial value — see `node.trigger_gate`).
-    pub const fn trigger(
-        id: &'static str,
-        name: &'static str,
-        osc_suffix: &'static str,
-    ) -> Self {
+    pub const fn trigger(id: &'static str, name: &'static str, osc_suffix: &'static str) -> Self {
         Self {
             id,
             name,
@@ -229,7 +225,8 @@ inventory::collect!(GeneratorAliasMetadata);
 impl GeneratorMetadata {
     /// Convert to the unified `PresetDef` (kind = `Generator`).
     pub fn to_generator_def(&self) -> PresetDef {
-        let param_defs: Vec<RegistryParamDef> = self.params.iter().map(|p| p.to_param_def()).collect();
+        let param_defs: Vec<RegistryParamDef> =
+            self.params.iter().map(|p| p.to_param_def()).collect();
         PresetDef {
             kind: PresetKind::Generator,
             display_name: self.display_name.to_string(),

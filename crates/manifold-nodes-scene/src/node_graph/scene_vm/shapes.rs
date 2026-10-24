@@ -5,12 +5,16 @@
 //! knows a handle.
 
 use manifold_core::NodeId;
-use manifold_core::scene_doc::{ForceType, Item, ItemFields, ItemKind, LightFields, LightType, SceneDoc, param_id};
+use manifold_core::scene_doc::{
+    ForceType, Item, ItemFields, ItemKind, LightFields, LightType, SceneDoc, param_id,
+};
 use manifold_foundation::ItemId;
 use manifold_foundation::scene_surface::SceneShapeDecl;
 use manifold_node_engine::scene::transform::{IDENTITY_MAT4, Mat4, Transform};
 
-use crate::node_graph::scene_surface::{RADIAL_FORCE_SHAPES, VORTEX_FORCE_SHAPES, DIRECTED_FORCE_SHAPES, ITEM_SHAPES, LAMP_SHAPES};
+use crate::node_graph::scene_surface::{
+    DIRECTED_FORCE_SHAPES, ITEM_SHAPES, LAMP_SHAPES, RADIAL_FORCE_SHAPES, VORTEX_FORCE_SHAPES,
+};
 
 /// The roles a placed fluid source plays (`node.fluid_role_source`'s
 /// `role` values 0 to 2).
@@ -86,7 +90,11 @@ pub struct SceneShapeVm {
 
 /// What an item's transform reads when the manifest has no value yet.
 fn transform_default(property: &str) -> f32 {
-    if property.starts_with("scale_") { 1.0 } else { 0.0 }
+    if property.starts_with("scale_") {
+        1.0
+    } else {
+        0.0
+    }
 }
 
 /// An item's value for `property`: the live manifest value, else the default.
@@ -117,12 +125,22 @@ pub fn frame_of(values: &dyn Fn(&str) -> Option<f32>, chain: &[&Item]) -> Option
 /// item-id buffer and their shapes only carry the selected item's handles;
 /// a lamp or a force draws none, so its shape is how it is clicked
 /// (SCENE_DOCUMENT_DESIGN.md section 7.14).
-pub(super) fn item_shapes(doc: &SceneDoc, values: &dyn Fn(&str) -> Option<f32>) -> Vec<SceneShapeVm> {
+pub(super) fn item_shapes(
+    doc: &SceneDoc,
+    values: &dyn Fn(&str) -> Option<f32>,
+) -> Vec<SceneShapeVm> {
     let mut out = Vec::new();
     doc.walk(|item, ancestors| {
         match &item.fields {
-            ItemFields::Light(LightFields { light: LightType::Sun | LightType::Point | LightType::Spot }) => {
-                let mut lamp = card_shape(ShapeOwner::Item(item.id.clone()), item, &LAMP_SHAPES[0], values);
+            ItemFields::Light(LightFields {
+                light: LightType::Sun | LightType::Point | LightType::Spot,
+            }) => {
+                let mut lamp = card_shape(
+                    ShapeOwner::Item(item.id.clone()),
+                    item,
+                    &LAMP_SHAPES[0],
+                    values,
+                );
                 lamp.frame = frame_of(values, ancestors);
                 out.push(lamp);
                 return;
@@ -135,12 +153,20 @@ pub(super) fn item_shapes(doc: &SceneDoc, values: &dyn Fn(&str) -> Option<f32>) 
                     // Still air has nowhere to be and no direction.
                     ForceType::Drag => return,
                 };
-                out.push(card_shape(ShapeOwner::Force(NodeId::new(item.id.as_str())), item, decl, values));
+                out.push(card_shape(
+                    ShapeOwner::Force(NodeId::new(item.id.as_str())),
+                    item,
+                    decl,
+                    values,
+                ));
                 return;
             }
             _ => {}
         }
-        if !matches!(item.kind(), ItemKind::Object | ItemKind::Group | ItemKind::Swarm) {
+        if !matches!(
+            item.kind(),
+            ItemKind::Object | ItemKind::Group | ItemKind::Swarm
+        ) {
             return;
         }
         let frame = frame_of(values, ancestors);
@@ -152,7 +178,11 @@ pub(super) fn item_shapes(doc: &SceneDoc, values: &dyn Fn(&str) -> Option<f32>) 
                     let id = param_id(&item.id, property);
                     ShapeParamVm {
                         value: values(&id).unwrap_or_else(|| transform_default(property)),
-                        write: ShapeWrite::Card { id, scale: 1.0, offset: 0.0 },
+                        write: ShapeWrite::Card {
+                            id,
+                            scale: 1.0,
+                            offset: 0.0,
+                        },
                         id: property.to_owned(),
                         wired: false,
                     }
@@ -176,7 +206,12 @@ pub(super) fn item_shapes(doc: &SceneDoc, values: &dyn Fn(&str) -> Option<f32>) 
 /// One declared shape over `item`'s own card rows, in world space: each param
 /// writes the item's card param and sits at its live value, else at its
 /// row's default. Water and its sources are placed this way.
-pub(super) fn card_shape(owner: ShapeOwner, item: &Item, decl: &SceneShapeDecl, values: &dyn Fn(&str) -> Option<f32>) -> SceneShapeVm {
+pub(super) fn card_shape(
+    owner: ShapeOwner,
+    item: &Item,
+    decl: &SceneShapeDecl,
+    values: &dyn Fn(&str) -> Option<f32>,
+) -> SceneShapeVm {
     let params = decl
         .shape
         .param_ids()
@@ -184,13 +219,26 @@ pub(super) fn card_shape(owner: ShapeOwner, item: &Item, decl: &SceneShapeDecl, 
             let id = param_id(&item.id, property);
             ShapeParamVm {
                 value: values(&id).unwrap_or_else(|| resting(item, property)),
-                write: ShapeWrite::Card { id, scale: 1.0, offset: 0.0 },
+                write: ShapeWrite::Card {
+                    id,
+                    scale: 1.0,
+                    offset: 0.0,
+                },
                 id: property.to_owned(),
                 wired: false,
             }
         })
         .collect();
-    SceneShapeVm { owner, index: 0, decl: decl.clone(), params, frame: None, anchor: [0.0; 3], row: Some(item.id.clone()), pickable: true }
+    SceneShapeVm {
+        owner,
+        index: 0,
+        decl: decl.clone(),
+        params,
+        frame: None,
+        anchor: [0.0; 3],
+        row: Some(item.id.clone()),
+        pickable: true,
+    }
 }
 
 /// What `item`'s card row `property` rests at before the manifest has it.

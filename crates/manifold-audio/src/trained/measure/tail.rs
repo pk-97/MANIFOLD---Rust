@@ -23,7 +23,13 @@ struct MaxDeque {
 
 impl MaxDeque {
     fn new(w: usize) -> Self {
-        Self { idx: vec![0; w + 1], val: vec![0.0; w + 1], head: 0, len: 0, w: w as u64 }
+        Self {
+            idx: vec![0; w + 1],
+            val: vec![0.0; w + 1],
+            head: 0,
+            len: 0,
+            w: w as u64,
+        }
     }
 
     fn slot(&self, k: usize) -> usize {
@@ -136,7 +142,10 @@ impl Tail {
         }
         let n = PRE_LEN as f64;
         let mean = pre.iter().sum::<f64>() / n;
-        let xm = (0..PRE_LEN).map(|m| m as f64 - PRE_FROM as f64).sum::<f64>() / n;
+        let xm = (0..PRE_LEN)
+            .map(|m| m as f64 - PRE_FROM as f64)
+            .sum::<f64>()
+            / n;
         let (mut sxy, mut sxx) = (0.0, 0.0);
         for (m, &p) in pre.iter().enumerate() {
             let dx = m as f64 - PRE_FROM as f64 - xm;
@@ -169,7 +178,9 @@ mod tests {
         let mut seed = 12345u64;
         let mut xs = Vec::new();
         for i in 0..200u64 {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let v = ((seed >> 33) % 17) as f64;
             xs.push(v);
             let lo = (i as usize + 1).saturating_sub(w);

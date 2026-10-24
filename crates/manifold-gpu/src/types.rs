@@ -327,7 +327,10 @@ impl GpuBinding<'_> {
     /// The WGSL @binding(N) this binds.
     pub fn binding(&self) -> u32 {
         match *self {
-            Self::Buffer { binding, .. } | Self::Texture { binding, .. } | Self::Sampler { binding, .. } | Self::Bytes { binding, .. } => binding,
+            Self::Buffer { binding, .. }
+            | Self::Texture { binding, .. }
+            | Self::Sampler { binding, .. }
+            | Self::Bytes { binding, .. } => binding,
         }
     }
 }

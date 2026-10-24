@@ -62,7 +62,11 @@ fn every_bundled_and_fixture_param_resolves() {
         let data = super::fixtures::build_cached(scene, &mut cache)
             .unwrap_or_else(|| panic!("unknown fixture {scene}"));
         for layer in &data.project.timeline.layers {
-            for fx in layer.gen_params().into_iter().chain(layer.effects.iter().flatten()) {
+            for fx in layer
+                .gen_params()
+                .into_iter()
+                .chain(layer.effects.iter().flatten())
+            {
                 checked += fx.params.len();
                 audit(scene, fx, &mut misses);
             }
@@ -80,7 +84,9 @@ fn every_bundled_and_fixture_param_resolves() {
 fn card_rows(project: &manifold_core::project::Project) -> Vec<String> {
     let mut rows = Vec::new();
     for layer in &project.timeline.layers {
-        let Some(fx) = layer.gen_params() else { continue };
+        let Some(fx) = layer.gen_params() else {
+            continue;
+        };
         for p in fx.params.iter().filter(|p| p.spec.card_visible) {
             rows.push(format!(
                 "{} {} {:?} [{}, {}] {:?}",
@@ -114,17 +120,28 @@ fn scene_card_rows_survive_save_and_reload() {
             .filter(|row| !after.contains(row))
             .chain(after.iter().filter(|row| !before.contains(row)))
             .collect();
-        println!("CARD_DUMP {scene}: {} rows, {} differing", before.len(), diff.len());
+        println!(
+            "CARD_DUMP {scene}: {} rows, {} differing",
+            before.len(),
+            diff.len()
+        );
         for line in &diff {
             println!("CARD_DIFF {scene}: {line}");
         }
         assert!(!before.is_empty(), "{scene} has no card rows");
-        assert_eq!(before, after, "{scene} card rows changed across save and reload");
+        assert_eq!(
+            before, after,
+            "{scene} card rows changed across save and reload"
+        );
     }
 }
 
 /// A PhysicsSolids control the template declares, bound to one top-level node.
-fn template_node_control() -> (manifold_core::effect_graph_def::EffectGraphDef, String, String) {
+fn template_node_control() -> (
+    manifold_core::effect_graph_def::EffectGraphDef,
+    String,
+    String,
+) {
     manifold_nodes::engine_scenes::install();
     let ty = manifold_core::PresetTypeId::from_string("PhysicsSolids".into());
     let template = manifold_nodes::engine_scenes::scene_def(&ty).expect("PhysicsSolids");
@@ -134,8 +151,12 @@ fn template_node_control() -> (manifold_core::effect_graph_def::EffectGraphDef, 
         .iter()
         .find_map(|s| {
             let mut bound = meta.bindings.iter().filter(|b| b.id == s.id);
-            let (Some(b), None) = (bound.next(), bound.next()) else { return None };
-            let BindingTarget::Node { node_id, .. } = &b.target else { return None };
+            let (Some(b), None) = (bound.next(), bound.next()) else {
+                return None;
+            };
+            let BindingTarget::Node { node_id, .. } = &b.target else {
+                return None;
+            };
             template
                 .nodes
                 .iter()
@@ -180,8 +201,16 @@ fn old_template_copy_section_is_ignored_and_the_template_wins() {
     // the lookup is an old copy, ignored and never converted into a choice,
     // so a later section fix is never read as a user choice.
     let (mut graph, id, _) = template_node_control();
-    let template_section = graph.preset_metadata.as_ref().unwrap().params.iter()
-        .find(|spec| spec.id == id).unwrap().section.clone();
+    let template_section = graph
+        .preset_metadata
+        .as_ref()
+        .unwrap()
+        .params
+        .iter()
+        .find(|spec| spec.id == id)
+        .unwrap()
+        .section
+        .clone();
     assert_ne!(template_section.as_deref(), Some("Old Section"));
     for spec in &mut graph.preset_metadata.as_mut().unwrap().params {
         if spec.id == id {
@@ -203,7 +232,13 @@ fn old_template_copy_section_is_ignored_and_the_template_wins() {
     project.timeline.layers.push(layer);
     let json = serde_json::to_string(&project).expect("save");
     let back = manifold_io::loader::load_project_from_json(&json).expect("reload");
-    let q = back.timeline.layers[0].gen_params().unwrap().params.get(&id).unwrap().clone();
+    let q = back.timeline.layers[0]
+        .gen_params()
+        .unwrap()
+        .params
+        .get(&id)
+        .unwrap()
+        .clone();
     let q = &q;
     assert_eq!((&q.choices, &q.spec), (&p.choices, &p.spec));
 }
@@ -218,14 +253,27 @@ fn joined_vs_saved(fx: &PresetInstance) -> (usize, Vec<String>) {
     let mut compared = 0;
     let mut diffs = Vec::new();
     for p in fx.params.iter().filter(|p| p.source == SpecSource::Lookup) {
-        let Some(saved) = meta.params.iter().find(|s| s.id == p.id()) else { continue };
+        let Some(saved) = meta.params.iter().find(|s| s.id == p.id()) else {
+            continue;
+        };
         compared += 1;
         let j = &p.spec;
         let same = j.name == saved.name
             && close(j.min, saved.min)
             && close(j.max, saved.max)
-            && (j.whole_numbers, j.is_toggle, j.is_trigger, j.card_visible, j.is_angle)
-                == (saved.whole_numbers, saved.is_toggle, saved.is_trigger, saved.card_visible, saved.is_angle)
+            && (
+                j.whole_numbers,
+                j.is_toggle,
+                j.is_trigger,
+                j.card_visible,
+                j.is_angle,
+            ) == (
+                saved.whole_numbers,
+                saved.is_toggle,
+                saved.is_trigger,
+                saved.card_visible,
+                saved.is_angle,
+            )
             && j.value_labels == saved.value_labels;
         if !same {
             diffs.push(format!(
@@ -249,14 +297,22 @@ fn joined_specs_match_saved_specs_on_bundled_scenes() {
         .into_iter()
         .map(|t| with_graph(definitions::create_default(&t)))
         .filter(|fx| {
-            fx.graph.as_ref().is_some_and(|g| g.nodes.iter().any(|n| n.type_id == "node.render_scene"))
+            fx.graph
+                .as_ref()
+                .is_some_and(|g| g.nodes.iter().any(|n| n.type_id == "node.render_scene"))
         })
         .map(|fx| (format!("bundled {}", fx.effect_type().as_str()), fx))
         .collect();
     let mut cache = super::fixtures::FixtureCache::default();
     for scene in ["physicsscene", "gltfscene"] {
         let data = super::fixtures::build_cached(scene, &mut cache).expect("fixture");
-        for fx in data.project.timeline.layers.iter().filter_map(|l| l.gen_params()) {
+        for fx in data
+            .project
+            .timeline
+            .layers
+            .iter()
+            .filter_map(|l| l.gen_params())
+        {
             scenes.push((format!("fixture {scene}"), with_graph(fx.clone())));
         }
     }
@@ -265,11 +321,19 @@ fn joined_specs_match_saved_specs_on_bundled_scenes() {
     for (label, fx) in &scenes {
         let (compared, diffs) = joined_vs_saved(fx);
         total += compared;
-        println!("JOIN_DUMP {label}: {compared} lookup controls, {} differing", diffs.len());
+        println!(
+            "JOIN_DUMP {label}: {compared} lookup controls, {} differing",
+            diffs.len()
+        );
         all.extend(diffs.into_iter().map(|d| format!("{label}: {d}")));
     }
     assert!(total > 0, "no lookup controls compared");
-    assert!(all.is_empty(), "{} joined specs differ from saved:\n{}", all.len(), all.join("\n"));
+    assert!(
+        all.is_empty(),
+        "{} joined specs differ from saved:\n{}",
+        all.len(),
+        all.join("\n")
+    );
 }
 
 /// The instance with its graph made explicit: a layer on the catalog default
@@ -291,15 +355,27 @@ fn drawer_rename_is_a_choice_and_survives_reload() {
     use manifold_core::GraphTarget;
     use manifold_editing::commands::effects::{BindingMappingEdit, EditParamMappingCommand};
     let mut cache = super::fixtures::FixtureCache::default();
-    let mut project = super::fixtures::build_cached("physicsscene", &mut cache).expect("fixture").project.clone();
+    let mut project = super::fixtures::build_cached("physicsscene", &mut cache)
+        .expect("fixture")
+        .project
+        .clone();
     let (index, id, name, range) = project
         .timeline
         .layers
         .iter()
         .enumerate()
         .find_map(|(i, l)| {
-            let p = l.gen_params()?.params.iter().find(|p| p.source == SpecSource::Lookup)?;
-            Some((i, p.id().to_string(), p.spec.name.clone(), (p.spec.min, p.spec.max)))
+            let p = l
+                .gen_params()?
+                .params
+                .iter()
+                .find(|p| p.source == SpecSource::Lookup)?;
+            Some((
+                i,
+                p.id().to_string(),
+                p.spec.name.clone(),
+                (p.spec.min, p.spec.max),
+            ))
         })
         .expect("physicsscene has a lookup control");
     let layer = project.timeline.layers[index].layer_id.clone();
@@ -311,11 +387,22 @@ fn drawer_rename_is_a_choice_and_survives_reload() {
         ..Default::default()
     };
     editing.execute(
-        Box::new(EditParamMappingCommand::new(GraphTarget::Generator(layer), id.clone(), edit, None)),
+        Box::new(EditParamMappingCommand::new(
+            GraphTarget::Generator(layer),
+            id.clone(),
+            edit,
+            None,
+        )),
         &mut project,
     );
     let control = |project: &manifold_core::project::Project| {
-        let p = project.timeline.layers[index].gen_params().unwrap().params.get(&id).unwrap().clone();
+        let p = project.timeline.layers[index]
+            .gen_params()
+            .unwrap()
+            .params
+            .get(&id)
+            .unwrap()
+            .clone();
         (p.spec.name.clone(), p.slider_span(), p.choices.clone())
     };
     let reload = |project: &manifold_core::project::Project| {
@@ -325,16 +412,28 @@ fn drawer_rename_is_a_choice_and_survives_reload() {
     let edited = (String::from("Lamp Power"), (range.0 + 0.5, range.1 + 2.0));
     let after = control(&project);
     assert_eq!((after.0.clone(), after.1), edited);
-    assert_eq!(after.2.rename.as_deref(), Some("Lamp Power"), "the rename is a choice");
+    assert_eq!(
+        after.2.rename.as_deref(),
+        Some("Lamp Power"),
+        "the rename is a choice"
+    );
     assert_eq!(after.2.slider, Some(edited.1), "the range is a choice");
     let reloaded = control(&reload(&project));
-    assert_eq!((reloaded.0, reloaded.1), edited, "rename and range survive reload");
+    assert_eq!(
+        (reloaded.0, reloaded.1),
+        edited,
+        "rename and range survive reload"
+    );
 
     assert!(editing.undo(&mut project));
     let undone = control(&project);
     assert_eq!((undone.0, undone.1), (name.clone(), range));
     let undone = control(&reload(&project));
-    assert_eq!((undone.0, undone.1), (name, range), "undo leaves no choice behind");
+    assert_eq!(
+        (undone.0, undone.1),
+        (name, range),
+        "undo leaves no choice behind"
+    );
 
     assert!(editing.redo(&mut project));
     let redone = control(&reload(&project));
@@ -348,15 +447,24 @@ fn drawer_rename_is_a_choice_and_survives_reload() {
 fn saved_scene_has_id_only_lookup_entries() {
     let mut cache = super::fixtures::FixtureCache::default();
     for scene in ["physicsscene", "gltfscene"] {
-        let mut project = super::fixtures::build_cached(scene, &mut cache).expect("fixture").project.clone();
+        let mut project = super::fixtures::build_cached(scene, &mut cache)
+            .expect("fixture")
+            .project
+            .clone();
         let mut chosen = 0;
         for layer in project.timeline.layers.iter_mut() {
-            let Some(fx) = layer.gen_params_mut() else { continue };
+            let Some(fx) = layer.gen_params_mut() else {
+                continue;
+            };
             // A layer on the catalog default saves no graph; give it one so
             // its described controls reach the saved meta.params.
             *fx = with_graph(fx.clone());
             fx.folded_sections = vec!["Light".into()];
-            if let Some(p) = fx.params.iter_mut().find(|p| p.source == SpecSource::Lookup) {
+            if let Some(p) = fx
+                .params
+                .iter_mut()
+                .find(|p| p.source == SpecSource::Lookup)
+            {
                 p.choices.rename = Some("Chosen".into());
                 p.choices.slider = Some((p.spec.min, p.spec.max + 1.0));
                 p.choices.clone().apply(&mut p.spec);
@@ -367,8 +475,15 @@ fn saved_scene_has_id_only_lookup_entries() {
         let json = serde_json::to_string(&project).expect("save");
         let wire: serde_json::Value = serde_json::from_str(&json).unwrap();
         let reloaded = manifold_io::loader::load_project_from_json(&json).expect("reload");
-        for (before, after) in project.timeline.layers.iter().zip(&reloaded.timeline.layers) {
-            let (Some(a), Some(b)) = (before.gen_params(), after.gen_params()) else { continue };
+        for (before, after) in project
+            .timeline
+            .layers
+            .iter()
+            .zip(&reloaded.timeline.layers)
+        {
+            let (Some(a), Some(b)) = (before.gen_params(), after.gen_params()) else {
+                continue;
+            };
             let view = |fx: &PresetInstance| {
                 fx.params
                     .iter()
@@ -379,19 +494,33 @@ fn saved_scene_has_id_only_lookup_entries() {
             for (x, y) in view(a).into_iter().zip(view(b)) {
                 assert_eq!(x, y, "{scene} control changed across save and reload");
             }
-            assert_eq!(a.params.len(), b.params.len(), "{scene} control count changed");
+            assert_eq!(
+                a.params.len(),
+                b.params.len(),
+                "{scene} control count changed"
+            );
             assert_eq!(a.folded_sections, b.folded_sections);
         }
         let mut lookup_entries = 0;
         let layers = wire["timeline"]["layers"].as_array().unwrap();
-        for (layer, fx) in layers.iter().zip(project.timeline.layers.iter().map(|l| l.gen_params())) {
+        for (layer, fx) in layers
+            .iter()
+            .zip(project.timeline.layers.iter().map(|l| l.gen_params()))
+        {
             let Some(fx) = fx else { continue };
             let meta = &layer["genParams"]["graph"]["presetMetadata"];
             for entry in meta["params"].as_array().into_iter().flatten() {
                 let id = entry["id"].as_str().unwrap();
-                if fx.params.get(id).is_some_and(|p| p.source == SpecSource::Lookup) {
+                if fx
+                    .params
+                    .get(id)
+                    .is_some_and(|p| p.source == SpecSource::Lookup)
+                {
                     lookup_entries += 1;
-                    assert!(entry.get("min").is_none() && entry.get("max").is_none(), "{scene} {id} saved a copy: {entry}");
+                    assert!(
+                        entry.get("min").is_none() && entry.get("max").is_none(),
+                        "{scene} {id} saved a copy: {entry}"
+                    );
                 }
             }
             // D24: only a control whose name the lookup supplies saves without
@@ -400,20 +529,36 @@ fn saved_scene_has_id_only_lookup_entries() {
             let declared = manifold_core::param_lookup::Declared::new(graph).unwrap();
             for b in meta["bindings"].as_array().into_iter().flatten() {
                 let id = b["id"].as_str().unwrap();
-                if fx.params.get(id).is_some_and(|p| p.source == SpecSource::Lookup)
+                if fx
+                    .params
+                    .get(id)
+                    .is_some_and(|p| p.source == SpecSource::Lookup)
                     && b["target"]["kind"] != "composite"
                 {
-                    let authored = graph.preset_metadata.as_ref().unwrap().bindings.iter()
-                        .find(|x| x.id == id).is_some_and(|x| !x.label.is_empty());
+                    let authored = graph
+                        .preset_metadata
+                        .as_ref()
+                        .unwrap()
+                        .bindings
+                        .iter()
+                        .find(|x| x.id == id)
+                        .is_some_and(|x| !x.label.is_empty());
                     if declared.lookup_names(id) {
                         assert!(b.get("label").is_none(), "{scene} {id} saved a label: {b}");
                     } else if authored {
-                        assert!(b.get("label").is_some(), "{scene} {id} lost its authored label: {b}");
+                        assert!(
+                            b.get("label").is_some(),
+                            "{scene} {id} lost its authored label: {b}"
+                        );
                     }
                 }
             }
         }
-        assert!(lookup_entries > 0, "{scene} saved no lookup entries: {}", &json[..json.len().min(400)]);
+        assert!(
+            lookup_entries > 0,
+            "{scene} saved no lookup entries: {}",
+            &json[..json.len().min(400)]
+        );
     }
 }
 
@@ -425,19 +570,34 @@ fn slider_range_round_trips_on_card_and_panel_rows() {
     use manifold_core::scene_surface::SurfaceRole;
     use manifold_editing::command::Command;
     let mut cache = super::fixtures::FixtureCache::default();
-    let mut project = super::fixtures::build_cached("gltfscene", &mut cache).expect("fixture").project.clone();
+    let mut project = super::fixtures::build_cached("gltfscene", &mut cache)
+        .expect("fixture")
+        .project
+        .clone();
     let (index, layer) = project
         .timeline
         .layers
         .iter()
         .enumerate()
-        .find(|(_, l)| l.gen_params().is_some_and(|g| g.params.iter().any(|p| p.spec.scene.is_some())))
+        .find(|(_, l)| {
+            l.gen_params()
+                .is_some_and(|g| g.params.iter().any(|p| p.spec.scene.is_some()))
+        })
         .map(|(i, l)| (i, l.layer_id.clone()))
         .expect("gltfscene has a scene layer");
     let pick = |role: SurfaceRole| {
-        project.timeline.layers[index].gen_params().unwrap().params.iter()
-            .find(|p| p.spec.scene.is_some_and(|s| s.role == role) && !p.spec.is_toggle && !p.spec.is_trigger
-                && p.spec.value_labels.is_empty() && p.spec.max > p.spec.min)
+        project.timeline.layers[index]
+            .gen_params()
+            .unwrap()
+            .params
+            .iter()
+            .find(|p| {
+                p.spec.scene.is_some_and(|s| s.role == role)
+                    && !p.spec.is_toggle
+                    && !p.spec.is_trigger
+                    && p.spec.value_labels.is_empty()
+                    && p.spec.max > p.spec.min
+            })
             .map(|p| (p.id().to_string(), (p.spec.min, p.spec.max)))
             .expect("a slider row in that role")
     };
@@ -457,8 +617,16 @@ fn slider_range_round_trips_on_card_and_panel_rows() {
     let params = &reloaded.timeline.layers[index].gen_params().unwrap().params;
     for (id, (lo, hi)) in [(&card, card_declared), (&panel, panel_declared)] {
         let p = params.get(id).unwrap();
-        assert_eq!(p.slider_span(), (lo - 1.0, hi + 3.0), "{id} slider range holds");
-        assert_eq!((p.spec.min, p.spec.max), (lo, hi), "{id} declared range never moves");
+        assert_eq!(
+            p.slider_span(),
+            (lo - 1.0, hi + 3.0),
+            "{id} slider range holds"
+        );
+        assert_eq!(
+            (p.spec.min, p.spec.max),
+            (lo, hi),
+            "{id} declared range never moves"
+        );
     }
 }
 
@@ -475,7 +643,10 @@ fn old_labels_load_as_new_names_with_addresses_kept() {
         ("_exposure_ev", "Exposure (EV)", "Exposure"),
     ];
     let mut cache = super::fixtures::FixtureCache::default();
-    let mut project = super::fixtures::build_cached("gltfscene", &mut cache).expect("fixture").project.clone();
+    let mut project = super::fixtures::build_cached("gltfscene", &mut cache)
+        .expect("fixture")
+        .project
+        .clone();
     for layer in project.timeline.layers.iter_mut() {
         if let Some(fx) = layer.gen_params_mut() {
             *fx = with_graph(fx.clone());
@@ -484,11 +655,17 @@ fn old_labels_load_as_new_names_with_addresses_kept() {
     let addresses = |project: &manifold_core::project::Project| {
         let mut out = Vec::new();
         for layer in &project.timeline.layers {
-            let Some(fx) = layer.gen_params() else { continue };
+            let Some(fx) = layer.gen_params() else {
+                continue;
+            };
             for (suffix, _, _) in RENAMED {
                 for p in fx.params.iter().filter(|p| p.id().ends_with(suffix)) {
-                    let address = definitions::get_osc_address_for_layer_by_id(fx.effect_type(), layer.layer_id.as_str(), p.id())
-                        .unwrap_or_else(|| panic!("{} has no OSC address", p.id()));
+                    let address = definitions::get_osc_address_for_layer_by_id(
+                        fx.effect_type(),
+                        layer.layer_id.as_str(),
+                        p.id(),
+                    )
+                    .unwrap_or_else(|| panic!("{} has no OSC address", p.id()));
                     out.push((address, p.spec.name.clone(), p.spec.unit));
                 }
             }
@@ -504,20 +681,32 @@ fn old_labels_load_as_new_names_with_addresses_kept() {
         for (list, key) in [("params", "name"), ("bindings", "label")] {
             for entry in meta[list].as_array_mut().into_iter().flatten() {
                 let id = entry["id"].as_str().unwrap_or_default().to_owned();
-                if let Some((_, old, _)) = RENAMED.iter().find(|(suffix, _, _)| id.ends_with(suffix)) {
+                if let Some((_, old, _)) =
+                    RENAMED.iter().find(|(suffix, _, _)| id.ends_with(suffix))
+                {
                     entry[key] = serde_json::json!(old);
                     stale += 1;
                 }
             }
         }
     }
-    assert!(stale >= 6, "the fixture lost a camera or lens control: {stale} stale copies written");
+    assert!(
+        stale >= 6,
+        "the fixture lost a camera or lens control: {stale} stale copies written"
+    );
     let reloaded = manifold_io::loader::load_project_from_json(&wire.to_string()).expect("reload");
     let after = addresses(&reloaded);
 
-    assert_eq!(after.len(), RENAMED.len(), "one control per renamed param: {after:?}");
+    assert_eq!(
+        after.len(),
+        RENAMED.len(),
+        "one control per renamed param: {after:?}"
+    );
     for (suffix, old, new) in RENAMED {
-        let (address, name, unit) = after.iter().find(|(a, ..)| a.ends_with(suffix)).expect("control kept");
+        let (address, name, unit) = after
+            .iter()
+            .find(|(a, ..)| a.ends_with(suffix))
+            .expect("control kept");
         assert_eq!(name, new, "{old} reads as {new} after reload");
         assert!(before.iter().any(|(a, ..)| a == address), "{address} moved");
         if suffix == "_exposure_ev" {

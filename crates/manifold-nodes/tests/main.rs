@@ -1,16 +1,16 @@
 use manifold_nodes as _;
-#[path = "support/rust_items.rs"]
-mod rust_items;
-mod contracts;
 mod blob_v2_demo;
 mod blob_v2_presets;
 mod card_binding_shadow_corpus;
 mod code_terminal;
+mod contracts;
 mod file_loader_exhaustiveness;
 mod gltf_manifest_fetch_coverage;
 mod mosh_presets;
 mod param_wrap_smoke;
 mod project_preset_overlay;
+#[path = "support/rust_items.rs"]
+mod rust_items;
 mod scene_document;
 mod scene_force_presets;
 mod scene_loop_probe;

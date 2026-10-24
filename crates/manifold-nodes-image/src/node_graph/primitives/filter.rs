@@ -11,9 +11,9 @@ use manifold_gpu::{
 use std::borrow::Cow;
 
 use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
-use manifold_node_engine::gpu::render_target::RenderTarget;
 
 const SOURCE_INPUT: NodeInput = NodePort {
     name: Cow::Borrowed("source"),
@@ -780,11 +780,15 @@ mod gpu_tests {
         GpuTextureUsage,
     };
 
-    use manifold_node_engine::exec::backend::Backend;
     use manifold_node_engine::bindings::Slot;
+    use manifold_node_engine::exec::backend::Backend;
     use manifold_node_engine::exec::execution_plan::{ExecutionPlan, ResourceId};
-    use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, scene::boundary_nodes::Source, exec::execution_plan::compile};
     use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::{
+        exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+        exec::execution_plan::compile, exec::metal_backend::MetalBackend, graph::Graph,
+        parameters::ParamValue, scene::boundary_nodes::FinalOutput, scene::boundary_nodes::Source,
+    };
 
     use super::Blur;
 
@@ -888,7 +892,8 @@ mod gpu_tests {
         let output_slot = Slot(backend.slot_count());
         let mut executor = Executor::new(Box::new(backend));
         {
-            let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native, device);
+            let mut gpu =
+                manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native, device);
             executor.execute_frame_with_gpu(
                 &mut graph,
                 &plan,
@@ -1021,8 +1026,10 @@ mod gpu_tests {
                 "radius {radius} regressed moment {moment} from {previous_moment}"
             );
             if radius > 64.0 {
-                assert!(moment > previous_moment * 1.2,
-                    "radius {radius} must broaden the footprint beyond the display range");
+                assert!(
+                    moment > previous_moment * 1.2,
+                    "radius {radius} must broaden the footprint beyond the display range"
+                );
             }
             previous_moment = moment;
         }

@@ -6,10 +6,13 @@
 //! live vertices, so copies times tiles never multiply its padding.
 //! `SCENE_LOOP_COPIES_PNG_DIR=dir` saves each still.
 
+use manifold_core::PresetTypeId;
 use manifold_core::Seconds;
 use manifold_core::layer::Layer;
-use manifold_core::scene_doc::{CameraRig, Item, ItemFields, ItemId, ItemKind, ModifierFields, ModifierTargets, ModifierType, SceneDoc};
-use manifold_core::PresetTypeId;
+use manifold_core::scene_doc::{
+    CameraRig, Item, ItemFields, ItemId, ItemKind, ModifierFields, ModifierTargets, ModifierType,
+    SceneDoc,
+};
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::exec::effect_node::SimStep;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
@@ -27,20 +30,49 @@ const TICK: f64 = 1.0 / 60.0;
 /// Scene Mirror across the floor.
 fn scene(rig: CameraRig) -> SceneDoc {
     let mut doc = SceneDoc::base();
-    if let Some(Item { fields: ItemFields::Object(cube), .. }) = doc.find_mut(&ItemId::new("cube")) {
+    if let Some(Item {
+        fields: ItemFields::Object(cube),
+        ..
+    }) = doc.find_mut(&ItemId::new("cube"))
+    {
         cube.copies = true;
     }
-    if let Some(Item { fields: ItemFields::Camera(camera), .. }) = doc.find_mut(&ItemId::new("camera")) {
+    if let Some(Item {
+        fields: ItemFields::Camera(camera),
+        ..
+    }) = doc.find_mut(&ItemId::new("camera"))
+    {
         camera.rig = rig;
     }
     let end = doc.items.len();
-    doc.insert(None, end, Item::new(ItemId::new("swarm"), "Swarm", ItemFields::default_for(ItemKind::Swarm))).unwrap();
-    for (k, (id, modifier)) in [("loop", ModifierType::SceneLoop), ("mirror", ModifierType::SceneMirror)].into_iter().enumerate() {
+    doc.insert(
+        None,
+        end,
+        Item::new(
+            ItemId::new("swarm"),
+            "Swarm",
+            ItemFields::default_for(ItemKind::Swarm),
+        ),
+    )
+    .unwrap();
+    for (k, (id, modifier)) in [
+        ("loop", ModifierType::SceneLoop),
+        ("mirror", ModifierType::SceneMirror),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let mut card = ItemFields::default_for(ItemKind::Modifier);
         if let ItemFields::Modifier(fields) = &mut card {
-            *fields = ModifierFields { modifier, on: true, targets: ModifierTargets::Scene, ..fields.clone() };
+            *fields = ModifierFields {
+                modifier,
+                on: true,
+                targets: ModifierTargets::Scene,
+                ..fields.clone()
+            };
         }
-        doc.insert(None, end + 1 + k, Item::new(ItemId::new(id), id, card)).unwrap();
+        doc.insert(None, end + 1 + k, Item::new(ItemId::new(id), id, card))
+            .unwrap();
     }
     doc
 }
@@ -49,23 +81,50 @@ fn scene(rig: CameraRig) -> SceneDoc {
 /// World Speed 0 holds the swarm at its seed, so only the camera moves. The
 /// Loop's Spacing and far plane keep their defaults, measured from the scene.
 fn still(doc: SceneDoc, values: &[(&str, f32)], beat: f64) -> Vec<u8> {
-    let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::from_string("Scene".into()), 0);
-    layer.gen_params_mut().unwrap().install_scene_document(doc).unwrap();
+    let mut layer =
+        Layer::new_generator("Scene".into(), PresetTypeId::from_string("Scene".into()), 0);
+    layer
+        .gen_params_mut()
+        .unwrap()
+        .install_scene_document(doc)
+        .unwrap();
     let mut fx = layer.gen_params().unwrap().clone();
-    for &(id, value) in [("world.speed", 0.0), ("cube.count", 9.0), ("cube.columns", 3.0), ("swarm.count", 400.0), ("swarm.size", 0.05)]
-        .iter()
-        .chain(values)
+    for &(id, value) in [
+        ("world.speed", 0.0),
+        ("cube.count", 9.0),
+        ("cube.columns", 3.0),
+        ("swarm.count", 400.0),
+        ("swarm.size", 0.05),
+    ]
+    .iter()
+    .chain(values)
     {
         assert!(fx.set_base_param(id, value), "the scene has a {id} row");
     }
     let device = &manifold_node_engine::testkit::gpu_harness::shared().device;
     let registry = PrimitiveRegistry::with_builtin();
-    let mut runtime = PresetRuntime::from_def_for_render(fx.graph.clone().unwrap(), &registry, Some(&fx.params), false)
-        .expect("the scene builds")
-        .with_generator_device(std::sync::Arc::clone(device), WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float)
-        .expect("the scene installs on the device");
+    let mut runtime = PresetRuntime::from_def_for_render(
+        fx.graph.clone().unwrap(),
+        &registry,
+        Some(&fx.params),
+        false,
+    )
+    .expect("the scene builds")
+    .with_generator_device(
+        std::sync::Arc::clone(device),
+        WIDTH,
+        HEIGHT,
+        GpuTextureFormat::Rgba16Float,
+    )
+    .expect("the scene installs on the device");
     runtime.apply_param_values(&fx.params);
-    let target = RenderTarget::new(device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "scene-loop-copies");
+    let target = RenderTarget::new(
+        device,
+        WIDTH,
+        HEIGHT,
+        GpuTextureFormat::Rgba16Float,
+        "scene-loop-copies",
+    );
     for frame in 0..4 {
         let context = PresetContext {
             time: beat / 2.0,
@@ -84,7 +143,12 @@ fn still(doc: SceneDoc, values: &[(&str, f32)], beat: f64) -> Vec<u8> {
         };
         runtime.set_sim_step(SimStep::live(Seconds(TICK)));
         let mut encoder = device.create_encoder("scene-loop-copies");
-        runtime.render(&mut GpuEncoder::new(&mut encoder, device), &target.texture, &context, &fx.params);
+        runtime.render(
+            &mut GpuEncoder::new(&mut encoder, device),
+            &target.texture,
+            &context,
+            &fx.params,
+        );
         encoder.commit_and_wait_completed();
     }
     readback_to_srgb_png(device, &target.texture, WIDTH, HEIGHT)
@@ -109,7 +173,10 @@ fn the_loop_wraps_a_copies_grid_and_a_swarm_cleanly() {
     save("loop_beat8", &wrapped);
     save("loop_beat3", &midway);
     save("orbit_beat0", &orbit);
-    assert!(start == wrapped, "one loop later the Loop flyer sees the same picture");
+    assert!(
+        start == wrapped,
+        "one loop later the Loop flyer sees the same picture"
+    );
     assert!(start != midway, "the flyer moves between the wraps");
 }
 
@@ -123,23 +190,53 @@ fn vortex_fragments_draw_only_the_cuts_live_vertices() {
     let mut doc = SceneDoc::base();
     let mut card = ItemFields::default_for(ItemKind::Modifier);
     if let ItemFields::Modifier(fields) = &mut card {
-        *fields = ModifierFields { modifier: ModifierType::VortexFragments, on: true, targets: ModifierTargets::Scene, ..fields.clone() };
+        *fields = ModifierFields {
+            modifier: ModifierType::VortexFragments,
+            on: true,
+            targets: ModifierTargets::Scene,
+            ..fields.clone()
+        };
     }
     let end = doc.items.len();
-    doc.insert(None, end, Item::new(ItemId::new("vortex"), "vortex", card)).unwrap();
-    let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::from_string("Scene".into()), 0);
-    layer.gen_params_mut().unwrap().install_scene_document(doc).unwrap();
+    doc.insert(None, end, Item::new(ItemId::new("vortex"), "vortex", card))
+        .unwrap();
+    let mut layer =
+        Layer::new_generator("Scene".into(), PresetTypeId::from_string("Scene".into()), 0);
+    layer
+        .gen_params_mut()
+        .unwrap()
+        .install_scene_document(doc)
+        .unwrap();
     let mut fx = layer.gen_params().unwrap().clone();
-    assert!(fx.set_base_param("cube-material.transmission", 1.0), "the cube's material has a transmission row");
+    assert!(
+        fx.set_base_param("cube-material.transmission", 1.0),
+        "the cube's material has a transmission row"
+    );
     let device = &manifold_node_engine::testkit::gpu_harness::shared().device;
     let registry = PrimitiveRegistry::with_builtin();
-    let mut runtime = PresetRuntime::from_def_for_render(fx.graph.clone().unwrap(), &registry, Some(&fx.params), false)
-        .expect("the scene builds")
-        .with_generator_device(std::sync::Arc::clone(device), WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float)
-        .expect("the scene installs on the device");
+    let mut runtime = PresetRuntime::from_def_for_render(
+        fx.graph.clone().unwrap(),
+        &registry,
+        Some(&fx.params),
+        false,
+    )
+    .expect("the scene builds")
+    .with_generator_device(
+        std::sync::Arc::clone(device),
+        WIDTH,
+        HEIGHT,
+        GpuTextureFormat::Rgba16Float,
+    )
+    .expect("the scene installs on the device");
     runtime.apply_param_values(&fx.params);
     runtime.set_dump_all(true);
-    let target = RenderTarget::new(device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "vortex-live-draw");
+    let target = RenderTarget::new(
+        device,
+        WIDTH,
+        HEIGHT,
+        GpuTextureFormat::Rgba16Float,
+        "vortex-live-draw",
+    );
     let frames = 4;
     for frame in 0..frames {
         if frame == frames - 1 {
@@ -162,7 +259,12 @@ fn vortex_fragments_draw_only_the_cuts_live_vertices() {
         };
         runtime.set_sim_step(SimStep::live(Seconds(TICK)));
         let mut encoder = device.create_encoder("vortex-live-draw");
-        runtime.render(&mut GpuEncoder::new(&mut encoder, device), &target.texture, &context, &fx.params);
+        runtime.render(
+            &mut GpuEncoder::new(&mut encoder, device),
+            &target.texture,
+            &context,
+            &fx.params,
+        );
         encoder.commit_and_wait_completed();
     }
     let dumps = runtime.dump_arrays_all();
@@ -171,12 +273,27 @@ fn vortex_fragments_draw_only_the_cuts_live_vertices() {
         .filter(|d| d.type_id == "node.cut_mesh_cells" && d.port == "live_count")
         .map(|d| manifold_node_engine::testkit::array_harness::read::<u32>(d.buffer, 1)[0])
         .collect();
-    let [live] = counts[..] else { panic!("one fragment cut, found {counts:?}") };
+    let [live] = counts[..] else {
+        panic!("one fragment cut, found {counts:?}")
+    };
     let mut draws = Vec::new();
     // SAFETY: the armed frame completed above and no frame was encoded since.
     unsafe { water_perf::finish(|draw| draws.push(draw)) };
-    let [cube] = &draws[..] else { panic!("one glass cube draw, found {draws:?}") };
-    println!("vortex cube: live {live}, drawn {}, capacity {}", cube.drawn_vertices, cube.capacity_vertices);
-    assert!(live > 0 && live < cube.capacity_vertices, "the cut is padded: live {live}, capacity {}", cube.capacity_vertices);
-    assert_eq!(cube.drawn_vertices, live / 3 * 3, "the cube draws the cut's live vertices");
+    let [cube] = &draws[..] else {
+        panic!("one glass cube draw, found {draws:?}")
+    };
+    println!(
+        "vortex cube: live {live}, drawn {}, capacity {}",
+        cube.drawn_vertices, cube.capacity_vertices
+    );
+    assert!(
+        live > 0 && live < cube.capacity_vertices,
+        "the cut is padded: live {live}, capacity {}",
+        cube.capacity_vertices
+    );
+    assert_eq!(
+        cube.drawn_vertices,
+        live / 3 * 3,
+        "the cube draws the cut's live vertices"
+    );
 }

@@ -7,14 +7,14 @@ use manifold_core::liquid_domain::{LIQUID_DOMAIN_TYPE_IDS, liquid_dial_params};
 use manifold_physics::input::EventStamp;
 use manifold_physics::{FieldValue, Seconds};
 
-use manifold_node_engine::exec::effect_node::{EffectNode, ParamValues};
-use manifold_node_engine::parameters::ParamValue;
 use manifold_core::fluid_domain::DEFAULT_ROLE_PORTS;
-use manifold_node_engine::parameters::ParamType;
-use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_core::scene_impulse::ImpulseTarget;
-use manifold_water_rigid::physics_events::ResolvedNodeImpulse;
+use manifold_node_engine::exec::effect_node::{EffectNode, ParamValues};
+use manifold_node_engine::parameters::ParamType;
+use manifold_node_engine::parameters::ParamValue;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::ports::{PortKind, PortType};
+use manifold_water_rigid::physics_events::ResolvedNodeImpulse;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SceneItem {
@@ -39,19 +39,29 @@ const SCENE_ITEMS: [SceneItem; 6] = [
 const LIQUID_SCENE_OWED: &[(&str, SceneItem, &str)] = &[];
 
 fn has_input(node: &dyn EffectNode, name: &str, ty: PortType) -> bool {
-    node.inputs().iter().any(|port| port.kind == PortKind::Input && port.name == name && port.ty == ty)
+    node.inputs()
+        .iter()
+        .any(|port| port.kind == PortKind::Input && port.name == name && port.ty == ty)
 }
 
 fn has_param(node: &dyn EffectNode, name: &str, ty: ParamType) -> bool {
-    node.parameters().iter().any(|param| param.name == name && param.ty == ty)
+    node.parameters()
+        .iter()
+        .any(|param| param.name == name && param.ty == ty)
 }
 
 /// A fresh domain that does not route liquid impulses has no native interface
 /// or answers with its default ("does not accept"). Any other answer, including "the
 /// clock has not started", means the hook routes them.
 fn routes_fluid_impulses(node: &mut dyn EffectNode) -> bool {
-    let Some(node) = manifold_water_rigid::node::get_mut(node) else { return false; };
-    let stamp = EventStamp { epoch: 0, time: Seconds(0.0), sequence: 0 };
+    let Some(node) = manifold_water_rigid::node::get_mut(node) else {
+        return false;
+    };
+    let stamp = EventStamp {
+        epoch: 0,
+        time: Seconds(0.0),
+        sequence: 0,
+    };
     let impulse = ResolvedNodeImpulse {
         field: FieldValue::uniform([1.0, 0.0, 0.0]).expect("uniform field"),
         target: ImpulseTarget::Fluid,
@@ -71,13 +81,18 @@ fn is_met(type_id: &str, node: &mut dyn EffectNode, item: SceneItem) -> bool {
             params.insert("roles".into(), ParamValue::Float(grown as f32));
             node.reconfigure(&params);
             has_param(node, "roles", ParamType::Int)
-                && (0..grown).all(|index| has_input(node, &format!("role_{index}"), PortType::FluidRole))
+                && (0..grown)
+                    .all(|index| has_input(node, &format!("role_{index}"), PortType::FluidRole))
         }
-        SceneItem::AccelerationField => has_input(node, "acceleration_field", PortType::VectorField),
+        SceneItem::AccelerationField => {
+            has_input(node, "acceleration_field", PortType::VectorField)
+        }
         SceneItem::Speed => has_param(node, "speed", ParamType::Float),
         SceneItem::Reset => has_param(node, "reset", ParamType::Trigger),
         SceneItem::DialRow => liquid_dial_params(type_id).is_some_and(|dials| {
-            dials.iter().all(|dial| node.parameters().iter().any(|param| param.name == *dial))
+            dials
+                .iter()
+                .all(|dial| node.parameters().iter().any(|param| param.name == *dial))
         }),
         SceneItem::FluidImpulses => routes_fluid_impulses(node),
     }
@@ -93,20 +108,33 @@ fn liquid_domain_scene_contract() {
         if !registry.contains(type_id) {
             continue;
         }
-        let mut node = registry.construct(type_id).unwrap_or_else(|| panic!("{type_id} is not registered"));
+        let mut node = registry
+            .construct(type_id)
+            .unwrap_or_else(|| panic!("{type_id} is not registered"));
         for item in SCENE_ITEMS {
-            let owed = LIQUID_SCENE_OWED.iter().find(|(owner, owed, _)| *owner == type_id && *owed == item);
+            let owed = LIQUID_SCENE_OWED
+                .iter()
+                .find(|(owner, owed, _)| *owner == type_id && *owed == item);
             match (is_met(type_id, node.as_mut(), item), owed) {
-                (true, Some((_, _, phase))) => {
-                    failures.push(format!("{type_id} meets {item:?}; delete its {phase} entry from LIQUID_SCENE_OWED"))
+                (true, Some((_, _, phase))) => failures.push(format!(
+                    "{type_id} meets {item:?}; delete its {phase} entry from LIQUID_SCENE_OWED"
+                )),
+                (false, None) => {
+                    failures.push(format!("{type_id} misses {item:?} and no phase owes it"))
                 }
-                (false, None) => failures.push(format!("{type_id} misses {item:?} and no phase owes it")),
                 _ => {}
             }
         }
     }
     for (owner, item, phase) in LIQUID_SCENE_OWED {
-        assert!(LIQUID_DOMAIN_TYPE_IDS.contains(owner) && registry.contains(owner), "{owner} owes {item:?} to {phase} but is not a product liquid domain");
+        assert!(
+            LIQUID_DOMAIN_TYPE_IDS.contains(owner) && registry.contains(owner),
+            "{owner} owes {item:?} to {phase} but is not a product liquid domain"
+        );
     }
-    assert!(failures.is_empty(), "liquid scene contract:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "liquid scene contract:\n{}",
+        failures.join("\n")
+    );
 }

@@ -20,11 +20,10 @@
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::scene::camera::Camera;
 
 const ORBIT: f32 = 0.7;
 const TILT: f32 = 0.95;
@@ -221,7 +220,10 @@ fn region_luma(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> f
             let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
             let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
             let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-            assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+            assert!(
+                r.is_finite() && g.is_finite() && b.is_finite(),
+                "non-finite pixel"
+            );
             sum += (0.2126 * r + 0.7152 * g + 0.0722 * b) as f64;
             n += 1;
         }
@@ -229,7 +231,6 @@ fn region_luma(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> f
     assert!(n > 0, "region window is entirely off-screen");
     sum / n as f64
 }
-
 
 /// Mirror-pixel helper: given a world point on the emitter quad, compute
 /// its virtual image across y=0, intersect the camera→virtual_image ray
@@ -262,7 +263,6 @@ fn mirror_pixel(cam: &Camera, world: [f32; 3], w: u32, h: u32) -> (f32, f32) {
 /// the mirror image, which is why the mean sits below the pre-R2 2.15 while
 /// total energy is preserved.
 
-
 #[test]
 fn mirror_reflection_of_emissive_quad_appears_only_when_rt_reflections_enabled() {
     let (refl_bytes, w, h) = render_readback(&scene_json(true));
@@ -282,7 +282,9 @@ fn mirror_reflection_of_emissive_quad_appears_only_when_rt_reflections_enabled()
     eprintln!(
         "reflection region (pixel ({:.0},{:.0})): mean_on={luma_on:.4} mean_off={luma_off:.4} \
          delta={:.4} | threshold_on={THRESHOLD_ON} min_delta={MIN_DELTA} ceiling_off={CEILING_OFF}",
-        px, py, luma_on - luma_off,
+        px,
+        py,
+        luma_on - luma_off,
     );
 
     assert!(
@@ -389,7 +391,6 @@ fn reflection_of_empty_scene_equals_env_only() {
     );
 }
 
-
 /// R1 gate (d): frame-time discipline — the reflection dispatch adds rays
 /// to the existing trace kernel; the per-frame budget must not exceed 20ms
 /// (no frame hitch). Same `RT_WARMUP_FRAMES` and async-accel pattern as
@@ -470,7 +471,9 @@ fn rt_reflections_dispatch_never_stalls_past_20ms() {
     // bare wall-clock constant — a bare 20ms flaked under full-suite GPU
     // thread contention. Same shared math as `rt_p1_region_probe.rs`'s
     // equivalent assert (one fix, not three copies).
-    use crate::rt_p1_region_probe::{stall_ceiling_ms, STALL_ABS_FLOOR_MS, STALL_FACTOR, STEADY_TAIL_COUNT};
+    use crate::rt_p1_region_probe::{
+        STALL_ABS_FLOOR_MS, STALL_FACTOR, STEADY_TAIL_COUNT, stall_ceiling_ms,
+    };
     let checked = &frame_ms[WARMUP_FRAMES_EXEMPT as usize..];
     let steady_tail = &checked[checked.len().saturating_sub(STEADY_TAIL_COUNT)..];
     let ceiling_ms = stall_ceiling_ms(steady_tail);

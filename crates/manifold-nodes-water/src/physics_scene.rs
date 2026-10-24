@@ -2,15 +2,15 @@
 //! rigid world it couples, and that fluid and each other fluid taking its
 //! solids.
 
+use manifold_core::scene_impulse::RigidImpulseTargets;
 use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, NodeInstanceId};
 use manifold_node_engine::exec::node_pairs::NodePairBehavior;
 use manifold_node_engine::graph::Graph;
 use manifold_node_engine::validation::GraphError;
-use manifold_water_rigid::node;
-use manifold_core::scene_impulse::RigidImpulseTargets;
 use manifold_water_gpu_flip::primitives::gpu_flip_domain::GpuFlipDomain;
 use manifold_water_gpu_mpm::primitives::matter_domain::MatterDomain;
 use manifold_water_liquid::coupling::SharesSolids;
+use manifold_water_rigid::node;
 
 pub(crate) struct PhysicsPair {
     colliders: RigidImpulseTargets,
@@ -32,7 +32,12 @@ impl NodePairBehavior for PhysicsPair {
     ) {
         let Some(ctx) = inputs else {
             if let Some(native) = node::get_mut(fluid) {
-                native.set_coupled_rigid_inputs(None, self.colliders.clone(), None, step.authored_sample_only);
+                native.set_coupled_rigid_inputs(
+                    None,
+                    self.colliders.clone(),
+                    None,
+                    step.authored_sample_only,
+                );
             }
             if let Some(native) = node::get_mut(rigid) {
                 native.accept_coupled_rigid_frame(None);
@@ -71,15 +76,21 @@ fn shares_solids(node: &dyn EffectNode) -> Option<&dyn SharesSolids> {
     let any = node.as_any();
     any.downcast_ref::<GpuFlipDomain>()
         .map(|domain| domain as &dyn SharesSolids)
-        .or_else(|| any.downcast_ref::<MatterDomain>().map(|domain| domain as &dyn SharesSolids))
+        .or_else(|| {
+            any.downcast_ref::<MatterDomain>()
+                .map(|domain| domain as &dyn SharesSolids)
+        })
 }
 
 fn shares_solids_mut(node: &mut dyn EffectNode) -> Option<&mut dyn SharesSolids> {
     let any = node.as_any_mut();
     if any.is::<GpuFlipDomain>() {
-        return any.downcast_mut::<GpuFlipDomain>().map(|domain| domain as &mut dyn SharesSolids);
+        return any
+            .downcast_mut::<GpuFlipDomain>()
+            .map(|domain| domain as &mut dyn SharesSolids);
     }
-    any.downcast_mut::<MatterDomain>().map(|domain| domain as &mut dyn SharesSolids)
+    any.downcast_mut::<MatterDomain>()
+        .map(|domain| domain as &mut dyn SharesSolids)
 }
 
 impl NodePairBehavior for SharedSolidsPair {
@@ -103,7 +114,11 @@ impl NodePairBehavior for SharedSolidsPair {
 }
 
 /// Hand `owner`'s solids to `water` every frame.
-pub(crate) fn add_shared_solids(graph: &mut Graph, owner: NodeInstanceId, water: NodeInstanceId) -> Result<(), GraphError> {
+pub(crate) fn add_shared_solids(
+    graph: &mut Graph,
+    owner: NodeInstanceId,
+    water: NodeInstanceId,
+) -> Result<(), GraphError> {
     if graph.pair_behavior_mut(owner, water).is_some() {
         return Ok(());
     }
@@ -157,7 +172,9 @@ mod tests {
             &mut graph,
             fluid,
             rigid,
-            RigidImpulseTargets::body(2).unwrap().union(RigidImpulseTargets::group(0).unwrap()),
+            RigidImpulseTargets::body(2)
+                .unwrap()
+                .union(RigidImpulseTargets::group(0).unwrap()),
         )
         .unwrap();
         assert_eq!(graph.node_pairs().len(), 1);

@@ -12,11 +12,11 @@ pub mod bodies;
 pub mod body_buffers;
 pub mod clock;
 pub mod coupling;
+pub mod display_cursor;
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 #[doc(hidden)]
 pub mod extent;
 pub mod fields;
-pub mod display_cursor;
 pub mod frame_history;
 pub mod frame_ring;
 pub mod gizmos;
@@ -24,10 +24,10 @@ pub mod grid;
 pub mod lattice;
 pub mod world_pose;
 
+use crate::fluid_role::FluidRole;
 use manifold_node_engine::bindings::NodeInputs;
 use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_node_engine::ports::{NodeInput, PortKind, PortType};
-use crate::fluid_role::FluidRole;
 
 pub mod fluid_particles;
 pub mod fluid_role;
@@ -119,4 +119,3 @@ impl RolePorts {
 pub const WATER_DENSITY: f32 = 1000.0;
 
 pub mod substep_history;
-

@@ -356,7 +356,11 @@ mod tests {
             .collect();
         assert_eq!(struct_nulls.len(), 1, "one struct null was declared");
         assert!(elements.iter().all(|&e| e == struct_nulls[0][1]));
-        assert_eq!(output[3], input[3] + 2, "bound grew by the null and the construct");
+        assert_eq!(
+            output[3],
+            input[3] + 2,
+            "bound grew by the null and the construct"
+        );
     }
 
     #[test]
@@ -424,7 +428,11 @@ mod tests {
                 .inst(OP_CONSTANT_NULL, &[7, 8]);
             let input = b.finish(7, 8);
             validate(&input, label);
-            assert_eq!(materialize_complex_constant_array_stores(&input), input, "{label}");
+            assert_eq!(
+                materialize_complex_constant_array_stores(&input),
+                input,
+                "{label}"
+            );
         }
     }
 

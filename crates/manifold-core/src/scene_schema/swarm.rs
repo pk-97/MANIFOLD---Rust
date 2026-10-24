@@ -8,7 +8,8 @@ use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 
 use super::fields::{
-    Choice, FieldControl, FieldRow, FieldValue, MATERIAL_BINDING, always, enabled, is_object_or_group, wrong_value,
+    Choice, FieldControl, FieldRow, FieldValue, MATERIAL_BINDING, always, enabled,
+    is_object_or_group, wrong_value,
 };
 use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, follows, perform, row, setup};
 use crate::scene_doc::{DrawAs, EmitFrom, Item, ItemFields, ItemId, SceneDoc, Shape};
@@ -54,7 +55,8 @@ fn draws_platonic(fields: &ItemFields) -> bool {
 /// a particle against the default sphere's 2,880.
 const PARTICLE_SPHERE: &str = "a particle sphere is low detail: up to 100,000 draw each frame";
 
-const BOX_OF_SWARM: &str = "the bounds box is fixed in the emitter's own frame, wider than the seed box";
+const BOX_OF_SWARM: &str =
+    "the bounds box is fixed in the emitter's own frame, wider than the seed box";
 const CLOCK: &str = "the forces node's clock and lattice, wired to the mover";
 
 const fn bounds(property: &'static str, param: &'static str, exposure: Exposure) -> PropertyRow {
@@ -157,14 +159,38 @@ pub static SWARM_ROWS: [PropertyRow; 77] = [
     follows("live_count", "the swarm's Count: how many of its copies are drawn"),
 ];
 
-const EMITTERS: &[Choice] = &[Choice { key: "box", label: "Box volume" }, Choice { key: "sphere", label: "Sphere" }];
+const EMITTERS: &[Choice] = &[
+    Choice {
+        key: "box",
+        label: "Box volume",
+    },
+    Choice {
+        key: "sphere",
+        label: "Sphere",
+    },
+];
 
 const SHAPES: &[Choice] = &[
-    Choice { key: "tetrahedron", label: "Tetrahedron" },
-    Choice { key: "cube", label: "Cube" },
-    Choice { key: "octahedron", label: "Octahedron" },
-    Choice { key: "icosahedron", label: "Icosahedron" },
-    Choice { key: "sphere", label: "Sphere" },
+    Choice {
+        key: "tetrahedron",
+        label: "Tetrahedron",
+    },
+    Choice {
+        key: "cube",
+        label: "Cube",
+    },
+    Choice {
+        key: "octahedron",
+        label: "Octahedron",
+    },
+    Choice {
+        key: "icosahedron",
+        label: "Icosahedron",
+    },
+    Choice {
+        key: "sphere",
+        label: "Sphere",
+    },
 ];
 
 pub static SWARM_FIELDS: [FieldRow; 3] = [
@@ -172,7 +198,10 @@ pub static SWARM_FIELDS: [FieldRow; 3] = [
         id: "emit_from",
         label: "Emit From",
         section: ControlGroup::Source,
-        control: FieldControl::ClosedOrItem { closed: EMITTERS, items: is_object_or_group },
+        control: FieldControl::ClosedOrItem {
+            closed: EMITTERS,
+            items: is_object_or_group,
+        },
         applies: always,
         disabled: enabled,
         read: |fields| match fields {
@@ -200,7 +229,10 @@ pub static SWARM_FIELDS: [FieldRow; 3] = [
         id: "draw_as",
         label: "Draw As",
         section: ControlGroup::Source,
-        control: FieldControl::ClosedOrItem { closed: SHAPES, items: is_object_or_group },
+        control: FieldControl::ClosedOrItem {
+            closed: SHAPES,
+            items: is_object_or_group,
+        },
         applies: always,
         disabled: enabled,
         read: |fields| match fields {
@@ -239,7 +271,12 @@ pub static SWARM_FIELDS: [FieldRow; 3] = [
 /// Why `swarm` cannot take `pick` as its field `field`'s item, or `None`.
 /// The picker draws the item disabled with the reason, and a pick of it is
 /// refused, so a swarm never sits on an item it cannot use.
-pub(super) fn pick_unavailable(doc: &SceneDoc, swarm: &Item, field: &str, pick: &Item) -> Option<&'static str> {
+pub(super) fn pick_unavailable(
+    doc: &SceneDoc,
+    swarm: &Item,
+    field: &str,
+    pick: &Item,
+) -> Option<&'static str> {
     let ocean = matches!(&pick.fields, ItemFields::Object(object) if object.shape == Shape::Ocean);
     match field {
         "emit_from" if ocean => Some("An Ocean is endless: it has no surface to emit from"),
@@ -268,9 +305,10 @@ fn draw_as_refused(doc: &SceneDoc, swarm: &Item, pick: &Item) -> Option<&'static
     let mut copied_above = false;
     doc.walk(|other, ancestors| {
         if other.id == pick.id {
-            copied_above = ancestors
-                .iter()
-                .any(|holder| matches!(&holder.fields, ItemFields::Group(group) if group.copies) || drawn_by_other(&holder.id));
+            copied_above = ancestors.iter().any(|holder| {
+                matches!(&holder.fields, ItemFields::Group(group) if group.copies)
+                    || drawn_by_other(&holder.id)
+            });
         }
     });
     copied_above.then_some("Inside a group whose copies draw it already")
@@ -301,10 +339,26 @@ mod tests {
             group.copies = true;
         }
         let end = doc.items.len();
-        doc.insert(None, end, Item::new(ItemId::new("sea"), "sea", sea)).unwrap();
-        doc.insert(None, end + 1, Item::new(ItemId::new("rack"), "rack", copied)).unwrap();
-        doc.insert(Some(&ItemId::new("rack")), 0, Item::new(ItemId::new("ball"), "ball", ItemFields::default_for(crate::scene_doc::ItemKind::Object))).unwrap();
-        doc.insert(None, end + 2, swarm("first", Some("rack"))).unwrap();
+        doc.insert(None, end, Item::new(ItemId::new("sea"), "sea", sea))
+            .unwrap();
+        doc.insert(
+            None,
+            end + 1,
+            Item::new(ItemId::new("rack"), "rack", copied),
+        )
+        .unwrap();
+        doc.insert(
+            Some(&ItemId::new("rack")),
+            0,
+            Item::new(
+                ItemId::new("ball"),
+                "ball",
+                ItemFields::default_for(crate::scene_doc::ItemKind::Object),
+            ),
+        )
+        .unwrap();
+        doc.insert(None, end + 2, swarm("first", Some("rack")))
+            .unwrap();
         doc.insert(None, end + 3, swarm("second", None)).unwrap();
         let second = doc.find(&ItemId::new("second")).unwrap().clone();
         let pick = |field: &str, id: &str| {
@@ -312,9 +366,16 @@ mod tests {
             set_field(&doc, &second, row, &FieldValue::Item(Some(ItemId::new(id)))).err()
         };
         assert_eq!(pick("draw_as", "rack"), None, "two swarms draw one item");
-        assert_eq!(pick("draw_as", "ball").as_deref(), Some("Inside a group whose copies draw it already"));
+        assert_eq!(
+            pick("draw_as", "ball").as_deref(),
+            Some("Inside a group whose copies draw it already")
+        );
         assert!(pick("draw_as", "sea").is_some_and(|reason| reason.starts_with("An Ocean")));
         assert!(pick("emit_from", "sea").is_some_and(|reason| reason.starts_with("An Ocean")));
-        assert_eq!(pick("emit_from", "rack"), None, "emitting from a drawn group is fine");
+        assert_eq!(
+            pick("emit_from", "rack"),
+            None,
+            "emitting from a drawn group is fine"
+        );
     }
 }

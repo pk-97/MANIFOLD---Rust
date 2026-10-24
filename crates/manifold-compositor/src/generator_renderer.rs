@@ -1,23 +1,23 @@
-use manifold_node_engine::runtime::generator_provider::{GeneratorProvider, generator_provider};
-use manifold_node_engine::runtime::PresetRuntime;
-use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_node_engine::runtime::preset_context::{PresetContext, ProjectTempo};
-use manifold_node_engine::gpu::render_target::RenderTarget;
-use manifold_node_engine::gpu::uniform_arena::UniformArena;
 use ahash::AHashMap;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_core::params::ParamManifest;
-use manifold_core::{Beats, ClipId, PresetTypeId, LayerId, NodeId, Seconds};
+use manifold_core::{Beats, ClipId, LayerId, NodeId, PresetTypeId, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_node_engine::gpu::uniform_arena::UniformArena;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::generator_provider::{GeneratorProvider, generator_provider};
+use manifold_node_engine::runtime::preset_context::{PresetContext, ProjectTempo};
 use manifold_playback::renderer::ClipRenderer;
 use std::any::Any;
 use std::sync::Arc;
 
-use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_core::fluid_domain::FluidDomainSnapshot;
-use manifold_node_engine::scene::scene_viewport::{SceneViewportConfig, SceneViewportHostError};
 use manifold_node_engine::runtime::ModifierPreviewContext;
+use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
+use manifold_node_engine::scene::scene_viewport::{SceneViewportConfig, SceneViewportHostError};
 
 mod physics_events;
 mod runaway;
@@ -27,18 +27,17 @@ use state::{ActiveClip, LayerGeneratorState, ThumbGen};
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 
-
-
 /// Prepared replacements remain private until every pipeline owner has admitted resize.
 pub struct PreparedGeneratorResize {
     width: u32,
     height: u32,
     active: Vec<(ClipId, RenderTarget)>,
     available: Vec<RenderTarget>,
-    layers: Vec<(LayerId, manifold_node_engine::runtime::PreparedRuntimeResize)>,
+    layers: Vec<(
+        LayerId,
+        manifold_node_engine::runtime::PreparedRuntimeResize,
+    )>,
 }
-
-
 
 /// GPU-side clip renderer for generators.
 /// Manages per-layer Generator instances and per-clip RenderTargets.
@@ -57,7 +56,6 @@ const THUMB_H: u32 = 288;
 /// generators look empty at t=0, so we advance the runtime this many steps before
 /// the parked still is read. ~0.75 s at 60 fps; cheap on the tiny target.
 const WARMUP_FRAMES: usize = 45;
-
 
 pub struct GeneratorRenderer {
     next_physics_event: u64,
@@ -234,7 +232,9 @@ impl GeneratorRenderer {
 
     /// Drain every owned generator's per-step CPU profiles recorded on the
     /// last profiled frame.
-    pub fn take_step_profiles(&mut self) -> Vec<manifold_node_engine::exec::execution::StepProfile> {
+    pub fn take_step_profiles(
+        &mut self,
+    ) -> Vec<manifold_node_engine::exec::execution::StepProfile> {
         let mut out = Vec::new();
         for state in self.layer_generators.values_mut() {
             out.extend(state.generator.take_step_profiles());
@@ -343,12 +343,12 @@ impl GeneratorRenderer {
     }
 
     /// The latest valid viewport color for `layer_id`.
-    pub fn scene_viewport_texture(
-        &self,
-        layer_id: &LayerId,
-    ) -> Option<&manifold_gpu::GpuTexture> {
+    pub fn scene_viewport_texture(&self, layer_id: &LayerId) -> Option<&manifold_gpu::GpuTexture> {
         if self.scene_viewport_error.is_some()
-            || self.scene_viewport_request.as_ref().is_none_or(|(requested, _, _)| requested != layer_id)
+            || self
+                .scene_viewport_request
+                .as_ref()
+                .is_none_or(|(requested, _, _)| requested != layer_id)
         {
             return None;
         }
@@ -385,7 +385,10 @@ impl GeneratorRenderer {
         output: &mut Vec<(NodeId, FluidDomainSnapshot)>,
     ) {
         if self.scene_viewport_error.is_some()
-            || self.scene_viewport_request.as_ref().is_none_or(|(requested, _, _)| requested != layer_id)
+            || self
+                .scene_viewport_request
+                .as_ref()
+                .is_none_or(|(requested, _, _)| requested != layer_id)
         {
             return;
         }
@@ -393,7 +396,9 @@ impl GeneratorRenderer {
             return;
         };
         if let Some(context) = self.scene_viewport_modifier.as_deref() {
-            state.generator.write_modifier_fluid_domains(context, output);
+            state
+                .generator
+                .write_modifier_fluid_domains(context, output);
         } else {
             state.generator.write_fluid_domains_watched(output);
         }
@@ -410,7 +415,12 @@ impl GeneratorRenderer {
         domains: &mut Vec<(NodeId, FluidDomainSnapshot)>,
         not_made: &mut Vec<(NodeId, u32)>,
         refused: &mut Vec<(NodeId, manifold_core::physics_members::BodyRefusalRow)>,
-        mut each: impl FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)], &[(NodeId, u32)], &[(NodeId, manifold_core::physics_members::BodyRefusalRow)]),
+        mut each: impl FnMut(
+            &LayerId,
+            &[(NodeId, FluidDomainSnapshot)],
+            &[(NodeId, u32)],
+            &[(NodeId, manifold_core::physics_members::BodyRefusalRow)],
+        ),
     ) {
         for (layer_id, state) in &self.layer_generators {
             if state.rendered_pass != Some(self.render_pass) {
@@ -440,7 +450,9 @@ impl GeneratorRenderer {
         lights: &mut Vec<[f32; 3]>,
         gizmos: &mut Vec<manifold_core::physics_gizmo::PhysicsGizmo>,
     ) -> Option<(NodeId, manifold_node_engine::scene::camera::Camera)> {
-        let state = self.layer_generators.get(layer_id)
+        let state = self
+            .layer_generators
+            .get(layer_id)
             .filter(|state| state.rendered_pass == Some(self.render_pass))?;
         state.generator.write_fluid_domains_watched(domains);
         state.generator.write_physics_gizmos_watched(gizmos);
@@ -465,40 +477,67 @@ impl GeneratorRenderer {
     /// Pick the item drawn at a point of `layer_id`'s output render
     /// (SCENE_DOCUMENT_DESIGN.md section 7.14); [`Self::take_pick`] answers a
     /// render later.
-    pub fn request_pick(&mut self, layer_id: &LayerId, pick: manifold_node_engine::scene::pick::PickRequest) {
+    pub fn request_pick(
+        &mut self,
+        layer_id: &LayerId,
+        pick: manifold_node_engine::scene::pick::PickRequest,
+    ) {
         if let Some(state) = self.layer_generators.get_mut(layer_id) {
             state.generator.request_pick(pick);
         }
     }
 
-    pub fn take_pick(&mut self, layer_id: &LayerId) -> Option<manifold_node_engine::scene::pick::PickHit> {
-        self.layer_generators.get_mut(layer_id)?.generator.take_pick()
+    pub fn take_pick(
+        &mut self,
+        layer_id: &LayerId,
+    ) -> Option<manifold_node_engine::scene::pick::PickHit> {
+        self.layer_generators
+            .get_mut(layer_id)?
+            .generator
+            .take_pick()
     }
 
     /// [`Self::request_pick`] in `layer_id`'s scene viewport.
-    pub fn request_scene_viewport_pick(&mut self, layer_id: &LayerId, pick: manifold_node_engine::scene::pick::PickRequest) {
+    pub fn request_scene_viewport_pick(
+        &mut self,
+        layer_id: &LayerId,
+        pick: manifold_node_engine::scene::pick::PickRequest,
+    ) {
         if let Some(state) = self.layer_generators.get_mut(layer_id) {
             state.generator.request_scene_viewport_pick(pick);
         }
     }
 
-    pub fn take_scene_viewport_pick(&mut self, layer_id: &LayerId) -> Option<manifold_node_engine::scene::pick::PickHit> {
-        self.layer_generators.get_mut(layer_id)?.generator.take_scene_viewport_pick()
+    pub fn take_scene_viewport_pick(
+        &mut self,
+        layer_id: &LayerId,
+    ) -> Option<manifold_node_engine::scene::pick::PickHit> {
+        self.layer_generators
+            .get_mut(layer_id)?
+            .generator
+            .take_scene_viewport_pick()
     }
 
     /// The selection mask `layer_id`'s output render drew in the last
     /// `render_all`.
     pub fn selection_mask(&self, layer_id: &LayerId) -> Option<&manifold_gpu::GpuTexture> {
-        self.layer_generators.get(layer_id)
+        self.layer_generators
+            .get(layer_id)
             .filter(|state| state.rendered_pass == Some(self.render_pass))?
             .generator
             .selection_mask()
     }
 
     /// The selection mask of `layer_id`'s scene viewport frame.
-    pub fn scene_viewport_selection_mask(&self, layer_id: &LayerId) -> Option<&manifold_gpu::GpuTexture> {
+    pub fn scene_viewport_selection_mask(
+        &self,
+        layer_id: &LayerId,
+    ) -> Option<&manifold_gpu::GpuTexture> {
         self.scene_viewport_texture(layer_id)?;
-        self.layer_generators.get(layer_id)?.generator.scene_viewport_selection_mask()
+        self.layer_generators
+            .get(layer_id)?
+            .generator
+            .scene_viewport_selection_mask()
     }
 
     /// Keep `layer_id`'s scene depth for the gizmo pass (BUG-b36b8 gizmo
@@ -519,16 +558,23 @@ impl GeneratorRenderer {
 
     /// The raw depth `layer_id`'s output render kept in the last `render_all`.
     pub fn gizmo_depth(&self, layer_id: &LayerId) -> Option<&manifold_gpu::GpuTexture> {
-        self.layer_generators.get(layer_id)
+        self.layer_generators
+            .get(layer_id)
             .filter(|state| state.rendered_pass == Some(self.render_pass))?
             .generator
             .gizmo_depth()
     }
 
     /// The raw depth of `layer_id`'s scene viewport frame.
-    pub fn scene_viewport_gizmo_depth(&self, layer_id: &LayerId) -> Option<&manifold_gpu::GpuTexture> {
+    pub fn scene_viewport_gizmo_depth(
+        &self,
+        layer_id: &LayerId,
+    ) -> Option<&manifold_gpu::GpuTexture> {
         self.scene_viewport_texture(layer_id)?;
-        self.layer_generators.get(layer_id)?.generator.scene_viewport_gizmo_depth()
+        self.layer_generators
+            .get(layer_id)?
+            .generator
+            .scene_viewport_gizmo_depth()
     }
 
     /// Keep local modifier addresses out of the host's node namespace.
@@ -559,8 +605,12 @@ impl GeneratorRenderer {
         self.sim_metrics.take()
     }
 
-    pub fn set_layer_skin_registry(&mut self, registry: Option<&manifold_node_engine::runtime::layer_skin::LayerSkinRegistry>) {
-        self.layer_skin_registry = registry.map(manifold_node_engine::runtime::layer_skin::LayerSkinPtr::new);
+    pub fn set_layer_skin_registry(
+        &mut self,
+        registry: Option<&manifold_node_engine::runtime::layer_skin::LayerSkinRegistry>,
+    ) {
+        self.layer_skin_registry =
+            registry.map(manifold_node_engine::runtime::layer_skin::LayerSkinPtr::new);
     }
 
     /// Set the per-node thumbnail-atlas dump to the editor's currently-visible
@@ -583,12 +633,18 @@ impl GeneratorRenderer {
     }
 
     pub fn set_modifier_dump_visible(
-        &mut self, layer_id: &LayerId,
-        context: Option<&manifold_node_engine::runtime::ModifierPreviewContext>, visible: &[NodeId],
+        &mut self,
+        layer_id: &LayerId,
+        context: Option<&manifold_node_engine::runtime::ModifierPreviewContext>,
+        visible: &[NodeId],
     ) {
         for (lid, state) in &mut self.layer_generators {
-            if lid == layer_id && let Some(context) = context {
-                state.generator.set_dump_visible_with_context(None, visible, Some(context));
+            if lid == layer_id
+                && let Some(context) = context
+            {
+                state
+                    .generator
+                    .set_dump_visible_with_context(None, visible, Some(context));
             } else {
                 state.generator.clear_dump_set();
             }
@@ -596,10 +652,15 @@ impl GeneratorRenderer {
     }
 
     pub fn modifier_preview_local_node(
-        &self, layer_id: &LayerId, context: &manifold_node_engine::runtime::ModifierPreviewContext,
+        &self,
+        layer_id: &LayerId,
+        context: &manifold_node_engine::runtime::ModifierPreviewContext,
         generated: &str,
     ) -> Option<&NodeId> {
-        self.layer_generators.get(layer_id)?.generator.modifier_preview_local_node(context, generated)
+        self.layer_generators
+            .get(layer_id)?
+            .generator
+            .modifier_preview_local_node(context, generated)
     }
 
     /// section 8 D1: bump `layer_id`'s audio-trigger counter by one fire. Called by
@@ -611,14 +672,20 @@ impl GeneratorRenderer {
     /// pulse fired).
     pub fn bump_audio_count(&mut self, layer_id: &LayerId) {
         if let Some(ls) = self.layer_generators.get_mut(layer_id) {
-            ls.generator.note_trigger_event(ls.effective_trigger_count());
+            ls.generator
+                .note_trigger_event(ls.effective_trigger_count());
             ls.audio_count = ls.audio_count.wrapping_add(1);
         }
     }
 
     /// Modifier-owned audio stays in that modifier's stream. Legacy host and
     /// effect gates retain the existing layer counter behavior.
-    pub fn route_audio_pulse(&mut self, layer_id: &LayerId, owner: &manifold_core::EffectId, param_key: u64) {
+    pub fn route_audio_pulse(
+        &mut self,
+        layer_id: &LayerId,
+        owner: &manifold_core::EffectId,
+        param_key: u64,
+    ) {
         if let Some(layer) = self.layer_generators.get_mut(layer_id)
             && layer.event_owner.as_ref() == Some(owner)
             && layer.generator.note_modifier_audio_key(param_key)
@@ -662,7 +729,10 @@ impl GeneratorRenderer {
 
     /// How the watched generator's previewed node should be rendered (flow
     /// wheel / lift / raw). `Color` if the layer has no generator.
-    pub fn preview_encoding(&self, layer_id: &LayerId) -> manifold_node_engine::preview_encoding::PreviewEncoding {
+    pub fn preview_encoding(
+        &self,
+        layer_id: &LayerId,
+    ) -> manifold_node_engine::preview_encoding::PreviewEncoding {
         self.layer_generators
             .get(layer_id)
             .map(|s| s.generator.preview_encoding())
@@ -686,7 +756,10 @@ impl GeneratorRenderer {
     /// canvas reflects what a card slider / driver / Ableton / envelope is doing
     /// to each inner knob this frame, not the frozen authoring def. Empty if the
     /// layer has no generator.
-    pub fn live_node_params(&self, layer_id: &LayerId) -> manifold_node_engine::preview_encoding::LiveNodeParams {
+    pub fn live_node_params(
+        &self,
+        layer_id: &LayerId,
+    ) -> manifold_node_engine::preview_encoding::LiveNodeParams {
         self.layer_generators
             .get(layer_id)
             .map(|s| s.generator.live_node_params_watched())
@@ -738,22 +811,18 @@ impl GeneratorRenderer {
         // present this frame"; `Some(v)` means "override is at v". Encoding
         // "no override" as `None` lets us distinguish the initial
         // bundled-preset path from a v0 override.
-        let current_override_version: Option<u32> =
-            override_def.map(|_| override_version);
+        let current_override_version: Option<u32> = override_def.map(|_| override_version);
         // Keyed on the manifest's presence (not the override's) so a
         // spec-only mapping edit on a catalog-default generator — no
         // override, just a `graph_version` bump — is visible to the sweep's
         // value-only path, matching the sweep's own keying below.
         let current_param_version: Option<u32> = manifest.map(|_| param_version);
         let is_watched_now = self.preview_layer.as_ref() == Some(&layer_id);
-        let needs_create = self
-            .layer_generators
-            .get(&layer_id)
-            .is_none_or(|ls| {
-                ls.generator_type != gen_type
-                    || ls.override_version != current_override_version
-                    || ls.built_watched != is_watched_now
-            });
+        let needs_create = self.layer_generators.get(&layer_id).is_none_or(|ls| {
+            ls.generator_type != gen_type
+                || ls.override_version != current_override_version
+                || ls.built_watched != is_watched_now
+        });
 
         if needs_create {
             // Preserve `clip_count`/`audio_count` across rebuild. Without
@@ -793,14 +862,19 @@ impl GeneratorRenderer {
         // hasn't touched this feature).
         if let Some(ls) = self.layer_generators.get_mut(&layer_id) {
             let clip_edge_enabled = modifier_event.map_or(clip_edge_enabled, |(host, fire)| {
-                fire && host.clip_edge_enabled_matching(|param| !ls.generator.is_modifier_trigger_param(param))
+                fire && host.clip_edge_enabled_matching(|param| {
+                    !ls.generator.is_modifier_trigger_param(param)
+                })
             });
             if let Some((host, fire_clip_edge)) = modifier_event {
                 ls.event_owner = Some(host.id.clone());
-                if fire_clip_edge { ls.generator.note_modifier_clip_event(Some(host)); }
+                if fire_clip_edge {
+                    ls.generator.note_modifier_clip_event(Some(host));
+                }
             }
             if clip_edge_enabled {
-                ls.generator.note_trigger_event(ls.effective_trigger_count());
+                ls.generator
+                    .note_trigger_event(ls.effective_trigger_count());
                 ls.clip_count = ls.clip_count.wrapping_add(1);
             }
         }
@@ -866,7 +940,9 @@ impl GeneratorRenderer {
         // structurally changed (the Layers, Clips or Effects stamp moved).
         // layer_id stays stable across reorders so generator state follows.
         if structure_key != self.last_structure_key {
-            manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::GeneratorStructureRefresh);
+            manifold_core::work_count::record_work(
+                manifold_core::work_count::WorkKind::GeneratorStructureRefresh,
+            );
             self.last_structure_key = structure_key;
             for (clip_id, active) in self.active_clips.iter_mut() {
                 if let Some(pos) = layers.iter().position(|l| l.layer_id == active.layer_id) {
@@ -1089,10 +1165,16 @@ impl GeneratorRenderer {
                 }
                 // The last-resort cut watches scene layers only.
                 if runaway::watched(layer) {
-                    if Self::skip_stopped(self.watch.live, &mut layer_state.runaway, gpu, &active.render_target.texture) {
+                    if Self::skip_stopped(
+                        self.watch.live,
+                        &mut layer_state.runaway,
+                        gpu,
+                        &active.render_target.texture,
+                    ) {
                         continue;
                     }
-                    self.watch.begin(gpu, layer_state.span_key, self.render_pass);
+                    self.watch
+                        .begin(gpu, layer_state.span_key, self.render_pass);
                 }
                 // Pass per-clip string params (e.g. text content) to the generator.
                 // If the clip's map is missing keys that other clips on the layer
@@ -1151,22 +1233,28 @@ impl GeneratorRenderer {
                     .generator
                     .set_layer_skin_registry(self.layer_skin_registry.map(|p| unsafe { p.get() }));
                 layer_state.generator.set_project_tempo(project_tempo);
-                layer_state.generator.set_source_instance(layer.gen_params());
-                let new_progress = layer_state.generator.render(
-                    gpu,
-                    &active.render_target.texture,
-                    &ctx,
-                    params,
-                );
+                layer_state
+                    .generator
+                    .set_source_instance(layer.gen_params());
+                let new_progress =
+                    layer_state
+                        .generator
+                        .render(gpu, &active.render_target.texture, &ctx, params);
                 active.anim_progress = new_progress;
                 layer_state.rendered_pass = Some(self.render_pass);
-                layer_state.generator.drain_sim_metrics(&mut self.sim_metrics);
+                layer_state
+                    .generator
+                    .drain_sim_metrics(&mut self.sim_metrics);
                 // Acknowledge native tick-start receipts every rendered frame;
                 // otherwise completed clicks would fill the bounded event queue.
-                layer_state.generator.drain_scene_impulse_diagnostics(
-                    &mut self.scene_impulse_diagnostics,
+                layer_state
+                    .generator
+                    .drain_scene_impulse_diagnostics(&mut self.scene_impulse_diagnostics);
+                Self::note_node_errors(
+                    &mut self.watch,
+                    &layer.layer_id,
+                    layer_state.generator.node_errors_mut(),
                 );
-                Self::note_node_errors(&mut self.watch, &layer.layer_id, layer_state.generator.node_errors_mut());
             }
             if !self.waiting_fires.is_empty()
                 && let Some(layer) = layers.get(layer_index as usize)
@@ -1203,39 +1291,74 @@ impl GeneratorRenderer {
     }
 
     /// Prepare all layers without replacing any live target or runtime.
-    pub fn prepare_resize_gpu(&self, width: u32, height: u32) -> Result<PreparedGeneratorResize, String> {
+    pub fn prepare_resize_gpu(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> Result<PreparedGeneratorResize, String> {
         let device = &*self.device;
-        let target = |old: &RenderTarget| RenderTarget::try_new(
-            device, width, height, old.format, "generator-resize",
-        );
-        let active = self.active_clips.iter().map(|(id, clip)| {
-            Ok((id.clone(), target(&clip.render_target)?))
-        }).collect::<Result<_, String>>()?;
-        let available = self.available_rts.iter().map(target).collect::<Result<_, _>>()?;
-        let layers = self.layer_generators.iter().map(|(id, layer)| {
-            layer.generator.prepare_resize(device, width, height)
-                .map(|prepared| (id.clone(), prepared)).map_err(|error| error.to_string())
-        }).collect::<Result<_, _>>()?;
-        Ok(PreparedGeneratorResize { width, height, active, available, layers })
+        let target = |old: &RenderTarget| {
+            RenderTarget::try_new(device, width, height, old.format, "generator-resize")
+        };
+        let active = self
+            .active_clips
+            .iter()
+            .map(|(id, clip)| Ok((id.clone(), target(&clip.render_target)?)))
+            .collect::<Result<_, String>>()?;
+        let available = self
+            .available_rts
+            .iter()
+            .map(target)
+            .collect::<Result<_, _>>()?;
+        let layers = self
+            .layer_generators
+            .iter()
+            .map(|(id, layer)| {
+                layer
+                    .generator
+                    .prepare_resize(device, width, height)
+                    .map(|prepared| (id.clone(), prepared))
+                    .map_err(|error| error.to_string())
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(PreparedGeneratorResize {
+            width,
+            height,
+            active,
+            available,
+            layers,
+        })
     }
 
     /// Called on the content thread before another frame can observe the pipeline.
     pub fn commit_resize_gpu(&mut self, prepared: PreparedGeneratorResize) {
         for (id, target) in prepared.active {
-            let active = self.active_clips.get_mut(&id).expect("resize owner unchanged");
+            let active = self
+                .active_clips
+                .get_mut(&id)
+                .expect("resize owner unchanged");
             active.render_target = target;
             active.needs_clear = true;
         }
         self.available_rts = prepared.available;
         for (id, runtime) in prepared.layers {
-            self.layer_generators.get_mut(&id).expect("resize owner unchanged")
-                .generator.commit_resize(runtime);
+            self.layer_generators
+                .get_mut(&id)
+                .expect("resize owner unchanged")
+                .generator
+                .commit_resize(runtime);
         }
         self.width = prepared.width;
         self.height = prepared.height;
     }
 
-    pub fn resize_gpu(&mut self, width: u32, height: u32, _output_width: u32, _output_height: u32) -> Result<(), String> {
+    pub fn resize_gpu(
+        &mut self,
+        width: u32,
+        height: u32,
+        _output_width: u32,
+        _output_height: u32,
+    ) -> Result<(), String> {
         let prepared = self.prepare_resize_gpu(width, height)?;
         self.commit_resize_gpu(prepared);
         Ok(())
@@ -1398,7 +1521,10 @@ impl GeneratorRenderer {
         // never misses a --profile run in progress.
         generator.set_profiling(self.profiling_enabled);
         generator.set_profile_scope(&gen_scope(&layer_id));
-        let event_owner = self.layer_generators.get(&layer_id).and_then(|prior| prior.event_owner.clone());
+        let event_owner = self
+            .layer_generators
+            .get(&layer_id)
+            .and_then(|prior| prior.event_owner.clone());
         if let Some(prior) = self.layer_generators.get_mut(&layer_id)
             && prior.generator_type == gen_type
         {
@@ -1408,7 +1534,10 @@ impl GeneratorRenderer {
         // rebuild of the same graph (the graph editor opening, a ray-tracing
         // toggle) keeps it stopped.
         let runaway = match self.layer_generators.get_mut(&layer_id) {
-            Some(prior) if prior.generator_type == gen_type && prior.override_version == override_version => {
+            Some(prior)
+                if prior.generator_type == gen_type
+                    && prior.override_version == override_version =>
+            {
                 std::mem::take(&mut prior.runaway)
             }
             Some(prior) => {
@@ -1517,7 +1646,8 @@ impl GeneratorRenderer {
                     gen_type: gen_type.clone(),
                     ready: false,
                     frame_count: 0,
-                    last_frame_status: manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete,
+                    last_frame_status:
+                        manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete,
                 },
             );
         }
@@ -1565,8 +1695,7 @@ impl GeneratorRenderer {
         }
         t.runtime.drain_sim_metrics(&mut Default::default());
         t.last_frame_status = gpu.frame_status();
-        t.ready = !t.runtime.warmup_pending()
-            && t.last_frame_status.presentable();
+        t.ready = !t.runtime.warmup_pending() && t.last_frame_status.presentable();
         t.ready.then_some(&t.rt.texture)
     }
 
@@ -1576,11 +1705,7 @@ impl GeneratorRenderer {
     pub fn thumb_texture(&self, clip_id: &str) -> Option<&manifold_gpu::GpuTexture> {
         self.thumb_gens
             .get(clip_id)
-            .filter(|t| {
-                t.ready
-                    && !t.runtime.warmup_pending()
-                    && t.last_frame_status.presentable()
-            })
+            .filter(|t| t.ready && !t.runtime.warmup_pending() && t.last_frame_status.presentable())
             .map(|t| &t.rt.texture)
     }
 
@@ -1672,7 +1797,9 @@ impl ClipRenderer for GeneratorRenderer {
             override_version,
             param_version,
             clip_edge_enabled,
-            layer.and_then(|layer| layer.gen_params()).map(|host| (host, fire_clip_edge)),
+            layer
+                .and_then(|layer| layer.gen_params())
+                .map(|host| (host, fire_clip_edge)),
             manifest,
         );
 
@@ -1769,7 +1896,8 @@ impl ClipRenderer for GeneratorRenderer {
         // map the per-frame sweep would build for an active clip.
         let first_clip_params = first_clip.and_then(|c| c.string_params.as_ref());
         if let Some(ls) = self.layer_generators.get_mut(&layer_id) {
-            ls.merged_string_params.clone_from(&ls.layer_string_defaults);
+            ls.merged_string_params
+                .clone_from(&ls.layer_string_defaults);
             if let Some(map) = first_clip_params {
                 for (k, v) in map {
                     ls.merged_string_params.insert(k.clone(), v.clone());
@@ -1824,7 +1952,8 @@ impl ClipRenderer for GeneratorRenderer {
                         .gen_params()
                         .map(|gp| &gp.params)
                         .unwrap_or(&default_manifest);
-                    ls.generator.set_string_params(Some(&ls.merged_string_params));
+                    ls.generator
+                        .set_string_params(Some(&ls.merged_string_params));
                     ls.generator.set_rt_quality(self.rt_quality);
                     ls.generator.set_sim_step(self.sim_step);
                     ls.generator.set_project_tempo(None);
@@ -1845,7 +1974,8 @@ impl ClipRenderer for GeneratorRenderer {
                         trigger_count: 0,
                     };
                     gpu.clear_texture(&scratch.texture, 0.0, 0.0, 0.0, 0.0);
-                    ls.generator.render(&mut gpu, &scratch.texture, &ctx, params);
+                    ls.generator
+                        .render(&mut gpu, &scratch.texture, &ctx, params);
                     ls.generator.drain_sim_metrics(&mut Default::default());
                 }
                 // §5.4: pending geometry is incomplete preparation — the
@@ -1881,8 +2011,13 @@ impl ClipRenderer for GeneratorRenderer {
         scratch.resize(&device, self.width, self.height);
         self.available_rts.push(scratch);
 
-        if matches!(outcome, manifold_core::WarmupOutcome::BudgetExhausted { .. }) {
-            outcome = run.exhausted(std::time::Instant::now(), budget.per_layer_frames).unwrap();
+        if matches!(
+            outcome,
+            manifold_core::WarmupOutcome::BudgetExhausted { .. }
+        ) {
+            outcome = run
+                .exhausted(std::time::Instant::now(), budget.per_layer_frames)
+                .unwrap();
         }
         outcome
     }

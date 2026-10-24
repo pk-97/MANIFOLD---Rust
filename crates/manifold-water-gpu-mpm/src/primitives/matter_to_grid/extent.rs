@@ -1,13 +1,13 @@
 //! Buffer extent rule owned by this node.
-use manifold_water_liquid::extent::liquid_lattice;
-use std::mem::size_of;
-use manifold_water_liquid::fluid_particles::CellRange;
-use manifold_water_liquid::fluid_particles::bin_total;
 use crate::matter::grid_accum_bytes;
 use crate::matter::lattice_blocks;
-use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use manifold_water_liquid::extent::{whole};
 use crate::matter::node_extent;
+use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use manifold_water_liquid::extent::liquid_lattice;
+use manifold_water_liquid::extent::whole;
+use manifold_water_liquid::fluid_particles::CellRange;
+use manifold_water_liquid::fluid_particles::bin_total;
+use std::mem::size_of;
 
 fn matter_to_grid(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let lattice = liquid_lattice(x)?;
@@ -16,7 +16,10 @@ fn matter_to_grid(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if x.wired("order") && x.wired("ranges") {
         let blocks = ["blocks_x", "blocks_y", "blocks_z"].map(|name| whole(x, name, 18.0).max(1));
         if blocks != lattice_blocks(&lattice) {
-            return Err(x.uncovered(format!("blocks {blocks:?} are not the lattice's {:?}", lattice_blocks(&lattice))));
+            return Err(x.uncovered(format!(
+                "blocks {blocks:?} are not the lattice's {:?}",
+                lattice_blocks(&lattice)
+            )));
         }
         x.covers("ranges", bin_total(blocks) * size_of::<CellRange>() as u64)?;
         // Active points never exceed the points array; the order holds one

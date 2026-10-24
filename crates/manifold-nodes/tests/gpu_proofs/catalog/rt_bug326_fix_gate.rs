@@ -9,12 +9,14 @@
 //! rerun) is verified via render-import 50ms-paced traces (BUG-326
 //! entry: Helmet frame2=0.146->frame3+=0.239, AMG 0.045->0.168).
 
-use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
+use manifold_gpu::{
+    GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 
 use manifold_nodes_scene::testkit::gpu_harness as harness;
 
@@ -81,15 +83,21 @@ fn non_black_fraction_rgbf32(px: &[f32]) -> f64 {
     non_black as f64 / n as f64
 }
 
-fn readback_rgba_f32(device: &manifold_gpu::GpuDevice, texture: &manifold_gpu::GpuTexture) -> Vec<f32> {
+fn readback_rgba_f32(
+    device: &manifold_gpu::GpuDevice,
+    texture: &manifold_gpu::GpuTexture,
+) -> Vec<f32> {
     let bytes_per_row = W * 8;
     let total = u64::from(H * bytes_per_row);
     let buf = device.create_buffer_shared(total);
     let mut enc = device.create_encoder("bug326-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait_completed();
-    let ptr = buf.mapped_ptr().expect("shared readback buffer must expose mapped pointer");
-    let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (W * H * 4) as usize) };
+    let ptr = buf
+        .mapped_ptr()
+        .expect("shared readback buffer must expose mapped pointer");
+    let halves: &[u16] =
+        unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (W * H * 4) as usize) };
     let mut out = Vec::with_capacity((W * H * 4) as usize);
     for &h in halves {
         out.push(half::f16::from_bits(h).to_f32());
@@ -141,7 +149,10 @@ fn build_helmet_harness(
         Some(&manifest),
     )
     .expect("imported def must build a runtime");
-    manifold_node_engine::testkit::gpu_harness::assert_no_shadowed_def_params(&runtime, "bug326 helmet import");
+    manifold_node_engine::testkit::gpu_harness::assert_no_shadowed_def_params(
+        &runtime,
+        "bug326 helmet import",
+    );
 
     let target = make_512_target(&h.device, "bug326-gate-target");
     (runtime, target, manifest)
@@ -180,7 +191,10 @@ fn imported_glb_rt_on_stays_within_80pct_of_baseline() {
             break;
         }
     }
-    assert!(baseline_frac > 0.0, "baseline must contain lit pixels, not a vacuous zero threshold");
+    assert!(
+        baseline_frac > 0.0,
+        "baseline must contain lit pixels, not a vacuous zero threshold"
+    );
 
     // RT on: rt=1+refl=1. Poll until lit: the rerun suppression window
     // skips the composite while the rerun build is in flight, which reads
@@ -202,7 +216,9 @@ fn imported_glb_rt_on_stays_within_80pct_of_baseline() {
         settled += 1;
         let rendered = f - 1;
         if rendered >= 84 && rendered % 5 == 4 {
-            on_frac = on_frac.max(non_black_fraction_rgbf32(&readback_rgba_f32(&h.device, &tex_on)));
+            on_frac = on_frac.max(non_black_fraction_rgbf32(&readback_rgba_f32(
+                &h.device, &tex_on,
+            )));
             if on_frac >= threshold {
                 break;
             }
@@ -211,7 +227,9 @@ fn imported_glb_rt_on_stays_within_80pct_of_baseline() {
 
     eprintln!(
         "[bug326-gate] baseline={:.4} rt_on={:.4} ratio={:.2}",
-        baseline_frac, on_frac, on_frac / baseline_frac
+        baseline_frac,
+        on_frac,
+        on_frac / baseline_frac
     );
 
     // Liveness: the RT kernel really dispatched on the rt-on arm. Capture slots

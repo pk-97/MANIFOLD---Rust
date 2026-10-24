@@ -1,10 +1,10 @@
 use crate::clip::TimelineClip;
 use crate::color::Color;
-use crate::preset_type_id::PresetTypeId;
 use crate::effects::{EffectGroup, ParamEnvelope, ParameterDriver, PresetInstance};
 use crate::id::{ClipId, EffectGroupId, LayerId};
-use crate::types::{BlendMode, ClipDurationMode, LayerType, MidiTriggerMode};
+use crate::preset_type_id::PresetTypeId;
 use crate::tempo::SourceClock;
+use crate::types::{BlendMode, ClipDurationMode, LayerType, MidiTriggerMode};
 use crate::units::{Beats, Seconds};
 use ahash::AHashMap;
 use serde::{Deserialize, Serialize};
@@ -356,10 +356,10 @@ impl Layer {
 
     /// The generator type for this layer, or `NONE` without generator params.
     pub fn generator_type(&self) -> &PresetTypeId {
-        self.gen_params.as_ref().map_or(&PresetTypeId::NONE, |gp| gp.generator_type())
+        self.gen_params
+            .as_ref()
+            .map_or(&PresetTypeId::NONE, |gp| gp.generator_type())
     }
-
-
 
     /// True when any visual layer is soloed. Audio has its own solo/mute bus;
     /// timing-only trigger lanes must not affect video visibility either.
@@ -451,8 +451,7 @@ impl Layer {
         }
 
         // Index into clips_by_end_indices where end_beat > from starts
-        let end_idx =
-            Self::lower_bound_end_beat(&self.clips, &self.clips_by_end_indices, from);
+        let end_idx = Self::lower_bound_end_beat(&self.clips, &self.clips_by_end_indices, from);
         let ending_after_count = self.clips_by_end_indices.len() - end_idx;
 
         // Iterate the smaller candidate set. The write-time non-overlap
@@ -640,7 +639,8 @@ impl Layer {
 
             // Case 4: placed inside existing → split
             if placed_start > clip_start && placed_end < clip_end {
-                let tail_in_point = clip.in_point + clock.source_seconds(clip, clip_start, placed_end);
+                let tail_in_point =
+                    clip.in_point + clock.source_seconds(clip, clip_start, placed_end);
 
                 let mut tail = clip.clone_with_new_id();
                 tail.start_beat = placed_end;
@@ -873,22 +873,24 @@ impl Layer {
         // EffectId just like every other card, so both the group id and the
         // mask card id must follow the duplicated instances. Parent groups use
         // the same old→new map.
-        let (mut new_groups, group_id_map): (Option<Vec<EffectGroup>>, AHashMap<EffectGroupId, EffectGroupId>) =
-            self.effect_groups.as_ref().map_or_else(
-                || (None, AHashMap::new()),
-                |groups| {
-                    let mut id_map = AHashMap::new();
-                    let cloned_groups: Vec<EffectGroup> = groups
-                        .iter()
-                        .map(|group| {
-                            let cloned = group.clone_with_new_id();
-                            id_map.insert(group.id.clone(), cloned.id.clone());
-                            cloned
-                        })
-                        .collect();
-                    (Some(cloned_groups), id_map)
-                },
-            );
+        let (mut new_groups, group_id_map): (
+            Option<Vec<EffectGroup>>,
+            AHashMap<EffectGroupId, EffectGroupId>,
+        ) = self.effect_groups.as_ref().map_or_else(
+            || (None, AHashMap::new()),
+            |groups| {
+                let mut id_map = AHashMap::new();
+                let cloned_groups: Vec<EffectGroup> = groups
+                    .iter()
+                    .map(|group| {
+                        let cloned = group.clone_with_new_id();
+                        id_map.insert(group.id.clone(), cloned.id.clone());
+                        cloned
+                    })
+                    .collect();
+                (Some(cloned_groups), id_map)
+            },
+        );
 
         let mut effect_id_map = AHashMap::new();
         if let Some(effects) = &mut cloned.effects {
@@ -1022,7 +1024,11 @@ mod tests {
     fn add_clip_syncs_clip_layer_id() {
         let mut layer = Layer::new("Video 1".into(), LayerType::Video, 0);
         let tm = crate::tempo::TempoMap::default();
-        layer.add_clip(TimelineClip::default(), &HashSet::new(), &SourceClock::new(&tm, crate::units::Bpm(120.0), None));
+        layer.add_clip(
+            TimelineClip::default(),
+            &HashSet::new(),
+            &SourceClock::new(&tm, crate::units::Bpm(120.0), None),
+        );
 
         assert_eq!(layer.clips.len(), 1);
         assert_eq!(layer.clips[0].layer_id, layer.layer_id);
@@ -1087,15 +1093,23 @@ mod tests {
 
         assert_ne!(clone_groups[0].id, source_groups[0].id);
         assert_ne!(clone_child.id, source_child.id);
-        assert_eq!(clone_child.parent_group_id, Some(clone_groups[0].id.clone()));
+        assert_eq!(
+            clone_child.parent_group_id,
+            Some(clone_groups[0].id.clone())
+        );
         assert_ne!(clone_child.mask_effect_id, source_child.mask_effect_id);
         assert_eq!(
             clone_child.mask_effect_id,
             Some(cloned.effects.as_ref().unwrap()[1].id.clone())
         );
-        assert!(cloned.effects.as_ref().unwrap().iter().all(|effect| {
-            effect.group_id.as_ref() == Some(&clone_child.id)
-        }));
+        assert!(
+            cloned
+                .effects
+                .as_ref()
+                .unwrap()
+                .iter()
+                .all(|effect| { effect.group_id.as_ref() == Some(&clone_child.id) })
+        );
     }
 
     #[test]
@@ -1115,8 +1129,12 @@ mod tests {
         assert!(layer.active_audio_clip_at(Beats(20.0)).is_none());
         // A non-audio clip on the layer is never returned as an audio clip.
         let mut vid = Layer::new_video("V".into(), 1);
-        vid.clips
-            .push(TimelineClip::new_video("v1".into(), Beats(0.0), Beats(4.0), Seconds(0.0)));
+        vid.clips.push(TimelineClip::new_video(
+            "v1".into(),
+            Beats(0.0),
+            Beats(4.0),
+            Seconds(0.0),
+        ));
         assert!(vid.active_audio_clip_at(Beats(1.0)).is_none());
     }
 
@@ -1137,7 +1155,11 @@ mod tests {
                 ..TimelineClip::default()
             },
             &HashSet::new(),
-            &SourceClock::new(&crate::tempo::TempoMap::default(), crate::units::Bpm(120.0), None),
+            &SourceClock::new(
+                &crate::tempo::TempoMap::default(),
+                crate::units::Bpm(120.0),
+                None,
+            ),
         );
         assert_eq!(layer.clips.len(), 2);
         assert!(!layer.has_overlapping_clips());
@@ -1207,18 +1229,14 @@ mod tests {
         let mut layer = desynced_generator(PresetTypeId::new("FluidSim3D"));
         assert_eq!(*layer.generator_type(), PresetTypeId::NONE);
         assert!(layer.reconcile_generator_identity());
-        assert_eq!(
-            *layer.generator_type(),
-            PresetTypeId::new("FluidSim3D")
-        );
+        assert_eq!(*layer.generator_type(), PresetTypeId::new("FluidSim3D"));
         // Idempotent: a second pass is a no-op.
         assert!(!layer.reconcile_generator_identity());
     }
 
     #[test]
     fn reconcile_leaves_typed_generator_untouched() {
-        let mut layer =
-            Layer::new_generator("Gen".into(), PresetTypeId::new("Plasma"), 0);
+        let mut layer = Layer::new_generator("Gen".into(), PresetTypeId::new("Plasma"), 0);
         assert!(!layer.reconcile_generator_identity());
         assert_eq!(*layer.generator_type(), PresetTypeId::new("Plasma"));
     }
@@ -1259,7 +1277,10 @@ mod tests {
         ] {
             layer.detect_stem_role = Some(role);
             let json = serde_json::to_string(&layer).unwrap();
-            assert!(json.contains("\"detectStemRole\""), "field present when set");
+            assert!(
+                json.contains("\"detectStemRole\""),
+                "field present when set"
+            );
             let back: Layer = serde_json::from_str(&json).unwrap();
             assert_eq!(back.detect_stem_role, Some(role));
         }
@@ -1411,7 +1432,11 @@ mod tests {
 
         results.clear();
         layer.collect_active_clips_at_beat(Beats(8.0 - 1e-9), &mut results);
-        assert_eq!(results, vec![0], "just before the join the outgoing clip renders");
+        assert_eq!(
+            results,
+            vec![0],
+            "just before the join the outgoing clip renders"
+        );
     }
 
     #[test]
@@ -1474,7 +1499,11 @@ mod tests {
                 ..TimelineClip::default()
             },
             &HashSet::new(),
-            &SourceClock::new(&crate::tempo::TempoMap::default(), crate::units::Bpm(120.0), None),
+            &SourceClock::new(
+                &crate::tempo::TempoMap::default(),
+                crate::units::Bpm(120.0),
+                None,
+            ),
         );
         project.timeline.layers.push(led);
 
@@ -1483,7 +1512,11 @@ mod tests {
             serde_json::from_str(&json).expect("deserialize project");
 
         let led = &reloaded.timeline.layers[0];
-        assert_eq!(led.layer_type, LayerType::Dmx, "type survives the round trip");
+        assert_eq!(
+            led.layer_type,
+            LayerType::Dmx,
+            "type survives the round trip"
+        );
         assert!(
             led.routes_to_led(),
             "reloaded LED layer still routes to the LED composite"

@@ -24,8 +24,16 @@
 //! authorise — if anything in the macro / port-type / validation
 //! chain regresses, this test catches it.
 
-use {manifold_nodes_image::node_graph::primitives::array_feedback::ArrayFeedback, manifold_water_gpu_flip::primitives::euler_step_particles::EulerStepParticles, manifold_nodes_image::node_graph::primitives::resolve_accumulator::ResolveAccumulator, manifold_nodes_image::node_graph::primitives::sample_texture_at_particles::SampleTextureAtParticles, manifold_nodes_image::node_graph::primitives::scatter_particles::ScatterParticles, manifold_nodes_image::node_graph::primitives::seed_particles::SeedParticles, manifold_nodes_image::node_graph::primitives::wrap_particles_torus::WrapParticlesTorus};
 use manifold_node_engine::{graph::Graph, scene::boundary_nodes::Source};
+use {
+    manifold_nodes_image::node_graph::primitives::array_feedback::ArrayFeedback,
+    manifold_nodes_image::node_graph::primitives::resolve_accumulator::ResolveAccumulator,
+    manifold_nodes_image::node_graph::primitives::sample_texture_at_particles::SampleTextureAtParticles,
+    manifold_nodes_image::node_graph::primitives::scatter_particles::ScatterParticles,
+    manifold_nodes_image::node_graph::primitives::seed_particles::SeedParticles,
+    manifold_nodes_image::node_graph::primitives::wrap_particles_torus::WrapParticlesTorus,
+    manifold_water_gpu_flip::primitives::euler_step_particles::EulerStepParticles,
+};
 
 #[test]
 fn particle_pipeline_topology_builds_and_connects_with_matching_port_types() {
@@ -110,7 +118,8 @@ fn sample_demands_a_field_texture_in_addition_to_particles() {
     let seed = g.add_node(Box::new(SeedParticles::new()));
     let sample = g.add_node(Box::new(SampleTextureAtParticles::new()));
 
-    g.connect((seed, "particles"), (sample, "particles")).unwrap();
+    g.connect((seed, "particles"), (sample, "particles"))
+        .unwrap();
     // No `in` (field texture) wire.
 
     let validation = manifold_node_engine::validation::validate(&g);

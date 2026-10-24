@@ -30,9 +30,7 @@ fn small_fixture_path() -> std::path::PathBuf {
 fn headless_application() -> Application {
     let mut app = Application::new();
     let (tx, rx) = crossbeam_channel::unbounded::<ContentCommand>();
-    std::thread::spawn(move || {
-        while rx.recv().is_ok() {}
-    });
+    std::thread::spawn(move || while rx.recv().is_ok() {});
     app.content_tx = Some(tx);
     app
 }
@@ -80,7 +78,10 @@ fn stage_event_shows_toast_before_done_dispatches_the_layer() {
             facts: read.facts,
             warnings: read.warnings,
             conversion_report_line: None,
-            target: crate::import_worker::ImportTarget::Drop { beat: 0.0, under: None },
+            target: crate::import_worker::ImportTarget::Drop {
+                beat: 0.0,
+                under: None,
+            },
         })
         .unwrap();
     app.drain_import_progress();
@@ -101,7 +102,10 @@ fn stage_event_shows_toast_before_done_dispatches_the_layer() {
         .iter()
         .filter_map(|layer| layer.gen_params()?.scene.as_ref())
         .any(|doc| doc.models.contains(&file));
-    assert!(carried, "the new scene layer's document carries the file's facts");
+    assert!(
+        carried,
+        "the new scene layer's document carries the file's facts"
+    );
 }
 
 #[test]
@@ -121,7 +125,10 @@ fn failed_event_shows_an_accent_toast_never_silent() {
         app.ws.ui_root.toast.is_open(),
         "a Failed import must never be silent — the toast is the invariant's enforcement"
     );
-    assert!(!app.import_worker_busy, "Failed must clear the busy flag too");
+    assert!(
+        !app.import_worker_busy,
+        "Failed must clear the busy flag too"
+    );
 }
 
 #[test]
@@ -136,10 +143,23 @@ fn a_second_drop_while_busy_is_queued_not_run_in_parallel() {
     let path = small_fixture_path();
     app.import_model_file(&path, 4.0, None);
 
-    assert!(app.import_worker_busy, "still busy — the queued request didn't spawn");
-    assert_eq!(app.import_queue.len(), 1, "the drop while busy must be queued FIFO");
+    assert!(
+        app.import_worker_busy,
+        "still busy — the queued request didn't spawn"
+    );
+    assert_eq!(
+        app.import_queue.len(),
+        1,
+        "the drop while busy must be queued FIFO"
+    );
     assert_eq!(app.import_queue[0].path, path);
-    assert_eq!(app.import_queue[0].target, crate::import_worker::ImportTarget::Drop { beat: 4.0, under: None });
+    assert_eq!(
+        app.import_queue[0].target,
+        crate::import_worker::ImportTarget::Drop {
+            beat: 4.0,
+            under: None
+        }
+    );
 }
 
 /// The import's layer travels by id: a layer removed while the file parsed
@@ -154,8 +174,14 @@ fn an_import_whose_layer_went_is_dropped_with_a_toast() {
     let layers_before = app.local_project.timeline.layers.len();
     let gone = manifold_core::LayerId::new("removed-while-parsing");
     for target in [
-        crate::import_worker::ImportTarget::Drop { beat: 0.0, under: Some(gone.clone()) },
-        crate::import_worker::ImportTarget::Into { layer: gone.clone(), parent: None },
+        crate::import_worker::ImportTarget::Drop {
+            beat: 0.0,
+            under: Some(gone.clone()),
+        },
+        crate::import_worker::ImportTarget::Into {
+            layer: gone.clone(),
+            parent: None,
+        },
     ] {
         app.import_worker_busy = true;
         app.import_progress_tx
@@ -170,7 +196,11 @@ fn an_import_whose_layer_went_is_dropped_with_a_toast() {
             })
             .unwrap();
         app.drain_import_progress();
-        assert_eq!(app.local_project.timeline.layers.len(), layers_before, "the import landed although its layer is gone");
+        assert_eq!(
+            app.local_project.timeline.layers.len(),
+            layers_before,
+            "the import landed although its layer is gone"
+        );
         assert!(app.ws.ui_root.toast.is_open(), "a dropped import says why");
         assert!(!app.import_worker_busy);
     }

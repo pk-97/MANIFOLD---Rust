@@ -10,10 +10,10 @@
 //! can build through the real `UICacheManager` too, without a second copy of
 //! this shader/pipeline setup.
 
+use manifold_compositor::presentation::UI_FORMAT;
 use manifold_gpu::{GpuDevice, GpuTexture};
 use manifold_ui_paint::ui_cache_manager::UICacheManager;
 use manifold_ui_paint::ui_renderer::UIRenderer;
-use manifold_compositor::presentation::UI_FORMAT;
 
 use crate::ui_frame::composite_main_ui_frame;
 use crate::ui_root::UIRoot;
@@ -105,7 +105,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             mip_levels: 1,
         });
 
-        Self { offscreen, atlas_pipeline, atlas_sampler, blit_pipeline, blit_sampler }
+        Self {
+            offscreen,
+            atlas_pipeline,
+            atlas_sampler,
+            blit_pipeline,
+            blit_sampler,
+        }
     }
 }
 

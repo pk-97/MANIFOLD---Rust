@@ -39,13 +39,10 @@ mod alerts;
 mod app;
 mod app_lifecycle;
 mod app_render;
-mod frame;
-mod editor_bridge;
-mod editor_graph_cache;
 mod audio_mod_runtime;
 mod audio_visualization;
-mod autosave;
 mod audio_waveform_cache;
+mod autosave;
 mod blender_import;
 mod breadcrumb;
 mod clip_atlas;
@@ -53,47 +50,50 @@ mod clip_filmstrip;
 mod clip_thumb_cache;
 pub(crate) mod content_command;
 mod content_commands;
-mod content_reactions;
 mod content_export;
 mod content_pipeline;
+mod content_reactions;
 pub(crate) mod content_state;
-mod layer_notices;
 pub(crate) mod content_thread;
-mod file_dialogs;
 #[cfg(target_os = "macos")]
 mod display_link;
 mod drag_hover;
 mod drag_interpose;
-mod editing_host;
 mod edit_selection;
+mod editing_host;
+mod editor_bridge;
 mod editor_frame;
+mod editor_graph_cache;
 mod editor_input;
 mod edr_surface;
+mod file_dialogs;
+mod frame;
 mod frame_plan;
 mod frame_timer;
 mod gesture_preview;
+mod layer_notices;
 // The graph canvas + its mapping popover moved into `manifold-ui` (Phase 8 of
 // `docs/UI_ARCHITECTURE_OVERHAUL.md`). Re-export under the historic `crate::`
 // paths so the editor-window glue keeps resolving `crate::graph_canvas::*` and
 // `crate::mapping_popover::*` unchanged.
 pub(crate) use manifold_ui::graph_canvas;
 pub(crate) use manifold_ui::graph_canvas::mapping_popover;
+mod generator_change;
+mod gizmo_overlay;
 mod graph_dump;
 mod graph_snapshot;
 mod graph_target;
-mod scene_gizmo;
-mod scene_pick;
-mod setup_check;
-mod gizmo_overlay;
-mod selection_outline;
+mod modifier_preset;
 mod scene_clipboard;
 mod scene_edit;
+mod scene_gizmo;
 mod scene_material_look;
 mod scene_models;
+mod scene_pick;
 mod scene_tree_move;
 mod scene_view_copy;
-mod generator_change;
-mod modifier_preset;
+mod selection_outline;
+mod setup_check;
 // Shared headless `ContentThread` construction (PERF_BUDGET_GATE_DESIGN.md
 // P1) — used by the `journey-proofs` test harness (only compiled in test
 // mode) AND the `perf-soak` xtask binary path (a real, non-test caller), so
@@ -103,17 +103,17 @@ mod modifier_preset;
 // want it under `cfg(test)`.
 #[cfg(all(target_os = "macos", any(feature = "perf-soak", test)))]
 pub(crate) mod headless_harness;
+mod import_placement_verify;
 mod import_responsiveness_verify;
 mod import_worker;
-mod scene_import;
 mod import_worker_drain_verify;
-mod import_placement_verify;
 mod input_handler;
 mod input_host;
 #[cfg(target_os = "macos")]
 mod macos_pasteboard;
 mod menu;
 mod offline_audio_mod;
+mod scene_import;
 // P3 release-journey harness (docs/OFFLINE_AUDIO_REACTIVE_EXPORT_DESIGN.md):
 // headless end-to-end export proofs. Feature-gated, macOS-only (same
 // constraint as `run_export` itself — native Metal, no wgpu).
@@ -151,20 +151,25 @@ mod rt_capture;
 mod bridge_probe;
 #[cfg(all(feature = "perf-soak", target_os = "macos"))]
 mod export_repro;
+#[cfg(all(feature = "ui-automation", unix))]
+mod live_ui;
+mod physics_overlay;
+mod present_feedback;
+mod preview_navigation;
 mod project_io;
 mod quit;
+mod scene_viewport;
 mod session_log;
-mod present_feedback;
-mod sync_prefs;
-mod sync_rig_log;
 #[cfg(target_os = "macos")]
 mod shared_texture;
-#[cfg(target_os = "macos")]
-mod texture_pane;
+mod sync_prefs;
+mod sync_rig_log;
 mod text_input;
 mod text_session;
-mod ui_bridge;
+#[cfg(target_os = "macos")]
+mod texture_pane;
 mod tree_passes;
+mod ui_bridge;
 mod ui_frame;
 mod ui_frame_profile;
 mod ui_root;
@@ -173,14 +178,9 @@ mod ui_snapshot;
 mod ui_translate;
 mod user_library;
 mod user_prefs;
-mod window_input;
-#[cfg(all(feature = "ui-automation", unix))]
-mod live_ui;
 mod viewport_input;
 mod viewport_selection;
-mod scene_viewport;
-mod physics_overlay;
-mod preview_navigation;
+mod window_input;
 // P2 hot-mute acceptance demo — headless pixel probe (BUG-bk1s).
 #[cfg(all(test, target_os = "macos"))]
 mod mute_visibility_probe;
@@ -195,14 +195,19 @@ mod frame_exact_app;
 #[cfg(all(test, target_os = "macos"))]
 mod content_reaction_budget;
 // D8.4 acceptance — deliberate native GPU journey with external reference projects.
+#[cfg(all(
+    test,
+    target_os = "macos",
+    feature = "journey-proofs",
+    feature = "perf-soak"
+))]
+mod blob_v2_performance;
 #[cfg(all(test, target_os = "macos", feature = "journey-proofs"))]
 mod corridor_acceptance;
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
-mod rt_dynamic_export_tests;
-#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 mod gpu_flip_export_demo;
-#[cfg(all(test, target_os = "macos", feature = "journey-proofs", feature = "perf-soak"))]
-mod blob_v2_performance;
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+mod rt_dynamic_export_tests;
 mod window_registry;
 mod workspace;
 
@@ -281,8 +286,7 @@ fn main() {
     // test headless; Peter launches the GUI, and he launches it bare.
     {
         let args: Vec<String> = std::env::args().collect();
-        let known_gui_argv =
-            args.len() == 1 || args.get(1).map(String::as_str) == Some("--resume");
+        let known_gui_argv = args.len() == 1 || args.get(1).map(String::as_str) == Some("--resume");
         if !known_gui_argv {
             eprintln!(
                 "manifold: unrecognized argument {:?} — refusing to launch the GUI.\n\
@@ -386,11 +390,12 @@ fn main() {
     let mut application = app::Application::new();
     #[cfg(all(feature = "ui-automation", unix))]
     if let Some(path) = std::env::var_os("MANIFOLD_UI_SOCKET") {
-        application.live_ui = Some(live_ui::LiveUi::bind(std::path::Path::new(&path))
-            .unwrap_or_else(|err| {
+        application.live_ui = Some(
+            live_ui::LiveUi::bind(std::path::Path::new(&path)).unwrap_or_else(|err| {
                 eprintln!("live UI connection failed: {err}");
                 std::process::exit(2);
-            }));
+            }),
+        );
     }
     application.show_crash_notice = previous_session_uncleanly_exited;
     application.resume_breadcrumb_path = resume_breadcrumb_path;
@@ -498,9 +503,7 @@ fn abort_gpu_work(reason: &str) -> ! {
     // Completion handlers own the final Metal error/encoder evidence. Give
     // already-submitted buffers a bounded chance to publish it before the
     // fatal report is sealed; normal completion never waits or polls.
-    let drained = manifold_gpu::gpu_fault::drain_completions(
-        std::time::Duration::from_millis(250),
-    );
+    let drained = manifold_gpu::gpu_fault::drain_completions(std::time::Duration::from_millis(250));
     if !drained {
         log::error!("[GPU] Completion drain timed out; report may omit in-flight buffer evidence");
     }
@@ -520,18 +523,24 @@ fn write_fatal_gpu_report(reason: &str, exit_code: i32) {
         breadcrumb::last_known_beat_for_crash_log(),
         session_log::path(),
     );
-    msg.push_str(&format!("diagnostic_mode={}\napp_version={}\narchitecture={}\n",
-        manifold_gpu::gpu_fault::diagnostics_enabled(), env!("CARGO_PKG_VERSION"), std::env::consts::ARCH));
+    msg.push_str(&format!(
+        "diagnostic_mode={}\napp_version={}\narchitecture={}\n",
+        manifold_gpu::gpu_fault::diagnostics_enabled(),
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::ARCH
+    ));
     // The Metal error carries no reason; macOS's own reset report does.
-    msg.push_str(&format!("firmware_gpu_resets={}\n",
-        manifold_gpu::firmware_reports::summary_since_boot().as_deref().unwrap_or("none since boot")));
+    msg.push_str(&format!(
+        "firmware_gpu_resets={}\n",
+        manifold_gpu::firmware_reports::summary_since_boot()
+            .as_deref()
+            .unwrap_or("none since boot")
+    ));
     msg.push_str("diagnostic_limitations=GPU timing may be unavailable on failed buffers; missing completion is not proof of a hang; shader counters may be incomplete after device failure; resource metadata does not prove lifetime or ordering safety; geometry hit-index bounds and driver-internal traversal are not fully instrumented.\n");
     msg.push_str("--- recent session evidence (bounded; full session path above) ---\n");
     msg.push_str(&session_log::crash_tail());
     if let Some(dir) = crash_log_dir() {
-        match std::fs::create_dir_all(&dir)
-            .and_then(|()| write_crash_log(&dir, &msg, timestamp))
-        {
+        match std::fs::create_dir_all(&dir).and_then(|()| write_crash_log(&dir, &msg, timestamp)) {
             Ok(path) => {
                 log::error!("Fatal GPU report saved: {}", path.display());
                 prune_crash_logs(&dir, CRASH_LOGS_KEPT);
@@ -578,7 +587,10 @@ fn session_sentinel_path() -> Option<std::path::PathBuf> {
     let live_ui_socket = std::env::var_os("MANIFOLD_UI_SOCKET").map(std::path::PathBuf::from);
     #[cfg(not(all(feature = "ui-automation", unix)))]
     let live_ui_socket = None;
-    session_sentinel_for(std::env::var_os("HOME").map(std::path::PathBuf::from), live_ui_socket)
+    session_sentinel_for(
+        std::env::var_os("HOME").map(std::path::PathBuf::from),
+        live_ui_socket,
+    )
 }
 
 /// An isolated automation instance owns its recovery marker beside its socket.
@@ -590,7 +602,9 @@ fn session_sentinel_for(
     if let Some(socket) = live_ui_socket {
         return Some(socket.with_extension("session.active"));
     }
-    home.map(|home| home.join("Library/Application Support/com.latentspace.manifold/session.active"))
+    home.map(|home| {
+        home.join("Library/Application Support/com.latentspace.manifold/session.active")
+    })
 }
 
 #[test]
@@ -598,9 +612,18 @@ fn live_ui_session_sentinel_is_separate_from_regular_app() {
     use std::path::PathBuf;
     let home = Some(PathBuf::from("/Users/test"));
     let regular = session_sentinel_for(home.clone(), None).unwrap();
-    assert_eq!(regular, PathBuf::from("/Users/test/Library/Application Support/com.latentspace.manifold/session.active"));
-    let isolated = session_sentinel_for(home, Some(PathBuf::from("/tmp/manifold-test/ui.sock"))).unwrap();
-    assert_eq!(isolated, PathBuf::from("/tmp/manifold-test/ui.session.active"));
+    assert_eq!(
+        regular,
+        PathBuf::from(
+            "/Users/test/Library/Application Support/com.latentspace.manifold/session.active"
+        )
+    );
+    let isolated =
+        session_sentinel_for(home, Some(PathBuf::from("/tmp/manifold-test/ui.sock"))).unwrap();
+    assert_eq!(
+        isolated,
+        PathBuf::from("/tmp/manifold-test/ui.session.active")
+    );
     assert_ne!(regular, isolated);
 }
 
@@ -788,7 +811,10 @@ mod resume_arg_tests {
     use super::{ResumeArg, parse_resume_arg};
 
     fn args(v: &[&str]) -> impl Iterator<Item = String> {
-        v.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter()
+        v.iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 
     #[test]
@@ -799,14 +825,21 @@ mod resume_arg_tests {
     #[test]
     fn resume_flag_with_path_parses() {
         assert_eq!(
-            parse_resume_arg(args(&["manifold", "--resume", "/tmp/show.manifold.breadcrumb"])),
+            parse_resume_arg(args(&[
+                "manifold",
+                "--resume",
+                "/tmp/show.manifold.breadcrumb"
+            ])),
             ResumeArg::Explicit(std::path::PathBuf::from("/tmp/show.manifold.breadcrumb"))
         );
     }
 
     #[test]
     fn resume_flag_without_a_following_path_resolves_from_prefs() {
-        assert_eq!(parse_resume_arg(args(&["manifold", "--resume"])), ResumeArg::Auto);
+        assert_eq!(
+            parse_resume_arg(args(&["manifold", "--resume"])),
+            ResumeArg::Auto
+        );
     }
 
     #[test]

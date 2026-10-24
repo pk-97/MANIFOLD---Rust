@@ -37,7 +37,10 @@ impl Flatness {
         let n = c.i64s("flat.n_fft", &[])?[0];
         let frame_hop = c.i64s("net.frame_hop", &[])?[0];
         if n <= 0 || frame_hop <= 0 {
-            return Err(ContainerError::WrongType { name: "flat.n_fft/net.frame_hop".into(), want: "positive lengths" });
+            return Err(ContainerError::WrongType {
+                name: "flat.n_fft/net.frame_hop".into(),
+                want: "positive lengths",
+            });
         }
         let n = n as usize;
         let window = c.f64s("flat.window", &[n])?.to_vec();
@@ -48,7 +51,10 @@ impl Flatness {
         let mut band_n = [0; BANDS];
         for b in 0..BANDS {
             if lo[b] < 0 || cnt[b] <= 0 || (lo[b] + cnt[b]) as usize > n / 2 + 1 {
-                return Err(ContainerError::WrongType { name: "flat.band_lo/flat.band_n".into(), want: "bins inside the rfft" });
+                return Err(ContainerError::WrongType {
+                    name: "flat.band_lo/flat.band_n".into(),
+                    want: "bins inside the rfft",
+                });
             }
             band_lo[b] = lo[b] as usize;
             band_n[b] = cnt[b] as usize;
@@ -115,10 +121,16 @@ impl Flatness {
         // The frame ends at `samples`, so the oldest sample sits at `samples % n`.
         let start = (self.samples % n as u64) as usize;
         let (old, new) = self.ring.split_at(start);
-        for ((b, &s), &w) in self.buf.iter_mut().zip(new.iter().chain(old)).zip(&self.window) {
+        for ((b, &s), &w) in self
+            .buf
+            .iter_mut()
+            .zip(new.iter().chain(old))
+            .zip(&self.window)
+        {
             *b = Complex::new(s * w, 0.0);
         }
-        self.fft.process_with_scratch(&mut self.buf, &mut self.scratch);
+        self.fft
+            .process_with_scratch(&mut self.buf, &mut self.scratch);
         for (p, b) in self.power.iter_mut().zip(&self.buf) {
             *p = b.norm_sqr() + 1e-12;
         }

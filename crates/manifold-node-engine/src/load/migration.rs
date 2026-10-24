@@ -1,7 +1,7 @@
 //! Registered family transformations at explicit graph preparation boundaries.
 
-use std::borrow::Cow;
 use manifold_core::effect_graph_def::EffectGraphDef;
+use std::borrow::Cow;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MigrationStage {
@@ -24,7 +24,9 @@ inventory::collect!(GraphMigration);
 
 fn ordered(stage: MigrationStage) -> Vec<&'static GraphMigration> {
     let mut migrations: Vec<_> = inventory::iter::<GraphMigration>
-        .into_iter().filter(|migration| migration.stage == stage).collect();
+        .into_iter()
+        .filter(|migration| migration.stage == stage)
+        .collect();
     migrations.sort_by_key(|migration| (migration.order, migration.name));
     migrations
 }

@@ -161,7 +161,11 @@ impl Primitive for CurlSlopeForce3D {
             (0.0, 1.0, 0.0)
         } else {
             let inv_len = raw_len_sq.sqrt().recip();
-            (raw_axis_x * inv_len, raw_axis_y * inv_len, raw_axis_z * inv_len)
+            (
+                raw_axis_x * inv_len,
+                raw_axis_y * inv_len,
+                raw_axis_z * inv_len,
+            )
         };
 
         let Some(gradient) = ctx.inputs.texture_3d("gradient") else {

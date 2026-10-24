@@ -2,7 +2,7 @@
 //! candidate's onset patch to the kick templates, over all bands, bands under 300 Hz, and bands over 1 kHz.
 //! Port of `patches` and `template_features` in `tools/audio_analysis/eval/kick_goal_templates.py`.
 
-use super::spec::{BandSpec, BANDS};
+use super::spec::{BANDS, BandSpec};
 use crate::trained::container::{Container, ContainerError};
 
 /// The reference zeroes candidates before this hop (its base needs frames `c-5..c-2`).
@@ -42,7 +42,11 @@ impl Templates {
         let k = match c.shape("fit.tmpl3.all")? {
             [k, _] => *k,
             got => {
-                return Err(ContainerError::WrongShape { name: "fit.tmpl3.all".into(), want: vec![0, 0], got: got.to_vec() });
+                return Err(ContainerError::WrongShape {
+                    name: "fit.tmpl3.all".into(),
+                    want: vec![0, 0],
+                    got: got.to_vec(),
+                });
             }
         };
         let all = [true; BANDS];
@@ -50,13 +54,21 @@ impl Templates {
         let high = mask(c, "extra.band_high")?;
         let selection = |name: &str, mask: [bool; BANDS]| -> Result<Selection, ContainerError> {
             let width = span as usize * mask.iter().filter(|&&m| m).count();
-            Ok(Selection { mask, templates: c.f64s(name, &[k, width])?.to_vec(), width })
+            Ok(Selection {
+                mask,
+                templates: c.f64s(name, &[k, width])?.to_vec(),
+                width,
+            })
         };
         Ok(Self {
             span,
             k,
             eps: super::scalar(c, "extra.unit_eps")?,
-            sel: [selection("fit.tmpl3.all", all)?, selection("fit.tmpl3.low", low)?, selection("fit.tmpl3.high", high)?],
+            sel: [
+                selection("fit.tmpl3.all", all)?,
+                selection("fit.tmpl3.low", low)?,
+                selection("fit.tmpl3.high", high)?,
+            ],
             scratch: vec![0.0; span as usize * BANDS],
         })
     }
@@ -72,7 +84,10 @@ impl Templates {
         if cand < MIN_CAND {
             return;
         }
-        assert!(spec.holds(cand - BASE_FROM, self.last_frame(cand)), "kick templates: candidate {cand} read outside the stream history");
+        assert!(
+            spec.holds(cand - BASE_FROM, self.last_frame(cand)),
+            "kick templates: candidate {cand} read outside the stream history"
+        );
         let mut base = [0.0; BANDS];
         for (b, v) in base.iter_mut().enumerate() {
             let f = |d: u64| spec.frame_at(cand - BASE_FROM + d)[b];

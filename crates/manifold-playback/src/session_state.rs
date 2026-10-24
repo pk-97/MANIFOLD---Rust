@@ -101,12 +101,16 @@ impl SessionRuntime {
 
     /// Arrangement coverage ends at the first due session launch, even when
     /// one display tick crosses both the launch and later arrangement clips.
-    pub(crate) fn pending_arrangement_end(&self, layer_id: &LayerId, through: Beats) -> Option<Beats> {
+    pub(crate) fn pending_arrangement_end(
+        &self,
+        layer_id: &LayerId,
+        through: Beats,
+    ) -> Option<Beats> {
         self.pending.iter().find_map(|pending| {
             (&pending.layer_id == layer_id
                 && pending.target_beat <= through.0
                 && matches!(pending.action, LaunchAction::Launch(_)))
-                .then_some(Beats(pending.target_beat))
+            .then_some(Beats(pending.target_beat))
         })
     }
 
@@ -172,7 +176,13 @@ impl SessionRuntime {
     /// Enqueue a slot launch at the next quantize boundary (or immediately if
     /// `immediate` — set when the launch is also starting the transport from
     /// stopped, section 4). Replaces any pending launch for the layer.
-    pub fn launch_slot(&mut self, layer_id: LayerId, scene_id: SceneId, current_beat: f64, immediate: bool) {
+    pub fn launch_slot(
+        &mut self,
+        layer_id: LayerId,
+        scene_id: SceneId,
+        current_beat: f64,
+        immediate: bool,
+    ) {
         self.replace_pending_for_layer(&layer_id);
         let target = if immediate {
             current_beat
@@ -207,9 +217,20 @@ impl SessionRuntime {
     /// layer currently playing a session slot with NO slot in `scene_id` gets
     /// a quantized stop (Ableton "stop other tracks" default, section 5). Layers
     /// never session-launched are untouched.
-    pub fn launch_scene(&mut self, scene_id: &SceneId, grid: &SessionGrid, current_beat: f64, immediate: bool) {
+    pub fn launch_scene(
+        &mut self,
+        scene_id: &SceneId,
+        grid: &SessionGrid,
+        current_beat: f64,
+        immediate: bool,
+    ) {
         for slot in grid.slots.iter().filter(|s| &s.scene_id == scene_id) {
-            self.launch_slot(slot.layer_id.clone(), scene_id.clone(), current_beat, immediate);
+            self.launch_slot(
+                slot.layer_id.clone(),
+                scene_id.clone(),
+                current_beat,
+                immediate,
+            );
         }
         let playing_layers: Vec<LayerId> = self.playing.keys().cloned().collect();
         for layer_id in playing_layers {
@@ -298,7 +319,8 @@ impl SessionRuntime {
                 let due = self.pending.remove(i);
                 match due.action {
                     LaunchAction::Launch(scene_id) => {
-                        self.session_override.entry(due.layer_id.clone())
+                        self.session_override
+                            .entry(due.layer_id.clone())
                             .or_insert(Beats(due.target_beat));
                         self.playing.insert(
                             due.layer_id,
@@ -338,7 +360,14 @@ impl SessionRuntime {
         out: &mut Vec<ActiveClipRef>,
         wrap_restarts: &mut Vec<ClipId>,
     ) {
-        self.resolve_refs_with_controls(Beats(current_beat), grid, timeline, out, wrap_restarts, None);
+        self.resolve_refs_with_controls(
+            Beats(current_beat),
+            grid,
+            timeline,
+            out,
+            wrap_restarts,
+            None,
+        );
     }
 
     /// Resolve current membership and the control interval from the same slot
@@ -353,7 +382,8 @@ impl SessionRuntime {
         wrap_restarts: &mut Vec<ClipId>,
         window: Option<(Beats, &mut Vec<ActiveClipRef>)>,
     ) -> bool {
-        self.arrangement_resumed_at.retain(|id, _| timeline.layer_index_for_id(id).is_some());
+        self.arrangement_resumed_at
+            .retain(|id, _| timeline.layer_index_for_id(id).is_some());
         let complete = window.is_none_or(|(from, controls)| {
             self.collect_control_window(from, current_beat, grid, timeline, controls)
         });
@@ -429,26 +459,53 @@ impl SessionRuntime {
         self.control_span_indices.clear();
         for (index, entry) in out.iter().enumerate() {
             self.control_span_indices.insert(
-                (entry.layer_id.clone(), entry.clip_id.clone(), entry.start_beat.0.to_bits()), index,
+                (
+                    entry.layer_id.clone(),
+                    entry.clip_id.clone(),
+                    entry.start_beat.0.to_bits(),
+                ),
+                index,
             );
         }
         for (layer, playing) in &self.playing {
-            let end = self.pending.iter()
+            let end = self
+                .pending
+                .iter()
                 .find(|pending| &pending.layer_id == layer && pending.target_beat <= through.0)
                 .map_or(through, |pending| Beats(pending.target_beat));
             if let (Some(slot), Some(index)) = (
-                grid.get_slot(layer, &playing.scene_id), timeline.layer_index_for_id(layer),
-            ) && !append_control_window(slot, index, Beats(playing.launch_beat), from, end, out, &mut self.control_span_indices) {
+                grid.get_slot(layer, &playing.scene_id),
+                timeline.layer_index_for_id(layer),
+            ) && !append_control_window(
+                slot,
+                index,
+                Beats(playing.launch_beat),
+                from,
+                end,
+                out,
+                &mut self.control_span_indices,
+            ) {
                 return false;
             }
         }
         for pending in &self.pending {
-            if pending.target_beat > through.0 { continue; }
+            if pending.target_beat > through.0 {
+                continue;
+            }
             if let LaunchAction::Launch(scene) = &pending.action
                 && let (Some(slot), Some(index)) = (
-                    grid.get_slot(&pending.layer_id, scene), timeline.layer_index_for_id(&pending.layer_id),
+                    grid.get_slot(&pending.layer_id, scene),
+                    timeline.layer_index_for_id(&pending.layer_id),
                 )
-                && !append_control_window(slot, index, Beats(pending.target_beat), from, through, out, &mut self.control_span_indices)
+                && !append_control_window(
+                    slot,
+                    index,
+                    Beats(pending.target_beat),
+                    from,
+                    through,
+                    out,
+                    &mut self.control_span_indices,
+                )
             {
                 return false;
             }
@@ -491,34 +548,50 @@ fn append_control_window(
     indices: &mut AHashMap<(LayerId, ClipId, u64), usize>,
 ) -> bool {
     let length = slot.sequence.length_beats.0;
-    if length <= 0.0 || through <= from || through <= launch
-        || !slot.sequence.clips.iter().any(|clip| clip.duration_beats > Beats::ZERO)
+    if length <= 0.0
+        || through <= from
+        || through <= launch
+        || !slot
+            .sequence
+            .clips
+            .iter()
+            .any(|clip| clip.duration_beats > Beats::ZERO)
     {
         return true;
     }
     let first = ((from.max(launch) - launch).0 / length).floor() as i64;
     let last = ((through - launch).0 / length).floor() as i64;
     let limit = crate::engine::trigger_delivery::DEFAULT_TRIGGER_DELIVERY_CAPACITY;
-    if last.saturating_sub(first) > limit as i64 { return false; }
+    if last.saturating_sub(first) > limit as i64 {
+        return false;
+    }
     for iteration in first..=last {
         let origin = launch.0 + iteration as f64 * length;
         for clip in &slot.sequence.clips {
             let start = Beats(origin + clip.start_beat.0);
             let end = Beats((origin + clip.end_beat().0).min(origin + length)).min(through);
-            if start >= through || end <= from || end <= start { continue; }
+            if start >= through || end <= from || end <= start {
+                continue;
+            }
             let key = (slot.layer_id.clone(), clip.id.clone(), start.0.to_bits());
             if let Some(&index) = indices.get(&key) {
                 out[index].duration_beats = end - start;
                 continue;
             }
-            if out.len() == limit { return false; }
+            if out.len() == limit {
+                return false;
+            }
             indices.insert(key, out.len());
             out.push(ActiveClipRef {
-                clip_id: clip.id.clone(), layer_index: layer_index as i32,
-                clip_index: ActiveClipRef::SESSION_SLOT, start_beat: start,
+                clip_id: clip.id.clone(),
+                layer_index: layer_index as i32,
+                clip_index: ActiveClipRef::SESSION_SLOT,
+                start_beat: start,
                 control_from: start,
-                duration_beats: end - start, is_looping: clip.is_looping,
-                is_video: !clip.video_clip_id.is_empty(), is_muted: clip.is_muted,
+                duration_beats: end - start,
+                is_looping: clip.is_looping,
+                is_video: !clip.video_clip_id.is_empty(),
+                is_muted: clip.is_muted,
                 layer_id: slot.layer_id.clone(),
             });
         }
@@ -556,7 +629,12 @@ mod tests {
         timeline
     }
 
-    fn one_clip_sequence(length_beats: f64, clip_start: f64, clip_dur: f64, clip_id: &str) -> ClipSequence {
+    fn one_clip_sequence(
+        length_beats: f64,
+        clip_start: f64,
+        clip_dur: f64,
+        clip_id: &str,
+    ) -> ClipSequence {
         let mut clip = TimelineClip::new_generator(Beats(clip_start), Beats(clip_dur));
         clip.id = manifold_core::ClipId::new(clip_id);
         ClipSequence {
@@ -571,7 +649,11 @@ mod tests {
         // build via `default()` then push into the public `scenes`/`slots`
         // Vecs, same as any other external consumer would.
         let mut grid = SessionGrid::default();
-        grid.scenes.push(Scene { id: scene.clone(), name: "Scene".into(), color: None });
+        grid.scenes.push(Scene {
+            id: scene.clone(),
+            name: "Scene".into(),
+            color: None,
+        });
         grid.slots.push(SessionSlot {
             layer_id: layer.clone(),
             scene_id: scene.clone(),
@@ -588,11 +670,17 @@ mod tests {
     fn control_window_closes_replaced_and_stopped_slots_at_the_quantized_boundary() {
         let layer = layer_id("l1");
         let timeline = timeline_with_layers(&["l1"]);
-        let mut grid = grid_with_slot(&layer, &scene_id("a"), one_clip_sequence(4.0, 0.0, 4.0, "old"));
+        let mut grid = grid_with_slot(
+            &layer,
+            &scene_id("a"),
+            one_clip_sequence(4.0, 0.0, 4.0, "old"),
+        );
         grid.slots.push(SessionSlot {
-            layer_id: layer.clone(), scene_id: scene_id("b"),
+            layer_id: layer.clone(),
+            scene_id: scene_id("b"),
             sequence: one_clip_sequence(4.0, 0.0, 4.0, "new"),
-            name: "New".into(), color: None,
+            name: "New".into(),
+            color: None,
         });
         let mut runtime = SessionRuntime::new();
         runtime.set_quantize(Beats(1.0));
@@ -602,23 +690,46 @@ mod tests {
         runtime.launch_slot(layer.clone(), scene_id("b"), 0.5, false);
         active.clear();
         assert!(runtime.resolve_refs_with_controls(
-            Beats(1.4), &grid, &timeline, &mut active, &mut restarts, Some((Beats::ZERO, &mut controls)),
+            Beats(1.4),
+            &grid,
+            &timeline,
+            &mut active,
+            &mut restarts,
+            Some((Beats::ZERO, &mut controls)),
         ));
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].clip_id, ClipId::new("new"));
         assert_eq!(controls.len(), 2);
-        assert_eq!((controls[0].start_beat, controls[0].end_beat()), (Beats::ZERO, Beats(1.0)));
-        assert_eq!((controls[1].start_beat, controls[1].end_beat()), (Beats(1.0), Beats(1.4)));
+        assert_eq!(
+            (controls[0].start_beat, controls[0].end_beat()),
+            (Beats::ZERO, Beats(1.0))
+        );
+        assert_eq!(
+            (controls[1].start_beat, controls[1].end_beat()),
+            (Beats(1.0), Beats(1.4))
+        );
 
         runtime.stop_slot(layer.clone(), 1.5, false);
         active.clear();
         assert!(runtime.resolve_refs_with_controls(
-            Beats(2.4), &grid, &timeline, &mut active, &mut restarts, Some((Beats(1.4), &mut controls)),
+            Beats(2.4),
+            &grid,
+            &timeline,
+            &mut active,
+            &mut restarts,
+            Some((Beats(1.4), &mut controls)),
         ));
         assert!(active.is_empty());
-        assert_eq!(controls.len(), 2, "repeated sync extends the existing observed span");
+        assert_eq!(
+            controls.len(),
+            2,
+            "repeated sync extends the existing observed span"
+        );
         assert_eq!(controls[1].end_beat(), Beats(2.0));
-        assert!(runtime.is_overridden(&layer), "stop does not resume arrangement");
+        assert!(
+            runtime.is_overridden(&layer),
+            "stop does not resume arrangement"
+        );
     }
 
     #[test]
@@ -735,7 +846,11 @@ mod tests {
         // Tick 2: elapsed 5.0 -> iteration 1, same clip_id "c1" as before.
         out.clear();
         rt.resolve_refs(5.0, &grid, &timeline, &mut out, &mut wraps);
-        assert_eq!(wraps.len(), 1, "wrap boundary with unchanged clip_id must force a restart");
+        assert_eq!(
+            wraps.len(),
+            1,
+            "wrap boundary with unchanged clip_id must force a restart"
+        );
         assert_eq!(wraps[0], "c1");
         // global_start rebased to the new iteration: 0 + 1*4 + 0 = 4.0
         assert!((out[0].start_beat.0 - 4.0).abs() < 1e-9);
@@ -763,7 +878,10 @@ mod tests {
         let grid = grid_with_slot(
             &l1,
             &s1,
-            ClipSequence { length_beats: Beats(4.0), clips: vec![clip_a, clip_b] },
+            ClipSequence {
+                length_beats: Beats(4.0),
+                clips: vec![clip_a, clip_b],
+            },
         );
 
         let mut rt = SessionRuntime::new();
@@ -777,7 +895,10 @@ mod tests {
         out.clear();
         rt.resolve_refs(4.5, &grid, &timeline, &mut out, &mut wraps); // iteration 1, clip "a"
         assert_eq!(out[0].clip_id, "a");
-        assert!(wraps.is_empty(), "clip_id changed across the boundary — ordinary diff handles it");
+        assert!(
+            wraps.is_empty(),
+            "clip_id changed across the boundary — ordinary diff handles it"
+        );
     }
 
     // ─── Scene launch/stop matrix (section 5) ───
@@ -855,7 +976,10 @@ mod tests {
         rt.stop_slot(l1.clone(), 0.0, true);
         rt.activate_due_pending(0.0);
         assert!(!rt.is_playing_layer(&l1));
-        assert!(rt.is_overridden(&l1), "layer goes black, does not fall back to arrangement");
+        assert!(
+            rt.is_overridden(&l1),
+            "layer goes black, does not fall back to arrangement"
+        );
     }
 
     // ─── Back to arrangement ───
@@ -909,7 +1033,10 @@ mod tests {
         rt.on_transport_stop();
         assert_eq!(rt.playing_count(), 0);
         assert_eq!(rt.pending_count(), 0);
-        assert!(rt.is_overridden(&l1), "session_override is NOT cleared by transport stop");
+        assert!(
+            rt.is_overridden(&l1),
+            "session_override is NOT cleared by transport stop"
+        );
     }
 
     #[test]
@@ -921,7 +1048,10 @@ mod tests {
         rt.activate_due_pending(0.0);
 
         rt.on_seek(100.0);
-        assert!(rt.is_playing_layer(&l1), "seek must not stop session playback (section 4)");
+        assert!(
+            rt.is_playing_layer(&l1),
+            "seek must not stop session playback (section 4)"
+        );
     }
 
     #[test]

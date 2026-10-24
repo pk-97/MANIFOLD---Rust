@@ -3,7 +3,9 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_node_engine::freeze::classify::InputAccess;
 use manifold_node_engine::freeze::region::*;
-use manifold_node_engine::freeze::region::{build_region, final_reachable_nodes, wire_coincident_consumed};
+use manifold_node_engine::freeze::region::{
+    build_region, final_reachable_nodes, wire_coincident_consumed,
+};
 use manifold_node_engine::persistence::PrimitiveRegistry;
 
 fn registry() -> PrimitiveRegistry {
@@ -83,7 +85,11 @@ mod tests {
         // Wire-level contract: the array wire into `detections` is gather-
         // shaped (BufferIndex.is_gather()), so partition_regions' union
         // filter refuses it regardless of either endpoint's eligibility.
-        let det_wire = def.wires.iter().find(|w| w.to_port == "detections").unwrap();
+        let det_wire = def
+            .wires
+            .iter()
+            .find(|w| w.to_port == "detections")
+            .unwrap();
         assert!(
             !wire_coincident_consumed(&def, &registry(), det_wire),
             "a BufferIndex-consumed wire must never be a union candidate"
@@ -104,9 +110,15 @@ mod tests {
         );
         assert_eq!(dots.inputs.len(), 2);
         let RegionInput::External(slot) = dots.inputs[1] else {
-            panic!("detections must resolve to an external, not a member: {:?}", dots.inputs[1]);
+            panic!(
+                "detections must resolve to an external, not a member: {:?}",
+                dots.inputs[1]
+            );
         };
-        assert_eq!(region.externals[slot].from_node, 2, "blob_tracker is the external producer");
+        assert_eq!(
+            region.externals[slot].from_node, 2,
+            "blob_tracker is the external producer"
+        );
         assert_eq!(region.externals[slot].from_port, "blobs");
 
         // P5's concrete proof (P4a's escalation, resolved): on the full graph
@@ -159,15 +171,33 @@ mod tests {
                 {"fromNode": 4, "fromPort": "object", "toNode": 5, "toPort": "object_0"},
                 {"fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in"}
             ]
-        })).unwrap();
+        }))
+        .unwrap();
         let regions = partition_regions(&def, &registry());
-        let region = regions.iter().find(|region| region.members.iter().any(|m| m.doc_id == 2))
+        let region = regions
+            .iter()
+            .find(|region| region.members.iter().any(|m| m.doc_id == 2))
             .expect("remap and rotation must actually fuse");
         assert!(region.members.iter().any(|m| m.doc_id == 3));
-        let capacities: Vec<_> = region.externals.iter().enumerate().map(|(i, external)|
-            (format!("src_{i}"), if external.from_node == 1 { 30 } else { 3 })).collect();
-        let refs: Vec<_> = capacities.iter().map(|(name, n)| (name.as_str(), *n)).collect();
-        assert_eq!(region.output_capacity.as_ref().unwrap().eval(&refs), Some(30));
+        let capacities: Vec<_> = region
+            .externals
+            .iter()
+            .enumerate()
+            .map(|(i, external)| {
+                (
+                    format!("src_{i}"),
+                    if external.from_node == 1 { 30 } else { 3 },
+                )
+            })
+            .collect();
+        let refs: Vec<_> = capacities
+            .iter()
+            .map(|(name, n)| (name.as_str(), *n))
+            .collect();
+        assert_eq!(
+            region.output_capacity.as_ref().unwrap().eval(&refs),
+            Some(30)
+        );
     }
 
     #[test]
@@ -263,8 +293,10 @@ mod tests {
         }
         regions.sort_by_key(|r| r.members[0].doc_id);
         assert!(
-            regions.iter().any(|r| r.members.iter().any(|m| m.doc_id == 1)
-                && r.members.iter().any(|m| m.doc_id == 3)),
+            regions
+                .iter()
+                .any(|r| r.members.iter().any(|m| m.doc_id == 1)
+                    && r.members.iter().any(|m| m.doc_id == 3)),
             "cells must still fuse with its OWN branch (invert + remap)"
         );
     }
@@ -304,7 +336,11 @@ mod tests {
         );
         assert_eq!(r.virtual_chains.len(), 1, "the upstream invert is absorbed");
         assert_eq!(r.virtual_chains[0].members[0].doc_id, 1);
-        assert_eq!(r.externals.len(), 1, "the source backs both the chain and width");
+        assert_eq!(
+            r.externals.len(),
+            1,
+            "the source backs both the chain and width"
+        );
         assert_eq!(r.outputs, vec![(3, "out".to_string())]);
     }
 
@@ -331,18 +367,32 @@ mod tests {
         let regions = partition_regions(&def, &registry());
         assert_eq!(regions.len(), 1, "blur + absorbed gain form one region");
         let r = &regions[0];
-        assert_eq!(r.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![2]);
-        assert_eq!(r.virtual_chains.len(), 1, "gain absorbed as a virtual chain");
+        assert_eq!(
+            r.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![2]
+        );
+        assert_eq!(
+            r.virtual_chains.len(),
+            1,
+            "gain absorbed as a virtual chain"
+        );
         let chain = &r.virtual_chains[0];
         assert_eq!(chain.consumer, 2);
         assert_eq!(chain.input_index, 0);
         assert_eq!(chain.output, 1);
-        assert_eq!(chain.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![1]);
+        assert_eq!(
+            chain.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![1]
+        );
         assert_eq!(r.externals.len(), 1, "the source backs the chain");
         assert_eq!(r.externals[0].from_node, 0);
         assert_eq!(chain.members[0].inputs, vec![RegionInput::External(0)]);
         let blur = &r.members[0];
-        assert_eq!(blur.inputs, vec![RegionInput::Virtual(0)], "the blur reads the chain");
+        assert_eq!(
+            blur.inputs,
+            vec![RegionInput::Virtual(0)],
+            "the blur reads the chain"
+        );
         assert_eq!(r.outputs, vec![(2, "out".to_string())]);
     }
 
@@ -383,7 +433,11 @@ mod tests {
         let regions = partition_regions(&def, &registry());
         assert_eq!(regions.len(), 1, "gain + fragment + invert form one region");
         assert_eq!(
-            regions[0].members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            regions[0]
+                .members
+                .iter()
+                .map(|m| m.doc_id)
+                .collect::<Vec<_>>(),
             vec![1, 2, 3],
             "the fragment-form wgsl_compute fuses between the two atoms"
         );
@@ -422,7 +476,11 @@ mod tests {
             vec![1, 2],
             "the BufferGather atom joined through its coincident consumer"
         );
-        assert_eq!(r.externals.len(), 1, "scatter.instances deduped to one slot");
+        assert_eq!(
+            r.externals.len(),
+            1,
+            "scatter.instances deduped to one slot"
+        );
         assert_eq!(r.externals[0].from_node, 0);
         assert_eq!(r.externals[0].from_port, "instances");
         let smooth = r.members.iter().find(|m| m.doc_id == 1).unwrap();
@@ -597,14 +655,21 @@ mod tests {
         let mut registry = registry();
         manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes(&mut registry);
         let regions = partition_regions(&def, &registry);
-        let fused: Vec<Vec<u32>> = regions.iter().map(|r| r.members.iter().map(|m| m.doc_id).collect()).collect();
+        let fused: Vec<Vec<u32>> = regions
+            .iter()
+            .map(|r| r.members.iter().map(|m| m.doc_id).collect())
+            .collect();
         assert!(
             fused.iter().all(|members| !members.contains(&2)),
             "follow_first's output follows a alone, so it must not fuse as MinInputs: {fused:?}"
         );
         // Declared honestly (FromInput), the same shape fuses: the refusal
         // above is the probe's, not a gate the chain trips anyway.
-        assert_eq!(partition_regions(&honest_chain(), &registry).len(), 1, "a solid clamp into the divide fuses");
+        assert_eq!(
+            partition_regions(&honest_chain(), &registry).len(),
+            1,
+            "a solid clamp into the divide fuses"
+        );
     }
 
     /// The same chain with an honest producer: node.clamp_liquid_to_solids (its
@@ -651,10 +716,10 @@ mod tests {
     #[test]
     fn tone_map_and_gradient_map_both_fuse_next_to_a_fusable_neighbor() {
         let registry = registry();
-        for (type_id, in_port, should_fuse) in
-            [("node.tone_map", "in", true), ("node.gradient_map", "source", true),
-        ]
-        {
+        for (type_id, in_port, should_fuse) in [
+            ("node.tone_map", "in", true),
+            ("node.gradient_map", "source", true),
+        ] {
             let json = format!(
                 r#"{{
                     "version": 1, "name": "pair", "nodes": [
@@ -671,8 +736,10 @@ mod tests {
             );
             let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
             let regions = partition_regions(&def, &registry);
-            let fused_doc_ids: std::collections::HashSet<u32> =
-                regions.iter().flat_map(|r| r.members.iter().map(|m| m.doc_id)).collect();
+            let fused_doc_ids: std::collections::HashSet<u32> = regions
+                .iter()
+                .flat_map(|r| r.members.iter().map(|m| m.doc_id))
+                .collect();
             assert_eq!(
                 fused_doc_ids.contains(&2),
                 should_fuse,
@@ -699,10 +766,10 @@ mod tests {
     #[test]
     fn wave3_scalar_only_atoms_fuse_next_to_a_fusable_neighbor() {
         let registry = registry();
-        for (type_id, in_port, should_fuse) in
-            [("node.rotate_coordinates", "in", true), ("node.sine_wave", "field", true),
-        ]
-        {
+        for (type_id, in_port, should_fuse) in [
+            ("node.rotate_coordinates", "in", true),
+            ("node.sine_wave", "field", true),
+        ] {
             let json = format!(
                 r#"{{
                     "version": 1, "name": "pair", "nodes": [
@@ -719,8 +786,10 @@ mod tests {
             );
             let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
             let regions = partition_regions(&def, &registry);
-            let fused_doc_ids: std::collections::HashSet<u32> =
-                regions.iter().flat_map(|r| r.members.iter().map(|m| m.doc_id)).collect();
+            let fused_doc_ids: std::collections::HashSet<u32> = regions
+                .iter()
+                .flat_map(|r| r.members.iter().map(|m| m.doc_id))
+                .collect();
             assert_eq!(
                 fused_doc_ids.contains(&2),
                 should_fuse,

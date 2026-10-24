@@ -50,7 +50,11 @@ pub fn decode(
 /// The D4 body term: the shortest `0.5·(dx/c)·√(m_b/(ρ0·A_b·dx))` over the
 /// dynamic coupled bodies, with `c` the wave speed. Errors, naming the
 /// body, when it needs more than [`MAX_SUBSTEPS`] substeps with `dt_f`.
-fn body_limit_details(owner: &LiquidRigidOwner, cell_size: f32, wave: f32) -> Option<(f32, usize, f32)> {
+fn body_limit_details(
+    owner: &LiquidRigidOwner,
+    cell_size: f32,
+    wave: f32,
+) -> Option<(f32, usize, f32)> {
     let mut limit: Option<(f32, usize, f32)> = None;
     for (index, (face_area, row)) in owner.face_areas().zip(owner.rows()).enumerate() {
         if !takes_reaction(row) {
@@ -70,8 +74,15 @@ pub fn live_body_limit(owner: &LiquidRigidOwner, cell_size: f32, wave: f32) -> O
     body_limit_details(owner, cell_size, wave).map(|(dt, _, _)| dt)
 }
 
-pub fn body_limit(owner: &LiquidRigidOwner, cell_size: f32, wave: f32, v_est: f32) -> Result<Option<f32>, String> {
-    let Some((dt, index, face_area)) = body_limit_details(owner, cell_size, wave) else { return Ok(None) };
+pub fn body_limit(
+    owner: &LiquidRigidOwner,
+    cell_size: f32,
+    wave: f32,
+    v_est: f32,
+) -> Result<Option<f32>, String> {
+    let Some((dt, index, face_area)) = body_limit_details(owner, cell_size, wave) else {
+        return Ok(None);
+    };
     if substeps_per_tick(cell_size, wave, v_est, Some(dt), None) > MAX_SUBSTEPS {
         let row = &owner.rows()[index];
         return Err(format!(
@@ -93,19 +104,26 @@ pub fn body_substep(cell_size: f32, wave: f32, mass: f32, area: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::scene_impulse::RigidImpulseTargets;
+    use manifold_node_engine::scene::transform::Transform;
     use manifold_physics::clock::TICK;
     use manifold_water_liquid::coupling::PendingTick;
-    use manifold_core::scene_impulse::RigidImpulseTargets;
     use manifold_water_rigid::physics::{RigidBody, RigidSceneInputs};
-    use manifold_node_engine::scene::transform::Transform;
 
     /// A reaction of Δv = +1 m/s (encoded at U = 128) reaches Box3D as a
     /// linear impulse of m·Δv, on top of the tick's gravity.
     #[test]
     fn matter_coupled_reaction_decodes_to_body_impulse() {
-        let mut scene = RigidSceneInputs { gravity: [0.0, -9.81, 0.0], ..RigidSceneInputs::default() };
+        let mut scene = RigidSceneInputs {
+            gravity: [0.0, -9.81, 0.0],
+            ..RigidSceneInputs::default()
+        };
         scene.bodies[0] = Some(RigidBody {
-            transform: Transform { pos: [0.0, 1.0, 0.0], scale: [0.4; 3], ..Transform::default() },
+            transform: Transform {
+                pos: [0.0, 1.0, 0.0],
+                scale: [0.4; 3],
+                ..Transform::default()
+            },
             mass: 50.0,
             bounce: 0.0,
             ..RigidBody::default()
@@ -113,20 +131,49 @@ mod tests {
         let colliders = RigidImpulseTargets::body(0).unwrap();
         let open = manifold_water_liquid::coupling::DomainWalls::default();
         let capacity = manifold_core::fluid_domain::MAX_LIQUID_BODIES;
-        let mut owner = LiquidRigidOwner::new(&scene, open, &colliders, capacity, 3, None).expect("owner");
-        let scale = ReactionScale { unit: 128.0, cell_size: 0.0625, offset: 0 };
+        let mut owner =
+            LiquidRigidOwner::new(&scene, open, &colliders, capacity, 3, None).expect("owner");
+        let scale = ReactionScale {
+            unit: 128.0,
+            cell_size: 0.0625,
+            offset: 0,
+        };
         let mut words = [0i32; 16];
         words[1] = (16_777_216.0 / f64::from(scale.unit)) as i32;
-        owner.set_pending(PendingTick { tick: 0, stamp: 0, interval: manifold_physics::stepping::StepInterval::new(manifold_core::Seconds((0) as f64 * TICK), manifold_core::Seconds(TICK)), offline: true });
+        owner.set_pending(PendingTick {
+            tick: 0,
+            stamp: 0,
+            interval: manifold_physics::stepping::StepInterval::new(
+                manifold_core::Seconds((0) as f64 * TICK),
+                manifold_core::Seconds(TICK),
+            ),
+            offline: true,
+        });
         owner
-            .settle_ready(Some(&scene), |_| true, |_, rows, impulses| decode(scale, rows, Some(&words[..]), impulses))
+            .settle_ready(
+                Some(&scene),
+                |_| true,
+                |_, rows, impulses| decode(scale, rows, Some(&words[..]), impulses),
+            )
             .unwrap();
         let v = owner.rows()[0].linear_velocity[1];
         assert!((v - (1.0 - 9.81 * TICK as f32)).abs() < 1e-3, "{v}");
         let short = [0i32; 8];
-        owner.set_pending(PendingTick { tick: 1, stamp: 0, interval: manifold_physics::stepping::StepInterval::new(manifold_core::Seconds((1) as f64 * TICK), manifold_core::Seconds(2.0 * TICK)), offline: true });
+        owner.set_pending(PendingTick {
+            tick: 1,
+            stamp: 0,
+            interval: manifold_physics::stepping::StepInterval::new(
+                manifold_core::Seconds((1) as f64 * TICK),
+                manifold_core::Seconds(2.0 * TICK),
+            ),
+            offline: true,
+        });
         let error = owner
-            .settle_ready(Some(&scene), |_| true, |_, rows, impulses| decode(scale, rows, Some(&short[..]), impulses))
+            .settle_ready(
+                Some(&scene),
+                |_| true,
+                |_, rows, impulses| decode(scale, rows, Some(&short[..]), impulses),
+            )
             .unwrap_err();
         assert!(error.contains("smaller than the bodies"), "{error}");
     }

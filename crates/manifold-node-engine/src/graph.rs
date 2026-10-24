@@ -10,8 +10,8 @@ use std::borrow::Cow;
 use std::collections::hash_map::Entry;
 
 use crate::exec::effect_node::{EffectNode, NodeInstanceId, NodeWire, ParamValues};
-use crate::parameters::ParamValue;
 use crate::exec::node_pairs::{NodePair, NodePairBehavior};
+use crate::parameters::ParamValue;
 use crate::validation::{GraphError, validate_connection};
 
 /// One instance of an [`EffectNode`] within a [`Graph`].
@@ -153,36 +153,48 @@ impl Graph {
         self.modifier_buffer_budget = Some(budget);
     }
 
-manifold_core::testkit_visible! {
-    pub(crate) fn modifier_buffer_budget(&self) -> Option<&crate::load::expand::PreparedModifierBufferBudget> {
-        self.modifier_buffer_budget.as_ref()
-    }
-}
-
-manifold_core::testkit_visible! {
-    /// Hold a source selector or admitted mode at its prepared value. This
-    /// policy is installed only after construction defaults have been applied.
-    pub(crate) fn protect_prepared_param(&mut self, id: NodeInstanceId, name: &str) -> Result<(), GraphError> {
-        let inst = self.nodes.get(&id).ok_or(GraphError::NodeNotFound(id))?;
-        let expected = inst.params.get(name).ok_or_else(|| GraphError::ParamNotFound {
-            node: id, param: name.into(),
-        })?.clone();
-        let guards = self.prepared_params.entry(id).or_default();
-        if !guards.iter().any(|guard| guard.name == name) {
-            guards.push(PreparedParam { name: name.into(), expected, rejected: false });
+    manifold_core::testkit_visible! {
+        pub(crate) fn modifier_buffer_budget(&self) -> Option<&crate::load::expand::PreparedModifierBufferBudget> {
+            self.modifier_buffer_budget.as_ref()
         }
-        Ok(())
     }
-}
 
-    fn prepared_param_allows(&mut self, id: NodeInstanceId, name: &str, value: &ParamValue) -> bool {
-        let Some(guard) = self.prepared_params.get_mut(&id)
-            .and_then(|guards| guards.iter_mut().find(|guard| guard.name == name)) else { return true; };
+    manifold_core::testkit_visible! {
+        /// Hold a source selector or admitted mode at its prepared value. This
+        /// policy is installed only after construction defaults have been applied.
+        pub(crate) fn protect_prepared_param(&mut self, id: NodeInstanceId, name: &str) -> Result<(), GraphError> {
+            let inst = self.nodes.get(&id).ok_or(GraphError::NodeNotFound(id))?;
+            let expected = inst.params.get(name).ok_or_else(|| GraphError::ParamNotFound {
+                node: id, param: name.into(),
+            })?.clone();
+            let guards = self.prepared_params.entry(id).or_default();
+            if !guards.iter().any(|guard| guard.name == name) {
+                guards.push(PreparedParam { name: name.into(), expected, rejected: false });
+            }
+            Ok(())
+        }
+    }
+
+    fn prepared_param_allows(
+        &mut self,
+        id: NodeInstanceId,
+        name: &str,
+        value: &ParamValue,
+    ) -> bool {
+        let Some(guard) = self
+            .prepared_params
+            .get_mut(&id)
+            .and_then(|guards| guards.iter_mut().find(|guard| guard.name == name))
+        else {
+            return true;
+        };
         let rejected = guard.expected != *value;
         if rejected != guard.rejected {
             if rejected {
                 self.prepared_param_rejections += 1;
-                log::warn!("prepared scene parameter {id:?}.{name} changed; reapply the modifier or restore its source/mode before rendering");
+                log::warn!(
+                    "prepared scene parameter {id:?}.{name} changed; reapply the modifier or restore its source/mode before rendering"
+                );
             } else {
                 self.prepared_param_rejections -= 1;
             }
@@ -192,7 +204,9 @@ manifold_core::testkit_visible! {
     }
 
     pub fn prepared_param_violation(&self) -> Option<(&manifold_core::NodeId, &str)> {
-        if self.prepared_param_rejections == 0 { return None; }
+        if self.prepared_param_rejections == 0 {
+            return None;
+        }
         self.prepared_params.iter().find_map(|(id, guards)| {
             let guard = guards.iter().find(|guard| guard.rejected)?;
             Some((&self.nodes.get(id)?.node_id, guard.name.as_str()))
@@ -251,8 +265,15 @@ manifold_core::testkit_visible! {
 
     /// Register an output port whose value is consumed outside the graph.
     /// External outputs are runtime-only liveness roots and are not serialized.
-    pub fn add_external_output(&mut self, node: NodeInstanceId, port: &str) -> Result<(), GraphError> {
-        let inst = self.nodes.get(&node).ok_or(GraphError::NodeNotFound(node))?;
+    pub fn add_external_output(
+        &mut self,
+        node: NodeInstanceId,
+        port: &str,
+    ) -> Result<(), GraphError> {
+        let inst = self
+            .nodes
+            .get(&node)
+            .ok_or(GraphError::NodeNotFound(node))?;
         let canonical = inst
             .node
             .outputs()
@@ -263,7 +284,12 @@ manifold_core::testkit_visible! {
                 node,
                 port: port.to_string(),
             })?;
-        if self.external_outputs.entry(node).or_default().insert(canonical) {
+        if self
+            .external_outputs
+            .entry(node)
+            .or_default()
+            .insert(canonical)
+        {
             self.forced_outputs_epoch += 1;
         }
         Ok(())
@@ -278,7 +304,9 @@ manifold_core::testkit_visible! {
 
     /// Whether a node must be retained as an execution root.
     pub fn is_liveness_root(&self, node: NodeInstanceId) -> bool {
-        self.nodes.get(&node).is_some_and(|inst| inst.node.is_liveness_root())
+        self.nodes
+            .get(&node)
+            .is_some_and(|inst| inst.node.is_liveness_root())
             || self.external_outputs.contains_key(&node)
     }
 
@@ -323,20 +351,39 @@ manifold_core::testkit_visible! {
         behavior: Box<dyn NodePairBehavior>,
     ) -> Result<(), GraphError> {
         if first == second {
-            return Err(GraphError::CycleDetected { involves: vec![first] });
+            return Err(GraphError::CycleDetected {
+                involves: vec![first],
+            });
         }
         for id in [first, second] {
             if !self.nodes.contains_key(&id) {
                 return Err(GraphError::NodeNotFound(id));
             }
         }
-        if self.node_pairs.iter().any(|pair| pair.first == first && pair.second == second) {
-            return Err(GraphError::CycleDetected { involves: vec![first, second] });
+        if self
+            .node_pairs
+            .iter()
+            .any(|pair| pair.first == first && pair.second == second)
+        {
+            return Err(GraphError::CycleDetected {
+                involves: vec![first, second],
+            });
         }
         for id in [first, second] {
-            behavior.set_enabled(self.nodes.get_mut(&id).expect("validated pair node").node.as_mut(), true);
+            behavior.set_enabled(
+                self.nodes
+                    .get_mut(&id)
+                    .expect("validated pair node")
+                    .node
+                    .as_mut(),
+                true,
+            );
         }
-        self.node_pairs.push(NodePair { first, second, behavior });
+        self.node_pairs.push(NodePair {
+            first,
+            second,
+            behavior,
+        });
         Ok(())
     }
 
@@ -346,7 +393,10 @@ manifold_core::testkit_visible! {
         first: NodeInstanceId,
         second: NodeInstanceId,
     ) -> Option<&mut dyn NodePairBehavior> {
-        let pair = self.node_pairs.iter_mut().find(|pair| pair.first == first && pair.second == second)?;
+        let pair = self
+            .node_pairs
+            .iter_mut()
+            .find(|pair| pair.first == first && pair.second == second)?;
         Some(pair.behavior.as_mut())
     }
 
@@ -465,11 +515,7 @@ manifold_core::testkit_visible! {
     /// after a `node.wgsl_compute_*` node is constructed so the kernel
     /// is in place before the first `evaluate`. No-op on nodes whose
     /// shader is fixed at compile time via `include_str!`.
-    pub fn set_wgsl_source(
-        &mut self,
-        id: NodeInstanceId,
-        source: &str,
-    ) -> Result<(), GraphError> {
+    pub fn set_wgsl_source(&mut self, id: NodeInstanceId, source: &str) -> Result<(), GraphError> {
         let inst = self
             .nodes
             .get_mut(&id)
@@ -574,7 +620,9 @@ manifold_core::testkit_visible! {
         name: &'static str,
         value: ParamValue,
     ) {
-        if !self.prepared_param_allows(id, name, &value) { return; }
+        if !self.prepared_param_allows(id, name, &value) {
+            return;
+        }
         if let Some(inst) = self.nodes.get_mut(&id) {
             // Same compare-on-write contract as `set_param` — see there.
             // Hot path: `name` is a `&'static str`, wrapped as a borrowed
@@ -657,7 +705,9 @@ manifold_core::testkit_visible! {
     /// Use [`walk_wires`](Self::walk_wires) for whole-graph walks,
     /// [`walk_wires_from`](Self::walk_wires_from) for outgoing walks.
     pub fn walk_wires(&self, mode: WireWalkMode) -> impl Iterator<Item = &NodeWire> {
-        self.wires.iter().filter(move |w| self.wire_matches(w, mode))
+        self.wires
+            .iter()
+            .filter(move |w| self.wire_matches(w, mode))
     }
 
     /// Outgoing-wire walk filtered by `mode`. See [`walk_wires`](Self::walk_wires).
@@ -754,9 +804,9 @@ mod tests {
     }
 
     impl EffectNode for TestNode {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -813,24 +863,27 @@ mod tests {
         g.add_external_output(node, "field").unwrap();
         assert_eq!(g.forced_outputs_epoch(), epoch + 1);
         assert!(g.is_liveness_root(node));
-        assert_eq!(g.external_outputs().collect::<Vec<_>>(), vec![(node, "field")]);
+        assert_eq!(
+            g.external_outputs().collect::<Vec<_>>(),
+            vec![(node, "field")]
+        );
 
         // Reconfigured nodes must still satisfy every external reader.
         g.get_node_mut(node).unwrap().node = Box::new(TestNode::new("source", vec![], vec![]));
         assert!(matches!(super::super::validation::validate(&g),
             Err(GraphError::PortNotFound { node: invalid, port })
                 if invalid == node && port == "field"));
-        assert!(g.is_liveness_root(node), "a vanished port must not silently remove its reader");
+        assert!(
+            g.is_liveness_root(node),
+            "a vanished port must not silently remove its reader"
+        );
     }
 
     #[test]
     #[should_panic(expected = "duplicate handle 'same'")]
     fn add_node_named_rejects_duplicate_borrowed_and_owned_handles() {
         let mut g = Graph::new();
-        g.add_node_named(
-            "same",
-            Box::new(TestNode::new("first", vec![], vec![])),
-        );
+        g.add_node_named("same", Box::new(TestNode::new("first", vec![], vec![])));
         g.add_node_named(
             String::from("same"),
             Box::new(TestNode::new("second", vec![], vec![])),

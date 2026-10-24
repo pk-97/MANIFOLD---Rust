@@ -21,8 +21,14 @@ fn mid(cand: u64, avail: u64) -> u64 {
 }
 
 fn check(spec: &BandSpec, cand: u64, avail: u64) {
-    assert!(avail >= cand, "profile: deadline {avail} before candidate {cand}");
-    assert!(spec.holds(cand - BASE_FROM, avail), "profile: candidate {cand} read outside the stream history");
+    assert!(
+        avail >= cand,
+        "profile: deadline {avail} before candidate {cand}"
+    );
+    assert!(
+        spec.holds(cand - BASE_FROM, avail),
+        "profile: candidate {cand} read outside the stream history"
+    );
 }
 
 /// prof32: `[rise_early_0..16, rise_late_0..16]`, each band's max rise.
@@ -34,11 +40,19 @@ pub(super) fn rise(spec: &BandSpec, cand: u64, avail: u64, out: &mut [f64]) {
     check(spec, cand, avail);
     let base = base(spec, cand);
     let mid = mid(cand, avail);
-    let max_over = |from: u64, to: u64, b: usize| (from..to).map(|f| spec.paired_at(f)[b]).fold(f64::NEG_INFINITY, f64::max);
+    let max_over = |from: u64, to: u64, b: usize| {
+        (from..to)
+            .map(|f| spec.paired_at(f)[b])
+            .fold(f64::NEG_INFINITY, f64::max)
+    };
     let (early, late) = out.split_at_mut(PAIRS);
     for b in 0..PAIRS {
         early[b] = max_over(cand, mid, b) - base[b];
-        late[b] = if avail + 1 > mid { max_over(mid, avail + 1, b) - base[b] } else { early[b] };
+        late[b] = if avail + 1 > mid {
+            max_over(mid, avail + 1, b) - base[b]
+        } else {
+            early[b]
+        };
     }
 }
 
@@ -55,6 +69,9 @@ pub(super) fn fall(spec: &BandSpec, cand: u64, avail: u64, out: &mut [f64]) {
         return;
     }
     for (b, o) in out.iter_mut().enumerate() {
-        *o = (mid..avail + 1).map(|f| spec.paired_at(f)[b]).fold(f64::INFINITY, f64::min) - base[b];
+        *o = (mid..avail + 1)
+            .map(|f| spec.paired_at(f)[b])
+            .fold(f64::INFINITY, f64::min)
+            - base[b];
     }
 }

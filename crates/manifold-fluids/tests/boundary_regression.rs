@@ -38,9 +38,11 @@ fn coarse_grid_water_survives_closed_boundary_settling() {
     let mut surface = Vec::new();
     world.surface(&mut surface).unwrap();
     assert!(!surface.is_empty());
-    assert!(surface.iter().all(|vertex| vertex
-        .position
-        .iter()
-        .chain(&vertex.normal)
-        .all(|value| value.is_finite())));
+    assert!(surface.iter().all(|vertex| {
+        vertex
+            .position
+            .iter()
+            .chain(&vertex.normal)
+            .all(|value| value.is_finite())
+    }));
 }

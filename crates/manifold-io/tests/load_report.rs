@@ -1,12 +1,12 @@
 //! BUG-063 — `Project::load_report` surfaces what a load silently repaired.
 //! `docs/PROJECT_FILE_INTEGRITY_DESIGN.md` section 3.6 / P3.
 
+use manifold_core::Beats;
+use manifold_core::clip::TimelineClip;
 use manifold_core::effects::PresetInstance;
 use manifold_core::preset_type_id::PresetTypeId;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
-use manifold_core::Beats;
-use manifold_core::clip::TimelineClip;
 use manifold_io::loader;
 
 /// Build a project with a known-unknown master effect and a layer holding
@@ -76,9 +76,7 @@ fn load_report_surfaces_unknown_effect_and_overlap_repair() {
         "human_lines should name the unknown-effect repair: {lines:?}"
     );
     assert!(
-        lines
-            .iter()
-            .any(|l| l.contains("overlapping clip")),
+        lines.iter().any(|l| l.contains("overlapping clip")),
         "human_lines should name the overlap repair: {lines:?}"
     );
 

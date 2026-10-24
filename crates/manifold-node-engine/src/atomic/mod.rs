@@ -21,12 +21,15 @@ pub use plasma::{PLASMA_TYPE_ID, Plasma};
 
 #[cfg(test)]
 mod tests {
-    use crate::validation::validate;
     use super::*;
+    use crate::validation::validate;
 
     use manifold_core::{Beats, Seconds};
 
-    use crate::{exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::execution_plan::compile};
+    use crate::{
+        exec::effect_node::FrameTime, exec::execution::Executor, exec::execution_plan::compile,
+        graph::Graph,
+    };
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -75,6 +78,4 @@ mod tests {
         exec.execute_frame(&mut g, &plan, frame_time());
         assert_eq!(exec.backend().slot_count(), 0);
     }
-
-
 }

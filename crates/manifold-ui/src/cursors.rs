@@ -133,8 +133,21 @@ mod tests {
 
     #[test]
     fn crosshair_belongs_to_draw_alone() {
-        let all = [Op::Point, Op::Segment, Op::Bend, Op::Insert, Op::Marquee, Op::Draw, Op::Resize, Op::Title, Op::Blocked];
-        let crosshairs = all.iter().filter(|op| TimelineCursor::from(**op) == TimelineCursor::Crosshair).count();
+        let all = [
+            Op::Point,
+            Op::Segment,
+            Op::Bend,
+            Op::Insert,
+            Op::Marquee,
+            Op::Draw,
+            Op::Resize,
+            Op::Title,
+            Op::Blocked,
+        ];
+        let crosshairs = all
+            .iter()
+            .filter(|op| TimelineCursor::from(**op) == TimelineCursor::Crosshair)
+            .count();
         assert_eq!(crosshairs, 1);
     }
 
@@ -153,6 +166,9 @@ mod tests {
             hint: "",
         };
         assert_eq!(TimelineCursor::from(&feedback(false)), TimelineCursor::Bend);
-        assert_eq!(TimelineCursor::from(&feedback(true)), TimelineCursor::Grabbing);
+        assert_eq!(
+            TimelineCursor::from(&feedback(true)),
+            TimelineCursor::Grabbing
+        );
     }
 }

@@ -22,8 +22,8 @@ use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 use manifold_nodes_scene::testkit::gpu_harness as harness;
 
@@ -103,7 +103,9 @@ fn scene_json(light_specs: &[(f32, f32, f32, f32)]) -> String {
         ));
     }
 
-    format!(r#"{{"version":2,"name":"RenderSceneLightsProof","nodes":[{nodes}],"wires":[{wires}]}}"#)
+    format!(
+        r#"{{"version":2,"name":"RenderSceneLightsProof","nodes":[{nodes}],"wires":[{wires}]}}"#
+    )
 }
 
 /// Render a scene-graph JSON to `WxH` `Rgba16Float`, returning the readback
@@ -167,7 +169,10 @@ fn channel_sums(bytes: &[u8]) -> (f64, f64, f64, f32) {
         let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
         let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
         let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-        assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+        assert!(
+            r.is_finite() && g.is_finite() && b.is_finite(),
+            "non-finite pixel"
+        );
         sr += r as f64;
         sg += g as f64;
         sb += b as f64;
@@ -191,20 +196,24 @@ fn light_contract_scene_json(
 ) -> String {
     let rt = if rt_enabled { "true" } else { "false" };
     let material_node = match material {
-        "pbr" => r#"{"id":4,"typeId":"node.pbr_material","nodeId":"mat","params":{
+        "pbr" => {
+            r#"{"id":4,"typeId":"node.pbr_material","nodeId":"mat","params":{
             "color_r":{"type":"Float","value":1.0},
             "color_g":{"type":"Float","value":1.0},
             "color_b":{"type":"Float","value":1.0},
             "ambient":{"type":"Float","value":0.0},
             "metallic":{"type":"Float","value":0.0},
-            "roughness":{"type":"Float","value":1.0}}}"#,
-        "cel" => r#"{"id":4,"typeId":"node.cel_material","nodeId":"mat","params":{
+            "roughness":{"type":"Float","value":1.0}}}"#
+        }
+        "cel" => {
+            r#"{"id":4,"typeId":"node.cel_material","nodeId":"mat","params":{
             "color_r":{"type":"Float","value":1.0},
             "color_g":{"type":"Float","value":1.0},
             "color_b":{"type":"Float","value":1.0},
             "cel_bands":{"type":"Int","value":4},
             "band_low":{"type":"Float","value":0.1},
-            "band_high":{"type":"Float","value":1.0}}}"#,
+            "band_high":{"type":"Float","value":1.0}}}"#
+        }
         other => panic!("unknown light-contract material {other}"),
     };
     let env = if material == "pbr" {
@@ -354,7 +363,13 @@ fn write_png(bytes: &[u8], w: u32, h: u32, path: &str) {
 fn eight_lights_render_past_the_old_cap_of_four() {
     // Lights 0–3 red (dim), lights 4–7 green (bright). All eight overhead.
     let specs: Vec<(f32, f32, f32, f32)> = (0..8)
-        .map(|i| if i < 4 { (1.0, 0.0, 0.0, 0.3) } else { (0.0, 1.0, 0.0, 0.8) })
+        .map(|i| {
+            if i < 4 {
+                (1.0, 0.0, 0.0, 0.3)
+            } else {
+                (0.0, 1.0, 0.0, 0.8)
+            }
+        })
         .collect();
     let (bytes, w, h) = render_scene_readback(&scene_json(&specs));
 
@@ -362,7 +377,10 @@ fn eight_lights_render_past_the_old_cap_of_four() {
     let (sr, sg, sb, peak) = channel_sums(&bytes);
 
     // Something is lit — not a black frame.
-    assert!(peak > 0.2, "8-light plane is unlit (peak {peak}) — lights not contributing");
+    assert!(
+        peak > 0.2,
+        "8-light plane is unlit (peak {peak}) — lights not contributing"
+    );
     // Green (lights 4–7) dominates red (lights 0–3): the 5th–8th lights,
     // impossible under the old fixed-array cap of 4, are contributing.
     assert!(
@@ -380,8 +398,12 @@ fn zero_lights_render_without_validation_error() {
     // didn't crash). A GPU validation error would panic in the executor's
     // commit_and_wait; reaching the asserts means binding 8 stayed valid.
     let mut scene: serde_json::Value = serde_json::from_str(&scene_json(&[])).unwrap();
-    let material = scene["nodes"].as_array_mut().unwrap().iter_mut()
-        .find(|node| node["id"] == 4).unwrap();
+    let material = scene["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|node| node["id"] == 4)
+        .unwrap();
     for (name, value) in [
         ("emission_r", 0.4),
         ("emission_g", 0.4),
@@ -393,7 +415,10 @@ fn zero_lights_render_without_validation_error() {
     let (bytes, w, h) = render_scene_readback(&scene.to_string());
     write_png(&bytes, w, h, "/tmp/render_scene_0_lights.png");
     let (_sr, _sg, _sb, peak) = channel_sums(&bytes);
-    assert!(peak > 0.1, "zero-light emissive plane should still render (peak {peak})");
+    assert!(
+        peak > 0.1,
+        "zero-light emissive plane should still render (peak {peak})"
+    );
 }
 
 #[test]
@@ -450,7 +475,10 @@ fn light_contract_point_position_aim_range_and_sun_controls() {
     assert_ne!(overhead_json, side_json);
     let overhead = render_light_contract_scene(&overhead_json, false, false);
     let side = render_light_contract_scene(&side_json, false, false);
-    assert!(overhead > side * 1.2, "Point direction must follow position: overhead={overhead} side={side}");
+    assert!(
+        overhead > side * 1.2,
+        "Point direction must follow position: overhead={overhead} side={side}"
+    );
 
     // A zero-range Point is finite and contributes no direct light. Keep this
     // on Cel to isolate the exact zero-range contract from PBR IBL policy.
@@ -459,7 +487,10 @@ fn light_contract_point_position_aim_range_and_sun_controls() {
         false,
         false,
     );
-    assert!(zero.is_finite() && zero < 0.01, "zero-range Point must be dark and finite: {zero:.5}");
+    assert!(
+        zero.is_finite() && zero < 0.01,
+        "zero-range Point must be dark and finite: {zero:.5}"
+    );
     let short_range = render_light_contract_scene(
         &light_contract_scene_json("cel", 1, 4.0, 0.0, 2.0, false),
         false,

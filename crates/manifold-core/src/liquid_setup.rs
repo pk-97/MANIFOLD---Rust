@@ -68,7 +68,11 @@ pub fn fit_fill_height(layout: &FluidDomainLayout, height: f32) -> Result<FillFi
         return Err("Fill Height must be a number of at least zero");
     }
     let top = layout.size[1];
-    Ok(if height > top + FIT_TOLERANCE { FillFit::Capped(top) } else { FillFit::Within(height.min(top)) })
+    Ok(if height > top + FIT_TOLERANCE {
+        FillFit::Capped(top)
+    } else {
+        FillFit::Within(height.min(top))
+    })
 }
 
 /// Cells of padding every liquid lattice holds outside the domain box
@@ -127,15 +131,32 @@ pub fn fit_box(layout: &FluidDomainLayout, min: [f32; 3], max: [f32; 3]) -> BoxF
     }
     let clipped = |d: usize| {
         let (lo, hi) = (layout.min[d], layout.min[d] + layout.size[d]);
-        (if min[d] < lo - FIT_TOLERANCE { lo } else { min[d] }, if max[d] > hi + FIT_TOLERANCE { hi } else { max[d] })
+        (
+            if min[d] < lo - FIT_TOLERANCE {
+                lo
+            } else {
+                min[d]
+            },
+            if max[d] > hi + FIT_TOLERANCE {
+                hi
+            } else {
+                max[d]
+            },
+        )
     };
-    BoxFit::Clipped { min: std::array::from_fn(|d| clipped(d).0), max: std::array::from_fn(|d| clipped(d).1) }
+    BoxFit::Clipped {
+        min: std::array::from_fn(|d| clipped(d).0),
+        max: std::array::from_fn(|d| clipped(d).1),
+    }
 }
 
 /// The initial column centred on `pos` of size `scale` as a world box, in
 /// f32: what [`fit_column`] classifies and what a warning outlines.
 pub fn column_box(pos: [f32; 3], scale: [f32; 3]) -> ([f32; 3], [f32; 3]) {
-    (std::array::from_fn(|d| pos[d] - scale[d] * 0.5), std::array::from_fn(|d| pos[d] + scale[d] * 0.5))
+    (
+        std::array::from_fn(|d| pos[d] - scale[d] * 0.5),
+        std::array::from_fn(|d| pos[d] + scale[d] * 0.5),
+    )
 }
 
 /// The initial column's edges as the solvers site them: `centre ± half` in
@@ -158,7 +179,11 @@ pub fn fit_column(
         BoxFit::Clipped { min, max } => (min, max, ColumnOutcome::Clipped),
     };
     let edge = |d: usize, sign: f64, clipped: f32, raw: f32| {
-        if clipped != raw { f64::from(clipped) } else { f64::from(pos[d]) + sign * f64::from(scale[d]) * 0.5 }
+        if clipped != raw {
+            f64::from(clipped)
+        } else {
+            f64::from(pos[d]) + sign * f64::from(scale[d]) * 0.5
+        }
     };
     let edges = (
         std::array::from_fn(|d| edge(d, -1.0, clip_lo[d], lo32[d])),
@@ -172,7 +197,12 @@ mod tests {
     use super::*;
 
     fn layout() -> FluidDomainLayout {
-        FluidDomainLayout { min: [-2.0, 0.0, -2.0], size: [4.0, 4.0, 4.0], cells: [32; 3], cell_size: 0.125 }
+        FluidDomainLayout {
+            min: [-2.0, 0.0, -2.0],
+            size: [4.0, 4.0, 4.0],
+            cells: [32; 3],
+            cell_size: 0.125,
+        }
     }
 
     #[test]
@@ -189,16 +219,31 @@ mod tests {
     #[test]
     fn a_box_is_inside_clipped_or_outside() {
         let layout = layout();
-        assert_eq!(fit_box(&layout, [-1.0, 0.0, -1.0], [1.0, 2.0, 1.0]), BoxFit::Inside);
+        assert_eq!(
+            fit_box(&layout, [-1.0, 0.0, -1.0], [1.0, 2.0, 1.0]),
+            BoxFit::Inside
+        );
         assert_eq!(
             fit_box(&layout, [1.0, 1.0, -1.0], [3.0, 2.0, 1.0]),
-            BoxFit::Clipped { min: [1.0, 1.0, -1.0], max: [2.0, 2.0, 1.0] }
+            BoxFit::Clipped {
+                min: [1.0, 1.0, -1.0],
+                max: [2.0, 2.0, 1.0]
+            }
         );
-        assert_eq!(fit_box(&layout, [2.5, 0.0, 0.0], [3.5, 1.0, 1.0]), BoxFit::Outside);
+        assert_eq!(
+            fit_box(&layout, [2.5, 0.0, 0.0], [3.5, 1.0, 1.0]),
+            BoxFit::Outside
+        );
         // Touching a wall from outside leaves no volume.
-        assert_eq!(fit_box(&layout, [2.0, 0.0, 0.0], [3.0, 1.0, 1.0]), BoxFit::Outside);
+        assert_eq!(
+            fit_box(&layout, [2.0, 0.0, 0.0], [3.0, 1.0, 1.0]),
+            BoxFit::Outside
+        );
         // On the wall from inside is inside.
-        assert_eq!(fit_box(&layout, [1.0, 0.0, 0.0], [2.0, 1.0, 1.0]), BoxFit::Inside);
+        assert_eq!(
+            fit_box(&layout, [1.0, 0.0, 0.0], [2.0, 1.0, 1.0]),
+            BoxFit::Inside
+        );
     }
 
     #[test]
@@ -206,8 +251,16 @@ mod tests {
         // Sea Wall: an 8 m domain at resolution 112, a column at x = -2.83,
         // 0.41 wide. The f64 edges are what the site range was always built
         // from; an f32 subtraction would round them.
-        let layout = FluidDomainLayout { min: [-4.0, 0.0, -4.0], size: [8.0; 3], cells: [112; 3], cell_size: 8.0 / 112.0 };
-        let (lo, hi) = fit_column(&layout, [-2.83, 1.0, 0.0], [0.41, 1.0, 1.0]).unwrap().0.unwrap();
+        let layout = FluidDomainLayout {
+            min: [-4.0, 0.0, -4.0],
+            size: [8.0; 3],
+            cells: [112; 3],
+            cell_size: 8.0 / 112.0,
+        };
+        let (lo, hi) = fit_column(&layout, [-2.83, 1.0, 0.0], [0.41, 1.0, 1.0])
+            .unwrap()
+            .0
+            .unwrap();
         assert_eq!(lo[0], f64::from(-2.83f32) - f64::from(0.41f32) * 0.5);
         assert_eq!(hi[0], f64::from(-2.83f32) + f64::from(0.41f32) * 0.5);
     }
@@ -220,7 +273,10 @@ mod tests {
         let (lo, hi) = edges.unwrap();
         assert_eq!((lo[0], hi[0]), (1.0, 2.0));
         assert_eq!((lo[1], hi[1]), (0.5, 1.5));
-        assert_eq!(fit_column(&layout, [9.0, 1.0, 0.0], [1.0; 3]), Ok((None, ColumnOutcome::Outside)));
+        assert_eq!(
+            fit_column(&layout, [9.0, 1.0, 0.0], [1.0; 3]),
+            Ok((None, ColumnOutcome::Outside))
+        );
         assert!(fit_column(&layout, [0.0; 3], [0.0, 1.0, 1.0]).is_err());
     }
 

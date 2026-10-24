@@ -11,13 +11,15 @@
 //! shape as `node.mix` (8 blend modes) or `node.math` (13 ops): one
 //! composable atom that branches on a `mode` param.
 
-use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
+use std::borrow::Cow;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::primitives::standalone_pipeline::{
+    dispatch_standalone_2d, standalone_pipeline,
+};
 
 /// Display labels for the `mode` enum. Index = enum value, matching the
 /// legacy Strobe mode discriminants (0=Opacity, 1=White, 2=Gain).

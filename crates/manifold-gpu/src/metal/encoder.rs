@@ -3,16 +3,15 @@
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
-use objc2::rc::Retained;
 use objc2::msg_send;
+use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLAccelerationStructureCommandEncoder, MTLAccelerationStructurePassDescriptor, MTLBuffer,
-    MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLCommandBuffer,
-    MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor,
-    MTLComputePipelineState, MTLIndexType,
-    MTLLoadAction, MTLMultisampleDepthResolveFilter, MTLOrigin, MTLPrimitiveType,
+    MTLAccelerationStructureCommandEncoder, MTLAccelerationStructurePassDescriptor,
+    MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLBuffer, MTLCommandBuffer,
+    MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLComputePipelineState,
+    MTLIndexType, MTLLoadAction, MTLMultisampleDepthResolveFilter, MTLOrigin, MTLPrimitiveType,
     MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLResourceUsage, MTLScissorRect, MTLSize,
     MTLStoreAction, MTLTexture, MTLTextureUsage, MTLViewport,
 };
@@ -155,11 +154,17 @@ enum DispatchGrid<'a> {
 /// How many vertices or indices and instances one batch draw covers.
 #[derive(Clone, Copy)]
 pub enum DrawCount<'a> {
-    Direct { vertices: u32, instances: u32 },
+    Direct {
+        vertices: u32,
+        instances: u32,
+    },
     /// Metal's four-word draw arguments (vertex count, instance count, vertex
     /// start, base instance) at `offset`, written on the GPU earlier in the
     /// same command buffer: the count is known only to the GPU.
-    Indirect { args: &'a GpuBuffer, offset: u64 },
+    Indirect {
+        args: &'a GpuBuffer,
+        offset: u64,
+    },
     /// Direct indexed draw. The index buffer contains `u32` indices starting
     /// at byte offset zero.
     IndexedDirect {
@@ -222,18 +227,33 @@ impl<'a> DepthMsaaDraw<'a> {
     /// vertex count as the index count.
     pub fn indexed(mut self, indices: &'a GpuBuffer) -> Self {
         self.count = match self.count {
-            DrawCount::Direct { vertices, instances } => DrawCount::IndexedDirect {
+            DrawCount::Direct {
+                vertices,
+                instances,
+            } => DrawCount::IndexedDirect {
                 indices,
                 index_count: vertices,
                 instances,
             },
-            DrawCount::Indirect { args, offset } => DrawCount::IndexedIndirect { indices, args, offset },
-            DrawCount::IndexedDirect { index_count, instances, .. } => {
-                DrawCount::IndexedDirect { indices, index_count, instances }
-            }
-            DrawCount::IndexedIndirect { args, offset, .. } => {
-                DrawCount::IndexedIndirect { indices, args, offset }
-            }
+            DrawCount::Indirect { args, offset } => DrawCount::IndexedIndirect {
+                indices,
+                args,
+                offset,
+            },
+            DrawCount::IndexedDirect {
+                index_count,
+                instances,
+                ..
+            } => DrawCount::IndexedDirect {
+                indices,
+                index_count,
+                instances,
+            },
+            DrawCount::IndexedIndirect { args, offset, .. } => DrawCount::IndexedIndirect {
+                indices,
+                args,
+                offset,
+            },
         };
         self
     }
@@ -243,9 +263,19 @@ impl<'a> DepthMsaaDraw<'a> {
     /// indexed arguments when [`Self::indexed`] was used first.
     pub fn indirect(mut self, args: &'a GpuBuffer, offset: u64) -> Self {
         self.count = match self.count {
-            DrawCount::Direct { .. } | DrawCount::Indirect { .. } => DrawCount::Indirect { args, offset },
-            DrawCount::IndexedDirect { indices, .. } => DrawCount::IndexedIndirect { indices, args, offset },
-            DrawCount::IndexedIndirect { indices, .. } => DrawCount::IndexedIndirect { indices, args, offset },
+            DrawCount::Direct { .. } | DrawCount::Indirect { .. } => {
+                DrawCount::Indirect { args, offset }
+            }
+            DrawCount::IndexedDirect { indices, .. } => DrawCount::IndexedIndirect {
+                indices,
+                args,
+                offset,
+            },
+            DrawCount::IndexedIndirect { indices, .. } => DrawCount::IndexedIndirect {
+                indices,
+                args,
+                offset,
+            },
         };
         self
     }
@@ -258,7 +288,10 @@ fn encode_draw(
     count: &DrawCount,
 ) {
     match *count {
-        DrawCount::Direct { vertices, instances } => unsafe {
+        DrawCount::Direct {
+            vertices,
+            instances,
+        } => unsafe {
             enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
                 primitive,
                 0,
@@ -267,9 +300,17 @@ fn encode_draw(
             );
         },
         DrawCount::Indirect { args, offset } => unsafe {
-            enc.drawPrimitives_indirectBuffer_indirectBufferOffset(primitive, &args.raw, offset as usize);
+            enc.drawPrimitives_indirectBuffer_indirectBufferOffset(
+                primitive,
+                &args.raw,
+                offset as usize,
+            );
         },
-        DrawCount::IndexedDirect { indices, index_count, instances } => unsafe {
+        DrawCount::IndexedDirect {
+            indices,
+            index_count,
+            instances,
+        } => unsafe {
             enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount(
                 primitive,
                 index_count as usize,
@@ -279,7 +320,11 @@ fn encode_draw(
                 instances as usize,
             );
         },
-        DrawCount::IndexedIndirect { indices, args, offset } => unsafe {
+        DrawCount::IndexedIndirect {
+            indices,
+            args,
+            offset,
+        } => unsafe {
             enc.drawIndexedPrimitives_indexType_indexBuffer_indexBufferOffset_indirectBuffer_indirectBufferOffset(
                 primitive,
                 MTLIndexType::UInt32,
@@ -357,7 +402,9 @@ impl GpuEncoder {
     }
 
     /// `ensure_compute` without the replay flush: the replay execute path.
-    pub(super) fn ensure_compute_raw(&mut self) -> Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> {
+    pub(super) fn ensure_compute_raw(
+        &mut self,
+    ) -> Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> {
         if let EncoderState::Compute(ref enc) = self.state {
             return enc.clone();
         }
@@ -407,7 +454,12 @@ impl GpuEncoder {
     }
 
     /// [`Self::enable_dispatch_profiling`] at a chosen [`ProfileGranularity`].
-    pub fn enable_profiling_at(&mut self, sampler: GpuTimestampSampler, device: &GpuDevice, granularity: ProfileGranularity) {
+    pub fn enable_profiling_at(
+        &mut self,
+        sampler: GpuTimestampSampler,
+        device: &GpuDevice,
+        granularity: ProfileGranularity,
+    ) {
         let calib_start = profiling::sample_cpu_gpu(device.raw_device());
         self.profile = Some(ProfileState {
             sampler,
@@ -429,7 +481,10 @@ impl GpuEncoder {
     #[cfg(feature = "gpu-proofs")]
     pub fn profile_next_encoder(&mut self, label: &'static str) {
         if let Some(profile) = &mut self.profile {
-            assert!(profile.next_label.is_none(), "previous encoder label was not consumed");
+            assert!(
+                profile.next_label.is_none(),
+                "previous encoder label was not consumed"
+            );
             profile.next_label = Some(label);
         }
     }
@@ -454,8 +509,11 @@ impl GpuEncoder {
             self.cmd_buf.waitUntilCompleted();
             let mut total = (self.cmd_buf.GPUEndTime() - self.cmd_buf.GPUStartTime()).max(0.0);
             if let Some(profile) = &self.profile {
-                total += profile.committed_buffers.iter()
-                    .map(|buf| (buf.GPUEndTime() - buf.GPUStartTime()).max(0.0)).sum::<f64>();
+                total += profile
+                    .committed_buffers
+                    .iter()
+                    .map(|buf| (buf.GPUEndTime() - buf.GPUStartTime()).max(0.0))
+                    .sum::<f64>();
             }
             total * 1000.0
         };
@@ -464,7 +522,9 @@ impl GpuEncoder {
                 let calib_end = profiling::sample_cpu_gpu(device.raw_device());
                 let mut profile = profiling::resolve(&state, calib_end, total_ms);
                 use objc2_metal::MTLCommandBufferStatus;
-                profile.failed_command_buffers = state.committed_buffers.iter()
+                profile.failed_command_buffers = state
+                    .committed_buffers
+                    .iter()
                     .chain(std::iter::once(&self.cmd_buf))
                     .filter(|buf| unsafe { buf.status() } != MTLCommandBufferStatus::Completed)
                     .count();
@@ -486,7 +546,10 @@ impl GpuEncoder {
         label: &str,
         pipeline: &GpuComputePipeline,
     ) -> Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> {
-        self.begin_profiled_compute_named(label, pipeline.state.staticThreadgroupMemoryLength() as u32)
+        self.begin_profiled_compute_named(
+            label,
+            pipeline.state.staticThreadgroupMemoryLength() as u32,
+        )
     }
 
     /// [`Self::begin_profiled_compute`] by label and threadgroup memory: a
@@ -498,7 +561,8 @@ impl GpuEncoder {
     ) -> Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> {
         self.flush_replay();
         if let (EncoderState::Compute(enc), Some(p)) = (&self.state, &self.profile)
-            && p.granularity.reuses_open_encoder(p.open_tag.as_deref(), &p.tag)
+            && p.granularity
+                .reuses_open_encoder(p.open_tag.as_deref(), &p.tag)
         {
             return enc.clone();
         }
@@ -553,7 +617,11 @@ impl GpuEncoder {
             };
             self.pass_samples = unsafe {
                 (
-                    samples(desc.colorAttachments().objectAtIndexedSubscript(0).texture()),
+                    samples(
+                        desc.colorAttachments()
+                            .objectAtIndexedSubscript(0)
+                            .texture(),
+                    ),
                     samples(desc.depthAttachment().texture()),
                 )
             };
@@ -573,7 +641,8 @@ impl GpuEncoder {
     ) {
         let (color, depth) = self.pass_samples;
         debug_assert!(
-            (color == 0 || color == pipeline.sample_count) && (depth == 0 || depth == pipeline.sample_count),
+            (color == 0 || color == pipeline.sample_count)
+                && (depth == 0 || depth == pipeline.sample_count),
             "[GPU] pipeline '{}' built for {} samples bound in a pass with color {} / depth {} samples",
             pipeline.label,
             pipeline.sample_count,
@@ -624,7 +693,8 @@ impl GpuEncoder {
             .as_mut()
             .and_then(|p| p.reserve(label, GpuWorkKind::AccelerationStructure, 0))
         {
-            let desc = MTLAccelerationStructurePassDescriptor::accelerationStructurePassDescriptor();
+            let desc =
+                MTLAccelerationStructurePassDescriptor::accelerationStructurePassDescriptor();
             unsafe {
                 let att = desc.sampleBufferAttachments().objectAtIndexedSubscript(0);
                 att.setSampleBuffer(Some(&sample_buffer));
@@ -662,7 +732,12 @@ impl GpuEncoder {
         offset: u64,
         label: &str,
     ) {
-        self.dispatch_compute_grid(pipeline, bindings, DispatchGrid::Indirect { args, offset }, label);
+        self.dispatch_compute_grid(
+            pipeline,
+            bindings,
+            DispatchGrid::Indirect { args, offset },
+            label,
+        );
     }
 
     fn dispatch_compute_grid(
@@ -687,7 +762,11 @@ impl GpuEncoder {
                 DispatchGrid::Groups(groups) => format!("{groups:?}"),
                 DispatchGrid::Indirect { .. } => "indirect".to_owned(),
             };
-            log::info!("[GPU-DIAG] dispatch stage={label} groups={groups} threads={:?} bindings={}", pipeline.workgroup_size, bindings.len());
+            log::info!(
+                "[GPU-DIAG] dispatch stage={label} groups={groups} threads={:?} bindings={}",
+                pipeline.workgroup_size,
+                bindings.len()
+            );
         }
         if isolate_rt_stage {
             self.end_current();
@@ -812,16 +891,14 @@ impl GpuEncoder {
         // in raytrace.rs; BUG-jddy).
         for binding in bindings {
             match binding {
-                GpuBinding::Buffer { buffer, .. } => {
-                    unsafe {
-                        let () = msg_send![&enc, useResource: &*buffer.raw, usage: MTLResourceUsage::Read];
-                    }
-                }
-                GpuBinding::Texture { texture, .. } => {
-                    unsafe {
-                        let () = msg_send![&enc, useResource: &*texture.raw, usage: MTLResourceUsage::Read];
-                    }
-                }
+                GpuBinding::Buffer { buffer, .. } => unsafe {
+                    let () =
+                        msg_send![&enc, useResource: &*buffer.raw, usage: MTLResourceUsage::Read];
+                },
+                GpuBinding::Texture { texture, .. } => unsafe {
+                    let () =
+                        msg_send![&enc, useResource: &*texture.raw, usage: MTLResourceUsage::Read];
+                },
                 GpuBinding::Bytes { .. } | GpuBinding::Sampler { .. } => {} // not MTLResource
             }
         }
@@ -851,7 +928,11 @@ impl GpuEncoder {
         }
 
         let wg = pipeline.workgroup_size;
-        let threads = MTLSize { width: wg[0] as usize, height: wg[1] as usize, depth: wg[2] as usize };
+        let threads = MTLSize {
+            width: wg[0] as usize,
+            height: wg[1] as usize,
+            depth: wg[2] as usize,
+        };
         unsafe {
             match grid {
                 DispatchGrid::Groups(groups) => enc.dispatchThreadgroups_threadsPerThreadgroup(
@@ -895,19 +976,40 @@ impl GpuEncoder {
         label: &str,
     ) {
         if super::gpu_fault::diagnostics_enabled() {
-            log::info!("[GPU-DIAG] trace stage={label} groups={workgroups:?} threads={:?} blas={} geometry_buffers={} bindings={}",
-                pipeline.workgroup_size, accel.blas.len(), accel.geometry_buffers.len(), bindings.len());
-            log::info!("[GPU-DIAG] accel={:p} instances_bytes={}", &*accel.structure, accel.instance_buffer.size);
+            log::info!(
+                "[GPU-DIAG] trace stage={label} groups={workgroups:?} threads={:?} blas={} geometry_buffers={} bindings={}",
+                pipeline.workgroup_size,
+                accel.blas.len(),
+                accel.geometry_buffers.len(),
+                bindings.len()
+            );
+            log::info!(
+                "[GPU-DIAG] accel={:p} instances_bytes={}",
+                &*accel.structure,
+                accel.instance_buffer.size
+            );
             for binding in bindings {
-                if let GpuBinding::Buffer { binding: slot, buffer, offset } = binding {
-                    log::info!("[GPU-DIAG] trace_buffer slot={slot} handle={:p} bytes={} offset={offset} offset_valid={}",
-                        &*buffer.raw, buffer.size, *offset <= buffer.size);
+                if let GpuBinding::Buffer {
+                    binding: slot,
+                    buffer,
+                    offset,
+                } = binding
+                {
+                    log::info!(
+                        "[GPU-DIAG] trace_buffer slot={slot} handle={:p} bytes={} offset={offset} offset_valid={}",
+                        &*buffer.raw,
+                        buffer.size,
+                        *offset <= buffer.size
+                    );
                 }
             }
             for geo in &accel.geometry_buffers {
-                log::info!("[GPU-DIAG] geometry handle={:p} bytes={}", &**geo, geo.length());
+                log::info!(
+                    "[GPU-DIAG] geometry handle={:p} bytes={}",
+                    &**geo,
+                    geo.length()
+                );
             }
-
         }
         self.end_current();
         let enc = if self.profile.is_some() {
@@ -966,10 +1068,7 @@ impl GpuEncoder {
                         continue;
                     };
                     unsafe {
-                        enc.setSamplerState_atIndex(
-                            Some(&sampler.raw),
-                            slot.metal_index as usize,
-                        );
+                        enc.setSamplerState_atIndex(Some(&sampler.raw), slot.metal_index as usize);
                     }
                 }
                 GpuBinding::Bytes { binding: b, data } => {
@@ -993,7 +1092,9 @@ impl GpuEncoder {
         }
         if let Some((binding, bytes)) = inline_bytes {
             let Some(slot) = pipeline.slot_map.get(binding) else {
-                panic!("dispatch_compute_with_accel: inline binding {binding} absent from pipeline slot map");
+                panic!(
+                    "dispatch_compute_with_accel: inline binding {binding} absent from pipeline slot map"
+                );
             };
             let ptr = NonNull::new(bytes.as_ptr() as *mut c_void)
                 .expect("dispatch_compute_with_accel: inline bytes must not be empty");
@@ -1012,7 +1113,8 @@ impl GpuEncoder {
         unsafe {
             let () = msg_send![&enc, useResource: &*accel.structure, usage: MTLResourceUsage::Read];
             for blas in &accel.blas {
-                let () = msg_send![&enc, useResource: &*blas.structure, usage: MTLResourceUsage::Read];
+                let () =
+                    msg_send![&enc, useResource: &*blas.structure, usage: MTLResourceUsage::Read];
             }
             let () = msg_send![&enc, useResource: accel.instance_buffer.raw(), usage: MTLResourceUsage::Read];
             // BUG-84fv audit: the kernels also read vertex/index data via
@@ -1026,16 +1128,14 @@ impl GpuEncoder {
         // Same contract for the direct bindings.
         for binding in bindings {
             match binding {
-                GpuBinding::Buffer { buffer, .. } => {
-                    unsafe {
-                        let () = msg_send![&enc, useResource: &*buffer.raw, usage: MTLResourceUsage::Read];
-                    }
-                }
-                GpuBinding::Texture { texture, .. } => {
-                    unsafe {
-                        let () = msg_send![&enc, useResource: &*texture.raw, usage: MTLResourceUsage::Read];
-                    }
-                }
+                GpuBinding::Buffer { buffer, .. } => unsafe {
+                    let () =
+                        msg_send![&enc, useResource: &*buffer.raw, usage: MTLResourceUsage::Read];
+                },
+                GpuBinding::Texture { texture, .. } => unsafe {
+                    let () =
+                        msg_send![&enc, useResource: &*texture.raw, usage: MTLResourceUsage::Read];
+                },
                 GpuBinding::Bytes { .. } => {} // inline data, no resource
                 GpuBinding::Sampler { .. } => {} // samplers aren't MTLResource
             }
@@ -1301,7 +1401,10 @@ impl GpuEncoder {
         DepthMsaaDraw {
             pipeline,
             bindings,
-            count: DrawCount::Direct { vertices: vertex_count, instances: instance_count },
+            count: DrawCount::Direct {
+                vertices: vertex_count,
+                instances: instance_count,
+            },
             fill_mode: crate::GpuTriangleFillMode::Fill,
             primitive: crate::GpuPrimitiveType::Triangle,
         }
@@ -1320,7 +1423,10 @@ impl GpuEncoder {
         DepthMsaaDraw {
             pipeline,
             bindings,
-            count: DrawCount::Direct { vertices: vertex_count, instances: instance_count },
+            count: DrawCount::Direct {
+                vertices: vertex_count,
+                instances: instance_count,
+            },
             fill_mode,
             primitive: crate::GpuPrimitiveType::Triangle,
         }
@@ -1340,7 +1446,10 @@ impl GpuEncoder {
         DepthMsaaDraw {
             pipeline,
             bindings,
-            count: DrawCount::Direct { vertices: vertex_count, instances: instance_count },
+            count: DrawCount::Direct {
+                vertices: vertex_count,
+                instances: instance_count,
+            },
             fill_mode: crate::GpuTriangleFillMode::Fill,
             primitive: crate::GpuPrimitiveType::Point,
         }
@@ -1420,11 +1529,7 @@ impl GpuEncoder {
         // the clear color is per-attachment (see `AuxColorAttachment`).
         for (i, aux_att) in desc.aux_color.iter().enumerate() {
             let idx = i + 1;
-            let aux = unsafe {
-                pass_desc
-                    .colorAttachments()
-                    .objectAtIndexedSubscript(idx)
-            };
+            let aux = unsafe { pass_desc.colorAttachments().objectAtIndexedSubscript(idx) };
             unsafe {
                 aux.setTexture(Some(&aux_att.msaa.raw));
                 aux.setResolveTexture(Some(&aux_att.resolve.raw));
@@ -1447,8 +1552,7 @@ impl GpuEncoder {
             match desc.depth_resolve {
                 Some(resolve) => {
                     assert_eq!(
-                        resolve.format,
-                        desc.msaa_depth.format,
+                        resolve.format, desc.msaa_depth.format,
                         "depth resolve texture must match the MSAA depth format"
                     );
                     assert_eq!(
@@ -1499,7 +1603,11 @@ impl GpuEncoder {
             apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
             // D8: per-draw topology (Points mode = point primitives) — colour
             // batches only; depth-only batches force Triangle.
-            encode_draw(&enc, format::to_mtl_primitive_type(draw.primitive), &draw.count);
+            encode_draw(
+                &enc,
+                format::to_mtl_primitive_type(draw.primitive),
+                &draw.count,
+            );
         }
 
         // IMPORT_FIDELITY_DESIGN.md D8/F-P5: the sorted transparent group,
@@ -1521,7 +1629,11 @@ impl GpuEncoder {
                     enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode));
                 }
                 apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
-                encode_draw(&enc, format::to_mtl_primitive_type(draw.primitive), &draw.count);
+                encode_draw(
+                    &enc,
+                    format::to_mtl_primitive_type(draw.primitive),
+                    &draw.count,
+                );
             }
         }
 
@@ -1606,7 +1718,11 @@ impl GpuEncoder {
             apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
             // D8: per-draw topology (Points mode = point primitives) — colour
             // batches only; depth-only batches force Triangle.
-            encode_draw(&enc, format::to_mtl_primitive_type(draw.primitive), &draw.count);
+            encode_draw(
+                &enc,
+                format::to_mtl_primitive_type(draw.primitive),
+                &draw.count,
+            );
         }
 
         unsafe {
@@ -1799,7 +1915,14 @@ impl GpuEncoder {
         label: &str,
     ) {
         let full = [depth_target.width, depth_target.height];
-        self.draw_depth_only_batch(depth_target, depth_stencil_state, draws, MTLLoadAction::Clear, full, label);
+        self.draw_depth_only_batch(
+            depth_target,
+            depth_stencil_state,
+            draws,
+            MTLLoadAction::Clear,
+            full,
+            label,
+        );
     }
 
     /// Clear `depth_target` and draw into its top-left `viewport` square only.
@@ -1813,8 +1936,18 @@ impl GpuEncoder {
         viewport: [u32; 2],
         label: &str,
     ) {
-        let viewport = [viewport[0].min(depth_target.width), viewport[1].min(depth_target.height)];
-        self.draw_depth_only_batch(depth_target, depth_stencil_state, draws, MTLLoadAction::Clear, viewport, label);
+        let viewport = [
+            viewport[0].min(depth_target.width),
+            viewport[1].min(depth_target.height),
+        ];
+        self.draw_depth_only_batch(
+            depth_target,
+            depth_stencil_state,
+            draws,
+            MTLLoadAction::Clear,
+            viewport,
+            label,
+        );
     }
 
     fn draw_depth_only_batch(
@@ -1898,7 +2031,14 @@ impl GpuEncoder {
         label: &str,
     ) {
         let full = [depth_target.width, depth_target.height];
-        self.draw_depth_only_batch(depth_target, depth_stencil_state, draws, MTLLoadAction::Load, full, label);
+        self.draw_depth_only_batch(
+            depth_target,
+            depth_stencil_state,
+            draws,
+            MTLLoadAction::Load,
+            full,
+            label,
+        );
     }
 
     /// Draw indexed geometry with a render pipeline and vertex/index buffers.
@@ -2316,14 +2456,22 @@ impl GpuEncoder {
         assert_eq!(target.format, crate::GpuTextureFormat::R32Float);
         assert_eq!(source.width, target.width);
         assert_eq!(source.height, target.height);
-        assert!(unsafe { target.raw.usage() }.contains(MTLTextureUsage::ShaderWrite),
-            "copy_depth_to_float destination must allow shader writes");
+        assert!(
+            unsafe { target.raw.usage() }.contains(MTLTextureUsage::ShaderWrite),
+            "copy_depth_to_float destination must allow shader writes"
+        );
         let pipelines = unsafe { &*self.clear_pipelines };
         self.dispatch_compute(
             &pipelines.depth_to_float,
             &[
-                GpuBinding::Texture { binding: 0, texture: source },
-                GpuBinding::Texture { binding: 1, texture: target },
+                GpuBinding::Texture {
+                    binding: 0,
+                    texture: source,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: target,
+                },
             ],
             [target.width.div_ceil(16), target.height.div_ceil(16), 1],
             "Copy Depth To Float",
@@ -2378,14 +2526,21 @@ impl GpuEncoder {
         depth: u32,
     ) {
         assert_eq!(
-            src.format, dst.format,
+            src.format,
+            dst.format,
             "copy_texture_to_texture: pixel format mismatch — \
              src {:?} ({}×{}) → dst {:?} ({}×{}), copy region {}×{}×{}. \
              Metal blit requires matching formats. If you need a cross-\
              format copy, use a compute-shader copy path instead.",
-            src.format, src.width, src.height,
-            dst.format, dst.width, dst.height,
-            width, height, depth,
+            src.format,
+            src.width,
+            src.height,
+            dst.format,
+            dst.width,
+            dst.height,
+            width,
+            height,
+            depth,
         );
         // Same-size guard. A Metal blit copies from origin (0,0) with NO
         // scaling, so a size mismatch silently copies the top-left
@@ -2402,19 +2557,32 @@ impl GpuEncoder {
              scaling) — src {}×{} != dst {}×{}. To change resolution, \
              sample: use GpuEncoder::resize_sample. A size-mismatched blit \
              would silently crop the top-left corner.",
-            src.width, src.height, dst.width, dst.height,
+            src.width,
+            src.height,
+            dst.width,
+            dst.height,
         );
         assert!(
             width <= src.width && height <= src.height,
             "copy_texture_to_texture: copy region exceeds source bounds — \
              src {}×{} ({:?}), copy region {}×{}×{}. Source extent out of bounds.",
-            src.width, src.height, src.format, width, height, depth,
+            src.width,
+            src.height,
+            src.format,
+            width,
+            height,
+            depth,
         );
         assert!(
             width <= dst.width && height <= dst.height,
             "copy_texture_to_texture: copy region exceeds destination bounds — \
              dst {}×{} ({:?}), copy region {}×{}×{}. Destination extent out of bounds.",
-            dst.width, dst.height, dst.format, width, height, depth,
+            dst.width,
+            dst.height,
+            dst.format,
+            width,
+            height,
+            depth,
         );
         self.end_current();
         let enc = self.make_blit_encoder("copy_texture_to_texture");
@@ -2537,7 +2705,11 @@ impl GpuEncoder {
             width <= src.width && height <= src.height,
             "copy_texture_to_buffer: copy region exceeds source bounds — \
              src {}×{} ({:?}), copy region {}×{}. Source extent out of bounds.",
-            src.width, src.height, src.format, width, height,
+            src.width,
+            src.height,
+            src.format,
+            width,
+            height,
         );
         let required = u64::from(bytes_per_row) * u64::from(height);
         assert!(
@@ -2588,7 +2760,13 @@ impl GpuEncoder {
             width <= src.width && height <= src.height && depth <= src.depth,
             "copy_texture_3d_to_buffer: copy region exceeds source bounds — \
              src {}×{}×{} ({:?}), copy region {}×{}×{}.",
-            src.width, src.height, src.depth, src.format, width, height, depth,
+            src.width,
+            src.height,
+            src.depth,
+            src.format,
+            width,
+            height,
+            depth,
         );
         let bytes_per_image = u64::from(bytes_per_row) * u64::from(height);
         let required = bytes_per_image * u64::from(depth);
@@ -2710,7 +2888,6 @@ impl GpuEncoder {
         }
     }
 
-
     /// Register a callback to run when the GPU finishes executing this command buffer.
     pub fn add_completed_handler<F: Fn() + Send + 'static>(&self, callback: F) {
         use block2::RcBlock;
@@ -2788,7 +2965,9 @@ impl GpuEncoder {
     /// frame — per card, not per dispatch.
     pub fn note_scope(&mut self, scope: &str) {
         if super::gpu_fault::diagnostics_enabled() {
-            log::info!("[GPU-DIAG] scope buffer={:?} {scope}", unsafe { self.cmd_buf.label() });
+            log::info!("[GPU-DIAG] scope buffer={:?} {scope}", unsafe {
+                self.cmd_buf.label()
+            });
         }
         self.scopes.push(scope.to_string());
     }
@@ -2831,7 +3010,9 @@ impl GpuEncoder {
                     }
                 };
                 if scopes.is_empty() {
-                    super::gpu_fault::emit_diagnostic(format_args!("[GPU] Command buffer '{label}' error (code={code}): {desc}"));
+                    super::gpu_fault::emit_diagnostic(format_args!(
+                        "[GPU] Command buffer '{label}' error (code={code}): {desc}"
+                    ));
                 } else {
                     super::gpu_fault::emit_diagnostic(format_args!(
                         "[GPU] Command buffer '{label}' error (code={code}): {desc} \
@@ -2861,7 +3042,9 @@ impl GpuEncoder {
 
     fn register_gpu_time_tap(&self) {
         use block2::RcBlock;
-        let Some(tap) = self.gpu_time_tap.clone() else { return };
+        let Some(tap) = self.gpu_time_tap.clone() else {
+            return;
+        };
         let block = RcBlock::new(move |buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
             let cb = unsafe { buf.as_ref() };
             tap(unsafe { cb.GPUStartTime() }, unsafe { cb.GPUEndTime() });
@@ -2892,7 +3075,9 @@ impl GpuEncoder {
         if let Some(profile) = &mut self.profile {
             profile.committed_buffers.push(self.cmd_buf.clone());
         }
-        if let Some(span) = &mut self.span_buffers { span.push(self.cmd_buf.clone()); }
+        if let Some(span) = &mut self.span_buffers {
+            span.push(self.cmd_buf.clone());
+        }
 
         let label = unsafe { self.cmd_buf.label() }
             .map(|s| s.to_string())
@@ -2958,7 +3143,9 @@ impl GpuEncoder {
         };
         Err(format!(
             "[GPU] try_commit_and_wait_completed: command buffer did not reach Completed (status={}, code={}): {}",
-            unsafe { self.cmd_buf.status() }.0, code, desc
+            unsafe { self.cmd_buf.status() }.0,
+            code,
+            desc
         ))
     }
 
@@ -3035,8 +3222,8 @@ fn new_render_pass_descriptor() -> Retained<MTLRenderPassDescriptor> {
 #[cfg(test)]
 mod tests {
     use std::ptr::NonNull;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use block2::RcBlock;
     use objc2::runtime::ProtocolObject;
@@ -3069,7 +3256,11 @@ mod tests {
             for _ in 0..dispatches {
                 encoder.dispatch_compute(
                     &pipeline,
-                    &[GpuBinding::Buffer { binding: 0, buffer: &buffer, offset: 0 }],
+                    &[GpuBinding::Buffer {
+                        binding: 0,
+                        buffer: &buffer,
+                        offset: 0,
+                    }],
                     [1, 1, 1],
                     "chain dispatch",
                 );
@@ -3081,20 +3272,35 @@ mod tests {
             .expect("timestamp sampler");
         assert_eq!((sampler.buffers.len(), sampler.max_spans()), (4, 256));
         let within = frame(&sampler, 150);
-        assert_eq!((within.spans.len(), within.overflow, within.invalid), (150, 0, 0));
-        assert!(within.spans.windows(2).all(|w| w[1].start_ms >= w[0].start_ms), "spans out of order");
+        assert_eq!(
+            (within.spans.len(), within.overflow, within.invalid),
+            (150, 0, 0)
+        );
+        assert!(
+            within
+                .spans
+                .windows(2)
+                .all(|w| w[1].start_ms >= w[0].start_ms),
+            "spans out of order"
+        );
         let past = frame(&sampler, 300);
         assert_eq!((past.spans.len(), past.overflow), (256, 44));
         drop(sampler);
 
-        let large = device.create_timestamp_sampler(8_192).expect("timestamp sampler");
+        let large = device
+            .create_timestamp_sampler(8_192)
+            .expect("timestamp sampler");
         eprintln!(
             "profiling chain: 8192 spans asked, {} held in {} buffers of {} spans",
             large.max_spans(),
             large.buffers.len(),
             large.per_buffer / 2
         );
-        assert!(large.max_spans() >= 8_192, "sampler holds {} spans", large.max_spans());
+        assert!(
+            large.max_spans() >= 8_192,
+            "sampler holds {} spans",
+            large.max_spans()
+        );
     }
 
     /// commit_and_continue must preserve in-order execution: three chunks
@@ -3126,11 +3332,9 @@ mod tests {
         let completed = Arc::new(AtomicUsize::new(0));
         for value in values {
             let completed_inner = Arc::clone(&completed);
-            let block = RcBlock::new(
-                move |_buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
-                    completed_inner.fetch_add(1, Ordering::SeqCst);
-                },
-            );
+            let block = RcBlock::new(move |_buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+                completed_inner.fetch_add(1, Ordering::SeqCst);
+            });
             unsafe {
                 encoder.cmd_buf.addCompletedHandler(RcBlock::as_ptr(&block));
             }
@@ -3158,11 +3362,17 @@ mod tests {
         encoder.commit_and_wait_completed();
 
         let final_value: u32 = unsafe {
-            let ptr = buffer.mapped_ptr().expect("shared buffer must be CPU-mapped");
+            let ptr = buffer
+                .mapped_ptr()
+                .expect("shared buffer must be CPU-mapped");
             *(ptr as *const u32)
         };
         assert_eq!(final_value, 30, "chunks must execute in order");
-        assert_eq!(completed.load(Ordering::SeqCst), 3, "expected 3 completed handlers");
+        assert_eq!(
+            completed.load(Ordering::SeqCst),
+            3,
+            "expected 3 completed handlers"
+        );
     }
 
     /// SCENE_RENDER_MODE_DESIGN.md D8: `depth_msaa_draw_points` draws the
@@ -3235,7 +3445,9 @@ mod tests {
             let mut enc = device.create_encoder("test points readback");
             enc.copy_texture_to_buffer(target, &buf, 64, 64, 64 * 4);
             enc.commit_and_wait_completed();
-            let ptr = buf.mapped_ptr().expect("shared readback buffer must be CPU-mapped");
+            let ptr = buf
+                .mapped_ptr()
+                .expect("shared readback buffer must be CPU-mapped");
             let px: &[u8] = unsafe { std::slice::from_raw_parts(ptr, 64 * 64 * 4) };
             px.chunks_exact(4).filter(|c| c[0] > 0).count() as u32
         };
@@ -3324,7 +3536,8 @@ mod tests {
                 args[4] = push.vertices; args[5] = 1u; args[6] = 0u; args[7] = 0u;
             }
         "#;
-        let args_pipeline = device.create_compute_pipeline(args_wgsl, "cs_main", "test indirect args");
+        let args_pipeline =
+            device.create_compute_pipeline(args_wgsl, "cs_main", "test indirect args");
         let fill_wgsl = r#"
             @group(0) @binding(0) var<storage, read_write> out: array<u32>;
             @compute @workgroup_size(64)
@@ -3338,15 +3551,24 @@ mod tests {
             enc.dispatch_compute(
                 &args_pipeline,
                 &[
-                    GpuBinding::Buffer { binding: 0, buffer: args, offset: 0 },
-                    GpuBinding::Bytes { binding: 1, data: bytemuck::cast_slice(&push) },
+                    GpuBinding::Buffer {
+                        binding: 0,
+                        buffer: args,
+                        offset: 0,
+                    },
+                    GpuBinding::Bytes {
+                        binding: 1,
+                        data: bytemuck::cast_slice(&push),
+                    },
                 ],
                 [1, 1, 1],
                 "test indirect args",
             );
         };
         let read = |buffer: &GpuBuffer, words: usize| -> Vec<u32> {
-            let ptr = buffer.mapped_ptr().expect("shared buffer must be CPU-mapped");
+            let ptr = buffer
+                .mapped_ptr()
+                .expect("shared buffer must be CPU-mapped");
             unsafe { std::slice::from_raw_parts(ptr as *const u32, words) }.to_vec()
         };
 
@@ -3356,23 +3578,37 @@ mod tests {
         let mut enc = device.create_encoder("test indirect dispatch");
         enc.dispatch_compute(
             &fill,
-            &[GpuBinding::Buffer { binding: 0, buffer: &direct, offset: 0 }],
+            &[GpuBinding::Buffer {
+                binding: 0,
+                buffer: &direct,
+                offset: 0,
+            }],
             [2, 1, 1],
             "test direct fill",
         );
         write_args(&mut enc, &args, 3);
         enc.dispatch_compute_indirect(
             &fill,
-            &[GpuBinding::Buffer { binding: 0, buffer: &indirect, offset: 0 }],
+            &[GpuBinding::Buffer {
+                binding: 0,
+                buffer: &indirect,
+                offset: 0,
+            }],
             &args,
             0,
             "test indirect fill",
         );
         enc.commit_and_wait_completed();
         let (direct, indirect) = (read(&direct, 512), read(&indirect, 512));
-        assert_eq!(direct, indirect, "an indirect grid of [2, 1, 1] matches the direct one");
+        assert_eq!(
+            direct, indirect,
+            "an indirect grid of [2, 1, 1] matches the direct one"
+        );
         assert_eq!(indirect[127], 128);
-        assert_eq!(indirect[128], 0, "threadgroups past the GPU-written grid never run");
+        assert_eq!(
+            indirect[128], 0,
+            "threadgroups past the GPU-written grid never run"
+        );
 
         let wgsl = r#"
             @vertex
@@ -3438,14 +3674,27 @@ mod tests {
             let readback = device.create_buffer_shared(64 * 64 * 4);
             enc.copy_texture_to_buffer(&target, &readback, 64, 64, 64 * 4);
             enc.commit_and_wait_completed();
-            let ptr = readback.mapped_ptr().expect("shared readback buffer must be CPU-mapped");
+            let ptr = readback
+                .mapped_ptr()
+                .expect("shared readback buffer must be CPU-mapped");
             let px: &[u8] = unsafe { std::slice::from_raw_parts(ptr, 64 * 64 * 4) };
             px.chunks_exact(4).filter(|c| c[0] > 0).count()
         };
         let direct = red_pixels(None);
-        assert!(direct > 0, "the direct three-vertex draw covers the left half");
-        assert_eq!(red_pixels(Some(3)), direct, "GPU-written count 3 draws what the direct call draws");
-        assert_eq!(red_pixels(Some(6)), 2 * direct, "GPU-written count 6 draws both triangles");
+        assert!(
+            direct > 0,
+            "the direct three-vertex draw covers the left half"
+        );
+        assert_eq!(
+            red_pixels(Some(3)),
+            direct,
+            "GPU-written count 3 draws what the direct call draws"
+        );
+        assert_eq!(
+            red_pixels(Some(6)),
+            2 * direct,
+            "GPU-written count 6 draws both triangles"
+        );
         assert_eq!(red_pixels(Some(0)), 0, "GPU-written count 0 draws nothing");
     }
 }
@@ -3749,7 +3998,10 @@ fn debug_check_write_usage(slot: &super::Slot, texture: &GpuTexture, pipeline: &
         debug_assert!(
             usage.contains(objc2_metal::MTLTextureUsage::ShaderWrite),
             "[GPU] pipeline '{pipeline}' writes texture '{}' ({}x{} {:?}) at binding slot {} but its usage {:#x} lacks shader write",
-            texture.raw.label().map_or_else(String::new, |l| l.to_string()),
+            texture
+                .raw
+                .label()
+                .map_or_else(String::new, |l| l.to_string()),
             texture.width,
             texture.height,
             texture.format,

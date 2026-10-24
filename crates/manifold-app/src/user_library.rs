@@ -125,16 +125,20 @@ impl UserLibrary {
             return true;
         }
         match kind {
-            PresetKind::Effect => {
-                manifold_node_engine::load::preset_loader::EFFECT_CATALOG.load().json(id).is_some()
-            }
-            PresetKind::Generator => {
-                manifold_node_engine::load::preset_loader::GENERATOR_CATALOG.load().json(id).is_some()
-            }
-            PresetKind::SceneModifier => manifold_node_engine::load::preset_loader::SCENE_MODIFIER_CATALOG
+            PresetKind::Effect => manifold_node_engine::load::preset_loader::EFFECT_CATALOG
                 .load()
                 .json(id)
                 .is_some(),
+            PresetKind::Generator => manifold_node_engine::load::preset_loader::GENERATOR_CATALOG
+                .load()
+                .json(id)
+                .is_some(),
+            PresetKind::SceneModifier => {
+                manifold_node_engine::load::preset_loader::SCENE_MODIFIER_CATALOG
+                    .load()
+                    .json(id)
+                    .is_some()
+            }
         }
     }
 
@@ -181,7 +185,10 @@ impl UserLibrary {
         let id = PresetTypeId::from_string(minted.clone());
 
         let mut def = def.clone();
-        let meta = def.preset_metadata.as_mut().ok_or(LibError::MissingMetadata)?;
+        let meta = def
+            .preset_metadata
+            .as_mut()
+            .ok_or(LibError::MissingMetadata)?;
         meta.id = id.clone();
         meta.display_name = minted.clone();
 
@@ -189,7 +196,10 @@ impl UserLibrary {
         std::fs::create_dir_all(&dir).map_err(PresetFileError::Io)?;
         manifold_io::preset_file::export_preset(&def, &self.path_for(kind, &minted))?;
 
-        log::info!("[UserLibrary] saved {kind:?} preset '{minted}' to {}", dir.display());
+        log::info!(
+            "[UserLibrary] saved {kind:?} preset '{minted}' to {}",
+            dir.display()
+        );
         Ok(id)
     }
 
@@ -236,7 +246,11 @@ impl UserLibrary {
             meta.id = id.clone();
         }
         manifold_io::preset_file::export_preset(&def, &path)?;
-        log::info!("[UserLibrary] pushed {kind:?} preset '{}' to {}", id.as_str(), path.display());
+        log::info!(
+            "[UserLibrary] pushed {kind:?} preset '{}' to {}",
+            id.as_str(),
+            path.display()
+        );
         Ok(())
     }
 
@@ -247,13 +261,21 @@ impl UserLibrary {
     ///
     /// Consumed by the browser management menu (right-click → Rename),
     /// via `TextInputField::RenamePreset`'s commit arm in `app.rs`.
-    pub fn rename(&self, kind: PresetKind, id: &PresetTypeId, new_name: &str) -> Result<(), LibError> {
+    pub fn rename(
+        &self,
+        kind: PresetKind,
+        id: &PresetTypeId,
+        new_name: &str,
+    ) -> Result<(), LibError> {
         let path = self.path_for(kind, id.as_str());
         if !path.is_file() {
             return Err(LibError::NotFound);
         }
         let mut def = manifold_io::preset_file::import_preset(&path)?;
-        let meta = def.preset_metadata.as_mut().ok_or(LibError::MissingMetadata)?;
+        let meta = def
+            .preset_metadata
+            .as_mut()
+            .ok_or(LibError::MissingMetadata)?;
         meta.display_name = new_name.trim().to_string();
         manifold_io::preset_file::export_preset(&def, &path)?;
         Ok(())
@@ -306,7 +328,11 @@ impl UserLibrary {
     /// Finder), via `PanelAction::BrowserRevealPresetClicked`'s dispatch arm.
     pub fn reveal(&self, kind: PresetKind, id: &PresetTypeId) {
         let path = self.path_for(kind, id.as_str());
-        if let Err(e) = std::process::Command::new("open").arg("-R").arg(&path).spawn() {
+        if let Err(e) = std::process::Command::new("open")
+            .arg("-R")
+            .arg(&path)
+            .spawn()
+        {
             log::error!("[UserLibrary] reveal failed for {}: {e}", path.display());
         }
     }
@@ -350,7 +376,7 @@ mod tests {
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
-                    layer_types: None,
+                layer_types: None,
                 params: Vec::new(),
                 bindings: Vec::new(),
                 param_aliases: Vec::new(),
@@ -411,7 +437,11 @@ mod tests {
         let second = lib
             .save(PresetKind::Generator, "My Look", &def_named("My Look"))
             .expect("second save succeeds");
-        assert_eq!(second.as_str(), "My Look 2", "a name collision must disambiguate to 'Name 2'");
+        assert_eq!(
+            second.as_str(),
+            "My Look 2",
+            "a name collision must disambiguate to 'Name 2'"
+        );
 
         assert!(root.join("generators").join("My Look.json").is_file());
         assert!(root.join("generators").join("My Look 2.json").is_file());
@@ -434,9 +464,12 @@ mod tests {
     fn rename_edits_display_name_but_keeps_id_and_filename() {
         let root = scratch_root("rename");
         let lib = UserLibrary { root: root.clone() };
-        let id = lib.save(PresetKind::Effect, "Original", &def_named("Original")).unwrap();
+        let id = lib
+            .save(PresetKind::Effect, "Original", &def_named("Original"))
+            .unwrap();
 
-        lib.rename(PresetKind::Effect, &id, "Renamed").expect("rename succeeds");
+        lib.rename(PresetKind::Effect, &id, "Renamed")
+            .expect("rename succeeds");
 
         let path = root.join("effects").join("Original.json");
         assert!(path.is_file(), "filename/id must stay Original");
@@ -453,11 +486,18 @@ mod tests {
     fn duplicate_creates_a_second_disambiguated_file_leaving_original_intact() {
         let root = scratch_root("duplicate");
         let lib = UserLibrary { root: root.clone() };
-        let id = lib.save(PresetKind::Generator, "Seed", &def_named("Seed")).unwrap();
+        let id = lib
+            .save(PresetKind::Generator, "Seed", &def_named("Seed"))
+            .unwrap();
 
-        let dup_id = lib.duplicate(PresetKind::Generator, &id).expect("duplicate succeeds");
+        let dup_id = lib
+            .duplicate(PresetKind::Generator, &id)
+            .expect("duplicate succeeds");
         assert_eq!(dup_id.as_str(), "Seed 2");
-        assert!(root.join("generators").join("Seed.json").is_file(), "original must survive");
+        assert!(
+            root.join("generators").join("Seed.json").is_file(),
+            "original must survive"
+        );
         assert!(root.join("generators").join("Seed 2.json").is_file());
 
         let _ = std::fs::remove_dir_all(&root);
@@ -467,10 +507,13 @@ mod tests {
     fn delete_removes_the_file_and_reports_not_found_for_a_missing_id() {
         let root = scratch_root("delete");
         let lib = UserLibrary { root: root.clone() };
-        let id = lib.save(PresetKind::Effect, "Gone Soon", &def_named("Gone Soon")).unwrap();
+        let id = lib
+            .save(PresetKind::Effect, "Gone Soon", &def_named("Gone Soon"))
+            .unwrap();
         assert!(root.join("effects").join("Gone Soon.json").is_file());
 
-        lib.delete(PresetKind::Effect, &id).expect("delete succeeds");
+        lib.delete(PresetKind::Effect, &id)
+            .expect("delete succeeds");
         assert!(!root.join("effects").join("Gone Soon.json").exists());
 
         assert!(matches!(
@@ -487,23 +530,36 @@ mod tests {
     fn push_overwrites_an_existing_user_entry_in_place() {
         let root = scratch_root("push-overwrite");
         let lib = UserLibrary { root: root.clone() };
-        let id = lib.save(PresetKind::Effect, "Glow", &def_named("Glow")).unwrap();
-        assert!(lib.is_user_entry(PresetKind::Effect, &id), "just-saved entry must be a user entry");
+        let id = lib
+            .save(PresetKind::Effect, "Glow", &def_named("Glow"))
+            .unwrap();
+        assert!(
+            lib.is_user_entry(PresetKind::Effect, &id),
+            "just-saved entry must be a user entry"
+        );
 
         // A "diverged" def: same id, different name embedded on the def
         // itself (standing in for a real topology edit) — push must land
         // this content at the SAME path/id, not mint a new one.
         let mut edited = def_named("Glow (edited)");
         edited.preset_metadata.as_mut().unwrap().id = id.clone();
-        lib.push(PresetKind::Effect, &id, &edited).expect("push succeeds for a user entry");
+        lib.push(PresetKind::Effect, &id, &edited)
+            .expect("push succeeds for a user entry");
 
         let path = root.join("effects").join("Glow.json");
         assert!(path.is_file(), "push must not rename the file");
         let on_disk = std::fs::read_to_string(&path).unwrap();
         let parsed: EffectGraphDef = serde_json::from_str(&on_disk).unwrap();
         let meta = parsed.preset_metadata.unwrap();
-        assert_eq!(meta.id.as_str(), "Glow", "id must stay stable across a push");
-        assert_eq!(meta.display_name, "Glow (edited)", "push must write the new definition");
+        assert_eq!(
+            meta.id.as_str(),
+            "Glow",
+            "id must stay stable across a push"
+        );
+        assert_eq!(
+            meta.display_name, "Glow (edited)",
+            "push must write the new definition"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -513,11 +569,17 @@ mod tests {
         let root = scratch_root("push-not-found");
         let lib = UserLibrary { root: root.clone() };
         let stock_like_id = PresetTypeId::from_string("Bloom".to_string());
-        assert!(!lib.is_user_entry(PresetKind::Effect, &stock_like_id), "no file under this root");
-        assert!(matches!(
-            lib.push(PresetKind::Effect, &stock_like_id, &def_named("Bloom")),
-            Err(LibError::NotFound)
-        ), "a factory/never-saved id must refuse rather than write outside root");
+        assert!(
+            !lib.is_user_entry(PresetKind::Effect, &stock_like_id),
+            "no file under this root"
+        );
+        assert!(
+            matches!(
+                lib.push(PresetKind::Effect, &stock_like_id, &def_named("Bloom")),
+                Err(LibError::NotFound)
+            ),
+            "a factory/never-saved id must refuse rather than write outside root"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

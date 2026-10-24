@@ -93,7 +93,11 @@ impl ScopeColumn {
     /// The "nothing recorded" column: hidden centroid traces, no onset ticks.
     pub const EMPTY: Self = Self {
         centroids: [-1.0; SCOPE_CENTROID_COUNT],
-        onsets: ScopeOnsets { low: 0.0, mid: 0.0, high: 0.0 },
+        onsets: ScopeOnsets {
+            low: 0.0,
+            mid: 0.0,
+            high: 0.0,
+        },
     };
 }
 
@@ -102,7 +106,9 @@ impl ScopeColumn {
 // field or reordering breaks these at compile time instead of desyncing the
 // shader silently.
 const _: () = {
-    assert!(size_of::<ScopeColumn>() == (SCOPE_CENTROID_COUNT + ScopeOnsets::COUNT) * size_of::<f32>());
+    assert!(
+        size_of::<ScopeColumn>() == (SCOPE_CENTROID_COUNT + ScopeOnsets::COUNT) * size_of::<f32>()
+    );
     assert!(std::mem::offset_of!(ScopeColumn, onsets) == SCOPE_CENTROID_COUNT * size_of::<f32>());
     assert!(align_of::<ScopeColumn>() == align_of::<f32>());
     assert!(ScopeOnsets::COUNT <= MAX_ONSET_LANES);
@@ -118,7 +124,11 @@ mod tests {
     fn lanes_match_memory_order() {
         let col = ScopeColumn {
             centroids: [0.1, 0.2, 0.3, 0.4],
-            onsets: ScopeOnsets { low: 1.0, mid: 2.0, high: 3.0 },
+            onsets: ScopeOnsets {
+                low: 1.0,
+                mid: 2.0,
+                high: 3.0,
+            },
         };
         // SAFETY: repr(C), all-f32, no padding (const-asserted above).
         let raw: [f32; ScopeColumn::STRIDE] = unsafe { std::mem::transmute(col) };

@@ -16,11 +16,11 @@ use manifold_native::region_detector::{
 
 use super::region_types::{MAX_REGIONS, Region};
 
-use manifold_node_engine::runtime::background_worker::BackgroundWorker;
-use manifold_node_engine::gpu::gpu_readback::ReadbackRequest;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::gpu::gpu_readback::ReadbackRequest;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::runtime::background_worker::BackgroundWorker;
 
 // The performance proof enables this fixed-capacity probe only around its
 // measured frames. Normal playback uses relaxed atomic loads and allocates nothing.
@@ -565,18 +565,18 @@ impl Primitive for DetectRegions {
             // Publish at the ready-readback deadline, including work submitted above.
             // Waiting here removes an extra frame of mask/HUD delay while keeping
             // result timing independent of whether the native worker wins a race.
-            let response =
-                if region_schedule(worker.is_busy(), false, false, false).consume_worker {
-                    let start = PERF_ENABLED.load(Ordering::Relaxed).then(Instant::now);
-                    let response = worker.recv_blocking();
-                    if let Some(start) = start {
-                        FIXED_LAG_WAIT_NS.record(start.elapsed().as_nanos() as u64);
-                    }
-                    response
-                } else {
-                    FIXED_LAG_WAIT_NS.record(0);
-                    worker.try_recv()
-                };
+            let response = if region_schedule(worker.is_busy(), false, false, false).consume_worker
+            {
+                let start = PERF_ENABLED.load(Ordering::Relaxed).then(Instant::now);
+                let response = worker.recv_blocking();
+                if let Some(start) = start {
+                    FIXED_LAG_WAIT_NS.record(start.elapsed().as_nanos() as u64);
+                }
+                response
+            } else {
+                FIXED_LAG_WAIT_NS.record(0);
+                worker.try_recv()
+            };
             if let Some(mut response) = response {
                 updated = publish_response(
                     &response,

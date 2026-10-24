@@ -139,13 +139,24 @@ mod tests {
 
         let mut grid = SessionGrid {
             scenes: vec![
-                Scene { id: scene_a.clone(), name: "Intro".to_string(), color: Some([255, 0, 0]) },
-                Scene { id: scene_b.clone(), name: "Drop".to_string(), color: None },
+                Scene {
+                    id: scene_a.clone(),
+                    name: "Intro".to_string(),
+                    color: Some([255, 0, 0]),
+                },
+                Scene {
+                    id: scene_b.clone(),
+                    name: "Drop".to_string(),
+                    color: None,
+                },
             ],
             slots: vec![SessionSlot {
                 layer_id: layer_1.clone(),
                 scene_id: scene_a.clone(),
-                sequence: ClipSequence { length_beats: Beats(4.0), clips: Vec::new() },
+                sequence: ClipSequence {
+                    length_beats: Beats(4.0),
+                    clips: Vec::new(),
+                },
                 name: "Intro loop".to_string(),
                 color: None,
             }],
@@ -190,7 +201,10 @@ mod tests {
         assert!(restored.slot_lookup.is_empty());
         restored.rebuild_slot_lookup();
         assert_eq!(
-            restored.slot_lookup.get(&(grid.slots[0].layer_id.clone(), grid.slots[0].scene_id.clone())),
+            restored.slot_lookup.get(&(
+                grid.slots[0].layer_id.clone(),
+                grid.slots[0].scene_id.clone()
+            )),
             Some(&0)
         );
     }
@@ -202,7 +216,11 @@ mod tests {
         let value: serde_json::Value =
             serde_json::to_value(&grid).expect("serialize default SessionGrid");
         let obj = value.as_object().expect("object");
-        assert_eq!(obj.len(), 2, "expected exactly scenes + slots keys, got {obj:?}");
+        assert_eq!(
+            obj.len(),
+            2,
+            "expected exactly scenes + slots keys, got {obj:?}"
+        );
         assert!(obj.contains_key("scenes"));
         assert!(obj.contains_key("slots"));
     }

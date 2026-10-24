@@ -17,9 +17,9 @@
 
 #[cfg(target_os = "macos")]
 mod imp {
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
     use manifold_gpu::denoiser::GpuDenoiser;
     use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 
     /// macOS-native MetalFX Temporal Denoised Scaler, wrapped to avoid
     /// leaking Apple types into render-scene code.
@@ -194,13 +194,7 @@ mod imp {
 
         /// Whether this denoiser matches the given (input, output)
         /// dimensions for reuse.
-        pub fn matches(
-            &self,
-            in_w: u32,
-            in_h: u32,
-            out_w: u32,
-            out_h: u32,
-        ) -> bool {
+        pub fn matches(&self, in_w: u32, in_h: u32, out_w: u32, out_h: u32) -> bool {
             self.input_width == in_w
                 && self.input_height == in_h
                 && self.output_width == out_w

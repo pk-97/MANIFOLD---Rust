@@ -16,12 +16,14 @@
 
 mod cqt;
 mod scope;
-mod window;
 #[cfg(feature = "gpu")]
 mod spectrogram;
+mod window;
 
 pub use cqt::{CqtTransform, num_bins};
-pub use scope::{LANE_HEIGHT_FRAC, MAX_ONSET_LANES, SCOPE_CENTROID_COUNT, ScopeColumn, ScopeOnsets};
+pub use scope::{
+    LANE_HEIGHT_FRAC, MAX_ONSET_LANES, SCOPE_CENTROID_COUNT, ScopeColumn, ScopeOnsets,
+};
 #[cfg(feature = "gpu")]
 pub use spectrogram::Spectrogram;
 

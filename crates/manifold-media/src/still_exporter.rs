@@ -173,7 +173,11 @@ mod tests {
     use super::*;
 
     fn solid_rgba(w: u32, h: u32, c: [u8; 4]) -> Vec<u8> {
-        c.iter().copied().cycle().take((w * h * 4) as usize).collect()
+        c.iter()
+            .copied()
+            .cycle()
+            .take((w * h * 4) as usize)
+            .collect()
     }
 
     #[test]
@@ -262,7 +266,10 @@ mod tests {
         let r_white = r(&white, true);
         let r_over = r(&over, true);
         assert!(r_white < 255, "pure white should compress: {r_white}");
-        assert!(r_over > r_white, "over-white kept distinct: {r_over} vs {r_white}");
+        assert!(
+            r_over > r_white,
+            "over-white kept distinct: {r_over} vs {r_white}"
+        );
         // Below the knee, rolloff is identity — midtones are untouched.
         let mid = px_f16(F16_HALF, F16_HALF, F16_HALF, F16_1);
         assert_eq!(r(&mid, true), r(&mid, false));

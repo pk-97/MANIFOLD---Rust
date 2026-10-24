@@ -65,7 +65,10 @@ impl LowBank {
             return;
         }
         let (a, d) = (a as u64, d as u64);
-        assert!(self.env.holds(a - BASE_FROM, d), "kick low bank: candidate {cand} read outside the stream history");
+        assert!(
+            self.env.holds(a - BASE_FROM, d),
+            "kick low bank: candidate {cand} read outside the stream history"
+        );
         let mid = a + (d - a).div_ceil(2).max(1);
         let (early, late) = out.split_at_mut(BANDS);
         for b in 0..BANDS {
@@ -74,9 +77,17 @@ impl LowBank {
                 *v = self.env.get(a - BASE_FROM + i as u64)[b];
             }
             let base = median_even(&mut w);
-            let max_over = |from: u64, to: u64| (from..to).map(|i| self.env.get(i)[b]).fold(f64::NEG_INFINITY, f64::max);
+            let max_over = |from: u64, to: u64| {
+                (from..to)
+                    .map(|i| self.env.get(i)[b])
+                    .fold(f64::NEG_INFINITY, f64::max)
+            };
             early[b] = max_over(a, mid) - base;
-            late[b] = if d + 1 > mid { max_over(mid, d + 1) - base } else { early[b] };
+            late[b] = if d + 1 > mid {
+                max_over(mid, d + 1) - base
+            } else {
+                early[b]
+            };
         }
     }
 }

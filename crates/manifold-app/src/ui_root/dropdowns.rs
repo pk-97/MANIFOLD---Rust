@@ -3,26 +3,41 @@
 //! builders. Moved verbatim from ui_root/mod.rs (UI_FUNNEL_DECOMPOSITION P-F2a,
 //! pure move).
 
-use manifold_ui::{AudioSetupAction, BrowserAction, ClipAction, EditingAction, LayerAction, MappingAction, ParamsAction, ProjectAction, RootAction, TransportAction};
-use manifold_ui::panels::actions::AutomationShape;
 use super::*;
 use manifold_core::LayerId;
+use manifold_ui::panels::actions::AutomationShape;
+use manifold_ui::{
+    AudioSetupAction, BrowserAction, ClipAction, EditingAction, LayerAction, MappingAction,
+    ParamsAction, ProjectAction, RootAction, TransportAction,
+};
 
 /// One preset menu vocabulary for all card families; addressing is captured by
 /// the caller, independently of the current editor or later selection changes.
 fn card_edit_menu_items(can_paste: bool, effects: bool, grouped: bool) -> Vec<DropdownItem> {
     use manifold_ui::panels::actions::CardEditAction::*;
-    let mut entries = vec![("Cut", Cut), ("Copy", Copy), ("Paste", Paste), ("Duplicate", Duplicate), ("Delete", Delete)];
+    let mut entries = vec![
+        ("Cut", Cut),
+        ("Copy", Copy),
+        ("Paste", Paste),
+        ("Duplicate", Duplicate),
+        ("Delete", Delete),
+    ];
     if effects {
         entries.push(("Group", Group));
-        if grouped { entries.push(("Ungroup", Ungroup)); }
+        if grouped {
+            entries.push(("Ungroup", Ungroup));
+        }
     }
-    entries.into_iter().map(|(label, edit)| {
-        let mut item = DropdownItem::new(label).with_action(PanelAction::Params(ParamsAction::EditCards(edit)));
-        item.enabled = edit != Paste || can_paste;
-        item.separator_after = edit == Delete;
-        item
-    }).collect()
+    entries
+        .into_iter()
+        .map(|(label, edit)| {
+            let mut item = DropdownItem::new(label)
+                .with_action(PanelAction::Params(ParamsAction::EditCards(edit)));
+            item.enabled = edit != Paste || can_paste;
+            item.separator_after = edit == Delete;
+            item
+        })
+        .collect()
 }
 
 fn preset_menu_items(
@@ -32,13 +47,26 @@ fn preset_menu_items(
     use manifold_ui::panels::actions::PresetActionKind::*;
     let mut entries = vec![("Make Unique", MakeUnique)];
     if modified {
-        entries.extend([("Revert to Library", RevertToLibrary),
-            ("Push to Library — updates instances tracking this preset", PushToLibrary)]);
+        entries.extend([
+            ("Revert to Library", RevertToLibrary),
+            (
+                "Push to Library — updates instances tracking this preset",
+                PushToLibrary,
+            ),
+        ]);
     }
-    entries.extend([("Save to Library…", SaveToLibrary), ("Save to Project…", SaveToProject),
-        ("Export Preset…", Export), ("Import Preset…", Import)]);
-    entries.into_iter().map(|(label, kind)| DropdownItem::new(label)
-        .with_action(PanelAction::Params(action(kind)))).collect()
+    entries.extend([
+        ("Save to Library…", SaveToLibrary),
+        ("Save to Project…", SaveToProject),
+        ("Export Preset…", Export),
+        ("Import Preset…", Import),
+    ]);
+    entries
+        .into_iter()
+        .map(|(label, kind)| {
+            DropdownItem::new(label).with_action(PanelAction::Params(action(kind)))
+        })
+        .collect()
 }
 
 fn automation_lane_context_items(
@@ -51,11 +79,19 @@ fn automation_lane_context_items(
     whole_numbers: bool,
 ) -> Vec<DropdownItem> {
     let mut items = Vec::new();
-    items.push(DropdownItem::new(if pinned { "Unpin lane" } else { "Pin lane" })
-        .with_action(PanelAction::Editing(EditingAction::AutomationLanePinToggle(
-            target.clone(), param_id.clone(),
-        ))));
-    let hide_label = if pinned { "Hide lane (unpin first)" } else { "Hide lane" };
+    items.push(
+        DropdownItem::new(if pinned { "Unpin lane" } else { "Pin lane" }).with_action(
+            PanelAction::Editing(EditingAction::AutomationLanePinToggle(
+                target.clone(),
+                param_id.clone(),
+            )),
+        ),
+    );
+    let hide_label = if pinned {
+        "Hide lane (unpin first)"
+    } else {
+        "Hide lane"
+    };
     items.push(if pinned {
         DropdownItem::disabled(hide_label)
     } else {
@@ -63,18 +99,26 @@ fn automation_lane_context_items(
             EditingAction::AutomationLaneHide(target.clone(), param_id.clone()),
         ))
     });
-    items.push(DropdownItem::new("Move lane up").with_action(PanelAction::Editing(
-        EditingAction::AutomationLaneMove(target.clone(), param_id.clone(), -1),
-    )));
-    items.push(DropdownItem::new("Move lane down").with_action(PanelAction::Editing(
-        EditingAction::AutomationLaneMove(target.clone(), param_id.clone(), 1),
-    )));
-    items.push(DropdownItem::new("Show all automated lanes").with_separator().with_action(
-        PanelAction::Editing(EditingAction::ShowAllAutomationLanes),
-    ));
-    items.push(DropdownItem::new("Choose parameter…").with_action(
-        PanelAction::Params(ParamsAction::OpenAutomationChooser(layer_id)),
-    ));
+    items.push(
+        DropdownItem::new("Move lane up").with_action(PanelAction::Editing(
+            EditingAction::AutomationLaneMove(target.clone(), param_id.clone(), -1),
+        )),
+    );
+    items.push(
+        DropdownItem::new("Move lane down").with_action(PanelAction::Editing(
+            EditingAction::AutomationLaneMove(target.clone(), param_id.clone(), 1),
+        )),
+    );
+    items.push(
+        DropdownItem::new("Show all automated lanes")
+            .with_separator()
+            .with_action(PanelAction::Editing(EditingAction::ShowAllAutomationLanes)),
+    );
+    items.push(
+        DropdownItem::new("Choose parameter…").with_action(PanelAction::Params(
+            ParamsAction::OpenAutomationChooser(layer_id),
+        )),
+    );
     if let Some(beat) = beat {
         items.push(DropdownItem::new("Cut").with_action(PanelAction::Editing(
             EditingAction::ContextAutomationCut(target.clone(), param_id.clone(), beat),
@@ -82,23 +126,43 @@ fn automation_lane_context_items(
         items.push(DropdownItem::new("Copy").with_action(PanelAction::Editing(
             EditingAction::ContextAutomationCopy(target.clone(), param_id.clone(), beat),
         )));
-        items.push(DropdownItem::new("Paste here").with_action(PanelAction::Editing(
-            EditingAction::ContextAutomationPaste(target.clone(), param_id.clone(), beat),
-        )));
-        items.push(DropdownItem::new("Duplicate").with_separator().with_action(PanelAction::Editing(
-            EditingAction::ContextAutomationDuplicate(target.clone(), param_id.clone(), beat),
-        )));
+        items.push(
+            DropdownItem::new("Paste here").with_action(PanelAction::Editing(
+                EditingAction::ContextAutomationPaste(target.clone(), param_id.clone(), beat),
+            )),
+        );
+        items.push(DropdownItem::new("Duplicate").with_separator().with_action(
+            PanelAction::Editing(EditingAction::ContextAutomationDuplicate(
+                target.clone(),
+                param_id.clone(),
+                beat,
+            )),
+        ));
     }
-    items.push(DropdownItem::new("Select all points").with_action(PanelAction::Editing(
-        EditingAction::ContextSelectAllAutomation(target.clone(), param_id.clone()),
-    )));
-    items.push(DropdownItem::new("Delete selected points").with_separator().with_action(PanelAction::Editing(
-        EditingAction::ContextDeleteSelectedAutomation(target.clone(), param_id.clone()),
-    )));
+    items.push(
+        DropdownItem::new("Select all points").with_action(PanelAction::Editing(
+            EditingAction::ContextSelectAllAutomation(target.clone(), param_id.clone()),
+        )),
+    );
+    items.push(
+        DropdownItem::new("Delete selected points")
+            .with_separator()
+            .with_action(PanelAction::Editing(
+                EditingAction::ContextDeleteSelectedAutomation(target.clone(), param_id.clone()),
+            )),
+    );
     if let Some(beat) = beat {
-        items.push(DropdownItem::new("Insert shape…").with_separator().with_action(PanelAction::Editing(
-            EditingAction::ContextOpenAutomationShapePicker(target.clone(), param_id.clone(), beat),
-        )));
+        items.push(
+            DropdownItem::new("Insert shape…")
+                .with_separator()
+                .with_action(PanelAction::Editing(
+                    EditingAction::ContextOpenAutomationShapePicker(
+                        target.clone(),
+                        param_id.clone(),
+                        beat,
+                    ),
+                )),
+        );
     }
     if let Some((beat, value_norm)) = point_context {
         for (label, shape) in [
@@ -112,26 +176,52 @@ fn automation_lane_context_items(
             }
             items.push(DropdownItem::new(label).with_action(PanelAction::Editing(
                 EditingAction::ContextAutomationSetShape(
-                    target.clone(), param_id.clone(), beat, value_norm, shape,
+                    target.clone(),
+                    param_id.clone(),
+                    beat,
+                    value_norm,
+                    shape,
                 ),
             )));
         }
-        items.push(DropdownItem::new("Edit point value…").with_action(PanelAction::Editing(
-            EditingAction::AutomationPointEditValue(target.clone(), param_id.clone(), beat, value_norm),
-        )));
-        items.push(DropdownItem::new("Edit point time…").with_separator().with_action(PanelAction::Editing(
-            EditingAction::AutomationPointEditTime(target.clone(), param_id.clone(), beat, value_norm),
-        )));
+        items.push(
+            DropdownItem::new("Edit point value…").with_action(PanelAction::Editing(
+                EditingAction::AutomationPointEditValue(
+                    target.clone(),
+                    param_id.clone(),
+                    beat,
+                    value_norm,
+                ),
+            )),
+        );
+        items.push(
+            DropdownItem::new("Edit point time…")
+                .with_separator()
+                .with_action(PanelAction::Editing(
+                    EditingAction::AutomationPointEditTime(
+                        target.clone(),
+                        param_id.clone(),
+                        beat,
+                        value_norm,
+                    ),
+                )),
+        );
     }
-    items.push(DropdownItem::new("Restore automation").with_action(PanelAction::Project(
-        ProjectAction::ContextRestoreAutomationLane(target.clone(), param_id.clone()),
-    )));
-    items.push(DropdownItem::new("Clear points").with_action(PanelAction::Project(
-        ProjectAction::ContextClearAutomationLane(target.clone(), param_id.clone()),
-    )));
-    items.push(DropdownItem::new("Clear Automation").with_action(PanelAction::Project(
-        ProjectAction::ContextRemoveAutomationLane(target.clone(), param_id.clone()),
-    )));
+    items.push(
+        DropdownItem::new("Restore automation").with_action(PanelAction::Project(
+            ProjectAction::ContextRestoreAutomationLane(target.clone(), param_id.clone()),
+        )),
+    );
+    items.push(
+        DropdownItem::new("Clear points").with_action(PanelAction::Project(
+            ProjectAction::ContextClearAutomationLane(target.clone(), param_id.clone()),
+        )),
+    );
+    items.push(
+        DropdownItem::new("Clear Automation").with_action(PanelAction::Project(
+            ProjectAction::ContextRemoveAutomationLane(target.clone(), param_id.clone()),
+        )),
+    );
     items
 }
 
@@ -149,15 +239,22 @@ fn mask_menu_items(
         ("Image", "MaskImage"),
         ("Blob Detector", "MaskBlob"),
     ] {
-        items.push(DropdownItem::new(&format!("{prefix} — {label}"))
-            .with_action(PanelAction::Params(action(preset_id.to_string(), None))));
+        items.push(
+            DropdownItem::new(&format!("{prefix} — {label}"))
+                .with_action(PanelAction::Params(action(preset_id.to_string(), None))),
+        );
     }
     if layers.is_empty() {
-        items.push(DropdownItem::disabled(&format!("{prefix} — Layer (no visual layers)")));
+        items.push(DropdownItem::disabled(&format!(
+            "{prefix} — Layer (no visual layers)"
+        )));
     } else {
         for (layer_id, layer_name) in layers {
-            items.push(DropdownItem::new(&format!("{prefix} — Layer: {layer_name}"))
-                .with_action(PanelAction::Params(action("MaskLayer".to_string(), Some(layer_id.clone())))));
+            items.push(
+                DropdownItem::new(&format!("{prefix} — Layer: {layer_name}")).with_action(
+                    PanelAction::Params(action("MaskLayer".to_string(), Some(layer_id.clone()))),
+                ),
+            );
         }
     }
     items
@@ -187,23 +284,33 @@ fn trigger_source_menu_items(
 ) -> Vec<DropdownItem> {
     let mut items = Vec::new();
     if target.has_main_source {
-        items.push(DropdownItem::new("Main lane")
-            .with_check(target.source == manifold_ui::view::UiClipTriggerSource::Main)
-            .with_action(PanelAction::Params(ParamsAction::AssignClipTriggerSource(
-                target.target.clone(),
-                target.param_id.clone(),
-                manifold_ui::view::UiClipTriggerSource::Main,
-            ))));
+        items.push(
+            DropdownItem::new("Main lane")
+                .with_check(target.source == manifold_ui::view::UiClipTriggerSource::Main)
+                .with_action(PanelAction::Params(ParamsAction::AssignClipTriggerSource(
+                    target.target.clone(),
+                    target.param_id.clone(),
+                    manifold_ui::view::UiClipTriggerSource::Main,
+                ))),
+        );
     }
-    items.push(DropdownItem::new("No source")
-            .with_check(target.source == manifold_ui::view::UiClipTriggerSource::Disabled
-                || (!target.has_main_source && target.source == manifold_ui::view::UiClipTriggerSource::Main))
+    items.push(
+        DropdownItem::new("No source")
+            .with_check(
+                target.source == manifold_ui::view::UiClipTriggerSource::Disabled
+                    || (!target.has_main_source
+                        && target.source == manifold_ui::view::UiClipTriggerSource::Main),
+            )
             .with_action(PanelAction::Params(ParamsAction::AssignClipTriggerSource(
                 target.target.clone(),
                 target.param_id.clone(),
                 manifold_ui::view::UiClipTriggerSource::Disabled,
-            ))));
-    for source in sources.iter().filter(|source| target.eligible_sources.contains(&source.id)) {
+            ))),
+    );
+    for source in sources
+        .iter()
+        .filter(|source| target.eligible_sources.contains(&source.id))
+    {
         items.push(
             DropdownItem::new(&source.label)
                 .with_check(
@@ -241,31 +348,49 @@ fn trigger_target_picker_items(
     targets: &[crate::ui_bridge::TriggerTargetChoice],
 ) -> TriggerTargetPicker {
     let mut picker = TriggerTargetPicker {
-        items: Vec::new(), actions: Vec::new(), secondary_actions: Vec::new(), categories: Vec::new(),
+        items: Vec::new(),
+        actions: Vec::new(),
+        secondary_actions: Vec::new(),
+        categories: Vec::new(),
     };
-    for target in targets.iter().filter(|target| target.eligible_sources.contains(layer_id)) {
-        let assigned = target.source
-            == manifold_ui::view::UiClipTriggerSource::Lane(layer_id.clone());
+    for target in targets
+        .iter()
+        .filter(|target| target.eligible_sources.contains(layer_id))
+    {
+        let assigned =
+            target.source == manifold_ui::view::UiClipTriggerSource::Lane(layer_id.clone());
         if !picker.categories.contains(&target.group_label) {
             picker.categories.push(target.group_label.clone());
         }
-        picker.items.push(manifold_ui::panels::picker_core::PickerItem {
-            type_id: format!("{:?}/{}", target.target, target.param_id),
-            label: if assigned { format!("✓ {}", target.label) } else { target.label.clone() },
-            category: Some(target.group_label.clone()),
-            search_text: None, source: None, thumbnail: None,
-        });
+        picker
+            .items
+            .push(manifold_ui::panels::picker_core::PickerItem {
+                type_id: format!("{:?}/{}", target.target, target.param_id),
+                label: if assigned {
+                    format!("✓ {}", target.label)
+                } else {
+                    target.label.clone()
+                },
+                category: Some(target.group_label.clone()),
+                search_text: None,
+                source: None,
+                thumbnail: None,
+            });
         let source = if assigned {
             manifold_ui::view::UiClipTriggerSource::Disabled
         } else {
             manifold_ui::view::UiClipTriggerSource::Lane(layer_id.clone())
         };
-        picker.actions.push(PanelAction::Params(ParamsAction::AssignClipTriggerSource(
-            target.target.clone(), target.param_id.clone(), source,
+        picker
+            .actions
+            .push(PanelAction::Params(ParamsAction::AssignClipTriggerSource(
+                target.target.clone(),
+                target.param_id.clone(),
+                source,
+            )));
+        picker.secondary_actions.push(Some(PanelAction::Params(
+            ParamsAction::ShowClipTriggerResponse(target.target.clone(), target.param_id.clone()),
         )));
-        picker.secondary_actions.push(Some(PanelAction::Params(ParamsAction::ShowClipTriggerResponse(
-            target.target.clone(), target.param_id.clone(),
-        ))));
     }
     picker
 }
@@ -273,10 +398,9 @@ fn trigger_target_picker_items(
 #[cfg(test)]
 mod tests {
     use super::preset_allowed_on_layer_type;
-    use manifold_core::types::LayerType;
     use manifold_core::LayerId;
+    use manifold_core::types::LayerType;
     use manifold_ui::panels::PanelAction;
-
 
     #[test]
     fn automation_numeric_menu_captures_the_clicked_point_value() {
@@ -291,10 +415,26 @@ mod tests {
             false,
         );
         for (label, is_value) in [("Edit point value…", true), ("Edit point time…", false)] {
-            let action = items.iter().find(|item| item.label == label).unwrap().action.as_ref().unwrap();
+            let action = items
+                .iter()
+                .find(|item| item.label == label)
+                .unwrap()
+                .action
+                .as_ref()
+                .unwrap();
             let (actual_target, param, beat, value) = match action {
-                PanelAction::Editing(manifold_ui::EditingAction::AutomationPointEditValue(t, p, b, v)) if is_value => (t, p, b, v),
-                PanelAction::Editing(manifold_ui::EditingAction::AutomationPointEditTime(t, p, b, v)) if !is_value => (t, p, b, v),
+                PanelAction::Editing(manifold_ui::EditingAction::AutomationPointEditValue(
+                    t,
+                    p,
+                    b,
+                    v,
+                )) if is_value => (t, p, b, v),
+                PanelAction::Editing(manifold_ui::EditingAction::AutomationPointEditTime(
+                    t,
+                    p,
+                    b,
+                    v,
+                )) if !is_value => (t, p, b, v),
                 _ => panic!("numeric menu must capture point identity"),
             };
             assert_eq!(*actual_target, target);
@@ -303,13 +443,19 @@ mod tests {
             assert_eq!(*value, 0.8);
         }
         for label in ["Straighten", "Hold", "Ease in", "Ease out"] {
-            assert!(items.iter().any(|item| item.label == label), "missing segment action: {label}");
+            assert!(
+                items.iter().any(|item| item.label == label),
+                "missing segment action: {label}"
+            );
         }
-        assert!(matches!(
-            items.iter().find(|item| item.label == "Paste here").unwrap().action.as_ref(),
-            Some(PanelAction::Editing(manifold_ui::EditingAction::ContextAutomationPaste(_, _, beat)))
-                if *beat == manifold_core::Beats(6.0)
-        ), "pasting on a segment uses the clicked beat, independently of its left handle");
+        assert!(
+            matches!(
+                items.iter().find(|item| item.label == "Paste here").unwrap().action.as_ref(),
+                Some(PanelAction::Editing(manifold_ui::EditingAction::ContextAutomationPaste(_, _, beat)))
+                    if *beat == manifold_core::Beats(6.0)
+            ),
+            "pasting on a segment uses the clicked beat, independently of its left handle"
+        );
     }
 
     /// LED presets (`layer_types: [Dmx]`) must be unreachable from a video /
@@ -341,16 +487,18 @@ mod tests {
     #[test]
     fn unscoped_presets_stay_visible_everywhere() {
         let general: Option<Vec<LayerType>> = None;
-        for invoking in [None, Some(LayerType::Video), Some(LayerType::Generator), Some(LayerType::Dmx)] {
+        for invoking in [
+            None,
+            Some(LayerType::Video),
+            Some(LayerType::Generator),
+            Some(LayerType::Dmx),
+        ] {
             assert!(
                 preset_allowed_on_layer_type(&general, invoking),
                 "unscoped preset must appear for invoking {invoking:?}"
             );
         }
     }
-
-
-
 }
 
 /// Convert an AbletonSession into the picker's thin data struct.
@@ -439,7 +587,8 @@ impl UIRoot {
                 thumbnail: None,
             })
             .collect();
-        self.browser_popup.set_screen_size(self.screen_width, self.screen_height);
+        self.browser_popup
+            .set_screen_size(self.screen_width, self.screen_height);
         self.browser_popup.open_actions(
             BrowserPopupRequest {
                 mode: BrowserPopupMode::Actions,
@@ -461,7 +610,9 @@ impl UIRoot {
     /// project. The frame planner runs it when the EmbeddedPresets stamp moved
     /// (UI_INVALIDATION_DESIGN.md section 4).
     pub fn sync_embedded_presets(&mut self, project: &manifold_core::project::Project) {
-        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::PresetListProjection);
+        manifold_core::work_count::record_work(
+            manifold_core::work_count::WorkKind::PresetListProjection,
+        );
         self.embedded_presets = project
             .embedded_presets
             .iter()
@@ -552,9 +703,7 @@ impl UIRoot {
         let available: Vec<preset_type_registry::PresetTypeRegistration> =
             preset_type_registry::available_of_kind(kind)
                 .into_iter()
-                .filter(|reg| {
-                    preset_allowed_on_layer_type(&reg.layer_types, invoking_layer_type)
-                })
+                .filter(|reg| preset_allowed_on_layer_type(&reg.layer_types, invoking_layer_type))
                 .collect();
         let mut items: Vec<PickerItem> = available
             .iter()
@@ -571,9 +720,12 @@ impl UIRoot {
                     let p = lib.thumbnail_path(kind, reg.id.as_str());
                     p.is_file().then(|| p.to_string_lossy().into_owned())
                 } else {
-                    manifold_compositor::preset_thumbnail::factory_thumbnail_path(kind, reg.id.as_str())
-                        .filter(|p| p.is_file())
-                        .map(|p| p.to_string_lossy().into_owned())
+                    manifold_compositor::preset_thumbnail::factory_thumbnail_path(
+                        kind,
+                        reg.id.as_str(),
+                    )
+                    .filter(|p| p.is_file())
+                    .map(|p| p.to_string_lossy().into_owned())
                 };
                 PickerItem {
                     label: reg.display_name.to_string(),
@@ -588,7 +740,11 @@ impl UIRoot {
                         reg.category,
                         reg.id.as_str(),
                     )),
-                    source: Some(if is_user { Source::MyLibrary } else { Source::Factory }),
+                    source: Some(if is_user {
+                        Source::MyLibrary
+                    } else {
+                        Source::Factory
+                    }),
                     thumbnail,
                 }
             })
@@ -608,10 +764,18 @@ impl UIRoot {
             items.push(PickerItem {
                 label: e.display_name.clone(),
                 type_id: e.type_id.clone(),
-                category: if tag_project_category { Some("Project".to_string()) } else { None },
+                category: if tag_project_category {
+                    Some("Project".to_string())
+                } else {
+                    None
+                },
                 search_text: Some(Self::preset_search_haystack(
                     &e.display_name,
-                    if tag_project_category { Some("Project") } else { None },
+                    if tag_project_category {
+                        Some("Project")
+                    } else {
+                        None
+                    },
                     &e.type_id,
                 )),
                 source: Some(Source::Project),
@@ -636,7 +800,11 @@ impl UIRoot {
     /// `open_context` arms used to forget this individually, which is exactly why
     /// right-click context menus were flaky: they drew only when some *unrelated*
     /// state change happened to trigger a rebuild that same frame.
-    pub(crate) fn try_open_dropdown(&mut self, action: &PanelAction, click_node: Option<NodeId>) -> bool {
+    pub(crate) fn try_open_dropdown(
+        &mut self,
+        action: &PanelAction,
+        click_node: Option<NodeId>,
+    ) -> bool {
         let opened = self.try_open_dropdown_inner(action, click_node);
         if opened {
             self.mark_overlay_dirty();
@@ -644,7 +812,11 @@ impl UIRoot {
         opened
     }
 
-    fn try_open_dropdown_inner(&mut self, action: &PanelAction, click_node: Option<NodeId>) -> bool {
+    fn try_open_dropdown_inner(
+        &mut self,
+        action: &PanelAction,
+        click_node: Option<NodeId>,
+    ) -> bool {
         let right_click_pos = self.last_right_click_pos;
         let trigger = if let Some(node) = click_node {
             self.tree.get_bounds(node)
@@ -653,17 +825,23 @@ impl UIRoot {
         };
 
         match action {
-            PanelAction::Root(RootAction::OpenColourMenu { target, param_ids, value }) => {
+            PanelAction::Root(RootAction::OpenColourMenu {
+                target,
+                param_ids,
+                value,
+            }) => {
                 // The hex item edits over the swatch; the grid writes the
                 // picked colour as one RGB edit (`dropdown_color_to_action`).
-                let items = vec![DropdownItem::new("Hex\u{2026}").with_action(PanelAction::Root(
-                    RootAction::BeginColourTextInput {
-                        target: target.clone(),
-                        param_ids: param_ids.clone(),
-                        anchor: trigger,
-                        value: *value,
-                    },
-                ))];
+                let items = vec![
+                    DropdownItem::new("Hex\u{2026}").with_action(PanelAction::Root(
+                        RootAction::BeginColourTextInput {
+                            target: target.clone(),
+                            param_ids: param_ids.clone(),
+                            anchor: trigger,
+                            value: *value,
+                        },
+                    )),
+                ];
                 self.dropdown_context = Some(DropdownContext::Colour {
                     target: target.clone(),
                     param_ids: param_ids.clone(),
@@ -688,30 +866,45 @@ impl UIRoot {
                         // The label is the display name; the action carries the
                         // Debug form, exactly as the old index→action map did
                         // (`format!("{:?}", BlendMode::from_index(i))`).
-                        DropdownItem::new(m.display_name())
-                            .with_action(PanelAction::Layer(LayerAction::SetBlendMode(idx.clone(), format!("{:?}", m))))
+                        DropdownItem::new(m.display_name()).with_action(PanelAction::Layer(
+                            LayerAction::SetBlendMode(idx.clone(), format!("{:?}", m)),
+                        ))
                     })
                     .collect();
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            PanelAction::Root(RootAction::OpenRtQualityTierDropdown { field, realtime, anchor }) => {
+            PanelAction::Root(RootAction::OpenRtQualityTierDropdown {
+                field,
+                realtime,
+                anchor,
+            }) => {
                 use manifold_core::settings::RtQualityTier;
                 // Items are built from the panel's synced snapshot — selecting
                 // one writes the whole settings struct with just this field
                 // changed, so rapid successive edits never compose on a stale
                 // base (the cycle-button multi-click bug class).
                 let settings = self.rt_quality_panel.current_settings();
-                let current = field.get(if *realtime { &settings.realtime } else { &settings.export });
+                let current = field.get(if *realtime {
+                    &settings.realtime
+                } else {
+                    &settings.export
+                });
                 let items: Vec<DropdownItem> = RtQualityTier::ALL
                     .iter()
                     .map(|t| {
                         let mut new_settings = settings;
-                        let col = if *realtime { &mut new_settings.realtime } else { &mut new_settings.export };
+                        let col = if *realtime {
+                            &mut new_settings.realtime
+                        } else {
+                            &mut new_settings.export
+                        };
                         field.set(col, *t);
                         DropdownItem::new(t.label())
                             .with_check(*t == current)
-                            .with_action(PanelAction::Project(ProjectAction::ChangeRtQuality(new_settings)))
+                            .with_action(PanelAction::Project(ProjectAction::ChangeRtQuality(
+                                new_settings,
+                            )))
                     })
                     .collect();
                 self.open_dropdown_typed(items, *anchor);
@@ -720,16 +913,26 @@ impl UIRoot {
             PanelAction::Root(RootAction::OpenRtQualityResDropdown { realtime, anchor }) => {
                 use manifold_core::settings::RtRayResolution;
                 let settings = self.rt_quality_panel.current_settings();
-                let current = if *realtime { settings.realtime.ray_resolution } else { settings.export.ray_resolution };
+                let current = if *realtime {
+                    settings.realtime.ray_resolution
+                } else {
+                    settings.export.ray_resolution
+                };
                 let items: Vec<DropdownItem> = RtRayResolution::ALL
                     .iter()
                     .map(|r| {
                         let mut new_settings = settings;
-                        let col = if *realtime { &mut new_settings.realtime } else { &mut new_settings.export };
+                        let col = if *realtime {
+                            &mut new_settings.realtime
+                        } else {
+                            &mut new_settings.export
+                        };
                         col.ray_resolution = *r;
                         DropdownItem::new(r.label())
                             .with_check(*r == current)
-                            .with_action(PanelAction::Project(ProjectAction::ChangeRtQuality(new_settings)))
+                            .with_action(PanelAction::Project(ProjectAction::ChangeRtQuality(
+                                new_settings,
+                            )))
                     })
                     .collect();
                 self.open_dropdown_typed(items, *anchor);
@@ -738,16 +941,26 @@ impl UIRoot {
             PanelAction::Root(RootAction::OpenRtQualityDenoiseDropdown { realtime, anchor }) => {
                 use manifold_core::settings::RtSpatialDenoise;
                 let settings = self.rt_quality_panel.current_settings();
-                let current = if *realtime { settings.realtime.spatial_denoise } else { settings.export.spatial_denoise };
+                let current = if *realtime {
+                    settings.realtime.spatial_denoise
+                } else {
+                    settings.export.spatial_denoise
+                };
                 let items: Vec<DropdownItem> = RtSpatialDenoise::ALL
                     .iter()
                     .map(|d| {
                         let mut new_settings = settings;
-                        let col = if *realtime { &mut new_settings.realtime } else { &mut new_settings.export };
+                        let col = if *realtime {
+                            &mut new_settings.realtime
+                        } else {
+                            &mut new_settings.export
+                        };
                         col.spatial_denoise = *d;
                         DropdownItem::new(d.label())
                             .with_check(*d == current)
-                            .with_action(PanelAction::Project(ProjectAction::ChangeRtQuality(new_settings)))
+                            .with_action(PanelAction::Project(ProjectAction::ChangeRtQuality(
+                                new_settings,
+                            )))
                     })
                     .collect();
                 self.open_dropdown_typed(items, *anchor);
@@ -759,8 +972,9 @@ impl UIRoot {
                     manifold_core::audio_clip_detection::quantize_grid_options()
                         .iter()
                         .map(|(label, step)| {
-                            DropdownItem::new(label)
-                                .with_action(PanelAction::Clip(ClipAction::ClipDetectSetQuantize(*step)))
+                            DropdownItem::new(label).with_action(PanelAction::Clip(
+                                ClipAction::ClipDetectSetQuantize(*step),
+                            ))
                         })
                         .collect();
                 self.open_dropdown_typed(items, trigger);
@@ -770,14 +984,13 @@ impl UIRoot {
                 // "Auto" (route by trigger name) first, then every candidate
                 // layer cached by state_sync — each carries its target layer.
                 let mut items = Vec::with_capacity(self.clip_detect_layers.len() + 1);
-                items.push(
-                    DropdownItem::new("Auto")
-                        .with_action(PanelAction::Clip(ClipAction::ClipDetectSetLayer(*idx, None))),
-                );
+                items.push(DropdownItem::new("Auto").with_action(PanelAction::Clip(
+                    ClipAction::ClipDetectSetLayer(*idx, None),
+                )));
                 for (id, name) in &self.clip_detect_layers {
-                    items.push(DropdownItem::new(name).with_action(
-                        PanelAction::Clip(ClipAction::ClipDetectSetLayer(*idx, Some(id.clone()))),
-                    ));
+                    items.push(DropdownItem::new(name).with_action(PanelAction::Clip(
+                        ClipAction::ClipDetectSetLayer(*idx, Some(id.clone())),
+                    )));
                 }
                 self.open_dropdown_typed(items, trigger);
                 true
@@ -792,14 +1005,14 @@ impl UIRoot {
                 let sends = self.audio_setup_panel.send_options();
                 let mut items = Vec::with_capacity(sends.len() + 1);
                 items.push(
-                    DropdownItem::new("No source")
-                        .with_action(PanelAction::Layer(LayerAction::SetLayerAudioSend(idx.clone(), None))),
+                    DropdownItem::new("No source").with_action(PanelAction::Layer(
+                        LayerAction::SetLayerAudioSend(idx.clone(), None),
+                    )),
                 );
                 for (id, label) in sends {
-                    items.push(
-                        DropdownItem::new(&label)
-                            .with_action(PanelAction::Layer(LayerAction::SetLayerAudioSend(idx.clone(), Some(id)))),
-                    );
+                    items.push(DropdownItem::new(&label).with_action(PanelAction::Layer(
+                        LayerAction::SetLayerAudioSend(idx.clone(), Some(id)),
+                    )));
                 }
                 self.open_dropdown_typed(items, trigger);
                 true
@@ -814,7 +1027,9 @@ impl UIRoot {
                 let candidates = self
                     .automation_chooser_candidates
                     .iter()
-                    .filter(|candidate| layer_id.as_ref().is_none_or(|id| id == &candidate.layer_id));
+                    .filter(|candidate| {
+                        layer_id.as_ref().is_none_or(|id| id == &candidate.layer_id)
+                    });
                 let mut items = Vec::new();
                 let mut actions = Vec::new();
                 let mut categories = Vec::new();
@@ -829,56 +1044,59 @@ impl UIRoot {
                 }
                 self.browser_popup
                     .set_screen_size(self.screen_width, self.screen_height);
-                self.browser_popup.open_actions(BrowserPopupRequest {
-                    mode: BrowserPopupMode::Actions,
-                    tab: self.inspector.last_effect_tab(),
-                    layer_id: layer_id.clone(),
-                    items,
-                    category_names: categories,
-                    spawn_graph_pos: None,
-                    paste_count: 0,
-                    screen_anchor: Vec2::new(trigger.x, trigger.y + trigger.height),
-                }, actions, ActionListOptions {
-                    empty_label: "No parameters match",
-                    ..ActionListOptions::default()
-                });
+                self.browser_popup.open_actions(
+                    BrowserPopupRequest {
+                        mode: BrowserPopupMode::Actions,
+                        tab: self.inspector.last_effect_tab(),
+                        layer_id: layer_id.clone(),
+                        items,
+                        category_names: categories,
+                        spawn_graph_pos: None,
+                        paste_count: 0,
+                        screen_anchor: Vec2::new(trigger.x, trigger.y + trigger.height),
+                    },
+                    actions,
+                    ActionListOptions {
+                        empty_label: "No parameters match",
+                        ..ActionListOptions::default()
+                    },
+                );
                 true
             }
             PanelAction::Params(ParamsAction::OpenClipTriggerSource(target, param_id)) => {
-                let Some(target_choice) = self
-                    .trigger_routing
-                    .targets
-                    .iter()
-                    .find(|candidate| candidate.target == *target && candidate.param_id == *param_id)
-                else {
+                let Some(target_choice) = self.trigger_routing.targets.iter().find(|candidate| {
+                    candidate.target == *target && candidate.param_id == *param_id
+                }) else {
                     return true;
                 };
-                let items = trigger_source_menu_items(
-                    target_choice,
-                    &self.trigger_routing.sources,
-                );
+                let items = trigger_source_menu_items(target_choice, &self.trigger_routing.sources);
                 self.open_dropdown_typed(items, trigger);
                 true
             }
             PanelAction::Params(ParamsAction::OpenTriggerTargets(layer_id)) => {
                 use manifold_ui::panels::browser_popup::*;
                 let picker = trigger_target_picker_items(layer_id, &self.trigger_routing.targets);
-                self.browser_popup.set_screen_size(self.screen_width, self.screen_height);
-                self.browser_popup.open_actions(BrowserPopupRequest {
-                    mode: BrowserPopupMode::Actions,
-                    tab: self.inspector.last_effect_tab(),
-                    layer_id: Some(layer_id.clone()),
-                    items: picker.items,
-                    category_names: picker.categories,
-                    spawn_graph_pos: None,
-                    paste_count: 0,
-                    screen_anchor: Vec2::new(trigger.x, trigger.y + trigger.height),
-                }, picker.actions, ActionListOptions {
-                    empty_label: "No compatible trigger targets",
-                    secondary_actions: picker.secondary_actions,
-                    keep_open: true,
-                    ..Default::default()
-                });
+                self.browser_popup
+                    .set_screen_size(self.screen_width, self.screen_height);
+                self.browser_popup.open_actions(
+                    BrowserPopupRequest {
+                        mode: BrowserPopupMode::Actions,
+                        tab: self.inspector.last_effect_tab(),
+                        layer_id: Some(layer_id.clone()),
+                        items: picker.items,
+                        category_names: picker.categories,
+                        spawn_graph_pos: None,
+                        paste_count: 0,
+                        screen_anchor: Vec2::new(trigger.x, trigger.y + trigger.height),
+                    },
+                    picker.actions,
+                    ActionListOptions {
+                        empty_label: "No compatible trigger targets",
+                        secondary_actions: picker.secondary_actions,
+                        keep_open: true,
+                        ..Default::default()
+                    },
+                );
                 self.mark_overlay_dirty();
                 true
             }
@@ -889,10 +1107,10 @@ impl UIRoot {
                 // Effect mode keeps its existing "Project" category chip
                 // grouping (`tag_project_category: true`). No layer-type
                 // gate in effect mode (D8 scopes the gate to generators).
-                let mut items =
-                    self.build_preset_picker_items(PresetKind::Effect, true, None);
-                let has_project_items =
-                    items.iter().any(|it| it.category.as_deref() == Some("Project"));
+                let mut items = self.build_preset_picker_items(PresetKind::Effect, true, None);
+                let has_project_items = items
+                    .iter()
+                    .any(|it| it.category.as_deref() == Some("Project"));
                 items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
 
                 // The atomic invocation context (D2): the action carries
@@ -954,8 +1172,11 @@ impl UIRoot {
                             manifold_core::types::LayerType::Generator
                         }
                     });
-                let mut items =
-                    self.build_preset_picker_items(PresetKind::Generator, true, invoking_layer_type);
+                let mut items = self.build_preset_picker_items(
+                    PresetKind::Generator,
+                    true,
+                    invoking_layer_type,
+                );
                 items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
 
                 // Category chips derived from the items themselves (first
@@ -1010,32 +1231,29 @@ impl UIRoot {
 
                 let mut items = Vec::new();
                 items.push(
-                    DropdownItem::new("Rename…").with_action(PanelAction::Browser(BrowserAction::BrowserRenamePresetClicked(
-                        *mode,
-                        type_id.clone(),
-                        *source,
-                    ))),
+                    DropdownItem::new("Rename…").with_action(PanelAction::Browser(
+                        BrowserAction::BrowserRenamePresetClicked(*mode, type_id.clone(), *source),
+                    )),
                 );
                 if matches!(source, Source::MyLibrary) {
                     items.push(
-                        DropdownItem::new("Duplicate").with_action(
-                            PanelAction::Browser(BrowserAction::BrowserDuplicatePresetClicked(*mode, type_id.clone())),
-                        ),
+                        DropdownItem::new("Duplicate").with_action(PanelAction::Browser(
+                            BrowserAction::BrowserDuplicatePresetClicked(*mode, type_id.clone()),
+                        )),
                     );
                 }
                 items.push(
-                    DropdownItem::new("Delete…").with_action(PanelAction::Browser(BrowserAction::BrowserDeletePresetClicked(
-                        *mode,
-                        type_id.clone(),
-                        *source,
-                    ))),
+                    DropdownItem::new("Delete…").with_action(PanelAction::Browser(
+                        BrowserAction::BrowserDeletePresetClicked(*mode, type_id.clone(), *source),
+                    )),
                 );
                 if matches!(source, Source::MyLibrary) {
-                    items.push(
-                        DropdownItem::new("Reveal in Finder").with_action(
-                            PanelAction::Browser(BrowserAction::BrowserRevealPresetClicked(*mode, type_id.clone())),
-                        ),
-                    );
+                    items.push(DropdownItem::new("Reveal in Finder").with_action(
+                        PanelAction::Browser(BrowserAction::BrowserRevealPresetClicked(
+                            *mode,
+                            type_id.clone(),
+                        )),
+                    ));
                 }
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
@@ -1050,11 +1268,14 @@ impl UIRoot {
                         .map(|d| d.name)
                         .collect();
                 let mut items: Vec<DropdownItem> = vec![
-                    DropdownItem::new("None (video only)")
-                        .with_action(PanelAction::Project(ProjectAction::SetAudioInputDevice(String::new()))),
+                    DropdownItem::new("None (video only)").with_action(PanelAction::Project(
+                        ProjectAction::SetAudioInputDevice(String::new()),
+                    )),
                 ];
                 items.extend(device_names.into_iter().map(|name| {
-                    DropdownItem::new(&name).with_action(PanelAction::Project(ProjectAction::SetAudioInputDevice(name)))
+                    DropdownItem::new(&name).with_action(PanelAction::Project(
+                        ProjectAction::SetAudioInputDevice(name),
+                    ))
                 }));
                 self.open_dropdown_typed(items, trigger);
                 true
@@ -1065,12 +1286,17 @@ impl UIRoot {
                 // hardware/virtual input devices, and the output taps (system +
                 // running apps). A parallel choice map records what each row is so
                 // selection doesn't depend on position.
-                manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::DeviceQuery);
+                manifold_core::work_count::record_work(
+                    manifold_core::work_count::WorkKind::DeviceQuery,
+                );
                 let dir = manifold_audio::directory::system_directory();
                 self.audio_setup_devices = dir.list_input_devices();
                 let caps = dir.tap_capabilities();
-                self.audio_setup_apps =
-                    if caps.app_audio { dir.list_audio_apps() } else { Vec::new() };
+                self.audio_setup_apps = if caps.app_audio {
+                    dir.list_audio_apps()
+                } else {
+                    Vec::new()
+                };
 
                 // Typed (2b.11): each source row carries its AudioSetDevice action
                 // built from the cached metadata; headers stay non-selectable.
@@ -1078,17 +1304,15 @@ impl UIRoot {
 
                 // No capture at all — sends are fed by timeline audio layers
                 // only, the device stays dark.
-                items.push(
-                    DropdownItem::new("None (layers only)")
-                        .with_action(PanelAction::AudioSetup(AudioSetupAction::AudioSetDevice(Some(
-                            manifold_ui::AudioDeviceRef::none(),
-                        )))),
-                );
+                items.push(DropdownItem::new("None (layers only)").with_action(
+                    PanelAction::AudioSetup(AudioSetupAction::AudioSetDevice(Some(
+                        manifold_ui::AudioDeviceRef::none(),
+                    ))),
+                ));
 
-                items.push(
-                    DropdownItem::new("System Default")
-                        .with_action(PanelAction::AudioSetup(AudioSetupAction::AudioSetDevice(None))),
-                );
+                items.push(DropdownItem::new("System Default").with_action(
+                    PanelAction::AudioSetup(AudioSetupAction::AudioSetDevice(None)),
+                ));
 
                 if !self.audio_setup_devices.is_empty() {
                     items.push(DropdownItem::disabled("Input Devices"));
@@ -1100,9 +1324,10 @@ impl UIRoot {
                             format!("{} (offline)", d.name)
                         };
                         // Store stable UID + display name from the cached metadata.
-                        let action = PanelAction::AudioSetup(AudioSetupAction::AudioSetDevice(Some(
-                            manifold_ui::AudioDeviceRef::new(d.uid.clone(), d.name.clone()),
-                        )));
+                        let action =
+                            PanelAction::AudioSetup(AudioSetupAction::AudioSetDevice(Some(
+                                manifold_ui::AudioDeviceRef::new(d.uid.clone(), d.name.clone()),
+                            )));
                         items.push(DropdownItem::new(&label).with_action(action));
                     }
                 }
@@ -1125,12 +1350,12 @@ impl UIRoot {
                         } else {
                             format!("{} (idle)", app.name)
                         };
-                        let action = PanelAction::AudioSetup(AudioSetupAction::AudioSetDevice(Some(
-                            manifold_ui::AudioDeviceRef::app(
+                        let action = PanelAction::AudioSetup(AudioSetupAction::AudioSetDevice(
+                            Some(manifold_ui::AudioDeviceRef::app(
                                 app.bundle_id.clone(),
                                 app.name.clone(),
-                            ),
-                        )));
+                            )),
+                        ));
                         items.push(DropdownItem::new(&label).with_action(action));
                     }
                 }
@@ -1149,8 +1374,9 @@ impl UIRoot {
                     .iter()
                     .enumerate()
                     .map(|(i, name)| {
-                        DropdownItem::new(name)
-                            .with_action(PanelAction::Transport(TransportAction::SetMidiClockDevice(i as i32)))
+                        DropdownItem::new(name).with_action(PanelAction::Transport(
+                            TransportAction::SetMidiClockDevice(i as i32),
+                        ))
                     })
                     .collect();
                 self.open_dropdown_typed(items, trigger);
@@ -1160,8 +1386,9 @@ impl UIRoot {
                 // Typed dropdown (2b.11): item n carries SetMidiNote(idx, n).
                 let items: Vec<DropdownItem> = (0..128)
                     .map(|n| {
-                        DropdownItem::new(&manifold_core::midi::note_number_to_name(n))
-                            .with_action(PanelAction::Project(ProjectAction::SetMidiNote(idx.clone(), n)))
+                        DropdownItem::new(&manifold_core::midi::note_number_to_name(n)).with_action(
+                            PanelAction::Project(ProjectAction::SetMidiNote(idx.clone(), n)),
+                        )
                     })
                     .collect();
                 self.open_dropdown_typed(items, trigger);
@@ -1169,12 +1396,13 @@ impl UIRoot {
             }
             PanelAction::Layer(LayerAction::MidiChannelClicked(idx)) => {
                 // "All" (-1) then channels 0..15 (displayed 1..16).
-                let mut items: Vec<DropdownItem> = vec![
-                    DropdownItem::new("All").with_action(PanelAction::Project(ProjectAction::SetMidiChannel(idx.clone(), -1))),
-                ];
+                let mut items: Vec<DropdownItem> = vec![DropdownItem::new("All").with_action(
+                    PanelAction::Project(ProjectAction::SetMidiChannel(idx.clone(), -1)),
+                )];
                 items.extend((1..=16).map(|ch| {
-                    DropdownItem::new(&format!("Ch {}", ch))
-                        .with_action(PanelAction::Project(ProjectAction::SetMidiChannel(idx.clone(), ch - 1)))
+                    DropdownItem::new(&format!("Ch {}", ch)).with_action(PanelAction::Project(
+                        ProjectAction::SetMidiChannel(idx.clone(), ch - 1),
+                    ))
                 }));
                 self.open_dropdown_typed(items, trigger);
                 true
@@ -1182,12 +1410,14 @@ impl UIRoot {
             PanelAction::Layer(LayerAction::MidiDeviceClicked(idx)) => {
                 // "All Devices" (None) then each named device.
                 let mut items: Vec<DropdownItem> = vec![
-                    DropdownItem::new("All Devices")
-                        .with_action(PanelAction::Project(ProjectAction::SetMidiDevice(idx.clone(), None))),
+                    DropdownItem::new("All Devices").with_action(PanelAction::Project(
+                        ProjectAction::SetMidiDevice(idx.clone(), None),
+                    )),
                 ];
                 items.extend(self.midi_device_names.iter().map(|name| {
-                    DropdownItem::new(name)
-                        .with_action(PanelAction::Project(ProjectAction::SetMidiDevice(idx.clone(), Some(name.clone()))))
+                    DropdownItem::new(name).with_action(PanelAction::Project(
+                        ProjectAction::SetMidiDevice(idx.clone(), Some(name.clone())),
+                    ))
                 }));
                 self.open_dropdown_typed(items, trigger);
                 true
@@ -1213,7 +1443,9 @@ impl UIRoot {
                     for (w, h, label) in &self.display_resolutions {
                         items.push(
                             DropdownItem::new(&format!("{}  ({}x{})", label, w, h)).with_action(
-                                PanelAction::Project(ProjectAction::SetDisplayResolution(*w as i32, *h as i32)),
+                                PanelAction::Project(ProjectAction::SetDisplayResolution(
+                                    *w as i32, *h as i32,
+                                )),
                             ),
                         );
                     }
@@ -1228,13 +1460,13 @@ impl UIRoot {
                 let mut items = vec![
                     DropdownItem::new("After All FX")
                         .with_action(PanelAction::Params(ParamsAction::SetLedExitIndex(-1))),
-                    DropdownItem::new("Before FX").with_action(PanelAction::Params(ParamsAction::SetLedExitIndex(0))),
+                    DropdownItem::new("Before FX")
+                        .with_action(PanelAction::Params(ParamsAction::SetLedExitIndex(0))),
                 ];
                 for (e, name) in self.master_effect_names.iter().enumerate() {
-                    items.push(
-                        DropdownItem::new(&format!("After {}", name))
-                            .with_action(PanelAction::Params(ParamsAction::SetLedExitIndex(e as i32 + 1))),
-                    );
+                    items.push(DropdownItem::new(&format!("After {}", name)).with_action(
+                        PanelAction::Params(ParamsAction::SetLedExitIndex(e as i32 + 1)),
+                    ));
                 }
                 self.open_dropdown_typed(items, trigger);
                 true
@@ -1242,12 +1474,15 @@ impl UIRoot {
             PanelAction::Editing(EditingAction::ClipRightClicked(clip_id)) => {
                 // Typed (2b.11): each item carries its clip action.
                 let items = vec![
-                    DropdownItem::new("Split at Playhead")
-                        .with_action(PanelAction::Editing(EditingAction::ContextSplitAtPlayhead(clip_id.clone()))),
-                    DropdownItem::new("Delete")
-                        .with_action(PanelAction::Editing(EditingAction::ContextDeleteClip(clip_id.clone()))),
-                    DropdownItem::new("Duplicate")
-                        .with_action(PanelAction::Editing(EditingAction::ContextDuplicateClip(clip_id.clone()))),
+                    DropdownItem::new("Split at Playhead").with_action(PanelAction::Editing(
+                        EditingAction::ContextSplitAtPlayhead(clip_id.clone()),
+                    )),
+                    DropdownItem::new("Delete").with_action(PanelAction::Editing(
+                        EditingAction::ContextDeleteClip(clip_id.clone()),
+                    )),
+                    DropdownItem::new("Duplicate").with_action(PanelAction::Editing(
+                        EditingAction::ContextDuplicateClip(clip_id.clone()),
+                    )),
                 ];
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
@@ -1259,10 +1494,9 @@ impl UIRoot {
                 // slot, not a specific layer's identity) but the Context*Layer
                 // family is LayerId-keyed (BUG-031) — resolve the row-under-
                 // cursor's id once, synchronously, same as the layer-header menu.
-                let mut items = vec![
-                    DropdownItem::new("Paste")
-                        .with_action(PanelAction::Editing(EditingAction::ContextPasteAtTrack(*beat, *layer))),
-                ];
+                let mut items = vec![DropdownItem::new("Paste").with_action(PanelAction::Editing(
+                    EditingAction::ContextPasteAtTrack(*beat, *layer),
+                ))];
                 if let Some(layer_id) = self
                     .layer_headers
                     .layer_info(*layer)
@@ -1272,34 +1506,38 @@ impl UIRoot {
                     let is_trigger = info.is_some_and(|info| info.is_trigger);
                     // A trigger lane adds its sibling under the same parent.
                     let lane_owner = if is_trigger {
-                        info.and_then(|i| i.parent_layer_id.as_deref()).map(manifold_core::LayerId::new)
+                        info.and_then(|i| i.parent_layer_id.as_deref())
+                            .map(manifold_core::LayerId::new)
                     } else {
-                        items.push(DropdownItem::new("Import MIDI File").with_action(PanelAction::Editing(
-                            EditingAction::ContextImportMidi(layer_id.clone()),
-                        )));
+                        items.push(DropdownItem::new("Import MIDI File").with_action(
+                            PanelAction::Editing(EditingAction::ContextImportMidi(
+                                layer_id.clone(),
+                            )),
+                        ));
                         Some(layer_id.clone())
                     };
                     if let Some(owner) = lane_owner {
-                        items.push(DropdownItem::new("Add trigger lane").with_action(PanelAction::Params(
-                            ParamsAction::CreateTriggerLane { owner, assignment: None },
-                        )));
+                        items.push(DropdownItem::new("Add trigger lane").with_action(
+                            PanelAction::Params(ParamsAction::CreateTriggerLane {
+                                owner,
+                                assignment: None,
+                            }),
+                        ));
                     }
-                    items.push(
-                        DropdownItem::new("Insert Video Layer")
-                            .with_action(PanelAction::Editing(EditingAction::ContextAddVideoLayer(layer_id.clone()))),
-                    );
-                    items.push(
-                        DropdownItem::new("Insert Generator Layer")
-                            .with_action(PanelAction::Editing(EditingAction::ContextAddGeneratorLayer(layer_id.clone()))),
-                    );
-                    items.push(
-                        DropdownItem::new("Insert LED Layer")
-                            .with_action(PanelAction::Editing(EditingAction::ContextAddLedLayer(layer_id.clone()))),
-                    );
-                    items.push(
-                        DropdownItem::new("Insert Audio Layer")
-                            .with_action(PanelAction::Editing(EditingAction::ContextAddAudioLayer(layer_id))),
-                    );
+                    items.push(DropdownItem::new("Insert Video Layer").with_action(
+                        PanelAction::Editing(EditingAction::ContextAddVideoLayer(layer_id.clone())),
+                    ));
+                    items.push(DropdownItem::new("Insert Generator Layer").with_action(
+                        PanelAction::Editing(EditingAction::ContextAddGeneratorLayer(
+                            layer_id.clone(),
+                        )),
+                    ));
+                    items.push(DropdownItem::new("Insert LED Layer").with_action(
+                        PanelAction::Editing(EditingAction::ContextAddLedLayer(layer_id.clone())),
+                    ));
+                    items.push(DropdownItem::new("Insert Audio Layer").with_action(
+                        PanelAction::Editing(EditingAction::ContextAddAudioLayer(layer_id)),
+                    ));
                 }
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
@@ -1310,28 +1548,64 @@ impl UIRoot {
                 let lanes = self.viewport.automation_lane_screens();
                 let hit = hit_test_automation(right_click_pos, lanes);
                 let point = match hit {
-                    Some(AutomationHit::Dot { lane_index, dot_index }) => Some(lanes[lane_index].dots[dot_index]),
-                    Some(AutomationHit::Segment { lane_index, left_dot_index }) => Some(lanes[lane_index].dots[left_dot_index]),
+                    Some(AutomationHit::Dot {
+                        lane_index,
+                        dot_index,
+                    }) => Some(lanes[lane_index].dots[dot_index]),
+                    Some(AutomationHit::Segment {
+                        lane_index,
+                        left_dot_index,
+                    }) => Some(lanes[lane_index].dots[left_dot_index]),
                     _ => None,
                 };
                 let beat = match hit {
-                    Some(AutomationHit::Dot { lane_index, dot_index }) => lanes[lane_index].dots[dot_index].beat,
-                    _ => self.viewport.snap_to_grid(self.viewport.pixel_to_beat(right_click_pos.x))
+                    Some(AutomationHit::Dot {
+                        lane_index,
+                        dot_index,
+                    }) => lanes[lane_index].dots[dot_index].beat,
+                    _ => self
+                        .viewport
+                        .snap_to_grid(self.viewport.pixel_to_beat(right_click_pos.x))
                         .max(manifold_core::Beats::ZERO),
                 };
-                let layer_id = self.automation_chooser_candidates.iter().find_map(|candidate| {
-                    let PanelAction::Params(ParamsAction::ShowAutomationAddress(candidate_target, _)) = &candidate.action else {
-                        return None;
-                    };
-                    (candidate_target == target).then(|| candidate.layer_id.clone())
+                let layer_id = self
+                    .automation_chooser_candidates
+                    .iter()
+                    .find_map(|candidate| {
+                        let PanelAction::Params(ParamsAction::ShowAutomationAddress(
+                            candidate_target,
+                            _,
+                        )) = &candidate.action
+                        else {
+                            return None;
+                        };
+                        (candidate_target == target).then(|| candidate.layer_id.clone())
+                    });
+                let pinned = self
+                    .pinned_automation_lanes
+                    .iter()
+                    .any(|key| key.0 == *target && key.1 == *param_id);
+                let whole_numbers = lanes.iter().any(|lane| {
+                    lane.target == *target && lane.param_id == *param_id && lane.whole_numbers
                 });
-                let pinned = self.pinned_automation_lanes.iter().any(|key| key.0 == *target && key.1 == *param_id);
-                let whole_numbers = lanes.iter().any(|lane| lane.target == *target && lane.param_id == *param_id && lane.whole_numbers);
-                let items = automation_lane_context_items(target, param_id, layer_id, Some(beat), point.map(|dot| (dot.beat, dot.value_norm)), pinned, whole_numbers);
-                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                let items = automation_lane_context_items(
+                    target,
+                    param_id,
+                    layer_id,
+                    Some(beat),
+                    point.map(|dot| (dot.beat, dot.value_norm)),
+                    pinned,
+                    whole_numbers,
+                );
+                self.dropdown
+                    .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
-            PanelAction::Editing(EditingAction::ContextOpenAutomationShapePicker(target, param_id, beat)) => {
+            PanelAction::Editing(EditingAction::ContextOpenAutomationShapePicker(
+                target,
+                param_id,
+                beat,
+            )) => {
                 let items = [
                     ("Ramp up", AutomationShape::RampUp),
                     ("Ramp down", AutomationShape::RampDown),
@@ -1345,12 +1619,16 @@ impl UIRoot {
                 .map(|(label, shape)| {
                     DropdownItem::new(label).with_action(PanelAction::Editing(
                         EditingAction::ContextInsertAutomationShape(
-                            target.clone(), param_id.clone(), *beat, shape,
+                            target.clone(),
+                            param_id.clone(),
+                            *beat,
+                            shape,
                         ),
                     ))
                 })
                 .collect();
-                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                self.dropdown
+                    .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
             PanelAction::Editing(EditingAction::LayerHeaderRightClicked(layer_id)) => {
@@ -1366,23 +1644,20 @@ impl UIRoot {
                 let layer_info = self.layer_headers.layer_info(li);
                 let is_group = layer_info.is_some_and(|l| l.is_group);
                 let is_trigger = layer_info.is_some_and(|l| l.is_trigger);
-                let mut items = vec![
-                    DropdownItem::new("Paste")
-                        .with_action(PanelAction::Editing(EditingAction::ContextPasteAtLayer(layer_id.clone()))),
-                ];
+                let mut items = vec![DropdownItem::new("Paste").with_action(PanelAction::Editing(
+                    EditingAction::ContextPasteAtLayer(layer_id.clone()),
+                ))];
                 if !is_trigger {
-                    items.push(
-                        DropdownItem::new("Add/show automation lane…")
-                            .with_action(PanelAction::Params(ParamsAction::OpenAutomationChooser(
-                                Some(layer_id.clone()),
-                            ))),
-                    );
+                    items.push(DropdownItem::new("Add/show automation lane…").with_action(
+                        PanelAction::Params(ParamsAction::OpenAutomationChooser(Some(
+                            layer_id.clone(),
+                        ))),
+                    ));
                 }
                 if !is_group && !is_trigger {
-                    items.push(
-                        DropdownItem::new("Import MIDI File")
-                            .with_action(PanelAction::Editing(EditingAction::ContextImportMidi(layer_id.clone()))),
-                    );
+                    items.push(DropdownItem::new("Import MIDI File").with_action(
+                        PanelAction::Editing(EditingAction::ContextImportMidi(layer_id.clone())),
+                    ));
                 }
                 // A trigger lane adds its sibling under the same parent.
                 let lane_owner = if is_trigger {
@@ -1393,52 +1668,49 @@ impl UIRoot {
                     Some(layer_id.clone())
                 };
                 if let Some(owner) = lane_owner {
-                    items.push(
-                        DropdownItem::new("Add trigger lane").with_action(PanelAction::Params(
-                            ParamsAction::CreateTriggerLane { owner, assignment: None },
-                        )),
-                    );
+                    items.push(DropdownItem::new("Add trigger lane").with_action(
+                        PanelAction::Params(ParamsAction::CreateTriggerLane {
+                            owner,
+                            assignment: None,
+                        }),
+                    ));
                 }
+                items.push(DropdownItem::new("Insert Video Layer").with_action(
+                    PanelAction::Editing(EditingAction::ContextAddVideoLayer(layer_id.clone())),
+                ));
+                items.push(DropdownItem::new("Insert Generator Layer").with_action(
+                    PanelAction::Editing(EditingAction::ContextAddGeneratorLayer(layer_id.clone())),
+                ));
+                items.push(DropdownItem::new("Insert LED Layer").with_action(
+                    PanelAction::Editing(EditingAction::ContextAddLedLayer(layer_id.clone())),
+                ));
+                items.push(DropdownItem::new("Insert Audio Layer").with_action(
+                    PanelAction::Editing(EditingAction::ContextAddAudioLayer(layer_id.clone())),
+                ));
                 items.push(
-                    DropdownItem::new("Insert Video Layer")
-                        .with_action(PanelAction::Editing(EditingAction::ContextAddVideoLayer(layer_id.clone()))),
-                );
-                items.push(
-                    DropdownItem::new("Insert Generator Layer")
-                        .with_action(PanelAction::Editing(EditingAction::ContextAddGeneratorLayer(layer_id.clone()))),
-                );
-                items.push(
-                    DropdownItem::new("Insert LED Layer")
-                        .with_action(PanelAction::Editing(EditingAction::ContextAddLedLayer(layer_id.clone()))),
-                );
-                items.push(
-                    DropdownItem::new("Insert Audio Layer")
-                        .with_action(PanelAction::Editing(EditingAction::ContextAddAudioLayer(layer_id.clone()))),
-                );
-                items.push(
-                    DropdownItem::new("Duplicate Layer")
-                        .with_action(PanelAction::Editing(EditingAction::ContextDuplicateLayer(layer_id.clone()))),
+                    DropdownItem::new("Duplicate Layer").with_action(PanelAction::Editing(
+                        EditingAction::ContextDuplicateLayer(layer_id.clone()),
+                    )),
                 );
                 // "Group" only when 2+ non-group, non-nested layers are selected
                 let can_group = self.layer_headers.layer_count() >= 2 && !is_group;
                 if can_group {
-                    items.push(
-                        DropdownItem::new("Group Selected Layers")
-                            .with_action(PanelAction::Editing(EditingAction::ContextGroupSelectedLayers)),
-                    );
+                    items.push(DropdownItem::new("Group Selected Layers").with_action(
+                        PanelAction::Editing(EditingAction::ContextGroupSelectedLayers),
+                    ));
                 }
                 if is_group {
                     items.push(
-                        DropdownItem::new("Ungroup")
-                            .with_action(PanelAction::Editing(EditingAction::ContextUngroup(layer_id.clone()))),
+                        DropdownItem::new("Ungroup").with_action(PanelAction::Editing(
+                            EditingAction::ContextUngroup(layer_id.clone()),
+                        )),
                     );
                 }
                 // Only allow delete if more than 1 layer exists
                 if self.layer_headers.layer_count() > 1 {
-                    items.push(
-                        DropdownItem::new("Delete Layer")
-                            .with_action(PanelAction::Editing(EditingAction::ContextDeleteLayer(layer_id.clone()))),
-                    );
+                    items.push(DropdownItem::new("Delete Layer").with_action(
+                        PanelAction::Editing(EditingAction::ContextDeleteLayer(layer_id.clone())),
+                    ));
                 }
                 // Last text item gets a separator before the color grid
                 if let Some(last) = items.last_mut() {
@@ -1458,12 +1730,16 @@ impl UIRoot {
                 let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT + 6);
                 // The inspector shows one tab at a time, so the tab says which
                 // surface the row was right-clicked on.
-                let pin_surface = if self.inspector.active_tab() == manifold_ui::InspectorTab::Scene {
+                let pin_surface = if self.inspector.active_tab() == manifold_ui::InspectorTab::Scene
+                {
                     match gpt {
                         GraphParamTarget::GeneratorOf(layer)
                             if self.scene_setup_panel.scene_layer_with(param_id) == Some(layer) =>
                         {
-                            let on_card = self.inspector.scene_card_row(layer, param_id.as_ref()).is_some();
+                            let on_card = self
+                                .inspector
+                                .scene_card_row(layer, param_id.as_ref())
+                                .is_some();
                             Some(super::card_pin::PinSurface::SceneTab { on_card })
                         }
                         _ => None,
@@ -1479,17 +1755,30 @@ impl UIRoot {
                 if let Some(surface) = pin_surface {
                     items.extend(super::card_pin::scene_items(gpt, param_id, surface));
                 }
-                let range_anchor = manifold_ui::Rect::new(right_click_pos.x, right_click_pos.y, 140.0, 20.0);
-                items.extend(super::card_pin::slider_range_items(gpt, param_id, range_anchor));
+                let range_anchor =
+                    manifold_ui::Rect::new(right_click_pos.x, right_click_pos.y, 140.0, 20.0);
+                items.extend(super::card_pin::slider_range_items(
+                    gpt,
+                    param_id,
+                    range_anchor,
+                ));
                 if self.inspector.last_effect_tab().is_layer_scope()
                     || matches!(gpt, GraphParamTarget::GeneratorOf(_))
                 {
                     items.push(DropdownItem::new("Show Automation").with_action(
-                        PanelAction::Params(ParamsAction::ShowAutomation(gpt.clone(), param_id.clone())),
+                        PanelAction::Params(ParamsAction::ShowAutomation(
+                            gpt.clone(),
+                            param_id.clone(),
+                        )),
                     ));
-                    items.push(DropdownItem::new("Clear Automation").with_action(
-                        PanelAction::Params(ParamsAction::ClearAutomation(gpt.clone(), param_id.clone())),
-                    ).with_separator());
+                    items.push(
+                        DropdownItem::new("Clear Automation")
+                            .with_action(PanelAction::Params(ParamsAction::ClearAutomation(
+                                gpt.clone(),
+                                param_id.clone(),
+                            )))
+                            .with_separator(),
+                    );
                 }
                 for i in 0..manifold_core::MACRO_COUNT {
                     let label = {
@@ -1501,9 +1790,9 @@ impl UIRoot {
                         }
                     };
                     // Typed (2b.11): item i maps the param to macro i.
-                    items.push(DropdownItem::new(&label).with_action(
-                        PanelAction::Mapping(MappingAction::MapParamToMacro(gpt.clone(), param_id.clone(), i)),
-                    ));
+                    items.push(DropdownItem::new(&label).with_action(PanelAction::Mapping(
+                        MappingAction::MapParamToMacro(gpt.clone(), param_id.clone(), i),
+                    )));
                 }
                 // Ableton picker entry
                 if let Some(last) = items.last_mut() {
@@ -1512,7 +1801,10 @@ impl UIRoot {
                 let ableton_connected = self.ableton_session.as_ref().is_some_and(|s| s.connected);
                 if ableton_connected {
                     items.push(DropdownItem::new("Map to Ableton Macro…").with_action(
-                        PanelAction::Root(RootAction::OpenAbletonPickerForParam(gpt.clone(), param_id.clone())),
+                        PanelAction::Root(RootAction::OpenAbletonPickerForParam(
+                            gpt.clone(),
+                            param_id.clone(),
+                        )),
                     ));
                 } else {
                     items.push(DropdownItem::disabled("Ableton not connected"));
@@ -1533,7 +1825,10 @@ impl UIRoot {
                 };
                 if is_ableton_mapped {
                     items.push(DropdownItem::new("Remove Ableton Mapping").with_action(
-                        PanelAction::Mapping(MappingAction::UnmapParamAbleton(gpt.clone(), param_id.clone())),
+                        PanelAction::Mapping(MappingAction::UnmapParamAbleton(
+                            gpt.clone(),
+                            param_id.clone(),
+                        )),
                     ));
                 }
                 self.dropdown
@@ -1545,7 +1840,9 @@ impl UIRoot {
                 // Ableton entries each carry their own action.
                 let descs = &self.macro_mapping_descs[*macro_idx];
                 let rename = DropdownItem::new("Rename")
-                    .with_action(PanelAction::Params(ParamsAction::MacroLabelRename(*macro_idx)))
+                    .with_action(PanelAction::Params(ParamsAction::MacroLabelRename(
+                        *macro_idx,
+                    )))
                     .with_separator();
                 let mut items = vec![rename];
                 if descs.is_empty() {
@@ -1554,19 +1851,17 @@ impl UIRoot {
                     items.push(item);
                 } else {
                     for (i, desc) in descs.iter().enumerate() {
-                        items.push(
-                            DropdownItem::new(desc)
-                                .with_action(PanelAction::Mapping(MappingAction::UnmapMacro(*macro_idx, i))),
-                        );
+                        items.push(DropdownItem::new(desc).with_action(PanelAction::Mapping(
+                            MappingAction::UnmapMacro(*macro_idx, i),
+                        )));
                     }
                     if descs.len() > 1 {
                         if let Some(last) = items.last_mut() {
                             last.separator_after = true;
                         }
-                        items.push(
-                            DropdownItem::new("Clear All")
-                                .with_action(PanelAction::Mapping(MappingAction::ClearMacroMappings(*macro_idx))),
-                        );
+                        items.push(DropdownItem::new("Clear All").with_action(
+                            PanelAction::Mapping(MappingAction::ClearMacroMappings(*macro_idx)),
+                        ));
                     }
                 }
                 // Ableton section — same pattern as effect/gen param dropdowns
@@ -1574,9 +1869,13 @@ impl UIRoot {
                     last.separator_after = true;
                 }
                 if self.ableton_session.is_some() {
-                    items.push(DropdownItem::new("Map to Ableton Macro\u{2026}").with_action(
-                        PanelAction::Mapping(MappingAction::OpenAbletonPickerForMacro(*macro_idx)),
-                    ));
+                    items.push(
+                        DropdownItem::new("Map to Ableton Macro\u{2026}").with_action(
+                            PanelAction::Mapping(MappingAction::OpenAbletonPickerForMacro(
+                                *macro_idx,
+                            )),
+                        ),
+                    );
                 } else {
                     let mut item = DropdownItem::new("Ableton not connected");
                     item.enabled = false;
@@ -1595,11 +1894,15 @@ impl UIRoot {
             PanelAction::Root(RootAction::SceneItemRightClicked) => {
                 use manifold_ui::panels::actions::CardEditAction;
                 self.object_cards_have_focus = true;
-                let mut items = card_edit_menu_items(self.scene_item_clipboard.is_some(), false, false);
+                let mut items =
+                    card_edit_menu_items(self.scene_item_clipboard.is_some(), false, false);
                 if let Some(selected) = self.scene_setup_panel.selected_scene_item() {
                     let allowed = |action| self.scene_setup_panel.scene_item_edit_allowed(action);
-                    let (can_copy, can_cut, can_duplicate) =
-                        (allowed(CardEditAction::Copy), allowed(CardEditAction::Cut), allowed(CardEditAction::Duplicate));
+                    let (can_copy, can_cut, can_duplicate) = (
+                        allowed(CardEditAction::Copy),
+                        allowed(CardEditAction::Cut),
+                        allowed(CardEditAction::Duplicate),
+                    );
                     items.retain(|item| match item.label.as_str() {
                         "Copy" => can_copy,
                         "Cut" => can_cut,
@@ -1608,22 +1911,44 @@ impl UIRoot {
                         _ => true,
                     });
                     if let Some(group) = self.scene_setup_panel.group_selection_action() {
-                        items.push(DropdownItem::new("Group").with_action(group).with_separator());
+                        items.push(
+                            DropdownItem::new("Group")
+                                .with_action(group)
+                                .with_separator(),
+                        );
                     }
                     if let Some(ungroup) = self.scene_setup_panel.ungroup_selection_action() {
                         items.push(DropdownItem::new("Ungroup").with_action(ungroup));
                     }
-                    items.push(DropdownItem::new("Rename").with_action(PanelAction::Root(RootAction::SceneItemRename)));
-                    items.push(DropdownItem::new("Move Up").with_action(PanelAction::Root(RootAction::SceneItemMove(-1))));
-                    items.push(DropdownItem::new("Move Down").with_action(PanelAction::Root(RootAction::SceneItemMove(1))));
-                    if !matches!(selected.kind, manifold_core::scene_surface::ItemKind::World | manifold_core::scene_surface::ItemKind::Material | manifold_core::scene_surface::ItemKind::Camera) {
-                        items.push(DropdownItem::new("Frame Selected").with_action(PanelAction::Root(RootAction::SceneItemFrame)));
+                    items.push(
+                        DropdownItem::new("Rename")
+                            .with_action(PanelAction::Root(RootAction::SceneItemRename)),
+                    );
+                    items.push(
+                        DropdownItem::new("Move Up")
+                            .with_action(PanelAction::Root(RootAction::SceneItemMove(-1))),
+                    );
+                    items.push(
+                        DropdownItem::new("Move Down")
+                            .with_action(PanelAction::Root(RootAction::SceneItemMove(1))),
+                    );
+                    if !matches!(
+                        selected.kind,
+                        manifold_core::scene_surface::ItemKind::World
+                            | manifold_core::scene_surface::ItemKind::Material
+                            | manifold_core::scene_surface::ItemKind::Camera
+                    ) {
+                        items.push(
+                            DropdownItem::new("Frame Selected")
+                                .with_action(PanelAction::Root(RootAction::SceneItemFrame)),
+                        );
                     }
                 } else {
                     // Camera and World remain addressable for navigation; only paste applies.
                     items.retain(|item| item.label.starts_with("Paste"));
                 }
-                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                self.dropdown
+                    .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
             PanelAction::Params(ParamsAction::EffectGroupRightClicked(group_id)) => {
@@ -1631,20 +1956,32 @@ impl UIRoot {
                 self.inspector.select_rack_group(group_id, false);
                 self.inspector.apply_selection_visuals(&mut self.tree);
                 let items = card_edit_menu_items(self.effect_clipboard.has_content(), true, true);
-                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                self.dropdown
+                    .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
             PanelAction::Params(ParamsAction::EffectGroupAddModifierClicked(group_id)) => {
-                let mut items = mask_menu_items("Mask", &self.clip_detect_layers, |preset_id, source_layer| {
-                    ParamsAction::AddEffectGroupMask { group_id: group_id.clone(), preset_id, source_layer }
-                });
-                if self.inspector.rack_group_has_mask(self.inspector.last_effect_tab(), group_id) {
+                let mut items = mask_menu_items(
+                    "Mask",
+                    &self.clip_detect_layers,
+                    |preset_id, source_layer| ParamsAction::AddEffectGroupMask {
+                        group_id: group_id.clone(),
+                        preset_id,
+                        source_layer,
+                    },
+                );
+                if self
+                    .inspector
+                    .rack_group_has_mask(self.inspector.last_effect_tab(), group_id)
+                {
                     if let Some(last) = items.last_mut() {
                         last.separator_after = true;
                     }
-                    items.push(DropdownItem::new("Remove Mask").with_action(
-                        PanelAction::Params(ParamsAction::RemoveEffectGroupMask(group_id.clone())),
-                    ));
+                    items.push(
+                        DropdownItem::new("Remove Mask").with_action(PanelAction::Params(
+                            ParamsAction::RemoveEffectGroupMask(group_id.clone()),
+                        )),
+                    );
                 }
                 self.open_dropdown_typed(items, trigger);
                 true
@@ -1661,19 +1998,32 @@ impl UIRoot {
                 if let GraphParamTarget::Effect(clicked_id) = gpt {
                     self.inspector.select_effect_for_context_menu(clicked_id);
                     self.inspector.apply_selection_visuals(&mut self.tree);
-                    items.extend(card_edit_menu_items(self.effect_clipboard.has_content(), true, self.inspector.selection_has_group()));
+                    items.extend(card_edit_menu_items(
+                        self.effect_clipboard.has_content(),
+                        true,
+                        self.inspector.selection_has_group(),
+                    ));
                     let selected = self.inspector.get_selected_effect_indices();
                     // A stale id (the effect left this chain) offers no mask action.
-                    if let Some(idx) = self.inspector.effect_position(self.inspector.active_tab(), clicked_id) {
-                        let selected_indices = if selected.contains(&idx) { selected } else { vec![idx] };
-                        items.extend(mask_menu_items("Add Mask", &self.clip_detect_layers, |preset_id, source_layer| {
-                            ParamsAction::AddMask {
+                    if let Some(idx) = self
+                        .inspector
+                        .effect_position(self.inspector.active_tab(), clicked_id)
+                    {
+                        let selected_indices = if selected.contains(&idx) {
+                            selected
+                        } else {
+                            vec![idx]
+                        };
+                        items.extend(mask_menu_items(
+                            "Add Mask",
+                            &self.clip_detect_layers,
+                            |preset_id, source_layer| ParamsAction::AddMask {
                                 target: gpt.clone(),
                                 selected_indices: selected_indices.clone(),
                                 preset_id,
                                 source_layer,
-                            }
-                        }));
+                            },
+                        ));
                     }
                 }
                 if matches!(gpt, GraphParamTarget::Generator) {
@@ -1689,9 +2039,9 @@ impl UIRoot {
                     }
                 }
                 let has_graph_mod = match gpt {
-                    GraphParamTarget::Effect(effect_id) => {
-                        self.inspector.effect_has_graph_mod(self.inspector.last_effect_tab(), effect_id)
-                    }
+                    GraphParamTarget::Effect(effect_id) => self
+                        .inspector
+                        .effect_has_graph_mod(self.inspector.last_effect_tab(), effect_id),
                     // Same rationale as `is_ableton_mapped` above: card-only
                     // state, `GeneratorOf` doesn't reach `CardRightClicked` in
                     // practice, same query applies if it ever does.
@@ -1703,7 +2053,10 @@ impl UIRoot {
                     if let Some(last) = items.last_mut() {
                         last.separator_after = true;
                     }
-                    for (label, folded) in [("Collapse all sections", true), ("Expand all sections", false)] {
+                    for (label, folded) in [
+                        ("Collapse all sections", true),
+                        ("Expand all sections", false),
+                    ] {
                         items.push(DropdownItem::new(label).with_action(PanelAction::Params(
                             ParamsAction::SetCardSectionsFolded(gpt.clone(), folded),
                         )));
@@ -1790,7 +2143,10 @@ impl UIRoot {
             }
             // The Scene tab's menus (Add, field picks, Material features):
             // each item carries the action it sends.
-            PanelAction::Root(RootAction::SceneSetupActionMenuClicked { button_node_id, items }) => {
+            PanelAction::Root(RootAction::SceneSetupActionMenuClicked {
+                button_node_id,
+                items,
+            }) => {
                 let button = self.tree.get_bounds(*button_node_id);
                 self.open_dropdown_typed(items.clone(), button);
                 true
@@ -1810,15 +2166,19 @@ impl UIRoot {
         };
         match ctx {
             DropdownContext::LayerContext(layer_id) => {
-                vec![PanelAction::Editing(EditingAction::ContextSetLayerColor(layer_id, *color))]
+                vec![PanelAction::Editing(EditingAction::ContextSetLayerColor(
+                    layer_id, *color,
+                ))]
             }
             // The same Begin, Move, Commit transaction the hex entry commits:
             // one undoable write to all three channels.
-            DropdownContext::Colour { target, param_ids } => crate::text_input::material_colour_scrub_actions(
-                crate::text_input::MaterialColourCtx { target, param_ids },
-                [color.r, color.g, color.b].map(|channel| f32::from(channel) / 255.0),
-            )
-            .into(),
+            DropdownContext::Colour { target, param_ids } => {
+                crate::text_input::material_colour_scrub_actions(
+                    crate::text_input::MaterialColourCtx { target, param_ids },
+                    [color.r, color.g, color.b].map(|channel| f32::from(channel) / 255.0),
+                )
+                .into()
+            }
         }
     }
 }
@@ -1944,10 +2304,11 @@ mod led_browser_scoped_open_tests {
             "a non-DMX lane must open on \"All\", not a scoped chip"
         );
         assert!(
-            picker.filtered_len() > picker
-                .all_items()
-                .filter(|it| it.category.as_deref() == Some("LED"))
-                .count(),
+            picker.filtered_len()
+                > picker
+                    .all_items()
+                    .filter(|it| it.category.as_deref() == Some("LED"))
+                    .count(),
             "unscoped open must list more than just the LED presets"
         );
     }
@@ -1969,8 +2330,14 @@ mod led_browser_scoped_open_tests {
         let items = super::trigger_source_menu_items(
             &target,
             &[
-                TriggerSourceChoice { id: LayerId::new("lane-a"), label: "Lane A".into() },
-                TriggerSourceChoice { id: LayerId::new("lane-b"), label: "Lane B".into() },
+                TriggerSourceChoice {
+                    id: LayerId::new("lane-a"),
+                    label: "Lane A".into(),
+                },
+                TriggerSourceChoice {
+                    id: LayerId::new("lane-b"),
+                    label: "Lane B".into(),
+                },
             ],
         );
         assert!(items.iter().any(|item| item.label == "Lane A"));
@@ -2000,10 +2367,12 @@ mod led_browser_scoped_open_tests {
             source: UiClipTriggerSource::Lane(LayerId::new("lane")),
             eligible_sources: vec![LayerId::new("lane")],
         };
-        let super::TriggerTargetPicker { items, actions, secondary_actions, .. } = super::trigger_target_picker_items(
-            &LayerId::new("lane"),
-            &[target],
-        );
+        let super::TriggerTargetPicker {
+            items,
+            actions,
+            secondary_actions,
+            ..
+        } = super::trigger_target_picker_items(&LayerId::new("lane"), &[target]);
         assert!(matches!(&secondary_actions[0], Some(PanelAction::Params(
             manifold_ui::ParamsAction::ShowClipTriggerResponse(UiGraphTarget::Generator(id), param)
         )) if id == &LayerId::new("owner") && param.as_ref() == "fire"));
@@ -2025,12 +2394,24 @@ impl UIRoot {
     /// frame was planned, and the planner already rebuilds an open overlay
     /// with that projection.
     pub(crate) fn refresh_trigger_target_picker(&mut self) {
-        let Some(source) = self.browser_popup.persistent_actions_layer().cloned() else { return; };
-        if !self.trigger_routing.sources.iter().any(|item| item.id == source) {
+        let Some(source) = self.browser_popup.persistent_actions_layer().cloned() else {
+            return;
+        };
+        if !self
+            .trigger_routing
+            .sources
+            .iter()
+            .any(|item| item.id == source)
+        {
             self.browser_popup.close();
         } else {
             let picker = trigger_target_picker_items(&source, &self.trigger_routing.targets);
-            self.browser_popup.refresh_actions(picker.items, picker.categories, picker.actions, picker.secondary_actions);
+            self.browser_popup.refresh_actions(
+                picker.items,
+                picker.categories,
+                picker.actions,
+                picker.secondary_actions,
+            );
         }
     }
 }

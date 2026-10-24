@@ -56,9 +56,15 @@ pub struct AppInputHost<'a> {
 }
 
 impl TimelineInputHost for AppInputHost<'_> {
-    fn navigate_scene_selection(&mut self, delta: i32, reorder: bool) -> bool { self.scene_navigation(delta, reorder) }
-    fn rename_scene_selection(&mut self) -> bool { self.scene_rename_or_frame(true) }
-    fn frame_scene_selection(&mut self) -> bool { self.scene_rename_or_frame(false) }
+    fn navigate_scene_selection(&mut self, delta: i32, reorder: bool) -> bool {
+        self.scene_navigation(delta, reorder)
+    }
+    fn rename_scene_selection(&mut self) -> bool {
+        self.scene_rename_or_frame(true)
+    }
+    fn frame_scene_selection(&mut self) -> bool {
+        self.scene_rename_or_frame(false)
+    }
     fn handle_inspector_keyboard(&mut self) -> bool {
         // Future: inspector arrow key stepping for loop duration.
         // Stub returns false — correct until clip inspector is ported.
@@ -169,7 +175,9 @@ impl TimelineInputHost for AppInputHost<'_> {
     // ── Effect keyboard shortcuts (Unity EffectSelectionManager) ──
 
     fn handle_effect_select_all(&mut self) -> bool {
-        if self.ui_root.object_cards_have_focus { return true; }
+        if self.ui_root.object_cards_have_focus {
+            return true;
+        }
         let selected = self.ui_root.inspector.select_all_effects();
         if selected {
             self.ui_root
@@ -180,7 +188,9 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn handle_effect_copy(&mut self) -> bool {
-        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Copy) { return true; }
+        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Copy) {
+            return true;
+        }
         if self.ui_root.inspector.has_effect_selection() {
             self.copy_effect_selection();
             return true;
@@ -189,17 +199,32 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn handle_effect_cut(&mut self) -> bool {
-        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Cut) { return true; }
+        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Cut) {
+            return true;
+        }
         if self.ui_root.inspector.has_effect_selection() {
             self.copy_effect_selection();
             let target = self.card_effect_target();
             let selected = self.ui_root.inspector.selected_effect_ids();
             let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
-            manifold_editing::commands::effect_target::with_effects(&self.project, &target, |effects, _| {
-                for (index, effect) in effects.iter().enumerate().rev().filter(|(_, effect)| selected.contains(&effect.id)) {
-                    commands.push(Box::new(RemoveEffectCommand::new(target.clone(), effect.clone(), index)));
-                }
-            });
+            manifold_editing::commands::effect_target::with_effects(
+                &self.project,
+                &target,
+                |effects, _| {
+                    for (index, effect) in effects
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .filter(|(_, effect)| selected.contains(&effect.id))
+                    {
+                        commands.push(Box::new(RemoveEffectCommand::new(
+                            target.clone(),
+                            effect.clone(),
+                            index,
+                        )));
+                    }
+                },
+            );
             if !commands.is_empty() {
                 ContentCommand::send(
                     self.content_tx,
@@ -216,34 +241,57 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn handle_effect_paste(&mut self) -> bool {
-        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Paste) { return true; }
+        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Paste) {
+            return true;
+        }
         self.paste_effect_selection()
     }
 
     fn handle_effect_duplicate(&mut self) -> bool {
-        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Duplicate) { return true; }
-        if !self.ui_root.inspector.has_effect_selection() { return false; }
+        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Duplicate) {
+            return true;
+        }
+        if !self.ui_root.inspector.has_effect_selection() {
+            return false;
+        }
         let clipboard = std::mem::take(&mut self.ui_root.effect_clipboard);
         let scene_items = self.ui_root.scene_item_clipboard.take();
-        if self.copy_effect_selection() { self.paste_effect_selection(); }
+        if self.copy_effect_selection() {
+            self.paste_effect_selection();
+        }
         self.ui_root.effect_clipboard = clipboard;
         self.ui_root.scene_item_clipboard = scene_items;
         true
     }
 
     fn handle_effect_delete(&mut self) -> bool {
-        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Delete) { return true; }
+        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Delete) {
+            return true;
+        }
         if !self.ui_root.inspector.has_effect_selection() {
             return false;
         }
         let target = self.card_effect_target();
         let selected = self.ui_root.inspector.selected_effect_ids();
         let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
-        manifold_editing::commands::effect_target::with_effects(&self.project, &target, |effects, _| {
-            for (index, effect) in effects.iter().enumerate().rev().filter(|(_, effect)| selected.contains(&effect.id)) {
-                commands.push(Box::new(RemoveEffectCommand::new(target.clone(), effect.clone(), index)));
-            }
-        });
+        manifold_editing::commands::effect_target::with_effects(
+            &self.project,
+            &target,
+            |effects, _| {
+                for (index, effect) in effects
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .filter(|(_, effect)| selected.contains(&effect.id))
+                {
+                    commands.push(Box::new(RemoveEffectCommand::new(
+                        target.clone(),
+                        effect.clone(),
+                        index,
+                    )));
+                }
+            },
+        );
 
         if !commands.is_empty() {
             ContentCommand::send(
@@ -261,7 +309,9 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn handle_effect_group(&mut self) -> bool {
-        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Group) { return true; }
+        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Group) {
+            return true;
+        }
         let indices = self.ui_root.inspector.get_selected_effect_indices();
         if indices.is_empty() {
             return false;
@@ -281,17 +331,43 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn handle_effect_ungroup(&mut self) -> bool {
-        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Ungroup) { return true; }
-        if !self.ui_root.inspector.has_effect_selection() { return false; }
+        if self.edit_scene_items(manifold_ui::panels::actions::CardEditAction::Ungroup) {
+            return true;
+        }
+        if !self.ui_root.inspector.has_effect_selection() {
+            return false;
+        }
         let target = self.card_effect_target();
         let selected = self.ui_root.inspector.selected_effect_ids();
-        let commands = manifold_editing::commands::effect_target::with_effects(&self.project, &target, |effects, groups| {
-            groups.iter().filter(|group| effects.iter().any(|effect| selected.contains(&effect.id) && effect.group_id.as_ref() == Some(&group.id)))
-                .map(|group| Box::new(manifold_editing::commands::effect_groups::UngroupEffectsCommand::new(target.clone(), group.id.clone())) as Box<dyn Command>)
-                .collect::<Vec<_>>()
-        }).unwrap_or_default();
+        let commands = manifold_editing::commands::effect_target::with_effects(
+            &self.project,
+            &target,
+            |effects, groups| {
+                groups
+                    .iter()
+                    .filter(|group| {
+                        effects.iter().any(|effect| {
+                            selected.contains(&effect.id)
+                                && effect.group_id.as_ref() == Some(&group.id)
+                        })
+                    })
+                    .map(|group| {
+                        Box::new(
+                            manifold_editing::commands::effect_groups::UngroupEffectsCommand::new(
+                                target.clone(),
+                                group.id.clone(),
+                            ),
+                        ) as Box<dyn Command>
+                    })
+                    .collect::<Vec<_>>()
+            },
+        )
+        .unwrap_or_default();
         if !commands.is_empty() {
-            ContentCommand::send(self.content_tx, ContentCommand::ExecuteBatch(commands, "Ungroup effects".into()));
+            ContentCommand::send(
+                self.content_tx,
+                ContentCommand::ExecuteBatch(commands, "Ungroup effects".into()),
+            );
         }
         true
     }
@@ -510,11 +586,11 @@ impl TimelineInputHost for AppInputHost<'_> {
                 .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
                 .collect();
             let region_core = crate::ui_translate::selection_region_to_core(&region);
-            let commands =
-                EditingService::duplicate_clips(project, clip_ids, &region_core);
+            let commands = EditingService::duplicate_clips(project, clip_ids, &region_core);
             if !commands.is_empty() {
                 // Executed locally for read-back (need new clip IDs for selection).
-                self.project.execute_batch(commands, "Duplicate clips".into());
+                self.project
+                    .execute_batch(commands, "Duplicate clips".into());
                 let project = &*self.project;
 
                 // Find newly created clips and select them
@@ -673,8 +749,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn move_selection_across_layers(&mut self, clip_ids: &[ClipId], layer_delta: i32) {
         if let Some(project) = Some(&*self.project) {
-            let commands =
-                EditingService::move_clips_across_layers(project, clip_ids, layer_delta);
+            let commands = EditingService::move_clips_across_layers(project, clip_ids, layer_delta);
             if !commands.is_empty() {
                 ContentCommand::send(
                     self.content_tx,
@@ -740,8 +815,12 @@ impl TimelineInputHost for AppInputHost<'_> {
             return;
         }
 
-        let selected_ids: Vec<LayerId> =
-            self.selection.selected_layer_ids().iter().cloned().collect();
+        let selected_ids: Vec<LayerId> = self
+            .selection
+            .selected_layer_ids()
+            .iter()
+            .cloned()
+            .collect();
 
         if let Some(project) = Some(&*self.project) {
             // Validate: none are nested (have parent) or group layers
@@ -822,8 +901,12 @@ impl TimelineInputHost for AppInputHost<'_> {
             return;
         }
 
-        let selected_ids: Vec<LayerId> =
-            self.selection.selected_layer_ids().iter().cloned().collect();
+        let selected_ids: Vec<LayerId> = self
+            .selection
+            .selected_layer_ids()
+            .iter()
+            .cloned()
+            .collect();
 
         if let Some(project) = Some(&*self.project) {
             // Find indices to delete (in reverse order for safe removal)
@@ -876,10 +959,15 @@ impl TimelineInputHost for AppInputHost<'_> {
         if self.selection.layer_selection_count() == 0 {
             return;
         }
-        let selected_ids: Vec<manifold_core::LayerId> =
-            self.selection.selected_layer_ids().iter().cloned().collect();
+        let selected_ids: Vec<manifold_core::LayerId> = self
+            .selection
+            .selected_layer_ids()
+            .iter()
+            .cloned()
+            .collect();
         if let Some(cmd) = EditingService::duplicate_layers(&self.project, &selected_ids) {
-            self.project.execute_batch(vec![cmd], "Duplicate Layers".to_string());
+            self.project
+                .execute_batch(vec![cmd], "Duplicate Layers".to_string());
         }
     }
 
@@ -897,30 +985,34 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn set_export_in_at_playhead(&mut self) {
         let snapped = self.playhead_on_grid();
-        self.project.mutate(crate::content_command::touch::MARKERS, move |p| {
-            p.timeline.export_in_beat = snapped;
-            p.timeline.export_range_enabled = true;
-        });
+        self.project
+            .mutate(crate::content_command::touch::MARKERS, move |p| {
+                p.timeline.export_in_beat = snapped;
+                p.timeline.export_range_enabled = true;
+            });
         self.push_export_range();
     }
 
     fn set_export_out_at_playhead(&mut self) {
         let snapped = self.playhead_on_grid();
-        self.project.mutate(crate::content_command::touch::MARKERS, move |p| {
-            p.timeline.export_out_beat = snapped;
-            p.timeline.export_range_enabled = true;
-        });
+        self.project
+            .mutate(crate::content_command::touch::MARKERS, move |p| {
+                p.timeline.export_out_beat = snapped;
+                p.timeline.export_range_enabled = true;
+            });
         self.push_export_range();
     }
 
     fn clear_export_in(&mut self) {
         let has_out = self.project.timeline.export_out_beat > self.project.timeline.export_in_beat;
         if has_out {
-            self.project.mutate(crate::content_command::touch::MARKERS, |p| {
-                p.timeline.export_in_beat = manifold_core::Beats::ZERO;
-            });
+            self.project
+                .mutate(crate::content_command::touch::MARKERS, |p| {
+                    p.timeline.export_in_beat = manifold_core::Beats::ZERO;
+                });
         } else {
-            self.project.mutate(crate::content_command::touch::MARKERS, clear_export_range);
+            self.project
+                .mutate(crate::content_command::touch::MARKERS, clear_export_range);
         }
         self.push_export_range();
     }
@@ -929,7 +1021,8 @@ impl TimelineInputHost for AppInputHost<'_> {
         if !self.project.timeline.export_range_enabled {
             return;
         }
-        self.project.mutate(crate::content_command::touch::MARKERS, clear_export_range);
+        self.project
+            .mutate(crate::content_command::touch::MARKERS, clear_export_range);
         self.push_export_range();
     }
 
@@ -1078,7 +1171,9 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn insert_cursor_beat(&self) -> Option<f32> {
-        self.selection.insert_cursor_beat().map(|beat| beat.as_f32())
+        self.selection
+            .insert_cursor_beat()
+            .map(|beat| beat.as_f32())
     }
 
     fn insert_cursor_layer_index(&self) -> Option<usize> {
@@ -1124,9 +1219,9 @@ impl TimelineInputHost for AppInputHost<'_> {
 
         if clip_count == 0 {
             // No clips — reset to default zoom, scroll to start
-            self.ui_root.viewport.set_zoom(
-                manifold_ui::color::ZOOM_LEVELS[manifold_ui::color::DEFAULT_ZOOM_INDEX],
-            );
+            self.ui_root
+                .viewport
+                .set_zoom(manifold_ui::color::ZOOM_LEVELS[manifold_ui::color::DEFAULT_ZOOM_INDEX]);
             self.ui_root.viewport.set_scroll(0.0, 0.0);
             return;
         }
@@ -1211,7 +1306,9 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn zoom_back(&mut self) {
         if let Some((ppb, scroll_x, scroll_y)) = self.ui_root.viewport.recall_zoom_back() {
             self.ui_root.viewport.set_zoom(ppb);
-            self.ui_root.viewport.set_scroll(scroll_x.as_f32(), scroll_y);
+            self.ui_root
+                .viewport
+                .set_scroll(scroll_x.as_f32(), scroll_y);
         }
     }
 
@@ -1224,17 +1321,25 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn delete_selected_markers(&mut self) {
         use manifold_editing::commands::marker::DeleteMarkerCommand;
 
-        let ids: Vec<manifold_core::MarkerId> =
-            self.selection.selected_marker_ids().iter().cloned().collect();
+        let ids: Vec<manifold_core::MarkerId> = self
+            .selection
+            .selected_marker_ids()
+            .iter()
+            .cloned()
+            .collect();
         if ids.is_empty() {
             return;
         }
 
         let commands: Vec<Box<dyn manifold_editing::command::Command>> = ids
             .iter()
-            .map(|id| Box::new(DeleteMarkerCommand::new(id.clone())) as Box<dyn manifold_editing::command::Command>)
+            .map(|id| {
+                Box::new(DeleteMarkerCommand::new(id.clone()))
+                    as Box<dyn manifold_editing::command::Command>
+            })
             .collect();
-        self.project.execute_batch(commands, "Delete Markers".into());
+        self.project
+            .execute_batch(commands, "Delete Markers".into());
         self.selection.clear_marker_selection();
     }
 
@@ -1264,7 +1369,9 @@ impl TimelineInputHost for AppInputHost<'_> {
                     .and_then(|lane| {
                         let param = inst.params.get(param_id_str)?;
                         lane.points.iter().position(|p| {
-                            let range = (param.slider_span().1 - param.slider_span().0).abs().max(f32::EPSILON);
+                            let range = (param.slider_span().1 - param.slider_span().0)
+                                .abs()
+                                .max(f32::EPSILON);
                             let norm = ((p.value - param.slider_span().0) / range).clamp(0.0, 1.0);
                             p.beat == point_ref.beat && norm == point_ref.value_norm
                         })
@@ -1294,8 +1401,12 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn select_all_automation(&mut self) -> bool {
-        if !self.selection.automation_mode_visible() { return false; }
-        let Some((target, param_id)) = self.selection.automation_paste_context.clone() else { return false; };
+        if !self.selection.automation_mode_visible() {
+            return false;
+        }
+        let Some((target, param_id)) = self.selection.automation_paste_context.clone() else {
+            return false;
+        };
         automation::select_all_in_lane(&self.project, self.selection, &target, &param_id);
         // Point selection is drawn at paint time (UI_INVALIDATION D8).
         *self.redraw = true;
@@ -1307,11 +1418,12 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn cut_selected_automation(&mut self) {
-        self.project.with_sent(|p| (automation::cut_selected(
-            p,
-            self.selection,
-            self.content_tx,
-        ), crate::content_command::touch::AUTOMATION));
+        self.project.with_sent(|p| {
+            (
+                automation::cut_selected(p, self.selection, self.content_tx),
+                crate::content_command::touch::AUTOMATION,
+            )
+        });
     }
 
     fn has_automation_paste_target(&self) -> bool {
@@ -1323,43 +1435,57 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn paste_automation(&mut self, target_beat: f32) {
-        let target_beat = self.selection.automation_time_selection.as_ref()
+        let target_beat = self
+            .selection
+            .automation_time_selection
+            .as_ref()
             .map(|range| range.start)
             .or(self.selection.automation_insert_beat)
             .unwrap_or_else(|| Beats::from_f32(target_beat));
-        self.project.with_sent(|p| (automation::paste(
-            p,
-            self.selection,
-            self.content_tx,
-            target_beat,
-        ), crate::content_command::touch::AUTOMATION));
+        self.project.with_sent(|p| {
+            (
+                automation::paste(p, self.selection, self.content_tx, target_beat),
+                crate::content_command::touch::AUTOMATION,
+            )
+        });
     }
 
     fn duplicate_selected_automation(&mut self) {
-        self.project.with_sent(|p| (automation::duplicate_selected(
-            p,
-            self.selection,
-            self.content_tx,
-            self.ui_root.viewport.grid_step(),
-        ), crate::content_command::touch::AUTOMATION));
+        self.project.with_sent(|p| {
+            (
+                automation::duplicate_selected(
+                    p,
+                    self.selection,
+                    self.content_tx,
+                    self.ui_root.viewport.grid_step(),
+                ),
+                crate::content_command::touch::AUTOMATION,
+            )
+        });
     }
 
     fn nudge_selected_automation(&mut self, beat_delta: f32, value_steps: f32) -> bool {
-        self.project.with_sent(|p| (automation::nudge_selected(
-            p,
-            self.selection,
-            self.content_tx,
-            Beats::from_f32(beat_delta),
-            value_steps,
-        ), crate::content_command::touch::AUTOMATION))
+        self.project.with_sent(|p| {
+            (
+                automation::nudge_selected(
+                    p,
+                    self.selection,
+                    self.content_tx,
+                    Beats::from_f32(beat_delta),
+                    value_steps,
+                ),
+                crate::content_command::touch::AUTOMATION,
+            )
+        })
     }
 
     fn delete_selected_automation_points(&mut self) {
-        self.project.with_sent(|p| (automation::delete_selected(
-            p,
-            self.selection,
-            self.content_tx,
-        ), crate::content_command::touch::AUTOMATION));
+        self.project.with_sent(|p| {
+            (
+                automation::delete_selected(p, self.selection, self.content_tx),
+                crate::content_command::touch::AUTOMATION,
+            )
+        });
     }
 
     fn toggle_automation_draw_mode(&mut self) {
@@ -1512,7 +1638,8 @@ impl AppInputHost<'_> {
         use manifold_editing::commands::marker::AddMarkerCommand;
 
         let marker = TimelineMarker::new(self.playhead_on_grid());
-        self.project.execute(Box::new(AddMarkerCommand::new(marker)));
+        self.project
+            .execute(Box::new(AddMarkerCommand::new(marker)));
     }
 }
 
@@ -1543,7 +1670,12 @@ fn resolve_effect_target(
 /// Same shape as `zoom_to_fit`'s inline math (10% padding each side, min 1
 /// beat; center-scroll on the extent), narrowed to `[min_beat, max_beat)`.
 /// Returns `(pixels_per_beat, scroll_x_beats)`.
-fn selection_fit_zoom(min_beat: f32, max_beat: f32, viewport_width: f32, max_ppb: f32) -> (f32, f32) {
+fn selection_fit_zoom(
+    min_beat: f32,
+    max_beat: f32,
+    viewport_width: f32,
+    max_ppb: f32,
+) -> (f32, f32) {
     let extent_beats = (max_beat - min_beat).max(0.0);
     let padding = (extent_beats * 0.1).max(1.0);
     let fit_beats = extent_beats + padding * 2.0;
@@ -1610,9 +1742,9 @@ mod automation_clipboard_host_tests {
     use crossbeam_channel::Receiver;
     use manifold_core::effect_graph_def::ParamSpecDef;
     use manifold_core::effects::{AutomationLane, AutomationPoint, PresetInstance, SegmentShape};
+    use manifold_core::layer::Layer;
     use manifold_core::params::{Param, ParamManifest};
     use manifold_core::{EffectId, LayerId, PresetTypeId};
-    use manifold_core::layer::Layer;
     use manifold_editing::service::EditingService;
     use manifold_ui::ui_state::AutomationTimeSelection;
     use manifold_ui::view::{UiAutomationPointRef, UiGraphTarget, UiSegmentShape};
@@ -1642,53 +1774,109 @@ mod automation_clipboard_host_tests {
             let mut project = manifold_core::project::Project::default();
             let mut effect = PresetInstance::new(PresetTypeId::new("ClipboardTest"));
             let p1 = ParamSpecDef {
-                id: "amount".to_string(), name: "Amount".to_string(), min: 0.0,
-                max: 1.0, default_value: 0.5, ..Default::default()
+                id: "amount".to_string(),
+                name: "Amount".to_string(),
+                min: 0.0,
+                max: 1.0,
+                default_value: 0.5,
+                ..Default::default()
             };
             let p2 = ParamSpecDef {
-                id: "steps".to_string(), name: "Steps".to_string(), min: 0.0,
-                max: 10.0, default_value: 5.0, whole_numbers: true, ..Default::default()
+                id: "steps".to_string(),
+                name: "Steps".to_string(),
+                min: 0.0,
+                max: 10.0,
+                default_value: 5.0,
+                whole_numbers: true,
+                ..Default::default()
             };
-            effect.params = ParamManifest::from_params(vec![Param::bundled(p1), Param::bundled(p2)]);
+            effect.params =
+                ParamManifest::from_params(vec![Param::bundled(p1), Param::bundled(p2)]);
             effect.automation_lanes = Some(vec![
                 AutomationLane {
-                    param_id: manifold_core::effects::ParamId::from("amount"), enabled: true,
+                    param_id: manifold_core::effects::ParamId::from("amount"),
+                    enabled: true,
                     points: vec![
-                        AutomationPoint { beat: Beats(2.0), value: 0.2, shape: SegmentShape::Linear },
-                        AutomationPoint { beat: Beats(6.0), value: 0.6, shape: SegmentShape::CurvedRange { bend: 0.4, start: 0.1, end: 0.9 } },
-                        AutomationPoint { beat: Beats(10.0), value: 0.8, shape: SegmentShape::Hold },
+                        AutomationPoint {
+                            beat: Beats(2.0),
+                            value: 0.2,
+                            shape: SegmentShape::Linear,
+                        },
+                        AutomationPoint {
+                            beat: Beats(6.0),
+                            value: 0.6,
+                            shape: SegmentShape::CurvedRange {
+                                bend: 0.4,
+                                start: 0.1,
+                                end: 0.9,
+                            },
+                        },
+                        AutomationPoint {
+                            beat: Beats(10.0),
+                            value: 0.8,
+                            shape: SegmentShape::Hold,
+                        },
                     ],
                 },
                 AutomationLane {
-                    param_id: manifold_core::effects::ParamId::from("steps"), enabled: true,
+                    param_id: manifold_core::effects::ParamId::from("steps"),
+                    enabled: true,
                     points: vec![
-                        AutomationPoint { beat: Beats(4.0), value: 2.0, shape: SegmentShape::Hold },
-                        AutomationPoint { beat: Beats(8.0), value: 8.0, shape: SegmentShape::Linear },
+                        AutomationPoint {
+                            beat: Beats(4.0),
+                            value: 2.0,
+                            shape: SegmentShape::Hold,
+                        },
+                        AutomationPoint {
+                            beat: Beats(8.0),
+                            value: 8.0,
+                            shape: SegmentShape::Linear,
+                        },
                     ],
                 },
             ]);
             project.settings.master_effects.push(effect);
             Self {
-                project, tx, rx, content_state: Default::default(), ui_root: UIRoot::new(),
-                selection: UIState::new(), active_layer: None, redraw: false,
+                project,
+                tx,
+                rx,
+                content_state: Default::default(),
+                ui_root: UIRoot::new(),
+                selection: UIState::new(),
+                active_layer: None,
+                redraw: false,
                 edits: Default::default(),
-                current_project_path: None, pending_close_output: false, pending_export: false,
-                project_io: crate::project_io::ProjectIOService::new(&crate::user_prefs::UserPrefs::in_memory()),
+                current_project_path: None,
+                pending_close_output: false,
+                pending_export: false,
+                project_io: crate::project_io::ProjectIOService::new(
+                    &crate::user_prefs::UserPrefs::in_memory(),
+                ),
                 import_failures_rx: None,
                 #[cfg(target_os = "macos")]
                 internal_clipboard_change_count: None,
             }
         }
 
-        fn effect_id(&self) -> EffectId { self.project.settings.master_effects[0].id.clone() }
+        fn effect_id(&self) -> EffectId {
+            self.project.settings.master_effects[0].id.clone()
+        }
 
         fn host(&mut self) -> AppInputHost<'_> {
             AppInputHost {
-                project: crate::ui_bridge::ProjectRef::new(&mut self.project, &mut self.edits, &self.tx), content_tx: &self.tx,
-                content_state: &self.content_state, ui_root: &mut self.ui_root,
-                selection: &mut self.selection, active_layer: &mut self.active_layer,
+                project: crate::ui_bridge::ProjectRef::new(
+                    &mut self.project,
+                    &mut self.edits,
+                    &self.tx,
+                ),
+                content_tx: &self.tx,
+                content_state: &self.content_state,
+                ui_root: &mut self.ui_root,
+                selection: &mut self.selection,
+                active_layer: &mut self.active_layer,
                 redraw: &mut self.redraw,
-                current_project_path: &self.current_project_path, has_output_window: false,
+                current_project_path: &self.current_project_path,
+                has_output_window: false,
                 pending_close_output: &mut self.pending_close_output,
                 pending_export: &mut self.pending_export,
                 project_io: &mut self.project_io,
@@ -1700,39 +1888,69 @@ mod automation_clipboard_host_tests {
 
         fn select(&mut self, points: &[(&str, f64)]) {
             let target = UiGraphTarget::Effect(self.effect_id());
-            self.selection.selected_automation_points = points.iter().map(|(param, beat)| {
-                let effect = &self.project.settings.master_effects[0];
-                let param_spec = effect.params.get(param).expect("clipboard fixture parameter").spec.clone();
-                let lane = effect.automation_lanes.as_ref().expect("clipboard fixture lanes")
-                    .iter().find(|lane| lane.param_id.as_ref() == *param)
-                    .expect("clipboard fixture lane");
-                let point = lane.points.iter().find(|point| point.beat == Beats(*beat))
-                    .expect("clipboard fixture point");
-                UiAutomationPointRef {
-                    target: target.clone(),
-                    param_id: manifold_core::effects::ParamId::from((*param).to_string()),
-                    beat: Beats(*beat),
-                    value_norm: manifold_ui::slider::BitmapSlider::value_to_normalized(
-                        point.value, param_spec.min, param_spec.max,
-                    ),
-                }
-            }).collect();
+            self.selection.selected_automation_points = points
+                .iter()
+                .map(|(param, beat)| {
+                    let effect = &self.project.settings.master_effects[0];
+                    let param_spec = effect
+                        .params
+                        .get(param)
+                        .expect("clipboard fixture parameter")
+                        .spec
+                        .clone();
+                    let lane = effect
+                        .automation_lanes
+                        .as_ref()
+                        .expect("clipboard fixture lanes")
+                        .iter()
+                        .find(|lane| lane.param_id.as_ref() == *param)
+                        .expect("clipboard fixture lane");
+                    let point = lane
+                        .points
+                        .iter()
+                        .find(|point| point.beat == Beats(*beat))
+                        .expect("clipboard fixture point");
+                    UiAutomationPointRef {
+                        target: target.clone(),
+                        param_id: manifold_core::effects::ParamId::from((*param).to_string()),
+                        beat: Beats(*beat),
+                        value_norm: manifold_ui::slider::BitmapSlider::value_to_normalized(
+                            point.value,
+                            param_spec.min,
+                            param_spec.max,
+                        ),
+                    }
+                })
+                .collect();
             self.selection.selected_automation_point = None;
         }
     }
 
-
-    fn drain_batch(h: &Harness, authoritative: &mut manifold_core::project::Project, service: &mut EditingService) {
+    fn drain_batch(
+        h: &Harness,
+        authoritative: &mut manifold_core::project::Project,
+        service: &mut EditingService,
+    ) {
         match h.rx.try_recv().expect("host must emit one command") {
-            ContentCommand::ExecuteBatch(commands, description) => service.execute_batch(commands, description, authoritative),
+            ContentCommand::ExecuteBatch(commands, description) => {
+                service.execute_batch(commands, description, authoritative)
+            }
             _ => panic!("expected an automation ExecuteBatch"),
         }
     }
 
     fn points(project: &manifold_core::project::Project, param: &str) -> Vec<(f64, f32)> {
-        project.settings.master_effects[0].automation_lanes.as_ref().unwrap()
-            .iter().find(|l| l.param_id.as_ref() == param).unwrap().points.iter()
-            .map(|p| (p.beat.0, p.value)).collect()
+        project.settings.master_effects[0]
+            .automation_lanes
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|l| l.param_id.as_ref() == param)
+            .unwrap()
+            .points
+            .iter()
+            .map(|p| (p.beat.0, p.value))
+            .collect()
     }
 
     #[test]
@@ -1741,30 +1959,51 @@ mod automation_clipboard_host_tests {
             let mut h = Harness::new();
             let mut layer = Layer::new("Effects".into(), manifold_core::types::LayerType::Video, 0);
             let layer_id = layer.layer_id.clone();
-            let effects = (0..count).map(|_| PresetInstance::new(PresetTypeId::new("Mirror"))).collect::<Vec<_>>();
-            let surfaces = effects.iter().enumerate().map(|(index, effect)| {
-                manifold_ui::param_surface::ParamSurface {
+            let effects = (0..count)
+                .map(|_| PresetInstance::new(PresetTypeId::new("Mirror")))
+                .collect::<Vec<_>>();
+            let surfaces = effects
+                .iter()
+                .enumerate()
+                .map(|(index, effect)| manifold_ui::param_surface::ParamSurface {
                     kind: manifold_ui::panels::param_card::ParamCardKind::Effect,
-                    title: "Mirror".into(), collapsed: false, enabled: true,
-                    effect_index: index, effect_id: effect.id.clone(), supports_envelopes: true,
-                    has_graph_mod: false, layer_id: Some(layer_id.clone()),
-                    rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
-                }
-            }).collect::<Vec<_>>();
+                    title: "Mirror".into(),
+                    collapsed: false,
+                    enabled: true,
+                    effect_index: index,
+                    effect_id: effect.id.clone(),
+                    supports_envelopes: true,
+                    has_graph_mod: false,
+                    layer_id: Some(layer_id.clone()),
+                    rows: Vec::new(),
+                    string_params: Vec::new(),
+                    audio_sends: Vec::new(),
+                })
+                .collect::<Vec<_>>();
             layer.effects = Some(effects);
             h.project.timeline.layers.push(layer);
             h.active_layer = Some(layer_id.clone());
-            h.ui_root.inspector.configure_layer_effects(&surfaces, Some(&layer_id));
+            h.ui_root
+                .inspector
+                .configure_layer_effects(&surfaces, Some(&layer_id));
             assert!(h.ui_root.inspector.select_all_effects());
             let mut input = crate::input_handler::InputHandler::new();
             input.inspector_has_focus = true;
             assert!(input.handle_keyboard_input(
                 &winit::keyboard::Key::Character("g".into()),
-                manifold_ui::input::Modifiers { command: true, ..Default::default() },
+                manifold_ui::input::Modifiers {
+                    command: true,
+                    ..Default::default()
+                },
                 &mut h.host(),
             ));
-            assert!(h.project.timeline.layers[0].effect_groups.is_none(), "UI must not mutate the model");
-            let ContentCommand::ExecuteOnContent(mut command) = h.rx.try_recv().expect("group queued") else {
+            assert!(
+                h.project.timeline.layers[0].effect_groups.is_none(),
+                "UI must not mutate the model"
+            );
+            let ContentCommand::ExecuteOnContent(mut command) =
+                h.rx.try_recv().expect("group queued")
+            else {
                 panic!("group must execute on content thread");
             };
             command.execute(&mut h.project);
@@ -1773,9 +2012,23 @@ mod automation_clipboard_host_tests {
             assert_eq!(groups.len(), 1);
             assert_eq!(groups[0].name, "Modifier Group");
             assert!(groups[0].mask_effect_id.is_none());
-            assert!(layer.effects.as_ref().unwrap().iter().all(|effect| effect.group_id.as_ref() == Some(&groups[0].id)));
+            assert!(
+                layer
+                    .effects
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .all(|effect| effect.group_id.as_ref() == Some(&groups[0].id))
+            );
             command.undo(&mut h.project);
-            assert!(h.project.timeline.layers[0].effects.as_ref().unwrap().iter().all(|effect| effect.group_id.is_none()));
+            assert!(
+                h.project.timeline.layers[0]
+                    .effects
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .all(|effect| effect.group_id.is_none())
+            );
         }
     }
 
@@ -1790,40 +2043,87 @@ mod automation_clipboard_host_tests {
         h.project.settings.master_effects[0].group_id = Some(group.id.clone());
         h.project.settings.master_effects.push(second);
         h.project.settings.master_effect_groups = Some(vec![group.clone()]);
-        let surfaces = |effects: &[PresetInstance]| effects.iter().enumerate().map(|(index, effect)| {
-            manifold_ui::param_surface::ParamSurface {
-                kind: manifold_ui::panels::param_card::ParamCardKind::Effect,
-                title: "Card".into(), collapsed: false, enabled: true,
-                effect_index: index, effect_id: effect.id.clone(), supports_envelopes: true,
-                has_graph_mod: false, layer_id: None,
-                rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
-            }
-        }).collect::<Vec<_>>();
-        h.ui_root.inspector.configure_master_effects(&surfaces(&h.project.settings.master_effects));
-        h.ui_root.inspector.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
-        let ids = h.project.settings.master_effects.iter().map(|effect| effect.id.clone()).collect::<Vec<_>>();
-        h.ui_root.inspector.select_effect_ids(InspectorTab::Master, &ids);
+        let surfaces = |effects: &[PresetInstance]| {
+            effects
+                .iter()
+                .enumerate()
+                .map(|(index, effect)| manifold_ui::param_surface::ParamSurface {
+                    kind: manifold_ui::panels::param_card::ParamCardKind::Effect,
+                    title: "Card".into(),
+                    collapsed: false,
+                    enabled: true,
+                    effect_index: index,
+                    effect_id: effect.id.clone(),
+                    supports_envelopes: true,
+                    has_graph_mod: false,
+                    layer_id: None,
+                    rows: Vec::new(),
+                    string_params: Vec::new(),
+                    audio_sends: Vec::new(),
+                })
+                .collect::<Vec<_>>()
+        };
+        h.ui_root
+            .inspector
+            .configure_master_effects(&surfaces(&h.project.settings.master_effects));
+        h.ui_root
+            .inspector
+            .configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
+        let ids = h
+            .project
+            .settings
+            .master_effects
+            .iter()
+            .map(|effect| effect.id.clone())
+            .collect::<Vec<_>>();
+        h.ui_root
+            .inspector
+            .select_effect_ids(InspectorTab::Master, &ids);
         assert!(h.host().handle_effect_copy());
         let before = serde_json::to_vec(&h.project.settings).unwrap();
         assert!(h.host().handle_effect_paste());
         assert_eq!(before, serde_json::to_vec(&h.project.settings).unwrap());
-        assert_eq!(h.ui_root.inspector.selected_effect_ids(), ids, "keep selection until paste succeeds");
-        let ContentCommand::ExecuteSelecting(command, request) = h.rx.try_recv().unwrap() else { panic!("atomic paste"); };
+        assert_eq!(
+            h.ui_root.inspector.selected_effect_ids(),
+            ids,
+            "keep selection until paste succeeds"
+        );
+        let ContentCommand::ExecuteSelecting(command, request) = h.rx.try_recv().unwrap() else {
+            panic!("atomic paste");
+        };
         let pending = request.capture(&h.project);
         let mut service = EditingService::new();
         service.execute(command, &mut h.project);
-        let update = crate::edit_selection::EditSelectionUpdate { sequence: 1, selection: pending.resolve(&h.project).expect("accepted paste") };
-        crate::edit_selection::apply_update(&mut h.ui_root, &h.project, Some(&update), &mut h.selection, &mut h.active_layer);
+        let update = crate::edit_selection::EditSelectionUpdate {
+            sequence: 1,
+            selection: pending.resolve(&h.project).expect("accepted paste"),
+        };
+        crate::edit_selection::apply_update(
+            &mut h.ui_root,
+            &h.project,
+            Some(&update),
+            &mut h.selection,
+            &mut h.active_layer,
+        );
         let effects = &h.project.settings.master_effects;
         assert_eq!(effects.len(), 4);
-        let pasted_ids: Vec<_> = effects[2..].iter().map(|effect| effect.id.clone()).collect();
+        let pasted_ids: Vec<_> = effects[2..]
+            .iter()
+            .map(|effect| effect.id.clone())
+            .collect();
         let pasted_groups = h.project.settings.master_effect_groups.as_ref().unwrap();
         assert_eq!(pasted_groups.len(), 2);
         assert_ne!(pasted_groups[1].id, group.id);
         assert_eq!(pasted_groups[1].name, "My group");
         assert!(pasted_groups[1].collapsed);
-        assert!(effects[2..].iter().all(|effect| effect.group_id.as_ref() == Some(&pasted_groups[1].id)));
-        h.ui_root.inspector.configure_master_effects(&surfaces(effects));
+        assert!(
+            effects[2..]
+                .iter()
+                .all(|effect| effect.group_id.as_ref() == Some(&pasted_groups[1].id))
+        );
+        h.ui_root
+            .inspector
+            .configure_master_effects(&surfaces(effects));
         assert_eq!(h.ui_root.inspector.selected_effect_ids(), pasted_ids);
         assert!(service.undo(&mut h.project));
         assert_eq!(serde_json::to_vec(&h.project.settings).unwrap(), before);
@@ -1839,67 +2139,165 @@ mod automation_clipboard_host_tests {
         let effects = (0..3)
             .map(|_| PresetInstance::new(PresetTypeId::new("Mirror")))
             .collect::<Vec<_>>();
-        let surfaces = effects.iter().enumerate().map(|(index, effect)| {
-            manifold_ui::param_surface::ParamSurface {
+        let surfaces = effects
+            .iter()
+            .enumerate()
+            .map(|(index, effect)| manifold_ui::param_surface::ParamSurface {
                 kind: manifold_ui::panels::param_card::ParamCardKind::Effect,
-                title: "Mirror".into(), collapsed: false, enabled: true,
-                effect_index: index, effect_id: effect.id.clone(), supports_envelopes: true,
-                has_graph_mod: false, layer_id: Some(layer_id.clone()),
-                rows: Vec::new(), string_params: Vec::new(), audio_sends: Vec::new(),
-            }
-        }).collect::<Vec<_>>();
+                title: "Mirror".into(),
+                collapsed: false,
+                enabled: true,
+                effect_index: index,
+                effect_id: effect.id.clone(),
+                supports_envelopes: true,
+                has_graph_mod: false,
+                layer_id: Some(layer_id.clone()),
+                rows: Vec::new(),
+                string_params: Vec::new(),
+                audio_sends: Vec::new(),
+            })
+            .collect::<Vec<_>>();
         layer.effects = Some(effects);
         h.project.timeline.layers.push(layer);
         h.active_layer = Some(layer_id.clone());
-        h.ui_root.inspector.configure_layer_effects(&surfaces, Some(&layer_id));
+        h.ui_root
+            .inspector
+            .configure_layer_effects(&surfaces, Some(&layer_id));
         assert!(h.ui_root.inspector.select_all_effects());
 
         let before = serde_json::to_vec(&h.project).expect("project serializes");
-        let before_effects = serde_json::to_vec(&h.project.timeline.find_layer_by_id(&layer_id).unwrap().1.effects).unwrap();
+        let before_effects = serde_json::to_vec(
+            &h.project
+                .timeline
+                .find_layer_by_id(&layer_id)
+                .unwrap()
+                .1
+                .effects,
+        )
+        .unwrap();
         assert!(h.host().handle_effect_cut());
-        assert_eq!(serde_json::to_vec(&h.project).expect("project serializes"), before);
+        assert_eq!(
+            serde_json::to_vec(&h.project).expect("project serializes"),
+            before
+        );
         let (cut_commands, cut_description) = match h.rx.try_recv().expect("cut batch") {
             ContentCommand::ExecuteBatch(commands, description) => (commands, description),
-            other => panic!("expected effect cut batch, got {:?}", std::mem::discriminant(&other)),
+            other => panic!(
+                "expected effect cut batch, got {:?}",
+                std::mem::discriminant(&other)
+            ),
         };
         assert_eq!(cut_commands.len(), 3);
 
         let mut authoritative = h.project.clone();
         let mut service = EditingService::new();
         service.execute_batch(cut_commands, cut_description, &mut authoritative);
-        assert!(authoritative.timeline.find_layer_by_id(&layer_id).unwrap().1.effects.as_ref().is_none_or(Vec::is_empty));
+        assert!(
+            authoritative
+                .timeline
+                .find_layer_by_id(&layer_id)
+                .unwrap()
+                .1
+                .effects
+                .as_ref()
+                .is_none_or(Vec::is_empty)
+        );
         assert!(service.undo(&mut authoritative));
-        assert_eq!(serde_json::to_vec(&authoritative.timeline.find_layer_by_id(&layer_id).unwrap().1.effects).unwrap(), before_effects);
+        assert_eq!(
+            serde_json::to_vec(
+                &authoritative
+                    .timeline
+                    .find_layer_by_id(&layer_id)
+                    .unwrap()
+                    .1
+                    .effects
+            )
+            .unwrap(),
+            before_effects
+        );
         assert!(service.redo(&mut authoritative));
 
         let before_paste = serde_json::to_vec(&h.project).expect("project serializes");
         assert!(h.host().handle_effect_paste());
-        assert_eq!(serde_json::to_vec(&h.project).expect("project serializes"), before_paste);
+        assert_eq!(
+            serde_json::to_vec(&h.project).expect("project serializes"),
+            before_paste
+        );
         let paste_command = match h.rx.try_recv().expect("paste command") {
             ContentCommand::ExecuteSelecting(command, _) => command,
-            other => panic!("expected atomic effect paste, got {:?}", std::mem::discriminant(&other)),
+            other => panic!(
+                "expected atomic effect paste, got {:?}",
+                std::mem::discriminant(&other)
+            ),
         };
         service.execute(paste_command, &mut authoritative);
-        assert_eq!(authoritative.timeline.find_layer_by_id(&layer_id).unwrap().1.effects.as_ref().unwrap().len(), 3);
+        assert_eq!(
+            authoritative
+                .timeline
+                .find_layer_by_id(&layer_id)
+                .unwrap()
+                .1
+                .effects
+                .as_ref()
+                .unwrap()
+                .len(),
+            3
+        );
         assert!(service.undo(&mut authoritative));
-        assert!(authoritative.timeline.find_layer_by_id(&layer_id).unwrap().1.effects.as_ref().is_none_or(Vec::is_empty));
+        assert!(
+            authoritative
+                .timeline
+                .find_layer_by_id(&layer_id)
+                .unwrap()
+                .1
+                .effects
+                .as_ref()
+                .is_none_or(Vec::is_empty)
+        );
         assert!(service.redo(&mut authoritative));
-        assert_eq!(authoritative.timeline.find_layer_by_id(&layer_id).unwrap().1.effects.as_ref().unwrap().len(), 3);
+        assert_eq!(
+            authoritative
+                .timeline
+                .find_layer_by_id(&layer_id)
+                .unwrap()
+                .1
+                .effects
+                .as_ref()
+                .unwrap()
+                .len(),
+            3
+        );
     }
-
-
-
 
     #[test]
     fn paste_multilane_preserves_relative_timing_and_undoes_collision_exactly() {
         let mut h = Harness::new();
-        h.select(&[("amount", 2.0), ("amount", 6.0), ("steps", 4.0), ("steps", 8.0)]);
+        h.select(&[
+            ("amount", 2.0),
+            ("amount", 6.0),
+            ("steps", 4.0),
+            ("steps", 8.0),
+        ]);
         let before = h.project.clone();
-        { let mut host = h.host(); host.copy_selected_automation(); host.paste_automation(10.0); }
-        let amount = h.project.settings.master_effects[0].automation_lanes.as_ref().unwrap()
-            .iter().find(|lane| lane.param_id.as_ref() == "amount").unwrap();
-        let steps = h.project.settings.master_effects[0].automation_lanes.as_ref().unwrap()
-            .iter().find(|lane| lane.param_id.as_ref() == "steps").unwrap();
+        {
+            let mut host = h.host();
+            host.copy_selected_automation();
+            host.paste_automation(10.0);
+        }
+        let amount = h.project.settings.master_effects[0]
+            .automation_lanes
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|lane| lane.param_id.as_ref() == "amount")
+            .unwrap();
+        let steps = h.project.settings.master_effects[0]
+            .automation_lanes
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|lane| lane.param_id.as_ref() == "steps")
+            .unwrap();
         assert_eq!(amount.value_at(Beats(10.0)), 0.2);
         assert_eq!(amount.value_at(Beats(14.0)), 0.6);
         assert_eq!(steps.value_at(Beats(12.0)), 2.0);
@@ -1907,11 +2305,22 @@ mod automation_clipboard_host_tests {
         let mut authoritative = before.clone();
         let mut service = EditingService::new();
         drain_batch(&h, &mut authoritative, &mut service);
-        assert_eq!(points(&authoritative, "amount"), points(&h.project, "amount"));
+        assert_eq!(
+            points(&authoritative, "amount"),
+            points(&h.project, "amount")
+        );
         assert!(service.undo(&mut authoritative));
-        assert_eq!(serde_json::to_value(&authoritative.settings.master_effects[0].automation_lanes).unwrap(), serde_json::to_value(&before.settings.master_effects[0].automation_lanes).unwrap());
+        assert_eq!(
+            serde_json::to_value(&authoritative.settings.master_effects[0].automation_lanes)
+                .unwrap(),
+            serde_json::to_value(&before.settings.master_effects[0].automation_lanes).unwrap()
+        );
         assert!(service.redo(&mut authoritative));
-        assert_eq!(serde_json::to_value(&authoritative.settings.master_effects[0].automation_lanes).unwrap(), serde_json::to_value(&h.project.settings.master_effects[0].automation_lanes).unwrap());
+        assert_eq!(
+            serde_json::to_value(&authoritative.settings.master_effects[0].automation_lanes)
+                .unwrap(),
+            serde_json::to_value(&h.project.settings.master_effects[0].automation_lanes).unwrap()
+        );
     }
 
     #[test]
@@ -1919,7 +2328,10 @@ mod automation_clipboard_host_tests {
         let mut h = Harness::new();
         let target = UiGraphTarget::Effect(h.effect_id());
         h.select(&[("amount", 2.0), ("amount", 6.0)]);
-        { let mut host = h.host(); host.copy_selected_automation(); }
+        {
+            let mut host = h.host();
+            host.copy_selected_automation();
+        }
         h.selection.selected_automation_point = Some(UiAutomationPointRef {
             target,
             param_id: "steps".into(),
@@ -1927,12 +2339,24 @@ mod automation_clipboard_host_tests {
             value_norm: manifold_ui::slider::BitmapSlider::value_to_normalized(2.0, 0.0, 10.0),
         });
         h.selection.selected_automation_points.clear();
-        { let mut host = h.host(); host.paste_automation(20.0); }
+        {
+            let mut host = h.host();
+            host.paste_automation(20.0);
+        }
         assert!(points(&h.project, "steps").contains(&(20.0, 2.0)));
         assert_eq!(h.selection.selected_automation_points.len(), 2);
-        let lane = h.project.settings.master_effects[0].automation_lanes.as_ref().unwrap()
-            .iter().find(|lane| lane.param_id.as_ref() == "steps").unwrap();
-        assert_eq!(lane.value_at(Beats(23.5)), 2.0, "integer destinations hold between pasted points");
+        let lane = h.project.settings.master_effects[0]
+            .automation_lanes
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|lane| lane.param_id.as_ref() == "steps")
+            .unwrap();
+        assert_eq!(
+            lane.value_at(Beats(23.5)),
+            2.0,
+            "integer destinations hold between pasted points"
+        );
         assert_eq!(lane.value_at(Beats(24.0)), 6.0);
     }
 
@@ -1940,34 +2364,59 @@ mod automation_clipboard_host_tests {
     fn time_range_copy_carries_empty_interior_and_curved_boundaries() {
         let mut h = Harness::new();
         h.project.settings.master_effects[0]
-            .automation_lanes.as_mut().unwrap()[0].points[0].shape = SegmentShape::Curved(0.6);
+            .automation_lanes
+            .as_mut()
+            .unwrap()[0]
+            .points[0]
+            .shape = SegmentShape::Curved(0.6);
         let target = UiGraphTarget::Effect(h.effect_id());
         h.selection.automation_time_selection = Some(AutomationTimeSelection {
             start: Beats(3.0),
             end: Beats(5.0),
             lanes: vec![(target.clone(), "amount".into())],
         });
-        { let mut host = h.host(); host.copy_selected_automation(); }
+        {
+            let mut host = h.host();
+            host.copy_selected_automation();
+        }
         let clipboard = h.selection.automation_clipboard.as_ref().unwrap();
         assert_eq!(clipboard.span, Beats(2.0));
-        assert_eq!(clipboard.points.len(), 2, "no authored point lies inside the range");
+        assert_eq!(
+            clipboard.points.len(),
+            2,
+            "no authored point lies inside the range"
+        );
         assert_eq!(clipboard.points[0].beat_offset, Beats::ZERO);
         assert_eq!(clipboard.points[1].beat_offset, Beats(2.0));
         assert_eq!(
             clipboard.points[0].shape,
-            UiSegmentShape::CurvedRange { bend: 0.6, start: 0.25, end: 0.75 }
+            UiSegmentShape::CurvedRange {
+                bend: 0.6,
+                start: 0.25,
+                end: 0.75
+            }
         );
         let copied_values = (clipboard.points[0].value, clipboard.points[1].value);
         h.selection.clear_automation_selection();
         h.selection.automation_time_selection = Some(AutomationTimeSelection {
-            start: Beats(12.0), end: Beats(14.0), lanes: vec![(target, "amount".into())],
+            start: Beats(12.0),
+            end: Beats(14.0),
+            lanes: vec![(target, "amount".into())],
         });
-        { let mut host = h.host(); host.paste_automation(100.0); }
-        let lane = &h.project.settings.master_effects[0].automation_lanes.as_ref().unwrap()[0];
+        {
+            let mut host = h.host();
+            host.paste_automation(100.0);
+        }
+        let lane = &h.project.settings.master_effects[0]
+            .automation_lanes
+            .as_ref()
+            .unwrap()[0];
         assert_eq!(lane.value_at(Beats(12.0)), copied_values.0);
         assert_eq!(lane.value_at(Beats(14.0)), copied_values.1);
-        assert!(lane.points.iter().all(|point| point.beat < Beats(100.0)),
-            "an empty selected range supplies both the lane and insertion beat");
+        assert!(
+            lane.points.iter().all(|point| point.beat < Beats(100.0)),
+            "an empty selected range supplies both the lane and insertion beat"
+        );
     }
 
     #[test]
@@ -1980,16 +2429,25 @@ mod automation_clipboard_host_tests {
             lanes: vec![(target, "amount".into())],
         });
         let before = h.project.clone();
-        { let mut host = h.host(); host.cut_selected_automation(); }
-        let lane = h.project.settings.master_effects[0].automation_lanes.as_ref().unwrap()
-            .iter().find(|lane| lane.param_id.as_ref() == "amount").unwrap();
+        {
+            let mut host = h.host();
+            host.cut_selected_automation();
+        }
+        let lane = h.project.settings.master_effects[0]
+            .automation_lanes
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|lane| lane.param_id.as_ref() == "amount")
+            .unwrap();
         assert_eq!(lane.value_at(Beats(4.0)), lane.value_at(Beats(3.0)));
         let mut authoritative = before.clone();
         let mut service = EditingService::new();
         drain_batch(&h, &mut authoritative, &mut service);
         assert!(service.undo(&mut authoritative));
         assert_eq!(
-            serde_json::to_value(&authoritative.settings.master_effects[0].automation_lanes).unwrap(),
+            serde_json::to_value(&authoritative.settings.master_effects[0].automation_lanes)
+                .unwrap(),
             serde_json::to_value(&before.settings.master_effects[0].automation_lanes).unwrap()
         );
     }
@@ -1999,19 +2457,33 @@ mod automation_clipboard_host_tests {
         let mut h = Harness::new();
         h.select(&[("amount", 2.0), ("amount", 6.0)]);
         let before = h.project.clone();
-        { let mut host = h.host(); host.duplicate_selected_automation(); }
-        let amount = h.project.settings.master_effects[0].automation_lanes.as_ref().unwrap()
-            .iter().find(|lane| lane.param_id.as_ref() == "amount").unwrap();
+        {
+            let mut host = h.host();
+            host.duplicate_selected_automation();
+        }
+        let amount = h.project.settings.master_effects[0]
+            .automation_lanes
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|lane| lane.param_id.as_ref() == "amount")
+            .unwrap();
         assert_eq!(amount.value_at(Beats(6.0)), 0.2);
         assert_eq!(amount.value_at(Beats(10.0)), 0.6);
         let mut authoritative = before;
         let mut service = EditingService::new();
         drain_batch(&h, &mut authoritative, &mut service);
         assert!(service.undo(&mut authoritative));
-        assert_eq!(points(&authoritative, "amount"), vec![(2.0, 0.2), (6.0, 0.6), (10.0, 0.8)]);
+        assert_eq!(
+            points(&authoritative, "amount"),
+            vec![(2.0, 0.2), (6.0, 0.6), (10.0, 0.8)]
+        );
         let mut empty = Harness::new();
         empty.select(&[("amount", 2.0)]);
-        { let mut host = empty.host(); host.paste_automation(12.0); }
+        {
+            let mut host = empty.host();
+            host.paste_automation(12.0);
+        }
         assert!(empty.rx.try_recv().is_err());
     }
 
@@ -2019,11 +2491,17 @@ mod automation_clipboard_host_tests {
     fn missing_source_target_after_project_switch_is_a_safe_noop() {
         let mut h = Harness::new();
         h.select(&[("amount", 2.0)]);
-        { let mut host = h.host(); host.copy_selected_automation(); }
+        {
+            let mut host = h.host();
+            host.copy_selected_automation();
+        }
         h.project = manifold_core::project::Project::default();
         h.selection.selected_automation_point = None;
         h.selection.selected_automation_points.clear();
-        { let mut host = h.host(); host.paste_automation(12.0); }
+        {
+            let mut host = h.host();
+            host.paste_automation(12.0);
+        }
         assert!(h.rx.try_recv().is_err());
     }
 
@@ -2034,15 +2512,34 @@ mod automation_clipboard_host_tests {
         h.project.settings.time_signature_numerator = 3;
         let target = UiGraphTarget::Effect(h.effect_id());
         let mut authoritative = h.project.clone();
-        automation::insert_shape(&mut h.project, &mut h.selection, &h.tx, &target,
-            &"amount".into(), Beats(5.0), manifold_ui::panels::actions::AutomationShape::Triangle);
-        assert_eq!(points(&h.project, "amount"), vec![(5.0, 0.0), (6.5, 1.0), (8.0, 0.0)]);
-        let ContentCommand::Execute(command) = h.rx.try_recv().unwrap() else { panic!("one undoable shape"); };
+        automation::insert_shape(
+            &mut h.project,
+            &mut h.selection,
+            &h.tx,
+            &target,
+            &"amount".into(),
+            Beats(5.0),
+            manifold_ui::panels::actions::AutomationShape::Triangle,
+        );
+        assert_eq!(
+            points(&h.project, "amount"),
+            vec![(5.0, 0.0), (6.5, 1.0), (8.0, 0.0)]
+        );
+        let ContentCommand::Execute(command) = h.rx.try_recv().unwrap() else {
+            panic!("one undoable shape");
+        };
         let mut service = EditingService::new();
         service.execute(command, &mut authoritative);
-        assert_eq!(points(&authoritative, "amount"), points(&h.project, "amount"));
+        assert_eq!(
+            points(&authoritative, "amount"),
+            points(&h.project, "amount")
+        );
         assert!(service.undo(&mut authoritative));
-        assert!(authoritative.settings.master_effects[0].automation_lanes.is_none());
+        assert!(
+            authoritative.settings.master_effects[0]
+                .automation_lanes
+                .is_none()
+        );
     }
 
     #[test]
@@ -2060,16 +2557,25 @@ mod automation_clipboard_host_tests {
             assert!(host.has_automation_paste_target());
             host.paste_automation(12.0);
         }
-        assert_eq!(points(&h.project, "amount"), vec![(6.0, 0.6), (10.0, 0.8), (12.0, 0.2)],
-            "a single-point paste creates a breakpoint, without zero-duration punch guards");
+        assert_eq!(
+            points(&h.project, "amount"),
+            vec![(6.0, 0.6), (10.0, 0.8), (12.0, 0.2)],
+            "a single-point paste creates a breakpoint, without zero-duration punch guards"
+        );
         let mut authoritative = before;
         let mut service = EditingService::new();
         drain_batch(&h, &mut authoritative, &mut service);
         drain_batch(&h, &mut authoritative, &mut service);
         assert!(service.undo(&mut authoritative));
-        assert_eq!(points(&authoritative, "amount"), vec![(6.0, 0.6), (10.0, 0.8)]);
+        assert_eq!(
+            points(&authoritative, "amount"),
+            vec![(6.0, 0.6), (10.0, 0.8)]
+        );
         assert!(service.undo(&mut authoritative));
-        assert_eq!(points(&authoritative, "amount"), vec![(2.0, 0.2), (6.0, 0.6), (10.0, 0.8)]);
+        assert_eq!(
+            points(&authoritative, "amount"),
+            vec![(2.0, 0.2), (6.0, 0.6), (10.0, 0.8)]
+        );
     }
     /// Census bug 23 (pasted video plays black): a Finder paste of a video
     /// never writes the screen's copy directly, and the content thread never
@@ -2077,27 +2583,43 @@ mod automation_clipboard_host_tests {
     #[test]
     fn finder_paste_of_a_video_never_writes_the_screen_copy_only() {
         let mut h = Harness::new();
-        let index = h.project.timeline.add_layer("Video", manifold_core::types::LayerType::Video, PresetTypeId::NONE);
+        let index = h.project.timeline.add_layer(
+            "Video",
+            manifold_core::types::LayerType::Video,
+            PresetTypeId::NONE,
+        );
         h.active_layer = Some(h.project.timeline.layers[index].layer_id.clone());
         let mut content = h.project.clone();
         let file = std::env::temp_dir().join(format!("manifold-paste-{}.mp4", std::process::id()));
         std::fs::write(&file, b"not a real video").expect("write fixture");
 
-        h.host().paste_pasteboard_files(std::slice::from_ref(&file), 0.0);
+        h.host()
+            .paste_pasteboard_files(std::slice::from_ref(&file), 0.0);
         let _ = std::fs::remove_file(&file);
 
-        assert!(h.project.video_library.clips.is_empty(), "the paste wrote the screen's copy directly");
+        assert!(
+            h.project.video_library.clips.is_empty(),
+            "the paste wrote the screen's copy directly"
+        );
         while let Ok(cmd) = h.rx.try_recv() {
             match cmd {
-                ContentCommand::Execute(mut cmd) => { cmd.execute(&mut content); }
-                ContentCommand::ExecuteBatch(cmds, _) => cmds.into_iter().for_each(|mut c| { c.execute(&mut content); }),
+                ContentCommand::Execute(mut cmd) => {
+                    cmd.execute(&mut content);
+                }
+                ContentCommand::ExecuteBatch(cmds, _) => cmds.into_iter().for_each(|mut c| {
+                    c.execute(&mut content);
+                }),
                 ContentCommand::MutateProject { f, .. } => f(&mut content),
                 _ => {}
             }
         }
         for clip in content.timeline.layers.iter().flat_map(|l| &l.clips) {
             assert!(
-                content.video_library.clips.iter().any(|v| v.id == clip.video_clip_id),
+                content
+                    .video_library
+                    .clips
+                    .iter()
+                    .any(|v| v.id == clip.video_clip_id),
                 "content thread got clip {} with no library entry",
                 clip.video_clip_id
             );
@@ -2109,12 +2631,18 @@ mod automation_clipboard_host_tests {
     #[test]
     fn finder_paste_of_an_unreadable_video_reports_the_failure() {
         let mut h = Harness::new();
-        let index = h.project.timeline.add_layer("Video", manifold_core::types::LayerType::Video, PresetTypeId::NONE);
+        let index = h.project.timeline.add_layer(
+            "Video",
+            manifold_core::types::LayerType::Video,
+            PresetTypeId::NONE,
+        );
         h.active_layer = Some(h.project.timeline.layers[index].layer_id.clone());
-        let file = std::env::temp_dir().join(format!("manifold-paste-fail-{}.mp4", std::process::id()));
+        let file =
+            std::env::temp_dir().join(format!("manifold-paste-fail-{}.mp4", std::process::id()));
         std::fs::write(&file, b"not a real video").expect("write fixture");
 
-        h.host().paste_pasteboard_files(std::slice::from_ref(&file), 0.0);
+        h.host()
+            .paste_pasteboard_files(std::slice::from_ref(&file), 0.0);
         let failures = h
             .import_failures_rx
             .take()
@@ -2123,6 +2651,9 @@ mod automation_clipboard_host_tests {
             .expect("the import reports its probe failure");
         let _ = std::fs::remove_file(&file);
         assert_eq!(failures.len(), 1, "{failures:?}");
-        assert!(h.rx.is_empty(), "nothing reaches the content thread for an unreadable file");
+        assert!(
+            h.rx.is_empty(),
+            "nothing reaches the content thread for an unreadable file"
+        );
     }
 }

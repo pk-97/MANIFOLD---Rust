@@ -148,12 +148,42 @@ impl Key {
     pub fn to_char(self) -> Option<char> {
         use Key::*;
         Some(match self {
-            A => 'a', B => 'b', C => 'c', D => 'd', E => 'e', F => 'f', G => 'g',
-            H => 'h', I => 'i', J => 'j', K => 'k', L => 'l', M => 'm', N => 'n',
-            O => 'o', P => 'p', Q => 'q', R => 'r', S => 's', T => 't', U => 'u',
-            V => 'v', W => 'w', X => 'x', Y => 'y', Z => 'z',
-            Num0 => '0', Num1 => '1', Num2 => '2', Num3 => '3', Num4 => '4',
-            Num5 => '5', Num6 => '6', Num7 => '7', Num8 => '8', Num9 => '9',
+            A => 'a',
+            B => 'b',
+            C => 'c',
+            D => 'd',
+            E => 'e',
+            F => 'f',
+            G => 'g',
+            H => 'h',
+            I => 'i',
+            J => 'j',
+            K => 'k',
+            L => 'l',
+            M => 'm',
+            N => 'n',
+            O => 'o',
+            P => 'p',
+            Q => 'q',
+            R => 'r',
+            S => 's',
+            T => 't',
+            U => 'u',
+            V => 'v',
+            W => 'w',
+            X => 'x',
+            Y => 'y',
+            Z => 'z',
+            Num0 => '0',
+            Num1 => '1',
+            Num2 => '2',
+            Num3 => '3',
+            Num4 => '4',
+            Num5 => '5',
+            Num6 => '6',
+            Num7 => '7',
+            Num8 => '8',
+            Num9 => '9',
             _ => return None,
         })
     }
@@ -474,8 +504,11 @@ impl UIInputSystem {
                         // this press (`request_immediate_drag`) — the global
                         // `DRAG_THRESHOLD` constant is untouched; only this
                         // press's effective threshold drops to 0.
-                        let threshold =
-                            if self.immediate_drag_armed { 0.0 } else { DRAG_THRESHOLD };
+                        let threshold = if self.immediate_drag_armed {
+                            0.0
+                        } else {
+                            DRAG_THRESHOLD
+                        };
                         if dist >= threshold {
                             self.is_dragging = true;
                             if input_trace_enabled() {
@@ -678,7 +711,15 @@ mod tests {
         // Root panel
         let root = tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, UIStyle::default());
         // Button at (50,50) size 100x30
-        tree.add_button(Some(root), 50.0, 50.0, 100.0, 30.0, UIStyle::default(), "Click me");
+        tree.add_button(
+            Some(root),
+            50.0,
+            50.0,
+            100.0,
+            30.0,
+            UIStyle::default(),
+            "Click me",
+        );
         (tree, UIInputSystem::new())
     }
 
@@ -754,7 +795,15 @@ mod tests {
     fn rebuild(tree: &mut UITree) {
         tree.clear();
         let root = tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, UIStyle::default());
-        tree.add_button(Some(root), 50.0, 50.0, 100.0, 30.0, UIStyle::default(), "Click me");
+        tree.add_button(
+            Some(root),
+            50.0,
+            50.0,
+            100.0,
+            30.0,
+            UIStyle::default(),
+            "Click me",
+        );
     }
 
     /// Regression: a drag's events must keep flowing with a LIVE node id across a
@@ -802,9 +851,7 @@ mod tests {
         let hover_events: Vec<_> = input
             .drain_events()
             .into_iter()
-            .filter(|e| {
-                matches!(e, UIEvent::HoverEnter { .. } | UIEvent::HoverExit { .. })
-            })
+            .filter(|e| matches!(e, UIEvent::HoverEnter { .. } | UIEvent::HoverExit { .. }))
             .collect();
         assert!(
             hover_events.is_empty(),
@@ -869,8 +916,14 @@ mod tests {
         input.process_pointer(&mut tree, Vec2::new(61.0, 60.0), PointerAction::Move, 0.01);
 
         let events = input.drain_events();
-        let begins = events.iter().filter(|e| matches!(e, UIEvent::DragBegin { .. })).count();
-        assert_eq!(begins, 1, "a 1px move must begin the drag once immediate-drag is armed");
+        let begins = events
+            .iter()
+            .filter(|e| matches!(e, UIEvent::DragBegin { .. }))
+            .count();
+        assert_eq!(
+            begins, 1,
+            "a 1px move must begin the drag once immediate-drag is armed"
+        );
         assert!(input.is_dragging());
     }
 
@@ -886,17 +939,29 @@ mod tests {
         input.process_pointer(&mut tree, Vec2::new(60.0, 60.0), PointerAction::Down, 0.0);
         // 3px wiggle — under the 4px threshold, no immediate-drag arm.
         input.process_pointer(&mut tree, Vec2::new(63.0, 60.0), PointerAction::Move, 0.01);
-        assert!(!input.is_dragging(), "a 3px move must stay under DRAG_THRESHOLD_PX");
+        assert!(
+            !input.is_dragging(),
+            "a 3px move must stay under DRAG_THRESHOLD_PX"
+        );
 
         input.process_pointer(&mut tree, Vec2::new(63.0, 60.0), PointerAction::Up, 0.02);
         let events = input.drain_events();
         assert_eq!(
-            events.iter().filter(|e| matches!(e, UIEvent::Click { .. })).count(),
+            events
+                .iter()
+                .filter(|e| matches!(e, UIEvent::Click { .. }))
+                .count(),
             1,
             "release without crossing the threshold must still resolve to a Click: {events:?}"
         );
         assert_eq!(
-            events.iter().filter(|e| matches!(e, UIEvent::DragBegin { .. } | UIEvent::Drag { .. } | UIEvent::DragEnd { .. })).count(),
+            events
+                .iter()
+                .filter(|e| matches!(
+                    e,
+                    UIEvent::DragBegin { .. } | UIEvent::Drag { .. } | UIEvent::DragEnd { .. }
+                ))
+                .count(),
             0,
             "no drag event should fire for a sub-threshold wiggle: {events:?}"
         );
@@ -1056,9 +1121,7 @@ mod tests {
         input.process_right_click(&tree, Vec2::new(60.0, 60.0));
         let events = input.drain_events();
         assert_eq!(events.len(), 1);
-        assert!(
-            matches!(events[0], UIEvent::RightClick { node_id: Some(n), .. } if n.slot() == 1)
-        );
+        assert!(matches!(events[0], UIEvent::RightClick { node_id: Some(n), .. } if n.slot() == 1));
     }
 
     #[test]
@@ -1111,8 +1174,15 @@ mod tests {
                 _ => None,
             })
             .expect("DragBegin must still fire even though the pressed node died");
-        assert_eq!(begin.0, None, "node_id must be None — the pressed node is gone");
-        assert_eq!(begin.1, Vec2::new(80.0, 60.0), "position is still the real payload");
+        assert_eq!(
+            begin.0, None,
+            "node_id must be None — the pressed node is gone"
+        );
+        assert_eq!(
+            begin.1,
+            Vec2::new(80.0, 60.0),
+            "position is still the real payload"
+        );
 
         // Continue the drag — Drag must keep flowing too, not just DragBegin.
         input.process_pointer(&mut tree, Vec2::new(90.0, 60.0), PointerAction::Move, 0.0);

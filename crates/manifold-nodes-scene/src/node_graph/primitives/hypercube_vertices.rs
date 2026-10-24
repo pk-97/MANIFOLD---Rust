@@ -30,11 +30,11 @@
 //! the legacy generator's *projected* pixels bit-exactly — accepted
 //! trade-off, identical to the prior `generate_tesseract_vertices`.
 
-use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
+use std::borrow::Cow;
 
-use manifold_node_engine::mesh::Vec4Vertex;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::Vec4Vertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
@@ -158,13 +158,19 @@ mod gpu_tests {
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
-    use manifold_node_engine::mesh::Vec4Vertex;
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
     use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::mesh::Vec4Vertex;
     use manifold_node_engine::parameters::ParamDef;
-    use manifold_node_engine::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
-    use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::execution_plan::compile};
+    use manifold_node_engine::ports::{
+        ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType,
+    };
+    use manifold_node_engine::{
+        exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+        exec::execution_plan::ExecutionPlan, exec::execution_plan::compile,
+        exec::metal_backend::MetalBackend, graph::Graph, parameters::ParamValue,
+    };
 
     use super::{HYPERCUBE_VERTEX_COUNT, HypercubeVertices};
 
@@ -190,7 +196,9 @@ mod gpu_tests {
     }
 
     impl EffectNode for VertexSink {
-        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+            manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+        } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -256,8 +264,7 @@ mod gpu_tests {
         let plan = compile(&g).unwrap();
 
         let r_verts = output_resource(&plan, hv, "vertices");
-        let vert_bytes =
-            (HYPERCUBE_VERTEX_COUNT as u64) * std::mem::size_of::<Vec4Vertex>() as u64;
+        let vert_bytes = (HYPERCUBE_VERTEX_COUNT as u64) * std::mem::size_of::<Vec4Vertex>() as u64;
         let vert_buf = device.create_buffer_shared(vert_bytes);
 
         let mut backend = MetalBackend::new(device.arc(), 1, 1, format);
@@ -316,7 +323,10 @@ mod gpu_tests {
                 );
             }
             let mag = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2] + p[3] * p[3]).sqrt();
-            assert!((mag - 0.25).abs() < 1e-5, "vertex {i} magnitude {mag} != 0.25");
+            assert!(
+                (mag - 0.25).abs() < 1e-5,
+                "vertex {i} magnitude {mag} != 0.25"
+            );
         }
     }
 }

@@ -39,7 +39,10 @@ pub(crate) type LiveColumns = [Option<([f32; 3], [f32; 3])>; LIVE_COLUMNS];
 /// Publish this frame's domain snapshots: the live column boxes move out of
 /// `scratch` into the returned slots, and `shared` is re-allocated only when
 /// what is left changes (readiness, layout, fit, refusal).
-pub(crate) fn share_domains(scratch: &mut [(NodeId, FluidDomainSnapshot)], shared: &mut SharedDomains) -> LiveColumns {
+pub(crate) fn share_domains(
+    scratch: &mut [(NodeId, FluidDomainSnapshot)],
+    shared: &mut SharedDomains,
+) -> LiveColumns {
     let mut live = [None; LIVE_COLUMNS];
     for ((_, snapshot), slot) in scratch.iter_mut().zip(&mut live) {
         *slot = snapshot.column_box.take();
@@ -113,7 +116,11 @@ pub(crate) struct PreviewGizmo {
 type TargetKey = (Arc<SceneVm>, u64, u64, u64);
 
 /// A frame with no scene to read: the chrome draws, nothing is selected.
-pub(crate) static NO_SELECTION: GizmoSelection = GizmoSelection { targets: Vec::new(), selected: Vec::new(), handles: None };
+pub(crate) static NO_SELECTION: GizmoSelection = GizmoSelection {
+    targets: Vec::new(),
+    selected: Vec::new(),
+    handles: None,
+};
 
 /// Parts that decide whether an effect follows the scene layer.
 const CHAIN_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Effects, Part::Settings]);
@@ -168,7 +175,12 @@ impl PreviewGizmo {
     /// `navigated` is the preview's navigated picture when it shows instead
     /// of the output (`preview_navigation.rs`): the lines and picks follow
     /// its camera, the output camera stays as reported.
-    pub fn show(&mut self, frame: Option<&PhysicsOverlayFrame>, output: (u32, u32), navigated: Option<GizmoView>) {
+    pub fn show(
+        &mut self,
+        frame: Option<&PhysicsOverlayFrame>,
+        output: (u32, u32),
+        navigated: Option<GizmoView>,
+    ) {
         self.shown = frame.map(|frame| (frame.clone(), output));
         self.navigated = navigated;
     }
@@ -180,7 +192,10 @@ impl PreviewGizmo {
 
     fn view(&self) -> Option<GizmoView> {
         let (frame, (width, height)) = self.shown.as_ref()?;
-        Some(self.navigated.unwrap_or(GizmoView::new(frame.camera, *width, *height)))
+        Some(
+            self.navigated
+                .unwrap_or(GizmoView::new(frame.camera, *width, *height)),
+        )
     }
 
     /// Follow the shown frame: the selected item's handle targets for picks
@@ -193,24 +208,44 @@ impl PreviewGizmo {
         panel: &manifold_ui::panels::scene_setup_panel::ScenePanel,
         parts: &PartStamps,
     ) -> bool {
-        let Some((frame, _)) = self.shown.as_ref() else { return false };
+        let Some((frame, _)) = self.shown.as_ref() else {
+            return false;
+        };
         let layer = frame.layer.clone();
         let target = GraphTarget::Generator(layer.clone());
         let scene = self.scene.viewport_def(project, Some(&target), parts).scene;
-        let key = scene.map(|scene| (scene, panel.selection_version(), self.version, parts.key(CHAIN_PARTS)));
+        let key = scene.map(|scene| {
+            (
+                scene,
+                panel.selection_version(),
+                self.version,
+                parts.key(CHAIN_PARTS),
+            )
+        });
         let fresh = match (&self.target, &key) {
-            (Some((cached, ..)), Some(key)) => Arc::ptr_eq(&cached.0, &key.0) && cached.1 == key.1 && cached.2 == key.2 && cached.3 == key.3,
+            (Some((cached, ..)), Some(key)) => {
+                Arc::ptr_eq(&cached.0, &key.0)
+                    && cached.1 == key.1
+                    && cached.2 == key.2
+                    && cached.3 == key.3
+            }
             _ => false,
         };
         if !fresh {
             self.target = key.map(|key| {
                 let items = panel.live_selected();
-                let selection = GizmoSelection::new(&key.0, crate::scene_gizmo::selected_targets(&key.0, items));
+                let selection = GizmoSelection::new(
+                    &key.0,
+                    crate::scene_gizmo::selected_targets(&key.0, items),
+                );
                 let fade = effect_follows(project, &layer);
-                let objects = items.iter().filter(|_| !fade).filter_map(|item| match item {
-                    SceneSelection::Item(object) => Some(object),
-                    _ => None,
-                });
+                let objects = items
+                    .iter()
+                    .filter(|_| !fade)
+                    .filter_map(|item| match item {
+                        SceneSelection::Item(object) => Some(object),
+                        _ => None,
+                    });
                 key.0.outline_slots(objects, &mut self.outline);
                 (key, selection, fade)
             });
@@ -228,25 +263,48 @@ impl PreviewGizmo {
     /// the Scene panel's picture is remembered: released where it landed, it
     /// is a click that picks what is drawn there. Every press inside the
     /// picture focuses the preview; one outside unfocuses it.
-    pub fn press(&mut self, ctx: &mut DispatchCtx, fit: Option<Rect>, pos: Vec2, extend: bool) -> bool {
+    pub fn press(
+        &mut self,
+        ctx: &mut DispatchCtx,
+        fit: Option<Rect>,
+        pos: Vec2,
+        extend: bool,
+    ) -> bool {
         self.missed_at = None;
         let panel = &ctx.ui.scene_setup_panel;
-        let (layer, gizmos) = (panel.live_layer_id().cloned(), panel.gizmo_layer().is_some());
+        let (layer, gizmos) = (
+            panel.live_layer_id().cloned(),
+            panel.gizmo_layer().is_some(),
+        );
         // An open overlay over the picture takes its own presses.
-        let inside = fit.is_some_and(|fit| fit.contains(pos)) && !ctx.ui.overlay_contains_point(pos);
+        let inside =
+            fit.is_some_and(|fit| fit.contains(pos)) && !ctx.ui.overlay_contains_point(pos);
         self.focused = inside && gizmos;
-        let (Some(layer), Some(fit), Some(view)) = (layer, fit.filter(|_| inside), self.view()) else { return false };
+        let (Some(layer), Some(fit), Some(view)) = (layer, fit.filter(|_| inside), self.view())
+        else {
+            return false;
+        };
         if self.shown().is_none_or(|frame| frame.layer != layer) {
             return false;
         }
-        let Some((view, point)) = crate::viewport_input::gizmo_pointer(fit, view, (pos.x, pos.y)) else { return false };
+        let Some((view, point)) = crate::viewport_input::gizmo_pointer(fit, view, (pos.x, pos.y))
+        else {
+            return false;
+        };
         // The handles were built over the cached scene at the last present;
         // a press never rebuilds the scene.
         if gizmos && let Some(((scene, ..), selection, _)) = self.target.as_ref() {
-            let at = crate::scene_gizmo::PressAt { view: &view, point, extend };
+            let at = crate::scene_gizmo::PressAt {
+                view: &view,
+                point,
+                extend,
+            };
             match crate::scene_gizmo::press(ctx, &layer, scene, selection, self.mode, at) {
                 GizmoPress::Handle(gesture) => {
-                    self.drag = gesture.map(|gesture| PreviewDrag { gesture: *gesture, view });
+                    self.drag = gesture.map(|gesture| PreviewDrag {
+                        gesture: *gesture,
+                        view,
+                    });
                     return true;
                 }
                 GizmoPress::Picked(true) => return true,
@@ -262,22 +320,47 @@ impl PreviewGizmo {
     /// and empty space clears the selection, as in Blender. A press that
     /// orbited the preview away is not a click.
     pub fn release_click(&mut self, ctx: &mut DispatchCtx, fit: Option<Rect>, pos: Vec2) {
-        let Some((at, extend)) = self.missed_at.take() else { return };
+        let Some((at, extend)) = self.missed_at.take() else {
+            return;
+        };
         if (pos.x - at.x).hypot(pos.y - at.y) > manifold_ui::color::DRAG_THRESHOLD_PX {
             return;
         }
-        let (Some(layer), Some(fit), Some(view)) = (ctx.ui.scene_setup_panel.live_layer_id().cloned(), fit, self.view()) else { return };
-        let Some((view, point)) = crate::viewport_input::gizmo_pointer(fit, view, (pos.x, pos.y)) else { return };
-        let surface = if self.navigated.is_some() { PickSurface::Viewport } else { PickSurface::Output };
-        let pick = ScenePick { layer, surface, uv: crate::scene_pick::uv_of(&view, point), extend };
-        crate::content_command::ContentCommand::send(ctx.content_tx, crate::content_command::ContentCommand::PickSceneItem(pick));
+        let (Some(layer), Some(fit), Some(view)) = (
+            ctx.ui.scene_setup_panel.live_layer_id().cloned(),
+            fit,
+            self.view(),
+        ) else {
+            return;
+        };
+        let Some((view, point)) = crate::viewport_input::gizmo_pointer(fit, view, (pos.x, pos.y))
+        else {
+            return;
+        };
+        let surface = if self.navigated.is_some() {
+            PickSurface::Viewport
+        } else {
+            PickSurface::Output
+        };
+        let pick = ScenePick {
+            layer,
+            surface,
+            uv: crate::scene_pick::uv_of(&view, point),
+            extend,
+        };
+        crate::content_command::ContentCommand::send(
+            ctx.content_tx,
+            crate::content_command::ContentCommand::PickSceneItem(pick),
+        );
     }
 
     /// Pointer motion during a drag: the knob scrub moves live. True when a
     /// drag took it.
     pub fn drag_to(&mut self, ctx: &mut DispatchCtx, fit: Option<Rect>, pos: Vec2) -> bool {
         let view = self.view();
-        let Some(drag) = self.drag.as_mut() else { return false };
+        let Some(drag) = self.drag.as_mut() else {
+            return false;
+        };
         // Follow the camera frame for frame, so the grabbed point stays
         // under the cursor in the picture on screen; the grab itself was
         // fixed at the press (`GizmoDrag::begin`). Hold the last camera
@@ -286,7 +369,9 @@ impl PreviewGizmo {
             drag.view = view;
         }
         let view = drag.view;
-        if let Some((view, point)) = fit.and_then(|fit| crate::viewport_input::gizmo_pointer(fit, view, (pos.x, pos.y))) {
+        if let Some((view, point)) =
+            fit.and_then(|fit| crate::viewport_input::gizmo_pointer(fit, view, (pos.x, pos.y)))
+        {
             drag.gesture.drag_to(ctx, &view, point);
         }
         true
@@ -295,7 +380,9 @@ impl PreviewGizmo {
     /// Release, or the drag is cut short (Escape, perform mode): one undo
     /// entry for the whole drag. True when a drag ended.
     pub fn release(&mut self, ctx: &mut DispatchCtx) -> bool {
-        let Some(drag) = self.drag.take() else { return false };
+        let Some(drag) = self.drag.take() else {
+            return false;
+        };
         drag.gesture.commit(ctx);
         true
     }
@@ -325,14 +412,33 @@ impl PreviewGizmo {
     /// object asks for one. Call after [`Self::compose`].
     #[cfg(feature = "ui-snapshot")]
     pub fn grips(&self, fit: Rect) -> Vec<(String, Vec2)> {
-        let (Some(view), Some((_, GizmoSelection { handles: Some(target), .. }, _))) = (self.view(), self.target.as_ref()) else {
+        let (
+            Some(view),
+            Some((
+                _,
+                GizmoSelection {
+                    handles: Some(target),
+                    ..
+                },
+                _,
+            )),
+        ) = (self.view(), self.target.as_ref())
+        else {
             return Vec::new();
         };
         let at = |point: [f32; 3]| {
-            let p = view.camera.project_to_pixel(point, view.width, view.height)?;
-            Some(Vec2::new(fit.x + p.px * fit.width / view.width as f32, fit.y + p.py * fit.height / view.height as f32))
+            let p = view
+                .camera
+                .project_to_pixel(point, view.width, view.height)?;
+            Some(Vec2::new(
+                fit.x + p.px * fit.width / view.width as f32,
+                fit.y + p.py * fit.height / view.height as f32,
+            ))
         };
-        let mut out: Vec<_> = at(target.origin).map(|p| ("Origin".to_string(), p)).into_iter().collect();
+        let mut out: Vec<_> = at(target.origin)
+            .map(|p| ("Origin".to_string(), p))
+            .into_iter()
+            .collect();
         if !self.outline.is_empty()
             && let Some(p) = at(target.origin)
         {
@@ -363,7 +469,11 @@ impl manifold_ui::hit_targets::HitTargets for GizmoHitTargets<'_> {
     fn enumerate(&self, out: &mut Vec<manifold_ui::hit_targets::HitTargetEntry>) {
         for (label, at) in self.0 {
             out.push(manifold_ui::hit_targets::HitTargetEntry {
-                kind: if label == "Outline" { "outline" } else { "handle" },
+                kind: if label == "Outline" {
+                    "outline"
+                } else {
+                    "handle"
+                },
                 label: label.clone(),
                 rect: Rect::new(at.x - 3.0, at.y - 3.0, 6.0, 6.0),
                 payload: label.clone(),
@@ -375,11 +485,17 @@ impl manifold_ui::hit_targets::HitTargets for GizmoHitTargets<'_> {
 /// D-69: an enabled effect on the scene layer, a group it sits in, or the
 /// master chain moves the picture off the scene.
 pub(crate) fn effect_follows(project: &Project, layer: &LayerId) -> bool {
-    let enabled = |effects: &[manifold_core::effects::PresetInstance]| effects.iter().any(|fx| fx.enabled);
+    let enabled =
+        |effects: &[manifold_core::effects::PresetInstance]| effects.iter().any(|fx| fx.enabled);
     let mut next = Some(layer.clone());
     // A parent chain is at most every layer long.
     for _ in 0..=project.timeline.layers.len() {
-        let Some((_, found)) = next.as_ref().and_then(|id| project.timeline.find_layer_by_id(id)) else { break };
+        let Some((_, found)) = next
+            .as_ref()
+            .and_then(|id| project.timeline.find_layer_by_id(id))
+        else {
+            break;
+        };
         if found.effects.as_deref().is_some_and(enabled) {
             return true;
         }
@@ -395,7 +511,9 @@ pub(crate) type PhysicsOverlayFrames = [Option<PhysicsOverlayFrame>; 3];
 /// frame-planner input: an entry arriving after its frame was already shown
 /// moves it, so that frame is drawn again with its lines.
 pub(crate) fn newest_frame(frames: &PhysicsOverlayFrames, layer: Option<&LayerId>) -> u64 {
-    frames.iter().flatten()
+    frames
+        .iter()
+        .flatten()
         .filter(|entry| Some(&entry.layer) == layer)
         .map(|entry| entry.frame)
         .max()
@@ -458,14 +576,28 @@ impl PhysicsOverlayObservations {
         &mut self,
         slot: usize,
         frame: u64,
-        observe: impl FnOnce(&LayerId, &mut Vec<(NodeId, FluidDomainSnapshot)>, &mut Vec<[f32; 3]>, &mut Vec<PhysicsGizmo>) -> Option<(NodeId, Camera)>,
+        observe: impl FnOnce(
+            &LayerId,
+            &mut Vec<(NodeId, FluidDomainSnapshot)>,
+            &mut Vec<[f32; 3]>,
+            &mut Vec<PhysicsGizmo>,
+        ) -> Option<(NodeId, Camera)>,
     ) {
         self.frames[slot] = None;
-        let Some(layer) = self.layer.as_ref() else { return };
+        let Some(layer) = self.layer.as_ref() else {
+            return;
+        };
         self.domain_scratch.clear();
         self.light_scratch.clear();
         self.gizmo_scratch.clear();
-        let Some((scene_node, camera)) = observe(layer, &mut self.domain_scratch, &mut self.light_scratch, &mut self.gizmo_scratch) else { return };
+        let Some((scene_node, camera)) = observe(
+            layer,
+            &mut self.domain_scratch,
+            &mut self.light_scratch,
+            &mut self.gizmo_scratch,
+        ) else {
+            return;
+        };
         let live_columns = share_domains(&mut self.domain_scratch, &mut self.domains);
         if self.light_scratch.as_slice() != self.lights.as_ref() {
             self.lights = Arc::from(self.light_scratch.as_slice());
@@ -495,14 +627,23 @@ mod tests {
     fn the_preview_fits_the_show_inside_the_video_area() {
         let area = manifold_ui::Rect::new(0.0, 0.0, 400.0, 400.0);
         let fit = crate::ui_frame::video_fit_rect(area, (1920.0, 1080.0)).unwrap();
-        assert_eq!((fit.x, fit.y, fit.width, fit.height), (0.0, 87.5, 400.0, 225.0));
+        assert_eq!(
+            (fit.x, fit.y, fit.width, fit.height),
+            (0.0, 87.5, 400.0, 225.0)
+        );
     }
 
     #[test]
     fn an_unchanged_physics_setup_publishes_no_new_snapshot() {
         use manifold_core::physics_gizmo::{PhysicsGizmoFamily, PhysicsGizmoShape};
         let collider = PhysicsGizmo::aabb(PhysicsGizmoFamily::Collider, [0.0; 3], [1.0; 3]);
-        let wind = PhysicsGizmo { family: PhysicsGizmoFamily::Force, shape: PhysicsGizmoShape::Arrow { from: [0.0; 3], to: [1.0, 0.0, 0.0] } };
+        let wind = PhysicsGizmo {
+            family: PhysicsGizmoFamily::Force,
+            shape: PhysicsGizmoShape::Arrow {
+                from: [0.0; 3],
+                to: [1.0, 0.0, 0.0],
+            },
+        };
         let mut observations = PhysicsOverlayObservations::default();
         observations.set_layer(Some(LayerId::new("water")));
         let observe = |gizmos: &mut Vec<PhysicsGizmo>| {
@@ -513,7 +654,10 @@ mod tests {
         let first = observations.frames[0].as_ref().unwrap().gizmos.clone();
         assert_eq!(first.as_ref(), [collider, wind]);
         observations.record(1, 2, |_, _, _, gizmos| observe(gizmos));
-        assert!(Arc::ptr_eq(&first, &observations.frames[1].as_ref().unwrap().gizmos));
+        assert!(Arc::ptr_eq(
+            &first,
+            &observations.frames[1].as_ref().unwrap().gizmos
+        ));
     }
 
     /// A driven column clipped by a wall moves its box every frame; the box
@@ -523,7 +667,11 @@ mod tests {
     fn a_moving_clipped_column_shares_the_domain_snapshots() {
         use manifold_core::fluid_domain::FluidDomainState;
         use manifold_core::liquid_setup::{ColumnOutcome, SetupFit};
-        let clipped = SetupFit { fill_capped: false, column: ColumnOutcome::Clipped, pool_full: false };
+        let clipped = SetupFit {
+            fill_capped: false,
+            column: ColumnOutcome::Clipped,
+            pool_full: false,
+        };
         let at = |x: f32| Some(([x, 0.0, 0.0], [x + 1.0, 1.0, 1.0]));
         let snapshot = |column_box, fit| FluidDomainSnapshot {
             epoch: 1,
@@ -547,15 +695,30 @@ mod tests {
         let first = record(0, at(1.5), clipped);
         let shared = (first.domains.as_ptr(), first.domains.len());
         assert_eq!(first.live_columns[0], at(1.5));
-        assert_eq!(first.domains[0].1.column_box, None, "the live box is not part of the shared snapshot");
+        assert_eq!(
+            first.domains[0].1.column_box, None,
+            "the live box is not part of the shared snapshot"
+        );
         for frame in 1..120 {
             let x = 1.5 + frame as f32 * 0.01;
             let moving = record(frame, at(x), clipped);
-            assert_eq!((moving.domains.as_ptr(), moving.domains.len()), shared, "frame {frame} re-shared the snapshots");
-            assert_eq!(moving.live_columns[0], at(x), "the frame carries where the column is now");
+            assert_eq!(
+                (moving.domains.as_ptr(), moving.domains.len()),
+                shared,
+                "frame {frame} re-shared the snapshots"
+            );
+            assert_eq!(
+                moving.live_columns[0],
+                at(x),
+                "the frame carries where the column is now"
+            );
         }
         let fitting = record(120, None, SetupFit::default());
-        assert_ne!(fitting.domains.as_ptr(), shared.0, "a new fit is a new snapshot");
+        assert_ne!(
+            fitting.domains.as_ptr(),
+            shared.0,
+            "a new fit is a new snapshot"
+        );
     }
 
     #[test]
@@ -563,12 +726,20 @@ mod tests {
         let mut project = crate::ui_bridge::force_project("RadialForce", &["force_a"]);
         let layer = LayerId::new("scene");
         assert!(!effect_follows(&project, &layer));
-        let mut fx = manifold_core::effects::PresetInstance::new(manifold_core::PresetTypeId::from_string("Mirror".to_string()));
+        let mut fx = manifold_core::effects::PresetInstance::new(
+            manifold_core::PresetTypeId::from_string("Mirror".to_string()),
+        );
         fx.enabled = true;
         project.settings.master_effects.push(fx);
-        assert!(effect_follows(&project, &layer), "the master chain follows every layer");
+        assert!(
+            effect_follows(&project, &layer),
+            "the master chain follows every layer"
+        );
         project.settings.master_effects[0].enabled = false;
-        assert!(!effect_follows(&project, &layer), "a bypassed effect leaves the picture on the scene");
+        assert!(
+            !effect_follows(&project, &layer),
+            "a bypassed effect leaves the picture on the scene"
+        );
     }
 
     #[test]
@@ -582,12 +753,17 @@ mod tests {
         };
         // The surface was published and drawn before its entry arrived.
         let shown = inputs(&observations.frames);
-        observations.record(2, 41, |_, _, _, _| Some((NodeId::new("scene"), Camera::default_perspective())));
+        observations.record(2, 41, |_, _, _, _| {
+            Some((NodeId::new("scene"), Camera::default_perspective()))
+        });
         let arrived = inputs(&observations.frames);
         assert!(crate::frame_plan::plan_frame(&shown, &arrived).redraw);
         assert!(!crate::frame_plan::plan_frame(&arrived, &arrived).redraw);
         // Another scene's entries never move it.
-        assert_eq!(newest_frame(&observations.frames, Some(&LayerId::new("other"))), 0);
+        assert_eq!(
+            newest_frame(&observations.frames, Some(&LayerId::new("other"))),
+            0
+        );
     }
 
     #[test]
@@ -599,7 +775,9 @@ mod tests {
             lights.push([0.0; 3]);
             Some((NodeId::new("scene"), Camera::default_perspective()))
         });
-        let frame = observations.frames[0].as_ref().expect("a rendered layer reports");
+        let frame = observations.frames[0]
+            .as_ref()
+            .expect("a rendered layer reports");
         assert!(frame.matches(Some(&layer), 7) && !frame.matches(Some(&layer), 8));
 
         // The clip ended or the layer was occluded: the same slot's next write

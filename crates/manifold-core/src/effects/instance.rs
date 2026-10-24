@@ -3,15 +3,14 @@
 //! per-facet split). Extracted from effects.rs (P2-E). Its custom wire-format
 //! serde lives in `instance_serde.rs`.
 
-use super::*;
 use super::automation::{prune_automation_by_ids, take_automation_by_ids};
 use super::instance_serde::{
-    build_param_manifest, normalize_meta_params, template_known_for, ManifestPass, GraphWithDerivedParams, ManifestSer,
-    ParamEntryWire,
+    GraphWithDerivedParams, ManifestPass, ManifestSer, ParamEntryWire, build_param_manifest,
+    normalize_meta_params, template_known_for,
 };
+use super::*;
 
 // ─── Effect Instance ───
-
 
 /// A single effect applied to a clip, layer, or master chain.
 ///
@@ -138,7 +137,6 @@ pub struct PresetInstance {
     pub scene: Option<crate::scene_doc::SceneDoc>,
 }
 
-
 impl PresetInstance {
     /// Serialize a generator-kind instance in the legacy `PresetInstance`
     /// wire shape (so generator fixtures round-trip byte-identically). Ported
@@ -214,7 +212,12 @@ impl PresetInstance {
             // (D12) — see `GraphWithDerivedParams`.
             s.serialize_field(
                 "graph",
-                &GraphWithDerivedParams { preset: &self.effect_type, graph: g, manifest: &self.params, joined: true },
+                &GraphWithDerivedParams {
+                    preset: &self.effect_type,
+                    graph: g,
+                    manifest: &self.params,
+                    joined: true,
+                },
             )?;
         }
         if !self.folded_sections.is_empty() {
@@ -226,7 +229,6 @@ impl PresetInstance {
         s.end()
     }
 }
-
 
 impl PresetInstance {
     /// The per-instance graph override (`None` ⇒ use the catalog default).
@@ -350,8 +352,14 @@ impl PresetInstance {
             }
             return;
         };
-        let (params, base_tracked) =
-            build_param_manifest(self.is_generator(), self.scene.is_some(), &self.effect_type, &self.graph, Some(wire), ManifestPass::Reconcile);
+        let (params, base_tracked) = build_param_manifest(
+            self.is_generator(),
+            self.scene.is_some(),
+            &self.effect_type,
+            &self.graph,
+            Some(wire),
+            ManifestPass::Reconcile,
+        );
         normalize_meta_params(&mut self.graph, &params);
         self.params = params;
         self.base_tracked = base_tracked;
@@ -389,10 +397,21 @@ impl PresetInstance {
         let wire: std::collections::BTreeMap<String, ParamEntryWire> = self
             .params
             .iter()
-            .map(|p| (p.id().to_string(), ParamEntryWire::from_param(p, self.base_tracked, false)))
+            .map(|p| {
+                (
+                    p.id().to_string(),
+                    ParamEntryWire::from_param(p, self.base_tracked, false),
+                )
+            })
             .collect();
-        let (params, base_tracked) =
-            build_param_manifest(self.is_generator(), self.scene.is_some(), &self.effect_type, &self.graph, Some(wire), ManifestPass::Refresh);
+        let (params, base_tracked) = build_param_manifest(
+            self.is_generator(),
+            self.scene.is_some(),
+            &self.effect_type,
+            &self.graph,
+            Some(wire),
+            ManifestPass::Refresh,
+        );
         normalize_meta_params(&mut self.graph, &params);
         self.params = params;
         self.base_tracked = base_tracked;
@@ -474,21 +493,29 @@ impl PresetInstance {
         let mut copy = self.clone();
         copy.regenerate_id();
         copy.ableton_mappings = None;
-        let clip_responses: Vec<_> = self.audio_mods.iter().flatten().filter_map(|source| {
-            if !source.trigger_mode.is_some_and(|mode| mode.wants_clip_edge()) {
-                return None;
-            }
-            let mut response = crate::audio_mod::ParameterAudioMod::new(
-                source.param_id.clone(),
-                Default::default(),
-                source.source.feature,
-            );
-            response.enabled = source.enabled;
-            response.shape = source.shape;
-            response.action = source.action;
-            response.trigger_mode = Some(crate::audio_trigger::TriggerFireMode::ClipEdge);
-            Some(response)
-        }).collect();
+        let clip_responses: Vec<_> = self
+            .audio_mods
+            .iter()
+            .flatten()
+            .filter_map(|source| {
+                if !source
+                    .trigger_mode
+                    .is_some_and(|mode| mode.wants_clip_edge())
+                {
+                    return None;
+                }
+                let mut response = crate::audio_mod::ParameterAudioMod::new(
+                    source.param_id.clone(),
+                    Default::default(),
+                    source.source.feature,
+                );
+                response.enabled = source.enabled;
+                response.shape = source.shape;
+                response.action = source.action;
+                response.trigger_mode = Some(crate::audio_trigger::TriggerFireMode::ClipEdge);
+                Some(response)
+            })
+            .collect();
         copy.audio_mods = (!clip_responses.is_empty()).then_some(clip_responses);
         copy
     }
@@ -638,7 +665,9 @@ impl PresetInstance {
     /// like the generator side. Empty when the effect has no per-instance
     /// graph or no user-added bindings. Order matches the `param_values`
     /// user-tail order (registry `param_count + j`).
-    pub fn user_added_bindings(&self) -> impl Iterator<Item = &crate::effect_graph_def::BindingDef> {
+    pub fn user_added_bindings(
+        &self,
+    ) -> impl Iterator<Item = &crate::effect_graph_def::BindingDef> {
         self.graph
             .as_ref()
             .and_then(|g| g.preset_metadata.as_ref())
@@ -692,13 +721,14 @@ impl PresetInstance {
     /// Build one [`UserParamBinding`] from a `user_added` [`BindingDef`]
     /// plus its matching `ParamSpecDef` reshape. Shared by
     /// [`Self::user_param_bindings`] and the single-binding lookups.
-    fn synth_user_binding(&self, b: &crate::effect_graph_def::BindingDef) -> Option<UserParamBinding> {
+    fn synth_user_binding(
+        &self,
+        b: &crate::effect_graph_def::BindingDef,
+    ) -> Option<UserParamBinding> {
         use crate::effect_graph_def::BindingTarget;
         let (node_id, inner_param) = match &b.target {
             BindingTarget::Node { node_id, param } => (node_id.clone(), param.clone()),
-            BindingTarget::Composite { outer_name } => {
-                (NodeId::default(), outer_name.clone())
-            }
+            BindingTarget::Composite { outer_name } => (NodeId::default(), outer_name.clone()),
             // This legacy view addresses a node, not a modifier-local macro.
             // Keep the authored binding intact; expansion resolves its leaves.
             BindingTarget::SceneModifier { .. } => return None,
@@ -829,12 +859,12 @@ impl PresetInstance {
         };
 
         // Pull the binding + shadow spec from the graph metadata.
-        if let Some(meta) = self
-            .graph
-            .as_mut()
-            .and_then(|g| g.preset_metadata.as_mut())
-        {
-            if let Some(bi) = meta.bindings.iter().position(|b| b.user_added && b.id == id) {
+        if let Some(meta) = self.graph.as_mut().and_then(|g| g.preset_metadata.as_mut()) {
+            if let Some(bi) = meta
+                .bindings
+                .iter()
+                .position(|b| b.user_added && b.id == id)
+            {
                 meta.bindings.remove(bi);
             }
             if let Some(si) = meta.params.iter().position(|p| p.id == id) {
@@ -1185,8 +1215,16 @@ impl PresetInstance {
         self.drivers.iter().flatten().any(|x| x.param_id == id)
             || self.envelopes.iter().flatten().any(|x| x.param_id == id)
             || self.audio_mods.iter().flatten().any(|x| x.param_id == id)
-            || self.ableton_mappings.iter().flatten().any(|x| x.param_id == id)
-            || self.automation_lanes.iter().flatten().any(|x| x.param_id == id)
+            || self
+                .ableton_mappings
+                .iter()
+                .flatten()
+                .any(|x| x.param_id == id)
+            || self
+                .automation_lanes
+                .iter()
+                .flatten()
+                .any(|x| x.param_id == id)
     }
 
     /// Drop any driver / Ableton mapping / envelope whose `param_id` no longer
@@ -1243,7 +1281,9 @@ impl PresetInstance {
     /// meaning (they're keyed by `param_id`).
     pub fn restore_automation(&mut self, removed: RemovedAutomation) {
         if !removed.drivers.is_empty() {
-            self.drivers.get_or_insert_with(Vec::new).extend(removed.drivers);
+            self.drivers
+                .get_or_insert_with(Vec::new)
+                .extend(removed.drivers);
         }
         if !removed.ableton_mappings.is_empty() {
             self.ableton_mappings
@@ -1297,7 +1337,8 @@ impl PresetInstance {
     /// mapping on this instance names `param_id`, enabled or not.
     pub fn modulates(&self, param_id: &str) -> bool {
         fn names<T>(list: &Option<Vec<T>>, id: impl Fn(&T) -> &str, param_id: &str) -> bool {
-            list.as_ref().is_some_and(|list| list.iter().any(|item| id(item) == param_id))
+            list.as_ref()
+                .is_some_and(|list| list.iter().any(|item| id(item) == param_id))
         }
         names(&self.drivers, |d| d.param_id.as_ref(), param_id)
             || names(&self.envelopes, |e| e.param_id.as_ref(), param_id)
@@ -1311,13 +1352,30 @@ impl PresetInstance {
     /// the card row shows (`ParamRow::is_attached`).
     pub fn drives(&self, param_id: &str) -> bool {
         fn live<T>(list: &Option<Vec<T>>, on: impl Fn(&T) -> Option<&str>, param_id: &str) -> bool {
-            list.as_ref().is_some_and(|list| list.iter().any(|item| on(item) == Some(param_id)))
+            list.as_ref()
+                .is_some_and(|list| list.iter().any(|item| on(item) == Some(param_id)))
         }
-        live(&self.drivers, |d| d.enabled.then_some(d.param_id.as_ref()), param_id)
-            || live(&self.envelopes, |e| e.enabled.then_some(e.param_id.as_ref()), param_id)
-            || live(&self.audio_mods, |a| a.enabled.then_some(a.param_id.as_ref()), param_id)
-            || live(&self.automation_lanes, |l| l.enabled.then_some(l.param_id.as_ref()), param_id)
-            || live(&self.ableton_mappings, |m| Some(m.param_id.as_ref()), param_id)
+        live(
+            &self.drivers,
+            |d| d.enabled.then_some(d.param_id.as_ref()),
+            param_id,
+        ) || live(
+            &self.envelopes,
+            |e| e.enabled.then_some(e.param_id.as_ref()),
+            param_id,
+        ) || live(
+            &self.audio_mods,
+            |a| a.enabled.then_some(a.param_id.as_ref()),
+            param_id,
+        ) || live(
+            &self.automation_lanes,
+            |l| l.enabled.then_some(l.param_id.as_ref()),
+            param_id,
+        ) || live(
+            &self.ableton_mappings,
+            |m| Some(m.param_id.as_ref()),
+            param_id,
+        )
     }
 
     /// Put `param_id` on the scene card for good when a modulator attaches
@@ -1326,17 +1384,27 @@ impl PresetInstance {
     /// Shown, and switching the modulator off or removing it never takes the
     /// control away. Returns the pin it replaced, or `None` when it wrote
     /// nothing; the attach command restores that pin on undo.
-    pub fn keep_on_card(&mut self, param_id: &str) -> Option<Option<crate::scene_surface::CardPin>> {
+    pub fn keep_on_card(
+        &mut self,
+        param_id: &str,
+    ) -> Option<Option<crate::scene_surface::CardPin>> {
         use crate::scene_surface::CardPin;
         if !self.params.iter().any(|param| param.spec.scene.is_some()) {
             return None;
         }
-        let modifier_bound = self.graph.as_ref().and_then(|def| def.preset_metadata.as_ref()).is_some_and(|meta| {
-            meta.bindings.iter().any(|binding| {
-                binding.id == param_id
-                    && matches!(binding.target, crate::effect_graph_def::BindingTarget::SceneModifier { .. })
-            })
-        });
+        let modifier_bound = self
+            .graph
+            .as_ref()
+            .and_then(|def| def.preset_metadata.as_ref())
+            .is_some_and(|meta| {
+                meta.bindings.iter().any(|binding| {
+                    binding.id == param_id
+                        && matches!(
+                            binding.target,
+                            crate::effect_graph_def::BindingTarget::SceneModifier { .. }
+                        )
+                })
+            });
         let param = self.params.get_mut(param_id)?;
         let off = match param.choices.pin {
             Some(CardPin::Shown) => false,
@@ -1387,7 +1455,6 @@ impl PresetInstance {
     }
 }
 
-
 /// Implement ParamSource for PresetInstance.
 /// Port of Unity PresetInstance : IParamSource.
 /// Generator-kind methods, ported from the former `PresetInstance`. They
@@ -1401,7 +1468,10 @@ impl PresetInstance {
 
     /// Generator-only home.
     pub fn find_envelope(&self, param_id: &str) -> Option<&ParamEnvelope> {
-        self.envelopes.as_ref()?.iter().find(|e| e.param_id == param_id)
+        self.envelopes
+            .as_ref()?
+            .iter()
+            .find(|e| e.param_id == param_id)
     }
 
     /// The instance's envelope list, auto-created on first access.
@@ -1434,8 +1504,18 @@ impl PresetInstance {
         }
         self.ensure_base_values();
         // Every frame, for every generator: no allocation.
-        let driven = self.drivers.iter().flatten().filter(|d| d.enabled).map(|d| &d.param_id);
-        let enveloped = self.envelopes.iter().flatten().filter(|e| e.enabled).map(|e| &e.param_id);
+        let driven = self
+            .drivers
+            .iter()
+            .flatten()
+            .filter(|d| d.enabled)
+            .map(|d| &d.param_id);
+        let enveloped = self
+            .envelopes
+            .iter()
+            .flatten()
+            .filter(|e| e.enabled)
+            .map(|e| &e.param_id);
         for id in driven.chain(enveloped) {
             if let Some(p) = self.params.get_mut(id) {
                 p.value = p.base;
@@ -1468,7 +1548,10 @@ impl PresetInstance {
             // Param seeds base = value = default.
             let mut specs: Vec<_> = def.param_defs.iter().map(|pd| pd.spec.clone()).collect();
             crate::param_lookup::fill_template_scene_facts(&self.effect_type, &mut specs);
-            let entries = specs.into_iter().map(crate::params::Param::bundled).collect();
+            let entries = specs
+                .into_iter()
+                .map(crate::params::Param::bundled)
+                .collect();
             self.params = crate::params::ParamManifest::from_params(entries);
             self.base_tracked = true;
             // A scene layer starts from the base scene; any other type has no
@@ -1614,8 +1697,8 @@ impl ParamSource for PresetInstance {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::test_support::*;
+    use super::*;
     use crate::units::Beats;
 
     // `bundled_slider_delete_does_not_misroute_survivor_drivers` (and its
@@ -1677,25 +1760,44 @@ mod tests {
         use crate::audio_mod::{AudioFeature, ParameterAudioMod, TriggerAction, WrapMode};
         use crate::audio_trigger::TriggerFireMode;
         let mut source = PresetInstance::new(PresetTypeId::BLOOM);
-        let modes = [None, Some(TriggerFireMode::Transient), Some(TriggerFireMode::ClipEdge), Some(TriggerFireMode::Both)];
-        source.audio_mods = Some(modes.into_iter().enumerate().map(|(i, mode)| {
-            let mut response = ParameterAudioMod::new(
-                format!("response-{i}").into(), crate::AudioSendId::new("external"), AudioFeature::default(),
-            );
-            response.trigger_mode = mode;
-            response.action = TriggerAction::Step { amount: 0.2, wrap: WrapMode::Clamp };
-            response.shape.range_max = 0.7;
-            response.enabled = i != 3;
-            response.fire_count = 10;
-            response.step_value = Some(0.5);
-            response.smoothed = 0.8;
-            response
-        }).collect());
+        let modes = [
+            None,
+            Some(TriggerFireMode::Transient),
+            Some(TriggerFireMode::ClipEdge),
+            Some(TriggerFireMode::Both),
+        ];
+        source.audio_mods = Some(
+            modes
+                .into_iter()
+                .enumerate()
+                .map(|(i, mode)| {
+                    let mut response = ParameterAudioMod::new(
+                        format!("response-{i}").into(),
+                        crate::AudioSendId::new("external"),
+                        AudioFeature::default(),
+                    );
+                    response.trigger_mode = mode;
+                    response.action = TriggerAction::Step {
+                        amount: 0.2,
+                        wrap: WrapMode::Clamp,
+                    };
+                    response.shape.range_max = 0.7;
+                    response.enabled = i != 3;
+                    response.fire_count = 10;
+                    response.step_value = Some(0.5);
+                    response.smoothed = 0.8;
+                    response
+                })
+                .collect(),
+        );
 
         let copy = source.duplicated();
         let responses = copy.audio_mods.as_ref().unwrap();
         assert_eq!(responses.len(), 2);
-        for (response, original) in responses.iter().zip(&source.audio_mods.as_ref().unwrap()[2..]) {
+        for (response, original) in responses
+            .iter()
+            .zip(&source.audio_mods.as_ref().unwrap()[2..])
+        {
             assert_eq!(response.param_id, original.param_id);
             assert_eq!(response.enabled, original.enabled);
             assert_eq!(response.shape, original.shape);
@@ -1732,7 +1834,10 @@ mod tests {
         // Read-back: synth (the card/renderer view) reflects the spec, not a
         // hardcoded false.
         let synth = fx.user_param_bindings();
-        let a = synth.iter().find(|b| b.id == "user.rotate.angle.1").unwrap();
+        let a = synth
+            .iter()
+            .find(|b| b.id == "user.rotate.angle.1")
+            .unwrap();
         let p = synth.iter().find(|b| b.id == "user.mix.amount.1").unwrap();
         assert!(a.is_angle, "angle user param must synth is_angle=true");
         assert!(!p.is_angle, "plain user param must stay is_angle=false");
@@ -1740,9 +1845,18 @@ mod tests {
         // Persistence: `is_angle: true` is emitted (skip_serializing_if only
         // skips false), so the flag survives save/load; false stays off disk.
         let json = serde_json::to_string(&fx).unwrap();
-        assert!(json.contains("\"isAngle\":true"), "true angle flag must serialize");
+        assert!(
+            json.contains("\"isAngle\":true"),
+            "true angle flag must serialize"
+        );
         let back: PresetInstance = serde_json::from_str(&json).unwrap();
-        assert!(back.params.get("user.rotate.angle.1").unwrap().spec.is_angle);
+        assert!(
+            back.params
+                .get("user.rotate.angle.1")
+                .unwrap()
+                .spec
+                .is_angle
+        );
         assert!(!back.params.get("user.mix.amount.1").unwrap().spec.is_angle);
         assert!(
             back.user_param_bindings()
@@ -1839,7 +1953,7 @@ mod tests {
                     offset: 0.0,
                     default_mirrors_node_param: false,
                 }],
-                    param_aliases: Vec::new(),
+                param_aliases: Vec::new(),
                 value_aliases: Vec::new(),
                 string_params: Vec::new(),
                 string_bindings: Vec::new(),
@@ -1882,7 +1996,10 @@ mod tests {
         // declared range is rebuilt from the catalog, never from the user's
         // choice (SCENE_SURFACES_DESIGN.md D15 (slider range vs hard limit)).
         let back: PresetInstance = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.params.get("amount").unwrap().slider_span(), (10.0, 20.0));
+        assert_eq!(
+            back.params.get("amount").unwrap().slider_span(),
+            (10.0, 20.0)
+        );
     }
 
     #[test]
@@ -2038,7 +2155,10 @@ mod tests {
             fx.params.contains("user.blur.radius.1"),
             "binding + param spec restored"
         );
-        assert!(fx.find_driver("user.blur.radius.1").is_some(), "driver restored");
+        assert!(
+            fx.find_driver("user.blur.radius.1").is_some(),
+            "driver restored"
+        );
         assert!(
             fx.find_envelope("user.blur.radius.1").is_some(),
             "envelope restored"
@@ -2064,7 +2184,10 @@ mod tests {
 
         let removed = fx.prune_orphaned_automation();
         assert!(fx.find_driver("user.a.b.1").is_some(), "live driver kept");
-        assert!(fx.find_driver("user.gone.x.1").is_none(), "orphan driver pruned");
+        assert!(
+            fx.find_driver("user.gone.x.1").is_none(),
+            "orphan driver pruned"
+        );
         assert!(
             fx.envelopes.is_none(),
             "sole orphan envelope pruned, list collapses to None"
@@ -2188,7 +2311,10 @@ mod tests {
         let mut fx = PresetInstance::new(PresetTypeId::new("Mirror"));
         fx.params = manifest(&[(0.0, true)]);
         fx.set_base_param("p0", 0.5);
-        assert!(fx.params.get("p0").unwrap().touched, "set_base_param marks touched");
+        assert!(
+            fx.params.get("p0").unwrap().touched,
+            "set_base_param marks touched"
+        );
     }
 
     #[test]
@@ -2263,9 +2389,15 @@ mod tests {
         assert!(inst.clip_edge_enabled(), "disabled mod must be inert");
 
         inst.audio_mods.as_mut().unwrap()[0].enabled = true;
-        assert!(!inst.clip_edge_enabled(), "armed Transient mode gates the clip edge");
+        assert!(
+            !inst.clip_edge_enabled(),
+            "armed Transient mode gates the clip edge"
+        );
         assert!(!inst.clip_edge_enabled_matching(|param| param == "clip_trigger"));
-        assert!(inst.clip_edge_enabled_matching(|param| param != "clip_trigger"), "another owner's transient gate cannot suppress this clip edge");
+        assert!(
+            inst.clip_edge_enabled_matching(|param| param != "clip_trigger"),
+            "another owner's transient gate cannot suppress this clip edge"
+        );
 
         inst.audio_mods.as_mut().unwrap()[0].trigger_mode = Some(TriggerFireMode::ClipEdge);
         assert!(inst.clip_edge_enabled());
@@ -2273,7 +2405,6 @@ mod tests {
         inst.audio_mods.as_mut().unwrap()[0].trigger_mode = Some(TriggerFireMode::Both);
         assert!(inst.clip_edge_enabled());
     }
-
 
     #[test]
     fn scene_modifier_binding_metadata_matches_append_output() {
@@ -2296,7 +2427,10 @@ mod tests {
         instance.append_user_binding(binding);
 
         let graph = instance.graph.as_ref().expect("append creates graph");
-        let metadata = graph.preset_metadata.as_ref().expect("append creates metadata");
+        let metadata = graph
+            .preset_metadata
+            .as_ref()
+            .expect("append creates metadata");
         assert_eq!(metadata.params, vec![expected_spec]);
         assert_eq!(metadata.bindings, vec![expected_binding]);
     }

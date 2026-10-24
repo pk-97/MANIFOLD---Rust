@@ -48,7 +48,10 @@ fn node_id(n: &Value) -> Option<u64> {
 fn value_repr(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
-        Value::Array(arr) => format!("[{}]", arr.iter().map(value_repr).collect::<Vec<_>>().join(",")),
+        Value::Array(arr) => format!(
+            "[{}]",
+            arr.iter().map(value_repr).collect::<Vec<_>>().join(",")
+        ),
         Value::Null => "null".to_string(),
         other => other.to_string(),
     }
@@ -59,7 +62,10 @@ fn value_repr(v: &Value) -> String {
 fn rects_equal(a: &Value, b: &Value) -> bool {
     match (a.as_array(), b.as_array()) {
         (Some(av), Some(bv)) if av.len() == bv.len() => av.iter().zip(bv.iter()).all(|(x, y)| {
-            let (xf, yf) = (x.as_f64().unwrap_or(f64::NAN), y.as_f64().unwrap_or(f64::NAN));
+            let (xf, yf) = (
+                x.as_f64().unwrap_or(f64::NAN),
+                y.as_f64().unwrap_or(f64::NAN),
+            );
             (xf - yf).abs() <= RECT_EPS
         }),
         _ => a == b,
@@ -85,7 +91,11 @@ fn diff_node_fields(a: &Value, b: &Value) -> Vec<FieldChange> {
         .filter_map(|field| {
             let av = a.get(field).unwrap_or(&Value::Null);
             let bv = b.get(field).unwrap_or(&Value::Null);
-            let equal = if field == "rect" { rects_equal(av, bv) } else { av == bv };
+            let equal = if field == "rect" {
+                rects_equal(av, bv)
+            } else {
+                av == bv
+            };
             if equal {
                 None
             } else {
@@ -105,7 +115,11 @@ fn surface_target_count(surfaces: &Value) -> usize {
         .as_array()
         .map(|arr| {
             arr.iter()
-                .map(|s| s.get("targets").and_then(Value::as_array).map_or(0, Vec::len))
+                .map(|s| {
+                    s.get("targets")
+                        .and_then(Value::as_array)
+                        .map_or(0, Vec::len)
+                })
                 .sum()
         })
         .unwrap_or(0)
@@ -128,15 +142,32 @@ pub(super) fn normalize_dump(dump: &Value) -> Value {
     // still compares equal. Ties keep dump order.
     let sort_key = |n: &Value| {
         let field = |k: &str| n.get(k).map(Value::to_string).unwrap_or_default();
-        let visible = n.get("flags").and_then(Value::as_str).is_none_or(|f| f.contains("VISIBLE"));
-        let rect = if visible { field("rect") } else { String::new() };
-        [field("type"), rect, field("text"), field("bg"), field("name")].join("|")
+        let visible = n
+            .get("flags")
+            .and_then(Value::as_str)
+            .is_none_or(|f| f.contains("VISIBLE"));
+        let rect = if visible {
+            field("rect")
+        } else {
+            String::new()
+        };
+        [
+            field("type"),
+            rect,
+            field("text"),
+            field("bg"),
+            field("name"),
+        ]
+        .join("|")
     };
     let mut order: Vec<usize> = (0..nodes.len()).collect();
     order.sort_by_cached_key(|&i| sort_key(&nodes[i]));
     let nodes: Vec<&Value> = order.iter().map(|&i| &nodes[i]).collect();
-    let position: std::collections::HashMap<u64, usize> =
-        nodes.iter().enumerate().filter_map(|(i, n)| node_id(n).map(|id| (id, i))).collect();
+    let position: std::collections::HashMap<u64, usize> = nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, n)| node_id(n).map(|id| (id, i)))
+        .collect();
     let nodes: Vec<Value> = nodes
         .iter()
         .enumerate()
@@ -147,8 +178,14 @@ pub(super) fn normalize_dump(dump: &Value) -> Value {
                 // `draw_order` is the mint counter, read by nothing that paints.
                 obj.remove("draw_order");
                 obj.insert("id".into(), Value::from(i as u64));
-                let parent = obj.get("parent").and_then(Value::as_u64).and_then(|p| position.get(&p).copied());
-                obj.insert("parent".into(), parent.map_or(Value::Null, |p| Value::from(p as u64)));
+                let parent = obj
+                    .get("parent")
+                    .and_then(Value::as_u64)
+                    .and_then(|p| position.get(&p).copied());
+                obj.insert(
+                    "parent".into(),
+                    parent.map_or(Value::Null, |p| Value::from(p as u64)),
+                );
                 if let Some(flags) = obj.get("flags").and_then(Value::as_str) {
                     let kept = strip_volatile_flags(flags);
                     // A hidden node draws nothing, so where it sits is not shown.
@@ -172,7 +209,10 @@ pub(super) fn normalize_dump(dump: &Value) -> Value {
 /// An empty set prints as `UIFlags(0x0)`, so `0x0` is dropped too: it must
 /// match a set that held only volatile flags.
 fn strip_volatile_flags(flags: &str) -> String {
-    let inner = flags.strip_prefix("UIFlags(").and_then(|s| s.strip_suffix(')')).unwrap_or(flags);
+    let inner = flags
+        .strip_prefix("UIFlags(")
+        .and_then(|s| s.strip_suffix(')'))
+        .unwrap_or(flags);
     inner
         .split('|')
         .map(str::trim)
@@ -222,9 +262,15 @@ pub(super) fn diff_trees(a: &Value, b: &Value) -> (Vec<String>, bool) {
                     unchanged += 1;
                 } else {
                     changed += 1;
-                    let parts: Vec<String> =
-                        field_changes.iter().map(|c| format!("{} {} -> {}", c.field, c.from, c.to)).collect();
-                    lines.push(format!("node {id} [{}]: {}", node_label(bn), parts.join("; ")));
+                    let parts: Vec<String> = field_changes
+                        .iter()
+                        .map(|c| format!("{} {} -> {}", c.field, c.from, c.to))
+                        .collect();
+                    lines.push(format!(
+                        "node {id} [{}]: {}",
+                        node_label(bn),
+                        parts.join("; ")
+                    ));
                 }
             }
         }
@@ -253,7 +299,9 @@ pub(super) fn diff_trees(a: &Value, b: &Value) -> (Vec<String>, bool) {
         ));
     }
 
-    lines.push(format!("{added} added, {removed} removed, {changed} changed, {unchanged} unchanged"));
+    lines.push(format!(
+        "{added} added, {removed} removed, {changed} changed, {unchanged} unchanged"
+    ));
     (lines, added + removed + changed > 0 || surfaces_differ)
 }
 
@@ -293,8 +341,14 @@ fn parse_coords(spec: &str) -> Vec<(u32, u32)> {
                 std::process::exit(2);
             };
             let mut it = pair.split(',');
-            let x: u32 = it.next().and_then(|s| s.trim().parse().ok()).unwrap_or_else(bad);
-            let y: u32 = it.next().and_then(|s| s.trim().parse().ok()).unwrap_or_else(bad);
+            let x: u32 = it
+                .next()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or_else(bad);
+            let y: u32 = it
+                .next()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or_else(bad);
             (x, y)
         })
         .collect()
@@ -322,7 +376,10 @@ pub fn probe_png(png_path: &Path, coords_spec: &str) {
             std::process::exit(2);
         }
         let px = img.get_pixel(x, y);
-        println!("probe ({x},{y}) = #{:02x}{:02x}{:02x}{:02x}", px[0], px[1], px[2], px[3]);
+        println!(
+            "probe ({x},{y}) = #{:02x}{:02x}{:02x}{:02x}",
+            px[0], px[1], px[2], px[3]
+        );
     }
 }
 
@@ -365,7 +422,10 @@ pub fn crop_png(png_path: &Path, rect_spec: &str) -> PathBuf {
     let (cw, ch) = ((x1 - x0).max(0) as u32, (y1 - y0).max(0) as u32);
     let cropped = img.crop_imm(x0 as u32, y0 as u32, cw, ch);
 
-    let stem = png_path.file_stem().and_then(|s| s.to_str()).unwrap_or("crop");
+    let stem = png_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("crop");
     let mut out_path = png_path.to_path_buf();
     out_path.set_file_name(format!("{stem}.crop.png"));
     cropped.save(&out_path).unwrap_or_else(|e| {
@@ -398,7 +458,10 @@ mod tests {
         let b = a.clone();
         let (lines, differs) = diff_trees(&a, &b);
         assert!(!differs);
-        assert_eq!(lines.last().unwrap(), "0 added, 0 removed, 0 changed, 1 unchanged");
+        assert_eq!(
+            lines.last().unwrap(),
+            "0 added, 0 removed, 0 changed, 1 unchanged"
+        );
     }
 
     #[test]
@@ -407,9 +470,20 @@ mod tests {
         let b = dump(json!([{ "id": 42, "rect": [10.0, 20.0, 100.0, 30.0], "bg": "#38383cff" }]));
         let (lines, differs) = diff_trees(&a, &b);
         assert!(differs);
-        assert!(lines[0].starts_with("node 0 "), "unexpected line: {}", lines[0]);
-        assert!(lines[0].contains("bg #2a2a2dff -> #38383cff"), "unexpected line: {}", lines[0]);
-        assert_eq!(lines.last().unwrap(), "0 added, 0 removed, 1 changed, 0 unchanged");
+        assert!(
+            lines[0].starts_with("node 0 "),
+            "unexpected line: {}",
+            lines[0]
+        );
+        assert!(
+            lines[0].contains("bg #2a2a2dff -> #38383cff"),
+            "unexpected line: {}",
+            lines[0]
+        );
+        assert_eq!(
+            lines.last().unwrap(),
+            "0 added, 0 removed, 1 changed, 0 unchanged"
+        );
     }
 
     #[test]
@@ -420,9 +494,15 @@ mod tests {
         let b = dump(json!([one, two]));
         let (lines, differs) = diff_trees(&a, &b);
         assert!(differs);
-        assert!(lines.iter().any(|l| l == "node 1 [-]: added"), "lines: {lines:?}");
+        assert!(
+            lines.iter().any(|l| l == "node 1 [-]: added"),
+            "lines: {lines:?}"
+        );
         let (lines, _) = diff_trees(&b, &a);
-        assert!(lines.iter().any(|l| l == "node 1 [-]: removed"), "lines: {lines:?}");
+        assert!(
+            lines.iter().any(|l| l == "node 1 [-]: removed"),
+            "lines: {lines:?}"
+        );
     }
 
     #[test]
@@ -468,8 +548,15 @@ mod tests {
         let b = dump(json!([{ "id": 7, "rect": [0.0, 0.0, 10.0, 10.0], "opacity": 0.5 }]));
         let (lines, differs) = diff_trees(&a, &b);
         assert!(differs);
-        assert!(lines[0].contains("opacity null -> 0.5"), "unexpected line: {}", lines[0]);
-        assert_eq!(lines.last().unwrap(), "0 added, 0 removed, 1 changed, 0 unchanged");
+        assert!(
+            lines[0].contains("opacity null -> 0.5"),
+            "unexpected line: {}",
+            lines[0]
+        );
+        assert_eq!(
+            lines.last().unwrap(),
+            "0 added, 0 removed, 1 changed, 0 unchanged"
+        );
     }
 
     #[test]
@@ -482,9 +569,14 @@ mod tests {
         let (lines, differs) = diff_trees(&a, &b);
         assert!(differs);
         assert!(
-            lines.iter().any(|l| l == "custom_surfaces differ (0 -> 1 targets across 0 -> 1 surfaces)"),
+            lines
+                .iter()
+                .any(|l| l == "custom_surfaces differ (0 -> 1 targets across 0 -> 1 surfaces)"),
             "lines: {lines:?}"
         );
-        assert_eq!(lines.last().unwrap(), "0 added, 0 removed, 0 changed, 1 unchanged");
+        assert_eq!(
+            lines.last().unwrap(),
+            "0 added, 0 removed, 0 changed, 1 unchanged"
+        );
     }
 }

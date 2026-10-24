@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex, Weak, mpsc};
 
-use {crate::node_graph::gltf_load, super::gltf_load::GltfInterp, super::gltf_load::Mat4};
+use {super::gltf_load::GltfInterp, super::gltf_load::Mat4, crate::node_graph::gltf_load};
 
 pub(crate) type LoadedAnimSet = manifold_node_engine::scene::source_asset::LoadedAsset<GltfAnimSet>;
 
@@ -130,7 +130,15 @@ impl Channel {
                 out_tangents.extend_from_slice(&track.out_tangents[i]);
             }
         }
-        Channel { target_node, kind, mode: track.mode, times: track.times.clone(), values, in_tangents, out_tangents }
+        Channel {
+            target_node,
+            kind,
+            mode: track.mode,
+            times: track.times.clone(),
+            values,
+            in_tangents,
+            out_tangents,
+        }
     }
 
     fn from_quat(target_node: u32, track: &gltf_load::QuatTrack) -> Self {
@@ -151,7 +159,15 @@ impl Channel {
                 out_tangents.extend_from_slice(&track.out_tangents[i]);
             }
         }
-        Channel { target_node, kind, mode: track.mode, times: track.times.clone(), values, in_tangents, out_tangents }
+        Channel {
+            target_node,
+            kind,
+            mode: track.mode,
+            times: track.times.clone(),
+            values,
+            in_tangents,
+            out_tangents,
+        }
     }
 
     /// Morph-weight channels are LINEAR-only (GLTF_ANIMATION_DESIGN.md A3,
@@ -197,15 +213,21 @@ impl AnimClip {
     }
 
     pub(crate) fn translation_channel(&self, node: u32) -> Option<&Channel> {
-        self.channels_for_node(node).iter().find(|c| c.kind == ChannelKind::Translation)
+        self.channels_for_node(node)
+            .iter()
+            .find(|c| c.kind == ChannelKind::Translation)
     }
 
     pub(crate) fn rotation_channel(&self, node: u32) -> Option<&Channel> {
-        self.channels_for_node(node).iter().find(|c| c.kind == ChannelKind::Rotation)
+        self.channels_for_node(node)
+            .iter()
+            .find(|c| c.kind == ChannelKind::Rotation)
     }
 
     pub(crate) fn scale_channel(&self, node: u32) -> Option<&Channel> {
-        self.channels_for_node(node).iter().find(|c| c.kind == ChannelKind::Scale)
+        self.channels_for_node(node)
+            .iter()
+            .find(|c| c.kind == ChannelKind::Scale)
     }
 
     /// GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: `node.gltf_morph_weights`' cache
@@ -213,7 +235,9 @@ impl AnimClip {
     /// convention as TRS channels (the mesh-owning node), matched
     /// regardless of `target_count` (the caller checks that separately).
     pub(crate) fn weights_channel(&self, node: u32) -> Option<&Channel> {
-        self.channels_for_node(node).iter().find(|c| matches!(c.kind, ChannelKind::Weights { .. }))
+        self.channels_for_node(node)
+            .iter()
+            .find(|c| matches!(c.kind, ChannelKind::Weights { .. }))
     }
 }
 
@@ -247,13 +271,18 @@ fn load_anim_set(path: &Path) -> Result<Arc<LoadedAnimSet>, String> {
         return Ok(set);
     }
     let identity = snapshot.identity;
-    Ok(insert_cache(identity, Arc::new(decode_anim_set(snapshot).into())))
+    Ok(insert_cache(
+        identity,
+        Arc::new(decode_anim_set(snapshot).into()),
+    ))
 }
 
 /// Parse the exact snapshot that produced the cache key, without reopening
 /// its files or maintaining another document/buffer parser.
 fn decode_anim_set(snapshot: gltf_load::GltfBufferSnapshot) -> GltfAnimSet {
-    let gltf_load::GltfBufferSnapshot { document, buffers, .. } = snapshot;
+    let gltf_load::GltfBufferSnapshot {
+        document, buffers, ..
+    } = snapshot;
 
     let node_parents: Vec<i32> = gltf_load::build_parent_map(&document)
         .iter()
@@ -263,7 +292,11 @@ fn decode_anim_set(snapshot: gltf_load::GltfBufferSnapshot) -> GltfAnimSet {
         .nodes()
         .map(|n| {
             let (translation, rotation, scale) = n.transform().decomposed();
-            BindTrs { translation, rotation, scale }
+            BindTrs {
+                translation,
+                rotation,
+                scale,
+            }
         })
         .collect();
 
@@ -299,7 +332,10 @@ fn decode_anim_set(snapshot: gltf_load::GltfBufferSnapshot) -> GltfAnimSet {
                 .map(|c| c.times.last().copied().unwrap_or(0.0))
                 .fold(0.0f32, f32::max)
                 .max(1e-3);
-            AnimClip { duration_s, channels }
+            AnimClip {
+                duration_s,
+                channels,
+            }
         })
         .collect();
 
@@ -313,7 +349,12 @@ fn decode_anim_set(snapshot: gltf_load::GltfBufferSnapshot) -> GltfAnimSet {
         })
         .collect();
 
-    GltfAnimSet { clips, skins, node_parents, node_bind_trs }
+    GltfAnimSet {
+        clips,
+        skins,
+        node_parents,
+        node_bind_trs,
+    }
 }
 
 /// Reuse the existing approved cache and lock. Keys cover primary and
@@ -374,13 +415,23 @@ mod tests {
     fn clip_channel_lookup_finds_the_grouped_node_slice() {
         let clip = AnimClip {
             duration_s: 1.0,
-            channels: vec![synthetic_channel(0, 4), synthetic_channel(2, 4), synthetic_channel(5, 4)],
+            channels: vec![
+                synthetic_channel(0, 4),
+                synthetic_channel(2, 4),
+                synthetic_channel(5, 4),
+            ],
         };
         assert!(clip.translation_channel(0).is_some());
         assert!(clip.translation_channel(2).is_some());
         assert!(clip.translation_channel(5).is_some());
-        assert!(clip.translation_channel(1).is_none(), "no channel authored for node 1");
-        assert!(clip.rotation_channel(0).is_none(), "node 0 has no rotation channel");
+        assert!(
+            clip.translation_channel(1).is_none(),
+            "no channel authored for node 1"
+        );
+        assert!(
+            clip.rotation_channel(0).is_none(),
+            "node 0 has no rotation channel"
+        );
     }
 
     /// D2's structural property: the last `Arc<GltfAnimSet>` dropping
@@ -396,9 +447,15 @@ mod tests {
             node_bind_trs: Vec::new(),
         }));
         let set = insert_cache(identity, set);
-        assert!(cached(&identity).is_some(), "cache hit while the Arc is alive");
+        assert!(
+            cached(&identity).is_some(),
+            "cache hit while the Arc is alive"
+        );
         drop(set);
-        assert!(cached(&identity).is_none(), "Weak::upgrade() must be None once every Arc has dropped");
+        assert!(
+            cached(&identity).is_none(),
+            "Weak::upgrade() must be None once every Arc has dropped"
+        );
     }
 }
 

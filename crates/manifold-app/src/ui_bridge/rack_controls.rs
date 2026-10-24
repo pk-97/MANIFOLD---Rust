@@ -17,13 +17,22 @@ use manifold_ui::{InspectorTab, ScrubPhase};
 pub(crate) fn rack_target(tab: InspectorTab, layer_id: &Option<LayerId>) -> Option<EffectTarget> {
     match tab {
         InspectorTab::Master => Some(EffectTarget::Master),
-        _ => layer_id.clone().map(|layer_id| EffectTarget::Layer { layer_id }),
+        _ => layer_id
+            .clone()
+            .map(|layer_id| EffectTarget::Layer { layer_id }),
     }
 }
 
-fn group_state(project: &Project, target: &EffectTarget, group_id: &EffectGroupId) -> Option<(bool, f32)> {
+fn group_state(
+    project: &Project,
+    target: &EffectTarget,
+    group_id: &EffectGroupId,
+) -> Option<(bool, f32)> {
     with_effects(project, target, |_, groups| {
-        groups.iter().find(|g| g.id == *group_id).map(|g| (g.enabled, g.wet_dry))
+        groups
+            .iter()
+            .find(|g| g.id == *group_id)
+            .map(|g| (g.enabled, g.wet_dry))
     })
     .flatten()
 }
@@ -41,14 +50,22 @@ pub(crate) fn dispatch_bypass(
         && current != enabled
     {
         let cmd = ToggleGroupCommand::new(target, group_id.clone(), current, enabled);
-        ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
+        ContentCommand::send(
+            ctx.content_tx,
+            ContentCommand::ExecuteOnContent(Box::new(cmd)),
+        );
     }
     DispatchResult::handled()
 }
 
 /// Write the rack's wet/dry in place, the same write a drag move and the
 /// mid-gesture restore both use.
-pub(crate) fn set_wet_dry(project: &mut Project, target: &EffectTarget, group_id: &EffectGroupId, value: f32) {
+pub(crate) fn set_wet_dry(
+    project: &mut Project,
+    target: &EffectTarget,
+    group_id: &EffectGroupId,
+    value: f32,
+) {
     with_effects_mut(project, target, |_, groups| {
         if let Some(group) = groups.iter_mut().find(|g| g.id == *group_id) {
             group.wet_dry = value;
@@ -107,9 +124,9 @@ mod tests {
     use super::*;
     use crate::app::SelectionState;
     use crate::ui_root::UIRoot;
+    use manifold_core::PresetTypeId;
     use manifold_core::effects::EffectGroup;
     use manifold_core::types::LayerType;
-    use manifold_core::PresetTypeId;
     use manifold_editing::service::EditingService;
     use manifold_ui::{PanelAction, ParamsAction, ScrubValue, ValueRef};
 
@@ -228,11 +245,22 @@ mod tests {
         let scrub = |phase| PanelAction::Scrub(address.clone(), phase);
         rig.dispatch(&scrub(ScrubPhase::Begin), &mut project);
         for v in [0.9, 0.6, 0.3] {
-            rig.dispatch(&scrub(ScrubPhase::Move(ScrubValue::Scalar(v))), &mut project);
+            rig.dispatch(
+                &scrub(ScrubPhase::Move(ScrubValue::Scalar(v))),
+                &mut project,
+            );
         }
-        assert_eq!(group_of(&project, &layer).wet_dry, 0.3, "the UI copy tracks the cursor");
+        assert_eq!(
+            group_of(&project, &layer).wet_dry,
+            0.3,
+            "the UI copy tracks the cursor"
+        );
         rig.dispatch(&scrub(ScrubPhase::Commit), &mut project);
-        assert_eq!(rig.apply(&mut service, &mut content), 1, "the whole drag is one command");
+        assert_eq!(
+            rig.apply(&mut service, &mut content),
+            1,
+            "the whole drag is one command"
+        );
         assert_eq!(group_of(&content, &layer).wet_dry, 0.3);
         assert!(service.undo(&mut content));
         assert_eq!(group_of(&content, &layer).wet_dry, 1.0);

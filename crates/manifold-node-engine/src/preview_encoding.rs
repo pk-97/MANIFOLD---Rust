@@ -238,7 +238,10 @@ impl PreviewEncoding {
             .map(|n| {
                 (
                     n.node_id.clone(),
-                    kind.get(&n.id).copied().flatten().unwrap_or(Self::ScalarLift),
+                    kind.get(&n.id)
+                        .copied()
+                        .flatten()
+                        .unwrap_or(Self::ScalarLift),
                 )
             })
             .collect()
@@ -289,7 +292,13 @@ fn name_is_depth(s: &str) -> bool {
 
 fn name_is_color(s: &str) -> bool {
     [
-        "color", "colour", "albedo", "image", "composite", "display", "final",
+        "color",
+        "colour",
+        "albedo",
+        "image",
+        "composite",
+        "display",
+        "final",
     ]
     .iter()
     .any(|k| s.contains(k))
@@ -312,8 +321,6 @@ mod tests {
             PreviewEncoding::VectorField
         );
     }
-
-
 
     #[test]
     fn density_port_picks_scalar() {
@@ -342,7 +349,10 @@ mod tests {
     #[test]
     fn filter_declares_nothing_unknown_falls_to_scalar() {
         // A blur asserts no kind of its own (it's transparent to its input).
-        assert_eq!(PreviewEncoding::declared_kind("node.gaussian_blur", "out"), None);
+        assert_eq!(
+            PreviewEncoding::declared_kind("node.gaussian_blur", "out"),
+            None
+        );
         // …so the single-node fallback for a generic port is the safe lift.
         assert_eq!(
             PreviewEncoding::derive("node.gaussian_blur", "out"),
@@ -394,8 +404,6 @@ mod tests {
             wires,
         }
     }
-
-
 
     #[test]
     fn color_source_propagates_through_blur() {

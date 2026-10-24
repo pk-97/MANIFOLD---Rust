@@ -443,7 +443,15 @@ mod tests {
     #[test]
     fn select_layer_quads_skips_missing_and_degenerate() {
         let mut rects: Vec<(usize, Rect)> = (0..70).map(|i| (i * 4, rect())).collect();
-        rects.push((3, Rect { x: 0.0, y: 0.0, width: 0.0, height: 10.0 }));
+        rects.push((
+            3,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 10.0,
+            },
+        ));
         let live: std::collections::HashSet<usize> = (0..70).map(|i| i * 4).collect();
         let (selected, cap_hit) = select_layer_quads(&rects, 300, |i| live.contains(&i));
         assert_eq!(selected.len(), 70, "only live, non-degenerate layers");

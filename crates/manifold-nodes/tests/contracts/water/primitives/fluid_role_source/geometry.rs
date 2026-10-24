@@ -1,11 +1,15 @@
 pub(super) mod tests {
-    use std::fs;
-    use manifold_water_liquid::primitives::fluid_role_source::{CompoundPreparation, WiredPreparation};
-    use manifold_water_liquid::primitives::fluid_role_source::geometry::{prepare_geometry, prepare_wired_geometry};
-    use manifold_water_liquid::testkit::fluid_role_source::cube_triangle_list;
-    use manifold_node_engine::scene::mesh_source::MeshSource;
     use manifold_node_engine::scene::mesh_selection::MeshSelection;
+    use manifold_node_engine::scene::mesh_source::MeshSource;
     use manifold_node_engine::scene::transform::Transform;
+    use manifold_water_liquid::primitives::fluid_role_source::geometry::{
+        prepare_geometry, prepare_wired_geometry,
+    };
+    use manifold_water_liquid::primitives::fluid_role_source::{
+        CompoundPreparation, WiredPreparation,
+    };
+    use manifold_water_liquid::testkit::fluid_role_source::cube_triangle_list;
+    use std::fs;
 
     pub(crate) fn write_two_material_cube_fixture() -> (std::path::PathBuf, CompoundPreparation) {
         let vertices = cube_triangle_list();
@@ -76,10 +80,15 @@ pub(super) mod tests {
             wired.sources[slot] = Some(MeshSource::Gltf {
                 path: std::sync::Arc::from(source_path.to_str().unwrap()),
                 node_path: None,
-                selection: manifold_water_liquid::primitives::fluid_role_source::default_selection().with_material(slot as i32),
+                selection: manifold_water_liquid::primitives::fluid_role_source::default_selection(
+                )
+                .with_material(slot as i32),
             });
         }
-        let transform = Transform { pos: [0.0, 2.0, 0.0], ..Transform::default() };
+        let transform = Transform {
+            pos: [0.0, 2.0, 0.0],
+            ..Transform::default()
+        };
         let first = prepare_wired_geometry(&wired, transform).unwrap();
         assert_eq!(first[0].vertices.len(), 8);
         assert_eq!(first[0].triangles.len(), 12);
@@ -99,8 +108,12 @@ pub(super) mod tests {
             selection.material = 0;
         }
         let doubled = prepare_wired_geometry(&wired, transform).unwrap();
-        assert!(manifold_physics::closed_triangles(&doubled[0]).unwrap().contains(&false),
-            "two copies of one half are an open surface, not the original closed cube");
+        assert!(
+            manifold_physics::closed_triangles(&doubled[0])
+                .unwrap()
+                .contains(&false),
+            "two copies of one half are an open surface, not the original closed cube"
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -118,8 +131,8 @@ pub(super) mod tests {
             fragment_index: 0,
             own_space: false,
         };
-        let meshes = prepare_geometry(&path, selection, Transform::default(), Some(&compound))
-        .unwrap();
+        let meshes =
+            prepare_geometry(&path, selection, Transform::default(), Some(&compound)).unwrap();
         assert_eq!(meshes[0].vertices.len(), 8);
         assert_eq!(meshes[0].triangles.len(), 12);
         manifold_fluids::validate_mesh(&meshes[0]).unwrap();

@@ -26,7 +26,11 @@ pub(crate) fn migrate(value: &mut Value) {
 }
 
 fn migrate_graph(graph: &mut Value) {
-    let name = graph.get("name").and_then(Value::as_str).unwrap_or("Unnamed graph").to_owned();
+    let name = graph
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("Unnamed graph")
+        .to_owned();
     let mut dropped = 0usize;
     let mut body_ids = BTreeSet::new();
     if let Some(nodes) = graph.get_mut("nodes").and_then(Value::as_array_mut) {
@@ -46,19 +50,26 @@ fn migrate_graph(graph: &mut Value) {
         let before = wires.len();
         wires.retain(|wire| {
             !(wire.get("toPort").and_then(Value::as_str) == Some("mass")
-                && wire.get("toNode").and_then(Value::as_u64).is_some_and(|id| body_ids.contains(&id)))
+                && wire
+                    .get("toNode")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|id| body_ids.contains(&id)))
         });
         dropped += before - wires.len();
     }
 
     let mut body_node_ids = BTreeSet::new();
     collect_body_node_ids(graph, &mut body_node_ids);
-    if let Some(meta) = graph.get_mut("presetMetadata").and_then(Value::as_object_mut) {
+    if let Some(meta) = graph
+        .get_mut("presetMetadata")
+        .and_then(Value::as_object_mut)
+    {
         let mut removed = BTreeSet::new();
         if let Some(bindings) = meta.get_mut("bindings").and_then(Value::as_array_mut) {
             bindings.retain(|binding| {
                 let target = binding.get("target");
-                let hit = target.and_then(|t| t.get("param")).and_then(Value::as_str) == Some("mass")
+                let hit = target.and_then(|t| t.get("param")).and_then(Value::as_str)
+                    == Some("mass")
                     && target
                         .and_then(|t| t.get("nodeId"))
                         .and_then(Value::as_str)
@@ -71,7 +82,10 @@ fn migrate_graph(graph: &mut Value) {
         }
         if let Some(params) = meta.get_mut("params").and_then(Value::as_array_mut) {
             params.retain(|param| {
-                !param.get("id").and_then(Value::as_str).is_some_and(|id| removed.contains(id))
+                !param
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| removed.contains(id))
             });
         }
         dropped += removed.len();
@@ -124,12 +138,21 @@ mod tests {
     #[test]
     fn mass_param_wires_and_cards_are_dropped_and_rerun_is_a_no_op() {
         super::super::take_migration_notes();
-        let after: Value = serde_json::from_str(&crate::migrate::migrate_if_needed(&project().to_string()).unwrap()).unwrap();
-        assert_eq!(after["projectVersion"], manifold_core::project::CURRENT_PROJECT_VERSION);
+        let after: Value = serde_json::from_str(
+            &crate::migrate::migrate_if_needed(&project().to_string()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            after["projectVersion"],
+            manifold_core::project::CURRENT_PROJECT_VERSION
+        );
         let graph = &after["timeline"]["layers"][0]["genParams"]["graph"];
         assert!(graph["nodes"][1]["params"].get("mass").is_none());
         assert_eq!(graph["nodes"][1]["params"]["friction"]["value"], 0.4);
-        assert_eq!(graph["nodes"][2]["params"]["mass"]["value"], 1.0, "only rigid bodies change");
+        assert_eq!(
+            graph["nodes"][2]["params"]["mass"]["value"], 1.0,
+            "only rigid bodies change"
+        );
         assert_eq!(graph["wires"].as_array().unwrap().len(), 1);
         assert_eq!(graph["wires"][0]["toPort"], "friction");
         let meta = &graph["presetMetadata"];
@@ -137,7 +160,9 @@ mod tests {
         assert_eq!(meta["params"], json!([{"id":"box_friction"}]));
         assert_eq!(super::super::take_migration_notes().len(), 1);
 
-        let second: Value = serde_json::from_str(&crate::migrate::migrate_if_needed(&after.to_string()).unwrap()).unwrap();
+        let second: Value =
+            serde_json::from_str(&crate::migrate::migrate_if_needed(&after.to_string()).unwrap())
+                .unwrap();
         assert_eq!(second, after);
     }
 }

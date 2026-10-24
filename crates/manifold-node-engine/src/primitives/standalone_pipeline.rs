@@ -91,11 +91,15 @@ pub fn dispatch_standalone_2d(
     // and the reflected input texture ports (currently well below this
     // bound). Keep the storage fixed so dispatches never allocate.
     let binding_count = textures.len() + 2 + usize::from(sampler.is_some());
-    assert!(binding_count <= STANDALONE_2D_MAX_BINDINGS, "standalone 2D binding count exceeds stack capacity");
-    let mut bindings: [_; STANDALONE_2D_MAX_BINDINGS] = std::array::from_fn(|_| manifold_gpu::GpuBinding::Bytes {
-        binding: 0,
-        data: &[],
-    });
+    assert!(
+        binding_count <= STANDALONE_2D_MAX_BINDINGS,
+        "standalone 2D binding count exceeds stack capacity"
+    );
+    let mut bindings: [_; STANDALONE_2D_MAX_BINDINGS] =
+        std::array::from_fn(|_| manifold_gpu::GpuBinding::Bytes {
+            binding: 0,
+            data: &[],
+        });
     let mut len = 0;
     bindings[len] = manifold_gpu::GpuBinding::Bytes {
         binding: 0,

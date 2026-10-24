@@ -4,8 +4,8 @@
 //! is its CPU twin.
 
 use crate::clock::{ClockFrame, SimulationClock};
-use crate::tick_samples::TickSamples;
 use crate::interaction::ForceSample;
+use crate::tick_samples::TickSamples;
 use crate::{FieldValue, VectorField};
 
 /// Solver cells per force-lattice cell along each axis
@@ -72,15 +72,24 @@ impl LatticeFrame {
         let [a, b, c] = axes;
         let rows = [cross(b, c), cross(c, a), cross(a, b)];
         let det = dot(a, rows[0]);
-        let size = [a, b, c].iter().map(|v| dot(*v, *v).sqrt()).product::<f32>();
+        let size = [a, b, c]
+            .iter()
+            .map(|v| dot(*v, *v).sqrt())
+            .product::<f32>();
         if !det.is_finite() || det.abs() <= 1e-6 * size {
             return None;
         }
-        Some(Self { axes, origin, inverse: rows.map(|row| row.map(|v| v / det)) })
+        Some(Self {
+            axes,
+            origin,
+            inverse: rows.map(|row| row.map(|v| v / det)),
+        })
     }
 
     fn point(&self, local: [f32; 3]) -> [f32; 3] {
-        std::array::from_fn(|d| self.origin[d] + (0..3).map(|i| self.axes[i][d] * local[i]).sum::<f32>())
+        std::array::from_fn(|d| {
+            self.origin[d] + (0..3).map(|i| self.axes[i][d] * local[i]).sum::<f32>()
+        })
     }
 
     fn vector_to_local(&self, world: [f32; 3]) -> [f32; 3] {
@@ -89,7 +98,11 @@ impl LatticeFrame {
 }
 
 fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -116,7 +129,8 @@ impl ForceLattice {
         Self {
             min,
             spacing: cell_size * FORCE_LATTICE_STRIDE as f32,
-            nodes: solver_nodes.map(|n| n.saturating_sub(1).div_ceil(FORCE_LATTICE_STRIDE).max(1) + 1),
+            nodes: solver_nodes
+                .map(|n| n.saturating_sub(1).div_ceil(FORCE_LATTICE_STRIDE).max(1) + 1),
             frame: None,
         }
     }
@@ -128,12 +142,20 @@ impl ForceLattice {
     pub fn over_box(min: [f32; 3], size: [f32; 3], detail: u32) -> Self {
         let detail = detail.max(2);
         let spacing = size.into_iter().fold(0.0_f32, f32::max) / (detail - 1) as f32;
-        Self { min, spacing, nodes: size.map(|s| ((s / spacing).ceil().max(1.0) as u32 + 1).min(detail)), frame: None }
+        Self {
+            min,
+            spacing,
+            nodes: size.map(|s| ((s / spacing).ceil().max(1.0) as u32 + 1).min(detail)),
+            frame: None,
+        }
     }
 
     /// This lattice laid in `frame`.
     pub fn in_frame(self, frame: LatticeFrame) -> Self {
-        Self { frame: Some(frame), ..self }
+        Self {
+            frame: Some(frame),
+            ..self
+        }
     }
 
     /// Where the node at `local` sits in the world.
@@ -143,7 +165,8 @@ impl ForceLattice {
 
     /// A world vector as the lattice stores it.
     fn stored(&self, world: [f32; 3]) -> [f32; 3] {
-        self.frame.map_or(world, |frame| frame.vector_to_local(world))
+        self.frame
+            .map_or(world, |frame| frame.vector_to_local(world))
     }
 
     pub fn min(&self) -> [f32; 3] {
@@ -180,7 +203,11 @@ impl ForceLattice {
 
     /// Sample a vector `field` (in the world) at every node into `values`,
     /// one `[f32; 4]` per node (an impulse lattice).
-    pub fn fill(&self, values: &mut [[f32; 4]], field: impl Fn([f32; 3]) -> [f32; 3]) -> Result<(), NotFinite> {
+    pub fn fill(
+        &self,
+        values: &mut [[f32; 4]],
+        field: impl Fn([f32; 3]) -> [f32; 3],
+    ) -> Result<(), NotFinite> {
         for (index, value) in values.iter_mut().enumerate() {
             let v = field(self.world(self.position(index)));
             if v.iter().any(|c| !c.is_finite()) {
@@ -198,11 +225,20 @@ impl ForceLattice {
     /// Sample a force `field` at every node into `values`, two `[f32; 4]` per
     /// node: (push, drag rate) then (drag rate × wind, 0). [`TickForces`]
     /// splits a big lattice across its [`FillWorkers`].
-    pub fn fill_forces(&self, values: &mut [[f32; 4]], field: impl Fn([f32; 3]) -> ForceSample) -> Result<(), NotFinite> {
+    pub fn fill_forces(
+        &self,
+        values: &mut [[f32; 4]],
+        field: impl Fn([f32; 3]) -> ForceSample,
+    ) -> Result<(), NotFinite> {
         self.fill_forces_from(0, values, &field)
     }
 
-    fn fill_forces_from(&self, first: usize, values: &mut [[f32; 4]], field: &impl Fn([f32; 3]) -> ForceSample) -> Result<(), NotFinite> {
+    fn fill_forces_from(
+        &self,
+        first: usize,
+        values: &mut [[f32; 4]],
+        field: &impl Fn([f32; 3]) -> ForceSample,
+    ) -> Result<(), NotFinite> {
         for (index, node) in values.chunks_exact_mut(2).enumerate() {
             let mut s = field(self.world(self.position(first + index)));
             if !s.is_finite() {
@@ -293,12 +329,23 @@ pub struct TickForces {
 
 /// Lay `field` onto `values`, on `workers` when the lattice is big enough to
 /// share out (starting them the first time).
-fn fill_lattice(workers: &mut Option<FillWorkers>, lattice: ForceLattice, values: &mut [[f32; 4]], field: &FieldValue) -> Result<(), String> {
+fn fill_lattice(
+    workers: &mut Option<FillWorkers>,
+    lattice: ForceLattice,
+    values: &mut [[f32; 4]],
+    field: &FieldValue,
+) -> Result<(), String> {
     let result = if values.len() / 2 < PARALLEL_FILL_NODES {
         lattice.fill_forces(values, |x| field.sample_force(x))
     } else {
-        let threads = || std::thread::available_parallelism().map_or(1, |n| n.get()).min(FILL_THREADS);
-        workers.get_or_insert_with(|| FillWorkers::start(threads() - 1)).fill(lattice, values, field)
+        let threads = || {
+            std::thread::available_parallelism()
+                .map_or(1, |n| n.get())
+                .min(FILL_THREADS)
+        };
+        workers
+            .get_or_insert_with(|| FillWorkers::start(threads() - 1))
+            .fill(lattice, values, field)
     };
     result.map_err(|_| NOT_FINITE.to_string())
 }
@@ -307,7 +354,10 @@ impl TickForces {
     /// Forces that also lay the far terms beside each lattice: what a
     /// swarm reads past its lattice ([`FarForces`]).
     pub fn with_far() -> Self {
-        Self { far: Some(FarForces::default()), ..Self::default() }
+        Self {
+            far: Some(FarForces::default()),
+            ..Self::default()
+        }
     }
 
     /// Lay each of the frame's ticks' fields onto `lattice`. Call right after
@@ -359,7 +409,11 @@ impl TickForces {
             if let Some(far) = self.far.as_mut() {
                 far.lay(&lattice, sampled.clone().map(|(_, at)| at));
             }
-            for (values, at) in self.forces.chunks_exact_mut(count).zip(sampled.map(|(_, at)| at)) {
+            for (values, at) in self
+                .forces
+                .chunks_exact_mut(count)
+                .zip(sampled.map(|(_, at)| at))
+            {
                 fill_lattice(&mut self.workers, lattice, values, at)?;
             }
             self.lattices = ticks;
@@ -373,13 +427,24 @@ impl TickForces {
 
     /// Each boundary a not-yet-run tick may start at under `clock` in
     /// `(from, until]`.
-    pub fn request_samples(&mut self, clock: &SimulationClock, from: crate::PlayedTime, until: crate::PlayedTime, out: &mut Vec<crate::PlayedTime>) {
+    pub fn request_samples(
+        &mut self,
+        clock: &SimulationClock,
+        from: crate::PlayedTime,
+        until: crate::PlayedTime,
+        out: &mut Vec<crate::PlayedTime>,
+    ) {
         self.samples.request(clock, from, until, out);
     }
 
     /// A history replay sample of the field at played time `now`, after
     /// `clock` observed this sample's Speed.
-    pub fn observe_sample(&mut self, clock: &SimulationClock, now: crate::PlayedTime, field: Option<&FieldValue>) {
+    pub fn observe_sample(
+        &mut self,
+        clock: &SimulationClock,
+        now: crate::PlayedTime,
+        field: Option<&FieldValue>,
+    ) {
         self.samples.observe(clock, now, field);
     }
 
@@ -406,18 +471,28 @@ impl TickForces {
     /// The far terms beside the lattices, packed; empty without
     /// [`Self::with_far`] or a far form.
     pub fn far(&self) -> &[[f32; 4]] {
-        if self.lattices == 0 { &[] } else { self.far.as_ref().map_or(&[], FarForces::packed) }
+        if self.lattices == 0 {
+            &[]
+        } else {
+            self.far.as_ref().map_or(&[], FarForces::packed)
+        }
     }
 
     /// Far terms per lattice in [`Self::far`]; 0 for none.
     pub fn far_terms(&self) -> usize {
-        if self.lattices == 0 { 0 } else { self.far.as_ref().map_or(0, FarForces::terms_per_lattice) }
+        if self.lattices == 0 {
+            0
+        } else {
+            self.far.as_ref().map_or(0, FarForces::terms_per_lattice)
+        }
     }
 
     /// The far force lattice `slot` gives at `local`, the CPU twin of a
     /// swarm's read past its lattice.
     pub fn sample_far(&self, slot: usize, local: [f32; 3]) -> ForceSample {
-        self.far.as_ref().map_or_else(ForceSample::default, |far| far.sample(slot, local))
+        self.far
+            .as_ref()
+            .map_or_else(ForceSample::default, |far| far.sample(slot, local))
     }
 }
 
@@ -481,17 +556,31 @@ mod tests {
     /// corner and never pass the detail, even where the division rounds up.
     #[test]
     fn force_lattice_over_a_box_keeps_its_detail_on_every_axis() {
-        for (size, detail) in [([4.0, 4.0, 4.0], 17), ([3.0, 0.7, 1.9], 64), ([0.3, 0.3, 9.1], 2), ([1.0e3, 1.0, 1.0e-3], 64)] {
+        for (size, detail) in [
+            ([4.0, 4.0, 4.0], 17),
+            ([3.0, 0.7, 1.9], 64),
+            ([0.3, 0.3, 9.1], 2),
+            ([1.0e3, 1.0, 1.0e-3], 64),
+        ] {
             let lattice = ForceLattice::over_box([-1.0; 3], size, detail);
             let longest = size.into_iter().fold(0.0_f32, f32::max);
-            assert!((lattice.spacing() - longest / (detail - 1) as f32).abs() <= 1e-6 * longest, "{size:?}");
+            assert!(
+                (lattice.spacing() - longest / (detail - 1) as f32).abs() <= 1e-6 * longest,
+                "{size:?}"
+            );
             for (nodes, extent) in lattice.nodes().into_iter().zip(size) {
                 assert!(nodes <= detail && nodes >= 2, "{size:?}: {nodes} nodes");
-                assert!((nodes - 1) as f32 * lattice.spacing() >= extent * (1.0 - 1e-6), "{size:?} reaches {extent}");
+                assert!(
+                    (nodes - 1) as f32 * lattice.spacing() >= extent * (1.0 - 1e-6),
+                    "{size:?} reaches {extent}"
+                );
             }
             assert!(lattice.node_count() <= (detail as usize).pow(3));
         }
-        assert_eq!(ForceLattice::over_box([0.0; 3], [4.0; 3], 17).nodes(), [17; 3]);
+        assert_eq!(
+            ForceLattice::over_box([0.0; 3], [4.0; 3], 17).nodes(),
+            [17; 3]
+        );
     }
 
     /// A force node carries the push, the drag rate and drag rate × wind;
@@ -500,11 +589,18 @@ mod tests {
     fn force_lattice_carries_wind_and_drag() {
         let field = FieldValue::radial([0.2, 0.1, -0.4], 1.5, 1.0)
             .unwrap()
-            .sum(&FieldValue::turbulence(0.8, [0.0; 3], 1).unwrap().air(2.0).unwrap())
+            .sum(
+                &FieldValue::turbulence(0.8, [0.0; 3], 1)
+                    .unwrap()
+                    .air(2.0)
+                    .unwrap(),
+            )
             .unwrap();
         let lattice = lattice();
         let mut values = vec![[0.0; 4]; 2 * lattice.node_count()];
-        lattice.fill_forces(&mut values, |x| field.sample_force(x)).unwrap();
+        lattice
+            .fill_forces(&mut values, |x| field.sample_force(x))
+            .unwrap();
         for index in [0, 7, 40, lattice.node_count() - 1] {
             let position = lattice.position(index);
             let expected = field.sample_force(position);
@@ -526,13 +622,24 @@ mod tests {
     #[test]
     fn force_lattice_in_a_frame_keeps_the_field_in_the_world() {
         // A quarter turn about y, doubled: local x lands on world -z, local z on world x.
-        let frame = LatticeFrame::new([[0.0, 0.0, -2.0], [0.0, 2.0, 0.0], [2.0, 0.0, 0.0]], [1.0, 2.0, 3.0]).unwrap();
+        let frame = LatticeFrame::new(
+            [[0.0, 0.0, -2.0], [0.0, 2.0, 0.0], [2.0, 0.0, 0.0]],
+            [1.0, 2.0, 3.0],
+        )
+        .unwrap();
         let lattice = ForceLattice::over_box([-1.0; 3], [2.0; 3], 3).in_frame(frame);
         let wind = FieldValue::uniform([1.0, 0.0, 0.0]).unwrap();
         let mut values = vec![[0.0; 4]; 2 * lattice.node_count()];
-        lattice.fill_forces(&mut values, |x| wind.sample_force(x)).unwrap();
+        lattice
+            .fill_forces(&mut values, |x| wind.sample_force(x))
+            .unwrap();
         for node in values.chunks_exact(2) {
-            assert!(node[0][0].abs() < 1e-6 && node[0][1].abs() < 1e-6 && (node[0][2] - 0.5).abs() < 1e-6, "world +x is local +z at half length: {node:?}");
+            assert!(
+                node[0][0].abs() < 1e-6
+                    && node[0][1].abs() < 1e-6
+                    && (node[0][2] - 0.5).abs() < 1e-6,
+                "world +x is local +z at half length: {node:?}"
+            );
         }
         let radial = FieldValue::radial([1.0, 2.0, 3.0], 10.0, 1.0).unwrap();
         let mut impulses = vec![[0.0; 4]; lattice.node_count()];
@@ -546,13 +653,20 @@ mod tests {
             let along = dot(v, local) / (dot(v, v).sqrt() * l);
             assert!(along.abs() > 1.0 - 1e-5, "node {local:?} reads {v:?}");
         }
-        assert_eq!(LatticeFrame::new([[1.0, 0.0, 0.0], [0.0; 3], [0.0, 0.0, 1.0]], [0.0; 3]), None, "a flattened axis has no inverse");
+        assert_eq!(
+            LatticeFrame::new([[1.0, 0.0, 0.0], [0.0; 3], [0.0, 0.0, 1.0]], [0.0; 3]),
+            None,
+            "a flattened axis has no inverse"
+        );
     }
 
     #[test]
     fn force_lattice_refuses_a_non_finite_field() {
         let lattice = lattice();
         let mut values = vec![[0.0; 4]; lattice.node_count()];
-        assert_eq!(lattice.fill(&mut values, |_| [f32::NAN, 0.0, 0.0]), Err(NotFinite));
+        assert_eq!(
+            lattice.fill(&mut values, |_| [f32::NAN, 0.0, 0.0]),
+            Err(NotFinite)
+        );
     }
 }

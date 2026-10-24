@@ -35,10 +35,7 @@ pub(crate) fn parse_and_validate_wgsl(
 /// the shared tail of [`parse_and_validate_wgsl`] and
 /// [`rebind_vertex_output_as_point_size`], both of which must surface shader
 /// errors loudly at boot rather than swallow them at runtime.
-fn validate_module(
-    module: naga::Module,
-    label: &str,
-) -> (naga::Module, naga::valid::ModuleInfo) {
+fn validate_module(module: naga::Module, label: &str) -> (naga::Module, naga::valid::ModuleInfo) {
     let info = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
@@ -91,7 +88,10 @@ pub(crate) fn rebind_vertex_output_as_point_size(
     // `UniqueArena` exposes no mutable accessor — clone the type, flip the
     // member's binding in the clone, swap it back.
     let mut ty = module.types[result_ty].clone();
-    let naga::TypeInner::Struct { ref mut members, .. } = ty.inner else {
+    let naga::TypeInner::Struct {
+        ref mut members, ..
+    } = ty.inner
+    else {
         panic!("{label}: point-size entry '{vs_entry}' result must be a struct")
     };
     let member = members

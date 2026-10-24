@@ -9,7 +9,9 @@ use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
-use super::switch_mesh::{selected_switch_input, switch_output_capacity, switch_passthrough, ArraySwitch};
+use super::switch_mesh::{
+    ArraySwitch, selected_switch_input, switch_output_capacity, switch_passthrough,
+};
 
 manifold_node_engine::primitive! {
     name: SwitchInstances,
@@ -52,11 +54,19 @@ manifold_node_engine::param_tooltips!("node.switch_instances", {
 });
 
 impl Primitive for SwitchInstances {
-    fn selected_input_branch(&self, params: &ParamValues, wired_inputs: &[&str]) -> Option<&'static str> {
+    fn selected_input_branch(
+        &self,
+        params: &ParamValues,
+        wired_inputs: &[&str],
+    ) -> Option<&'static str> {
         selected_switch_input(params, wired_inputs)
     }
 
-    fn skip_passthrough(&self, params: &ParamValues, wired_inputs: &[&str]) -> Option<(&'static str, &'static str)> {
+    fn skip_passthrough(
+        &self,
+        params: &ParamValues,
+        wired_inputs: &[&str],
+    ) -> Option<(&'static str, &'static str)> {
         switch_passthrough(params, wired_inputs)
     }
 
@@ -74,7 +84,11 @@ impl Primitive for SwitchInstances {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        self.switch.run(ctx, std::mem::size_of::<InstanceTransform>() as u64, "node.switch_instances");
+        self.switch.run(
+            ctx,
+            std::mem::size_of::<InstanceTransform>() as u64,
+            "node.switch_instances",
+        );
     }
 }
 
@@ -93,12 +107,22 @@ mod tests {
     fn ports_are_a_param_shadowed_selector_and_two_instance_inputs() {
         let node = SwitchInstances::new();
         let instances = PortType::Array(ArrayType::of_known::<InstanceTransform>());
-        let inputs: Vec<_> = EffectNode::inputs(&node).iter().map(|p| (p.name.as_ref(), p.ty, p.required)).collect();
+        let inputs: Vec<_> = EffectNode::inputs(&node)
+            .iter()
+            .map(|p| (p.name.as_ref(), p.ty, p.required))
+            .collect();
         assert_eq!(
             inputs,
-            [("selector", PortType::Scalar(ScalarType::F32), true), ("in_0", instances, false), ("in_1", instances, false)]
+            [
+                ("selector", PortType::Scalar(ScalarType::F32), true),
+                ("in_0", instances, false),
+                ("in_1", instances, false)
+            ]
         );
-        let outputs: Vec<_> = EffectNode::outputs(&node).iter().map(|p| (p.name.as_ref(), p.ty)).collect();
+        let outputs: Vec<_> = EffectNode::outputs(&node)
+            .iter()
+            .map(|p| (p.name.as_ref(), p.ty))
+            .collect();
         assert_eq!(outputs, [("out", instances)]);
     }
 
@@ -107,15 +131,30 @@ mod tests {
         let node = SwitchInstances::new();
         let mut params = ParamValues::default();
         params.insert(Cow::Borrowed("selector"), ParamValue::Float(1.0));
-        assert_eq!(Primitive::selected_input_branch(&node, &params, &["selector", "in_0", "in_1"]), None);
-        assert_eq!(Primitive::selected_input_branch(&node, &params, &["in_0", "in_1"]), Some("in_1"));
-        assert_eq!(Primitive::array_output_capacity(&node, "out", &params, &[("in_1", 7)]), Some(7));
+        assert_eq!(
+            Primitive::selected_input_branch(&node, &params, &["selector", "in_0", "in_1"]),
+            None
+        );
+        assert_eq!(
+            Primitive::selected_input_branch(&node, &params, &["in_0", "in_1"]),
+            Some("in_1")
+        );
+        assert_eq!(
+            Primitive::array_output_capacity(&node, "out", &params, &[("in_1", 7)]),
+            Some(7)
+        );
     }
 
     #[test]
     fn param_selector_skips_the_producer_of_the_other_input() {
         let instances = PortType::Array(ArrayType::of_known::<InstanceTransform>());
-        assert_eq!(producers_run(Box::new(SwitchInstances::new()), instances, 1.0), ["b"]);
-        assert_eq!(producers_run(Box::new(SwitchInstances::new()), instances, 0.0), ["a"]);
+        assert_eq!(
+            producers_run(Box::new(SwitchInstances::new()), instances, 1.0),
+            ["b"]
+        );
+        assert_eq!(
+            producers_run(Box::new(SwitchInstances::new()), instances, 0.0),
+            ["a"]
+        );
     }
 }

@@ -13,7 +13,9 @@ pub fn marker_phi(markers: &[[f32; 3]], cells: [u32; 3], dx: f32) -> Vec<f32> {
             for j in lo[1]..(lo[1] + 7).min(n[1]) {
                 for i in lo[0]..(lo[0] + 7).min(n[0]) {
                     let c = [i, j, k].map(|v| (v as f32 + 0.5) * dx);
-                    let d = ((c[0] - m[0]).powi(2) + (c[1] - m[1]).powi(2) + (c[2] - m[2]).powi(2)).sqrt() - radius;
+                    let d = ((c[0] - m[0]).powi(2) + (c[1] - m[1]).powi(2) + (c[2] - m[2]).powi(2))
+                        .sqrt()
+                        - radius;
                     let slot = &mut phi[i + n[0] * (j + n[1] * k)];
                     *slot = slot.min(d.max(-3.0 * dx));
                 }

@@ -5,10 +5,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -153,12 +153,12 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use manifold_node_engine::freeze::codegen::{ENTRY, standalone_for_spec};
-    use manifold_node_engine::gpu::render_target::RenderTarget;
     use half::f16;
     use manifold_gpu::{
         GpuBinding, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
     };
+    use manifold_node_engine::freeze::codegen::{ENTRY, standalone_for_spec};
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     const TEST_W: u32 = 4;
     const TEST_H: u32 = 4;

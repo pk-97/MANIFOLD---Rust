@@ -1,6 +1,6 @@
 use manifold_core::project::Project;
-use manifold_core::types::{ClockAuthority, PlaybackState};
 use manifold_core::tempo::{TempoMap, TempoMapConverter};
+use manifold_core::types::{ClockAuthority, PlaybackState};
 use manifold_core::units::Bpm;
 use manifold_core::{Beats, Seconds};
 
@@ -46,9 +46,10 @@ pub struct SyncTargetSnapshot {
 impl SyncTargetSnapshot {
     /// Capture a snapshot from any SyncTarget implementor.
     pub fn from_engine(target: &dyn SyncTarget) -> Self {
-        let (tempo_map, fallback_bpm) = target
-            .current_project()
-            .map_or_else(|| (TempoMap::default(), Bpm(120.0)), |p| (p.tempo_map.clone(), p.settings.bpm));
+        let (tempo_map, fallback_bpm) = target.current_project().map_or_else(
+            || (TempoMap::default(), Bpm(120.0)),
+            |p| (p.tempo_map.clone(), p.settings.bpm),
+        );
         Self {
             state: target.current_state(),
             time: target.position_time(),
@@ -298,8 +299,18 @@ mod tests {
         use manifold_core::types::TempoPointSource;
 
         let mut project = Project::default();
-        project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
-        project.tempo_map.add_or_replace_point(Beats(64.0), Bpm(60.0), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(
+            Beats::ZERO,
+            Bpm(120.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
+        project.tempo_map.add_or_replace_point(
+            Beats(64.0),
+            Bpm(60.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
         // The live tempo at beat 128, as the engine keeps settings.bpm.
         project.settings.bpm = Bpm(60.0);
         let mut engine = crate::engine::PlaybackEngine::new(Vec::new());
@@ -310,7 +321,10 @@ mod tests {
         // 64 beats at 120 BPM (32 s) plus 64 beats at 60 BPM (64 s).
         assert!((engine.timeline_beat_to_time(beat) - Seconds(96.0)).abs() < Seconds(1e-3));
         let error = (snap.timeline_beat_to_time(beat) - engine.timeline_beat_to_time(beat)).abs();
-        assert!(error < Seconds(1e-9), "snapshot is {error:?} off the tempo map at beat 128");
+        assert!(
+            error < Seconds(1e-9),
+            "snapshot is {error:?} off the tempo map at beat 128"
+        );
     }
 
     // ── section 11 thresholds ──────────────────────────────────────────────────

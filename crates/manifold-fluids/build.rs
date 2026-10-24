@@ -169,7 +169,11 @@ fn main() {
     // The sheet oracle's bitwise proofs hold for clang with FMA hardware;
     // the tests read this to refuse any other configuration.
     let compiler = build.get_compiler();
-    let kind = if compiler.is_like_clang() { "clang" } else { "other" };
+    let kind = if compiler.is_like_clang() {
+        "clang"
+    } else {
+        "other"
+    };
     println!("cargo:rustc-env=MANIFOLD_FLUIDS_ORACLE_CC={kind}");
     build.compile("manifold_flip_fluids");
 }

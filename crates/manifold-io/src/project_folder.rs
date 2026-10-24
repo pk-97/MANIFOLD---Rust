@@ -99,7 +99,10 @@ mod tests {
     fn folder_with_manifold_resolves_to_version() {
         let dir = temp_dir("version");
         std::fs::write(dir.join("MyShow.manifold"), b"v2").unwrap();
-        assert_eq!(resolve_save_target(&dir, "MyShow v2"), SaveTarget::Version { dir: dir.clone() });
+        assert_eq!(
+            resolve_save_target(&dir, "MyShow v2"),
+            SaveTarget::Version { dir: dir.clone() }
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -112,7 +115,10 @@ mod tests {
         std::fs::write(dir.join("MyShow.manifold"), b"v2").unwrap();
         match resolve_save_target(&dir, "MyShow v2") {
             SaveTarget::Version { dir: d } => {
-                assert_eq!(d.join("MyShow v2.manifold").file_stem().unwrap(), "MyShow v2");
+                assert_eq!(
+                    d.join("MyShow v2.manifold").file_stem().unwrap(),
+                    "MyShow v2"
+                );
             }
             _ => panic!("expected Version"),
         }

@@ -14,7 +14,9 @@ impl PresetRuntime {
     /// A rebuilt graph starts without a request, so hosts set it each frame
     /// while an outline shows.
     pub fn set_selection_mask(&mut self, slots: &[u32]) {
-        let Some(slot) = self.effect_nodes.first() else { return };
+        let Some(slot) = self.effect_nodes.first() else {
+            return;
+        };
         for (_, instance) in &slot.node_map {
             if let Some(node) = self.graph.get_node_mut(*instance) {
                 node.node.set_selection_mask(slots);
@@ -49,7 +51,9 @@ impl PresetRuntime {
     /// a render later. A rebuilt graph drops a pick in flight; the host gives
     /// up on it.
     pub fn request_pick(&mut self, pick: PickRequest) {
-        let Some(slot) = self.effect_nodes.first() else { return };
+        let Some(slot) = self.effect_nodes.first() else {
+            return;
+        };
         for (_, instance) in &slot.node_map {
             if let Some(node) = self.graph.get_node_mut(*instance) {
                 node.node.request_pick(pick);
@@ -60,7 +64,9 @@ impl PresetRuntime {
     /// The answer to the last [`Self::request_pick`], once read back.
     pub fn take_pick(&mut self) -> Option<PickHit> {
         let slot = self.effect_nodes.first()?;
-        slot.node_map.iter().find_map(|(_, instance)| self.graph.get_node_mut(*instance)?.node.take_pick())
+        slot.node_map
+            .iter()
+            .find_map(|(_, instance)| self.graph.get_node_mut(*instance)?.node.take_pick())
     }
 
     /// [`Self::request_pick`] in the second view ([`Self::set_scene_viewport`]).
@@ -78,7 +84,9 @@ impl PresetRuntime {
     /// A rebuilt graph starts without the request, so hosts set it each
     /// frame while gizmos show.
     pub fn set_gizmo_depth(&mut self, wanted: bool) {
-        let Some(slot) = self.effect_nodes.first() else { return };
+        let Some(slot) = self.effect_nodes.first() else {
+            return;
+        };
         for (_, instance) in &slot.node_map {
             if let Some(node) = self.graph.get_node_mut(*instance) {
                 node.node.set_gizmo_depth(wanted);

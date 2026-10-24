@@ -128,7 +128,6 @@ pub(super) fn dispatch_marker(
             selection.clear_marker_selection();
             DispatchResult::handled()
         }
-
     }
 }
 
@@ -181,7 +180,7 @@ mod tests {
 
 #[cfg(test)]
 mod drag_preview_tests {
-    use crate::frame_plan::{plan_frame, FrameInputs, MainRegion, Projection};
+    use crate::frame_plan::{FrameInputs, MainRegion, Projection, plan_frame};
     use crate::gesture_preview::UiEdits;
     use manifold_core::change::Part;
     use manifold_core::marker::TimelineMarker;
@@ -189,7 +188,11 @@ mod drag_preview_tests {
     use manifold_ui::MarkerAction;
 
     fn inputs(edits: &UiEdits) -> FrameInputs {
-        FrameInputs { parts: edits.stamps.parts(), preview: edits.preview.version(), ..Default::default() }
+        FrameInputs {
+            parts: edits.stamps.parts(),
+            preview: edits.preview.version(),
+            ..Default::default()
+        }
     }
 
     /// A marker drag is a preview (D12): each move moves the marker preview
@@ -208,13 +211,28 @@ mod drag_preview_tests {
         let mut edits = UiEdits::default();
         let mut run = |action: MarkerAction, edits: &mut UiEdits, project: &mut Project| {
             let mut project_ref = crate::ui_bridge::ProjectRef::new(project, edits, &tx);
-            super::dispatch_marker(&action, &mut project_ref, &tx, &mut ui, &mut selection, &mut scrub);
+            super::dispatch_marker(
+                &action,
+                &mut project_ref,
+                &tx,
+                &mut ui,
+                &mut selection,
+                &mut scrub,
+            );
         };
 
-        run(MarkerAction::MarkerDragStarted(id.clone()), &mut edits, &mut project);
+        run(
+            MarkerAction::MarkerDragStarted(id.clone()),
+            &mut edits,
+            &mut project,
+        );
         let mut last = inputs(&edits);
         for beat in [2.0, 4.0] {
-            run(MarkerAction::MarkerDragMoved(id.clone(), beat), &mut edits, &mut project);
+            run(
+                MarkerAction::MarkerDragMoved(id.clone(), beat),
+                &mut edits,
+                &mut project,
+            );
             let next = inputs(&edits);
             assert_eq!(next.parts, last.parts, "a preview moves no stamp");
             let plan = plan_frame(&last, &next);
@@ -222,13 +240,28 @@ mod drag_preview_tests {
             assert!(!plan.projections.contains(Projection::ProjectSync));
             assert!(!plan.projections.contains(Projection::InspectorSync));
             assert!(plan.viewport.markers && plan.in_place.contains(MainRegion::Viewport));
-            assert!(!plan.rebuild.contains(MainRegion::Viewport), "a marker drag moves flags in place");
+            assert!(
+                !plan.rebuild.contains(MainRegion::Viewport),
+                "a marker drag moves flags in place"
+            );
             last = next;
         }
-        assert!(rx.try_recv().is_err(), "the content thread never sees a preview");
+        assert!(
+            rx.try_recv().is_err(),
+            "the content thread never sees a preview"
+        );
 
-        run(MarkerAction::MarkerDragEnded(id.clone(), 4.0), &mut edits, &mut project);
-        assert!(inputs(&edits).parts.moved_since(&last.parts).contains(Part::Markers));
+        run(
+            MarkerAction::MarkerDragEnded(id.clone(), 4.0),
+            &mut edits,
+            &mut project,
+        );
+        assert!(
+            inputs(&edits)
+                .parts
+                .moved_since(&last.parts)
+                .contains(Part::Markers)
+        );
         assert!(rx.try_recv().is_ok(), "the drop sends its command");
     }
 }

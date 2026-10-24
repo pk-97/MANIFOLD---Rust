@@ -10,11 +10,11 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::float_param;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use crate::whitewater::{WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes};
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use crate::whitewater::{WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes};
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
@@ -57,35 +57,75 @@ manifold_node_engine::primitive! {
 }
 
 impl Primitive for LiquidCells {
-    fn array_output_capacity(&self, port: &str, _params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
-        (port == "out").then(|| inputs.iter().find(|(name, _)| *name == "distance").map(|&(_, n)| n)).flatten()
+    fn array_output_capacity(
+        &self,
+        port: &str,
+        _params: &ParamValues,
+        inputs: &[(&str, u32)],
+    ) -> Option<u32> {
+        (port == "out")
+            .then(|| {
+                inputs
+                    .iter()
+                    .find(|(name, _)| *name == "distance")
+                    .map(|&(_, n)| n)
+            })
+            .flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let nodes = grid_nodes(ctx);
         let Some(cells) = grid_cells(nodes) else {
-            ctx.error(format!("Liquid Cells: a {nodes:?} solid lattice has too few or too many nodes"));
+            ctx.error(format!(
+                "Liquid Cells: a {nodes:?} solid lattice has too few or too many nodes"
+            ));
             return;
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(distance), Some(solid), Some(out)) = (ctx.inputs.array("distance"), ctx.inputs.array("solid"), ctx.outputs.array("out")) else {
+        let (Some(distance), Some(solid), Some(out)) = (
+            ctx.inputs.array("distance"),
+            ctx.inputs.array("solid"),
+            ctx.outputs.array("out"),
+        ) else {
             return;
         };
         let count = cell_total(cells);
         if count * 4 > distance.size.min(out.size) || cell_total(nodes) * 4 > solid.size {
-            ctx.error(format!("Liquid Cells: a {nodes:?}-node grid is larger than its arrays"));
+            ctx.error(format!(
+                "Liquid Cells: a {nodes:?}-node grid is larger than its arrays"
+            ));
             return;
         }
-        let uniforms = CellsUniforms { nodes_x: nodes[0] as f32, nodes_y: nodes[1] as f32, nodes_z: nodes[2] as f32, dispatch_count: count as u32 };
+        let uniforms = CellsUniforms {
+            nodes_x: nodes[0] as f32,
+            nodes_y: nodes[1] as f32,
+            nodes_z: nodes[2] as f32,
+            dispatch_count: count as u32,
+        };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: distance, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: solid, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: distance,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: solid,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: out,
+                    offset: 0,
+                },
             ],
             [(count as u32).div_ceil(256), 1, 1],
             "node.liquid_cells",

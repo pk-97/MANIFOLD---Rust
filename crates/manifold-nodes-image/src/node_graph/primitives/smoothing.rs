@@ -14,11 +14,15 @@
 //!
 //! [`StateStore`]: crate::node_graph::StateStore
 
-use std::borrow::Cow;
-use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, NodeRequires};
+use manifold_node_engine::exec::effect_node::{
+    EffectNode, EffectNodeContext, EffectNodeType, NodeRequires,
+};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use manifold_node_engine::ports::{
+    NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+};
 use manifold_node_engine::state_store::NodeState;
+use std::borrow::Cow;
 
 pub const SMOOTHING_TYPE_ID: &str = "node.smoothing";
 
@@ -185,14 +189,9 @@ impl EffectNode for Smoothing {
                 .unwrap_or(input)
         };
         let smoothed = previous + (input - previous) * alpha;
-        store.insert(
-            node_id,
-            owner_key,
-            SmoothingState { previous: smoothed },
-        );
+        store.insert(node_id, owner_key, SmoothingState { previous: smoothed });
 
-        ctx.outputs
-            .set_scalar("out", ParamValue::Float(smoothed));
+        ctx.outputs.set_scalar("out", ParamValue::Float(smoothed));
     }
 
     fn requires(&self) -> NodeRequires {
@@ -220,13 +219,13 @@ mod tests {
     use manifold_core::{Beats, Seconds};
     use std::sync::{Arc, Mutex};
 
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use manifold_node_engine::exec::effect_node::FrameTime;
+    use manifold_node_engine::exec::execution::Executor;
     use manifold_node_engine::exec::execution_plan::compile;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use manifold_node_engine::graph::Graph;
     use manifold_node_engine::primitives::value::Value;
     use manifold_node_engine::state_store::StateStore;
-    use manifold_node_engine::exec::execution::Executor;
 
     fn frame_time(dt_secs: f32) -> FrameTime {
         FrameTime {
@@ -242,7 +241,9 @@ mod tests {
         seen: Arc<Mutex<Option<f32>>>,
     }
     impl EffectNode for Capture {
-        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+            manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+        } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -268,12 +269,7 @@ mod tests {
         }
     }
 
-    fn drive(
-        input_value: f32,
-        time_constant: f32,
-        frames: usize,
-        dt_per_frame: f32,
-    ) -> Vec<f32> {
+    fn drive(input_value: f32, time_constant: f32, frames: usize, dt_per_frame: f32) -> Vec<f32> {
         // CPU-only primitive but execute_frame_with_state still wants a
         // real GpuEncoder. Construct one against the shared test device;
         // Smoothing won't dispatch anything through it.
@@ -286,13 +282,10 @@ mod tests {
             type_id: EffectNodeType::new("test.capture"),
             seen: seen.clone(),
         }));
-        g.set_param(val, "value", ParamValue::Float(input_value)).unwrap();
-        g.set_param(
-            smooth,
-            "time_constant",
-            ParamValue::Float(time_constant),
-        )
-        .unwrap();
+        g.set_param(val, "value", ParamValue::Float(input_value))
+            .unwrap();
+        g.set_param(smooth, "time_constant", ParamValue::Float(time_constant))
+            .unwrap();
         g.connect((val, "out"), (smooth, "in")).unwrap();
         g.connect((smooth, "out"), (sink, "in")).unwrap();
         let plan = compile(&g).unwrap();
@@ -335,10 +328,7 @@ mod tests {
     fn constant_input_holds_value() {
         let samples = drive(0.5, 0.1, 10, 1.0 / 60.0);
         for (i, s) in samples.iter().enumerate() {
-            assert!(
-                (s - 0.5).abs() < 1e-5,
-                "frame {i}: expected 0.5, got {s}",
-            );
+            assert!((s - 0.5).abs() < 1e-5, "frame {i}: expected 0.5, got {s}",);
         }
     }
 
@@ -358,7 +348,8 @@ mod tests {
             seen: seen.clone(),
         }));
         g.set_param(val, "value", ParamValue::Float(0.0)).unwrap();
-        g.set_param(smooth, "time_constant", ParamValue::Float(0.1)).unwrap();
+        g.set_param(smooth, "time_constant", ParamValue::Float(0.1))
+            .unwrap();
         g.connect((val, "out"), (smooth, "in")).unwrap();
         g.connect((smooth, "out"), (sink, "in")).unwrap();
         let plan = compile(&g).unwrap();

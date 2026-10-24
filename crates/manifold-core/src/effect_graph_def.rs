@@ -39,9 +39,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::preset_type_id::PresetTypeId;
 use crate::effects::ParamConvert;
 use crate::id::NodeId;
+use crate::preset_type_id::PresetTypeId;
 use crate::scene_modifier_preset::SceneModifierInstanceDef;
 
 /// Schema version for graph-topology-only documents (no preset
@@ -301,7 +301,10 @@ pub fn render_scene_count(nodes: &[EffectGraphNode]) -> usize {
         .iter()
         .map(|node| {
             usize::from(node.type_id == RENDER_SCENE_TYPE_ID)
-                + node.group.as_ref().map_or(0, |group| render_scene_count(&group.nodes))
+                + node
+                    .group
+                    .as_ref()
+                    .map_or(0, |group| render_scene_count(&group.nodes))
         })
         .sum()
 }
@@ -316,12 +319,17 @@ pub fn find_node<'a>(nodes: &'a [EffectGraphNode], node_id: &str) -> Option<&'a 
         if node.node_id.as_str() == node_id {
             return Some(node);
         }
-        node.group.as_deref().and_then(|group| find_node(&group.nodes, node_id))
+        node.group
+            .as_deref()
+            .and_then(|group| find_node(&group.nodes, node_id))
     })
 }
 
 /// Mutable [`find_node`].
-pub fn find_node_mut<'a>(nodes: &'a mut [EffectGraphNode], node_id: &str) -> Option<&'a mut EffectGraphNode> {
+pub fn find_node_mut<'a>(
+    nodes: &'a mut [EffectGraphNode],
+    node_id: &str,
+) -> Option<&'a mut EffectGraphNode> {
     if node_id.is_empty() {
         return None;
     }
@@ -329,7 +337,11 @@ pub fn find_node_mut<'a>(nodes: &'a mut [EffectGraphNode], node_id: &str) -> Opt
         if node.node_id.as_str() == node_id {
             return Some(node);
         }
-        if let Some(found) = node.group.as_deref_mut().and_then(|group| find_node_mut(&mut group.nodes, node_id)) {
+        if let Some(found) = node
+            .group
+            .as_deref_mut()
+            .and_then(|group| find_node_mut(&mut group.nodes, node_id))
+        {
             return Some(found);
         }
     }
@@ -365,22 +377,42 @@ pub fn leaf_scope(nodes: &[EffectGraphNode], leaf: &NodeId) -> Option<Vec<NodeId
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "PascalCase")]
 pub enum SerializedParamValue {
-    Float { value: f32 },
-    Int { value: i32 },
-    Bool { value: bool },
-    Vec2 { value: [f32; 2] },
-    Vec3 { value: [f32; 3] },
-    Vec4 { value: [f32; 4] },
-    Color { value: [f32; 4] },
-    Enum { value: u32 },
+    Float {
+        value: f32,
+    },
+    Int {
+        value: i32,
+    },
+    Bool {
+        value: bool,
+    },
+    Vec2 {
+        value: [f32; 2],
+    },
+    Vec3 {
+        value: [f32; 3],
+    },
+    Vec4 {
+        value: [f32; 4],
+    },
+    Color {
+        value: [f32; 4],
+    },
+    Enum {
+        value: u32,
+    },
     /// Read-only N×M `f32` table. JSON shape:
     /// `{"type":"Table","rows":[[1.0, 2.0], [3.0, 4.0]]}`. All rows
     /// must have the same length; rejected on load otherwise.
-    Table { rows: Vec<Vec<f32>> },
+    Table {
+        rows: Vec<Vec<f32>>,
+    },
     /// Single text value (filesystem paths, font names, identifiers).
     /// JSON shape: `{"type":"String","value":"some text"}`. Not
     /// modulated — `ParamConvert` has no variant for strings.
-    String { value: String },
+    String {
+        value: String,
+    },
 }
 
 impl EffectGraphDef {
@@ -679,7 +711,11 @@ impl ParamSpecDef {
     pub fn row_fact(&self, base: f32) -> Option<i32> {
         use crate::material_inspector::{MaterialGroup::Feature, MaterialParamRole as Role};
         if let Some(feature) = self.scene.and_then(|scene| scene.switch) {
-            return Some(if feature.has_modes() { base.round() as i32 } else { i32::from(base > 0.5) });
+            return Some(if feature.has_modes() {
+                base.round() as i32
+            } else {
+                i32::from(base > 0.5)
+            });
         }
         match self.material_role {
             Some(Role::FeatureMode(_)) => Some(base.round() as i32),
@@ -979,7 +1015,11 @@ pub struct StringBindingDef {
 /// because live IDs aren't serializable, the second because function
 /// pointers aren't.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum BindingTarget {
     /// Route to an inner-graph node identified by its stable
     /// [`NodeId`] — minted once at node creation, invariant under
@@ -994,7 +1034,10 @@ pub enum BindingTarget {
     /// multiple inner-node parameters.
     Composite { outer_name: String },
     /// Route through an authored scene-modifier instance in the owning graph.
-    SceneModifier { modifier_id: NodeId, param_id: String },
+    SceneModifier {
+        modifier_id: NodeId,
+        param_id: String,
+    },
 }
 
 impl<'de> Deserialize<'de> for BindingTarget {
@@ -1012,12 +1055,27 @@ impl<'de> Deserialize<'de> for BindingTarget {
         D: serde::Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+        #[serde(
+            tag = "kind",
+            rename_all = "camelCase",
+            rename_all_fields = "camelCase"
+        )]
         enum Wire {
-            Node { node_id: NodeId, param: String },
-            Composite { outer_name: String },
-            SceneModifier { modifier_id: NodeId, param_id: String },
-            HandleNode { handle: String, param: String },
+            Node {
+                node_id: NodeId,
+                param: String,
+            },
+            Composite {
+                outer_name: String,
+            },
+            SceneModifier {
+                modifier_id: NodeId,
+                param_id: String,
+            },
+            HandleNode {
+                handle: String,
+                param: String,
+            },
         }
         Ok(match Wire::deserialize(deserializer)? {
             Wire::Node { node_id, param } => BindingTarget::Node { node_id, param },
@@ -1126,8 +1184,14 @@ mod tests {
         // Default (Linear / false) must not appear on the wire, so every
         // shipped preset stays byte-identical after Phase 2.
         let json = serde_json::to_string(&sample_param_spec()).unwrap();
-        assert!(!json.contains("curve"), "Linear curve must be skipped: {json}");
-        assert!(!json.contains("invert"), "false invert must be skipped: {json}");
+        assert!(
+            !json.contains("curve"),
+            "Linear curve must be skipped: {json}"
+        );
+        assert!(
+            !json.contains("invert"),
+            "false invert must be skipped: {json}"
+        );
     }
 
     /// `card_visible` must be skipped when `true` (every existing preset's
@@ -1136,13 +1200,20 @@ mod tests {
     #[test]
     fn param_spec_card_visible_defaults_true_and_is_skipped_on_serialize() {
         let json = serde_json::to_string(&sample_param_spec()).unwrap();
-        assert!(!json.contains("cardVisible"), "true cardVisible must be skipped: {json}");
+        assert!(
+            !json.contains("cardVisible"),
+            "true cardVisible must be skipped: {json}"
+        );
 
         // A pre-field JSON document (no `cardVisible` key at all) must still
         // deserialize with `card_visible: true`.
-        let pre_field_json = r#"{"id":"speed","name":"Speed","min":0.1,"max":10.0,"defaultValue":1.0}"#;
+        let pre_field_json =
+            r#"{"id":"speed","name":"Speed","min":0.1,"max":10.0,"defaultValue":1.0}"#;
         let back: ParamSpecDef = serde_json::from_str(pre_field_json).unwrap();
-        assert!(back.card_visible, "missing cardVisible key must default to true");
+        assert!(
+            back.card_visible,
+            "missing cardVisible key must default to true"
+        );
     }
 
     #[test]
@@ -1185,7 +1256,10 @@ mod tests {
         // not appear on the wire, so a no-section preset stays byte-identical
         // to the on-disk source (the `is_angle`/`curve` precedent above).
         let json = serde_json::to_string(&sample_param_spec()).unwrap();
-        assert!(!json.contains("section"), "absent section must be skipped: {json}");
+        assert!(
+            !json.contains("section"),
+            "absent section must be skipped: {json}"
+        );
         let back: ParamSpecDef = serde_json::from_str(&json).unwrap();
         assert_eq!(back.section, None);
     }
@@ -1552,9 +1626,8 @@ mod tests {
             "bindings": [],
             "skipMode": {"kind": "onZero", "paramId": "amount"}
         }"#;
-        let meta: PresetMetadata = serde_json::from_str(json).expect(
-            "PresetMetadata must ignore the legacy skipMode key so old files keep loading"
-        );
+        let meta: PresetMetadata = serde_json::from_str(json)
+            .expect("PresetMetadata must ignore the legacy skipMode key so old files keep loading");
         assert_eq!(meta.id.as_str(), "test::legacy_skip_mode");
     }
 
@@ -1743,7 +1816,11 @@ mod tests {
             output_formats: BTreeMap::new(),
             output_canvas_scales: BTreeMap::new(),
             group: Some(Box::new(GroupDef {
-                interface: GroupInterface { inputs: Vec::new(), outputs: Vec::new(), params: Vec::new() },
+                interface: GroupInterface {
+                    inputs: Vec::new(),
+                    outputs: Vec::new(),
+                    params: Vec::new(),
+                },
                 nodes: vec![leaf("inner")],
                 wires: Vec::new(),
                 tint: None,
@@ -1753,7 +1830,9 @@ mod tests {
         assert_eq!(find_node(&nodes, "inner").map(|node| node.id), Some(7));
         assert!(find_node(&nodes, "missing").is_none());
         assert!(find_node_mut(&mut nodes, "missing").is_none());
-        find_node_mut(&mut nodes, "inner").expect("nested node").type_id = "node.changed".into();
+        find_node_mut(&mut nodes, "inner")
+            .expect("nested node")
+            .type_id = "node.changed".into();
         assert_eq!(find_node(&nodes, "inner").unwrap().type_id, "node.changed");
     }
 }

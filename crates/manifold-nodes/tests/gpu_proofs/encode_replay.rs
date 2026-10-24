@@ -8,10 +8,15 @@ use manifold_core::params::{Param, ParamManifest};
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuReplayStats, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_water_gpu_mpm::matter::MatterTickStats;
-use manifold_node_engine::{exec::backend::Backend, persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, parameters::ParamValue, state_store::StateStore, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::{
+    exec::backend::Backend, exec::effect_node::FrameTime, exec::execution::Executor,
+    exec::execution_plan::compile, exec::metal_backend::MetalBackend, graph::Graph,
+    load::graph_loader::pre_allocate_resources, parameters::ParamValue,
+    persistence::EffectGraphDefExt, state_store::StateStore,
+};
+use manifold_water_gpu_mpm::matter::MatterTickStats;
 
 use crate::substeps::{
     N, copy_chains_def, def, forces, node_of, registry, resource, seed_particles,
@@ -53,7 +58,9 @@ fn read_shared(buffer: &manifold_gpu::GpuBuffer, bytes: usize, out: &mut Vec<u8>
     };
     let ptr = source.mapped_ptr().expect("shared buffer");
     // SAFETY: every command buffer that wrote it completed; `bytes` is within it.
-    out.extend_from_slice(unsafe { std::slice::from_raw_parts(ptr.cast::<u8>().cast_const(), bytes) });
+    out.extend_from_slice(unsafe {
+        std::slice::from_raw_parts(ptr.cast::<u8>().cast_const(), bytes)
+    });
 }
 
 /// Run `def` for `frames` frames with replay on or off. `change` edits the
@@ -68,18 +75,31 @@ fn run_graph(
 ) -> Outcome {
     let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &harness.device;
-    let mut graph = def.into_graph(&registry(), &Default::default()).expect("proof def builds");
+    let mut graph = def
+        .into_graph(&registry(), &Default::default())
+        .expect("proof def builds");
     let plan = compile(&graph).expect("proof def compiles");
     let mut backend = MetalBackend::new(device.clone(), 64, 64, GpuTextureFormat::Rgba16Float);
     pre_allocate_resources(&mut graph, &plan, device, &mut backend).expect("pre-allocate");
     let boundary = node_of(&graph, "test.particle_boundary");
     let state_res = resource(&plan, boundary, "out", true);
-    let sink_res = resource(&plan, node_of(&graph, "test.particle_sink"), "particles", false);
+    let sink_res = resource(
+        &plan,
+        node_of(&graph, "test.particle_sink"),
+        "particles",
+        false,
+    );
     let seed_res = resource(&plan, node_of(&graph, "test.particle_source"), "out", true);
     let force_res = resource(&plan, node_of(&graph, "test.force_source"), "out", true);
     for (res, bytes) in [
-        (seed_res, bytemuck::cast_slice::<_, u8>(&seed_particles()).to_vec()),
-        (force_res, bytemuck::cast_slice::<[f32; 3], u8>(&forces()).to_vec()),
+        (
+            seed_res,
+            bytemuck::cast_slice::<_, u8>(&seed_particles()).to_vec(),
+        ),
+        (
+            force_res,
+            bytemuck::cast_slice::<[f32; 3], u8>(&forces()).to_vec(),
+        ),
     ] {
         let slot = backend.slot_for(res).expect("array bound");
         let buffer = Backend::array_buffer(&backend, slot).expect("array buffer");
@@ -95,7 +115,11 @@ fn run_graph(
     }
     let mut state = StateStore::new();
     let particle_bytes = N * std::mem::size_of::<manifold_node_engine::particles::Particle>();
-    let mut outcome = Outcome { frames: Vec::new(), stats: GpuReplayStats::default(), stats_by_frame: Vec::new() };
+    let mut outcome = Outcome {
+        frames: Vec::new(),
+        stats: GpuReplayStats::default(),
+        stats_by_frame: Vec::new(),
+    };
     for frame in 0..frames {
         change(frame, &mut graph);
         let time = FrameTime {
@@ -106,7 +130,9 @@ fn run_graph(
         };
         let mut enc = device.create_encoder("encode-replay-proof");
         if profile {
-            let sampler = device.create_timestamp_sampler(4096).expect("timestamp counters");
+            let sampler = device
+                .create_timestamp_sampler(4096)
+                .expect("timestamp counters");
             enc.enable_dispatch_profiling(sampler, device);
         }
         {
@@ -114,11 +140,16 @@ fn run_graph(
             exec.execute_frame_with_state(&mut graph, &plan, time, &mut gpu, &mut state, 0);
         }
         let profile = enc.commit_and_wait_profiled(device);
-        assert_eq!(profile.failed_command_buffers, 0, "frame {frame} failed on the GPU");
+        assert_eq!(
+            profile.failed_command_buffers, 0,
+            "frame {frame} failed on the GPU"
+        );
 
         let mut bytes = Vec::new();
         for res in [state_res, sink_res] {
-            let buffer = exec.host_array_buffer(&graph, &plan, res).expect("array holds its own contents");
+            let buffer = exec
+                .host_array_buffer(&graph, &plan, res)
+                .expect("array holds its own contents");
             read_shared(buffer, particle_bytes, &mut bytes);
         }
         // Independent steps may run in another order in another build.
@@ -140,10 +171,17 @@ fn run_graph(
 fn assert_same(what: &str, off: &[Vec<u8>], on: &[Vec<u8>]) {
     assert_eq!(off.len(), on.len());
     for (frame, (a, b)) in off.iter().zip(on).enumerate() {
-        assert_eq!(a.len(), b.len(), "{what}: frame {frame} read back a different amount");
+        assert_eq!(
+            a.len(),
+            b.len(),
+            "{what}: frame {frame} read back a different amount"
+        );
         if a != b {
             let first = a.iter().zip(b).position(|(x, y)| x != y).expect("differs");
-            panic!("{what}: replay changed frame {frame} (first differing byte {first} of {})", a.len());
+            panic!(
+                "{what}: replay changed frame {frame} (first differing byte {first} of {})",
+                a.len()
+            );
         }
     }
 }
@@ -153,15 +191,30 @@ fn assert_same(what: &str, off: &[Vec<u8>], on: &[Vec<u8>]) {
 /// without the editor's atlas dump.
 #[test]
 fn encode_replay_parity() {
-    for (name, def) in [("region", def as fn() -> EffectGraphDef), ("copy chains", copy_chains_def)] {
+    for (name, def) in [
+        ("region", def as fn() -> EffectGraphDef),
+        ("copy chains", copy_chains_def),
+    ] {
         for dump in [Dump::None, Dump::Every] {
             let what = format!("{name}, dump {dump:?}");
             let off = run_graph(def(), false, dump, false, FRAMES, |_, _| {});
             let on = run_graph(def(), true, dump, false, FRAMES, |_, _| {});
-            assert_eq!(off.stats, GpuReplayStats::default(), "{what}: replay off opened a span");
-            assert!(on.stats.replayed > 0 && on.stats.executes > 0, "{what}: nothing replayed: {:?}", on.stats);
+            assert_eq!(
+                off.stats,
+                GpuReplayStats::default(),
+                "{what}: replay off opened a span"
+            );
+            assert!(
+                on.stats.replayed > 0 && on.stats.executes > 0,
+                "{what}: nothing replayed: {:?}",
+                on.stats
+            );
             let warm = on.stats_by_frame[1];
-            assert_eq!(on.stats.recorded, warm.recorded, "{what}: a steady graph re-recorded: {:?}", on.stats);
+            assert_eq!(
+                on.stats.recorded, warm.recorded,
+                "{what}: a steady graph re-recorded: {:?}",
+                on.stats
+            );
             eprintln!("encode replay parity, {what}: {:?}", on.stats);
             assert_same(&what, &off.frames, &on.frames);
         }
@@ -169,7 +222,11 @@ fn encode_replay_parity() {
     let off = dam_break(false, FRAMES, |_, _| {});
     let again = dam_break(false, FRAMES, |_, _| {});
     let on = dam_break(true, FRAMES, |_, _| {});
-    assert!(on.stats.replayed > 0, "Dam Break replayed nothing: {:?}", on.stats);
+    assert!(
+        on.stats.replayed > 0,
+        "Dam Break replayed nothing: {:?}",
+        on.stats
+    );
     eprintln!("encode replay parity, Dam Break: {:?}", on.stats);
     assert_within_spread("Dam Break", &off, &again, &on);
 }
@@ -177,7 +234,11 @@ fn encode_replay_parity() {
 /// Mean |Δ| over an Rgba16Float image.
 fn image_delta(a: &[u8], b: &[u8]) -> f64 {
     let decode = |c: &[u8]| f64::from(half::f16::from_le_bytes([c[0], c[1]]).to_f32());
-    let sum: f64 = a.chunks_exact(2).zip(b.chunks_exact(2)).map(|(x, y)| (decode(x) - decode(y)).abs()).sum();
+    let sum: f64 = a
+        .chunks_exact(2)
+        .zip(b.chunks_exact(2))
+        .map(|(x, y)| (decode(x) - decode(y)).abs())
+        .sum();
     sum / (a.len() / 2) as f64
 }
 
@@ -190,22 +251,59 @@ fn image_delta(a: &[u8], b: &[u8]) -> f64 {
 /// arrays at the same sizes, no point went non-finite, the live point count
 /// is exact, and mass holds. The byte spreads are printed. The bit-for-bit
 /// proofs are the deterministic graphs above and the SWASH scenes.
-fn assert_within_spread(what: &str, off: &PresetOutcome, again: &PresetOutcome, on: &PresetOutcome) {
-    let shape = |o: &PresetOutcome| o.arrays.iter().map(|(n, b)| (n.clone(), b.len())).collect::<Vec<_>>();
-    assert_eq!(shape(off), shape(on), "{what}: replay changed what the dump holds");
+fn assert_within_spread(
+    what: &str,
+    off: &PresetOutcome,
+    again: &PresetOutcome,
+    on: &PresetOutcome,
+) {
+    let shape = |o: &PresetOutcome| {
+        o.arrays
+            .iter()
+            .map(|(n, b)| (n.clone(), b.len()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        shape(off),
+        shape(on),
+        "{what}: replay changed what the dump holds"
+    );
     let stats = |o: &PresetOutcome| {
-        let (_, bytes) = o.arrays.iter().find(|(n, _)| n == "matter_state.stats").expect("Matter tick stats dumped");
+        let (_, bytes) = o
+            .arrays
+            .iter()
+            .find(|(n, _)| n == "matter_state.stats")
+            .expect("Matter tick stats dumped");
         MatterTickStats::from_words(bytemuck::cast_slice(bytes))
     };
     let (direct, replay) = (stats(off), stats(on));
-    assert_eq!(replay.nonfinite, 0, "{what}: replay left non-finite points: {replay:?}");
-    assert_eq!(replay.live, direct.live, "{what}: replay changed the live point count");
-    assert!((replay.mass - direct.mass).abs() <= 1e-4 * direct.mass.abs(), "{what}: mass {} under replay, {} direct", replay.mass, direct.mass);
+    assert_eq!(
+        replay.nonfinite, 0,
+        "{what}: replay left non-finite points: {replay:?}"
+    );
+    assert_eq!(
+        replay.live, direct.live,
+        "{what}: replay changed the live point count"
+    );
+    assert!(
+        (replay.mass - direct.mass).abs() <= 1e-4 * direct.mass.abs(),
+        "{what}: mass {} under replay, {} direct",
+        replay.mass,
+        direct.mass
+    );
     let differ = |a: &PresetOutcome, b: &PresetOutcome| {
-        a.arrays.iter().zip(&b.arrays).filter(|((_, x), (_, y))| x != y).count()
+        a.arrays
+            .iter()
+            .zip(&b.arrays)
+            .filter(|((_, x), (_, y))| x != y)
+            .count()
     };
     let frames = |a: &PresetOutcome, b: &PresetOutcome| {
-        a.frames.iter().zip(&b.frames).map(|(x, y)| image_delta(x, y)).fold(0.0, f64::max)
+        a.frames
+            .iter()
+            .zip(&b.frames)
+            .map(|(x, y)| image_delta(x, y))
+            .fold(0.0, f64::max)
     };
     eprintln!(
         "{what}: of {} dumped arrays, {} differ between direct runs and {} under replay; worst frame mean |Δ| {:.3e} direct, {:.3e} replay; live {} mass {:.4}",
@@ -237,7 +335,9 @@ fn encode_replay_survives_changes() {
     let region_change = |frame: u32, graph: &mut Graph| {
         if frame == 10 {
             let boundary = node_of(graph, "test.particle_boundary");
-            graph.set_param(boundary, "iterations", ParamValue::Float(5.0)).expect("iterations");
+            graph
+                .set_param(boundary, "iterations", ParamValue::Float(5.0))
+                .expect("iterations");
         }
         if frame == 20 {
             let movers: Vec<_> = graph
@@ -246,21 +346,39 @@ fn encode_replay_survives_changes() {
                 .map(|n| n.id)
                 .collect();
             for mover in movers {
-                graph.set_param(mover, "active_count", ParamValue::Float(600.0)).expect("active_count");
+                graph
+                    .set_param(mover, "active_count", ParamValue::Float(600.0))
+                    .expect("active_count");
             }
         }
     };
     let off = run_graph(def(), false, Dump::None, false, FRAMES, region_change);
     let on = run_graph(def(), true, Dump::None, false, FRAMES, region_change);
     let recorded = |frame: usize| on.stats_by_frame[frame].recorded;
-    eprintln!("encode replay changes, region: recorded {} → {} → {}", recorded(9), recorded(19), recorded(29));
-    assert!(recorded(10) > recorded(9), "more iterations recorded nothing new");
-    assert!(recorded(20) > recorded(19), "a new grid recorded nothing new");
-    assert_eq!(recorded(29), recorded(21), "the changed region kept re-recording");
+    eprintln!(
+        "encode replay changes, region: recorded {} → {} → {}",
+        recorded(9),
+        recorded(19),
+        recorded(29)
+    );
+    assert!(
+        recorded(10) > recorded(9),
+        "more iterations recorded nothing new"
+    );
+    assert!(
+        recorded(20) > recorded(19),
+        "a new grid recorded nothing new"
+    );
+    assert_eq!(
+        recorded(29),
+        recorded(21),
+        "the changed region kept re-recording"
+    );
     assert_same("region with changes", &off.frames, &on.frames);
 
     let dam_change = |frame: u32, manifest: &mut ParamManifest| {
-        let mut set = |id: &str, value: f32| manifest.get_mut(id).expect("Dam Break param").value = value;
+        let mut set =
+            |id: &str, value: f32| manifest.get_mut(id).expect("Dam Break param").value = value;
         if frame == 10 {
             set("speed", 1.5);
         }
@@ -272,9 +390,20 @@ fn encode_replay_survives_changes() {
     let again = dam_break(false, FRAMES, dam_change);
     let on = dam_break(true, FRAMES, dam_change);
     let recorded = |frame: usize| on.stats_by_frame[frame].recorded;
-    eprintln!("encode replay changes, Dam Break: recorded {} → {} → {}", recorded(9), recorded(19), recorded(29));
-    assert!(recorded(19) > recorded(9), "a faster Dam Break recorded nothing new");
-    assert!(recorded(29) > recorded(19), "a new resolution recorded nothing new");
+    eprintln!(
+        "encode replay changes, Dam Break: recorded {} → {} → {}",
+        recorded(9),
+        recorded(19),
+        recorded(29)
+    );
+    assert!(
+        recorded(19) > recorded(9),
+        "a faster Dam Break recorded nothing new"
+    );
+    assert!(
+        recorded(29) > recorded(19),
+        "a new resolution recorded nothing new"
+    );
     assert_within_spread("Dam Break with changes", &off, &again, &on);
 }
 
@@ -282,10 +411,22 @@ fn encode_replay_survives_changes() {
 #[test]
 fn replay_off_under_profiling_and_dump() {
     let profiled = run_graph(def(), true, Dump::None, true, 3, |_, _| {});
-    assert_eq!(profiled.stats.replayed + profiled.stats.recorded + profiled.stats.executes, 0, "{:?}", profiled.stats);
-    assert!(profiled.stats.direct > 0, "the profiled span saw no dispatches");
+    assert_eq!(
+        profiled.stats.replayed + profiled.stats.recorded + profiled.stats.executes,
+        0,
+        "{:?}",
+        profiled.stats
+    );
+    assert!(
+        profiled.stats.direct > 0,
+        "the profiled span saw no dispatches"
+    );
     let dumped = run_graph(def(), true, Dump::All, false, 3, |_, _| {});
-    assert_eq!(dumped.stats, GpuReplayStats::default(), "a span opened under the Cmd+D dump");
+    assert_eq!(
+        dumped.stats,
+        GpuReplayStats::default(),
+        "a span opened under the Cmd+D dump"
+    );
     let direct = run_graph(def(), false, Dump::All, false, 3, |_, _| {});
     assert_same("Cmd+D dump", &direct.frames, &dumped.frames);
 }
@@ -318,7 +459,10 @@ fn run_preset(
         .expect("bundled preset");
     let def: EffectGraphDef = serde_json::from_str(&json).expect("preset parses");
     let mut manifest = ParamManifest::from_params(
-        def.preset_metadata.as_ref().map(|m| m.params.iter().cloned().map(Param::bundled).collect()).unwrap_or_default(),
+        def.preset_metadata
+            .as_ref()
+            .map(|m| m.params.iter().cloned().map(Param::bundled).collect())
+            .unwrap_or_default(),
     );
     let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
@@ -364,7 +508,10 @@ fn run_preset(
             runtime.render(&mut gpu, &target.texture, &ctx, &manifest);
         }
         let profile = enc.commit_and_wait_profiled(&h.device);
-        assert_eq!(profile.failed_command_buffers, 0, "{id} frame {frame} failed on the GPU");
+        assert_eq!(
+            profile.failed_command_buffers, 0,
+            "{id} frame {frame} failed on the GPU"
+        );
         outcome.stats_by_frame.push(runtime.replay_stats());
         if !read {
             continue;
@@ -374,7 +521,9 @@ fn run_preset(
             for dump in runtime.dump_arrays_all() {
                 let mut bytes = Vec::new();
                 read_shared(dump.buffer, dump.buffer.size as usize, &mut bytes);
-                outcome.arrays.push((format!("{}.{}", dump.name, dump.port), bytes));
+                outcome
+                    .arrays
+                    .push((format!("{}.{}", dump.name, dump.port), bytes));
             }
             outcome.arrays.sort_by(|a, b| a.0.cmp(&b.0));
         }

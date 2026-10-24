@@ -7,11 +7,17 @@ use super::*;
 // beat/layer pair onto `TimelineDrag::RegionSelect(RegionDrag)`.
 
 fn trim_left_pos(panel: &TimelineViewportPanel, clip_start_beat: f32) -> Vec2 {
-    Vec2::new(panel.beat_to_pixel(Beats::from_f32(clip_start_beat)) + 3.0, panel.tracks_rect().y + 70.0)
+    Vec2::new(
+        panel.beat_to_pixel(Beats::from_f32(clip_start_beat)) + 3.0,
+        panel.tracks_rect().y + 70.0,
+    )
 }
 
 fn trim_right_pos(panel: &TimelineViewportPanel, clip_end_beat: f32) -> Vec2 {
-    Vec2::new(panel.beat_to_pixel(Beats::from_f32(clip_end_beat)) - 3.0, panel.tracks_rect().y + 70.0)
+    Vec2::new(
+        panel.beat_to_pixel(Beats::from_f32(clip_end_beat)) - 3.0,
+        panel.tracks_rect().y + 70.0,
+    )
 }
 
 #[test]
@@ -42,42 +48,71 @@ fn trim_left_drag_fans_delta_over_the_whole_selection_and_batches_undo() {
 
     let press = trim_left_pos(&panel, 0.0);
     overlay.on_begin_drag(press, &mut host, &mut ui_state, &panel);
-    assert_eq!(overlay.drag_mode(), DragMode::TrimLeft, "pressing the left edge must begin a left trim");
+    assert_eq!(
+        overlay.drag_mode(),
+        DragMode::TrimLeft,
+        "pressing the left edge must begin a left trim"
+    );
 
     // Drag right by ~1 beat — shrinks clip_a from the left; the SAME
     // beat delta fans over clip_b too (it's part of the selection).
-    overlay.on_drag(press + Vec2::new(panel.beat_to_pixel(Beats::from_f32(1.0)) - panel.beat_to_pixel(Beats::ZERO), 0.0), &mut host, &mut ui_state, &mut panel);
+    overlay.on_drag(
+        press
+            + Vec2::new(
+                panel.beat_to_pixel(Beats::from_f32(1.0)) - panel.beat_to_pixel(Beats::ZERO),
+                0.0,
+            ),
+        &mut host,
+        &mut ui_state,
+        &mut panel,
+    );
     overlay.on_end_drag(&mut host);
 
     assert_eq!(overlay.drag_mode(), DragMode::None);
-    assert_eq!(host.trim_records.len(), 2, "both selected clips must be recorded (fan-over)");
-    assert_eq!(host.committed_batches.len(), 1, "one batched undo entry for the whole trim");
+    assert_eq!(
+        host.trim_records.len(),
+        2,
+        "both selected clips must be recorded (fan-over)"
+    );
+    assert_eq!(
+        host.committed_batches.len(),
+        1,
+        "one batched undo entry for the whole trim"
+    );
     let a = host.find_clip_by_id("clip_a").unwrap();
-    assert!(a.start_beat > Beats::ZERO, "clip_a's start must have moved right");
+    assert!(
+        a.start_beat > Beats::ZERO,
+        "clip_a's start must have moved right"
+    );
 }
 
 #[test]
 fn trim_left_reveals_source_across_separate_gestures() {
     for command in [false, true] {
         let mut panel = build_viewport();
-        let mut host = GestureTestHost::new(&["layer-0"])
-            .with_clip("clip_a", 0, 4.0, 8.0);
+        let mut host = GestureTestHost::new(&["layer-0"]).with_clip("clip_a", 0, 4.0, 8.0);
         let mut state = UIState::new();
         state.select_clips(vec![ClipId::new("clip_a")]);
         let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
-        overlay.set_modifiers(Modifiers { command, ..Modifiers::NONE });
+        overlay.set_modifiers(Modifiers {
+            command,
+            ..Modifiers::NONE
+        });
         let trimmed_start = if command { 6.375 } else { 6.0 };
 
         // Commit the inward trim, then start fresh gestures to reveal
         // part of it and finally drag beyond the beginning of the source.
         for (requested, expected) in [(trimmed_start, trimmed_start), (5.0, 5.0), (2.0, 4.0)] {
             let clip = host.find_clip_by_id("clip_a").unwrap();
-            let trim = InteractionOverlay::build_trim_drag(clip.clip_id.clone(), &clip, &state, &host);
+            let trim =
+                InteractionOverlay::build_trim_drag(clip.clip_id.clone(), &clip, &state, &host);
             let press = trim_left_pos(&panel, clip.start_beat.as_f32());
             overlay.drag.start(TimelineDrag::TrimLeft(trim), press);
             overlay.on_drag(
                 Vec2::new(panel.beat_to_pixel(Beats(requested)), press.y),
-                &mut host, &mut state, &mut panel,
+                &mut host,
+                &mut state,
+                &mut panel,
             );
             overlay.on_end_drag(&mut host);
             let clip = host.find_clip_by_id("clip_a").unwrap();
@@ -107,13 +142,24 @@ fn trim_left_drag_on_generator_clamps_to_beat_zero() {
     assert_eq!(overlay.drag_mode(), DragMode::TrimLeft);
 
     // Drag far left of beat 0 — must clamp at zero, never go negative.
-    overlay.on_drag(Vec2::new(panel.tracks_rect().x - 500.0, press.y), &mut host, &mut ui_state, &mut panel);
+    overlay.on_drag(
+        Vec2::new(panel.tracks_rect().x - 500.0, press.y),
+        &mut host,
+        &mut ui_state,
+        &mut panel,
+    );
     let mid = host.find_clip_by_id("clip_a").unwrap().start_beat;
-    assert!(mid >= Beats::ZERO, "start_beat must clamp at zero mid-drag: {mid:?}");
+    assert!(
+        mid >= Beats::ZERO,
+        "start_beat must clamp at zero mid-drag: {mid:?}"
+    );
 
     overlay.on_end_drag(&mut host);
     let end = host.find_clip_by_id("clip_a").unwrap().start_beat;
-    assert!(end >= Beats::ZERO, "start_beat must clamp at zero at commit: {end:?}");
+    assert!(
+        end >= Beats::ZERO,
+        "start_beat must clamp at zero at commit: {end:?}"
+    );
 }
 
 #[test]
@@ -130,13 +176,24 @@ fn trim_right_drag_clamps_to_minimum_duration() {
 
     // Drag far left — must clamp at the 1/16-note (0.25 beat) minimum,
     // never collapse to zero or negative duration.
-    overlay.on_drag(Vec2::new(panel.tracks_rect().x, press.y), &mut host, &mut ui_state, &mut panel);
+    overlay.on_drag(
+        Vec2::new(panel.tracks_rect().x, press.y),
+        &mut host,
+        &mut ui_state,
+        &mut panel,
+    );
     let mid = host.find_clip_by_id("clip_a").unwrap().duration_beats;
-    assert!(mid >= Beats(0.25), "duration must clamp at the 1/16 minimum mid-drag: {mid:?}");
+    assert!(
+        mid >= Beats(0.25),
+        "duration must clamp at the 1/16 minimum mid-drag: {mid:?}"
+    );
 
     overlay.on_end_drag(&mut host);
     let end = host.find_clip_by_id("clip_a").unwrap().duration_beats;
-    assert!(end >= Beats(0.25), "duration must clamp at the 1/16 minimum at commit: {end:?}");
+    assert!(
+        end >= Beats(0.25),
+        "duration must clamp at the 1/16 minimum at commit: {end:?}"
+    );
 }
 
 #[test]
@@ -152,7 +209,11 @@ fn drag_readout_clip_id_reports_the_trimmed_clip() {
     assert_eq!(overlay.drag_readout_clip_id(), Some(ClipId::new("clip_a")));
 
     overlay.on_end_drag(&mut host);
-    assert_eq!(overlay.drag_readout_clip_id(), None, "readout clears once the drag ends");
+    assert_eq!(
+        overlay.drag_readout_clip_id(),
+        None,
+        "readout clears once the drag ends"
+    );
 }
 
 #[test]
@@ -169,13 +230,26 @@ fn region_select_drag_updates_extents_and_clears_prior_selection() {
     let press = body_pos_for(&panel, 30.0);
     overlay.on_begin_drag(press, &mut host, &mut ui_state, &panel);
     assert_eq!(overlay.drag_mode(), DragMode::RegionSelect);
-    assert!(ui_state.get_selected_clip_ids().is_empty(), "a bare region drag clears prior clip selection");
+    assert!(
+        ui_state.get_selected_clip_ids().is_empty(),
+        "a bare region drag clears prior clip selection"
+    );
 
     // Drag back to beat ~2, spanning most of clip_a's range.
-    overlay.on_drag(body_pos_for(&panel, 2.0), &mut host, &mut ui_state, &mut panel);
-    let region = ui_state.current_region().expect("region must be active mid-drag");
+    overlay.on_drag(
+        body_pos_for(&panel, 2.0),
+        &mut host,
+        &mut ui_state,
+        &mut panel,
+    );
+    let region = ui_state
+        .current_region()
+        .expect("region must be active mid-drag");
     assert!(region.start_beat < region.end_beat);
-    assert!(region.end_beat >= Beats::from_f32(29.0), "region must extend to the drag's far corner");
+    assert!(
+        region.end_beat >= Beats::from_f32(29.0),
+        "region must extend to the drag's far corner"
+    );
 
     overlay.on_end_drag(&mut host);
     assert_eq!(overlay.drag_mode(), DragMode::None);
@@ -205,13 +279,22 @@ fn assert_preview_equals_committed(landing_beat_center: f32, case: &str) {
     let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
 
     overlay.on_begin_drag(body_pos_for(&panel, 2.0), &mut host, &mut ui_state, &panel);
-    assert_eq!(overlay.drag_mode(), DragMode::Move, "case {case}: drag must begin");
+    assert_eq!(
+        overlay.drag_mode(),
+        DragMode::Move,
+        "case {case}: drag must begin"
+    );
 
     // Several synthetic pointer moves walking toward the landing spot.
     for step in 1..=3 {
         let t = step as f32 / 3.0;
         let beat = 2.0 + (landing_beat_center - 2.0) * t;
-        overlay.on_drag(body_pos_for(&panel, beat), &mut host, &mut ui_state, &mut panel);
+        overlay.on_drag(
+            body_pos_for(&panel, beat),
+            &mut host,
+            &mut ui_state,
+            &mut panel,
+        );
     }
 
     let preview = host.find_clip_by_id("clip_a").unwrap().start_beat;
@@ -245,8 +328,18 @@ fn escape_mid_drag_restores_byte_identical_state() {
     let before = host.clips.clone();
 
     overlay.on_begin_drag(body_pos_for(&panel, 2.0), &mut host, &mut ui_state, &panel);
-    overlay.on_drag(body_pos_for(&panel, 10.0), &mut host, &mut ui_state, &mut panel);
-    overlay.on_drag(body_pos_for(&panel, 12.37), &mut host, &mut ui_state, &mut panel);
+    overlay.on_drag(
+        body_pos_for(&panel, 10.0),
+        &mut host,
+        &mut ui_state,
+        &mut panel,
+    );
+    overlay.on_drag(
+        body_pos_for(&panel, 12.37),
+        &mut host,
+        &mut ui_state,
+        &mut panel,
+    );
 
     // Sanity: the drag actually moved the clip before cancelling —
     // otherwise this test would pass for the wrong reason.
@@ -363,8 +456,18 @@ fn full_drag_produces_exactly_one_undo_entry() {
     let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
 
     overlay.on_begin_drag(body_pos_for(&panel, 2.0), &mut host, &mut ui_state, &panel);
-    overlay.on_drag(body_pos_for(&panel, 6.0), &mut host, &mut ui_state, &mut panel);
-    overlay.on_drag(body_pos_for(&panel, 10.0), &mut host, &mut ui_state, &mut panel);
+    overlay.on_drag(
+        body_pos_for(&panel, 6.0),
+        &mut host,
+        &mut ui_state,
+        &mut panel,
+    );
+    overlay.on_drag(
+        body_pos_for(&panel, 10.0),
+        &mut host,
+        &mut ui_state,
+        &mut panel,
+    );
     overlay.on_end_drag(&mut host);
 
     assert_eq!(
@@ -372,7 +475,11 @@ fn full_drag_produces_exactly_one_undo_entry() {
         1,
         "exactly one non-empty commit_command_batch call must fire per gesture (B9)"
     );
-    assert_eq!(host.move_records.len(), 1, "one clip moved -> one record_move call");
+    assert_eq!(
+        host.move_records.len(),
+        1,
+        "one clip moved -> one record_move call"
+    );
 }
 
 #[test]
@@ -388,7 +495,12 @@ fn drag_toward_zero_clamps_every_frame_not_just_at_release() {
     // Walk the pointer far past beat 0 in several steps; the clamp must
     // hold on EVERY intermediate frame, not just once the drag ends.
     for beat in [3.0, 0.5, -2.0, -8.0, -20.0] {
-        overlay.on_drag(body_pos_for(&panel, beat), &mut host, &mut ui_state, &mut panel);
+        overlay.on_drag(
+            body_pos_for(&panel, beat),
+            &mut host,
+            &mut ui_state,
+            &mut panel,
+        );
         let start = host.find_clip_by_id("clip_a").unwrap().start_beat;
         assert!(
             start >= Beats::ZERO,
@@ -398,7 +510,10 @@ fn drag_toward_zero_clamps_every_frame_not_just_at_release() {
 
     overlay.on_end_drag(&mut host);
     let start = host.find_clip_by_id("clip_a").unwrap().start_beat;
-    assert!(start >= Beats::ZERO, "start_beat negative after release: {start:?}");
+    assert!(
+        start >= Beats::ZERO,
+        "start_beat negative after release: {start:?}"
+    );
 }
 
 // ── P1.5 drag ergonomics tests ────────────────────────────────────
@@ -424,7 +539,10 @@ fn edge_autoscroll_advances_scroll_and_gesture_tracks_it() {
 
     // Parked just inside the right edge of the tracks area — within
     // `TimelineViewportPanel::AUTOSCROLL_EDGE_PX` of `tracks_rect.x_max()`.
-    let edge_pos = Vec2::new(panel.tracks_rect().x_max() - 5.0, panel.tracks_rect().y + 70.0);
+    let edge_pos = Vec2::new(
+        panel.tracks_rect().x_max() - 5.0,
+        panel.tracks_rect().y + 70.0,
+    );
 
     let scroll_start = panel.scroll_x_beats();
     let start_begin = host.find_clip_by_id("clip_a").unwrap().start_beat;
@@ -479,7 +597,12 @@ fn move_drag_snaps_to_clip_edge_and_cmd_bypasses_it() {
     ui_state.select_clips(vec![ClipId::new("clip_a")]);
     let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
     overlay.on_begin_drag(body_pos_for(&panel, 2.0), &mut host, &mut ui_state, &panel);
-    overlay.on_drag(body_pos_for(&panel, 17.9), &mut host, &mut ui_state, &mut panel);
+    overlay.on_drag(
+        body_pos_for(&panel, 17.9),
+        &mut host,
+        &mut ui_state,
+        &mut panel,
+    );
     let snapped = host.find_clip_by_id("clip_a").unwrap().start_beat;
     assert_eq!(
         snapped,
@@ -496,8 +619,18 @@ fn move_drag_snaps_to_clip_edge_and_cmd_bypasses_it() {
         command: true,
         ..Modifiers::NONE
     });
-    overlay2.on_begin_drag(body_pos_for(&panel, 2.0), &mut host2, &mut ui_state2, &panel);
-    overlay2.on_drag(body_pos_for(&panel, 17.9), &mut host2, &mut ui_state2, &mut panel);
+    overlay2.on_begin_drag(
+        body_pos_for(&panel, 2.0),
+        &mut host2,
+        &mut ui_state2,
+        &panel,
+    );
+    overlay2.on_drag(
+        body_pos_for(&panel, 17.9),
+        &mut host2,
+        &mut ui_state2,
+        &mut panel,
+    );
     let raw = host2.find_clip_by_id("clip_a").unwrap().start_beat;
     assert_ne!(
         raw,
@@ -523,7 +656,12 @@ fn move_drag_snaps_to_marker() {
     ui_state.select_clips(vec![ClipId::new("clip_a")]);
     let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
     overlay.on_begin_drag(body_pos_for(&panel, 2.0), &mut host, &mut ui_state, &panel);
-    overlay.on_drag(body_pos_for(&panel, 12.02), &mut host, &mut ui_state, &mut panel);
+    overlay.on_drag(
+        body_pos_for(&panel, 12.02),
+        &mut host,
+        &mut ui_state,
+        &mut panel,
+    );
 
     let snapped = host.find_clip_by_id("clip_a").unwrap().start_beat;
     assert_eq!(
@@ -546,23 +684,39 @@ fn move_drag_fires_landing_flash_at_commit_only_when_landed() {
     let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
 
     overlay.on_begin_drag(body_pos_for(&panel, 2.0), &mut host, &mut ui_state, &panel);
-    overlay.on_drag(body_pos_for(&panel, 10.0), &mut host, &mut ui_state, &mut panel);
+    overlay.on_drag(
+        body_pos_for(&panel, 10.0),
+        &mut host,
+        &mut ui_state,
+        &mut panel,
+    );
     overlay.on_end_drag(&mut host);
 
-    let (_, beat, lo, hi) = overlay.landing_flash().expect("flash fires on a landed move");
+    let (_, beat, lo, hi) = overlay
+        .landing_flash()
+        .expect("flash fires on a landed move");
     let landed = host.find_clip_by_id("clip_a").unwrap().start_beat;
     assert!(
         (beat - landed).abs() < Beats(1e-6),
         "flash beat {beat:?} must be the landed start beat {landed:?}"
     );
-    assert_eq!((lo, hi), (0, 0), "single-layer drag spans exactly its layer");
+    assert_eq!(
+        (lo, hi),
+        (0, 0),
+        "single-layer drag spans exactly its layer"
+    );
 
     // Same gesture, zero displacement: begin then release in place.
     let mut host2 = GestureTestHost::new(&["layer-0"]).with_clip("clip_a", 0, 0.0, 8.0);
     let mut ui_state2 = UIState::new();
     ui_state2.select_clips(vec![ClipId::new("clip_a")]);
     let mut overlay2 = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
-    overlay2.on_begin_drag(body_pos_for(&panel, 2.0), &mut host2, &mut ui_state2, &panel);
+    overlay2.on_begin_drag(
+        body_pos_for(&panel, 2.0),
+        &mut host2,
+        &mut ui_state2,
+        &panel,
+    );
     overlay2.on_end_drag(&mut host2);
     assert!(
         overlay2.landing_flash().is_none(),

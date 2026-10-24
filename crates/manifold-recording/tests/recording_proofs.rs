@@ -10,8 +10,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use manifold_audio::capture::{AudioStreamProducer, audio_stream};
 use manifold_gpu::{GpuDevice, GpuTexture};
-use manifold_audio::capture::{audio_stream, AudioStreamProducer};
 use manifold_recording::proofs::{self, PatternWriter};
 use manifold_recording::{AudioCodec, AudioFeed, LiveRecordingConfig, LiveRecordingSession};
 
@@ -30,8 +30,7 @@ const FRAME_NS: u64 = 16_666_667;
 /// Stable output directory inside the worktree's target dir — kept
 /// artifacts (not deleted) so a landing session can open them.
 fn proof_output_dir() -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/proof-output");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/proof-output");
     std::fs::create_dir_all(&dir).expect("create proof-output dir");
     dir
 }
@@ -96,7 +95,10 @@ fn push_sine_chunk(
 ) {
     const FREQ_HZ: f32 = 440.0;
     const AMPLITUDE: f32 = 0.25;
-    assert!(producer.vacant_frames() >= num_frames as usize, "nominal proof audio must fit its preallocated stream");
+    assert!(
+        producer.vacant_frames() >= num_frames as usize,
+        "nominal proof audio must fit its preallocated stream"
+    );
     let frames = num_frames;
     let mut buf = Vec::with_capacity(frames as usize * channels as usize);
     for _ in 0..frames {
@@ -125,9 +127,15 @@ fn nominal_video_only() {
 
     let out = scratch_output("nominal_video_only");
     let config = video_only_config(out.clone());
-    let mut session =
-        LiveRecordingSession::new_with_audio_feed(config, &device, WIDTH, HEIGHT, FPS, AudioFeed::None)
-            .expect("session creation");
+    let mut session = LiveRecordingSession::new_with_audio_feed(
+        config,
+        &device,
+        WIDTH,
+        HEIGHT,
+        FPS,
+        AudioFeed::None,
+    )
+    .expect("session creation");
 
     for frame_index in 0..600u32 {
         submit_paced_frame(
@@ -141,7 +149,10 @@ fn nominal_video_only() {
     }
 
     let result = session.stop();
-    assert_eq!(result.frames_recorded, 600, "expected 600 recorded: {result:?}");
+    assert_eq!(
+        result.frames_recorded, 600,
+        "expected 600 recorded: {result:?}"
+    );
     assert_eq!(result.frames_dropped, 0, "expected 0 dropped: {result:?}");
 
     let report = proofs::probe(&out, true).expect("probe");
@@ -152,14 +163,21 @@ fn nominal_video_only() {
     );
     assert_eq!(report.video_frame_count, 600);
     assert_eq!(report.pts.len(), 600);
-    assert!(is_strictly_increasing(&report.pts), "PTS not strictly increasing: {:?}", report.pts);
+    assert!(
+        is_strictly_increasing(&report.pts),
+        "PTS not strictly increasing: {:?}",
+        report.pts
+    );
     assert!(
         (report.video_duration_s - 10.0).abs() <= 0.05,
         "video_duration_s {} not within ±50ms of 10.0",
         report.video_duration_s
     );
     let expected_indices: Vec<u32> = (0..600).collect();
-    assert_eq!(report.frame_indices, expected_indices, "frame identity did not survive the encode");
+    assert_eq!(
+        report.frame_indices, expected_indices,
+        "frame identity did not survive the encode"
+    );
 
     println!(
         "nominal_video_only: {} frames, codec={}, video_duration_s={:.3}, kept at {}",
@@ -216,7 +234,13 @@ fn nominal_with_audio() {
     let mut phase = 0.0f32;
 
     for frame_index in 0..600u32 {
-        push_sine_chunk(&mut producer, &mut phase, sample_rate, channels, samples_per_frame);
+        push_sine_chunk(
+            &mut producer,
+            &mut phase,
+            sample_rate,
+            channels,
+            samples_per_frame,
+        );
         submit_paced_frame(
             &mut session,
             &device,
@@ -228,7 +252,10 @@ fn nominal_with_audio() {
     }
 
     let result = session.stop();
-    assert_eq!(result.frames_recorded, 600, "expected 600 recorded: {result:?}");
+    assert_eq!(
+        result.frames_recorded, 600,
+        "expected 600 recorded: {result:?}"
+    );
     assert_eq!(result.frames_dropped, 0, "expected 0 dropped: {result:?}");
 
     let report = proofs::probe(&out, true).expect("probe");
@@ -305,9 +332,15 @@ fn adversarial_pts_survives() {
 
     let out = scratch_output("adversarial_pts_survives");
     let config = video_only_config(out.clone());
-    let mut session =
-        LiveRecordingSession::new_with_audio_feed(config, &device, WIDTH, HEIGHT, FPS, AudioFeed::None)
-            .expect("session creation");
+    let mut session = LiveRecordingSession::new_with_audio_feed(
+        config,
+        &device,
+        WIDTH,
+        HEIGHT,
+        FPS,
+        AudioFeed::None,
+    )
+    .expect("session creation");
 
     for frame_index in 0..600u32 {
         submit_paced_frame(
@@ -329,9 +362,16 @@ fn adversarial_pts_survives() {
 
     let report = proofs::probe(&out, true).expect("probe");
     assert_eq!(report.pts.len(), 600);
-    assert!(is_strictly_increasing(&report.pts), "PTS not strictly increasing: {:?}", report.pts);
+    assert!(
+        is_strictly_increasing(&report.pts),
+        "PTS not strictly increasing: {:?}",
+        report.pts
+    );
     let expected_indices: Vec<u32> = (0..600).collect();
-    assert_eq!(report.frame_indices, expected_indices, "frame identity did not survive adversarial PTS");
+    assert_eq!(
+        report.frame_indices, expected_indices,
+        "frame identity did not survive adversarial PTS"
+    );
 
     // The n=400 stall's ~2s gap must survive the monotonic clamp — the
     // clamp exists to kill duplicates, never to flatten a real gap (D9 /
@@ -339,7 +379,10 @@ fn adversarial_pts_survives() {
     // against a normal per-frame PTS step so this doesn't depend on the
     // encoder's actual timescale value.
     let normal_step = median_pts_delta(&report.pts, 450..550);
-    assert!(normal_step > 0.0, "normal PTS step must be positive: {normal_step}");
+    assert!(
+        normal_step > 0.0,
+        "normal PTS step must be positive: {normal_step}"
+    );
     let gap_step = (report.pts[400] - report.pts[399]) as f64;
     let gap_seconds_estimate = (gap_step / normal_step) / 60.0;
     let expected_gap_s = 2.0 + 1.0 / 60.0; // +2s stall, plus the one normal frame step
@@ -369,9 +412,15 @@ fn pool_accounting_consistent() {
 
     let out = scratch_output("pool_accounting_consistent");
     let config = video_only_config(out.clone());
-    let mut session =
-        LiveRecordingSession::new_with_audio_feed(config, &device, WIDTH, HEIGHT, FPS, AudioFeed::None)
-            .expect("session creation");
+    let mut session = LiveRecordingSession::new_with_audio_feed(
+        config,
+        &device,
+        WIDTH,
+        HEIGHT,
+        FPS,
+        AudioFeed::None,
+    )
+    .expect("session creation");
 
     // Hold the first 4 acquired slots' fences un-signaled — a gated
     // fence-signal simulating a slow encoder — until frame 100. Because the
@@ -440,7 +489,10 @@ fn pool_accounting_consistent() {
         FRAME_COUNT,
         "accounting mismatch: {result:?}"
     );
-    assert!(result.frames_recorded > 0, "expected at least some frames to survive backpressure: {result:?}");
+    assert!(
+        result.frames_recorded > 0,
+        "expected at least some frames to survive backpressure: {result:?}"
+    );
     // BUG-085 gate: the forced-backpressure stall (frames ~4..~99 held on a
     // FIFO-blocked fence) must produce real drops, and `frames_recorded`
     // must be the native ground truth, not an overstated synchronous count.
@@ -463,7 +515,11 @@ fn pool_accounting_consistent() {
         report.pts.len(),
         result.frames_recorded
     );
-    assert!(is_strictly_increasing(&report.pts), "PTS not strictly increasing: {:?}", report.pts);
+    assert!(
+        is_strictly_increasing(&report.pts),
+        "PTS not strictly increasing: {:?}",
+        report.pts
+    );
     // Gaps are allowed/expected (dropped frames leave PTS gaps, never
     // corruption) — just confirm decoded indices are strictly increasing
     // (no reorder, no duplicate).
@@ -608,7 +664,14 @@ fn hdr_blocked_by_bug_053() {
     let mut config = video_only_config(out);
     config.hdr = true;
 
-    match LiveRecordingSession::new_with_audio_feed(config, &device, WIDTH, HEIGHT, FPS, AudioFeed::None) {
+    match LiveRecordingSession::new_with_audio_feed(
+        config,
+        &device,
+        WIDTH,
+        HEIGHT,
+        FPS,
+        AudioFeed::None,
+    ) {
         Err(e) => {
             // Loud failure at construction — session creation itself
             // refused the mismatched HDR configuration.

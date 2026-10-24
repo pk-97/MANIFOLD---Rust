@@ -53,9 +53,9 @@ impl Project {
     /// The current preset id of the instance addressed by `target`, if found.
     pub fn instance_preset_id(&self, target: &crate::GraphTarget) -> Option<PresetTypeId> {
         match target {
-            crate::GraphTarget::Effect(effect_id) => {
-                self.find_effect_by_id(effect_id).map(|fx| fx.effect_type().clone())
-            }
+            crate::GraphTarget::Effect(effect_id) => self
+                .find_effect_by_id(effect_id)
+                .map(|fx| fx.effect_type().clone()),
             crate::GraphTarget::Generator(layer_id) => self
                 .timeline
                 .layers
@@ -83,7 +83,10 @@ impl Project {
 
     /// Remove a project-embedded preset by id. Returns it if present.
     pub fn remove_embedded_preset(&mut self, id: &PresetTypeId) -> Option<EmbeddedPreset> {
-        let pos = self.embedded_presets.iter().position(|p| p.id() == Some(id))?;
+        let pos = self
+            .embedded_presets
+            .iter()
+            .position(|p| p.id() == Some(id))?;
         Some(self.embedded_presets.remove(pos))
     }
 
@@ -246,8 +249,8 @@ impl Project {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::test_support::*;
+    use super::*;
     use crate::PresetTypeId;
 
     #[test]
@@ -273,7 +276,10 @@ mod tests {
         // fixtures stay byte-identical).
         let p = Project::default();
         let json = serde_json::to_string(&p).unwrap();
-        assert!(!json.contains("embeddedPresets"), "empty must be skipped: {json}");
+        assert!(
+            !json.contains("embeddedPresets"),
+            "empty must be skipped: {json}"
+        );
 
         // A forked preset round-trips inside the project JSON.
         let mut p = Project::default();
@@ -297,7 +303,7 @@ mod tests {
             scene_bounds: None,
             available: true,
             is_line_based: false,
-                layer_types: None,
+            layer_types: None,
             params: Vec::new(),
             bindings: Vec::new(),
             param_aliases: Vec::new(),
@@ -312,7 +318,10 @@ mod tests {
         });
 
         let json = serde_json::to_string(&p).unwrap();
-        assert!(json.contains("embeddedPresets"), "non-empty must serialize: {json}");
+        assert!(
+            json.contains("embeddedPresets"),
+            "non-empty must serialize: {json}"
+        );
         let back: Project = serde_json::from_str(&json).unwrap();
         assert_eq!(back.embedded_presets.len(), 1);
         assert_eq!(back.embedded_presets[0].kind, PresetKind::Generator);
@@ -343,8 +352,14 @@ mod tests {
         });
 
         let json = serde_json::to_string(&p).unwrap();
-        assert!(json.contains("\"origin\":\"Saved\""), "Saved must serialize: {json}");
-        assert!(json.contains("\"origin\":\"Snapshot\""), "Snapshot must serialize: {json}");
+        assert!(
+            json.contains("\"origin\":\"Saved\""),
+            "Saved must serialize: {json}"
+        );
+        assert!(
+            json.contains("\"origin\":\"Snapshot\""),
+            "Snapshot must serialize: {json}"
+        );
 
         let back: Project = serde_json::from_str(&json).unwrap();
         assert_eq!(

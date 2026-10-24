@@ -180,9 +180,13 @@ mod gpu_tests {
             in_buf.write(0, bytemuck::cast_slice(&input));
         }
 
-        let gen_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<ArrayUnpackVec2>()
-            .expect("array_unpack_vec2 codegen");
-        assert!(gen_wgsl.contains("struct BufferOutputs"), "multi-output struct emitted");
+        let gen_wgsl =
+            manifold_node_engine::freeze::codegen::standalone_for_spec::<ArrayUnpackVec2>()
+                .expect("array_unpack_vec2 codegen");
+        assert!(
+            gen_wgsl.contains("struct BufferOutputs"),
+            "multi-output struct emitted"
+        );
         let pipeline = device.create_compute_pipeline(
             &gen_wgsl,
             manifold_node_engine::freeze::codegen::ENTRY,
@@ -199,10 +203,25 @@ mod gpu_tests {
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: &in_buf, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: &x_buf, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: &y_buf, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &in_buf,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: &x_buf,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: &y_buf,
+                    offset: 0,
+                },
             ],
             [n.div_ceil(256), 1, 1],
             "unpack-oracle",

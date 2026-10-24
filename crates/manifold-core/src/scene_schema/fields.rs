@@ -28,13 +28,23 @@ pub enum FieldControl {
     /// A closed set of values.
     Closed(&'static [Choice]),
     /// A closed set, then every item `items` passes.
-    ClosedOrItem { closed: &'static [Choice], items: fn(&Item) -> bool },
+    ClosedOrItem {
+        closed: &'static [Choice],
+        items: fn(&Item) -> bool,
+    },
     /// One item reference, or none (`none` names the empty value).
-    Item { items: fn(&Item) -> bool, none: &'static str },
+    Item {
+        items: fn(&Item) -> bool,
+        none: &'static str,
+    },
     /// Any number of items, or everything (`all`). A pick toggles the item in
     /// the set. `refused` gives why the item holding the row (second) cannot
     /// take a candidate (third): the choice is drawn disabled.
-    ItemSet { items: fn(&Item) -> bool, all: &'static str, refused: fn(&SceneDoc, &Item, &Item) -> Option<&'static str> },
+    ItemSet {
+        items: fn(&Item) -> bool,
+        all: &'static str,
+        refused: fn(&SceneDoc, &Item, &Item) -> Option<&'static str>,
+    },
     /// A closed set, then every layer in the project.
     ClosedOrLayer(&'static [Choice]),
     /// A file picker.
@@ -75,7 +85,10 @@ pub struct FieldRow {
 
 impl std::fmt::Debug for FieldRow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FieldRow").field("id", &self.id).field("section", &self.section).finish()
+        f.debug_struct("FieldRow")
+            .field("id", &self.id)
+            .field("section", &self.section)
+            .finish()
     }
 }
 
@@ -122,20 +135,33 @@ pub fn field_rows(kind: ItemKind) -> &'static [FieldRow] {
 /// Why `item` cannot take the choice `key` of its field `field` right now,
 /// or `None`. The choice is drawn disabled with the reason, and a pick of it
 /// is refused.
-pub fn choice_disabled(doc: &SceneDoc, item: &Item, field: &str, key: &str) -> Option<&'static str> {
+pub fn choice_disabled(
+    doc: &SceneDoc,
+    item: &Item,
+    field: &str,
+    key: &str,
+) -> Option<&'static str> {
     match item.kind() {
         ItemKind::Water => super::water::choice_unavailable(item, field, key),
         ItemKind::WaterSource => super::water_source::choice_unavailable(doc, item, field, key),
         ItemKind::Camera => super::camera::choice_unavailable(doc, field, key),
-        ItemKind::Modifier => super::scene_wide::type_unavailable(doc, item, field, key).or_else(|| super::copies::type_moves_no_copies(doc, item, field, key)),
-        ItemKind::Object | ItemKind::Group if field == "physics" && key != "none" => physics_refused(doc, item),
+        ItemKind::Modifier => super::scene_wide::type_unavailable(doc, item, field, key)
+            .or_else(|| super::copies::type_moves_no_copies(doc, item, field, key)),
+        ItemKind::Object | ItemKind::Group if field == "physics" && key != "none" => {
+            physics_refused(doc, item)
+        }
         _ => None,
     }
 }
 
 /// Why `item` cannot take `pick` as the item of its field `field` right now,
 /// or `None`: the item picker's sibling of [`choice_disabled`].
-pub fn item_disabled(doc: &SceneDoc, item: &Item, field: &str, pick: &Item) -> Option<&'static str> {
+pub fn item_disabled(
+    doc: &SceneDoc,
+    item: &Item,
+    field: &str,
+    pick: &Item,
+) -> Option<&'static str> {
     match item.kind() {
         ItemKind::Swarm => super::swarm::pick_unavailable(doc, item, field, pick),
         _ => None,
@@ -144,7 +170,9 @@ pub fn item_disabled(doc: &SceneDoc, item: &Item, field: &str, pick: &Item) -> O
 
 /// The field rows that exist for an item with `fields`.
 pub fn applicable_fields(fields: &ItemFields) -> impl Iterator<Item = &'static FieldRow> + '_ {
-    field_rows(fields.kind()).iter().filter(move |row| (row.applies)(fields))
+    field_rows(fields.kind())
+        .iter()
+        .filter(move |row| (row.applies)(fields))
 }
 
 /// The field row `id` of an item with `fields`, if it exists there.
@@ -155,7 +183,12 @@ pub fn field_for(fields: &ItemFields, id: &str) -> Option<&'static FieldRow> {
 /// The fields `item` would have after `row` is set to `value`. The item's
 /// kind is kept; a refused pick (a disabled row, a value the row does not
 /// take) is an error and changes nothing.
-pub fn set_field(doc: &SceneDoc, item: &Item, row: &FieldRow, value: &FieldValue) -> Result<ItemFields, String> {
+pub fn set_field(
+    doc: &SceneDoc,
+    item: &Item,
+    row: &FieldRow,
+    value: &FieldValue,
+) -> Result<ItemFields, String> {
     if let Some(reason) = (row.disabled)(doc, item) {
         return Err(reason.to_owned());
     }
@@ -199,9 +232,18 @@ pub(super) fn parse_on(row: &str, value: &FieldValue) -> Result<bool, String> {
 }
 
 const PHYSICS_CHOICES: &[Choice] = &[
-    Choice { key: "none", label: "None" },
-    Choice { key: "collider", label: "Collider" },
-    Choice { key: "body", label: "Body" },
+    Choice {
+        key: "none",
+        label: "None",
+    },
+    Choice {
+        key: "collider",
+        label: "Collider",
+    },
+    Choice {
+        key: "body",
+        label: "Body",
+    },
 ];
 
 fn physics_of(fields: &ItemFields) -> crate::scene_doc::PhysicsSetting {
@@ -209,7 +251,9 @@ fn physics_of(fields: &ItemFields) -> crate::scene_doc::PhysicsSetting {
 }
 
 fn has_body_below(item: &Item) -> bool {
-    item.children.iter().any(|child| child.fields.physics() == crate::scene_doc::PhysicsSetting::Body || has_body_below(child))
+    item.children.iter().any(|child| {
+        child.fields.physics() == crate::scene_doc::PhysicsSetting::Body || has_body_below(child)
+    })
 }
 
 /// A Body inside a Body is refused (section 7.8): the row is disabled with
@@ -218,7 +262,9 @@ fn physics_blocked(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
     let mut inside_body = false;
     doc.walk(|other, ancestors| {
         if other.id == item.id {
-            inside_body = ancestors.iter().any(|a| a.fields.physics() == crate::scene_doc::PhysicsSetting::Body);
+            inside_body = ancestors
+                .iter()
+                .any(|a| a.fields.physics() == crate::scene_doc::PhysicsSetting::Body);
         }
     });
     if inside_body {
@@ -235,7 +281,9 @@ fn physics_blocked(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
 /// stays pickable once a setting is on, so a Collider inside a Body group can
 /// be switched off.
 fn physics_disabled(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
-    (item.fields.physics() == crate::scene_doc::PhysicsSetting::None).then(|| physics_refused(doc, item)).flatten()
+    (item.fields.physics() == crate::scene_doc::PhysicsSetting::None)
+        .then(|| physics_refused(doc, item))
+        .flatten()
 }
 
 /// Why this item can take no Collider or Body; with a setting already on,
@@ -326,7 +374,10 @@ pub(super) const MATERIAL_BINDING: FieldRow = FieldRow {
     id: "material",
     label: "Material",
     section: ControlGroup::Material,
-    control: FieldControl::Item { items: is_material, none: "Default" },
+    control: FieldControl::Item {
+        items: is_material,
+        none: "Default",
+    },
     applies: always,
     disabled: enabled,
     read: |fields| FieldValue::Item(fields.material().cloned()),
@@ -339,7 +390,11 @@ pub(super) const MATERIAL_BINDING: FieldRow = FieldRow {
             ItemFields::Group(g) => g.material = material.clone(),
             ItemFields::Swarm(s) => s.material = material.clone(),
             ItemFields::Water(w) => w.material = material.clone(),
-            _ => return Err("only an Object, a Group, a Swarm or a Water binds a material".to_owned()),
+            _ => {
+                return Err(
+                    "only an Object, a Group, a Swarm or a Water binds a material".to_owned(),
+                );
+            }
         }
         Ok(())
     },
@@ -357,16 +412,25 @@ mod tests {
         let part = Item {
             id: ItemId::new("part"),
             name: "Part".into(),
-            fields: ItemFields::Object(ObjectFields { physics: PhysicsSetting::Collider, ..ObjectFields::default() }),
+            fields: ItemFields::Object(ObjectFields {
+                physics: PhysicsSetting::Collider,
+                ..ObjectFields::default()
+            }),
             children: Vec::new(),
         };
         let group = Item {
             id: ItemId::new("group"),
             name: "Group".into(),
-            fields: ItemFields::Group(GroupFields { physics: PhysicsSetting::Body, ..GroupFields::default() }),
+            fields: ItemFields::Group(GroupFields {
+                physics: PhysicsSetting::Body,
+                ..GroupFields::default()
+            }),
             children: vec![part.clone()],
         };
-        let doc = SceneDoc { items: vec![group], ..SceneDoc::default() };
+        let doc = SceneDoc {
+            items: vec![group],
+            ..SceneDoc::default()
+        };
         let none = FieldValue::Choice("none".into());
         let fields = set_field(&doc, &part, &PHYSICS, &none).expect("None is pickable");
         assert_eq!(fields.physics(), PhysicsSetting::None);

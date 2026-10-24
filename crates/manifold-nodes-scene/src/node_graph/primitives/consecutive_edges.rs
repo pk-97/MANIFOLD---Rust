@@ -18,8 +18,8 @@
 
 use std::borrow::Cow;
 
-use manifold_node_engine::mesh::EdgePair;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::EdgePair;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
@@ -103,7 +103,10 @@ impl Primitive for ConsecutiveEdges {
         .min(CONSECUTIVE_EDGES_MAX_CAPACITY);
         let n = (count_raw.round().max(2.0) as u32).min(max_capacity);
 
-        let closed = matches!(ctx.params.get("closed"), Some(ParamValue::Bool(true)) | None);
+        let closed = matches!(
+            ctx.params.get("closed"),
+            Some(ParamValue::Bool(true)) | None
+        );
 
         let Some(edges_dst) = ctx.outputs.array("edges") else {
             log::warn!(
@@ -117,8 +120,7 @@ impl Primitive for ConsecutiveEdges {
             return;
         }
 
-        let mut scratch =
-            [EdgePair::SENTINEL; CONSECUTIVE_EDGES_MAX_CAPACITY as usize];
+        let mut scratch = [EdgePair::SENTINEL; CONSECUTIVE_EDGES_MAX_CAPACITY as usize];
         let n_usize = n as usize;
 
         // Open-strip span: N-1 consecutive (i, i+1) pairs.
@@ -155,7 +157,10 @@ mod tests {
         let prim = ConsecutiveEdges::new();
 
         let mut params = ParamValues::default();
-        params.insert(std::borrow::Cow::Borrowed("max_capacity"), ParamValue::Float(32.0));
+        params.insert(
+            std::borrow::Cow::Borrowed("max_capacity"),
+            ParamValue::Float(32.0),
+        );
         assert_eq!(
             Primitive::array_output_capacity(&prim, "edges", &params, &[]),
             Some(32),
@@ -163,7 +168,10 @@ mod tests {
 
         // Clamped to the hard upper bound.
         let mut over = ParamValues::default();
-        over.insert(std::borrow::Cow::Borrowed("max_capacity"), ParamValue::Float(128.0));
+        over.insert(
+            std::borrow::Cow::Borrowed("max_capacity"),
+            ParamValue::Float(128.0),
+        );
         assert_eq!(
             Primitive::array_output_capacity(&prim, "edges", &over, &[]),
             Some(CONSECUTIVE_EDGES_MAX_CAPACITY),

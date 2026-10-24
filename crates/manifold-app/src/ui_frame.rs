@@ -131,20 +131,20 @@
 
 use manifold_core::Beats;
 use manifold_gpu::{GpuDevice, GpuRenderPipeline, GpuSampler, GpuTexture};
+use manifold_spectral::{ScopeColumn, Spectrogram, SpectrogramConfig};
+use manifold_ui::node::{Color32, Vec2};
+use manifold_ui::panels::viewport::{ClipScreenRect, TimelineOverlays};
 use manifold_ui_paint::clip_content_gpu::ClipContentGpu;
 use manifold_ui_paint::clip_draw::ClipBody;
 use manifold_ui_paint::clip_thumb_gpu::{ClipThumbGpu, ThumbQuad};
 use manifold_ui_paint::panel_bitmap_gpu::PanelBitmapGpu;
 use manifold_ui_paint::ui_cache_manager::UICacheManager;
 use manifold_ui_paint::ui_renderer::UIRenderer;
-use manifold_spectral::{ScopeColumn, Spectrogram, SpectrogramConfig};
-use manifold_ui::node::{Color32, Vec2};
-use manifold_ui::panels::viewport::{ClipScreenRect, TimelineOverlays};
 
 use crate::frame_plan::{MainRegion, RegionMask, ViewportMoves};
 use crate::texture_pane::TexturePane;
 use crate::ui_root::UIRoot;
-use manifold_core::work_count::{record_work, WorkKind};
+use manifold_core::work_count::{WorkKind, record_work};
 
 /// What the executor applies to the tree this frame, read from the plan.
 #[derive(Default)]
@@ -223,7 +223,8 @@ pub(crate) fn apply_ui_frame_invalidations(
             regions = regions.union(UIRoot::scroll_rebuild_regions(moves));
         }
     }
-    if signals.in_place.contains(MainRegion::AudioDock) && !regions.contains(MainRegion::AudioDock) {
+    if signals.in_place.contains(MainRegion::AudioDock) && !regions.contains(MainRegion::AudioDock)
+    {
         if ui_root.audio_setup_panel.scroll_in_place(&mut ui_root.tree) {
             scrolled = true;
             record_work(WorkKind::InPlaceUpdate);
@@ -273,7 +274,11 @@ pub(crate) fn apply_ui_frame_invalidations(
 /// Rebuild each region of `regions` alone, in build order: clear its arena,
 /// build it again, invalidate its atlas slot (D7). Every other region keeps
 /// its nodes, ids and pixels. Returns whether anything rebuilt.
-fn rebuild_regions(ui_root: &mut UIRoot, mut cache: Option<&mut UICacheManager>, regions: RegionMask) -> bool {
+fn rebuild_regions(
+    ui_root: &mut UIRoot,
+    mut cache: Option<&mut UICacheManager>,
+    regions: RegionMask,
+) -> bool {
     if regions.is_empty() {
         return false;
     }
@@ -313,7 +318,14 @@ pub(crate) fn project_editor_inspector(
     latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
     led_preview: Option<&crate::content_state::LedPreview>,
 ) {
-    crate::ui_bridge::sync_inspector_data(ed, project, active_layer, selection, latched, led_preview);
+    crate::ui_bridge::sync_inspector_data(
+        ed,
+        project,
+        active_layer,
+        selection,
+        latched,
+        led_preview,
+    );
     ed.inspector.drop_scene_tab();
     ed.scene_setup_panel.close();
     ed.note_inspector_projected();
@@ -405,15 +417,24 @@ pub(crate) fn gather_frame_inputs(
         zoom_bits: ui_root.viewport.pixels_per_beat().to_bits(),
         scroll_x_bits: ui_root.viewport.scroll_x_beats().as_f32().to_bits(),
         scroll_y_bits: ui_root.viewport.scroll_y_px().to_bits(),
-        playhead_px: ui_root.viewport.playhead_pixel().map_or(i32::MIN, |px| px.round() as i32),
+        playhead_px: ui_root
+            .viewport
+            .playhead_pixel()
+            .map_or(i32::MIN, |px| px.round() as i32),
         // The docked Scene body is inspector-region content (SCENE_SURFACES
         // D16). Both counters only grow, so their sum moves when either does.
-        inspector_view: ui_root.inspector.view_version().wrapping_add(ui_root.scene_setup_panel.view_version()),
+        inspector_view: ui_root
+            .inspector
+            .view_version()
+            .wrapping_add(ui_root.scene_setup_panel.view_version()),
         scene_selection: ui_root.scene_setup_panel.selection_version(),
         setup_check: planner.setup_check.input(
             chrome.project,
             edits.stamps.parts(),
-            [active_layer.as_ref(), ui_root.scene_setup_panel.live_layer_id()],
+            [
+                active_layer.as_ref(),
+                ui_root.scene_setup_panel.live_layer_id(),
+            ],
             &content_state.setup_fits,
         ),
         inspector_reveal: ui_root.inspector_reveal_version(),
@@ -473,8 +494,10 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
     let projections = plan.projections;
     let latched = &push.content_state.automation_latched_params;
     let led_preview = push.content_state.led_preview.as_ref();
-    let active_idx = |project: &manifold_core::project::Project, id: &Option<manifold_core::LayerId>| {
-        id.as_ref().and_then(|id| project.timeline.find_layer_index_by_id(id))
+    let active_idx = |project: &manifold_core::project::Project,
+                      id: &Option<manifold_core::LayerId>| {
+        id.as_ref()
+            .and_then(|id| project.timeline.find_layer_index_by_id(id))
     };
 
     let project_sync = projections.contains(Projection::ProjectSync);
@@ -512,7 +535,14 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
         let idx = active_idx(project, active_layer);
         ui_root.chain_failures = push.content_state.chain_failures.clone();
         ui_root.layer_notices = push.content_state.layer_notices.clone();
-        crate::ui_bridge::sync_inspector_data(ui_root, project, idx, selection, latched, led_preview);
+        crate::ui_bridge::sync_inspector_data(
+            ui_root,
+            project,
+            idx,
+            selection,
+            latched,
+            led_preview,
+        );
     }
     // A marker drag moved the dragged marker; the viewport lays the new list
     // out in place.
@@ -578,7 +608,10 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
     }
     // The clock writes its label in place; a chrome layout below re-reads
     // the same text.
-    if replaced || projections.contains(Projection::ChromePush) || projections.contains(Projection::ClockPush) {
+    if replaced
+        || projections.contains(Projection::ChromePush)
+        || projections.contains(Projection::ClockPush)
+    {
         crate::ui_bridge::push_clock(ui_root, project, push.content_state, push.transport_cache);
     }
     // The zoom label writes in place; the bars need no layout for it.
@@ -587,9 +620,13 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
     }
     // The bars show what the two pushes above wrote; they lay out only then.
     if replaced
-        || [MainRegion::Transport, MainRegion::Header, MainRegion::Footer]
-            .into_iter()
-            .any(|r| plan.in_place.contains(r))
+        || [
+            MainRegion::Transport,
+            MainRegion::Header,
+            MainRegion::Footer,
+        ]
+        .into_iter()
+        .any(|r| plan.in_place.contains(r))
     {
         // A bar resized to a new shape cannot lay out in place: it rebuilds,
         // from the values the pushes just wrote.
@@ -627,7 +664,9 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
     if clips_moved {
         crate::ui_bridge::sync_clip_positions(ui_root, project);
     } else if edits.preview.clip_gesture_live() {
-        if (clip_preview || clip_drag) && !crate::ui_bridge::project_clip_preview(ui_root, project, &edits.preview) {
+        if (clip_preview || clip_drag)
+            && !crate::ui_bridge::project_clip_preview(ui_root, project, &edits.preview)
+        {
             crate::ui_bridge::sync_clip_positions(ui_root, project);
         }
     } else if clip_preview {
@@ -669,7 +708,10 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
 /// (`atlas_ranges_cover_every_region_node`). Clearing only the panel range
 /// left the roots dirty forever, so the idle main window recomposited every
 /// frame (BUG-5y9y4 (region roots stay dirty)).
-pub(crate) fn clear_painted_dirt(ui_root: &mut UIRoot, painted: &[manifold_ui_paint::ui_cache_manager::RenderedRange]) {
+pub(crate) fn clear_painted_dirt(
+    ui_root: &mut UIRoot,
+    painted: &[manifold_ui_paint::ui_cache_manager::RenderedRange],
+) {
     for &(region, _, _) in painted {
         ui_root.tree.clear_dirty_range(region, 0, usize::MAX);
     }
@@ -707,7 +749,8 @@ pub(crate) fn composite_main_ui_frame(
     // atlas via LoadOp::Load. The cache manager doesn't own the UITree, so
     // this is the sole place atlas dirt is cleared.
     let mut subs = std::mem::take(&mut ui_root.panel_subs_scratch);
-    let mut panels = manifold_core::scratch::recycle_vec(std::mem::take(&mut ui_root.panel_info_scratch));
+    let mut panels =
+        manifold_core::scratch::recycle_vec(std::mem::take(&mut ui_root.panel_info_scratch));
     ui_root.panel_cache_info_into(&mut subs, &mut panels);
     let (_, rendered_ranges) =
         cache.render_dirty_panels(device, ui_renderer, &ui_root.tree, &panels);
@@ -727,8 +770,14 @@ pub(crate) fn composite_main_ui_frame(
             atlas_pipeline,
             offscreen,
             &[
-                manifold_gpu::GpuBinding::Texture { binding: 0, texture: atlas },
-                manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: atlas_sampler },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 0,
+                    texture: atlas,
+                },
+                manifold_gpu::GpuBinding::Sampler {
+                    binding: 1,
+                    sampler: atlas_sampler,
+                },
             ],
             false,
             true,
@@ -747,8 +796,14 @@ pub(crate) fn composite_main_ui_frame(
             blit_pipeline,
             offscreen,
             &[
-                manifold_gpu::GpuBinding::Texture { binding: 0, texture: compositor_tex },
-                manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: blit_sampler },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 0,
+                    texture: compositor_tex,
+                },
+                manifold_gpu::GpuBinding::Sampler {
+                    binding: 1,
+                    sampler: blit_sampler,
+                },
             ],
             (fit.x * sf, fit.y * sf, fit.width * sf, fit.height * sf),
             manifold_gpu::GpuLoadAction::Load,
@@ -764,7 +819,13 @@ pub(crate) fn composite_main_ui_frame(
         && let Some(fit) = fit
         && let Some((outline, mask)) = gizmos.outline
     {
-        outline.draw(&mut encoder, offscreen, mask, (fit.x * sf, fit.y * sf, fit.width * sf, fit.height * sf), sf);
+        outline.draw(
+            &mut encoder,
+            offscreen,
+            mask,
+            (fit.x * sf, fit.y * sf, fit.width * sf, fit.height * sf),
+            sf,
+        );
     }
 
     encoder.commit();
@@ -773,13 +834,23 @@ pub(crate) fn composite_main_ui_frame(
 /// The Scene panel's overlay for one main-window frame.
 pub(crate) struct MainGizmos<'a> {
     /// The selection outline pass and the shown picture's mask (D-102).
-    pub outline: Option<(&'a crate::selection_outline::SelectionOutline, &'a manifold_gpu::GpuTexture)>,
+    pub outline: Option<(
+        &'a crate::selection_outline::SelectionOutline,
+        &'a manifold_gpu::GpuTexture,
+    )>,
 }
 
 /// Where the show picture sits inside `area`: aspect-fit and centred, in
 /// logical units. `None` for an empty area or source.
-pub(crate) fn video_fit_rect(area: manifold_ui::Rect, (source_w, source_h): (f32, f32)) -> Option<manifold_ui::Rect> {
-    let source_aspect = if source_h > 0.0 { source_w / source_h } else { 0.0 };
+pub(crate) fn video_fit_rect(
+    area: manifold_ui::Rect,
+    (source_w, source_h): (f32, f32),
+) -> Option<manifold_ui::Rect> {
+    let source_aspect = if source_h > 0.0 {
+        source_w / source_h
+    } else {
+        0.0
+    };
     if area.width <= 0.0 || area.height <= 0.0 || source_aspect <= 0.0 {
         return None;
     }
@@ -788,7 +859,12 @@ pub(crate) fn video_fit_rect(area: manifold_ui::Rect, (source_w, source_h): (f32
     } else {
         (area.height * source_aspect, area.height)
     };
-    Some(manifold_ui::Rect::new(area.x + (area.width - fit_w) * 0.5, area.y + (area.height - fit_h) * 0.5, fit_w, fit_h))
+    Some(manifold_ui::Rect::new(
+        area.x + (area.width - fit_w) * 0.5,
+        area.y + (area.height - fit_h) * 0.5,
+        fit_w,
+        fit_h,
+    ))
 }
 
 /// The `Application` field bundle the VQT (Audio Setup spectrogram
@@ -880,7 +956,10 @@ pub(crate) struct MainUiPassInputs<'a> {
     // the live app's `MANIFOLD_UI_FRAME_PROFILE` profiler is enabled
     // (`UiFrameProfile::gpu_sink()`); `None` headless — no perf HUD there
     // (section 3 input presence, not caller identity).
-    pub gpu_sink: Option<(std::sync::Arc<std::sync::atomic::AtomicU64>, std::sync::Arc<std::sync::atomic::AtomicU64>)>,
+    pub gpu_sink: Option<(
+        std::sync::Arc<std::sync::atomic::AtomicU64>,
+        std::sync::Arc<std::sync::atomic::AtomicU64>,
+    )>,
 }
 
 /// Owns the full main-window immediate-pass assembly (Passes 4a→5 + the VQT
@@ -940,7 +1019,11 @@ pub(crate) fn render_main_ui_passes(
     if let Some(grid) = ui_root.viewport.timeline_grid_view() {
         {
             let mut scissor = ui_renderer.lane_content_scissor(tracks);
-            manifold_ui_paint::timeline_grid_draw::emit_timeline_grid(&mut scissor, &grid, ui_root.viewport.timeline_grid_rows());
+            manifold_ui_paint::timeline_grid_draw::emit_timeline_grid(
+                &mut scissor,
+                &grid,
+                ui_root.viewport.timeline_grid_rows(),
+            );
         }
         if ui_renderer.prepare(device, logical_w, logical_h, scale) {
             ui_renderer.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
@@ -971,7 +1054,16 @@ pub(crate) fn render_main_ui_passes(
     if let Some(content_gpu) = clip_content_gpu.as_mut()
         && !clip_rects.is_empty()
     {
-        content_gpu.render(device, &mut encoder, offscreen, logical_w, logical_h, sf, tracks, clip_rects);
+        content_gpu.render(
+            device,
+            &mut encoder,
+            offscreen,
+            logical_w,
+            logical_h,
+            sf,
+            tracks,
+            clip_rects,
+        );
     }
 
     // Pass 4b″: Clip thumbnails (section 24 5c) — blit each visible generator/video
@@ -982,7 +1074,17 @@ pub(crate) fn render_main_ui_passes(
     if let Some(thumb) = thumb
         && !thumb.quads.is_empty()
     {
-        thumb.gpu.render(device, &mut encoder, offscreen, logical_w, logical_h, sf, tracks, thumb.atlas, thumb.quads);
+        thumb.gpu.render(
+            device,
+            &mut encoder,
+            offscreen,
+            logical_w,
+            logical_h,
+            sf,
+            tracks,
+            thumb.atlas,
+            thumb.quads,
+        );
     }
 
     // Pass 4c: The lane / stem / overview / collapsed-group panel bitmaps.
@@ -1008,7 +1110,14 @@ pub(crate) fn render_main_ui_passes(
         }
 
         if !rects.is_empty() {
-            bitmap_gpu.render_layers(device, &mut encoder, offscreen, logical_w, logical_h, &rects);
+            bitmap_gpu.render_layers(
+                device,
+                &mut encoder,
+                offscreen,
+                logical_w,
+                logical_h,
+                &rects,
+            );
         }
     }
 
@@ -1041,7 +1150,8 @@ pub(crate) fn render_main_ui_passes(
             let y1 = ui_root.viewport.track_y(max_layer) + ui_root.viewport.track_height(max_layer);
             if y1 > y0 {
                 let alpha = ((1.0 - progress) * 230.0).round().clamp(0.0, 255.0) as u8;
-                let c = manifold_ui::color::with_alpha(manifold_ui::color::INSERT_CURSOR_BLUE, alpha);
+                let c =
+                    manifold_ui::color::with_alpha(manifold_ui::color::INSERT_CURSOR_BLUE, alpha);
                 scissor.draw_rect(x - 1.0, y0, 2.0, y1 - y0, c);
             }
         }
@@ -1113,7 +1223,14 @@ pub(crate) fn render_main_ui_passes(
             manifold_ui::color::SCROLLBAR_THUMB_C32
         };
         let radius = (thumb.height * 0.5).min(thumb.width * 0.5);
-        ui_renderer.draw_rounded_rect(thumb.x, thumb.y, thumb.width, thumb.height, thumb_color, radius);
+        ui_renderer.draw_rounded_rect(
+            thumb.x,
+            thumb.y,
+            thumb.width,
+            thumb.height,
+            thumb_color,
+            radius,
+        );
     }
 
     // Tree-overlay pass (`EDITOR_WINDOW_UNIFICATION_DESIGN.md` D1, P1): browser-
@@ -1199,7 +1316,8 @@ pub(crate) fn render_main_ui_passes(
         // Cursor frequency-line position (uv.y), resolved caller-side.
         // Negative = not hovering.
         let scope_cursor_y = vqt.scope_cursor_y;
-        if let (Some(spectrogram), Some(pane)) = (vqt.spectrogram.as_mut(), vqt.spectrogram_pane.as_mut())
+        if let (Some(spectrogram), Some(pane)) =
+            (vqt.spectrogram.as_mut(), vqt.spectrogram_pane.as_mut())
             && let Some(target) = pane.local_target().cloned()
         {
             // Feed new columns (post-gain magnitudes from the worker), each
@@ -1227,7 +1345,11 @@ pub(crate) fn render_main_ui_passes(
             };
             // Octave span of the displayed range — drives the pink tilt
             // (centred on the geometric-mean freq). 0 disables it.
-            let freq_log_ratio = if fmin > 0.0 && fmax > fmin { (fmax / fmin).log2() } else { 0.0 };
+            let freq_log_ratio = if fmin > 0.0 && fmax > fmin {
+                (fmax / fmin).log2()
+            } else {
+                0.0
+            };
             let lo_yfb = y_of(vqt.content_low_hz);
             let hi_yfb = y_of(vqt.content_mid_hz);
             // Which divider the cursor is over, for the grip-handle hover
@@ -1235,8 +1357,14 @@ pub(crate) fn render_main_ui_passes(
             // uses) so the glow and the grab zone match exactly — converting
             // the cursor's uv.y back to a screen y. Off-scope cursor (< 0)
             // maps far away → no hover.
-            let cursor_screen_y = if scope_cursor_y < 0.0 { -1.0e9 } else { rect.y + scope_cursor_y * rect.height };
-            let hovered_divider = ui_root.audio_setup_panel.divider_hover_index(cursor_screen_y);
+            let cursor_screen_y = if scope_cursor_y < 0.0 {
+                -1.0e9
+            } else {
+                rect.y + scope_cursor_y * rect.height
+            };
+            let hovered_divider = ui_root
+                .audio_setup_panel
+                .divider_hover_index(cursor_screen_y);
             // P7 band dimming: the KEPT range in the same [lo_yfb, hi_yfb]
             // normalised space the dividers already use — Low/Mid/High slice
             // the same two crossovers differently; Full (or no drawer open)
@@ -1286,7 +1414,10 @@ pub(crate) fn render_main_ui_passes(
     // (pre-extraction) :4671-4676, which timed this same "Frame" encoder.
     if let Some((sink_us, sink_n)) = gpu_sink {
         encoder.add_gpu_time_handler(move |secs| {
-            sink_us.fetch_add((secs * 1_000_000.0) as u64, std::sync::atomic::Ordering::Relaxed);
+            sink_us.fetch_add(
+                (secs * 1_000_000.0) as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
             sink_n.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         });
     }
@@ -1316,7 +1447,10 @@ mod tests {
         ui.panel_cache_info_into(&mut subs, &mut infos);
         let painted: Vec<_> = infos.iter().map(|p| (p.region, p.start, p.end)).collect();
         clear_painted_dirt(&mut ui, &painted);
-        assert!(!ui.atlas_dirty(), "an idle frame after a paint has nothing to repaint");
+        assert!(
+            !ui.atlas_dirty(),
+            "an idle frame after a paint has nothing to repaint"
+        );
     }
 
     /// INV-5 (only the frame planner builds): outside the frame seam
@@ -1341,7 +1475,11 @@ mod tests {
         while let Some(dir) = stack.pop() {
             for entry in std::fs::read_dir(&dir).unwrap() {
                 let path = entry.unwrap().path();
-                let rel = path.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/");
+                let rel = path
+                    .strip_prefix(&src)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
                 if path.is_dir() {
                     if rel != "ui_snapshot" && !rel.ends_with("/tests") && rel != "tests" {
                         stack.push(path);
@@ -1370,7 +1508,11 @@ mod tests {
                 }
             }
         }
-        assert!(offenders.is_empty(), "region work outside the frame planner:\n{}", offenders.join("\n"));
+        assert!(
+            offenders.is_empty(),
+            "region work outside the frame planner:\n{}",
+            offenders.join("\n")
+        );
     }
 
     /// The lines of `text` outside any item gated on `test` (a
@@ -1383,7 +1525,10 @@ mod tests {
         let mut opened = false;
         for (i, line) in text.lines().enumerate() {
             let t = line.trim();
-            if depth == 0 && !pending && (t.starts_with("#[cfg(test)]") || t.starts_with("#[cfg(any(test")) {
+            if depth == 0
+                && !pending
+                && (t.starts_with("#[cfg(test)]") || t.starts_with("#[cfg(any(test"))
+            {
                 pending = true;
                 continue;
             }

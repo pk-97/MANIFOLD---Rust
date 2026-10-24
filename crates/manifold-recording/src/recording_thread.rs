@@ -129,7 +129,11 @@ pub(crate) fn run(
     /// `LiveRecorder_Finalize` drains the append queue — see the tail of
     /// `run()` below.
     #[inline]
-    fn encode_frame(frame: RecordingFrame, encoder_handle: *mut c_void, frames_sync_failed: &mut u32) {
+    fn encode_frame(
+        frame: RecordingFrame,
+        encoder_handle: *mut c_void,
+        frames_sync_failed: &mut u32,
+    ) {
         // Wait for GPU blit to complete (kernel notification, zero CPU).
         let fence_ok = frame.gpu_complete.wait(Duration::from_secs(5));
         if !fence_ok {

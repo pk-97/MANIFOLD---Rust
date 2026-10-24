@@ -41,7 +41,6 @@ impl MockHost {
         self.recording = true;
         self
     }
-
 }
 
 impl LiveClipHost for MockHost {
@@ -156,17 +155,7 @@ fn trigger_live_content_clip_for_generator() {
     let host = MockHost::new();
     let mut mgr = LiveClipManager::new();
 
-    let clip = mgr.trigger_live_content_clip(
-        &mut project,
-        &host,
-        0,
-        4.0,
-        None,
-        -1,
-        true,
-        0.0,
-        -1,
-    );
+    let clip = mgr.trigger_live_content_clip(&mut project, &host, 0, 4.0, None, -1, true, 0.0, -1);
 
     assert!(clip.is_some());
     let clip = clip.unwrap();
@@ -200,7 +189,10 @@ fn trigger_live_content_clip_for_trigger_owner_uses_trigger_clip() {
         .unwrap();
 
     assert!(clip.video_clip_id.is_empty());
-    assert_eq!(clip.layer_id, project.timeline.layers[trigger_index].layer_id);
+    assert_eq!(
+        clip.layer_id,
+        project.timeline.layers[trigger_index].layer_id
+    );
     assert_eq!(clip.duration_beats, Beats(2.0));
 }
 
@@ -214,18 +206,18 @@ fn trigger_one_shot_expires_without_parent_mute_gate() {
     let mut mgr = LiveClipManager::new();
 
     let clip = mgr
-        .fire_layer_oneshot(
-            &mut project,
-            &host,
-            trigger_index as i32,
-            Beats(1.0),
-            0.0,
-        )
+        .fire_layer_oneshot(&mut project, &host, trigger_index as i32, Beats(1.0), 0.0)
         .unwrap();
-    assert_eq!(clip.layer_id, project.timeline.layers[trigger_index].layer_id);
+    assert_eq!(
+        clip.layer_id,
+        project.timeline.layers[trigger_index].layer_id
+    );
     assert!(mgr.is_live_slot_clip(&clip.id));
     assert!(mgr.expire_due_oneshots(2.49).is_empty());
-    assert_eq!(mgr.expire_due_oneshots(2.5), vec![(trigger_index as i32, clip.id.clone())]);
+    assert_eq!(
+        mgr.expire_due_oneshots(2.5),
+        vec![(trigger_index as i32, clip.id.clone())]
+    );
 }
 
 #[test]
@@ -529,7 +521,10 @@ fn fire_oneshot_starts_at_playhead_when_abs_tick_is_frame_based() {
         clip.start_beat.as_f32()
     );
     // Window is live at the playhead: not due at 100.5, due by 101.0.
-    assert!(mgr.expire_due_oneshots(100.5).is_empty(), "not due mid-window");
+    assert!(
+        mgr.expire_due_oneshots(100.5).is_empty(),
+        "not due mid-window"
+    );
     assert_eq!(mgr.expire_due_oneshots(101.0), vec![(0, clip.id.clone())]);
 }
 
@@ -778,7 +773,11 @@ fn note_off_before_boundary_commits_cleanly_no_stuck_slot() {
         60,
     );
 
-    assert_eq!(mgr.live_slots().len(), 0, "no stuck slot after early release");
+    assert_eq!(
+        mgr.live_slots().len(),
+        0,
+        "no stuck slot after early release"
+    );
     assert!(host.stopped_clips.iter().any(|s| *s == clip.id));
 }
 

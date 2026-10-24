@@ -3,6 +3,7 @@
 //! per-frame card VALUE sync, and the macro-mapping label. Moved from
 //! state_sync.rs (P-P, UI_FUNNEL_DECOMPOSITION_DESIGN.md).
 
+use crate::ui_root::UIRoot;
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 use manifold_ui::panels::param_card::{
@@ -10,7 +11,6 @@ use manifold_ui::panels::param_card::{
 };
 use manifold_ui::panels::param_slider_shared::{AbletonMappingDisplay, AudioSendChoice};
 use manifold_ui::param_surface::{ParamRow, ParamSurface, RowMapping, RowSpec, RowValue};
-use crate::ui_root::UIRoot;
 
 use super::inspector::{audio_row_state, build_card_modulation};
 
@@ -104,7 +104,10 @@ pub fn sync_card_values(ui: &mut UIRoot, project: &Project, active_layer: Option
 /// Stamp the card-level available-send list (labels + ids) onto every card
 /// config, from the project's `AudioSetup`. One pass after the configs are
 /// built, so the per-instance builders stay project-agnostic.
-pub(crate) fn attach_audio_sends(configs: &mut [ParamSurface], setup: &manifold_core::audio_setup::AudioSetup) {
+pub(crate) fn attach_audio_sends(
+    configs: &mut [ParamSurface],
+    setup: &manifold_core::audio_setup::AudioSetup,
+) {
     let sends = audio_send_choices(setup);
     for c in configs.iter_mut() {
         c.audio_sends = sends.clone();
@@ -163,13 +166,17 @@ fn audio_send_string_state(
         value: String::new(),
         disabled: false,
     })
-    .chain(setup.sends.iter().enumerate().map(|(index, send)| {
-        ParamCardStringChoice {
-            label: format!("{} · {}", index + 1, send.label),
-            value: send.id.to_string(),
-            disabled: false,
-        }
-    }))
+    .chain(
+        setup
+            .sends
+            .iter()
+            .enumerate()
+            .map(|(index, send)| ParamCardStringChoice {
+                label: format!("{} · {}", index + 1, send.label),
+                value: send.id.to_string(),
+                disabled: false,
+            }),
+    )
     .collect();
     let display = if value.is_empty() {
         "First send".to_string()
@@ -190,9 +197,11 @@ fn find_string_node<'a>(
     node_id: &manifold_core::NodeId,
 ) -> Option<&'a manifold_core::effect_graph_def::EffectGraphNode> {
     nodes.iter().find_map(|node| {
-        (node.node_id == *node_id)
-            .then_some(node)
-            .or_else(|| node.group.as_ref().and_then(|group| find_string_node(&group.nodes, node_id)))
+        (node.node_id == *node_id).then_some(node).or_else(|| {
+            node.group
+                .as_ref()
+                .and_then(|group| find_string_node(&group.nodes, node_id))
+        })
     })
 }
 
@@ -200,7 +209,8 @@ fn graph_string_param_value(
     inst: &PresetInstance,
     sp_def: &manifold_core::preset_definition_registry::StringParamDef,
 ) -> (String, Option<String>) {
-    let Some(catalog_def) = manifold_nodes::bundled_presets::bundled_preset_def(inst.effect_type()) else {
+    let Some(catalog_def) = manifold_nodes::bundled_presets::bundled_preset_def(inst.effect_type())
+    else {
         return (sp_def.default_value.to_string(), None);
     };
     let graph = inst.graph.as_ref().unwrap_or(catalog_def.as_ref());
@@ -208,22 +218,22 @@ fn graph_string_param_value(
         .preset_metadata
         .as_ref()
         .or(catalog_def.preset_metadata.as_ref());
-    let binding = metadata.and_then(|m| {
-        m.string_bindings
-            .iter()
-            .find(|b| b.id == sp_def.key)
-    });
+    let binding = metadata.and_then(|m| m.string_bindings.iter().find(|b| b.id == sp_def.key));
     let Some(binding) = binding else {
         return (sp_def.default_value.to_string(), None);
     };
     let value = match &binding.target {
-        manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } => find_string_node(&graph.nodes, node_id)
-            .and_then(|node| node.params.get(param))
-            .and_then(|value| match value {
-                manifold_core::effect_graph_def::SerializedParamValue::String { value } => Some(value.clone()),
-                _ => None,
-            })
-            .unwrap_or_else(|| binding.default_value.clone()),
+        manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } => {
+            find_string_node(&graph.nodes, node_id)
+                .and_then(|node| node.params.get(param))
+                .and_then(|value| match value {
+                    manifold_core::effect_graph_def::SerializedParamValue::String { value } => {
+                        Some(value.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| binding.default_value.clone())
+        }
         _ => binding.default_value.clone(),
     };
     (value, Some(binding.id.clone()))
@@ -322,7 +332,9 @@ fn param_surface(
 
     match kind {
         PresetKind::SceneModifier => {
-            log::error!("scene modifier cards require an attached host and the scene modifier parameter resolver");
+            log::error!(
+                "scene modifier cards require an attached host and the scene modifier parameter resolver"
+            );
             return None;
         }
         PresetKind::Effect => {
@@ -372,11 +384,16 @@ fn param_surface(
     // hands the FULL manifest as an id-keyed channel and the card JOINS by id
     // (BUG-313), so a hidden param simply finds no row — there is no second
     // filter to drift out of alignment.
-    let scene_doc = (visibility == SurfaceVisibility::CuratedCard && kind == PresetKind::Generator).then_some(inst.scene.as_ref()).flatten();
+    let scene_doc = (visibility == SurfaceVisibility::CuratedCard && kind == PresetKind::Generator)
+        .then_some(inst.scene.as_ref())
+        .flatten();
     let visible_params: Vec<&manifold_core::params::Param> = match visibility {
         SurfaceVisibility::CuratedCard if scene_doc.is_some() => inst.params.iter().collect(),
         SurfaceVisibility::CuratedCard => {
-            let modifier_bindings = inst.graph.as_ref().and_then(|graph| graph.preset_metadata.as_ref());
+            let modifier_bindings = inst
+                .graph
+                .as_ref()
+                .and_then(|graph| graph.preset_metadata.as_ref());
             inst.params.iter().filter(|p| p.spec.card_visible && !modifier_bindings.is_some_and(|metadata|
                 metadata.bindings.iter().any(|binding| binding.id == p.id()
                     && matches!(binding.target, manifold_core::effect_graph_def::BindingTarget::SceneModifier { .. })))).collect()
@@ -384,8 +401,11 @@ fn param_surface(
         SurfaceVisibility::All => inst.params.iter().collect(),
     };
 
-    let row_index_of: ahash::AHashMap<String, usize> =
-        visible_params.iter().enumerate().map(|(i, p)| (p.id().to_string(), i)).collect();
+    let row_index_of: ahash::AHashMap<String, usize> = visible_params
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.id().to_string(), i))
+        .collect();
 
     let mut rows: Vec<ParamRow> = visible_params
         .iter()
@@ -453,9 +473,19 @@ fn param_surface(
                 // straight off the manifest slot, `driven` false (state_sync
                 // has no wire-fed presentation case; only the editor snapshot
                 // path sets it).
-                value: RowValue { base: p.base, effective: p.value, exposed: p.exposed, driven: false },
+                value: RowValue {
+                    base: p.base,
+                    effective: p.value,
+                    exposed: p.exposed,
+                    driven: false,
+                },
                 modulation: RowMod::default(),
-                mapping: RowMapping { osc_address, ableton_display, ableton_range, mappable: true },
+                mapping: RowMapping {
+                    osc_address,
+                    ableton_display,
+                    ableton_range,
+                    mappable: true,
+                },
                 rgb_members: None,
                 affordance: None,
                 modulator_stored: stored,
@@ -515,8 +545,11 @@ fn param_surface(
                                 .unwrap_or_else(|| sp_def.default_value.to_string())
                         };
                         let display_value = (scene_doc.is_some() && sp_def.is_file_path)
-                            .then(|| std::path::Path::new(&value).file_name()
-                                .map(|name| name.to_string_lossy().into_owned()))
+                            .then(|| {
+                                std::path::Path::new(&value)
+                                    .file_name()
+                                    .map(|name| name.to_string_lossy().into_owned())
+                            })
                             .flatten();
                         ParamCardStringInfo {
                             name: sp_def.name.to_string(),
@@ -598,9 +631,12 @@ fn param_surface(
         // display-based, so no id-format parsing is needed to render one).
         // Falls back to the static registry name for stock/user presets not
         // (yet) reflected in the overlay snapshot.
-        title: reg_def.as_deref().map(|d| d.display_name.clone()).unwrap_or_else(|| {
-            manifold_core::preset_type_registry::display_name(preset_type).to_string()
-        }),
+        title: reg_def
+            .as_deref()
+            .map(|d| d.display_name.clone())
+            .unwrap_or_else(|| {
+                manifold_core::preset_type_registry::display_name(preset_type).to_string()
+            }),
         enabled,
         collapsed,
         supports_envelopes: true,
@@ -641,8 +677,15 @@ pub(crate) fn gen_params_to_surface(
 
 /// The folded section titles of a curated generator card when it is a scene
 /// card; `None` otherwise.
-pub(crate) fn scene_card_folds(gp: &manifold_core::effects::PresetInstance, card: &ParamSurface) -> Option<Vec<String>> {
-    Some(super::scene_card::folded_sections(gp, gp.scene.as_ref()?, &card.rows))
+pub(crate) fn scene_card_folds(
+    gp: &manifold_core::effects::PresetInstance,
+    card: &ParamSurface,
+) -> Option<Vec<String>> {
+    Some(super::scene_card::folded_sections(
+        gp,
+        gp.scene.as_ref()?,
+        &card.rows,
+    ))
 }
 
 /// Write a human-readable description of a macro mapping target over `out`,
@@ -671,7 +714,9 @@ pub(crate) fn write_macro_mapping(
             // glb params resolve instead of rendering "?" (was a registry
             // id-lookup miss, the UI twin of the P4 blind spot).
             let def = manifold_core::preset_definition_registry::try_get(effect_type);
-            let effect_name = def.as_deref().map_or(effect_type.as_str(), |d| d.display_name.as_str());
+            let effect_name = def
+                .as_deref()
+                .map_or(effect_type.as_str(), |d| d.display_name.as_str());
             let param_name = fx
                 .params
                 .get(param_id.as_ref())
@@ -761,8 +806,10 @@ mod param_label_tests {
     fn describe_macro_mapping_uses_live_manifest_param_name() {
         let mut project = manifold_core::project::Project::default();
         let mut fx = PresetInstance::new(manifold_core::PresetTypeId::BLOOM);
-        fx.params =
-            ParamManifest::from_params(vec![Param::user_added(user_spec("user_glow", "Glow Amount"))]);
+        fx.params = ParamManifest::from_params(vec![Param::user_added(user_spec(
+            "user_glow",
+            "Glow Amount",
+        ))]);
         let effect_id = fx.id.clone();
         project.settings.master_effects.push(fx);
 
@@ -776,7 +823,10 @@ mod param_label_tests {
             label.contains("Glow Amount"),
             "label must show the live param name, got {label:?}"
         );
-        assert!(!label.contains('?'), "label must not fall back to ?, got {label:?}");
+        assert!(
+            !label.contains('?'),
+            "label must not fall back to ?, got {label:?}"
+        );
     }
 }
 
@@ -794,7 +844,10 @@ mod audio_send_projection_tests {
         setup.sends = vec![first.clone(), second.clone()];
 
         let (choices, display) = audio_send_string_state("", &setup);
-        assert_eq!(choices[0].value, "", "First send uses the automatic empty payload");
+        assert_eq!(
+            choices[0].value, "",
+            "First send uses the automatic empty payload"
+        );
         assert_eq!(display, "First send");
         assert_eq!(choices[1].label, "1 · Music");
         assert_eq!(choices[2].label, "2 · Music");
@@ -817,8 +870,11 @@ mod audio_send_projection_tests {
             manifold_core::PresetTypeId::from_string("Oscilloscope".to_string()),
         );
         generator.init_defaults();
-        let mut graph = manifold_nodes::bundled_presets::bundled_preset_def(generator.effect_type())
-            .expect("Oscilloscope generator preset is bundled").as_ref().clone();
+        let mut graph =
+            manifold_nodes::bundled_presets::bundled_preset_def(generator.effect_type())
+                .expect("Oscilloscope generator preset is bundled")
+                .as_ref()
+                .clone();
         let first = AudioSend::new("Music");
         let second = AudioSend::new("Music");
         let selected_id = second.id.to_string();
@@ -871,12 +927,12 @@ mod sync_card_values_tests {
     //! graph-editor window's present path now makes every frame
     //! (`app_render.rs::present_graph_editor_window`), so the test guards the
     //! editor-window slider-freeze fix, not just the helper.
-    use super::*;
     use super::super::inspector::sync_inspector_data;
-    use manifold_core::PresetTypeId;
+    use super::*;
     use crate::app::SelectionState;
-    use manifold_core::params::{Param, ParamManifest};
+    use manifold_core::PresetTypeId;
     use manifold_core::effect_graph_def::ParamSpecDef;
+    use manifold_core::params::{Param, ParamManifest};
 
     fn user_spec(id: &str, name: &str) -> manifold_core::effect_graph_def::ParamSpecDef {
         manifold_core::effect_graph_def::ParamSpecDef {
@@ -916,8 +972,10 @@ mod sync_card_values_tests {
     fn project_param_change_reaches_card_value_text_via_sync_card_values() {
         let mut project = Project::default();
         let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-        fx.params =
-            ParamManifest::from_params(vec![Param::user_added(user_spec("user_glow", "Glow Amount"))]);
+        fx.params = ParamManifest::from_params(vec![Param::user_added(user_spec(
+            "user_glow",
+            "Glow Amount",
+        ))]);
         project.settings.master_effects.push(fx);
 
         // Configure + build exactly as the structural sync does, at the
@@ -971,13 +1029,13 @@ mod sync_card_values_tests {
             .get_mut("user_glow")
             .expect("user_glow param")
             .spec = ParamSpecDef {
-                id: "user_glow".to_string(),
-                name: "Glow Amount".to_string(),
-                min: 10.0,  // Changed from 0.0
-                max: 100.0, // Changed from 1.0
-                default_value: 50.0,
-                ..ParamSpecDef::default()
-            };
+            id: "user_glow".to_string(),
+            name: "Glow Amount".to_string(),
+            min: 10.0,  // Changed from 0.0
+            max: 100.0, // Changed from 1.0
+            default_value: 50.0,
+            ..ParamSpecDef::default()
+        };
 
         // Only the value-sync call — no configure, no rebuild.
         sync_card_values(&mut ui, &project, None);
@@ -986,7 +1044,10 @@ mod sync_card_values_tests {
         // This is the real oracle: the stored spec.min/max drive the slider's
         // normalization math, so a stale spec would keep using 0..1 despite
         // the manifest now saying 10..100.
-        let effect_card = ui.inspector.master_effect_mut(0).expect("effect card exists");
+        let effect_card = ui
+            .inspector
+            .master_effect_mut(0)
+            .expect("effect card exists");
         assert_eq!(
             effect_card.rows[0].spec.min, 10.0,
             "sync_card_values must update the built row's spec.min to match the manifest edit"
@@ -998,7 +1059,6 @@ mod sync_card_values_tests {
     }
 }
 
-
 /// The display name shared by modifier cards and trigger target groups.
 /// Duplicate recipe names get an occurrence suffix only when the stack needs
 /// disambiguation.
@@ -1006,13 +1066,29 @@ pub(crate) fn scene_modifier_display_name(
     def: &manifold_core::effect_graph_def::EffectGraphDef,
     instance: &manifold_core::scene_modifier_preset::SceneModifierInstanceDef,
 ) -> Option<String> {
-    let base = instance.graph.preset_metadata.as_ref()?.display_name.clone();
-    let same_name = |candidate: &&manifold_core::scene_modifier_preset::SceneModifierInstanceDef| {
-        candidate.graph.preset_metadata.as_ref().is_some_and(|metadata| metadata.display_name == base)
-    };
+    let base = instance
+        .graph
+        .preset_metadata
+        .as_ref()?
+        .display_name
+        .clone();
+    let same_name =
+        |candidate: &&manifold_core::scene_modifier_preset::SceneModifierInstanceDef| {
+            candidate
+                .graph
+                .preset_metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.display_name == base)
+        };
     if def.scene_modifiers.iter().filter(same_name).count() <= 1 {
         return Some(base);
     }
-    let occurrence = def.scene_modifiers.iter().take_while(|candidate| candidate.id != instance.id).filter(same_name).count() + 1;
+    let occurrence = def
+        .scene_modifiers
+        .iter()
+        .take_while(|candidate| candidate.id != instance.id)
+        .filter(same_name)
+        .count()
+        + 1;
     Some(format!("{base} #{occurrence}"))
 }

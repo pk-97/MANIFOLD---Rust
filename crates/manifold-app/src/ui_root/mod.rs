@@ -5,7 +5,7 @@
 //! workspace window and forwards winit events through it.
 
 use crate::frame_plan::MainRegion;
-use manifold_core::work_count::{record_work, WorkKind};
+use manifold_core::work_count::{WorkKind, record_work};
 use manifold_playback::ableton_bridge::AbletonSession;
 use manifold_ui::input::{Key, Modifiers, PointerAction, UIEvent};
 use manifold_ui::node::{Rect, Vec2};
@@ -88,7 +88,6 @@ pub(crate) enum DragOwner {
     /// `ViewportDragMode::RulerScrub` consumes `Drag` events).
     Ruler,
 }
-
 
 /// What the currently-open dropdown is selecting for.
 #[derive(Debug, Clone)]
@@ -181,12 +180,14 @@ pub struct UIRoot {
     /// Scratch for the panel list handed to a window's cache manager each
     /// painted frame (`panel_cache_info_into`), kept so painting allocates nothing.
     pub(crate) panel_subs_scratch: Vec<(usize, usize)>,
-    pub(crate) panel_info_scratch: Vec<manifold_ui_paint::ui_cache_manager::PanelCacheInfo<'static>>,
+    pub(crate) panel_info_scratch:
+        Vec<manifold_ui_paint::ui_cache_manager::PanelCacheInfo<'static>>,
     /// Last rejected graph-edit diagnostic shown by the UI. Rejections do not
     /// bump `data_version`, so this guard keys directly on the content event's
     /// sequence and remains stable across repeated snapshots.
     pub last_graph_edit_diagnostic_sequence: Option<u64>,
-    pub last_trigger_delivery_failure: Option<manifold_playback::engine::trigger_delivery::TriggerDeliveryFailure>,
+    pub last_trigger_delivery_failure:
+        Option<manifold_playback::engine::trigger_delivery::TriggerDeliveryFailure>,
     /// Scene impulse refusals and discards shown, coalesced into one toast.
     pub(crate) scene_impulse_toast: crate::ui_bridge::SceneImpulseToast,
     /// The setup report the body-refusal toast last read.
@@ -290,16 +291,25 @@ pub struct UIRoot {
     /// their dropdown menus after the main event loop returns.
     last_right_click_pos: Vec2,
     /// One-shot view request, consumed after lane geometry is projected.
-    pub(crate) pending_automation_reveal: Option<(manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId)>,
+    pub(crate) pending_automation_reveal: Option<(
+        manifold_ui::view::UiGraphTarget,
+        manifold_core::effects::ParamId,
+    )>,
     pub(crate) automation_chooser_candidates: Vec<AutomationChooserCandidate>,
     pub(crate) trigger_routing: crate::ui_bridge::TriggerRoutingCatalog,
     /// Queued inspector reveals, taken by the inspector projection. Written
     /// only through the `request_*` setters, which move `inspector_reveal_version`.
-    pending_trigger_response_reveal: Option<(manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId)>,
+    pending_trigger_response_reveal: Option<(
+        manifold_ui::view::UiGraphTarget,
+        manifold_core::effects::ParamId,
+    )>,
     /// Show in Scene tab / a card section title: revealed once the Scene tab
     /// is projected (SCENE_SURFACES_DESIGN.md D10). A section carries all its
     /// rows; the Scene tab picks which to reveal.
-    pending_scene_reveal: Option<(manifold_ui::view::UiGraphTarget, Vec<manifold_core::effects::ParamId>)>,
+    pending_scene_reveal: Option<(
+        manifold_ui::view::UiGraphTarget,
+        Vec<manifold_core::effects::ParamId>,
+    )>,
     inspector_reveal_version: u64,
     /// Moves each time the inspector projection rewrote this root's inspector
     /// lists: the graph editor's card lane rebuilds on it (D17).
@@ -435,20 +445,29 @@ impl UIRoot {
 
     pub(crate) fn take_scene_reveal(
         &mut self,
-    ) -> Option<(manifold_ui::view::UiGraphTarget, Vec<manifold_core::effects::ParamId>)> {
+    ) -> Option<(
+        manifold_ui::view::UiGraphTarget,
+        Vec<manifold_core::effects::ParamId>,
+    )> {
         self.pending_scene_reveal.take()
     }
 
     pub(crate) fn take_trigger_response_reveal(
         &mut self,
-    ) -> Option<(manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId)> {
+    ) -> Option<(
+        manifold_ui::view::UiGraphTarget,
+        manifold_core::effects::ParamId,
+    )> {
         self.pending_trigger_response_reveal.take()
     }
 
     #[cfg(test)]
     pub(crate) fn pending_trigger_response_reveal(
         &self,
-    ) -> Option<&(manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId)> {
+    ) -> Option<&(
+        manifold_ui::view::UiGraphTarget,
+        manifold_core::effects::ParamId,
+    )> {
         self.pending_trigger_response_reveal.as_ref()
     }
 
@@ -486,16 +505,43 @@ impl UIRoot {
     }
 
     /// Refresh only when a frame-aligned period changes, not on every clock sample.
-    pub fn sync_driver_bpm(&mut self, project: &manifold_core::project::Project, bpm: manifold_core::Bpm) -> bool {
+    pub fn sync_driver_bpm(
+        &mut self,
+        project: &manifold_core::project::Project,
+        bpm: manifold_core::Bpm,
+    ) -> bool {
         let previous = self.driver_bpm.replace(bpm).unwrap_or(project.settings.bpm);
-        if previous == bpm { return false; }
+        if previous == bpm {
+            return false;
+        }
         record_work(WorkKind::DriverScan);
         let fps = project.settings.frame_rate;
-        project.settings.master_effects.iter()
-            .chain(project.timeline.layers.iter().flat_map(|l| l.effects.iter().flatten()))
-            .chain(project.timeline.layers.iter().filter_map(|l| l.gen_params()))
-            .any(|inst| inst.drivers.iter().flatten().any(|d| d.enabled && d.frame_aligned
-                && d.effective_period_frames(previous, fps) != d.effective_period_frames(bpm, fps)))
+        project
+            .settings
+            .master_effects
+            .iter()
+            .chain(
+                project
+                    .timeline
+                    .layers
+                    .iter()
+                    .flat_map(|l| l.effects.iter().flatten()),
+            )
+            .chain(
+                project
+                    .timeline
+                    .layers
+                    .iter()
+                    .filter_map(|l| l.gen_params()),
+            )
+            .any(|inst| {
+                inst.drivers.iter().flatten().any(|d| {
+                    d.enabled
+                        && d.frame_aligned
+                        && d.effective_period_frames(previous, fps)
+                            != d.effective_period_frames(bpm, fps)
+                })
+            })
     }
 
     pub fn new() -> Self {
@@ -548,7 +594,10 @@ impl UIRoot {
                     .zip(ScopeOnsets::LANE_COLORS)
                     .map(|(name, [r, g, b])| {
                         let to8 = |c: f32| (c * 255.0).round() as u8;
-                        (name.to_string(), manifold_ui::Color32::new(to8(r), to8(g), to8(b), 255))
+                        (
+                            name.to_string(),
+                            manifold_ui::Color32::new(to8(r), to8(g), to8(b), 255),
+                        )
                     })
                     .collect();
                 p.set_scope_lane_legend(legend, LANE_HEIGHT_FRAC);
@@ -656,19 +705,54 @@ impl UIRoot {
 
         let len = |r: MainRegion| self.tree.region_len(r.id());
         let entries = [
-            (PanelSlot::Transport, MainRegion::Transport, self.transport.node_range(), self.layout.transport_bar()),
-            (PanelSlot::Header, MainRegion::Header, self.header.node_range(), self.layout.header()),
-            (PanelSlot::Footer, MainRegion::Footer, self.footer.node_range(), self.layout.footer()),
+            (
+                PanelSlot::Transport,
+                MainRegion::Transport,
+                self.transport.node_range(),
+                self.layout.transport_bar(),
+            ),
+            (
+                PanelSlot::Header,
+                MainRegion::Header,
+                self.header.node_range(),
+                self.layout.header(),
+            ),
+            (
+                PanelSlot::Footer,
+                MainRegion::Footer,
+                self.footer.node_range(),
+                self.layout.footer(),
+            ),
             (
                 PanelSlot::Inspector,
                 MainRegion::Inspector,
                 (self.inspector.first_node(), len(MainRegion::Inspector)),
                 self.layout.inspector(),
             ),
-            (PanelSlot::AudioDock, MainRegion::AudioDock, (0, len(MainRegion::AudioDock)), self.layout.audio_setup()),
-            (PanelSlot::SplitHandles, MainRegion::SplitHandles, (0, len(MainRegion::SplitHandles)), self.layout.split_handle()),
-            (PanelSlot::LayerHeaders, MainRegion::LayerHeaders, self.layer_headers.node_range(), self.layout.layer_controls()),
-            (PanelSlot::Viewport, MainRegion::Viewport, self.viewport.node_range(), self.layout.timeline_body()),
+            (
+                PanelSlot::AudioDock,
+                MainRegion::AudioDock,
+                (0, len(MainRegion::AudioDock)),
+                self.layout.audio_setup(),
+            ),
+            (
+                PanelSlot::SplitHandles,
+                MainRegion::SplitHandles,
+                (0, len(MainRegion::SplitHandles)),
+                self.layout.split_handle(),
+            ),
+            (
+                PanelSlot::LayerHeaders,
+                MainRegion::LayerHeaders,
+                self.layer_headers.node_range(),
+                self.layout.layer_controls(),
+            ),
+            (
+                PanelSlot::Viewport,
+                MainRegion::Viewport,
+                self.viewport.node_range(),
+                self.layout.timeline_body(),
+            ),
         ];
         for (slot, region, (start, end), rect) in entries {
             if start < end && end <= len(region) {
@@ -688,9 +772,19 @@ impl UIRoot {
     /// rect that moved translates its region; one that resized rebuilds it.
     pub(crate) fn region_rects(&self) -> crate::frame_plan::RegionRects {
         let quantize = |r: Rect| {
-            [r.x.round() as i32, r.y.round() as i32, r.width.round() as i32, r.height.round() as i32]
+            [
+                r.x.round() as i32,
+                r.y.round() as i32,
+                r.width.round() as i32,
+                r.height.round() as i32,
+            ]
         };
-        let full_screen = Rect::new(0.0, 0.0, self.layout.screen_width, self.layout.screen_height);
+        let full_screen = Rect::new(
+            0.0,
+            0.0,
+            self.layout.screen_width,
+            self.layout.screen_height,
+        );
         let mut rects = crate::frame_plan::RegionRects::default();
         for region in MainRegion::ALL {
             let rect = match region {
@@ -738,9 +832,9 @@ impl UIRoot {
                 by
             }
             // The split handle keeps its node id; nothing else is held.
-            MainRegion::SplitHandles => self
-                .split_handle_id
-                .map_or((0.0, 0.0), |id| delta(self.tree.get_bounds(id), self.layout.split_handle())),
+            MainRegion::SplitHandles => self.split_handle_id.map_or((0.0, 0.0), |id| {
+                delta(self.tree.get_bounds(id), self.layout.split_handle())
+            }),
             MainRegion::AudioDock => {
                 let (dx, dy) = delta(self.audio_setup_panel.rect(), self.layout.audio_setup());
                 self.audio_setup_panel.follow_translate(dx, dy);
@@ -751,7 +845,10 @@ impl UIRoot {
             | MainRegion::Viewport
             | MainRegion::Overlays
             | MainRegion::Ghosts => {
-                debug_assert!(false, "{region:?} rebuilds on a rect change; it never translates");
+                debug_assert!(
+                    false,
+                    "{region:?} rebuilds on a rect change; it never translates"
+                );
                 (0.0, 0.0)
             }
         }
@@ -781,7 +878,9 @@ impl UIRoot {
                 rect
             }
             MainRegion::SplitHandles => {
-                let Some(id) = self.split_handle_id else { return false };
+                let Some(id) = self.split_handle_id else {
+                    return false;
+                };
                 let rect = self.layout.split_handle();
                 self.tree.set_bounds(id, rect);
                 rect
@@ -879,32 +978,57 @@ impl UIRoot {
         match region {
             // Chrome tier: the always-visible frame, painted over Base.
             MainRegion::Transport => {
-                let token = self.tree.begin_region_in(id, self.layout.transport_bar(), ZTier::Chrome, "transport", UIFlags::empty());
+                let token = self.tree.begin_region_in(
+                    id,
+                    self.layout.transport_bar(),
+                    ZTier::Chrome,
+                    "transport",
+                    UIFlags::empty(),
+                );
                 let start = self.tree.count();
                 self.transport.build(&mut self.tree, &self.layout);
                 self.tree.end_region(token, start);
             }
             MainRegion::Header => {
-                let token = self.tree.begin_region_in(id, self.layout.header(), ZTier::Chrome, "header", UIFlags::empty());
+                let token = self.tree.begin_region_in(
+                    id,
+                    self.layout.header(),
+                    ZTier::Chrome,
+                    "header",
+                    UIFlags::empty(),
+                );
                 let start = self.tree.count();
                 self.header.build(&mut self.tree, &self.layout);
                 self.tree.end_region(token, start);
             }
             MainRegion::Footer => {
-                let token = self.tree.begin_region_in(id, self.layout.footer(), ZTier::Chrome, "footer", UIFlags::empty());
+                let token = self.tree.begin_region_in(
+                    id,
+                    self.layout.footer(),
+                    ZTier::Chrome,
+                    "footer",
+                    UIFlags::empty(),
+                );
                 let start = self.tree.count();
                 self.footer.build(&mut self.tree, &self.layout);
                 self.tree.end_region(token, start);
             }
             MainRegion::Inspector => {
-                let token = self.tree.begin_region_in(id, self.layout.inspector(), ZTier::Base, "inspector", UIFlags::empty());
+                let token = self.tree.begin_region_in(
+                    id,
+                    self.layout.inspector(),
+                    ZTier::Base,
+                    "inspector",
+                    UIFlags::empty(),
+                );
                 let start = self.tree.count();
                 self.inspector.build(&mut self.tree, &self.layout);
                 // The Scene tab's content is the scene panel, built into the
                 // column area below the inspector's tab strip (SCENE_SURFACES D16).
                 let scene_rect = self.inspector.scene_content_rect();
                 if scene_rect.width > 0.0 {
-                    self.scene_setup_panel.build_docked(&mut self.tree, scene_rect);
+                    self.scene_setup_panel
+                        .build_docked(&mut self.tree, scene_rect);
                 }
                 self.tree.end_region(token, start);
                 // Its resize handle, drawn just inside its left edge, moves with
@@ -913,7 +1037,8 @@ impl UIRoot {
                 // the hit test (`is_near_inspector_edge`) stays centred on the
                 // seam.
                 let insp = self.layout.inspector();
-                self.inspector_handle_id = Some(self.build_resize_handle(region, insp.x, insp.y, 4.0, insp.height));
+                self.inspector_handle_id =
+                    Some(self.build_resize_handle(region, insp.x, insp.y, 4.0, insp.height));
             }
             // Audio Setup dock (D1) — a Base-tier column between the content
             // area and the inspector. Guard on the WIDTH (the geometry), not
@@ -922,11 +1047,18 @@ impl UIRoot {
             MainRegion::AudioDock => {
                 if self.layout.audio_setup_width > 0.0 {
                     let dock = self.layout.audio_setup();
-                    let token = self.tree.begin_region_in(id, dock, ZTier::Base, "audio_setup", UIFlags::empty());
+                    let token = self.tree.begin_region_in(
+                        id,
+                        dock,
+                        ZTier::Base,
+                        "audio_setup",
+                        UIFlags::empty(),
+                    );
                     let start = self.tree.count();
                     self.audio_setup_panel.build_docked(&mut self.tree, dock);
                     self.tree.end_region(token, start);
-                    self.audio_setup_handle_id = Some(self.build_resize_handle(region, dock.x, dock.y, 4.0, dock.height));
+                    self.audio_setup_handle_id =
+                        Some(self.build_resize_handle(region, dock.x, dock.y, 4.0, dock.height));
                 } else {
                     self.audio_setup_handle_id = None;
                 }
@@ -940,8 +1072,13 @@ impl UIRoot {
                     self.viewport.reveal_automation_lane(target, param);
                     self.pending_automation_reveal = None;
                 }
-                let token =
-                    self.tree.begin_region_in(id, self.layout.layer_controls(), ZTier::Base, "layer_headers", UIFlags::empty());
+                let token = self.tree.begin_region_in(
+                    id,
+                    self.layout.layer_controls(),
+                    ZTier::Base,
+                    "layer_headers",
+                    UIFlags::empty(),
+                );
                 let start = self.tree.count();
                 self.layer_headers.build(
                     &mut self.tree,
@@ -952,7 +1089,13 @@ impl UIRoot {
                 self.tree.end_region(token, start);
             }
             MainRegion::Viewport => {
-                let token = self.tree.begin_region_in(id, self.layout.timeline_body(), ZTier::Base, "viewport", UIFlags::empty());
+                let token = self.tree.begin_region_in(
+                    id,
+                    self.layout.timeline_body(),
+                    ZTier::Base,
+                    "viewport",
+                    UIFlags::empty(),
+                );
                 let start = self.tree.count();
                 self.viewport.build(&mut self.tree, &self.layout);
                 self.tree.end_region(token, start);
@@ -972,14 +1115,28 @@ impl UIRoot {
     /// utility chrome that should never be occluded.
     fn build_split_handles(&mut self) {
         let r = self.layout.split_handle();
-        self.split_handle_id = Some(self.build_resize_handle(MainRegion::SplitHandles, r.x, r.y, r.width, r.height));
+        self.split_handle_id =
+            Some(self.build_resize_handle(MainRegion::SplitHandles, r.x, r.y, r.width, r.height));
     }
 
     /// One thin resize affordance as a Chrome-tier sub-region of `region`'s
     /// arena, so it moves and rebuilds with the panel edge it sits on.
-    fn build_resize_handle(&mut self, region: MainRegion, x: f32, y: f32, w: f32, h: f32) -> NodeId {
+    fn build_resize_handle(
+        &mut self,
+        region: MainRegion,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    ) -> NodeId {
         let rect = Rect::new(x, y, w, h);
-        let token = self.tree.begin_region_in(region.id(), rect, ZTier::Chrome, "resize_handle", UIFlags::empty());
+        let token = self.tree.begin_region_in(
+            region.id(),
+            rect,
+            ZTier::Chrome,
+            "resize_handle",
+            UIFlags::empty(),
+        );
         let start = self.tree.count();
         let id = self.tree.add_panel(
             None,
@@ -1006,7 +1163,7 @@ impl UIRoot {
         let Some(ref warmup) = self.warmup else {
             return;
         };
-        use manifold_ui::chrome::{materialize, Align, Pad, Sizing, View};
+        use manifold_ui::chrome::{Align, Pad, Sizing, View, materialize};
         use manifold_ui::color;
         use manifold_ui::node::Color32;
 
@@ -1043,7 +1200,12 @@ impl UIRoot {
             .child(label)
             .child(track);
 
-        let full = Rect::new(0.0, 0.0, self.layout.screen_width, self.layout.screen_height);
+        let full = Rect::new(
+            0.0,
+            0.0,
+            self.layout.screen_width,
+            self.layout.screen_height,
+        );
         let token = self.tree.begin_region_in(
             MainRegion::Overlays.id(),
             full,
@@ -1062,7 +1224,13 @@ impl UIRoot {
     /// (docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md). The card-drag ghost is
     /// the Ghosts arena's, settled by the window's frame.
     pub fn build_inspector_in(&mut self, region: u8, rect: Rect) {
-        let token = self.tree.begin_region_in(region, rect, ZTier::Base, "inspector_in_rect", UIFlags::empty());
+        let token = self.tree.begin_region_in(
+            region,
+            rect,
+            ZTier::Base,
+            "inspector_in_rect",
+            UIFlags::empty(),
+        );
         let start = self.tree.count();
         self.inspector.build_in_rect(&mut self.tree, rect);
         self.tree.end_region(token, start);
@@ -1137,7 +1305,8 @@ impl UIRoot {
                         self.inspector.update_card_drag(*pos, &mut self.tree);
                     } else if self.inspector.has_pressed_target() {
                         let mut drag_actions =
-                            self.inspector.handle_drag(*pos, &mut self.tree, modifiers.shift);
+                            self.inspector
+                                .handle_drag(*pos, &mut self.tree, modifiers.shift);
                         actions.append(&mut drag_actions);
                     }
                 }
@@ -1205,10 +1374,14 @@ impl UIRoot {
             if ok {
                 record_work(WorkKind::InPlaceUpdate);
                 if !rebuilding.contains(MainRegion::Viewport) {
-                    self.tree.set_region_rect(MainRegion::Viewport.id(), self.layout.timeline_body());
+                    self.tree
+                        .set_region_rect(MainRegion::Viewport.id(), self.layout.timeline_body());
                 }
                 if !rebuilding.contains(MainRegion::LayerHeaders) {
-                    self.tree.set_region_rect(MainRegion::LayerHeaders.id(), self.layout.layer_controls());
+                    self.tree.set_region_rect(
+                        MainRegion::LayerHeaders.id(),
+                        self.layout.layer_controls(),
+                    );
                 }
             }
             return ok;
@@ -1219,8 +1392,11 @@ impl UIRoot {
         }
         if ok && dirty.scroll_y {
             let scroll_y_px = self.viewport.scroll_y_px();
-            ok = self.layer_headers.try_update_vertical_scroll(&mut self.tree, &self.layout, scroll_y_px)
-                && self.viewport.try_update_vertical_scroll(&mut self.tree);
+            ok = self.layer_headers.try_update_vertical_scroll(
+                &mut self.tree,
+                &self.layout,
+                scroll_y_px,
+            ) && self.viewport.try_update_vertical_scroll(&mut self.tree);
         }
         if ok {
             record_work(WorkKind::InPlaceUpdate);
@@ -1231,7 +1407,9 @@ impl UIRoot {
     /// The regions a scroll or zoom rebuilds when it cannot update in place:
     /// the layer headers when the vertical scroll or the layout moved, and the
     /// viewport. Overlays key on their own version.
-    pub(crate) fn scroll_rebuild_regions(dirty: crate::frame_plan::ViewportMoves) -> crate::frame_plan::RegionMask {
+    pub(crate) fn scroll_rebuild_regions(
+        dirty: crate::frame_plan::ViewportMoves,
+    ) -> crate::frame_plan::RegionMask {
         let mut mask = crate::frame_plan::RegionMask::NONE;
         if dirty.scroll_y || dirty.relayout {
             mask.insert(MainRegion::LayerHeaders);
@@ -1292,30 +1470,18 @@ impl UIRoot {
         self.input.process_key(&self.tree, key, modifiers);
     }
 
-
     /// Cache the candidate target layers for the audio-clip detection layer
     /// dropdowns. Set by `state_sync` when an audio clip is selected; read when
     /// an instrument's layer dropdown opens.
-    pub fn set_clip_detect_layers(
-        &mut self,
-        layers: Vec<(manifold_core::LayerId, String)>,
-    ) {
+    pub fn set_clip_detect_layers(&mut self, layers: Vec<(manifold_core::LayerId, String)>) {
         self.clip_detect_layers = layers;
     }
-
-
-
-
-
-
-
 
     // dropdown_to_action removed (2b.11): every selectable dropdown item now
     // carries its own PanelAction via DropdownItem::with_action and fires
     // DropdownAction::SelectedAction directly. The only surviving DropdownContext
     // is LayerContext (its color swatches, handled below), which doesn't map a
     // positional text Selected(index) either.
-
 
     // ── Inspector resize ──────────────────────────────────────────
 
@@ -1372,7 +1538,9 @@ impl UIRoot {
             return false;
         }
         let dock = self.layout.audio_setup();
-        (pos.x - dock.x).abs() < Self::RESIZE_EDGE_PX && pos.y >= dock.y && pos.y <= dock.y + dock.height
+        (pos.x - dock.x).abs() < Self::RESIZE_EDGE_PX
+            && pos.y >= dock.y
+            && pos.y <= dock.y + dock.height
     }
 
     /// Begin an Audio Setup dock resize drag.
@@ -1425,20 +1593,32 @@ impl UIRoot {
 
     /// Audio Setup dock resize-handle colour feedback (idle/hover/drag).
     pub fn set_audio_setup_handle_hover(&mut self) {
-        self.set_handle_color(self.audio_setup_handle_id, manifold_ui::color::RESIZE_HANDLE_HOVER);
+        self.set_handle_color(
+            self.audio_setup_handle_id,
+            manifold_ui::color::RESIZE_HANDLE_HOVER,
+        );
     }
     pub fn set_audio_setup_handle_drag(&mut self) {
-        self.set_handle_color(self.audio_setup_handle_id, manifold_ui::color::RESIZE_HANDLE_DRAG);
+        self.set_handle_color(
+            self.audio_setup_handle_id,
+            manifold_ui::color::RESIZE_HANDLE_DRAG,
+        );
     }
     pub fn set_audio_setup_handle_idle(&mut self) {
-        self.set_handle_color(self.audio_setup_handle_id, manifold_ui::color::RESIZE_HANDLE_IDLE);
+        self.set_handle_color(
+            self.audio_setup_handle_id,
+            manifold_ui::color::RESIZE_HANDLE_IDLE,
+        );
     }
 
     fn set_handle_color(&mut self, id: Option<NodeId>, color: manifold_ui::node::Color32) {
         if let Some(id) = id {
             self.tree.set_style(
                 id,
-                manifold_ui::node::UIStyle { bg_color: color, ..manifold_ui::node::UIStyle::default() },
+                manifold_ui::node::UIStyle {
+                    bg_color: color,
+                    ..manifold_ui::node::UIStyle::default()
+                },
             );
         }
     }
@@ -1520,10 +1700,6 @@ impl UIRoot {
         }
     }
 
-
-
-
-
     /// Advance the inspector's per-frame motion (drawer-height tweens,
     /// value-flash, dying-card collapse, tab-ink slide — everything
     /// `InspectorCompositePanel::update` drives). Extracted
@@ -1555,7 +1731,10 @@ impl UIRoot {
         use manifold_ui::chrome::Reconcile;
         let mut stale = crate::frame_plan::RegionMask::NONE;
         for (region, reconcile) in [
-            (MainRegion::Transport, self.transport.relayout(&mut self.tree)),
+            (
+                MainRegion::Transport,
+                self.transport.relayout(&mut self.tree),
+            ),
             (MainRegion::Header, self.header.relayout(&mut self.tree)),
             (MainRegion::Footer, self.footer.relayout(&mut self.tree)),
         ] {
@@ -1622,7 +1801,8 @@ impl UIRoot {
         fire_meters: &manifold_core::audio_trigger::FireMeterCapture,
         dt: f32,
     ) {
-        self.inspector.update_fire_meters(&mut self.tree, &|key| fire_meters.get(key), dt);
+        self.inspector
+            .update_fire_meters(&mut self.tree, &|key| fire_meters.get(key), dt);
     }
 
     /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 5):
@@ -1648,7 +1828,8 @@ impl UIRoot {
         if !self.audio_setup_panel.is_open() {
             return;
         }
-        self.audio_setup_panel.update_scope_readout(&mut self.tree, text);
+        self.audio_setup_panel
+            .update_scope_readout(&mut self.tree, text);
     }
 
     /// Push the current crossovers (Hz) + the scope's analysed frequency range to
@@ -1675,15 +1856,12 @@ impl UIRoot {
         if !self.audio_setup_panel.is_open() {
             return;
         }
-        self.audio_setup_panel.update_band_meters(&mut self.tree, amps);
-        self.audio_setup_panel.update_scope_lane_labels(&mut self.tree);
+        self.audio_setup_panel
+            .update_band_meters(&mut self.tree, amps);
+        self.audio_setup_panel
+            .update_scope_lane_labels(&mut self.tree);
     }
-
 }
-
-
-
-
 
 /// BUG-058 trace (`MANIFOLD_INPUT_TRACE=1`): the discrete pointer transitions
 /// worth a routing line. Never the per-frame Move/Drag stream — a trace run
@@ -1708,8 +1886,6 @@ fn trace_kind(event: &UIEvent) -> &'static str {
         _ => "other",
     }
 }
-
-
 
 #[cfg(test)]
 mod region_structural_tests {
@@ -1778,7 +1954,10 @@ mod region_structural_tests {
     fn inspector_in_rect_has_no_stray_roots() {
         let mut ui = UIRoot::new();
         ui.resize(W, H);
-        ui.build_inspector_in(crate::editor_frame::EditorRegion::CardLane.id(), Rect::new(0.0, 0.0, 400.0, H));
+        ui.build_inspector_in(
+            crate::editor_frame::EditorRegion::CardLane.id(),
+            Rect::new(0.0, 0.0, 400.0, H),
+        );
         assert!(
             ui.tree.all_roots_are_regions(),
             "the card lane build left a stray root"
@@ -1834,7 +2013,12 @@ mod tick_parity_tests {
                     limit: Default::default(),
                     disabled: None,
                 },
-                value: manifold_ui::RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
+                value: manifold_ui::RowValue {
+                    base: 0.5,
+                    effective: 0.5,
+                    exposed: true,
+                    driven: false,
+                },
                 modulation: manifold_ui::RowMod::default(),
                 mapping: manifold_ui::RowMapping {
                     osc_address: None,
@@ -1881,7 +2065,8 @@ mod tick_parity_tests {
         root.inspector.set_card_context(CardContext::Author);
         // First configure: nothing to preserve yet, so `sync_collapse_anim`
         // snaps straight to the settled (expanded) height.
-        root.inspector.configure_master_effects(&[fixture_config(false)]);
+        root.inspector
+            .configure_master_effects(&[fixture_config(false)]);
         let height_expanded = root
             .inspector
             .master_effect_mut(0)
@@ -1893,9 +2078,13 @@ mod tick_parity_tests {
         // eases from here (D4: identically in both contexts) rather than
         // snapping. The tween is armed but hasn't ticked yet — height is
         // still the expanded value.
-        root.inspector.configure_master_effects(&[fixture_config(true)]);
+        root.inspector
+            .configure_master_effects(&[fixture_config(true)]);
         {
-            let card = root.inspector.master_effect_mut(0).expect("card configured");
+            let card = root
+                .inspector
+                .master_effect_mut(0)
+                .expect("card configured");
             assert!(
                 card.is_collapse_animating(),
                 "flipping collapsed on an already-configured card must arm a tween"
@@ -1927,5 +2116,4 @@ mod tick_parity_tests {
              this is the exact mechanism BUG-160's card-height overflow came from"
         );
     }
-
 }

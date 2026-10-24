@@ -30,11 +30,10 @@
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::scene::camera::Camera;
 
 const ORBIT: f32 = 0.7;
 const TILT: f32 = 0.95;
@@ -249,7 +248,10 @@ fn region_luma(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> f
             let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
             let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
             let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-            assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+            assert!(
+                r.is_finite() && g.is_finite() && b.is_finite(),
+                "non-finite pixel"
+            );
             sum += (0.2126 * r + 0.7152 * g + 0.0722 * b) as f64;
             n += 1;
         }
@@ -326,7 +328,10 @@ fn rt_cast_shadows_off_brightens_shadow_but_keeps_occluder_drawn() {
     let red_on = red_excess_sum(&on_bytes);
     let red_off = red_excess_sum(&off_bytes);
     eprintln!("rt cast_shadows off: red-excess on={red_on:.1} off={red_off:.1}");
-    assert!(red_on > 0.0, "occluder must be visible with cast_shadows on (red-excess {red_on:.1})");
+    assert!(
+        red_on > 0.0,
+        "occluder must be visible with cast_shadows on (red-excess {red_on:.1})"
+    );
     let red_delta = (red_off - red_on).abs() / red_on.max(1e-9);
     assert!(
         red_delta < 0.05,
@@ -384,7 +389,10 @@ fn raster_cast_shadows_off_removes_ground_shadow() {
     let occ_on = region_luma(&on_bytes, w, h, occ_px.px, occ_px.py, RADIUS);
     let occ_off = region_luma(&off_bytes, w, h, occ_px.px, occ_px.py, RADIUS);
     let brighten = (occ_off - occ_on) / occ_on.max(1e-9);
-    eprintln!("raster cast_shadows off: on={occ_on:.4} off={occ_off:.4} brighten={:.1}%", brighten * 100.0);
+    eprintln!(
+        "raster cast_shadows off: on={occ_on:.4} off={occ_off:.4} brighten={:.1}%",
+        brighten * 100.0
+    );
 
     assert!(
         occ_off > occ_on && brighten > 0.20,

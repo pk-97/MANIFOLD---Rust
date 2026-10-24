@@ -494,7 +494,9 @@ impl AbletonBridge {
 
         // Outside the live app the bridge stays disconnected: no fixed port, and
         // nothing is ever sent to a running Live set.
-        if !manifold_core::device_guard::allowed(manifold_core::device_guard::RealDevice::AbletonBridge) {
+        if !manifold_core::device_guard::allowed(
+            manifold_core::device_guard::RealDevice::AbletonBridge,
+        ) {
             return;
         }
 
@@ -634,7 +636,11 @@ impl AbletonBridge {
         log::info!("[AbletonBridge] Disconnected");
     }
 
-    fn handle_packet_static(packet: rosc::OscPacket, queue: &Arc<Mutex<AbletonMessageQueue>>, at: Instant) {
+    fn handle_packet_static(
+        packet: rosc::OscPacket,
+        queue: &Arc<Mutex<AbletonMessageQueue>>,
+        at: Instant,
+    ) {
         match packet {
             rosc::OscPacket::Message(msg) => {
                 // Rig log (C0): transport reports stamped on arrival, before
@@ -950,7 +956,8 @@ impl AbletonBridge {
                 }
                 "/live/song/get/current_song_time" => {
                     if let Some(beat) = msg.args.first().and_then(osc_arg_f64) {
-                        self.pending_transport.lock().song_time = Some(SongTimeReport { beat, at: msg.at });
+                        self.pending_transport.lock().song_time =
+                            Some(SongTimeReport { beat, at: msg.at });
                     }
                     return;
                 }
@@ -1850,9 +1857,15 @@ impl AbletonBridge {
         };
         project.settings.master_effects.iter().any(instance)
             || project.timeline.layers.iter().any(|layer| {
-                layer.effects.iter().flatten().any(instance) || layer.gen_params().is_some_and(instance)
+                layer.effects.iter().flatten().any(instance)
+                    || layer.gen_params().is_some_and(instance)
             })
-            || project.settings.macro_bank.slots.iter().any(|s| s.ableton_mapping.as_ref().is_some_and(differs))
+            || project
+                .settings
+                .macro_bank
+                .slots
+                .iter()
+                .any(|s| s.ableton_mapping.as_ref().is_some_and(differs))
     }
 
     /// Validate all Ableton mappings in the project against the current session.
@@ -2140,7 +2153,9 @@ impl AbletonBridge {
 
     /// Scan all Active mappings in the project and subscribe/unsubscribe accordingly.
     pub fn rebuild_listeners(&mut self, project: &Project) {
-        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::AbletonListenerRebuild);
+        manifold_core::work_count::record_work(
+            manifold_core::work_count::WorkKind::AbletonListenerRebuild,
+        );
         let mut needed: AHashSet<(i32, i32, i32)> = AHashSet::new();
         let mut new_write_targets: AHashMap<(i32, i32, i32), Vec<WriteTarget>> = AHashMap::new();
 
@@ -2210,8 +2225,7 @@ impl AbletonBridge {
                             // Live-manifest resolution (P4) — see master-effect
                             // path; user-added / registry-absent params resolve
                             // here instead of being dropped by an id_to_index miss.
-                            let Some(param) = fx.params.get(mapping.param_id.as_ref())
-                            else {
+                            let Some(param) = fx.params.get(mapping.param_id.as_ref()) else {
                                 continue;
                             };
                             let (pmin, pmax) = param.slider_span();
@@ -2358,7 +2372,9 @@ impl AbletonBridge {
     /// MappingRanges reaction (docs/UI_INVALIDATION_DESIGN.md D20); the
     /// listener set rebuilds only when the mapping set moved.
     pub fn refresh_ranges(&mut self, project: &Project) {
-        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ListenerRangeRefresh);
+        manifold_core::work_count::record_work(
+            manifold_core::work_count::WorkKind::ListenerRangeRefresh,
+        );
         for targets in self.write_targets.values_mut() {
             for wt in targets.iter_mut() {
                 let mapping = match &wt.target {
@@ -2481,7 +2497,11 @@ impl AbletonBridge {
         }
         let report = self.last_song_time?;
         let bpm = f64::from(self.ableton_tempo);
-        let tempo = self.tempo_report.unwrap_or(TempoReport { before: bpm, bpm, at: report.at });
+        let tempo = self.tempo_report.unwrap_or(TempoReport {
+            before: bpm,
+            bpm,
+            at: report.at,
+        });
         Some((report, tempo))
     }
 
@@ -2501,10 +2521,7 @@ impl AbletonBridge {
             }
         };
 
-        if pending.is_playing.is_some()
-            || pending.tempo.is_some()
-            || pending.song_time.is_some()
-        {
+        if pending.is_playing.is_some() || pending.tempo.is_some() || pending.song_time.is_some() {
             self.transport_last_received = realtime;
         }
 
@@ -2513,8 +2530,11 @@ impl AbletonBridge {
         // position (the ack evaluation reads the full observed snapshot).
         if let Some((tempo, at)) = pending.tempo {
             if tempo != self.ableton_tempo {
-                self.tempo_report =
-                    Some(TempoReport { before: f64::from(self.ableton_tempo), bpm: f64::from(tempo), at });
+                self.tempo_report = Some(TempoReport {
+                    before: f64::from(self.ableton_tempo),
+                    bpm: f64::from(tempo),
+                    at,
+                });
             }
             self.ableton_tempo = tempo;
             self.transport_sync.on_osc_tempo(tempo, realtime);
@@ -2524,7 +2544,8 @@ impl AbletonBridge {
             self.transport_sync.on_osc_is_playing(playing, realtime);
         }
         if let Some(report) = pending.song_time {
-            self.transport_sync.on_osc_song_time(report.beat as f32, realtime);
+            self.transport_sync
+                .on_osc_song_time(report.beat as f32, realtime);
             self.last_song_time = Some(report);
         }
     }
@@ -3061,7 +3082,10 @@ mod tests {
             .get("user_glow")
             .unwrap()
             .value;
-        assert!((v - 0.42).abs() < 1e-6, "write must reach the user param; got {v}");
+        assert!(
+            (v - 0.42).abs() < 1e-6,
+            "write must reach the user param; got {v}"
+        );
     }
 
     // ── Resolver: canonical name path ──────────────────────────────
@@ -3517,11 +3541,11 @@ mod tests {
         assert_eq!(test_outcome(false), SendLogAction::WarnFirst);
 
         // Flap begins: ok, fail, ok, fail, ok, fail...
-        assert_eq!(test_outcome(true), SendLogAction::Silent);  // success #1
+        assert_eq!(test_outcome(true), SendLogAction::Silent); // success #1
         assert_eq!(test_outcome(false), SendLogAction::DebugRepeat); // resets to 0
-        assert_eq!(test_outcome(true), SendLogAction::Silent);  // success #1 again
+        assert_eq!(test_outcome(true), SendLogAction::Silent); // success #1 again
         assert_eq!(test_outcome(false), SendLogAction::DebugRepeat); // resets to 0
-        assert_eq!(test_outcome(true), SendLogAction::Silent);  // success #1 again
+        assert_eq!(test_outcome(true), SendLogAction::Silent); // success #1 again
         assert_eq!(test_outcome(false), SendLogAction::DebugRepeat); // resets to 0
 
         // During sustained flap, we should see at most one WARN and zero INFO.

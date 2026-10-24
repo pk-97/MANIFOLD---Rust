@@ -1,7 +1,7 @@
 use crate::command::Command;
-use manifold_core::change::{ChangeSet, Part};
 use crate::service::EditingService;
 use manifold_core::audio_clip_detection::AudioClipDetection;
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::OverlapAction;
 use manifold_core::project::Project;
@@ -37,15 +37,14 @@ pub fn build_audio_dependent_edits(
 
             let child_source_start = old_clock.source_position(old_source, child.start_beat);
             let child_source_end = old_clock.source_position(old_source, child.end_beat());
-            let source_start = child_source_start.max(old_window_start).max(new_window_start);
+            let source_start = child_source_start
+                .max(old_window_start)
+                .max(new_window_start);
             let source_end = child_source_end.min(old_window_end).min(new_window_end);
             let layer_id = layer.layer_id.clone();
 
             if source_end <= source_start || new_window_end <= new_window_start {
-                commands.push(Box::new(DeleteClipCommand::new(
-                    child.clone(),
-                    layer_id,
-                )));
+                commands.push(Box::new(DeleteClipCommand::new(child.clone(), layer_id)));
                 continue;
             }
 
@@ -54,10 +53,7 @@ pub fn build_audio_dependent_edits(
             new_start = new_start.max(new_source.start_beat);
             new_end = new_end.min(new_source.end_beat());
             if new_end <= new_start {
-                commands.push(Box::new(DeleteClipCommand::new(
-                    child.clone(),
-                    layer_id,
-                )));
+                commands.push(Box::new(DeleteClipCommand::new(child.clone(), layer_id)));
                 continue;
             }
 
@@ -65,8 +61,7 @@ pub fn build_audio_dependent_edits(
             moved_ids.push(child.id.clone());
             let old_child_start = old_clock.beat_at_source(old_source, source_start);
             let new_in_point = if child.is_source_media() && old_child_start > child.start_beat {
-                child.in_point
-                    + old_clock.source_seconds(child, child.start_beat, old_child_start)
+                child.in_point + old_clock.source_seconds(child, child.start_beat, old_child_start)
             } else {
                 child.in_point
             };
@@ -112,20 +107,40 @@ struct ResolveDependentOverlaps {
 impl Command for ResolveDependentOverlaps {
     fn touches(&self) -> ChangeSet {
         let base = ChangeSet::of(&[Part::Clips]);
-        self.commands.iter().flatten().fold(base, |set, c| set.union(c.touches()))
+        self.commands
+            .iter()
+            .flatten()
+            .fold(base, |set, c| set.union(c.touches()))
     }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(commands) = &mut self.commands {
-            for command in commands { command.execute(project); }
+            for command in commands {
+                command.execute(project);
+            }
             return;
         }
         let protected = self.moved_ids.iter().cloned().collect();
         let mut commands = Vec::new();
         for id in &self.moved_ids {
-            let Some((index, clip)) = project.timeline.layers.iter().enumerate()
-                .find_map(|(index, layer)| layer.clips.iter().find(|clip| &clip.id == id)
-                    .map(|clip| (index, clip.clone()))) else { continue; };
-            for mut command in EditingService::enforce_non_overlap(project, &clip, index, &protected) {
+            let Some((index, clip)) =
+                project
+                    .timeline
+                    .layers
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, layer)| {
+                        layer
+                            .clips
+                            .iter()
+                            .find(|clip| &clip.id == id)
+                            .map(|clip| (index, clip.clone()))
+                    })
+            else {
+                continue;
+            };
+            for mut command in
+                EditingService::enforce_non_overlap(project, &clip, index, &protected)
+            {
                 command.execute(project);
                 commands.push(command);
             }
@@ -135,11 +150,15 @@ impl Command for ResolveDependentOverlaps {
 
     fn do_undo(&mut self, project: &mut Project) {
         if let Some(commands) = &mut self.commands {
-            for command in commands.iter_mut().rev() { command.undo(project); }
+            for command in commands.iter_mut().rev() {
+                command.undo(project);
+            }
         }
     }
 
-    fn description(&self) -> &str { "Resolve Linked Clip Overlaps" }
+    fn description(&self) -> &str {
+        "Resolve Linked Clip Overlaps"
+    }
 }
 
 const MOVE_CLIP_SOURCE_UNAVAILABLE: &str = "move clip source layer or clip is unavailable";
@@ -207,7 +226,11 @@ impl Command for MoveClipCommand {
             self.rejection = Some(MOVE_CLIP_SOURCE_UNAVAILABLE);
             return;
         };
-        let Some(source_clip) = source_layer.clips.iter().find(|clip| clip.id == self.clip_id) else {
+        let Some(source_clip) = source_layer
+            .clips
+            .iter()
+            .find(|clip| clip.id == self.clip_id)
+        else {
             self.rejection = Some(MOVE_CLIP_SOURCE_UNAVAILABLE);
             return;
         };
@@ -249,13 +272,8 @@ impl Command for MoveClipCommand {
                 && let Some(new_source) = project.timeline.find_clip_by_id(&self.clip_id).cloned()
             {
                 let clock = project.source_clock();
-                self.dependent_commands = build_audio_dependent_edits(
-                    project,
-                    &old_source,
-                    &new_source,
-                    &clock,
-                    &clock,
-                );
+                self.dependent_commands =
+                    build_audio_dependent_edits(project, &old_source, &new_source, &clock, &clock);
             }
             self.dependent_prepared = true;
         }
@@ -427,13 +445,8 @@ impl Command for TrimClipCommand {
                 && let Some(new_source) = project.timeline.find_clip_by_id(&self.clip_id).cloned()
             {
                 let clock = project.source_clock();
-                self.dependent_commands = build_audio_dependent_edits(
-                    project,
-                    &old_source,
-                    &new_source,
-                    &clock,
-                    &clock,
-                );
+                self.dependent_commands =
+                    build_audio_dependent_edits(project, &old_source, &new_source, &clock, &clock);
             }
             self.dependent_prepared = true;
         }
@@ -534,7 +547,9 @@ impl RetimeAudioDependentCommand {
 }
 
 impl Command for RetimeAudioDependentCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Clips])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         Self::apply(project, &self.clip_id, self.new_state);
         if let Some(layer_index) = project.timeline.layer_index_for_id(&self.layer_id)
@@ -577,7 +592,9 @@ impl DeleteClipCommand {
 }
 
 impl Command for DeleteClipCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Clips])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let clip_id = self.clip.as_ref().unwrap().id.clone();
         if let Some(li) = project.timeline.layer_index_for_id(&self.layer_id)
@@ -651,7 +668,9 @@ impl AddClipCommand {
 }
 
 impl Command for AddClipCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Clips])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let clock = manifold_core::tempo::SourceClock::new(
             &project.tempo_map,
@@ -751,7 +770,9 @@ impl SwapVideoCommand {
 }
 
 impl Command for SwapVideoCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Clips])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             clip.video_clip_id = self.new_video_clip_id.clone();
@@ -824,7 +845,9 @@ impl ReplaceAudioFileCommand {
 }
 
 impl Command for ReplaceAudioFileCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Clips])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             if self.old_audio_warp_enabled.is_none() {
@@ -883,7 +906,9 @@ impl SlipClipCommand {
 }
 
 impl Command for SlipClipCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Clips])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             clip.in_point = self.new_in_point;
@@ -935,7 +960,9 @@ impl ClipEffectsCommand {
 }
 
 impl Command for ClipEffectsCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Clips])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             Self::apply(clip, &self.new);
@@ -982,7 +1009,9 @@ impl ChangeClipLoopCommand {
 }
 
 impl Command for ChangeClipLoopCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Clips])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             clip.is_looping = self.new_looping;
@@ -1125,7 +1154,9 @@ impl ChangeClipRecordedBpmCommand {
 }
 
 impl Command for ChangeClipRecordedBpmCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Clips])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if self.old_state.is_none() {
             let Some(old_clip) = project.timeline.find_clip_by_id(&self.clip_id).cloned() else {
@@ -1146,11 +1177,8 @@ impl Command for ChangeClipRecordedBpmCommand {
                 let clock = project.source_clock();
                 let source_seconds =
                     clock.source_seconds(&old_clip, old_clip.start_beat, old_clip.end_beat());
-                let new_duration = clock.beats_for_source(
-                    &new_clip,
-                    new_clip.start_beat,
-                    source_seconds,
-                );
+                let new_duration =
+                    clock.beats_for_source(&new_clip, new_clip.start_beat, source_seconds);
                 new_clip.set_duration_beats(new_duration);
             }
 
@@ -1165,13 +1193,8 @@ impl Command for ChangeClipRecordedBpmCommand {
 
             Self::apply_state(project, &self.clip_id, new_state);
             let clock = project.source_clock();
-            self.dependent_commands = build_audio_dependent_edits(
-                project,
-                &old_clip,
-                &new_clip,
-                &clock,
-                &clock,
-            );
+            self.dependent_commands =
+                build_audio_dependent_edits(project, &old_clip, &new_clip, &clock, &clock);
             if old_clip.is_audio()
                 && let Some(layer_index) = project.timeline.layer_index_for_id(&old_clip.layer_id)
                 && let Some(placed_clip) = project.timeline.find_clip_by_id(&self.clip_id).cloned()
@@ -1248,7 +1271,9 @@ impl SplitClipCommand {
 }
 
 impl Command for SplitClipCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Clips])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         // Trim original
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
@@ -1301,7 +1326,9 @@ impl MuteClipCommand {
 }
 
 impl Command for MuteClipCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Clips])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             clip.is_muted = self.new_muted;
@@ -1365,8 +1392,12 @@ impl SetClipStringParamCommand {
 }
 
 impl Command for SetClipStringParamCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
-    fn graph_admission_clips(&self, clips: &mut Vec<ClipId>) { clips.push(self.clip_id.clone()); }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Clips])
+    }
+    fn graph_admission_clips(&self, clips: &mut Vec<ClipId>) {
+        clips.push(self.clip_id.clone());
+    }
     fn do_execute(&mut self, project: &mut Project) {
         self.apply(project, &self.new_value.clone());
     }
@@ -1439,19 +1470,18 @@ mod dependent_edit_tests {
     #[test]
     fn helper_removes_out_of_window_child_and_undo_restores_it() {
         let (mut project, source_id, child_id, _) = project_with_source_and_child();
-        let old_source = project.timeline.find_clip_by_id(&source_id).unwrap().clone();
+        let old_source = project
+            .timeline
+            .find_clip_by_id(&source_id)
+            .unwrap()
+            .clone();
         let mut new_source = old_source.clone();
         new_source.in_point = Seconds(2.0);
         new_source.start_beat = Beats(2.0);
         new_source.duration_beats = Beats(2.0);
         let clock = project.source_clock();
-        let mut commands = build_audio_dependent_edits(
-            &project,
-            &old_source,
-            &new_source,
-            &clock,
-            &clock,
-        );
+        let mut commands =
+            build_audio_dependent_edits(&project, &old_source, &new_source, &clock, &clock);
         for command in &mut commands {
             command.execute(&mut project);
         }

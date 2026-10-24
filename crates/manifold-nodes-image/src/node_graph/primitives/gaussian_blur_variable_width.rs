@@ -141,38 +141,33 @@ impl Primitive for GaussianBlurVariableWidth {
 
         let gpu = ctx.gpu_encoder();
         let key = pipeline_key(quality, weighting);
-        let pipeline = self
-            .pipelines
-            .entry(key)
-            .or_insert_with(|| {
-                // Single-source: `in` + `width` are both Gather inputs (sampled at
-                // body-computed tap offsets); generated kernel binds uniform(0)/
-                // tex_in(1)/tex_width(2)/samp(3)/dst(4), matching the set below. The
-                // body references the QUALITY_LEVEL/WEIGHTING_MODE specialization
-                // tokens, so we still specialize the GENERATED WGSL per (quality,
-                // weighting) — dead tap branches flatten away, perf preserved.
-                // gaussian_blur_variable_width.wgsl is the parity oracle.
-                let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.variable_blur standalone codegen");
-                let quality_str = match quality {
-                    0 => "0u",
-                    2 => "2u",
-                    _ => "1u",
-                };
-                let weighting_str = if weighting == 1 { "1u" } else { "0u" };
-                let label = format!(
-                    "node.variable_blur.q{quality}.w{weighting}"
-                );
-                gpu.device.create_specialized_compute_pipeline(
-                    &wgsl,
-                    manifold_node_engine::freeze::codegen::ENTRY,
-                    &[
-                        ("QUALITY_LEVEL", quality_str),
-                        ("WEIGHTING_MODE", weighting_str),
-                    ],
-                    &label,
-                )
-            });
+        let pipeline = self.pipelines.entry(key).or_insert_with(|| {
+            // Single-source: `in` + `width` are both Gather inputs (sampled at
+            // body-computed tap offsets); generated kernel binds uniform(0)/
+            // tex_in(1)/tex_width(2)/samp(3)/dst(4), matching the set below. The
+            // body references the QUALITY_LEVEL/WEIGHTING_MODE specialization
+            // tokens, so we still specialize the GENERATED WGSL per (quality,
+            // weighting) — dead tap branches flatten away, perf preserved.
+            // gaussian_blur_variable_width.wgsl is the parity oracle.
+            let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.variable_blur standalone codegen");
+            let quality_str = match quality {
+                0 => "0u",
+                2 => "2u",
+                _ => "1u",
+            };
+            let weighting_str = if weighting == 1 { "1u" } else { "0u" };
+            let label = format!("node.variable_blur.q{quality}.w{weighting}");
+            gpu.device.create_specialized_compute_pipeline(
+                &wgsl,
+                manifold_node_engine::freeze::codegen::ENTRY,
+                &[
+                    ("QUALITY_LEVEL", quality_str),
+                    ("WEIGHTING_MODE", weighting_str),
+                ],
+                &label,
+            )
+        });
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
@@ -214,7 +209,10 @@ impl GaussianBlurVariableWidth {
                 device.create_specialized_compute_pipeline(
                     &wgsl,
                     manifold_node_engine::freeze::codegen::ENTRY,
-                    &[("QUALITY_LEVEL", quality_str), ("WEIGHTING_MODE", weighting_str)],
+                    &[
+                        ("QUALITY_LEVEL", quality_str),
+                        ("WEIGHTING_MODE", weighting_str),
+                    ],
                     &label,
                 );
             }
@@ -244,8 +242,14 @@ mod tests {
         let mut prev = vbw_subtap_count(1.0);
         for step_size_px in [2, 4, 8, 9, 16, 24, 32, 65, 200] {
             let cur = vbw_subtap_count(step_size_px as f32);
-            assert!(cur >= prev, "subtap count regressed at step_size={step_size_px}");
-            assert!((1..=4).contains(&cur), "subtap count must stay within [1, 4]");
+            assert!(
+                cur >= prev,
+                "subtap count regressed at step_size={step_size_px}"
+            );
+            assert!(
+                (1..=4).contains(&cur),
+                "subtap count must stay within [1, 4]"
+            );
             prev = cur;
         }
     }

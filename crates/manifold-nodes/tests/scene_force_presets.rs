@@ -1,20 +1,26 @@
 //! Structural and CPU preparation coverage for the stock force scene modifiers.
 
-use manifold_nodes as _;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
-use manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier;
 use manifold_core::scene_modifier_preset::{
     SceneEndpoint, SceneStageScope, SceneStageSource, SceneTargetSelection,
     validate_scene_modifier_schema,
 };
 use manifold_core::{Beats, Seconds};
-use manifold_physics::{FieldValue, interaction::VectorField};
-use manifold_node_engine::persistence::EffectGraphDefExt;
-use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
-use manifold_node_engine::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, exec::execution::Executor, exec::effect_node::FrameTime, parameters::ParamValue, persistence::PrimitiveRegistry, exec::execution_plan::compile};
+use manifold_node_engine::persistence::EffectGraphDefExt;
+use manifold_node_engine::ports::{
+    NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+};
+use manifold_node_engine::{
+    exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext,
+    exec::effect_node::EffectNodeType, exec::effect_node::FrameTime, exec::execution::Executor,
+    exec::execution_plan::compile, parameters::ParamValue, persistence::PrimitiveRegistry,
+};
+use manifold_nodes as _;
+use manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier;
+use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
+use manifold_physics::{FieldValue, interaction::VectorField};
 
 const PHYSICS_SOLIDS: &str = include_str!("fixtures/presets/PhysicsSolids.json");
 
@@ -116,7 +122,11 @@ fn force_recipes_validate_and_expose_finite_controls() {
         // The Radial card is also Burst, whose kick reaches 50 m/s.
         let reach = if name == "RadialForce" { 50.0 } else { 20.0 };
         assert_eq!(
-            (impulse_strength.min, impulse_strength.max, impulse_strength.default_value),
+            (
+                impulse_strength.min,
+                impulse_strength.max,
+                impulse_strength.default_value
+            ),
             (-reach, reach, 2.0)
         );
         let fire = metadata
@@ -125,7 +135,10 @@ fn force_recipes_validate_and_expose_finite_controls() {
             .find(|param| param.id == "fire")
             .expect("Fire trigger control");
         assert!(fire.is_trigger);
-        assert_eq!((fire.min, fire.max, fire.default_value), (0.0, 16777216.0, 0.0));
+        assert_eq!(
+            (fire.min, fire.max, fire.default_value),
+            (0.0, 16777216.0, 0.0)
+        );
         let binding_ids: std::collections::BTreeSet<_> = metadata
             .bindings
             .iter()
@@ -138,7 +151,11 @@ fn force_recipes_validate_and_expose_finite_controls() {
             .collect();
         assert!(binding_ids.contains("impulse_strength"));
         assert!(!binding_ids.contains("fire"));
-        assert_eq!(binding_ids.len() + 1, param_ids.len(), "{name} leaves only Fire unbound");
+        assert_eq!(
+            binding_ids.len() + 1,
+            param_ids.len(),
+            "{name} leaves only Fire unbound"
+        );
         let impulse_binding = metadata
             .bindings
             .iter()
@@ -150,7 +167,10 @@ fn force_recipes_validate_and_expose_finite_controls() {
             manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
                 if node_id.as_str() == "force_impulse_strength" && param == "strength"
         ));
-        let modifier = metadata.scene_modifier.as_ref().expect("scene modifier recipe");
+        let modifier = metadata
+            .scene_modifier
+            .as_ref()
+            .expect("scene modifier recipe");
         assert_eq!(modifier.impulses.len(), 1);
         let impulse = &modifier.impulses[0];
         assert_eq!(impulse.param_id, "fire");
@@ -404,7 +424,9 @@ impl EffectNode for FieldObserver {
             return;
         };
         // The acceleration of a body at rest there: push plus drag rate × wind.
-        let value = field.sample_force([0.25, -0.5, 0.75]).acceleration([0.0; 3]);
+        let value = field
+            .sample_force([0.25, -0.5, 0.75])
+            .acceleration([0.0; 3]);
         for (port, component) in [("x", value[0]), ("y", value[1]), ("z", value[2])] {
             ctx.outputs.set_scalar(port, ParamValue::Float(component));
         }
@@ -469,13 +491,20 @@ fn frame_time() -> FrameTime {
 }
 
 fn evaluate_force_graph(names: &[&str], strengths: &[f32], enabled: &[f32]) -> [f32; 3] {
-    let controls: Vec<_> = strengths.iter().zip(enabled).map(|(&s, &e)| vec![("strength", s), ("enabled", e)]).collect();
+    let controls: Vec<_> = strengths
+        .iter()
+        .zip(enabled)
+        .map(|(&s, &e)| vec![("strength", s), ("enabled", e)])
+        .collect();
     evaluate_force_output(names, &controls, false)
 }
 
 fn evaluate_impulse_graph(names: &[&str], strengths: &[f32], enabled: &[f32]) -> [f32; 3] {
-    let controls: Vec<_> =
-        strengths.iter().zip(enabled).map(|(&s, &e)| vec![("strength", s), ("enabled", e), ("impulse_strength", 2.0)]).collect();
+    let controls: Vec<_> = strengths
+        .iter()
+        .zip(enabled)
+        .map(|(&s, &e)| vec![("strength", s), ("enabled", e), ("impulse_strength", 2.0)])
+        .collect();
     evaluate_force_output(names, &controls, true)
 }
 
@@ -673,21 +702,44 @@ fn industry_force_recipes_attach_and_evaluate() {
         .expect("physics host has render_scene");
     for name in ["Wind", "RadialForce"] {
         let def = recipe(name);
-        validate_scene_modifier_schema(&def).unwrap_or_else(|error| panic!("{name} schema is valid: {error}"));
+        validate_scene_modifier_schema(&def)
+            .unwrap_or_else(|error| panic!("{name} schema is valid: {error}"));
         let metadata = def.preset_metadata.as_ref().expect("preset metadata");
         assert_eq!(metadata.category, "Forces");
         assert!(metadata.shape.is_some(), "{name} declares its shape");
-        assert!(manifold_core::scene_modifier_preset::is_force_recipe(&def), "{name} is a force");
-        assert!(metadata.params.iter().all(|p| p.min <= p.default_value && p.default_value <= p.max));
-        let bound: std::collections::BTreeSet<_> = metadata.bindings.iter().map(|b| b.id.as_str()).collect();
+        assert!(
+            manifold_core::scene_modifier_preset::is_force_recipe(&def),
+            "{name} is a force"
+        );
+        assert!(
+            metadata
+                .params
+                .iter()
+                .all(|p| p.min <= p.default_value && p.default_value <= p.max)
+        );
+        let bound: std::collections::BTreeSet<_> =
+            metadata.bindings.iter().map(|b| b.id.as_str()).collect();
         for param in &metadata.params {
-            assert_eq!(bound.contains(param.id.as_str()), param.id != "fire", "{name}.{} binding", param.id);
+            assert_eq!(
+                bound.contains(param.id.as_str()),
+                param.id != "fire",
+                "{name}.{} binding",
+                param.id
+            );
         }
         for objects in [Vec::new(), vec![NodeId::new("physics_demo_114")]] {
-            let instance = prepare_new_scene_modifier(&host, &def, NodeId::new(format!("set-{name}")), scene.clone(), SceneTargetSelection::Explicit { objects })
-                .unwrap_or_else(|error| panic!("{name} attaches: {error}"));
-            let attached = attach_scene_modifier(&host, instance).unwrap_or_else(|error| panic!("{name} inserts: {error}"));
-            prepare_scene_modifiers(&attached, &PrimitiveRegistry::with_builtin()).unwrap_or_else(|error| panic!("{name} prepares: {error}"));
+            let instance = prepare_new_scene_modifier(
+                &host,
+                &def,
+                NodeId::new(format!("set-{name}")),
+                scene.clone(),
+                SceneTargetSelection::Explicit { objects },
+            )
+            .unwrap_or_else(|error| panic!("{name} attaches: {error}"));
+            let attached = attach_scene_modifier(&host, instance)
+                .unwrap_or_else(|error| panic!("{name} inserts: {error}"));
+            prepare_scene_modifiers(&attached, &PrimitiveRegistry::with_builtin())
+                .unwrap_or_else(|error| panic!("{name} prepares: {error}"));
         }
     }
 
@@ -695,38 +747,78 @@ fn industry_force_recipes_attach_and_evaluate() {
     let previous = [1.0, 2.0, 3.0];
     // A body at rest in a 4 m/s wind along z at drag rate 0.5 is pushed at
     // 0.5 × 4 = 2 m/s² along z; with no air resistance the wind adds nothing.
-    let wind = [("direction_x", 0.0), ("direction_y", 0.0), ("direction_z", 1.0), ("speed", 4.0)];
-    let windy = evaluate_force_output(&["Wind"], &[[&wind[..], &[("air_resistance", 0.5)]].concat()], false);
+    let wind = [
+        ("direction_x", 0.0),
+        ("direction_y", 0.0),
+        ("direction_z", 1.0),
+        ("speed", 4.0),
+    ];
+    let windy = evaluate_force_output(
+        &["Wind"],
+        &[[&wind[..], &[("air_resistance", 0.5)]].concat()],
+        false,
+    );
     assert!(close(windy, [1.0, 2.0, 5.0]), "{windy:?}");
     // The direction is only a direction: a diagonal wind still blows at Speed.
-    let diagonal = [("direction_x", 1.0), ("direction_y", 0.0), ("direction_z", 1.0), ("speed", 4.0), ("air_resistance", 0.5)];
+    let diagonal = [
+        ("direction_x", 1.0),
+        ("direction_y", 0.0),
+        ("direction_z", 1.0),
+        ("speed", 4.0),
+        ("air_resistance", 0.5),
+    ];
     let gust = evaluate_force_output(&["Wind"], &[diagonal.to_vec()], false);
     let side = 2.0 * std::f32::consts::FRAC_1_SQRT_2;
     assert!(close(gust, [1.0 + side, 2.0, 3.0 + side]), "{gust:?}");
-    let still = evaluate_force_output(&["Wind"], &[[&wind[..], &[("air_resistance", 0.0)]].concat()], false);
+    let still = evaluate_force_output(
+        &["Wind"],
+        &[[&wind[..], &[("air_resistance", 0.0)]].concat()],
+        false,
+    );
     assert!(close(still, previous), "{still:?}");
 
     // Pull: the sample point sits 0.935 m from the origin, inside its 1 m
     // radius, so the Inverse curve pulls at full strength toward it.
     let at = [0.25f32, -0.5, 0.75];
     let d = at.iter().map(|c| c * c).sum::<f32>().sqrt();
-    let pull = vec![("strength", -5.0), ("radius", 1.0), ("falloff", 2.0), ("curve", 1.0)];
+    let pull = vec![
+        ("strength", -5.0),
+        ("radius", 1.0),
+        ("falloff", 2.0),
+        ("curve", 1.0),
+    ];
     let pulled = evaluate_force_output(&["RadialForce"], &[pull], false);
-    assert!(close(pulled, std::array::from_fn(|i| previous[i] - 5.0 * at[i] / d)), "{pulled:?}");
+    assert!(
+        close(
+            pulled,
+            std::array::from_fn(|i| previous[i] - 5.0 * at[i] / d)
+        ),
+        "{pulled:?}"
+    );
 
     // Burst has no steady push; its impulse kicks outward, fading to nothing
     // at its 3 m radius.
-    let burst = vec![("strength", 0.0), ("impulse_strength", 8.0), ("radius", 3.0)];
+    let burst = vec![
+        ("strength", 0.0),
+        ("impulse_strength", 8.0),
+        ("radius", 3.0),
+    ];
     let calm = evaluate_force_output(&["RadialForce"], std::slice::from_ref(&burst), false);
     assert!(close(calm, previous), "{calm:?}");
     let blast = evaluate_force_output(&["RadialForce"], &[burst], true);
     let size = 8.0 * (1.0 - d / 3.0);
-    assert!(close(blast, std::array::from_fn(|i| size * at[i] / d)), "{blast:?}");
+    assert!(
+        close(blast, std::array::from_fn(|i| size * at[i] / d)),
+        "{blast:?}"
+    );
 }
 
-
 fn render_scene(host: &EffectGraphDef) -> manifold_core::NodeId {
-    let node = host.nodes.iter().find(|node| node.type_id == "node.render_scene").expect("a render scene");
+    let node = host
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "node.render_scene")
+        .expect("a render scene");
     node.node_id.clone()
 }
 
@@ -736,8 +828,14 @@ fn with_force(host: &EffectGraphDef, name: &str) -> EffectGraphDef {
 }
 
 fn with_recipe(host: &EffectGraphDef, name: &str, recipe: &EffectGraphDef) -> EffectGraphDef {
-    let instance = prepare_new_scene_modifier(host, recipe, NodeId::new(format!("all-{name}")), render_scene(host), SceneTargetSelection::AllObjects)
-        .unwrap_or_else(|error| panic!("{name} prepares on every object: {error}"));
+    let instance = prepare_new_scene_modifier(
+        host,
+        recipe,
+        NodeId::new(format!("all-{name}")),
+        render_scene(host),
+        SceneTargetSelection::AllObjects,
+    )
+    .unwrap_or_else(|error| panic!("{name} prepares on every object: {error}"));
     attach_scene_modifier(host, instance).unwrap_or_else(|error| panic!("{name} attaches: {error}"))
 }
 
@@ -747,11 +845,16 @@ fn with_recipe(host: &EffectGraphDef, name: &str, recipe: &EffectGraphDef) -> Ef
 /// and preparing the force leaves every host node exactly as authored.
 #[test]
 fn adding_a_force_changes_no_host_node() {
-    use manifold_core::effect_graph_def::{SerializedParamValue, StringBindingDef, StringParamSpecDef};
+    use manifold_core::effect_graph_def::{
+        SerializedParamValue, StringBindingDef, StringParamSpecDef,
+    };
     let mut host: EffectGraphDef = serde_json::from_str(PHYSICS_SOLIDS).unwrap();
     for (id, path) in [(111, "a.glb"), (121, "b.glb")] {
         let body = host.nodes.iter_mut().find(|node| node.id == id).unwrap();
-        body.params.insert("path".into(), SerializedParamValue::String { value: path.into() });
+        body.params.insert(
+            "path".into(),
+            SerializedParamValue::String { value: path.into() },
+        );
     }
     let metadata = host.preset_metadata.as_mut().unwrap();
     let spec: StringParamSpecDef = serde_json::from_value(serde_json::json!({
@@ -772,10 +875,19 @@ fn adding_a_force_changes_no_host_node() {
         .expect("the force prepares")
         .def;
     let second = node(&prepared.nodes, "physics_demo_121");
-    assert_eq!(second.params["path"], SerializedParamValue::String { value: "b.glb".into() });
+    assert_eq!(
+        second.params["path"],
+        SerializedParamValue::String {
+            value: "b.glb".into()
+        }
+    );
     let authored = manifold_core::flatten::flatten_groups(&host).unwrap();
     for authored in &authored.nodes {
         let prepared = node(&prepared.nodes, authored.node_id.as_str());
-        assert_eq!(prepared.params, authored.params, "{} changed when the force was added", authored.node_id);
+        assert_eq!(
+            prepared.params, authored.params,
+            "{} changed when the force was added",
+            authored.node_id
+        );
     }
 }

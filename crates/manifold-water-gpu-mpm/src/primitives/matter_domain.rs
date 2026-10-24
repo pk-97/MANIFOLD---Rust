@@ -15,37 +15,48 @@
 use std::borrow::Cow;
 
 use manifold_gpu::{FrameClock, GpuBuffer};
-use manifold_physics::FieldValue;
 use manifold_nodes_physics::force_lattice::felt_field;
+use manifold_physics::FieldValue;
 
-use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
-use manifold_core::liquid_setup::{ColumnOutcome, DEFAULT_FILL_HEIGHT, FillFit, SetupFit, fit_column, fit_fill_height};
-use manifold_water_liquid::gizmos::SetupReport;
-use manifold_physics::clock::TICK;
-use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
+use crate::matter::coupling::{ReactionScale, decode, live_body_limit};
+use crate::matter::{
+    MAX_SUBSTEPS, REACTION_WORDS, WATER_DENSITY, block_sort_box, free_fall_speed, lattice_blocks,
+    lattice_nodes, momentum_unit, substeps_for_interval, substeps_per_tick, water_lambda,
+    wave_speed,
+};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
+use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
+use manifold_core::liquid_setup::{
+    ColumnOutcome, DEFAULT_FILL_HEIGHT, FillFit, SetupFit, fit_column, fit_fill_height,
+};
 use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily};
-use manifold_water_liquid::fluid_role::{FluidRole, take_initial_fill};
+use manifold_core::scene_impulse::RigidImpulseTargets;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::exec::substeps::{SubstepClockOutput, SubstepInterval};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::transform::Transform;
+use manifold_nodes_physics::tick_sampled::{TickSampled, TickSampledRegistration};
+use manifold_physics::clock::TICK;
+use manifold_physics::tick_samples::TickSamples;
 use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
-use manifold_water_liquid::lattice::closed_faces;
 use manifold_water_liquid::clock::LiquidClock;
-use manifold_water_liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, SharedSolids, SharesSolids, takes_reaction};
-use {manifold_water_liquid::fields, manifold_water_liquid::fields::LiquidFields, manifold_water_liquid::fields::LiquidImpulses};
+use manifold_water_liquid::coupling::{
+    DomainWalls, LiquidRigidOwner, PendingTick, SharedSolids, SharesSolids, takes_reaction,
+};
+use manifold_water_liquid::fluid_role::{FluidRole, take_initial_fill};
+use manifold_water_liquid::gizmos::SetupReport;
 use manifold_water_liquid::lattice::LiquidLattice;
-use manifold_physics::tick_samples::TickSamples;
-use crate::matter::coupling::{ReactionScale, decode, live_body_limit};
-use crate::matter::{MAX_SUBSTEPS, REACTION_WORDS, WATER_DENSITY, block_sort_box, free_fall_speed, lattice_blocks, lattice_nodes, momentum_unit, substeps_for_interval, substeps_per_tick, water_lambda, wave_speed};
-use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_core::scene_impulse::RigidImpulseTargets;
+use manifold_water_liquid::lattice::closed_faces;
+use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
+use manifold_water_rigid::node::{PhysicsNode, PhysicsNodeRegistration};
 use manifold_water_rigid::physics::{RigidSceneInputs, RigidSceneObservation};
 use manifold_water_rigid::physics_events::ResolvedNodeImpulse;
-use manifold_water_rigid::node::{PhysicsNode, PhysicsNodeRegistration};
-use manifold_nodes_physics::tick_sampled::{TickSampled, TickSampledRegistration};
-use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::exec::substeps::{SubstepClockOutput, SubstepInterval};
-use manifold_node_engine::scene::transform::Transform;
+use {
+    manifold_water_liquid::fields, manifold_water_liquid::fields::LiquidFields,
+    manifold_water_liquid::fields::LiquidImpulses,
+};
 
 /// Everything whose change restarts the simulation.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -72,7 +83,14 @@ pub(crate) struct MatterGeometry {
 impl MatterGeometry {
     /// The scalar outputs fixed by the setup, by name.
     pub(crate) fn outputs(&self) -> [(&'static str, f32); 27] {
-        let MatterSetup { lattice, closed_faces, pool_cells, column, points_per_cell, seed } = self.setup;
+        let MatterSetup {
+            lattice,
+            closed_faces,
+            pool_cells,
+            column,
+            points_per_cell,
+            seed,
+        } = self.setup;
         let blocks = lattice_blocks(&lattice);
         let (centre, size, bin) = block_sort_box(&lattice);
         [
@@ -119,21 +137,37 @@ pub(crate) fn fill_region(
 ) -> Result<(u32, [[u32; 2]; 3], SetupFit), String> {
     // The lattice's f32 cell size, as every matter atom reads it.
     let dx = f64::from(layout.cell_size as f32);
-    let filled = fit_fill_height(layout, fill_height).map_err(|reason| format!("Matter: {reason}"))?;
-    let mut fit = SetupFit { fill_capped: matches!(filled, FillFit::Capped(_)), column: ColumnOutcome::Fits, pool_full: false };
+    let filled =
+        fit_fill_height(layout, fill_height).map_err(|reason| format!("Matter: {reason}"))?;
+    let mut fit = SetupFit {
+        fill_capped: matches!(filled, FillFit::Capped(_)),
+        column: ColumnOutcome::Fits,
+        pool_full: false,
+    };
     let fill_height = filled.height();
     let pool_cells = ((f64::from(fill_height) / dx).round() as u32).min(layout.cells[1]);
     let mut column = [[0u32; 2]; 3];
     if let Some(volume) = initial_fill {
-        if volume.billboard || volume.rot_euler.iter().any(|v| !v.is_finite() || v.abs() > 1e-6) {
+        if volume.billboard
+            || volume
+                .rot_euler
+                .iter()
+                .any(|v| !v.is_finite() || v.abs() > 1e-6)
+        {
             return Err("Matter: the Initial Fill must be an axis-aligned box; rotation and billboarding are not supported".into());
         }
-        let (edges, outcome) = fit_column(layout, volume.pos, volume.scale).map_err(|reason| format!("Matter: {reason}"))?;
+        let (edges, outcome) = fit_column(layout, volume.pos, volume.scale)
+            .map_err(|reason| format!("Matter: {reason}"))?;
         fit.column = outcome;
         if let Some((lo, hi)) = edges {
             for (d, range) in column.iter_mut().enumerate() {
                 // The lattice's f32 edges, as every matter atom reads them.
-                let cell = |x: f64| {(((f64::from(x as f32) - f64::from(layout.min[d])) / dx).round().max(0.0) as u32).min(layout.cells[d])};
+                let cell = |x: f64| {
+                    (((f64::from(x as f32) - f64::from(layout.min[d])) / dx)
+                        .round()
+                        .max(0.0) as u32)
+                        .min(layout.cells[d])
+                };
                 *range = [cell(lo[d]), cell(hi[d])];
             }
         }
@@ -151,14 +185,22 @@ pub(crate) fn matter_geometry(
     initial_fill: Option<Transform>,
 ) -> Result<MatterGeometry, String> {
     let resolution = read("resolution", 64.0).round().max(0.0) as u32;
-    let layout = domain_layout(domain.map(|domain| manifold_water_liquid::world_pose::world_domain_box(domain).into()), read("domain_size", 4.0), resolution)?;
+    let layout = domain_layout(
+        domain.map(|domain| manifold_water_liquid::world_pose::world_domain_box(domain).into()),
+        read("domain_size", 4.0),
+        resolution,
+    )?;
     let lattice = LiquidLattice::from_layout(&layout);
     let budget = match params.get("grid_budget_mcells") {
         Some(ParamValue::Float(budget)) => *budget,
         _ => 8.0,
     };
     admit_lattice(&lattice, budget)?;
-    let (pool_cells, column, fit) = fill_region(&layout, read("fill_height", DEFAULT_FILL_HEIGHT), initial_fill)?;
+    let (pool_cells, column, fit) = fill_region(
+        &layout,
+        read("fill_height", DEFAULT_FILL_HEIGHT),
+        initial_fill,
+    )?;
     let points_per_cell = match params.get("points_per_cell") {
         Some(ParamValue::Enum(1)) => 27,
         _ => 8,
@@ -361,7 +403,10 @@ impl MatterInterval {
     }
 
     fn reaction_scale(&self, previous: ReactionScale) -> ReactionScale {
-        ReactionScale { unit: self.scalars[1].1, ..previous }
+        ReactionScale {
+            unit: self.scalars[1].1,
+            ..previous
+        }
     }
 }
 
@@ -377,18 +422,27 @@ fn schedule_intervals(
     let mut total = 0u32;
     let mut capped = false;
     for ordinal in 0..frame.ticks {
-        let interval = frame.interval(u64::from(ordinal)).expect("accepted Matter interval");
+        let interval = frame
+            .interval(u64::from(ordinal))
+            .expect("accepted Matter interval");
         let requested = substeps_for_interval(interval.duration().0 as f32, nominal);
         let iterations = requested.min(MAX_SUBSTEPS);
         capped |= requested >= MAX_SUBSTEPS;
         schedule.push(MatterInterval {
             timing: SubstepInterval {
-                start: interval.start, end: interval.end,
-                ordinal, first_iteration: total, iterations, total_iterations: 0,
+                start: interval.start,
+                end: interval.end,
+                ordinal,
+                first_iteration: total,
+                iterations,
+                total_iterations: 0,
             },
             scalars: [
                 ("substeps_per_tick", iterations as f32),
-                ("momentum_unit", momentum_unit(cell_size, interval.duration().0 / f64::from(iterations))),
+                (
+                    "momentum_unit",
+                    momentum_unit(cell_size, interval.duration().0 / f64::from(iterations)),
+                ),
             ],
         });
         total = total.saturating_add(iterations);
@@ -412,7 +466,8 @@ fn reaction_words(buffer: Option<&GpuBuffer>) -> Option<&[i32]> {
 /// refused by name before anything downstream sizes or dispatches over it.
 pub(crate) fn admit_lattice(lattice: &LiquidLattice, budget_mcells: f32) -> Result<(), String> {
     let nodes = lattice_nodes(lattice.nodes()) as f64;
-    if !budget_mcells.is_finite() || budget_mcells <= 0.0 || nodes > f64::from(budget_mcells) * 1e6 {
+    if !budget_mcells.is_finite() || budget_mcells <= 0.0 || nodes > f64::from(budget_mcells) * 1e6
+    {
         return Err(format!(
             "Matter lattice needs {:.3} million nodes; Grid Budget is {budget_mcells:.3} million. Increase Grid Budget or lower Resolution. GPU time grows with node count.",
             nodes / 1e6
@@ -424,24 +479,72 @@ pub(crate) fn admit_lattice(lattice: &LiquidLattice, budget_mcells: f32) -> Resu
 impl Coupling {
     fn reset(&mut self) {
         let (mode, epochs) = (self.mode, self.epochs);
-        *self = Self { mode, epochs, ..Self::default() };
+        *self = Self {
+            mode,
+            epochs,
+            ..Self::default()
+        };
     }
 }
 
 /// Every scalar output, in the order [`MatterDomain::compute`] fills them.
 const OUTPUTS: [&str; 55] = [
-    "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y",
-    "nodes_z", "closed_faces", "gravity_x", "gravity", "gravity_z", "pool_cells", "column_x0",
-    "column_x1", "column_y0", "column_y1", "column_z0", "column_z1", "points_per_cell",
-    "fill_seed", "ticks", "substeps_per_tick", "epoch", "simulation_time", "display_time",
-    "dropped_seconds", "lambda", "cohesion", "liveliness", "density", "limited_by_substeps",
-    "blocks_x", "blocks_y", "blocks_z", "block_center_x", "block_center_y", "block_center_z",
-    "block_size_x", "block_size_y", "block_size_z", "block_cell_size", "momentum_unit",
-    "body_count", "body_rows", "first_tick", "dynamic_count", "field_nodes_x", "field_nodes_y",
-    "field_nodes_z", "field_spacing", "force_lattices", "impulse_tick",
+    "lattice_min_x",
+    "lattice_min_y",
+    "lattice_min_z",
+    "cell_size",
+    "nodes_x",
+    "nodes_y",
+    "nodes_z",
+    "closed_faces",
+    "gravity_x",
+    "gravity",
+    "gravity_z",
+    "pool_cells",
+    "column_x0",
+    "column_x1",
+    "column_y0",
+    "column_y1",
+    "column_z0",
+    "column_z1",
+    "points_per_cell",
+    "fill_seed",
+    "ticks",
+    "substeps_per_tick",
+    "epoch",
+    "simulation_time",
+    "display_time",
+    "dropped_seconds",
+    "lambda",
+    "cohesion",
+    "liveliness",
+    "density",
+    "limited_by_substeps",
+    "blocks_x",
+    "blocks_y",
+    "blocks_z",
+    "block_center_x",
+    "block_center_y",
+    "block_center_z",
+    "block_size_x",
+    "block_size_y",
+    "block_size_z",
+    "block_cell_size",
+    "momentum_unit",
+    "body_count",
+    "body_rows",
+    "first_tick",
+    "dynamic_count",
+    "field_nodes_x",
+    "field_nodes_y",
+    "field_nodes_z",
+    "field_spacing",
+    "force_lattices",
+    "impulse_tick",
     "interval_duration",
     "target_time",
-    "step_cap_hit"];
+    "step_cap_hit",
+];
 const TICKS: usize = 20;
 const EPOCH: usize = 22;
 const IMPULSE_TICK: usize = 51;
@@ -451,7 +554,10 @@ const _: () = assert!(matches!(OUTPUTS[IMPULSE_TICK].as_bytes(), b"impulse_tick"
 
 impl Primitive for MatterDomain {
     fn reconfigure(&mut self, params: &manifold_node_engine::exec::effect_node::ParamValues) {
-        self.role_ports.configure(<Self as manifold_node_engine::primitive::PrimitiveSpec>::INPUTS, params);
+        self.role_ports.configure(
+            <Self as manifold_node_engine::primitive::PrimitiveSpec>::INPUTS,
+            params,
+        );
     }
 
     fn live_inputs(&self) -> Option<&[manifold_node_engine::ports::NodeInput]> {
@@ -459,12 +565,17 @@ impl Primitive for MatterDomain {
     }
 
     /// A liquid follows the Physics World: its gravity and its clock.
-    fn world_control_inputs(&self) -> &'static [manifold_core::scene_world_controls::WorldControlInput] {
+    fn world_control_inputs(
+        &self,
+    ) -> &'static [manifold_core::scene_world_controls::WorldControlInput] {
         &manifold_core::scene_world_controls::WORLD_INPUTS
     }
 
     fn provides_array_output(&self, port: &str) -> bool {
-        matches!(port, "bodies" | "shapes" | "atlas" | "reaction" | "forces" | "impulses")
+        matches!(
+            port,
+            "bodies" | "shapes" | "atlas" | "reaction" | "forces" | "impulses"
+        )
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
@@ -484,7 +595,11 @@ impl Primitive for MatterDomain {
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         // Provided storage: a one-record hint, grown at run time.
-        matches!(port_name, "bodies" | "shapes" | "atlas" | "reaction" | "forces" | "impulses").then_some(1)
+        matches!(
+            port_name,
+            "bodies" | "shapes" | "atlas" | "reaction" | "forces" | "impulses"
+        )
+        .then_some(1)
     }
 
     fn warmup_pending(&self) -> bool {
@@ -492,17 +607,23 @@ impl Primitive for MatterDomain {
     }
 
     fn substep_clock_interval(&self, iteration: u32) -> Option<SubstepClockOutput<'_>> {
-        let record = self.schedule.iter().find(|record| record.contains(iteration))?;
+        let record = self
+            .schedule
+            .iter()
+            .find(|record| record.contains(iteration))?;
         Some(SubstepClockOutput {
-            duration_port: "interval_duration", timing: record.timing, scalars: &record.scalars,
+            duration_port: "interval_duration",
+            timing: record.timing,
+            scalars: &record.scalars,
         })
     }
 
     /// Coupled frames sync at each later tick's first substep.
     fn substep_host_sync(&self, iteration: u32) -> bool {
-        self.coupled.exchange.is_some() && self.schedule.iter().any(|record| {
-            record.timing.ordinal > 0 && record.timing.first_iteration == iteration
-        })
+        self.coupled.exchange.is_some()
+            && self.schedule.iter().any(|record| {
+                record.timing.ordinal > 0 && record.timing.first_iteration == iteration
+            })
     }
 
     /// Section 5 between two ticks of one frame: settle the tick the
@@ -513,8 +634,13 @@ impl Primitive for MatterDomain {
         iteration: u32,
         _gpu: Option<&mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder<'_>>,
     ) -> Result<(), String> {
-        let Some(exchange) = self.coupled.exchange else { return Ok(()) };
-        let record = *self.schedule.iter().find(|record| record.contains(iteration))
+        let Some(exchange) = self.coupled.exchange else {
+            return Ok(());
+        };
+        let record = *self
+            .schedule
+            .iter()
+            .find(|record| record.contains(iteration))
             .ok_or("Matter coupling: the numerical iteration has no accepted interval")?;
         let result = self.exchange_tick(record, exchange);
         if let Err(error) = &result {
@@ -532,7 +658,8 @@ impl Primitive for MatterDomain {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        self.clock.set_live_load(manifold_water_rigid::physics::live_load(ctx.sim_step));
+        self.clock
+            .set_live_load(manifold_water_rigid::physics::live_load(ctx.sim_step));
         self.clock.set_played_target(ctx.sim_step.played_target);
         self.coupled.step = ctx.sim_step;
         if let Some(owner) = self.coupled.owner.as_mut() {
@@ -545,13 +672,22 @@ impl Primitive for MatterDomain {
         // A physics sample reads the force field and the roles at a tick's
         // start; it never advances time.
         if ctx.sim_step.authored_sample_only {
-            self.clock.observe_speed(ctx.played(), ctx.scalar_or_param("speed", 1.0));
+            self.clock
+                .observe_speed(ctx.played(), ctx.scalar_or_param("speed", 1.0));
             match felt_field(ctx, "Matter") {
-                Ok(field) => self.fields.observe_sample(&self.clock, ctx.played(), field.as_ref()),
+                Ok(field) => self
+                    .fields
+                    .observe_sample(&self.clock, ctx.played(), field.as_ref()),
                 Err(error) => ctx.error(error),
             }
-            self.bodies.observe_sample(&self.clock, ctx.played(), (!role_pending).then_some(&roles[..]));
-            self.coupled.scenes.observe_staged(&self.clock, ctx.played());
+            self.bodies.observe_sample(
+                &self.clock,
+                ctx.played(),
+                (!role_pending).then_some(&roles[..]),
+            );
+            self.coupled
+                .scenes
+                .observe_staged(&self.clock, ctx.played());
             self.role_ports.put_back(roles);
             return;
         }
@@ -573,7 +709,11 @@ impl Primitive for MatterDomain {
         // so the outputs are declared pending.
         self.coupled.exchange = None;
         self.schedule.clear();
-        let computed = if self.role_pending { Ok(None) } else { self.compute(ctx, &roles, fill) };
+        let computed = if self.role_pending {
+            Ok(None)
+        } else {
+            self.compute(ctx, &roles, fill)
+        };
         self.role_ports.put_back(roles);
         let held = || {
             let mut held = self.published.unwrap_or([0.0; OUTPUTS.len()]);
@@ -608,7 +748,11 @@ impl Primitive for MatterDomain {
             ctx.outputs.set_scalar(name, ParamValue::Float(value));
         }
         self.upload_bodies(ctx, fresh && self.rows_fresh, values[TICKS] > 0.0);
-        let uploaded = match ctx.gpu.as_deref_mut().map(|gpu| self.fields.upload(gpu, ctx.sim_step.offline())) {
+        let uploaded = match ctx
+            .gpu
+            .as_deref_mut()
+            .map(|gpu| self.fields.upload(gpu, ctx.sim_step.offline()))
+        {
             Some(Ok(())) => true,
             Some(Err(error)) => {
                 ctx.error(error);
@@ -632,7 +776,6 @@ impl Primitive for MatterDomain {
         self.coupled.reset();
         self.clock.restart();
     }
-
 }
 
 impl SharesSolids for MatterDomain {
@@ -654,26 +797,46 @@ impl PhysicsNode for MatterDomain {
             self.role_pending,
             epoch,
             &self.setup_report,
-            self.coupled.owner.as_ref().map_or_else(|| self.observed.uncoupled(), LiquidRigidOwner::uncoupled),
+            self.coupled
+                .owner
+                .as_ref()
+                .map_or_else(|| self.observed.uncoupled(), LiquidRigidOwner::uncoupled),
         ))
     }
 
     /// The pool and the initial column as the fill seeds them (whole
     /// cells), then bodies and forces.
     fn write_physics_gizmos(&self, out: &mut Vec<PhysicsGizmo>) {
-        let (Some(layout), Some(setup)) = (self.layout, self.setup) else { return };
+        let (Some(layout), Some(setup)) = (self.layout, self.setup) else {
+            return;
+        };
         // The lattice's f32 cell size, as `fill_region` counts cells.
         let dx = layout.cell_size as f32;
         let max: [f32; 3] = std::array::from_fn(|i| layout.min[i] + layout.size[i]);
         if setup.pool_cells > 0 {
             let top = layout.min[1] + setup.pool_cells as f32 * dx;
-            out.push(PhysicsGizmo::aabb(PhysicsGizmoFamily::Fill, layout.min, [max[0], top, max[2]]));
+            out.push(PhysicsGizmo::aabb(
+                PhysicsGizmoFamily::Fill,
+                layout.min,
+                [max[0], top, max[2]],
+            ));
         }
         if setup.column.iter().all(|[lo, hi]| hi > lo) {
-            let corner = |end: usize| std::array::from_fn(|i| layout.min[i] + setup.column[i][end] as f32 * dx);
-            out.push(PhysicsGizmo::aabb(PhysicsGizmoFamily::Fill, corner(0), corner(1)));
+            let corner = |end: usize| {
+                std::array::from_fn(|i| layout.min[i] + setup.column[i][end] as f32 * dx)
+            };
+            out.push(PhysicsGizmo::aabb(
+                PhysicsGizmoFamily::Fill,
+                corner(0),
+                corner(1),
+            ));
         }
-        manifold_water_liquid::gizmos::write_liquid_gizmos(&layout, &self.bodies, self.acceleration.as_ref(), out);
+        manifold_water_liquid::gizmos::write_liquid_gizmos(
+            &layout,
+            &self.bodies,
+            self.acceleration.as_ref(),
+            out,
+        );
     }
 
     fn set_coupled_physics(&mut self, enabled: bool) {
@@ -694,7 +857,9 @@ impl PhysicsNode for MatterDomain {
         // the sample's Speed; `run` records it once Speed names the tick. A
         // pending one records nothing.
         if authored_sample_only {
-            let scene = observation.filter(|_| error.is_none()).map(|observation| &observation.inputs);
+            let scene = observation
+                .filter(|_| error.is_none())
+                .map(|observation| &observation.inputs);
             self.coupled.scenes.stage(scene);
             return;
         }
@@ -710,7 +875,12 @@ impl PhysicsNode for MatterDomain {
 
     fn coupled_rigid_frame(&self) -> Option<&CoupledRigidFrame> {
         let coupled = &self.coupled;
-        if !coupled.mode || self.role_pending || coupled.failed || coupled.observation.is_none() || coupled.error.is_some() {
+        if !coupled.mode
+            || self.role_pending
+            || coupled.failed
+            || coupled.observation.is_none()
+            || coupled.error.is_some()
+        {
             return None;
         }
         coupled.owner.as_ref().map(LiquidRigidOwner::frame)
@@ -745,7 +915,10 @@ impl PhysicsNode for MatterDomain {
             return Err("Matter impulses: the liquid is still preparing; fire waits for it".into());
         }
         let mut stamp = self.impulses.stamp(played, sequence)?;
-        stamp.time = manifold_core::Seconds(self.clock.simulation_at(played, manifold_water_rigid::physics::live_load(step)));
+        stamp.time = manifold_core::Seconds(
+            self.clock
+                .simulation_at(played, manifold_water_rigid::physics::live_load(step)),
+        );
         Ok(stamp)
     }
 
@@ -754,25 +927,36 @@ impl PhysicsNode for MatterDomain {
         stamp: manifold_physics::input::EventStamp,
         impulse: ResolvedNodeImpulse,
     ) -> Result<manifold_physics::TickStamp, String> {
-        self.impulses.enqueue(stamp, impulse, self.coupled.owner.as_mut())
+        self.impulses
+            .enqueue(stamp, impulse, self.coupled.owner.as_mut())
     }
 
     fn drain_physics_impulses(
         &mut self,
         consume: &mut dyn FnMut(manifold_physics::input::AppliedEvent<ResolvedNodeImpulse>),
     ) {
-        self.impulses.drain_applied(consume, self.coupled.owner.as_mut());
+        self.impulses
+            .drain_applied(consume, self.coupled.owner.as_mut());
     }
 
-    fn drain_discarded_impulses(&mut self, consume: &mut dyn FnMut(manifold_physics::input::EventStamp)) -> u64 {
-        self.impulses.drain_discarded(consume, self.coupled.owner.as_mut())
+    fn drain_discarded_impulses(
+        &mut self,
+        consume: &mut dyn FnMut(manifold_physics::input::EventStamp),
+    ) -> u64 {
+        self.impulses
+            .drain_discarded(consume, self.coupled.owner.as_mut())
     }
 }
 
 inventory::submit! { PhysicsNodeRegistration::new::<MatterDomain>() }
 
 impl TickSampled for MatterDomain {
-    fn request_physics_samples(&mut self, from: manifold_core::PlayedTime, until: manifold_core::PlayedTime, out: &mut Vec<manifold_core::PlayedTime>) {
+    fn request_physics_samples(
+        &mut self,
+        from: manifold_core::PlayedTime,
+        until: manifold_core::PlayedTime,
+        out: &mut Vec<manifold_core::PlayedTime>,
+    ) {
         self.fields.request_samples(&self.clock, from, until, out);
         self.bodies.request_samples(&self.clock, from, until, out);
         if self.coupled.mode {
@@ -786,8 +970,15 @@ inventory::submit! { TickSampledRegistration::new::<MatterDomain>() }
 impl MatterDomain {
     /// Keep the reaction and the provided body, shape and atlas buffers
     /// current.
-    fn upload_bodies(&mut self, ctx: &mut EffectNodeContext<'_, '_>, rows_fresh: bool, ticks: bool) {
-        let Some(gpu) = ctx.gpu.as_deref_mut() else { return };
+    fn upload_bodies(
+        &mut self,
+        ctx: &mut EffectNodeContext<'_, '_>,
+        rows_fresh: bool,
+        ticks: bool,
+    ) {
+        let Some(gpu) = ctx.gpu.as_deref_mut() else {
+            return;
+        };
         // Sized for every body a liquid holds, so a pending reaction never
         // moves when roles come and go.
         let reaction = self.reaction.get_or_insert_with(|| {
@@ -802,7 +993,8 @@ impl MatterDomain {
         if ticks && self.coupled.owner.is_some() {
             gpu.native_enc.clear_buffer(reaction);
         }
-        self.body_buffers.upload(gpu, &self.bodies, rows_fresh, "node.matter_domain.bodies");
+        self.body_buffers
+            .upload(gpu, &self.bodies, rows_fresh, "node.matter_domain.bodies");
     }
 
     /// This frame's outputs, or None while a collider's distance lattice is
@@ -813,10 +1005,17 @@ impl MatterDomain {
         roles: &[Option<FluidRole>],
         fill: Result<Option<Transform>, String>,
     ) -> Result<Option<[f32; OUTPUTS.len()]>, String> {
-        let geometry = fill.map_err(|reason| format!("Matter: {reason}")).and_then(|column| {
-            matter_geometry(|name, default| ctx.scalar_or_param(name, default), ctx.params, ctx.inputs.transform("domain"), column)
+        let geometry = fill
+            .map_err(|reason| format!("Matter: {reason}"))
+            .and_then(|column| {
+                matter_geometry(
+                    |name, default| ctx.scalar_or_param(name, default),
+                    ctx.params,
+                    ctx.inputs.transform("domain"),
+                    column,
+                )
                 .map(|geometry| (geometry, column))
-        });
+            });
         let (geometry, column) = match geometry {
             Ok(found) => found,
             Err(reason) => {
@@ -825,27 +1024,61 @@ impl MatterDomain {
             }
         };
         let MatterGeometry { layout, setup, fit } = geometry;
-        self.setup_report.accept(fit, column.map(|column| (column.pos, column.scale)));
+        self.setup_report
+            .accept(fit, column.map(|column| (column.pos, column.scale)));
         let lattice = setup.lattice;
         let speed = ctx.scalar_or_param("speed", 1.0);
-        let live = ["gravity_x", "gravity", "gravity_z", "stiffness", "cohesion", "liveliness"]
-            .map(|name| ctx.scalar_or_param(name, 0.0));
-        if !speed.is_finite() || !(0.0..=4.0).contains(&speed) || live.iter().any(|v| !v.is_finite()) {
-            return Err("Matter: Speed must be between 0 and 4, and gravity and the dials must be finite".into());
+        let live = [
+            "gravity_x",
+            "gravity",
+            "gravity_z",
+            "stiffness",
+            "cohesion",
+            "liveliness",
+        ]
+        .map(|name| ctx.scalar_or_param(name, 0.0));
+        if !speed.is_finite()
+            || !(0.0..=4.0).contains(&speed)
+            || live.iter().any(|v| !v.is_finite())
+        {
+            return Err(
+                "Matter: Speed must be between 0 and 4, and gravity and the dials must be finite"
+                    .into(),
+            );
         }
         let offline = ctx.sim_step.offline();
         if let Some(error) = self.coupled.host_error.take() {
             return Err(error);
         }
-        let clock = if self.coupled.mode { ctx.gpu.as_deref().and_then(|gpu| gpu.device.frame_clock()) } else { None };
+        let clock = if self.coupled.mode {
+            ctx.gpu.as_deref().and_then(|gpu| gpu.device.frame_clock())
+        } else {
+            None
+        };
         self.coupled.walls = DomainWalls::of(&layout, closed_faces(ctx.params));
         self.coupled.capacity = MAX_LIQUID_BODIES;
         if self.coupled.mode && !self.observe_rigid(ctx.played(), speed)? {
             return Ok(None);
         }
-        let coupled_geometries = self.coupled.owner.as_ref().map_or_else(|| self.observed.geometries(), LiquidRigidOwner::geometries);
-        let coupled_rows = self.coupled.owner.as_ref().map_or_else(|| self.observed.rows(), LiquidRigidOwner::rows);
-        if self.bodies.prepare(roles, coupled_geometries, coupled_rows, self.coupled.walls.bounds(), lattice.cell_size(), offline)? == BodiesStatus::Pending {
+        let coupled_geometries = self
+            .coupled
+            .owner
+            .as_ref()
+            .map_or_else(|| self.observed.geometries(), LiquidRigidOwner::geometries);
+        let coupled_rows = self
+            .coupled
+            .owner
+            .as_ref()
+            .map_or_else(|| self.observed.rows(), LiquidRigidOwner::rows);
+        if self.bodies.prepare(
+            roles,
+            coupled_geometries,
+            coupled_rows,
+            self.coupled.walls.bounds(),
+            lattice.cell_size(),
+            offline,
+        )? == BodiesStatus::Pending
+        {
             return Ok(None);
         }
         let setup_changed = self.setup != Some(setup);
@@ -860,11 +1093,14 @@ impl MatterDomain {
             // This frame's clear is encoded after this read.
             let settled = owner.settle_ready(
                 self.coupled.scenes.endpoint(owner.completed() + 1),
-                |stamp| clock.as_ref().is_none_or(|clock| {
-                    clock.is_complete(stamp) || (clock.wait(stamp) && clock.is_complete(stamp))
-                }),
+                |stamp| {
+                    clock.as_ref().is_none_or(|clock| {
+                        clock.is_complete(stamp) || (clock.wait(stamp) && clock.is_complete(stamp))
+                    })
+                },
                 |_, rows, impulses| {
-                    let scale = scale.ok_or("Matter coupling: the pending tick has no reaction scale")?;
+                    let scale =
+                        scale.ok_or("Matter coupling: the pending tick has no reaction scale")?;
                     decode(scale, rows, reaction_words(reaction), impulses)
                 },
             );
@@ -885,7 +1121,15 @@ impl MatterDomain {
             && owner.wants_rebind()
         {
             owner.rebind()?;
-            if self.bodies.prepare(roles, owner.geometries(), owner.rows(), self.coupled.walls.bounds(), lattice.cell_size(), offline)? == BodiesStatus::Pending {
+            if self.bodies.prepare(
+                roles,
+                owner.geometries(),
+                owner.rows(),
+                self.coupled.walls.bounds(),
+                lattice.cell_size(),
+                offline,
+            )? == BodiesStatus::Pending
+            {
                 return Ok(None);
             }
         }
@@ -910,7 +1154,11 @@ impl MatterDomain {
             ctx.sim_metrics.merge(&owner.rigid_mut().take_metrics());
         }
         if let Some(owner) = &self.coupled.owner {
-            let scene = self.coupled.observation.as_ref().map(|observation| &observation.inputs);
+            let scene = self
+                .coupled
+                .observation
+                .as_ref()
+                .map(|observation| &observation.inputs);
             self.coupled.scenes.settle(&self.clock, &frame, scene);
             self.coupled.scenes.prune_before(owner.completed());
         }
@@ -920,23 +1168,40 @@ impl MatterDomain {
         // A restart runs no tick yet still publishes the first tick's rows: the
         // fill seeds around the colliders' starting poses. Otherwise a frame
         // without ticks keeps the last rows as the bodies' poses.
-        let row_ticks = if frame.restarted { frame.ticks.max(1) } else { frame.ticks };
+        let row_ticks = if frame.restarted {
+            frame.ticks.max(1)
+        } else {
+            frame.ticks
+        };
         self.rows_fresh = row_ticks > 0;
-        let coupled_rows = self.coupled.owner.as_ref().map_or_else(|| self.observed.rows(), LiquidRigidOwner::rows);
+        let coupled_rows = self
+            .coupled
+            .owner
+            .as_ref()
+            .map_or_else(|| self.observed.rows(), LiquidRigidOwner::rows);
         let rows = if row_ticks > 0 {
-            let rows = self.bodies.rows(first_tick, frame.ticks, coupled_rows)?.len() as f32;
+            let rows = self
+                .bodies
+                .rows(first_tick, frame.ticks, coupled_rows)?
+                .len() as f32;
             self.body_rows = rows;
             rows
         } else {
             self.body_rows
         };
-        let dynamic_count = coupled_rows.iter().filter(|row| takes_reaction(row)).count();
+        let dynamic_count = coupled_rows
+            .iter()
+            .filter(|row| takes_reaction(row))
+            .count();
         // Another water's bodies move on through each later tick of this frame.
         if row_ticks > 0 && self.coupled.owner.is_none() && !self.observed.rows().is_empty() {
             let mut seconds = 0.0;
             for tick in 1..frame.ticks as usize {
-                seconds += frame.interval(tick as u64 - 1).map_or(0.0, |interval| interval.duration().0 as f32);
-                self.bodies.set_coupled_rows(tick, self.observed.rows_after(seconds))?;
+                seconds += frame
+                    .interval(tick as u64 - 1)
+                    .map_or(0.0, |interval| interval.duration().0 as f32);
+                self.bodies
+                    .set_coupled_rows(tick, self.observed.rows_after(seconds))?;
             }
         }
         self.observed.used();
@@ -961,7 +1226,8 @@ impl MatterDomain {
             Some(owner) => live_body_limit(owner, lattice.cell_size(), wave),
             None => None,
         };
-        let nominal_substeps = substeps_per_tick(lattice.cell_size(), wave, v_est as f32, body_limit, None);
+        let nominal_substeps =
+            substeps_per_tick(lattice.cell_size(), wave, v_est as f32, body_limit, None);
         // A frame without ticks reports what one Sim Rate interval runs, so
         // the substep count and unit hold steady between ticks.
         let duration = if frame.ticks == 0 {
@@ -973,7 +1239,12 @@ impl MatterDomain {
         };
         let requested = substeps_for_interval(duration as f32, nominal_substeps);
         let substeps = requested.min(MAX_SUBSTEPS);
-        let schedule_capped = schedule_intervals(&mut self.schedule, &frame, nominal_substeps, lattice.cell_size());
+        let schedule_capped = schedule_intervals(
+            &mut self.schedule,
+            &frame,
+            nominal_substeps,
+            lattice.cell_size(),
+        );
         let lambda = water_lambda(longest, fitted);
         let unit = self.schedule.first().map_or_else(
             || momentum_unit(lattice.cell_size(), duration / f64::from(substeps)),
@@ -989,9 +1260,12 @@ impl MatterDomain {
                         owner.completed()
                     ));
                 }
-                let pending = PendingTick { tick: first_tick, stamp: clock.as_ref().map_or(0, FrameClock::stamp) ,
+                let pending = PendingTick {
+                    tick: first_tick,
+                    stamp: clock.as_ref().map_or(0, FrameClock::stamp),
                     interval: frame.interval(0).expect("pending interval"),
-                    offline: frame.offline};
+                    offline: frame.offline,
+                };
                 let scale = ReactionScale {
                     unit,
                     cell_size: lattice.cell_size(),
@@ -1009,9 +1283,13 @@ impl MatterDomain {
             display_time = owner.completed_time().0;
         }
         self.coupled.transport = Some(ctx.played());
-        let field = self
-            .fields
-            .prepare(lattice.force_lattice(), self.acceleration.as_ref(), &self.clock, &frame, &self.impulses)?;
+        let field = self.fields.prepare(
+            lattice.force_lattice(),
+            self.acceleration.as_ref(),
+            &self.clock,
+            &frame,
+            &self.impulses,
+        )?;
 
         let per_frame = [
             ("gravity_x", ctx.scalar_or_param("gravity_x", 0.0)),
@@ -1025,18 +1303,29 @@ impl MatterDomain {
             ("target_time", frame.target_time as f32),
             (
                 "step_cap_hit",
-                if !offline && (schedule_capped || (frame.ticks == 0 && requested >= MAX_SUBSTEPS)) {
+                if !offline && (schedule_capped || (frame.ticks == 0 && requested >= MAX_SUBSTEPS))
+                {
                     1.0
                 } else {
                     0.0
-                }),
+                },
+            ),
             ("display_time", display_time as f32),
             ("dropped_seconds", frame.dropped_seconds as f32),
             ("lambda", lambda as f32),
-            ("cohesion", ctx.scalar_or_param("cohesion", 0.0).clamp(0.0, 1.0)),
-            ("liveliness", ctx.scalar_or_param("liveliness", 0.0).clamp(0.0, 1.0)),
+            (
+                "cohesion",
+                ctx.scalar_or_param("cohesion", 0.0).clamp(0.0, 1.0),
+            ),
+            (
+                "liveliness",
+                ctx.scalar_or_param("liveliness", 0.0).clamp(0.0, 1.0),
+            ),
             ("density", WATER_DENSITY),
-            ("limited_by_substeps", if limited { fitted as f32 } else { 0.0 }),
+            (
+                "limited_by_substeps",
+                if limited { fitted as f32 } else { 0.0 },
+            ),
             ("momentum_unit", unit),
             ("body_count", self.bodies.count() as f32),
             ("body_rows", rows),
@@ -1045,12 +1334,24 @@ impl MatterDomain {
         ];
         let mut values = [0.0; OUTPUTS.len()];
         let mut written = 0u64;
-        for (name, value) in geometry.outputs().into_iter().chain(per_frame).chain(field.outputs()) {
-            let slot = OUTPUTS.iter().position(|output| *output == name).expect("every output has a slot");
+        for (name, value) in geometry
+            .outputs()
+            .into_iter()
+            .chain(per_frame)
+            .chain(field.outputs())
+        {
+            let slot = OUTPUTS
+                .iter()
+                .position(|output| *output == name)
+                .expect("every output has a slot");
             values[slot] = value;
             written |= 1 << slot;
         }
-        debug_assert_eq!(written, (1 << OUTPUTS.len()) - 1, "every output written once");
+        debug_assert_eq!(
+            written,
+            (1 << OUTPUTS.len()) - 1,
+            "every output written once"
+        );
         Ok(Some(values))
     }
 
@@ -1058,12 +1359,30 @@ impl MatterDomain {
     /// the liquid's clock, and build a new rigid owner (restarting the pair)
     /// on its reset or a change of bodies. False while the world's inputs are
     /// still pending.
-    fn observe_rigid(&mut self, played: manifold_core::PlayedTime, speed: f32) -> Result<bool, String> {
-        let Coupling { observation, colliders, error, previous_reset, owner, owner_fresh, epochs, walls, capacity, step, .. } = &mut self.coupled;
+    fn observe_rigid(
+        &mut self,
+        played: manifold_core::PlayedTime,
+        speed: f32,
+    ) -> Result<bool, String> {
+        let Coupling {
+            observation,
+            colliders,
+            error,
+            previous_reset,
+            owner,
+            owner_fresh,
+            epochs,
+            walls,
+            capacity,
+            step,
+            ..
+        } = &mut self.coupled;
         if let Some(error) = error {
             return Err(error.clone());
         }
-        let Some(observation) = observation.as_ref() else { return Ok(false) };
+        let Some(observation) = observation.as_ref() else {
+            return Ok(false);
+        };
         if speed != observation.speed {
             return Err(format!(
                 "Matter coupling: liquid and rigid bodies require the same Speed and shared World control (liquid {speed}, rigid {})",
@@ -1071,15 +1390,24 @@ impl MatterDomain {
             ));
         }
         if (observation.transport.seconds() - played.seconds()).abs() > 1e-9 {
-            return Err("Matter coupling: rigid observation transport does not match liquid transport".into());
+            return Err(
+                "Matter coupling: rigid observation transport does not match liquid transport"
+                    .into(),
+            );
         }
-        CoupledRigidInputs { scene: &observation.inputs, colliders, density: f64::from(WATER_DENSITY) }
-            .validate()?;
+        CoupledRigidInputs {
+            scene: &observation.inputs,
+            colliders,
+            density: f64::from(WATER_DENSITY),
+        }
+        .validate()?;
         let reset_edge = previous_reset.is_some_and(|previous| previous != observation.reset);
         *previous_reset = Some(observation.reset);
         // A body that joined is admitted into the running world; only a
         // change it cannot take live starts a new epoch.
-        let changed = owner.as_ref().is_none_or(|owner| !owner.matches(&observation.inputs, *walls, &*colliders, *capacity));
+        let changed = owner.as_ref().is_none_or(|owner| {
+            !owner.matches(&observation.inputs, *walls, &*colliders, *capacity)
+        });
         let admitted = !reset_edge
             && changed
             && match owner.as_mut() {
@@ -1088,7 +1416,14 @@ impl MatterDomain {
             };
         if reset_edge || (changed && !admitted) {
             *epochs += 1;
-            let mut built = LiquidRigidOwner::new(&observation.inputs, *walls, &*colliders, *capacity, *epochs, owner.as_ref())?;
+            let mut built = LiquidRigidOwner::new(
+                &observation.inputs,
+                *walls,
+                &*colliders,
+                *capacity,
+                *epochs,
+                owner.as_ref(),
+            )?;
             built.set_step(*step);
             *owner = Some(built);
             *owner_fresh = true;
@@ -1102,16 +1437,35 @@ impl MatterDomain {
     fn exchange_tick(&mut self, record: MatterInterval, exchange: Exchange) -> Result<(), String> {
         let tick = record.timing.ordinal;
         let scale = record.reaction_scale(exchange.scale);
-        let owner = self.coupled.owner.as_mut().ok_or("Matter coupling: no coupled rigid world")?;
-        let reaction = self.reaction.as_ref().ok_or("Matter coupling: the reaction array is missing")?;
+        let owner = self
+            .coupled
+            .owner
+            .as_mut()
+            .ok_or("Matter coupling: no coupled rigid world")?;
+        let reaction = self
+            .reaction
+            .as_ref()
+            .ok_or("Matter coupling: the reaction array is missing")?;
         // A tick running this frame started by now, so the tick before it
         // has its end sampled.
         let end = self.coupled.scenes.endpoint(owner.completed() + 1);
-        owner.settle_ready(end, |_| true, |_, rows, impulses| {
-            decode(exchange.scale, rows, reaction_words(Some(reaction)), impulses)
-        })?;
+        owner.settle_ready(
+            end,
+            |_| true,
+            |_, rows, impulses| {
+                decode(
+                    exchange.scale,
+                    rows,
+                    reaction_words(Some(reaction)),
+                    impulses,
+                )
+            },
+        )?;
         let (offset, rows) = self.bodies.set_coupled_rows(tick as usize, owner.rows())?;
-        let bodies = self.body_buffers.bodies().ok_or("Matter coupling: the body rows are missing")?;
+        let bodies = self
+            .body_buffers
+            .bodies()
+            .ok_or("Matter coupling: the body rows are missing")?;
         let bytes: &[u8] = bytemuck::cast_slice(rows);
         if offset + bytes.len() as u64 > bodies.size {
             return Err("Matter coupling: the body rows outgrew their buffer".into());
@@ -1136,9 +1490,20 @@ impl MatterDomain {
     /// A restart the liquid's own clock found (its reset, a backward seek):
     /// the rigid world restarts with it, keeping its hulls.
     fn rebuild_owner(&mut self) -> Result<(), String> {
-        let observation = self.coupled.observation.as_ref().ok_or("Matter coupling: the rigid observation is missing")?;
+        let observation = self
+            .coupled
+            .observation
+            .as_ref()
+            .ok_or("Matter coupling: the rigid observation is missing")?;
         self.coupled.epochs += 1;
-        let mut owner = LiquidRigidOwner::new(&observation.inputs, self.coupled.walls, &self.coupled.colliders, self.coupled.capacity, self.coupled.epochs, self.coupled.owner.as_ref())?;
+        let mut owner = LiquidRigidOwner::new(
+            &observation.inputs,
+            self.coupled.walls,
+            &self.coupled.colliders,
+            self.coupled.capacity,
+            self.coupled.epochs,
+            self.coupled.owner.as_ref(),
+        )?;
         owner.set_step(self.coupled.step);
         self.coupled.owner = Some(owner);
         Ok(())
@@ -1159,14 +1524,31 @@ mod sim_rate_tests {
             clock.observe_speed(PlayedTime::from_played(TICK), 4.0);
             let mut schedule = Vec::new();
             let mut result = Vec::new();
-            for transport in if grouped { vec![2.0 * TICK] } else { vec![TICK, 2.0 * TICK] } {
-                let frame = clock.advance(PlayedTime::from_played(transport), TICK, 4.0, 0.0, false, true);
+            for transport in if grouped {
+                vec![2.0 * TICK]
+            } else {
+                vec![TICK, 2.0 * TICK]
+            } {
+                let frame = clock.advance(
+                    PlayedTime::from_played(transport),
+                    TICK,
+                    4.0,
+                    0.0,
+                    false,
+                    true,
+                );
                 schedule_intervals(&mut schedule, &frame, 100, 0.0625);
                 for record in &schedule {
-                    result.push((record.interval(), record.timing.iterations,
+                    result.push((
+                        record.interval(),
+                        record.timing.iterations,
                         crate::matter::substep_duration(
-                            record.timing.duration().0 as f32, record.timing.iterations,
-                        ).to_bits(), record.scalars[1].1.to_bits()));
+                            record.timing.duration().0 as f32,
+                            record.timing.iterations,
+                        )
+                        .to_bits(),
+                        record.scalars[1].1.to_bits(),
+                    ));
                 }
             }
             result
@@ -1184,27 +1566,58 @@ mod sim_rate_tests {
         let mut clock = SimulationClock::default();
         clock.advance(PlayedTime::from_played(0.0), TICK, 0.25, 0.0, false, true);
         clock.observe_speed(PlayedTime::from_played(TICK), 4.0);
-        let frame = clock.advance(PlayedTime::from_played(2.0 * TICK), TICK, 4.0, 0.0, false, true);
+        let frame = clock.advance(
+            PlayedTime::from_played(2.0 * TICK),
+            TICK,
+            4.0,
+            0.0,
+            false,
+            true,
+        );
         let mut domain = MatterDomain::new();
-        assert!(schedule_intervals(&mut domain.schedule, &frame, 100, 0.0625));
+        assert!(schedule_intervals(
+            &mut domain.schedule,
+            &frame,
+            100,
+            0.0625
+        ));
         let first = domain.schedule[0];
         let second = domain.schedule[1];
         assert_eq!(second.timing.first_iteration, first.timing.iterations);
         assert_eq!(first.timing.total_iterations, 153);
         assert_eq!(second.timing.total_iterations, 153);
         domain.coupled.exchange = Some(Exchange {
-            pending: PendingTick { tick: 7, interval: first.interval(), offline: true, stamp: 0 },
-            scale: ReactionScale { unit: first.scalars[1].1, cell_size: 0.0625, offset: 0 },
+            pending: PendingTick {
+                tick: 7,
+                interval: first.interval(),
+                offline: true,
+                stamp: 0,
+            },
+            scale: ReactionScale {
+                unit: first.scalars[1].1,
+                cell_size: 0.0625,
+                offset: 0,
+            },
         });
         for iteration in 0..153 {
             let expected = if iteration < 25 { first } else { second };
             let output = Primitive::substep_clock_interval(&domain, iteration).unwrap();
             assert_eq!(output.timing, expected.timing);
             assert_eq!(output.scalars, expected.scalars.as_slice());
-            assert_eq!(Primitive::substep_host_sync(&domain, iteration), iteration == 25);
+            assert_eq!(
+                Primitive::substep_host_sync(&domain, iteration),
+                iteration == 25
+            );
         }
         assert!(Primitive::substep_clock_interval(&domain, 153).is_none());
-        let held = clock.advance(PlayedTime::from_played(2.0 * TICK), TICK, 4.0, 0.0, false, true);
+        let held = clock.advance(
+            PlayedTime::from_played(2.0 * TICK),
+            TICK,
+            4.0,
+            0.0,
+            false,
+            true,
+        );
         let capacity = domain.schedule.capacity();
         schedule_intervals(&mut domain.schedule, &held, 100, 0.0625);
         assert!(domain.schedule.is_empty());
@@ -1218,31 +1631,66 @@ mod sim_rate_tests {
     #[test]
     fn matter_interval_reaction_scale_keeps_previous_decode_and_next_unit() {
         use manifold_water_rigid::physics::RigidBody;
-        let previous = ReactionScale { unit: 64.0, cell_size: 0.0625, offset: 3 };
+        let previous = ReactionScale {
+            unit: 64.0,
+            cell_size: 0.0625,
+            offset: 3,
+        };
         let record = MatterInterval {
             timing: SubstepInterval {
-                start: Seconds(TICK), end: Seconds(2.0 * TICK),
-                ordinal: 1, first_iteration: 25, iterations: 128, total_iterations: 153,
+                start: Seconds(TICK),
+                end: Seconds(2.0 * TICK),
+                ordinal: 1,
+                first_iteration: 25,
+                iterations: 128,
+                total_iterations: 153,
             },
             scalars: [("substeps_per_tick", 128.0), ("momentum_unit", 256.0)],
         };
         let exchange = Exchange {
-            pending: PendingTick { tick: 7, interval: record.interval(), offline: true, stamp: 0 },
+            pending: PendingTick {
+                tick: 7,
+                interval: record.interval(),
+                offline: true,
+                stamp: 0,
+            },
             scale: previous,
         };
         let next = record.reaction_scale(exchange.scale);
-        assert_eq!(exchange.scale, previous, "completed reaction uses its original unit");
-        assert_eq!(next, ReactionScale { unit: 256.0, ..previous });
+        assert_eq!(
+            exchange.scale, previous,
+            "completed reaction uses its original unit"
+        );
+        assert_eq!(
+            next,
+            ReactionScale {
+                unit: 256.0,
+                ..previous
+            }
+        );
 
-        let mut scene = RigidSceneInputs { gravity: [0.0; 3], ..RigidSceneInputs::default() };
+        let mut scene = RigidSceneInputs {
+            gravity: [0.0; 3],
+            ..RigidSceneInputs::default()
+        };
         scene.bodies[0] = Some(RigidBody {
-            transform: Transform { pos: [0.0, 1.0, 0.0], scale: [0.4; 3], ..Transform::default() },
+            transform: Transform {
+                pos: [0.0, 1.0, 0.0],
+                scale: [0.4; 3],
+                ..Transform::default()
+            },
             mass: 50.0,
             ..RigidBody::default()
         });
         let mut owner = LiquidRigidOwner::new(
-            &scene, DomainWalls::default(), &RigidImpulseTargets::body(0).unwrap(), MAX_LIQUID_BODIES, 3, None,
-        ).unwrap();
+            &scene,
+            DomainWalls::default(),
+            &RigidImpulseTargets::body(0).unwrap(),
+            MAX_LIQUID_BODIES,
+            3,
+            None,
+        )
+        .unwrap();
         let mut words = [0i32; 4 * REACTION_WORDS as usize];
         for (tick, scale) in [exchange.scale, next].into_iter().enumerate() {
             // The same +1 m/s reaction is encoded with different units. Decoding
@@ -1250,26 +1698,41 @@ mod sim_rate_tests {
             words[previous.offset * REACTION_WORDS as usize] = (16_777_216.0 / scale.unit) as i32;
             owner.set_pending(PendingTick {
                 tick: tick as u64,
-                interval: StepInterval::new(Seconds(tick as f64 * TICK), Seconds((tick + 1) as f64 * TICK)),
-                offline: true, stamp: 0,
+                interval: StepInterval::new(
+                    Seconds(tick as f64 * TICK),
+                    Seconds((tick + 1) as f64 * TICK),
+                ),
+                offline: true,
+                stamp: 0,
             });
-            owner.settle_ready(Some(&scene), |_| true, |_, rows, impulses| {
-                decode(scale, rows, Some(&words), impulses)
-            }).unwrap();
+            owner
+                .settle_ready(
+                    Some(&scene),
+                    |_| true,
+                    |_, rows, impulses| decode(scale, rows, Some(&words), impulses),
+                )
+                .unwrap();
             assert!((owner.rows()[0].linear_velocity[0] - (tick + 1) as f32).abs() < 1e-4);
         }
     }
 
     #[test]
     fn sim_rate_matter_keeps_stability_subdivisions() {
+        use crate::matter::{substep_duration, substeps_for_interval};
         use manifold_physics::{SimRate, clock::SimulationClock};
-        use crate::matter::{substeps_for_interval, substep_duration};
         for rate in SimRate::ALL {
             let run = |offline| {
                 let mut clock = SimulationClock::default();
                 let mut result = Vec::new();
                 for frame in 0..=60 {
-                    let accepted = clock.advance(PlayedTime::from_played(f64::from(frame) / 60.0), rate.interval(), 1.0, 0.0, false, offline);
+                    let accepted = clock.advance(
+                        PlayedTime::from_played(f64::from(frame) / 60.0),
+                        rate.interval(),
+                        1.0,
+                        0.0,
+                        false,
+                        offline,
+                    );
                     for ordinal in 0..u64::from(accepted.ticks) {
                         let interval = accepted.interval(ordinal).unwrap().duration().0 as f32;
                         let steps = substeps_for_interval(interval, 34);
@@ -1294,14 +1757,37 @@ mod sim_rate_tests {
         use manifold_physics::clock::{SimulationClock, TICK};
         use manifold_water_rigid::node::PhysicsNode;
         let mut domain = MatterDomain::new();
-        assert_eq!(domain.physics_impulse_readiness(), Ok(false), "the clock has not started");
-        let frame = SimulationClock::default().advance(PlayedTime::from_played(0.0), TICK, 1.0, 0.0, false, false);
-        domain.impulses.observe_frame(PlayedTime::from_played(0.0), &frame).unwrap();
+        assert_eq!(
+            domain.physics_impulse_readiness(),
+            Ok(false),
+            "the clock has not started"
+        );
+        let frame = SimulationClock::default().advance(
+            PlayedTime::from_played(0.0),
+            TICK,
+            1.0,
+            0.0,
+            false,
+            false,
+        );
+        domain
+            .impulses
+            .observe_frame(PlayedTime::from_played(0.0), &frame)
+            .unwrap();
         assert_eq!(domain.physics_impulse_readiness(), Ok(true));
         domain.role_pending = true;
-        assert_eq!(domain.physics_impulse_readiness(), Ok(false), "a role is still preparing");
+        assert_eq!(
+            domain.physics_impulse_readiness(),
+            Ok(false),
+            "a role is still preparing"
+        );
         domain.coupled.failed = true;
-        assert!(domain.physics_impulse_readiness().unwrap_err().contains("refused"));
+        assert!(
+            domain
+                .physics_impulse_readiness()
+                .unwrap_err()
+                .contains("refused")
+        );
     }
 }
 
@@ -1320,17 +1806,33 @@ mod gizmo_tests {
     #[test]
     fn matter_fill_caps_the_pool_and_clips_the_column() {
         let geometry = |fill: f32, column: Option<Transform>| {
-            let read = |name: &str, default: f32| if name == "fill_height" { fill } else { default };
+            let read =
+                |name: &str, default: f32| if name == "fill_height" { fill } else { default };
             matter_geometry(read, &ParamValues::default(), None, column).expect("fits or is fitted")
         };
         let top = geometry(4.0, None);
         assert_eq!(geometry(9.0, None).setup.pool_cells, top.setup.pool_cells);
 
         // The default 4 m domain spans x from -2 to 2.
-        let at_wall = Transform { pos: [1.5, 1.0, 0.0], scale: [1.0; 3], ..Transform::default() };
-        let past_wall = Transform { pos: [2.0, 1.0, 0.0], scale: [2.0, 1.0, 1.0], ..Transform::default() };
-        assert_eq!(geometry(0.16, Some(past_wall)).setup.column, geometry(0.16, Some(at_wall)).setup.column);
-        let away = Transform { pos: [9.0, 1.0, 0.0], scale: [1.0; 3], ..Transform::default() };
+        let at_wall = Transform {
+            pos: [1.5, 1.0, 0.0],
+            scale: [1.0; 3],
+            ..Transform::default()
+        };
+        let past_wall = Transform {
+            pos: [2.0, 1.0, 0.0],
+            scale: [2.0, 1.0, 1.0],
+            ..Transform::default()
+        };
+        assert_eq!(
+            geometry(0.16, Some(past_wall)).setup.column,
+            geometry(0.16, Some(at_wall)).setup.column
+        );
+        let away = Transform {
+            pos: [9.0, 1.0, 0.0],
+            scale: [1.0; 3],
+            ..Transform::default()
+        };
         assert_eq!(geometry(0.16, Some(away)).setup.column, [[0; 2]; 3]);
     }
 
@@ -1338,25 +1840,42 @@ mod gizmo_tests {
     /// layers and the column within half a cell of the authored box.
     #[test]
     fn matter_fill_gizmos_are_the_seeded_cells() {
-        let column = Transform { pos: [-1.25, 1.12, 0.0], scale: [1.18, 1.92, 3.5], ..Transform::default() };
+        let column = Transform {
+            pos: [-1.25, 1.12, 0.0],
+            scale: [1.18, 1.92, 3.5],
+            ..Transform::default()
+        };
         let read = |name: &str, default: f32| if name == "fill_height" { 0.16 } else { default };
-        let geometry = matter_geometry(read, &ParamValues::default(), None, Some(column)).expect("fills");
+        let geometry =
+            matter_geometry(read, &ParamValues::default(), None, Some(column)).expect("fills");
         let mut domain = MatterDomain::new();
         (domain.setup, domain.layout) = (Some(geometry.setup), Some(geometry.layout));
-        assert_eq!(domain.fluid_domain_snapshot().unwrap().accepted_layout, Some(geometry.layout));
+        assert_eq!(
+            domain.fluid_domain_snapshot().unwrap().accepted_layout,
+            Some(geometry.layout)
+        );
         let mut out = Vec::new();
         domain.write_physics_gizmos(&mut out);
-        let boxes: Vec<_> = out.iter().map(|gizmo| match (gizmo.family, gizmo.shape) {
-            (PhysicsGizmoFamily::Fill, PhysicsGizmoShape::Box { center, half, .. }) => (center, half),
-            other => panic!("{other:?}"),
-        }).collect();
+        let boxes: Vec<_> = out
+            .iter()
+            .map(|gizmo| match (gizmo.family, gizmo.shape) {
+                (PhysicsGizmoFamily::Fill, PhysicsGizmoShape::Box { center, half, .. }) => {
+                    (center, half)
+                }
+                other => panic!("{other:?}"),
+            })
+            .collect();
         assert_eq!(boxes.len(), 2);
         let (layout, dx) = (geometry.layout, geometry.layout.cell_size as f32);
         let pool_top = boxes[0].0[1] + boxes[0].1[1];
         assert!((pool_top - (layout.min[1] + geometry.setup.pool_cells as f32 * dx)).abs() < 1e-6);
         assert!((pool_top - layout.min[1] - 0.16).abs() <= 0.5 * dx);
         for axis in 0..3 {
-            assert!((boxes[1].0[axis] - column.pos[axis]).abs() <= 0.5 * dx, "axis {axis}: {:?}", boxes[1]);
+            assert!(
+                (boxes[1].0[axis] - column.pos[axis]).abs() <= 0.5 * dx,
+                "axis {axis}: {:?}",
+                boxes[1]
+            );
         }
     }
 }

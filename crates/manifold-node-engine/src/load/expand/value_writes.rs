@@ -3,7 +3,7 @@
 use super::value_sources::{SceneModifierValueSource, SceneModifierValueSourcePlan};
 use super::{SceneModifierExpandError, SceneModifierNodeRoute};
 use crate::parameters::ParamValue;
-use crate::{graph::Graph, exec::effect_node::NodeInstanceId};
+use crate::{exec::effect_node::NodeInstanceId, graph::Graph};
 use ahash::AHashMap;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
@@ -78,12 +78,25 @@ impl PreparedGraphValueWrites {
                         // Internal Shatter draws retain the authored object's
                         // visibility and other properties under live edits.
                         for modifier in &owner.scene_modifiers {
-                            if modifier.graph.preset_metadata.as_ref()
+                            if modifier
+                                .graph
+                                .preset_metadata
+                                .as_ref()
                                 .and_then(|m| m.scene_modifier.as_ref())
-                                .is_none_or(|r| r.shatter.is_none()) { continue; }
+                                .is_none_or(|r| r.shatter.is_none())
+                            {
+                                continue;
+                            }
                             for piece in 0..32 {
-                                let copy = super::compiler::shatter::copy_id(&modifier.id, reference, "object", piece);
-                                if graph.instance_by_node_id(&copy).is_none() { break; }
+                                let copy = super::compiler::shatter::copy_id(
+                                    &modifier.id,
+                                    reference,
+                                    "object",
+                                    piece,
+                                );
+                                if graph.instance_by_node_id(&copy).is_none() {
+                                    break;
+                                }
                                 copies.push(copy);
                             }
                         }

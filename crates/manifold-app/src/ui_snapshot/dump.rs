@@ -19,7 +19,7 @@ use std::fmt::Write as _;
 
 use manifold_ui::hit_targets::HitTargets;
 use manifold_ui::{Color32, UITree};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// A node's address as one number, unique across region arenas: region in
 /// the high bits, slot in the low 24.
@@ -134,14 +134,27 @@ pub fn catalog_json(panel: &str, surfaces: &[manifold_ui::param_surface::Catalog
 
 /// Terse stdout catalog — one line per card, then one per affordance, marking
 /// a nameless affordance with `name=<none>` so a BUG-239 gap is obvious inline.
-pub fn terse_catalog(panel: &str, surfaces: &[manifold_ui::param_surface::CatalogSurface]) -> String {
+pub fn terse_catalog(
+    panel: &str,
+    surfaces: &[manifold_ui::param_surface::CatalogSurface],
+) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "catalog[{panel}]: {} surface(s)", surfaces.len());
     for s in surfaces {
-        let _ = writeln!(out, "  [{:?}] {} — {} affordance(s)", s.kind, s.title, s.affordances.len());
+        let _ = writeln!(
+            out,
+            "  [{:?}] {} — {} affordance(s)",
+            s.kind,
+            s.title,
+            s.affordances.len()
+        );
         for a in &s.affordances {
             let name = a.name.as_deref().unwrap_or("<none>");
-            let _ = writeln!(out, "    {} {:?} name={} widget={:016x}", a.row_id, a.role, name, a.widget);
+            let _ = writeln!(
+                out,
+                "    {} {:?} name={} widget={:016x}",
+                a.row_id, a.role, name, a.widget
+            );
         }
     }
     out
@@ -156,7 +169,9 @@ pub fn terse(tree: &UITree) -> String {
         let s = &n.style;
         // BUG-071: live reparented parent, not the mint-time `n.parent_id` —
         // see the matching comment in `dump_tree_ex` above.
-        let parent = tree.parent_of(n.id).map_or_else(|| "-".to_string(), |p| flat_id(p).to_string());
+        let parent = tree
+            .parent_of(n.id)
+            .map_or_else(|| "-".to_string(), |p| flat_id(p).to_string());
         let _ = write!(
             out,
             "#{:<3} {:<9} p={:<3} ({:>6.1},{:>6.1} {:>6.1}x{:>5.1}) bg={}",

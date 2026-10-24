@@ -35,8 +35,18 @@ fn physics_field() -> FieldRowVm {
         control: FieldControlVm::Pick {
             current: "None".into(),
             options: vec![
-                FieldOptionVm { label: "None".into(), pick: FieldPick::Choice("none".into()), checked: true, disabled: None },
-                FieldOptionVm { label: "Body".into(), pick: FieldPick::Choice("body".into()), checked: false, disabled: None },
+                FieldOptionVm {
+                    label: "None".into(),
+                    pick: FieldPick::Choice("none".into()),
+                    checked: true,
+                    disabled: None,
+                },
+                FieldOptionVm {
+                    label: "Body".into(),
+                    pick: FieldPick::Choice("body".into()),
+                    checked: false,
+                    disabled: None,
+                },
             ],
         },
         disabled: None,
@@ -53,7 +63,10 @@ fn live_panel(fields: Vec<FieldRowVm>) -> (ScenePanel, UITree) {
 fn live_panel_with(cube: SceneItemVm) -> (ScenePanel, UITree) {
     let vm = SceneSetupVm {
         layer_id: LayerId::new("layer-1"),
-        items: vec![item("world", ItemKind::World, "World", 0, None), cube.clone()],
+        items: vec![
+            item("world", ItemKind::World, "World", 0, None),
+            cube.clone(),
+        ],
         add_entries: vec![AddEntryVm {
             key: "object.cube".into(),
             group: "Object".into(),
@@ -81,14 +94,26 @@ fn live_panel_with(cube: SceneItemVm) -> (ScenePanel, UITree) {
     panel.open();
     panel.configure(SceneSetupState::Live(Box::new(vm)));
     panel.configure_params(Some(surface));
-    panel.set_selection(LayerId::new("layer-1"), SceneSelection::Item(ItemId::new("cube")));
+    panel.set_selection(
+        LayerId::new("layer-1"),
+        SceneSelection::Item(ItemId::new("cube")),
+    );
     let mut tree = UITree::new();
     panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
     (panel, tree)
 }
 
 fn click(panel: &mut ScenePanel, tree: &mut UITree, node_id: NodeId) -> Vec<PanelAction> {
-    panel.handle_event(&UIEvent::Click { node_id, pos: Vec2::ZERO, modifiers: Modifiers::default() }, tree).1
+    panel
+        .handle_event(
+            &UIEvent::Click {
+                node_id,
+                pos: Vec2::ZERO,
+                modifiers: Modifiers::default(),
+            },
+            tree,
+        )
+        .1
 }
 
 /// A field row is an ordinary row of the properties card; a click on it
@@ -96,9 +121,14 @@ fn click(panel: &mut ScenePanel, tree: &mut UITree, node_id: NodeId) -> Vec<Pane
 #[test]
 fn a_field_row_click_opens_a_menu_of_field_sets() {
     let (mut panel, mut tree) = live_panel(vec![physics_field()]);
-    let button = panel.properties_card.row_host.toggle_ids[0].as_ref().expect("the field row is a button row").button_id;
+    let button = panel.properties_card.row_host.toggle_ids[0]
+        .as_ref()
+        .expect("the field row is a button row")
+        .button_id;
     let actions = click(&mut panel, &mut tree, button);
-    let [PanelAction::Root(RootAction::SceneSetupActionMenuClicked { items, .. })] = actions.as_slice() else {
+    let [PanelAction::Root(RootAction::SceneSetupActionMenuClicked { items, .. })] =
+        actions.as_slice()
+    else {
         panic!("expected one menu, got {actions:?}");
     };
     assert_eq!(items.len(), 2);
@@ -116,9 +146,15 @@ fn a_disabled_field_row_does_nothing_and_keeps_its_reason_on_hover() {
     let mut field = physics_field();
     field.disabled = Some("A group above is already a Body".into());
     let (mut panel, mut tree) = live_panel(vec![field]);
-    let button = panel.properties_card.row_host.toggle_ids[0].as_ref().unwrap().button_id;
+    let button = panel.properties_card.row_host.toggle_ids[0]
+        .as_ref()
+        .unwrap()
+        .button_id;
     assert!(click(&mut panel, &mut tree, button).is_empty());
-    assert_eq!(tree.get_node(button).unwrap().tooltip.as_deref(), Some("A group above is already a Body"));
+    assert_eq!(
+        tree.get_node(button).unwrap().tooltip.as_deref(),
+        Some("A group above is already a Body")
+    );
 }
 
 /// A panel showing the World and two Modifier cards.
@@ -141,7 +177,12 @@ fn chain_panel() -> (ScenePanel, UITree) {
 }
 
 fn drag_begin(node_id: Option<NodeId>, pos: Vec2) -> UIEvent {
-    UIEvent::DragBegin { node_id, pos, origin: pos, modifiers: Modifiers::default() }
+    UIEvent::DragBegin {
+        node_id,
+        pos,
+        origin: pos,
+        modifiers: Modifiers::default(),
+    }
 }
 
 /// A tree of a Group and a cube beside it.
@@ -150,7 +191,11 @@ fn tree_panel() -> (ScenePanel, UITree) {
     rig.has_children = false;
     let vm = SceneSetupVm {
         layer_id: LayerId::new("layer-1"),
-        items: vec![item("world", ItemKind::World, "World", 0, None), rig, item("cube", ItemKind::Object, "Cube", 0, None)],
+        items: vec![
+            item("world", ItemKind::World, "World", 0, None),
+            rig,
+            item("cube", ItemKind::Object, "Cube", 0, None),
+        ],
         add_entries: Vec::new(),
     };
     let mut panel = ScenePanel::new();
@@ -163,7 +208,12 @@ fn tree_panel() -> (ScenePanel, UITree) {
 
 fn tree_row(panel: &ScenePanel, id: &str) -> NodeId {
     let item = SceneSelection::Item(ItemId::new(id));
-    panel.outliner_row_ids.iter().find(|(_, sel)| *sel == item).expect("the item has a row").0
+    panel
+        .outliner_row_ids
+        .iter()
+        .find(|(_, sel)| *sel == item)
+        .expect("the item has a row")
+        .0
 }
 
 /// Dragging a row onto the middle of a Group's row moves it into the
@@ -176,10 +226,29 @@ fn a_tree_row_drag_moves_the_item_into_a_group_or_beside_a_row() {
     let target = tree.get_bounds(rig);
     for (at, parent, before) in [(0.5, Some("rig"), None), (0.1, None, Some("rig"))] {
         let start = Vec2::new(from.x + 4.0, from.y + from.height * 0.5);
-        assert!(panel.handle_event(&drag_begin(Some(cube), start), &mut tree).0, "the row drag begins");
+        assert!(
+            panel
+                .handle_event(&drag_begin(Some(cube), start), &mut tree)
+                .0,
+            "the row drag begins"
+        );
         let drop = Vec2::new(target.x + 4.0, target.y + target.height * at);
-        let (_, actions) = panel.handle_event(&UIEvent::DragEnd { node_id: None, pos: drop }, &mut tree);
-        let [PanelAction::Project(ProjectAction::SceneTreeMove { item, parent: to, before: ahead, .. })] = actions.as_slice() else {
+        let (_, actions) = panel.handle_event(
+            &UIEvent::DragEnd {
+                node_id: None,
+                pos: drop,
+            },
+            &mut tree,
+        );
+        let [
+            PanelAction::Project(ProjectAction::SceneTreeMove {
+                item,
+                parent: to,
+                before: ahead,
+                ..
+            }),
+        ] = actions.as_slice()
+        else {
             panic!("expected one move, got {actions:?}");
         };
         assert_eq!(item.as_str(), "cube");
@@ -190,16 +259,46 @@ fn a_tree_row_drag_moves_the_item_into_a_group_or_beside_a_row() {
     // of the top level; releasing outside the panel (over the viewport)
     // cancels.
     let start = Vec2::new(from.x + 4.0, from.y + from.height * 0.5);
-    assert!(panel.handle_event(&drag_begin(Some(cube), start), &mut tree).0);
-    let (_, actions) = panel.handle_event(&UIEvent::DragEnd { node_id: None, pos: Vec2::new(from.x + 4.0, 890.0) }, &mut tree);
     assert!(
-        matches!(actions.as_slice(), [PanelAction::Project(ProjectAction::SceneTreeMove { parent: None, before: None, .. })]),
+        panel
+            .handle_event(&drag_begin(Some(cube), start), &mut tree)
+            .0
+    );
+    let (_, actions) = panel.handle_event(
+        &UIEvent::DragEnd {
+            node_id: None,
+            pos: Vec2::new(from.x + 4.0, 890.0),
+        },
+        &mut tree,
+    );
+    assert!(
+        matches!(
+            actions.as_slice(),
+            [PanelAction::Project(ProjectAction::SceneTreeMove {
+                parent: None,
+                before: None,
+                ..
+            })]
+        ),
         "a drop below the rows goes to the end of the top level, got {actions:?}"
     );
     let drop = Vec2::new(600.0, target.y + target.height * 0.5);
-    assert!(panel.handle_event(&drag_begin(Some(cube), start), &mut tree).0);
-    let (_, actions) = panel.handle_event(&UIEvent::DragEnd { node_id: None, pos: drop }, &mut tree);
-    assert!(actions.is_empty(), "a drop at {drop:?} moves nothing, got {actions:?}");
+    assert!(
+        panel
+            .handle_event(&drag_begin(Some(cube), start), &mut tree)
+            .0
+    );
+    let (_, actions) = panel.handle_event(
+        &UIEvent::DragEnd {
+            node_id: None,
+            pos: drop,
+        },
+        &mut tree,
+    );
+    assert!(
+        actions.is_empty(),
+        "a drop at {drop:?} moves nothing, got {actions:?}"
+    );
 }
 
 /// Double-clicking a tree row renames its item, the name field over the row.
@@ -207,15 +306,24 @@ fn a_tree_row_drag_moves_the_item_into_a_group_or_beside_a_row() {
 fn a_tree_row_double_click_renames_in_place() {
     let (mut panel, mut tree) = tree_panel();
     let row = tree_row(&panel, "cube");
-    let event = UIEvent::DoubleClick { node_id: row, pos: Vec2::ZERO, modifiers: Modifiers::default() };
+    let event = UIEvent::DoubleClick {
+        node_id: row,
+        pos: Vec2::ZERO,
+        modifiers: Modifiers::default(),
+    };
     let (_, actions) = panel.handle_event(&event, &mut tree);
-    let [PanelAction::Root(RootAction::SceneRenameClicked(_, item, name))] = actions.as_slice() else {
+    let [PanelAction::Root(RootAction::SceneRenameClicked(_, item, name))] = actions.as_slice()
+    else {
         panic!("expected a rename, got {actions:?}");
     };
     assert_eq!((item.as_str(), name.as_str()), ("cube", "Cube"));
     let anchor = panel.item_name_rect(&tree, item).expect("an anchor");
     let bounds = tree.get_bounds(row);
-    assert_eq!((anchor.x, anchor.y), (bounds.x, bounds.y), "the name field opens over the row");
+    assert_eq!(
+        (anchor.x, anchor.y),
+        (bounds.x, bounds.y),
+        "the name field opens over the row"
+    );
 }
 
 /// Closing the tab mid card drag ends the drag: the release the panel never
@@ -225,14 +333,29 @@ fn closing_the_tab_mid_card_drag_drops_the_drag() {
     let (mut panel, mut tree) = chain_panel();
     let row = panel.chain_rows[0].0;
     let bounds = tree.get_bounds(row);
-    let at = Vec2::new(bounds.x + bounds.width * 0.5, bounds.y + bounds.height * 0.5);
-    assert!(panel.handle_event(&drag_begin(Some(row), at), &mut tree).0, "the card drag begins");
+    let at = Vec2::new(
+        bounds.x + bounds.width * 0.5,
+        bounds.y + bounds.height * 0.5,
+    );
+    assert!(
+        panel.handle_event(&drag_begin(Some(row), at), &mut tree).0,
+        "the card drag begins"
+    );
     panel.close();
     panel.open();
     panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
-    let (_, actions) = panel.handle_event(&UIEvent::DragEnd { node_id: None, pos: Vec2::new(at.x, 2000.0) }, &mut tree);
+    let (_, actions) = panel.handle_event(
+        &UIEvent::DragEnd {
+            node_id: None,
+            pos: Vec2::new(at.x, 2000.0),
+        },
+        &mut tree,
+    );
     assert!(
-        !actions.iter().any(|action| matches!(action, PanelAction::Project(ProjectAction::SceneChainMove { .. }))),
+        !actions.iter().any(|action| matches!(
+            action,
+            PanelAction::Project(ProjectAction::SceneChainMove { .. })
+        )),
         "a stale card drag reordered the chain: {actions:?}"
     );
 }
@@ -257,15 +380,29 @@ fn an_inline_material_row_sets_the_material_not_its_owner() {
         pbr: true,
     });
     let (mut panel, mut tree) = live_panel_with(cube);
-    let button = panel.properties_card.row_host.toggle_ids.iter().flatten().next().expect("the Type row is a button row").button_id;
+    let button = panel
+        .properties_card
+        .row_host
+        .toggle_ids
+        .iter()
+        .flatten()
+        .next()
+        .expect("the Type row is a button row")
+        .button_id;
     let actions = click(&mut panel, &mut tree, button);
-    let [PanelAction::Root(RootAction::SceneSetupActionMenuClicked { items, .. })] = actions.as_slice() else {
+    let [PanelAction::Root(RootAction::SceneSetupActionMenuClicked { items, .. })] =
+        actions.as_slice()
+    else {
         panic!("expected one menu, got {actions:?}");
     };
-    assert!(matches!(
-        &items[0].action,
-        Some(PanelAction::Project(ProjectAction::SceneFieldSet { item, field, .. })) if item.as_str() == "cube-material" && field == "material_type"
-    ), "{:?}", items[0].action);
+    assert!(
+        matches!(
+            &items[0].action,
+            Some(PanelAction::Project(ProjectAction::SceneFieldSet { item, field, .. })) if item.as_str() == "cube-material" && field == "material_type"
+        ),
+        "{:?}",
+        items[0].action
+    );
 }
 
 /// A structural field row is no manifest param: right-clicking it opens no
@@ -273,13 +410,23 @@ fn an_inline_material_row_sets_the_material_not_its_owner() {
 #[test]
 fn a_field_row_opens_no_param_menu() {
     let (panel, tree) = live_panel(vec![physics_field()]);
-    let ids = panel.properties_card.row_host.toggle_ids.iter().flatten().next().expect("the Physics row is a button row");
+    let ids = panel
+        .properties_card
+        .row_host
+        .toggle_ids
+        .iter()
+        .flatten()
+        .next()
+        .expect("the Physics row is a button row");
     let mut intents = crate::intent::IntentRegistry::new();
     panel.register_intents(&mut intents);
     for node in std::iter::once(ids.button_id).chain(ids.label_id) {
         let action = intents.resolve(&tree, Some(node), crate::intent::Gesture::RightClick);
         assert!(
-            !matches!(action, Some(PanelAction::Params(ParamsAction::ParamLabelRightClick(..)))),
+            !matches!(
+                action,
+                Some(PanelAction::Params(ParamsAction::ParamLabelRightClick(..)))
+            ),
             "a field row opened the param menu: {action:?}"
         );
     }
@@ -295,7 +442,10 @@ fn the_scale_link_belongs_to_one_layers_item() {
     let row = panel.properties_card.rows.len() - 1;
     assert!(panel.scale_link_click(row));
     assert!(!panel.scale_linked(&LayerId::new("layer-1"), &cube));
-    assert!(panel.scale_linked(&LayerId::new("layer-2"), &cube), "another layer's cube keeps its own link");
+    assert!(
+        panel.scale_linked(&LayerId::new("layer-2"), &cube),
+        "another layer's cube keeps its own link"
+    );
 }
 
 fn switch_field(id: &str, label: &str, on: bool) -> FieldRowVm {
@@ -303,7 +453,10 @@ fn switch_field(id: &str, label: &str, on: bool) -> FieldRowVm {
         id: id.into(),
         label: label.into(),
         section: ControlGroup::Copies,
-        control: FieldControlVm::Switch { on, toggle: FieldPick::Choice(if on { "off" } else { "on" }.into()) },
+        control: FieldControlVm::Switch {
+            on,
+            toggle: FieldPick::Choice(if on { "off" } else { "on" }.into()),
+        },
         disabled: None,
         header: false,
     }
@@ -313,7 +466,9 @@ fn switch_field(id: &str, label: &str, on: bool) -> FieldRowVm {
 #[test]
 fn an_on_off_field_is_a_switch_that_flips() {
     let (mut panel, mut tree) = live_panel(vec![switch_field("copies", "Copies", false)]);
-    let ids = panel.properties_card.row_host.toggle_ids[0].as_ref().expect("the switch is a button row");
+    let ids = panel.properties_card.row_host.toggle_ids[0]
+        .as_ref()
+        .expect("the switch is a button row");
     assert_eq!(ids.kind, crate::param_surface::RowKind::Switch);
     let button = ids.button_id;
     let actions = click(&mut panel, &mut tree, button);
@@ -335,7 +490,10 @@ fn a_modifier_header_carries_its_type_and_switch() {
     on.header = true;
     card.fields = vec![kind, on];
     let (mut panel, mut tree) = live_panel_with(card);
-    assert!(panel.properties_card.rows.is_empty(), "no Type or On row on the card");
+    assert!(
+        panel.properties_card.rows.is_empty(),
+        "no Type or On row on the card"
+    );
     let switch = named(&tree, "scene_setup.properties.header_field.on").expect("the header switch");
     let actions = click(&mut panel, &mut tree, switch);
     assert!(
@@ -357,10 +515,16 @@ fn add_entry(key: &str, group: &str, label: &str, refused: bool) -> AddEntryVm {
     }
 }
 
-fn add_menu(panel: &mut ScenePanel, tree: &mut UITree, section: &str) -> Vec<crate::panels::dropdown::DropdownItem> {
+fn add_menu(
+    panel: &mut ScenePanel,
+    tree: &mut UITree,
+    section: &str,
+) -> Vec<crate::panels::dropdown::DropdownItem> {
     let button = named(tree, &format!("scene_tree.add.{section}")).expect("the section has a +");
     let actions = click(panel, tree, button);
-    let [PanelAction::Root(RootAction::SceneSetupActionMenuClicked { items, .. })] = actions.as_slice() else {
+    let [PanelAction::Root(RootAction::SceneSetupActionMenuClicked { items, .. })] =
+        actions.as_slice()
+    else {
         panic!("expected one menu, got {actions:?}");
     };
     items.clone()
@@ -373,7 +537,10 @@ fn each_section_adds_its_own_and_says_why_one_is_refused() {
     let cube = item("cube", ItemKind::Object, "Cube", 0, None);
     let vm = |refused: bool| SceneSetupVm {
         layer_id: LayerId::new("layer-1"),
-        items: vec![item("world", ItemKind::World, "World", 0, None), cube.clone()],
+        items: vec![
+            item("world", ItemKind::World, "World", 0, None),
+            cube.clone(),
+        ],
         add_entries: vec![
             add_entry("object.cube", "Object", "Cube", false),
             add_entry("group", "Group", "Group", false),
@@ -386,9 +553,20 @@ fn each_section_adds_its_own_and_says_why_one_is_refused() {
     panel.configure(SceneSetupState::Live(Box::new(vm(true))));
     tree.clear();
     panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
-    assert!(named(&tree, "scene_tree.add").is_none(), "the top Add is gone");
-    let labels = |items: &[crate::panels::dropdown::DropdownItem]| items.iter().map(|item| item.label.clone()).collect::<Vec<_>>();
-    assert_eq!(labels(&add_menu(&mut panel, &mut tree, "Objects")), ["Cube", "Group"]);
+    assert!(
+        named(&tree, "scene_tree.add").is_none(),
+        "the top Add is gone"
+    );
+    let labels = |items: &[crate::panels::dropdown::DropdownItem]| {
+        items
+            .iter()
+            .map(|item| item.label.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        labels(&add_menu(&mut panel, &mut tree, "Objects")),
+        ["Cube", "Group"]
+    );
     // A menu of one thing is no choice: the + adds it at the top.
     let lighting = named(&tree, "scene_tree.add.Lighting").expect("Lighting has a +");
     let actions = click(&mut panel, &mut tree, lighting);
@@ -397,13 +575,20 @@ fn each_section_adds_its_own_and_says_why_one_is_refused() {
         "{actions:?}"
     );
     let modifiers = add_menu(&mut panel, &mut tree, "Modifiers");
-    assert_eq!(labels(&modifiers), ["Bend", "Copy Wave \u{2014} Turn on Copies to move them"]);
+    assert_eq!(
+        labels(&modifiers),
+        ["Bend", "Copy Wave \u{2014} Turn on Copies to move them"]
+    );
     assert!(!modifiers[1].enabled);
     panel.configure(SceneSetupState::Live(Box::new(vm(false))));
     tree.clear();
     panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
     let modifiers = add_menu(&mut panel, &mut tree, "Modifiers");
-    assert!(modifiers[1].enabled && modifiers[1].label == "Copy Wave", "{:?}", modifiers[1].label);
+    assert!(
+        modifiers[1].enabled && modifiers[1].label == "Copy Wave",
+        "{:?}",
+        modifiers[1].label
+    );
 }
 
 /// Lighting lines up with every other top-level row, and a Material shows
@@ -440,9 +625,17 @@ fn lighting_lines_up_and_only_shared_materials_are_rows() {
     panel.configure(SceneSetupState::Live(Box::new(vm)));
     let mut tree = UITree::new();
     panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
-    let has_row = |id: &str| panel.outliner_row_ids.iter().any(|(_, sel)| *sel == SceneSelection::Item(ItemId::new(id)));
+    let has_row = |id: &str| {
+        panel
+            .outliner_row_ids
+            .iter()
+            .any(|(_, sel)| *sel == SceneSelection::Item(ItemId::new(id)))
+    };
     assert!(has_row("sun"), "Sun has its own row under Lighting");
-    assert!(!has_row("own"), "a Material one item uses shows only on that item's card");
+    assert!(
+        !has_row("own"),
+        "a Material one item uses shows only on that item's card"
+    );
     assert!(has_row("shared"));
 }
 
@@ -454,20 +647,48 @@ fn a_card_drag_shows_where_it_lands() {
     let from = tree.get_bounds(bend);
     let below = tree.get_bounds(twist);
     let start = Vec2::new(from.x + 4.0, from.y + from.height * 0.5);
-    assert!(panel.handle_event(&drag_begin(Some(bend), start), &mut tree).0);
+    assert!(
+        panel
+            .handle_event(&drag_begin(Some(bend), start), &mut tree)
+            .0
+    );
     let past = Vec2::new(start.x, below.y + below.height);
     let version = panel.view_version();
-    panel.handle_event(&UIEvent::Drag { node_id: None, pos: past, delta: Vec2::ZERO, modifiers: Modifiers::default() }, &mut tree);
-    assert!(panel.view_version() > version, "a new landing place redraws");
+    panel.handle_event(
+        &UIEvent::Drag {
+            node_id: None,
+            pos: past,
+            delta: Vec2::ZERO,
+            modifiers: Modifiers::default(),
+        },
+        &mut tree,
+    );
+    assert!(
+        panel.view_version() > version,
+        "a new landing place redraws"
+    );
     tree.clear();
     panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
     let line = named(&tree, "scene_tree.drop_line").expect("the landing line");
     let twist_now = tree.get_bounds(panel.chain_rows[1].0);
-    assert_eq!(tree.get_bounds(line).y + 1.0, twist_now.y + twist_now.height, "the line sits under the last card");
-    panel.handle_event(&UIEvent::DragEnd { node_id: None, pos: past }, &mut tree);
+    assert_eq!(
+        tree.get_bounds(line).y + 1.0,
+        twist_now.y + twist_now.height,
+        "the line sits under the last card"
+    );
+    panel.handle_event(
+        &UIEvent::DragEnd {
+            node_id: None,
+            pos: past,
+        },
+        &mut tree,
+    );
     tree.clear();
     panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
-    assert!(named(&tree, "scene_tree.drop_line").is_none(), "the line leaves with the drag");
+    assert!(
+        named(&tree, "scene_tree.drop_line").is_none(),
+        "the line leaves with the drag"
+    );
 }
 
 #[test]
@@ -477,13 +698,20 @@ fn collapsing_a_group_moves_selection_off_a_hidden_descendant() {
     let child = item("child", ItemKind::Object, "Child", 1, Some("group"));
     let vm = SceneSetupVm {
         layer_id: LayerId::new("layer-1"),
-        items: vec![item("world", ItemKind::World, "World", 0, None), group, child],
+        items: vec![
+            item("world", ItemKind::World, "World", 0, None),
+            group,
+            child,
+        ],
         add_entries: Vec::new(),
     };
     let mut panel = ScenePanel::new();
     panel.open();
     panel.configure(SceneSetupState::Live(Box::new(vm)));
-    panel.set_selection(LayerId::new("layer-1"), SceneSelection::Item(ItemId::new("child")));
+    panel.set_selection(
+        LayerId::new("layer-1"),
+        SceneSelection::Item(ItemId::new("child")),
+    );
     let mut tree = UITree::new();
     panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
     let toggle = named(&tree, "scene_setup.objects.group_toggle").expect("the group fold chevron");
@@ -505,7 +733,13 @@ fn preview_navigation_shows_reset_view_button_and_preserves_mod_tabs_by_id() {
     panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
     let reset = named(&tree, "scene_setup.reset_preview_view").expect("Back to Camera button");
     let actions = click(&mut panel, &mut tree, reset);
-    assert!(matches!(actions.as_slice(), [PanelAction::Root(RootAction::SceneResetPreviewView)]), "{actions:?}");
+    assert!(
+        matches!(
+            actions.as_slice(),
+            [PanelAction::Root(RootAction::SceneResetPreviewView)]
+        ),
+        "{actions:?}"
+    );
 
     // Verify SceneCardState preserves mod_active_tab by row id when a row is inserted before it.
     let mut surface = panel.full_params.clone().unwrap();
@@ -514,15 +748,25 @@ fn preview_navigation_shows_reset_view_button_and_preserves_mod_tabs_by_id() {
     let mut row_b = placeholder_param_info();
     row_b.id = manifold_foundation::ParamId::from("cube.pos_y");
     surface.rows = vec![row_a, row_b];
-    panel.properties_card.configure_from_filtered(&surface, &[1]);
+    panel
+        .properties_card
+        .configure_from_filtered(&surface, &[1]);
     panel.properties_card.mod_active_tab[0] = ModTab::Envelope;
-    panel.properties_card.configure_from_filtered(&surface, &[0, 1]);
-    assert_eq!(panel.properties_card.mod_active_tab, vec![ModTab::Driver, ModTab::Envelope]);
+    panel
+        .properties_card
+        .configure_from_filtered(&surface, &[0, 1]);
+    assert_eq!(
+        panel.properties_card.mod_active_tab,
+        vec![ModTab::Driver, ModTab::Envelope]
+    );
 }
 
 /// The live node registered under `name`, in any region.
 fn named(tree: &UITree, name: &str) -> Option<NodeId> {
     (0..=u8::MAX).find_map(|region| {
-        (0..).map(|slot| tree.id_in(region, slot)).take_while(|id| *id != NodeId::PLACEHOLDER).find(|id| tree.name_of(*id) == Some(name))
+        (0..)
+            .map(|slot| tree.id_in(region, slot))
+            .take_while(|id| *id != NodeId::PLACEHOLDER)
+            .find(|id| tree.name_of(*id) == Some(name))
     })
 }

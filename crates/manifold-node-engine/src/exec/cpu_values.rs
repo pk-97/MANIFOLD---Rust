@@ -70,7 +70,9 @@ impl<T: Clone + Send + 'static> ErasedWrites for TypedWrites<T> {
 }
 
 fn make_values<T: Clone + Send + 'static>() -> Box<dyn ErasedValues> {
-    Box::new(TypedValues::<T> { values: AHashMap::new() })
+    Box::new(TypedValues::<T> {
+        values: AHashMap::new(),
+    })
 }
 
 fn make_writes<T: Clone + Send + 'static>() -> Box<dyn ErasedWrites> {
@@ -109,8 +111,14 @@ impl CpuWireValues {
         let mut tables = AHashMap::new();
         for registration in registrations {
             let type_id = registration.type_id;
-            if tables.insert(type_id, (registration.make_values)()).is_some() {
-                panic!("duplicate CPU wire registration for TypeId {:?}", registration.type_id);
+            if tables
+                .insert(type_id, (registration.make_values)())
+                .is_some()
+            {
+                panic!(
+                    "duplicate CPU wire registration for TypeId {:?}",
+                    registration.type_id
+                );
             }
         }
         Self { tables }
@@ -180,8 +188,14 @@ impl CpuWireWrites {
         let mut tables = AHashMap::new();
         for registration in registrations {
             let type_id = registration.type_id;
-            if tables.insert(type_id, (registration.make_writes)()).is_some() {
-                panic!("duplicate CPU wire registration for TypeId {:?}", registration.type_id);
+            if tables
+                .insert(type_id, (registration.make_writes)())
+                .is_some()
+            {
+                panic!(
+                    "duplicate CPU wire registration for TypeId {:?}",
+                    registration.type_id
+                );
             }
         }
         Self { tables }
@@ -234,7 +248,10 @@ mod tests {
     use super::*;
 
     fn registrations() -> [CpuWireRegistration; 2] {
-        [CpuWireRegistration::new::<u32>(), CpuWireRegistration::new::<f32>()]
+        [
+            CpuWireRegistration::new::<u32>(),
+            CpuWireRegistration::new::<f32>(),
+        ]
     }
 
     #[test]

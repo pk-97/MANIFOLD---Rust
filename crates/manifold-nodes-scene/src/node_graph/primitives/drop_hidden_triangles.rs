@@ -63,19 +63,37 @@ impl Primitive for DropHiddenTriangles {
         _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
-        (port_name == "out").then(|| input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)).flatten()
+        (port_name == "out")
+            .then(|| {
+                input_capacities
+                    .iter()
+                    .find(|(p, _)| *p == "in")
+                    .map(|(_, n)| *n)
+            })
+            .flatten()
     }
 
     /// The triangle count never changes: topology tracks `in`.
-    fn mesh_output_rule(&self, port: &str) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
-        use manifold_node_engine::scene::mesh_change::{MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule};
+    fn mesh_output_rule(
+        &self,
+        port: &str,
+    ) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
+        use manifold_node_engine::scene::mesh_change::{
+            MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule,
+        };
         if port == "out" {
             return MeshOutputRule {
-                topology: MeshRevisionRule::Dependencies(&[MeshDependency { input: Cow::Borrowed("in"), aspect: MeshAspect::Topology }]),
+                topology: MeshRevisionRule::Dependencies(&[MeshDependency {
+                    input: Cow::Borrowed("in"),
+                    aspect: MeshAspect::Topology,
+                }]),
                 positions: MeshRevisionRule::Written,
             };
         }
-        MeshOutputRule { topology: MeshRevisionRule::Written, positions: MeshRevisionRule::Written }
+        MeshOutputRule {
+            topology: MeshRevisionRule::Written,
+            positions: MeshRevisionRule::Written,
+        }
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -93,13 +111,29 @@ impl Primitive for DropHiddenTriangles {
         }
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let uniforms = DropUniforms { cutoff, dispatch_count: count, _pad0: 0, _pad1: 0 };
+        let uniforms = DropUniforms {
+            cutoff,
+            dispatch_count: count,
+            _pad0: 0,
+            _pad1: 0,
+        };
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: src, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: dst, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: src,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: dst,
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256), 1, 1],
             "node.drop_hidden_triangles",
@@ -125,23 +159,44 @@ mod gpu_tests {
 
     fn dispatch(src: &[MeshVertex], cutoff: f32) -> Vec<MeshVertex> {
         let device = manifold_gpu::testkit::test_device();
-        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<DropHiddenTriangles>()
-            .expect("drop_hidden_triangles buffer codegen");
-        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "drop-hidden-test");
+        let wgsl =
+            manifold_node_engine::freeze::codegen::standalone_for_spec::<DropHiddenTriangles>()
+                .expect("drop_hidden_triangles buffer codegen");
+        let pipeline = device.create_compute_pipeline(
+            &wgsl,
+            manifold_node_engine::freeze::codegen::ENTRY,
+            "drop-hidden-test",
+        );
         let bytes = std::mem::size_of_val(src) as u64;
         let input = device.create_buffer_shared(bytes);
         unsafe {
             input.write(0, bytemuck::cast_slice(src));
         }
         let output = device.create_buffer_shared(bytes);
-        let uniforms = DropUniforms { cutoff, dispatch_count: src.len() as u32, _pad0: 0, _pad1: 0 };
+        let uniforms = DropUniforms {
+            cutoff,
+            dispatch_count: src.len() as u32,
+            _pad0: 0,
+            _pad1: 0,
+        };
         let mut enc = device.create_encoder("drop-hidden-test");
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: &input, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: &output, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &input,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: &output,
+                    offset: 0,
+                },
             ],
             [(src.len() as u32).div_ceil(256), 1, 1],
             "drop-hidden-test",
@@ -158,10 +213,17 @@ mod gpu_tests {
             .enumerate()
             .map(|(i, v)| {
                 let base = i / 3 * 3;
-                if base + 2 >= src.len() || src[base..base + 3].iter().any(|corner| corner.color[3] > cutoff) {
+                if base + 2 >= src.len()
+                    || src[base..base + 3]
+                        .iter()
+                        .any(|corner| corner.color[3] > cutoff)
+                {
                     return *v;
                 }
-                MeshVertex { position: src[base].position, ..*v }
+                MeshVertex {
+                    position: src[base].position,
+                    ..*v
+                }
             })
             .collect()
     }
@@ -183,9 +245,23 @@ mod gpu_tests {
         let got = dispatch(&src, 0.5);
         let want = expected(&src, 0.5);
         for (i, (got, want)) in got.iter().zip(&want).enumerate() {
-            assert_eq!(bytemuck::bytes_of(got), bytemuck::bytes_of(want), "vertex {i}: {:?} vs {:?}", got.position, want.position);
+            assert_eq!(
+                bytemuck::bytes_of(got),
+                bytemuck::bytes_of(want),
+                "vertex {i}: {:?} vs {:?}",
+                got.position,
+                want.position
+            );
         }
-        assert_eq!(got[1].position, [0.0, 0.0, 0.0], "a hidden triangle has no area");
-        assert_eq!(got[4].position, [3.0, 0.0, 0.0], "a shown triangle keeps its shape");
+        assert_eq!(
+            got[1].position,
+            [0.0, 0.0, 0.0],
+            "a hidden triangle has no area"
+        );
+        assert_eq!(
+            got[4].position,
+            [3.0, 0.0, 0.0],
+            "a shown triangle keeps its shape"
+        );
     }
 }

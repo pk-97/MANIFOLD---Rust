@@ -40,11 +40,30 @@ pub(crate) struct MoveSwarmUniforms {
 }
 
 const fn int(name: &'static str, label: &'static str, default: f32, max: f32) -> ParamDef {
-    ParamDef { name: Cow::Borrowed(name), label, ty: ParamType::Int, default: ParamValue::Float(default), range: Some((0.0, max)), enum_values: &[] }
+    ParamDef {
+        name: Cow::Borrowed(name),
+        label,
+        ty: ParamType::Int,
+        default: ParamValue::Float(default),
+        range: Some((0.0, max)),
+        enum_values: &[],
+    }
 }
 
-const fn float(name: &'static str, label: &'static str, default: f32, range: (f32, f32)) -> ParamDef {
-    ParamDef { name: Cow::Borrowed(name), label, ty: ParamType::Float, default: ParamValue::Float(default), range: Some(range), enum_values: &[] }
+const fn float(
+    name: &'static str,
+    label: &'static str,
+    default: f32,
+    range: (f32, f32),
+) -> ParamDef {
+    ParamDef {
+        name: Cow::Borrowed(name),
+        label,
+        ty: ParamType::Float,
+        default: ParamValue::Float(default),
+        range: Some(range),
+        enum_values: &[],
+    }
 }
 
 manifold_node_engine::primitive! {
@@ -110,7 +129,14 @@ impl Primitive for MoveSwarm {
         _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
-        (port_name == "out").then(|| input_capacities.iter().find(|(p, _)| *p == "in").map(|&(_, n)| n)).flatten()
+        (port_name == "out")
+            .then(|| {
+                input_capacities
+                    .iter()
+                    .find(|(p, _)| *p == "in")
+                    .map(|&(_, n)| n)
+            })
+            .flatten()
     }
 
     fn aliased_array_io(&self) -> &'static [(&'static str, &'static str)] {
@@ -133,11 +159,20 @@ impl Primitive for MoveSwarm {
         // Sim Rate) or a refused one leaves last frame's state, which is this
         // frame's. Either way the aliased buffer holds the right particles.
         ctx.mark_gpu_accessed();
-        let int = |ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32| ctx.scalar_or_param(name, default).round().max(0.0) as i32;
+        let int = |ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32| {
+            ctx.scalar_or_param(name, default).round().max(0.0) as i32
+        };
         let requested = int(ctx, "active_count", 100_000.0) as u32;
         let ticks = int(ctx, "ticks", 0.0);
-        let Some(particles) = ctx.inputs.array("in") else { return };
-        let field = match ForceLatticeBinding::read(ctx, ctx.inputs.array("forces"), ctx.inputs.array("impulses"), "Move Swarm") {
+        let Some(particles) = ctx.inputs.array("in") else {
+            return;
+        };
+        let field = match ForceLatticeBinding::read(
+            ctx,
+            ctx.inputs.array("forces"),
+            ctx.inputs.array("impulses"),
+            "Move Swarm",
+        ) {
             Ok(field) => field,
             Err(error) => {
                 ctx.error(error);
@@ -155,21 +190,36 @@ impl Primitive for MoveSwarm {
         }
         // Each tick runs for its own length (a Speed ramp gives every tick a
         // different one), so the lengths come with the ticks or not at all.
-        let Some(tick_seconds) = ctx.inputs.array("tick_seconds").filter(|lengths| lengths.size >= ticks as u64 * 4) else {
+        let Some(tick_seconds) = ctx
+            .inputs
+            .array("tick_seconds")
+            .filter(|lengths| lengths.size >= ticks as u64 * 4)
+        else {
             ctx.error(format!("Move Swarm: {ticks} ticks need {ticks} tick lengths; wire tick_seconds from node.swarm_forces"));
             return;
         };
         // A frame with hits carries one impulse lattice per tick.
         let node_bytes = field.nodes.iter().map(|&n| n as u64).product::<u64>() * 16;
-        if field.impulse_tick >= 0 && field.impulses.is_some_and(|impulses| impulses.size < ticks as u64 * node_bytes) {
+        if field.impulse_tick >= 0
+            && field
+                .impulses
+                .is_some_and(|impulses| impulses.size < ticks as u64 * node_bytes)
+        {
             ctx.error(format!("Move Swarm: {ticks} ticks need {ticks} impulse lattices; wire impulses from node.swarm_forces"));
             return;
         }
         // Past the lattice a particle reads the far terms, when they come
         // with a buffer that holds them all; otherwise the lattice's edge.
         let far = ctx.inputs.array("far_forces");
-        let far_terms = if far.is_some() { int(ctx, "far_terms", 0.0) } else { 0 };
-        let far_words = (FAR_HEADER + field.force_lattices.max(1) as usize * far_terms as usize * FAR_TERM) as u64 * 16;
+        let far_terms = if far.is_some() {
+            int(ctx, "far_terms", 0.0)
+        } else {
+            0
+        };
+        let far_words = (FAR_HEADER
+            + field.force_lattices.max(1) as usize * far_terms as usize * FAR_TERM)
+            as u64
+            * 16;
         if far_terms > 0 && far.is_some_and(|far| far.size < far_words) {
             ctx.error(format!("Move Swarm: {far_terms} far terms per lattice need a longer far_forces; wire it from node.swarm_forces"));
             return;
@@ -200,13 +250,40 @@ impl Primitive for MoveSwarm {
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: particles, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: field.forces.unwrap_or(particles), offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: tick_seconds, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: field.impulses.unwrap_or(particles), offset: 0 },
-                GpuBinding::Buffer { binding: 5, buffer: far.unwrap_or(particles), offset: 0 },
-                GpuBinding::Buffer { binding: 6, buffer: particles, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: particles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: field.forces.unwrap_or(particles),
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: tick_seconds,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: field.impulses.unwrap_or(particles),
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: far.unwrap_or(particles),
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 6,
+                    buffer: particles,
+                    offset: 0,
+                },
             ],
             [active.div_ceil(256), 1, 1],
             "node.move_swarm",
@@ -220,15 +297,29 @@ mod tests {
 
     #[test]
     fn move_swarm_generates_a_valid_gathering_kernel() {
-        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<MoveSwarm>().expect("move_swarm codegen");
-        let module = naga::front::wgsl::parse_str(&wgsl).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
-        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
-            .validate(&module)
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<MoveSwarm>()
+            .expect("move_swarm codegen");
+        let module = naga::front::wgsl::parse_str(&wgsl)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
         assert!(wgsl.contains("buf_forces: array<f32>"), "{wgsl}");
-        assert!(wgsl.contains("@binding(3) var<storage, read> buf_tick_seconds: array<f32>"), "{wgsl}");
-        assert!(wgsl.contains("@binding(4) var<storage, read> buf_impulses: array<f32>"), "{wgsl}");
-        assert!(wgsl.contains("@binding(5) var<storage, read> buf_far_forces: array<f32>"), "{wgsl}");
+        assert!(
+            wgsl.contains("@binding(3) var<storage, read> buf_tick_seconds: array<f32>"),
+            "{wgsl}"
+        );
+        assert!(
+            wgsl.contains("@binding(4) var<storage, read> buf_impulses: array<f32>"),
+            "{wgsl}"
+        );
+        assert!(
+            wgsl.contains("@binding(5) var<storage, read> buf_far_forces: array<f32>"),
+            "{wgsl}"
+        );
         assert!(wgsl.contains("field_min_z: f32,\n    impulse_tick: i32,\n    far_terms: i32,\n    dispatch_count: u32,"), "{wgsl}");
         assert_eq!(std::mem::size_of::<MoveSwarmUniforms>(), 64);
     }

@@ -1,8 +1,8 @@
+use manifold_foundation::work_count::{WorkKind, record_work, record_work_n};
 use manifold_gpu::{
     GpuDevice, GpuLoadAction, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
     GpuTextureUsage,
 };
-use manifold_foundation::work_count::{record_work, record_work_n, WorkKind};
 use manifold_ui::node::Rect;
 use manifold_ui::tree::UITree;
 
@@ -116,7 +116,11 @@ impl UICacheManager {
     }
 
     /// A cache over `slots`, one window's atlas.
-    pub fn with_slots(format: GpuTextureFormat, scale_factor: f64, slots: &'static [PanelSlot]) -> Self {
+    pub fn with_slots(
+        format: GpuTextureFormat,
+        scale_factor: f64,
+        slots: &'static [PanelSlot],
+    ) -> Self {
         Self {
             slots,
             atlas_texture: None,
@@ -232,7 +236,8 @@ impl UICacheManager {
             let idx = info.slot as usize;
 
             // Skip if panel region is valid and no nodes are dirty.
-            if self.panel_valid[idx] && !tree.has_dirty_in_range(info.region, info.start, info.end) {
+            if self.panel_valid[idx] && !tree.has_dirty_in_range(info.region, info.start, info.end)
+            {
                 continue;
             }
 
@@ -247,7 +252,8 @@ impl UICacheManager {
                 && let Some(subs) = info.sub_regions
                 && Self::incremental_path_safe(&self.last_sub_regions[idx], subs, info, tree)
             {
-                let is_dirty = |&&(s, e): &&(usize, usize)| tree.has_dirty_in_range(info.region, s, e);
+                let is_dirty =
+                    |&&(s, e): &&(usize, usize)| tree.has_dirty_in_range(info.region, s, e);
                 let dirty = subs.iter().filter(is_dirty).count();
 
                 if dirty > 0 && dirty <= INCREMENTAL_THRESHOLD {
@@ -293,7 +299,12 @@ impl UICacheManager {
             }
             // Record the sub-region extents this full render established, so the
             // next incremental frame can confirm nothing moved before trusting Load.
-            Self::sub_region_sig(&mut self.last_sub_regions[idx], info.region, info.sub_regions, tree);
+            Self::sub_region_sig(
+                &mut self.last_sub_regions[idx],
+                info.region,
+                info.sub_regions,
+                tree,
+            );
             rendered_ranges.push((info.region, info.start, info.end));
         }
 
@@ -357,9 +368,12 @@ impl UICacheManager {
         tree: &UITree,
     ) -> bool {
         let matches = last.len() == subs.len()
-            && last.iter().zip(subs.iter()).all(|(&(ls, le, lb), &(s, e))| {
-                ls == s && le == e && lb == tree.get_bounds(tree.id_in(region, s))
-            });
+            && last
+                .iter()
+                .zip(subs.iter())
+                .all(|(&(ls, le, lb), &(s, e))| {
+                    ls == s && le == e && lb == tree.get_bounds(tree.id_in(region, s))
+                });
         if !matches {
             log::debug!(
                 "UI cache: sub-region extent changed on an incremental frame — \
@@ -398,9 +412,13 @@ impl UICacheManager {
 mod tests {
     use super::*;
     use manifold_ui::node::{UIFlags, UIStyle};
-    use manifold_ui::tree::{ZTier, DEFAULT_REGION};
+    use manifold_ui::tree::{DEFAULT_REGION, ZTier};
 
-    fn sig_of(region: u8, subs: Option<&[(usize, usize)]>, tree: &UITree) -> Vec<(usize, usize, Rect)> {
+    fn sig_of(
+        region: u8,
+        subs: Option<&[(usize, usize)]>,
+        tree: &UITree,
+    ) -> Vec<(usize, usize, Rect)> {
         let mut sig = vec![(9, 9, Rect::new(0.0, 0.0, 1.0, 1.0))];
         UICacheManager::sub_region_sig(&mut sig, region, subs, tree);
         sig
@@ -439,7 +457,11 @@ mod tests {
         // Sub-region 1 — first node frame at (0,60,100,40).
         tree.add_panel(None, 0.0, 60.0, 100.0, 40.0, UIStyle::default());
         tree.end_region(region, start);
-        (tree, vec![(start, start + 2), (start + 2, start + 3)], start)
+        (
+            tree,
+            vec![(start, start + 2), (start + 2, start + 3)],
+            start,
+        )
     }
 
     #[test]
@@ -447,7 +469,12 @@ mod tests {
         let (tree, subs, _start) = tree_with_subregions();
         let sig = sig_of(DEFAULT_REGION, Some(&subs), &tree);
         // In-place content change (no bounds change) is the incremental fast path.
-        assert!(UICacheManager::extents_unchanged(DEFAULT_REGION, &sig, &subs, &tree));
+        assert!(UICacheManager::extents_unchanged(
+            DEFAULT_REGION,
+            &sig,
+            &subs,
+            &tree
+        ));
     }
 
     #[test]
@@ -457,7 +484,12 @@ mod tests {
         // A sub-region's first node grows — Load would leave stale pixels below it,
         // so the guard must report the extent changed (caller falls back to full).
         tree.set_bounds(tree.id_at(subs[1].0), Rect::new(0.0, 60.0, 100.0, 80.0));
-        assert!(!UICacheManager::extents_unchanged(DEFAULT_REGION, &sig, &subs, &tree));
+        assert!(!UICacheManager::extents_unchanged(
+            DEFAULT_REGION,
+            &sig,
+            &subs,
+            &tree
+        ));
     }
 
     #[test]
@@ -467,7 +499,12 @@ mod tests {
         // A different sub-region partition (count / ranges differ) is never safe to
         // trust against an older signature.
         let repartitioned = vec![(0, 3)];
-        assert!(!UICacheManager::extents_unchanged(DEFAULT_REGION, &sig, &repartitioned, &tree));
+        assert!(!UICacheManager::extents_unchanged(
+            DEFAULT_REGION,
+            &sig,
+            &repartitioned,
+            &tree
+        ));
     }
 
     #[test]
@@ -509,7 +546,12 @@ mod tests {
         // node) — the Load path reaches it, and the sub-region's first node
         // hasn't moved, so the incremental path stays safe.
         tree.set_bounds(tree.id_at(start + 2), Rect::new(8.0, 12.0, 50.0, 10.0));
-        assert!(UICacheManager::incremental_path_safe(&sig, &subs, &info(start, end), &tree));
+        assert!(UICacheManager::incremental_path_safe(
+            &sig,
+            &subs,
+            &info(start, end),
+            &tree
+        ));
     }
 
     #[test]
@@ -525,7 +567,17 @@ mod tests {
         // would never repaint. The guard must force the full, self-clearing panel
         // render (BUG-015).
         tree.set_bounds(tree.id_at(end - 1), Rect::new(0.0, 95.0, 80.0, 5.0));
-        assert!(UICacheManager::extents_unchanged(DEFAULT_REGION, &sig, &subs, &tree));
-        assert!(!UICacheManager::incremental_path_safe(&sig, &subs, &info(start, end), &tree));
+        assert!(UICacheManager::extents_unchanged(
+            DEFAULT_REGION,
+            &sig,
+            &subs,
+            &tree
+        ));
+        assert!(!UICacheManager::incremental_path_safe(
+            &sig,
+            &subs,
+            &info(start, end),
+            &tree
+        ));
     }
 }

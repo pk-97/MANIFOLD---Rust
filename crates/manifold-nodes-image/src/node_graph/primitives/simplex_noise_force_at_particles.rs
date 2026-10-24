@@ -28,15 +28,15 @@
 //! Reusable for any per-particle force-augmentation pipeline that
 //! wants spatially-coherent jitter without paying canvas-area cost.
 
-use std::borrow::Cow;
 use manifold_gpu::{
     GpuBinding, GpuSamplerDesc, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
     GpuTextureUsage,
 };
+use std::borrow::Cow;
 
-use manifold_node_engine::particles::Particle;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::Particle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
@@ -266,4 +266,3 @@ impl Primitive for SimplexNoiseForceAtParticles {
         );
     }
 }
-

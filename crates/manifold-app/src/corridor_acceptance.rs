@@ -82,10 +82,14 @@ fn loop_graph_and_period(
             continue;
         };
         let Some(instance) = graph.scene_modifiers.iter().find(|instance| {
-            instance.graph.preset_metadata.as_ref().is_some_and(|metadata| {
-                metadata.id.as_str() == "SceneLoop"
-            })
-        }) else { continue; };
+            instance
+                .graph
+                .preset_metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.id.as_str() == "SceneLoop")
+        }) else {
+            continue;
+        };
         let Some(phase) = find_authored_node(&instance.graph.nodes, "loop_phase") else {
             continue;
         };
@@ -129,11 +133,15 @@ fn find_authored_node<'a>(
 }
 
 fn local_binding_id(def: &EffectGraphDef, node_id: &str, param: &str) -> Option<String> {
-    def.preset_metadata.as_ref()?.bindings.iter().find_map(|binding| {
-        matches!(&binding.target, BindingTarget::Node { node_id: id, param: key }
+    def.preset_metadata
+        .as_ref()?
+        .bindings
+        .iter()
+        .find_map(|binding| {
+            matches!(&binding.target, BindingTarget::Node { node_id: id, param: key }
             if id.as_str() == node_id && key == param)
             .then(|| binding.id.clone())
-    })
+        })
 }
 
 // ─── Gate 1: migration smoke on the real projects ─────────────────────
@@ -153,7 +161,13 @@ fn corridor_acceptance_migration_smoke() {
         let local = def
             .scene_modifiers
             .iter()
-            .find(|instance| instance.graph.preset_metadata.as_ref().is_some_and(|metadata| metadata.id.as_str() == "SceneLoop"))
+            .find(|instance| {
+                instance
+                    .graph
+                    .preset_metadata
+                    .as_ref()
+                    .is_some_and(|metadata| metadata.id.as_str() == "SceneLoop")
+            })
             .map(|instance| instance.graph.as_ref())
             .expect("migrated SceneLoop instance");
 
@@ -214,11 +228,14 @@ fn corridor_acceptance_migration_smoke() {
             local_meta.bindings.iter().find_map(|binding| {
                 matches!(&binding.target, BindingTarget::Node { node_id, param: target }
                     if node_id.as_str() == node && target == param)
-                    .then_some(binding.id.as_str())
+                .then_some(binding.id.as_str())
             })
         };
         let pattern_slot = binding_for("scene_array", "pattern_length").expect("Pattern binding");
-        assert_eq!(binding_for("loop_camera", "pattern_length"), Some(pattern_slot));
+        assert_eq!(
+            binding_for("loop_camera", "pattern_length"),
+            Some(pattern_slot)
+        );
         let spacing_slot = binding_for("loop_camera", "cell_size").expect("Spacing binding");
         assert_eq!(binding_for("scene_array", "cell_size"), Some(spacing_slot));
 
@@ -626,13 +643,19 @@ fn corridor_acceptance_stone_effects_wrap_metric() {
         let local = def
             .scene_modifiers
             .iter()
-            .find(|instance| instance.graph.preset_metadata.as_ref().is_some_and(|metadata| metadata.id.as_str() == "SceneLoop"))
+            .find(|instance| {
+                instance
+                    .graph
+                    .preset_metadata
+                    .as_ref()
+                    .is_some_and(|metadata| metadata.id.as_str() == "SceneLoop")
+            })
             .map(|instance| instance.graph.as_ref())
             .expect("migrated SceneLoop instance");
         // The saved instance value overrides the graph default (v2: 4 vs 8).
         let gp = project.timeline.layers[layer_idx].gen_params().unwrap();
-        let phase_binding = local_binding_id(local, "loop_phase", "bars")
-            .expect("loop bars binding");
+        let phase_binding =
+            local_binding_id(local, "loop_phase", "bars").expect("loop bars binding");
         let loop_beats = gp.get_base_param(&phase_binding) as f64;
         eprintln!("[corridor-probe] variant={variant} actual bars={loop_beats}");
         let bpm = project.settings.bpm.0 as f64;
@@ -897,7 +920,13 @@ fn modifier_live_scrub_keeps_runtime_couplings_through_undo_redo() {
         let instance_graph = graph
             .scene_modifiers
             .iter()
-            .find(|instance| instance.graph.preset_metadata.as_ref().is_some_and(|metadata| metadata.id.as_str() == "SceneLoop"))
+            .find(|instance| {
+                instance
+                    .graph
+                    .preset_metadata
+                    .as_ref()
+                    .is_some_and(|metadata| metadata.id.as_str() == "SceneLoop")
+            })
             .map(|instance| instance.graph.as_ref())
             .expect("migrated SceneLoop instance");
         let spacing_id = local_binding_id(instance_graph, "loop_camera", "cell_size").unwrap();
@@ -923,7 +952,8 @@ fn modifier_live_scrub_keeps_runtime_couplings_through_undo_redo() {
                 .iter()
                 .find_map(|r| {
                     r.as_any()
-                        .downcast_ref::<manifold_compositor::generator_renderer::GeneratorRenderer>()
+                        .downcast_ref::<manifold_compositor::generator_renderer::GeneratorRenderer>(
+                        )
                 })
                 .unwrap()
                 .live_node_params(&layer_id)
@@ -979,7 +1009,11 @@ fn modifier_live_scrub_keeps_runtime_couplings_through_undo_redo() {
                 crate::ui_bridge::dispatch(
                     &action,
                     &mut crate::ui_bridge::DispatchCtx {
-                        project: crate::ui_bridge::ProjectRef::new(&mut local, &mut Default::default(), &content_tx),
+                        project: crate::ui_bridge::ProjectRef::new(
+                            &mut local,
+                            &mut Default::default(),
+                            &content_tx,
+                        ),
                         content_tx: &content_tx,
                         content_state: &state,
                         ui: &mut ui,

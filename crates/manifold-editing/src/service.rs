@@ -1,5 +1,5 @@
 use crate::audit;
-use crate::command::{rows_deferred, rows_written, Command, CompositeCommand};
+use crate::command::{Command, CompositeCommand, rows_deferred, rows_written};
 use crate::commands::clip::*;
 use crate::commands::layer::DuplicateLayersCommand;
 use crate::edit::ProjectEdit;
@@ -66,7 +66,12 @@ impl EditingService {
     /// write changed which rows exist (`rows_written`). Never bumps
     /// `data_version` (D23). An empty set is a no-op stamp, for writes that
     /// found nothing to change.
-    pub fn mutate<'p>(&mut self, touches: ChangeSet, project: impl Into<ProjectEdit<'p>>, f: impl FnOnce(&mut Project)) -> ChangeSet {
+    pub fn mutate<'p>(
+        &mut self,
+        touches: ChangeSet,
+        project: impl Into<ProjectEdit<'p>>,
+        f: impl FnOnce(&mut Project),
+    ) -> ChangeSet {
         let project = project.into().into_mut();
         let window = audit::open(project);
         let ((), rows) = rows_written(project, f);
@@ -79,7 +84,12 @@ impl EditingService {
     /// A gesture's live move (a scrub tick): as [`Self::mutate`], but rows
     /// are left to the gesture's commit (`rows_deferred`), so no row appears
     /// or vanishes under the cursor mid-drag.
-    pub fn mutate_gesture<'p>(&mut self, touches: ChangeSet, project: impl Into<ProjectEdit<'p>>, f: impl FnOnce(&mut Project)) {
+    pub fn mutate_gesture<'p>(
+        &mut self,
+        touches: ChangeSet,
+        project: impl Into<ProjectEdit<'p>>,
+        f: impl FnOnce(&mut Project),
+    ) {
         let project = project.into().into_mut();
         let window = audit::open(project);
         rows_deferred(project, f);
@@ -125,7 +135,11 @@ impl EditingService {
             if !commands.is_empty() {
                 service.execute_batch(commands, "Paste clips".into(), &mut *p);
             }
-            let touches = if added_layers { ChangeSet::of(&[Part::Layers]) } else { ChangeSet::NONE };
+            let touches = if added_layers {
+                ChangeSet::of(&[Part::Layers])
+            } else {
+                ChangeSet::NONE
+            };
             (result, touches)
         })
     }
@@ -140,7 +154,9 @@ impl EditingService {
     pub fn execute<'p>(&mut self, command: Box<dyn Command>, project: impl Into<ProjectEdit<'p>>) {
         let project = project.into().into_mut();
         let window = audit::open(project);
-        if !self.undo_manager.execute(command, project) { return; }
+        if !self.undo_manager.execute(command, project) {
+            return;
+        }
         // Read after execute: a command may learn what it touches from the
         // project it ran on (a scene feature switch).
         let touches = self.undo_manager.last_written();
@@ -203,7 +219,9 @@ impl EditingService {
 
     /// Record an already-executed command (e.g., end of drag).
     pub fn record(&mut self, command: Box<dyn Command>) {
-        if !command.was_applied() { return; }
+        if !command.was_applied() {
+            return;
+        }
         let touches = command.touches();
         self.undo_manager.record(command);
         self.data_version += 1;
@@ -219,7 +237,11 @@ impl EditingService {
     /// Undo and validate the resulting project before publishing the history
     /// move. A failed validation restores the command and leaves the service
     /// version unchanged.
-    pub fn undo_with_validation<'p, F>(&mut self, project: impl Into<ProjectEdit<'p>>, validate: F) -> bool
+    pub fn undo_with_validation<'p, F>(
+        &mut self,
+        project: impl Into<ProjectEdit<'p>>,
+        validate: F,
+    ) -> bool
     where
         F: FnMut(&Project) -> Result<(), String>,
     {
@@ -247,7 +269,11 @@ impl EditingService {
     /// Redo and validate the resulting project before publishing the history
     /// move. A failed validation restores the command and leaves the service
     /// version unchanged.
-    pub fn redo_with_validation<'p, F>(&mut self, project: impl Into<ProjectEdit<'p>>, validate: F) -> bool
+    pub fn redo_with_validation<'p, F>(
+        &mut self,
+        project: impl Into<ProjectEdit<'p>>,
+        validate: F,
+    ) -> bool
     where
         F: FnMut(&Project) -> Result<(), String>,
     {
@@ -418,7 +444,9 @@ impl EditingService {
             // Case 2: placed clip covers the start -> trim start of existing
             if placed_start <= clip_start && placed_end < clip_end {
                 let trim_beats = placed_end - clip_start;
-                let trim_seconds = project.source_clock().source_seconds(clip, clip_start, placed_end);
+                let trim_seconds = project
+                    .source_clock()
+                    .source_seconds(clip, clip_start, placed_end);
                 let new_in_point = clip.in_point + trim_seconds;
                 let new_start = placed_end;
                 let new_duration = clip.duration_beats - trim_beats;
@@ -456,8 +484,10 @@ impl EditingService {
                 let mut tail = clip.clone_with_new_id();
                 tail.start_beat = placed_end;
                 tail.duration_beats = clip_end - placed_end;
-                tail.in_point =
-                    clip.in_point + project.source_clock().source_seconds(clip, clip_start, placed_end);
+                tail.in_point = clip.in_point
+                    + project
+                        .source_clock()
+                        .source_seconds(clip, clip_start, placed_end);
 
                 commands.push(Box::new(TrimClipCommand::new(
                     clip.id.clone(),
@@ -661,7 +691,9 @@ impl EditingService {
                 tail.duration_beats = tail_duration;
                 if clip.is_source_media() && clip.duration_beats > Beats::ZERO {
                     tail.in_point = clip.in_point
-                        + project.source_clock().source_seconds(clip, clip.start_beat, split_beat);
+                        + project
+                            .source_clock()
+                            .source_seconds(clip, clip.start_beat, split_beat);
                 }
                 return Some(SplitClipCommand::new(
                     clip.id.clone(),
@@ -985,7 +1017,11 @@ impl EditingService {
                         interior_clip.duration_beats = tail_end - region_start;
                         if orig.is_source_media() && orig.duration_beats > Beats::ZERO {
                             interior_clip.in_point = orig.in_point
-                                + project.source_clock().source_seconds(orig, orig.start_beat, region_start);
+                                + project.source_clock().source_seconds(
+                                    orig,
+                                    orig.start_beat,
+                                    region_start,
+                                );
                         }
                         commands.push(Box::new(DeleteClipCommand::new(interior_clip, lid)));
                     }
@@ -1067,12 +1103,8 @@ impl EditingService {
 
         // Enforce overlaps for each nudged clip, excluding other nudged clips
         for nudged in &nudged_clips {
-            let overlap_cmds = Self::enforce_non_overlap(
-                project,
-                &nudged.clip,
-                nudged.layer_index,
-                &nudged_ids,
-            );
+            let overlap_cmds =
+                Self::enforce_non_overlap(project, &nudged.clip, nudged.layer_index, &nudged_ids);
             commands.extend(overlap_cmds);
         }
 
@@ -1269,8 +1301,7 @@ impl EditingService {
             // same semantics as `nudge_clips`). The clip's own beat position
             // is unchanged by a cross-layer move, so `clip` itself is already
             // the correct post-move shape.
-            let overlap_cmds =
-                Self::enforce_non_overlap(project, clip, dest as usize, &moved_ids);
+            let overlap_cmds = Self::enforce_non_overlap(project, clip, dest as usize, &moved_ids);
             commands.extend(overlap_cmds);
         }
         commands
@@ -1314,14 +1345,22 @@ impl EditingService {
             number += 1;
         };
         let layer = Layer::new_trigger(name, owner_id.clone(), (index + 1) as i32);
-        let source = manifold_core::params::ClipTriggerSource::Lane { layer_id: layer.layer_id.clone() };
-        let add = Box::new(crate::commands::layer::AddLayerCommand::from_layer(layer, index + 1));
+        let source = manifold_core::params::ClipTriggerSource::Lane {
+            layer_id: layer.layer_id.clone(),
+        };
+        let add = Box::new(crate::commands::layer::AddLayerCommand::from_layer(
+            layer,
+            index + 1,
+        ));
         if let Some((target, param_id)) = assignment {
-            Some(Box::new(CompositeCommand::new(vec![add, Box::new(
+            Some(Box::new(CompositeCommand::new(
+                vec![add, Box::new(
                 crate::commands::trigger_source::SetParamClipTriggerSourceCommand::for_assignment(
                     target, param_id, source,
                 ),
-            )], "Add Trigger Lane".into())))
+            )],
+                "Add Trigger Lane".into(),
+            )))
         } else {
             Some(add)
         }
@@ -1438,8 +1477,13 @@ mod stamp_tests {
         let mut service = EditingService::new();
         let mut project = Project::default();
         let before = service.stamps();
-        service.mutate(ChangeSet::of(&[Part::Values]), &mut project, |p| p.settings.master_opacity = 0.5);
-        assert_eq!(service.stamps().moved_since(&before), ChangeSet::of(&[Part::Values]));
+        service.mutate(ChangeSet::of(&[Part::Values]), &mut project, |p| {
+            p.settings.master_opacity = 0.5
+        });
+        assert_eq!(
+            service.stamps().moved_since(&before),
+            ChangeSet::of(&[Part::Values])
+        );
         assert_eq!(service.data_version(), 0);
     }
 
@@ -1449,7 +1493,9 @@ mod stamp_tests {
     fn audit_rejects_an_undeclared_part() {
         let mut service = EditingService::new();
         let mut project = Project::default();
-        service.mutate(ChangeSet::of(&[Part::Values]), &mut project, |p| p.settings.frame_rate = 30.0);
+        service.mutate(ChangeSet::of(&[Part::Values]), &mut project, |p| {
+            p.settings.frame_rate = 30.0
+        });
     }
 
     /// Materializing an override under `Overrides | Shapes` passes, but a
@@ -1457,43 +1503,59 @@ mod stamp_tests {
     /// and the graph's contents are fingerprinted apart.
     #[test]
     fn override_presence_is_its_own_part() {
-        let mut fx = manifold_core::effects::PresetInstance::new(manifold_core::PresetTypeId::new("AuditTest"));
+        let mut fx = manifold_core::effects::PresetInstance::new(manifold_core::PresetTypeId::new(
+            "AuditTest",
+        ));
         fx.graph = None;
         let mut project = Project::default();
         project.settings.master_effects.push(fx);
         let mut service = EditingService::new();
         let materialize = ChangeSet::of(&[Part::Overrides, Part::Shapes]);
         service.mutate(materialize, &mut project, |p| {
-            p.settings.master_effects[0].graph = Some(manifold_core::effect_graph_def::EffectGraphDef {
-                version: 1,
-                name: None,
-                description: None,
-                preset_metadata: None,
-                scene_modifiers: Vec::new(),
-                nodes: Vec::new(),
-                wires: Vec::new(),
-            });
+            p.settings.master_effects[0].graph =
+                Some(manifold_core::effect_graph_def::EffectGraphDef {
+                    version: 1,
+                    name: None,
+                    description: None,
+                    preset_metadata: None,
+                    scene_modifiers: Vec::new(),
+                    nodes: Vec::new(),
+                    wires: Vec::new(),
+                });
         });
         let structural = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             service.mutate(materialize, &mut project, |p| {
                 p.settings.master_effects[0].graph.as_mut().unwrap().name = Some("renamed".into());
             });
         }));
-        assert!(structural.is_err(), "a structural graph edit must declare Effects");
+        assert!(
+            structural.is_err(),
+            "a structural graph edit must declare Effects"
+        );
     }
 
     /// A binding's reshape values are Shapes; which bindings exist is
     /// membership (Effects). Adding one under Shapes fails the audit.
     #[test]
     fn binding_membership_is_effects_not_shapes() {
-        let mut fx = manifold_core::effects::PresetInstance::new(manifold_core::PresetTypeId::new("AuditTest"));
-        fx.graph = Some(crate::commands::effects::tests::seed_def_with_param("amount"));
+        let mut fx = manifold_core::effects::PresetInstance::new(manifold_core::PresetTypeId::new(
+            "AuditTest",
+        ));
+        fx.graph = Some(crate::commands::effects::tests::seed_def_with_param(
+            "amount",
+        ));
         let mut project = Project::default();
         project.settings.master_effects.push(fx);
         let mut service = EditingService::new();
         let shapes = ChangeSet::of(&[Part::Shapes]);
         fn meta(p: &mut Project) -> &mut manifold_core::effect_graph_def::PresetMetadata {
-            p.settings.master_effects[0].graph.as_mut().unwrap().preset_metadata.as_mut().unwrap()
+            p.settings.master_effects[0]
+                .graph
+                .as_mut()
+                .unwrap()
+                .preset_metadata
+                .as_mut()
+                .unwrap()
         }
         service.mutate(shapes, &mut project, |p| {
             let m = meta(p);
@@ -1525,8 +1587,8 @@ mod paste_type_guard_tests {
     // an existing audio layer, symmetric with the pre-existing generator/
     // video mismatch guard in `paste_clips`.
     use super::*;
-    use manifold_core::project::Project;
     use manifold_core::Seconds;
+    use manifold_core::project::Project;
 
     fn make_project() -> Project {
         let mut project = Project::default();
@@ -1609,7 +1671,10 @@ mod paste_type_guard_tests {
         service.copy_clips(&project, &[id], None);
         for target in [0, 2, 3] {
             let result = service.paste_clips(&mut project, Beats(10.0), target);
-            assert!(result.pasted_clip_ids.is_empty(), "video clip landed on layer {target}");
+            assert!(
+                result.pasted_clip_ids.is_empty(),
+                "video clip landed on layer {target}"
+            );
             assert_eq!(result.skipped_count, 1);
             assert!(result.skip_reason.is_some(), "a skip must be reported");
         }
@@ -1629,6 +1694,10 @@ mod paste_type_guard_tests {
         let mut cmd = cmd;
         cmd.execute(&mut project);
         let tail = project.timeline.find_clip_by_id(tail_id.as_str()).unwrap();
-        assert!((tail.in_point.0 - 2.4).abs() < 1e-6, "tail in_point {}", tail.in_point.0);
+        assert!(
+            (tail.in_point.0 - 2.4).abs() < 1e-6,
+            "tail in_point {}",
+            tail.in_point.0
+        );
     }
 }

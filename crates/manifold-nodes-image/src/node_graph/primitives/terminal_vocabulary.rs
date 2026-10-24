@@ -42,7 +42,11 @@ pub(super) fn write_line(dst: &mut [u8], role: Role, context: Context) -> usize 
     let mut writer = Writer {
         dst,
         at: 0,
-        rng: Rng::new(hash3(context.stream, context.line as u32, context.signature)),
+        rng: Rng::new(hash3(
+            context.stream,
+            context.line as u32,
+            context.signature,
+        )),
     };
     writer.template(template, context);
     writer.at
@@ -110,8 +114,7 @@ const REGISTERS: [&[u8]; 14] = [
     b"r13", b"r14",
 ];
 const BINARY: [&[u8]; 12] = [
-    b"mov", b"add", b"sub", b"xor", b"and", b"or", b"cmp", b"test", b"lea", b"imul", b"shl",
-    b"shr",
+    b"mov", b"add", b"sub", b"xor", b"and", b"or", b"cmp", b"test", b"lea", b"imul", b"shl", b"shr",
 ];
 const UNARY: [&[u8]; 5] = [b"push", b"pop", b"inc", b"dec", b"neg"];
 const BRANCH: [&[u8]; 5] = [b"call", b"jmp", b"jne", b"je", b"jg"];
@@ -338,7 +341,11 @@ impl Writer<'_> {
                 }
             }
             _ => {
-                let op: &[u8] = if self.rng.below(2) == 0 { b"ret" } else { b"nop" };
+                let op: &[u8] = if self.rng.below(2) == 0 {
+                    b"ret"
+                } else {
+                    b"nop"
+                };
                 self.bytes(op);
             }
         }
@@ -438,7 +445,11 @@ mod tests {
                     let mut buffer = [0u8; 7];
                     let written = write_line(&mut buffer[..size], role, context(stream, 3));
                     assert!(written <= size);
-                    assert!(buffer[..size].iter().all(|&byte| (32..=126).contains(&byte)));
+                    assert!(
+                        buffer[..size]
+                            .iter()
+                            .all(|&byte| (32..=126).contains(&byte))
+                    );
                 }
             }
         }
@@ -493,7 +504,11 @@ mod tests {
             lines.dedup();
             let floor = if role == Role::Inspect { 25 } else { 45 };
             assert!(passages.len() >= 8, "{role:?}: {} passages", passages.len());
-            assert!(lines.len() >= floor, "{role:?}: {} distinct lines", lines.len());
+            assert!(
+                lines.len() >= floor,
+                "{role:?}: {} distinct lines",
+                lines.len()
+            );
         }
     }
 
@@ -521,7 +536,10 @@ mod tests {
             let first = stream as usize % passages.len();
             let len = passages[first].len();
             assert_eq!(template(passages, stream, 0), passages[first][0]);
-            assert_eq!(template(passages, stream, len - 1), passages[first][len - 1]);
+            assert_eq!(
+                template(passages, stream, len - 1),
+                passages[first][len - 1]
+            );
             assert_eq!(
                 template(passages, stream, len),
                 passages[(first + 1) % passages.len()][0]

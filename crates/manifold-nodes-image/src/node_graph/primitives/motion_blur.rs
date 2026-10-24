@@ -62,11 +62,13 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::primitives::standalone_pipeline::{
+    dispatch_standalone_2d, standalone_pipeline,
+};
+use manifold_node_engine::scene::camera::Camera;
 
 /// Generated-codegen uniform layout: the `max_blur_px` param (f32, PARAMS
 /// order), the `enabled` param (Bool → u32), then the one DERIVED field
@@ -170,7 +172,10 @@ impl Primitive for MotionBlur {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let max_blur_px = ctx.param_f32("max_blur_px", 32.0);
 
-        let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
+        let cam = ctx
+            .inputs
+            .camera("camera")
+            .unwrap_or_else(Camera::default_perspective);
         let shutter_angle = cam.lens.shutter_angle;
 
         let Some(src) = ctx.inputs.texture_2d("in") else {
@@ -311,10 +316,7 @@ pub(crate) mod cpu_reference {
         shutter_angle: f32,
     ) -> [f32; 4] {
         let dims = [color.w as f32, color.h as f32];
-        let uv = [
-            (cx as f32 + 0.5) / dims[0],
-            (cy as f32 + 0.5) / dims[1],
-        ];
+        let uv = [(cx as f32 + 0.5) / dims[0], (cy as f32 + 0.5) / dims[1]];
 
         let smear_px_raw = [
             velocity_ndc[0] * 0.5 * dims[0] * (shutter_angle / 360.0),
@@ -353,7 +355,7 @@ pub(crate) mod cpu_reference {
 /// the same invariant on the shipping kernel).
 #[cfg(test)]
 mod analytic_sanity {
-    use super::cpu_reference::{motion_blur_texel, ColorBuffer};
+    use super::cpu_reference::{ColorBuffer, motion_blur_texel};
 
     #[test]
     fn zero_shutter_angle_collapses_every_tap_to_the_center_texel() {
@@ -411,7 +413,7 @@ mod gpu_tests {
         GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
     };
 
-    use super::cpu_reference::{motion_blur_texel, ColorBuffer};
+    use super::cpu_reference::{ColorBuffer, motion_blur_texel};
     use super::{MotionBlur, MotionBlurUniforms};
     use manifold_node_engine::gpu::render_target::RenderTarget;
 
@@ -482,7 +484,10 @@ mod gpu_tests {
                 px[i * 4 + 3] = f16::from_f32(a);
             }
         }
-        (upload_rgba16f(device, w, h, "motion-blur-color-gradient", &px), rgba)
+        (
+            upload_rgba16f(device, w, h, "motion-blur-color-gradient", &px),
+            rgba,
+        )
     }
 
     fn readback_rgba(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<[f32; 4]> {
@@ -509,7 +514,12 @@ mod gpu_tests {
     }
 
     fn mb_uniforms(max_blur_px: f32, shutter_angle: f32) -> MotionBlurUniforms {
-        MotionBlurUniforms { max_blur_px, enabled: 1, shutter_angle, _pad0: 0.0 }
+        MotionBlurUniforms {
+            max_blur_px,
+            enabled: 1,
+            shutter_angle,
+            _pad0: 0.0,
+        }
     }
 
     fn dispatch(
@@ -522,16 +532,37 @@ mod gpu_tests {
         h: u32,
         uniform_bytes: &[u8],
     ) -> Vec<[f32; 4]> {
-        let out = RenderTarget::new(device, w, h, GpuTextureFormat::Rgba16Float, "motion-blur-out");
+        let out = RenderTarget::new(
+            device,
+            w,
+            h,
+            GpuTextureFormat::Rgba16Float,
+            "motion-blur-out",
+        );
         let mut enc = device.create_encoder("motion-blur-dispatch");
         enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: uniform_bytes },
-                GpuBinding::Texture { binding: 1, texture: color },
-                GpuBinding::Texture { binding: 2, texture: velocity },
-                GpuBinding::Sampler { binding: 3, sampler },
-                GpuBinding::Texture { binding: 4, texture: &out.texture },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: uniform_bytes,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: color,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: velocity,
+                },
+                GpuBinding::Sampler {
+                    binding: 3,
+                    sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 4,
+                    texture: &out.texture,
+                },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "motion-blur-dispatch",
@@ -563,9 +594,22 @@ mod gpu_tests {
             "motion-blur-generated",
         );
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
-        let gen_out = dispatch(&device, &pipeline, &sampler, &color_tex, &velocity_tex, w, h, bytes);
+        let gen_out = dispatch(
+            &device,
+            &pipeline,
+            &sampler,
+            &color_tex,
+            &velocity_tex,
+            w,
+            h,
+            bytes,
+        );
 
-        let color_buf = ColorBuffer { w: w as i32, h: h as i32, rgba: &color_rgba };
+        let color_buf = ColorBuffer {
+            w: w as i32,
+            h: h as i32,
+            rgba: &color_rgba,
+        };
         for y in 0..h as i32 {
             for x in 0..w as i32 {
                 let idx = (y as u32 * w + x as u32) as usize;
@@ -583,7 +627,6 @@ mod gpu_tests {
             }
         }
     }
-
 
     /// **I2**: `shutter_angle = 0` is an exact pass-through of `in` — every
     /// tap collapses onto the center texel regardless of the velocity
@@ -608,7 +651,16 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "motion-blur-zero-shutter",
         );
-        let got = dispatch(&device, &pipeline, &sampler, &color_tex, &velocity_tex, w, h, bytes);
+        let got = dispatch(
+            &device,
+            &pipeline,
+            &sampler,
+            &color_tex,
+            &velocity_tex,
+            w,
+            h,
+            bytes,
+        );
         let expected = readback_rgba(&device, &color_tex, w, h);
 
         assert_eq!(expected.len(), got.len());
@@ -645,7 +697,16 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "motion-blur-disabled",
         );
-        let got = dispatch(&device, &pipeline, &sampler, &color_tex, &velocity_tex, w, h, bytes);
+        let got = dispatch(
+            &device,
+            &pipeline,
+            &sampler,
+            &color_tex,
+            &velocity_tex,
+            w,
+            h,
+            bytes,
+        );
         let expected = readback_rgba(&device, &color_tex, w, h);
 
         for (i, (e, g)) in expected.iter().zip(got.iter()).enumerate() {

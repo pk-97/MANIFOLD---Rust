@@ -9,7 +9,11 @@ impl AppInputHost<'_> {
         if !self.ui_root.object_cards_have_focus {
             return false;
         }
-        if !self.ui_root.scene_setup_panel.scene_item_edit_allowed(action) {
+        if !self
+            .ui_root
+            .scene_setup_panel
+            .scene_item_edit_allowed(action)
+        {
             return true;
         }
         let Some(layer) = self.ui_root.scene_setup_panel.scene_destination() else {
@@ -18,7 +22,9 @@ impl AppInputHost<'_> {
         let selected = self.ui_root.scene_setup_panel.selected_scene_items();
         let queued = match action {
             CardEditAction::Copy | CardEditAction::Cut => {
-                let Some(clipboard) = crate::scene_clipboard::copy(&self.project, &layer, &selected) else {
+                let Some(clipboard) =
+                    crate::scene_clipboard::copy(&self.project, &layer, &selected)
+                else {
                     return true;
                 };
                 self.ui_root.scene_item_clipboard = Some(clipboard);
@@ -31,7 +37,11 @@ impl AppInputHost<'_> {
             }
             CardEditAction::Delete => self.ui_root.scene_setup_panel.remove_selection_action(),
             CardEditAction::Duplicate => {
-                crate::ui_bridge::project::send_scene_edit(self.content_tx, &layer, crate::scene_edit::duplicate(&self.project, &layer, &selected).map(Some));
+                crate::ui_bridge::project::send_scene_edit(
+                    self.content_tx,
+                    &layer,
+                    crate::scene_edit::duplicate(&self.project, &layer, &selected).map(Some),
+                );
                 None
             }
             CardEditAction::Group => self.ui_root.scene_setup_panel.group_selection_action(),
@@ -40,7 +50,8 @@ impl AppInputHost<'_> {
                 let Some(clipboard) = self.ui_root.scene_item_clipboard.as_ref() else {
                     return true;
                 };
-                let built = crate::scene_clipboard::paste(&self.project, &layer, clipboard).map(Some);
+                let built =
+                    crate::scene_clipboard::paste(&self.project, &layer, clipboard).map(Some);
                 crate::ui_bridge::project::send_scene_edit(self.content_tx, &layer, built);
                 None
             }
@@ -58,9 +69,15 @@ impl AppInputHost<'_> {
         if reorder {
             if let Some(item) = self.ui_root.scene_setup_panel.selected_scene_item() {
                 match crate::scene_edit::nudge(&self.project, &item.layer_id, &item.item, delta) {
-                    Ok(Some(edit)) => ContentCommand::send(self.content_tx, ContentCommand::ExecuteOnContent(edit.command)),
+                    Ok(Some(edit)) => ContentCommand::send(
+                        self.content_tx,
+                        ContentCommand::ExecuteOnContent(edit.command),
+                    ),
                     Ok(None) => {}
-                    Err(reason) => ContentCommand::send(self.content_tx, ContentCommand::GraphEditRejected(reason)),
+                    Err(reason) => ContentCommand::send(
+                        self.content_tx,
+                        ContentCommand::GraphEditRejected(reason),
+                    ),
                 }
             }
         } else if let Some(action) = self.ui_root.scene_setup_panel.navigate_selection(delta) {

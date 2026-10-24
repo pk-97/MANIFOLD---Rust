@@ -1,12 +1,16 @@
-use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
-use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_node_engine::scene::mesh_source::MeshSource;
-use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use crate::physics::{arrangement_of, requested_count, CopySpawn, MAX_COPIES, RestBox, RigidBody, Solid};
-use manifold_node_engine::scene::mesh_selection::MeshSelection;
+use crate::physics::{
+    CopySpawn, MAX_COPIES, RestBox, RigidBody, Solid, arrangement_of, requested_count,
+};
 use crate::physics_mesh::{PartPorts, is_part_mesh, transform_vertices, validate_transform};
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::transform::{IDENTITY_MAT4, Transform, rotation_to_render_scene_euler};
+use manifold_node_engine::scene::mesh_selection::MeshSelection;
+use manifold_node_engine::scene::mesh_source::MeshSource;
+use manifold_node_engine::scene::transform::{
+    IDENTITY_MAT4, Transform, rotation_to_render_scene_euler,
+};
 use manifold_physics::collision_shape::{CollisionShape, SCALE_STEPS_PER_OCTAVE, ShapeKey};
 use std::borrow::Cow;
 use std::sync::{Arc, mpsc};
@@ -23,11 +27,14 @@ const IDENTITY_TRANSFORM: Transform = Transform {
 /// prototype. Arrangement accepts a wired scalar or the enum param.
 fn read_spawn(ctx: &EffectNodeContext<'_, '_>) -> CopySpawn {
     let defaults = CopySpawn::default();
-    let wired_layout = ctx.inputs.scalar("copy_layout").and_then(|value| match value {
-        ParamValue::Float(value) => Some(value),
-        ParamValue::Enum(value) => Some(value as f32),
-        _ => None,
-    });
+    let wired_layout = ctx
+        .inputs
+        .scalar("copy_layout")
+        .and_then(|value| match value {
+            ParamValue::Float(value) => Some(value),
+            ParamValue::Enum(value) => Some(value as f32),
+            _ => None,
+        });
     let layout = wired_layout.unwrap_or_else(|| match ctx.params.get("copy_layout") {
         Some(ParamValue::Enum(value)) => *value as f32,
         Some(ParamValue::Float(value)) => *value,
@@ -55,16 +62,33 @@ pub(crate) fn flatten(transform: Transform) -> Transform {
         return transform;
     }
     let m = transform.world();
-    let mut scale: [f32; 3] = std::array::from_fn(|col| (0..3).map(|row| m[col][row] * m[col][row]).sum::<f32>().sqrt());
+    let mut scale: [f32; 3] = std::array::from_fn(|col| {
+        (0..3)
+            .map(|row| m[col][row] * m[col][row])
+            .sum::<f32>()
+            .sqrt()
+    });
     let column = |col: usize| [m[col][0], m[col][1], m[col][2]];
     let [x, y, z] = [column(0), column(1), column(2)];
-    let determinant = x[0] * (y[1] * z[2] - y[2] * z[1]) - x[1] * (y[0] * z[2] - y[2] * z[0]) + x[2] * (y[0] * z[1] - y[1] * z[0]);
+    let determinant = x[0] * (y[1] * z[2] - y[2] * z[1]) - x[1] * (y[0] * z[2] - y[2] * z[0])
+        + x[2] * (y[0] * z[1] - y[1] * z[0]);
     if determinant < 0.0 {
-        let axis = transform.scale.iter().position(|s| s.is_sign_negative()).unwrap_or(0);
+        let axis = transform
+            .scale
+            .iter()
+            .position(|s| s.is_sign_negative())
+            .unwrap_or(0);
         scale[axis] = -scale[axis];
     }
-    let rotation: [[f32; 3]; 3] =
-        std::array::from_fn(|row| std::array::from_fn(|col| if scale[col] != 0.0 { m[col][row] / scale[col] } else { 0.0 }));
+    let rotation: [[f32; 3]; 3] = std::array::from_fn(|row| {
+        std::array::from_fn(|col| {
+            if scale[col] != 0.0 {
+                m[col][row] / scale[col]
+            } else {
+                0.0
+            }
+        })
+    });
     Transform {
         pos: [m[3][0], m[3][1], m[3][2]],
         rot_euler: rotation_to_render_scene_euler(rotation),
@@ -78,8 +102,15 @@ pub(crate) fn flatten(transform: Transform) -> Transform {
 /// the X axis: the rest of the per-axis `scale`, so a 10 x 0.16 x 10 slab
 /// draws as one, never as 10 x 10 x 10.
 fn copy_scale(scale: [f32; 3]) -> Transform {
-    let uniform = if scale[0].is_finite() && scale[0] != 0.0 { scale[0] } else { 1.0 };
-    Transform { scale: [1.0, scale[1] / uniform, scale[2] / uniform], ..IDENTITY_TRANSFORM }
+    let uniform = if scale[0].is_finite() && scale[0] != 0.0 {
+        scale[0]
+    } else {
+        1.0
+    };
+    Transform {
+        scale: [1.0, scale[1] / uniform, scale[2] / uniform],
+        ..IDENTITY_TRANSFORM
+    }
 }
 
 /// A box as a transform, as `node.loop_cell` reads one: the unit cube
@@ -89,12 +120,20 @@ fn copy_scale(scale: [f32; 3]) -> Transform {
 /// nothing.
 fn rest_box(bounds: Option<([f32; 3], [f32; 3])>, group: &Transform) -> Transform {
     let Some((lo, hi)) = bounds else {
-        return Transform { scale: [0.0; 3], ..IDENTITY_TRANSFORM };
+        return Transform {
+            scale: [0.0; 3],
+            ..IDENTITY_TRANSFORM
+        };
     };
     Transform {
         pos: std::array::from_fn(|axis| 0.5 * (lo[axis] + hi[axis])),
         scale: std::array::from_fn(|axis| hi[axis] - lo[axis]),
-        parent: Transform { pos: group.pos, rot_euler: group.rot_euler, ..IDENTITY_TRANSFORM }.world(),
+        parent: Transform {
+            pos: group.pos,
+            rot_euler: group.rot_euler,
+            ..IDENTITY_TRANSFORM
+        }
+        .world(),
         ..IDENTITY_TRANSFORM
     }
 }
@@ -138,10 +177,12 @@ impl Default for ShapeWant {
 /// refused once instead of rebuilding every frame.
 impl PartialEq for ShapeWant {
     fn eq(&self, other: &Self) -> bool {
-        let same_part = |a: &Option<(MeshSource, Transform)>, b: &Option<(MeshSource, Transform)>| match (a, b) {
+        let same_part = |a: &Option<(MeshSource, Transform)>,
+                         b: &Option<(MeshSource, Transform)>| match (a, b) {
             (None, None) => true,
             (Some((source_a, transform_a)), Some((source_b, transform_b))) => {
-                same_source(source_a, source_b) && transform_bits(transform_a) == transform_bits(transform_b)
+                same_source(source_a, source_b)
+                    && transform_bits(transform_a) == transform_bits(transform_b)
             }
             _ => false,
         };
@@ -155,28 +196,58 @@ impl PartialEq for ShapeWant {
             && self.path == other.path
             && same_selection
             && self.parts.len() == other.parts.len()
-            && self.parts.iter().zip(other.parts.iter()).all(|(a, b)| same_part(a, b))
+            && self
+                .parts
+                .iter()
+                .zip(other.parts.iter())
+                .all(|(a, b)| same_part(a, b))
     }
 }
 
 fn same_source(a: &MeshSource, b: &MeshSource) -> bool {
     match (a, b) {
         (MeshSource::Cube { size: a }, MeshSource::Cube { size: b }) => a.to_bits() == b.to_bits(),
-        (MeshSource::Platonic { shape: shape_a, radius: a }, MeshSource::Platonic { shape: shape_b, radius: b }) => {
-            shape_a == shape_b && a.to_bits() == b.to_bits()
-        }
-        (MeshSource::Plane { width: wa, height: ha }, MeshSource::Plane { width: wb, height: hb }) => {
-            wa.to_bits() == wb.to_bits() && ha.to_bits() == hb.to_bits()
-        }
-        (MeshSource::Gltf { path: path_a, node_path: node_a, selection: a }, MeshSource::Gltf { path: path_b, node_path: node_b, selection: b }) => {
-            path_a == path_b && node_a == node_b && same_selection(a, b)
-        }
+        (
+            MeshSource::Platonic {
+                shape: shape_a,
+                radius: a,
+            },
+            MeshSource::Platonic {
+                shape: shape_b,
+                radius: b,
+            },
+        ) => shape_a == shape_b && a.to_bits() == b.to_bits(),
+        (
+            MeshSource::Plane {
+                width: wa,
+                height: ha,
+            },
+            MeshSource::Plane {
+                width: wb,
+                height: hb,
+            },
+        ) => wa.to_bits() == wb.to_bits() && ha.to_bits() == hb.to_bits(),
+        (
+            MeshSource::Gltf {
+                path: path_a,
+                node_path: node_a,
+                selection: a,
+            },
+            MeshSource::Gltf {
+                path: path_b,
+                node_path: node_b,
+                selection: b,
+            },
+        ) => path_a == path_b && node_a == node_b && same_selection(a, b),
         _ => a == b,
     }
 }
 
 fn same_selection(a: &MeshSelection, b: &MeshSelection) -> bool {
-    let unplaced = |selection: &MeshSelection| MeshSelection { translate: [0.0; 3], ..*selection };
+    let unplaced = |selection: &MeshSelection| MeshSelection {
+        translate: [0.0; 3],
+        ..*selection
+    };
     a.translate.map(f32::to_bits) == b.translate.map(f32::to_bits) && unplaced(a) == unplaced(b)
 }
 
@@ -197,7 +268,8 @@ impl ShapeWant {
 
     /// The scale the steps stand for.
     fn scale(&self) -> [f32; 3] {
-        self.scale_steps.map(|step| (step as f32 / SCALE_STEPS_PER_OCTAVE).exp2())
+        self.scale_steps
+            .map(|step| (step as f32 / SCALE_STEPS_PER_OCTAVE).exp2())
     }
 
     /// Load every part, place it, and make the solid this want asks for.
@@ -213,11 +285,14 @@ impl ShapeWant {
             let vertices = selection.load(std::path::Path::new(&self.path))?;
             lists.push(positions(&vertices));
         }
-        let shape = CollisionShape::from_triangle_lists(lists.iter().map(Vec::as_slice)).map_err(|error| error.to_string())?;
+        let shape = CollisionShape::from_triangle_lists(lists.iter().map(Vec::as_slice))
+            .map_err(|error| error.to_string())?;
         let scale = self.scale();
         let key = ShapeKey::new(&shape, scale, None).map_err(|error| error.to_string())?;
         let solid = match self.form {
-            Form::Hulls => Solid::Hulls(shape.body_hulls(scale).map_err(|error| error.to_string())?),
+            Form::Hulls => {
+                Solid::Hulls(shape.body_hulls(scale).map_err(|error| error.to_string())?)
+            }
             Form::Mesh => Solid::Mesh(shape.exact_mesh()),
         };
         Ok((key, solid))
@@ -331,7 +406,12 @@ fn next_identity() -> u64 {
 
 impl RigidBodyNode {
     /// Fill `self.asked` with what this frame's inputs ask for.
-    fn read_geometry(&mut self, ctx: &EffectNodeContext<'_, '_>, form: Form, scale: [f32; 3]) -> Result<Geometry, Cow<'static, str>> {
+    fn read_geometry(
+        &mut self,
+        ctx: &EffectNodeContext<'_, '_>,
+        form: Form,
+        scale: [f32; 3],
+    ) -> Result<Geometry, Cow<'static, str>> {
         let asked = &mut self.asked;
         asked.form = form;
         // An exact mesh is installed at the exact scale; only hull detail
@@ -341,31 +421,48 @@ impl RigidBodyNode {
         } else if scale.iter().all(|s| s.is_finite() && *s != 0.0) {
             // Hulls are made unscaled and reflected when cooked, so a mirror
             // asks for the same detail as its size.
-            asked.scale_steps = scale.map(|s| (s.abs().log2() * SCALE_STEPS_PER_OCTAVE).round() as i32);
+            asked.scale_steps =
+                scale.map(|s| (s.abs().log2() * SCALE_STEPS_PER_OCTAVE).round() as i32);
         }
         asked.path.clear();
         asked.selection = None;
         let ports = &self.part_ports;
-        let wired_parts = (0..ports.count()).any(|index| ctx.inputs.slot(ports.ports(index).0).is_some());
+        let wired_parts =
+            (0..ports.count()).any(|index| ctx.inputs.slot(ports.ports(index).0).is_some());
         // A part still loading keeps its last mesh, so the slots carry over.
-        asked.parts.resize(if wired_parts { ports.count() } else { 1 }, None);
+        asked
+            .parts
+            .resize(if wired_parts { ports.count() } else { 1 }, None);
         let mut loading = false;
         for (index, part) in asked.parts.iter_mut().enumerate() {
-            let (port, transform_port) = if wired_parts { ports.ports(index) } else { ("source", "source_transform") };
+            let (port, transform_port) = if wired_parts {
+                ports.ports(index)
+            } else {
+                ("source", "source_transform")
+            };
             let Some(slot) = ctx.inputs.slot(port) else {
                 *part = None;
                 continue;
             };
-            let source = ctx.inputs.slot_content_ready(slot).then(|| ctx.inputs.mesh_source_slot(slot)).flatten();
+            let source = ctx
+                .inputs
+                .slot_content_ready(slot)
+                .then(|| ctx.inputs.mesh_source_slot(slot))
+                .flatten();
             let Some(source) = source else {
                 loading = true;
                 continue;
             };
-            let transform = ctx.inputs.transform(transform_port).unwrap_or(IDENTITY_TRANSFORM);
-            validate_transform(transform).map_err(|error| Cow::Owned(format!("mesh part {index}: {error}")))?;
+            let transform = ctx
+                .inputs
+                .transform(transform_port)
+                .unwrap_or(IDENTITY_TRANSFORM);
+            validate_transform(transform)
+                .map_err(|error| Cow::Owned(format!("mesh part {index}: {error}")))?;
             *part = Some((source, transform));
         }
-        if !wired_parts && ctx.inputs.slot("source").is_none()
+        if !wired_parts
+            && ctx.inputs.slot("source").is_none()
             && let Some(ParamValue::String(path)) = ctx.params.get("path")
         {
             asked.path.push_str(path);
@@ -374,14 +471,25 @@ impl RigidBodyNode {
         // Nothing wired and no file: a Group with no mesh inside, set up
         // before its first part or after its last one left. It is refused
         // at once, never held as loading.
-        if !loading && asked.is_empty() && !asked.parts.iter().enumerate().any(|(index, _)| {
-            let port = if wired_parts { ports.ports(index).0 } else { "source" };
-            ctx.inputs.slot(port).is_some()
-        }) {
+        if !loading
+            && asked.is_empty()
+            && !asked.parts.iter().enumerate().any(|(index, _)| {
+                let port = if wired_parts {
+                    ports.ports(index).0
+                } else {
+                    "source"
+                };
+                ctx.inputs.slot(port).is_some()
+            })
+        {
             return Err(Cow::Borrowed("this group has no mesh to collide with"));
         }
         self.mesh_seen |= !asked.is_empty();
-        Ok(if loading || !self.mesh_seen { Geometry::Loading } else { Geometry::Ready })
+        Ok(if loading || !self.mesh_seen {
+            Geometry::Loading
+        } else {
+            Geometry::Ready
+        })
     }
 
     /// Start building the asked-for shape when it differs from the current
@@ -404,15 +512,21 @@ impl RigidBodyNode {
             }
             let want = self.want.clone();
             let (sender, receiver) = mpsc::channel();
-            let spawned = std::thread::Builder::new().name("collision-shape".into()).spawn(move || {
-                // Always settle, so a build that panicked is a refusal, not a wait.
-                let built = std::panic::catch_unwind(|| want.build())
-                    .unwrap_or_else(|_| Err("the collision shape build panicked".into()));
-                let _ = sender.send(built);
-            });
+            let spawned = std::thread::Builder::new()
+                .name("collision-shape".into())
+                .spawn(move || {
+                    // Always settle, so a build that panicked is a refusal, not a wait.
+                    let built = std::panic::catch_unwind(|| want.build())
+                        .unwrap_or_else(|_| Err("the collision shape build panicked".into()));
+                    let _ = sender.send(built);
+                });
             match spawned {
                 Ok(_) => self.building = Some((self.want.clone(), receiver)),
-                Err(error) => self.refused = Some(Arc::from(format!("the collision shape build could not start: {error}"))),
+                Err(error) => {
+                    self.refused = Some(Arc::from(format!(
+                        "the collision shape build could not start: {error}"
+                    )))
+                }
             }
             if !wait {
                 return;
@@ -423,13 +537,19 @@ impl RigidBodyNode {
     /// Take the build in flight once it has settled, blocking for it with
     /// `wait`. False while it is still running.
     fn take_build(&mut self, wait: bool) -> bool {
-        let Some((built_for, receiver)) = &self.building else { return true };
+        let Some((built_for, receiver)) = &self.building else {
+            return true;
+        };
         let result = if wait {
-            receiver.recv().unwrap_or_else(|_| Err("the collision shape build stopped".into()))
+            receiver
+                .recv()
+                .unwrap_or_else(|_| Err("the collision shape build stopped".into()))
         } else {
             match receiver.try_recv() {
                 Err(mpsc::TryRecvError::Empty) => return false,
-                result => result.unwrap_or_else(|_| Err("the collision shape build stopped".into())),
+                result => {
+                    result.unwrap_or_else(|_| Err("the collision shape build stopped".into()))
+                }
             }
         };
         if *built_for == self.want {
@@ -451,7 +571,10 @@ impl RigidBodyNode {
 
 impl Primitive for RigidBodyNode {
     fn reconfigure(&mut self, params: &ParamValues) {
-        self.part_ports.configure(<Self as manifold_node_engine::primitive::PrimitiveSpec>::INPUTS, params);
+        self.part_ports.configure(
+            <Self as manifold_node_engine::primitive::PrimitiveSpec>::INPUTS,
+            params,
+        );
     }
 
     fn live_inputs(&self) -> Option<&[manifold_node_engine::ports::NodeInput]> {
@@ -481,7 +604,10 @@ impl Primitive for RigidBodyNode {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        if ctx.inputs.any_pending_except(|port| port == "source" || is_part_mesh(port)) {
+        if ctx
+            .inputs
+            .any_pending_except(|port| port == "source" || is_part_mesh(port))
+        {
             ctx.mark_outputs_pending();
             return;
         }
@@ -518,7 +644,11 @@ impl Primitive for RigidBodyNode {
                 }
             }
         }
-        let collider = if self.refused.is_some() { None } else { self.shape.clone() };
+        let collider = if self.refused.is_some() {
+            None
+        } else {
+            self.shape.clone()
+        };
         let body = RigidBody {
             transform,
             enabled,
@@ -534,16 +664,23 @@ impl Primitive for RigidBodyNode {
             identity: self.identity,
             spawn: read_spawn(ctx),
         };
-        ctx.outputs.set_transform("copy_scale", copy_scale(transform.scale));
+        ctx.outputs
+            .set_transform("copy_scale", copy_scale(transform.scale));
         let (copy_box, group_box) = self.rest.of(&body);
-        ctx.outputs.set_transform("rest_box", rest_box(group_box, &transform));
+        ctx.outputs
+            .set_transform("rest_box", rest_box(group_box, &transform));
         // Everything the copies' layout reads, so Copy Blend lays its target
         // out by the same rows (`manifold_core::copy_layout`).
         let arrangement = arrangement_of(&body, requested_count(body.spawn));
         ctx.outputs.set_transform("copy_frame", transform);
-        ctx.outputs.set_scalar("copy_box", ParamValue::Vec3(copy_box));
-        ctx.outputs.set_scalar("copy_turn", ParamValue::Vec3(arrangement.turn));
-        ctx.outputs.set_scalar("copy_grid", ParamValue::Vec2([arrangement.columns as f32, arrangement.spacing]));
+        ctx.outputs
+            .set_scalar("copy_box", ParamValue::Vec3(copy_box));
+        ctx.outputs
+            .set_scalar("copy_turn", ParamValue::Vec3(arrangement.turn));
+        ctx.outputs.set_scalar(
+            "copy_grid",
+            ParamValue::Vec2([arrangement.columns as f32, arrangement.spacing]),
+        );
         ctx.outputs.set_cpu_value("body", body);
     }
 }
@@ -554,14 +691,14 @@ mod extent;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_node_engine::exec::backend::Backend;
-    use manifold_node_engine::exec::cpu_values::CpuWireWrites;
+    use manifold_core::{Beats, Seconds};
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::exec::backend::MockBackend;
+    use manifold_node_engine::exec::cpu_values::CpuWireWrites;
     use manifold_node_engine::exec::effect_node::{EffectNodeContext, FrameTime, ParamValues};
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::ports::PortType;
-    use manifold_node_engine::exec::backend::MockBackend;
-    use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -593,12 +730,22 @@ mod tests {
             let body = backend.acquire(ResourceId(2), PortType::RigidBody, None, (0, 0));
             backend.set_transform(transform, Transform::default());
             backend.set_mesh_source(source_slot, source);
-            Self { node: RigidBodyNode::new(), backend, transform, source: source_slot, body, params: ParamValues::default(), unwired: false, live: false }
+            Self {
+                node: RigidBodyNode::new(),
+                backend,
+                transform,
+                source: source_slot,
+                body,
+                params: ParamValues::default(),
+                unwired: false,
+                live: false,
+            }
         }
 
         fn run(&mut self) -> RigidBody {
             let wired = [("transform", self.transform), ("source", self.source)];
-            let input_bindings: &[(&'static str, Slot)] = if self.unwired { &wired[..1] } else { &wired };
+            let input_bindings: &[(&'static str, Slot)] =
+                if self.unwired { &wired[..1] } else { &wired };
             let output_bindings: &[(&'static str, Slot)] = &[("body", self.body)];
             let mut scalar_scratch = Vec::new();
             let mut camera_scratch = Vec::new();
@@ -624,15 +771,21 @@ mod tests {
             )
             .with_cpu_value_writes(&mut body_scratch);
             {
-                let mut ctx = EffectNodeContext::new(frame_time(), &self.params, inputs, outputs, None);
+                let mut ctx =
+                    EffectNodeContext::new(frame_time(), &self.params, inputs, outputs, None);
                 if self.live {
-                    ctx = ctx.with_sim_step(manifold_node_engine::exec::effect_node::SimStep::live(Seconds(1.0 / 60.0)));
+                    ctx = ctx.with_sim_step(
+                        manifold_node_engine::exec::effect_node::SimStep::live(Seconds(1.0 / 60.0)),
+                    );
                 }
                 self.node.run(&mut ctx);
                 assert!(!ctx.outputs_pending, "a body never holds its world");
             }
             body_scratch.commit(self.backend.cpu_values_mut());
-            self.backend.cpu_values().get::<RigidBody>(self.body).expect("a body every frame")
+            self.backend
+                .cpu_values()
+                .get::<RigidBody>(self.body)
+                .expect("a body every frame")
         }
 
         /// Run until the shape build settles.
@@ -652,7 +805,10 @@ mod tests {
     /// keeps its shape, and a uniform scale draws as it always did.
     #[test]
     fn copy_scale_is_the_scale_beyond_the_x_axis() {
-        assert_eq!(copy_scale([10.0, 0.16, 10.0]).scale, [1.0, 0.16 / 10.0, 1.0]);
+        assert_eq!(
+            copy_scale([10.0, 0.16, 10.0]).scale,
+            [1.0, 0.16 / 10.0, 1.0]
+        );
         assert_eq!(copy_scale([2.0; 3]).scale, [1.0; 3]);
     }
 
@@ -662,14 +818,37 @@ mod tests {
     #[test]
     fn the_rest_box_is_placed_by_the_group_frame() {
         let bounds = Some(([0.0, -0.5, -0.5], [4.0, 0.5, 0.5]));
-        let group = Transform { pos: [3.0, 1.0, -2.0], scale: [2.0; 3], ..IDENTITY_TRANSFORM };
+        let group = Transform {
+            pos: [3.0, 1.0, -2.0],
+            scale: [2.0; 3],
+            ..IDENTITY_TRANSFORM
+        };
         let m = rest_box(bounds, &group).world();
-        assert_eq!([m[3][0], m[3][1], m[3][2]], [5.0, 1.0, -2.0], "the box centre, carried by the group's place");
-        assert_eq!([m[0][0], m[1][1], m[2][2]], [4.0, 1.0, 1.0], "the box's own size");
-        let turned = Transform { rot_euler: [0.0, std::f32::consts::FRAC_PI_2, 0.0], ..group };
+        assert_eq!(
+            [m[3][0], m[3][1], m[3][2]],
+            [5.0, 1.0, -2.0],
+            "the box centre, carried by the group's place"
+        );
+        assert_eq!(
+            [m[0][0], m[1][1], m[2][2]],
+            [4.0, 1.0, 1.0],
+            "the box's own size"
+        );
+        let turned = Transform {
+            rot_euler: [0.0, std::f32::consts::FRAC_PI_2, 0.0],
+            ..group
+        };
         let m = rest_box(bounds, &turned).world();
-        assert!((m[3][2] - (-4.0)).abs() < 1e-5 && (m[3][0] - 3.0).abs() < 1e-5, "a quarter turn swings the row round: {:?}", m[3]);
-        assert_eq!(rest_box(None, &group).scale, [0.0; 3], "no copies measures nothing");
+        assert!(
+            (m[3][2] - (-4.0)).abs() < 1e-5 && (m[3][0] - 3.0).abs() < 1e-5,
+            "a quarter turn swings the row round: {:?}",
+            m[3]
+        );
+        assert_eq!(
+            rest_box(None, &group).scale,
+            [0.0; 3],
+            "no copies measures nothing"
+        );
     }
 
     /// A body inside a mirrored group keeps the mirror in its scale, so the
@@ -677,18 +856,37 @@ mod tests {
     /// the body exactly where its group does.
     #[test]
     fn a_mirrored_parent_flattens_to_a_mirrored_scale() {
-        let mirror_x = [[-1.5, 0.0, 0.0, 0.0], [0.0, 1.5, 0.0, 0.0], [0.0, 0.0, 1.5, 0.0], [0.5, 0.0, 0.0, 1.0]];
+        let mirror_x = [
+            [-1.5, 0.0, 0.0, 0.0],
+            [0.0, 1.5, 0.0, 0.0],
+            [0.0, 0.0, 1.5, 0.0],
+            [0.5, 0.0, 0.0, 1.0],
+        ];
         for own in [[1.0, 1.0, 1.0], [1.0, -1.0, 1.0], [-1.0, -1.0, 0.5]] {
-            let transform = Transform { pos: [1.0, 2.0, 0.0], rot_euler: [0.3, 0.5, -0.2], scale: own, parent: mirror_x, ..IDENTITY_TRANSFORM };
+            let transform = Transform {
+                pos: [1.0, 2.0, 0.0],
+                rot_euler: [0.3, 0.5, -0.2],
+                scale: own,
+                parent: mirror_x,
+                ..IDENTITY_TRANSFORM
+            };
             let flat = flatten(transform);
             let (a, b) = (transform.world(), flat.world());
             for column in 0..4 {
                 for row in 0..4 {
-                    assert!((a[column][row] - b[column][row]).abs() < 1e-5, "{own:?}: {a:?} vs {b:?}");
+                    assert!(
+                        (a[column][row] - b[column][row]).abs() < 1e-5,
+                        "{own:?}: {a:?} vs {b:?}"
+                    );
                 }
             }
             let sign = |scale: [f32; 3]| scale.iter().map(|s| s.signum()).product::<f32>();
-            assert_eq!(sign(flat.scale), -sign(own), "{own:?}: the group's mirror stays in the scale: {:?}", flat.scale);
+            assert_eq!(
+                sign(flat.scale),
+                -sign(own),
+                "{own:?}: the group's mirror stays in the scale: {:?}",
+                flat.scale
+            );
         }
     }
 
@@ -699,21 +897,39 @@ mod tests {
         let hulls = first.hulls().expect("a moving body is hulls");
         assert_eq!(hulls.len(), 1, "a cube is convex: one hull");
         assert_eq!(hulls[0].len(), 8);
-        assert!(Arc::ptr_eq(&rig.settle().collider.unwrap(), &first), "an unchanged mesh keeps its shape");
+        assert!(
+            Arc::ptr_eq(&rig.settle().collider.unwrap(), &first),
+            "an unchanged mesh keeps its shape"
+        );
 
-        rig.backend.release(ResourceId(1), PortType::MeshSource, None, (0, 0));
+        rig.backend
+            .release(ResourceId(1), PortType::MeshSource, None, (0, 0));
         let reloading = rig.run();
-        assert!(Arc::ptr_eq(reloading.collider.as_ref().unwrap(), &first), "a reloading mesh keeps the old shape");
+        assert!(
+            Arc::ptr_eq(reloading.collider.as_ref().unwrap(), &first),
+            "a reloading mesh keeps the old shape"
+        );
 
-        rig.backend.set_mesh_source(rig.source, MeshSource::Cube { size: 0.6 });
+        rig.backend
+            .set_mesh_source(rig.source, MeshSource::Cube { size: 0.6 });
         let resized = rig.settle().collider.expect("edited shape");
         assert!(!Arc::ptr_eq(&resized, &first));
-        let extent = resized.hulls().unwrap()[0].iter().map(|point| point[0].abs()).fold(0.0_f32, f32::max);
-        assert!((extent - 0.3).abs() < 1e-6, "source edits change collision size");
+        let extent = resized.hulls().unwrap()[0]
+            .iter()
+            .map(|point| point[0].abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            (extent - 0.3).abs() < 1e-6,
+            "source edits change collision size"
+        );
 
-        rig.params.insert(Cow::Borrowed("motion"), ParamValue::Enum(0));
+        rig.params
+            .insert(Cow::Borrowed("motion"), ParamValue::Enum(0));
         let fixed = rig.settle().collider.expect("static shape");
-        assert!(matches!(*fixed, Solid::Mesh(_)), "a Fixed body is the exact mesh");
+        assert!(
+            matches!(*fixed, Solid::Mesh(_)),
+            "a Fixed body is the exact mesh"
+        );
     }
 
     /// A Group set to Body or Collider with no mesh inside, from the start or
@@ -726,13 +942,19 @@ mod tests {
         let body = rig.run();
         assert!(!rig.node.warmup_pending(), "never held as loading");
         assert!(body.collider.is_none());
-        assert_eq!(body.refused.as_deref(), Some("this group has no mesh to collide with"));
+        assert_eq!(
+            body.refused.as_deref(),
+            Some("this group has no mesh to collide with")
+        );
 
         let mut rig = Rig::new(MeshSource::Cube { size: 1.0 });
         assert!(rig.settle().collider.is_some());
         rig.unwired = true;
         let body = rig.run();
-        assert!(!rig.node.warmup_pending() && body.collider.is_none() && body.refused.is_some(), "the last part leaving refuses it too");
+        assert!(
+            !rig.node.warmup_pending() && body.collider.is_none() && body.refused.is_some(),
+            "the last part leaving refuses it too"
+        );
     }
 
     /// Export takes the body's shape on its first frame, so the world never
@@ -741,11 +963,17 @@ mod tests {
     #[test]
     fn an_export_takes_the_shape_on_the_first_frame() {
         let mut rig = Rig::new(MeshSource::Cube { size: 1.0 });
-        assert!(rig.run().collider.is_some() && !rig.node.warmup_pending(), "export waits for the shape");
+        assert!(
+            rig.run().collider.is_some() && !rig.node.warmup_pending(),
+            "export waits for the shape"
+        );
 
         let mut rig = Rig::new(MeshSource::Cube { size: 1.0 });
         rig.live = true;
-        assert!(rig.run().collider.is_none() && rig.node.warmup_pending(), "live never waits");
+        assert!(
+            rig.run().collider.is_none() && rig.node.warmup_pending(),
+            "live never waits"
+        );
         assert!(rig.settle().collider.is_some());
     }
 
@@ -753,9 +981,15 @@ mod tests {
     fn a_bad_mesh_is_refused_with_a_reason() {
         let mut rig = Rig::new(MeshSource::Cube { size: f32::NAN });
         let body = rig.settle();
-        assert!(body.collider.is_none(), "invalid geometry never becomes a shape");
+        assert!(
+            body.collider.is_none(),
+            "invalid geometry never becomes a shape"
+        );
         assert!(body.refused.is_some());
         let again = rig.run();
-        assert!(again.refused.is_some() && rig.node.building.is_none(), "an unchanged bad mesh is not rebuilt");
+        assert!(
+            again.refused.is_some() && rig.node.building.is_none(),
+            "an unchanged bad mesh is not rebuilt"
+        );
     }
 }

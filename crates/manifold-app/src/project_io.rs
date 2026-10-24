@@ -29,7 +29,9 @@ use crate::user_prefs::UserPrefs;
 /// global, but only one project is live at a time. Also re-invoked by the
 /// content reaction pass when the EmbeddedPresets stamp moves (a fork or recalibrate).
 pub(crate) fn install_project_preset_overlay(project: &Project) {
-    manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::PresetOverlayInstall);
+    manifold_core::work_count::record_work(
+        manifold_core::work_count::WorkKind::PresetOverlayInstall,
+    );
     install_embedded_presets(&project.embedded_presets);
 }
 
@@ -53,10 +55,16 @@ pub(crate) fn install_embedded_presets(presets: &[manifold_core::project::Embedd
         match p.kind {
             PresetKind::Effect => effect.push((id.as_str().to_string(), json, p.origin)),
             PresetKind::Generator => generator.push((id.as_str().to_string(), json, p.origin)),
-            PresetKind::SceneModifier => scene_modifier.push((id.as_str().to_string(), json, p.origin)),
+            PresetKind::SceneModifier => {
+                scene_modifier.push((id.as_str().to_string(), json, p.origin))
+            }
         }
     }
-    manifold_node_engine::load::preset_loader::set_project_presets(effect, generator, scene_modifier);
+    manifold_node_engine::load::preset_loader::set_project_presets(
+        effect,
+        generator,
+        scene_modifier,
+    );
 }
 
 /// Self-containment snapshot (PRESET_LIBRARY_DESIGN D5, P2). Called
@@ -178,15 +186,21 @@ pub(crate) fn prepare_loaded_project(project: &mut Project) -> Vec<String> {
 pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String> {
     let mut notices = Vec::new();
     for layer in &mut project.timeline.layers {
-        let Some(host) = layer.gen_params_mut() else { continue; };
+        let Some(host) = layer.gen_params_mut() else {
+            continue;
+        };
         // A scene layer's graph is the compiler's alone (SCENE_DOCUMENT_DESIGN.md
         // ruling 18): its load is the compile, never a repair of the graph.
         if host.scene.is_some() {
             continue;
         }
-        let Some(graph) = host.graph.as_mut() else { continue; };
+        let Some(graph) = host.graph.as_mut() else {
+            continue;
+        };
         match manifold_nodes_scene::node_graph::scene_camera::prepare_camera_effects(graph) {
-            Ok(true) => notices.push("Scene camera controls restored with depth of field and motion blur off.".into()),
+            Ok(true) => notices.push(
+                "Scene camera controls restored with depth of field and motion blur off.".into(),
+            ),
             Ok(false) => {}
             Err(error) => notices.push(error),
         }
@@ -222,14 +236,19 @@ fn pin_modulated_rows(project: &mut Project) {
         .collect();
     for layer in &mut project.timeline.layers {
         let layer_id = layer.layer_id.clone();
-        let Some(host) = layer.gen_params_mut() else { continue };
+        let Some(host) = layer.gen_params_mut() else {
+            continue;
+        };
         let modulated: Vec<String> = host
             .params
             .iter()
             .filter(|param| match param.choices.pin {
                 None => {
                     let id = param.spec.id.as_str();
-                    host.modulates(id) || macro_targets.iter().any(|(layer, param)| *layer == layer_id && param == id)
+                    host.modulates(id)
+                        || macro_targets
+                            .iter()
+                            .any(|(layer, param)| *layer == layer_id && param == id)
                 }
                 Some(manifold_core::scene_surface::CardPin::Removed) => host.drives(&param.spec.id),
                 Some(manifold_core::scene_surface::CardPin::Shown) => false,
@@ -306,7 +325,8 @@ impl ProjectIOService {
     }
 
     fn persist_recent_projects(&self, user_prefs: &mut UserPrefs) {
-        let json = serde_json::to_string(&self.recent_projects).unwrap_or_else(|_| "[]".to_string());
+        let json =
+            serde_json::to_string(&self.recent_projects).unwrap_or_else(|_| "[]".to_string());
         user_prefs.set_string(RECENT_PROJECTS_PREF_KEY, &json);
         user_prefs.save();
     }
@@ -337,7 +357,11 @@ impl ProjectIOService {
     // ── Open Project ────────────────────────────────────────────────
 
     /// Unity ProjectIOService.OnOpenProject / OnOpenProjectAsync (lines 92-106).
-    pub fn open_project(&mut self, host: DialogHost, user_prefs: &mut UserPrefs) -> ProjectIOAction {
+    pub fn open_project(
+        &mut self,
+        host: DialogHost,
+        user_prefs: &mut UserPrefs,
+    ) -> ProjectIOAction {
         if let Some(path) = file_dialogs::pick_file(DialogAction::OpenProject, host, user_prefs) {
             self.open_project_from_path(&path, user_prefs)
         } else {
@@ -383,8 +407,7 @@ impl ProjectIOService {
         // there is no rollback window to guard, unlike the pre-P1 order
         // (pre-deserialize install, so a failed load could strand the live
         // project on the candidate file's presets).
-        let load_result =
-            manifold_io::loader::load_project_with(path, install_embedded_presets);
+        let load_result = manifold_io::loader::load_project_with(path, install_embedded_presets);
 
         match load_result {
             Ok(mut project) => {
@@ -430,7 +453,10 @@ impl ProjectIOService {
 
                 if !modifier_notices.is_empty() {
                     let message = modifier_notices.join("\n");
-                    notice = Some(notice.map_or_else(|| message.clone(), |existing| format!("{existing}\n{message}")));
+                    notice = Some(notice.map_or_else(
+                        || message.clone(),
+                        |existing| format!("{existing}\n{message}"),
+                    ));
                 }
 
                 ProjectIOAction {
@@ -636,7 +662,8 @@ impl ProjectIOService {
             // and, at the project tempo, sets the initial clip length.
             let source_duration = audio_source_duration(&path_str);
             let duration_beats = project.source_clock().beats_for_unwarped_source(
-                manifold_core::Beats::from_f32(drop_beat), source_duration,
+                manifold_core::Beats::from_f32(drop_beat),
+                source_duration,
             );
 
             // Join the targeted audio lane, or append a new one for this file.
@@ -690,7 +717,11 @@ impl ProjectIOService {
             audio_imported += 1;
         }
         if audio_imported > 0 {
-            let how = if join_target.is_some() { "onto lane" } else { "as new lane(s)" };
+            let how = if join_target.is_some() {
+                "onto lane"
+            } else {
+                "as new lane(s)"
+            };
             log::info!(
                 "[ProjectIO] Dropped {audio_imported} audio file(s) {how} at beat {drop_beat:.2}"
             );
@@ -814,7 +845,8 @@ pub fn is_supported_midi_extension(path: &Path) -> bool {
 /// Audio files an audio layer takes, by drop or by the Replace Audio dialog.
 /// Mirrors what the decoder (symphonia) and kira can read. See
 /// `docs/AUDIO_LAYER_DESIGN.md`.
-pub(crate) const AUDIO_EXTENSIONS: &[&str] = &["wav", "mp3", "flac", "aif", "aiff", "ogg", "m4a", "aac"];
+pub(crate) const AUDIO_EXTENSIONS: &[&str] =
+    &["wav", "mp3", "flac", "aif", "aiff", "ogg", "m4a", "aac"];
 
 pub fn is_supported_audio_extension(path: &Path) -> bool {
     path.extension()
@@ -842,7 +874,6 @@ pub(crate) fn audio_source_duration(path: &str) -> manifold_core::Seconds {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -855,7 +886,10 @@ mod tests {
     fn new_project_starts_on_no_capture_device() {
         let service = ProjectIOService::new(&UserPrefs::for_test());
         let project = service.new_project().apply_project.expect("new project");
-        assert_eq!(project.audio_setup.device, Some(manifold_core::audio_setup::AudioDeviceRef::none()));
+        assert_eq!(
+            project.audio_setup.device,
+            Some(manifold_core::audio_setup::AudioDeviceRef::none())
+        );
     }
 
     #[test]
@@ -1028,7 +1062,9 @@ mod tests {
         // is deliberate (Save to Project / fork / import) and must never be
         // downgraded or overwritten by the auto-captured snapshot pass.
         let saved_def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::BLOOM)
-            .expect("Bloom resolves").as_ref().clone();
+            .expect("Bloom resolves")
+            .as_ref()
+            .clone();
         project.upsert_embedded_preset(EmbeddedPreset {
             kind: PresetKind::Effect,
             def: saved_def,
@@ -1038,7 +1074,10 @@ mod tests {
         snapshot_and_prune_embedded_presets(&mut project);
 
         assert_eq!(
-            project.embedded_preset(&PresetTypeId::BLOOM).unwrap().origin,
+            project
+                .embedded_preset(&PresetTypeId::BLOOM)
+                .unwrap()
+                .origin,
             EmbeddedOrigin::Saved,
             "a Saved entry must never be overwritten by the snapshot pass"
         );

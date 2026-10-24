@@ -1,18 +1,18 @@
 //! Multi-frame evidence through the real effect-chain and parameter binding path.
-use manifold_node_engine::runtime::*;
-use manifold_node_engine::persistence::*;
-use manifold_node_engine::load::loaded_preset_view::*;
 use manifold_core::effects::*;
 use manifold_gpu::*;
+use manifold_node_engine::load::loaded_preset_view::*;
+use manifold_node_engine::persistence::*;
+use manifold_node_engine::runtime::*;
 
 use manifold_node_engine::runtime::core::GRAPH_FORMAT;
 
-use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_node_engine::testkit::gpu::readback_raw_halves;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use half::f16;
 use manifold_core::PresetTypeId;
 use manifold_gpu::{GpuTextureDesc, GpuTextureDimension, GpuTextureUsage};
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::testkit::gpu::readback_raw_halves;
 
 const SIZE: u32 = 512;
 
@@ -48,9 +48,11 @@ fn make_effect(name: &'static str, fused: bool, registry: &PrimitiveRegistry) ->
     let view = loaded_preset_view_by_id(&ty).expect("mosh preset registered");
     let mut fx = manifold_core::preset_definition_registry::create_default(&ty);
     if fused {
-        let result =
-            manifold_node_engine::freeze::install::fuse_canonical_def(&view.canonical_def, registry)
-                .expect("mosh has fusable regions");
+        let result = manifold_node_engine::freeze::install::fuse_canonical_def(
+            &view.canonical_def,
+            registry,
+        )
+        .expect("mosh has fusable regions");
         fx.graph = Some(result.def);
         fx.bump_graph_structure_version();
     }

@@ -16,8 +16,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
@@ -151,7 +151,10 @@ impl Primitive for TwistMesh {
         if port_name != "out" {
             return None;
         }
-        input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)
+        input_capacities
+            .iter()
+            .find(|(p, _)| *p == "in")
+            .map(|(_, n)| *n)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -244,7 +247,7 @@ mod gpu_tests {
             tangent: [0.0; 4],
             color: [1.0; 4],
         }
-}
+    }
 
     /// The generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {
@@ -319,7 +322,10 @@ mod gpu_tests {
                 }
                 (b, weights_len_override.unwrap_or(w.len() as u32))
             }
-            None => (device.create_buffer_shared(std::mem::size_of_val(src) as u64), 0),
+            None => (
+                device.create_buffer_shared(std::mem::size_of_val(src) as u64),
+                0,
+            ),
         };
 
         let uniforms = TwistUniforms {
@@ -334,10 +340,25 @@ mod gpu_tests {
         };
 
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: &sbuf, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &wbuf, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &dbuf, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &sbuf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &wbuf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &dbuf,
+                offset: 0,
+            },
         ];
         let mut enc = device.create_encoder("twist-mesh-test");
         enc.dispatch_compute(
@@ -351,7 +372,6 @@ mod gpu_tests {
         let ptr = dbuf.mapped_ptr().expect("shared dst buffer");
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, src.len()) }.to_vec()
     }
-
 
     /// The exact bar this test guards: a saw LFO doing full revolutions
     /// (angle sweeping past 2*pi and beyond) must keep producing the exact
@@ -368,7 +388,12 @@ mod gpu_tests {
         ];
         let center = 0.2f32;
         for axis in [0u32, 1, 2] {
-            for &angle in &[0.3f32, std::f32::consts::PI, 2.5 * std::f32::consts::PI, 9.4] {
+            for &angle in &[
+                0.3f32,
+                std::f32::consts::PI,
+                2.5 * std::f32::consts::PI,
+                9.4,
+            ] {
                 let out = dispatch_twist(&device, &gen_wgsl, &src, None, None, axis, angle, center);
                 for (i, v) in src.iter().enumerate() {
                     let (exp_pos, exp_n) =
@@ -404,7 +429,10 @@ mod gpu_tests {
         let out = dispatch_twist(&device, &gen_wgsl, &src, None, None, 0, 0.6, 0.0);
         assert_eq!(out.len(), src.len());
         for i in 0..src.len() {
-            assert_eq!(out[i].uv, src[i].uv, "uv must pass through unchanged at {i}");
+            assert_eq!(
+                out[i].uv, src[i].uv,
+                "uv must pass through unchanged at {i}"
+            );
         }
     }
 
@@ -420,19 +448,30 @@ mod gpu_tests {
         let weights = [0.0f32, 0.0];
         let angle = 0.5f32;
 
-        let out = dispatch_twist(&device, &gen_wgsl, &src, Some(&weights), Some(2), 0, angle, 0.0);
+        let out = dispatch_twist(
+            &device,
+            &gen_wgsl,
+            &src,
+            Some(&weights),
+            Some(2),
+            0,
+            angle,
+            0.0,
+        );
         let full = expected_twist([1.0, 0.0, 1.0], [0.0, 1.0, 0.0], 0, angle, 0.0, 1.0);
         let zero = expected_twist([1.0, 0.0, 1.0], [0.0, 1.0, 0.0], 0, angle, 0.0, 0.0);
 
         assert!(
-            (out[0].position[1] - zero.0[1]).abs() < 1e-5 && (out[0].position[2] - zero.0[2]).abs() < 1e-5,
+            (out[0].position[1] - zero.0[1]).abs() < 1e-5
+                && (out[0].position[2] - zero.0[2]).abs() < 1e-5,
             "vertex 0 has explicit weight 0 -> unchanged, got y={} z={}",
             out[0].position[1],
             out[0].position[2]
         );
         for (i, v) in out.iter().enumerate().skip(2).take(10) {
             assert!(
-                (v.position[1] - full.0[1]).abs() < 1e-5 && (v.position[2] - full.0[2]).abs() < 1e-5,
+                (v.position[1] - full.0[1]).abs() < 1e-5
+                    && (v.position[2] - full.0[2]).abs() < 1e-5,
                 "vertex {i} past weights_len should degrade to w=1.0, got y={} z={} expected y={} z={}",
                 v.position[1],
                 v.position[2],

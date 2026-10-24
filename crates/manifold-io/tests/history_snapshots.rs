@@ -53,7 +53,10 @@ fn autosave_pushes_previous_state_into_history_and_loads_back() {
     let manifest = archive::read_manifest(&path.to_string_lossy()).expect("manifest after save 2");
     assert_eq!(manifest.history.len(), 2, "second save appends an entry");
     assert!(manifest.history[0].is_auto, "newest entry is the autosave");
-    assert!(!manifest.history[1].is_auto, "older entry is the manual save");
+    assert!(
+        !manifest.history[1].is_auto,
+        "older entry is the manual save"
+    );
     assert_eq!(manifest.history[1].hash, first_hash);
     assert_eq!(manifest.current_hash, manifest.history[0].hash);
 
@@ -115,7 +118,11 @@ fn differing_projects_produce_different_hashes() {
         manifest.current_hash, first_hash,
         "a real content change must not collide with the prior hash"
     );
-    assert_eq!(manifest.history.len(), 2, "differing content must not dedup");
+    assert_eq!(
+        manifest.history.len(),
+        2,
+        "differing content must not dedup"
+    );
 
     let _ = std::fs::remove_file(&path);
 }
@@ -204,8 +211,8 @@ fn replace_manifest(path: &Path, manifest_bytes: &[u8]) {
     let bytes = std::fs::read(path).expect("read archive");
     let mut src = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("open archive");
     let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let opts = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored);
+    let opts =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     for i in 0..src.len() {
         let mut entry = src.by_index(i).expect("entry");
         let name = entry.name().to_string();

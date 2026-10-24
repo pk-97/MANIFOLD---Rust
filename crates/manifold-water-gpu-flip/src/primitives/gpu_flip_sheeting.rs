@@ -43,7 +43,16 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEnco
 
 const SHADER: &str = include_str!("shaders/gpu_flip_sheeting.wgsl");
 const ENTRIES: [&str; 10] = [
-    "clear", "detect", "feather", "feather_border", "select_markers", "build_buckets", "candidates", "resolve", "place", "write",
+    "clear",
+    "detect",
+    "feather",
+    "feather_border",
+    "select_markers",
+    "build_buckets",
+    "candidates",
+    "resolve",
+    "place",
+    "write",
 ];
 /// gpu_flip_step.wgsl `ClockPlan`.
 const PLAN_BYTES: u64 = 48;
@@ -101,20 +110,30 @@ fn bucket_bytes(cells: [u32; 3]) -> u64 {
 /// the rank scan included.
 pub(crate) fn scratch_bytes(cells: [u32; 3], capacity: u32) -> u64 {
     let n = cells.into_iter().map(u64::from).product::<u64>();
-    let scan = 4 * manifold_water_liquid::primitives::prefix_scan::storage_words(ranks(cells) as usize) as u64;
-    BYTES_PER_CELL * n + bucket_bytes(cells) + 16 * u64::from(capacity.max(1)) + 16 + PLAN_BYTES + scan + 16
+    let scan =
+        4 * manifold_water_liquid::primitives::prefix_scan::storage_words(ranks(cells) as usize)
+            as u64;
+    BYTES_PER_CELL * n
+        + bucket_bytes(cells)
+        + 16 * u64::from(capacity.max(1))
+        + 16
+        + PLAN_BYTES
+        + scan
+        + 16
 }
 
 /// Candidate ranks: eight offsets of eight cells of every 2-cell bucket.
 fn ranks(cells: [u32; 3]) -> u64 {
-    64 * cells.into_iter().map(|c| u64::from(c.div_ceil(2))).product::<u64>()
+    64 * cells
+        .into_iter()
+        .map(|c| u64::from(c.div_ceil(2)))
+        .product::<u64>()
 }
 
 fn words(x: f64) -> [u32; 2] {
     let bits = x.to_bits();
     [bits as u32, (bits >> 32) as u32]
 }
-
 
 /// What one sheeting pass reads.
 pub(crate) struct SheetInputs<'a> {
@@ -166,7 +185,11 @@ impl GpuSheeting {
     pub(crate) fn prepare(&mut self, device: &GpuDevice) {
         if self.pipelines.is_empty() {
             for entry in ENTRIES {
-                self.pipelines.push(device.create_compute_pipeline(SHADER, entry, "gpu_flip.sheeting"));
+                self.pipelines.push(device.create_compute_pipeline(
+                    SHADER,
+                    entry,
+                    "gpu_flip.sheeting",
+                ));
             }
         }
         self.scan.prepare(device);
@@ -178,7 +201,11 @@ impl GpuSheeting {
         assert!(self.pipelines.is_empty());
         let shader = super::gpu_flip_sheeting_cpu_tests::reference_shader();
         for entry in ENTRIES {
-            self.pipelines.push(device.create_compute_pipeline(&shader, entry, "gpu_flip.sheeting.reference"));
+            self.pipelines.push(device.create_compute_pipeline(
+                &shader,
+                entry,
+                "gpu_flip.sheeting.reference",
+            ));
         }
         self.scan.prepare(device);
     }
@@ -186,10 +213,22 @@ impl GpuSheeting {
     /// Synthetic cell segments, without detection/feathering.
     #[cfg(all(test, feature = "gpu-proofs"))]
     pub(crate) fn encode_buckets(&self, enc: &mut GpuEncoder, inputs: &SheetInputs<'_>) {
-        self.dispatch_with(enc, inputs, &self.buffers.as_ref().expect("sheeting reserved")[9], None, None, 5..6);
+        self.dispatch_with(
+            enc,
+            inputs,
+            &self.buffers.as_ref().expect("sheeting reserved")[9],
+            None,
+            None,
+            5..6,
+        );
     }
 
-    pub(crate) fn reserve(&mut self, device: &GpuDevice, cells: [u32; 3], capacity: u32) -> Result<(), String> {
+    pub(crate) fn reserve(
+        &mut self,
+        device: &GpuDevice,
+        cells: [u32; 3],
+        capacity: u32,
+    ) -> Result<(), String> {
         if self.buffers.is_some() && self.cells == cells && self.capacity == capacity {
             return Ok(());
         }
@@ -267,33 +306,70 @@ impl GpuSheeting {
     /// Proof only: each particle's cell and half-cell into the birth list,
     /// two records a particle (`capacity` must cover `2 * count`).
     #[cfg(all(test, feature = "gpu-proofs"))]
-    pub(crate) fn encode_index_probe(&self, device: &GpuDevice, enc: &mut GpuEncoder, inputs: &SheetInputs<'_>) {
-        let probe = device.create_compute_pipeline(SHADER, "index_probe", "gpu_flip.sheeting.probe");
-        self.dispatch_with(enc, inputs, &self.buffers.as_ref().expect("sheeting reserved")[9], None, Some((&probe, inputs.count)), 0..0);
+    pub(crate) fn encode_index_probe(
+        &self,
+        device: &GpuDevice,
+        enc: &mut GpuEncoder,
+        inputs: &SheetInputs<'_>,
+    ) {
+        let probe =
+            device.create_compute_pipeline(SHADER, "index_probe", "gpu_flip.sheeting.probe");
+        self.dispatch_with(
+            enc,
+            inputs,
+            &self.buffers.as_ref().expect("sheeting reserved")[9],
+            None,
+            Some((&probe, inputs.count)),
+            0..0,
+        );
     }
 
     /// Proof only: clear and detect, the sheet flags before feathering.
     #[cfg(all(test, feature = "gpu-proofs"))]
     pub(crate) fn encode_detect(&self, enc: &mut GpuEncoder, inputs: &SheetInputs<'_>) {
-        self.dispatch_with(enc, inputs, &self.buffers.as_ref().expect("sheeting reserved")[9], None, None, 0..2);
+        self.dispatch_with(
+            enc,
+            inputs,
+            &self.buffers.as_ref().expect("sheeting reserved")[9],
+            None,
+            None,
+            0..2,
+        );
     }
 
     /// Gated by the FLIP clock plan: in an inactive slot every pass returns
     /// before writing.
     #[cfg(all(test, feature = "gpu-proofs"))]
-    pub(crate) fn encode_gated(&self, enc: &mut GpuEncoder, inputs: &SheetInputs<'_>, plan: &GpuBuffer) {
+    pub(crate) fn encode_gated(
+        &self,
+        enc: &mut GpuEncoder,
+        inputs: &SheetInputs<'_>,
+        plan: &GpuBuffer,
+    ) {
         self.dispatch_with(enc, inputs, plan, None, None, 0..9);
     }
 
     /// In the step: selection, the fill-rate draw and the rank scan. The
     /// caller reserves identities from [`Self::winners`] over [`Self::ranks`],
     /// then calls [`Self::encode_write`].
-    pub(crate) fn encode_draw(&self, enc: &mut GpuEncoder, inputs: &SheetInputs<'_>, plan: &GpuBuffer, births: &StepBirths<'_>) {
+    pub(crate) fn encode_draw(
+        &self,
+        enc: &mut GpuEncoder,
+        inputs: &SheetInputs<'_>,
+        plan: &GpuBuffer,
+        births: &StepBirths<'_>,
+    ) {
         self.dispatch_with(enc, inputs, plan, Some(births), None, 0..8);
     }
 
     /// In the step, after the reservation: the births after the live prefix.
-    pub(crate) fn encode_write(&self, enc: &mut GpuEncoder, inputs: &SheetInputs<'_>, plan: &GpuBuffer, births: &StepBirths<'_>) {
+    pub(crate) fn encode_write(
+        &self,
+        enc: &mut GpuEncoder,
+        inputs: &SheetInputs<'_>,
+        plan: &GpuBuffer,
+        births: &StepBirths<'_>,
+    ) {
         self.dispatch_with(enc, inputs, plan, Some(births), None, 9..10);
     }
 
@@ -306,8 +382,19 @@ impl GpuSheeting {
         probe: Option<(&GpuComputePipeline, u32)>,
         entries: std::ops::Range<usize>,
     ) {
-        let [sheet_a, sheet_b, mask, cell_counts, selected, claims, flags, births, birth_count, zeros, stats] =
-            self.buffers.as_ref().expect("sheeting reserved");
+        let [
+            sheet_a,
+            sheet_b,
+            mask,
+            cell_counts,
+            selected,
+            claims,
+            flags,
+            births,
+            birth_count,
+            zeros,
+            stats,
+        ] = self.buffers.as_ref().expect("sheeting reserved");
         let n = self.cells;
         let h = inputs.h;
         let dx = f64::from(h);
@@ -350,10 +437,17 @@ impl GpuSheeting {
             pad1: 0,
         };
         fn buffer(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
-            GpuBinding::Buffer { binding, buffer, offset: 0 }
+            GpuBinding::Buffer {
+                binding,
+                buffer,
+                offset: 0,
+            }
         }
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&params),
+            },
             buffer(1, inputs.particles),
             buffer(2, inputs.ranges),
             buffer(3, inputs.order),
@@ -380,7 +474,18 @@ impl GpuSheeting {
             return;
         }
         let ranks = ranks(n) as u32;
-        let work = [cells, inputs.count, cells, cells, cells, ranks / 64, 8 * cells, ranks, ranks, ranks];
+        let work = [
+            cells,
+            inputs.count,
+            cells,
+            cells,
+            cells,
+            ranks / 64,
+            8 * cells,
+            ranks,
+            ranks,
+            ranks,
+        ];
         let labels = [
             "gpu_flip.sheeting.clear",
             "gpu_flip.sheeting.detect",
@@ -400,7 +505,10 @@ impl GpuSheeting {
                 self.scan.encode_labelled_gated(
                     enc,
                     ranks as usize,
-                    manifold_water_liquid::primitives::prefix_scan::ScanLabels { blocks: "gpu_flip.sheeting.scan.blocks", add: "gpu_flip.sheeting.scan.add" },
+                    manifold_water_liquid::primitives::prefix_scan::ScanLabels {
+                        blocks: "gpu_flip.sheeting.scan.blocks",
+                        add: "gpu_flip.sheeting.scan.add",
+                    },
                     plan,
                 );
                 enc.compute_memory_barrier_buffers();

@@ -12,7 +12,9 @@ fn candidate_cost() {
     let spec = Spec::parse(&model).unwrap();
     let mut net = Net::new(&model, 1).unwrap();
     let mut frames = FrameBank::new(&model, &spec.net.as_ref().unwrap().channels).unwrap();
-    let audio: Vec<f64> = (0..48_000 * 2).map(|i| ((i as f64) * 0.013).sin() * 0.3).collect();
+    let audio: Vec<f64> = (0..48_000 * 2)
+        .map(|i| ((i as f64) * 0.013).sin() * 0.3)
+        .collect();
     let t0 = std::time::Instant::now();
     net.push(&audio);
     frames.push(&audio, Some(net.spectrum()));
@@ -27,5 +29,9 @@ fn candidate_cost() {
     }
     let per = t0.elapsed() / reps as u32;
     assert!(acc.is_finite());
-    eprintln!("kick net: {:.1} us per candidate; push {:.2} ms per second of audio", per.as_secs_f64() * 1e6, push.as_secs_f64() * 1e3 / 2.0);
+    eprintln!(
+        "kick net: {:.1} us per candidate; push {:.2} ms per second of audio",
+        per.as_secs_f64() * 1e6,
+        push.as_secs_f64() * 1e3 / 2.0
+    );
 }

@@ -22,9 +22,12 @@ use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::ParamManifest;
 use manifold_node_engine::gpu::headless_readback::encode_rgba8_png;
-use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_nodes_scene::node_graph::viewport_overlay::ViewportOverlayConfig, manifold_nodes_scene::node_graph::viewport_session::ViewportSession};
 use manifold_node_engine::runtime::preset_context::PresetContext;
-
+use {
+    manifold_node_engine::persistence::PrimitiveRegistry,
+    manifold_nodes_scene::node_graph::viewport_overlay::ViewportOverlayConfig,
+    manifold_nodes_scene::node_graph::viewport_session::ViewportSession,
+};
 
 /// Ray-tracing/temporal history belongs to each renderer, even though the
 /// two cameras read one scene. Compare matching frames on a control runtime
@@ -32,30 +35,47 @@ use manifold_node_engine::runtime::preset_context::PresetContext;
 #[test]
 fn shared_scene_viewport_preserves_rt_and_temporal_show_history() {
     use manifold_gpu::GpuTextureFormat;
-    use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
     use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
-    use manifold_node_engine::scene::scene_viewport::SceneViewportConfig;
-    use manifold_node_engine::runtime::PresetRuntime;
     use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::runtime::PresetRuntime;
+    use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
+    use manifold_node_engine::scene::scene_viewport::SceneViewportConfig;
 
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut def: serde_json::Value = serde_json::from_str(&scene_json()).unwrap();
-    let scene = def["nodes"].as_array_mut().unwrap().iter_mut()
-        .find(|node| node["nodeId"] == "scene").unwrap();
+    let scene = def["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|node| node["nodeId"] == "scene")
+        .unwrap();
     for param in ["rt_enabled", "temporal_upscale", "rt_denoise_feed"] {
         scene["params"][param] = serde_json::json!({"type":"Bool","value":true});
     }
     let json = serde_json::to_string(&def).unwrap();
-    let build = || PresetRuntime::from_json_str_with_device(
-        &json, &registry, std::sync::Arc::clone(&h.device), 320, 200,
-        GpuTextureFormat::Rgba16Float, None,
-    ).unwrap();
+    let build = || {
+        PresetRuntime::from_json_str_with_device(
+            &json,
+            &registry,
+            std::sync::Arc::clone(&h.device),
+            320,
+            200,
+            GpuTextureFormat::Rgba16Float,
+            None,
+        )
+        .unwrap()
+    };
     let mut control = build();
     let mut viewed = build();
-    let target = RenderTarget::new(&h.device, 320, 200,
-        GpuTextureFormat::Rgba16Float, "rt-shared-viewport-show");
+    let target = RenderTarget::new(
+        &h.device,
+        320,
+        200,
+        GpuTextureFormat::Rgba16Float,
+        "rt-shared-viewport-show",
+    );
     let mut frame_ctx = ctx(h);
     frame_ctx.width = 320;
     frame_ctx.height = 200;
@@ -64,18 +84,30 @@ fn shared_scene_viewport_preserves_rt_and_temporal_show_history() {
     frame_ctx.aspect = 1.6;
     let mut config = SceneViewportConfig {
         camera: manifold_node_engine::scene::viewport_camera::ViewportCamera {
-            pitch: -0.45, ..Default::default()
-        }, width: 320, height: 200,
+            pitch: -0.45,
+            ..Default::default()
+        },
+        width: 320,
+        height: 200,
     };
     let render = |runtime: &mut PresetRuntime, frame_ctx: &PresetContext| {
         let mut enc = h.device.create_encoder("rt-shared-viewport-frame");
         let (status, dispatches) = {
             let mut gpu = GpuEncoder::new(&mut enc, &h.device);
-            runtime.render(&mut gpu, &target.texture, frame_ctx, &ParamManifest::default());
+            runtime.render(
+                &mut gpu,
+                &target.texture,
+                frame_ctx,
+                &ParamManifest::default(),
+            );
             (gpu.frame_status(), gpu.rt_dispatches)
         };
         enc.commit_and_wait_completed();
-        (readback_raw_halves(&h.device, &target.texture, 320, 200), status, dispatches)
+        (
+            readback_raw_halves(&h.device, &target.texture, 320, 200),
+            status,
+            dispatches,
+        )
     };
     let mut viewport_frames = 0;
     let mut rt_dispatches = 0;
@@ -84,25 +116,45 @@ fn shared_scene_viewport_preserves_rt_and_temporal_show_history() {
         if frame == 3 {
             control.clear_state();
             viewed.clear_state();
-            assert!(viewed.scene_viewport_texture().is_none(), "reset must invalidate the old image");
-            assert_eq!(viewed.scene_viewport_status(), Some(FrameRenderStatus::PendingGeometry));
+            assert!(
+                viewed.scene_viewport_texture().is_none(),
+                "reset must invalidate the old image"
+            );
+            assert_eq!(
+                viewed.scene_viewport_status(),
+                Some(FrameRenderStatus::PendingGeometry)
+            );
         }
         if frame == 4 {
             viewed.clear_scene_viewport();
         } else if frame < 4 {
             config.camera.orbit(50.0, 0.0, 0.008);
-            viewed.set_scene_viewport_watched(&NodeId::new("scene"), config).unwrap();
+            viewed
+                .set_scene_viewport_watched(&NodeId::new("scene"), config)
+                .unwrap();
         }
         let (expected, expected_status, expected_dispatches) = render(&mut control, &frame_ctx);
         let (actual, actual_status, actual_dispatches) = render(&mut viewed, &frame_ctx);
-        assert_eq!(actual_status, expected_status, "viewport changed show validity");
+        assert_eq!(
+            actual_status, expected_status,
+            "viewport changed show validity"
+        );
         assert!(!matches!(actual_status, FrameRenderStatus::Failed(_)));
-        assert!(expected == actual, "viewport changed RT/temporal show frame {frame}");
-        assert_eq!(actual_dispatches, expected_dispatches,
-            "viewport RT accounting must be isolated from show accounting");
+        assert!(
+            expected == actual,
+            "viewport changed RT/temporal show frame {frame}"
+        );
+        assert_eq!(
+            actual_dispatches, expected_dispatches,
+            "viewport RT accounting must be isolated from show accounting"
+        );
         rt_dispatches += actual_dispatches;
         if frame < 4 {
-            assert!(viewed.scene_viewport_errors().is_empty(), "{:?}", viewed.scene_viewport_errors());
+            assert!(
+                viewed.scene_viewport_errors().is_empty(),
+                "{:?}",
+                viewed.scene_viewport_errors()
+            );
             if viewed.scene_viewport_status() == Some(FrameRenderStatus::Complete) {
                 assert!(viewed.scene_viewport_texture().is_some());
                 viewport_frames += 1;
@@ -111,8 +163,14 @@ fn shared_scene_viewport_preserves_rt_and_temporal_show_history() {
             assert!(viewed.scene_viewport_texture().is_none());
         }
     }
-    assert!(viewport_frames > 0, "RT viewport never produced a complete image");
-    assert!(rt_dispatches > 0, "proof must actually exercise ray tracing");
+    assert!(
+        viewport_frames > 0,
+        "RT viewport never produced a complete image"
+    );
+    assert!(
+        rt_dispatches > 0,
+        "proof must actually exercise ray tracing"
+    );
 }
 
 /// The output preview's navigation (A2) on the runtime it drives: the
@@ -125,7 +183,9 @@ fn shared_scene_viewport_preserves_rt_and_temporal_show_history() {
 fn preview_navigation_starts_at_the_show_camera_and_leaves_the_show_untouched() {
     use manifold_gpu::GpuTextureFormat;
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-    use manifold_node_engine::gpu::headless_readback::{mean_abs_half_diff, readback_raw_halves, readback_tonemapped_rgba8};
+    use manifold_node_engine::gpu::headless_readback::{
+        mean_abs_half_diff, readback_raw_halves, readback_tonemapped_rgba8,
+    };
     use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_node_engine::runtime::PresetRuntime;
     use manifold_node_engine::scene::scene_viewport::SceneViewportConfig;
@@ -136,23 +196,56 @@ fn preview_navigation_starts_at_the_show_camera_and_leaves_the_show_untouched() 
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let json = scene_json();
-    let build = || PresetRuntime::from_json_str_with_device(
-        &json, &registry, std::sync::Arc::clone(&h.device), W, H, GpuTextureFormat::Rgba16Float, None,
-    ).unwrap();
+    let build = || {
+        PresetRuntime::from_json_str_with_device(
+            &json,
+            &registry,
+            std::sync::Arc::clone(&h.device),
+            W,
+            H,
+            GpuTextureFormat::Rgba16Float,
+            None,
+        )
+        .unwrap()
+    };
     let (mut control, mut viewed) = (build(), build());
-    let target = RenderTarget::new(&h.device, W, H, GpuTextureFormat::Rgba16Float, "preview-nav-show");
+    let target = RenderTarget::new(
+        &h.device,
+        W,
+        H,
+        GpuTextureFormat::Rgba16Float,
+        "preview-nav-show",
+    );
     let mut frame_ctx = ctx(h);
-    (frame_ctx.width, frame_ctx.height, frame_ctx.output_width, frame_ctx.output_height) = (W, H, W, H);
+    (
+        frame_ctx.width,
+        frame_ctx.height,
+        frame_ctx.output_width,
+        frame_ctx.output_height,
+    ) = (W, H, W, H);
     frame_ctx.aspect = W as f32 / H as f32;
     let render = |runtime: &mut PresetRuntime, frame_ctx: &PresetContext| {
         let mut enc = h.device.create_encoder("preview-nav-frame");
-        runtime.render(&mut GpuEncoder::new(&mut enc, &h.device), &target.texture, frame_ctx, &ParamManifest::default());
+        runtime.render(
+            &mut GpuEncoder::new(&mut enc, &h.device),
+            &target.texture,
+            frame_ctx,
+            &ParamManifest::default(),
+        );
         enc.commit_and_wait_completed();
-        (readback_raw_halves(&h.device, &target.texture, W, H), readback_tonemapped_rgba8(&h.device, &target.texture, W, H))
+        (
+            readback_raw_halves(&h.device, &target.texture, W, H),
+            readback_tonemapped_rgba8(&h.device, &target.texture, W, H),
+        )
     };
     let viewport = |runtime: &PresetRuntime| {
-        let texture = runtime.scene_viewport_texture().expect("the viewport renders");
-        (readback_raw_halves(&h.device, texture, W, H), readback_tonemapped_rgba8(&h.device, texture, W, H))
+        let texture = runtime
+            .scene_viewport_texture()
+            .expect("the viewport renders");
+        (
+            readback_raw_halves(&h.device, texture, W, H),
+            readback_tonemapped_rgba8(&h.device, texture, W, H),
+        )
     };
 
     // Two frames settle the show; then the scene reports what rendered it.
@@ -162,10 +255,16 @@ fn preview_navigation_starts_at_the_show_camera_and_leaves_the_show_untouched() 
         render(&mut control, &frame_ctx);
         show = render(&mut viewed, &frame_ctx);
     }
-    let (node, show_camera) = viewed.write_rendered_view(&mut Vec::new()).expect("the scene reports its camera");
+    let (node, show_camera) = viewed
+        .write_rendered_view(&mut Vec::new())
+        .expect("the scene reports its camera");
     assert_eq!(node, NodeId::new("scene"));
 
-    let mut config = SceneViewportConfig { camera: ViewportCamera::seeded_from(&show_camera), width: W, height: H };
+    let mut config = SceneViewportConfig {
+        camera: ViewportCamera::seeded_from(&show_camera),
+        width: W,
+        height: H,
+    };
     let mut frames = Vec::new();
     for (frame, moved) in [(2, false), (3, false), (4, true), (5, true)] {
         if moved && frame == 4 {
@@ -176,7 +275,10 @@ fn preview_navigation_starts_at_the_show_camera_and_leaves_the_show_untouched() 
         frame_ctx.frame_count = frame;
         let (expected, _) = render(&mut control, &frame_ctx);
         let (actual, rgba) = render(&mut viewed, &frame_ctx);
-        assert!(expected == actual, "preview navigation changed the show output on frame {frame}");
+        assert!(
+            expected == actual,
+            "preview navigation changed the show output on frame {frame}"
+        );
         show = (actual, rgba);
         frames.push(viewport(&viewed));
     }
@@ -184,8 +286,14 @@ fn preview_navigation_starts_at_the_show_camera_and_leaves_the_show_untouched() 
     let navigated = &frames[3];
     let seeded_diff = mean_abs_half_diff(&seeded.0, &show.0);
     let navigated_diff = mean_abs_half_diff(&navigated.0, &show.0);
-    assert!(seeded_diff < 0.01, "seeded navigation starts on the show picture: mean diff {seeded_diff}");
-    assert!(navigated_diff > 4.0 * seeded_diff.max(0.005), "navigation looks from elsewhere: mean diff {navigated_diff}");
+    assert!(
+        seeded_diff < 0.01,
+        "seeded navigation starts on the show picture: mean diff {seeded_diff}"
+    );
+    assert!(
+        navigated_diff > 4.0 * seeded_diff.max(0.005),
+        "navigation looks from elsewhere: mean diff {navigated_diff}"
+    );
 
     let mut strip = vec![0u8; (3 * W * H * 4) as usize];
     for (panel, rgba) in [&show.1, &seeded.1, &navigated.1].into_iter().enumerate() {
@@ -196,7 +304,8 @@ fn preview_navigation_starts_at_the_show_camera_and_leaves_the_show_untouched() 
         }
     }
     let path = "/tmp/preview_navigation_after.png";
-    std::fs::write(path, encode_rgba8_png(&strip, 3 * W, H)).unwrap_or_else(|e| panic!("write {path}: {e}"));
+    std::fs::write(path, encode_rgba8_png(&strip, 3 * W, H))
+        .unwrap_or_else(|e| panic!("write {path}: {e}"));
     eprintln!("[A2] wrote {path}: show | seeded preview | navigated preview");
 }
 
@@ -205,7 +314,8 @@ fn preview_navigation_starts_at_the_show_camera_and_leaves_the_show_untouched() 
 /// deliberately: this test is about session lifecycle/dirty-tracking, not
 /// scene fidelity.
 fn scene_json() -> String {
-    manifold_nodes::testkit::scene_objects::bundle_scene_objects(r#"{"version":2,"name":"ViewportSessionProof","nodes":[
+    manifold_nodes::testkit::scene_objects::bundle_scene_objects(
+        r#"{"version":2,"name":"ViewportSessionProof","nodes":[
         {"id":0,"typeId":"system.generator_input","nodeId":"input"},
         {"id":1,"typeId":"node.grid_mesh","nodeId":"ground_grid","params":{
             "max_capacity":{"type":"Int","value":8192},
@@ -250,7 +360,8 @@ fn scene_json() -> String {
         {"fromNode":4,"fromPort":"out","toNode":20,"toPort":"material_0"},
         {"fromNode":5,"fromPort":"out","toNode":20,"toPort":"light_0"},
         {"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}
-    ]}"#)
+    ]}"#,
+    )
 }
 
 fn ctx(h: &manifold_node_engine::testkit::gpu_harness::ParityHarness) -> PresetContext {
@@ -301,23 +412,38 @@ fn viewport_session_navigates_and_debounces() {
     let overlay_cfg = ViewportOverlayConfig::default();
 
     // ── Frame 1: default framing. ──
-    assert!(session.is_dirty(), "a freshly-opened session must render its first frame");
+    assert!(
+        session.is_dirty(),
+        "a freshly-opened session must render its first frame"
+    );
     let frame1 = session.render_if_dirty(&frame_ctx, &overlay_cfg, None, &[], &[]);
-    assert!(!session.is_dirty(), "render_if_dirty must clear the dirty flag");
+    assert!(
+        !session.is_dirty(),
+        "render_if_dirty must clear the dirty flag"
+    );
 
     // ── Debounce proof: call again with NO input in between — must be a
     //    cache hit (identical bytes, no new dispatch needed to prove it,
     //    since a stale/rebuilt render would still often look "similar" —
     //    what actually matters is `is_dirty()` staying false). ──
     let frame1_again = session.render_if_dirty(&frame_ctx, &overlay_cfg, None, &[], &[]);
-    assert_eq!(frame1, frame1_again, "no camera/def change ⇒ identical cached bytes");
-    assert!(!session.is_dirty(), "no-op render_if_dirty must not mark dirty");
+    assert_eq!(
+        frame1, frame1_again,
+        "no camera/def change ⇒ identical cached bytes"
+    );
+    assert!(
+        !session.is_dirty(),
+        "no-op render_if_dirty must not mark dirty"
+    );
 
     // ── Frame 2: orbit — LMB-drag equivalent. ──
     session.orbit(220.0, 40.0, 0.01);
     assert!(session.is_dirty(), "orbit() must mark the session dirty");
     let frame2 = session.render_if_dirty(&frame_ctx, &overlay_cfg, None, &[], &[]);
-    assert_ne!(frame1, frame2, "orbiting the camera must change the rendered pixels");
+    assert_ne!(
+        frame1, frame2,
+        "orbiting the camera must change the rendered pixels"
+    );
 
     // ── Frame 3: dolly in — scroll-wheel equivalent, from the orbited pose. ──
     session.dolly(1.0, 0.3);
@@ -327,8 +453,13 @@ fn viewport_session_navigates_and_debounces() {
 
     // ── sync_def on the SAME def is a no-op: doesn't reset the camera or
     //    force a redraw. ──
-    session.sync_def(&def, &registry, &frame_ctx).expect("sync_def on unchanged def must succeed");
-    assert!(!session.is_dirty(), "sync_def on an unchanged def must not mark dirty");
+    session
+        .sync_def(&def, &registry, &frame_ctx)
+        .expect("sync_def on unchanged def must succeed");
+    assert!(
+        !session.is_dirty(),
+        "sync_def on an unchanged def must not mark dirty"
+    );
     assert!(
         (session.camera().yaw - 0.6 - 220.0 * 0.01).abs() < 1e-4,
         "sync_def on an unchanged def must not reset the navigated camera"
@@ -379,8 +510,16 @@ fn viewport_session_rebuilds_on_def_change() {
         manifold_core::effect_graph_def::SerializedParamValue::Float { value: 0.05 },
     );
 
-    session.sync_def(&edited, &registry, &frame_ctx).expect("sync_def must rebuild on a real change");
-    assert!(session.is_dirty(), "a real def change must mark the session dirty");
+    session
+        .sync_def(&edited, &registry, &frame_ctx)
+        .expect("sync_def must rebuild on a real change");
+    assert!(
+        session.is_dirty(),
+        "a real def change must mark the session dirty"
+    );
     let after = session.render_if_dirty(&frame_ctx, &overlay_cfg, None, &[], &[]);
-    assert_ne!(before, after, "a material color edit must change the rendered pixels");
+    assert_ne!(
+        before, after,
+        "a material color edit must change the rendered pixels"
+    );
 }

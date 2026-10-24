@@ -3,8 +3,8 @@
 //! bookkeeping, and selection lowering. Moved verbatim from ui_root/mod.rs
 //! (UI_FUNNEL_DECOMPOSITION P-F2a, pure move).
 
-use manifold_ui::{MappingAction};
 use super::*;
+use manifold_ui::MappingAction;
 
 impl UIRoot {
     /// The overlay for an id. The exhaustive match forces every new overlay to
@@ -167,8 +167,13 @@ impl UIRoot {
             if !ov.is_open() {
                 continue;
             }
-            let tier = if id == OverlayId::Toast { ZTier::Ghost } else { ZTier::Overlay };
-            let region = tree.begin_region_in(overlays, full_screen, tier, "overlay", UIFlags::empty());
+            let tier = if id == OverlayId::Toast {
+                ZTier::Ghost
+            } else {
+                ZTier::Overlay
+            };
+            let region =
+                tree.begin_region_in(overlays, full_screen, tier, "overlay", UIFlags::empty());
             let start = tree.count();
             if let Modality::Modal {
                 dim_background: true,
@@ -235,7 +240,11 @@ impl UIRoot {
     /// lower panels. Stashed selections are lowered by `drain_overlay_selections`.
     /// Also records into `closed_overlays` any overlay whose `on_event` flipped
     /// it shut (self-close on Escape / backdrop / cell pick) — section 3, D2.
-    pub(crate) fn route_overlay_event(&mut self, event: &UIEvent, actions: &mut Vec<PanelAction>) -> bool {
+    pub(crate) fn route_overlay_event(
+        &mut self,
+        event: &UIEvent,
+        actions: &mut Vec<PanelAction>,
+    ) -> bool {
         let mut tree = std::mem::replace(&mut self.tree, UITree::new());
         let mut consumed = false;
         for id in OverlayId::Z_ORDER.iter().rev() {
@@ -441,7 +450,10 @@ mod overlay_redraw_needed_tests {
     #[test]
     fn toast_animating_flips_the_aggregate_true() {
         let mut ui = UIRoot::new();
-        assert!(!ui.overlay_redraw_needed(), "idle toast contributes nothing");
+        assert!(
+            !ui.overlay_redraw_needed(),
+            "idle toast contributes nothing"
+        );
 
         ui.toast.show("Undo");
         assert!(
@@ -461,6 +473,9 @@ mod overlay_redraw_needed_tests {
 
         // Comfortably longer than the toast's total enter+hold+fade timeline.
         ui.toast.tick(10_000.0);
-        assert!(!ui.overlay_redraw_needed(), "toast settled — no more keepalive needed");
+        assert!(
+            !ui.overlay_redraw_needed(),
+            "toast settled — no more keepalive needed"
+        );
     }
 }

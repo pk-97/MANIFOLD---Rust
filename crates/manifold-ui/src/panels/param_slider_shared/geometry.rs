@@ -3,7 +3,6 @@
 
 use super::*;
 
-
 /// The ONE trim-geometry source (BUG-258): the fill + bar rects for a trim
 /// range on a track. Build, reposition, and hit-zone math all derive from
 /// this, so the grabbable zone can never drift from the drawn handle.
@@ -12,7 +11,6 @@ pub(crate) struct TrimBarRects {
     pub min_bar: Rect,
     pub max_bar: Rect,
 }
-
 
 pub(crate) fn trim_bar_rects(track_rect: Rect, min: f32, max: f32) -> TrimBarRects {
     let usable = track_rect.width - OVERLAY_INSET * 2.0;
@@ -24,11 +22,20 @@ pub(crate) fn trim_bar_rects(track_rect: Rect, min: f32, max: f32) -> TrimBarRec
             (max - min) * usable,
             track_rect.height - OVERLAY_INSET * 2.0,
         ),
-        min_bar: Rect::new(base_x + min * usable - TRIM_BAR_W * 0.5, track_rect.y, TRIM_BAR_W, track_rect.height),
-        max_bar: Rect::new(base_x + max * usable - TRIM_BAR_W * 0.5, track_rect.y, TRIM_BAR_W, track_rect.height),
+        min_bar: Rect::new(
+            base_x + min * usable - TRIM_BAR_W * 0.5,
+            track_rect.y,
+            TRIM_BAR_W,
+            track_rect.height,
+        ),
+        max_bar: Rect::new(
+            base_x + max * usable - TRIM_BAR_W * 0.5,
+            track_rect.y,
+            TRIM_BAR_W,
+            track_rect.height,
+        ),
     }
 }
-
 
 /// The envelope target bar's rect for a depth `norm` on a track — the
 /// single geometry source for build, drag-reposition, and hit-zone math
@@ -43,7 +50,6 @@ pub(crate) fn target_bar_rect(track_rect: Rect, norm: f32) -> Rect {
         track_rect.height + 4.0,
     )
 }
-
 
 /// Reposition a trim overlay's three nodes (fill + min/max bars) along a slider
 /// track for a new `[min, max]`. The pixel math is identical for driver,

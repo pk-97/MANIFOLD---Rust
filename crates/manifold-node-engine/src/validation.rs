@@ -7,12 +7,17 @@ use ahash::{AHashMap, AHashSet};
 
 use crate::exec::effect_node::NodeInstanceId;
 use crate::graph::Graph;
-use crate::ports::{ArrayType, ChannelElementType, ChannelName, ChannelSpec, MatchMode, PortKind, PortType, TextureChannels};
+use crate::ports::{
+    ArrayType, ChannelElementType, ChannelName, ChannelSpec, MatchMode, PortKind, PortType,
+    TextureChannels,
+};
 
 /// Errors produced by graph mutation and validation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GraphError {
-    PreparedParameterChanged { node: NodeInstanceId },
+    PreparedParameterChanged {
+        node: NodeInstanceId,
+    },
     NodeNotFound(NodeInstanceId),
     PortNotFound {
         node: NodeInstanceId,
@@ -189,7 +194,10 @@ pub enum TextureChannelMismatchReason {
 impl std::fmt::Display for GraphError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::PreparedParameterChanged { node } => write!(f, "prepared source/mode on {node:?} changed; restore it or reapply the scene modifier"),
+            Self::PreparedParameterChanged { node } => write!(
+                f,
+                "prepared source/mode on {node:?} changed; restore it or reapply the scene modifier"
+            ),
             Self::NodeNotFound(id) => write!(f, "node {:?} not found", id),
             Self::PortNotFound { node, port } => {
                 write!(f, "port `{port}` not found on node {node:?}")
@@ -432,23 +440,20 @@ pub(super) fn validate_wire_endpoints(
     // `docs/CHANNEL_TYPE_SYSTEM.md` section 5. Wires that match neither
     // condition fall through to `port_types_compatible` (raw-byte
     // size+align match) below.
-    if let (PortType::Array(producer), PortType::Array(consumer)) =
-        (from_port.ty, to_port.ty)
+    if let (PortType::Array(producer), PortType::Array(consumer)) = (from_port.ty, to_port.ty)
         && (consumer.match_mode == MatchMode::Permissive
             || (!producer.specs.is_empty() && !consumer.specs.is_empty()))
     {
         if let Err(reason) = channels_compatible(producer, consumer) {
-            return Err(GraphError::ChannelMismatch(Box::new(
-                ChannelMismatchInfo {
-                    from_node: from.0,
-                    from_port: from.1.to_string(),
-                    to_node: to.0,
-                    to_port: to.1.to_string(),
-                    producer_specs: producer.specs,
-                    consumer_specs: consumer.specs,
-                    reason,
-                },
-            )));
+            return Err(GraphError::ChannelMismatch(Box::new(ChannelMismatchInfo {
+                from_node: from.0,
+                from_port: from.1.to_string(),
+                to_node: to.0,
+                to_port: to.1.to_string(),
+                producer_specs: producer.specs,
+                consumer_specs: consumer.specs,
+                reason,
+            })));
         }
         // Channels-compatible: skip the legacy check; the wire is
         // already validated.
@@ -535,12 +540,7 @@ pub fn channels_compatible(
                     consumer_count: consumer.specs.len() as u32,
                 });
             }
-            for (i, (p, c)) in producer
-                .specs
-                .iter()
-                .zip(consumer.specs.iter())
-                .enumerate()
-            {
+            for (i, (p, c)) in producer.specs.iter().zip(consumer.specs.iter()).enumerate() {
                 if p.name != c.name {
                     return Err(ChannelMismatchReason::NameMismatch {
                         index: i as u32,
@@ -742,11 +742,7 @@ pub fn validate(graph: &Graph) -> Result<(), GraphError> {
                 // inline param value drives the op. Constants embedded
                 // in the graph live as param values on the consuming
                 // node rather than as Value-node middlemen.
-                let has_backing_param = inst
-                    .node
-                    .parameters()
-                    .iter()
-                    .any(|p| p.name == input.name);
+                let has_backing_param = inst.node.parameters().iter().any(|p| p.name == input.name);
                 if has_backing_param {
                     continue;
                 }
@@ -757,7 +753,10 @@ pub fn validate(graph: &Graph) -> Result<(), GraphError> {
             }
         }
         if let Some(reason) = inst.node.params_refusal(&inst.params) {
-            return Err(GraphError::IllegalParams { node: inst.id, reason });
+            return Err(GraphError::IllegalParams {
+                node: inst.id,
+                reason,
+            });
         }
     }
     // Per-node conditional-requirement sweep. Resolves the material's
@@ -778,8 +777,7 @@ pub fn validate(graph: &Graph) -> Result<(), GraphError> {
         }
         // Find the wire to this node's `material` input port and look
         // up its source primitive's emitted kind.
-        let Some(material_wire) =
-            graph.wires().iter().find(|w| w.to == (inst.id, "material"))
+        let Some(material_wire) = graph.wires().iter().find(|w| w.to == (inst.id, "material"))
         else {
             continue;
         };
@@ -1033,9 +1031,9 @@ mod tests {
     }
 
     impl crate::exec::effect_node::EffectNode for TestNode {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -1117,9 +1115,9 @@ mod tests {
     }
 
     impl crate::exec::effect_node::EffectNode for FormatTestNode {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -1155,7 +1153,10 @@ mod tests {
             vec![input("source", PortType::Texture2D, true)],
             vec![output("field", PortType::VectorField)],
         )));
-        assert!(validate(&g).is_ok(), "an unconsumed orphan remains inactive");
+        assert!(
+            validate(&g).is_ok(),
+            "an unconsumed orphan remains inactive"
+        );
         g.add_external_output(orphan, "field").unwrap();
         assert!(matches!(
             validate(&g),
@@ -1195,11 +1196,7 @@ mod tests {
             vec![],
             vec![],
         )));
-        let dead_fluid = dead.add_node(Box::new(TestNode::new(
-            "dead_fluid",
-            vec![],
-            vec![],
-        )));
+        let dead_fluid = dead.add_node(Box::new(TestNode::new("dead_fluid", vec![], vec![])));
         let dead_rigid = dead.add_node(Box::new(TestNode::new(
             "dead_rigid",
             vec![input("velocity", PortType::Texture2D, true)],
@@ -1242,12 +1239,8 @@ mod tests {
         // through regardless of what the producer emits.
         let mut g = Graph::new();
         let a = g.add_node(Box::new(
-            FormatTestNode::new(
-                "producer",
-                vec![],
-                vec![output("out", PortType::Texture2D)],
-            )
-            .with_output_format("out", manifold_gpu::GpuTextureFormat::Rgba32Float),
+            FormatTestNode::new("producer", vec![], vec![output("out", PortType::Texture2D)])
+                .with_output_format("out", manifold_gpu::GpuTextureFormat::Rgba32Float),
         ));
         let b = g.add_node(Box::new(FormatTestNode::new(
             "consumer",
@@ -1262,12 +1255,8 @@ mod tests {
     fn format_contract_accepts_when_producer_format_in_accept_list() {
         let mut g = Graph::new();
         let a = g.add_node(Box::new(
-            FormatTestNode::new(
-                "producer",
-                vec![],
-                vec![output("out", PortType::Texture2D)],
-            )
-            .with_output_format("out", manifold_gpu::GpuTextureFormat::Rgba16Float),
+            FormatTestNode::new("producer", vec![], vec![output("out", PortType::Texture2D)])
+                .with_output_format("out", manifold_gpu::GpuTextureFormat::Rgba16Float),
         ));
         let b = g.add_node(Box::new(
             FormatTestNode::new(
@@ -1291,12 +1280,8 @@ mod tests {
     fn format_contract_rejects_at_connect_when_mismatch() {
         let mut g = Graph::new();
         let a = g.add_node(Box::new(
-            FormatTestNode::new(
-                "producer",
-                vec![],
-                vec![output("out", PortType::Texture2D)],
-            )
-            .with_output_format("out", manifold_gpu::GpuTextureFormat::Rgba32Float),
+            FormatTestNode::new("producer", vec![], vec![output("out", PortType::Texture2D)])
+                .with_output_format("out", manifold_gpu::GpuTextureFormat::Rgba32Float),
         ));
         let b = g.add_node(Box::new(
             FormatTestNode::new(
@@ -1304,10 +1289,7 @@ mod tests {
                 vec![input("in", PortType::Texture2D, true)],
                 vec![],
             )
-            .with_accepted_inputs(
-                "in",
-                &[manifold_gpu::GpuTextureFormat::Rgba16Float],
-            ),
+            .with_accepted_inputs("in", &[manifold_gpu::GpuTextureFormat::Rgba16Float]),
         ));
         let err = g
             .connect((a, "out"), (b, "in"))
@@ -1344,7 +1326,15 @@ mod tests {
         // rejected if we tried — `validate_wire_endpoints` called
         // directly returns the same error.
         #[allow(clippy::type_complexity)]
-        let cases: Vec<(&str, fn() -> (Graph, (NodeInstanceId, &'static str), (NodeInstanceId, &'static str), &'static str))> = vec![
+        let cases: Vec<(
+            &str,
+            fn() -> (
+                Graph,
+                (NodeInstanceId, &'static str),
+                (NodeInstanceId, &'static str),
+                &'static str,
+            ),
+        )> = vec![
             ("type mismatch", || {
                 let mut g = Graph::new();
                 let a = g.add_node(Box::new(TestNode::new(
@@ -1393,9 +1383,8 @@ mod tests {
             let (g, from, to, expected_variant) = build();
 
             // connect-time rejection
-            let connect_err = validate_connection(&g, from, to).expect_err(
-                "connect-time validation should reject this case",
-            );
+            let connect_err = validate_connection(&g, from, to)
+                .expect_err("connect-time validation should reject this case");
             let connect_label = error_variant_label(&connect_err);
             assert_eq!(
                 connect_label, expected_variant,
@@ -1450,11 +1439,11 @@ mod tests {
         // loop is `producer.out → mid.in → consumer.in (forward)`
         // closed by `consumer.out → producer.capture_in` (back-edge).
         let mut g = Graph::new();
-        let producer = g.add_node(Box::new(
-            TestNodeWithCapturePort::new("producer", vec![
-                input("capture_in", PortType::Texture2D, false),
-            ], vec![output("out", PortType::Texture2D)]),
-        ));
+        let producer = g.add_node(Box::new(TestNodeWithCapturePort::new(
+            "producer",
+            vec![input("capture_in", PortType::Texture2D, false)],
+            vec![output("out", PortType::Texture2D)],
+        )));
         let mid = g.add_node(Box::new(TestNode::new(
             "mid",
             vec![input("in", PortType::Texture2D, true)],
@@ -1504,9 +1493,9 @@ mod tests {
     }
 
     impl crate::exec::effect_node::EffectNode for TestNodeWithCapturePort {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -1577,18 +1566,14 @@ mod tests {
             vec![],
             vec![output(
                 "out",
-                PortType::Array(ArrayType::of_known::<
-                    crate::particles::Particle,
-                >()),
+                PortType::Array(ArrayType::of_known::<crate::particles::Particle>()),
             )],
         )));
         let b = g.add_node(Box::new(TestNode::new(
             "vertex_consumer",
             vec![input(
                 "in",
-                PortType::Array(ArrayType::of_known::<
-                    crate::mesh::MeshVertex,
-                >()),
+                PortType::Array(ArrayType::of_known::<crate::mesh::MeshVertex>()),
                 true,
             )],
             vec![],
@@ -1621,7 +1606,10 @@ mod tests {
         let edge = ArrayType::of_known::<EdgePair>();
         assert_eq!((curve.item_size, curve.item_align), (8, 4));
         assert_eq!((edge.item_size, edge.item_align), (8, 4));
-        assert_ne!(curve, edge, "Channels signatures must distinguish the ArrayTypes");
+        assert_ne!(
+            curve, edge,
+            "Channels signatures must distinguish the ArrayTypes"
+        );
 
         let mut g = Graph::new();
         let a = g.add_node(Box::new(TestNode::new(
@@ -1769,9 +1757,9 @@ mod tests {
             type_id: EffectNodeType,
         }
         impl crate::exec::effect_node::EffectNode for StatefulNode {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+            fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+                crate::scene::depth_rule::DepthRule::Terminal
+            }
             fn type_id(&self) -> &EffectNodeType {
                 &self.type_id
             }
@@ -1948,24 +1936,45 @@ mod tests {
 
     mod channels {
         use super::*;
-        use crate::ports::{ArrayType, ChannelElementType, ChannelSpec, MatchMode};
         use crate::channel_names::well_known;
+        use crate::ports::{ArrayType, ChannelElementType, ChannelSpec, MatchMode};
 
         fn ch(name: crate::ports::ChannelName, ty: ChannelElementType) -> ChannelSpec {
             ChannelSpec { name, ty }
         }
 
         const EDGE_PAIR_SPECS: &[ChannelSpec] = &[
-            ChannelSpec { name: well_known::A_INDEX, ty: ChannelElementType::U32 },
-            ChannelSpec { name: well_known::B_INDEX, ty: ChannelElementType::U32 },
+            ChannelSpec {
+                name: well_known::A_INDEX,
+                ty: ChannelElementType::U32,
+            },
+            ChannelSpec {
+                name: well_known::B_INDEX,
+                ty: ChannelElementType::U32,
+            },
         ];
 
         const PARTICLE_SPECS: &[ChannelSpec] = &[
-            ChannelSpec { name: well_known::POSITION, ty: ChannelElementType::Vec3F },
-            ChannelSpec { name: well_known::VELOCITY, ty: ChannelElementType::Vec3F },
-            ChannelSpec { name: well_known::LIFE,     ty: ChannelElementType::F32 },
-            ChannelSpec { name: well_known::AGE,      ty: ChannelElementType::F32 },
-            ChannelSpec { name: well_known::COLOR,    ty: ChannelElementType::Vec4F },
+            ChannelSpec {
+                name: well_known::POSITION,
+                ty: ChannelElementType::Vec3F,
+            },
+            ChannelSpec {
+                name: well_known::VELOCITY,
+                ty: ChannelElementType::Vec3F,
+            },
+            ChannelSpec {
+                name: well_known::LIFE,
+                ty: ChannelElementType::F32,
+            },
+            ChannelSpec {
+                name: well_known::AGE,
+                ty: ChannelElementType::F32,
+            },
+            ChannelSpec {
+                name: well_known::COLOR,
+                ty: ChannelElementType::Vec4F,
+            },
         ];
 
         #[test]
@@ -1978,13 +1987,28 @@ mod tests {
         #[test]
         fn exact_match_rejects_different_channel_count() {
             const THREE: &[ChannelSpec] = &[
-                ChannelSpec { name: well_known::X, ty: ChannelElementType::F32 },
-                ChannelSpec { name: well_known::Y, ty: ChannelElementType::F32 },
-                ChannelSpec { name: well_known::Z, ty: ChannelElementType::F32 },
+                ChannelSpec {
+                    name: well_known::X,
+                    ty: ChannelElementType::F32,
+                },
+                ChannelSpec {
+                    name: well_known::Y,
+                    ty: ChannelElementType::F32,
+                },
+                ChannelSpec {
+                    name: well_known::Z,
+                    ty: ChannelElementType::F32,
+                },
             ];
             const TWO: &[ChannelSpec] = &[
-                ChannelSpec { name: well_known::X, ty: ChannelElementType::F32 },
-                ChannelSpec { name: well_known::Y, ty: ChannelElementType::F32 },
+                ChannelSpec {
+                    name: well_known::X,
+                    ty: ChannelElementType::F32,
+                },
+                ChannelSpec {
+                    name: well_known::Y,
+                    ty: ChannelElementType::F32,
+                },
             ];
             let producer = ArrayType::of_channels(THREE, MatchMode::Exact);
             let consumer = ArrayType::of_channels(TWO, MatchMode::Exact);
@@ -2003,12 +2027,24 @@ mod tests {
         #[test]
         fn exact_match_rejects_different_channel_name_at_index() {
             const PRODUCER: &[ChannelSpec] = &[
-                ChannelSpec { name: well_known::X, ty: ChannelElementType::F32 },
-                ChannelSpec { name: well_known::Y, ty: ChannelElementType::F32 },
+                ChannelSpec {
+                    name: well_known::X,
+                    ty: ChannelElementType::F32,
+                },
+                ChannelSpec {
+                    name: well_known::Y,
+                    ty: ChannelElementType::F32,
+                },
             ];
             const CONSUMER: &[ChannelSpec] = &[
-                ChannelSpec { name: well_known::X, ty: ChannelElementType::F32 },
-                ChannelSpec { name: well_known::Z, ty: ChannelElementType::F32 },
+                ChannelSpec {
+                    name: well_known::X,
+                    ty: ChannelElementType::F32,
+                },
+                ChannelSpec {
+                    name: well_known::Z,
+                    ty: ChannelElementType::F32,
+                },
             ];
             let producer = ArrayType::of_channels(PRODUCER, MatchMode::Exact);
             let consumer = ArrayType::of_channels(CONSUMER, MatchMode::Exact);
@@ -2028,12 +2064,14 @@ mod tests {
 
         #[test]
         fn exact_match_rejects_different_element_type_at_index() {
-            const PRODUCER: &[ChannelSpec] = &[
-                ChannelSpec { name: well_known::X, ty: ChannelElementType::Vec3F },
-            ];
-            const CONSUMER: &[ChannelSpec] = &[
-                ChannelSpec { name: well_known::X, ty: ChannelElementType::Vec2F },
-            ];
+            const PRODUCER: &[ChannelSpec] = &[ChannelSpec {
+                name: well_known::X,
+                ty: ChannelElementType::Vec3F,
+            }];
+            const CONSUMER: &[ChannelSpec] = &[ChannelSpec {
+                name: well_known::X,
+                ty: ChannelElementType::Vec2F,
+            }];
             let producer = ArrayType::of_channels(PRODUCER, MatchMode::Exact);
             let consumer = ArrayType::of_channels(CONSUMER, MatchMode::Exact);
             match channels_compatible(producer, consumer) {
@@ -2054,12 +2092,24 @@ mod tests {
         fn exact_match_rejects_reordered_specs() {
             // Same names, same types, different order → Exact fails.
             const NORMAL: &[ChannelSpec] = &[
-                ChannelSpec { name: well_known::X, ty: ChannelElementType::F32 },
-                ChannelSpec { name: well_known::Y, ty: ChannelElementType::F32 },
+                ChannelSpec {
+                    name: well_known::X,
+                    ty: ChannelElementType::F32,
+                },
+                ChannelSpec {
+                    name: well_known::Y,
+                    ty: ChannelElementType::F32,
+                },
             ];
             const REORDERED: &[ChannelSpec] = &[
-                ChannelSpec { name: well_known::Y, ty: ChannelElementType::F32 },
-                ChannelSpec { name: well_known::X, ty: ChannelElementType::F32 },
+                ChannelSpec {
+                    name: well_known::Y,
+                    ty: ChannelElementType::F32,
+                },
+                ChannelSpec {
+                    name: well_known::X,
+                    ty: ChannelElementType::F32,
+                },
             ];
             let producer = ArrayType::of_channels(NORMAL, MatchMode::Exact);
             let consumer = ArrayType::of_channels(REORDERED, MatchMode::Exact);
@@ -2070,11 +2120,9 @@ mod tests {
         fn permissive_consumer_accepts_arbitrary_producer() {
             let permissive_consumer =
                 ArrayType::of_channels(EDGE_PAIR_SPECS, MatchMode::Permissive);
-            let unrelated_producer =
-                ArrayType::of_channels(PARTICLE_SPECS, MatchMode::Exact);
+            let unrelated_producer = ArrayType::of_channels(PARTICLE_SPECS, MatchMode::Exact);
             assert!(channels_compatible(unrelated_producer, permissive_consumer).is_ok());
-            let matching_producer =
-                ArrayType::of_channels(EDGE_PAIR_SPECS, MatchMode::Exact);
+            let matching_producer = ArrayType::of_channels(EDGE_PAIR_SPECS, MatchMode::Exact);
             assert!(channels_compatible(matching_producer, permissive_consumer).is_ok());
         }
 
@@ -2087,7 +2135,8 @@ mod tests {
                     matches!(port.ty, PortType::Array(layout) if layout.match_mode == MatchMode::Permissive)
                 });
                 assert!(
-                    !permissive || super::super::PERMISSIVE_PRIMITIVE_ALLOWLIST.contains(&factory.type_id),
+                    !permissive
+                        || super::super::PERMISSIVE_PRIMITIVE_ALLOWLIST.contains(&factory.type_id),
                     "{} declares a Channels[permissive] input but is not in PERMISSIVE_PRIMITIVE_ALLOWLIST",
                     factory.type_id,
                 );
@@ -2099,12 +2148,10 @@ mod tests {
             // An inline (non-registry) channel name compares fine — the
             // FNV hash is the identity, even if `debug_name` returns None.
             let local = crate::ports::ChannelName::from_str("internal_counter");
-            let specs_a: &'static [ChannelSpec] = Box::leak(Box::new([
-                ch(local, ChannelElementType::U32),
-            ]));
-            let specs_b: &'static [ChannelSpec] = Box::leak(Box::new([
-                ch(local, ChannelElementType::U32),
-            ]));
+            let specs_a: &'static [ChannelSpec] =
+                Box::leak(Box::new([ch(local, ChannelElementType::U32)]));
+            let specs_b: &'static [ChannelSpec] =
+                Box::leak(Box::new([ch(local, ChannelElementType::U32)]));
             let a = ArrayType::of_channels(specs_a, MatchMode::Exact);
             let b = ArrayType::of_channels(specs_b, MatchMode::Exact);
             assert!(channels_compatible(a, b).is_ok());
@@ -2118,22 +2165,31 @@ mod tests {
             // Build a graph where producer and consumer have different
             // Channels signatures and confirm the validator surfaces
             // ChannelMismatch, not the generic PortTypeMismatch.
-            const PRODUCER: &[ChannelSpec] = &[
-                ChannelSpec { name: well_known::POSITION, ty: ChannelElementType::Vec3F },
-            ];
-            const CONSUMER: &[ChannelSpec] = &[
-                ChannelSpec { name: well_known::POSITION, ty: ChannelElementType::Vec2F },
-            ];
+            const PRODUCER: &[ChannelSpec] = &[ChannelSpec {
+                name: well_known::POSITION,
+                ty: ChannelElementType::Vec3F,
+            }];
+            const CONSUMER: &[ChannelSpec] = &[ChannelSpec {
+                name: well_known::POSITION,
+                ty: ChannelElementType::Vec2F,
+            }];
 
             let mut g = Graph::new();
             let src = g.add_node(Box::new(TestNode::new(
                 "src",
                 vec![],
-                vec![output("out", PortType::Array(ArrayType::of_channels(PRODUCER, MatchMode::Exact)))],
+                vec![output(
+                    "out",
+                    PortType::Array(ArrayType::of_channels(PRODUCER, MatchMode::Exact)),
+                )],
             )));
             let dst = g.add_node(Box::new(TestNode::new(
                 "dst",
-                vec![input("in", PortType::Array(ArrayType::of_channels(CONSUMER, MatchMode::Exact)), true)],
+                vec![input(
+                    "in",
+                    PortType::Array(ArrayType::of_channels(CONSUMER, MatchMode::Exact)),
+                    true,
+                )],
                 vec![],
             )));
 
@@ -2276,13 +2332,11 @@ mod tests {
             )));
 
             match g.connect((src, "out"), (dst, "in")) {
-                Err(GraphError::TextureChannelMismatch(info)) => {
-                    match info.reason {
-                        TextureChannelMismatchReason::SlotNameMismatch {
-                            slot, ..
-                        } => assert_eq!(slot, 1, "first divergence at G slot"),
+                Err(GraphError::TextureChannelMismatch(info)) => match info.reason {
+                    TextureChannelMismatchReason::SlotNameMismatch { slot, .. } => {
+                        assert_eq!(slot, 1, "first divergence at G slot")
                     }
-                }
+                },
                 other => panic!("expected TextureChannelMismatch, got {other:?}"),
             }
         }
@@ -2384,8 +2438,14 @@ mod tests {
                 )],
             )));
             const TYPED: &[ChannelSpec] = &[
-                ChannelSpec { name: well_known::A_INDEX, ty: ChannelElementType::U32 },
-                ChannelSpec { name: well_known::B_INDEX, ty: ChannelElementType::U32 },
+                ChannelSpec {
+                    name: well_known::A_INDEX,
+                    ty: ChannelElementType::U32,
+                },
+                ChannelSpec {
+                    name: well_known::B_INDEX,
+                    ty: ChannelElementType::U32,
+                },
             ];
             let dst = g.add_node(Box::new(TestNode::new(
                 "dst",

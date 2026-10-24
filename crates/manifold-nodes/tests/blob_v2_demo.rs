@@ -19,7 +19,9 @@ use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_node_engine::gpu::headless_readback::{readback_raw_halves, readback_to_srgb_png_linear};
+use manifold_node_engine::gpu::headless_readback::{
+    readback_raw_halves, readback_to_srgb_png_linear,
+};
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::{ChainBuildInputs, PresetRuntime};
@@ -1175,9 +1177,8 @@ fn blob_v2_shared_mask_detection() {
     let dry = source_bytes(&source);
     // Seed the normal effect-view cache so the unwatched path really uses
     // fusion, instead of merely testing the async worker's initial fallback.
-    let fused = manifold_node_engine::freeze::install::fused_view_by_id(
-        &PresetTypeId::new("MaskBlob"),
-    );
+    let fused =
+        manifold_node_engine::freeze::install::fused_view_by_id(&PresetTypeId::new("MaskBlob"));
     assert!(fused.is_some(), "the composed mask must remain fusable");
     let mut outputs = Vec::new();
     for watched in [true, false] {
@@ -1284,14 +1285,7 @@ fn blob_v2_box_area() {
 
     let mut unrestricted = Vec::new();
     for frame in 0..8 {
-        unrestricted = render_fixture(
-            &device,
-            &mut runtime,
-            &effect,
-            &input,
-            frame,
-            &source,
-        );
+        unrestricted = render_fixture(&device, &mut runtime, &effect, &input, frame, &source);
     }
     assert_finite_and_bounded("box-area-unrestricted", &unrestricted);
     let unrestricted_border = region_mean(&unrestricted, 40, 20, 190, 21);
@@ -1304,14 +1298,7 @@ fn blob_v2_box_area() {
     set_param(&mut effect, "max_box_area", 0.25);
     let mut bounded = Vec::new();
     for frame in 8..16 {
-        bounded = render_fixture(
-            &device,
-            &mut runtime,
-            &effect,
-            &input,
-            frame,
-            &source,
-        );
+        bounded = render_fixture(&device, &mut runtime, &effect, &input, frame, &source);
     }
     assert_finite_and_bounded("box-area-bounded", &bounded);
     let bounded_border = region_mean(&bounded, 40, 20, 190, 21);

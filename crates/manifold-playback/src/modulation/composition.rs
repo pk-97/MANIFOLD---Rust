@@ -169,7 +169,10 @@ fn compose_shadows(
     // Envelope step/random shadows apply regardless of the instance-enabled
     // flag, preserving the retained pipeline's established precedence.
     for envelope in sources.envelopes.iter().filter(|envelope| envelope.enabled) {
-        if matches!(envelope.action, manifold_core::audio_mod::TriggerAction::Continuous) {
+        if matches!(
+            envelope.action,
+            manifold_core::audio_mod::TriggerAction::Continuous
+        ) {
             continue;
         }
         if targets(envelope.param_id.as_ref(), id)
@@ -229,7 +232,10 @@ fn compose_dynamic(
                     written = true;
                 }
             } else if !param.spec.is_trigger_gate
-                && matches!(audio.action, manifold_core::audio_mod::TriggerAction::Continuous)
+                && matches!(
+                    audio.action,
+                    manifold_core::audio_mod::TriggerAction::Continuous
+                )
                 && let Some(output) = state.held_output
             {
                 value = output;
@@ -245,7 +251,10 @@ fn compose_dynamic(
     {
         for envelope in sources.envelopes.iter().filter(|envelope| {
             envelope.enabled
-                && matches!(envelope.action, manifold_core::audio_mod::TriggerAction::Continuous)
+                && matches!(
+                    envelope.action,
+                    manifold_core::audio_mod::TriggerAction::Continuous
+                )
         }) {
             if targets(envelope.param_id.as_ref(), id)
                 && apply_envelope_offset(
@@ -366,22 +375,44 @@ mod tests {
         p.choices.slider = Some((0.0, 0.5));
         let mut params = ParamManifest::from_params(vec![p]);
         let mut peak = f32::MIN;
-        for waveform in [DriverWaveform::Sine, DriverWaveform::Sawtooth, DriverWaveform::Square] {
-            let drivers = [ParameterDriver::new("value", BeatDivision::Quarter, waveform)];
+        for waveform in [
+            DriverWaveform::Sine,
+            DriverWaveform::Sawtooth,
+            DriverWaveform::Square,
+        ] {
+            let drivers = [ParameterDriver::new(
+                "value",
+                BeatDivision::Quarter,
+                waveform,
+            )];
             for step in 0..64 {
                 let beat = Beats(step as f64 / 16.0);
                 compose_controls(
                     &mut params,
-                    ControlSources { enabled: true, drivers: &drivers, envelopes: &[], audio_mods: &[] },
-                    |_| ControlSample { beat, ..sample(None) },
+                    ControlSources {
+                        enabled: true,
+                        drivers: &drivers,
+                        envelopes: &[],
+                        audio_mods: &[],
+                    },
+                    |_| ControlSample {
+                        beat,
+                        ..sample(None)
+                    },
                     |_, m| AudioControlState::current(m),
                 );
                 let v = params.get("value").unwrap().value;
-                assert!((0.0..=0.5).contains(&v), "{waveform:?} at {beat:?} gave {v}");
+                assert!(
+                    (0.0..=0.5).contains(&v),
+                    "{waveform:?} at {beat:?} gave {v}"
+                );
                 peak = peak.max(v);
             }
         }
-        assert!(peak > 0.45, "the LFO reaches the top of the user's range, peak {peak}");
+        assert!(
+            peak > 0.45,
+            "the LFO reaches the top of the user's range, peak {peak}"
+        );
     }
 
     #[test]
@@ -533,15 +564,13 @@ mod tests {
                 envelopes: &[],
                 audio_mods: &mods,
             };
-            assert!(prepare_control_bases(
-                &mut prepared,
-                sources,
-                |_, _| AudioControlState {
+            assert!(prepare_control_bases(&mut prepared, sources, |_, _| {
+                AudioControlState {
                     step_value: Some(0.2),
                     held_output: None,
                     fire_count: Some(0),
-                },
-            ));
+                }
+            },));
         }
         mods[0].step_value = Some(0.8);
         let sources = ControlSources {

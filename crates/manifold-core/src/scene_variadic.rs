@@ -31,8 +31,12 @@ impl Variadic {
     /// The owner's saved count, or the family's default.
     pub fn count(&self, owner: &EffectGraphNode) -> u32 {
         match owner.params.get(self.count_param) {
-            Some(SerializedParamValue::Float { value }) if value.is_finite() && *value >= 0.0 => value.round() as u32,
-            Some(SerializedParamValue::Int { value }) => u32::try_from(*value).unwrap_or(self.default_count),
+            Some(SerializedParamValue::Float { value }) if value.is_finite() && *value >= 0.0 => {
+                value.round() as u32
+            }
+            Some(SerializedParamValue::Int { value }) => {
+                u32::try_from(*value).unwrap_or(self.default_count)
+            }
             _ => self.default_count,
         }
     }
@@ -43,7 +47,12 @@ impl Variadic {
     pub fn grow_to_cover(&self, owner: &mut EffectGraphNode, k: u32) {
         let needed = k + 1;
         if self.count(owner) < needed {
-            owner.params.insert(self.count_param.to_string(), SerializedParamValue::Float { value: needed as f32 });
+            owner.params.insert(
+                self.count_param.to_string(),
+                SerializedParamValue::Float {
+                    value: needed as f32,
+                },
+            );
         }
     }
 }

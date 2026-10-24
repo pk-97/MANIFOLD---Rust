@@ -720,7 +720,10 @@ mod tests {
         }
         assert!(terminal.cells().iter().all(|&c| (32..=127).contains(&c)));
         let fresh = rows_with_new_words(&initial, terminal.cells());
-        assert!(fresh >= 12, "only {fresh} rows show new text after 40 beats");
+        assert!(
+            fresh >= 12,
+            "only {fresh} rows show new text after 40 beats"
+        );
     }
 
     #[test]
@@ -740,10 +743,15 @@ mod tests {
             );
         }
         let changed: Vec<_> = (0..36)
-            .filter(|&row| initial[row * 128..(row + 1) * 128] != terminal.cells()[row * 128..(row + 1) * 128])
+            .filter(|&row| {
+                initial[row * 128..(row + 1) * 128] != terminal.cells()[row * 128..(row + 1) * 128]
+            })
             .collect();
         assert!(!changed.is_empty());
-        assert!(changed.iter().all(|row| (12..20).contains(row)), "{changed:?}");
+        assert!(
+            changed.iter().all(|row| (12..20).contains(row)),
+            "{changed:?}"
+        );
     }
 
     #[test]
@@ -812,7 +820,15 @@ mod tests {
         let mut prior = terminal.cells().to_vec();
         let mut saw_cursor = false;
         for frame in 1..120 {
-            terminal.update(128, 36, 0, Beats(f64::from(frame) / 32.0), 1.0, 0.0, &source(44));
+            terminal.update(
+                128,
+                36,
+                0,
+                Beats(f64::from(frame) / 32.0),
+                1.0,
+                0.0,
+                &source(44),
+            );
             let cursors = terminal.cells().iter().filter(|&&c| c == 127).count();
             assert!(cursors <= MAX_ACTIVE);
             saw_cursor |= cursors != 0;

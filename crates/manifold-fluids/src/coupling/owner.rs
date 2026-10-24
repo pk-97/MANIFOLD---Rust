@@ -266,11 +266,7 @@ impl SubstepExchange for CoupledFluidFrame<'_, '_> {
 
 impl CoupledFluidFrame<'_, '_> {
     /// Replace the copied force fields for the next accepted live segment.
-    pub fn set_fields(
-        &mut self,
-        dt: Seconds,
-        fields: &[FieldInput<'_>],
-    ) -> Result<(), FluidError> {
+    pub fn set_fields(&mut self, dt: Seconds, fields: &[FieldInput<'_>]) -> Result<(), FluidError> {
         self.frame.set_fields(dt, fields)
     }
 }

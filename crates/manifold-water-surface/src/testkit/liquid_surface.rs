@@ -1,15 +1,17 @@
-use manifold_water_liquid::primitives::sort_particles_into_cells::SortParticlesIntoCells;
 use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_water_liquid::fluid_particles::{CellRange, FluidBlob, bin_counts};
+use manifold_water_liquid::primitives::sort_particles_into_cells::SortParticlesIntoCells;
 
 /// Deterministic pseudo-random stream (xorshift) for fixtures.
 pub struct Rng(u64);
 
 impl Rng {
-    pub fn new(seed: u64) -> Self { Self(seed) }
+    pub fn new(seed: u64) -> Self {
+        Self(seed)
+    }
     pub fn next_f32(&mut self) -> f32 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
@@ -55,7 +57,8 @@ impl Lattice {
         let min = self.min();
         let inv = 1.0 / self.cell;
         let b: [usize; 3] = std::array::from_fn(|axis| {
-            (((p[axis] - min[axis]) * inv).floor() as i64).clamp(0, i64::from(bins[axis]) - 1) as usize
+            (((p[axis] - min[axis]) * inv).floor() as i64).clamp(0, i64::from(bins[axis]) - 1)
+                as usize
         });
         b[0] + bins[0] as usize * (b[1] + bins[1] as usize * b[2])
     }
@@ -70,7 +73,12 @@ pub fn particle(position: [f32; 3], radius: f32, id: u32) -> FluidParticle {
 }
 
 /// Sort then blobs, read back: (sorted, ranges, blobs, their GPU slots in that order).
-type Shaped = (Vec<FluidParticle>, Vec<CellRange>, Vec<FluidBlob>, (Slot, Slot, Slot));
+type Shaped = (
+    Vec<FluidParticle>,
+    Vec<CellRange>,
+    Vec<FluidBlob>,
+    (Slot, Slot, Slot),
+);
 
 pub fn sort_and_shape(
     harness: &mut Harness,
@@ -110,7 +118,6 @@ pub fn sort_and_shape(
     )
 }
 
-
 pub fn blob_matrix(blob: &FluidBlob) -> [[f64; 3]; 3] {
     let d = blob.shape_diag.map(f64::from);
     let o = blob.shape_off.map(f64::from);
@@ -119,7 +126,13 @@ pub fn blob_matrix(blob: &FluidBlob) -> [[f64; 3]; 3] {
 
 /// The clamp's wires as params: the box, the level-set lattice, the solid
 /// lattice and the bin size.
-pub fn clamp_params(center: [f32; 3], size: [f32; 3], nodes: [u32; 3], solid_nodes: [u32; 3], cell: f32) -> ParamValues {
+pub fn clamp_params(
+    center: [f32; 3],
+    size: [f32; 3],
+    nodes: [u32; 3],
+    solid_nodes: [u32; 3],
+    cell: f32,
+) -> ParamValues {
     params(&[
         ("center_x", center[0]),
         ("center_y", center[1]),
@@ -140,7 +153,14 @@ pub fn clamp_params(center: [f32; 3], size: [f32; 3], nodes: [u32; 3], solid_nod
 /// The level set's cap outside the liquid, as a fraction of a bin; the WGSL of
 /// `node.particle_volume` and `node.shape_particle_blobs` both hold it (P6e).
 /// The volume's cap, as a fraction of a bin; the blob reach cap is the rest.
-pub fn native_support(ijk: [u32; 3], centre: [f64; 3], radius: f64, min: [f64; 3], h: [f64; 3], extra: f64) -> bool {
+pub fn native_support(
+    ijk: [u32; 3],
+    centre: [f64; 3],
+    radius: f64,
+    min: [f64; 3],
+    h: [f64; 3],
+    extra: f64,
+) -> bool {
     (0..3).all(|a| {
         let lo = ((centre[a] - 1.5 * radius - extra - min[a]) / h[a]).floor();
         let hi = ((centre[a] + 1.5 * radius + extra - min[a]) / h[a]).floor() + 1.0;
@@ -150,7 +170,13 @@ pub fn native_support(ijk: [u32; 3], centre: [f64; 3], radius: f64, min: [f64; 3
 
 /// f64 trilinear sample of a solid lattice spanning `min`..`min + size`: the
 /// rule node.particle_volume and node.clamp_liquid_to_solids share.
-pub fn solid_sample(solid: &[f32], nodes: [u32; 3], min: [f32; 3], size: [f32; 3], p: [f64; 3]) -> f64 {
+pub fn solid_sample(
+    solid: &[f32],
+    nodes: [u32; 3],
+    min: [f32; 3],
+    size: [f32; 3],
+    p: [f64; 3],
+) -> f64 {
     let n = nodes.map(|v| v as usize);
     let mut base = [0usize; 3];
     let mut frac = [0f64; 3];
@@ -163,7 +189,9 @@ pub fn solid_sample(solid: &[f32], nodes: [u32; 3], min: [f32; 3], size: [f32; 3
     (0..8usize)
         .map(|corner| {
             let o = [corner & 1, (corner >> 1) & 1, (corner >> 2) & 1];
-            let w: f64 = (0..3).map(|a| if o[a] == 1 { frac[a] } else { 1.0 - frac[a] }).product();
+            let w: f64 = (0..3)
+                .map(|a| if o[a] == 1 { frac[a] } else { 1.0 - frac[a] })
+                .product();
             let at: [usize; 3] = std::array::from_fn(|a| base[a] + o[a]);
             w * f64::from(solid[at[0] + n[0] * (at[1] + n[1] * at[2])])
         })

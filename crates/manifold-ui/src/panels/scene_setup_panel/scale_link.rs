@@ -16,12 +16,17 @@ pub(super) const SCALE_AXES: [&str; 3] = ["scale_x", "scale_y", "scale_z"];
 
 impl ScenePanel {
     pub(super) fn scale_linked(&self, layer: &LayerId, item: &ItemId) -> bool {
-        !self.scale_unlinked.get(layer).is_some_and(|items| items.contains(item))
+        !self
+            .scale_unlinked
+            .get(layer)
+            .is_some_and(|items| items.contains(item))
     }
 
     /// The Scale link row of `item`'s Transform section.
     pub(super) fn scale_link_row(&self, item: &ItemId) -> ParamRow {
-        let linked = self.live_layer_id().is_none_or(|layer| self.scale_linked(layer, item));
+        let linked = self
+            .live_layer_id()
+            .is_none_or(|layer| self.scale_linked(layer, item));
         let mut row = placeholder_param_info();
         row.id = ParamId::from(format!("{item}#scale_link"));
         row.spec.name = "Link Scale".to_owned();
@@ -38,7 +43,12 @@ impl ScenePanel {
             switch: None,
             colour: None,
         });
-        row.value = RowValue { base: f32::from(u8::from(linked)), effective: f32::from(u8::from(linked)), exposed: false, driven: false };
+        row.value = RowValue {
+            base: f32::from(u8::from(linked)),
+            effective: f32::from(u8::from(linked)),
+            exposed: false,
+            driven: false,
+        };
         row.affordance = Some(RowAffordance::ScaleLink { item: item.clone() });
         row
     }
@@ -46,7 +56,12 @@ impl ScenePanel {
     /// A click on a Scale link row flips its item's link. `true` when the
     /// click was one.
     pub(super) fn scale_link_click(&mut self, row: usize) -> bool {
-        let Some(RowAffordance::ScaleLink { item }) = self.properties_card.rows.get(row).and_then(|row| row.affordance.clone()) else {
+        let Some(RowAffordance::ScaleLink { item }) = self
+            .properties_card
+            .rows
+            .get(row)
+            .and_then(|row| row.affordance.clone())
+        else {
             return false;
         };
         let Some(layer) = self.live_layer_id().cloned() else {
@@ -63,12 +78,21 @@ impl ScenePanel {
     /// When `param_id` on `layer` is a Scale axis of an item whose link is
     /// on: the item's three Scale ids, and which of them `param_id` is. Only
     /// for the layer this panel shows, whose card holds the link.
-    pub fn linked_scale_axes(&self, layer: &LayerId, param_id: &str) -> Option<([ParamId; 3], usize)> {
+    pub fn linked_scale_axes(
+        &self,
+        layer: &LayerId,
+        param_id: &str,
+    ) -> Option<([ParamId; 3], usize)> {
         if self.live_layer_id() != Some(layer) {
             return None;
         }
         let (item, property) = param_id.split_once('.')?;
         let axis = SCALE_AXES.iter().position(|name| *name == property)?;
-        self.scale_linked(layer, &ItemId::new(item)).then(|| (SCALE_AXES.map(|name| ParamId::from(format!("{item}.{name}"))), axis))
+        self.scale_linked(layer, &ItemId::new(item)).then(|| {
+            (
+                SCALE_AXES.map(|name| ParamId::from(format!("{item}.{name}"))),
+                axis,
+            )
+        })
     }
 }

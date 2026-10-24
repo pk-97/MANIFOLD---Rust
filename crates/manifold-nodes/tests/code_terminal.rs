@@ -5,12 +5,15 @@
 //! graph executor. It samples bounded source timelines and layout choices
 //! instead of becoming a thumbnail/render sweep.
 
-use manifold_nodes as _;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id;
 use manifold_node_engine::scene::mesh_change::PreparedMeshRules;
-use manifold_node_engine::{exec::bound_graph::BoundGraph, persistence::EffectGraphDefExt, persistence::PrimitiveRegistry, param_binding::ResolvedBinding, exec::execution_plan::compile};
+use manifold_node_engine::{
+    exec::bound_graph::BoundGraph, exec::execution_plan::compile, param_binding::ResolvedBinding,
+    persistence::EffectGraphDefExt, persistence::PrimitiveRegistry,
+};
+use manifold_nodes as _;
 
 const PRESET_JSON: &str = include_str!("../assets/effect-presets/CodeTerminal.json");
 
@@ -223,7 +226,11 @@ fn code_terminal_roundtrip_compiles_and_resolves_all_controls() {
 #[cfg(feature = "gpu-proofs")]
 mod gpu {
     use super::*;
-    use manifold_node_engine::{exec::backend::Backend, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, state_store::StateStore, load::graph_loader::pre_allocate_resources};
+    use manifold_node_engine::{
+        exec::backend::Backend, exec::effect_node::FrameTime, exec::execution::Executor,
+        exec::metal_backend::MetalBackend, load::graph_loader::pre_allocate_resources,
+        state_store::StateStore,
+    };
     const W: u32 = 960;
     const H: u32 = 540;
     const FMT: manifold_gpu::GpuTextureFormat = manifold_gpu::GpuTextureFormat::Rgba16Float;
@@ -232,11 +239,13 @@ mod gpu {
     use manifold_gpu::{
         GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureUsage,
     };
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-    use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, readback_raw_halves, readback_srgb_rgba8};
     use manifold_node_engine::freeze::install::fused_view_for;
-    use manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+    use manifold_node_engine::gpu::headless_readback::{
+        encode_rgba8_png, readback_raw_halves, readback_srgb_rgba8,
+    };
     use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id;
 
     #[derive(Clone, Copy)]
     struct Controls {
@@ -1237,7 +1246,10 @@ mod gpu {
             gaps > strokes + 0.1,
             "gaps turn before letter strokes: strokes={strokes:.3} gaps={gaps:.3}"
         );
-        assert!(fraction(faded) > 0.01, "mid amount fades some cells to terminal");
+        assert!(
+            fraction(faded) > 0.01,
+            "mid amount fades some cells to terminal"
+        );
 
         let frozen_a = unfused.render(
             &def,

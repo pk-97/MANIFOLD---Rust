@@ -65,7 +65,10 @@ impl GeneratorRenderer {
         pending_target: Option<manifold_core::PlayedTime>,
         tempo_shift: manifold_core::Seconds,
     ) -> Result<bool, String> {
-        let step = self.sim_step.with_played_target(pending_target).with_tempo_shift(tempo_shift);
+        let step = self
+            .sim_step
+            .with_played_target(pending_target)
+            .with_tempo_shift(tempo_shift);
         self.fire_scene_impulse_with_step(layer, param, source, project_tempo, step)
     }
 
@@ -82,19 +85,36 @@ impl GeneratorRenderer {
         }
         // The seam: the hit becomes played time here, once, so a tempo edit
         // while it waits never moves it.
-        let source = FireSource { played: step.to_played(source.seconds), beats: source.beats };
+        let source = FireSource {
+            played: step.to_played(source.seconds),
+            beats: source.beats,
+        };
         // Behind an earlier waiting hit of this scene, in firing order.
-        let result = if self.waiting_fires.iter().any(|fire| fire.layer == layer.layer_id) {
+        let result = if self
+            .waiting_fires
+            .iter()
+            .any(|fire| fire.layer == layer.layer_id)
+        {
             self.wait(layer, param, source)
         } else {
             let state = self.layer_generators.get_mut(&layer.layer_id);
-            match try_fire(state, &mut self.next_physics_event, layer, param, source, project_tempo, step) {
+            match try_fire(
+                state,
+                &mut self.next_physics_event,
+                layer,
+                param,
+                source,
+                project_tempo,
+                step,
+            ) {
                 Ok(ImpulseFire::NotReady) => self.wait(layer, param, source),
                 Ok(_) => Ok(()),
                 Err(error) => Err(error),
             }
         };
-        result.map(|()| true).inspect_err(|error| self.scene_impulse_diagnostics.refuse(error))
+        result
+            .map(|()| true)
+            .inspect_err(|error| self.scene_impulse_diagnostics.refuse(error))
     }
 
     fn wait(&mut self, layer: &Layer, param: &str, source: FireSource) -> Result<(), String> {
@@ -118,7 +138,12 @@ impl GeneratorRenderer {
     /// never lands off the beat. None lands past `frame`, the played time of
     /// the frame that just rendered: a seek back while it waited never sends
     /// it into time not yet played.
-    pub(super) fn land_waiting_fires(&mut self, layer: &Layer, project_tempo: Option<&ProjectTempo>, frame: manifold_core::PlayedTime) {
+    pub(super) fn land_waiting_fires(
+        &mut self,
+        layer: &Layer,
+        project_tempo: Option<&ProjectTempo>,
+        frame: manifold_core::PlayedTime,
+    ) {
         let mut index = 0;
         while index < self.waiting_fires.len() {
             if self.waiting_fires[index].layer != layer.layer_id {
@@ -131,9 +156,20 @@ impl GeneratorRenderer {
                 continue;
             }
             let fire = &self.waiting_fires[index];
-            let source = FireSource { played: fire.source.played.min(frame), ..fire.source };
+            let source = FireSource {
+                played: fire.source.played.min(frame),
+                ..fire.source
+            };
             let state = self.layer_generators.get_mut(&layer.layer_id);
-            match try_fire(state, &mut self.next_physics_event, layer, &fire.param, source, project_tempo, self.sim_step) {
+            match try_fire(
+                state,
+                &mut self.next_physics_event,
+                layer,
+                &fire.param,
+                source,
+                project_tempo,
+                self.sim_step,
+            ) {
                 Ok(ImpulseFire::NotReady) => return,
                 Ok(_) => {}
                 Err(error) => self.scene_impulse_diagnostics.refuse(&error),
@@ -173,8 +209,9 @@ impl GeneratorRenderer {
     /// refused, visibly, so none lands in the next take, project or frame.
     pub(super) fn refuse_all_waiting_fires(&mut self) {
         for _ in self.waiting_fires.drain(..) {
-            self.scene_impulse_diagnostics
-                .refuse("Impulse: the scene was reset before the hit could land; this hit is refused");
+            self.scene_impulse_diagnostics.refuse(
+                "Impulse: the scene was reset before the hit could land; this hit is refused",
+            );
         }
     }
 
@@ -194,7 +231,8 @@ pub(super) const MAX_WAIT: Seconds = Seconds(0.1);
 /// six 60 fps frames at 100 ms.
 const WAIT_TOLERANCE: f64 = 1e-6;
 
-const WAITED_TOO_LONG: &str = "Impulse: the hit waited more than 100 ms for its scene; this hit is refused";
+const WAITED_TOO_LONG: &str =
+    "Impulse: the hit waited more than 100 ms for its scene; this hit is refused";
 
 /// A Fire's source on the played clock, with the beat it fired on.
 #[derive(Clone, Copy)]
@@ -264,5 +302,7 @@ fn try_fire(
     state.generator.apply_param_values(&params.params);
     state.generator.set_source_instance(Some(params));
     state.generator.set_project_tempo(project_tempo);
-    state.generator.fire_scene_impulse_played(param, source.played, source.beats, next_sequence)
+    state
+        .generator
+        .fire_scene_impulse_played(param, source.played, source.beats, next_sequence)
 }

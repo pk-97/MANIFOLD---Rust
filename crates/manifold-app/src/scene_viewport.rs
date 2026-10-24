@@ -1,9 +1,16 @@
 //! Transient editor navigation and frame-matched observations of the live scene.
 use manifold_core::{GraphTarget, NodeId};
-use {manifold_node_engine::runtime::frame_status::FrameRenderStatus, manifold_node_engine::scene::viewport_camera::ViewportCamera, manifold_core::fluid_domain::FluidDomainSnapshot, manifold_node_engine::scene::scene_viewport::SceneViewportConfig, manifold_node_engine::scene::scene_viewport::SceneViewportHostError, manifold_node_engine::runtime::ModifierPreviewContext};
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
+};
+use {
+    manifold_core::fluid_domain::FluidDomainSnapshot,
+    manifold_node_engine::runtime::ModifierPreviewContext,
+    manifold_node_engine::runtime::frame_status::FrameRenderStatus,
+    manifold_node_engine::scene::scene_viewport::SceneViewportConfig,
+    manifold_node_engine::scene::scene_viewport::SceneViewportHostError,
+    manifold_node_engine::scene::viewport_camera::ViewportCamera,
 };
 
 type Domains = [(NodeId, FluidDomainSnapshot)];
@@ -111,10 +118,9 @@ impl SceneViewportNavigation {
         previous: Option<&Arc<SceneViewportRequest>>,
     ) -> Arc<SceneViewportRequest> {
         let modifier_parts = match target {
-            GraphTarget::SceneModifier { modifier_id, .. } => Some((
-                modifier_id,
-                modifier.and_then(Option::as_ref),
-            )),
+            GraphTarget::SceneModifier { modifier_id, .. } => {
+                Some((modifier_id, modifier.and_then(Option::as_ref)))
+            }
             _ => None,
         };
         if let Some(previous) = previous
@@ -164,7 +170,9 @@ pub(crate) fn lease_frame(
     let bridge = pane.bridge()?.clone();
     let lease = bridge.acquire_read();
     let matched = bridge.leased_frame(lease).and_then(|frame| {
-        frames[lease.slot()].as_ref().filter(|observation| observation.matches(request, frame, bridge.generation()))
+        frames[lease.slot()]
+            .as_ref()
+            .filter(|observation| observation.matches(request, frame, bridge.generation()))
     });
     let texture = matched
         .filter(|frame| frame.has_image())
@@ -213,7 +221,8 @@ impl SceneViewportObservations {
         request: Arc<SceneViewportRequest>,
         status: Result<FrameRenderStatus, SceneViewportHostError>,
     ) {
-        let live_columns = crate::physics_overlay::share_domains(&mut self.scratch, &mut self.domains);
+        let live_columns =
+            crate::physics_overlay::share_domains(&mut self.scratch, &mut self.domains);
         self.frames[slot] = Some(SceneViewportFrame {
             frame,
             surface_generation,
@@ -233,7 +242,10 @@ pub(crate) fn texture_handle() -> manifold_ui::node::TextureHandle {
 pub(crate) struct SceneViewportPaint<'a> {
     pub rect: manifold_ui::Rect,
     /// The selection outline pass and this frame's mask (D-102).
-    pub outline: Option<(&'a crate::selection_outline::SelectionOutline, &'a manifold_gpu::GpuTexture)>,
+    pub outline: Option<(
+        &'a crate::selection_outline::SelectionOutline,
+        &'a manifold_gpu::GpuTexture,
+    )>,
 }
 
 impl SceneViewportPaint<'_> {
@@ -242,7 +254,15 @@ impl SceneViewportPaint<'_> {
         let r = self.rect;
         ui.push_depth(Depth::CONTENT);
         ui.push_immediate_clip(r.x, r.y, r.width, r.height);
-        ui.draw_image_uv(r.x, r.y, r.width, r.height, texture_handle(), [0.0, 0.0, 1.0, 1.0], 0.0);
+        ui.draw_image_uv(
+            r.x,
+            r.y,
+            r.width,
+            r.height,
+            texture_handle(),
+            [0.0, 0.0, 1.0, 1.0],
+            0.0,
+        );
         ui.pop_immediate_clip();
         ui.pop_depth();
     }
@@ -268,8 +288,12 @@ mod tests {
         let moved = navigation.request(&target(), &node, None, Some(&same));
         assert!(!Arc::ptr_eq(&same, &moved));
         assert_eq!(same.session, moved.session);
-        let reopened =
-            SceneViewportNavigation::new(ViewportHost::GraphEditor, 320, 200).request(&target(), &node, None, Some(&first));
+        let reopened = SceneViewportNavigation::new(ViewportHost::GraphEditor, 320, 200).request(
+            &target(),
+            &node,
+            None,
+            Some(&first),
+        );
         assert_ne!(first.session, reopened.session);
     }
 
@@ -345,8 +369,7 @@ mod tests {
             &observations.frames[1].as_ref().unwrap().domains
         ));
         observations.scratch[0].1.state = FluidDomainState::Ready;
-        observations.scratch[0].1.accepted_layout =
-            Some(domain_layout(None, 4.0, 24).unwrap());
+        observations.scratch[0].1.accepted_layout = Some(domain_layout(None, 4.0, 24).unwrap());
         observations.record(2, 3, 0, request, Ok(FrameRenderStatus::Complete));
         assert!(!Arc::ptr_eq(
             &initial,

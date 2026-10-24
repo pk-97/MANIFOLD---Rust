@@ -186,7 +186,11 @@ impl<T: Timestamped> InputHistory<T> {
             return Err(HistoryError::InvalidTime);
         }
         let mut removed = 0;
-        while self.samples.back().is_some_and(|last| last.time().0 > time.0) {
+        while self
+            .samples
+            .back()
+            .is_some_and(|last| last.time().0 > time.0)
+        {
             self.samples.pop_back();
             removed += 1;
         }

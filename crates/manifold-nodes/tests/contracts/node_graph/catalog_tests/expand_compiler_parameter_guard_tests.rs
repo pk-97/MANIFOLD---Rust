@@ -1,7 +1,7 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::load::expand::SceneModifierExpandError;
 use manifold_node_engine::load::expand::resolve_modifier_mesh_frames;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 
 use std::collections::BTreeMap;
 
@@ -99,13 +99,7 @@ fn calibrated_fixture() -> EffectGraphDef {
         .find(|node| node.node_id.as_str() == "group_current")
         .expect("fixture group input")
         .clone();
-    let radius_id = group
-        .nodes
-        .iter()
-        .map(|node| node.id)
-        .max()
-        .unwrap_or(0)
-        + 1;
+    let radius_id = group.nodes.iter().map(|node| node.id).max().unwrap_or(0) + 1;
     radius_input.id = radius_id;
     radius_input.node_id = NodeId::new("group_radius");
     radius_input.handle = Some("radius".into());
@@ -129,7 +123,9 @@ fn runtime(owner: EffectGraphDef, fused: bool) -> manifold_node_engine::runtime:
         .expect("prepared scene modifier runtime")
 }
 
-fn source_id(runtime: &manifold_node_engine::runtime::PresetRuntime) -> manifold_node_engine::exec::effect_node::NodeInstanceId {
+fn source_id(
+    runtime: &manifold_node_engine::runtime::PresetRuntime,
+) -> manifold_node_engine::exec::effect_node::NodeInstanceId {
     runtime
         .graph
         .instance_by_node_id(&NodeId::new("left_mesh"))
@@ -218,22 +214,26 @@ fn scene_modifier_parameter_guard_blocks_source_selector_allows_rt_and_keeps_geo
         .graph
         .instance_by_node_id(&NodeId::new("scan_render"))
         .expect("render scene");
-    assert!(runtime
-        .graph
-        .set_param(
-            scene,
-            "rt_enabled",
-            manifold_node_engine::parameters::ParamValue::Bool(true)
-        )
-        .is_ok());
-    assert!(runtime
-        .graph
-        .set_param(
-            scene,
-            "rt_enabled",
-            manifold_node_engine::parameters::ParamValue::Bool(false)
-        )
-        .is_ok());
+    assert!(
+        runtime
+            .graph
+            .set_param(
+                scene,
+                "rt_enabled",
+                manifold_node_engine::parameters::ParamValue::Bool(true)
+            )
+            .is_ok()
+    );
+    assert!(
+        runtime
+            .graph
+            .set_param(
+                scene,
+                "rt_enabled",
+                manifold_node_engine::parameters::ParamValue::Bool(false)
+            )
+            .is_ok()
+    );
 
     let local = NodeId::new("shear_x");
     let copy = runtime
@@ -286,8 +286,9 @@ fn scene_modifier_parameter_guard_rejects_initial_selector_change_before_gpu() {
     metadata.params.push(spec);
     metadata.bindings.push(binding);
     let registry = PrimitiveRegistry::with_builtin();
-    let result =
-        manifold_node_engine::runtime::PresetRuntime::from_def_for_render(owner, &registry, None, false);
+    let result = manifold_node_engine::runtime::PresetRuntime::from_def_for_render(
+        owner, &registry, None, false,
+    );
     assert!(
         matches!(
             &result,

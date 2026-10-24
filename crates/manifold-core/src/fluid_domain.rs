@@ -47,13 +47,15 @@ pub fn domain_layout(
             .iter()
             .any(|v| !v.is_finite() || v.abs() > 1e-6)
     {
-        return Err("Fluid: the domain must be axis-aligned; rotation and billboarding are not supported".into());
+        return Err(
+            "Fluid: the domain must be axis-aligned; rotation and billboarding are not supported"
+                .into(),
+        );
     }
     if pose.pos.iter().any(|v| !v.is_finite())
-        || pose
-            .scale
-            .iter()
-            .any(|v| !v.is_finite() || !(DOMAIN_EXTENT_METRES.0..=DOMAIN_EXTENT_METRES.1).contains(v))
+        || pose.scale.iter().any(|v| {
+            !v.is_finite() || !(DOMAIN_EXTENT_METRES.0..=DOMAIN_EXTENT_METRES.1).contains(v)
+        })
     {
         return Err("Fluid: domain position must be finite and each dimension must be between 0.5 and 20 metres".into());
     }
@@ -72,8 +74,11 @@ pub fn domain_layout(
         count as u32
     });
     if cells.iter().any(|n| *n < 8)
-        || cells.iter().try_fold(1u64, |total, n| total.checked_mul(u64::from(*n) + 4))
-            .is_none_or(|total| total > i32::MAX as u64) {
+        || cells
+            .iter()
+            .try_fold(1u64, |total, n| total.checked_mul(u64::from(*n) + 4))
+            .is_none_or(|total| total > i32::MAX as u64)
+    {
         return Err("Fluid: padded grid exceeds the native solver's 32-bit grid indexing".into());
     }
     let size = cells.map(|n| (f64::from(n) * cell_size) as f32);

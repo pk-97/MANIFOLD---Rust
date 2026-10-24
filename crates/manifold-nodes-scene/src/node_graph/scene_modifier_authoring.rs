@@ -11,8 +11,10 @@ use manifold_core::scene_modifier_preset::{
     initialize_scene_modifier_snapshot, validate_scene_modifier_schema,
 };
 
+use manifold_node_engine::load::expand::{
+    SceneModifierExpandError, resolve_modifier_mesh_frames, validate_modifier_attachment,
+};
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::load::expand::{SceneModifierExpandError, resolve_modifier_mesh_frames, validate_modifier_attachment};
 
 static SCENE_MODIFIER_REGISTRY: std::sync::LazyLock<PrimitiveRegistry> =
     std::sync::LazyLock::new(PrimitiveRegistry::with_builtin);
@@ -63,10 +65,16 @@ pub fn attach_scene_modifier(
     owner: &EffectGraphDef,
     instance: SceneModifierInstanceDef,
 ) -> Result<EffectGraphDef, String> {
-    use manifold_core::effect_graph_def::{BindingDef, BindingTarget, PresetMetadata, StringBindingDef};
+    use manifold_core::effect_graph_def::{
+        BindingDef, BindingTarget, PresetMetadata, StringBindingDef,
+    };
     use manifold_core::effects::ParamConvert;
 
-    if owner.scene_modifiers.iter().any(|item| item.id == instance.id) {
+    if owner
+        .scene_modifiers
+        .iter()
+        .any(|item| item.id == instance.id)
+    {
         return Err(format!("modifier id '{}' is already attached", instance.id));
     }
     let local = instance
@@ -74,12 +82,18 @@ pub fn attach_scene_modifier(
         .preset_metadata
         .clone()
         .ok_or_else(|| format!("modifier '{}' has no recipe card", instance.id))?;
-    let preparation: &[String] = local.scene_modifier.as_ref().map_or(&[], |recipe| &recipe.preparation_params);
+    let preparation: &[String] = local
+        .scene_modifier
+        .as_ref()
+        .map_or(&[], |recipe| &recipe.preparation_params);
     let mut graph = owner.clone();
     graph.version = graph.version.max(3);
     let id = instance.id.clone();
     graph.scene_modifiers.push(instance);
-    let metadata = graph.preset_metadata.as_mut().ok_or("the host has no preset metadata")?;
+    let metadata = graph
+        .preset_metadata
+        .as_mut()
+        .ok_or("the host has no preset metadata")?;
     let host_id = |param: &str| {
         let tuple = serde_json::to_string(&(id.as_str(), param)).unwrap_or_default();
         format!("sceneModifier:{tuple}")
@@ -88,9 +102,16 @@ pub fn attach_scene_modifier(
         metadata.params.iter().any(|param| param.id == key)
             || metadata.string_params.iter().any(|param| param.id == key)
             || metadata.bindings.iter().any(|binding| binding.id == key)
-            || metadata.string_bindings.iter().any(|binding| binding.id == key)
+            || metadata
+                .string_bindings
+                .iter()
+                .any(|binding| binding.id == key)
     };
-    for param in local.params.iter().filter(|param| !preparation.contains(&param.id)) {
+    for param in local
+        .params
+        .iter()
+        .filter(|param| !preparation.contains(&param.id))
+    {
         let key = host_id(&param.id);
         if in_use(metadata, &key) {
             return Err(format!("host param id '{key}' is already in use"));
@@ -102,7 +123,10 @@ pub fn attach_scene_modifier(
             id: key,
             label: param.name.clone(),
             default_value: param.default_value,
-            target: BindingTarget::SceneModifier { modifier_id: id.clone(), param_id: param.id.clone() },
+            target: BindingTarget::SceneModifier {
+                modifier_id: id.clone(),
+                param_id: param.id.clone(),
+            },
             convert: ParamConvert::Float,
             user_added: false,
             scale: 1.0,
@@ -122,7 +146,10 @@ pub fn attach_scene_modifier(
             id: key,
             label: param.name.clone(),
             default_value: param.default_value.clone(),
-            target: BindingTarget::SceneModifier { modifier_id: id.clone(), param_id: param.id.clone() },
+            target: BindingTarget::SceneModifier {
+                modifier_id: id.clone(),
+                param_id: param.id.clone(),
+            },
         });
     }
     validate_scene_modifier_schema(&graph).map_err(|error| error.to_string())?;
@@ -132,9 +159,11 @@ pub fn attach_scene_modifier(
 /// A stock force from the scene modifier catalog, tuned by [`tune_force_card`].
 pub fn stock_force(id: &str, card: &[(&str, f32)]) -> Result<EffectGraphDef, String> {
     let catalog = manifold_node_engine::load::preset_loader::SCENE_MODIFIER_CATALOG.load();
-    let json = catalog.json(id).ok_or_else(|| format!("The stock {id} force is missing"))?;
-    let mut recipe: EffectGraphDef =
-        serde_json::from_str(&json).map_err(|error| format!("The stock {id} force does not read: {error}"))?;
+    let json = catalog
+        .json(id)
+        .ok_or_else(|| format!("The stock {id} force is missing"))?;
+    let mut recipe: EffectGraphDef = serde_json::from_str(&json)
+        .map_err(|error| format!("The stock {id} force does not read: {error}"))?;
     tune_force_card(&mut recipe, card).map_err(|error| format!("The stock {id} force: {error}"))?;
     Ok(recipe)
 }
@@ -154,7 +183,11 @@ pub fn tune_force_card(force: &mut EffectGraphDef, card: &[(&str, f32)]) -> Resu
             .find(|spec| spec.id == param)
             .ok_or_else(|| format!("it has no {param}"))?;
         spec.default_value = value;
-        for binding in metadata.bindings.iter_mut().filter(|binding| binding.id == param) {
+        for binding in metadata
+            .bindings
+            .iter_mut()
+            .filter(|binding| binding.id == param)
+        {
             binding.default_value = value;
             if let BindingTarget::Node { node_id, param } = &binding.target {
                 driven.push((node_id.clone(), param.clone(), value));
@@ -162,9 +195,12 @@ pub fn tune_force_card(force: &mut EffectGraphDef, card: &[(&str, f32)]) -> Resu
         }
     }
     for (node_id, param, value) in driven {
-        let slot = find_param(&mut force.nodes, &node_id, &param).ok_or_else(|| format!("it has no {node_id}.{param}"))?;
+        let slot = find_param(&mut force.nodes, &node_id, &param)
+            .ok_or_else(|| format!("it has no {node_id}.{param}"))?;
         *slot = match slot {
-            SerializedParamValue::Enum { .. } => SerializedParamValue::Enum { value: value.round() as u32 },
+            SerializedParamValue::Enum { .. } => SerializedParamValue::Enum {
+                value: value.round() as u32,
+            },
             _ => SerializedParamValue::Float { value },
         };
     }
@@ -181,7 +217,11 @@ fn find_param<'a>(
         if node.node_id == *node_id {
             return node.params.get_mut(param);
         }
-        if let Some(found) = node.group.as_deref_mut().and_then(|body| find_param(&mut body.nodes, node_id, param)) {
+        if let Some(found) = node
+            .group
+            .as_deref_mut()
+            .and_then(|body| find_param(&mut body.nodes, node_id, param))
+        {
             return Some(found);
         }
     }

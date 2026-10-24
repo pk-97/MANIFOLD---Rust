@@ -10,9 +10,9 @@
 
 use std::sync::OnceLock;
 
-use manifold_node_engine::scene::transform::Transform;
 use manifold_core::fluid_domain::domain_layout;
 use manifold_node_engine::particles::FluidParticle;
+use manifold_node_engine::scene::transform::Transform;
 use manifold_water_gpu_mpm::matter::look::{ALIGNMENT_TICKS, Cells, LookRecorder};
 
 use crate::matter_scene::{MatterScene, SceneSettings};
@@ -25,7 +25,11 @@ const SPACING: f32 = DOMAIN_SIZE / RESOLUTION as f32 * 0.5;
 const DAM_BREAK_TICKS: u32 = 720;
 
 fn column() -> Transform {
-    Transform { pos: [-1.25, 1.12, 0.0], scale: [1.18, 1.92, 3.5], ..Transform::default() }
+    Transform {
+        pos: [-1.25, 1.12, 0.0],
+        scale: [1.18, 1.92, 3.5],
+        ..Transform::default()
+    }
 }
 
 fn cells() -> Cells {
@@ -83,14 +87,25 @@ fn run_matter(liveliness: f32, ticks: u32) -> Series {
         let frame = scene.frame();
         series.observe(tick, &frame);
         let rest = *rest_volume.get_or_insert_with(|| {
-            scene.points().iter().filter(|p| p.id != 0).map(|p| f64::from(p.affine_y[3])).sum::<f64>()
+            scene
+                .points()
+                .iter()
+                .filter(|p| p.id != 0)
+                .map(|p| f64::from(p.affine_y[3]))
+                .sum::<f64>()
         });
         let stats = scene.stats();
         assert_eq!(stats.nonfinite, 0, "non-finite state at tick {tick}");
         // The first frame restarts the domain and runs no tick; its stats are empty.
         if stats.live > 0 {
-            series.j_range = (series.j_range.0.min(stats.min_j), series.j_range.1.max(stats.max_j));
-            series.volume_error.push((tick as f32 / 60.0, ((f64::from(stats.volume) - rest).abs() / rest) as f32));
+            series.j_range = (
+                series.j_range.0.min(stats.min_j),
+                series.j_range.1.max(stats.max_j),
+            );
+            series.volume_error.push((
+                tick as f32 / 60.0,
+                ((f64::from(stats.volume) - rest).abs() / rest) as f32,
+            ));
         }
     }
     series
@@ -125,12 +140,20 @@ fn describe(name: &str, s: &Series) {
 #[test]
 fn matter_look_lattice_alignment() {
     let gate = run_matter(0.0, ALIGNMENT_TICKS[0]);
-    eprintln!("matter_look_lattice_alignment (largest 16-bin histogram bin over mean; fails above 1.5)");
+    eprintln!(
+        "matter_look_lattice_alignment (largest 16-bin histogram bin over mean; fails above 1.5)"
+    );
     describe("matter L0", &gate);
     assert_eq!(gate.alignment.len(), 1);
     for (t, ratio, interior) in &gate.alignment {
-        assert!(*interior > 10_000, "too few interior points at {t} s: {interior}");
-        assert!(ratio.iter().all(|&r| r <= 1.5), "grid-aligned ridges at {t} s: {ratio:?}");
+        assert!(
+            *interior > 10_000,
+            "too few interior points at {t} s: {interior}"
+        );
+        assert!(
+            ratio.iter().all(|&r| r <= 1.5),
+            "grid-aligned ridges at {t} s: {ratio:?}"
+        );
     }
 }
 
@@ -141,8 +164,17 @@ fn matter_look_volume_drift() {
     let gate = matter(0.0);
     let settle = gate.settling().settle_time.unwrap_or(f32::INFINITY);
     let peak = gate.volume_error.iter().map(|v| v.1).fold(0.0, f32::max);
-    let settled = gate.volume_error.iter().filter(|v| v.0 >= settle).map(|v| v.1).fold(0.0, f32::max);
-    let lively = matter(0.9).volume_error.iter().map(|v| v.1).fold(0.0, f32::max);
+    let settled = gate
+        .volume_error
+        .iter()
+        .filter(|v| v.0 >= settle)
+        .map(|v| v.1)
+        .fold(0.0, f32::max);
+    let lively = matter(0.9)
+        .volume_error
+        .iter()
+        .map(|v| v.1)
+        .fold(0.0, f32::max);
 
     let mut pool = MatterScene::new(&SceneSettings {
         domain_size: DOMAIN_SIZE,
@@ -151,7 +183,12 @@ fn matter_look_volume_drift() {
         ..SceneSettings::default()
     });
     pool.tick();
-    let rest: f64 = pool.points().iter().filter(|p| p.id != 0).map(|p| f64::from(p.affine_y[3])).sum();
+    let rest: f64 = pool
+        .points()
+        .iter()
+        .filter(|p| p.id != 0)
+        .map(|p| f64::from(p.affine_y[3]))
+        .sum();
     let mut pool_error = 0.0f64;
     for _ in 1..3600 {
         pool.tick();
@@ -173,7 +210,11 @@ fn matter_momentum_conserved_free_blob() {
         domain_size: DOMAIN_SIZE,
         resolution: RESOLUTION,
         fill_height: 0.0,
-        column: Some(Transform { pos: [-0.5, 1.5, 0.0], scale: [1.0, 1.0, 1.0], ..Transform::default() }),
+        column: Some(Transform {
+            pos: [-0.5, 1.5, 0.0],
+            scale: [1.0, 1.0, 1.0],
+            ..Transform::default()
+        }),
         gravity: [0.0; 3],
         ..SceneSettings::default()
     });
@@ -189,9 +230,17 @@ fn matter_momentum_conserved_free_blob() {
         if std::env::var_os("MATTER_DIAG").is_some() && tick % 5 == 0 {
             let pts = scene.points();
             let live: Vec<_> = pts.iter().filter(|p| p.id != 0).collect();
-            let lo = live.iter().fold([f32::MAX; 3], |a, p| std::array::from_fn(|i| a[i].min(p.position[i])));
-            let hi = live.iter().fold([f32::MIN; 3], |a, p| std::array::from_fn(|i| a[i].max(p.position[i])));
-            let cpu: [f64; 3] = std::array::from_fn(|i| live.iter().map(|p| 1000.0 * f64::from(p.affine_y[3]) * f64::from(p.velocity[i])).sum());
+            let lo = live.iter().fold([f32::MAX; 3], |a, p| {
+                std::array::from_fn(|i| a[i].min(p.position[i]))
+            });
+            let hi = live.iter().fold([f32::MIN; 3], |a, p| {
+                std::array::from_fn(|i| a[i].max(p.position[i]))
+            });
+            let cpu: [f64; 3] = std::array::from_fn(|i| {
+                live.iter()
+                    .map(|p| 1000.0 * f64::from(p.affine_y[3]) * f64::from(p.velocity[i]))
+                    .sum()
+            });
             eprintln!(
                 "tick {tick}: live {} mass {:.2} momentum {:?} cpu {cpu:?} J [{:.5},{:.5}] max speed {:.4} clamped {} bounds {lo:?}..{hi:?}",
                 s.live, s.mass, s.momentum, s.min_j, s.max_j, s.max_speed, s.clamped
@@ -201,7 +250,9 @@ fn matter_momentum_conserved_free_blob() {
         let change = [m[0] - start[0], m[1] - start[1], m[2] - start[2]];
         worst = worst.max(norm(change) / norm(start));
     }
-    eprintln!("matter_momentum_conserved_free_blob: start {start:?}, worst relative change {worst:.2e}");
+    eprintln!(
+        "matter_momentum_conserved_free_blob: start {start:?}, worst relative change {worst:.2e}"
+    );
     assert!(norm(start) > 0.0);
     assert!(worst <= 1e-4, "momentum changed by {worst}");
 }

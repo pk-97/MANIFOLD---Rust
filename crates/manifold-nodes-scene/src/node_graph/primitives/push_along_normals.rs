@@ -18,8 +18,8 @@ use manifold_gpu::{
     GpuTextureUsage,
 };
 
-use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
@@ -126,7 +126,10 @@ impl Primitive for PushAlongNormals {
         if port_name != "out" {
             return None;
         }
-        input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)
+        input_capacities
+            .iter()
+            .find(|(p, _)| *p == "in")
+            .map(|(_, n)| *n)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -156,7 +159,9 @@ impl Primitive for PushAlongNormals {
             return;
         }
         let weights_len = weights_wired.map(|b| (b.size / 4) as u32).unwrap_or(0);
-        let direction_len = direction_wired.map(|b| (b.size / vertex_size) as u32).unwrap_or(0);
+        let direction_len = direction_wired
+            .map(|b| (b.size / vertex_size) as u32)
+            .unwrap_or(0);
 
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
@@ -255,14 +260,19 @@ mod gpu_tests {
             tangent: [0.0; 4],
             color: [1.0; 4],
         }
-}
+    }
 
     /// A spatially UNIFORM field texture (every texel identical). Bilinear
     /// interpolation of a constant field is exactly that constant
     /// regardless of addressing/filtering edge cases, so the sampled
     /// value is hand-computable exactly — sidesteps needing to replicate
     /// Metal's bilinear kernel in Rust to get an element-wise parity bar.
-    fn uniform_field_tex(device: &manifold_gpu::GpuDevice, w: u32, h: u32, value: f32) -> GpuTexture {
+    fn uniform_field_tex(
+        device: &manifold_gpu::GpuDevice,
+        w: u32,
+        h: u32,
+        value: f32,
+    ) -> GpuTexture {
         let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
         for i in 0..(w * h) as usize {
             px[i * 4] = f16::from_f32(value);
@@ -336,7 +346,10 @@ mod gpu_tests {
                 (b, weights_len_override.unwrap_or(w.len() as u32))
             }
             // Unwired: bind `src` as the harmless filler (run()'s pattern), len 0.
-            None => (device.create_buffer_shared(std::mem::size_of_val(src) as u64), 0),
+            None => (
+                device.create_buffer_shared(std::mem::size_of_val(src) as u64),
+                0,
+            ),
         };
 
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
@@ -374,13 +387,38 @@ mod gpu_tests {
         };
 
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: &sbuf, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &wbuf, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &sbuf, offset: 0 },
-            GpuBinding::Texture { binding: 4, texture: field_ref },
-            GpuBinding::Sampler { binding: 5, sampler: &sampler },
-            GpuBinding::Buffer { binding: 6, buffer: &dbuf, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &sbuf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &wbuf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &sbuf,
+                offset: 0,
+            },
+            GpuBinding::Texture {
+                binding: 4,
+                texture: field_ref,
+            },
+            GpuBinding::Sampler {
+                binding: 5,
+                sampler: &sampler,
+            },
+            GpuBinding::Buffer {
+                binding: 6,
+                buffer: &dbuf,
+                offset: 0,
+            },
         ];
         let mut enc = device.create_encoder("push-normals-test");
         enc.dispatch_compute(
@@ -395,7 +433,6 @@ mod gpu_tests {
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, src.len()) }.to_vec()
     }
 
-
     #[test]
     fn count_order_and_uv_are_preserved() {
         let device = manifold_gpu::testkit::test_device();
@@ -408,8 +445,14 @@ mod gpu_tests {
         let out = dispatch_push(&device, &gen_wgsl, &src, None, None, None, 0.5, 0.5);
         assert_eq!(out.len(), src.len());
         for i in 0..src.len() {
-            assert_eq!(out[i].uv, src[i].uv, "uv must pass through unchanged at {i}");
-            assert_eq!(out[i].normal, src[i].normal, "normal must pass through unchanged at {i}");
+            assert_eq!(
+                out[i].uv, src[i].uv,
+                "uv must pass through unchanged at {i}"
+            );
+            assert_eq!(
+                out[i].normal, src[i].normal,
+                "normal must pass through unchanged at {i}"
+            );
         }
     }
 
@@ -432,7 +475,16 @@ mod gpu_tests {
         let weights = [0.0f32, 0.0]; // first 2 explicit-zero, rest padded 0.0
         let amount = 0.7f32;
 
-        let out = dispatch_push(&device, &gen_wgsl, &src, Some(&weights), Some(2), None, amount, 0.5);
+        let out = dispatch_push(
+            &device,
+            &gen_wgsl,
+            &src,
+            Some(&weights),
+            Some(2),
+            None,
+            amount,
+            0.5,
+        );
 
         assert!(
             (out[0].position[1]).abs() < 1e-5,
@@ -465,7 +517,16 @@ mod gpu_tests {
         let weights = [0.3f32, 0.8, 1.0];
         let amount = 0.6f32;
 
-        let out = dispatch_push(&device, &gen_wgsl, &src, Some(&weights), None, None, amount, 0.5);
+        let out = dispatch_push(
+            &device,
+            &gen_wgsl,
+            &src,
+            Some(&weights),
+            None,
+            None,
+            amount,
+            0.5,
+        );
 
         for i in 0..src.len() {
             let v = &src[i];
@@ -501,7 +562,16 @@ mod gpu_tests {
         let amount = 0.4f32;
         let field_bias = 0.4f32; // f = 0.75 - 0.4 = 0.35 exactly, all weights default to 1.0
 
-        let out = dispatch_push(&device, &gen_wgsl, &src, None, None, Some(&tex), amount, field_bias);
+        let out = dispatch_push(
+            &device,
+            &gen_wgsl,
+            &src,
+            None,
+            None,
+            Some(&tex),
+            amount,
+            field_bias,
+        );
 
         let f = 0.75f32 - field_bias;
         for i in 0..src.len() {
@@ -513,8 +583,14 @@ mod gpu_tests {
                 out[i].position[1],
                 expected_y
             );
-            assert_eq!(out[i].position[0], v.position[0], "no X displacement (normal is +Y)");
-            assert_eq!(out[i].position[2], v.position[2], "no Z displacement (normal is +Y)");
+            assert_eq!(
+                out[i].position[0], v.position[0],
+                "no X displacement (normal is +Y)"
+            );
+            assert_eq!(
+                out[i].position[2], v.position[2],
+                "no Z displacement (normal is +Y)"
+            );
         }
     }
 }

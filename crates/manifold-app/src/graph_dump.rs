@@ -224,9 +224,12 @@ fn dump_one_array(
     };
     let bytes = unsafe { std::slice::from_raw_parts(ptr, size as usize) };
 
-    let rd_f32 = |o: usize| f32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
-    let rd_u32 = |o: usize| u32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
-    let rd_i32 = |o: usize| i32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
+    let rd_f32 =
+        |o: usize| f32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
+    let rd_u32 =
+        |o: usize| u32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
+    let rd_i32 =
+        |o: usize| i32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
 
     // Per-field stats over all items, plus a sample of the first rows.
     let stride = a.item_size as usize;
@@ -324,7 +327,10 @@ pub fn write_array_dump(
         "arrays": entries,
     });
     std::fs::write(dir.join("arrays.json"), serde_json::to_vec_pretty(&doc)?)?;
-    log::info!("[graph-dump] wrote {} array(s) to arrays.json", arrays.len());
+    log::info!(
+        "[graph-dump] wrote {} array(s) to arrays.json",
+        arrays.len()
+    );
     Ok(())
 }
 
@@ -370,13 +376,13 @@ mod tests {
     #[test]
     #[ignore = "headless GPU dump; run manually with --ignored"]
     fn dump_blackhole_headless() {
-        use manifold_gpu::{GpuDevice, GpuTextureFormat};
-        use manifold_node_engine::runtime::PresetRuntime;
-        use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RGpuEncoder;
-        use manifold_node_engine::runtime::preset_context::PresetContext;
-        use manifold_node_engine::persistence::PrimitiveRegistry;
-        use manifold_node_engine::gpu::render_target::RenderTarget;
         use manifold_core::params::ParamManifest;
+        use manifold_gpu::{GpuDevice, GpuTextureFormat};
+        use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RGpuEncoder;
+        use manifold_node_engine::gpu::render_target::RenderTarget;
+        use manifold_node_engine::persistence::PrimitiveRegistry;
+        use manifold_node_engine::runtime::PresetRuntime;
+        use manifold_node_engine::runtime::preset_context::PresetContext;
 
         const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
         let (w, h) = (1280u32, 720u32);
@@ -475,13 +481,13 @@ mod tests {
     #[test]
     #[ignore = "headless GPU sweep; run manually with --ignored"]
     fn sweep_blackhole_cloud() {
-        use manifold_gpu::{GpuDevice, GpuTextureFormat};
-        use manifold_node_engine::runtime::PresetRuntime;
-        use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RGpuEncoder;
-        use manifold_node_engine::runtime::preset_context::PresetContext;
-        use manifold_node_engine::persistence::PrimitiveRegistry;
-        use manifold_node_engine::gpu::render_target::RenderTarget;
         use manifold_core::params::ParamManifest;
+        use manifold_gpu::{GpuDevice, GpuTextureFormat};
+        use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RGpuEncoder;
+        use manifold_node_engine::gpu::render_target::RenderTarget;
+        use manifold_node_engine::persistence::PrimitiveRegistry;
+        use manifold_node_engine::runtime::PresetRuntime;
+        use manifold_node_engine::runtime::preset_context::PresetContext;
 
         // Set a node param's `value` (preserving its type tag) by numeric id.
         fn set_val(doc: &mut serde_json::Value, id: u64, key: &str, v: serde_json::Value) {
@@ -572,12 +578,7 @@ mod tests {
                 let mut enc = device.create_encoder("sweep");
                 {
                     let mut gpu = RGpuEncoder::new(&mut enc, &device);
-                    generator.render(
-                        &mut gpu,
-                        &target.texture,
-                        &mk(f64::from(i) / 60.0),
-                        &params,
-                    );
+                    generator.render(&mut gpu, &target.texture, &mk(f64::from(i) / 60.0), &params);
                 }
                 enc.commit_and_wait_completed();
             }

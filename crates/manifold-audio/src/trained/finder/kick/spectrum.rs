@@ -43,7 +43,13 @@ pub(super) struct TrailingSpectrum {
 }
 
 impl TrailingSpectrum {
-    pub(super) fn new(window: &[f64], first_bin: usize, log2_freq: &[f64], splits: [usize; SPLIT_BANDS + 1], eps: f64) -> Self {
+    pub(super) fn new(
+        window: &[f64],
+        first_bin: usize,
+        log2_freq: &[f64],
+        splits: [usize; SPLIT_BANDS + 1],
+        eps: f64,
+    ) -> Self {
         let fft = FftPlanner::<f64>::new().plan_fft_forward(FFT_SIZE);
         let scratch = vec![Complex::default(); fft.get_inplace_scratch_len()];
         Self {
@@ -74,10 +80,16 @@ impl TrailingSpectrum {
     /// The scalars of the frame ending at the last pushed sample. Call once per completed hop.
     pub(super) fn hop(&mut self) -> SpecRow {
         let (old, new) = self.ring.split_at(self.pos);
-        for ((c, &x), &w) in self.buf.iter_mut().zip(new.iter().chain(old)).zip(self.window.iter()) {
+        for ((c, &x), &w) in self
+            .buf
+            .iter_mut()
+            .zip(new.iter().chain(old))
+            .zip(self.window.iter())
+        {
             *c = Complex::new(x * w, 0.0);
         }
-        self.fft.process_with_scratch(&mut self.buf, &mut self.scratch);
+        self.fft
+            .process_with_scratch(&mut self.buf, &mut self.scratch);
         for (m, c) in self.cur.iter_mut().zip(&self.buf[self.first_bin..]) {
             *m = c.norm();
         }
@@ -94,10 +106,20 @@ impl TrailingSpectrum {
             let flux = if first { sum } else { np_sum(&rise[r.clone()]) };
             (flux / (sum + eps), np_sum(&weighted[r]) / (sum + eps))
         };
-        let (rel_flux, centroid) = reduce(0..BINS, &self.cur[..], &self.rise[..], &self.weighted[..]);
-        let mut row = SpecRow { rel_flux, centroid, ..SpecRow::default() };
+        let (rel_flux, centroid) =
+            reduce(0..BINS, &self.cur[..], &self.rise[..], &self.weighted[..]);
+        let mut row = SpecRow {
+            rel_flux,
+            centroid,
+            ..SpecRow::default()
+        };
         for b in 0..SPLIT_BANDS {
-            let (f, c) = reduce(self.splits[b]..self.splits[b + 1], &self.cur[..], &self.rise[..], &self.weighted[..]);
+            let (f, c) = reduce(
+                self.splits[b]..self.splits[b + 1],
+                &self.cur[..],
+                &self.rise[..],
+                &self.weighted[..],
+            );
             row.band_rel_flux[b] = f;
             row.band_centroid[b] = c;
         }

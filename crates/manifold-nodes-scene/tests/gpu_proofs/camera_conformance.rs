@@ -35,11 +35,10 @@
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::scene::camera::Camera;
 
 /// One camera configuration: `(orbit, tilt, distance, fov_y, look_y)`, all
 /// radians / world units, `roll = 0`, `near = 0.05`, `far = 200.0` for every
@@ -207,7 +206,12 @@ fn render_readback(json: &str) -> Vec<u8> {
         let mut enc = h.device.create_encoder("camera-conformance-enc");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-            runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+            runtime.render(
+                &mut gpu,
+                &target.texture,
+                &ctx,
+                &manifold_core::params::ParamManifest::default(),
+            );
         }
         enc.commit_and_wait_completed();
     }
@@ -228,7 +232,10 @@ fn intensity_centroid(bytes: &[u8], width: u32, height: u32) -> Option<(f32, f32
         let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
         let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
         let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-        assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel at {i}");
+        assert!(
+            r.is_finite() && g.is_finite() && b.is_finite(),
+            "non-finite pixel at {i}"
+        );
         let w = (r + g + b).max(0.0) as f64;
         if w == 0.0 {
             continue;
@@ -256,11 +263,14 @@ fn flatten_3d_camera_mode_matches_project_to_pixel_oracle() {
         let cam = Camera::orbit_perspective(orbit, tilt, distance, fov_y, look_y, 0.0, NEAR, FAR);
         let oracle = cam
             .project_to_pixel(WORLD_POINT, h.width, h.height)
-            .unwrap_or_else(|| panic!("camera {cam_params:?}: WORLD_POINT unexpectedly behind camera"));
+            .unwrap_or_else(|| {
+                panic!("camera {cam_params:?}: WORLD_POINT unexpectedly behind camera")
+            });
 
         let bytes = render_readback(&flatten_3d_scene_json(cam_params));
-        let (mx, my) = intensity_centroid(&bytes, h.width, h.height)
-            .unwrap_or_else(|| panic!("camera {cam_params:?}: flatten_3d/draw_lines rendered nothing"));
+        let (mx, my) = intensity_centroid(&bytes, h.width, h.height).unwrap_or_else(|| {
+            panic!("camera {cam_params:?}: flatten_3d/draw_lines rendered nothing")
+        });
 
         let dist = ((mx - oracle.px).powi(2) + (my - oracle.py).powi(2)).sqrt();
         assert!(
@@ -281,7 +291,9 @@ fn render_scene_matches_project_to_pixel_oracle() {
         let cam = Camera::orbit_perspective(orbit, tilt, distance, fov_y, look_y, 0.0, NEAR, FAR);
         let oracle = cam
             .project_to_pixel(WORLD_POINT, h.width, h.height)
-            .unwrap_or_else(|| panic!("camera {cam_params:?}: WORLD_POINT unexpectedly behind camera"));
+            .unwrap_or_else(|| {
+                panic!("camera {cam_params:?}: WORLD_POINT unexpectedly behind camera")
+            });
 
         let bytes = render_readback(&render_scene_json(cam_params));
         let (mx, my) = intensity_centroid(&bytes, h.width, h.height)

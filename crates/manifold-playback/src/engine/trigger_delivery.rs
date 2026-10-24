@@ -163,8 +163,7 @@ impl TriggerDeliveryQueue {
             matches!(
                 &pulse.source_stamp,
                 TriggerSourceStamp::Clip { beat, .. } if !beat.0.is_finite()
-            )
-            || matches!(
+            ) || matches!(
                 &pulse.source_stamp,
                 TriggerSourceStamp::Audio { time, .. } if !time.0.is_finite()
             )
@@ -228,7 +227,8 @@ impl TriggerDeliveryQueue {
     pub(crate) fn cancel_clip_parameter(&mut self, owner: &manifold_core::EffectId, param: u64) {
         self.pulses.retain(|captured| {
             let pulse = &captured.pulse;
-            pulse.owner_id != *owner || pulse.param_key != param
+            pulse.owner_id != *owner
+                || pulse.param_key != param
                 || !matches!(pulse.source_stamp, TriggerSourceStamp::Clip { .. })
         });
     }
@@ -242,9 +242,9 @@ impl TriggerDeliveryQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::Bpm;
     use manifold_core::id::{ClipId, EffectId, LayerId};
     use manifold_core::types::TempoPointSource;
-    use manifold_core::Bpm;
 
     fn pulse(sequence: u64) -> TriggerPulse {
         TriggerPulse {
@@ -262,17 +262,27 @@ mod tests {
         let mut clip = pulse(1);
         clip.kind = crate::modulation::TriggerPulseKind::Parameter;
         clip.source_stamp = TriggerSourceStamp::Clip {
-            layer_id: LayerId::new("source"), clip_id: ClipId::new("clip"), beat: Beats::ZERO,
+            layer_id: LayerId::new("source"),
+            clip_id: ClipId::new("clip"),
+            beat: Beats::ZERO,
         };
         let mut audio = clip.clone();
         audio.source_stamp = TriggerSourceStamp::Snapshot;
         let mut other = clip.clone();
         other.param_key = 2;
         let mut pulses = vec![clip.clone(), audio.clone(), other.clone()];
-        queue.append_batch(&mut pulses, Seconds::ZERO, Beats::ZERO).unwrap();
+        queue
+            .append_batch(&mut pulses, Seconds::ZERO, Beats::ZERO)
+            .unwrap();
         queue.cancel_clip_parameter(&clip.owner_id, clip.param_key);
-        assert_eq!(queue.as_slice().iter().map(|capture| &capture.pulse).collect::<Vec<_>>(),
-            [&audio, &other]);
+        assert_eq!(
+            queue
+                .as_slice()
+                .iter()
+                .map(|capture| &capture.pulse)
+                .collect::<Vec<_>>(),
+            [&audio, &other]
+        );
     }
 
     fn stamped_pulse(
@@ -373,7 +383,10 @@ mod tests {
             .append_batch(&mut pulses, Seconds(2.0), Beats(4.0))
             .unwrap();
         assert_eq!(queue.as_slice()[0].pulse.audio_stamp(), first.audio_stamp());
-        assert_eq!(queue.as_slice()[1].pulse.audio_stamp(), second.audio_stamp());
+        assert_eq!(
+            queue.as_slice()[1].pulse.audio_stamp(),
+            second.audio_stamp()
+        );
         assert_eq!(queue.as_slice()[0].sequence, 0);
         assert_eq!(queue.as_slice()[1].sequence, 1);
     }
@@ -402,9 +415,12 @@ mod tests {
     #[test]
     fn clip_source_clock_preserves_each_source_and_destination_identity() {
         let mut project = Project::default();
-        project
-            .tempo_map
-            .add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(
+            Beats::ZERO,
+            Bpm(120.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
         project.tempo_map.add_or_replace_point(
             Beats(4.0),
             Bpm(60.0),
@@ -428,7 +444,9 @@ mod tests {
         let mut queue = TriggerDeliveryQueue::with_capacity(2);
         queue.reset().unwrap();
         let mut pulses = vec![first.clone(), second.clone()];
-        queue.append_batch(&mut pulses, Seconds(99.0), Beats(99.0)).unwrap();
+        queue
+            .append_batch(&mut pulses, Seconds(99.0), Beats(99.0))
+            .unwrap();
 
         assert_eq!(queue.as_slice()[0].pulse.layer_id, first.layer_id);
         assert_eq!(queue.as_slice()[1].pulse.layer_id, second.layer_id);
@@ -466,9 +484,12 @@ mod tests {
     #[test]
     fn audio_source_clock_preserves_export_time_and_resolves_current_tempo() {
         let mut project = Project::default();
-        project
-            .tempo_map
-            .add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(
+            Beats::ZERO,
+            Bpm(120.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
         let mut pulse = pulse(1);
         pulse.source_stamp = TriggerSourceStamp::Audio {
             stamp: manifold_core::audio_features::AudioHopStamp {
@@ -493,9 +514,12 @@ mod tests {
     #[test]
     fn audio_source_clock_clamps_hop_ahead_of_accepted_frame_time() {
         let mut project = Project::default();
-        project
-            .tempo_map
-            .add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(
+            Beats::ZERO,
+            Bpm(120.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
         let mut pulse = pulse(1);
         pulse.source_stamp = TriggerSourceStamp::Audio {
             stamp: manifold_core::audio_features::AudioHopStamp {

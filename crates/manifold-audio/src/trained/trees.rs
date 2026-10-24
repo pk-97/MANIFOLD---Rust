@@ -34,7 +34,10 @@ impl Forest {
     /// always reaches a leaf.
     pub fn from_container(c: &Container, prefix: &str) -> Result<Self, ContainerError> {
         let key = |s: &str| format!("{prefix}{s}");
-        let n = *c.shape(&key("value"))?.first().ok_or_else(|| bad(key("value"), "1-d node array"))?;
+        let n = *c
+            .shape(&key("value"))?
+            .first()
+            .ok_or_else(|| bad(key("value"), "1-d node array"))?;
         let value = c.f64s(&key("value"), &[n])?;
         let threshold = c.f64s(&key("threshold"), &[n])?;
         let feature = c.i32s(&key("feature"), &[n])?;
@@ -42,7 +45,10 @@ impl Forest {
         let right = c.i32s(&key("right"), &[n])?;
         let missing_left = c.i32s(&key("missing_left"), &[n])?;
         let is_leaf = c.i32s(&key("is_leaf"), &[n])?;
-        let t = *c.shape(&key("offsets"))?.first().ok_or_else(|| bad(key("offsets"), "1-d offsets"))?;
+        let t = *c
+            .shape(&key("offsets"))?
+            .first()
+            .ok_or_else(|| bad(key("offsets"), "1-d offsets"))?;
         let offsets = c.i64s(&key("offsets"), &[t])?;
         let baseline = c.f64s(&key("baseline"), &[])?[0];
         let n_features = c.i64s(&key("n_features"), &[])?[0];
@@ -50,8 +56,15 @@ impl Forest {
             return Err(bad(key("n_features"), "positive feature count"));
         }
         let n_features = n_features as usize;
-        if t < 2 || offsets[0] != 0 || offsets[t - 1] != n as i64 || offsets.windows(2).any(|w| w[1] <= w[0]) {
-            return Err(bad(key("offsets"), "increasing tree offsets from 0 to the node count"));
+        if t < 2
+            || offsets[0] != 0
+            || offsets[t - 1] != n as i64
+            || offsets.windows(2).any(|w| w[1] <= w[0])
+        {
+            return Err(bad(
+                key("offsets"),
+                "increasing tree offsets from 0 to the node count",
+            ));
         }
         let mut nodes = Vec::with_capacity(n);
         for w in offsets.windows(2) {
@@ -74,7 +87,10 @@ impl Forest {
                     if leaf || (v > local && v < size) {
                         Ok(if leaf { 0 } else { (start as i64 + v) as u32 })
                     } else {
-                        Err(bad(key(name), "child index after its parent, inside its tree"))
+                        Err(bad(
+                            key(name),
+                            "child index after its parent, inside its tree",
+                        ))
                     }
                 };
                 let (l, r) = (child(left[i], "left")?, child(right[i], "right")?);
@@ -93,7 +109,12 @@ impl Forest {
             }
         }
         let roots = offsets[..t - 1].iter().map(|&o| o as u32).collect();
-        Ok(Self { nodes, roots, baseline, n_features })
+        Ok(Self {
+            nodes,
+            roots,
+            baseline,
+            n_features,
+        })
     }
 
     pub fn n_features(&self) -> usize {
@@ -126,7 +147,11 @@ impl Forest {
                 return n.value;
             }
             let v = x[n.feature as usize];
-            let go_left = if v.is_nan() { n.missing_left } else { v <= n.threshold };
+            let go_left = if v.is_nan() {
+                n.missing_left
+            } else {
+                v <= n.threshold
+            };
             i = if go_left { n.left } else { n.right } as usize;
         }
     }
@@ -170,16 +195,31 @@ pub(crate) mod tests {
 
     pub(crate) fn f64e(name: &str, v: &[f64], scalar: bool) -> (String, u8, Vec<u64>, Vec<u8>) {
         let shape = if scalar { vec![] } else { vec![v.len() as u64] };
-        (name.into(), 0, shape, v.iter().flat_map(|x| x.to_le_bytes()).collect())
+        (
+            name.into(),
+            0,
+            shape,
+            v.iter().flat_map(|x| x.to_le_bytes()).collect(),
+        )
     }
 
     pub(crate) fn i32e(name: &str, v: &[i32]) -> (String, u8, Vec<u64>, Vec<u8>) {
-        (name.into(), 2, vec![v.len() as u64], v.iter().flat_map(|x| x.to_le_bytes()).collect())
+        (
+            name.into(),
+            2,
+            vec![v.len() as u64],
+            v.iter().flat_map(|x| x.to_le_bytes()).collect(),
+        )
     }
 
     pub(crate) fn i64e(name: &str, v: &[i64], scalar: bool) -> (String, u8, Vec<u64>, Vec<u8>) {
         let shape = if scalar { vec![] } else { vec![v.len() as u64] };
-        (name.into(), 4, shape, v.iter().flat_map(|x| x.to_le_bytes()).collect())
+        (
+            name.into(),
+            4,
+            shape,
+            v.iter().flat_map(|x| x.to_le_bytes()).collect(),
+        )
     }
 
     /// Two trees on 2 features: tree 0 splits feature 0 at 0.5 (NaN right), tree 1 splits feature 1 at -1
@@ -187,8 +227,16 @@ pub(crate) mod tests {
     pub(crate) fn two_trees(prefix: &str, baseline: f64) -> Vec<(String, u8, Vec<u64>, Vec<u8>)> {
         let p = |s: &str| format!("{prefix}{s}");
         vec![
-            f64e(&p("value"), &[0.0, -1.0, 1.0, 0.0, 0.25, 0.0, 0.5, 2.0], false),
-            f64e(&p("threshold"), &[0.5, 0.0, 0.0, -1.0, 0.0, 2.0, 0.0, 0.0], false),
+            f64e(
+                &p("value"),
+                &[0.0, -1.0, 1.0, 0.0, 0.25, 0.0, 0.5, 2.0],
+                false,
+            ),
+            f64e(
+                &p("threshold"),
+                &[0.5, 0.0, 0.0, -1.0, 0.0, 2.0, 0.0, 0.0],
+                false,
+            ),
             i32e(&p("feature"), &[0, 0, 0, 1, 0, 0, 0, 0]),
             i32e(&p("left"), &[1, 0, 0, 1, 0, 3, 0, 0]),
             i32e(&p("right"), &[2, 0, 0, 2, 0, 4, 0, 0]),

@@ -21,7 +21,6 @@ pub use crate::effect_graph_def::EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS;
 /// Version of the scene-modifier recipe ABI.
 pub const SCENE_MODIFIER_RECIPE_VERSION: u32 = 1;
 
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SceneTargetSelection {
@@ -90,12 +89,16 @@ pub fn scene_modifier_parameter_lock_reason(
     param: &str,
 ) -> Option<&'static str> {
     if !matches!(param, "source_vertex_count" | "source_bbox_radius")
-        && owner
-            .scene_modifiers
-            .iter()
-            .any(|modifier| modifier.mesh_frames.iter().any(|frame| frame.source == *node))
+        && owner.scene_modifiers.iter().any(|modifier| {
+            modifier
+                .mesh_frames
+                .iter()
+                .any(|frame| frame.source == *node)
+        })
     {
-        return Some("Source settings are locked by a calibrated modifier; remove it before changing the source.");
+        return Some(
+            "Source settings are locked by a calibrated modifier; remove it before changing the source.",
+        );
     }
 
     None
@@ -103,10 +106,20 @@ pub fn scene_modifier_parameter_lock_reason(
 
 /// A host control is locked if any binding addresses captured source data.
 /// Modifier controls use a distinct namespace.
-pub fn scene_modifier_macro_lock_reason(owner: &EffectGraphDef, param: &str) -> Option<&'static str> {
-    owner.preset_metadata.as_ref()?.bindings.iter().filter(|binding| binding.id == param)
+pub fn scene_modifier_macro_lock_reason(
+    owner: &EffectGraphDef,
+    param: &str,
+) -> Option<&'static str> {
+    owner
+        .preset_metadata
+        .as_ref()?
+        .bindings
+        .iter()
+        .filter(|binding| binding.id == param)
         .find_map(|binding| match &binding.target {
-            BindingTarget::Node { node_id, param } => scene_modifier_parameter_lock_reason(owner, node_id, param),
+            BindingTarget::Node { node_id, param } => {
+                scene_modifier_parameter_lock_reason(owner, node_id, param)
+            }
             _ => None,
         })
 }
@@ -524,7 +537,9 @@ pub fn initialize_scene_modifier_snapshot(
         if min > max || !(min..=max).contains(&default_value) {
             return Err(SceneModifierSchemaError::InvalidRecipe {
                 path,
-                detail: "calibration min/max/default must be ordered and in range before conversion".into(),
+                detail:
+                    "calibration min/max/default must be ordered and in range before conversion"
+                        .into(),
             });
         }
         let min = finite_f32(min, &format!("{path}.min"))?;
@@ -773,7 +788,10 @@ fn validate_def(
     }
     if let Some(meta) = metadata
         && let Some(shape) = meta.shape.as_ref()
-        && let Some(id) = shape.shape.param_ids().find(|id| find_param(&meta.params, id).is_none())
+        && let Some(id) = shape
+            .shape
+            .param_ids()
+            .find(|id| find_param(&meta.params, id).is_none())
     {
         return Err(SceneModifierSchemaError::InvalidRecipe {
             path: format!("{path}.presetMetadata.shape"),
@@ -929,9 +947,7 @@ fn validate_recipe(
             || find_param(params, &shatter.fragments_param).is_none()
         {
             return Err(SceneModifierSchemaError::InvalidBinding {
-                path: format!(
-                    "{path}.presetMetadata.sceneModifier.shatter.fragmentsParam"
-                ),
+                path: format!("{path}.presetMetadata.sceneModifier.shatter.fragmentsParam"),
                 detail: "fragmentsParam must name a declared preparation parameter".into(),
             });
         }
@@ -1471,7 +1487,12 @@ mod tests {
             (-1.0, 2.0, 0.5)
         );
         assert_eq!(
-            snapshot.preset_metadata.as_ref().expect("metadata").bindings[0].default_value,
+            snapshot
+                .preset_metadata
+                .as_ref()
+                .expect("metadata")
+                .bindings[0]
+                .default_value,
             0.5
         );
         assert_eq!(
@@ -1873,30 +1894,34 @@ mod tests {
     #[test]
     fn calibrated_source_lock_uses_stable_nested_identity_and_exempts_provenance() {
         let owner = owner_with_calibrated_source("nested-source");
-        assert!(scene_modifier_parameter_lock_reason(
-            &owner,
-            &NodeId::new("nested-source"),
-            "path",
-        )
-        .is_some());
-        assert!(scene_modifier_parameter_lock_reason(
-            &owner,
-            &NodeId::new("nested-source"),
-            "max_capacity",
-        )
-        .is_some());
-        assert!(scene_modifier_parameter_lock_reason(
-            &owner,
-            &NodeId::new("nested-source"),
-            "source_vertex_count",
-        )
-        .is_none());
-        assert!(scene_modifier_parameter_lock_reason(
-            &owner,
-            &NodeId::new("same-text-different-node"),
-            "path",
-        )
-        .is_none());
+        assert!(
+            scene_modifier_parameter_lock_reason(&owner, &NodeId::new("nested-source"), "path",)
+                .is_some()
+        );
+        assert!(
+            scene_modifier_parameter_lock_reason(
+                &owner,
+                &NodeId::new("nested-source"),
+                "max_capacity",
+            )
+            .is_some()
+        );
+        assert!(
+            scene_modifier_parameter_lock_reason(
+                &owner,
+                &NodeId::new("nested-source"),
+                "source_vertex_count",
+            )
+            .is_none()
+        );
+        assert!(
+            scene_modifier_parameter_lock_reason(
+                &owner,
+                &NodeId::new("same-text-different-node"),
+                "path",
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -1927,12 +1952,10 @@ mod tests {
             }]
         }))
         .expect("vertices recipe fixture parses");
-        assert!(scene_modifier_parameter_lock_reason(
-            &owner,
-            &NodeId::new("scene"),
-            "rt_enabled",
-        )
-        .is_none());
+        assert!(
+            scene_modifier_parameter_lock_reason(&owner, &NodeId::new("scene"), "rt_enabled",)
+                .is_none()
+        );
         assert!(scene_modifier_parameter_lock_reason(
             &owner,
             &NodeId::new("other-scene"),

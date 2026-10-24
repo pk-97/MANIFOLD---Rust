@@ -15,8 +15,8 @@ pub mod running_total;
 pub mod smooth_lattice;
 // Keep this declaration outside a macro: the module exports float_param!.
 pub mod sort_particles_into_cells;
-pub mod upwind_distance;
-pub mod whitewater_distance;
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 #[doc(hidden)]
 pub mod testkit;
+pub mod upwind_distance;
+pub mod whitewater_distance;

@@ -8,7 +8,11 @@ use crate::user_prefs::UserPrefs;
 /// Hidden override, ms, 0–250. No footer field and no menu entry.
 pub const EXTRA_DELAY_KEY: &str = "MANIFOLD_ExtraOutputDelayMs";
 /// Learned offsets against Link, ms: MIDI clock, AbletonOSC, timecode.
-pub const OFFSET_KEYS: [&str; 3] = ["MANIFOLD_SyncOffsetClkMs", "MANIFOLD_SyncOffsetOscMs", "MANIFOLD_SyncOffsetTimecodeMs"];
+pub const OFFSET_KEYS: [&str; 3] = [
+    "MANIFOLD_SyncOffsetClkMs",
+    "MANIFOLD_SyncOffsetOscMs",
+    "MANIFOLD_SyncOffsetTimecodeMs",
+];
 /// s: offsets closer than this to the saved ones are not re-saved.
 const SAVE_EPSILON: f64 = 1e-6;
 
@@ -31,14 +35,33 @@ impl SyncPrefs {
                 0.0
             }
         };
-        let offsets_ms = OFFSET_KEYS.map(|key| prefs.get_string(key, "").trim().parse::<f64>().unwrap_or(f64::NAN));
-        self.saved = offsets_ms.map(|ms| if ms.is_finite() { (ms / 1000.0).clamp(-0.05, 0.05) } else { 0.0 });
-        ContentCommand::SetSyncCalibration { extra_delay_ms, offsets_ms }
+        let offsets_ms = OFFSET_KEYS.map(|key| {
+            prefs
+                .get_string(key, "")
+                .trim()
+                .parse::<f64>()
+                .unwrap_or(f64::NAN)
+        });
+        self.saved = offsets_ms.map(|ms| {
+            if ms.is_finite() {
+                (ms / 1000.0).clamp(-0.05, 0.05)
+            } else {
+                0.0
+            }
+        });
+        ContentCommand::SetSyncCalibration {
+            extra_delay_ms,
+            offsets_ms,
+        }
     }
 
     /// Writes learned offsets the content thread reports, when they changed.
     pub fn save_learned(&mut self, prefs: &mut UserPrefs, offsets: [f64; 3]) {
-        if offsets.iter().zip(&self.saved).all(|(a, b)| (a - b).abs() <= SAVE_EPSILON) {
+        if offsets
+            .iter()
+            .zip(&self.saved)
+            .all(|(a, b)| (a - b).abs() <= SAVE_EPSILON)
+        {
             return;
         }
         for (key, offset) in OFFSET_KEYS.iter().zip(offsets) {
@@ -52,7 +75,8 @@ impl SyncPrefs {
 impl crate::app::Application {
     /// Once per UI frame, after the content state drain: save learned offsets.
     pub(crate) fn tick_sync_calibration(&mut self) {
-        self.sync_prefs.save_learned(&mut self.user_prefs, self.content_state.sync_offsets);
+        self.sync_prefs
+            .save_learned(&mut self.user_prefs, self.content_state.sync_offsets);
     }
 }
 
@@ -65,7 +89,10 @@ mod tests {
         let mut prefs = UserPrefs::in_memory();
         let mut sync = SyncPrefs::default();
         match sync.stored(&prefs) {
-            ContentCommand::SetSyncCalibration { extra_delay_ms, offsets_ms } => {
+            ContentCommand::SetSyncCalibration {
+                extra_delay_ms,
+                offsets_ms,
+            } => {
                 assert_eq!(extra_delay_ms, 0.0);
                 assert!(offsets_ms.iter().all(|o| o.is_nan()), "nothing stored");
             }
@@ -75,7 +102,10 @@ mod tests {
         assert_eq!(prefs.get_string(OFFSET_KEYS[0], ""), "7.000");
         prefs.set_string(EXTRA_DELAY_KEY, "300");
         match SyncPrefs::default().stored(&prefs) {
-            ContentCommand::SetSyncCalibration { extra_delay_ms, offsets_ms } => {
+            ContentCommand::SetSyncCalibration {
+                extra_delay_ms,
+                offsets_ms,
+            } => {
                 assert_eq!(extra_delay_ms, 0.0, "300 ms is out of range");
                 assert_eq!(offsets_ms, [7.0, 0.0, -2.0]);
             }

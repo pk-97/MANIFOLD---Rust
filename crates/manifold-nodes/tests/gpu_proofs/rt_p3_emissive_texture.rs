@@ -32,10 +32,9 @@ use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::scene::camera::Camera;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::scene::camera::Camera;
 
 const ORBIT: f32 = 0.7;
 const TILT: f32 = 0.95;
@@ -99,7 +98,10 @@ fn f16l(px: &[u8]) -> f32 {
     let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
     let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
     let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-    assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+    assert!(
+        r.is_finite() && g.is_finite() && b.is_finite(),
+        "non-finite pixel"
+    );
     0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
@@ -280,9 +282,12 @@ fn probe_windows(bytes: &[u8], w: u32, h: u32) -> Vec<(f64, bool)> {
 
 #[test]
 fn black_emissive_texture_gives_no_gi() {
-    let (glow_bytes, w, h) = render_readback(&scene_json(false, true, 0.0, 1.5, 3.0, 1.0, 0.5, 0.45));
-    let (black_bytes, _, _) = render_readback(&scene_json(true, true, 0.0, 1.5, 3.0, 1.0, 0.5, 0.45));
-    let (off_bytes, _, _) = render_readback(&scene_json(false, false, 0.0, 1.5, 3.0, 1.0, 0.5, 0.45));
+    let (glow_bytes, w, h) =
+        render_readback(&scene_json(false, true, 0.0, 1.5, 3.0, 1.0, 0.5, 0.45));
+    let (black_bytes, _, _) =
+        render_readback(&scene_json(true, true, 0.0, 1.5, 3.0, 1.0, 0.5, 0.45));
+    let (off_bytes, _, _) =
+        render_readback(&scene_json(false, false, 0.0, 1.5, 3.0, 1.0, 0.5, 0.45));
 
     let glow = probe_windows(&glow_bytes, w, h);
     let black = probe_windows(&black_bytes, w, h);
@@ -293,7 +298,10 @@ fn black_emissive_texture_gives_no_gi() {
     let usable: Vec<usize> = (0..glow.len())
         .filter(|&i| off[i].0 > 0.2 && !glow[i].1 && !black[i].1 && !off[i].1)
         .collect();
-    assert!(!usable.is_empty(), "need at least one clean sun-lit ground probe");
+    assert!(
+        !usable.is_empty(),
+        "need at least one clean sun-lit ground probe"
+    );
 
     // Three metrics over the clean probes (pre-fix expectations in
     // comments — every assert fails pre-fix):
@@ -315,8 +323,15 @@ fn black_emissive_texture_gives_no_gi() {
         let t = (glow[i].0 - black[i].0).abs() / off[i].0.max(1e-9);
         let b = (black[i].0 - off[i].0).abs() / off[i].0.max(1e-9);
         let f = (glow[i].0 - off[i].0).abs() / off[i].0.max(1e-9);
-        eprintln!("  probe {i}: |glow-black|={:.2}% |black-off|={:.2}% |glow-off|={:.2}% (abs glow={:.4} black={:.4} off={:.4})",
-            t * 100.0, b * 100.0, f * 100.0, glow[i].0, black[i].0, off[i].0);
+        eprintln!(
+            "  probe {i}: |glow-black|={:.2}% |black-off|={:.2}% |glow-off|={:.2}% (abs glow={:.4} black={:.4} off={:.4})",
+            t * 100.0,
+            b * 100.0,
+            f * 100.0,
+            glow[i].0,
+            black[i].0,
+            off[i].0
+        );
         texture_response = texture_response.max(t);
         black_vs_off = black_vs_off.max(b);
         factor_response = factor_response.max(f);
@@ -349,9 +364,12 @@ fn black_emissive_texture_gives_no_gi() {
 
 #[test]
 fn emissive_uv_transform_applies_at_hit_sample() {
-    let (base_bytes, w, h) = render_readback(&scene_json(false, true, 0.0, 1.5, 3.0, 1.0, 0.5, 0.45));
-    let (shift_bytes, _, _) = render_readback(&scene_json(false, true, -0.3, 1.5, 3.0, 2.5, 0.8, 0.2));
-    let (off_bytes, _, _) = render_readback(&scene_json(false, false, 0.0, 1.5, 3.0, 2.5, 0.8, 0.2));
+    let (base_bytes, w, h) =
+        render_readback(&scene_json(false, true, 0.0, 1.5, 3.0, 1.0, 0.5, 0.45));
+    let (shift_bytes, _, _) =
+        render_readback(&scene_json(false, true, -0.3, 1.5, 3.0, 2.5, 0.8, 0.2));
+    let (off_bytes, _, _) =
+        render_readback(&scene_json(false, false, 0.0, 1.5, 3.0, 2.5, 0.8, 0.2));
 
     let base = probe_windows(&base_bytes, w, h);
     let shift = probe_windows(&shift_bytes, w, h);
@@ -370,16 +388,29 @@ fn emissive_uv_transform_applies_at_hit_sample() {
     let usable: Vec<usize> = (0..base.len())
         .filter(|&i| off[i].0 > 0.2 && !base[i].1 && !shift[i].1 && !off[i].1)
         .collect();
-    assert!(!usable.is_empty(), "need at least one clean sun-lit ground probe");
+    assert!(
+        !usable.is_empty(),
+        "need at least one clean sun-lit ground probe"
+    );
     let mut best_change = 0.0f64;
     for &i in &usable {
         let d0 = (base[i].0 - off[i].0) / off[i].0.max(1e-9);
         let d1 = (shift[i].0 - off[i].0) / off[i].0.max(1e-9);
         let change = (d0 - d1).abs();
-        eprintln!("  probe {i}: delta(tx=0)={:.2}% delta(tx=0.5)={:.2}% (abs base={:.4} shift={:.4} off={:.4})", d0 * 100.0, d1 * 100.0, base[i].0, shift[i].0, off[i].0);
+        eprintln!(
+            "  probe {i}: delta(tx=0)={:.2}% delta(tx=0.5)={:.2}% (abs base={:.4} shift={:.4} off={:.4})",
+            d0 * 100.0,
+            d1 * 100.0,
+            base[i].0,
+            shift[i].0,
+            off[i].0
+        );
         best_change = best_change.max(change);
     }
-    eprintln!("emissive UV transform: best per-probe delta change={:.2}%", best_change * 100.0);
+    eprintln!(
+        "emissive UV transform: best per-probe delta change={:.2}%",
+        best_change * 100.0
+    );
     assert!(
         best_change > 0.005,
         "shifting the emissive map by em_uv_tx=0.5 changed no probe's GI ({:.2}% best) — \

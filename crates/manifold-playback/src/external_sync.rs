@@ -113,7 +113,13 @@ impl Default for LinkTempoGuard {
 
 impl LinkTempoGuard {
     pub fn new() -> Self {
-        Self { latched: false, disagree_since: None, window: [(0.0, 0, 0.0); WINDOW_RING], head: 0, len: 0 }
+        Self {
+            latched: false,
+            disagree_since: None,
+            window: [(0.0, 0, 0.0); WINDOW_RING],
+            head: 0,
+            len: 0,
+        }
     }
 
     pub fn latched(&self) -> bool {
@@ -162,21 +168,31 @@ impl LinkTempoGuard {
     /// AbletonOSC: Link's session tempo against the tempo listener's.
     pub fn observe_listener(&mut self, now: f64, link_bpm: f64, listener_bpm: f64) {
         if link_bpm > 0.0 && listener_bpm > 0.0 && now.is_finite() {
-            self.judge(now, (link_bpm / listener_bpm - 1.0).abs(), "AbletonOSC tempo");
+            self.judge(
+                now,
+                (link_bpm / listener_bpm - 1.0).abs(),
+                "AbletonOSC tempo",
+            );
         }
     }
 
     fn judge(&mut self, now: f64, gap: f64, what: &str) {
         if gap <= GUARD_TOLERANCE {
             if !self.latched {
-                log::info!("[Transport] guard: Link tempo latched, {what} within {:.3}%", gap * 100.0);
+                log::info!(
+                    "[Transport] guard: Link tempo latched, {what} within {:.3}%",
+                    gap * 100.0
+                );
             }
             self.latched = true;
             self.disagree_since = None;
         } else if self.latched {
             let since = *self.disagree_since.get_or_insert(now);
             if now - since >= GUARD_UNLATCH_HOLD {
-                log::info!("[Transport] guard: Link tempo released, {what} {:.3}% apart for 2 s", gap * 100.0);
+                log::info!(
+                    "[Transport] guard: Link tempo released, {what} {:.3}% apart for 2 s",
+                    gap * 100.0
+                );
                 self.latched = false;
                 self.disagree_since = None;
             }
@@ -215,7 +231,11 @@ pub fn live_tempo(
     match authority {
         ClockAuthority::Link => link,
         ClockAuthority::MidiClock | ClockAuthority::Osc => {
-            if latched { link.or(own) } else { own }
+            if latched {
+                link.or(own)
+            } else {
+                own
+            }
         }
         ClockAuthority::Internal => None,
     }

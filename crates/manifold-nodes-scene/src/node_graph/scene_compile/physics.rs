@@ -40,17 +40,27 @@ pub(crate) struct State {
 
 impl State {
     pub(crate) fn new(doc: &SceneDoc) -> Self {
-        Self { parts: physics_parts(doc), ..Self::default() }
+        Self {
+            parts: physics_parts(doc),
+            ..Self::default()
+        }
     }
 
     fn part(&self, item: &Item) -> PhysicsPart {
-        self.parts.get(&item.id).cloned().unwrap_or(PhysicsPart::Off)
+        self.parts
+            .get(&item.id)
+            .cloned()
+            .unwrap_or(PhysicsPart::Off)
     }
 }
 
 fn add_body(b: &mut Builder<'_>, item: &Item, setting: PhysicsSetting, transform: u32) -> u32 {
     let body = b.add(item.id.as_str(), BODY_ROLE, BODY_TYPE);
-    let motion = if setting == PhysicsSetting::Body { MOVING } else { FIXED };
+    let motion = if setting == PhysicsSetting::Body {
+        MOVING
+    } else {
+        FIXED
+    };
     b.set(body, "motion", SerializedParamValue::Enum { value: motion });
     b.wire(transform, "transform", body, "transform");
     b.physics.bodies.push(body);
@@ -67,7 +77,13 @@ fn pose_frame(b: &mut Builder<'_>, item: &Item, body: u32) -> u32 {
 /// An Object's physics, after its mesh (with a `source` output) and its
 /// transform are emitted. Returns the frame the object draws in when it is
 /// its own body: its transform is then the body's start, not its draw.
-pub(crate) fn object(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>, mesh: u32, transform: u32) -> Option<u32> {
+pub(crate) fn object(
+    b: &mut Builder<'_>,
+    item: &Item,
+    frame: Option<&Frame>,
+    mesh: u32,
+    transform: u32,
+) -> Option<u32> {
     match b.physics.part(item) {
         PhysicsPart::Solo(setting) => {
             if let Some(parent) = frame.and_then(|frame| frame.transform) {
@@ -106,7 +122,12 @@ pub(crate) fn combined(b: &mut Builder<'_>, group: &Item, mesh: u32, transform: 
 }
 
 fn add_part(b: &mut Builder<'_>, root: ItemId, part: (u32, u32)) {
-    match b.physics.group_parts.iter_mut().find(|(known, _)| *known == root) {
+    match b
+        .physics
+        .group_parts
+        .iter_mut()
+        .find(|(known, _)| *known == root)
+    {
         Some((_, parts)) => parts.push(part),
         None => b.physics.group_parts.push((root, vec![part])),
     }
@@ -124,9 +145,17 @@ pub(crate) fn group(b: &mut Builder<'_>, item: &Item, inner: Frame) -> Frame {
             };
             let body = add_body(b, item, setting, transform);
             // The group's rows ran before its body existed.
-            b.apply_rows(item, PHYSICS_ROWS.iter().filter(|row| (row.applies)(&item.fields)));
+            b.apply_rows(
+                item,
+                PHYSICS_ROWS
+                    .iter()
+                    .filter(|row| (row.applies)(&item.fields)),
+            );
             if setting == PhysicsSetting::Body {
-                return Frame { transform: Some(pose_frame(b, item, body)), ..inner };
+                return Frame {
+                    transform: Some(pose_frame(b, item, body)),
+                    ..inner
+                };
             }
             inner
         }
@@ -151,7 +180,13 @@ pub(crate) fn join_world(b: &mut Builder<'_>, world: u32) {
             continue;
         };
         // The body grows a mesh and transform input per part.
-        b.set(body, "parts", SerializedParamValue::Int { value: parts.len() as i32 });
+        b.set(
+            body,
+            "parts",
+            SerializedParamValue::Int {
+                value: parts.len() as i32,
+            },
+        );
         for (k, (mesh, transform)) in parts.into_iter().enumerate() {
             b.wire(mesh, "source", body, &format!("mesh_{k}"));
             b.wire(transform, "transform", body, &format!("part_{k}"));
@@ -161,7 +196,13 @@ pub(crate) fn join_world(b: &mut Builder<'_>, world: u32) {
     // The world sizes its ports to its bodies. A body added mid-show grows
     // them and joins the running world; the bodies already moving keep going
     // (`RigidSimulation` follows each body by identity, not by port).
-    b.set(world, "bodies", SerializedParamValue::Int { value: bodies.len().max(1) as i32 });
+    b.set(
+        world,
+        "bodies",
+        SerializedParamValue::Int {
+            value: bodies.len().max(1) as i32,
+        },
+    );
     for (k, body) in bodies.into_iter().enumerate() {
         b.wire(body, "body", world, &format!("body_{k}"));
     }

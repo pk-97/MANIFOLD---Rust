@@ -37,7 +37,9 @@ pub fn readback_raw_halves(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32)
     let mut enc = device.create_encoder("headless-convergence-readback");
     enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
     enc.commit_and_wait_completed();
-    let ptr = buf.mapped_ptr().expect("shared readback buffer must expose mapped pointer");
+    let ptr = buf
+        .mapped_ptr()
+        .expect("shared readback buffer must expose mapped pointer");
     unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), total as usize) }.to_vec()
 }
 
@@ -67,12 +69,7 @@ pub fn linear_to_srgb8(v: f32) -> u8 {
     (s * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
-pub fn readback_srgb_rgba8(
-    device: &GpuDevice,
-    tex: &GpuTexture,
-    w: u32,
-    h: u32,
-) -> Vec<u8> {
+pub fn readback_srgb_rgba8(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<u8> {
     let bytes_per_row = w * 8; // Rgba16Float = 8 bytes/pixel
     let total = u64::from(h * bytes_per_row);
     let buf = device.create_buffer_shared(total);
@@ -80,8 +77,11 @@ pub fn readback_srgb_rgba8(
     enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
     enc.commit_and_wait_completed();
 
-    let ptr = buf.mapped_ptr().expect("shared readback buffer must expose mapped pointer");
-    let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+    let ptr = buf
+        .mapped_ptr()
+        .expect("shared readback buffer must expose mapped pointer");
+    let halves: &[u16] =
+        unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
 
     let mut out = Vec::with_capacity((w * h * 4) as usize);
     for px in halves.chunks_exact(4) {

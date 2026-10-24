@@ -2,8 +2,8 @@ use crate::freeze::classify::FusionKind;
 use crate::parameters::{ParamDef, ParamType};
 use crate::ports::{NodeInput, NodeOutput, PortType};
 
-use super::standalone::{generate_standalone, StandaloneKernelSpec};
-use super::types::{dim_forms, TexDim, VOLUME_WORKGROUP_3D};
+use super::standalone::{StandaloneKernelSpec, generate_standalone};
+use super::types::{TexDim, VOLUME_WORKGROUP_3D, dim_forms};
 
 /// Pins the `dim_forms` D3 workgroup string to [`VOLUME_WORKGROUP_3D`], the
 /// constant every volume primitive's `run()` sizes its dispatch grid with.

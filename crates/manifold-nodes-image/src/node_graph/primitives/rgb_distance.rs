@@ -9,10 +9,12 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{
+    dispatch_standalone_2d, standalone_pipeline,
+};
 
 fn finite_unit(value: f32, fallback: f32) -> f32 {
     if value.is_finite() {
@@ -125,17 +127,19 @@ impl Primitive for RgbDistance {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use manifold_node_engine::exec::effect_node::NodeInstanceId;
-    use manifold_node_engine::freeze::TextureDiff;
-    use manifold_node_engine::freeze::classify::FusionKind;
-    use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused, standalone_for_spec};
-    use manifold_node_engine::primitive::PrimitiveSpec;
-    use manifold_node_engine::gpu::render_target::RenderTarget;
     use half::f16;
     use manifold_gpu::{
         GpuBinding, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
         GpuTextureUsage,
     };
+    use manifold_node_engine::exec::effect_node::NodeInstanceId;
+    use manifold_node_engine::freeze::TextureDiff;
+    use manifold_node_engine::freeze::classify::FusionKind;
+    use manifold_node_engine::freeze::codegen::{
+        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused, standalone_for_spec,
+    };
+    use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     const FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 

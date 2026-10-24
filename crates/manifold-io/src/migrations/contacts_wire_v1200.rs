@@ -9,7 +9,7 @@
 //! ships. Idempotent: a step whose `contacts` input is already wired is left
 //! alone. A domain or step inside a group is reported and left alone.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const DOMAIN: &str = manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 const STEP: &str = "node.gpu_flip_step";
@@ -23,7 +23,10 @@ pub(crate) fn migrate(root: &mut Value) {
             migrated += usize::from(migrate_graph_value(graph));
         }
     });
-    if let Some(presets) = root.get_mut("embeddedPresets").and_then(|v| v.as_array_mut()) {
+    if let Some(presets) = root
+        .get_mut("embeddedPresets")
+        .and_then(|v| v.as_array_mut())
+    {
         for preset in presets.iter_mut() {
             if let Some(def) = preset.get_mut("def") {
                 migrated += usize::from(migrate_graph_value(def));
@@ -43,7 +46,9 @@ pub(crate) fn wire(domain: &Value, step: &Value) -> Value {
 }
 
 fn first_of_type<'a>(nodes: &'a [Value], type_id: &str) -> Option<&'a Value> {
-    nodes.iter().find(|n| n.get("typeId").and_then(Value::as_str) == Some(type_id))
+    nodes
+        .iter()
+        .find(|n| n.get("typeId").and_then(Value::as_str) == Some(type_id))
 }
 
 fn in_group(nodes: &[Value], type_id: &str) -> bool {
@@ -51,19 +56,28 @@ fn in_group(nodes: &[Value], type_id: &str) -> bool {
         n.get("group")
             .and_then(|g| g.get("nodes"))
             .and_then(Value::as_array)
-            .is_some_and(|inner| first_of_type(inner, type_id).is_some() || in_group(inner, type_id))
+            .is_some_and(|inner| {
+                first_of_type(inner, type_id).is_some() || in_group(inner, type_id)
+            })
     })
 }
 
 /// Migrate one graph-shaped value. Returns true when it was modified.
 fn migrate_graph_value(graph: &mut Value) -> bool {
-    let Value::Object(map) = graph else { return false };
-    let Some(nodes) = map.get("nodes").and_then(Value::as_array) else { return false };
+    let Value::Object(map) = graph else {
+        return false;
+    };
+    let Some(nodes) = map.get("nodes").and_then(Value::as_array) else {
+        return false;
+    };
     let (domain_id, step_id) = match (first_of_type(nodes, DOMAIN), first_of_type(nodes, STEP)) {
         (Some(d), Some(s)) => (d["id"].clone(), s["id"].clone()),
         _ => {
             if in_group(nodes, DOMAIN) || in_group(nodes, STEP) {
-                let name = map.get("name").and_then(Value::as_str).unwrap_or("Unnamed graph");
+                let name = map
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Unnamed graph");
                 super::note_migration(format!(
                     "{name}: GPU FLIP domain or step sits inside a group; the contacts wire was not added, so water can drain under resting bodies. Re-add the generator from the preset to get it."
                 ));
@@ -72,8 +86,13 @@ fn migrate_graph_value(graph: &mut Value) -> bool {
         }
     };
     let wires = map.entry("wires").or_insert_with(|| json!([]));
-    let Some(wires) = wires.as_array_mut() else { return false };
-    if wires.iter().any(|w| w["toNode"] == step_id && w["toPort"] == PORT) {
+    let Some(wires) = wires.as_array_mut() else {
+        return false;
+    };
+    if wires
+        .iter()
+        .any(|w| w["toNode"] == step_id && w["toPort"] == PORT)
+    {
         return false;
     }
     wires.push(wire(&domain_id, &step_id));
@@ -84,22 +103,31 @@ fn migrate_graph_value(graph: &mut Value) -> bool {
 mod tests {
     use super::*;
 
-    const BUNDLED: &str = include_str!("../../../manifold-nodes/tests/fixtures/presets/WaterDamBreakGpuFlip.json");
-    const PARTICLES: &str = include_str!("../../../manifold-nodes/tests/fixtures/presets/WaterDamBreakParticles.json");
+    const BUNDLED: &str =
+        include_str!("../../../manifold-nodes/tests/fixtures/presets/WaterDamBreakGpuFlip.json");
+    const PARTICLES: &str =
+        include_str!("../../../manifold-nodes/tests/fixtures/presets/WaterDamBreakParticles.json");
     const PETER_LAYER: &str = include_str!("../../tests/fixtures/water_layer_graph_v1160.json");
 
     fn migrate_project(before: &Value) -> Value {
-        serde_json::from_str(&crate::migrate::migrate_if_needed(&before.to_string()).unwrap()).unwrap()
+        serde_json::from_str(&crate::migrate::migrate_if_needed(&before.to_string()).unwrap())
+            .unwrap()
     }
 
     fn contacts_wires(graph: &Value) -> Vec<&Value> {
-        graph["wires"].as_array().unwrap().iter().filter(|w| w["toPort"] == PORT).collect()
+        graph["wires"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|w| w["toPort"] == PORT)
+            .collect()
     }
 
     /// A bundled def in the shape this rung upgrades: ungrouped, read back
     /// like a saved graph.
     fn flat_bundled(def: &str) -> Value {
-        let flat = manifold_core::flatten::flatten_groups(&serde_json::from_str(def).unwrap()).unwrap();
+        let flat =
+            manifold_core::flatten::flatten_groups(&serde_json::from_str(def).unwrap()).unwrap();
         serde_json::from_str(&serde_json::to_string(&flat).unwrap()).unwrap()
     }
 
@@ -110,7 +138,10 @@ mod tests {
             let nodes = bundled["nodes"].as_array().unwrap();
             let domain = first_of_type(nodes, DOMAIN).expect("bundled domain");
             let step = first_of_type(nodes, STEP).expect("bundled step");
-            assert_eq!(contacts_wires(&bundled), [&wire(&domain["id"], &step["id"])]);
+            assert_eq!(
+                contacts_wires(&bundled),
+                [&wire(&domain["id"], &step["id"])]
+            );
         }
     }
 
@@ -121,10 +152,16 @@ mod tests {
         assert!(contacts_wires(&graph).is_empty());
         let before = json!({"projectVersion": "1.19.0", "timeline": {"layers": [{"genParams": {"params": null, "graph": graph}}]}});
         let after = migrate_project(&before);
-        assert_eq!(after["projectVersion"], manifold_core::project::CURRENT_PROJECT_VERSION);
+        assert_eq!(
+            after["projectVersion"],
+            manifold_core::project::CURRENT_PROJECT_VERSION
+        );
         let graph = &after["timeline"]["layers"][0]["genParams"]["graph"];
         assert_eq!(contacts_wires(graph), [&wire(&json!(0), &json!(6))]);
-        assert_eq!(graph["nodes"], before["timeline"]["layers"][0]["genParams"]["graph"]["nodes"]);
+        assert_eq!(
+            graph["nodes"],
+            before["timeline"]["layers"][0]["genParams"]["graph"]["nodes"]
+        );
         let notes = super::super::take_migration_notes();
         assert_eq!(notes.len(), 1, "{notes:?}");
         assert!(notes[0].starts_with("1 GPU FLIP graph(s) gained the domain→step contacts wire"));
@@ -155,6 +192,11 @@ mod tests {
         let after = migrate_project(&before);
         assert_eq!(after["timeline"], before["timeline"]);
         let notes = super::super::take_migration_notes();
-        assert!(notes.iter().any(|n| n.starts_with("Grouped: GPU FLIP domain or step sits inside a group; the contacts wire")), "{notes:?}");
+        assert!(
+            notes.iter().any(|n| n.starts_with(
+                "Grouped: GPU FLIP domain or step sits inside a group; the contacts wire"
+            )),
+            "{notes:?}"
+        );
     }
 }

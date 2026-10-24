@@ -73,7 +73,8 @@ impl Primitive for ClipTriggerCycleNode {
             },
         };
         let index = self.cycle.step(trigger_count, modulus);
-        ctx.outputs.set_scalar("out", ParamValue::Float(index as f32));
+        ctx.outputs
+            .set_scalar("out", ParamValue::Float(index as f32));
     }
 
     /// BUG-104: release the cycle's idempotence tracking so a fresh
@@ -109,6 +110,10 @@ mod tests {
             node.clear_state();
         }
 
-        assert_eq!(prim.cycle.step(8, 8), 0, "released cycle should re-arm to a fresh computation");
+        assert_eq!(
+            prim.cycle.step(8, 8),
+            0,
+            "released cycle should re-arm to a fresh computation"
+        );
     }
 }

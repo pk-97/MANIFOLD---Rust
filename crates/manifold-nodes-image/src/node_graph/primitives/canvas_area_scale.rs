@@ -119,8 +119,8 @@ impl Primitive for CanvasAreaScale {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use manifold_node_engine::validation::validate;
-use super::*;
 
     /// Default-params output is `1.0` for 1920×1080 against the
     /// same reference area. This is what a graph sees if the user
@@ -128,8 +128,11 @@ use super::*;
     /// not a div-by-zero or zero-brightness surprise.
     #[test]
     fn default_params_evaluate_to_unity() {
-        use manifold_node_engine::{graph::Graph, exec::execution_plan::compile, exec::execution::Executor, exec::effect_node::FrameTime};
         use manifold_core::{Beats, Seconds};
+        use manifold_node_engine::{
+            exec::effect_node::FrameTime, exec::execution::Executor, exec::execution_plan::compile,
+            graph::Graph,
+        };
 
         let mut g = Graph::new();
         let _ = g.add_node(Box::new(CanvasAreaScale::new()));

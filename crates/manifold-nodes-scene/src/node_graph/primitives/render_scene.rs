@@ -65,24 +65,24 @@
 //! `node.render_copies`' private-depth-buffer instancing cannot do inside a
 //! scene.
 
-mod rt_changes;
-mod volume_optics;
-mod live_draw_args;
-mod selection_mask;
-mod item_pick;
 mod construction;
 mod frame_setup;
-mod post_passes;
+mod item_pick;
+mod live_draw_args;
 mod pass2_draw;
-mod rt_trace;
-mod rt_frame;
+mod post_passes;
 mod prepasses;
+mod rt_changes;
+mod rt_frame;
+mod rt_trace;
+mod selection_mask;
+mod volume_optics;
 use prepasses::ShadowUniforms;
 mod instance_space;
 use instance_space::{IDENTITY_M4, instance_space_pair};
 mod matrix;
-pub(crate) use matrix::{mat4_inverse, model_matrix};
 use manifold_node_engine::mesh::pipeline::mat4_mul;
+pub(crate) use matrix::{mat4_inverse, model_matrix};
 mod pipelines;
 mod resources;
 #[cfg(feature = "gpu-proofs")]
@@ -100,13 +100,17 @@ pub mod blend_snapshot_proof {
     pub fn with_legacy_snapshots<R>(run: impl FnOnce() -> R) -> R {
         struct Restore(bool);
         impl Drop for Restore {
-            fn drop(&mut self) { LEGACY.set(self.0); }
+            fn drop(&mut self) {
+                LEGACY.set(self.0);
+            }
         }
         let _restore = Restore(LEGACY.replace(true));
         run()
     }
 
-    pub(super) fn legacy() -> bool { LEGACY.get() }
+    pub(super) fn legacy() -> bool {
+        LEGACY.get()
+    }
 }
 
 fn needs_layer_snapshot(is_transmissive: bool) -> bool {
@@ -133,33 +137,35 @@ mod blend_snapshot_tests {
         }
     }
 }
-use manifold_node_engine::runtime::frame_status::{FrameRenderFailure, FrameRenderStatus};
-use manifold_node_engine::scene::mesh_change::MeshRevision;
-use manifold_node_engine::content_revision::ContentVersion;
-use manifold_gpu::raytrace::RtGeometryChange;
 use ahash::AHashMap;
 use manifold_gpu::GpuBinding;
-use manifold_gpu::raytrace::ShadowRayTracer;
 use manifold_gpu::denoiser::denoiser_available;
+use manifold_gpu::raytrace::RtGeometryChange;
+use manifold_gpu::raytrace::ShadowRayTracer;
+use manifold_node_engine::content_revision::ContentVersion;
+use manifold_node_engine::runtime::frame_status::{FrameRenderFailure, FrameRenderStatus};
+use manifold_node_engine::scene::mesh_change::MeshRevision;
 
-use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
-use manifold_node_engine::scene::atmosphere::Atmosphere;
-use manifold_node_engine::scene::camera::Camera;
-use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
+use manifold_node_engine::exec::effect_node::{
+    EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
+};
 use manifold_node_engine::exec::temporal_reset::TemporalResetDetector;
-use manifold_node_engine::scene::material::{AlphaMode, MapSamplerDesc, Material, MaterialKind};
-use manifold_node_engine::scene::scene_object::SceneObject;
+use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use manifold_node_engine::primitive::PrimitiveDescription;
+use manifold_node_engine::scene::atmosphere::Atmosphere;
+use manifold_node_engine::scene::camera::Camera;
+use manifold_node_engine::scene::material::{AlphaMode, MapSamplerDesc, Material, MaterialKind};
+use manifold_node_engine::scene::scene_object::SceneObject;
 
 // Diagnostic handles only: the proof reads the actual indirect arguments after
 // commit/wait, before encoding another frame. No copy, extra encoder or heap
 // allocation is added to the measured water seam.
 #[cfg(feature = "fluid-perf-proofs")]
 pub mod water_perf {
-    use std::cell::RefCell;
     use manifold_gpu::GpuBuffer;
+    use std::cell::RefCell;
 
     const MAX_DRAWS: usize = 64;
     struct Capture {
@@ -189,10 +195,17 @@ pub mod water_perf {
 
     pub(super) fn record(index: usize, draw: &super::ObjectDraw<'_>) {
         PROBE.with_borrow_mut(|p| {
-            if !p.armed { return; }
-            assert!(p.len < MAX_DRAWS, "water probe exceeded 64 transmissive draws");
+            if !p.armed {
+                return;
+            }
+            assert!(
+                p.len < MAX_DRAWS,
+                "water probe exceeded 64 transmissive draws"
+            );
             p.draws[p.len] = Some(Capture {
-                draw: index, capacity: draw.vertex_count, args: draw.live_args.clone(),
+                draw: index,
+                capacity: draw.vertex_count,
+                args: draw.live_args.clone(),
                 instances: draw.instance_count,
             });
             p.len += 1;
@@ -215,7 +228,9 @@ pub mod water_perf {
     pub unsafe fn finish(mut visit: impl FnMut(DrawCount)) {
         unsafe fn word(buffer: &GpuBuffer, offset: u64) -> u32 {
             assert!(offset + 4 <= buffer.size && offset.is_multiple_of(4));
-            let ptr = buffer.mapped_ptr().expect("water probe requires shared arguments");
+            let ptr = buffer
+                .mapped_ptr()
+                .expect("water probe requires shared arguments");
             // SAFETY: caller waited for GPU completion; range/alignment checked.
             unsafe { ptr.cast::<u8>().add(offset as usize).cast::<u32>().read() }
         }
@@ -225,11 +240,17 @@ pub mod water_perf {
                 let c = slot.take().expect("captured draw");
                 let (vertices, instances) = match &c.args {
                     // SAFETY: finish's caller guarantees completion and no reuse.
-                    Some((buffer, offset)) => unsafe { (word(buffer, *offset), word(buffer, *offset + 4)) },
+                    Some((buffer, offset)) => unsafe {
+                        (word(buffer, *offset), word(buffer, *offset + 4))
+                    },
                     None => (c.capacity, c.instances),
                 };
-                visit(DrawCount { draw: c.draw, capacity_vertices: c.capacity,
-                    drawn_vertices: vertices, instances });
+                visit(DrawCount {
+                    draw: c.draw,
+                    capacity_vertices: c.capacity,
+                    drawn_vertices: vertices,
+                    instances,
+                });
             }
             p.len = 0;
         });
@@ -295,7 +316,13 @@ pub fn take_rt_captures() -> Vec<RtCaptureSlot> {
 
 fn push_rt_capture(label: &str, tex: &manifold_gpu::GpuTexture) {
     RT_CAPTURE_QUEUE.with_borrow_mut(|q| {
-        q.push(RtCaptureSlot { label: label.into(), tex: tex.clone(), frame: 0, w: tex.width, h: tex.height })
+        q.push(RtCaptureSlot {
+            label: label.into(),
+            tex: tex.clone(),
+            frame: 0,
+            w: tex.width,
+            h: tex.height,
+        })
     });
 }
 // ── end capture harness ─────────────────────────────────────────
@@ -865,28 +892,54 @@ struct MaterialMapUniform {
 impl From<manifold_node_engine::scene::material::MaterialMapInfo> for MaterialMapUniform {
     fn from(info: manifold_node_engine::scene::material::MaterialMapInfo) -> Self {
         use manifold_gpu::{GpuAddressMode as A, GpuFilterMode as F};
-        let address = |a| match a { A::ClampToEdge => 0, A::Repeat => 1, A::MirrorRepeat => 2, A::ClampToZero => 3 };
+        let address = |a| match a {
+            A::ClampToEdge => 0,
+            A::Repeat => 1,
+            A::MirrorRepeat => 2,
+            A::ClampToZero => 3,
+        };
         let linear = |f| u32::from(f == F::Linear);
         Self {
             matrix: info.uv_transform[..4].try_into().expect("fixed affine"),
-            offset_set: [info.uv_transform[4], info.uv_transform[5], info.tex_coord as f32, 0.0],
-            sampling: [address(info.sampler.wrap_u), address(info.sampler.wrap_v),
+            offset_set: [
+                info.uv_transform[4],
+                info.uv_transform[5],
+                info.tex_coord as f32,
+                0.0,
+            ],
+            sampling: [
+                address(info.sampler.wrap_u),
+                address(info.sampler.wrap_v),
                 linear(info.sampler.mag_filter) | (linear(info.sampler.min_filter) << 1),
-                info.sampler.mip_filter.map_or(0, |f| 1 + linear(f))],
+                info.sampler.mip_filter.map_or(0, |f| 1 + linear(f)),
+            ],
         }
     }
 }
 
 fn material_map_uniforms(material: &Material) -> [MaterialMapUniform; 19] {
-    let transforms = [material.base_color_uv_transform, material.normal_uv_transform,
-        material.mr_uv_transform, material.occlusion_uv_transform, material.emissive_uv_transform];
-    let samplers = [material.base_color_sampler, material.normal_sampler,
-        material.mr_sampler, material.occlusion_sampler, material.emissive_sampler];
+    let transforms = [
+        material.base_color_uv_transform,
+        material.normal_uv_transform,
+        material.mr_uv_transform,
+        material.occlusion_uv_transform,
+        material.emissive_uv_transform,
+    ];
+    let samplers = [
+        material.base_color_sampler,
+        material.normal_sampler,
+        material.mr_sampler,
+        material.occlusion_sampler,
+        material.emissive_sampler,
+    ];
     std::array::from_fn(|i| {
         if i < 5 {
             manifold_node_engine::scene::material::MaterialMapInfo {
-                uv_transform: transforms[i], tex_coord: material.core_tex_coords[i], sampler: samplers[i],
-            }.into()
+                uv_transform: transforms[i],
+                tex_coord: material.core_tex_coords[i],
+                sampler: samplers[i],
+            }
+            .into()
         } else {
             material.extension_maps[i - 5].into()
         }
@@ -1642,10 +1695,7 @@ fn compute_rt_lighting_key(
 /// designated svt slot. Does NOT hash color, ambient_tint, or envmap
 /// generation: a strobe or env-brightness scrub leaves this key unchanged
 /// (visibility and transmission tint are geometry terms).
-fn compute_rt_lighting_geo_key(
-    rt_casters: &[manifold_gpu::ShadowCaster],
-    svt_slot: u32,
-) -> u64 {
+fn compute_rt_lighting_geo_key(rt_casters: &[manifold_gpu::ShadowCaster], svt_slot: u32) -> u64 {
     let mut k = 0x8a5f_3c1e_2b94_0d76u64;
     let mut mix = |bits: u32| {
         k ^= u64::from(bits);
@@ -1700,11 +1750,17 @@ fn prepare_rt_table<T>(
     needed: usize,
     shared: bool,
 ) -> Result<Option<manifold_gpu::GpuBuffer>, FrameRenderFailure> {
-    if capacity >= needed { return Ok(None); }
-    let bytes = needed.checked_mul(std::mem::size_of::<T>())
+    if capacity >= needed {
+        return Ok(None);
+    }
+    let bytes = needed
+        .checked_mul(std::mem::size_of::<T>())
         .ok_or(FrameRenderFailure::RtAllocation)? as u64;
-    let result = if shared { device.try_create_buffer_shared(bytes) }
-        else { device.try_create_buffer(bytes) };
+    let result = if shared {
+        device.try_create_buffer_shared(bytes)
+    } else {
+        device.try_create_buffer(bytes)
+    };
     result.map(Some).map_err(|error| {
         log::error!("RT table preparation failed: {error}");
         FrameRenderFailure::RtAllocation
@@ -1739,7 +1795,10 @@ const _: () = assert!(std::mem::size_of::<ShaftCompositeUniforms>() == 16);
 
 type RtMeshSnapshot = Option<(MeshRevision, Option<ContentVersion>)>;
 type RtFrameTables<'a> = (
-    manifold_gpu::raytrace::RtMaterialTextures<'a>, u64, u64, bool,
+    manifold_gpu::raytrace::RtMaterialTextures<'a>,
+    u64,
+    u64,
+    bool,
 );
 
 /// Recycle only the allocation, never references from a previous frame.
@@ -1768,8 +1827,12 @@ fn rt_frame_failure(error: manifold_gpu::raytrace::RtAccelError) -> FrameRenderF
 /// What the card says while ray tracing sits out a frame.
 fn rt_paused_reason(failure: FrameRenderFailure) -> &'static str {
     match failure {
-        FrameRenderFailure::RtAllocation | FrameRenderFailure::SurfaceAllocation => "Ray tracing paused: not enough GPU memory for this scene. Drawing without it.",
-        FrameRenderFailure::InvalidGeometry => "Ray tracing paused: an object's shape is invalid. Drawing without it.",
+        FrameRenderFailure::RtAllocation | FrameRenderFailure::SurfaceAllocation => {
+            "Ray tracing paused: not enough GPU memory for this scene. Drawing without it."
+        }
+        FrameRenderFailure::InvalidGeometry => {
+            "Ray tracing paused: an object's shape is invalid. Drawing without it."
+        }
         _ => "Ray tracing paused for this frame. Drawing without it.",
     }
 }
@@ -1913,8 +1976,14 @@ impl ObjectDraw<'_> {
 
     /// `draw`, switched to this object's GPU-written arguments when it has
     /// them.
-    fn live<'a>(&'a self, draw: manifold_gpu::DepthMsaaDraw<'a>) -> manifold_gpu::DepthMsaaDraw<'a> {
-        let draw = match self.indices { Some(indices) => draw.indexed(indices), None => draw };
+    fn live<'a>(
+        &'a self,
+        draw: manifold_gpu::DepthMsaaDraw<'a>,
+    ) -> manifold_gpu::DepthMsaaDraw<'a> {
+        let draw = match self.indices {
+            Some(indices) => draw.indexed(indices),
+            None => draw,
+        };
         match &self.live_args {
             Some((args, offset)) => draw.indirect(args, *offset),
             None => draw,
@@ -1925,10 +1994,24 @@ impl ObjectDraw<'_> {
     /// else the whole buffer.
     fn draw_count(&self) -> manifold_gpu::DrawCount<'_> {
         match (self.indices, &self.live_args) {
-            (Some(indices), Some((args, offset))) => manifold_gpu::DrawCount::IndexedIndirect { indices, args, offset: *offset },
-            (Some(indices), None) => manifold_gpu::DrawCount::IndexedDirect { indices, index_count: self.vertex_count, instances: self.instance_count },
-            (None, Some((args, offset))) => manifold_gpu::DrawCount::Indirect { args, offset: *offset },
-            (None, None) => manifold_gpu::DrawCount::Direct { vertices: self.vertex_count, instances: self.instance_count },
+            (Some(indices), Some((args, offset))) => manifold_gpu::DrawCount::IndexedIndirect {
+                indices,
+                args,
+                offset: *offset,
+            },
+            (Some(indices), None) => manifold_gpu::DrawCount::IndexedDirect {
+                indices,
+                index_count: self.vertex_count,
+                instances: self.instance_count,
+            },
+            (None, Some((args, offset))) => manifold_gpu::DrawCount::Indirect {
+                args,
+                offset: *offset,
+            },
+            (None, None) => manifold_gpu::DrawCount::Direct {
+                vertices: self.vertex_count,
+                instances: self.instance_count,
+            },
         }
     }
 }
@@ -1961,7 +2044,10 @@ fn effective_instance_count(buffer_capacity: Option<u32>, requested: Option<f32>
 /// Gating here (not at the RT trace) keeps the gi_materials table and every
 /// RT uniform on the Rendered path, and makes the wireframe override inert
 /// the moment RT owns the scene, exactly the D4 contract.
-fn effective_render_mode(render_mode: &manifold_node_engine::scene::render_mode::RenderMode, rt_enabled: bool) -> manifold_node_engine::scene::render_mode::RenderMode {
+fn effective_render_mode(
+    render_mode: &manifold_node_engine::scene::render_mode::RenderMode,
+    rt_enabled: bool,
+) -> manifold_node_engine::scene::render_mode::RenderMode {
     if rt_enabled {
         manifold_node_engine::scene::render_mode::RenderMode::default()
     } else {
@@ -1974,7 +2060,9 @@ fn effective_render_mode(render_mode: &manifold_node_engine::scene::render_mode:
 /// `pipeline_for`) — no shader change, no new pipeline, and the
 /// substitution happens here at material-gather time, upstream of
 /// `pipeline_for`, so pipeline caching is untouched.
-fn wireframe_material(render_mode: &manifold_node_engine::scene::render_mode::RenderMode) -> Material {
+fn wireframe_material(
+    render_mode: &manifold_node_engine::scene::render_mode::RenderMode,
+) -> Material {
     let b = render_mode.line_brightness;
     Material::unlit(
         [
@@ -1995,21 +2083,16 @@ fn wireframe_material(render_mode: &manifold_node_engine::scene::render_mode::Re
 /// material-gather time, upstream of `pipeline_for`, so pipeline caching is
 /// untouched.
 fn clay_material(render_mode: &manifold_node_engine::scene::render_mode::RenderMode) -> Material {
-    Material::pbr(
-        render_mode.clay_color,
-        0.0,
-        0.0,
-        0.7,
-        [0.0; 3],
-        0.0,
-    )
+    Material::pbr(render_mode.clay_color, 0.0, 0.0, 0.7, [0.0; 3], 0.0)
 }
 
 /// Solid in a scene with no environment: PBR needs an `envmap`, and without
 /// one the whole picture fell back to magenta. A sixteen-band cel material
 /// carries the same clay colour, lit by the scene's own lights, and needs
 /// nothing wired.
-fn clay_material_without_envmap(render_mode: &manifold_node_engine::scene::render_mode::RenderMode) -> Material {
+fn clay_material_without_envmap(
+    render_mode: &manifold_node_engine::scene::render_mode::RenderMode,
+) -> Material {
     Material::cel(render_mode.clay_color, 16, 0.15, 1.0, [0.0; 3], 0.0)
 }
 
@@ -2029,9 +2112,7 @@ fn color_pass_fill_mode(
 /// D8: the color pass draws `Point` topology under Points mode, triangles
 /// otherwise. Mirrored shape to `color_pass_fill_mode` — one helper per
 /// per-draw encoder state the mode branch sets.
-fn color_pass_points(
-    render_mode: &manifold_node_engine::scene::render_mode::RenderMode,
-) -> bool {
+fn color_pass_points(render_mode: &manifold_node_engine::scene::render_mode::RenderMode) -> bool {
     render_mode.mode == manifold_node_engine::scene::render_mode::RENDER_MODE_POINTS
 }
 
@@ -2121,10 +2202,6 @@ struct FrameRtState {
 }
 
 impl RenderScene {
-
-
-
-
     /// AI-composition surface metadata.
     pub fn description() -> PrimitiveDescription {
         PrimitiveDescription {
@@ -2208,15 +2285,19 @@ fn build_uniforms(
         base_color_uv_t: uv_t(&material.base_color_uv_transform),
         normal_uv_m: uv_m(&material.normal_uv_transform),
         normal_uv_t: [
-            material.normal_uv_transform[4], material.normal_uv_transform[5],
-            material.normal_scale, material.clearcoat_normal_scale,
+            material.normal_uv_transform[4],
+            material.normal_uv_transform[5],
+            material.normal_scale,
+            material.clearcoat_normal_scale,
         ],
         mr_uv_m: uv_m(&material.mr_uv_transform),
         mr_uv_t: uv_t(&material.mr_uv_transform),
         occlusion_uv_m: uv_m(&material.occlusion_uv_transform),
         occlusion_uv_t: [
-            material.occlusion_uv_transform[4], material.occlusion_uv_transform[5],
-            material.occlusion_strength, 0.0,
+            material.occlusion_uv_transform[4],
+            material.occlusion_uv_transform[5],
+            material.occlusion_strength,
+            0.0,
         ],
         emissive_uv_m: uv_m(&material.emissive_uv_transform),
         emissive_uv_t: uv_t(&material.emissive_uv_transform),
@@ -2312,8 +2393,22 @@ fn build_uniforms(
         // uniform field changes no pixel, so Rendered parity holds whatever
         // value rides here.
         render_mode: [point_size, 0.0, 0.0, 0.0],
-        volume_optics: [if material.volume_geometry && material.transmission_factor > 0.0 { 1.0 } else { 0.0 }, material.volume_scattering_density, material.volume_particle_density, 0.0],
-        volume_scattering_color: [material.volume_scattering_color[0], material.volume_scattering_color[1], material.volume_scattering_color[2], 0.0],
+        volume_optics: [
+            if material.volume_geometry && material.transmission_factor > 0.0 {
+                1.0
+            } else {
+                0.0
+            },
+            material.volume_scattering_density,
+            material.volume_particle_density,
+            0.0,
+        ],
+        volume_scattering_color: [
+            material.volume_scattering_color[0],
+            material.volume_scattering_color[1],
+            material.volume_scattering_color[2],
+            0.0,
+        ],
         // Object space; frame setup writes the Group-space pair.
         instance_inner: IDENTITY_M4,
         prev_instance_inner: IDENTITY_M4,
@@ -2350,7 +2445,9 @@ impl EffectNode for RenderScene {
     }
 
     /// Return a fresh pass with its own renderer and render history, never this node's own state.
-    fn viewport_pass(&self) -> Option<Box<dyn manifold_node_engine::scene::scene_viewport::ViewportPass>> {
+    fn viewport_pass(
+        &self,
+    ) -> Option<Box<dyn manifold_node_engine::scene::scene_viewport::ViewportPass>> {
         Some(Box::new(scene_viewport::SceneViewportPass::new()))
     }
 
@@ -2362,13 +2459,27 @@ impl EffectNode for RenderScene {
         &self.rendered_lights
     }
 
-    fn set_selection_mask(&mut self, slots: &[u32]) { self.selection.set(slots); }
-    fn selection_mask(&self) -> Option<&manifold_gpu::GpuTexture> { self.selection.texture() }
-    fn request_pick(&mut self, pick: manifold_node_engine::scene::pick::PickRequest) { self.pick.request(pick); }
-    fn take_pick(&mut self) -> Option<manifold_node_engine::scene::pick::PickHit> { self.pick.take() }
-    fn set_gizmo_depth(&mut self, wanted: bool) { self.gizmo_depth_wanted = wanted; }
+    fn set_selection_mask(&mut self, slots: &[u32]) {
+        self.selection.set(slots);
+    }
+    fn selection_mask(&self) -> Option<&manifold_gpu::GpuTexture> {
+        self.selection.texture()
+    }
+    fn request_pick(&mut self, pick: manifold_node_engine::scene::pick::PickRequest) {
+        self.pick.request(pick);
+    }
+    fn take_pick(&mut self) -> Option<manifold_node_engine::scene::pick::PickHit> {
+        self.pick.take()
+    }
+    fn set_gizmo_depth(&mut self, wanted: bool) {
+        self.gizmo_depth_wanted = wanted;
+    }
     fn gizmo_depth(&self) -> Option<&manifold_gpu::GpuTexture> {
-        if self.gizmo_depth_ready { self.shaft_depth_internal.as_ref() } else { None }
+        if self.gizmo_depth_ready {
+            self.shaft_depth_internal.as_ref()
+        } else {
+            None
+        }
     }
 
     #[cfg(feature = "gpu-proofs")]
@@ -2380,9 +2491,16 @@ impl EffectNode for RenderScene {
     ) -> Option<manifold_gpu::GpuBuffer> {
         let scene = self.rt_probe.as_ref()?;
         let textures: manifold_gpu::raytrace::RtMaterialTextures = scene.textures.iter().collect();
-        Some(self.rt_tracer.as_ref()?.debug_ray_query(device, encoder,
-            self.rt_accel.as_ref()?, self.rt_normal_sources.as_ref()?, rays,
-            Some(&textures), scene.objects.len() as u32, 0))
+        Some(self.rt_tracer.as_ref()?.debug_ray_query(
+            device,
+            encoder,
+            self.rt_accel.as_ref()?,
+            self.rt_normal_sources.as_ref()?,
+            rays,
+            Some(&textures),
+            scene.objects.len() as u32,
+            0,
+        ))
     }
 
     fn warmup_pending(&self) -> bool {
@@ -2417,7 +2535,8 @@ impl EffectNode for RenderScene {
         port: &str,
         params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
-        let temporal_upscale = matches!(params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
+        let temporal_upscale =
+            matches!(params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
         let denoise_feed = matches!(params.get("rt_denoise_feed"), Some(ParamValue::Bool(true)));
         let is_denoise_feed_port = port == "normals"
             || port == "roughness"
@@ -2465,8 +2584,7 @@ impl EffectNode for RenderScene {
         let rt_enabled = matches!(params.get("rt_enabled"), Some(ParamValue::Bool(true)));
         let temporal_upscale =
             matches!(params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
-        let denoise_feed =
-            matches!(params.get("rt_denoise_feed"), Some(ParamValue::Bool(true)));
+        let denoise_feed = matches!(params.get("rt_denoise_feed"), Some(ParamValue::Bool(true)));
         if denoise_feed {
             &[
                 "depth",
@@ -2556,7 +2674,11 @@ impl RenderScene {
         renderer
     }
 
-    pub(crate) fn render_single_mesh(&mut self, ctx: &mut EffectNodeContext<'_, '_>, instance_count: Option<f32>) {
+    pub(crate) fn render_single_mesh(
+        &mut self,
+        ctx: &mut EffectNodeContext<'_, '_>,
+        instance_count: Option<f32>,
+    ) {
         let inputs = ctx.inputs;
         let object = SceneObject {
             visible: true,
@@ -2596,7 +2718,11 @@ impl RenderScene {
         };
         self.render_objects(ctx, Some(object));
     }
-    fn render_objects<'ctx, 'gpu>(&mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>, single_object: Option<SceneObject>) {
+    fn render_objects<'ctx, 'gpu>(
+        &mut self,
+        ctx: &mut EffectNodeContext<'ctx, 'gpu>,
+        single_object: Option<SceneObject>,
+    ) {
         let mut objects = recycle_rt_objects(std::mem::take(&mut self.rt_objects_scratch));
         let mut materials = std::mem::take(&mut self.rt_materials_scratch);
         self.render_objects_frame(ctx, single_object, &mut objects, &mut materials);
@@ -2627,7 +2753,9 @@ impl RenderScene {
     }
 
     fn render_objects_frame<'ctx, 'gpu>(
-        &mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>, single_object: Option<SceneObject>,
+        &mut self,
+        ctx: &mut EffectNodeContext<'ctx, 'gpu>,
+        single_object: Option<SceneObject>,
         rt_objects: &mut Vec<manifold_gpu::raytrace::RtObjectGeometry<'ctx>>,
         gi_materials_data: &mut Vec<manifold_gpu::raytrace::GiMaterial>,
     ) {
@@ -2652,19 +2780,55 @@ impl RenderScene {
             return;
         };
         let FramePrelude {
-            objects: _, cam: _, envmap_wired: _, envmap_pending: _, env_rotation: _, atmosphere: _,
-            render_mode: _, light_data: _, light_count: _, casters: _,
+            objects: _,
+            cam: _,
+            envmap_wired: _,
+            envmap_pending: _,
+            env_rotation: _,
+            atmosphere: _,
+            render_mode: _,
+            light_data: _,
+            light_count: _,
+            casters: _,
             shadow_casters: _,
-            native_width: _, native_height: _, width: _, height: _, aspect: _, temporal_upscale: _,
-            view_proj: _, prev_view_proj: _, jitter_px: _, jitter_ndc: _, prev_jitter_ndc: _,
-            cam_motion: _, rt_enabled, rt_reflections: _, rt_shadows_enabled: _,
-            rt_ao_enabled: _, rt_gi_enabled: _, rt_firefly_clamp_enabled: _, rtq: _,
-            denoise_strength: _, denoise_iterations: _, rt_trace_w: _, rt_trace_h: _,
-            toggle_flipped: _, reset_decision: _, upscale_just_resumed: _, velocity_wired: _,
-            ao_mask_wired: _, denoise_feed: _, denoise_aux_ready: _, spec_hit_dist_out: _,
-            normals_resolve_target: _, roughness_resolve_target: _,
-            diffuse_albedo_resolve_target: _, specular_albedo_resolve_target: _,
-            reactive_resolve_target: _, wants_shafts_now: _, depth_wired: _,
+            native_width: _,
+            native_height: _,
+            width: _,
+            height: _,
+            aspect: _,
+            temporal_upscale: _,
+            view_proj: _,
+            prev_view_proj: _,
+            jitter_px: _,
+            jitter_ndc: _,
+            prev_jitter_ndc: _,
+            cam_motion: _,
+            rt_enabled,
+            rt_reflections: _,
+            rt_shadows_enabled: _,
+            rt_ao_enabled: _,
+            rt_gi_enabled: _,
+            rt_firefly_clamp_enabled: _,
+            rtq: _,
+            denoise_strength: _,
+            denoise_iterations: _,
+            rt_trace_w: _,
+            rt_trace_h: _,
+            toggle_flipped: _,
+            reset_decision: _,
+            upscale_just_resumed: _,
+            velocity_wired: _,
+            ao_mask_wired: _,
+            denoise_feed: _,
+            denoise_aux_ready: _,
+            spec_hit_dist_out: _,
+            normals_resolve_target: _,
+            roughness_resolve_target: _,
+            diffuse_albedo_resolve_target: _,
+            specular_albedo_resolve_target: _,
+            reactive_resolve_target: _,
+            wants_shafts_now: _,
+            depth_wired: _,
         } = pre;
         let FrameRtState {
             mut rt_ready,
@@ -2694,27 +2858,45 @@ impl RenderScene {
         for draw in &mut draws {
             let requested = draw.kind == MaterialKind::Pbr && draw.subsurface.weight > 0.0;
             if requested && draw.points {
-                Self::fail_frame(ctx, Some(draw.slot), "Subsurface scattering requires a triangle surface; point primitives have no volume boundary.");
+                Self::fail_frame(
+                    ctx,
+                    Some(draw.slot),
+                    "Subsurface scattering requires a triangle surface; point primitives have no volume boundary.",
+                );
                 return;
             }
             if requested && draw.routes_to_transparent() {
-                Self::fail_frame(ctx, Some(draw.slot), "Subsurface scattering requires an opaque PBR surface; use its scattering colour and radius for translucency instead of alpha Blend or glass transmission.");
+                Self::fail_frame(
+                    ctx,
+                    Some(draw.slot),
+                    "Subsurface scattering requires an opaque PBR surface; use its scattering colour and radius for translucency instead of alpha Blend or glass transmission.",
+                );
                 return;
             }
             if !draw.routes_to_transparent() && draw.instance_count > 0 {
                 if requested {
-                    draw.subsurface_binding = [draw.subsurface.weight, (opaque_index + 1) as f32, 0.0, 0.0];
+                    draw.subsurface_binding =
+                        [draw.subsurface.weight, (opaque_index + 1) as f32, 0.0, 0.0];
                     has_subsurface = true;
                 }
                 opaque_index += 1;
             }
         }
-        if !has_subsurface { self.subsurface_pass.reset(); }
-        let prepare_rt = rt_enabled || has_subsurface || ctx.gpu.as_ref().is_some_and(|gpu| gpu.preparing);
+        if !has_subsurface {
+            self.subsurface_pass.reset();
+        }
+        let prepare_rt =
+            rt_enabled || has_subsurface || ctx.gpu.as_ref().is_some_and(|gpu| gpu.preparing);
         Self::collect_rt_objects(&draws, prepare_rt, rt_objects);
         let rt_tables = if prepare_rt && !rt_objects.is_empty() {
             self.ensure_rt_tracer(ctx.gpu_encoder().device);
-            match self.rt_accel_maintenance(ctx, &mut rt_ready, rt_objects, &draws, gi_materials_data) {
+            match self.rt_accel_maintenance(
+                ctx,
+                &mut rt_ready,
+                rt_objects,
+                &draws,
+                gi_materials_data,
+            ) {
                 Ok((textures, topo, content, changed)) => {
                     pre.reset_decision |= changed;
                     Some((textures, topo, content))
@@ -2728,7 +2910,9 @@ impl RenderScene {
                     None
                 }
             }
-        } else { None };
+        } else {
+            None
+        };
         let (rt_just_resumed, will_rt_accumulate_this_frame) =
             self.author_rt_flags(ctx, &pre, &rt_ready, &mut draws, has_transmission);
 
@@ -2745,7 +2929,10 @@ impl RenderScene {
             rt_ready,
         );
         if has_transmission && let Some(error) = &self.transmissive_depth_error {
-            ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::SurfaceAllocation));
+            ctx.gpu_encoder()
+                .merge_frame_status(FrameRenderStatus::Failed(
+                    FrameRenderFailure::SurfaceAllocation,
+                ));
             Self::fail_frame(ctx, None, error.as_str());
             return;
         }
@@ -2783,23 +2970,41 @@ impl RenderScene {
 
         if has_subsurface {
             let Some((textures, _, _)) = rt_tables.as_ref() else {
-                Self::fail_frame(ctx, None, "Subsurface scattering has no current-frame geometry acceleration data.");
+                Self::fail_frame(
+                    ctx,
+                    None,
+                    "Subsurface scattering has no current-frame geometry acceleration data.",
+                );
                 return;
             };
-            if !self.subsurface_trace(ctx, &pre, &opaque_draws, rt_objects, gi_materials_data, textures) {
+            if !self.subsurface_trace(
+                ctx,
+                &pre,
+                &opaque_draws,
+                rt_objects,
+                gi_materials_data,
+                textures,
+            ) {
                 return;
             }
         }
         if has_transmission {
             let gpu = ctx.gpu_encoder();
-            if let Err(error) = self.volume_optics.encode(gpu.device, gpu.native_enc, &draws,
-                self.opaque_depth_snapshot.as_ref().expect("transmission depth ensured"),
-                self.identity_instance_stub.as_ref().expect("identity ensured")) {
+            if let Err(error) = self.volume_optics.encode(
+                gpu.device,
+                gpu.native_enc,
+                &draws,
+                self.opaque_depth_snapshot
+                    .as_ref()
+                    .expect("transmission depth ensured"),
+                self.identity_instance_stub
+                    .as_ref()
+                    .expect("identity ensured"),
+            ) {
                 Self::fail_frame(ctx, None, error);
                 return;
             }
         }
-
 
         // ---- RAYTRACING_DESIGN.md RT-D3 (P1-part-2): half-res hard-
         // shadow-ray dispatch + depth-aware upsample, reading the opaque-

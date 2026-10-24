@@ -213,8 +213,14 @@ impl KnownItem for [f32; 2] {
     // preserves byte parity with the existing `[f32; 2]` layout per
     // the section 6.8 / section 13(3) resolution.
     const SPECS: &'static [ChannelSpec] = &[
-        ChannelSpec { name: ChannelName::from_str("x"), ty: ChannelElementType::F32 },
-        ChannelSpec { name: ChannelName::from_str("y"), ty: ChannelElementType::F32 },
+        ChannelSpec {
+            name: ChannelName::from_str("x"),
+            ty: ChannelElementType::F32,
+        },
+        ChannelSpec {
+            name: ChannelName::from_str("y"),
+            ty: ChannelElementType::F32,
+        },
     ];
 }
 
@@ -227,9 +233,18 @@ impl KnownItem for [f32; 3] {
     // `struct { x: f32, y: f32, z: f32 }` (stride 12), read/written via
     // `.x/.y/.z` — NOT `vec3<f32>` (stride 16).
     const SPECS: &'static [ChannelSpec] = &[
-        ChannelSpec { name: ChannelName::from_str("x"), ty: ChannelElementType::F32 },
-        ChannelSpec { name: ChannelName::from_str("y"), ty: ChannelElementType::F32 },
-        ChannelSpec { name: ChannelName::from_str("z"), ty: ChannelElementType::F32 },
+        ChannelSpec {
+            name: ChannelName::from_str("x"),
+            ty: ChannelElementType::F32,
+        },
+        ChannelSpec {
+            name: ChannelName::from_str("y"),
+            ty: ChannelElementType::F32,
+        },
+        ChannelSpec {
+            name: ChannelName::from_str("z"),
+            ty: ChannelElementType::F32,
+        },
     ];
 }
 
@@ -311,10 +326,7 @@ impl ArrayType {
     /// the specs via std430 layout rules. The canonical constructor
     /// for ad-hoc signatures declared via inline `Channels[name: Type, …]`
     /// macro syntax (per `docs/CHANNEL_TYPE_SYSTEM.md` section 12.1).
-    pub const fn of_channels(
-        specs: &'static [ChannelSpec],
-        match_mode: MatchMode,
-    ) -> Self {
+    pub const fn of_channels(specs: &'static [ChannelSpec], match_mode: MatchMode) -> Self {
         let (item_size, item_align) = std430_stride_and_align(specs);
         Self {
             item_size,
@@ -492,7 +504,10 @@ pub const fn std430_stride_and_align(specs: &[ChannelSpec]) -> (u32, u32) {
 /// The std430 byte offset and type of the channel named `name`, or `None`
 /// when the signature has no such channel. Allocates nothing, so a node can
 /// call it every frame on its input's layout.
-pub fn std430_channel(specs: &[ChannelSpec], name: ChannelName) -> Option<(u32, ChannelElementType)> {
+pub fn std430_channel(
+    specs: &[ChannelSpec],
+    name: ChannelName,
+) -> Option<(u32, ChannelElementType)> {
     let mut offset: u32 = 0;
     for spec in specs {
         offset = round_up_align(offset, spec.ty.alignment());
@@ -577,7 +592,11 @@ mod channel_layout_tests {
         assert_eq!(ChannelElementType::Vec2F.size(), 8);
         assert_eq!(ChannelElementType::Vec2F.alignment(), 8);
         assert_eq!(ChannelElementType::Vec3F.size(), 12);
-        assert_eq!(ChannelElementType::Vec3F.alignment(), 16, "std430 vec3 trap");
+        assert_eq!(
+            ChannelElementType::Vec3F.alignment(),
+            16,
+            "std430 vec3 trap"
+        );
         assert_eq!(ChannelElementType::Vec4F.size(), 16);
         assert_eq!(ChannelElementType::Vec4F.alignment(), 16);
     }
@@ -587,8 +606,14 @@ mod channel_layout_tests {
         // CurvePoint equivalent: [x: F32, y: F32]. 4-byte aligned per
         // the section 6.3 / section 13(3) resolution (paired scalars, not Vec2F).
         const SPECS: &[ChannelSpec] = &[
-            ChannelSpec { name: X, ty: ChannelElementType::F32 },
-            ChannelSpec { name: Y, ty: ChannelElementType::F32 },
+            ChannelSpec {
+                name: X,
+                ty: ChannelElementType::F32,
+            },
+            ChannelSpec {
+                name: Y,
+                ty: ChannelElementType::F32,
+            },
         ];
         let (offsets, stride, align) = std430_layout(SPECS);
         assert_eq!(offsets, vec![0, 4]);
@@ -601,8 +626,14 @@ mod channel_layout_tests {
         const A: ChannelName = ChannelName::from_str("a_index");
         const B: ChannelName = ChannelName::from_str("b_index");
         const SPECS: &[ChannelSpec] = &[
-            ChannelSpec { name: A, ty: ChannelElementType::U32 },
-            ChannelSpec { name: B, ty: ChannelElementType::U32 },
+            ChannelSpec {
+                name: A,
+                ty: ChannelElementType::U32,
+            },
+            ChannelSpec {
+                name: B,
+                ty: ChannelElementType::U32,
+            },
         ];
         let (offsets, stride, align) = std430_layout(SPECS);
         assert_eq!(offsets, vec![0, 4]);
@@ -616,9 +647,18 @@ mod channel_layout_tests {
         // Should match the existing struct's 48-byte size (16 + 16 + 16 with
         // tail-pad to 16-align).
         const SPECS: &[ChannelSpec] = &[
-            ChannelSpec { name: POSITION, ty: ChannelElementType::Vec3F },
-            ChannelSpec { name: NORMAL, ty: ChannelElementType::Vec3F },
-            ChannelSpec { name: UV, ty: ChannelElementType::Vec2F },
+            ChannelSpec {
+                name: POSITION,
+                ty: ChannelElementType::Vec3F,
+            },
+            ChannelSpec {
+                name: NORMAL,
+                ty: ChannelElementType::Vec3F,
+            },
+            ChannelSpec {
+                name: UV,
+                ty: ChannelElementType::Vec2F,
+            },
         ];
         let (offsets, stride, align) = std430_layout(SPECS);
         assert_eq!(
@@ -636,11 +676,26 @@ mod channel_layout_tests {
         // Must produce 64-byte sample stride matching the existing
         // `#[repr(C)] struct Particle`.
         const SPECS: &[ChannelSpec] = &[
-            ChannelSpec { name: POSITION, ty: ChannelElementType::Vec3F },
-            ChannelSpec { name: VELOCITY, ty: ChannelElementType::Vec3F },
-            ChannelSpec { name: LIFE, ty: ChannelElementType::F32 },
-            ChannelSpec { name: AGE, ty: ChannelElementType::F32 },
-            ChannelSpec { name: COLOR, ty: ChannelElementType::Vec4F },
+            ChannelSpec {
+                name: POSITION,
+                ty: ChannelElementType::Vec3F,
+            },
+            ChannelSpec {
+                name: VELOCITY,
+                ty: ChannelElementType::Vec3F,
+            },
+            ChannelSpec {
+                name: LIFE,
+                ty: ChannelElementType::F32,
+            },
+            ChannelSpec {
+                name: AGE,
+                ty: ChannelElementType::F32,
+            },
+            ChannelSpec {
+                name: COLOR,
+                ty: ChannelElementType::Vec4F,
+            },
         ];
         let (offsets, stride, align) = std430_layout(SPECS);
         assert_eq!(
@@ -655,8 +710,14 @@ mod channel_layout_tests {
     #[test]
     fn std430_stride_matches_stride_and_align() {
         const SPECS: &[ChannelSpec] = &[
-            ChannelSpec { name: POSITION, ty: ChannelElementType::Vec3F },
-            ChannelSpec { name: COLOR, ty: ChannelElementType::Vec4F },
+            ChannelSpec {
+                name: POSITION,
+                ty: ChannelElementType::Vec3F,
+            },
+            ChannelSpec {
+                name: COLOR,
+                ty: ChannelElementType::Vec4F,
+            },
         ];
         let (_, full_stride, full_align) = std430_layout(SPECS);
         let (cs_stride, cs_align) = std430_stride_and_align(SPECS);
@@ -728,9 +789,18 @@ mod channel_layout_tests {
     #[test]
     fn array_type_of_channels_derives_size_and_align() {
         const SPECS: &[ChannelSpec] = &[
-            ChannelSpec { name: X, ty: ChannelElementType::Vec3F },
-            ChannelSpec { name: Y, ty: ChannelElementType::F32 },
-            ChannelSpec { name: Z, ty: ChannelElementType::F32 },
+            ChannelSpec {
+                name: X,
+                ty: ChannelElementType::Vec3F,
+            },
+            ChannelSpec {
+                name: Y,
+                ty: ChannelElementType::F32,
+            },
+            ChannelSpec {
+                name: Z,
+                ty: ChannelElementType::F32,
+            },
         ];
         let array_type = ArrayType::of_channels(SPECS, MatchMode::Exact);
         let (_, expected_stride, expected_align) = std430_layout(SPECS);

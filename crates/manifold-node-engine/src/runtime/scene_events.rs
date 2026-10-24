@@ -2,10 +2,11 @@
 
 use manifold_core::{Beats, NodeId, PlayedTime, id::EffectId};
 
-use manifold_core::{fluid_domain::FluidDomainSnapshot, scene_impulse::{ImpulseFire, SceneImpulseDiagnostics}};
 use super::{ModifierPreviewContext, PresetRuntime};
-use crate::{
-    exec::effect_node::FrameTime,
+use crate::exec::effect_node::FrameTime;
+use manifold_core::{
+    fluid_domain::FluidDomainSnapshot,
+    scene_impulse::{ImpulseFire, SceneImpulseDiagnostics},
 };
 
 impl PresetRuntime {
@@ -31,11 +32,19 @@ impl PresetRuntime {
     /// node that rendered it, from the first node in authored order that
     /// reports one; that node's light positions are appended to `lights`.
     /// Read-only, for editor overlays and the preview's navigation view.
-    pub fn write_rendered_view(&self, lights: &mut Vec<[f32; 3]>) -> Option<(NodeId, crate::scene::camera::Camera)> {
-        let node = self.extension_slots().first()?.node_map.iter().find_map(|(id, instance)| {
-            let node = &self.graph.get_node(*instance)?.node;
-            node.rendered_camera().map(|camera| (id, node, camera))
-        });
+    pub fn write_rendered_view(
+        &self,
+        lights: &mut Vec<[f32; 3]>,
+    ) -> Option<(NodeId, crate::scene::camera::Camera)> {
+        let node = self
+            .extension_slots()
+            .first()?
+            .node_map
+            .iter()
+            .find_map(|(id, instance)| {
+                let node = &self.graph.get_node(*instance)?.node;
+                node.rendered_camera().map(|camera| (id, node, camera))
+            });
         let (id, node, camera) = node?;
         lights.extend_from_slice(node.rendered_lights());
         Some((id.clone(), camera))
@@ -49,8 +58,13 @@ impl PresetRuntime {
 
     /// Append the setup shapes of the same slot's simulations, for the
     /// gizmo overlay. The caller reuses the buffer.
-    pub fn write_physics_gizmos_watched(&self, output: &mut Vec<manifold_core::physics_gizmo::PhysicsGizmo>) {
-        let Some(slot) = self.extension_slots().first() else { return };
+    pub fn write_physics_gizmos_watched(
+        &self,
+        output: &mut Vec<manifold_core::physics_gizmo::PhysicsGizmo>,
+    ) {
+        let Some(slot) = self.extension_slots().first() else {
+            return;
+        };
         for extension in &self.extensions {
             extension.write_physics_gizmos(&self.graph, slot, output);
         }
@@ -59,7 +73,9 @@ impl PresetRuntime {
     /// Append the same slot's worlds that left copies unmade. The caller
     /// reuses the buffer.
     pub fn write_copies_not_made_watched(&self, output: &mut Vec<(NodeId, u32)>) {
-        let Some(slot) = self.extension_slots().first() else { return };
+        let Some(slot) = self.extension_slots().first() else {
+            return;
+        };
         for extension in &self.extensions {
             extension.write_copies_not_made(&self.graph, slot, output);
         }
@@ -67,8 +83,13 @@ impl PresetRuntime {
 
     /// Append the same slot's worlds' refused bodies. The caller reuses the
     /// buffer.
-    pub fn write_body_refusals_watched(&self, output: &mut Vec<(NodeId, manifold_core::physics_members::BodyRefusalRow)>) {
-        let Some(slot) = self.extension_slots().first() else { return };
+    pub fn write_body_refusals_watched(
+        &self,
+        output: &mut Vec<(NodeId, manifold_core::physics_members::BodyRefusalRow)>,
+    ) {
+        let Some(slot) = self.extension_slots().first() else {
+            return;
+        };
         for extension in &self.extensions {
             extension.write_body_refusals(&self.graph, slot, output);
         }
@@ -124,8 +145,13 @@ impl PresetRuntime {
         next_sequence: &mut u64,
     ) -> Result<ImpulseFire, String> {
         let (extensions, mut context) = self.extension_context();
-        match extensions.iter_mut().find(|extension| extension.is_scene_impulse_param(param)) {
-            Some(owner) => owner.fire_scene_impulse(&mut context, param, source, beats, next_sequence),
+        match extensions
+            .iter_mut()
+            .find(|extension| extension.is_scene_impulse_param(param))
+        {
+            Some(owner) => {
+                owner.fire_scene_impulse(&mut context, param, source, beats, next_sequence)
+            }
             None => Ok(ImpulseFire::NotImpulse),
         }
     }

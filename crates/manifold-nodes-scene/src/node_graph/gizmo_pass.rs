@@ -11,9 +11,9 @@
 
 use manifold_foundation::scene_surface::GizmoDrawMode;
 use manifold_gpu::{
-    DrawCount, GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuDevice, GpuEncoder,
-    GpuLoadAction, GpuRenderPipeline, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
-    GpuTextureUsage,
+    DrawCount, GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuDevice,
+    GpuEncoder, GpuLoadAction, GpuRenderPipeline, GpuTexture, GpuTextureDesc, GpuTextureDimension,
+    GpuTextureFormat, GpuTextureUsage,
 };
 use manifold_node_engine::scene::camera::Camera;
 
@@ -70,11 +70,23 @@ impl GizmoPass {
     ) {
         self.scratch.clear();
         for line in lines {
-            let Some((a, b)) = clip_to_near(camera, line.a, line.b) else { continue };
+            let Some((a, b)) = clip_to_near(camera, line.a, line.b) else {
+                continue;
+            };
             let [r, g, b8, a8] = line.color;
             self.scratch.extend_from_slice(&[
-                a[0], a[1], a[2], if line.caps { 1.0 } else { 0.0 }, b[0], b[1], b[2], 0.0,
-                f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b8) / 255.0, f32::from(a8) / 255.0,
+                a[0],
+                a[1],
+                a[2],
+                if line.caps { 1.0 } else { 0.0 },
+                b[0],
+                b[1],
+                b[2],
+                0.0,
+                f32::from(r) / 255.0,
+                f32::from(g) / 255.0,
+                f32::from(b8) / 255.0,
+                f32::from(a8) / 255.0,
             ]);
         }
         let count = self.scratch.len() / FLOATS_PER_LINE;
@@ -84,14 +96,20 @@ impl GizmoPass {
         let needed = (self.scratch.len() * std::mem::size_of::<f32>()) as u64;
         if self.buffers.len() < RING || self.buffers[0].size < needed {
             let size = needed.max(4096).next_power_of_two();
-            self.buffers = (0..RING).map(|_| device.create_buffer_shared(size)).collect();
+            self.buffers = (0..RING)
+                .map(|_| device.create_buffer_shared(size))
+                .collect();
         }
         self.next = (self.next + 1) % RING;
         // SAFETY: the buffer holds at least `needed` bytes, and the ring keeps
         // it clear of any frame still reading it.
         unsafe { self.buffers[self.next].write(0, bytemuck::cast_slice(&self.scratch)) };
 
-        if !self.pipelines.iter().any(|(format, _)| *format == target.format) {
+        if !self
+            .pipelines
+            .iter()
+            .any(|(format, _)| *format == target.format)
+        {
             let blend = GpuBlendState {
                 src_factor: GpuBlendFactor::SrcAlpha,
                 dst_factor: GpuBlendFactor::OneMinusSrcAlpha,
@@ -100,11 +118,22 @@ impl GizmoPass {
                 dst_alpha_factor: GpuBlendFactor::OneMinusSrcAlpha,
                 alpha_operation: GpuBlendOp::Add,
             };
-            let pipeline =
-                device.create_render_pipeline(SHADER, "vs_main", "fs_main", target.format, Some(blend), "gizmo lines");
+            let pipeline = device.create_render_pipeline(
+                SHADER,
+                "vs_main",
+                "fs_main",
+                target.format,
+                Some(blend),
+                "gizmo lines",
+            );
             self.pipelines.push((target.format, pipeline));
         }
-        let pipeline = &self.pipelines.iter().find(|(format, _)| *format == target.format).expect("just ensured").1;
+        let pipeline = &self
+            .pipelines
+            .iter()
+            .find(|(format, _)| *format == target.format)
+            .expect("just ensured")
+            .1;
         if self.stub_depth.is_none() {
             self.stub_depth = Some(device.create_texture(&GpuTextureDesc {
                 width: 1,
@@ -119,7 +148,10 @@ impl GizmoPass {
         }
         let (scene_depth, mode) = match depth {
             Some(depth) => (depth, mode),
-            None => (self.stub_depth.as_ref().expect("just ensured"), GizmoDrawMode::OnTop),
+            None => (
+                self.stub_depth.as_ref().expect("just ensured"),
+                GizmoDrawMode::OnTop,
+            ),
         };
         let sized = depth.unwrap_or(target);
         let aspect = sized.width as f32 / sized.height.max(1) as f32;
@@ -140,11 +172,24 @@ impl GizmoPass {
             pipeline,
             target,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
-                GpuBinding::Buffer { binding: 1, buffer: &self.buffers[self.next], offset: 0 },
-                GpuBinding::Texture { binding: 2, texture: scene_depth },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&params),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &self.buffers[self.next],
+                    offset: 0,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: scene_depth,
+                },
             ],
-            DrawCount::Direct { vertices: 6 * count as u32, instances: 1 },
+            DrawCount::Direct {
+                vertices: 6 * count as u32,
+                instances: 1,
+            },
             GpuLoadAction::Load,
             "gizmo lines",
         );

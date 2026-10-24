@@ -9,8 +9,8 @@
 //! One MTL4 command queue + allocator is created lazily per `GpuDevice`
 //! and shared by all MTL4FX scalers on that device.
 
-use objc2::{AnyThread, Message, rc::Retained};
 use objc2::runtime::ProtocolObject;
+use objc2::{AnyThread, Message, rc::Retained};
 use objc2_metal::{
     MTL4CommandAllocator, MTL4CommandBuffer, MTL4CommandQueue, MTLAllocation, MTLCommandBuffer,
     MTLDevice, MTLEvent, MTLPixelFormat, MTLResidencySet, MTLResidencySetDescriptor,
@@ -18,12 +18,11 @@ use objc2_metal::{
 };
 use objc2_metal_fx::{
     MTL4FXTemporalDenoisedScaler, MTL4FXTemporalScaler, MTLFXTemporalDenoisedScalerBase,
-    MTLFXTemporalDenoisedScalerDescriptor, MTLFXTemporalScalerBase,
-    MTLFXTemporalScalerDescriptor,
+    MTLFXTemporalDenoisedScalerDescriptor, MTLFXTemporalScalerBase, MTLFXTemporalScalerDescriptor,
 };
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::GpuTexture;
 use crate::{GpuEvent, GpuTextureFormat};
@@ -146,7 +145,9 @@ unsafe fn set_mtl4fx_barrier_stages<T: ?Sized>(scaler: &ProtocolObject<T>) {
     let all: Option<Retained<AnyObject>> =
         msg_send![class!(NSNumber), numberWithUnsignedLongLong: MTLStages::All.0 as u64];
     let Some(all) = all else {
-        log::error!("[MetalFX MTL4] NSNumber creation failed — barrier stages unset, MTL4FX encode may produce black output");
+        log::error!(
+            "[MetalFX MTL4] NSNumber creation failed — barrier stages unset, MTL4FX encode may produce black output"
+        );
         return;
     };
     for key in ["colorTextureBarrierStages", "outputTextureBarrierStages"] {
@@ -244,7 +245,9 @@ impl MTL4Bridge {
             set
         };
 
-        log::info!("[MetalFX MTL4] Bridge created — typed MTL4 queue + 3 allocator ring + shared event + residency set");
+        log::info!(
+            "[MetalFX MTL4] Bridge created — typed MTL4 queue + 3 allocator ring + shared event + residency set"
+        );
 
         Some(Self {
             queue,
@@ -312,7 +315,9 @@ impl MTL4Bridge {
                     self.residency_set.addAllocation(as_allocation(tex));
                 }
                 changed = true;
-                log::info!("[MetalFX MTL4] Residency set pruned (exceeded {PRUNE_CAP} allocations)");
+                log::info!(
+                    "[MetalFX MTL4] Residency set pruned (exceeded {PRUNE_CAP} allocations)"
+                );
             }
         }
 
@@ -350,7 +355,9 @@ impl MTL4Bridge {
         // saturated, skip this frame without creating a signal/wait pair.
         let Some(slot) = self.acquire_allocator_slot() else {
             if !self.saturated_logged.swap(true, Ordering::Relaxed) {
-                log::warn!("[MetalFX MTL4] Allocator ring saturated (3 frames in flight); skipping denoiser this frame");
+                log::warn!(
+                    "[MetalFX MTL4] Allocator ring saturated (3 frames in flight); skipping denoiser this frame"
+                );
             }
             return false;
         };
@@ -362,10 +369,8 @@ impl MTL4Bridge {
 
         // 2. Signal on classic cmd_buf.
         unsafe {
-            classic_cmd_buf.encodeSignalEvent_value(
-                ProtocolObject::from_ref(self.event.raw()),
-                wait_val,
-            );
+            classic_cmd_buf
+                .encodeSignalEvent_value(ProtocolObject::from_ref(self.event.raw()), wait_val);
         }
 
         // 3. Enqueue wait on MTL4 queue.
@@ -398,10 +403,8 @@ impl MTL4Bridge {
         unsafe {
             let buf_ptr = &*cmd_buf as *const ProtocolObject<dyn MTL4CommandBuffer>;
             let ptrs = [buf_ptr];
-            self.queue.commit_count(
-                NonNull::new(ptrs.as_ptr() as *mut _).expect("non-null"),
-                1,
-            );
+            self.queue
+                .commit_count(NonNull::new(ptrs.as_ptr() as *mut _).expect("non-null"), 1);
         }
 
         // 6. Enqueue signal on MTL4 queue.
@@ -418,10 +421,8 @@ impl MTL4Bridge {
 
         // 8. Enqueue wait on classic queue for MTL4 completion signal.
         unsafe {
-            classic_cmd_buf.encodeWaitForEvent_value(
-                ProtocolObject::from_ref(self.event.raw()),
-                signal_val,
-            );
+            classic_cmd_buf
+                .encodeWaitForEvent_value(ProtocolObject::from_ref(self.event.raw()), signal_val);
         }
 
         true
@@ -472,9 +473,7 @@ impl Metal4FxDenoisedScaler {
         depth_reversed: bool,
     ) -> Option<Self> {
         if !supports_m4_denoiser(device) {
-            log::info!(
-                "[MetalFX MTL4 Denoiser] Not available — falling back to classic MTLFX"
-            );
+            log::info!("[MetalFX MTL4 Denoiser] Not available — falling back to classic MTLFX");
             return None;
         }
 
@@ -514,42 +513,30 @@ impl Metal4FxDenoisedScaler {
                 let true_ns: &objc2::runtime::AnyObject =
                     msg_send![objc2::class!(NSNumber), numberWithBool: true];
 
-                let k_spec_hit = NSString::from_str(
-                    "specularHitDistanceTextureEnabled",
-                );
+                let k_spec_hit = NSString::from_str("specularHitDistanceTextureEnabled");
                 let _: () = msg_send![&desc, setValue: true_ns, forKey: &*k_spec_hit];
 
-                let k_dns_str = NSString::from_str(
-                    "denoiseStrengthMaskTextureEnabled",
-                );
+                let k_dns_str = NSString::from_str("denoiseStrengthMaskTextureEnabled");
                 let _: () = msg_send![&desc, setValue: true_ns, forKey: &*k_dns_str];
 
-                let k_transp = NSString::from_str(
-                    "transparencyOverlayTextureEnabled",
-                );
+                let k_transp = NSString::from_str("transparencyOverlayTextureEnabled");
                 let _: () = msg_send![&desc, setValue: true_ns, forKey: &*k_transp];
 
                 let denoise_fmt: &objc2::runtime::AnyObject = msg_send![
                     objc2::class!(NSNumber),
                     numberWithUnsignedInteger: MTLPixelFormat::R16Float.0
                 ];
-                let k_dns_fmt = NSString::from_str(
-                    "denoiseStrengthMaskTextureFormat",
-                );
+                let k_dns_fmt = NSString::from_str("denoiseStrengthMaskTextureFormat");
                 let _: () = msg_send![&desc, setValue: denoise_fmt, forKey: &*k_dns_fmt];
 
                 let transp_fmt: &objc2::runtime::AnyObject = msg_send![
                     objc2::class!(NSNumber),
                     numberWithUnsignedInteger: MTLPixelFormat::RGBA16Float.0
                 ];
-                let k_transp_fmt = NSString::from_str(
-                    "transparencyOverlayTextureFormat",
-                );
+                let k_transp_fmt = NSString::from_str("transparencyOverlayTextureFormat");
                 let _: () = msg_send![&desc, setValue: transp_fmt, forKey: &*k_transp_fmt];
 
-                let k_sync = NSString::from_str(
-                    "requiresSynchronousInitialization",
-                );
+                let k_sync = NSString::from_str("requiresSynchronousInitialization");
                 let _: () = msg_send![&desc, setValue: true_ns, forKey: &*k_sync];
             }
 
@@ -568,9 +555,8 @@ impl Metal4FxDenoisedScaler {
         })
         .ok()?;
 
-        let scaler = unsafe {
-            desc.newTemporalDenoisedScalerWithDevice_compiler(device, &compiler)
-        };
+        let scaler =
+            unsafe { desc.newTemporalDenoisedScalerWithDevice_compiler(device, &compiler) };
 
         let Some(scaler) = scaler else {
             log::error!(
@@ -667,8 +653,14 @@ impl Metal4FxDenoisedScaler {
         let device: &ProtocolObject<dyn MTLDevice> = &self.device;
 
         let mut textures: [&ProtocolObject<dyn MTLTexture>; 11] = [
-            &color.raw, &depth.raw, &motion.raw, &normal.raw, &roughness.raw,
-            &diffuse_albedo.raw, &specular_albedo.raw, &specular_hit_distance.raw,
+            &color.raw,
+            &depth.raw,
+            &motion.raw,
+            &normal.raw,
+            &roughness.raw,
+            &diffuse_albedo.raw,
+            &specular_albedo.raw,
+            &specular_hit_distance.raw,
             &output.raw,
             &color.raw, // placeholder for exposure (index 9)
             &color.raw, // placeholder for reactive_mask (index 10)
@@ -683,8 +675,11 @@ impl Metal4FxDenoisedScaler {
             texture_count += 1;
         }
 
-        self.bridge.encode_gpu_only(classic_cmd_buf, device, &textures[..texture_count], |mtl4_cmd_buf| {
-            unsafe {
+        self.bridge.encode_gpu_only(
+            classic_cmd_buf,
+            device,
+            &textures[..texture_count],
+            |mtl4_cmd_buf| unsafe {
                 let base: &ProtocolObject<dyn MTLFXTemporalDenoisedScalerBase> =
                     ProtocolObject::from_ref(scaler);
                 base.setColorTexture(Some(&color.raw));
@@ -706,8 +701,8 @@ impl Metal4FxDenoisedScaler {
                 );
 
                 scaler.encodeToCommandBuffer(mtl4_cmd_buf);
-            }
-        })
+            },
+        )
     }
 }
 
@@ -750,18 +745,14 @@ impl Metal4FxTemporalScaler {
         color_format: GpuTextureFormat,
     ) -> Option<Self> {
         if !supports_m4_temporal(device) {
-            log::info!(
-                "[MetalFX MTL4 Temporal] Not available — falling back to classic MTLFX"
-            );
+            log::info!("[MetalFX MTL4 Temporal] Not available — falling back to classic MTLFX");
             return None;
         }
 
         let color_pixel_format = to_mtl_pixel_format(color_format);
 
         let desc = unsafe {
-            let desc = MTLFXTemporalScalerDescriptor::init(
-                MTLFXTemporalScalerDescriptor::alloc(),
-            );
+            let desc = MTLFXTemporalScalerDescriptor::init(MTLFXTemporalScalerDescriptor::alloc());
             desc.setInputWidth(input_width as usize);
             desc.setInputHeight(input_height as usize);
             desc.setOutputWidth(output_width as usize);
@@ -785,9 +776,7 @@ impl Metal4FxTemporalScaler {
         })
         .ok()?;
 
-        let scaler = unsafe {
-            desc.newTemporalScalerWithDevice_compiler(device, &compiler)
-        };
+        let scaler = unsafe { desc.newTemporalScalerWithDevice_compiler(device, &compiler) };
 
         let Some(scaler) = scaler else {
             log::error!(
@@ -860,8 +849,8 @@ impl Metal4FxTemporalScaler {
         let textures: [&ProtocolObject<dyn MTLTexture>; 4] =
             [&color.raw, &depth.raw, &motion.raw, &dst.raw];
 
-        self.bridge.encode_gpu_only(classic_cmd_buf, device, &textures, |mtl4_cmd_buf| {
-            unsafe {
+        self.bridge
+            .encode_gpu_only(classic_cmd_buf, device, &textures, |mtl4_cmd_buf| unsafe {
                 let base: &ProtocolObject<dyn MTLFXTemporalScalerBase> =
                     ProtocolObject::from_ref(scaler);
                 base.setColorTexture(Some(&color.raw));
@@ -873,8 +862,7 @@ impl Metal4FxTemporalScaler {
                 base.setReset(reset);
 
                 scaler.encodeToCommandBuffer(mtl4_cmd_buf);
-            }
-        })
+            })
     }
 }
 
@@ -930,8 +918,10 @@ mod tests {
         let mut bytes: Vec<u8> = vec![0; total];
 
         let ch = match format {
-            GpuTextureFormat::Rgba32Float | GpuTextureFormat::Rgba16Float
-            | GpuTextureFormat::Rgba8Unorm | GpuTextureFormat::Rgba8UnormSrgb => 4,
+            GpuTextureFormat::Rgba32Float
+            | GpuTextureFormat::Rgba16Float
+            | GpuTextureFormat::Rgba8Unorm
+            | GpuTextureFormat::Rgba8UnormSrgb => 4,
             GpuTextureFormat::Rg32Float | GpuTextureFormat::Rg16Float => 2,
             _ => 1,
         };
@@ -946,8 +936,7 @@ mod tests {
                 | GpuTextureFormat::Rg32Float => {
                     for c in 0..(bpp as usize / 4) {
                         let v: f32 = data.get(src + c).copied().unwrap_or(0.0);
-                        bytes[dst + c * 4..dst + c * 4 + 4]
-                            .copy_from_slice(&f32::to_ne_bytes(v));
+                        bytes[dst + c * 4..dst + c * 4 + 4].copy_from_slice(&f32::to_ne_bytes(v));
                     }
                 }
                 GpuTextureFormat::Rgba16Float
@@ -955,8 +944,7 @@ mod tests {
                 | GpuTextureFormat::Rg16Float => {
                     for c in 0..(bpp as usize / 2) {
                         let v: f32 = data.get(src + c).copied().unwrap_or(0.0);
-                        bytes[dst + c * 2..dst + c * 2 + 2]
-                            .copy_from_slice(&f32_to_f16(v));
+                        bytes[dst + c * 2..dst + c * 2 + 2].copy_from_slice(&f32_to_f16(v));
                     }
                 }
                 _ => {
@@ -1002,9 +990,7 @@ mod tests {
         let device = GpuDevice::new();
 
         if !metalfx_m4_denoiser_available() {
-            eprintln!(
-                "[metalfx_m4 test] MTL4FXTemporalDenoisedScaler not available -- skipping"
-            );
+            eprintln!("[metalfx_m4 test] MTL4FXTemporalDenoisedScaler not available -- skipping");
             return;
         }
 
@@ -1072,22 +1058,52 @@ mod tests {
         }
 
         let color_noisy = upload_texture(
-            &device, W, H, GpuTextureFormat::Rgba32Float, &noisy, "m4_color_noisy",
+            &device,
+            W,
+            H,
+            GpuTextureFormat::Rgba32Float,
+            &noisy,
+            "m4_color_noisy",
         );
         let depth_tex = upload_texture(
-            &device, W, H, GpuTextureFormat::R32Float, &vec![0.5f32; npixels], "m4_depth",
+            &device,
+            W,
+            H,
+            GpuTextureFormat::R32Float,
+            &vec![0.5f32; npixels],
+            "m4_depth",
         );
         let motion_tex = upload_texture(
-            &device, W, H, GpuTextureFormat::Rg16Float, &vec![0.0f32; npixels * 2], "m4_motion",
+            &device,
+            W,
+            H,
+            GpuTextureFormat::Rg16Float,
+            &vec![0.0f32; npixels * 2],
+            "m4_motion",
         );
         let normal_tex = upload_texture(
-            &device, W, H, GpuTextureFormat::Rgba16Float, &normal_data, "m4_normal",
+            &device,
+            W,
+            H,
+            GpuTextureFormat::Rgba16Float,
+            &normal_data,
+            "m4_normal",
         );
         let roughness_tex = upload_texture(
-            &device, W, H, GpuTextureFormat::R16Float, &vec![0.5f32; npixels], "m4_roughness",
+            &device,
+            W,
+            H,
+            GpuTextureFormat::R16Float,
+            &vec![0.5f32; npixels],
+            "m4_roughness",
         );
         let diffuse_tex = upload_texture(
-            &device, W, H, GpuTextureFormat::Rgba16Float, &albedo_data, "m4_diffuse_albedo",
+            &device,
+            W,
+            H,
+            GpuTextureFormat::Rgba16Float,
+            &albedo_data,
+            "m4_diffuse_albedo",
         );
         let specular_tex = upload_texture(
             &device,
@@ -1131,8 +1147,8 @@ mod tests {
             &hit_distance_tex,
             None,
             &output_tex,
-            true,  // reset
-            None,  // no reactive mask
+            true, // reset
+            None, // no reactive mask
         );
         assert!(
             encoded,
@@ -1223,13 +1239,28 @@ mod tests {
             }
         }
         let color = upload_texture(
-            &device, IN_W, IN_H, GpuTextureFormat::Rgba16Float, &color_data, "m4t_color",
+            &device,
+            IN_W,
+            IN_H,
+            GpuTextureFormat::Rgba16Float,
+            &color_data,
+            "m4t_color",
         );
         let depth = upload_texture(
-            &device, IN_W, IN_H, GpuTextureFormat::R32Float, &vec![0.5f32; npixels], "m4t_depth",
+            &device,
+            IN_W,
+            IN_H,
+            GpuTextureFormat::R32Float,
+            &vec![0.5f32; npixels],
+            "m4t_depth",
         );
         let motion = upload_texture(
-            &device, IN_W, IN_H, GpuTextureFormat::Rg16Float, &vec![0.0f32; npixels * 2], "m4t_motion",
+            &device,
+            IN_W,
+            IN_H,
+            GpuTextureFormat::Rg16Float,
+            &vec![0.0f32; npixels * 2],
+            "m4t_motion",
         );
         let output = device.create_texture(&GpuTextureDesc {
             width: OUT_W,

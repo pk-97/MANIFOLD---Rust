@@ -12,11 +12,12 @@
 
 use std::f32::consts::TAU;
 
+use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::scene_doc::{Curve, Item, Shape};
 use manifold_core::scene_schema::{
-    self, CURVE_AXIS, CURVE_MATH, CURVE_POLYGON, CURVE_RATIO, CURVE_T, CURVE_XY, SOLID, SWEEP, TRIANGLES,
+    self, CURVE_AXIS, CURVE_MATH, CURVE_POLYGON, CURVE_RATIO, CURVE_T, CURVE_XY, SOLID, SWEEP,
+    TRIANGLES,
 };
-use manifold_core::effect_graph_def::SerializedParamValue;
 
 use super::builder::{Builder, Rest};
 
@@ -73,7 +74,15 @@ impl Emit<'_, '_> {
 
     /// `node.array_math` number `k` of the curve: `op` on `a` (and `with`),
     /// at `scale` and `offset`.
-    fn math(&mut self, k: usize, op: f32, a: Port, with: Option<Port>, scale: f32, offset: f32) -> Port {
+    fn math(
+        &mut self,
+        k: usize,
+        op: f32,
+        a: Port,
+        with: Option<Port>,
+        scale: f32,
+        offset: f32,
+    ) -> Port {
         let node = self.b.add(&self.owner, CURVE_MATH[k], "node.array_math");
         self.b.set_number(node, "op", op);
         self.b.set_number(node, "scale", scale);
@@ -102,7 +111,11 @@ impl Emit<'_, '_> {
             Curve::Polygon | Curve::Star => {
                 let outline = self.b.add(&self.owner, CURVE_POLYGON, "node.polygon_curve");
                 self.b.set_number(outline, "max_capacity", SAMPLES as f32);
-                Channels { x: (outline, "x"), y: (outline, "y"), rise: None }
+                Channels {
+                    x: (outline, "x"),
+                    y: (outline, "y"),
+                    rise: None,
+                }
             }
             Curve::Spiral => {
                 let t = self.range(0.0, 1.0);
@@ -124,7 +137,11 @@ impl Emit<'_, '_> {
                 let x = self.scale(4, c, 1.0);
                 let y = self.scale(5, s, 1.0);
                 let rise = self.scale(6, t, 1.0);
-                Channels { x, y, rise: Some(rise) }
+                Channels {
+                    x,
+                    y,
+                    rise: Some(rise),
+                }
             }
             Curve::Wave => {
                 let t = self.range(-0.5, 0.5);
@@ -175,7 +192,10 @@ impl Emit<'_, '_> {
 pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, shape: &Shape) -> Option<CurveMesh> {
     let curve = shape.curve()?;
     let caps = shape.capped();
-    let mut e = Emit { b, owner: item.id.as_str().to_owned() };
+    let mut e = Emit {
+        b,
+        owner: item.id.as_str().to_owned(),
+    };
     let channels = e.curve(curve);
     // Extrude and Revolve take Helix's side view: around and up.
     let profile_y = channels.rise.unwrap_or(channels.y);
@@ -222,7 +242,11 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, shape: &Shape) -> Option<Cu
         e.b.wire(rise.0, rise.1, solid, "lift");
     }
     let rest = rest(item, shape, curve, cols, rows);
-    Some(CurveMesh { solid, vertices, rest })
+    Some(CurveMesh {
+        solid,
+        vertices,
+        rest,
+    })
 }
 
 /// `node.curve_solid_source`'s kind for a curve shape: Extrude 0, Revolve 1,
@@ -257,7 +281,10 @@ pub(crate) fn follow_rows(b: &mut Builder<'_>, item: &Item, shape: &Shape) {
         Some(Curve::Helix | Curve::Lissajous) => (4, 5),
         _ => return,
     };
-    if let (Some(from), Some(to)) = (b.id(owner, CURVE_MATH[pair.0]), b.id(owner, CURVE_MATH[pair.1])) {
+    if let (Some(from), Some(to)) = (
+        b.id(owner, CURVE_MATH[pair.0]),
+        b.id(owner, CURVE_MATH[pair.1]),
+    ) {
         b.follow(from, "scale", to, "scale");
     }
 }
@@ -265,31 +292,54 @@ pub(crate) fn follow_rows(b: &mut Builder<'_>, item: &Item, shape: &Shape) {
 /// The rest pose at the kind's defaults: the box the curve fills, swept.
 /// A row moved live changes the solid, not this box.
 fn rest(item: &Item, shape: &Shape, curve: Curve, cols: u32, rows: u32) -> Option<Rest> {
-    let default = |property: &str| scene_schema::row_for(&item.fields, property).and_then(|row| row.default).unwrap_or(0.0);
+    let default = |property: &str| {
+        scene_schema::row_for(&item.fields, property)
+            .and_then(|row| row.default)
+            .unwrap_or(0.0)
+    };
     // The curve's half-extent across (x) and along (y), and Helix's rise.
     let (half_x, half_y, rise) = match curve {
         Curve::Circle | Curve::Polygon | Curve::Star | Curve::Spiral | Curve::Lissajous => {
             (default("radius"), default("radius"), None)
         }
-        Curve::Helix => (default("radius"), default("radius"), Some(default("height") * 0.5)),
+        Curve::Helix => (
+            default("radius"),
+            default("radius"),
+            Some(default("height") * 0.5),
+        ),
         Curve::Wave => (default("amplitude"), default("length") * 0.5, None),
     };
     let profile_half_y = rise.unwrap_or(half_y);
     let (lo, hi) = match shape {
         Shape::Extrude { .. } => {
             let half_depth = default("depth") * 0.5;
-            ([-half_x, -profile_half_y, -half_depth], [half_x, profile_half_y, half_depth])
+            (
+                [-half_x, -profile_half_y, -half_depth],
+                [half_x, profile_half_y, half_depth],
+            )
         }
         Shape::Revolve { .. } => {
             let reach = default("offset").abs() + half_x;
-            ([-reach, -profile_half_y, -reach], [reach, profile_half_y, reach])
+            (
+                [-reach, -profile_half_y, -reach],
+                [reach, profile_half_y, reach],
+            )
         }
         Shape::Tube { .. } => {
             let thick = default("thickness");
             let up = rise.unwrap_or(0.0) + thick;
-            ([-half_x - thick, -up, -half_y - thick], [half_x + thick, up, half_y + thick])
+            (
+                [-half_x - thick, -up, -half_y - thick],
+                [half_x + thick, up, half_y + thick],
+            )
         }
         _ => return None,
     };
-    Some(Rest { lo, hi, placed: None, own_space: false, vertices: (cols - 1) * (rows - 1) * 6 })
+    Some(Rest {
+        lo,
+        hi,
+        placed: None,
+        own_space: false,
+        vertices: (cols - 1) * (rows - 1) * 6,
+    })
 }

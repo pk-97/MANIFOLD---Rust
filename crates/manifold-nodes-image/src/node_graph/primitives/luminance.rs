@@ -132,14 +132,20 @@ mod gpu_tests {
     use manifold_gpu::GpuTextureFormat;
 
     use super::Luminance;
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId};
+    use manifold_node_engine::exec::effect_node::{
+        EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId,
+    };
     use manifold_node_engine::exec::execution_plan::{ExecutionPlan, ResourceId, compile};
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_node_engine::graph::Graph;
     use manifold_node_engine::parameters::{ParamDef, ParamValue};
-    use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-    use manifold_node_engine::{exec::execution::Executor, exec::metal_backend::MetalBackend, scene::boundary_nodes::Source};
-    use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::ports::{
+        NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+    };
+    use manifold_node_engine::{
+        exec::execution::Executor, exec::metal_backend::MetalBackend, scene::boundary_nodes::Source,
+    };
 
     fn output_resource(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> ResourceId {
         for step in plan.steps() {
@@ -169,7 +175,9 @@ mod gpu_tests {
         seen: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
     }
     impl EffectNode for Capture {
-        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+            manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+        } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -290,8 +298,7 @@ mod gpu_tests {
             let plan = compile(&g).unwrap();
 
             let r_src = output_resource(&plan, src, "out");
-            let src_target =
-                RenderTarget::new(&device, w, h, format, "test-lum-bw-src");
+            let src_target = RenderTarget::new(&device, w, h, format, "test-lum-bw-src");
             manifold_node_engine::testkit::gpu::clear_texture_committed(
                 &device,
                 &src_target.texture,
@@ -299,8 +306,7 @@ mod gpu_tests {
                 "luminance-bw-clear",
             );
 
-            let mut backend =
-                MetalBackend::new(device.arc(), w, h, format);
+            let mut backend = MetalBackend::new(device.arc(), w, h, format);
             backend.pre_bind_texture_2d(r_src, src_target);
             let mut exec = Executor::new(Box::new(backend));
 

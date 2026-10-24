@@ -3,7 +3,6 @@
 
 use super::*;
 
-
 // ── Shared helper functions ─────────────────────────────────────
 
 /// BUG-250: the click-to-change action set for an enum (`value_labels`)
@@ -33,7 +32,10 @@ pub(crate) fn enum_value_cell_actions(
         let next = (current_index + 1) % count;
         let new_value = min + next as f32;
         vec![
-            PanelAction::Scrub(ValueRef::Param(target.clone(), param_id.clone()), ScrubPhase::Begin),
+            PanelAction::Scrub(
+                ValueRef::Param(target.clone(), param_id.clone()),
+                ScrubPhase::Begin,
+            ),
             PanelAction::Scrub(
                 ValueRef::Param(target.clone(), param_id.clone()),
                 ScrubPhase::Move(ScrubValue::Scalar(new_value)),
@@ -41,7 +43,13 @@ pub(crate) fn enum_value_cell_actions(
             PanelAction::Scrub(ValueRef::Param(target, param_id), ScrubPhase::Commit),
         ]
     } else {
-        vec![enum_dropdown(target, param_id, labels, current_index, cell_node_id)]
+        vec![enum_dropdown(
+            target,
+            param_id,
+            labels,
+            current_index,
+            cell_node_id,
+        )]
     }
 }
 
@@ -55,9 +63,18 @@ pub(crate) fn pick_list_action(
     current_value: f32,
     button: NodeId,
 ) -> Option<crate::panels::PanelAction> {
-    let labels = spec.value_labels.as_deref().filter(|labels| !labels.is_empty())?;
+    let labels = spec
+        .value_labels
+        .as_deref()
+        .filter(|labels| !labels.is_empty())?;
     let current_index = label_index(current_value, spec.min, labels.len());
-    Some(enum_dropdown(target, param_id, labels, current_index, button))
+    Some(enum_dropdown(
+        target,
+        param_id,
+        labels,
+        current_index,
+        button,
+    ))
 }
 
 /// A click on a scene item's structural field row (the section 8 action
@@ -74,8 +91,14 @@ pub(crate) fn field_row_action(
     use crate::panels::PanelAction;
     use crate::panels::dropdown::DropdownItem;
     use crate::panels::scene_setup_panel::FieldControlVm;
-    let (Some(crate::param_surface::RowAffordance::Field { item, field, control }), crate::panels::GraphParamTarget::GeneratorOf(layer)) =
-        (&row.affordance, target)
+    let (
+        Some(crate::param_surface::RowAffordance::Field {
+            item,
+            field,
+            control,
+        }),
+        crate::panels::GraphParamTarget::GeneratorOf(layer),
+    ) = (&row.affordance, target)
     else {
         return Vec::new();
     };
@@ -103,20 +126,27 @@ pub(crate) fn field_row_action(
                     })),
                 })
                 .collect();
-            vec![PanelAction::Root(RootAction::SceneSetupActionMenuClicked { button_node_id: button, items })]
+            vec![PanelAction::Root(RootAction::SceneSetupActionMenuClicked {
+                button_node_id: button,
+                items,
+            })]
         }
-        FieldControlVm::Switch { toggle, .. } => vec![PanelAction::Project(crate::ProjectAction::SceneFieldSet {
-            layer_id: layer.clone(),
-            item: item.clone(),
-            field: field.clone(),
-            pick: toggle.clone(),
-        })],
-        FieldControlVm::File { extensions, .. } => vec![PanelAction::Root(RootAction::SceneFieldFileClicked {
-            layer_id: layer.clone(),
-            item: item.clone(),
-            field: field.clone(),
-            extensions: extensions.clone(),
-        })],
+        FieldControlVm::Switch { toggle, .. } => {
+            vec![PanelAction::Project(crate::ProjectAction::SceneFieldSet {
+                layer_id: layer.clone(),
+                item: item.clone(),
+                field: field.clone(),
+                pick: toggle.clone(),
+            })]
+        }
+        FieldControlVm::File { extensions, .. } => {
+            vec![PanelAction::Root(RootAction::SceneFieldFileClicked {
+                layer_id: layer.clone(),
+                item: item.clone(),
+                field: field.clone(),
+                extensions: extensions.clone(),
+            })]
+        }
     }
 }
 
@@ -136,7 +166,6 @@ fn enum_dropdown(
     })
 }
 
-
 // ── Shared event helpers ────────────────────────────────────────
 
 /// If `node_id` is a driver drawer's Free-period field, return its param index.
@@ -149,6 +178,10 @@ pub(crate) fn driver_free_field_index(
     drawers.iter().enumerate().find_map(|(pi, drawer)| {
         let drawer = drawer.as_ref()?;
         let action = drawer.resolve_action(node_id)?;
-        matches!(action, crate::panels::PanelAction::Root(crate::RootAction::BeginDriverPeriodTextInput { .. })).then_some(pi)
+        matches!(
+            action,
+            crate::panels::PanelAction::Root(crate::RootAction::BeginDriverPeriodTextInput { .. })
+        )
+        .then_some(pi)
     })
 }

@@ -63,5 +63,7 @@ fn side_by_side(app_png: &Path, mock_png: &Path, out: &Path) {
     let mut canvas = image::RgbaImage::from_pixel(w, h, image::Rgba([16, 16, 18, 255]));
     image::imageops::overlay(&mut canvas, &app, 0, 0);
     image::imageops::overlay(&mut canvas, &mock, i64::from(app.width() + gap), 0);
-    canvas.save(out).unwrap_or_else(|e| panic!("save {}: {e}", out.display()));
+    canvas
+        .save(out)
+        .unwrap_or_else(|e| panic!("save {}: {e}", out.display()));
 }

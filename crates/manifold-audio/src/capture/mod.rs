@@ -92,9 +92,11 @@ pub fn open(source: CaptureSource) -> Result<Box<dyn CaptureBackend>, String> {
         CaptureSource::DefaultInput => Ok(Box::new(AudioCaptureDevice::new(AudioCaptureConfig {
             device_name: None,
         })?)),
-        CaptureSource::Device { name } => Ok(Box::new(AudioCaptureDevice::new(
-            AudioCaptureConfig { device_name: Some(name) },
-        )?)),
+        CaptureSource::Device { name } => {
+            Ok(Box::new(AudioCaptureDevice::new(AudioCaptureConfig {
+                device_name: Some(name),
+            })?))
+        }
         CaptureSource::SystemAudio => tap::open_system_audio(),
         CaptureSource::Apps { handles } => tap::open_apps(&handles),
     }

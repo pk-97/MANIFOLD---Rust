@@ -28,7 +28,9 @@ pub enum ValueCellZone {
 pub enum ValueCellGesture {
     /// Shift held at drag-start (D8: "fine" — the host multiplies its
     /// applied delta by 0.1).
-    Drag { shift: bool },
+    Drag {
+        shift: bool,
+    },
     DoubleClick,
     RightClick,
 }

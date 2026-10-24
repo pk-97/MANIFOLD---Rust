@@ -12,14 +12,14 @@
 
 use manifold_core::effects::{ParamEnvelope, ParameterDriver};
 use manifold_core::types::{BeatDivision, DriverWaveform};
-use manifold_editing::commands::drivers::{
-    AddDriverCommand, ChangeDriverBeatDivCommand, ChangeDriverWaveformCommand,
-    SetDriverFreePeriodCommand, ToggleDriverEnabledCommand, ToggleDriverReversedCommand,
-    ToggleDriverFrameAlignedCommand,
-};
 use manifold_editing::commands::audio_mod::{
     AddAudioModCommand, RemoveAudioModCommand, SetAudioModActionCommand, SetAudioModShapeCommand,
     SetAudioModSourceCommand, SetAudioModTriggerModeCommand, ToggleAudioModEnabledCommand,
+};
+use manifold_editing::commands::drivers::{
+    AddDriverCommand, ChangeDriverBeatDivCommand, ChangeDriverWaveformCommand,
+    SetDriverFreePeriodCommand, ToggleDriverEnabledCommand, ToggleDriverFrameAlignedCommand,
+    ToggleDriverReversedCommand,
 };
 use manifold_editing::commands::effect_target::DriverTarget;
 use manifold_editing::commands::envelopes::{
@@ -30,8 +30,16 @@ use manifold_ui::{DriverConfigAction, InspectorTab, ModulationAction};
 use super::super::DispatchResult;
 use super::resolve::resolve_mod_target;
 
-pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
-    let (effective_tab, effective_active_layer) = super::editor_dispatch_context(ctx.editor_target, &ctx.project, ctx.ui.inspector.last_effect_tab(), ctx.active_layer);
+pub(crate) fn dispatch_modulation(
+    action: &ModulationAction,
+    ctx: &mut super::super::DispatchCtx,
+) -> DispatchResult {
+    let (effective_tab, effective_active_layer) = super::editor_dispatch_context(
+        ctx.editor_target,
+        &ctx.project,
+        ctx.ui.inspector.last_effect_tab(),
+        ctx.active_layer,
+    );
     let active_layer = &effective_active_layer;
     match action {
         ModulationAction::DriverToggle(gpt, param_id) => {
@@ -39,8 +47,16 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
             // (materializing the exposure on first arm) — see
             // `resolve_mod_target`. Non-scene ids resolve exactly as before.
             let Some((target, param_id)) = resolve_mod_target(
-                ctx.ui, &ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
-                ctx.selection, true,
+                ctx.ui,
+                &ctx.project,
+                ctx.content_tx,
+                gpt,
+                param_id,
+                ctx.editor_target,
+                effective_tab,
+                active_layer,
+                ctx.selection,
+                true,
             ) else {
                 return DispatchResult::handled();
             };
@@ -62,7 +78,12 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
             let driver_target = DriverTarget::from(&target);
             let boxed: Box<dyn manifold_editing::command::Command + Send> =
                 if let Some((di, old)) = existing {
-                    Box::new(ToggleDriverEnabledCommand::new(driver_target, di, old, !old))
+                    Box::new(ToggleDriverEnabledCommand::new(
+                        driver_target,
+                        di,
+                        old,
+                        !old,
+                    ))
                 } else {
                     let driver = ParameterDriver {
                         param_id: param_id.clone(),
@@ -75,7 +96,7 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                         trim_max: 1.0,
                         reversed: false,
                         free_period_beats: None,
-            frame_aligned: false,
+                        frame_aligned: false,
                         legacy_param_index: None,
                         is_paused_by_user: false,
                     };
@@ -86,14 +107,23 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
         }
         ModulationAction::AudioModToggle(gpt, param_id) => {
             let Some((target, param_id)) = resolve_mod_target(
-                ctx.ui, &ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
-                ctx.selection, true,
+                ctx.ui,
+                &ctx.project,
+                ctx.content_tx,
+                gpt,
+                param_id,
+                ctx.editor_target,
+                effective_tab,
+                active_layer,
+                ctx.selection,
+                true,
             ) else {
                 return DispatchResult::handled();
             };
             let param_id = &param_id;
             // Existing mod's enabled state, read off the resolved instance.
-            let existing = ctx.project
+            let existing = ctx
+                .project
                 .with_preset_graph(&target, |inst| {
                     inst.find_audio_mod(param_id.as_ref()).map(|a| a.enabled)
                 })
@@ -110,17 +140,21 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                 } else {
                     let send_id = ctx.project.audio_setup.sends.first().map(|s| s.id.clone());
                     let clip_only = send_id.is_none()
-                        && ctx.project.preset_instance(&target).is_some_and(|instance| {
-                            instance.params.get(param_id.as_ref()).is_some_and(|param| {
-                                param.spec.is_trigger && !param.spec.is_trigger_gate
+                        && ctx
+                            .project
+                            .preset_instance(&target)
+                            .is_some_and(|instance| {
+                                instance.params.get(param_id.as_ref()).is_some_and(|param| {
+                                    param.spec.is_trigger && !param.spec.is_trigger_gate
+                                })
                             })
-                        })
                         && match target.host_target() {
                             Some(manifold_core::GraphTarget::Generator(_)) => true,
-                            Some(manifold_core::GraphTarget::Effect(id)) =>
+                            Some(manifold_core::GraphTarget::Effect(id)) => {
                                 ctx.project.timeline.layers.iter().any(|layer| {
                                     layer.effects.iter().flatten().any(|fx| &fx.id == id)
-                                }),
+                                })
+                            }
                             _ => false,
                         };
                     // A layer-owned Fire can start with Clip timing without
@@ -135,7 +169,8 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                         manifold_core::AudioFeature::default(),
                     );
                     if clip_only {
-                        m.trigger_mode = Some(manifold_core::audio_trigger::TriggerFireMode::ClipEdge);
+                        m.trigger_mode =
+                            Some(manifold_core::audio_trigger::TriggerFireMode::ClipEdge);
                     }
                     Box::new(AddAudioModCommand::new(driver_target, m))
                 };
@@ -144,15 +179,25 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
         }
         ModulationAction::AudioModSetSource(gpt, param_id, send_id, feature) => {
             let Some((target, param_id)) = resolve_mod_target(
-                ctx.ui, &ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
-                ctx.selection, true,
+                ctx.ui,
+                &ctx.project,
+                ctx.content_tx,
+                gpt,
+                param_id,
+                ctx.editor_target,
+                effective_tab,
+                active_layer,
+                ctx.selection,
+                true,
             ) else {
                 return DispatchResult::handled();
             };
             let param_id = &param_id;
-            let old_source = ctx.project
+            let old_source = ctx
+                .project
                 .with_preset_graph(&target, |inst| {
-                    inst.find_audio_mod(param_id.as_ref()).map(|a| a.source.clone())
+                    inst.find_audio_mod(param_id.as_ref())
+                        .map(|a| a.source.clone())
                 })
                 .flatten();
             let driver_target = DriverTarget::from(&target);
@@ -181,8 +226,16 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
         }
         ModulationAction::AudioModRemove(gpt, param_id) => {
             let Some((target, param_id)) = resolve_mod_target(
-                ctx.ui, &ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
-                ctx.selection, false,
+                ctx.ui,
+                &ctx.project,
+                ctx.content_tx,
+                gpt,
+                param_id,
+                ctx.editor_target,
+                effective_tab,
+                active_layer,
+                ctx.selection,
+                false,
             ) else {
                 return DispatchResult::handled();
             };
@@ -197,11 +250,20 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
             // Flip the mod's invert flag in one undo step. Reads the current
             // shape, flips `invert`, commits old→new via the shape command.
             if let Some((target, param_id)) = resolve_mod_target(
-                ctx.ui, &ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
-                ctx.selection, false,
+                ctx.ui,
+                &ctx.project,
+                ctx.content_tx,
+                gpt,
+                param_id,
+                ctx.editor_target,
+                effective_tab,
+                active_layer,
+                ctx.selection,
+                false,
             ) {
                 let param_id = &param_id;
-                let old_shape = ctx.project
+                let old_shape = ctx
+                    .project
                     .with_preset_graph(&target, |inst| {
                         inst.audio_mods
                             .as_ref()
@@ -230,11 +292,20 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
             // path as invert: read the current shape, flip `rate_of_change`,
             // commit old→new via the shape command.
             if let Some((target, param_id)) = resolve_mod_target(
-                ctx.ui, &ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
-                ctx.selection, false,
+                ctx.ui,
+                &ctx.project,
+                ctx.content_tx,
+                gpt,
+                param_id,
+                ctx.editor_target,
+                effective_tab,
+                active_layer,
+                ctx.selection,
+                false,
             ) {
                 let param_id = &param_id;
-                let old_shape = ctx.project
+                let old_shape = ctx
+                    .project
                     .with_preset_graph(&target, |inst| {
                         inst.audio_mods
                             .as_ref()
@@ -268,13 +339,23 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
         // separate per-instance config, no separate command family).
         ModulationAction::AudioModSetTriggerMode(gpt, param_id, mode_idx) => {
             if let Some((target, param_id)) = resolve_mod_target(
-                ctx.ui, &ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
-                ctx.selection, false,
+                ctx.ui,
+                &ctx.project,
+                ctx.content_tx,
+                gpt,
+                param_id,
+                ctx.editor_target,
+                effective_tab,
+                active_layer,
+                ctx.selection,
+                false,
             ) {
                 let param_id = &param_id;
-                let old_mode = ctx.project
+                let old_mode = ctx
+                    .project
                     .with_preset_graph(&target, |inst| {
-                        inst.find_audio_mod(param_id.as_ref()).and_then(|m| m.trigger_mode)
+                        inst.find_audio_mod(param_id.as_ref())
+                            .and_then(|m| m.trigger_mode)
                     })
                     .flatten();
                 let new_mode = Some(match mode_idx {
@@ -304,11 +385,20 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
         // depend on which action is armed.
         ModulationAction::AudioModSetActionKind(gpt, param_id, kind_idx) => {
             if let Some((target, param_id)) = resolve_mod_target(
-                ctx.ui, &ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
-                ctx.selection, false,
+                ctx.ui,
+                &ctx.project,
+                ctx.content_tx,
+                gpt,
+                param_id,
+                ctx.editor_target,
+                effective_tab,
+                active_layer,
+                ctx.selection,
+                false,
             ) {
                 let param_id = &param_id;
-                let (old_action, min, max, whole_numbers) = ctx.project
+                let (old_action, min, max, whole_numbers) = ctx
+                    .project
                     .with_preset_graph(&target, |inst| {
                         let action = inst.find_audio_mod(param_id.as_ref()).map(|m| m.action);
                         let spec = inst.params.get(param_id.as_ref());
@@ -362,16 +452,27 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
         // isn't built then) is a harmless no-op.
         ModulationAction::AudioModSetWrap(gpt, param_id, wrap_idx) => {
             if let Some((target, param_id)) = resolve_mod_target(
-                ctx.ui, &ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
-                ctx.selection, false,
+                ctx.ui,
+                &ctx.project,
+                ctx.content_tx,
+                gpt,
+                param_id,
+                ctx.editor_target,
+                effective_tab,
+                active_layer,
+                ctx.selection,
+                false,
             ) {
                 let param_id = &param_id;
-                let old_action = ctx.project
+                let old_action = ctx
+                    .project
                     .with_preset_graph(&target, |inst| {
                         inst.find_audio_mod(param_id.as_ref()).map(|m| m.action)
                     })
                     .flatten();
-                if let Some(manifold_core::audio_mod::TriggerAction::Step { amount, .. }) = old_action {
+                if let Some(manifold_core::audio_mod::TriggerAction::Step { amount, .. }) =
+                    old_action
+                {
                     let wrap = match wrap_idx {
                         1 => manifold_core::audio_mod::WrapMode::Bounce,
                         2 => manifold_core::audio_mod::WrapMode::Clamp,
@@ -399,14 +500,23 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
         // rows. Entering Step seeds `amount`/`wrap` from the param's own spec.
         ModulationAction::EnvelopeSetActionKind(gpt, param_id, kind_idx) => {
             if let Some((target, param_id)) = resolve_mod_target(
-                ctx.ui, &ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
-                ctx.selection, false,
+                ctx.ui,
+                &ctx.project,
+                ctx.content_tx,
+                gpt,
+                param_id,
+                ctx.editor_target,
+                effective_tab,
+                active_layer,
+                ctx.selection,
+                false,
             ) {
                 let param_id = &param_id;
-                let Some((env_info, min, max, whole_numbers)) = ctx.project
-                    .with_preset_graph(&target, |inst| {
+                let Some((env_info, min, max, whole_numbers)) =
+                    ctx.project.with_preset_graph(&target, |inst| {
                         let env = inst.envelopes.as_ref().and_then(|es| {
-                            es.iter().position(|e| e.param_id == *param_id)
+                            es.iter()
+                                .position(|e| e.param_id == *param_id)
                                 .map(|idx| (idx, es[idx].action))
                         });
                         let spec = inst.params.get(param_id.as_ref());
@@ -425,7 +535,11 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                         1 => match old_action {
                             manifold_core::audio_mod::TriggerAction::Step { .. } => old_action,
                             _ => manifold_core::audio_mod::TriggerAction::Step {
-                                amount: manifold_core::audio_mod::default_step_amount(min, max, whole_numbers),
+                                amount: manifold_core::audio_mod::default_step_amount(
+                                    min,
+                                    max,
+                                    whole_numbers,
+                                ),
                                 wrap: manifold_core::audio_mod::WrapMode::Wrap,
                             },
                         },
@@ -433,13 +547,9 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                         _ => manifold_core::audio_mod::TriggerAction::Continuous,
                     };
                     if new_action != old_action {
-                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(SetEnvelopeActionCommand::new(
-                                target,
-                                env_idx,
-                                old_action,
-                                new_action,
-                            ));
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
+                            SetEnvelopeActionCommand::new(target, env_idx, old_action, new_action),
+                        );
                         ctx.execute(boxed);
                     }
                 }
@@ -450,11 +560,20 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
         // The envelope drawer's Wrap row — only meaningful while Action=Step.
         ModulationAction::EnvelopeSetWrap(gpt, param_id, wrap_idx) => {
             if let Some((target, param_id)) = resolve_mod_target(
-                ctx.ui, &ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
-                ctx.selection, false,
+                ctx.ui,
+                &ctx.project,
+                ctx.content_tx,
+                gpt,
+                param_id,
+                ctx.editor_target,
+                effective_tab,
+                active_layer,
+                ctx.selection,
+                false,
             ) {
                 let param_id = &param_id;
-                let env_info = ctx.project
+                let env_info = ctx
+                    .project
                     .with_preset_graph(&target, |inst| {
                         inst.envelopes.as_ref().and_then(|es| {
                             es.iter()
@@ -463,22 +582,28 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                         })
                     })
                     .flatten();
-                if let Some((env_idx, manifold_core::audio_mod::TriggerAction::Step { amount, wrap: old_wrap })) = env_info {
+                if let Some((
+                    env_idx,
+                    manifold_core::audio_mod::TriggerAction::Step {
+                        amount,
+                        wrap: old_wrap,
+                    },
+                )) = env_info
+                {
                     let wrap = match wrap_idx {
                         1 => manifold_core::audio_mod::WrapMode::Bounce,
                         2 => manifold_core::audio_mod::WrapMode::Clamp,
                         _ => manifold_core::audio_mod::WrapMode::Wrap,
                     };
                     let new_action = manifold_core::audio_mod::TriggerAction::Step { amount, wrap };
-                    let old_action = manifold_core::audio_mod::TriggerAction::Step { amount, wrap: old_wrap };
+                    let old_action = manifold_core::audio_mod::TriggerAction::Step {
+                        amount,
+                        wrap: old_wrap,
+                    };
                     if new_action != old_action {
-                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(SetEnvelopeActionCommand::new(
-                                target,
-                                env_idx,
-                                old_action,
-                                new_action,
-                            ));
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
+                            SetEnvelopeActionCommand::new(target, env_idx, old_action, new_action),
+                        );
                         ctx.execute(boxed);
                     }
                 }
@@ -494,8 +619,16 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
             // envelopes (master/clip have no trigger — the button is inert
             // there); generators are layer-scoped, always permitted.
             if let Some((target, param_id)) = resolve_mod_target(
-                ctx.ui, &ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
-                ctx.selection, true,
+                ctx.ui,
+                &ctx.project,
+                ctx.content_tx,
+                gpt,
+                param_id,
+                ctx.editor_target,
+                effective_tab,
+                active_layer,
+                ctx.selection,
+                true,
             ) {
                 let param_id = &param_id;
                 let Some(env_target) = target.host_target() else {
@@ -513,15 +646,14 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                     // siblings (was `MutateProject` — arming or flipping an
                     // envelope recorded NO undo entry): existing envelope →
                     // flip `enabled`; none → add a fresh enabled one.
-                    let existing = ctx.project
+                    let existing = ctx
+                        .project
                         .with_preset_graph(&target, |inst| {
-                            inst.envelopes
-                                .as_ref()
-                                .and_then(|envs| {
-                                    envs.iter()
-                                        .position(|e| e.param_id == *param_id)
-                                        .map(|idx| (idx, envs[idx].enabled))
-                                })
+                            inst.envelopes.as_ref().and_then(|envs| {
+                                envs.iter()
+                                    .position(|e| e.param_id == *param_id)
+                                    .map(|idx| (idx, envs[idx].enabled))
+                            })
                         })
                         .flatten();
                     let boxed: Box<dyn manifold_editing::command::Command + Send> =
@@ -545,8 +677,16 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
         }
         ModulationAction::DriverConfig(gpt, param_id, cfg) => {
             let Some((target, param_id)) = resolve_mod_target(
-                ctx.ui, &ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
-                ctx.selection, false,
+                ctx.ui,
+                &ctx.project,
+                ctx.content_tx,
+                gpt,
+                param_id,
+                ctx.editor_target,
+                effective_tab,
+                active_layer,
+                ctx.selection,
+                false,
             ) else {
                 return DispatchResult::handled();
             };
@@ -555,14 +695,22 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
             // Read the driver's current config off the same instance the
             // command targets (by GraphTarget), so an editor-card edit can't
             // split command vs row index.
-            let info = ctx.project
+            let info = ctx
+                .project
                 .with_preset_graph(&target, |inst| {
                     inst.drivers
                         .as_ref()
                         .and_then(|ds| ds.iter().position(|d| d.param_id == *param_id))
                         .map(|di| {
                             let d = &inst.drivers.as_ref().unwrap()[di];
-                            (di, d.beat_division, d.waveform, d.reversed, d.free_period_beats, d.frame_aligned)
+                            (
+                                di,
+                                d.beat_division,
+                                d.waveform,
+                                d.reversed,
+                                d.free_period_beats,
+                                d.frame_aligned,
+                            )
                         })
                 })
                 .flatten();
@@ -572,8 +720,8 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                 // base without a dotted/triplet variant (e.g. 1/32) keeps the base.
                 let base = beat_division.base_division();
                 let cmd: Option<BoxedCmd> = match cfg {
-                    DriverConfigAction::BeatDiv(idx) => BeatDivision::from_button_index(*idx)
-                        .map(|new_div| {
+                    DriverConfigAction::BeatDiv(idx) => {
+                        BeatDivision::from_button_index(*idx).map(|new_div| {
                             Box::new(ChangeDriverBeatDivCommand::new(
                                 driver_target,
                                 di,
@@ -581,15 +729,18 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                                 new_div,
                                 free,
                             )) as BoxedCmd
-                        }),
-                    DriverConfigAction::Wave(idx) => DriverWaveform::from_index(*idx).map(|new_wave| {
-                        Box::new(ChangeDriverWaveformCommand::new(
-                            driver_target,
-                            di,
-                            waveform,
-                            new_wave,
-                        )) as BoxedCmd
-                    }),
+                        })
+                    }
+                    DriverConfigAction::Wave(idx) => {
+                        DriverWaveform::from_index(*idx).map(|new_wave| {
+                            Box::new(ChangeDriverWaveformCommand::new(
+                                driver_target,
+                                di,
+                                waveform,
+                                new_wave,
+                            )) as BoxedCmd
+                        })
+                    }
                     DriverConfigAction::Straight => Some(Box::new(ChangeDriverBeatDivCommand::new(
                         driver_target,
                         di,
@@ -617,32 +768,31 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                         reversed,
                         !reversed,
                     )) as BoxedCmd),
-                    DriverConfigAction::ToggleFrameAligned => Some(Box::new(ToggleDriverFrameAlignedCommand::new(
-                        driver_target, di, frame_aligned, !frame_aligned,
-                    )) as BoxedCmd),
-                    DriverConfigAction::SetFreePeriod(p) => {
-                        Some(Box::new(SetDriverFreePeriodCommand::new(
+                    DriverConfigAction::ToggleFrameAligned => {
+                        Some(Box::new(ToggleDriverFrameAlignedCommand::new(
                             driver_target,
                             di,
-                            free,
-                            Some(*p),
+                            frame_aligned,
+                            !frame_aligned,
                         )) as BoxedCmd)
                     }
+                    DriverConfigAction::SetFreePeriod(p) => Some(Box::new(
+                        SetDriverFreePeriodCommand::new(driver_target, di, free, Some(*p)),
+                    ) as BoxedCmd),
                 };
                 if let Some(boxed) = cmd {
                     ctx.execute(boxed);
                 }
             }
             DispatchResult::handled()
-        }
-        // Trim-range scrub trio (driver / audio / Ableton) migrated to the
-        // unified `PanelAction::Scrub` wire (`ValueRef::Trim`, P-I / D4).
-        // Envelope-target scrub trio migrated to the unified `PanelAction::Scrub`
-        // wire (`ValueRef::EnvelopeTarget`, P-I / D4).
-        // ── Modulation undo: snapshot/commit ────────────────────────
-        // Trim-range, envelope-target, and envelope-decay scrub trios migrated to
-        // the unified `PanelAction::Scrub` wire (`ValueRef::Trim` /
-        // `ValueRef::EnvelopeTarget` / `ValueRef::EnvDecay`, P-I / D4): Begin
-        // captures the undo baseline, Commit emits the undo command.
+        } // Trim-range scrub trio (driver / audio / Ableton) migrated to the
+          // unified `PanelAction::Scrub` wire (`ValueRef::Trim`, P-I / D4).
+          // Envelope-target scrub trio migrated to the unified `PanelAction::Scrub`
+          // wire (`ValueRef::EnvelopeTarget`, P-I / D4).
+          // ── Modulation undo: snapshot/commit ────────────────────────
+          // Trim-range, envelope-target, and envelope-decay scrub trios migrated to
+          // the unified `PanelAction::Scrub` wire (`ValueRef::Trim` /
+          // `ValueRef::EnvelopeTarget` / `ValueRef::EnvDecay`, P-I / D4): Begin
+          // captures the undo baseline, Commit emits the undo command.
     }
 }

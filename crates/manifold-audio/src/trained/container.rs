@@ -32,19 +32,31 @@ impl Array {
     }
 
     pub fn f64s(shape: &[usize], v: Vec<f64>) -> Self {
-        Self { shape: shape.to_vec(), data: Data::F64(v) }
+        Self {
+            shape: shape.to_vec(),
+            data: Data::F64(v),
+        }
     }
 
     pub fn i64s(shape: &[usize], v: Vec<i64>) -> Self {
-        Self { shape: shape.to_vec(), data: Data::I64(v) }
+        Self {
+            shape: shape.to_vec(),
+            data: Data::I64(v),
+        }
     }
 
     pub fn i32_scalar(v: i32) -> Self {
-        Self { shape: vec![], data: Data::I32(vec![v]) }
+        Self {
+            shape: vec![],
+            data: Data::I32(vec![v]),
+        }
     }
 
     pub fn text(s: &str) -> Self {
-        Self { shape: vec![s.len()], data: Data::U8(s.as_bytes().to_vec()) }
+        Self {
+            shape: vec![s.len()],
+            data: Data::U8(s.as_bytes().to_vec()),
+        }
     }
 }
 
@@ -60,8 +72,15 @@ pub enum ContainerError {
     BadName,
     BadDtype(u8),
     Missing(String),
-    WrongType { name: String, want: &'static str },
-    WrongShape { name: String, want: Vec<usize>, got: Vec<usize> },
+    WrongType {
+        name: String,
+        want: &'static str,
+    },
+    WrongShape {
+        name: String,
+        want: Vec<usize>,
+        got: Vec<usize>,
+    },
 }
 
 impl std::fmt::Display for ContainerError {
@@ -91,7 +110,9 @@ impl<'a> Reader<'a> {
 }
 
 fn decode<T, const N: usize>(raw: &[u8], f: fn([u8; N]) -> T) -> Vec<T> {
-    raw.chunks_exact(N).map(|c| f(c.try_into().expect("chunk of N bytes"))).collect()
+    raw.chunks_exact(N)
+        .map(|c| f(c.try_into().expect("chunk of N bytes")))
+        .collect()
 }
 
 impl Container {
@@ -104,7 +125,9 @@ impl Container {
         let mut entries = HashMap::with_capacity(count as usize);
         for _ in 0..count {
             let n = u16::from_le_bytes(r.arr()?) as usize;
-            let name = std::str::from_utf8(r.take(n)?).map_err(|_| ContainerError::BadName)?.to_owned();
+            let name = std::str::from_utf8(r.take(n)?)
+                .map_err(|_| ContainerError::BadName)?
+                .to_owned();
             let [code, ndim] = r.arr::<2>()?;
             let mut shape = Vec::with_capacity(ndim as usize);
             for _ in 0..ndim {
@@ -133,7 +156,9 @@ impl Container {
     }
 
     pub fn get(&self, name: &str) -> Result<&Array, ContainerError> {
-        self.entries.get(name).ok_or_else(|| ContainerError::Missing(name.to_owned()))
+        self.entries
+            .get(name)
+            .ok_or_else(|| ContainerError::Missing(name.to_owned()))
     }
 
     pub fn names(&self) -> impl Iterator<Item = &str> {
@@ -158,7 +183,10 @@ impl Container {
         let a = self.shaped(name, shape)?;
         match &a.data {
             Data::F64(v) => Ok(v),
-            _ => Err(ContainerError::WrongType { name: name.to_owned(), want: "f64" }),
+            _ => Err(ContainerError::WrongType {
+                name: name.to_owned(),
+                want: "f64",
+            }),
         }
     }
 
@@ -166,7 +194,10 @@ impl Container {
         let a = self.shaped(name, shape)?;
         match &a.data {
             Data::F32(v) => Ok(v),
-            _ => Err(ContainerError::WrongType { name: name.to_owned(), want: "f32" }),
+            _ => Err(ContainerError::WrongType {
+                name: name.to_owned(),
+                want: "f32",
+            }),
         }
     }
 
@@ -174,7 +205,10 @@ impl Container {
         let a = self.shaped(name, shape)?;
         match &a.data {
             Data::I64(v) => Ok(v),
-            _ => Err(ContainerError::WrongType { name: name.to_owned(), want: "i64" }),
+            _ => Err(ContainerError::WrongType {
+                name: name.to_owned(),
+                want: "i64",
+            }),
         }
     }
 
@@ -182,7 +216,10 @@ impl Container {
         let a = self.shaped(name, shape)?;
         match &a.data {
             Data::I32(v) => Ok(v),
-            _ => Err(ContainerError::WrongType { name: name.to_owned(), want: "i32" }),
+            _ => Err(ContainerError::WrongType {
+                name: name.to_owned(),
+                want: "i32",
+            }),
         }
     }
 
@@ -190,14 +227,20 @@ impl Container {
         let a = self.shaped(name, shape)?;
         match &a.data {
             Data::I16(v) => Ok(v),
-            _ => Err(ContainerError::WrongType { name: name.to_owned(), want: "i16" }),
+            _ => Err(ContainerError::WrongType {
+                name: name.to_owned(),
+                want: "i16",
+            }),
         }
     }
 
     pub fn text(&self, name: &str) -> Result<&str, ContainerError> {
         match &self.get(name)?.data {
             Data::U8(v) => std::str::from_utf8(v).map_err(|_| ContainerError::BadName),
-            _ => Err(ContainerError::WrongType { name: name.to_owned(), want: "u8 text" }),
+            _ => Err(ContainerError::WrongType {
+                name: name.to_owned(),
+                want: "u8 text",
+            }),
         }
     }
 
@@ -209,7 +252,11 @@ impl Container {
     fn shaped(&self, name: &str, shape: &[usize]) -> Result<&Array, ContainerError> {
         let a = self.get(name)?;
         if a.shape != shape {
-            return Err(ContainerError::WrongShape { name: name.to_owned(), want: shape.to_vec(), got: a.shape.clone() });
+            return Err(ContainerError::WrongShape {
+                name: name.to_owned(),
+                want: shape.to_vec(),
+                got: a.shape.clone(),
+            });
         }
         Ok(a)
     }
@@ -233,7 +280,10 @@ mod tests {
     fn parses_typed_entries_and_checks_shapes() {
         let mut b = MAGIC.to_vec();
         b.extend(3u32.to_le_bytes());
-        let w: Vec<u8> = [1.5f64, -2.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let w: Vec<u8> = [1.5f64, -2.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
         entry(&mut b, "w", 0, &[2], &w);
         entry(&mut b, "seed", 2, &[], &7i32.to_le_bytes());
         entry(&mut b, "train_id", 5, &[3], b"abc");
@@ -241,10 +291,22 @@ mod tests {
         assert_eq!(c.f64s("w", &[2]).unwrap(), &[1.5, -2.0]);
         assert_eq!(c.i32s("seed", &[]).unwrap(), &[7]);
         assert_eq!(c.text("train_id").unwrap(), "abc");
-        assert!(matches!(c.f64s("w", &[3]), Err(ContainerError::WrongShape { .. })));
-        assert!(matches!(c.f32s("w", &[2]), Err(ContainerError::WrongType { .. })));
+        assert!(matches!(
+            c.f64s("w", &[3]),
+            Err(ContainerError::WrongShape { .. })
+        ));
+        assert!(matches!(
+            c.f32s("w", &[2]),
+            Err(ContainerError::WrongType { .. })
+        ));
         assert!(matches!(c.get("nope"), Err(ContainerError::Missing(_))));
-        assert_eq!(Container::parse(&b[..b.len() - 1]).unwrap_err(), ContainerError::Truncated);
-        assert_eq!(Container::parse(b"NOTKICK!").unwrap_err(), ContainerError::BadMagic);
+        assert_eq!(
+            Container::parse(&b[..b.len() - 1]).unwrap_err(),
+            ContainerError::Truncated
+        );
+        assert_eq!(
+            Container::parse(b"NOTKICK!").unwrap_err(),
+            ContainerError::BadMagic
+        );
     }
 }

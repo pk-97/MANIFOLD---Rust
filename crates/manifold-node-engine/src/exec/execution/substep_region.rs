@@ -9,13 +9,13 @@
 //! refresh its scalars, so the next iteration reads the finished one.
 
 use super::{Executor, FrameTally, StepEnv, StepFlow, StepPass, resolve_dims};
-use crate::gpu::gpu_encoder::GpuEncoder;
+use crate::exec::effect_node::NodeInstanceId;
 use crate::exec::execution_plan::ExecutionPlan;
+use crate::exec::substeps::{SubstepClockOutput, SubstepRegion};
+use crate::gpu::gpu_encoder::GpuEncoder;
 use crate::graph::Graph;
 use crate::parameters::ParamValue;
 use crate::state_store::StateStore;
-use crate::exec::effect_node::NodeInstanceId;
-use crate::exec::substeps::{SubstepClockOutput, SubstepRegion};
 
 /// Iterations one region may run in one frame. The boundary owns the count
 /// (the MPM rule caps it at 128 substeps per tick); this only stops a
@@ -41,10 +41,21 @@ impl Executor {
         if !self.live_steps[boundary_idx] {
             return StepFlow::Next;
         }
-        if self.run_step(graph, plan, boundary_idx, StepPass::Frame, env, tally, gpu, state) == StepFlow::Abort {
+        if self.run_step(
+            graph,
+            plan,
+            boundary_idx,
+            StepPass::Frame,
+            env,
+            tally,
+            gpu,
+            state,
+        ) == StepFlow::Abort
+        {
             return StepFlow::Abort;
         }
-        let restart = graph.get_node_mut(region.boundary)
+        let restart = graph
+            .get_node_mut(region.boundary)
             .is_some_and(|boundary| boundary.node.take_substep_restart_request());
         if restart {
             if let Some(clock) = region.clock.and_then(|id| graph.get_node_mut(id)) {
@@ -52,7 +63,10 @@ impl Executor {
                 // a coupled rigid owner. No ID is reused in the old epoch.
                 clock.node.clear_state();
             } else {
-                eprintln!("[graph error] substep boundary {:?} requested an identity restart without a clock owner", region.boundary);
+                eprintln!(
+                    "[graph error] substep boundary {:?} requested an identity restart without a clock owner",
+                    region.boundary
+                );
             }
             self.release_region_held(plan, region, env);
             return StepFlow::Next;
@@ -62,7 +76,9 @@ impl Executor {
             // once, so each step publishes its outputs pending.
             for &step_idx in &region.steps[1..] {
                 let pass = StepPass::Repeat { first: true };
-                if self.run_step(graph, plan, step_idx, pass, env, tally, gpu, state) == StepFlow::Abort {
+                if self.run_step(graph, plan, step_idx, pass, env, tally, gpu, state)
+                    == StepFlow::Abort
+                {
                     return StepFlow::Abort;
                 }
             }
@@ -84,7 +100,8 @@ impl Executor {
             self.substep_scalar_slots.push(slot);
         }
         self.substep_scalar_values.clear();
-        self.substep_scalar_values.resize(ports.iteration_scalars.len(), 0.0);
+        self.substep_scalar_values
+            .resize(ports.iteration_scalars.len(), 0.0);
 
         // The body replays its recorded dispatches (docs/ENCODE_REPLAY_DESIGN.md D1).
         let replay = self.encode_replay && !self.dumps_arrays();
@@ -96,13 +113,17 @@ impl Executor {
             let mut iteration = 0u32;
             loop {
                 if let Some(clock) = region.clock
-                    && let Some(output) = graph.get_node(clock)
+                    && let Some(output) = graph
+                        .get_node(clock)
                         .and_then(|owner| owner.node.substep_clock_interval(iteration))
                 {
                     let timing = output.timing;
                     self.publish_clock_output(plan, clock, &output);
-                    graph.get_node_mut(region.boundary).expect("boundary exists")
-                        .node.set_substep_interval(timing);
+                    graph
+                        .get_node_mut(region.boundary)
+                        .expect("boundary exists")
+                        .node
+                        .set_substep_interval(timing);
                 }
                 let more = graph
                     .get_node_mut(region.boundary)
@@ -124,14 +145,17 @@ impl Executor {
                 // once between ticks, bounded live by MAX_LIVE_TICKS - 1.
                 if let Some(clock) = region.clock
                     && iteration > 0
-                    && graph.get_node(clock).is_some_and(|inst| inst.node.substep_host_sync(iteration))
+                    && graph
+                        .get_node(clock)
+                        .is_some_and(|inst| inst.node.substep_host_sync(iteration))
                 {
                     if let Some(gpu) = gpu.as_deref_mut() {
                         gpu.native_enc.commit_wait_and_continue(gpu.device);
                     }
                     self.substep_host_syncs += 1;
                     let owner = graph.get_node_mut(clock).expect("clock owner exists");
-                    if let Err(error) = owner.node.substep_host_step(iteration, gpu.as_deref_mut()) {
+                    if let Err(error) = owner.node.substep_host_step(iteration, gpu.as_deref_mut())
+                    {
                         eprintln!(
                             "[graph error] node {clock:?} ({}): substep host step before iteration {iteration}: {error}",
                             owner.node.type_id().as_str(),
@@ -141,22 +165,34 @@ impl Executor {
                     // The finished iteration refreshes what the next one
                     // reads: the clock owner's outputs, then the boundary's
                     // scalars.
-                    if let Some(output) = graph.get_node(clock)
+                    if let Some(output) = graph
+                        .get_node(clock)
                         .and_then(|owner| owner.node.substep_clock_interval(iteration))
                     {
                         self.publish_clock_output(plan, clock, &output);
                     }
-                    graph.get_node_mut(region.boundary).expect("boundary exists")
-                        .node.substep_host_synced(iteration, &mut self.substep_scalar_values);
+                    graph
+                        .get_node_mut(region.boundary)
+                        .expect("boundary exists")
+                        .node
+                        .substep_host_synced(iteration, &mut self.substep_scalar_values);
                 }
-                for (slot, &value) in self.substep_scalar_slots.iter().zip(&self.substep_scalar_values) {
+                for (slot, &value) in self
+                    .substep_scalar_slots
+                    .iter()
+                    .zip(&self.substep_scalar_values)
+                {
                     if let Some(slot) = *slot {
                         self.backend.set_scalar(slot, ParamValue::Float(value));
                     }
                 }
-                let body_pass = StepPass::Repeat { first: iteration == 0 };
+                let body_pass = StepPass::Repeat {
+                    first: iteration == 0,
+                };
                 for &step_idx in &region.steps[1..] {
-                    if self.run_step(graph, plan, step_idx, body_pass, env, tally, gpu, state) == StepFlow::Abort {
+                    if self.run_step(graph, plan, step_idx, body_pass, env, tally, gpu, state)
+                        == StepFlow::Abort
+                    {
                         break 'iterations StepFlow::Abort;
                     }
                 }
@@ -166,7 +202,10 @@ impl Executor {
         };
         if replay && let Some(gpu) = gpu.as_deref_mut() {
             let cache = gpu.native_enc.end_replay();
-            *self.replay_caches.get_mut(&region.boundary).expect("taken above") = cache;
+            *self
+                .replay_caches
+                .get_mut(&region.boundary)
+                .expect("taken above") = cache;
         }
         if flow == StepFlow::Abort {
             return StepFlow::Abort;
@@ -177,7 +216,12 @@ impl Executor {
 
     /// Write a clock owner's per-iteration outputs: the interval duration,
     /// then its extra scalars, each into the clock step's output slot.
-    fn publish_clock_output(&mut self, plan: &ExecutionPlan, clock: NodeInstanceId, output: &SubstepClockOutput<'_>) {
+    fn publish_clock_output(
+        &mut self,
+        plan: &ExecutionPlan,
+        clock: NodeInstanceId,
+        output: &SubstepClockOutput<'_>,
+    ) {
         let clock_step = plan.steps().iter().find(|step| step.node == clock);
         let duration = (output.duration_port, output.timing.duration().0 as f32);
         for &(port, value) in std::iter::once(&duration).chain(output.scalars) {
@@ -190,7 +234,12 @@ impl Executor {
         }
     }
 
-    fn release_region_held(&mut self, plan: &ExecutionPlan, region: &SubstepRegion, env: StepEnv<'_>) {
+    fn release_region_held(
+        &mut self,
+        plan: &ExecutionPlan,
+        region: &SubstepRegion,
+        env: StepEnv<'_>,
+    ) {
         for &resource in &region.held_resources {
             if self.backend.slot_for(resource).is_none()
                 || self.dump_pinned_resources.contains(&resource)

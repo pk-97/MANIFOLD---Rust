@@ -13,8 +13,9 @@ use manifold_foundation::ItemId;
 
 mod setup_check;
 pub use setup_check::{
-    BodyAnchor, CopiesAnchor, RuntimeFit, SetupAnchor, SetupProblem, SetupProblemKind, SetupSite, SetupValues, body_anchors,
-    body_problems, card_param, copies_anchors, copies_problems, problems_with_runtime,
+    BodyAnchor, CopiesAnchor, RuntimeFit, SetupAnchor, SetupProblem, SetupProblemKind, SetupSite,
+    SetupValues, body_anchors, body_problems, card_param, copies_anchors, copies_problems,
+    problems_with_runtime,
 };
 mod shapes;
 pub use shapes::{FluidRole, SceneShapeVm, ShapeOwner, ShapeParamVm, ShapeWrite, frame_of};
@@ -80,7 +81,10 @@ impl SceneStructure {
     pub fn of(doc: &SceneDoc) -> Arc<SceneStructure> {
         let mut families = Vec::new();
         doc.walk(|item, _| families.push((item.id.clone(), family(item))));
-        Arc::new(SceneStructure { drawn: crate::node_graph::scene_compile::drawn_items(doc), families })
+        Arc::new(SceneStructure {
+            drawn: crate::node_graph::scene_compile::drawn_items(doc),
+            families,
+        })
     }
 }
 
@@ -106,7 +110,11 @@ impl SceneVm {
 
     /// [`SceneVm::from_doc`] over `structure`, which must be
     /// [`SceneStructure::of`] this same document: what a value write rebuilds.
-    pub fn with_structure(structure: Arc<SceneStructure>, doc: &SceneDoc, values: &dyn Fn(&str) -> Option<f32>) -> SceneVm {
+    pub fn with_structure(
+        structure: Arc<SceneStructure>,
+        doc: &SceneDoc,
+        values: &dyn Fn(&str) -> Option<f32>,
+    ) -> SceneVm {
         let mut shapes = shapes::item_shapes(doc, values);
         let setup_sites = setup_check::water_sites(doc, values, &mut shapes);
         let (mut problems, mut setup_anchors) = (Vec::new(), Vec::new());
@@ -128,12 +136,24 @@ impl SceneVm {
 
     /// The render slots that draw `items` and everything inside them, for the
     /// selection outline. Written into `out`, sorted and deduplicated.
-    pub fn outline_slots<'a>(&self, items: impl IntoIterator<Item = &'a ItemId>, out: &mut Vec<u32>) {
+    pub fn outline_slots<'a>(
+        &self,
+        items: impl IntoIterator<Item = &'a ItemId>,
+        out: &mut Vec<u32>,
+    ) {
         out.clear();
         for item in items {
-            let Some((_, members)) = self.structure.families.iter().find(|(id, _)| id == item) else { continue };
+            let Some((_, members)) = self.structure.families.iter().find(|(id, _)| id == item)
+            else {
+                continue;
+            };
             let drawn = &self.structure.drawn;
-            out.extend(members.iter().filter_map(|member| drawn.iter().position(|id| id == member)).map(|slot| slot as u32));
+            out.extend(
+                members
+                    .iter()
+                    .filter_map(|member| drawn.iter().position(|id| id == member))
+                    .map(|slot| slot as u32),
+            );
         }
         out.sort_unstable();
         out.dedup();
@@ -142,7 +162,12 @@ impl SceneVm {
     /// The setup check re-run with `value` overriding the authored value of
     /// any param it reads: what a rebuild at those values would find, without
     /// one. `problems` and `anchors` are cleared first.
-    pub fn recheck_setup(&self, value: SetupValues<'_>, problems: &mut Vec<SetupProblem>, anchors: &mut Vec<SetupAnchor>) {
+    pub fn recheck_setup(
+        &self,
+        value: SetupValues<'_>,
+        problems: &mut Vec<SetupProblem>,
+        anchors: &mut Vec<SetupAnchor>,
+    ) {
         problems.clear();
         anchors.clear();
         for site in &self.setup_sites {
@@ -166,9 +191,17 @@ mod tests {
 
     fn doc() -> SceneDoc {
         let mut doc = SceneDoc::base();
-        let group = Item::new(ItemId::new("g"), "G", ItemFields::default_for(ItemKind::Group));
+        let group = Item::new(
+            ItemId::new("g"),
+            "G",
+            ItemFields::default_for(ItemKind::Group),
+        );
         let mut group = group;
-        group.children.push(Item::new(ItemId::new("o2"), "O2", ItemFields::default_for(ItemKind::Object)));
+        group.children.push(Item::new(
+            ItemId::new("o2"),
+            "O2",
+            ItemFields::default_for(ItemKind::Object),
+        ));
         doc.items.push(group);
         doc
     }

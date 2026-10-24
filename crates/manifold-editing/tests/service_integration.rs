@@ -14,23 +14,41 @@ fn trigger_assignment_project() -> (Project, manifold_core::GraphTarget, LayerId
     let mut project = Project::default();
     let mut owner = Layer::new_generator("Scene".into(), manifold_core::PresetTypeId::PLASMA, 0);
     let owner_id = owner.layer_id.clone();
-    owner.gen_params_mut().unwrap().params = manifold_core::params::ParamManifest::from_params(vec![
-        manifold_core::params::Param::bundled(manifold_core::effect_graph_def::ParamSpecDef {
-            id: "force".into(), ..Default::default()
-        }),
-    ]);
+    owner.gen_params_mut().unwrap().params =
+        manifold_core::params::ParamManifest::from_params(vec![
+            manifold_core::params::Param::bundled(manifold_core::effect_graph_def::ParamSpecDef {
+                id: "force".into(),
+                ..Default::default()
+            }),
+        ]);
     project.timeline.layers.push(owner);
-    (project, manifold_core::GraphTarget::Generator(owner_id.clone()), owner_id)
+    (
+        project,
+        manifold_core::GraphTarget::Generator(owner_id.clone()),
+        owner_id,
+    )
 }
 
 #[test]
 fn create_trigger_lane_and_assignment_are_one_undoable_edit() {
     use manifold_core::params::ClipTriggerSource;
     let (mut project, target, owner_id) = trigger_assignment_project();
-    project.graph_target_owner_mut(&target).unwrap().params.get_mut("force").unwrap()
-        .clip_trigger_source = ClipTriggerSource::Lane { layer_id: LayerId::new("missing") };
+    project
+        .graph_target_owner_mut(&target)
+        .unwrap()
+        .params
+        .get_mut("force")
+        .unwrap()
+        .clip_trigger_source = ClipTriggerSource::Lane {
+        layer_id: LayerId::new("missing"),
+    };
     let before = serde_json::to_value(&project).unwrap();
-    let command = EditingService::create_trigger_lane(&project, &owner_id, Some((target.clone(), "force".into()))).unwrap();
+    let command = EditingService::create_trigger_lane(
+        &project,
+        &owner_id,
+        Some((target.clone(), "force".into())),
+    )
+    .unwrap();
     let mut editing = EditingService::new();
     editing.execute(command, &mut project);
     assert!(editing.take_rejection().is_none());
@@ -39,8 +57,18 @@ fn create_trigger_lane_and_assignment_are_one_undoable_edit() {
     assert!(lane.is_trigger());
     assert_eq!(lane.parent_layer_id.as_ref(), Some(&owner_id));
     assert!(lane.clips.is_empty());
-    assert_eq!(project.graph_target_owner(&target).unwrap().params.get("force").unwrap().clip_trigger_source,
-        ClipTriggerSource::Lane { layer_id: lane.layer_id.clone() });
+    assert_eq!(
+        project
+            .graph_target_owner(&target)
+            .unwrap()
+            .params
+            .get("force")
+            .unwrap()
+            .clip_trigger_source,
+        ClipTriggerSource::Lane {
+            layer_id: lane.layer_id.clone()
+        }
+    );
     let after = serde_json::to_value(&project).unwrap();
     assert!(editing.undo(&mut project));
     assert_eq!(serde_json::to_value(&project).unwrap(), before);
@@ -53,7 +81,12 @@ fn create_trigger_lane_and_assignment_are_one_undoable_edit() {
 fn rejected_trigger_assignment_rolls_back_creation_and_preserves_history() {
     let (mut project, target, owner_id) = trigger_assignment_project();
     let before = serde_json::to_value(&project).unwrap();
-    let command = EditingService::create_trigger_lane(&project, &owner_id, Some((target, "missing-param".into()))).unwrap();
+    let command = EditingService::create_trigger_lane(
+        &project,
+        &owner_id,
+        Some((target, "missing-param".into())),
+    )
+    .unwrap();
     let mut editing = EditingService::new();
     editing.execute(command, &mut project);
     assert!(editing.take_rejection().is_some());
@@ -75,22 +108,39 @@ fn authoring_assignment_rejects_an_unrelated_source_on_execution() {
     let (mut project, target, _) = trigger_assignment_project();
     let other = Layer::new_video("Other".into(), 1);
     let lane = Layer::new_trigger("Other pattern".into(), other.layer_id.clone(), 2);
-    let source = ClipTriggerSource::Lane { layer_id: lane.layer_id.clone() };
+    let source = ClipTriggerSource::Lane {
+        layer_id: lane.layer_id.clone(),
+    };
     project.timeline.layers.extend([other, lane]);
     let mut editing = EditingService::new();
-    editing.execute(Box::new(SetParamClipTriggerSourceCommand::for_assignment(target.clone(), "force", source)), &mut project);
+    editing.execute(
+        Box::new(SetParamClipTriggerSourceCommand::for_assignment(
+            target.clone(),
+            "force",
+            source,
+        )),
+        &mut project,
+    );
     assert!(editing.take_rejection().is_some());
     assert!(!editing.can_undo());
-    assert_eq!(project.graph_target_owner(&target).unwrap().params.get("force").unwrap().clip_trigger_source,
-        ClipTriggerSource::OwnLayer);
+    assert_eq!(
+        project
+            .graph_target_owner(&target)
+            .unwrap()
+            .params
+            .get("force")
+            .unwrap()
+            .clip_trigger_source,
+        ClipTriggerSource::OwnLayer
+    );
 }
 
 #[test]
 fn duplicate_owner_remaps_trigger_sources_across_instances_and_undo_redo() {
+    use manifold_core::PresetTypeId;
+    use manifold_core::effect_graph_def::ParamSpecDef;
     use manifold_core::effects::PresetInstance;
     use manifold_core::params::{ClipTriggerSource, Param, ParamManifest};
-    use manifold_core::effect_graph_def::ParamSpecDef;
-    use manifold_core::PresetTypeId;
 
     let mut project = Project::default();
     let mut group = Layer::new("Group".into(), LayerType::Group, 0);
@@ -99,23 +149,41 @@ fn duplicate_owner_remaps_trigger_sources_across_instances_and_undo_redo() {
     owner.parent_layer_id = Some(group.layer_id.clone());
     let source = Layer::new_trigger("Force".into(), owner.layer_id.clone(), 3);
     let sources = [
-        ClipTriggerSource::Lane { layer_id: source.layer_id.clone() },
-        ClipTriggerSource::Lane { layer_id: external.layer_id.clone() },
-        ClipTriggerSource::Lane { layer_id: LayerId::new("missing") },
+        ClipTriggerSource::Lane {
+            layer_id: source.layer_id.clone(),
+        },
+        ClipTriggerSource::Lane {
+            layer_id: external.layer_id.clone(),
+        },
+        ClipTriggerSource::Lane {
+            layer_id: LayerId::new("missing"),
+        },
         ClipTriggerSource::OwnLayer,
         ClipTriggerSource::Disabled,
     ];
-    let params = ParamManifest::from_params(sources.iter().enumerate().map(|(i, source)| {
-        let mut param = Param::bundled(ParamSpecDef { id: format!("p{i}"), ..Default::default() });
-        param.clip_trigger_source = source.clone();
-        param
-    }).collect());
+    let params = ParamManifest::from_params(
+        sources
+            .iter()
+            .enumerate()
+            .map(|(i, source)| {
+                let mut param = Param::bundled(ParamSpecDef {
+                    id: format!("p{i}"),
+                    ..Default::default()
+                });
+                param.clip_trigger_source = source.clone();
+                param
+            })
+            .collect(),
+    );
     let mut effect = PresetInstance::new(PresetTypeId::BLOOM);
     effect.params = params.clone();
     group.effects = Some(vec![effect.clone()]);
     owner.effects = Some(vec![effect.clone()]);
     owner.gen_params_mut().unwrap().params = params;
-    owner.clips.push(TimelineClip { effects: vec![effect], ..Default::default() });
+    owner.clips.push(TimelineClip {
+        effects: vec![effect],
+        ..Default::default()
+    });
     let owner_id = owner.layer_id.clone();
     let source_id = source.layer_id.clone();
     let generator_id = owner.gen_params().unwrap().id.clone();
@@ -123,22 +191,58 @@ fn duplicate_owner_remaps_trigger_sources_across_instances_and_undo_redo() {
     project.timeline.enforce_tree_order();
     let before = serde_json::to_value(&project).unwrap();
 
-    let mut command = EditingService::duplicate_layers(&project, std::slice::from_ref(&owner_id)).unwrap();
+    let mut command =
+        EditingService::duplicate_layers(&project, std::slice::from_ref(&owner_id)).unwrap();
     command.execute(&mut project);
-    let copied_owner = project.timeline.layers.iter().find(|l| l.name == "Scene" && l.layer_id != owner_id).unwrap();
-    let copied_source = project.timeline.layers.iter().find(|l| l.name == "Force" && l.layer_id != source_id).unwrap();
-    assert_eq!(copied_source.parent_layer_id.as_ref(), Some(&copied_owner.layer_id));
+    let copied_owner = project
+        .timeline
+        .layers
+        .iter()
+        .find(|l| l.name == "Scene" && l.layer_id != owner_id)
+        .unwrap();
+    let copied_source = project
+        .timeline
+        .layers
+        .iter()
+        .find(|l| l.name == "Force" && l.layer_id != source_id)
+        .unwrap();
+    assert_eq!(
+        copied_source.parent_layer_id.as_ref(),
+        Some(&copied_owner.layer_id)
+    );
     assert_ne!(copied_owner.gen_params().unwrap().id, generator_id);
-    for instance in [copied_owner.gen_params().unwrap(), &copied_owner.effects.as_ref().unwrap()[0], &copied_owner.clips[0].effects[0]] {
+    for instance in [
+        copied_owner.gen_params().unwrap(),
+        &copied_owner.effects.as_ref().unwrap()[0],
+        &copied_owner.clips[0].effects[0],
+    ] {
         for (i, original) in sources.iter().enumerate() {
             let expected = if i == 0 {
-                ClipTriggerSource::Lane { layer_id: copied_source.layer_id.clone() }
-            } else { original.clone() };
-            assert_eq!(instance.params.get(&format!("p{i}")).unwrap().clip_trigger_source, expected);
+                ClipTriggerSource::Lane {
+                    layer_id: copied_source.layer_id.clone(),
+                }
+            } else {
+                original.clone()
+            };
+            assert_eq!(
+                instance
+                    .params
+                    .get(&format!("p{i}"))
+                    .unwrap()
+                    .clip_trigger_source,
+                expected
+            );
         }
     }
     // Targets outside the duplicated subtree still point at the original source.
-    assert_eq!(project.timeline.layers[0].effects.as_ref().unwrap()[0].params.get("p0").unwrap().clip_trigger_source, sources[0]);
+    assert_eq!(
+        project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .params
+            .get("p0")
+            .unwrap()
+            .clip_trigger_source,
+        sources[0]
+    );
     let after = serde_json::to_value(&project).unwrap();
     command.undo(&mut project);
     assert_eq!(serde_json::to_value(&project).unwrap(), before);
@@ -455,13 +559,9 @@ fn create_clip_at_position_uses_trigger_constructor() {
     let trigger = Layer::new_trigger("Trigger".into(), owner.layer_id.clone(), 1);
     project.timeline.layers.extend([owner, trigger]);
 
-    let (mut command, clip_id) = EditingService::create_clip_at_position(
-        &mut project,
-        Beats(2.0),
-        1,
-        Beats(4.0),
-    )
-    .expect("trigger layers accept ordinary timeline clips");
+    let (mut command, clip_id) =
+        EditingService::create_clip_at_position(&mut project, Beats(2.0), 1, Beats(4.0))
+            .expect("trigger layers accept ordinary timeline clips");
     command.execute(&mut project);
 
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
@@ -536,12 +636,8 @@ fn s5_multi_clip_move_onto_occupied_lane_preserves_all_moved_clips() {
             .find_clip(moved_id)
             .expect("moved clip must exist before its own enforcement pass")
             .clone();
-        let cmds = EditingService::enforce_non_overlap(
-            &project,
-            &moved_clip,
-            layer_index,
-            &ignore_ids,
-        );
+        let cmds =
+            EditingService::enforce_non_overlap(&project, &moved_clip, layer_index, &ignore_ids);
         for mut cmd in cmds {
             cmd.execute(&mut project);
         }
@@ -549,17 +645,23 @@ fn s5_multi_clip_move_onto_occupied_lane_preserves_all_moved_clips() {
     project.timeline.mark_clip_lookup_dirty();
 
     assert!(
-        project.timeline.layers[layer_index].find_clip(&c1).is_some(),
+        project.timeline.layers[layer_index]
+            .find_clip(&c1)
+            .is_some(),
         "c1 (moved/selected) must survive the batch overlap-split"
     );
     assert!(
-        project.timeline.layers[layer_index].find_clip(&c2).is_some(),
+        project.timeline.layers[layer_index]
+            .find_clip(&c2)
+            .is_some(),
         "c2 (moved/selected) must survive the batch overlap-split — S5: the \
          overlap-split tail's own enforcement pass must honor the batch's \
          protected ignore set, not silently delete a sibling"
     );
     assert!(
-        project.timeline.layers[layer_index].find_clip(&c3).is_some(),
+        project.timeline.layers[layer_index]
+            .find_clip(&c3)
+            .is_some(),
         "c3's trimmed head must survive (only its span shrinks, at [20,25))"
     );
 }
@@ -665,8 +767,7 @@ fn data_version_increments() {
     assert_eq!(service.data_version(), 0);
 
     let (cmd, _) =
-        EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0))
-            .unwrap();
+        EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0)).unwrap();
     service.execute(cmd, &mut project);
     assert_eq!(service.data_version(), 1);
 
@@ -685,8 +786,7 @@ fn dirty_flag_tracks_saves() {
     assert!(!service.is_dirty());
 
     let (cmd, _) =
-        EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0))
-            .unwrap();
+        EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0)).unwrap();
     service.execute(cmd, &mut project);
     assert!(service.is_dirty());
 
@@ -767,14 +867,16 @@ fn extend_shrink_by_grid() {
     let id1 = add_clip(&mut project, 0, 0.0, 4.0);
 
     // Extend
-    let cmds = EditingService::extend_clips_by_grid(&project, std::slice::from_ref(&id1), Beats(1.0));
+    let cmds =
+        EditingService::extend_clips_by_grid(&project, std::slice::from_ref(&id1), Beats(1.0));
     let mut service = EditingService::new();
     service.execute_batch(cmds, "ext".into(), &mut project);
     let clip = project.timeline.find_clip_by_id(&id1).unwrap();
     assert!((clip.duration_beats - Beats(5.0)).abs() < Beats(0.001));
 
     // Shrink
-    let cmds = EditingService::shrink_clips_by_grid(&project, std::slice::from_ref(&id1), Beats(1.0));
+    let cmds =
+        EditingService::shrink_clips_by_grid(&project, std::slice::from_ref(&id1), Beats(1.0));
     service.execute_batch(cmds, "shrink".into(), &mut project);
     let clip = project.timeline.find_clip_by_id(&id1).unwrap();
     assert!((clip.duration_beats - Beats(4.0)).abs() < Beats(0.001));
@@ -828,11 +930,26 @@ fn trigger_clip_moves_between_trigger_layers_and_recorded_preview_is_undoable() 
     service.record(Box::new(command));
 
     assert!(project.timeline.layers[1].clips.is_empty());
-    assert!(project.timeline.layers[2].clips.iter().any(|c| c.id == clip_id));
+    assert!(
+        project.timeline.layers[2]
+            .clips
+            .iter()
+            .any(|c| c.id == clip_id)
+    );
     assert!(service.undo(&mut project));
-    assert!(project.timeline.layers[1].clips.iter().any(|c| c.id == clip_id));
+    assert!(
+        project.timeline.layers[1]
+            .clips
+            .iter()
+            .any(|c| c.id == clip_id)
+    );
     assert!(service.redo(&mut project));
-    assert!(project.timeline.layers[2].clips.iter().any(|c| c.id == clip_id));
+    assert!(
+        project.timeline.layers[2]
+            .clips
+            .iter()
+            .any(|c| c.id == clip_id)
+    );
 }
 
 #[test]
@@ -862,7 +979,12 @@ fn move_command_uses_containing_layer_for_stale_clip_id_and_rejects_incompatible
     );
     command.execute(&mut compatible);
     assert!(command.was_applied());
-    assert!(compatible.timeline.layers[1].clips.iter().any(|c| c.id == clip_id));
+    assert!(
+        compatible.timeline.layers[1]
+            .clips
+            .iter()
+            .any(|c| c.id == clip_id)
+    );
 
     let mut incompatible = Project::default();
     let mut media = Layer::new("Media".into(), LayerType::Video, 0);
@@ -888,8 +1010,16 @@ fn move_command_uses_containing_layer_for_stale_clip_id_and_rejects_incompatible
     );
     command.execute(&mut incompatible);
     assert!(!command.was_applied());
-    assert_eq!(command.rejection_reason(), Some("move clip layer kinds are incompatible"));
-    assert!(incompatible.timeline.layers[0].clips.iter().any(|c| c.id == clip_id));
+    assert_eq!(
+        command.rejection_reason(),
+        Some("move clip layer kinds are incompatible")
+    );
+    assert!(
+        incompatible.timeline.layers[0]
+            .clips
+            .iter()
+            .any(|c| c.id == clip_id)
+    );
     assert!(incompatible.timeline.layers[1].clips.is_empty());
 }
 
@@ -928,7 +1058,12 @@ fn trigger_and_media_clip_moves_are_rejected_in_both_directions() {
         project.timeline.rebuild_clip_lookup();
 
         assert!(EditingService::move_clip_to_layer(&project, &clip_id, 2).is_none());
-        assert!(project.timeline.layers[1].clips.iter().any(|c| c.id == clip_id));
+        assert!(
+            project.timeline.layers[1]
+                .clips
+                .iter()
+                .any(|c| c.id == clip_id)
+        );
         assert!(project.timeline.layers[2].clips.is_empty());
     }
 }
@@ -952,7 +1087,12 @@ fn generator_and_dmx_clip_moves_are_compatible_both_directions() {
             .expect("Generator and Dmx layers share the generator clip kind");
         let mut service = EditingService::new();
         service.execute(cmd, &mut project);
-        assert!(project.timeline.layers[1].clips.iter().any(|c| c.id == clip_id));
+        assert!(
+            project.timeline.layers[1]
+                .clips
+                .iter()
+                .any(|c| c.id == clip_id)
+        );
     }
 }
 
@@ -969,11 +1109,8 @@ fn mixed_clip_move_batch_rejects_atomically_on_kind_mismatch() {
     let video_id = video_clip.id.clone();
     video_source.restore_clip(video_clip);
 
-    let mut trigger_source = Layer::new_trigger(
-        "Trigger source".into(),
-        video_source.layer_id.clone(),
-        1,
-    );
+    let mut trigger_source =
+        Layer::new_trigger("Trigger source".into(), video_source.layer_id.clone(), 1);
     let trigger_clip = TimelineClip::new_trigger(Beats::ZERO, Beats(4.0));
     let trigger_id = trigger_clip.id.clone();
     trigger_source.restore_clip(trigger_clip);
@@ -995,9 +1132,22 @@ fn mixed_clip_move_batch_rejects_atomically_on_kind_mismatch() {
         &[video_id.clone(), trigger_id.clone()],
         2,
     );
-    assert!(commands.is_empty(), "one incompatible destination rejects the batch");
-    assert!(project.timeline.layers[0].clips.iter().any(|c| c.id == video_id));
-    assert!(project.timeline.layers[1].clips.iter().any(|c| c.id == trigger_id));
+    assert!(
+        commands.is_empty(),
+        "one incompatible destination rejects the batch"
+    );
+    assert!(
+        project.timeline.layers[0]
+            .clips
+            .iter()
+            .any(|c| c.id == video_id)
+    );
+    assert!(
+        project.timeline.layers[1]
+            .clips
+            .iter()
+            .any(|c| c.id == trigger_id)
+    );
     assert!(project.timeline.layers[2].clips.is_empty());
     assert!(project.timeline.layers[3].clips.is_empty());
 }
@@ -1021,18 +1171,38 @@ fn move_command_missing_target_preserves_source_and_valid_move_undoes_redoes() {
     assert!(!missing.was_applied());
     assert!(missing.rejection_reason().is_some());
     missing.undo(&mut project);
-    assert!(project.timeline.layers[0].clips.iter().any(|c| c.id == clip_id));
+    assert!(
+        project.timeline.layers[0]
+            .clips
+            .iter()
+            .any(|c| c.id == clip_id)
+    );
 
     let mut service = EditingService::new();
     service.execute(
         EditingService::move_clip_to_layer(&project, &clip_id, 1).unwrap(),
         &mut project,
     );
-    assert!(project.timeline.layers[1].clips.iter().any(|c| c.id == clip_id));
+    assert!(
+        project.timeline.layers[1]
+            .clips
+            .iter()
+            .any(|c| c.id == clip_id)
+    );
     assert!(service.undo(&mut project));
-    assert!(project.timeline.layers[0].clips.iter().any(|c| c.id == clip_id));
+    assert!(
+        project.timeline.layers[0]
+            .clips
+            .iter()
+            .any(|c| c.id == clip_id)
+    );
     assert!(service.redo(&mut project));
-    assert!(project.timeline.layers[1].clips.iter().any(|c| c.id == clip_id));
+    assert!(
+        project.timeline.layers[1]
+            .clips
+            .iter()
+            .any(|c| c.id == clip_id)
+    );
 }
 
 // ─── Move clips across layers (B14 keyboard Up/Down —
@@ -1044,8 +1214,7 @@ fn move_clips_across_layers_batches_as_one_undo_entry() {
     let c1 = add_clip(&mut project, 0, 0.0, 4.0);
     let c2 = add_clip(&mut project, 0, 10.0, 4.0);
 
-    let cmds =
-        EditingService::move_clips_across_layers(&project, &[c1.clone(), c2.clone()], 1);
+    let cmds = EditingService::move_clips_across_layers(&project, &[c1.clone(), c2.clone()], 1);
     assert!(!cmds.is_empty());
 
     let mut service = EditingService::new();
@@ -1150,9 +1319,16 @@ fn region_with_deleted_edge_layers_touches_no_clips() {
     assert!(in_region.is_empty(), "region clips: {in_region:?}");
     let (splits, interior) =
         EditingService::split_clips_at_region_boundaries_with_interior(&project, &region);
-    assert!(splits.is_empty() && interior.is_empty(), "split reached {interior:?}");
+    assert!(
+        splits.is_empty() && interior.is_empty(),
+        "split reached {interior:?}"
+    );
     let deletes = EditingService::delete_clips(&project, &outside, Some(&region));
-    assert!(deletes.is_empty(), "delete built {} commands", deletes.len());
+    assert!(
+        deletes.is_empty(),
+        "delete built {} commands",
+        deletes.len()
+    );
     let dupes = EditingService::duplicate_clips(&project, &outside, &region);
     assert!(dupes.is_empty(), "duplicate built {} commands", dupes.len());
     let mut service = EditingService::new();

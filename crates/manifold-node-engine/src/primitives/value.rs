@@ -60,7 +60,10 @@ mod tests {
     use super::*;
     use manifold_core::{Beats, Seconds};
 
-    use crate::{exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, parameters::ParamValue, exec::execution_plan::compile};
+    use crate::{
+        exec::effect_node::FrameTime, exec::execution::Executor, exec::execution_plan::compile,
+        graph::Graph, parameters::ParamValue,
+    };
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -87,9 +90,9 @@ mod tests {
             seen: std::sync::Arc<std::sync::Mutex<Option<ParamValue>>>,
         }
         impl EffectNode for ScalarSink {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+            fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+                crate::scene::depth_rule::DepthRule::Terminal
+            }
             fn type_id(&self) -> &EffectNodeType {
                 &self.type_id
             }
@@ -120,7 +123,8 @@ mod tests {
             type_id: EffectNodeType::new("test.scalar_sink"),
             seen: seen.clone(),
         }));
-        g.set_param(value, "value", ParamValue::Float(0.42)).unwrap();
+        g.set_param(value, "value", ParamValue::Float(0.42))
+            .unwrap();
         g.connect((value, "out"), (sink, "in")).unwrap();
 
         // No FinalOutput in this graph — the executor walks every node

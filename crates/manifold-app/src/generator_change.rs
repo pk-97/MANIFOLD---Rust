@@ -5,8 +5,8 @@
 //! swaps the complete generator instance, which also makes undo restore all
 //! modulation and runtime authored state in one operation.
 
-use manifold_core::effects::PresetInstance;
 use manifold_core::change::ChangeSet;
+use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 use manifold_core::{GraphTarget, LayerId, PresetTypeId};
 use manifold_editing::command::Command;
@@ -136,7 +136,9 @@ impl ReplaceGeneratorStateCommand {
 }
 
 impl Command for ReplaceGeneratorStateCommand {
-    fn touches(&self) -> ChangeSet { manifold_editing::commands::WHOLE_INSTANCES }
+    fn touches(&self) -> ChangeSet {
+        manifold_editing::commands::WHOLE_INSTANCES
+    }
     fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
         let expected = if self.applied {

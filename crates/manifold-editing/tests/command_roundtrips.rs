@@ -1,13 +1,16 @@
-use manifold_core::{EffectGroupId, EffectId, LayerId};
+use manifold_core::SceneId;
 use manifold_core::audio_clip_detection::AudioClipDetection;
 use manifold_core::clip::TimelineClip;
 use manifold_core::effects::*;
 use manifold_core::layer::Layer;
+use manifold_core::marker::TimelineMarker;
 use manifold_core::percussion_analysis::{PercussionAnalysisData, PercussionTriggerType};
 use manifold_core::project::Project;
+use manifold_core::session::{ClipSequence, Scene, SessionSlot};
 use manifold_core::types::*;
 use manifold_core::units::Bpm;
 use manifold_core::{Beats, PresetTypeId, Seconds};
+use manifold_core::{EffectGroupId, EffectId, LayerId};
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::commands::clip::*;
 use manifold_editing::commands::drivers::*;
@@ -20,9 +23,6 @@ use manifold_editing::commands::layer::*;
 use manifold_editing::commands::session_commands::*;
 use manifold_editing::commands::settings::*;
 use manifold_editing::service::EditingService;
-use manifold_core::marker::TimelineMarker;
-use manifold_core::session::{ClipSequence, Scene, SessionSlot};
-use manifold_core::SceneId;
 
 // Test-only inventory submissions — manifold-nodes isn't linked in editing tests.
 use manifold_core::effect_registration::EffectMetadata;
@@ -87,31 +87,32 @@ inventory::submit! {
 }
 
 fn slot(id: &str, value: f32, exposed: bool) -> manifold_core::params::Param {
-    let mut p = manifold_core::params::Param::bundled(manifold_core::effect_graph_def::ParamSpecDef {
-        tooltip: None,
-        id: id.into(),
-        name: id.into(),
-        min: 0.0,
-        max: 1.0,
-        default_value: value,
-        whole_numbers: false,
-        is_toggle: false,
-        is_trigger: false,
-        value_labels: vec![],
-        format_string: None,
-        osc_suffix: String::new(),
-        curve: Default::default(),
-        invert: false,
-        is_angle: false,
-        is_trigger_gate: false,
-        wraps: false,
-        section: None,
-        card_visible: true,
-        material_role: None,
-        limit: Default::default(),
-        unit: None,
-        scene: None,
-    });
+    let mut p =
+        manifold_core::params::Param::bundled(manifold_core::effect_graph_def::ParamSpecDef {
+            tooltip: None,
+            id: id.into(),
+            name: id.into(),
+            min: 0.0,
+            max: 1.0,
+            default_value: value,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: vec![],
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: Default::default(),
+            invert: false,
+            is_angle: false,
+            is_trigger_gate: false,
+            wraps: false,
+            section: None,
+            card_visible: true,
+            material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
+        });
     p.value = value;
     p.base = value;
     p.exposed = exposed;
@@ -263,7 +264,10 @@ fn replace_audio_file_undo_restores_source_state_and_generated_clips() {
             .iter()
             .filter(|c| c.detection_source.as_ref() == Some(&song_id))
         {
-            commands.push(Box::new(DeleteClipCommand::new(c.clone(), layer_id.clone())));
+            commands.push(Box::new(DeleteClipCommand::new(
+                c.clone(),
+                layer_id.clone(),
+            )));
         }
     }
     assert_eq!(commands.len(), 3, "replace + 2 generated-clip deletes");
@@ -281,7 +285,10 @@ fn replace_audio_file_undo_restores_source_state_and_generated_clips() {
     // start_beat / duration_beats untouched by the replace.
     assert_eq!(clip.start_beat, Beats(0.0));
     assert_eq!(clip.duration_beats, Beats(16.0));
-    let det = clip.audio_detection.as_ref().expect("config survives replace");
+    let det = clip
+        .audio_detection
+        .as_ref()
+        .expect("config survives replace");
     assert!(!det.config.quantize_on, "config kept as-is");
     assert!(det.analysis.is_none(), "stale analysis cleared");
     assert!(det.last_counts.is_empty(), "stale counts cleared");
@@ -366,11 +373,17 @@ fn change_clip_recorded_bpm_rescales_audio_clip_length() {
     let mut cmd = ChangeClipRecordedBpmCommand::new(clip_id.clone(), 0.0, 60.0);
     cmd.execute(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.duration_beats.0 - 2.0).abs() < 1e-6, "60 BPM → 2 beats");
+    assert!(
+        (clip.duration_beats.0 - 2.0).abs() < 1e-6,
+        "60 BPM → 2 beats"
+    );
 
     cmd.undo(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.duration_beats.0 - 4.0).abs() < 1e-6, "undo restores 4 beats");
+    assert!(
+        (clip.duration_beats.0 - 4.0).abs() < 1e-6,
+        "undo restores 4 beats"
+    );
 }
 
 #[test]
@@ -396,13 +409,19 @@ fn change_clip_recorded_bpm_detected_preserves_source_span() {
     cmd.execute(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
     assert!((clip.recorded_bpm - 128.0).abs() < 0.01, "BPM updated");
-    assert!((clip.duration_beats.0 - (4.0 * 128.0 / 120.0)).abs() < 1e-6, "source span preserved");
+    assert!(
+        (clip.duration_beats.0 - (4.0 * 128.0 / 120.0)).abs() < 1e-6,
+        "source span preserved"
+    );
 
     cmd.undo(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
     assert!((clip.recorded_bpm - 120.0).abs() < 0.01, "BPM restored");
     assert!(clip.audio_bpm_automatic, "detection state restored");
-    assert!((clip.duration_beats.0 - 4.0).abs() < 1e-6, "duration still 4 beats");
+    assert!(
+        (clip.duration_beats.0 - 4.0).abs() < 1e-6,
+        "duration still 4 beats"
+    );
 }
 
 #[test]
@@ -487,7 +506,17 @@ fn change_clip_recorded_bpm_overlap_undo_redo_restores_neighbour() {
     let mut cmd = ChangeClipRecordedBpmCommand::new(target_id.clone(), 0.0, 240.0);
     cmd.execute(&mut project);
     assert_eq!(project.timeline.layers[1].clips.len(), 1);
-    assert!((project.timeline.find_clip_by_id(&target_id).unwrap().duration_beats.0 - 8.0).abs() < 1e-6);
+    assert!(
+        (project
+            .timeline
+            .find_clip_by_id(&target_id)
+            .unwrap()
+            .duration_beats
+            .0
+            - 8.0)
+            .abs()
+            < 1e-6
+    );
 
     // UI/content handoff may execute the same command twice; the captured
     // overlap result must not add another split tail or otherwise rescale.
@@ -623,7 +652,10 @@ fn change_generator_type_clears_and_restores_graph_override() {
         wires: Vec::new(),
     };
     project.timeline.layers[1].gen_params_mut().unwrap().graph = Some(stale_graph.clone());
-    project.timeline.layers[1].gen_params_mut().unwrap().graph_version = 7;
+    project.timeline.layers[1]
+        .gen_params_mut()
+        .unwrap()
+        .graph_version = 7;
 
     let old_params = project.timeline.layers[1].snapshot_gen_params();
     let old_drivers = project.timeline.layers[1].snapshot_gen_drivers();
@@ -654,7 +686,8 @@ fn change_generator_type_clears_and_restores_graph_override() {
          (otherwise the renderer keeps drawing the previous generator)",
     );
     assert_ne!(
-        project.timeline.layers[1].generator_graph_version(), 7,
+        project.timeline.layers[1].generator_graph_version(),
+        7,
         "generator_graph_version must bump on clear so the renderer's \
          per-frame override-version sweep rebuilds the generator",
     );
@@ -670,7 +703,9 @@ fn change_generator_type_clears_and_restores_graph_override() {
         PresetTypeId::PLASMA
     );
     assert_eq!(
-        project.timeline.layers[1].generator_graph().and_then(|g| g.name.as_deref()),
+        project.timeline.layers[1]
+            .generator_graph()
+            .and_then(|g| g.name.as_deref()),
         Some("stale-plasma"),
         "undo must restore the pre-change graph override verbatim",
     );
@@ -736,13 +771,25 @@ fn change_effect_param_undo_roundtrip() {
 
     cmd.execute(&mut project);
     assert!(
-        (project.settings.master_effects[0].params.get("amount").unwrap().value - 0.9).abs()
+        (project.settings.master_effects[0]
+            .params
+            .get("amount")
+            .unwrap()
+            .value
+            - 0.9)
+            .abs()
             < 0.001
     );
 
     cmd.undo(&mut project);
     assert!(
-        (project.settings.master_effects[0].params.get("amount").unwrap().value - 0.5).abs()
+        (project.settings.master_effects[0]
+            .params
+            .get("amount")
+            .unwrap()
+            .value
+            - 0.5)
+            .abs()
             < 0.001
     );
 
@@ -756,12 +803,24 @@ fn change_effect_param_undo_roundtrip() {
     );
     cmd2.execute(&mut project);
     assert!(
-        (project.settings.master_effects[0].params.get("threshold").unwrap().value - 0.7).abs()
+        (project.settings.master_effects[0]
+            .params
+            .get("threshold")
+            .unwrap()
+            .value
+            - 0.7)
+            .abs()
             < 0.001
     );
     cmd2.undo(&mut project);
     assert!(
-        (project.settings.master_effects[0].params.get("threshold").unwrap().value - 0.3).abs()
+        (project.settings.master_effects[0]
+            .params
+            .get("threshold")
+            .unwrap()
+            .value
+            - 0.3)
+            .abs()
             < 0.001
     );
 }
@@ -772,8 +831,10 @@ fn change_effect_param_undo_roundtrip() {
 #[test]
 fn change_graph_param_switch_declares_effects() {
     use manifold_core::change::{ChangeSet, Part};
+    use manifold_core::scene_surface::{
+        CardLabel, ControlGroup, Feature, SceneParamDesc, SurfaceRole,
+    };
     use manifold_editing::command::Command;
-    use manifold_core::scene_surface::{CardLabel, ControlGroup, Feature, SceneParamDesc, SurfaceRole};
     let mut project = make_test_project();
     let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
     let mut switch = slot("dof_on", 0.0, true);
@@ -787,7 +848,8 @@ fn change_graph_param_switch_declares_effects() {
         switch: Some(Feature::DepthOfField),
         colour: None,
     });
-    fx.params = manifold_core::params::ParamManifest::from_params(vec![slot("amount", 0.5, true), switch]);
+    fx.params =
+        manifold_core::params::ParamManifest::from_params(vec![slot("amount", 0.5, true), switch]);
     fx.base_tracked = true;
     project.settings.master_effects.push(fx);
     let target = manifold_core::GraphTarget::Effect(project.settings.master_effects[0].id.clone());
@@ -795,8 +857,14 @@ fn change_graph_param_switch_declares_effects() {
     let mut plain = ChangeGraphParamCommand::new(target.clone(), "amount", 0.5, 0.9);
     assert_eq!(plain.execute(&mut project), ChangeSet::of(&[Part::Values]));
     let mut flip = ChangeGraphParamCommand::new(target.clone(), "dof_on", 0.0, 1.0);
-    assert_eq!(flip.execute(&mut project), ChangeSet::of(&[Part::Values, Part::Effects]));
-    assert_eq!(flip.undo(&mut project), ChangeSet::of(&[Part::Values, Part::Effects]));
+    assert_eq!(
+        flip.execute(&mut project),
+        ChangeSet::of(&[Part::Values, Part::Effects])
+    );
+    assert_eq!(
+        flip.undo(&mut project),
+        ChangeSet::of(&[Part::Values, Part::Effects])
+    );
 
     // A scrub: the live move defers rows, so the commit, whose value is
     // already in the project, reports them on mouse-up.
@@ -805,7 +873,10 @@ fn change_graph_param_switch_declares_effects() {
         p.with_preset_graph_mut(&live, |inst| inst.set_base_param("dof_on", 1.0));
     });
     let mut commit = ChangeGraphParamCommand::new(target, "dof_on", 0.0, 1.0);
-    assert_eq!(commit.execute(&mut project), ChangeSet::of(&[Part::Values, Part::Effects]));
+    assert_eq!(
+        commit.execute(&mut project),
+        ChangeSet::of(&[Part::Values, Part::Effects])
+    );
 }
 
 #[test]
@@ -872,7 +943,8 @@ fn change_effect_param_undo_roundtrip_on_user_tail_binding() {
     fx.append_user_binding(UserParamBinding {
         id: "user.uv.translate.1".to_string(),
         label: "Translate".to_string(),
-        node_id: manifold_core::NodeId::new("uv"), legacy_node_handle: None,
+        node_id: manifold_core::NodeId::new("uv"),
+        legacy_node_handle: None,
         inner_param: "translate".to_string(),
         min: -1.0,
         max: 1.0,
@@ -890,7 +962,10 @@ fn change_effect_param_undo_roundtrip_on_user_tail_binding() {
 
     let user_id = "user.uv.translate.1";
     assert!(
-        project.settings.master_effects[0].params.get(user_id).is_some(),
+        project.settings.master_effects[0]
+            .params
+            .get(user_id)
+            .is_some(),
         "user binding resolves to a manifest entry"
     );
 
@@ -902,11 +977,22 @@ fn change_effect_param_undo_roundtrip_on_user_tail_binding() {
         0.42,
     );
     cmd.execute(&mut project);
-    let v = project.settings.master_effects[0].params.get(user_id).unwrap().value;
-    assert!((v - 0.42).abs() < 0.001, "execute writes the user-tail slot");
+    let v = project.settings.master_effects[0]
+        .params
+        .get(user_id)
+        .unwrap()
+        .value;
+    assert!(
+        (v - 0.42).abs() < 0.001,
+        "execute writes the user-tail slot"
+    );
 
     cmd.undo(&mut project);
-    let v = project.settings.master_effects[0].params.get(user_id).unwrap().value;
+    let v = project.settings.master_effects[0]
+        .params
+        .get(user_id)
+        .unwrap()
+        .value;
     assert!((v - 0.0).abs() < 0.001, "undo restores the user-tail slot");
 }
 
@@ -984,12 +1070,7 @@ fn group_effects_undo_roundtrip() {
     cmd.undo(&mut project);
     assert!(project.settings.master_effects[0].group_id.is_none());
     assert!(project.settings.master_effects[1].group_id.is_none());
-    assert!(
-        project
-            .settings
-            .master_effect_groups
-            .is_none()
-    );
+    assert!(project.settings.master_effect_groups.is_none());
 }
 
 #[test]
@@ -1009,12 +1090,7 @@ fn ungroup_effects_undo_roundtrip() {
 
     cmd.execute(&mut project);
     assert!(project.settings.master_effects[0].group_id.is_none());
-    assert!(
-        project
-            .settings
-            .master_effect_groups
-            .is_none()
-    );
+    assert!(project.settings.master_effect_groups.is_none());
 
     cmd.undo(&mut project);
     assert!(project.settings.master_effects[0].group_id.is_some());
@@ -1052,7 +1128,7 @@ fn add_driver_effect_undo_roundtrip() {
         trim_max: 1.0,
         reversed: false,
         free_period_beats: None,
-            frame_aligned: false,
+        frame_aligned: false,
         legacy_param_index: None,
         is_paused_by_user: false,
     };
@@ -1196,7 +1272,7 @@ fn make_driver() -> ParameterDriver {
         trim_max: 1.0,
         reversed: false,
         free_period_beats: None,
-            frame_aligned: false,
+        frame_aligned: false,
         legacy_param_index: None,
         is_paused_by_user: false,
     }
@@ -1364,7 +1440,10 @@ fn expose_effect_param_command_undo_roundtrip() {
     assert_eq!(fx.params.get("amount").unwrap().value, 0.5);
     assert_eq!(fx.params.get("threshold").unwrap().value, 1.0);
     assert_eq!(
-        fx.params.get("user.uv_transform.translate.1").unwrap().value,
+        fx.params
+            .get("user.uv_transform.translate.1")
+            .unwrap()
+            .value,
         0.0
     );
     assert_eq!(
@@ -1408,7 +1487,8 @@ fn expose_already_exposed_is_idempotent_noop() {
     fx.append_user_binding(UserParamBinding {
         id: "user.uv_transform.translate.1".to_string(),
         label: "Translate".to_string(),
-        node_id: manifold_core::NodeId::new("uv_transform"), legacy_node_handle: None,
+        node_id: manifold_core::NodeId::new("uv_transform"),
+        legacy_node_handle: None,
         inner_param: "translate".to_string(),
         min: -1.0,
         max: 1.0,
@@ -1436,14 +1516,18 @@ fn expose_already_exposed_is_idempotent_noop() {
     cmd.execute(&mut project);
     // Still 1 binding (not 2 — execute is idempotent).
     assert_eq!(
-        project.settings.master_effects[0].user_param_bindings().len(),
+        project.settings.master_effects[0]
+            .user_param_bindings()
+            .len(),
         1
     );
     cmd.undo(&mut project);
     // Pre-existing binding is preserved (the no-op execute recorded
     // ReverseState::None, so undo did nothing).
     assert_eq!(
-        project.settings.master_effects[0].user_param_bindings().len(),
+        project.settings.master_effects[0]
+            .user_param_bindings()
+            .len(),
         1
     );
 }
@@ -1460,7 +1544,8 @@ fn unexpose_effect_param_command_undo_roundtrip() {
     fx.append_user_binding(UserParamBinding {
         id: "user.uv_transform.translate.1".to_string(),
         label: "Translate".to_string(),
-        node_id: manifold_core::NodeId::new("uv_transform"), legacy_node_handle: None,
+        node_id: manifold_core::NodeId::new("uv_transform"),
+        legacy_node_handle: None,
         inner_param: "translate".to_string(),
         min: -1.0,
         max: 1.0,
@@ -1552,7 +1637,8 @@ fn generate_user_param_id_collision_probe() {
         UserParamBinding {
             id: "user.uv_transform.translate.1".to_string(),
             label: String::new(),
-            node_id: manifold_core::NodeId::new("uv_transform"), legacy_node_handle: None,
+            node_id: manifold_core::NodeId::new("uv_transform"),
+            legacy_node_handle: None,
             inner_param: "translate".to_string(),
             min: 0.0,
             max: 1.0,
@@ -1569,7 +1655,8 @@ fn generate_user_param_id_collision_probe() {
         UserParamBinding {
             id: "user.uv_transform.translate.2".to_string(),
             label: String::new(),
-            node_id: manifold_core::NodeId::new("uv_transform"), legacy_node_handle: None,
+            node_id: manifold_core::NodeId::new("uv_transform"),
+            legacy_node_handle: None,
             inner_param: "translate".to_string(),
             min: 0.0,
             max: 1.0,
@@ -1611,7 +1698,8 @@ fn unexpose_prunes_orphan_drivers_and_undo_restores_them() {
     fx.append_user_binding(UserParamBinding {
         id: "user.uv_transform.translate.1".to_string(),
         label: "Translate".to_string(),
-        node_id: manifold_core::NodeId::new("uv_transform"), legacy_node_handle: None,
+        node_id: manifold_core::NodeId::new("uv_transform"),
+        legacy_node_handle: None,
         inner_param: "translate".to_string(),
         min: -1.0,
         max: 1.0,
@@ -1718,7 +1806,8 @@ fn unexpose_prunes_orphan_ableton_mappings_and_undo_restores_them() {
     fx.append_user_binding(UserParamBinding {
         id: "user.uv_transform.translate.1".to_string(),
         label: "Translate".to_string(),
-        node_id: manifold_core::NodeId::new("uv_transform"), legacy_node_handle: None,
+        node_id: manifold_core::NodeId::new("uv_transform"),
+        legacy_node_handle: None,
         inner_param: "translate".to_string(),
         min: -1.0,
         max: 1.0,
@@ -1778,8 +1867,7 @@ fn unexpose_prunes_orphan_ableton_mappings_and_undo_restores_them() {
         .expect("ableton mappings restored");
     assert_eq!(mappings.len(), 1);
     assert_eq!(
-        mappings[0].param_id,
-        "user.uv_transform.translate.1",
+        mappings[0].param_id, "user.uv_transform.translate.1",
         "undo must reinstate the pruned mapping with its original param_id",
     );
 }
@@ -1795,7 +1883,8 @@ fn unexpose_prunes_orphan_envelopes_and_undo_restores_them() {
     fx.append_user_binding(UserParamBinding {
         id: "user.uv_transform.translate.1".to_string(),
         label: "Translate".to_string(),
-        node_id: manifold_core::NodeId::new("uv_transform"), legacy_node_handle: None,
+        node_id: manifold_core::NodeId::new("uv_transform"),
+        legacy_node_handle: None,
         inner_param: "translate".to_string(),
         min: -1.0,
         max: 1.0,
@@ -1812,9 +1901,10 @@ fn unexpose_prunes_orphan_envelopes_and_undo_restores_them() {
     // Envelope-home unification: envelopes ride on the instance, keyed by
     // param_id. Plant one on the unexposed binding (pruned) and one on an
     // unrelated param (kept).
-    fx.envelopes_mut().push(ParamEnvelope::new(std::borrow::Cow::Owned(
-        "user.uv_transform.translate.1".to_string(),
-    )));
+    fx.envelopes_mut()
+        .push(ParamEnvelope::new(std::borrow::Cow::Owned(
+            "user.uv_transform.translate.1".to_string(),
+        )));
     fx.envelopes_mut()
         .push(ParamEnvelope::new(std::borrow::Cow::Borrowed("amount")));
     project.timeline.layers[0].effects = Some(vec![fx]);
@@ -1832,7 +1922,10 @@ fn unexpose_prunes_orphan_envelopes_and_undo_restores_them() {
     );
     cmd.execute(&mut project);
     let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
-    let envs = fx.envelopes.as_ref().expect("instance envelopes vec retained");
+    let envs = fx
+        .envelopes
+        .as_ref()
+        .expect("instance envelopes vec retained");
     assert_eq!(
         envs.len(),
         1,
@@ -1842,10 +1935,14 @@ fn unexpose_prunes_orphan_envelopes_and_undo_restores_them() {
 
     cmd.undo(&mut project);
     let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
-    let envs = fx.envelopes.as_ref().expect("instance envelopes vec restored");
+    let envs = fx
+        .envelopes
+        .as_ref()
+        .expect("instance envelopes vec restored");
     assert_eq!(envs.len(), 2);
     assert!(
-        envs.iter().any(|e| e.param_id == "user.uv_transform.translate.1"),
+        envs.iter()
+            .any(|e| e.param_id == "user.uv_transform.translate.1"),
         "undo must reinstate the pruned envelope",
     );
 }
@@ -2087,7 +2184,10 @@ fn paste_slot_to_timeline_undo_roundtrip() {
     let mut cmd = PasteSlotToTimelineCommand::new(layer_id.clone(), scene_id.clone(), Beats(20.0));
     cmd.execute(&mut project);
 
-    assert_eq!(project.timeline.layers[0].clips.len(), initial_clip_count + 1);
+    assert_eq!(
+        project.timeline.layers[0].clips.len(),
+        initial_clip_count + 1
+    );
     let pasted = project.timeline.layers[0]
         .clips
         .iter()
@@ -2179,13 +2279,13 @@ fn delete_layer_removes_its_session_slots_and_undo_restores() {
 
 #[path = "../src/commands/setter_roundtrip.rs"]
 mod setter_roundtrip;
-use setter_roundtrip::{SetterCase, assert_setter_cases, undeclared};
 use manifold_core::audio_mod::{AudioModSource, ParameterAudioMod, TriggerAction, WrapMode};
 use manifold_core::audio_trigger::TriggerFireMode;
 use manifold_core::change::audit;
 use manifold_editing::commands::audio_mod::*;
 use manifold_editing::commands::automation::*;
 use manifold_editing::commands::marker::*;
+use setter_roundtrip::{SetterCase, assert_setter_cases, undeclared};
 
 fn first_clip(p: &Project) -> &TimelineClip {
     &p.timeline.layers[0].clips[0]
@@ -2239,7 +2339,11 @@ fn bloom_envelope(p: &Project) -> &ParamEnvelope {
 fn bloom_with_audio_mod(p: &mut Project) -> DriverTarget {
     let effect_id = push_master_bloom(p);
     let feature = manifold_core::AudioFeature::default();
-    let audio_mod = ParameterAudioMod::new("amount".into(), manifold_core::AudioSendId::new("send-1"), feature);
+    let audio_mod = ParameterAudioMod::new(
+        "amount".into(),
+        manifold_core::AudioSendId::new("send-1"),
+        feature,
+    );
     p.settings.master_effects[0].audio_mods = Some(vec![audio_mod]);
     DriverTarget::Effect { effect_id }
 }
@@ -2249,7 +2353,11 @@ fn bloom_audio_mod(p: &Project) -> &ParameterAudioMod {
 }
 
 fn lane_point(beat: f64) -> AutomationPoint {
-    AutomationPoint { beat: Beats(beat), value: 1.0, shape: SegmentShape::Linear }
+    AutomationPoint {
+        beat: Beats(beat),
+        value: 1.0,
+        shape: SegmentShape::Linear,
+    }
 }
 
 fn bloom_with_lane(p: &mut Project) -> manifold_core::GraphTarget {
@@ -2260,470 +2368,812 @@ fn bloom_with_lane(p: &mut Project) -> manifold_core::GraphTarget {
 
 #[test]
 fn project_commands_undo_and_redo_restore_the_whole_project() {
-    assert_setter_cases(make_test_project, &[
-        // Clips
-        SetterCase {
-            name: "slip clip",
-            build: |p| Box::new(SlipClipCommand::new(first_clip(p).id.clone(), Seconds(0.0), Seconds(2.5))),
-            applied: |p| first_clip(p).in_point == Seconds(2.5),
-        },
-        SetterCase {
-            name: "clip loop",
-            build: |p| Box::new(ChangeClipLoopCommand::new(first_clip(p).id.clone(), false, true, Beats(0.0), Beats(2.0))),
-            applied: |p| first_clip(p).is_looping && first_clip(p).loop_duration_beats == Beats(2.0),
-        },
-        SetterCase {
-            name: "clip recorded bpm",
-            build: |p| Box::new(ChangeClipRecordedBpmCommand::new(first_clip(p).id.clone(), first_clip(p).recorded_bpm, 130.0)),
-            applied: |p| first_clip(p).recorded_bpm == 130.0,
-        },
-        SetterCase {
-            name: "mute clip",
-            build: |p| Box::new(MuteClipCommand::new(first_clip(p).id.clone(), false, true)),
-            applied: |p| first_clip(p).is_muted,
-        },
-        SetterCase {
-            name: "split clip",
-            build: |p| {
-                let mut tail = first_clip(p).clone_with_new_id();
-                tail.start_beat = Beats(2.0);
-                tail.duration_beats = Beats(2.0);
-                Box::new(SplitClipCommand::new(first_clip(p).id.clone(), first_layer_id(p), Beats(4.0), Beats(2.0), tail))
+    assert_setter_cases(
+        make_test_project,
+        &[
+            // Clips
+            SetterCase {
+                name: "slip clip",
+                build: |p| {
+                    Box::new(SlipClipCommand::new(
+                        first_clip(p).id.clone(),
+                        Seconds(0.0),
+                        Seconds(2.5),
+                    ))
+                },
+                applied: |p| first_clip(p).in_point == Seconds(2.5),
             },
-            applied: |p| p.timeline.layers[0].clips.len() == 3 && first_clip(p).duration_beats == Beats(2.0),
-        },
-        // Layers
-        SetterCase {
-            name: "add layer",
-            build: |_| Box::new(AddLayerCommand::new("New Layer".into(), LayerType::Video, PresetTypeId::NONE, 0, None)),
-            applied: |p| p.timeline.layers.len() == 3,
-        },
-        SetterCase {
-            name: "delete layer",
-            build: |p| Box::new(DeleteLayerCommand::new(p.timeline.layers[0].clone())),
-            applied: |p| p.timeline.layers.len() == 1,
-        },
-        SetterCase {
-            name: "reorder layers",
-            build: |p| {
-                let old = p.timeline.layers.clone();
-                let new = old.iter().rev().cloned().collect();
-                Box::new(ReorderLayerCommand::new(old, new, Default::default(), Default::default()))
+            SetterCase {
+                name: "clip loop",
+                build: |p| {
+                    Box::new(ChangeClipLoopCommand::new(
+                        first_clip(p).id.clone(),
+                        false,
+                        true,
+                        Beats(0.0),
+                        Beats(2.0),
+                    ))
+                },
+                applied: |p| {
+                    first_clip(p).is_looping && first_clip(p).loop_duration_beats == Beats(2.0)
+                },
             },
-            applied: |p| p.timeline.layers[0].name == "Layer 2",
-        },
-        SetterCase {
-            name: "group layers",
-            build: |p| {
-                let ids = p.timeline.layers.iter().map(|l| l.layer_id.clone()).collect();
-                Box::new(GroupLayersCommand::new(ids, p.timeline.layers.clone()))
+            SetterCase {
+                name: "clip recorded bpm",
+                build: |p| {
+                    Box::new(ChangeClipRecordedBpmCommand::new(
+                        first_clip(p).id.clone(),
+                        first_clip(p).recorded_bpm,
+                        130.0,
+                    ))
+                },
+                applied: |p| first_clip(p).recorded_bpm == 130.0,
             },
-            applied: |p| p.timeline.layers.iter().any(|l| l.is_group()),
-        },
-        SetterCase {
-            name: "layer midi note",
-            build: |p| Box::new(ChangeLayerMidiNoteCommand::new(first_layer_id(p), p.timeline.layers[0].midi_note, 60)),
-            applied: |p| p.timeline.layers[0].midi_note == 60,
-        },
-        SetterCase {
-            name: "layer midi channel",
-            build: |p| Box::new(ChangeLayerMidiChannelCommand::new(first_layer_id(p), p.timeline.layers[0].midi_channel, 5)),
-            applied: |p| p.timeline.layers[0].midi_channel == 5,
-        },
-        SetterCase {
-            name: "layer blend mode",
-            build: |p| Box::new(ChangeLayerBlendModeCommand::new(first_layer_id(p), p.timeline.layers[0].default_blend_mode, BlendMode::Additive)),
-            applied: |p| p.timeline.layers[0].default_blend_mode == BlendMode::Additive,
-        },
-        SetterCase {
-            name: "layer opacity",
-            build: |p| Box::new(ChangeLayerOpacityCommand::new(first_layer_id(p), p.timeline.layers[0].opacity, 0.5)),
-            applied: |p| p.timeline.layers[0].opacity == 0.5,
-        },
-        // Settings
-        SetterCase {
-            name: "bpm",
-            build: |p| Box::new(ChangeBpmCommand::new(p.settings.bpm, Bpm(128.0))),
-            applied: |p| p.settings.bpm == Bpm(128.0),
-        },
-        SetterCase {
-            name: "quantize mode",
-            build: |p| Box::new(ChangeQuantizeModeCommand::new(p.settings.quantize_mode, QuantizeMode::Beat)),
-            applied: |p| p.settings.quantize_mode == QuantizeMode::Beat,
-        },
-        SetterCase {
-            name: "frame rate",
-            build: |p| Box::new(ChangeFrameRateCommand::new(p.settings.frame_rate, 30.0)),
-            applied: |p| p.settings.frame_rate == 30.0,
-        },
-        SetterCase {
-            name: "master opacity",
-            build: |p| Box::new(ChangeMasterOpacityCommand::new(p.settings.master_opacity, 0.7)),
-            applied: |p| p.settings.master_opacity == 0.7,
-        },
-        SetterCase {
-            name: "export hdr",
-            build: |p| Box::new(ToggleExportHdrCommand::new(p.settings.export_hdr)),
-            applied: |p| p.settings.export_hdr,
-        },
-        SetterCase {
-            name: "display dimensions",
-            build: |p| Box::new(SetDisplayDimensionsCommand::new(p.settings.output_width, p.settings.output_height, 3840, 2160)),
-            applied: |p| (p.settings.output_width, p.settings.output_height) == (3840, 2160),
-        },
-        SetterCase {
-            name: "clear tempo map",
-            build: |p| {
-                p.tempo_map.add_or_replace_point(Beats(0.0), Bpm(120.0), TempoPointSource::Manual, 0.001);
-                p.tempo_map.add_or_replace_point(Beats(4.0), Bpm(140.0), TempoPointSource::Manual, 0.001);
-                Box::new(ClearTempoMapCommand::new(p.tempo_map.clone_points(), Bpm(120.0)))
+            SetterCase {
+                name: "mute clip",
+                build: |p| Box::new(MuteClipCommand::new(first_clip(p).id.clone(), false, true)),
+                applied: |p| first_clip(p).is_muted,
             },
-            applied: |p| p.tempo_map.point_count() == 1,
-        },
-        // Effects
-        SetterCase {
-            name: "add master effect",
-            build: |_| {
-                let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-                fx.params = manifold_core::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
-                Box::new(AddEffectCommand::new(EffectTarget::Master, fx, 0))
+            SetterCase {
+                name: "split clip",
+                build: |p| {
+                    let mut tail = first_clip(p).clone_with_new_id();
+                    tail.start_beat = Beats(2.0);
+                    tail.duration_beats = Beats(2.0);
+                    Box::new(SplitClipCommand::new(
+                        first_clip(p).id.clone(),
+                        first_layer_id(p),
+                        Beats(4.0),
+                        Beats(2.0),
+                        tail,
+                    ))
+                },
+                applied: |p| {
+                    p.timeline.layers[0].clips.len() == 3
+                        && first_clip(p).duration_beats == Beats(2.0)
+                },
             },
-            applied: |p| p.settings.master_effects.len() == 1,
-        },
-        SetterCase {
-            name: "add layer effect",
-            build: |p| {
-                let target = EffectTarget::Layer { layer_id: first_layer_id(p) };
-                Box::new(AddEffectCommand::new(target, PresetInstance::new(PresetTypeId::MIRROR), 0))
+            // Layers
+            SetterCase {
+                name: "add layer",
+                build: |_| {
+                    Box::new(AddLayerCommand::new(
+                        "New Layer".into(),
+                        LayerType::Video,
+                        PresetTypeId::NONE,
+                        0,
+                        None,
+                    ))
+                },
+                applied: |p| p.timeline.layers.len() == 3,
             },
-            applied: |p| p.timeline.layers[0].effects.as_ref().is_some_and(|e| e.len() == 1),
-        },
-        SetterCase {
-            name: "remove master effect",
-            build: |p| {
-                push_master_bloom(p);
-                Box::new(RemoveEffectCommand::new(EffectTarget::Master, p.settings.master_effects[0].clone(), 0))
+            SetterCase {
+                name: "delete layer",
+                build: |p| Box::new(DeleteLayerCommand::new(p.timeline.layers[0].clone())),
+                applied: |p| p.timeline.layers.len() == 1,
             },
-            applied: |p| p.settings.master_effects.is_empty(),
-        },
-        SetterCase {
-            name: "toggle effect",
-            build: |p| Box::new(ToggleEffectCommand::new(push_master_bloom(p), true, false)),
-            applied: |p| !p.settings.master_effects[0].enabled,
-        },
-        SetterCase {
-            name: "toggle driver",
-            build: |p| {
-                let effect_id = push_master_bloom(p);
-                p.settings.master_effects[0].drivers = Some(vec![ParameterDriver {
-                    param_id: std::borrow::Cow::Borrowed("amount"),
-                    enabled: true,
-                    ..make_driver()
-                }]);
-                Box::new(ToggleDriverEnabledCommand::new(DriverTarget::Effect { effect_id }, 0, true, false))
+            SetterCase {
+                name: "reorder layers",
+                build: |p| {
+                    let old = p.timeline.layers.clone();
+                    let new = old.iter().rev().cloned().collect();
+                    Box::new(ReorderLayerCommand::new(
+                        old,
+                        new,
+                        Default::default(),
+                        Default::default(),
+                    ))
+                },
+                applied: |p| p.timeline.layers[0].name == "Layer 2",
             },
-            applied: |p| !p.settings.master_effects[0].drivers.as_ref().unwrap()[0].enabled,
-        },
-        // Effect groups
-        SetterCase {
-            name: "toggle effect group",
-            build: |p| Box::new(ToggleGroupCommand::new(EffectTarget::Master, push_master_group(p, "Test"), true, false)),
-            applied: |p| !master_group(p).enabled,
-        },
-        SetterCase {
-            name: "rename effect group",
-            build: |p| Box::new(RenameGroupCommand::new(EffectTarget::Master, push_master_group(p, "Old Name"), "Old Name".into(), "New Name".into())),
-            applied: |p| master_group(p).name == "New Name",
-        },
-        SetterCase {
-            name: "effect group wet/dry",
-            build: |p| {
-                let gid = push_master_group(p, "Test");
-                Box::new(ChangeGroupWetDryCommand::new(EffectTarget::Master, gid, master_group(p).wet_dry, 0.5))
+            SetterCase {
+                name: "group layers",
+                build: |p| {
+                    let ids = p
+                        .timeline
+                        .layers
+                        .iter()
+                        .map(|l| l.layer_id.clone())
+                        .collect();
+                    Box::new(GroupLayersCommand::new(ids, p.timeline.layers.clone()))
+                },
+                applied: |p| p.timeline.layers.iter().any(|l| l.is_group()),
             },
-            applied: |p| master_group(p).wet_dry == 0.5,
-        },
-        // Session
-        SetterCase {
-            name: "add scene",
-            build: |_| Box::new(AddSceneCommand::new(Scene { id: SceneId::new("scene-1"), name: "Intro".into(), color: None }, 0)),
-            applied: |p| p.session.scenes.len() == 1 && p.session.scenes[0].name == "Intro",
-        },
-        SetterCase {
-            name: "rename scene",
-            build: |p| {
-                p.session.scenes.push(Scene { id: SceneId::new("scene-1"), name: "Old".into(), color: None });
-                Box::new(RenameSceneCommand::new(SceneId::new("scene-1"), "Old".into(), "New".into()))
+            SetterCase {
+                name: "layer midi note",
+                build: |p| {
+                    Box::new(ChangeLayerMidiNoteCommand::new(
+                        first_layer_id(p),
+                        p.timeline.layers[0].midi_note,
+                        60,
+                    ))
+                },
+                applied: |p| p.timeline.layers[0].midi_note == 60,
             },
-            applied: |p| p.session.scenes[0].name == "New",
-        },
-        SetterCase {
-            name: "remove scene",
-            build: |p| {
-                p.session.scenes.push(Scene { id: SceneId::new("scene-1"), name: "A".into(), color: None });
-                Box::new(RemoveSceneCommand::new(SceneId::new("scene-1")))
+            SetterCase {
+                name: "layer midi channel",
+                build: |p| {
+                    Box::new(ChangeLayerMidiChannelCommand::new(
+                        first_layer_id(p),
+                        p.timeline.layers[0].midi_channel,
+                        5,
+                    ))
+                },
+                applied: |p| p.timeline.layers[0].midi_channel == 5,
             },
-            applied: |p| p.session.scenes.is_empty(),
-        },
-        SetterCase {
-            name: "reorder scenes",
-            build: |p| {
-                p.session.scenes.push(Scene { id: SceneId::new("scene-1"), name: "A".into(), color: None });
-                p.session.scenes.push(Scene { id: SceneId::new("scene-2"), name: "B".into(), color: None });
-                let old = p.session.scenes.clone();
-                let new = old.iter().rev().cloned().collect();
-                Box::new(ReorderSceneCommand::new(old, new))
+            SetterCase {
+                name: "layer blend mode",
+                build: |p| {
+                    Box::new(ChangeLayerBlendModeCommand::new(
+                        first_layer_id(p),
+                        p.timeline.layers[0].default_blend_mode,
+                        BlendMode::Additive,
+                    ))
+                },
+                applied: |p| p.timeline.layers[0].default_blend_mode == BlendMode::Additive,
             },
-            applied: |p| p.session.scenes[0].name == "B",
-        },
-        SetterCase {
-            name: "set slot",
-            build: |p| {
-                p.session.scenes.push(Scene { id: SceneId::new("scene-1"), name: "A".into(), color: None });
-                let slot = SessionSlot {
-                    layer_id: first_layer_id(p),
-                    scene_id: SceneId::new("scene-1"),
-                    sequence: ClipSequence::default(),
-                    name: "Slot".into(),
-                    color: None,
-                };
-                Box::new(SetSlotCommand::new(first_layer_id(p), SceneId::new("scene-1"), Some(slot)))
+            SetterCase {
+                name: "layer opacity",
+                build: |p| {
+                    Box::new(ChangeLayerOpacityCommand::new(
+                        first_layer_id(p),
+                        p.timeline.layers[0].opacity,
+                        0.5,
+                    ))
+                },
+                applied: |p| p.timeline.layers[0].opacity == 0.5,
             },
-            applied: |p| p.session.slots.len() == 1,
-        },
-        // Markers
-        SetterCase {
-            name: "add marker",
-            build: |_| Box::new(AddMarkerCommand::new(TimelineMarker::new(Beats(4.0)).with_name("Drop"))),
-            applied: |p| p.timeline.markers.len() == 1,
-        },
-        SetterCase {
-            name: "move marker",
-            build: |p| {
-                let marker = TimelineMarker::new(Beats(4.0));
-                let id = marker.id.clone();
-                p.timeline.markers.push(marker);
-                Box::new(MoveMarkerCommand::new(id, Beats(4.0), Beats(8.0)))
+            // Settings
+            SetterCase {
+                name: "bpm",
+                build: |p| Box::new(ChangeBpmCommand::new(p.settings.bpm, Bpm(128.0))),
+                applied: |p| p.settings.bpm == Bpm(128.0),
             },
-            applied: |p| p.timeline.markers[0].beat == Beats(8.0),
-        },
-        SetterCase {
-            name: "rename marker",
-            build: |p| {
-                let marker = TimelineMarker::new(Beats(4.0));
-                let id = marker.id.clone();
-                p.timeline.markers.push(marker);
-                Box::new(RenameMarkerCommand::new(id, String::new(), "Drop".into()))
+            SetterCase {
+                name: "quantize mode",
+                build: |p| {
+                    Box::new(ChangeQuantizeModeCommand::new(
+                        p.settings.quantize_mode,
+                        QuantizeMode::Beat,
+                    ))
+                },
+                applied: |p| p.settings.quantize_mode == QuantizeMode::Beat,
             },
-            applied: |p| p.timeline.markers[0].name == "Drop",
-        },
-        SetterCase {
-            name: "delete marker",
-            build: |p| {
-                let marker = TimelineMarker::new(Beats(4.0));
-                let id = marker.id.clone();
-                p.timeline.markers.push(marker);
-                Box::new(DeleteMarkerCommand::new(id))
+            SetterCase {
+                name: "frame rate",
+                build: |p| Box::new(ChangeFrameRateCommand::new(p.settings.frame_rate, 30.0)),
+                applied: |p| p.settings.frame_rate == 30.0,
             },
-            applied: |p| p.timeline.markers.is_empty(),
-        },
-        // Layer settings
-        SetterCase {
-            name: "rename layer",
-            build: |p| Box::new(RenameLayerCommand::new(first_layer_id(p), "Layer 1".into(), "Renamed".into())),
-            applied: |p| p.timeline.layers[0].name == "Renamed",
-        },
-        SetterCase {
-            name: "layer analysis only",
-            build: |p| Box::new(SetLayerAnalysisOnlyCommand::new(first_layer_id(p), true)),
-            applied: |p| p.timeline.layers[0].analysis_only,
-        },
-        SetterCase {
-            name: "layer midi device",
-            build: |p| Box::new(ChangeLayerMidiDeviceCommand::new(first_layer_id(p), None, Some("Push".into()))),
-            applied: |p| p.timeline.layers[0].midi_device.as_deref() == Some("Push"),
-        },
-        SetterCase {
-            name: "layer midi trigger mode",
-            build: |p| Box::new(ChangeLayerMidiTriggerModeCommand::new(first_layer_id(p), MidiTriggerMode::SingleNote, MidiTriggerMode::AllNotes)),
-            applied: |p| p.timeline.layers[0].midi_trigger_mode == MidiTriggerMode::AllNotes,
-        },
-        // Project settings
-        SetterCase {
-            name: "resolution",
-            build: |p| Box::new(ChangeResolutionCommand::new(p.settings.resolution_preset, ResolutionPreset::UHD4K)),
-            applied: |p| p.settings.resolution_preset == ResolutionPreset::UHD4K,
-        },
-        SetterCase {
-            name: "render scale",
-            build: |p| Box::new(ChangeRenderScaleCommand::new(p.settings.render_scale, 0.5)),
-            applied: |p| p.settings.render_scale == 0.5,
-        },
-        SetterCase {
-            name: "split sections",
-            build: |p| Box::new(ToggleSplitSectionsCommand::new(p.settings.split_at_markers)),
-            applied: |p| p.settings.split_at_markers,
-        },
-        SetterCase {
-            name: "export gizmos",
-            build: |p| Box::new(ToggleExportGizmosCommand::new(p.settings.export_gizmos)),
-            applied: |p| p.settings.export_gizmos,
-        },
-        // Drivers, envelopes and audio mods
-        SetterCase {
-            name: "driver waveform",
-            build: |p| Box::new(ChangeDriverWaveformCommand::new(bloom_with_driver(p), 0, DriverWaveform::Sine, DriverWaveform::Triangle)),
-            applied: |p| bloom_driver(p).waveform == DriverWaveform::Triangle,
-        },
-        SetterCase {
-            name: "driver free period",
-            build: |p| Box::new(SetDriverFreePeriodCommand::new(bloom_with_driver(p), 0, None, Some(3.0))),
-            applied: |p| bloom_driver(p).free_period_beats == Some(3.0),
-        },
-        SetterCase {
-            name: "driver reversed",
-            build: |p| Box::new(ToggleDriverReversedCommand::new(bloom_with_driver(p), 0, false, true)),
-            applied: |p| bloom_driver(p).reversed,
-        },
-        SetterCase {
-            name: "envelope enabled",
-            build: |p| {
-                let target = bloom_with_envelope(p, TriggerAction::Continuous);
-                let old = bloom_envelope(p).enabled;
-                Box::new(ToggleEnvelopeEnabledCommand::new(target, 0, old, !old))
+            SetterCase {
+                name: "master opacity",
+                build: |p| {
+                    Box::new(ChangeMasterOpacityCommand::new(
+                        p.settings.master_opacity,
+                        0.7,
+                    ))
+                },
+                applied: |p| p.settings.master_opacity == 0.7,
             },
-            applied: |p| !bloom_envelope(p).enabled,
-        },
-        SetterCase {
-            name: "envelope action kind",
-            build: |p| Box::new(SetEnvelopeActionCommand::new(bloom_with_envelope(p, TriggerAction::Continuous), 0, TriggerAction::Continuous, TriggerAction::Random)),
-            applied: |p| bloom_envelope(p).action == TriggerAction::Random,
-        },
-        SetterCase {
-            name: "envelope step amount",
-            build: |p| {
-                let old = TriggerAction::Step { amount: 1.0, wrap: WrapMode::Wrap };
-                let new = TriggerAction::Step { amount: 2.0, wrap: WrapMode::Wrap };
-                Box::new(SetEnvelopeActionCommand::new(bloom_with_envelope(p, old), 0, old, new))
+            SetterCase {
+                name: "export hdr",
+                build: |p| Box::new(ToggleExportHdrCommand::new(p.settings.export_hdr)),
+                applied: |p| p.settings.export_hdr,
             },
-            applied: |p| matches!(bloom_envelope(p).action, TriggerAction::Step { amount, .. } if amount == 2.0),
-        },
-        SetterCase {
-            name: "remove envelope",
-            build: |p| {
-                let target = bloom_with_envelope(p, TriggerAction::Continuous);
-                Box::new(RemoveEnvelopeCommand::new(target, bloom_envelope(p).clone(), 0))
+            SetterCase {
+                name: "display dimensions",
+                build: |p| {
+                    Box::new(SetDisplayDimensionsCommand::new(
+                        p.settings.output_width,
+                        p.settings.output_height,
+                        3840,
+                        2160,
+                    ))
+                },
+                applied: |p| (p.settings.output_width, p.settings.output_height) == (3840, 2160),
             },
-            applied: |p| p.settings.master_effects[0].envelopes.as_ref().is_none_or(|e| e.is_empty()),
-        },
-        SetterCase {
-            name: "audio mod source",
-            build: |p| {
-                let target = bloom_with_audio_mod(p);
-                let old = bloom_audio_mod(p).source.clone();
-                let new = AudioModSource { send_id: manifold_core::AudioSendId::new("send-2"), feature: old.feature };
-                Box::new(SetAudioModSourceCommand::new(target, "amount".into(), old, new))
+            SetterCase {
+                name: "clear tempo map",
+                build: |p| {
+                    p.tempo_map.add_or_replace_point(
+                        Beats(0.0),
+                        Bpm(120.0),
+                        TempoPointSource::Manual,
+                        0.001,
+                    );
+                    p.tempo_map.add_or_replace_point(
+                        Beats(4.0),
+                        Bpm(140.0),
+                        TempoPointSource::Manual,
+                        0.001,
+                    );
+                    Box::new(ClearTempoMapCommand::new(
+                        p.tempo_map.clone_points(),
+                        Bpm(120.0),
+                    ))
+                },
+                applied: |p| p.tempo_map.point_count() == 1,
             },
-            applied: |p| bloom_audio_mod(p).source.send_id == manifold_core::AudioSendId::new("send-2"),
-        },
-        SetterCase {
-            name: "audio mod trigger mode",
-            build: |p| Box::new(SetAudioModTriggerModeCommand::new(bloom_with_audio_mod(p), "amount".into(), None, Some(TriggerFireMode::Transient))),
-            applied: |p| bloom_audio_mod(p).trigger_mode == Some(TriggerFireMode::Transient),
-        },
-        SetterCase {
-            name: "remove audio mod",
-            build: |p| Box::new(RemoveAudioModCommand::new(bloom_with_audio_mod(p), "amount".into())),
-            applied: |p| !p.settings.master_effects[0].has_audio_mods(),
-        },
-        // Effects and groups
-        SetterCase {
-            name: "reorder effects",
-            build: |p| {
-                push_master_bloom(p);
-                push_master_bloom(p);
-                Box::new(ReorderEffectCommand::new(EffectTarget::Master, 0, 2))
+            // Effects
+            SetterCase {
+                name: "add master effect",
+                build: |_| {
+                    let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+                    fx.params = manifold_core::params::ParamManifest::from_params(vec![slot(
+                        "amount", 0.5, true,
+                    )]);
+                    Box::new(AddEffectCommand::new(EffectTarget::Master, fx, 0))
+                },
+                applied: |p| p.settings.master_effects.len() == 1,
             },
-            applied: |_| true,
-        },
-        SetterCase {
-            name: "group collapsed",
-            build: |p| Box::new(SetGroupCollapsedCommand::new(EffectTarget::Master, push_master_group(p, "Test"), true)),
-            applied: |p| master_group(p).collapsed,
-        },
-        SetterCase {
-            name: "group effects",
-            build: |p| {
-                push_master_bloom(p);
-                Box::new(GroupEffectsCommand::new(EffectTarget::Master, vec![0], "Group".into()))
+            SetterCase {
+                name: "add layer effect",
+                build: |p| {
+                    let target = EffectTarget::Layer {
+                        layer_id: first_layer_id(p),
+                    };
+                    Box::new(AddEffectCommand::new(
+                        target,
+                        PresetInstance::new(PresetTypeId::MIRROR),
+                        0,
+                    ))
+                },
+                applied: |p| {
+                    p.timeline.layers[0]
+                        .effects
+                        .as_ref()
+                        .is_some_and(|e| e.len() == 1)
+                },
             },
-            applied: |p| p.settings.master_effect_groups.as_ref().is_some_and(|g| g.len() == 1),
-        },
-        // Automation
-        SetterCase {
-            name: "add automation point",
-            build: |p| {
-                let target = manifold_core::GraphTarget::Effect(push_master_bloom(p));
-                Box::new(AddAutomationPointCommand::new(target, "amount", lane_point(0.0)))
+            SetterCase {
+                name: "remove master effect",
+                build: |p| {
+                    push_master_bloom(p);
+                    Box::new(RemoveEffectCommand::new(
+                        EffectTarget::Master,
+                        p.settings.master_effects[0].clone(),
+                        0,
+                    ))
+                },
+                applied: |p| p.settings.master_effects.is_empty(),
             },
-            applied: |p| p.settings.master_effects[0].automation_lanes.as_ref().is_some_and(|l| l.len() == 1),
-        },
-        SetterCase {
-            name: "automation lane enabled",
-            build: |p| {
-                let target = bloom_with_lane(p);
-                Box::new(SetLaneEnabledCommand::new(target, "amount", true, false))
+            SetterCase {
+                name: "toggle effect",
+                build: |p| Box::new(ToggleEffectCommand::new(push_master_bloom(p), true, false)),
+                applied: |p| !p.settings.master_effects[0].enabled,
             },
-            applied: |p| !p.settings.master_effects[0].automation_lanes.as_ref().unwrap()[0].enabled,
-        },
-        SetterCase {
-            name: "clear automation lane",
-            build: |p| Box::new(ClearLaneCommand::new(bloom_with_lane(p), "amount")),
-            applied: |p| !p.settings.master_effects[0].automation_lanes.as_ref().is_some_and(|l| l.iter().any(|l| !l.points.is_empty())),
-        },
-        SetterCase {
-            name: "rename macro label",
-            build: |p| Box::new(RenameMacroLabelCommand::new(0, p.settings.macro_bank.slots[0].label.clone(), "Wobble".into())),
-            applied: |p| p.settings.macro_bank.slots[0].label == "Wobble",
-        },
-        SetterCase {
-            name: "toggle param expose",
-            build: |p| Box::new(ToggleParamExposeCommand::new(push_master_bloom(p), "amount".into(), false)),
-            applied: |_| true,
-        },
-        SetterCase {
-            name: "reorder rack",
-            build: |p| {
-                push_master_bloom(p);
-                push_master_bloom(p);
-                GroupEffectsCommand::new(EffectTarget::Master, vec![0], "Rack".into()).execute(p);
-                let group_id = master_group(p).id.clone();
-                Box::new(ReorderRackCommand::new(EffectTarget::Master, group_id, 2))
+            SetterCase {
+                name: "toggle driver",
+                build: |p| {
+                    let effect_id = push_master_bloom(p);
+                    p.settings.master_effects[0].drivers = Some(vec![ParameterDriver {
+                        param_id: std::borrow::Cow::Borrowed("amount"),
+                        enabled: true,
+                        ..make_driver()
+                    }]);
+                    Box::new(ToggleDriverEnabledCommand::new(
+                        DriverTarget::Effect { effect_id },
+                        0,
+                        true,
+                        false,
+                    ))
+                },
+                applied: |p| !p.settings.master_effects[0].drivers.as_ref().unwrap()[0].enabled,
             },
-            applied: |p| p.settings.master_effects[1].group_id.is_some(),
-        },
-    ]);
+            // Effect groups
+            SetterCase {
+                name: "toggle effect group",
+                build: |p| {
+                    Box::new(ToggleGroupCommand::new(
+                        EffectTarget::Master,
+                        push_master_group(p, "Test"),
+                        true,
+                        false,
+                    ))
+                },
+                applied: |p| !master_group(p).enabled,
+            },
+            SetterCase {
+                name: "rename effect group",
+                build: |p| {
+                    Box::new(RenameGroupCommand::new(
+                        EffectTarget::Master,
+                        push_master_group(p, "Old Name"),
+                        "Old Name".into(),
+                        "New Name".into(),
+                    ))
+                },
+                applied: |p| master_group(p).name == "New Name",
+            },
+            SetterCase {
+                name: "effect group wet/dry",
+                build: |p| {
+                    let gid = push_master_group(p, "Test");
+                    Box::new(ChangeGroupWetDryCommand::new(
+                        EffectTarget::Master,
+                        gid,
+                        master_group(p).wet_dry,
+                        0.5,
+                    ))
+                },
+                applied: |p| master_group(p).wet_dry == 0.5,
+            },
+            // Session
+            SetterCase {
+                name: "add scene",
+                build: |_| {
+                    Box::new(AddSceneCommand::new(
+                        Scene {
+                            id: SceneId::new("scene-1"),
+                            name: "Intro".into(),
+                            color: None,
+                        },
+                        0,
+                    ))
+                },
+                applied: |p| p.session.scenes.len() == 1 && p.session.scenes[0].name == "Intro",
+            },
+            SetterCase {
+                name: "rename scene",
+                build: |p| {
+                    p.session.scenes.push(Scene {
+                        id: SceneId::new("scene-1"),
+                        name: "Old".into(),
+                        color: None,
+                    });
+                    Box::new(RenameSceneCommand::new(
+                        SceneId::new("scene-1"),
+                        "Old".into(),
+                        "New".into(),
+                    ))
+                },
+                applied: |p| p.session.scenes[0].name == "New",
+            },
+            SetterCase {
+                name: "remove scene",
+                build: |p| {
+                    p.session.scenes.push(Scene {
+                        id: SceneId::new("scene-1"),
+                        name: "A".into(),
+                        color: None,
+                    });
+                    Box::new(RemoveSceneCommand::new(SceneId::new("scene-1")))
+                },
+                applied: |p| p.session.scenes.is_empty(),
+            },
+            SetterCase {
+                name: "reorder scenes",
+                build: |p| {
+                    p.session.scenes.push(Scene {
+                        id: SceneId::new("scene-1"),
+                        name: "A".into(),
+                        color: None,
+                    });
+                    p.session.scenes.push(Scene {
+                        id: SceneId::new("scene-2"),
+                        name: "B".into(),
+                        color: None,
+                    });
+                    let old = p.session.scenes.clone();
+                    let new = old.iter().rev().cloned().collect();
+                    Box::new(ReorderSceneCommand::new(old, new))
+                },
+                applied: |p| p.session.scenes[0].name == "B",
+            },
+            SetterCase {
+                name: "set slot",
+                build: |p| {
+                    p.session.scenes.push(Scene {
+                        id: SceneId::new("scene-1"),
+                        name: "A".into(),
+                        color: None,
+                    });
+                    let slot = SessionSlot {
+                        layer_id: first_layer_id(p),
+                        scene_id: SceneId::new("scene-1"),
+                        sequence: ClipSequence::default(),
+                        name: "Slot".into(),
+                        color: None,
+                    };
+                    Box::new(SetSlotCommand::new(
+                        first_layer_id(p),
+                        SceneId::new("scene-1"),
+                        Some(slot),
+                    ))
+                },
+                applied: |p| p.session.slots.len() == 1,
+            },
+            // Markers
+            SetterCase {
+                name: "add marker",
+                build: |_| {
+                    Box::new(AddMarkerCommand::new(
+                        TimelineMarker::new(Beats(4.0)).with_name("Drop"),
+                    ))
+                },
+                applied: |p| p.timeline.markers.len() == 1,
+            },
+            SetterCase {
+                name: "move marker",
+                build: |p| {
+                    let marker = TimelineMarker::new(Beats(4.0));
+                    let id = marker.id.clone();
+                    p.timeline.markers.push(marker);
+                    Box::new(MoveMarkerCommand::new(id, Beats(4.0), Beats(8.0)))
+                },
+                applied: |p| p.timeline.markers[0].beat == Beats(8.0),
+            },
+            SetterCase {
+                name: "rename marker",
+                build: |p| {
+                    let marker = TimelineMarker::new(Beats(4.0));
+                    let id = marker.id.clone();
+                    p.timeline.markers.push(marker);
+                    Box::new(RenameMarkerCommand::new(id, String::new(), "Drop".into()))
+                },
+                applied: |p| p.timeline.markers[0].name == "Drop",
+            },
+            SetterCase {
+                name: "delete marker",
+                build: |p| {
+                    let marker = TimelineMarker::new(Beats(4.0));
+                    let id = marker.id.clone();
+                    p.timeline.markers.push(marker);
+                    Box::new(DeleteMarkerCommand::new(id))
+                },
+                applied: |p| p.timeline.markers.is_empty(),
+            },
+            // Layer settings
+            SetterCase {
+                name: "rename layer",
+                build: |p| {
+                    Box::new(RenameLayerCommand::new(
+                        first_layer_id(p),
+                        "Layer 1".into(),
+                        "Renamed".into(),
+                    ))
+                },
+                applied: |p| p.timeline.layers[0].name == "Renamed",
+            },
+            SetterCase {
+                name: "layer analysis only",
+                build: |p| Box::new(SetLayerAnalysisOnlyCommand::new(first_layer_id(p), true)),
+                applied: |p| p.timeline.layers[0].analysis_only,
+            },
+            SetterCase {
+                name: "layer midi device",
+                build: |p| {
+                    Box::new(ChangeLayerMidiDeviceCommand::new(
+                        first_layer_id(p),
+                        None,
+                        Some("Push".into()),
+                    ))
+                },
+                applied: |p| p.timeline.layers[0].midi_device.as_deref() == Some("Push"),
+            },
+            SetterCase {
+                name: "layer midi trigger mode",
+                build: |p| {
+                    Box::new(ChangeLayerMidiTriggerModeCommand::new(
+                        first_layer_id(p),
+                        MidiTriggerMode::SingleNote,
+                        MidiTriggerMode::AllNotes,
+                    ))
+                },
+                applied: |p| p.timeline.layers[0].midi_trigger_mode == MidiTriggerMode::AllNotes,
+            },
+            // Project settings
+            SetterCase {
+                name: "resolution",
+                build: |p| {
+                    Box::new(ChangeResolutionCommand::new(
+                        p.settings.resolution_preset,
+                        ResolutionPreset::UHD4K,
+                    ))
+                },
+                applied: |p| p.settings.resolution_preset == ResolutionPreset::UHD4K,
+            },
+            SetterCase {
+                name: "render scale",
+                build: |p| Box::new(ChangeRenderScaleCommand::new(p.settings.render_scale, 0.5)),
+                applied: |p| p.settings.render_scale == 0.5,
+            },
+            SetterCase {
+                name: "split sections",
+                build: |p| Box::new(ToggleSplitSectionsCommand::new(p.settings.split_at_markers)),
+                applied: |p| p.settings.split_at_markers,
+            },
+            SetterCase {
+                name: "export gizmos",
+                build: |p| Box::new(ToggleExportGizmosCommand::new(p.settings.export_gizmos)),
+                applied: |p| p.settings.export_gizmos,
+            },
+            // Drivers, envelopes and audio mods
+            SetterCase {
+                name: "driver waveform",
+                build: |p| {
+                    Box::new(ChangeDriverWaveformCommand::new(
+                        bloom_with_driver(p),
+                        0,
+                        DriverWaveform::Sine,
+                        DriverWaveform::Triangle,
+                    ))
+                },
+                applied: |p| bloom_driver(p).waveform == DriverWaveform::Triangle,
+            },
+            SetterCase {
+                name: "driver free period",
+                build: |p| {
+                    Box::new(SetDriverFreePeriodCommand::new(
+                        bloom_with_driver(p),
+                        0,
+                        None,
+                        Some(3.0),
+                    ))
+                },
+                applied: |p| bloom_driver(p).free_period_beats == Some(3.0),
+            },
+            SetterCase {
+                name: "driver reversed",
+                build: |p| {
+                    Box::new(ToggleDriverReversedCommand::new(
+                        bloom_with_driver(p),
+                        0,
+                        false,
+                        true,
+                    ))
+                },
+                applied: |p| bloom_driver(p).reversed,
+            },
+            SetterCase {
+                name: "envelope enabled",
+                build: |p| {
+                    let target = bloom_with_envelope(p, TriggerAction::Continuous);
+                    let old = bloom_envelope(p).enabled;
+                    Box::new(ToggleEnvelopeEnabledCommand::new(target, 0, old, !old))
+                },
+                applied: |p| !bloom_envelope(p).enabled,
+            },
+            SetterCase {
+                name: "envelope action kind",
+                build: |p| {
+                    Box::new(SetEnvelopeActionCommand::new(
+                        bloom_with_envelope(p, TriggerAction::Continuous),
+                        0,
+                        TriggerAction::Continuous,
+                        TriggerAction::Random,
+                    ))
+                },
+                applied: |p| bloom_envelope(p).action == TriggerAction::Random,
+            },
+            SetterCase {
+                name: "envelope step amount",
+                build: |p| {
+                    let old = TriggerAction::Step {
+                        amount: 1.0,
+                        wrap: WrapMode::Wrap,
+                    };
+                    let new = TriggerAction::Step {
+                        amount: 2.0,
+                        wrap: WrapMode::Wrap,
+                    };
+                    Box::new(SetEnvelopeActionCommand::new(
+                        bloom_with_envelope(p, old),
+                        0,
+                        old,
+                        new,
+                    ))
+                },
+                applied: |p| matches!(bloom_envelope(p).action, TriggerAction::Step { amount, .. } if amount == 2.0),
+            },
+            SetterCase {
+                name: "remove envelope",
+                build: |p| {
+                    let target = bloom_with_envelope(p, TriggerAction::Continuous);
+                    Box::new(RemoveEnvelopeCommand::new(
+                        target,
+                        bloom_envelope(p).clone(),
+                        0,
+                    ))
+                },
+                applied: |p| {
+                    p.settings.master_effects[0]
+                        .envelopes
+                        .as_ref()
+                        .is_none_or(|e| e.is_empty())
+                },
+            },
+            SetterCase {
+                name: "audio mod source",
+                build: |p| {
+                    let target = bloom_with_audio_mod(p);
+                    let old = bloom_audio_mod(p).source.clone();
+                    let new = AudioModSource {
+                        send_id: manifold_core::AudioSendId::new("send-2"),
+                        feature: old.feature,
+                    };
+                    Box::new(SetAudioModSourceCommand::new(
+                        target,
+                        "amount".into(),
+                        old,
+                        new,
+                    ))
+                },
+                applied: |p| {
+                    bloom_audio_mod(p).source.send_id == manifold_core::AudioSendId::new("send-2")
+                },
+            },
+            SetterCase {
+                name: "audio mod trigger mode",
+                build: |p| {
+                    Box::new(SetAudioModTriggerModeCommand::new(
+                        bloom_with_audio_mod(p),
+                        "amount".into(),
+                        None,
+                        Some(TriggerFireMode::Transient),
+                    ))
+                },
+                applied: |p| bloom_audio_mod(p).trigger_mode == Some(TriggerFireMode::Transient),
+            },
+            SetterCase {
+                name: "remove audio mod",
+                build: |p| {
+                    Box::new(RemoveAudioModCommand::new(
+                        bloom_with_audio_mod(p),
+                        "amount".into(),
+                    ))
+                },
+                applied: |p| !p.settings.master_effects[0].has_audio_mods(),
+            },
+            // Effects and groups
+            SetterCase {
+                name: "reorder effects",
+                build: |p| {
+                    push_master_bloom(p);
+                    push_master_bloom(p);
+                    Box::new(ReorderEffectCommand::new(EffectTarget::Master, 0, 2))
+                },
+                applied: |_| true,
+            },
+            SetterCase {
+                name: "group collapsed",
+                build: |p| {
+                    Box::new(SetGroupCollapsedCommand::new(
+                        EffectTarget::Master,
+                        push_master_group(p, "Test"),
+                        true,
+                    ))
+                },
+                applied: |p| master_group(p).collapsed,
+            },
+            SetterCase {
+                name: "group effects",
+                build: |p| {
+                    push_master_bloom(p);
+                    Box::new(GroupEffectsCommand::new(
+                        EffectTarget::Master,
+                        vec![0],
+                        "Group".into(),
+                    ))
+                },
+                applied: |p| {
+                    p.settings
+                        .master_effect_groups
+                        .as_ref()
+                        .is_some_and(|g| g.len() == 1)
+                },
+            },
+            // Automation
+            SetterCase {
+                name: "add automation point",
+                build: |p| {
+                    let target = manifold_core::GraphTarget::Effect(push_master_bloom(p));
+                    Box::new(AddAutomationPointCommand::new(
+                        target,
+                        "amount",
+                        lane_point(0.0),
+                    ))
+                },
+                applied: |p| {
+                    p.settings.master_effects[0]
+                        .automation_lanes
+                        .as_ref()
+                        .is_some_and(|l| l.len() == 1)
+                },
+            },
+            SetterCase {
+                name: "automation lane enabled",
+                build: |p| {
+                    let target = bloom_with_lane(p);
+                    Box::new(SetLaneEnabledCommand::new(target, "amount", true, false))
+                },
+                applied: |p| {
+                    !p.settings.master_effects[0]
+                        .automation_lanes
+                        .as_ref()
+                        .unwrap()[0]
+                        .enabled
+                },
+            },
+            SetterCase {
+                name: "clear automation lane",
+                build: |p| Box::new(ClearLaneCommand::new(bloom_with_lane(p), "amount")),
+                applied: |p| {
+                    !p.settings.master_effects[0]
+                        .automation_lanes
+                        .as_ref()
+                        .is_some_and(|l| l.iter().any(|l| !l.points.is_empty()))
+                },
+            },
+            SetterCase {
+                name: "rename macro label",
+                build: |p| {
+                    Box::new(RenameMacroLabelCommand::new(
+                        0,
+                        p.settings.macro_bank.slots[0].label.clone(),
+                        "Wobble".into(),
+                    ))
+                },
+                applied: |p| p.settings.macro_bank.slots[0].label == "Wobble",
+            },
+            SetterCase {
+                name: "toggle param expose",
+                build: |p| {
+                    Box::new(ToggleParamExposeCommand::new(
+                        push_master_bloom(p),
+                        "amount".into(),
+                        false,
+                    ))
+                },
+                applied: |_| true,
+            },
+            SetterCase {
+                name: "reorder rack",
+                build: |p| {
+                    push_master_bloom(p);
+                    push_master_bloom(p);
+                    GroupEffectsCommand::new(EffectTarget::Master, vec![0], "Rack".into())
+                        .execute(p);
+                    let group_id = master_group(p).id.clone();
+                    Box::new(ReorderRackCommand::new(EffectTarget::Master, group_id, 2))
+                },
+                applied: |p| p.settings.master_effects[1].group_id.is_some(),
+            },
+        ],
+    );
 }
 
 /// Undo must restore the saved file byte for byte, and redo must reproduce
 /// the edited one. Undoing the first add into an optional list leaves an
 /// empty list behind in memory; the save must not see it (BUG-rr482 (undo
 /// leaves empty lists)).
-fn assert_undo_restores_saved_bytes(name: &str, mut project: Project, mut command: Box<dyn Command>) {
+fn assert_undo_restores_saved_bytes(
+    name: &str,
+    mut project: Project,
+    mut command: Box<dyn Command>,
+) {
     let before = serde_json::to_string(&project).unwrap();
     let fp = audit::fingerprint(&project);
     command.execute(&mut project);
-    undeclared("execute", &fp, &project, command.touches()).unwrap_or_else(|e| panic!("{name}: {e}"));
+    undeclared("execute", &fp, &project, command.touches())
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
     let after = serde_json::to_string(&project).unwrap();
     assert_ne!(after, before, "{name}: the command changed nothing");
     let (fp, declared) = (audit::fingerprint(&project), command.touches());
     command.undo(&mut project);
     undeclared("undo", &fp, &project, declared).unwrap_or_else(|e| panic!("{name}: {e}"));
-    assert_eq!(serde_json::to_string(&project).unwrap(), before, "{name}: undo");
+    assert_eq!(
+        serde_json::to_string(&project).unwrap(),
+        before,
+        "{name}: undo"
+    );
     let (fp, declared) = (audit::fingerprint(&project), command.touches());
     command.execute(&mut project);
     undeclared("redo", &fp, &project, declared).unwrap_or_else(|e| panic!("{name}: {e}"));
-    assert_eq!(serde_json::to_string(&project).unwrap(), after, "{name}: redo");
+    assert_eq!(
+        serde_json::to_string(&project).unwrap(),
+        after,
+        "{name}: redo"
+    );
 }
 
 #[test]
@@ -2735,43 +3185,94 @@ fn first_add_into_each_optional_list_undoes_to_the_same_saved_bytes() {
 
     let with_master_bloom = || {
         let mut project = make_test_project();
-        project.settings.master_effects.push(make_effect(&PresetTypeId::BLOOM));
+        project
+            .settings
+            .master_effects
+            .push(make_effect(&PresetTypeId::BLOOM));
         let effect_id = project.settings.master_effects[0].id.clone();
         (project, effect_id)
     };
     let mut project = make_test_project();
     project.timeline.layers[1] = Layer::new_generator("Plasma".into(), PresetTypeId::PLASMA, 1);
     let target = GraphTarget::Generator(project.timeline.layers[1].layer_id.clone());
-    assert_undo_restores_saved_bytes("generator envelope", project,
-        Box::new(AddEnvelopeCommand::new(target, make_envelope())));
+    assert_undo_restores_saved_bytes(
+        "generator envelope",
+        project,
+        Box::new(AddEnvelopeCommand::new(target, make_envelope())),
+    );
 
     let (project, effect_id) = with_master_bloom();
-    assert_undo_restores_saved_bytes("effect envelope", project,
-        Box::new(AddEnvelopeCommand::new(GraphTarget::Effect(effect_id), ParamEnvelope::new("amount"))));
+    assert_undo_restores_saved_bytes(
+        "effect envelope",
+        project,
+        Box::new(AddEnvelopeCommand::new(
+            GraphTarget::Effect(effect_id),
+            ParamEnvelope::new("amount"),
+        )),
+    );
 
     let (project, effect_id) = with_master_bloom();
     let driver = ParameterDriver::new("amount", BeatDivision::Quarter, DriverWaveform::Sine);
-    assert_undo_restores_saved_bytes("effect driver", project,
-        Box::new(AddDriverCommand::new(DriverTarget::Effect { effect_id }, driver)));
+    assert_undo_restores_saved_bytes(
+        "effect driver",
+        project,
+        Box::new(AddDriverCommand::new(
+            DriverTarget::Effect { effect_id },
+            driver,
+        )),
+    );
 
     let (project, effect_id) = with_master_bloom();
     let audio_mod = ParameterAudioMod::new(
-        "amount".into(), manifold_core::AudioSendId::new(""), manifold_core::AudioFeature::default(),
+        "amount".into(),
+        manifold_core::AudioSendId::new(""),
+        manifold_core::AudioFeature::default(),
     );
-    assert_undo_restores_saved_bytes("effect audio mod", project,
-        Box::new(AddAudioModCommand::new(DriverTarget::Effect { effect_id }, audio_mod)));
+    assert_undo_restores_saved_bytes(
+        "effect audio mod",
+        project,
+        Box::new(AddAudioModCommand::new(
+            DriverTarget::Effect { effect_id },
+            audio_mod,
+        )),
+    );
 
     let (project, effect_id) = with_master_bloom();
-    let point = AutomationPoint { beat: Beats(0.0), value: 1.0, shape: SegmentShape::Linear };
-    assert_undo_restores_saved_bytes("effect automation lane", project,
-        Box::new(AddAutomationPointCommand::new(GraphTarget::Effect(effect_id), "amount", point)));
+    let point = AutomationPoint {
+        beat: Beats(0.0),
+        value: 1.0,
+        shape: SegmentShape::Linear,
+    };
+    assert_undo_restores_saved_bytes(
+        "effect automation lane",
+        project,
+        Box::new(AddAutomationPointCommand::new(
+            GraphTarget::Effect(effect_id),
+            "amount",
+            point,
+        )),
+    );
 
     let project = make_test_project();
     let layer_id = project.timeline.layers[0].layer_id.clone();
-    assert_undo_restores_saved_bytes("layer effect", project,
-        Box::new(AddEffectCommand::new(EffectTarget::Layer { layer_id }, make_effect(&PresetTypeId::BLOOM), 0)));
+    assert_undo_restores_saved_bytes(
+        "layer effect",
+        project,
+        Box::new(AddEffectCommand::new(
+            EffectTarget::Layer { layer_id },
+            make_effect(&PresetTypeId::BLOOM),
+            0,
+        )),
+    );
 
     let (project, _) = with_master_bloom();
-    assert_undo_restores_saved_bytes("master effect group", project,
-        Box::new(GroupEffectsCommand::new(EffectTarget::Master, vec![0], "Group".into())));
+    assert_undo_restores_saved_bytes(
+        "master effect group",
+        project,
+        Box::new(GroupEffectsCommand::new(
+            EffectTarget::Master,
+            vec![0],
+            "Group".into(),
+        )),
+    );
 }

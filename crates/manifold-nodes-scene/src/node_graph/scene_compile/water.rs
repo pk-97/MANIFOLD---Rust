@@ -21,8 +21,9 @@ use std::collections::BTreeMap;
 use manifold_core::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
 use manifold_core::scene_doc::{Item, ItemFields, ItemKind, SceneDoc, SourceShape};
 use manifold_core::scene_schema::{
-    DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SURFACE_DETAIL_NODES, SURFACE_DETAIL_OFFSET, WATER_MATERIAL_ROLE, WATER_OBJECT_ROLE,
-    WORLD_FOLLOWS, WaterFamily, role_index, template_roles, water_family,
+    DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SURFACE_DETAIL_NODES, SURFACE_DETAIL_OFFSET,
+    WATER_MATERIAL_ROLE, WATER_OBJECT_ROLE, WORLD_FOLLOWS, WaterFamily, role_index, template_roles,
+    water_family,
 };
 use manifold_core::scene_world_controls::WORLD_INPUTS;
 use manifold_foundation::ItemId;
@@ -36,7 +37,11 @@ pub(crate) fn waters(doc: &SceneDoc) -> Vec<(Item, Option<ItemId>)> {
     let mut found = Vec::new();
     doc.walk(|item, ancestors| {
         if matches!(item.fields, ItemFields::Water(_)) {
-            let group = ancestors.iter().rev().find(|ancestor| ancestor.kind() == ItemKind::Group).map(|group| group.id.clone());
+            let group = ancestors
+                .iter()
+                .rev()
+                .find(|ancestor| ancestor.kind() == ItemKind::Group)
+                .map(|group| group.id.clone());
             found.push((item.clone(), group));
         }
     });
@@ -60,7 +65,10 @@ fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>, family: &Water
     let owner = item.id.as_str();
     let ids = splice(b, owner, family);
     let node = |name: &str| ids.get(name).copied();
-    for role in template_roles().chain(PHYSICS_VIEW_SWITCHES).chain(SURFACE_DETAIL_NODES) {
+    for role in template_roles()
+        .chain(PHYSICS_VIEW_SWITCHES)
+        .chain(SURFACE_DETAIL_NODES)
+    {
         if let Some(id) = node(role) {
             b.adopt(owner, role, id);
         }
@@ -98,8 +106,18 @@ fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>, family: &Water
         }
     }
 
-    let sources: Vec<&Item> = item.children.iter().filter(|child| matches!(child.fields, ItemFields::WaterSource(_))).collect();
-    b.set(domain, "roles", SerializedParamValue::Int { value: sources.len() as i32 });
+    let sources: Vec<&Item> = item
+        .children
+        .iter()
+        .filter(|child| matches!(child.fields, ItemFields::WaterSource(_)))
+        .collect();
+    b.set(
+        domain,
+        "roles",
+        SerializedParamValue::Int {
+            value: sources.len() as i32,
+        },
+    );
     for (port, source) in sources.into_iter().enumerate() {
         emit_source(b, source, domain, port, frame);
     }
@@ -132,7 +150,13 @@ fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>, family: &Water
     if let Some(detail) = b.id(owner, "surface_detail") {
         for target in SURFACE_DETAIL_NODES {
             if let Some(target) = b.id(owner, target) {
-                b.follow_offset(detail, "value", target, "resolution_scale", SURFACE_DETAIL_OFFSET);
+                b.follow_offset(
+                    detail,
+                    "value",
+                    target,
+                    "resolution_scale",
+                    SURFACE_DETAIL_OFFSET,
+                );
             }
         }
     }
@@ -150,7 +174,13 @@ fn emit_source(b: &mut Builder<'_>, item: &Item, domain: u32, port: usize, frame
         b.wire(frame, "transform", transform, "parent");
     }
     let role = b.add(owner, "role", "node.fluid_role_source");
-    b.set(role, "role", SerializedParamValue::Enum { value: role_index(fields.role) });
+    b.set(
+        role,
+        "role",
+        SerializedParamValue::Enum {
+            value: role_index(fields.role),
+        },
+    );
     b.wire(transform, "transform", role, "transform");
     if fields.shape == SourceShape::Sphere {
         let sphere = b.add(owner, "sphere", "node.sphere_mesh");
@@ -204,7 +234,10 @@ fn renumber(
         }
     }
     for wire in wires.iter_mut() {
-        wire.from_node = level.get(&wire.from_node).copied().unwrap_or(wire.from_node);
+        wire.from_node = level
+            .get(&wire.from_node)
+            .copied()
+            .unwrap_or(wire.from_node);
         wire.to_node = level.get(&wire.to_node).copied().unwrap_or(wire.to_node);
     }
 }
@@ -226,7 +259,13 @@ pub(crate) fn follow_world(b: &mut Builder<'_>, world: Option<u32>, mode: u32) {
         }
         for switch in PHYSICS_VIEW_SWITCHES {
             if let Some(switch) = b.id(owner, switch) {
-                b.follow_offset(mode, "mode", switch, "selector", 1.0 - RENDER_MODE_PHYSICS_VIEW as f32);
+                b.follow_offset(
+                    mode,
+                    "mode",
+                    switch,
+                    "selector",
+                    1.0 - RENDER_MODE_PHYSICS_VIEW as f32,
+                );
             }
         }
     }

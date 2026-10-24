@@ -6,8 +6,8 @@
 
 mod context;
 mod dispatch;
-pub(crate) use dispatch::resolve::resolve_graph_target;
 pub(crate) use dispatch::resolve::preset_source_def;
+pub(crate) use dispatch::resolve::resolve_graph_target;
 mod editing;
 mod inspector;
 mod layer;
@@ -17,13 +17,15 @@ pub(crate) mod project;
 mod projection;
 pub(crate) use projection::preview::{project_clip_preview, project_lane_preview};
 mod rack_controls;
+#[cfg(test)]
+pub(crate) use projection::scene::scene_state;
 pub use projection::timeline::sync_automation_lane_order;
 pub(crate) use projection::trigger_routing::modifier_label_for_param;
 #[cfg(test)]
-pub(crate) use projection::scene::scene_state;
-#[cfg(test)]
 pub(crate) use projection::trigger_routing::tests::{duplicate_force_project, force_project};
-pub(crate) use projection::trigger_routing::{TriggerRoutingCatalog, TriggerSourceChoice, TriggerTargetChoice};
+pub(crate) use projection::trigger_routing::{
+    TriggerRoutingCatalog, TriggerSourceChoice, TriggerTargetChoice,
+};
 // `pub(crate)` so the frame-resident gestures in `app_render` (graph-editor
 // mapping drags, graph-canvas node-param drags) can name `ResolvedScrub`
 // directly — they open the one `ScrubState.active` slot without going through
@@ -222,7 +224,11 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
         PanelAction::Root(a) => match a {
             // Right-click slider reset: recurses into this same `dispatch` for
             // the value-change trio (BUG-061), so undo == a drag to the default.
-            RootAction::SliderReset { snapshot, changed, commit } => {
+            RootAction::SliderReset {
+                snapshot,
+                changed,
+                commit,
+            } => {
                 dispatch(snapshot, ctx);
                 dispatch(changed, ctx);
                 dispatch(commit, ctx)
@@ -277,20 +283,43 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             RootAction::SceneItemRightClicked => DispatchResult::handled(),
             // The blocking native picker, as every other file field uses; the
             // picked path is one `SceneFieldSet`.
-            RootAction::SceneFieldFileClicked { layer_id, item, field, extensions } => {
+            RootAction::SceneFieldFileClicked {
+                layer_id,
+                item,
+                field,
+                extensions,
+            } => {
                 // A new Model File is a swap: the parts whose file node is
                 // still there keep their edits.
                 if field == "model_file" {
-                    ctx.ui.pending_keyboard_actions.push(manifold_ui::panels::PanelAction::Project(
-                        manifold_ui::panels::ProjectAction::SceneSetupSwapModelFile(layer_id.clone(), item.clone()),
-                    ));
+                    ctx.ui.pending_keyboard_actions.push(
+                        manifold_ui::panels::PanelAction::Project(
+                            manifold_ui::panels::ProjectAction::SceneSetupSwapModelFile(
+                                layer_id.clone(),
+                                item.clone(),
+                            ),
+                        ),
+                    );
                     return DispatchResult::handled();
                 }
-                let picked = crate::file_dialogs::pick_file_of(crate::file_dialogs::DialogAction::NodeFile, ctx.dialogs, ctx.user_prefs, extensions);
+                let picked = crate::file_dialogs::pick_file_of(
+                    crate::file_dialogs::DialogAction::NodeFile,
+                    ctx.dialogs,
+                    ctx.user_prefs,
+                    extensions,
+                );
                 match picked {
                     Some(path) => {
-                        let pick = manifold_core::scene_surface::FieldPick::File(path.to_string_lossy().into_owned());
-                        let built = crate::scene_edit::set_field(&ctx.project, layer_id, item, field, &pick);
+                        let pick = manifold_core::scene_surface::FieldPick::File(
+                            path.to_string_lossy().into_owned(),
+                        );
+                        let built = crate::scene_edit::set_field(
+                            &ctx.project,
+                            layer_id,
+                            item,
+                            field,
+                            &pick,
+                        );
                         project::send_scene_edit(ctx.content_tx, layer_id, built)
                     }
                     None => DispatchResult::handled(),
@@ -298,7 +327,8 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             }
             RootAction::SceneItemMove(delta) => {
                 if let Some(item) = ctx.ui.scene_setup_panel.selected_scene_item() {
-                    let built = crate::scene_edit::nudge(&ctx.project, &item.layer_id, &item.item, *delta);
+                    let built =
+                        crate::scene_edit::nudge(&ctx.project, &item.layer_id, &item.item, *delta);
                     return project::send_scene_edit(ctx.content_tx, &item.layer_id, built);
                 }
                 DispatchResult::handled()
@@ -306,9 +336,13 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             RootAction::SceneItemRename | RootAction::SceneItemFrame => {
                 let action = if matches!(a, RootAction::SceneItemRename) {
                     ctx.ui.scene_setup_panel.rename_selection_action()
-                } else { ctx.ui.scene_setup_panel.frame_selection_action() };
+                } else {
+                    ctx.ui.scene_setup_panel.frame_selection_action()
+                };
                 // The queued action's own dispatch decides its work.
-                if let Some(action) = action { ctx.ui.pending_keyboard_actions.push(action); }
+                if let Some(action) = action {
+                    ctx.ui.pending_keyboard_actions.push(action);
+                }
                 DispatchResult::handled()
             }
             RootAction::SceneSetupSelectionChanged(_) => DispatchResult::handled(),
@@ -342,8 +376,9 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             // The pre-decomposition router routed these through the inspector
             // chain, which no handler claimed, so they returned `unhandled()`;
             // preserve that exactly.
-            RootAction::AudioSetupDeviceClicked
-            | RootAction::OpenAbletonPickerForParam(..) => DispatchResult::unhandled(),
+            RootAction::AudioSetupDeviceClicked | RootAction::OpenAbletonPickerForParam(..) => {
+                DispatchResult::unhandled()
+            }
         },
 
         // ── Scrub: the unified value-scrub gesture (P-I / D4). One handler for
@@ -371,7 +406,12 @@ pub(crate) fn select_region_to_with_project(
             .as_ref()
             .and_then(|id| project.timeline.find_layer_index_by_id(id))
             .map(|anchor_idx| {
-                (selection.insert_cursor_beat().unwrap_or(manifold_core::Beats::ZERO), anchor_idx)
+                (
+                    selection
+                        .insert_cursor_beat()
+                        .unwrap_or(manifold_core::Beats::ZERO),
+                    anchor_idx,
+                )
             })
     } else if let Some(r) = selection.current_region() {
         r.layer_index_range(&crate::ui_translate::layers_to_ui(&project.timeline.layers))
@@ -437,12 +477,17 @@ pub(crate) fn select_clip_range_to_with_project(
     project: &Project,
 ) {
     let find = |id: &manifold_core::ClipId| -> Option<(usize, LayerId, manifold_core::Beats)> {
-        project.timeline.layers.iter().enumerate().find_map(|(li, l)| {
-            l.clips
-                .iter()
-                .find(|c| c.id == *id)
-                .map(|c| (li, l.layer_id.clone(), c.start_beat))
-        })
+        project
+            .timeline
+            .layers
+            .iter()
+            .enumerate()
+            .find_map(|(li, l)| {
+                l.clips
+                    .iter()
+                    .find(|c| c.id == *id)
+                    .map(|c| (li, l.layer_id.clone(), c.start_beat))
+            })
     };
 
     let Some((_, target_layer_id, target_start)) = find(target_clip_id) else {
@@ -680,7 +725,12 @@ pub(crate) fn editor_dispatch_context(
             (InspectorTab::Layer, Some(lid.clone()))
         }
         Some(manifold_core::GraphTarget::Effect(eid)) => {
-            if project.settings.master_effects.iter().any(|fx| &fx.id == eid) {
+            if project
+                .settings
+                .master_effects
+                .iter()
+                .any(|fx| &fx.id == eid)
+            {
                 (InspectorTab::Master, None)
             } else if let Some(lid) = project.timeline.layers.iter().find_map(|l| {
                 l.effects
@@ -723,15 +773,15 @@ pub(crate) fn write_led_exit_path_label(
 }
 
 // Re-export public functions from sub-modules
-pub use state_sync::{
-    LiveGroups, TransportDisplayCache, check_auto_scroll, drain_events, intake_overlay_state, push_chrome, push_clock, push_zoom_label, push_frame, push_live, push_selection,
-    sync_automation_lane_geometry,
-    sync_clip_positions, sync_driver_readouts, sync_markers,
-    sync_scene_row_values,
-    sync_audio_dock, sync_inspector_data, sync_project_all, sync_project_data, sync_track_layout, sync_trigger_catalog,
-};
 #[cfg(feature = "ui-snapshot")]
 pub use state_sync::push_state;
+pub use state_sync::{
+    LiveGroups, TransportDisplayCache, check_auto_scroll, drain_events, intake_overlay_state,
+    push_chrome, push_clock, push_frame, push_live, push_selection, push_zoom_label,
+    sync_audio_dock, sync_automation_lane_geometry, sync_clip_positions, sync_driver_readouts,
+    sync_inspector_data, sync_markers, sync_project_all, sync_project_data, sync_scene_row_values,
+    sync_track_layout, sync_trigger_catalog,
+};
 
 #[cfg(test)]
 mod d2_d3_tests {
@@ -755,7 +805,9 @@ mod d2_d3_tests {
     fn shift_click_after_region_edge_layers_are_deleted_does_not_anchor_on_layer_0() {
         let mut project = Project::default();
         for (i, name) in ["a", "b", "c", "d"].iter().enumerate() {
-            project.timeline.insert_layer(i, Layer::new((*name).into(), LayerType::Video, i as i32));
+            project
+                .timeline
+                .insert_layer(i, Layer::new((*name).into(), LayerType::Video, i as i32));
         }
         let mut selection = UIState::new();
         let ui_layers = crate::ui_translate::layers_to_ui(&project.timeline.layers);
@@ -766,7 +818,11 @@ mod d2_d3_tests {
 
         select_region_to_with_project(Beats(8.0), 1, &mut selection, &project);
 
-        assert!(selection.current_region().is_none(), "region {:?}", selection.current_region());
+        assert!(
+            selection.current_region().is_none(),
+            "region {:?}",
+            selection.current_region()
+        );
         assert_eq!(selection.insert_cursor_layer_id(), Some(&survivor));
     }
 
@@ -898,9 +954,7 @@ mod d2_d3_tests {
         let new_min_start = main
             .clips
             .iter()
-            .filter(|c| {
-                !["clip_a", "clip_b", "clip_c", "clip_d"].contains(&c.id.as_str())
-            })
+            .filter(|c| !["clip_a", "clip_b", "clip_c", "clip_d"].contains(&c.id.as_str()))
             .map(|c| c.start_beat)
             .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
             .expect("4 new copies were created");
@@ -935,7 +989,7 @@ mod command_site_plan_tests {
     //! planner follows the stamps its write moved, one test per write kind.
     use super::*;
     use crate::content_command::ContentCommand;
-    use crate::frame_plan::{plan_frame, FrameInputs, Projection, UiStamps};
+    use crate::frame_plan::{FrameInputs, Projection, UiStamps, plan_frame};
     use manifold_core::change::PartStamps;
     use manifold_ui::{LayerAction, ProjectAction};
 
@@ -953,31 +1007,42 @@ mod command_site_plan_tests {
         let mut user_prefs = crate::user_prefs::UserPrefs::in_memory();
         let mut scrub = ScrubState::default();
         let mut edits = crate::gesture_preview::UiEdits::default();
-        let result = dispatch(action, &mut DispatchCtx {
-            project: ProjectRef::new(project, &mut edits, &content_tx),
-            content_tx: &content_tx,
-            content_state: &content_state,
-            ui: &mut ui,
-            selection: &mut selection,
-            active_layer: &mut active_layer,
-            user_prefs: &mut user_prefs,
-            editor_target: None,
-            scrub: &mut scrub,
-            dialogs: Default::default(),
-        });
+        let result = dispatch(
+            action,
+            &mut DispatchCtx {
+                project: ProjectRef::new(project, &mut edits, &content_tx),
+                content_tx: &content_tx,
+                content_state: &content_state,
+                ui: &mut ui,
+                selection: &mut selection,
+                active_layer: &mut active_layer,
+                user_prefs: &mut user_prefs,
+                editor_target: None,
+                scrub: &mut scrub,
+                dialogs: Default::default(),
+            },
+        );
         (result, edits.stamps, content_rx.try_iter().collect())
     }
 
     fn plan_after(stamps: &UiStamps) -> crate::frame_plan::FramePlan {
-        plan_frame(&FrameInputs::default(), &FrameInputs { parts: stamps.parts(), ..Default::default() })
+        plan_frame(
+            &FrameInputs::default(),
+            &FrameInputs {
+                parts: stamps.parts(),
+                ..Default::default()
+            },
+        )
     }
 
     #[test]
     fn execute_site_projects_from_its_stamps() {
         let mut project = Project::default();
         project.timeline.add_layer_default();
-        let (_, stamps, sent) =
-            dispatch_stamped(&PanelAction::Layer(LayerAction::AddLayerClicked), &mut project);
+        let (_, stamps, sent) = dispatch_stamped(
+            &PanelAction::Layer(LayerAction::AddLayerClicked),
+            &mut project,
+        );
         assert_eq!(project.timeline.layers.len(), 2, "executed locally");
         assert!(matches!(sent.as_slice(), [ContentCommand::Execute(_)]));
         let plan = plan_after(&stamps);
@@ -991,10 +1056,18 @@ mod command_site_plan_tests {
         project.timeline.add_layer_default();
         let id = project.timeline.layers[0].layer_id.clone();
         let collapsed = project.timeline.layers[0].is_collapsed;
-        let (_, stamps, sent) =
-            dispatch_stamped(&PanelAction::Layer(LayerAction::ChevronClicked(id)), &mut project);
-        assert_ne!(project.timeline.layers[0].is_collapsed, collapsed, "written locally");
-        assert!(matches!(sent.as_slice(), [ContentCommand::MutateProject { .. }]));
+        let (_, stamps, sent) = dispatch_stamped(
+            &PanelAction::Layer(LayerAction::ChevronClicked(id)),
+            &mut project,
+        );
+        assert_ne!(
+            project.timeline.layers[0].is_collapsed, collapsed,
+            "written locally"
+        );
+        assert!(matches!(
+            sent.as_slice(),
+            [ContentCommand::MutateProject { .. }]
+        ));
         let plan = plan_after(&stamps);
         assert!(plan.projections.contains(Projection::ProjectSync));
         assert!(plan.projections.contains(Projection::ClipPositions));
@@ -1014,10 +1087,21 @@ mod command_site_plan_tests {
         let layer_id = project.timeline.layers[idx].layer_id.clone();
         let before = serde_json::to_value(&project).unwrap();
         {
-            let action = ProjectAction::SceneRemove(layer_id.clone(), vec![manifold_core::scene_doc::ItemId::new("cube")]);
-            let (_, stamps, sent) = dispatch_stamped(&PanelAction::Project(action.clone()), &mut project);
-            assert_eq!(serde_json::to_value(&project).unwrap(), before, "{action:?}: UI snapshot untouched");
-            assert!(plan_after(&stamps).projections == Default::default(), "{action:?}: nothing to project yet");
+            let action = ProjectAction::SceneRemove(
+                layer_id.clone(),
+                vec![manifold_core::scene_doc::ItemId::new("cube")],
+            );
+            let (_, stamps, sent) =
+                dispatch_stamped(&PanelAction::Project(action.clone()), &mut project);
+            assert_eq!(
+                serde_json::to_value(&project).unwrap(),
+                before,
+                "{action:?}: UI snapshot untouched"
+            );
+            assert!(
+                plan_after(&stamps).projections == Default::default(),
+                "{action:?}: nothing to project yet"
+            );
             let [ContentCommand::ExecuteOnContent(command)] = sent.as_slice() else {
                 panic!("{action:?}: expected one content-owned edit");
             };
@@ -1028,7 +1112,10 @@ mod command_site_plan_tests {
             let mut folded = stamps;
             folded.fold_snapshot(&content);
             let plan = plan_after(&folded);
-            assert!(plan.projections.contains(Projection::InspectorSync), "{action:?}");
+            assert!(
+                plan.projections.contains(Projection::InspectorSync),
+                "{action:?}"
+            );
         }
     }
 }

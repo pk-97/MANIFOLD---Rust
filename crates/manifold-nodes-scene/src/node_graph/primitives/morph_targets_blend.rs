@@ -25,13 +25,12 @@
 //! loop (rather than N chained single-target apply nodes) keeps graph
 //! topology independent of the imported asset's target count — a
 
-
 use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
@@ -102,7 +101,10 @@ impl Primitive for MorphTargetsBlend {
         if port_name != "out" {
             return None;
         }
-        input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)
+        input_capacities
+            .iter()
+            .find(|(p, _)| *p == "in")
+            .map(|(_, n)| *n)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -152,10 +154,26 @@ impl Primitive for MorphTargetsBlend {
                     binding: 0,
                     data: bytemuck::bytes_of(&uniforms),
                 },
-                GpuBinding::Buffer { binding: 1, buffer: in_buf, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: deltas_buf, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: weights_buf, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: out_buf, offset: 0 },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: in_buf,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: deltas_buf,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: weights_buf,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: out_buf,
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256), 1, 1],
             "node.morph_targets_blend",
@@ -172,8 +190,17 @@ mod gpu_tests {
     use super::*;
 
     fn mk_vertex(pos: [f32; 3], normal: [f32; 3]) -> MeshVertex {
-        MeshVertex { position: pos, _pad0: 0.0, normal, _pad1: 0.0, uv: [0.0, 0.0], _pad2: [0.0, 0.0], tangent: [0.0; 4], color: [1.0; 4] }
-}
+        MeshVertex {
+            position: pos,
+            _pad0: 0.0,
+            normal,
+            _pad1: 0.0,
+            uv: [0.0, 0.0],
+            _pad2: [0.0, 0.0],
+            tangent: [0.0; 4],
+            color: [1.0; 4],
+        }
+    }
 
     /// Generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {
@@ -192,8 +219,14 @@ mod gpu_tests {
         weights: &[f32],
         target_count: i32,
     ) -> ([f32; 3], [f32; 3]) {
-        let by_deltas = if vertex_count > 0 { deltas.len() / vertex_count } else { 0 };
-        let bound = (target_count.max(0) as usize).min(weights.len()).min(by_deltas);
+        let by_deltas = if vertex_count > 0 {
+            deltas.len() / vertex_count
+        } else {
+            0
+        };
+        let bound = (target_count.max(0) as usize)
+            .min(weights.len())
+            .min(by_deltas);
         let mut pos = base.position;
         let mut nrm = base.normal;
         for t in 0..bound {
@@ -204,7 +237,9 @@ mod gpu_tests {
                 nrm[c] += w * d.normal[c];
             }
         }
-        let mag = (nrm[0] * nrm[0] + nrm[1] * nrm[1] + nrm[2] * nrm[2]).sqrt().max(1e-12);
+        let mag = (nrm[0] * nrm[0] + nrm[1] * nrm[1] + nrm[2] * nrm[2])
+            .sqrt()
+            .max(1e-12);
         (pos, [nrm[0] / mag, nrm[1] / mag, nrm[2] / mag])
     }
 
@@ -219,8 +254,11 @@ mod gpu_tests {
         deltas_len_override: Option<u32>,
     ) -> Vec<MeshVertex> {
         let wgsl = generated_wgsl();
-        let pipeline =
-            device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "morph-targets-blend-test");
+        let pipeline = device.create_compute_pipeline(
+            &wgsl,
+            manifold_node_engine::freeze::codegen::ENTRY,
+            "morph-targets-blend-test",
+        );
         let in_buf = device.create_buffer_shared(std::mem::size_of_val(verts) as u64);
         unsafe {
             in_buf.write(0, bytemuck::cast_slice(verts));
@@ -231,7 +269,8 @@ mod gpu_tests {
                 deltas_buf.write(0, bytemuck::cast_slice(deltas));
             }
         }
-        let weights_buf = device.create_buffer_shared((std::mem::size_of_val(weights) as u64).max(1));
+        let weights_buf =
+            device.create_buffer_shared((std::mem::size_of_val(weights) as u64).max(1));
         if !weights.is_empty() {
             unsafe {
                 weights_buf.write(0, bytemuck::cast_slice(weights));
@@ -246,14 +285,38 @@ mod gpu_tests {
             dispatch_count: verts.len() as u32,
         };
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: &in_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &deltas_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &weights_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 4, buffer: &out_buf, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &in_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &deltas_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &weights_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: &out_buf,
+                offset: 0,
+            },
         ];
         let mut enc = device.create_encoder("morph-targets-blend-test");
-        enc.dispatch_compute(&pipeline, &bindings, [(verts.len() as u32).div_ceil(256), 1, 1], "morph-targets-blend-test");
+        enc.dispatch_compute(
+            &pipeline,
+            &bindings,
+            [(verts.len() as u32).div_ceil(256), 1, 1],
+            "morph-targets-blend-test",
+        );
         enc.commit_and_wait_completed();
         let ptr = out_buf.mapped_ptr().expect("shared dst buffer");
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, verts.len()) }.to_vec()
@@ -265,8 +328,14 @@ mod gpu_tests {
     fn generated_matches_hand_formula_single_target_full_weight() {
         let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
-        assert!(gen_wgsl.contains("struct Element"), "element struct synthesized");
-        assert!(gen_wgsl.contains("var<storage, read_write>"), "output bound read_write");
+        assert!(
+            gen_wgsl.contains("struct Element"),
+            "element struct synthesized"
+        );
+        assert!(
+            gen_wgsl.contains("var<storage, read_write>"),
+            "output bound read_write"
+        );
 
         let verts = vec![
             mk_vertex([1.0, 2.0, 3.0], [0.0, 1.0, 0.0]),
@@ -288,7 +357,10 @@ mod gpu_tests {
                     out[i].position[c],
                     exp_pos[c]
                 );
-                assert!((out[i].normal[c] - exp_n[c]).abs() < 1e-4, "vertex {i} normal[{c}]");
+                assert!(
+                    (out[i].normal[c] - exp_n[c]).abs() < 1e-4,
+                    "vertex {i} normal[{c}]"
+                );
             }
         }
     }
@@ -315,7 +387,10 @@ mod gpu_tests {
                 out[0].position[c],
                 exp_pos[c]
             );
-            assert!((out[0].normal[c] - exp_n[c]).abs() < 1e-4, "blended vertex normal[{c}]");
+            assert!(
+                (out[0].normal[c] - exp_n[c]).abs() < 1e-4,
+                "blended vertex normal[{c}]"
+            );
         }
     }
 
@@ -329,7 +404,10 @@ mod gpu_tests {
         let weights = vec![1.0f32];
 
         let out = dispatch_blend(&device, &verts, &deltas, &weights, 0, None, None);
-        assert_eq!(out[0].position, verts[0].position, "zero target_count must not apply any delta");
+        assert_eq!(
+            out[0].position, verts[0].position,
+            "zero target_count must not apply any delta"
+        );
         for c in 0..3 {
             assert!((out[0].normal[c] - verts[0].normal[c]).abs() < 1e-4);
         }

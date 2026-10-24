@@ -29,7 +29,6 @@
 
 use manifold_gpu::raytrace::MetalShadowRayTracer;
 
-
 const TOLERANCE: f32 = 1e-4;
 /// Mirrors the MSL `FIREFLY_MEDIAN_GAIN` constant.
 const GAIN: f32 = 8.0;
@@ -103,7 +102,11 @@ fn firefly_clamp_void_center_passes_through_unclamped() {
     let depth: [f32; 9] = std::array::from_fn(|i| if i == 4 { VOID } else { NON_VOID });
 
     let expected = clamp_center(&color, &depth, GAIN, 1.0);
-    assert_close(expected, [100.0, 100.0, 100.0], "mirror sanity: void passthrough");
+    assert_close(
+        expected,
+        [100.0, 100.0, 100.0],
+        "mirror sanity: void passthrough",
+    );
 
     let got = tracer.debug_firefly_clamp(&h.device, &color, &depth, GAIN, 1.0, 0.0);
     assert_close(got, expected, "void center passthrough");
@@ -126,7 +129,11 @@ fn firefly_clamp_isolated_glint_passes_through_unclamped() {
     let depth: [f32; 9] = std::array::from_fn(|i| if i == 4 { NON_VOID } else { VOID });
 
     let expected = clamp_center(&color, &depth, GAIN, 1.0);
-    assert_close(expected, [50.0, 50.0, 50.0], "mirror sanity: isolated glint passthrough");
+    assert_close(
+        expected,
+        [50.0, 50.0, 50.0],
+        "mirror sanity: isolated glint passthrough",
+    );
 
     let got = tracer.debug_firefly_clamp(&h.device, &color, &depth, GAIN, 1.0, 0.0);
     assert_close(got, expected, "isolated glint passthrough");
@@ -150,10 +157,18 @@ fn firefly_clamp_hot_outlier_surrounded_by_dim_neighbors_is_clamped() {
     let depth = [NON_VOID; 9];
 
     let expected = clamp_center(&color, &depth, GAIN, 1.0);
-    assert_close(expected, [8.0, 8.0, 8.0], "mirror sanity: clamps to gain * max(median, floor)");
+    assert_close(
+        expected,
+        [8.0, 8.0, 8.0],
+        "mirror sanity: clamps to gain * max(median, floor)",
+    );
 
     let got = tracer.debug_firefly_clamp(&h.device, &color, &depth, GAIN, 1.0, 0.0);
-    assert_close(got, expected, "hot outlier clamps to gain * max(median, floor)");
+    assert_close(
+        got,
+        expected,
+        "hot outlier clamps to gain * max(median, floor)",
+    );
 }
 
 #[test]
@@ -185,7 +200,11 @@ fn firefly_clamp_median_matches_cpu_expected() {
     );
 
     let expected = clamp_center(&color, &depth, GAIN, 1.0);
-    assert_close(expected, [40.0, 40.0, 40.0], "mirror sanity: median 5 => clamp to 40");
+    assert_close(
+        expected,
+        [40.0, 40.0, 40.0],
+        "mirror sanity: median 5 => clamp to 40",
+    );
 
     let got = tracer.debug_firefly_clamp(&h.device, &color, &depth, GAIN, 1.0, 0.0);
     assert_close(got, expected, "median selection + clamp math");
@@ -215,8 +234,16 @@ fn firefly_clamp_mean_power_raises_floor() {
 
     // Kernel: threshold = 8 * max(max(1, 4), 50) = 400 → clamps to [400;3].
     let expected = clamp_center(&color, &depth, GAIN, MEAN);
-    assert_close(expected, [400.0, 400.0, 400.0], "mirror sanity: mean_power 50 => clamp to 8*50");
+    assert_close(
+        expected,
+        [400.0, 400.0, 400.0],
+        "mirror sanity: mean_power 50 => clamp to 8*50",
+    );
 
     let got = tracer.debug_firefly_clamp(&h.device, &color, &depth, GAIN, FLOOR, MEAN);
-    assert_close(got, expected, "mean_power raises the floor past the fixed 4.0 minimum");
+    assert_close(
+        got,
+        expected,
+        "mean_power raises the floor past the fixed 4.0 minimum",
+    );
 }

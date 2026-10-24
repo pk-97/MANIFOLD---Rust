@@ -46,7 +46,11 @@ impl SyncLog {
 
     pub fn observe_with(&mut self, tick: &SyncTick, mut write: impl FnMut(&str)) {
         if tick.source != self.source {
-            write(&format!("[Transport] handover {} -> {}", self.source.unwrap_or("map"), tick.source.unwrap_or("map")));
+            write(&format!(
+                "[Transport] handover {} -> {}",
+                self.source.unwrap_or("map"),
+                tick.source.unwrap_or("map")
+            ));
             self.source = tick.source;
             self.catch_up_open = false;
             self.next_lock_line = tick.now + LOCK_LINE_INTERVAL;
@@ -54,14 +58,27 @@ impl SyncLog {
         let Some(source) = tick.source else { return };
         let f = tick.follower;
         match tick.event {
-            FollowEvent::Seeded => write(&format!("[Transport] {source} seeded at {:.2} BPM", f.base_bpm().0)),
-            FollowEvent::Seek { error, .. } => write(&format!("[Transport] {source} seek {:+.0} ms", error * 1000.0)),
+            FollowEvent::Seeded => write(&format!(
+                "[Transport] {source} seeded at {:.2} BPM",
+                f.base_bpm().0
+            )),
+            FollowEvent::Seek { error, .. } => write(&format!(
+                "[Transport] {source} seek {:+.0} ms",
+                error * 1000.0
+            )),
             FollowEvent::None => {}
         }
         if f.catch_up_open() != self.catch_up_open {
             self.catch_up_open = f.catch_up_open();
-            let state = if self.catch_up_open { "opened" } else { "closed" };
-            write(&format!("[Transport] {source} catch-up window {state}, trim {:+.2}%", f.trim() * 100.0));
+            let state = if self.catch_up_open {
+                "opened"
+            } else {
+                "closed"
+            };
+            write(&format!(
+                "[Transport] {source} catch-up window {state}, trim {:+.2}%",
+                f.trim() * 100.0
+            ));
         }
         if !tick.playing {
             self.next_lock_line = tick.now + LOCK_LINE_INTERVAL;
@@ -106,7 +123,12 @@ mod tests {
 
     #[test]
     fn events_and_a_lock_line_every_five_seconds() {
-        let follower = ExternalFollower::starting_at(FollowProfile::FAST, Seconds(0.0), Beats(0.0), Bpm(128.0));
+        let follower = ExternalFollower::starting_at(
+            FollowProfile::FAST,
+            Seconds(0.0),
+            Beats(0.0),
+            Bpm(128.0),
+        );
         let calibration = SyncCalibration::new();
         let mut log = SyncLog::new();
         let tick = |now: f64, source: Option<&'static str>, event: FollowEvent| SyncTick {
@@ -118,18 +140,39 @@ mod tests {
             calibration: &calibration,
             offset: Some(0.0061),
         };
-        assert_eq!(lines(&mut log, &tick(0.0, Some("CLK"), FollowEvent::Seeded)), [
-            "[Transport] handover map -> CLK",
-            "[Transport] CLK seeded at 128.00 BPM"
-        ]);
-        assert!(lines(&mut log, &tick(4.9, Some("CLK"), FollowEvent::None)).is_empty(), "no lock line before 5 s");
+        assert_eq!(
+            lines(&mut log, &tick(0.0, Some("CLK"), FollowEvent::Seeded)),
+            [
+                "[Transport] handover map -> CLK",
+                "[Transport] CLK seeded at 128.00 BPM"
+            ]
+        );
+        assert!(
+            lines(&mut log, &tick(4.9, Some("CLK"), FollowEvent::None)).is_empty(),
+            "no lock line before 5 s"
+        );
         let lock = lines(&mut log, &tick(5.0, Some("CLK"), FollowEvent::None));
-        assert_eq!(lock, [
-            "[Transport] CLK lock: phase +0.0 ms, trim +0.00%, base 128.00 BPM, L 17.0 ms (present 17.0, extra 0.0), CLK offset +6.1 ms"
-        ]);
-        let seek = FollowEvent::Seek { beat: Beats(12.0), error: -0.312 };
-        assert_eq!(lines(&mut log, &tick(6.0, Some("CLK"), seek)), ["[Transport] CLK seek -312 ms"]);
-        assert_eq!(lines(&mut log, &tick(7.0, None, FollowEvent::None)), ["[Transport] handover CLK -> map"]);
-        assert!(lines(&mut log, &tick(20.0, None, FollowEvent::None)).is_empty(), "the map logs nothing");
+        assert_eq!(
+            lock,
+            [
+                "[Transport] CLK lock: phase +0.0 ms, trim +0.00%, base 128.00 BPM, L 17.0 ms (present 17.0, extra 0.0), CLK offset +6.1 ms"
+            ]
+        );
+        let seek = FollowEvent::Seek {
+            beat: Beats(12.0),
+            error: -0.312,
+        };
+        assert_eq!(
+            lines(&mut log, &tick(6.0, Some("CLK"), seek)),
+            ["[Transport] CLK seek -312 ms"]
+        );
+        assert_eq!(
+            lines(&mut log, &tick(7.0, None, FollowEvent::None)),
+            ["[Transport] handover CLK -> map"]
+        );
+        assert!(
+            lines(&mut log, &tick(20.0, None, FollowEvent::None)).is_empty(),
+            "the map logs nothing"
+        );
     }
 }

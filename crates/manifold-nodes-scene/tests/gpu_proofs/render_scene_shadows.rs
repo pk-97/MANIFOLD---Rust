@@ -21,9 +21,8 @@ use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 /// Ground plane (8×8 at y=0) + an occluder plane (3×3 at y=1.5) lit by
 /// `num_lights` suns positioned overhead-and-to-one-side so the occluder's
@@ -113,7 +112,9 @@ fn shadow_scene_json(cast: bool, num_lights: usize) -> String {
         ));
     }
 
-    format!(r#"{{"version":2,"name":"RenderSceneShadowProof","nodes":[{nodes}],"wires":[{wires}]}}"#)
+    format!(
+        r#"{{"version":2,"name":"RenderSceneShadowProof","nodes":[{nodes}],"wires":[{wires}]}}"#
+    )
 }
 
 /// Render a scene-graph JSON to `Rgba16Float`, returning readback bytes.
@@ -174,7 +175,10 @@ fn luma(bytes: &[u8]) -> (f64, f32) {
         let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
         let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
         let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-        assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+        assert!(
+            r.is_finite() && g.is_finite() && b.is_finite(),
+            "non-finite pixel"
+        );
         sum += (0.2126 * r + 0.7152 * g + 0.0722 * b) as f64;
         peak = peak.max(r.max(g).max(b));
     }
@@ -208,7 +212,10 @@ fn occluder_casts_shadow_that_darkens_the_ground() {
     // Both frames are lit (the depth-only shadow PSO didn't crash the run,
     // and the scene renders).
     assert!(peak_on > 0.2, "shadowed frame is unlit (peak {peak_on})");
-    assert!(peak_off > 0.2, "unshadowed frame is unlit (peak {peak_off})");
+    assert!(
+        peak_off > 0.2,
+        "unshadowed frame is unlit (peak {peak_off})"
+    );
 
     // The shadow removes light: same geometry, same lights, only difference
     // is the cast shadow → total luma must drop measurably.
@@ -236,6 +243,9 @@ fn many_casters_all_cast_shadows() {
     let (sum_off, _) = luma(&off);
     assert!(peak > 0.2, "12-caster scene is unlit (peak {peak})");
     let drop = (sum_off - sum_on) / sum_off;
-    eprintln!("12 casters: off={sum_off:.1} on={sum_on:.1} drop={:.1}%", drop * 100.0);
+    eprintln!(
+        "12 casters: off={sum_off:.1} on={sum_on:.1} drop={:.1}%",
+        drop * 100.0
+    );
     assert!(drop > 0.01, "12 casters must cast shadows: drop {drop}");
 }

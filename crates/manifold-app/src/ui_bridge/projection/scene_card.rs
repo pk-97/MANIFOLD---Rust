@@ -19,13 +19,21 @@ use manifold_ui::param_surface::{ColourGroup, ParamRow, RgbMembers};
 pub(super) fn scene_card_rows(rows: &mut Vec<ParamRow>, inst: &PresetInstance, doc: &SceneDoc) {
     let mut items: Vec<&Item> = Vec::new();
     doc.walk(|item, _| items.push(item));
-    let owner = |id: &str| split_param_id(id).and_then(|(item, _)| items.iter().position(|candidate| candidate.id.as_str() == item));
+    let owner = |id: &str| {
+        split_param_id(id).and_then(|(item, _)| {
+            items
+                .iter()
+                .position(|candidate| candidate.id.as_str() == item)
+        })
+    };
     let switches = FeatureSwitches::read(rows, inst, &owner);
     let colours = item_colours(rows, inst, &items, &owner);
 
     let mut placed: Vec<(SortKey, ParamRow)> = Vec::with_capacity(rows.len());
     for (manifest_index, mut row) in std::mem::take(rows).into_iter().enumerate() {
-        let Some(param) = inst.params.get(row.id.as_ref()) else { continue };
+        let Some(param) = inst.params.get(row.id.as_ref()) else {
+            continue;
+        };
         let owner_index = owner(row.id.as_ref());
         let item = owner_index.map(|index| items[index]);
         // A pinned row stays whatever its gate: Show on Card and every
@@ -58,7 +66,10 @@ pub(super) fn scene_card_rows(rows: &mut Vec<ParamRow>, inst: &PresetInstance, d
         if place.label == CardLabel::ItemName
             && let Some(index) = owner_index
         {
-            row.rgb_members = colours.iter().find(|(item, _)| *item == index).map(|(_, members)| members.clone());
+            row.rgb_members = colours
+                .iter()
+                .find(|(item, _)| *item == index)
+                .map(|(_, members)| members.clone());
         }
         if param.choices.rename.is_none() {
             match (place.label, item) {
@@ -94,10 +105,19 @@ pub(super) fn scene_card_rows(rows: &mut Vec<ParamRow>, inst: &PresetInstance, d
     // A light colour shown on the card as its own colour row takes the
     // swatch off the light's fader: one swatch per colour.
     for index in 0..rows.len() {
-        let Some(ids) = rows[index].rgb_members.as_ref().filter(|m| m.ids[0] != rows[index].id).map(|m| m.ids.clone()) else {
+        let Some(ids) = rows[index]
+            .rgb_members
+            .as_ref()
+            .filter(|m| m.ids[0] != rows[index].id)
+            .map(|m| m.ids.clone())
+        else {
             continue;
         };
-        if rows.iter().any(|row| row.rgb_members.as_ref().is_some_and(|m| m.ids == ids && m.ids[0] == row.id)) {
+        if rows.iter().any(|row| {
+            row.rgb_members
+                .as_ref()
+                .is_some_and(|m| m.ids == ids && m.ids[0] == row.id)
+        }) {
             rows[index].rgb_members = None;
         }
     }
@@ -107,7 +127,9 @@ pub(super) fn scene_card_rows(rows: &mut Vec<ParamRow>, inst: &PresetInstance, d
 /// numbers. The compiled row carries no names, so a rename reaches the row
 /// here without recompiling the scene.
 pub(super) fn name_cuts(rows: &mut [ParamRow], doc: &SceneDoc) {
-    let Some(id) = doc.camera_pick_param() else { return };
+    let Some(id) = doc.camera_pick_param() else {
+        return;
+    };
     if let Some(row) = rows.iter_mut().find(|row| row.id.as_ref() == id) {
         row.spec.value_labels = Some(doc.cut_labels());
     }
@@ -119,7 +141,11 @@ const LIGHT_ROWS_BEFORE_FOLD: usize = 8;
 /// The card's folded section titles, from curated `rows`: the user's saved
 /// fold choices (D7 (user choices)) over the default, which folds Lighting
 /// past eight light rows.
-pub(super) fn folded_sections(inst: &PresetInstance, doc: &SceneDoc, rows: &[ParamRow]) -> Vec<String> {
+pub(super) fn folded_sections(
+    inst: &PresetInstance,
+    doc: &SceneDoc,
+    rows: &[ParamRow],
+) -> Vec<String> {
     let lighting = CardBand::Lighting.title();
     let light_rows = rows
         .iter()
@@ -130,14 +156,19 @@ pub(super) fn folded_sections(inst: &PresetInstance, doc: &SceneDoc, rows: &[Par
                 .is_some_and(|item| item.kind() == ItemKind::Light)
         })
         .count();
-    let mut titles: Vec<&str> = rows.iter().filter_map(|row| row.spec.section.as_deref()).collect();
+    let mut titles: Vec<&str> = rows
+        .iter()
+        .filter_map(|row| row.spec.section.as_deref())
+        .collect();
     titles.dedup();
     let saved = |list: &[String], title: &str| list.iter().any(|saved| saved == title);
     titles
         .into_iter()
         .filter(|title| {
             saved(&inst.folded_sections, title)
-                || (!saved(&inst.unfolded_sections, title) && *title == lighting && light_rows > LIGHT_ROWS_BEFORE_FOLD)
+                || (!saved(&inst.unfolded_sections, title)
+                    && *title == lighting
+                    && light_rows > LIGHT_ROWS_BEFORE_FOLD)
         })
         .map(str::to_string)
         .collect()
@@ -168,13 +199,26 @@ impl Placement {
         let Some(scene) = param.spec.scene else {
             // An authored control follows its card visibility, in the Scene band.
             let on = shown || (param.spec.card_visible && pin != Some(CardPin::Removed));
-            return on.then_some(Self { band: CardBand::Scene, card_order: 0, label: CardLabel::Param, gate: None });
+            return on.then_some(Self {
+                band: CardBand::Scene,
+                card_order: 0,
+                label: CardLabel::Param,
+                gate: None,
+            });
         };
         if !shown {
             return None;
         }
-        let band = scene.band.filter(|_| scene.role == SurfaceRole::Performance).unwrap_or_else(|| item_band(item));
-        Some(Self { band, card_order: scene.card_order, label: scene.card_label, gate: scene.gate })
+        let band = scene
+            .band
+            .filter(|_| scene.role == SurfaceRole::Performance)
+            .unwrap_or_else(|| item_band(item));
+        Some(Self {
+            band,
+            card_order: scene.card_order,
+            label: scene.card_label,
+            gate: scene.gate,
+        })
     }
 }
 
@@ -196,7 +240,11 @@ struct FeatureSwitches {
 }
 
 impl FeatureSwitches {
-    fn read(rows: &[ParamRow], inst: &PresetInstance, owner: &dyn Fn(&str) -> Option<usize>) -> Self {
+    fn read(
+        rows: &[ParamRow],
+        inst: &PresetInstance,
+        owner: &dyn Fn(&str) -> Option<usize>,
+    ) -> Self {
         let on = rows
             .iter()
             .filter_map(|row| {
@@ -218,13 +266,24 @@ impl FeatureSwitches {
 /// item carries it, so recolouring a light is one gesture on its fader. An
 /// item with more than one colour, or channels a single RGB write cannot
 /// own, gets no swatch.
-fn item_colours(rows: &[ParamRow], inst: &PresetInstance, items: &[&Item], owner: &dyn Fn(&str) -> Option<usize>) -> Vec<(usize, RgbMembers)> {
+fn item_colours(
+    rows: &[ParamRow],
+    inst: &PresetInstance,
+    items: &[&Item],
+    owner: &dyn Fn(&str) -> Option<usize>,
+) -> Vec<(usize, RgbMembers)> {
     let mut channels: Vec<(usize, [Option<&ParamRow>; 3], bool)> = Vec::new();
     for row in rows {
-        let Some(channel) = inst.params.get(row.id.as_ref()).and_then(|p| p.spec.scene).and_then(|s| s.colour) else {
+        let Some(channel) = inst
+            .params
+            .get(row.id.as_ref())
+            .and_then(|p| p.spec.scene)
+            .and_then(|s| s.colour)
+        else {
             continue;
         };
-        let Some(item) = owner(row.id.as_ref()).filter(|&i| items[i].kind() == ItemKind::Light) else {
+        let Some(item) = owner(row.id.as_ref()).filter(|&i| items[i].kind() == ItemKind::Light)
+        else {
             continue;
         };
         let index = match channels.iter().position(|(i, _, _)| *i == item) {
@@ -241,7 +300,9 @@ fn item_colours(rows: &[ParamRow], inst: &PresetInstance, items: &[&Item], owner
     channels
         .into_iter()
         .filter_map(|(item, members, single)| match members {
-            [Some(r), Some(g), Some(b)] if single => super::material::rgb_members(inst, ColourGroup::Light, [r, g, b]).map(|m| (item, m)),
+            [Some(r), Some(g), Some(b)] if single => {
+                super::material::rgb_members(inst, ColourGroup::Light, [r, g, b]).map(|m| (item, m))
+            }
             _ => None,
         })
         .collect()

@@ -47,8 +47,13 @@ use half::f16;
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::{
+    bindings::Slot, descriptor::Category, descriptor::descriptor_for, exec::backend::Backend,
+    exec::effect_node::FrameTime, exec::execution::Executor, exec::execution_plan::compile,
+    exec::metal_backend::MetalBackend, graph::Graph, parameters::ParamValue,
+    persistence::PrimitiveRegistry, scene::boundary_nodes::FinalOutput,
+};
 use manifold_nodes_image::node_graph::primitives::render_text::RenderText;
-use manifold_node_engine::{exec::backend::Backend, descriptor::Category, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, parameters::ParamValue, persistence::PrimitiveRegistry, bindings::Slot, exec::execution_plan::compile, descriptor::descriptor_for};
 
 use manifold_node_engine::testkit::gpu_harness::port_is_texture;
 
@@ -171,8 +176,7 @@ fn effects_preserve_transparency() {
 
     panic::set_hook(prev_hook);
 
-    let by_frac =
-        |a: &(String, &str, f32, f32), b: &(String, &str, f32, f32)| b.3.total_cmp(&a.3);
+    let by_frac = |a: &(String, &str, f32, f32), b: &(String, &str, f32, f32)| b.3.total_cmp(&a.3);
     display_violators.sort_by(by_frac);
     data_writes.sort_by(by_frac);
 
@@ -252,7 +256,8 @@ fn render_text_respects_premultiplied_alpha_producer_contract() {
         ParamValue::String(Arc::new("Helvetica".to_string())),
     )
     .unwrap();
-    g.set_param(rt, "fill_color", ParamValue::Color(fill)).unwrap();
+    g.set_param(rt, "fill_color", ParamValue::Color(fill))
+        .unwrap();
     g.set_param(rt, "size", ParamValue::Float(0.4)).unwrap();
     g.connect((rt, "out"), (out, "in")).unwrap();
 
@@ -310,7 +315,10 @@ fn render_text_respects_premultiplied_alpha_producer_contract() {
             }
             if a > 0.1 && a < 0.9 {
                 let closeness = (a - 0.5).abs();
-                if best_edge.map(|(best_a, _)| (best_a - 0.5).abs() > closeness).unwrap_or(true) {
+                if best_edge
+                    .map(|(best_a, _)| (best_a - 0.5).abs() > closeness)
+                    .unwrap_or(true)
+                {
                     best_edge = Some((a, [r, g_, b]));
                 }
             }
@@ -330,7 +338,9 @@ fn render_text_respects_premultiplied_alpha_producer_contract() {
     );
 
     assert!(opaque_count > 0, "expected opaque-ish glyph centre pixels");
-    let max_opaque = max_opaque_rgb[0].max(max_opaque_rgb[1]).max(max_opaque_rgb[2]);
+    let max_opaque = max_opaque_rgb[0]
+        .max(max_opaque_rgb[1])
+        .max(max_opaque_rgb[2]);
     assert!(
         max_opaque > 0.5,
         "opaque texels must not be black; max rgb was {max_opaque}"

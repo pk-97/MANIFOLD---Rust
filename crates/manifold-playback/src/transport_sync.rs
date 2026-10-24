@@ -163,7 +163,9 @@ struct RttEstimator {
 
 impl RttEstimator {
     fn new() -> Self {
-        Self { ewma_secs: RTT_SEED_SECS }
+        Self {
+            ewma_secs: RTT_SEED_SECS,
+        }
     }
     fn sample(&mut self, rtt: f64) {
         let clamped = rtt.clamp(RTT_MIN_SECS, RTT_MAX_SECS);
@@ -241,7 +243,11 @@ impl AbletonTransportSync {
         }
         // T1 / T13: latest user intent wins.
         self.begin_pending(
-            Expectation { playing: true, beat: Some(beat), anchored_at: now },
+            Expectation {
+                playing: true,
+                beat: Some(beat),
+                anchored_at: now,
+            },
             now,
         );
         self.out.push(OutMsg::StartPlaying);
@@ -251,14 +257,16 @@ impl AbletonTransportSync {
     /// Settled-only restriction on the shortcut.
     pub fn on_local_stop(&mut self, now: f64) {
         self.local_playing = false;
-        if matches!(self.state, SyncState::Settled)
-            && self.observed.is_playing == Some(false)
-        {
+        if matches!(self.state, SyncState::Settled) && self.observed.is_playing == Some(false) {
             return;
         }
         // T2 / T13.
         self.begin_pending(
-            Expectation { playing: false, beat: None, anchored_at: now },
+            Expectation {
+                playing: false,
+                beat: None,
+                anchored_at: now,
+            },
             now,
         );
         self.out.push(OutMsg::StopPlaying);
@@ -270,7 +278,11 @@ impl AbletonTransportSync {
         self.local_beat = beat;
         // T3 / T4 / T13.
         self.begin_pending(
-            Expectation { playing, beat: Some(beat), anchored_at: now },
+            Expectation {
+                playing,
+                beat: Some(beat),
+                anchored_at: now,
+            },
             now,
         );
         self.out.push(OutMsg::SetSongTime(beat));
@@ -447,11 +459,19 @@ impl AbletonTransportSync {
     /// `&self` borrows (the bridge's send loop). O(n) shift is fine: the
     /// queue holds a handful of messages at most.
     pub fn pop_out(&mut self) -> Option<OutMsg> {
-        if self.out.is_empty() { None } else { Some(self.out.remove(0)) }
+        if self.out.is_empty() {
+            None
+        } else {
+            Some(self.out.remove(0))
+        }
     }
 
     pub fn pop_action(&mut self) -> Option<EngineAction> {
-        if self.actions.is_empty() { None } else { Some(self.actions.remove(0)) }
+        if self.actions.is_empty() {
+            None
+        } else {
+            Some(self.actions.remove(0))
+        }
     }
 
     // ── Gates ──────────────────────────────────────────────────────
@@ -505,7 +525,10 @@ impl AbletonTransportSync {
     /// the anchor — within [beat − ε, beat + elapsed·tempo + ε]. A STOPPED
     /// expectation stays a point match.
     fn try_ack(&mut self, now: f64) {
-        let SyncState::Pending { expect, sent_at, .. } = &self.state else {
+        let SyncState::Pending {
+            expect, sent_at, ..
+        } = &self.state
+        else {
             return;
         };
         let playing_matches = self.observed.is_playing == Some(expect.playing);
@@ -514,10 +537,8 @@ impl AbletonTransportSync {
             Some(target) => self.observed.song_time_at(now).is_some_and(|b| {
                 if expect.playing {
                     let bpm = self.observed.tempo_bpm.unwrap_or(FALLBACK_BPM);
-                    let max_advance =
-                        ((now - expect.anchored_at).max(0.0) as f32) * bpm / 60.0;
-                    b >= target - ACK_EPSILON_BEATS
-                        && b <= target + max_advance + ACK_EPSILON_BEATS
+                    let max_advance = ((now - expect.anchored_at).max(0.0) as f32) * bpm / 60.0;
+                    b >= target - ACK_EPSILON_BEATS && b <= target + max_advance + ACK_EPSILON_BEATS
                 } else {
                     (b - target).abs() <= ACK_EPSILON_BEATS
                 }
@@ -638,8 +659,11 @@ mod tests {
         // at 130 — consistent with having started from 128.
         m.on_osc_is_playing(true, 2.0);
         m.on_osc_song_time(130.0, 2.0);
-        assert!(!m.sync_pending(), "advancing position within the anchor \
-             interval must acknowledge (L4 escape regression)");
+        assert!(
+            !m.sync_pending(),
+            "advancing position within the anchor \
+             interval must acknowledge (L4 escape regression)"
+        );
         assert_eq!(m.status(), TransportSyncStatus::Locked);
     }
 
@@ -725,7 +749,11 @@ mod tests {
         m.on_osc_song_time(9.0, 1.55);
         drain_actions(&mut m);
         m.on_local_play(9.0, 1.6);
-        assert_eq!(drain_out(&mut m), vec![], "relay echo must not command Ableton");
+        assert_eq!(
+            drain_out(&mut m),
+            vec![],
+            "relay echo must not command Ableton"
+        );
         assert!(!m.sync_pending());
     }
 

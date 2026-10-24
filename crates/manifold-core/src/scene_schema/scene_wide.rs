@@ -21,7 +21,12 @@ use crate::scene_doc::{CameraRig, Item, ItemFields, ModifierType, SceneDoc};
 const M: ControlGroup = ControlGroup::Modifier;
 
 const fn live(property: &'static str, order: u8) -> PropertyRow {
-    row(property, Reach::Modifier, M, perform(CardBand::Modifiers, order))
+    row(
+        property,
+        Reach::Modifier,
+        M,
+        perform(CardBand::Modifiers, order),
+    )
 }
 
 const ON_IS_THE_TOGGLE: &str = "The card's On toggle turns the modifier on and off";
@@ -40,16 +45,41 @@ pub const LOOP_CAMERA_ROWS: [(&str, &str); 4] = [
 pub const LOOP_GAP_ROW: (&str, &str) = ("spacing", "gap");
 
 pub static SCENE_LOOP_ROWS: [PropertyRow; 10] = [
-    live("bars", 0).name("Beats").tip("Beats per full loop cycle"),
-    live("pattern_length", 1).default(4.0).tip("Number of cells in each repeating pattern"),
-    live("patterns_per_loop", 2).name("Stride").tip("Patterns travelled per loop cycle"),
-    live("spacing", 3).name("Spacing").unit(Unit::Metres).tip("Extra gap between repeating cells along the corridor"),
-    live("twist", 4).name("Twist").tip("Spiral rotation per pattern around the tunnel axis"),
-    live("spiral_radius", 5).name("Tunnel Radius").unit(Unit::Metres).tip("Radial offset around the tunnel axis for helical/ring tunnels"),
-    live("alternate", 6).name("Alternate Flip").toggle().tip("Flip every odd cell in the pattern by 180 degrees"),
+    live("bars", 0)
+        .name("Beats")
+        .tip("Beats per full loop cycle"),
+    live("pattern_length", 1)
+        .default(4.0)
+        .tip("Number of cells in each repeating pattern"),
+    live("patterns_per_loop", 2)
+        .name("Stride")
+        .tip("Patterns travelled per loop cycle"),
+    live("spacing", 3)
+        .name("Spacing")
+        .unit(Unit::Metres)
+        .tip("Extra gap between repeating cells along the corridor"),
+    live("twist", 4)
+        .name("Twist")
+        .tip("Spiral rotation per pattern around the tunnel axis"),
+    live("spiral_radius", 5)
+        .name("Tunnel Radius")
+        .unit(Unit::Metres)
+        .tip("Radial offset around the tunnel axis for helical/ring tunnels"),
+    live("alternate", 6)
+        .name("Alternate Flip")
+        .toggle()
+        .tip("Flip every odd cell in the pattern by 180 degrees"),
     live("jitter_amount", 7).tip("Random rotation and scale variation across pattern cells"),
-    live("home", 8).name("Home").unit(Unit::Metres).tip("Starting camera offset along the corridor"),
-    row("enabled", Reach::Modifier, M, Exposure::Internal(ON_IS_THE_TOGGLE)),
+    live("home", 8)
+        .name("Home")
+        .unit(Unit::Metres)
+        .tip("Starting camera offset along the corridor"),
+    row(
+        "enabled",
+        Reach::Modifier,
+        M,
+        Exposure::Internal(ON_IS_THE_TOGGLE),
+    ),
 ];
 
 pub static MATH_VIEW_ROWS: [PropertyRow; 18] = [
@@ -70,13 +100,23 @@ pub static MATH_VIEW_ROWS: [PropertyRow; 18] = [
     live("math_view_line_width", 14),
     live("math_view_geometry_hue", 15),
     live("math_view_path_hue", 16),
-    row("enabled", Reach::Modifier, M, Exposure::Internal(ON_IS_THE_TOGGLE)),
+    row(
+        "enabled",
+        Reach::Modifier,
+        M,
+        Exposure::Internal(ON_IS_THE_TOGGLE),
+    ),
 ];
 
 pub static SCENE_MIRROR_ROWS: [PropertyRow; 3] = [
     live("axis", 0),
     live("plane_offset", 1).unit(Unit::Metres),
-    row("enabled", Reach::Modifier, M, Exposure::Internal(ON_IS_THE_TOGGLE)),
+    row(
+        "enabled",
+        Reach::Modifier,
+        M,
+        Exposure::Internal(ON_IS_THE_TOGGLE),
+    ),
 ];
 
 /// Why the Loop rig cannot be picked: it rides the scene's Scene Loop.
@@ -92,14 +132,14 @@ pub fn scene_loop(doc: &SceneDoc) -> Option<&Item> {
 
 /// The Scene Loop rows only a Loop camera reads: the corridor recipe has no
 /// Beats, Stride, Home, Near or Far of its own.
-pub const LOOP_CAMERA_ONLY: [&str; 3] = [
-    "bars", "patterns_per_loop", "home",
-];
+pub const LOOP_CAMERA_ONLY: [&str; 3] = ["bars", "patterns_per_loop", "home"];
 
 /// Whether some camera in `doc` rides the Loop rig.
 pub fn has_loop_camera(doc: &SceneDoc) -> bool {
     let mut found = false;
-    doc.walk(|item, _| found |= matches!(&item.fields, ItemFields::Camera(camera) if camera.rig == CameraRig::Loop));
+    doc.walk(|item, _| {
+        found |= matches!(&item.fields, ItemFields::Camera(camera) if camera.rig == CameraRig::Loop)
+    });
     found
 }
 
@@ -122,10 +162,17 @@ pub fn add_refused(doc: &SceneDoc, fields: &ItemFields) -> Option<&'static str> 
 
 /// Why a modifier card cannot swap to the type `key`: the scene already
 /// holds that type's one card.
-pub(super) fn type_unavailable(doc: &SceneDoc, item: &Item, field: &str, key: &str) -> Option<&'static str> {
+pub(super) fn type_unavailable(
+    doc: &SceneDoc,
+    item: &Item,
+    field: &str,
+    key: &str,
+) -> Option<&'static str> {
     if field != "modifier_type" {
         return None;
     }
-    let entry = super::MODIFIER_TYPES.iter().find(|entry| entry.key == key)?;
+    let entry = super::MODIFIER_TYPES
+        .iter()
+        .find(|entry| entry.key == key)?;
     doc.second_modifier(entry.modifier, Some(&item.id))
 }

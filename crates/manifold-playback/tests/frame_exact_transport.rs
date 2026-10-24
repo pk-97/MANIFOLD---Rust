@@ -78,11 +78,18 @@ fn bundled_param(inst: &mut PresetInstance, id: &str, max: f32, whole_numbers: b
 }
 
 fn point(beat: f64, value: f32, shape: SegmentShape) -> AutomationPoint {
-    AutomationPoint { beat: Beats(beat), value, shape }
+    AutomationPoint {
+        beat: Beats(beat),
+        value,
+        shape,
+    }
 }
 
 fn clips(spans: &[(f64, f64)]) -> Vec<TimelineClip> {
-    spans.iter().map(|&(start, length)| TimelineClip::new_generator(Beats(start), Beats(length))).collect()
+    spans
+        .iter()
+        .map(|&(start, length)| TimelineClip::new_generator(Beats(start), Beats(length)))
+        .collect()
 }
 
 struct Fixture {
@@ -100,7 +107,12 @@ fn fixture() -> Fixture {
     project.settings.bpm = Bpm(150.0);
     project.settings.frame_rate = FPS;
     for (beat, bpm) in [(0.0, 150.0), (8.0, 128.0), (32.0, 141.0)] {
-        project.tempo_map.add_or_replace_point(Beats(beat), Bpm(bpm), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(
+            Beats(beat),
+            Bpm(bpm),
+            TempoPointSource::Manual,
+            0.001,
+        );
     }
 
     let mut main = Layer::new_generator("Main".into(), PresetTypeId::new("TestGen"), 0);
@@ -132,31 +144,56 @@ fn fixture() -> Fixture {
         free,
     ]);
     let mut envelope = ParamEnvelope::new("level");
-    envelope.action = TriggerAction::Step { amount: 1.0, wrap: WrapMode::Wrap };
+    envelope.action = TriggerAction::Step {
+        amount: 1.0,
+        wrap: WrapMode::Wrap,
+    };
     gp.envelopes = Some(vec![envelope]);
     // On-frame starts and ends every half beat at 150 BPM, then off-grid starts.
     let mut spans: Vec<(f64, f64)> = (0..16).map(|i| (i as f64 * 0.5, 0.375)).collect();
-    spans.extend([8.3, 9.17, 11.05, 13.333, 17.71, 21.9, 26.41, 30.07, 33.13, 35.55].map(|s| (s, 0.6)));
+    spans.extend(
+        [
+            8.3, 9.17, 11.05, 13.333, 17.71, 21.9, 26.41, 30.07, 33.13, 35.55,
+        ]
+        .map(|s| (s, 0.6)),
+    );
     main.clips = clips(&spans);
 
     // Tempo boundaries (8, 16, 32) and sub-beat starts as clip edges.
     let mut second = Layer::new_generator("Second".into(), PresetTypeId::new("TestGen"), 1);
-    second.clips = clips(&[(0.125, 0.25), (3.0625, 0.5), (8.0, 1.0), (16.0, 2.0), (32.0, 1.0)]);
+    second.clips = clips(&[
+        (0.125, 0.25),
+        (3.0625, 0.5),
+        (8.0, 1.0),
+        (16.0, 2.0),
+        (32.0, 1.0),
+    ]);
 
     let session = Layer::new_generator("Session".into(), PresetTypeId::new("TestGen"), 2);
     let session_layer = session.layer_id.clone();
     let scene = SceneId::new("frame-exact-scene");
-    project.session.scenes.push(Scene { id: scene.clone(), name: "Scene".into(), color: None });
+    project.session.scenes.push(Scene {
+        id: scene.clone(),
+        name: "Scene".into(),
+        color: None,
+    });
     project.session.slots.push(SessionSlot {
         layer_id: session_layer.clone(),
         scene_id: scene.clone(),
         name: "Loop".into(),
         color: None,
-        sequence: ClipSequence { length_beats: Beats(2.0), clips: clips(&[(0.0, 0.5), (1.0, 0.25)]) },
+        sequence: ClipSequence {
+            length_beats: Beats(2.0),
+            clips: clips(&[(0.0, 0.5), (1.0, 0.25)]),
+        },
     });
 
     project.timeline.layers = vec![main, second, session];
-    Fixture { project, session_layer, scene }
+    Fixture {
+        project,
+        session_layer,
+        scene,
+    }
 }
 
 /// What one transport frame shows: the values the determinism claim covers
@@ -173,29 +210,46 @@ struct Frame {
 
 fn all_clip_ids(project: &Project) -> Vec<ClipId> {
     let timeline = project.timeline.layers.iter().flat_map(|l| l.clips.iter());
-    let session = project.session.slots.iter().flat_map(|s| s.sequence.clips.iter());
+    let session = project
+        .session
+        .slots
+        .iter()
+        .flat_map(|s| s.sequence.clips.iter());
     timeline.chain(session).map(|c| c.id.clone()).collect()
 }
 
 fn capture(engine: &PlaybackEngine, clip_ids: &[ClipId], session_layer: &LayerId) -> Frame {
     let project = engine.project().expect("project");
     let renderer = &engine.renderers()[0];
-    let instances = project.timeline.layers.iter().filter_map(|l| l.gen_params());
+    let instances = project
+        .timeline
+        .layers
+        .iter()
+        .filter_map(|l| l.gen_params());
     let mut param_bits = Vec::new();
     let mut step_values = Vec::new();
     for gp in instances {
         param_bits.extend(gp.params.iter().map(|p| p.value.to_bits()));
-        step_values.extend(gp.envelopes.iter().flatten().map(|e| e.step_value.map(f32::to_bits)));
+        step_values.extend(
+            gp.envelopes
+                .iter()
+                .flatten()
+                .map(|e| e.step_value.map(f32::to_bits)),
+        );
     }
     let runtime = engine.session_runtime();
     Frame {
         time_bits: engine.current_time_double().to_bits(),
         beat_bits: engine.current_beat_f64().to_bits(),
-        active_clips: (0..clip_ids.len()).filter(|&i| renderer.is_active(clip_ids[i].as_str())).collect(),
+        active_clips: (0..clip_ids.len())
+            .filter(|&i| renderer.is_active(clip_ids[i].as_str()))
+            .collect(),
         param_bits,
         step_values,
         session: (
-            runtime.playing_scene(session_layer).map(|s| format!("{s:?}")),
+            runtime
+                .playing_scene(session_layer)
+                .map(|s| format!("{s:?}")),
             runtime.pending_count(),
             runtime.playing_count(),
         ),
@@ -216,7 +270,11 @@ impl Event {
 }
 
 fn offset(base: Instant, seconds: f64) -> Instant {
-    if seconds >= 0.0 { base + Duration::from_secs_f64(seconds) } else { base - Duration::from_secs_f64(-seconds) }
+    if seconds >= 0.0 {
+        base + Duration::from_secs_f64(seconds)
+    } else {
+        base - Duration::from_secs_f64(-seconds)
+    }
 }
 
 /// One run's events on the content tick grid anchored at `anchor`. Without a
@@ -237,7 +295,11 @@ fn schedule(anchor: Instant, seed: Option<u64>) -> Vec<Event> {
     let phase = seed.map_or(0.0, |s| Rng(s ^ 0xA5A5).unit() * step);
     events.push(Event::Press(offset(grid.deadline(deadline), phase)));
     for tick in 0..PLAYING_TICKS {
-        deadline += if seed.is_some() && tick == STALL_AT_TICK { 4 } else { 1 };
+        deadline += if seed.is_some() && tick == STALL_AT_TICK {
+            4
+        } else {
+            1
+        };
         events.push(Event::Tick(offset(grid.deadline(deadline), jitter())));
     }
     // Commands drain at the start of a tick, so a press orders by its instant.
@@ -249,7 +311,12 @@ fn schedule(anchor: Instant, seed: Option<u64>) -> Vec<Event> {
 /// with the transport frame index it rendered. Each tick hands the engine the
 /// grid frames the D2 tick grid counted since the previous tick, as the
 /// content thread's timer does, and the index is the engine clock's.
-fn drive(engine: &mut PlaybackEngine, anchor: Instant, events: &[Event], mut on_frame: impl FnMut(&mut PlaybackEngine, i64)) {
+fn drive(
+    engine: &mut PlaybackEngine,
+    anchor: Instant,
+    events: &[Event],
+    mut on_frame: impl FnMut(&mut PlaybackEngine, i64),
+) {
     let mut grid = FrameGrid::new(FPS, anchor);
     let mut frame_count = 0u64;
     for event in events {
@@ -277,7 +344,11 @@ fn drive(engine: &mut PlaybackEngine, anchor: Instant, events: &[Event], mut on_
 }
 
 fn run(seed: Option<u64>) -> BTreeMap<i64, Frame> {
-    let Fixture { project, session_layer, scene } = fixture();
+    let Fixture {
+        project,
+        session_layer,
+        scene,
+    } = fixture();
     let clip_ids = all_clip_ids(&project);
     let mut engine = PlaybackEngine::new(vec![Box::new(StubRenderer::new_generator())]);
     engine.initialize(project);
@@ -302,24 +373,55 @@ fn seconds(bits: u64) -> String {
 
 /// The first transport frame both runs rendered where any value differs.
 fn first_divergence(a: &BTreeMap<i64, Frame>, b: &BTreeMap<i64, Frame>) -> Option<String> {
-    let (index, fa, fb) = a.iter().filter_map(|(i, fa)| b.get(i).map(|fb| (i, fa, fb))).find(|(_, fa, fb)| fa != fb)?;
+    let (index, fa, fb) = a
+        .iter()
+        .filter_map(|(i, fa)| b.get(i).map(|fb| (i, fa, fb)))
+        .find(|(_, fa, fb)| fa != fb)?;
     let field = if fa.time_bits != fb.time_bits {
-        format!("time {} vs {}", seconds(fa.time_bits), seconds(fb.time_bits))
+        format!(
+            "time {} vs {}",
+            seconds(fa.time_bits),
+            seconds(fb.time_bits)
+        )
     } else if fa.beat_bits != fb.beat_bits {
-        format!("beat {} vs {}", seconds(fa.beat_bits), seconds(fb.beat_bits))
+        format!(
+            "beat {} vs {}",
+            seconds(fa.beat_bits),
+            seconds(fb.beat_bits)
+        )
     } else if fa.active_clips != fb.active_clips {
-        format!("active clips {:?} vs {:?}", fa.active_clips, fb.active_clips)
+        format!(
+            "active clips {:?} vs {:?}",
+            fa.active_clips, fb.active_clips
+        )
     } else if fa.param_bits != fb.param_bits {
-        let p = fa.param_bits.iter().zip(&fb.param_bits).position(|(x, y)| x != y).unwrap_or(0);
-        format!("param {p}: {} vs {}", f32::from_bits(fa.param_bits[p]), f32::from_bits(fb.param_bits[p]))
+        let p = fa
+            .param_bits
+            .iter()
+            .zip(&fb.param_bits)
+            .position(|(x, y)| x != y)
+            .unwrap_or(0);
+        format!(
+            "param {p}: {} vs {}",
+            f32::from_bits(fa.param_bits[p]),
+            f32::from_bits(fb.param_bits[p])
+        )
     } else if fa.step_values != fb.step_values {
-        format!("envelope steps {:?} vs {:?}", fa.step_values, fb.step_values)
+        format!(
+            "envelope steps {:?} vs {:?}",
+            fa.step_values, fb.step_values
+        )
     } else {
         format!("session {:?} vs {:?}", fa.session, fb.session)
     };
     let shared = a.keys().filter(|i| b.contains_key(i)).count();
-    let differing = a.iter().filter(|(i, fa)| b.get(i).is_some_and(|fb| fb != *fa)).count();
-    Some(format!("{differing} of {shared} shared transport frames differ; the first is frame {index}: {field}"))
+    let differing = a
+        .iter()
+        .filter(|(i, fa)| b.get(i).is_some_and(|fb| fb != *fa))
+        .count();
+    Some(format!(
+        "{differing} of {shared} shared transport frames differ; the first is frame {index}: {field}"
+    ))
 }
 
 fn distinct<T: PartialEq + Copy>(values: impl Iterator<Item = T>) -> usize {
@@ -335,16 +437,36 @@ fn distinct<T: PartialEq + Copy>(values: impl Iterator<Item = T>) -> usize {
 /// The steady run exercises everything the comparison claims to cover.
 fn assert_not_vacuous(frames: &BTreeMap<i64, Frame>) {
     let last = frames.values().next_back().expect("frames");
-    assert!(f64::from_bits(last.beat_bits) > 33.0, "the run must cross the 141 BPM change at beat 32");
+    assert!(
+        f64::from_bits(last.beat_bits) > 33.0,
+        "the run must cross the 141 BPM change at beat 32"
+    );
     let param = |p: usize| distinct(frames.values().map(move |f| f.param_bits[p]));
     assert!(param(0) >= 8, "automation must move: {} values", param(0));
-    assert!(param(1) >= 100 && param(2) >= 100, "both LFOs must move: {} and {}", param(1), param(2));
+    assert!(
+        param(1) >= 100 && param(2) >= 100,
+        "both LFOs must move: {} and {}",
+        param(1),
+        param(2)
+    );
     let steps = distinct(frames.values().map(|f| f.step_values[0]));
-    assert!(steps >= 8, "the clip-edge step envelope must advance: {steps} values");
+    assert!(
+        steps >= 8,
+        "the clip-edge step envelope must advance: {steps} values"
+    );
     let memberships = distinct(frames.values().map(|f| f.active_clips.len()));
-    assert!(memberships >= 3, "clips must start and stop: {memberships} membership sizes");
-    let launched = frames.iter().find(|(_, f)| f.session.2 > 0).map(|(i, _)| *i);
-    assert!(launched.is_some_and(|i| i > LAUNCH_AFTER_INDEX), "the quantised launch must wait for its bar: {launched:?}");
+    assert!(
+        memberships >= 3,
+        "clips must start and stop: {memberships} membership sizes"
+    );
+    let launched = frames
+        .iter()
+        .find(|(_, f)| f.session.2 > 0)
+        .map(|(i, _)| *i);
+    assert!(
+        launched.is_some_and(|i| i > LAUNCH_AFTER_INDEX),
+        "the quantised launch must wait for its bar: {launched:?}"
+    );
 }
 
 #[test]
@@ -353,11 +475,18 @@ fn same_values_per_index_across_phase_jitter_and_stalls() {
     assert_eq!(steady.len(), PLAYING_TICKS, "one frame per steady tick");
     assert_not_vacuous(&steady);
     // The harness itself is repeatable: identical instants give identical frames.
-    assert_eq!(first_divergence(&steady, &run(None)), None, "the steady run must repeat bit for bit");
+    assert_eq!(
+        first_divergence(&steady, &run(None)),
+        None,
+        "the steady run must repeat bit for bit"
+    );
 
     let jittered = run(Some(SEED));
     let shared = steady.keys().filter(|i| jittered.contains_key(i)).count();
-    assert!(shared + 3 >= PLAYING_TICKS, "the jittered run must render all but the stalled frames: {shared}");
+    assert!(
+        shared + 3 >= PLAYING_TICKS,
+        "the jittered run must render all but the stalled frames: {shared}"
+    );
     if let Some(divergence) = first_divergence(&steady, &jittered) {
         panic!("same arrangement, different values per transport frame: {divergence}");
     }
@@ -375,7 +504,10 @@ fn engine_with(project: Project) -> PlaybackEngine {
 }
 
 fn tick(engine: &mut PlaybackEngine, frames: u32) {
-    let result = engine.tick(TickContext { frames, ..TickContext::default() });
+    let result = engine.tick(TickContext {
+        frames,
+        ..TickContext::default()
+    });
     engine.reclaim_tick_result(result);
 }
 
@@ -384,7 +516,9 @@ fn constant_tempo(bpm: f32, fps: f32, spans: &[(f64, f64)]) -> Project {
     let mut project = Project::default();
     project.settings.bpm = Bpm(bpm);
     project.settings.frame_rate = fps;
-    project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(bpm), TempoPointSource::Manual, 0.001);
+    project
+        .tempo_map
+        .add_or_replace_point(Beats::ZERO, Bpm(bpm), TempoPointSource::Manual, 0.001);
     let mut layer = Layer::new_generator("Gen".into(), PresetTypeId::new("TestGen"), 0);
     layer.clips = clips(spans);
     project.timeline.layers.push(layer);
@@ -397,13 +531,20 @@ fn session_project(bpm: f32) -> (Project, LayerId, SceneId) {
     let session = Layer::new_generator("Session".into(), PresetTypeId::new("TestGen"), 1);
     let layer = session.layer_id.clone();
     let scene = SceneId::new("edge-scene");
-    project.session.scenes.push(Scene { id: scene.clone(), name: "Scene".into(), color: None });
+    project.session.scenes.push(Scene {
+        id: scene.clone(),
+        name: "Scene".into(),
+        color: None,
+    });
     project.session.slots.push(SessionSlot {
         layer_id: layer.clone(),
         scene_id: scene.clone(),
         name: "Loop".into(),
         color: None,
-        sequence: ClipSequence { length_beats: Beats(2.0), clips: clips(&[(0.0, 1.0)]) },
+        sequence: ClipSequence {
+            length_beats: Beats(2.0),
+            clips: clips(&[(0.0, 1.0)]),
+        },
     });
     project.timeline.layers.push(session);
     (project, layer, scene)
@@ -424,16 +565,25 @@ fn tempo_edit_during_play_keeps_beat() {
     assert_eq!(engine.transport_frame(), 288);
     let before = engine.current_beat_f64();
     let old_map = engine.project().unwrap().tempo_map.clone();
-    settings_write(&mut engine, |p| p.tempo_map.add_or_replace_point(Beats(8.0), Bpm(128.0), TempoPointSource::Manual, 0.001));
+    settings_write(&mut engine, |p| {
+        p.tempo_map
+            .add_or_replace_point(Beats(8.0), Bpm(128.0), TempoPointSource::Manual, 0.001)
+    });
     engine.reconcile_tempo_edit(&old_map, Bpm(150.0));
     // Beat 12 now sits at 3.2 s + 4 beats at 128 BPM = 5.075 s, frame 304.5.
     assert_eq!(engine.transport_frame(), 305);
     let per_frame = 128.0 / 60.0 / f64::from(FPS);
     let after = engine.current_beat_f64();
-    assert!(after >= before && after < before + per_frame, "beat {before} became {after}");
+    assert!(
+        after >= before && after < before + per_frame,
+        "beat {before} became {after}"
+    );
     tick(&mut engine, 1);
     assert_eq!(engine.transport_frame(), 306);
-    assert!((engine.current_beat_f64() - after - per_frame).abs() < 1e-9, "the new tempo holds");
+    assert!(
+        (engine.current_beat_f64() - after - per_frame).abs() < 1e-9,
+        "the new tempo holds"
+    );
 }
 
 /// D10: a project fps change keeps the time, moves the index to the first
@@ -471,16 +621,32 @@ fn stop_resets_pause_keeps() {
     tick(&mut engine, 3);
     assert_eq!(engine.transport_frame(), 100);
     assert_eq!(engine.current_beat_f64().to_bits(), beat.to_bits());
-    assert_eq!(engine.tick_dt().0, 3.0 * engine.transport_clock().step().0, "paused graphs keep moving");
+    assert_eq!(
+        engine.tick_dt().0,
+        3.0 * engine.transport_clock().step().0,
+        "paused graphs keep moving"
+    );
     engine.play();
     tick(&mut engine, 1);
-    assert_eq!(engine.transport_frame(), 101, "resume renders the next frame, not the paused one again");
+    assert_eq!(
+        engine.transport_frame(),
+        101,
+        "resume renders the next frame, not the paused one again"
+    );
     engine.stop();
     assert_eq!(engine.transport_frame(), 0);
     assert_eq!(engine.current_time(), Seconds::ZERO);
-    assert!((0.0..1e-6).contains(&engine.current_beat_f64()), "{}", engine.current_beat_f64());
+    assert!(
+        (0.0..1e-6).contains(&engine.current_beat_f64()),
+        "{}",
+        engine.current_beat_f64()
+    );
     tick(&mut engine, 2);
-    assert_eq!(engine.transport_frame(), 0, "stopped ticks don't move the transport");
+    assert_eq!(
+        engine.transport_frame(),
+        0,
+        "stopped ticks don't move the transport"
+    );
 }
 
 fn first_session_frame(bpm: f32) -> Option<i64> {
@@ -523,7 +689,11 @@ fn stamp_note_on(seed: Option<u64>) -> (i64, u64, u64) {
             let clip = manifold_playback::live_clip_manager::LiveClipManager::new()
                 .trigger_live_content_clip(&mut project, &*engine, 0, 1.0, None, -1, false, 0.0, -1)
                 .expect("phantom clip");
-            stamp = Some((index, clip.start_beat.0.to_bits(), engine.current_beat_f64().to_bits()));
+            stamp = Some((
+                index,
+                clip.start_beat.0.to_bits(),
+                engine.current_beat_f64().to_bits(),
+            ));
         }
     });
     stamp.expect("the note fired")
@@ -535,7 +705,10 @@ fn stamp_note_on(seed: Option<u64>) -> (i64, u64, u64) {
 fn noteon_stamps_previous_grid_beat() {
     let steady = stamp_note_on(None);
     assert_eq!(steady.0, NOTE_AFTER_INDEX);
-    assert_eq!(steady.1, steady.2, "the phantom clip starts at the beat of the frame on screen");
+    assert_eq!(
+        steady.1, steady.2,
+        "the phantom clip starts at the beat of the frame on screen"
+    );
     assert_eq!(stamp_note_on(Some(SEED)), steady, "same frame, same stamp");
 }
 
@@ -564,7 +737,10 @@ fn stall_skips_and_stays_in_time() {
     assert_eq!(engine.transport_frame(), 99);
     assert_eq!(engine.current_time(), engine.transport_clock().time_at(99));
     assert_eq!(engine.tick_dt().0, 5.0 * engine.transport_clock().step().0);
-    assert!(engine.session_runtime().playing_count() > 0, "the jumped-over launch activates on the landing frame");
+    assert!(
+        engine.session_runtime().playing_count() > 0,
+        "the jumped-over launch activates on the landing frame"
+    );
     let frames = grid.consume_at(grid.deadline(100));
     assert_eq!(frames, 1, "the next on-time tick is one frame");
     tick(&mut engine, frames);
@@ -577,14 +753,23 @@ fn stall_skips_and_stays_in_time() {
 fn seek_while_playing_renders_target_first() {
     // 150 BPM: the clip at beat 2.5 starts at 1.0 s, frame 60.
     let mut engine = engine_with(constant_tempo(150.0, FPS, &[(2.5, 1.0)]));
-    let clip = engine.project().unwrap().timeline.layers[0].clips[0].id.clone();
+    let clip = engine.project().unwrap().timeline.layers[0].clips[0]
+        .id
+        .clone();
     engine.play();
     tick(&mut engine, 1);
     tick(&mut engine, 1);
     engine.seek_to(Seconds(1.0));
     tick(&mut engine, 1);
-    assert_eq!(engine.transport_frame(), 60, "the first tick after a playing seek renders the target");
-    assert!(is_active(&engine, &clip), "the clip's first frame is on screen");
+    assert_eq!(
+        engine.transport_frame(),
+        60,
+        "the first tick after a playing seek renders the target"
+    );
+    assert!(
+        is_active(&engine, &clip),
+        "the clip's first frame is on screen"
+    );
     tick(&mut engine, 1);
     assert_eq!(engine.transport_frame(), 61);
     // 1.004 s is frame 60.24: snapped forward to 61.
@@ -602,26 +787,47 @@ fn play_advances_from_anchor_without_repeat() {
     engine.locate(Seconds(0.81));
     assert_eq!(engine.transport_frame(), 49);
     engine.play();
-    assert_eq!(engine.transport_frame(), 49, "play anchors on the frame on screen");
+    assert_eq!(
+        engine.transport_frame(),
+        49,
+        "play anchors on the frame on screen"
+    );
     tick(&mut engine, 1);
     assert_eq!(engine.transport_frame(), 50);
     engine.stop();
     engine.play();
     tick(&mut engine, 1);
-    assert_eq!(engine.transport_frame(), 1, "from stop, frame 0 was on screen");
+    assert_eq!(
+        engine.transport_frame(),
+        1,
+        "from stop, frame 0 was on screen"
+    );
 }
 
 /// Export through the engine's own export sequence, the one `content_export`
 /// runs: the restore point, stop, export mode, `begin_export_run` (with one
 /// warm-up tick standing in for a video project's decoder wait), frame k's
 /// `export_frame_context`, then `end_export_run`.
-fn export(engine: &mut PlaybackEngine, fps: f32, start: Seconds, n: u32, on_frame: impl FnMut(&PlaybackEngine, u32)) {
+fn export(
+    engine: &mut PlaybackEngine,
+    fps: f32,
+    start: Seconds,
+    n: u32,
+    on_frame: impl FnMut(&PlaybackEngine, u32),
+) {
     export_with(engine, fps, start, n, true, on_frame);
 }
 
 /// `export`, warming up only when `warm_up` is set: production skips the
 /// warm-up for a project with no video clips.
-fn export_with(engine: &mut PlaybackEngine, fps: f32, start: Seconds, n: u32, warm_up: bool, mut on_frame: impl FnMut(&PlaybackEngine, u32)) {
+fn export_with(
+    engine: &mut PlaybackEngine,
+    fps: f32,
+    start: Seconds,
+    n: u32,
+    warm_up: bool,
+    mut on_frame: impl FnMut(&PlaybackEngine, u32),
+) {
     let restore = engine.export_restore_point();
     engine.stop();
     engine.set_export_mode(true);
@@ -646,14 +852,21 @@ fn export_with(engine: &mut PlaybackEngine, fps: f32, start: Seconds, n: u32, wa
 /// agree to within that.
 #[test]
 fn export_frames_match_live_indices() {
-    let Fixture { project, session_layer, .. } = fixture();
+    let Fixture {
+        project,
+        session_layer,
+        ..
+    } = fixture();
     let clip_ids = all_clip_ids(&project);
     let mut live = engine_with(project.clone());
     live.play();
     let mut live_frames = BTreeMap::new();
     for _ in 0..600 {
         tick(&mut live, 1);
-        live_frames.insert(live.transport_frame(), capture(&live, &clip_ids, &session_layer));
+        live_frames.insert(
+            live.transport_frame(),
+            capture(&live, &clip_ids, &session_layer),
+        );
     }
     // From 0 s, as production exports this generator-only project (no
     // warm-up), every value matches live but the clip-edge step's param: a
@@ -671,43 +884,54 @@ fn export_frames_match_live_indices() {
     // so it alone is left out; `param_step_clip_edge` covers its live and
     // export counts.
     let level = 3;
-    for (start, fps, ratio, first, warm_up) in
-        [(0.0, 60.0, 1, 0, false), (0.0, 30.0, 2, 0, false), (2.01, 60.0, 1, 121, true), (2.01, 30.0, 2, 61, true)]
-    {
+    for (start, fps, ratio, first, warm_up) in [
+        (0.0, 60.0, 1, 0, false),
+        (0.0, 30.0, 2, 0, false),
+        (2.01, 60.0, 1, 121, true),
+        (2.01, 30.0, 2, 61, true),
+    ] {
         let mut engine = engine_with(project.clone());
-        export_with(&mut engine, fps, Seconds(start), 200, warm_up, |engine, k| {
-            let index = engine.transport_frame();
-            let at = format!("export from {start} s at {fps} fps, frame {k}");
-            assert_eq!(index, first + k as i64, "{at}");
-            let Some(live) = live_frames.get(&(index * ratio)) else {
-                assert_eq!(index, 0, "live play renders every frame after 0");
-                return;
-            };
-            let mut frame = capture(engine, &clip_ids, &session_layer);
-            let history = start != 0.0;
-            if history || ratio != 1 || k == 1 {
-                frame.param_bits[level] = live.param_bits[level];
-            }
-            if history {
-                frame.step_values.clone_from(&live.step_values);
-            }
-            if ratio == 1 {
-                let one = BTreeMap::from([(index, frame)]);
-                if let Some(divergence) = first_divergence(&live_frames, &one) {
-                    panic!("{at}: {divergence}");
+        export_with(
+            &mut engine,
+            fps,
+            Seconds(start),
+            200,
+            warm_up,
+            |engine, k| {
+                let index = engine.transport_frame();
+                let at = format!("export from {start} s at {fps} fps, frame {k}");
+                assert_eq!(index, first + k as i64, "{at}");
+                let Some(live) = live_frames.get(&(index * ratio)) else {
+                    assert_eq!(index, 0, "live play renders every frame after 0");
+                    return;
+                };
+                let mut frame = capture(engine, &clip_ids, &session_layer);
+                let history = start != 0.0;
+                if history || ratio != 1 || k == 1 {
+                    frame.param_bits[level] = live.param_bits[level];
                 }
-                return;
-            }
-            assert_eq!(frame.time_bits, live.time_bits, "{at}: time");
-            assert_eq!(frame.active_clips, live.active_clips, "{at}: clips");
-            assert_eq!(frame.session, live.session, "{at}: session");
-            let beat_gap = (f64::from_bits(frame.beat_bits) - f64::from_bits(live.beat_bits)).abs();
-            assert!(beat_gap < 1e-8, "{at}: beats {beat_gap} apart");
-            for (p, (a, b)) in frame.param_bits.iter().zip(&live.param_bits).enumerate() {
-                let gap = (f32::from_bits(*a) - f32::from_bits(*b)).abs();
-                assert!(gap < 1e-5, "{at}: param {p} {gap} apart");
-            }
-        });
+                if history {
+                    frame.step_values.clone_from(&live.step_values);
+                }
+                if ratio == 1 {
+                    let one = BTreeMap::from([(index, frame)]);
+                    if let Some(divergence) = first_divergence(&live_frames, &one) {
+                        panic!("{at}: {divergence}");
+                    }
+                    return;
+                }
+                assert_eq!(frame.time_bits, live.time_bits, "{at}: time");
+                assert_eq!(frame.active_clips, live.active_clips, "{at}: clips");
+                assert_eq!(frame.session, live.session, "{at}: session");
+                let beat_gap =
+                    (f64::from_bits(frame.beat_bits) - f64::from_bits(live.beat_bits)).abs();
+                assert!(beat_gap < 1e-8, "{at}: beats {beat_gap} apart");
+                for (p, (a, b)) in frame.param_bits.iter().zip(&live.param_bits).enumerate() {
+                    let gap = (f32::from_bits(*a) - f32::from_bits(*b)).abs();
+                    assert!(gap < 1e-5, "{at}: param {p} {gap} apart");
+                }
+            },
+        );
     }
 }
 
@@ -716,7 +940,10 @@ fn start_count(engine: &PlaybackEngine, clip: &ClipId) -> usize {
 }
 
 fn stub(engine: &PlaybackEngine) -> &StubRenderer {
-    engine.renderers()[0].as_any().downcast_ref::<StubRenderer>().expect("stub renderer")
+    engine.renderers()[0]
+        .as_any()
+        .downcast_ref::<StubRenderer>()
+        .expect("stub renderer")
 }
 
 /// A 24 fps export of a 60 fps project starting at 1.04 s (beat 2.08 at 120
@@ -727,13 +954,23 @@ fn stub(engine: &PlaybackEngine) -> &StubRenderer {
 #[test]
 fn export_clip_inside_first_frame() {
     let mut engine = engine_with(constant_tempo(120.0, 60.0, &[(2.09, 4.0)]));
-    let clip = engine.project().unwrap().timeline.layers[0].clips[0].id.clone();
+    let clip = engine.project().unwrap().timeline.layers[0].clips[0]
+        .id
+        .clone();
     let mut shown = Vec::new();
     export_with(&mut engine, 24.0, Seconds(1.04), 3, false, |engine, _| {
-        shown.push((engine.transport_frame(), is_active(engine, &clip), start_count(engine, &clip)));
+        shown.push((
+            engine.transport_frame(),
+            is_active(engine, &clip),
+            start_count(engine, &clip),
+        ));
     });
     assert_eq!(shown, vec![(25, false, 0), (26, true, 1), (27, true, 1)]);
-    assert_eq!(engine.frame_rate(), 60.0, "the end of export returns to the project rate");
+    assert_eq!(
+        engine.frame_rate(),
+        60.0,
+        "the end of export returns to the project rate"
+    );
 }
 
 /// An export returns the transport to the frame it left, at every tempo,
@@ -747,15 +984,28 @@ fn export_restores_the_frame_it_left() {
         for k in (1..3_000).step_by(7).chain([86_399, 216_001]) {
             let time = engine.transport_clock().time_at(k);
             engine.locate(time);
-            let state = if k % 2 == 0 { PlaybackState::Playing } else { PlaybackState::Paused };
+            let state = if k % 2 == 0 {
+                PlaybackState::Playing
+            } else {
+                PlaybackState::Paused
+            };
             engine.set_state(state);
             export(&mut engine, 24.0, Seconds(2.0), 2, |_, _| {});
             if engine.transport_frame() != k {
                 moved.push((k, engine.transport_frame()));
             }
-            assert_eq!(engine.current_state(), state, "{bpm} BPM frame {k}: state restored");
+            assert_eq!(
+                engine.current_state(),
+                state,
+                "{bpm} BPM frame {k}: state restored"
+            );
         }
-        assert!(moved.is_empty(), "{bpm} BPM: {} restores moved, first {:?}", moved.len(), &moved[..moved.len().min(5)]);
+        assert!(
+            moved.is_empty(),
+            "{bpm} BPM: {} restores moved, first {:?}",
+            moved.len(),
+            &moved[..moved.len().min(5)]
+        );
     }
 }
 
@@ -768,20 +1018,41 @@ fn export_under_external_sync_advances() {
     engine.set_follow_authority(Some(FollowProfile::FAST));
     let mut frames = Vec::new();
     export(&mut engine, 30.0, Seconds(1.0), 5, |engine, _| {
-        frames.push((engine.transport_frame(), engine.follows_external(), engine.frame_beat().0));
+        frames.push((
+            engine.transport_frame(),
+            engine.follows_external(),
+            engine.frame_beat().0,
+        ));
     });
-    let expected: Vec<_> = (30..35).map(|i| (i, false, i as f64 / 30.0 * 2.0)).collect();
+    let expected: Vec<_> = (30..35)
+        .map(|i| (i, false, i as f64 / 30.0 * 2.0))
+        .collect();
     assert_eq!(frames.len(), expected.len());
     for (got, want) in frames.iter().zip(&expected) {
         assert_eq!((got.0, got.1), (want.0, want.1));
-        assert!((got.2 - want.2).abs() < 1e-9, "export beat {} is the map's {}", got.2, want.2);
+        assert!(
+            (got.2 - want.2).abs() < 1e-9,
+            "export beat {} is the map's {}",
+            got.2,
+            want.2
+        );
     }
-    assert!(engine.follows_external(), "the follower is back after the export");
-    assert!(engine.follower().awaiting_seed(), "export end is a seed point");
+    assert!(
+        engine.follows_external(),
+        "the follower is back after the export"
+    );
+    assert!(
+        engine.follower().awaiting_seed(),
+        "export end is a seed point"
+    );
     engine.play();
     let parked = engine.transport_frame();
     tick(&mut engine, 1);
-    assert_eq!(engine.transport_frame(), parked + 1, "live ticks advance under the follower");
+    assert_eq!(
+        engine.transport_frame(),
+        parked + 1,
+        "live ticks advance under the follower"
+    );
 }
 
 /// A sample handed over before a placement in the same tick (AbletonOSC
@@ -791,9 +1062,22 @@ fn export_under_external_sync_advances() {
 fn placement_after_an_external_target_wins_the_tick() {
     type Place = fn(&mut PlaybackEngine);
     let places: [(&str, Place, i64); 3] = [
-        ("seek while playing (held)", |e| { e.seek_to(Seconds(10.0)); }, 600),
+        (
+            "seek while playing (held)",
+            |e| {
+                e.seek_to(Seconds(10.0));
+            },
+            600,
+        ),
         ("locate", |e| e.locate(Seconds(10.0)), 601),
-        ("stop then play", |e| { e.stop(); e.play(); }, 1),
+        (
+            "stop then play",
+            |e| {
+                e.stop();
+                e.play();
+            },
+            1,
+        ),
     ];
     for (name, place, expected) in places {
         let mut engine = engine_with(constant_tempo(120.0, FPS, &[]));
@@ -802,13 +1086,26 @@ fn placement_after_an_external_target_wins_the_tick() {
         for _ in 0..60 {
             tick(&mut engine, 1);
         }
-        engine.set_external_sample(ExternalSample { beat: 1000.0, bpm: 120.0, fresh: true, exact: false });
+        engine.set_external_sample(ExternalSample {
+            beat: 1000.0,
+            bpm: 120.0,
+            fresh: true,
+            exact: false,
+        });
         place(&mut engine);
         tick(&mut engine, 1);
         assert_eq!(engine.transport_frame(), expected, "{name}");
         let map_beat = engine.current_time().0 * 2.0;
-        assert!((engine.frame_beat().0 - map_beat).abs() < 1e-9, "{name}: beat {} is the map's {map_beat}", engine.frame_beat().0);
-        assert_eq!(engine.follower().filtered_error(), 0.0, "{name}: the sample reached the follower");
+        assert!(
+            (engine.frame_beat().0 - map_beat).abs() < 1e-9,
+            "{name}: beat {} is the map's {map_beat}",
+            engine.frame_beat().0
+        );
+        assert_eq!(
+            engine.follower().filtered_error(),
+            0.0,
+            "{name}: the sample reached the follower"
+        );
     }
 }
 
@@ -827,11 +1124,18 @@ fn on_frame_edges_below_their_beat_start_on_their_frame() {
         })
         .take(12)
         .collect();
-    assert!(edges.len() >= 8, "150 BPM must have on-frame edges that round below: {edges:?}");
+    assert!(
+        edges.len() >= 8,
+        "150 BPM must have on-frame edges that round below: {edges:?}"
+    );
     // Each clip 1/16 beat long: shown on its frame and the next.
     let spans: Vec<(f64, f64)> = edges.iter().map(|&(_, beat)| (beat, 1.0 / 16.0)).collect();
     let mut engine = engine_with(constant_tempo(150.0, FPS, &spans));
-    let ids: Vec<ClipId> = engine.project().unwrap().timeline.layers[0].clips.iter().map(|c| c.id.clone()).collect();
+    let ids: Vec<ClipId> = engine.project().unwrap().timeline.layers[0]
+        .clips
+        .iter()
+        .map(|c| c.id.clone())
+        .collect();
     let last = edges.last().unwrap().0 + 3;
     engine.play();
     for frame in 1..=last {
@@ -839,7 +1143,11 @@ fn on_frame_edges_below_their_beat_start_on_their_frame() {
         assert_eq!(engine.transport_frame(), frame);
         for ((edge_frame, beat), id) in edges.iter().zip(&ids) {
             let expected = frame == *edge_frame || frame == edge_frame + 1;
-            assert_eq!(is_active(&engine, id), expected, "clip at beat {beat} (frame {edge_frame}) on frame {frame}");
+            assert_eq!(
+                is_active(&engine, id),
+                expected,
+                "clip at beat {beat} (frame {edge_frame}) on frame {frame}"
+            );
         }
     }
 }
@@ -851,13 +1159,29 @@ fn tick_dt_reaches_consumers_as_whole_frames() {
     let mut engine = engine_with(constant_tempo(120.0, FPS, &[(0.0, 8.0)]));
     let step = engine.transport_clock().step().0;
     engine.play();
-    for (state, frames) in [(PlaybackState::Playing, 1), (PlaybackState::Playing, 3), (PlaybackState::Paused, 2), (PlaybackState::Paused, 1)] {
+    for (state, frames) in [
+        (PlaybackState::Playing, 1),
+        (PlaybackState::Playing, 3),
+        (PlaybackState::Paused, 2),
+        (PlaybackState::Paused, 1),
+    ] {
         engine.set_state(state);
-        let result = engine.tick(TickContext { frames, realtime_now: Seconds(0.123_456 * f64::from(frames)), frame_count: 7 });
+        let result = engine.tick(TickContext {
+            frames,
+            realtime_now: Seconds(0.123_456 * f64::from(frames)),
+            frame_count: 7,
+        });
         engine.reclaim_tick_result(result);
         let expected = (f64::from(frames) * step) as f32;
-        assert_eq!(stub(&engine).last_pre_render_dt().map(f32::to_bits), Some(expected.to_bits()), "{state:?}, {frames} frames");
-        assert_eq!(engine.tick_dt().0.to_bits(), (f64::from(frames) * step).to_bits());
+        assert_eq!(
+            stub(&engine).last_pre_render_dt().map(f32::to_bits),
+            Some(expected.to_bits()),
+            "{state:?}, {frames} frames"
+        );
+        assert_eq!(
+            engine.tick_dt().0.to_bits(),
+            (f64::from(frames) * step).to_bits()
+        );
     }
 }
 
@@ -867,13 +1191,20 @@ fn loop_restart_intervals(bpm: f32, length: f64, launch_after: i64, loops: usize
     let mut project = constant_tempo(bpm, FPS, &[]);
     let layer = project.timeline.layers[0].layer_id.clone();
     let scene = SceneId::new("loop-scene");
-    project.session.scenes.push(Scene { id: scene.clone(), name: "Scene".into(), color: None });
+    project.session.scenes.push(Scene {
+        id: scene.clone(),
+        name: "Scene".into(),
+        color: None,
+    });
     project.session.slots.push(SessionSlot {
         layer_id: layer.clone(),
         scene_id: scene.clone(),
         name: "Loop".into(),
         color: None,
-        sequence: ClipSequence { length_beats: Beats(length), clips: clips(&[(0.0, length)]) },
+        sequence: ClipSequence {
+            length_beats: Beats(length),
+            clips: clips(&[(0.0, length)]),
+        },
     });
     let clip = project.session.slots[0].sequence.clips[0].id.clone();
     let mut engine = engine_with(project);
@@ -881,7 +1212,11 @@ fn loop_restart_intervals(bpm: f32, length: f64, launch_after: i64, loops: usize
     engine.play();
     tick(&mut engine, u32::try_from(launch_after).unwrap());
     engine.session_launch_slot(layer, scene);
-    assert_eq!(start_count(&engine, &clip), 1, "quantize 0 launches on the frame it is pressed");
+    assert_eq!(
+        start_count(&engine, &clip),
+        1,
+        "quantize 0 launches on the frame it is pressed"
+    );
     let mut starts = vec![engine.transport_frame()];
     while starts.len() <= loops {
         let before = start_count(&engine, &clip);
@@ -902,15 +1237,27 @@ fn unquantised_loops_restart_on_whole_frames() {
     for (bpm, length, frames) in [(120.0, 2.0, 60), (150.0, 0.5, 12)] {
         for launch_after in [37, 41, 53, 64, 97, 128] {
             let intervals = loop_restart_intervals(bpm, length, launch_after, 100);
-            let off: Vec<(usize, i64)> = intervals.iter().copied().enumerate().filter(|&(_, d)| d != frames).collect();
-            assert!(off.is_empty(), "{bpm} BPM {length}-beat loop from frame {launch_after}: {} of 100 restarts off {frames} frames, first {:?}", off.len(), &off[..off.len().min(5)]);
+            let off: Vec<(usize, i64)> = intervals
+                .iter()
+                .copied()
+                .enumerate()
+                .filter(|&(_, d)| d != frames)
+                .collect();
+            assert!(
+                off.is_empty(),
+                "{bpm} BPM {length}-beat loop from frame {launch_after}: {} of 100 restarts off {frames} frames, first {:?}",
+                off.len(),
+                &off[..off.len().min(5)]
+            );
         }
     }
 }
 
-
 /// A user settings write through the gateway, as the content thread makes it.
-fn settings_write(engine: &mut PlaybackEngine, f: impl FnOnce(&mut manifold_core::project::Project)) {
+fn settings_write(
+    engine: &mut PlaybackEngine,
+    f: impl FnOnce(&mut manifold_core::project::Project),
+) {
     let settings = manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Settings]);
     let edit = engine.project_edit().expect("project");
     manifold_editing::service::EditingService::new().mutate(settings, edit, f);
@@ -928,7 +1275,9 @@ fn an_export_after_a_bpm_edit_and_back_matches_the_export_before_it() {
             frames.push([
                 engine.current_time_double().to_bits(),
                 engine.played_time().seconds().to_bits(),
-                engine.played_target().map_or(u64::MAX, |target| target.seconds().to_bits()),
+                engine
+                    .played_target()
+                    .map_or(u64::MAX, |target| target.seconds().to_bits()),
                 engine.replay_origin().seconds().to_bits(),
                 engine.tempo_shift().0.to_bits(),
             ]);
@@ -940,7 +1289,12 @@ fn an_export_after_a_bpm_edit_and_back_matches_the_export_before_it() {
         let old_bpm = engine.project().unwrap().settings.bpm;
         settings_write(engine, |project| {
             project.settings.bpm = Bpm(bpm);
-            project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(bpm), TempoPointSource::Manual, 0.001);
+            project.tempo_map.add_or_replace_point(
+                Beats::ZERO,
+                Bpm(bpm),
+                TempoPointSource::Manual,
+                0.001,
+            );
         });
         engine.reconcile_tempo_edit(&old_map, old_bpm);
     }
@@ -952,8 +1306,15 @@ fn an_export_after_a_bpm_edit_and_back_matches_the_export_before_it() {
     tick(&mut engine, 10);
     set_bpm(&mut engine, 128.0);
     tick(&mut engine, 10);
-    assert_ne!(engine.tempo_shift(), Seconds::ZERO, "the edits moved the transport");
+    assert_ne!(
+        engine.tempo_shift(),
+        Seconds::ZERO,
+        "the edits moved the transport"
+    );
     let after = physics_clock(&mut engine);
     assert_eq!(before.len(), 120);
-    assert!(before == after, "the export after the edits differs from the one before them");
+    assert!(
+        before == after,
+        "the export after the edits differs from the one before them"
+    );
 }

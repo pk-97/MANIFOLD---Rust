@@ -4,8 +4,12 @@ use manifold_node_engine::scene::scene_object::InstanceSpace;
 
 use super::mat4_mul;
 
-pub(super) const IDENTITY_M4: [[f32; 4]; 4] =
-    [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+pub(super) const IDENTITY_M4: [[f32; 4]; 4] = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+];
 
 /// The two matrices (A, B) a draw composes as world = A · T_instance · B.
 ///
@@ -23,7 +27,13 @@ pub(crate) fn instance_space_pair(
 ) -> ([[f32; 4]; 4], [[f32; 4]; 4]) {
     match (space, instanced) {
         (InstanceSpace::Group, true) => (parent.unwrap_or(IDENTITY_M4), local),
-        (InstanceSpace::World, true) => (IDENTITY_M4, parent.map_or(local, |parent| mat4_mul(parent, local))),
-        _ => (parent.map_or(local, |parent| mat4_mul(parent, local)), IDENTITY_M4),
+        (InstanceSpace::World, true) => (
+            IDENTITY_M4,
+            parent.map_or(local, |parent| mat4_mul(parent, local)),
+        ),
+        _ => (
+            parent.map_or(local, |parent| mat4_mul(parent, local)),
+            IDENTITY_M4,
+        ),
     }
 }

@@ -387,7 +387,8 @@ impl EffectNode for GeneratorInput {
         ctx.outputs
             .set_scalar("trigger_count", ParamValue::Float(trigger_count));
         let trigger_baseline = read_f(ctx, "trigger_baseline", trigger_count);
-        ctx.outputs.set_scalar("trigger_baseline", ParamValue::Float(trigger_baseline));
+        ctx.outputs
+            .set_scalar("trigger_baseline", ParamValue::Float(trigger_baseline));
         ctx.outputs
             .set_scalar("anim_progress", ParamValue::Float(anim_progress));
         ctx.outputs
@@ -418,11 +419,14 @@ inventory::submit! {
 
 #[cfg(test)]
 mod tests {
-    use crate::validation::validate;
     use super::*;
+    use crate::validation::validate;
     use manifold_core::{Beats, Seconds};
 
-    use crate::{exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, validation::GraphError, exec::execution_plan::compile};
+    use crate::{
+        exec::effect_node::FrameTime, exec::execution::Executor, exec::execution_plan::compile,
+        graph::Graph, validation::GraphError,
+    };
 
     fn frame_time() -> FrameTime {
         FrameTime {

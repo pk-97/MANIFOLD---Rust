@@ -17,8 +17,8 @@
 //! work when the GPU is badly behind) — `guard_slot`'s blocking wait is the
 //! backstop for whatever admission control lets through.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use super::device::GpuDevice;
@@ -71,8 +71,7 @@ impl FrameFence {
     /// outstanding. Used by admission control to decide whether to skip a
     /// UI redraw rather than let ring owners stall mid-encode.
     pub fn lag(&self) -> u64 {
-        self.current_frame()
-            .saturating_sub(self.completed_frame())
+        self.current_frame().saturating_sub(self.completed_frame())
     }
 
     /// Block (via short sleeps, not a busy spin) until `frame` is

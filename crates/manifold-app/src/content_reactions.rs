@@ -15,7 +15,8 @@ use crate::content_thread::ContentThread;
 /// Parts whose change rebuilds OSC routes and Ableton listeners.
 const ROUTE_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Effects, Part::Mappings]);
 /// Parts whose change makes clip-control bindings stale (BUG-6ompp (content tick re-hashes every clip)).
-const BINDING_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Clips, Part::Effects, Part::Session]);
+const BINDING_PARTS: ChangeSet =
+    ChangeSet::of(&[Part::Layers, Part::Clips, Part::Effects, Part::Session]);
 
 #[derive(Default)]
 pub(crate) struct ReactionState {
@@ -56,12 +57,18 @@ impl ContentThread {
     pub(crate) fn track_runtime_seqs(&mut self) -> crate::content_state::RuntimeSeqs {
         let latches = self.engine.automation_latches();
         let hasher = ahash::RandomState::with_seeds(1, 2, 3, 4);
-        let latches_key = latches.keys().map(|k| hasher.hash_one(k)).fold(0u64, u64::wrapping_add);
+        let latches_key = latches
+            .keys()
+            .map(|k| hasher.hash_one(k))
+            .fold(0u64, u64::wrapping_add);
         let mut chain_failures_key = (0usize, 0u64);
-        self.content_pipeline.visit_chain_failures(&mut |owner, message| {
-            chain_failures_key.0 += 1;
-            chain_failures_key.1 = chain_failures_key.1.wrapping_add(hasher.hash_one((owner, &**message)));
-        });
+        self.content_pipeline
+            .visit_chain_failures(&mut |owner, message| {
+                chain_failures_key.0 += 1;
+                chain_failures_key.1 = chain_failures_key
+                    .1
+                    .wrapping_add(hasher.hash_one((owner, &**message)));
+            });
         let seen = RuntimeSeen {
             latches_len: latches.len(),
             latches_key,
@@ -84,9 +91,10 @@ impl ContentThread {
         if seen.chain_failures_key != last.chain_failures_key {
             runtime.chain_failures += 1;
             let mut failures = Vec::with_capacity(seen.chain_failures_key.0);
-            self.content_pipeline.visit_chain_failures(&mut |owner, message| {
-                failures.push((owner.cloned(), message.clone()));
-            });
+            self.content_pipeline
+                .visit_chain_failures(&mut |owner, message| {
+                    failures.push((owner.cloned(), message.clone()));
+                });
             self.reactions.chain_failures = failures.into();
         }
         self.reactions.runtime_seen = seen;
@@ -96,8 +104,10 @@ impl ContentThread {
     /// Keep the tempo map as it stands before a Settings edit, once per pass.
     pub(crate) fn retain_tempo_for_reaction(&mut self) {
         if self.reactions.tempo_retained.is_none() {
-            self.reactions.tempo_retained =
-                self.engine.project().map(|p| (p.tempo_map.clone(), p.settings.bpm));
+            self.reactions.tempo_retained = self
+                .engine
+                .project()
+                .map(|p| (p.tempo_map.clone(), p.settings.bpm));
         }
     }
 
@@ -140,14 +150,19 @@ impl ContentThread {
             let (renderers, project) = self.engine.split_renderer_project();
             if let Some(p) = project {
                 for renderer in renderers.iter_mut() {
-                    manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::RendererReload);
+                    manifold_core::work_count::record_work(
+                        manifold_core::work_count::WorkKind::RendererReload,
+                    );
                     renderer.on_project_loaded(p);
                 }
             }
         }
         // Restore any layers stopped by runaway GPU frames so an edit retries.
         for renderer in self.engine.renderers_mut() {
-            if let Some(gen_renderer) = renderer.as_any_mut().downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>() {
+            if let Some(gen_renderer) = renderer
+                .as_any_mut()
+                .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>(
+            ) {
                 gen_renderer.restore_stopped_layers();
             }
         }

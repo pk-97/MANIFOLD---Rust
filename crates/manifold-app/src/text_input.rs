@@ -192,7 +192,6 @@ pub struct GraphNumericParamCtx {
     pub outer_param_id: Option<String>,
 }
 
-
 /// Context for an in-flight Audio Setup dock gain-stepper type-in
 /// ([`TextInputField::AudioSendGainParam`]), read on commit.
 #[derive(Debug, Clone)]
@@ -601,15 +600,31 @@ impl TextInputState {
 
     /// Up/Down arrow: the same x on the visual line above or below; past the
     /// first or last line, the text's start or end.
-    pub fn move_vertical(&mut self, down: bool, select: bool, measure: &mut dyn FnMut(&str) -> f32) {
+    pub fn move_vertical(
+        &mut self,
+        down: bool,
+        select: bool,
+        measure: &mut dyn FnMut(&str) -> f32,
+    ) {
         let mut lines = Vec::new();
         self.overlay_geometry(&mut lines, measure);
-        let target = text_edit::vertical_target(self.model.text(), &lines, self.model.caret(), down, measure);
+        let target = text_edit::vertical_target(
+            self.model.text(),
+            &lines,
+            self.model.caret(),
+            down,
+            measure,
+        );
         self.model.caret_to(target, select);
     }
 
     /// Cmd+Left/Right: start or end of the caret's visual line.
-    pub fn move_line_edge(&mut self, end: bool, select: bool, measure: &mut dyn FnMut(&str) -> f32) {
+    pub fn move_line_edge(
+        &mut self,
+        end: bool,
+        select: bool,
+        measure: &mut dyn FnMut(&str) -> f32,
+    ) {
         let mut lines = Vec::new();
         self.overlay_geometry(&mut lines, measure);
         let i = text_edit::line_of(&lines, self.model.caret());
@@ -626,7 +641,9 @@ impl TextInputState {
     pub fn byte_at_point(&self, x: f32, y: f32, measure: &mut dyn FnMut(&str) -> f32) -> usize {
         let mut lines = Vec::new();
         let g = self.overlay_geometry(&mut lines, measure);
-        let i = ((y - g.text_y) / g.line_h).floor().clamp(0.0, (lines.len() - 1) as f32) as usize;
+        let i = ((y - g.text_y) / g.line_h)
+            .floor()
+            .clamp(0.0, (lines.len() - 1) as f32) as usize;
         text_edit::byte_on_line(self.model.text(), &lines, i, x - g.text_x, measure)
     }
 
@@ -646,7 +663,11 @@ impl TextInputState {
         let inner_w = w - TEXT_INPUT_PAD_H * 2.0;
         let text = self.model.text();
         text_edit::layout_lines(text, self.multiline.then_some(inner_w), measure, lines);
-        let line_count = if self.multiline { lines.len().max(3) } else { 1 };
+        let line_count = if self.multiline {
+            lines.len().max(3)
+        } else {
+            1
+        };
         let h = (line_count as f32 * line_h + TEXT_INPUT_PAD_V * 2.0)
             .max(a.height.max(fs + TEXT_INPUT_PAD_V * 2.0));
         let scroll = if self.multiline {
@@ -780,8 +801,14 @@ pub fn parse_slider_range(text: &str) -> Option<Option<(f32, f32)>> {
     if text.is_empty() {
         return Some(None);
     }
-    let spaced = text.replace("..", " ").replace(" to ", " ").replace([',', ';', '\u{2013}', '\u{2014}'], " ");
-    let numbers: Vec<f32> = spaced.split_whitespace().map(parse_lenient_numeric).collect::<Option<_>>()?;
+    let spaced = text
+        .replace("..", " ")
+        .replace(" to ", " ")
+        .replace([',', ';', '\u{2013}', '\u{2014}'], " ");
+    let numbers: Vec<f32> = spaced
+        .split_whitespace()
+        .map(parse_lenient_numeric)
+        .collect::<Option<_>>()?;
     match numbers.as_slice() {
         [a, b] if a != b => Some(Some((a.min(*b), a.max(*b)))),
         _ => None,
@@ -899,8 +926,14 @@ mod parse_tests {
             parse_material_colour_hex("#aBc012"),
             Some([171.0 / 255.0, 192.0 / 255.0, 18.0 / 255.0])
         );
-        assert_eq!(parse_material_colour_hex(" f0A "), Some([1.0, 0.0, 170.0 / 255.0]));
-        assert_eq!(format_material_colour_hex([1.0, 0.0, 170.0 / 255.0]), "#FF00AA");
+        assert_eq!(
+            parse_material_colour_hex(" f0A "),
+            Some([1.0, 0.0, 170.0 / 255.0])
+        );
+        assert_eq!(
+            format_material_colour_hex([1.0, 0.0, 170.0 / 255.0]),
+            "#FF00AA"
+        );
     }
 
     #[test]
@@ -929,7 +962,9 @@ mod parse_tests {
 
     #[test]
     fn material_colour_hex_builds_one_atomic_param_rgb_transaction() {
-        use manifold_ui::panels::{GraphParamTarget, PanelAction, ScrubPhase, ScrubValue, ValueRef};
+        use manifold_ui::panels::{
+            GraphParamTarget, PanelAction, ScrubPhase, ScrubValue, ValueRef,
+        };
 
         let values = parse_material_colour_hex("#12aBc0").expect("valid colour");
         let ids = ["r".into(), "g".into(), "b".into()];
@@ -972,32 +1007,56 @@ mod overlay_geometry_tests {
     fn multiline_click_on_the_third_line_stays_inside_and_lands_there() {
         let mut ti = TextInputState::new();
         // A one-row anchor, as the generator card row gives it.
-        ti.begin(TextInputField::GenStringParam(0), "ab\ncd\nef", AnchorRect::new(0.0, 0.0, 200.0, 16.0), 11.0);
+        ti.begin(
+            TextInputField::GenStringParam(0),
+            "ab\ncd\nef",
+            AnchorRect::new(0.0, 0.0, 200.0, 16.0),
+            11.0,
+        );
         let g = ti.overlay_geometry(&mut Vec::new(), &mut mono);
         let third_line_y = g.text_y + g.line_h * 2.5;
-        assert!(g.contains(5.0, third_line_y), "drawn box must take the click, not pass it through");
-        assert_eq!(ti.byte_at_point(g.text_x + 11.0, third_line_y, &mut mono), 7);
+        assert!(
+            g.contains(5.0, third_line_y),
+            "drawn box must take the click, not pass it through"
+        );
+        assert_eq!(
+            ti.byte_at_point(g.text_x + 11.0, third_line_y, &mut mono),
+            7
+        );
     }
 
     #[test]
     fn single_line_scrolls_to_keep_the_caret_visible() {
         let mut ti = TextInputState::new();
         let long = "x".repeat(50);
-        ti.begin(TextInputField::Bpm, &long, AnchorRect::new(0.0, 0.0, 100.0, 16.0), 11.0);
+        ti.begin(
+            TextInputField::Bpm,
+            &long,
+            AnchorRect::new(0.0, 0.0, 100.0, 16.0),
+            11.0,
+        );
         ti.model.move_end(false);
         let g = ti.overlay_geometry(&mut Vec::new(), &mut mono);
         let caret_x = g.text_x + 500.0;
         assert!(caret_x <= g.x + g.w, "caret at the end is inside the box");
         ti.model.move_home(false);
         let g = ti.overlay_geometry(&mut Vec::new(), &mut mono);
-        assert_eq!(g.text_x, TEXT_INPUT_PAD_H, "back at the start, scroll resets");
+        assert_eq!(
+            g.text_x, TEXT_INPUT_PAD_H,
+            "back at the start, scroll resets"
+        );
     }
 
     #[test]
     fn multiline_wraps_to_the_box_and_arrows_follow_visual_lines() {
         let mut ti = TextInputState::new();
         // inner width 52px → 5 chars per line
-        ti.begin(TextInputField::GenStringParam(0), "aaaa bbbb", AnchorRect::new(0.0, 0.0, 60.0, 16.0), 11.0);
+        ti.begin(
+            TextInputField::GenStringParam(0),
+            "aaaa bbbb",
+            AnchorRect::new(0.0, 0.0, 60.0, 16.0),
+            11.0,
+        );
         let mut lines = Vec::new();
         ti.overlay_geometry(&mut lines, &mut mono);
         assert_eq!(lines, vec![0..5, 5..9]);

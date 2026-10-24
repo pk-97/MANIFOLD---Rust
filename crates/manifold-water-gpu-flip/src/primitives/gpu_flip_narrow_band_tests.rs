@@ -102,7 +102,13 @@ mod cpu_tests {
                 // All x/z columns are filled through y=POOL_TOP-1. The
                 // nearest quarter site is in the same cell or up to two out,
                 // inside its 2r scatter box. Neither value needs the eps snap.
-                let dy = if y < POOL_TOP { 0.25 } else if y == POOL_TOP { 0.75 } else { 1.75 };
+                let dy = if y < POOL_TOP {
+                    0.25
+                } else if y == POOL_TOP {
+                    0.75
+                } else {
+                    1.75
+                };
                 (0.125_f32 + dy * dy).sqrt() - 0.8660254
             })
             .collect()
@@ -136,8 +142,7 @@ mod cpu_tests {
                             continue;
                         }
                         next[axis] += 1;
-                        let next_index =
-                            next[0] + n[0] * (next[1] + n[1] * next[2]);
+                        let next_index = next[0] + n[0] * (next[1] + n[1] * next[2]);
                         let other = field[next_index];
                         if (here < 0.0) == (other < 0.0) {
                             continue;
@@ -151,16 +156,23 @@ mod cpu_tests {
                 }
             }
         }
-        let seeds: Vec<_> = seeds.into_iter().enumerate()
+        let seeds: Vec<_> = seeds
+            .into_iter()
+            .enumerate()
             .filter(|(_, value)| *value < sentinel)
-            .map(|(i, value)| (coords(i, n), value)).collect();
-        field.iter().enumerate().map(|(i, value)| {
-            let p = coords(i, n);
-            let distance = seeds.iter().fold(sentinel, |distance, (q, seed)| {
-                distance.min(seed + (0..3).map(|a| p[a].abs_diff(q[a])).sum::<usize>() as f32)
-            });
-            if *value < 0.0 { -distance } else { distance }
-        }).collect()
+            .map(|(i, value)| (coords(i, n), value))
+            .collect();
+        field
+            .iter()
+            .enumerate()
+            .map(|(i, value)| {
+                let p = coords(i, n);
+                let distance = seeds.iter().fold(sentinel, |distance, (q, seed)| {
+                    distance.min(seed + (0..3).map(|a| p[a].abs_diff(q[a])).sum::<usize>() as f32)
+                });
+                if *value < 0.0 { -distance } else { distance }
+            })
+            .collect()
     }
 
     /// The integrated host receives the authored scalar wires, then derives
@@ -171,7 +183,8 @@ mod cpu_tests {
             "nodes_x" | "nodes_y" | "nodes_z" => 23.0,
             "cell_size" => 1.0,
             _ => default,
-        }).unwrap()
+        })
+        .unwrap()
     }
 
     pub(super) fn runtime_grid() -> FlipSolverGrid {
@@ -190,8 +203,17 @@ mod cpu_tests {
         let mut distance = 0.0;
         for corner in 0..8 {
             let o = [corner & 1, (corner >> 1) & 1, (corner >> 2) & 1];
-            let weight: f32 = (0..3).map(|a| if o[a] == 1 { g[a] - i[a] as f32 } else { 1.0 - (g[a] - i[a] as f32) }).product();
-            distance += weight * walls[(i[0] + o[0]) + n[0] * ((i[1] + o[1]) + n[1] * (i[2] + o[2]))];
+            let weight: f32 = (0..3)
+                .map(|a| {
+                    if o[a] == 1 {
+                        g[a] - i[a] as f32
+                    } else {
+                        1.0 - (g[a] - i[a] as f32)
+                    }
+                })
+                .product();
+            distance +=
+                weight * walls[(i[0] + o[0]) + n[0] * ((i[1] + o[1]) + n[1] * (i[2] + o[2]))];
         }
         distance
     }
@@ -199,9 +221,16 @@ mod cpu_tests {
     /// `quarter_pool` as the engine seeds it in the runtime box: a site stays
     /// only where the solid distance is positive (`_addNewFluidCellsThread`).
     pub(super) fn runtime_seeded_pool() -> Vec<FluidParticle> {
-        quarter_pool().into_iter().filter(|p| {
-            runtime_wall_distance([p.position_radius[0], p.position_radius[1], p.position_radius[2]]) > 0.0
-        }).collect()
+        quarter_pool()
+            .into_iter()
+            .filter(|p| {
+                runtime_wall_distance([
+                    p.position_radius[0],
+                    p.position_radius[1],
+                    p.position_radius[2],
+                ]) > 0.0
+            })
+            .collect()
     }
 
     /// Independent physical-site oracle over the seeded pool's live sites,
@@ -214,39 +243,66 @@ mod cpu_tests {
         let radius = 0.8660254_f32;
         let mut phi = vec![3.0_f32; cells(n)];
         for p in runtime_seeded_pool() {
-            let site = [p.position_radius[0], p.position_radius[1], p.position_radius[2]];
-            let low: [usize; 3] = std::array::from_fn(|a| (site[a] - 2.0 * radius - minimum[a]).floor().max(0.0) as usize);
-            let high: [usize; 3] = std::array::from_fn(|a| ((site[a] + 2.0 * radius - minimum[a]).floor() as usize).min(n[a] - 1));
+            let site = [
+                p.position_radius[0],
+                p.position_radius[1],
+                p.position_radius[2],
+            ];
+            let low: [usize; 3] = std::array::from_fn(|a| {
+                (site[a] - 2.0 * radius - minimum[a]).floor().max(0.0) as usize
+            });
+            let high: [usize; 3] = std::array::from_fn(|a| {
+                ((site[a] + 2.0 * radius - minimum[a]).floor() as usize).min(n[a] - 1)
+            });
             for z in low[2]..=high[2] {
                 for y in low[1]..=high[1] {
                     for x in low[0]..=high[0] {
                         let c = [x, y, z];
-                        let centre: [f32; 3] = std::array::from_fn(|a| minimum[a] + c[a] as f32 + 0.5);
-                        let distance = (0..3).map(|a| (centre[a] - site[a]).powi(2)).sum::<f32>().sqrt() - radius;
+                        let centre: [f32; 3] =
+                            std::array::from_fn(|a| minimum[a] + c[a] as f32 + 0.5);
+                        let distance = (0..3)
+                            .map(|a| (centre[a] - site[a]).powi(2))
+                            .sum::<f32>()
+                            .sqrt()
+                            - radius;
                         let i = x + n[0] * (y + n[1] * z);
                         phi[i] = phi[i].min(distance);
                     }
                 }
             }
         }
-        phi.into_iter().map(|d| if d.abs() < 0.005 { 0.0 } else { d.min(3.0) }).collect()
+        phi.into_iter()
+            .map(|d| if d.abs() < 0.005 { 0.0 } else { d.min(3.0) })
+            .collect()
     }
 
     #[cfg(feature = "gpu-proofs")]
     pub(super) fn runtime_pool_initial_phi() -> Vec<f32> {
-        redistance_oracle(runtime_pool_particle_phi(), runtime_grid().cells().map(|v| v as usize))
+        redistance_oracle(
+            runtime_pool_particle_phi(),
+            runtime_grid().cells().map(|v| v as usize),
+        )
     }
 
     #[cfg(feature = "gpu-proofs")]
     pub(super) fn runtime_expected_retained(input: &[FluidParticle], phi: &[f32]) -> BTreeSet<u32> {
         let grid = runtime_grid();
-        input.iter().filter(|p| {
-            let [x, y, z, _] = p.position_radius;
-            // The near-wall rule reads the interpolated solid, which rounds
-            // the box's corners inward.
-            runtime_wall_distance([x, y, z]) <= 3.0 || sample_field(phi, [x,y,z], grid.cells().map(|v| v as usize),
-                grid.min().map(|v| v + 0.5)) >= -3.0
-        }).map(|p| p.id).collect()
+        input
+            .iter()
+            .filter(|p| {
+                let [x, y, z, _] = p.position_radius;
+                // The near-wall rule reads the interpolated solid, which rounds
+                // the box's corners inward.
+                runtime_wall_distance([x, y, z]) <= 3.0
+                    || sample_field(
+                        phi,
+                        [x, y, z],
+                        grid.cells().map(|v| v as usize),
+                        grid.min().map(|v| v + 0.5),
+                    ) >= -3.0
+            })
+            .map(|p| p.id)
+            .collect()
     }
 
     #[test]
@@ -345,7 +401,10 @@ mod cpu_tests {
             if p[1] >= POOL_TOP + 2 {
                 assert_eq!(particle[i], 3.0, "unsupported air cell {p:?}");
             } else if p[1] == POOL_TOP + 1 {
-                assert!((f64::from(particle[i]) - above).abs() < 1e-6, "ring-two air cell {p:?}");
+                assert!(
+                    (f64::from(particle[i]) - above).abs() < 1e-6,
+                    "ring-two air cell {p:?}"
+                );
             }
             let expected = p[1] as f64 - POOL_TOP as f64 - crossing;
             assert!(
@@ -453,7 +512,10 @@ mod cpu_tests {
         bindings.sort_unstable();
         assert_eq!(
             bindings,
-            (0..=12).chain([46, 47]).map(|binding| (0, binding)).collect::<Vec<_>>()
+            (0..=12)
+                .chain([46, 47])
+                .map(|binding| (0, binding))
+                .collect::<Vec<_>>()
         );
 
         let params = module
@@ -514,18 +576,20 @@ mod gpu_tests {
     use std::collections::BTreeSet;
 
     use super::super::gpu_flip_step::{GpuFlipStep, StepParams, dispatch_pass};
-    use manifold_node_engine::testkit::array_harness::{Harness, params as effect_params, read};
-    use manifold_water_liquid::primitives::prefix_scan::PrefixScan;
-    use manifold_water_liquid::primitives::liquid_stats::{SOLVER_WORDS, NARROW_BAND_SHORTAGE_TAIL};
     use super::cpu_tests::{
-        STEP_CELLS, cells, coords, quarter_pool, runtime_grid, runtime_expected_retained, runtime_pool_initial_phi, runtime_seeded_pool,
-        stationary_pool_particle_phi,
+        STEP_CELLS, cells, coords, quarter_pool, runtime_expected_retained, runtime_grid,
+        runtime_pool_initial_phi, runtime_seeded_pool, stationary_pool_particle_phi,
     };
     use super::{NbFace, NbParams, NbParticle, NbRange, SHADER};
-    use manifold_node_engine::particles::FluidParticle;
-use manifold_water_liquid::fluid_particles::FaceSample;
-    use manifold_node_engine::primitive::Primitive;
     use manifold_gpu::{GpuBinding, GpuBuffer};
+    use manifold_node_engine::particles::FluidParticle;
+    use manifold_node_engine::primitive::Primitive;
+    use manifold_node_engine::testkit::array_harness::{Harness, params as effect_params, read};
+    use manifold_water_liquid::fluid_particles::FaceSample;
+    use manifold_water_liquid::primitives::liquid_stats::{
+        NARROW_BAND_SHORTAGE_TAIL, SOLVER_WORDS,
+    };
+    use manifold_water_liquid::primitives::prefix_scan::PrefixScan;
 
     const N: [usize; 3] = [8, 8, 8];
     const H: f32 = 1.0;
@@ -596,7 +660,11 @@ use manifold_water_liquid::fluid_particles::FaceSample;
         let (identity_slot, _) = harness.array::<u32>(&[next, 1, 0, 0], 4);
 
         step.prepare_pipelines(&harness.device);
-        let inputs = vec![("particles", particles_slot), ("count", count_slot), ("identity", identity_slot)];
+        let inputs = vec![
+            ("particles", particles_slot),
+            ("count", count_slot),
+            ("identity", identity_slot),
+        ];
         let (_, errors) = harness.run(
             step,
             &inputs,
@@ -674,7 +742,10 @@ use manifold_water_liquid::fluid_particles::FaceSample;
         }
     }
 
-    fn shared<T: bytemuck::Pod>(device: &manifold_gpu::testkit::TestDevice, values: &[T]) -> GpuBuffer {
+    fn shared<T: bytemuck::Pod>(
+        device: &manifold_gpu::testkit::TestDevice,
+        values: &[T],
+    ) -> GpuBuffer {
         let buffer = device.create_buffer_shared((size_of_val(values) as u64).max(16));
         buffer.zero_fill();
         if !values.is_empty() {
@@ -1310,8 +1381,8 @@ use manifold_water_liquid::fluid_particles::FaceSample;
                 bind(10, &ranges_buffer),
                 bind(11, &ranks),
                 bind(12, &status),
-                    bind(46, &shared(&device, &[0u32; 12])),
-                    bind(47, &shared(&device, &[0u32, 0, 3, 0])),
+                bind(46, &shared(&device, &[0u32; 12])),
+                bind(47, &shared(&device, &[0u32, 0, 3, 0])),
             ],
             [(8 * cells(N)).div_ceil(256) as u32, 1, 1],
             "narrow-band-restore-overflow-write",
@@ -1363,7 +1434,10 @@ use manifold_water_liquid::fluid_particles::FaceSample;
             &[(22, &capped), (43, &status)],
             1,
         );
-        assert_eq!(read::<u32>(&capped, SOLVER_WORDS as usize)[NARROW_BAND_SHORTAGE_TAIL as usize], 8);
+        assert_eq!(
+            read::<u32>(&capped, SOLVER_WORDS as usize)[NARROW_BAND_SHORTAGE_TAIL as usize],
+            8
+        );
         step.step_in_tick = 1;
         unsafe {
             status.write(0, bytemuck::cast_slice::<u32, u8>(&[0, 16]));
@@ -1375,7 +1449,10 @@ use manifold_water_liquid::fluid_particles::FaceSample;
             &[(22, &capped), (43, &status)],
             1,
         );
-        assert_eq!(read::<u32>(&capped, SOLVER_WORDS as usize)[NARROW_BAND_SHORTAGE_TAIL as usize], 8);
+        assert_eq!(
+            read::<u32>(&capped, SOLVER_WORDS as usize)[NARROW_BAND_SHORTAGE_TAIL as usize],
+            8
+        );
         failure.zero_fill();
         dispatch_pass(
             &device,

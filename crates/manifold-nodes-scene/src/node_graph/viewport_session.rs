@@ -33,16 +33,20 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::ParamManifest;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
+use crate::node_graph::viewport_overlay::{
+    ViewportOverlayConfig, build_overlay_lines, composite_overlay_lines_rgba8, project_lines,
+};
+use crate::node_graph::viewport_render::{
+    OVERRIDE_CAMERA_NODE_ID, ViewportRenderError, override_camera_def,
+};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::gpu::headless_readback::readback_tonemapped_rgba8;
-use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::scene::viewport_camera::ViewportCamera;
-use crate::node_graph::viewport_overlay::{ViewportOverlayConfig, build_overlay_lines, composite_overlay_lines_rgba8, project_lines};
-use crate::node_graph::viewport_render::{OVERRIDE_CAMERA_NODE_ID, ViewportRenderError, override_camera_def};
-use manifold_node_engine::{exec::effect_node::NodeInstanceId, parameters::ParamValue};
-use manifold_node_engine::runtime::preset_context::PresetContext;
-use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::scene::viewport_camera::ViewportCamera;
+use manifold_node_engine::{exec::effect_node::NodeInstanceId, parameters::ParamValue};
 
 /// Content-hash of an [`EffectGraphDef`] — used to detect "the authored
 /// graph changed while the viewport was open" ([`ViewportSession::sync_def`]).
@@ -180,7 +184,12 @@ impl ViewportSession {
                 let mut gpu = GpuEncoder::new(&mut enc, &device);
                 let mut ctx = *frame_ctx;
                 ctx.frame_count = frame;
-                runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+                runtime.render(
+                    &mut gpu,
+                    &target.texture,
+                    &ctx,
+                    &manifold_core::params::ParamManifest::default(),
+                );
             }
             enc.commit_and_wait_completed();
         }
@@ -247,7 +256,10 @@ impl ViewportSession {
             // (NodeNotFound / ParamNotFound) are impossible here: the node
             // was just resolved via `instance_by_node_id` in `build()`, and
             // these are exactly `node.free_camera`'s own params (D6).
-            let _ = self.runtime.graph.set_param(self.camera_instance, name, ParamValue::Float(value));
+            let _ =
+                self.runtime
+                    .graph
+                    .set_param(self.camera_instance, name, ParamValue::Float(value));
         }
         self.dirty = true;
     }
@@ -318,15 +330,16 @@ impl ViewportSession {
             let mut enc = self.device.create_encoder("viewport-session-render-enc");
             {
                 let mut gpu = GpuEncoder::new(&mut enc, &self.device);
-                self.runtime.render(
-                    &mut gpu,
-                    &self.target.texture,
-                    frame_ctx,
-                    params,
-                );
+                self.runtime
+                    .render(&mut gpu, &self.target.texture, frame_ctx, params);
             }
             enc.commit_and_wait_completed();
-            self.cached_rgba = readback_tonemapped_rgba8(&self.device, &self.target.texture, self.width, self.height);
+            self.cached_rgba = readback_tonemapped_rgba8(
+                &self.device,
+                &self.target.texture,
+                self.width,
+                self.height,
+            );
             self.dirty = false;
             self.param_values_hash = Some(params_hash);
         }
@@ -366,10 +379,10 @@ impl ViewportSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_node_engine::persistence::PrimitiveRegistry;
     use manifold_core::effect_graph_def::{
         EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, EffectGraphWire,
     };
+    use manifold_node_engine::persistence::PrimitiveRegistry;
     use std::collections::{BTreeMap, BTreeSet};
 
     fn node(id: u32, node_id: &str, type_id: &str) -> EffectGraphNode {

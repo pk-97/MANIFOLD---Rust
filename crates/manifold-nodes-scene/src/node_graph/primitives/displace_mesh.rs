@@ -17,8 +17,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
-use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
@@ -107,7 +107,10 @@ impl Primitive for DisplaceMesh {
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {
-            input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)
+            input_capacities
+                .iter()
+                .find(|(p, _)| *p == "in")
+                .map(|(_, n)| *n)
         } else {
             None
         }
@@ -192,4 +195,3 @@ impl Primitive for DisplaceMesh {
         );
     }
 }
-

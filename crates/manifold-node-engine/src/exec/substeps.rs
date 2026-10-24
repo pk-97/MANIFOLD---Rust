@@ -16,11 +16,11 @@
 
 use ahash::{AHashMap, AHashSet};
 
-use crate::scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID;
 use crate::exec::effect_node::NodeInstanceId;
 use crate::exec::execution_plan::ResourceId;
 use crate::freeze::classify::BoundaryReason;
 use crate::graph::{Graph, WireWalkMode};
+use crate::scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID;
 use crate::validation::GraphError;
 
 /// One accepted clock interval and its place in this frame's numerical loop.
@@ -192,7 +192,9 @@ pub(crate) fn derive_regions(
         let inst = graph.get_node(boundary).expect("boundary exists");
         let has_input = |name: &str| inst.node.inputs().iter().any(|p| p.name == name);
         let has_output = |name: &str| inst.node.outputs().iter().any(|p| p.name == name);
-        let declared_inputs = std::iter::once(ports.seed).chain(ports.capture_ports()).chain(ports.clock);
+        let declared_inputs = std::iter::once(ports.seed)
+            .chain(ports.capture_ports())
+            .chain(ports.clock);
         let declared_outputs = std::iter::once(ports.state)
             .chain(ports.iteration_scalars.iter().copied())
             .chain(ports.results.iter().map(|r| r.output));
@@ -218,9 +220,14 @@ pub(crate) fn derive_regions(
 
         let mut producers: Vec<NodeInstanceId> = Vec::new();
         for result in ports.results {
-            let capture = graph.wires_into(boundary).find(|w| w.to.1 == result.capture);
+            let capture = graph
+                .wires_into(boundary)
+                .find(|w| w.to.1 == result.capture);
             if capture.is_none() && result.optional {
-                if graph.wires_from(boundary).any(|w| w.from.1 == result.output) {
+                if graph
+                    .wires_from(boundary)
+                    .any(|w| w.from.1 == result.output)
+                {
                     return Err(malformed(
                         boundary,
                         boundary,
@@ -257,7 +264,11 @@ pub(crate) fn derive_regions(
     for (boundary, ports, producers) in &declared {
         let (boundary, ports) = (*boundary, *ports);
         let in_body = region_body(boundary, producers, &fwd, &rev);
-        let body: Vec<NodeInstanceId> = active_order.iter().copied().filter(|id| in_body.contains(id)).collect();
+        let body: Vec<NodeInstanceId> = active_order
+            .iter()
+            .copied()
+            .filter(|id| in_body.contains(id))
+            .collect();
 
         for &producer in producers {
             if !body.contains(&producer) {
@@ -278,7 +289,9 @@ pub(crate) fn derive_regions(
                 return Err(malformed(
                     boundary,
                     node,
-                    format!("substep regions do not nest: boundary {node:?} lies in this region's body"),
+                    format!(
+                        "substep regions do not nest: boundary {node:?} lies in this region's body"
+                    ),
                 ));
             }
             if !inst.node.state_capture_input_ports().is_empty() {
@@ -304,10 +317,11 @@ pub(crate) fn derive_regions(
                     "coupled-scene participant inside a substep region".to_string(),
                 ));
             }
-            if let Some(&target) = fwd
-                .get(&node)
-                .and_then(|targets| targets.iter().find(|t| **t != boundary && !members.contains(t)))
-            {
+            if let Some(&target) = fwd.get(&node).and_then(|targets| {
+                targets
+                    .iter()
+                    .find(|t| **t != boundary && !members.contains(t))
+            }) {
                 return Err(malformed(
                     boundary,
                     node,
@@ -336,7 +350,11 @@ pub(crate) fn derive_regions(
             None => None,
             Some(port) => {
                 let Some(wire) = graph.wires_into(boundary).find(|w| w.to.1 == port) else {
-                    return Err(malformed(boundary, boundary, format!("clock port `{port}` has no wire")));
+                    return Err(malformed(
+                        boundary,
+                        boundary,
+                        format!("clock port `{port}` has no wire"),
+                    ));
                 };
                 let owner = wire.from.0;
                 if members.contains(&owner) {
@@ -352,7 +370,11 @@ pub(crate) fn derive_regions(
         let mut nodes = Vec::with_capacity(body.len() + 1);
         nodes.push(boundary);
         nodes.extend(body);
-        regions.push(RegionNodes { boundary, nodes, clock });
+        regions.push(RegionNodes {
+            boundary,
+            nodes,
+            clock,
+        });
     }
 
     // One region feeding another (chaining) is not supported: a member whose
@@ -433,8 +455,6 @@ where
     }
     seen
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -523,7 +543,10 @@ mod tests {
                 output("step_dt", PortType::Scalar(ScalarType::F32)),
                 output("step_index", PortType::Scalar(ScalarType::F32)),
             ];
-            let has_stats = ports.results.iter().any(|result| result.capture == "stats_in");
+            let has_stats = ports
+                .results
+                .iter()
+                .any(|result| result.capture == "stats_in");
             let capture_inputs: &'static [&'static str] = if !has_stats {
                 &["in"]
             } else {
@@ -543,8 +566,12 @@ mod tests {
 
         fn boundary_with_optional_result() -> Self {
             let mut boundary = Self::boundary(PORTS_WITH_OPTIONAL_RESULT);
-            boundary.inputs.push(input("optional_in", PortType::Texture2D, false));
-            boundary.outputs.push(output("optional_out", PortType::Texture2D));
+            boundary
+                .inputs
+                .push(input("optional_in", PortType::Texture2D, false));
+            boundary
+                .outputs
+                .push(output("optional_out", PortType::Texture2D));
             boundary.capture_inputs = OPTIONAL_CAPTURE_INPUTS;
             boundary
         }
@@ -691,7 +718,9 @@ mod tests {
         graph.connect((src, "out"), (body_a, "b")).unwrap();
         graph.connect((boundary, "out"), (body_a, "a")).unwrap();
         graph.connect((boundary, "out"), (consumer, "tex")).unwrap();
-        graph.connect((boundary, "step_dt"), (body_b, "dt")).unwrap();
+        graph
+            .connect((boundary, "step_dt"), (body_b, "dt"))
+            .unwrap();
         graph.connect((body_a, "out"), (body_b, "a")).unwrap();
         graph.connect((body_b, "out"), (boundary, "in")).unwrap();
         HappyPath {
@@ -715,7 +744,11 @@ mod tests {
         }
     }
 
-    fn step_output(plan: &crate::exec::execution_plan::ExecutionPlan, step: usize, port: &str) -> ResourceId {
+    fn step_output(
+        plan: &crate::exec::execution_plan::ExecutionPlan,
+        step: usize,
+        port: &str,
+    ) -> ResourceId {
         plan.steps()[step]
             .outputs
             .iter()
@@ -781,9 +814,13 @@ mod tests {
         graph.connect((boundary, "out"), (body, "a")).unwrap();
         graph.connect((body, "out"), (boundary, "in")).unwrap();
         graph.connect((body, "out"), (stats, "a")).unwrap();
-        graph.connect((stats, "out"), (boundary, "stats_in")).unwrap();
+        graph
+            .connect((stats, "out"), (boundary, "stats_in"))
+            .unwrap();
         graph.connect((boundary, "out"), (consumer, "tex")).unwrap();
-        graph.connect((boundary, "stats"), (consumer, "aux")).unwrap();
+        graph
+            .connect((boundary, "stats"), (consumer, "aux"))
+            .unwrap();
 
         let plan = compile(&graph).unwrap();
         let region = &plan.substep_regions()[0];
@@ -857,13 +894,18 @@ mod tests {
         graph.connect((boundary, "out"), (body, "a")).unwrap();
         graph.connect((body, "out"), (boundary, "in")).unwrap();
         graph.connect((body, "out"), (optional_body, "a")).unwrap();
-        graph.connect((optional_body, "out"), (boundary, "optional_in")).unwrap();
+        graph
+            .connect((optional_body, "out"), (boundary, "optional_in"))
+            .unwrap();
         graph.connect((boundary, "out"), (consumer, "tex")).unwrap();
-        graph.connect((boundary, "optional_out"), (consumer, "aux")).unwrap();
+        graph
+            .connect((boundary, "optional_out"), (consumer, "aux"))
+            .unwrap();
 
         let plan = compile(&graph).expect("wired optional result remains legal");
         let region = &plan.substep_regions()[0];
-        let nodes: Vec<NodeInstanceId> = region.steps.iter().map(|&i| plan.steps()[i].node).collect();
+        let nodes: Vec<NodeInstanceId> =
+            region.steps.iter().map(|&i| plan.steps()[i].node).collect();
         assert_eq!(nodes, vec![boundary, body, optional_body]);
     }
 
@@ -894,11 +936,16 @@ mod tests {
         graph.connect((boundary, "out"), (body, "a")).unwrap();
         graph.connect((body, "out"), (boundary, "in")).unwrap();
         graph.connect((boundary, "out"), (consumer, "tex")).unwrap();
-        graph.connect((boundary, "whitewater_pool"), (consumer, "aux")).unwrap();
+        graph
+            .connect((boundary, "whitewater_pool"), (consumer, "aux"))
+            .unwrap();
 
         let (b, _, reason) = malformed_parts(compile(&graph).unwrap_err());
         assert_eq!(b, boundary);
-        assert!(reason.contains("optional result output `whitewater_pool`"), "{reason}");
+        assert!(
+            reason.contains("optional result output `whitewater_pool`"),
+            "{reason}"
+        );
         assert!(reason.contains("whitewater_pool_in"), "{reason}");
     }
 
@@ -1233,7 +1280,10 @@ mod tests {
     };
 
     /// The same region, opted into host syncs through its clock owner.
-    const SIM_CLOCK_PORTS: SubstepBoundaryPorts = SubstepBoundaryPorts { clock: Some("clock"), ..SIM_PORTS };
+    const SIM_CLOCK_PORTS: SubstepBoundaryPorts = SubstepBoundaryPorts {
+        clock: Some("clock"),
+        ..SIM_PORTS
+    };
 
     fn scalar_in(ctx: &EffectNodeContext<'_, '_>, port: &str) -> Option<f32> {
         match ctx.inputs.scalar(port) {
@@ -1294,7 +1344,12 @@ mod tests {
         }
         fn take_substep_restart_request(&mut self) -> bool {
             let mut count = self.count.lock().unwrap();
-            if *count == u32::MAX { *count = 0; true } else { false }
+            if *count == u32::MAX {
+                *count = 0;
+                true
+            } else {
+                false
+            }
         }
         fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
             crate::scene::depth_rule::DepthRule::Terminal
@@ -1318,7 +1373,8 @@ mod tests {
                 self.accepted = scalar_in(ctx, "seed").unwrap_or(0.0);
             }
             self.pending = *self.count.lock().unwrap();
-            ctx.outputs.set_scalar("out", ParamValue::Float(self.accepted));
+            ctx.outputs
+                .set_scalar("out", ParamValue::Float(self.accepted));
         }
         fn state_capture_input_ports(&self) -> &[&str] {
             &["in"]
@@ -1342,7 +1398,10 @@ mod tests {
         }
         fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
             let candidate = scalar_in(ctx, "in").expect("capture slot bound");
-            self.log.lock().unwrap().push(format!("capture {candidate}"));
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("capture {candidate}"));
             self.accepted = candidate;
             ctx.outputs.set_scalar("out", ParamValue::Float(candidate));
         }
@@ -1482,7 +1541,11 @@ mod tests {
             let intervals = self.intervals?;
             intervals.get(iteration as usize).map(|&(start, end)| {
                 let mut output = SubstepClockOutput::single(
-                    "out", start, end, iteration, intervals.len() as u32,
+                    "out",
+                    start,
+                    end,
+                    iteration,
+                    intervals.len() as u32,
                 );
                 if self.stepped_for == Some(iteration) {
                     output.scalars = &self.stepped;
@@ -1525,13 +1588,22 @@ mod tests {
         clock_fixture_with_intervals(opted, fail_at, None)
     }
 
-    fn clock_fixture_with_intervals(opted: bool, fail_at: Option<u32>, intervals: Option<&'static [(Seconds, Seconds)]>) -> SimFixture {
+    fn clock_fixture_with_intervals(
+        opted: bool,
+        fail_at: Option<u32>,
+        intervals: Option<&'static [(Seconds, Seconds)]>,
+    ) -> SimFixture {
         clock_fixture_refreshing(opted, fail_at, intervals, false)
     }
 
     /// `refresh`: the clock re-publishes after its host step and the
     /// boundary replaces its scalars after the sync.
-    fn clock_fixture_refreshing(opted: bool, fail_at: Option<u32>, intervals: Option<&'static [(Seconds, Seconds)]>, refresh: bool) -> SimFixture {
+    fn clock_fixture_refreshing(
+        opted: bool,
+        fail_at: Option<u32>,
+        intervals: Option<&'static [(Seconds, Seconds)]>,
+        refresh: bool,
+    ) -> SimFixture {
         let sample_intervals = intervals.is_some();
         let log: Log = Arc::default();
         let count = Arc::new(Mutex::new(3));
@@ -1562,13 +1634,26 @@ mod tests {
         graph.connect((boundary, "out"), (add_dt, "a")).unwrap();
         graph.connect((boundary, "step_dt"), (add_dt, "b")).unwrap();
         graph.connect((add_dt, "out"), (add_index, "a")).unwrap();
-        graph.connect((boundary, "step_index"), (add_index, "b")).unwrap();
-        graph.connect((if sample_intervals { clock } else { aux }, "out"), (add_index, "c")).unwrap();
+        graph
+            .connect((boundary, "step_index"), (add_index, "b"))
+            .unwrap();
+        graph
+            .connect(
+                (if sample_intervals { clock } else { aux }, "out"),
+                (add_index, "c"),
+            )
+            .unwrap();
         graph.connect((add_index, "out"), (boundary, "in")).unwrap();
         graph.connect((boundary, "out"), (consumer, "a")).unwrap();
         let plan = compile(&graph).unwrap();
         assert_eq!(plan.substep_regions()[0].clock, opted.then_some(clock));
-        SimFixture { graph, plan, log, count, aux }
+        SimFixture {
+            graph,
+            plan,
+            log,
+            count,
+            aux,
+        }
     }
 
     fn sim_fixture() -> SimFixture {
@@ -1577,8 +1662,7 @@ mod tests {
         let mut graph = Graph::new();
         let src = graph.add_node(Box::new(Adder::constant("src", log.clone(), 1.0)));
         let aux = graph.add_node(Box::new(Adder::constant("aux", log.clone(), 0.0)));
-        let boundary =
-            graph.add_node(Box::new(SimBoundary::new(log.clone(), count.clone())));
+        let boundary = graph.add_node(Box::new(SimBoundary::new(log.clone(), count.clone())));
         let add_dt = graph.add_node(Box::new(Adder::new("add_dt", log.clone())));
         let add_index = graph.add_node(Box::new(Adder::new("add_index", log.clone())));
         let consumer = graph.add_node(Box::new(Adder::root("consumer", log.clone())));
@@ -1586,7 +1670,9 @@ mod tests {
         graph.connect((boundary, "out"), (add_dt, "a")).unwrap();
         graph.connect((boundary, "step_dt"), (add_dt, "b")).unwrap();
         graph.connect((add_dt, "out"), (add_index, "a")).unwrap();
-        graph.connect((boundary, "step_index"), (add_index, "b")).unwrap();
+        graph
+            .connect((boundary, "step_index"), (add_index, "b"))
+            .unwrap();
         graph.connect((aux, "out"), (add_index, "c")).unwrap();
         graph.connect((add_index, "out"), (boundary, "in")).unwrap();
         graph.connect((boundary, "out"), (consumer, "a")).unwrap();
@@ -1622,7 +1708,10 @@ mod tests {
         let mut fx = clock_fixture(true);
         let mut exec = Executor::with_mock();
         let log = run_frame(&mut fx, &mut exec, u32::MAX);
-        assert_eq!(log.iter().filter(|s| s.as_str() == "restart clock").count(), 1);
+        assert_eq!(
+            log.iter().filter(|s| s.as_str() == "restart clock").count(),
+            1
+        );
         assert!(!log.iter().any(|s| s.starts_with("capture ")));
         let log = run_frame(&mut fx, &mut exec, 1);
         assert!(!log.iter().any(|s| s == "restart clock"));
@@ -1698,8 +1787,7 @@ mod tests {
             let log = run_frame(&mut fx, &mut exec, 4);
             // An outside input read inside the body stays bound for every
             // iteration: a mid-region free would unbind it (`c=none`).
-            let reads: Vec<&String> =
-                log.iter().filter(|e| e.starts_with("add_index")).collect();
+            let reads: Vec<&String> = log.iter().filter(|e| e.starts_with("add_index")).collect();
             assert_eq!(reads.len(), 4);
             assert!(reads.iter().all(|e| e.ends_with("c=0")), "{reads:?}");
             // Released once the region ends.
@@ -1745,8 +1833,9 @@ mod tests {
         );
         let log = fx.log.lock().unwrap().clone();
         assert!(
-            log.iter()
-                .all(|e| !e.starts_with("boundary") && !e.starts_with("add_") && !e.starts_with("capture")),
+            log.iter().all(|e| !e.starts_with("boundary")
+                && !e.starts_with("add_")
+                && !e.starts_with("capture")),
             "{log:?}"
         );
         // The live state is untouched by the sample.
@@ -1759,7 +1848,9 @@ mod tests {
     fn region_events(log: &[String]) -> Vec<&str> {
         log.iter()
             .map(String::as_str)
-            .filter(|e| e.starts_with("capture") || e.starts_with("host") || e.starts_with("add_index"))
+            .filter(|e| {
+                e.starts_with("capture") || e.starts_with("host") || e.starts_with("add_index")
+            })
             .collect()
     }
 
@@ -1791,11 +1882,19 @@ mod tests {
         let mut exec = Executor::with_mock();
         let log = run_frame(&mut fx, &mut exec, 3);
         assert_eq!(log.last().unwrap(), "consumer a=9.5 b=0 c=none");
-        assert_eq!(region_events(&log), vec![
-            "add_index a=1.75 b=0 c=0.75", "capture 2.5", "host 1",
-            "add_index a=3.5 b=1 c=1", "capture 5.5", "host 2",
-            "add_index a=6.5 b=2 c=1", "capture 9.5",
-        ]);
+        assert_eq!(
+            region_events(&log),
+            vec![
+                "add_index a=1.75 b=0 c=0.75",
+                "capture 2.5",
+                "host 1",
+                "add_index a=3.5 b=1 c=1",
+                "capture 5.5",
+                "host 2",
+                "add_index a=6.5 b=2 c=1",
+                "capture 9.5",
+            ]
+        );
     }
 
     /// What a host sync finished feeds the next iteration: the clock owner's
@@ -1809,13 +1908,22 @@ mod tests {
         let events: Vec<&str> = log
             .iter()
             .map(String::as_str)
-            .filter(|e| e.starts_with("host") || e.starts_with("synced") || e.starts_with("add_index"))
+            .filter(|e| {
+                e.starts_with("host") || e.starts_with("synced") || e.starts_with("add_index")
+            })
             .collect();
-        assert_eq!(events, vec![
-            "add_index a=1.75 b=0 c=0.75",
-            "host 1", "synced 1", "add_index a=3.5 b=101 c=1001",
-            "host 2", "synced 2", "add_index a=1106.5 b=102 c=1002",
-        ]);
+        assert_eq!(
+            events,
+            vec![
+                "add_index a=1.75 b=0 c=0.75",
+                "host 1",
+                "synced 1",
+                "add_index a=3.5 b=101 c=1001",
+                "host 2",
+                "synced 2",
+                "add_index a=1106.5 b=102 c=1002",
+            ]
+        );
     }
 
     /// A boundary that has not opted in never commits or waits mid-region,
@@ -1835,8 +1943,14 @@ mod tests {
         let mut fx = clock_fixture_with_failure(true, Some(1));
         let mut exec = Executor::with_mock();
         let log = run_frame(&mut fx, &mut exec, 3);
-        assert_eq!(region_events(&log), vec!["add_index a=1.5 b=0 c=0", "capture 1.5", "host 1"]);
-        assert!(!log.iter().any(|entry| entry.starts_with("consumer")), "{log:?}");
+        assert_eq!(
+            region_events(&log),
+            vec!["add_index a=1.5 b=0 c=0", "capture 1.5", "host 1"]
+        );
+        assert!(
+            !log.iter().any(|entry| entry.starts_with("consumer")),
+            "{log:?}"
+        );
         assert_eq!(exec.substep_host_syncs(), 1);
     }
 
@@ -1865,8 +1979,8 @@ mod tests {
 
     #[test]
     fn substeps_freeze_never_fuses_across_border() {
-        use crate::persistence::PrimitiveRegistry;
         use crate::freeze::region::partition_regions;
+        use crate::persistence::PrimitiveRegistry;
         use crate::testkit::substep_nodes::register_substep_test_nodes;
 
         let mut registry = PrimitiveRegistry::with_builtin();
@@ -1904,7 +2018,11 @@ mod tests {
             }))
             .unwrap();
         let regions = partition_regions(&def, &registry);
-        let region_of = |id: u32| regions.iter().position(|r| r.members.iter().any(|m| m.doc_id == id));
+        let region_of = |id: u32| {
+            regions
+                .iter()
+                .position(|r| r.members.iter().any(|m| m.doc_id == id))
+        };
         // The body pair fuses; the outside atom never joins it.
         assert!(region_of(3).is_some(), "the body pair should fuse");
         assert_eq!(region_of(3), region_of(4));
@@ -1937,6 +2055,9 @@ mod tests {
         let fused_together = regions.iter().any(|r| {
             r.members.iter().any(|m| m.doc_id == 3) && r.members.iter().any(|m| m.doc_id == 5)
         });
-        assert!(fused_together, "control: the force atom and mover should fuse");
+        assert!(
+            fused_together,
+            "control: the force atom and mover should fuse"
+        );
     }
 }

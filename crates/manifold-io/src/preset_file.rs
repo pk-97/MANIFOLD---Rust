@@ -98,7 +98,7 @@ mod tests {
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
-                    layer_types: None,
+                layer_types: None,
                 params: vec![ParamSpecDef {
                     tooltip: None,
                     id: "speed".to_string(),
@@ -155,7 +155,10 @@ mod tests {
         let back = deserialize_preset(&json).expect("deserialize");
         // The whole point of the file: calibration survives a share.
         let meta = back.preset_metadata.as_ref().expect("metadata survives");
-        assert_eq!(meta.params[0].max, 10.0, "widened range survives export/import");
+        assert_eq!(
+            meta.params[0].max, 10.0,
+            "widened range survives export/import"
+        );
         assert_eq!(meta.bindings[0].scale, 2.0, "binding scale survives");
         assert_eq!(back.name.as_deref(), Some("My Oily Fluid"));
         // Re-serializing the imported def reproduces the same JSON.
@@ -166,8 +169,10 @@ mod tests {
     #[test]
     fn export_to_disk_then_import_reinstalls_into_a_project() {
         let def = sample_def();
-        let path = std::env::temp_dir()
-            .join(format!("manifold-preset-{}.manifoldpreset", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "manifold-preset-{}.manifoldpreset",
+            std::process::id()
+        ));
         export_preset(&def, &path).expect("export to disk");
         let imported = import_preset(&path).expect("import from disk");
 

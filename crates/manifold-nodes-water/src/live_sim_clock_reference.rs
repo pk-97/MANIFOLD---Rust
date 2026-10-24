@@ -8,10 +8,8 @@
 //! consumes all remaining frame time when more stability work is owed.
 //! See THIRD_PARTY_NOTICES.md and docs/LIVE_SIM_CLOCK_DESIGN.md.
 
-use manifold_physics::stepping::{
-    LiveStepError, LiveStepOutcome, LiveStepSchedule,
-};
 use manifold_physics::Seconds;
+use manifold_physics::stepping::{LiveStepError, LiveStepOutcome, LiveStepSchedule};
 
 const TICK: f64 = 1.0 / 60.0;
 
@@ -130,7 +128,10 @@ impl Step {
                 let planned_outcome = schedule_outcome.value.next(cfl_outcome.value);
                 diagnostic = diagnostic.or(planned_outcome.diagnostic);
                 let Some(planned) = planned_outcome.value else {
-                    return LiveStepOutcome { value: numerical_steps, diagnostic };
+                    return LiveStepOutcome {
+                        value: numerical_steps,
+                        diagnostic,
+                    };
                 };
                 pending_end = planned.interval.end;
                 capped = planned.hit_cap;
@@ -145,9 +146,11 @@ impl Step {
             {
                 hit_index += 1;
             }
-            let end = hits.get(hit_index)
+            let end = hits
+                .get(hit_index)
                 .filter(|hit| hit.0 > at.0 && hit.0 < pending_end.0)
-                .copied().unwrap_or(pending_end);
+                .copied()
+                .unwrap_or(pending_end);
             visit(Action::Integrate(Step { start: at, end }));
             at = end;
             if at.0 == pending_end.0 {
@@ -528,7 +531,14 @@ fn live_sim_clock_pause_seek_speed_reset_match_today() {
             setup_changed,
             ..input(time, 3)
         });
-        let old = current.advance(manifold_physics::PlayedTime::from_played(time), TICK, speed as f32, reset, setup_changed, false);
+        let old = current.advance(
+            manifold_physics::PlayedTime::from_played(time),
+            TICK,
+            speed as f32,
+            reset,
+            setup_changed,
+            false,
+        );
         assert_eq!(
             (out.epoch, out.restarted, out.held),
             (old.epoch, old.restarted, old.held)
@@ -541,7 +551,14 @@ fn live_sim_clock_pause_seek_speed_reset_match_today() {
     reference.restart();
     current.restart();
     let out = reference.advance(input(5.0 * TICK, 3));
-    let old = current.advance(manifold_physics::PlayedTime::from_played(5.0 * TICK), TICK, 1.0, 0.0, false, false);
+    let old = current.advance(
+        manifold_physics::PlayedTime::from_played(5.0 * TICK),
+        TICK,
+        1.0,
+        0.0,
+        false,
+        false,
+    );
     assert_eq!(
         (out.epoch, out.restarted, out.simulation.0),
         (old.epoch, old.restarted, old.simulation_time)

@@ -14,8 +14,8 @@
 //! Other settings extend the family — fewer octaves for cheaper
 //! computation, larger lacunarity for sparser cells, etc.
 
-use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
+use std::borrow::Cow;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
@@ -233,4 +233,3 @@ mod tests {
         }
     }
 }
-

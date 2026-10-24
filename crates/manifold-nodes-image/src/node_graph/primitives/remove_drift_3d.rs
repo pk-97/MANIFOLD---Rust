@@ -20,9 +20,9 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::particles::Particle;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::Particle;
 use manifold_node_engine::primitive::Primitive;
 
 /// Workgroups in the partial pass = entries in the partials scratch.
@@ -107,7 +107,10 @@ impl Primitive for RemoveDrift3D {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let active_count = ctx.scalar_or_param("active_count", 100_000.0).round().max(0.0) as u32;
+        let active_count = ctx
+            .scalar_or_param("active_count", 100_000.0)
+            .round()
+            .max(0.0) as u32;
         let amount = ctx.scalar_or_param("amount", 1.0).clamp(0.0, 1.0);
 
         let Some(in_forces) = ctx.inputs.array("in") else {
@@ -268,11 +271,30 @@ mod gpu_tests {
             _pad0: 0,
         };
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: &in_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &p_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &partials, offset: 0 },
-            GpuBinding::Buffer { binding: 4, buffer: &out_buf, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &in_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &p_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &partials,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: &out_buf,
+                offset: 0,
+            },
         ];
 
         let mut enc = device.create_encoder("rd-oracle");

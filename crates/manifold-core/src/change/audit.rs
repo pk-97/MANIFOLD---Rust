@@ -7,7 +7,7 @@
 //! `Layer` are destructured without `..`, so a new field does not compile
 //! until it is given a part.
 
-use super::{Part, PART_COUNT};
+use super::{PART_COUNT, Part};
 use crate::effects::PresetInstance;
 use crate::layer::Layer;
 use crate::project::Project;
@@ -36,8 +36,12 @@ pub enum TickSlot {
 }
 const TICK_SLOT_COUNT: usize = 4;
 impl TickSlot {
-    pub const ALL: [TickSlot; TICK_SLOT_COUNT] =
-        [TickSlot::Bpm, TickSlot::ClockAuthority, TickSlot::TempoMap, TickSlot::RecordingProvenance];
+    pub const ALL: [TickSlot; TICK_SLOT_COUNT] = [
+        TickSlot::Bpm,
+        TickSlot::ClockAuthority,
+        TickSlot::TempoMap,
+        TickSlot::RecordingProvenance,
+    ];
 }
 
 struct Fp {
@@ -98,13 +102,32 @@ pub fn fingerprint(project: &Project) -> Fingerprint {
     fp.put(Part::EmbeddedPresets, embedded_presets);
     fp.put(Part::Session, session);
 
-    let crate::audio_setup::AudioSetup { device, sends, low_hz, mid_hz, .. } = audio_setup;
+    let crate::audio_setup::AudioSetup {
+        device,
+        sends,
+        low_hz,
+        mid_hz,
+        ..
+    } = audio_setup;
     fp.put(Part::AudioSetup, device);
     fp.put(Part::Shapes, low_hz);
     fp.put(Part::Shapes, mid_hz);
     for send in sends {
-        let crate::audio_setup::AudioSend { id, label, channels, gain_db, floor_db, analysis, triggers, source, .. } = send;
-        fp.put(Part::AudioSetup, &(id, label, channels, floor_db, analysis, triggers, source));
+        let crate::audio_setup::AudioSend {
+            id,
+            label,
+            channels,
+            gain_db,
+            floor_db,
+            analysis,
+            triggers,
+            source,
+            ..
+        } = send;
+        fp.put(
+            Part::AudioSetup,
+            &(id, label, channels, floor_db, analysis, triggers, source),
+        );
         fp.put(Part::Shapes, gain_db);
     }
 
@@ -123,7 +146,15 @@ pub fn fingerprint(project: &Project) -> Fingerprint {
     } = timeline;
     unowned(&(clip_lookup, clip_lookup_dirty, layer_id_to_index));
     fp.put(Part::Layers, name);
-    fp.put(Part::Markers, &(export_in_beat, export_out_beat, export_range_enabled, markers));
+    fp.put(
+        Part::Markers,
+        &(
+            export_in_beat,
+            export_out_beat,
+            export_range_enabled,
+            markers,
+        ),
+    );
     for layer in layers {
         layer_fp(&mut fp, layer);
     }
@@ -186,25 +217,70 @@ fn settings_fp(fp: &mut Fp, settings: &crate::settings::ProjectSettings) {
         audio_triggers_collapsed,
     } = settings;
     fp.put(Part::Settings, physics);
-    fp.put(Part::Settings, &(output_width, output_height, frame_rate, vsync_enabled, export_hdr, split_at_markers, export_gizmos));
+    fp.put(
+        Part::Settings,
+        &(
+            output_width,
+            output_height,
+            frame_rate,
+            vsync_enabled,
+            export_hdr,
+            split_at_markers,
+            export_gizmos,
+        ),
+    );
     fp.put(Part::Media, &(video_library_paths, video_player_pool_size));
-    fp.put(Part::Settings, &(max_layers, default_recording_layer, time_signature_numerator, time_signature_denominator));
+    fp.put(
+        Part::Settings,
+        &(
+            max_layers,
+            default_recording_layer,
+            time_signature_numerator,
+            time_signature_denominator,
+        ),
+    );
     fp.tick(TickSlot::Bpm, bpm);
-    fp.put(Part::Settings, &(quantize_mode, resolution_preset, render_scale, tonemap_curve, tonemap_enabled));
+    fp.put(
+        Part::Settings,
+        &(
+            quantize_mode,
+            resolution_preset,
+            render_scale,
+            tonemap_curve,
+            tonemap_enabled,
+        ),
+    );
     fp.put(Part::Led, &(stage_layout, led_exit_index, led_enabled));
     fp.put(Part::Values, &(master_opacity, led_brightness, led_gain));
     for fx in master_effects {
         instance_fp(fp, fx);
     }
     fp.put(Part::Effects, master_effect_groups);
-    fp.put(Part::Settings, &(midi_clock_source_name, osc_send_port, osc_sync_mode, rt_quality));
+    fp.put(
+        Part::Settings,
+        &(
+            midi_clock_source_name,
+            osc_send_port,
+            osc_sync_mode,
+            rt_quality,
+        ),
+    );
     fp.tick(TickSlot::ClockAuthority, clock_authority);
     for slot in &macro_bank.slots {
-        let crate::macro_bank::MacroSlot { value, label, mappings, ableton_mapping, .. } = slot;
+        let crate::macro_bank::MacroSlot {
+            value,
+            label,
+            mappings,
+            ableton_mapping,
+            ..
+        } = slot;
         fp.put(Part::Values, value);
         fp.put(Part::Effects, label);
         for m in mappings {
-            fp.put(Part::Effects, &(&m.target, &m.legacy_param_index, &m.legacy_effect_addr));
+            fp.put(
+                Part::Effects,
+                &(&m.target, &m.legacy_param_index, &m.legacy_effect_addr),
+            );
             fp.put(Part::Shapes, &(m.range_min, m.range_max, &m.curve));
         }
         if let Some(m) = ableton_mapping {
@@ -212,9 +288,33 @@ fn settings_fp(fp: &mut Fp, settings: &crate::settings::ProjectSettings) {
         }
     }
     fp.put(Part::Mappings, ableton_set_context);
-    fp.put(Part::ViewPrefs, &(inspector_width, timeline_height_percent, effect_browser_width, effect_browser_open));
-    fp.put(Part::ViewPrefs, &(viewport_scroll_x_beats, viewport_scroll_y_px, viewport_pixels_per_beat));
-    fp.put(Part::ViewPrefs, &(macros_collapsed, master_chrome_collapsed, layer_chrome_collapsed, clip_chrome_collapsed, audio_triggers_collapsed));
+    fp.put(
+        Part::ViewPrefs,
+        &(
+            inspector_width,
+            timeline_height_percent,
+            effect_browser_width,
+            effect_browser_open,
+        ),
+    );
+    fp.put(
+        Part::ViewPrefs,
+        &(
+            viewport_scroll_x_beats,
+            viewport_scroll_y_px,
+            viewport_pixels_per_beat,
+        ),
+    );
+    fp.put(
+        Part::ViewPrefs,
+        &(
+            macros_collapsed,
+            master_chrome_collapsed,
+            layer_chrome_collapsed,
+            clip_chrome_collapsed,
+            audio_triggers_collapsed,
+        ),
+    );
 }
 
 fn layer_fp(fp: &mut Fp, layer: &Layer) {
@@ -253,9 +353,29 @@ fn layer_fp(fp: &mut Fp, layer: &Layer) {
         clips_by_end_sorted,
     } = layer;
     unowned(&(clips_sorted, clips_by_end_indices, clips_by_end_sorted));
-    fp.put(Part::Layers, &(layer_id, index, name, layer_type, parent_layer_id, is_collapsed));
+    fp.put(
+        Part::Layers,
+        &(
+            layer_id,
+            index,
+            name,
+            layer_type,
+            parent_layer_id,
+            is_collapsed,
+        ),
+    );
     fp.put(Part::Clips, clips);
-    fp.put(Part::Layers, &(is_solo, is_muted, blit_to_led, default_blend_mode, layer_color, analysis_only));
+    fp.put(
+        Part::Layers,
+        &(
+            is_solo,
+            is_muted,
+            blit_to_led,
+            default_blend_mode,
+            layer_color,
+            analysis_only,
+        ),
+    );
     fp.put(Part::Values, opacity);
     fp.put(Part::Shapes, audio_gain_db);
     fp.put(Part::Layers, &(detect_group_source, detect_stem_role));
@@ -266,38 +386,93 @@ fn layer_fp(fp: &mut Fp, layer: &Layer) {
     if let Some(gp) = gen_params {
         instance_fp(fp, gp);
     }
-    fp.put(Part::Layers, &(video_folder_path, relative_video_folder_path));
-    fp.put(Part::Layers, &(midi_note, midi_channel, midi_device, midi_trigger_mode, duration_mode, source_clip_ids));
+    fp.put(
+        Part::Layers,
+        &(video_folder_path, relative_video_folder_path),
+    );
+    fp.put(
+        Part::Layers,
+        &(
+            midi_note,
+            midi_channel,
+            midi_device,
+            midi_trigger_mode,
+            duration_mode,
+            source_clip_ids,
+        ),
+    );
     for trigger in clip_triggers {
-        let crate::audio_trigger::LayerClipTrigger { enabled, source, shape, one_shot_beats } = trigger;
+        let crate::audio_trigger::LayerClipTrigger {
+            enabled,
+            source,
+            shape,
+            one_shot_beats,
+        } = trigger;
         fp.put(Part::Effects, &(enabled, source, one_shot_beats));
         fp.put(Part::Shapes, shape);
     }
 }
 
 fn mapping_fp(fp: &mut Fp, m: &crate::ableton_mapping::AbletonParamMapping) {
-    fp.put(Part::Mappings, &(&m.param_id, &m.address, m.inverted, &m.legacy_param_index, &m.status));
+    fp.put(
+        Part::Mappings,
+        &(
+            &m.param_id,
+            &m.address,
+            m.inverted,
+            &m.legacy_param_index,
+            &m.status,
+        ),
+    );
     fp.put(Part::MappingRanges, &(m.range_min, m.range_max));
     fp.put(Part::Values, &m.last_value);
 }
 
 fn instance_fp(fp: &mut Fp, inst: &PresetInstance) {
-    fp.put(Part::Effects, &(&inst.kind, &inst.id, inst.effect_type(), inst.enabled, inst.collapsed, &inst.folded_sections, &inst.unfolded_sections));
+    fp.put(
+        Part::Effects,
+        &(
+            &inst.kind,
+            &inst.id,
+            inst.effect_type(),
+            inst.enabled,
+            inst.collapsed,
+            &inst.folded_sections,
+            &inst.unfolded_sections,
+        ),
+    );
     // First base write latches base tracking; it rides with the values it tracks.
     fp.put(Part::Values, &inst.base_tracked);
     for p in inst.params.iter() {
         let mut structural = p.spec.clone();
         // Mapping reshape (range, curve, invert) is a live scalar.
-        fp.put(Part::Shapes, &(structural.min, structural.max, &structural.curve, structural.invert, p.choices.slider, &p.choices.curve, p.choices.invert));
+        fp.put(
+            Part::Shapes,
+            &(
+                structural.min,
+                structural.max,
+                &structural.curve,
+                structural.invert,
+                p.choices.slider,
+                &p.choices.curve,
+                p.choices.invert,
+            ),
+        );
         // The label and the committed choices that decide labels or which rows
         // exist and where are discrete, never dragged; the live Shapes push
         // writes no labels (UI_INVALIDATION D22), so they rebuild through Effects.
-        fp.put(Part::Effects, &(&p.choices.rename, &p.choices.section, &p.choices.pin));
+        fp.put(
+            Part::Effects,
+            &(&p.choices.rename, &p.choices.section, &p.choices.pin),
+        );
         structural.min = 0.0;
         structural.max = 0.0;
         structural.curve = Default::default();
         structural.invert = false;
-        fp.put(Part::Effects, &(structural, &p.origin, p.exposed, &p.clip_trigger_source));
+        fp.put(
+            Part::Effects,
+            &(structural, &p.origin, p.exposed, &p.clip_trigger_source),
+        );
         // A runtime cache the tick re-derives from Clips and Effects.
         unowned(&p.clip_control_digest);
         fp.put(Part::Values, &(p.value, p.base, p.touched));
@@ -320,7 +495,16 @@ fn instance_fp(fp: &mut Fp, inst: &PresetInstance) {
         mapping_fp(fp, m);
     }
     for m in inst.audio_mods.iter().flatten() {
-        fp.put(Part::Effects, &(&m.param_id, m.enabled, &m.source, m.trigger_mode, action_rows(m.action)));
+        fp.put(
+            Part::Effects,
+            &(
+                &m.param_id,
+                m.enabled,
+                &m.source,
+                m.trigger_mode,
+                action_rows(m.action),
+            ),
+        );
         fp.put(Part::Shapes, &(&m.shape, m.action));
         fp.put(Part::Values, &m.smoothed);
     }
@@ -339,7 +523,10 @@ fn instance_fp(fp: &mut Fp, inst: &PresetInstance) {
         // is membership and stays with the graph contents.
         if let Some(meta) = structural.preset_metadata.as_mut() {
             for spec in &mut meta.params {
-                fp.put(Part::Shapes, &(&spec.id, spec.min, spec.max, &spec.curve, spec.invert));
+                fp.put(
+                    Part::Shapes,
+                    &(&spec.id, spec.min, spec.max, &spec.curve, spec.invert),
+                );
                 spec.min = 0.0;
                 spec.max = 0.0;
                 spec.curve = Default::default();
@@ -361,7 +548,9 @@ fn instance_fp(fp: &mut Fp, inst: &PresetInstance) {
 
 /// The part of a fire action that decides which drawer rows exist and which
 /// segment is lit: its kind and wrap mode. The step amount is a live scalar.
-fn action_rows(action: crate::audio_mod::TriggerAction) -> (u8, Option<crate::audio_mod::WrapMode>) {
+fn action_rows(
+    action: crate::audio_mod::TriggerAction,
+) -> (u8, Option<crate::audio_mod::WrapMode>) {
     use crate::audio_mod::TriggerAction;
     match action {
         TriggerAction::Continuous => (0, None),
@@ -393,14 +582,21 @@ pub fn changed(before: &Fingerprint, after: &Fingerprint) -> super::ChangeSet {
 }
 
 /// The tick-written Settings fields whose fingerprint differs.
-pub fn tick_slots_changed<'a>(before: &'a Fingerprint, after: &'a Fingerprint) -> impl Iterator<Item = TickSlot> + 'a {
-    TickSlot::ALL.into_iter().filter(move |s| before.tick[*s as usize] != after.tick[*s as usize])
+pub fn tick_slots_changed<'a>(
+    before: &'a Fingerprint,
+    after: &'a Fingerprint,
+) -> impl Iterator<Item = TickSlot> + 'a {
+    TickSlot::ALL
+        .into_iter()
+        .filter(move |s| before.tick[*s as usize] != after.tick[*s as usize])
 }
 
 /// The parts that changed, not counting the tick-written Settings fields.
 pub fn changed_outside_tick_slots(before: &Fingerprint, after: &Fingerprint) -> super::ChangeSet {
-    let mut parts: Vec<Part> =
-        Part::ALL.into_iter().filter(|p| before.parts[*p as usize] != after.parts[*p as usize]).collect();
+    let mut parts: Vec<Part> = Part::ALL
+        .into_iter()
+        .filter(|p| before.parts[*p as usize] != after.parts[*p as usize])
+        .collect();
     let presence_moved = parts.contains(&Part::Overrides);
     if before.graphs != after.graphs && !presence_moved {
         parts.push(Part::Effects);

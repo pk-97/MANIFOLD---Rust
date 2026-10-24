@@ -25,8 +25,9 @@ use manifold_core::project::Project;
 use manifold_core::scene_doc::ItemKind;
 use manifold_core::{LayerId, NodeId, PresetTypeId};
 use manifold_nodes_scene::node_graph::scene_vm::{
-    BodyAnchor, CopiesAnchor, ParamAddr, RuntimeFit, SceneStructure, SceneVm, SetupProblem, body_anchors, body_problems, card_param, copies_anchors,
-    copies_problems, problems_with_runtime,
+    BodyAnchor, CopiesAnchor, ParamAddr, RuntimeFit, SceneStructure, SceneVm, SetupProblem,
+    body_anchors, body_problems, card_param, copies_anchors, copies_problems,
+    problems_with_runtime,
 };
 use manifold_ui::param_surface::{ParamRow, ParamSurface};
 
@@ -78,12 +79,26 @@ pub(crate) struct SetupFitObservations {
 
 impl Default for SetupFitObservations {
     fn default() -> Self {
-        Self { domains: Vec::new(), not_made: Vec::new(), refused: Vec::new(), scratch: Vec::new(), latched_layers: Vec::new(), edits: None, report: Arc::from([]) }
+        Self {
+            domains: Vec::new(),
+            not_made: Vec::new(),
+            refused: Vec::new(),
+            scratch: Vec::new(),
+            latched_layers: Vec::new(),
+            edits: None,
+            report: Arc::from([]),
+        }
     }
 }
 
 /// What can release a latch: an edit to a layer's cards, graph or manifest.
-const LATCH_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Effects, Part::Overrides, Part::EmbeddedPresets, Part::Values]);
+const LATCH_PARTS: ChangeSet = ChangeSet::of(&[
+    Part::Layers,
+    Part::Effects,
+    Part::Overrides,
+    Part::EmbeddedPresets,
+    Part::Values,
+]);
 
 /// A layer holding latched warnings, followed frame by frame so an authored
 /// edit is told apart from automation. Allocated when it latches.
@@ -99,12 +114,26 @@ struct LatchedLayer {
 
 impl LatchedLayer {
     fn graph(layer: &Layer) -> (u32, u32, PresetTypeId) {
-        (layer.generator_graph_version(), layer.generator_graph_structure_version(), layer.generator_type().clone())
+        (
+            layer.generator_graph_version(),
+            layer.generator_graph_structure_version(),
+            layer.generator_type().clone(),
+        )
     }
 
     fn new(layer: &Layer) -> Self {
-        let values: Vec<f32> = layer.gen_params().map_or_else(Vec::new, |inst| inst.params.iter().map(|param| authored_value(inst, param)).collect());
-        Self { layer: layer.layer_id.clone(), graph: Self::graph(layer), playing: vec![false; values.len()], values }
+        let values: Vec<f32> = layer.gen_params().map_or_else(Vec::new, |inst| {
+            inst.params
+                .iter()
+                .map(|param| authored_value(inst, param))
+                .collect()
+        });
+        Self {
+            layer: layer.layer_id.clone(),
+            graph: Self::graph(layer),
+            playing: vec![false; values.len()],
+            values,
+        }
     }
 
     /// Follow this frame's card values. True when an authored edit changed the
@@ -112,14 +141,24 @@ impl LatchedLayer {
     /// card that is not playing.
     fn edited(&mut self, layer: &Layer, edit: bool) -> bool {
         let (version, structure, kind) = &self.graph;
-        if layer.generator_graph_version() != *version || layer.generator_graph_structure_version() != *structure || layer.generator_type() != kind {
+        if layer.generator_graph_version() != *version
+            || layer.generator_graph_structure_version() != *structure
+            || layer.generator_type() != kind
+        {
             return true;
         }
-        let Some(inst) = layer.gen_params() else { return true };
+        let Some(inst) = layer.gen_params() else {
+            return true;
+        };
         if inst.params.len() != self.values.len() {
             return true;
         }
-        for ((param, value), playing) in inst.params.iter().zip(&mut self.values).zip(&mut self.playing) {
+        for ((param, value), playing) in inst
+            .params
+            .iter()
+            .zip(&mut self.values)
+            .zip(&mut self.playing)
+        {
             let now = authored_value(inst, param);
             if now.to_bits() == value.to_bits() {
                 continue;
@@ -137,13 +176,21 @@ impl LatchedLayer {
 /// Hands each rendered layer's domain snapshots, its worlds' unmade copies
 /// and the bodies they left out to the callback, refilling the buffers it is
 /// given.
-pub(crate) type EachRenderedSetup<'a> =
-    &'a mut dyn FnMut(&LayerId, &[(NodeId, FluidDomainSnapshot)], &[(NodeId, u32)], &[(NodeId, BodyRefusalRow)]);
+pub(crate) type EachRenderedSetup<'a> = &'a mut dyn FnMut(
+    &LayerId,
+    &[(NodeId, FluidDomainSnapshot)],
+    &[(NodeId, u32)],
+    &[(NodeId, BodyRefusalRow)],
+);
 
 /// A card param's authored value, as `PresetInstance::get_base_param` reads
 /// it, from the param in hand rather than a lookup by id.
 fn authored_value(inst: &PresetInstance, param: &manifold_core::params::Param) -> f32 {
-    if inst.base_tracked { param.base } else { param.value }
+    if inst.base_tracked {
+        param.base
+    } else {
+        param.value
+    }
 }
 
 /// What one node reported this frame, folded into its latched entry.
@@ -203,54 +250,122 @@ impl SetupFitObservations {
         &mut self,
         project: Option<&Project>,
         stamps: PartStamps,
-        observe: impl FnOnce(&mut Vec<(NodeId, FluidDomainSnapshot)>, &mut Vec<(NodeId, u32)>, &mut Vec<(NodeId, BodyRefusalRow)>, EachRenderedSetup<'_>),
+        observe: impl FnOnce(
+            &mut Vec<(NodeId, FluidDomainSnapshot)>,
+            &mut Vec<(NodeId, u32)>,
+            &mut Vec<(NodeId, BodyRefusalRow)>,
+            EachRenderedSetup<'_>,
+        ),
     ) {
-        let find = |id: &LayerId| project.and_then(|p| p.timeline.find_layer_by_id(id)).map(|(_, layer)| layer);
+        let find = |id: &LayerId| {
+            project
+                .and_then(|p| p.timeline.find_layer_by_id(id))
+                .map(|(_, layer)| layer)
+        };
         let edits = stamps.key(LATCH_PARTS);
         let edit = self.edits.replace(edits).is_some_and(|last| last != edits);
         let before = self.scratch.len();
-        self.latched_layers.retain_mut(|latched| find(&latched.layer).is_some_and(|layer| !latched.edited(layer, edit)));
+        self.latched_layers.retain_mut(|latched| {
+            find(&latched.layer).is_some_and(|layer| !latched.edited(layer, edit))
+        });
         let latched_layers = &self.latched_layers;
-        self.scratch.retain(|entry| latched_layers.iter().any(|latched| latched.layer == entry.layer));
+        self.scratch.retain(|entry| {
+            latched_layers
+                .iter()
+                .any(|latched| latched.layer == entry.layer)
+        });
         let mut changed = self.scratch.len() != before;
         let (scratch, latched_layers) = (&mut self.scratch, &mut self.latched_layers);
-        observe(&mut self.domains, &mut self.not_made, &mut self.refused, &mut |layer, domains, not_made, refused| {
-            // A world's refusals arrive together.
-            let refused_by = |node: &NodeId| refused.chunk_by(|a, b| a.0 == b.0).find(|chunk| &chunk[0].0 == node).unwrap_or(&[]);
-            let domains = domains.iter().map(|(node, snapshot)| (node, Seen { fit: snapshot.fit, refusal: snapshot.refusal.as_ref(), copies_not_made: 0, uncoupled_bodies: snapshot.uncoupled_bodies, refused: &[] }));
-            let worlds = not_made.iter().map(|(node, count)| (node, Seen { fit: SetupFit::default(), refusal: None, copies_not_made: *count, uncoupled_bodies: 0, refused: refused_by(node) }));
-            let refusing = refused
-                .chunk_by(|a, b| a.0 == b.0)
-                .filter(|chunk| !not_made.iter().any(|(node, _)| *node == chunk[0].0))
-                .map(|chunk| (&chunk[0].0, Seen { fit: SetupFit::default(), refusal: None, copies_not_made: 0, uncoupled_bodies: 0, refused: chunk }));
-            for (node, seen) in domains.chain(worlds).chain(refusing) {
-                if seen.fit.is_clean() && seen.refusal.is_none() && seen.copies_not_made == 0 && seen.uncoupled_bodies == 0 && seen.refused.is_empty() {
-                    continue;
-                }
-                if !latched_layers.iter().any(|latched| &latched.layer == layer) {
-                    let Some(found) = find(layer) else { continue };
-                    latched_layers.push(LatchedLayer::new(found));
-                }
-                match scratch.iter_mut().find(|entry| &entry.layer == layer && &entry.node == node) {
-                    Some(entry) => changed |= seen.fold_into(entry),
-                    None => {
-                        scratch.push(SetupFitEntry {
-                            layer: layer.clone(),
-                            node: node.clone(),
-                            fit: seen.fit,
-                            refusal: seen.refusal.cloned(),
-                            copies_not_made: seen.copies_not_made,
-                            uncoupled_bodies: seen.uncoupled_bodies,
-                            refused: seen.refused.iter().map(|(_, row)| row.clone()).collect(),
-                        });
-                        changed = true;
+        observe(
+            &mut self.domains,
+            &mut self.not_made,
+            &mut self.refused,
+            &mut |layer, domains, not_made, refused| {
+                // A world's refusals arrive together.
+                let refused_by = |node: &NodeId| {
+                    refused
+                        .chunk_by(|a, b| a.0 == b.0)
+                        .find(|chunk| &chunk[0].0 == node)
+                        .unwrap_or(&[])
+                };
+                let domains = domains.iter().map(|(node, snapshot)| {
+                    (
+                        node,
+                        Seen {
+                            fit: snapshot.fit,
+                            refusal: snapshot.refusal.as_ref(),
+                            copies_not_made: 0,
+                            uncoupled_bodies: snapshot.uncoupled_bodies,
+                            refused: &[],
+                        },
+                    )
+                });
+                let worlds = not_made.iter().map(|(node, count)| {
+                    (
+                        node,
+                        Seen {
+                            fit: SetupFit::default(),
+                            refusal: None,
+                            copies_not_made: *count,
+                            uncoupled_bodies: 0,
+                            refused: refused_by(node),
+                        },
+                    )
+                });
+                let refusing = refused
+                    .chunk_by(|a, b| a.0 == b.0)
+                    .filter(|chunk| !not_made.iter().any(|(node, _)| *node == chunk[0].0))
+                    .map(|chunk| {
+                        (
+                            &chunk[0].0,
+                            Seen {
+                                fit: SetupFit::default(),
+                                refusal: None,
+                                copies_not_made: 0,
+                                uncoupled_bodies: 0,
+                                refused: chunk,
+                            },
+                        )
+                    });
+                for (node, seen) in domains.chain(worlds).chain(refusing) {
+                    if seen.fit.is_clean()
+                        && seen.refusal.is_none()
+                        && seen.copies_not_made == 0
+                        && seen.uncoupled_bodies == 0
+                        && seen.refused.is_empty()
+                    {
+                        continue;
+                    }
+                    if !latched_layers.iter().any(|latched| &latched.layer == layer) {
+                        let Some(found) = find(layer) else { continue };
+                        latched_layers.push(LatchedLayer::new(found));
+                    }
+                    match scratch
+                        .iter_mut()
+                        .find(|entry| &entry.layer == layer && &entry.node == node)
+                    {
+                        Some(entry) => changed |= seen.fold_into(entry),
+                        None => {
+                            scratch.push(SetupFitEntry {
+                                layer: layer.clone(),
+                                node: node.clone(),
+                                fit: seen.fit,
+                                refusal: seen.refusal.cloned(),
+                                copies_not_made: seen.copies_not_made,
+                                uncoupled_bodies: seen.uncoupled_bodies,
+                                refused: seen.refused.iter().map(|(_, row)| row.clone()).collect(),
+                            });
+                            changed = true;
+                        }
                     }
                 }
-            }
-        });
+            },
+        );
         if changed {
             // Layers arrive in hash order: sort, so the report reads the same each time.
-            self.scratch.sort_unstable_by(|a, b| (a.layer.as_str(), a.node.as_str()).cmp(&(b.layer.as_str(), b.node.as_str())));
+            self.scratch.sort_unstable_by(|a, b| {
+                (a.layer.as_str(), a.node.as_str()).cmp(&(b.layer.as_str(), b.node.as_str()))
+            });
             self.report = Arc::from(self.scratch.as_slice());
         }
     }
@@ -258,21 +373,30 @@ impl SetupFitObservations {
 
 /// `layer`'s entries in the report, as the check reads them. The cards draw
 /// no box, so no bounds ride along.
-pub(crate) fn runtime_fits<'a>(report: &'a [SetupFitEntry], layer: &'a LayerId) -> impl Iterator<Item = RuntimeFit<'a>> + 'a {
-    report.iter().filter(move |entry| &entry.layer == layer).map(|entry| RuntimeFit {
-        node: &entry.node,
-        fit: entry.fit,
-        refusal: entry.refusal.as_deref(),
-        layout: None,
-        column_box: None,
-        uncoupled_bodies: entry.uncoupled_bodies,
-        copies_not_made: entry.copies_not_made,
-    })
+pub(crate) fn runtime_fits<'a>(
+    report: &'a [SetupFitEntry],
+    layer: &'a LayerId,
+) -> impl Iterator<Item = RuntimeFit<'a>> + 'a {
+    report
+        .iter()
+        .filter(move |entry| &entry.layer == layer)
+        .map(|entry| RuntimeFit {
+            node: &entry.node,
+            fit: entry.fit,
+            refusal: entry.refusal.as_deref(),
+            layout: None,
+            column_box: None,
+            uncoupled_bodies: entry.uncoupled_bodies,
+            copies_not_made: entry.copies_not_made,
+        })
 }
 
 /// The problems of the graph `def`: what the copy pools of its Physics Worlds
 /// reported (`runtime`) as unmade copies.
-pub(crate) fn problems_of<'a>(def: &EffectGraphDef, runtime: impl IntoIterator<Item = RuntimeFit<'a>>) -> Vec<SetupProblem> {
+pub(crate) fn problems_of<'a>(
+    def: &EffectGraphDef,
+    runtime: impl IntoIterator<Item = RuntimeFit<'a>>,
+) -> Vec<SetupProblem> {
     let mut out = Vec::new();
     copies_problems(&copies_anchors(def), runtime, &mut out);
     out
@@ -280,10 +404,18 @@ pub(crate) fn problems_of<'a>(def: &EffectGraphDef, runtime: impl IntoIterator<I
 
 /// The first body `now` reports refused that `before` did not, as the toast
 /// says it: the item the world left out, by name, and why.
-pub(crate) fn new_refusal(before: &[SetupFitEntry], now: &[SetupFitEntry], project: &Project) -> Option<String> {
+pub(crate) fn new_refusal(
+    before: &[SetupFitEntry],
+    now: &[SetupFitEntry],
+    project: &Project,
+) -> Option<String> {
     now.iter().find_map(|entry| {
-        let held = before.iter().find(|old| old.layer == entry.layer && old.node == entry.node);
-        let row = entry.refused.iter().find(|row| held.is_none_or(|old| !old.refused.iter().any(|seen| seen.input == row.input)))?;
+        let held = before
+            .iter()
+            .find(|old| old.layer == entry.layer && old.node == entry.node);
+        let row = entry.refused.iter().find(|row| {
+            held.is_none_or(|old| !old.refused.iter().any(|seen| seen.input == row.input))
+        })?;
         let name = refused_item_name(project, entry, &row.input).unwrap_or("Physics");
         Some(format!("{name}: {}", row.reason))
     })
@@ -291,19 +423,34 @@ pub(crate) fn new_refusal(before: &[SetupFitEntry], now: &[SetupFitEntry], proje
 
 /// The scene item whose body is wired into world input `input` of `entry`'s
 /// world: the item named in the body node's id (`<item id>:<role>`).
-fn refused_item_name<'a>(project: &'a Project, entry: &SetupFitEntry, input: &str) -> Option<&'a str> {
+fn refused_item_name<'a>(
+    project: &'a Project,
+    entry: &SetupFitEntry,
+    input: &str,
+) -> Option<&'a str> {
     let (_, layer) = project.timeline.find_layer_by_id(entry.layer.as_str())?;
     let owner = with_layer_def(layer, |def| {
-        let anchor = body_anchors(def).into_iter().find(|anchor| anchor.world == entry.node)?;
+        let anchor = body_anchors(def)
+            .into_iter()
+            .find(|anchor| anchor.world == entry.node)?;
         let &(_, body) = anchor.inputs.iter().find(|(port, _)| port == input)?;
         let node = find_node_by_scope(def, &anchor.scope_path, body)?;
-        node.node_id.as_str().rsplit_once(':').map(|(owner, _)| manifold_core::scene_doc::ItemId::new(owner))
+        node.node_id
+            .as_str()
+            .rsplit_once(':')
+            .map(|(owner, _)| manifold_core::scene_doc::ItemId::new(owner))
     })??;
-    project.scene_of(&entry.layer)?.find(&owner).map(|item| item.name.as_str())
+    project
+        .scene_of(&entry.layer)?
+        .find(&owner)
+        .map(|item| item.name.as_str())
 }
 
 /// `layer`'s refused bodies in the report: (world, refusal).
-pub(crate) fn refused_bodies<'a>(report: &'a [SetupFitEntry], layer: &'a LayerId) -> impl Iterator<Item = (&'a NodeId, &'a BodyRefusalRow)> + 'a {
+pub(crate) fn refused_bodies<'a>(
+    report: &'a [SetupFitEntry],
+    layer: &'a LayerId,
+) -> impl Iterator<Item = (&'a NodeId, &'a BodyRefusalRow)> + 'a {
     report
         .iter()
         .filter(move |entry| &entry.layer == layer)
@@ -314,16 +461,26 @@ pub(crate) fn refused_bodies<'a>(report: &'a [SetupFitEntry], layer: &'a LayerId
 fn with_layer_def<R>(layer: &Layer, f: impl FnOnce(&EffectGraphDef) -> R) -> Option<R> {
     match layer.generator_graph() {
         Some(def) => Some(f(def)),
-        None => manifold_nodes::bundled_presets::bundled_preset_def(layer.generator_type()).map(|def| f(&def)),
+        None => manifold_nodes::bundled_presets::bundled_preset_def(layer.generator_type())
+            .map(|def| f(&def)),
     }
 }
 
 /// The graph node with doc id `node_doc_id` at `scope_path`, a path of group
 /// doc ids to descend into (empty is the document root).
-fn find_node_by_scope<'a>(def: &'a EffectGraphDef, scope_path: &[u32], node_doc_id: u32) -> Option<&'a manifold_core::effect_graph_def::EffectGraphNode> {
+fn find_node_by_scope<'a>(
+    def: &'a EffectGraphDef,
+    scope_path: &[u32],
+    node_doc_id: u32,
+) -> Option<&'a manifold_core::effect_graph_def::EffectGraphNode> {
     let mut nodes = def.nodes.as_slice();
     for group_id in scope_path {
-        nodes = &nodes.iter().find(|n| n.id == *group_id)?.group.as_ref()?.nodes;
+        nodes = &nodes
+            .iter()
+            .find(|n| n.id == *group_id)?
+            .group
+            .as_ref()?
+            .nodes;
     }
     nodes.iter().find(|n| n.id == node_doc_id)
 }
@@ -333,13 +490,33 @@ fn find_node_by_scope<'a>(def: &'a EffectGraphDef, scope_path: &[u32], node_doc_
 /// targets do not.
 fn card_binding_id(def: &EffectGraphDef, addr: &ParamAddr) -> Option<String> {
     if let Some(id) = card_param(addr) {
-        return def.preset_metadata.as_ref()?.bindings.iter().any(|binding| binding.id == id).then(|| id.to_owned());
+        return def
+            .preset_metadata
+            .as_ref()?
+            .bindings
+            .iter()
+            .any(|binding| binding.id == id)
+            .then(|| id.to_owned());
     }
     let Some(node) = find_node_by_scope(def, &addr.scope_path, addr.node_doc_id) else {
-        return addr.scope_path.is_empty().then(|| manifold_core::effects::binding_id_for_node_param_in(def, addr.node_doc_id, &addr.param_id)).flatten();
+        return addr
+            .scope_path
+            .is_empty()
+            .then(|| {
+                manifold_core::effects::binding_id_for_node_param_in(
+                    def,
+                    addr.node_doc_id,
+                    &addr.param_id,
+                )
+            })
+            .flatten();
     };
     let identity = if node.node_id.is_empty() {
-        NodeId::new(node.handle.clone().unwrap_or_else(|| format!("node{}", addr.node_doc_id)))
+        NodeId::new(
+            node.handle
+                .clone()
+                .unwrap_or_else(|| format!("node{}", addr.node_doc_id)),
+        )
     } else {
         node.node_id.clone()
     };
@@ -352,7 +529,11 @@ fn card_binding_id(def: &EffectGraphDef, addr: &ParamAddr) -> Option<String> {
 pub(crate) fn mark_layer_card(card: &mut ParamSurface, layer: &Layer, report: &[SetupFitEntry]) {
     with_layer_def(layer, |def| {
         let mut problems = problems_of(def, runtime_fits(report, &layer.layer_id));
-        body_problems(&body_anchors(def), refused_bodies(report, &layer.layer_id), &mut problems);
+        body_problems(
+            &body_anchors(def),
+            refused_bodies(report, &layer.layer_id),
+            &mut problems,
+        );
         problems.extend(water_problems(layer, report, &mut None));
         mark_rows(&mut card.rows, &problems, def);
     });
@@ -362,19 +543,31 @@ pub(crate) fn mark_layer_card(card: &mut ParamSurface, layer: &Layer, report: &[
 /// with what the solver reported (clipped water, bodies past what it couples).
 /// `structure` is the scene's structure from the last check of this same
 /// graph, kept so a value write never lays out the compile again.
-fn water_problems(layer: &Layer, report: &[SetupFitEntry], structure: &mut Option<Arc<SceneStructure>>) -> Vec<SetupProblem> {
+fn water_problems(
+    layer: &Layer,
+    report: &[SetupFitEntry],
+    structure: &mut Option<Arc<SceneStructure>>,
+) -> Vec<SetupProblem> {
     // Only a Water has problems here; a scene without one builds nothing,
     // so a row drag on any other scene costs no scene model per frame.
     let mut has_water = false;
     if let Some(doc) = layer.gen_params().and_then(|inst| inst.scene.as_ref()) {
         doc.walk(|item, _| has_water |= item.kind() == ItemKind::Water);
     }
-    let Some(vm) = has_water.then(|| crate::scene_gizmo::layer_scene_vm_over(layer, structure.as_ref())).flatten() else {
+    let Some(vm) = has_water
+        .then(|| crate::scene_gizmo::layer_scene_vm_over(layer, structure.as_ref()))
+        .flatten()
+    else {
         return Vec::new();
     };
     *structure = Some(Arc::clone(vm.structure()));
     let mut problems = Vec::new();
-    problems_with_runtime(&vm.setup_anchors, &vm.problems, runtime_fits(report, &layer.layer_id), &mut problems);
+    problems_with_runtime(
+        &vm.setup_anchors,
+        &vm.problems,
+        runtime_fits(report, &layer.layer_id),
+        &mut problems,
+    );
     problems
 }
 
@@ -385,11 +578,13 @@ pub(crate) fn mark_rows(rows: &mut [ParamRow], problems: &[SetupProblem], def: &
     for problem in problems {
         let message = problem.kind.message();
         for addr in &problem.params {
-            let Some(id) = card_binding_id(def, addr)
-            else {
+            let Some(id) = card_binding_id(def, addr) else {
                 continue;
             };
-            if let Some(row) = rows.iter_mut().find(|row| row.value.exposed && row.id.as_ref() == id.as_str()) {
+            if let Some(row) = rows
+                .iter_mut()
+                .find(|row| row.value.exposed && row.id.as_ref() == id.as_str())
+            {
                 row.spec.setup_warning.get_or_insert(message);
                 break;
             }
@@ -399,7 +594,14 @@ pub(crate) fn mark_rows(rows: &mut [ParamRow], problems: &[SetupProblem], def: &
 
 /// What can move a copy pool's report or which graph a layer resolves: a
 /// frame where none moved skips the per-layer keys.
-const CHECK_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Effects, Part::Overrides, Part::Shapes, Part::EmbeddedPresets, Part::Values]);
+const CHECK_PARTS: ChangeSet = ChangeSet::of(&[
+    Part::Layers,
+    Part::Effects,
+    Part::Overrides,
+    Part::Shapes,
+    Part::EmbeddedPresets,
+    Part::Values,
+]);
 
 /// One card's setup check: the active layer's or the Scene panel's.
 #[derive(Default)]
@@ -433,11 +635,28 @@ impl SlotCheck {
     /// Follow `layer`'s graph and solver report. The anchors are re-read only
     /// when the graph changes. Unless `woke` (a part the check reads moved) or
     /// the report changed, it costs nothing.
-    fn follow(&mut self, project: &Project, layer: Option<&LayerId>, report: &SetupFitReport, generation: u64, woke: bool) {
-        if !woke && self.layer.as_ref() == layer && self.report.as_ref().is_some_and(|seen| Arc::ptr_eq(seen, report)) {
+    fn follow(
+        &mut self,
+        project: &Project,
+        layer: Option<&LayerId>,
+        report: &SetupFitReport,
+        generation: u64,
+        woke: bool,
+    ) {
+        if !woke
+            && self.layer.as_ref() == layer
+            && self
+                .report
+                .as_ref()
+                .is_some_and(|seen| Arc::ptr_eq(seen, report))
+        {
             return;
         }
-        let Some(layer) = layer.and_then(|id| project.timeline.find_layer_by_id(id)).map(|(_, layer)| layer).filter(|layer| layer.gen_params().is_some()) else {
+        let Some(layer) = layer
+            .and_then(|id| project.timeline.find_layer_by_id(id))
+            .map(|(_, layer)| layer)
+            .filter(|layer| layer.gen_params().is_some())
+        else {
             if self.layer.take().is_some() || self.hash != 0 {
                 self.copies.clear();
                 self.bodies.clear();
@@ -461,19 +680,38 @@ impl SlotCheck {
         }
         // A Water's own problems move with its card values, so a woken frame
         // re-checks even under the same report.
-        if !moved && !woke && self.report.as_ref().is_some_and(|seen| Arc::ptr_eq(seen, report)) {
+        if !moved
+            && !woke
+            && self
+                .report
+                .as_ref()
+                .is_some_and(|seen| Arc::ptr_eq(seen, report))
+        {
             return;
         }
         self.report = Some(report.clone());
         self.problems.clear();
-        copies_problems(&self.copies, runtime_fits(report, &layer.layer_id), &mut self.problems);
-        body_problems(&self.bodies, refused_bodies(report, &layer.layer_id), &mut self.problems);
-        self.problems.extend(water_problems(layer, report, &mut self.structure));
+        copies_problems(
+            &self.copies,
+            runtime_fits(report, &layer.layer_id),
+            &mut self.problems,
+        );
+        body_problems(
+            &self.bodies,
+            refused_bodies(report, &layer.layer_id),
+            &mut self.problems,
+        );
+        self.problems
+            .extend(water_problems(layer, report, &mut self.structure));
         let mut hasher = DefaultHasher::new();
         for problem in &self.problems {
             problem.hash_card(&mut hasher);
         }
-        self.hash = if self.problems.is_empty() { 0 } else { hasher.finish() };
+        self.hash = if self.problems.is_empty() {
+            0
+        } else {
+            hasher.finish()
+        };
     }
 }
 
@@ -492,7 +730,13 @@ pub(crate) struct CardCheck {
 
 impl CardCheck {
     /// The input this frame; 0 while neither layer has a problem.
-    pub fn input(&mut self, project: &Project, parts: PartStamps, layers: [Option<&LayerId>; 2], report: &SetupFitReport) -> u64 {
+    pub fn input(
+        &mut self,
+        project: &Project,
+        parts: PartStamps,
+        layers: [Option<&LayerId>; 2],
+        report: &SetupFitReport,
+    ) -> u64 {
         let generation = manifold_node_engine::load::preset_loader::catalog_generation();
         let seen = Some((parts.key(CHECK_PARTS), generation));
         let woke = seen != self.seen;
@@ -527,7 +771,11 @@ pub(crate) struct GizmoProblems {
 
 impl GizmoProblems {
     /// Follow the shown scene and domains. True when the list was rebuilt.
-    pub fn update(&mut self, scene: Option<&Arc<SceneVm>>, domains: Option<&SharedDomains>) -> bool {
+    pub fn update(
+        &mut self,
+        scene: Option<&Arc<SceneVm>>,
+        domains: Option<&SharedDomains>,
+    ) -> bool {
         let Some(scene) = scene else {
             let rebuilt = self.scene.take().is_some();
             self.fits.clear();
@@ -536,17 +784,37 @@ impl GizmoProblems {
         };
         let domains = domains.map_or(&[][..], |domains| &domains[..]);
         let same_fits = self.fits.len() == domains.len()
-            && self.fits.iter().zip(domains).all(|((node, fit, refusal), (id, snapshot))| {
-                node == id && *fit == snapshot.fit && refusal.as_deref() == snapshot.refusal.as_deref()
-            });
-        if same_fits && self.scene.as_ref().is_some_and(|cached| Arc::ptr_eq(cached, scene)) {
+            && self
+                .fits
+                .iter()
+                .zip(domains)
+                .all(|((node, fit, refusal), (id, snapshot))| {
+                    node == id
+                        && *fit == snapshot.fit
+                        && refusal.as_deref() == snapshot.refusal.as_deref()
+                });
+        if same_fits
+            && self
+                .scene
+                .as_ref()
+                .is_some_and(|cached| Arc::ptr_eq(cached, scene))
+        {
             return false;
         }
-        problems_with_runtime(&scene.setup_anchors, &scene.problems, domains.iter().map(RuntimeFit::of), &mut self.problems);
+        problems_with_runtime(
+            &scene.setup_anchors,
+            &scene.problems,
+            domains.iter().map(RuntimeFit::of),
+            &mut self.problems,
+        );
         self.scene = Some(scene.clone());
         if !same_fits {
             self.fits.clear();
-            self.fits.extend(domains.iter().map(|(id, snapshot)| (id.clone(), snapshot.fit, snapshot.refusal.clone())));
+            self.fits.extend(
+                domains
+                    .iter()
+                    .map(|(id, snapshot)| (id.clone(), snapshot.fit, snapshot.refusal.clone())),
+            );
         }
         true
     }

@@ -24,12 +24,14 @@
 
 use manifold_core::flatten::flatten_groups;
 use manifold_core::params::ParamManifest;
-use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
+use manifold_gpu::{
+    GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 
 use manifold_nodes_scene::testkit::gpu_harness as harness;
 
@@ -102,9 +104,15 @@ fn readback_rgba_f32(device: &GpuDevice, texture: &manifold_gpu::GpuTexture) -> 
     let mut enc = device.create_encoder("ntm-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait_completed();
-    let ptr = buf.mapped_ptr().expect("shared readback buffer must expose mapped pointer");
-    let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (W * H * 4) as usize) };
-    halves.iter().map(|&v| half::f16::from_bits(v).to_f32()).collect()
+    let ptr = buf
+        .mapped_ptr()
+        .expect("shared readback buffer must expose mapped pointer");
+    let halves: &[u16] =
+        unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (W * H * 4) as usize) };
+    halves
+        .iter()
+        .map(|&v| half::f16::from_bits(v).to_f32())
+        .collect()
 }
 
 fn non_black_fraction(px: &[f32]) -> f64 {
@@ -132,10 +140,16 @@ fn fixture() -> std::path::PathBuf {
 fn build_variant(
     h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     strip_normal_map: bool,
-) -> (PresetRuntime, manifold_gpu::GpuTexture, ParamManifest, usize) {
+) -> (
+    PresetRuntime,
+    manifold_gpu::GpuTexture,
+    ParamManifest,
+    usize,
+) {
     let (def, report) = compile_model_scene(&fixture()).expect("import must succeed");
     eprintln!("[ntm] import report: {report:?}");
-    let mut flat = flatten_groups(&def).expect("flatten_groups must succeed (no-op if already flat)");
+    let mut flat =
+        flatten_groups(&def).expect("flatten_groups must succeed (no-op if already flat)");
 
     let scene_object_ids: Vec<_> = flat
         .nodes
@@ -143,7 +157,10 @@ fn build_variant(
         .filter(|n| n.type_id == "node.scene_object")
         .map(|n| n.id)
         .collect();
-    assert!(!scene_object_ids.is_empty(), "imported def has no node.scene_object bind nodes");
+    assert!(
+        !scene_object_ids.is_empty(),
+        "imported def has no node.scene_object bind nodes"
+    );
     let normal_wire_count = flat
         .wires
         .iter()
@@ -167,9 +184,13 @@ fn build_variant(
         ("node.bake_environment", "fill", FILL_LIGHT),
         ("node.light", "intensity", SUN_INTENSITY),
     ] {
-        let id = card_param_driving(&flat, node_type, param)
-            .unwrap_or_else(|| panic!("imported def exposes no card param for {node_type}.{param}"));
-        params.get_mut(&id).expect("id came from this manifest").value = value;
+        let id = card_param_driving(&flat, node_type, param).unwrap_or_else(|| {
+            panic!("imported def exposes no card param for {node_type}.{param}")
+        });
+        params
+            .get_mut(&id)
+            .expect("id came from this manifest")
+            .value = value;
     }
 
     let registry = PrimitiveRegistry::with_builtin();
@@ -183,8 +204,17 @@ fn build_variant(
         None,
     )
     .expect("imported def must build a runtime");
-    let label = if strip_normal_map { "ntm-stripped" } else { "ntm-bound" };
-    (runtime, make_target(&h.device, label), params, normal_wire_count)
+    let label = if strip_normal_map {
+        "ntm-stripped"
+    } else {
+        "ntm-bound"
+    };
+    (
+        runtime,
+        make_target(&h.device, label),
+        params,
+        normal_wire_count,
+    )
 }
 
 /// Frames enough for the async accel build + the one-frame rebuild defer and
@@ -256,7 +286,9 @@ fn normal_tangent_mirror_dispatches_rt_on_the_import_path() {
         }
     }
     let mean_abs_diff = sum_abs_diff / (n * 3) as f64;
-    eprintln!("[ntm] RT-on vs RT-off: mean_abs_diff={mean_abs_diff:.6} max_abs_diff={max_abs_diff:.4}");
+    eprintln!(
+        "[ntm] RT-on vs RT-off: mean_abs_diff={mean_abs_diff:.6} max_abs_diff={max_abs_diff:.4}"
+    );
     assert!(
         max_abs_diff > 0.0,
         "RT-on and RT-off composites are bit-identical — the RT path is inert here (BUG-1l7f), so \
@@ -279,9 +311,8 @@ fn settle_and_capture_refl_raw(
     for f in 0..SETTLE_FRAMES {
         frame(&mut runtime, h, &target, f, &params);
     }
-    let slots = harness::capture_rt_channels(|| {
-        frame(&mut runtime, h, &target, SETTLE_FRAMES, &params)
-    });
+    let slots =
+        harness::capture_rt_channels(|| frame(&mut runtime, h, &target, SETTLE_FRAMES, &params));
     let refl = slots
         .iter()
         .find(|c| c.label == "refl_raw")
@@ -293,7 +324,12 @@ fn settle_and_capture_refl_raw(
             )
         });
     let px = harness::read_rt_channel(&h.device, refl);
-    eprintln!("[ntm] refl_raw {}x{} nonblack={:.4}", refl.w, refl.h, non_black_fraction(&px));
+    eprintln!(
+        "[ntm] refl_raw {}x{} nonblack={:.4}",
+        refl.w,
+        refl.h,
+        non_black_fraction(&px)
+    );
     px
 }
 
@@ -310,7 +346,11 @@ fn normal_tangent_mirror_normal_map_reaches_the_traced_reflection() {
     let _warmup = settle_and_capture_refl_raw(h, false);
     let bound_px = settle_and_capture_refl_raw(h, false);
     let stripped_px = settle_and_capture_refl_raw(h, true);
-    assert_eq!(bound_px.len(), stripped_px.len(), "capture geometry changed between variants");
+    assert_eq!(
+        bound_px.len(),
+        stripped_px.len(),
+        "capture geometry changed between variants"
+    );
 
     // Sanity: the channel must hold real traced radiance, or "no difference"
     // would be vacuously true.
@@ -355,11 +395,21 @@ fn normal_tangent_mirror_normal_map_reaches_the_traced_reflection() {
 
 /// The card param id whose binding drives `param` on the first node of
 /// `node_type`.
-fn card_param_driving(def: &manifold_core::effect_graph_def::EffectGraphDef, node_type: &str, param: &str) -> Option<String> {
+fn card_param_driving(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    node_type: &str,
+    param: &str,
+) -> Option<String> {
     use manifold_core::effect_graph_def::BindingTarget;
     let node = def.nodes.iter().find(|n| n.type_id == node_type)?;
-    def.preset_metadata.as_ref()?.bindings.iter().find_map(|b| match &b.target {
-        BindingTarget::Node { node_id, param: p } if *node_id == node.node_id && p == param => Some(b.id.clone()),
-        _ => None,
-    })
+    def.preset_metadata
+        .as_ref()?
+        .bindings
+        .iter()
+        .find_map(|b| match &b.target {
+            BindingTarget::Node { node_id, param: p } if *node_id == node.node_id && p == param => {
+                Some(b.id.clone())
+            }
+            _ => None,
+        })
 }

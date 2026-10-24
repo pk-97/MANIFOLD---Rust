@@ -25,15 +25,15 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    ensure_normal_sources, EmissiveTableStats, GiMaterial, MetalShadowRayTracer, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
+    EmissiveTableStats, GiMaterial, MetalShadowRayTracer, RtObjectGeometry, ShadowRayParams,
+    ShadowRayTracer, ensure_normal_sources,
 };
-use manifold_gpu::{ShadowCaster, upload_shadow_casters};
 use manifold_gpu::{
     GpuBuffer, GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
     GpuTextureUsage,
 };
+use manifold_gpu::{ShadowCaster, upload_shadow_casters};
 use manifold_node_engine::mesh::InstanceTransform;
-
 
 /// `pos` + `normal` interleaved vertex (stride 24, normal at offset 12) —
 /// same record shape `rt_instancing.rs` uses.
@@ -48,12 +48,30 @@ struct PackedVertexN {
 /// [-0.05, 0.05], normal (0,0,-1). Local origin = center, so a
 /// translation-only slot's stored translation is the copy's world center.
 const EMISSIVE_QUAD: [PackedVertexN; 6] = [
-    PackedVertexN { pos: [-0.05, -0.05, 0.0], normal: [0.0, 0.0, -1.0] },
-    PackedVertexN { pos: [ 0.05, -0.05, 0.0], normal: [0.0, 0.0, -1.0] },
-    PackedVertexN { pos: [ 0.05,  0.05, 0.0], normal: [0.0, 0.0, -1.0] },
-    PackedVertexN { pos: [-0.05, -0.05, 0.0], normal: [0.0, 0.0, -1.0] },
-    PackedVertexN { pos: [ 0.05,  0.05, 0.0], normal: [0.0, 0.0, -1.0] },
-    PackedVertexN { pos: [-0.05,  0.05, 0.0], normal: [0.0, 0.0, -1.0] },
+    PackedVertexN {
+        pos: [-0.05, -0.05, 0.0],
+        normal: [0.0, 0.0, -1.0],
+    },
+    PackedVertexN {
+        pos: [0.05, -0.05, 0.0],
+        normal: [0.0, 0.0, -1.0],
+    },
+    PackedVertexN {
+        pos: [0.05, 0.05, 0.0],
+        normal: [0.0, 0.0, -1.0],
+    },
+    PackedVertexN {
+        pos: [-0.05, -0.05, 0.0],
+        normal: [0.0, 0.0, -1.0],
+    },
+    PackedVertexN {
+        pos: [0.05, 0.05, 0.0],
+        normal: [0.0, 0.0, -1.0],
+    },
+    PackedVertexN {
+        pos: [-0.05, 0.05, 0.0],
+        normal: [0.0, 0.0, -1.0],
+    },
 ];
 
 /// Receiver quad: same shape, placed by its (unwired) model transform.
@@ -89,7 +107,9 @@ fn pcg(mut v: u32) -> u32 {
 }
 
 fn rand2(p: [u32; 2], frame: u32, ray: u32) -> [f32; 2] {
-    let s = pcg(p[0].wrapping_add(pcg(p[1].wrapping_add(pcg(frame.wrapping_mul(61).wrapping_add(ray))))));
+    let s = pcg(p[0].wrapping_add(pcg(
+        p[1].wrapping_add(pcg(frame.wrapping_mul(61).wrapping_add(ray)))
+    )));
     let t = pcg(s);
     [
         (s & 0xFFFFFF) as f32 / 16777216.0,
@@ -100,7 +120,9 @@ fn rand2(p: [u32; 2], frame: u32, ray: u32) -> [f32; 2] {
 fn write_shared_buffer<T: Copy>(device: &GpuDevice, data: &[T]) -> GpuBuffer {
     let bytes = std::mem::size_of_val(data) as u64;
     let buf = device.create_buffer_shared(bytes.max(16));
-    let ptr = buf.mapped_ptr().expect("shared buffer must expose a mapped pointer");
+    let ptr = buf
+        .mapped_ptr()
+        .expect("shared buffer must expose a mapped pointer");
     unsafe {
         std::ptr::copy_nonoverlapping(data.as_ptr().cast::<u8>(), ptr, bytes as usize);
     }
@@ -125,8 +147,9 @@ fn upload_texture_f32(
         label,
         mip_levels: 1,
     });
-    let bytes =
-        unsafe { slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels)) };
+    let bytes = unsafe {
+        slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels))
+    };
     device.upload_texture(&texture, bytes);
     texture
 }
@@ -159,8 +182,14 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     let emissive_buffer = write_shared_buffer(device, &EMISSIVE_QUAD);
     let receiver_buffer = write_shared_buffer(device, &RECEIVER_QUAD);
     let instances = [
-        InstanceTransform { pos_scale: [SLOT_POS[0][0], SLOT_POS[0][1], SLOT_POS[0][2], 1.0], rot_pad: [0.0; 4] },
-        InstanceTransform { pos_scale: [SLOT_POS[1][0], SLOT_POS[1][1], SLOT_POS[1][2], 1.0], rot_pad: [0.0; 4] },
+        InstanceTransform {
+            pos_scale: [SLOT_POS[0][0], SLOT_POS[0][1], SLOT_POS[0][2], 1.0],
+            rot_pad: [0.0; 4],
+        },
+        InstanceTransform {
+            pos_scale: [SLOT_POS[1][0], SLOT_POS[1][1], SLOT_POS[1][2], 1.0],
+            rot_pad: [0.0; 4],
+        },
     ];
     let instances_buffer = write_shared_buffer(device, &instances);
 
@@ -170,7 +199,9 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     receiver_model[3][2] = RECEIVER_WP[2];
 
     let objects = [
-        RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+        RtObjectGeometry {
+            instance_inner: RtObjectGeometry::NO_INNER,
+            material_attributes: Default::default(),
             vertex_buffer: &emissive_buffer,
             vertex_stride: std::mem::size_of::<PackedVertexN>() as u32,
             vertex_offset: 0,
@@ -186,7 +217,7 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
             mr_texture: None,
             normal_texture: None,
             emissive_texture: None,
-        extra_material_textures: [None; 15],
+            extra_material_textures: [None; 15],
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -202,7 +233,9 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
             base_color_alpha: 1.0,
             tangent_offset: u32::MAX,
         },
-        RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+        RtObjectGeometry {
+            instance_inner: RtObjectGeometry::NO_INNER,
+            material_attributes: Default::default(),
             vertex_buffer: &receiver_buffer,
             vertex_stride: std::mem::size_of::<PackedVertexN>() as u32,
             vertex_offset: 0,
@@ -218,7 +251,7 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
             mr_texture: None,
             normal_texture: None,
             emissive_texture: None,
-        extra_material_textures: [None; 15],
+            extra_material_textures: [None; 15],
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
@@ -243,27 +276,52 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     // preparation (enumerate → sort → gather → alias → stats, P4a) on its
     // own committed encoder so the AS and the light table are ready well
     // before the dispatch below.
-    let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
+    let plan = tracer
+        .plan_accel(device, None, &objects)
+        .expect("plan accel");
     let mut accel_slot = None;
-    tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+    tracer
+        .prepare_accel(device, &mut accel_slot, plan)
+        .expect("prepare accel");
     let mut accel = accel_slot.unwrap();
     {
         let mut enc_build = device.create_encoder("rt-emissive-instancing-build");
         let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
         tracer
-            .encode_accel_update(device, &mut enc_build, &mut accel, &objects, &changes, &materials, true, true)
+            .encode_accel_update(
+                device,
+                &mut enc_build,
+                &mut accel,
+                &objects,
+                &changes,
+                &materials,
+                true,
+                true,
+            )
             .expect("encode accel update");
         enc_build.commit_and_wait_completed();
     }
-    let table = accel.emissive_table.as_ref().expect("emissive object must build a light table");
+    let table = accel
+        .emissive_table
+        .as_ref()
+        .expect("emissive object must build a light table");
     // P4a: count/local-flag/mean live in the GPU-written stats buffer —
     // mapped after commit+wait, same readback discipline as triangles.
     let table_stats = unsafe {
-        (table.stats.mapped_ptr().expect("stats buffer must be shared") as *const EmissiveTableStats)
+        (table
+            .stats
+            .mapped_ptr()
+            .expect("stats buffer must be shared") as *const EmissiveTableStats)
             .read_unaligned()
     };
-    assert_eq!(table_stats.entries_are_local, 1, "wired instances => local-space emissive entries (D8)");
-    assert_eq!(table_stats.entry_count, 4, "2 triangles x 2 slots = 4 candidates (D8)");
+    assert_eq!(
+        table_stats.entries_are_local, 1,
+        "wired instances => local-space emissive entries (D8)"
+    );
+    assert_eq!(
+        table_stats.entry_count, 4,
+        "2 triangles x 2 slots = 4 candidates (D8)"
+    );
 
     // D11 tables + per-slot gi materials (N + Σ = 2 + 3 = 5 rows).
     let mut nss = None;
@@ -271,7 +329,8 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     ensure_normal_sources(&mut nss, &mut nsc, device, &objects);
     let normal_sources = nss.unwrap();
     let gi_rows = 5usize;
-    let gi_buffer = device.create_buffer_shared((gi_rows * std::mem::size_of::<GiMaterial>()) as u64);
+    let gi_buffer =
+        device.create_buffer_shared((gi_rows * std::mem::size_of::<GiMaterial>()) as u64);
     {
         let ptr = gi_buffer.mapped_ptr().expect("gi buffer must be shared") as *mut GiMaterial;
         let row_for = |oi: usize| materials[oi];
@@ -290,7 +349,14 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     // so the reconstructed wp is ON the receiver surface (the lighting
     // origin sec_origin is biased from wp along the receiver normal).
     let depth_px: [f32; 8] = [0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0];
-    let depth_tex = upload_texture_f32(device, 8, 1, GpuTextureFormat::Depth32Float, &depth_px, "rt-emissive-inst-depth");
+    let depth_tex = upload_texture_f32(
+        device,
+        8,
+        1,
+        GpuTextureFormat::Depth32Float,
+        &depth_px,
+        "rt-emissive-inst-depth",
+    );
     let tex = |label: &str| {
         device.create_texture(&GpuTextureDesc {
             width: 8,
@@ -389,8 +455,7 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     enc2.copy_texture_to_buffer(&out_irr, &readback, 8, 1, 8 * 4 * 4);
     enc2.commit_and_wait_completed();
     let ptr = readback.mapped_ptr().expect("readback must be mapped");
-    let floats: &[f32] =
-        unsafe { slice::from_raw_parts(ptr.cast::<c_void>().cast::<f32>(), 32) };
+    let floats: &[f32] = unsafe { slice::from_raw_parts(ptr.cast::<c_void>().cast::<f32>(), 32) };
     let got = &floats[4 * 4..4 * 4 + 3];
 
     // Primary-hit contract: the texel must resolve to the RECEIVER
@@ -407,7 +472,9 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
         unsafe { slice::from_raw_parts(n_ptr.cast::<c_void>().cast::<f32>(), 32) };
     let hit = &n_floats[4 * 4..4 * 4 + 4];
     assert!(
-        (hit[0]).abs() < 1e-5 && (hit[1]).abs() < 1e-5 && (hit[2] + 1.0).abs() < 1e-5
+        (hit[0]).abs() < 1e-5
+            && (hit[1]).abs() < 1e-5
+            && (hit[2] + 1.0).abs() < 1e-5
             && hit[3] == 1.0,
         "primary must hit the receiver (normal (0,0,-1), object_index 1), got {hit:?}"
     );
@@ -427,7 +494,11 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     // Translation-only slot: world = local + slot translation.
     let w = |k: usize| {
         let l = local(k);
-        [l[0] + SLOT_POS[slot][0], l[1] + SLOT_POS[slot][1], l[2] + SLOT_POS[slot][2]]
+        [
+            l[0] + SLOT_POS[slot][0],
+            l[1] + SLOT_POS[slot][1],
+            l[2] + SLOT_POS[slot][2],
+        ]
     };
     let (w0, w1, w2) = (w(0), w(1), w(2));
     let u2 = rand2(tid, 0, 702);

@@ -3,12 +3,18 @@ use super::*;
 impl InspectorCompositePanel {
     pub fn selection_has_group(&self) -> bool {
         let selected = self.selection_for_tab(self.last_effect_tab).0;
-        self.rack_groups[Self::scope_idx(self.last_effect_tab)].iter().any(|group| group.member_ids.iter().any(|id| selected.contains(id)))
+        self.rack_groups[Self::scope_idx(self.last_effect_tab)]
+            .iter()
+            .any(|group| group.member_ids.iter().any(|id| selected.contains(id)))
     }
 
     pub fn selected_effect_ids(&self) -> Vec<EffectId> {
         let (selected, cards) = self.selection_for_tab(self.last_effect_tab);
-        cards.iter().filter(|card| selected.contains(card.effect_id())).map(|card| card.effect_id().clone()).collect()
+        cards
+            .iter()
+            .filter(|card| selected.contains(card.effect_id()))
+            .map(|card| card.effect_id().clone())
+            .collect()
     }
 
     /// Select exactly `ids` on `tab` and queue a reveal of the first. The
@@ -38,14 +44,23 @@ impl InspectorCompositePanel {
 
     /// Open the existing response drawer of the card routing this trigger
     /// and reuse the inspector's reveal path.
-    pub fn reveal_trigger_response(&mut self, target: &crate::view::UiGraphTarget, param: &manifold_foundation::ParamId) -> bool {
-        let id = self.effects[Self::SCOPE_LAYER].iter_mut()
+    pub fn reveal_trigger_response(
+        &mut self,
+        target: &crate::view::UiGraphTarget,
+        param: &manifold_foundation::ParamId,
+    ) -> bool {
+        let id = self.effects[Self::SCOPE_LAYER]
+            .iter_mut()
             .chain(self.gen_params.iter_mut())
             .find(|card| card.routes_clip_trigger(target, param))
             .and_then(|card| card.reveal_param(param).then(|| card.effect_id().clone()));
-        let Some(id) = id else { return false; };
+        let Some(id) = id else {
+            return false;
+        };
         for group in &mut self.rack_groups[Self::SCOPE_LAYER] {
-            if group.member_ids.contains(&id) { group.collapsed = false; }
+            if group.member_ids.contains(&id) {
+                group.collapsed = false;
+            }
         }
         self.pending_reveal = Some((id, Some(param.clone())));
         // The card unfolded its section and switched its mod tab.
@@ -56,17 +71,38 @@ impl InspectorCompositePanel {
     }
 
     pub fn reveal_pending_selection(&mut self, tree: &mut UITree) {
-        let Some((id, param)) = self.pending_reveal.as_ref() else { return; };
-        let group_bounds = self.rack_groups[Self::scope_idx(self.active_tab)].iter()
+        let Some((id, param)) = self.pending_reveal.as_ref() else {
+            return;
+        };
+        let group_bounds = self.rack_groups[Self::scope_idx(self.active_tab)]
+            .iter()
             .find(|group| group.collapsed && group.member_ids.contains(id))
-            .and_then(|group| self.group_nodes.iter().find(|nodes| nodes.group_id == group.id))
+            .and_then(|group| {
+                self.group_nodes
+                    .iter()
+                    .find(|nodes| nodes.group_id == group.id)
+            })
             .map(|nodes| tree.get_bounds(nodes.header));
-        let bounds = group_bounds.or_else(|| self.cards_for_tab(self.active_tab).iter()
-            .chain(self.gen_params.iter()).find(|card| card.effect_id() == id)
-            .and_then(|card| param.as_ref().and_then(|param| card.clip_response_rect(tree, param.as_ref()))
-                .or_else(|| card.live_bounds(tree))));
-        let Some(bounds) = bounds else { return; };
-        let scroll = if self.active_tab == InspectorTab::Master { &mut self.master_scroll } else { &mut self.layer_scroll };
+        let bounds = group_bounds.or_else(|| {
+            self.cards_for_tab(self.active_tab)
+                .iter()
+                .chain(self.gen_params.iter())
+                .find(|card| card.effect_id() == id)
+                .and_then(|card| {
+                    param
+                        .as_ref()
+                        .and_then(|param| card.clip_response_rect(tree, param.as_ref()))
+                        .or_else(|| card.live_bounds(tree))
+                })
+        });
+        let Some(bounds) = bounds else {
+            return;
+        };
+        let scroll = if self.active_tab == InspectorTab::Master {
+            &mut self.master_scroll
+        } else {
+            &mut self.layer_scroll
+        };
         self.scrolled_in_place |= scroll.reveal_rect(tree, bounds);
         self.pending_reveal = None;
     }
@@ -77,7 +113,13 @@ impl InspectorCompositePanel {
 
     pub fn select_effect_for_context_menu(&mut self, effect_id: &EffectId) {
         let tab = self.active_tab;
-        let Some(card_index) = self.cards_for_tab(tab).iter().position(|card| card.effect_id() == effect_id) else { return; };
+        let Some(card_index) = self
+            .cards_for_tab(tab)
+            .iter()
+            .position(|card| card.effect_id() == effect_id)
+        else {
+            return;
+        };
         let id = self.cards_for_tab(tab)[card_index].effect_id();
         if !self.selection_for_tab(tab).0.contains(id) {
             self.select_effect(tab, card_index);
@@ -85,11 +127,15 @@ impl InspectorCompositePanel {
         self.last_effect_tab = tab;
     }
 
-
     pub fn select_rack_group(&mut self, group_id: &EffectGroupId, additive: bool) {
         let tab = self.active_tab;
-        let Some(members) = self.rack_groups[Self::scope_idx(tab)].iter()
-            .find(|group| group.id == *group_id).map(|group| group.member_ids.clone()) else { return; };
+        let Some(members) = self.rack_groups[Self::scope_idx(tab)]
+            .iter()
+            .find(|group| group.id == *group_id)
+            .map(|group| group.member_ids.clone())
+        else {
+            return;
+        };
         if !additive {
             self.selected_master_ids.clear();
             self.selected_layer_ids.clear();
@@ -104,10 +150,16 @@ impl InspectorCompositePanel {
     }
 
     /// Get the selection set and cards vec for a given tab.
-    pub(super) fn selection_for_tab(&self, tab: InspectorTab) -> (&HashSet<EffectId>, &[ParamCardPanel]) {
+    pub(super) fn selection_for_tab(
+        &self,
+        tab: InspectorTab,
+    ) -> (&HashSet<EffectId>, &[ParamCardPanel]) {
         let set = match tab {
             InspectorTab::Master => &self.selected_master_ids,
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip | InspectorTab::Scene => &self.selected_layer_ids,
+            InspectorTab::Layer
+            | InspectorTab::Group
+            | InspectorTab::Clip
+            | InspectorTab::Scene => &self.selected_layer_ids,
         };
         (set, self.cards_for_tab(tab))
     }
@@ -115,7 +167,10 @@ impl InspectorCompositePanel {
     pub(super) fn selection_set_mut(&mut self, tab: InspectorTab) -> &mut HashSet<EffectId> {
         match tab {
             InspectorTab::Master => &mut self.selected_master_ids,
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip | InspectorTab::Scene => &mut self.selected_layer_ids,
+            InspectorTab::Layer
+            | InspectorTab::Group
+            | InspectorTab::Clip
+            | InspectorTab::Scene => &mut self.selected_layer_ids,
         }
     }
 
@@ -230,7 +285,11 @@ impl InspectorCompositePanel {
 
     /// Resolve a clicked node to a driver Free-period field across the visible
     /// cards and return its type-in action (empty if it isn't a Free field).
-    pub(super) fn route_driver_period_typein(&self, node_id: NodeId, tree: &UITree) -> Vec<PanelAction> {
+    pub(super) fn route_driver_period_typein(
+        &self,
+        node_id: NodeId,
+        tree: &UITree,
+    ) -> Vec<PanelAction> {
         // No scope gate — a non-live card's `driver_period_typein` returns None
         // (see `route_value_typein`).
         for card in &self.effects[Self::SCOPE_MASTER] {
@@ -251,7 +310,11 @@ impl InspectorCompositePanel {
         Vec::new()
     }
 
-    pub(super) fn find_target_for_node(&self, tree: &UITree, node_id: NodeId) -> Option<PressedTarget> {
+    pub(super) fn find_target_for_node(
+        &self,
+        tree: &UITree,
+        node_id: NodeId,
+    ) -> Option<PressedTarget> {
         // Every press target below is an inspector node; slots compare only
         // inside the inspector's own arena.
         if node_id.region() != self.cache_region {
@@ -336,16 +399,33 @@ impl InspectorCompositePanel {
         &mut self.effects[Self::scope_idx(tab)]
     }
 
-    pub(super) fn route_click(&mut self, node_id: NodeId, modifiers: Modifiers, tree: &UITree) -> Vec<PanelAction> {
+    pub(super) fn route_click(
+        &mut self,
+        node_id: NodeId,
+        modifiers: Modifiers,
+        tree: &UITree,
+    ) -> Vec<PanelAction> {
         if let Some(actions) = self.rack_click(node_id) {
             return actions;
         }
-        if let Some(nodes) = self.group_nodes.iter().find(|nodes| nodes.collapse == node_id) {
-            let group = self.rack_groups[Self::scope_idx(self.active_tab)].iter().find(|group| group.id == nodes.group_id);
-            return group.map(|group| vec![PanelAction::Params(ParamsAction::EffectGroupCollapsed {
-                tab: self.active_tab, layer_id: self.inspecting_layer_id.clone(),
-                group_id: group.id.clone(), collapsed: !group.collapsed,
-            })]).unwrap_or_default();
+        if let Some(nodes) = self
+            .group_nodes
+            .iter()
+            .find(|nodes| nodes.collapse == node_id)
+        {
+            let group = self.rack_groups[Self::scope_idx(self.active_tab)]
+                .iter()
+                .find(|group| group.id == nodes.group_id);
+            return group
+                .map(|group| {
+                    vec![PanelAction::Params(ParamsAction::EffectGroupCollapsed {
+                        tab: self.active_tab,
+                        layer_id: self.inspecting_layer_id.clone(),
+                        group_id: group.id.clone(),
+                        collapsed: !group.collapsed,
+                    })]
+                })
+                .unwrap_or_default();
         }
         if self.group_nodes.iter().any(|nodes| nodes.header == node_id) {
             return Vec::new(); // Selection is established on press, before drag capture.
@@ -360,7 +440,9 @@ impl InspectorCompositePanel {
         // column's current cards (collapse if any open, else expand).
         if self.collapse_all_btn_id == Some(node_id) {
             let collapsed = self.any_active_card_expanded();
-            return vec![PanelAction::Params(ParamsAction::SetAllCardsCollapsed { collapsed })];
+            return vec![PanelAction::Params(ParamsAction::SetAllCardsCollapsed {
+                collapsed,
+            })];
         }
         // section 6b — compact toggle: flip global mod-drawer visibility (UI-only). Flip
         // here and return a structural no-op so the inspector rebuilds with the
@@ -411,10 +493,9 @@ impl InspectorCompositePanel {
                         .map(|c| c.handle_click(node_id, tree))
                         .unwrap_or_default();
 
-                    if actions
-                        .iter()
-                        .any(|a| matches!(a, PanelAction::Params(ParamsAction::EffectCardClicked(_))))
-                    {
+                    if actions.iter().any(|a| {
+                        matches!(a, PanelAction::Params(ParamsAction::EffectCardClicked(_)))
+                    }) {
                         self.on_effect_card_clicked(InspectorTab::Master, i, modifiers);
                     } else if !self.is_effect_target_selected(&PressedTarget::MasterEffect(i)) {
                         // Only auto-select if not already in multi-selection
@@ -424,10 +505,9 @@ impl InspectorCompositePanel {
                         .get(i)
                         .map(|c| c.effect_index())
                         .unwrap_or(0);
-                    if !actions
-                        .iter()
-                        .any(|a| matches!(a, PanelAction::Params(ParamsAction::EffectCardClicked(_))))
-                    {
+                    if !actions.iter().any(|a| {
+                        matches!(a, PanelAction::Params(ParamsAction::EffectCardClicked(_)))
+                    }) {
                         actions.insert(0, PanelAction::Params(ParamsAction::EffectCardClicked(ei)));
                     }
                     actions
@@ -438,10 +518,9 @@ impl InspectorCompositePanel {
                         .map(|c| c.handle_click(node_id, tree))
                         .unwrap_or_default();
 
-                    if actions
-                        .iter()
-                        .any(|a| matches!(a, PanelAction::Params(ParamsAction::EffectCardClicked(_))))
-                    {
+                    if actions.iter().any(|a| {
+                        matches!(a, PanelAction::Params(ParamsAction::EffectCardClicked(_)))
+                    }) {
                         self.on_effect_card_clicked(InspectorTab::Layer, i, modifiers);
                     } else if !self.is_effect_target_selected(&PressedTarget::LayerEffect(i)) {
                         self.auto_select_effect(&PressedTarget::LayerEffect(i));
@@ -450,10 +529,9 @@ impl InspectorCompositePanel {
                         .get(i)
                         .map(|c| c.effect_index())
                         .unwrap_or(0);
-                    if !actions
-                        .iter()
-                        .any(|a| matches!(a, PanelAction::Params(ParamsAction::EffectCardClicked(_))))
-                    {
+                    if !actions.iter().any(|a| {
+                        matches!(a, PanelAction::Params(ParamsAction::EffectCardClicked(_)))
+                    }) {
                         actions.insert(0, PanelAction::Params(ParamsAction::EffectCardClicked(ei)));
                     }
                     actions
@@ -480,7 +558,12 @@ impl InspectorCompositePanel {
         if let Some(actions) = self.rack_press(node_id, pos) {
             return actions;
         }
-        if let Some(group_id) = self.group_nodes.iter().find(|nodes| nodes.header == node_id).map(|nodes| nodes.group_id.clone()) {
+        if let Some(group_id) = self
+            .group_nodes
+            .iter()
+            .find(|nodes| nodes.header == node_id)
+            .map(|nodes| nodes.group_id.clone())
+        {
             self.select_rack_group(&group_id, modifiers.ctrl || modifiers.command);
             return vec![PanelAction::Params(ParamsAction::EffectSelectionChanged)];
         }
@@ -505,33 +588,33 @@ impl InspectorCompositePanel {
         if let Some(target) = target {
             // For effect targets, prepend EffectCardClicked to trigger visual update
             let select_action = match target {
-                PressedTarget::MasterEffect(i) => Some(PanelAction::Params(ParamsAction::EffectCardClicked(
-                    self.effects[Self::SCOPE_MASTER]
-                        .get(i)
-                        .map(|c| c.effect_index())
-                        .unwrap_or(0),
-                ))),
-                PressedTarget::LayerEffect(i) => Some(PanelAction::Params(ParamsAction::EffectCardClicked(
-                    self.effects[Self::SCOPE_LAYER]
-                        .get(i)
-                        .map(|c| c.effect_index())
-                        .unwrap_or(0),
-                ))),
+                PressedTarget::MasterEffect(i) => {
+                    Some(PanelAction::Params(ParamsAction::EffectCardClicked(
+                        self.effects[Self::SCOPE_MASTER]
+                            .get(i)
+                            .map(|c| c.effect_index())
+                            .unwrap_or(0),
+                    )))
+                }
+                PressedTarget::LayerEffect(i) => {
+                    Some(PanelAction::Params(ParamsAction::EffectCardClicked(
+                        self.effects[Self::SCOPE_LAYER]
+                            .get(i)
+                            .map(|c| c.effect_index())
+                            .unwrap_or(0),
+                    )))
+                }
                 _ => None,
             };
 
             let mut actions = match target {
                 PressedTarget::Macros => self.macros_panel.handle_press(node_id, pos.x),
                 PressedTarget::RackWetDry => Vec::new(),
-                PressedTarget::AudioTriggers => {
-                    self.audio_trigger_section.handle_press(node_id, pos.x, tree)
-                }
-                PressedTarget::MasterChrome => {
-                    self.master_chrome.handle_pointer_down(node_id, pos)
-                }
-                PressedTarget::LayerChrome => {
-                    self.layer_chrome.handle_pointer_down(node_id, pos)
-                }
+                PressedTarget::AudioTriggers => self
+                    .audio_trigger_section
+                    .handle_press(node_id, pos.x, tree),
+                PressedTarget::MasterChrome => self.master_chrome.handle_pointer_down(node_id, pos),
+                PressedTarget::LayerChrome => self.layer_chrome.handle_pointer_down(node_id, pos),
                 PressedTarget::ClipChrome => self.clip_chrome.handle_pointer_down(node_id, pos),
                 PressedTarget::MasterEffect(i) => self.effects[Self::SCOPE_MASTER]
                     .get_mut(i)
@@ -566,25 +649,40 @@ impl InspectorCompositePanel {
 }
 
 impl InspectorCompositePanel {
-    fn card_for_target_mut(&mut self, gpt: &crate::GraphParamTarget) -> Option<&mut ParamCardPanel> {
+    fn card_for_target_mut(
+        &mut self,
+        gpt: &crate::GraphParamTarget,
+    ) -> Option<&mut ParamCardPanel> {
         match gpt {
-            crate::GraphParamTarget::Effect(id) => self.effects.iter_mut().flatten()
+            crate::GraphParamTarget::Effect(id) => self
+                .effects
+                .iter_mut()
+                .flatten()
                 .find(|card| card.effect_id() == id),
-            crate::GraphParamTarget::Generator | crate::GraphParamTarget::GeneratorOf(_) => self.gen_params.as_mut(),
+            crate::GraphParamTarget::Generator | crate::GraphParamTarget::GeneratorOf(_) => {
+                self.gen_params.as_mut()
+            }
         }
     }
 
     /// Whether the card `gpt` names has drawer sections to fold (the card
     /// menu offers collapse-all only then).
     pub fn card_has_sections(&mut self, gpt: &crate::GraphParamTarget) -> bool {
-        self.card_for_target_mut(gpt).is_some_and(|card| card.has_sections())
+        self.card_for_target_mut(gpt)
+            .is_some_and(|card| card.has_sections())
     }
 
     /// Fold or unfold every drawer section on the card in one pass, through
     /// the card's own fold state; one view bump, so one rebuild. Returns the
     /// changed sections and whether the card saves its folds (a scene card).
-    pub fn set_card_sections_folded(&mut self, gpt: &crate::GraphParamTarget, folded: bool) -> (Vec<String>, bool) {
-        let Some(card) = self.card_for_target_mut(gpt) else { return (Vec::new(), false) };
+    pub fn set_card_sections_folded(
+        &mut self,
+        gpt: &crate::GraphParamTarget,
+        folded: bool,
+    ) -> (Vec<String>, bool) {
+        let Some(card) = self.card_for_target_mut(gpt) else {
+            return (Vec::new(), false);
+        };
         let changed = card.set_all_sections_folded(folded);
         let saved = card.is_scene_card();
         if !changed.is_empty() {

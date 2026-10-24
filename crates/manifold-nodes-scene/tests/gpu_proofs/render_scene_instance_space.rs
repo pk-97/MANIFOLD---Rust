@@ -125,7 +125,9 @@ fn scene_json() -> String {
     ]
     .join(",");
     let wire = |from: u32, from_port: &str, to: u32, to_port: &str| {
-        format!(r#"{{"fromNode":{from},"fromPort":"{from_port}","toNode":{to},"toPort":"{to_port}"}}"#)
+        format!(
+            r#"{{"fromNode":{from},"fromPort":"{from_port}","toNode":{to},"toPort":"{to_port}"}}"#
+        )
     };
     let mut wires = vec![
         wire(1, "out", 30, "camera"),
@@ -187,7 +189,12 @@ fn render() -> (Vec<u8>, u32, u32) {
         let mut enc = h.device.create_encoder("render-scene-instance-space-enc");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-            runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+            runtime.render(
+                &mut gpu,
+                &target.texture,
+                &ctx,
+                &manifold_core::params::ParamManifest::default(),
+            );
         }
         enc.commit_and_wait_completed();
     }
@@ -209,11 +216,18 @@ fn write_png(bytes: &[u8], w: u32, h: u32, path: &str) {
 /// The colour channel (0 red, 1 green, 2 blue) dominating the pixel under
 /// `world`, or `None` for background.
 fn colour_at(bytes: &[u8], w: u32, h: u32, camera: &Camera, world: [f32; 3]) -> Option<usize> {
-    let p = camera.project_to_pixel(world, w, h).expect("in front of the camera");
+    let p = camera
+        .project_to_pixel(world, w, h)
+        .expect("in front of the camera");
     let (x, y) = (p.px.floor() as u32, p.py.floor() as u32);
-    assert!(x < w && y < h, "{world:?} projects outside the frame ({x}, {y})");
+    assert!(
+        x < w && y < h,
+        "{world:?} projects outside the frame ({x}, {y})"
+    );
     let i = ((y * w + x) * 8) as usize;
-    let rgb: Vec<f32> = (0..3).map(|c| f16::from_le_bytes([bytes[i + c * 2], bytes[i + c * 2 + 1]]).to_f32()).collect();
+    let rgb: Vec<f32> = (0..3)
+        .map(|c| f16::from_le_bytes([bytes[i + c * 2], bytes[i + c * 2 + 1]]).to_f32())
+        .collect();
     (0..3).find(|&c| rgb[c] > 0.5 && (0..3).all(|o| o == c || rgb[o] < 0.2))
 }
 
@@ -247,16 +261,35 @@ fn group_space_copies_draw_every_part_and_object_space_echoes_stay_put() {
     for i in 0..COPIES {
         for (part, colour, name) in [(PART_RED, 0, "red"), (PART_GREEN, 1, "green")] {
             // Group space: parent · instance · part.
-            let right = add(PARENT, add(ring(i, RING_RADIUS), yaw(facing(i, COPY_YAW), part)));
-            assert_eq!(colour_at(&bytes, w, h, &camera, right), Some(colour), "copy {i} draws its {name} part at {right:?}");
+            let right = add(
+                PARENT,
+                add(ring(i, RING_RADIUS), yaw(facing(i, COPY_YAW), part)),
+            );
+            assert_eq!(
+                colour_at(&bytes, w, h, &camera, right),
+                Some(colour),
+                "copy {i} draws its {name} part at {right:?}"
+            );
             // Object space would have put it at parent · part · instance.
             let wrong = add(PARENT, add(part, ring(i, RING_RADIUS)));
-            assert_ne!(colour_at(&bytes, w, h, &camera, wrong), Some(colour), "copy {i} {name} part is not at the Object-space place {wrong:?}");
+            assert_ne!(
+                colour_at(&bytes, w, h, &camera, wrong),
+                Some(colour),
+                "copy {i} {name} part is not at the Object-space place {wrong:?}"
+            );
         }
         // Object space: local · instance, the existing echo rule.
         let echo = yaw(ECHO_YAW, ring(i, ECHO_RADIUS));
-        assert_eq!(colour_at(&bytes, w, h, &camera, echo), Some(2), "echo {i} stays at local · instance {echo:?}");
+        assert_eq!(
+            colour_at(&bytes, w, h, &camera, echo),
+            Some(2),
+            "echo {i} stays at local · instance {echo:?}"
+        );
         let group_rule = ring(i, ECHO_RADIUS);
-        assert_ne!(colour_at(&bytes, w, h, &camera, group_rule), Some(2), "echo {i} is not at instance · local {group_rule:?}");
+        assert_ne!(
+            colour_at(&bytes, w, h, &camera, group_rule),
+            Some(2),
+            "echo {i} is not at instance · local {group_rule:?}"
+        );
     }
 }

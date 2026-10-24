@@ -10,7 +10,10 @@ impl RenderScene {
     /// (resolve_target is where everything above landed; target is the
     /// final color before the tails). None = the zero-vertex or
     /// missing-color abort (cleared exactly as the inline code did).
-    #[allow(clippy::too_many_arguments, reason = "BUG-trh7 stage 2 pass method: args are the evaluate() locals the inline block used — destructuring at call sites is the approved shape")]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "BUG-trh7 stage 2 pass method: args are the evaluate() locals the inline block used — destructuring at call sites is the approved shape"
+    )]
     pub(super) fn pass2_draw<'ctx, 'gpu>(
         &mut self,
         ctx: &mut EffectNodeContext<'ctx, 'gpu>,
@@ -22,11 +25,19 @@ impl RenderScene {
         irr_filtered_valid: bool,
     ) -> Option<Pass2Targets> {
         let FramePrelude {
-            envmap_wired, wants_shafts_now, width, height,
-            temporal_upscale, rt_firefly_clamp_enabled, denoise_aux_ready,
-            normals_resolve_target, roughness_resolve_target,
-            diffuse_albedo_resolve_target, specular_albedo_resolve_target,
-            reactive_resolve_target, ..
+            envmap_wired,
+            wants_shafts_now,
+            width,
+            height,
+            temporal_upscale,
+            rt_firefly_clamp_enabled,
+            denoise_aux_ready,
+            normals_resolve_target,
+            roughness_resolve_target,
+            diffuse_albedo_resolve_target,
+            specular_albedo_resolve_target,
+            reactive_resolve_target,
+            ..
         } = *pre;
         // ---- Pass 2 (immutable phase): draw. Every object composites into
         // ONE 4x-MSAA color+depth pass (cleared once); the shared depth
@@ -47,13 +58,17 @@ impl RenderScene {
         // real `native_color` texture is only touched again at this fn's
         // very end.
         let target: &manifold_gpu::GpuTexture = if temporal_upscale {
-            self.rt_temporal_color_scratch.as_ref().expect("ensured above")
+            self.rt_temporal_color_scratch
+                .as_ref()
+                .expect("ensured above")
         } else if denoise_active {
             // 1:1 denoise: render into the native-res scratch so the
             // denoiser can read color from it and write to native_color
             // without aliasing (the scratch was ensured at native dims
             // in the ensure block above).
-            self.rt_temporal_color_scratch.as_ref().expect("ensured above")
+            self.rt_temporal_color_scratch
+                .as_ref()
+                .expect("ensured above")
         } else {
             native_color
         };
@@ -65,9 +80,8 @@ impl RenderScene {
         // `target` IS that scratch and the clamp's source/destination would
         // alias. Gated on RT having actually rendered this frame AND the
         // param AND not `denoise_active` (the denoiser owns the tail then).
-        let firefly_clamp_active = rt_rendered_this_frame
-            && rt_firefly_clamp_enabled
-            && !denoise_active;
+        let firefly_clamp_active =
+            rt_rendered_this_frame && rt_firefly_clamp_enabled && !denoise_active;
         let resolve_target: &manifold_gpu::GpuTexture = if firefly_clamp_active {
             self.rt_firefly_scratch.as_ref().expect("ensured above")
         } else {
@@ -89,8 +103,12 @@ impl RenderScene {
         // unwired". When `depth` IS wired, the graph's own resolve target
         // is used for BOTH the graph consumer and the march (one resolve,
         // two readers).
-        let depth_resolve_target = graph_depth_resolve_target
-            .or(if wants_shafts_now || self.gizmo_depth_wanted { self.shaft_depth_internal.as_ref() } else { None });
+        let depth_resolve_target =
+            graph_depth_resolve_target.or(if wants_shafts_now || self.gizmo_depth_wanted {
+                self.shaft_depth_internal.as_ref()
+            } else {
+                None
+            });
         // GBUFFER_DESIGN.md section 2 D1/D5 (P2): same lazy rule as `depth` —
         // `None` when unwired, costing zero new bytes (I1).
         let velocity_resolve_target = ctx.outputs.texture_2d("velocity");
@@ -118,7 +136,10 @@ impl RenderScene {
         let envmap_texture = envmap_wired.unwrap_or(dummy);
         // Every caster's shadow map is a layer of one array; the 1-layer
         // stand-in keeps the binding valid in a scene with no casters.
-        let shadow_maps = self.shadow_maps.as_ref().map(|maps| &maps.texture)
+        let shadow_maps = self
+            .shadow_maps
+            .as_ref()
+            .map(|maps| &maps.texture)
             .unwrap_or_else(|| self.dummy_depth_array.as_ref().expect("stubs ensured"));
         let dummy_mask_array = self.dummy_mask_array.as_ref().expect("stubs ensured");
 
@@ -126,13 +147,17 @@ impl RenderScene {
             // Every object had zero drawable vertices — clear so stale
             // pool contents don't leak through (matches render_mesh's
             // vertex_count == 0 fallback).
-            ctx.gpu_encoder().native_enc.clear_texture(resolve_target, 0.0, 0.0, 0.0, 0.0);
+            ctx.gpu_encoder()
+                .native_enc
+                .clear_texture(resolve_target, 0.0, 0.0, 0.0, 0.0);
             if firefly_clamp_active {
                 // Zero-vertex + clamp: RT didn't render (no geometry), so
                 // this branch is unreachable with the clamp armed — but
                 // clear `target` too so a future gate change can't strand
                 // a stale `target` behind an un-run clamp.
-                ctx.gpu_encoder().native_enc.clear_texture(target, 0.0, 0.0, 0.0, 0.0);
+                ctx.gpu_encoder()
+                    .native_enc
+                    .clear_texture(target, 0.0, 0.0, 0.0, 0.0);
             }
             return None;
         }
@@ -162,7 +187,9 @@ impl RenderScene {
         // the `rt_irr_tex` discipline below. Before SV-ACCUM this bound
         // the raw post-atrous `rt_mask_full` — the only RT channel with
         // no temporal amortization, and the penumbra boil Peter reported.
-        let rt_mask_tex = self.rt_sv_history[self.rt_history_ping].as_ref().unwrap_or(dummy_mask_array);
+        let rt_mask_tex = self.rt_sv_history[self.rt_history_ping]
+            .as_ref()
+            .unwrap_or(dummy_mask_array);
         // RAYTRACING_DESIGN.md section 5.2 P2, extended RT-T1-C: the temporally-
         // accumulated demodulated-irradiance history — `rt_history_ping`
         // always indexes whichever ping-pong slot `accumulate_irradiance`
@@ -174,7 +201,9 @@ impl RenderScene {
         let rt_irr_tex = if irr_filtered_valid {
             self.rt_irr_filtered.as_ref().unwrap_or(dummy)
         } else {
-            self.rt_irr_history[self.rt_history_ping].as_ref().unwrap_or(dummy)
+            self.rt_irr_history[self.rt_history_ping]
+                .as_ref()
+                .unwrap_or(dummy)
         };
         // RAYTRACING_DESIGN.md section 9 RD1: the accumulated specular history
         // texture fs_pbr SUBSTITUTES for its prefiltered-env fetch when
@@ -183,15 +212,20 @@ impl RenderScene {
         // unreachable then). `rt_history_ping` indexes the most recent
         // write from `accumulate_irradiance` (RT-R2: swapped every frame
         // by the same ping-pong clock as `rt_irr_history`).
-        let rt_refl_tex = self.rt_refl_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
+        let rt_refl_tex = self.rt_refl_history[self.rt_history_ping]
+            .as_ref()
+            .unwrap_or(dummy);
         // RT-TL-C (section 16 TL5): accumulated svt history — the just-written
         // slot after the ping flip, same ABI-stub discipline as rt_refl_tex.
-        let rt_svt_tex = self.rt_svt_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
+        let rt_svt_tex = self.rt_svt_history[self.rt_history_ping]
+            .as_ref()
+            .unwrap_or(dummy);
         // D11: Pass 2 binds its own identity stub (each pass binds what it
         // needs since the stage-2 carve — the ensure block guarantees it).
         let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
         let binding_sets: Vec<[GpuBinding; 52]> = draws
-            .iter().enumerate()
+            .iter()
+            .enumerate()
             .map(|(draw_index, draw)| {
                 [
                     GpuBinding::Bytes {
@@ -443,11 +477,29 @@ impl RenderScene {
                         buffer: draw.weights.unwrap_or(draw.vertices),
                         offset: 0,
                     },
-                    GpuBinding::Texture { binding: 53, texture: self.volume_optics.path(draw_index).unwrap_or(dummy) },
-                    GpuBinding::Texture { binding: 54, texture: self.volume_optics.density().unwrap_or(dummy) },
-                    GpuBinding::Texture { binding: 55, texture: self.volume_optics.nearest(draw_index).unwrap_or(dummy_depth) },
-                    GpuBinding::Bytes { binding: 51, data: bytemuck::bytes_of(&draw.subsurface_binding) },
-                    GpuBinding::Texture { binding: 52, texture: self.subsurface_pass.output.as_ref().unwrap_or(dummy) },
+                    GpuBinding::Texture {
+                        binding: 53,
+                        texture: self.volume_optics.path(draw_index).unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 54,
+                        texture: self.volume_optics.density().unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 55,
+                        texture: self
+                            .volume_optics
+                            .nearest(draw_index)
+                            .unwrap_or(dummy_depth),
+                    },
+                    GpuBinding::Bytes {
+                        binding: 51,
+                        data: bytemuck::bytes_of(&draw.subsurface_binding),
+                    },
+                    GpuBinding::Texture {
+                        binding: 52,
+                        texture: self.subsurface_pass.output.as_ref().unwrap_or(dummy),
+                    },
                 ]
             })
             .collect();
@@ -566,25 +618,44 @@ impl RenderScene {
         // the MSAA self-fields were ensured under raw denoise_feed one
         // frame early (harmless, preserves ensure-before-use).
         let normals_pair = match (self.denoise_normals_msaa.as_ref(), normals_resolve_target) {
-            (Some(msaa), Some(resolve)) if denoise_aux_ready && !points_active => Some((msaa, resolve)),
+            (Some(msaa), Some(resolve)) if denoise_aux_ready && !points_active => {
+                Some((msaa, resolve))
+            }
             _ => None,
         };
-        let roughness_pair = match (self.denoise_roughness_msaa.as_ref(), roughness_resolve_target) {
-            (Some(msaa), Some(resolve)) if denoise_aux_ready && !points_active => Some((msaa, resolve)),
+        let roughness_pair = match (
+            self.denoise_roughness_msaa.as_ref(),
+            roughness_resolve_target,
+        ) {
+            (Some(msaa), Some(resolve)) if denoise_aux_ready && !points_active => {
+                Some((msaa, resolve))
+            }
             _ => None,
         };
-        let diffuse_albedo_pair = match (self.denoise_diffuse_albedo_msaa.as_ref(), diffuse_albedo_resolve_target) {
-            (Some(msaa), Some(resolve)) if denoise_aux_ready && !points_active => Some((msaa, resolve)),
+        let diffuse_albedo_pair = match (
+            self.denoise_diffuse_albedo_msaa.as_ref(),
+            diffuse_albedo_resolve_target,
+        ) {
+            (Some(msaa), Some(resolve)) if denoise_aux_ready && !points_active => {
+                Some((msaa, resolve))
+            }
             _ => None,
         };
-        let specular_albedo_pair = match (self.denoise_specular_albedo_msaa.as_ref(), specular_albedo_resolve_target) {
-            (Some(msaa), Some(resolve)) if denoise_aux_ready && !points_active => Some((msaa, resolve)),
+        let specular_albedo_pair = match (
+            self.denoise_specular_albedo_msaa.as_ref(),
+            specular_albedo_resolve_target,
+        ) {
+            (Some(msaa), Some(resolve)) if denoise_aux_ready && !points_active => {
+                Some((msaa, resolve))
+            }
             _ => None,
         };
         // DN-L (section 17.7): reactive mask — same all-or-none gate as the
         // other four feeds.
         let reactive_pair = match (self.denoise_reactive_msaa.as_ref(), reactive_resolve_target) {
-            (Some(msaa), Some(resolve)) if denoise_aux_ready && !points_active => Some((msaa, resolve)),
+            (Some(msaa), Some(resolve)) if denoise_aux_ready && !points_active => {
+                Some((msaa, resolve))
+            }
             _ => None,
         };
         let n_att = normals_pair.map(|(msaa, resolve)| manifold_gpu::AuxColorAttachment {
@@ -619,7 +690,15 @@ impl RenderScene {
         let aux_storage_one: [manifold_gpu::AuxColorAttachment; 1];
         // DN-L: the reactive attachment (`rm`) joins the denoise four's
         // all-or-none group — every arm that carries n/r/da/sa carries rm.
-        let aux_color: &[manifold_gpu::AuxColorAttachment] = match (velocity_att, ao_mask_att, n_att, r_att, da_att, sa_att, rm_att) {
+        let aux_color: &[manifold_gpu::AuxColorAttachment] = match (
+            velocity_att,
+            ao_mask_att,
+            n_att,
+            r_att,
+            da_att,
+            sa_att,
+            rm_att,
+        ) {
             (Some(v), Some(a), Some(n), Some(r), Some(da), Some(sa), Some(rm)) => {
                 aux_storage_seven = [v, a, n, r, da, sa, rm];
                 &aux_storage_seven
@@ -656,7 +735,9 @@ impl RenderScene {
             resolve_target,
             msaa_depth: depth_tex,
             depth_resolve: depth_resolve_target.map(|_| {
-                self.depth_resolve_scratch.as_ref().expect("depth consumer ensured native resolve")
+                self.depth_resolve_scratch
+                    .as_ref()
+                    .expect("depth consumer ensured native resolve")
             }),
             aux_color,
             depth_stencil_state: depth_stencil,
@@ -668,16 +749,26 @@ impl RenderScene {
 
         if let Some(output) = depth_resolve_target {
             ctx.gpu_encoder().native_enc.copy_depth_to_float(
-                self.depth_resolve_scratch.as_ref().expect("native resolve ensured"), output,
+                self.depth_resolve_scratch
+                    .as_ref()
+                    .expect("native resolve ensured"),
+                output,
             );
         }
         // The editor's gizmo lines read the internal copy; a wired `depth`
         // output is copied there so both readers see the same frame.
         if self.gizmo_depth_wanted
-            && let (Some(output), Some(internal)) = (depth_resolve_target, self.shaft_depth_internal.as_ref())
+            && let (Some(output), Some(internal)) =
+                (depth_resolve_target, self.shaft_depth_internal.as_ref())
         {
             if graph_depth_resolve_target.is_some() {
-                ctx.gpu_encoder().native_enc.copy_texture_to_texture(output, internal, internal.width, internal.height, 1);
+                ctx.gpu_encoder().native_enc.copy_texture_to_texture(
+                    output,
+                    internal,
+                    internal.width,
+                    internal.height,
+                    1,
+                );
             }
             self.gizmo_depth_ready = true;
         }
@@ -714,10 +805,13 @@ impl RenderScene {
             // of all panes replacing one another with the original opaque image.
             for (_, draw_index, draw_call) in &blend_entries {
                 let draw = &draws[*draw_index];
-                let nearest_surface = draw.is_transmissive && !draw.points
+                let nearest_surface = draw.is_transmissive
+                    && !draw.points
                     && draw.fill_mode == manifold_gpu::GpuTriangleFillMode::Fill;
                 #[cfg(feature = "fluid-perf-proofs")]
-                if nearest_surface { water_perf::record(*draw_index, draw); }
+                if nearest_surface {
+                    water_perf::record(*draw_index, draw);
+                }
                 let shadow_uniforms = ShadowUniforms::for_draw(pre.view_proj, draw);
                 let shadow_bindings = [
                     GpuBinding::Bytes {
@@ -745,7 +839,8 @@ impl RenderScene {
                     },
                     GpuBinding::Sampler {
                         binding: 5,
-                        sampler: &self.material_samplers[&Self::sampler_cache_key(draw.sampler_descs[0])],
+                        sampler: &self.material_samplers
+                            [&Self::sampler_cache_key(draw.sampler_descs[0])],
                     },
                 ];
                 let depth_draw = draw.live(manifold_gpu::GpuEncoder::depth_msaa_draw(
@@ -760,7 +855,8 @@ impl RenderScene {
                 // testing within the mesh selects its nearest surface.
                 if nearest_surface {
                     #[cfg(feature = "fluid-perf-proofs")]
-                    gpu.native_enc.profile_next_encoder("node.render_scene water opaque-depth seed");
+                    gpu.native_enc
+                        .profile_next_encoder("node.render_scene water opaque-depth seed");
                     gpu.native_enc.copy_texture_to_texture(
                         opaque_depth_snapshot,
                         transmissive_depth_scratch,
@@ -780,20 +876,34 @@ impl RenderScene {
                 // Blend layer composites straight onto `resolve_target`.
                 if needs_layer_snapshot(draw.is_transmissive) {
                     #[cfg(feature = "fluid-perf-proofs")]
-                    gpu.native_enc.profile_next_encoder("node.render_scene water scene-color snapshot");
+                    gpu.native_enc
+                        .profile_next_encoder("node.render_scene water scene-color snapshot");
                     gpu.native_enc.copy_texture_to_texture(
-                        resolve_target, opaque_scene_color, width, height, 1,
+                        resolve_target,
+                        opaque_scene_color,
+                        width,
+                        height,
+                        1,
                     );
                     if opaque_scene_color.mip_level_count() > 1 {
                         #[cfg(feature = "fluid-perf-proofs")]
-                        gpu.native_enc.profile_next_encoder("node.render_scene water scene-color mipmaps");
+                        gpu.native_enc
+                            .profile_next_encoder("node.render_scene water scene-color mipmaps");
                         gpu.native_enc.generate_mipmaps(opaque_scene_color);
                     }
                 }
                 gpu.native_enc.draw_instanced_depth_batch(
                     resolve_target,
-                    if nearest_surface { transmissive_depth_scratch } else { opaque_depth_snapshot },
-                    if nearest_surface { transmission_depth_stencil } else { self.blend_depth_stencil.as_ref().expect("ensured") },
+                    if nearest_surface {
+                        transmissive_depth_scratch
+                    } else {
+                        opaque_depth_snapshot
+                    },
+                    if nearest_surface {
+                        transmission_depth_stencil
+                    } else {
+                        self.blend_depth_stencil.as_ref().expect("ensured")
+                    },
                     std::slice::from_ref(draw_call),
                     manifold_gpu::GpuLoadAction::Load,
                     manifold_gpu::GpuLoadAction::Load,
@@ -801,7 +911,6 @@ impl RenderScene {
                 );
             }
         }
-
 
         Some((
             target.clone(),

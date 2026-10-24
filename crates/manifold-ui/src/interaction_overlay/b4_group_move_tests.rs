@@ -168,7 +168,8 @@ impl TimelineEditingHost for TestHost {
         _new_in_point: Seconds,
     ) {
     }
-    fn duplicate_clip_to(&mut self, _src_clip_id: &str, _target_beat: Beats, _target_layer: usize) {}
+    fn duplicate_clip_to(&mut self, _src_clip_id: &str, _target_beat: Beats, _target_layer: usize) {
+    }
     fn commit_command_batch(&mut self, _description: &str) {}
     fn set_clip_start_beat(&mut self, _clip_id: &str, _beat: Beats) {}
     fn set_clip_trim(
@@ -218,7 +219,14 @@ impl TimelineEditingHost for TestHost {
         _new: (Beats, f32, UiSegmentShape),
     ) {
     }
-    fn remove_automation_point(&mut self, _target: &UiGraphTarget, _param_id: &ParamId, _beat: Beats, _value_norm: f32) {}
+    fn remove_automation_point(
+        &mut self,
+        _target: &UiGraphTarget,
+        _param_id: &ParamId,
+        _beat: Beats,
+        _value_norm: f32,
+    ) {
+    }
     fn set_automation_segment_bend_preview(
         &mut self,
         _target: &UiGraphTarget,
@@ -248,11 +256,7 @@ impl TimelineEditingHost for TestHost {
         _right: (Beats, f32, f32, UiSegmentShape),
     ) {
     }
-    fn commit_automation_group_move(
-        &mut self,
-        _moves: Vec<AutomationPointMove>,
-    ) {
-    }
+    fn commit_automation_group_move(&mut self, _moves: Vec<AutomationPointMove>) {}
     fn automation_lane_points(
         &self,
         _target: &UiGraphTarget,
@@ -268,7 +272,13 @@ impl TimelineEditingHost for TestHost {
     ) {
     }
     fn clear_automation_previews(&mut self) {}
-    fn restore_automation_lane_preview(&mut self, _target: &UiGraphTarget, _param_id: &ParamId, _points: Option<&[(Beats, f32, UiSegmentShape)]>) {}
+    fn restore_automation_lane_preview(
+        &mut self,
+        _target: &UiGraphTarget,
+        _param_id: &ParamId,
+        _points: Option<&[(Beats, f32, UiSegmentShape)]>,
+    ) {
+    }
     fn commit_automation_draw_stroke(
         &mut self,
         _target: &UiGraphTarget,
@@ -345,7 +355,11 @@ fn shift_click_after_region_edge_layers_are_deleted_does_not_anchor_on_layer_0()
 
     select_region_to(Beats(8.0), 1, &mut ui_state, &after);
 
-    assert!(ui_state.current_region().is_none(), "region {:?}", ui_state.current_region());
+    assert!(
+        ui_state.current_region().is_none(),
+        "region {:?}",
+        ui_state.current_region()
+    );
     assert_eq!(ui_state.insert_cursor_layer_id(), Some(&LayerId::new("d")));
 }
 
@@ -391,12 +405,7 @@ fn drag_from_any_selected_member_moves_the_whole_group() {
 
     let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
     // Press on clip_b — NOT the anchor — and begin a drag: grab-any-member.
-    overlay.on_begin_drag(
-        body_pos_for(&panel, 6.0),
-        &mut host,
-        &mut ui_state,
-        &panel,
-    );
+    overlay.on_begin_drag(body_pos_for(&panel, 6.0), &mut host, &mut ui_state, &panel);
 
     assert_eq!(overlay.drag_mode(), DragMode::Move);
     let ids: HashSet<ClipId> = ui_state.get_selected_clip_ids().into_iter().collect();

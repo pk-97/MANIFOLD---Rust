@@ -40,7 +40,10 @@ pub const MATERIAL_FAMILY: MaterialFamily = MaterialFamily {
     automatic_reason: "the Material's features field",
     internal: &[
         ("baked_look", "Type Unlit draws a material without lighting"),
-        ("ambient", "a flat fill under the lighting; world lighting alone fills the shadows, so every scene material has none"),
+        (
+            "ambient",
+            "a flat fill under the lighting; world lighting alone fills the shadows, so every scene material has none",
+        ),
     ],
 };
 
@@ -134,12 +137,33 @@ pub static MATERIAL_ROWS: [PropertyRow; 8 + 7 * MODEL_MAP_ROLES.len()] = materia
     "volume_thickness_map",
 ];
 
-const TEXTURE_SOURCES: &[Choice] = &[Choice { key: "none", label: "None" }, Choice { key: "file", label: "File" }];
+const TEXTURE_SOURCES: &[Choice] = &[
+    Choice {
+        key: "none",
+        label: "None",
+    },
+    Choice {
+        key: "file",
+        label: "File",
+    },
+];
 
 /// A model file's material keeps its file's maps until another source is
 /// picked.
-const MODEL_TEXTURE_SOURCES: &[Choice] =
-    &[Choice { key: "model", label: "From Model File" }, Choice { key: "none", label: "None" }, Choice { key: "file", label: "File" }];
+const MODEL_TEXTURE_SOURCES: &[Choice] = &[
+    Choice {
+        key: "model",
+        label: "From Model File",
+    },
+    Choice {
+        key: "none",
+        label: "None",
+    },
+    Choice {
+        key: "file",
+        label: "File",
+    },
+];
 
 fn not_model(fields: &ItemFields) -> bool {
     !model(fields)
@@ -165,20 +189,49 @@ fn write_texture(fields: &mut ItemFields, value: &FieldValue) -> Result<(), Stri
         FieldValue::Choice(key) if key == "none" => TextureSource::None,
         FieldValue::Choice(key) if key == "file" => match &m.texture {
             TextureSource::File { .. } => m.texture.clone(),
-            _ => TextureSource::File { path: String::new() },
+            _ => TextureSource::File {
+                path: String::new(),
+            },
         },
         // The model's maps can be kept, never picked back once replaced.
-        FieldValue::Choice(key) if key == "model" && matches!(m.texture, TextureSource::Model { .. }) => m.texture.clone(),
-        FieldValue::Layer(layer) => TextureSource::Layer { layer: layer.clone() },
+        FieldValue::Choice(key)
+            if key == "model" && matches!(m.texture, TextureSource::Model { .. }) =>
+        {
+            m.texture.clone()
+        }
+        FieldValue::Layer(layer) => TextureSource::Layer {
+            layer: layer.clone(),
+        },
         other => return Err(wrong_value("texture", other)),
     };
     Ok(())
 }
 
-const TYPES: &[Choice] =
-    &[Choice { key: "pbr", label: "PBR" }, Choice { key: "unlit", label: "Unlit" }, Choice { key: "cel", label: "Cel" }];
+const TYPES: &[Choice] = &[
+    Choice {
+        key: "pbr",
+        label: "PBR",
+    },
+    Choice {
+        key: "unlit",
+        label: "Unlit",
+    },
+    Choice {
+        key: "cel",
+        label: "Cel",
+    },
+];
 
-const FEEDS: &[Choice] = &[Choice { key: "base_colour", label: "Base Colour" }, Choice { key: "emission", label: "Emission" }];
+const FEEDS: &[Choice] = &[
+    Choice {
+        key: "base_colour",
+        label: "Base Colour",
+    },
+    Choice {
+        key: "emission",
+        label: "Emission",
+    },
+];
 
 fn material_type_key(fields: &ItemFields) -> &'static str {
     match fields {
@@ -233,7 +286,10 @@ pub static MATERIAL_FIELDS: [FieldRow; 5] = [
         applies: layer,
         disabled: enabled,
         read: |fields| match fields {
-            ItemFields::Material(MaterialFields { texture_feeds: TextureFeeds::Emission, .. }) => FieldValue::Choice("emission".to_owned()),
+            ItemFields::Material(MaterialFields {
+                texture_feeds: TextureFeeds::Emission,
+                ..
+            }) => FieldValue::Choice("emission".to_owned()),
             _ => FieldValue::Choice("base_colour".to_owned()),
         },
         write: |fields, value| match (fields, value) {
@@ -272,7 +328,9 @@ pub static MATERIAL_FIELDS: [FieldRow; 5] = [
         id: "texture_file",
         label: "Texture File",
         section: Material,
-        control: FieldControl::File { extensions: crate::file_loader::PICTURE_EXTENSIONS },
+        control: FieldControl::File {
+            extensions: crate::file_loader::PICTURE_EXTENSIONS,
+        },
         applies: file,
         disabled: enabled,
         read: |fields| match fields {

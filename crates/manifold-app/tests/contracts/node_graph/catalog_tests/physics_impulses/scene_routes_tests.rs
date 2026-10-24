@@ -1,12 +1,14 @@
 use super::*;
 use manifold_core::effect_graph_def::BindingTarget;
 use manifold_core::params::{Param, ParamManifest};
-use manifold_core::scene_modifier_preset::SceneModifierInstanceDef;
 use manifold_core::scene_impulse::ImpulseFire;
+use manifold_core::scene_modifier_preset::SceneModifierInstanceDef;
 
 fn scene_fixture(targets: &[&str]) -> (EffectGraphDef, ParamManifest) {
     let mut def = fixture();
-    let recipe: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_UNIFORMFORCE_JSON)
+    let recipe: EffectGraphDef = serde_json::from_str(
+        manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_UNIFORMFORCE_JSON,
+    )
     .unwrap();
     // The host carries its own metadata. Copying the recipe's would hand the
     // host recipe-only fields, such as a shape naming the recipe's params.
@@ -23,7 +25,9 @@ fn scene_fixture(targets: &[&str]) -> (EffectGraphDef, ParamManifest) {
     );
     // No continuous acceleration; isolate velocity changes from Fire.
     def.wires.retain(|wire| wire.from_node != 1);
-    def = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(&def, SceneModifierInstanceDef {
+    def = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(
+        &def,
+        SceneModifierInstanceDef {
             id: NodeId::new("force"),
             scene: reference("scene"),
             targets: SceneTargetSelection::Explicit {
@@ -32,7 +36,8 @@ fn scene_fixture(targets: &[&str]) -> (EffectGraphDef, ParamManifest) {
             mesh_frames: vec![],
             legacy_math_view_carrier: None,
             graph: Box::new(recipe),
-        })
+        },
+    )
     .unwrap();
     let mut manifest = ParamManifest::from_params(
         def.preset_metadata
@@ -101,7 +106,9 @@ fn scene_impulse_routes_capture_each_click_with_selected_body_and_edited_strengt
         );
         assert_eq!(positions[1], 5.0);
         let mut receipts = Vec::new();
-        runtime.water().drain_scene_impulses(|_, event| receipts.push(event));
+        runtime
+            .water()
+            .drain_scene_impulses(|_, event| receipts.push(event));
         assert_eq!(receipts.len(), 2);
         for (event, (sequence, strength)) in receipts.iter().zip([(41, 2.0), (42, 7.0)]) {
             assert_eq!(event.source.sequence, sequence);
@@ -127,7 +134,9 @@ fn scene_impulse_routes_reload_does_not_replay_saved_counter_and_empty_targets_s
                 .unwrap();
         runtime.execute_frame(time(0.0));
         runtime.execute_frame(time(DT));
-        runtime.water().drain_scene_impulses(|_, _| panic!("saved counters must not generate events"));
+        runtime
+            .water()
+            .drain_scene_impulses(|_, _| panic!("saved counters must not generate events"));
         let result = runtime.fire_scene_impulse(&fire, time(DT), &mut 0);
         if targets.is_empty() {
             assert!(result.unwrap_err().contains("select a simulated object"));
@@ -207,17 +216,25 @@ fn scene_impulse_routes_take_a_burst_past_the_history_and_never_latch() {
     // A rigid world's hit history grows with a burst (ruling 23): one past
     // the 256 it holds up front is admitted, never refused.
     for _ in 0..257 {
-        assert_eq!(runtime.fire_scene_impulse(&fire, time(0.0), &mut sequence), Ok(ImpulseFire::Admitted));
+        assert_eq!(
+            runtime.fire_scene_impulse(&fire, time(0.0), &mut sequence),
+            Ok(ImpulseFire::Admitted)
+        );
     }
     // No reset: the queued hits land once, their receipts drain, the next Fire lands.
     runtime.execute_frame(time(DT));
     let mut receipts = 0;
     runtime.water().drain_scene_impulses(|_, _| receipts += 1);
     assert_eq!(receipts, 257);
-    assert_eq!(runtime.fire_scene_impulse(&fire, time(DT), &mut sequence), Ok(ImpulseFire::Admitted));
+    assert_eq!(
+        runtime.fire_scene_impulse(&fire, time(DT), &mut sequence),
+        Ok(ImpulseFire::Admitted)
+    );
     runtime.execute_frame(time(2.0 * DT));
     let mut landed = Vec::new();
-    runtime.water().drain_scene_impulses(|_, event| landed.push(event.source.sequence));
+    runtime
+        .water()
+        .drain_scene_impulses(|_, event| landed.push(event.source.sequence));
     assert_eq!(landed, [257], "the hit after a refusal lands once");
 }
 
@@ -235,19 +252,29 @@ fn scene_impulse_routes_accept_audio_hits_stamped_ahead_of_the_last_render() {
     runtime.execute_frame(time(DT));
     let mut sequence = 0;
     // Manual: the last rendered time.
-    runtime.fire_scene_impulse(&fire, time(DT), &mut sequence).unwrap();
+    runtime
+        .fire_scene_impulse(&fire, time(DT), &mut sequence)
+        .unwrap();
     // Audio: the next frame's time, before it renders.
-    runtime.fire_scene_impulse(&fire, time(2.0 * DT), &mut sequence).unwrap();
+    runtime
+        .fire_scene_impulse(&fire, time(2.0 * DT), &mut sequence)
+        .unwrap();
     runtime.execute_frame(time(2.0 * DT));
     runtime.execute_frame(time(3.0 * DT));
     let mut sequences = Vec::new();
-    runtime.water().drain_scene_impulses(|_, event| sequences.push(event.source.sequence));
+    runtime
+        .water()
+        .drain_scene_impulses(|_, event| sequences.push(event.source.sequence));
     sequences.sort();
     assert_eq!(sequences, [0, 1], "each hit applies once");
     // Older than the latest observation: lands at it, never skipped.
-    runtime.fire_scene_impulse(&fire, time(2.0 * DT), &mut sequence).unwrap();
+    runtime
+        .fire_scene_impulse(&fire, time(2.0 * DT), &mut sequence)
+        .unwrap();
     runtime.execute_frame(time(4.0 * DT));
     let mut late = Vec::new();
-    runtime.water().drain_scene_impulses(|_, event| late.push(event.source.sequence));
+    runtime
+        .water()
+        .drain_scene_impulses(|_, event| late.push(event.source.sequence));
     assert_eq!(late, [2], "a late hit applies once");
 }

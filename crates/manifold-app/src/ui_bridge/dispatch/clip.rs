@@ -39,7 +39,10 @@ fn apply_detection_edit(
     ContentCommand::send(content_tx, ContentCommand::ReplanClip(clip_id.clone()));
 }
 
-pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
+pub(crate) fn dispatch_clip(
+    action: &ClipAction,
+    ctx: &mut super::super::DispatchCtx,
+) -> DispatchResult {
     match action {
         // ── Clip chrome ────────────────────────────────────────────
         ClipAction::ClipChromeCollapseToggle => {
@@ -51,11 +54,15 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
             if let Some(clip_id) = ctx.selection.primary_selected_clip_id()
                 && let Some(clip) = ctx.project.find_clip_by_id(clip_id)
             {
-                ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(
-                    ChangeClipRecordedBpmCommand::new_warp(
-                        clip_id.clone(), !clip.is_audio_warp_enabled(),
-                    ),
-                )));
+                ContentCommand::send(
+                    ctx.content_tx,
+                    ContentCommand::ExecuteOnContent(Box::new(
+                        ChangeClipRecordedBpmCommand::new_warp(
+                            clip_id.clone(),
+                            !clip.is_audio_warp_enabled(),
+                        ),
+                    )),
+                );
             }
             DispatchResult::handled()
         }
@@ -208,13 +215,12 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
                 }
             }
             DispatchResult::handled()
-        }
-        // BUG-061: the clip in-point ("slip") slider and its right-click reset
-        // were removed (`ClipSlipSnapshot`/`Changed`/`Commit`/`RightClick`) —
-        // dead code with no emitter (the slip UI itself was already gone;
-        // `clip_chrome.rs`'s `set_slip_range`/`sync_slip` were empty stubs).
-        // The clip LOOP-DURATION trio (`ClipLoopSnapshot`/`Changed`/`Commit`)
-        // was dead for the same reason and removed alongside it.
-        // `ClipLoopToggle` is a real, live toggle (is_looping) — kept above.
+        } // BUG-061: the clip in-point ("slip") slider and its right-click reset
+          // were removed (`ClipSlipSnapshot`/`Changed`/`Commit`/`RightClick`) —
+          // dead code with no emitter (the slip UI itself was already gone;
+          // `clip_chrome.rs`'s `set_slip_range`/`sync_slip` were empty stubs).
+          // The clip LOOP-DURATION trio (`ClipLoopSnapshot`/`Changed`/`Commit`)
+          // was dead for the same reason and removed alongside it.
+          // `ClipLoopToggle` is a real, live toggle (is_looping) — kept above.
     }
 }

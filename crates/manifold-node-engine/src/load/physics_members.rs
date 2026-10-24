@@ -130,15 +130,31 @@ mod tests {
     use manifold_core::effect_graph_def::EffectGraphNode;
 
     fn node(id: u32, type_id: &str) -> EffectGraphNode {
-        serde_json::from_value(serde_json::json!({"id": id, "nodeId": format!("n{id}"), "typeId": type_id})).unwrap()
+        serde_json::from_value(
+            serde_json::json!({"id": id, "nodeId": format!("n{id}"), "typeId": type_id}),
+        )
+        .unwrap()
     }
 
     fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectGraphWire {
-        EffectGraphWire { from_node, from_port: from_port.into(), to_node, to_port: to_port.into() }
+        EffectGraphWire {
+            from_node,
+            from_port: from_port.into(),
+            to_node,
+            to_port: to_port.into(),
+        }
     }
 
     fn def(nodes: Vec<EffectGraphNode>, wires: Vec<EffectGraphWire>) -> EffectGraphDef {
-        EffectGraphDef { version: 2, name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(), nodes, wires }
+        EffectGraphDef {
+            version: 2,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            scene_modifiers: Vec::new(),
+            nodes,
+            wires,
+        }
     }
 
     #[test]
@@ -160,18 +176,31 @@ mod tests {
         );
         let built = compile(&source);
         let has = |from: u32, from_port: &str, to: u32, to_port: &str| {
-            built.wires.iter().any(|w| w.from_node == from && w.from_port == from_port && w.to_node == to && w.to_port == to_port)
+            built.wires.iter().any(|w| {
+                w.from_node == from
+                    && w.from_port == from_port
+                    && w.to_node == to
+                    && w.to_port == to_port
+            })
         };
         assert!(has(1, "pose_7", 3, "transform"));
         assert!(has(4, "field", 1, "body_acceleration_7"));
-        assert!(has(2, "body", 1, "body_7"), "membership is the one numbered wire and stays");
+        assert!(
+            has(2, "body", 1, "body_7"),
+            "membership is the one numbered wire and stays"
+        );
         assert_eq!(built.wires.len(), 4);
     }
 
     #[test]
     fn a_copies_body_publishes_its_group_s_instances_and_count() {
         let source = def(
-            vec![node(1, "node.physics_world"), node(2, "node.rigid_body"), node(3, "node.scene_object"), node(4, "node.value")],
+            vec![
+                node(1, "node.physics_world"),
+                node(2, "node.rigid_body"),
+                node(3, "node.scene_object"),
+                node(4, "node.value"),
+            ],
             vec![
                 wire(2, "body", 1, "copies_3"),
                 wire(2, "instances", 3, "instances"),
@@ -182,18 +211,31 @@ mod tests {
         );
         let built = compile(&source);
         let has = |from: u32, from_port: &str, to: u32, to_port: &str| {
-            built.wires.iter().any(|w| w.from_node == from && w.from_port == from_port && w.to_node == to && w.to_port == to_port)
+            built.wires.iter().any(|w| {
+                w.from_node == from
+                    && w.from_port == from_port
+                    && w.to_node == to
+                    && w.to_port == to_port
+            })
         };
         assert!(has(1, "instances_3", 3, "instances"));
         assert!(has(1, "active_count_3", 3, "instance_count"));
         assert!(has(4, "field", 1, "copies_acceleration_3"));
-        assert!(!built.wires.iter().any(|w| w.to_port == "transform"), "a copy group has no single pose");
+        assert!(
+            !built.wires.iter().any(|w| w.to_port == "transform"),
+            "a copy group has no single pose"
+        );
     }
 
     #[test]
     fn a_body_with_no_world_shows_its_authored_transform() {
         let source = def(
-            vec![node(2, "node.rigid_body"), node(3, "node.scene_object"), node(4, "node.value"), node(5, "node.transform_3d")],
+            vec![
+                node(2, "node.rigid_body"),
+                node(3, "node.scene_object"),
+                node(4, "node.value"),
+                node(5, "node.transform_3d"),
+            ],
             vec![
                 wire(5, "transform", 2, "transform"),
                 wire(2, "pose", 3, "transform"),
@@ -201,15 +243,30 @@ mod tests {
             ],
         );
         let built = compile(&source);
-        assert!(built.wires.iter().any(|w| w.from_node == 5 && w.to_node == 3 && w.to_port == "transform"));
-        assert!(!built.wires.iter().any(|w| w.to_port == "acceleration"), "a force on a body in no world acts on nothing");
+        assert!(
+            built
+                .wires
+                .iter()
+                .any(|w| w.from_node == 5 && w.to_node == 3 && w.to_port == "transform")
+        );
+        assert!(
+            !built.wires.iter().any(|w| w.to_port == "acceleration"),
+            "a force on a body in no world acts on nothing"
+        );
     }
 
     #[test]
     fn a_graph_with_no_alias_wire_is_borrowed_unchanged() {
         let source = def(
-            vec![node(1, "node.physics_world"), node(2, "node.rigid_body"), node(3, "node.scene_object")],
-            vec![wire(2, "body", 1, "body_0"), wire(1, "pose_0", 3, "transform")],
+            vec![
+                node(1, "node.physics_world"),
+                node(2, "node.rigid_body"),
+                node(3, "node.scene_object"),
+            ],
+            vec![
+                wire(2, "body", 1, "body_0"),
+                wire(1, "pose_0", 3, "transform"),
+            ],
         );
         assert!(matches!(compile(&source), Cow::Borrowed(_)));
     }

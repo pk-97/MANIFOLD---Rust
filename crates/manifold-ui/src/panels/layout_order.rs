@@ -17,7 +17,10 @@ pub(crate) fn assert_left_to_right(cells: &[(&str, Rect)], bounds: Rect) {
     }
     for pair in cells.windows(2) {
         let ((a, ra), (b, rb)) = (pair[0], pair[1]);
-        assert!(ra.x_max() <= rb.x + EPS, "{a} {ra:?} must end before {b} {rb:?} starts");
+        assert!(
+            ra.x_max() <= rb.x + EPS,
+            "{a} {ra:?} must end before {b} {rb:?} starts"
+        );
     }
 }
 
@@ -32,7 +35,10 @@ pub(crate) fn assert_top_to_bottom(cells: &[(&str, Rect)], bounds: Rect) {
     }
     for pair in cells.windows(2) {
         let ((a, ra), (b, rb)) = (pair[0], pair[1]);
-        assert!(ra.y_max() <= rb.y + EPS, "{a} {ra:?} must end above {b} {rb:?}");
+        assert!(
+            ra.y_max() <= rb.y + EPS,
+            "{a} {ra:?} must end above {b} {rb:?}"
+        );
     }
 }
 
@@ -40,7 +46,10 @@ pub(crate) fn assert_top_to_bottom(cells: &[(&str, Rect)], bounds: Rect) {
 pub(crate) fn assert_one_row(cells: &[(&str, Rect)]) {
     let (first, fr) = cells[0];
     for (name, r) in &cells[1..] {
-        assert!(r.y < fr.y_max() && fr.y < r.y_max(), "{name} {r:?} is off {first}'s row {fr:?}");
+        assert!(
+            r.y < fr.y_max() && fr.y < r.y_max(),
+            "{name} {r:?} is off {first}'s row {fr:?}"
+        );
     }
 }
 
@@ -48,5 +57,8 @@ pub(crate) fn assert_one_row(cells: &[(&str, Rect)]) {
 pub(crate) fn assert_centred(what: &str, inner_x: f32, inner_x_max: f32, outer: Rect) {
     let mid = (inner_x + inner_x_max) * 0.5;
     let want = outer.x + outer.width * 0.5;
-    assert!((mid - want).abs() < 0.5, "{what} centre {mid} != panel centre {want}");
+    assert!(
+        (mid - want).abs() < 0.5,
+        "{what} centre {mid} != panel centre {want}"
+    );
 }

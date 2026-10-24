@@ -46,17 +46,19 @@ use std::path::{Path, PathBuf};
 
 use crossbeam_channel::{Receiver, Sender};
 
+use manifold_compositor::presentation::{
+    CurrentHeadroom, DisplayCapabilities, DisplayDestination, DisplayPlan, PotentialHeadroom,
+};
+use manifold_core::TonemapCurve;
 use manifold_core::clip::TimelineClip;
 use manifold_core::effects::{ParamId, ParameterDriver};
 use manifold_core::layer::Layer;
 use manifold_core::marker::TimelineMarker;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
-use manifold_core::TonemapCurve;
 use manifold_core::{AudioBand, AudioFeature, AudioFeatureKind, AudioSend, ParameterAudioMod};
 use manifold_core::{BeatDivision, Beats, Bpm, DriverWaveform, PresetTypeId, Seconds};
 use manifold_media::export_config::ExportConfig;
-use manifold_compositor::presentation::{CurrentHeadroom, DisplayCapabilities, DisplayDestination, DisplayPlan, PotentialHeadroom};
 
 use crate::content_command::ContentCommand;
 use crate::content_state::ContentState;
@@ -107,7 +109,8 @@ fn run_headless_export_states(
 /// frame export, and is how we observe the `ExportFinishedEvent` outside
 /// `run_export`'s own borrow of `state_tx`.
 fn run_headless_export(project: Project, cfg: ExportConfig) -> Result<PathBuf, String> {
-    run_headless_export_with_options(project, cfg, None, false, false, false).map(|result| result.path)
+    run_headless_export_with_options(project, cfg, None, false, false, false)
+        .map(|result| result.path)
 }
 
 struct ObservedExport {
@@ -133,7 +136,8 @@ fn run_headless_export_with_sdr_observation(
         false,
         sdr_preview,
     )?;
-    result.sdr
+    result
+        .sdr
         .map(|readback| (result.path, readback))
         .ok_or_else(|| "colour proof observer produced no first-frame SDR readback".to_string())
 }
@@ -152,7 +156,8 @@ fn run_headless_export_with_hdr_observation(
         true,
         sdr_preview,
     )?;
-    result.hdr
+    result
+        .hdr
         .map(|readback| (result.path, readback))
         .ok_or_else(|| "colour proof observer produced no first-frame HDR readback".to_string())
 }
@@ -167,7 +172,10 @@ fn run_headless_export_with_options(
 ) -> Result<ObservedExport, String> {
     let expected_sdr_plan = DisplayPlan::new(
         DisplayCapabilities::sdr(),
-        project.settings.tonemap_enabled.then_some(project.settings.tonemap_curve),
+        project
+            .settings
+            .tonemap_enabled
+            .then_some(project.settings.tonemap_curve),
     );
     let mut ct = headless_content_thread(project, cfg.width, cfg.height);
 
@@ -202,12 +210,14 @@ fn run_headless_export_with_options(
     let (state_tx, state_rx) = crate::content_state::state_channel();
     let (observation_tx, observation_rx) = crossbeam_channel::unbounded();
     let _observation_guard = if capture_sdr_readback || capture_hdr_readback {
-        Some(crate::content_export::install_export_observer_with_export_readbacks(
-            observation_tx,
-            None,
-            capture_sdr_readback,
-            capture_hdr_readback,
-        ))
+        Some(
+            crate::content_export::install_export_observer_with_export_readbacks(
+                observation_tx,
+                None,
+                capture_sdr_readback,
+                capture_hdr_readback,
+            ),
+        )
     } else {
         None
     };
@@ -246,10 +256,14 @@ fn run_headless_export_with_options(
 
     // Rendering synchronizes the project's curve into the pipeline. Inspect
     // the plan afterward so this checks the selected curve, not its initial Off state.
-    assert_eq!(ct.content_pipeline.sdr_presentation_plan(), expected_sdr_plan);
+    assert_eq!(
+        ct.content_pipeline.sdr_presentation_plan(),
+        expected_sdr_plan
+    );
     if sdr_preview {
         assert_eq!(
-            ct.content_pipeline.display_presentation_plan(DisplayDestination::Workspace),
+            ct.content_pipeline
+                .display_presentation_plan(DisplayDestination::Workspace),
             Some(expected_sdr_plan),
             "SDR preview must use the exact shared SDR export presentation plan"
         );
@@ -261,7 +275,9 @@ fn run_headless_export_with_options(
     drop(cmd_tx);
     drop(state_tx);
 
-    let finished = drain.join().map_err(|_| "journey-proof drain thread panicked".to_string())?;
+    let finished = drain
+        .join()
+        .map_err(|_| "journey-proof drain thread panicked".to_string())?;
     let (sdr_readback, hdr_readback) = if capture_sdr_readback || capture_hdr_readback {
         let mut sdr = None;
         let mut hdr = None;
@@ -318,7 +334,11 @@ fn resolve_ffprobe() -> Option<String> {
     {
         return Some(p);
     }
-    for candidate in ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe", "/usr/bin/ffprobe"] {
+    for candidate in [
+        "/opt/homebrew/bin/ffprobe",
+        "/usr/local/bin/ffprobe",
+        "/usr/bin/ffprobe",
+    ] {
         if Path::new(candidate).exists() {
             return Some(candidate.to_string());
         }
@@ -354,7 +374,10 @@ fn extract_frames_to_pngs(video_path: &Path, out_dir: &Path) -> Result<Vec<PathB
         .collect();
     frames.sort();
     if frames.is_empty() {
-        return Err(format!("ffmpeg produced no frames in {}", out_dir.display()));
+        return Err(format!(
+            "ffmpeg produced no frames in {}",
+            out_dir.display()
+        ));
     }
     Ok(frames)
 }
@@ -364,7 +387,9 @@ fn extract_frames_to_pngs(video_path: &Path, out_dir: &Path) -> Result<Vec<PathB
 fn frame_mean_luma(png_path: &Path) -> Result<f32, String> {
     let img = image::open(png_path).map_err(|e| format!("decode {}: {e}", png_path.display()))?;
     let gray = img.to_luma8();
-    let (sum, count) = gray.pixels().fold((0u64, 0u64), |(s, c), p| (s + p.0[0] as u64, c + 1));
+    let (sum, count) = gray
+        .pixels()
+        .fold((0u64, 0u64), |(s, c), p| (s + p.0[0] as u64, c + 1));
     if count == 0 {
         return Err(format!("{} decoded to zero pixels", png_path.display()));
     }
@@ -382,7 +407,16 @@ fn luma_series(frames: &[PathBuf]) -> Result<Vec<f32>, String> {
 fn ffprobe_has_audio_stream(path: &Path) -> Result<bool, String> {
     let ffprobe = resolve_ffprobe().ok_or_else(|| "ffprobe not found".to_string())?;
     let output = std::process::Command::new(&ffprobe)
-        .args(["-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0"])
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=index",
+            "-of",
+            "csv=p=0",
+        ])
         .arg(path)
         .output()
         .map_err(|e| format!("spawn ffprobe: {e}"))?;
@@ -394,7 +428,14 @@ fn ffprobe_has_audio_stream(path: &Path) -> Result<bool, String> {
 fn ffprobe_duration_seconds(path: &Path) -> Result<f64, String> {
     let ffprobe = resolve_ffprobe().ok_or_else(|| "ffprobe not found".to_string())?;
     let output = std::process::Command::new(&ffprobe)
-        .args(["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0"])
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "csv=p=0",
+        ])
         .arg(path)
         .output()
         .map_err(|e| format!("spawn ffprobe: {e}"))?;
@@ -464,7 +505,10 @@ fn max_finite_half(readback: &[u8]) -> f32 {
             continue;
         }
         let value = half::f16::from_bits(u16::from_le_bytes([bytes[0], bytes[1]])).to_f32();
-        assert!(value.is_finite(), "HDR source RGB readback contains non-finite value");
+        assert!(
+            value.is_finite(),
+            "HDR source RGB readback contains non-finite value"
+        );
         max = max.max(value);
     }
     max
@@ -481,7 +525,8 @@ fn decode_hdr_first_frame(path: &Path, width: u32, height: u32) -> Result<Vec<u1
             "-v",
             "error",
             "-i",
-            path.to_str().ok_or_else(|| format!("non-UTF-8 path: {}", path.display()))?,
+            path.to_str()
+                .ok_or_else(|| format!("non-UTF-8 path: {}", path.display()))?,
             "-frames:v",
             "1",
             "-vf",
@@ -535,7 +580,11 @@ fn pq_code_to_nits(code: u16) -> f32 {
 }
 
 fn max_decoded_pq_nits(codes: &[u16]) -> f32 {
-    codes.iter().copied().map(pq_code_to_nits).fold(0.0, f32::max)
+    codes
+        .iter()
+        .copied()
+        .map(pq_code_to_nits)
+        .fold(0.0, f32::max)
 }
 
 // ─── Fixture builders ───────────────────────────────────────────────────────
@@ -562,7 +611,10 @@ pub(crate) fn star_field_generator_layer(index: i32) -> Layer {
     let mut layer = Layer::new("Stars".to_string(), LayerType::Generator, index);
     let pid = PresetTypeId::from_string("StarField".to_string());
     layer.change_generator_type(pid);
-    layer.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(CLICK_BEATS as f64)));
+    layer.clips.push(TimelineClip::new_generator(
+        Beats(0.0),
+        Beats(CLICK_BEATS as f64),
+    ));
     layer
 }
 
@@ -580,7 +632,8 @@ fn cut_boundary_project() -> Project {
     top.gen_params_mut()
         .expect("generator layer must carry gen_params")
         .set_param("brightness", 0.0);
-    top.clips.push(TimelineClip::new_generator(Beats(4.0), Beats(4.0)));
+    top.clips
+        .push(TimelineClip::new_generator(Beats(4.0), Beats(4.0)));
 
     let mut bottom = Layer::new("Outgoing".to_string(), LayerType::Generator, 1);
     bottom.change_generator_type(PresetTypeId::from_string("StarField".to_string()));
@@ -588,7 +641,9 @@ fn cut_boundary_project() -> Project {
         .gen_params_mut()
         .expect("generator layer must carry gen_params")
         .set_param("brightness", 4.0);
-    bottom.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(4.0)));
+    bottom
+        .clips
+        .push(TimelineClip::new_generator(Beats(0.0), Beats(4.0)));
 
     project.timeline.layers.push(top);
     project.timeline.layers.push(bottom);
@@ -695,7 +750,11 @@ fn audio_reactive_project(click_wav_path: &str) -> Project {
         AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Full),
     );
     audio_mod.enabled = true;
-    gen_layer.gen_params_mut().expect("generator layer must carry gen_params").audio_mods_mut().push(audio_mod);
+    gen_layer
+        .gen_params_mut()
+        .expect("generator layer must carry gen_params")
+        .audio_mods_mut()
+        .push(audio_mod);
 
     project.timeline.layers.push(audio_layer);
     project.timeline.layers.push(gen_layer);
@@ -716,7 +775,10 @@ fn lfo_project() -> Project {
     // Half-note period = 2 beats = 1s at 120 BPM -> 4 full cycles across the
     // 4s/8-beat export, so the mean-crossing assertion has real margin.
     let driver = ParameterDriver::new(DRIVEN_PARAM, BeatDivision::Half, DriverWaveform::Sine);
-    gen_layer.gen_params_mut().expect("generator layer must carry gen_params").drivers = Some(vec![driver]);
+    gen_layer
+        .gen_params_mut()
+        .expect("generator layer must carry gen_params")
+        .drivers = Some(vec![driver]);
 
     project.timeline.layers.push(gen_layer);
     project
@@ -742,16 +804,18 @@ fn colour_export_project(curve: Option<TonemapCurve>) -> Project {
         .gen_params_mut()
         .expect("Plasma generator must carry parameters");
     for (id, value) in [("complexity", 1.0), ("contrast", 1.0), ("speed", 0.0)] {
-        assert!(params.set_base_param(id, value), "Plasma parameter {id} exists");
+        assert!(
+            params.set_base_param(id, value),
+            "Plasma parameter {id} exists"
+        );
         assert_eq!(
             params.get_param(id),
             value,
             "Plasma fixture must target an existing `{id}` manifest parameter"
         );
     }
-    let mut grade = manifold_core::preset_definition_registry::create_default(
-        &PresetTypeId::COLOR_GRADE,
-    );
+    let mut grade =
+        manifold_core::preset_definition_registry::create_default(&PresetTypeId::COLOR_GRADE);
     // Export restores effective values from the authored bases every frame.
     // Seed the base so this fixture actually exercises HDR master highlights.
     assert!(grade.set_base_param("gain", 2.0));
@@ -859,12 +923,11 @@ mod tests {
                 ));
             }
             for (a, b) in a.pixels().zip(b.pixels()) {
-                total += a
-                    .0
-                    .iter()
-                    .zip(b.0)
-                    .map(|(a, b)| (f32::from(*a) - f32::from(b)).abs() / 255.0)
-                    .sum::<f32>();
+                total +=
+                    a.0.iter()
+                        .zip(b.0)
+                        .map(|(a, b)| (f32::from(*a) - f32::from(b)).abs() / 255.0)
+                        .sum::<f32>();
                 count += 3;
             }
         }
@@ -890,12 +953,11 @@ mod tests {
         let mut samples = 0usize;
         for (pixel, halves) in image.pixels().zip(mapped_rgba16f.chunks_exact(8)) {
             for (channel, offset) in [0usize, 2, 4].into_iter().enumerate() {
-                let linear = half::f16::from_bits(u16::from_le_bytes([
-                    halves[offset],
-                    halves[offset + 1],
-                ]))
-                .to_f32();
-                let expected = manifold_node_engine::gpu::headless_readback::linear_to_srgb8(linear);
+                let linear =
+                    half::f16::from_bits(u16::from_le_bytes([halves[offset], halves[offset + 1]]))
+                        .to_f32();
+                let expected =
+                    manifold_node_engine::gpu::headless_readback::linear_to_srgb8(linear);
                 let error = pixel.0[channel].abs_diff(expected);
                 sum += f32::from(error);
                 max = max.max(error);
@@ -912,7 +974,9 @@ mod tests {
         layer.clips[0].duration_beats = Beats(1.0);
         project.timeline.layers.push(layer);
         if let Some(beat) = marker {
-            project.timeline.add_marker(TimelineMarker::new(beat).with_name("Mid"));
+            project
+                .timeline
+                .add_marker(TimelineMarker::new(beat).with_name("Mid"));
         }
         project
     }
@@ -946,9 +1010,14 @@ mod tests {
              (project_audio_layer_export_mixdown memory / audio_mixdown.rs docs)"
         );
 
-        let frames = extract_frames_to_pngs(&video_path, &dir.join("frames")).expect("frame extract");
+        let frames =
+            extract_frames_to_pngs(&video_path, &dir.join("frames")).expect("frame extract");
         let luma = luma_series(&frames).expect("luma series");
-        println!("[journey-proof] audio_reactive_export_moves: {} frames, luma={:?}", luma.len(), luma);
+        println!(
+            "[journey-proof] audio_reactive_export_moves: {} frames, luma={:?}",
+            luma.len(),
+            luma
+        );
 
         let (click_idx, gap_idx) = click_and_gap_frames(luma.len());
         let click_mean = mean_at(&luma, &click_idx);
@@ -968,7 +1037,9 @@ mod tests {
              click_mean={click_mean} gap_mean={gap_mean} (ratio={:.2})",
             click_mean / gap_mean
         );
-        let (min, max) = luma.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &v| (mn.min(v), mx.max(v)));
+        let (min, max) = luma
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(mn, mx), &v| (mn.min(v), mx.max(v)));
         assert!(
             max > min * 2.0,
             "luma series must not be constant: min={min} max={max} (ratio={:.2})",
@@ -994,7 +1065,8 @@ mod tests {
         let cfg = tiny_export_config(&video_path, FPS);
         run_headless_export(cut_boundary_project(), cfg).expect("export should succeed");
 
-        let frames = extract_frames_to_pngs(&video_path, &dir.join("frames")).expect("frame extract");
+        let frames =
+            extract_frames_to_pngs(&video_path, &dir.join("frames")).expect("frame extract");
         let luma = luma_series(&frames).expect("luma series");
         println!(
             "[journey-proof] export_cut_lands_exactly_on_clip_boundary: {} frames, luma={:?}",
@@ -1047,7 +1119,8 @@ mod tests {
         let cfg = tiny_export_config(&video_path, CLICK_FPS);
         run_headless_export(reloaded, cfg).expect("export of the RELOADED project should succeed");
 
-        let frames = extract_frames_to_pngs(&video_path, &dir.join("frames")).expect("frame extract");
+        let frames =
+            extract_frames_to_pngs(&video_path, &dir.join("frames")).expect("frame extract");
         let luma = luma_series(&frames).expect("luma series");
         println!(
             "[journey-proof] audio_reactive_survives_save_reload: {} frames, luma={:?}",
@@ -1080,19 +1153,33 @@ mod tests {
         let cfg = tiny_export_config(&video_path, CLICK_FPS);
         run_headless_export(project, cfg).expect("export should succeed");
 
-        let frames = extract_frames_to_pngs(&video_path, &dir.join("frames")).expect("frame extract");
+        let frames =
+            extract_frames_to_pngs(&video_path, &dir.join("frames")).expect("frame extract");
         let luma = luma_series(&frames).expect("luma series");
-        println!("[journey-proof] lfo_modulation_exports: {} frames, luma={:?}", luma.len(), luma);
+        println!(
+            "[journey-proof] lfo_modulation_exports: {} frames, luma={:?}",
+            luma.len(),
+            luma
+        );
 
         let mean: f32 = luma.iter().sum::<f32>() / luma.len() as f32;
-        let (min, max) = luma.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &v| (mn.min(v), mx.max(v)));
+        let (min, max) = luma
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(mn, mx), &v| (mn.min(v), mx.max(v)));
         println!("[journey-proof] mean={mean} min={min} max={max}");
         // Ratio, not absolute delta — see audio_reactive_export_moves for why
         // (StarField's mean luma is tiny in absolute terms regardless of
         // `brightness`'s param-range swing).
-        assert!(max > min * 2.0, "LFO-driven export must swing: min={min} max={max} (ratio={:.2})", max / min);
+        assert!(
+            max > min * 2.0,
+            "LFO-driven export must swing: min={min} max={max} (ratio={:.2})",
+            max / min
+        );
 
-        let crossings = luma.windows(2).filter(|w| (w[0] - mean) * (w[1] - mean) < 0.0).count();
+        let crossings = luma
+            .windows(2)
+            .filter(|w| (w[0] - mean) * (w[1] - mean) < 0.0)
+            .count();
         println!("[journey-proof] mean crossings={crossings}");
         assert!(
             crossings >= 4,
@@ -1127,12 +1214,10 @@ mod tests {
             ));
             project.timeline.layers.push(audio_layer);
             project.timeline.layers.push(star_field_generator_layer(1));
-            project.timeline.add_marker(
-                TimelineMarker::new(Beats(2.0)).with_name("Drop"),
-            );
             project
                 .timeline
-                .add_marker(TimelineMarker::new(Beats(5.0)));
+                .add_marker(TimelineMarker::new(Beats(2.0)).with_name("Drop"));
+            project.timeline.add_marker(TimelineMarker::new(Beats(5.0)));
             project
         };
 
@@ -1153,7 +1238,10 @@ mod tests {
             assert!(path.exists(), "missing section file {}", path.display());
             let dur = ffprobe_duration_seconds(&path).expect("ffprobe duration");
             let start = ffprobe_audio_start_seconds(&path).expect("ffprobe audio start");
-            println!("[journey-proof] section {}: duration={dur:.3}s (expect {secs}), audio_start={start:.4}", name);
+            println!(
+                "[journey-proof] section {}: duration={dur:.3}s (expect {secs}), audio_start={start:.4}",
+                name
+            );
             assert!(
                 (dur - secs).abs() <= one_frame,
                 "{} duration {dur:.3}s must match its beat range {secs}s within one frame",
@@ -1195,7 +1283,9 @@ mod tests {
         let cancelled_path = dir.join("cancelled.mp4");
         let _ = std::fs::remove_file(&cancelled_path);
         let mut cancel_ui = crate::ui_root::UIRoot::new();
-        cancel_ui.export_progress.begin(cancelled_path.to_str().unwrap());
+        cancel_ui
+            .export_progress
+            .begin(cancelled_path.to_str().unwrap());
         cancel_ui.build();
         let escape = manifold_ui::input::UIEvent::KeyDown {
             node_id: manifold_ui::node::NodeId::PLACEHOLDER,
@@ -1226,21 +1316,38 @@ mod tests {
             .iter()
             .flat_map(|state| &state.export_finished)
             .collect();
-        assert_eq!(cancel_finished.len(), 1, "cancellation must emit one terminal file result");
+        assert_eq!(
+            cancel_finished.len(),
+            1,
+            "cancellation must emit one terminal file result"
+        );
         assert!(!cancel_finished[0].success);
         assert_eq!(cancel_finished[0].message, "Export cancelled");
-        assert!(!cancelled_path.exists(), "cancelled export must remove its partial output");
+        assert!(
+            !cancelled_path.exists(),
+            "cancelled export must remove its partial output"
+        );
         assert_eq!(
-            cancel_states.iter().filter(|state| state.export_run_finished).count(),
+            cancel_states
+                .iter()
+                .filter(|state| state.export_run_finished)
+                .count(),
             1,
             "cancellation must emit one whole-run terminal pulse"
         );
-        assert!(cancel_states.last().is_some_and(|state| state.export_run_finished));
+        assert!(
+            cancel_states
+                .last()
+                .is_some_and(|state| state.export_run_finished)
+        );
         for state in &cancel_states {
             let terminal = state.export_run_finished;
             assert!(cancel_ui.consume_export_notification(state));
             if !terminal {
-                assert!(cancel_ui.export_progress.is_open(), "modal closes only on run terminal");
+                assert!(
+                    cancel_ui.export_progress.is_open(),
+                    "modal closes only on run terminal"
+                );
             }
         }
         assert!(!cancel_ui.export_progress.is_open());
@@ -1260,16 +1367,27 @@ mod tests {
             .iter()
             .flat_map(|state| &state.export_finished)
             .collect();
-        assert_eq!(batch_finished.len(), 2, "one interior marker must produce two file results");
+        assert_eq!(
+            batch_finished.len(),
+            2,
+            "one interior marker must produce two file results"
+        );
         assert!(batch_finished.iter().all(|event| event.success));
         assert!(dir.join("batch--section-1.mp4").exists());
         assert!(dir.join("batch--Mid.mp4").exists());
         assert_eq!(
-            batch_states.iter().filter(|state| state.export_run_finished).count(),
+            batch_states
+                .iter()
+                .filter(|state| state.export_run_finished)
+                .count(),
             1,
             "a split run must emit one whole-run terminal pulse"
         );
-        assert!(batch_states.last().is_some_and(|state| state.export_run_finished));
+        assert!(
+            batch_states
+                .last()
+                .is_some_and(|state| state.export_run_finished)
+        );
 
         let mut batch_ui = crate::ui_root::UIRoot::new();
         batch_ui.export_progress.begin(batch_base.to_str().unwrap());
@@ -1291,11 +1409,8 @@ mod tests {
         let mut invalid_cfg = tiny_export_config(&invalid_path, 4.0);
         invalid_cfg.start_beat = 0.75;
         invalid_cfg.end_beat = 0.5;
-        let invalid_states = run_headless_export_states(
-            one_beat_generator_project(None),
-            invalid_cfg,
-            None,
-        );
+        let invalid_states =
+            run_headless_export_states(one_beat_generator_project(None), invalid_cfg, None);
         let invalid_finished: Vec<_> = invalid_states
             .iter()
             .flat_map(|state| &state.export_finished)
@@ -1303,8 +1418,18 @@ mod tests {
         assert_eq!(invalid_finished.len(), 1);
         assert!(!invalid_finished[0].success);
         assert_eq!(invalid_finished[0].message, "No content in export range");
-        assert_eq!(invalid_states.iter().filter(|state| state.export_run_finished).count(), 1);
-        assert!(invalid_states.last().is_some_and(|state| state.export_run_finished));
+        assert_eq!(
+            invalid_states
+                .iter()
+                .filter(|state| state.export_run_finished)
+                .count(),
+            1
+        );
+        assert!(
+            invalid_states
+                .last()
+                .is_some_and(|state| state.export_run_finished)
+        );
     }
 
     /// D4 (design doc): same project + range + fps -> the same feature
@@ -1318,18 +1443,28 @@ mod tests {
         let wav_path = click_wav.to_str().unwrap();
 
         let video_a = dir.join("export_a.mp4");
-        run_headless_export(audio_reactive_project(wav_path), tiny_export_config(&video_a, CLICK_FPS))
-            .expect("export a should succeed");
+        run_headless_export(
+            audio_reactive_project(wav_path),
+            tiny_export_config(&video_a, CLICK_FPS),
+        )
+        .expect("export a should succeed");
         let frames_a = extract_frames_to_pngs(&video_a, &dir.join("frames_a")).expect("frames a");
         let luma_a = luma_series(&frames_a).expect("luma a");
 
         let video_b = dir.join("export_b.mp4");
-        run_headless_export(audio_reactive_project(wav_path), tiny_export_config(&video_b, CLICK_FPS))
-            .expect("export b should succeed");
+        run_headless_export(
+            audio_reactive_project(wav_path),
+            tiny_export_config(&video_b, CLICK_FPS),
+        )
+        .expect("export b should succeed");
         let frames_b = extract_frames_to_pngs(&video_b, &dir.join("frames_b")).expect("frames b");
         let luma_b = luma_series(&frames_b).expect("luma b");
 
-        assert_eq!(luma_a.len(), luma_b.len(), "both runs must produce the same frame count");
+        assert_eq!(
+            luma_a.len(),
+            luma_b.len(),
+            "both runs must produce the same frame count"
+        );
         let max_diff = luma_a
             .iter()
             .zip(luma_b.iter())
@@ -1339,7 +1474,10 @@ mod tests {
         // Tolerant of encoder-quantization jitter (H.264 CRF is deterministic
         // given identical input frames, but this guards against any residual
         // GPU float nondeterminism) while still failing hard on real drift.
-        assert!(max_diff < 0.01, "two runs of the same export diverged: max per-frame luma diff {max_diff}");
+        assert!(
+            max_diff < 0.01,
+            "two runs of the same export diverged: max per-frame luma diff {max_diff}"
+        );
     }
 
     /// Real SDR/HDR export colour proof. SDR curves are selected only at the
@@ -1383,13 +1521,14 @@ mod tests {
             PotentialHeadroom::new(4.0).expect("valid HDR potential headroom"),
             CurrentHeadroom::new(2.0).expect("valid HDR current headroom"),
         );
-        let (aces_hdr_workspace_path, aces_hdr_workspace_mapped) = run_headless_export_with_sdr_observation(
-            colour_export_project(Some(TonemapCurve::AcesNarkowicz)),
-            tiny_colour_export_config(&aces_hdr_workspace_path),
-            Some(hdr_workspace),
-            true,
-        )
-        .expect("ACES SDR export with HDR workspace capability should succeed");
+        let (aces_hdr_workspace_path, aces_hdr_workspace_mapped) =
+            run_headless_export_with_sdr_observation(
+                colour_export_project(Some(TonemapCurve::AcesNarkowicz)),
+                tiny_colour_export_config(&aces_hdr_workspace_path),
+                Some(hdr_workspace),
+                true,
+            )
+            .expect("ACES SDR export with HDR workspace capability should succeed");
 
         let (hdr_off_path, hdr_off_scene) = run_headless_export_with_hdr_observation(
             colour_export_project(None),
@@ -1406,12 +1545,12 @@ mod tests {
         )
         .expect("AgX HDR export with SDR preview should succeed");
 
-        let off_frames = extract_frames_to_pngs(&off_path, &dir.join("off_frames"))
-            .expect("extract Off frames");
+        let off_frames =
+            extract_frames_to_pngs(&off_path, &dir.join("off_frames")).expect("extract Off frames");
         let aces_frames = extract_frames_to_pngs(&aces_path, &dir.join("aces_frames"))
             .expect("extract ACES frames");
-        let agx_frames = extract_frames_to_pngs(&agx_path, &dir.join("agx_frames"))
-            .expect("extract AgX frames");
+        let agx_frames =
+            extract_frames_to_pngs(&agx_path, &dir.join("agx_frames")).expect("extract AgX frames");
         let aces_hdr_workspace_frames = extract_frames_to_pngs(
             &aces_hdr_workspace_path,
             &dir.join("aces_hdr_workspace_frames"),
@@ -1442,22 +1581,23 @@ mod tests {
         let hdr_agx_decoded = decode_hdr_first_frame(&hdr_agx_path, 64, 64)
             .expect("decode first AgX HDR frame without SDR tonemap");
         let hdr_decoded_delta = mean_u16_distance(&hdr_off_decoded, &hdr_agx_decoded);
-        let hdr_decoded_highlight = max_decoded_pq_nits(&hdr_off_decoded)
-            .max(max_decoded_pq_nits(&hdr_agx_decoded));
+        let hdr_decoded_highlight =
+            max_decoded_pq_nits(&hdr_off_decoded).max(max_decoded_pq_nits(&hdr_agx_decoded));
         let hdr_agx_metadata = ffprobe_hdr_stream(&hdr_agx_path).expect("ffprobe AgX HDR metadata");
         let off_aces = mean_rgb_distance(&off_frames, &aces_frames).expect("compare Off/ACES");
         let off_agx = mean_rgb_distance(&off_frames, &agx_frames).expect("compare Off/AgX");
         let aces_agx = mean_rgb_distance(&aces_frames, &agx_frames).expect("compare ACES/AgX");
         let display_delta = mean_rgb_distance(&aces_frames, &aces_hdr_workspace_frames)
             .expect("compare SDR exports across workspace capabilities");
-        let off_error = encoded_rgb_error(&off_frames[0], &off_mapped).expect("compare Off to mapped SDR");
-        let aces_error = encoded_rgb_error(&aces_frames[0], &aces_mapped).expect("compare ACES to mapped SDR");
-        let agx_error = encoded_rgb_error(&agx_frames[0], &agx_mapped).expect("compare AgX to mapped SDR");
-        let aces_hdr_workspace_error = encoded_rgb_error(
-            &aces_hdr_workspace_frames[0],
-            &aces_hdr_workspace_mapped,
-        )
-        .expect("compare HDR-workspace ACES to mapped SDR");
+        let off_error =
+            encoded_rgb_error(&off_frames[0], &off_mapped).expect("compare Off to mapped SDR");
+        let aces_error =
+            encoded_rgb_error(&aces_frames[0], &aces_mapped).expect("compare ACES to mapped SDR");
+        let agx_error =
+            encoded_rgb_error(&agx_frames[0], &agx_mapped).expect("compare AgX to mapped SDR");
+        let aces_hdr_workspace_error =
+            encoded_rgb_error(&aces_hdr_workspace_frames[0], &aces_hdr_workspace_mapped)
+                .expect("compare HDR-workspace ACES to mapped SDR");
         let hdr_scene_delta = manifold_node_engine::gpu::headless_readback::mean_abs_half_diff(
             &hdr_off_scene,
             &hdr_agx_scene,
@@ -1479,9 +1619,18 @@ mod tests {
         // Per-pixel RGB distance is measured after the real H.264 encode and
         // PNG extraction, so these margins tolerate codec quantisation while
         // still failing if the selected project curve is bypassed or collapsed.
-        assert!(off_aces > 0.005, "Off and ACES encoded pixels must differ: {off_aces}");
-        assert!(off_agx > 0.005, "Off and AgX encoded pixels must differ: {off_agx}");
-        assert!(aces_agx > 0.002, "ACES and AgX encoded pixels must differ: {aces_agx}");
+        assert!(
+            off_aces > 0.005,
+            "Off and ACES encoded pixels must differ: {off_aces}"
+        );
+        assert!(
+            off_agx > 0.005,
+            "Off and AgX encoded pixels must differ: {off_agx}"
+        );
+        assert!(
+            aces_agx > 0.002,
+            "ACES and AgX encoded pixels must differ: {aces_agx}"
+        );
         assert!(
             display_delta < 0.005,
             "SDR encoded pixels must not depend on workspace HDR headroom or SDR preview: {display_delta}"
@@ -1492,8 +1641,14 @@ mod tests {
             ("AgX", agx_error),
             ("HDR-workspace ACES", aces_hdr_workspace_error),
         ] {
-            assert!(mean < 8.0, "{name} encoded RGB mean error is too large: {mean:.2} levels");
-            assert!(max < 64, "{name} encoded RGB max error is too large: {max} levels");
+            assert!(
+                mean < 8.0,
+                "{name} encoded RGB mean error is too large: {mean:.2} levels"
+            );
+            assert!(
+                max < 64,
+                "{name} encoded RGB max error is too large: {max} levels"
+            );
         }
         assert!(
             hdr_scene_delta < 0.01,

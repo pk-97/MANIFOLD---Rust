@@ -27,20 +27,26 @@ impl RtProbeScene {
         history_textures: &[&GpuTexture],
     ) -> Self {
         Self {
-            objects: objects.iter().map(|object| RtProbeObject {
-                vertices: object.vertex_buffer.clone(),
-                indices: object.index_buffer.cloned(),
-                vertex_stride: object.vertex_stride,
-                vertex_offset: object.vertex_offset,
-                triangle_count: object.triangle_count,
-                transform: object.transform,
-                instances: object.instances_buffer.cloned(),
-                instance_slots: object.instance_slots,
-                weights: object.appearance_weights.cloned(),
-                gain: object.appearance_gain,
-            }).collect(),
+            objects: objects
+                .iter()
+                .map(|object| RtProbeObject {
+                    vertices: object.vertex_buffer.clone(),
+                    indices: object.index_buffer.cloned(),
+                    vertex_stride: object.vertex_stride,
+                    vertex_offset: object.vertex_offset,
+                    triangle_count: object.triangle_count,
+                    transform: object.transform,
+                    instances: object.instances_buffer.cloned(),
+                    instance_slots: object.instance_slots,
+                    weights: object.appearance_weights.cloned(),
+                    gain: object.appearance_gain,
+                })
+                .collect(),
             textures: textures.iter().map(|texture| (*texture).clone()).collect(),
-            history_textures: history_textures.iter().map(|texture| (*texture).clone()).collect(),
+            history_textures: history_textures
+                .iter()
+                .map(|texture| (*texture).clone())
+                .collect(),
         }
     }
 
@@ -57,8 +63,14 @@ impl RtProbeScene {
 }
 
 /// Observe the first captured scene without exposing scene-family types in the engine.
-pub fn rt_probe_scene(runtime: &manifold_node_engine::runtime::PresetRuntime) -> Option<&RtProbeScene> {
+pub fn rt_probe_scene(
+    runtime: &manifold_node_engine::runtime::PresetRuntime,
+) -> Option<&RtProbeScene> {
     runtime.graph.nodes().find_map(|node| {
-        node.node.as_ref().as_any().downcast_ref::<super::RenderScene>()?.rt_probe_scene()
+        node.node
+            .as_ref()
+            .as_any()
+            .downcast_ref::<super::RenderScene>()?
+            .rt_probe_scene()
     })
 }

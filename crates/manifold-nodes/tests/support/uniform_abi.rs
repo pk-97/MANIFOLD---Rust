@@ -44,7 +44,8 @@ pub fn abi_source_files() -> Result<Vec<PathBuf>, String> {
         .iter()
         .map(|relative| {
             let path = manifest.join(relative);
-            path.canonicalize().map_err(|e| format!("missing ABI case source file {}: {e}", path.display()))
+            path.canonicalize()
+                .map_err(|e| format!("missing ABI case source file {}: {e}", path.display()))
         })
         .collect()
 }
@@ -74,7 +75,11 @@ pub fn resolve_source_path(source: &str) -> Result<PathBuf, String> {
     let mut candidates = Vec::with_capacity(roots.len() + 1);
     candidates.push(manifest.join("src/node_graph/primitives").join(source));
     candidates.extend(roots.into_iter().map(|root| root.join(source)));
-    candidates.extend(abi_source_files()?.into_iter().filter(|file| file.ends_with(source)));
+    candidates.extend(
+        abi_source_files()?
+            .into_iter()
+            .filter(|file| file.ends_with(source)),
+    );
     candidates
         .into_iter()
         .find(|path| path.is_file())

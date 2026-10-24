@@ -128,7 +128,11 @@ impl GesturePreview {
         else {
             return;
         };
-        match self.lanes.iter_mut().find(|l| l.target == *target && l.param_id == lane.param_id) {
+        match self
+            .lanes
+            .iter_mut()
+            .find(|l| l.target == *target && l.param_id == lane.param_id)
+        {
             Some(slot) => {
                 slot.points.clear();
                 slot.points.extend_from_slice(&lane.points);
@@ -230,7 +234,9 @@ fn reapply_clip(project: &mut Project, clip: &ClipPreview) {
 
 /// The parts a committed batch wrote.
 pub(crate) fn touches_of(commands: &[Box<dyn Command>]) -> ChangeSet {
-    commands.iter().fold(ChangeSet::NONE, |acc, c| acc.union(c.touches()))
+    commands
+        .iter()
+        .fold(ChangeSet::NONE, |acc, c| acc.union(c.touches()))
 }
 
 #[cfg(test)]
@@ -240,16 +246,20 @@ mod tests {
     //! real `AppEditingHost`.
     use super::*;
     use manifold_core::change::Part;
-    use manifold_core::effects::{AutomationPoint, SegmentShape};
     use manifold_core::effects::PresetInstance;
+    use manifold_core::effects::{AutomationPoint, SegmentShape};
     use manifold_editing::service::EditingService;
     use manifold_ui::interaction_overlay::{DragMode, InteractionOverlay};
     use manifold_ui::layout::ScreenLayout;
     use manifold_ui::node::Vec2;
     use manifold_ui::panels::Panel;
-    use manifold_ui::panels::viewport::{TimelineViewportPanel, TrackInfo, ViewportAutomationLane, ViewportClip};
+    use manifold_ui::panels::viewport::{
+        TimelineViewportPanel, TrackInfo, ViewportAutomationLane, ViewportClip,
+    };
     use manifold_ui::tree::UITree;
-    use manifold_ui::view::{UiAutomationLane, UiAutomationPoint, UiGraphTarget, UiLayer, UiSegmentShape};
+    use manifold_ui::view::{
+        UiAutomationLane, UiAutomationPoint, UiGraphTarget, UiLayer, UiSegmentShape,
+    };
 
     struct Rig {
         project: Project,
@@ -289,7 +299,11 @@ mod tests {
         }
     }
 
-    fn viewport(layer_id: &LayerId, clips: Vec<ViewportClip>, lanes: Vec<ViewportAutomationLane>) -> TimelineViewportPanel {
+    fn viewport(
+        layer_id: &LayerId,
+        clips: Vec<ViewportClip>,
+        lanes: Vec<ViewportAutomationLane>,
+    ) -> TimelineViewportPanel {
         let mut tree = UITree::new();
         let mut panel = TimelineViewportPanel::new();
         panel.set_tracks(vec![TrackInfo::default()]);
@@ -329,7 +343,8 @@ mod tests {
             manifold_core::PresetTypeId::from_string("Video".to_string()),
         );
         let (mut create, clip_id) =
-            EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(8.0)).unwrap();
+            EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(8.0))
+                .unwrap();
         create.execute(&mut project);
         let layer_id = project.timeline.layers[0].layer_id.clone();
         let mut panel = viewport(
@@ -352,7 +367,10 @@ mod tests {
             Vec::new(),
         );
         let body = |panel: &TimelineViewportPanel, beat: f32| {
-            Vec2::new(panel.beat_to_pixel(Beats::from_f32(beat)), panel.tracks_rect().y + 70.0)
+            Vec2::new(
+                panel.beat_to_pixel(Beats::from_f32(beat)),
+                panel.tracks_rect().y + 70.0,
+            )
         };
         let mut rig = Rig::new(project);
         let mut selection = manifold_ui::UIState::new();
@@ -363,15 +381,33 @@ mod tests {
         overlay.on_begin_drag(body(&panel, 2.0), &mut rig.host(), &mut selection, &panel);
         assert_eq!(overlay.drag_mode(), DragMode::Move);
         for beat in [6.0, 10.0] {
-            overlay.on_drag(body(&panel, beat), &mut rig.host(), &mut selection, &mut panel);
-            assert_eq!(rig.edits.stamps.parts(), before, "a clip move preview moved a stamp");
+            overlay.on_drag(
+                body(&panel, beat),
+                &mut rig.host(),
+                &mut selection,
+                &mut panel,
+            );
+            assert_eq!(
+                rig.edits.stamps.parts(),
+                before,
+                "a clip move preview moved a stamp"
+            );
         }
-        assert!(rig.edits.preview.version().clips > 0, "the move wrote the preview");
+        assert!(
+            rig.edits.preview.version().clips > 0,
+            "the move wrote the preview"
+        );
         assert!(!rig.edits.preview.is_empty());
         overlay.on_end_drag(&mut rig.host());
         let moved = rig.edits.stamps.parts().moved_since(&before);
-        assert!(moved.contains(Part::Clips), "the commit stamps Clips once: {moved:?}");
-        assert!(rig.edits.preview.is_empty(), "the commit clears the preview");
+        assert!(
+            moved.contains(Part::Clips),
+            "the commit stamps Clips once: {moved:?}"
+        );
+        assert!(
+            rig.edits.preview.is_empty(),
+            "the commit clears the preview"
+        );
 
         // ── Automation point drag ──
         let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("Mirror"));
@@ -381,8 +417,16 @@ mod tests {
             param_id: "amount".into(),
             enabled: true,
             points: vec![
-                AutomationPoint { beat: Beats(4.0), value: 0.5, shape: SegmentShape::Linear },
-                AutomationPoint { beat: Beats(8.0), value: 0.8, shape: SegmentShape::Linear },
+                AutomationPoint {
+                    beat: Beats(4.0),
+                    value: 0.5,
+                    shape: SegmentShape::Linear,
+                },
+                AutomationPoint {
+                    beat: Beats(8.0),
+                    value: 0.8,
+                    shape: SegmentShape::Linear,
+                },
             ],
         }]);
         let mut project = Project::default();
@@ -405,8 +449,18 @@ mod tests {
                     target,
                     label: "Mirror: amount".into(),
                     points: vec![
-                        UiAutomationPoint { beat: Beats(4.0), value_norm: 0.5, shape: UiSegmentShape::Linear, past_end: false },
-                        UiAutomationPoint { beat: Beats(8.0), value_norm: 0.8, shape: UiSegmentShape::Linear, past_end: false },
+                        UiAutomationPoint {
+                            beat: Beats(4.0),
+                            value_norm: 0.5,
+                            shape: UiSegmentShape::Linear,
+                            past_end: false,
+                        },
+                        UiAutomationPoint {
+                            beat: Beats(8.0),
+                            value_norm: 0.8,
+                            shape: UiSegmentShape::Linear,
+                            past_end: false,
+                        },
                     ],
                     param_min: 0.0,
                     param_max: 1.0,
@@ -417,7 +471,10 @@ mod tests {
             }],
         );
         let lane = panel.automation_lane_screens()[0].clone();
-        let press = Vec2::new(panel.beat_to_pixel(lane.dots[0].beat), lane.y_at_norm(lane.dots[0].value_norm));
+        let press = Vec2::new(
+            panel.beat_to_pixel(lane.dots[0].beat),
+            lane.y_at_norm(lane.dots[0].value_norm),
+        );
         let mut rig = Rig::new(project);
         let mut selection = manifold_ui::UIState::new();
         let mut overlay = InteractionOverlay::new(manifold_ui::color::CLIP_VERTICAL_PAD);
@@ -427,13 +484,26 @@ mod tests {
         assert_eq!(overlay.drag_mode(), DragMode::AutomationPoint);
         for step in [Vec2::new(10.0, -15.0), Vec2::new(20.0, -30.0)] {
             overlay.on_drag(press + step, &mut rig.host(), &mut selection, &mut panel);
-            assert_eq!(rig.edits.stamps.parts(), before, "a point drag preview moved a stamp");
+            assert_eq!(
+                rig.edits.stamps.parts(),
+                before,
+                "a point drag preview moved a stamp"
+            );
         }
-        assert!(!rig.edits.preview.is_empty(), "the point drag wrote the preview");
+        assert!(
+            !rig.edits.preview.is_empty(),
+            "the point drag wrote the preview"
+        );
         overlay.on_end_drag(&mut rig.host());
         let moved = rig.edits.stamps.parts().moved_since(&before);
-        assert!(moved.contains(Part::Automation), "the commit stamps Automation once: {moved:?}");
-        assert!(rig.edits.preview.is_empty(), "the commit clears the preview");
+        assert!(
+            moved.contains(Part::Automation),
+            "the commit stamps Automation once: {moved:?}"
+        );
+        assert!(
+            rig.edits.preview.is_empty(),
+            "the commit clears the preview"
+        );
     }
 
     #[test]
@@ -450,7 +520,8 @@ mod tests {
             manifold_core::PresetTypeId::from_string("Video".to_string()),
         );
         let (mut create, clip_id) =
-            EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(8.0)).unwrap();
+            EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(8.0))
+                .unwrap();
         create.execute(&mut project);
         let snapshot = project.clone();
         let mut rig = Rig::new(project);
@@ -462,8 +533,15 @@ mod tests {
         }
         let mut fresh = snapshot.clone();
         rig.edits.preview.reapply(&mut fresh);
-        let layer = fresh.timeline.layers[1].clips.iter().find(|c| c.id == clip_id).expect("moved to B");
-        assert_eq!((layer.start_beat, layer.duration_beats, layer.in_point), (Beats(4.0), Beats(2.0), Seconds(0.5)));
+        let layer = fresh.timeline.layers[1]
+            .clips
+            .iter()
+            .find(|c| c.id == clip_id)
+            .expect("moved to B");
+        assert_eq!(
+            (layer.start_beat, layer.duration_beats, layer.in_point),
+            (Beats(4.0), Beats(2.0), Seconds(0.5))
+        );
         assert!(fresh.timeline.layers[0].clips.is_empty());
     }
 }

@@ -6,14 +6,15 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_water_liquid::primitives::liquid_bricks;
-use manifold_water_liquid::float_param;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::primitives::liquid_bricks;
 
-pub const MARCHING_CUBES_COMMON: &str = manifold_water_liquid::primitives::redistance_lattice::MARCHING_CUBES_COMMON;
+pub const MARCHING_CUBES_COMMON: &str =
+    manifold_water_liquid::primitives::redistance_lattice::MARCHING_CUBES_COMMON;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -161,4 +162,5 @@ mod extent;
 
 /// The dense kernel the brick-fused form is proven against.
 #[cfg(any(test, feature = "testkit"))]
-pub const DENSE_REFERENCE: &str = include_str!("shaders/count_surface_triangles_dense_reference.wgsl");
+pub const DENSE_REFERENCE: &str =
+    include_str!("shaders/count_surface_triangles_dense_reference.wgsl");

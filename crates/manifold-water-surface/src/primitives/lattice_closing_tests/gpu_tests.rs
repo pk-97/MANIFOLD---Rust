@@ -1,7 +1,7 @@
+use super::*;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_water_liquid::primitives::offset_lattice::OffsetLattice;
 use manifold_water_liquid::primitives::redistance_lattice::RedistanceLattice;
-use super::*;
 
 #[test]
 fn fluid_fill_pits_gpu_values_match_f64_and_zero_identity() {

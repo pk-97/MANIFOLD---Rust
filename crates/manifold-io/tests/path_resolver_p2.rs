@@ -66,7 +66,7 @@ fn build_project(broken_audio: &Path, broken_glb: &Path) -> Project {
         legacy_discriminant: None,
         available: true,
         is_line_based: false,
-            layer_types: None,
+        layer_types: None,
         params: Vec::new(),
         bindings: Vec::new(),
         param_aliases: Vec::new(),
@@ -121,7 +121,10 @@ fn build_project(broken_audio: &Path, broken_glb: &Path) -> Project {
     let mut gen_layer = Layer::new_generator("GLB".into(), PresetTypeId::new("p2_glb"), 1);
     let mut gen_clip = TimelineClip::new_generator(Beats::ZERO, Beats::from_f32(8.0));
     let mut params = BTreeMap::new();
-    params.insert("model_file".to_string(), broken_glb.to_string_lossy().to_string());
+    params.insert(
+        "model_file".to_string(),
+        broken_glb.to_string_lossy().to_string(),
+    );
     gen_clip.string_params = Some(params);
     gen_layer.clips.push(gen_clip);
     project.timeline.layers.push(gen_layer);
@@ -162,7 +165,10 @@ fn moved_audio_and_glb_relink_through_media_sibling() {
     let audio_clip = &audio_layer.clips[0];
     assert_ne!(audio_clip.audio_file_path, broken_audio.to_string_lossy());
     let audio_path = Path::new(&audio_clip.audio_file_path);
-    assert!(audio_path.exists(), "audio re-linked to a live file: {audio_path:?}");
+    assert!(
+        audio_path.exists(),
+        "audio re-linked to a live file: {audio_path:?}"
+    );
     assert_eq!(audio_path.file_name().unwrap(), "loop.wav");
     assert!(
         audio_clip.relative_audio_file_path.is_some(),
@@ -185,6 +191,9 @@ fn moved_audio_and_glb_relink_through_media_sibling() {
         .expect("model_file override survives the round trip");
     assert_ne!(glb, &broken_glb.to_string_lossy());
     let glb_path = Path::new(glb);
-    assert!(glb_path.exists(), "GLB re-linked to a live file: {glb_path:?}");
+    assert!(
+        glb_path.exists(),
+        "GLB re-linked to a live file: {glb_path:?}"
+    );
     assert_eq!(glb_path.file_name().unwrap(), "model.glb");
 }

@@ -34,7 +34,10 @@ pub struct ParticleFrameInfo {
 #[derive(Debug)]
 pub enum CaptureError {
     /// Caller memory too small; nothing was published. Retry the same tick.
-    Capacity { particles: u32, solid: usize },
+    Capacity {
+        particles: u32,
+        solid: usize,
+    },
     Fluid(FluidError),
 }
 
@@ -71,7 +74,12 @@ unsafe extern "C" {
         fits_out: *mut i32,
     ) -> i32;
     #[cfg(feature = "face-oracle")]
-    fn manifold_fluids_world_capture_face_v(world: *mut c_void, out: *mut f32, capacity: usize, dims_out: *mut u32) -> i32;
+    fn manifold_fluids_world_capture_face_v(
+        world: *mut c_void,
+        out: *mut f32,
+        capacity: usize,
+        dims_out: *mut u32,
+    ) -> i32;
 }
 
 #[cfg(feature = "face-oracle")]
@@ -82,11 +90,25 @@ impl FluidWorld {
     pub fn capture_face_v(&mut self, out: &mut Vec<f32>) -> Result<[u32; 3], FluidError> {
         let mut dims = [0u32; 3];
         // The entry reports its dims before it checks capacity.
-        let mut ok = unsafe { manifold_fluids_world_capture_face_v(self.native, out.as_mut_ptr(), out.len(), dims.as_mut_ptr()) };
+        let mut ok = unsafe {
+            manifold_fluids_world_capture_face_v(
+                self.native,
+                out.as_mut_ptr(),
+                out.len(),
+                dims.as_mut_ptr(),
+            )
+        };
         let needed = dims.iter().map(|&d| d as usize).product::<usize>();
         if out.len() < needed {
             out.resize(needed, 0.0);
-            ok = unsafe { manifold_fluids_world_capture_face_v(self.native, out.as_mut_ptr(), out.len(), dims.as_mut_ptr()) };
+            ok = unsafe {
+                manifold_fluids_world_capture_face_v(
+                    self.native,
+                    out.as_mut_ptr(),
+                    out.len(),
+                    dims.as_mut_ptr(),
+                )
+            };
         }
         native_result(ok, "capturing vertical faces")?;
         Ok(dims)
@@ -181,7 +203,10 @@ mod tests {
         world
     }
 
-    fn capture(world: &mut FluidWorld, offset: [f32; 3]) -> (Vec<ParticleRecord>, Vec<f32>, ParticleFrameInfo) {
+    fn capture(
+        world: &mut FluidWorld,
+        offset: [f32; 3],
+    ) -> (Vec<ParticleRecord>, Vec<f32>, ParticleFrameInfo) {
         let mut particles = vec![ParticleRecord::default(); 8192];
         let mut solid = vec![0.0; SOLID_NODES];
         let info = world
@@ -285,7 +310,10 @@ mod tests {
             let mut particles = vec![sentinel; particle_len];
             let mut solid = vec![7.0; solid_len];
             match world.capture_particle_frame([0.0; 3], &mut particles, &mut solid) {
-                Err(CaptureError::Capacity { particles: p, solid: s }) => {
+                Err(CaptureError::Capacity {
+                    particles: p,
+                    solid: s,
+                }) => {
                     assert_eq!(p, info.count);
                     assert_eq!(s, SOLID_NODES);
                 }
@@ -302,12 +330,23 @@ mod tests {
     #[test]
     fn particle_frame_solid_matches_surface_frame() {
         let mut world = dam_break(9);
-        world.set_surface_options(SurfaceOptions::default()).unwrap();
+        world
+            .set_surface_options(SurfaceOptions::default())
+            .unwrap();
         world
             .set_obstacle(
-                Bounds { min: [1.4, 0.2, 1.0], max: [1.8, 1.2, 1.4] },
-                Bounds { min: [1.41, 0.2, 1.0], max: [1.81, 1.2, 1.4] },
-                Bounds { min: [1.42, 0.2, 1.0], max: [1.82, 1.2, 1.4] },
+                Bounds {
+                    min: [1.4, 0.2, 1.0],
+                    max: [1.8, 1.2, 1.4],
+                },
+                Bounds {
+                    min: [1.41, 0.2, 1.0],
+                    max: [1.81, 1.2, 1.4],
+                },
+                Bounds {
+                    min: [1.42, 0.2, 1.0],
+                    max: [1.82, 1.2, 1.4],
+                },
             )
             .unwrap();
         for _ in 0..3 {
@@ -331,7 +370,10 @@ mod tests {
             solid.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
             reference.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
         );
-        assert!(solid.iter().any(|v| *v < 0.0), "the obstacle must be inside the lattice");
+        assert!(
+            solid.iter().any(|v| *v < 0.0),
+            "the obstacle must be inside the lattice"
+        );
         // A second capture reuses its scratch and must repeat the lattice.
         let (_, repeated, _) = capture(&mut world, [0.0; 3]);
         assert_eq!(solid, repeated);

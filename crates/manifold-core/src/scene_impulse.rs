@@ -58,11 +58,17 @@ fn with_bit(words: &[u64], index: usize) -> Arc<[u64]> {
 }
 
 fn has_bit(words: &[u64], index: usize) -> bool {
-    words.get(index / 64).is_some_and(|word| word & (1u64 << (index % 64)) != 0)
+    words
+        .get(index / 64)
+        .is_some_and(|word| word & (1u64 << (index % 64)) != 0)
 }
 
 fn union_words(left: &[u64], right: &[u64]) -> Arc<[u64]> {
-    let (long, short) = if left.len() >= right.len() { (left, right) } else { (right, left) };
+    let (long, short) = if left.len() >= right.len() {
+        (left, right)
+    } else {
+        (right, left)
+    };
     let mut words = long.to_vec();
     for (word, other) in words.iter_mut().zip(short) {
         *word |= other;
@@ -72,19 +78,27 @@ fn union_words(left: &[u64], right: &[u64]) -> Arc<[u64]> {
 
 fn set_bits(words: &[u64]) -> impl Iterator<Item = usize> + '_ {
     words.iter().enumerate().flat_map(|(at, &word)| {
-        (0..64).filter(move |bit| word & (1u64 << bit) != 0).map(move |bit| at * 64 + bit)
+        (0..64)
+            .filter(move |bit| word & (1u64 << bit) != 0)
+            .map(move |bit| at * 64 + bit)
     })
 }
 
 impl RigidImpulseTargets {
     /// Body slot `index` alone. Always `Some`: the mask holds any slot.
     pub fn body(index: usize) -> Option<Self> {
-        Some(Self { bodies: with_bit(&[], index), groups: Arc::default() })
+        Some(Self {
+            bodies: with_bit(&[], index),
+            groups: Arc::default(),
+        })
     }
 
     /// Copy group `index` alone. Always `Some`: the mask holds any group.
     pub fn group(index: usize) -> Option<Self> {
-        Some(Self { bodies: Arc::default(), groups: with_bit(&[], index) })
+        Some(Self {
+            bodies: Arc::default(),
+            groups: with_bit(&[], index),
+        })
     }
 
     /// Select body slot `index`. Graph expansion only: it reallocates.
@@ -117,7 +131,10 @@ impl RigidImpulseTargets {
     }
 
     pub fn union(self, other: Self) -> Self {
-        Self { bodies: union_words(&self.bodies, &other.bodies), groups: union_words(&self.groups, &other.groups) }
+        Self {
+            bodies: union_words(&self.bodies, &other.bodies),
+            groups: union_words(&self.groups, &other.groups),
+        }
     }
 
     /// The selected body slots, lowest first.
@@ -194,15 +211,22 @@ mod tests {
         }
         assert!(targets.insert_group(31));
         assert!(targets.insert_group(32));
-        assert_eq!(targets.bodies().collect::<Vec<_>>(), [0, 63, 64, 200, 255, 256, 5_000]);
+        assert_eq!(
+            targets.bodies().collect::<Vec<_>>(),
+            [0, 63, 64, 200, 255, 256, 5_000]
+        );
         assert_eq!(targets.groups().collect::<Vec<_>>(), [31, 32]);
         assert!(!targets.contains_body(65) && !targets.contains_body(usize::MAX));
         assert!(!targets.contains_group(30) && !targets.contains_group(usize::MAX));
         let group = RigidImpulseTargets::group(2).unwrap();
         assert!(group.has_groups() && !group.contains_body(2));
         assert_eq!(
-            RigidImpulseTargets::body(3).unwrap().union(RigidImpulseTargets::body(300).unwrap()),
-            RigidImpulseTargets::body(300).unwrap().union(RigidImpulseTargets::body(3).unwrap()),
+            RigidImpulseTargets::body(3)
+                .unwrap()
+                .union(RigidImpulseTargets::body(300).unwrap()),
+            RigidImpulseTargets::body(300)
+                .unwrap()
+                .union(RigidImpulseTargets::body(3).unwrap()),
             "a selection compares by what it selects"
         );
     }
@@ -212,7 +236,9 @@ mod tests {
         let rigid = RigidImpulseTargets::body(0).unwrap();
         let combined = ImpulseTarget::Rigid(rigid.clone())
             .union(ImpulseTarget::FluidAndRigid(
-                RigidImpulseTargets::body(200).unwrap().union(RigidImpulseTargets::group(5).unwrap()),
+                RigidImpulseTargets::body(200)
+                    .unwrap()
+                    .union(RigidImpulseTargets::group(5).unwrap()),
             ))
             .unwrap();
         let ImpulseTarget::FluidAndRigid(targets) = &combined else {
@@ -228,8 +254,15 @@ mod tests {
             ImpulseTarget::Rigid(rigid.clone()).union(ImpulseTarget::Rigid(rigid.clone())),
             Ok(ImpulseTarget::Rigid(rigid.clone()))
         );
-        assert_eq!(ImpulseTarget::Swarm.union(ImpulseTarget::Swarm), Ok(ImpulseTarget::Swarm));
+        assert_eq!(
+            ImpulseTarget::Swarm.union(ImpulseTarget::Swarm),
+            Ok(ImpulseTarget::Swarm)
+        );
         assert!(ImpulseTarget::Swarm.union(ImpulseTarget::Fluid).is_err());
-        assert!(ImpulseTarget::Rigid(rigid).union(ImpulseTarget::Swarm).is_err());
+        assert!(
+            ImpulseTarget::Rigid(rigid)
+                .union(ImpulseTarget::Swarm)
+                .is_err()
+        );
     }
 }

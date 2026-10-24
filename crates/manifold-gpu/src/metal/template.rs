@@ -22,8 +22,8 @@ use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBarrierScope, MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder,
     MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLIndirectCommandBuffer,
-    MTLIndirectCommandBufferDescriptor, MTLIndirectCommandType, MTLIndirectComputeCommand, MTLResource,
-    MTLResourceOptions, MTLResourceUsage, MTLSize,
+    MTLIndirectCommandBufferDescriptor, MTLIndirectCommandType, MTLIndirectComputeCommand,
+    MTLResource, MTLResourceOptions, MTLResourceUsage, MTLSize,
 };
 
 use super::SIZES_BUFFER_BINDING;
@@ -105,7 +105,11 @@ impl GatedRecorder<'_> {
 }
 
 enum RoundBinding {
-    Buffer { slot: u8, buffer: Retained<ProtocolObject<dyn MTLBuffer>>, offset: u64 },
+    Buffer {
+        slot: u8,
+        buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
+        offset: u64,
+    },
     /// Inline bytes at `start..start + len` of the round's byte vector.
     Bytes { slot: u8, start: u32, len: u32 },
 }
@@ -150,12 +154,20 @@ impl Round {
         }
     }
 
-    fn push(&mut self, pipeline: &GpuComputePipeline, bindings: &[GpuBinding], groups: [u32; 3], label: &str) {
+    fn push(
+        &mut self,
+        pipeline: &GpuComputePipeline,
+        bindings: &[GpuBinding],
+        groups: [u32; 3],
+        label: &str,
+    ) {
         if self.commands.is_empty() {
             self.label.push_str(label);
         }
         if !pipeline.supports_replay {
-            self.refuse(format!("{label}: the pipeline has no indirect command buffer support"));
+            self.refuse(format!(
+                "{label}: the pipeline has no indirect command buffer support"
+            ));
         }
         // Commands inherit no bindings: a referenced binding left out would
         // read whatever the buffer slot last held.
@@ -165,16 +177,28 @@ impl Round {
         let first = self.bindings.len();
         for binding in bindings {
             match binding {
-                GpuBinding::Buffer { binding, buffer, offset } => {
+                GpuBinding::Buffer {
+                    binding,
+                    buffer,
+                    offset,
+                } => {
                     if let Some(slot) = pipeline.slot_map.get(*binding) {
-                        self.bindings.push(RoundBinding::Buffer { slot: slot.metal_index as u8, buffer: buffer.raw.clone(), offset: *offset });
+                        self.bindings.push(RoundBinding::Buffer {
+                            slot: slot.metal_index as u8,
+                            buffer: buffer.raw.clone(),
+                            offset: *offset,
+                        });
                     }
                 }
                 GpuBinding::Bytes { binding, data } => {
                     if let Some(slot) = pipeline.slot_map.get(*binding) {
                         let start = self.bytes.len() as u32;
                         self.bytes.extend_from_slice(data);
-                        self.bindings.push(RoundBinding::Bytes { slot: slot.metal_index as u8, start, len: data.len() as u32 });
+                        self.bindings.push(RoundBinding::Bytes {
+                            slot: slot.metal_index as u8,
+                            start,
+                            len: data.len() as u32,
+                        });
                     }
                 }
                 GpuBinding::Texture { .. } | GpuBinding::Sampler { .. } => {
@@ -183,21 +207,34 @@ impl Round {
             }
         }
         if pipeline.needs_sizes_buffer {
-            let (sizes, len): ([u32; MAX_BUFFER_SLOTS], usize) = collect_buffer_sizes(&pipeline.slot_map, bindings);
-            let slot = pipeline.slot_map.get(SIZES_BUFFER_BINDING).expect("sizes buffer slot missing").metal_index as u8;
+            let (sizes, len): ([u32; MAX_BUFFER_SLOTS], usize) =
+                collect_buffer_sizes(&pipeline.slot_map, bindings);
+            let slot = pipeline
+                .slot_map
+                .get(SIZES_BUFFER_BINDING)
+                .expect("sizes buffer slot missing")
+                .metal_index as u8;
             let start = self.bytes.len() as u32;
             for word in &sizes[..len] {
                 self.bytes.extend_from_slice(&word.to_ne_bytes());
             }
-            self.bindings.push(RoundBinding::Bytes { slot, start, len: (len * 4) as u32 });
+            self.bindings.push(RoundBinding::Bytes {
+                slot,
+                start,
+                len: (len * 4) as u32,
+            });
         }
         let count = self.bindings.len() - first;
         let too_many = count > MAX_KEY_BINDINGS
             || self.bindings[first..].iter().any(|b| match b {
-                RoundBinding::Buffer { slot, .. } | RoundBinding::Bytes { slot, .. } => usize::from(*slot) >= ICB_BUFFER_SLOTS,
+                RoundBinding::Buffer { slot, .. } | RoundBinding::Bytes { slot, .. } => {
+                    usize::from(*slot) >= ICB_BUFFER_SLOTS
+                }
             });
         if too_many {
-            self.refuse(format!("{label}: more buffer slots than an indirect command sets"));
+            self.refuse(format!(
+                "{label}: more buffer slots than an indirect command sets"
+            ));
         }
         self.commands.push(RoundCommand {
             pipeline: pipeline.state.clone(),
@@ -217,15 +254,42 @@ impl Round {
                 std::ptr::eq(&*a.pipeline, &*b.pipeline)
                     && a.groups == b.groups
                     && a.count == b.count
-                    && self.bindings_of(a).iter().zip(other.bindings_of(b)).all(|pair| match pair {
-                        (RoundBinding::Buffer { slot: s, buffer: x, offset: o }, RoundBinding::Buffer { slot: t, buffer: y, offset: p }) => {
-                            s == t && o == p && std::ptr::eq(&**x, &**y)
-                        }
-                        (RoundBinding::Bytes { slot: s, start: i, len: n }, RoundBinding::Bytes { slot: t, start: j, len: m }) => {
-                            s == t && n == m && self.bytes[*i as usize..(*i + *n) as usize] == other.bytes[*j as usize..(*j + *m) as usize]
-                        }
-                        _ => false,
-                    })
+                    && self
+                        .bindings_of(a)
+                        .iter()
+                        .zip(other.bindings_of(b))
+                        .all(|pair| match pair {
+                            (
+                                RoundBinding::Buffer {
+                                    slot: s,
+                                    buffer: x,
+                                    offset: o,
+                                },
+                                RoundBinding::Buffer {
+                                    slot: t,
+                                    buffer: y,
+                                    offset: p,
+                                },
+                            ) => s == t && o == p && std::ptr::eq(&**x, &**y),
+                            (
+                                RoundBinding::Bytes {
+                                    slot: s,
+                                    start: i,
+                                    len: n,
+                                },
+                                RoundBinding::Bytes {
+                                    slot: t,
+                                    start: j,
+                                    len: m,
+                                },
+                            ) => {
+                                s == t
+                                    && n == m
+                                    && self.bytes[*i as usize..(*i + *n) as usize]
+                                        == other.bytes[*j as usize..(*j + *m) as usize]
+                            }
+                            _ => false,
+                        })
             })
     }
 }
@@ -262,11 +326,12 @@ impl Slot {
     /// Drop users that are done: completed or failed, or abandoned (never
     /// sent, and the encoder that held them dropped).
     fn prune(&mut self) {
-        self.users.retain(|(buf, alive)| match unsafe { buf.status() } {
-            MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error => false,
-            MTLCommandBufferStatus::NotEnqueued => alive.load(Ordering::Acquire),
-            _ => true,
-        });
+        self.users
+            .retain(|(buf, alive)| match unsafe { buf.status() } {
+                MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error => false,
+                MTLCommandBufferStatus::NotEnqueued => alive.load(Ordering::Acquire),
+                _ => true,
+            });
     }
 
     fn idle(&self) -> bool {
@@ -339,20 +404,35 @@ impl GpuTemplateStore {
     fn build(&mut self, chunk: u32) -> Result<usize, String> {
         let commands = self.round.commands.len();
         let count = commands * chunk as usize;
-        let arena_bytes = self.round.bindings.iter().map(|b| match b {
-            RoundBinding::Bytes { len, .. } => (*len as usize).next_multiple_of(BYTES_ALIGN),
-            RoundBinding::Buffer { .. } => 0,
-        }).sum::<usize>().max(BYTES_ALIGN);
-        let idle = self.slots.iter().enumerate().filter(|(_, s)| s.idle()).min_by_key(|(_, s)| s.used).map(|(i, _)| i);
+        let arena_bytes = self
+            .round
+            .bindings
+            .iter()
+            .map(|b| match b {
+                RoundBinding::Bytes { len, .. } => (*len as usize).next_multiple_of(BYTES_ALIGN),
+                RoundBinding::Buffer { .. } => 0,
+            })
+            .sum::<usize>()
+            .max(BYTES_ALIGN);
+        let idle = self
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.idle())
+            .min_by_key(|(_, s)| s.used)
+            .map(|(i, _)| i);
         #[cfg(all(test, feature = "gpu-proofs"))]
         if std::mem::take(&mut self.fail_next_alloc) {
             return Err("gated template: storage allocation failed (forced)".into());
         }
-        let reuse = idle.filter(|&i| self.slots[i].icb.size() >= count && self.slots[i].arena.length() >= arena_bytes);
+        let reuse = idle.filter(|&i| {
+            self.slots[i].icb.size() >= count && self.slots[i].arena.length() >= arena_bytes
+        });
         let (icb, arena) = match reuse {
             Some(i) => (self.slots[i].icb.clone(), self.slots[i].arena.clone()),
             None => {
-                let icb = new_icb(&self.device, count).ok_or("gated template: indirect command buffer allocation failed")?;
+                let icb = new_icb(&self.device, count)
+                    .ok_or("gated template: indirect command buffer allocation failed")?;
                 let arena = self
                     .device
                     .newBufferWithLength_options(arena_bytes, MTLResourceOptions::StorageModeShared)
@@ -375,7 +455,9 @@ impl GpuTemplateStore {
                     // Safety: the arena holds `arena_bytes`, laid out here;
                     // a reused arena belongs to an idle slot, so no GPU work
                     // reads it.
-                    unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), base.add(offset), data.len()) };
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(data.as_ptr(), base.add(offset), data.len())
+                    };
                     placed.push(offset);
                     offset += (*len as usize).next_multiple_of(BYTES_ALIGN);
                 }
@@ -390,8 +472,16 @@ impl GpuTemplateStore {
                 ic.setComputePipelineState(&command.pipeline);
                 for binding in self.round.bindings_of(command) {
                     match binding {
-                        RoundBinding::Buffer { slot, buffer, offset } => unsafe {
-                            ic.setKernelBuffer_offset_atIndex(buffer, *offset as usize, usize::from(*slot));
+                        RoundBinding::Buffer {
+                            slot,
+                            buffer,
+                            offset,
+                        } => unsafe {
+                            ic.setKernelBuffer_offset_atIndex(
+                                buffer,
+                                *offset as usize,
+                                usize::from(*slot),
+                            );
                         },
                         RoundBinding::Bytes { slot, .. } => unsafe {
                             let at = *placed.next().expect("one arena offset per inline binding");
@@ -399,7 +489,10 @@ impl GpuTemplateStore {
                         },
                     }
                 }
-                ic.concurrentDispatchThreadgroups_threadsPerThreadgroup(mtl_size(command.groups), mtl_size(command.workgroup));
+                ic.concurrentDispatchThreadgroups_threadsPerThreadgroup(
+                    mtl_size(command.groups),
+                    mtl_size(command.workgroup),
+                );
                 ic.setBarrier();
             }
         }
@@ -413,7 +506,17 @@ impl GpuTemplateStore {
         std::mem::swap(&mut round, &mut self.round);
         let id = self.next_build;
         self.next_build += 1;
-        let slot = Slot { round, chunk, icb, arena, resources, label, id, users: Vec::new(), used: self.clock };
+        let slot = Slot {
+            round,
+            chunk,
+            icb,
+            arena,
+            resources,
+            label,
+            id,
+            users: Vec::new(),
+            used: self.clock,
+        };
         Ok(match idle {
             Some(i) => {
                 // The old round's vectors come back as the next walk's scratch.
@@ -438,7 +541,10 @@ impl GpuTemplateStore {
             if (0..self.slots.len()).filter(others).count() < IDLE_SLOTS_KEPT {
                 return keep;
             }
-            let oldest = (0..self.slots.len()).filter(others).min_by_key(|&i| self.slots[i].used).expect("non-empty");
+            let oldest = (0..self.slots.len())
+                .filter(others)
+                .min_by_key(|&i| self.slots[i].used)
+                .expect("non-empty");
             self.slots.swap_remove(oldest);
             if keep == self.slots.len() {
                 keep = oldest;
@@ -453,12 +559,17 @@ impl Drop for GpuTemplateStore {
             // Abandoned buffers never run: pruning drops them.
             slot.prune();
             let pending = slot.users.iter().any(|(buf, _)| {
-                matches!(unsafe { buf.status() }, MTLCommandBufferStatus::NotEnqueued | MTLCommandBufferStatus::Enqueued)
+                matches!(
+                    unsafe { buf.status() },
+                    MTLCommandBufferStatus::NotEnqueued | MTLCommandBufferStatus::Enqueued
+                )
             });
             if pending {
                 // A buffer that may never be committed can't be waited on;
                 // freeing what it names could free it under the GPU.
-                log::warn!("gated template dropped while an uncommitted command buffer names it; its storage is leaked");
+                log::warn!(
+                    "gated template dropped while an uncommitted command buffer names it; its storage is leaked"
+                );
                 std::mem::forget(slot);
                 continue;
             }
@@ -496,11 +607,19 @@ impl GpuEncoder {
     /// buffer the slot names, a buffer barrier around and between executes.
     /// `Err`, encoding nothing, for a ticket from another store or one whose
     /// build was since rebuilt or freed.
-    pub fn execute_template(&mut self, store: &mut GpuTemplateStore, ticket: TemplateTicket) -> Result<(), String> {
+    pub fn execute_template(
+        &mut self,
+        store: &mut GpuTemplateStore,
+        ticket: TemplateTicket,
+    ) -> Result<(), String> {
         if ticket.store != store.id {
             return Err("gated template: the ticket belongs to another store".into());
         }
-        let index = store.slots.iter().position(|s| s.id == ticket.slot).ok_or("gated template: the ticket's build was rebuilt or freed")?;
+        let index = store
+            .slots
+            .iter()
+            .position(|s| s.id == ticket.slot)
+            .ok_or("gated template: the ticket's build was rebuilt or freed")?;
         self.end_gated_segments();
         self.flush_replay();
         let token = match &self.template_token {
@@ -521,7 +640,10 @@ impl GpuEncoder {
             }
         };
         let slot = &mut store.slots[index];
-        let per_execute = self.profile.as_ref().is_some_and(|p| p.granularity == super::ProfileGranularity::Dispatch);
+        let per_execute = self
+            .profile
+            .as_ref()
+            .is_some_and(|p| p.granularity == super::ProfileGranularity::Dispatch);
         let mut enc: Option<Retained<ProtocolObject<dyn MTLComputeCommandEncoder>>> = None;
         for j in 0..ticket.executes {
             if enc.is_none() || per_execute {
@@ -539,7 +661,11 @@ impl GpuEncoder {
                     opened.pushDebugGroup(&slot.label);
                     opened.memoryBarrierWithScope(MTLBarrierScope::Buffers);
                     let resources = NonNull::new_unchecked(slot.resources.as_mut_ptr());
-                    opened.useResources_count_usage(resources, slot.resources.len(), MTLResourceUsage::Read | MTLResourceUsage::Write);
+                    opened.useResources_count_usage(
+                        resources,
+                        slot.resources.len(),
+                        MTLResourceUsage::Read | MTLResourceUsage::Write,
+                    );
                 }
                 enc = Some(opened);
             } else if let Some(open) = &enc {
@@ -547,7 +673,13 @@ impl GpuEncoder {
             }
             let open = enc.as_ref().expect("opened above");
             let offset = ticket.first_bytes + j as u64 * ticket.stride_bytes;
-            unsafe { open.executeCommandsInBuffer_indirectBuffer_indirectBufferOffset(&slot.icb, &ticket.ranges, offset as usize) };
+            unsafe {
+                open.executeCommandsInBuffer_indirectBuffer_indirectBufferOffset(
+                    &slot.icb,
+                    &ticket.ranges,
+                    offset as usize,
+                )
+            };
             store.stats.executes += 1;
         }
         if let Some(open) = enc {
@@ -559,7 +691,11 @@ impl GpuEncoder {
         if self.profile.is_some() && matches!(self.state, EncoderState::Compute(_)) {
             self.end_current();
         }
-        if slot.users.last().is_none_or(|(last, _)| !std::ptr::eq(&**last, &*self.cmd_buf)) {
+        if slot
+            .users
+            .last()
+            .is_none_or(|(last, _)| !std::ptr::eq(&**last, &*self.cmd_buf))
+        {
             slot.users.push((self.cmd_buf.clone(), token));
         }
         Ok(())
@@ -580,10 +716,20 @@ fn prepare(
     body: impl FnOnce(&mut GatedRecorder<'_>) -> Result<(), String>,
 ) -> Result<TemplateTicket, String> {
     let executes = template_chunks(copies, at.chunk).count() as u32;
-    let last = executes.checked_sub(1).and_then(|c| c.checked_mul(at.stride)).and_then(|c| c.checked_add(at.first));
+    let last = executes
+        .checked_sub(1)
+        .and_then(|c| c.checked_mul(at.stride))
+        .and_then(|c| c.checked_add(at.first));
     let end = last.and_then(|l| (u64::from(l) + 1).checked_mul(GATED_RANGE_BYTES));
-    let replicated = commands.checked_mul(at.chunk).filter(|&n| n <= MAX_TEMPLATE_COMMANDS);
-    if commands == 0 || copies == 0 || at.chunk == 0 || replicated.is_none() || end.is_none_or(|end| end > at.ranges.size) {
+    let replicated = commands
+        .checked_mul(at.chunk)
+        .filter(|&n| n <= MAX_TEMPLATE_COMMANDS);
+    if commands == 0
+        || copies == 0
+        || at.chunk == 0
+        || replicated.is_none()
+        || end.is_none_or(|end| end > at.ranges.size)
+    {
         return Err(format!(
             "gated template: {commands} commands, {copies} rounds by {} in {executes} executes from entry {} by {} do not fit a {}-byte range buffer",
             at.chunk, at.first, at.stride, at.ranges.size
@@ -591,19 +737,26 @@ fn prepare(
     }
     store.round.clear();
     store.stats.walks += 1;
-    body(&mut GatedRecorder { round: &mut store.round })?;
+    body(&mut GatedRecorder {
+        round: &mut store.round,
+    })?;
     if let Some(why) = store.round.refusal.take() {
         return Err(format!("gated template: {why}"));
     }
     let taken = store.round.commands.len();
     if taken != commands as usize {
-        return Err(format!("gated template: the body issued {taken} dispatches, not the {commands} declared"));
+        return Err(format!(
+            "gated template: the body issued {taken} dispatches, not the {commands} declared"
+        ));
     }
     store.clock += 1;
     for slot in &mut store.slots {
         slot.prune();
     }
-    let found = store.slots.iter().position(|s| s.chunk == at.chunk && s.round.same_as(&store.round));
+    let found = store
+        .slots
+        .iter()
+        .position(|s| s.chunk == at.chunk && s.round.same_as(&store.round));
     let index = match found {
         Some(i) => {
             store.stats.hits += 1;
@@ -624,13 +777,22 @@ fn prepare(
     })
 }
 
-fn new_icb(device: &ProtocolObject<dyn MTLDevice>, commands: usize) -> Option<Retained<ProtocolObject<dyn MTLIndirectCommandBuffer>>> {
+fn new_icb(
+    device: &ProtocolObject<dyn MTLDevice>,
+    commands: usize,
+) -> Option<Retained<ProtocolObject<dyn MTLIndirectCommandBuffer>>> {
     let desc = MTLIndirectCommandBufferDescriptor::new();
     desc.setCommandTypes(MTLIndirectCommandType::ConcurrentDispatch);
     desc.setInheritPipelineState(false);
     desc.setInheritBuffers(false);
     desc.setMaxKernelBufferBindCount(ICB_BUFFER_SLOTS);
-    unsafe { device.newIndirectCommandBufferWithDescriptor_maxCommandCount_options(&desc, commands, MTLResourceOptions::StorageModeShared) }
+    unsafe {
+        device.newIndirectCommandBufferWithDescriptor_maxCommandCount_options(
+            &desc,
+            commands,
+            MTLResourceOptions::StorageModeShared,
+        )
+    }
 }
 
 fn resource(buffer: &ProtocolObject<dyn MTLBuffer>) -> NonNull<ProtocolObject<dyn MTLResource>> {
@@ -638,17 +800,24 @@ fn resource(buffer: &ProtocolObject<dyn MTLBuffer>) -> NonNull<ProtocolObject<dy
 }
 
 fn mtl_size(v: [u32; 3]) -> MTLSize {
-    MTLSize { width: v[0] as usize, height: v[1] as usize, depth: v[2] as usize }
+    MTLSize {
+        width: v[0] as usize,
+        height: v[1] as usize,
+        depth: v[2] as usize,
+    }
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 impl GpuTemplateStore {
     /// Outstanding command buffers per slot, after pruning completed ones.
     pub(super) fn users(&mut self) -> Vec<usize> {
-        self.slots.iter_mut().map(|s| {
-            s.prune();
-            s.users.len()
-        }).collect()
+        self.slots
+            .iter_mut()
+            .map(|s| {
+                s.prune();
+                s.users.len()
+            })
+            .collect()
     }
 
     /// Liveness tokens the store has ever made.

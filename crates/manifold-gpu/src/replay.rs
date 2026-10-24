@@ -156,8 +156,17 @@ struct RecordedCommand {
 
 #[derive(Clone, Copy)]
 enum RecordedBinding {
-    Buffer { slot: u32, id: usize, offset: u64 },
-    Bytes { slot: u32, len: u32, shadow: u32, store: BytesSlot },
+    Buffer {
+        slot: u32,
+        id: usize,
+        offset: u64,
+    },
+    Bytes {
+        slot: u32,
+        len: u32,
+        shadow: u32,
+        store: BytesSlot,
+    },
 }
 
 /// The recorded command list of one ring entry, in encode order.
@@ -176,7 +185,10 @@ impl Recording {
 
     /// Whether command `index` continues a gated segment opened before it.
     pub fn continues_segment(&self, index: usize) -> bool {
-        self.commands.get(index).and_then(|c| c.gate).is_some_and(|gate| gate.slot > 0)
+        self.commands
+            .get(index)
+            .and_then(|c| c.gate)
+            .is_some_and(|gate| gate.slot > 0)
     }
 
     /// Drop every command from `len` on.
@@ -201,31 +213,50 @@ impl Recording {
         let Some(command) = self.commands.get(index) else {
             return false;
         };
-        let recorded = &self.bindings[command.bindings_start as usize..command.bindings_end as usize];
+        let recorded =
+            &self.bindings[command.bindings_start as usize..command.bindings_end as usize];
         command.pipeline == key.pipeline
             && command.groups == key.groups
             && command.gate == key.gate
             && recorded.len() == key.bindings().len()
-            && recorded.iter().zip(key.bindings()).all(|(recorded, incoming)| match (recorded, incoming) {
-                (
-                    RecordedBinding::Buffer { slot, id, offset },
-                    KeyBinding::Buffer { slot: s, id: i, offset: o },
-                ) => slot == s && id == i && offset == o,
-                (RecordedBinding::Bytes { slot, len, .. }, KeyBinding::Bytes { slot: s, data }) => {
-                    slot == s && *len as usize == data.len()
-                }
-                _ => false,
-            })
+            && recorded
+                .iter()
+                .zip(key.bindings())
+                .all(|(recorded, incoming)| match (recorded, incoming) {
+                    (
+                        RecordedBinding::Buffer { slot, id, offset },
+                        KeyBinding::Buffer {
+                            slot: s,
+                            id: i,
+                            offset: o,
+                        },
+                    ) => slot == s && id == i && offset == o,
+                    (
+                        RecordedBinding::Bytes { slot, len, .. },
+                        KeyBinding::Bytes { slot: s, data },
+                    ) => slot == s && *len as usize == data.len(),
+                    _ => false,
+                })
     }
 
     /// For a command `matches` accepted: hand every inline slot whose
     /// content changed to `write`, and remember the new content.
-    pub fn refresh_bytes(&mut self, index: usize, key: &DispatchKey, mut write: impl FnMut(BytesSlot, &[u8])) {
+    pub fn refresh_bytes(
+        &mut self,
+        index: usize,
+        key: &DispatchKey,
+        mut write: impl FnMut(BytesSlot, &[u8]),
+    ) {
         let command = self.commands[index];
-        let recorded = &self.bindings[command.bindings_start as usize..command.bindings_end as usize];
+        let recorded =
+            &self.bindings[command.bindings_start as usize..command.bindings_end as usize];
         for (recorded, incoming) in recorded.iter().zip(key.bindings()) {
-            if let (RecordedBinding::Bytes { len, shadow, store, .. }, KeyBinding::Bytes { data, .. }) =
-                (recorded, incoming)
+            if let (
+                RecordedBinding::Bytes {
+                    len, shadow, store, ..
+                },
+                KeyBinding::Bytes { data, .. },
+            ) = (recorded, incoming)
             {
                 let held = &mut self.shadow[*shadow as usize..*shadow as usize + *len as usize];
                 if held != *data {
@@ -243,7 +274,9 @@ impl Recording {
         let mut slots = slots.iter();
         for binding in key.bindings() {
             self.bindings.push(match *binding {
-                KeyBinding::Buffer { slot, id, offset } => RecordedBinding::Buffer { slot, id, offset },
+                KeyBinding::Buffer { slot, id, offset } => {
+                    RecordedBinding::Buffer { slot, id, offset }
+                }
                 KeyBinding::Bytes { slot, data } => {
                     let shadow = self.shadow.len() as u32;
                     self.shadow.extend_from_slice(data);
@@ -268,7 +301,11 @@ impl Recording {
 
 /// The entry a span visit uses: the most recently used one if idle, else
 /// another idle one, else a new one while the ring has room, else none.
-pub(crate) fn pick_entry(len: usize, mru: Option<usize>, is_idle: impl Fn(usize) -> bool) -> Option<usize> {
+pub(crate) fn pick_entry(
+    len: usize,
+    mru: Option<usize>,
+    is_idle: impl Fn(usize) -> bool,
+) -> Option<usize> {
     if let Some(mru) = mru
         && is_idle(mru)
     {
@@ -289,15 +326,32 @@ mod tests {
 
     fn key<'a>(bytes: &'a [u8]) -> DispatchKey<'a> {
         let mut key = DispatchKey::new(0x1000, [4, 2, 1]);
-        assert!(key.push(KeyBinding::Buffer { slot: 0, id: 0x2000, offset: 0 }));
-        assert!(key.push(KeyBinding::Buffer { slot: 1, id: 0x3000, offset: 64 }));
-        assert!(key.push(KeyBinding::Bytes { slot: 2, data: bytes }));
+        assert!(key.push(KeyBinding::Buffer {
+            slot: 0,
+            id: 0x2000,
+            offset: 0
+        }));
+        assert!(key.push(KeyBinding::Buffer {
+            slot: 1,
+            id: 0x3000,
+            offset: 64
+        }));
+        assert!(key.push(KeyBinding::Bytes {
+            slot: 2,
+            data: bytes
+        }));
         key
     }
 
     fn recorded(bytes: &[u8]) -> Recording {
         let mut recording = Recording::default();
-        recording.push(&key(bytes), &[BytesSlot { arena: 0, offset: 0 }]);
+        recording.push(
+            &key(bytes),
+            &[BytesSlot {
+                arena: 0,
+                offset: 0,
+            }],
+        );
         recording
     }
 
@@ -319,51 +373,110 @@ mod tests {
             variants.push(("groups", k));
         }
         let mut k = key(&bytes);
-        k.bindings[0] = KeyBinding::Buffer { slot: 0, id: 0x2008, offset: 0 };
+        k.bindings[0] = KeyBinding::Buffer {
+            slot: 0,
+            id: 0x2008,
+            offset: 0,
+        };
         variants.push(("buffer identity", k));
         let mut k = key(&bytes);
-        k.bindings[1] = KeyBinding::Buffer { slot: 1, id: 0x3000, offset: 128 };
+        k.bindings[1] = KeyBinding::Buffer {
+            slot: 1,
+            id: 0x3000,
+            offset: 128,
+        };
         variants.push(("buffer offset", k));
         let mut k = key(&bytes);
-        k.bindings[1] = KeyBinding::Buffer { slot: 4, id: 0x3000, offset: 64 };
+        k.bindings[1] = KeyBinding::Buffer {
+            slot: 4,
+            id: 0x3000,
+            offset: 64,
+        };
         variants.push(("buffer slot", k));
         let mut k = key(&bytes);
-        k.bindings[2] = KeyBinding::Bytes { slot: 3, data: &bytes };
+        k.bindings[2] = KeyBinding::Bytes {
+            slot: 3,
+            data: &bytes,
+        };
         variants.push(("bytes slot", k));
         let mut k = key(&bytes);
-        k.bindings[2] = KeyBinding::Bytes { slot: 2, data: &bytes[..4] };
+        k.bindings[2] = KeyBinding::Bytes {
+            slot: 2,
+            data: &bytes[..4],
+        };
         variants.push(("bytes length", k));
         let mut k = key(&bytes);
-        k.bindings[1] = KeyBinding::Bytes { slot: 1, data: &bytes };
+        k.bindings[1] = KeyBinding::Bytes {
+            slot: 1,
+            data: &bytes,
+        };
         variants.push(("binding kind", k));
         let mut k = key(&bytes);
         k.len = 2;
         variants.push(("binding count (fewer)", k));
         let mut k = key(&bytes);
-        assert!(k.push(KeyBinding::Buffer { slot: 5, id: 0x4000, offset: 0 }));
+        assert!(k.push(KeyBinding::Buffer {
+            slot: 5,
+            id: 0x4000,
+            offset: 0
+        }));
         variants.push(("binding count (more)", k));
 
         let mut k = key(&bytes);
-        k.gate = Some(GateKey { ranges: 0x5000, offset: 0, commands: 4, slot: 0 });
+        k.gate = Some(GateKey {
+            ranges: 0x5000,
+            offset: 0,
+            commands: 4,
+            slot: 0,
+        });
         variants.push(("gate (added)", k));
 
         for (field, variant) in &variants {
-            assert!(!recording.matches(0, variant), "a changed {field} must miss");
+            assert!(
+                !recording.matches(0, variant),
+                "a changed {field} must miss"
+            );
         }
-        assert!(!recording.matches(1, &key(&bytes)), "past the end must miss");
+        assert!(
+            !recording.matches(1, &key(&bytes)),
+            "past the end must miss"
+        );
 
         // A gated command: every gate field decides the match too.
-        let gate = GateKey { ranges: 0x5000, offset: 8, commands: 4, slot: 1 };
+        let gate = GateKey {
+            ranges: 0x5000,
+            offset: 8,
+            commands: 4,
+            slot: 1,
+        };
         let mut gated = Recording::default();
         let mut k = key(&bytes);
         k.gate = Some(gate);
-        gated.push(&k, &[BytesSlot { arena: 0, offset: 0 }]);
+        gated.push(
+            &k,
+            &[BytesSlot {
+                arena: 0,
+                offset: 0,
+            }],
+        );
         assert!(gated.matches(0, &k));
         assert!(gated.continues_segment(0));
         for (field, changed) in [
-            ("ranges", GateKey { ranges: 0x5008, ..gate }),
+            (
+                "ranges",
+                GateKey {
+                    ranges: 0x5008,
+                    ..gate
+                },
+            ),
             ("offset", GateKey { offset: 16, ..gate }),
-            ("commands", GateKey { commands: 5, ..gate }),
+            (
+                "commands",
+                GateKey {
+                    commands: 5,
+                    ..gate
+                },
+            ),
             ("slot", GateKey { slot: 0, ..gate }),
         ] {
             let mut k = key(&bytes);
@@ -371,17 +484,36 @@ mod tests {
             assert!(!gated.matches(0, &k), "a changed gate {field} must miss");
         }
         assert!(!gated.matches(0, &key(&bytes)), "a gate removed must miss");
-        assert!(!recording.continues_segment(0), "an ungated command opens no segment");
+        assert!(
+            !recording.continues_segment(0),
+            "an ungated command opens no segment"
+        );
 
         let mut recording = recording;
         let changed = [9, 2, 3, 4, 5, 6, 7, 8];
         let changed_key = key(&changed);
-        assert!(recording.matches(0, &changed_key), "new bytes content is not a miss");
+        assert!(
+            recording.matches(0, &changed_key),
+            "new bytes content is not a miss"
+        );
         let mut writes = Vec::new();
-        recording.refresh_bytes(0, &changed_key, |slot, data| writes.push((slot, data.to_vec())));
-        assert_eq!(writes, vec![(BytesSlot { arena: 0, offset: 0 }, changed.to_vec())]);
+        recording.refresh_bytes(0, &changed_key, |slot, data| {
+            writes.push((slot, data.to_vec()))
+        });
+        assert_eq!(
+            writes,
+            vec![(
+                BytesSlot {
+                    arena: 0,
+                    offset: 0
+                },
+                changed.to_vec()
+            )]
+        );
         writes.clear();
-        recording.refresh_bytes(0, &changed_key, |slot, data| writes.push((slot, data.to_vec())));
+        recording.refresh_bytes(0, &changed_key, |slot, data| {
+            writes.push((slot, data.to_vec()))
+        });
         assert!(writes.is_empty(), "unchanged bytes are not written again");
     }
 
@@ -390,15 +522,33 @@ mod tests {
         let a = base_bytes();
         let b = [8u8; 8];
         let mut recording = Recording::default();
-        recording.push(&key(&a), &[BytesSlot { arena: 0, offset: 0 }]);
-        recording.push(&key(&b), &[BytesSlot { arena: 0, offset: 256 }]);
+        recording.push(
+            &key(&a),
+            &[BytesSlot {
+                arena: 0,
+                offset: 0,
+            }],
+        );
+        recording.push(
+            &key(&b),
+            &[BytesSlot {
+                arena: 0,
+                offset: 256,
+            }],
+        );
         recording.truncate(1);
         assert_eq!(recording.len(), 1);
         assert!(recording.matches(0, &key(&a)));
         let mut writes = 0;
         recording.refresh_bytes(0, &key(&a), |_, _| writes += 1);
         assert_eq!(writes, 0, "the kept command's bytes survive the cut");
-        recording.push(&key(&b), &[BytesSlot { arena: 0, offset: 256 }]);
+        recording.push(
+            &key(&b),
+            &[BytesSlot {
+                arena: 0,
+                offset: 256,
+            }],
+        );
         assert!(recording.matches(1, &key(&b)));
     }
 
@@ -440,7 +590,11 @@ mod chunk_tests {
 
     #[test]
     fn template_chunks_double_then_hold() {
-        let rounds = |copies, chunk| template_chunks(copies, chunk).map(|(_, len)| len).collect::<Vec<_>>();
+        let rounds = |copies, chunk| {
+            template_chunks(copies, chunk)
+                .map(|(_, len)| len)
+                .collect::<Vec<_>>()
+        };
         assert_eq!(rounds(64, 32), [1, 2, 4, 8, 16, 32, 1]);
         assert_eq!(rounds(900, 32).len(), 33);
         assert_eq!(rounds(900, 32).iter().sum::<u32>(), 900);

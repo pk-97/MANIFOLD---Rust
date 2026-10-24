@@ -4,10 +4,10 @@
 //! cleanest demonstration of how primitives compose into a recognisable
 //! effect — the entire implementation is "two nodes wired in series".
 
-use manifold_node_engine::param_binding::composite_handle::CompositeHandle;
+use crate::node_graph::primitives::{Brightness, ColorRamp};
 use manifold_node_engine::exec::effect_node::NodeInstanceId;
 use manifold_node_engine::graph::Graph;
-use crate::node_graph::primitives::{Brightness, ColorRamp};
+use manifold_node_engine::param_binding::composite_handle::CompositeHandle;
 use manifold_node_engine::validation::GraphError;
 
 pub const INFRARED_TYPE_ID: &str = "composite.infrared";

@@ -60,7 +60,8 @@ fn write_triangle_glb(name: &str, nodes: serde_json::Value) -> PathBuf {
     glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
     glb.extend_from_slice(b"BIN\0");
     glb.extend_from_slice(&bin);
-    let path = std::env::temp_dir().join(format!("manifold_import_{name}_{}.glb", std::process::id()));
+    let path =
+        std::env::temp_dir().join(format!("manifold_import_{name}_{}.glb", std::process::id()));
     std::fs::write(&path, glb).unwrap();
     path
 }
@@ -82,7 +83,9 @@ fn a_model_becomes_parts_keyed_by_file_node_path() {
     };
     assert_eq!(group.source.as_deref(), Some(file.as_str()));
     let placement = &item.children[0];
-    let ItemFields::Group(_) = &placement.fields else { panic!("placement is a group"); };
+    let ItemFields::Group(_) = &placement.fields else {
+        panic!("placement is a group");
+    };
     assert_eq!(placement.name, "File Placement");
     let paths: Vec<&str> = placement
         .children
@@ -90,7 +93,11 @@ fn a_model_becomes_parts_keyed_by_file_node_path() {
         .filter(|child| !matches!(child.fields, ItemFields::Material(_)))
         .map(|child| match &child.fields {
             ItemFields::Object(o) => match &o.shape {
-                Shape::Mesh { node_path, vertex_count, .. } => {
+                Shape::Mesh {
+                    node_path,
+                    vertex_count,
+                    ..
+                } => {
                     assert_eq!(*vertex_count, 3);
                     node_path.as_str()
                 }
@@ -102,12 +109,39 @@ fn a_model_becomes_parts_keyed_by_file_node_path() {
     assert_eq!(paths, ["rig/a", "rig/b"]);
 
     // Each part loads its own mesh, already placed in the file's world.
-    let a = load_gltf_mesh(&path, GltfMeshSelector::Node { path: "rig/a".into(), material: -1, own_space: false }).unwrap();
-    let b = load_gltf_mesh(&path, GltfMeshSelector::Node { path: "rig/b".into(), material: -1, own_space: false }).unwrap();
+    let a = load_gltf_mesh(
+        &path,
+        GltfMeshSelector::Node {
+            path: "rig/a".into(),
+            material: -1,
+            own_space: false,
+        },
+    )
+    .unwrap();
+    let b = load_gltf_mesh(
+        &path,
+        GltfMeshSelector::Node {
+            path: "rig/b".into(),
+            material: -1,
+            own_space: false,
+        },
+    )
+    .unwrap();
     assert_eq!((a.len(), b.len()), (3, 3));
     assert_eq!(a[0].position, [1.0, 0.0, 0.0]);
     assert_eq!(b[0].position, [0.0, 2.0, 0.0]);
-    assert!(load_gltf_mesh(&path, GltfMeshSelector::Node { path: "rig/empty".into(), material: -1, own_space: false }).unwrap().is_empty());
+    assert!(
+        load_gltf_mesh(
+            &path,
+            GltfMeshSelector::Node {
+                path: "rig/empty".into(),
+                material: -1,
+                own_space: false
+            }
+        )
+        .unwrap()
+        .is_empty()
+    );
     std::fs::remove_file(path).unwrap();
 }
 
@@ -122,7 +156,10 @@ fn a_compile_reads_a_models_facts_from_the_document() {
     let mut doc = read.model.scene_doc(&file, ItemId::new("rigid"));
     let sized = |doc: &manifold_core::scene_doc::SceneDoc| {
         let def = crate::node_graph::scene_compile::compile(doc).unwrap();
-        def.nodes.iter().filter(|node| node.params.contains_key("source_bbox_radius")).count()
+        def.nodes
+            .iter()
+            .filter(|node| node.params.contains_key("source_bbox_radius"))
+            .count()
     };
     assert_eq!(sized(&doc), 0, "the compile opened the file");
     doc.models.insert(file, read.facts);
@@ -164,9 +201,13 @@ fn a_file_without_measured_parts_has_no_world_bounds() {
         "boundsless",
         serde_json::json!([{ "name": "lone", "children": [] }]),
     );
-    let (document, buffers) = crate::node_graph::gltf_load::parse_document_and_buffers(&path).unwrap();
+    let (document, buffers) =
+        crate::node_graph::gltf_load::parse_document_and_buffers(&path).unwrap();
     let (facts, _) = super::model_file::facts_of(&path, &document, &buffers);
-    assert!(super::world_bounds(&manifold_core::scene_doc::ModelFacts::new(facts)).is_none(), "no recorded box, no bounds");
+    assert!(
+        super::world_bounds(&manifold_core::scene_doc::ModelFacts::new(facts)).is_none(),
+        "no recorded box, no bounds"
+    );
     std::fs::remove_file(path).unwrap();
 }
 
@@ -176,9 +217,9 @@ fn a_file_without_measured_parts_has_no_world_bounds() {
 /// node's own space, and turning the child turns it about its own origin.
 #[test]
 fn an_imported_part_keeps_its_file_transform_and_pivot() {
-    use manifold_core::scene_doc::transform::{mat4_mul, trs_matrix};
     use manifold_core::effect_graph_def::SerializedParamValue;
     use manifold_core::scene_doc::import_child_id;
+    use manifold_core::scene_doc::transform::{mat4_mul, trs_matrix};
 
     let quarter = std::f32::consts::FRAC_PI_2;
     let path = write_triangle_glb(
@@ -196,51 +237,122 @@ fn an_imported_part_keeps_its_file_transform_and_pivot() {
     // the child.
     let items = model.into_items(&path.to_string_lossy(), id.clone());
     let placement = &items[0].children[0];
-    let parent = placement.children.iter().find(|item| item.name == "parent").expect("the parent node is a group");
+    let parent = placement
+        .children
+        .iter()
+        .find(|item| item.name == "parent")
+        .expect("the parent node is a group");
     assert!(matches!(parent.fields, ItemFields::Group(_)));
-    let names: Vec<&str> = parent.children.iter().map(|item| item.name.as_str()).collect();
+    let names: Vec<&str> = parent
+        .children
+        .iter()
+        .map(|item| item.name.as_str())
+        .collect();
     assert_eq!(names, ["parent", "child"]);
 
     // Every card starts at the file's values.
     let card = |key: &str, property: &str| {
         let param = format!("{}.{property}", import_child_id(&id, key));
-        let spec = def.preset_metadata.as_ref().unwrap().params.iter().find(|spec| spec.id == param);
-        spec.unwrap_or_else(|| panic!("no card row {param}")).default_value
+        let spec = def
+            .preset_metadata
+            .as_ref()
+            .unwrap()
+            .params
+            .iter()
+            .find(|spec| spec.id == param);
+        spec.unwrap_or_else(|| panic!("no card row {param}"))
+            .default_value
     };
     let rest = |key: &str| {
-        let [position, rotation, scale] =
-            [["pos_x", "pos_y", "pos_z"], ["rot_x", "rot_y", "rot_z"], ["scale_x", "scale_y", "scale_z"]]
-                .map(|names| names.map(|property| card(key, property)));
+        let [position, rotation, scale] = [
+            ["pos_x", "pos_y", "pos_z"],
+            ["rot_x", "rot_y", "rot_z"],
+            ["scale_x", "scale_y", "scale_z"],
+        ]
+        .map(|names| names.map(|property| card(key, property)));
         (position, rotation, scale)
     };
     let (group_at, group_turn, group_scale) = rest("parent");
-    assert_eq!((group_at, group_turn, group_scale), ([2.0, 0.0, 0.0], [0.0; 3], [1.0; 3]));
-    assert_eq!(rest("parent#mesh"), ([0.0; 3], [0.0; 3], [1.0; 3]), "the parent's mesh sits at its node");
+    assert_eq!(
+        (group_at, group_turn, group_scale),
+        ([2.0, 0.0, 0.0], [0.0; 3], [1.0; 3])
+    );
+    assert_eq!(
+        rest("parent#mesh"),
+        ([0.0; 3], [0.0; 3], [1.0; 3]),
+        "the parent's mesh sits at its node"
+    );
     let (child_at, child_turn, child_scale) = rest("parent/child#mesh");
     assert_eq!(child_at, [0.0, 1.0, 0.0]);
-    assert!((child_turn[2] - quarter).abs() < 1e-5 && child_turn[0].abs() < 1e-5 && child_turn[1].abs() < 1e-5, "{child_turn:?}");
-    assert!(child_scale.iter().all(|s| (s - 2.0).abs() < 1e-5), "{child_scale:?}");
+    assert!(
+        (child_turn[2] - quarter).abs() < 1e-5
+            && child_turn[0].abs() < 1e-5
+            && child_turn[1].abs() < 1e-5,
+        "{child_turn:?}"
+    );
+    assert!(
+        child_scale.iter().all(|s| (s - 2.0).abs() < 1e-5),
+        "{child_scale:?}"
+    );
 
     // The child draws its node's own mesh, unshifted.
     let source = def
         .nodes
         .iter()
-        .find(|node| node.params.get("node_path") == Some(&SerializedParamValue::String { value: "parent/child".into() }))
+        .find(|node| {
+            node.params.get("node_path")
+                == Some(&SerializedParamValue::String {
+                    value: "parent/child".into(),
+                })
+        })
         .expect("the child's mesh source");
-    assert_eq!(source.params.get("own_space"), Some(&SerializedParamValue::Bool { value: true }));
-    assert!(!source.params.contains_key("translate_x"), "the mesh is not recentred");
+    assert_eq!(
+        source.params.get("own_space"),
+        Some(&SerializedParamValue::Bool { value: true })
+    );
+    assert!(
+        !source.params.contains_key("translate_x"),
+        "the mesh is not recentred"
+    );
 
     // Its cards put that mesh exactly where the file does.
-    let own = load_gltf_mesh(&path, GltfMeshSelector::Node { path: "parent/child".into(), material: -1, own_space: true }).unwrap();
-    let in_file =
-        load_gltf_mesh(&path, GltfMeshSelector::Node { path: "parent/child".into(), material: -1, own_space: false }).unwrap();
-    let world = |turn: [f32; 3]| mat4_mul(trs_matrix(group_at, group_turn, group_scale), trs_matrix(child_at, turn, child_scale));
+    let own = load_gltf_mesh(
+        &path,
+        GltfMeshSelector::Node {
+            path: "parent/child".into(),
+            material: -1,
+            own_space: true,
+        },
+    )
+    .unwrap();
+    let in_file = load_gltf_mesh(
+        &path,
+        GltfMeshSelector::Node {
+            path: "parent/child".into(),
+            material: -1,
+            own_space: false,
+        },
+    )
+    .unwrap();
+    let world = |turn: [f32; 3]| {
+        mat4_mul(
+            trs_matrix(group_at, group_turn, group_scale),
+            trs_matrix(child_at, turn, child_scale),
+        )
+    };
     let place = |m: [[f32; 4]; 4], p: [f32; 3]| -> [f32; 3] {
-        std::array::from_fn(|row| m[0][row] * p[0] + m[1][row] * p[1] + m[2][row] * p[2] + m[3][row])
+        std::array::from_fn(|row| {
+            m[0][row] * p[0] + m[1][row] * p[1] + m[2][row] * p[2] + m[3][row]
+        })
     };
     let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-5);
     for (local, file) in own.iter().zip(&in_file) {
-        assert!(near(place(world(child_turn), local.position), file.position), "{:?} vs {:?}", local.position, file.position);
+        assert!(
+            near(place(world(child_turn), local.position), file.position),
+            "{:?} vs {:?}",
+            local.position,
+            file.position
+        );
     }
 
     // Turning the child moves its mesh about its node's origin: the corner

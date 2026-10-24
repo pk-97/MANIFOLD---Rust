@@ -92,7 +92,14 @@ impl Primitive for MeshTextureWeights {
         _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
-        (port_name == "weights").then(|| input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)).flatten()
+        (port_name == "weights")
+            .then(|| {
+                input_capacities
+                    .iter()
+                    .find(|(p, _)| *p == "in")
+                    .map(|(_, n)| *n)
+            })
+            .flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -128,18 +135,40 @@ impl Primitive for MeshTextureWeights {
         if count == 0 {
             return;
         }
-        let uniforms = TextureWeightsUniforms { dispatch_count: count, ..uniforms };
+        let uniforms = TextureWeightsUniforms {
+            dispatch_count: count,
+            ..uniforms
+        };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let sampler = self.sampler.get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+        let sampler = self
+            .sampler
+            .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: src, offset: 0 },
-                GpuBinding::Texture { binding: 2, texture: field },
-                GpuBinding::Sampler { binding: 3, sampler },
-                GpuBinding::Buffer { binding: 4, buffer: dst, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: src,
+                    offset: 0,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: field,
+                },
+                GpuBinding::Sampler {
+                    binding: 3,
+                    sampler,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: dst,
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256), 1, 1],
             "node.mesh_texture_weights",
@@ -168,10 +197,22 @@ mod gpu_tests {
         uv: bool,
     }
 
-    const PLAIN: Settings = Settings { scale: 1.0, shift: [0.0, 0.0], bias: 0.5, radius: 1.0, source_offset: [0.0; 3], uv: false };
+    const PLAIN: Settings = Settings {
+        scale: 1.0,
+        shift: [0.0, 0.0],
+        bias: 0.5,
+        radius: 1.0,
+        source_offset: [0.0; 3],
+        uv: false,
+    };
 
     fn vertex(position: [f32; 3], normal: [f32; 3]) -> MeshVertex {
-        MeshVertex { position, normal, color: [1.0; 4], ..bytemuck::Zeroable::zeroed() }
+        MeshVertex {
+            position,
+            normal,
+            color: [1.0; 4],
+            ..bytemuck::Zeroable::zeroed()
+        }
     }
 
     fn mirrored(t: f32) -> f32 {
@@ -188,18 +229,28 @@ mod gpu_tests {
         if s.uv {
             return sample(mirrored(v.uv[0] * s.scale + s.shift[0])) - s.bias;
         }
-        let q: [f32; 3] = std::array::from_fn(|k| (v.position[k] + s.source_offset[k]) / s.radius * s.scale);
+        let q: [f32; 3] =
+            std::array::from_fn(|k| (v.position[k] + s.source_offset[k]) / s.radius * s.scale);
         let w: [f32; 3] = std::array::from_fn(|k| v.normal[k].powi(4));
         let total: f32 = w.iter().sum();
-        let reads = [sample(mirrored(q[1] + s.shift[0])), sample(mirrored(q[0] + s.shift[0])), sample(mirrored(q[0] + s.shift[0]))];
+        let reads = [
+            sample(mirrored(q[1] + s.shift[0])),
+            sample(mirrored(q[0] + s.shift[0])),
+            sample(mirrored(q[0] + s.shift[0])),
+        ];
         (0..3).map(|k| w[k] / total * reads[k]).sum::<f32>() - s.bias
     }
 
     fn dispatch(src: &[MeshVertex], s: &Settings) -> Vec<f32> {
         let device = manifold_gpu::testkit::test_device();
-        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<MeshTextureWeights>()
-            .expect("mesh_texture_weights buffer codegen");
-        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "texture-weights-test");
+        let wgsl =
+            manifold_node_engine::freeze::codegen::standalone_for_spec::<MeshTextureWeights>()
+                .expect("mesh_texture_weights buffer codegen");
+        let pipeline = device.create_compute_pipeline(
+            &wgsl,
+            manifold_node_engine::freeze::codegen::ENTRY,
+            "texture-weights-test",
+        );
         let field = device.create_texture(&GpuTextureDesc {
             width: 2,
             height: 1,
@@ -235,11 +286,28 @@ mod gpu_tests {
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: &input, offset: 0 },
-                GpuBinding::Texture { binding: 2, texture: &field },
-                GpuBinding::Sampler { binding: 3, sampler: &sampler },
-                GpuBinding::Buffer { binding: 4, buffer: &output, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &input,
+                    offset: 0,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: &field,
+                },
+                GpuBinding::Sampler {
+                    binding: 3,
+                    sampler: &sampler,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: &output,
+                    offset: 0,
+                },
             ],
             [(src.len() as u32).div_ceil(256), 1, 1],
             "texture-weights-test",
@@ -252,7 +320,10 @@ mod gpu_tests {
     fn check(src: &[MeshVertex], s: &Settings) {
         for (i, (got, v)) in dispatch(src, s).iter().zip(src).enumerate() {
             let want = expected(v, s);
-            assert!((got - want).abs() < 2e-3, "vertex {i}: got {got}, want {want}");
+            assert!(
+                (got - want).abs() < 2e-3,
+                "vertex {i}: got {got}, want {want}"
+            );
         }
     }
 
@@ -273,9 +344,19 @@ mod gpu_tests {
             vertex([0.25, 0.75, 0.0], [half, half, 0.0]),
         ];
         check(&src, &PLAIN);
-        assert!((dispatch(&src[..1], &PLAIN)[0] - (0.2 - 0.5)).abs() < 2e-3, "a dark texel pushes in by the bias");
+        assert!(
+            (dispatch(&src[..1], &PLAIN)[0] - (0.2 - 0.5)).abs() < 2e-3,
+            "a dark texel pushes in by the bias"
+        );
         // Shift, scale, frame radius and source offset move where it reads.
-        let moved = Settings { scale: 2.0, shift: [0.5, 0.0], bias: 0.0, radius: 2.0, source_offset: [0.5, 0.0, 0.0], uv: false };
+        let moved = Settings {
+            scale: 2.0,
+            shift: [0.5, 0.0],
+            bias: 0.0,
+            radius: 2.0,
+            source_offset: [0.5, 0.0, 0.0],
+            uv: false,
+        };
         check(&src, &moved);
     }
 
@@ -283,11 +364,30 @@ mod gpu_tests {
     /// whichever way it faces.
     #[test]
     fn uv_mapping_reads_each_vertex_at_its_own_uv() {
-        let at = |position: [f32; 3], normal: [f32; 3], u: f32| MeshVertex { uv: [u, 0.5], ..vertex(position, normal) };
-        let src = [at([5.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0.25), at([5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 0.75), at([-3.0, 2.0, 1.0], [0.0, 1.0, 0.0], 1.25)];
+        let at = |position: [f32; 3], normal: [f32; 3], u: f32| MeshVertex {
+            uv: [u, 0.5],
+            ..vertex(position, normal)
+        };
+        let src = [
+            at([5.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0.25),
+            at([5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 0.75),
+            at([-3.0, 2.0, 1.0], [0.0, 1.0, 0.0], 1.25),
+        ];
         check(&src, &Settings { uv: true, ..PLAIN });
-        check(&src, &Settings { scale: 2.0, shift: [0.5, 0.0], bias: 0.0, uv: true, ..PLAIN });
+        check(
+            &src,
+            &Settings {
+                scale: 2.0,
+                shift: [0.5, 0.0],
+                bias: 0.0,
+                uv: true,
+                ..PLAIN
+            },
+        );
         let reads = dispatch(&src[..2], &Settings { uv: true, ..PLAIN });
-        assert!((reads[0] - (0.2 - 0.5)).abs() < 2e-3 && (reads[1] - (1.0 - 0.5)).abs() < 2e-3, "the same place reads by its UV: {reads:?}");
+        assert!(
+            (reads[0] - (0.2 - 0.5)).abs() < 2e-3 && (reads[1] - (1.0 - 0.5)).abs() < 2e-3,
+            "the same place reads by its UV: {reads:?}"
+        );
     }
 }

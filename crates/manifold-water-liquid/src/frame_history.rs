@@ -157,10 +157,22 @@ impl HistoryCore {
     /// generation, or None when nothing is retired in it.
     pub fn retired_bounds(&self) -> Option<RetiredBounds> {
         let mut bounds: Option<RetiredBounds> = None;
-        for s in self.slots.iter().filter(|s| s.state == SlotState::Retired && s.generation == self.generation) {
+        for s in self
+            .slots
+            .iter()
+            .filter(|s| s.state == SlotState::Retired && s.generation == self.generation)
+        {
             bounds = Some(match bounds {
-                None => RetiredBounds { earliest: s.t, second: None, newest: s.t },
-                Some(b) if s.t > b.newest => RetiredBounds { earliest: b.earliest, second: Some(b.newest), newest: s.t },
+                None => RetiredBounds {
+                    earliest: s.t,
+                    second: None,
+                    newest: s.t,
+                },
+                Some(b) if s.t > b.newest => RetiredBounds {
+                    earliest: b.earliest,
+                    second: Some(b.newest),
+                    newest: s.t,
+                },
                 Some(b) => RetiredBounds {
                     earliest: b.earliest.min(s.t),
                     second: Some(b.second.map_or(s.t, |second| second.max(s.t))),
@@ -178,7 +190,10 @@ impl HistoryCore {
 
     /// Slots holding anything: every state but Free.
     pub fn in_use(&self) -> usize {
-        self.slots.iter().filter(|s| s.state != SlotState::Free).count()
+        self.slots
+            .iter()
+            .filter(|s| s.state != SlotState::Free)
+            .count()
     }
 
     fn is_pinned(&self, slot: usize) -> bool {
@@ -210,7 +225,8 @@ impl HistoryCore {
 
     /// Whether `time` is an endpoint not yet submitted in this generation.
     pub fn wants_publication(&self, time: f64) -> bool {
-        self.newest_submitted.is_none_or(|(generation, t)| generation != self.generation || time > t)
+        self.newest_submitted
+            .is_none_or(|(generation, t)| generation != self.generation || time > t)
     }
 
     /// The particle capacity a publication of `count` records needs; growth
@@ -282,7 +298,11 @@ impl HistoryCore {
     /// Retire completed publications in publication order. `metadata` reads
     /// a completed slot's words (count, identity, accepted, 0). Runs are
     /// assigned here, from retired metadata only.
-    pub fn retire(&mut self, complete: impl Fn(u64) -> bool, mut metadata: impl FnMut(usize) -> Option<[u32; 4]>) {
+    pub fn retire(
+        &mut self,
+        complete: impl Fn(u64) -> bool,
+        mut metadata: impl FnMut(usize) -> Option<[u32; 4]>,
+    ) {
         loop {
             let next = (0..self.slots.len())
                 .filter(|&i| self.slots[i].state == SlotState::Pending)
@@ -318,10 +338,15 @@ impl HistoryCore {
     /// B's predecessor in B's run, else B. Runs only move forward. With
     /// nothing retired in this generation the previous pin holds unchanged.
     pub fn select(&mut self, c: f64) -> Option<Presentation> {
-        let min_run = self.pinned.filter(|p| p.generation == self.generation).map_or(0, |p| p.run);
+        let min_run = self
+            .pinned
+            .filter(|p| p.generation == self.generation)
+            .map_or(0, |p| p.run);
         // Allocation-free scan: B is the earliest candidate after c, else
         // the newest; A the latest candidate before B in B's run.
-        let candidate = |s: &SlotMeta| s.state == SlotState::Retired && s.generation == self.generation && s.run >= min_run;
+        let candidate = |s: &SlotMeta| {
+            s.state == SlotState::Retired && s.generation == self.generation && s.run >= min_run
+        };
         let mut after: Option<usize> = None;
         let mut newest: Option<usize> = None;
         for (i, s) in self.slots.iter().enumerate().filter(|(_, s)| candidate(s)) {
@@ -332,14 +357,18 @@ impl HistoryCore {
                 after = Some(i);
             }
         }
-        let Some(b) = after.or(newest) else { return self.pinned };
+        let Some(b) = after.or(newest) else {
+            return self.pinned;
+        };
         let mut before: Option<usize> = None;
         for (i, s) in self.slots.iter().enumerate().filter(|(_, s)| candidate(s)) {
             if s.seq < self.slots[b].seq && before.is_none_or(|n| s.seq > self.slots[n].seq) {
                 before = Some(i);
             }
         }
-        let a = before.filter(|&a| self.slots[a].run == self.slots[b].run).unwrap_or(b);
+        let a = before
+            .filter(|&a| self.slots[a].run == self.slots[b].run)
+            .unwrap_or(b);
         let (sa, sb) = (self.slots[a], self.slots[b]);
         let (blend, span) = display_blend(c, sa.t, sb.t);
         let presentation = Presentation {
@@ -358,7 +387,10 @@ impl HistoryCore {
         };
         self.pinned = Some(presentation);
         for slot in &mut self.slots {
-            if slot.state == SlotState::Retired && slot.generation == self.generation && slot.seq < sa.seq {
+            if slot.state == SlotState::Retired
+                && slot.generation == self.generation
+                && slot.seq < sa.seq
+            {
                 slot.state = SlotState::Obsolete;
             }
         }
@@ -386,11 +418,13 @@ impl HistoryCore {
                 && complete(s.writer_stamp)
                 && complete(s.reader_stamp)
             {
-                self.slots[i] = SlotMeta { reader_stamp: 0, ..SlotMeta::FREE };
+                self.slots[i] = SlotMeta {
+                    reader_stamp: 0,
+                    ..SlotMeta::FREE
+                };
             }
         }
     }
-
 }
 
 /// Storage a slot holds: its byte size is all the lifecycle needs.
@@ -413,18 +447,28 @@ pub struct SlotBuffers<B = GpuBuffer> {
 
 impl<B> Default for SlotBuffers<B> {
     fn default() -> Self {
-        Self { particles: None, metadata: None, fields: std::array::from_fn(|_| None) }
+        Self {
+            particles: None,
+            metadata: None,
+            fields: std::array::from_fn(|_| None),
+        }
     }
 }
 
 impl<B: SlotStorage> SlotBuffers<B> {
     fn fits(&self, particle_bytes: u64, fields: &[u64; FIELDS]) -> bool {
-        self.particles.as_ref().is_some_and(|b| b.bytes() >= particle_bytes)
+        self.particles
+            .as_ref()
+            .is_some_and(|b| b.bytes() >= particle_bytes)
             && self.metadata.is_some()
-            && self.fields.iter().zip(fields).all(|(buffer, &bytes)| match buffer {
-                None => bytes == 0,
-                Some(buffer) => buffer.bytes() == bytes,
-            })
+            && self
+                .fields
+                .iter()
+                .zip(fields)
+                .all(|(buffer, &bytes)| match buffer {
+                    None => bytes == 0,
+                    Some(buffer) => buffer.bytes() == bytes,
+                })
     }
 }
 
@@ -440,7 +484,11 @@ pub struct FrameHistory<B = GpuBuffer> {
 
 impl<B> Default for FrameHistory<B> {
     fn default() -> Self {
-        Self { core: HistoryCore::default(), buffers: Vec::new(), field_capacity: [0; FIELDS] }
+        Self {
+            core: HistoryCore::default(),
+            buffers: Vec::new(),
+            field_capacity: [0; FIELDS],
+        }
     }
 }
 
@@ -472,8 +520,16 @@ impl<B: SlotStorage> FrameHistory<B> {
             *capacity = (*capacity).max(bytes);
         }
         let capacity = self.field_capacity;
-        let fields = &std::array::from_fn(|i| if i == FIELD_SOLID && fields[i] > 0 { capacity[i] } else { fields[i] });
-        let found = self.core.free_slot(|i| self.buffers[i].fits(particle_bytes, fields));
+        let fields = &std::array::from_fn(|i| {
+            if i == FIELD_SOLID && fields[i] > 0 {
+                capacity[i]
+            } else {
+                fields[i]
+            }
+        });
+        let found = self
+            .core
+            .free_slot(|i| self.buffers[i].fits(particle_bytes, fields));
         let slot = match found {
             Some(slot) => slot,
             None if self.core.can_grow() => self.core.len(),
@@ -487,9 +543,15 @@ impl<B: SlotStorage> FrameHistory<B> {
         }
         let total = particle_bytes + 16 + fields.iter().sum::<u64>();
         let fresh = admit(total)
-            .map_err(|error| format!("a history slot needs {total} bytes the device cannot give: {error}"))
+            .map_err(|error| {
+                format!("a history slot needs {total} bytes the device cannot give: {error}")
+            })
             .and_then(|()| {
-                let mut fresh = SlotBuffers { particles: Some(create(particle_bytes)?), metadata: Some(create(16)?), ..SlotBuffers::default() };
+                let mut fresh = SlotBuffers {
+                    particles: Some(create(particle_bytes)?),
+                    metadata: Some(create(16)?),
+                    ..SlotBuffers::default()
+                };
                 for (field, &bytes) in fresh.fields.iter_mut().zip(fields) {
                     if bytes > 0 {
                         *field = Some(create(bytes)?);
@@ -518,12 +580,24 @@ impl<B: SlotStorage> FrameHistory<B> {
 
 impl FrameHistory<GpuBuffer> {
     /// [`Self::acquire_with`] on the device under its memory admission.
-    pub fn acquire(&mut self, device: &GpuDevice, time: f64, particle_bytes: u64, fields: &[u64; FIELDS]) -> Result<Option<usize>, String> {
+    pub fn acquire(
+        &mut self,
+        device: &GpuDevice,
+        time: f64,
+        particle_bytes: u64,
+        fields: &[u64; FIELDS],
+    ) -> Result<Option<usize>, String> {
         self.acquire_with(
             time,
             particle_bytes,
             fields,
-            |total| manifold_node_engine::load::expand::admit_candidate_bytes(device.modifier_memory_snapshot(), total).map_err(|e| e.to_string()),
+            |total| {
+                manifold_node_engine::load::expand::admit_candidate_bytes(
+                    device.modifier_memory_snapshot(),
+                    total,
+                )
+                .map_err(|e| e.to_string())
+            },
             |bytes| device.try_create_buffer_shared(bytes),
         )
     }
@@ -557,7 +631,11 @@ mod tests {
     const LATTICE: [u32; 7] = [0, 0, 0, 1, 8, 8, 8];
 
     fn layout(epoch: u32) -> Layout {
-        Layout { epoch, lattice: LATTICE, fields: [0; FIELDS] }
+        Layout {
+            epoch,
+            lattice: LATTICE,
+            fields: [0; FIELDS],
+        }
     }
 
     /// The history driven by frames, each with a frame stamp; a stamp
@@ -574,7 +652,15 @@ mod tests {
 
     impl Model {
         fn new(delay: u64) -> Self {
-            Self { core: HistoryCore::default(), frame: 0, delay, rejected: Vec::new(), identity: 1, max_in_use: 0, shown: Vec::new() }
+            Self {
+                core: HistoryCore::default(),
+                frame: 0,
+                delay,
+                rejected: Vec::new(),
+                identity: 1,
+                max_in_use: 0,
+                shown: Vec::new(),
+            }
         }
 
         fn complete(frame: u64, delay: u64) -> impl Fn(u64) -> bool {
@@ -582,7 +668,13 @@ mod tests {
         }
 
         /// One live frame: retire, select at `c`, stamp, reclaim, publish.
-        fn live_frame(&mut self, layout: Layout, time: f64, ready: bool, c: f64) -> Option<Presentation> {
+        fn live_frame(
+            &mut self,
+            layout: Layout,
+            time: f64,
+            ready: bool,
+            c: f64,
+        ) -> Option<Presentation> {
             self.frame += 1;
             let stamp = self.frame;
             let complete = Self::complete(self.frame, self.delay);
@@ -590,12 +682,18 @@ mod tests {
             let rejected = self.rejected.clone();
             let identity = self.identity;
             let times: Vec<f64> = (0..self.core.len()).map(|i| self.core.slots[i].t).collect();
-            self.core.retire(&complete, |i| Some([10, identity, u32::from(!rejected.contains(&times[i])), 0]));
+            self.core.retire(&complete, |i| {
+                Some([10, identity, u32::from(!rejected.contains(&times[i])), 0])
+            });
             let shown = self.core.select(c);
             self.core.stamp_readers(stamp);
             self.core.reclaim(&complete);
             if ready && self.core.wants_publication(time) {
-                match self.core.free_slot(|_| true).or_else(|| self.core.can_grow().then(|| self.core.push_free())) {
+                match self
+                    .core
+                    .free_slot(|_| true)
+                    .or_else(|| self.core.can_grow().then(|| self.core.push_free()))
+                {
                     Some(slot) => self.core.begin(slot, time, stamp),
                     None => self.core.skip(time),
                 }
@@ -608,11 +706,31 @@ mod tests {
         }
 
         /// Run the real clock at `fps` render / `hz` simulation for `frames`.
-        fn run(&mut self, clock: &mut SimulationClock, fps: f64, hz: f64, speed: f32, frames: usize, start: usize) -> Vec<(manifold_physics::clock::ClockFrame, Option<Presentation>)> {
+        fn run(
+            &mut self,
+            clock: &mut SimulationClock,
+            fps: f64,
+            hz: f64,
+            speed: f32,
+            frames: usize,
+            start: usize,
+        ) -> Vec<(manifold_physics::clock::ClockFrame, Option<Presentation>)> {
             (start..start + frames)
                 .map(|f| {
-                    let frame = clock.advance(manifold_physics::PlayedTime::from_played(f as f64 / fps), 1.0 / hz, speed, 0.0, false, false);
-                    let shown = self.live_frame(layout(frame.epoch), frame.simulation_time, true, frame.display_time);
+                    let frame = clock.advance(
+                        manifold_physics::PlayedTime::from_played(f as f64 / fps),
+                        1.0 / hz,
+                        speed,
+                        0.0,
+                        false,
+                        false,
+                    );
+                    let shown = self.live_frame(
+                        layout(frame.epoch),
+                        frame.simulation_time,
+                        true,
+                        frame.display_time,
+                    );
                     (frame, shown)
                 })
                 .collect()
@@ -628,7 +746,11 @@ mod tests {
 
     #[test]
     fn frame_history_selector_matches_frame_ring_within_latest_pair() {
-        for (c, expected) in [(1.0, (1.0, 2.0, 0.0)), (2.5, (1.0, 2.0, 1.0)), (0.5, (0.0, 1.0, 0.5))] {
+        for (c, expected) in [
+            (1.0, (1.0, 2.0, 0.0)),
+            (2.5, (1.0, 2.0, 1.0)),
+            (0.5, (0.0, 1.0, 0.5)),
+        ] {
             let mut core = HistoryCore::default();
             core.set_layout(layout(1));
             for t in [0.0, 1.0, 2.0] {
@@ -636,7 +758,10 @@ mod tests {
             }
             let p = core.select(c).expect("retired endpoints");
             assert_eq!((p.t_a, p.t_b, f64::from(p.blend)), expected, "c = {c}");
-            assert_eq!(p.presented_time(), expected.0 + expected.2 * (expected.1 - expected.0));
+            assert_eq!(
+                p.presented_time(),
+                expected.0 + expected.2 * (expected.1 - expected.0)
+            );
         }
     }
 
@@ -648,15 +773,28 @@ mod tests {
         let frames = model.run(&mut clock, 27.0, 30.0, 1.0, 270, 0);
         let two_tick = frames.iter().filter(|(f, _)| f.ticks == 2).count();
         assert!(two_tick > 0, "the cadence has two-tick frames");
-        let mut published: Vec<f64> = model.core.slots.iter().filter(|s| s.state != SlotState::Free).map(|s| s.t).collect();
+        let mut published: Vec<f64> = model
+            .core
+            .slots
+            .iter()
+            .filter(|s| s.state != SlotState::Free)
+            .map(|s| s.t)
+            .collect();
         published.sort_by(f64::total_cmp);
-        let ends: Vec<f64> = frames.iter().filter(|(f, _)| f.ticks > 0).map(|(f, _)| f.simulation_time).collect();
+        let ends: Vec<f64> = frames
+            .iter()
+            .filter(|(f, _)| f.ticks > 0)
+            .map(|(f, _)| f.simulation_time)
+            .collect();
         for t in published {
             assert!(ends.contains(&t), "only frame-end endpoints publish: {t}");
         }
         for (f, _) in frames.iter().filter(|(f, _)| f.ticks == 2) {
             let intermediate = f.simulation_time - 1.0 / 30.0;
-            assert!(!model.shown.iter().any(|&t| (t - intermediate).abs() < 1e-9), "the intermediate tick is never shown");
+            assert!(
+                !model.shown.iter().any(|&t| (t - intermediate).abs() < 1e-9),
+                "the intermediate tick is never shown"
+            );
         }
         assert_eq!(model.core.publications_skipped(), 0);
     }
@@ -670,11 +808,17 @@ mod tests {
         let mut wider = layout(1);
         wider.fields[FIELD_INTERIOR] = 64;
         assert_eq!(core.set_layout(wider), LayoutChange::Generation);
-        assert!(core.wants_publication(1.0), "a field change republishes at unchanged time");
+        assert!(
+            core.wants_publication(1.0),
+            "a field change republishes at unchanged time"
+        );
         let mut moved = wider;
         moved.lattice[4] = 9;
         assert_eq!(core.set_layout(moved), LayoutChange::Lattice);
-        assert!(core.pinned().is_none(), "a lattice change leaves nothing comparable");
+        assert!(
+            core.pinned().is_none(),
+            "a lattice change leaves nothing comparable"
+        );
         assert!(core.wants_publication(1.0));
     }
 
@@ -703,9 +847,17 @@ mod tests {
         }
         let held = core.select(1.5).expect("pair");
         core.set_layout(layout(2));
-        assert_eq!(core.select(0.0), Some(held), "the old water shows unchanged after reset");
+        assert_eq!(
+            core.select(0.0),
+            Some(held),
+            "the old water shows unchanged after reset"
+        );
         core.reclaim(|_| true);
-        assert_ne!(core.state(held.a), SlotState::Free, "a pinned slot is never freed");
+        assert_ne!(
+            core.state(held.a),
+            SlotState::Free,
+            "a pinned slot is never freed"
+        );
         assert_ne!(core.state(held.b), SlotState::Free);
         let slot = core.free_slot(|_| true).unwrap_or_else(|| core.push_free());
         core.begin(slot, 0.0, 0);
@@ -766,8 +918,13 @@ mod tests {
             let delay = 1 + next(4);
             for frame in 1..400u64 {
                 let complete = move |stamp: u64| stamp == 0 || stamp + delay <= frame;
-                let safe = |core: &HistoryCore, writer: &[u64; H_MAX], reader: &[u64; H_MAX], slot: usize| {
-                    complete(writer[slot]) && complete(reader[slot]) && core.pinned().is_none_or(|p| p.a != slot && p.b != slot)
+                let safe = |core: &HistoryCore,
+                            writer: &[u64; H_MAX],
+                            reader: &[u64; H_MAX],
+                            slot: usize| {
+                    complete(writer[slot])
+                        && complete(reader[slot])
+                        && core.pinned().is_none_or(|p| p.a != slot && p.b != slot)
                 };
                 match next(25) {
                     0 => epoch += 1,
@@ -785,7 +942,11 @@ mod tests {
                 if next(8) == 0 {
                     continue; // an early exit: nothing else this frame
                 }
-                core.set_layout(Layout { epoch, lattice, fields });
+                core.set_layout(Layout {
+                    epoch,
+                    lattice,
+                    fields,
+                });
                 core.retire(complete, |_| Some([5, 1, u32::from(next(5) != 0), 0]));
                 if let Some(p) = core.select(t - 0.05) {
                     reader[p.a] = frame;
@@ -796,14 +957,23 @@ mod tests {
                 core.reclaim(complete);
                 for (i, was) in before.iter().enumerate() {
                     if *was != SlotState::Free && core.state(i) == SlotState::Free {
-                        assert!(safe(&core, &writer, &reader, i), "slot {i} freed while the GPU may still use it");
+                        assert!(
+                            safe(&core, &writer, &reader, i),
+                            "slot {i} freed while the GPU may still use it"
+                        );
                     }
                 }
                 t += 1.0 / 30.0;
                 if core.wants_publication(t) {
-                    match core.free_slot(|_| true).or_else(|| core.can_grow().then(|| core.push_free())) {
+                    match core
+                        .free_slot(|_| true)
+                        .or_else(|| core.can_grow().then(|| core.push_free()))
+                    {
                         Some(slot) => {
-                            assert!(safe(&core, &writer, &reader, slot), "slot {slot} reused while the GPU may still use it");
+                            assert!(
+                                safe(&core, &writer, &reader, slot),
+                                "slot {slot} reused while the GPU may still use it"
+                            );
                             core.begin(slot, t, frame);
                             writer[slot] = frame;
                             if next(10) == 0 {
@@ -816,7 +986,10 @@ mod tests {
                 for i in 0..core.len() {
                     let s = core.slots[i];
                     if s.state == SlotState::Retired {
-                        assert_eq!(s.generation, core.generation, "an obsolete Pending never retires");
+                        assert_eq!(
+                            s.generation, core.generation,
+                            "an obsolete Pending never retires"
+                        );
                     }
                 }
             }
@@ -834,15 +1007,23 @@ mod tests {
             }
             if let Some(p) = model.live_frame(layout(1), t, true, t - 0.1) {
                 shown = Some(p);
-                assert!(!model.rejected.iter().any(|&r| r == p.t_a || r == p.t_b), "a rejected tick is never shown");
+                assert!(
+                    !model.rejected.iter().any(|&r| r == p.t_a || r == p.t_b),
+                    "a rejected tick is never shown"
+                );
             }
         }
         assert!(shown.is_some());
         for _ in 0..5 {
             model.live_frame(layout(1), 1.0, false, 1.0);
         }
-        let rejected = (0..model.core.len()).filter(|&i| model.core.state(i) == SlotState::Rejected).count();
-        assert_eq!(rejected, 0, "rejected slots free once their stamps complete");
+        let rejected = (0..model.core.len())
+            .filter(|&i| model.core.state(i) == SlotState::Rejected)
+            .count();
+        assert_eq!(
+            rejected, 0,
+            "rejected slots free once their stamps complete"
+        );
     }
 
     /// Storage that only knows its size, for allocation tests.
@@ -861,20 +1042,42 @@ mod tests {
         let fields = [0; FIELDS];
         let ok = |_: u64| Ok(());
         // Admission refused: no slot is added, the endpoint is skipped once.
-        let refused = history.acquire_with(1.0, 64, &fields, |_| Err("no memory".into()), |b| Ok(Bytes(b)));
+        let refused = history.acquire_with(
+            1.0,
+            64,
+            &fields,
+            |_| Err("no memory".into()),
+            |b| Ok(Bytes(b)),
+        );
         assert!(refused.is_err());
-        assert_eq!((history.core.len(), history.core.publications_skipped()), (0, 1));
-        assert!(!history.core.wants_publication(1.0), "a held frame does not retry it");
+        assert_eq!(
+            (history.core.len(), history.core.publications_skipped()),
+            (0, 1)
+        );
+        assert!(
+            !history.core.wants_publication(1.0),
+            "a held frame does not retry it"
+        );
         // A partial allocation installs nothing.
         let mut made = 0;
         let partial = history.acquire_with(2.0, 64, &fields, ok, |b| {
             made += 1;
-            if made == 2 { Err("device refused".into()) } else { Ok(Bytes(b)) }
+            if made == 2 {
+                Err("device refused".into())
+            } else {
+                Ok(Bytes(b))
+            }
         });
         assert!(partial.is_err());
-        assert_eq!((history.core.len(), history.core.publications_skipped()), (0, 2));
+        assert_eq!(
+            (history.core.len(), history.core.publications_skipped()),
+            (0, 2)
+        );
         // A slot that exists keeps its storage when its regrowth fails.
-        let slot = history.acquire_with(3.0, 64, &fields, ok, |b| Ok(Bytes(b))).unwrap().expect("slot");
+        let slot = history
+            .acquire_with(3.0, 64, &fields, ok, |b| Ok(Bytes(b)))
+            .unwrap()
+            .expect("slot");
         history.core.begin(slot, 3.0, 0);
         history.core.fail(slot, 0);
         history.core.reclaim(|_| true);
@@ -894,9 +1097,17 @@ mod tests {
             assert!(!history.core.wants_publication(t));
         }
         assert_eq!(history.core.len(), H_MAX);
-        assert_eq!(history.core.publications_skipped(), 3 + 3, "each skipped endpoint counts once");
+        assert_eq!(
+            history.core.publications_skipped(),
+            3 + 3,
+            "each skipped endpoint counts once"
+        );
         history.core.set_layout(layout(2));
-        assert_eq!(history.core.publications_skipped(), 6, "the counter spans epochs");
+        assert_eq!(
+            history.core.publications_skipped(),
+            6,
+            "the counter spans epochs"
+        );
     }
 
     #[test]
@@ -917,7 +1128,10 @@ mod tests {
         let half = model.run(&mut clock, 60.0, 30.0, 0.5, 240, 190);
         let (first, last) = (half[120].1.expect("shown"), half[239].1.expect("shown"));
         let rate = (last.presented_time() - first.presented_time()) / (119.0 / 60.0);
-        assert!((rate - 0.5).abs() < 0.05, "half speed presents at half rate: {rate}");
+        assert!(
+            (rate - 0.5).abs() < 0.05,
+            "half speed presents at half rate: {rate}"
+        );
         // A requested time behind every retained endpoint holds at the oldest.
         let p = model.core.select(-1.0).expect("shown");
         assert_eq!(p.a, p.b);
@@ -945,7 +1159,10 @@ mod tests {
                 }
             }
             let last = model.core.pinned().expect("shown");
-            assert!(last.t_b < 21.0 / 60.0 * f64::from(ticks_per_frame), "the reset epoch is shown");
+            assert!(
+                last.t_b < 21.0 / 60.0 * f64::from(ticks_per_frame),
+                "the reset epoch is shown"
+            );
         }
     }
 
@@ -953,11 +1170,20 @@ mod tests {
     fn frame_history_slot_use_over_2000_frames() {
         // Section 3.8: pending plus retained from A, plus the pinned pair and
         // obsolete slots awaiting readers.
-        for (fps, hz, delay, bound) in [(60.0, 30.0, 3, 4 + 2 + 6), (30.0, 30.0, 3, 6 + 2 + 6), (27.0, 30.0, 3, 6 + 2 + 6), (30.0, 30.0, 4, 6 + 2 + 6)] {
+        for (fps, hz, delay, bound) in [
+            (60.0, 30.0, 3, 4 + 2 + 6),
+            (30.0, 30.0, 3, 6 + 2 + 6),
+            (27.0, 30.0, 3, 6 + 2 + 6),
+            (30.0, 30.0, 4, 6 + 2 + 6),
+        ] {
             let mut model = Model::new(delay);
             let mut clock = SimulationClock::default();
             model.run(&mut clock, fps, hz, 1.0, 2000, 0);
-            assert!(model.max_in_use <= bound, "{fps}/{hz} R{delay}: {} slots in use", model.max_in_use);
+            assert!(
+                model.max_in_use <= bound,
+                "{fps}/{hz} R{delay}: {} slots in use",
+                model.max_in_use
+            );
             assert!(model.core.len() <= H_MAX);
             assert_eq!(model.core.publications_skipped(), 0);
         }

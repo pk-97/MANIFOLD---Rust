@@ -133,12 +133,26 @@ const MAP_PREFIXES: [(&str, &str); 19] = [
     ("transmission_", "transmission_map"),
     ("volume_thickness_", "volume_thickness_map"),
     ("diffuse_transmission_", "diffuse_transmission_map"),
-    ("diffuse_transmission_color_", "diffuse_transmission_color_map"),
+    (
+        "diffuse_transmission_color_",
+        "diffuse_transmission_color_map",
+    ),
 ];
 
 /// The placement, UV-set and sampler params every map carries, after its prefix.
 const MAP_SUFFIXES: [&str; 13] = [
-    "uv_m00", "uv_m01", "uv_m10", "uv_m11", "uv_tx", "uv_ty", "uv_set", "tex_coord", "wrap_u", "wrap_v", "mag_filter", "min_filter",
+    "uv_m00",
+    "uv_m01",
+    "uv_m10",
+    "uv_m11",
+    "uv_tx",
+    "uv_ty",
+    "uv_set",
+    "tex_coord",
+    "wrap_u",
+    "wrap_v",
+    "mag_filter",
+    "min_filter",
     "mip_filter",
 ];
 
@@ -148,7 +162,11 @@ const MAP_SUFFIXES: [&str; 13] = [
 pub fn map_port(param_name: &str) -> Option<&'static str> {
     MAP_PREFIXES
         .iter()
-        .find(|(prefix, _)| param_name.strip_prefix(prefix).is_some_and(|suffix| MAP_SUFFIXES.contains(&suffix)))
+        .find(|(prefix, _)| {
+            param_name
+                .strip_prefix(prefix)
+                .is_some_and(|suffix| MAP_SUFFIXES.contains(&suffix))
+        })
         .map(|(_, port)| *port)
 }
 
@@ -167,9 +185,7 @@ fn feature_for_scalar(name: &str) -> MaterialFeature {
         | "volume_geometry"
         | "volume_scattering_density"
         | "volume_particle_density"
-        | "dispersion" => {
-            MaterialFeature::Glass
-        }
+        | "dispersion" => MaterialFeature::Glass,
         "sheen_roughness" => MaterialFeature::Sheen,
         "anisotropy_strength" | "anisotropy_rotation" => MaterialFeature::Anisotropy,
         "translucency" => MaterialFeature::Translucency,
@@ -263,8 +279,8 @@ fn sampler_component(name: &str) -> Option<(MaterialMapFamily, SamplerComponent)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_node_engine::primitive::PrimitiveSpec;
     use crate::node_graph::primitives::pbr_material::PbrMaterial;
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     #[test]
     fn material_inspector_schema_covers_pbr() {
@@ -317,9 +333,19 @@ mod tests {
                 RgbChannel::R
             ))
         );
-        assert_eq!(material_param_role("node.pbr_material", "volume_scattering_color_r"),
-            Some(MaterialParamRole::Colour(MaterialGroup::Feature(MaterialFeature::Glass), MaterialColour::VolumeScattering, RgbChannel::R)));
-        assert_eq!(material_param_role("node.pbr_material", "volume_geometry"),
-            Some(MaterialParamRole::Scalar(MaterialGroup::Feature(MaterialFeature::Glass))));
+        assert_eq!(
+            material_param_role("node.pbr_material", "volume_scattering_color_r"),
+            Some(MaterialParamRole::Colour(
+                MaterialGroup::Feature(MaterialFeature::Glass),
+                MaterialColour::VolumeScattering,
+                RgbChannel::R
+            ))
+        );
+        assert_eq!(
+            material_param_role("node.pbr_material", "volume_geometry"),
+            Some(MaterialParamRole::Scalar(MaterialGroup::Feature(
+                MaterialFeature::Glass
+            )))
+        );
     }
 }

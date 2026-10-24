@@ -155,8 +155,11 @@ mod tests {
 
     #[test]
     fn ntsc_rationals_reconstruct_within_broadcast_tolerance() {
-        for &(target, num, den) in &[(23.976_f32, 24000, 1001), (29.97, 30000, 1001), (59.94, 60000, 1001)]
-        {
+        for &(target, num, den) in &[
+            (23.976_f32, 24000, 1001),
+            (29.97, 30000, 1001),
+            (59.94, 60000, 1001),
+        ] {
             let reconstructed = num as f64 / den as f64;
             assert!(
                 (reconstructed - target as f64).abs() < 0.001,

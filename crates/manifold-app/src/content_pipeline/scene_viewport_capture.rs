@@ -12,7 +12,9 @@ use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_node_engine::scene::scene_viewport::SceneViewportHostError;
 
 use super::ContentPipeline;
-use crate::scene_viewport::{SceneViewportFrames, SceneViewportObservations, SceneViewportRequest, ViewportHost};
+use crate::scene_viewport::{
+    SceneViewportFrames, SceneViewportObservations, SceneViewportRequest, ViewportHost,
+};
 
 /// The request, what each output surface's frame was rendered with, and the
 /// bridge its pixels travel through.
@@ -70,7 +72,10 @@ impl SceneViewportCapture {
 
     /// The selection mask of this frame's generator viewport (D-102).
     #[cfg(target_os = "macos")]
-    pub(super) fn generator_mask<'g>(&self, generators: Option<&'g GeneratorRenderer>) -> Option<&'g manifold_gpu::GpuTexture> {
+    pub(super) fn generator_mask<'g>(
+        &self,
+        generators: Option<&'g GeneratorRenderer>,
+    ) -> Option<&'g manifold_gpu::GpuTexture> {
         generators?.scene_viewport_selection_mask(self.generator_layer()?)
     }
 
@@ -84,13 +89,20 @@ impl SceneViewportCapture {
         frame: u64,
     ) -> Option<ViewportCopy> {
         let request = self.request.clone()?;
-        let Some(manifold_core::GraphTarget::Generator(layer)) = request.target.host_target() else { return None };
+        let Some(manifold_core::GraphTarget::Generator(layer)) = request.target.host_target()
+        else {
+            return None;
+        };
         self.observations.scratch.clear();
         if let Some(generators) = generators {
             generators.write_scene_viewport_fluid_domains(layer, &mut self.observations.scratch);
         }
-        let status = generators.map_or(Err(SceneViewportHostError::MissingRuntime), |g| g.scene_viewport_status(layer));
-        let texture = generators.and_then(|g| g.scene_viewport_texture(layer)).cloned();
+        let status = generators.map_or(Err(SceneViewportHostError::MissingRuntime), |g| {
+            g.scene_viewport_status(layer)
+        });
+        let texture = generators
+            .and_then(|g| g.scene_viewport_texture(layer))
+            .cloned();
         let mut copy = self.record(request.clone(), slot, frame, status, texture)?;
         copy.depth = crate::gizmo_overlay::GizmoCapture::viewport_depth(generators, Some(layer));
         Some(copy)
@@ -104,10 +116,19 @@ impl SceneViewportCapture {
         slot: usize,
         frame: u64,
     ) -> Option<ViewportCopy> {
-        let request = self.request.clone().filter(|request| matches!(request.target, manifold_core::GraphTarget::Effect(_)))?;
+        let request = self
+            .request
+            .clone()
+            .filter(|request| matches!(request.target, manifold_core::GraphTarget::Effect(_)))?;
         self.observations.scratch.clear();
         compositor.write_scene_viewport_fluid_domains(&mut self.observations.scratch);
-        self.record(request, slot, frame, compositor.scene_viewport_status(), compositor.scene_viewport_texture().cloned())
+        self.record(
+            request,
+            slot,
+            frame,
+            compositor.scene_viewport_status(),
+            compositor.scene_viewport_texture().cloned(),
+        )
     }
 
     #[cfg(target_os = "macos")]
@@ -122,22 +143,33 @@ impl SceneViewportCapture {
         let generation = self.bridge.as_ref().map_or(0, |bridge| bridge.generation());
         let host = request.host;
         let camera = request.config.camera.to_camera();
-        self.observations.record(slot, frame, generation, request, status);
+        self.observations
+            .record(slot, frame, generation, request, status);
         let frame = self.observations.frames[slot].clone()?;
-        Some(ViewportCopy { source: texture, target: self.textures[slot].clone()?, host, camera, depth: None, frame })
+        Some(ViewportCopy {
+            source: texture,
+            target: self.textures[slot].clone()?,
+            host,
+            camera,
+            depth: None,
+            frame,
+        })
     }
 
     /// The bridge takes the owning host's view size (D7a). Both sides
     /// re-import on the generation bump.
     #[cfg(target_os = "macos")]
     fn fit(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
-        let Some(bridge) = self.bridge.as_ref() else { return };
+        let Some(bridge) = self.bridge.as_ref() else {
+            return;
+        };
         let (width, height) = (width.max(1), height.max(1));
         if bridge.width() == width && bridge.height() == height {
             return;
         }
         bridge.resize(width, height);
-        self.textures = std::array::from_fn(|i| Some(unsafe { bridge.import_texture_native(device, i) }));
+        self.textures =
+            std::array::from_fn(|i| Some(unsafe { bridge.import_texture_native(device, i) }));
         self.observations.frames.fill(None);
     }
 }
@@ -161,7 +193,8 @@ impl ContentPipeline {
         }
         #[cfg(target_os = "macos")]
         if let (Some(request), Some(device)) = (request.as_ref(), self.native_device.as_ref()) {
-            self.scene_viewport.fit(device, request.config.width, request.config.height);
+            self.scene_viewport
+                .fit(device, request.config.width, request.config.height);
         }
         self.scene_viewport.request = request;
     }
@@ -175,7 +208,10 @@ impl ContentPipeline {
 
     /// The host owning the viewport request, if any.
     pub fn scene_viewport_host(&self) -> Option<ViewportHost> {
-        self.scene_viewport.request.as_ref().map(|request| request.host)
+        self.scene_viewport
+            .request
+            .as_ref()
+            .map(|request| request.host)
     }
 
     pub fn scene_viewport_frames(&self) -> &SceneViewportFrames {
@@ -187,7 +223,11 @@ impl ContentPipeline {
     /// preview it sits in (its headroom, the SDR preview toggle), the graph
     /// editor like the graph editor window.
     #[cfg(target_os = "macos")]
-    pub(super) fn copy_scene_viewport(&self, enc: &mut manifold_gpu::GpuEncoder, copy: ViewportCopy) {
+    pub(super) fn copy_scene_viewport(
+        &self,
+        enc: &mut manifold_gpu::GpuEncoder,
+        copy: ViewportCopy,
+    ) {
         let target = &copy.target;
         let Some(source) = copy.source.as_ref() else {
             enc.clear_texture(target, 0.0, 0.0, 0.0, 1.0);
@@ -195,9 +235,24 @@ impl ContentPipeline {
         };
         let mut pipelines = self.preview_pipelines();
         pipelines.plan = self.display_presentation_plan(display_destination(copy.host));
-        Self::update_node_preview(enc, source, Some(target), false, Default::default(), &pipelines, self.preview_sampler.as_ref());
+        Self::update_node_preview(
+            enc,
+            source,
+            Some(target),
+            false,
+            Default::default(),
+            &pipelines,
+            self.preview_sampler.as_ref(),
+        );
         if let Some(device) = self.native_device.as_deref() {
-            self.gizmos.draw_viewport(device, enc, target, copy.host, copy.depth.as_ref(), &copy.camera);
+            self.gizmos.draw_viewport(
+                device,
+                enc,
+                target,
+                copy.host,
+                copy.depth.as_ref(),
+                &copy.camera,
+            );
         }
     }
 }
@@ -216,7 +271,13 @@ mod tests {
 
     #[test]
     fn each_host_maps_its_view_for_the_window_that_shows_it() {
-        assert_eq!(display_destination(ViewportHost::OutputPreview), DisplayDestination::Workspace);
-        assert_eq!(display_destination(ViewportHost::GraphEditor), DisplayDestination::GraphEditor);
+        assert_eq!(
+            display_destination(ViewportHost::OutputPreview),
+            DisplayDestination::Workspace
+        );
+        assert_eq!(
+            display_destination(ViewportHost::GraphEditor),
+            DisplayDestination::GraphEditor
+        );
     }
 }

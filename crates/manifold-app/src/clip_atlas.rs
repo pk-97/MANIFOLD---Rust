@@ -71,7 +71,10 @@ impl ClipAtlasCache {
             return Some(cell);
         }
         let cell = self.take_free_cell(clip)?;
-        self.strips.entry(clip.clone()).or_default().insert(idx, cell);
+        self.strips
+            .entry(clip.clone())
+            .or_default()
+            .insert(idx, cell);
         self.last_visible_frame.insert(clip.clone(), self.frame);
         Some(cell)
     }
@@ -181,7 +184,10 @@ mod tests {
         // A clip cannot evict itself to grow its own strip past capacity.
         c.begin_frame(&[cid("a"), cid("b")]);
         assert_eq!(c.get_or_alloc(&cid("a"), 5), None);
-        assert!(c.contains_any(&cid("b")), "requester didn't evict a peer it shares with");
+        assert!(
+            c.contains_any(&cid("b")),
+            "requester didn't evict a peer it shares with"
+        );
     }
 
     #[test]

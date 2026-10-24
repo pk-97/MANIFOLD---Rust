@@ -49,7 +49,12 @@ impl Primitive for ZeroArray {
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         (port_name == "out")
-            .then(|| input_capacities.iter().find(|(p, _)| *p == "in").map(|&(_, n)| n))
+            .then(|| {
+                input_capacities
+                    .iter()
+                    .find(|(p, _)| *p == "in")
+                    .map(|&(_, n)| n)
+            })
             .flatten()
     }
 
@@ -69,13 +74,29 @@ impl Primitive for ZeroArray {
             return;
         }
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let uniforms = ZeroUniforms { dispatch_count: count, _pad0: 0, _pad1: 0, _pad2: 0 };
+        let uniforms = ZeroUniforms {
+            dispatch_count: count,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+        };
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: array, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: array, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: array,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: array,
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256), 1, 1],
             "node.zero_array",
@@ -92,8 +113,14 @@ mod tests {
     fn matter_zero_array_generates_an_in_place_i32_kernel() {
         let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<ZeroArray>()
             .expect("zero_array codegen");
-        assert!(wgsl.contains("var<storage, read> buf_in: array<i32>"), "{wgsl}");
-        assert!(wgsl.contains("var<storage, read_write> buf_out: array<i32>"), "{wgsl}");
+        assert!(
+            wgsl.contains("var<storage, read> buf_in: array<i32>"),
+            "{wgsl}"
+        );
+        assert!(
+            wgsl.contains("var<storage, read_write> buf_out: array<i32>"),
+            "{wgsl}"
+        );
         assert!(wgsl.contains("dispatch_count: u32"), "{wgsl}");
         assert_eq!(std::mem::size_of::<ZeroUniforms>(), 16);
         assert_eq!(ZeroArray::TYPE_ID, "node.zero_array");

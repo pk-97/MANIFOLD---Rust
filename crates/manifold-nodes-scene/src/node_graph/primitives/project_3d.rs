@@ -16,12 +16,12 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::{CurvePoint, MeshVertex};
-use manifold_node_engine::scene::camera::CameraMode;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::{CurvePoint, MeshVertex};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::scene::camera::CameraMode;
 
 pub const PROJECT_3D_MODES: &[&str] = &["Orthographic", "Perspective"];
 
@@ -139,7 +139,10 @@ impl Primitive for Project3D {
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {
-            input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)
+            input_capacities
+                .iter()
+                .find(|(p, _)| *p == "in")
+                .map(|(_, n)| *n)
         } else {
             None
         }
@@ -247,4 +250,3 @@ impl Primitive for Project3D {
         );
     }
 }
-

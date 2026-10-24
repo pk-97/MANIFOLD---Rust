@@ -6,9 +6,9 @@
 //! The wrapper struct `AppEditingHost` borrows individual Application fields
 //! to avoid borrowing the entire Application — this lets the overlay
 //! simultaneously borrow ui_root and selection from Application.
-use manifold_ui::{EditingAction};
 use manifold_core::change::{ChangeSet, Part};
 use manifold_core::{Beats, ClipId, GraphTarget, LayerId, Seconds};
+use manifold_ui::EditingAction;
 use std::collections::HashSet;
 
 use manifold_core::clip::TimelineClip;
@@ -39,7 +39,8 @@ pub(crate) fn to_graph_target(target: &UiGraphTarget) -> GraphTarget {
         UiGraphTarget::Effect(id) => GraphTarget::Effect(id.clone()),
         UiGraphTarget::Generator(id) => GraphTarget::Generator(id.clone()),
         UiGraphTarget::SceneModifier { owner, modifier_id } => GraphTarget::SceneModifier {
-            owner: Box::new(to_graph_target(owner)), modifier_id: modifier_id.clone(),
+            owner: Box::new(to_graph_target(owner)),
+            modifier_id: modifier_id.clone(),
         },
     }
 }
@@ -53,7 +54,8 @@ pub(crate) fn to_ui_graph_target(target: &GraphTarget) -> UiGraphTarget {
         GraphTarget::Effect(id) => UiGraphTarget::Effect(id.clone()),
         GraphTarget::Generator(id) => UiGraphTarget::Generator(id.clone()),
         GraphTarget::SceneModifier { owner, modifier_id } => UiGraphTarget::SceneModifier {
-            owner: Box::new(to_ui_graph_target(owner)), modifier_id: modifier_id.clone(),
+            owner: Box::new(to_ui_graph_target(owner)),
+            modifier_id: modifier_id.clone(),
         },
     }
 }
@@ -65,7 +67,9 @@ fn to_segment_shape(shape: UiSegmentShape) -> SegmentShape {
         UiSegmentShape::Linear => SegmentShape::Linear,
         UiSegmentShape::Hold => SegmentShape::Hold,
         UiSegmentShape::Curved(bend) => SegmentShape::Curved(bend),
-        UiSegmentShape::CurvedRange { bend, start, end } => SegmentShape::CurvedRange { bend, start, end },
+        UiSegmentShape::CurvedRange { bend, start, end } => {
+            SegmentShape::CurvedRange { bend, start, end }
+        }
     }
 }
 
@@ -78,7 +82,9 @@ fn from_segment_shape(shape: SegmentShape) -> UiSegmentShape {
         SegmentShape::Linear => UiSegmentShape::Linear,
         SegmentShape::Hold => UiSegmentShape::Hold,
         SegmentShape::Curved(bend) => UiSegmentShape::Curved(bend),
-        SegmentShape::CurvedRange { bend, start, end } => UiSegmentShape::CurvedRange { bend, start, end },
+        SegmentShape::CurvedRange { bend, start, end } => {
+            UiSegmentShape::CurvedRange { bend, start, end }
+        }
     }
 }
 
@@ -129,11 +135,16 @@ impl<'a> AppEditingHost<'a> {
     /// input event, leaving the content project's authoritative points
     /// available to the undoable commit.
     fn send_automation_preview(&mut self, target: &GraphTarget, param_id: &str) {
-        self.project.preview(|p, preview| preview.record_lane(p, target, param_id));
-        let Some(lane) = self.project.preset_instance(target)
+        self.project
+            .preview(|p, preview| preview.record_lane(p, target, param_id));
+        let Some(lane) = self
+            .project
+            .preset_instance(target)
             .and_then(|inst| inst.automation_lanes.as_ref())
             .and_then(|lanes| lanes.iter().find(|lane| lane.param_id == param_id))
-        else { return; };
+        else {
+            return;
+        };
         crate::content_command::ContentCommand::send(
             self.content_tx,
             crate::content_command::ContentCommand::PreviewAutomationLane {
@@ -218,7 +229,10 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     fn clip_beats_for_source(&self, clip_id: &str, from: Beats, seconds: Seconds) -> Beats {
         match self.clip_by_id(clip_id) {
-            Some(clip) => self.project.source_clock().beats_for_source(clip, from, seconds),
+            Some(clip) => self
+                .project
+                .source_clock()
+                .beats_for_source(clip, from, seconds),
             None => Beats::ZERO,
         }
     }
@@ -350,9 +364,10 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                     return;
                 }
 
-                if !project.timeline.layers[target_layer].layer_type.accepts_clips_from(
-                    project.timeline.layers[src_layer].layer_type,
-                ) {
+                if !project.timeline.layers[target_layer]
+                    .layer_type
+                    .accepts_clips_from(project.timeline.layers[src_layer].layer_type)
+                {
                     return;
                 }
 
@@ -386,12 +401,17 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     fn on_clip_right_click(&mut self, clip_id: &str, _screen_pos: Vec2) {
         self.pending_actions
-            .push(PanelAction::Editing(EditingAction::ClipRightClicked(clip_id.to_string())));
+            .push(PanelAction::Editing(EditingAction::ClipRightClicked(
+                clip_id.to_string(),
+            )));
     }
 
     fn on_track_right_click(&mut self, beat: Beats, layer_index: usize, _screen_pos: Vec2) {
         self.pending_actions
-            .push(PanelAction::Editing(EditingAction::TrackRightClicked(beat.as_f32(), layer_index)));
+            .push(PanelAction::Editing(EditingAction::TrackRightClicked(
+                beat.as_f32(),
+                layer_index,
+            )));
     }
 
     fn on_automation_lane_right_click(
@@ -400,10 +420,9 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         param_id: &ParamId,
         _screen_pos: Vec2,
     ) {
-        self.pending_actions.push(PanelAction::Editing(EditingAction::AutomationLaneRightClicked(
-            target.clone(),
-            param_id.clone(),
-        )));
+        self.pending_actions.push(PanelAction::Editing(
+            EditingAction::AutomationLaneRightClicked(target.clone(), param_id.clone()),
+        ));
     }
 
     fn inspect_layer(&mut self, layer_index: usize) {
@@ -464,12 +483,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                     }
                 }
                 if let Some((clip_clone, layer_idx)) = found {
-                    EditingService::enforce_non_overlap(
-                        project,
-                        &clip_clone,
-                        layer_idx,
-                        ignore_ids,
-                    )
+                    EditingService::enforce_non_overlap(project, &clip_clone, layer_idx, ignore_ids)
                 } else {
                     Vec::new()
                 }
@@ -632,7 +646,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         if commands.is_empty() {
             return;
         }
-        self.project.stamp(crate::gesture_preview::touches_of(&commands));
+        self.project
+            .stamp(crate::gesture_preview::touches_of(&commands));
         // Commands are already applied (drag mutated data live).
         // Use record() not execute() — just push to undo stack.
         if commands.len() == 1 {
@@ -711,7 +726,11 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         let media_seconds = if clip.is_audio() {
             clip.source_duration.0
         } else {
-            match self.project.video_library.find_clip_by_id(&clip.video_clip_id) {
+            match self
+                .project
+                .video_library
+                .find_clip_by_id(&clip.video_clip_id)
+            {
                 Some(vc) => f64::from(vc.duration),
                 None => return Beats::ZERO,
             }
@@ -741,7 +760,12 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             value,
             shape: to_segment_shape(shape),
         };
-        self.project.execute(Box::new(AddAutomationPointCommand::new(target, param_id.as_ref(), point)));
+        self.project
+            .execute(Box::new(AddAutomationPointCommand::new(
+                target,
+                param_id.as_ref(),
+                point,
+            )));
     }
 
     fn insert_automation_point_on_curve(
@@ -759,19 +783,24 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             beat,
             to_segment_shape(outside_shape),
         );
-        self.project.executed_by(|project| {
-            local_cmd.execute(project);
-            if !local_cmd.was_applied() {
-                return None;
-            }
-            let value = project
-                .preset_instance(&graph_target)
-                .and_then(|inst| inst.automation_lanes.as_ref())
-                .and_then(|lanes| lanes.iter().find(|lane| lane.param_id.as_ref() == param_id_str))
-                .map(|lane| lane.value_at(beat));
-            Some((Box::new(local_cmd) as Box<dyn Command>, value))
-        })
-        .flatten()
+        self.project
+            .executed_by(|project| {
+                local_cmd.execute(project);
+                if !local_cmd.was_applied() {
+                    return None;
+                }
+                let value = project
+                    .preset_instance(&graph_target)
+                    .and_then(|inst| inst.automation_lanes.as_ref())
+                    .and_then(|lanes| {
+                        lanes
+                            .iter()
+                            .find(|lane| lane.param_id.as_ref() == param_id_str)
+                    })
+                    .map(|lane| lane.value_at(beat));
+                Some((Box::new(local_cmd) as Box<dyn Command>, value))
+            })
+            .flatten()
     }
 
     fn set_automation_point_preview(
@@ -787,18 +816,20 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         let param_id = param_id.as_ref();
         self.project.preview(|project, _| {
             if let Some(inst) = project.preset_instance_mut(&target)
-            && let Some(lanes) = inst.automation_lanes.as_mut()
-            && let Some(lane) = lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id)
-            && let Some(p) = lane
-                .points
-                .iter_mut()
-                .find(|p| p.beat == from_beat && p.value == from_value)
-        {
-            p.beat = to_beat;
-            p.value = to_value;
-            lane.points.sort_by(|a, b| {
-                a.beat.partial_cmp(&b.beat).unwrap_or(std::cmp::Ordering::Equal)
-            });
+                && let Some(lanes) = inst.automation_lanes.as_mut()
+                && let Some(lane) = lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id)
+                && let Some(p) = lane
+                    .points
+                    .iter_mut()
+                    .find(|p| p.beat == from_beat && p.value == from_value)
+            {
+                p.beat = to_beat;
+                p.value = to_value;
+                lane.points.sort_by(|a, b| {
+                    a.beat
+                        .partial_cmp(&b.beat)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
             }
         });
         self.send_automation_preview(&target, param_id);
@@ -824,7 +855,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         };
         // The UI already displays the draft, but content still owns the original
         // lane. Execute captures that complete lane for collision-safe undo.
-        let cmd = MoveAutomationPointCommand::new(graph_target, param_id.as_ref(), old_point, new_point);
+        let cmd =
+            MoveAutomationPointCommand::new(graph_target, param_id.as_ref(), old_point, new_point);
         self.project.stamp(cmd.touches());
         crate::content_command::ContentCommand::send(
             self.content_tx,
@@ -832,25 +864,45 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         );
     }
 
-    fn remove_automation_point(&mut self, target: &UiGraphTarget, param_id: &ParamId, beat: Beats, value_norm: f32) {
+    fn remove_automation_point(
+        &mut self,
+        target: &UiGraphTarget,
+        param_id: &ParamId,
+        beat: Beats,
+        value_norm: f32,
+    ) {
         let graph_target = to_graph_target(target);
         let param_id_str = param_id.as_ref();
-        let index = self.project.preset_instance(&graph_target).and_then(|inst| {
-            let param = inst.params.get(param_id_str)?;
-            inst.automation_lanes.as_ref().and_then(|lanes| {
-                lanes
-                    .iter()
-                    .find(|l| l.param_id.as_ref() == param_id_str)
-                    .and_then(|lane| lane.points.iter().position(|p| {
-                        let norm = manifold_ui::slider::BitmapSlider::value_to_normalized(p.value, param.slider_span().0, param.slider_span().1);
-                        p.beat == beat && norm == value_norm
-                    }))
-            })
-        });
+        let index = self
+            .project
+            .preset_instance(&graph_target)
+            .and_then(|inst| {
+                let param = inst.params.get(param_id_str)?;
+                inst.automation_lanes.as_ref().and_then(|lanes| {
+                    lanes
+                        .iter()
+                        .find(|l| l.param_id.as_ref() == param_id_str)
+                        .and_then(|lane| {
+                            lane.points.iter().position(|p| {
+                                let norm = manifold_ui::slider::BitmapSlider::value_to_normalized(
+                                    p.value,
+                                    param.slider_span().0,
+                                    param.slider_span().1,
+                                );
+                                p.beat == beat && norm == value_norm
+                            })
+                        })
+                })
+            });
         let Some(index) = index else {
             return;
         };
-        self.project.execute(Box::new(RemoveAutomationPointCommand::new(graph_target, param_id.as_ref(), index)));
+        self.project
+            .execute(Box::new(RemoveAutomationPointCommand::new(
+                graph_target,
+                param_id.as_ref(),
+                index,
+            )));
     }
 
     // ── Automation lane editing — segment gestures (P4 Unit B) ───────
@@ -867,11 +919,14 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         let param_id = param_id.as_ref();
         self.project.preview(|project, _| {
             if let Some(inst) = project.preset_instance_mut(&target)
-            && let Some(lanes) = inst.automation_lanes.as_mut()
-            && let Some(lane) = lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id)
-            && let Some(p) = lane.points.iter_mut().find(|p| p.beat == left_beat && p.value == left_value)
-        {
-            p.shape = SegmentShape::Curved(bend);
+                && let Some(lanes) = inst.automation_lanes.as_mut()
+                && let Some(lane) = lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id)
+                && let Some(p) = lane
+                    .points
+                    .iter_mut()
+                    .find(|p| p.beat == left_beat && p.value == left_value)
+            {
+                p.shape = SegmentShape::Curved(bend);
             }
         });
         self.send_automation_preview(&target, param_id);
@@ -892,15 +947,23 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         let param_id = param_id.as_ref();
         self.project.preview(|project, _| {
             if let Some(inst) = project.preset_instance_mut(&target)
-            && let Some(lanes) = inst.automation_lanes.as_mut()
-            && let Some(lane) = lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id)
-        {
-            if let Some(p) = lane.points.iter_mut().find(|p| p.beat == left_beat && p.value == left_from_value) {
-                p.value = left_value;
-            }
-            if let Some(p) = lane.points.iter_mut().find(|p| p.beat == right_beat && p.value == right_from_value) {
-                p.value = right_value;
-            }
+                && let Some(lanes) = inst.automation_lanes.as_mut()
+                && let Some(lane) = lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id)
+            {
+                if let Some(p) = lane
+                    .points
+                    .iter_mut()
+                    .find(|p| p.beat == left_beat && p.value == left_from_value)
+                {
+                    p.value = left_value;
+                }
+                if let Some(p) = lane
+                    .points
+                    .iter_mut()
+                    .find(|p| p.beat == right_beat && p.value == right_from_value)
+                {
+                    p.value = right_value;
+                }
             }
         });
         self.send_automation_preview(&target, param_id);
@@ -917,8 +980,16 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         let param_id_str = param_id.as_ref();
         let make = |beat: Beats, old_v: f32, new_v: f32, shape: UiSegmentShape| {
             let shape = to_segment_shape(shape);
-            let old_point = AutomationPoint { beat, value: old_v, shape };
-            let new_point = AutomationPoint { beat, value: new_v, shape };
+            let old_point = AutomationPoint {
+                beat,
+                value: old_v,
+                shape,
+            };
+            let new_point = AutomationPoint {
+                beat,
+                value: new_v,
+                shape,
+            };
             Box::new(MoveAutomationPointCommand::new(
                 graph_target.clone(),
                 param_id_str,
@@ -932,7 +1003,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             make(left.0, left.1, left.2, left.3),
             make(right.0, right.1, right.2, right.3),
         ];
-        self.project.stamp(crate::gesture_preview::touches_of(&commands));
+        self.project
+            .stamp(crate::gesture_preview::touches_of(&commands));
         crate::content_command::ContentCommand::send(
             self.content_tx,
             crate::content_command::ContentCommand::ExecuteBatch(
@@ -948,18 +1020,27 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         &mut self,
         moves: Vec<manifold_ui::timeline_editing_host::AutomationPointMove>,
     ) {
-        if moves.is_empty() { return; }
+        if moves.is_empty() {
+            return;
+        }
         // Group by lane before constructing commands: sequential point moves
         // would overwrite other selected sources when a phrase overlaps itself.
-        type LaneMoves = (GraphTarget, ParamId, Vec<(AutomationPoint, AutomationPoint)>);
+        type LaneMoves = (
+            GraphTarget,
+            ParamId,
+            Vec<(AutomationPoint, AutomationPoint)>,
+        );
         let mut lanes: Vec<LaneMoves> = Vec::new();
         for movement in moves {
             let target = to_graph_target(&movement.target);
             let convert = |p: (Beats, f32, UiSegmentShape)| AutomationPoint {
-                beat: p.0, value: p.1, shape: to_segment_shape(p.2),
+                beat: p.0,
+                value: p.1,
+                shape: to_segment_shape(p.2),
             };
             let pair = (convert(movement.old), convert(movement.new));
-            if let Some((_, _, points)) = lanes.iter_mut()
+            if let Some((_, _, points)) = lanes
+                .iter_mut()
                 .find(|(t, p, _)| *t == target && *p == movement.param_id)
             {
                 points.push(pair);
@@ -967,15 +1048,23 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 lanes.push((target, movement.param_id, vec![pair]));
             }
         }
-        let commands: Vec<Box<dyn Command>> = lanes.into_iter().map(|(target, param_id, points)| {
-            Box::new(MoveAutomationPointCommand::for_group(target, param_id.as_ref(), points))
-                as Box<dyn Command>
-        }).collect();
-        self.project.stamp(crate::gesture_preview::touches_of(&commands));
+        let commands: Vec<Box<dyn Command>> = lanes
+            .into_iter()
+            .map(|(target, param_id, points)| {
+                Box::new(MoveAutomationPointCommand::for_group(
+                    target,
+                    param_id.as_ref(),
+                    points,
+                )) as Box<dyn Command>
+            })
+            .collect();
+        self.project
+            .stamp(crate::gesture_preview::touches_of(&commands));
         crate::content_command::ContentCommand::send(
             self.content_tx,
             crate::content_command::ContentCommand::ExecuteBatch(
-                commands, "Move Automation Points".to_string(),
+                commands,
+                "Move Automation Points".to_string(),
             ),
         );
     }
@@ -1034,7 +1123,9 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                     let old_len = lanes.len();
                     lanes.retain(|lane| lane.param_id != *param_id);
                     mutated = lanes.len() != old_len;
-                    if mutated && lanes.is_empty() { inst.automation_lanes = None; }
+                    if mutated && lanes.is_empty() {
+                        inst.automation_lanes = None;
+                    }
                 }
                 mutated
             });
@@ -1046,37 +1137,52 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         };
         let param_id_str = param_id.as_ref();
         let created = self.project.preview(|project, _| {
-        let mut created = false;
-        if let Some(inst) = project.preset_instance_mut(&target) {
-            let lanes = inst.automation_lanes.get_or_insert_with(Vec::new);
-            match lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id_str) {
-                Some(lane) => {
-                    let same_points = lane.points.len() == points.len()
-                        && lane.points.iter().zip(points).all(|(existing, &(beat, value, shape))| {
-                            existing.beat == beat
-                                && existing.value == value
-                                && existing.shape == to_segment_shape(shape)
+            let mut created = false;
+            if let Some(inst) = project.preset_instance_mut(&target) {
+                let lanes = inst.automation_lanes.get_or_insert_with(Vec::new);
+                match lanes
+                    .iter_mut()
+                    .find(|l| l.param_id.as_ref() == param_id_str)
+                {
+                    Some(lane) => {
+                        let same_points = lane.points.len() == points.len()
+                            && lane.points.iter().zip(points).all(
+                                |(existing, &(beat, value, shape))| {
+                                    existing.beat == beat
+                                        && existing.value == value
+                                        && existing.shape == to_segment_shape(shape)
+                                },
+                            );
+                        if !same_points {
+                            lane.points.clear();
+                            lane.points
+                                .extend(points.iter().map(|&(beat, value, shape)| {
+                                    AutomationPoint {
+                                        beat,
+                                        value,
+                                        shape: to_segment_shape(shape),
+                                    }
+                                }));
+                        }
+                    }
+                    None => {
+                        lanes.push(manifold_core::effects::AutomationLane {
+                            param_id: param_id.clone(),
+                            enabled: true,
+                            points: points
+                                .iter()
+                                .map(|&(beat, value, shape)| AutomationPoint {
+                                    beat,
+                                    value,
+                                    shape: to_segment_shape(shape),
+                                })
+                                .collect(),
                         });
-                    if !same_points {
-                        lane.points.clear();
-                        lane.points.extend(points.iter().map(|&(beat, value, shape)| {
-                            AutomationPoint { beat, value, shape: to_segment_shape(shape) }
-                        }));
+                        created = true;
                     }
                 }
-                None => {
-                    lanes.push(manifold_core::effects::AutomationLane {
-                        param_id: param_id.clone(),
-                        enabled: true,
-                        points: points.iter().map(|&(beat, value, shape)| {
-                            AutomationPoint { beat, value, shape: to_segment_shape(shape) }
-                        }).collect(),
-                    });
-                    created = true;
-                }
             }
-        }
-        created
+            created
         });
         if created {
             self.project.stamp(ChangeSet::of(&[Part::Automation]));
@@ -1096,14 +1202,23 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         let param_id_str = param_id.as_ref().to_string();
         let convert = |pts: Vec<(Beats, f32, UiSegmentShape)>| -> Vec<AutomationPoint> {
             pts.into_iter()
-                .map(|(beat, value, shape)| AutomationPoint { beat, value, shape: to_segment_shape(shape) })
+                .map(|(beat, value, shape)| AutomationPoint {
+                    beat,
+                    value,
+                    shape: to_segment_shape(shape),
+                })
                 .collect()
         };
         let new_converted = convert(new_points);
         let old_converted = old_points.map(convert);
         // Install the draft on content using the same undoable lane replacement
         // as recording; the runtime preview left the original lane untouched.
-        let cmd = CommitRecordedGestureCommand::new(graph_target, param_id_str, new_converted, old_converted);
+        let cmd = CommitRecordedGestureCommand::new(
+            graph_target,
+            param_id_str,
+            new_converted,
+            old_converted,
+        );
         self.project.stamp(cmd.touches());
         crate::content_command::ContentCommand::send(
             self.content_tx,

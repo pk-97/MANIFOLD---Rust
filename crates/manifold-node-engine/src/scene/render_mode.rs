@@ -31,7 +31,8 @@ pub const RENDER_MODE_PHYSICS_VIEW: u32 = 4;
 /// Enum-label table for `mode` — `RENDER_MODE_LABELS[mode as usize]` is the
 /// human name. Index IS the wire value; INV-R2 (Rendered = index 0 forever)
 /// is enforced by the const assertion below and the atom tests.
-pub const RENDER_MODE_LABELS: &[&str] = &["Rendered", "Solid", "Wireframe", "Points", "Physics View"];
+pub const RENDER_MODE_LABELS: &[&str] =
+    &["Rendered", "Solid", "Wireframe", "Points", "Physics View"];
 
 // INV-R2: Rendered must stay mode 0 — the enable gate multiplies
 // (`enabled × mode`, D5), so a shifted index would make `enabled = 0`
@@ -50,7 +51,10 @@ const fn str_eq(a: &str, b: &str) -> bool {
     }
     true
 }
-const _: () = assert!(str_eq(RENDER_MODE_LABELS[RENDER_MODE_RENDERED as usize], "Rendered"));
+const _: () = assert!(str_eq(
+    RENDER_MODE_LABELS[RENDER_MODE_RENDERED as usize],
+    "Rendered"
+));
 
 /// Scene-wide render mode (viewport shading mode). CPU-only wire value
 /// (`PortType::RenderMode`). `mode == 0` (Rendered) means "render exactly as
@@ -93,7 +97,10 @@ mod tests {
     #[test]
     fn default_is_rendered() {
         let m = RenderMode::default();
-        assert_eq!(m.mode, RENDER_MODE_RENDERED, "unwired default must be Rendered (INV-R1)");
+        assert_eq!(
+            m.mode, RENDER_MODE_RENDERED,
+            "unwired default must be Rendered (INV-R1)"
+        );
         assert_eq!(m.line_brightness, 1.0);
         assert_eq!(m.point_size, 2.0);
     }

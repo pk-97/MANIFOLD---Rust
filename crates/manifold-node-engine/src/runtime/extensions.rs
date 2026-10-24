@@ -3,10 +3,10 @@
 use std::sync::LazyLock;
 
 use manifold_core::{
-    Beats, NodeId, PlayedTime, PresetTypeId, effect_graph_def::EffectGraphDef, effects::PresetInstance, id::EffectId,
+    Beats, NodeId, PlayedTime, PresetTypeId, effect_graph_def::EffectGraphDef,
+    effects::PresetInstance, id::EffectId,
 };
 
-use manifold_core::{fluid_domain::FluidDomainSnapshot, scene_impulse::{ImpulseFire, SceneImpulseDiagnostics}};
 use super::{PresetRuntime, core::EffectSlot, preset_context::ProjectTempo};
 use crate::{
     exec::{
@@ -19,6 +19,10 @@ use crate::{
     param_binding::ResolvedBinding,
     persistence::PrimitiveRegistry,
     validation::GraphError,
+};
+use manifold_core::{
+    fluid_domain::FluidDomainSnapshot,
+    scene_impulse::{ImpulseFire, SceneImpulseDiagnostics},
 };
 
 /// Read-only authored scope. The runtime retains ownership of maps and bindings.
@@ -89,10 +93,22 @@ pub trait RuntimeExtension: AsAny + Send + 'static {
     }
     /// Append each world whose copy pool left copies unmade on its last
     /// frame, with how many, for the setup check.
-    fn write_copies_not_made(&self, _graph: &Graph, _slot: RuntimeSlot<'_>, _output: &mut Vec<(NodeId, u32)>) {}
+    fn write_copies_not_made(
+        &self,
+        _graph: &Graph,
+        _slot: RuntimeSlot<'_>,
+        _output: &mut Vec<(NodeId, u32)>,
+    ) {
+    }
     /// Append each body or copy group a world left out on its last frame:
     /// the world and the refusal, for the setup check.
-    fn write_body_refusals(&self, _graph: &Graph, _slot: RuntimeSlot<'_>, _output: &mut Vec<(NodeId, manifold_core::physics_members::BodyRefusalRow)>) {}
+    fn write_body_refusals(
+        &self,
+        _graph: &Graph,
+        _slot: RuntimeSlot<'_>,
+        _output: &mut Vec<(NodeId, manifold_core::physics_members::BodyRefusalRow)>,
+    ) {
+    }
     fn is_scene_impulse_param(&self, _param: &str) -> bool {
         false
     }
@@ -119,7 +135,12 @@ pub trait RuntimeExtension: AsAny + Send + 'static {
     fn set_project_tempo(&mut self, _graph: &mut Graph, _tempo: Option<&ProjectTempo>) {}
     /// The executor holds this frame's step: the host's hop times become
     /// played time with its tempo shift here, as they arrive.
-    fn set_source_instance(&mut self, _runtime: &mut RuntimeContext<'_>, _instance: Option<&PresetInstance>) {}
+    fn set_source_instance(
+        &mut self,
+        _runtime: &mut RuntimeContext<'_>,
+        _instance: Option<&PresetInstance>,
+    ) {
+    }
     fn prepare_modifiers(
         &mut self,
         _runtime: &mut RuntimeContext<'_>,

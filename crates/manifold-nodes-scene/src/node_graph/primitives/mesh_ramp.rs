@@ -16,8 +16,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
@@ -161,7 +161,10 @@ impl Primitive for MeshRamp {
         if port_name != "weights" {
             return None;
         }
-        input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)
+        input_capacities
+            .iter()
+            .find(|(p, _)| *p == "in")
+            .map(|(_, n)| *n)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -256,7 +259,7 @@ mod gpu_tests {
             tangent: [0.0; 4],
             color: [1.0; 4],
         }
-}
+    }
 
     /// The generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {
@@ -265,7 +268,14 @@ mod gpu_tests {
     }
 
     /// Hand-reference: identical formula to the WGSL kernel, f32 math.
-    fn expected_weight(m: f32, bound_min: f32, bound_max: f32, phase: f32, feather: f32, invert: bool) -> f32 {
+    fn expected_weight(
+        m: f32,
+        bound_min: f32,
+        bound_max: f32,
+        phase: f32,
+        feather: f32,
+        invert: bool,
+    ) -> f32 {
         let denom = (bound_max - bound_min).max(1e-6);
         let t = ((m - bound_min) / denom).clamp(0.0, 1.0);
         let edge0 = phase;
@@ -316,9 +326,20 @@ mod gpu_tests {
         };
 
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: &src, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &dst, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &src,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &dst,
+                offset: 0,
+            },
         ];
         let mut enc = device.create_encoder("mesh-ramp-test");
         enc.dispatch_compute(
@@ -333,7 +354,6 @@ mod gpu_tests {
         unsafe { std::slice::from_raw_parts(ptr as *const f32, vertices.len()) }.to_vec()
     }
 
-
     #[test]
     fn axis_y_ramp_matches_hand_formula_and_is_monotonic() {
         let device = manifold_gpu::testkit::test_device();
@@ -343,7 +363,16 @@ mod gpu_tests {
 
         let (phase, feather, bound_min, bound_max) = (0.0f32, 0.5f32, 0.0f32, 3.0f32);
         let got = dispatch_ramp(
-            &device, &gen_wgsl, &vertices, 1, [0.0, 0.0, 0.0], phase, feather, bound_min, bound_max, false,
+            &device,
+            &gen_wgsl,
+            &vertices,
+            1,
+            [0.0, 0.0, 0.0],
+            phase,
+            feather,
+            bound_min,
+            bound_max,
+            false,
         );
 
         let expected: Vec<f32> = ys
@@ -362,14 +391,26 @@ mod gpu_tests {
 
         // Hand-computed anchors (section 4 invariant: "monotonic ramp along its
         // axis... hand-computed expected at a couple of vertices").
-        assert!((got[0] - 1.0).abs() < 1e-5, "v0 should be fully weighted, got {}", got[0]);
+        assert!(
+            (got[0] - 1.0).abs() < 1e-5,
+            "v0 should be fully weighted, got {}",
+            got[0]
+        );
         assert!(
             (got[1] - 0.259_259_3).abs() < 1e-4,
             "v1 hand-computed 0.2592593, got {}",
             got[1]
         );
-        assert!(got[2].abs() < 1e-5, "v2 should be fully decayed, got {}", got[2]);
-        assert!(got[3].abs() < 1e-5, "v3 should be fully decayed, got {}", got[3]);
+        assert!(
+            got[2].abs() < 1e-5,
+            "v2 should be fully decayed, got {}",
+            got[2]
+        );
+        assert!(
+            got[3].abs() < 1e-5,
+            "v3 should be fully decayed, got {}",
+            got[3]
+        );
 
         // Monotonic non-increasing along the sweep axis.
         for i in 1..got.len() {
@@ -390,10 +431,28 @@ mod gpu_tests {
         let (phase, feather, bound_min, bound_max) = (0.0f32, 0.5f32, 0.0f32, 3.0f32);
 
         let normal = dispatch_ramp(
-            &device, &gen_wgsl, &vertices, 1, [0.0, 0.0, 0.0], phase, feather, bound_min, bound_max, false,
+            &device,
+            &gen_wgsl,
+            &vertices,
+            1,
+            [0.0, 0.0, 0.0],
+            phase,
+            feather,
+            bound_min,
+            bound_max,
+            false,
         );
         let inverted = dispatch_ramp(
-            &device, &gen_wgsl, &vertices, 1, [0.0, 0.0, 0.0], phase, feather, bound_min, bound_max, true,
+            &device,
+            &gen_wgsl,
+            &vertices,
+            1,
+            [0.0, 0.0, 0.0],
+            phase,
+            feather,
+            bound_min,
+            bound_max,
+            true,
         );
 
         for i in 0..vertices.len() {

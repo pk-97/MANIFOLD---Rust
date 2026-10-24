@@ -21,11 +21,14 @@ use std::sync::OnceLock;
 
 use manifold_gpu::{GpuBinding, GpuComputePipeline};
 
-use crate::particles::Particle;
 use crate::exec::effect_node::{EffectNodeContext, EffectNodeType};
 use crate::freeze::classify::FusionKind;
 use crate::parameters::{ParamDef, ParamType, ParamValue};
-use crate::ports::{ArrayType, ChannelElementType, ChannelName, ChannelSpec, MatchMode, NodeInput, NodeOutput, NodePort, PortKind, PortType};
+use crate::particles::Particle;
+use crate::ports::{
+    ArrayType, ChannelElementType, ChannelName, ChannelSpec, MatchMode, NodeInput, NodeOutput,
+    NodePort, PortKind, PortType,
+};
 use crate::primitive::{Primitive, PrimitiveSpec};
 use crate::primitives::standalone_pipeline::standalone_pipeline;
 
@@ -165,8 +168,12 @@ impl Primitive for TestMultiOutputAtomic {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let drag = ctx.scalar_or_param("drag", 0.5);
         let fixed_point_scale = ctx.scalar_or_param("fixed_point_scale", 65536.0);
-        let Some(points) = ctx.inputs.array("points") else { return };
-        let Some(momentum) = ctx.outputs.array("momentum") else { return };
+        let Some(points) = ctx.inputs.array("points") else {
+            return;
+        };
+        let Some(momentum) = ctx.outputs.array("momentum") else {
+            return;
+        };
         let count = (points.size / std::mem::size_of::<Particle>() as u64) as u32;
         if count == 0 {
             return;
@@ -174,17 +181,37 @@ impl Primitive for TestMultiOutputAtomic {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let uniforms = Uniforms { drag, fixed_point_scale, dispatch_count: count, _pad0: 0 };
+        let uniforms = Uniforms {
+            drag,
+            fixed_point_scale,
+            dispatch_count: count,
+            _pad0: 0,
+        };
         // `points` / `points_out` alias one buffer (aliased_array_io): bind it
         // to the read input (1) and the read_write output (2). Pointwise, so
         // the in-place write is race-free.
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: points, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: points, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: momentum, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: points,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: points,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: momentum,
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256), 1, 1],
             TYPE_ID,
@@ -195,7 +222,11 @@ impl Primitive for TestMultiOutputAtomic {
 /// CPU reference for one dispatch over `points`: the updated particles and
 /// the momentum words the kernel adds. Exact for inputs whose products are
 /// exact in f32 (power-of-two `drag` and `fixed_point_scale`).
-pub fn cpu_reference(points: &[Particle], drag: f32, fixed_point_scale: f32) -> (Vec<Particle>, Vec<i32>) {
+pub fn cpu_reference(
+    points: &[Particle],
+    drag: f32,
+    fixed_point_scale: f32,
+) -> (Vec<Particle>, Vec<i32>) {
     let mut out = points.to_vec();
     let mut momentum = vec![0i32; MOMENTUM_WORDS as usize];
     for (idx, p) in out.iter_mut().enumerate() {
@@ -206,7 +237,8 @@ pub fn cpu_reference(points: &[Particle], drag: f32, fixed_point_scale: f32) -> 
         for c in 0..3 {
             let removed = p.velocity[c] * drag;
             p.velocity[c] -= removed;
-            momentum[base + c] = momentum[base + c].wrapping_add((removed * fixed_point_scale) as i32);
+            momentum[base + c] =
+                momentum[base + c].wrapping_add((removed * fixed_point_scale) as i32);
         }
     }
     (out, momentum)
@@ -237,14 +269,23 @@ mod tests {
             wgsl.contains("    buf_points_out[idx] = body("),
             "wrapper writes the one plain output at idx:\n{wgsl}"
         );
-        assert!(!wgsl.contains("BufferOutputs"), "one plain output needs no output struct:\n{wgsl}");
-        assert!(!wgsl.contains("buf_momentum[idx]"), "the wrapper never writes the atomic output:\n{wgsl}");
+        assert!(
+            !wgsl.contains("BufferOutputs"),
+            "one plain output needs no output struct:\n{wgsl}"
+        );
+        assert!(
+            !wgsl.contains("buf_momentum[idx]"),
+            "the wrapper never writes the atomic output:\n{wgsl}"
+        );
 
         let module = naga::front::wgsl::parse_str(&wgsl)
             .unwrap_or_else(|e| panic!("generated kernel must parse: {e:?}\n{wgsl}"));
-        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
-            .validate(&module)
-            .unwrap_or_else(|e| panic!("generated kernel must validate: {e:?}\n{wgsl}"));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("generated kernel must validate: {e:?}\n{wgsl}"));
 
         // The Params block matches the Rust uniform run() packs. This is the
         // fixture's own layout proof: uniform_layout_proof can't construct a
@@ -254,7 +295,9 @@ mod tests {
             .iter()
             .find(|(_, g)| {
                 g.space == naga::AddressSpace::Uniform
-                    && g.binding.as_ref().is_some_and(|b| b.group == 0 && b.binding == 0)
+                    && g.binding
+                        .as_ref()
+                        .is_some_and(|b| b.group == 0 && b.binding == 0)
             })
             .expect("Params uniform at binding 0")
             .1;
@@ -269,8 +312,14 @@ mod tests {
             &shader[..3],
             &[
                 ("drag", std::mem::offset_of!(Uniforms, drag) as u32),
-                ("fixed_point_scale", std::mem::offset_of!(Uniforms, fixed_point_scale) as u32),
-                ("dispatch_count", std::mem::offset_of!(Uniforms, dispatch_count) as u32),
+                (
+                    "fixed_point_scale",
+                    std::mem::offset_of!(Uniforms, fixed_point_scale) as u32
+                ),
+                (
+                    "dispatch_count",
+                    std::mem::offset_of!(Uniforms, dispatch_count) as u32
+                ),
             ],
             "{wgsl}"
         );
@@ -296,7 +345,11 @@ mod tests {
         dead.life = 0.0;
         let (out, m) = cpu_reference(&[p, dead, p, p, p], 0.5, 4.0);
         assert_eq!(out[0].velocity, [0.5, -0.25, 0.125]);
-        assert_eq!(out[1].velocity, [1.0, -0.5, 0.25], "dead particle untouched");
+        assert_eq!(
+            out[1].velocity,
+            [1.0, -0.5, 0.25],
+            "dead particle untouched"
+        );
         // Particles 0 and 4 share bin 0; the dead particle adds nothing to bin 1.
         assert_eq!(&m[0..3], &[4, -2, 0]);
         assert_eq!(&m[3..6], &[0, 0, 0]);

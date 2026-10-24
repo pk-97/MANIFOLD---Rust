@@ -4,10 +4,10 @@ use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 use manifold_core::scene_index::FlatSceneIndex;
 use manifold_core::scene_modifier_preset::{
-    SceneModifierInstanceDef, SceneEndpoint, SceneTargetSelection,
+    SceneEndpoint, SceneModifierInstanceDef, SceneTargetSelection,
 };
-use manifold_node_engine::load::expand::compiler::Builder;
 use manifold_node_engine::load::expand::SceneModifierExpandError;
+use manifold_node_engine::load::expand::compiler::Builder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 
 fn node(id: u32, node_id: &str, type_id: &str) -> EffectGraphNode {
@@ -112,8 +112,7 @@ fn camera_stages_reuse_one_anchor_and_reference_original_source() {
     let first = builder
         .attachment_key(&modifier, None, SceneEndpoint::Camera)
         .unwrap();
-    builder
-        .set_current_for_test(first.clone(), Some((90, "out".into())));
+    builder.set_current_for_test(first.clone(), Some((90, "out".into())));
     let second = builder
         .attachment_key(&modifier, None, SceneEndpoint::Camera)
         .unwrap();

@@ -5,9 +5,9 @@
 //! GPU liquid's: `liquid`.
 
 use manifold_node_engine::channel_names::well_known;
+use manifold_node_engine::ports::{ChannelElementType, ChannelSpec, KnownItem};
 use manifold_physics::clock::TICK;
 use manifold_water_liquid::lattice::LiquidLattice;
-use manifold_node_engine::ports::{ChannelElementType, ChannelSpec, KnownItem};
 
 pub mod coupling;
 #[doc = "The f64 CPU oracle, compiled for unit tests and the `gpu-proofs` binary."]
@@ -40,13 +40,34 @@ pub struct MatterPoint {
 /// Std430: position Vec3F at 0, id at 12, velocity at 16, volume_ratio at 28,
 /// the three affine rows at 32, 48, 64. Stride 80.
 pub const MATTER_POINT_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: well_known::POSITION, ty: ChannelElementType::Vec3F },
-    ChannelSpec { name: well_known::ID, ty: ChannelElementType::U32 },
-    ChannelSpec { name: well_known::VELOCITY, ty: ChannelElementType::Vec3F },
-    ChannelSpec { name: well_known::VOLUME_RATIO, ty: ChannelElementType::F32 },
-    ChannelSpec { name: well_known::AFFINE_X, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::AFFINE_Y, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::AFFINE_Z, ty: ChannelElementType::Vec4F },
+    ChannelSpec {
+        name: well_known::POSITION,
+        ty: ChannelElementType::Vec3F,
+    },
+    ChannelSpec {
+        name: well_known::ID,
+        ty: ChannelElementType::U32,
+    },
+    ChannelSpec {
+        name: well_known::VELOCITY,
+        ty: ChannelElementType::Vec3F,
+    },
+    ChannelSpec {
+        name: well_known::VOLUME_RATIO,
+        ty: ChannelElementType::F32,
+    },
+    ChannelSpec {
+        name: well_known::AFFINE_X,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::AFFINE_Y,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::AFFINE_Z,
+        ty: ChannelElementType::Vec4F,
+    },
 ];
 
 impl KnownItem for MatterPoint {
@@ -65,8 +86,14 @@ pub struct MatterGridNode {
 }
 
 pub const MATTER_GRID_NODE_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: well_known::VELOCITY_MASS, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::VELOCITY_BEFORE, ty: ChannelElementType::Vec4F },
+    ChannelSpec {
+        name: well_known::VELOCITY_MASS,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::VELOCITY_BEFORE,
+        ty: ChannelElementType::Vec4F,
+    },
 ];
 
 impl KnownItem for MatterGridNode {
@@ -256,7 +283,9 @@ pub fn substep_duration(interval_duration: f32, substeps: u32) -> f32 {
 /// Subtracting f64 transport endpoints can straddle an integer by a few
 /// bits even when both intervals encode the same f32 duration.
 pub fn substeps_for_interval(duration: f32, nominal: u32) -> u32 {
-    (f64::from(duration / TICK as f32) * f64::from(nominal)).ceil().max(1.0) as u32
+    (f64::from(duration / TICK as f32) * f64::from(nominal))
+        .ceil()
+        .max(1.0) as u32
 }
 
 /// Grid velocity clamp per component, in cells per substep
@@ -303,7 +332,9 @@ pub fn stiffness_fitting_cap(dx: f64, unit_wave_speed: f64, v_est: f64) -> f64 {
 /// D6 blocks per axis: 4 stencil base nodes each, covering every base a
 /// point can have (0..=nodes − 3).
 pub fn lattice_blocks(lattice: &LiquidLattice) -> [u32; 3] {
-    lattice.nodes().map(|n| n.saturating_sub(2).div_ceil(BLOCK_NODES).max(1))
+    lattice
+        .nodes()
+        .map(|n| n.saturating_sub(2).div_ceil(BLOCK_NODES).max(1))
 }
 
 /// The cell-sort box whose bins are the D6 blocks: a point's bin is its
@@ -336,7 +367,9 @@ pub fn node_extent(
 ) -> Result<u64, manifold_node_engine::exec::extent::Verdict> {
     let nodes = lattice_nodes(lattice.nodes());
     if nodes > i32::MAX as u64 || nodes * u64::from(ACCUM_WORDS_PER_NODE) > u64::from(u32::MAX) {
-        return Err(x.uncovered(format!("{nodes} nodes overflow the accumulator's 32-bit word index")));
+        return Err(x.uncovered(format!(
+            "{nodes} nodes overflow the accumulator's 32-bit word index"
+        )));
     }
     Ok(nodes)
 }
@@ -371,7 +404,14 @@ mod tests {
             let mut clock = SimulationClock::default();
             let mut schedule = Vec::new();
             for frame in 0..=120 / stride {
-                let accepted = clock.advance(PlayedTime::from_played(f64::from(frame * stride) * TICK), TICK, 1.0, 0.0, false, true);
+                let accepted = clock.advance(
+                    PlayedTime::from_played(f64::from(frame * stride) * TICK),
+                    TICK,
+                    1.0,
+                    0.0,
+                    false,
+                    true,
+                );
                 for i in 0..accepted.ticks {
                     let interval = accepted.interval(u64::from(i)).unwrap().duration().0 as f32;
                     let substeps = substeps_for_interval(interval, 34);
@@ -416,7 +456,15 @@ mod tests {
     fn matter_substeps_follow_stiffness() {
         let dx = 4.0f32 / 64.0;
         let v = free_fall_speed(4.0) as f32;
-        let n = |s: f64| substeps_per_tick(dx, wave_speed(water_lambda(4.0, s), 1000.0) as f32, v, None, None);
+        let n = |s: f64| {
+            substeps_per_tick(
+                dx,
+                wave_speed(water_lambda(4.0, s), 1000.0) as f32,
+                v,
+                None,
+                None,
+            )
+        };
         assert_eq!(n(0.5), 21);
         assert_eq!(n(1.0), 34);
         assert_eq!(n(2.0), 61);
@@ -437,8 +485,13 @@ mod tests {
         let n_fitted = substeps_per_tick(dx as f32, (unit * fitted) as f32, v as f32, None, None);
         assert!(n_fitted <= MAX_SUBSTEPS, "{n_fitted}");
         // The largest fitting value: slightly stiffer needs one more substep.
-        let n_above =
-            substeps_per_tick(dx as f32, (unit * fitted * 1.001) as f32, v as f32, None, None);
+        let n_above = substeps_per_tick(
+            dx as f32,
+            (unit * fitted * 1.001) as f32,
+            v as f32,
+            None,
+            None,
+        );
         assert!(n_above > MAX_SUBSTEPS, "{n_above}");
     }
 
@@ -491,13 +544,20 @@ mod tests {
                 for substeps in 1..=MAX_SUBSTEPS {
                     let dt = tick / f64::from(substeps);
                     let unit = momentum_unit(dx, dt);
-                    assert!(momentum_unit_fits(unit, dx, dt as f32), "dx {dx} substeps {substeps}: {unit}");
+                    assert!(
+                        momentum_unit_fits(unit, dx, dt as f32),
+                        "dx {dx} substeps {substeps}: {unit}"
+                    );
                     // The kernels' f32 arithmetic, as written in their WGSL.
                     let inv_mass_unit = 1.0 / mass_unit(dx);
                     let to_mass = MASS_SCALE * inv_mass_unit;
                     let to_momentum = MOMENTUM_SCALE / unit * inv_mass_unit;
                     let to_velocity = unit * (MASS_SCALE / MOMENTUM_SCALE);
-                    assert_eq!(to_momentum / to_mass * to_velocity, 1.0, "dx {dx} substeps {substeps}");
+                    assert_eq!(
+                        to_momentum / to_mass * to_velocity,
+                        1.0,
+                        "dx {dx} substeps {substeps}"
+                    );
                 }
             }
         }
@@ -510,7 +570,8 @@ mod tests {
     fn matter_block_bins_are_base_node_blocks() {
         for domain in [0.5f32, 1.0, 4.0, 20.0] {
             for resolution in [8u32, 32, 63, 64, 100, 128, 512] {
-                let layout = manifold_core::fluid_domain::domain_layout(None, domain, resolution).unwrap();
+                let layout =
+                    manifold_core::fluid_domain::domain_layout(None, domain, resolution).unwrap();
                 let lattice = LiquidLattice::from_layout(&layout);
                 let (_, size, bin) = block_sort_box(&lattice);
                 assert_eq!(
@@ -535,7 +596,10 @@ mod tests {
             // f32 may put a point within an ulp of a block edge in the
             // neighbour; P2G then adds it globally, still correctly.
             let near_edge = ((q - 0.5) / 4.0 - ((q - 0.5) / 4.0).round()).abs() < 1e-4;
-            assert!(near_edge || sorted == base.div_euclid(4), "q {q}: bin {sorted}, base {base}");
+            assert!(
+                near_edge || sorted == base.div_euclid(4),
+                "q {q}: bin {sorted}, base {base}"
+            );
         }
     }
 }
@@ -545,8 +609,8 @@ mod grid_budget_tests {
     use manifold_water_liquid::fluid_particles::bin_counts;
     use manifold_water_liquid::lattice::LiquidLattice;
 
-    use manifold_core::fluid_domain::domain_layout;
     use super::{block_sort_box, lattice_blocks, lattice_nodes};
+    use manifold_core::fluid_domain::domain_layout;
 
     use crate::primitives::matter_domain::admit_lattice;
 
@@ -564,16 +628,22 @@ mod grid_budget_tests {
                 let fits = nodes as f64 <= f64::from(budget) * 1e6;
                 match admit_lattice(&lattice, budget) {
                     Ok(()) => assert!(fits, "res {resolution}"),
-                    Err(error) => assert!(!fits && error.contains("Grid Budget"), "res {resolution}: {error}"),
+                    Err(error) => assert!(
+                        !fits && error.contains("Grid Budget"),
+                        "res {resolution}: {error}"
+                    ),
                 }
             }
             if admit_lattice(&lattice, 8.0).is_ok() {
                 largest_default = resolution;
             }
             let (_, size, bin) = block_sort_box(&lattice);
-            assert_eq!(bin_counts(size, bin), lattice_blocks(&lattice), "res {resolution}");
+            assert_eq!(
+                bin_counts(size, bin),
+                lattice_blocks(&lattice),
+                "res {resolution}"
+            );
         }
         assert_eq!(largest_default, 193);
     }
 }
-

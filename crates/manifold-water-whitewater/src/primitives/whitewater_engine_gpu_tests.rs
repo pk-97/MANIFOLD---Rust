@@ -1,12 +1,18 @@
 //! BUG-g75v.7: engine value and fusion proofs, 8³ CPU-proven extents only.
-use manifold_node_engine::testkit::array_harness::{params, read, Harness};
-use manifold_node_engine::testkit::fused_atoms::{fused, member};
-use manifold_node_engine::testkit::fused_atoms::run;
 use super::advect_whitewater::AdvectWhitewater;
-use manifold_water_liquid::primitives::{offset_lattice::OffsetLattice, upwind_distance::UpwindDistance};
-use {manifold_node_engine::exec::effect_node::NodeInstanceId, manifold_node_engine::freeze::codegen::InputSource, manifold_water_liquid::whitewater::WhitewaterParticle};
+use manifold_node_engine::testkit::array_harness::{Harness, params, read};
+use manifold_node_engine::testkit::fused_atoms::run;
+use manifold_node_engine::testkit::fused_atoms::{fused, member};
+use manifold_water_liquid::primitives::{
+    offset_lattice::OffsetLattice, upwind_distance::UpwindDistance,
+};
 #[cfg(feature = "whitewater-oracle")]
 use manifold_water_liquid::testkit::marker_phi::marker_phi;
+use {
+    manifold_node_engine::exec::effect_node::NodeInstanceId,
+    manifold_node_engine::freeze::codegen::InputSource,
+    manifold_water_liquid::whitewater::WhitewaterParticle,
+};
 
 #[test]
 fn whitewater_engine_distance_values_and_fusion() {
@@ -52,7 +58,8 @@ fn whitewater_engine_distance_values_and_fusion() {
         &values,
     );
     assert_eq!(combined, standalone);
-    let mut stage = manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance::default();
+    let mut stage =
+        manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance::default();
     stage.prepare(&h.device);
     stage.reserve(&h.device, [8; 3]).unwrap();
     let mut corner = vec![8.0; 512];
@@ -102,7 +109,10 @@ fn motion_values() -> Vec<(&'static str, f32)> {
 #[test]
 fn whitewater_engine_substep_force_hit_values_and_fusion() {
     use super::whitewater_particle_cpu::Box3;
-    use {crate::primitives::whitewater_pool_cpu as cpu, super::whitewater_pool_cpu::Advect, super::whitewater_pool_cpu::Fields};
+    use {
+        super::whitewater_pool_cpu::Advect, super::whitewater_pool_cpu::Fields,
+        crate::primitives::whitewater_pool_cpu as cpu,
+    };
     let mut h = Harness::new();
     let pool: Vec<_> = [0, 1, 2, 4]
         .into_iter()
@@ -145,7 +155,9 @@ fn whitewater_engine_substep_force_hit_values_and_fusion() {
         0.0,
     ];
     let clock = h.array(&schedule, 12);
-    let force: Vec<_> = (0..8).flat_map(|_| [1.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).collect();
+    let force: Vec<_> = (0..8)
+        .flat_map(|_| [1.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        .collect();
     let impulse: Vec<_> = (0..8).flat_map(|_| [2.0f32, 0.0, 0.0, 0.0]).collect();
     let f = h.array(&force, 64);
     let i = h.array(&impulse, 32);
@@ -243,7 +255,10 @@ fn whitewater_engine_substep_force_hit_values_and_fusion() {
 #[test]
 fn whitewater_engine_outflow_values_and_fusion() {
     use super::keep_whitewater::KeepWhitewater;
-    use manifold_water_liquid::{fluid_particles::CellRange, bodies::pack_distance_atlas, bodies::LiquidBody, bodies::LiquidShape};
+    use manifold_water_liquid::{
+        bodies::LiquidBody, bodies::LiquidShape, bodies::pack_distance_atlas,
+        fluid_particles::CellRange,
+    };
     let mut h = Harness::new();
     let pool: Vec<_> = [0, 1, 2, 4]
         .into_iter()
@@ -384,7 +399,15 @@ fn whitewater_engine_seam_publishes_accepted_substeps() {
 fn whitewater_engine_seam_skips_inactive_grids_and_resumes_capture() {
     use manifold_water_liquid::{fluid_particles::FaceSample, substep_history::SubstepHistory};
     let mut h = Harness::new();
-    let faces = |velocity| vec![FaceSample { velocity, weight: [1.0; 4] }; 729];
+    let faces = |velocity| {
+        vec![
+            FaceSample {
+                velocity,
+                weight: [1.0; 4]
+            };
+            729
+        ]
+    };
     let first = h.array(&faces([1.0, 2.0, 3.0, 0.0]), 729);
     let poison = h.array(&faces([f32::NAN; 4]), 729);
     let resumed = h.array(&faces([4.0, 5.0, 6.0, 0.0]), 729);
@@ -396,7 +419,9 @@ fn whitewater_engine_seam_skips_inactive_grids_and_resumes_capture() {
     let held = std::array::from_fn::<_, 3, _>(|_| h.array::<f32>(&[], 1152));
     let final_grids = std::array::from_fn::<_, 3, _>(|_| h.array::<f32>(&[], 1152));
     let held_schedule = h.array::<u32>(&[], 8);
-    let mut enc = h.device.create_encoder("whitewater-engine-inactive-history");
+    let mut enc = h
+        .device
+        .create_encoder("whitewater-engine-inactive-history");
     history.capture(&mut enc, 0, &active.1, &first.1);
     // An inactive row must neither read this poisoned grid nor overwrite a
     // previous active capture. A never-active row starts with zero storage.
@@ -426,7 +451,13 @@ fn whitewater_engine_seam_skips_inactive_grids_and_resumes_capture() {
 }
 
 /// Runs the surface distance stage on `phi` and returns its output.
-fn surface_on_gpu(h: &mut Harness, stage: &manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance, phi: &[f32], cell: f32, plan: Option<&manifold_gpu::GpuBuffer>) -> Vec<f32> {
+fn surface_on_gpu(
+    h: &mut Harness,
+    stage: &manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance,
+    phi: &[f32],
+    cell: f32,
+    plan: Option<&manifold_gpu::GpuBuffer>,
+) -> Vec<f32> {
     let n = phi.len();
     let source = h.array(phi, n);
     let mut enc = h.device.create_encoder("whitewater-surface-distance");
@@ -450,9 +481,14 @@ fn live_plan(h: &mut Harness, step_dt: f32) -> manifold_gpu::GpuBuffer {
 }
 
 /// Every scratch buffer of the stage except its sweep grid, as words.
-fn scratch_words(h: &mut Harness, stage: &manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance) -> Vec<Vec<u32>> {
+fn scratch_words(
+    h: &mut Harness,
+    stage: &manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance,
+) -> Vec<Vec<u32>> {
     let buffers = stage.scratch();
-    let mut enc = h.device.create_encoder("whitewater-surface-distance-scratch");
+    let mut enc = h
+        .device
+        .create_encoder("whitewater-surface-distance-scratch");
     let staged: Vec<_> = buffers[..5]
         .iter()
         .map(|b| {
@@ -484,7 +520,8 @@ fn sphere_phi(centre: f32) -> Vec<f32> {
 #[test]
 fn whitewater_surface_distance_clock_gate() {
     let mut h = Harness::new();
-    let mut stage = manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance::default();
+    let mut stage =
+        manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance::default();
     stage.prepare(&h.device);
     stage.reserve(&h.device, [24; 3]).unwrap();
     let a = sphere_phi(3.0);
@@ -492,7 +529,13 @@ fn whitewater_surface_distance_clock_gate() {
     let ungated = surface_on_gpu(&mut h, &stage, &a, 0.25, None);
     let active = live_plan(&mut h, 0.01);
     let gated = surface_on_gpu(&mut h, &stage, &a, 0.25, Some(&active));
-    assert!(ungated.iter().zip(&gated).all(|(x, y)| x.to_bits() == y.to_bits()), "active slot differs from the zero plan");
+    assert!(
+        ungated
+            .iter()
+            .zip(&gated)
+            .all(|(x, y)| x.to_bits() == y.to_bits()),
+        "active slot differs from the zero plan"
+    );
     let want = super::whitewater_engine_cpu::surface_distance(&a, [24; 3], 0.25);
     for (g, c) in gated.iter().zip(&want) {
         assert!((g - c).abs() < 2e-6, "stage {g} CPU {c}");
@@ -500,13 +543,27 @@ fn whitewater_surface_distance_clock_gate() {
     let before = scratch_words(&mut h, &stage);
     let inactive = live_plan(&mut h, 0.0);
     let after_output = surface_on_gpu(&mut h, &stage, &b, 0.25, Some(&inactive));
-    assert!(after_output.iter().zip(&gated).all(|(x, y)| x.to_bits() == y.to_bits()), "inactive slot changed the output");
-    assert_eq!(scratch_words(&mut h, &stage), before, "inactive slot touched the scratch");
+    assert!(
+        after_output
+            .iter()
+            .zip(&gated)
+            .all(|(x, y)| x.to_bits() == y.to_bits()),
+        "inactive slot changed the output"
+    );
+    assert_eq!(
+        scratch_words(&mut h, &stage),
+        before,
+        "inactive slot touched the scratch"
+    );
     let mut enc = h.device.create_encoder("whitewater-surface-distance-args");
     let args = h.array::<u32>(&[], 3);
     enc.copy_buffer_to_buffer(&stage.scratch()[5], &args.1, 12);
     enc.commit_and_wait_completed();
-    assert_eq!(read::<u32>(&args.1, 3), vec![0, 1, 1], "inactive sweep grid");
+    assert_eq!(
+        read::<u32>(&args.1, 3),
+        vec![0, 1, 1],
+        "inactive sweep grid"
+    );
     // And the next active slot computes from the new input again.
     let next = surface_on_gpu(&mut h, &stage, &b, 0.25, Some(&active));
     let want = super::whitewater_engine_cpu::surface_distance(&b, [24; 3], 0.25);
@@ -526,17 +583,36 @@ fn whitewater_surface_distance_matches_engine_on_a_splash() {
     let mut h = Harness::new();
     let (markers, analytic, cells, dx) = sheeter::fixtures::splash();
     let cell = dx as f32;
-    let mut stage = manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance::default();
+    let mut stage =
+        manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance::default();
     stage.prepare(&h.device);
     stage.reserve(&h.device, cells).unwrap();
-    for (name, input) in [("analytic", analytic), ("markers", marker_phi(&markers, cells, cell))] {
-        let native = whitewater_oracle::curvature(&input, cells, dx).expect("oracle").surface_phi;
+    for (name, input) in [
+        ("analytic", analytic),
+        ("markers", marker_phi(&markers, cells, cell)),
+    ] {
+        let native = whitewater_oracle::curvature(&input, cells, dx)
+            .expect("oracle")
+            .surface_phi;
         let gpu = surface_on_gpu(&mut h, &stage, &input, cell, None);
-        let mut errors: Vec<f32> = native.iter().zip(&gpu).map(|(a, b)| (a - b).abs() / cell).collect();
+        let mut errors: Vec<f32> = native
+            .iter()
+            .zip(&gpu)
+            .map(|(a, b)| (a - b).abs() / cell)
+            .collect();
         errors.sort_by(f32::total_cmp);
         let max = errors[errors.len() - 1];
         let p99 = errors[errors.len() * 99 / 100];
-        let trace = |phi: &[f32]| sheeter::trace_sheet_particles(&markers, phi, cells, dx, sheet_oracle::DEFAULT_FILL_THRESHOLD).expect("sheeter");
+        let trace = |phi: &[f32]| {
+            sheeter::trace_sheet_particles(
+                &markers,
+                phi,
+                cells,
+                dx,
+                sheet_oracle::DEFAULT_FILL_THRESHOLD,
+            )
+            .expect("sheeter")
+        };
         let (ours, theirs) = (trace(&gpu), trace(&native));
         let flips = |a: &[bool], b: &[bool]| a.iter().zip(b).filter(|(x, y)| x != y).count();
         eprintln!(
@@ -555,8 +631,15 @@ fn whitewater_surface_distance_matches_engine_on_a_splash() {
         assert!(max < 4e-6, "{name}: surfaces differ by {max} h");
         assert_eq!(ours.thin, theirs.thin, "{name}: phase-1 sheet test flipped");
         assert_eq!(ours.kept, theirs.kept, "{name}: phase-2 band flipped");
-        assert_eq!(ours.candidates, theirs.candidates, "{name}: candidate band flipped");
-        assert_eq!(ours.seeds.len(), theirs.seeds.len(), "{name}: seed counts differ");
+        assert_eq!(
+            ours.candidates, theirs.candidates,
+            "{name}: candidate band flipped"
+        );
+        assert_eq!(
+            ours.seeds.len(),
+            theirs.seeds.len(),
+            "{name}: seed counts differ"
+        );
         assert!(!theirs.seeds.is_empty(), "{name}: the splash seeds");
     }
 }
@@ -570,7 +653,8 @@ fn whitewater_surface_distance_replay_matches_direct() {
     use manifold_gpu::GpuReplayCache;
     let device = manifold_gpu::testkit::test_device();
     let make = || {
-        let mut stage = manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance::default();
+        let mut stage =
+            manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance::default();
         stage.prepare(&device);
         stage.reserve(&device, [24; 3]).unwrap();
         let plan = device.create_buffer_shared(48);
@@ -581,7 +665,16 @@ fn whitewater_surface_distance_replay_matches_direct() {
     let (replayed, replay_plan, replay_source) = make();
     let mut cache = Some(GpuReplayCache::default());
     let inputs = [sphere_phi(3.0), sphere_phi(2.5), sphere_phi(2.75)];
-    let slots = [(0.01f32, 0), (0.0, 1), (0.01, 1), (0.01, 0), (0.0, 2), (0.0, 0), (0.01, 2), (0.01, 0)];
+    let slots = [
+        (0.01f32, 0),
+        (0.0, 1),
+        (0.01, 1),
+        (0.01, 0),
+        (0.0, 2),
+        (0.0, 0),
+        (0.01, 2),
+        (0.01, 0),
+    ];
     let words = |stage: &manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance| -> Vec<Vec<u32>> {
         let mut enc = device.create_encoder("surface replay readback");
         let staged: Vec<_> = stage.scratch()[..6]
@@ -599,7 +692,10 @@ fn whitewater_surface_distance_replay_matches_direct() {
         let mut plan = [0u32; 12];
         plan[0] = step_dt.to_bits();
         plan[11] = 1;
-        for (p, s) in [(&direct_plan, &direct_source), (&replay_plan, &replay_source)] {
+        for (p, s) in [
+            (&direct_plan, &direct_source),
+            (&replay_plan, &replay_source),
+        ] {
             // SAFETY: shared buffers sized for the writes; no GPU work in flight.
             unsafe {
                 p.write(0, bytemuck::cast_slice(&plan));
@@ -614,7 +710,10 @@ fn whitewater_surface_distance_replay_matches_direct() {
         replayed.encode_gated(&mut enc, &replay_source, 0.25, &replay_plan);
         cache = Some(enc.end_replay());
         enc.commit_and_wait_completed();
-        assert!(words(&direct) == words(&replayed), "slot {slot} (step {step_dt}, input {input}): replay differs from direct");
+        assert!(
+            words(&direct) == words(&replayed),
+            "slot {slot} (step {step_dt}, input {input}): replay differs from direct"
+        );
     }
     let stats = cache.expect("cache").stats();
     assert!(stats.replayed > 0, "nothing replayed: {stats:?}");

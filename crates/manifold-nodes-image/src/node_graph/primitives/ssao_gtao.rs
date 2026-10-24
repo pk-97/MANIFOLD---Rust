@@ -216,9 +216,15 @@ impl Primitive for SsaoGtao {
             _ => 0,
         };
         let relief = read_f32(ctx, "relief", 0.2);
-        let noise_per_frame = u32::from(matches!(ctx.params.get("noise_per_frame"), Some(ParamValue::Bool(true))));
+        let noise_per_frame = u32::from(matches!(
+            ctx.params.get("noise_per_frame"),
+            Some(ParamValue::Bool(true))
+        ));
 
-        let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
+        let cam = ctx
+            .inputs
+            .camera("camera")
+            .unwrap_or_else(Camera::default_perspective);
         let [fov_y, near, far] = derive_view_scalars(&cam);
         let pass = ctx.gpu.as_ref().map_or(0, |gpu| gpu.render_pass);
         let noise_frame = self.noise_frame_for((pass, ctx.time.frame_count));
@@ -236,9 +242,14 @@ impl Primitive for SsaoGtao {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
-            let wgsl = manifold_node_engine::freeze::codegen::standalone_for_boundary_spec::<Self>()
-                .expect("node.ssao_gtao standalone codegen");
-            gpu.device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "node.ssao_gtao")
+            let wgsl =
+                manifold_node_engine::freeze::codegen::standalone_for_boundary_spec::<Self>()
+                    .expect("node.ssao_gtao standalone codegen");
+            gpu.device.create_compute_pipeline(
+                &wgsl,
+                manifold_node_engine::freeze::codegen::ENTRY,
+                "node.ssao_gtao",
+            )
         });
 
         let uniforms = SsaoGtaoUniforms {
@@ -278,7 +289,10 @@ mod tests {
         cam.near = 0.1;
         cam.far = 500.0;
         let [fov_y, near, far] = derive_view_scalars(&cam);
-        let CameraMode::Perspective { fov_y: expected_fov } = cam.mode else {
+        let CameraMode::Perspective {
+            fov_y: expected_fov,
+        } = cam.mode
+        else {
             panic!("default_perspective is Perspective");
         };
         assert_eq!(fov_y, expected_fov);
@@ -303,20 +317,36 @@ mod tests {
     fn noise_moves_once_per_new_frame_and_restarts_on_clear() {
         let mut node = SsaoGtao::new();
         let ticks = |node: &mut SsaoGtao| -> Vec<u32> {
-            (0..=u64::from(NOISE_CYCLE)).map(|pass| node.noise_frame_for((pass + 1, 0))).collect()
+            (0..=u64::from(NOISE_CYCLE))
+                .map(|pass| node.noise_frame_for((pass + 1, 0)))
+                .collect()
         };
         let first = ticks(&mut node);
         assert_eq!(first[0], 0);
         assert_eq!(first[1], NOISE_FRAME_STRIDE);
-        assert!(first.windows(2).all(|w| w[0] != w[1]), "each content tick moves the pattern");
+        assert!(
+            first.windows(2).all(|w| w[0] != w[1]),
+            "each content tick moves the pattern"
+        );
         assert_eq!(first[NOISE_CYCLE as usize], 0, "the pattern cycles");
 
         let held = node.noise_frame_for((7, 3));
-        assert!((0..5).all(|_| node.noise_frame_for((7, 3)) == held), "the same frame rendered again keeps its pattern");
-        assert_ne!(node.noise_frame_for((7, 4)), held, "a new host frame count moves it");
+        assert!(
+            (0..5).all(|_| node.noise_frame_for((7, 3)) == held),
+            "the same frame rendered again keeps its pattern"
+        );
+        assert_ne!(
+            node.noise_frame_for((7, 4)),
+            held,
+            "a new host frame count moves it"
+        );
 
         Primitive::clear_state(&mut node);
-        assert_eq!(first, ticks(&mut node), "a cleared node repeats the sequence");
+        assert_eq!(
+            first,
+            ticks(&mut node),
+            "a cleared node repeats the sequence"
+        );
     }
 }
 
@@ -368,13 +398,21 @@ pub(crate) mod cpu_reference {
 
     /// (slice, step) noise in [0,1) for a pixel and frame offset.
     fn noise(cx: i32, cy: i32, frame_offset: u32) -> (f32, f32) {
-        let index = (hilbert_index(cx as u32 % HILBERT_WIDTH, cy as u32 % HILBERT_WIDTH) + frame_offset) as f32;
+        let index = (hilbert_index(cx as u32 % HILBERT_WIDTH, cy as u32 % HILBERT_WIDTH)
+            + frame_offset) as f32;
         let fract = |v: f32| v - v.floor();
-        (fract(0.5 + index * 0.754_877_7), fract(0.5 + index * 0.569_840_3))
+        (
+            fract(0.5 + index * 0.754_877_7),
+            fract(0.5 + index * 0.569_840_3),
+        )
     }
 
     fn gtao_round(x: f32) -> f32 {
-        if x >= 0.0 { (x + 0.5).floor() } else { -(-x + 0.5).floor() }
+        if x >= 0.0 {
+            (x + 0.5).floor()
+        } else {
+            -(-x + 0.5).floor()
+        }
     }
 
     fn height_pos(depth: &DepthBuffer<'_>, cx: i32, cy: i32, aspect: f32, relief: f32) -> [f32; 3] {
@@ -403,14 +441,22 @@ pub(crate) mod cpu_reference {
         let v = (ccy as f32 + 0.5) / depth.h as f32;
         let ndc_x = u * 2.0 - 1.0;
         let ndc_y = 1.0 - v * 2.0;
-        [ndc_x * tan_half_fov * aspect * view_z, ndc_y * tan_half_fov * view_z, view_z]
+        [
+            ndc_x * tan_half_fov * aspect * view_z,
+            ndc_y * tan_half_fov * view_z,
+            view_z,
+        ]
     }
 
     fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
         [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
     }
     fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-        [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
     }
     fn length(a: [f32; 3]) -> f32 {
         (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt()
@@ -423,7 +469,11 @@ pub(crate) mod cpu_reference {
     }
     fn normalize(a: [f32; 3]) -> [f32; 3] {
         let l = length(a);
-        if l > 1e-8 { scale(a, 1.0 / l) } else { [0.0, 0.0, -1.0] }
+        if l > 1e-8 {
+            scale(a, 1.0 / l)
+        } else {
+            [0.0, 0.0, -1.0]
+        }
     }
 
     /// `view_normal_common.wgsl`'s edge weights (left, right, top, bottom).
@@ -431,24 +481,50 @@ pub(crate) mod cpu_reference {
         let e = [left - center, right - center, top - center, bottom - center];
         let slope_lr = (e[1] - e[0]) * 0.5;
         let slope_tb = (e[3] - e[2]) * 0.5;
-        let adjusted = [e[0] + slope_lr, e[1] - slope_lr, e[2] + slope_tb, e[3] - slope_tb];
+        let adjusted = [
+            e[0] + slope_lr,
+            e[1] - slope_lr,
+            e[2] + slope_tb,
+            e[3] - slope_tb,
+        ];
         let scale = (center * 0.011).max(1e-6);
         std::array::from_fn(|i| (1.25 - e[i].abs().min(adjusted[i].abs()) / scale).clamp(0.0, 1.0))
     }
 
     /// `view_normal_common.wgsl`'s `view_normal`.
-    fn view_normal(edges: [f32; 4], c: [f32; 3], l: [f32; 3], r: [f32; 3], t: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    fn view_normal(
+        edges: [f32; 4],
+        c: [f32; 3],
+        l: [f32; 3],
+        r: [f32; 3],
+        t: [f32; 3],
+        b: [f32; 3],
+    ) -> [f32; 3] {
         let dir = |p: [f32; 3]| {
             let d = sub(p, c);
             let len = length(d);
-            if len > 1e-8 { scale(d, 1.0 / len) } else { [0.0; 3] }
+            if len > 1e-8 {
+                scale(d, 1.0 / len)
+            } else {
+                [0.0; 3]
+            }
         };
         let (l, r, t, b) = (dir(l), dir(r), dir(t), dir(b));
-        let accepted = [edges[0] * edges[2], edges[2] * edges[1], edges[1] * edges[3], edges[3] * edges[0]].map(|a| (a + 0.01).clamp(0.0, 1.0));
+        let accepted = [
+            edges[0] * edges[2],
+            edges[2] * edges[1],
+            edges[1] * edges[3],
+            edges[3] * edges[0],
+        ]
+        .map(|a| (a + 0.01).clamp(0.0, 1.0));
         let corners = [cross(l, t), cross(t, r), cross(r, b), cross(b, l)];
         let mut n = [0.0f32; 3];
         for (a, corner) in accepted.iter().zip(corners) {
-            n = [n[0] + a * corner[0], n[1] + a * corner[1], n[2] + a * corner[2]];
+            n = [
+                n[0] + a * corner[0],
+                n[1] + a * corner[1],
+                n[2] + a * corner[2],
+            ];
         }
         normalize(n)
     }
@@ -507,15 +583,27 @@ pub(crate) mod cpu_reference {
         };
 
         let p_c = pos(cx, cy);
-        let (l, r, t, b) = (pos(cx - 1, cy), pos(cx + 1, cy), pos(cx, cy - 1), pos(cx, cy + 1));
-        let edges = if heightfield { [1.0; 4] } else { view_normal_edges(p_c[2], l[2], r[2], t[2], b[2]) };
+        let (l, r, t, b) = (
+            pos(cx - 1, cy),
+            pos(cx + 1, cy),
+            pos(cx, cy - 1),
+            pos(cx, cy + 1),
+        );
+        let edges = if heightfield {
+            [1.0; 4]
+        } else {
+            view_normal_edges(p_c[2], l[2], r[2], t[2], b[2])
+        };
         let normal = view_normal(edges, p_c, l, r, t, b);
 
         let (view_vec, radius_px) = if heightfield {
             ([0.0, 0.0, -1.0], radius * depth.h as f32)
         } else {
             let center_vz = p_c[2].max(1e-4);
-            (scale(normalize(p_c), -1.0), (radius / (tan_half_fov * center_vz)) * (depth.h as f32 * 0.5))
+            (
+                scale(normalize(p_c), -1.0),
+                (radius / (tan_half_fov * center_vz)) * (depth.h as f32 * 0.5),
+            )
         };
 
         let (slice_noise, step_offset) = noise(cx, cy, noise_frame);
@@ -540,7 +628,11 @@ pub(crate) mod cpu_reference {
                 if proj_len > 1e-6 {
                     let cos_n = (dot(proj_normal, view_vec) / proj_len).clamp(-1.0, 1.0);
                     let ortho = sub(dir3, scale(view_vec, dot(dir3, view_vec)));
-                    let sign_n = if dot(ortho, proj_normal) >= 0.0 { 1.0 } else { -1.0 };
+                    let sign_n = if dot(ortho, proj_normal) >= 0.0 {
+                        1.0
+                    } else {
+                        -1.0
+                    };
                     n_signed = sign_n * cos_n.acos();
                 }
             }
@@ -551,9 +643,15 @@ pub(crate) mod cpu_reference {
             let mut hcos_plus = -1.0f32;
             for j in 0..steps {
                 let r_j = radius_px * (j as f32 + step_offset) / steps as f32 + MIN_TAP_PX;
-                let plus = pos(cx + gtao_round(dir2[0] * r_j) as i32, cy + gtao_round(dir2[1] * r_j) as i32);
+                let plus = pos(
+                    cx + gtao_round(dir2[0] * r_j) as i32,
+                    cy + gtao_round(dir2[1] * r_j) as i32,
+                );
                 hcos_plus = horizon(hcos_plus, sub(plus, p_c), view_vec, radius, low_plus);
-                let minus = pos(cx + gtao_round(-dir2[0] * r_j) as i32, cy + gtao_round(-dir2[1] * r_j) as i32);
+                let minus = pos(
+                    cx + gtao_round(-dir2[0] * r_j) as i32,
+                    cy + gtao_round(-dir2[1] * r_j) as i32,
+                );
                 hcos_minus = horizon(hcos_minus, sub(minus, p_c), view_vec, radius, low_minus);
             }
 
@@ -562,7 +660,8 @@ pub(crate) mod cpu_reference {
             h1 = n_signed + (h1 - n_signed).max(-GTAO_HALF_PI);
             h2 = n_signed + (h2 - n_signed).min(GTAO_HALF_PI);
 
-            visibility_sum += proj_len * (integrate_arc(h1, n_signed) + integrate_arc(h2, n_signed));
+            visibility_sum +=
+                proj_len * (integrate_arc(h1, n_signed) + integrate_arc(h2, n_signed));
             baseline_sum += proj_len * full_ref(n_signed);
         }
 
@@ -576,17 +675,43 @@ pub(crate) mod cpu_reference {
 /// real neighbour.
 #[cfg(test)]
 mod analytic_sanity {
-    use super::cpu_reference::{gtao_texel, DepthBuffer};
+    use super::cpu_reference::{DepthBuffer, gtao_texel};
 
     #[allow(clippy::too_many_arguments)]
-    fn assert_flat_plane_visible(fov_y: f32, near: f32, far: f32, radius: f32, raw: f32, margin: i32, bound: f32) {
+    fn assert_flat_plane_visible(
+        fov_y: f32,
+        near: f32,
+        far: f32,
+        radius: f32,
+        raw: f32,
+        margin: i32,
+        bound: f32,
+    ) {
         let (w, h) = (16i32, 16i32);
         let raw_buf = vec![raw; (w * h) as usize];
-        let depth = DepthBuffer { w, h, raw: &raw_buf };
+        let depth = DepthBuffer {
+            w,
+            h,
+            raw: &raw_buf,
+        };
         for noise_frame in [0, super::NOISE_FRAME_STRIDE * 7] {
             for cy in margin..(h - margin) {
                 for cx in margin..(w - margin) {
-                    let vis = gtao_texel(&depth, cx, cy, radius, 1.0, 2, 4, false, 0.2, fov_y, near, far, noise_frame);
+                    let vis = gtao_texel(
+                        &depth,
+                        cx,
+                        cy,
+                        radius,
+                        1.0,
+                        2,
+                        4,
+                        false,
+                        0.2,
+                        fov_y,
+                        near,
+                        far,
+                        noise_frame,
+                    );
                     assert!(
                         (vis - 1.0).abs() < bound,
                         "fov_y={fov_y} texel ({cx},{cy}): flat plane must give ~full visibility (out.r~1), got {vis}"
@@ -609,7 +734,15 @@ mod analytic_sanity {
 
     #[test]
     fn gtao_flat_plane_full_visibility_at_90_degree_fov() {
-        assert_flat_plane_visible(std::f32::consts::FRAC_PI_2, 0.1, 1000.0, 0.5, 0.0399, 2, 0.05);
+        assert_flat_plane_visible(
+            std::f32::consts::FRAC_PI_2,
+            0.1,
+            1000.0,
+            0.5,
+            0.0399,
+            2,
+            0.05,
+        );
     }
 
     /// A radius five times the plane's distance: every tap clamps to the
@@ -624,7 +757,7 @@ mod analytic_sanity {
 /// flat regions away from it are not.
 #[cfg(test)]
 mod corner_sanity {
-    use super::cpu_reference::{gtao_texel, DepthBuffer};
+    use super::cpu_reference::{DepthBuffer, gtao_texel};
 
     #[test]
     fn corner_shows_real_occlusion_flat_region_does_not() {
@@ -642,13 +775,25 @@ mod corner_sanity {
         // Averaged down the column, as the blur after this atom does: one
         // pixel's two slices may run parallel to the step.
         let ao = |x: i32| {
-            (8..h - 8).map(|y| gtao_texel(&depth, x, y, radius, 1.0, 2, 4, false, 0.2, fov_y, near, far, 0)).sum::<f32>()
+            (8..h - 8)
+                .map(|y| {
+                    gtao_texel(
+                        &depth, x, y, radius, 1.0, 2, 4, false, 0.2, fov_y, near, far, 0,
+                    )
+                })
+                .sum::<f32>()
                 / (h - 16) as f32
         };
 
         let (at_crease, flat_far, flat_near) = (ao(step_x - 2), ao(4), ao(w - 4));
-        assert!(flat_far > 0.9, "flat region on the far surface must read near-unoccluded, got {flat_far}");
-        assert!(flat_near > 0.9, "flat region on the near block must read near-unoccluded, got {flat_near}");
+        assert!(
+            flat_far > 0.9,
+            "flat region on the far surface must read near-unoccluded, got {flat_far}"
+        );
+        assert!(
+            flat_near > 0.9,
+            "flat region on the near block must read near-unoccluded, got {flat_near}"
+        );
         assert!(
             at_crease < flat_far - 0.15,
             "the wall beside the step must show occlusion: crease {at_crease}, flat {flat_far}"
@@ -669,8 +814,13 @@ mod heightfield_sanity {
         let depth = DepthBuffer { w, h, raw: &raw };
         for cy in 0..h {
             for cx in 0..w {
-                let vis = gtao_texel(&depth, cx, cy, 0.02, 1.0, 4, 8, true, 0.25, 0.9, 1.0, 3.0, 0);
-                assert!((vis - 1.0).abs() < 1e-4, "texel ({cx},{cy}): flat heightfield must be fully visible, got {vis}");
+                let vis = gtao_texel(
+                    &depth, cx, cy, 0.02, 1.0, 4, 8, true, 0.25, 0.9, 1.0, 3.0, 0,
+                );
+                assert!(
+                    (vis - 1.0).abs() < 1e-4,
+                    "texel ({cx},{cy}): flat heightfield must be fully visible, got {vis}"
+                );
             }
         }
     }
@@ -683,7 +833,7 @@ mod heightfield_sanity {
 /// pixel, bend that profile sharply: the lines parallel to the edge.
 #[cfg(test)]
 mod contact_lines {
-    use super::cpu_reference::{gtao_texel, DepthBuffer};
+    use super::cpu_reference::{DepthBuffer, gtao_texel};
 
     const W: i32 = 1280;
     const H: i32 = 720;
@@ -705,7 +855,11 @@ mod contact_lines {
         a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
     }
     fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-        [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
     }
     fn normalize(a: [f32; 3]) -> [f32; 3] {
         let l = dot(a, a).sqrt();
@@ -756,7 +910,8 @@ mod contact_lines {
                     let z = t * dot(d, fwd);
                     let i = (y * W + x) as usize;
                     raw[i] = NEAR * (FAR - z) / (z * (FAR - NEAR));
-                    cube[i] = on_cube.then(|| [eye[0] + d[0] * t, eye[1] + d[1] * t, eye[2] + d[2] * t]);
+                    cube[i] =
+                        on_cube.then(|| [eye[0] + d[0] * t, eye[1] + d[1] * t, eye[2] + d[2] * t]);
                 }
             }
         }
@@ -767,10 +922,19 @@ mod contact_lines {
     /// width, over the given noise frames.
     fn profile(hover: f32, noise_frames: &[u32]) -> Vec<f32> {
         let (raw, cube) = render(hover);
-        let depth = DepthBuffer { w: W, h: H, raw: &raw };
+        let depth = DepthBuffer {
+            w: W,
+            h: H,
+            raw: &raw,
+        };
         let centre = W / 2;
-        let bottom = (0..H).rev().find(|&y| cube[(y * W + centre) as usize]).expect("cube in view");
-        let cols: Vec<i32> = (0..W).filter(|&x| cube[(bottom * W + x) as usize]).collect();
+        let bottom = (0..H)
+            .rev()
+            .find(|&y| cube[(y * W + centre) as usize])
+            .expect("cube in view");
+        let cols: Vec<i32> = (0..W)
+            .filter(|&x| cube[(bottom * W + x) as usize])
+            .collect();
         let fifth = cols.len() / 5;
         let cols = &cols[fifth..cols.len() - fifth];
         (bottom + 1..(bottom + 120).min(H - 2))
@@ -778,7 +942,9 @@ mod contact_lines {
                 let mut sum = 0.0;
                 for &x in cols {
                     for &frame in noise_frames {
-                        sum += gtao_texel(&depth, x, y, RADIUS, 1.0, 2, 4, false, 0.2, FOV_Y, NEAR, FAR, frame);
+                        sum += gtao_texel(
+                            &depth, x, y, RADIUS, 1.0, 2, 4, false, 0.2, FOV_Y, NEAR, FAR, frame,
+                        );
                     }
                 }
                 sum / (cols.len() * noise_frames.len()) as f32
@@ -792,7 +958,10 @@ mod contact_lines {
     /// contact's own shape (and the gap under a falling cube), not lines.
     fn largest_bend(p: &[f32]) -> f32 {
         let start = p.iter().position(|&v| v > FADE_START).unwrap_or(p.len());
-        p[start..].windows(3).map(|w| w[2] - 2.0 * w[1] + w[0]).fold(0.0, f32::max)
+        p[start..]
+            .windows(3)
+            .map(|w| w[2] - 2.0 * w[1] + w[0])
+            .fold(0.0, f32::max)
     }
 
     #[test]
@@ -801,9 +970,21 @@ mod contact_lines {
         for hover in [0.0, 0.1] {
             let still = profile(hover, &[0]);
             let averaged = profile(hover, &moving);
-            assert!(averaged[0] < 0.8, "hover {hover}: the ground by the cube must stay occluded, got {}", averaged[0]);
-            assert!(largest_bend(&still) < LINE_BEND, "hover {hover}: one still frame shows a line, bend {}", largest_bend(&still));
-            assert!(largest_bend(&averaged) < LINE_BEND, "hover {hover}: averaged frames show a line, bend {}", largest_bend(&averaged));
+            assert!(
+                averaged[0] < 0.8,
+                "hover {hover}: the ground by the cube must stay occluded, got {}",
+                averaged[0]
+            );
+            assert!(
+                largest_bend(&still) < LINE_BEND,
+                "hover {hover}: one still frame shows a line, bend {}",
+                largest_bend(&still)
+            );
+            assert!(
+                largest_bend(&averaged) < LINE_BEND,
+                "hover {hover}: averaged frames show a line, bend {}",
+                largest_bend(&averaged)
+            );
         }
     }
 
@@ -814,22 +995,41 @@ mod contact_lines {
     #[test]
     fn no_dark_line_beside_an_edge_on_face() {
         let (raw, hits) = render_from([3.0, 3.5, 10.0], 0.0);
-        let depth = DepthBuffer { w: W, h: H, raw: &raw };
-        let ao = |x: i32, y: i32| gtao_texel(&depth, x, y, RADIUS, 1.0, 2, 4, false, 0.2, FOV_Y, NEAR, FAR, 0);
-        let mid_side = |x: i32, y: i32| hits[(y * W + x) as usize].is_some_and(|p| (p[0] - 0.5).abs() < 1e-3 && (0.3..0.7).contains(&p[1]));
+        let depth = DepthBuffer {
+            w: W,
+            h: H,
+            raw: &raw,
+        };
+        let ao = |x: i32, y: i32| {
+            gtao_texel(
+                &depth, x, y, RADIUS, 1.0, 2, 4, false, 0.2, FOV_Y, NEAR, FAR, 0,
+            )
+        };
+        let mid_side = |x: i32, y: i32| {
+            hits[(y * W + x) as usize]
+                .is_some_and(|p| (p[0] - 0.5).abs() < 1e-3 && (0.3..0.7).contains(&p[1]))
+        };
         let (mut outside, mut beyond) = (0.0, 0.0);
         let mut rows = 0;
         for y in 1..H - 1 {
-            let Some(x) = (1..W - 4).find(|&x| mid_side(x, y) && hits[(y * W + x + 1) as usize].is_none()) else {
+            let Some(x) =
+                (1..W - 4).find(|&x| mid_side(x, y) && hits[(y * W + x + 1) as usize].is_none())
+            else {
                 continue;
             };
             outside += ao(x + 1, y);
             beyond += ao(x + 3, y);
             rows += 1;
         }
-        assert!(rows > 10, "the side must be in view on more than {rows} rows");
+        assert!(
+            rows > 10,
+            "the side must be in view on more than {rows} rows"
+        );
         let (outside, beyond) = (outside / rows as f32, beyond / rows as f32);
-        assert!(outside > beyond - 0.05, "a dark line beside the silhouette: {outside} against {beyond} beyond it");
+        assert!(
+            outside > beyond - 0.05,
+            "a dark line beside the silhouette: {outside} against {beyond} beyond it"
+        );
     }
 }
 
@@ -842,9 +1042,12 @@ mod gpu_tests {
     //! below carry that.
     use half::f16;
 
-    use manifold_gpu::{GpuBinding, GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
+    use manifold_gpu::{
+        GpuBinding, GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
+        GpuTextureUsage,
+    };
 
-    use super::cpu_reference::{gtao_texel, DepthBuffer};
+    use super::cpu_reference::{DepthBuffer, gtao_texel};
     use super::{SsaoGtao, SsaoGtaoUniforms};
     use manifold_node_engine::gpu::render_target::RenderTarget;
 
@@ -862,11 +1065,18 @@ mod gpu_tests {
             depth: 1,
             format: GpuTextureFormat::Rgba16Float,
             dimension: GpuTextureDimension::D2,
-            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
+            usage: GpuTextureUsage::CPU_UPLOAD
+                | GpuTextureUsage::SHADER_READ
+                | GpuTextureUsage::COPY_SRC,
             label: "gtao-depth",
             mip_levels: 1,
         });
-        let bytes = unsafe { std::slice::from_raw_parts(px.as_ptr().cast::<u8>(), std::mem::size_of_val(px.as_slice())) };
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                px.as_ptr().cast::<u8>(),
+                std::mem::size_of_val(px.as_slice()),
+            )
+        };
         device.upload_texture(&tex, bytes);
         tex
     }
@@ -884,7 +1094,13 @@ mod gpu_tests {
         raw
     }
 
-    fn uniforms(radius: f32, fov_y: f32, near: f32, far: f32, noise_frame: u32) -> SsaoGtaoUniforms {
+    fn uniforms(
+        radius: f32,
+        fov_y: f32,
+        near: f32,
+        far: f32,
+        noise_frame: u32,
+    ) -> SsaoGtaoUniforms {
         SsaoGtaoUniforms {
             radius,
             intensity: 1.0,
@@ -901,17 +1117,38 @@ mod gpu_tests {
         }
     }
 
-    fn run_generated(device: &GpuDevice, depth: &GpuTexture, w: u32, h: u32, uniforms: &SsaoGtaoUniforms) -> Vec<f32> {
-        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_boundary_spec::<SsaoGtao>().expect("node.ssao_gtao standalone codegen");
-        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "gtao-generated");
+    fn run_generated(
+        device: &GpuDevice,
+        depth: &GpuTexture,
+        w: u32,
+        h: u32,
+        uniforms: &SsaoGtaoUniforms,
+    ) -> Vec<f32> {
+        let wgsl =
+            manifold_node_engine::freeze::codegen::standalone_for_boundary_spec::<SsaoGtao>()
+                .expect("node.ssao_gtao standalone codegen");
+        let pipeline = device.create_compute_pipeline(
+            &wgsl,
+            manifold_node_engine::freeze::codegen::ENTRY,
+            "gtao-generated",
+        );
         let out = RenderTarget::new(device, w, h, GpuTextureFormat::Rgba16Float, "gtao-out");
         let mut enc = device.create_encoder("gtao-dispatch");
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(uniforms) },
-                GpuBinding::Texture { binding: 1, texture: depth },
-                GpuBinding::Texture { binding: 2, texture: &out.texture },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(uniforms),
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: depth,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: &out.texture,
+                },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "gtao-dispatch",
@@ -923,8 +1160,11 @@ mod gpu_tests {
         enc.copy_texture_to_buffer(&out.texture, &readback, w, h, bytes_per_row);
         enc.commit_and_wait_completed();
         let ptr = readback.mapped_ptr().expect("shared readback buffer");
-        let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
-        (0..(w * h) as usize).map(|i| f16::from_bits(halves[i * 4]).to_f32()).collect()
+        let halves: &[u16] =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+        (0..(w * h) as usize)
+            .map(|i| f16::from_bits(halves[i * 4]).to_f32())
+            .collect()
     }
 
     #[test]
@@ -934,22 +1174,52 @@ mod gpu_tests {
         let raw = depth_ramp_2d(w, h);
         let depth_tex = upload_depth(&device, w, h, &raw);
         let (radius, fov_y, near, far) = (0.02f32, std::f32::consts::FRAC_PI_2, 0.1, 100.0);
-        let depth_buf = DepthBuffer { w: w as i32, h: h as i32, raw: &raw };
+        let depth_buf = DepthBuffer {
+            w: w as i32,
+            h: h as i32,
+            raw: &raw,
+        };
         for noise_frame in [0, 5 * super::NOISE_FRAME_STRIDE] {
-            let gpu_out = run_generated(&device, &depth_tex, w, h, &uniforms(radius, fov_y, near, far, noise_frame));
+            let gpu_out = run_generated(
+                &device,
+                &depth_tex,
+                w,
+                h,
+                &uniforms(radius, fov_y, near, far, noise_frame),
+            );
             let mut mismatches = 0usize;
             for y in 0..h as i32 {
                 for x in 0..w as i32 {
-                    let cpu = gtao_texel(&depth_buf, x, y, radius, 1.0, 2, 4, false, 0.2, fov_y, near, far, noise_frame);
+                    let cpu = gtao_texel(
+                        &depth_buf,
+                        x,
+                        y,
+                        radius,
+                        1.0,
+                        2,
+                        4,
+                        false,
+                        0.2,
+                        fov_y,
+                        near,
+                        far,
+                        noise_frame,
+                    );
                     let gpu = gpu_out[(y as u32 * w + x as u32) as usize];
                     let diff = (cpu - gpu).abs();
-                    assert!(diff < 0.25, "frame {noise_frame} texel ({x},{y}): cpu={cpu} gpu={gpu} diff={diff}");
+                    assert!(
+                        diff < 0.25,
+                        "frame {noise_frame} texel ({x},{y}): cpu={cpu} gpu={gpu} diff={diff}"
+                    );
                     if diff >= 1e-3 {
                         mismatches += 1;
                     }
                 }
             }
-            assert!(mismatches * 3 <= (w * h) as usize, "frame {noise_frame}: {mismatches} texels differ by more than 1e-3");
+            assert!(
+                mismatches * 3 <= (w * h) as usize,
+                "frame {noise_frame}: {mismatches} texels differ by more than 1e-3"
+            );
         }
     }
 
@@ -958,9 +1228,18 @@ mod gpu_tests {
         let device = manifold_gpu::testkit::test_device();
         let (w, h) = (16u32, 16u32);
         let depth_tex = upload_depth(&device, w, h, &vec![0.5f32; (w * h) as usize]);
-        let out = run_generated(&device, &depth_tex, w, h, &uniforms(0.05, 0.02, 0.1, 1000.0, 0));
+        let out = run_generated(
+            &device,
+            &depth_tex,
+            w,
+            h,
+            &uniforms(0.05, 0.02, 0.1, 1000.0, 0),
+        );
         for (i, v) in out.iter().enumerate() {
-            assert!((v - 1.0).abs() < 1e-3, "texel {i}: flat plane must give ~full visibility, got {v}");
+            assert!(
+                (v - 1.0).abs() < 1e-3,
+                "texel {i}: flat plane must give ~full visibility, got {v}"
+            );
         }
     }
 }

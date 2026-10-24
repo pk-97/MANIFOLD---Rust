@@ -295,9 +295,11 @@ mod tests {
     fn clipping_preserves_winding() {
         let output = clipped(TRIANGLE, &[[1.0, 1.0, 0.0, -0.25]]);
         assert!(!output.is_empty());
-        assert!(output
-            .iter()
-            .all(|triangle| signed_area_xy(*triangle, TRIANGLE) > 0.0));
+        assert!(
+            output
+                .iter()
+                .all(|triangle| signed_area_xy(*triangle, TRIANGLE) > 0.0)
+        );
     }
 
     #[test]

@@ -7,12 +7,16 @@
 
 use manifold_gpu::{GpuBuffer, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::scene::depth_rule::DepthRule;
-use manifold_node_engine::{ports::ArrayType, exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, ports::NodeInput, ports::NodeOutput, ports::NodePort, parameters::ParamDef, exec::effect_node::ParamValues, ports::PortKind, ports::PortType, persistence::PrimitiveRegistry};
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-use serde_json::{json, Value};
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::scene::depth_rule::DepthRule;
+use manifold_node_engine::{
+    exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext,
+    exec::effect_node::EffectNodeType, exec::effect_node::ParamValues, parameters::ParamDef,
+    persistence::PrimitiveRegistry, ports::ArrayType, ports::NodeInput, ports::NodeOutput,
+    ports::NodePort, ports::PortKind, ports::PortType,
+};
+use serde_json::{Value, json};
 
 #[derive(Clone, Copy)]
 struct Fixture {
@@ -50,16 +54,15 @@ impl LevelsetSource {
         for z in 0..nodes {
             for y in 0..nodes {
                 for x in 0..nodes {
-                    let position = |index: usize| {
-                        -2.0 + 4.0 * index as f32 / (nodes.saturating_sub(1)) as f32
-                    };
+                    let position =
+                        |index: usize| -2.0 + 4.0 * index as f32 / (nodes.saturating_sub(1)) as f32;
                     let [px, py, pz] = [position(x), position(y), position(z)];
                     let value = if fixture.asymmetric {
                         let [dx, dy, dz] = [px - 0.22, py + 0.14, pz - 0.08];
                         let ellipsoid = (dx * dx / 1.15_f32.powi(2)
                             + dy * dy / 0.78_f32.powi(2)
                             + dz * dz / 0.92_f32.powi(2))
-                            .sqrt()
+                        .sqrt()
                             - 1.0;
                         ellipsoid + 0.04 * dx * dz
                     } else {
@@ -298,7 +301,9 @@ fn smoothed_graph_json(fixture: Fixture) -> String {
         }
     }
     for wire in graph["wires"].as_array_mut().unwrap() {
-        if wire["fromNode"] == 8 { wire["fromPort"] = json!("out"); }
+        if wire["fromNode"] == 8 {
+            wire["fromPort"] = json!("out");
+        }
     }
     // A real pointwise region makes this a compiler-on/off proof even
     // though the shared-edge gather must retain its own dispatch.
@@ -308,16 +313,25 @@ fn smoothed_graph_json(fixture: Fixture) -> String {
     ]);
     let wires = graph["wires"].as_array_mut().unwrap();
     wires.retain(|w| w["toNode"] != 12 || w["toPort"] != "vertices");
-    wires.extend([wire(8,"out",30,"in"),wire(30,"out",31,"in"),wire(31,"out",12,"vertices")]);
+    wires.extend([
+        wire(8, "out", 30, "in"),
+        wire(30, "out", 31, "in"),
+        wire(31, "out", 12, "vertices"),
+    ]);
     graph.to_string()
 }
 
 fn fused_smoothed_graph(fixture: Fixture) -> String {
     let def = serde_json::from_str(&smoothed_graph_json(fixture)).unwrap();
-    let view = manifold_node_engine::freeze::install::fuse_generator_view(&def, &registry_for(fixture))
-        .expect("the downstream pointwise pair must fuse");
+    let view =
+        manifold_node_engine::freeze::install::fuse_generator_view(&def, &registry_for(fixture))
+            .expect("the downstream pointwise pair must fuse");
     for ty in ["node.smooth_surface_mesh", "node.surface_mesh_normals"] {
-        assert_eq!(view.def.nodes.iter().filter(|n| n.type_id == ty).count(),1,"{ty} survives freezing");
+        assert_eq!(
+            view.def.nodes.iter().filter(|n| n.type_id == ty).count(),
+            1,
+            "{ty} survives freezing"
+        );
     }
     serde_json::to_string(&view.def).unwrap()
 }
@@ -325,8 +339,9 @@ fn fused_smoothed_graph(fixture: Fixture) -> String {
 #[test]
 fn smoothed_liquid_fixture_graphs_compile_on_cpu() {
     for fixture in [SPHERE, ASYMMETRIC] {
-        for json in [smoothed_graph_json(fixture),fused_smoothed_graph(fixture)] {
-            PresetRuntime::from_json_str(&json,&registry_for(fixture)).expect("smoothed fixture compiles");
+        for json in [smoothed_graph_json(fixture), fused_smoothed_graph(fixture)] {
+            PresetRuntime::from_json_str(&json, &registry_for(fixture))
+                .expect("smoothed fixture compiles");
         }
     }
 }
@@ -334,19 +349,27 @@ fn smoothed_liquid_fixture_graphs_compile_on_cpu() {
 #[test]
 fn liquid_surface_smoothing_normals_fused_matches_unfused() {
     for fixture in [SPHERE, ASYMMETRIC] {
-        let registry=registry_for(fixture);
-        let plain=render(&smoothed_graph_json(fixture),&registry);
-        let fused=render(&fused_smoothed_graph(fixture),&registry);
-        assert_eq!(plain,fused,"smoothed normals change when freezing {}",fixture.type_id);
-        let hidden=render(&hidden_scene_json(fixture,false),&registry);
-        assert_ne!(plain,hidden,"surface must actually draw");
+        let registry = registry_for(fixture);
+        let plain = render(&smoothed_graph_json(fixture), &registry);
+        let fused = render(&fused_smoothed_graph(fixture), &registry);
+        assert_eq!(
+            plain, fused,
+            "smoothed normals change when freezing {}",
+            fixture.type_id
+        );
+        let hidden = render(&hidden_scene_json(fixture, false), &registry);
+        assert_ne!(plain, hidden, "surface must actually draw");
     }
 }
 
 fn hidden_scene_json(fixture: Fixture, volume: bool) -> String {
     let mut graph: Value = serde_json::from_str(&graph_json(fixture, false, volume, 1)).unwrap();
-    let object = graph["nodes"].as_array_mut().unwrap().iter_mut()
-        .find(|node| node["id"] == 12).unwrap();
+    let object = graph["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|node| node["id"] == 12)
+        .unwrap();
     object["params"]["visible"] = scalar(0.0);
     graph.to_string()
 }
@@ -368,7 +391,9 @@ fn indexed_liquid_fixture_graphs_compile_on_cpu() {
 
 fn registry_for(fixture: Fixture) -> PrimitiveRegistry {
     let mut registry = PrimitiveRegistry::with_builtin();
-    registry.register(fixture.type_id, move || Box::new(LevelsetSource::new(fixture)));
+    registry.register(fixture.type_id, move || {
+        Box::new(LevelsetSource::new(fixture))
+    });
     registry
 }
 
@@ -415,8 +440,11 @@ fn render(json: &str, registry: &PrimitiveRegistry) -> Vec<u8> {
                 &context(frame, h.width, h.height),
                 &manifold_core::params::ParamManifest::default(),
             );
-            assert_eq!(gpu.frame_status(), manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete,
-                "liquid indexed image proof frame {frame} must complete");
+            assert_eq!(
+                gpu.frame_status(),
+                manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete,
+                "liquid indexed image proof frame {frame} must complete"
+            );
         }
         encoder.commit_and_wait_completed();
     }
@@ -424,8 +452,14 @@ fn render(json: &str, registry: &PrimitiveRegistry) -> Vec<u8> {
 }
 
 fn assert_nonempty_and_exact(fixture: Fixture, volume: bool) {
-    let indexed = render(&graph_json(fixture, true, volume, 1), &registry_for(fixture));
-    let triangle_list = render(&graph_json(fixture, false, volume, 1), &registry_for(fixture));
+    let indexed = render(
+        &graph_json(fixture, true, volume, 1),
+        &registry_for(fixture),
+    );
+    let triangle_list = render(
+        &graph_json(fixture, false, volume, 1),
+        &registry_for(fixture),
+    );
     let hidden = render(&hidden_scene_json(fixture, volume), &registry_for(fixture));
     assert_eq!(
         indexed, triangle_list,
@@ -438,7 +472,9 @@ fn assert_nonempty_and_exact(fixture: Fixture, volume: bool) {
         fixture.type_id
     );
     assert!(
-        indexed.chunks_exact(8).any(|pixel| pixel[..6].iter().any(|byte| *byte != 0)),
+        indexed
+            .chunks_exact(8)
+            .any(|pixel| pixel[..6].iter().any(|byte| *byte != 0)),
         "{} (volume={volume}) produced no visible RGB bytes",
         fixture.type_id
     );

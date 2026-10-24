@@ -62,7 +62,11 @@ fn effect_badge_layout(
         env_x: xs[2],
         drv_x: xs[3],
         aud_x: xs[4],
-        name_right: if count == 0 { region_right } else { block_left - GAP },
+        name_right: if count == 0 {
+            region_right
+        } else {
+            block_left - GAP
+        },
     }
 }
 
@@ -79,7 +83,6 @@ fn scaled_card_rect(x: f32, y: f32, w: f32, h: f32, s: f32) -> Rect {
     let cy = y + h * 0.5;
     Rect::new(cx - w * 0.5 * s, cy - h * 0.5 * s, w * s, h * s)
 }
-
 
 impl ParamCardPanel {
     /// Configure from card metadata. Call before [`build`](Self::build).
@@ -174,7 +177,8 @@ impl ParamCardPanel {
         // Ink x-position targets are only knowable once the tab strip is laid
         // out (build time, not here) — resize only; `sync_mod_tab_ink` sets
         // targets per-row after `build_param_row` returns.
-        self.mod_tab_ink.resize_with(n, || AnimF32::new(0.0, color::MOTION_MED_MS));
+        self.mod_tab_ink
+            .resize_with(n, || AnimF32::new(0.0, color::MOTION_MED_MS));
         self.mod_tab_ink.truncate(n);
         self.string_param_btn_ids = vec![None; config.string_params.len()];
         self.param_cache = vec![f32::NAN; n];
@@ -205,7 +209,9 @@ impl ParamCardPanel {
     }
 
     fn compute_height_effect(&self) -> f32 {
-        let h = BORDER_W * 2.0 + HEADER_HEIGHT + self.effect_body_natural_height() * self.collapse_frac();
+        let h = BORDER_W * 2.0
+            + HEADER_HEIGHT
+            + self.effect_body_natural_height() * self.collapse_frac();
         h + CARD_BOTTOM_MARGIN
     }
 
@@ -256,7 +262,6 @@ impl ParamCardPanel {
         h
     }
 
-
     /// BUG-108: same section-run walk as `effect_body_natural_height` — see
     /// its doc comment. `build_generator` draws section headers identically
     /// to `build_effect` (same `build_section_header` call, same fold-skip),
@@ -301,7 +306,10 @@ impl ParamCardPanel {
             }
             h
         };
-        if self.row_host.is_colour_tail(&self.rows, i, self.draws_by_kind()) {
+        if self
+            .row_host
+            .is_colour_tail(&self.rows, i, self.draws_by_kind())
+        {
             return 0.0;
         }
         if self.rows[i].kind(self.draws_by_kind()) != RowKind::Colour {
@@ -309,7 +317,11 @@ impl ParamCardPanel {
         }
         let mut h = ROW_HEIGHT + ROW_SPACING;
         if self.row_host.colour_open(&self.rows[i]) {
-            h += RowHost::colour_channels(&self.rows, i).into_iter().flatten().map(slider).sum::<f32>();
+            h += RowHost::colour_channels(&self.rows, i)
+                .into_iter()
+                .flatten()
+                .map(slider)
+                .sum::<f32>();
         }
         h
     }
@@ -385,7 +397,12 @@ impl ParamCardPanel {
             // section 14.5 D — one right gutter: trailing controls right-align to
             // `inner_right - PADDING`, same as the effect header and the param
             // rows' value/mod-icon lane (was r: 0, flush to the inner edge).
-            .pad(Pad { l: PADDING, t: 0.0, r: PADDING, b: 0.0 })
+            .pad(Pad {
+                l: PADDING,
+                t: 0.0,
+                r: PADDING,
+                b: 0.0,
+            })
             .cross_align(Align::Center)
             .key(KEY_HEADER_BG)
             .child(
@@ -520,7 +537,12 @@ impl ParamCardPanel {
             .radius(CORNER_RADIUS - BORDER_W)
             .interactive()
             .inert()
-            .pad(Pad { l: PADDING, t: 0.0, r: PADDING, b: 0.0 })
+            .pad(Pad {
+                l: PADDING,
+                t: 0.0,
+                r: PADDING,
+                b: 0.0,
+            })
             .cross_align(Align::Center)
             .key(KEY_HEADER_BG);
         if !author {
@@ -542,13 +564,17 @@ impl ParamCardPanel {
                 .h(Sizing::Fixed(16.0))
                 .key(KEY_NAME_CLIP)
                 .child(
-                    View::label(if self.item_hosted { "" } else { self.name.as_str() })
-                        .fill_w()
-                        .fill_h()
-                        .font(HEADER_FONT_SIZE)
-                        .text_color(self.header_name_color())
-                        .align_text(TextAlign::Left)
-                        .key(KEY_NAME),
+                    View::label(if self.item_hosted {
+                        ""
+                    } else {
+                        self.name.as_str()
+                    })
+                    .fill_w()
+                    .fill_h()
+                    .font(HEADER_FONT_SIZE)
+                    .text_color(self.header_name_color())
+                    .align_text(TextAlign::Left)
+                    .key(KEY_NAME),
                 ),
         );
         row = row.child(
@@ -585,7 +611,8 @@ impl ParamCardPanel {
             )
             .child(chevron)
         } else {
-            row.child(View::panel().w(Sizing::Fixed(COG_W)).fill_h()).child(chevron)
+            row.child(View::panel().w(Sizing::Fixed(COG_W)).fill_h())
+                .child(chevron)
         }
     }
 
@@ -639,7 +666,12 @@ impl ParamCardPanel {
             let sliders_parent = if self.collapse_anim.is_animating() {
                 tree.add_node(
                     Some(parent),
-                    Rect::new(inner.x, body_y, inner_w.max(1.0), (self.effect_body_natural_height() * frac).max(0.0)),
+                    Rect::new(
+                        inner.x,
+                        body_y,
+                        inner_w.max(1.0),
+                        (self.effect_body_natural_height() * frac).max(0.0),
+                    ),
                     UINodeType::ClipRegion,
                     UIStyle::default(),
                     None,
@@ -668,8 +700,13 @@ impl ParamCardPanel {
         let (badge_right, content_left) = {
             let cog_x = chevron_x - GAP - COG_W;
             let toggle_x = cog_x - GAP - TOGGLE_W;
-            let content_left = x + PADDING
-                + if self.context == CardContext::Author { 0.0 } else { DRAG_HANDLE_W + GAP };
+            let content_left = x
+                + PADDING
+                + if self.context == CardContext::Author {
+                    0.0
+                } else {
+                    DRAG_HANDLE_W + GAP
+                };
             (toggle_x, content_left)
         };
         let badges = effect_badge_layout(
@@ -967,7 +1004,10 @@ impl ParamCardPanel {
         row_count: usize,
         key_base: u64,
     ) -> NodeId {
-        Self::build_section_header_with_title(tree, parent, rect, name, folded, row_count, key_base, false).0
+        Self::build_section_header_with_title(
+            tree, parent, rect, name, folded, row_count, key_base, false,
+        )
+        .0
     }
 
     /// `build_section_header`, plus, when `title_navigates`, an "Open in
@@ -984,7 +1024,12 @@ impl ParamCardPanel {
         key_base: u64,
         title_navigates: bool,
     ) -> (NodeId, Option<NodeId>) {
-        let Rect { x, y, width: w, height: row_h } = rect;
+        let Rect {
+            x,
+            y,
+            width: w,
+            height: row_h,
+        } = rect;
         let header_id = tree.add_button_keyed(
             parent,
             x,
@@ -1032,8 +1077,10 @@ impl ParamCardPanel {
             tree.set_name(header_id, "card_section.header");
             // The reveal button sits at the row end, left of the folded
             // count chip; the heading itself only folds.
-            let reveal_w = (tree.text_width(REVEAL_LABEL, color::FONT_CAPTION, title_style.font_weight) + GAP * 2.0)
-                .min(title_room / 2.0);
+            let reveal_w =
+                (tree.text_width(REVEAL_LABEL, color::FONT_CAPTION, title_style.font_weight)
+                    + GAP * 2.0)
+                    .min(title_room / 2.0);
             label_room = (title_room - reveal_w - GAP).max(0.0);
             let id = tree.add_button_keyed(
                 Some(header_id),
@@ -1055,7 +1102,15 @@ impl ParamCardPanel {
             tree.set_name(id, "card_section.reveal");
             title_id = Some(id);
         }
-        let title_label = tree.add_label(Some(header_id), title_x, y, label_room, row_h, name, title_style);
+        let title_label = tree.add_label(
+            Some(header_id),
+            title_x,
+            y,
+            label_room,
+            row_h,
+            name,
+            title_style,
+        );
         if title_navigates {
             tree.set_name(title_label, "card_section.title");
         }
@@ -1126,7 +1181,10 @@ impl ParamCardPanel {
         // default, so narrow timeline cards keep the timeline's width exactly.
         // Shared with `build_generator` via `row_geometry` (D2) so the two
         // builders' lane math can't drift from each other.
-        let RowGeometry { label_width, slider_w } = row_geometry(w - PADDING * 2.0, author);
+        let RowGeometry {
+            label_width,
+            slider_w,
+        } = row_geometry(w - PADDING * 2.0, author);
 
         self.row_host.section_header_ids.clear();
         let runs = self.section_runs();
@@ -1142,8 +1200,14 @@ impl ParamCardPanel {
                     len,
                     param_row_key_base(&self.rows[start].id),
                 );
-                self.row_host.section_header_ids.push((header_id, name.clone()));
-                self.row_host.row_index.insert(tree.widget_of(header_id), start, RowRole::SectionHeader);
+                self.row_host
+                    .section_header_ids
+                    .push((header_id, name.clone()));
+                self.row_host.row_index.insert(
+                    tree.widget_of(header_id),
+                    start,
+                    RowRole::SectionHeader,
+                );
                 cy += ROW_HEIGHT + ROW_SPACING;
                 if folded {
                     // Folded run: no rows built for start..start+len. Clear
@@ -1159,124 +1223,127 @@ impl ParamCardPanel {
                 }
             }
 
-        for i in start..start + len {
-            // Hidden params: leave slider_ids[i] = None and skip widget
-            // construction entirely. Slot-index semantics for any attached
-            // driver/Ableton mapping/envelope are preserved.
-            if !self.rows[i].value.exposed {
-                continue;
-            }
-            let info = self.rows[i].clone();
-            let kind = info.kind(self.draws_by_kind());
+            for i in start..start + len {
+                // Hidden params: leave slider_ids[i] = None and skip widget
+                // construction entirely. Slot-index semantics for any attached
+                // driver/Ableton mapping/envelope are preserved.
+                if !self.rows[i].value.exposed {
+                    continue;
+                }
+                let info = self.rows[i].clone();
+                let kind = info.kind(self.draws_by_kind());
 
-            if kind != RowKind::Number {
-                // Button row — the shared builder the generator card and the
-                // Scene tab use. Effects gate the driver-column reservation
-                // on `supports_envelopes` like their slider rows do, so an
-                // `is_trigger` row's lone "A" button lands in the same column.
-                let has_osc = self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some();
+                if kind != RowKind::Number {
+                    // Button row — the shared builder the generator card and the
+                    // Scene tab use. Effects gate the driver-column reservation
+                    // on `supports_envelopes` like their slider rows do, so an
+                    // `is_trigger` row's lone "A" button lands in the same column.
+                    let has_osc = self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some();
+                    let reveal = self.reveal_for_build(i);
+                    let row = build_button_row(
+                        tree,
+                        Some(parent),
+                        x + PADDING,
+                        cy,
+                        slider_w,
+                        label_width,
+                        &info,
+                        kind,
+                        &self.state.mod_state,
+                        i,
+                        self.param_target(),
+                        CONFIG_BTN_FONT_SIZE,
+                        self.supports_envelopes,
+                        has_osc,
+                        Some(param_row_key_base(&info.id)),
+                        reveal,
+                    );
+                    self.drawer_clips[i] = row.drawer_clip;
+                    self.row_host.toggle_ids[i] = Some(row.button_ids());
+                    self.toggle_cache[i] = info.spec.default > 0.5;
+                    self.row_host.envelope_btn_ids[i] = row.envelope_btn;
+                    self.row_host.driver_btn_ids[i] = row.driver_btn;
+                    self.row_host.audio_btn_ids[i] = row.audio_btn;
+                    self.row_host.audio_configs[i] = row.audio_config;
+                    self.row_host.audio_trigger_mode_badge_ids[i] = row.mode_badge_id;
+                    self.row_host.reindex_row(tree, i);
+                    cy = row.new_cy;
+                    continue;
+                }
+
+                let row_y = cy;
+                // Per-param slider + driver/envelope/Ableton drawers — the shared
+                // core. Effects nest rows under `parent` (the inner-bg panel), use
+                // the default slider palette + caption-size driver-config font, and
+                // gate the `E` button on `supports_envelopes`.
                 let reveal = self.reveal_for_build(i);
-                let row = build_button_row(
+                let row = build_param_row(
                     tree,
                     Some(parent),
                     x + PADDING,
                     cy,
                     slider_w,
-                    label_width,
                     &info,
-                    kind,
                     &self.state.mod_state,
                     i,
                     self.param_target(),
+                    &SliderColors::default_slider(),
                     CONFIG_BTN_FONT_SIZE,
                     self.supports_envelopes,
-                    has_osc,
+                    label_width,
+                    self.mod_active_tab
+                        .get(i)
+                        .copied()
+                        .unwrap_or(ModTab::Driver),
+                    !self.compact,
                     Some(param_row_key_base(&info.id)),
                     reveal,
+                    // Persistent card: the sync pushes every change unconditionally,
+                    // so rows build showing the default as before.
+                    None,
                 );
                 self.drawer_clips[i] = row.drawer_clip;
-                self.row_host.toggle_ids[i] = Some(row.button_ids());
-                self.toggle_cache[i] = info.spec.default > 0.5;
-                self.row_host.envelope_btn_ids[i] = row.envelope_btn;
-                self.row_host.driver_btn_ids[i] = row.driver_btn;
-                self.row_host.audio_btn_ids[i] = row.audio_btn;
-                self.row_host.audio_configs[i] = row.audio_config;
-                self.row_host.audio_trigger_mode_badge_ids[i] = row.mode_badge_id;
-                self.row_host.reindex_row(tree, i);
-                cy = row.new_cy;
-                continue;
-            }
-
-            let row_y = cy;
-            // Per-param slider + driver/envelope/Ableton drawers — the shared
-            // core. Effects nest rows under `parent` (the inner-bg panel), use
-            // the default slider palette + caption-size driver-config font, and
-            // gate the `E` button on `supports_envelopes`.
-            let reveal = self.reveal_for_build(i);
-            let row = build_param_row(
-                tree,
-                Some(parent),
-                x + PADDING,
-                cy,
-                slider_w,
-                &info,
-                &self.state.mod_state,
-                i,
-                self.param_target(),
-                &SliderColors::default_slider(),
-                CONFIG_BTN_FONT_SIZE,
-                self.supports_envelopes,
-                label_width,
-                self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
-                !self.compact,
-                Some(param_row_key_base(&info.id)),
-                reveal,
-                // Persistent card: the sync pushes every change unconditionally,
-                // so rows build showing the default as before.
-                None,
-            );
-            self.drawer_clips[i] = row.drawer_clip;
-            let new_cy = self.row_host.install_row(tree, i, row);
-            self.sync_mod_tab_ink(tree, i);
-            // Mapping-drawer chevron at the row's right edge (Author + mappable).
-            // A subtle ">" that opens the sideways range/scale/offset/invert/
-            // curve drawer for this binding. Sits past the D/E buttons in the
-            // reserved lane; click resolves via `mapping_chevron_ids`.
-            if author && info.mapping.mappable {
-                let ch_x = x + PADDING + (w - PADDING * 2.0) - MAP_CHEVRON_W;
-                let ch_y = row_y + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
-                // Keyed by (row | chevron role): the chevron's identity must not
-                // shift when an earlier row arms a modulator and inserts drawer
-                // nodes ahead of it. See `docs/INPUT_IDENTITY_UNIFICATION.md`.
-                self.row_host.mapping_chevron_ids[i] = Some(tree.add_button_keyed(
-                    Some(parent),
-                    ch_x,
-                    ch_y,
-                    MAP_CHEVRON_W,
-                    DE_BUTTON_SIZE,
-                    UIStyle {
-                        bg_color: Color32::TRANSPARENT,
-                        hover_bg_color: color::HOVER_OVERLAY,
-                        pressed_bg_color: color::PRESS_OVERLAY,
-                        text_color: color::CHEVRON_COLOR,
-                        font_size: FONT_SIZE,
-                        text_align: TextAlign::Center,
-                        corner_radius: color::SMALL_RADIUS,
-                        ..UIStyle::default()
-                    },
-                    "\u{203A}", // ›
-                    param_row_key_base(&info.id) | ROW_ROLE_CHEVRON,
-                ));
-                // Naming pass (UI_AUTOMATION_DESIGN.md D8/section 3): one static name for
-                // every row's chevron — which row comes from the selector's
-                // `under_text` query, not a per-row name string.
-                if let Some(id) = self.row_host.mapping_chevron_ids[i] {
-                    tree.set_name(id, "inspector.param_card.mapping_chevron");
+                let new_cy = self.row_host.install_row(tree, i, row);
+                self.sync_mod_tab_ink(tree, i);
+                // Mapping-drawer chevron at the row's right edge (Author + mappable).
+                // A subtle ">" that opens the sideways range/scale/offset/invert/
+                // curve drawer for this binding. Sits past the D/E buttons in the
+                // reserved lane; click resolves via `mapping_chevron_ids`.
+                if author && info.mapping.mappable {
+                    let ch_x = x + PADDING + (w - PADDING * 2.0) - MAP_CHEVRON_W;
+                    let ch_y = row_y + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
+                    // Keyed by (row | chevron role): the chevron's identity must not
+                    // shift when an earlier row arms a modulator and inserts drawer
+                    // nodes ahead of it. See `docs/INPUT_IDENTITY_UNIFICATION.md`.
+                    self.row_host.mapping_chevron_ids[i] = Some(tree.add_button_keyed(
+                        Some(parent),
+                        ch_x,
+                        ch_y,
+                        MAP_CHEVRON_W,
+                        DE_BUTTON_SIZE,
+                        UIStyle {
+                            bg_color: Color32::TRANSPARENT,
+                            hover_bg_color: color::HOVER_OVERLAY,
+                            pressed_bg_color: color::PRESS_OVERLAY,
+                            text_color: color::CHEVRON_COLOR,
+                            font_size: FONT_SIZE,
+                            text_align: TextAlign::Center,
+                            corner_radius: color::SMALL_RADIUS,
+                            ..UIStyle::default()
+                        },
+                        "\u{203A}", // ›
+                        param_row_key_base(&info.id) | ROW_ROLE_CHEVRON,
+                    ));
+                    // Naming pass (UI_AUTOMATION_DESIGN.md D8/section 3): one static name for
+                    // every row's chevron — which row comes from the selector's
+                    // `under_text` query, not a per-row name string.
+                    if let Some(id) = self.row_host.mapping_chevron_ids[i] {
+                        tree.set_name(id, "inspector.param_card.mapping_chevron");
+                    }
                 }
+                self.row_host.reindex_row(tree, i);
+                cy = new_cy;
             }
-            self.row_host.reindex_row(tree, i);
-            cy = new_cy;
-        }
         }
 
         // Effect string rows (currently graph-backed audio-send selectors)
@@ -1343,11 +1410,19 @@ impl ParamCardPanel {
     /// without this its square corners would poke past the rounded chrome.
     /// The radius is measured in logical pixels from the cached interior
     /// size, evaluated per texel center.
-    fn round_led_band_corners(bitmap: &mut [Color32], tex_w: usize, tex_h: usize, interior_w: f32, interior_h: f32) {
+    fn round_led_band_corners(
+        bitmap: &mut [Color32],
+        tex_w: usize,
+        tex_h: usize,
+        interior_w: f32,
+        interior_h: f32,
+    ) {
         if interior_w <= 0.0 || interior_h <= 0.0 {
             return;
         }
-        let radius = (CORNER_RADIUS - BORDER_W).min(interior_w * 0.5).min(interior_h * 0.5);
+        let radius = (CORNER_RADIUS - BORDER_W)
+            .min(interior_w * 0.5)
+            .min(interior_h * 0.5);
         for ty in 0..tex_h {
             for tx in 0..tex_w {
                 let lx = ((tx as f32 + 0.5) / tex_w as f32) * interior_w;
@@ -1482,89 +1557,121 @@ impl ParamCardPanel {
             // math. `author` gates both the chevron lane reservation and the
             // glyph draw + row-id scheme below.
             let author = self.context == CardContext::Author;
-            let RowGeometry { label_width, slider_w } = row_geometry(content_w, author);
+            let RowGeometry {
+                label_width,
+                slider_w,
+            } = row_geometry(content_w, author);
 
             if !self.rows.is_empty() {
-            self.row_host.section_header_ids.clear();
-            let runs = self.section_runs();
-            for (start, len, section) in runs {
-                if let Some(name) = &section {
-                    let folded = self.section_folded.get(name).copied().unwrap_or(false);
-                    let (header_id, title_id) = Self::build_section_header_with_title(
-                        tree,
-                        None,
-                        Rect::new(cx, cy, content_w, ROW_HEIGHT),
-                        name,
-                        folded,
-                        len,
-                        param_row_key_base(&self.rows[start].id),
-                        self.scene_sections,
-                    );
-                    self.row_host.section_header_ids.push((header_id, name.clone()));
-                    self.row_host.row_index.insert(tree.widget_of(header_id), start, RowRole::SectionHeader);
-                    if let Some(title_id) = title_id {
-                        self.row_host.row_index.insert(tree.widget_of(title_id), start, RowRole::SectionTitle);
-                    }
-                    cy += ROW_HEIGHT + ROW_SPACING;
-                    if folded {
-                        // See the effect-card twin of this branch for why
-                        // this clears rather than leaves stale ids.
-                        for i in start..start + len {
-                            self.clear_row_ids(i);
+                self.row_host.section_header_ids.clear();
+                let runs = self.section_runs();
+                for (start, len, section) in runs {
+                    if let Some(name) = &section {
+                        let folded = self.section_folded.get(name).copied().unwrap_or(false);
+                        let (header_id, title_id) = Self::build_section_header_with_title(
+                            tree,
+                            None,
+                            Rect::new(cx, cy, content_w, ROW_HEIGHT),
+                            name,
+                            folded,
+                            len,
+                            param_row_key_base(&self.rows[start].id),
+                            self.scene_sections,
+                        );
+                        self.row_host
+                            .section_header_ids
+                            .push((header_id, name.clone()));
+                        self.row_host.row_index.insert(
+                            tree.widget_of(header_id),
+                            start,
+                            RowRole::SectionHeader,
+                        );
+                        if let Some(title_id) = title_id {
+                            self.row_host.row_index.insert(
+                                tree.widget_of(title_id),
+                                start,
+                                RowRole::SectionTitle,
+                            );
                         }
-                        continue;
+                        cy += ROW_HEIGHT + ROW_SPACING;
+                        if folded {
+                            // See the effect-card twin of this branch for why
+                            // this clears rather than leaves stale ids.
+                            for i in start..start + len {
+                                self.clear_row_ids(i);
+                            }
+                            continue;
+                        }
+                    }
+
+                    for i in start..start + len {
+                        // A G or B channel draws inside its colour row's fold.
+                        if self
+                            .row_host
+                            .is_colour_tail(&self.rows, i, self.draws_by_kind())
+                        {
+                            continue;
+                        }
+                        let info = self.rows[i].clone();
+                        let kind = info.kind(self.draws_by_kind());
+
+                        if kind == RowKind::Colour {
+                            cy = self.build_generator_colour_row(
+                                tree,
+                                (cx, cy, content_w),
+                                slider_w,
+                                label_width,
+                                author,
+                                i,
+                            );
+                        } else if kind != RowKind::Number {
+                            // Button row — the shared builder (see its doc comment):
+                            // a switch, a pick list on a scene card, or a fire button,
+                            // which additionally reaches the audio-mod "A" drawer (D5b).
+                            let has_osc =
+                                self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some();
+                            let reveal = self.reveal_for_build(i);
+                            let row = build_button_row(
+                                tree,
+                                None,
+                                cx,
+                                cy,
+                                slider_w,
+                                label_width,
+                                &info,
+                                kind,
+                                &self.state.mod_state,
+                                i,
+                                self.param_target(),
+                                FONT_SIZE,
+                                true, // generators always reserve the driver-column gap
+                                has_osc,
+                                Some(param_row_key_base(&info.id)),
+                                reveal,
+                            );
+                            self.drawer_clips[i] = row.drawer_clip;
+                            self.row_host.toggle_ids[i] = Some(row.button_ids());
+                            self.toggle_cache[i] = info.spec.default > 0.5;
+                            self.row_host.envelope_btn_ids[i] = row.envelope_btn;
+                            self.row_host.driver_btn_ids[i] = row.driver_btn;
+                            self.row_host.audio_btn_ids[i] = row.audio_btn;
+                            self.row_host.audio_configs[i] = row.audio_config;
+                            self.row_host.audio_trigger_mode_badge_ids[i] = row.mode_badge_id;
+                            self.row_host.reindex_row(tree, i);
+                            cy = row.new_cy;
+                        } else {
+                            cy = self.build_generator_slider_row(
+                                tree,
+                                (cx, cy, content_w),
+                                slider_w,
+                                label_width,
+                                author,
+                                i,
+                                info,
+                            );
+                        }
                     }
                 }
-
-            for i in start..start + len {
-                // A G or B channel draws inside its colour row's fold.
-                if self.row_host.is_colour_tail(&self.rows, i, self.draws_by_kind()) {
-                    continue;
-                }
-                let info = self.rows[i].clone();
-                let kind = info.kind(self.draws_by_kind());
-
-                if kind == RowKind::Colour {
-                    cy = self.build_generator_colour_row(tree, (cx, cy, content_w), slider_w, label_width, author, i);
-                } else if kind != RowKind::Number {
-                    // Button row — the shared builder (see its doc comment):
-                    // a switch, a pick list on a scene card, or a fire button,
-                    // which additionally reaches the audio-mod "A" drawer (D5b).
-                    let has_osc = self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some();
-                    let reveal = self.reveal_for_build(i);
-                    let row = build_button_row(
-                        tree,
-                        None,
-                        cx,
-                        cy,
-                        slider_w,
-                        label_width,
-                        &info,
-                        kind,
-                        &self.state.mod_state,
-                        i,
-                        self.param_target(),
-                        FONT_SIZE,
-                        true, // generators always reserve the driver-column gap
-                        has_osc,
-                        Some(param_row_key_base(&info.id)),
-                        reveal,
-                    );
-                    self.drawer_clips[i] = row.drawer_clip;
-                    self.row_host.toggle_ids[i] = Some(row.button_ids());
-                    self.toggle_cache[i] = info.spec.default > 0.5;
-                    self.row_host.envelope_btn_ids[i] = row.envelope_btn;
-                    self.row_host.driver_btn_ids[i] = row.driver_btn;
-                    self.row_host.audio_btn_ids[i] = row.audio_btn;
-                    self.row_host.audio_configs[i] = row.audio_config;
-                    self.row_host.audio_trigger_mode_badge_ids[i] = row.mode_badge_id;
-                    self.row_host.reindex_row(tree, i);
-                    cy = row.new_cy;
-                } else {
-                    cy = self.build_generator_slider_row(tree, (cx, cy, content_w), slider_w, label_width, author, i, info);
-                }
-            }
-            }
             } // end if !self.rows.is_empty()
 
             // ── String param rows (clickable text fields) ──
@@ -1630,7 +1737,10 @@ impl ParamCardPanel {
             FONT_SIZE,
             true,
             label_width,
-            self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
+            self.mod_active_tab
+                .get(i)
+                .copied()
+                .unwrap_or(ModTab::Driver),
             !self.compact,
             Some(param_row_key_base(&info.id)),
             reveal,
@@ -1693,7 +1803,18 @@ impl ParamCardPanel {
         let open = self.row_host.colour_open(&self.rows[i]);
         let rgb = self.row_host.swatch_rgb_of(i).unwrap_or([0.0; 3]);
         let key = Some(param_row_key_base(&self.rows[i].id));
-        let Some(ids) = build_colour_row(tree, None, cx, cy, slider_w, label_width, &self.rows[i], rgb, open, key) else {
+        let Some(ids) = build_colour_row(
+            tree,
+            None,
+            cx,
+            cy,
+            slider_w,
+            label_width,
+            &self.rows[i],
+            rgb,
+            open,
+            key,
+        ) else {
             return cy;
         };
         let mut cy = ids.new_cy;
@@ -1702,7 +1823,15 @@ impl ParamCardPanel {
                 // The R channel's own slider carries no second swatch.
                 let mut info = self.rows[channel].clone();
                 info.rgb_members = None;
-                cy = self.build_generator_slider_row(tree, (cx, cy, content_w), slider_w, label_width, author, channel, info);
+                cy = self.build_generator_slider_row(
+                    tree,
+                    (cx, cy, content_w),
+                    slider_w,
+                    label_width,
+                    author,
+                    channel,
+                    info,
+                );
             }
         }
         self.row_host.install_colour_row(tree, i, &ids);
@@ -1779,7 +1908,8 @@ impl ParamCardPanel {
         for (i, synced) in self.row_value_synced.iter().enumerate() {
             // Unavailable presentation rows deliberately have no parameter
             // address. Real controls still require the manifest join.
-            let placeholder = self.rows[i].spec.disabled.is_some() && !self.rows[i].mapping.mappable;
+            let placeholder =
+                self.rows[i].spec.disabled.is_some() && !self.rows[i].mapping.mappable;
             if !*synced && !placeholder {
                 debug_assert!(
                     false,
@@ -1915,7 +2045,10 @@ impl ParamCardPanel {
     fn sync_param_value(&mut self, tree: &mut UITree, i: usize, val: f32) {
         let info = &self.rows[i];
         if self.row_host.is_dragging()
-            && self.row_host.active_param_index(&self.param_target(), &self.rows) == Some(i)
+            && self
+                .row_host
+                .active_param_index(&self.param_target(), &self.rows)
+                == Some(i)
         {
             return;
         }
@@ -1983,11 +2116,18 @@ impl ParamCardPanel {
         let max_idx = i * 2 + 1;
 
         // Check if range has changed (NaN means first sync after configure)
-        let range_changed = self.range_cache.get(min_idx)
-            .map(|&cached_min| (cached_min, self.range_cache.get(max_idx).copied().unwrap_or(f32::NAN)))
+        let range_changed = self
+            .range_cache
+            .get(min_idx)
+            .map(|&cached_min| {
+                (
+                    cached_min,
+                    self.range_cache.get(max_idx).copied().unwrap_or(f32::NAN),
+                )
+            })
             .map(|(cached_min, cached_max)| {
-                (cached_min.is_nan() || (min - cached_min).abs() > f32::EPSILON) ||
-                (cached_max.is_nan() || (max - cached_max).abs() > f32::EPSILON)
+                (cached_min.is_nan() || (min - cached_min).abs() > f32::EPSILON)
+                    || (cached_max.is_nan() || (max - cached_max).abs() > f32::EPSILON)
             })
             .unwrap_or(true); // Cache miss = first sync = update
 
@@ -2171,7 +2311,10 @@ mod led_band_tests {
             .iter()
             .filter(|p| p.r != 0 || p.g != 0 || p.b != 0)
             .count();
-        assert_eq!(lit, 1, "exactly one lit cell, a swap/flip leaks or loses it");
+        assert_eq!(
+            lit, 1,
+            "exactly one lit cell, a swap/flip leaks or loses it"
+        );
     }
 
     /// All four corners plus one interior sentinel, copied — each must land

@@ -29,7 +29,11 @@ pub fn hdri_sun_direction(path: &Path) -> Result<[f32; 3], String> {
 
 /// [`hdri_sun_direction`] over decoded `Rgba16Float` texels, row 0 at the
 /// nadir (how `hdri_source` stores them).
-pub(crate) fn sun_direction(width: usize, height: usize, rgba16: &[u8]) -> Result<[f32; 3], String> {
+pub(crate) fn sun_direction(
+    width: usize,
+    height: usize,
+    rgba16: &[u8],
+) -> Result<[f32; 3], String> {
     if width == 0 || height == 0 || rgba16.len() < width * height * 8 {
         return Err("the HDRI has no pixels".to_string());
     }
@@ -38,7 +42,9 @@ pub(crate) fn sun_direction(width: usize, height: usize, rgba16: &[u8]) -> Resul
     let luminance = block_luminance(width, height, rgba16, cols, rows);
     let (peak_row, peak_col) = (0..rows)
         .flat_map(|r| (0..cols).map(move |c| (r, c)))
-        .max_by(|&(ar, ac), &(br, bc)| luminance[ar * cols + ac].total_cmp(&luminance[br * cols + bc]))
+        .max_by(|&(ar, ac), &(br, bc)| {
+            luminance[ar * cols + ac].total_cmp(&luminance[br * cols + bc])
+        })
         .ok_or("the HDRI has no pixels")?;
     if luminance[peak_row * cols + peak_col] <= 0.0 {
         return Err("the HDRI has no bright region".to_string());
@@ -63,19 +69,31 @@ pub(crate) fn sun_direction(width: usize, height: usize, rgba16: &[u8]) -> Resul
     if !len.is_finite() || len <= 0.0 {
         return Err("the HDRI has no bright region".to_string());
     }
-    Ok([(sum[0] / len) as f32, (sum[1] / len) as f32, (sum[2] / len) as f32])
+    Ok([
+        (sum[0] / len) as f32,
+        (sum[1] / len) as f32,
+        (sum[2] / len) as f32,
+    ])
 }
 
 /// Mean luminance of each `cols` x `rows` block; a non-finite texel counts as
 /// black.
-fn block_luminance(width: usize, height: usize, rgba16: &[u8], cols: usize, rows: usize) -> Vec<f32> {
+fn block_luminance(
+    width: usize,
+    height: usize,
+    rgba16: &[u8],
+    cols: usize,
+    rows: usize,
+) -> Vec<f32> {
     let mut sums = vec![0.0f64; cols * rows];
     let mut counts = vec![0u32; cols * rows];
     for y in 0..height {
         let row = y * rows / height;
         for x in 0..width {
             let at = (y * width + x) * 8;
-            let channel = |k: usize| f16::from_le_bytes([rgba16[at + 2 * k], rgba16[at + 2 * k + 1]]).to_f32();
+            let channel = |k: usize| {
+                f16::from_le_bytes([rgba16[at + 2 * k], rgba16[at + 2 * k + 1]]).to_f32()
+            };
             let luma = 0.2126 * channel(0) + 0.7152 * channel(1) + 0.0722 * channel(2);
             let cell = row * cols + x * cols / width;
             if luma.is_finite() && luma > 0.0 {
@@ -84,7 +102,16 @@ fn block_luminance(width: usize, height: usize, rgba16: &[u8], cols: usize, rows
             counts[cell] += 1;
         }
     }
-    sums.iter().zip(&counts).map(|(sum, &n)| if n == 0 { 0.0 } else { (sum / f64::from(n)) as f32 }).collect()
+    sums.iter()
+        .zip(&counts)
+        .map(|(sum, &n)| {
+            if n == 0 {
+                0.0
+            } else {
+                (sum / f64::from(n)) as f32
+            }
+        })
+        .collect()
 }
 
 /// The unit direction through the centre of grid cell (`row`, `col`).
@@ -129,7 +156,11 @@ mod tests {
     fn the_sun_is_the_bright_disc_not_a_speck() {
         let toward = unit([0.6, 0.5, -0.4]);
         let found = sun_direction(512, 256, &sky_with_sun(512, 256, toward)).unwrap();
-        let dot = found.iter().zip(toward).map(|(&a, b)| f64::from(a) * b).sum::<f64>();
+        let dot = found
+            .iter()
+            .zip(toward)
+            .map(|(&a, b)| f64::from(a) * b)
+            .sum::<f64>();
         assert!(dot > 0.995, "found {found:?} for {toward:?}, dot {dot}");
     }
 
@@ -137,7 +168,11 @@ mod tests {
     fn a_sun_across_the_seam_is_found() {
         let toward = unit([-1.0, 0.1, 0.01]);
         let found = sun_direction(512, 256, &sky_with_sun(512, 256, toward)).unwrap();
-        let dot = found.iter().zip(toward).map(|(&a, b)| f64::from(a) * b).sum::<f64>();
+        let dot = found
+            .iter()
+            .zip(toward)
+            .map(|(&a, b)| f64::from(a) * b)
+            .sum::<f64>();
         assert!(dot > 0.995, "found {found:?} for {toward:?}, dot {dot}");
     }
 
@@ -148,4 +183,3 @@ mod tests {
         assert!(sun_direction(0, 0, &[]).is_err());
     }
 }
-

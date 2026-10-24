@@ -7,7 +7,9 @@
 // The GPU proofs (`whitewater_grid_tests`, feature gpu-proofs) call every
 // item here; a default test build compiles only the extrapolation check.
 
-use manifold_water_liquid::whitewater::{CELL_AIR, CELL_LIQUID, CELL_SOLID, KnownValue, NO_CROSSING, SurfaceCrossing};
+use manifold_water_liquid::whitewater::{
+    CELL_AIR, CELL_LIQUID, CELL_SOLID, KnownValue, NO_CROSSING, SurfaceCrossing,
+};
 
 /// A whitewater grid over a solid lattice of `nodes`.
 #[derive(Clone, Copy, Debug)]
@@ -18,7 +20,10 @@ pub(super) struct Grid {
 
 impl Grid {
     pub fn new(nodes: [u32; 3]) -> Self {
-        Self { nodes, cells: nodes.map(|n| n - 1) }
+        Self {
+            nodes,
+            cells: nodes.map(|n| n - 1),
+        }
     }
 
     pub fn total(&self) -> usize {
@@ -43,14 +48,17 @@ impl Grid {
     pub fn face(&self, c: [u32; 3], face: usize) -> Option<[u32; 3]> {
         let mut n = c.map(i64::from);
         n[face / 2] += if face % 2 == 1 { 1 } else { -1 };
-        (0..3).all(|a| n[a] >= 0 && n[a] < i64::from(self.cells[a])).then(|| n.map(|v| v as u32))
+        (0..3)
+            .all(|a| n[a] >= 0 && n[a] < i64::from(self.cells[a]))
+            .then(|| n.map(|v| v as u32))
     }
 
     /// The solid at cell `c`'s eight corners, bit 0 x, bit 1 y, bit 2 z.
     pub fn corners(&self, solid: &[f32], c: [u32; 3]) -> [f32; 8] {
         let [nx, ny, _] = self.nodes.map(|n| n as usize);
         std::array::from_fn(|corner| {
-            let n: [usize; 3] = std::array::from_fn(|a| (c[a] + ((corner >> a) & 1) as u32) as usize);
+            let n: [usize; 3] =
+                std::array::from_fn(|a| (c[a] + ((corner >> a) & 1) as u32) as usize);
             solid[n[0] + nx * (n[1] + ny * n[2])]
         })
     }
@@ -61,7 +69,15 @@ impl Grid {
 }
 
 fn corner_weight(f: [f32; 3], corner: usize) -> f32 {
-    (0..3).map(|a| if (corner >> a) & 1 == 1 { f[a] } else { 1.0 - f[a] }).product()
+    (0..3)
+        .map(|a| {
+            if (corner >> a) & 1 == 1 {
+                f[a]
+            } else {
+                1.0 - f[a]
+            }
+        })
+        .product()
 }
 
 fn dist2(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -70,7 +86,13 @@ fn dist2(a: [f32; 3], b: [f32; 3]) -> f32 {
 
 /// `node.surface_crossings` for one cell, with the squared distance (in
 /// refined nodes) of the runner-up crossing, so a proof can allow a tie.
-pub(super) fn surface_crossing(grid: &Grid, level: &[f32], solid: &[f32], s: u32, c: [u32; 3]) -> (SurfaceCrossing, f32, f32) {
+pub(super) fn surface_crossing(
+    grid: &Grid,
+    level: &[f32],
+    solid: &[f32],
+    s: u32,
+    c: [u32; 3],
+) -> (SurfaceCrossing, f32, f32) {
     let levels = grid.cells.map(|n| (n * s + 1) as usize);
     let corners = grid.corners(solid, c);
     let side = (s + 1) as usize;
@@ -81,16 +103,27 @@ pub(super) fn surface_crossing(grid: &Grid, level: &[f32], solid: &[f32], s: u32
     for z in 0..side {
         for y in 0..side {
             for x in 0..side {
-                let q = [base[0] as usize + x, base[1] as usize + y, base[2] as usize + z];
+                let q = [
+                    base[0] as usize + x,
+                    base[1] as usize + y,
+                    base[2] as usize + z,
+                ];
                 phi[slot([x, y, z])] = level[q[0] + levels[0] * (q[1] + levels[1] * q[2])];
                 let f = [x, y, z].map(|v| v as f32 / s as f32);
-                let solid: f32 = (0..8).map(|corner| corner_weight(f, corner) * corners[corner]).sum();
+                let solid: f32 = (0..8)
+                    .map(|corner| corner_weight(f, corner) * corners[corner])
+                    .sum();
                 clear[slot([x, y, z])] = solid >= 0.0;
             }
         }
     }
     let centre = [0.5 * s as f32; 3];
-    let mut out = SurfaceCrossing { crossing: [NO_CROSSING; 3], level: NO_CROSSING, normal: [0.0; 3], pad0: 0.0 };
+    let mut out = SurfaceCrossing {
+        crossing: [NO_CROSSING; 3],
+        level: NO_CROSSING,
+        normal: [0.0; 3],
+        pad0: 0.0,
+    };
     let (mut best, mut runner_up) = (3.0e38f32, 3.0e38f32);
     let mut liquid_end = [0usize; 3];
     let mut best_root = [0.0f32; 3];
@@ -116,7 +149,8 @@ pub(super) fn surface_crossing(grid: &Grid, level: &[f32], solid: &[f32], s: u32
                     if dd < best {
                         runner_up = best;
                         best = dd;
-                        out.crossing = std::array::from_fn(|i| (base[i] as f32 + root[i]) / s as f32);
+                        out.crossing =
+                            std::array::from_fn(|i| (base[i] as f32 + root[i]) / s as f32);
                         liquid_end = if v0 < 0.0 { p0 } else { p1 };
                         best_root = root;
                     } else if dd < runner_up {
@@ -130,7 +164,11 @@ pub(super) fn surface_crossing(grid: &Grid, level: &[f32], solid: &[f32], s: u32
         let q: [i64; 3] = std::array::from_fn(|i| i64::from(base[i]) + liquid_end[i] as i64);
         let g = level_gradient(level, levels, q);
         let size = (g[0] * g[0] + g[1] * g[1] + g[2] * g[2]).sqrt();
-        out.normal = if size > 0.0 { g.map(|v| v / size) } else { [0.0; 3] };
+        out.normal = if size > 0.0 {
+            g.map(|v| v / size)
+        } else {
+            [0.0; 3]
+        };
         out.level = (0..3).map(|i| g[i] * (centre[i] - best_root[i])).sum();
         return (out, best, runner_up);
     }
@@ -155,7 +193,14 @@ fn level_at(level: &[f32], levels: [usize; 3], p: [i64; 3]) -> f32 {
 /// fraction from `q0`: the inner of the chord's root and the root of the
 /// secant through the next liquid node beyond the edge (the body's
 /// `sc_root`).
-fn crossing_fraction(level: &[f32], levels: [usize; 3], v0: f32, v1: f32, q0: [i64; 3], a: usize) -> f32 {
+fn crossing_fraction(
+    level: &[f32],
+    levels: [usize; 3],
+    v0: f32,
+    v1: f32,
+    q0: [i64; 3],
+    a: usize,
+) -> f32 {
     let from_q0 = v0 < 0.0;
     let (liquid, air) = if from_q0 { (v0, v1) } else { (v1, v0) };
     let mut beyond = q0;
@@ -190,7 +235,12 @@ fn level_gradient(level: &[f32], levels: [usize; 3], q: [i64; 3]) -> [f32; 3] {
 }
 
 /// `node.nearest_crossing` for one cell, at `step` cells.
-pub(super) fn nearest_crossing(grid: &Grid, crossings: &[SurfaceCrossing], c: [u32; 3], step: f32) -> SurfaceCrossing {
+pub(super) fn nearest_crossing(
+    grid: &Grid,
+    crossings: &[SurfaceCrossing],
+    c: [u32; 3],
+    step: f32,
+) -> SurfaceCrossing {
     let reach = step.round().max(1.0) as i64;
     let own = crossings[grid.index(c)];
     let centre = Grid::centre(c);
@@ -198,8 +248,14 @@ pub(super) fn nearest_crossing(grid: &Grid, crossings: &[SurfaceCrossing], c: [u
     for dz in -1i64..=1 {
         for dy in -1i64..=1 {
             for dx in -1i64..=1 {
-                let n = [i64::from(c[0]) + reach * dx, i64::from(c[1]) + reach * dy, i64::from(c[2]) + reach * dz];
-                if (dx, dy, dz) == (0, 0, 0) || (0..3).any(|a| n[a] < 0 || n[a] >= i64::from(grid.cells[a])) {
+                let n = [
+                    i64::from(c[0]) + reach * dx,
+                    i64::from(c[1]) + reach * dy,
+                    i64::from(c[2]) + reach * dz,
+                ];
+                if (dx, dy, dz) == (0, 0, 0)
+                    || (0..3).any(|a| n[a] < 0 || n[a] >= i64::from(grid.cells[a]))
+                {
                     continue;
                 }
                 let other = crossings[grid.index(n.map(|v| v as u32))];
@@ -211,11 +267,22 @@ pub(super) fn nearest_crossing(grid: &Grid, crossings: &[SurfaceCrossing], c: [u
             }
         }
     }
-    SurfaceCrossing { crossing: best.crossing, level: own.level, normal: best.normal, pad0: 0.0 }
+    SurfaceCrossing {
+        crossing: best.crossing,
+        level: own.level,
+        normal: best.normal,
+        pad0: 0.0,
+    }
 }
 
 /// `node.crossing_distance` for one cell.
-pub(super) fn crossing_distance(grid: &Grid, crossing: SurfaceCrossing, solid: &[f32], h: f32, c: [u32; 3]) -> f32 {
+pub(super) fn crossing_distance(
+    grid: &Grid,
+    crossing: SurfaceCrossing,
+    solid: &[f32],
+    h: f32,
+    c: [u32; 3],
+) -> f32 {
     let centre = Grid::centre(c);
     let offset: [f32; 3] = std::array::from_fn(|i| centre[i] - crossing.crossing[i]);
     let n = crossing.normal;
@@ -253,21 +320,35 @@ pub(super) fn liquid_cell(grid: &Grid, distance: &[f32], solid: &[f32], c: [u32;
     if own != CELL_LIQUID {
         return own;
     }
-    let bordering_air = (0..6).filter_map(|face| grid.face(c, face)).any(|n| cell_kind(grid, distance, solid, n) == CELL_AIR);
+    let bordering_air = (0..6)
+        .filter_map(|face| grid.face(c, face))
+        .any(|n| cell_kind(grid, distance, solid, n) == CELL_AIR);
     if bordering_air { CELL_AIR } else { CELL_LIQUID }
 }
 
 /// `node.lattice_curvature` for one cell.
 pub(super) fn lattice_curvature(grid: &Grid, distance: &[f32], h: f32, c: [u32; 3]) -> KnownValue {
-    let unknown = KnownValue { value: 0.0, known: 0.0 };
+    let unknown = KnownValue {
+        value: 0.0,
+        known: 0.0,
+    };
     if grid.on_border(c) {
         return unknown;
     }
-    let phi = |d: [i64; 3]| distance[grid.index(std::array::from_fn(|a| (i64::from(c[a]) + d[a]) as u32))];
+    let phi = |d: [i64; 3]| {
+        distance[grid.index(std::array::from_fn(|a| (i64::from(c[a]) + d[a]) as u32))]
+    };
     // False for NaN too, as the body's `abs(v) < band` is.
     let near = |v: f32| v.abs() < 2.0 * h;
     let p = phi([0, 0, 0]);
-    let faces = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+    let faces = [
+        [1, 0, 0],
+        [-1, 0, 0],
+        [0, 1, 0],
+        [0, -1, 0],
+        [0, 0, 1],
+        [0, 0, -1],
+    ];
     if !near(p) || faces.iter().any(|&f| !near(phi(f))) {
         return unknown;
     }
@@ -283,12 +364,21 @@ pub(super) fn lattice_curvature(grid: &Grid, distance: &[f32], h: f32, c: [u32; 
     let g = x * x + y * y + z * z;
     let denominator = (g * g * g).sqrt();
     if denominator < 1e-9 {
-        return KnownValue { value: 0.0, known: 1.0 };
+        return KnownValue {
+            value: 0.0,
+            known: 1.0,
+        };
     }
-    let k = ((xx * (y * y + z * z) + yy * (x * x + z * z) + zz * (x * x + y * y) - 2.0 * xy * x * y - 2.0 * xz * x * z - 2.0 * yz * y * z)
+    let k = ((xx * (y * y + z * z) + yy * (x * x + z * z) + zz * (x * x + y * y)
+        - 2.0 * xy * x * y
+        - 2.0 * xz * x * z
+        - 2.0 * yz * y * z)
         / denominator)
         / h;
-    KnownValue { value: k.clamp(-1.0 / h, 1.0 / h), known: 1.0 }
+    KnownValue {
+        value: k.clamp(-1.0 / h, 1.0 / h),
+        known: 1.0,
+    }
 }
 
 /// `node.extend_lattice` for one cell.
@@ -299,7 +389,9 @@ pub(super) fn extend_lattice(grid: &Grid, values: &[KnownValue], c: [u32; 3]) ->
     }
     let (mut sum, mut hits, mut reached) = (0.0f32, 0.0f32, false);
     for face in 0..6 {
-        let n = grid.face(c, face).expect("an inner cell has six face neighbours");
+        let n = grid
+            .face(c, face)
+            .expect("an inner cell has six face neighbours");
         let other = values[grid.index(n)];
         let border = grid.on_border(n);
         reached |= other.known > 0.0 && !border;
@@ -308,20 +400,40 @@ pub(super) fn extend_lattice(grid: &Grid, values: &[KnownValue], c: [u32; 3]) ->
             hits += 1.0;
         }
     }
-    if reached { KnownValue { value: sum / hits, known: 1.0 } } else { own }
+    if reached {
+        KnownValue {
+            value: sum / hits,
+            known: 1.0,
+        }
+    } else {
+        own
+    }
 }
 
 /// FLIP's extrapolation as FLIP runs it (gridutils.h, extrapolateGridWithObserver):
 /// border cells settled from the start, `layers` passes over a status grid.
 /// The whole-grid statement `extend_lattice` must match pass by pass.
-pub(super) fn flip_extrapolate(grid: &Grid, values: &[f32], valid: &[bool], layers: usize) -> Vec<f32> {
+pub(super) fn flip_extrapolate(
+    grid: &Grid,
+    values: &[f32],
+    valid: &[bool],
+    layers: usize,
+) -> Vec<f32> {
     const UNKNOWN: u8 = 0;
     const WAITING: u8 = 1;
     const KNOWN: u8 = 2;
     const DONE: u8 = 3;
     let mut out = values.to_vec();
     let mut status: Vec<u8> = (0..grid.total())
-        .map(|i| if grid.on_border(grid.coords(i)) { DONE } else if valid[i] { KNOWN } else { UNKNOWN })
+        .map(|i| {
+            if grid.on_border(grid.coords(i)) {
+                DONE
+            } else if valid[i] {
+                KNOWN
+            } else {
+                UNKNOWN
+            }
+        })
         .collect();
     for layer in 0..layers {
         let mut waiting = Vec::new();
@@ -343,7 +455,10 @@ pub(super) fn flip_extrapolate(grid: &Grid, values: &[f32], valid: &[bool], laye
             let c = grid.coords(i);
             let (mut sum, mut count) = (0.0f32, 0.0f32);
             for face in [1, 0, 3, 2, 5, 4] {
-                let n = grid.index(grid.face(c, face).expect("a waiting cell is off the border"));
+                let n = grid.index(
+                    grid.face(c, face)
+                        .expect("a waiting cell is off the border"),
+                );
                 if status[n] == DONE {
                     sum += out[n];
                     count += 1.0;
@@ -386,19 +501,33 @@ mod tests {
         for i in 0..grid.total() {
             let c = grid.coords(i);
             let known = !grid.on_border(c) && rng.unit() < 0.15;
-            values.push(KnownValue { value: rng.unit() * 4.0 - 2.0, known: if known { 1.0 } else { 0.0 } });
+            values.push(KnownValue {
+                value: rng.unit() * 4.0 - 2.0,
+                known: if known { 1.0 } else { 0.0 },
+            });
         }
         let valid: Vec<bool> = values.iter().map(|v| v.known > 0.0).collect();
         let raw: Vec<f32> = values.iter().map(|v| v.value).collect();
         let flip = flip_extrapolate(&grid, &raw, &valid, 3);
         let mut ours = values.clone();
         for _ in 0..3 {
-            ours = (0..grid.total()).map(|i| extend_lattice(&grid, &ours, grid.coords(i))).collect();
+            ours = (0..grid.total())
+                .map(|i| extend_lattice(&grid, &ours, grid.coords(i)))
+                .collect();
         }
-        let filled = ours.iter().zip(&values).filter(|(o, v)| o.known > 0.0 && v.known == 0.0).count();
+        let filled = ours
+            .iter()
+            .zip(&values)
+            .filter(|(o, v)| o.known > 0.0 && v.known == 0.0)
+            .count();
         assert!(filled > 100, "the fixture extends into {filled} cells");
         for (i, (o, f)) in ours.iter().zip(&flip).enumerate() {
-            assert!((o.value - f).abs() <= 1e-5, "cell {:?}: ours {} FLIP {f}", grid.coords(i), o.value);
+            assert!(
+                (o.value - f).abs() <= 1e-5,
+                "cell {:?}: ours {} FLIP {f}",
+                grid.coords(i),
+                o.value
+            );
         }
     }
 }

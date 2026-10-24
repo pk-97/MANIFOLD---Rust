@@ -1,2 +1,2 @@
-pub(crate) mod primitives;
 mod coupling;
+pub(crate) mod primitives;

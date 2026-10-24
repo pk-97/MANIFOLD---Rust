@@ -6,16 +6,16 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::grid::face_bytes;
 use crate::float_param;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
-use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_node_engine::freeze::classify::FusedOutputCapacity;
 use crate::fluid_particles::FaceSample;
+use crate::grid::face_bytes;
 use crate::grid::face_len;
 use crate::lattice::{FlipSolverGrid, LiquidLattice};
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::freeze::classify::FusedOutputCapacity;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 pub const AXES: &[&str] = &["X (u)", "Y (v)", "Z (w)"];
 
@@ -75,11 +75,19 @@ manifold_node_engine::primitive! {
 }
 
 impl Primitive for FaceSampleComponent {
-    fn array_output_capacity(&self, port: &str, _params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
+    fn array_output_capacity(
+        &self,
+        port: &str,
+        _params: &ParamValues,
+        inputs: &[(&str, u32)],
+    ) -> Option<u32> {
         if port != "out" {
             return None;
         }
-        inputs.iter().find(|(name, _)| *name == "faces").map(|&(_, records)| records)
+        inputs
+            .iter()
+            .find(|(name, _)| *name == "faces")
+            .map(|&(_, records)| records)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -98,7 +106,9 @@ impl Primitive for FaceSampleComponent {
         };
         let count = face_len(cells, axis);
         if count * 4 > out.size || face_bytes(cells) > faces.size {
-            ctx.error(format!("Face Grid Component: a {cells:?} cell lattice is larger than its arrays"));
+            ctx.error(format!(
+                "Face Grid Component: a {cells:?} cell lattice is larger than its arrays"
+            ));
             return;
         }
         let nodes = lattice.nodes();
@@ -116,9 +126,20 @@ impl Primitive for FaceSampleComponent {
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: faces, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: faces,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: out,
+                    offset: 0,
+                },
             ],
             [(count as u32).div_ceil(256), 1, 1],
             "node.face_sample_component",
@@ -130,4 +151,5 @@ impl Primitive for FaceSampleComponent {
 mod extent;
 
 /// The face-sample body, for fused consumers that inline it.
-pub const FACE_SAMPLE_COMPONENT_BODY: &str = include_str!("shaders/face_sample_component_body.wgsl");
+pub const FACE_SAMPLE_COMPONENT_BODY: &str =
+    include_str!("shaders/face_sample_component_body.wgsl");

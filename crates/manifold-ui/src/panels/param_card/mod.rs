@@ -17,21 +17,21 @@
 //! `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` section 8). Readers branch on
 //! [`ParamCardKind`] or ignore the field that doesn't apply to them.
 
-use crate::{ParamsAction, RootAction};
-use crate::panels::AudioDrawerClick;
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::*;
-use super::{GraphParamTarget, PanelAction};
 #[cfg(test)]
 use super::{AudioShapeParam, ScrubPhase, ScrubValue, TrimKind, ValueRef};
+use super::{GraphParamTarget, PanelAction};
 use crate::anim::{AnimF32, Transient};
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, View};
 use crate::color;
 use crate::node::*;
+use crate::panels::AudioDrawerClick;
 use crate::param_surface::{CatalogAffordance, CatalogSurface, ParamRow, ParamSurface, RowRole};
 use crate::slider::SliderColors;
 use crate::transform2d::Affine2;
 use crate::tree::UITree;
+use crate::{ParamsAction, RootAction};
 use manifold_foundation::{EffectId, LayerId};
 
 // Stable keys for the host-owned card frame + header.
@@ -96,11 +96,18 @@ pub(crate) struct RowGeometry {
 }
 
 pub(crate) fn row_geometry(content_w: f32, reserve_chevron: bool) -> RowGeometry {
-    let chevron_lane = if reserve_chevron { MAP_CHEVRON_W + DE_BUTTON_GAP } else { 0.0 };
+    let chevron_lane = if reserve_chevron {
+        MAP_CHEVRON_W + DE_BUTTON_GAP
+    } else {
+        0.0
+    };
     let label_width = crate::slider::label_width_for_row(content_w);
     let slider_w =
         content_w - MOD_LANE_GAP - DE_BUTTON_SIZE * 3.0 - DE_BUTTON_GAP * 2.0 - chevron_lane;
-    RowGeometry { label_width, slider_w }
+    RowGeometry {
+        label_width,
+        slider_w,
+    }
 }
 
 // Effect shell furniture.
@@ -145,7 +152,10 @@ pub enum LedPreviewBand {
     /// A completed readback: tightly-packed RGBA8, 8×120 (row = LED position,
     /// col = strip index). `version` bumps per completed readback; the band
     /// bitmap re-transposes on version change only.
-    Frame { pixels: std::sync::Arc<[u8]>, version: u64 },
+    Frame {
+        pixels: std::sync::Arc<[u8]>,
+        version: u64,
+    },
     /// The strips are dark (blackout / disabled) — a black band, and the
     /// cached frame is dropped so a stale chase can never animate (D24).
     Black,
@@ -156,15 +166,15 @@ mod routing;
 mod state;
 
 pub use state::{
-    CardContext, CardHost, ParamCardKind, ParamCardState, ParamCardStringChoice, ParamCardStringInfo,
-    RowMod,
+    CardContext, CardHost, ParamCardKind, ParamCardState, ParamCardStringChoice,
+    ParamCardStringInfo, RowMod,
 };
 
 // ── ParamCardPanel ───────────────────────────────────────────────
 
 /// The unified inspector parameter card. One struct presents both effect cards
 /// and generator cards; [`kind`](ParamCardKind) selects the shell furniture
-    /// (effect: drag-handle + badges + ON/OFF toggle + hierarchical parenting;
+/// (effect: drag-handle + badges + ON/OFF toggle + hierarchical parenting;
 /// generator: Change button + toggle/trigger/string rows + flat parenting)
 /// while the per-parameter row core — slider + trim/target/range handles + D/E
 /// buttons + driver/envelope/Ableton drawers — is shared verbatim via
@@ -359,7 +369,6 @@ pub struct ParamCardPanel {
 
     copied_flash: CopyToClipboardLabelState,
 
-
     // Caches (NaN = needs sync)
     param_cache: Vec<f32>,
     toggle_cache: Vec<bool>,
@@ -414,7 +423,6 @@ pub struct ParamCardPanel {
     first_node: usize,
     first_id: NodeId,
     node_count: usize,
-
     // Card position (for effect drag-reorder hit testing)
 }
 
@@ -526,16 +534,15 @@ impl ParamCardPanel {
         if !self.is_live() || self.param_target() != target {
             return Vec::new();
         }
-        let Some(row) = self.rows.iter().position(|r| r.id.as_ref() == param_id.as_ref()) else {
+        let Some(row) = self
+            .rows
+            .iter()
+            .position(|r| r.id.as_ref() == param_id.as_ref())
+        else {
             return Vec::new();
         };
-        self.row_host.audio_drawer_action(
-            target,
-            row,
-            click,
-            &self.rows,
-            &mut self.state.mod_state,
-        )
+        self.row_host
+            .audio_drawer_action(target, row, click, &self.rows, &mut self.state.mod_state)
     }
 
     /// The card ROOT's identity key (D4): cards are siblings under the
@@ -570,8 +577,13 @@ impl ParamCardPanel {
         if !self.is_live() {
             return None;
         }
-        self.row_host
-            .value_cell_typein(node_id, tree, &self.rows, &self.base_values, self.param_target())
+        self.row_host.value_cell_typein(
+            node_id,
+            tree,
+            &self.rows,
+            &self.base_values,
+            self.param_target(),
+        )
     }
 
     /// If `node_id` is a driver drawer's Free-period field, build the action that
@@ -626,12 +638,14 @@ impl ParamCardPanel {
         let owner = &self.effect_id;
         for (pi, cfg) in self.row_host.audio_configs.iter().enumerate() {
             let Some((dids, _)) = cfg else { continue };
-            let Some(info) = self.rows.get(pi) else { continue };
-            let Some(Some(meter)) = dids.meters.first() else { continue };
-            let key = manifold_foundation::fire_meter_key_for_param(
-                owner.as_str(),
-                info.id.as_ref(),
-            );
+            let Some(info) = self.rows.get(pi) else {
+                continue;
+            };
+            let Some(Some(meter)) = dids.meters.first() else {
+                continue;
+            };
+            let key =
+                manifold_foundation::fire_meter_key_for_param(owner.as_str(), info.id.as_ref());
             let level = fire_level(key).unwrap_or(0.0);
             meter.update(tree, level, AUDIO_MOD_ACTIVE_C32, dt);
         }
@@ -646,11 +660,15 @@ impl ParamCardPanel {
     /// never matches. First match wins; a card with two armed fire rows is not
     /// a case this app produces today.
     fn open_fire_mode_drawer_row(&self) -> Option<usize> {
-        self.row_host.audio_configs.iter().enumerate().find_map(|(pi, cfg)| {
-            cfg.as_ref()?;
-            let info = self.rows.get(pi)?;
-            (info.spec.is_trigger || info.spec.is_trigger_gate).then_some(pi)
-        })
+        self.row_host
+            .audio_configs
+            .iter()
+            .enumerate()
+            .find_map(|(pi, cfg)| {
+                cfg.as_ref()?;
+                let info = self.rows.get(pi)?;
+                (info.spec.is_trigger || info.spec.is_trigger_gate).then_some(pi)
+            })
     }
 
     /// The send the currently-open fire-mode drawer is reading, if any.
@@ -660,13 +678,22 @@ impl ParamCardPanel {
         if idx < 0 {
             return None;
         }
-        self.state.mod_state.audio_sends.get(idx as usize).map(|send| send.id.clone())
+        self.state
+            .mod_state
+            .audio_sends
+            .get(idx as usize)
+            .map(|send| send.id.clone())
     }
 
     /// The band the currently-open fire-mode drawer is reading, if any.
     pub fn open_fire_mode_drawer_band(&self) -> Option<crate::types::AudioBand> {
         let pi = self.open_fire_mode_drawer_row()?;
-        let idx = self.state.mod_state.audio_rows.get(pi).map_or(0, |row| row.band_idx);
+        let idx = self
+            .state
+            .mod_state
+            .audio_rows
+            .get(pi)
+            .map_or(0, |row| row.band_idx);
         crate::types::AudioBand::ALL.get(idx as usize).copied()
     }
 
@@ -738,7 +765,11 @@ impl ParamCardPanel {
                 }
             }
         }
-        CatalogSurface { kind: self.kind, title: self.name.clone(), affordances }
+        CatalogSurface {
+            kind: self.kind,
+            title: self.name.clone(),
+            affordances,
+        }
     }
 
     /// Reset this card to "not built": the stored node range becomes empty, so
@@ -836,13 +867,21 @@ impl ParamCardPanel {
         rate_of: &mut dyn FnMut(&str) -> Option<(u32, f32)>,
     ) {
         for (row, param) in self.rows.iter_mut().enumerate() {
-            if !self.state.mod_state.driver_frame_aligned.get(row).copied().unwrap_or(false) {
+            if !self
+                .state
+                .mod_state
+                .driver_frame_aligned
+                .get(row)
+                .copied()
+                .unwrap_or(false)
+            {
                 continue;
             }
             let rate = rate_of(param.id.as_ref());
             // The row model too, so a later build from these rows agrees.
             param.modulation.driver_frame_rate = rate;
-            self.row_host.sync_driver_frame_rate(tree, &mut self.state.mod_state, row, rate);
+            self.row_host
+                .sync_driver_frame_rate(tree, &mut self.state.mod_state, row, rate);
         }
     }
 
@@ -855,10 +894,10 @@ impl ParamCardPanel {
     ) {
         for (row, param) in self.rows.iter_mut().enumerate() {
             let shapes = shapes_of(param.id.as_ref());
-            self.row_host.sync_row_shapes(tree, &mut self.state.mod_state, param, row, &shapes);
+            self.row_host
+                .sync_row_shapes(tree, &mut self.state.mod_state, param, row, &shapes);
         }
     }
-
 
     /// Per-frame content sync (push_state — after build). Black↔Frame
     /// transitions and new readback versions update the band in place; a
@@ -892,7 +931,11 @@ impl ParamCardPanel {
     pub fn led_band_bitmap(&mut self) -> Option<(&[Color32], usize, usize)> {
         if self.led_band_dirty && self.led_band_tex_w > 0 && self.led_band_tex_h > 0 {
             self.led_band_dirty = false;
-            Some((&self.led_band_bitmap, self.led_band_tex_w, self.led_band_tex_h))
+            Some((
+                &self.led_band_bitmap,
+                self.led_band_tex_w,
+                self.led_band_tex_h,
+            ))
         } else {
             None
         }
@@ -904,7 +947,11 @@ impl ParamCardPanel {
     /// instance consumes `led_band_bitmap` instead).
     pub fn led_band_bitmap_peek(&self) -> Option<(&[Color32], usize, usize)> {
         if self.led_band_tex_w > 0 && self.led_band_tex_h > 0 {
-            Some((&self.led_band_bitmap, self.led_band_tex_w, self.led_band_tex_h))
+            Some((
+                &self.led_band_bitmap,
+                self.led_band_tex_w,
+                self.led_band_tex_h,
+            ))
         } else {
             None
         }
@@ -1131,11 +1178,20 @@ impl ParamCardPanel {
     /// Flash the value readout of a built row; `false` when the row is not
     /// on this card or not built this frame (folded or scrolled away).
     pub fn flash_row(&mut self, param_id: &str) -> bool {
-        let Some(index) = self.rows.iter().position(|row| row.id == param_id) else { return false };
-        if self.row_host.slider_ids.get(index).is_none_or(|ids| ids.is_none()) {
+        let Some(index) = self.rows.iter().position(|row| row.id == param_id) else {
+            return false;
+        };
+        if self
+            .row_host
+            .slider_ids
+            .get(index)
+            .is_none_or(|ids| ids.is_none())
+        {
             return false;
         }
-        let Some(flash) = self.value_flash.get_mut(index) else { return false };
+        let Some(flash) = self.value_flash.get_mut(index) else {
+            return false;
+        };
         flash.fire(color::MOTION_SLOW_MS * 2.0);
         true
     }
@@ -1193,7 +1249,12 @@ pub(super) mod tests {
                         scene: None,
                         limit: Default::default(),
                     },
-                    value: RowValue { base: 10.0, effective: 10.0, exposed: true, driven: false },
+                    value: RowValue {
+                        base: 10.0,
+                        effective: 10.0,
+                        exposed: true,
+                        driven: false,
+                    },
                     audio: AudioRowState::default(),
                     clip_trigger: None,
                     modulation: RowMod::default(),
@@ -1230,7 +1291,12 @@ pub(super) mod tests {
                         scene: None,
                         limit: Default::default(),
                     },
-                    value: RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
+                    value: RowValue {
+                        base: 0.5,
+                        effective: 0.5,
+                        exposed: true,
+                        driven: false,
+                    },
                     audio: AudioRowState::default(),
                     clip_trigger: None,
                     modulation: RowMod::default(),
@@ -1279,7 +1345,12 @@ pub(super) mod tests {
                 scene: None,
                 limit: Default::default(),
             },
-            value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
+            value: RowValue {
+                base: 0.0,
+                effective: 0.0,
+                exposed: true,
+                driven: false,
+            },
             audio: AudioRowState::default(),
             clip_trigger: None,
             modulation: RowMod::default(),
@@ -1316,7 +1387,12 @@ pub(super) mod tests {
                 scene: None,
                 limit: Default::default(),
             },
-            value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
+            value: RowValue {
+                base: 0.0,
+                effective: 0.0,
+                exposed: true,
+                driven: false,
+            },
             audio: AudioRowState::default(),
             clip_trigger: None,
             modulation: RowMod::default(),
@@ -1348,9 +1424,11 @@ pub(super) mod tests {
         for _ in 0..first + count {
             tree.add_button(None, 0.0, 0.0, 10.0, 10.0, UIStyle::default(), "");
         }
-        assert!((first..first + count)
-            .map(|slot| tree.id_in(panel.region, slot))
-            .all(|id| tree.is_live(id) && !panel.owns_node(&tree, id)));
+        assert!(
+            (first..first + count)
+                .map(|slot| tree.id_in(panel.region, slot))
+                .all(|id| tree.is_live(id) && !panel.owns_node(&tree, id))
+        );
     }
 
     #[test]
@@ -1394,7 +1472,10 @@ pub(super) mod tests {
         assert_eq!(tree.name_of(rc), Some("param_row.radius"));
         let slider = panel.row_host.slider_ids[0].expect("radius row has a slider");
         assert_eq!(tree.name_of(slider.track), Some("param_row.radius.slider"));
-        assert_eq!(tree.name_of(slider.value_text), Some("param_row.radius.value"));
+        assert_eq!(
+            tree.name_of(slider.value_text),
+            Some("param_row.radius.value")
+        );
         let drv = panel.row_host.driver_btn_ids[0].expect("radius row has a driver button");
         assert_eq!(tree.name_of(drv), Some("param_row.radius.driver_btn"));
         let trigger = panel.row_host.envelope_btn_ids[0].expect("radius row has a trigger button");
@@ -1402,7 +1483,9 @@ pub(super) mod tests {
 
         // Toggle row ("invert"): no separate row-catcher — its button IS the
         // row's identity, so the row name lands there.
-        let toggle = panel.row_host.toggle_ids[2].as_ref().expect("invert row is a toggle");
+        let toggle = panel.row_host.toggle_ids[2]
+            .as_ref()
+            .expect("invert row is a toggle");
         assert_eq!(tree.name_of(toggle.button_id), Some("param_row.invert"));
     }
 
@@ -1414,8 +1497,15 @@ pub(super) mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
         for i in 0..tree.count() {
             let id = tree.id_at(i);
-            assert_ne!(tree.get_node(id).and_then(|n| n.text.as_deref()), Some("AUTO"));
-            assert!(!tree.name_of(id).is_some_and(|n| n.starts_with("param_automation.")));
+            assert_ne!(
+                tree.get_node(id).and_then(|n| n.text.as_deref()),
+                Some("AUTO")
+            );
+            assert!(
+                !tree
+                    .name_of(id)
+                    .is_some_and(|n| n.starts_with("param_automation."))
+            );
         }
     }
 
@@ -1434,7 +1524,10 @@ pub(super) mod tests {
         let cat = panel.catalog(&tree);
         assert_eq!(cat.kind, ParamCardKind::Effect);
         assert_eq!(cat.title, "Blur");
-        assert!(!cat.affordances.is_empty(), "a live card must enumerate affordances");
+        assert!(
+            !cat.affordances.is_empty(),
+            "a live card must enumerate affordances"
+        );
 
         // Enumeration proves out: the slider row's track/value/driver arm and
         // the toggle row's button appear with their exact durable roles + names
@@ -1447,17 +1540,26 @@ pub(super) mod tests {
         };
         assert!(has("radius", RowRole::Slider, "param_row.radius.slider"));
         assert!(has("radius", RowRole::Slider, "param_row.radius.value"));
-        assert!(has("radius", RowRole::DriverBtn, "param_row.radius.driver_btn"));
+        assert!(has(
+            "radius",
+            RowRole::DriverBtn,
+            "param_row.radius.driver_btn"
+        ));
         assert!(has("radius", RowRole::RowCatcher, "param_row.radius"));
         assert!(has("invert", RowRole::ToggleBtn, "param_row.invert"));
 
         // Every enumerated affordance's durable WidgetId is non-zero and its
         // row_id is a real row — the catalog can't manufacture an entry.
-        let known: std::collections::BTreeSet<&str> =
-            ["radius", "strength", "invert", "reset"].into_iter().collect();
+        let known: std::collections::BTreeSet<&str> = ["radius", "strength", "invert", "reset"]
+            .into_iter()
+            .collect();
         for a in &cat.affordances {
             assert!(a.widget != 0, "affordance carries a durable WidgetId");
-            assert!(known.contains(a.row_id.as_str()), "enumerated row {} is a real row", a.row_id);
+            assert!(
+                known.contains(a.row_id.as_str()),
+                "enumerated row {} is a real row",
+                a.row_id
+            );
         }
 
         // ── The BUG-239 structural kill ──────────────────────────────────
@@ -1469,7 +1571,9 @@ pub(super) mod tests {
             cat.affordances.iter().map(|a| a.row_id.clone()).collect();
         for rid in &rows {
             assert!(
-                cat.affordances.iter().any(|a| &a.row_id == rid && a.name.is_some()),
+                cat.affordances
+                    .iter()
+                    .any(|a| &a.row_id == rid && a.name.is_some()),
                 "row `{rid}` has no queryable name on ANY affordance — BUG-239 structural regression"
             );
         }
@@ -1489,7 +1593,10 @@ pub(super) mod tests {
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             PanelAction::Params(ParamsAction::ParamToggle(target, param_id)) => {
-                assert_eq!(*target, GraphParamTarget::Effect(EffectId::new("test-effect-0")));
+                assert_eq!(
+                    *target,
+                    GraphParamTarget::Effect(EffectId::new("test-effect-0"))
+                );
                 assert_eq!(param_id.as_ref(), "invert");
             }
             other => panic!("expected ParamToggle, got {:?}", other),
@@ -1508,7 +1615,10 @@ pub(super) mod tests {
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             PanelAction::Params(ParamsAction::ParamFire(target, param_id)) => {
-                assert_eq!(*target, GraphParamTarget::Effect(EffectId::new("test-effect-0")));
+                assert_eq!(
+                    *target,
+                    GraphParamTarget::Effect(EffectId::new("test-effect-0"))
+                );
                 assert_eq!(param_id.as_ref(), "reset");
             }
             other => panic!("expected ParamFire, got {:?}", other),
@@ -1518,7 +1628,11 @@ pub(super) mod tests {
         let audio_btn = panel.row_host.audio_btn_ids[3].unwrap();
         let actions = panel.handle_click(audio_btn, &tree);
         assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], PanelAction::Root(RootAction::OpenAudioSetup) | PanelAction::Modulation(ModulationAction::AudioModToggle(..))));
+        assert!(matches!(
+            actions[0],
+            PanelAction::Root(RootAction::OpenAudioSetup)
+                | PanelAction::Modulation(ModulationAction::AudioModToggle(..))
+        ));
     }
 
     /// Config with an `is_trigger_gate` toggle param (section 9, the outer-card gate
@@ -1554,7 +1668,12 @@ pub(super) mod tests {
                 scene: None,
                 limit: Default::default(),
             },
-            value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
+            value: RowValue {
+                base: 0.0,
+                effective: 0.0,
+                exposed: true,
+                driven: false,
+            },
             audio: AudioRowState::default(),
             clip_trigger: None,
             modulation: RowMod::default(),
@@ -1570,7 +1689,10 @@ pub(super) mod tests {
         });
         let n = c.rows.len();
 
-        c.audio_sends = vec![AudioSendChoice { label: "Kick".into(), id: manifold_foundation::AudioSendId::new("send-kick") }];
+        c.audio_sends = vec![AudioSendChoice {
+            label: "Kick".into(),
+            id: manifold_foundation::AudioSendId::new("send-kick"),
+        }];
         let gi = n - 1; // the clip_trigger row's index
         c.rows[gi].audio.active = true;
         c.rows[gi].audio.send_id = Some(manifold_foundation::AudioSendId::new("send-kick"));
@@ -1611,12 +1733,17 @@ pub(super) mod tests {
         let mut tree = UITree::new();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
 
-        let envelope = panel.row_host.envelope_config_ids[0].as_ref().expect("envelope drawer");
+        let envelope = panel.row_host.envelope_config_ids[0]
+            .as_ref()
+            .expect("envelope drawer");
         let source_button = envelope.drawer.button_ids()[0];
         let actions = panel.handle_click(source_button, &tree);
-        let [PanelAction::Params(ParamsAction::OpenClipTriggerSource(
-            crate::view::UiGraphTarget::Effect(owner), param_id,
-        ))] = actions.as_slice()
+        let [
+            PanelAction::Params(ParamsAction::OpenClipTriggerSource(
+                crate::view::UiGraphTarget::Effect(owner),
+                param_id,
+            )),
+        ] = actions.as_slice()
         else {
             panic!("expected stable envelope clip-source action, got {actions:?}");
         };
@@ -1643,12 +1770,17 @@ pub(super) mod tests {
         let mut tree = UITree::new();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 500.0));
 
-        let audio = panel.row_host.audio_configs[fi].as_ref().expect("audio drawer");
+        let audio = panel.row_host.audio_configs[fi]
+            .as_ref()
+            .expect("audio drawer");
         let source_button = audio.0.button_ids()[1]; // send, then clip source
         let actions = panel.handle_click(source_button, &tree);
-        let [PanelAction::Params(ParamsAction::OpenClipTriggerSource(
-            crate::view::UiGraphTarget::Effect(owner), param_id,
-        ))] = actions.as_slice()
+        let [
+            PanelAction::Params(ParamsAction::OpenClipTriggerSource(
+                crate::view::UiGraphTarget::Effect(owner),
+                param_id,
+            )),
+        ] = actions.as_slice()
         else {
             panic!("expected stable audio clip-source action, got {actions:?}");
         };
@@ -1684,9 +1816,11 @@ pub(super) mod tests {
             panel.configure(&config);
             let mut tree = UITree::new();
             panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 500.0));
-            assert!(!tree
-                .all_nodes()
-                .any(|node| node.text.as_deref() == Some("Owner lane")));
+            assert!(
+                !tree
+                    .all_nodes()
+                    .any(|node| node.text.as_deref() == Some("Owner lane"))
+            );
         }
     }
 
@@ -1725,13 +1859,22 @@ pub(super) mod tests {
         // Ordinary Fire defaults to Audio/Transient, so the armed mode badge
         // is visible even before the drawer is opened.
         let badge_id = panel.row_host.audio_trigger_mode_badge_ids[fi].expect("Fire mode badge");
-        assert_eq!(tree.get_node(badge_id).and_then(|node| node.text.as_deref()), Some("Audio"));
+        assert_eq!(
+            tree.get_node(badge_id)
+                .and_then(|node| node.text.as_deref()),
+            Some("Audio")
+        );
         assert_eq!(
             panel.open_fire_mode_drawer_send(),
             Some(manifold_foundation::AudioSendId::new("send-kick"))
         );
-        assert_eq!(panel.open_fire_mode_drawer_band(), Some(crate::types::AudioBand::Low));
-        let (dids, _) = panel.row_host.audio_configs[fi].as_ref().expect("Fire drawer");
+        assert_eq!(
+            panel.open_fire_mode_drawer_band(),
+            Some(crate::types::AudioBand::Low)
+        );
+        let (dids, _) = panel.row_host.audio_configs[fi]
+            .as_ref()
+            .expect("Fire drawer");
         let mode_buttons = &dids.button_ids()[dids.button_count() - 3..];
         let mode_labels: Vec<_> = mode_buttons
             .iter()
@@ -1759,7 +1902,12 @@ pub(super) mod tests {
         let mut clip_tree = UITree::new();
         clip_panel.build(&mut clip_tree, Rect::new(0.0, 0.0, 280.0, 400.0));
         let clip_badge = clip_panel.row_host.audio_trigger_mode_badge_ids[fi].expect("Clip badge");
-        assert_eq!(clip_tree.get_node(clip_badge).and_then(|node| node.text.as_deref()), Some("Clip"));
+        assert_eq!(
+            clip_tree
+                .get_node(clip_badge)
+                .and_then(|node| node.text.as_deref()),
+            Some("Clip")
+        );
 
         let mut gate_clip_cfg = effect_config_with_trigger_gate();
         let mut gate_clip_panel = ParamCardPanel::new();
@@ -1767,8 +1915,14 @@ pub(super) mod tests {
         gate_clip_panel.configure(&gate_clip_cfg);
         let mut gate_clip_tree = UITree::new();
         gate_clip_panel.build(&mut gate_clip_tree, Rect::new(0.0, 0.0, 280.0, 400.0));
-        let gate_badge = gate_clip_panel.row_host.audio_trigger_mode_badge_ids[fi].expect("gate badge");
-        assert_eq!(gate_clip_tree.get_node(gate_badge).and_then(|node| node.text.as_deref()), Some(""));
+        let gate_badge =
+            gate_clip_panel.row_host.audio_trigger_mode_badge_ids[fi].expect("gate badge");
+        assert_eq!(
+            gate_clip_tree
+                .get_node(gate_badge)
+                .and_then(|node| node.text.as_deref()),
+            Some("")
+        );
     }
 
     #[test]
@@ -1790,8 +1944,15 @@ pub(super) mod tests {
         let actions = panel.handle_click(button_id, &tree);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            PanelAction::Modulation(ModulationAction::AudioModSetTriggerMode(target, param_id, mode_idx)) => {
-                assert_eq!(*target, GraphParamTarget::Effect(EffectId::new("test-effect-0")));
+            PanelAction::Modulation(ModulationAction::AudioModSetTriggerMode(
+                target,
+                param_id,
+                mode_idx,
+            )) => {
+                assert_eq!(
+                    *target,
+                    GraphParamTarget::Effect(EffectId::new("test-effect-0"))
+                );
                 assert_eq!(param_id.as_ref(), "clip_trigger");
                 assert_eq!(*mode_idx, 2);
             }
@@ -1813,7 +1974,10 @@ pub(super) mod tests {
             panel.open_fire_mode_drawer_send(),
             Some(manifold_foundation::AudioSendId::new("send-kick"))
         );
-        assert_eq!(panel.open_fire_mode_drawer_band(), Some(crate::types::AudioBand::Low));
+        assert_eq!(
+            panel.open_fire_mode_drawer_band(),
+            Some(crate::types::AudioBand::Low)
+        );
     }
 
     #[test]
@@ -1847,7 +2011,10 @@ pub(super) mod tests {
         panel.configure(&cfg);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
 
-        assert!(panel.row_host.audio_configs[gi].is_some(), "sanity: the drawer still builds");
+        assert!(
+            panel.row_host.audio_configs[gi].is_some(),
+            "sanity: the drawer still builds"
+        );
         assert_eq!(panel.open_fire_mode_drawer_send(), None);
         assert_eq!(panel.open_fire_mode_drawer_band(), None);
     }
@@ -1868,7 +2035,10 @@ pub(super) mod tests {
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             PanelAction::Modulation(ModulationAction::AudioModToggle(target, param_id)) => {
-                assert_eq!(*target, GraphParamTarget::Effect(EffectId::new("test-effect-0")));
+                assert_eq!(
+                    *target,
+                    GraphParamTarget::Effect(EffectId::new("test-effect-0"))
+                );
                 assert_eq!(param_id.as_ref(), "clip_trigger");
             }
             other => panic!("expected AudioModToggle, got {:?}", other),
@@ -1884,8 +2054,16 @@ pub(super) mod tests {
         let actions = panel.handle_click(send_btn, &tree);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            PanelAction::Modulation(ModulationAction::AudioModSetSource(target, param_id, send_id, _feature)) => {
-                assert_eq!(*target, GraphParamTarget::Effect(EffectId::new("test-effect-0")));
+            PanelAction::Modulation(ModulationAction::AudioModSetSource(
+                target,
+                param_id,
+                send_id,
+                _feature,
+            )) => {
+                assert_eq!(
+                    *target,
+                    GraphParamTarget::Effect(EffectId::new("test-effect-0"))
+                );
                 assert_eq!(param_id.as_ref(), "clip_trigger");
                 assert_eq!(send_id.as_ref(), "send-kick");
             }
@@ -1908,8 +2086,15 @@ pub(super) mod tests {
         let actions = panel.handle_click(mode_both_btn, &tree);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            PanelAction::Modulation(ModulationAction::AudioModSetTriggerMode(target, param_id, mode_idx)) => {
-                assert_eq!(*target, GraphParamTarget::Effect(EffectId::new("test-effect-0")));
+            PanelAction::Modulation(ModulationAction::AudioModSetTriggerMode(
+                target,
+                param_id,
+                mode_idx,
+            )) => {
+                assert_eq!(
+                    *target,
+                    GraphParamTarget::Effect(EffectId::new("test-effect-0"))
+                );
                 assert_eq!(param_id.as_ref(), "clip_trigger");
                 assert_eq!(*mode_idx, 2);
             }
@@ -1942,27 +2127,39 @@ pub(super) mod tests {
         assert!(full_target > 0.0);
 
         panel.tick_drawers(40.0);
-        assert!(panel.drawer_height_anim[gi].is_animating(), "still mid-flight after 40ms");
+        assert!(
+            panel.drawer_height_anim[gi].is_animating(),
+            "still mid-flight after 40ms"
+        );
 
         let mut tree = UITree::new();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
-        let clips_midflight =
-            tree.all_nodes().filter(|n| n.node_type == UINodeType::ClipRegion).count();
-        assert!(clips_midflight >= 1, "an animating trigger-gate drawer builds under a clip region");
+        let clips_midflight = tree
+            .all_nodes()
+            .filter(|n| n.node_type == UINodeType::ClipRegion)
+            .count();
+        assert!(
+            clips_midflight >= 1,
+            "an animating trigger-gate drawer builds under a clip region"
+        );
         // The drawer still builds (not skipped) — just clipped to the reveal.
         assert!(panel.row_host.audio_configs[gi].is_some());
 
         for _ in 0..20 {
             panel.tick_drawers(20.0);
         }
-        assert!(!panel.drawer_height_anim[gi].is_animating(), "tween settles");
+        assert!(
+            !panel.drawer_height_anim[gi].is_animating(),
+            "tween settles"
+        );
         assert!(
             (panel.compute_height() - (closed_h + full_target)).abs() < 0.1,
             "settled height = closed + full drawer contribution"
         );
         let mut tree2 = UITree::new();
         panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 400.0));
-        let clip = panel.drawer_clips[gi].expect("the settled trigger-gate drawer keeps its reveal clip");
+        let clip =
+            panel.drawer_clips[gi].expect("the settled trigger-gate drawer keeps its reveal clip");
         assert!(
             (tree2.get_bounds(clip).height - full_target).abs() < 0.1,
             "the settled clip shows the whole trigger-gate drawer"
@@ -2027,7 +2224,10 @@ pub(super) mod tests {
         // While live: the value cell opens a type-in and the drag icon is known.
         assert!(panel.value_cell_typein(value_cell, &tree).is_some());
         assert!(panel.is_drag_handle(drag_icon));
-        assert!(panel.is_drag_handle(header), "neutral header starts a card drag");
+        assert!(
+            panel.is_drag_handle(header),
+            "neutral header starts a card drag"
+        );
         assert!(panel.is_drag_handle(name), "title starts a card drag");
         assert!(!panel.is_drag_handle(panel.toggle_btn_id.unwrap()));
         assert!(!panel.is_drag_handle(panel.chevron_btn_id.unwrap()));
@@ -2074,7 +2274,10 @@ pub(super) mod tests {
             "drag handle suppressed in Author"
         );
         // Mapping chevron only on the mappable row.
-        assert!(panel.row_host.mapping_chevron_ids[0].is_none(), "row 0 not mappable");
+        assert!(
+            panel.row_host.mapping_chevron_ids[0].is_none(),
+            "row 0 not mappable"
+        );
         assert!(
             panel.row_host.mapping_chevron_ids[1].is_some(),
             "row 1 mappable → chevron"
@@ -2090,7 +2293,13 @@ pub(super) mod tests {
 
         // Perform keeps the cog and never draws the mapping chevron.
         assert!(panel.cog_btn_id.is_some(), "cog present in Perform");
-        assert!(panel.row_host.mapping_chevron_ids.iter().all(|id| id.is_none()));
+        assert!(
+            panel
+                .row_host
+                .mapping_chevron_ids
+                .iter()
+                .all(|id| id.is_none())
+        );
     }
 
     #[test]
@@ -2121,7 +2330,10 @@ pub(super) mod tests {
         let build_with_driver0 = |driver0: bool| {
             let mut tree = UITree::new();
             let mut c = effect_config_with_mappable(); // param[1] is mappable
-            c.rows[0].modulation = RowMod { driver_active: driver0, ..Default::default() };
+            c.rows[0].modulation = RowMod {
+                driver_active: driver0,
+                ..Default::default()
+            };
             let mut panel = ParamCardPanel::new();
             panel.set_context(CardContext::Author);
             panel.configure(&c);
@@ -2199,8 +2411,12 @@ pub(super) mod tests {
 
         // Same as the effect card: chevron only on the mappable row, click opens
         // the card mapping drawer, and the anchor rect resolves by binding id.
-        assert!(panel.row_host.mapping_chevron_ids[0].is_none(), "row 0 not mappable");
-        let chevron = panel.row_host.mapping_chevron_ids[1].expect("generator mappable row → chevron");
+        assert!(
+            panel.row_host.mapping_chevron_ids[0].is_none(),
+            "row 0 not mappable"
+        );
+        let chevron =
+            panel.row_host.mapping_chevron_ids[1].expect("generator mappable row → chevron");
         let actions = panel.handle_click(chevron, &tree);
         assert!(
             matches!(&actions[..], [PanelAction::Root(RootAction::OpenCardMapping { target: GraphParamTarget::Generator, param_id: pid, anchor_node_id })] if pid == "strength" && *anchor_node_id == chevron),
@@ -2215,7 +2431,13 @@ pub(super) mod tests {
         let mut panel = ParamCardPanel::new(); // default Perform
         panel.configure(&generator_config_with_mappable());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 200.0));
-        assert!(panel.row_host.mapping_chevron_ids.iter().all(|id| id.is_none()));
+        assert!(
+            panel
+                .row_host
+                .mapping_chevron_ids
+                .iter()
+                .all(|id| id.is_none())
+        );
     }
 
     #[test]
@@ -2227,7 +2449,10 @@ pub(super) mod tests {
 
         let actions = panel.handle_click(panel.toggle_btn_id.unwrap(), &tree);
         assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], PanelAction::Params(ParamsAction::EffectToggle(0))));
+        assert!(matches!(
+            actions[0],
+            PanelAction::Params(ParamsAction::EffectToggle(0))
+        ));
     }
 
     #[test]
@@ -2240,7 +2465,10 @@ pub(super) mod tests {
         let actions = panel.handle_click(panel.row_host.driver_btn_ids[0].unwrap(), &tree);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            PanelAction::Modulation(ModulationAction::DriverToggle(GraphParamTarget::Effect(ei), param_id)) => {
+            PanelAction::Modulation(ModulationAction::DriverToggle(
+                GraphParamTarget::Effect(ei),
+                param_id,
+            )) => {
                 assert_eq!(ei.as_str(), "test-effect-0");
                 assert_eq!(param_id.as_ref(), "radius");
             }
@@ -2272,13 +2500,26 @@ pub(super) mod tests {
         let mut panel = ParamCardPanel::new();
         panel.configure(&effect_config());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-        let slot = |min: f32, max: f32| crate::view::UiParamSlot { min, max, ..crate::view::UiParamSlot::exposed(50.0) };
-        panel.sync_values(&mut tree, &mut [("radius", slot(0.0, 100.0)), ("strength", slot(0.0, 1.0))].into_iter());
+        let slot = |min: f32, max: f32| crate::view::UiParamSlot {
+            min,
+            max,
+            ..crate::view::UiParamSlot::exposed(50.0)
+        };
+        panel.sync_values(
+            &mut tree,
+            &mut [("radius", slot(0.0, 100.0)), ("strength", slot(0.0, 1.0))].into_iter(),
+        );
         let fill = panel.row_host.slider_ids[0].as_ref().unwrap().fill;
         let wide = tree.get_bounds(fill).width;
-        panel.sync_values(&mut tree, &mut [("radius", slot(0.0, 75.0)), ("strength", slot(0.0, 1.0))].into_iter());
+        panel.sync_values(
+            &mut tree,
+            &mut [("radius", slot(0.0, 75.0)), ("strength", slot(0.0, 1.0))].into_iter(),
+        );
         let narrow_span = tree.get_bounds(fill).width;
-        assert!(narrow_span > wide + 1.0, "fill {wide} -> {narrow_span}: the span shrank, so 50 sits further along");
+        assert!(
+            narrow_span > wide + 1.0,
+            "fill {wide} -> {narrow_span}: the span shrank, so 50 sits further along"
+        );
     }
 
     #[test]
@@ -2290,7 +2531,10 @@ pub(super) mod tests {
         config.rows[1].mapping.mappable = false;
         panel.configure(&config);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-        panel.sync_values(&mut tree, &mut [("radius", crate::view::UiParamSlot::exposed(80.0))].into_iter());
+        panel.sync_values(
+            &mut tree,
+            &mut [("radius", crate::view::UiParamSlot::exposed(80.0))].into_iter(),
+        );
         let value = panel.row_host.slider_ids[0].as_ref().unwrap().value_text;
         assert_eq!(tree.get_node(value).unwrap().text.as_deref(), Some("80"));
         assert!(panel.rows[1].spec.disabled.is_some());
@@ -2343,7 +2587,12 @@ pub(super) mod tests {
         use crate::view::UiParamSlot as ParamSlot;
         let ids = ["7_color_r", "7_color_g", "7_color_b"].map(manifold_foundation::ParamId::from);
         let mut config = gen_config();
-        config.rows[0].rgb_members = Some(RgbMembers { group: ColourGroup::Light, ids: ids.clone(), values: [1.0, 0.5, 0.25], editable: true });
+        config.rows[0].rgb_members = Some(RgbMembers {
+            group: ColourGroup::Light,
+            ids: ids.clone(),
+            values: [1.0, 0.5, 0.25],
+            editable: true,
+        });
         let mut tree = UITree::new();
         let mut panel = ParamCardPanel::new();
         panel.configure(&config);
@@ -2351,12 +2600,30 @@ pub(super) mod tests {
 
         let (swatch, group) = panel.row_host.swatch_ids[0].expect("the light row builds a swatch");
         assert_eq!(group, ColourGroup::Light);
-        assert!(panel.row_host.swatch_ids[1..].iter().all(Option::is_none), "only the swatch row gets one");
-        assert_eq!(tree.get_node(swatch).unwrap().style.bg_color, crate::panels::param_slider_shared::swatch_colour([1.0, 0.5, 0.25]));
-        assert_eq!(panel.row_host.row_index.get(tree.widget_of(swatch)), Some((0, RowRole::ColourSwatch(ColourGroup::Light))));
-        let track_x = |row: usize| tree.get_bounds(panel.row_host.slider_ids[row].as_ref().unwrap().track).x;
-        let plain = (1..panel.rows.len()).find(|&row| panel.row_host.slider_ids[row].is_some()).expect("a plain slider row");
-        assert_eq!(track_x(0), track_x(plain), "the swatch takes label space, never track space");
+        assert!(
+            panel.row_host.swatch_ids[1..].iter().all(Option::is_none),
+            "only the swatch row gets one"
+        );
+        assert_eq!(
+            tree.get_node(swatch).unwrap().style.bg_color,
+            crate::panels::param_slider_shared::swatch_colour([1.0, 0.5, 0.25])
+        );
+        assert_eq!(
+            panel.row_host.row_index.get(tree.widget_of(swatch)),
+            Some((0, RowRole::ColourSwatch(ColourGroup::Light)))
+        );
+        let track_x = |row: usize| {
+            tree.get_bounds(panel.row_host.slider_ids[row].as_ref().unwrap().track)
+                .x
+        };
+        let plain = (1..panel.rows.len())
+            .find(|&row| panel.row_host.slider_ids[row].is_some())
+            .expect("a plain slider row");
+        assert_eq!(
+            track_x(0),
+            track_x(plain),
+            "the swatch takes label space, never track space"
+        );
 
         let actions = panel.handle_click(swatch, &tree);
         assert!(
@@ -2366,12 +2633,20 @@ pub(super) mod tests {
         );
 
         let row_ids: Vec<String> = panel.rows.iter().map(|row| row.id.to_string()).collect();
-        let mut slots: Vec<(&str, ParamSlot)> = row_ids.iter().map(|id| (id.as_str(), ParamSlot::exposed(1.0))).collect();
+        let mut slots: Vec<(&str, ParamSlot)> = row_ids
+            .iter()
+            .map(|id| (id.as_str(), ParamSlot::exposed(1.0)))
+            .collect();
         slots.push((ids[1].as_ref(), ParamSlot::exposed(0.0)));
         panel.sync_values(&mut tree, &mut slots.into_iter());
-        assert_eq!(tree.get_node(swatch).unwrap().style.bg_color, crate::panels::param_slider_shared::swatch_colour([1.0, 0.0, 0.25]));
+        assert_eq!(
+            tree.get_node(swatch).unwrap().style.bg_color,
+            crate::panels::param_slider_shared::swatch_colour([1.0, 0.0, 0.25])
+        );
         let actions = panel.handle_click(swatch, &tree);
-        assert!(matches!(actions.as_slice(), [PanelAction::Root(RootAction::OpenColourMenu { value, .. })] if *value == [1.0, 0.0, 0.25]));
+        assert!(
+            matches!(actions.as_slice(), [PanelAction::Root(RootAction::OpenColourMenu { value, .. })] if *value == [1.0, 0.0, 0.25])
+        );
     }
 
     #[test]
@@ -2386,25 +2661,37 @@ pub(super) mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
         use crate::view::UiParamSlot as ParamSlot;
-        panel.sync_values_positional(&mut tree, &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)]);
+        panel.sync_values_positional(
+            &mut tree,
+            &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)],
+        );
         assert!(
             panel.value_flash[0].progress().is_none(),
             "the post-configure resync must not flash"
         );
 
-        panel.sync_values_positional(&mut tree, &[ParamSlot::exposed(75.0), ParamSlot::exposed(0.8)]);
+        panel.sync_values_positional(
+            &mut tree,
+            &[ParamSlot::exposed(75.0), ParamSlot::exposed(0.8)],
+        );
         assert!(
             panel.value_flash[0].progress().is_some(),
             "a genuine value change fires the flash"
         );
-        assert!(panel.value_flash[1].progress().is_none(), "unchanged param 1 stays idle");
+        assert!(
+            panel.value_flash[1].progress().is_none(),
+            "unchanged param 1 stays idle"
+        );
 
         // tick_value_flash paints the accent while active, then reverts once —
         // the id-based read-modify-write leaves everything else on the node
         // untouched (font/bg/align), only `text_color` moves.
         let value_text_id = panel.row_host.slider_ids[0].as_ref().unwrap().value_text;
         panel.tick_value_flash(&mut tree, 1.0);
-        assert_eq!(tree.get_node(value_text_id).unwrap().style.text_color, color::ACCENT_BLUE_C32);
+        assert_eq!(
+            tree.get_node(value_text_id).unwrap().style.text_color,
+            color::ACCENT_BLUE_C32
+        );
 
         for _ in 0..30 {
             panel.tick_value_flash(&mut tree, color::MOTION_SLOW_MS / 20.0);
@@ -2427,12 +2714,19 @@ pub(super) mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
         use crate::view::UiParamSlot as ParamSlot;
-        panel.sync_values_positional(&mut tree, &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)]);
+        panel.sync_values_positional(
+            &mut tree,
+            &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)],
+        );
 
         let track = panel.row_host.slider_ids[0].as_ref().unwrap().track;
         let rect = tree.get_bounds(track);
-        let _ = panel.handle_pointer_down(track, Vec2::new(rect.x + rect.width * 0.5, rect.y), &tree);
-        panel.sync_values_positional(&mut tree, &[ParamSlot::exposed(75.0), ParamSlot::exposed(0.8)]);
+        let _ =
+            panel.handle_pointer_down(track, Vec2::new(rect.x + rect.width * 0.5, rect.y), &tree);
+        panel.sync_values_positional(
+            &mut tree,
+            &[ParamSlot::exposed(75.0), ParamSlot::exposed(0.8)],
+        );
         assert!(
             panel.value_flash[0].progress().is_none(),
             "no flash while this card is mid-drag"
@@ -2461,7 +2755,9 @@ pub(super) mod tests {
         // Coarse: 20 px right from mid-track on a 0..100 range.
         let moved = panel.handle_drag(Vec2::new(mid_x + 20.0, track_rect.y), &mut tree, false);
         let coarse_val = match moved.as_slice() {
-            [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Move(ScrubValue::Scalar(v)))] => *v,
+            [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Move(ScrubValue::Scalar(v)))] => {
+                *v
+            }
             other => panic!("expected a coarse param move, got {other:?}"),
         };
 
@@ -2469,7 +2765,9 @@ pub(super) mod tests {
         panel.handle_drag(Vec2::new(mid_x, track_rect.y), &mut tree, false);
         let moved = panel.handle_drag(Vec2::new(mid_x + 20.0, track_rect.y), &mut tree, true);
         let fine_val = match moved.as_slice() {
-            [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Move(ScrubValue::Scalar(v)))] => *v,
+            [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Move(ScrubValue::Scalar(v)))] => {
+                *v
+            }
             other => panic!("expected a fine param move, got {other:?}"),
         };
 
@@ -2482,7 +2780,10 @@ pub(super) mod tests {
         );
 
         let ended = panel.handle_drag_end(&mut tree);
-        assert!(matches!(ended.as_slice(), [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Commit)]));
+        assert!(matches!(
+            ended.as_slice(),
+            [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Commit)]
+        ));
     }
 
     /// BUG-257 regression: shift every node down (what `ScrollContainer::
@@ -2506,16 +2807,28 @@ pub(super) mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
         let track = panel.row_host.slider_ids[0].as_ref().unwrap().track;
-        let trim = panel.row_host.trim_ids[0].as_ref().expect("driver trim built");
+        let trim = panel.row_host.trim_ids[0]
+            .as_ref()
+            .expect("driver trim built");
         let (min_bar, max_bar, fill) = (trim.min_bar_id, trim.max_bar_id, trim.fill_id);
 
         scroll_shift(&mut tree, 137.0);
 
         panel.handle_pointer_down(min_bar, Vec2::ZERO, &tree);
         let live = tree.get_bounds(track);
-        let moved = panel.handle_drag(Vec2::new(live.x + live.width * 0.3, live.y), &mut tree, false);
+        let moved = panel.handle_drag(
+            Vec2::new(live.x + live.width * 0.3, live.y),
+            &mut tree,
+            false,
+        );
         assert!(
-            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::Trim(TrimKind::Driver, ..), ScrubPhase::Move(..))]),
+            matches!(
+                moved.as_slice(),
+                [PanelAction::Scrub(
+                    ValueRef::Trim(TrimKind::Driver, ..),
+                    ScrubPhase::Move(..)
+                )]
+            ),
             "trim drag still routes after scroll: {moved:?}"
         );
 
@@ -2538,15 +2851,28 @@ pub(super) mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
         let track = panel.row_host.slider_ids[0].as_ref().unwrap().track;
-        let target_bar = panel.row_host.target_ids[0].as_ref().expect("envelope target built").target_bar_id;
+        let target_bar = panel.row_host.target_ids[0]
+            .as_ref()
+            .expect("envelope target built")
+            .target_bar_id;
 
         scroll_shift(&mut tree, 137.0);
 
         panel.handle_pointer_down(target_bar, Vec2::ZERO, &tree);
         let live = tree.get_bounds(track);
-        let moved = panel.handle_drag(Vec2::new(live.x + live.width * 0.5, live.y), &mut tree, false);
+        let moved = panel.handle_drag(
+            Vec2::new(live.x + live.width * 0.5, live.y),
+            &mut tree,
+            false,
+        );
         assert!(
-            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::EnvelopeTarget(..), ScrubPhase::Move(..))]),
+            matches!(
+                moved.as_slice(),
+                [PanelAction::Scrub(
+                    ValueRef::EnvelopeTarget(..),
+                    ScrubPhase::Move(..)
+                )]
+            ),
             "target drag still routes after scroll: {moved:?}"
         );
 
@@ -2562,7 +2888,10 @@ pub(super) mod tests {
     /// shaping sliders (Sensitivity/Attack/Release, `DrawerIds.sliders[0..3]`).
     fn effect_config_with_audio_shape_armed() -> ParamSurface {
         let mut c = effect_config();
-        c.audio_sends = vec![AudioSendChoice { label: "Kick".into(), id: manifold_foundation::AudioSendId::new("send-kick") }];
+        c.audio_sends = vec![AudioSendChoice {
+            label: "Kick".into(),
+            id: manifold_foundation::AudioSendId::new("send-kick"),
+        }];
         c.rows[0].audio.active = true;
         c.rows[0].audio.send_id = Some(manifold_foundation::AudioSendId::new("send-kick"));
         c
@@ -2587,7 +2916,10 @@ pub(super) mod tests {
                 audio_band_from_index(ms.audio_rows.first().map_or(0, |row| row.band_idx) as usize),
             );
             let chip_count = trigger_source_chips(current).len();
-            (dids.button_ids()[*send_count + chip_count], dids.button_count())
+            (
+                dids.button_ids()[*send_count + chip_count],
+                dids.button_count(),
+            )
         };
         // The button is hittable at its own center (not shadowed by the card).
         let r = tree.get_bounds(custom_id);
@@ -2598,11 +2930,8 @@ pub(super) mod tests {
         );
 
         let pid = panel.rows[0].id.clone();
-        let actions = panel.audio_drawer_intent(
-            panel.param_target(),
-            &pid,
-            AudioDrawerClick::Custom,
-        );
+        let actions =
+            panel.audio_drawer_intent(panel.param_target(), &pid, AudioDrawerClick::Custom);
         assert!(
             panel.state.mod_state.audio_matrix_open[0],
             "Custom click opens the matrix; actions={actions:?}"
@@ -2618,10 +2947,16 @@ pub(super) mod tests {
         // One button per Feature and per Band more than the closed drawer.
         let mut tree2 = UITree::new();
         panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 400.0));
-        let open_count = panel.row_host.audio_configs[0].as_ref().unwrap().0.button_count();
+        let open_count = panel.row_host.audio_configs[0]
+            .as_ref()
+            .unwrap()
+            .0
+            .button_count();
         assert_eq!(
             open_count,
-            closed_count + crate::types::AudioFeatureKind::ALL.len() + crate::types::AudioBand::ALL.len(),
+            closed_count
+                + crate::types::AudioFeatureKind::ALL.len()
+                + crate::types::AudioBand::ALL.len(),
             "open matrix adds one button per Feature and per Band"
         );
     }
@@ -2674,7 +3009,10 @@ pub(super) mod tests {
         let mut collapsed_cfg = effect_config();
         collapsed_cfg.collapsed = true;
         panel.configure(&collapsed_cfg); // Perform context, already configured once → eases
-        assert!(panel.collapse_anim.is_animating(), "collapse retargets, doesn't snap");
+        assert!(
+            panel.collapse_anim.is_animating(),
+            "collapse retargets, doesn't snap"
+        );
         assert_eq!(
             panel.compute_height(),
             expanded_h,
@@ -2684,7 +3022,10 @@ pub(super) mod tests {
 
         panel.tick_drawers(color::MOTION_MED_MS * 0.5);
         let mid_h = panel.compute_height();
-        assert!(mid_h < expanded_h, "mid-flight height has started shrinking: {mid_h} vs {expanded_h}");
+        assert!(
+            mid_h < expanded_h,
+            "mid-flight height has started shrinking: {mid_h} vs {expanded_h}"
+        );
 
         let mut tree = UITree::new();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
@@ -2692,14 +3033,20 @@ pub(super) mod tests {
             .all_nodes()
             .filter(|n| n.node_type == UINodeType::ClipRegion)
             .count();
-        assert!(clips_midflight >= 1, "an animating card collapse builds its body under a clip region");
+        assert!(
+            clips_midflight >= 1,
+            "an animating card collapse builds its body under a clip region"
+        );
 
         for _ in 0..20 {
             panel.tick_drawers(20.0);
         }
         assert!(!panel.collapse_anim.is_animating(), "tween settles");
         let collapsed_h = panel.compute_height();
-        assert!(collapsed_h < mid_h, "settled fully collapsed is smaller still: {collapsed_h} vs {mid_h}");
+        assert!(
+            collapsed_h < mid_h,
+            "settled fully collapsed is smaller still: {collapsed_h} vs {mid_h}"
+        );
 
         let mut tree2 = UITree::new();
         panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 300.0));
@@ -2707,7 +3054,10 @@ pub(super) mod tests {
             .all_nodes()
             .filter(|n| n.node_type == UINodeType::ClipRegion)
             .count();
-        assert_eq!(clips_settled, 0, "settled collapsed card has no leftover clip region");
+        assert_eq!(
+            clips_settled, 0,
+            "settled collapsed card has no leftover clip region"
+        );
     }
 
     #[test]
@@ -2751,7 +3101,12 @@ pub(super) mod tests {
         let mut tree = UITree::new();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
         let chevron_id = panel.chevron_node_id().expect("chevron built");
-        let transform = tree.get_node(chevron_id).unwrap().style.transform.expect("chevron carries a transform");
+        let transform = tree
+            .get_node(chevron_id)
+            .unwrap()
+            .style
+            .transform
+            .expect("chevron carries a transform");
         // `Affine2::rotate` populates `b = sin(theta)`; recover theta and
         // compare against the panel's own mid-flight angle.
         assert!(
@@ -2799,7 +3154,10 @@ pub(super) mod tests {
         // Advance partway (well under MOTION_MED): reserved height sits strictly
         // between closed and fully open — the reflow tracks the tween.
         panel.tick_drawers(40.0);
-        assert!(panel.drawer_height_anim[0].is_animating(), "still mid-flight after 40ms");
+        assert!(
+            panel.drawer_height_anim[0].is_animating(),
+            "still mid-flight after 40ms"
+        );
         let mid_h = panel.compute_height();
         assert!(
             mid_h > closed_h && mid_h < closed_h + full_target,
@@ -2813,7 +3171,10 @@ pub(super) mod tests {
             .all_nodes()
             .filter(|n| n.node_type == UINodeType::ClipRegion)
             .count();
-        assert!(clips_midflight >= 1, "an animating drawer builds under a clip region");
+        assert!(
+            clips_midflight >= 1,
+            "an animating drawer builds under a clip region"
+        );
 
         // Run the tween to completion: settled at full height, the drawer
         // clip kept at full height for the next tween to move in place.
@@ -2832,7 +3193,10 @@ pub(super) mod tests {
             (tree2.get_bounds(clip).height - full_target).abs() < 0.1,
             "the settled clip shows the whole drawer"
         );
-        assert!(panel.row_host.driver_config_ids[0].is_some(), "driver config built (unclipped) when settled");
+        assert!(
+            panel.row_host.driver_config_ids[0].is_some(),
+            "driver config built (unclipped) when settled"
+        );
     }
 
     // BUG-076 instrumentation: a card configured for the FIRST time (no prior
@@ -2856,7 +3220,10 @@ pub(super) mod tests {
             "a cold-armed drawer must be snapped, not eased, on first configure"
         );
         let full_target = panel.row_drawer_height(0);
-        assert!(full_target > 0.0, "sanity: driver-armed row must reserve nonzero drawer height");
+        assert!(
+            full_target > 0.0,
+            "sanity: driver-armed row must reserve nonzero drawer height"
+        );
 
         // The regression this guards: before the fix, `compute_height()`
         // read `drawer_height_anim[0].value()` (0, since the tween hadn't
@@ -2912,7 +3279,10 @@ pub(super) mod tests {
             "the hidden config is not built (no stacking)"
         );
         // Track overlays still show for every armed mod regardless of the tab.
-        assert!(panel.row_host.trim_ids[0].is_some(), "driver trim stays on the track");
+        assert!(
+            panel.row_host.trim_ids[0].is_some(),
+            "driver trim stays on the track"
+        );
         assert!(
             panel.row_host.target_ids[0].is_some(),
             "envelope target stays on the track"
@@ -2957,7 +3327,10 @@ pub(super) mod tests {
             .copied()
             .expect("envelope tab present");
         let actions = panel.handle_click(env_tab_id, &tree);
-        assert!(matches!(actions.as_slice(), [PanelAction::Params(ParamsAction::ModConfigTabChanged)]));
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::Params(ParamsAction::ModConfigTabChanged)]
+        ));
         assert_eq!(panel.mod_active_tab[0], ModTab::Envelope);
     }
 
@@ -3005,7 +3378,10 @@ pub(super) mod tests {
         for _ in 0..20 {
             panel.tick_drawers(20.0);
         }
-        assert!((panel.mod_tab_ink[0].value() - env_x).abs() < 0.01, "settles at the new tab");
+        assert!(
+            (panel.mod_tab_ink[0].value() - env_x).abs() < 0.01,
+            "settles at the new tab"
+        );
     }
 
     #[test]
@@ -3024,15 +3400,39 @@ pub(super) mod tests {
             .button_ids()
             .iter()
             .copied()
-            .find(|&id| matches!(ids.resolve_action(id), Some(PanelAction::Modulation(ModulationAction::DriverConfig(_, _, crate::panels::DriverConfigAction::ToggleFrameAligned)))))
+            .find(|&id| {
+                matches!(
+                    ids.resolve_action(id),
+                    Some(PanelAction::Modulation(ModulationAction::DriverConfig(
+                        _,
+                        _,
+                        crate::panels::DriverConfigAction::ToggleFrameAligned
+                    )))
+                )
+            })
             .expect("frame-align button is selected by its bound action");
-        assert!(matches!(ids.resolve_action(frame_button), Some(PanelAction::Modulation(ModulationAction::DriverConfig(_, _, crate::panels::DriverConfigAction::ToggleFrameAligned)))));
+        assert!(matches!(
+            ids.resolve_action(frame_button),
+            Some(PanelAction::Modulation(ModulationAction::DriverConfig(
+                _,
+                _,
+                crate::panels::DriverConfigAction::ToggleFrameAligned
+            )))
+        ));
         assert_eq!(panel.state.mod_state.driver_frame_rate[0], Some((2, 12.0)));
         let button = frame_button;
         let actions = panel.handle_click(button, &tree);
-        assert!(actions.iter().any(|action| matches!(action,
-            PanelAction::Modulation(ModulationAction::DriverConfig(_, _, crate::panels::DriverConfigAction::ToggleFrameAligned))
-        )), "button must route through the row index, not select the card");
+        assert!(
+            actions.iter().any(|action| matches!(
+                action,
+                PanelAction::Modulation(ModulationAction::DriverConfig(
+                    _,
+                    _,
+                    crate::panels::DriverConfigAction::ToggleFrameAligned
+                ))
+            )),
+            "button must route through the row index, not select the card"
+        );
     }
 
     #[test]
@@ -3118,7 +3518,8 @@ pub(super) mod tests {
             panel.configure(cfg);
             panel.set_collapsed(false);
             panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
-            panel.row_host
+            panel
+                .row_host
                 .slider_ids
                 .iter()
                 .flatten()
@@ -3185,7 +3586,12 @@ pub(super) mod tests {
                         scene: None,
                         limit: Default::default(),
                     },
-                    value: RowValue { base: 1.0, effective: 1.0, exposed: true, driven: false },
+                    value: RowValue {
+                        base: 1.0,
+                        effective: 1.0,
+                        exposed: true,
+                        driven: false,
+                    },
                     audio: AudioRowState::default(),
                     clip_trigger: None,
                     modulation: RowMod::default(),
@@ -3195,9 +3601,9 @@ pub(super) mod tests {
                         ableton_range: None,
                         mappable: false,
                     },
-                rgb_members: None,
-                modulator_stored: false,
-                affordance: None,
+                    rgb_members: None,
+                    modulator_stored: false,
+                    affordance: None,
                 },
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("invert"),
@@ -3222,7 +3628,12 @@ pub(super) mod tests {
                         scene: None,
                         limit: Default::default(),
                     },
-                    value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
+                    value: RowValue {
+                        base: 0.0,
+                        effective: 0.0,
+                        exposed: true,
+                        driven: false,
+                    },
                     audio: AudioRowState::default(),
                     clip_trigger: None,
                     modulation: RowMod::default(),
@@ -3232,9 +3643,9 @@ pub(super) mod tests {
                         ableton_range: None,
                         mappable: false,
                     },
-                rgb_members: None,
-                modulator_stored: false,
-                affordance: None,
+                    rgb_members: None,
+                    modulator_stored: false,
+                    affordance: None,
                 },
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("scale"),
@@ -3259,7 +3670,12 @@ pub(super) mod tests {
                         scene: None,
                         limit: Default::default(),
                     },
-                    value: RowValue { base: 1.0, effective: 1.0, exposed: true, driven: false },
+                    value: RowValue {
+                        base: 1.0,
+                        effective: 1.0,
+                        exposed: true,
+                        driven: false,
+                    },
                     audio: AudioRowState::default(),
                     clip_trigger: None,
                     modulation: RowMod::default(),
@@ -3269,9 +3685,9 @@ pub(super) mod tests {
                         ableton_range: None,
                         mappable: false,
                     },
-                rgb_members: None,
-                modulator_stored: false,
-                affordance: None,
+                    rgb_members: None,
+                    modulator_stored: false,
+                    affordance: None,
                 },
             ],
             string_params: vec![],
@@ -3307,12 +3723,18 @@ pub(super) mod tests {
         // Clicking the Change button opens the type picker
         let actions = panel.handle_click(panel.change_btn_id.unwrap(), &tree);
         assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], PanelAction::Params(ParamsAction::GenTypeClicked(_))));
+        assert!(matches!(
+            actions[0],
+            PanelAction::Params(ParamsAction::GenTypeClicked(_))
+        ));
 
         // Clicking the name label selects the card
         let actions = panel.handle_click(panel.name_label_id.unwrap(), &tree);
         assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], PanelAction::Params(ParamsAction::GenCardClicked)));
+        assert!(matches!(
+            actions[0],
+            PanelAction::Params(ParamsAction::GenCardClicked)
+        ));
     }
 
     /// D5 card sections (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2): Speed +
@@ -3344,7 +3766,11 @@ pub(super) mod tests {
         panel.configure(&gen_config_with_sections());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        assert_eq!(panel.row_host.section_header_ids.len(), 1, "exactly one header — the Leaf run");
+        assert_eq!(
+            panel.row_host.section_header_ids.len(),
+            1,
+            "exactly one header — the Leaf run"
+        );
         assert_eq!(panel.row_host.section_header_ids[0].1, "Leaf");
         // Every row still builds (unfolded by default) — Speed/Invert/Scale
         // widgets all present, same as the no-sections case.
@@ -3363,7 +3789,10 @@ pub(super) mod tests {
         let header_id = panel.row_host.section_header_ids[0].0;
         let actions = panel.handle_click(header_id, &tree);
         assert!(
-            matches!(actions.as_slice(), [PanelAction::Params(ParamsAction::SectionFoldToggled)]),
+            matches!(
+                actions.as_slice(),
+                [PanelAction::Params(ParamsAction::SectionFoldToggled)]
+            ),
             "fold click is UI-local — no model-mutating action"
         );
         assert_eq!(
@@ -3380,18 +3809,37 @@ pub(super) mod tests {
         // convention `mod_active_tab`/`drawer_height_anim` already use.
         let mut tree2 = UITree::new();
         panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 300.0));
-        assert_eq!(panel.row_host.section_header_ids.len(), 1, "the header itself still draws while folded");
-        assert!(panel.row_host.slider_ids[0].is_none(), "Speed's row was skipped (folded)");
-        assert!(panel.row_host.toggle_ids[1].is_none(), "Invert's row was skipped (folded)");
-        assert!(panel.row_host.slider_ids[2].is_some(), "Scale (outside the folded run) still builds");
+        assert_eq!(
+            panel.row_host.section_header_ids.len(),
+            1,
+            "the header itself still draws while folded"
+        );
+        assert!(
+            panel.row_host.slider_ids[0].is_none(),
+            "Speed's row was skipped (folded)"
+        );
+        assert!(
+            panel.row_host.toggle_ids[1].is_none(),
+            "Invert's row was skipped (folded)"
+        );
+        assert!(
+            panel.row_host.slider_ids[2].is_some(),
+            "Scale (outside the folded run) still builds"
+        );
 
         // Click again — unfolds.
         let actions = panel.handle_click(header_id, &tree);
-        assert!(matches!(actions.as_slice(), [PanelAction::Params(ParamsAction::SectionFoldToggled)]));
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::Params(ParamsAction::SectionFoldToggled)]
+        ));
         assert_eq!(panel.section_folded.get("Leaf"), Some(&false));
         let mut tree3 = UITree::new();
         panel.build(&mut tree3, Rect::new(0.0, 0.0, 280.0, 300.0));
-        assert!(panel.row_host.slider_ids[0].is_some(), "Speed's row is back once unfolded");
+        assert!(
+            panel.row_host.slider_ids[0].is_some(),
+            "Speed's row is back once unfolded"
+        );
     }
 
     #[test]
@@ -3455,7 +3903,10 @@ pub(super) mod tests {
         let base_h = panel.compute_height();
         panel.state.mod_state.driver_expanded[0] = true;
         let expanded_h = panel.compute_height();
-        assert!(expanded_h > base_h, "armed driver should add the drawer height");
+        assert!(
+            expanded_h > base_h,
+            "armed driver should add the drawer height"
+        );
 
         panel.set_compact(true);
         let compact_h = panel.compute_height();
@@ -3511,7 +3962,10 @@ pub(super) mod tests {
         let actions = panel.handle_click(btn, &tree);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            PanelAction::Modulation(ModulationAction::EnvelopeToggle(GraphParamTarget::Effect(ei), param_id)) => {
+            PanelAction::Modulation(ModulationAction::EnvelopeToggle(
+                GraphParamTarget::Effect(ei),
+                param_id,
+            )) => {
                 assert_eq!(ei.as_str(), "test-effect-0");
                 assert_eq!(param_id.as_ref(), "radius");
             }
@@ -3532,7 +3986,10 @@ pub(super) mod tests {
 
         let catcher = panel.row_host.row_catcher_ids[0].expect("row 0 built a catcher");
         let actions = panel.handle_click(catcher, &tree);
-        assert!(actions.is_empty(), "left click on the row catcher must be a no-op, got {actions:?}");
+        assert!(
+            actions.is_empty(),
+            "left click on the row catcher must be a no-op, got {actions:?}"
+        );
     }
 
     #[test]
@@ -3542,7 +3999,11 @@ pub(super) mod tests {
         panel.configure(&effect_config_with_osc_and_enum());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
-        let label = panel.row_host.slider_ids[0].as_ref().unwrap().label.expect("row 0 has a label");
+        let label = panel.row_host.slider_ids[0]
+            .as_ref()
+            .unwrap()
+            .label
+            .expect("row 0 has a label");
         let actions = panel.handle_click(label, &tree);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
@@ -3561,9 +4022,16 @@ pub(super) mod tests {
         panel.configure(&effect_config_with_osc_and_enum());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
-        let label = panel.row_host.slider_ids[1].as_ref().unwrap().label.expect("row 1 has a label");
+        let label = panel.row_host.slider_ids[1]
+            .as_ref()
+            .unwrap()
+            .label
+            .expect("row 1 has a label");
         let actions = panel.handle_click(label, &tree);
-        assert!(actions.is_empty(), "no OSC address on this row → no-op, got {actions:?}");
+        assert!(
+            actions.is_empty(),
+            "no OSC address on this row → no-op, got {actions:?}"
+        );
     }
 
     #[test]
@@ -3578,7 +4046,10 @@ pub(super) mod tests {
 
         let value_cell = panel.row_host.slider_ids[1].as_ref().unwrap().value_text;
         let actions = panel.handle_click(value_cell, &tree);
-        assert!(!actions.is_empty(), "an enum row's value-cell click must resolve to an action");
+        assert!(
+            !actions.is_empty(),
+            "an enum row's value-cell click must resolve to an action"
+        );
     }
 
     #[test]
@@ -3593,14 +4064,16 @@ pub(super) mod tests {
         panel.configure(&effect_config());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
         let row1_driver_btn_before = tree.widget_of(panel.row_host.driver_btn_ids[1].unwrap());
-        let row1_slider_track_before = tree.widget_of(panel.row_host.slider_ids[1].as_ref().unwrap().track);
+        let row1_slider_track_before =
+            tree.widget_of(panel.row_host.slider_ids[1].as_ref().unwrap().track);
 
         tree.clear();
         panel.state.mod_state.driver_expanded[0] = true;
         panel.mod_active_tab[0] = ModTab::Driver;
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
         let row1_driver_btn_after = tree.widget_of(panel.row_host.driver_btn_ids[1].unwrap());
-        let row1_slider_track_after = tree.widget_of(panel.row_host.slider_ids[1].as_ref().unwrap().track);
+        let row1_slider_track_after =
+            tree.widget_of(panel.row_host.slider_ids[1].as_ref().unwrap().track);
 
         assert_eq!(
             row1_driver_btn_before, row1_driver_btn_after,
@@ -3729,16 +4202,41 @@ pub(super) mod tests {
             target: |v| matches!(v, ValueRef::Param(..)),
             default: 10.0,
         });
-        let dids = &panel.row_host.audio_configs[0].as_ref().expect("audio drawer built").0;
+        let dids = &panel.row_host.audio_configs[0]
+            .as_ref()
+            .expect("audio drawer built")
+            .0;
         assert_eq!(dids.sliders.len(), 3, "Amount/Attack/Release");
         type Shape = (&'static str, fn(&ValueRef) -> bool, f32);
         let shape: [Shape; 3] = [
-            ("audio amount", |v| matches!(v, ValueRef::AudioModShape(_, _, AudioShapeParam::Sensitivity)), AUDIO_SENS_DEFAULT),
-            ("audio attack", |v| matches!(v, ValueRef::AudioModShape(_, _, AudioShapeParam::Attack)), AUDIO_ATTACK_DEFAULT_MS),
-            ("audio release", |v| matches!(v, ValueRef::AudioModShape(_, _, AudioShapeParam::Release)), AUDIO_RELEASE_DEFAULT_MS),
+            (
+                "audio amount",
+                |v| {
+                    matches!(
+                        v,
+                        ValueRef::AudioModShape(_, _, AudioShapeParam::Sensitivity)
+                    )
+                },
+                AUDIO_SENS_DEFAULT,
+            ),
+            (
+                "audio attack",
+                |v| matches!(v, ValueRef::AudioModShape(_, _, AudioShapeParam::Attack)),
+                AUDIO_ATTACK_DEFAULT_MS,
+            ),
+            (
+                "audio release",
+                |v| matches!(v, ValueRef::AudioModShape(_, _, AudioShapeParam::Release)),
+                AUDIO_RELEASE_DEFAULT_MS,
+            ),
         ];
         for (slider, (label, target, default)) in dids.sliders.iter().zip(shape) {
-            cases.push(ResetCase { label: label.into(), got: resolve(slider.track), target, default });
+            cases.push(ResetCase {
+                label: label.into(),
+                got: resolve(slider.track),
+                target,
+                default,
+            });
         }
 
         let mut tree = UITree::new();
@@ -3746,16 +4244,35 @@ pub(super) mod tests {
         panel.configure(&effect_config_with_trigger_gate());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
         let gi = panel.rows.len() - 1;
-        assert!(panel.row_host.slider_ids[gi].is_none(), "trigger-gate row has no main slider");
+        assert!(
+            panel.row_host.slider_ids[gi].is_none(),
+            "trigger-gate row has no main slider"
+        );
         let mut reg = crate::intent::IntentRegistry::new();
         panel.register_intents(&mut reg);
-        let dids = &panel.row_host.audio_configs[gi].as_ref().expect("audio drawer armed in fixture").0;
+        let dids = &panel.row_host.audio_configs[gi]
+            .as_ref()
+            .expect("audio drawer armed in fixture")
+            .0;
         // A trigger-gate target fires on the raw edge, so only Sensitivity is built.
-        assert_eq!(dids.sliders.len(), 1, "Sensitivity only on a trigger-gate row");
+        assert_eq!(
+            dids.sliders.len(),
+            1,
+            "Sensitivity only on a trigger-gate row"
+        );
         cases.push(ResetCase {
             label: "trigger-gate amount".into(),
-            got: reg.resolve(&tree, Some(dids.sliders[0].track), crate::intent::Gesture::RightClick),
-            target: |v| matches!(v, ValueRef::AudioModShape(_, _, AudioShapeParam::Sensitivity)),
+            got: reg.resolve(
+                &tree,
+                Some(dids.sliders[0].track),
+                crate::intent::Gesture::RightClick,
+            ),
+            target: |v| {
+                matches!(
+                    v,
+                    ValueRef::AudioModShape(_, _, AudioShapeParam::Sensitivity)
+                )
+            },
             default: AUDIO_SENS_DEFAULT,
         });
         cases
@@ -3806,7 +4323,10 @@ pub(super) mod tests {
                 prepare: |_| {},
                 press: |p, t| {
                     let r = main_track(p, t);
-                    (p.row_host.slider_ids[0].as_ref().unwrap().track, Vec2::new(r.x + r.width * 0.5, r.y))
+                    (
+                        p.row_host.slider_ids[0].as_ref().unwrap().track,
+                        Vec2::new(r.x + r.width * 0.5, r.y),
+                    )
                 },
                 drag_to: |p, t| {
                     let r = main_track(p, t);
@@ -3820,7 +4340,15 @@ pub(super) mod tests {
                 name: "driver trim",
                 config: effect_config,
                 prepare: |p| p.state.mod_state.driver_expanded[0] = true,
-                press: |p, _| (p.row_host.trim_ids[0].as_ref().expect("driver trim built").min_bar_id, Vec2::new(0.0, 0.0)),
+                press: |p, _| {
+                    (
+                        p.row_host.trim_ids[0]
+                            .as_ref()
+                            .expect("driver trim built")
+                            .min_bar_id,
+                        Vec2::new(0.0, 0.0),
+                    )
+                },
                 drag_to: |p, t| {
                     let r = main_track(p, t);
                     Vec2::new(r.x + r.width * 0.4, r.y)
@@ -3833,7 +4361,15 @@ pub(super) mod tests {
                 name: "envelope target",
                 config: effect_config,
                 prepare: |p| p.state.mod_state.envelope_expanded[0] = true,
-                press: |p, _| (p.row_host.target_ids[0].as_ref().expect("envelope target built").target_bar_id, Vec2::new(0.0, 0.0)),
+                press: |p, _| {
+                    (
+                        p.row_host.target_ids[0]
+                            .as_ref()
+                            .expect("envelope target built")
+                            .target_bar_id,
+                        Vec2::new(0.0, 0.0),
+                    )
+                },
                 drag_to: |p, t| {
                     let r = main_track(p, t);
                     Vec2::new(r.x + r.width * 0.3, r.y)
@@ -3847,7 +4383,9 @@ pub(super) mod tests {
                 config: effect_config,
                 prepare: |p| p.state.mod_state.envelope_expanded[0] = true,
                 press: |p, t| {
-                    let cfg = p.row_host.envelope_config_ids[0].as_ref().expect("envelope config built");
+                    let cfg = p.row_host.envelope_config_ids[0]
+                        .as_ref()
+                        .expect("envelope config built");
                     let track = cfg.decay_slider.expect("decay slider in Continuous").track;
                     let r = t.get_bounds(track);
                     (track, Vec2::new(r.x, r.y))
@@ -3866,12 +4404,19 @@ pub(super) mod tests {
                 config: effect_config_with_audio_shape_armed,
                 prepare: |_| {},
                 press: |p, t| {
-                    let track = p.row_host.audio_configs[0].as_ref().expect("audio drawer built").0.sliders[0].track;
+                    let track = p.row_host.audio_configs[0]
+                        .as_ref()
+                        .expect("audio drawer built")
+                        .0
+                        .sliders[0]
+                        .track;
                     let r = t.get_bounds(track);
                     (track, Vec2::new(r.x, r.y))
                 },
                 drag_to: |p, t| {
-                    let r = t.get_bounds(p.row_host.audio_configs[0].as_ref().unwrap().0.sliders[0].track);
+                    let r = t.get_bounds(
+                        p.row_host.audio_configs[0].as_ref().unwrap().0.sliders[0].track,
+                    );
                     Vec2::new(r.x + r.width * 0.7, r.y)
                 },
                 value: |v| matches!(v, ValueRef::AudioModShape(GraphParamTarget::Effect(fx), pid, AudioShapeParam::Sensitivity) if fx == "test-effect-0" && radius(pid)),
@@ -3887,13 +4432,22 @@ pub(super) mod tests {
                 },
                 prepare: |_| {},
                 press: |p, t| {
-                    let sliders = &p.row_host.audio_configs[0].as_ref().expect("audio drawer built").0.sliders;
-                    let track = sliders.get(3).expect("Step slider built while Action=Step").track;
+                    let sliders = &p.row_host.audio_configs[0]
+                        .as_ref()
+                        .expect("audio drawer built")
+                        .0
+                        .sliders;
+                    let track = sliders
+                        .get(3)
+                        .expect("Step slider built while Action=Step")
+                        .track;
                     let r = t.get_bounds(track);
                     (track, Vec2::new(r.x, r.y))
                 },
                 drag_to: |p, t| {
-                    let r = t.get_bounds(p.row_host.audio_configs[0].as_ref().unwrap().0.sliders[3].track);
+                    let r = t.get_bounds(
+                        p.row_host.audio_configs[0].as_ref().unwrap().0.sliders[3].track,
+                    );
                     Vec2::new(r.x + r.width * 0.8, r.y)
                 },
                 value: |v| matches!(v, ValueRef::AudioModStepAmount(GraphParamTarget::Effect(fx), pid) if fx == "test-effect-0" && radius(pid)),
@@ -3913,9 +4467,10 @@ pub(super) mod tests {
             let down = panel.handle_pointer_down(node, at, &tree);
             let begin_ok = match down.as_slice() {
                 [PanelAction::Scrub(v, ScrubPhase::Begin)] => !case.begin_moves && (case.value)(v),
-                [PanelAction::Scrub(v, ScrubPhase::Begin), PanelAction::Scrub(w, ScrubPhase::Move(..))] => {
-                    case.begin_moves && (case.value)(v) && (case.value)(w)
-                }
+                [
+                    PanelAction::Scrub(v, ScrubPhase::Begin),
+                    PanelAction::Scrub(w, ScrubPhase::Move(..)),
+                ] => case.begin_moves && (case.value)(v) && (case.value)(w),
                 _ => false,
             };
             assert!(begin_ok, "{name}: press emitted {down:?}");
@@ -3939,7 +4494,10 @@ pub(super) mod tests {
                 matches!(ended.as_slice(), [PanelAction::Scrub(v, ScrubPhase::Commit)] if (case.value)(v)),
                 "{name}: release emitted {ended:?}"
             );
-            assert!(!panel.is_dragging(), "{name}: drag slot cleared after release");
+            assert!(
+                !panel.is_dragging(),
+                "{name}: drag slot cleared after release"
+            );
         }
     }
 }

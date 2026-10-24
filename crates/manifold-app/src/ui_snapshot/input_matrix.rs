@@ -16,7 +16,7 @@ use manifold_core::effects::ParamId;
 use manifold_core::{Beats, LayerId};
 
 use super::fixtures::{self, SceneData};
-use super::{sync_build, LOGICAL_H, LOGICAL_W};
+use super::{LOGICAL_H, LOGICAL_W, sync_build};
 use crate::frame_plan::{FrameInputs, FramePlanner, Projection};
 use crate::gesture_preview::UiEdits;
 use crate::ui_bridge::TransportDisplayCache;
@@ -44,8 +44,14 @@ const REBUILD: [Projection; 5] = [
 ];
 /// `LiveShapes` stands for the live push's Shapes group, which the planner
 /// runs on the Shapes or the MappingRanges stamp.
-const PUSHES: [Projection; 6] =
-    [Projection::SelectionPush, Projection::ChromePush, Projection::ClockPush, Projection::LiveValues, Projection::LiveShapes, Projection::SceneEyes];
+const PUSHES: [Projection; 6] = [
+    Projection::SelectionPush,
+    Projection::ChromePush,
+    Projection::ClockPush,
+    Projection::LiveValues,
+    Projection::LiveShapes,
+    Projection::SceneEyes,
+];
 
 fn planned(plan: &crate::frame_plan::FramePlan, p: Projection) -> bool {
     plan.projections.contains(p)
@@ -91,40 +97,66 @@ fn fresh_ui(data: &SceneData, shown: Shown) -> UIRoot {
 }
 
 fn active_id(data: &SceneData) -> Option<LayerId> {
-    data.active.and_then(|i| data.project.timeline.layers.get(i)).map(|l| l.layer_id.clone())
+    data.active
+        .and_then(|i| data.project.timeline.layers.get(i))
+        .map(|l| l.layer_id.clone())
 }
 
 fn fingerprint(ui: &UIRoot) -> String {
     let tree = super::dump::dump_tree_ex(&ui.tree, &[]);
     let mut clips = Vec::new();
     ui.viewport.visible_clip_rects(&mut clips);
-    format!("{tree}\n{clips:?}\n{:?}", ui.viewport.automation_lane_screens())
+    format!(
+        "{tree}\n{clips:?}\n{:?}",
+        ui.viewport.automation_lane_screens()
+    )
 }
 
 fn push(ui: &mut UIRoot, data: &SceneData, which: Projection) {
     use crate::ui_bridge::LiveGroups;
     let mut cache = TransportDisplayCache::new();
     match which {
-        Projection::SelectionPush => crate::ui_bridge::push_selection(ui, &data.project, data.active, &data.selection),
+        Projection::SelectionPush => {
+            crate::ui_bridge::push_selection(ui, &data.project, data.active, &data.selection)
+        }
         // As `apply_frame_plan` runs it: the push, then the bars lay out.
         Projection::ChromePush => {
-            crate::ui_bridge::push_chrome(ui, &data.project, &data.content, &data.selection, false, None, &mut cache);
-            assert!(ui.lay_out_chrome().is_empty(), "a chrome push changed a bar's structure");
+            crate::ui_bridge::push_chrome(
+                ui,
+                &data.project,
+                &data.content,
+                &data.selection,
+                false,
+                None,
+                &mut cache,
+            );
+            assert!(
+                ui.lay_out_chrome().is_empty(),
+                "a chrome push changed a bar's structure"
+            );
         }
-        Projection::ClockPush => crate::ui_bridge::push_clock(ui, &data.project, &data.content, &mut cache),
+        Projection::ClockPush => {
+            crate::ui_bridge::push_clock(ui, &data.project, &data.content, &mut cache)
+        }
         Projection::LiveValues => crate::ui_bridge::push_live(
             ui,
             &data.project,
             &data.content,
             data.active,
-            LiveGroups { values: true, shapes: false },
+            LiveGroups {
+                values: true,
+                shapes: false,
+            },
         ),
         Projection::LiveShapes => crate::ui_bridge::push_live(
             ui,
             &data.project,
             &data.content,
             data.active,
-            LiveGroups { values: false, shapes: true },
+            LiveGroups {
+                values: false,
+                shapes: true,
+            },
         ),
         Projection::SceneEyes => crate::ui_bridge::sync_scene_row_values(ui, &data.project),
         other => unreachable!("{other:?} is not a push"),
@@ -186,11 +218,13 @@ fn push_output(base: &SceneData, data: &SceneData, which: Projection, shown: Sho
     fingerprint(&ui)
 }
 
-
 fn mirror_param(data: &SceneData) -> (manifold_core::EffectId, ParamId) {
     let flowers = &data.project.timeline.layers[1];
     let mirror = &flowers.effects.as_ref().expect("flowers carries Mirror")[0];
-    let lane = &mirror.automation_lanes.as_ref().expect("Mirror is automated")[0];
+    let lane = &mirror
+        .automation_lanes
+        .as_ref()
+        .expect("Mirror is automated")[0];
     (mirror.id.clone(), lane.param_id.clone())
 }
 
@@ -223,12 +257,14 @@ fn perturbations() -> Vec<Perturbation> {
             name: "clip added",
             parts: ChangeSet::of(&[Part::Clips]),
             apply: |d| {
-                d.project.timeline.layers[0].clips.push(manifold_core::clip::TimelineClip::new_video(
-                    "EXTRA".into(),
-                    Beats(48.0),
-                    Beats(4.0),
-                    manifold_core::Seconds::ZERO,
-                ));
+                d.project.timeline.layers[0].clips.push(
+                    manifold_core::clip::TimelineClip::new_video(
+                        "EXTRA".into(),
+                        Beats(48.0),
+                        Beats(4.0),
+                        manifold_core::Seconds::ZERO,
+                    ),
+                );
             },
         },
         Perturbation {
@@ -246,9 +282,17 @@ fn perturbations() -> Vec<Perturbation> {
             parts: ChangeSet::of(&[Part::Automation]),
             apply: |d| {
                 let mirror = &mut d.project.timeline.layers[1].effects.as_mut().unwrap()[0];
-                let automated: Vec<String> =
-                    mirror.automation_lanes.iter().flatten().map(|l| l.param_id.as_ref().to_string()).collect();
-                let pid = mirror.params.iter().map(|p| p.spec.id.to_string()).find(|id| !automated.contains(id));
+                let automated: Vec<String> = mirror
+                    .automation_lanes
+                    .iter()
+                    .flatten()
+                    .map(|l| l.param_id.as_ref().to_string())
+                    .collect();
+                let pid = mirror
+                    .params
+                    .iter()
+                    .map(|p| p.spec.id.to_string())
+                    .find(|id| !automated.contains(id));
                 let lanes = mirror.automation_lanes.get_or_insert_with(Vec::new);
                 if let Some(pid) = pid {
                     lanes.push(manifold_core::effects::AutomationLane {
@@ -275,9 +319,15 @@ fn perturbations() -> Vec<Perturbation> {
             name: "effect added",
             parts: ChangeSet::of(&[Part::Effects]),
             apply: |d| {
-                let mut fx = manifold_core::effects::PresetInstance::new(manifold_core::PresetTypeId::new("Mirror"));
+                let mut fx = manifold_core::effects::PresetInstance::new(
+                    manifold_core::PresetTypeId::new("Mirror"),
+                );
                 fx.init_defaults();
-                d.project.timeline.layers[1].effects.as_mut().unwrap().push(fx);
+                d.project.timeline.layers[1]
+                    .effects
+                    .as_mut()
+                    .unwrap()
+                    .push(fx);
             },
         },
         Perturbation {
@@ -297,7 +347,10 @@ fn perturbations() -> Vec<Perturbation> {
             name: "marker added",
             parts: ChangeSet::of(&[Part::Markers]),
             apply: |d| {
-                d.project.timeline.markers.push(manifold_core::marker::TimelineMarker::new(Beats(8.0)));
+                d.project
+                    .timeline
+                    .markers
+                    .push(manifold_core::marker::TimelineMarker::new(Beats(8.0)));
             },
         },
         Perturbation {
@@ -310,7 +363,8 @@ fn perturbations() -> Vec<Perturbation> {
             parts: ChangeSet::NONE,
             apply: |d| {
                 let clip = d.project.timeline.layers[0].clips[1].id.clone();
-                d.selection.select_clip(clip, d.project.timeline.layers[0].layer_id.clone());
+                d.selection
+                    .select_clip(clip, d.project.timeline.layers[0].layer_id.clone());
             },
         },
         Perturbation {
@@ -354,12 +408,13 @@ fn perturbations() -> Vec<Perturbation> {
             parts: ChangeSet::NONE,
             apply: |d| {
                 let (fx, pid) = mirror_param(d);
-                d.selection.selected_automation_point = Some(manifold_ui::view::UiAutomationPointRef {
-                    target: manifold_ui::view::UiGraphTarget::Effect(fx),
-                    param_id: pid,
-                    beat: Beats(16.0),
-                    value_norm: 0.9,
-                });
+                d.selection.selected_automation_point =
+                    Some(manifold_ui::view::UiAutomationPointRef {
+                        target: manifold_ui::view::UiGraphTarget::Effect(fx),
+                        param_id: pid,
+                        beat: Beats(16.0),
+                        value_norm: 0.9,
+                    });
                 d.selection.note_automation_selection_change();
             },
         },
@@ -374,12 +429,25 @@ struct MatrixRun {
 }
 
 fn run_matrix(base: &SceneData, perturbations: Vec<Perturbation>, shown: Shown) -> MatrixRun {
-    let mut run = MatrixRun { observed: BTreeSet::new(), failures: Vec::new(), seen_rows: BTreeSet::new() };
+    let mut run = MatrixRun {
+        observed: BTreeSet::new(),
+        failures: Vec::new(),
+        seen_rows: BTreeSet::new(),
+    };
 
-    let base_rebuild: Vec<String> = REBUILD.iter().map(|&p| rebuild_output(base, base, p, shown)).collect();
-    let base_push: Vec<String> = PUSHES.iter().map(|&p| push_output(base, base, p, shown)).collect();
+    let base_rebuild: Vec<String> = REBUILD
+        .iter()
+        .map(|&p| rebuild_output(base, base, p, shown))
+        .collect();
+    let base_push: Vec<String> = PUSHES
+        .iter()
+        .map(|&p| push_output(base, base, p, shown))
+        .collect();
     // The harness is deterministic: the same state twice gives the same output.
-    assert_eq!(base_rebuild[0], rebuild_output(base, base, Projection::ProjectSync, shown));
+    assert_eq!(
+        base_rebuild[0],
+        rebuild_output(base, base, Projection::ProjectSync, shown)
+    );
 
     for perturbation in perturbations {
         let mut data = clone_data(base);
@@ -397,7 +465,12 @@ fn run_matrix(base: &SceneData, perturbations: Vec<Perturbation>, shown: Shown) 
             &active_id(base),
             &base_edits,
             &base.content,
-            crate::frame_plan::ChromeSource { project: &base.project, is_dirty: false, project_path: None, automation_draw_mode: base.selection.automation_draw_mode },
+            crate::frame_plan::ChromeSource {
+                project: &base.project,
+                is_dirty: false,
+                project_path: None,
+                automation_draw_mode: base.selection.automation_draw_mode,
+            },
         );
         base_edits.stamps.bump(perturbation.parts);
         let mut pert_sel = data.selection.clone();
@@ -408,28 +481,44 @@ fn run_matrix(base: &SceneData, perturbations: Vec<Perturbation>, shown: Shown) 
             &active_id(&data),
             &base_edits,
             &data.content,
-            crate::frame_plan::ChromeSource { project: &data.project, is_dirty: false, project_path: None, automation_draw_mode: data.selection.automation_draw_mode },
+            crate::frame_plan::ChromeSource {
+                project: &data.project,
+                is_dirty: false,
+                project_path: None,
+                automation_draw_mode: data.selection.automation_draw_mode,
+            },
         );
         let plan = crate::frame_plan::plan_frame(&last, &next);
 
         for (i, &p) in REBUILD.iter().enumerate() {
             if rebuild_output(base, &data, p, shown) != base_rebuild[i] {
-                run.observed.insert((Kind::Rebuild, format!("{p:?}"), perturbation.name));
+                run.observed
+                    .insert((Kind::Rebuild, format!("{p:?}"), perturbation.name));
                 run.seen_rows.insert(format!("{p:?}"));
                 if !planned(&plan, p) {
-                    run.failures.push(format!("rebuild: {} changes {p:?}, the plan does not run it", perturbation.name));
+                    run.failures.push(format!(
+                        "rebuild: {} changes {p:?}, the plan does not run it",
+                        perturbation.name
+                    ));
                 }
                 if perturbation.parts.intersects(ChangeSet::LIVE) {
-                    run.failures.push(format!("live scalar {} is a rebuild dependency of {p:?}", perturbation.name));
+                    run.failures.push(format!(
+                        "live scalar {} is a rebuild dependency of {p:?}",
+                        perturbation.name
+                    ));
                 }
             }
         }
         for (i, &p) in PUSHES.iter().enumerate() {
             if push_output(base, &data, p, shown) != base_push[i] {
-                run.observed.insert((Kind::InPlace, format!("{p:?}"), perturbation.name));
+                run.observed
+                    .insert((Kind::InPlace, format!("{p:?}"), perturbation.name));
                 run.seen_rows.insert(format!("{p:?}"));
                 if !planned(&plan, p) {
-                    run.failures.push(format!("in place: {} changes {p:?}, the plan does not run it", perturbation.name));
+                    run.failures.push(format!(
+                        "in place: {} changes {p:?}, the plan does not run it",
+                        perturbation.name
+                    ));
                 }
             }
         }
@@ -445,11 +534,13 @@ fn run_matrix(base: &SceneData, perturbations: Vec<Perturbation>, shown: Shown) 
 fn projection_input_matrix() {
     let run = run_matrix(&base(), perturbations(), Shown::Plain);
     assert!(
-        run.observed.contains(&(Kind::InPlace, "ChromePush".to_string(), "draw mode")),
+        run.observed
+            .contains(&(Kind::InPlace, "ChromePush".to_string(), "draw mode")),
         "the DRAW button repaints from the chrome push"
     );
     assert!(
-        run.observed.contains(&(Kind::InPlace, "ClockPush".to_string(), "playhead")),
+        run.observed
+            .contains(&(Kind::InPlace, "ClockPush".to_string(), "playhead")),
         "the header clock follows the playhead through the clock push"
     );
     for p in REBUILD.iter().chain(PUSHES.iter()) {
@@ -457,7 +548,11 @@ fn projection_input_matrix() {
             println!("row never observed: {p:?}");
         }
     }
-    assert!(run.failures.is_empty(), "dependencies missing from the plan:\n{}", run.failures.join("\n"));
+    assert!(
+        run.failures.is_empty(),
+        "dependencies missing from the plan:\n{}",
+        run.failures.join("\n")
+    );
 }
 
 // ── Live scalars (D22, P4d batch 0) ───────────────────────────────
@@ -474,23 +569,35 @@ fn live_base() -> SceneData {
     data.active = Some(1);
     let send = data.project.audio_setup.sends[0].id.clone();
     let bloom_layer = &mut data.project.timeline.layers[1];
-    let mut grade = PresetInstance::new(manifold_core::PresetTypeId::from_string("ColorGrade".to_string()));
+    let mut grade = PresetInstance::new(manifold_core::PresetTypeId::from_string(
+        "ColorGrade".to_string(),
+    ));
     grade.init_defaults();
     let ids: Vec<String> = grade.params.iter().map(|p| p.id().to_string()).collect();
     assert!(ids.len() >= 3, "Color Grade has three rows to arm");
-    grade.drivers = Some(vec![ParameterDriver::new(ids[0].clone(), BeatDivision::Quarter, DriverWaveform::Sine)]);
+    grade.drivers = Some(vec![ParameterDriver::new(
+        ids[0].clone(),
+        BeatDivision::Quarter,
+        DriverWaveform::Sine,
+    )]);
     grade.envelopes = Some(vec![ParamEnvelope::new(ids[1].clone())]);
     grade.ableton_mappings = Some(vec![ableton_mapping(&ids[2])]);
-    bloom_layer.effects.as_mut().expect("the Bloom layer has Bloom").push(grade);
-    bloom_layer.clip_triggers.push(manifold_core::audio_trigger::LayerClipTrigger::new(
-        manifold_core::audio_mod::AudioModSource {
-            send_id: send,
-            feature: manifold_core::audio_mod::AudioFeature::new(
-                manifold_core::audio_mod::AudioFeatureKind::Amplitude,
-                manifold_core::audio_mod::AudioBand::Low,
-            ),
-        },
-    ));
+    bloom_layer
+        .effects
+        .as_mut()
+        .expect("the Bloom layer has Bloom")
+        .push(grade);
+    bloom_layer
+        .clip_triggers
+        .push(manifold_core::audio_trigger::LayerClipTrigger::new(
+            manifold_core::audio_mod::AudioModSource {
+                send_id: send,
+                feature: manifold_core::audio_mod::AudioFeature::new(
+                    manifold_core::audio_mod::AudioFeatureKind::Amplitude,
+                    manifold_core::audio_mod::AudioBand::Low,
+                ),
+            },
+        ));
     data.project.settings.macro_bank.slots[0].ableton_mapping = Some(ableton_mapping(""));
     data.project.settings.macros_collapsed = false;
     data.project.settings.master_chrome_collapsed = false;
@@ -505,7 +612,9 @@ fn ableton_mapping(param: &str) -> manifold_core::ableton_mapping::AbletonParamM
             track_id: 0,
             device_id: 0,
             param_id: 1,
-            device_identity: AbletonDeviceIdentity { device_class_name: "AudioEffectGroupDevice".into() },
+            device_identity: AbletonDeviceIdentity {
+                device_class_name: "AudioEffectGroupDevice".into(),
+            },
             track_name: "1-Audio".into(),
             device_name: "Rack".into(),
             macro_name: "Macro 1".into(),
@@ -593,7 +702,10 @@ fn live_perturbations() -> Vec<Perturbation> {
             name: "macro ableton range",
             parts: ranges,
             apply: |d| {
-                let mapping = d.project.settings.macro_bank.slots[0].ableton_mapping.as_mut().unwrap();
+                let mapping = d.project.settings.macro_bank.slots[0]
+                    .ableton_mapping
+                    .as_mut()
+                    .unwrap();
                 (mapping.range_min, mapping.range_max) = (0.1, 0.5);
             },
         },
@@ -610,7 +722,11 @@ fn live_perturbations() -> Vec<Perturbation> {
         Perturbation {
             name: "clip trigger sensitivity",
             parts: shapes,
-            apply: |d| d.project.timeline.layers[1].clip_triggers[0].shape.sensitivity = 3.0,
+            apply: |d| {
+                d.project.timeline.layers[1].clip_triggers[0]
+                    .shape
+                    .sensitivity = 3.0
+            },
         },
         Perturbation {
             name: "card param value",
@@ -646,10 +762,17 @@ fn live_scalars_update_in_place() {
                 && (projection == "LiveValues" || projection == "LiveShapes")
         });
         if !pushed {
-            failures.push(format!("{} shows nowhere the live push writes", perturbation.name));
+            failures.push(format!(
+                "{} shows nowhere the live push writes",
+                perturbation.name
+            ));
         }
     }
-    assert!(failures.is_empty(), "live scalars not updated in place:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "live scalars not updated in place:\n{}",
+        failures.join("\n")
+    );
 }
 
 #[test]
@@ -659,26 +782,46 @@ fn renaming_an_authored_control_updates_its_label() {
     use manifold_editing::commands::effects::{BindingMappingEdit, EditParamMappingCommand};
     const NAME: &str = "Glintness";
     let base = base();
-    let fx = &base.project.timeline.layers[base.active.unwrap()].effects.as_ref().expect("the active layer has effects")[0];
-    let param = fx.params.iter().next().expect("the card has a control").id().to_string();
-    let seed = manifold_nodes::bundled_presets::bundled_preset_def(fx.effect_type()).map(|d| d.as_ref().clone());
+    let fx = &base.project.timeline.layers[base.active.unwrap()]
+        .effects
+        .as_ref()
+        .expect("the active layer has effects")[0];
+    let param = fx
+        .params
+        .iter()
+        .next()
+        .expect("the card has a control")
+        .id()
+        .to_string();
+    let seed = manifold_nodes::bundled_presets::bundled_preset_def(fx.effect_type())
+        .map(|d| d.as_ref().clone());
     let mut cmd = EditParamMappingCommand::new(
         GraphTarget::Effect(fx.id.clone()),
         param,
-        BindingMappingEdit { label: Some(NAME.into()), ..Default::default() },
+        BindingMappingEdit {
+            label: Some(NAME.into()),
+            ..Default::default()
+        },
         seed,
     );
     let mut renamed = clone_data(&base);
     cmd.execute(&mut renamed.project);
     let touches = cmd.touches();
-    assert!(touches.contains(Part::Effects), "a rename declares Effects: {touches:?}");
+    assert!(
+        touches.contains(Part::Effects),
+        "a rename declares Effects: {touches:?}"
+    );
 
     let last = FrameInputs::default();
     let mut next = last;
     let mut parts = next.parts;
     parts.bump(touches);
     next.parts = parts;
-    assert!(crate::frame_plan::plan_frame(&last, &next).projections.contains(Projection::InspectorSync));
+    assert!(
+        crate::frame_plan::plan_frame(&last, &next)
+            .projections
+            .contains(Projection::InspectorSync)
+    );
 
     assert!(!rebuild_output(&base, &base, Projection::InspectorSync, Shown::Plain).contains(NAME));
     assert!(

@@ -19,8 +19,8 @@ pub mod image_renderer;
 pub mod metadata;
 #[cfg(target_os = "macos")]
 pub mod metal_encoder;
-pub mod still_exporter;
 #[cfg(target_os = "macos")]
 mod metal_ffi;
+pub mod still_exporter;
 #[cfg(target_os = "macos")]
 pub mod video_renderer;

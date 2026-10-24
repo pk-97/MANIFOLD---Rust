@@ -101,10 +101,7 @@ pub fn thread_cold_touch_count(kind: ColdTouchKind) -> u64 {
 
 /// Sum across all cold-touch kinds.
 pub fn total_cold_touches() -> u64 {
-    COUNTERS
-        .iter()
-        .map(|c| c.load(Ordering::Relaxed))
-        .sum()
+    COUNTERS.iter().map(|c| c.load(Ordering::Relaxed)).sum()
 }
 
 /// Reset every counter to zero. Tests call this after warmup and before the
@@ -202,7 +199,10 @@ mod tests {
         set_transport_playing(false);
         set_transport_playing(true);
         record_cold_touch(ColdTouchKind::ChainConstruction);
-        assert_eq!(thread_cold_touch_count(ColdTouchKind::ChainConstruction), before + 1);
+        assert_eq!(
+            thread_cold_touch_count(ColdTouchKind::ChainConstruction),
+            before + 1
+        );
         set_transport_playing(false);
     }
 }

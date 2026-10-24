@@ -40,7 +40,11 @@ fn every_dev_path_device_is_queued() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let mut files = Vec::new();
     rust_files(&crates, &mut files);
-    assert!(files.len() > 100, "scan found {} files; wrong root?", files.len());
+    assert!(
+        files.len() > 100,
+        "scan found {} files; wrong root?",
+        files.len()
+    );
 
     let mut offenders = Vec::new();
     for file in files {
@@ -49,13 +53,18 @@ fn every_dev_path_device_is_queued() {
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
-        if ALLOWED.iter().any(|a| rel.starts_with(a) || rel.ends_with(a)) {
+        if ALLOWED
+            .iter()
+            .any(|a| rel.starts_with(a) || rel.ends_with(a))
+        {
             continue;
         }
         if rel == "manifold-gpu/tests/queued_device_audit.rs" {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&file) else { continue };
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
         for (n, line) in text.lines().enumerate() {
             if line.trim_start().starts_with("//") {
                 continue;

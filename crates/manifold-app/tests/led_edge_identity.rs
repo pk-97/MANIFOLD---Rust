@@ -70,9 +70,8 @@ fn edge_extend_half_widths_is_identity_mapping() {
     let ptr = buf
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");
-    let out = unsafe {
-        std::slice::from_raw_parts(ptr.cast::<u8>(), (LEDS * bytes_per_row) as usize)
-    };
+    let out =
+        unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), (LEDS * bytes_per_row) as usize) };
 
     for y in 0..LEDS {
         for x in 0..STRIPS {
@@ -83,8 +82,7 @@ fn edge_extend_half_widths_is_identity_mapping() {
             let expected = quant(pat_value(x, LEDS - 1 - y));
             let off = ((y * STRIPS + x) * 4) as usize;
             assert_eq!(
-                out[off],
-                expected,
+                out[off], expected,
                 "red channel at ({x},{y}): identity mapping broken"
             );
             assert_eq!(out[off + 1], expected, "green at ({x},{y})");

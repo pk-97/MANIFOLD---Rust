@@ -21,28 +21,41 @@
 //! changes apply in place, while topology or resolution changes rebuild it.
 
 use ahash::AHashMap;
-use manifold_core::PresetTypeId;
 use manifold_core::NodeId;
+use manifold_core::PresetTypeId;
 use manifold_core::effects::{EffectGroup, PresetInstance};
 use manifold_core::id::{EffectGroupId, EffectId};
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat, TexturePool};
 
 use crate::gpu::gpu_encoder::GpuEncoder;
-use crate::primitives::mix::Mix;
-use crate::{param_binding::BindingSource, exec::bound_graph::BoundGraph, persistence::EffectGraphDefExt, exec::execution_plan::ExecutionPlan, exec::execution::Executor, scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, scene::boundary_nodes::GENERATOR_INPUT_TYPE_ID, graph::Graph, validation::GraphError, persistence::LoadError, load::loaded_preset_view::LoadedPresetView, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, param_binding::ParamBinding, parameters::ParamValue, persistence::PrimitiveRegistry, param_binding::ResolvedBinding, param_binding::ResolvedTarget, exec::execution_plan::ResourceId, bindings::Slot, scene::boundary_nodes::Source, load::chain_spec::SpliceResult, state_store::StateStore, param_binding::apply_binding_defaults, exec::execution_plan::compile, load::chain_spec::splice_def_into_chain};
+use crate::gpu::render_target::RenderTarget;
 use crate::load::loaded_preset_view::loaded_preset_view_by_id;
+use crate::primitives::mix::Mix;
 use crate::runtime::preset_context::PresetContext;
+use crate::{
+    bindings::Slot, exec::bound_graph::BoundGraph, exec::effect_node::FrameTime,
+    exec::effect_node::NodeInstanceId, exec::execution::Executor,
+    exec::execution_plan::ExecutionPlan, exec::execution_plan::ResourceId,
+    exec::execution_plan::compile, exec::metal_backend::MetalBackend, graph::Graph,
+    load::chain_spec::SpliceResult, load::chain_spec::splice_def_into_chain,
+    load::loaded_preset_view::LoadedPresetView, param_binding::BindingSource,
+    param_binding::ParamBinding, param_binding::ResolvedBinding, param_binding::ResolvedTarget,
+    param_binding::apply_binding_defaults, parameters::ParamValue, persistence::EffectGraphDefExt,
+    persistence::LoadError, persistence::PrimitiveRegistry,
+    scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID, scene::boundary_nodes::FinalOutput,
+    scene::boundary_nodes::GENERATOR_INPUT_TYPE_ID, scene::boundary_nodes::Source,
+    state_store::StateStore, validation::GraphError,
+};
 use manifold_core::effect_graph_def::{EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS, EffectGraphDef};
 use manifold_core::params::ParamManifest;
 use manifold_core::{Beats, Seconds};
-use crate::gpu::render_target::RenderTarget;
 
 mod errors;
+pub mod generator_provider;
 mod scene_events;
 mod selection_mask;
-pub mod generator_provider;
-pub use errors::{ChainError, JsonGeneratorLoadError};
 use errors::record_chain_error;
+pub use errors::{ChainError, JsonGeneratorLoadError};
 
 mod bindings;
 use bindings::{StringBindingResolution, def_string_param_value};
@@ -51,9 +64,9 @@ manifold_core::testkit_visible! {
 #[doc(hidden)]
 pub(crate) mod segments;
 }
-pub use segments::{prewarm_chain_segments, prewarm_project_chain_segments};
 pub use crate::freeze::install::prewarm_worker_pending_count;
-use segments::{SegmentMember, classify_segment_member, segment_run, build_segment_cards};
+use segments::{SegmentMember, build_segment_cards, classify_segment_member, segment_run};
+pub use segments::{prewarm_chain_segments, prewarm_project_chain_segments};
 mod segment_bindings;
 use segment_bindings::{SegmentRefusal, resolve_segment_bindings};
 
@@ -67,10 +80,13 @@ pub use build::chain_topology_hash;
 use build::{assign_texture2d_slots, compute_topology_hash};
 
 mod groups;
-use groups::{chain_active_effects, close_mix_group, has_chain_active_effects, validate_mask_groups, OpenGroup};
+use groups::{
+    OpenGroup, chain_active_effects, close_mix_group, has_chain_active_effects,
+    validate_mask_groups,
+};
 mod convert_heal;
-mod lifecycle;
 pub mod extensions;
+mod lifecycle;
 
 manifold_core::testkit_visible! {
 pub(crate) mod core;
@@ -79,28 +95,19 @@ pub use self::core::{ChainBuildInputs, FrameContextInputs, PresetRuntime};
 mod resize;
 pub use resize::PreparedRuntimeResize;
 mod debug;
-pub use debug::{ChainDebugInfo, StepDebugInfo};
 use self::core::{EffectSlot, PresetIo};
+pub use debug::{ChainDebugInfo, StepDebugInfo};
 
-
+pub mod beat_envelope;
 mod dump_sets;
 pub mod instrumentation;
-pub mod beat_envelope;
-mod scene_viewport;
 mod modifier_preview;
 mod modifier_runtime;
+mod scene_viewport;
 pub use modifier_preview::{ModifierPreviewContext, ModifierPreviewError};
-
-
-
-
-
-
 
 #[cfg(test)]
 mod topology_hash_tests;
-
-
 
 #[cfg(test)]
 mod persistent_slot_tests;
@@ -114,20 +121,6 @@ mod segment_bindings_tests;
 #[cfg(test)]
 mod groups_tests;
 
-
-
-
-
-
-
-
-
-
-
-
-#[cfg(any(test, feature = "testkit"))]
-#[doc(hidden)]
-pub mod testkit;
 pub mod background_worker;
 pub mod chain_dispatch;
 pub mod effect;
@@ -135,3 +128,6 @@ pub mod frame_status;
 pub mod layer_skin;
 pub mod plugin_prewarm;
 pub mod preset_context;
+#[cfg(any(test, feature = "testkit"))]
+#[doc(hidden)]
+pub mod testkit;

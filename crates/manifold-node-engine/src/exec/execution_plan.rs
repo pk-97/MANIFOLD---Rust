@@ -22,12 +22,12 @@
 
 use ahash::AHashMap;
 
-use crate::mesh::MeshVertex;
-use crate::exec::effect_node::{intern_name, NodeInstanceId, NodeRequires, NodeWire};
+use crate::exec::effect_node::{NodeInstanceId, NodeRequires, NodeWire, intern_name};
+use crate::exec::node_pairs::{NodePairSteps, active_execution_order, contracted_execution_order};
 use crate::graph::Graph;
-use crate::scene::mesh_change::{MeshAspect, MeshRevisionRule};
-use crate::exec::node_pairs::{active_execution_order, contracted_execution_order, NodePairSteps};
+use crate::mesh::MeshVertex;
 use crate::ports::{KnownItem, PortType};
+use crate::scene::mesh_change::{MeshAspect, MeshRevisionRule};
 use crate::validation::{GraphError, topological_sort, validate};
 
 /// Identifier for one logical resource (texture, scalar) flowing on a wire.
@@ -247,14 +247,8 @@ impl ExecutionPlan {
     /// Producer-declared texture format for the given resource, or
     /// `None` if the producer didn't override (use backend default).
     /// Always `None` for non-`Texture2D` resources.
-    pub fn resource_format(
-        &self,
-        id: ResourceId,
-    ) -> Option<manifold_gpu::GpuTextureFormat> {
-        self.resource_formats
-            .get(id.0 as usize)
-            .copied()
-            .flatten()
+    pub fn resource_format(&self, id: ResourceId) -> Option<manifold_gpu::GpuTextureFormat> {
+        self.resource_formats.get(id.0 as usize).copied().flatten()
     }
 
     /// Resources whose producer requested a mip-chained slot — the list
@@ -307,7 +301,9 @@ impl ExecutionPlan {
 
     /// Whether this resource reserves immutable node-owned texture storage.
     pub fn is_provided_texture(&self, resource: ResourceId) -> bool {
-        self.provided_texture_resources.binary_search(&resource).is_ok()
+        self.provided_texture_resources
+            .binary_search(&resource)
+            .is_ok()
     }
 
     /// Resources held across frames, never aliased or recycled by the plan.
@@ -331,11 +327,11 @@ impl ExecutionPlan {
         &self.late_capture_steps
     }
 
-manifold_core::testkit_visible! {
-    pub(crate) fn node_pairs(&self) -> &[NodePairSteps] {
-        &self.node_pairs
+    manifold_core::testkit_visible! {
+        pub(crate) fn node_pairs(&self) -> &[NodePairSteps] {
+            &self.node_pairs
+        }
     }
-}
 
     /// Substep repeat regions derived at compile time; empty for graphs
     /// without a substep boundary.
@@ -435,9 +431,9 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     // Substep regions contract to one vertex each, like coupled scenes, so
     // every region's steps are one contiguous block (boundary first).
     let region_nodes = crate::exec::substeps::derive_regions(graph, &active_order)?;
-    let region_blocks: Vec<Vec<NodeInstanceId>> = region_nodes.iter().map(|r| r.nodes.clone()).collect();
-    let (order, node_pairs) =
-        contracted_execution_order(graph, &active_order, &region_blocks)?;
+    let region_blocks: Vec<Vec<NodeInstanceId>> =
+        region_nodes.iter().map(|r| r.nodes.clone()).collect();
+    let (order, node_pairs) = contracted_execution_order(graph, &active_order, &region_blocks)?;
 
     // Index wires by their target (input) port for O(1) lookup during
     // input-binding construction.
@@ -505,8 +501,10 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     // the producer means "use the default policy" — max of texture
     // input dims, or canvas (left as `None` here, resolved by the
     // executor at acquire-time against the live backend's canvas).
-    let mut output_resources: AHashMap<(NodeInstanceId, std::borrow::Cow<'static, str>), ResourceId> =
-        AHashMap::default();
+    let mut output_resources: AHashMap<
+        (NodeInstanceId, std::borrow::Cow<'static, str>),
+        ResourceId,
+    > = AHashMap::default();
     let mut resource_types: Vec<PortType> = Vec::new();
     let mut mesh_rules: Vec<Option<CompiledMeshOutputRule>> = Vec::new();
     let mut resource_formats: Vec<Option<manifold_gpu::GpuTextureFormat>> = Vec::new();
@@ -579,8 +577,14 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
                 continue;
             };
             let dims = resource_dims.get(src_res.0 as usize).copied().flatten();
-            let scale = resource_canvas_scales.get(src_res.0 as usize).copied().flatten();
-            let cap = resource_canvas_max_dims.get(src_res.0 as usize).copied().flatten();
+            let scale = resource_canvas_scales
+                .get(src_res.0 as usize)
+                .copied()
+                .flatten();
+            let cap = resource_canvas_max_dims
+                .get(src_res.0 as usize)
+                .copied()
+                .flatten();
             match (dims, cap, scale) {
                 (Some(d), _, _) => input_dims_scratch.push((input_port.name.as_ref(), d)),
                 (None, Some(c), _) => input_canvas_max_dims.push(c),
@@ -602,9 +606,10 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             }
             let id = ResourceId(resource_types.len() as u32);
             output_resources.insert((node_id, output_port.name.clone()), id);
-            if graph.external_outputs().any(|(node, port)| {
-                node == node_id && port == output_port.name.as_ref()
-            }) {
+            if graph
+                .external_outputs()
+                .any(|(node, port)| node == node_id && port == output_port.name.as_ref())
+            {
                 external_resources.push(id);
             }
             resource_types.push(output_port.ty);
@@ -630,18 +635,21 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             // When the producer has no opinion AND the output is a
             // Texture2D-shaped intermediate, check whether any downstream
             // consumer needs the extra precision.
-            let format = inst.node.output_format(output_port.name.as_ref()).or_else(|| {
-                if !output_port.ty.is_texture_2d() {
-                    return None;
-                }
-                let key = (node_id, output_port.name.clone());
-                let wires = consumers_by_output.get(&key)?;
-                if wants_fp32_intermediate(graph, wires) {
-                    Some(manifold_gpu::GpuTextureFormat::Rgba32Float)
-                } else {
-                    None
-                }
-            });
+            let format = inst
+                .node
+                .output_format(output_port.name.as_ref())
+                .or_else(|| {
+                    if !output_port.ty.is_texture_2d() {
+                        return None;
+                    }
+                    let key = (node_id, output_port.name.clone());
+                    let wires = consumers_by_output.get(&key)?;
+                    if wants_fp32_intermediate(graph, wires) {
+                        Some(manifold_gpu::GpuTextureFormat::Rgba32Float)
+                    } else {
+                        None
+                    }
+                });
             resource_formats.push(format);
             if output_port.ty.is_texture_2d()
                 && inst.node.output_mipmapped(output_port.name.as_ref())
@@ -685,7 +693,12 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
                 // scalar input instead. Mostly only downsample-style
                 // primitives care, and they only need INPUT dims.
                 inst.node
-                    .output_dims(output_port.name.as_ref(), (0, 0), &input_dims_scratch, &inst.params)
+                    .output_dims(
+                        output_port.name.as_ref(),
+                        (0, 0),
+                        &input_dims_scratch,
+                        &inst.params,
+                    )
                     .or_else(|| {
                         if declared_scale.is_some() || any_canvas_input {
                             // Propagate canvas: any None input means
@@ -722,12 +735,9 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             //      dispatching every downstream node at full canvas.
             //   3. None — output is canvas-default OR concrete (and
             //      `dims` above has already been set).
-            let canvas_scale = if output_port.ty.is_texture_2d()
-                && dims.is_none()
-                && declared_cap.is_none()
-            {
-                declared_scale
-                    .or_else(|| {
+            let canvas_scale =
+                if output_port.ty.is_texture_2d() && dims.is_none() && declared_cap.is_none() {
+                    declared_scale.or_else(|| {
                         // Only propagate when ALL wired inputs are
                         // canvas-scaled (none canvas-default, none
                         // concrete). Mixed cases fall back to canvas
@@ -750,9 +760,9 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
                             })
                         }
                     })
-            } else {
-                None
-            };
+                } else {
+                    None
+                };
             let canvas_max_dim = if output_port.ty.is_texture_2d() && dims.is_none() {
                 if let Some(cap) = declared_cap {
                     let input = if input_dims_scratch.is_empty()
@@ -778,7 +788,9 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
                     && input_dims_scratch.is_empty()
                     && input_canvas_scales.is_empty()
                     && !input_canvas_max_dims.is_empty()
-                    && input_canvas_max_dims.iter().all(|hint| *hint == input_canvas_max_dims[0])
+                    && input_canvas_max_dims
+                        .iter()
+                        .all(|hint| *hint == input_canvas_max_dims[0])
                 {
                     Some(input_canvas_max_dims[0])
                 } else {
@@ -877,7 +889,10 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             // set: pre-acquired before the step loop, never pool-released,
             // its texture survives across frames so a late-capture swap
             // with the back-edge slot carries state with no copies.
-            if inst.node.persistent_output_ports().contains(&output_port.name.as_ref())
+            if inst
+                .node
+                .persistent_output_ports()
+                .contains(&output_port.name.as_ref())
                 && persistent_seen.insert(res_id)
             {
                 persistent.push(res_id);
@@ -933,7 +948,8 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         // one of them gets the extension — the planner can't know which `in_N`
         // the selector picks at runtime.
         if let Some(out_port) = inst.node.variadic_skip_passthrough_out() {
-            let Some(&r_out) = output_resources.get(&(node_id, std::borrow::Cow::Borrowed(out_port)))
+            let Some(&r_out) =
+                output_resources.get(&(node_id, std::borrow::Cow::Borrowed(out_port)))
             else {
                 continue;
             };
@@ -976,9 +992,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             // exactly one: `object`).
             let mut out_last = step_idx;
             for output_port in inst.node.outputs() {
-                if let Some(&r_out) =
-                    output_resources.get(&(node_id, output_port.name.clone()))
-                {
+                if let Some(&r_out) = output_resources.get(&(node_id, output_port.name.clone())) {
                     let r_out_last = *last_reader.get(&r_out).unwrap_or(&step_idx);
                     if r_out_last > out_last {
                         out_last = r_out_last;
@@ -1026,8 +1040,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             continue;
         };
         // R(out_port): the resource N produces on the output port.
-        let Some(&r_out) =
-            output_resources.get(&(node_id, std::borrow::Cow::Borrowed(out_port)))
+        let Some(&r_out) = output_resources.get(&(node_id, std::borrow::Cow::Borrowed(out_port)))
         else {
             continue;
         };
@@ -1087,7 +1100,9 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     for step in &steps {
         let inst = graph.get_node(step.node).expect("compiled node exists");
         for &(port, res) in &step.outputs {
-            if resource_types.get(res.0 as usize).is_some_and(|ty| ty.is_texture_2d())
+            if resource_types
+                .get(res.0 as usize)
+                .is_some_and(|ty| ty.is_texture_2d())
                 && !persistent_seen.contains(&res)
                 && inst.node.provides_texture_output(port)
             {
@@ -1195,17 +1210,32 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
 /// write lands on the output's storage at all, or on an input's storage after
 /// the switch: there the output's readers would see bytes the switch never
 /// chose. Refused steps run their node instead.
-fn array_passthrough_steps(graph: &Graph, steps: &[ExecutionStep], resource_types: &[PortType]) -> Vec<bool> {
+fn array_passthrough_steps(
+    graph: &Graph,
+    steps: &[ExecutionStep],
+    resource_types: &[PortType],
+) -> Vec<bool> {
     let port = |list: &[(&'static str, ResourceId)], name: &str| {
-        list.iter().find(|(port, _)| *port == name).map(|&(_, resource)| resource)
+        list.iter()
+            .find(|(port, _)| *port == name)
+            .map(|&(_, resource)| resource)
     };
-    let is_array = |resource: ResourceId| matches!(resource_types.get(resource.0 as usize), Some(PortType::Array(_)));
+    let is_array = |resource: ResourceId| {
+        matches!(
+            resource_types.get(resource.0 as usize),
+            Some(PortType::Array(_))
+        )
+    };
     let mut storage: AHashMap<ResourceId, ResourceId> = AHashMap::default();
     let mut writes: Vec<(usize, ResourceId)> = Vec::new();
     for (idx, step) in steps.iter().enumerate() {
-        let Some(inst) = graph.get_node(step.node) else { continue };
+        let Some(inst) = graph.get_node(step.node) else {
+            continue;
+        };
         for &(input_port, output_port) in inst.node.aliased_array_io() {
-            let Some(input) = port(&step.inputs, input_port) else { continue };
+            let Some(input) = port(&step.inputs, input_port) else {
+                continue;
+            };
             let root = storage.get(&input).copied().unwrap_or(input);
             writes.push((idx, root));
             if let Some(output) = port(&step.outputs, output_port) {
@@ -1230,7 +1260,10 @@ fn array_passthrough_steps(graph: &Graph, steps: &[ExecutionStep], resource_type
             !writes.iter().any(|&(at, written)| {
                 written == out_root
                     || (at > idx
-                        && step.inputs.iter().any(|&(_, input)| is_array(input) && root(input) == written))
+                        && step
+                            .inputs
+                            .iter()
+                            .any(|&(_, input)| is_array(input) && root(input) == written))
             })
         })
         .collect()
@@ -1373,9 +1406,9 @@ mod tests {
     }
 
     impl crate::exec::effect_node::EffectNode for TestNode {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -1417,18 +1450,30 @@ mod tests {
             vec![],
             vec![output("field", PortType::VectorField)],
         )));
-        assert!(compile(&graph).unwrap().steps().iter().all(|step| step.node != source));
+        assert!(
+            compile(&graph)
+                .unwrap()
+                .steps()
+                .iter()
+                .all(|step| step.node != source)
+        );
         graph.add_external_output(source, "field").unwrap();
 
         let plan = compile(&graph).unwrap();
-        let step = plan.steps().iter().find(|step| step.node == source).unwrap();
+        let step = plan
+            .steps()
+            .iter()
+            .find(|step| step.node == source)
+            .unwrap();
         let resource = step.outputs[0].1;
         assert_eq!(step.outputs, vec![("field", resource)]);
         assert!(plan.held_resources().contains(&resource));
-        assert!(plan.steps().iter().all(|step| !step.free_after.contains(&resource)));
+        assert!(
+            plan.steps()
+                .iter()
+                .all(|step| !step.free_after.contains(&resource))
+        );
     }
-
-
 
     fn output(name: &'static str, ty: PortType) -> NodeOutput {
         NodePort {
@@ -1620,9 +1665,9 @@ mod tests {
     }
 
     impl crate::exec::effect_node::EffectNode for SkippableNode {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -1771,9 +1816,9 @@ mod tests {
     }
 
     impl crate::exec::effect_node::EffectNode for CarriesResourcesNode {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -1845,9 +1890,9 @@ mod tests {
             type_id: EffectNodeType,
         }
         impl crate::exec::effect_node::EffectNode for ExplicitDimNode {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+            fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+                crate::scene::depth_rule::DepthRule::Terminal
+            }
             fn type_id(&self) -> &EffectNodeType {
                 &self.type_id
             }
@@ -1911,15 +1956,17 @@ mod tests {
         g.connect((b, "out"), (sink, "in")).unwrap();
         let plan = compile(&g).unwrap();
         // The explicit-dim node should still resolve to quarter-res...
-        let r_explicit = plan.steps().iter()
-            .find(|s| s.node == a_explicit).unwrap()
-            .outputs[0].1;
+        let r_explicit = plan
+            .steps()
+            .iter()
+            .find(|s| s.node == a_explicit)
+            .unwrap()
+            .outputs[0]
+            .1;
         assert_eq!(plan.resource_dims(r_explicit), Some((480, 270)));
         // ...but B's mix output, because one input is canvas-default,
         // must NOT inherit the quarter-res — it must be None (canvas).
-        let r_b = plan.steps().iter()
-            .find(|s| s.node == b).unwrap()
-            .outputs[0].1;
+        let r_b = plan.steps().iter().find(|s| s.node == b).unwrap().outputs[0].1;
         assert_eq!(
             plan.resource_dims(r_b),
             None,
@@ -2034,13 +2081,15 @@ mod tests {
             type_id: EffectNodeType,
         }
         impl crate::exec::effect_node::EffectNode for QuarterCanvasSource {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+            fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+                crate::scene::depth_rule::DepthRule::Terminal
+            }
             fn type_id(&self) -> &EffectNodeType {
                 &self.type_id
             }
-            fn inputs(&self) -> &[NodePort] { &[] }
+            fn inputs(&self) -> &[NodePort] {
+                &[]
+            }
             fn outputs(&self) -> &[NodePort] {
                 static OUTPUTS: [NodePort; 1] = [NodePort {
                     name: std::borrow::Cow::Borrowed("out"),
@@ -2050,7 +2099,9 @@ mod tests {
                 }];
                 &OUTPUTS
             }
-            fn parameters(&self) -> &[ParamDef] { &[] }
+            fn parameters(&self) -> &[ParamDef] {
+                &[]
+            }
             fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
             fn output_canvas_scale(
                 &self,
@@ -2092,7 +2143,11 @@ mod tests {
         let r_b = plan.steps().iter().find(|s| s.node == b).unwrap().outputs[0].1;
 
         assert_eq!(plan.resource_dims(r_q), None, "Q has no concrete dim");
-        assert_eq!(plan.resource_canvas_scale(r_q), Some((1, 4)), "Q declared (1, 4)");
+        assert_eq!(
+            plan.resource_canvas_scale(r_q),
+            Some((1, 4)),
+            "Q declared (1, 4)"
+        );
         assert_eq!(
             plan.resource_canvas_scale(r_a),
             Some((1, 4)),
@@ -2119,11 +2174,15 @@ mod tests {
             type_id: EffectNodeType,
         }
         impl crate::exec::effect_node::EffectNode for QuarterCanvasSource {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
-            fn type_id(&self) -> &EffectNodeType { &self.type_id }
-            fn inputs(&self) -> &[NodePort] { &[] }
+            fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+                crate::scene::depth_rule::DepthRule::Terminal
+            }
+            fn type_id(&self) -> &EffectNodeType {
+                &self.type_id
+            }
+            fn inputs(&self) -> &[NodePort] {
+                &[]
+            }
             fn outputs(&self) -> &[NodePort] {
                 static OUTPUTS: [NodePort; 1] = [NodePort {
                     name: std::borrow::Cow::Borrowed("out"),
@@ -2133,7 +2192,9 @@ mod tests {
                 }];
                 &OUTPUTS
             }
-            fn parameters(&self) -> &[ParamDef] { &[] }
+            fn parameters(&self) -> &[ParamDef] {
+                &[]
+            }
             fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
             fn output_canvas_scale(
                 &self,
@@ -2322,7 +2383,6 @@ mod tests {
         );
     }
 
-
     /// Array routing roles for the passthrough planner tests.
     struct ArrayRoute {
         type_id: EffectNodeType,
@@ -2338,10 +2398,17 @@ mod tests {
         fn array() -> PortType {
             PortType::Array(crate::ports::ArrayType::of::<u32>())
         }
-        fn new(name: &'static str, inputs: &[&'static str], outputs: &[(&'static str, PortType)]) -> Self {
+        fn new(
+            name: &'static str,
+            inputs: &[&'static str],
+            outputs: &[(&'static str, PortType)],
+        ) -> Self {
             Self {
                 type_id: EffectNodeType::new(name),
-                inputs: inputs.iter().map(|&n| input(n, Self::array(), false)).collect(),
+                inputs: inputs
+                    .iter()
+                    .map(|&n| input(n, Self::array(), false))
+                    .collect(),
                 outputs: outputs.iter().map(|&(n, ty)| output(n, ty)).collect(),
                 switch: false,
                 carries: false,
@@ -2356,13 +2423,22 @@ mod tests {
             Self::new(name, &["in"], &[("out", Self::array())])
         }
         fn switch() -> Self {
-            Self { switch: true, ..Self::new("switch", &["in_0", "in_1"], &[("out", Self::array())]) }
+            Self {
+                switch: true,
+                ..Self::new("switch", &["in_0", "in_1"], &[("out", Self::array())])
+            }
         }
         fn in_place(name: &'static str) -> Self {
-            Self { in_place: true, ..Self::stage(name) }
+            Self {
+                in_place: true,
+                ..Self::stage(name)
+            }
         }
         fn sink() -> Self {
-            Self { root: true, ..Self::new("sink", &["in"], &[]) }
+            Self {
+                root: true,
+                ..Self::new("sink", &["in"], &[])
+            }
         }
     }
 
@@ -2398,7 +2474,10 @@ mod tests {
     }
 
     fn step_of(plan: &ExecutionPlan, node: NodeInstanceId) -> usize {
-        plan.steps().iter().position(|step| step.node == node).unwrap()
+        plan.steps()
+            .iter()
+            .position(|step| step.node == node)
+            .unwrap()
     }
 
     fn out_of(plan: &ExecutionPlan, node: NodeInstanceId) -> ResourceId {
@@ -2415,13 +2494,21 @@ mod tests {
         let switch = g.add_node(Box::new(ArrayRoute::switch()));
         let object = g.add_node(Box::new(ArrayRoute {
             carries: true,
-            ..ArrayRoute::new("object", &["vertices"], &[("object", PortType::Scalar(crate::ports::ScalarType::F32))])
+            ..ArrayRoute::new(
+                "object",
+                &["vertices"],
+                &[("object", PortType::Scalar(crate::ports::ScalarType::F32))],
+            )
         }));
         let later = g.add_node(Box::new(ArrayRoute::source("later")));
         let render = g.add_node(Box::new(TestNode::new(
             "render",
             vec![
-                input("object", PortType::Scalar(crate::ports::ScalarType::F32), true),
+                input(
+                    "object",
+                    PortType::Scalar(crate::ports::ScalarType::F32),
+                    true,
+                ),
                 input("other", ArrayRoute::array(), true),
             ],
             vec![],
@@ -2435,7 +2522,11 @@ mod tests {
         let input = out_of(&plan, source);
         let render_step = step_of(&plan, render);
         assert!(step_of(&plan, object) < render_step);
-        assert!(plan.steps()[render_step].free_after.contains(&input), "{:?}", plan.steps());
+        assert!(
+            plan.steps()[render_step].free_after.contains(&input),
+            "{:?}",
+            plan.steps()
+        );
         assert!(plan.array_passthrough(step_of(&plan, switch)));
     }
 
@@ -2479,10 +2570,25 @@ mod tests {
             let plan = compile(&g).unwrap();
             plan.array_passthrough(step_of(&plan, switch))
         };
-        assert!(build(false, false, false), "read-only readers keep the alias");
-        assert!(build(false, true, false), "an in-place write before the switch is what it chose");
-        assert!(!build(true, false, false), "an in-place reader of the output writes the input");
-        assert!(!build(false, false, true), "an in-place write to the input after the switch");
-        assert!(!build(false, true, true), "the same storage, reached through an earlier in-place step");
+        assert!(
+            build(false, false, false),
+            "read-only readers keep the alias"
+        );
+        assert!(
+            build(false, true, false),
+            "an in-place write before the switch is what it chose"
+        );
+        assert!(
+            !build(true, false, false),
+            "an in-place reader of the output writes the input"
+        );
+        assert!(
+            !build(false, false, true),
+            "an in-place write to the input after the switch"
+        );
+        assert!(
+            !build(false, true, true),
+            "the same storage, reached through an earlier in-place step"
+        );
     }
 }

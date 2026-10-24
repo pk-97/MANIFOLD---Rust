@@ -1,18 +1,20 @@
 //! Render-only viewport pass owned by the scene renderer.
 
+use super::RenderScene;
 use manifold_gpu::GpuTexture;
 #[cfg(test)]
 use manifold_gpu::GpuTextureFormat;
-use manifold_node_engine::scene::viewport_outputs::ViewportOutputs;
-use manifold_node_engine::runtime::frame_status::{FrameRenderFailure, FrameRenderStatus};
-use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext};
-use manifold_node_engine::scene::scene_viewport::{SceneViewportConfig, SceneViewportError, ViewportPass};
-use super::RenderScene;
 #[cfg(test)]
 use manifold_node_engine::exec::effect_node::ParamValues;
+use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext};
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::runtime::frame_status::{FrameRenderFailure, FrameRenderStatus};
+use manifold_node_engine::scene::scene_viewport::{
+    SceneViewportConfig, SceneViewportError, ViewportPass,
+};
 #[cfg(test)]
 use manifold_node_engine::scene::viewport_camera::ViewportCamera;
+use manifold_node_engine::scene::viewport_outputs::ViewportOutputs;
 
 /// A persistent, render-only `node.render_scene` pass.
 pub(crate) struct SceneViewportPass {
@@ -70,7 +72,10 @@ impl SceneViewportPass {
         };
 
         let device = parent_gpu.device;
-        if let Err(error) = self.outputs.ensure(device, config, source_params, &self.renderer) {
+        if let Err(error) = self
+            .outputs
+            .ensure(device, config, source_params, &self.renderer)
+        {
             self.errors.push(error);
             self.status = FrameRenderStatus::Failed(FrameRenderFailure::SurfaceAllocation);
             return;
@@ -84,7 +89,8 @@ impl SceneViewportPass {
         viewport_gpu.audio_visuals = parent_gpu.audio_visuals;
 
         let Some(outputs) = self.outputs.outputs() else {
-            self.errors.push("viewport output storage is unavailable".to_string());
+            self.errors
+                .push("viewport output storage is unavailable".to_string());
             self.status = FrameRenderStatus::Failed(FrameRenderFailure::SurfaceAllocation);
             return;
         };
@@ -145,7 +151,12 @@ impl SceneViewportPass {
     }
 
     #[cfg(test)]
-    fn output_shape(&self, config: SceneViewportConfig, params: &ParamValues, port: &'static str) -> (u32, u32, GpuTextureFormat) {
+    fn output_shape(
+        &self,
+        config: SceneViewportConfig,
+        params: &ParamValues,
+        port: &'static str,
+    ) -> (u32, u32, GpuTextureFormat) {
         ViewportOutputs::output_shape(&self.renderer, config, params, port)
     }
 }
@@ -155,20 +166,36 @@ impl ViewportPass for SceneViewportPass {
         SceneViewportPass::render(self, ctx, config);
     }
 
-    fn texture(&self) -> Option<&GpuTexture> { SceneViewportPass::texture(self) }
-    fn status(&self) -> FrameRenderStatus { SceneViewportPass::status(self) }
-    fn errors(&self) -> &[String] { SceneViewportPass::errors(self) }
-    fn clear_state(&mut self) { SceneViewportPass::clear_state(self); }
-    fn set_selection_mask(&mut self, slots: &[u32]) { self.renderer.set_selection_mask(slots); }
+    fn texture(&self) -> Option<&GpuTexture> {
+        SceneViewportPass::texture(self)
+    }
+    fn status(&self) -> FrameRenderStatus {
+        SceneViewportPass::status(self)
+    }
+    fn errors(&self) -> &[String] {
+        SceneViewportPass::errors(self)
+    }
+    fn clear_state(&mut self) {
+        SceneViewportPass::clear_state(self);
+    }
+    fn set_selection_mask(&mut self, slots: &[u32]) {
+        self.renderer.set_selection_mask(slots);
+    }
     fn selection_mask(&self) -> Option<&GpuTexture> {
         if !self.last_attempt_valid {
             return None;
         }
         self.renderer.selection_mask()
     }
-    fn request_pick(&mut self, pick: manifold_node_engine::scene::pick::PickRequest) { self.renderer.request_pick(pick); }
-    fn take_pick(&mut self) -> Option<manifold_node_engine::scene::pick::PickHit> { self.renderer.take_pick() }
-    fn set_gizmo_depth(&mut self, wanted: bool) { self.renderer.set_gizmo_depth(wanted); }
+    fn request_pick(&mut self, pick: manifold_node_engine::scene::pick::PickRequest) {
+        self.renderer.request_pick(pick);
+    }
+    fn take_pick(&mut self) -> Option<manifold_node_engine::scene::pick::PickHit> {
+        self.renderer.take_pick()
+    }
+    fn set_gizmo_depth(&mut self, wanted: bool) {
+        self.renderer.set_gizmo_depth(wanted);
+    }
     fn gizmo_depth(&self) -> Option<&GpuTexture> {
         if !self.last_attempt_valid {
             return None;
@@ -254,7 +281,10 @@ mod tests {
             "temporal_upscale".into(),
             manifold_node_engine::parameters::ParamValue::Bool(true),
         );
-        params.insert("rt_denoise_feed".into(), manifold_node_engine::parameters::ParamValue::Bool(true));
+        params.insert(
+            "rt_denoise_feed".into(),
+            manifold_node_engine::parameters::ParamValue::Bool(true),
+        );
         let scale = pass.renderer.output_canvas_scale("depth", &params).unwrap();
         let dimensions = (321 * scale.0 / scale.1, 201 * scale.0 / scale.1);
         for (port, format) in [

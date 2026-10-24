@@ -53,7 +53,14 @@ impl Primitive for SwarmToCopies {
         _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
-        (port_name == "copies").then(|| input_capacities.iter().find(|(p, _)| *p == "particles").map(|&(_, n)| n)).flatten()
+        (port_name == "copies")
+            .then(|| {
+                input_capacities
+                    .iter()
+                    .find(|(p, _)| *p == "particles")
+                    .map(|&(_, n)| n)
+            })
+            .flatten()
     }
 
     /// A copy stands where its particle is: a force on the copies moves the
@@ -64,7 +71,9 @@ impl Primitive for SwarmToCopies {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let size = ctx.scalar_or_param("size", 0.05);
-        let (Some(particles), Some(copies)) = (ctx.inputs.array("particles"), ctx.outputs.array("copies")) else {
+        let (Some(particles), Some(copies)) =
+            (ctx.inputs.array("particles"), ctx.outputs.array("copies"))
+        else {
             return;
         };
         let count = ((particles.size / std::mem::size_of::<Particle>() as u64) as u32)
@@ -74,13 +83,29 @@ impl Primitive for SwarmToCopies {
         }
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let uniforms = Uniforms { size, dispatch_count: count, _pad0: 0, _pad1: 0 };
+        let uniforms = Uniforms {
+            size,
+            dispatch_count: count,
+            _pad0: 0,
+            _pad1: 0,
+        };
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: particles, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: copies, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: particles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: copies,
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256), 1, 1],
             "node.swarm_to_copies",
@@ -94,12 +119,20 @@ mod tests {
 
     #[test]
     fn swarm_to_copies_generates_a_valid_map_kernel() {
-        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SwarmToCopies>().expect("swarm_to_copies codegen");
-        let module = naga::front::wgsl::parse_str(&wgsl).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
-        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
-            .validate(&module)
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SwarmToCopies>()
+            .expect("swarm_to_copies codegen");
+        let module = naga::front::wgsl::parse_str(&wgsl)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
-        assert!(wgsl.contains("size: f32,\n    dispatch_count: u32,"), "{wgsl}");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
+        assert!(
+            wgsl.contains("size: f32,\n    dispatch_count: u32,"),
+            "{wgsl}"
+        );
         assert_eq!(std::mem::size_of::<Uniforms>(), 16);
     }
 }

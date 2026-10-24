@@ -18,8 +18,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
@@ -102,7 +102,8 @@ impl Primitive for GeneratePlaneMesh {
         // present, the param is the fallback.
         let width = ctx.scalar_or_param("width", 1.0);
         let height = ctx.scalar_or_param("height", 1.0);
-        ctx.outputs.set_mesh_source("source", MeshSource::Plane { width, height });
+        ctx.outputs
+            .set_mesh_source("source", MeshSource::Plane { width, height });
 
         let Some(dst) = ctx.outputs.array("vertices") else {
             return;
@@ -155,23 +156,29 @@ mod tests {
         assert_eq!(GeneratePlaneMesh::INPUTS.len(), 2);
         assert_eq!(GeneratePlaneMesh::INPUTS[0].name, "width");
         assert!(!GeneratePlaneMesh::INPUTS[0].required);
-        assert_eq!(GeneratePlaneMesh::INPUTS[0].ty, PortType::Scalar(ScalarType::F32));
+        assert_eq!(
+            GeneratePlaneMesh::INPUTS[0].ty,
+            PortType::Scalar(ScalarType::F32)
+        );
         assert_eq!(GeneratePlaneMesh::INPUTS[1].name, "height");
         assert!(!GeneratePlaneMesh::INPUTS[1].required);
-        assert_eq!(GeneratePlaneMesh::INPUTS[1].ty, PortType::Scalar(ScalarType::F32));
+        assert_eq!(
+            GeneratePlaneMesh::INPUTS[1].ty,
+            PortType::Scalar(ScalarType::F32)
+        );
         assert_eq!(GeneratePlaneMesh::OUTPUTS.len(), 2);
         assert_eq!(GeneratePlaneMesh::OUTPUTS[1].name, "source");
         assert_eq!(GeneratePlaneMesh::OUTPUTS[1].ty, PortType::MeshSource);
         assert_eq!(GeneratePlaneMesh::OUTPUTS[0].name, "vertices");
-        assert_eq!(
-            GeneratePlaneMesh::OUTPUTS[0].ty,
-            PortType::Array(layout)
-        );
+        assert_eq!(GeneratePlaneMesh::OUTPUTS[0].ty, PortType::Array(layout));
     }
 
     #[test]
     fn generate_plane_mesh_default_capacity_is_6() {
-        let names: Vec<&str> = GeneratePlaneMesh::PARAMS.iter().map(|p| p.name.as_ref()).collect();
+        let names: Vec<&str> = GeneratePlaneMesh::PARAMS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
         assert_eq!(names, vec!["max_capacity", "width", "height"]);
         let cap = GeneratePlaneMesh::PARAMS
             .iter()
@@ -204,8 +211,15 @@ mod gpu_tests {
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: uniform },
-                GpuBinding::Buffer { binding: 1, buffer: &out_buf, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: uniform,
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &out_buf,
+                    offset: 0,
+                },
             ],
             [capacity.div_ceil(256), 1, 1],
             "plane-mesh-oracle",
@@ -222,12 +236,20 @@ mod gpu_tests {
     /// (n = the 0..1-normalized position).
     fn expected_vertex(idx: u32, width: f32, height: f32) -> MeshVertex {
         const CORNER_POS: [[f32; 3]; 6] = [
-            [-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [1.0, 1.0, 0.0],
-            [-1.0, -1.0, 0.0], [1.0, 1.0, 0.0], [-1.0, 1.0, 0.0],
+            [-1.0, -1.0, 0.0],
+            [1.0, -1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [-1.0, -1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [-1.0, 1.0, 0.0],
         ];
         const CORNER_UV: [[f32; 2]; 6] = [
-            [0.0, 1.0], [1.0, 1.0], [1.0, 0.0],
-            [0.0, 1.0], [1.0, 0.0], [0.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 1.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 0.0],
+            [0.0, 0.0],
         ];
         let c = CORNER_POS[idx as usize];
         let uv = CORNER_UV[idx as usize];
@@ -241,7 +263,7 @@ mod gpu_tests {
             tangent: [0.0; 4],
             color: [1.0; 4],
         }
-}
+    }
 
     #[test]
     fn generated_plane_mesh_matches_cpu_expected_positions_normals_and_uvs() {

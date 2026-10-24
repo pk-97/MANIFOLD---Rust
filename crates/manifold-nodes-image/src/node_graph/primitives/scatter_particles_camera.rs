@@ -20,15 +20,15 @@
 //! pixel-write behavior (perspective culls behind-camera particles; ortho
 //! wraps toroidally so edges connect seamlessly).
 
-use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
+use std::borrow::Cow;
 
-use manifold_node_engine::particles::Particle;
-use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::Particle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::scene::camera::Camera;
 
 pub const SCATTER_CAMERA_MODES: &[&str] = &["Perspective", "Orthographic"];
 
@@ -156,11 +156,16 @@ impl Primitive for ScatterParticlesCamera {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let active_count = ctx.scalar_or_param("active_count", 100_000.0).round().max(0.0) as u32;
+        let active_count = ctx
+            .scalar_or_param("active_count", 100_000.0)
+            .round()
+            .max(0.0) as u32;
         let disp_w = ctx.scalar_or_param("disp_w", 1920.0).round().max(1.0) as u32;
         let disp_h = ctx.scalar_or_param("disp_h", 1080.0).round().max(1.0) as u32;
-        let scaled_energy =
-            ctx.scalar_or_param("scaled_energy", 4096.0).round().max(0.0) as u32;
+        let scaled_energy = ctx
+            .scalar_or_param("scaled_energy", 4096.0)
+            .round()
+            .max(0.0) as u32;
         // `mode` is port-shadows-param: wired Float wins (FluidSim3D
         // computes `1 if container == 0 else 0` via a math chain so the
         // outer `container` enum maps None → Ortho-toroidal vs Cube /
@@ -177,7 +182,10 @@ impl Primitive for ScatterParticlesCamera {
                 _ => 0,
             });
 
-        let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
+        let cam = ctx
+            .inputs
+            .camera("camera")
+            .unwrap_or_else(Camera::default_perspective);
 
         let Some(particles) = ctx.inputs.array("particles") else {
             return;
@@ -246,4 +254,3 @@ impl Primitive for ScatterParticlesCamera {
         );
     }
 }
-

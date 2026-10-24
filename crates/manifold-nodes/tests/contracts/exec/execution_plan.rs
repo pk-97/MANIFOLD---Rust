@@ -1,6 +1,6 @@
 mod tests {
-use manifold_node_engine::graph::Graph;
-use manifold_node_engine::exec::execution_plan::compile;
+    use manifold_node_engine::exec::execution_plan::compile;
+    use manifold_node_engine::graph::Graph;
     /// D6(a) follow-up: end-to-end proof
     /// using the REAL registered primitives, now that `node.edge_slope`
     /// (aliased "gradient" — a gradient-producing central-difference atom)
@@ -15,7 +15,11 @@ use manifold_node_engine::exec::execution_plan::compile;
 
         let registry = PrimitiveRegistry::with_builtin();
         let mut g = Graph::new();
-        let source = g.add_node(registry.construct("system.source").expect("source boundary registered"));
+        let source = g.add_node(
+            registry
+                .construct("system.source")
+                .expect("source boundary registered"),
+        );
         let edge_slope = g.add_node(
             registry
                 .construct("node.edge_slope")
@@ -27,7 +31,8 @@ use manifold_node_engine::exec::execution_plan::compile;
                 .expect("node.surface_bumps registered"),
         );
         g.connect((source, "out"), (edge_slope, "in")).unwrap();
-        g.connect((edge_slope, "out"), (surface_bumps, "in")).unwrap();
+        g.connect((edge_slope, "out"), (surface_bumps, "in"))
+            .unwrap();
 
         let plan = compile(&g).unwrap();
         let r_edge_slope_out = plan

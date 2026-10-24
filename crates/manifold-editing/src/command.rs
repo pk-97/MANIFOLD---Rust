@@ -133,12 +133,22 @@ impl Drop for RowWalk {
 /// nothing; the commit measures its own move with the same rule
 /// (`ParamSpecDef::row_fact`). Rows then change on mouse-up, never under the
 /// cursor.
-pub fn value_moves_rows(project: &Project, target: &GraphTarget, param_id: &str, old: f32, new: f32) -> ChangeSet {
+pub fn value_moves_rows(
+    project: &Project,
+    target: &GraphTarget,
+    param_id: &str,
+    old: f32,
+    new: f32,
+) -> ChangeSet {
     let moves = project
         .preset_instance(target)
         .and_then(|inst| inst.params.get(param_id))
         .is_some_and(|param| param.spec.row_fact(old) != param.spec.row_fact(new));
-    if moves { ChangeSet::of(&[manifold_core::change::Part::Effects]) } else { ChangeSet::NONE }
+    if moves {
+        ChangeSet::of(&[manifold_core::change::Part::Effects])
+    } else {
+        ChangeSet::NONE
+    }
 }
 
 /// Composite command that groups multiple commands.
@@ -180,11 +190,18 @@ impl CompositeCommand {
     /// The end of the run of scene document commands on one layer that
     /// starts at `start`; `start + 1` when none starts there.
     fn scene_run_end(&mut self, start: usize) -> usize {
-        let Some(layer) = self.commands[start].scene_edit().map(|edit| edit.layer().clone()) else {
+        let Some(layer) = self.commands[start]
+            .scene_edit()
+            .map(|edit| edit.layer().clone())
+        else {
             return start + 1;
         };
         let mut end = start + 1;
-        while end < self.commands.len() && self.commands[end].scene_edit().is_some_and(|edit| *edit.layer() == layer) {
+        while end < self.commands.len()
+            && self.commands[end]
+                .scene_edit()
+                .is_some_and(|edit| *edit.layer() == layer)
+        {
             end += 1;
         }
         end
@@ -192,16 +209,34 @@ impl CompositeCommand {
 
     /// Edit the document with each command of `range` in turn, compile and
     /// install once, then let each write what needs the new params.
-    fn run_scene_edits(&mut self, project: &mut Project, range: std::ops::Range<usize>) -> Result<(), String> {
+    fn run_scene_edits(
+        &mut self,
+        project: &mut Project,
+        range: std::ops::Range<usize>,
+    ) -> Result<(), String> {
         let run = &mut self.commands[range.clone()];
         let layer = run[0].scene_edit().expect("a scene run").layer().clone();
         let mut before = crate::commands::scene_doc::apply(project, &layer, |doc, values| {
-            run.iter_mut().try_for_each(|command| command.scene_edit().expect("a scene run").edit_doc(doc, values))
+            run.iter_mut().try_for_each(|command| {
+                command
+                    .scene_edit()
+                    .expect("a scene run")
+                    .edit_doc(doc, values)
+            })
         })?;
         for command in run.iter_mut() {
-            before.note_written(command.scene_edit().expect("a scene run").after_install(project));
+            before.note_written(
+                command
+                    .scene_edit()
+                    .expect("a scene run")
+                    .after_install(project),
+            );
         }
-        self.scene_runs.push(SceneRun { range, layer, before: Some(before) });
+        self.scene_runs.push(SceneRun {
+            range,
+            layer,
+            before: Some(before),
+        });
         Ok(())
     }
 
@@ -209,7 +244,11 @@ impl CompositeCommand {
     fn undo_before(&mut self, project: &mut Project, upto: usize) {
         let mut index = upto;
         while index > 0 {
-            if let Some(run) = self.scene_runs.iter_mut().find(|run| run.range.end == index) {
+            if let Some(run) = self
+                .scene_runs
+                .iter_mut()
+                .find(|run| run.range.end == index)
+            {
                 if let Some(before) = run.before.take() {
                     crate::commands::scene_doc::restore(project, &run.layer, before);
                 }
@@ -322,14 +361,24 @@ mod tests {
         let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let mut files = Vec::new();
         rust_files(&crates, &mut files);
-        assert!(files.len() > 100, "the scan found no sources under {}", crates.display());
+        assert!(
+            files.len() > 100,
+            "the scan found no sources under {}",
+            crates.display()
+        );
         let this = std::path::Path::new(file!()).file_name().unwrap();
         let mut escapes = Vec::new();
-        for path in files.iter().filter(|p| !p.ends_with(std::path::Path::new("manifold-editing/src").join(this))) {
-            let Ok(text) = std::fs::read_to_string(path) else { continue };
+        for path in files
+            .iter()
+            .filter(|p| !p.ends_with(std::path::Path::new("manifold-editing/src").join(this)))
+        {
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
             for (n, line) in text.lines().enumerate() {
                 let code = line.trim_start();
-                let overrides = (code.starts_with("fn execute(&mut self,") || code.starts_with("fn undo(&mut self,"))
+                let overrides = (code.starts_with("fn execute(&mut self,")
+                    || code.starts_with("fn undo(&mut self,"))
                     && code.contains("&mut Project)");
                 let bypasses = code.contains(".do_execute(") || code.contains(".do_undo(");
                 if overrides || bypasses {
@@ -337,14 +386,20 @@ mod tests {
                 }
             }
         }
-        assert!(escapes.is_empty(), "commands escaping the change audit:\n{}", escapes.join("\n"));
+        assert!(
+            escapes.is_empty(),
+            "commands escaping the change audit:\n{}",
+            escapes.join("\n")
+        );
     }
 
     #[derive(Debug)]
     struct TargetCommand(GraphTarget);
 
     impl Command for TargetCommand {
-        fn touches(&self) -> ChangeSet { ChangeSet::NONE }
+        fn touches(&self) -> ChangeSet {
+            ChangeSet::NONE
+        }
         fn do_execute(&mut self, _project: &mut Project) {}
         fn do_undo(&mut self, _project: &mut Project) {}
         fn description(&self) -> &str {
@@ -359,7 +414,9 @@ mod tests {
     struct ReasonCommand(&'static str);
 
     impl Command for ReasonCommand {
-        fn touches(&self) -> ChangeSet { ChangeSet::NONE }
+        fn touches(&self) -> ChangeSet {
+            ChangeSet::NONE
+        }
         fn do_execute(&mut self, _project: &mut Project) {}
         fn do_undo(&mut self, _project: &mut Project) {}
         fn description(&self) -> &str {
@@ -381,7 +438,9 @@ mod tests {
     }
 
     impl Command for AppendCommand {
-        fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Media]) }
+        fn touches(&self) -> ChangeSet {
+            ChangeSet::of(&[Part::Media])
+        }
         fn do_execute(&mut self, project: &mut Project) {
             project
                 .settings
@@ -533,9 +592,17 @@ mod tests {
         assert_eq!(walks() - before, 1, "undo");
         let before = walks();
         rows_deferred(&mut project, |project| cmd.execute(project));
-        assert_eq!(walks() - before, 0, "a gesture move walks nothing, nested or not");
+        assert_eq!(
+            walks() - before,
+            0,
+            "a gesture move walks nothing, nested or not"
+        );
         let before = walks();
         cmd.undo(&mut project);
-        assert_eq!(walks() - before, 1, "the walk reopens after a deferred write");
+        assert_eq!(
+            walks() - before,
+            1,
+            "the walk reopens after a deferred write"
+        );
     }
 }

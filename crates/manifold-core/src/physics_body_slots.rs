@@ -36,7 +36,9 @@ impl BodySlots {
     }
 
     fn is_taken(&self, slot: u32) -> bool {
-        self.0.get(slot as usize / 64).is_some_and(|word| word & (1 << (slot % 64)) != 0)
+        self.0
+            .get(slot as usize / 64)
+            .is_some_and(|word| word & (1 << (slot % 64)) != 0)
     }
 
     pub fn first_free(&self) -> u32 {
@@ -59,12 +61,18 @@ pub fn world_bodies(world: &EffectGraphNode) -> u32 {
 /// this once after wiring. A world already that big is left alone, so
 /// nothing shrinks and a saved count is written only when it must change.
 pub fn fit_world_bodies(nodes: &mut [EffectGraphNode], wires: &[EffectGraphWire], world_id: u32) {
-    let Some(world) = nodes.iter_mut().find(|node| node.id == world_id) else { return };
+    let Some(world) = nodes.iter_mut().find(|node| node.id == world_id) else {
+        return;
+    };
     let highest = |family: Family| {
         wires
             .iter()
             .filter(|wire| wire.to_node == world_id)
-            .filter_map(|wire| member_input(&wire.to_port).filter(|(found, _)| *found == family).map(|(_, k)| k))
+            .filter_map(|wire| {
+                member_input(&wire.to_port)
+                    .filter(|(found, _)| *found == family)
+                    .map(|(_, k)| k)
+            })
             .max()
     };
     if let Some(k) = highest(Family::Body) {
@@ -111,19 +119,28 @@ mod tests {
 
     #[test]
     fn fitting_a_slot_grows_the_world_count_and_never_shrinks_it() {
-        let mut nodes: Vec<EffectGraphNode> = vec![serde_json::from_value(serde_json::json!(
-            {"id": 1, "nodeId": "world", "typeId": "node.physics_world"}
-        ))
-        .unwrap()];
+        let mut nodes: Vec<EffectGraphNode> = vec![
+            serde_json::from_value(serde_json::json!(
+                {"id": 1, "nodeId": "world", "typeId": "node.physics_world"}
+            ))
+            .unwrap(),
+        ];
         assert_eq!(world_bodies(&nodes[0]), PHYSICS_WORLD_DEFAULT_BODIES);
         let mut wires = vec![wire(10, "body", 1, "body_0")];
         fit_world_bodies(&mut nodes, &wires, 1);
-        assert!(nodes[0].params.is_empty(), "a slot inside the count writes nothing");
+        assert!(
+            nodes[0].params.is_empty(),
+            "a slot inside the count writes nothing"
+        );
         wires.push(wire(11, "body", 1, "body_999"));
         fit_world_bodies(&mut nodes, &wires, 1);
         assert_eq!(world_bodies(&nodes[0]), 1_000);
         wires.truncate(1);
         fit_world_bodies(&mut nodes, &wires, 1);
-        assert_eq!(world_bodies(&nodes[0]), 1_000, "unwiring never shrinks the world");
+        assert_eq!(
+            world_bodies(&nodes[0]),
+            1_000,
+            "unwiring never shrinks the world"
+        );
     }
 }

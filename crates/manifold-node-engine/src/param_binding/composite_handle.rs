@@ -1,8 +1,8 @@
-use ahash::AHashMap;
 use crate::exec::effect_node::{EffectNodeType, NodeInstanceId};
 use crate::graph::Graph;
 use crate::parameters::ParamValue;
 use crate::validation::GraphError;
+use ahash::AHashMap;
 
 /// Returned by every composite-builder function. Tracks the wire endpoint
 /// to use as the composite's output, the routing from outer parameter

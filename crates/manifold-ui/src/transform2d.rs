@@ -27,7 +27,14 @@ pub struct Affine2 {
 
 impl Affine2 {
     /// The identity transform — `apply` is a no-op.
-    pub const IDENTITY: Affine2 = Affine2 { a: 1.0, b: 0.0, c: 0.0, d: 1.0, tx: 0.0, ty: 0.0 };
+    pub const IDENTITY: Affine2 = Affine2 {
+        a: 1.0,
+        b: 0.0,
+        c: 0.0,
+        d: 1.0,
+        tx: 0.0,
+        ty: 0.0,
+    };
 
     pub fn identity() -> Self {
         Self::IDENTITY
@@ -35,21 +42,42 @@ impl Affine2 {
 
     /// Pure translation by `(tx, ty)`.
     pub fn translate(tx: f32, ty: f32) -> Self {
-        Self { a: 1.0, b: 0.0, c: 0.0, d: 1.0, tx, ty }
+        Self {
+            a: 1.0,
+            b: 0.0,
+            c: 0.0,
+            d: 1.0,
+            tx,
+            ty,
+        }
     }
 
     /// Pure scale about the origin — `(sx, sy)` independent axis factors.
     /// Non-uniform (`sx != sy`) warps corner-radius AA; see the design doc's
     /// "honest boundaries" section.
     pub fn scale(sx: f32, sy: f32) -> Self {
-        Self { a: sx, b: 0.0, c: 0.0, d: sy, tx: 0.0, ty: 0.0 }
+        Self {
+            a: sx,
+            b: 0.0,
+            c: 0.0,
+            d: sy,
+            tx: 0.0,
+            ty: 0.0,
+        }
     }
 
     /// Pure rotation about the origin, `radians` clockwise (screen Y grows
     /// downward, so a positive angle turns the +X axis toward +Y visually).
     pub fn rotate(radians: f32) -> Self {
         let (sin_r, cos_r) = radians.sin_cos();
-        Self { a: cos_r, b: sin_r, c: -sin_r, d: cos_r, tx: 0.0, ty: 0.0 }
+        Self {
+            a: cos_r,
+            b: sin_r,
+            c: -sin_r,
+            d: cos_r,
+            tx: 0.0,
+            ty: 0.0,
+        }
     }
 
     /// Rotation by `radians` about `pivot` — the pivot point is left fixed.
@@ -75,7 +103,10 @@ impl Affine2 {
 
     /// Apply the transform to a point.
     pub fn apply(&self, p: (f32, f32)) -> (f32, f32) {
-        (self.a * p.0 + self.c * p.1 + self.tx, self.b * p.0 + self.d * p.1 + self.ty)
+        (
+            self.a * p.0 + self.c * p.1 + self.tx,
+            self.b * p.0 + self.d * p.1 + self.ty,
+        )
     }
 }
 

@@ -26,17 +26,19 @@ use objc2_foundation::{NSRange, NSString};
 use objc2_metal::{
     MTLBarrierScope, MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder,
     MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLIndirectCommandBuffer,
-    MTLIndirectCommandBufferDescriptor, MTLIndirectCommandType, MTLIndirectComputeCommand, MTLResource,
-    MTLResourceOptions, MTLResourceUsage, MTLSize,
+    MTLIndirectCommandBufferDescriptor, MTLIndirectCommandType, MTLIndirectComputeCommand,
+    MTLResource, MTLResourceOptions, MTLResourceUsage, MTLSize,
 };
 
-use super::device::GpuDevice;
-use super::encoder::{EncoderState, GpuEncoder, MAX_BUFFER_SLOTS, RT_STAGE_PREFIX, collect_buffer_sizes};
-use super::types::{GpuBuffer, GpuComputePipeline};
 use super::SIZES_BUFFER_BINDING;
+use super::device::GpuDevice;
+use super::encoder::{
+    EncoderState, GpuEncoder, MAX_BUFFER_SLOTS, RT_STAGE_PREFIX, collect_buffer_sizes,
+};
+use super::types::{GpuBuffer, GpuComputePipeline};
 use crate::replay::{
-    ARENA_BYTES, BYTES_ALIGN, BytesSlot, CHUNK_COMMANDS, DispatchKey, GateKey, GpuReplayStats, KeyBinding,
-    MAX_KEY_BINDINGS, Recording, pick_entry, replay_allowed_by_env,
+    ARENA_BYTES, BYTES_ALIGN, BytesSlot, CHUNK_COMMANDS, DispatchKey, GateKey, GpuReplayStats,
+    KeyBinding, MAX_KEY_BINDINGS, Recording, pick_entry, replay_allowed_by_env,
 };
 use crate::types::GpuBinding;
 
@@ -66,7 +68,8 @@ impl GpuReplayCache {
     /// wanted. `None`: no idle entry, or its storage couldn't be made.
     fn enter(&mut self, device: &GpuDevice) -> Option<usize> {
         let entries = &self.entries;
-        let Some(index) = pick_entry(entries.len(), self.mru, |i| entries[i].store.is_idle()) else {
+        let Some(index) = pick_entry(entries.len(), self.mru, |i| entries[i].store.is_idle())
+        else {
             self.stats.ring_busy += 1;
             return None;
         };
@@ -138,7 +141,10 @@ struct ReplayStore {
 impl ReplayStore {
     fn is_idle(&self) -> bool {
         self.last_cmd_buf.as_ref().is_none_or(|buf| {
-            matches!(unsafe { buf.status() }, MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error)
+            matches!(
+                unsafe { buf.status() },
+                MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error
+            )
         })
     }
 
@@ -151,18 +157,23 @@ impl ReplayStore {
     /// when a segment is first recorded (a changed segment structure is a
     /// recording cut, which already allocates nothing while warm).
     fn reserve(&mut self, device: &GpuDevice, stats: &mut GpuReplayStats) {
-        let chunks = (self.chunk_cursor + self.short_commands).div_ceil(CHUNK_COMMANDS).max(1);
+        let chunks = (self.chunk_cursor + self.short_commands)
+            .div_ceil(CHUNK_COMMANDS)
+            .max(1);
         while self.chunks.len() < chunks {
             let Some(chunk) = new_chunk(device) else {
-                log::warn!("encode replay: indirect command buffer allocation failed; the span encodes directly");
+                log::warn!(
+                    "encode replay: indirect command buffer allocation failed; the span encodes directly"
+                );
                 break;
             };
             self.chunks.push(chunk);
             stats.store_allocations += 1;
         }
         let used = self.arena_cursor.0 as usize * ARENA_BYTES + self.arena_cursor.1 as usize;
-        let arenas = ((used + self.short_bytes).div_ceil(ARENA_BYTES) + usize::from(self.short_bytes > 0))
-            .max(1);
+        let arenas = ((used + self.short_bytes).div_ceil(ARENA_BYTES)
+            + usize::from(self.short_bytes > 0))
+        .max(1);
         while self.arenas.len() < arenas {
             match device.try_create_buffer_shared(ARENA_BYTES as u64) {
                 Ok(arena) => {
@@ -170,7 +181,9 @@ impl ReplayStore {
                     stats.store_allocations += 1;
                 }
                 Err(error) => {
-                    log::warn!("encode replay: uniform arena allocation failed ({error}); the span encodes directly");
+                    log::warn!(
+                        "encode replay: uniform arena allocation failed ({error}); the span encodes directly"
+                    );
                     break;
                 }
             }
@@ -181,7 +194,11 @@ impl ReplayStore {
 
     /// Arena slots for every inline binding of `key`, in binding order, or
     /// `false` with the cursor untouched when they don't all fit.
-    fn alloc_bytes(&mut self, key: &DispatchKey, slots: &mut [BytesSlot; MAX_KEY_BINDINGS]) -> (bool, usize) {
+    fn alloc_bytes(
+        &mut self,
+        key: &DispatchKey,
+        slots: &mut [BytesSlot; MAX_KEY_BINDINGS],
+    ) -> (bool, usize) {
         let before = self.arena_cursor;
         let mut count = 0;
         for binding in key.bindings() {
@@ -206,11 +223,15 @@ impl ReplayStore {
     }
 
     fn write_bytes(&self, slot: BytesSlot, data: &[u8]) {
-        let base = self.arenas[slot.arena as usize].mapped_ptr().expect("replay arenas are shared memory");
+        let base = self.arenas[slot.arena as usize]
+            .mapped_ptr()
+            .expect("replay arenas are shared memory");
         // Safety: the slot was allocated for `data.len()` bytes inside the
         // arena, and the entry is not being read by the GPU (it was idle
         // when the span took it, and this command has not executed yet).
-        unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), base.add(slot.offset as usize), data.len()) };
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), base.add(slot.offset as usize), data.len())
+        };
     }
 
     /// Drop every command from `len` on. A dropped segment slot is reset so
@@ -229,7 +250,12 @@ impl ReplayStore {
             match command.place {
                 Place::Chunk(position) => chunk_cursor = chunk_cursor.min(position),
                 Place::Segment { segment, slot } => {
-                    unsafe { self.segments[segment].icb.indirectComputeCommandAtIndex(slot) }.reset();
+                    unsafe {
+                        self.segments[segment]
+                            .icb
+                            .indirectComputeCommandAtIndex(slot)
+                    }
+                    .reset();
                     if slot == 0 {
                         segments = segments.min(segment);
                     }
@@ -252,7 +278,8 @@ impl ReplayStore {
         stats: &mut GpuReplayStats,
     ) -> Option<Place> {
         let Some(gate) = key.gate else {
-            return (self.chunk_cursor < self.capacity()).then_some(Place::Chunk(self.chunk_cursor));
+            return (self.chunk_cursor < self.capacity())
+                .then_some(Place::Chunk(self.chunk_cursor));
         };
         let slot = gate.slot as usize;
         if slot >= gate.commands as usize {
@@ -265,10 +292,16 @@ impl ReplayStore {
                 unsafe { icb.indirectComputeCommandAtIndex(i) }.reset();
             }
             stats.store_allocations += 1;
-            self.segments.push(StoredSegment { icb, commands: gate.commands as usize, ranges: ranges.clone(), offset: gate.offset });
+            self.segments.push(StoredSegment {
+                icb,
+                commands: gate.commands as usize,
+                ranges: ranges.clone(),
+                offset: gate.offset,
+            });
         }
         let segment = self.segments.len().checked_sub(1)?;
-        (self.segments[segment].commands == gate.commands as usize).then_some(Place::Segment { segment, slot })
+        (self.segments[segment].commands == gate.commands as usize)
+            .then_some(Place::Segment { segment, slot })
     }
 
     /// Write `key` as the next command at `place`. `buffers` holds the
@@ -288,9 +321,15 @@ impl ReplayStore {
         let resources_start = self.resources.len() as u32;
         let command = match place {
             Place::Chunk(position) => {
-                debug_assert_eq!(position, self.chunk_cursor, "chunk commands are placed in order");
+                debug_assert_eq!(
+                    position, self.chunk_cursor,
+                    "chunk commands are placed in order"
+                );
                 self.chunk_cursor = position + 1;
-                unsafe { self.chunks[position / CHUNK_COMMANDS].indirectComputeCommandAtIndex(position % CHUNK_COMMANDS) }
+                unsafe {
+                    self.chunks[position / CHUNK_COMMANDS]
+                        .indirectComputeCommandAtIndex(position % CHUNK_COMMANDS)
+                }
             }
             Place::Segment { segment, slot } => {
                 let stored = &self.segments[segment];
@@ -307,8 +346,18 @@ impl ReplayStore {
         for binding in key.bindings() {
             match *binding {
                 KeyBinding::Buffer { slot, offset, .. } => {
-                    let buffer = buffers.next().copied().flatten().expect("one buffer per buffer binding");
-                    unsafe { command.setKernelBuffer_offset_atIndex(&buffer.raw, offset as usize, slot as usize) };
+                    let buffer = buffers
+                        .next()
+                        .copied()
+                        .flatten()
+                        .expect("one buffer per buffer binding");
+                    unsafe {
+                        command.setKernelBuffer_offset_atIndex(
+                            &buffer.raw,
+                            offset as usize,
+                            slot as usize,
+                        )
+                    };
                     self.resources.push(resource(&buffer.raw));
                     self.retained.push(buffer.raw.clone());
                 }
@@ -316,12 +365,21 @@ impl ReplayStore {
                     let store = *slots.next().expect("one arena slot per inline binding");
                     self.write_bytes(store, data);
                     let arena = &self.arenas[store.arena as usize].raw;
-                    unsafe { command.setKernelBuffer_offset_atIndex(arena, store.offset as usize, slot as usize) };
+                    unsafe {
+                        command.setKernelBuffer_offset_atIndex(
+                            arena,
+                            store.offset as usize,
+                            slot as usize,
+                        )
+                    };
                     self.resources.push(resource(arena));
                 }
             }
         }
-        command.concurrentDispatchThreadgroups_threadsPerThreadgroup(mtl_size(key.groups), mtl_size(pipeline.workgroup_size));
+        command.concurrentDispatchThreadgroups_threadsPerThreadgroup(
+            mtl_size(key.groups),
+            mtl_size(pipeline.workgroup_size),
+        );
         command.setBarrier();
         self.commands.push(StoredCommand {
             _pipeline: pipeline.state.clone(),
@@ -345,7 +403,10 @@ impl ReplayStore {
     ) -> (u64, u64) {
         let first = &self.commands[range.start];
         let resources_start = first.resources_start as usize;
-        let resources_end = self.commands.get(range.end).map_or(self.resources.len(), |c| c.resources_start as usize);
+        let resources_end = self
+            .commands
+            .get(range.end)
+            .map_or(self.resources.len(), |c| c.resources_start as usize);
         let (mut executes, mut segments) = (0, 0);
         unsafe {
             enc.pushDebugGroup(&first.label);
@@ -356,7 +417,8 @@ impl ReplayStore {
             // the proofs hold without it under the Metal debug layer.
             enc.memoryBarrierWithScope(MTLBarrierScope::Buffers);
             if resources_end > resources_start {
-                let resources = NonNull::new_unchecked(self.resources.as_mut_ptr().add(resources_start));
+                let resources =
+                    NonNull::new_unchecked(self.resources.as_mut_ptr().add(resources_start));
                 enc.useResources_count_usage(
                     resources,
                     resources_end - resources_start,
@@ -379,16 +441,25 @@ impl ReplayStore {
                             end += 1;
                         }
                         let icb = &self.chunks[chunk];
-                        enc.executeCommandsInBuffer_withRange(icb, NSRange::new(position % CHUNK_COMMANDS, end - start));
+                        enc.executeCommandsInBuffer_withRange(
+                            icb,
+                            NSRange::new(position % CHUNK_COMMANDS, end - start),
+                        );
                         start = end;
                     }
                     Place::Segment { segment, .. } => {
                         let mut end = start + 1;
-                        while end < range.end && matches!(self.commands[end].place, Place::Segment { segment: s, .. } if s == segment) {
+                        while end < range.end
+                            && matches!(self.commands[end].place, Place::Segment { segment: s, .. } if s == segment)
+                        {
                             end += 1;
                         }
                         let stored = &self.segments[segment];
-                        enc.executeCommandsInBuffer_indirectBuffer_indirectBufferOffset(&stored.icb, &stored.ranges, stored.offset as usize);
+                        enc.executeCommandsInBuffer_indirectBuffer_indirectBufferOffset(
+                            &stored.icb,
+                            &stored.ranges,
+                            stored.offset as usize,
+                        );
                         segments += 1;
                         start = end;
                     }
@@ -407,7 +478,10 @@ fn new_chunk(device: &GpuDevice) -> Option<Retained<ProtocolObject<dyn MTLIndire
     new_icb(device.raw_device(), CHUNK_COMMANDS)
 }
 
-fn new_icb(device: &ProtocolObject<dyn MTLDevice>, commands: usize) -> Option<Retained<ProtocolObject<dyn MTLIndirectCommandBuffer>>> {
+fn new_icb(
+    device: &ProtocolObject<dyn MTLDevice>,
+    commands: usize,
+) -> Option<Retained<ProtocolObject<dyn MTLIndirectCommandBuffer>>> {
     let desc = MTLIndirectCommandBufferDescriptor::new();
     desc.setCommandTypes(MTLIndirectCommandType::ConcurrentDispatch);
     desc.setInheritPipelineState(false);
@@ -427,7 +501,11 @@ fn resource(buffer: &ProtocolObject<dyn MTLBuffer>) -> NonNull<ProtocolObject<dy
 }
 
 fn mtl_size(v: [u32; 3]) -> MTLSize {
-    MTLSize { width: v[0] as usize, height: v[1] as usize, depth: v[2] as usize }
+    MTLSize {
+        width: v[0] as usize,
+        height: v[1] as usize,
+        depth: v[2] as usize,
+    }
 }
 
 fn identity<T: ?Sized>(object: &T) -> usize {
@@ -498,7 +576,9 @@ impl GpuEncoder {
     /// `MANIFOLD_ENCODE_REPLAY=0`.
     pub fn begin_replay(&mut self, device: &GpuDevice, mut cache: GpuReplayCache) {
         debug_assert!(self.replay.is_none(), "replay spans never nest");
-        let enabled = self.profile.is_none() && !super::gpu_fault::diagnostics_enabled() && replay_allowed_by_env();
+        let enabled = self.profile.is_none()
+            && !super::gpu_fault::diagnostics_enabled()
+            && replay_allowed_by_env();
         let entry = if enabled { cache.enter(device) } else { None };
         let copy_kernel = entry.is_some().then(|| device.replay_copy_kernel().clone());
         self.replay = Some(ReplaySpan {
@@ -570,7 +650,14 @@ impl GpuEncoder {
                         commands: segment.commands,
                         slot: segment.taken,
                     };
-                    self.replay_dispatch_in(&mut span, pipeline, bindings, Some(groups), Some(gate), label)
+                    self.replay_dispatch_in(
+                        &mut span,
+                        pipeline,
+                        bindings,
+                        Some(groups),
+                        Some(gate),
+                        label,
+                    )
                 }
                 _ => false,
             };
@@ -611,13 +698,26 @@ impl GpuEncoder {
     /// went that way; false leaves it to the blit. Only a replaying span
     /// takes copies, only word-aligned ones, and never one whose source and
     /// destination ranges overlap.
-    pub(super) fn replay_copy(&mut self, src: &GpuBuffer, src_offset: u64, dst: &GpuBuffer, dst_offset: u64, size: u64) -> bool {
-        let Some(kernel) = self.replay.as_ref().and_then(|span| span.copy_kernel.clone()) else {
+    pub(super) fn replay_copy(
+        &mut self,
+        src: &GpuBuffer,
+        src_offset: u64,
+        dst: &GpuBuffer,
+        dst_offset: u64,
+        size: u64,
+    ) -> bool {
+        let Some(kernel) = self
+            .replay
+            .as_ref()
+            .and_then(|span| span.copy_kernel.clone())
+        else {
             return false;
         };
-        let aligned = src_offset.is_multiple_of(4) && dst_offset.is_multiple_of(4) && size.is_multiple_of(4);
-        let overlap =
-            std::ptr::eq(&*src.raw, &*dst.raw) && src_offset < dst_offset + size && dst_offset < src_offset + size;
+        let aligned =
+            src_offset.is_multiple_of(4) && dst_offset.is_multiple_of(4) && size.is_multiple_of(4);
+        let overlap = std::ptr::eq(&*src.raw, &*dst.raw)
+            && src_offset < dst_offset + size
+            && dst_offset < src_offset + size;
         let words = size / 4;
         let (Ok(src_word), Ok(dst_word), Ok(count), Ok(groups)) = (
             u32::try_from(src_offset / 4),
@@ -632,13 +732,26 @@ impl GpuEncoder {
         }
         let params = [src_word, dst_word, count, 0];
         // SAFETY: plain u32 data, read for the length of the call.
-        let bytes = unsafe { std::slice::from_raw_parts(params.as_ptr().cast::<u8>(), std::mem::size_of_val(&params)) };
+        let bytes = unsafe {
+            std::slice::from_raw_parts(params.as_ptr().cast::<u8>(), std::mem::size_of_val(&params))
+        };
         self.dispatch_compute(
             &kernel,
             &[
-                GpuBinding::Buffer { binding: 0, buffer: src, offset: 0 },
-                GpuBinding::Buffer { binding: 1, buffer: dst, offset: 0 },
-                GpuBinding::Bytes { binding: 2, data: bytes },
+                GpuBinding::Buffer {
+                    binding: 0,
+                    buffer: src,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: dst,
+                    offset: 0,
+                },
+                GpuBinding::Bytes {
+                    binding: 2,
+                    data: bytes,
+                },
             ],
             [groups, 1, 1],
             "replay copy",
@@ -659,7 +772,11 @@ impl GpuEncoder {
 
     /// Execute the pending stretch, if any.
     pub(super) fn flush_replay(&mut self) {
-        if self.replay.as_ref().is_none_or(|span| span.cursor == span.pending_start) {
+        if self
+            .replay
+            .as_ref()
+            .is_none_or(|span| span.cursor == span.pending_start)
+        {
             return;
         }
         let mut span = self.replay.take().expect("checked above");
@@ -676,7 +793,8 @@ impl GpuEncoder {
         Self::break_segment(span);
         let enc = self.ensure_compute_raw();
         let store = &mut span.cache.entries[entry].store;
-        let (executes, segments) = store.execute(&enc, span.pending_start..span.cursor, &self.cmd_buf);
+        let (executes, segments) =
+            store.execute(&enc, span.pending_start..span.cursor, &self.cmd_buf);
         span.cache.stats.executes += executes;
         span.cache.stats.segments_replayed += segments;
         span.pending_start = span.cursor;
@@ -753,7 +871,11 @@ impl GpuEncoder {
         let mut buffer_count = 0;
         for binding in bindings {
             let pushed = match binding {
-                GpuBinding::Buffer { binding, buffer, offset } => {
+                GpuBinding::Buffer {
+                    binding,
+                    buffer,
+                    offset,
+                } => {
                     let Some(slot) = pipeline.slot_map.get(*binding) else {
                         continue;
                     };
@@ -772,7 +894,10 @@ impl GpuEncoder {
                     let Some(slot) = pipeline.slot_map.get(*binding) else {
                         continue;
                     };
-                    key.push(KeyBinding::Bytes { slot: slot.metal_index, data })
+                    key.push(KeyBinding::Bytes {
+                        slot: slot.metal_index,
+                        data,
+                    })
                 }
                 GpuBinding::Texture { .. } | GpuBinding::Sampler { .. } => false,
             };
@@ -781,12 +906,21 @@ impl GpuEncoder {
                 return false;
             }
         }
-        let (sizes, sizes_len): ([u32; MAX_BUFFER_SLOTS], usize) = collect_buffer_sizes(&pipeline.slot_map, bindings);
+        let (sizes, sizes_len): ([u32; MAX_BUFFER_SLOTS], usize) =
+            collect_buffer_sizes(&pipeline.slot_map, bindings);
         // Safety: `sizes` is plain u32 data that outlives `key`.
-        let sizes_bytes = unsafe { std::slice::from_raw_parts(sizes.as_ptr().cast::<u8>(), sizes_len * 4) };
+        let sizes_bytes =
+            unsafe { std::slice::from_raw_parts(sizes.as_ptr().cast::<u8>(), sizes_len * 4) };
         if pipeline.needs_sizes_buffer {
-            let slot = pipeline.slot_map.get(SIZES_BUFFER_BINDING).expect("sizes buffer slot missing").metal_index;
-            if !key.push(KeyBinding::Bytes { slot, data: sizes_bytes }) {
+            let slot = pipeline
+                .slot_map
+                .get(SIZES_BUFFER_BINDING)
+                .expect("sizes buffer slot missing")
+                .metal_index;
+            if !key.push(KeyBinding::Bytes {
+                slot,
+                data: sizes_bytes,
+            }) {
                 span.cache.stats.direct += 1;
                 return false;
             }
@@ -803,7 +937,9 @@ impl GpuEncoder {
             let ReplayEntry { recording, store } = &mut span.cache.entries[entry];
             if span.cursor < recording.len() {
                 if recording.matches(span.cursor, &key) {
-                    recording.refresh_bytes(span.cursor, &key, |slot, data| store.write_bytes(slot, data));
+                    recording.refresh_bytes(span.cursor, &key, |slot, data| {
+                        store.write_bytes(slot, data)
+                    });
                     span.cursor += 1;
                     span.cache.stats.replayed += 1;
                     return true;
@@ -818,20 +954,36 @@ impl GpuEncoder {
             span.mode = SpanMode::Record;
         }
 
-        debug_assert!(span.cursor >= span.pending_start, "a recording is never written where this span already ran");
+        debug_assert!(
+            span.cursor >= span.pending_start,
+            "a recording is never written where this span already ran"
+        );
         let ReplayEntry { recording, store } = &mut span.cache.entries[entry];
         debug_assert_eq!(recording.len(), span.cursor, "records append at the cursor");
         let arena_before = store.arena_cursor;
-        let mut slots = [BytesSlot { arena: 0, offset: 0 }; MAX_KEY_BINDINGS];
+        let mut slots = [BytesSlot {
+            arena: 0,
+            offset: 0,
+        }; MAX_KEY_BINDINGS];
         let ranges = span.segment.as_ref().map(|s| &s.ranges);
-        let fits = store.place_for(&span.device, &key, ranges, &mut span.cache.stats).is_some_and(|place| {
-            let (fits, count) = store.alloc_bytes(&key, &mut slots);
-            fits && {
-                recording.push(&key, &slots[..count]);
-                store.record(pipeline, &key, place, &buffers[..buffer_count], &slots[..count], arena_before, label);
-                true
-            }
-        });
+        let fits = store
+            .place_for(&span.device, &key, ranges, &mut span.cache.stats)
+            .is_some_and(|place| {
+                let (fits, count) = store.alloc_bytes(&key, &mut slots);
+                fits && {
+                    recording.push(&key, &slots[..count]);
+                    store.record(
+                        pipeline,
+                        &key,
+                        place,
+                        &buffers[..buffer_count],
+                        &slots[..count],
+                        arena_before,
+                        label,
+                    );
+                    true
+                }
+            });
         if fits {
             span.cursor += 1;
             span.cache.stats.recorded += 1;

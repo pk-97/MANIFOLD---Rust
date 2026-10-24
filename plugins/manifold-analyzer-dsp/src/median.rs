@@ -250,8 +250,6 @@ impl QuantizedHistogram {
         }
         Some(estimates)
     }
-
-
 }
 
 #[cfg(test)]

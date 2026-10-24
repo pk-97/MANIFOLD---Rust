@@ -86,13 +86,19 @@ impl<P> TickHits<P> {
 
     /// Begin this frame's ticks, right after the clock advanced to `frame`. A
     /// restart opens a new epoch and cancels every unread event of the old one.
-    pub fn observe_frame(&mut self, played: crate::PlayedTime, frame: &ClockFrame) -> Result<(), String> {
+    pub fn observe_frame(
+        &mut self,
+        played: crate::PlayedTime,
+        frame: &ClockFrame,
+    ) -> Result<(), String> {
         let label = self.label;
         if frame.restarted {
             self.epoch += 1;
             match &mut self.queue {
                 Some(queue) => {
-                    queue.reset(self.epoch, Seconds::ZERO).map_err(|error| format!("{label}: {error}"))?;
+                    queue
+                        .reset(self.epoch, Seconds::ZERO)
+                        .map_err(|error| format!("{label}: {error}"))?;
                 }
                 None => {
                     self.queue = Some(
@@ -117,16 +123,25 @@ impl<P> TickHits<P> {
         if let Some(error) = &self.failure {
             return Err(error.clone());
         }
-        let queue = self.queue.as_mut().ok_or_else(|| format!("{label}: the clock never started"))?;
+        let queue = self
+            .queue
+            .as_mut()
+            .ok_or_else(|| format!("{label}: the clock never started"))?;
         let first = frame.first_sequence;
         if queue.next_tick().tick != first {
-            let error = format!("{label}: tick {first} does not follow tick {}; restart the simulation", queue.next_tick().tick);
+            let error = format!(
+                "{label}: tick {first} does not follow tick {}; restart the simulation",
+                queue.next_tick().tick
+            );
             self.failure = Some(error.clone());
             return Err(error);
         }
         let pending = &mut self.pending;
         for tick in first..first + u64::from(frame.ticks) {
-            let stamp = TickStamp { epoch: self.epoch, tick };
+            let stamp = TickStamp {
+                epoch: self.epoch,
+                tick,
+            };
             let result = if let Some(interval) = frame.interval(tick - first) {
                 queue.begin_interval(stamp, interval, |event| pending.push(event))
             } else {
@@ -149,7 +164,12 @@ impl<P> TickHits<P> {
 
     /// This frame's ticks will not run: its hits are discarded, with a receipt.
     pub fn abandon_frame(&mut self) {
-        let Self { pending, discarded, discarded_beyond, .. } = self;
+        let Self {
+            pending,
+            discarded,
+            discarded_beyond,
+            ..
+        } = self;
         for event in pending.drain(..) {
             record_discard(discarded, discarded_beyond, event.source);
         }
@@ -174,7 +194,11 @@ impl<P> TickHits<P> {
         if !played.is_finite() {
             return Err(format!("{}: the hit time is not finite", self.label));
         }
-        Ok(EventStamp { epoch: self.epoch, time: Seconds(self.simulation_time), sequence })
+        Ok(EventStamp {
+            epoch: self.epoch,
+            time: Seconds(self.simulation_time),
+            sequence,
+        })
     }
 
     /// Whether hits are refused because the clock broke; cleared by a restart.
@@ -185,7 +209,11 @@ impl<P> TickHits<P> {
     /// Check one hit before anything takes it. A held clock discards it here.
     /// `also_outstanding` counts hits a caller keeps in flight elsewhere
     /// against the same capacity.
-    pub fn admit(&mut self, stamp: EventStamp, also_outstanding: usize) -> Result<Admission, String> {
+    pub fn admit(
+        &mut self,
+        stamp: EventStamp,
+        also_outstanding: usize,
+    ) -> Result<Admission, String> {
         if let Some(error) = &self.failure {
             return Err(error.clone());
         }
@@ -194,9 +222,14 @@ impl<P> TickHits<P> {
             return Err(format!("{label}: the clock has not started"));
         };
         if stamp.epoch != self.epoch {
-            return Err(format!("{label}: the hit belongs to a restarted simulation"));
+            return Err(format!(
+                "{label}: the hit belongs to a restarted simulation"
+            ));
         }
-        if self.last_sequence.is_some_and(|last| stamp.sequence <= last) {
+        if self
+            .last_sequence
+            .is_some_and(|last| stamp.sequence <= last)
+        {
             return Err(format!("{label}: hit sequences must increase"));
         }
         let next = queue.next_tick();
@@ -207,7 +240,9 @@ impl<P> TickHits<P> {
         }
         let outstanding = queue.len() + self.pending.len() + self.applied.len() + also_outstanding;
         if outstanding >= HIT_CAPACITY {
-            return Err(format!("{label}: {HIT_CAPACITY} hits are already in flight; this hit is refused"));
+            return Err(format!(
+                "{label}: {HIT_CAPACITY} hits are already in flight; this hit is refused"
+            ));
         }
         Ok(Admission::Open(next))
     }

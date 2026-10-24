@@ -4,8 +4,10 @@ mod exec;
 mod freeze;
 #[cfg(test)]
 mod load;
+mod node_graph;
 #[cfg(test)]
 mod palette;
+mod particle_pipeline_integration;
 #[cfg(test)]
 mod preview_encoding;
 #[cfg(test)]
@@ -14,5 +16,3 @@ mod primitive_registry;
 mod runtime;
 #[cfg(test)]
 mod water;
-mod node_graph;
-mod particle_pipeline_integration;

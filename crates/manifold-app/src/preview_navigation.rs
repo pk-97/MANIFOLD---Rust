@@ -17,7 +17,10 @@ use winit::event::{MouseButton, MouseScrollDelta};
 
 use crate::physics_overlay::PhysicsOverlayFrame;
 use crate::scene_gizmo::GizmoView;
-use crate::scene_viewport::{SceneViewportFrame, SceneViewportFrames, SceneViewportNavigation, SceneViewportRequest, ViewportHost};
+use crate::scene_viewport::{
+    SceneViewportFrame, SceneViewportFrames, SceneViewportNavigation, SceneViewportRequest,
+    ViewportHost,
+};
 use crate::viewport_input::{self, ViewportGesture, ViewportInputSensitivity};
 
 /// The output preview's navigation host.
@@ -48,16 +51,31 @@ impl PreviewNavigation {
 
     /// The navigated camera when `PreviewNavigation` is active on `layer_id`.
     pub fn camera_for(&self, layer_id: &LayerId) -> Option<ViewportCamera> {
-        let (GraphTarget::Generator(layer), _) = self.target.as_ref()? else { return None };
-        (layer == layer_id).then(|| self.session.as_ref().map(|s| s.config.camera)).flatten()
+        let (GraphTarget::Generator(layer), _) = self.target.as_ref()? else {
+            return None;
+        };
+        (layer == layer_id)
+            .then(|| self.session.as_ref().map(|s| s.config.camera))
+            .flatten()
     }
 
     /// A left or middle press inside the picture `fit` with `pickable`
     /// gizmos on: arm a drag. Only when there is a view to navigate (an
     /// output frame `shown`, or navigation running); otherwise the press
     /// belongs to whatever else is under the pointer.
-    pub fn press(&mut self, fit: Option<Rect>, pos: Vec2, button: MouseButton, pickable: bool, shown: bool) -> bool {
-        if !pickable || !(shown || self.active()) || !matches!(button, MouseButton::Left | MouseButton::Middle) || !fit.is_some_and(|fit| fit.contains(pos)) {
+    pub fn press(
+        &mut self,
+        fit: Option<Rect>,
+        pos: Vec2,
+        button: MouseButton,
+        pickable: bool,
+        shown: bool,
+    ) -> bool {
+        if !pickable
+            || !(shown || self.active())
+            || !matches!(button, MouseButton::Left | MouseButton::Middle)
+            || !fit.is_some_and(|fit| fit.contains(pos))
+        {
             return false;
         }
         self.drag = Some((button, pos.x, pos.y));
@@ -67,7 +85,13 @@ impl PreviewNavigation {
     /// Pointer motion with a drag armed: orbit, or pan with Shift or the
     /// middle button. `None` when no drag is armed; `Some(true)` when this
     /// move started navigation.
-    pub fn drag_to(&mut self, pos: Vec2, shift: bool, shown: Option<&PhysicsOverlayFrame>, size: (u32, u32)) -> Option<bool> {
+    pub fn drag_to(
+        &mut self,
+        pos: Vec2,
+        shift: bool,
+        shown: Option<&PhysicsOverlayFrame>,
+        size: (u32, u32),
+    ) -> Option<bool> {
         let (button, x, y) = self.drag?;
         let (dx, dy) = (pos.x - x, pos.y - y);
         if dx == 0.0 && dy == 0.0 {
@@ -104,17 +128,30 @@ impl PreviewNavigation {
     /// Apply `gesture`, starting navigation from the shown output camera
     /// when none runs. `Some(true)` when it started here; `None` when there
     /// is neither a session nor a shown frame to seed one.
-    fn navigate(&mut self, gesture: ViewportGesture, shown: Option<&PhysicsOverlayFrame>, size: (u32, u32)) -> Option<bool> {
+    fn navigate(
+        &mut self,
+        gesture: ViewportGesture,
+        shown: Option<&PhysicsOverlayFrame>,
+        size: (u32, u32),
+    ) -> Option<bool> {
         let started = self.session.is_none();
         if started {
             let shown = shown?;
-            let mut session = SceneViewportNavigation::new(ViewportHost::OutputPreview, size.0, size.1);
+            let mut session =
+                SceneViewportNavigation::new(ViewportHost::OutputPreview, size.0, size.1);
             *session.camera_mut() = ViewportCamera::seeded_from(&shown.camera);
             self.session = Some(session);
-            self.target = Some((GraphTarget::Generator(shown.layer.clone()), shown.scene_node.clone()));
+            self.target = Some((
+                GraphTarget::Generator(shown.layer.clone()),
+                shown.scene_node.clone(),
+            ));
         }
         let session = self.session.as_mut()?;
-        viewport_input::apply(session.camera_mut(), gesture, &ViewportInputSensitivity::default());
+        viewport_input::apply(
+            session.camera_mut(),
+            gesture,
+            &ViewportInputSensitivity::default(),
+        );
         Some(started)
     }
 
@@ -130,14 +167,26 @@ impl PreviewNavigation {
     /// The request this frame wants. Navigation ends when the Scene panel's
     /// gizmos leave the scene it looks at.
     pub fn sync_request(&mut self, gizmo_layer: Option<&LayerId>, size: (u32, u32)) -> RequestSync {
-        let Some((target, node)) = self.target.as_ref() else { return RequestSync::Unchanged };
+        let Some((target, node)) = self.target.as_ref() else {
+            return RequestSync::Unchanged;
+        };
         if !matches!(target, GraphTarget::Generator(layer) if Some(layer) == gizmo_layer) {
-            return if self.end() { RequestSync::Clear } else { RequestSync::Unchanged };
+            return if self.end() {
+                RequestSync::Clear
+            } else {
+                RequestSync::Unchanged
+            };
         }
-        let Some(session) = self.session.as_mut() else { return RequestSync::Unchanged };
+        let Some(session) = self.session.as_mut() else {
+            return RequestSync::Unchanged;
+        };
         (session.config.width, session.config.height) = (size.0.max(1), size.1.max(1));
         let request = session.request(target, node, None, self.request_sent.as_ref());
-        if self.request_sent.as_ref().is_some_and(|sent| Arc::ptr_eq(sent, &request)) {
+        if self
+            .request_sent
+            .as_ref()
+            .is_some_and(|sent| Arc::ptr_eq(sent, &request))
+        {
             return RequestSync::Unchanged;
         }
         self.request_sent = Some(request.clone());
@@ -159,15 +208,26 @@ impl PreviewNavigation {
     /// of the displayed frame. `None` shows the output through its camera.
     pub fn view(&self) -> Option<GizmoView> {
         let config = self.session.as_ref()?.displayed_config()?;
-        Some(GizmoView::new(config.camera.to_camera(), config.width, config.height))
+        Some(GizmoView::new(
+            config.camera.to_camera(),
+            config.width,
+            config.height,
+        ))
     }
 
     /// A frame-planner input: the session and the newest frame published for
     /// it, so a new navigated frame, or the end of navigation, redraws.
     pub fn frame_input(&self, frames: &SceneViewportFrames) -> (u64, u64) {
-        let Some(session) = self.session.as_ref() else { return (0, 0) };
-        let newest = frames.iter().flatten()
-            .filter(|frame| frame.request.host == ViewportHost::OutputPreview && frame.request.session == session.session)
+        let Some(session) = self.session.as_ref() else {
+            return (0, 0);
+        };
+        let newest = frames
+            .iter()
+            .flatten()
+            .filter(|frame| {
+                frame.request.host == ViewportHost::OutputPreview
+                    && frame.request.session == session.session
+            })
             .map(|frame| frame.frame)
             .max()
             .unwrap_or(0);
@@ -191,7 +251,9 @@ pub(crate) fn lease_navigated_frame(
         nav.show(None);
         return None;
     };
-    let Some((frame, texture, slot)) = crate::scene_viewport::lease_frame(pane, device, frames, &request, leases) else {
+    let Some((frame, texture, slot)) =
+        crate::scene_viewport::lease_frame(pane, device, frames, &request, leases)
+    else {
         nav.show(None);
         return None;
     };
@@ -225,15 +287,26 @@ impl crate::app::Application {
     /// picture: arm a navigation drag. True when the preview took it.
     pub(crate) fn preview_navigation_press(&mut self, button: MouseButton) -> bool {
         let pickable = self.pointer_on_navigable_preview();
-        let (fit, pos, shown) = (self.preview_fit(), self.cursor_pos, self.ws.preview_gizmo.shown().is_some());
-        self.ws.preview_navigation.press(fit, pos, button, pickable, shown)
+        let (fit, pos, shown) = (
+            self.preview_fit(),
+            self.cursor_pos,
+            self.ws.preview_gizmo.shown().is_some(),
+        );
+        self.ws
+            .preview_navigation
+            .press(fit, pos, button, pickable, shown)
     }
 
     /// Pointer motion while a navigation drag holds the pointer.
     pub(crate) fn preview_navigation_move(&mut self) -> bool {
         let size = self.preview_navigation_size();
         let shift = self.modifiers.shift;
-        let Some(started) = self.ws.preview_navigation.drag_to(self.cursor_pos, shift, self.ws.preview_gizmo.shown(), size) else {
+        let Some(started) = self.ws.preview_navigation.drag_to(
+            self.cursor_pos,
+            shift,
+            self.ws.preview_gizmo.shown(),
+            size,
+        ) else {
             return false;
         };
         if started {
@@ -257,7 +330,13 @@ impl crate::app::Application {
     pub(crate) fn preview_navigation_wheel(&mut self, delta: MouseScrollDelta) -> bool {
         let over = self.pointer_on_navigable_preview();
         let (size, ctrl) = (self.preview_navigation_size(), self.modifiers.ctrl);
-        let Some(started) = self.ws.preview_navigation.wheel(over, delta, ctrl, self.ws.preview_gizmo.shown(), size) else {
+        let Some(started) = self.ws.preview_navigation.wheel(
+            over,
+            delta,
+            ctrl,
+            self.ws.preview_gizmo.shown(),
+            size,
+        ) else {
             return false;
         };
         if started {
@@ -270,7 +349,9 @@ impl crate::app::Application {
     pub(crate) fn end_preview_navigation(&mut self) -> bool {
         let active = self.ws.preview_navigation.active();
         if self.ws.preview_navigation.end() {
-            self.send_content_cmd(crate::content_command::ContentCommand::SetSceneViewport(None));
+            self.send_content_cmd(crate::content_command::ContentCommand::SetSceneViewport(
+                None,
+            ));
         }
         active
     }
@@ -291,9 +372,13 @@ impl crate::app::Application {
         match self.ws.preview_navigation.sync_request(layer, size) {
             RequestSync::Unchanged => {}
             RequestSync::Send(request) => {
-                self.send_content_cmd(crate::content_command::ContentCommand::SetSceneViewport(Some(request)));
+                self.send_content_cmd(crate::content_command::ContentCommand::SetSceneViewport(
+                    Some(request),
+                ));
             }
-            RequestSync::Clear => self.send_content_cmd(crate::content_command::ContentCommand::SetSceneViewport(None)),
+            RequestSync::Clear => self.send_content_cmd(
+                crate::content_command::ContentCommand::SetSceneViewport(None),
+            ),
         }
     }
 }
@@ -311,7 +396,14 @@ mod tests {
             layer: LayerId::new("scene"),
             frame: 7,
             scene_node: NodeId::new("render"),
-            camera: Camera::look_at([0.0, 1.5, 6.0], [0.0; 3], [0.0, 1.0, 0.0], std::f32::consts::FRAC_PI_3, 0.05, 200.0),
+            camera: Camera::look_at(
+                [0.0, 1.5, 6.0],
+                [0.0; 3],
+                [0.0, 1.0, 0.0],
+                std::f32::consts::FRAC_PI_3,
+                0.05,
+                200.0,
+            ),
             domains: Arc::from([]),
             live_columns: Default::default(),
             lights: Arc::from([]),
@@ -365,13 +457,43 @@ mod tests {
     fn a_click_without_motion_never_starts_navigation() {
         let mut nav = PreviewNavigation::default();
         let shown = output_frame();
-        assert!(nav.press(Some(fit()), Vec2::new(300.0, 200.0), MouseButton::Left, true, true));
-        assert_eq!(nav.drag_to(Vec2::new(300.0, 200.0), false, Some(&shown), SIZE), Some(false));
+        assert!(nav.press(
+            Some(fit()),
+            Vec2::new(300.0, 200.0),
+            MouseButton::Left,
+            true,
+            true
+        ));
+        assert_eq!(
+            nav.drag_to(Vec2::new(300.0, 200.0), false, Some(&shown), SIZE),
+            Some(false)
+        );
         assert!(nav.release());
         assert!(!nav.active());
-        assert_eq!(nav.sync_request(Some(&shown.layer), SIZE), RequestSync::Unchanged);
-        assert!(!nav.press(Some(fit()), Vec2::new(10.0, 10.0), MouseButton::Left, true, true), "outside the picture");
-        assert!(!nav.press(Some(fit()), Vec2::new(300.0, 200.0), MouseButton::Left, false, true), "gizmos off");
+        assert_eq!(
+            nav.sync_request(Some(&shown.layer), SIZE),
+            RequestSync::Unchanged
+        );
+        assert!(
+            !nav.press(
+                Some(fit()),
+                Vec2::new(10.0, 10.0),
+                MouseButton::Left,
+                true,
+                true
+            ),
+            "outside the picture"
+        );
+        assert!(
+            !nav.press(
+                Some(fit()),
+                Vec2::new(300.0, 200.0),
+                MouseButton::Left,
+                false,
+                true
+            ),
+            "gizmos off"
+        );
     }
 
     /// With no output frame shown there is nothing to navigate: the press
@@ -382,7 +504,10 @@ mod tests {
         let inside = Vec2::new(300.0, 200.0);
         assert!(!nav.press(Some(fit()), inside, MouseButton::Left, true, false));
         nav.wheel(true, notch(), false, Some(&output_frame()), SIZE);
-        assert!(nav.press(Some(fit()), inside, MouseButton::Left, true, false), "a running session keeps taking presses");
+        assert!(
+            nav.press(Some(fit()), inside, MouseButton::Left, true, false),
+            "a running session keeps taking presses"
+        );
     }
 
     /// Navigation starts from the output camera, sends a request for the
@@ -393,31 +518,73 @@ mod tests {
     fn every_session_starts_from_the_output_camera() {
         let mut nav = PreviewNavigation::default();
         let shown = output_frame();
-        nav.press(Some(fit()), Vec2::new(300.0, 200.0), MouseButton::Left, true, true);
-        assert_eq!(nav.drag_to(Vec2::new(360.0, 180.0), false, Some(&shown), SIZE), Some(true), "the first move starts it");
-        assert_eq!(nav.drag_to(Vec2::new(380.0, 170.0), true, Some(&shown), SIZE), Some(false));
+        nav.press(
+            Some(fit()),
+            Vec2::new(300.0, 200.0),
+            MouseButton::Left,
+            true,
+            true,
+        );
+        assert_eq!(
+            nav.drag_to(Vec2::new(360.0, 180.0), false, Some(&shown), SIZE),
+            Some(true),
+            "the first move starts it"
+        );
+        assert_eq!(
+            nav.drag_to(Vec2::new(380.0, 170.0), true, Some(&shown), SIZE),
+            Some(false)
+        );
         assert!(nav.release());
         let request = sent(&mut nav, &shown);
         assert_eq!(request.host, ViewportHost::OutputPreview);
         assert_eq!(request.target, GraphTarget::Generator(shown.layer.clone()));
         assert_eq!(request.node, shown.scene_node);
         assert_eq!((request.config.width, request.config.height), SIZE);
-        let orbit = viewport_input::classify_mouse_drag(MouseButton::Left, false, 60.0, -20.0).unwrap();
+        let orbit =
+            viewport_input::classify_mouse_drag(MouseButton::Left, false, 60.0, -20.0).unwrap();
         let after_orbit = from_output(&shown, orbit).to_camera();
-        assert_ne!(request.config.camera.to_camera().pos, after_orbit.pos, "the shift-drag panned on from the orbit");
-        assert_eq!(nav.sync_request(Some(&shown.layer), SIZE), RequestSync::Unchanged, "an unchanged camera sends nothing");
+        assert_ne!(
+            request.config.camera.to_camera().pos,
+            after_orbit.pos,
+            "the shift-drag panned on from the orbit"
+        );
+        assert_eq!(
+            nav.sync_request(Some(&shown.layer), SIZE),
+            RequestSync::Unchanged,
+            "an unchanged camera sends nothing"
+        );
 
         nav.show(Some(displayed(&request)));
-        assert_eq!(nav.view().expect("the gizmos project through the displayed navigated frame").camera.pos,
-            request.config.camera.to_camera().pos);
+        assert_eq!(
+            nav.view()
+                .expect("the gizmos project through the displayed navigated frame")
+                .camera
+                .pos,
+            request.config.camera.to_camera().pos
+        );
         assert!(nav.end(), "it owned the request");
-        assert!(nav.view().is_none(), "ended: the preview shows the output through its camera");
+        assert!(
+            nav.view().is_none(),
+            "ended: the preview shows the output through its camera"
+        );
 
         nav.wheel(true, notch(), false, Some(&shown), SIZE);
         let restarted = sent(&mut nav, &shown).config.camera.to_camera();
-        let expected = from_output(&shown, viewport_input::classify_wheel(notch(), false).unwrap()).to_camera();
-        assert_near(restarted.pos, expected.pos, "a new session starts at the output camera");
-        assert_near(restarted.fwd, shown.camera.fwd, "a dolly keeps the output camera's aim");
+        let expected = from_output(
+            &shown,
+            viewport_input::classify_wheel(notch(), false).unwrap(),
+        )
+        .to_camera();
+        assert_near(
+            restarted.pos,
+            expected.pos,
+            "a new session starts at the output camera",
+        );
+        assert_near(
+            restarted.fwd,
+            shown.camera.fwd,
+            "a dolly keeps the output camera's aim",
+        );
     }
 
     #[test]
@@ -425,10 +592,34 @@ mod tests {
         let mut nav = PreviewNavigation::default();
         let shown = output_frame();
         let pinch_free = MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(0.0, 0.0));
-        assert_eq!(nav.wheel(true, MouseScrollDelta::LineDelta(0.0, 0.0), false, Some(&shown), SIZE), Some(false));
-        assert_eq!(nav.wheel(true, pinch_free, true, Some(&shown), SIZE), Some(false));
-        assert!(!nav.active(), "a zero wheel event moves nothing and starts nothing");
-        assert_eq!(nav.wheel(true, MouseScrollDelta::LineDelta(0.0, 0.0), false, None, SIZE), None);
+        assert_eq!(
+            nav.wheel(
+                true,
+                MouseScrollDelta::LineDelta(0.0, 0.0),
+                false,
+                Some(&shown),
+                SIZE
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            nav.wheel(true, pinch_free, true, Some(&shown), SIZE),
+            Some(false)
+        );
+        assert!(
+            !nav.active(),
+            "a zero wheel event moves nothing and starts nothing"
+        );
+        assert_eq!(
+            nav.wheel(
+                true,
+                MouseScrollDelta::LineDelta(0.0, 0.0),
+                false,
+                None,
+                SIZE
+            ),
+            None
+        );
 
         let mut seeded = SceneViewportNavigation::new(ViewportHost::OutputPreview, SIZE.0, SIZE.1);
         *seeded.camera_mut() = ViewportCamera::seeded_from(&shown.camera);
@@ -444,14 +635,30 @@ mod tests {
         let shown = output_frame();
         let distance = |dy: f64| {
             let mut nav = PreviewNavigation::default();
-            nav.wheel(true, MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(0.0, dy)), true, Some(&shown), SIZE);
+            nav.wheel(
+                true,
+                MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(0.0, dy)),
+                true,
+                Some(&shown),
+                SIZE,
+            );
             sent(&mut nav, &shown).config.camera.distance
         };
         let start = ViewportCamera::seeded_from(&shown.camera).distance;
-        let one = from_output(&shown, viewport_input::classify_wheel(notch(), false).unwrap()).distance;
-        assert!((distance(crate::window_input::LINE_DELTA_PX as f64) - one).abs() < 1e-4, "20 px is one notch");
+        let one = from_output(
+            &shown,
+            viewport_input::classify_wheel(notch(), false).unwrap(),
+        )
+        .distance;
+        assert!(
+            (distance(crate::window_input::LINE_DELTA_PX as f64) - one).abs() < 1e-4,
+            "20 px is one notch"
+        );
         let flick = distance(100.0) / start;
-        assert!(flick > 0.6 && flick < 1.0, "a 100 px event moves in at most about a third, got {flick}");
+        assert!(
+            flick > 0.6 && flick < 1.0,
+            "a 100 px event moves in at most about a third, got {flick}"
+        );
         assert_eq!(distance(100.0), distance(5000.0), "a long flick is clamped");
     }
 
@@ -461,14 +668,29 @@ mod tests {
     fn a_released_drag_moves_nothing() {
         let mut nav = PreviewNavigation::default();
         let shown = output_frame();
-        nav.press(Some(fit()), Vec2::new(300.0, 200.0), MouseButton::Left, true, true);
+        nav.press(
+            Some(fit()),
+            Vec2::new(300.0, 200.0),
+            MouseButton::Left,
+            true,
+            true,
+        );
         nav.drag_to(Vec2::new(340.0, 200.0), false, Some(&shown), SIZE);
         let before = sent(&mut nav, &shown);
         assert!(nav.release());
-        assert_eq!(nav.drag_to(Vec2::new(500.0, 260.0), false, Some(&shown), SIZE), None);
-        assert_eq!(nav.sync_request(Some(&shown.layer), SIZE), RequestSync::Unchanged);
+        assert_eq!(
+            nav.drag_to(Vec2::new(500.0, 260.0), false, Some(&shown), SIZE),
+            None
+        );
+        assert_eq!(
+            nav.sync_request(Some(&shown.layer), SIZE),
+            RequestSync::Unchanged
+        );
         assert!(nav.active(), "the navigated view stays; only the drag ends");
-        assert_eq!(nav.request_sent().map(|r| r.config.camera.yaw), Some(before.config.camera.yaw));
+        assert_eq!(
+            nav.request_sent().map(|r| r.config.camera.yaw),
+            Some(before.config.camera.yaw)
+        );
     }
 
     #[test]
@@ -476,8 +698,15 @@ mod tests {
         let mut nav = PreviewNavigation::default();
         let shown = output_frame();
         nav.wheel(true, notch(), false, Some(&shown), SIZE);
-        assert!(matches!(nav.sync_request(Some(&shown.layer), SIZE), RequestSync::Send(_)));
-        assert_eq!(nav.sync_request(None, SIZE), RequestSync::Clear, "Show gizmos off");
+        assert!(matches!(
+            nav.sync_request(Some(&shown.layer), SIZE),
+            RequestSync::Send(_)
+        ));
+        assert_eq!(
+            nav.sync_request(None, SIZE),
+            RequestSync::Clear,
+            "Show gizmos off"
+        );
         assert!(!nav.active());
         assert_eq!(nav.sync_request(None, SIZE), RequestSync::Unchanged);
     }
@@ -486,7 +715,10 @@ mod tests {
     fn nothing_starts_without_a_shown_output_frame() {
         let mut nav = PreviewNavigation::default();
         assert_eq!(nav.wheel(true, notch(), false, None, SIZE), None);
-        assert_eq!(nav.wheel(false, notch(), false, Some(&output_frame()), SIZE), None);
+        assert_eq!(
+            nav.wheel(false, notch(), false, Some(&output_frame()), SIZE),
+            None
+        );
         assert!(!nav.active());
     }
 }

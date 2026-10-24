@@ -1,6 +1,6 @@
 //! Explicit authored modifier addresses for runtime previews.
-use manifold_core::NodeId;
 use crate::load::expand::SceneModifierNodeRoute;
+use manifold_core::NodeId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModifierPreviewContext {
@@ -30,14 +30,19 @@ pub(super) fn resolve<'a>(
     context: &ModifierPreviewContext,
     node: &NodeId,
 ) -> Result<&'a NodeId, ModifierPreviewError> {
-    let route = routes.iter().find(|route| route.modifier_id == context.modifier_id
-        && route.local == *node)
+    let route = routes
+        .iter()
+        .find(|route| route.modifier_id == context.modifier_id && route.local == *node)
         .ok_or(ModifierPreviewError::MissingNode)?;
     if let Some(object) = &context.object {
         // Shared controls have one output regardless of object selection.
-        return route.copies.iter().find(|copy| copy.object.as_ref() == Some(object))
+        return route
+            .copies
+            .iter()
+            .find(|copy| copy.object.as_ref() == Some(object))
             .or_else(|| route.copies.iter().find(|copy| copy.object.is_none()))
-            .map(|copy| &copy.node_id).ok_or(ModifierPreviewError::MissingObject);
+            .map(|copy| &copy.node_id)
+            .ok_or(ModifierPreviewError::MissingObject);
     }
     match route.copies.as_slice() {
         [copy] => Ok(&copy.node_id),
@@ -72,10 +77,13 @@ impl super::PresetRuntime {
         context: &ModifierPreviewContext,
         generated: &str,
     ) -> Option<&'a NodeId> {
-        self.modifier_preview_routes.iter().filter(|route|
-            route.modifier_id == context.modifier_id)
-            .find(|route| resolve(&self.modifier_preview_routes, context, &route.local)
-                .is_ok_and(|node| node.as_str() == generated))
+        self.modifier_preview_routes
+            .iter()
+            .filter(|route| route.modifier_id == context.modifier_id)
+            .find(|route| {
+                resolve(&self.modifier_preview_routes, context, &route.local)
+                    .is_ok_and(|node| node.as_str() == generated)
+            })
             .map(|route| &route.local)
     }
 
@@ -86,7 +94,9 @@ impl super::PresetRuntime {
         context: &ModifierPreviewContext,
         node: Option<&NodeId>,
     ) -> Result<(), ModifierPreviewError> {
-        let resolved = node.map(|node| resolve(&self.modifier_preview_routes, context, node).cloned()).transpose();
+        let resolved = node
+            .map(|node| resolve(&self.modifier_preview_routes, context, node).cloned())
+            .transpose();
         self.set_preview_node(resolved.as_ref().ok().and_then(Option::as_ref));
         resolved.map(|_| ())
     }
@@ -96,25 +106,51 @@ impl super::PresetRuntime {
 mod tests {
     use super::*;
     use crate::load::expand::SceneModifierNodeCopy;
-    fn address(name: &str) -> NodeId { NodeId::new(name) }
+    fn address(name: &str) -> NodeId {
+        NodeId::new(name)
+    }
 
     #[test]
     fn scene_modifier_preview_requires_explicit_copy() {
         let route = SceneModifierNodeRoute {
-            modifier_id: NodeId::new("a"), local: address("same"),
+            modifier_id: NodeId::new("a"),
+            local: address("same"),
             copies: vec![
-                SceneModifierNodeCopy { object: Some(address("one")), node_id: NodeId::new("generated-one") },
-                SceneModifierNodeCopy { object: Some(address("two")), node_id: NodeId::new("generated-two") },
+                SceneModifierNodeCopy {
+                    object: Some(address("one")),
+                    node_id: NodeId::new("generated-one"),
+                },
+                SceneModifierNodeCopy {
+                    object: Some(address("two")),
+                    node_id: NodeId::new("generated-two"),
+                },
             ],
         };
         let routes = [route];
-        let mut context = ModifierPreviewContext { modifier_id: NodeId::new("a"), object: None };
-        assert_eq!(resolve(&routes, &context, &NodeId::new("same")), Err(ModifierPreviewError::SelectObject));
+        let mut context = ModifierPreviewContext {
+            modifier_id: NodeId::new("a"),
+            object: None,
+        };
+        assert_eq!(
+            resolve(&routes, &context, &NodeId::new("same")),
+            Err(ModifierPreviewError::SelectObject)
+        );
         context.object = Some(address("two"));
-        assert_eq!(resolve(&routes, &context, &NodeId::new("same")).unwrap().as_str(), "generated-two");
+        assert_eq!(
+            resolve(&routes, &context, &NodeId::new("same"))
+                .unwrap()
+                .as_str(),
+            "generated-two"
+        );
         context.object = Some(address("deleted"));
-        assert_eq!(resolve(&routes, &context, &NodeId::new("same")), Err(ModifierPreviewError::MissingObject));
+        assert_eq!(
+            resolve(&routes, &context, &NodeId::new("same")),
+            Err(ModifierPreviewError::MissingObject)
+        );
         context.modifier_id = NodeId::new("b");
-        assert_eq!(resolve(&routes, &context, &NodeId::new("same")), Err(ModifierPreviewError::MissingNode));
+        assert_eq!(
+            resolve(&routes, &context, &NodeId::new("same")),
+            Err(ModifierPreviewError::MissingNode)
+        );
     }
 }

@@ -67,10 +67,8 @@ pub fn draw_waveform(
         }
         // Pool the complete time interval under this pixel, including the last
         // partial source bin. Point sampling used to miss narrow peaks.
-        let source_start =
-            src_start as f64 + left / waveform_width_px as f64 * src_span;
-        let source_end =
-            src_start as f64 + right / waveform_width_px as f64 * src_span;
+        let source_start = src_start as f64 + left / waveform_width_px as f64 * src_span;
+        let source_end = src_start as f64 + right / waveform_width_px as f64 * src_span;
         let clipped_start = source_start.max(0.0);
         let clipped_end = source_end.min(1.0);
         if clipped_end <= clipped_start {
@@ -272,7 +270,11 @@ mod tests {
         let columns: Vec<_> = (0..128)
             .filter(|&x| (0..80).any(|y| pixels[y * 128 + x].a > 0))
             .collect();
-        assert_eq!(columns, [64], "the source feature must keep its timeline position");
+        assert_eq!(
+            columns,
+            [64],
+            "the source feature must keep its timeline position"
+        );
         assert!(
             (96..128).all(|x| (0..80).all(|y| pixels[y * 128 + x].a == 0)),
             "the source window past EOF must stay transparent"

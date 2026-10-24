@@ -23,18 +23,30 @@ pub struct FirmwareGpuReset {
 
 /// When this machine last booted.
 pub fn boot_time() -> Option<SystemTime> {
-    let mut boot = libc::timeval { tv_sec: 0, tv_usec: 0 };
+    let mut boot = libc::timeval {
+        tv_sec: 0,
+        tv_usec: 0,
+    };
     let mut size = std::mem::size_of::<libc::timeval>();
     let name = c"kern.boottime";
     let status = unsafe {
-        libc::sysctlbyname(name.as_ptr(), (&mut boot as *mut libc::timeval).cast(), &mut size, std::ptr::null_mut(), 0)
+        libc::sysctlbyname(
+            name.as_ptr(),
+            (&mut boot as *mut libc::timeval).cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
     };
-    (status == 0 && boot.tv_sec > 0).then(|| UNIX_EPOCH + Duration::new(boot.tv_sec as u64, boot.tv_usec as u32 * 1000))
+    (status == 0 && boot.tv_sec > 0)
+        .then(|| UNIX_EPOCH + Duration::new(boot.tv_sec as u64, boot.tv_usec as u32 * 1000))
 }
 
 /// Every firmware GPU reset since boot, any process, oldest first.
 pub fn resets_since_boot() -> Vec<FirmwareGpuReset> {
-    boot_time().map_or_else(Vec::new, |boot| resets_since(Path::new(SYSTEM_REPORTS), boot))
+    boot_time().map_or_else(Vec::new, |boot| {
+        resets_since(Path::new(SYSTEM_REPORTS), boot)
+    })
 }
 
 /// One line for logs and crash reports; `None` when the boot is clean.
@@ -43,12 +55,17 @@ pub fn summary_since_boot() -> Option<String> {
     let latest = resets.last()?;
     Some(format!(
         "macOS reset the GPU {} time(s) since boot; latest: process={} reason=\"{}\" report={}",
-        resets.len(), latest.process, latest.reason, latest.report.display(),
+        resets.len(),
+        latest.process,
+        latest.reason,
+        latest.report.display(),
     ))
 }
 
 fn resets_since(dir: &Path, since: SystemTime) -> Vec<FirmwareGpuReset> {
-    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
     let mut resets: Vec<FirmwareGpuReset> = entries
         .flatten()
         .filter(|entry| {
@@ -58,10 +75,17 @@ fn resets_since(dir: &Path, since: SystemTime) -> Vec<FirmwareGpuReset> {
         })
         .filter_map(|entry| {
             let at = entry.metadata().ok()?.modified().ok()?;
-            if at < since { return None; }
+            if at < since {
+                return None;
+            }
             let text = std::fs::read_to_string(entry.path()).ok()?;
             let (process, reason) = parse_report(&text)?;
-            Some(FirmwareGpuReset { report: entry.path(), process, reason, at })
+            Some(FirmwareGpuReset {
+                report: entry.path(),
+                process,
+                reason,
+                at,
+            })
         })
         .collect();
     resets.sort_by_key(|reset| reset.at);
@@ -91,7 +115,9 @@ fn string_field(text: &str, key: &str) -> Option<String> {
 
 fn number_field(text: &str, key: &str) -> Option<u64> {
     let rest = value_after(text, key)?;
-    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
     rest[..end].parse().ok()
 }
 
@@ -109,18 +135,27 @@ mod tests {
 
     #[test]
     fn reads_process_and_reason_from_a_real_report() {
-        assert_eq!(parse_report(REPORT), Some(("manifold".into(), "CDM Kill timeout".into())));
+        assert_eq!(
+            parse_report(REPORT),
+            Some(("manifold".into(), "CDM Kill timeout".into()))
+        );
     }
 
     #[test]
     fn falls_back_to_the_numeric_reason() {
         let text = REPORT.replace(r#","restart_reason_desc":"CDM Kill timeout""#, "");
-        assert_eq!(parse_report(&text), Some(("manifold".into(), "restart_reason 9".into())));
+        assert_eq!(
+            parse_report(&text),
+            Some(("manifold".into(), "restart_reason 9".into()))
+        );
     }
 
     #[test]
     fn rejects_reports_without_a_process() {
-        assert_eq!(parse_report(r#"{"restart_reason_desc":"CDM Kill timeout"}"#), None);
+        assert_eq!(
+            parse_report(r#"{"restart_reason_desc":"CDM Kill timeout"}"#),
+            None
+        );
     }
 
     #[test]

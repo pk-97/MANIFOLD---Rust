@@ -4,12 +4,13 @@
 //! publisher can therefore replace its source slice immediately after
 //! `upload` returns without racing an in-flight Metal command buffer.
 
-use crate::mesh::InstanceTransform;
 use crate::gpu::gpu_encoder::GpuEncoder;
+use crate::mesh::InstanceTransform;
 use bytemuck::Zeroable;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
-const INSTANCE_UPLOAD_WGSL: &str = include_str!("../primitives/shaders/physics_instance_upload.wgsl");
+const INSTANCE_UPLOAD_WGSL: &str =
+    include_str!("../primitives/shaders/physics_instance_upload.wgsl");
 const INSTANCES_PER_UPLOAD: usize = 64;
 const WORKGROUP_SIZE: u32 = 64;
 

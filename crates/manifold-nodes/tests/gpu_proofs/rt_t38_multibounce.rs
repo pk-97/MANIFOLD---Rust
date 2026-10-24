@@ -40,11 +40,10 @@ use std::sync::Arc;
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
-use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
-
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 /// Matches `tools/rt_prototype/compare/RtBleed.json`'s companion
 /// `graph_tool render` default output size — the program's captures and
@@ -67,7 +66,10 @@ const AMBIENT_JSON: &str =
 /// line of sight to the emitter but full sight of the red wall.
 const PROBE_RECT: (u32, u32, u32, u32) = (80, 175, 230, 235);
 
-fn readback_rgba16f(device: &manifold_gpu::GpuDevice, texture: &manifold_gpu::GpuTexture) -> Vec<u8> {
+fn readback_rgba16f(
+    device: &manifold_gpu::GpuDevice,
+    texture: &manifold_gpu::GpuTexture,
+) -> Vec<u8> {
     const BYTES_PER_PIXEL: u32 = 8; // Rgba16Float
     let bytes_per_row = W * BYTES_PER_PIXEL;
     let total_bytes = u64::from(H * bytes_per_row);
@@ -97,7 +99,13 @@ fn render_fixture(json: &str) -> Vec<u8> {
     )
     .expect("rt-t38 multibounce fixture must build");
 
-    let target = RenderTarget::new(&h.device, W, H, GpuTextureFormat::Rgba16Float, "rt-t38-multibounce");
+    let target = RenderTarget::new(
+        &h.device,
+        W,
+        H,
+        GpuTextureFormat::Rgba16Float,
+        "rt-t38-multibounce",
+    );
     for frame in 0..RT_WARMUP_FRAMES {
         let ctx = PresetContext {
             time: 0.1,
@@ -143,7 +151,10 @@ fn region_rgb_mean(bytes: &[u8], rect: (u32, u32, u32, u32)) -> (f64, f64, f64) 
             let r = f16::from_le_bytes([px[0], px[1]]).to_f32() as f64;
             let g = f16::from_le_bytes([px[2], px[3]]).to_f32() as f64;
             let b = f16::from_le_bytes([px[4], px[5]]).to_f32() as f64;
-            assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+            assert!(
+                r.is_finite() && g.is_finite() && b.is_finite(),
+                "non-finite pixel"
+            );
             sum.0 += r;
             sum.1 += g;
             sum.2 += b;

@@ -29,24 +29,43 @@ pub fn transfer_bindings(
         .map(|spec| spec.id.clone())
         .chain(dest.string_params.iter().map(|spec| spec.id.clone()))
         .chain(dest.bindings.iter().map(|binding| binding.id.clone()))
-        .chain(dest.string_bindings.iter().map(|binding| binding.id.clone()))
+        .chain(
+            dest.string_bindings
+                .iter()
+                .map(|binding| binding.id.clone()),
+        )
         .collect();
     let copy_of = |target: &BindingTarget| match target {
         BindingTarget::Node { node_id, param } => node_map
             .iter()
             .find(|(old, _)| old == node_id)
-            .map(|(_, new)| (node_id.clone(), BindingTarget::Node { node_id: new.clone(), param: param.clone() })),
+            .map(|(_, new)| {
+                (
+                    node_id.clone(),
+                    BindingTarget::Node {
+                        node_id: new.clone(),
+                        param: param.clone(),
+                    },
+                )
+            }),
         _ => None,
     };
     let mut remaps: BTreeMap<String, String> = BTreeMap::new();
     let mut owners: BTreeMap<String, NodeId> = BTreeMap::new();
     let mut fresh = |id: &str, owner: &NodeId, remaps: &mut BTreeMap<String, String>| {
-        owners.entry(id.to_string()).or_insert_with(|| owner.clone());
-        remaps.entry(id.to_string()).or_insert_with(|| unique(&mut taken, &format!("{id}_duplicate"))).clone()
+        owners
+            .entry(id.to_string())
+            .or_insert_with(|| owner.clone());
+        remaps
+            .entry(id.to_string())
+            .or_insert_with(|| unique(&mut taken, &format!("{id}_duplicate")))
+            .clone()
     };
 
     for binding in &source.bindings {
-        let Some((owner, target)) = copy_of(&binding.target) else { continue };
+        let Some((owner, target)) = copy_of(&binding.target) else {
+            continue;
+        };
         let mut copy = binding.clone();
         copy.id = fresh(&binding.id, &owner, &mut remaps);
         copy.target = target;
@@ -54,7 +73,9 @@ pub fn transfer_bindings(
         dest.bindings.push(copy);
     }
     for binding in &source.string_bindings {
-        let Some((owner, target)) = copy_of(&binding.target) else { continue };
+        let Some((owner, target)) = copy_of(&binding.target) else {
+            continue;
+        };
         let mut copy = binding.clone();
         copy.id = fresh(&binding.id, &owner, &mut remaps);
         copy.target = target;
@@ -62,14 +83,18 @@ pub fn transfer_bindings(
         dest.string_bindings.push(copy);
     }
     for spec in &source.params {
-        let (Some(id), Some(owner)) = (remaps.get(&spec.id), owners.get(&spec.id)) else { continue };
+        let (Some(id), Some(owner)) = (remaps.get(&spec.id), owners.get(&spec.id)) else {
+            continue;
+        };
         let mut copy = spec.clone();
         copy.id = id.clone();
         copy.section = copy.section.map(|section| relabel(&section, owner));
         dest.params.push(copy);
     }
     for spec in &source.string_params {
-        let (Some(id), Some(owner)) = (remaps.get(&spec.id), owners.get(&spec.id)) else { continue };
+        let (Some(id), Some(owner)) = (remaps.get(&spec.id), owners.get(&spec.id)) else {
+            continue;
+        };
         let mut copy = spec.clone();
         copy.id = id.clone();
         copy.name = relabel(&copy.name, owner);
@@ -121,24 +146,50 @@ mod tests {
             .iter()
             .map(|id| (NodeId::new(*id), NodeId::new(format!("{id}_copy"))))
             .collect();
-        let remaps = transfer_bindings(&source, &mut dest, &map, &|text, _| text.replace("moss", "moss 2"));
+        let remaps = transfer_bindings(&source, &mut dest, &map, &|text, _| {
+            text.replace("moss", "moss 2")
+        });
         assert_eq!(
             remaps,
             vec![
                 ("7_scale_x".to_string(), "7_scale_x_duplicate".to_string()),
-                ("model_file_2".to_string(), "model_file_2_duplicate".to_string()),
+                (
+                    "model_file_2".to_string(),
+                    "model_file_2_duplicate".to_string()
+                ),
                 ("user_glow".to_string(), "user_glow_duplicate".to_string()),
             ]
         );
-        let file = dest.string_params.iter().find(|spec| spec.id == "model_file_2_duplicate").unwrap();
-        assert_eq!((file.default_value.as_str(), file.name.as_str()), ("/m/moss.glb", "Model File — moss 2"));
-        assert_eq!(dest.string_bindings.iter().filter(|b| b.id == "model_file_2_duplicate").count(), 2);
+        let file = dest
+            .string_params
+            .iter()
+            .find(|spec| spec.id == "model_file_2_duplicate")
+            .unwrap();
         assert_eq!(
-            dest.params.iter().find(|spec| spec.id == "user_glow_duplicate").unwrap().section.as_deref(),
+            (file.default_value.as_str(), file.name.as_str()),
+            ("/m/moss.glb", "Model File — moss 2")
+        );
+        assert_eq!(
+            dest.string_bindings
+                .iter()
+                .filter(|b| b.id == "model_file_2_duplicate")
+                .count(),
+            2
+        );
+        assert_eq!(
+            dest.params
+                .iter()
+                .find(|spec| spec.id == "user_glow_duplicate")
+                .unwrap()
+                .section
+                .as_deref(),
             Some("moss 2 — Material")
         );
         assert!(manifold_core::binding_identity::check(&dest).is_empty());
         let again = transfer_bindings(&source, &mut dest, &map, &|text, _| text.to_string());
-        assert_eq!(again[0].1, "7_scale_x_duplicate_2", "a second copy takes the next free id");
+        assert_eq!(
+            again[0].1, "7_scale_x_duplicate_2",
+            "a second copy takes the next free id"
+        );
     }
 }

@@ -1,6 +1,6 @@
 //! Registered access to family-owned preset catalogs and their caches.
-use std::sync::{Arc, LazyLock};
 use manifold_core::{PresetTypeId, effect_graph_def::EffectGraphDef, preset_def::PresetKind};
+use std::sync::{Arc, LazyLock};
 
 pub struct PresetCatalogSource {
     pub name: &'static str,
@@ -14,7 +14,10 @@ fn sources() -> &'static [&'static PresetCatalogSource] {
     static SOURCES: LazyLock<Vec<&'static PresetCatalogSource>> = LazyLock::new(|| {
         let mut entries: Vec<_> = inventory::iter::<PresetCatalogSource>.into_iter().collect();
         entries.sort_unstable_by_key(|entry| entry.name);
-        assert!(entries.windows(2).all(|pair| pair[0].name != pair[1].name), "duplicate preset catalog provider name");
+        assert!(
+            entries.windows(2).all(|pair| pair[0].name != pair[1].name),
+            "duplicate preset catalog provider name"
+        );
         entries
     });
     &SOURCES

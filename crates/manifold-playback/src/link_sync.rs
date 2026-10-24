@@ -266,9 +266,17 @@ mod tests {
         for late_us in [0u64, 1, 13_333, 16_000, 250_000] {
             let now = deadline + Duration::from_micros(late_us);
             let link_now = link_at_deadline + late_us as i64;
-            assert_eq!(link_micros_at(link_now, now, deadline), link_at_deadline, "woke {late_us} us late");
+            assert_eq!(
+                link_micros_at(link_now, now, deadline),
+                link_at_deadline,
+                "woke {late_us} us late"
+            );
         }
         let early = deadline - Duration::from_micros(6_667);
-        assert_eq!(link_micros_at(link_at_deadline - 6_667, early, deadline), link_at_deadline, "woke early");
+        assert_eq!(
+            link_micros_at(link_at_deadline - 6_667, early, deadline),
+            link_at_deadline,
+            "woke early"
+        );
     }
 }

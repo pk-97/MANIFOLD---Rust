@@ -15,8 +15,8 @@
 //! `build_instances_from_edges`) to consume it same-frame without a
 //! GPU→CPU fence — same pattern as `polytope_edges`.
 
-use manifold_node_engine::mesh::EdgePair;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::EdgePair;
 use manifold_node_engine::primitive::Primitive;
 
 pub const HYPERCUBE_EDGE_COUNT: u32 = 32;

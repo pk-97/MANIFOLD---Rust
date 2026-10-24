@@ -36,19 +36,33 @@ fn number(value: &SerializedParamValue) -> Option<f32> {
 /// Whether `node` is a `node.light` in Sun mode. `mode` 0 is Sun, and is
 /// also the default a light saved without `mode` gets.
 pub fn is_sun_light(node: &EffectGraphNode) -> bool {
-    node.type_id == LIGHT_TYPE_ID && node.params.get("mode").and_then(number).is_none_or(|m| m.round() == 0.0)
+    node.type_id == LIGHT_TYPE_ID
+        && node
+            .params
+            .get("mode")
+            .and_then(number)
+            .is_none_or(|m| m.round() == 0.0)
 }
 
 /// The scene's Sun light in one graph level: the Sun-mode light on the
 /// lowest-numbered `light_k` input of the level's `node.render_scene`. A
 /// light that feeds no renderer lights nothing, so it is not the scene's.
 pub fn scene_sun_light(nodes: &[EffectGraphNode], wires: &[EffectGraphWire]) -> Option<u32> {
-    let is_renderer = |id: u32| nodes.iter().any(|n| n.id == id && n.type_id == RENDER_SCENE_TYPE_ID);
+    let is_renderer = |id: u32| {
+        nodes
+            .iter()
+            .any(|n| n.id == id && n.type_id == RENDER_SCENE_TYPE_ID)
+    };
     let is_sun = |id: u32| nodes.iter().any(|n| n.id == id && is_sun_light(n));
     wires
         .iter()
         .filter(|w| is_renderer(w.to_node) && is_sun(w.from_node))
-        .filter_map(|w| Some((w.to_port.strip_prefix("light_")?.parse::<u32>().ok()?, w.from_node)))
+        .filter_map(|w| {
+            Some((
+                w.to_port.strip_prefix("light_")?.parse::<u32>().ok()?,
+                w.from_node,
+            ))
+        })
         .min()
         .map(|(_, light)| light)
 }
@@ -58,10 +72,18 @@ pub fn scene_sun_light(nodes: &[EffectGraphNode], wires: &[EffectGraphWire]) -> 
 /// already the Sun light or a light the user chose. Returns the number of
 /// wires added.
 pub fn wire_sky_sun(nodes: &[EffectGraphNode], wires: &mut Vec<EffectGraphWire>) -> usize {
-    let Some(sun) = scene_sun_light(nodes, wires) else { return 0 };
+    let Some(sun) = scene_sun_light(nodes, wires) else {
+        return 0;
+    };
     let mut added = 0;
-    for bake in nodes.iter().filter(|n| n.type_id == BAKE_ENVIRONMENT_TYPE_ID) {
-        if wires.iter().any(|w| w.to_node == bake.id && w.to_port == SKY_SUN_PORT) {
+    for bake in nodes
+        .iter()
+        .filter(|n| n.type_id == BAKE_ENVIRONMENT_TYPE_ID)
+    {
+        if wires
+            .iter()
+            .any(|w| w.to_node == bake.id && w.to_port == SKY_SUN_PORT)
+        {
             continue;
         }
         wires.push(EffectGraphWire {
@@ -94,13 +116,20 @@ pub struct WorldSunMigration {
 /// that still carries a World sun position, so a `sun` wire the user later
 /// removes stays removed. `card_value` answers a card's saved value by id;
 /// a card it does not know reads its binding default.
-pub fn migrate_world_sun(def: &mut EffectGraphDef, card_value: &dyn Fn(&str) -> Option<f32>) -> WorldSunMigration {
+pub fn migrate_world_sun(
+    def: &mut EffectGraphDef,
+    card_value: &dyn Fn(&str) -> Option<f32>,
+) -> WorldSunMigration {
     if !carries_world_sun(def) {
         return WorldSunMigration::default();
     }
     let mut bakes = BTreeSet::new();
     collect_bakes(&def.nodes, &mut bakes);
-    let bindings = def.preset_metadata.as_ref().map(|m| m.bindings.as_slice()).unwrap_or_default();
+    let bindings = def
+        .preset_metadata
+        .as_ref()
+        .map(|m| m.bindings.as_slice())
+        .unwrap_or_default();
     let targets_world_sun = |target: &BindingTarget| targets_world_sun(&bakes, target);
 
     // The value a param had when saved: its card's value if a card drives
@@ -113,9 +142,17 @@ pub fn migrate_world_sun(def: &mut EffectGraphDef, card_value: &dyn Fn(&str) -> 
             .or_else(|| node.params.get(param).and_then(number))
             .unwrap_or(default)
     };
-    let mut report = WorldSunMigration { changed: true, ..WorldSunMigration::default() };
-    let sun = scene_sun_light(&def.nodes, &def.wires).and_then(|id| def.nodes.iter().find(|n| n.id == id));
-    for bake in def.nodes.iter().filter(|n| n.type_id == BAKE_ENVIRONMENT_TYPE_ID) {
+    let mut report = WorldSunMigration {
+        changed: true,
+        ..WorldSunMigration::default()
+    };
+    let sun = scene_sun_light(&def.nodes, &def.wires)
+        .and_then(|id| def.nodes.iter().find(|n| n.id == id));
+    for bake in def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == BAKE_ENVIRONMENT_TYPE_ID)
+    {
         let world = WORLD_SUN_PARAMS.map(|p| effective(bake, p, 0.0));
         if length(world) < 1e-6 {
             continue;
@@ -148,9 +185,11 @@ pub fn migrate_world_sun(def: &mut EffectGraphDef, card_value: &dyn Fn(&str) -> 
         // position, in an imported scene) stays.
         dropped.retain(|id| !meta.bindings.iter().any(|b| &b.id == id));
         meta.params.retain(|p| !dropped.contains(&p.id));
-        meta.param_aliases
-            .retain(|a| !dropped.contains(&a.old) && a.new.as_ref().is_none_or(|id| !dropped.contains(id)));
-        meta.value_aliases.retain(|a| !dropped.contains(&a.param_id));
+        meta.param_aliases.retain(|a| {
+            !dropped.contains(&a.old) && a.new.as_ref().is_none_or(|id| !dropped.contains(id))
+        });
+        meta.value_aliases
+            .retain(|a| !dropped.contains(&a.param_id));
     }
     wire_levels(&mut def.nodes, &mut def.wires);
     report
@@ -166,10 +205,11 @@ pub fn carries_world_sun(def: &EffectGraphDef) -> bool {
     let mut bakes = BTreeSet::new();
     collect_bakes(&def.nodes, &mut bakes);
     !bakes.is_empty()
-        && def
-            .preset_metadata
-            .as_ref()
-            .is_some_and(|m| m.bindings.iter().any(|b| targets_world_sun(&bakes, &b.target)))
+        && def.preset_metadata.as_ref().is_some_and(|m| {
+            m.bindings
+                .iter()
+                .any(|b| targets_world_sun(&bakes, &b.target))
+        })
 }
 
 fn targets_world_sun(bakes: &BTreeSet<String>, target: &BindingTarget) -> bool {
@@ -190,8 +230,11 @@ fn collect_bakes(nodes: &[EffectGraphNode], bakes: &mut BTreeSet<String>) {
 
 fn any_world_sun_param(nodes: &[EffectGraphNode]) -> bool {
     nodes.iter().any(|n| {
-        (n.type_id == BAKE_ENVIRONMENT_TYPE_ID && WORLD_SUN_PARAMS.iter().any(|p| n.params.contains_key(*p)))
-            || n.group.as_ref().is_some_and(|g| any_world_sun_param(&g.nodes))
+        (n.type_id == BAKE_ENVIRONMENT_TYPE_ID
+            && WORLD_SUN_PARAMS.iter().any(|p| n.params.contains_key(*p)))
+            || n.group
+                .as_ref()
+                .is_some_and(|g| any_world_sun_param(&g.nodes))
     })
 }
 
@@ -270,7 +313,9 @@ impl crate::project::Project {
             }
         }
         fn migrate_instance(fx: &mut PresetInstance, notes: &mut BTreeSet<String>) {
-            let Some(mut def) = fx.graph.take() else { return };
+            let Some(mut def) = fx.graph.take() else {
+                return;
+            };
             let params = &fx.params;
             let outcome = migrate_world_sun(&mut def, &|id| params.get(id).map(|p| p.base));
             note(&def, outcome, notes);
@@ -334,21 +379,48 @@ mod tests {
             ]
         }))
         .expect("scene def");
-        EmbeddedPreset { kind: PresetKind::Generator, def, origin: EmbeddedOrigin::Saved }
+        EmbeddedPreset {
+            kind: PresetKind::Generator,
+            def,
+            origin: EmbeddedOrigin::Saved,
+        }
     }
 
     fn assert_follows_light(def: &EffectGraphDef) {
         let envmap = def.nodes.iter().find(|n| n.node_id == "envmap").unwrap();
-        assert!(["sun_x", "sun_y", "sun_z"].iter().all(|p| !envmap.params.contains_key(*p)), "World position dropped");
-        assert!(envmap.params.contains_key("sun_disc_intensity"), "the disc's own brightness stays");
+        assert!(
+            ["sun_x", "sun_y", "sun_z"]
+                .iter()
+                .all(|p| !envmap.params.contains_key(*p)),
+            "World position dropped"
+        );
+        assert!(
+            envmap.params.contains_key("sun_disc_intensity"),
+            "the disc's own brightness stays"
+        );
         let meta = def.preset_metadata.as_ref().unwrap();
         assert!(!meta.bindings.iter().any(|b| matches!(&b.target,
             crate::effect_graph_def::BindingTarget::Node { node_id, param } if node_id == "envmap" && param.starts_with("sun_") && param != "sun_disc_intensity")));
-        assert!(!meta.params.iter().any(|p| p.id == "1_sun_x"), "the Sun X card drove only the World position");
-        assert!(meta.params.iter().any(|p| p.id == "7_pos_y"), "the light's own card stays");
-        assert!(def.wires.iter().any(|w| w.from_node == 7 && w.to_node == 1 && w.to_port == "sun"), "the Sun light feeds the sky");
+        assert!(
+            !meta.params.iter().any(|p| p.id == "1_sun_x"),
+            "the Sun X card drove only the World position"
+        );
+        assert!(
+            meta.params.iter().any(|p| p.id == "7_pos_y"),
+            "the light's own card stays"
+        );
+        assert!(
+            def.wires
+                .iter()
+                .any(|w| w.from_node == 7 && w.to_node == 1 && w.to_port == "sun"),
+            "the Sun light feeds the sky"
+        );
         let light = def.nodes.iter().find(|n| n.node_id == "sun").unwrap();
-        assert_eq!(light.params.get("pos_y"), Some(&crate::effect_graph_def::SerializedParamValue::Float { value: 5.0 }), "the light is kept");
+        assert_eq!(
+            light.params.get("pos_y"),
+            Some(&crate::effect_graph_def::SerializedParamValue::Float { value: 5.0 }),
+            "the light is kept"
+        );
     }
 
     /// A World sun pointing away from the Sun light loads with the light
@@ -361,7 +433,12 @@ mod tests {
         p.on_after_deserialize();
 
         assert_follows_light(&p.embedded_presets[0].def);
-        assert_eq!(p.load_report.migration_notes.len(), 1, "{:?}", p.load_report.migration_notes);
+        assert_eq!(
+            p.load_report.migration_notes.len(),
+            1,
+            "{:?}",
+            p.load_report.migration_notes
+        );
         assert!(p.load_report.migration_notes[0].contains("\"Sky Scene\""));
         assert!(p.load_report.migration_notes[0].contains("now follows the Sun light"));
 
@@ -379,6 +456,10 @@ mod tests {
         p.embedded_presets.push(world_sun_scene(0.0, true));
         p.on_after_deserialize();
         assert_follows_light(&p.embedded_presets[0].def);
-        assert!(p.load_report.migration_notes.is_empty(), "{:?}", p.load_report.migration_notes);
+        assert!(
+            p.load_report.migration_notes.is_empty(),
+            "{:?}",
+            p.load_report.migration_notes
+        );
     }
 }

@@ -31,7 +31,12 @@ fn run(det: &mut BaseDetector, audio: &[f64], seed: u64) -> Vec<Candidate> {
 fn chunking_does_not_change_candidates() {
     let m = model();
     let g = golden::load("detectors/kick", &clip_names()[0]);
-    let audio: Vec<f64> = g.i16s("audio_i16", &[g.shape("audio_i16").unwrap()[0]]).unwrap().iter().map(|&v| v as f64 / 32768.0).collect();
+    let audio: Vec<f64> = g
+        .i16s("audio_i16", &[g.shape("audio_i16").unwrap()[0]])
+        .unwrap()
+        .iter()
+        .map(|&v| v as f64 / 32768.0)
+        .collect();
     let a = run(&mut BaseDetector::new(&m).unwrap(), &audio, 1);
     let mut whole = Vec::with_capacity(audio.len() / 256 + 1);
     BaseDetector::new(&m).unwrap().push(&audio, &mut whole);
@@ -41,10 +46,22 @@ fn chunking_does_not_change_candidates() {
 /// Values from numpy 2.4 `np.sum` (pairwise summation), where a naive left fold rounds differently.
 #[test]
 fn np_sum_matches_numpy_pairwise_order() {
-    let v: Vec<f64> = (0..340).map(|i| if i % 9 == 0 { 1.0e16 } else { 1.0 + i as f64 * 0.25 }).collect();
+    let v: Vec<f64> = (0..340)
+        .map(|i| {
+            if i % 9 == 0 {
+                1.0e16
+            } else {
+                1.0 + i as f64 * 0.25
+            }
+        })
+        .collect();
     let naive = v.iter().fold(0.0, |a, b| a + b);
     let pw = np_sum(&v);
-    assert_ne!(naive.to_bits(), pw.to_bits(), "test vector must separate the orders");
+    assert_ne!(
+        naive.to_bits(),
+        pw.to_bits(),
+        "test vector must separate the orders"
+    );
     assert_eq!(pw.to_bits(), NUMPY_SUM_340.to_bits());
     assert_eq!(np_sum(&v[..37]).to_bits(), NUMPY_SUM_37.to_bits());
     assert_eq!(np_sum(&v[..5]).to_bits(), NUMPY_SUM_5.to_bits());

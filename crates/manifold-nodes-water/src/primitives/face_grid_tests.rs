@@ -4,16 +4,16 @@
 //! positions, comes out of its component atom as that field at the seam's
 //! face positions (`liquid::grid::face_position`).
 
-use manifold_water_liquid::primitives::face_sample_component::FaceSampleComponent;
-use manifold_node_engine::testkit::array_harness::{Harness, params, read};
-use manifold_water_gpu_mpm::primitives::matter_face_component::MatterFaceComponent;
 use manifold_node_engine::exec::effect_node::ParamValues;
+use manifold_node_engine::parameters::ParamValue;
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::testkit::array_harness::{Harness, params, read};
+use manifold_water_gpu_mpm::matter::MatterGridNode;
+use manifold_water_gpu_mpm::primitives::matter_face_component::MatterFaceComponent;
 use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::grid::{face_coords, face_len, face_position};
 use manifold_water_liquid::lattice::PADDING_NODES;
-use manifold_water_gpu_mpm::matter::MatterGridNode;
-use manifold_node_engine::parameters::ParamValue;
-use manifold_node_engine::primitive::Primitive;
+use manifold_water_liquid::primitives::face_sample_component::FaceSampleComponent;
 
 /// Unequal sides, so a swapped axis shows.
 const N: [u32; 3] = [6, 5, 4];
@@ -29,12 +29,18 @@ struct Field {
 
 impl Field {
     fn uniform() -> Self {
-        Self { c: [0.7, -1.3, 0.4], a: [[0.0; 3]; 3] }
+        Self {
+            c: [0.7, -1.3, 0.4],
+            a: [[0.0; 3]; 3],
+        }
     }
 
     /// A linear field with every shear term set.
     fn shear() -> Self {
-        Self { c: [0.2, -0.5, 0.9], a: [[0.3, 1.1, -0.7], [-0.4, 0.25, 0.8], [0.6, -0.9, -0.15]] }
+        Self {
+            c: [0.2, -0.5, 0.9],
+            a: [[0.3, 1.1, -0.7], [-0.4, 0.25, 0.8], [0.6, -0.9, -0.15]],
+        }
     }
 
     fn at(&self, x: [f64; 3]) -> [f64; 3] {
@@ -54,7 +60,11 @@ impl Rng {
 }
 
 fn component_params(nodes: [u32; 3], axis: u32) -> ParamValues {
-    let mut p = params(&[("nodes_x", nodes[0] as f32), ("nodes_y", nodes[1] as f32), ("nodes_z", nodes[2] as f32)]);
+    let mut p = params(&[
+        ("nodes_x", nodes[0] as f32),
+        ("nodes_y", nodes[1] as f32),
+        ("nodes_z", nodes[2] as f32),
+    ]);
     p.insert("axis".into(), ParamValue::Enum(axis));
     p
 }
@@ -78,7 +88,10 @@ fn assert_faces(axis: usize, got: &[f32], want: impl Fn([u32; 3]) -> f64, what: 
     for (i, &g) in got.iter().enumerate() {
         let f = face_coords(N, axis, i);
         let w = want(f);
-        assert!((f64::from(g) - w).abs() <= 1e-5, "{what} axis {axis} face {f:?}: {g} vs {w}");
+        assert!(
+            (f64::from(g) - w).abs() <= 1e-5,
+            "{what} axis {axis} face {f:?}: {g} vs {w}"
+        );
     }
 }
 
@@ -118,7 +131,9 @@ fn gpu_flip_nodes() -> [u32; 3] {
 }
 
 fn node_position(p: [u32; 3]) -> [f64; 3] {
-    std::array::from_fn(|b| f64::from(MIN[b]) + (f64::from(p[b]) - f64::from(PADDING_NODES)) * f64::from(H))
+    std::array::from_fn(|b| {
+        f64::from(MIN[b]) + (f64::from(p[b]) - f64::from(PADDING_NODES)) * f64::from(H)
+    })
 }
 
 fn matter_grid(field: &Field) -> Vec<MatterGridNode> {
@@ -127,7 +142,10 @@ fn matter_grid(field: &Field) -> Vec<MatterGridNode> {
         .map(|i| {
             let p = [i % n[0], (i / n[0]) % n[1], i / (n[0] * n[1])];
             let v = field.at(node_position(p));
-            MatterGridNode { velocity_mass: [v[0] as f32, v[1] as f32, v[2] as f32, 1.0], ..Default::default() }
+            MatterGridNode {
+                velocity_mass: [v[0] as f32, v[1] as f32, v[2] as f32, 1.0],
+                ..Default::default()
+            }
         })
         .collect()
 }
@@ -148,7 +166,12 @@ fn liquid_face_grid_layout_gpu_flip() {
                 face_len(N, axis) as usize,
                 &component_params(gpu_flip_nodes(), axis as u32),
             );
-            assert_faces(axis, &got, |f| field.at(seam_position(axis, f))[axis], &format!("GPU FLIP {name}"));
+            assert_faces(
+                axis,
+                &got,
+                |f| field.at(seam_position(axis, f))[axis],
+                &format!("GPU FLIP {name}"),
+            );
         }
     }
 }
@@ -170,7 +193,12 @@ fn liquid_face_grid_layout_matter() {
                 face_len(N, axis) as usize,
                 &component_params(nodes, axis as u32),
             );
-            assert_faces(axis, &got, |f| field.at(seam_position(axis, f))[axis], &format!("MPM {name}"));
+            assert_faces(
+                axis,
+                &got,
+                |f| field.at(seam_position(axis, f))[axis],
+                &format!("MPM {name}"),
+            );
         }
     }
 }
@@ -205,7 +233,11 @@ fn face_sample_component_zeroes_unweighted_faces() {
             &got,
             |f| {
                 let s = lattice[(f[0] + m[0] * (f[1] + m[1] * f[2])) as usize];
-                if s.weight[axis] > 0.0 { f64::from(s.velocity[axis]) } else { 0.0 }
+                if s.weight[axis] > 0.0 {
+                    f64::from(s.velocity[axis])
+                } else {
+                    0.0
+                }
             },
             "GPU FLIP weights",
         );
@@ -253,7 +285,11 @@ fn matter_face_component_skips_empty_nodes() {
                         hits += 1;
                     }
                 }
-                if hits == 0 { 0.0 } else { sum / f64::from(hits) }
+                if hits == 0 {
+                    0.0
+                } else {
+                    sum / f64::from(hits)
+                }
             },
             "MPM masses",
         );

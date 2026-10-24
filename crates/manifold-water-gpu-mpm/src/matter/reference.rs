@@ -124,8 +124,9 @@ pub fn substep(points: &mut [Point], lat: &LiquidLattice, p: &Params) -> Grid {
 
     let m_unit = f64::from(super::mass_unit(lat.cell_size()));
     let to_mass = f64::from(super::MASS_SCALE) / m_unit;
-    let to_momentum =
-        f64::from(super::MOMENTUM_SCALE) / m_unit / f64::from(super::momentum_unit(lat.cell_size(), p.dt));
+    let to_momentum = f64::from(super::MOMENTUM_SCALE)
+        / m_unit
+        / f64::from(super::momentum_unit(lat.cell_size(), p.dt));
     let quantize = |value: f64, scale: f64, key: u32, slot: usize| {
         if p.fixed_point {
             super::encode_fixed(value * scale, key, slot as u32) as f64 / scale
@@ -135,7 +136,9 @@ pub fn substep(points: &mut [Point], lat: &LiquidLattice, p: &Params) -> Grid {
     };
     for pt in points.iter().filter(|pt| pt.id != 0) {
         let key = super::rounding_point_key(pt.id, p.tick_index, p.substep_in_tick);
-        let Some((base, w, f)) = base_of(lat, pt.x) else { continue };
+        let Some((base, w, f)) = base_of(lat, pt.x) else {
+            continue;
+        };
         let mass = pt.v0 * p.density;
         let stress = p.dt * pt.v0 * 4.0 * inv_dx * inv_dx * water_stress(p, pt.j);
         let mut affine = [[0.0; 3]; 3];
@@ -153,12 +156,19 @@ pub fn substep(points: &mut [Point], lat: &LiquidLattice, p: &Params) -> Grid {
                         (b as f64 - f[1]) * dx,
                         (cc as f64 - f[2]) * dx,
                     ];
-                    let idx = node_index(lat, [base[0] + a as i64, base[1] + b as i64, base[2] + cc as i64]);
+                    let idx = node_index(
+                        lat,
+                        [base[0] + a as i64, base[1] + b as i64, base[2] + cc as i64],
+                    );
                     grid.mass[idx] += quantize(weight * mass, to_mass, key, idx * 4 + 3);
                     for r in 0..3 {
                         let ad = affine[r][0] * d[0] + affine[r][1] * d[1] + affine[r][2] * d[2];
-                        grid.momentum[idx][r] +=
-                            quantize(weight * (mass * pt.v[r] + ad), to_momentum, key, idx * 4 + r);
+                        grid.momentum[idx][r] += quantize(
+                            weight * (mass * pt.v[r] + ad),
+                            to_momentum,
+                            key,
+                            idx * 4 + r,
+                        );
                     }
                 }
             }
@@ -219,7 +229,10 @@ pub fn substep(points: &mut [Point], lat: &LiquidLattice, p: &Params) -> Grid {
                         (b as f64 - f[1]) * dx,
                         (cc as f64 - f[2]) * dx,
                     ];
-                    let idx = node_index(lat, [base[0] + a as i64, base[1] + b as i64, base[2] + cc as i64]);
+                    let idx = node_index(
+                        lat,
+                        [base[0] + a as i64, base[1] + b as i64, base[2] + cc as i64],
+                    );
                     let vi = grid.velocity[idx];
                     let vbi = grid.velocity_before[idx];
                     for r in 0..3 {
@@ -330,7 +343,10 @@ mod tests {
         let total: f64 = points.iter().map(|pt| pt.v0 * p.density).sum();
         let grid = substep(&mut points, &lat, &p);
         let grid_mass: f64 = grid.mass.iter().sum();
-        assert!((grid_mass - total).abs() <= 1e-12 * total, "{grid_mass} vs {total}");
+        assert!(
+            (grid_mass - total).abs() <= 1e-12 * total,
+            "{grid_mass} vs {total}"
+        );
     }
 
     #[test]
@@ -344,7 +360,12 @@ mod tests {
         }
         let after = momentum(&points, p.density);
         for d in 0..3 {
-            assert!((after[d] - before[d]).abs() < 1e-9, "axis {d}: {} vs {}", after[d], before[d]);
+            assert!(
+                (after[d] - before[d]).abs() < 1e-9,
+                "axis {d}: {} vs {}",
+                after[d],
+                before[d]
+            );
         }
     }
 
@@ -360,18 +381,35 @@ mod tests {
             for pt in &mut points {
                 pt.v = velocity;
             }
-            let p = Params { dt: 1.0 / (60.0 * 34.0), fixed_point, ..params() };
+            let p = Params {
+                dt: 1.0 / (60.0 * 34.0),
+                fixed_point,
+                ..params()
+            };
             let before = momentum(&points, p.density);
             for step in 0..300u32 {
-                substep(&mut points, &lat, &Params { tick_index: step / 34, substep_in_tick: step % 34, ..p });
+                substep(
+                    &mut points,
+                    &lat,
+                    &Params {
+                        tick_index: step / 34,
+                        substep_in_tick: step % 34,
+                        ..p
+                    },
+                );
             }
             let after = momentum(&points, p.density);
             let j = points.iter().map(|pt| pt.j).fold(1.0f64, f64::max);
-            (std::array::from_fn::<f64, 3, _>(|d| (after[d] - before[d]) / before[d]), j)
+            (
+                std::array::from_fn::<f64, 3, _>(|d| (after[d] - before[d]) / before[d]),
+                j,
+            )
         };
         let (exact, exact_j) = run(false);
         let (fixed, fixed_j) = run(true);
-        eprintln!("relative momentum change: f64 {exact:?} (max J {exact_j}), fixed point {fixed:?} (max J {fixed_j})");
+        eprintln!(
+            "relative momentum change: f64 {exact:?} (max J {exact_j}), fixed point {fixed:?} (max J {fixed_j})"
+        );
         assert!(exact.iter().all(|c| c.abs() < 1e-9), "{exact:?}");
         assert!(fixed.iter().all(|c| c.abs() < 1e-4), "{fixed:?}");
     }
@@ -383,7 +421,10 @@ mod tests {
         for pt in &mut points {
             pt.v = [0.0; 3];
         }
-        let p = Params { gravity: [0.0, -9.81, 0.0], ..params() };
+        let p = Params {
+            gravity: [0.0, -9.81, 0.0],
+            ..params()
+        };
         substep(&mut points, &lat, &p);
         for pt in &points {
             assert!((pt.v[1] + 9.81 * p.dt).abs() < 1e-12, "{:?}", pt.v);

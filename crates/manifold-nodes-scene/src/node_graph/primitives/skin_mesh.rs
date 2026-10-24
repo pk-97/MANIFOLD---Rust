@@ -29,8 +29,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::{JointMatrix, MeshVertex, Vec4Vertex};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::{JointMatrix, MeshVertex, Vec4Vertex};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
@@ -102,7 +102,10 @@ impl Primitive for SkinMesh {
         if port_name != "out" {
             return None;
         }
-        input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)
+        input_capacities
+            .iter()
+            .find(|(p, _)| *p == "in")
+            .map(|(_, n)| *n)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -162,11 +165,31 @@ impl Primitive for SkinMesh {
                     binding: 0,
                     data: bytemuck::bytes_of(&uniforms),
                 },
-                GpuBinding::Buffer { binding: 1, buffer: in_buf, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: joints_buf, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: weights_buf, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: matrices_buf, offset: 0 },
-                GpuBinding::Buffer { binding: 5, buffer: out_buf, offset: 0 },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: in_buf,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: joints_buf,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: weights_buf,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: matrices_buf,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: out_buf,
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256), 1, 1],
             "node.skin_mesh",
@@ -183,8 +206,17 @@ mod gpu_tests {
     use super::*;
 
     fn mk_vertex(pos: [f32; 3], normal: [f32; 3]) -> MeshVertex {
-        MeshVertex { position: pos, _pad0: 0.0, normal, _pad1: 0.0, uv: [0.0, 0.0], _pad2: [0.0, 0.0], tangent: [0.0; 4], color: [1.0; 4] }
-}
+        MeshVertex {
+            position: pos,
+            _pad0: 0.0,
+            normal,
+            _pad1: 0.0,
+            uv: [0.0, 0.0],
+            _pad2: [0.0, 0.0],
+            tangent: [0.0; 4],
+            color: [1.0; 4],
+        }
+    }
 
     fn identity_matrix() -> JointMatrix {
         JointMatrix {
@@ -225,7 +257,13 @@ mod gpu_tests {
             let w = weights[k] / wsum;
             let j = (joints[k].round() as usize).min(matrices.len() - 1);
             let m = &matrices[j];
-            let mp = |c0: [f32; 4], c1: [f32; 4], c2: [f32; 4], c3: [f32; 4], p: [f32; 3], is_point: f32| -> [f32; 3] {
+            let mp = |c0: [f32; 4],
+                      c1: [f32; 4],
+                      c2: [f32; 4],
+                      c3: [f32; 4],
+                      p: [f32; 3],
+                      is_point: f32|
+             -> [f32; 3] {
                 [
                     c0[0] * p[0] + c1[0] * p[1] + c2[0] * p[2] + c3[0] * is_point,
                     c0[1] * p[0] + c1[1] * p[1] + c2[1] * p[2] + c3[1] * is_point,
@@ -239,7 +277,9 @@ mod gpu_tests {
                 nrm[c] += w * tn[c];
             }
         }
-        let mag = (nrm[0] * nrm[0] + nrm[1] * nrm[1] + nrm[2] * nrm[2]).sqrt().max(1e-12);
+        let mag = (nrm[0] * nrm[0] + nrm[1] * nrm[1] + nrm[2] * nrm[2])
+            .sqrt()
+            .max(1e-12);
         (pos, [nrm[0] / mag, nrm[1] / mag, nrm[2] / mag])
     }
 
@@ -253,19 +293,28 @@ mod gpu_tests {
         joint_count: i32,
     ) -> Vec<MeshVertex> {
         let wgsl = generated_wgsl();
-        let pipeline =
-            device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "skin-mesh-test");
+        let pipeline = device.create_compute_pipeline(
+            &wgsl,
+            manifold_node_engine::freeze::codegen::ENTRY,
+            "skin-mesh-test",
+        );
         let in_buf = device.create_buffer_shared(std::mem::size_of_val(verts) as u64);
         unsafe {
             in_buf.write(0, bytemuck::cast_slice(verts));
         }
-        let joints_v4: Vec<Vec4Vertex> = joints.iter().map(|j| Vec4Vertex { position: *j }).collect();
-        let joints_buf = device.create_buffer_shared(std::mem::size_of_val(joints_v4.as_slice()) as u64);
+        let joints_v4: Vec<Vec4Vertex> =
+            joints.iter().map(|j| Vec4Vertex { position: *j }).collect();
+        let joints_buf =
+            device.create_buffer_shared(std::mem::size_of_val(joints_v4.as_slice()) as u64);
         unsafe {
             joints_buf.write(0, bytemuck::cast_slice(&joints_v4));
         }
-        let weights_v4: Vec<Vec4Vertex> = weights.iter().map(|w| Vec4Vertex { position: *w }).collect();
-        let weights_buf = device.create_buffer_shared(std::mem::size_of_val(weights_v4.as_slice()) as u64);
+        let weights_v4: Vec<Vec4Vertex> = weights
+            .iter()
+            .map(|w| Vec4Vertex { position: *w })
+            .collect();
+        let weights_buf =
+            device.create_buffer_shared(std::mem::size_of_val(weights_v4.as_slice()) as u64);
         unsafe {
             weights_buf.write(0, bytemuck::cast_slice(&weights_v4));
         }
@@ -286,15 +335,43 @@ mod gpu_tests {
             _pad2: 0,
         };
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: &in_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &joints_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &weights_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 4, buffer: &matrices_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 5, buffer: &out_buf, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &in_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &joints_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &weights_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: &matrices_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 5,
+                buffer: &out_buf,
+                offset: 0,
+            },
         ];
         let mut enc = device.create_encoder("skin-mesh-test");
-        enc.dispatch_compute(&pipeline, &bindings, [(verts.len() as u32).div_ceil(256), 1, 1], "skin-mesh-test");
+        enc.dispatch_compute(
+            &pipeline,
+            &bindings,
+            [(verts.len() as u32).div_ceil(256), 1, 1],
+            "skin-mesh-test",
+        );
         enc.commit_and_wait_completed();
         let ptr = out_buf.mapped_ptr().expect("shared dst buffer");
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, verts.len()) }.to_vec()
@@ -304,8 +381,14 @@ mod gpu_tests {
     fn generated_matches_hand_formula_single_joint_full_weight() {
         let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
-        assert!(gen_wgsl.contains("struct Element"), "element struct synthesized");
-        assert!(gen_wgsl.contains("var<storage, read_write>"), "output bound read_write");
+        assert!(
+            gen_wgsl.contains("struct Element"),
+            "element struct synthesized"
+        );
+        assert!(
+            gen_wgsl.contains("var<storage, read_write>"),
+            "output bound read_write"
+        );
 
         let verts = vec![
             mk_vertex([1.0, 2.0, 3.0], [0.0, 1.0, 0.0]),
@@ -313,7 +396,10 @@ mod gpu_tests {
         ];
         let joints = vec![[0.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]];
         let weights = vec![[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]];
-        let matrices = vec![translate_matrix([5.0, 0.0, 0.0]), translate_matrix([0.0, 5.0, 0.0])];
+        let matrices = vec![
+            translate_matrix([5.0, 0.0, 0.0]),
+            translate_matrix([0.0, 5.0, 0.0]),
+        ];
 
         let out = dispatch_skin(&device, &verts, &joints, &weights, &matrices, 2);
         for i in 0..verts.len() {
@@ -325,7 +411,10 @@ mod gpu_tests {
                     out[i].position[c],
                     exp_pos[c]
                 );
-                assert!((out[i].normal[c] - exp_n[c]).abs() < 1e-4, "vertex {i} normal[{c}]");
+                assert!(
+                    (out[i].normal[c] - exp_n[c]).abs() < 1e-4,
+                    "vertex {i} normal[{c}]"
+                );
             }
         }
     }
@@ -347,7 +436,10 @@ mod gpu_tests {
                 out[0].position[c],
                 exp_pos[c]
             );
-            assert!((out[0].normal[c] - exp_n[c]).abs() < 1e-4, "blended vertex normal[{c}]");
+            assert!(
+                (out[0].normal[c] - exp_n[c]).abs() < 1e-4,
+                "blended vertex normal[{c}]"
+            );
         }
     }
 
@@ -362,6 +454,10 @@ mod gpu_tests {
         let matrices = vec![translate_matrix([3.0, 0.0, 0.0])];
 
         let out = dispatch_skin(&device, &verts, &joints, &weights, &matrices, 1);
-        assert!((out[0].position[0] - 4.0).abs() < 1e-4, "clamped to joint 0, got {}", out[0].position[0]);
+        assert!(
+            (out[0].position[0] - 4.0).abs() < 1e-4,
+            "clamped to joint 0, got {}",
+            out[0].position[0]
+        );
     }
 }

@@ -1,8 +1,8 @@
 use crate::command::Command;
-use manifold_core::change::{ChangeSet, Part};
-use manifold_core::audio_clip_detection::{AudioClipDetection, DetectionConfig};
-use manifold_core::project::Project;
 use manifold_core::ClipId;
+use manifold_core::audio_clip_detection::{AudioClipDetection, DetectionConfig};
+use manifold_core::change::{ChangeSet, Part};
+use manifold_core::project::Project;
 
 /// Set an audio clip's detection config (the inspector's knobs). Preserves any
 /// cached analysis on the clip — only the settings change, so the host can
@@ -32,7 +32,9 @@ impl SetClipDetectionConfigCommand {
 }
 
 impl Command for SetClipDetectionConfigCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Clips])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) else {
             return;
@@ -83,11 +85,11 @@ impl Command for SetClipDetectionConfigCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::PresetTypeId;
     use manifold_core::clip::TimelineClip;
     use manifold_core::layer::Layer;
     use manifold_core::types::LayerType;
     use manifold_core::units::{Beats, Seconds};
-    use manifold_core::PresetTypeId;
 
     fn project_with_audio_clip() -> (Project, ClipId) {
         let mut project = Project::default();
@@ -111,7 +113,8 @@ mod tests {
     #[test]
     fn execute_sets_config_and_undo_clears_when_absent() {
         let (mut project, clip_id) = project_with_audio_clip();
-        let mut cmd = SetClipDetectionConfigCommand::new(clip_id.clone(), DetectionConfig::default());
+        let mut cmd =
+            SetClipDetectionConfigCommand::new(clip_id.clone(), DetectionConfig::default());
 
         cmd.execute(&mut project);
         let clip = project.timeline.find_clip_by_id_mut(&clip_id).unwrap();
@@ -135,11 +138,13 @@ mod tests {
             };
             clip.audio_detection = Some(AudioClipDetection {
                 config: cfg,
-                analysis: Some(manifold_core::percussion_analysis::PercussionAnalysisData::new_simple(
-                    "t",
-                    manifold_core::units::Bpm(128.0),
-                    vec![],
-                )),
+                analysis: Some(
+                    manifold_core::percussion_analysis::PercussionAnalysisData::new_simple(
+                        "t",
+                        manifold_core::units::Bpm(128.0),
+                        vec![],
+                    ),
+                ),
                 ..Default::default()
             });
         }

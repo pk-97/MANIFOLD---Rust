@@ -205,7 +205,6 @@ impl RenderScene {
             light_port_names: Vec::new(),
         };
 
-
         s.rebuild(DEFAULT_OBJECTS, DEFAULT_LIGHTS);
         s
     }
@@ -216,8 +215,10 @@ impl RenderScene {
         let objects = objects.clamp(1, OBJECT_SAFETY_MAX);
         let lights = lights.clamp(0, LIGHT_SLIDER_MAX);
         let n_obj = objects as usize;
-        self.rt_objects_scratch.reserve(n_obj.saturating_sub(self.rt_objects_scratch.len()));
-        self.rt_materials_scratch.reserve(n_obj.saturating_sub(self.rt_materials_scratch.len()));
+        self.rt_objects_scratch
+            .reserve(n_obj.saturating_sub(self.rt_objects_scratch.len()));
+        self.rt_materials_scratch
+            .reserve(n_obj.saturating_sub(self.rt_materials_scratch.len()));
         self.rt_mesh_revisions.resize(n_obj, None);
         self.rt_mesh_revisions.fill(None);
         self.rt_changes = Vec::with_capacity(n_obj);
@@ -311,7 +312,10 @@ impl RenderScene {
                 label: "Render Mode",
                 ty: ParamType::Enum,
                 default: ParamValue::Enum(0),
-                range: Some((0.0, (manifold_node_engine::scene::render_mode::RENDER_MODE_LABELS.len() - 1) as f32)),
+                range: Some((
+                    0.0,
+                    (manifold_node_engine::scene::render_mode::RENDER_MODE_LABELS.len() - 1) as f32,
+                )),
                 enum_values: manifold_node_engine::scene::render_mode::RENDER_MODE_LABELS,
             },
             // RAYTRACING_DESIGN.md D14 (W0): per-scene RT toggle. Default
@@ -443,9 +447,11 @@ impl RenderScene {
         // `objects`/`lights` param change — never per frame). `evaluate()`
         // indexes these by object/light number instead of calling `format!`
         // itself.
-        self.object_port_names =
-            (0..n_obj).map(|i| format!("object_{i}").into_boxed_str()).collect();
-        self.light_port_names =
-            (0..n_lights).map(|i| format!("light_{i}").into_boxed_str()).collect();
+        self.object_port_names = (0..n_obj)
+            .map(|i| format!("object_{i}").into_boxed_str())
+            .collect();
+        self.light_port_names = (0..n_lights)
+            .map(|i| format!("light_{i}").into_boxed_str())
+            .collect();
     }
 }

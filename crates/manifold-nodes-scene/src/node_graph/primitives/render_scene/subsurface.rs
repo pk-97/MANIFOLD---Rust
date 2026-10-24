@@ -1,7 +1,7 @@
 //! Optional geometry-based subsurface pass; see SUBSURFACE_MATERIAL_DESIGN.md.
 use super::*;
-use manifold_node_engine::scene::material::SubsurfaceMode;
 use manifold_gpu::raytrace::{SubsurfaceMaterial, SubsurfaceParams};
+use manifold_node_engine::scene::material::SubsurfaceMode;
 
 #[derive(Default)]
 pub(super) struct SubsurfacePass {
@@ -100,20 +100,32 @@ impl SubsurfacePass {
         };
         let guide = if resize {
             [
-                Some(make_texture(manifold_gpu::GpuTextureFormat::Rgba32Float,
-                    "node.render_scene subsurface guide A")?),
-                Some(make_texture(manifold_gpu::GpuTextureFormat::Rgba32Float,
-                    "node.render_scene subsurface guide B")?),
+                Some(make_texture(
+                    manifold_gpu::GpuTextureFormat::Rgba32Float,
+                    "node.render_scene subsurface guide A",
+                )?),
+                Some(make_texture(
+                    manifold_gpu::GpuTextureFormat::Rgba32Float,
+                    "node.render_scene subsurface guide B",
+                )?),
             ]
-        } else { [None, None] };
+        } else {
+            [None, None]
+        };
         let depth_history = if resize {
             [
-                Some(make_texture(manifold_gpu::GpuTextureFormat::R32Float,
-                    "node.render_scene subsurface depth A")?),
-                Some(make_texture(manifold_gpu::GpuTextureFormat::R32Float,
-                    "node.render_scene subsurface depth B")?),
+                Some(make_texture(
+                    manifold_gpu::GpuTextureFormat::R32Float,
+                    "node.render_scene subsurface depth A",
+                )?),
+                Some(make_texture(
+                    manifold_gpu::GpuTextureFormat::R32Float,
+                    "node.render_scene subsurface depth B",
+                )?),
             ]
-        } else { [None, None] };
+        } else {
+            [None, None]
+        };
         let filter_scratch = if resize {
             Some(make_texture(
                 manifold_gpu::GpuTextureFormat::Rgba16Float,
@@ -192,7 +204,11 @@ impl RenderScene {
             return false;
         }
         let Some(inv_view_proj) = mat4_inverse(pre.view_proj) else {
-            Self::fail_frame(ctx, None, "Subsurface scattering requires an invertible camera projection.");
+            Self::fail_frame(
+                ctx,
+                None,
+                "Subsurface scattering requires an invertible camera projection.",
+            );
             return false;
         };
         let rows: arrayvec::ArrayVec<SubsurfaceMaterial, { OBJECT_SAFETY_MAX as usize }> = draws
@@ -236,25 +252,39 @@ impl RenderScene {
             key.write(bytemuck::cast_slice(&draw.map_uniforms));
             key.write(bytemuck::bytes_of(&draw.uniforms.alpha_params));
             key.write(bytemuck::bytes_of(&draw.uniforms.normal_uv_t));
-            for content in draw.rt_texture_content { content.hash(&mut key); }
+            for content in draw.rt_texture_content {
+                content.hash(&mut key);
+            }
         }
         let material_bytes = unsafe {
-            std::slice::from_raw_parts(gi_materials.as_ptr().cast::<u8>(),
-                std::mem::size_of_val(gi_materials))
+            std::slice::from_raw_parts(
+                gi_materials.as_ptr().cast::<u8>(),
+                std::mem::size_of_val(gi_materials),
+            )
         };
         key.write(material_bytes);
         let key = key.finish();
-        let known = draws.iter().all(|d| d.geometry_content_known && d.appearance_content_known)
+        let known = draws
+            .iter()
+            .all(|d| d.geometry_content_known && d.appearance_content_known)
             && (ctx.inputs.texture_2d("envmap").is_none() || env_content.is_some());
         static TRACE_HISTORY: OnceLock<bool> = OnceLock::new();
         if *TRACE_HISTORY.get_or_init(|| std::env::var_os("MANIFOLD_SSS_HISTORY_TRACE").is_some()) {
-            eprintln!("SSS history frame={} key={key:x} previous={:?} known={known} needs_reset={} env={env_content:?} accel={:?}",
-                self.jitter_frame_index, self.subsurface_pass.scene_key,
-                self.subsurface_pass.needs_reset, self.rt_accel_key);
+            eprintln!(
+                "SSS history frame={} key={key:x} previous={:?} known={known} needs_reset={} env={env_content:?} accel={:?}",
+                self.jitter_frame_index,
+                self.subsurface_pass.scene_key,
+                self.subsurface_pass.needs_reset,
+                self.rt_accel_key
+            );
             for draw in draws {
-                eprintln!("  vertices={:?} instances={:?} geometry_known={} appearance_known={}",
-                    draw.vertices_content, draw.instances_content,
-                    draw.geometry_content_known, draw.appearance_content_known);
+                eprintln!(
+                    "  vertices={:?} instances={:?} geometry_known={} appearance_known={}",
+                    draw.vertices_content,
+                    draw.instances_content,
+                    draw.geometry_content_known,
+                    draw.appearance_content_known
+                );
             }
         }
         if !known || self.subsurface_pass.scene_key != Some(key) {
@@ -310,10 +340,18 @@ impl RenderScene {
         let write_idx = 1 - read_idx;
         let reset = self.subsurface_pass.needs_reset;
         let raw = self.subsurface_pass.raw.as_ref().expect("ensured");
-        let guide = self.subsurface_pass.guide[write_idx].as_ref().expect("ensured");
-        let guide_read = self.subsurface_pass.guide[read_idx].as_ref().expect("ensured");
-        let depth_read = self.subsurface_pass.depth_history[read_idx].as_ref().expect("ensured");
-        let depth_write = self.subsurface_pass.depth_history[write_idx].as_ref().expect("ensured");
+        let guide = self.subsurface_pass.guide[write_idx]
+            .as_ref()
+            .expect("ensured");
+        let guide_read = self.subsurface_pass.guide[read_idx]
+            .as_ref()
+            .expect("ensured");
+        let depth_read = self.subsurface_pass.depth_history[read_idx]
+            .as_ref()
+            .expect("ensured");
+        let depth_write = self.subsurface_pass.depth_history[write_idx]
+            .as_ref()
+            .expect("ensured");
         let history_read = self.subsurface_pass.history[read_idx]
             .as_ref()
             .expect("ensured");
@@ -355,8 +393,12 @@ impl RenderScene {
                 guide_read,
                 depth_read,
                 depth_write,
-                self.subsurface_pass.previous_view_proj.unwrap_or(pre.view_proj),
-                self.subsurface_pass.previous_inv_view_proj.unwrap_or(inv_view_proj),
+                self.subsurface_pass
+                    .previous_view_proj
+                    .unwrap_or(pre.view_proj),
+                self.subsurface_pass
+                    .previous_inv_view_proj
+                    .unwrap_or(inv_view_proj),
                 history_read,
                 history_write,
                 count_read,

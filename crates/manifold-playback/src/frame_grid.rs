@@ -25,7 +25,11 @@ pub struct FrameGrid {
 
 impl FrameGrid {
     pub fn new(fps: f32, anchor: Instant) -> Self {
-        Self { anchor, step: step_for_fps(fps), consumed: 0 }
+        Self {
+            anchor,
+            step: step_for_fps(fps),
+            consumed: 0,
+        }
     }
 
     /// Load and fps change: a fresh grid from `anchor`.
@@ -51,7 +55,9 @@ impl FrameGrid {
     /// least 1. A tick before its deadline consumes that deadline early, so the
     /// following tick is not counted twice.
     pub fn consume_at(&mut self, now: Instant) -> u32 {
-        let reached = self.last_deadline_at_or_before(now).max(self.consumed.saturating_add(1));
+        let reached = self
+            .last_deadline_at_or_before(now)
+            .max(self.consumed.saturating_add(1));
         let frames = reached - self.consumed;
         self.consumed = reached;
         u32::try_from(frames).unwrap_or(u32::MAX)
@@ -105,15 +111,27 @@ mod tests {
                 let deadline = grid.next_deadline();
                 let now = deadline + secs(rng.unit() * 0.95 * step);
                 assert_eq!(grid.consume_at(now), 1, "{fps}");
-                assert_eq!(grid.consumed_deadline(), deadline, "{fps}: the frame's deadline, not the wake");
+                assert_eq!(
+                    grid.consumed_deadline(),
+                    deadline,
+                    "{fps}: the frame's deadline, not the wake"
+                );
             }
             // A harness waking up to 40% early still counts one frame per tick.
             for _ in 0..20_000 {
                 let offset = (rng.unit() * 0.8 - 0.4) * step;
                 let deadline = grid.next_deadline();
-                let now = if offset >= 0.0 { deadline + secs(offset) } else { deadline - secs(-offset) };
+                let now = if offset >= 0.0 {
+                    deadline + secs(offset)
+                } else {
+                    deadline - secs(-offset)
+                };
                 assert_eq!(grid.consume_at(now), 1, "{fps} early or late wake");
-                assert_eq!(grid.consumed_deadline(), deadline, "{fps}: early or late wake");
+                assert_eq!(
+                    grid.consumed_deadline(),
+                    deadline,
+                    "{fps}: early or late wake"
+                );
             }
         }
     }
@@ -126,7 +144,11 @@ mod tests {
             let mut grid = FrameGrid::new(fps, anchor);
             assert_eq!(grid.consume_at(grid.deadline(1)), 1);
             assert_eq!(grid.consume_at(grid.deadline(4) + secs(0.2 * step)), 3);
-            assert_eq!(grid.consumed_deadline(), grid.deadline(4), "{fps}: the last missed deadline");
+            assert_eq!(
+                grid.consumed_deadline(),
+                grid.deadline(4),
+                "{fps}: the last missed deadline"
+            );
             // A 5 s stall, then an hour asleep.
             let stall = grid.deadline(4) + secs(5.0);
             let due = (5.0 * fps as f64).floor() as u32;
@@ -135,7 +157,9 @@ mod tests {
             let consumed = grid.consumed;
             let hour = grid.deadline(consumed) + secs(3600.0);
             let got = grid.consume_at(hour) as i64;
-            let expected = (consumed..consumed + 300_000).take_while(|&n| grid.deadline(n + 1) <= hour).count() as i64;
+            let expected = (consumed..consumed + 300_000)
+                .take_while(|&n| grid.deadline(n + 1) <= hour)
+                .count() as i64;
             assert_eq!(got, expected, "{fps}: an hour of missed deadlines");
         }
     }
@@ -162,7 +186,11 @@ mod tests {
                             brute += 1;
                         }
                         let expected = (brute - grid.consumed).max(1);
-                        assert_eq!(grid.consume_at(now) as i64, expected, "{fps} n {n} nudge {nudge}");
+                        assert_eq!(
+                            grid.consume_at(now) as i64,
+                            expected,
+                            "{fps} n {n} nudge {nudge}"
+                        );
                     }
                 }
             }
@@ -181,10 +209,21 @@ mod tests {
             let clock = TransportClock::new(fps);
             for n in [1i64, 1_000, 432_000] {
                 let formula = n as f64 * (1.0 / fps as f64);
-                assert_eq!(clock.time_at(n).0.to_bits(), formula.to_bits(), "{fps} clock frame {n}");
-                assert_eq!(grid.deadline(n) - anchor, Duration::from_secs_f64(formula), "{fps} grid frame {n}");
+                assert_eq!(
+                    clock.time_at(n).0.to_bits(),
+                    formula.to_bits(),
+                    "{fps} clock frame {n}"
+                );
+                assert_eq!(
+                    grid.deadline(n) - anchor,
+                    Duration::from_secs_f64(formula),
+                    "{fps} grid frame {n}"
+                );
                 let exact = n as f64 / f64::from(fps);
-                assert!((formula - exact).abs() < 1e-9, "{fps} frame {n}: {formula} vs {exact}");
+                assert!(
+                    (formula - exact).abs() < 1e-9,
+                    "{fps} frame {n}: {formula} vs {exact}"
+                );
             }
         }
     }
@@ -196,14 +235,31 @@ mod tests {
         let anchor = Instant::now();
         let sixty = FrameGrid::new(60.0, anchor);
         let later = anchor + secs(1.25);
-        for fps in [0.0_f32, -24.0, 0.5, 1000.5, f32::NAN, f32::INFINITY, f32::MAX, 1e-30] {
+        for fps in [
+            0.0_f32,
+            -24.0,
+            0.5,
+            1000.5,
+            f32::NAN,
+            f32::INFINITY,
+            f32::MAX,
+            1e-30,
+        ] {
             let mut grid = FrameGrid::new(fps, anchor);
             assert_eq!(grid.deadline(432_000), sixty.deadline(432_000), "{fps}");
-            assert_eq!(grid.consume_at(later), sixty.clone().consume_at(later), "{fps}");
+            assert_eq!(
+                grid.consume_at(later),
+                sixty.clone().consume_at(later),
+                "{fps}"
+            );
         }
         for fps in [1.0_f32, 1000.0] {
             let grid = FrameGrid::new(fps, anchor);
-            assert_eq!(grid.deadline(1) - anchor, secs(1.0 / fps as f64), "{fps} is accepted");
+            assert_eq!(
+                grid.deadline(1) - anchor,
+                secs(1.0 / fps as f64),
+                "{fps} is accepted"
+            );
         }
         let mut grid = FrameGrid::new(1000.0, anchor);
         grid.consumed = i64::MAX - 1;

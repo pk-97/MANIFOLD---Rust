@@ -85,7 +85,10 @@ impl Primitive for RunningTotal {
         inputs: &[(&str, u32)],
     ) -> Option<u32> {
         match port {
-            "out" => inputs.iter().find(|(name, _)| *name == "in").map(|&(_, n)| n),
+            "out" => inputs
+                .iter()
+                .find(|(name, _)| *name == "in")
+                .map(|&(_, n)| n),
             "extent" => Some(EXTENT_WORDS),
             _ => None,
         }
@@ -97,13 +100,17 @@ impl Primitive for RunningTotal {
             // SAFETY: a 4-byte shared buffer; only this node writes it.
             self.previous_total = unsafe { std::ptr::read(ptr.cast::<u32>()) } as f32;
         }
-        ctx.outputs.set_scalar("total", ParamValue::Float(self.previous_total));
+        ctx.outputs
+            .set_scalar("total", ParamValue::Float(self.previous_total));
         if let Some(ParamValue::Float(capacity)) = ctx.params.get("capacity")
             && *capacity >= 1.0
             && self.previous_total > capacity.round()
         {
             let (needs, holds) = (self.previous_total as u64, capacity.round() as u64);
-            ctx.error(format!("Running Total: needs {needs}, holds {holds}; {} items were dropped", needs - holds));
+            ctx.error(format!(
+                "Running Total: needs {needs}, holds {holds}; {} items were dropped",
+                needs - holds
+            ));
         }
         // Unwired, the whole array: a numeric default would cap it at a float's
         // exact-integer range.
@@ -128,7 +135,8 @@ impl Primitive for RunningTotal {
                 let last = gpu.device.create_buffer_shared(4);
                 last.zero_fill();
                 self.last_total = Some(last);
-                self.extent_scratch = Some(gpu.device.create_buffer_shared(u64::from(EXTENT_WORDS) * 4));
+                self.extent_scratch =
+                    Some(gpu.device.create_buffer_shared(u64::from(EXTENT_WORDS) * 4));
             }
         }
         let (Some(input), Some(out)) = (ctx.inputs.array("in"), ctx.outputs.array("out")) else {
@@ -165,12 +173,23 @@ impl Primitive for RunningTotal {
         }
         // With nothing scanned the total reads nothing; `out` may be empty.
         let scanned = if n > 0 { out } else { &parents };
-        let uniforms = TotalParams { n: n as u32, per_item, _pad: [0; 2] };
+        let uniforms = TotalParams {
+            n: n as u32,
+            per_item,
+            _pad: [0; 2],
+        };
         encoder.dispatch_compute(
             self.read_total.as_ref().expect("total pipeline created"),
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: scanned, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: scanned,
+                    offset: 0,
+                },
                 GpuBinding::Buffer {
                     binding: 2,
                     buffer: self.total_cell.as_ref().expect("total cell allocated"),
@@ -181,7 +200,11 @@ impl Primitive for RunningTotal {
                     buffer: self.last_total.as_ref().expect("last total allocated"),
                     offset: 0,
                 },
-                GpuBinding::Buffer { binding: 4, buffer: extent, offset: 0 },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: extent,
+                    offset: 0,
+                },
             ],
             [1, 1, 1],
             "node.running_total.total",

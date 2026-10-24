@@ -5,9 +5,9 @@
 
 use manifold_gpu::{GpuTexture, GpuTextureDesc, GpuTextureFormat, GpuTextureUsage};
 
+use crate::text_rasterizer::{HAlign, RasterizeOptions, TextRasterizer};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::primitive::Primitive;
-use crate::text_rasterizer::{HAlign, RasterizeOptions, TextRasterizer};
 
 pub(crate) const ATLAS_TILE_WIDTH: u32 = 32;
 pub(crate) const ATLAS_TILE_HEIGHT: u32 = 48;

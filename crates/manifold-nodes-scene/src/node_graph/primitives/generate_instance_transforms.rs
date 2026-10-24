@@ -115,7 +115,8 @@ fn vector<const N: usize>(value: Option<ParamValue>, default: [f32; N]) -> [f32;
 
 impl Primitive for GenerateInstanceTransforms {
     fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
-        self.pipeline.get_or_insert_with(|| super::nest_copies::nest_pipeline(device));
+        self.pipeline
+            .get_or_insert_with(|| super::nest_copies::nest_pipeline(device));
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -123,18 +124,28 @@ impl Primitive for GenerateInstanceTransforms {
             return;
         };
         let capacity = (out.size / std::mem::size_of::<InstanceTransform>() as u64) as usize;
-        let count = (ctx.scalar_or_param("active_count", 64.0).round().max(0.0) as usize).min(capacity);
+        let count =
+            (ctx.scalar_or_param("active_count", 64.0).round().max(0.0) as usize).min(capacity);
         let layout = match ctx.params.get("layout") {
             Some(ParamValue::Enum(value)) => *value as f32,
             Some(ParamValue::Float(value)) => *value,
             _ => 0.0,
         };
         let frame = ctx.inputs.transform("copy_frame").unwrap_or_default();
-        let width = vector(ctx.inputs.scalar("copy_box"), ["box_x", "box_y", "box_z"].map(|name| ctx.param_f32(name, 1.0)));
-        let turn = vector(ctx.inputs.scalar("copy_turn"), ["turn_x", "turn_y", "turn_z"].map(|name| ctx.param_f32(name, 0.0)));
+        let width = vector(
+            ctx.inputs.scalar("copy_box"),
+            ["box_x", "box_y", "box_z"].map(|name| ctx.param_f32(name, 1.0)),
+        );
+        let turn = vector(
+            ctx.inputs.scalar("copy_turn"),
+            ["turn_x", "turn_y", "turn_z"].map(|name| ctx.param_f32(name, 0.0)),
+        );
         let [columns, spacing] = vector(
             ctx.inputs.scalar("copy_grid"),
-            [ctx.param_f32("columns", COLUMNS_DEFAULT), ctx.param_f32("spacing", SIZE_SPACING_DEFAULT)],
+            [
+                ctx.param_f32("columns", COLUMNS_DEFAULT),
+                ctx.param_f32("spacing", SIZE_SPACING_DEFAULT),
+            ],
         );
         // In the group's own frame: the frame is applied on the GPU below.
         let arrangement = Arrangement {
@@ -150,15 +161,28 @@ impl Primitive for GenerateInstanceTransforms {
         let key = (arrangement, width.map(f32::to_bits), scale.to_bits());
         if self.laid != Some(key) {
             self.places.clear();
-            self.places.extend((0..count).map(|index| place(&arrangement, width, scale, index)));
+            self.places
+                .extend((0..count).map(|index| place(&arrangement, width, scale, index)));
             self.laid = Some(key);
             self.version = self.version.wrapping_add(1);
         }
         let group = InstanceTransform {
             pos_scale: [frame.pos[0], frame.pos[1], frame.pos[2], 1.0],
-            rot_pad: [frame.rot_euler[0], frame.rot_euler[1], frame.rot_euler[2], 0.0],
+            rot_pad: [
+                frame.rot_euler[0],
+                frame.rot_euler[1],
+                frame.rot_euler[2],
+                0.0,
+            ],
         };
-        let group_key: [u32; 6] = std::array::from_fn(|i| if i < 3 { frame.pos[i] } else { frame.rot_euler[i - 3] }.to_bits());
+        let group_key: [u32; 6] = std::array::from_fn(|i| {
+            if i < 3 {
+                frame.pos[i]
+            } else {
+                frame.rot_euler[i - 3]
+            }
+            .to_bits()
+        });
         if self.group != Some(group_key) {
             self.group = Some(group_key);
             self.group_version = self.group_version.wrapping_add(1);
@@ -167,7 +191,10 @@ impl Primitive for GenerateInstanceTransforms {
         let Some(gpu) = ctx.gpu.as_deref_mut() else {
             return;
         };
-        for (buffer, size) in [(&mut self.laid_buffer, out.size), (&mut self.group_buffer, COPY_BYTES)] {
+        for (buffer, size) in [
+            (&mut self.laid_buffer, out.size),
+            (&mut self.group_buffer, COPY_BYTES),
+        ] {
             if buffer.as_ref().is_none_or(|held| held.size != size) {
                 match gpu.device.try_create_buffer(size) {
                     Ok(created) => *buffer = Some(created),
@@ -178,17 +205,33 @@ impl Primitive for GenerateInstanceTransforms {
                 }
             }
         }
-        let (Some(laid), Some(placed_by)) = (self.laid_buffer.as_ref(), self.group_buffer.as_ref()) else {
+        let (Some(laid), Some(placed_by)) = (self.laid_buffer.as_ref(), self.group_buffer.as_ref())
+        else {
             return;
         };
-        let uploads = self.upload.upload(gpu, laid, &self.places, self.version, true).and_then(|relaid| {
-            let moved = self.group_upload.upload(gpu, placed_by, std::slice::from_ref(&group), self.group_version, true)?;
-            Ok(relaid || moved)
-        });
+        let uploads = self
+            .upload
+            .upload(gpu, laid, &self.places, self.version, true)
+            .and_then(|relaid| {
+                let moved = self.group_upload.upload(
+                    gpu,
+                    placed_by,
+                    std::slice::from_ref(&group),
+                    self.group_version,
+                    true,
+                )?;
+                Ok(relaid || moved)
+            });
         match uploads {
             Ok(changed) if changed || !retained => {
                 let copies = (out.size / COPY_BYTES).min(u64::from(u32::MAX)) as u32;
-                super::nest_copies::nest(gpu, &mut self.pipeline, [placed_by, laid, out], copies, copies);
+                super::nest_copies::nest(
+                    gpu,
+                    &mut self.pipeline,
+                    [placed_by, laid, out],
+                    copies,
+                    copies,
+                );
             }
             Ok(_) => ctx.mark_output_content_unchanged(),
             Err(error) => ctx.error(error),
@@ -200,7 +243,12 @@ const COPY_BYTES: u64 = std::mem::size_of::<InstanceTransform>() as u64;
 
 /// Copy `index`'s instance: its rest place, as the physics world publishes
 /// a resting copy.
-fn place(arrangement: &Arrangement, width: [f32; 3], scale: f32, index: usize) -> InstanceTransform {
+fn place(
+    arrangement: &Arrangement,
+    width: [f32; 3],
+    scale: f32,
+    index: usize,
+) -> InstanceTransform {
     let rest = arrangement.rest(width, index);
     let [x, y, z] = quat_to_render_scene_euler(rest.rotation);
     InstanceTransform {

@@ -22,13 +22,20 @@ pub struct SetCardPinCommand {
 
 impl SetCardPinCommand {
     pub fn new(target: GraphTarget, param_id: String, pin: Option<CardPin>) -> Self {
-        Self { target, param_id, pin, previous: None }
+        Self {
+            target,
+            param_id,
+            pin,
+            previous: None,
+        }
     }
 
     fn write(&self, project: &mut Project, pin: Option<CardPin>) -> Option<Option<CardPin>> {
         project
             .with_preset_graph_mut(&self.target, |host| {
-                host.params.get_mut(&self.param_id).map(|param| std::mem::replace(&mut param.choices.pin, pin))
+                host.params
+                    .get_mut(&self.param_id)
+                    .map(|param| std::mem::replace(&mut param.choices.pin, pin))
             })
             .flatten()
     }
@@ -81,11 +88,18 @@ impl KeepOnCard {
         if !matches!(target, GraphTarget::Generator(_)) {
             return;
         }
-        let before = project.with_preset_graph_mut(target, |host| host.keep_on_card(param_id)).flatten();
+        let before = project
+            .with_preset_graph_mut(target, |host| host.keep_on_card(param_id))
+            .flatten();
         self.replaced = before.map(|before| (target.clone(), param_id.to_string(), before));
     }
 
-    pub fn attach_driver(&mut self, project: &mut Project, target: &crate::commands::effect_target::DriverTarget, param_id: &str) {
+    pub fn attach_driver(
+        &mut self,
+        project: &mut Project,
+        target: &crate::commands::effect_target::DriverTarget,
+        param_id: &str,
+    ) {
         if let crate::commands::effect_target::DriverTarget::GeneratorParam { layer_id } = target {
             self.attach(project, &GraphTarget::Generator(layer_id.clone()), param_id);
         }
@@ -95,8 +109,12 @@ impl KeepOnCard {
     /// another live modulator or a macro (whose mapping has no undo) still
     /// drives the control, so undo never strands a driven control off the card.
     pub fn undo(&mut self, project: &mut Project) {
-        let Some((target, param_id, before)) = self.replaced.take() else { return };
-        let GraphTarget::Generator(layer_id) = &target else { return };
+        let Some((target, param_id, before)) = self.replaced.take() else {
+            return;
+        };
+        let GraphTarget::Generator(layer_id) = &target else {
+            return;
+        };
         let macro_driven = project.settings.macro_bank.slots.iter().flat_map(|slot| &slot.mappings).any(|mapping| {
             matches!(&mapping.target, manifold_core::MacroMappingTarget::GenParam { layer_id: layer, param_id: id }
                 if layer == layer_id && id.as_ref() == param_id)
@@ -117,7 +135,11 @@ impl KeepOnCard {
     /// Effects while this command's pin stands: the pin changes card rows.
     pub fn touches(&self) -> manifold_core::change::ChangeSet {
         use manifold_core::change::{ChangeSet, Part};
-        if self.replaced.is_some() { ChangeSet::of(&[Part::Effects]) } else { ChangeSet::NONE }
+        if self.replaced.is_some() {
+            ChangeSet::of(&[Part::Effects])
+        } else {
+            ChangeSet::NONE
+        }
     }
 }
 
@@ -127,34 +149,59 @@ mod tests {
     use super::*;
 
     fn pin_of(project: &Project, target: &GraphTarget) -> Option<CardPin> {
-        let GraphTarget::Generator(layer) = target else { unreachable!() };
+        let GraphTarget::Generator(layer) = target else {
+            unreachable!()
+        };
         let (_, layer) = project.timeline.find_layer_by_id(layer.as_str()).unwrap();
-        layer.gen_params().unwrap().params.get("roughness").unwrap().choices.pin
+        layer
+            .gen_params()
+            .unwrap()
+            .params
+            .get("roughness")
+            .unwrap()
+            .choices
+            .pin
     }
 
     #[test]
     fn pin_unpin_undo_redo() {
         let (mut project, layer) = project_with_one_generator_layer();
         let target = GraphTarget::Generator(layer);
-        project.with_preset_graph_mut(&target, |host| host.params.push(slot("roughness", 0.5, true)));
+        project.with_preset_graph_mut(&target, |host| {
+            host.params.push(slot("roughness", 0.5, true))
+        });
 
-        let mut show = SetCardPinCommand::new(target.clone(), "roughness".into(), Some(CardPin::Shown));
+        let mut show =
+            SetCardPinCommand::new(target.clone(), "roughness".into(), Some(CardPin::Shown));
         show.execute(&mut project);
         assert_eq!(pin_of(&project, &target), Some(CardPin::Shown));
-        let mut remove = SetCardPinCommand::new(target.clone(), "roughness".into(), Some(CardPin::Removed));
+        let mut remove =
+            SetCardPinCommand::new(target.clone(), "roughness".into(), Some(CardPin::Removed));
         remove.execute(&mut project);
         assert_eq!(pin_of(&project, &target), Some(CardPin::Removed));
 
         remove.undo(&mut project);
         assert_eq!(pin_of(&project, &target), Some(CardPin::Shown));
         show.undo(&mut project);
-        assert_eq!(pin_of(&project, &target), None, "undo hands the row back to its role");
+        assert_eq!(
+            pin_of(&project, &target),
+            None,
+            "undo hands the row back to its role"
+        );
         show.execute(&mut project);
         remove.execute(&mut project);
-        assert_eq!(pin_of(&project, &target), Some(CardPin::Removed), "redo replays both");
+        assert_eq!(
+            pin_of(&project, &target),
+            Some(CardPin::Removed),
+            "redo replays both"
+        );
         remove.undo(&mut project);
         show.undo(&mut project);
-        assert_eq!(pin_of(&project, &target), None, "a redo never overwrites the captured previous pin");
+        assert_eq!(
+            pin_of(&project, &target),
+            None,
+            "a redo never overwrites the captured previous pin"
+        );
 
         use manifold_core::change::Part;
         assert!(show.touches().contains(Part::Effects));

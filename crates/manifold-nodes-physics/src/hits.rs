@@ -22,7 +22,12 @@ pub trait TakesHits: Send {
 
     /// Stamp a hit fired at `played` against the clock this frame's
     /// `step` accepted.
-    fn hit_stamp(&self, played: manifold_physics::PlayedTime, sequence: u64, step: SimStep) -> Result<EventStamp, String>;
+    fn hit_stamp(
+        &self,
+        played: manifold_physics::PlayedTime,
+        sequence: u64,
+        step: SimStep,
+    ) -> Result<EventStamp, String>;
 
     /// Queue one hit: a velocity change in m/s, by position.
     fn enqueue_hit(&mut self, stamp: EventStamp, field: FieldValue) -> Result<TickStamp, String>;
@@ -46,27 +51,43 @@ impl TakesHitsRegistration {
     pub const fn new<T: EffectNode + TakesHits + 'static>() -> Self {
         Self {
             type_id: TypeId::of::<T>(),
-            get: |node| node.as_any().downcast_ref::<T>().expect("registered hit-taking node type"),
-            get_mut: |node| node.as_any_mut().downcast_mut::<T>().expect("registered hit-taking node type"),
+            get: |node| {
+                node.as_any()
+                    .downcast_ref::<T>()
+                    .expect("registered hit-taking node type")
+            },
+            get_mut: |node| {
+                node.as_any_mut()
+                    .downcast_mut::<T>()
+                    .expect("registered hit-taking node type")
+            },
         }
     }
 }
 
 inventory::collect!(TakesHitsRegistration);
 
-static REGISTRATIONS: LazyLock<AHashMap<TypeId, &'static TakesHitsRegistration>> = LazyLock::new(|| {
-    let mut registrations = AHashMap::new();
-    for entry in inventory::iter::<TakesHitsRegistration> {
-        assert!(registrations.insert(entry.type_id, entry).is_none(), "duplicate hit-taking registration");
-    }
-    registrations
-});
+static REGISTRATIONS: LazyLock<AHashMap<TypeId, &'static TakesHitsRegistration>> =
+    LazyLock::new(|| {
+        let mut registrations = AHashMap::new();
+        for entry in inventory::iter::<TakesHitsRegistration> {
+            assert!(
+                registrations.insert(entry.type_id, entry).is_none(),
+                "duplicate hit-taking registration"
+            );
+        }
+        registrations
+    });
 
 pub fn get(node: &dyn EffectNode) -> Option<&dyn TakesHits> {
-    REGISTRATIONS.get(&node.as_any().type_id()).map(|entry| (entry.get)(node))
+    REGISTRATIONS
+        .get(&node.as_any().type_id())
+        .map(|entry| (entry.get)(node))
 }
 
 pub fn get_mut(node: &mut dyn EffectNode) -> Option<&mut dyn TakesHits> {
     let type_id = node.as_any().type_id();
-    REGISTRATIONS.get(&type_id).map(|entry| (entry.get_mut)(node))
+    REGISTRATIONS
+        .get(&type_id)
+        .map(|entry| (entry.get_mut)(node))
 }

@@ -52,7 +52,8 @@ impl MessageQueue {
         if let Some(&slot) = self.latest.get(&message.address) {
             self.latest_list[slot] = message;
         } else {
-            self.latest.insert(message.address.clone(), self.latest_list.len());
+            self.latest
+                .insert(message.address.clone(), self.latest_list.len());
             self.latest_list.push(message);
         }
     }
@@ -136,7 +137,9 @@ impl OscReceiver {
 
         // Outside the live app, listen on an ephemeral loopback port so a test
         // never takes the app's fixed port or hears the network.
-        let addr = if manifold_core::device_guard::allowed(manifold_core::device_guard::RealDevice::OscListen) {
+        let addr = if manifold_core::device_guard::allowed(
+            manifold_core::device_guard::RealDevice::OscListen,
+        ) {
             format!("0.0.0.0:{}", self.listen_port)
         } else {
             "127.0.0.1:0".to_string()
@@ -219,7 +222,12 @@ impl OscReceiver {
                         _ => None,
                     })
                     .collect();
-                queue.lock().push(PendingMessage { address: msg.addr, values, wide, at });
+                queue.lock().push(PendingMessage {
+                    address: msg.addr,
+                    values,
+                    wide,
+                    at,
+                });
             }
             rosc::OscPacket::Bundle(bundle) => {
                 for inner in bundle.content {
@@ -355,7 +363,10 @@ impl OscReceiver {
     /// Subscribe with full-precision values and the receive-thread arrival
     /// instant. `unsubscribe_all` removes it.
     pub fn subscribe_stamped(&mut self, address: &str, callback: OscStampedCallback) {
-        self.stamped.entry(address.to_string()).or_default().push(callback);
+        self.stamped
+            .entry(address.to_string())
+            .or_default()
+            .push(callback);
     }
 }
 
@@ -521,7 +532,11 @@ mod tests {
         receiver.update();
 
         assert_eq!(*stamped.lock(), vec![(vec![seconds], at)]);
-        assert_eq!(log.lock()[0].1, Vec::<f32>::new(), "plain subscribers never saw doubles");
+        assert_eq!(
+            log.lock()[0].1,
+            Vec::<f32>::new(),
+            "plain subscribers never saw doubles"
+        );
         receiver.unsubscribe_all("/time");
         assert!(receiver.stamped.is_empty());
     }

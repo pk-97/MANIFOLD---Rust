@@ -50,8 +50,9 @@ use crate::node_graph::scene_vm::{
     FluidRole, SceneShapeVm, SceneVm, SetupProblem, ShapeOwner, ShapeParamVm, ShapeWrite,
 };
 use crate::node_graph::viewport_overlay::{
-    DOMAIN_BOX_COLOR, PHYSICS_GIZMO_LINES, ViewportOverlayConfig, WorldLine, box_lines, clip_to_near, fluid_domain_lines, fluid_lattice_lines,
-    grid_lines, light_billboard_lines, physics_gizmo_color, physics_gizmo_lines,
+    DOMAIN_BOX_COLOR, PHYSICS_GIZMO_LINES, ViewportOverlayConfig, WorldLine, box_lines,
+    clip_to_near, fluid_domain_lines, fluid_lattice_lines, grid_lines, light_billboard_lines,
+    physics_gizmo_color, physics_gizmo_lines,
 };
 
 mod selection;
@@ -183,18 +184,27 @@ pub struct GizmoTargetId {
 pub enum HandleWrite {
     /// One param moved along the handle: a position, a size or a radius.
     /// `limit` stops the value as the param's knob stops at its hard limit.
-    Linear { param: ShapeParamVm, limit: HardLimit },
+    Linear {
+        param: ShapeParamVm,
+        limit: HardLimit,
+    },
     /// One angle param, turned by the ring.
     Angle(ShapeParamVm),
     /// A direction's three components, turned by the ring about the
     /// handle's axis. `normalize` writes a unit vector; otherwise the
     /// length is kept.
-    Direction { params: [ShapeParamVm; 3], normalize: bool },
+    Direction {
+        params: [ShapeParamVm; 3],
+        normalize: bool,
+    },
     /// One scale handle of a box whose three size params are one uniform
     /// scale (`SceneShapeDecl::uniform_scale`): the drag's ratio multiplies
     /// the first param's value and writes the result to all three, so the
     /// three never differ.
-    Uniform { params: [ShapeParamVm; 3], limit: HardLimit },
+    Uniform {
+        params: [ShapeParamVm; 3],
+        limit: HardLimit,
+    },
     /// A handle of the selection's set ([`GizmoTarget::selection`]): one
     /// amount (a distance, a factor or an angle) that [`selection_writes`]
     /// turns into each member's params. `locked` when no member can take it.
@@ -204,7 +214,9 @@ pub enum HandleWrite {
 impl HandleWrite {
     pub fn params(&self) -> &[ShapeParamVm] {
         match self {
-            HandleWrite::Linear { param, .. } | HandleWrite::Angle(param) => std::slice::from_ref(param),
+            HandleWrite::Linear { param, .. } | HandleWrite::Angle(param) => {
+                std::slice::from_ref(param)
+            }
             HandleWrite::Direction { params, .. } | HandleWrite::Uniform { params, .. } => params,
             HandleWrite::Selection { .. } => &[],
         }
@@ -214,9 +226,10 @@ impl HandleWrite {
     pub fn locked(&self) -> bool {
         match self {
             HandleWrite::Selection { locked } => *locked,
-            HandleWrite::Linear { .. } | HandleWrite::Angle(_) | HandleWrite::Direction { .. } | HandleWrite::Uniform { .. } => {
-                self.params().iter().any(|param| param.wired)
-            }
+            HandleWrite::Linear { .. }
+            | HandleWrite::Angle(_)
+            | HandleWrite::Direction { .. }
+            | HandleWrite::Uniform { .. } => self.params().iter().any(|param| param.wired),
         }
     }
 }
@@ -261,20 +274,44 @@ pub enum ShapeOutline {
     /// share an edge.
     Box([[f32; 3]; 8]),
     /// A ball: three great circles.
-    Ball { center: [f32; 3], radius: f32 },
+    Ball {
+        center: [f32; 3],
+        radius: f32,
+    },
     /// A direction from a point, with the ring of its reach around it.
-    Ray { from: [f32; 3], dir: [f32; 3], length: f32, reach: Option<f32> },
+    Ray {
+        from: [f32; 3],
+        dir: [f32; 3],
+        length: f32,
+        reach: Option<f32>,
+    },
     /// A radial force: the ball of its radius, and the balls where its
     /// strength falls to each of [`SHELLS`] (none where it never does).
-    Field { center: [f32; 3], radius: f32, shells: [Option<f32>; 2], sign: f32 },
+    Field {
+        center: [f32; 3],
+        radius: f32,
+        shells: [Option<f32>; 2],
+        sign: f32,
+    },
     /// A vortex: a cylinder of its radius round its unit axis, as tall as
     /// it is wide, and the axis through it.
-    Vortex { center: [f32; 3], axis: [f32; 3], radius: f32, sign: f32 },
+    Vortex {
+        center: [f32; 3],
+        axis: [f32; 3],
+        radius: f32,
+        sign: f32,
+    },
 }
 
 /// A circle of [`OUTLINE_SEGMENTS`] round `center` in the plane of unit `u`
 /// and `v`.
-fn circle(center: [f32; 3], u: [f32; 3], v: [f32; 3], r: f32, edge: &mut impl FnMut([f32; 3], [f32; 3])) {
+fn circle(
+    center: [f32; 3],
+    u: [f32; 3],
+    v: [f32; 3],
+    r: f32,
+    edge: &mut impl FnMut([f32; 3], [f32; 3]),
+) {
     let point = |k: usize| -> [f32; 3] {
         let (s, c) = (k as f32 / OUTLINE_SEGMENTS as f32 * std::f32::consts::TAU).sin_cos();
         std::array::from_fn(|i| center[i] + r * (c * u[i] + s * v[i]))
@@ -300,7 +337,11 @@ fn shell_distance(strength: f32, r: f32, p: f32, curve: f32) -> Option<f32> {
     if p <= 0.0 || r <= 0.0 {
         return None;
     }
-    let d = if curve.round() >= 1.0 { r * strength.powf(-1.0 / p) } else { r * (1.0 - strength.powf(1.0 / p)) };
+    let d = if curve.round() >= 1.0 {
+        r * strength.powf(-1.0 / p)
+    } else {
+        r * (1.0 - strength.powf(1.0 / p))
+    };
     d.is_finite().then_some(d)
 }
 
@@ -319,8 +360,15 @@ impl ShapeOutline {
                     }
                 }
             }
-            ShapeOutline::Ball { center, radius } | ShapeOutline::Field { center, radius, .. } => ball(center, radius, &mut edge),
-            ShapeOutline::Ray { from, dir, length, reach } => {
+            ShapeOutline::Ball { center, radius } | ShapeOutline::Field { center, radius, .. } => {
+                ball(center, radius, &mut edge)
+            }
+            ShapeOutline::Ray {
+                from,
+                dir,
+                length,
+                reach,
+            } => {
                 edge(from, offset(from, dir, length));
                 if let Some(r) = reach {
                     let u = normalized(perpendicular(dir)).unwrap_or(IDENTITY_AXES[0]);
@@ -328,7 +376,12 @@ impl ShapeOutline {
                     circle(from, u, v, r, &mut edge);
                 }
             }
-            ShapeOutline::Vortex { center, axis, radius, .. } => {
+            ShapeOutline::Vortex {
+                center,
+                axis,
+                radius,
+                ..
+            } => {
                 let u = normalized(perpendicular(axis)).unwrap_or(IDENTITY_AXES[0]);
                 let v = cross3(axis, u);
                 let [top, bottom] = [radius, -radius].map(|h| offset(center, axis, h));
@@ -337,7 +390,10 @@ impl ShapeOutline {
                 for side in [u, v, u.map(|c| -c), v.map(|c| -c)] {
                     edge(offset(bottom, side, radius), offset(top, side, radius));
                 }
-                edge(offset(center, axis, -1.5 * radius), offset(center, axis, 1.5 * radius));
+                edge(
+                    offset(center, axis, -1.5 * radius),
+                    offset(center, axis, 1.5 * radius),
+                );
             }
         }
     }
@@ -358,8 +414,20 @@ impl ShapeOutline {
     /// Drawn, never picked: `for_each_edge` stays the pick set.
     pub fn for_each_arrow(&self, mut edge: impl FnMut([f32; 3], [f32; 3])) {
         match *self {
-            ShapeOutline::Field { center, radius, sign, .. } if radius > MIN_EXTENT => {
-                for dir in [[1.0_f32, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, -1.0]] {
+            ShapeOutline::Field {
+                center,
+                radius,
+                sign,
+                ..
+            } if radius > MIN_EXTENT => {
+                for dir in [
+                    [1.0_f32, 0.0, 0.0],
+                    [-1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, -1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, -1.0],
+                ] {
                     let p_in = offset(center, dir, 0.35 * radius);
                     let p_out = offset(center, dir, 0.85 * radius);
                     let perp = perpendicular(dir);
@@ -376,10 +444,20 @@ impl ShapeOutline {
                     }
                 }
             }
-            ShapeOutline::Vortex { center, axis, radius, sign } if radius > MIN_EXTENT => {
+            ShapeOutline::Vortex {
+                center,
+                axis,
+                radius,
+                sign,
+            } if radius > MIN_EXTENT => {
                 let u = normalized(perpendicular(axis)).unwrap_or(IDENTITY_AXES[0]);
                 let v = cross3(axis, u);
-                let bases = [(u, v), (v, u.map(|c| -c)), (u.map(|c| -c), v.map(|c| -c)), (v.map(|c| -c), u)];
+                let bases = [
+                    (u, v),
+                    (v, u.map(|c| -c)),
+                    (u.map(|c| -c), v.map(|c| -c)),
+                    (v.map(|c| -c), u),
+                ];
                 for (radial, tangent) in bases {
                     let tip = offset(center, radial, radius);
                     let t = tangent.map(|c| c * sign);
@@ -406,60 +484,124 @@ impl GizmoTarget {
         let mut handles = Vec::new();
         let mut local = None;
         let mut direction = None;
-        let extent_limit = shape.decl.extent_limit.unwrap_or(HardLimit::AtLeast(MIN_EXTENT));
+        let extent_limit = shape
+            .decl
+            .extent_limit
+            .unwrap_or(HardLimit::AtLeast(MIN_EXTENT));
         let mut place = |center: &ParamTriple, handles: &mut Vec<GizmoHandle>| {
             if let Some(center) = triple(center) {
                 local = Some(center.each_ref().map(|param| param.value));
                 for (axis, param) in GizmoAxis::XYZ.into_iter().zip(center) {
-                    handles.push(GizmoHandle { mode: GizmoMode::Move, axis, write: HandleWrite::Linear { param, limit: HardLimit::Unlimited } });
+                    handles.push(GizmoHandle {
+                        mode: GizmoMode::Move,
+                        axis,
+                        write: HandleWrite::Linear {
+                            param,
+                            limit: HardLimit::Unlimited,
+                        },
+                    });
                 }
             }
         };
         let extent = |id: &str, handles: &mut Vec<GizmoHandle>| {
             if let Some(param) = param(id) {
-                let write = HandleWrite::Linear { param, limit: extent_limit };
-                handles.push(GizmoHandle { mode: GizmoMode::Scale, axis: GizmoAxis::Uniform, write });
+                let write = HandleWrite::Linear {
+                    param,
+                    limit: extent_limit,
+                };
+                handles.push(GizmoHandle {
+                    mode: GizmoMode::Scale,
+                    axis: GizmoAxis::Uniform,
+                    write,
+                });
             }
         };
         let mut turn = |ids: &ParamTriple, normalize: bool, handles: &mut Vec<GizmoHandle>| {
             if let Some(params) = triple(ids) {
                 direction = Some(params.each_ref().map(|param| param.value));
                 for axis in GizmoAxis::XYZ {
-                    let write = HandleWrite::Direction { params: params.clone(), normalize };
-                    handles.push(GizmoHandle { mode: GizmoMode::Rotate, axis, write });
+                    let write = HandleWrite::Direction {
+                        params: params.clone(),
+                        normalize,
+                    };
+                    handles.push(GizmoHandle {
+                        mode: GizmoMode::Rotate,
+                        axis,
+                        write,
+                    });
                 }
             }
         };
         match &shape.decl.shape {
-            SceneShape::Box { center, rotation, size } => {
+            SceneShape::Box {
+                center,
+                rotation,
+                size,
+            } => {
                 place(center, &mut handles);
                 for (axis, id) in GizmoAxis::XYZ.into_iter().zip(rotation.iter().flatten()) {
                     if let Some(param) = param(id) {
-                        handles.push(GizmoHandle { mode: GizmoMode::Rotate, axis, write: HandleWrite::Angle(param) });
+                        handles.push(GizmoHandle {
+                            mode: GizmoMode::Rotate,
+                            axis,
+                            write: HandleWrite::Angle(param),
+                        });
                     }
                 }
                 match triple(size) {
                     // Three params that are one scale: one handle writes all three.
-                    Some(params) if shape.decl.uniform_scale && params.iter().all(|param| param.write != ShapeWrite::Unplaced) => {
-                        let write = HandleWrite::Uniform { params, limit: extent_limit };
-                        handles.push(GizmoHandle { mode: GizmoMode::Scale, axis: GizmoAxis::Uniform, write });
+                    Some(params)
+                        if shape.decl.uniform_scale
+                            && params
+                                .iter()
+                                .all(|param| param.write != ShapeWrite::Unplaced) =>
+                    {
+                        let write = HandleWrite::Uniform {
+                            params,
+                            limit: extent_limit,
+                        };
+                        handles.push(GizmoHandle {
+                            mode: GizmoMode::Scale,
+                            axis: GizmoAxis::Uniform,
+                            write,
+                        });
                     }
                     // A cube's sides are one param: it scales uniformly.
-                    Some([side, y, z]) if side.write != ShapeWrite::Unplaced && side.write == y.write && side.write == z.write => {
-                        let write = HandleWrite::Linear { param: side, limit: extent_limit };
-                        handles.push(GizmoHandle { mode: GizmoMode::Scale, axis: GizmoAxis::Uniform, write });
+                    Some([side, y, z])
+                        if side.write != ShapeWrite::Unplaced
+                            && side.write == y.write
+                            && side.write == z.write =>
+                    {
+                        let write = HandleWrite::Linear {
+                            param: side,
+                            limit: extent_limit,
+                        };
+                        handles.push(GizmoHandle {
+                            mode: GizmoMode::Scale,
+                            axis: GizmoAxis::Uniform,
+                            write,
+                        });
                     }
                     _ => {
                         for (axis, id) in GizmoAxis::XYZ.into_iter().zip(size) {
                             if let Some(param) = param(id) {
-                                let write = HandleWrite::Linear { param, limit: extent_limit };
-                                handles.push(GizmoHandle { mode: GizmoMode::Scale, axis, write });
+                                let write = HandleWrite::Linear {
+                                    param,
+                                    limit: extent_limit,
+                                };
+                                handles.push(GizmoHandle {
+                                    mode: GizmoMode::Scale,
+                                    axis,
+                                    write,
+                                });
                             }
                         }
                     }
                 }
             }
-            SceneShape::Sphere { center, radius } | SceneShape::PointRadius { center, radius } | SceneShape::Field { center, radius, .. } => {
+            SceneShape::Sphere { center, radius }
+            | SceneShape::PointRadius { center, radius }
+            | SceneShape::Field { center, radius, .. } => {
                 place(center, &mut handles);
                 extent(radius, &mut handles);
             }
@@ -467,7 +609,11 @@ impl GizmoTarget {
                 place(center, &mut handles);
                 turn(normal, true, &mut handles);
             }
-            SceneShape::Axis { origin, direction, radius } => {
+            SceneShape::Axis {
+                origin,
+                direction,
+                radius,
+            } => {
                 if let Some(origin) = origin {
                     place(origin, &mut handles);
                 }
@@ -488,19 +634,29 @@ impl GizmoTarget {
         });
         let to_world = |p: [f32; 3]| -> [f32; 3] {
             match shape.frame {
-                Some(m) => std::array::from_fn(|i| m[3][i] + (0..3).map(|j| m[j][i] * p[j]).sum::<f32>()),
+                Some(m) => {
+                    std::array::from_fn(|i| m[3][i] + (0..3).map(|j| m[j][i] * p[j]).sum::<f32>())
+                }
                 None => p,
             }
         };
         let origin = to_world(local);
-        let world_axes = shape.frame.map_or(IDENTITY_AXES, |m| std::array::from_fn(|j| [m[j][0], m[j][1], m[j][2]]));
+        let world_axes = shape.frame.map_or(IDENTITY_AXES, |m| {
+            std::array::from_fn(|j| [m[j][0], m[j][1], m[j][2]])
+        });
         let kind = GizmoTargetKind::of(&shape.owner);
         Self {
-            id: GizmoTargetId { owner: shape.owner.clone(), shape: shape.index },
+            id: GizmoTargetId {
+                owner: shape.owner.clone(),
+                shape: shape.index,
+            },
             kind,
             origin,
             world_axes,
-            unplaced: shape.params.iter().any(|param| param.write == ShapeWrite::Unplaced),
+            unplaced: shape
+                .params
+                .iter()
+                .any(|param| param.write == ShapeWrite::Unplaced),
             pickable: shape.pickable,
             row: shape.row.clone(),
             direction,
@@ -517,20 +673,42 @@ impl GizmoTarget {
 
     /// Like [`Self::outline_lines`], but `show_shells` controls whether the
     /// falloff shells are drawn (unselected forces skip them).
-    pub fn outline_lines_with_shells(&self, color: [u8; 4], show_shells: bool, out: &mut Vec<WorldLine>) {
+    pub fn outline_lines_with_shells(
+        &self,
+        color: [u8; 4],
+        show_shells: bool,
+        out: &mut Vec<WorldLine>,
+    ) {
         // A box's edges meet at its corners; a curve's pieces join end to end.
         let caps = matches!(self.outline, ShapeOutline::Box(_));
-        self.outline.for_each_edge(|a, b| out.push(WorldLine { a, b, color, caps }));
+        self.outline
+            .for_each_edge(|a, b| out.push(WorldLine { a, b, color, caps }));
         if show_shells {
             self.outline.for_each_shell(|a, b, alpha| {
                 let [r, g, b8, a8] = color;
                 // Tint falloff shells toward warm amber when selected so Radius (magenta)
                 // and Falloff (amber) are immediately distinguishable.
-                let (r, g, b8) = if a8 == 255 { (255, g.saturating_add(95), b8 / 3) } else { (r, g, b8) };
-                out.push(WorldLine { a, b, color: [r, g, b8, (f32::from(a8) * alpha).round() as u8], caps: false });
+                let (r, g, b8) = if a8 == 255 {
+                    (255, g.saturating_add(95), b8 / 3)
+                } else {
+                    (r, g, b8)
+                };
+                out.push(WorldLine {
+                    a,
+                    b,
+                    color: [r, g, b8, (f32::from(a8) * alpha).round() as u8],
+                    caps: false,
+                });
             });
         }
-        self.outline.for_each_arrow(|a, b| out.push(WorldLine { a, b, color, caps: false }));
+        self.outline.for_each_arrow(|a, b| {
+            out.push(WorldLine {
+                a,
+                b,
+                color,
+                caps: false,
+            })
+        });
     }
 
     /// The color this shape's outline draws in, by what it is: the families
@@ -552,7 +730,9 @@ impl GizmoTarget {
     }
 
     pub fn handle(&self, mode: GizmoMode, axis: GizmoAxis) -> Option<&GizmoHandle> {
-        self.handles.iter().find(|handle| handle.mode == mode && handle.axis == axis)
+        self.handles
+            .iter()
+            .find(|handle| handle.mode == mode && handle.axis == axis)
     }
 
     /// The world direction a Move or Scale handle on `axis` drags along.
@@ -576,7 +756,11 @@ impl GizmoTarget {
     /// along the parent's axes turned to unit length, so rings keep the
     /// fixed size too.
     fn world_point(&self, point: [f32; 3]) -> [f32; 3] {
-        let d = [point[0] - self.origin[0], point[1] - self.origin[1], point[2] - self.origin[2]];
+        let d = [
+            point[0] - self.origin[0],
+            point[1] - self.origin[1],
+            point[2] - self.origin[2],
+        ];
         let axes = self.world_axes.map(|axis| normalized(axis).unwrap_or(axis));
         std::array::from_fn(|i| self.origin[i] + (0..3).map(|j| axes[j][i] * d[j]).sum::<f32>())
     }
@@ -617,47 +801,114 @@ impl GizmoTarget {
         }
         let len = handle_length(self.origin, &view.camera, view.height);
         match mode {
-            GizmoMode::Move | GizmoMode::Scale => Some(offset(self.origin, self.handle_direction(axis), len)),
-            GizmoMode::Rotate => ring_lines(self.origin, axis, len, [0; 4]).nth(HANDLE_RING_SEGMENTS / 8).map(|line| self.world_point(line.a)),
+            GizmoMode::Move | GizmoMode::Scale => {
+                Some(offset(self.origin, self.handle_direction(axis), len))
+            }
+            GizmoMode::Rotate => ring_lines(self.origin, axis, len, [0; 4])
+                .nth(HANDLE_RING_SEGMENTS / 8)
+                .map(|line| self.world_point(line.a)),
         }
     }
 }
 
 /// The world outline `shape` declares, sitting at `origin`. Box params are
 /// in the shape's parent space; `to_world` maps them out.
-fn outline(shape: &SceneShapeVm, kind: GizmoTargetKind, origin: [f32; 3], to_world: impl Fn([f32; 3]) -> [f32; 3]) -> ShapeOutline {
-    let value = |id: &str| shape.params.iter().find(|param| param.id == id).map(|param| param.value);
+fn outline(
+    shape: &SceneShapeVm,
+    kind: GizmoTargetKind,
+    origin: [f32; 3],
+    to_world: impl Fn([f32; 3]) -> [f32; 3],
+) -> ShapeOutline {
+    let value = |id: &str| {
+        shape
+            .params
+            .iter()
+            .find(|param| param.id == id)
+            .map(|param| param.value)
+    };
     let values = |ids: &ParamTriple| Some([value(&ids[0])?, value(&ids[1])?, value(&ids[2])?]);
     let outline = match (kind, &shape.decl.shape) {
         (GizmoTargetKind::Object, _) => None,
-        (_, SceneShape::Box { center, rotation, size }) => values(center).zip(values(size)).map(|(center, size)| {
+        (
+            _,
+            SceneShape::Box {
+                center,
+                rotation,
+                size,
+            },
+        ) => values(center).zip(values(size)).map(|(center, size)| {
             let turn = rotation.as_ref().and_then(values).unwrap_or([0.0; 3]);
             let m = model_matrix(center, turn, size);
             ShapeOutline::Box(std::array::from_fn(|k| {
-                let local: [f32; 3] = std::array::from_fn(|i| if k >> i & 1 == 1 { 0.5 } else { -0.5 });
-                to_world(std::array::from_fn(|i| m[3][i] + (0..3).map(|j| m[j][i] * local[j]).sum::<f32>()))
+                let local: [f32; 3] =
+                    std::array::from_fn(|i| if k >> i & 1 == 1 { 0.5 } else { -0.5 });
+                to_world(std::array::from_fn(|i| {
+                    m[3][i] + (0..3).map(|j| m[j][i] * local[j]).sum::<f32>()
+                }))
             }))
         }),
         (_, SceneShape::Sphere { radius, .. } | SceneShape::PointRadius { radius, .. }) => {
-            value(radius).map(|radius| ShapeOutline::Ball { center: origin, radius: radius.abs() })
+            value(radius).map(|radius| ShapeOutline::Ball {
+                center: origin,
+                radius: radius.abs(),
+            })
         }
-        (_, SceneShape::Field { radius, falloff, curve, axis, strength, .. }) => value(radius).map(|radius| {
+        (
+            _,
+            SceneShape::Field {
+                radius,
+                falloff,
+                curve,
+                axis,
+                strength,
+                ..
+            },
+        ) => value(radius).map(|radius| {
             let radius = radius.abs();
-            let sign = if strength.as_deref().and_then(&value).unwrap_or(1.0) < 0.0 { -1.0 } else { 1.0 };
+            let sign = if strength.as_deref().and_then(&value).unwrap_or(1.0) < 0.0 {
+                -1.0
+            } else {
+                1.0
+            };
             match axis.as_ref().map(|axis| values(axis).and_then(normalized)) {
-                Some(Some(axis)) => ShapeOutline::Vortex { center: origin, axis, radius, sign },
+                Some(Some(axis)) => ShapeOutline::Vortex {
+                    center: origin,
+                    axis,
+                    radius,
+                    sign,
+                },
                 // A vortex with no axis swirls nowhere: its reach only.
-                Some(None) => ShapeOutline::Ball { center: origin, radius },
+                Some(None) => ShapeOutline::Ball {
+                    center: origin,
+                    radius,
+                },
                 None => {
-                    let (power, curve) = (value(falloff).unwrap_or(1.0), value(curve).unwrap_or(0.0));
-                    let shells = SHELLS.map(|(strength, _)| shell_distance(strength, radius, power, curve));
-                    ShapeOutline::Field { center: origin, radius, shells, sign }
+                    let (power, curve) =
+                        (value(falloff).unwrap_or(1.0), value(curve).unwrap_or(0.0));
+                    let shells =
+                        SHELLS.map(|(strength, _)| shell_distance(strength, radius, power, curve));
+                    ShapeOutline::Field {
+                        center: origin,
+                        radius,
+                        shells,
+                        sign,
+                    }
                 }
             }
         }),
-        (_, SceneShape::Axis { direction, radius, .. }) => values(direction).and_then(normalized).map(|dir| {
+        (
+            _,
+            SceneShape::Axis {
+                direction, radius, ..
+            },
+        ) => values(direction).and_then(normalized).map(|dir| {
             let reach = radius.as_deref().and_then(value).map(f32::abs);
-            ShapeOutline::Ray { from: origin, dir, length: reach.filter(|r| *r > MIN_EXTENT).unwrap_or(1.0), reach }
+            ShapeOutline::Ray {
+                from: origin,
+                dir,
+                length: reach.filter(|r| *r > MIN_EXTENT).unwrap_or(1.0),
+                reach,
+            }
         }),
         (_, SceneShape::Plane { .. }) => None,
     };
@@ -679,13 +930,25 @@ impl GizmoView {
     /// A view whose render pixels are screen points; a host sets the real
     /// scale with [`Self::on_screen`] where it maps the pointer.
     pub fn new(camera: Camera, width: u32, height: u32) -> Self {
-        Self { camera, width, height, px_per_point: 1.0 }
+        Self {
+            camera,
+            width,
+            height,
+            px_per_point: 1.0,
+        }
     }
 
     /// This view shown `points_high` screen points tall.
     pub fn on_screen(self, points_high: f32) -> Self {
         let scale = self.height as f32 / points_high;
-        Self { px_per_point: if scale.is_finite() && scale > 0.0 { scale } else { 1.0 }, ..self }
+        Self {
+            px_per_point: if scale.is_finite() && scale > 0.0 {
+                scale
+            } else {
+                1.0
+            },
+            ..self
+        }
     }
 }
 
@@ -726,8 +989,13 @@ fn world_per_pixel(point: [f32; 3], cam: &Camera, height: u32) -> f32 {
     let height = height.max(1) as f32;
     match cam.mode {
         CameraMode::Perspective { fov_y } => {
-            let d = [point[0] - cam.pos[0], point[1] - cam.pos[1], point[2] - cam.pos[2]];
-            let depth = (d[0] * cam.fwd[0] + d[1] * cam.fwd[1] + d[2] * cam.fwd[2]).max(cam.near.max(1e-4));
+            let d = [
+                point[0] - cam.pos[0],
+                point[1] - cam.pos[1],
+                point[2] - cam.pos[2],
+            ];
+            let depth =
+                (d[0] * cam.fwd[0] + d[1] * cam.fwd[1] + d[2] * cam.fwd[2]).max(cam.near.max(1e-4));
             2.0 * depth * (fov_y * 0.5).tan() / height
         }
         CameraMode::Orthographic { half_height } => 2.0 * half_height / height,
@@ -768,13 +1036,21 @@ pub fn pick_target(scene: &SceneVm, view: &GizmoView, click: (f32, f32)) -> Opti
 /// nearer of its origin (within [`PICK_RADIUS_PT`]) and its edges (within
 /// [`EDGE_PICK_TOLERANCE_PT`]). `None` when neither is in reach.
 fn target_distance(target: &GizmoTarget, view: &GizmoView, click: (f32, f32)) -> Option<f32> {
-    let project = |p: [f32; 3]| view.camera.project_to_pixel(p, view.width, view.height).map(|p| (p.px, p.py));
+    let project = |p: [f32; 3]| {
+        view.camera
+            .project_to_pixel(p, view.width, view.height)
+            .map(|p| (p.px, p.py))
+    };
     let radius = PICK_RADIUS_PT * view.px_per_point;
     let tolerance = EDGE_PICK_TOLERANCE_PT * view.px_per_point;
-    let mut best = project(target.origin).map(|o| dist2(click, o).sqrt()).filter(|d| *d <= radius);
+    let mut best = project(target.origin)
+        .map(|o| dist2(click, o).sqrt())
+        .filter(|d| *d <= radius);
     target.outline.for_each_edge(|a, b| {
         // A camera inside a domain box still reaches the edges in front of it.
-        let Some((a, b)) = clip_to_near(&view.camera, a, b) else { return };
+        let Some((a, b)) = clip_to_near(&view.camera, a, b) else {
+            return;
+        };
         if let (Some(a), Some(b)) = (project(a), project(b)) {
             let d = point_segment_dist(click, a, b);
             if d <= tolerance && best.is_none_or(|bd| d < bd) {
@@ -840,10 +1116,18 @@ pub fn compose_lines(chrome: &GizmoChrome<'_>, out: &mut Vec<WorldLine>) {
     }
     // What physics did carries no owner, so it never draws bright; the
     // declared outline over it does.
-    let mut shape = [WorldLine { a: [0.0; 3], b: [0.0; 3], color: [0; 4], caps: false }; PHYSICS_GIZMO_LINES];
+    let mut shape = [WorldLine {
+        a: [0.0; 3],
+        b: [0.0; 3],
+        color: [0; 4],
+        caps: false,
+    }; PHYSICS_GIZMO_LINES];
     for gizmo in chrome.physics {
         let count = physics_gizmo_lines(gizmo, &mut shape);
-        out.extend(shape[..count].iter().map(|line| WorldLine { color: shown(line.color, false), ..*line }));
+        out.extend(shape[..count].iter().map(|line| WorldLine {
+            color: shown(line.color, false),
+            ..*line
+        }));
     }
     let selection = chrome.selection;
     let accepted = |node: &NodeId| {
@@ -855,9 +1139,18 @@ pub fn compose_lines(chrome: &GizmoChrome<'_>, out: &mut Vec<WorldLine>) {
     };
     // A domain box the solver accepted draws where the solver put it (its
     // size snaps to whole cells), in place of its declared outline.
-    for (node, snapshot) in chrome.domains.iter().filter(|(_, snapshot)| snapshot.state == FluidDomainState::Ready) {
-        let Some(layout) = snapshot.accepted_layout else { continue };
-        let bright = selection.selected.iter().any(|target| is_domain_box(target, node));
+    for (node, snapshot) in chrome
+        .domains
+        .iter()
+        .filter(|(_, snapshot)| snapshot.state == FluidDomainState::Ready)
+    {
+        let Some(layout) = snapshot.accepted_layout else {
+            continue;
+        };
+        let bright = selection
+            .selected
+            .iter()
+            .any(|target| is_domain_box(target, node));
         out.extend(fluid_domain_lines(layout, shown(DOMAIN_BOX_COLOR, bright)));
     }
     for target in selection.targets.iter().filter(|target| target.pickable) {
@@ -879,13 +1172,21 @@ pub fn compose_lines(chrome: &GizmoChrome<'_>, out: &mut Vec<WorldLine>) {
         Some((a.px - b.px).hypot(a.py - b.py) / view.px_per_point)
     };
     for (index, target) in selection.selected.iter().enumerate() {
-        let ShapeOwner::LiquidDomain(node) = &target.id.owner else { continue };
-        let first = !selection.selected[..index].iter().any(|other| other.id.owner == target.id.owner);
+        let ShapeOwner::LiquidDomain(node) = &target.id.owner else {
+            continue;
+        };
+        let first = !selection.selected[..index]
+            .iter()
+            .any(|other| other.id.owner == target.id.owner);
         if let Some(layout) = accepted(node).filter(|_| first) {
             fluid_lattice_lines(layout, view.camera.pos, view.camera.fwd, on_screen, out);
         }
     }
-    for (lo, hi) in chrome.problems.iter().filter_map(|problem| problem.live_bounds(chrome.domains, chrome.live_columns)) {
+    for (lo, hi) in chrome
+        .problems
+        .iter()
+        .filter_map(|problem| problem.live_bounds(chrome.domains, chrome.live_columns))
+    {
         out.extend(box_lines(lo, hi, PROBLEM_COLOR));
     }
     if let Some(target) = selection.handles.as_ref() {
@@ -903,7 +1204,8 @@ pub fn compose_lines(chrome: &GizmoChrome<'_>, out: &mut Vec<WorldLine>) {
 /// `target` is the box of the liquid domain `node`: its first declared
 /// shape (`LIQUID_DOMAIN_SHAPES`).
 fn is_domain_box(target: &GizmoTarget, node: &NodeId) -> bool {
-    target.id.shape == 0 && matches!(&target.id.owner, ShapeOwner::LiquidDomain(owner) if owner == node)
+    target.id.shape == 0
+        && matches!(&target.id.owner, ShapeOwner::LiquidDomain(owner) if owner == node)
 }
 
 /// World-space handle geometry for `mode` at `target`, plus the declared
@@ -912,14 +1214,28 @@ fn is_domain_box(target: &GizmoTarget, node: &NodeId) -> bool {
 pub fn gizmo_lines(mode: GizmoMode, target: &GizmoTarget, len: f32, lines: &mut Vec<WorldLine>) {
     let origin = target.origin;
     if let Some(direction) = target.direction.and_then(normalized) {
-        lines.push(WorldLine { a: origin, b: offset(origin, direction, len * 1.4), color: DIRECTION_COLOR, caps: false });
+        lines.push(WorldLine {
+            a: origin,
+            b: offset(origin, direction, len * 1.4),
+            color: DIRECTION_COLOR,
+            caps: false,
+        });
     }
     for handle in target.handles.iter().filter(|handle| handle.mode == mode) {
-        let color = if handle.write.locked() { LOCKED_COLOR } else { handle.axis.color() };
+        let color = if handle.write.locked() {
+            LOCKED_COLOR
+        } else {
+            handle.axis.color()
+        };
         match mode {
             GizmoMode::Move => {
                 let tip = offset(origin, target.handle_direction(handle.axis), len);
-                lines.push(WorldLine { a: origin, b: tip, color, caps: false });
+                lines.push(WorldLine {
+                    a: origin,
+                    b: tip,
+                    color,
+                    caps: false,
+                });
             }
             GizmoMode::Scale => {
                 let u = target.handle_direction(handle.axis);
@@ -927,23 +1243,39 @@ pub fn gizmo_lines(mode: GizmoMode, target: &GizmoTarget, len: f32, lines: &mut 
                 // A short tick at the tip tells scale from move.
                 let perp = perpendicular(u);
                 let tick = len * 0.12;
-                lines.push(WorldLine { a: origin, b: tip, color, caps: false });
-                lines.push(WorldLine { a: offset(tip, perp, tick), b: offset(tip, perp, -tick), color, caps: false });
+                lines.push(WorldLine {
+                    a: origin,
+                    b: tip,
+                    color,
+                    caps: false,
+                });
+                lines.push(WorldLine {
+                    a: offset(tip, perp, tick),
+                    b: offset(tip, perp, -tick),
+                    color,
+                    caps: false,
+                });
             }
             GizmoMode::Rotate => {
-                lines.extend(ring_lines(origin, handle.axis, len, color).map(|line| WorldLine {
-                    a: target.world_point(line.a),
-                    b: target.world_point(line.b),
-                    color: line.color,
-                    caps: line.caps,
-                }));
+                lines.extend(
+                    ring_lines(origin, handle.axis, len, color).map(|line| WorldLine {
+                        a: target.world_point(line.a),
+                        b: target.world_point(line.b),
+                        color: line.color,
+                        caps: line.caps,
+                    }),
+                );
             }
         }
     }
 }
 
 fn offset(p: [f32; 3], dir: [f32; 3], len: f32) -> [f32; 3] {
-    [p[0] + dir[0] * len, p[1] + dir[1] * len, p[2] + dir[2] * len]
+    [
+        p[0] + dir[0] * len,
+        p[1] + dir[1] * len,
+        p[2] + dir[2] * len,
+    ]
 }
 
 fn normalized(v: [f32; 3]) -> Option<[f32; 3]> {
@@ -953,12 +1285,21 @@ fn normalized(v: [f32; 3]) -> Option<[f32; 3]> {
 
 /// Any unit vector perpendicular to `u`, for the decorative scale tick.
 fn perpendicular(u: [f32; 3]) -> [f32; 3] {
-    if u[0].abs() < 0.9 { [0.0, -u[2], u[1]] } else { [-u[1], u[0], 0.0] }
+    if u[0].abs() < 0.9 {
+        [0.0, -u[2], u[1]]
+    } else {
+        [-u[1], u[0], 0.0]
+    }
 }
 
 /// A ring of segments in the plane perpendicular to `axis` around `origin`.
 /// `Uniform` has no ring.
-fn ring_lines(origin: [f32; 3], axis: GizmoAxis, r: f32, color: [u8; 4]) -> impl Iterator<Item = WorldLine> {
+fn ring_lines(
+    origin: [f32; 3],
+    axis: GizmoAxis,
+    r: f32,
+    color: [u8; 4],
+) -> impl Iterator<Item = WorldLine> {
     const SEGMENTS: usize = HANDLE_RING_SEGMENTS;
     let ((a, b), segments) = match axis {
         GizmoAxis::X => (([0.0, 1.0, 0.0], [0.0, 0.0, 1.0]), SEGMENTS),
@@ -973,7 +1314,12 @@ fn ring_lines(origin: [f32; 3], axis: GizmoAxis, r: f32, color: [u8; 4]) -> impl
     (0..segments).map(move |i| {
         let t0 = (i as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
         let t1 = ((i + 1) as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
-        WorldLine { a: point(t0), b: point(t1), color, caps: false }
+        WorldLine {
+            a: point(t0),
+            b: point(t1),
+            color,
+            caps: false,
+        }
     })
 }
 
@@ -993,18 +1339,29 @@ fn point_segment_dist(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
 /// when no handle lies within [`AXIS_PICK_TOLERANCE_PT`]. A locked handle
 /// is returned too; the host decides to refuse the drag. An end-on handle
 /// is never returned.
-pub fn pick_axis(mode: GizmoMode, target: &GizmoTarget, view: &GizmoView, click: (f32, f32)) -> Option<GizmoAxis> {
+pub fn pick_axis(
+    mode: GizmoMode,
+    target: &GizmoTarget,
+    view: &GizmoView,
+    click: (f32, f32),
+) -> Option<GizmoAxis> {
     let (cam, width, height) = (&view.camera, view.width, view.height);
     let tolerance = AXIS_PICK_TOLERANCE_PT * view.px_per_point;
     let origin = target.origin;
     let origin_px = cam.project_to_pixel(origin, width, height)?;
     let len = handle_length(origin, cam, height);
     let mut best: Option<(GizmoAxis, f32)> = None;
-    for handle in target.handles.iter().filter(|handle| handle.mode == mode && !target.end_on(mode, handle.axis, cam)) {
+    for handle in target
+        .handles
+        .iter()
+        .filter(|handle| handle.mode == mode && !target.end_on(mode, handle.axis, cam))
+    {
         let d = match mode {
             GizmoMode::Move | GizmoMode::Scale => {
                 let tip = offset(origin, target.handle_direction(handle.axis), len);
-                let Some(tip_px) = cam.project_to_pixel(tip, width, height) else { continue };
+                let Some(tip_px) = cam.project_to_pixel(tip, width, height) else {
+                    continue;
+                };
                 point_segment_dist(click, (origin_px.px, origin_px.py), (tip_px.px, tip_px.py))
             }
             GizmoMode::Rotate => ring_lines(origin, handle.axis, len, [0; 4])
@@ -1051,14 +1408,22 @@ impl GizmoDrag {
     /// no such handle, the handle is locked, the target is not placed yet,
     /// or a linear handle cannot be held there (end-on, behind the camera,
     /// or a Scale press on the origin itself).
-    pub fn begin(target: GizmoTarget, mode: GizmoMode, axis: GizmoAxis, view: &GizmoView, at: (f32, f32)) -> Option<Self> {
+    pub fn begin(
+        target: GizmoTarget,
+        mode: GizmoMode,
+        axis: GizmoAxis,
+        view: &GizmoView,
+        at: (f32, f32),
+    ) -> Option<Self> {
         let handle = target.handle(mode, axis)?;
         if handle.write.locked() || target.unplaced {
             return None;
         }
         let held_linearly = match (&handle.write, mode) {
-            (HandleWrite::Linear { .. } | HandleWrite::Uniform { .. }, _) | (HandleWrite::Selection { .. }, GizmoMode::Move | GizmoMode::Scale) => true,
-            (HandleWrite::Angle(_) | HandleWrite::Direction { .. }, _) | (HandleWrite::Selection { .. }, GizmoMode::Rotate) => false,
+            (HandleWrite::Linear { .. } | HandleWrite::Uniform { .. }, _)
+            | (HandleWrite::Selection { .. }, GizmoMode::Move | GizmoMode::Scale) => true,
+            (HandleWrite::Angle(_) | HandleWrite::Direction { .. }, _)
+            | (HandleWrite::Selection { .. }, GizmoMode::Rotate) => false,
         };
         let grab = if held_linearly {
             let grab = target.axis_param(axis, view, at)?;
@@ -1069,18 +1434,34 @@ impl GizmoDrag {
         } else {
             None
         };
-        Some(Self { target, mode, axis, grab, last: at, angle: 0.0 })
+        Some(Self {
+            target,
+            mode,
+            axis,
+            grab,
+            last: at,
+            angle: 0.0,
+        })
     }
 
     pub fn handle(&self) -> &GizmoHandle {
-        self.target.handle(self.mode, self.axis).expect("begin checked the handle")
+        self.target
+            .handle(self.mode, self.axis)
+            .expect("begin checked the handle")
     }
 
     /// The handle's values with the pointer at `cur` (render pixels of
     /// `view`).
     pub fn update(&mut self, view: &GizmoView, cur: (f32, f32)) -> Option<HandleValues> {
         let origin = self.target.origin;
-        let turned = rotate_drag_delta(origin, &view.camera, view.width, view.height, self.last, cur);
+        let turned = rotate_drag_delta(
+            origin,
+            &view.camera,
+            view.width,
+            view.height,
+            self.last,
+            cur,
+        );
         self.last = cur;
         let write = self.handle().write.clone();
         let values = match &write {
@@ -1098,7 +1479,10 @@ impl GizmoDrag {
             }
             HandleWrite::Uniform { params, limit } => {
                 let (grab, held) = (self.grab?, self.target.axis_param(self.axis, view, cur)?);
-                let value = limit.clamp_input(params[0].value * held / grab, (f32::NEG_INFINITY, f32::INFINITY));
+                let value = limit.clamp_input(
+                    params[0].value * held / grab,
+                    (f32::NEG_INFINITY, f32::INFINITY),
+                );
                 HandleValues::Three([value; 3])
             }
             HandleWrite::Angle(param) => {
@@ -1109,13 +1493,19 @@ impl GizmoDrag {
                 self.angle += turned?;
                 let base = params.each_ref().map(|param| param.value);
                 let rotated = rotate_about(base, self.axis.unit(), self.angle);
-                HandleValues::Three(if *normalize { normalized(rotated)? } else { rotated })
+                HandleValues::Three(if *normalize {
+                    normalized(rotated)?
+                } else {
+                    rotated
+                })
             }
             // The selection's amount: the distance moved, the factor scaled
             // (never through zero) or the angle turned.
             HandleWrite::Selection { .. } => HandleValues::One(match self.mode {
                 GizmoMode::Move => self.target.axis_param(self.axis, view, cur)? - self.grab?,
-                GizmoMode::Scale => (self.target.axis_param(self.axis, view, cur)? / self.grab?).max(MIN_EXTENT),
+                GizmoMode::Scale => {
+                    (self.target.axis_param(self.axis, view, cur)? / self.grab?).max(MIN_EXTENT)
+                }
                 GizmoMode::Rotate => {
                     self.angle += turned?;
                     self.angle
@@ -1133,7 +1523,11 @@ impl GizmoDrag {
 /// `v` turned by `angle` radians about the unit axis `k` (Rodrigues).
 fn rotate_about(v: [f32; 3], k: [f32; 3], angle: f32) -> [f32; 3] {
     let (s, c) = angle.sin_cos();
-    let cross = [k[1] * v[2] - k[2] * v[1], k[2] * v[0] - k[0] * v[2], k[0] * v[1] - k[1] * v[0]];
+    let cross = [
+        k[1] * v[2] - k[2] * v[1],
+        k[2] * v[0] - k[0] * v[2],
+        k[0] * v[1] - k[1] * v[0],
+    ];
     let dot = k[0] * v[0] + k[1] * v[1] + k[2] * v[2];
     std::array::from_fn(|i| v[i] * c + cross[i] * s + k[i] * dot * (1.0 - c))
 }
@@ -1147,7 +1541,11 @@ fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 }
 
 fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 /// Rotation delta (radians) for dragging a ring: the screen-space angle

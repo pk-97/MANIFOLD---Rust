@@ -37,7 +37,9 @@ pub(crate) fn sanitize_fps(fps: f32) -> f32 {
         return fps;
     }
     if !WARNED_BAD_FPS.swap(true, Ordering::Relaxed) {
-        log::warn!("[Transport] frame rate {fps} is outside {MIN_FPS}-{MAX_FPS} fps; running at {FALLBACK_FPS}");
+        log::warn!(
+            "[Transport] frame rate {fps} is outside {MIN_FPS}-{MAX_FPS} fps; running at {FALLBACK_FPS}"
+        );
     }
     FALLBACK_FPS
 }
@@ -238,13 +240,21 @@ impl TransportClock {
     /// The index the next playing advance of `frames` lands on (the seek
     /// hold included).
     pub fn index_after(&self, frames: u32) -> i64 {
-        if self.hold_next { self.index } else { self.index.saturating_add(i64::from(frames)) }
+        if self.hold_next {
+            self.index
+        } else {
+            self.index.saturating_add(i64::from(frames))
+        }
     }
 
     /// Once per playing tick: the seek hold, then `frames`. Returns the net
     /// frames the index moved.
     pub fn advance(&mut self, frames: u32) -> i64 {
-        let base = if std::mem::take(&mut self.hold_next) { 0 } else { i64::from(frames) };
+        let base = if std::mem::take(&mut self.hold_next) {
+            0
+        } else {
+            i64::from(frames)
+        };
         let before = self.index;
         self.set_index(before.saturating_add(base));
         self.last_advance = self.index - before;

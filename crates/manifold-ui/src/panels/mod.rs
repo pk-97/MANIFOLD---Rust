@@ -3,9 +3,9 @@ pub mod actions;
 pub mod audio_setup_panel;
 pub mod audio_trigger_section;
 pub mod browser_popup;
+pub mod clip_chrome;
 #[cfg(test)]
 mod contract_tests;
-pub mod clip_chrome;
 pub mod copy_to_clipboard_label;
 pub mod drawer;
 pub mod dropdown;
@@ -23,14 +23,14 @@ pub mod macros_panel;
 pub mod master_chrome;
 pub mod overlay;
 pub mod param_card;
-pub mod picker_core;
 pub mod param_slider_shared;
-pub mod scrub;
 pub mod perf_hud;
+pub mod picker_core;
+pub mod popup_shell;
 pub mod rt_quality_panel;
 pub mod scene_setup_panel;
+pub mod scrub;
 pub mod settings_popup;
-pub mod popup_shell;
 pub mod toast;
 pub mod transport;
 pub mod viewport;
@@ -46,8 +46,9 @@ pub use viewport::HitRegion;
 // D-D1). Re-exported at the `panels::` level so existing `panels::PanelAction`
 // call sites reach the domain enums by the same path.
 pub use actions::{
-    AudioDrawerClick, ClipTriggerDrawerClick, AudioSetupAction, BrowserAction, ClipAction, EditingAction, LayerAction, MappingAction,
-    MarkerAction, ModulationAction, ParamsAction, ProjectAction, RootAction, TransportAction,
+    AudioDrawerClick, AudioSetupAction, BrowserAction, ClipAction, ClipTriggerDrawerClick,
+    EditingAction, LayerAction, MappingAction, MarkerAction, ModulationAction, ParamsAction,
+    ProjectAction, RootAction, TransportAction,
 };
 
 // The unified scrub wire (P-I / D4): one `Scrub` arm collapses the
@@ -193,7 +194,11 @@ impl PanelAction {
     /// trio — the same three actions a drag would emit, with `changed` carrying
     /// the slider's declared default. Boxing happens here so call sites read as
     /// plain action literals.
-    pub fn slider_reset(snapshot: PanelAction, changed: PanelAction, commit: PanelAction) -> PanelAction {
+    pub fn slider_reset(
+        snapshot: PanelAction,
+        changed: PanelAction,
+        commit: PanelAction,
+    ) -> PanelAction {
         PanelAction::Root(RootAction::SliderReset {
             snapshot: Box::new(snapshot),
             changed: Box::new(changed),

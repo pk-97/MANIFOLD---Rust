@@ -6,7 +6,9 @@
 //! only on a frame with a pick waiting, reads back on the next render, and
 //! never touches the output (REALTIME_3D_DESIGN.md D9).
 
-use manifold_node_engine::scene::pick::{PICK_REGION, PickHit, PickRequest, nearest_slot, pick_view_proj};
+use manifold_node_engine::scene::pick::{
+    PICK_REGION, PickHit, PickRequest, nearest_slot, pick_view_proj,
+};
 
 use super::*;
 
@@ -41,16 +43,29 @@ impl ItemPick {
     /// Read the last frame's ids back. The host waits for the previous frame
     /// before encoding the next (`gpu_readback.rs`), so they are written.
     pub(super) fn read_back(&mut self) {
-        let (Some(id), Some(buffer)) = (self.in_flight.take(), self.readback.as_ref()) else { return };
-        let ptr = buffer.mapped_ptr().expect("the pick readback is shared memory").cast::<u8>();
+        let (Some(id), Some(buffer)) = (self.in_flight.take(), self.readback.as_ref()) else {
+            return;
+        };
+        let ptr = buffer
+            .mapped_ptr()
+            .expect("the pick readback is shared memory")
+            .cast::<u8>();
         let mut ids = [0.0_f32; (PICK_REGION * PICK_REGION) as usize];
         for (row, chunk) in ids.chunks_exact_mut(PICK_REGION as usize).enumerate() {
             // SAFETY: the buffer holds PICK_REGION rows of ROW_BYTES, written
             // by a completed blit; each row starts with PICK_REGION f32s.
-            let src = unsafe { std::slice::from_raw_parts(ptr.add(row * ROW_BYTES as usize).cast::<f32>(), chunk.len()) };
+            let src = unsafe {
+                std::slice::from_raw_parts(
+                    ptr.add(row * ROW_BYTES as usize).cast::<f32>(),
+                    chunk.len(),
+                )
+            };
             chunk.copy_from_slice(src);
         }
-        self.answered = Some(PickHit { id, slot: nearest_slot(&ids) });
+        self.answered = Some(PickHit {
+            id,
+            slot: nearest_slot(&ids),
+        });
     }
 }
 
@@ -63,7 +78,9 @@ impl RenderScene {
         pre: &FramePrelude<'ctx>,
         draws: &[ObjectDraw<'ctx>],
     ) {
-        let Some(pick) = self.pick.waiting.take() else { return };
+        let Some(pick) = self.pick.waiting.take() else {
+            return;
+        };
         let gpu = ctx.gpu_encoder();
         let region = |label: &'static str, format: manifold_gpu::GpuTextureFormat| {
             gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
@@ -72,14 +89,40 @@ impl RenderScene {
                 depth: 1,
                 format,
                 dimension: manifold_gpu::GpuTextureDimension::D2,
-                usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET | manifold_gpu::GpuTextureUsage::SHADER_READ,
+                usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+                    | manifold_gpu::GpuTextureUsage::SHADER_READ,
                 label,
                 mip_levels: 1,
             })
         };
-        let ids = self.pick.ids.get_or_insert_with(|| region("node.render_scene pick ids", manifold_gpu::GpuTextureFormat::R32Float)).clone();
-        let depth = self.pick.depth.get_or_insert_with(|| region("node.render_scene pick depth", manifold_gpu::GpuTextureFormat::Depth32Float)).clone();
-        let readback = self.pick.readback.get_or_insert_with(|| gpu.device.create_buffer_shared(u64::from(ROW_BYTES * PICK_REGION))).clone();
+        let ids = self
+            .pick
+            .ids
+            .get_or_insert_with(|| {
+                region(
+                    "node.render_scene pick ids",
+                    manifold_gpu::GpuTextureFormat::R32Float,
+                )
+            })
+            .clone();
+        let depth = self
+            .pick
+            .depth
+            .get_or_insert_with(|| {
+                region(
+                    "node.render_scene pick depth",
+                    manifold_gpu::GpuTextureFormat::Depth32Float,
+                )
+            })
+            .clone();
+        let readback = self
+            .pick
+            .readback
+            .get_or_insert_with(|| {
+                gpu.device
+                    .create_buffer_shared(u64::from(ROW_BYTES * PICK_REGION))
+            })
+            .clone();
         let pipeline = self
             .pick
             .pipeline
@@ -96,10 +139,18 @@ impl RenderScene {
                 )
             })
             .clone();
-        let depth_stencil = self.depth_stencil.as_ref().expect("ensured before the draw");
+        let depth_stencil = self
+            .depth_stencil
+            .as_ref()
+            .expect("ensured before the draw");
         let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
         let dummy = self.dummy_texture.as_ref().expect("ensured");
-        let view_proj = pick_view_proj(pre.cam.view_proj(pre.aspect), pick.uv, pre.native_width, pre.native_height);
+        let view_proj = pick_view_proj(
+            pre.cam.view_proj(pre.aspect),
+            pick.uv,
+            pre.native_width,
+            pre.native_height,
+        );
         let drawn: Vec<&ObjectDraw<'ctx>> = draws.iter().filter(|d| d.instance_count > 0).collect();
         let uniforms: Vec<ShadowUniforms> = drawn
             .iter()
@@ -114,19 +165,48 @@ impl RenderScene {
             .zip(&uniforms)
             .map(|(d, uniforms)| {
                 [
-                    GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(uniforms) },
-                    GpuBinding::Buffer { binding: 1, buffer: d.vertices, offset: 0 },
-                    GpuBinding::Buffer { binding: 2, buffer: d.instances.unwrap_or(identity_stub), offset: 0 },
-                    GpuBinding::Buffer { binding: 3, buffer: d.weights.unwrap_or(d.vertices), offset: 0 },
-                    GpuBinding::Texture { binding: 4, texture: d.base_color_map.unwrap_or(dummy) },
-                    GpuBinding::Sampler { binding: 5, sampler: &self.material_samplers[&Self::sampler_cache_key(d.sampler_descs[0])] },
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(uniforms),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: d.vertices,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: d.instances.unwrap_or(identity_stub),
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: d.weights.unwrap_or(d.vertices),
+                        offset: 0,
+                    },
+                    GpuBinding::Texture {
+                        binding: 4,
+                        texture: d.base_color_map.unwrap_or(dummy),
+                    },
+                    GpuBinding::Sampler {
+                        binding: 5,
+                        sampler: &self.material_samplers
+                            [&Self::sampler_cache_key(d.sampler_descs[0])],
+                    },
                 ]
             })
             .collect();
         let batch: Vec<manifold_gpu::DepthMsaaDraw> = drawn
             .iter()
             .zip(&bindings)
-            .map(|(d, bindings)| d.live(manifold_gpu::GpuEncoder::depth_msaa_draw(&pipeline, bindings, d.vertex_count, d.instance_count)))
+            .map(|(d, bindings)| {
+                d.live(manifold_gpu::GpuEncoder::depth_msaa_draw(
+                    &pipeline,
+                    bindings,
+                    d.vertex_count,
+                    d.instance_count,
+                ))
+            })
             .collect();
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.draw_instanced_depth_batch(
@@ -138,7 +218,8 @@ impl RenderScene {
             manifold_gpu::GpuLoadAction::Clear,
             "node.render_scene pick",
         );
-        gpu.native_enc.copy_texture_to_buffer(&ids, &readback, PICK_REGION, PICK_REGION, ROW_BYTES);
+        gpu.native_enc
+            .copy_texture_to_buffer(&ids, &readback, PICK_REGION, PICK_REGION, ROW_BYTES);
         self.pick.in_flight = Some(pick.id);
     }
 }

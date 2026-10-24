@@ -31,7 +31,8 @@ impl ModelInput {
         }
         let max = Self::max_model(input_rate);
         Some(Self {
-            resampler: (input_rate != MODEL_RATE).then(|| LinearResampler::new(input_rate, MODEL_RATE)),
+            resampler: (input_rate != MODEL_RATE)
+                .then(|| LinearResampler::new(input_rate, MODEL_RATE)),
             step: input_rate as f64 / MODEL_RATE as f64,
             resampled: Vec::with_capacity(max),
             block: Vec::with_capacity(max),
@@ -67,7 +68,9 @@ impl ModelInput {
     }
 
     pub(crate) fn clock(&self) -> InputClock {
-        InputClock { step: self.resampler.is_some().then_some(self.step) }
+        InputClock {
+            step: self.resampler.is_some().then_some(self.step),
+        }
     }
 }
 

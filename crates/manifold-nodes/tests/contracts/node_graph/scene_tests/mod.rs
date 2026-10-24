@@ -1,7 +1,7 @@
 #[cfg(feature = "gpu-proofs")]
 mod fragment_mask_continuity;
-mod object_ports;
 mod material_validation;
+mod object_ports;
 
 mod mesh_fusion;
 

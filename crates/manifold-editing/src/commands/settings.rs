@@ -1,19 +1,17 @@
 use crate::command::Command;
-use manifold_core::change::{ChangeSet, Part};
-use crate::commands::clip::{
-    build_audio_dependent_edits, TrimClipCommand,
-};
+use crate::commands::clip::{TrimClipCommand, build_audio_dependent_edits};
 use crate::service::EditingService;
 use manifold_core::Beats;
-use manifold_core::PresetTypeId;
-use manifold_core::LayerId;
 use manifold_core::ClipId;
+use manifold_core::LayerId;
+use manifold_core::PresetTypeId;
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::effects::ParameterDriver;
 use manifold_core::math::BeatQuantizer;
 use manifold_core::project::Project;
 use manifold_core::settings::RtQualitySettings;
-use manifold_core::tempo::TempoPoint;
 use manifold_core::tempo::SourceClock;
+use manifold_core::tempo::TempoPoint;
 use manifold_core::types::{BlendMode, MidiTriggerMode, QuantizeMode, TempoPointSource};
 use manifold_core::units::{Bpm, Seconds};
 use std::collections::HashSet;
@@ -271,7 +269,9 @@ impl ChangeBpmCommand {
         for point in project.tempo_map.points() {
             let bpm = point.bpm.0 * ratio;
             if !bpm.is_finite() || !(20.0..=300.0).contains(&bpm) {
-                return Err("master tempo-map scaling would produce BPM outside 20..300".to_string());
+                return Err(
+                    "master tempo-map scaling would produce BPM outside 20..300".to_string()
+                );
             }
             scaled.push(TempoPoint {
                 beat: point.beat,
@@ -310,7 +310,10 @@ impl ChangeBpmCommand {
                     && clip.recorded_bpm_resolved() <= 0.0
                     && !clip.detection_source.as_ref().is_some_and(|source_id| {
                         project.timeline.layers.iter().any(|source_layer| {
-                            source_layer.clips.iter().any(|source| &source.id == source_id)
+                            source_layer
+                                .clips
+                                .iter()
+                                .any(|source| &source.id == source_id)
                         })
                     })
             })
@@ -329,9 +332,15 @@ impl ChangeBpmCommand {
             native_sources
                 .iter()
                 .filter_map(|(old_source, source_seconds)| {
-                    let new_source = project.timeline.layers.iter().flat_map(|layer| &layer.clips).find(|clip| clip.id == old_source.id).cloned()?;
-                    let new_duration = new_clock
-                        .beats_for_unwarped_source(old_source.start_beat, *source_seconds);
+                    let new_source = project
+                        .timeline
+                        .layers
+                        .iter()
+                        .flat_map(|layer| &layer.clips)
+                        .find(|clip| clip.id == old_source.id)
+                        .cloned()?;
+                    let new_duration =
+                        new_clock.beats_for_unwarped_source(old_source.start_beat, *source_seconds);
                     if (new_duration - old_source.duration_beats).0.abs() < 0.0001 {
                         return None;
                     }
@@ -356,7 +365,14 @@ impl ChangeBpmCommand {
 
         let new_clock = project.source_clock();
         for (old_source, _) in &native_sources {
-            if let Some(new_source) = project.timeline.layers.iter().flat_map(|layer| &layer.clips).find(|clip| clip.id == old_source.id).cloned() {
+            if let Some(new_source) = project
+                .timeline
+                .layers
+                .iter()
+                .flat_map(|layer| &layer.clips)
+                .find(|clip| clip.id == old_source.id)
+                .cloned()
+            {
                 self.dependent_commands.extend(build_audio_dependent_edits(
                     project,
                     old_source,
@@ -400,7 +416,9 @@ impl ChangeBpmCommand {
 }
 
 impl Command for ChangeBpmCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings, Part::Clips]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Settings, Part::Clips])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if self.rejection.is_some() {
             return;
@@ -482,7 +500,9 @@ impl ChangeResolutionCommand {
 }
 
 impl Command for ChangeResolutionCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Settings])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         project.settings.resolution_preset = self.new_preset;
         let (w, h) = self.new_preset.dimensions();
@@ -516,7 +536,9 @@ impl ChangeQuantizeModeCommand {
 }
 
 impl Command for ChangeQuantizeModeCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Settings])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         project.settings.quantize_mode = self.new_mode;
     }
@@ -544,7 +566,9 @@ impl ChangeFrameRateCommand {
 }
 
 impl Command for ChangeFrameRateCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Settings])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         project.settings.frame_rate = self.new_rate;
     }
@@ -577,7 +601,9 @@ impl ChangeLayerMidiNoteCommand {
 }
 
 impl Command for ChangeLayerMidiNoteCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Layers]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Layers])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.midi_note = self.new_note;
@@ -614,7 +640,9 @@ impl ChangeLayerBlendModeCommand {
 }
 
 impl Command for ChangeLayerBlendModeCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Layers]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Layers])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.default_blend_mode = self.new_mode;
@@ -714,7 +742,9 @@ impl ChangeGeneratorTypeCommand {
 }
 
 impl Command for ChangeGeneratorTypeCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::WHOLE_INSTANCES
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             if !self.captured_old_graph {
@@ -799,7 +829,9 @@ impl PasteGeneratorCommand {
 }
 
 impl Command for PasteGeneratorCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::WHOLE_INSTANCES
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             if !self.captured_old_graph {
@@ -924,7 +956,9 @@ impl ToggleExportHdrCommand {
 }
 
 impl Command for ToggleExportHdrCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Settings])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         project.settings.export_hdr = !self.old_hdr;
     }
@@ -952,7 +986,9 @@ impl ToggleSplitSectionsCommand {
 }
 
 impl Command for ToggleSplitSectionsCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Settings])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         project.settings.split_at_markers = !self.old_split;
     }
@@ -980,7 +1016,9 @@ impl ToggleExportGizmosCommand {
 }
 
 impl Command for ToggleExportGizmosCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Settings])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         project.settings.export_gizmos = !self.old;
     }
@@ -1013,7 +1051,9 @@ impl ChangeLayerMidiChannelCommand {
 }
 
 impl Command for ChangeLayerMidiChannelCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Layers]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Layers])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.midi_channel = self.new_channel;
@@ -1050,7 +1090,9 @@ impl ChangeLayerMidiDeviceCommand {
 }
 
 impl Command for ChangeLayerMidiDeviceCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Layers]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Layers])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.set_midi_device(self.new_device.clone());
@@ -1087,7 +1129,9 @@ impl ChangeLayerMidiTriggerModeCommand {
 }
 
 impl Command for ChangeLayerMidiTriggerModeCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Layers]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Layers])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.set_midi_trigger_mode(self.new_mode);
@@ -1126,7 +1170,9 @@ impl SetDisplayDimensionsCommand {
 }
 
 impl Command for SetDisplayDimensionsCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Settings])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         project.settings.output_width = self.new_width;
         project.settings.output_height = self.new_height;
@@ -1159,7 +1205,9 @@ impl ChangeRenderScaleCommand {
 }
 
 impl Command for ChangeRenderScaleCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Settings])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         project.settings.render_scale = self.new_scale;
     }
@@ -1199,7 +1247,9 @@ impl ChangeTonemapCurveCommand {
 }
 
 impl Command for ChangeTonemapCurveCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Settings])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         project.settings.tonemap_curve = self.new_curve;
         project.settings.tonemap_enabled = self.new_enabled;
@@ -1240,7 +1290,9 @@ impl RestoreRecordedTempoLaneCommand {
 }
 
 impl Command for RestoreRecordedTempoLaneCommand {
-    fn touches(&self) -> ChangeSet { self.transaction.touches() }
+    fn touches(&self) -> ChangeSet {
+        self.transaction.touches()
+    }
     fn do_execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
@@ -1280,7 +1332,9 @@ impl ClearTempoMapCommand {
 }
 
 impl Command for ClearTempoMapCommand {
-    fn touches(&self) -> ChangeSet { self.transaction.touches() }
+    fn touches(&self) -> ChangeSet {
+        self.transaction.touches()
+    }
     fn do_execute(&mut self, project: &mut Project) {
         self.transaction.execute(project);
     }
@@ -1355,7 +1409,9 @@ impl RenameMacroLabelCommand {
 }
 
 impl Command for RenameMacroLabelCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         Self::apply_label(project, self.index, &self.new_label);
     }
@@ -1387,7 +1443,9 @@ impl ChangeRtQualityCommand {
 }
 
 impl Command for ChangeRtQualityCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Settings])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         project.settings.rt_quality = self.new_settings;
     }
@@ -1408,24 +1466,36 @@ pub struct ChangeSimRateCommand {
     new_rate: manifold_core::settings::SimRate,
 }
 impl ChangeSimRateCommand {
-    pub fn new(old_rate: manifold_core::settings::SimRate, new_rate: manifold_core::settings::SimRate) -> Self {
+    pub fn new(
+        old_rate: manifold_core::settings::SimRate,
+        new_rate: manifold_core::settings::SimRate,
+    ) -> Self {
         Self { old_rate, new_rate }
     }
 }
 impl Command for ChangeSimRateCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Settings]) }
-    fn do_execute(&mut self, project: &mut Project) { project.settings.physics.sim_rate = self.new_rate; }
-    fn do_undo(&mut self, project: &mut Project) { project.settings.physics.sim_rate = self.old_rate; }
-    fn description(&self) -> &str { "Change Sim Rate" }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Settings])
+    }
+    fn do_execute(&mut self, project: &mut Project) {
+        project.settings.physics.sim_rate = self.new_rate;
+    }
+    fn do_undo(&mut self, project: &mut Project) {
+        project.settings.physics.sim_rate = self.old_rate;
+    }
+    fn description(&self) -> &str {
+        "Change Sim Rate"
+    }
 }
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use manifold_core::clip::TimelineClip;
     use manifold_core::layer::Layer;
-    use manifold_core::settings::{RtQualityColumn, RtQualitySettings, RtQualityTier, RtRayResolution, RtSpatialDenoise};
+    use manifold_core::settings::{
+        RtQualityColumn, RtQualitySettings, RtQualityTier, RtRayResolution, RtSpatialDenoise,
+    };
     use manifold_core::types::LayerType;
     use manifold_core::units::Seconds;
 
@@ -1460,9 +1530,10 @@ mod tests {
             let mut command = ChangeBpmCommand::new(Bpm(old_bpm), Bpm(60.0));
             command.execute(&mut project);
             let clip = &project.timeline.layers[0].clips[0];
-            let new_span = project
-                .source_clock()
-                .source_seconds(clip, clip.start_beat, clip.end_beat());
+            let new_span =
+                project
+                    .source_clock()
+                    .source_seconds(clip, clip.start_beat, clip.end_beat());
             assert!((new_span.0 - old_span.0).abs() < 1e-9);
         }
     }
@@ -1474,7 +1545,10 @@ mod tests {
         let old_duration = project.timeline.layers[0].clips[0].duration_beats;
         let mut command = ChangeBpmCommand::new(Bpm(120.0), Bpm(60.0));
         command.execute(&mut project);
-        assert_eq!(project.timeline.layers[0].clips[0].duration_beats, old_duration);
+        assert_eq!(
+            project.timeline.layers[0].clips[0].duration_beats,
+            old_duration
+        );
     }
 
     #[test]
@@ -1518,10 +1592,18 @@ mod tests {
             // The transport is in the second tempo segment when BPM is edited.
             project.settings.bpm = Bpm(140.0);
             project.tempo_map.add_or_replace_point_with_time(
-                Beats::ZERO, Bpm(120.0), TempoPointSource::Recorded, 0.001, Seconds(2.0),
+                Beats::ZERO,
+                Bpm(120.0),
+                TempoPointSource::Recorded,
+                0.001,
+                Seconds(2.0),
             );
             project.tempo_map.add_or_replace_point_with_time(
-                Beats(16.0), Bpm(140.0), TempoPointSource::Recorded, 0.001, Seconds(10.0),
+                Beats(16.0),
+                Bpm(140.0),
+                TempoPointSource::Recorded,
+                0.001,
+                Seconds(10.0),
             );
             project.tempo_map.ensure_sorted();
             let original = serde_json::to_value(&project.tempo_map).unwrap();
@@ -1535,7 +1617,10 @@ mod tests {
             let mut editing = crate::service::EditingService::new();
             editing.execute(Box::new(command), &mut project);
             assert_eq!(project.settings.bpm, Bpm(150.0));
-            assert_eq!(project.tempo_map.points().len(), if flatten { 1 } else { 2 });
+            assert_eq!(
+                project.tempo_map.points().len(),
+                if flatten { 1 } else { 2 }
+            );
             let edited = serde_json::to_value(&project.tempo_map).unwrap();
 
             for _ in 0..2 {
@@ -1559,12 +1644,8 @@ mod tests {
             TempoPointSource::Manual,
             0.001,
         );
-        base.tempo_map.add_or_replace_point(
-            Beats(4.0),
-            Bpm(60.0),
-            TempoPointSource::Manual,
-            0.001,
-        );
+        base.tempo_map
+            .add_or_replace_point(Beats(4.0), Bpm(60.0), TempoPointSource::Manual, 0.001);
         base.tempo_map.ensure_sorted();
 
         let mut source_layer = Layer::new_audio("Source".into(), 0);
@@ -1615,7 +1696,10 @@ mod tests {
         );
 
         command.undo(&mut second);
-        assert_eq!(serde_json::to_value(&second).unwrap(), serde_json::to_value(&base).unwrap());
+        assert_eq!(
+            serde_json::to_value(&second).unwrap(),
+            serde_json::to_value(&base).unwrap()
+        );
         command.execute(&mut second);
         assert_eq!(
             serde_json::to_value(&first).unwrap(),
@@ -1638,10 +1722,16 @@ mod tests {
             )),
             &mut project,
         );
-        assert_eq!(project.settings.tonemap_curve, manifold_core::TonemapCurve::Agx);
+        assert_eq!(
+            project.settings.tonemap_curve,
+            manifold_core::TonemapCurve::Agx
+        );
         assert!(project.settings.tonemap_enabled);
         assert!(editing.undo(&mut project));
-        assert_eq!(project.settings.tonemap_curve, manifold_core::TonemapCurve::Agx);
+        assert_eq!(
+            project.settings.tonemap_curve,
+            manifold_core::TonemapCurve::Agx
+        );
         assert!(!project.settings.tonemap_enabled);
         assert!(editing.redo(&mut project));
         assert!(project.settings.tonemap_enabled);
@@ -1655,7 +1745,10 @@ mod tests {
             )),
             &mut project,
         );
-        assert_eq!(project.settings.tonemap_curve, manifold_core::TonemapCurve::Agx);
+        assert_eq!(
+            project.settings.tonemap_curve,
+            manifold_core::TonemapCurve::Agx
+        );
         assert!(!project.settings.tonemap_enabled);
     }
 
@@ -1687,27 +1780,66 @@ mod tests {
 
         // Execute
         command.execute(&mut project);
-        assert_eq!(project.settings.rt_quality.realtime.shadows, RtQualityTier::Low);
+        assert_eq!(
+            project.settings.rt_quality.realtime.shadows,
+            RtQualityTier::Low
+        );
         assert_eq!(project.settings.rt_quality.realtime.ao, RtQualityTier::High);
-        assert_eq!(project.settings.rt_quality.realtime.gi, RtQualityTier::ExtraHigh);
-        assert_eq!(project.settings.rt_quality.realtime.reflections, RtQualityTier::Ultra);
-        assert_eq!(project.settings.rt_quality.realtime.ray_resolution, RtRayResolution::Quarter);
+        assert_eq!(
+            project.settings.rt_quality.realtime.gi,
+            RtQualityTier::ExtraHigh
+        );
+        assert_eq!(
+            project.settings.rt_quality.realtime.reflections,
+            RtQualityTier::Ultra
+        );
+        assert_eq!(
+            project.settings.rt_quality.realtime.ray_resolution,
+            RtRayResolution::Quarter
+        );
 
         // Undo
         command.undo(&mut project);
-        assert_eq!(project.settings.rt_quality.realtime.shadows, old_settings.realtime.shadows);
-        assert_eq!(project.settings.rt_quality.realtime.ao, old_settings.realtime.ao);
-        assert_eq!(project.settings.rt_quality.realtime.gi, old_settings.realtime.gi);
-        assert_eq!(project.settings.rt_quality.realtime.reflections, old_settings.realtime.reflections);
-        assert_eq!(project.settings.rt_quality.realtime.ray_resolution, old_settings.realtime.ray_resolution);
+        assert_eq!(
+            project.settings.rt_quality.realtime.shadows,
+            old_settings.realtime.shadows
+        );
+        assert_eq!(
+            project.settings.rt_quality.realtime.ao,
+            old_settings.realtime.ao
+        );
+        assert_eq!(
+            project.settings.rt_quality.realtime.gi,
+            old_settings.realtime.gi
+        );
+        assert_eq!(
+            project.settings.rt_quality.realtime.reflections,
+            old_settings.realtime.reflections
+        );
+        assert_eq!(
+            project.settings.rt_quality.realtime.ray_resolution,
+            old_settings.realtime.ray_resolution
+        );
 
         // Redo (execute again)
         command.execute(&mut project);
-        assert_eq!(project.settings.rt_quality.realtime.shadows, RtQualityTier::Low);
+        assert_eq!(
+            project.settings.rt_quality.realtime.shadows,
+            RtQualityTier::Low
+        );
         assert_eq!(project.settings.rt_quality.realtime.ao, RtQualityTier::High);
-        assert_eq!(project.settings.rt_quality.realtime.gi, RtQualityTier::ExtraHigh);
-        assert_eq!(project.settings.rt_quality.realtime.reflections, RtQualityTier::Ultra);
-        assert_eq!(project.settings.rt_quality.realtime.ray_resolution, RtRayResolution::Quarter);
+        assert_eq!(
+            project.settings.rt_quality.realtime.gi,
+            RtQualityTier::ExtraHigh
+        );
+        assert_eq!(
+            project.settings.rt_quality.realtime.reflections,
+            RtQualityTier::Ultra
+        );
+        assert_eq!(
+            project.settings.rt_quality.realtime.ray_resolution,
+            RtRayResolution::Quarter
+        );
     }
 
     // ── MVP-P3a: paste generator on gen-carrying lanes (LED_STRIPS_DESIGN.md section 5b D16) ──
@@ -1798,7 +1930,10 @@ mod tests {
         );
         cmd.undo(&mut project);
         assert_eq!(
-            project.timeline.layers[0].gen_params().unwrap().generator_type(),
+            project.timeline.layers[0]
+                .gen_params()
+                .unwrap()
+                .generator_type(),
             &TEST_PASTE_GEN_A,
             "undo restores the LED lane's generator"
         );
@@ -1846,7 +1981,10 @@ mod sim_rate_tests {
         let mut project = Project::default();
         let mut editing = crate::service::EditingService::new();
         for rate in SimRate::ALL {
-            editing.execute(Box::new(ChangeSimRateCommand::new(SimRate::Hz30, rate)), &mut project);
+            editing.execute(
+                Box::new(ChangeSimRateCommand::new(SimRate::Hz30, rate)),
+                &mut project,
+            );
             assert_eq!(project.settings.physics.sim_rate, rate);
             assert!(editing.undo(&mut project));
             assert_eq!(project.settings.physics.sim_rate, SimRate::Hz30);

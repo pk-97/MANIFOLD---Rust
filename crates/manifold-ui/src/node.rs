@@ -139,7 +139,12 @@ impl Color32 {
     /// wire tint at "in flight" opacity, a focused-vs-dim wire) that keep the
     /// RGB and vary only alpha.
     pub const fn with_alpha(self, a: u8) -> Self {
-        Self { r: self.r, g: self.g, b: self.b, a }
+        Self {
+            r: self.r,
+            g: self.g,
+            b: self.b,
+            a,
+        }
     }
 
     /// Byte components as `[r, g, b, a]` — bridges to APIs (e.g.

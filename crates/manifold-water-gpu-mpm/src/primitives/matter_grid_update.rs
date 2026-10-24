@@ -7,16 +7,16 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
-use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
-use manifold_nodes_physics::force_lattice::{ForceLatticeBinding, FORCE_LATTICE};
-use manifold_water_liquid::lattice::LiquidLattice;
+use super::matter_common::MATTER_WALLS;
 use crate::matter::{MatterGridNode, momentum_unit_fits};
+use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use super::matter_common::MATTER_WALLS;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_nodes_physics::force_lattice::{FORCE_LATTICE, ForceLatticeBinding};
+use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use manifold_water_liquid::lattice::LiquidLattice;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -125,7 +125,12 @@ impl Primitive for MatterGridUpdate {
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         (port_name == "grid_out")
-            .then(|| input_capacities.iter().find(|(p, _)| *p == "grid").map(|&(_, n)| n))
+            .then(|| {
+                input_capacities
+                    .iter()
+                    .find(|(p, _)| *p == "grid")
+                    .map(|&(_, n)| n)
+            })
             .flatten()
     }
 
@@ -143,16 +148,31 @@ impl Primitive for MatterGridUpdate {
             ctx.scalar_or_param("gravity", -9.81),
             ctx.scalar_or_param("gravity_z", 0.0),
         ];
-        let closed_faces = ctx.scalar_or_param("closed_faces", 63.0).round().clamp(0.0, 63.0) as i32;
+        let closed_faces = ctx
+            .scalar_or_param("closed_faces", 63.0)
+            .round()
+            .clamp(0.0, 63.0) as i32;
         let momentum_unit = ctx.scalar_or_param("momentum_unit", 128.0);
-        let body_count = ctx.scalar_or_param("body_count", 0.0).round().clamp(0.0, MAX_LIQUID_BODIES as f32) as i32;
+        let body_count = ctx
+            .scalar_or_param("body_count", 0.0)
+            .round()
+            .clamp(0.0, MAX_LIQUID_BODIES as f32) as i32;
         // In place on the grid input; the GPU is touched on every path.
         let accum = ctx.inputs.array("accum");
         let grid = ctx.inputs.array("grid");
-        let colliders = (ctx.inputs.array("bodies"), ctx.inputs.array("shapes"), ctx.inputs.array("atlas"));
+        let colliders = (
+            ctx.inputs.array("bodies"),
+            ctx.inputs.array("shapes"),
+            ctx.inputs.array("atlas"),
+        );
         let tick_index = ctx.scalar_or_param("tick_index", 0.0).round().max(0.0) as i32;
         let substep_in_tick = ctx.scalar_or_param("substep_in_tick", 0.0).round().max(0.0) as i32;
-        let field = ForceLatticeBinding::read(ctx, ctx.inputs.array("forces"), ctx.inputs.array("impulses"), "Matter Grid Update");
+        let field = ForceLatticeBinding::read(
+            ctx,
+            ctx.inputs.array("forces"),
+            ctx.inputs.array("impulses"),
+            "Matter Grid Update",
+        );
         let gpu = ctx.gpu_encoder();
         let (Some(accum), Some(grid)) = (accum, grid) else {
             return;
@@ -188,10 +208,15 @@ impl Primitive for MatterGridUpdate {
         };
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let impulse_bytes = field.nodes.iter().map(|&n| n as u64).product::<u64>() * 16;
-        let impulse_offset = tick_index.checked_sub(field.impulse_tick)
+        let impulse_offset = tick_index
+            .checked_sub(field.impulse_tick)
             .filter(|&ordinal| field.impulse_tick >= 0 && ordinal >= 0)
             .map(|ordinal| ordinal as u64 * impulse_bytes)
-            .filter(|&offset| field.impulses.is_some_and(|buffer| offset + impulse_bytes <= buffer.size));
+            .filter(|&offset| {
+                field
+                    .impulses
+                    .is_some_and(|buffer| offset + impulse_bytes <= buffer.size)
+            });
         let uniforms = GridUpdateUniforms {
             nodes_x: lattice.nodes()[0] as i32,
             nodes_y: lattice.nodes()[1] as i32,
@@ -214,7 +239,11 @@ impl Primitive for MatterGridUpdate {
             field_nodes_z: field.nodes[2],
             field_spacing: field.spacing,
             force_lattices: field.force_lattices,
-            impulse_tick: if impulse_offset.is_some() { tick_index } else { -1 },
+            impulse_tick: if impulse_offset.is_some() {
+                tick_index
+            } else {
+                -1
+            },
             first_tick: field.first_tick,
             dispatch_count: nodes,
         };
@@ -222,15 +251,50 @@ impl Primitive for MatterGridUpdate {
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: accum, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: grid, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: bodies, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: shapes, offset: 0 },
-                GpuBinding::Buffer { binding: 5, buffer: atlas, offset: 0 },
-                GpuBinding::Buffer { binding: 6, buffer: field.forces.unwrap_or(grid), offset: 0 },
-                GpuBinding::Buffer { binding: 7, buffer: field.impulses.unwrap_or(grid), offset: impulse_offset.unwrap_or(0) },
-                GpuBinding::Buffer { binding: 8, buffer: grid, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: accum,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: grid,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: bodies,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: shapes,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: atlas,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 6,
+                    buffer: field.forces.unwrap_or(grid),
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 7,
+                    buffer: field.impulses.unwrap_or(grid),
+                    offset: impulse_offset.unwrap_or(0),
+                },
+                GpuBinding::Buffer {
+                    binding: 8,
+                    buffer: grid,
+                    offset: 0,
+                },
             ],
             [nodes.div_ceil(256), 1, 1],
             "node.matter_grid_update",
@@ -246,15 +310,34 @@ mod tests {
     fn matter_grid_update_generates_a_gathering_node_kernel() {
         let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<MatterGridUpdate>()
             .expect("matter_grid_update codegen");
-        let module = naga::front::wgsl::parse_str(&wgsl).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
-        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
-            .validate(&module)
+        let module = naga::front::wgsl::parse_str(&wgsl)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
-        assert!(wgsl.contains("var<storage, read> buf_accum: array<i32>"), "{wgsl}");
-        assert!(wgsl.contains("buf_grid_out[idx] = body(idx, params.dispatch_count, e_grid,"), "{wgsl}");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
+        assert!(
+            wgsl.contains("var<storage, read> buf_accum: array<i32>"),
+            "{wgsl}"
+        );
+        assert!(
+            wgsl.contains("buf_grid_out[idx] = body(idx, params.dispatch_count, e_grid,"),
+            "{wgsl}"
+        );
         assert_eq!(std::mem::size_of::<GridUpdateUniforms>(), 96);
-        assert!(wgsl.contains("first_tick: i32,\n    dispatch_count: u32,\n}"), "{wgsl}");
-        for binding in ["buf_bodies", "buf_shapes", "buf_atlas: array<u32>", "buf_forces: array<f32>", "buf_impulses: array<f32>"] {
+        assert!(
+            wgsl.contains("first_tick: i32,\n    dispatch_count: u32,\n}"),
+            "{wgsl}"
+        );
+        for binding in [
+            "buf_bodies",
+            "buf_shapes",
+            "buf_atlas: array<u32>",
+            "buf_forces: array<f32>",
+            "buf_impulses: array<f32>",
+        ] {
             assert!(wgsl.contains(binding), "{binding}: {wgsl}");
         }
         let body = include_str!("shaders/matter_grid_update_body.wgsl");

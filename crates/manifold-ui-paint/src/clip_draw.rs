@@ -159,7 +159,10 @@ pub fn emit_clip_body(ui: &mut UIRenderer, c: &ClipBody) {
     // tying the full-bleed thumbnail + name strip to the layer; the selected clip
     // keeps the bright focus ring. Locked clips stay on the dim neutral edge.
     let (bw, bc) = if c.selected {
-        (color::CLIP_BORDER_SELECTED_WIDTH, color::CLIP_BORDER_SELECTED)
+        (
+            color::CLIP_BORDER_SELECTED_WIDTH,
+            color::CLIP_BORDER_SELECTED,
+        )
     } else if c.locked {
         (color::CLIP_BORDER_NORMAL_WIDTH, color::CLIP_BORDER_NORMAL)
     } else {
@@ -233,8 +236,9 @@ pub fn emit_clip_names(ui: &mut UIRenderer, clips: &[ClipScreenRect], tracks: Re
         // colour above already reads against it. Clamp so a tiny clip can't push
         // the text above its own top.
         let ty = match clip_strip_height(c.rect.height) {
-            Some(strip_h) => (c.rect.y + c.rect.height - strip_h + (strip_h - font) * 0.5)
-                .max(c.rect.y),
+            Some(strip_h) => {
+                (c.rect.y + c.rect.height - strip_h + (strip_h - font) * 0.5).max(c.rect.y)
+            }
             None => (c.rect.y + c.rect.height - font - 3.0).max(c.rect.y),
         };
         ui.draw_text(c.rect.x + pad, ty, &c.name, font, text_color);

@@ -28,7 +28,12 @@ pub(crate) struct TargetedFieldHistory {
 
 impl Default for TargetedFieldHistory {
     fn default() -> Self {
-        Self { samples: PackedRows::new(None), columns: Vec::new(), column_of: Vec::new(), connected: false }
+        Self {
+            samples: PackedRows::new(None),
+            columns: Vec::new(),
+            column_of: Vec::new(),
+            connected: false,
+        }
     }
 }
 
@@ -51,10 +56,15 @@ impl TargetedFieldHistory {
     /// `from[t]`'s column. A column whose target went keeps its history and
     /// no target.
     pub fn move_targets(&mut self, from: &[Option<usize>]) {
-        let column_of: Vec<Option<usize>> =
-            from.iter().map(|at| at.and_then(|at| self.column_of.get(at).copied().flatten())).collect();
+        let column_of: Vec<Option<usize>> = from
+            .iter()
+            .map(|at| at.and_then(|at| self.column_of.get(at).copied().flatten()))
+            .collect();
         for (column, target) in self.columns.iter_mut().enumerate() {
-            *target = column_of.iter().position(|of| *of == Some(column)).unwrap_or(usize::MAX);
+            *target = column_of
+                .iter()
+                .position(|of| *of == Some(column))
+                .unwrap_or(usize::MAX);
         }
         self.column_of = column_of;
     }
@@ -91,7 +101,11 @@ impl TargetedFieldHistory {
         self.connected = false;
     }
 
-    pub fn record(&mut self, fields: TargetedFields<'_>, write: HistoryWrite) -> Result<(), String> {
+    pub fn record(
+        &mut self,
+        fields: TargetedFields<'_>,
+        write: HistoryWrite,
+    ) -> Result<(), String> {
         if !self.connected {
             return Err("Physics: targeted field history is not connected".into());
         }
@@ -119,7 +133,12 @@ impl TargetedFieldHistory {
                 let columns = &self.columns;
                 // A column whose target a recompile removed records no field.
                 const NO_FIELD: &Option<FieldValue> = &None;
-                self.samples.record(write, columns.iter().map(|&target| fields.get(target).unwrap_or(NO_FIELD)))
+                self.samples.record(
+                    write,
+                    columns
+                        .iter()
+                        .map(|&target| fields.get(target).unwrap_or(NO_FIELD)),
+                )
             }
             TargetedFields::Cleared => self.samples.record_filler(write),
         };
@@ -181,10 +200,13 @@ impl TargetedFieldHistory {
         self.samples.back().is_some_and(|sample| match fields {
             TargetedFields::Values(fields) => {
                 fields.len() == self.column_of.len()
-                    && fields.iter().zip(&self.column_of).all(|(field, column)| match column {
-                        Some(column) => sample[*column] == *field,
-                        None => field.is_none(),
-                    })
+                    && fields
+                        .iter()
+                        .zip(&self.column_of)
+                        .all(|(field, column)| match column {
+                            Some(column) => sample[*column] == *field,
+                            None => field.is_none(),
+                        })
             }
             TargetedFields::Cleared => sample.iter().all(Option::is_none),
         })
@@ -221,16 +243,27 @@ mod tests {
         history.ensure_aligned(1).unwrap();
         let mut fields = vec![None; 288];
         fields[200] = Some(FieldValue::uniform([1.0, 0.0, 0.0]).unwrap());
-        history.record(TargetedFields::Values(&fields), HistoryWrite::Appended).unwrap();
+        history
+            .record(TargetedFields::Values(&fields), HistoryWrite::Appended)
+            .unwrap();
         assert_eq!(history.columns, [200]);
         assert!(history.fields_equal(TargetedFields::Values(&fields)));
         let span = history.span(1, 1, 0.0).unwrap();
         assert!(span.field(200).after.is_some());
         assert!(span.field(3).after.is_none());
         let before = history.span(0, 0, 0.0).unwrap();
-        assert!(before.field(200).before.is_none(), "the aligned row before the force has none");
+        assert!(
+            before.field(200).before.is_none(),
+            "the aligned row before the force has none"
+        );
         let storage = history.storage_ptr();
-        history.record(TargetedFields::Values(&fields), HistoryWrite::Appended).unwrap();
-        assert_eq!(history.storage_ptr(), storage, "a steady force never widens again");
+        history
+            .record(TargetedFields::Values(&fields), HistoryWrite::Appended)
+            .unwrap();
+        assert_eq!(
+            history.storage_ptr(),
+            storage,
+            "a steady force never widens again"
+        );
     }
 }

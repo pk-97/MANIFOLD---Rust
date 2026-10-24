@@ -7,7 +7,10 @@
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{ControlGroup, Unit};
 
-use super::fields::{COPIES, FieldControl, FieldRow, FieldValue, MATERIAL_BINDING, PHYSICS, enabled, on_off, is_on, parse_on, wrong_value};
+use super::fields::{
+    COPIES, FieldControl, FieldRow, FieldValue, MATERIAL_BINDING, PHYSICS, enabled, is_on, on_off,
+    parse_on, wrong_value,
+};
 use super::{Exposure, PropertyRow, Reach, row, setup};
 use crate::scene_doc::ItemFields;
 
@@ -21,27 +24,73 @@ fn import(fields: &ItemFields) -> bool {
 }
 
 pub static GROUP_ROWS: [PropertyRow; 18] = [
-    row("pos_x", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
-    row("pos_y", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
-    row("pos_z", T, Transform, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited),
+    row("pos_x", T, Transform, setup())
+        .unit(Unit::Metres)
+        .limit(HardLimit::Unlimited),
+    row("pos_y", T, Transform, setup())
+        .unit(Unit::Metres)
+        .limit(HardLimit::Unlimited),
+    row("pos_z", T, Transform, setup())
+        .unit(Unit::Metres)
+        .limit(HardLimit::Unlimited),
     row("rot_x", T, Transform, setup()).limit(HardLimit::Unlimited),
     row("rot_y", T, Transform, setup()).limit(HardLimit::Unlimited),
     row("rot_z", T, Transform, setup()).limit(HardLimit::Unlimited),
     row("scale_x", T, Transform, setup()),
     row("scale_y", T, Transform, setup()),
     row("scale_z", T, Transform, setup()),
-    row("billboard", T, Transform, Exposure::Internal("only an Object turns to face the camera")),
-    row("visible", VISIBLE, Look, setup()).param("value").default(1.0).name("Visible").toggle().limit(HardLimit::Between(0.0, 1.0)),
-    row("chain_a", CHAIN, Look, Exposure::Automatic("this group's Visible")).param("a"),
-    row("chain_b", CHAIN, Look, Exposure::Automatic("the enclosing group's visibility")).param("b"),
-    row("chain_op", CHAIN, Look, Exposure::Automatic("Multiply, so a hidden outer group hides everything inside it"))
-        .param("op"),
+    row(
+        "billboard",
+        T,
+        Transform,
+        Exposure::Internal("only an Object turns to face the camera"),
+    ),
+    row("visible", VISIBLE, Look, setup())
+        .param("value")
+        .default(1.0)
+        .name("Visible")
+        .toggle()
+        .limit(HardLimit::Between(0.0, 1.0)),
+    row(
+        "chain_a",
+        CHAIN,
+        Look,
+        Exposure::Automatic("this group's Visible"),
+    )
+    .param("a"),
+    row(
+        "chain_b",
+        CHAIN,
+        Look,
+        Exposure::Automatic("the enclosing group's visibility"),
+    )
+    .param("b"),
+    row(
+        "chain_op",
+        CHAIN,
+        Look,
+        Exposure::Automatic("Multiply, so a hidden outer group hides everything inside it"),
+    )
+    .param("op"),
     // The old importer's Animation section: Rate, Loop Mode and Retrigger
     // fan out to every clock in the file; the clip is the Group's field.
-    row("anim_rate", Reach::Clocks, Animation, setup()).param("rate").when(import),
-    row("anim_loop_mode", Reach::Clocks, Animation, setup()).param("loop_mode").when(import),
-    row("anim_retrigger", Reach::Clocks, Animation, setup()).param("trigger_count").when(import),
-    row("anim_clip", Reach::Clocks, Animation, Exposure::Automatic("the Group's clip field")).param("clip_index").when(import),
+    row("anim_rate", Reach::Clocks, Animation, setup())
+        .param("rate")
+        .when(import),
+    row("anim_loop_mode", Reach::Clocks, Animation, setup())
+        .param("loop_mode")
+        .when(import),
+    row("anim_retrigger", Reach::Clocks, Animation, setup())
+        .param("trigger_count")
+        .when(import),
+    row(
+        "anim_clip",
+        Reach::Clocks,
+        Animation,
+        Exposure::Automatic("the Group's clip field"),
+    )
+    .param("clip_index")
+    .when(import),
 ];
 
 /// A Group's Source file is an import; its children come from the file. A
@@ -62,7 +111,9 @@ pub static GROUP_FIELDS: [FieldRow; 7] = [
         id: "model_file",
         label: "Model File",
         section: ControlGroup::Source,
-        control: FieldControl::File { extensions: &["glb", "gltf"] },
+        control: FieldControl::File {
+            extensions: &["glb", "gltf"],
+        },
         applies: import,
         disabled: enabled,
         read: |fields| match fields {

@@ -15,11 +15,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
-use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: params in declaration order followed by
 /// the injected dispatch count. The 16 scalar words are already aligned.
@@ -212,7 +212,9 @@ mod gpu_tests {
     use super::*;
     use manifold_node_engine::exec::effect_node::NodeInstanceId;
     use manifold_node_engine::freeze::classify::{FusionKind, InputAccess};
-    use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused};
+    use manifold_node_engine::freeze::codegen::{
+        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused,
+    };
     use manifold_node_engine::primitive::PrimitiveSpec;
 
     fn vertex(position: [f32; 3], normal: [f32; 3], uv: [f32; 2], tangent: [f32; 4]) -> MeshVertex {
@@ -226,7 +228,7 @@ mod gpu_tests {
             tangent,
             color: [1.0; 4],
         }
-}
+    }
 
     fn dispatch(
         wgsl: &str,
@@ -645,12 +647,20 @@ mod gpu_tests {
         let prim = OrderedReconMesh::new();
         let node: &dyn manifold_node_engine::exec::effect_node::EffectNode = &prim;
         assert_eq!(
-            node.array_output_capacity("out", &Default::default(), &[("in", 1009), ("reference", 2009)]),
+            node.array_output_capacity(
+                "out",
+                &Default::default(),
+                &[("in", 1009), ("reference", 2009)]
+            ),
             None,
             "distinct capacities — the probe's case, refused"
         );
         assert_eq!(
-            node.array_output_capacity("out", &Default::default(), &[("in", 1009), ("reference", 1009)]),
+            node.array_output_capacity(
+                "out",
+                &Default::default(),
+                &[("in", 1009), ("reference", 1009)]
+            ),
             Some(1009),
             "identity when the capacities match — the atom's real precondition"
         );

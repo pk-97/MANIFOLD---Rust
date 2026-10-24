@@ -110,10 +110,14 @@ fn every_manifest_asset_has_a_fetch_mechanism() {
         "expected sentinel `TextureTransformTest` missing"
     );
 
-    let manifest_json = std::fs::read_to_string(khronos_manifest_path()).expect("read manifest.json");
+    let manifest_json =
+        std::fs::read_to_string(khronos_manifest_path()).expect("read manifest.json");
     let entries: Vec<ManifestEntry> =
         serde_json::from_str(&manifest_json).expect("parse manifest.json");
-    assert!(!entries.is_empty(), "manifest.json must name at least one asset");
+    assert!(
+        !entries.is_empty(),
+        "manifest.json must name at least one asset"
+    );
 
     let dead: Vec<&str> = entries
         .iter()

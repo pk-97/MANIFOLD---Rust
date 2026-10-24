@@ -616,10 +616,26 @@ impl UIRenderer {
         let image_layout = GpuVertexLayout {
             stride: std::mem::size_of::<ImageVertex>() as u32,
             attributes: vec![
-                GpuVertexAttribute { format: GpuVertexFormat::Float32x2, offset: 0, shader_location: 0 },
-                GpuVertexAttribute { format: GpuVertexFormat::Float32x2, offset: 8, shader_location: 1 },
-                GpuVertexAttribute { format: GpuVertexFormat::Float32x4, offset: 16, shader_location: 2 },
-                GpuVertexAttribute { format: GpuVertexFormat::Float32x4, offset: 32, shader_location: 3 },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x2,
+                    offset: 0,
+                    shader_location: 0,
+                },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x2,
+                    offset: 8,
+                    shader_location: 1,
+                },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x4,
+                    offset: 16,
+                    shader_location: 2,
+                },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x4,
+                    offset: 32,
+                    shader_location: 3,
+                },
             ],
         };
         let image_pipeline = device.create_render_pipeline_with_vertex_layout(
@@ -723,7 +739,11 @@ impl UIRenderer {
         if self.image_textures.contains_key(&handle) {
             return false;
         }
-        debug_assert_eq!(rgba.len(), (w * h * 4) as usize, "rgba buffer size must be w*h*4");
+        debug_assert_eq!(
+            rgba.len(),
+            (w * h * 4) as usize,
+            "rgba buffer size must be w*h*4"
+        );
         let tex = device.create_texture(&GpuTextureDesc {
             width: w,
             height: h,
@@ -815,7 +835,10 @@ impl UIRenderer {
     /// The transform subsequent draw commands are captured under. Identity
     /// when the stack is empty.
     pub fn current_transform(&self) -> Affine2 {
-        self.transform_stack.last().copied().unwrap_or(Affine2::IDENTITY)
+        self.transform_stack
+            .last()
+            .copied()
+            .unwrap_or(Affine2::IDENTITY)
     }
 
     /// Compose `transform` onto the current transform for subsequent commands
@@ -830,7 +853,10 @@ impl UIRenderer {
 
     /// Return to the transform that was active before the matching push.
     pub fn pop_transform(&mut self) {
-        debug_assert!(!self.transform_stack.is_empty(), "pop_transform without push");
+        debug_assert!(
+            !self.transform_stack.is_empty(),
+            "pop_transform without push"
+        );
         self.transform_stack.pop();
     }
 
@@ -1034,14 +1060,7 @@ impl UIRenderer {
     /// Queue a timing-grid line whose width is defined in physical pixels.
     /// The renderer snaps it to a whole pixel column (or row), so a lane's
     /// grid and its track's grid land on the same pixels.
-    pub fn draw_grid_line(
-        &mut self,
-        x0: f32,
-        y0: f32,
-        x1: f32,
-        y1: f32,
-        kind: TimingGridLineKind,
-    ) {
+    pub fn draw_grid_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, kind: TimingGridLineKind) {
         self.line_commands.push(LineCommand {
             x0,
             y0,
@@ -1151,7 +1170,13 @@ impl UIRenderer {
     /// additive within a prepare cycle: earlier commands (including pending
     /// immediate-mode draws) are preserved — batches derive from all of
     /// `rect_commands` together in `prepare()`.
-    pub fn render_tree_range(&mut self, tree: &UITree, region: u8, start_node: usize, end_node: usize) {
+    pub fn render_tree_range(
+        &mut self,
+        tree: &UITree,
+        region: u8,
+        start_node: usize,
+        end_node: usize,
+    ) {
         self.begin_scissor_tracking();
 
         tree.traverse_range(region, start_node, end_node, |event| match event {
@@ -1168,7 +1193,14 @@ impl UIRenderer {
     /// When `dirty_only` is true, only draws dirty nodes. The atlas already
     /// contains previous content via LoadOp::Load, so non-dirty nodes are
     /// preserved. Clip events are always processed for correctness.
-    pub fn render_sub_region(&mut self, tree: &UITree, region: u8, start: usize, end: usize, dirty_only: bool) {
+    pub fn render_sub_region(
+        &mut self,
+        tree: &UITree,
+        region: u8,
+        start: usize,
+        end: usize,
+        dirty_only: bool,
+    ) {
         self.begin_scissor_tracking();
 
         tree.traverse_flat_range(region, start, end, dirty_only, |event| match event {
@@ -1209,7 +1241,9 @@ impl UIRenderer {
         let has_transform = if let Some(t) = style.transform {
             let cx = bounds.x + bounds.width * 0.5;
             let cy = bounds.y + bounds.height * 0.5;
-            let pivoted = Affine2::translate(cx, cy).mul(&t).mul(&Affine2::translate(-cx, -cy));
+            let pivoted = Affine2::translate(cx, cy)
+                .mul(&t)
+                .mul(&Affine2::translate(-cx, -cy));
             self.push_transform(pivoted);
             true
         } else {
@@ -1392,11 +1426,7 @@ impl UIRenderer {
                     transform,
                 );
             } else {
-                let text_size = tree.measure_text(
-                    text,
-                    style.font_size,
-                    style.font_weight,
-                );
+                let text_size = tree.measure_text(text, style.font_size, style.font_weight);
                 let fs = style.font_size as f32;
                 let text_y =
                     bounds.y + (bounds.height - text_size.y) * 0.5 + fs * VERTICAL_OPTICAL_NUDGE;
@@ -1410,9 +1440,7 @@ impl UIRenderer {
                 let prefix = style.prefix_label.filter(|p| !p.is_empty());
                 let prefix_advance = match prefix {
                     Some(p) => {
-                        tree.measure_text(p, style.font_size, style.font_weight)
-                            .x
-                            + PREFIX_GAP
+                        tree.measure_text(p, style.font_size, style.font_weight).x + PREFIX_GAP
                     }
                     None => 0.0,
                 };
@@ -1512,9 +1540,9 @@ impl UIRenderer {
             let caret_color = [caret_color.r, caret_color.g, caret_color.b, caret_color.a];
             let caret_font = manifold_ui::color::CHIP_CARET_FONT;
             let size = tree.measure_text(CARET, caret_font, style.font_weight);
-            let caret_x =
-                bounds.x_max() - manifold_ui::color::CHIP_CARET_PAD_X - size.x;
-            let caret_y = bounds.y + (bounds.height - size.y) * 0.5
+            let caret_x = bounds.x_max() - manifold_ui::color::CHIP_CARET_PAD_X - size.x;
+            let caret_y = bounds.y
+                + (bounds.height - size.y) * 0.5
                 + (caret_font as f32) * VERTICAL_OPTICAL_NUDGE;
             let depth = self.current_depth();
             let transform = self.current_transform();
@@ -1554,8 +1582,17 @@ impl UIRenderer {
         {
             let depth = self.current_depth();
             let transform = self.current_transform();
-            self.text_renderer
-                .draw_icon(icon_id, x, y, w, h, color.into().0, clip_bounds, depth, transform);
+            self.text_renderer.draw_icon(
+                icon_id,
+                x,
+                y,
+                w,
+                h,
+                color.into().0,
+                clip_bounds,
+                depth,
+                transform,
+            );
         }
         #[cfg(not(target_os = "macos"))]
         let _ = (icon_id, x, y, w, h, color, clip_bounds);
@@ -1774,7 +1811,11 @@ impl UIRenderer {
                 // A capsule is centred on both endpoints. Extend its quad
                 // beyond the stroke to rasterize the OUTER half of the SDF
                 // coverage fringe; otherwise the quad edge still aliases.
-                let fringe = if cmd.antialiased { 2.0 / sf.max(f32::EPSILON) } else { 0.0 };
+                let fringe = if cmd.antialiased {
+                    2.0 / sf.max(f32::EPSILON)
+                } else {
+                    0.0
+                };
                 let extent = half + fringe;
                 let nx = -dy * inv_len * extent;
                 let ny = dx * inv_len * extent;
@@ -1792,7 +1833,9 @@ impl UIRenderer {
                 };
                 let (u_pad, v_pad) = if cmd.antialiased {
                     (fringe / capsule_length, fringe / thickness)
-                } else { (0.0, 0.0) };
+                } else {
+                    (0.0, 0.0)
+                };
                 let zero_border = [0.0; 4];
                 let zero_grad = [0.0; 4];
                 let base = self.vertices.len() as u32;
@@ -1839,8 +1882,14 @@ impl UIRenderer {
                     grad: zero_grad,
                 });
                 let idx_offset = (self.indices.len() * std::mem::size_of::<u32>()) as u64;
-                self.indices
-                    .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+                self.indices.extend_from_slice(&[
+                    base,
+                    base + 1,
+                    base + 2,
+                    base,
+                    base + 2,
+                    base + 3,
+                ]);
 
                 match line_batches.last_mut() {
                     Some((d, clip, _, count)) if *d == depth && *clip == cmd.clip => {
@@ -1924,7 +1973,12 @@ impl UIRenderer {
                 let uv_rect = cmd.uv;
                 let vertex_offset =
                     (image_vertices.len() * std::mem::size_of::<ImageVertex>()) as u64;
-                image_vertices.push(ImageVertex { position: [cmd.x, cmd.y], uv: [u0, v0], rect_params, uv_rect });
+                image_vertices.push(ImageVertex {
+                    position: [cmd.x, cmd.y],
+                    uv: [u0, v0],
+                    rect_params,
+                    uv_rect,
+                });
                 image_vertices.push(ImageVertex {
                     position: [cmd.x + cmd.w, cmd.y],
                     uv: [u1, v0],
@@ -2108,9 +2162,15 @@ impl UIRenderer {
                 let ph = self.prepared_physical_h;
                 let vbuf = self.image_vbuf_ring[self.prepared_image_slot]
                     .as_ref()
-                    .expect("image_vbuf_ring slot populated when prepared_image_draws is non-empty");
+                    .expect(
+                        "image_vbuf_ring slot populated when prepared_image_draws is non-empty",
+                    );
                 let mut drew_image = false;
-                for draw in self.prepared_image_draws.iter().filter(|d| d.depth == depth) {
+                for draw in self
+                    .prepared_image_draws
+                    .iter()
+                    .filter(|d| d.depth == depth)
+                {
                     let Some(tex) = self.image_textures.get(&draw.handle) else {
                         continue;
                     };
@@ -2126,8 +2186,14 @@ impl UIRenderer {
                                 binding: 0,
                                 data: bytemuck::bytes_of(&self.prepared_globals),
                             },
-                            GpuBinding::Texture { binding: 1, texture: tex },
-                            GpuBinding::Sampler { binding: 2, sampler: &self.image_sampler },
+                            GpuBinding::Texture {
+                                binding: 1,
+                                texture: tex,
+                            },
+                            GpuBinding::Sampler {
+                                binding: 2,
+                                sampler: &self.image_sampler,
+                            },
                         ],
                         vbuf,
                         draw.vertex_offset,
@@ -2162,7 +2228,15 @@ impl manifold_ui::draw::Painter for UIRenderer {
         self.draw_rect(x, y, w, h, color);
     }
 
-    fn draw_rounded_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: manifold_ui::Color32, corner: f32) {
+    fn draw_rounded_rect(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        color: manifold_ui::Color32,
+        corner: f32,
+    ) {
         self.draw_rounded_rect(x, y, w, h, color, corner);
     }
 
@@ -2180,7 +2254,15 @@ impl manifold_ui::draw::Painter for UIRenderer {
         self.draw_bordered_rect(x, y, w, h, color, corner, border_width, border_color);
     }
 
-    fn draw_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, thickness: f32, color: manifold_ui::Color32) {
+    fn draw_line(
+        &mut self,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        thickness: f32,
+        color: manifold_ui::Color32,
+    ) {
         self.draw_line(x0, y0, x1, y1, thickness, color);
     }
 
@@ -2249,7 +2331,10 @@ mod tests {
         let track = snapped_grid_centre(60.0, offset, sf, 1.0);
         let lane = snapped_grid_centre(60.2, offset, sf, 1.0);
         assert_eq!(track, lane);
-        assert!((((track - offset) * sf) - 0.5).rem_euclid(1.0).abs() < 1e-4, "centred in one pixel");
+        assert!(
+            (((track - offset) * sf) - 0.5).rem_euclid(1.0).abs() < 1e-4,
+            "centred in one pixel"
+        );
     }
 
     /// A node with `font_family` queues its text in that installed font
@@ -2266,7 +2351,10 @@ mod tests {
             UIFlags::empty(),
         );
         let start = tree.count();
-        let style = UIStyle { text_color: Color32::WHITE, ..UIStyle::default() };
+        let style = UIStyle {
+            text_color: Color32::WHITE,
+            ..UIStyle::default()
+        };
         let georgia = tree.add_label(None, 0.0, 0.0, 200.0, 24.0, "Georgia", style);
         tree.set_font_family(georgia, "Georgia");
         tree.add_label(None, 0.0, 30.0, 200.0, 24.0, "Plain", style);
@@ -2274,7 +2362,10 @@ mod tests {
 
         ui.begin_frame();
         ui.render_tree(&tree, None);
-        assert_eq!(ui.text_renderer.queued_families(), vec![Some("Georgia"), None]);
+        assert_eq!(
+            ui.text_renderer.queued_families(),
+            vec![Some("Georgia"), None]
+        );
     }
 
     /// Decode-cache proof (PRESET_LIBRARY_DESIGN P6, D7): `register_image` is
@@ -2370,7 +2461,13 @@ mod tests {
         );
 
         tree.end_region(region, content_start);
-        ui.render_sub_region(&tree, region.root.region(), content_start, tree.count(), false);
+        ui.render_sub_region(
+            &tree,
+            region.root.region(),
+            content_start,
+            tree.count(),
+            false,
+        );
 
         // The pill (x=15) and the chevron (x=60) are children of the clip
         // container: their RectCommands must each carry the container's
@@ -2395,7 +2492,13 @@ mod tests {
                 }
             }
         }
-        assert!(pill_checked, "sanity: pill rect must appear in rect_commands");
-        assert!(chevron_checked, "sanity: transformed rect must appear in rect_commands");
+        assert!(
+            pill_checked,
+            "sanity: pill rect must appear in rect_commands"
+        );
+        assert!(
+            chevron_checked,
+            "sanity: transformed rect must appear in rect_commands"
+        );
     }
 }

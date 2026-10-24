@@ -7,7 +7,9 @@
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 
-use super::fields::{Choice, FieldControl, FieldRow, FieldValue, always, enabled, is_object_or_group, wrong_value};
+use super::fields::{
+    Choice, FieldControl, FieldRow, FieldValue, always, enabled, is_object_or_group, wrong_value,
+};
 use super::{Exposure, PropertyRow, Reach, perform, row, setup};
 use crate::scene_doc::{ForceTargets, ForceType, Item, ItemFields, ItemId, ItemKind, SceneDoc};
 
@@ -34,7 +36,11 @@ fn drag(fields: &ItemFields) -> bool {
     is(fields, ForceType::Drag)
 }
 
-const fn r(property: &'static str, exposure: Exposure, when: fn(&ItemFields) -> bool) -> PropertyRow {
+const fn r(
+    property: &'static str,
+    exposure: Exposure,
+    when: fn(&ItemFields) -> bool,
+) -> PropertyRow {
     row(property, Reach::Modifier, F, exposure).when(when)
 }
 
@@ -43,7 +49,9 @@ const fn on_off(when: fn(&ItemFields) -> bool) -> PropertyRow {
 }
 
 const fn centre(property: &'static str, when: fn(&ItemFields) -> bool) -> PropertyRow {
-    r(property, setup(), when).unit(Unit::Metres).limit(HardLimit::Unlimited)
+    r(property, setup(), when)
+        .unit(Unit::Metres)
+        .limit(HardLimit::Unlimited)
 }
 
 const fn strength(when: fn(&ItemFields) -> bool) -> PropertyRow {
@@ -75,7 +83,8 @@ pub static FORCE_ROWS: [PropertyRow; 46] = [
     centre("center_y", radial),
     centre("center_z", radial),
     radius(radial).tip("Full-strength reach in Inverse mode, or outer boundary in Edge mode"),
-    r("falloff", setup(), radial).tip("How steeply strength fades (0 holds full strength everywhere)"),
+    r("falloff", setup(), radial)
+        .tip("How steeply strength fades (0 holds full strength everywhere)"),
     r("curve", setup(), radial).tip("Edge stops at Radius; Inverse reaches past Radius"),
     strength(radial),
     impulse_size(3, radial),
@@ -119,7 +128,9 @@ pub static FORCE_ROWS: [PropertyRow; 46] = [
     drag_held("speed", "Drag is still air: its speed is zero", 0.0),
     drag_held("turbulence", "Drag is still air: it has no gusts", 0.0),
     drag_held("turbulence_size", "Drag is still air: it has no gusts", 2.0),
-    r("air_resistance", perform(FORCES, 1), drag).unit(Unit::PerSecond).name("Drag"),
+    r("air_resistance", perform(FORCES, 1), drag)
+        .unit(Unit::PerSecond)
+        .name("Drag"),
 ];
 
 /// What a Force can be aimed at: Objects and Groups (the bodies at or under
@@ -139,7 +150,8 @@ fn holds(doc: &SceneDoc, kinds: &[ItemKind]) -> bool {
 fn swarm_under(doc: &SceneDoc, id: &ItemId) -> bool {
     let mut any = false;
     doc.walk(|item, ancestors| {
-        any |= item.kind() == ItemKind::Swarm && (&item.id == id || ancestors.iter().any(|holder| &holder.id == id));
+        any |= item.kind() == ItemKind::Swarm
+            && (&item.id == id || ancestors.iter().any(|holder| &holder.id == id));
     });
     any
 }
@@ -155,11 +167,17 @@ pub fn impulse_unavailable(doc: &SceneDoc, item: &Item) -> Option<&'static str> 
         return Some("This force has no impulse");
     }
     match &force.targets {
-        ForceTargets::Physics if !doc.any_physics() && !holds(doc, &[ItemKind::Swarm, ItemKind::Water]) => {
+        ForceTargets::Physics
+            if !doc.any_physics() && !holds(doc, &[ItemKind::Swarm, ItemKind::Water]) =>
+        {
             Some("Nothing in the scene has physics, a swarm or water for this force to push")
         }
         ForceTargets::Items(ids) if ids.is_empty() => Some("Choose the items this force pushes"),
-        ForceTargets::Items(ids) if !ids.iter().any(|id| doc.physical_under(id) || swarm_under(doc, id)) => {
+        ForceTargets::Items(ids)
+            if !ids
+                .iter()
+                .any(|id| doc.physical_under(id) || swarm_under(doc, id)) =>
+        {
             Some("None of the chosen items has physics or is a swarm")
         }
         _ => None,
@@ -167,11 +185,26 @@ pub fn impulse_unavailable(doc: &SceneDoc, item: &Item) -> Option<&'static str> 
 }
 
 const TYPES: &[Choice] = &[
-    Choice { key: "radial", label: "Radial" },
-    Choice { key: "uniform", label: "Uniform" },
-    Choice { key: "vortex", label: "Vortex" },
-    Choice { key: "wind", label: "Wind" },
-    Choice { key: "drag", label: "Drag" },
+    Choice {
+        key: "radial",
+        label: "Radial",
+    },
+    Choice {
+        key: "uniform",
+        label: "Uniform",
+    },
+    Choice {
+        key: "vortex",
+        label: "Vortex",
+    },
+    Choice {
+        key: "wind",
+        label: "Wind",
+    },
+    Choice {
+        key: "drag",
+        label: "Drag",
+    },
 ];
 
 pub static FORCE_FIELDS: [FieldRow; 2] = [
@@ -214,7 +247,11 @@ pub static FORCE_FIELDS: [FieldRow; 2] = [
         id: "targets",
         label: "Targets",
         section: ControlGroup::Force,
-        control: FieldControl::ItemSet { items: is_force_target, all: "Everything with physics", refused: |_, _, _| None },
+        control: FieldControl::ItemSet {
+            items: is_force_target,
+            all: "Everything with physics",
+            refused: |_, _, _| None,
+        },
         applies: always,
         disabled: enabled,
         read: |fields| match fields {

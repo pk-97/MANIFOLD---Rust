@@ -10,12 +10,12 @@ use std::sync::Arc;
 
 use manifold_core::params::ParamManifest;
 use manifold_gpu::GpuTextureFormat;
-use manifold_node_engine::runtime::frame_status::{FrameRenderFailure, FrameRenderStatus};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
-use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::frame_status::{FrameRenderFailure, FrameRenderStatus};
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 const WIDTH: u32 = 160;
 const HEIGHT: u32 = 90;
@@ -56,7 +56,13 @@ fn first_frame_status(json: &str) -> FrameRenderStatus {
         None,
     )
     .unwrap();
-    let target = RenderTarget::new(&harness.device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "node-error");
+    let target = RenderTarget::new(
+        &harness.device,
+        WIDTH,
+        HEIGHT,
+        GpuTextureFormat::Rgba16Float,
+        "node-error",
+    );
     let context = PresetContext {
         time: 0.0,
         beat: 0.0,
@@ -75,7 +81,12 @@ fn first_frame_status(json: &str) -> FrameRenderStatus {
     let mut encoder = harness.device.create_encoder("node-error");
     let status = {
         let mut gpu = RendererGpuEncoder::new(&mut encoder, &harness.device);
-        runtime.render(&mut gpu, &target.texture, &context, &ParamManifest::default());
+        runtime.render(
+            &mut gpu,
+            &target.texture,
+            &context,
+            &ParamManifest::default(),
+        );
         gpu.frame_status()
     };
     encoder.commit_and_wait_completed();
@@ -88,7 +99,13 @@ fn node_error_fails_the_frame() {
     // rejects speed outside 0..=4 and reports ctx.error during the frame.
     // The same graph at a valid speed must complete, so the failure below
     // comes from the speed check and not from the graph breaking elsewhere.
-    assert_eq!(first_frame_status(&domain_graph(1.0)), FrameRenderStatus::Complete);
+    assert_eq!(
+        first_frame_status(&domain_graph(1.0)),
+        FrameRenderStatus::Complete
+    );
     let status = first_frame_status(&domain_graph(5.0));
-    assert_eq!(status, FrameRenderStatus::Failed(FrameRenderFailure::NodeError));
+    assert_eq!(
+        status,
+        FrameRenderStatus::Failed(FrameRenderFailure::NodeError)
+    );
 }

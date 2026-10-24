@@ -1,9 +1,9 @@
 //! Catalog-owned generator construction, resolved once by the compositor.
 
-use std::sync::{Arc, LazyLock};
+use super::PresetRuntime;
 use manifold_core::{PresetTypeId, effect_graph_def::EffectGraphDef, params::ParamManifest};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
-use super::PresetRuntime;
+use std::sync::{Arc, LazyLock};
 
 pub type CreateGenerator = fn(
     Arc<GpuDevice>,
@@ -22,16 +22,22 @@ pub struct GeneratorProvider {
 }
 inventory::collect!(GeneratorProvider);
 
-fn exactly_one<'a>(mut providers: impl Iterator<Item = &'a GeneratorProvider>) -> &'a GeneratorProvider {
-    let provider = providers.next().expect("exactly one generator provider must be linked; found none");
-    assert!(providers.next().is_none(), "exactly one generator provider must be linked; found multiple");
+fn exactly_one<'a>(
+    mut providers: impl Iterator<Item = &'a GeneratorProvider>,
+) -> &'a GeneratorProvider {
+    let provider = providers
+        .next()
+        .expect("exactly one generator provider must be linked; found none");
+    assert!(
+        providers.next().is_none(),
+        "exactly one generator provider must be linked; found multiple"
+    );
     provider
 }
 
 pub fn generator_provider() -> &'static GeneratorProvider {
-    static PROVIDER: LazyLock<&'static GeneratorProvider> = LazyLock::new(|| {
-        exactly_one(inventory::iter::<GeneratorProvider>.into_iter())
-    });
+    static PROVIDER: LazyLock<&'static GeneratorProvider> =
+        LazyLock::new(|| exactly_one(inventory::iter::<GeneratorProvider>.into_iter()));
     *PROVIDER
 }
 
@@ -47,7 +53,10 @@ mod tests {
     #[test]
     fn provider_selection_does_not_prewarm_or_construct() {
         let provider = PROVIDER;
-        assert!(std::ptr::eq(exactly_one([&provider].into_iter()), &provider));
+        assert!(std::ptr::eq(
+            exactly_one([&provider].into_iter()),
+            &provider
+        ));
     }
 
     #[test]

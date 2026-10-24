@@ -1,8 +1,8 @@
 //! Pure-logic tests for the group-aware canvas. Everything that isn't
 //! pixels is exercised here so a misbehaving canvas points to rendering
 //! (eyes only), not logic. Per the handoff doc's debug-friendly mandate.
-use crate::{ScrubPhase, ScrubValue, ValueRef};
 use super::*;
+use crate::{ScrubPhase, ScrubValue, ValueRef};
 // Items used only by tests are imported directly from their module rather than
 // re-exported crate-wide from `mod.rs` (which would read as unused in a
 // non-test build).
@@ -24,7 +24,9 @@ fn port(name: &str) -> PortSnapshot {
 fn node(id: u32, type_id: &str, handle: Option<&str>) -> NodeSnapshot {
     NodeSnapshot {
         id,
-        node_id: handle.map(manifold_foundation::NodeId::new).unwrap_or_default(),
+        node_id: handle
+            .map(manifold_foundation::NodeId::new)
+            .unwrap_or_default(),
         node_handle: handle.map(|h| h.to_string()),
         type_id: type_id.to_string(),
         title: handle.unwrap_or(type_id).to_string(),
@@ -105,7 +107,11 @@ fn set_snapshot_marks_groups_and_navigation_swaps_level() {
     // Root level: the group node is flagged and the inner node is hidden.
     canvas.set_snapshot(&snap);
     assert_eq!(canvas.nodes.len(), 3);
-    let group = canvas.nodes.iter().find(|n| n.is_group).expect("group view");
+    let group = canvas
+        .nodes
+        .iter()
+        .find(|n| n.is_group)
+        .expect("group view");
     assert_eq!(group.id, 10);
     assert!(canvas.nodes.iter().all(|n| n.title != "inner"));
 
@@ -135,7 +141,11 @@ fn visible_node_thumbnails_preview_image_nodes_and_groups_via_producer() {
     // Texture2D), so each gets a preview strip: source, final, and the
     // group — but the group is keyed to its OUTPUT PRODUCER ("inner"), not
     // its own id, since that inner node is the cell already in the atlas.
-    assert_eq!(thumbs.len(), 3, "two image nodes + the group via its producer");
+    assert_eq!(
+        thumbs.len(),
+        3,
+        "two image nodes + the group via its producer"
+    );
     assert!(
         thumbs.iter().any(|(id, ..)| id.as_str() == "inner"),
         "the group previews its inner output producer"
@@ -152,15 +162,27 @@ fn visible_node_thumbnails_preview_image_nodes_and_groups_via_producer() {
 fn preview_screen_size_follows_project_aspect() {
     // Landscape (16:9) is width-bound: full inner width, short.
     let (w, h) = preview_screen_size(16.0 / 9.0);
-    assert!((w - PREVIEW_IMG_W).abs() < 0.01, "16:9 fills the node width");
+    assert!(
+        (w - PREVIEW_IMG_W).abs() < 0.01,
+        "16:9 fills the node width"
+    );
     assert!((w / h - 16.0 / 9.0).abs() < 0.01, "16:9 aspect preserved");
     assert!(h <= PREVIEW_MAX_H, "16:9 height sits under the cap");
 
     // Portrait (9:16) is height-bound: capped height, narrower, aspect kept.
     let (pw, ph) = preview_screen_size(9.0 / 16.0);
-    assert!((ph - PREVIEW_MAX_H).abs() < 0.01, "portrait clamps to the height cap");
-    assert!((pw / ph - 9.0 / 16.0).abs() < 0.01, "portrait aspect preserved");
-    assert!(pw < PREVIEW_IMG_W, "portrait screen is narrower than the band");
+    assert!(
+        (ph - PREVIEW_MAX_H).abs() < 0.01,
+        "portrait clamps to the height cap"
+    );
+    assert!(
+        (pw / ph - 9.0 / 16.0).abs() < 0.01,
+        "portrait aspect preserved"
+    );
+    assert!(
+        pw < PREVIEW_IMG_W,
+        "portrait screen is narrower than the band"
+    );
 
     // A non-finite / non-positive aspect falls back to 16:9 rather than NaN.
     let (fw, fh) = preview_screen_size(0.0);
@@ -188,8 +210,14 @@ fn set_preview_aspect_resizes_screens_and_node_heights() {
         .find(|n| n.preview_screen.is_some())
         .unwrap();
     let (sw, sh) = node.preview_screen.unwrap();
-    assert!((sw / sh - 9.0 / 16.0).abs() < 0.01, "screen took the portrait aspect");
-    assert!(node.height() > landscape_h, "portrait preview makes the node taller");
+    assert!(
+        (sw / sh - 9.0 / 16.0).abs() < 0.01,
+        "screen took the portrait aspect"
+    );
+    assert!(
+        node.height() > landscape_h,
+        "portrait preview makes the node taller"
+    );
 }
 
 #[test]
@@ -393,13 +421,19 @@ fn snapshot_with_param_node(
 #[test]
 fn apply_live_values_refreshes_on_face_value_and_fill() {
     let mut canvas = GraphCanvas::new();
-    canvas.set_snapshot(&snapshot_with_param_node("gain", vec![float_param("amount", 0.25)]));
+    canvas.set_snapshot(&snapshot_with_param_node(
+        "gain",
+        vec![float_param("amount", 0.25)],
+    ));
     // The frozen snapshot value formats to 0.25.
     assert_eq!(canvas.find_node(1).unwrap().params[0].value, "0.25");
 
     // A live value of 0.80 overlays the frozen value, refreshing the string,
     // the fill bar, and the scrub anchor — matched by stable node_id.
-    let live = vec![(manifold_foundation::NodeId::new("gain"), vec![("amount", 0.8_f32)])];
+    let live = vec![(
+        manifold_foundation::NodeId::new("gain"),
+        vec![("amount", 0.8_f32)],
+    )];
     canvas.apply_live_values(&live);
     let pv = &canvas.find_node(1).unwrap().params[0];
     assert_eq!(pv.value, "0.80");
@@ -410,7 +444,10 @@ fn apply_live_values_refreshes_on_face_value_and_fill() {
 #[test]
 fn apply_live_values_skips_the_actively_scrubbed_param() {
     let mut canvas = GraphCanvas::new();
-    canvas.set_snapshot(&snapshot_with_param_node("gain", vec![float_param("amount", 0.25)]));
+    canvas.set_snapshot(&snapshot_with_param_node(
+        "gain",
+        vec![float_param("amount", 0.25)],
+    ));
     // Mid-scrub on this exact (node, param): the drag stays the source of
     // truth, so the live feed must not overwrite it.
     canvas.drag.start(
@@ -424,7 +461,10 @@ fn apply_live_values_skips_the_actively_scrubbed_param() {
         },
         crate::node::Vec2::ZERO,
     );
-    let live = vec![(manifold_foundation::NodeId::new("gain"), vec![("amount", 0.8_f32)])];
+    let live = vec![(
+        manifold_foundation::NodeId::new("gain"),
+        vec![("amount", 0.8_f32)],
+    )];
     canvas.apply_live_values(&live);
     assert_eq!(canvas.find_node(1).unwrap().params[0].value, "0.25");
 }
@@ -432,7 +472,10 @@ fn apply_live_values_skips_the_actively_scrubbed_param() {
 #[test]
 fn apply_live_values_empty_feed_is_a_noop() {
     let mut canvas = GraphCanvas::new();
-    canvas.set_snapshot(&snapshot_with_param_node("gain", vec![float_param("amount", 0.25)]));
+    canvas.set_snapshot(&snapshot_with_param_node(
+        "gain",
+        vec![float_param("amount", 0.25)],
+    ));
     canvas.apply_live_values(&Vec::new());
     assert_eq!(canvas.find_node(1).unwrap().params[0].value, "0.25");
 }
@@ -440,9 +483,15 @@ fn apply_live_values_empty_feed_is_a_noop() {
 #[test]
 fn apply_live_values_ignores_unmatched_node_ids() {
     let mut canvas = GraphCanvas::new();
-    canvas.set_snapshot(&snapshot_with_param_node("gain", vec![float_param("amount", 0.25)]));
+    canvas.set_snapshot(&snapshot_with_param_node(
+        "gain",
+        vec![float_param("amount", 0.25)],
+    ));
     // A live entry for a different node leaves this one untouched.
-    let live = vec![(manifold_foundation::NodeId::new("other"), vec![("amount", 0.8_f32)])];
+    let live = vec![(
+        manifold_foundation::NodeId::new("other"),
+        vec![("amount", 0.8_f32)],
+    )];
     canvas.apply_live_values(&live);
     assert_eq!(canvas.find_node(1).unwrap().params[0].value, "0.25");
 }
@@ -455,7 +504,11 @@ fn grouped_snapshot_with_group_param(current: f32) -> GraphSnapshot {
     let mut inner = node(1, "node.blur", Some("inner"));
     inner.parameters = vec![float_param("amount", current)];
     let body = GroupSnapshot {
-        nodes: vec![node(0, "system.group_input", None), inner, node(2, "system.group_output", None)],
+        nodes: vec![
+            node(0, "system.group_input", None),
+            inner,
+            node(2, "system.group_output", None),
+        ],
         wires: vec![wire(0, "src", 1, "in"), wire(1, "out", 2, "out")],
         tint: None,
     };
@@ -486,14 +539,20 @@ fn apply_live_values_updates_group_face_mirror_row_via_inner_source() {
     canvas.set_snapshot(&grouped_snapshot_with_group_param(0.25));
     let group = canvas.find_node(10).unwrap();
     assert_eq!(group.params.len(), 1);
-    assert_eq!(group.params[0].name, "og_amount", "row is renamed to the outer id (D6)");
+    assert_eq!(
+        group.params[0].name, "og_amount",
+        "row is renamed to the outer id (D6)"
+    );
     assert_eq!(group.params[0].value, "0.25");
 
     // The live entry is keyed by the INNER node's id/param — not the
     // group's own (empty) node_id, and not the row's renamed
     // `outer_param_id` — and must still reach the group-face row via
     // `live_source`.
-    let live = vec![(manifold_foundation::NodeId::new("inner"), vec![("amount", 0.8_f32)])];
+    let live = vec![(
+        manifold_foundation::NodeId::new("inner"),
+        vec![("amount", 0.8_f32)],
+    )];
     canvas.apply_live_values(&live);
     let pv = &canvas.find_node(10).unwrap().params[0];
     assert_eq!(pv.value, "0.80");
@@ -506,7 +565,10 @@ fn apply_live_values_group_face_row_keeps_snapshot_value_when_unmatched() {
     canvas.set_snapshot(&grouped_snapshot_with_group_param(0.25));
     // A live feed with no entry for the inner node's id leaves the mirror
     // row at its frozen snapshot value — no panic, no stale-key match.
-    let live = vec![(manifold_foundation::NodeId::new("unrelated"), vec![("amount", 0.9_f32)])];
+    let live = vec![(
+        manifold_foundation::NodeId::new("unrelated"),
+        vec![("amount", 0.9_f32)],
+    )];
     canvas.apply_live_values(&live);
     let pv = &canvas.find_node(10).unwrap().params[0];
     assert_eq!(pv.value, "0.25");
@@ -515,7 +577,10 @@ fn apply_live_values_group_face_row_keeps_snapshot_value_when_unmatched() {
 #[test]
 fn apply_live_values_feeds_sparkline_history() {
     let mut canvas = GraphCanvas::new();
-    canvas.set_snapshot(&snapshot_with_param_node("gain", vec![float_param("amount", 0.2)]));
+    canvas.set_snapshot(&snapshot_with_param_node(
+        "gain",
+        vec![float_param("amount", 0.2)],
+    ));
     for v in [0.2_f32, 0.5, 0.8] {
         canvas.apply_live_values(&vec![(
             manifold_foundation::NodeId::new("gain"),
@@ -535,7 +600,10 @@ fn apply_live_values_feeds_sparkline_history() {
 #[test]
 fn sparkline_history_is_capped_at_capacity() {
     let mut canvas = GraphCanvas::new();
-    canvas.set_snapshot(&snapshot_with_param_node("gain", vec![float_param("amount", 0.2)]));
+    canvas.set_snapshot(&snapshot_with_param_node(
+        "gain",
+        vec![float_param("amount", 0.2)],
+    ));
     for i in 0..(SPARK_CAPACITY + 10) {
         let v = (i % 10) as f32 / 10.0;
         canvas.apply_live_values(&vec![(
@@ -547,18 +615,29 @@ fn sparkline_history_is_capped_at_capacity() {
         .spark_history
         .get(&manifold_foundation::NodeId::new("gain"))
         .unwrap();
-    assert_eq!(hist.len(), SPARK_CAPACITY, "ring buffer holds the cap, no more");
+    assert_eq!(
+        hist.len(),
+        SPARK_CAPACITY,
+        "ring buffer holds the cap, no more"
+    );
 }
 
 #[test]
 fn topology_rebuild_prunes_stale_sparkline_history() {
     let mut canvas = GraphCanvas::new();
-    canvas.set_snapshot(&snapshot_with_param_node("gain", vec![float_param("amount", 0.2)]));
+    canvas.set_snapshot(&snapshot_with_param_node(
+        "gain",
+        vec![float_param("amount", 0.2)],
+    ));
     canvas.apply_live_values(&vec![(
         manifold_foundation::NodeId::new("gain"),
         vec![("amount", 0.5_f32)],
     )]);
-    assert!(canvas.spark_history.contains_key(&manifold_foundation::NodeId::new("gain")));
+    assert!(
+        canvas
+            .spark_history
+            .contains_key(&manifold_foundation::NodeId::new("gain"))
+    );
 
     // A real topology change (different runtime id, so `hash_level` differs
     // and `set_snapshot` takes the full-rebuild path) evicts the old node's
@@ -571,7 +650,11 @@ fn topology_rebuild_prunes_stale_sparkline_history() {
         outer_routings: Vec::new(),
     };
     canvas.set_snapshot(&snap2);
-    assert!(!canvas.spark_history.contains_key(&manifold_foundation::NodeId::new("gain")));
+    assert!(
+        !canvas
+            .spark_history
+            .contains_key(&manifold_foundation::NodeId::new("gain"))
+    );
 }
 
 // ── Jump-to-node ────────────────────────────────────────────────
@@ -580,7 +663,8 @@ fn topology_rebuild_prunes_stale_sparkline_history() {
 fn find_node_scope_locates_root_and_nested_nodes() {
     let snap = grouped_snapshot();
     // Root-level node: empty scope.
-    let (path, _, rid) = find_node_scope(&snap, &manifold_foundation::NodeId::new("source")).unwrap();
+    let (path, _, rid) =
+        find_node_scope(&snap, &manifold_foundation::NodeId::new("source")).unwrap();
     assert!(path.is_empty());
     assert_eq!(rid, 0);
     // Node inside the group: scope = [group runtime id], title carried.
@@ -764,7 +848,15 @@ fn clicking_expose_glyph_emits_toggle_and_selects() {
                 max,
                 default_value,
                 ..
-            } => Some((node_handle, inner_param, expose, convert, min, max, default_value)),
+            } => Some((
+                node_handle,
+                inner_param,
+                expose,
+                convert,
+                min,
+                max,
+                default_value,
+            )),
             _ => None,
         })
         .expect("expose toggle emitted");
@@ -805,12 +897,16 @@ fn preparation_only_row_stays_editable_without_expose_or_mapping() {
     canvas.on_pointer_move(vp, row.x + row.w * 0.8, row.y + row.h * 0.5);
     canvas.on_left_button_up(vp, row.x + row.w * 0.8, row.y + row.h * 0.5);
     let edits = canvas.drain_edits();
-    assert!(edits
-        .iter()
-        .any(|edit| matches!(edit, GraphEditCommand::SetGraphNodeParam { .. })));
-    assert!(edits
-        .iter()
-        .all(|edit| !matches!(edit, GraphEditCommand::ToggleNodeParamExpose { .. })));
+    assert!(
+        edits
+            .iter()
+            .any(|edit| matches!(edit, GraphEditCommand::SetGraphNodeParam { .. }))
+    );
+    assert!(
+        edits
+            .iter()
+            .all(|edit| !matches!(edit, GraphEditCommand::ToggleNodeParamExpose { .. }))
+    );
 
     let hit = canvas.on_right_button_down(vp, row.x + 4.0, row.y + row.h * 0.5);
     assert!(hit.is_none(), "preparation-only rows cannot open mapping");
@@ -844,7 +940,10 @@ fn pressing_row_body_scrubs_and_emits_no_expose() {
     let row = canvas.param_row_rect(vp, 1, 0).expect("row rect");
     canvas.on_left_button_down(vp, row.x + row.w * 0.7, row.y + row.h * 0.5, 0.0, false);
     // A numeric row starts a scrub, not an expose.
-    assert!(matches!(canvas.drag.payload(), Some(CanvasDrag::ParamScrub { .. })));
+    assert!(matches!(
+        canvas.drag.payload(),
+        Some(CanvasDrag::ParamScrub { .. })
+    ));
     assert!(
         canvas
             .drain_edits()
@@ -876,7 +975,10 @@ fn right_click_track_zone_resets_numeric_param_to_default() {
     assert_eq!((nid, name.as_str()), (1, "amount"));
     match val {
         crate::SerializedParamValue::Float { value } => {
-            assert!((value - 0.0).abs() < 1e-6, "reset must write the declared default (0.0), got {value}");
+            assert!(
+                (value - 0.0).abs() < 1e-6,
+                "reset must write the declared default (0.0), got {value}"
+            );
         }
         other => panic!("expected a Float reset value, got {other:?}"),
     }
@@ -891,7 +993,11 @@ fn right_click_label_zone_still_reports_row_hit_for_mapping_popover() {
     let (mut canvas, vp) = expanded_canvas(float_param("amount", 0.8));
     let row = canvas.param_row_rect(vp, 1, 0).expect("row rect");
     let hit = canvas.on_right_button_down(vp, row.x + 4.0, row.y + row.h * 0.5);
-    assert_eq!(hit, Some((1, 0)), "label-zone right-click must still resolve to the row");
+    assert_eq!(
+        hit,
+        Some((1, 0)),
+        "label-zone right-click must still resolve to the row"
+    );
     assert!(
         canvas
             .drain_edits()
@@ -909,11 +1015,15 @@ fn press_row_value(canvas: &mut GraphCanvas, vp: Rect, pi: usize) {
     canvas.on_left_button_down(vp, row.x + row.w * 0.7, row.y + row.h * 0.5, 0.0, false);
 }
 
-fn drained_set_param(canvas: &mut GraphCanvas) -> Option<(u32, String, crate::SerializedParamValue)> {
+fn drained_set_param(
+    canvas: &mut GraphCanvas,
+) -> Option<(u32, String, crate::SerializedParamValue)> {
     canvas.drain_edits().into_iter().find_map(|a| match a {
-        GraphEditCommand::SetGraphNodeParam { node_id, param_name, new_value } => {
-            Some((node_id, param_name, new_value))
-        }
+        GraphEditCommand::SetGraphNodeParam {
+            node_id,
+            param_name,
+            new_value,
+        } => Some((node_id, param_name, new_value)),
         _ => None,
     })
 }
@@ -923,15 +1033,22 @@ fn clicking_bool_value_toggles_via_set_graph_node_param() {
     // false → true
     let (mut canvas, vp) = expanded_canvas(bool_param("on", 0.0));
     press_row_value(&mut canvas, vp, 0);
-    let (nid, name, val) = drained_set_param(&mut canvas).expect("bool click emits SetGraphNodeParam");
+    let (nid, name, val) =
+        drained_set_param(&mut canvas).expect("bool click emits SetGraphNodeParam");
     assert_eq!((nid, name.as_str()), (1, "on"));
-    assert!(matches!(val, crate::SerializedParamValue::Bool { value: true }));
+    assert!(matches!(
+        val,
+        crate::SerializedParamValue::Bool { value: true }
+    ));
 
     // true → false
     let (mut canvas, vp) = expanded_canvas(bool_param("on", 1.0));
     press_row_value(&mut canvas, vp, 0);
     let (_, _, val) = drained_set_param(&mut canvas).expect("emits");
-    assert!(matches!(val, crate::SerializedParamValue::Bool { value: false }));
+    assert!(matches!(
+        val,
+        crate::SerializedParamValue::Bool { value: false }
+    ));
 }
 
 #[test]
@@ -951,7 +1068,10 @@ fn clicking_enum_value_opens_dropdown_without_a_command() {
     let (mut canvas, vp) = expanded_canvas(enum_param("mode", 1.0));
     press_row_value(&mut canvas, vp, 0);
     // No value command yet — the dropdown is now open, seeded from the param.
-    assert!(drained_set_param(&mut canvas).is_none(), "opening the list emits nothing");
+    assert!(
+        drained_set_param(&mut canvas).is_none(),
+        "opening the list emits nothing"
+    );
     let dd = canvas.enum_dropdown.as_ref().expect("dropdown open");
     assert_eq!(dd.node_id, 1);
     assert_eq!(dd.param_name, "mode");
@@ -968,7 +1088,10 @@ fn picking_enum_option_emits_set_and_closes() {
     canvas.on_left_button_down(vp, opt.x + opt.w * 0.5, opt.y + opt.h * 0.5, 0.0, false);
     let (nid, name, val) = drained_set_param(&mut canvas).expect("pick emits SetGraphNodeParam");
     assert_eq!((nid, name.as_str()), (1, "mode"));
-    assert!(matches!(val, crate::SerializedParamValue::Enum { value: 2 }));
+    assert!(matches!(
+        val,
+        crate::SerializedParamValue::Enum { value: 2 }
+    ));
     assert!(canvas.enum_dropdown.is_none(), "picking closes the list");
 }
 
@@ -978,7 +1101,10 @@ fn picking_current_enum_option_emits_nothing_and_closes() {
     press_row_value(&mut canvas, vp, 0);
     let opt = canvas.enum_dropdown.as_ref().unwrap().option_rect(1); // == current
     canvas.on_left_button_down(vp, opt.x + opt.w * 0.5, opt.y + opt.h * 0.5, 0.0, false);
-    assert!(drained_set_param(&mut canvas).is_none(), "re-picking current is a no-op");
+    assert!(
+        drained_set_param(&mut canvas).is_none(),
+        "re-picking current is a no-op"
+    );
     assert!(canvas.enum_dropdown.is_none(), "still closes");
 }
 
@@ -1059,13 +1185,19 @@ fn pressing_a_color_channel_starts_a_vec_scrub() {
     let g = canvas.vec_editor.as_ref().unwrap().channel_rect(1); // G
     canvas.on_left_button_down(vp, g.x + g.w * 0.3, g.y + g.h * 0.5, 0.0, false);
     assert!(
-        matches!(canvas.drag.payload(), Some(CanvasDrag::VecScrub { channel: 1, .. })),
+        matches!(
+            canvas.drag.payload(),
+            Some(CanvasDrag::VecScrub { channel: 1, .. })
+        ),
         "channel press starts a scrub on that channel"
     );
     // Starting the scrub is not itself a value edit.
     assert!(drained_set_param(&mut canvas).is_none());
     // The panel stays open so another channel can be grabbed.
-    assert!(canvas.vec_editor.is_some(), "editor stays open during a scrub");
+    assert!(
+        canvas.vec_editor.is_some(),
+        "editor stays open during a scrub"
+    );
 }
 
 #[test]
@@ -1173,7 +1305,11 @@ fn pressing_inside_vec_editor_header_swallows_and_stays_open() {
 fn color_param_carries_vec_value_onto_the_face() {
     let (canvas, _vp) = expanded_canvas(color_param("tint", [0.25, 0.5, 0.75, 1.0]));
     let pv = &canvas.find_node(1).unwrap().params[0];
-    assert_eq!(pv.vec_value, [0.25, 0.5, 0.75, 1.0], "vec value on the face");
+    assert_eq!(
+        pv.vec_value,
+        [0.25, 0.5, 0.75, 1.0],
+        "vec value on the face"
+    );
     assert_eq!(pv.value, "#4080BF", "hex string on the face");
 }
 
@@ -1266,9 +1402,10 @@ fn clicking_path_value_opens_native_browse() {
         .drain_edits()
         .into_iter()
         .find_map(|a| match a {
-            GraphEditCommand::BrowseGraphNodePath { node_id, param_name } => {
-                Some((node_id, param_name))
-            }
+            GraphEditCommand::BrowseGraphNodePath {
+                node_id,
+                param_name,
+            } => Some((node_id, param_name)),
             _ => None,
         })
         .expect("path click opens the folder picker");
@@ -1280,7 +1417,10 @@ fn path_param_is_flagged_on_the_face() {
     let (canvas, _vp) = expanded_canvas(string_param("output_path", "/x"));
     assert!(canvas.find_node(1).unwrap().params[0].is_path, "path param");
     let (canvas2, _vp) = expanded_canvas(string_param("caption", "hi"));
-    assert!(!canvas2.find_node(1).unwrap().params[0].is_path, "free text");
+    assert!(
+        !canvas2.find_node(1).unwrap().params[0].is_path,
+        "free text"
+    );
 }
 
 #[test]
@@ -1328,7 +1468,10 @@ fn clicking_a_table_cell_emits_edit_table_cell() {
     assert_eq!(cmd.4, 12.0, "current cell value");
     assert_eq!(cmd.5, rows, "whole table stashed for the rebuild");
     // The grid stays open so more cells can be edited.
-    assert!(canvas.table_editor.is_some(), "grid stays open across a cell edit");
+    assert!(
+        canvas.table_editor.is_some(),
+        "grid stays open across a cell edit"
+    );
 }
 
 #[test]
@@ -1352,7 +1495,10 @@ fn pressing_inside_table_editor_header_swallows_and_stays_open() {
     let hy = anchor.y + anchor.h + anchor.h * 0.5; // header row centre
     canvas.on_left_button_down(vp, anchor.x + anchor.w * 0.5, hy, 0.0, false);
     assert!(canvas.table_editor.is_some(), "header press keeps it open");
-    assert!(canvas.drain_edits().is_empty(), "header press emits nothing");
+    assert!(
+        canvas.drain_edits().is_empty(),
+        "header press emits nothing"
+    );
 }
 
 #[test]
@@ -1368,15 +1514,19 @@ fn wgsl_node_has_edit_code_footer_and_click_opens_editor() {
         .drain_edits()
         .into_iter()
         .find_map(|a| match a {
-            GraphEditCommand::EditGraphNodeWgsl { node_id, current, .. } => {
-                Some((node_id, current))
-            }
+            GraphEditCommand::EditGraphNodeWgsl {
+                node_id, current, ..
+            } => Some((node_id, current)),
             _ => None,
         })
         .expect("footer click opens the WGSL editor");
     assert_eq!(cmd.0, 1, "node id");
     assert_eq!(cmd.1, "fn main() {}", "current kernel source");
-    assert_eq!(canvas.selected_ids(), vec![1], "footer click selects the node");
+    assert_eq!(
+        canvas.selected_ids(),
+        vec![1],
+        "footer click selects the node"
+    );
 }
 
 #[test]
@@ -1485,7 +1635,11 @@ fn distributor_snapshot(wired: bool) -> GraphSnapshot {
     sink.outputs = vec![port("out")];
     GraphSnapshot {
         nodes: vec![dist, sink],
-        wires: if wired { vec![wire(1, "a", 2, "in")] } else { Vec::new() },
+        wires: if wired {
+            vec![wire(1, "a", 2, "in")]
+        } else {
+            Vec::new()
+        },
         outer_routings: Vec::new(),
     }
 }
@@ -1543,21 +1697,50 @@ fn revealing_shows_all_sockets_but_keeps_hideable_count() {
         "revealed → all outputs shown"
     );
     assert!(dist.revealed);
-    assert_eq!(dist.hideable_ports, 2, "chip still knows 2 can be re-hidden");
+    assert_eq!(
+        dist.hideable_ports, 2,
+        "chip still knows 2 can be re-hidden"
+    );
 }
 
 #[test]
 fn clicking_reveal_chip_toggles_and_rebuilds() {
     let (mut canvas, vp) = expanded_dist(true);
-    let chip = canvas.reveal_chip_rect(vp, 1).expect("chip shows when hideable > 0");
+    let chip = canvas
+        .reveal_chip_rect(vp, 1)
+        .expect("chip shows when hideable > 0");
     canvas.on_left_button_down(vp, chip.x + chip.w * 0.5, chip.y + chip.h * 0.5, 0.0, false);
-    assert_eq!(canvas.revealed_ports.get(&1).copied(), Some(true), "chip revealed");
-    assert_eq!(canvas.find_node(1).unwrap().rows.len(), 3, "all outputs now shown");
+    assert_eq!(
+        canvas.revealed_ports.get(&1).copied(),
+        Some(true),
+        "chip revealed"
+    );
+    assert_eq!(
+        canvas.find_node(1).unwrap().rows.len(),
+        3,
+        "all outputs now shown"
+    );
     // Click again → re-hide.
-    let chip2 = canvas.reveal_chip_rect(vp, 1).expect("chip still shows (hideable)");
-    canvas.on_left_button_down(vp, chip2.x + chip2.w * 0.5, chip2.y + chip2.h * 0.5, 0.0, false);
-    assert_eq!(canvas.revealed_ports.get(&1).copied(), Some(false), "chip re-hidden");
-    assert_eq!(canvas.find_node(1).unwrap().rows.len(), 1, "back to the wired output");
+    let chip2 = canvas
+        .reveal_chip_rect(vp, 1)
+        .expect("chip still shows (hideable)");
+    canvas.on_left_button_down(
+        vp,
+        chip2.x + chip2.w * 0.5,
+        chip2.y + chip2.h * 0.5,
+        0.0,
+        false,
+    );
+    assert_eq!(
+        canvas.revealed_ports.get(&1).copied(),
+        Some(false),
+        "chip re-hidden"
+    );
+    assert_eq!(
+        canvas.find_node(1).unwrap().rows.len(),
+        1,
+        "back to the wired output"
+    );
 }
 
 #[test]
@@ -1575,9 +1758,18 @@ fn hidden_outputs_have_no_row_so_hit_test_skips_them() {
     // `a` wired, only `a` keeps a row, so b/c can't be wire-drag targets.
     let (canvas, _vp) = expanded_dist(true);
     let dist = canvas.find_node(1).unwrap();
-    assert!(dist.output_row_of(0).is_some(), "wired output a keeps its row");
-    assert!(dist.output_row_of(1).is_none(), "hidden output b has no row");
-    assert!(dist.output_row_of(2).is_none(), "hidden output c has no row");
+    assert!(
+        dist.output_row_of(0).is_some(),
+        "wired output a keeps its row"
+    );
+    assert!(
+        dist.output_row_of(1).is_none(),
+        "hidden output b has no row"
+    );
+    assert!(
+        dist.output_row_of(2).is_none(),
+        "hidden output c has no row"
+    );
 }
 
 // ─── Phase 5: wire-driven / outer-driven state + read-only lockout ───────────
@@ -1629,8 +1821,15 @@ fn import_shaped_graph_fits_all_nodes_on_open() {
             "node.render_scene",
             "render",
             &[
-                "camera", "envmap", "light_0", "mesh_0", "material_0", "base_color_map_0",
-                "mesh_1", "material_1", "base_color_map_1",
+                "camera",
+                "envmap",
+                "light_0",
+                "mesh_0",
+                "material_0",
+                "base_color_map_0",
+                "mesh_1",
+                "material_1",
+                "base_color_map_1",
             ],
             &["color"],
         ),
@@ -1651,7 +1850,11 @@ fn import_shaped_graph_fits_all_nodes_on_open() {
         wire(9, "out", 10, "base_color_map_1"),
         wire(10, "color", 11, "in"),
     ];
-    let snap = GraphSnapshot { nodes, wires, outer_routings: Vec::new() };
+    let snap = GraphSnapshot {
+        nodes,
+        wires,
+        outer_routings: Vec::new(),
+    };
 
     let mut canvas = GraphCanvas::new();
     canvas.set_snapshot(&snap);
@@ -1672,7 +1875,10 @@ fn import_shaped_graph_fits_all_nodes_on_open() {
                 && right <= viewport.x + viewport.w + 1.0
                 && bottom <= viewport.y + viewport.h + 1.0;
             (!inside).then(|| {
-                format!("{} screen=({sx:.0},{sy:.0}..{bottom:.0})", n.handle.as_deref().unwrap_or("?"))
+                format!(
+                    "{} screen=({sx:.0},{sy:.0}..{bottom:.0})",
+                    n.handle.as_deref().unwrap_or("?")
+                )
             })
         })
         .collect();
@@ -1710,7 +1916,11 @@ fn tall_fan_in(count: u32) -> GraphSnapshot {
     let final_id = sink_id + 1;
     nodes.push(node(final_id, "system.final_output", Some("final")));
     wires.push(wire(sink_id, "out", final_id, "in"));
-    GraphSnapshot { nodes, wires, outer_routings: Vec::new() }
+    GraphSnapshot {
+        nodes,
+        wires,
+        outer_routings: Vec::new(),
+    }
 }
 
 /// Peter's "on zoom it scrolls to an empty graph" report: after zoom-to-fit
@@ -1891,8 +2101,14 @@ fn node_previews_render_in_per_node_depth_bands() {
     // paints their previews inline. Keyed by preview_node_id (== node_id here).
     let handle = crate::node::texture_handle_for_key("test-atlas");
     let mut src = ahash::AHashMap::new();
-    src.insert(manifold_foundation::NodeId::new("na"), (handle, [0.0, 0.0, 1.0, 1.0]));
-    src.insert(manifold_foundation::NodeId::new("nb"), (handle, [0.0, 0.0, 1.0, 1.0]));
+    src.insert(
+        manifold_foundation::NodeId::new("na"),
+        (handle, [0.0, 0.0, 1.0, 1.0]),
+    );
+    src.insert(
+        manifold_foundation::NodeId::new("nb"),
+        (handle, [0.0, 0.0, 1.0, 1.0]),
+    );
     canvas.set_node_preview_src(src);
 
     let mut rec = Rec::default();
@@ -1901,7 +2117,12 @@ fn node_previews_render_in_per_node_depth_bands() {
     let content = Depth::CONTENT.0;
     // Node chrome draws above CONTENT; wires/header/bg are at/below it. Distinct
     // node-band depths, in order:
-    let mut bands: Vec<i32> = rec.rect_depths.iter().copied().filter(|d| *d > content).collect();
+    let mut bands: Vec<i32> = rec
+        .rect_depths
+        .iter()
+        .copied()
+        .filter(|d| *d > content)
+        .collect();
     bands.sort_unstable();
     bands.dedup();
     assert_eq!(
@@ -1976,7 +2197,10 @@ fn outer_driven_snapshot() -> GraphSnapshot {
 fn wire_on_same_named_port_marks_param_wire_driven() {
     let (canvas, _vp) = expanded_canvas_from(wire_driven_snapshot(false));
     let p = &canvas.find_node(1).unwrap().params[0];
-    assert!(p.wire_driven, "an input wire on the shadow port drives the param");
+    assert!(
+        p.wire_driven,
+        "an input wire on the shadow port drives the param"
+    );
     assert!(p.outer_driver.is_none(), "no outer routing");
 }
 
@@ -1988,10 +2212,7 @@ fn wire_driven_row_is_read_only_no_scrub() {
     canvas.on_left_button_down(vp, row.x + row.w * 0.7, row.y + row.h * 0.5, 0.0, false);
     // It selects the node but starts no scrub and emits nothing.
     assert_eq!(canvas.selected_ids(), vec![1], "still selects");
-    assert!(
-        !canvas.drag.is_active(),
-        "wire-driven row starts no scrub"
-    );
+    assert!(!canvas.drag.is_active(), "wire-driven row starts no scrub");
     assert!(canvas.drain_edits().is_empty(), "and emits no command");
 }
 
@@ -2015,7 +2236,11 @@ fn wire_driven_row_expose_glyph_is_dead() {
 fn outer_routing_marks_param_outer_driven_but_editable() {
     let (mut canvas, vp) = expanded_canvas_from(outer_driven_snapshot());
     let p = &canvas.find_node(1).unwrap().params[0];
-    assert_eq!(p.outer_driver.as_deref(), Some("Master"), "carries the label");
+    assert_eq!(
+        p.outer_driver.as_deref(),
+        Some("Master"),
+        "carries the label"
+    );
     assert!(!p.wire_driven, "no wire");
     // Outer-driven rows STAY editable — pressing the value starts a scrub.
     let row = canvas.param_row_rect(vp, 1, 0).unwrap();
@@ -2034,7 +2259,11 @@ fn wire_wins_when_both_wire_and_outer_drive_a_param() {
     // the row is read-only. The outer label is still resolved (for reference),
     // but render surfaces "← wired" first.
     assert!(p.wire_driven, "wire present → read-only");
-    assert_eq!(p.outer_driver.as_deref(), Some("Macro 1"), "outer still resolved");
+    assert_eq!(
+        p.outer_driver.as_deref(),
+        Some("Macro 1"),
+        "outer still resolved"
+    );
 }
 
 #[test]
@@ -2107,7 +2336,9 @@ fn removing_the_wire_reclaims_the_param() {
 #[test]
 fn marquee_fades_in_while_dragging_and_out_after_release() {
     let mut canvas = GraphCanvas::new();
-    canvas.drag.start(CanvasDrag::Marquee, crate::node::Vec2::new(10.0, 10.0));
+    canvas
+        .drag
+        .start(CanvasDrag::Marquee, crate::node::Vec2::new(10.0, 10.0));
     canvas.cursor = (50.0, 40.0);
 
     assert!(canvas.tick(16.0), "still animating toward alpha 1");
@@ -2129,7 +2360,10 @@ fn marquee_fades_in_while_dragging_and_out_after_release() {
     canvas.drag.cancel();
     assert!(canvas.tick(16.0), "now easing back toward 0");
     assert!(canvas.marquee_alpha.value() < 1.0, "fading out");
-    assert!(canvas.marquee_last_rect.is_some(), "rect held onto through the fade-out");
+    assert!(
+        canvas.marquee_last_rect.is_some(),
+        "rect held onto through the fade-out"
+    );
 
     for _ in 0..20 {
         canvas.tick(20.0);
@@ -2149,7 +2383,10 @@ fn valid_wire_drop_fires_connect_pop_not_error_shake() {
     for _ in 0..30 {
         canvas.tick(20.0);
     }
-    assert!(canvas.connect_pop.progress().is_none(), "pop finishes on its own");
+    assert!(
+        canvas.connect_pop.progress().is_none(),
+        "pop finishes on its own"
+    );
 }
 
 #[test]
@@ -2163,7 +2400,10 @@ fn invalid_wire_drop_fires_error_shake_not_connect_pop() {
     for _ in 0..30 {
         canvas.tick(20.0);
     }
-    assert!(canvas.error_shake.progress().is_none(), "shake finishes on its own");
+    assert!(
+        canvas.error_shake.progress().is_none(),
+        "shake finishes on its own"
+    );
 }
 
 #[test]
@@ -2177,11 +2417,17 @@ fn dropping_a_wire_on_empty_canvas_fires_error_shake() {
     let vp = Rect::new(0.0, 0.0, 2000.0, 2000.0);
 
     canvas.drag.start(
-        CanvasDrag::WireFrom { from_node: 1, from_port: "out".into() },
+        CanvasDrag::WireFrom {
+            from_node: 1,
+            from_port: "out".into(),
+        },
         crate::node::Vec2::ZERO,
     );
     canvas.on_left_button_up(vp, 9999.0, 9999.0); // far off any node/port
-    assert!(canvas.error_shake.progress().is_some(), "invalid drop shakes");
+    assert!(
+        canvas.error_shake.progress().is_some(),
+        "invalid drop shakes"
+    );
     assert!(canvas.connect_pop.progress().is_none());
 }
 
@@ -2191,18 +2437,32 @@ fn finish_pointer_capture_discards_unfinished_wire_and_marquee() {
     let mut canvas = GraphCanvas::new();
 
     canvas.drag.start(
-        CanvasDrag::WireFrom { from_node: 1, from_port: "out".into() },
+        CanvasDrag::WireFrom {
+            from_node: 1,
+            from_port: "out".into(),
+        },
         crate::node::Vec2::new(20.0, 20.0),
     );
     assert!(canvas.finish_pointer_capture(viewport));
     assert!(!canvas.drag.is_active());
-    assert!(canvas.drain_edits().is_empty(), "unfinished wire emits no command");
+    assert!(
+        canvas.drain_edits().is_empty(),
+        "unfinished wire emits no command"
+    );
 
-    canvas.drag.start(CanvasDrag::Marquee, crate::node::Vec2::new(30.0, 30.0));
+    canvas
+        .drag
+        .start(CanvasDrag::Marquee, crate::node::Vec2::new(30.0, 30.0));
     assert!(canvas.finish_pointer_capture(viewport));
     assert!(!canvas.drag.is_active());
-    assert!(canvas.drain_edits().is_empty(), "unfinished marquee emits no command");
-    assert!(!canvas.finish_pointer_capture(viewport), "idle canvas has no capture");
+    assert!(
+        canvas.drain_edits().is_empty(),
+        "unfinished marquee emits no command"
+    );
+    assert!(
+        !canvas.finish_pointer_capture(viewport),
+        "idle canvas has no capture"
+    );
 }
 
 #[test]
@@ -2247,7 +2507,10 @@ fn wire_magnet_eases_the_ghost_endpoint_onto_a_nearby_input_port() {
     // Drag from node 2's output, cursor placed exactly on node 1's input —
     // well within `port_under`'s hit radius.
     canvas.drag.start(
-        CanvasDrag::WireFrom { from_node: 2, from_port: "out".into() },
+        CanvasDrag::WireFrom {
+            from_node: 2,
+            from_port: "out".into(),
+        },
         crate::node::Vec2::ZERO,
     );
     canvas.cursor = (in_sx, in_sy);
@@ -2273,13 +2536,20 @@ fn wire_magnet_tracks_the_cursor_directly_when_no_port_is_near() {
     let vp = Rect::new(0.0, 0.0, 2000.0, 2000.0);
 
     canvas.drag.start(
-        CanvasDrag::WireFrom { from_node: 2, from_port: "out".into() },
+        CanvasDrag::WireFrom {
+            from_node: 2,
+            from_port: "out".into(),
+        },
         crate::node::Vec2::ZERO,
     );
     canvas.cursor = (1900.0, 1900.0); // far from every port
     canvas.tick_wire_magnet(vp);
     let (ex, ey) = canvas.wire_ghost_endpoint();
-    assert_eq!((ex, ey), (1900.0, 1900.0), "no lag when nothing is in magnet range");
+    assert_eq!(
+        (ex, ey),
+        (1900.0, 1900.0),
+        "no lag when nothing is in magnet range"
+    );
 }
 
 #[test]
@@ -2293,7 +2563,10 @@ fn wire_flow_pulse_fires_and_settles() {
     for _ in 0..20 {
         canvas.tick(20.0);
     }
-    assert!(canvas.wire_flow_pulse.progress().is_none(), "pulse finishes on its own");
+    assert!(
+        canvas.wire_flow_pulse.progress().is_none(),
+        "pulse finishes on its own"
+    );
 }
 
 #[test]
@@ -2312,12 +2585,18 @@ fn connecting_a_wire_end_to_end_fires_the_flow_pulse_with_real_port_geometry() {
     let (in_sx, in_sy) = canvas.to_screen(vp, in_gx, in_gy);
 
     canvas.drag.start(
-        CanvasDrag::WireFrom { from_node: 2, from_port: "out".into() },
+        CanvasDrag::WireFrom {
+            from_node: 2,
+            from_port: "out".into(),
+        },
         crate::node::Vec2::ZERO,
     );
     canvas.on_left_button_up(vp, in_sx, in_sy);
 
-    assert!(canvas.wire_flow_pulse.progress().is_some(), "connect fires the pulse");
+    assert!(
+        canvas.wire_flow_pulse.progress().is_some(),
+        "connect fires the pulse"
+    );
     assert!((canvas.wire_flow_pulse_from.0 - out_sx).abs() < 0.01);
     assert!((canvas.wire_flow_pulse_from.1 - out_sy).abs() < 0.01);
     assert!((canvas.wire_flow_pulse_to.0 - in_sx).abs() < 0.01);
@@ -2344,7 +2623,10 @@ fn graph_canvas_targets_enumerates_nodes_ports_and_wires_with_payload_ids() {
     let viewport = Rect::new(0.0, 0.0, 1000.0, 800.0);
     canvas.apply_pending_fit(viewport);
 
-    let targets = GraphCanvasTargets { canvas: &canvas, viewport };
+    let targets = GraphCanvasTargets {
+        canvas: &canvas,
+        viewport,
+    };
     assert_eq!(targets.surface_id(), "graph_canvas");
     let mut out = Vec::new();
     targets.enumerate(&mut out);
@@ -2393,9 +2675,17 @@ fn outer_routing(
 /// ("Amount"). One group, one level.
 fn grouped_snapshot_with_exposed_param(current: f32) -> GraphSnapshot {
     let mut snap = grouped_snapshot();
-    let group = snap.nodes.iter_mut().find(|n| n.type_id == GROUP_TYPE_ID).unwrap();
+    let group = snap
+        .nodes
+        .iter_mut()
+        .find(|n| n.type_id == GROUP_TYPE_ID)
+        .unwrap();
     let body = group.group.as_mut().unwrap();
-    let inner = body.nodes.iter_mut().find(|n| n.node_handle.as_deref() == Some("inner")).unwrap();
+    let inner = body
+        .nodes
+        .iter_mut()
+        .find(|n| n.node_handle.as_deref() == Some("inner"))
+        .unwrap();
     inner.parameters = vec![float_param("amount", current)];
     snap.outer_routings = vec![outer_routing("card_amount", "Amount", "inner", "amount")];
     snap
@@ -2410,7 +2700,11 @@ fn nested_group_snapshot_with_exposed_param(current: f32) -> GraphSnapshot {
     let mut leaf = node(1, "node.blur", Some("leaf"));
     leaf.parameters = vec![float_param("amount", current)];
     let inner_body = GroupSnapshot {
-        nodes: vec![node(0, "system.group_input", None), leaf, node(2, "system.group_output", None)],
+        nodes: vec![
+            node(0, "system.group_input", None),
+            leaf,
+            node(2, "system.group_output", None),
+        ],
         wires: vec![wire(0, "src", 1, "in"), wire(1, "out", 2, "out")],
         tint: None,
     };
@@ -2420,7 +2714,11 @@ fn nested_group_snapshot_with_exposed_param(current: f32) -> GraphSnapshot {
     inner_group.group = Some(Box::new(inner_body));
 
     let outer_body = GroupSnapshot {
-        nodes: vec![node(0, "system.group_input", None), inner_group, node(2, "system.group_output", None)],
+        nodes: vec![
+            node(0, "system.group_input", None),
+            inner_group,
+            node(2, "system.group_output", None),
+        ],
         wires: vec![wire(0, "src", 20, "src"), wire(20, "out", 2, "out")],
         tint: None,
     };
@@ -2447,9 +2745,16 @@ fn group_face_row_appears_for_inner_targeted_card_param() {
     canvas.set_snapshot(&grouped_snapshot_with_exposed_param(0.25));
 
     let group = canvas.find_node(10).expect("group node");
-    assert_eq!(group.params.len(), 1, "one mirrored row for the exposed inner param");
+    assert_eq!(
+        group.params.len(),
+        1,
+        "one mirrored row for the exposed inner param"
+    );
     let row = &group.params[0];
-    assert_eq!(row.label, "Amount", "row label is the OUTER card label, not the inner param name");
+    assert_eq!(
+        row.label, "Amount",
+        "row label is the OUTER card label, not the inner param name"
+    );
     assert_eq!(row.value, "0.25");
     assert_eq!(
         row.outer_param_id.as_deref(),
@@ -2458,16 +2763,29 @@ fn group_face_row_appears_for_inner_targeted_card_param() {
     );
     // A param with no exposing routing draws no row: build_group_param_rows is
     // exposed-only, never the deleted authoring picker.
-    assert!(group.rows.iter().any(|r| matches!(r, NodeRow::Param { .. })));
+    assert!(
+        group
+            .rows
+            .iter()
+            .any(|r| matches!(r, NodeRow::Param { .. }))
+    );
 }
 
 #[test]
 fn group_face_row_absent_when_no_outer_routing_targets_the_group() {
     let mut snap = grouped_snapshot();
     // Give `inner` a param but expose NOTHING — no `OuterParamRouting` at all.
-    let group = snap.nodes.iter_mut().find(|n| n.type_id == GROUP_TYPE_ID).unwrap();
+    let group = snap
+        .nodes
+        .iter_mut()
+        .find(|n| n.type_id == GROUP_TYPE_ID)
+        .unwrap();
     let body = group.group.as_mut().unwrap();
-    let inner = body.nodes.iter_mut().find(|n| n.node_handle.as_deref() == Some("inner")).unwrap();
+    let inner = body
+        .nodes
+        .iter_mut()
+        .find(|n| n.node_handle.as_deref() == Some("inner"))
+        .unwrap();
     inner.parameters = vec![float_param("amount", 0.25)];
     let mut canvas = GraphCanvas::new();
     canvas.collapsed.insert(10, false);
@@ -2512,12 +2830,20 @@ fn group_face_scrub_emits_set_outer_param_matching_card_value() {
     canvas.collapsed.insert(10, false);
     canvas.set_snapshot(&grouped_snapshot_with_exposed_param(0.25));
 
-    let row = canvas.param_row_rect(Rect::new(0.0, 0.0, 1200.0, 800.0), 10, 0).expect("row rect");
+    let row = canvas
+        .param_row_rect(Rect::new(0.0, 0.0, 1200.0, 800.0), 10, 0)
+        .expect("row rect");
     let vp = Rect::new(0.0, 0.0, 1200.0, 800.0);
     let px = row.x + row.w * 0.7;
     canvas.on_left_button_down(vp, px, row.y + row.h * 0.5, 0.0, false);
     assert!(
-        matches!(canvas.drag.payload(), Some(CanvasDrag::ParamScrub { outer_param_id: Some(_), .. })),
+        matches!(
+            canvas.drag.payload(),
+            Some(CanvasDrag::ParamScrub {
+                outer_param_id: Some(_),
+                ..
+            })
+        ),
         "the row's CanvasDrag carries the outer_param_id marker"
     );
     // +120px on a (0,1)-range Float, same PARAM_SCRUB_FULL_RANGE_PX math the
@@ -2528,20 +2854,30 @@ fn group_face_scrub_emits_set_outer_param_matching_card_value() {
         .drain_edits()
         .into_iter()
         .find_map(|a| match a {
-            GraphEditCommand::SetOuterParam { outer_param_id, new_value } => {
-                Some((outer_param_id, new_value))
-            }
+            GraphEditCommand::SetOuterParam {
+                outer_param_id,
+                new_value,
+            } => Some((outer_param_id, new_value)),
             _ => None,
         })
         .expect("scrub emits SetOuterParam, not SetGraphNodeParam");
-    assert_eq!(outer_param_id, "card_amount", "same ParamId string the card's own binding carries");
-    assert!((new_value - 0.75).abs() < 1e-3, "same scrub math as an ordinary node-face row");
+    assert_eq!(
+        outer_param_id, "card_amount",
+        "same ParamId string the card's own binding carries"
+    );
+    assert!(
+        (new_value - 0.75).abs() < 1e-3,
+        "same scrub math as an ordinary node-face row"
+    );
 
     // The card-path equivalent: what `param_card.rs`'s own ParamChanged arm
     // would build for this exact (id, value) pair.
     let target = GraphParamTarget::Effect(manifold_foundation::EffectId::new("fx0"));
     let mirrored = PanelAction::Scrub(
-        ValueRef::Param(target, manifold_foundation::ParamId::from(outer_param_id.clone())),
+        ValueRef::Param(
+            target,
+            manifold_foundation::ParamId::from(outer_param_id.clone()),
+        ),
         ScrubPhase::Move(ScrubValue::Scalar(new_value)),
     );
     let card_would_emit = PanelAction::Scrub(
@@ -2574,7 +2910,11 @@ fn group_face_row_wire_driven_when_inner_param_is_wire_fed() {
     // `amount`-named port by naming it via a synthetic wire (the row's
     // wire-driven check only cares about `to_port == "amount"`, not that a
     // declared port exists — mirrors the ordinary-node check).
-    let group = snap.nodes.iter_mut().find(|n| n.type_id == GROUP_TYPE_ID).unwrap();
+    let group = snap
+        .nodes
+        .iter_mut()
+        .find(|n| n.type_id == GROUP_TYPE_ID)
+        .unwrap();
     let body = group.group.as_mut().unwrap();
     body.wires.push(wire(0, "src", 1, "amount"));
 
@@ -2582,7 +2922,10 @@ fn group_face_row_wire_driven_when_inner_param_is_wire_fed() {
     canvas.collapsed.insert(10, false);
     canvas.set_snapshot(&snap);
     let row = &canvas.find_node(10).unwrap().params[0];
-    assert!(row.wire_driven, "a wire feeding the target inner param locks the mirrored row too");
+    assert!(
+        row.wire_driven,
+        "a wire feeding the target inner param locks the mirrored row too"
+    );
 }
 
 #[test]
@@ -2596,7 +2939,11 @@ fn nested_group_row_lives_on_the_currently_viewed_level_only() {
     // inside it); there is no OTHER box at this level that could also carry it.
     assert_eq!(canvas.nodes.len(), 3, "source, outer, final — one level");
     let outer = canvas.find_node(10).expect("outer group at root");
-    assert_eq!(outer.params.len(), 1, "outer carries the row while viewed from root");
+    assert_eq!(
+        outer.params.len(),
+        1,
+        "outer carries the row while viewed from root"
+    );
 
     // Descend into "outer": the level swaps to its body — "inner_group" (id
     // 20) is now the visible group box, and it, not "outer" (no longer even
@@ -2608,8 +2955,14 @@ fn nested_group_row_lives_on_the_currently_viewed_level_only() {
         canvas.find_node(10).is_none(),
         "outer's own box isn't rendered once you're inside it — never two boxes at once"
     );
-    let inner_group = canvas.find_node(20).expect("inner_group visible one level down");
-    assert_eq!(inner_group.params.len(), 1, "the row re-homed one level down with the group that now visibly contains leaf");
+    let inner_group = canvas
+        .find_node(20)
+        .expect("inner_group visible one level down");
+    assert_eq!(
+        inner_group.params.len(),
+        1,
+        "the row re-homed one level down with the group that now visibly contains leaf"
+    );
     assert_eq!(inner_group.params[0].label, "Amount");
 }
 
@@ -2618,19 +2971,53 @@ fn nested_group_row_lives_on_the_currently_viewed_level_only() {
 #[test]
 fn group_wires_by_pair_collapses_shared_endpoints_leaves_singletons_alone() {
     let wires = [
-        WireView { from_node: 1, from_port: "vertices".into(), to_node: 9, to_port: "mesh_0".into() },
-        WireView { from_node: 1, from_port: "material".into(), to_node: 9, to_port: "material_0".into() },
-        WireView { from_node: 1, from_port: "transform".into(), to_node: 9, to_port: "transform_0".into() },
-        WireView { from_node: 2, from_port: "out".into(), to_node: 9, to_port: "camera".into() },
+        WireView {
+            from_node: 1,
+            from_port: "vertices".into(),
+            to_node: 9,
+            to_port: "mesh_0".into(),
+        },
+        WireView {
+            from_node: 1,
+            from_port: "material".into(),
+            to_node: 9,
+            to_port: "material_0".into(),
+        },
+        WireView {
+            from_node: 1,
+            from_port: "transform".into(),
+            to_node: 9,
+            to_port: "transform_0".into(),
+        },
+        WireView {
+            from_node: 2,
+            from_port: "out".into(),
+            to_node: 9,
+            to_port: "camera".into(),
+        },
     ];
     let groups = group_wires_by_pair(wires.iter());
     assert_eq!(groups.len(), 2, "two distinct (from_node, to_node) pairs");
 
-    let ribboned = groups.iter().find(|(k, _)| *k == (1, 9)).expect("the 3-wire pair");
-    assert_eq!(ribboned.1.len(), 3, "all three same-pair wires grouped into one ribbon");
+    let ribboned = groups
+        .iter()
+        .find(|(k, _)| *k == (1, 9))
+        .expect("the 3-wire pair");
+    assert_eq!(
+        ribboned.1.len(),
+        3,
+        "all three same-pair wires grouped into one ribbon"
+    );
 
-    let singleton = groups.iter().find(|(k, _)| *k == (2, 9)).expect("the 1-wire pair");
-    assert_eq!(singleton.1.len(), 1, "a lone wire between a pair stays its own group (no ribbon)");
+    let singleton = groups
+        .iter()
+        .find(|(k, _)| *k == (2, 9))
+        .expect("the 1-wire pair");
+    assert_eq!(
+        singleton.1.len(),
+        1,
+        "a lone wire between a pair stays its own group (no ribbon)"
+    );
 }
 
 // ─── UI_WIDGET_UNIFICATION P4: boundary hit-geometry pins for the canvas's
@@ -2651,14 +3038,30 @@ fn option_at_pins_first_last_and_boundary_rows() {
     let r0 = dd.option_rect(0);
     let r2 = dd.option_rect(2);
     // Inside the first row's top-left corner.
-    assert_eq!(dd.option_at(r0.x + 1.0, r0.y + 1.0), Some(0), "first option, near-corner");
+    assert_eq!(
+        dd.option_at(r0.x + 1.0, r0.y + 1.0),
+        Some(0),
+        "first option, near-corner"
+    );
     // Inside the last row's bottom edge (just above it — the row is
     // half-open [top, top+h)).
-    assert_eq!(dd.option_at(r2.x + 1.0, r2.y + r2.h - 1.0), Some(2), "last option, near-bottom-edge");
+    assert_eq!(
+        dd.option_at(r2.x + 1.0, r2.y + r2.h - 1.0),
+        Some(2),
+        "last option, near-bottom-edge"
+    );
     // One pixel past the list's bottom edge: outside `contains()`, so `None`.
-    assert_eq!(dd.option_at(r2.x + 1.0, r2.y + r2.h + 1.0), None, "past the list bottom");
+    assert_eq!(
+        dd.option_at(r2.x + 1.0, r2.y + r2.h + 1.0),
+        None,
+        "past the list bottom"
+    );
     // Above the list (inside the anchor row it opened from): `None`.
-    assert_eq!(dd.option_at(dd.anchor.x + 1.0, dd.anchor.y + 1.0), None, "above the list, on the anchor row");
+    assert_eq!(
+        dd.option_at(dd.anchor.x + 1.0, dd.anchor.y + 1.0),
+        None,
+        "above the list, on the anchor row"
+    );
 }
 
 #[test]
@@ -2670,7 +3073,11 @@ fn channel_at_pins_first_last_channel_and_header_row() {
 
     let ch0 = ed.channel_rect(0);
     let ch3 = ed.channel_rect(3);
-    assert_eq!(ed.channel_at(ch0.x + 1.0, ch0.y + 1.0), Some(0), "first channel row");
+    assert_eq!(
+        ed.channel_at(ch0.x + 1.0, ch0.y + 1.0),
+        Some(0),
+        "first channel row"
+    );
     assert_eq!(
         ed.channel_at(ch3.x + 1.0, ch3.y + ch3.h - 1.0),
         Some(3),
@@ -2678,9 +3085,17 @@ fn channel_at_pins_first_last_channel_and_header_row() {
     );
     // The swatch header row sits above channel 0 — not itself a channel.
     let sw = ed.swatch_rect().unwrap();
-    assert_eq!(ed.channel_at(sw.x + 1.0, sw.y + 1.0), None, "header row is not a channel");
+    assert_eq!(
+        ed.channel_at(sw.x + 1.0, sw.y + 1.0),
+        None,
+        "header row is not a channel"
+    );
     // Past the panel entirely.
-    assert_eq!(ed.channel_at(ch3.x + 1.0, ch3.y + ch3.h + 50.0), None, "past the panel");
+    assert_eq!(
+        ed.channel_at(ch3.x + 1.0, ch3.y + ch3.h + 50.0),
+        None,
+        "past the panel"
+    );
 }
 
 #[test]
@@ -2699,13 +3114,20 @@ fn cell_at_pins_corner_cells_and_the_header_line() {
         "top-left corner cell"
     );
     assert_eq!(
-        ed.cell_at(bottom_right.x + bottom_right.w - 1.0, bottom_right.y + bottom_right.h - 1.0),
+        ed.cell_at(
+            bottom_right.x + bottom_right.w - 1.0,
+            bottom_right.y + bottom_right.h - 1.0
+        ),
         Some((1, 2)),
         "bottom-right corner cell, near its own boundary"
     );
     // The header line (between the anchor row and the grid) is not a cell.
     let panel = ed.panel_rect();
-    assert_eq!(ed.cell_at(panel.x + 1.0, panel.y + 1.0), None, "header line is not a cell");
+    assert_eq!(
+        ed.cell_at(panel.x + 1.0, panel.y + 1.0),
+        None,
+        "header line is not a cell"
+    );
     // Past the last column, same row band.
     assert_eq!(
         ed.cell_at(bottom_right.x + bottom_right.w + 50.0, bottom_right.y + 1.0),
@@ -2728,7 +3150,10 @@ fn pressing_far_outside_dismisses_then_a_second_rows_value_opens_its_own_editor(
     canvas.collapsed.insert(1, false);
     canvas.set_snapshot(&snapshot_with_param_node(
         "gain",
-        vec![enum_param("mode", 0.0), color_param("tint", [0.1, 0.2, 0.3, 1.0])],
+        vec![
+            enum_param("mode", 0.0),
+            color_param("tint", [0.1, 0.2, 0.3, 1.0]),
+        ],
     ));
     let vp = Rect::new(0.0, 0.0, 1200.0, 800.0);
 
@@ -2737,15 +3162,24 @@ fn pressing_far_outside_dismisses_then_a_second_rows_value_opens_its_own_editor(
 
     // Far from both the row and the open list — empty canvas, dismisses.
     canvas.on_left_button_down(vp, 1000.0, 700.0, 0.0, false);
-    assert!(canvas.enum_dropdown.is_none(), "out-of-bounds press dismissed the modal");
+    assert!(
+        canvas.enum_dropdown.is_none(),
+        "out-of-bounds press dismissed the modal"
+    );
     assert!(
         drained_set_param(&mut canvas).is_none(),
         "dismissal alone emits no value command"
     );
-    assert!(canvas.vec_editor.is_none(), "dismissal does not open a different editor by itself");
+    assert!(
+        canvas.vec_editor.is_none(),
+        "dismissal does not open a different editor by itself"
+    );
 
     press_row_value(&mut canvas, vp, 1);
-    assert!(canvas.vec_editor.is_some(), "a fresh press on row 1's value opens its own editor");
+    assert!(
+        canvas.vec_editor.is_some(),
+        "a fresh press on row 1's value opens its own editor"
+    );
 }
 
 // ─── UI_WIDGET_UNIFICATION P5d: the contract's last dead stop — a
@@ -2765,9 +3199,15 @@ fn zero_move_press_release_on_a_numeric_row_emits_no_command() {
     let y = row.y + row.h * 0.5;
 
     canvas.on_left_button_down(vp, x, y, 1.0, false);
-    assert!(matches!(canvas.drag.payload(), Some(CanvasDrag::ParamScrub { .. })));
+    assert!(matches!(
+        canvas.drag.payload(),
+        Some(CanvasDrag::ParamScrub { .. })
+    ));
     canvas.on_left_button_up(vp, x, y);
-    assert!(canvas.drain_edits().is_empty(), "zero-move press+release emits nothing");
+    assert!(
+        canvas.drain_edits().is_empty(),
+        "zero-move press+release emits nothing"
+    );
 }
 
 #[test]
@@ -2802,13 +3242,24 @@ fn double_click_on_the_value_cell_opens_the_type_in_instead_of_scrubbing() {
                 whole_numbers,
                 outer_param_id,
                 ..
-            } => Some((node_id, param_name, current, min, max, whole_numbers, outer_param_id)),
+            } => Some((
+                node_id,
+                param_name,
+                current,
+                min,
+                max,
+                whole_numbers,
+                outer_param_id,
+            )),
             _ => None,
         })
         .expect("double-click emits EditGraphNodeNumericParam");
     assert_eq!(cmd.0, 1, "node id");
     assert_eq!(cmd.1, "amount", "param name");
-    assert!((cmd.2 - 0.5).abs() < 1e-6, "prefilled with the current value");
+    assert!(
+        (cmd.2 - 0.5).abs() < 1e-6,
+        "prefilled with the current value"
+    );
     assert!(cmd.6.is_none(), "not a group-face mirror row");
 }
 
@@ -2821,8 +3272,14 @@ fn single_click_on_the_value_cell_still_scrubs() {
     let y = row.y + row.h * 0.5;
 
     canvas.on_left_button_down(vp, x, y, 1.0, false);
-    assert!(matches!(canvas.drag.payload(), Some(CanvasDrag::ParamScrub { .. })));
-    assert!(canvas.drain_edits().is_empty(), "opening a scrub emits nothing on its own");
+    assert!(matches!(
+        canvas.drag.payload(),
+        Some(CanvasDrag::ParamScrub { .. })
+    ));
+    assert!(
+        canvas.drain_edits().is_empty(),
+        "opening a scrub emits nothing on its own"
+    );
 }
 
 #[test]
@@ -2845,7 +3302,10 @@ fn double_click_outside_the_value_cell_still_scrubs() {
         "double-click outside the value cell still scrubs"
     );
     assert!(
-        canvas.drain_edits().iter().all(|a| !matches!(a, GraphEditCommand::EditGraphNodeNumericParam { .. })),
+        canvas
+            .drain_edits()
+            .iter()
+            .all(|a| !matches!(a, GraphEditCommand::EditGraphNodeNumericParam { .. })),
         "no type-in command from a double-click outside the value cell"
     );
 }
@@ -2862,10 +3322,31 @@ fn the_lane_pass_draws_no_floating_editor() {
     impl Painter for PopoverSeen {
         fn draw_rect(&mut self, _: f32, _: f32, _: f32, _: f32, _: Color32) {}
         fn draw_rounded_rect(&mut self, _: f32, _: f32, _: f32, _: f32, _: Color32, _: f32) {}
-        fn draw_bordered_rect(&mut self, _: f32, _: f32, _: f32, _: f32, _: Color32, _: f32, _: f32, _: Color32) {}
+        fn draw_bordered_rect(
+            &mut self,
+            _: f32,
+            _: f32,
+            _: f32,
+            _: f32,
+            _: Color32,
+            _: f32,
+            _: f32,
+            _: Color32,
+        ) {
+        }
         fn draw_line(&mut self, _: f32, _: f32, _: f32, _: f32, _: f32, _: Color32) {}
         fn draw_text(&mut self, _: f32, _: f32, _: &str, _: f32, _: [u8; 4]) {}
-        fn draw_image_uv(&mut self, _: f32, _: f32, _: f32, _: f32, _: crate::node::TextureHandle, _: [f32; 4], _: f32) {}
+        fn draw_image_uv(
+            &mut self,
+            _: f32,
+            _: f32,
+            _: f32,
+            _: f32,
+            _: crate::node::TextureHandle,
+            _: [f32; 4],
+            _: f32,
+        ) {
+        }
         fn push_immediate_clip(&mut self, _: f32, _: f32, _: f32, _: f32) {}
         fn pop_immediate_clip(&mut self) {}
         fn push_depth(&mut self, depth: Depth) {

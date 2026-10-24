@@ -12,16 +12,16 @@ pub mod reference;
 mod stereo_analyzer;
 
 pub use loudness::{
-    IntegratedScratch, LoudnessBlock, LoudnessMeter, LoudnessSnapshot, compute_integrated_and_lra,
+    compute_integrated_and_lra, IntegratedScratch, LoudnessBlock, LoudnessMeter, LoudnessSnapshot,
 };
 pub use reference::{
-    REF_FREQ_MAX, REF_FREQ_MIN, REF_POINTS, RefAnalysis, RefEnvelope, RefEnvelopeAtFft, RefError,
-    analyze_ref_file,
+    analyze_ref_file, RefAnalysis, RefEnvelope, RefEnvelopeAtFft, RefError, REF_FREQ_MAX,
+    REF_FREQ_MIN, REF_POINTS,
 };
 pub use smoothing::{SpectrumBandwidth, SpectrumSmoothingPlan};
 pub use stereo_analyzer::StereoAnalyzer;
 
-use rustfft::{Fft, FftPlanner, num_complex::Complex};
+use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use std::sync::Arc;
 
 pub(crate) fn ms_to_alpha(ms: f32, dt_s: f32) -> f32 {
@@ -304,7 +304,8 @@ impl Analyzer {
                 // is close to nominal, `raw_dev` is already small; for
                 // far-off signals the 2π ambiguity resolves here.
                 let wrapped = raw_dev - two_pi * (raw_dev / two_pi).round();
-                self.instantaneous_freqs[bin] = bin as f32 * bin_hz + wrapped * freq_per_rad_per_hop;
+                self.instantaneous_freqs[bin] =
+                    bin as f32 * bin_hz + wrapped * freq_per_rad_per_hop;
             }
             self.prev_phase[bin] = phase;
         }
@@ -385,9 +386,7 @@ mod tests {
 
         let target_freq = 1000.0;
         let samples: Vec<f32> = (0..fft_size * 4)
-            .map(|n| {
-                (2.0 * std::f32::consts::PI * target_freq * n as f32 / sample_rate).sin()
-            })
+            .map(|n| (2.0 * std::f32::consts::PI * target_freq * n as f32 / sample_rate).sin())
             .collect();
 
         analyzer.push_mono(&samples);
@@ -416,9 +415,7 @@ mod tests {
 
         let target_freq = 2000.0;
         let samples: Vec<f32> = (0..fft_size * 4)
-            .map(|n| {
-                (2.0 * std::f32::consts::PI * target_freq * n as f32 / sample_rate).sin()
-            })
+            .map(|n| (2.0 * std::f32::consts::PI * target_freq * n as f32 / sample_rate).sin())
             .collect();
 
         analyzer.push_mono(&samples);
@@ -444,7 +441,10 @@ mod tests {
         // Last bin's nominal frequency is Nyquist (sr/2).
         let last = analyzer.num_bins() - 1;
         let nyquist = analyzer.bin_frequency(last);
-        assert!((nyquist - 24_000.0).abs() < 1e-3, "Nyquist bin reads {nyquist} Hz");
+        assert!(
+            (nyquist - 24_000.0).abs() < 1e-3,
+            "Nyquist bin reads {nyquist} Hz"
+        );
     }
 
     #[test]

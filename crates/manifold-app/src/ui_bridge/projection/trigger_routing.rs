@@ -1,8 +1,8 @@
 //! Read-only choices for both trigger assignment entry points.
 
+use manifold_core::effects::ParamId;
 use manifold_core::params::ClipTriggerSource;
 use manifold_core::project::Project;
-use manifold_core::effects::ParamId;
 use manifold_core::{GraphTarget, LayerId};
 use manifold_ui::param_surface::{ClipTriggerRow, ParamSurface};
 use manifold_ui::view::{UiClipTriggerSource, UiGraphTarget};
@@ -41,20 +41,36 @@ pub(crate) fn to_core_source(source: &UiClipTriggerSource) -> ClipTriggerSource 
     match source {
         UiClipTriggerSource::Main => ClipTriggerSource::OwnLayer,
         UiClipTriggerSource::Disabled => ClipTriggerSource::Disabled,
-        UiClipTriggerSource::Lane(layer_id) => ClipTriggerSource::Lane { layer_id: layer_id.clone() },
+        UiClipTriggerSource::Lane(layer_id) => ClipTriggerSource::Lane {
+            layer_id: layer_id.clone(),
+        },
     }
 }
 
 /// Resolve navigation against the same curated generator surface the inspector
 /// builds. Scene-owned properties open in Scene Setup instead.
-pub(crate) fn response_uses_scene_panel(project: &Project, target: &GraphTarget, param_id: &str) -> bool {
-    let GraphTarget::Generator(layer_id) = target else { return false; };
-    let Some(instance) = project.graph_target_owner(target) else { return false; };
+pub(crate) fn response_uses_scene_panel(
+    project: &Project,
+    target: &GraphTarget,
+    param_id: &str,
+) -> bool {
+    let GraphTarget::Generator(layer_id) = target else {
+        return false;
+    };
+    let Some(instance) = project.graph_target_owner(target) else {
+        return false;
+    };
     if instance.scene.is_none() {
         return false;
     }
-    let surface = super::cards::gen_params_to_surface(instance, layer_id.as_str(), None, &[],
-        super::cards::SurfaceVisibility::CuratedCard, (project.settings.bpm, project.settings.frame_rate));
+    let surface = super::cards::gen_params_to_surface(
+        instance,
+        layer_id.as_str(),
+        None,
+        &[],
+        super::cards::SurfaceVisibility::CuratedCard,
+        (project.settings.bpm, project.settings.frame_rate),
+    );
     !surface.rows.iter().any(|row| row.id == param_id)
 }
 
@@ -71,17 +87,24 @@ pub(crate) fn modifier_label_for_param(
             return None;
         }
         match &binding.target {
-            manifold_core::effect_graph_def::BindingTarget::SceneModifier { modifier_id, .. } => Some(modifier_id),
+            manifold_core::effect_graph_def::BindingTarget::SceneModifier {
+                modifier_id, ..
+            } => Some(modifier_id),
             _ => None,
         }
     })?;
-    graph.scene_modifiers.iter().find(|modifier| modifier.id == *modifier_id)
+    graph
+        .scene_modifiers
+        .iter()
+        .find(|modifier| modifier.id == *modifier_id)
         .and_then(|modifier| super::cards::scene_modifier_display_name(graph, modifier))
 }
 
 /// The scene item that owns each generator control, by the item id every
 /// scene param id starts with. Built once per generator.
-fn scene_item_group_labels(instance: &manifold_core::effects::PresetInstance) -> Option<ahash::AHashMap<String, String>> {
+fn scene_item_group_labels(
+    instance: &manifold_core::effects::PresetInstance,
+) -> Option<ahash::AHashMap<String, String>> {
     let doc = instance.scene.as_ref()?;
     Some(
         instance
@@ -96,15 +119,29 @@ fn scene_item_group_labels(instance: &manifold_core::effects::PresetInstance) ->
     )
 }
 
-fn source_label(project: &Project, target: &GraphTarget, param_id: &str, source: &ClipTriggerSource) -> String {
+fn source_label(
+    project: &Project,
+    target: &GraphTarget,
+    param_id: &str,
+    source: &ClipTriggerSource,
+) -> String {
     match source {
-        ClipTriggerSource::OwnLayer if project
-            .clip_trigger_target_layer(target)
-            .is_some_and(|owner| owner.is_group()) => "No clip source".into(),
+        ClipTriggerSource::OwnLayer
+            if project
+                .clip_trigger_target_layer(target)
+                .is_some_and(|owner| owner.is_group()) =>
+        {
+            "No clip source".into()
+        }
         ClipTriggerSource::OwnLayer => "Main lane".into(),
         ClipTriggerSource::Disabled => "No source".into(),
-        source @ ClipTriggerSource::Lane { layer_id } => match project.timeline.find_layer_by_id(layer_id) {
-            Some((_, lane)) if project.can_assign_clip_trigger_source(target, param_id, source) => lane.name.clone(),
+        source @ ClipTriggerSource::Lane { layer_id } => match project
+            .timeline
+            .find_layer_by_id(layer_id)
+        {
+            Some((_, lane)) if project.can_assign_clip_trigger_source(target, param_id, source) => {
+                lane.name.clone()
+            }
             Some((_, lane)) => format!("Unavailable: {}", lane.name),
             None => "Missing source".into(),
         },
@@ -116,19 +153,33 @@ impl TriggerRoutingCatalog {
         let mut catalog = Self::default();
         for layer in &project.timeline.layers {
             if layer.is_trigger() {
-                let parent = layer.parent_layer_id.as_ref()
+                let parent = layer
+                    .parent_layer_id
+                    .as_ref()
                     .and_then(|id| project.timeline.find_layer_by_id(id))
-                    .map(|(_, parent)| parent.name.as_str()).unwrap_or("Missing owner");
+                    .map(|(_, parent)| parent.name.as_str())
+                    .unwrap_or("Missing owner");
                 catalog.sources.push(TriggerSourceChoice {
-                    id: layer.layer_id.clone(), label: format!("{parent} / {}", layer.name),
+                    id: layer.layer_id.clone(),
+                    label: format!("{parent} / {}", layer.name),
                 });
                 continue;
             }
             for instance in layer.effects.iter().flatten() {
-                catalog.add_instance(project, layer, instance, GraphTarget::Effect(instance.id.clone()));
+                catalog.add_instance(
+                    project,
+                    layer,
+                    instance,
+                    GraphTarget::Effect(instance.id.clone()),
+                );
             }
             if let Some(instance) = layer.gen_params() {
-                catalog.add_instance(project, layer, instance, GraphTarget::Generator(layer.layer_id.clone()));
+                catalog.add_instance(
+                    project,
+                    layer,
+                    instance,
+                    GraphTarget::Generator(layer.layer_id.clone()),
+                );
             }
         }
         catalog
@@ -143,9 +194,11 @@ impl TriggerRoutingCatalog {
     ) {
         let name = manifold_core::preset_type_registry::display_name(instance.effect_type());
         let scene_groups = (matches!(&target, GraphTarget::Generator(_)))
-            .then(|| scene_item_group_labels(instance)).flatten();
+            .then(|| scene_item_group_labels(instance))
+            .flatten();
         for param in instance.params.iter() {
-            let group_label = scene_groups.as_ref()
+            let group_label = scene_groups
+                .as_ref()
                 .and_then(|groups| groups.get(param.id()).cloned())
                 .or_else(|| modifier_label_for_param(instance, param.id()))
                 .map(|modifier| format!("{} / {modifier}", layer.name))
@@ -163,8 +216,13 @@ impl TriggerRoutingCatalog {
         group_label: String,
     ) {
         if param.spec.is_trigger_gate
-            || !project.can_assign_clip_trigger_source(target, param.id(), &ClipTriggerSource::Disabled)
-            || crate::graph_target::macro_parameter_lock_reason(project, target, param.id()).is_some()
+            || !project.can_assign_clip_trigger_source(
+                target,
+                param.id(),
+                &ClipTriggerSource::Disabled,
+            )
+            || crate::graph_target::macro_parameter_lock_reason(project, target, param.id())
+                .is_some()
         {
             return;
         }
@@ -187,9 +245,15 @@ impl TriggerRoutingCatalog {
             target.source == UiClipTriggerSource::Lane(source.clone())
                 && target.eligible_sources.contains(source)
         });
-        let Some(first) = targets.next() else { return "Assign…".into(); };
+        let Some(first) = targets.next() else {
+            return "Assign…".into();
+        };
         let others = targets.count();
-        if others == 0 { first.label.clone() } else { format!("{} +{others}", first.label) }
+        if others == 0 {
+            first.label.clone()
+        } else {
+            format!("{} +{others}", first.label)
+        }
     }
 }
 
@@ -202,18 +266,31 @@ pub(crate) fn attach_trigger_sources(configs: &mut [ParamSurface], project: &Pro
         } else {
             GraphTarget::Effect(config.effect_id.clone())
         };
-        let Some(instance) = project.graph_target_owner(&target) else { continue; };
+        let Some(instance) = project.graph_target_owner(&target) else {
+            continue;
+        };
         for row in &mut config.rows {
             row.clip_trigger = None;
-            let Some(param) = instance.params.get(row.id.as_ref()) else { continue; };
+            let Some(param) = instance.params.get(row.id.as_ref()) else {
+                continue;
+            };
             if param.spec.is_trigger_gate
-                || !project.can_assign_clip_trigger_source(&target, param.id(), &ClipTriggerSource::Disabled)
-                || crate::graph_target::macro_parameter_lock_reason(project, &target, param.id()).is_some()
+                || !project.can_assign_clip_trigger_source(
+                    &target,
+                    param.id(),
+                    &ClipTriggerSource::Disabled,
+                )
+                || crate::graph_target::macro_parameter_lock_reason(project, &target, param.id())
+                    .is_some()
                 || row.spec.disabled.is_some()
-            { continue; }
-            let source_label = source_label(project, &target, param.id(), &param.clip_trigger_source);
+            {
+                continue;
+            }
+            let source_label =
+                source_label(project, &target, param.id(), &param.clip_trigger_source);
             row.clip_trigger = Some(ClipTriggerRow {
-                target: crate::editing_host::to_ui_graph_target(&target), source_label,
+                target: crate::editing_host::to_ui_graph_target(&target),
+                source_label,
             });
         }
     }
@@ -261,11 +338,28 @@ pub(crate) mod tests {
             trigger_layer("unrelated", "missing"),
         ];
         let catalog = TriggerRoutingCatalog::project(&project);
-        let target = catalog.targets.iter().find(|target| target.owner == LayerId::new("owner")).unwrap();
-        assert_eq!(catalog.targets.iter().filter(|entry| entry.owner == LayerId::new("owner")).count(), 1);
-        assert_eq!(target.eligible_sources, vec![LayerId::new("group-lane"), LayerId::new("owner-lane")]);
+        let target = catalog
+            .targets
+            .iter()
+            .find(|target| target.owner == LayerId::new("owner"))
+            .unwrap();
+        assert_eq!(
+            catalog
+                .targets
+                .iter()
+                .filter(|entry| entry.owner == LayerId::new("owner"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            target.eligible_sources,
+            vec![LayerId::new("group-lane"), LayerId::new("owner-lane")]
+        );
         assert!(target.has_main_source);
-        assert_eq!(catalog.targets_label(&LayerId::new("owner-lane")), "Assign…");
+        assert_eq!(
+            catalog.targets_label(&LayerId::new("owner-lane")),
+            "Assign…"
+        );
     }
 
     #[test]
@@ -276,22 +370,53 @@ pub(crate) mod tests {
         let catalog = TriggerRoutingCatalog::project(&project);
         let choice = catalog.targets.first().unwrap();
         assert!(!choice.has_main_source);
-        assert_eq!(source_label(&project, &target, "amount", &ClipTriggerSource::OwnLayer), "No clip source");
-        assert_eq!(source_label(&project, &target, "amount", &ClipTriggerSource::Lane { layer_id: LayerId::new("gone") }), "Missing source");
+        assert_eq!(
+            source_label(&project, &target, "amount", &ClipTriggerSource::OwnLayer),
+            "No clip source"
+        );
+        assert_eq!(
+            source_label(
+                &project,
+                &target,
+                "amount",
+                &ClipTriggerSource::Lane {
+                    layer_id: LayerId::new("gone")
+                }
+            ),
+            "Missing source"
+        );
     }
 
     #[test]
     fn assigned_target_label_and_drawer_source_share_scope() {
         let mut project = Project::default();
         let mut owner = effect_layer("owner", LayerType::Video, None);
-        owner.effects.as_mut().unwrap()[0].params.get_mut("amount").unwrap().clip_trigger_source =
-            ClipTriggerSource::Lane { layer_id: LayerId::new("lane") };
+        owner.effects.as_mut().unwrap()[0]
+            .params
+            .get_mut("amount")
+            .unwrap()
+            .clip_trigger_source = ClipTriggerSource::Lane {
+            layer_id: LayerId::new("lane"),
+        };
         project.timeline.layers = vec![owner, trigger_layer("lane", "owner")];
         let catalog = TriggerRoutingCatalog::project(&project);
         let target = catalog.targets.first().unwrap();
-        assert_eq!(target.source, UiClipTriggerSource::Lane(LayerId::new("lane")));
+        assert_eq!(
+            target.source,
+            UiClipTriggerSource::Lane(LayerId::new("lane"))
+        );
         assert_eq!(catalog.targets_label(&LayerId::new("lane")), target.label);
-        assert_eq!(source_label(&project, &GraphTarget::Effect(EffectId::new("owner-effect")), "amount", &ClipTriggerSource::Lane { layer_id: LayerId::new("lane") }), "lane");
+        assert_eq!(
+            source_label(
+                &project,
+                &GraphTarget::Effect(EffectId::new("owner-effect")),
+                "amount",
+                &ClipTriggerSource::Lane {
+                    layer_id: LayerId::new("lane")
+                }
+            ),
+            "lane"
+        );
     }
 
     #[test]
@@ -302,15 +427,29 @@ pub(crate) mod tests {
         project.timeline.layers.push(owner);
         let instance = project.timeline.layers[0].gen_params().unwrap();
         let mut surface = super::super::cards::gen_params_to_surface(
-            instance, owner_id.as_str(), None, &[],
+            instance,
+            owner_id.as_str(),
+            None,
+            &[],
             super::super::cards::SurfaceVisibility::CuratedCard,
             (manifold_core::Bpm(120.0), 0.0),
         );
         assert_eq!(surface.layer_id.as_ref(), Some(&owner_id));
         attach_trigger_sources(std::slice::from_mut(&mut surface), &project);
-        let sources: Vec<_> = surface.rows.iter().filter_map(|row| row.clip_trigger.as_ref()).collect();
-        assert!(!sources.is_empty(), "the generator card exposes compatible numeric parameters");
-        assert!(sources.iter().all(|source| source.target == UiGraphTarget::Generator(owner_id.clone())));
+        let sources: Vec<_> = surface
+            .rows
+            .iter()
+            .filter_map(|row| row.clip_trigger.as_ref())
+            .collect();
+        assert!(
+            !sources.is_empty(),
+            "the generator card exposes compatible numeric parameters"
+        );
+        assert!(
+            sources
+                .iter()
+                .all(|source| source.target == UiGraphTarget::Generator(owner_id.clone()))
+        );
     }
 
     #[test]
@@ -321,7 +460,13 @@ pub(crate) mod tests {
         project.timeline.layers.push(layer);
         let catalog = TriggerRoutingCatalog::project(&project);
         for name in ["Camera", "Cube"] {
-            assert!(catalog.targets.iter().any(|target| target.group_label == format!("Scene / {name}")), "{name} has no group");
+            assert!(
+                catalog
+                    .targets
+                    .iter()
+                    .any(|target| target.group_label == format!("Scene / {name}")),
+                "{name} has no group"
+            );
         }
     }
 
@@ -335,9 +480,9 @@ pub(crate) mod tests {
         let mut graph: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(
             manifold_nodes::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON,
         ).unwrap();
-        let recipe = manifold_nodes::bundled_presets::bundled_preset_def(
-            &PresetTypeId::new(recipe),
-        ).unwrap();
+        let recipe =
+            manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new(recipe))
+                .unwrap();
         for &id in ids {
             let modifier = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
                 &graph,
@@ -346,7 +491,11 @@ pub(crate) mod tests {
                 "scan_render".into(),
                 manifold_core::scene_modifier_preset::SceneTargetSelection::AllObjects,
             ).unwrap();
-            graph = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(&graph, modifier).unwrap();
+            graph =
+                manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(
+                    &graph, modifier,
+                )
+                .unwrap();
         }
         let mut host = PresetInstance::new_generator(PresetTypeId::new("PhotoscanBaseline"));
         host.graph = Some(graph);
@@ -367,16 +516,37 @@ pub(crate) mod tests {
         let graph = host.graph.as_ref().unwrap();
         let catalog = TriggerRoutingCatalog::project(&project);
         for (index, modifier) in graph.scene_modifiers.iter().enumerate() {
-            let (binding_id, _) = graph.preset_metadata.as_ref().unwrap().bindings.iter()
+            let (binding_id, _) = graph
+                .preset_metadata
+                .as_ref()
+                .unwrap()
+                .bindings
+                .iter()
                 .filter_map(|binding| match &binding.target {
-                    manifold_core::effect_graph_def::BindingTarget::SceneModifier { modifier_id, param_id }
-                        if modifier_id == &modifier.id && param_id != "enabled" => Some((&binding.id, param_id)),
+                    manifold_core::effect_graph_def::BindingTarget::SceneModifier {
+                        modifier_id,
+                        param_id,
+                    } if modifier_id == &modifier.id && param_id != "enabled" => {
+                        Some((&binding.id, param_id))
+                    }
                     _ => None,
                 })
-                .find(|(id, _)| catalog.targets.iter().any(|target| target.param_id.as_ref() == id.as_str()))
+                .find(|(id, _)| {
+                    catalog
+                        .targets
+                        .iter()
+                        .any(|target| target.param_id.as_ref() == id.as_str())
+                })
                 .expect("each force has a routed parameter");
-            let target = catalog.targets.iter().find(|target| target.param_id.as_ref() == binding_id.as_str()).unwrap();
-            assert_eq!(target.group_label, format!("Scene / Radial Force #{}", index + 1));
+            let target = catalog
+                .targets
+                .iter()
+                .find(|target| target.param_id.as_ref() == binding_id.as_str())
+                .unwrap();
+            assert_eq!(
+                target.group_label,
+                format!("Scene / Radial Force #{}", index + 1)
+            );
         }
     }
 }

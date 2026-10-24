@@ -63,9 +63,7 @@ pub fn general_pasteboard_string() -> Option<String> {
     // static provided by AppKit — same pattern as NSPasteboardTypeFileURL
     // above.
     let string_type = unsafe { NSPasteboardTypeString };
-    pasteboard
-        .stringForType(string_type)
-        .map(|s| s.to_string())
+    pasteboard.stringForType(string_type).map(|s| s.to_string())
 }
 
 /// Replaces the general pasteboard's contents with `s` as plain text

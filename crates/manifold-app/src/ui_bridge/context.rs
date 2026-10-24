@@ -17,7 +17,7 @@ use crate::user_prefs::UserPrefs;
 use manifold_core::change::ChangeSet;
 use manifold_core::project::Project;
 use manifold_core::{GraphTarget, LayerId};
-use manifold_editing::command::{rows_deferred, rows_written, Command};
+use manifold_editing::command::{Command, rows_deferred, rows_written};
 
 use super::scrub::ScrubState;
 
@@ -51,8 +51,15 @@ impl LocalProject {
 
     /// Clips active at `beat`. It refreshes the timeline's sort cache, which
     /// is not model state, so it needs no stamp.
-    pub fn active_clips_at_beat(&mut self, beat: manifold_core::Beats, results: &mut Vec<(usize, usize)>, indices: &mut Vec<usize>) {
-        self.0.timeline.get_active_clips_at_beat(beat, results, indices);
+    pub fn active_clips_at_beat(
+        &mut self,
+        beat: manifold_core::Beats,
+        results: &mut Vec<(usize, usize)>,
+        indices: &mut Vec<usize>,
+    ) {
+        self.0
+            .timeline
+            .get_active_clips_at_beat(beat, results, indices);
     }
 }
 
@@ -85,7 +92,11 @@ impl<'a> ProjectRef<'a> {
         edits: &'a mut crate::gesture_preview::UiEdits,
         content_tx: &'a crossbeam_channel::Sender<ContentCommand>,
     ) -> Self {
-        Self { project, edits, content_tx }
+        Self {
+            project,
+            edits,
+            content_tx,
+        }
     }
 
     /// A non-undoable write: apply `f` locally, stamp what it wrote (as
@@ -97,7 +108,10 @@ impl<'a> ProjectRef<'a> {
     {
         let ((), rows) = rows_written(self.project, f.clone());
         self.edits.stamps.bump(touches.union(rows));
-        ContentCommand::send(self.content_tx, ContentCommand::mutate(touches, Box::new(f)));
+        ContentCommand::send(
+            self.content_tx,
+            ContentCommand::mutate(touches, Box::new(f)),
+        );
     }
 
     /// A gesture's live move (a scrub tick): as [`Self::mutate`], but rows
@@ -109,7 +123,10 @@ impl<'a> ProjectRef<'a> {
     {
         rows_deferred(self.project, f.clone());
         self.edits.stamps.bump(touches);
-        ContentCommand::send(self.content_tx, ContentCommand::gesture_move(touches, Box::new(f)));
+        ContentCommand::send(
+            self.content_tx,
+            ContentCommand::gesture_move(touches, Box::new(f)),
+        );
     }
 
     /// An undoable edit: execute `cmd` locally, stamp what it touches (read
@@ -128,7 +145,10 @@ impl<'a> ProjectRef<'a> {
         let mut batch = manifold_editing::command::CompositeCommand::new(cmds, label.clone());
         let wrote = batch.execute(self.project);
         self.edits.stamps.bump(wrote);
-        ContentCommand::send(self.content_tx, ContentCommand::ExecuteBatch(batch.into_commands(), label));
+        ContentCommand::send(
+            self.content_tx,
+            ContentCommand::ExecuteBatch(batch.into_commands(), label),
+        );
     }
 
     /// For factories that build a command and execute it on the project they
@@ -163,7 +183,10 @@ impl<'a> ProjectRef<'a> {
     /// A gesture preview write: local only, never sent, stamping nothing; it
     /// records itself in the gesture preview, whose version the planner reads
     /// (D12). The gesture's commit stamps.
-    pub fn preview<R>(&mut self, f: impl FnOnce(&mut Project, &mut crate::gesture_preview::GesturePreview) -> R) -> R {
+    pub fn preview<R>(
+        &mut self,
+        f: impl FnOnce(&mut Project, &mut crate::gesture_preview::GesturePreview) -> R,
+    ) -> R {
         f(self.project, &mut self.edits.preview)
     }
 
@@ -178,7 +201,11 @@ impl<'a> ProjectRef<'a> {
 
     /// A shorter-lived writer over the same project, for one dispatch in a loop.
     pub fn reborrow(&mut self) -> ProjectRef<'_> {
-        ProjectRef { project: self.project, edits: self.edits, content_tx: self.content_tx }
+        ProjectRef {
+            project: self.project,
+            edits: self.edits,
+            content_tx: self.content_tx,
+        }
     }
 
     /// Clip lookup by id. It refreshes the timeline's id cache, which is not
@@ -284,7 +311,10 @@ mod export_lock_tests {
             let mut project = Project::default();
             let (content_tx, content_rx) = crossbeam_channel::unbounded();
             let mut edits = Default::default();
-            let content_state = ContentState { is_exporting: exporting, ..ContentState::default() };
+            let content_state = ContentState {
+                is_exporting: exporting,
+                ..ContentState::default()
+            };
             let mut ui = UIRoot::new();
             let mut selection = manifold_ui::UIState::new();
             let mut active_layer = None;
@@ -302,18 +332,33 @@ mod export_lock_tests {
                 scrub: &mut scrub,
                 dialogs: Default::default(),
             };
-            ctx.mutate(crate::content_command::touch::VALUES, |p| p.settings.frame_rate = 24.0);
+            ctx.mutate(crate::content_command::touch::VALUES, |p| {
+                p.settings.frame_rate = 24.0
+            });
             let sent_mutate = content_rx.try_iter().count();
-            ctx.execute(Box::new(manifold_editing::commands::settings::ChangeTonemapCurveCommand::new(
-                manifold_core::TonemapCurve::default(),
-                false,
-                manifold_core::TonemapCurve::default(),
-                true,
-            )));
+            ctx.execute(Box::new(
+                manifold_editing::commands::settings::ChangeTonemapCurveCommand::new(
+                    manifold_core::TonemapCurve::default(),
+                    false,
+                    manifold_core::TonemapCurve::default(),
+                    true,
+                ),
+            ));
             let sent_execute = content_rx.try_iter().count();
-            assert_eq!(ctx.project.settings.frame_rate == 24.0, applied, "exporting={exporting}");
-            assert_eq!(ctx.project.settings.tonemap_enabled, applied, "exporting={exporting}");
-            assert_eq!((sent_mutate, sent_execute), (usize::from(applied), usize::from(applied)), "exporting={exporting}");
+            assert_eq!(
+                ctx.project.settings.frame_rate == 24.0,
+                applied,
+                "exporting={exporting}"
+            );
+            assert_eq!(
+                ctx.project.settings.tonemap_enabled, applied,
+                "exporting={exporting}"
+            );
+            assert_eq!(
+                (sent_mutate, sent_execute),
+                (usize::from(applied), usize::from(applied)),
+                "exporting={exporting}"
+            );
         }
     }
 }

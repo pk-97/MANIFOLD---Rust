@@ -14,12 +14,21 @@ pub(crate) fn emit(b: &mut Builder<'_>) {
     let Some(item) = b.doc.world().cloned() else {
         return;
     };
-    let ItemFields::World(WorldFields { fog, ambient_occlusion, .. }) = &item.fields else {
+    let ItemFields::World(WorldFields {
+        fog,
+        ambient_occlusion,
+        ..
+    }) = &item.fields
+    else {
         return;
     };
     let owner = item.id.as_str();
     let mut world = None;
-    if b.doc.any_physics() || b.doc.any_copies() || b.doc.any_swarm() || !super::water::waters(b.doc).is_empty() {
+    if b.doc.any_physics()
+        || b.doc.any_copies()
+        || b.doc.any_swarm()
+        || !super::water::waters(b.doc).is_empty()
+    {
         let node = b.add(owner, "physics", "node.physics_world");
         super::physics::join_world(b, node);
         world = Some(node);
@@ -61,10 +70,18 @@ fn emit_ambient_occlusion(b: &mut Builder<'_>, owner: &str) {
     let blur_v = b.add(owner, "ao_blur_v", "node.bilateral_blur");
     let multiply = b.add(owner, "ao_multiply", "node.mix");
     let mask = b.add(owner, "ao_mask", "node.masked_mix");
-    b.set(ao, "noise_per_frame", SerializedParamValue::Bool { value: true });
+    b.set(
+        ao,
+        "noise_per_frame",
+        SerializedParamValue::Bool { value: true },
+    );
     b.set(blur_h, "axis", SerializedParamValue::Enum { value: 0 });
     b.set(blur_v, "axis", SerializedParamValue::Enum { value: 1 });
-    b.set(multiply, "amount", SerializedParamValue::Float { value: 1.0 });
+    b.set(
+        multiply,
+        "amount",
+        SerializedParamValue::Float { value: 1.0 },
+    );
     // `node.mix`'s Multiply.
     b.set(multiply, "mode", SerializedParamValue::Enum { value: 4 });
     b.splice(render, "color", mask, "out");

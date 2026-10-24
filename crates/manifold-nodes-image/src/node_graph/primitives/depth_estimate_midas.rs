@@ -34,12 +34,12 @@ use manifold_gpu::{
 };
 use manifold_native::depth_estimator::DepthEstimator;
 
-use manifold_node_engine::runtime::background_worker::BackgroundWorker;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::gpu::gpu_readback::ReadbackRequest;
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::runtime::background_worker::BackgroundWorker;
 
 struct DepthRequest {
     pixel_data: Vec<u8>,
@@ -153,9 +153,7 @@ impl DepthEstimateMidas {
         if self.depth_worker.is_some() {
             record_cold_touch(ColdTouchKind::ModelLoad);
         } else {
-            log::warn!(
-                "[node.depth_map] MiDaS native plugin unavailable — output will be black"
-            );
+            log::warn!("[node.depth_map] MiDaS native plugin unavailable — output will be black");
         }
     }
 

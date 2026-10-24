@@ -17,13 +17,15 @@
 //! `angle = 0` mirrors across the horizontal centerline (bottom half =
 //! mirror of top). `angle = π/4` mirrors across the +45° diagonal.
 
-use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
+use std::borrow::Cow;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::primitives::standalone_pipeline::{
+    dispatch_standalone_2d, standalone_pipeline,
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -121,12 +123,16 @@ mod gpu_tests {
     use manifold_gpu::GpuTextureFormat;
 
     use super::MirrorAxis;
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use manifold_node_engine::exec::execution_plan::{ExecutionPlan, ResourceId, compile};
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_node_engine::graph::Graph;
     use manifold_node_engine::parameters::ParamValue;
-    use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, scene::boundary_nodes::Source};
-    use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::{
+        exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+        exec::metal_backend::MetalBackend, scene::boundary_nodes::FinalOutput,
+        scene::boundary_nodes::Source,
+    };
 
     fn frame_time() -> FrameTime {
         FrameTime {

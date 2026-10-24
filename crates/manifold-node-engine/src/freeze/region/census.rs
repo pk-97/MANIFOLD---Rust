@@ -305,8 +305,7 @@ fn component_build_results(
                 None => n,
             }
         };
-        let would_bridge_a_gather_wire =
-            gather_pairs.iter().any(|&(gp, gc)| key(gp) == key(gc));
+        let would_bridge_a_gather_wire = gather_pairs.iter().any(|&(gp, gc)| key(gp) == key(gc));
         if !collapsed_has_cycle(&forward, &key) && !would_bridge_a_gather_wire {
             uf.union(a, b);
         }
@@ -322,7 +321,8 @@ fn component_build_results(
         if nodes.len() < 2 {
             continue;
         }
-        let result = build_region(def, registry, &nodes, &final_reachable, spaces.as_ref()).map(|_| ());
+        let result =
+            build_region(def, registry, &nodes, &final_reachable, spaces.as_ref()).map(|_| ());
         out.push((nodes, result));
     }
     out
@@ -335,7 +335,10 @@ fn component_build_results(
 /// sits in a fused region of ≥2 members, and was NOT absorbed — the exact
 /// `MAX_VIRTUAL_CHAIN=1` cut); (3) region-level `build_region` drops
 /// (fan-out named explicitly, everything else Other).
-fn census_def(def: &EffectGraphDef, registry: &PrimitiveRegistry, stats: &mut AHashMap<RefusalFamily, FamilyStats>,
+fn census_def(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    stats: &mut AHashMap<RefusalFamily, FamilyStats>,
 ) {
     let regions = partition_regions(def, registry);
     let member_of: AHashMap<u32, usize> = regions
@@ -353,7 +356,8 @@ fn census_def(def: &EffectGraphDef, registry: &PrimitiveRegistry, stats: &mut AH
     // regions together or a chain of >1 newly-eligible neighbours, so the
     // real saving from lifting a whole family is >= what's reported here.
     for n in &def.nodes {
-        let Some(family) = classify_refusal(n, def, registry) else { continue;
+        let Some(family) = classify_refusal(n, def, registry) else {
+            continue;
         };
         let has_eligible_neighbor = def.wires.iter().any(|w| {
             let (other, this_is_from) = if w.from_node == n.id {
@@ -369,9 +373,7 @@ fn census_def(def: &EffectGraphDef, registry: &PrimitiveRegistry, stats: &mut AH
                     .nodes
                     .iter()
                     .find(|o| o.id == other)
-                    .is_some_and(|on| {
-                        classify_node(on, def, registry) == NodeClass::Eligible
-                    })
+                    .is_some_and(|on| classify_node(on, def, registry) == NodeClass::Eligible)
         });
         let e = stats.entry(family).or_default();
         e.refusals += 1;
@@ -389,10 +391,12 @@ fn census_def(def: &EffectGraphDef, registry: &PrimitiveRegistry, stats: &mut AH
                 if *access != InputAccess::Gather {
                     continue;
                 }
-                let RegionInput::External(e) = input else { continue;
+                let RegionInput::External(e) = input else {
+                    continue;
                 };
                 let prod = r.externals[*e].from_node;
-                let Some(&prod_region) = member_of.get(&prod) else { continue;
+                let Some(&prod_region) = member_of.get(&prod) else {
+                    continue;
                 };
                 if regions[prod_region].members.len() < 2 {
                     continue; // single-node chain — MAX_VIRTUAL_CHAIN=1 admits it; not this family
@@ -448,16 +452,17 @@ pub fn build_census_report(fixture: FixtureCorpus) -> String {
     let mut liveschool_note = String::from("NOT FOUND (gitignored fixture; skipped)");
 
     let mut census_json = |json: &str| {
-        if let Ok(def) = serde_json::from_str::<manifold_core::effect_graph_def::EffectGraphDef>(json)
+        if let Ok(def) =
+            serde_json::from_str::<manifold_core::effect_graph_def::EffectGraphDef>(json)
             && let Ok(flat) = manifold_core::flatten::flatten_groups(&def)
         {
             census_def(&flat, &registry, &mut stats);
         }
     };
 
-    for type_id in crate::load::catalog_source::preset_type_ids(
-        manifold_core::preset_def::PresetKind::Effect,
-    ) {
+    for type_id in
+        crate::load::catalog_source::preset_type_ids(manifold_core::preset_def::PresetKind::Effect)
+    {
         if let Some(view) = crate::load::loaded_preset_view::loaded_preset_view_by_id(&type_id) {
             let json = serde_json::to_string(&view.canonical_def).unwrap();
             census_json(&json);
@@ -536,12 +541,20 @@ pub fn build_census_report(fixture: FixtureCorpus) -> String {
     let mut rows: Vec<(RefusalFamily, FamilyStats)> = stats.into_iter().collect();
     rows.sort_by_key(|(f, _)| *f);
     for (family, s) in &rows {
-        out.push_str(&format!("| {} | {} | {} |\n", family.label(), s.refusals, s.dispatches_saved));
+        out.push_str(&format!(
+            "| {} | {} | {} |\n",
+            family.label(),
+            s.refusals,
+            s.dispatches_saved
+        ));
     }
     out.push('\n');
 
     let get = |f: RefusalFamily| {
-        rows.iter().find(|(rf, _)| *rf == f).map(|(_, s)| *s).unwrap_or_default()
+        rows.iter()
+            .find(|(rf, _)| *rf == f)
+            .map(|(_, s)| *s)
+            .unwrap_or_default()
     };
     let fan_out = get(RefusalFamily::BufferFanOut);
     let resample = get(RefusalFamily::Resample);

@@ -20,8 +20,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
@@ -74,7 +74,10 @@ impl Primitive for FacetNormals {
         if port_name != "out" {
             return None;
         }
-        input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)
+        input_capacities
+            .iter()
+            .find(|(p, _)| *p == "in")
+            .map(|(_, n)| *n)
     }
 
     /// Mesh revision declaration (SCENE_MODIFIER_RT_DESIGN.md §3.1): the
@@ -82,8 +85,13 @@ impl Primitive for FacetNormals {
     /// position and uv (`shaders/facet_normals_body.wgsl`) — so topology
     /// tracks input `in` topology and positions track input `in`
     /// positions.
-    fn mesh_output_rule(&self, port: &str) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
-        use manifold_node_engine::scene::mesh_change::{MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule};
+    fn mesh_output_rule(
+        &self,
+        port: &str,
+    ) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
+        use manifold_node_engine::scene::mesh_change::{
+            MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule,
+        };
         if port == "out" {
             return MeshOutputRule {
                 topology: MeshRevisionRule::Dependencies(&[MeshDependency {
@@ -172,7 +180,7 @@ mod gpu_tests {
             tangent: [0.0; 4],
             color: [1.0; 4],
         }
-}
+    }
 
     /// The generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {
@@ -180,7 +188,11 @@ mod gpu_tests {
             .expect("facet_normals buffer codegen")
     }
 
-    fn dispatch_facet(device: &manifold_gpu::GpuDevice, wgsl: &str, src: &[MeshVertex]) -> Vec<MeshVertex> {
+    fn dispatch_facet(
+        device: &manifold_gpu::GpuDevice,
+        wgsl: &str,
+        src: &[MeshVertex],
+    ) -> Vec<MeshVertex> {
         let pipeline = device.create_compute_pipeline(
             wgsl,
             manifold_node_engine::freeze::codegen::ENTRY,
@@ -201,18 +213,33 @@ mod gpu_tests {
             _pad2: 0,
         };
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: &sbuf, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &dbuf, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &sbuf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &dbuf,
+                offset: 0,
+            },
         ];
         let mut enc = device.create_encoder("facet-normals-test");
-        enc.dispatch_compute(&pipeline, &bindings, [dispatch_count.div_ceil(256), 1, 1], "facet-normals-test");
+        enc.dispatch_compute(
+            &pipeline,
+            &bindings,
+            [dispatch_count.div_ceil(256), 1, 1],
+            "facet-normals-test",
+        );
         enc.commit_and_wait_completed();
 
         let ptr = dbuf.mapped_ptr().expect("shared dst buffer");
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, src.len()) }.to_vec()
     }
-
 
     #[test]
     fn analytic_normal_on_a_right_triangle() {
@@ -231,9 +258,21 @@ mod gpu_tests {
         let out = dispatch_facet(&device, &gen_wgsl, &src);
 
         for i in 0..3 {
-            assert!((out[i].normal[0]).abs() < 1e-5, "vertex {i} normal.x: {}", out[i].normal[0]);
-            assert!((out[i].normal[1]).abs() < 1e-5, "vertex {i} normal.y: {}", out[i].normal[1]);
-            assert!((out[i].normal[2] - 1.0).abs() < 1e-5, "vertex {i} normal.z: {}", out[i].normal[2]);
+            assert!(
+                (out[i].normal[0]).abs() < 1e-5,
+                "vertex {i} normal.x: {}",
+                out[i].normal[0]
+            );
+            assert!(
+                (out[i].normal[1]).abs() < 1e-5,
+                "vertex {i} normal.y: {}",
+                out[i].normal[1]
+            );
+            assert!(
+                (out[i].normal[2] - 1.0).abs() < 1e-5,
+                "vertex {i} normal.z: {}",
+                out[i].normal[2]
+            );
             assert_eq!(out[i].position, src[i].position);
             assert_eq!(out[i].uv, src[i].uv);
         }
@@ -256,12 +295,18 @@ mod gpu_tests {
         assert_eq!(out.len(), 4);
         // Full triangle (0,1,2): normal is +Z.
         for (i, v) in out.iter().enumerate().take(3) {
-            assert!((v.normal[2] - 1.0).abs() < 1e-5, "vertex {i} should get the triangle normal");
+            assert!(
+                (v.normal[2] - 1.0).abs() < 1e-5,
+                "vertex {i} should get the triangle normal"
+            );
         }
         // Trailing partial (3): passes through UNCHANGED, including its
         // original (arbitrary) normal — nothing recomputed.
         assert_eq!(out[3].position, src[3].position);
-        assert_eq!(out[3].normal, src[3].normal, "trailing partial vertex normal must be untouched");
+        assert_eq!(
+            out[3].normal, src[3].normal,
+            "trailing partial vertex normal must be untouched"
+        );
         assert_eq!(out[3].uv, src[3].uv);
     }
 

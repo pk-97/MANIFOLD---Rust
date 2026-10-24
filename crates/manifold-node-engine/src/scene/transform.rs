@@ -25,7 +25,12 @@ use crate::mesh::pipeline::mat4_mul;
 /// and `render_scene` use.
 pub type Mat4 = [[f32; 4]; 4];
 
-pub const IDENTITY_MAT4: Mat4 = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+pub const IDENTITY_MAT4: Mat4 = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+];
 
 fn identity_mat4() -> Mat4 {
     IDENTITY_MAT4
@@ -96,7 +101,11 @@ impl Transform {
     /// billboard's rotation is known only once the camera is.
     pub fn world_with_rotation(&self, rot_euler: [f32; 3]) -> Mat4 {
         let local = trs_matrix(self.pos, rot_euler, self.scale);
-        if is_identity_mat4(&self.parent) { local } else { mat4_mul(self.parent, local) }
+        if is_identity_mat4(&self.parent) {
+            local
+        } else {
+            mat4_mul(self.parent, local)
+        }
     }
 
     /// Euler angles (radians, XYZ order) that rotate the object so its local
@@ -167,13 +176,24 @@ pub fn rotation_to_render_scene_euler(r: [[f32; 3]; 3]) -> [f32; 3] {
 
 impl From<Transform> for manifold_core::fluid_domain::DomainBox {
     fn from(t: Transform) -> Self {
-        Self { pos: t.pos, rot_euler: t.rot_euler, scale: t.scale, billboard: t.billboard }
+        Self {
+            pos: t.pos,
+            rot_euler: t.rot_euler,
+            scale: t.scale,
+            billboard: t.billboard,
+        }
     }
 }
 
 impl From<manifold_core::fluid_domain::DomainBox> for Transform {
     fn from(b: manifold_core::fluid_domain::DomainBox) -> Self {
-        Self { pos: b.pos, rot_euler: b.rot_euler, scale: b.scale, billboard: b.billboard, parent: IDENTITY_MAT4 }
+        Self {
+            pos: b.pos,
+            rot_euler: b.rot_euler,
+            scale: b.scale,
+            billboard: b.billboard,
+            parent: IDENTITY_MAT4,
+        }
     }
 }
 
@@ -232,12 +252,12 @@ mod tests {
         let general_len = general_raw.iter().map(|v| v * v).sum::<f32>().sqrt();
         let general = general_raw.map(|v| v / general_len);
         let cases: [[f32; 4]; 6] = [
-            [0.0, 0.0, 0.0, 1.0],                                   // identity
-            [0.0, 0.0, (0.4_f32).sin(), (0.4_f32).cos()],           // Z-only
-            [(0.3_f32).sin(), 0.0, 0.0, (0.3_f32).cos()],           // X-only
-            general,                                                // general
-            [0.0, half_90, 0.0, cos_45],                            // gimbal lock: +90 deg about Y
-            [0.0, -half_90, 0.0, cos_45],                           // gimbal lock: -90 deg about Y
+            [0.0, 0.0, 0.0, 1.0],                         // identity
+            [0.0, 0.0, (0.4_f32).sin(), (0.4_f32).cos()], // Z-only
+            [(0.3_f32).sin(), 0.0, 0.0, (0.3_f32).cos()], // X-only
+            general,                                      // general
+            [0.0, half_90, 0.0, cos_45],                  // gimbal lock: +90 deg about Y
+            [0.0, -half_90, 0.0, cos_45],                 // gimbal lock: -90 deg about Y
         ];
         for q in cases {
             let euler = quat_to_render_scene_euler(q);
@@ -296,29 +316,66 @@ mod tests {
 
     #[test]
     fn a_three_level_chain_composes_parent_times_child_with_shear_kept() {
-        let outer = Transform { pos: [1.0, -2.0, 0.5], rot_euler: [0.0, 0.0, 0.0], scale: [3.0, 1.0, 0.5], ..Transform::default() };
-        let middle = Transform { pos: [0.5, 1.0, -1.0], rot_euler: [0.3, -0.7, 0.4], scale: [1.0, 2.0, 1.0], ..Transform::default() };
-        let inner = Transform { pos: [-0.25, 0.75, 2.0], rot_euler: [-0.5, 0.2, 1.1], scale: [0.5, 0.5, 1.5], ..Transform::default() };
+        let outer = Transform {
+            pos: [1.0, -2.0, 0.5],
+            rot_euler: [0.0, 0.0, 0.0],
+            scale: [3.0, 1.0, 0.5],
+            ..Transform::default()
+        };
+        let middle = Transform {
+            pos: [0.5, 1.0, -1.0],
+            rot_euler: [0.3, -0.7, 0.4],
+            scale: [1.0, 2.0, 1.0],
+            ..Transform::default()
+        };
+        let inner = Transform {
+            pos: [-0.25, 0.75, 2.0],
+            rot_euler: [-0.5, 0.2, 1.1],
+            scale: [0.5, 0.5, 1.5],
+            ..Transform::default()
+        };
         // What node.transform_3d does with a wired parent.
-        let middle = Transform { parent: outer.world(), ..middle };
-        let inner = Transform { parent: middle.world(), ..inner };
+        let middle = Transform {
+            parent: outer.world(),
+            ..middle
+        };
+        let inner = Transform {
+            parent: middle.world(),
+            ..inner
+        };
         let world = inner.world();
-        for p in [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.3, -0.8, 2.5]] {
+        for p in [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.3, -0.8, 2.5],
+        ] {
             let expected = trs_point(&outer, trs_point(&middle, trs_point(&inner, p)));
             let got = apply(&world, p);
             for i in 0..3 {
-                assert!((expected[i] - got[i]).abs() < 1e-4, "point {p:?}: expected {expected:?}, got {got:?}");
+                assert!(
+                    (expected[i] - got[i]).abs() < 1e-4,
+                    "point {p:?}: expected {expected:?}, got {got:?}"
+                );
             }
         }
         // A turned child under a non-uniformly scaled parent shears: its
         // world axes are no longer at right angles.
         let dot = (0..3).map(|r| world[0][r] * world[1][r]).sum::<f32>();
-        assert!(dot.abs() > 1e-3, "the composed matrix must keep the shear, dot {dot}");
+        assert!(
+            dot.abs() > 1e-3,
+            "the composed matrix must keep the shear, dot {dot}"
+        );
     }
 
     #[test]
     fn an_unparented_transform_is_its_own_trs() {
-        let t = Transform { pos: [1.0, 2.0, 3.0], rot_euler: [0.1, 0.2, 0.3], scale: [2.0, 2.0, 2.0], ..Transform::default() };
+        let t = Transform {
+            pos: [1.0, 2.0, 3.0],
+            rot_euler: [0.1, 0.2, 0.3],
+            scale: [2.0, 2.0, 2.0],
+            ..Transform::default()
+        };
         assert_eq!(t.world(), trs_matrix(t.pos, t.rot_euler, t.scale));
         assert_eq!(Transform::default().world(), IDENTITY_MAT4);
     }

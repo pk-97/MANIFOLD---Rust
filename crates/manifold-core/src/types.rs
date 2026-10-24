@@ -177,7 +177,10 @@ impl LayerType {
 
     /// Whether this layer kind should produce timeline clip thumbnails.
     pub fn supports_clip_thumbnails(self) -> bool {
-        matches!(self, LayerType::Video | LayerType::Generator | LayerType::Dmx)
+        matches!(
+            self,
+            LayerType::Video | LayerType::Generator | LayerType::Dmx
+        )
     }
 }
 
@@ -1081,7 +1084,10 @@ mod tests {
             (Group, Group),
             (Video, Group),
         ] {
-            assert!(!to.accepts_clips_from(from), "{to:?} must refuse clips from {from:?}");
+            assert!(
+                !to.accepts_clips_from(from),
+                "{to:?} must refuse clips from {from:?}"
+            );
         }
     }
 
@@ -1120,11 +1126,17 @@ mod tests {
 
         for (wire, kind) in [(0, Video), (1, Generator), (2, Group), (3, Audio), (4, Dmx)] {
             assert_eq!(serde_json::to_string(&kind).unwrap(), wire.to_string());
-            assert_eq!(serde_json::from_str::<LayerType>(&wire.to_string()).unwrap(), kind);
+            assert_eq!(
+                serde_json::from_str::<LayerType>(&wire.to_string()).unwrap(),
+                kind
+            );
         }
         assert_eq!(serde_json::to_string(&Trigger).unwrap(), "5");
         assert_eq!(serde_json::from_str::<LayerType>("5").unwrap(), Trigger);
-        assert_eq!(serde_json::from_str::<LayerType>("\"Trigger\"").unwrap(), Trigger);
+        assert_eq!(
+            serde_json::from_str::<LayerType>("\"Trigger\"").unwrap(),
+            Trigger
+        );
 
         assert!(Trigger.accepts_clips_from(Trigger));
         assert!(!Trigger.accepts_clips_from(Video));

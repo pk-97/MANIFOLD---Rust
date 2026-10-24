@@ -6,12 +6,16 @@ mod gpu_tests {
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use manifold_node_engine::exec::execution_plan::ResourceId;
-    use manifold_node_engine::parameters::TableData;
-    use manifold_nodes_image::node_graph::primitives::cycle_table_row::CycleTableRow;
-    use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::execution_plan::compile};
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::parameters::TableData;
+    use manifold_node_engine::{
+        exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+        exec::execution_plan::compile, exec::metal_backend::MetalBackend, graph::Graph,
+        parameters::ParamValue, scene::boundary_nodes::FinalOutput,
+    };
+    use manifold_nodes_image::node_graph::primitives::cycle_table_row::CycleTableRow;
 
     use manifold_nodes_scene::node_graph::primitives::nested_cubes_geometry::NestedCubesGeometry;
 
@@ -50,10 +54,13 @@ mod gpu_tests {
         let mut g = Graph::new();
         let cycler = g.add_node(Box::new(CycleTableRow::new()));
         let table = std::sync::Arc::new(
-            TableData::new(vec![vec![angles[0], angles[1], angles[2], angles[3], angles[4]]])
-                .expect("1×5 table"),
+            TableData::new(vec![vec![
+                angles[0], angles[1], angles[2], angles[3], angles[4],
+            ]])
+            .expect("1×5 table"),
         );
-        g.set_param(cycler, "table", ParamValue::Table(table)).unwrap();
+        g.set_param(cycler, "table", ParamValue::Table(table))
+            .unwrap();
 
         let geom = g.add_node(Box::new(NestedCubesGeometry::new()));
         g.connect((cycler, "row"), (geom, "target_angles")).unwrap();
@@ -97,9 +104,8 @@ mod gpu_tests {
         readback_enc.commit_and_wait_completed();
 
         let ptr = readback_buf.mapped_ptr().expect("shared readback");
-        let halves: &[u16] = unsafe {
-            std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize)
-        };
+        let halves: &[u16] =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
         halves.to_vec()
     }
 

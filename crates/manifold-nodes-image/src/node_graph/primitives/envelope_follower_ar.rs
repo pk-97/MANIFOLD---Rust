@@ -10,11 +10,15 @@
 //!
 //! State: single f32 (previous smoothed value) in `StateStore`.
 
-use std::borrow::Cow;
-use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, NodeRequires};
+use manifold_node_engine::exec::effect_node::{
+    EffectNode, EffectNodeContext, EffectNodeType, NodeRequires,
+};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use manifold_node_engine::ports::{
+    NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+};
 use manifold_node_engine::state_store::NodeState;
+use std::borrow::Cow;
 
 pub const ENVELOPE_FOLLOWER_AR_TYPE_ID: &str = "node.envelope_follower_ar";
 

@@ -1,4 +1,3 @@
-use crate::{EditingAction, LayerAction, ParamsAction, ProjectAction, RootAction};
 use super::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
 use crate::chrome::{ChromeHost, Pad, Sizing, View, components};
 use crate::color::{self, darken, lighten};
@@ -8,8 +7,9 @@ use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::scroll_container::ScrollContainer;
 use crate::tree::UITree;
-use manifold_foundation::LayerId;
 use crate::types::note_number_to_name;
+use crate::{EditingAction, LayerAction, ParamsAction, ProjectAction, RootAction};
+use manifold_foundation::LayerId;
 use std::time::Instant;
 mod trigger_labels;
 
@@ -498,7 +498,10 @@ fn compute_layer_row(
     // Selection accent — a thin bar on the card's left edge, always laid out so
     // the node exists for in-place restyle; its colour is transparent until the
     // layer is selected.
-    d.set(C::SelectAccent, Rect::new(card_x, y_offset, SEL_ACCENT_W, height));
+    d.set(
+        C::SelectAccent,
+        Rect::new(card_x, y_offset, SEL_ACCENT_W, height),
+    );
 
     // ── Top row: Chevron | Name | DragHandle ──
     let chevron_w = CHEVRON_W;
@@ -590,7 +593,16 @@ fn compute_layer_row(
 
     if is_audio {
         return compute_audio_row(
-            d, y_offset, height, w, card_x, pad, right_pad, btn_x, y, is_collapsed,
+            d,
+            y_offset,
+            height,
+            w,
+            card_x,
+            pad,
+            right_pad,
+            btn_x,
+            y,
+            is_collapsed,
         );
     }
 
@@ -643,7 +655,10 @@ fn compute_layer_row(
         // video layer. Decided by the gen label, not the layer type: any lane
         // carrying a generator preset shows its name.
         if has_gen_label {
-            d.set(C::GenType, Rect::new(pad, y, (right_edge - pad).max(20.0), BTN_H));
+            d.set(
+                C::GenType,
+                Rect::new(pad, y, (right_edge - pad).max(20.0), BTN_H),
+            );
             y += BTN_H + ROUTING_ROW_GAP;
         } else if !is_generator {
             // FOLDER label | folder-path value chip — video layers only
@@ -1016,8 +1031,17 @@ impl LayerHeaderPanel {
     /// Rewrite each audio row's gain slider in place (UI_INVALIDATION D22).
     /// `gains` walks the project's layers in this panel's order as
     /// `(layer id, gain dB)`; a row whose id differs waits for the rebuild.
-    pub fn sync_audio_gains(&mut self, tree: &mut UITree, gains: &mut dyn Iterator<Item = (&str, f32)>) {
-        for ((layer, slider), (id, db)) in self.layers.iter_mut().zip(self.gain_sliders.iter_mut()).zip(gains) {
+    pub fn sync_audio_gains(
+        &mut self,
+        tree: &mut UITree,
+        gains: &mut dyn Iterator<Item = (&str, f32)>,
+    ) {
+        for ((layer, slider), (id, db)) in self
+            .layers
+            .iter_mut()
+            .zip(self.gain_sliders.iter_mut())
+            .zip(gains)
+        {
             if layer.layer_id != id || layer.audio_gain_db == db {
                 continue;
             }
@@ -1089,7 +1113,12 @@ impl LayerHeaderPanel {
     /// audio encoder backpressure) on the Record button's label while
     /// recording. Dirty-checked so a steady-state recording (the common
     /// case: 0 dropped) costs nothing beyond the initial call.
-    pub fn set_recording_drops(&mut self, tree: &mut UITree, video_dropped: u32, audio_dropped: u32) {
+    pub fn set_recording_drops(
+        &mut self,
+        tree: &mut UITree,
+        video_dropped: u32,
+        audio_dropped: u32,
+    ) {
         let total = video_dropped + audio_dropped;
         if self.recording_dropped_total == total {
             return;
@@ -1107,7 +1136,10 @@ impl LayerHeaderPanel {
             return "Record Live".to_string();
         }
         if self.recording_dropped_total > 0 {
-            format!("Stop Recording \u{26A0} {} dropped", self.recording_dropped_total)
+            format!(
+                "Stop Recording \u{26A0} {} dropped",
+                self.recording_dropped_total
+            )
         } else {
             "Stop Recording".to_string()
         }
@@ -1169,10 +1201,17 @@ impl LayerHeaderPanel {
             motion.tick(dt_ms, hovered, pressed);
 
             let muted = self.cached_mute.get(i).copied().unwrap_or(false);
-            let layer_color = self.cached_colors.get(i).copied().unwrap_or(Color32::TRANSPARENT);
+            let layer_color = self
+                .cached_colors
+                .get(i)
+                .copied()
+                .unwrap_or(Color32::TRANSPARENT);
             let target = mute_style(muted, layer_color);
-            let blended =
-                motion.blend(target.bg_color, target.hover_bg_color, target.pressed_bg_color);
+            let blended = motion.blend(
+                target.bg_color,
+                target.hover_bg_color,
+                target.pressed_bg_color,
+            );
             // Point every colour field the renderer might read at the SAME
             // blended value, so its own instant HOVERED/PRESSED flag branch
             // (`ui_renderer.rs`) paints exactly what we just computed
@@ -1186,7 +1225,6 @@ impl LayerHeaderPanel {
                     ..target
                 },
             );
-
         }
     }
 
@@ -1260,9 +1298,7 @@ impl LayerHeaderPanel {
     // ── Accessors ───────────────────────────────────────────────────
 
     pub fn blend_mode_node_id(&self, index: usize) -> Option<NodeId> {
-        self.rows
-            .get(index)
-            .and_then(|r| r.id(LayerControl::Blend))
+        self.rows.get(index).and_then(|r| r.id(LayerControl::Blend))
     }
 
     pub fn midi_channel_node_id(&self, index: usize) -> Option<NodeId> {
@@ -1286,7 +1322,11 @@ impl LayerHeaderPanel {
                 *cached = muted;
             }
             if let Some(mute_id) = row.id(LayerControl::Mute) {
-                let lc = self.cached_colors.get(index).copied().unwrap_or(Color32::TRANSPARENT);
+                let lc = self
+                    .cached_colors
+                    .get(index)
+                    .copied()
+                    .unwrap_or(Color32::TRANSPARENT);
                 tree.set_style(mute_id, mute_style(muted, lc));
             }
         }
@@ -1301,7 +1341,11 @@ impl LayerHeaderPanel {
                 *cached = solo;
             }
             if let Some(solo_id) = row.id(LayerControl::Solo) {
-                let lc = self.cached_colors.get(index).copied().unwrap_or(Color32::TRANSPARENT);
+                let lc = self
+                    .cached_colors
+                    .get(index)
+                    .copied()
+                    .unwrap_or(Color32::TRANSPARENT);
                 tree.set_style(solo_id, solo_style(solo, lc));
             }
         }
@@ -1316,7 +1360,11 @@ impl LayerHeaderPanel {
                 *cached = led;
             }
             if let Some(led_id) = row.id(LayerControl::Led) {
-                let lc = self.cached_colors.get(index).copied().unwrap_or(Color32::TRANSPARENT);
+                let lc = self
+                    .cached_colors
+                    .get(index)
+                    .copied()
+                    .unwrap_or(Color32::TRANSPARENT);
                 tree.set_style(led_id, led_style(led, lc));
             }
         }
@@ -1346,10 +1394,17 @@ impl LayerHeaderPanel {
             if let Some(name_id) = row.id(LayerControl::Name)
                 && let Some(node) = tree.get_node(name_id)
             {
-                let layer_color = self.cached_colors.get(index).copied().unwrap_or(Color32::TRANSPARENT);
+                let layer_color = self
+                    .cached_colors
+                    .get(index)
+                    .copied()
+                    .unwrap_or(Color32::TRANSPARENT);
                 let mut style = node.style;
-                style.text_color =
-                    if selected { color::TEXT_WHITE_C32 } else { color::contrast_text_color(layer_color) };
+                style.text_color = if selected {
+                    color::TEXT_WHITE_C32
+                } else {
+                    color::contrast_text_color(layer_color)
+                };
                 tree.set_style(name_id, style);
             }
         }
@@ -1359,47 +1414,53 @@ impl LayerHeaderPanel {
         // section M: the "BLEND" micro-label is a style prefix (`prefix_label`) painted by
         // the renderer — the live-refresh text is just the bare mode value.
         if let Some(row) = self.rows.get(index)
-            && let Some(id) = row.id(LayerControl::Blend) {
-                tree.set_text(id, text);
-            }
+            && let Some(id) = row.id(LayerControl::Blend)
+        {
+            tree.set_text(id, text);
+        }
     }
 
     pub fn set_midi_note_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
         // section M: the caret is a style flag (`dropdown_caret`), painted by the
         // renderer — the live-refresh text is just the value, no glyph to re-append.
         if let Some(row) = self.rows.get(index)
-            && let Some(id) = row.id(LayerControl::MidiInput) {
-                tree.set_text(id, text);
-            }
+            && let Some(id) = row.id(LayerControl::MidiInput)
+        {
+            tree.set_text(id, text);
+        }
     }
 
     pub fn set_midi_channel_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
         if let Some(row) = self.rows.get(index)
-            && let Some(id) = row.id(LayerControl::ChDropdown) {
-                tree.set_text(id, text);
-            }
+            && let Some(id) = row.id(LayerControl::ChDropdown)
+        {
+            tree.set_text(id, text);
+        }
     }
 
     pub fn set_midi_device_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
         if let Some(row) = self.rows.get(index)
-            && let Some(id) = row.id(LayerControl::DevDropdown) {
-                tree.set_text(id, text);
-            }
+            && let Some(id) = row.id(LayerControl::DevDropdown)
+        {
+            tree.set_text(id, text);
+        }
     }
 
     pub fn set_midi_mode_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
         // MidiMode is a toggle, not a dropdown — no caret (see the build arm).
         if let Some(row) = self.rows.get(index)
-            && let Some(id) = row.id(LayerControl::MidiMode) {
-                tree.set_text(id, text);
-            }
+            && let Some(id) = row.id(LayerControl::MidiMode)
+        {
+            tree.set_text(id, text);
+        }
     }
 
     pub fn set_info_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
         if let Some(row) = self.rows.get(index)
-            && let Some(id) = row.id(LayerControl::Info) {
-                tree.set_text(id, text);
-            }
+            && let Some(id) = row.id(LayerControl::Info)
+        {
+            tree.set_text(id, text);
+        }
     }
 
     // ── Drag-reorder (separate from Panel trait — needs &mut UITree) ──
@@ -1427,7 +1488,10 @@ impl LayerHeaderPanel {
                 };
                 return vec![
                     PanelAction::Scrub(ValueRef::LayerAudioGain(lid.clone()), ScrubPhase::Begin),
-                    PanelAction::Scrub(ValueRef::LayerAudioGain(lid), ScrubPhase::Move(ScrubValue::Scalar(val))),
+                    PanelAction::Scrub(
+                        ValueRef::LayerAudioGain(lid),
+                        ScrubPhase::Move(ScrubValue::Scalar(val)),
+                    ),
                 ];
             }
         }
@@ -1444,7 +1508,10 @@ impl LayerHeaderPanel {
         if let Some(val) = self.gain_sliders[i].apply_drag(pos_x, tree, &gain_db_text)
             && let Some(lid) = self.layer_id_at(i)
         {
-            return vec![PanelAction::Scrub(ValueRef::LayerAudioGain(lid), ScrubPhase::Move(ScrubValue::Scalar(val)))];
+            return vec![PanelAction::Scrub(
+                ValueRef::LayerAudioGain(lid),
+                ScrubPhase::Move(ScrubValue::Scalar(val)),
+            )];
         }
         Vec::new()
     }
@@ -1459,7 +1526,10 @@ impl LayerHeaderPanel {
         if self.gain_sliders[i].end_drag()
             && let Some(lid) = self.layer_id_at(i)
         {
-            return vec![PanelAction::Scrub(ValueRef::LayerAudioGain(lid), ScrubPhase::Commit)];
+            return vec![PanelAction::Scrub(
+                ValueRef::LayerAudioGain(lid),
+                ScrubPhase::Commit,
+            )];
         }
         Vec::new()
     }
@@ -1500,15 +1570,16 @@ impl LayerHeaderPanel {
             self.drag_source = i as i32;
             self.drag_target = i as i32;
             if let Some(row) = self.rows.get(i)
-                && let Some(bg_id) = row.id(LayerControl::Background) {
-                    tree.set_style(
-                        bg_id,
-                        UIStyle {
-                            bg_color: DRAG_SOURCE_DIM,
-                            ..UIStyle::default()
-                        },
-                    );
-                }
+                && let Some(bg_id) = row.id(LayerControl::Background)
+            {
+                tree.set_style(
+                    bg_id,
+                    UIStyle {
+                        bg_color: DRAG_SOURCE_DIM,
+                        ..UIStyle::default()
+                    },
+                );
+            }
             return vec![PanelAction::Layer(LayerAction::LayerDragStarted(i))];
         }
         self.drag_source = -1;
@@ -1580,18 +1651,21 @@ impl LayerHeaderPanel {
 
         // Restore source layer appearance
         if let Some(row) = self.rows.get(source)
-            && let Some(bg_id) = row.id(LayerControl::Background) {
-                let selected = self.cached_selected.get(source).copied().unwrap_or(false);
-                let layer_color = self
-                    .cached_colors
-                    .get(source)
-                    .copied()
-                    .unwrap_or(Color32::TRANSPARENT);
-                tree.set_style(bg_id, bg_style(selected, layer_color));
-            }
+            && let Some(bg_id) = row.id(LayerControl::Background)
+        {
+            let selected = self.cached_selected.get(source).copied().unwrap_or(false);
+            let layer_color = self
+                .cached_colors
+                .get(source)
+                .copied()
+                .unwrap_or(Color32::TRANSPARENT);
+            tree.set_style(bg_id, bg_style(selected, layer_color));
+        }
 
         if source != target {
-            vec![PanelAction::Layer(LayerAction::LayerDragEnded(source, target))]
+            vec![PanelAction::Layer(LayerAction::LayerDragEnded(
+                source, target,
+            ))]
         } else {
             Vec::new()
         }
@@ -1603,9 +1677,21 @@ impl LayerHeaderPanel {
     /// place the insert line again, so the drag carries on (D18). The drag
     /// itself is held by row index, never by node id.
     fn reapply_drag_visuals(&self, tree: &mut UITree, mapper: &CoordinateMapper) {
-        let Ok(source) = usize::try_from(self.drag_source) else { return };
-        if let Some(bg_id) = self.rows.get(source).and_then(|row| row.id(LayerControl::Background)) {
-            tree.set_style(bg_id, UIStyle { bg_color: DRAG_SOURCE_DIM, ..UIStyle::default() });
+        let Ok(source) = usize::try_from(self.drag_source) else {
+            return;
+        };
+        if let Some(bg_id) = self
+            .rows
+            .get(source)
+            .and_then(|row| row.id(LayerControl::Background))
+        {
+            tree.set_style(
+                bg_id,
+                UIStyle {
+                    bg_color: DRAG_SOURCE_DIM,
+                    ..UIStyle::default()
+                },
+            );
         }
         if self.drag_target >= 0 && (self.drag_target as usize) < self.layers.len() {
             self.update_insert_indicator(tree, mapper);
@@ -2163,8 +2249,14 @@ impl LayerHeaderPanel {
                     let value_text = gain_db_text(layer.audio_gain_db);
                     let lid = LayerId::new(&layer.layer_id);
                     let reset = PanelAction::slider_reset(
-                        PanelAction::Scrub(ValueRef::LayerAudioGain(lid.clone()), ScrubPhase::Begin),
-                        PanelAction::Scrub(ValueRef::LayerAudioGain(lid.clone()), ScrubPhase::Move(ScrubValue::Scalar(0.0))),
+                        PanelAction::Scrub(
+                            ValueRef::LayerAudioGain(lid.clone()),
+                            ScrubPhase::Begin,
+                        ),
+                        PanelAction::Scrub(
+                            ValueRef::LayerAudioGain(lid.clone()),
+                            ScrubPhase::Move(ScrubValue::Scalar(0.0)),
+                        ),
                         PanelAction::Scrub(ValueRef::LayerAudioGain(lid), ScrubPhase::Commit),
                     );
                     let built = crate::slider::BitmapSlider::build(
@@ -2182,11 +2274,8 @@ impl LayerHeaderPanel {
                         None,
                     );
                     let track = built.ids.track;
-                    let mut gs = crate::slider::SliderDragState::with_range(
-                        GAIN_DB_MIN,
-                        GAIN_DB_MAX,
-                        false,
-                    );
+                    let mut gs =
+                        crate::slider::SliderDragState::with_range(GAIN_DB_MIN, GAIN_DB_MAX, false);
                     gs.set_ids(built.ids);
                     self.gain_sliders[index] = gs;
                     self.gain_slider_resets[index] = Some(built.reset);
@@ -2230,7 +2319,11 @@ impl LayerHeaderPanel {
         self.layers.get(i).map(|l| LayerId::new(&l.layer_id))
     }
 
-    fn handle_click(&self, node_id: NodeId, modifiers: crate::input::Modifiers) -> Vec<PanelAction> {
+    fn handle_click(
+        &self,
+        node_id: NodeId,
+        modifiers: crate::input::Modifiers,
+    ) -> Vec<PanelAction> {
         // Record Live button
         if self.record_btn_id == Some(node_id) {
             return vec![PanelAction::Project(ProjectAction::ToggleLiveRecording)];
@@ -2259,19 +2352,23 @@ impl LayerHeaderPanel {
                     C::Led => vec![PanelAction::Layer(LayerAction::ToggleLed(lid))],
                     C::Chevron => vec![PanelAction::Layer(LayerAction::ChevronClicked(lid))],
                     C::Blend => vec![PanelAction::Layer(LayerAction::BlendModeClicked(lid))],
-                    C::TriggerTargets => vec![PanelAction::Params(
-                        ParamsAction::OpenTriggerTargets(lid),
-                    )],
+                    C::TriggerTargets => {
+                        vec![PanelAction::Params(ParamsAction::OpenTriggerTargets(lid))]
+                    }
                     C::Folder => vec![PanelAction::Layer(LayerAction::FolderClicked(lid))],
                     C::NewClip => vec![PanelAction::Layer(LayerAction::NewClipClicked(lid))],
                     C::AddGenClip => vec![PanelAction::Layer(LayerAction::AddGenClipClicked(lid))],
                     C::MidiInput => vec![PanelAction::Layer(LayerAction::MidiInputClicked(lid))],
-                    C::MidiMode => vec![PanelAction::Project(ProjectAction::MidiTriggerModeClicked(lid))],
+                    C::MidiMode => vec![PanelAction::Project(
+                        ProjectAction::MidiTriggerModeClicked(lid),
+                    )],
                     C::ChDropdown => vec![PanelAction::Layer(LayerAction::MidiChannelClicked(lid))],
                     C::DevDropdown => vec![PanelAction::Layer(LayerAction::MidiDeviceClicked(lid))],
                     C::Send => vec![PanelAction::Root(RootAction::AudioSendClicked(lid))],
                     C::Name | C::Background | C::DragHandle => {
-                        vec![PanelAction::Layer(LayerAction::LayerClicked(lid, modifiers))]
+                        vec![PanelAction::Layer(LayerAction::LayerClicked(
+                            lid, modifiers,
+                        ))]
                     }
                     // Labels, separators, accent visuals, and the gain track
                     // (drag, not click) have no click action.
@@ -2318,9 +2415,10 @@ impl LayerHeaderPanel {
             // slider never had a reset gesture before this). The reset was
             // built alongside the slider (`build_layer_row`'s `C::Gain` arm);
             // replayed here rather than re-derived.
-            if let (Some(ids), Some(reset)) =
-                (self.gain_sliders[i].ids(), self.gain_slider_resets.get(i).and_then(|r| r.as_ref()))
-            {
+            if let (Some(ids), Some(reset)) = (
+                self.gain_sliders[i].ids(),
+                self.gain_slider_resets.get(i).and_then(|r| r.as_ref()),
+            ) {
                 crate::slider::BitmapSlider::register_track_reset(ids, reset, intents);
             }
         }
@@ -2435,12 +2533,19 @@ impl LayerHeaderPanel {
         if let Some(clip) = self.scroll.clip_node_id() {
             tree.set_bounds(
                 clip,
-                Rect::new(lc.x, lc.y + header_spacer, lc.width, (lc.height - header_spacer).max(0.0)),
+                Rect::new(
+                    lc.x,
+                    lc.y + header_spacer,
+                    lc.width,
+                    (lc.height - header_spacer).max(0.0),
+                ),
             );
         }
         for i in 0..n {
-            let (Some(was), Some(now)) = (self.row_geom[i], row_geometry(&self.layers, i, mapper, lc.width))
-            else {
+            let (Some(was), Some(now)) = (
+                self.row_geom[i],
+                row_geometry(&self.layers, i, mapper, lc.width),
+            ) else {
                 continue;
             };
             let ids = self.rows[i];
@@ -2465,7 +2570,10 @@ impl LayerHeaderPanel {
             }
             if let Some(clip) = ids.clip {
                 let bg = now.rect(C::Background);
-                tree.set_bounds(clip, screen(Rect::new(0.0, bg.y, bg.x + bg.width, bg.height), origin));
+                tree.set_bounds(
+                    clip,
+                    screen(Rect::new(0.0, bg.y, bg.x + bg.width, bg.height), origin),
+                );
             }
             self.row_geom[i] = Some(now);
         }
@@ -2560,7 +2668,8 @@ impl LayerHeaderPanel {
         self.cached_led.resize(layer_count, false);
         self.cached_selected.resize(layer_count, false);
         self.cached_colors.resize(layer_count, Color32::TRANSPARENT);
-        self.mute_motion.resize(layer_count, components::ChipMotion::new());
+        self.mute_motion
+            .resize(layer_count, components::ChipMotion::new());
 
         // Swap layers out to avoid borrow conflict in build_layer_row
         // (takes O(1), avoids cloning the entire Vec)
@@ -2847,11 +2956,31 @@ pub(super) mod tests {
         assert_eq!(panel.layer_count(), 3);
         // All layers should have bg, name, mute, solo, blend_mode
         for i in 0..3 {
-            assert!(panel.rows[i].id(LayerControl::Background).is_some(), "layer {} bg", i);
-            assert!(panel.rows[i].id(LayerControl::Name).is_some(), "layer {} name", i);
-            assert!(panel.rows[i].id(LayerControl::Mute).is_some(), "layer {} mute", i);
-            assert!(panel.rows[i].id(LayerControl::Solo).is_some(), "layer {} solo", i);
-            assert!(panel.rows[i].id(LayerControl::Blend).is_some(), "layer {} blend", i);
+            assert!(
+                panel.rows[i].id(LayerControl::Background).is_some(),
+                "layer {} bg",
+                i
+            );
+            assert!(
+                panel.rows[i].id(LayerControl::Name).is_some(),
+                "layer {} name",
+                i
+            );
+            assert!(
+                panel.rows[i].id(LayerControl::Mute).is_some(),
+                "layer {} mute",
+                i
+            );
+            assert!(
+                panel.rows[i].id(LayerControl::Solo).is_some(),
+                "layer {} solo",
+                i
+            );
+            assert!(
+                panel.rows[i].id(LayerControl::Blend).is_some(),
+                "layer {} blend",
+                i
+            );
         }
         // Video layers should have folder routing.
         assert!(panel.rows[0].id(LayerControl::Folder).is_some());
@@ -2876,10 +3005,16 @@ pub(super) mod tests {
         panel.build(&mut tree, &layout, &mapper_for(&[]), 0.0);
 
         let id = panel.record_btn_id.expect("record button built");
-        assert_eq!(tree.get_node(id).unwrap().text.as_deref(), Some("Record Live"));
+        assert_eq!(
+            tree.get_node(id).unwrap().text.as_deref(),
+            Some("Record Live")
+        );
 
         panel.set_recording_active(&mut tree, true);
-        assert_eq!(tree.get_node(id).unwrap().text.as_deref(), Some("Stop Recording"));
+        assert_eq!(
+            tree.get_node(id).unwrap().text.as_deref(),
+            Some("Stop Recording")
+        );
 
         // Video pool-exhaustion drops + native audio-backpressure drops sum
         // into one label so a performer sees either kind.
@@ -2891,7 +3026,10 @@ pub(super) mod tests {
 
         // Stopping clears the counter — a new recording starts clean.
         panel.set_recording_active(&mut tree, false);
-        assert_eq!(tree.get_node(id).unwrap().text.as_deref(), Some("Record Live"));
+        assert_eq!(
+            tree.get_node(id).unwrap().text.as_deref(),
+            Some("Record Live")
+        );
     }
 
     /// BUG-025 regression: the in-place vertical-scroll fast-path must shift
@@ -2909,7 +3047,9 @@ pub(super) mod tests {
         panel.build(&mut tree, &layout, &mapper, 0.0);
 
         let clip0 = panel.rows[0].clip.expect("row 0 has a clip node");
-        let mute0 = panel.rows[0].id(LayerControl::Mute).expect("row 0 has a mute control");
+        let mute0 = panel.rows[0]
+            .id(LayerControl::Mute)
+            .expect("row 0 has a mute control");
         let clip_y0 = tree.get_bounds(clip0).y;
         let mute_y0 = tree.get_bounds(mute0).y;
 
@@ -2918,7 +3058,10 @@ pub(super) mod tests {
 
         let clip_dy = tree.get_bounds(clip0).y - clip_y0;
         let mute_dy = tree.get_bounds(mute0).y - mute_y0;
-        assert!((mute_dy - -50.0).abs() < 0.01, "control shifted by {mute_dy}, expected -50");
+        assert!(
+            (mute_dy - -50.0).abs() < 0.01,
+            "control shifted by {mute_dy}, expected -50"
+        );
         assert!(
             (clip_dy - mute_dy).abs() < 0.01,
             "clip shifted by {clip_dy} but its controls by {mute_dy} — clip must track content"
@@ -2940,14 +3083,18 @@ pub(super) mod tests {
             crate::input::Modifiers::NONE,
         );
         assert_eq!(a.len(), 1);
-        assert!(matches!(&a[0], PanelAction::Layer(LayerAction::ToggleMute(id)) if *id == LayerId::new("L1")));
+        assert!(
+            matches!(&a[0], PanelAction::Layer(LayerAction::ToggleMute(id)) if *id == LayerId::new("L1"))
+        );
 
         let a = panel.handle_click(
             panel.rows[0].id(LayerControl::Solo).unwrap(),
             crate::input::Modifiers::NONE,
         );
         assert_eq!(a.len(), 1);
-        assert!(matches!(&a[0], PanelAction::Layer(LayerAction::ToggleSolo(id)) if *id == LayerId::new("L1")));
+        assert!(
+            matches!(&a[0], PanelAction::Layer(LayerAction::ToggleSolo(id)) if *id == LayerId::new("L1"))
+        );
     }
 
     #[test]
@@ -2978,7 +3125,10 @@ pub(super) mod tests {
             LayerControl::Send,
             LayerControl::Analysis,
         ] {
-            assert!(row.id(control).is_none(), "trigger row unexpectedly has {control:?}");
+            assert!(
+                row.id(control).is_none(),
+                "trigger row unexpectedly has {control:?}"
+            );
         }
 
         let action = panel.handle_click(
@@ -3053,7 +3203,9 @@ pub(super) mod tests {
         panel.set_layers(layers);
         panel.build(&mut tree, &layout, &mapper, 0.0);
 
-        let mute_id = panel.rows[0].id(LayerControl::Mute).expect("mute chip built");
+        let mute_id = panel.rows[0]
+            .id(LayerControl::Mute)
+            .expect("mute chip built");
         let rest_bg = tree.get_node(mute_id).unwrap().style.bg_color;
         let rest_bounds = tree.get_bounds(mute_id);
 
@@ -3061,15 +3213,26 @@ pub(super) mod tests {
         tree.set_flag(mute_id, UIFlags::HOVERED);
         panel.tick_mute_motion(&mut tree, 45.0); // halfway through MOTION_FAST (90ms)
         let mid_bg = tree.get_node(mute_id).unwrap().style.bg_color;
-        assert_ne!(mid_bg, rest_bg, "background should have moved partway toward hover");
-        assert_eq!(tree.get_bounds(mute_id), rest_bounds, "bounds must not move on hover");
+        assert_ne!(
+            mid_bg, rest_bg,
+            "background should have moved partway toward hover"
+        );
+        assert_eq!(
+            tree.get_bounds(mute_id),
+            rest_bounds,
+            "bounds must not move on hover"
+        );
 
         panel.tick_mute_motion(&mut tree, 45.0); // finishes the hover-in tween
 
         // Press: colour settles fully pressed, bounds still untouched.
         tree.set_flag(mute_id, UIFlags::PRESSED);
         panel.tick_mute_motion(&mut tree, 90.0); // full MOTION_FAST press-in
-        assert_eq!(tree.get_bounds(mute_id), rest_bounds, "bounds must not move on press");
+        assert_eq!(
+            tree.get_bounds(mute_id),
+            rest_bounds,
+            "bounds must not move on press"
+        );
 
         // Release: eases back, no permanent drift in colour, bounds fixed throughout.
         tree.clear_flag(mute_id, UIFlags::PRESSED);
@@ -3081,7 +3244,11 @@ pub(super) mod tests {
             rest_bg,
             "background returns exactly to rest"
         );
-        assert_eq!(tree.get_bounds(mute_id), rest_bounds, "bounds never moved, start to finish");
+        assert_eq!(
+            tree.get_bounds(mute_id),
+            rest_bounds,
+            "bounds never moved, start to finish"
+        );
     }
 
     /// BUG-150 regression: scrolling the layer list must not leave the Mute
@@ -3100,7 +3267,9 @@ pub(super) mod tests {
         panel.set_layers(layers);
         panel.build(&mut tree, &layout, &mapper, 0.0);
 
-        let mute_id = panel.rows[0].id(LayerControl::Mute).expect("row 0 has a mute control");
+        let mute_id = panel.rows[0]
+            .id(LayerControl::Mute)
+            .expect("row 0 has a mute control");
         let row_bounds_before = panel.rows[0]
             .clip
             .map(|clip_id| tree.get_bounds(clip_id))
@@ -3131,7 +3300,8 @@ pub(super) mod tests {
         );
         assert!(
             mute_bounds.y >= row_bounds_after_scroll.y
-                && mute_bounds.y + mute_bounds.height <= row_bounds_after_scroll.y + row_bounds_after_scroll.height,
+                && mute_bounds.y + mute_bounds.height
+                    <= row_bounds_after_scroll.y + row_bounds_after_scroll.height,
             "mute chip bounds must stay inside its row's clip after scroll+hover: \
              chip y={} h={}, row y={} h={}",
             mute_bounds.y,
@@ -3219,7 +3389,9 @@ pub(super) mod tests {
         };
         let a = panel.handle_event(&event, &tree);
         assert_eq!(a.len(), 1);
-        assert!(matches!(&a[0], PanelAction::Layer(LayerAction::LayerDoubleClicked(id)) if *id == LayerId::new("L1")));
+        assert!(
+            matches!(&a[0], PanelAction::Layer(LayerAction::LayerDoubleClicked(id)) if *id == LayerId::new("L1"))
+        );
     }
 
     #[test]
@@ -3234,7 +3406,9 @@ pub(super) mod tests {
     /// it shows the generator-name line and never the source-folder row.
     #[test]
     fn led_layer_shows_generator_line_not_folder_row() {
-        let row = compute_layer_row(0.0, 140.0, 300.0, false, false, false, false, false, false, false, false, true);
+        let row = compute_layer_row(
+            0.0, 140.0, 300.0, false, false, false, false, false, false, false, false, true,
+        );
         assert!(row.has(LayerControl::GenType));
         assert!(!row.has(LayerControl::Folder));
     }
@@ -3326,10 +3500,12 @@ pub(super) mod tests {
         // collapsed_track_height`: the collapsed generator label is carved out
         // of Name's own width budget, so the row's total content width never
         // grows past what a non-generator collapsed row already uses.
-        let row_gen =
-            compute_layer_row(0.0, 140.0, 300.0, true, false, true, false, false, false, false, false, true);
-        let row_video =
-            compute_layer_row(0.0, 140.0, 300.0, true, false, false, false, false, false, false, false, false);
+        let row_gen = compute_layer_row(
+            0.0, 140.0, 300.0, true, false, true, false, false, false, false, false, true,
+        );
+        let row_video = compute_layer_row(
+            0.0, 140.0, 300.0, true, false, false, false, false, false, false, false, false,
+        );
 
         let label = row_gen.rect(LayerControl::GenType);
         let name_gen = row_gen.rect(LayerControl::Name);
@@ -3338,7 +3514,10 @@ pub(super) mod tests {
 
         // DragHandle's x (the row's right-hand boundary for this content) is
         // unchanged by the label's presence.
-        assert_eq!(handle_gen.x, handle_video.x, "label must not push DragHandle right");
+        assert_eq!(
+            handle_gen.x, handle_video.x,
+            "label must not push DragHandle right"
+        );
         // The label sits entirely between Name and DragHandle — it never
         // extends past the row's existing right edge.
         assert!(label.x + label.width <= handle_gen.x);
@@ -3385,10 +3564,16 @@ pub(super) mod tests {
         // fully inside `TrackHeight::Collapsed`, mirroring
         // `expanded_audio_content_fits_normal_track_height` below.
         let height = color::COLLAPSED_TRACK_HEIGHT;
-        let row = compute_layer_row(0.0, height, 300.0, true, false, false, true, false, false, false, false, false);
+        let row = compute_layer_row(
+            0.0, height, 300.0, true, false, false, true, false, false, false, false, false,
+        );
         assert!(!row.has(LayerControl::Gain));
         assert!(!row.has(LayerControl::Send));
-        for c in [LayerControl::Mute, LayerControl::Solo, LayerControl::Analysis] {
+        for c in [
+            LayerControl::Mute,
+            LayerControl::Solo,
+            LayerControl::Analysis,
+        ] {
             assert!(row.has(c), "collapsed audio row missing {c:?}");
             let r = row.rect(c);
             assert!(
@@ -3406,7 +3591,9 @@ pub(super) mod tests {
         // bottom edge sits inside `TrackHeight::Normal` — the state-only
         // height budget the card must fit without a per-type exception.
         let height = color::TRACK_HEIGHT;
-        let row = compute_layer_row(0.0, height, 300.0, false, false, false, true, false, false, false, false, false);
+        let row = compute_layer_row(
+            0.0, height, 300.0, false, false, false, true, false, false, false, false, false,
+        );
         for c in [
             LayerControl::Mute,
             LayerControl::Solo,
@@ -3426,7 +3613,11 @@ pub(super) mod tests {
         // button row's y with Mute/Solo/Analysis (the slot video cards give
         // Blend).
         let mute_y = row.rect(LayerControl::Mute).y;
-        assert_eq!(row.rect(LayerControl::Gain).y, mute_y, "Gain joins the M|S|A row");
+        assert_eq!(
+            row.rect(LayerControl::Gain).y,
+            mute_y,
+            "Gain joins the M|S|A row"
+        );
         // Gain and Analysis must not overlap horizontally.
         let analysis = row.rect(LayerControl::Analysis);
         let gain = row.rect(LayerControl::Gain);
@@ -3527,7 +3718,11 @@ pub(super) mod tests {
         panel.build(&mut tree, &layout, &mapper, 0.0);
         let mut reg = crate::intent::IntentRegistry::new();
         panel.register_intents(&mut reg);
-        let got = reg.resolve(&tree, panel.gain_sliders[0].track_id(), crate::intent::Gesture::RightClick);
+        let got = reg.resolve(
+            &tree,
+            panel.gain_sliders[0].track_id(),
+            crate::intent::Gesture::RightClick,
+        );
         vec![crate::panels::contract_tests::ResetCase {
             label: "audio gain".into(),
             got,
@@ -3544,6 +3739,9 @@ pub(super) mod tests {
         let mapper = mapper_for(&layers);
         panel.set_layers(layers);
         panel.build(&mut tree, &layout, &mapper, 0.0);
-        panel.handle_click(panel.rows[0].id(LayerControl::Chevron).unwrap(), crate::input::Modifiers::NONE)
+        panel.handle_click(
+            panel.rows[0].id(LayerControl::Chevron).unwrap(),
+            crate::input::Modifiers::NONE,
+        )
     }
 }

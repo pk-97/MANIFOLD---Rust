@@ -377,9 +377,19 @@ mod tests {
         PickerCore::new(
             vec![
                 item_with_source("Bloom", Some("Post-Process"), None, Some(Source::Factory)),
-                item_with_source("Bloom 2", Some("Post-Process"), None, Some(Source::MyLibrary)),
+                item_with_source(
+                    "Bloom 2",
+                    Some("Post-Process"),
+                    None,
+                    Some(Source::MyLibrary),
+                ),
                 item_with_source("Sunset Glow", Some("Filmic"), None, Some(Source::Project)),
-                item_with_source("Chromatic Aberration", Some("Filmic"), None, Some(Source::Factory)),
+                item_with_source(
+                    "Chromatic Aberration",
+                    Some("Filmic"),
+                    None,
+                    Some(Source::Factory),
+                ),
             ],
             vec!["Post-Process".to_string(), "Filmic".to_string()],
         )
@@ -512,7 +522,10 @@ mod tests {
         assert_eq!(p.active_category(), Some("A"));
         assert_eq!(p.cursor(), Some(0));
         assert_eq!(p.scroll.scroll_offset(), 12.0);
-        assert_eq!(p.filtered().next().map(|(_, item)| item.label.as_str()), Some("Keep"));
+        assert_eq!(
+            p.filtered().next().map(|(_, item)| item.label.as_str()),
+            Some("Keep")
+        );
     }
 
     #[test]
@@ -520,7 +533,10 @@ mod tests {
         let mut p = sample();
         p.set_category(Some("Spatial".to_string()));
         p.key_nav(Key::Down, 1, 1);
-        p.replace_items(vec![item("Only Filmic", Some("Filmic"), None)], vec!["Filmic".to_string()]);
+        p.replace_items(
+            vec![item("Only Filmic", Some("Filmic"), None)],
+            vec!["Filmic".to_string()],
+        );
         assert_eq!(p.active_category(), None);
         assert_eq!(p.cursor(), None);
     }
@@ -556,7 +572,9 @@ mod tests {
     #[test]
     fn grid_nav_down_moves_a_full_row_and_wraps() {
         let mut p = PickerCore::new(
-            (0..10).map(|i| item(&format!("Item {i}"), None, None)).collect(),
+            (0..10)
+                .map(|i| item(&format!("Item {i}"), None, None))
+                .collect(),
             vec![],
         );
         assert_eq!(p.key_nav(Key::Down, 3, 2), PickerNav::Moved);
@@ -579,7 +597,9 @@ mod tests {
     #[test]
     fn grid_nav_left_right_clamp_within_row() {
         let mut p = PickerCore::new(
-            (0..10).map(|i| item(&format!("Item {i}"), None, None)).collect(),
+            (0..10)
+                .map(|i| item(&format!("Item {i}"), None, None))
+                .collect(),
             vec![],
         );
         // Enter the grid on the first row.
@@ -609,7 +629,9 @@ mod tests {
     #[test]
     fn grid_nav_home_end_and_page() {
         let mut p = PickerCore::new(
-            (0..20).map(|i| item(&format!("Item {i}"), None, None)).collect(),
+            (0..20)
+                .map(|i| item(&format!("Item {i}"), None, None))
+                .collect(),
             vec![],
         );
         p.key_nav(Key::Down, 4, 3);

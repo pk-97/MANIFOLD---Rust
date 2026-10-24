@@ -105,7 +105,11 @@ fn run_ffprobe_query(ffprobe_path: &str, audio_path: &str) -> Option<String> {
     }
 
     let result = String::from_utf8_lossy(&output.stdout).to_string();
-    if result.is_empty() { None } else { Some(result) }
+    if result.is_empty() {
+        None
+    } else {
+        Some(result)
+    }
 }
 
 fn resolve_ffprobe_binary() -> Option<String> {

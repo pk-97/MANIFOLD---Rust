@@ -16,13 +16,12 @@
 //! update path runs). The CPU-side builder is deleted; count/mean/area
 //! assertions read the GPU-written `EmissiveTableStats` buffer.
 
+use manifold_gpu::GpuDevice;
 use manifold_gpu::raytrace::{
     EmissiveAliasEntry, EmissiveTableStats, EmissiveTriangleGpu, GiMaterial,
-    MetalShadowRayTracer, RtAccel, RtGeometryChange, RtObjectGeometry, ShadowRayTracer,
-    MAX_RT_EMISSIVE_TRIANGLES,
+    MAX_RT_EMISSIVE_TRIANGLES, MetalShadowRayTracer, RtAccel, RtGeometryChange, RtObjectGeometry,
+    ShadowRayTracer,
 };
-use manifold_gpu::GpuDevice;
-
 
 /// `packed_float3` stride-12 vertex layout — matches the position-only
 /// convention the emissive table builder reads (offset 0, stride 12).
@@ -67,11 +66,7 @@ fn cpu_triangle_area(v0: [f32; 3], v1: [f32; 3], v2: [f32; 3]) -> f32 {
         e1[0] * e2[1] - e1[1] * e2[0],
     ];
     let mag2 = cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2];
-    if mag2 <= 0.0 {
-        0.0
-    } else {
-        0.5 * mag2.sqrt()
-    }
+    if mag2 <= 0.0 { 0.0 } else { 0.5 * mag2.sqrt() }
 }
 
 /// P4a: run the production GPU emissive preparation on this fixture —
@@ -85,7 +80,9 @@ fn gpu_prepare_emissive_table(
     materials: &[GiMaterial],
 ) -> (MetalShadowRayTracer, RtAccel, EmissiveTableStats) {
     let tracer = MetalShadowRayTracer::new(device);
-    let plan = tracer.plan_accel(device, None, objects).expect("plan accel");
+    let plan = tracer
+        .plan_accel(device, None, objects)
+        .expect("plan accel");
     let mut accel_slot = None;
     tracer
         .prepare_accel(device, &mut accel_slot, plan)
@@ -96,11 +93,26 @@ fn gpu_prepare_emissive_table(
     // allocates storage only; bypassing encode would gather zero transforms.
     let changes = vec![RtGeometryChange::Rebuild; objects.len()];
     tracer
-        .encode_accel_update(device, &mut encoder, &mut accel, objects, &changes, materials, true, true)
+        .encode_accel_update(
+            device,
+            &mut encoder,
+            &mut accel,
+            objects,
+            &changes,
+            materials,
+            true,
+            true,
+        )
         .expect("encode acceleration and emissive table");
     encoder.commit_and_wait_completed();
-    let table = accel.emissive_table.as_ref().expect("encode ensures the table");
-    let stats_ptr = table.stats.mapped_ptr().expect("stats buffer must be shared");
+    let table = accel
+        .emissive_table
+        .as_ref()
+        .expect("encode ensures the table");
+    let stats_ptr = table
+        .stats
+        .mapped_ptr()
+        .expect("stats buffer must be shared");
     // SAFETY: `EmissiveTableStats` is `#[repr(C)]` all-POD, 16 bytes — the
     // buffer is exactly one struct wide.
     let stats = unsafe { (stats_ptr as *const EmissiveTableStats).read_unaligned() };
@@ -112,7 +124,9 @@ fn rt_object_geom<'a>(
     tri_count: u32,
     cast_shadows: bool,
 ) -> RtObjectGeometry<'a> {
-    RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+    RtObjectGeometry {
+        instance_inner: RtObjectGeometry::NO_INNER,
+        material_attributes: Default::default(),
         vertex_buffer: vbuf,
         vertex_stride: std::mem::size_of::<PosVertex>() as u32,
         vertex_offset: 0,
@@ -170,36 +184,66 @@ fn emissive_table_contents_match_cpu_oracle() {
 
     // Object 0: unit square in XY at z=0 — 2 triangles (6 verts, non-indexed), emissive red
     let v0 = [
-        PosVertex { pos: [0.0, 0.0, 0.0] },
-        PosVertex { pos: [1.0, 0.0, 0.0] },
-        PosVertex { pos: [0.0, 1.0, 0.0] }, // tri 0
-        PosVertex { pos: [1.0, 0.0, 0.0] },
-        PosVertex { pos: [0.0, 1.0, 0.0] },
-        PosVertex { pos: [1.0, 1.0, 0.0] }, // tri 1
+        PosVertex {
+            pos: [0.0, 0.0, 0.0],
+        },
+        PosVertex {
+            pos: [1.0, 0.0, 0.0],
+        },
+        PosVertex {
+            pos: [0.0, 1.0, 0.0],
+        }, // tri 0
+        PosVertex {
+            pos: [1.0, 0.0, 0.0],
+        },
+        PosVertex {
+            pos: [0.0, 1.0, 0.0],
+        },
+        PosVertex {
+            pos: [1.0, 1.0, 0.0],
+        }, // tri 1
     ];
     let buf0 = write_shared_buffer(device, &v0);
 
     // Object 1: tall triangle at z=1 — zero emissive (excluded)
     let v1 = [
-        PosVertex { pos: [5.0, 0.0, 1.0] },
-        PosVertex { pos: [5.0, 2.0, 1.0] },
-        PosVertex { pos: [7.0, 1.0, 1.0] },
+        PosVertex {
+            pos: [5.0, 0.0, 1.0],
+        },
+        PosVertex {
+            pos: [5.0, 2.0, 1.0],
+        },
+        PosVertex {
+            pos: [7.0, 1.0, 1.0],
+        },
     ];
     let buf1 = write_shared_buffer(device, &v1);
 
     // Object 2: large triangle at z=2 — emissive green, area 2.0
     let v2 = [
-        PosVertex { pos: [0.0, 0.0, 2.0] },
-        PosVertex { pos: [2.0, 2.0, 2.0] },
-        PosVertex { pos: [0.0, 2.0, 2.0] },
+        PosVertex {
+            pos: [0.0, 0.0, 2.0],
+        },
+        PosVertex {
+            pos: [2.0, 2.0, 2.0],
+        },
+        PosVertex {
+            pos: [0.0, 2.0, 2.0],
+        },
     ];
     let buf2 = write_shared_buffer(device, &v2);
 
     // Object 3: small triangle at z=3 — emissive blue, area 0.5
     let v3 = [
-        PosVertex { pos: [10.0, 0.0, 3.0] },
-        PosVertex { pos: [11.0, 0.0, 3.0] },
-        PosVertex { pos: [10.0, 1.0, 3.0] },
+        PosVertex {
+            pos: [10.0, 0.0, 3.0],
+        },
+        PosVertex {
+            pos: [11.0, 0.0, 3.0],
+        },
+        PosVertex {
+            pos: [10.0, 1.0, 3.0],
+        },
     ];
     let buf3 = write_shared_buffer(device, &v3);
 
@@ -211,10 +255,30 @@ fn emissive_table_contents_match_cpu_oracle() {
     ];
 
     let materials = [
-        GiMaterial::new([1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.5, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]), // emissive red
-        GiMaterial::new([0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [0.0, 0.5, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]), // black
-        GiMaterial::new([0.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.5, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]), // emissive green
-        GiMaterial::new([0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 0.5, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]), // emissive blue
+        GiMaterial::new(
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.5, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ), // emissive red
+        GiMaterial::new(
+            [0.5, 0.5, 0.5],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.5, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ), // black
+        GiMaterial::new(
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.5, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ), // emissive green
+        GiMaterial::new(
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.5, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ), // emissive blue
     ];
 
     let (_tracer, accel, stats) = gpu_prepare_emissive_table(device, &objects, &materials);
@@ -259,8 +323,10 @@ fn emissive_table_contents_match_cpu_oracle() {
         let area = cpu_triangle_area(t.v0, t.v1, t.v2);
         // Verify world-space positions are correctly transformed (all identity
         // transforms, so local == world).
-        assert!((area - 0.5).abs() < eps || (area - 2.0).abs() < eps,
-            "entry {i}: area {area} is neither 0.5 nor 2.0 (expected from fixture triangles)");
+        assert!(
+            (area - 0.5).abs() < eps || (area - 2.0).abs() < eps,
+            "entry {i}: area {area} is neither 0.5 nor 2.0 (expected from fixture triangles)"
+        );
 
         // Alias table validity: scaled prob in [0, 1], alias in [0, n).
         assert!(
@@ -306,7 +372,9 @@ fn emissive_table_contents_match_cpu_oracle() {
     let expected_mean = expected_total / 4.0;
     assert!(
         (stats.mean_power - expected_mean).abs() < 0.001,
-        "mean power {:.4} != expected {:.4}", stats.mean_power, expected_mean
+        "mean power {:.4} != expected {:.4}",
+        stats.mean_power,
+        expected_mean
     );
 
     // Verify truncation: with only 4 entries, none should be truncated
@@ -325,9 +393,15 @@ fn emissive_table_zero_stats_when_all_zero_emissive() {
     let device = &h.device;
 
     let verts = [
-        PosVertex { pos: [0.0, 0.0, 0.0] },
-        PosVertex { pos: [1.0, 0.0, 0.0] },
-        PosVertex { pos: [0.0, 1.0, 0.0] },
+        PosVertex {
+            pos: [0.0, 0.0, 0.0],
+        },
+        PosVertex {
+            pos: [1.0, 0.0, 0.0],
+        },
+        PosVertex {
+            pos: [0.0, 1.0, 0.0],
+        },
     ];
     let buf = write_shared_buffer(device, &verts);
 
@@ -348,7 +422,10 @@ fn emissive_table_zero_stats_when_all_zero_emissive() {
         stats.entry_count, 0,
         "stats entry_count must be 0 when no object has non-black emissive"
     );
-    assert_eq!(stats.mean_power, 0.0, "zero-emission scene has zero mean power");
+    assert_eq!(
+        stats.mean_power, 0.0,
+        "zero-emission scene has zero mean power"
+    );
 }
 
 /// ─── Proof 3: truncation boundary ─────────────────────────────────
@@ -405,7 +482,9 @@ fn emissive_table_truncates_at_cap() {
     let stride = std::mem::size_of::<PosVertex>() as u32;
     let mut objects: Vec<RtObjectGeometry> = Vec::with_capacity(n_quads);
     for i in 0..n_quads {
-        objects.push(RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+        objects.push(RtObjectGeometry {
+            instance_inner: RtObjectGeometry::NO_INNER,
+            material_attributes: Default::default(),
             vertex_buffer: &buf,
             vertex_stride: stride,
             vertex_offset: (i * 4 * stride as usize) as u32,
@@ -421,7 +500,7 @@ fn emissive_table_truncates_at_cap() {
             mr_texture: None,
             normal_texture: None,
             emissive_texture: None,
-        extra_material_textures: [None; 15],
+            extra_material_textures: [None; 15],
             emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
             emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,

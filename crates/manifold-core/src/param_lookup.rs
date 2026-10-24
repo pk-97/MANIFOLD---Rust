@@ -17,10 +17,12 @@
 use ahash::AHashMap;
 
 use crate::PresetTypeId;
-use crate::effect_graph_def::{BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, ParamSpecDef};
-use crate::params::{ParamChoices, SpecSource};
-use crate::effects::ParamConvert;
 use crate::effect_graph_def::SerializedParamValue;
+use crate::effect_graph_def::{
+    BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, ParamSpecDef,
+};
+use crate::effects::ParamConvert;
+use crate::params::{ParamChoices, SpecSource};
 
 /// Metadata for one inner-node parameter, produced from the primitive's own
 /// `ParamDef` by the registered [`NodeParamSource`].
@@ -122,9 +124,19 @@ pub fn scene_scaled_range(type_id: &str, param: &str, radius: f32) -> Option<(f3
 /// One control's lookup key.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ParamKey<'a> {
-    Template { preset: &'a PresetTypeId, id: &'a str },
-    Node { type_id: &'a str, param: &'a str, scene_radius: Option<f32> },
-    Modifier { recipe: &'a PresetTypeId, param: &'a str },
+    Template {
+        preset: &'a PresetTypeId,
+        id: &'a str,
+    },
+    Node {
+        type_id: &'a str,
+        param: &'a str,
+        scene_radius: Option<f32>,
+    },
+    Modifier {
+        recipe: &'a PresetTypeId,
+        param: &'a str,
+    },
 }
 
 /// The node half of the lookup: every param a node type declares, unfiltered,
@@ -133,7 +145,8 @@ pub enum ParamKey<'a> {
 /// read-only, no lock.
 pub struct NodeParamSource {
     pub params_for_type: fn(&str) -> Vec<NodeParamMetadata>,
-    pub world_inputs_for_type: fn(&str) -> &'static [crate::scene_world_controls::WorldControlInput],
+    pub world_inputs_for_type:
+        fn(&str) -> &'static [crate::scene_world_controls::WorldControlInput],
 }
 inventory::collect!(NodeParamSource);
 
@@ -155,12 +168,16 @@ fn node_source() -> Option<&'static NodeParamSource> {
 /// Every param `type_id` declares, in declaration order, Hidden ones
 /// included. Empty when the type is unknown or no source is linked.
 pub fn node_params(type_id: &str) -> Vec<NodeParamMetadata> {
-    node_source().map(|source| (source.params_for_type)(type_id)).unwrap_or_default()
+    node_source()
+        .map(|source| (source.params_for_type)(type_id))
+        .unwrap_or_default()
 }
 
 /// The Physics World controls `type_id` declares it takes, each with its own
 /// input. Empty when the type takes none or no source is linked.
-pub fn world_control_inputs(type_id: &str) -> &'static [crate::scene_world_controls::WorldControlInput] {
+pub fn world_control_inputs(
+    type_id: &str,
+) -> &'static [crate::scene_world_controls::WorldControlInput] {
     node_source().map_or(&[], |source| (source.world_inputs_for_type)(type_id))
 }
 
@@ -208,7 +225,11 @@ impl Resolver {
         match key {
             ParamKey::Template { preset, id } => template_spec(preset, id),
             ParamKey::Modifier { recipe, param } => template_spec(recipe, param),
-            ParamKey::Node { type_id, param, scene_radius } => {
+            ParamKey::Node {
+                type_id,
+                param,
+                scene_radius,
+            } => {
                 let params = self
                     .node_params
                     .entry(type_id.to_string())
@@ -253,10 +274,21 @@ impl Resolver {
         let Some((type_id, param)) = exact_stamp(&spec.id, bindings, nodes) else {
             return spec;
         };
-        let Some(d) = self.describe(ParamKey::Node { type_id, param, scene_radius }) else {
+        let Some(d) = self.describe(ParamKey::Node {
+            type_id,
+            param,
+            scene_radius,
+        }) else {
             return spec;
         };
-        let (min, max) = widen_to(&ParamSpecDef { min: d.min, max: d.max, ..spec.clone() }, spec.default_value);
+        let (min, max) = widen_to(
+            &ParamSpecDef {
+                min: d.min,
+                max: d.max,
+                ..spec.clone()
+            },
+            spec.default_value,
+        );
         spec.name = d.name;
         spec.is_angle = d.is_angle;
         spec.value_labels = d.value_labels;
@@ -291,7 +323,11 @@ impl Resolver {
         let Some(type_id) = nodes.nodes.get(node_id.as_str()) else {
             return spec;
         };
-        let Some(d) = self.describe(ParamKey::Node { type_id, param, scene_radius }) else {
+        let Some(d) = self.describe(ParamKey::Node {
+            type_id,
+            param,
+            scene_radius,
+        }) else {
             return spec;
         };
         spec.scene = spec.scene.or(d.scene);
@@ -318,7 +354,11 @@ impl Resolver {
 
 /// The node type and param of an exact auto-stamp: id `{doc_id}_{param}`,
 /// not user-added, targeting that node's param.
-fn exact_stamp<'n>(id: &str, bindings: &'n [BindingDef], nodes: &'n NodeTypes) -> Option<(&'n str, &'n str)> {
+fn exact_stamp<'n>(
+    id: &str,
+    bindings: &'n [BindingDef],
+    nodes: &'n NodeTypes,
+) -> Option<(&'n str, &'n str)> {
     bindings.iter().find_map(|b| match &b.target {
         BindingTarget::Node { node_id, param }
             if !b.user_added
@@ -373,7 +413,10 @@ pub(crate) fn fill_template_scene_facts(preset: &PresetTypeId, specs: &mut [Para
 
 fn template_spec(preset: &PresetTypeId, id: &str) -> Option<ParamSpecDef> {
     let def = crate::preset_definition_registry::try_get(preset)?;
-    def.param_defs.iter().find(|pd| pd.spec.id == id).map(|pd| pd.spec.clone())
+    def.param_defs
+        .iter()
+        .find(|pd| pd.spec.id == id)
+        .map(|pd| pd.spec.clone())
 }
 
 /// Node and scene-modifier types in one graph, keyed by stable id, group
@@ -412,7 +455,11 @@ impl NodeTypes {
                 Some((m.id.as_str().to_string(), recipe))
             })
             .collect();
-        Self { nodes, doc_ids, modifiers }
+        Self {
+            nodes,
+            doc_ids,
+            modifiers,
+        }
     }
 }
 
@@ -425,16 +472,29 @@ pub fn key_for<'a>(
     scene_radius: Option<f32>,
 ) -> Option<ParamKey<'a>> {
     if template_answers(preset, binding, nodes) {
-        return Some(ParamKey::Template { preset, id: &binding.id });
+        return Some(ParamKey::Template {
+            preset,
+            id: &binding.id,
+        });
     }
     match &binding.target {
         BindingTarget::Node { node_id, param } => {
             let type_id = nodes.nodes.get(node_id.as_str())?;
-            Some(ParamKey::Node { type_id, param, scene_radius })
+            Some(ParamKey::Node {
+                type_id,
+                param,
+                scene_radius,
+            })
         }
-        BindingTarget::SceneModifier { modifier_id, param_id } => {
+        BindingTarget::SceneModifier {
+            modifier_id,
+            param_id,
+        } => {
             let recipe = nodes.modifiers.get(modifier_id.as_str())?;
-            Some(ParamKey::Modifier { recipe, param: param_id })
+            Some(ParamKey::Modifier {
+                recipe,
+                param: param_id,
+            })
         }
         BindingTarget::Composite { .. } => None,
     }
@@ -491,7 +551,9 @@ impl<'a> Join<'a> {
             preset,
             bindings: meta.map(|m| m.bindings.as_slice()).unwrap_or(&[]),
             nodes: NodeTypes::from_graph(def),
-            scene_radius: meta.and_then(|m| m.scene_bounds).map(scene_radius_from_bounds),
+            scene_radius: meta
+                .and_then(|m| m.scene_bounds)
+                .map(scene_radius_from_bounds),
             resolver: Resolver::default(),
             from_file: false,
         }
@@ -522,8 +584,15 @@ impl<'a> Join<'a> {
             // factor, re-seeded from the node), not the template's, as on the
             // node path.
             let (min, max) = widen_to(&template, saved.default_value);
-            let base = ParamSpecDef { default_value: saved.default_value, min, max, ..template.clone() };
-            let spec = self.resolver.template_overlay(base, self.bindings, &self.nodes, self.scene_radius);
+            let base = ParamSpecDef {
+                default_value: saved.default_value,
+                min,
+                max,
+                ..template.clone()
+            };
+            let spec =
+                self.resolver
+                    .template_overlay(base, self.bindings, &self.nodes, self.scene_radius);
             // A saved name or section that differs is an old copy, ignored,
             // never converted into a choice: a later label fix must not read
             // as a user rename (D2 (one live lookup), old projects).
@@ -531,14 +600,19 @@ impl<'a> Join<'a> {
         }
         // A fan-out (several bindings under one id) is described by its first
         // binding's target, in authored order (D22).
-        let Some(binding) = single.or_else(|| self.bindings.iter().find(|b| b.id == saved.id)) else {
+        let Some(binding) = single.or_else(|| self.bindings.iter().find(|b| b.id == saved.id))
+        else {
             return (saved.clone(), SpecSource::Authored, none);
         };
         if single.is_none() && !matches!(binding.target, BindingTarget::Node { .. }) {
             return (saved.clone(), SpecSource::Authored, none);
         }
         let fan_out = single.is_none();
-        let unresolved = if fan_out { SpecSource::Authored } else { SpecSource::Unresolved };
+        let unresolved = if fan_out {
+            SpecSource::Authored
+        } else {
+            SpecSource::Unresolved
+        };
         let Some(key) = key_for(self.preset, binding, &self.nodes, self.scene_radius) else {
             return match binding.target {
                 BindingTarget::Composite { .. } => (saved.clone(), SpecSource::Authored, none),
@@ -550,13 +624,19 @@ impl<'a> Join<'a> {
         };
         let words_from_lookup = self.lookup_owns_words(&saved.id);
         let choices = match key {
-            ParamKey::Modifier { recipe, param } if self.from_file && words_from_lookup => ParamChoices {
-                rename: saved_modifier_rename(recipe, param, &saved.name, &described.name),
-                ..ParamChoices::default()
-            },
+            ParamKey::Modifier { recipe, param } if self.from_file && words_from_lookup => {
+                ParamChoices {
+                    rename: saved_modifier_rename(recipe, param, &saved.name, &described.name),
+                    ..ParamChoices::default()
+                }
+            }
             _ => none,
         };
-        (overlay(saved, described, binding.default_value, words_from_lookup), SpecSource::Lookup, choices)
+        (
+            overlay(saved, described, binding.default_value, words_from_lookup),
+            SpecSource::Lookup,
+            choices,
+        )
     }
 
     /// A control that is a copy of one declaration: a lone exact auto-stamp,
@@ -584,7 +664,9 @@ impl<'a> Join<'a> {
         let template_ok = self
             .single_binding(id)
             .is_none_or(|b| template_answers(self.preset, b, &self.nodes));
-        template_ok.then(|| template_spec(self.preset, id)).flatten()
+        template_ok
+            .then(|| template_spec(self.preset, id))
+            .flatten()
     }
 
     /// Whether the lookup supplies this control's name, so a save writes it
@@ -634,12 +716,20 @@ pub struct Declared<'a> {
 impl<'a> Declared<'a> {
     pub fn new(def: &'a EffectGraphDef) -> Option<Self> {
         let meta = def.preset_metadata.as_ref()?;
-        Some(Self { join: Join::new(&meta.id, def), params: &meta.params })
+        Some(Self {
+            join: Join::new(&meta.id, def),
+            params: &meta.params,
+        })
     }
 
     pub fn spec(&mut self, id: &str) -> Option<ParamSpecDef> {
         let saved = self.params.iter().find(|p| p.id == id)?;
-        if self.join.bindings.iter().any(|b| b.user_added && b.id == id) {
+        if self
+            .join
+            .bindings
+            .iter()
+            .any(|b| b.user_added && b.id == id)
+        {
             return Some(saved.clone());
         }
         Some(self.join.join_control(saved).0)
@@ -682,19 +772,31 @@ const FORMER_RECIPE_LABELS: &[(&str, &str, &[&str])] = &[
     ("RadialForce", "center_y", &["Center Y"]),
     ("RadialForce", "center_z", &["Center Z"]),
     ("RadialForce", "fire", &["Fire", "Kick"]),
-    ("RadialForce", "impulse_strength", &["Impulse (m/s)", "Kick Size"]),
+    (
+        "RadialForce",
+        "impulse_strength",
+        &["Impulse (m/s)", "Kick Size"],
+    ),
     ("RadialForce", "strength", &["Strength (m/s²)"]),
     ("UniformForce", "direction_x", &["Vector X"]),
     ("UniformForce", "direction_y", &["Vector Y"]),
     ("UniformForce", "direction_z", &["Vector Z"]),
     ("UniformForce", "fire", &["Fire", "Kick"]),
-    ("UniformForce", "impulse_strength", &["Impulse (m/s)", "Kick Size"]),
+    (
+        "UniformForce",
+        "impulse_strength",
+        &["Impulse (m/s)", "Kick Size"],
+    ),
     ("UniformForce", "strength", &["Strength (m/s²)"]),
     ("VortexForce", "center_x", &["Center X"]),
     ("VortexForce", "center_y", &["Center Y"]),
     ("VortexForce", "center_z", &["Center Z"]),
     ("VortexForce", "fire", &["Fire", "Kick"]),
-    ("VortexForce", "impulse_strength", &["Impulse (m/s)", "Kick Size"]),
+    (
+        "VortexForce",
+        "impulse_strength",
+        &["Impulse (m/s)", "Kick Size"],
+    ),
     ("VortexForce", "strength", &["Strength (m/s²)"]),
 ];
 
@@ -702,7 +804,12 @@ const FORMER_RECIPE_LABELS: &[(&str, &str, &[&str])] = &[
 /// drawer wrote rename choices, a rename went straight into the saved name;
 /// a saved name that is neither the recipe's label now nor one it shipped
 /// before is that rename, and becomes a choice (D7 (one saved choice set)).
-fn saved_modifier_rename(recipe: &PresetTypeId, param: &str, saved: &str, current: &str) -> Option<String> {
+fn saved_modifier_rename(
+    recipe: &PresetTypeId,
+    param: &str,
+    saved: &str,
+    current: &str,
+) -> Option<String> {
     let shipped = saved.is_empty()
         || saved == current
         || FORMER_RECIPE_LABELS
@@ -718,13 +825,30 @@ fn saved_modifier_rename(recipe: &PresetTypeId, param: &str, saved: &str, curren
 /// every other control owns its name (D24), and an empty one takes the
 /// lookup's. Identity, default, card visibility, curve, invert and
 /// periodicity stay as saved.
-fn overlay(saved: &ParamSpecDef, d: ParamSpecDef, binding_default: f32, words_from_lookup: bool) -> ParamSpecDef {
+fn overlay(
+    saved: &ParamSpecDef,
+    d: ParamSpecDef,
+    binding_default: f32,
+    words_from_lookup: bool,
+) -> ParamSpecDef {
     let (min, max) = widen_to(&d, binding_default);
     let keep_name = !words_from_lookup && !saved.name.is_empty();
     ParamSpecDef {
-        name: if keep_name { saved.name.clone() } else { d.name },
-        tooltip: if words_from_lookup { d.tooltip } else { saved.tooltip.clone() },
-        section: if d.section.is_some() { d.section } else { saved.section.clone() },
+        name: if keep_name {
+            saved.name.clone()
+        } else {
+            d.name
+        },
+        tooltip: if words_from_lookup {
+            d.tooltip
+        } else {
+            saved.tooltip.clone()
+        },
+        section: if d.section.is_some() {
+            d.section
+        } else {
+            saved.section.clone()
+        },
         min,
         max,
         whole_numbers: d.whole_numbers,
@@ -748,7 +872,9 @@ mod tests {
     use crate::effects::ParamConvert;
 
     fn lamp_scene() -> manifold_foundation::scene_surface::SceneParamDesc {
-        use manifold_foundation::scene_surface::{CardBand, CardLabel, ControlGroup, SceneParamDesc, SurfaceRole};
+        use manifold_foundation::scene_surface::{
+            CardBand, CardLabel, ControlGroup, SceneParamDesc, SurfaceRole,
+        };
         SceneParamDesc {
             role: SurfaceRole::Performance,
             group: ControlGroup::Light,
@@ -793,7 +919,11 @@ mod tests {
                     role: manifold_foundation::scene_surface::SurfaceRole::Hidden,
                     ..lamp_scene()
                 });
-                return vec![float_meta("first", "First"), hidden, float_meta("last", "Last")];
+                return vec![
+                    float_meta("first", "First"),
+                    hidden,
+                    float_meta("last", "Last"),
+                ];
             }
             _ => return Vec::new(),
         }
@@ -821,9 +951,16 @@ mod tests {
 
     #[test]
     fn stamped_node_params_drops_only_hidden_and_keeps_order() {
-        let names = |params: Vec<NodeParamMetadata>| params.into_iter().map(|m| m.name).collect::<Vec<_>>();
-        assert_eq!(names(node_params("node.test_hidden")), ["first", "hidden", "last"]);
-        assert_eq!(names(stamped_node_params("node.test_hidden")), ["first", "last"]);
+        let names =
+            |params: Vec<NodeParamMetadata>| params.into_iter().map(|m| m.name).collect::<Vec<_>>();
+        assert_eq!(
+            names(node_params("node.test_hidden")),
+            ["first", "hidden", "last"]
+        );
+        assert_eq!(
+            names(stamped_node_params("node.test_hidden")),
+            ["first", "last"]
+        );
         assert!(stamped_node_params("node.not_registered").is_empty());
     }
 
@@ -897,13 +1034,19 @@ mod tests {
                 scene_bounds: None,
             }),
             scene_modifiers: Vec::new(),
-            nodes: vec![node("lamp", "node.test_lamp"), node("ghost", "node.not_registered")],
+            nodes: vec![
+                node("lamp", "node.test_lamp"),
+                node("ghost", "node.not_registered"),
+            ],
             wires: Vec::new(),
         }
     }
 
     fn lamp(param: &str) -> BindingTarget {
-        BindingTarget::Node { node_id: NodeId::new("lamp"), param: param.into() }
+        BindingTarget::Node {
+            node_id: NodeId::new("lamp"),
+            param: param.into(),
+        }
     }
 
     #[test]
@@ -915,7 +1058,10 @@ mod tests {
         assert_eq!(source, SpecSource::Lookup);
         // A saved name is an old copy: the lookup's wins, and it is no choice.
         let (_, _, choices) = join.join_control(&saved("1_intensity"));
-        assert_eq!((spec.name.as_str(), choices), ("Intensity", ParamChoices::default()));
+        assert_eq!(
+            (spec.name.as_str(), choices),
+            ("Intensity", ParamChoices::default())
+        );
         // The declared band widens to keep the binding's seeded value on it.
         assert_eq!((spec.min, spec.max), (0.0, 12.0));
         // Identity, default and the fields later phases move stay as saved.
@@ -936,8 +1082,15 @@ mod tests {
         let preset = def.preset_metadata.as_ref().unwrap().id.clone();
         let mut join = Join::new(&preset, &def);
         let (curated, source, _) = join.join_control(&saved("key"));
-        assert_eq!((curated.name.as_str(), source), ("Stale Copy", SpecSource::Lookup));
-        assert_eq!((curated.min, curated.max), (0.0, 12.0), "range still comes from the lookup");
+        assert_eq!(
+            (curated.name.as_str(), source),
+            ("Stale Copy", SpecSource::Lookup)
+        );
+        assert_eq!(
+            (curated.min, curated.max),
+            (0.0, 12.0),
+            "range still comes from the lookup"
+        );
         assert_eq!(join.join_control(&saved("1_intensity")).0.name, "Intensity");
         assert!(join.lookup_names("1_intensity"));
         assert!(!join.lookup_names("key"));
@@ -947,7 +1100,10 @@ mod tests {
     /// value labels and angle flag, as the old load-time refresh gave it.
     #[test]
     fn template_auto_stamp_takes_its_node_declaration() {
-        let user = BindingDef { user_added: true, ..binding("1_intensity", lamp("intensity"), 12.0) };
+        let user = BindingDef {
+            user_added: true,
+            ..binding("1_intensity", lamp("intensity"), 12.0)
+        };
         let mut def = graph(vec![
             binding("1_intensity", lamp("intensity"), 12.0),
             binding("key", lamp("intensity"), 12.0),
@@ -955,23 +1111,48 @@ mod tests {
         def.preset_metadata.as_mut().unwrap().params = vec![saved("1_intensity"), saved("key")];
         let params = template_params(&def);
         assert_eq!(params[0].name, "Intensity");
-        assert_eq!((params[0].min, params[0].max), (0.0, 12.0), "widened to the default");
-        assert_eq!((params[0].default_value, params[0].section.as_deref()), (12.0, Some("Key Light")));
-        assert_eq!(params[0].scene, Some(lamp_scene()), "an auto-stamp takes its node's scene facts");
+        assert_eq!(
+            (params[0].min, params[0].max),
+            (0.0, 12.0),
+            "widened to the default"
+        );
+        assert_eq!(
+            (params[0].default_value, params[0].section.as_deref()),
+            (12.0, Some("Key Light"))
+        );
+        assert_eq!(
+            params[0].scene,
+            Some(lamp_scene()),
+            "an auto-stamp takes its node's scene facts"
+        );
         // D23: a curated id keeps its authored name and range, and takes the
         // bound node's scene facts because the template declares none.
         let key = &params[1];
-        assert_eq!((key.name.as_str(), key.min, key.max), ("Stale Copy", 0.0, 1.0));
+        assert_eq!(
+            (key.name.as_str(), key.min, key.max),
+            ("Stale Copy", 0.0, 1.0)
+        );
         assert_eq!(key.scene, Some(lamp_scene()));
         assert_eq!(key.unit, Some(manifold_foundation::scene_surface::Unit::Ev));
-        assert_eq!(key.limit, manifold_foundation::param_range::HardLimit::AtLeast(0.0));
+        assert_eq!(
+            key.limit,
+            manifold_foundation::param_range::HardLimit::AtLeast(0.0)
+        );
         // Scene facts the template declares stand.
         let mut declared = def.clone();
-        declared.preset_metadata.as_mut().unwrap().params[1].unit = Some(manifold_foundation::scene_surface::Unit::Metres);
-        assert_eq!(template_params(&declared)[1].unit, Some(manifold_foundation::scene_surface::Unit::Metres));
+        declared.preset_metadata.as_mut().unwrap().params[1].unit =
+            Some(manifold_foundation::scene_surface::Unit::Metres);
+        assert_eq!(
+            template_params(&declared)[1].unit,
+            Some(manifold_foundation::scene_surface::Unit::Metres)
+        );
 
         def.preset_metadata.as_mut().unwrap().bindings = vec![user];
-        assert_eq!(template_params(&def)[0], saved("1_intensity"), "a user exposure stays authored");
+        assert_eq!(
+            template_params(&def)[0],
+            saved("1_intensity"),
+            "a user exposure stays authored"
+        );
     }
 
     #[test]
@@ -983,10 +1164,20 @@ mod tests {
         let preset = fan_out.preset_metadata.as_ref().unwrap().id.clone();
         let (spec, source, _) = Join::new(&preset, &fan_out).join_control(&saved("sun"));
         // D22: the first binding's target describes range and flags; the rest stays authored.
-        assert_eq!((source, spec.name.as_str()), (SpecSource::Lookup, "Stale Copy"));
+        assert_eq!(
+            (source, spec.name.as_str()),
+            (SpecSource::Lookup, "Stale Copy")
+        );
         assert_eq!((spec.min, spec.max), (0.0, 10.0));
         let ghost = graph(vec![
-            binding("sun", BindingTarget::Node { node_id: NodeId::new("ghost"), param: "x".into() }, 1.0),
+            binding(
+                "sun",
+                BindingTarget::Node {
+                    node_id: NodeId::new("ghost"),
+                    param: "x".into(),
+                },
+                1.0,
+            ),
             binding("sun", lamp("intensity"), 1.0),
         ]);
         let (spec, source, _) = Join::new(&preset, &ghost).join_control(&saved("sun"));
@@ -994,19 +1185,38 @@ mod tests {
 
         let composite = graph(vec![binding(
             "mix",
-            BindingTarget::Composite { outer_name: "mix".into() },
+            BindingTarget::Composite {
+                outer_name: "mix".into(),
+            },
             1.0,
         )]);
         let (spec, source, _) = Join::new(&preset, &composite).join_control(&saved("mix"));
-        assert_eq!((source, spec.name.as_str()), (SpecSource::Authored, "Stale Copy"));
+        assert_eq!(
+            (source, spec.name.as_str()),
+            (SpecSource::Authored, "Stale Copy")
+        );
     }
 
     #[test]
     fn unknown_type_or_param_keeps_the_saved_spec_unresolved() {
         let def = graph(vec![
-            binding("1_x", BindingTarget::Node { node_id: NodeId::new("ghost"), param: "x".into() }, 1.0),
+            binding(
+                "1_x",
+                BindingTarget::Node {
+                    node_id: NodeId::new("ghost"),
+                    param: "x".into(),
+                },
+                1.0,
+            ),
             binding("1_gone", lamp("gone"), 1.0),
-            binding("1_dangling", BindingTarget::Node { node_id: NodeId::new("nowhere"), param: "x".into() }, 1.0),
+            binding(
+                "1_dangling",
+                BindingTarget::Node {
+                    node_id: NodeId::new("nowhere"),
+                    param: "x".into(),
+                },
+                1.0,
+            ),
         ]);
         let preset = def.preset_metadata.as_ref().unwrap().id.clone();
         let mut join = Join::new(&preset, &def);
@@ -1019,10 +1229,21 @@ mod tests {
 
     #[test]
     fn node_describe_reads_the_registered_source() {
-        let key = ParamKey::Node { type_id: "node.test_lamp", param: "intensity", scene_radius: Some(5.0) };
+        let key = ParamKey::Node {
+            type_id: "node.test_lamp",
+            param: "intensity",
+            scene_radius: Some(5.0),
+        };
         // node.test_lamp has no scene-scaled band, so the declared range holds.
         assert_eq!(describe(key).map(|s| (s.min, s.max)), Some((0.0, 10.0)));
-        assert!(describe(ParamKey::Node { type_id: "node.test_lamp", param: "nope", scene_radius: None }).is_none());
+        assert!(
+            describe(ParamKey::Node {
+                type_id: "node.test_lamp",
+                param: "nope",
+                scene_radius: None
+            })
+            .is_none()
+        );
     }
 
     #[test]
@@ -1032,13 +1253,20 @@ mod tests {
         let mut join = Join::new(&preset, &def);
         let (joined, source, _) = join.join_control(&saved("1_intensity"));
         assert_eq!(source, SpecSource::Lookup);
-        assert_eq!((joined.min, joined.max), (0.0, 10.0), "the stale saved range is ignored");
+        assert_eq!(
+            (joined.min, joined.max),
+            (0.0, 10.0),
+            "the stale saved range is ignored"
+        );
         // Saved as a stub: no range, no flags.
         let mut meta = def.preset_metadata.clone().unwrap();
         meta.params = vec![joined.lookup_stub()];
         let json = serde_json::to_value(&meta).unwrap();
         let entry = &json["params"][0];
-        assert!(entry.get("min").is_none() && entry.get("max").is_none(), "{entry}");
+        assert!(
+            entry.get("min").is_none() && entry.get("max").is_none(),
+            "{entry}"
+        );
         assert_eq!(entry["id"], "1_intensity");
         // The stub parses and joins back to the same spec.
         let parsed: PresetMetadata = serde_json::from_value(json).unwrap();
@@ -1057,20 +1285,32 @@ mod tests {
     // ── Saved choices through a full generator load and save ──
 
     fn user_binding(id: &str) -> BindingDef {
-        BindingDef { user_added: true, ..binding(id, lamp("intensity"), 1.0) }
+        BindingDef {
+            user_added: true,
+            ..binding(id, lamp("intensity"), 1.0)
+        }
     }
 
     fn scene_json(params: serde_json::Value, user_label: &str) -> String {
         let mut def = graph(vec![
             binding("1_intensity", lamp("intensity"), 1.0),
-            binding("mix", BindingTarget::Composite { outer_name: "mix".into() }, 1.0),
+            binding(
+                "mix",
+                BindingTarget::Composite {
+                    outer_name: "mix".into(),
+                },
+                1.0,
+            ),
             user_binding("user.lamp"),
         ]);
         let meta = def.preset_metadata.as_mut().unwrap();
         meta.params = vec![
             saved("1_intensity"),
             saved("mix"),
-            ParamSpecDef { name: user_label.into(), ..saved("user.lamp") },
+            ParamSpecDef {
+                name: user_label.into(),
+                ..saved("user.lamp")
+            },
         ];
         serde_json::json!({
             "generatorType": "test.param_lookup",
@@ -1091,8 +1331,13 @@ mod tests {
         serde_json::to_string(fx).unwrap()
     }
 
-    fn state(fx: &crate::effects::PresetInstance) -> Vec<(ParamSpecDef, ParamChoices, SpecSource, f32)> {
-        fx.params.iter().map(|p| (p.spec.clone(), p.choices.clone(), p.source, p.value)).collect()
+    fn state(
+        fx: &crate::effects::PresetInstance,
+    ) -> Vec<(ParamSpecDef, ParamChoices, SpecSource, f32)> {
+        fx.params
+            .iter()
+            .map(|p| (p.spec.clone(), p.choices.clone(), p.source, p.value))
+            .collect()
     }
 
     fn chosen_params() -> serde_json::Value {
@@ -1159,16 +1404,36 @@ mod tests {
     fn join_preserves_choices_and_user_bindings() {
         let mut fx = load(&scene_json(chosen_params(), "Lamp Power"));
         let before = state(&fx);
-        let bindings = fx.graph.as_ref().unwrap().preset_metadata.as_ref().unwrap().bindings.clone();
+        let bindings = fx
+            .graph
+            .as_ref()
+            .unwrap()
+            .preset_metadata
+            .as_ref()
+            .unwrap()
+            .bindings
+            .clone();
         fx.refresh_manifest_from_graph();
         assert_eq!(state(&fx), before);
         let p = fx.params.get("1_intensity").unwrap();
         assert_eq!(p.choices.rename.as_deref(), Some("Key"));
         assert_eq!(p.choices.section, Some(None));
-        assert_eq!(p.choices.pin, Some(manifold_foundation::scene_surface::CardPin::Shown));
+        assert_eq!(
+            p.choices.pin,
+            Some(manifold_foundation::scene_surface::CardPin::Shown)
+        );
         let user = fx.params.get("user.lamp").unwrap();
         assert_eq!(user.origin, crate::params::ParamOrigin::UserAdded);
-        assert_eq!(fx.graph.as_ref().unwrap().preset_metadata.as_ref().unwrap().bindings, bindings);
+        assert_eq!(
+            fx.graph
+                .as_ref()
+                .unwrap()
+                .preset_metadata
+                .as_ref()
+                .unwrap()
+                .bindings,
+            bindings
+        );
     }
 
     #[test]
@@ -1187,14 +1452,30 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .map(|b| (b["id"].as_str().unwrap().to_string(), b.get("label").is_some()))
+            .map(|b| {
+                (
+                    b["id"].as_str().unwrap().to_string(),
+                    b.get("label").is_some(),
+                )
+            })
             .collect();
         assert_eq!(
             labels,
-            [("1_intensity".into(), false), ("mix".into(), true), ("user.lamp".into(), true)]
+            [
+                ("1_intensity".into(), false),
+                ("mix".into(), true),
+                ("user.lamp".into(), true)
+            ]
         );
         let back = load(&first);
-        let lamp = &back.graph.as_ref().unwrap().preset_metadata.as_ref().unwrap().bindings[0];
+        let lamp = &back
+            .graph
+            .as_ref()
+            .unwrap()
+            .preset_metadata
+            .as_ref()
+            .unwrap()
+            .bindings[0];
         assert_eq!(lamp.label, "Key", "a load names the binding from the join");
         fx.folded_sections.clear();
         fx.unfolded_sections.clear();
@@ -1244,6 +1525,10 @@ mod tests {
         ] {
             scan(&crates.join(rel), &mut hits);
         }
-        assert!(hits.is_empty(), "readers around the join:\n{}", hits.join("\n"));
+        assert!(
+            hits.is_empty(),
+            "readers around the join:\n{}",
+            hits.join("\n")
+        );
     }
 }

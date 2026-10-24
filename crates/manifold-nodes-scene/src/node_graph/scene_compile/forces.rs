@@ -9,7 +9,10 @@
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef};
 use manifold_core::effects::ParamConvert;
-use manifold_core::scene_doc::{ForceFields, ForceTargets, ForceType, Item, ItemFields, ItemId, ItemKind, PhysicsSetting, param_id};
+use manifold_core::scene_doc::{
+    ForceFields, ForceTargets, ForceType, Item, ItemFields, ItemId, ItemKind, PhysicsSetting,
+    param_id,
+};
 use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, SceneTargetSelection};
 use manifold_core::scene_schema::{self, Exposure, PropertyRow};
 use manifold_foundation::scene_surface::SurfaceRole;
@@ -34,9 +37,19 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> Result<(), String> {
     let mut found: Vec<Placed<'_>> = Vec::new();
     doc.walk(|item, ancestors| {
         let physical = item.fields.physics() != PhysicsSetting::None
-            || ancestors.iter().any(|holder| holder.fields.physics() != PhysicsSetting::None);
-        let lineage = ancestors.iter().map(|holder| holder.id.clone()).chain([item.id.clone()]).collect();
-        found.push(Placed { item, physical, lineage });
+            || ancestors
+                .iter()
+                .any(|holder| holder.fields.physics() != PhysicsSetting::None);
+        let lineage = ancestors
+            .iter()
+            .map(|holder| holder.id.clone())
+            .chain([item.id.clone()])
+            .collect();
+        found.push(Placed {
+            item,
+            physical,
+            lineage,
+        });
     });
     for Placed { item, .. } in &found {
         if let ItemFields::Force(force) = &item.fields {
@@ -60,7 +73,8 @@ pub(super) fn node(owner: &str, role: &str) -> NodeId {
 
 /// The scene object node an Object item compiled to, if it did.
 fn object_ref(b: &Builder<'_>, item: &Item) -> Option<NodeId> {
-    b.id(item.id.as_str(), "object").map(|_| node(item.id.as_str(), "object"))
+    b.id(item.id.as_str(), "object")
+        .map(|_| node(item.id.as_str(), "object"))
 }
 
 /// The scene objects a swarm draws its particles with: its own built-in
@@ -70,12 +84,23 @@ fn swarm_objects(b: &mut Builder<'_>, swarm: &ItemId, items: &[Placed<'_>]) -> V
     let copies = b.id(swarm.as_str(), "copies");
     let drawn_by_swarm = |owner: &ItemId| {
         copies.is_some()
-            && items.iter().find(|placed| &placed.item.id == owner).is_some_and(|placed| {
-                placed.lineage.iter().any(|above| b.swarm_draws.get(above).copied() == copies)
-            })
+            && items
+                .iter()
+                .find(|placed| &placed.item.id == owner)
+                .is_some_and(|placed| {
+                    placed
+                        .lineage
+                        .iter()
+                        .any(|above| b.swarm_draws.get(above).copied() == copies)
+                })
     };
     // A later swarm's copies of an item's draws are its own, never the first's.
-    let copied_by = |object: u32| b.alike.iter().find(|(_, copy, _)| *copy == object).map(|(_, _, by)| by);
+    let copied_by = |object: u32| {
+        b.alike
+            .iter()
+            .find(|(_, copy, _)| *copy == object)
+            .map(|(_, _, by)| by)
+    };
     let drawn: Vec<u32> = b
         .objects
         .iter()
@@ -86,10 +111,18 @@ fn swarm_objects(b: &mut Builder<'_>, swarm: &ItemId, items: &[Placed<'_>]) -> V
         })
         .map(|(&object, _)| object)
         .collect();
-    drawn.into_iter().filter_map(|object| b.node_id_of(object)).collect()
+    drawn
+        .into_iter()
+        .filter_map(|object| b.node_id_of(object))
+        .collect()
 }
 
-fn emit_force(b: &mut Builder<'_>, item: &Item, force: &ForceFields, items: &[Placed<'_>]) -> Result<(), String> {
+fn emit_force(
+    b: &mut Builder<'_>,
+    item: &Item,
+    force: &ForceFields,
+    items: &[Placed<'_>],
+) -> Result<(), String> {
     let targets = match &force.targets {
         ForceTargets::Physics => SceneTargetSelection::AllObjects,
         ForceTargets::Items(ids) => {
@@ -104,7 +137,10 @@ fn emit_force(b: &mut Builder<'_>, item: &Item, force: &ForceFields, items: &[Pl
                 }
             }
             // A chosen Swarm (or one inside a chosen Group): what it draws.
-            for placed in items.iter().filter(|placed| placed.item.kind() == ItemKind::Swarm) {
+            for placed in items
+                .iter()
+                .filter(|placed| placed.item.kind() == ItemKind::Swarm)
+            {
                 if ids.iter().any(|chosen| placed.lineage.contains(chosen)) {
                     for target in swarm_objects(b, &placed.item.id, items) {
                         if !objects.contains(&target) {
@@ -117,7 +153,12 @@ fn emit_force(b: &mut Builder<'_>, item: &Item, force: &ForceFields, items: &[Pl
         }
     };
     let lookup = |param: &str| scene_schema::row_for(&item.fields, param);
-    let (graph, specs) = recipe_card(recipe_of(force.force), &lookup, &|param| param_id(&item.id, param), &[])?;
+    let (graph, specs) = recipe_card(
+        recipe_of(force.force),
+        &lookup,
+        &|param| param_id(&item.id, param),
+        &[],
+    )?;
     let id = node(item.id.as_str(), "force");
     let bindings = bindings(&specs, &id);
     let instance = SceneModifierInstanceDef {
@@ -128,7 +169,12 @@ fn emit_force(b: &mut Builder<'_>, item: &Item, force: &ForceFields, items: &[Pl
         legacy_math_view_carrier: None,
         graph: Box::new(graph),
     };
-    b.push_modifier(instance, specs.into_iter().map(|(spec, _)| spec).collect(), bindings, None);
+    b.push_modifier(
+        instance,
+        specs.into_iter().map(|(spec, _)| spec).collect(),
+        bindings,
+        None,
+    );
     Ok(())
 }
 
@@ -145,28 +191,51 @@ pub(super) fn recipe_card(
     held: &[(&str, f32)],
 ) -> Result<(EffectGraphDef, Vec<CardParam>), String> {
     let mut graph = stock_force(recipe, &[])?;
-    let local = graph.preset_metadata.clone().ok_or_else(|| format!("The stock {recipe} recipe has no card"))?;
-    let preparation: &[String] = local.scene_modifier.as_ref().map_or(&[], |recipe| &recipe.preparation_params);
+    let local = graph
+        .preset_metadata
+        .clone()
+        .ok_or_else(|| format!("The stock {recipe} recipe has no card"))?;
+    let preparation: &[String] = local
+        .scene_modifier
+        .as_ref()
+        .map_or(&[], |recipe| &recipe.preparation_params);
 
     let mut rows = Vec::new();
-    for spec in local.params.iter().filter(|spec| !preparation.contains(&spec.id)) {
-        let row = lookup(&spec.id)
-            .ok_or_else(|| format!("{recipe}: the scene table has no row for its {} param", spec.id))?;
+    for spec in local
+        .params
+        .iter()
+        .filter(|spec| !preparation.contains(&spec.id))
+    {
+        let row = lookup(&spec.id).ok_or_else(|| {
+            format!(
+                "{recipe}: the scene table has no row for its {} param",
+                spec.id
+            )
+        })?;
         rows.push((spec, row));
     }
     // The kind's defaults reach the recipe itself, so its graph agrees with its card.
-    let mut tuning: Vec<(&str, f32)> =
-        rows.iter().filter_map(|(spec, row)| row.default.map(|value| (spec.id.as_str(), value))).collect();
+    let mut tuning: Vec<(&str, f32)> = rows
+        .iter()
+        .filter_map(|(spec, row)| row.default.map(|value| (spec.id.as_str(), value)))
+        .collect();
     tuning.extend_from_slice(held);
     tune_force_card(&mut graph, &tuning)?;
-    let tuned = graph.preset_metadata.as_ref().map_or(&[][..], |meta| meta.params.as_slice()).to_vec();
+    let tuned = graph
+        .preset_metadata
+        .as_ref()
+        .map_or(&[][..], |meta| meta.params.as_slice())
+        .to_vec();
 
     let mut specs = Vec::new();
     for (spec, row) in rows {
         let Exposure::Card(facts) = row.exposure else {
             continue;
         };
-        let current = tuned.iter().find(|candidate| candidate.id == spec.id).unwrap_or(spec);
+        let current = tuned
+            .iter()
+            .find(|candidate| candidate.id == spec.id)
+            .unwrap_or(spec);
         let mut host: ParamSpecDef = current.clone();
         host.id = host_id(&spec.id);
         if let Some(name) = row.name {
@@ -193,7 +262,10 @@ pub(super) fn bindings(specs: &[CardParam], modifier: &NodeId) -> Vec<BindingDef
             id: host.id.clone(),
             label: host.name.clone(),
             default_value: host.default_value,
-            target: BindingTarget::SceneModifier { modifier_id: modifier.clone(), param_id: param.clone() },
+            target: BindingTarget::SceneModifier {
+                modifier_id: modifier.clone(),
+                param_id: param.clone(),
+            },
             convert: ParamConvert::Float,
             user_added: false,
             scale: 1.0,

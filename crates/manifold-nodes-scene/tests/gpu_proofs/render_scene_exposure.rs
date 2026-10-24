@@ -17,9 +17,8 @@ use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 /// A single unlit white quad (grid_mesh's XZ-plane grid) viewed from a
 /// tilted-down orbit camera so the plane fills the frame (not edge-on).
@@ -79,7 +78,9 @@ fn quad_scene_json(lens_ev: Option<f32>) -> String {
         }
     }
 
-    format!(r#"{{"version":2,"name":"RenderSceneExposureProof","nodes":[{nodes}],"wires":[{wires}]}}"#)
+    format!(
+        r#"{{"version":2,"name":"RenderSceneExposureProof","nodes":[{nodes}],"wires":[{wires}]}}"#
+    )
 }
 
 fn render_readback(json: &str) -> Vec<u8> {
@@ -135,7 +136,10 @@ fn mean_lit_rgb(bytes: &[u8]) -> (f64, f64, f64) {
         let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
         let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
         let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-        assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+        assert!(
+            r.is_finite() && g.is_finite() && b.is_finite(),
+            "non-finite pixel"
+        );
         if r + g + b > 0.02 {
             sr += r as f64;
             sg += g as f64;

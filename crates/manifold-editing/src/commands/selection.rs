@@ -21,7 +21,9 @@ impl SetSelectionRegionCommand {
 }
 
 impl Command for SetSelectionRegionCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::NONE }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::NONE
+    }
     fn do_execute(&mut self, _project: &mut Project) {
         // Selection is UI state — stored externally, not on Project.
         // This command exists for undo/redo tracking of selection changes.
@@ -56,7 +58,8 @@ mod tests {
     #[test]
     fn set_selection_region_writes_nothing() {
         let mut project = Project::default();
-        let mut command = SetSelectionRegionCommand::new(SelectionRegion::default(), SelectionRegion::default());
+        let mut command =
+            SetSelectionRegionCommand::new(SelectionRegion::default(), SelectionRegion::default());
         command.execute(&mut project);
         command.undo(&mut project);
     }

@@ -1,9 +1,9 @@
 //! Material facts adapted at the engine/UI boundary. No registry descriptor copies.
-use manifold_core::material_inspector as core;
+use manifold_core::GraphTarget;
 use manifold_core::effects::{ParamId, PresetInstance};
+use manifold_core::material_inspector as core;
 use manifold_core::project::Project;
 use manifold_core::scene_doc::split_param_id;
-use manifold_core::GraphTarget;
 use manifold_ui::param_surface as ui;
 
 pub(crate) fn feature(value: core::MaterialFeature) -> ui::MaterialFeature {
@@ -117,7 +117,8 @@ pub(super) fn colour_rows(rows: &mut [ui::ParamRow], inst: &PresetInstance) {
                 let ids = [r, g, b].map(|row| row.id.clone());
                 Some(ui::RgbMembers {
                     group,
-                    editable: [r, g, b].iter().all(|row| !row.value.driven) && rgb_ids_editable(inst, &ids),
+                    editable: [r, g, b].iter().all(|row| !row.value.driven)
+                        && rgb_ids_editable(inst, &ids),
                     ids,
                     values: [r, g, b].map(|row| row.value.base),
                 })
@@ -131,8 +132,13 @@ pub(super) fn colour_rows(rows: &mut [ui::ParamRow], inst: &PresetInstance) {
 /// A row's colour and channel, from its UI descriptor: a material colour
 /// channel, or a scene item's colour channel (`None` colour).
 fn row_rgb_channel(spec: &ui::RowSpec) -> Option<(Option<ui::MaterialColour>, ui::RgbChannel)> {
-    match (spec.material_role, spec.scene.and_then(|scene| scene.colour)) {
-        (Some(ui::MaterialParamRole::Colour(_, colour, channel)), _) => Some((Some(colour), channel)),
+    match (
+        spec.material_role,
+        spec.scene.and_then(|scene| scene.colour),
+    ) {
+        (Some(ui::MaterialParamRole::Colour(_, colour, channel)), _) => {
+            Some((Some(colour), channel))
+        }
         (None, Some(channel)) => Some((None, channel)),
         _ => None,
     }
@@ -140,16 +146,32 @@ fn row_rgb_channel(spec: &ui::RowSpec) -> Option<(Option<ui::MaterialColour>, ui
 
 /// One swatch over three channel rows, or `None` when the channels cannot
 /// take a single RGB write ([`rgb_ids_editable`]).
-pub(super) fn rgb_members(inst: &PresetInstance, group: ui::ColourGroup, rows: [&ui::ParamRow; 3]) -> Option<ui::RgbMembers> {
+pub(super) fn rgb_members(
+    inst: &PresetInstance,
+    group: ui::ColourGroup,
+    rows: [&ui::ParamRow; 3],
+) -> Option<ui::RgbMembers> {
     let ids = rows.map(|row| row.id.clone());
-    rgb_ids_editable(inst, &ids).then(|| ui::RgbMembers { group, ids, values: rows.map(|row| row.value.base), editable: true })
+    rgb_ids_editable(inst, &ids).then(|| ui::RgbMembers {
+        group,
+        ids,
+        values: rows.map(|row| row.value.base),
+        editable: true,
+    })
 }
 
 /// Which colour and channel a param is: a material colour channel, or a
 /// scene item's colour channel (`None` colour). `None` for any other param.
-fn rgb_channel(spec: &manifold_core::effect_graph_def::ParamSpecDef) -> Option<(Option<core::MaterialColour>, core::RgbChannel)> {
-    match (spec.material_role, spec.scene.and_then(|scene| scene.colour)) {
-        (Some(core::MaterialParamRole::Colour(_, colour, channel)), _) => Some((Some(colour), channel)),
+fn rgb_channel(
+    spec: &manifold_core::effect_graph_def::ParamSpecDef,
+) -> Option<(Option<core::MaterialColour>, core::RgbChannel)> {
+    match (
+        spec.material_role,
+        spec.scene.and_then(|scene| scene.colour),
+    ) {
+        (Some(core::MaterialParamRole::Colour(_, colour, channel)), _) => {
+            Some((Some(colour), channel))
+        }
         (None, Some(channel)) => Some((None, channel)),
         _ => None,
     }
@@ -189,5 +211,7 @@ pub(crate) fn rgb_editable(project: &Project, target: &GraphTarget, ids: &[Param
         return false;
     };
     rgb_ids_editable(inst, ids)
-        && ids.iter().all(|id| crate::graph_target::macro_parameter_lock_reason(project, target, id).is_none())
+        && ids.iter().all(|id| {
+            crate::graph_target::macro_parameter_lock_reason(project, target, id).is_none()
+        })
 }

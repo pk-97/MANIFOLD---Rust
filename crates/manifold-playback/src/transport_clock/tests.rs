@@ -1,10 +1,12 @@
 use super::*;
-use manifold_core::{Beats, Bpm};
 use manifold_core::tempo::{TempoMap, TempoMapConverter};
 use manifold_core::types::TempoPointSource;
+use manifold_core::{Beats, Bpm};
 
 const NTSC_2997: f32 = 29.97;
-const RATES: [f32; 9] = [60.0, 50.0, 30.0, 25.0, 24.0, NTSC_2997, 23.976, 59.94, 120.0];
+const RATES: [f32; 9] = [
+    60.0, 50.0, 30.0, 25.0, 24.0, NTSC_2997, 23.976, 59.94, 120.0,
+];
 
 fn playing_clock(fps: f32) -> TransportClock {
     let mut clock = TransportClock::new(fps);
@@ -24,7 +26,11 @@ fn time_is_absolute_at_two_hours() {
             assert_eq!(clock.advance(1), 1);
             assert_eq!(clock.index(), index);
             let expected = index as f64 * step;
-            assert_eq!(clock.time().0.to_bits(), expected.to_bits(), "fps {fps} index {index}");
+            assert_eq!(
+                clock.time().0.to_bits(),
+                expected.to_bits(),
+                "fps {fps} index {index}"
+            );
         }
     }
 }
@@ -33,7 +39,12 @@ fn time_is_absolute_at_two_hours() {
 
 fn tempo_map(bpm: u32) -> TempoMap {
     let mut map = TempoMap::default();
-    map.add_or_replace_point(Beats(0.0), Bpm(bpm as f32), TempoPointSource::Manual, 0.0001);
+    map.add_or_replace_point(
+        Beats(0.0),
+        Bpm(bpm as f32),
+        TempoPointSource::Manual,
+        0.0001,
+    );
     map.ensure_sorted();
     map
 }
@@ -68,11 +79,20 @@ fn expected_edge_frame(num: u128, den: u128) -> Option<(i64, bool)> {
         return Some((floor, true));
     }
     let after = rem as f64 / den as f64;
-    if (after - BEAT_SAMPLE_OFFSET_FRAMES).abs() < 1e-9 || (after - SNAP_TOLERANCE_FRAMES).abs() < 1e-9 {
+    if (after - BEAT_SAMPLE_OFFSET_FRAMES).abs() < 1e-9
+        || (after - SNAP_TOLERANCE_FRAMES).abs() < 1e-9
+    {
         return None; // on a tolerance boundary itself: either frame is honest
     }
-    let frame = if after <= BEAT_SAMPLE_OFFSET_FRAMES { floor } else { floor + 1 };
-    Some((frame, after > SNAP_TOLERANCE_FRAMES || after <= BEAT_SAMPLE_OFFSET_FRAMES))
+    let frame = if after <= BEAT_SAMPLE_OFFSET_FRAMES {
+        floor
+    } else {
+        floor + 1
+    };
+    Some((
+        frame,
+        after > SNAP_TOLERANCE_FRAMES || after <= BEAT_SAMPLE_OFFSET_FRAMES,
+    ))
 }
 
 /// The beat the engine will see on frame `index`: the clock's own sample time
@@ -111,7 +131,9 @@ fn on_frame_edges_land_on_their_frame() {
             let map = tempo_map(bpm);
             for n16 in candidate_edges(bpm, fps) {
                 let (num, den) = edge_frame_rational(n16, bpm, fps);
-                let Some((frame, seek_lands)) = expected_edge_frame(num, den) else { continue };
+                let Some((frame, seek_lands)) = expected_edge_frame(num, den) else {
+                    continue;
+                };
                 if num % den == 0 {
                     on_frame += 1;
                 }
@@ -129,13 +151,24 @@ fn on_frame_edges_land_on_their_frame() {
                 }
                 // The seek rule agrees with the beat rule.
                 if seek_lands {
-                    let edge_time = TempoMapConverter::beat_to_seconds_immut(&map, Beats(edge), Bpm(bpm as f32));
-                    assert_eq!(clock.index_at_or_after(edge_time), frame, "{fps} fps {bpm} BPM edge {edge}: seek");
+                    let edge_time = TempoMapConverter::beat_to_seconds_immut(
+                        &map,
+                        Beats(edge),
+                        Bpm(bpm as f32),
+                    );
+                    assert_eq!(
+                        clock.index_at_or_after(edge_time),
+                        frame,
+                        "{fps} fps {bpm} BPM edge {edge}: seek"
+                    );
                 }
             }
         }
     }
-    assert!(on_frame > 50_000, "sweep must cover on-frame edges, saw {on_frame}");
+    assert!(
+        on_frame > 50_000,
+        "sweep must cover on-frame edges, saw {on_frame}"
+    );
 }
 
 /// The D14 test discriminates: sampling at exact frame time, as today, shows
@@ -154,12 +187,16 @@ fn todays_sampling_misses_on_frame_edges() {
         }
         total += 1;
         let frame = (num / den) as i64;
-        let beat = TempoMapConverter::seconds_to_beat_immut(&map, clock.time_at(frame), Bpm(bpm as f32)).0;
+        let beat =
+            TempoMapConverter::seconds_to_beat_immut(&map, clock.time_at(frame), Bpm(bpm as f32)).0;
         if beat < n16 as f64 / 16.0 {
             late += 1;
         }
     }
-    assert!(late * 4 > total, "expected about 40% late at 150 BPM, saw {late} of {total}");
+    assert!(
+        late * 4 > total,
+        "expected about 40% late at 150 BPM, saw {late} of {total}"
+    );
 }
 
 // ── D4: snapping and holds ───────────────────────────────────────────────────
@@ -171,10 +208,20 @@ fn seek_snaps_forward_and_round_trips() {
         let step = clock.step().0;
         for index in (0..5_000).chain(431_000..433_000) {
             let t = clock.time_at(index);
-            assert_eq!(clock.index_at_or_after(t), index, "{fps} round trip {index}");
+            assert_eq!(
+                clock.index_at_or_after(t),
+                index,
+                "{fps} round trip {index}"
+            );
             assert_eq!(clock.index_nearest(t), index);
-            assert_eq!(clock.index_at_or_after(Seconds(t.0 + 0.5 * step)), index + 1);
-            assert_eq!(clock.index_at_or_after(Seconds(t.0 + 1e-4 * step)), index + 1);
+            assert_eq!(
+                clock.index_at_or_after(Seconds(t.0 + 0.5 * step)),
+                index + 1
+            );
+            assert_eq!(
+                clock.index_at_or_after(Seconds(t.0 + 1e-4 * step)),
+                index + 1
+            );
             assert_eq!(clock.index_nearest(Seconds(t.0 + 0.4 * step)), index);
             clock.locate(Seconds(t.0 + 0.3 * step));
             assert_eq!(clock.index(), index + 1, "{fps} locate snaps forward");
@@ -193,8 +240,13 @@ fn sampled_beats_round_trip_to_their_frame() {
             let clock = TransportClock::new(fps);
             for index in (0..5_000).chain(431_000..432_000) {
                 let beat = sampled_beat(&map, bpm, &clock, index);
-                let t = TempoMapConverter::beat_to_seconds_immut(&map, Beats(beat), Bpm(bpm as f32));
-                assert_eq!(clock.index_at_or_after(t), index, "{fps} fps {bpm} BPM frame {index}");
+                let t =
+                    TempoMapConverter::beat_to_seconds_immut(&map, Beats(beat), Bpm(bpm as f32));
+                assert_eq!(
+                    clock.index_at_or_after(t),
+                    index,
+                    "{fps} fps {bpm} BPM frame {index}"
+                );
             }
         }
     }
@@ -265,10 +317,24 @@ fn set_fps_keeps_time_and_snaps_forward() {
 
 #[test]
 fn fps_outside_one_to_a_thousand_falls_back_to_sixty() {
-    for fps in [0.0_f32, -24.0, 0.5, 1000.5, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, f32::MAX, 1e-30] {
+    for fps in [
+        0.0_f32,
+        -24.0,
+        0.5,
+        1000.5,
+        f32::NAN,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::MAX,
+        1e-30,
+    ] {
         let clock = TransportClock::new(fps);
         assert_eq!(clock.fps(), 60.0, "{fps}");
-        assert_eq!(clock.step().0.to_bits(), (1.0_f64 / 60.0).to_bits(), "{fps}");
+        assert_eq!(
+            clock.step().0.to_bits(),
+            (1.0_f64 / 60.0).to_bits(),
+            "{fps}"
+        );
         let mut clock = playing_clock(24.0);
         clock.set_fps(fps);
         assert_eq!(clock.fps(), 60.0, "set_fps {fps}");
@@ -294,10 +360,17 @@ fn export_frames_sit_on_the_song_grid() {
         for k in 0..20_000u32 {
             clock.set_export_frame(first, k);
             let expected = (first + i64::from(k)) as f64 * step;
-            assert_eq!(clock.time().0.to_bits(), expected.to_bits(), "{fps} frame {k}");
+            assert_eq!(
+                clock.time().0.to_bits(),
+                expected.to_bits(),
+                "{fps} frame {k}"
+            );
         }
         clock.set_export_frame(first, 0);
-        assert!(clock.time().0 >= start.0 && clock.time().0 - start.0 < step, "{fps}: frame 0 is the first at or after the start");
+        assert!(
+            clock.time().0 >= start.0 && clock.time().0 - start.0 < step,
+            "{fps}: frame 0 is the first at or after the start"
+        );
         clock.end_export(60.0);
         assert_eq!(clock.fps(), 60.0);
     }
@@ -309,7 +382,11 @@ fn export_frames_sit_on_the_song_grid() {
     let first = export.index_at_or_after(start);
     for k in 0..1_000u32 {
         export.set_export_frame(first, k);
-        assert_eq!(export.time().0.to_bits(), live.time().0.to_bits(), "export frame {k} equals live");
+        assert_eq!(
+            export.time().0.to_bits(),
+            live.time().0.to_bits(),
+            "export frame {k} equals live"
+        );
         live.advance(1);
     }
 }
@@ -319,7 +396,11 @@ fn export_frame_clears_a_pending_hold() {
     let mut clock = playing_clock(60.0);
     clock.seek_playing(Seconds(2.0));
     clock.set_export_frame(clock.index(), 0);
-    assert_eq!(clock.advance(1), 1, "an export frame leaves no seek hold behind");
+    assert_eq!(
+        clock.advance(1),
+        1,
+        "an export frame leaves no seek hold behind"
+    );
 }
 
 #[test]
@@ -364,13 +445,29 @@ fn placement_target_stands_until_a_frame_takes_it() {
         clock.seek_playing(Seconds(0.2137));
         assert!(clock.time().0 >= 0.2137);
         clock.advance(1);
-        assert_eq!(clock.played_target(), Some(PlayedTime::from_played(0.2137)), "{fps} fps");
-        assert_eq!(clock.take_played_target(), Some(PlayedTime::from_played(0.2137)), "{fps} fps");
+        assert_eq!(
+            clock.played_target(),
+            Some(PlayedTime::from_played(0.2137)),
+            "{fps} fps"
+        );
+        assert_eq!(
+            clock.take_played_target(),
+            Some(PlayedTime::from_played(0.2137)),
+            "{fps} fps"
+        );
         clock.advance(1);
-        assert_eq!(clock.take_played_target(), None, "{fps} fps: one frame takes it");
+        assert_eq!(
+            clock.take_played_target(),
+            None,
+            "{fps} fps: one frame takes it"
+        );
         clock.locate(Seconds(0.9137));
         clock.locate(clock.time());
         clock.advance(1);
-        assert_eq!(clock.take_played_target(), Some(PlayedTime::from_played(0.9137)), "{fps} fps: play after a seek keeps its target");
+        assert_eq!(
+            clock.take_played_target(),
+            Some(PlayedTime::from_played(0.9137)),
+            "{fps} fps: play after a seek keeps its target"
+        );
     }
 }

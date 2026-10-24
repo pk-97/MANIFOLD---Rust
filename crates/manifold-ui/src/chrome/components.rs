@@ -367,7 +367,12 @@ pub fn chip_state_style(
             color::TEXT_WHITE_C32,
         )
     } else {
-        (surface.bg(), surface.hover(), surface.pressed(), surface.text())
+        (
+            surface.bg(),
+            surface.hover(),
+            surface.pressed(),
+            surface.text(),
+        )
     };
     UIStyle {
         bg_color: bg,
@@ -420,7 +425,13 @@ pub fn dropdown_chip_style(surface: ChipSurface, font_size: u16, radius: f32) ->
     UIStyle {
         text_align: TextAlign::Left,
         dropdown_caret: true,
-        ..chip_style(surface, font_size, TextAlign::Left, radius, color::CHIP_TEXT_INSET_X)
+        ..chip_style(
+            surface,
+            font_size,
+            TextAlign::Left,
+            radius,
+            color::CHIP_TEXT_INSET_X,
+        )
     }
 }
 
@@ -528,14 +539,30 @@ mod tests {
     #[test]
     fn chip_motion_eases_toward_hover_and_back() {
         let mut m = ChipMotion::new();
-        assert_eq!(m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)), Color32::BLACK); // design-token-exempt: test fixture (chip-motion tween highlight)
+        assert_eq!(
+            m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)),
+            Color32::BLACK
+        ); // design-token-exempt: test fixture (chip-motion tween highlight)
 
-        assert!(m.tick(45.0, true, false), "halfway through MOTION_FAST, still animating");
+        assert!(
+            m.tick(45.0, true, false),
+            "halfway through MOTION_FAST, still animating"
+        );
         let mid = m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)); // design-token-exempt: test fixture (chip-motion tween highlight)
-        assert!(mid.r > 0 && mid.r < 255, "partway blended toward hover: r={}", mid.r);
+        assert!(
+            mid.r > 0 && mid.r < 255,
+            "partway blended toward hover: r={}",
+            mid.r
+        );
 
-        assert!(!m.tick(45.0, true, false), "settles at the end of MOTION_FAST");
-        assert_eq!(m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)), Color32::WHITE); // design-token-exempt: test fixture (chip-motion tween highlight)
+        assert!(
+            !m.tick(45.0, true, false),
+            "settles at the end of MOTION_FAST"
+        );
+        assert_eq!(
+            m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)),
+            Color32::WHITE
+        ); // design-token-exempt: test fixture (chip-motion tween highlight)
 
         // Pointer leaves: eases back down, not an instant snap.
         assert!(m.tick(45.0, false, false));
@@ -548,7 +575,10 @@ mod tests {
         let mut m = ChipMotion::new();
         m.tick(90.0, true, true); // fully hovered + pressed after one full MOTION_FAST
         // Press wins over hover once both are fully settled.
-        assert_eq!(m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)), Color32::new(255, 0, 0, 255)); // design-token-exempt: test fixture (chip-motion tween highlight)
+        assert_eq!(
+            m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)),
+            Color32::new(255, 0, 0, 255)
+        ); // design-token-exempt: test fixture (chip-motion tween highlight)
     }
 
     #[test]

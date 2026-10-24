@@ -22,13 +22,15 @@
 //! pass-through we'd specialise the shader per output format — for
 //! now this matches what the legacy `cs_downsample` did.
 
-use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
+use std::borrow::Cow;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::primitives::standalone_pipeline::{
+    dispatch_standalone_2d, standalone_pipeline,
+};
 
 pub const DOWNSAMPLE_FACTORS: &[&str] = &["2x", "4x", "8x"];
 
@@ -248,7 +250,10 @@ mod tests {
         let node: &dyn EffectNode = &prim;
         for (enum_v, expected_den) in [(0u32, 2u32), (1, 4), (2, 8)] {
             let mut params = ahash::AHashMap::default();
-            params.insert(std::borrow::Cow::Borrowed("factor"), ParamValue::Enum(enum_v));
+            params.insert(
+                std::borrow::Cow::Borrowed("factor"),
+                ParamValue::Enum(enum_v),
+            );
             assert_eq!(
                 node.output_canvas_scale("out", &params),
                 Some((1, expected_den)),

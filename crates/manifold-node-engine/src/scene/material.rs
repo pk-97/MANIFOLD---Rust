@@ -413,8 +413,7 @@ impl Material {
             diffuse_transmission_color: [1.0, 1.0, 1.0],
             transmission_factor: 0.0,
             volume_thickness_factor: 0.0,
-            volume_attenuation_distance:
-                VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+            volume_attenuation_distance: VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
             volume_attenuation_color: [1.0, 1.0, 1.0],
             volume_geometry: false,
             volume_scattering_density: 0.0,

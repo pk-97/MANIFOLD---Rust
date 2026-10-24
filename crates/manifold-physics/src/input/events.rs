@@ -395,13 +395,25 @@ mod tests {
         queue.enqueue(stamp(1, 0.02, 1), 2).unwrap();
         queue.enqueue(stamp(1, 0.05, 2), 3).unwrap();
         let mut values = Vec::new();
-        queue.begin_interval(queue.next_tick(), StepInterval::new(Seconds::ZERO, Seconds(0.05)), |event| {
-            values.push((event.value, event.source.time.0, event.lateness.0));
-        }).unwrap();
+        queue
+            .begin_interval(
+                queue.next_tick(),
+                StepInterval::new(Seconds::ZERO, Seconds(0.05)),
+                |event| {
+                    values.push((event.value, event.source.time.0, event.lateness.0));
+                },
+            )
+            .unwrap();
         assert_eq!(values, [(1, 0.02, 0.0), (2, 0.02, 0.0)]);
-        queue.begin_interval(queue.next_tick(), StepInterval::new(Seconds(0.05), Seconds(0.1)), |event| {
-            values.push((event.value, event.source.time.0, event.lateness.0));
-        }).unwrap();
+        queue
+            .begin_interval(
+                queue.next_tick(),
+                StepInterval::new(Seconds(0.05), Seconds(0.1)),
+                |event| {
+                    values.push((event.value, event.source.time.0, event.lateness.0));
+                },
+            )
+            .unwrap();
         assert_eq!(values[2], (3, 0.05, 0.0));
         assert!(queue.is_empty());
     }

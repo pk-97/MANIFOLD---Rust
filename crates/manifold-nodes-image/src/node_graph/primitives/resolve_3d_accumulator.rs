@@ -161,9 +161,7 @@ mod gpu_tests {
     //! atomicLoad/atomicStore on `buf_accum`, R-only density store.
     use super::*;
     use half::f16;
-    use manifold_gpu::{
-        GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
-    };
+    use manifold_gpu::{GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
     #[test]
     fn generated_resolve_3d_divides_and_self_clears() {
@@ -196,10 +194,7 @@ mod gpu_tests {
             gen_wgsl.contains("array<atomic<u32>>"),
             "accumulator bound as atomic"
         );
-        assert!(
-            gen_wgsl.contains("texture_storage_3d"),
-            "3D storage output"
-        );
+        assert!(gen_wgsl.contains("texture_storage_3d"), "3D storage output");
         let pipeline = device.create_compute_pipeline(
             &gen_wgsl,
             manifold_node_engine::freeze::codegen::ENTRY,
@@ -216,9 +211,19 @@ mod gpu_tests {
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: &accum, offset: 0 },
-                GpuBinding::Texture { binding: 2, texture: &density },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &accum,
+                    offset: 0,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: &density,
+                },
             ],
             [
                 vr.div_ceil(manifold_node_engine::freeze::codegen::VOLUME_WORKGROUP_3D),

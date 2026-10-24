@@ -173,7 +173,8 @@ impl FakeAbleton {
                 OutMsg::StopPlaying => self.is_playing = false,
                 OutMsg::SetSongTime(beat) => self.song_time_beats = beat,
                 OutMsg::QueryIsPlaying => {
-                    self.forced_replies.push(ObsEvent::IsPlaying(self.is_playing));
+                    self.forced_replies
+                        .push(ObsEvent::IsPlaying(self.is_playing));
                 }
                 OutMsg::QuerySongTime => {
                     self.forced_replies
@@ -415,7 +416,10 @@ fn f2_seek_survives_packet_loss() {
     h.frame(0.010, true);
 
     let settled = h.run_until_settled(true, 200);
-    assert!(settled, "machine never recovered from the dropped seek packet");
+    assert!(
+        settled,
+        "machine never recovered from the dropped seek packet"
+    );
     assert_eq!(h.machine.status(), TransportSyncStatus::Locked);
     // The retransmit carries the engine's CURRENT beat (anchor-fix
     // semantics), so the meaningful property is that the two playheads
@@ -501,7 +505,10 @@ fn f3_real_press_in_flight_wins() {
     }
 
     let settled = h.run_until_settled(true, 200);
-    assert!(settled, "machine never settled after the in-flight reversal");
+    assert!(
+        settled,
+        "machine never settled after the in-flight reversal"
+    );
     assert_eq!(h.machine.status(), TransportSyncStatus::Locked);
     assert!(
         !h.fake.is_playing,
@@ -570,7 +577,11 @@ fn f5_ableton_play_relays_when_clk_absent() {
     let mut saw_position_action = false;
     for _ in 0..15 {
         let result = h.frame(FRAME_DT, false);
-        if h.steered || result.actions.iter().any(|a| matches!(a, EngineAction::SeekBeats(_)))
+        if h.steered
+            || result
+                .actions
+                .iter()
+                .any(|a| matches!(a, EngineAction::SeekBeats(_)))
         {
             saw_position_action = true;
             break;
@@ -669,8 +680,7 @@ fn f7_slow_scheduler_400ms_still_converges() {
             break;
         }
     }
-    let retransmit_at =
-        retransmit_at.expect("expected a retransmit after the dropped command");
+    let retransmit_at = retransmit_at.expect("expected a retransmit after the dropped command");
     let elapsed = retransmit_at - send_time;
     assert!(
         elapsed > 0.6,
@@ -734,7 +744,10 @@ fn f8_high_tempo_slow_ack_no_yankback() {
         }
     }
 
-    assert!(settled, "gesture never acknowledged at 174 BPM / 0.5s latency");
+    assert!(
+        settled,
+        "gesture never acknowledged at 174 BPM / 0.5s latency"
+    );
     assert_eq!(
         h.machine.status(),
         TransportSyncStatus::Locked,

@@ -1,17 +1,17 @@
 //! Shared CPU execution and mesh helpers for fluid-role contract tests.
 
+use crate::fluid_role::FluidRole;
 use crate::primitives::fluid_role_source::FluidRoleSource;
+use manifold_core::{Beats, Seconds};
+use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
 use manifold_node_engine::exec::backend::{Backend, MockBackend};
 use manifold_node_engine::exec::cpu_values::CpuWireWrites;
-use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, FrameTime, ParamValues};
 use manifold_node_engine::exec::execution_plan::ResourceId;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::ports::PortType;
 use manifold_node_engine::primitive::Primitive;
-use crate::fluid_role::FluidRole;
 use manifold_node_engine::scene::transform::Transform;
-use manifold_node_engine::mesh::MeshVertex;
-use manifold_core::{Beats, Seconds};
 
 fn frame_time() -> FrameTime {
     FrameTime {
@@ -29,7 +29,14 @@ pub(crate) fn run_inputs(
     output_slot: Slot,
     params: &ParamValues,
 ) -> bool {
-    run_inputs_under(primitive, backend, input_bindings, output_slot, params, Default::default())
+    run_inputs_under(
+        primitive,
+        backend,
+        input_bindings,
+        output_slot,
+        params,
+        Default::default(),
+    )
 }
 
 pub(crate) fn run_inputs_under(
@@ -65,7 +72,8 @@ pub(crate) fn run_inputs_under(
     )
     .with_cpu_value_writes(&mut role_scratch);
     let pending = {
-        let mut ctx = EffectNodeContext::new(frame_time(), params, inputs, outputs, None).with_sim_step(step);
+        let mut ctx =
+            EffectNodeContext::new(frame_time(), params, inputs, outputs, None).with_sim_step(step);
         primitive.run(&mut ctx);
         ctx.outputs_pending
     };

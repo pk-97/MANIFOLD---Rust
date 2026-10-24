@@ -45,7 +45,11 @@ impl PresetRuntime {
     /// [`Self::set_dump_visible`] resolves; an empty list stops. The texture
     /// atlas set never holds arrays, so a node-scoped array read comes here.
     pub fn set_dump_arrays(&mut self, effect_id: Option<&EffectId>, nodes: &[NodeId]) {
-        let set = if nodes.is_empty() { None } else { self.resolve_nodes(effect_id, nodes, None) };
+        let set = if nodes.is_empty() {
+            None
+        } else {
+            self.resolve_nodes(effect_id, nodes, None)
+        };
         self.executor.set_dump_array_set(set);
     }
 
@@ -68,15 +72,24 @@ impl PresetRuntime {
             }
             for nid in visible {
                 let nid = if let Some(context) = context {
-                    let Ok(resolved) = super::modifier_preview::resolve(&self.modifier_preview_routes, context, nid) else { continue; };
+                    let Ok(resolved) = super::modifier_preview::resolve(
+                        &self.modifier_preview_routes,
+                        context,
+                        nid,
+                    ) else {
+                        continue;
+                    };
                     resolved
-                } else { nid };
-                if let Some((_, instance)) =
-                    slot.node_map.iter().find(|(mapped, _)| mapped == nid)
+                } else {
+                    nid
+                };
+                if let Some((_, instance)) = slot.node_map.iter().find(|(mapped, _)| mapped == nid)
                 {
                     set.insert(*instance);
-                } else if let Some((_, producer, _)) =
-                    slot.group_preview_map.iter().find(|(group, _, _)| group == nid)
+                } else if let Some((_, producer, _)) = slot
+                    .group_preview_map
+                    .iter()
+                    .find(|(group, _, _)| group == nid)
                     && let Some((_, instance)) =
                         slot.node_map.iter().find(|(mapped, _)| mapped == producer)
                 {

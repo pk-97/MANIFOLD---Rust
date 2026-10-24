@@ -1,4 +1,10 @@
 mod abs_texture;
+mod affine_transform;
+mod anti_clump_particles;
+mod array_connect_nearest;
+mod array_diffuse_particles;
+mod array_filter_detections;
+mod audio_waveform;
 mod glyph_atlas;
 mod render_glyph_grid;
 pub mod terminal_analysis;
@@ -7,12 +13,6 @@ mod terminal_passages;
 mod terminal_reaction;
 mod terminal_stream;
 mod terminal_vocabulary;
-mod audio_waveform;
-mod affine_transform;
-mod anti_clump_particles;
-mod array_connect_nearest;
-mod array_diffuse_particles;
-mod array_filter_detections;
 manifold_core::testkit_visible! { mod array_feedback; }
 mod array_math;
 mod array_unpack_vec2;
@@ -21,22 +21,22 @@ mod beat_ramp;
 mod bilateral_blur;
 mod blob_detect_ffi;
 manifold_core::testkit_visible! { mod blob_overlay_render; }
+mod basic_shape;
+mod blinn_specular;
 mod block_displace_field;
 mod block_sample;
+mod blur_3d_separable;
 pub mod bokeh_gather;
 mod box_mask;
-mod blur_3d_separable;
-mod blinn_specular;
-mod chroma_key;
 mod checkerboard;
+mod chroma_key;
 mod chromatic_displace;
-mod basic_shape;
 mod clamp_texture;
-mod mirror_axis;
-mod pack_channels;
 mod clip_trigger_cycle;
 mod clip_trigger_index;
 mod coc_dilate;
+mod mirror_axis;
+mod pack_channels;
 manifold_core::testkit_visible! {
     testkit { pub(crate) mod coc_from_depth; }
     production { mod coc_from_depth; }
@@ -56,16 +56,16 @@ mod convolution_2d_9tap;
 manifold_core::testkit_visible! { mod cycle_table_row; }
 mod depth_estimate_midas;
 pub mod detect_regions;
-mod region_types;
-mod track_regions;
-mod mask_extrema;
-mod region_mask;
-mod rgb_distance;
 mod distance_to_point;
 mod dither;
 mod dither_pattern;
 mod downsample;
+mod mask_extrema;
+mod region_mask;
+mod region_types;
 mod resize_limit;
+mod rgb_distance;
+mod track_regions;
 manifold_core::testkit_visible! { mod draw_connections; }
 manifold_core::testkit_visible! { mod draw_dots; }
 manifold_core::testkit_visible! { mod draw_gauge; }
@@ -73,30 +73,28 @@ manifold_core::testkit_visible! { mod draw_markers; }
 mod draw_scanlines;
 manifold_core::testkit_visible! { mod draw_ticks; }
 mod edge_detect;
-mod envelope_decay;
 mod envelope_beats;
+mod envelope_decay;
 mod envelope_follower_ar;
 mod field_combine;
 mod film_grain;
 pub mod filter;
 mod flash;
 manifold_core::testkit_visible! { mod flow_field_noise; }
-mod fract_texture;
-mod fresnel_rim;
-mod frequency_ratio;
-mod gradient_central_diff_3d;
+mod container_repel_force_3d;
 mod curl_slope_force_3d;
+mod diffuse_force_3d_at_particles;
+mod fract_texture;
+mod frequency_ratio;
+mod fresnel_rim;
+mod gradient_central_diff_3d;
 mod sample_texture_3d_at_particles;
 mod simplex_noise_force_3d_at_particles;
-mod diffuse_force_3d_at_particles;
-mod container_repel_force_3d;
 manifold_core::testkit_visible! { mod container_bounds_3d; }
-mod flatten_to_camera_plane;
-mod scatter_particles_camera;
-pub mod gaussian_blur_variable_width;
 mod ellipse_mask;
+mod flatten_to_camera_plane;
+pub mod gaussian_blur_variable_width;
 mod generate_range;
-mod pack_vec4;
 mod gradient_central_diff;
 mod gradient_ramp;
 mod grid_uv_field;
@@ -106,6 +104,8 @@ mod heightmap_to_normal;
 mod hue_saturation;
 mod image_folder;
 mod inject_burst;
+mod pack_vec4;
+mod scatter_particles_camera;
 manifold_core::testkit_visible! { mod sample_texture_at_particles; }
 manifold_core::testkit_visible! { mod wrap_particles_torus; }
 manifold_core::testkit_visible! { mod wave_field_3d; }
@@ -124,39 +124,39 @@ mod lic_integrate;
 mod lightning_bolt;
 mod linear_gradient;
 mod luminance;
-mod magnitude_db;
 mod lut1d;
+mod magnitude_db;
 mod matcap_two_tone;
 pub(crate) mod math;
-mod zero_array;
-pub mod multi_blend;
 mod motion_blur;
+pub mod multi_blend;
 mod mux_array;
+mod mux_scalar;
 mod switch_indices;
 mod switch_instances;
 mod switch_mesh;
-mod mux_scalar;
+mod zero_array;
 manifold_core::testkit_visible! { mod neighbor_smooth; }
+mod mirror_fold_uv;
+mod noise;
 mod normalize_vec2;
+mod note_rates;
 mod one_euro_filter;
 mod optical_flow_estimate;
 mod peak;
-mod noise;
 mod person_segment;
 mod polar_field;
 mod posterize;
 mod power_texture;
-mod mirror_fold_uv;
-mod note_rates;
 pub use note_rates::{NOTE_RATE_LABELS, NOTE_RATE_VALUES};
 mod radial_burst_force_field;
 mod radial_fold_uv;
 mod radial_offset_field;
-mod uv_strip_clamp;
 mod reinhard_tone_map;
 mod remap;
 mod remove_drift_3d;
 mod render_filled_rects;
+mod uv_strip_clamp;
 manifold_core::testkit_visible! { mod render_text; }
 mod render_value_overlay;
 mod resolve_3d_accumulator;
@@ -181,34 +181,34 @@ manifold_core::testkit_visible! {
     testkit { pub(crate) mod sharpen; }
     production { mod sharpen; }
 }
-mod ssao_gtao;
-mod simplex_field_2d;
-mod simplex_noise_force_at_particles;
-mod spawn_from_mesh;
 mod affine_scalar;
 mod canvas_area_scale;
 mod centered_uv;
 mod rotate_2d;
+mod simplex_field_2d;
+mod simplex_noise_force_at_particles;
 mod sin_term;
 mod slope_displace;
-mod texture_sum_5;
-mod trig_texture;
 mod smoothing;
 mod smoothstep_texture;
-mod track_persist;
+mod spawn_from_mesh;
+mod ssao_gtao;
 mod temporal;
 mod temporal_accumulate;
+mod texture_sum_5;
+mod track_persist;
+mod trig_texture;
 pub use temporal::{FEEDBACK_TYPE_ID, Feedback};
 mod texture_advect;
 mod texture_dimensions;
 mod tone_map;
+mod transform_components;
 mod trigger_ease_to;
 mod trigger_gate;
-mod transform_components;
 manifold_core::testkit_visible! { pub(crate) mod divide_by_value; }
+mod compose_vec3;
 mod uv_displace_by_flow;
 mod uv_field;
-mod compose_vec3;
 mod vignette;
 mod voronoi_2d;
 pub mod watercolor;

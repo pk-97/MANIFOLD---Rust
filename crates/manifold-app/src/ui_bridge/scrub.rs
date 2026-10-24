@@ -371,7 +371,12 @@ impl ResolvedScrub {
                     layer.opacity = *live;
                 }
             }
-            ResolvedScrub::RackWetDry { target, group_id, live, .. } => {
+            ResolvedScrub::RackWetDry {
+                target,
+                group_id,
+                live,
+                ..
+            } => {
                 super::rack_controls::set_wet_dry(project, target, group_id, *live);
             }
             ResolvedScrub::Macro { idx, live, .. } => {
@@ -626,10 +631,17 @@ impl ResolvedScrub {
 /// sent. Every Commit exit of the Param arm runs this; a lost release would
 /// keep armed recording writing the frozen value until the transport stops.
 fn end_param_gesture(ctx: &mut DispatchCtx) {
-    if let Some(ResolvedScrub::Param { target, param_id, .. }) = ctx.scrub.active.take() {
+    if let Some(ResolvedScrub::Param {
+        target, param_id, ..
+    }) = ctx.scrub.active.take()
+    {
         ContentCommand::send(
             ctx.content_tx,
-            ContentCommand::AutomationHold { target, param_id, held: false },
+            ContentCommand::AutomationHold {
+                target,
+                param_id,
+                held: false,
+            },
         );
     }
 }
@@ -693,10 +705,21 @@ pub(crate) fn dispatch_scrub(
     // (a drag, a typed value, a reset) moves all three in proportion, as one
     // gesture and one undo step (SCENE_DOCUMENT_DESIGN.md section 7.17).
     // Modulation, MIDI and OSC never come through here.
-    if let ValueRef::Param(gpt @ manifold_ui::GraphParamTarget::GeneratorOf(layer), param_id) = value_ref
-        && let Some((ids, axis)) = ctx.ui.scene_setup_panel.linked_scale_axes(layer, param_id.as_ref())
+    if let ValueRef::Param(gpt @ manifold_ui::GraphParamTarget::GeneratorOf(layer), param_id) =
+        value_ref
+        && let Some((ids, axis)) = ctx
+            .ui
+            .scene_setup_panel
+            .linked_scale_axes(layer, param_id.as_ref())
     {
-        let target = resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project);
+        let target = resolve_graph_target(
+            gpt,
+            ctx.editor_target,
+            effective_tab,
+            active_layer,
+            ctx.selection,
+            &ctx.project,
+        );
         return dispatch_linked_scale(target, ids, axis, phase, ctx);
     }
 
@@ -785,7 +808,9 @@ pub(crate) fn dispatch_scrub(
                     let val = ctx
                         .project
                         .with_preset_graph(&target, |inst| {
-                            inst.params.get(param_id.as_ref()).map(|p| p.spec.clamp_input(val))
+                            inst.params
+                                .get(param_id.as_ref())
+                                .map(|p| p.spec.clamp_input(val))
                         })
                         .flatten()
                         .unwrap_or(val);
@@ -1205,17 +1230,20 @@ pub(crate) fn dispatch_scrub(
                                     // shared locate-fork so they can't split.
                                     let mt = mapping_target.clone();
                                     let pid = param_id.clone();
-                                    ctx.gesture_move(crate::content_command::touch::MAPPING_RANGES, move |p| {
-                                        if let Some(ms) = p
-                                            .ableton_param_mappings_mut(&mt)
-                                            .and_then(|opt| opt.as_mut())
-                                            && let Some(m) =
-                                                ms.iter_mut().find(|m| m.param_id == pid)
-                                        {
-                                            m.range_min = mn;
-                                            m.range_max = mx;
-                                        }
-                                    });
+                                    ctx.gesture_move(
+                                        crate::content_command::touch::MAPPING_RANGES,
+                                        move |p| {
+                                            if let Some(ms) = p
+                                                .ableton_param_mappings_mut(&mt)
+                                                .and_then(|opt| opt.as_mut())
+                                                && let Some(m) =
+                                                    ms.iter_mut().find(|m| m.param_id == pid)
+                                            {
+                                                m.range_min = mn;
+                                                m.range_max = mx;
+                                            }
+                                        },
+                                    );
                                 }
                             }
                         }
@@ -1384,14 +1412,9 @@ pub(crate) fn dispatch_scrub(
                     {
                         *live = v;
                     }
-                    graph_env_dual_edit(
-                        &mut ctx.project,
-                        &target,
-                        param_id.clone(),
-                        move |env| {
-                            env.target_normalized = v;
-                        },
-                    );
+                    graph_env_dual_edit(&mut ctx.project, &target, param_id.clone(), move |env| {
+                        env.target_normalized = v;
+                    });
                 }
                 DispatchResult::handled()
             }
@@ -1482,14 +1505,9 @@ pub(crate) fn dispatch_scrub(
                     if let Some(ResolvedScrub::EnvDecay { live, .. }) = &mut ctx.scrub.active {
                         *live = v;
                     }
-                    graph_env_dual_edit(
-                        &mut ctx.project,
-                        &target,
-                        param_id.clone(),
-                        move |env| {
-                            env.decay_beats = v;
-                        },
-                    );
+                    graph_env_dual_edit(&mut ctx.project, &target, param_id.clone(), move |env| {
+                        env.decay_beats = v;
+                    });
                 }
                 DispatchResult::handled()
             }
@@ -1804,18 +1822,13 @@ pub(crate) fn dispatch_scrub(
                     {
                         *live_amount = v;
                     }
-                    graph_env_dual_edit(
-                        &mut ctx.project,
-                        &target,
-                        param_id.clone(),
-                        move |env| {
-                            let wrap = match env.action {
-                                TriggerAction::Step { wrap, .. } => wrap,
-                                _ => manifold_core::audio_mod::WrapMode::Wrap,
-                            };
-                            env.action = TriggerAction::Step { amount: v, wrap };
-                        },
-                    );
+                    graph_env_dual_edit(&mut ctx.project, &target, param_id.clone(), move |env| {
+                        let wrap = match env.action {
+                            TriggerAction::Step { wrap, .. } => wrap,
+                            _ => manifold_core::audio_mod::WrapMode::Wrap,
+                        };
+                        env.action = TriggerAction::Step { amount: v, wrap };
+                    });
                 }
                 DispatchResult::handled()
             }
@@ -1847,10 +1860,9 @@ pub(crate) fn dispatch_scrub(
                     if let Some((env_idx, new_action)) = info
                         && new_action != old_action
                     {
-                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(SetEnvelopeActionCommand::new(
-                                target, env_idx, old_action, new_action,
-                            ));
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
+                            SetEnvelopeActionCommand::new(target, env_idx, old_action, new_action),
+                        );
                         ctx.execute(boxed);
                     }
                 }
@@ -1924,13 +1936,9 @@ pub(crate) fn dispatch_scrub(
                     {
                         let mut old = current.clone();
                         old.shape = old_shape;
-                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(SetLayerClipTriggerCommand::new(
-                                layer_id.clone(),
-                                *index,
-                                old,
-                                current,
-                            ));
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
+                            SetLayerClipTriggerCommand::new(layer_id.clone(), *index, old, current),
+                        );
                         ctx.execute(boxed);
                     }
                 }
@@ -2067,9 +2075,11 @@ pub(crate) fn dispatch_scrub(
             }
         },
 
-        ValueRef::RackWetDry { tab, layer_id, group_id } => {
-            super::rack_controls::dispatch_wet_dry(*tab, layer_id, group_id, phase, ctx)
-        }
+        ValueRef::RackWetDry {
+            tab,
+            layer_id,
+            group_id,
+        } => super::rack_controls::dispatch_wet_dry(*tab, layer_id, group_id, phase, ctx),
 
         ValueRef::AbletonMacroTrim(slot_idx) => match phase {
             ScrubPhase::Begin => {
@@ -2178,11 +2188,13 @@ pub(crate) fn begin_param_group(
     nodes: Vec<crate::app_render::UnboundNodeParamDrag>,
     label: &'static str,
 ) -> bool {
-    if let Some(reason) = card_ids
-        .iter()
-        .find_map(|id| crate::graph_target::macro_parameter_lock_reason(&ctx.project, &target, id.as_ref()))
-    {
-        ContentCommand::send(ctx.content_tx, ContentCommand::GraphEditRejected(reason.into()));
+    if let Some(reason) = card_ids.iter().find_map(|id| {
+        crate::graph_target::macro_parameter_lock_reason(&ctx.project, &target, id.as_ref())
+    }) {
+        ContentCommand::send(
+            ctx.content_tx,
+            ContentCommand::GraphEditRejected(reason.into()),
+        );
         return false;
     }
     let Some(cards) = ctx
@@ -2193,7 +2205,11 @@ pub(crate) fn begin_param_group(
                 .map(|id| {
                     inst.params.contains(id.as_ref()).then(|| {
                         let baseline = inst.get_base_param(id.as_ref());
-                        CardScrub { id: id.clone(), baseline, live: baseline }
+                        CardScrub {
+                            id: id.clone(),
+                            baseline,
+                            live: baseline,
+                        }
                     })
                 })
                 .collect::<Option<Vec<_>>>()
@@ -2206,34 +2222,68 @@ pub(crate) fn begin_param_group(
     for card in &cards {
         ContentCommand::send(
             ctx.content_tx,
-            ContentCommand::AutomationHold { target: target.clone(), param_id: card.id.clone(), held: true },
+            ContentCommand::AutomationHold {
+                target: target.clone(),
+                param_id: card.id.clone(),
+                held: true,
+            },
         );
     }
-    ctx.scrub.active = Some(ResolvedScrub::ParamGroup { target, cards, nodes, label });
+    ctx.scrub.active = Some(ResolvedScrub::ParamGroup {
+        target,
+        cards,
+        nodes,
+        label,
+    });
     true
 }
 
 /// Move the live group gesture: each card to `cards[i]`, stopped at its
 /// hard limit as its own knob stops it, and each node param to `nodes[i]`.
 pub(crate) fn move_param_group(ctx: &mut DispatchCtx, cards: &[f32], nodes: &[f32]) {
-    let Some(ResolvedScrub::ParamGroup { target, cards: scrubs, .. }) = &ctx.scrub.active else { return };
+    let Some(ResolvedScrub::ParamGroup {
+        target,
+        cards: scrubs,
+        ..
+    }) = &ctx.scrub.active
+    else {
+        return;
+    };
     let target = target.clone();
     let Some(clamped) = ctx
         .project
         .with_preset_graph(&target, |inst| -> Option<Vec<f32>> {
-            scrubs.iter().zip(cards).map(|(card, value)| Some(inst.params.get(card.id.as_ref())?.spec.clamp_input(*value))).collect()
+            scrubs
+                .iter()
+                .zip(cards)
+                .map(|(card, value)| {
+                    Some(inst.params.get(card.id.as_ref())?.spec.clamp_input(*value))
+                })
+                .collect()
         })
         .flatten()
     else {
         return;
     };
-    let graph_absent = ctx.project.preset_instance(&target).is_none_or(|inst| inst.graph.is_none());
-    let Some(ResolvedScrub::ParamGroup { cards: scrubs, nodes: drags, .. }) = &mut ctx.scrub.active else { return };
+    let graph_absent = ctx
+        .project
+        .preset_instance(&target)
+        .is_none_or(|inst| inst.graph.is_none());
+    let Some(ResolvedScrub::ParamGroup {
+        cards: scrubs,
+        nodes: drags,
+        ..
+    }) = &mut ctx.scrub.active
+    else {
+        return;
+    };
     for (card, value) in scrubs.iter_mut().zip(&clamped) {
         card.live = *value;
     }
     for (drag, value) in drags.iter_mut().zip(nodes) {
-        drag.set_current(manifold_core::effect_graph_def::SerializedParamValue::Float { value: *value });
+        drag.set_current(
+            manifold_core::effect_graph_def::SerializedParamValue::Float { value: *value },
+        );
     }
     let ids: Vec<ParamId> = scrubs.iter().map(|card| card.id.clone()).collect();
     let live = drags.clone();
@@ -2258,24 +2308,41 @@ pub(crate) fn move_param_group(ctx: &mut DispatchCtx, cards: &[f32], nodes: &[f3
 /// End the group gesture: one undo entry for every param it changed, and
 /// the pointer holds its Begin sent released.
 pub(crate) fn commit_param_group(ctx: &mut DispatchCtx) {
-    let Some(ResolvedScrub::ParamGroup { target, cards, nodes, label }) = ctx.scrub.active.take() else {
+    let Some(ResolvedScrub::ParamGroup {
+        target,
+        cards,
+        nodes,
+        label,
+    }) = ctx.scrub.active.take()
+    else {
         return;
     };
     for card in &cards {
         ContentCommand::send(
             ctx.content_tx,
-            ContentCommand::AutomationHold { target: target.clone(), param_id: card.id.clone(), held: false },
+            ContentCommand::AutomationHold {
+                target: target.clone(),
+                param_id: card.id.clone(),
+                held: false,
+            },
         );
     }
     let mut changes: Vec<Box<dyn manifold_editing::command::Command>> = cards
         .into_iter()
         .filter(|card| (card.baseline - card.live).abs() > f32::EPSILON)
         .map(|card| {
-            Box::new(ChangeGraphParamCommand::new(target.clone(), card.id, card.baseline, card.live)) as Box<dyn manifold_editing::command::Command>
+            Box::new(ChangeGraphParamCommand::new(
+                target.clone(),
+                card.id,
+                card.baseline,
+                card.live,
+            )) as Box<dyn manifold_editing::command::Command>
         })
         .collect();
     changes.extend(
-        nodes.into_iter().filter(|drag| drag.moved()).map(|drag| Box::new(drag.into_command()) as Box<dyn manifold_editing::command::Command>),
+        nodes.into_iter().filter(|drag| drag.moved()).map(|drag| {
+            Box::new(drag.into_command()) as Box<dyn manifold_editing::command::Command>
+        }),
     );
     if !changes.is_empty() {
         let cmd = manifold_editing::command::CompositeCommand::new(changes, label.into());
@@ -2310,7 +2377,13 @@ fn dispatch_linked_scale(
             let from = cards[axis].baseline;
             let values: Vec<f32> = cards
                 .iter()
-                .map(|card| if from.abs() > f32::EPSILON { card.baseline * value / from } else { *value })
+                .map(|card| {
+                    if from.abs() > f32::EPSILON {
+                        card.baseline * value / from
+                    } else {
+                        *value
+                    }
+                })
                 .collect();
             move_param_group(ctx, &values, &[]);
         }

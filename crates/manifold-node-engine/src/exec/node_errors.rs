@@ -85,7 +85,10 @@ mod tests {
     }
 
     fn news(node: &str) -> impl FnOnce() -> NodeErrorNews + '_ {
-        move || NodeErrorNews { node: NodeId::new(node), object: None }
+        move || NodeErrorNews {
+            node: NodeId::new(node),
+            object: None,
+        }
     }
 
     #[test]
@@ -94,27 +97,65 @@ mod tests {
         let at = |ms: u64| move || start + Duration::from_millis(ms);
         let mut log = NodeErrors::default();
         let node = NodeInstanceId(3);
-        assert_eq!(log.record(node, false, news("a"), &mut errors(&["no surface"]), at(0)).as_deref(), Some("no surface"));
+        assert_eq!(
+            log.record(node, false, news("a"), &mut errors(&["no surface"]), at(0))
+                .as_deref(),
+            Some("no surface")
+        );
         // A live count in the text, and clean frames in between, are no news.
         for frame in 1..30u64 {
-            let mut this = if frame % 2 == 0 { errors(&[&format!("short buffer ({frame})")]) } else { Vec::new() };
-            assert_eq!(log.record(node, false, news("a"), &mut this, at(frame * 16)), None);
+            let mut this = if frame % 2 == 0 {
+                errors(&[&format!("short buffer ({frame})")])
+            } else {
+                Vec::new()
+            };
+            assert_eq!(
+                log.record(node, false, news("a"), &mut this, at(frame * 16)),
+                None
+            );
         }
         let mut taken = Vec::new();
         log.take_news(|news| taken.push(news));
-        assert_eq!(taken, [NodeErrorNews { node: NodeId::new("a"), object: None }]);
+        assert_eq!(
+            taken,
+            [NodeErrorNews {
+                node: NodeId::new("a"),
+                object: None
+            }]
+        );
         // A second of clean frames forgets it; failing again is news.
-        assert_eq!(log.record(node, false, news("a"), &mut Vec::new(), at(1500)), None);
-        assert_eq!(log.record(node, false, news("a"), &mut errors(&["again"]), at(1516)).as_deref(), Some("again"));
+        assert_eq!(
+            log.record(node, false, news("a"), &mut Vec::new(), at(1500)),
+            None
+        );
+        assert_eq!(
+            log.record(node, false, news("a"), &mut errors(&["again"]), at(1516))
+                .as_deref(),
+            Some("again")
+        );
         // The other hook of the same node is its own news.
-        assert_eq!(log.record(node, true, news("a"), &mut errors(&["late"]), at(1516)).as_deref(), Some("late"));
+        assert_eq!(
+            log.record(node, true, news("a"), &mut errors(&["late"]), at(1516))
+                .as_deref(),
+            Some("late")
+        );
         // An abort reports its cause first; the cause is what is logged.
         assert_eq!(
-            log.record(NodeInstanceId(5), false, news("b"), &mut errors(&["cause", "follow-on"]), at(1516)).as_deref(),
+            log.record(
+                NodeInstanceId(5),
+                false,
+                news("b"),
+                &mut errors(&["cause", "follow-on"]),
+                at(1516)
+            )
+            .as_deref(),
             Some("cause")
         );
         let mut nodes = Vec::new();
         log.take_news(|news| nodes.push(news.node));
-        assert_eq!(nodes, [NodeId::new("a"), NodeId::new("a"), NodeId::new("b")]);
+        assert_eq!(
+            nodes,
+            [NodeId::new("a"), NodeId::new("a"), NodeId::new("b")]
+        );
     }
 }

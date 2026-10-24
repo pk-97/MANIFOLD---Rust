@@ -7,14 +7,16 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use crate::matter::{
+    MatterGridNode, MatterPoint, REACTION_WORDS, grid_bytes, lattice_nodes, momentum_unit_fits,
+};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
-use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
-use manifold_water_liquid::lattice::LiquidLattice;
-use crate::matter::{MatterGridNode, MatterPoint, REACTION_WORDS, grid_bytes, lattice_nodes, momentum_unit_fits};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::{active_elements, standalone_pipeline};
+use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use manifold_water_liquid::lattice::LiquidLattice;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -123,7 +125,10 @@ impl Primitive for GridToMatter {
             "reaction_out" => "reaction",
             _ => return None,
         };
-        input_capacities.iter().find(|(p, _)| *p == input).map(|&(_, n)| n)
+        input_capacities
+            .iter()
+            .find(|(p, _)| *p == input)
+            .map(|&(_, n)| n)
     }
 
     fn aliased_array_io(&self) -> &'static [(&'static str, &'static str)] {
@@ -142,8 +147,13 @@ impl Primitive for GridToMatter {
         let liveliness = ctx.scalar_or_param("liveliness", 0.0).clamp(0.0, 1.0);
         let cohesion = ctx.scalar_or_param("cohesion", 0.0).clamp(0.0, 1.0);
         let requested = ctx.scalar_or_param("active_count", 0.0).round().max(0.0) as u32;
-        let body_count = ctx.scalar_or_param("body_count", 0.0).round().clamp(0.0, MAX_LIQUID_BODIES as f32) as i32;
-        let int = |ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32| ctx.scalar_or_param(name, default).round().max(0.0) as i32;
+        let body_count = ctx
+            .scalar_or_param("body_count", 0.0)
+            .round()
+            .clamp(0.0, MAX_LIQUID_BODIES as f32) as i32;
+        let int = |ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32| {
+            ctx.scalar_or_param(name, default).round().max(0.0) as i32
+        };
         let density = ctx.scalar_or_param("density", 1000.0);
         let momentum_unit = ctx.scalar_or_param("momentum_unit", 128.0);
         let tick_index = int(ctx, "tick_index", 0.0);
@@ -154,7 +164,11 @@ impl Primitive for GridToMatter {
         // is consumed, so the GPU is touched on every path.
         let points = ctx.inputs.array("points");
         let grid = ctx.inputs.array("grid");
-        let colliders = (ctx.inputs.array("bodies"), ctx.inputs.array("shapes"), ctx.inputs.array("atlas"));
+        let colliders = (
+            ctx.inputs.array("bodies"),
+            ctx.inputs.array("shapes"),
+            ctx.inputs.array("atlas"),
+        );
         let reaction = ctx.inputs.array("reaction");
         let unit_fits = momentum_unit_fits(momentum_unit, lattice.cell_size(), step_dt);
         if dynamic_count > 0 && reaction.is_some() && !unit_fits {
@@ -188,7 +202,8 @@ impl Primitive for GridToMatter {
         };
         // Reaction words are written only with a slot covering every body and
         // a momentum unit the words can hold; the grid stands in otherwise.
-        let covered = reaction.is_some_and(|r| r.size >= body_count as u64 * u64::from(REACTION_WORDS) * 4);
+        let covered =
+            reaction.is_some_and(|r| r.size >= body_count as u64 * u64::from(REACTION_WORDS) * 4);
         if !covered || !unit_fits || body_count == 0 {
             dynamic_count = 0;
         }
@@ -219,15 +234,50 @@ impl Primitive for GridToMatter {
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: points, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: grid, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: bodies, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: shapes, offset: 0 },
-                GpuBinding::Buffer { binding: 5, buffer: atlas, offset: 0 },
-                GpuBinding::Buffer { binding: 6, buffer: reaction, offset: 0 },
-                GpuBinding::Buffer { binding: 7, buffer: points, offset: 0 },
-                GpuBinding::Buffer { binding: 8, buffer: reaction, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: points,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: grid,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: bodies,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: shapes,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: atlas,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 6,
+                    buffer: reaction,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 7,
+                    buffer: points,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 8,
+                    buffer: reaction,
+                    offset: 0,
+                },
             ],
             [active.div_ceil(256), 1, 1],
             "node.grid_to_matter",
@@ -243,25 +293,49 @@ mod tests {
     fn grid_to_matter_generates_a_gathering_point_kernel() {
         let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<GridToMatter>()
             .expect("grid_to_matter codegen");
-        let module = naga::front::wgsl::parse_str(&wgsl).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
-        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
-            .validate(&module)
+        let module = naga::front::wgsl::parse_str(&wgsl)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
-        assert!(wgsl.contains("var<storage, read> buf_grid: array<Element2>"), "{wgsl}");
-        assert!(wgsl.contains("buf_points_out[idx] = body(idx, params.dispatch_count, e_points,"), "{wgsl}");
-        for binding in ["buf_bodies", "buf_shapes", "buf_atlas: array<u32>", "buf_reaction_out: array<atomic<i32>>"] {
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
+        assert!(
+            wgsl.contains("var<storage, read> buf_grid: array<Element2>"),
+            "{wgsl}"
+        );
+        assert!(
+            wgsl.contains("buf_points_out[idx] = body(idx, params.dispatch_count, e_points,"),
+            "{wgsl}"
+        );
+        for binding in [
+            "buf_bodies",
+            "buf_shapes",
+            "buf_atlas: array<u32>",
+            "buf_reaction_out: array<atomic<i32>>",
+        ] {
             assert!(wgsl.contains(binding), "{binding}: {wgsl}");
         }
-        assert!(!wgsl.contains("buf_reaction_out[idx]"), "the wrapper never writes the reaction words: {wgsl}");
+        assert!(
+            !wgsl.contains("buf_reaction_out[idx]"),
+            "the wrapper never writes the reaction words: {wgsl}"
+        );
         assert_eq!(std::mem::size_of::<ToMatterUniforms>(), 80);
-        assert!(wgsl.contains("dynamic_count: i32,\n    dispatch_count: u32,\n    _pad0: u32,\n}"), "{wgsl}");
+        assert!(
+            wgsl.contains("dynamic_count: i32,\n    dispatch_count: u32,\n    _pad0: u32,\n}"),
+            "{wgsl}"
+        );
     }
 
     #[test]
     fn grid_to_matter_is_a_boundary_for_its_reaction_words() {
         use manifold_node_engine::exec::effect_node::EffectNode;
         let node = GridToMatter::new();
-        assert_eq!(node.fusion_kind(), manifold_node_engine::freeze::classify::FusionKind::Boundary);
+        assert_eq!(
+            node.fusion_kind(),
+            manifold_node_engine::freeze::classify::FusionKind::Boundary
+        );
         assert_eq!(node.atomic_outputs(), &["reaction_out"]);
     }
 

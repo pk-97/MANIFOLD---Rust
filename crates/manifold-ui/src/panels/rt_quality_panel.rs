@@ -23,9 +23,7 @@ use manifold_foundation::settings::{RtQualitySettings, RtTierField};
 
 use super::PanelAction;
 use super::RootAction;
-use super::overlay::{
-    Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse, SizePolicy,
-};
+use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse, SizePolicy};
 
 // Stable keys for the host-owned modal chrome (background + title strip).
 const KEY_BG: u64 = 72_001;
@@ -114,7 +112,12 @@ impl RtQualityPanel {
 
     fn body_height(&self) -> f32 {
         // Section header + 5 rows + row gaps + padding
-        PAD + TITLE_H + SECTION_GAP + SECTION_H + ROW_COUNT * ROW_H + (ROW_COUNT - 1.0) * ROW_GAP + PAD
+        PAD + TITLE_H
+            + SECTION_GAP
+            + SECTION_H
+            + ROW_COUNT * ROW_H
+            + (ROW_COUNT - 1.0) * ROW_GAP
+            + PAD
     }
 
     // ── Chrome (background + title strip + close), as a host View ──
@@ -161,13 +164,16 @@ impl RtQualityPanel {
         self.last_placement = Some((x, y));
 
         let chrome = self.chrome_view();
-        self.host.build(
-            tree,
-            &chrome,
-            Rect::new(x, y, PANEL_W, self.body_height()),
-        );
-        self.bg_id = self.host.node_id_for_key(KEY_BG).unwrap_or(NodeId::PLACEHOLDER);
-        self.close_id = self.host.node_id_for_key(KEY_CLOSE).unwrap_or(NodeId::PLACEHOLDER);
+        self.host
+            .build(tree, &chrome, Rect::new(x, y, PANEL_W, self.body_height()));
+        self.bg_id = self
+            .host
+            .node_id_for_key(KEY_BG)
+            .unwrap_or(NodeId::PLACEHOLDER);
+        self.close_id = self
+            .host
+            .node_id_for_key(KEY_CLOSE)
+            .unwrap_or(NodeId::PLACEHOLDER);
 
         let inner_x = x + PAD;
         let inner_w = PANEL_W - PAD * 2.0;
@@ -211,17 +217,61 @@ impl RtQualityPanel {
         cy += SECTION_H;
 
         // Build rows: Shadows, AO, GI, Reflections, Ray Resolution, Spatial Denoise
-        self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "Shadows", RtTierField::Shadows);
+        self.build_tier_row(
+            tree,
+            inner_x,
+            cy,
+            realtime_x,
+            realtime_w,
+            export_x,
+            export_w,
+            "Shadows",
+            RtTierField::Shadows,
+        );
         cy += ROW_H + ROW_GAP;
-        self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "AO", RtTierField::Ao);
+        self.build_tier_row(
+            tree,
+            inner_x,
+            cy,
+            realtime_x,
+            realtime_w,
+            export_x,
+            export_w,
+            "AO",
+            RtTierField::Ao,
+        );
         cy += ROW_H + ROW_GAP;
-        self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "GI", RtTierField::Gi);
+        self.build_tier_row(
+            tree,
+            inner_x,
+            cy,
+            realtime_x,
+            realtime_w,
+            export_x,
+            export_w,
+            "GI",
+            RtTierField::Gi,
+        );
         cy += ROW_H + ROW_GAP;
-        self.build_tier_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w, "Reflections", RtTierField::Reflections);
+        self.build_tier_row(
+            tree,
+            inner_x,
+            cy,
+            realtime_x,
+            realtime_w,
+            export_x,
+            export_w,
+            "Reflections",
+            RtTierField::Reflections,
+        );
         cy += ROW_H + ROW_GAP;
-        self.build_resolution_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w);
+        self.build_resolution_row(
+            tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w,
+        );
         cy += ROW_H + ROW_GAP;
-        self.build_denoise_row(tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w);
+        self.build_denoise_row(
+            tree, inner_x, cy, realtime_x, realtime_w, export_x, export_w,
+        );
     }
 
     /// Build one tier row (shadows/AO/GI/reflections) with two dropdown
@@ -419,7 +469,9 @@ impl Overlay for RtQualityPanel {
     }
 
     fn modality(&self) -> Modality {
-        Modality::Modal { dim_background: true }
+        Modality::Modal {
+            dim_background: true,
+        }
     }
 
     fn anchor(&self) -> Anchor {
@@ -443,7 +495,9 @@ impl Overlay for RtQualityPanel {
 
     fn on_event(&mut self, event: &UIEvent, _tree: &mut UITree) -> OverlayResponse {
         match event {
-            UIEvent::KeyDown { key: Key::Escape, .. } => {
+            UIEvent::KeyDown {
+                key: Key::Escape, ..
+            } => {
                 self.close();
                 OverlayResponse::Consumed(Vec::new())
             }

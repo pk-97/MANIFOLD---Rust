@@ -25,7 +25,13 @@ use crate::mesh::MeshVertex;
 pub enum Sweep {
     /// `node.extrude_curve`: the outline pushed along +Z by `depth`, or
     /// centred on its plane when `symmetric`.
-    Extrude { depth: f32, steps: u32, close: bool, symmetric: bool, caps: bool },
+    Extrude {
+        depth: f32,
+        steps: u32,
+        close: bool,
+        symmetric: bool,
+        caps: bool,
+    },
     /// `node.revolve_curve`: the profile spun `sweep` radians about +Y.
     Revolve { segments: u32, sweep: f32 },
     /// `node.tube_from_path`: a ring of `radius` around the path (XZ plane,
@@ -36,11 +42,26 @@ pub enum Sweep {
 impl Sweep {
     fn bits(&self) -> [u32; 6] {
         match *self {
-            Self::Extrude { depth, steps, close, symmetric, caps } => {
-                [0, depth.to_bits(), steps, u32::from(close), u32::from(symmetric), u32::from(caps)]
-            }
+            Self::Extrude {
+                depth,
+                steps,
+                close,
+                symmetric,
+                caps,
+            } => [
+                0,
+                depth.to_bits(),
+                steps,
+                u32::from(close),
+                u32::from(symmetric),
+                u32::from(caps),
+            ],
             Self::Revolve { segments, sweep } => [1, segments, sweep.to_bits(), 0, 0, 0],
-            Self::Tube { radius, sides, caps } => [2, radius.to_bits(), sides, u32::from(caps), 0, 0],
+            Self::Tube {
+                radius,
+                sides,
+                caps,
+            } => [2, radius.to_bits(), sides, u32::from(caps), 0, 0],
         }
     }
 }
@@ -69,9 +90,17 @@ impl SweptCurve {
     pub fn is(&self, points: &[[f32; 2]], lift: &[f32], sweep: Sweep) -> bool {
         self.sweep.bits() == sweep.bits()
             && self.points.len() == points.len()
-            && self.points.iter().zip(points).all(|(a, b)| a.map(f32::to_bits) == b.map(f32::to_bits))
+            && self
+                .points
+                .iter()
+                .zip(points)
+                .all(|(a, b)| a.map(f32::to_bits) == b.map(f32::to_bits))
             && self.lift.len() == lift.len()
-            && self.lift.iter().zip(lift).all(|(a, b)| a.to_bits() == b.to_bits())
+            && self
+                .lift
+                .iter()
+                .zip(lift)
+                .all(|(a, b)| a.to_bits() == b.to_bits())
     }
 }
 
@@ -89,9 +118,13 @@ pub struct Grid {
 pub enum CapRow {
     Side,
     /// The start cap's centre or rim.
-    Start { centre: bool },
+    Start {
+        centre: bool,
+    },
     /// The end cap's rim or centre.
-    End { centre: bool },
+    End {
+        centre: bool,
+    },
 }
 
 /// Grid row `row`'s index along the sweep (`0..=last`) and its cap role.
@@ -120,7 +153,8 @@ pub fn is_loop(points: &[[f32; 2]]) -> bool {
         return false;
     };
     let reach = 1e-5 * (first[0] * first[0] + first[1] * first[1]).sqrt().max(1.0);
-    points.len() > 2 && ((last[0] - first[0]).powi(2) + (last[1] - first[1]).powi(2)).sqrt() <= reach
+    points.len() > 2
+        && ((last[0] - first[0]).powi(2) + (last[1] - first[1]).powi(2)).sqrt() <= reach
 }
 
 /// The curve's direction at point `i`: a central difference, wrapping round
@@ -138,7 +172,10 @@ pub fn curve_tangent(points: &[[f32; 2]], i: usize, looped: bool) -> [f32; 2] {
     } else {
         (i.saturating_sub(1), (i + 1).min(len - 1))
     };
-    [points[next][0] - points[prev][0], points[next][1] - points[prev][1]]
+    [
+        points[next][0] - points[prev][0],
+        points[next][1] - points[prev][1],
+    ]
 }
 
 fn signum(v: f32) -> f32 {
@@ -147,7 +184,11 @@ fn signum(v: f32) -> f32 {
 
 fn unit_or(v: [f32; 3], fallback: [f32; 3]) -> [f32; 3] {
     let len = length(v);
-    if len < 1e-8 { fallback } else { scale(v, 1.0 / len) }
+    if len < 1e-8 {
+        fallback
+    } else {
+        scale(v, 1.0 / len)
+    }
 }
 
 /// Twice the signed area a closed outline encloses (shoelace): positive when
@@ -172,7 +213,14 @@ pub fn extrude_reversed(points: &[[f32; 2]], close: bool, depth: f32) -> bool {
 
 /// `node.extrude_curve`'s grid. A cap fans from the curve's origin, so it
 /// fills an outline drawn around its origin (a circle, a polygon, a star).
-pub fn extrude_grid(points: &[[f32; 2]], depth: f32, steps: u32, close: bool, symmetric: bool, caps: bool) -> Grid {
+pub fn extrude_grid(
+    points: &[[f32; 2]],
+    depth: f32,
+    steps: u32,
+    close: bool,
+    symmetric: bool,
+    caps: bool,
+) -> Grid {
     let p_len = points.len().max(1);
     let cols = p_len + usize::from(close);
     let steps = steps.max(1) as usize;
@@ -181,7 +229,12 @@ pub fn extrude_grid(points: &[[f32; 2]], depth: f32, steps: u32, close: bool, sy
     let ends_meet = is_loop(points);
     let looped = close || ends_meet;
     let reversed = extrude_reversed(points, close, depth);
-    let mut grid = Grid { positions: Vec::with_capacity(cols * rows), normals: Vec::with_capacity(cols * rows), cols, rows };
+    let mut grid = Grid {
+        positions: Vec::with_capacity(cols * rows),
+        normals: Vec::with_capacity(cols * rows),
+        cols,
+        rows,
+    };
     for row in 0..rows {
         let (step, role) = capped_row(row, steps, caps);
         let z = depth * step as f32 / steps as f32 - shift;
@@ -189,7 +242,11 @@ pub fn extrude_grid(points: &[[f32; 2]], depth: f32, steps: u32, close: bool, sy
             let at = if reversed { cols - 1 - col } else { col } % p_len;
             // An end that only nearly meets the start reads the start, so the
             // seam welds (the WGSL does the same).
-            let at = if ends_meet && !close && at == p_len - 1 { 0 } else { at };
+            let at = if ends_meet && !close && at == p_len - 1 {
+                0
+            } else {
+                at
+            };
             let [x, y] = points.get(at).copied().unwrap_or_default();
             let [tx, ty] = curve_tangent(points, at, looped).map(|t| if reversed { -t } else { t });
             // A cap faces along Z, the way the outline runs round its
@@ -197,7 +254,13 @@ pub fn extrude_grid(points: &[[f32; 2]], depth: f32, steps: u32, close: bool, sy
             let around = signum(x * ty - y * tx);
             let rim = |centre: bool| if centre { [0.0, 0.0, z] } else { [x, y, z] };
             let (position, normal) = match role {
-                CapRow::Side => ([x, y, z], unit_or([-signum(depth) * ty, signum(depth) * tx, 0.0], [0.0, 1.0, 0.0])),
+                CapRow::Side => (
+                    [x, y, z],
+                    unit_or(
+                        [-signum(depth) * ty, signum(depth) * tx, 0.0],
+                        [0.0, 1.0, 0.0],
+                    ),
+                ),
                 CapRow::Start { centre } => (rim(centre), [0.0, 0.0, around]),
                 CapRow::End { centre } => (rim(centre), [0.0, 0.0, -around]),
             };
@@ -215,7 +278,12 @@ pub fn revolve_grid(points: &[[f32; 2]], segments: u32, sweep: f32) -> Grid {
     let cols = segments + 1;
     let rows = points.len();
     let looped = is_loop(points);
-    let mut grid = Grid { positions: Vec::with_capacity(cols * rows), normals: Vec::with_capacity(cols * rows), cols, rows };
+    let mut grid = Grid {
+        positions: Vec::with_capacity(cols * rows),
+        normals: Vec::with_capacity(cols * rows),
+        cols,
+        rows,
+    };
     for (i, &[radius, height]) in points.iter().enumerate() {
         let [tr, th] = curve_tangent(points, i, looped);
         let turn = signum(radius) * signum(sweep);
@@ -223,7 +291,8 @@ pub fn revolve_grid(points: &[[f32; 2]], segments: u32, sweep: f32) -> Grid {
             let phi = sweep * col as f32 / segments as f32;
             let (s, c) = phi.sin_cos();
             grid.positions.push([radius * c, height, radius * s]);
-            grid.normals.push(unit_or(scale([th * c, -tr, th * s], turn), [0.0, 1.0, 0.0]));
+            grid.normals
+                .push(unit_or(scale([th * c, -tr, th * s], turn), [0.0, 1.0, 0.0]));
         }
     }
     grid
@@ -241,11 +310,19 @@ pub fn tube_grid(points: &[[f32; 2]], lift: &[f32], radius: f32, sides: u32, cap
         let [x, z] = points.get(k).copied().unwrap_or_default();
         [x, lift.get(k).copied().unwrap_or(0.0), z]
     };
-    let mut grid = Grid { positions: Vec::with_capacity(cols * rows), normals: Vec::with_capacity(cols * rows), cols, rows };
+    let mut grid = Grid {
+        positions: Vec::with_capacity(cols * rows),
+        normals: Vec::with_capacity(cols * rows),
+        cols,
+        rows,
+    };
     for row in 0..rows {
         let (k, role) = capped_row(row, p_len - 1, caps);
         let center = at(k);
-        let tangent = unit_or(sub(at((k + 1).min(p_len - 1)), at(k.saturating_sub(1))), [0.0, 0.0, 1.0]);
+        let tangent = unit_or(
+            sub(at((k + 1).min(p_len - 1)), at(k.saturating_sub(1))),
+            [0.0, 0.0, 1.0],
+        );
         let right = unit_or(cross([0.0, 1.0, 0.0], tangent), [1.0, 0.0, 0.0]);
         let ring_up = cross(tangent, right);
         for col in 0..cols {
@@ -253,7 +330,13 @@ pub fn tube_grid(points: &[[f32; 2]], lift: &[f32], radius: f32, sides: u32, cap
             // winding faces out of the tube as its normals do.
             let theta = -std::f32::consts::TAU * (col % sides) as f32 / sides as f32;
             let ring = add(scale(right, theta.cos()), scale(ring_up, theta.sin()));
-            let rim = |centre: bool| if centre { center } else { add(center, scale(ring, radius)) };
+            let rim = |centre: bool| {
+                if centre {
+                    center
+                } else {
+                    add(center, scale(ring, radius))
+                }
+            };
             let (position, normal) = match role {
                 CapRow::Side => (rim(false), scale(ring, signum(radius))),
                 CapRow::Start { centre } => (rim(centre), scale(tangent, -1.0)),
@@ -270,7 +353,11 @@ pub fn tube_grid(points: &[[f32; 2]], lift: &[f32], radius: f32, sides: u32, cap
 /// each corner with the grid's own normal.
 pub fn triangulate(grid: &Grid) -> Vec<MeshVertex> {
     let (cols, rows) = (grid.cols, grid.rows);
-    if cols < 2 || rows < 2 || grid.positions.len() < cols * rows || grid.normals.len() < cols * rows {
+    if cols < 2
+        || rows < 2
+        || grid.positions.len() < cols * rows
+        || grid.normals.len() < cols * rows
+    {
         return Vec::new();
     }
     let mut out = Vec::with_capacity((cols - 1) * (rows - 1) * 6);
@@ -293,11 +380,19 @@ impl SweptCurve {
     /// The grid this sweep makes.
     pub fn grid(&self) -> Grid {
         match self.sweep {
-            Sweep::Extrude { depth, steps, close, symmetric, caps } => {
-                extrude_grid(&self.points, depth, steps, close, symmetric, caps)
-            }
+            Sweep::Extrude {
+                depth,
+                steps,
+                close,
+                symmetric,
+                caps,
+            } => extrude_grid(&self.points, depth, steps, close, symmetric, caps),
             Sweep::Revolve { segments, sweep } => revolve_grid(&self.points, segments, sweep),
-            Sweep::Tube { radius, sides, caps } => tube_grid(&self.points, &self.lift, radius, sides, caps),
+            Sweep::Tube {
+                radius,
+                sides,
+                caps,
+            } => tube_grid(&self.points, &self.lift, radius, sides, caps),
         }
     }
 
@@ -349,7 +444,11 @@ fn scale(a: [f32; 3], k: f32) -> [f32; 3] {
 }
 
 fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 fn length(a: [f32; 3]) -> f32 {
@@ -362,7 +461,10 @@ mod tests {
 
     fn circle(clockwise: bool) -> Vec<[f32; 2]> {
         let turn = if clockwise { -1.0 } else { 1.0 };
-        (0..=24).map(|i| (turn * std::f32::consts::TAU * i as f32 / 24.0).sin_cos()).map(|(s, c)| [c, s]).collect()
+        (0..=24)
+            .map(|i| (turn * std::f32::consts::TAU * i as f32 / 24.0).sin_cos())
+            .map(|(s, c)| [c, s])
+            .collect()
     }
 
     /// The volume a triangle list encloses, by the divergence theorem:
@@ -372,7 +474,8 @@ mod tests {
             .chunks(3)
             .map(|tri| {
                 let [a, b, c] = [0, 1, 2].map(|k| tri[k].position);
-                a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0])
+                a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
+                    + a[2] * (b[0] * c[1] - b[1] * c[0])
             })
             .sum::<f32>()
             / 6.0
@@ -391,21 +494,49 @@ mod tests {
                     if close {
                         points.pop();
                     }
-                    sweeps.push(SweptCurve { points, lift: Vec::new(), sweep: Sweep::Extrude { depth, steps: 2, close, symmetric, caps: true } });
+                    sweeps.push(SweptCurve {
+                        points,
+                        lift: Vec::new(),
+                        sweep: Sweep::Extrude {
+                            depth,
+                            steps: 2,
+                            close,
+                            symmetric,
+                            caps: true,
+                        },
+                    });
                 }
             }
         }
-        let path = (0..8).map(|i| [i as f32 * 0.5, (i as f32 * 0.7).sin()]).collect();
-        sweeps.push(SweptCurve { points: path, lift: Vec::new(), sweep: Sweep::Tube { radius: 0.3, sides: 12, caps: true } });
+        let path = (0..8)
+            .map(|i| [i as f32 * 0.5, (i as f32 * 0.7).sin()])
+            .collect();
+        sweeps.push(SweptCurve {
+            points: path,
+            lift: Vec::new(),
+            sweep: Sweep::Tube {
+                radius: 0.3,
+                sides: 12,
+                caps: true,
+            },
+        });
         for swept in &sweeps {
             let vertices = swept.load_vertices().expect("the sweep has area");
-            assert!(signed_volume(&vertices) > 0.0, "{:?} encloses negative volume", swept.sweep);
+            assert!(
+                signed_volume(&vertices) > 0.0,
+                "{:?} encloses negative volume",
+                swept.sweep
+            );
             for tri in vertices.chunks(3) {
                 let [a, b, c] = [0, 1, 2].map(|k| tri[k].position);
                 let face = cross(sub(b, a), sub(c, a));
                 let normal = add(add(tri[0].normal, tri[1].normal), tri[2].normal);
                 let along = face[0] * normal[0] + face[1] * normal[1] + face[2] * normal[2];
-                assert!(along > 0.0, "{:?}: a face's normals point against its winding", swept.sweep);
+                assert!(
+                    along > 0.0,
+                    "{:?}: a face's normals point against its winding",
+                    swept.sweep
+                );
             }
         }
     }
@@ -417,8 +548,14 @@ mod tests {
     #[test]
     fn round_sweeps_close_their_seam_exactly() {
         let ring = circle(false);
-        assert_ne!(ring[0], ring[ring.len() - 1], "the sampled circle's end should only nearly meet its start");
-        let path: Vec<[f32; 2]> = (0..8).map(|i| [i as f32 * 0.5, (i as f32 * 0.7).sin()]).collect();
+        assert_ne!(
+            ring[0],
+            ring[ring.len() - 1],
+            "the sampled circle's end should only nearly meet its start"
+        );
+        let path: Vec<[f32; 2]> = (0..8)
+            .map(|i| [i as f32 * 0.5, (i as f32 * 0.7).sin()])
+            .collect();
         let grids = [
             extrude_grid(&ring, 2.0, 2, false, false, true),
             extrude_grid(&ring, -2.0, 2, false, false, true),
@@ -426,10 +563,16 @@ mod tests {
         ];
         for grid in &grids {
             for row in 0..grid.rows {
-                let (first, last) = (grid.positions[row * grid.cols], grid.positions[row * grid.cols + grid.cols - 1]);
-                assert_eq!(first.map(f32::to_bits), last.map(f32::to_bits), "row {row}: the seam is open");
+                let (first, last) = (
+                    grid.positions[row * grid.cols],
+                    grid.positions[row * grid.cols + grid.cols - 1],
+                );
+                assert_eq!(
+                    first.map(f32::to_bits),
+                    last.map(f32::to_bits),
+                    "row {row}: the seam is open"
+                );
             }
         }
     }
 }
-

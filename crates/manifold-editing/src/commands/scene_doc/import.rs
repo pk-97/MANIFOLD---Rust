@@ -6,12 +6,16 @@
 //! Both are command lists for one `ExecuteBatch`, so each is one undo step.
 
 use manifold_core::scene_doc::{
-    ImportedModel, ImportedNode, Item, ItemFields, ItemId, ItemKind, MeshPrimitives, SceneDoc, Shape, TextureSource,
-    camera_item, import_child_id, import_placement_id, is_import_child, light_item, material_item, node_item, param_id,
+    ImportedModel, ImportedNode, Item, ItemFields, ItemId, ItemKind, MeshPrimitives, SceneDoc,
+    Shape, TextureSource, camera_item, import_child_id, import_placement_id, is_import_child,
+    light_item, material_item, node_item, param_id,
 };
 use manifold_core::{GraphTarget, LayerId};
 
-use super::commands::{AddSceneItemCommand, RemoveSceneItemCommand, ReparentSceneItemCommand, SetSceneItemFieldsCommand};
+use super::commands::{
+    AddSceneItemCommand, RemoveSceneItemCommand, ReparentSceneItemCommand,
+    SetSceneItemFieldsCommand,
+};
 use crate::command::Command;
 use crate::commands::effects::ChangeGraphParamCommand;
 
@@ -29,7 +33,12 @@ pub fn import_model_commands(
     let mut commands: Vec<Box<dyn Command>> = Vec::new();
     for (offset, item) in model.into_items(file, id.clone()).into_iter().enumerate() {
         let at = index.saturating_add(offset);
-        commands.push(Box::new(AddSceneItemCommand::with_subtree(layer.clone(), parent.clone(), at, item)));
+        commands.push(Box::new(AddSceneItemCommand::with_subtree(
+            layer.clone(),
+            parent.clone(),
+            at,
+            item,
+        )));
     }
     let target = GraphTarget::Generator(layer.clone());
     starting_writes(&target, model.starting_values(&id, center), &mut commands);
@@ -44,7 +53,12 @@ fn starting_writes(
     commands: &mut Vec<Box<dyn Command>>,
 ) {
     for (item, property, value) in values {
-        commands.push(Box::new(ChangeGraphParamCommand::new(target.clone(), param_id(&item, property), value, value)));
+        commands.push(Box::new(ChangeGraphParamCommand::new(
+            target.clone(),
+            param_id(&item, property),
+            value,
+            value,
+        )));
     }
 }
 
@@ -61,10 +75,19 @@ struct Wanted<'a> {
     parent: ItemId,
 }
 
-fn wanted<'a>(group: &ItemId, nodes: &'a [ImportedNode], parent: &ItemId, out: &mut Vec<Wanted<'a>>) {
+fn wanted<'a>(
+    group: &ItemId,
+    nodes: &'a [ImportedNode],
+    parent: &ItemId,
+    out: &mut Vec<Wanted<'a>>,
+) {
     for node in nodes {
         let id = import_child_id(group, &node.key);
-        out.push(Wanted { node, id: id.clone(), parent: parent.clone() });
+        out.push(Wanted {
+            node,
+            id: id.clone(),
+            parent: parent.clone(),
+        });
         wanted(group, &node.children, &id, out);
     }
 }
@@ -79,9 +102,13 @@ pub fn swap_model_file_commands(
     file: &str,
     model: &ImportedModel,
 ) -> Result<SwapPlan, String> {
-    let found = doc.find(item).ok_or_else(|| format!("no item {item} in this scene"))?;
+    let found = doc
+        .find(item)
+        .ok_or_else(|| format!("no item {item} in this scene"))?;
     match &found.fields {
-        ItemFields::Group(fields) if fields.source.is_some() => swap_group(layer, doc, found, file, model),
+        ItemFields::Group(fields) if fields.source.is_some() => {
+            swap_group(layer, doc, found, file, model)
+        }
         ItemFields::Object(fields) if matches!(fields.shape, Shape::Mesh { .. }) => {
             Ok(swap_object(layer, doc, found, file, model))
         }
@@ -92,7 +119,13 @@ pub fn swap_model_file_commands(
 /// A single-mesh import: a Set of its Shape to the new file's only mesh
 /// part (or, when the new file has several, all of it as one mesh), and its
 /// import Material pointed at that part's material.
-fn swap_object(layer: &LayerId, doc: &SceneDoc, object: &Item, file: &str, model: &ImportedModel) -> SwapPlan {
+fn swap_object(
+    layer: &LayerId,
+    doc: &SceneDoc,
+    object: &Item,
+    file: &str,
+    model: &ImportedModel,
+) -> SwapPlan {
     let ItemFields::Object(old) = &object.fields else {
         unreachable!("swap_model_file_commands checked the kind");
     };
@@ -113,8 +146,11 @@ fn swap_object(layer: &LayerId, doc: &SceneDoc, object: &Item, file: &str, model
     };
     let mut fields = old.clone();
     fields.shape = shape;
-    let mut commands: Vec<Box<dyn Command>> =
-        vec![Box::new(SetSceneItemFieldsCommand::new(layer.clone(), object.id.clone(), ItemFields::Object(fields)))];
+    let mut commands: Vec<Box<dyn Command>> = vec![Box::new(SetSceneItemFieldsCommand::new(
+        layer.clone(),
+        object.id.clone(),
+        ItemFields::Object(fields),
+    ))];
     // Its own import Material follows the file; one the user picked stays.
     let material = old.material.as_ref().and_then(|id| doc.find(id));
     if let Some(material) = material
@@ -126,14 +162,20 @@ fn swap_object(layer: &LayerId, doc: &SceneDoc, object: &Item, file: &str, model
             .and_then(|key| model.materials.iter().find(|m| &m.key == key))
             .and_then(|m| m.material);
         let mut fields = fields.clone();
-        fields.texture = TextureSource::Model { file: file.to_owned(), material: index };
+        fields.texture = TextureSource::Model {
+            file: file.to_owned(),
+            material: index,
+        };
         commands.push(Box::new(SetSceneItemFieldsCommand::new(
             layer.clone(),
             material.id.clone(),
             ItemFields::Material(fields),
         )));
     }
-    SwapPlan { commands, removed: 0 }
+    SwapPlan {
+        commands,
+        removed: 0,
+    }
 }
 
 /// An import Group: a part whose file node path (and material) is still in
@@ -141,7 +183,13 @@ fn swap_object(layer: &LayerId, doc: &SceneDoc, object: &Item, file: &str, model
 /// removed; a new path is added. Materials, lights and cameras reconcile the
 /// same way by their keys. Items the user put in the group by hand are left
 /// alone, and a part keeps a material the user bound it to.
-fn swap_group(layer: &LayerId, doc: &SceneDoc, item: &Item, file: &str, model: &ImportedModel) -> Result<SwapPlan, String> {
+fn swap_group(
+    layer: &LayerId,
+    doc: &SceneDoc,
+    item: &Item,
+    file: &str,
+    model: &ImportedModel,
+) -> Result<SwapPlan, String> {
     let group = &item.id;
     let ItemFields::Group(fields) = &item.fields else {
         return Err("only an imported model has a Model File".to_owned());
@@ -153,12 +201,19 @@ fn swap_group(layer: &LayerId, doc: &SceneDoc, item: &Item, file: &str, model: &
     if source.clip as usize >= model.clips.len() {
         source.clip = 0;
     }
-    let mut commands: Vec<Box<dyn Command>> =
-        vec![Box::new(SetSceneItemFieldsCommand::new(layer.clone(), group.clone(), ItemFields::Group(source)))];
+    let mut commands: Vec<Box<dyn Command>> = vec![Box::new(SetSceneItemFieldsCommand::new(
+        layer.clone(),
+        group.clone(),
+        ItemFields::Group(source),
+    ))];
 
     // New imports carry a persistent placement Group; legacy imports do not.
     let placement = import_placement_id(group);
-    let content_parent = if doc.find(&placement).is_some() { placement.clone() } else { group.clone() };
+    let content_parent = if doc.find(&placement).is_some() {
+        placement.clone()
+    } else {
+        group.clone()
+    };
 
     let mut wants = Vec::new();
     wanted(group, model.group_children(), &content_parent, &mut wants);
@@ -167,7 +222,12 @@ fn swap_group(layer: &LayerId, doc: &SceneDoc, item: &Item, file: &str, model: &
 
     for want in &wants {
         let Some(existing) = doc.find(&want.id) else {
-            starts.extend(want.node.transform.values().map(|(property, value)| (want.id.clone(), property, value)));
+            starts.extend(
+                want.node
+                    .transform
+                    .values()
+                    .map(|(property, value)| (want.id.clone(), property, value)),
+            );
             let mut added = node_item(group, want.node, file);
             added.children.clear();
             commands.push(Box::new(AddSceneItemCommand::with_subtree(
@@ -186,9 +246,16 @@ fn swap_group(layer: &LayerId, doc: &SceneDoc, item: &Item, file: &str, model: &
                 vertex_count: want.node.vertex_count,
                 primitives: want.node.primitives,
             };
-            let picked_by_hand = old.material.as_ref().is_some_and(|id| !is_import_child(group, id));
+            let picked_by_hand = old
+                .material
+                .as_ref()
+                .is_some_and(|id| !is_import_child(group, id));
             if !picked_by_hand {
-                fields.material = want.node.material.as_ref().map(|key| import_child_id(group, key));
+                fields.material = want
+                    .node
+                    .material
+                    .as_ref()
+                    .map(|key| import_child_id(group, key));
             }
             if &fields != old {
                 commands.push(Box::new(SetSceneItemFieldsCommand::new(
@@ -209,18 +276,32 @@ fn swap_group(layer: &LayerId, doc: &SceneDoc, item: &Item, file: &str, model: &
     }
 
     let add = |item: Item, commands: &mut Vec<Box<dyn Command>>| {
-        commands.push(Box::new(AddSceneItemCommand::with_subtree(layer.clone(), Some(content_parent.clone()), usize::MAX, item)));
+        commands.push(Box::new(AddSceneItemCommand::with_subtree(
+            layer.clone(),
+            Some(content_parent.clone()),
+            usize::MAX,
+            item,
+        )));
     };
     for material in &model.materials {
         let id = import_child_id(group, &material.key);
         kept.push(id.clone());
         match doc.find(&id).map(|existing| &existing.fields) {
             None => add(material_item(group, material, file), &mut commands),
-            Some(ItemFields::Material(old)) if matches!(old.texture, TextureSource::Model { .. }) => {
+            Some(ItemFields::Material(old))
+                if matches!(old.texture, TextureSource::Model { .. }) =>
+            {
                 let mut fields = old.clone();
-                fields.texture = TextureSource::Model { file: file.to_owned(), material: material.material };
+                fields.texture = TextureSource::Model {
+                    file: file.to_owned(),
+                    material: material.material,
+                };
                 if &fields != old {
-                    commands.push(Box::new(SetSceneItemFieldsCommand::new(layer.clone(), id, ItemFields::Material(fields))));
+                    commands.push(Box::new(SetSceneItemFieldsCommand::new(
+                        layer.clone(),
+                        id,
+                        ItemFields::Material(fields),
+                    )));
                 }
             }
             Some(_) => {}
@@ -232,7 +313,12 @@ fn swap_group(layer: &LayerId, doc: &SceneDoc, item: &Item, file: &str, model: &
         kept.push(id.clone());
         if doc.find(&id).is_none() {
             add(light_item(group, light), &mut commands);
-            starts.extend(light.values.iter().map(|(property, value)| (id.clone(), *property, *value)));
+            starts.extend(
+                light
+                    .values
+                    .iter()
+                    .map(|(property, value)| (id.clone(), *property, *value)),
+            );
         }
     }
     for camera in &model.cameras {
@@ -240,7 +326,12 @@ fn swap_group(layer: &LayerId, doc: &SceneDoc, item: &Item, file: &str, model: &
         kept.push(id.clone());
         if doc.find(&id).is_none() {
             add(camera_item(group, camera), &mut commands);
-            starts.extend(camera.values.iter().map(|(property, value)| (id.clone(), *property, *value)));
+            starts.extend(
+                camera
+                    .values
+                    .iter()
+                    .map(|(property, value)| (id.clone(), *property, *value)),
+            );
         }
     }
     starting_writes(&target, starts, &mut commands);
@@ -248,13 +339,23 @@ fn swap_group(layer: &LayerId, doc: &SceneDoc, item: &Item, file: &str, model: &
     // What of the old file is gone, children before their groups.
     let mut gone: Vec<&Item> = Vec::new();
     doc.walk(|item, ancestors| {
-        if ancestors.iter().any(|a| &a.id == group) && is_import_child(group, &item.id) && item.id != placement && !kept.contains(&item.id) {
+        if ancestors.iter().any(|a| &a.id == group)
+            && is_import_child(group, &item.id)
+            && item.id != placement
+            && !kept.contains(&item.id)
+        {
             gone.push(item);
         }
     });
-    let removed = gone.iter().filter(|item| item.kind() == ItemKind::Object).count();
+    let removed = gone
+        .iter()
+        .filter(|item| item.kind() == ItemKind::Object)
+        .count();
     for item in gone.into_iter().rev() {
-        commands.push(Box::new(RemoveSceneItemCommand::new(layer.clone(), item.id.clone())));
+        commands.push(Box::new(RemoveSceneItemCommand::new(
+            layer.clone(),
+            item.id.clone(),
+        )));
     }
     Ok(SwapPlan { commands, removed })
 }

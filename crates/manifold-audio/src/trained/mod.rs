@@ -37,7 +37,9 @@ pub(crate) mod golden {
 
     /// The clip goldens of `tests/fixtures/<set>/`, sorted.
     pub fn clips(set: &str) -> Vec<String> {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(set);
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(set);
         let mut names: Vec<String> = std::fs::read_dir(&dir)
             .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
             .filter_map(|e| e.ok()?.file_name().into_string().ok())
@@ -65,7 +67,11 @@ pub(crate) mod golden {
 
     pub fn audio_f32(g: &Container) -> Vec<f32> {
         let n = g.shape("audio_i16").unwrap()[0];
-        g.i16s("audio_i16", &[n]).unwrap().iter().map(|&v| v as f32 / 32768.0).collect()
+        g.i16s("audio_i16", &[n])
+            .unwrap()
+            .iter()
+            .map(|&v| v as f32 / 32768.0)
+            .collect()
     }
 
     /// Seeded chunk sizes in 256..=1024 (xorshift; the crate has no rand dependency).

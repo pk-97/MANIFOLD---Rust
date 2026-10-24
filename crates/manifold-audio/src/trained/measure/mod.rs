@@ -53,7 +53,10 @@ fn model_hop_end_s(h: u64) -> f64 {
 fn positive(c: &Container, name: &str) -> Result<u64, ContainerError> {
     match c.i64s(name, &[])?[0] {
         v if v > 0 => Ok(v as u64),
-        _ => Err(ContainerError::WrongType { name: name.to_owned(), want: "positive i64" }),
+        _ => Err(ContainerError::WrongType {
+            name: name.to_owned(),
+            want: "positive i64",
+        }),
     }
 }
 
@@ -77,19 +80,54 @@ impl MeasureBank {
     pub fn new(c: &Container, measures: &[Measure]) -> Result<Self, ContainerError> {
         let uses = |m: Measure| measures.contains(&m);
         let k = if measures.iter().any(|&m| m.uses_extra()) {
-            Some(Consts { sr: positive(c, "extra.sample_rate")? as f64, hop: positive(c, "extra.hop")?, ms: scalar(c, "extra.ms")? })
+            Some(Consts {
+                sr: positive(c, "extra.sample_rate")? as f64,
+                hop: positive(c, "extra.hop")?,
+                ms: scalar(c, "extra.ms")?,
+            })
         } else {
             None
         };
         let band = uses(Measure::Tmpl3) || uses(Measure::Prof32) || uses(Measure::Fall16);
         Ok(Self {
-            tail: if uses(Measure::Tail3) { Some(tail::Tail::new(c, k.as_ref().expect("set above"))?) } else { None },
-            spec: if band { Some(spec::BandSpec::new(c, k.as_ref().expect("set above").hop)?) } else { None },
-            templates: if uses(Measure::Tmpl3) { Some(templates::Templates::new(c)?) } else { None },
-            low: if uses(Measure::Low16) { Some(lowbank::LowBank::new(c, k.as_ref().expect("set above"))?) } else { None },
-            cdom: if uses(Measure::Cdom4) { Some(cdom::ComplexOnset::new(c, k.as_ref().expect("set above").hop)?) } else { None },
-            note: if uses(Measure::Note13) { Some(note::NotePitch::new(c, k.as_ref().expect("set above").sr)?) } else { None },
-            verdicts: if uses(Measure::Kick2) { Some(verdict::KickVerdicts::new(c)?) } else { None },
+            tail: if uses(Measure::Tail3) {
+                Some(tail::Tail::new(c, k.as_ref().expect("set above"))?)
+            } else {
+                None
+            },
+            spec: if band {
+                Some(spec::BandSpec::new(c, k.as_ref().expect("set above").hop)?)
+            } else {
+                None
+            },
+            templates: if uses(Measure::Tmpl3) {
+                Some(templates::Templates::new(c)?)
+            } else {
+                None
+            },
+            low: if uses(Measure::Low16) {
+                Some(lowbank::LowBank::new(c, k.as_ref().expect("set above"))?)
+            } else {
+                None
+            },
+            cdom: if uses(Measure::Cdom4) {
+                Some(cdom::ComplexOnset::new(
+                    c,
+                    k.as_ref().expect("set above").hop,
+                )?)
+            } else {
+                None
+            },
+            note: if uses(Measure::Note13) {
+                Some(note::NotePitch::new(c, k.as_ref().expect("set above").sr)?)
+            } else {
+                None
+            },
+            verdicts: if uses(Measure::Kick2) {
+                Some(verdict::KickVerdicts::new(c)?)
+            } else {
+                None
+            },
             samples: 0,
             k,
         })
@@ -165,27 +203,54 @@ impl MeasureBank {
         }
         if m == Measure::Kick2 {
             let v = self.verdicts.as_ref().expect("built with kick2");
-            v.features(model_hop_end_s(cand.cand_hop), model_hop_end_s(cand.avail_hop), out);
+            v.features(
+                model_hop_end_s(cand.cand_hop),
+                model_hop_end_s(cand.avail_hop),
+                out,
+            );
             return;
         }
-        assert!(self.samples >= self.ready_sample(cand), "measure {}: candidate {} asked before its data arrived", m.name(), cand.cand_hop);
+        assert!(
+            self.samples >= self.ready_sample(cand),
+            "measure {}: candidate {} asked before its data arrived",
+            m.name(),
+            cand.cand_hop
+        );
         let k = self.k.as_ref().expect("built with this measure");
         let (c, a) = (cand.cand_hop, cand.avail_hop);
         let spec = || self.spec.as_ref().expect("built with this measure");
         match m {
             Measure::F15 | Measure::Kick2 => unreachable!("handled above"),
-            Measure::Tail3 => self.tail.as_ref().expect("built with tail3").features(k, c, a, out),
+            Measure::Tail3 => self
+                .tail
+                .as_ref()
+                .expect("built with tail3")
+                .features(k, c, a, out),
             Measure::Tmpl3 => {
                 let spec = self.spec.as_ref().expect("built with tmpl3");
-                self.templates.as_mut().expect("built with tmpl3").features(spec, c, out)
+                self.templates
+                    .as_mut()
+                    .expect("built with tmpl3")
+                    .features(spec, c, out)
             }
             Measure::Prof32 => profile::rise(spec(), c, a, out),
             Measure::Fall16 => profile::fall(spec(), c, a, out),
-            Measure::Low16 => self.low.as_ref().expect("built with low16").features(k, c, a, out),
-            Measure::Cdom4 => self.cdom.as_ref().expect("built with cdom4").features(c, a, out),
+            Measure::Low16 => self
+                .low
+                .as_ref()
+                .expect("built with low16")
+                .features(k, c, a, out),
+            Measure::Cdom4 => self
+                .cdom
+                .as_ref()
+                .expect("built with cdom4")
+                .features(c, a, out),
             Measure::Note13 => {
                 let (on, em) = (k.hop_end_s(c), k.hop_end_s(a));
-                self.note.as_mut().expect("built with note13").features(on, em, out)
+                self.note
+                    .as_mut()
+                    .expect("built with note13")
+                    .features(on, em, out)
             }
         }
     }

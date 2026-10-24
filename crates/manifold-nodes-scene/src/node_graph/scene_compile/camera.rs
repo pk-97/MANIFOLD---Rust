@@ -24,7 +24,11 @@ pub(crate) const LOOP_BEATS: f32 = 8.0;
 /// camera's rows.
 pub(crate) fn emit_all(b: &mut Builder<'_>) {
     let doc = b.doc;
-    let cameras: Vec<Item> = doc.cuts().into_iter().filter_map(|(_, id)| doc.find(id).cloned()).collect();
+    let cameras: Vec<Item> = doc
+        .cuts()
+        .into_iter()
+        .filter_map(|(_, id)| doc.find(id).cloned())
+        .collect();
     if cameras.is_empty() {
         return;
     }
@@ -32,7 +36,13 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) {
     let lenses: Vec<u32> = cameras.iter().map(|item| emit(b, item)).collect();
     let owner = cut_owner(b);
     let switch = b.add(&owner, "camera_switch", "node.camera_switch");
-    b.set(switch, "num_inputs", SerializedParamValue::Int { value: slots.len() as i32 });
+    b.set(
+        switch,
+        "num_inputs",
+        SerializedParamValue::Int {
+            value: slots.len() as i32,
+        },
+    );
     b.set(switch, "select", SerializedParamValue::Enum { value: 0 });
     for (k, &camera) in slots.iter().enumerate() {
         b.wire(lenses[camera], "out", switch, &camera_switch_input(k));
@@ -41,13 +51,27 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) {
     b.wire(switch, "out", render, "camera");
     b.active_lens = Some(switch);
 
-    let tails: Vec<u32> = cameras.iter().zip(&lenses).map(|(item, &lens)| tail(b, &item.id, lens)).collect();
+    let tails: Vec<u32> = cameras
+        .iter()
+        .zip(&lenses)
+        .map(|(item, &lens)| tail(b, &item.id, lens))
+        .collect();
     b.tail = Some(match tails.as_slice() {
         [only] => *only,
         _ => {
             let image = b.add(&owner, "camera_cut", "node.switch_texture");
-            b.set(image, "num_inputs", SerializedParamValue::Int { value: slots.len() as i32 });
-            b.set(image, "selector", SerializedParamValue::Float { value: 0.0 });
+            b.set(
+                image,
+                "num_inputs",
+                SerializedParamValue::Int {
+                    value: slots.len() as i32,
+                },
+            );
+            b.set(
+                image,
+                "selector",
+                SerializedParamValue::Float { value: 0.0 },
+            );
             for (k, &camera) in slots.iter().enumerate() {
                 b.wire(tails[camera], "out", image, &format!("in_{k}"));
             }
@@ -97,7 +121,9 @@ pub(crate) fn finish_cut(b: &mut Builder<'_>) {
 
 /// The cut belongs to the World, whose card has the Camera row.
 fn cut_owner(b: &Builder<'_>) -> String {
-    b.doc.world().map_or_else(|| SCENE.to_owned(), |world| world.id.to_string())
+    b.doc
+        .world()
+        .map_or_else(|| SCENE.to_owned(), |world| world.id.to_string())
 }
 
 /// The camera's rig, shaken about its own position, then its lens. A group
@@ -165,7 +191,9 @@ fn rename(node: &mut EffectGraphNode, camera: &ItemId) {
     node.node_id = NodeId::new(format!("{camera}:{}", node.node_id));
     node.handle = Some(node.node_id.to_string());
     if let Some(body) = node.group.as_deref_mut() {
-        body.nodes.iter_mut().for_each(|inner| rename(inner, camera));
+        body.nodes
+            .iter_mut()
+            .for_each(|inner| rename(inner, camera));
     }
 }
 
@@ -173,7 +201,11 @@ fn find_type(node: &EffectGraphNode, type_id: &str) -> Option<u32> {
     if node.type_id == type_id {
         return Some(node.id);
     }
-    node.group.as_deref()?.nodes.iter().find_map(|inner| find_type(inner, type_id))
+    node.group
+        .as_deref()?
+        .nodes
+        .iter()
+        .find_map(|inner| find_type(inner, type_id))
 }
 
 /// Aim each Look At camera that has a Target item at that item's drawn frame:
@@ -190,7 +222,9 @@ pub(crate) fn aim_all(b: &mut Builder<'_>) {
         }
     });
     for (camera, target) in aims {
-        let frame = b.id(target.as_str(), "pose_frame").or_else(|| b.id(target.as_str(), "transform"));
+        let frame = b
+            .id(target.as_str(), "pose_frame")
+            .or_else(|| b.id(target.as_str(), "transform"));
         if let (Some(rig), Some(frame)) = (b.id(camera.as_str(), "rig"), frame) {
             b.wire(frame, "transform", rig, "target");
         }

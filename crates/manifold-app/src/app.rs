@@ -6,18 +6,18 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowId;
 
+use manifold_compositor::generator_renderer::GeneratorRenderer;
+use manifold_compositor::layer_compositor::LayerCompositor;
+use manifold_core::LayerId;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
-use manifold_core::LayerId;
 use manifold_editing::service::EditingService;
+use manifold_node_engine::gpu::context::GpuContext;
 use manifold_playback::engine::PlaybackEngine;
 use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
 #[cfg(not(target_os = "macos"))]
 use manifold_playback::renderer::StubRenderer;
-use manifold_compositor::generator_renderer::GeneratorRenderer;
-use manifold_node_engine::gpu::context::GpuContext;
-use manifold_compositor::layer_compositor::LayerCompositor;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 
 use manifold_ui::cursors::{CursorManager, TimelineCursor};
@@ -126,7 +126,8 @@ pub struct Application {
     /// `drain_import_progress` (`app_render.rs`, same site as
     /// `tick_import_failures`).
     pub(crate) import_progress_tx: crossbeam_channel::Sender<crate::import_worker::ImportProgress>,
-    pub(crate) import_progress_rx: crossbeam_channel::Receiver<crate::import_worker::ImportProgress>,
+    pub(crate) import_progress_rx:
+        crossbeam_channel::Receiver<crate::import_worker::ImportProgress>,
     /// True while a background import worker thread is in flight — gates
     /// whether `import_model_file` spawns immediately or enqueues.
     pub(crate) import_worker_busy: bool,
@@ -200,8 +201,7 @@ pub struct Application {
     /// Fixed small size; the content thread downscales the captured node
     /// texture into it and the editor sidebar samples the front buffer.
     #[cfg(target_os = "macos")]
-    pub(crate) node_preview_texture_bridge:
-        Option<Arc<crate::shared_texture::SharedTextureBridge>>,
+    pub(crate) node_preview_texture_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
     /// UI-side textures imported from the node-output preview IOSurfaces.
     #[cfg(target_os = "macos")]
     pub(crate) ui_node_preview_textures:
@@ -222,8 +222,7 @@ pub struct Application {
     /// IOSurface bridge for the per-node thumbnail atlas (one big texture packed
     /// as a cell grid). The editor present pass samples cells onto canvas nodes.
     #[cfg(target_os = "macos")]
-    pub(crate) node_atlas_texture_bridge:
-        Option<Arc<crate::shared_texture::SharedTextureBridge>>,
+    pub(crate) node_atlas_texture_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
     /// UI-side textures imported from the thumbnail-atlas IOSurfaces.
     #[cfg(target_os = "macos")]
     pub(crate) ui_node_atlas_textures:
@@ -349,7 +348,8 @@ pub struct Application {
     /// Last native capabilities sent to the workspace presentation destination.
     pub(crate) display_capabilities: manifold_compositor::presentation::DisplayCapabilities,
     /// Last native capabilities sent to the optional output destination.
-    pub(crate) output_display_capabilities: Option<manifold_compositor::presentation::DisplayCapabilities>,
+    pub(crate) output_display_capabilities:
+        Option<manifold_compositor::presentation::DisplayCapabilities>,
     pub(crate) graph_display_capabilities: manifold_compositor::presentation::DisplayCapabilities,
 
     /// Main timeline workspace. Owns its `UIRoot`, offscreen render
@@ -369,8 +369,10 @@ pub struct Application {
     /// Remembered outer position + inner size of the editor window from
     /// its last close, so reopening lands where the user left it instead
     /// of winit's default cascade. `None` until the first close.
-    pub(crate) graph_editor_geometry:
-        Option<(winit::dpi::PhysicalPosition<i32>, winit::dpi::PhysicalSize<u32>)>,
+    pub(crate) graph_editor_geometry: Option<(
+        winit::dpi::PhysicalPosition<i32>,
+        winit::dpi::PhysicalSize<u32>,
+    )>,
     /// Read-only graph canvas hosted in the editor. `Some` while the
     /// editor window is open; cleared on close. Phase 4 seeded it with
     /// a hardcoded view of a test effect's graph.
@@ -441,7 +443,11 @@ pub struct Application {
     /// previewed (editor closed or multi/zero selection).
     pub(crate) last_preview_node: Option<manifold_core::NodeId>,
     pub(crate) last_modifier_preview_context: Option<Option<manifold_core::NodeId>>,
-    pub(crate) last_modifier_preview_selection: Option<(std::sync::Arc<manifold_ui::graph_view::GraphSnapshot>, Vec<u32>, Option<u32>)>,
+    pub(crate) last_modifier_preview_selection: Option<(
+        std::sync::Arc<manifold_ui::graph_view::GraphSnapshot>,
+        Vec<u32>,
+        Option<u32>,
+    )>,
     /// What graph the editor canvas is open on. Set by `OpenGraphEditor`
     /// (Effect target) or `OpenGeneratorGraphEditor` (Generator target);
     /// cleared when the editor closes. Every graph mutation command
@@ -453,8 +459,7 @@ pub struct Application {
     /// available to lift `None` graphs on first edit. For effects this
     /// is the bundled effect preset; for generators it's the bundled
     /// generator preset.
-    pub(crate) watched_catalog_default:
-        Option<manifold_core::effect_graph_def::EffectGraphDef>,
+    pub(crate) watched_catalog_default: Option<manifold_core::effect_graph_def::EffectGraphDef>,
 
     // Frame timing
     pub(crate) frame_timer: FrameTimer,
@@ -670,7 +675,8 @@ impl Application {
             display_retarget_deadline: None,
             display_capabilities: manifold_compositor::presentation::DisplayCapabilities::sdr(),
             output_display_capabilities: None,
-            graph_display_capabilities: manifold_compositor::presentation::DisplayCapabilities::sdr(),
+            graph_display_capabilities: manifold_compositor::presentation::DisplayCapabilities::sdr(
+            ),
             ws: Workspace::new(WorkspaceKind::Main),
             graph_editor: None,
             graph_editor_window_id: None,
@@ -899,7 +905,12 @@ impl Application {
 
         // The Scene tab's split between its tree and settings panes.
         let scene_rect = self.ws.ui_root.inspector.scene_content_rect();
-        if self.ws.ui_root.scene_setup_panel.split_cursor(self.cursor_pos, scene_rect) {
+        if self
+            .ws
+            .ui_root
+            .scene_setup_panel
+            .split_cursor(self.cursor_pos, scene_rect)
+        {
             self.cursor_manager.set(TimelineCursor::ResizeVertical);
             return;
         }
@@ -973,7 +984,12 @@ impl Application {
             user_prefs: &mut self.user_prefs,
             editor_target: None,
             scrub: &mut self.scrub,
-            dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
+            dialogs: crate::file_dialogs::host(
+                &self.window_registry,
+                self.dialog_window_id,
+                self.primary_window_id,
+                self.current_project_path.as_deref(),
+            ),
         };
         let ed = crate::text_session::EditorCommitCtx {
             target: self.watched_graph_target.as_ref(),
@@ -1190,7 +1206,12 @@ impl ApplicationHandler for Application {
             // EDR: configure colorspace + query headroom
             surface.configure_edr();
             self.display_capabilities = crate::edr_surface::query_window_capabilities(&window);
-            log::info!("[Display] Workspace: format={:?} potential={:.2}x current={:.2}x", manifold_compositor::presentation::UI_FORMAT, self.display_capabilities.potential().value(), self.display_capabilities.current().value());
+            log::info!(
+                "[Display] Workspace: format={:?} potential={:.2}x current={:.2}x",
+                manifold_compositor::presentation::UI_FORMAT,
+                self.display_capabilities.potential().value(),
+                self.display_capabilities.current().value()
+            );
             crate::edr_surface::register_screen_change_observer();
             // BUG-028: winit never surfaces a live pointer position during a
             // Finder file drag. Install the draggingUpdated:/performDragOperation:
@@ -1258,7 +1279,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 mag_filter: manifold_gpu::GpuFilterMode::Linear,
                 ..Default::default()
             }));
-            self.selection_outline = Some(crate::selection_outline::SelectionOutline::new(&native_device));
+            self.selection_outline = Some(crate::selection_outline::SelectionOutline::new(
+                &native_device,
+            ));
 
             // Atlas blit pipeline (premultiplied alpha — One/OneMinusSrcAlpha)
             let atlas_shader = r#"
@@ -1340,13 +1363,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 None,
                 "Node Thumbnail Pipeline",
             ));
-            self.thumb_sampler = Some(native_device.create_sampler(&manifold_gpu::GpuSamplerDesc {
-                min_filter: manifold_gpu::GpuFilterMode::Linear,
-                mag_filter: manifold_gpu::GpuFilterMode::Linear,
-                address_mode_u: manifold_gpu::GpuAddressMode::ClampToEdge,
-                address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
-                ..Default::default()
-            }));
+            self.thumb_sampler =
+                Some(native_device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                    min_filter: manifold_gpu::GpuFilterMode::Linear,
+                    mag_filter: manifold_gpu::GpuFilterMode::Linear,
+                    address_mode_u: manifold_gpu::GpuAddressMode::ClampToEdge,
+                    address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
+                    ..Default::default()
+                }));
 
             // Create UI renderer using native Metal
             self.ui_renderer = Some(UIRenderer::new(
@@ -1462,13 +1486,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 self.node_preview_texture_bridge = Some(Arc::clone(&node_bridge));
 
                 // Scene viewport frames: sized from the first request.
-                let viewport_bridge = Arc::new(crate::shared_texture::SharedTextureBridge::new(64, 64));
-                self.scene_viewport_pane = Some(crate::texture_pane::TexturePane::bridged(viewport_bridge));
+                let viewport_bridge =
+                    Arc::new(crate::shared_texture::SharedTextureBridge::new(64, 64));
+                self.scene_viewport_pane =
+                    Some(crate::texture_pane::TexturePane::bridged(viewport_bridge));
 
                 // Selection outline masks, sized by the content thread to each mask.
-                let mask_bridge = || Arc::new(crate::shared_texture::SharedTextureBridge::with_format(64, 64, manifold_gpu::GpuTextureFormat::R8Unorm));
-                self.outline_output_pane = Some(crate::texture_pane::TexturePane::bridged(mask_bridge()));
-                self.outline_viewport_pane = Some(crate::texture_pane::TexturePane::bridged(mask_bridge()));
+                let mask_bridge = || {
+                    Arc::new(crate::shared_texture::SharedTextureBridge::with_format(
+                        64,
+                        64,
+                        manifold_gpu::GpuTextureFormat::R8Unorm,
+                    ))
+                };
+                self.outline_output_pane =
+                    Some(crate::texture_pane::TexturePane::bridged(mask_bridge()));
+                self.outline_viewport_pane =
+                    Some(crate::texture_pane::TexturePane::bridged(mask_bridge()));
 
                 // Per-node thumbnail atlas bridge — one big cell-grid texture of
                 // 16:9 cells (not square), so thumbnails keep a video aspect.
@@ -1559,7 +1593,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let mut content_pipeline = crate::content_pipeline::ContentPipeline::new(Box::new(
                 LayerCompositor::new(&native_device, output_w, output_h),
             ));
-            content_pipeline.presentation.update(manifold_compositor::presentation::DisplayDestination::Workspace, self.display_capabilities);
+            content_pipeline.presentation.update(
+                manifold_compositor::presentation::DisplayDestination::Workspace,
+                self.display_capabilities,
+            );
             // Save pipeline archive after all pipelines have been created.
             native_device.save_pipeline_archive();
             native_device.log_msl_cache_stats();
@@ -1588,17 +1625,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
             // Content-side import of the scene viewport IOSurfaces.
             #[cfg(target_os = "macos")]
-            if let Some(bridge) = self.scene_viewport_pane.as_ref().and_then(|pane| pane.bridge()) {
+            if let Some(bridge) = self
+                .scene_viewport_pane
+                .as_ref()
+                .and_then(|pane| pane.bridge())
+            {
                 let native_dev = content_pipeline.native_device().unwrap();
-                let textures: [manifold_gpu::GpuTexture;
-                    crate::shared_texture::SURFACE_COUNT] =
+                let textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT] =
                     std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
                 content_pipeline.set_scene_viewport_textures(textures, Arc::clone(bridge));
             }
             #[cfg(target_os = "macos")]
             if let (Some(output), Some(viewport)) = (
-                self.outline_output_pane.as_ref().and_then(|pane| pane.bridge()),
-                self.outline_viewport_pane.as_ref().and_then(|pane| pane.bridge()),
+                self.outline_output_pane
+                    .as_ref()
+                    .and_then(|pane| pane.bridge()),
+                self.outline_viewport_pane
+                    .as_ref()
+                    .and_then(|pane| pane.bridge()),
             ) {
                 content_pipeline.set_outline_bridges(Arc::clone(output), Arc::clone(viewport));
             }
@@ -1689,7 +1733,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 led_preview_version: 0,
                 still_export: None,
                 cached_midi_device_names: Vec::new(),
-                midi_source_discovery: manifold_playback::midi_source_discovery::MidiSourceDiscovery::new(),
+                midi_source_discovery:
+                    manifold_playback::midi_source_discovery::MidiSourceDiscovery::new(),
                 cached_project_snapshot: None,
                 watched_graph_target: None,
                 preview_graph_node: None,
@@ -1776,7 +1821,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             &self.content_state.automation_latched_params,
             self.content_state.led_preview.as_ref(),
         );
-        self.ws.ui_root.scene_setup_panel.set_preview_navigating(self.ws.preview_navigation.active());
+        self.ws
+            .ui_root
+            .scene_setup_panel
+            .set_preview_navigating(self.ws.preview_navigation.active());
         crate::ui_bridge::sync_audio_dock(&mut self.ws.ui_root, &self.local_project);
 
         // `--resume` boot fast path (GIG_RESILIENCE_DESIGN section 5.2): content
@@ -1806,12 +1854,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let is_primary = Some(window_id) == self.primary_window_id;
 
         #[cfg(all(feature = "ui-automation", unix))]
-        if is_primary && matches!(&event, WindowEvent::MouseInput { .. }
-            | WindowEvent::MouseWheel { .. } | WindowEvent::PinchGesture { .. }
-            | WindowEvent::KeyboardInput { .. }
-            | WindowEvent::ModifiersChanged(_) | WindowEvent::CursorMoved { .. }
-            | WindowEvent::Focused(false) | WindowEvent::Resized(_)
-            | WindowEvent::ScaleFactorChanged { .. }) {
+        if is_primary
+            && matches!(
+                &event,
+                WindowEvent::MouseInput { .. }
+                    | WindowEvent::MouseWheel { .. }
+                    | WindowEvent::PinchGesture { .. }
+                    | WindowEvent::KeyboardInput { .. }
+                    | WindowEvent::ModifiersChanged(_)
+                    | WindowEvent::CursorMoved { .. }
+                    | WindowEvent::Focused(false)
+                    | WindowEvent::Resized(_)
+                    | WindowEvent::ScaleFactorChanged { .. }
+            )
+        {
             self.interrupt_live_ui();
         }
 
@@ -1936,7 +1992,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             // ── Cursor left window → cancel in-progress drags ────────
             WindowEvent::CursorLeft { .. } => {
-                if is_graph_editor { self.cancel_editor_pointer_capture(window_id); }
+                if is_graph_editor {
+                    self.cancel_editor_pointer_capture(window_id);
+                }
                 if is_primary && self.perform_handle_cursor_left() {
                     return;
                 }
@@ -1970,7 +2028,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             // ── Focus loss → cancel in-progress drags ──────────────
             WindowEvent::Focused(false) => {
-                if is_graph_editor { self.cancel_editor_pointer_capture(window_id); }
+                if is_graph_editor {
+                    self.cancel_editor_pointer_capture(window_id);
+                }
                 // Synthesize a PointerUp to cancel any drag that was in
                 // progress when the user alt-tabbed away. Without this the
                 // drag state stays active forever because no real PointerUp
@@ -2049,19 +2109,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         .as_ref()
                         .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id))
                         .unwrap_or(0) as i32;
-                    let Some(tx) = self.content_tx.as_ref() else { return };
+                    let Some(tx) = self.content_tx.as_ref() else {
+                        return;
+                    };
                     let project_io = &mut self.project_io;
-                    let action = self.local_project.edit(&mut self.ui_edits, tx).with_sent(|project| {
-                        let action = project_io.process_dropped_files(
-                            std::slice::from_ref(&path),
-                            drop_beat,
-                            drop_layer,
-                            join_audio_layer,
-                            project,
-                        );
-                        let touches = crate::gesture_preview::touches_of(&action.record_commands);
-                        (action, touches)
-                    });
+                    let action =
+                        self.local_project
+                            .edit(&mut self.ui_edits, tx)
+                            .with_sent(|project| {
+                                let action = project_io.process_dropped_files(
+                                    std::slice::from_ref(&path),
+                                    drop_beat,
+                                    drop_layer,
+                                    join_audio_layer,
+                                    project,
+                                );
+                                let touches =
+                                    crate::gesture_preview::touches_of(&action.record_commands);
+                                (action, touches)
+                            });
                     self.apply_project_io_action(action);
                 } else if crate::project_io::is_supported_image_extension(&path) {
                     // Still images → an image clip, Video layers only. Resolve
@@ -2078,7 +2144,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         } else {
                             self.content_state.current_beat.as_f32()
                         };
-                        let under = if in_tracks { vp.layer_at_y(pos.y) } else { None };
+                        let under = if in_tracks {
+                            vp.layer_at_y(pos.y)
+                        } else {
+                            None
+                        };
                         (beat, under)
                     };
                     self.import_image_file(&path, drop_beat, layer_under_cursor);
@@ -2104,7 +2174,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         } else {
                             self.content_state.current_beat.as_f32()
                         };
-                        let under = if in_tracks { vp.layer_at_y(pos.y) } else { None };
+                        let under = if in_tracks {
+                            vp.layer_at_y(pos.y)
+                        } else {
+                            None
+                        };
                         (beat, under)
                     };
                     self.import_model_file(&path, drop_beat, layer_under_cursor);
@@ -2298,9 +2372,21 @@ impl Application {
         let mut updates = [None; 3];
         for (id, ws) in self.window_registry.iter() {
             let (destination, previous, index) = match ws.role {
-                WindowRole::Workspace if Some(*id) == self.graph_editor_window_id => (DisplayDestination::GraphEditor, Some(self.graph_display_capabilities), 2),
-                WindowRole::Workspace => (DisplayDestination::Workspace, Some(self.display_capabilities), 0),
-                WindowRole::Output { .. } => (DisplayDestination::Output, self.output_display_capabilities, 1),
+                WindowRole::Workspace if Some(*id) == self.graph_editor_window_id => (
+                    DisplayDestination::GraphEditor,
+                    Some(self.graph_display_capabilities),
+                    2,
+                ),
+                WindowRole::Workspace => (
+                    DisplayDestination::Workspace,
+                    Some(self.display_capabilities),
+                    0,
+                ),
+                WindowRole::Output { .. } => (
+                    DisplayDestination::Output,
+                    self.output_display_capabilities,
+                    1,
+                ),
             };
             let capabilities = crate::edr_surface::query_window_capabilities(&ws.window);
             if previous != Some(capabilities) {
@@ -2313,8 +2399,15 @@ impl Application {
                 DisplayDestination::Output => self.output_display_capabilities = Some(capabilities),
                 DisplayDestination::GraphEditor => self.graph_display_capabilities = capabilities,
             }
-            log::info!("[Display] {destination:?}: potential={:.2}x current={:.2}x", capabilities.potential().value(), capabilities.current().value());
-            self.send_content_cmd(ContentCommand::UpdateDisplayCapabilities { destination, capabilities });
+            log::info!(
+                "[Display] {destination:?}: potential={:.2}x current={:.2}x",
+                capabilities.potential().value(),
+                capabilities.current().value()
+            );
+            self.send_content_cmd(ContentCommand::UpdateDisplayCapabilities {
+                destination,
+                capabilities,
+            });
         }
 
         // Retarget CVDisplayLinks if windows moved to different displays.

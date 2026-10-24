@@ -13,12 +13,24 @@ use crate::scene::mesh_selection::MeshSelection;
 /// Authored source geometry description for mesh-producing nodes.
 #[derive(Clone, Debug, PartialEq)]
 pub enum MeshSource {
-    Cube { size: f32 },
-    Platonic { shape: u32, radius: f32 },
+    Cube {
+        size: f32,
+    },
+    Platonic {
+        shape: u32,
+        radius: f32,
+    },
     /// `node.plane_mesh`: the XY plane facing +Z, `width` by `height`.
-    Plane { width: f32, height: f32 },
+    Plane {
+        width: f32,
+        height: f32,
+    },
     /// `node.sphere_mesh`: a smooth UV sphere about the origin.
-    Sphere { radius: f32, segments: u32, rings: u32 },
+    Sphere {
+        radius: f32,
+        segments: u32,
+        rings: u32,
+    },
     /// A curve swept into a solid (`node.curve_solid_source`): the CPU
     /// mirror of the sweep and `node.make_triangles` the curve shape draws.
     Swept(Arc<SweptCurve>),
@@ -33,7 +45,12 @@ pub enum MeshSource {
     /// triangles, each split in four `detail` times so a shape with few
     /// triangles still breaks into `count`, partitioned as an imported
     /// mesh's pieces are ([`crate::scene::mesh_selection::select_fragment`]).
-    Fragment { of: Arc<MeshSource>, count: u32, index: u32, detail: u32 },
+    Fragment {
+        of: Arc<MeshSource>,
+        count: u32,
+        index: u32,
+        detail: u32,
+    },
 }
 
 /// The fewest triangles a piece is cut from, so a piece of a few-triangle
@@ -60,7 +77,8 @@ pub fn subdivide(mut vertices: Vec<MeshVertex>, levels: u32) -> Vec<MeshVertex> 
     for _ in 0..levels {
         let mid = |a: &MeshVertex, b: &MeshVertex| {
             let (a, b): (&[f32; 20], &[f32; 20]) = (bytemuck::cast_ref(a), bytemuck::cast_ref(b));
-            let mut m: MeshVertex = bytemuck::cast(std::array::from_fn::<f32, 20, _>(|k| (a[k] + b[k]) * 0.5));
+            let mut m: MeshVertex =
+                bytemuck::cast(std::array::from_fn::<f32, 20, _>(|k| (a[k] + b[k]) * 0.5));
             let length = m.normal.iter().map(|v| v * v).sum::<f32>().sqrt();
             if length > 0.0 {
                 m.normal = m.normal.map(|v| v / length);
@@ -83,11 +101,23 @@ pub fn subdivide(mut vertices: Vec<MeshVertex>, levels: u32) -> Vec<MeshVertex> 
 fn with_area(vertices: Vec<MeshVertex>) -> Vec<MeshVertex> {
     let area = |tri: &[MeshVertex]| {
         let [a, b, c] = [tri[0].position, tri[1].position, tri[2].position];
-        let (u, v) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
-        let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+        let (u, v) = (
+            [b[0] - a[0], b[1] - a[1], b[2] - a[2]],
+            [c[0] - a[0], c[1] - a[1], c[2] - a[2]],
+        );
+        let n = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ];
         n[0] * n[0] + n[1] * n[1] + n[2] * n[2]
     };
-    vertices.chunks_exact(3).filter(|tri| area(tri) > 0.0).flatten().copied().collect()
+    vertices
+        .chunks_exact(3)
+        .filter(|tri| area(tri) > 0.0)
+        .flatten()
+        .copied()
+        .collect()
 }
 
 impl MeshSource {
@@ -97,9 +127,18 @@ impl MeshSource {
     pub fn load_vertices(&self) -> Result<Vec<MeshVertex>, String> {
         let (shape, radius) = match self {
             Self::Plane { width, height } => return plane_vertices(*width, *height),
-            Self::Sphere { radius, segments, rings } => return sphere_vertices(*radius, *segments, *rings),
+            Self::Sphere {
+                radius,
+                segments,
+                rings,
+            } => return sphere_vertices(*radius, *segments, *rings),
             Self::Swept(curve) => return curve.load_vertices(),
-            Self::Fragment { of, count, index, detail } => {
+            Self::Fragment {
+                of,
+                count,
+                index,
+                detail,
+            } => {
                 let whole = subdivide(with_area(of.load_vertices()?), *detail);
                 return crate::scene::mesh_selection::select_fragment(whole, *count, *index);
             }
@@ -115,14 +154,19 @@ impl MeshSource {
                 }
                 (*shape, *radius)
             }
-            Self::Gltf { path, node_path, selection } => {
+            Self::Gltf {
+                path,
+                node_path,
+                selection,
+            } => {
                 if path.is_empty() {
                     return Err("mesh source has no file".into());
                 }
                 if selection.translate.iter().any(|value| !value.is_finite()) {
                     return Err("mesh source offsets must be finite".into());
                 }
-                if !(1..=manifold_foundation::mesh_partition::MAX_PIECES).contains(&selection.fragment_count)
+                if !(1..=manifold_foundation::mesh_partition::MAX_PIECES)
+                    .contains(&selection.fragment_count)
                     || selection.fragment_index >= selection.fragment_count
                     || selection.mesh < -1
                     || selection.primitive < -1
@@ -130,7 +174,8 @@ impl MeshSource {
                 {
                     return Err("mesh source has invalid selectors".into());
                 }
-                return selection.load_node(std::path::Path::new(path.as_ref()), node_path.as_deref());
+                return selection
+                    .load_node(std::path::Path::new(path.as_ref()), node_path.as_deref());
             }
         };
         if shape >= PLATONIC_SHAPES.len() as u32 {
@@ -164,9 +209,15 @@ fn plane_vertices(width: f32, height: f32) -> Result<Vec<MeshVertex>, String> {
         vertex.color = [1.0; 4];
         vertex
     };
-    Ok(vec![corner(-x, -y), corner(x, -y), corner(x, y), corner(-x, -y), corner(x, y), corner(-x, y)])
+    Ok(vec![
+        corner(-x, -y),
+        corner(x, -y),
+        corner(x, y),
+        corner(-x, -y),
+        corner(x, y),
+        corner(-x, y),
+    ])
 }
-
 
 /// The triangle-list vertex count of `node.sphere_mesh`: a cap fan at each
 /// pole and two triangles per quad between, `segments` around and `rings`
@@ -190,16 +241,28 @@ pub fn sphere_vertex(idx: u32, segments: u32, rings: u32, radius: f32) -> MeshVe
         [(0, s, true), (1, s + 1, false), (1, s, false)][corner as usize]
     } else if tri >= total - caps {
         let s = tri - (total - caps);
-        [(rings - 1, s, false), (rings - 1, s + 1, false), (rings, s, true)][corner as usize]
+        [
+            (rings - 1, s, false),
+            (rings - 1, s + 1, false),
+            (rings, s, true),
+        ][corner as usize]
     } else {
         let band = tri - caps;
         let quad = band / 2;
         let (r, s) = (1 + quad / segments, quad % segments);
-        let corners = if band.is_multiple_of(2) { [(r, s), (r, s + 1), (r + 1, s + 1)] } else { [(r, s), (r + 1, s + 1), (r + 1, s)] };
+        let corners = if band.is_multiple_of(2) {
+            [(r, s), (r, s + 1), (r + 1, s + 1)]
+        } else {
+            [(r, s), (r + 1, s + 1), (r + 1, s)]
+        };
         let (r, s) = corners[corner as usize];
         (r, s, false)
     };
-    let u = if pole { (seg as f32 + 0.5) / segments as f32 } else { seg as f32 / segments as f32 };
+    let u = if pole {
+        (seg as f32 + 0.5) / segments as f32
+    } else {
+        seg as f32 / segments as f32
+    };
     let v = ring as f32 / rings as f32;
     let phi = std::f32::consts::TAU * u;
     let theta = std::f32::consts::PI * v;
@@ -228,13 +291,18 @@ fn sphere_vertices(radius: f32, segments: u32, rings: u32) -> Result<Vec<MeshVer
     if segments < 3 || rings < 2 {
         return Err("a sphere needs at least 3 segments and 2 rings".into());
     }
-    Ok((0..sphere_vertex_count(segments, rings)).map(|idx| sphere_vertex(idx, segments, rings, radius)).collect())
+    Ok((0..sphere_vertex_count(segments, rings))
+        .map(|idx| sphere_vertex(idx, segments, rings, radius))
+        .collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{exec::backend::Backend, exec::backend::MockBackend, bindings::NodeInputs, bindings::NodeOutputs, ports::PortType, exec::execution_plan::ResourceId};
+    use crate::{
+        bindings::NodeInputs, bindings::NodeOutputs, exec::backend::Backend,
+        exec::backend::MockBackend, exec::execution_plan::ResourceId, ports::PortType,
+    };
 
     fn source() -> MeshSource {
         MeshSource::Gltf {
@@ -344,16 +412,32 @@ mod tests {
     #[test]
     fn mesh_source_sphere_is_closed_round_and_faces_out() {
         let (segments, rings, radius) = (12, 7, 0.5);
-        let vertices = MeshSource::Sphere { radius, segments, rings }.load_vertices().unwrap();
+        let vertices = MeshSource::Sphere {
+            radius,
+            segments,
+            rings,
+        }
+        .load_vertices()
+        .unwrap();
         assert_eq!(vertices.len() as u32, sphere_vertex_count(segments, rings));
         let key = |p: [f32; 3]| p.map(|v| (v * 1.0e4).round() as i64);
         let mut edges = std::collections::HashMap::new();
         for tri in vertices.chunks(3) {
             let [a, b, c] = [tri[0].position, tri[1].position, tri[2].position];
-            let (e1, e2) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
-            let n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+            let (e1, e2) = (
+                [b[0] - a[0], b[1] - a[1], b[2] - a[2]],
+                [c[0] - a[0], c[1] - a[1], c[2] - a[2]],
+            );
+            let n = [
+                e1[1] * e2[2] - e1[2] * e2[1],
+                e1[2] * e2[0] - e1[0] * e2[2],
+                e1[0] * e2[1] - e1[1] * e2[0],
+            ];
             let centre = [0, 1, 2].map(|k| (a[k] + b[k] + c[k]) / 3.0);
-            assert!(n.iter().zip(centre).map(|(n, c)| n * c).sum::<f32>() > 0.0, "a triangle faces in");
+            assert!(
+                n.iter().zip(centre).map(|(n, c)| n * c).sum::<f32>() > 0.0,
+                "a triangle faces in"
+            );
             for (from, to) in [(a, b), (b, c), (c, a)] {
                 *edges.entry((key(from), key(to))).or_insert(0) += 1;
             }
@@ -370,31 +454,43 @@ mod tests {
 
     #[test]
     fn mesh_source_rejects_invalid_dimensions_and_selectors() {
-        assert!(MeshSource::Sphere { radius: 1.0, segments: 2, rings: 4 }.load_vertices().is_err());
+        assert!(
+            MeshSource::Sphere {
+                radius: 1.0,
+                segments: 2,
+                rings: 4
+            }
+            .load_vertices()
+            .is_err()
+        );
         assert!(MeshSource::Cube { size: 0.0 }.load_vertices().is_err());
-        assert!(MeshSource::Platonic {
-            shape: PLATONIC_SHAPES.len() as u32,
-            radius: 1.0,
-        }
-        .load_vertices()
-        .is_err());
-        assert!(MeshSource::Gltf {
-            path: Arc::from("assets/mesh.glb"),
-            node_path: None,
-            selection: MeshSelection {
-                mesh: -1,
-                primitive: -1,
-                material: -1,
-                fit: false,
-                recenter: true,
-                translate: [0.0; 3],
-                fragment_count: 1,
-                fragment_index: 1,
-                own_space: false,
-            },
-        }
-        .load_vertices()
-        .is_err());
+        assert!(
+            MeshSource::Platonic {
+                shape: PLATONIC_SHAPES.len() as u32,
+                radius: 1.0,
+            }
+            .load_vertices()
+            .is_err()
+        );
+        assert!(
+            MeshSource::Gltf {
+                path: Arc::from("assets/mesh.glb"),
+                node_path: None,
+                selection: MeshSelection {
+                    mesh: -1,
+                    primitive: -1,
+                    material: -1,
+                    fit: false,
+                    recenter: true,
+                    translate: [0.0; 3],
+                    fragment_count: 1,
+                    fragment_index: 1,
+                    own_space: false,
+                },
+            }
+            .load_vertices()
+            .is_err()
+        );
     }
 
     #[test]
@@ -439,8 +535,15 @@ mod fragment_tests {
             .chunks_exact(3)
             .map(|tri| {
                 let [a, b, c] = [tri[0].position, tri[1].position, tri[2].position];
-                let (u, v) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
-                let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+                let (u, v) = (
+                    [b[0] - a[0], b[1] - a[1], b[2] - a[2]],
+                    [c[0] - a[0], c[1] - a[1], c[2] - a[2]],
+                );
+                let n = [
+                    u[1] * v[2] - u[2] * v[1],
+                    u[2] * v[0] - u[0] * v[2],
+                    u[0] * v[1] - u[1] * v[0],
+                ];
                 0.5 * (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt()
             })
             .sum()
@@ -452,18 +555,43 @@ mod fragment_tests {
     /// do not stop it breaking.
     #[test]
     fn a_few_triangle_shape_breaks_into_every_piece() {
-        for whole in [MeshSource::Platonic { shape: 0, radius: 1.0 }, MeshSource::Sphere { radius: 1.0, segments: 8, rings: 4 }] {
+        for whole in [
+            MeshSource::Platonic {
+                shape: 0,
+                radius: 1.0,
+            },
+            MeshSource::Sphere {
+                radius: 1.0,
+                segments: 8,
+                rings: 4,
+            },
+        ] {
             let triangles = (whole.load_vertices().unwrap().len() / 3) as u64;
             let count = 16;
             let detail = fragment_detail(triangles, count);
             let of = Arc::new(whole.clone());
             let pieces: Vec<Vec<MeshVertex>> = (0..count)
-                .map(|index| MeshSource::Fragment { of: Arc::clone(&of), count, index, detail }.load_vertices().unwrap())
+                .map(|index| {
+                    MeshSource::Fragment {
+                        of: Arc::clone(&of),
+                        count,
+                        index,
+                        detail,
+                    }
+                    .load_vertices()
+                    .unwrap()
+                })
                 .collect();
-            assert!(pieces.iter().all(|piece| !piece.is_empty()), "{whole:?}: an empty piece");
+            assert!(
+                pieces.iter().all(|piece| !piece.is_empty()),
+                "{whole:?}: an empty piece"
+            );
             let total: f32 = pieces.iter().map(|piece| area(piece)).sum();
             let surface = area(&whole.load_vertices().unwrap());
-            assert!((total - surface).abs() < 1e-3 * surface, "{whole:?}: pieces cover {total}, surface {surface}");
+            assert!(
+                (total - surface).abs() < 1e-3 * surface,
+                "{whole:?}: pieces cover {total}, surface {surface}"
+            );
         }
         assert_eq!(fragment_detail(4, 16), 2);
         assert_eq!(fragment_detail(10_000, 16), 0, "a dense mesh is not split");

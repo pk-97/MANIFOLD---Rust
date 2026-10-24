@@ -48,7 +48,10 @@ impl FrameRenderStatus {
     /// so live keeps presenting it and surfaces the error; only export
     /// rejects it.
     pub fn presentable(self) -> bool {
-        matches!(self, Self::Complete | Self::Failed(FrameRenderFailure::NodeError))
+        matches!(
+            self,
+            Self::Complete | Self::Failed(FrameRenderFailure::NodeError)
+        )
     }
 
     /// Fold `next` into `self`: failure beats pending beats complete; the
@@ -87,7 +90,9 @@ mod tests {
             FrameRenderStatus::Failed(FrameRenderFailure::RtEncode)
         );
         // First failure wins over a later one.
-        status.merge(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
+        status.merge(FrameRenderStatus::Failed(
+            FrameRenderFailure::InvalidGeometry,
+        ));
         assert_eq!(
             status,
             FrameRenderStatus::Failed(FrameRenderFailure::RtEncode)
@@ -102,8 +107,14 @@ mod tests {
         // A specific reason replaces the generic node error, never the reverse.
         let mut node = FrameRenderStatus::Failed(FrameRenderFailure::NodeError);
         node.merge(FrameRenderStatus::Failed(FrameRenderFailure::Simulation));
-        assert_eq!(node, FrameRenderStatus::Failed(FrameRenderFailure::Simulation));
+        assert_eq!(
+            node,
+            FrameRenderStatus::Failed(FrameRenderFailure::Simulation)
+        );
         node.merge(FrameRenderStatus::Failed(FrameRenderFailure::NodeError));
-        assert_eq!(node, FrameRenderStatus::Failed(FrameRenderFailure::Simulation));
+        assert_eq!(
+            node,
+            FrameRenderStatus::Failed(FrameRenderFailure::Simulation)
+        );
     }
 }

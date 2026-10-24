@@ -18,15 +18,14 @@ use manifold_gpu::raytrace::{
     ShadowRayTracer, ensure_normal_sources,
 };
 use manifold_gpu::{GpuBuffer, GpuDevice, GpuTextureFormat};
-use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::{parameters::ParamValue, persistence::PrimitiveRegistry};
-use manifold_node_engine::runtime::preset_context::PresetContext;
-use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::{parameters::ParamValue, persistence::PrimitiveRegistry};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-
 
 const WARMUP_FRAMES: usize = 16;
 const MEASURED_FRAMES: usize = 120;
@@ -143,7 +142,9 @@ fn small_triangle(device: &GpuDevice) -> GpuBuffer {
 }
 
 fn object<'a>(buffer: &'a GpuBuffer, triangles: u32) -> RtObjectGeometry<'a> {
-    RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+    RtObjectGeometry {
+        instance_inner: RtObjectGeometry::NO_INNER,
+        material_attributes: Default::default(),
         vertex_buffer: buffer,
         vertex_stride: VERTEX_STRIDE,
         vertex_offset: 0,

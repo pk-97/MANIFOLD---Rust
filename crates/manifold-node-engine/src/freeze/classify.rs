@@ -179,7 +179,10 @@ pub enum FusedOutputCapacity {
     /// pre-read at `[idx]`, so the region clamps its count by that
     /// external's length. `plus` is added to each rounded param first: a
     /// face grid holds `(nodes + 1)` per axis.
-    ParamProduct { params: &'static [&'static str], plus: u32 },
+    ParamProduct {
+        params: &'static [&'static str],
+        plus: u32,
+    },
 }
 
 /// A region output's capacity expression over the ARRAY external slots,
@@ -240,7 +243,9 @@ impl CapacityExpr {
             CapacityExpr::Slot(_) => false,
             CapacityExpr::Param(_) => true,
             CapacityExpr::Mul(_, x) | CapacityExpr::Add(_, x) => x.reads_params(),
-            CapacityExpr::Min(v) | CapacityExpr::Product(v) => v.iter().any(CapacityExpr::reads_params),
+            CapacityExpr::Min(v) | CapacityExpr::Product(v) => {
+                v.iter().any(CapacityExpr::reads_params)
+            }
         }
     }
 
@@ -286,15 +291,27 @@ impl CapacityExpr {
         } else if let Some(rest) = text.strip_prefix("par(") {
             let (field, rest) = rest.split_once(')')?;
             let field = field.trim();
-            let identifier = !field.is_empty() && field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            let identifier =
+                !field.is_empty() && field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
             identifier.then(|| (CapacityExpr::Param(field.to_string()), rest))
-        } else if let Some((add, rest)) = text.strip_prefix("mul(").map(|r| (false, r)).or_else(|| text.strip_prefix("add(").map(|r| (true, r))) {
+        } else if let Some((add, rest)) = text
+            .strip_prefix("mul(")
+            .map(|r| (false, r))
+            .or_else(|| text.strip_prefix("add(").map(|r| (true, r)))
+        {
             let (f_str, rest) = rest.split_once(',')?;
             let factor: u32 = f_str.trim().parse().ok()?;
             let (child, rest) = Self::parse_payload_node(rest)?;
             let rest = rest.trim_start().strip_prefix(')')?;
             let child = Box::new(child);
-            Some((if add { CapacityExpr::Add(factor, child) } else { CapacityExpr::Mul(factor, child) }, rest))
+            Some((
+                if add {
+                    CapacityExpr::Add(factor, child)
+                } else {
+                    CapacityExpr::Mul(factor, child)
+                },
+                rest,
+            ))
         } else if let Some(rest) = text.strip_prefix('s') {
             let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
             if digits.is_empty() {
@@ -336,12 +353,17 @@ impl CapacityExpr {
     /// `None` when a param is missing, not a Float, or not finite.
     pub fn eval_with(&self, input_capacities: &[(&str, u32)], params: &ParamValues) -> Option<u32> {
         let all = |v: &[CapacityExpr]| -> Option<Vec<u32>> {
-            v.iter().map(|e| e.eval_with(input_capacities, params)).collect()
+            v.iter()
+                .map(|e| e.eval_with(input_capacities, params))
+                .collect()
         };
         match self {
             CapacityExpr::Slot(n) => {
                 let name = format!("src_{n}");
-                input_capacities.iter().find(|(p, _)| *p == name).map(|(_, c)| *c)
+                input_capacities
+                    .iter()
+                    .find(|(p, _)| *p == name)
+                    .map(|(_, c)| *c)
             }
             CapacityExpr::Mul(f, x) => x.eval_with(input_capacities, params)?.checked_mul(*f),
             CapacityExpr::Add(n, x) => x.eval_with(input_capacities, params)?.checked_add(*n),
@@ -545,48 +567,80 @@ mod tests {
         use crate::exec::effect_node::ParamValues;
         use crate::parameters::ParamValue;
 
-        let lattice = CapacityExpr::Product(["n0_nodes_x", "n0_nodes_y", "n0_nodes_z"].map(|f| CapacityExpr::Param(f.to_string())).to_vec());
+        let lattice = CapacityExpr::Product(
+            ["n0_nodes_x", "n0_nodes_y", "n0_nodes_z"]
+                .map(|f| CapacityExpr::Param(f.to_string()))
+                .to_vec(),
+        );
         let clamped = CapacityExpr::Min(vec![lattice.clone(), CapacityExpr::Slot(1)]);
         assert_eq!(
             clamped.to_wgsl(),
             "min((u32(max(round(params.n0_nodes_x), 0.0)) * u32(max(round(params.n0_nodes_y), 0.0)) * u32(max(round(params.n0_nodes_z), 0.0))), arrayLength(&src_1))"
         );
         let payload = clamped.to_marker_payload();
-        assert_eq!(payload, "min(prod(par(n0_nodes_x),par(n0_nodes_y),par(n0_nodes_z)),s1)");
-        assert_eq!(CapacityExpr::parse_marker_payload(&payload), Some(clamped.clone()));
+        assert_eq!(
+            payload,
+            "min(prod(par(n0_nodes_x),par(n0_nodes_y),par(n0_nodes_z)),s1)"
+        );
+        assert_eq!(
+            CapacityExpr::parse_marker_payload(&payload),
+            Some(clamped.clone())
+        );
         assert_eq!(CapacityExpr::parse_marker_payload("par(n0 x)"), None);
         assert_eq!(CapacityExpr::parse_marker_payload("prod(par(a),"), None);
 
         let params = |x: f32, y: f32, z: f32| -> ParamValues {
-            [("n0_nodes_x", x), ("n0_nodes_y", y), ("n0_nodes_z", z)].into_iter().map(|(k, v)| (k.into(), ParamValue::Float(v))).collect()
+            [("n0_nodes_x", x), ("n0_nodes_y", y), ("n0_nodes_z", z)]
+                .into_iter()
+                .map(|(k, v)| (k.into(), ParamValue::Float(v)))
+                .collect()
         };
         assert_eq!(lattice.eval_with(&[], &params(64.0, 32.0, 2.0)), Some(4096));
-        assert_eq!(lattice.eval_with(&[], &params(64.5, 1.0, 1.0)), Some(64), "half to even, as WGSL rounds");
+        assert_eq!(
+            lattice.eval_with(&[], &params(64.5, 1.0, 1.0)),
+            Some(64),
+            "half to even, as WGSL rounds"
+        );
         assert_eq!(lattice.eval_with(&[], &params(-3.0, 1.0, 1.0)), Some(0));
         assert_eq!(lattice.eval_with(&[], &params(f32::NAN, 1.0, 1.0)), None);
-        assert_eq!(lattice.eval_with(&[], &params(65536.0, 65536.0, 1.0)), None, "overflow");
-        assert_eq!(clamped.eval_with(&[("src_1", 100)], &params(64.0, 64.0, 64.0)), Some(100));
+        assert_eq!(
+            lattice.eval_with(&[], &params(65536.0, 65536.0, 1.0)),
+            None,
+            "overflow"
+        );
+        assert_eq!(
+            clamped.eval_with(&[("src_1", 100)], &params(64.0, 64.0, 64.0)),
+            Some(100)
+        );
         assert_eq!(lattice.eval(&[]), None, "no params, no lattice");
 
         // A face grid: one more than the lattice per axis.
         let padded = CapacityExpr::Product(
-            ["n0_nodes_x", "n0_nodes_y", "n0_nodes_z"].map(|f| CapacityExpr::Add(1, Box::new(CapacityExpr::Param(f.to_string())))).to_vec(),
+            ["n0_nodes_x", "n0_nodes_y", "n0_nodes_z"]
+                .map(|f| CapacityExpr::Add(1, Box::new(CapacityExpr::Param(f.to_string()))))
+                .to_vec(),
         );
-        assert!(padded.to_wgsl().starts_with("((1u + u32(max(round(params.n0_nodes_x), 0.0))) * "));
+        assert!(
+            padded
+                .to_wgsl()
+                .starts_with("((1u + u32(max(round(params.n0_nodes_x), 0.0))) * ")
+        );
         let payload = padded.to_marker_payload();
-        assert_eq!(payload, "prod(add(1,par(n0_nodes_x)),add(1,par(n0_nodes_y)),add(1,par(n0_nodes_z)))");
-        assert_eq!(CapacityExpr::parse_marker_payload(&payload), Some(padded.clone()));
+        assert_eq!(
+            payload,
+            "prod(add(1,par(n0_nodes_x)),add(1,par(n0_nodes_y)),add(1,par(n0_nodes_z)))"
+        );
+        assert_eq!(
+            CapacityExpr::parse_marker_payload(&payload),
+            Some(padded.clone())
+        );
         assert_eq!(padded.eval_with(&[], &params(4.0, 3.0, 2.0)), Some(60));
-        assert_eq!(CapacityExpr::Add(1, Box::new(CapacityExpr::Slot(0))).eval(&[("src_0", u32::MAX)]), None, "overflow");
+        assert_eq!(
+            CapacityExpr::Add(1, Box::new(CapacityExpr::Slot(0))).eval(&[("src_0", u32::MAX)]),
+            None,
+            "overflow"
+        );
     }
-
-
-
-
-
-
-
-
 
     #[test]
     fn default_is_boundary() {
@@ -603,12 +657,18 @@ mod tests {
         let g = Gain::new();
         let node: &dyn EffectNode = &g;
         assert_eq!(node.fusion_kind(), FusionKind::Pointwise);
-        let body = node.wgsl_body().expect("converted gain exposes a fusable body");
-        assert!(body.contains("fn body"), "body fragment must define `fn body`");
-        assert!(body.contains("gain"), "gain body must reference the gain param");
+        let body = node
+            .wgsl_body()
+            .expect("converted gain exposes a fusable body");
+        assert!(
+            body.contains("fn body"),
+            "body fragment must define `fn body`"
+        );
+        assert!(
+            body.contains("gain"),
+            "gain body must reference the gain param"
+        );
     }
-
-
 
     /// `BufferIndex` is gather-shaped for the region-grower's
     /// "never unions a gather-consumed wire" contract, same as `Gather` /
@@ -618,8 +678,4 @@ mod tests {
         use super::InputAccess;
         assert!(InputAccess::BufferIndex.is_gather());
     }
-
-
-
-
 }

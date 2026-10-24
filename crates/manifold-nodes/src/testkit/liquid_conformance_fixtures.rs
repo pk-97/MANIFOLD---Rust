@@ -1,19 +1,22 @@
 //! Authored preset fixtures for the liquid conformance suite.
-use manifold_nodes_water::testkit::conformance::testkit::{G, liquid_totals, matter_totals, matter_faces, set_fill_param};
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{
-    BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
+    BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire,
+    SerializedParamValue,
 };
 use manifold_core::id::NodeId;
-use manifold_core::liquid_domain::{MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID};
+use manifold_core::liquid_domain::{GPU_FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
+use manifold_nodes_water::testkit::conformance::testkit::{
+    G, liquid_totals, matter_faces, matter_totals, set_fill_param,
+};
 
 use crate::engine_scenes::scene_def;
 use manifold_node_engine::particles::FluidParticle;
-use manifold_water_gpu_mpm::matter::{MatterPoint, STATS_WORDS};
-use manifold_nodes_water::testkit::face_grid_scenes::matter_dam_break_faces;
-use manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS;
-use manifold_water_gpu_mpm::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
 use manifold_nodes_water::presets::gpu_flip::{SHIPPED_PRESET, WaterScene, render_def};
+use manifold_nodes_water::testkit::face_grid_scenes::matter_dam_break_faces;
+use manifold_water_gpu_mpm::matter::{MatterPoint, STATS_WORDS};
+use manifold_water_gpu_mpm::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
+use manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS;
 use manifold_water_whitewater::primitives::whitewater_step::WHITEWATER_STEP_SHADER;
 
 use manifold_nodes_water::testkit::conformance::*;
@@ -39,7 +42,11 @@ const MPM_FLOATS_LOW: &str = "BUG-28j99 (MPM floats boxes about 3.5 cm low and d
      the old impulse handoff, which pushed floating bodies up";
 
 const fn known(check: Check, miss: &'static str, reason: &'static str) -> KnownRed {
-    KnownRed { check, miss, reason }
+    KnownRed {
+        check,
+        miss,
+        reason,
+    }
 }
 
 pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
@@ -54,15 +61,32 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             RefusalCase {
                 what: "Resolution 256 on Dam Break Matter at the default Grid Budget",
                 fixture: Fixture::DamBreak,
-                edit: |def| set_type_param(def, MATTER_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 256 }),
+                edit: |def| {
+                    set_type_param(
+                        def,
+                        MATTER_DOMAIN_TYPE_ID,
+                        "resolution",
+                        SerializedParamValue::Int { value: 256 },
+                    )
+                },
                 names: &["grid_budget_mcells", "resolution"],
             },
             RefusalCase {
                 what: "Particles per Cell 27 at Resolution 176 on Still Pool Matter",
                 fixture: Fixture::StillPool,
                 edit: |def| {
-                    set_type_param(def, MATTER_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 176 });
-                    set_type_param(def, MATTER_DOMAIN_TYPE_ID, "points_per_cell", SerializedParamValue::Enum { value: 1 });
+                    set_type_param(
+                        def,
+                        MATTER_DOMAIN_TYPE_ID,
+                        "resolution",
+                        SerializedParamValue::Int { value: 176 },
+                    );
+                    set_type_param(
+                        def,
+                        MATTER_DOMAIN_TYPE_ID,
+                        "points_per_cell",
+                        SerializedParamValue::Enum { value: 1 },
+                    );
                 },
                 names: &["resolution", "points_per_cell"],
             },
@@ -87,7 +111,14 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
         overflow: Some(OverflowCase {
             what: "Mesh Capacity 3 on Dam Break Matter's liquid surface",
             fixture: Fixture::DamBreak,
-            edit: |def| set_type_param(def, "node.volume_surface_mesh", "max_capacity", SerializedParamValue::Int { value: 3 }),
+            edit: |def| {
+                set_type_param(
+                    def,
+                    "node.volume_surface_mesh",
+                    "max_capacity",
+                    SerializedParamValue::Int { value: 3 },
+                )
+            },
             names: &["Mesh Capacity"],
         }),
         faces: Some(FaceSource {
@@ -119,7 +150,14 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             RefusalCase {
                 what: "Resolution 256 on Dam Break GPU FLIP: more particles than a count carries exactly",
                 fixture: Fixture::DamBreak,
-                edit: |def| set_type_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 256 }),
+                edit: |def| {
+                    set_type_param(
+                        def,
+                        GPU_FLIP_DOMAIN_TYPE_ID,
+                        "resolution",
+                        SerializedParamValue::Int { value: 256 },
+                    )
+                },
                 names: &["resolution", "fill_height"],
             },
             RefusalCase {
@@ -143,7 +181,14 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
         overflow: Some(OverflowCase {
             what: "Mesh Capacity 3 on Dam Break GPU FLIP's liquid surface",
             fixture: Fixture::DamBreak,
-            edit: |def| set_type_param(def, "node.volume_surface_mesh", "max_capacity", SerializedParamValue::Int { value: 3 }),
+            edit: |def| {
+                set_type_param(
+                    def,
+                    "node.volume_surface_mesh",
+                    "max_capacity",
+                    SerializedParamValue::Int { value: 3 },
+                )
+            },
             names: &["Mesh Capacity"],
         }),
         faces: Some(FaceSource {
@@ -170,7 +215,6 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
     },
 ];
 
-
 /// GPU FLIP's scenes in the render graph the app shows: the pool scenes at
 /// the 64³ lattice its solver is built for, the box scenes at their own. A
 /// scene that asks for open faces keeps them closed: its walls stay in the
@@ -180,7 +224,9 @@ fn gpu_flip_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
     match fixture {
         Fixture::DamBreak => Some(bundled(SHIPPED_PRESET)),
         Fixture::StillPool => Some(render_def(WaterScene::still_pool(64))),
-        Fixture::FaceGrid => Some(render_def(WaterScene::dam_break(FACE_GRID_RESOLUTION as usize).with_faces())),
+        Fixture::FaceGrid => Some(render_def(
+            WaterScene::dam_break(FACE_GRID_RESOLUTION as usize).with_faces(),
+        )),
         Fixture::Collision { .. }
         | Fixture::FloatingBox
         | Fixture::SubmergedBox
@@ -188,8 +234,15 @@ fn gpu_flip_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
         | Fixture::Resting { .. }
         | Fixture::Stack => {
             let scene = BoxScene::of(fixture)?;
-            let water = WaterScene::pool(scene.resolution as usize, f64::from(scene.domain_size), f64::from(scene.fill));
-            Some(scene.test_stacked(fixture, scene.test_set(with_box(render_def(water)), GPU_FLIP_DOMAIN_TYPE_ID)))
+            let water = WaterScene::pool(
+                scene.resolution as usize,
+                f64::from(scene.domain_size),
+                f64::from(scene.fill),
+            );
+            Some(scene.test_stacked(
+                fixture,
+                scene.test_set(with_box(render_def(water)), GPU_FLIP_DOMAIN_TYPE_ID),
+            ))
         }
     }
 }
@@ -217,8 +270,15 @@ pub fn gpu_flip_engine_tank_moved(shift: f32) -> (EffectGraphDef, BoxScene) {
         edge,
         mass: FIXTURE_DENSITY * edge.powi(3),
     };
-    let water = WaterScene::pool(scene.resolution as usize, f64::from(scene.domain_size), f64::from(scene.fill));
-    (scene.test_set(with_box(render_def(water)), GPU_FLIP_DOMAIN_TYPE_ID), scene)
+    let water = WaterScene::pool(
+        scene.resolution as usize,
+        f64::from(scene.domain_size),
+        f64::from(scene.fill),
+    );
+    (
+        scene.test_set(with_box(render_def(water)), GPU_FLIP_DOMAIN_TYPE_ID),
+        scene,
+    )
 }
 /// The engine's tank with `count` cubes of edge 0.2 m and half the water's
 /// density in one Physics World of `count` bodies, five by five per layer,
@@ -229,28 +289,69 @@ pub fn gpu_flip_box_grid(count: u32) -> EffectGraphDef {
     let (mut def, _) = gpu_flip_engine_tank();
     let float = |value: f32| SerializedParamValue::Float { value };
     let id_of = |def: &EffectGraphDef, name: &str| {
-        def.nodes.iter().find(|node| node.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}")).id
+        def.nodes
+            .iter()
+            .find(|node| node.node_id.as_str() == name)
+            .unwrap_or_else(|| panic!("no node {name}"))
+            .id
     };
-    let [start, body, object, world, scene, mesh, material] =
-        ["box_start", "box_body", "box_object", "box_world", "scene", "box_mesh", "box_material"].map(|name| id_of(&def, name));
-    let objects = match def.nodes.iter().find(|node| node.id == scene).and_then(|node| node.params.get("objects")) {
+    let [start, body, object, world, scene, mesh, material] = [
+        "box_start",
+        "box_body",
+        "box_object",
+        "box_world",
+        "scene",
+        "box_mesh",
+        "box_material",
+    ]
+    .map(|name| id_of(&def, name));
+    let objects = match def
+        .nodes
+        .iter()
+        .find(|node| node.id == scene)
+        .and_then(|node| node.params.get("objects"))
+    {
         Some(SerializedParamValue::Float { value }) => *value as u32,
         Some(SerializedParamValue::Int { value }) => *value as u32,
         other => panic!("the tank's render scene has no object count: {other:?}"),
     };
-    let world_node = def.nodes.iter_mut().find(|node| node.id == world).expect("the box world");
-    world_node.params.insert("bodies".into(), SerializedParamValue::Int { value: count as i32 });
-    let mut next = def.nodes.iter().map(|node| node.id).max().expect("a scene has nodes") + 1;
+    let world_node = def
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == world)
+        .expect("the box world");
+    world_node.params.insert(
+        "bodies".into(),
+        SerializedParamValue::Int {
+            value: count as i32,
+        },
+    );
+    let mut next = def
+        .nodes
+        .iter()
+        .map(|node| node.id)
+        .max()
+        .expect("a scene has nodes")
+        + 1;
     for k in 1..count {
         let clone = |def: &EffectGraphDef, id: u32, new: u32, name: &str| EffectGraphNode {
             id: new,
             node_id: NodeId::new(format!("{name}_{k}")),
             handle: Some(format!("{name}_{k}")),
-            ..def.nodes.iter().find(|node| node.id == id).expect("box node").clone()
+            ..def
+                .nodes
+                .iter()
+                .find(|node| node.id == id)
+                .expect("box node")
+                .clone()
         };
         let (start_k, body_k, object_k) = (next, next + 1, next + 2);
         next += 3;
-        let nodes = [clone(&def, start, start_k, "box_start"), clone(&def, body, body_k, "box_body"), clone(&def, object, object_k, "box_object")];
+        let nodes = [
+            clone(&def, start, start_k, "box_start"),
+            clone(&def, body, body_k, "box_body"),
+            clone(&def, object, object_k, "box_object"),
+        ];
         def.nodes.extend(nodes);
         let wire = |from_node, from_port: &str, to_node, to_port: &str| EffectGraphWire {
             from_node,
@@ -265,25 +366,65 @@ pub fn gpu_flip_box_grid(count: u32) -> EffectGraphDef {
             wire(body_k, "pose", object_k, "transform"),
             wire(mesh, "vertices", object_k, "vertices"),
             wire(material, "out", object_k, "material"),
-            wire(object_k, "object", scene, &format!("object_{}", objects - 1 + k)),
+            wire(
+                object_k,
+                "object",
+                scene,
+                &format!("object_{}", objects - 1 + k),
+            ),
         ]);
     }
-    let render = def.nodes.iter_mut().find(|node| node.id == scene).expect("the render scene");
-    render.params.insert("objects".into(), float((objects - 1 + count) as f32));
+    let render = def
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == scene)
+        .expect("the render scene");
+    render
+        .params
+        .insert("objects".into(), float((objects - 1 + count) as f32));
     for k in 0..count {
-        let suffix = if k == 0 { String::new() } else { format!("_{k}") };
+        let suffix = if k == 0 {
+            String::new()
+        } else {
+            format!("_{k}")
+        };
         let at = |i: u32| -0.9 + 0.45 * (i % 5) as f32;
         let centre = [at(k), 0.3 + 0.3 * (k / 25) as f32, at(k / 5)];
         for (axis, i) in [("x", 0), ("y", 1), ("z", 2)] {
-            set_node_param(&mut def, &format!("box_start{suffix}"), &format!("pos_{axis}"), float(centre[i]));
-            set_node_param(&mut def, &format!("box_start{suffix}"), &format!("rot_{axis}"), float(0.0));
-            set_node_param(&mut def, &format!("box_start{suffix}"), &format!("scale_{axis}"), float(edge / manifold_water_liquid::testkit::CUBE_EDGE_PER_SCALE));
+            set_node_param(
+                &mut def,
+                &format!("box_start{suffix}"),
+                &format!("pos_{axis}"),
+                float(centre[i]),
+            );
+            set_node_param(
+                &mut def,
+                &format!("box_start{suffix}"),
+                &format!("rot_{axis}"),
+                float(0.0),
+            );
+            set_node_param(
+                &mut def,
+                &format!("box_start{suffix}"),
+                &format!("scale_{axis}"),
+                float(edge / manifold_water_liquid::testkit::CUBE_EDGE_PER_SCALE),
+            );
         }
-        set_node_param(&mut def, &format!("box_body{suffix}"), "mass", float(0.5 * FIXTURE_DENSITY * edge.powi(3)));
+        set_node_param(
+            &mut def,
+            &format!("box_body{suffix}"),
+            "mass",
+            float(0.5 * FIXTURE_DENSITY * edge.powi(3)),
+        );
     }
     // The water's surface wraps every cube; sized up front, the first frame
     // draws it rather than growing the buffer.
-    set_type_param(&mut def, "node.volume_surface_mesh", "max_capacity", SerializedParamValue::Int { value: 262_144 });
+    set_type_param(
+        &mut def,
+        "node.volume_surface_mesh",
+        "max_capacity",
+        SerializedParamValue::Int { value: 262_144 },
+    );
     def
 }
 
@@ -304,7 +445,10 @@ pub fn gpu_flip_dam_break_with_box(density_ratio: f32) -> (EffectGraphDef, BoxSc
         edge,
         mass: density_ratio * FIXTURE_DENSITY * edge.powi(3),
     };
-    (scene.test_set(with_box(render_def(water)), GPU_FLIP_DOMAIN_TYPE_ID), scene)
+    (
+        scene.test_set(with_box(render_def(water)), GPU_FLIP_DOMAIN_TYPE_ID),
+        scene,
+    )
 }
 /// `def` with [`BOX_PRESET`]'s box in its render scene, which pairs the
 /// box's world with the scene's liquid, and the Speed card on the world too.
@@ -312,7 +456,13 @@ pub fn gpu_flip_dam_break_with_box(density_ratio: f32) -> (EffectGraphDef, BoxSc
 /// Object does (the editing finder is not linkable from the renderer lib).
 fn with_box(mut def: EffectGraphDef) -> EffectGraphDef {
     let source = bundled(BOX_PRESET);
-    let next = def.nodes.iter().map(|node| node.id).max().expect("a scene has nodes") + 1;
+    let next = def
+        .nodes
+        .iter()
+        .map(|node| node.id)
+        .max()
+        .expect("a scene has nodes")
+        + 1;
     let moved: Vec<(u32, u32)> = source
         .nodes
         .iter()
@@ -321,7 +471,12 @@ fn with_box(mut def: EffectGraphDef) -> EffectGraphDef {
         .map(|(node, id)| (node.id, id))
         .collect();
     assert_eq!(moved.len(), BOX_NODES.len(), "{BOX_PRESET} holds the box");
-    let new_id = |id: u32| moved.iter().find(|(old, _)| *old == id).map(|(_, new)| *new);
+    let new_id = |id: u32| {
+        moved
+            .iter()
+            .find(|(old, _)| *old == id)
+            .map(|(_, new)| *new)
+    };
     for node in &source.nodes {
         if let Some(id) = new_id(node.id) {
             def.nodes.push(EffectGraphNode { id, ..node.clone() });
@@ -329,26 +484,57 @@ fn with_box(mut def: EffectGraphDef) -> EffectGraphDef {
     }
     for wire in &source.wires {
         if let (Some(from_node), Some(to_node)) = (new_id(wire.from_node), new_id(wire.to_node)) {
-            def.wires.push(EffectGraphWire { from_node, to_node, ..wire.clone() });
+            def.wires.push(EffectGraphWire {
+                from_node,
+                to_node,
+                ..wire.clone()
+            });
         }
     }
     let id_of = |def: &EffectGraphDef, name: &str| {
-        def.nodes.iter().find(|node| node.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}")).id
+        def.nodes
+            .iter()
+            .find(|node| node.node_id.as_str() == name)
+            .unwrap_or_else(|| panic!("no node {name}"))
+            .id
     };
     let (object, scene) = (id_of(&def, "box_object"), id_of(&def, "scene"));
-    let slot = match def.nodes.iter().find(|node| node.id == scene).and_then(|node| node.params.get("objects")) {
+    let slot = match def
+        .nodes
+        .iter()
+        .find(|node| node.id == scene)
+        .and_then(|node| node.params.get("objects"))
+    {
         Some(SerializedParamValue::Float { value }) => *value as u32,
         Some(SerializedParamValue::Int { value }) => *value as u32,
-        other => panic!("{SHIPPED_PRESET}'s render scene has no object count for the box: {other:?}"),
+        other => {
+            panic!("{SHIPPED_PRESET}'s render scene has no object count for the box: {other:?}")
+        }
     };
     let port = format!("object_{slot}");
     assert!(
-        !def.wires.iter().any(|wire| wire.to_node == scene && wire.to_port == port),
+        !def.wires
+            .iter()
+            .any(|wire| wire.to_node == scene && wire.to_port == port),
         "{SHIPPED_PRESET}'s render scene has no free object slot for the box: {port} is taken"
     );
-    def.wires.push(EffectGraphWire { from_node: object, from_port: "object".into(), to_node: scene, to_port: port });
-    let render = def.nodes.iter_mut().find(|node| node.id == scene).expect("the render scene");
-    render.params.insert("objects".into(), SerializedParamValue::Float { value: (slot + 1) as f32 });
+    def.wires.push(EffectGraphWire {
+        from_node: object,
+        from_port: "object".into(),
+        to_node: scene,
+        to_port: port,
+    });
+    let render = def
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == scene)
+        .expect("the render scene");
+    render.params.insert(
+        "objects".into(),
+        SerializedParamValue::Float {
+            value: (slot + 1) as f32,
+        },
+    );
     let metadata = def.preset_metadata.as_mut().expect("the render's cards");
     let speed = metadata
         .bindings
@@ -357,18 +543,26 @@ fn with_box(mut def: EffectGraphDef) -> EffectGraphDef {
         .expect("the render's Speed card")
         .clone();
     metadata.bindings.push(BindingDef {
-        target: BindingTarget::Node { node_id: NodeId::new("box_world"), param: "speed".into() },
+        target: BindingTarget::Node {
+            node_id: NodeId::new("box_world"),
+            param: "speed".into(),
+        },
         ..speed
     });
     def
 }
 fn matter_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
     Some(match BoxScene::of(fixture) {
-        Some(scene) => scene.test_stacked(fixture, scene.apply(bundled("WaterFloatingBoxMatter"), MATTER_DOMAIN_TYPE_ID)),
+        Some(scene) => scene.test_stacked(
+            fixture,
+            scene.apply(bundled("WaterFloatingBoxMatter"), MATTER_DOMAIN_TYPE_ID),
+        ),
         None if fixture == Fixture::StillPool => bundled("WaterStillPoolMatter"),
         None if fixture == Fixture::FaceGrid => {
             let mut def = matter_dam_break_faces(None);
-            let resolution = SerializedParamValue::Int { value: FACE_GRID_RESOLUTION as i32 };
+            let resolution = SerializedParamValue::Int {
+                value: FACE_GRID_RESOLUTION as i32,
+            };
             set_type_param(&mut def, MATTER_DOMAIN_TYPE_ID, "resolution", resolution);
             def
         }
@@ -385,24 +579,30 @@ fn bundled(id: &'static str) -> EffectGraphDef {
 const BOX_PRESET: &str = "WaterFloatingBoxMatter";
 
 /// The preset's Box3D world, the box's start, body and drawn object.
-const BOX_NODES: [&str; 6] = ["box_world", "box_start", "box_body", "box_mesh", "box_material", "box_object"];
+const BOX_NODES: [&str; 6] = [
+    "box_world",
+    "box_start",
+    "box_body",
+    "box_mesh",
+    "box_material",
+    "box_object",
+];
 #[cfg(test)]
 mod tests {
 
     use super::*;
-    use manifold_node_engine::exec::extent::{ExtentError};
-use manifold_nodes_water::testkit::preset_extents::LiquidPreset;
-    use manifold_node_engine::persistence::PrimitiveRegistry;
     use manifold_core::liquid_domain::{LIQUID_DOMAIN_TYPE_IDS, is_liquid_domain};
+    use manifold_node_engine::exec::extent::ExtentError;
+    use manifold_node_engine::persistence::PrimitiveRegistry;
+    use manifold_nodes_water::testkit::preset_extents::LiquidPreset;
 
     /// The GPU runs no matter scene above resolution 64 until BUG-gwe4
     /// (staged GPU check above res 64) closes.
     const GPU_FIXTURE_RESOLUTION: u32 = 64;
 
-
-
     fn build(row: &LiquidSolverRow, fixture: Fixture, def: &EffectGraphDef) -> LiquidPreset {
-        LiquidPreset::build(def).unwrap_or_else(|error| panic!("{} {fixture:?}: {error}", row.type_id))
+        LiquidPreset::build(def)
+            .unwrap_or_else(|error| panic!("{} {fixture:?}: {error}", row.type_id))
     }
 
     fn conformance_registry() -> PrimitiveRegistry {
@@ -414,13 +614,21 @@ use manifold_nodes_water::testkit::preset_extents::LiquidPreset;
     #[test]
     fn box_grid_pairs_every_cube_with_the_liquid() {
         let def = gpu_flip_box_grid(100);
-        let bindings = manifold_nodes_water::graph_install::coupling::prepare_coupled_scenes(&def, &conformance_registry())
-            .expect("the tank pairs");
+        let bindings = manifold_nodes_water::graph_install::coupling::prepare_coupled_scenes(
+            &def,
+            &conformance_registry(),
+        )
+        .expect("the tank pairs");
         assert_eq!(bindings.len(), 1);
         assert!((0..100).all(|slot| bindings[0].colliders.contains_body(slot)));
         assert!(!bindings[0].colliders.contains_body(100));
-        manifold_node_engine::runtime::PresetRuntime::from_def_for_render(def, &conformance_registry(), None, false)
-            .unwrap_or_else(|error| panic!("the hundred-cube tank builds: {error:?}"));
+        manifold_node_engine::runtime::PresetRuntime::from_def_for_render(
+            def,
+            &conformance_registry(),
+            None,
+            false,
+        )
+        .unwrap_or_else(|error| panic!("the hundred-cube tank builds: {error:?}"));
     }
 
     /// I2: every registered liquid domain type has one row; every check a row does not
@@ -429,46 +637,106 @@ use manifold_nodes_water::testkit::preset_extents::LiquidPreset;
     #[test]
     fn liquid_conformance_covers_every_domain() {
         let registry = conformance_registry();
-        for &type_id in LIQUID_DOMAIN_TYPE_IDS.iter().filter(|id| registry.contains(id)) {
-            let rows = LIQUID_SOLVERS.iter().filter(|row| row.type_id == type_id).count();
+        for &type_id in LIQUID_DOMAIN_TYPE_IDS
+            .iter()
+            .filter(|id| registry.contains(id))
+        {
+            let rows = LIQUID_SOLVERS
+                .iter()
+                .filter(|row| row.type_id == type_id)
+                .count();
             assert_eq!(rows, 1, "{type_id} has {rows} conformance rows");
         }
         for row in LIQUID_SOLVERS {
-            assert!(is_liquid_domain(row.type_id), "{} has a row but is not a liquid domain", row.type_id);
+            assert!(
+                is_liquid_domain(row.type_id),
+                "{} has a row but is not a liquid domain",
+                row.type_id
+            );
             for (i, (check, reason)) in row.exempt.iter().enumerate() {
-                assert!(!reason.trim().is_empty(), "{}: {check:?} is exempt without a reason", row.type_id);
-                assert!(!row.exempt[..i].iter().any(|(c, _)| c == check), "{}: {check:?} is exempt twice", row.type_id);
+                assert!(
+                    !reason.trim().is_empty(),
+                    "{}: {check:?} is exempt without a reason",
+                    row.type_id
+                );
+                assert!(
+                    !row.exempt[..i].iter().any(|(c, _)| c == check),
+                    "{}: {check:?} is exempt twice",
+                    row.type_id
+                );
             }
             for (i, known) in row.known_red.iter().enumerate() {
                 let (check, miss) = (known.check, known.miss);
-                assert!(!known.reason.trim().is_empty(), "{}: {check:?} {miss} is known red without a reason", row.type_id);
-                assert!(row.exemption(check).is_none(), "{}: {check:?} is both exempt and known red", row.type_id);
                 assert!(
-                    !row.known_red[..i].iter().any(|k| k.check == check && k.miss == miss),
+                    !known.reason.trim().is_empty(),
+                    "{}: {check:?} {miss} is known red without a reason",
+                    row.type_id
+                );
+                assert!(
+                    row.exemption(check).is_none(),
+                    "{}: {check:?} is both exempt and known red",
+                    row.type_id
+                );
+                assert!(
+                    !row.known_red[..i]
+                        .iter()
+                        .any(|k| k.check == check && k.miss == miss),
                     "{}: {check:?} {miss} is known red twice",
                     row.type_id
                 );
             }
             for atom in row.atomic_free {
-                let node = registry.construct(atom).unwrap_or_else(|| panic!("{}: atomic-free atom {atom} is not registered", row.type_id));
+                let node = registry.construct(atom).unwrap_or_else(|| {
+                    panic!("{}: atomic-free atom {atom} is not registered", row.type_id)
+                });
                 // Codegen wraps the body and its includes; any atomic lives there.
-                let body = node.wgsl_body().unwrap_or_else(|| panic!("{}: {atom} has no codegen body to check", row.type_id));
-                let atomic = std::iter::once(body).chain(node.wgsl_includes().iter().copied()).any(|wgsl| wgsl.contains("atomic"));
-                assert!(!atomic, "{}: atomic-free atom {atom} uses an atomic", row.type_id);
+                let body = node.wgsl_body().unwrap_or_else(|| {
+                    panic!("{}: {atom} has no codegen body to check", row.type_id)
+                });
+                let atomic = std::iter::once(body)
+                    .chain(node.wgsl_includes().iter().copied())
+                    .any(|wgsl| wgsl.contains("atomic"));
+                assert!(
+                    !atomic,
+                    "{}: atomic-free atom {atom} uses an atomic",
+                    row.type_id
+                );
             }
             for (node, wgsl) in row.atomic_free_shaders {
-                assert!(registry.construct(node).is_some(), "{}: {node}, which runs an atomic-free shader, is not registered", row.type_id);
-                let code = wgsl.lines().map(|line| line.split("//").next().unwrap_or_default());
-                assert!(!code.clone().any(|line| line.contains("atomic")), "{}: {node}'s hand shader uses an atomic", row.type_id);
-                assert!(code.clone().any(|line| line.contains("@compute")), "{}: {node}'s hand shader has no entry point", row.type_id);
+                assert!(
+                    registry.construct(node).is_some(),
+                    "{}: {node}, which runs an atomic-free shader, is not registered",
+                    row.type_id
+                );
+                let code = wgsl
+                    .lines()
+                    .map(|line| line.split("//").next().unwrap_or_default());
+                assert!(
+                    !code.clone().any(|line| line.contains("atomic")),
+                    "{}: {node}'s hand shader uses an atomic",
+                    row.type_id
+                );
+                assert!(
+                    code.clone().any(|line| line.contains("@compute")),
+                    "{}: {node}'s hand shader has no entry point",
+                    row.type_id
+                );
             }
             let mut scenes: Vec<Fixture> = Vec::new();
             for check in Check::ALL {
                 if row.exemption(check).is_some() {
                     continue;
                 }
-                assert!(row.coupled || !check.coupled(), "{}: {check:?} needs a coupled row or an exemption", row.type_id);
-                assert!(!check.needs_totals() || row.totals.is_some(), "{}: {check:?} needs the row's totals", row.type_id);
+                assert!(
+                    row.coupled || !check.coupled(),
+                    "{}: {check:?} needs a coupled row or an exemption",
+                    row.type_id
+                );
+                assert!(
+                    !check.needs_totals() || row.totals.is_some(),
+                    "{}: {check:?} needs the row's totals",
+                    row.type_id
+                );
                 assert!(
                     check != Check::NonfiniteTickNotPublished || row.state.is_some(),
                     "{}: {check:?} needs the row's state array",
@@ -492,15 +760,25 @@ use manifold_nodes_water::testkit::preset_extents::LiquidPreset;
             }
             // An overflow is a run-time count, never a setup refusal.
             if let Some(case) = &row.overflow {
-                let mut def = (row.fixture)(case.fixture).unwrap_or_else(|| panic!("{}: no {:?} scene", row.type_id, case.fixture));
+                let mut def = (row.fixture)(case.fixture)
+                    .unwrap_or_else(|| panic!("{}: no {:?} scene", row.type_id, case.fixture));
                 (case.edit)(&mut def);
                 build(row, case.fixture, &def)
                     .check_authored()
-                    .unwrap_or_else(|error| panic!("{}: {} is refused at setup: {error}", row.type_id, case.what));
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "{}: {} is refused at setup: {error}",
+                            row.type_id, case.what
+                        )
+                    });
             }
             for fixture in scenes {
-                let def = (row.fixture)(fixture)
-                    .unwrap_or_else(|| panic!("{}: no {fixture:?} scene for a check that is not exempt", row.type_id));
+                let def = (row.fixture)(fixture).unwrap_or_else(|| {
+                    panic!(
+                        "{}: no {fixture:?} scene for a check that is not exempt",
+                        row.type_id
+                    )
+                });
                 let mut preset = build(row, fixture, &def);
                 let domains = preset.domains();
                 assert!(
@@ -510,13 +788,22 @@ use manifold_nodes_water::testkit::preset_extents::LiquidPreset;
                 );
                 let resolution = domains[0].1;
                 if row.gpu {
-                    assert!(resolution <= GPU_FIXTURE_RESOLUTION, "{} {fixture:?} runs at {resolution}", row.type_id);
+                    assert!(
+                        resolution <= GPU_FIXTURE_RESOLUTION,
+                        "{} {fixture:?} runs at {resolution}",
+                        row.type_id
+                    );
                 }
                 if let Some(scene) = BoxScene::of(fixture) {
-                    assert_eq!(resolution, scene.resolution as u32, "{} {fixture:?}: the card kept its resolution", row.type_id);
+                    assert_eq!(
+                        resolution, scene.resolution as u32,
+                        "{} {fixture:?}: the card kept its resolution",
+                        row.type_id
+                    );
                 }
-                let report =
-                    preset.check_authored().unwrap_or_else(|error| panic!("{} {fixture:?} at {resolution}: {error}", row.type_id));
+                let report = preset.check_authored().unwrap_or_else(|error| {
+                    panic!("{} {fixture:?} at {resolution}: {error}", row.type_id)
+                });
                 println!(
                     "{} {fixture:?}: resolution {resolution}, {} nodes checked, {:.1} MB",
                     row.type_id,
@@ -535,25 +822,61 @@ use manifold_nodes_water::testkit::preset_extents::LiquidPreset;
     #[test]
     fn liquid_fit_results_are_defined_not_refused() {
         let bytes = |row: &LiquidSolverRow, what: &str, edit: &dyn Fn(&mut EffectGraphDef)| {
-            let mut def = (row.fixture)(Fixture::DamBreak).unwrap_or_else(|| panic!("{}: no Dam Break scene", row.type_id));
+            let mut def = (row.fixture)(Fixture::DamBreak)
+                .unwrap_or_else(|| panic!("{}: no Dam Break scene", row.type_id));
             edit(&mut def);
             build(row, Fixture::DamBreak, &def)
                 .check_authored()
-                .unwrap_or_else(|error| panic!("{}: {what} is fitted, not refused: {error:?}", row.type_id))
+                .unwrap_or_else(|error| {
+                    panic!("{}: {what} is fitted, not refused: {error:?}", row.type_id)
+                })
                 .scene_bytes
         };
         for row in LIQUID_SOLVERS {
-            let fill = |height: f32| move |def: &mut EffectGraphDef| set_type_param(def, row.type_id, "fill_height", SerializedParamValue::Float { value: height });
+            let fill = |height: f32| {
+                move |def: &mut EffectGraphDef| {
+                    set_type_param(
+                        def,
+                        row.type_id,
+                        "fill_height",
+                        SerializedParamValue::Float { value: height },
+                    )
+                }
+            };
             // Dam Break's domain is 4 m tall.
-            let (low, top, past) = (bytes(row, "a low fill", &fill(0.5)), bytes(row, "fill at the top", &fill(4.0)), bytes(row, "fill past the top", &fill(9.0)));
-            assert!(top > low, "{}: the fill sizes the scene ({low} then {top} bytes)", row.type_id);
-            assert_eq!(past, top, "{}: Fill Height 9 m caps at the 4 m top", row.type_id);
+            let (low, top, past) = (
+                bytes(row, "a low fill", &fill(0.5)),
+                bytes(row, "fill at the top", &fill(4.0)),
+                bytes(row, "fill past the top", &fill(9.0)),
+            );
+            assert!(
+                top > low,
+                "{}: the fill sizes the scene ({low} then {top} bytes)",
+                row.type_id
+            );
+            assert_eq!(
+                past, top,
+                "{}: Fill Height 9 m caps at the 4 m top",
+                row.type_id
+            );
 
             let column = bytes(row, "the column", &|_| {});
-            let outside = bytes(row, "a column wholly outside", &|def| set_fill_param(def, row.type_id, "pos_x", 10.0));
-            let unwired = bytes(row, "no column", &|def| manifold_nodes_water::testkit::conformance::testkit::drop_fill(def, row.type_id));
-            assert!(column > unwired, "{}: the column fills ({unwired} then {column} bytes)", row.type_id);
-            assert_eq!(outside, unwired, "{}: a column wholly outside fills nothing", row.type_id);
+            let outside = bytes(row, "a column wholly outside", &|def| {
+                set_fill_param(def, row.type_id, "pos_x", 10.0)
+            });
+            let unwired = bytes(row, "no column", &|def| {
+                manifold_nodes_water::testkit::conformance::testkit::drop_fill(def, row.type_id)
+            });
+            assert!(
+                column > unwired,
+                "{}: the column fills ({unwired} then {column} bytes)",
+                row.type_id
+            );
+            assert_eq!(
+                outside, unwired,
+                "{}: a column wholly outside fills nothing",
+                row.type_id
+            );
         }
     }
 
@@ -563,7 +886,11 @@ use manifold_nodes_water::testkit::preset_extents::LiquidPreset;
     fn liquid_refusals_name_their_control() {
         let registry = conformance_registry();
         for row in LIQUID_SOLVERS {
-            assert!(!row.refusals.is_empty(), "{} lists no refusals", row.type_id);
+            assert!(
+                !row.refusals.is_empty(),
+                "{} lists no refusals",
+                row.type_id
+            );
             let domain = registry.construct(row.type_id).expect("registered domain");
             let words = |name: &str| -> String {
                 // A placed object, such as the Initial Fill, by its own name.
@@ -571,7 +898,12 @@ use manifold_nodes_water::testkit::preset_extents::LiquidPreset;
                     return name.to_owned();
                 }
                 if let Some(param) = domain.parameters().iter().find(|param| param.name == name) {
-                    return param.label.split(" (").next().unwrap_or(param.label).to_string();
+                    return param
+                        .label
+                        .split(" (")
+                        .next()
+                        .unwrap_or(param.label)
+                        .to_string();
                 }
                 assert!(
                     domain.inputs().iter().any(|port| port.name == name),
@@ -581,15 +913,24 @@ use manifold_nodes_water::testkit::preset_extents::LiquidPreset;
                 name.replace('_', " ")
             };
             for case in row.refusals {
-                let before = (row.fixture)(case.fixture).unwrap_or_else(|| panic!("{}: no {:?} scene", row.type_id, case.fixture));
+                let before = (row.fixture)(case.fixture)
+                    .unwrap_or_else(|| panic!("{}: no {:?} scene", row.type_id, case.fixture));
                 build(row, case.fixture, &before)
                     .check_authored()
-                    .unwrap_or_else(|error| panic!("{}: {:?} fails before the edit: {error}", row.type_id, case.fixture));
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "{}: {:?} fails before the edit: {error}",
+                            row.type_id, case.fixture
+                        )
+                    });
                 let mut def = before;
                 (case.edit)(&mut def);
                 let (node, reason) = match build(row, case.fixture, &def).check_authored() {
                     Err(ExtentError::Refused { node, reason }) => (node, reason),
-                    other => panic!("{}: {} is not refused by name: {other:?}", row.type_id, case.what),
+                    other => panic!(
+                        "{}: {} is not refused by name: {other:?}",
+                        row.type_id, case.what
+                    ),
                 };
                 println!("{}: {}\n    {node}: {reason}", row.type_id, case.what);
                 for name in case.names {
@@ -604,5 +945,4 @@ use manifold_nodes_water::testkit::preset_extents::LiquidPreset;
             }
         }
     }
-
 }

@@ -8,13 +8,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::NodeId;
 use crate::effect_graph_def::{
-    EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef,
-    GroupInterface, InterfacePortDef, SerializedParamValue,
+    EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID,
+    GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef, SerializedParamValue,
 };
 use crate::fluid_domain::DEFAULT_ROLE_PORTS;
 use crate::liquid_domain::{GPU_FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
-use crate::NodeId;
 
 /// The domain input the column used to arrive on.
 pub const INITIAL_VOLUME_PORT: &str = "initial_volume";
@@ -36,13 +36,24 @@ fn takes_initial_fill(type_id: &str) -> bool {
 pub fn carries_initial_volume(def: &EffectGraphDef) -> bool {
     fn level(nodes: &[EffectGraphNode], wires: &[EffectGraphWire]) -> bool {
         wires.iter().any(|wire| column_wire(nodes, wire))
-            || nodes.iter().any(|node| node.group.as_deref().is_some_and(|body| level(&body.nodes, &body.wires)))
+            || nodes.iter().any(|node| {
+                node.group
+                    .as_deref()
+                    .is_some_and(|body| level(&body.nodes, &body.wires))
+            })
     }
-    level(&def.nodes, &def.wires) || def.scene_modifiers.iter().any(|modifier| carries_initial_volume(&modifier.graph))
+    level(&def.nodes, &def.wires)
+        || def
+            .scene_modifiers
+            .iter()
+            .any(|modifier| carries_initial_volume(&modifier.graph))
 }
 
 fn column_wire(nodes: &[EffectGraphNode], wire: &EffectGraphWire) -> bool {
-    wire.to_port == INITIAL_VOLUME_PORT && nodes.iter().any(|node| node.id == wire.to_node && takes_initial_fill(&node.type_id))
+    wire.to_port == INITIAL_VOLUME_PORT
+        && nodes
+            .iter()
+            .any(|node| node.id == wire.to_node && takes_initial_fill(&node.type_id))
 }
 
 /// Rebuild every column wired into a GPU liquid's `initial_volume` as an
@@ -100,7 +111,12 @@ fn migrate_level(
     let mut retyped = Vec::new();
     for node in nodes.iter_mut() {
         if let Some(body) = node.group.as_deref_mut() {
-            let GroupDef { interface, nodes, wires, .. } = body;
+            let GroupDef {
+                interface,
+                nodes,
+                wires,
+                ..
+            } = body;
             let (inner, inputs) = migrate_level(nodes, wires, Some(interface), taken);
             changed |= inner;
             retyped.extend(inputs.into_iter().map(|input| (node.id, input)));
@@ -108,7 +124,10 @@ fn migrate_level(
     }
     let mut columns: Vec<EffectGraphWire> = Vec::new();
     wires.retain(|wire| {
-        let column = column_wire(nodes, wire) || retyped.iter().any(|(group, input)| wire.to_node == *group && &wire.to_port == input);
+        let column = column_wire(nodes, wire)
+            || retyped
+                .iter()
+                .any(|(group, input)| wire.to_node == *group && &wire.to_port == input);
         if column {
             columns.push(wire.clone());
         }
@@ -118,19 +137,33 @@ fn migrate_level(
     let columns_in = columns.clone();
     // Judged before any fill adds wires: a role wired from the input for an
     // earlier water is not another reader.
-    let sole_reader: Vec<bool> =
-        columns.iter().map(|column| !wires.iter().any(|wire| wire.from_node == column.from_node && wire.from_port == column.from_port)).collect();
+    let sole_reader: Vec<bool> = columns
+        .iter()
+        .map(|column| {
+            !wires.iter().any(|wire| {
+                wire.from_node == column.from_node && wire.from_port == column.from_port
+            })
+        })
+        .collect();
     for (column, sole_reader) in columns.into_iter().zip(sole_reader) {
         changed = true;
         // A column arriving through this group's own input: the input
         // carries the role instead, and the level above fills it.
-        let through = nodes.iter().any(|node| node.id == column.from_node && node.type_id == GROUP_INPUT_TYPE_ID)
+        let through = nodes
+            .iter()
+            .any(|node| node.id == column.from_node && node.type_id == GROUP_INPUT_TYPE_ID)
             && sole_reader;
         // An input already retyped for another water in this group carries
         // the same role to this one.
-        let input = interface.as_deref_mut().filter(|_| through).and_then(|interface| {
-            interface.inputs.iter_mut().find(|input| input.name == column.from_port && matches!(input.port_type.as_str(), "Transform" | "FluidRole"))
-        });
+        let input = interface
+            .as_deref_mut()
+            .filter(|_| through)
+            .and_then(|interface| {
+                interface.inputs.iter_mut().find(|input| {
+                    input.name == column.from_port
+                        && matches!(input.port_type.as_str(), "Transform" | "FluidRole")
+                })
+            });
         let target = if column.to_port == INITIAL_VOLUME_PORT {
             free_role(nodes, wires, column.to_node)
         } else {
@@ -141,22 +174,44 @@ fn migrate_level(
             if !inputs.contains(&input.name) {
                 inputs.push(input.name.clone());
             }
-            wires.push(EffectGraphWire { from_node: column.from_node, from_port: column.from_port, to_node: column.to_node, to_port: target });
+            wires.push(EffectGraphWire {
+                from_node: column.from_node,
+                from_port: column.from_port,
+                to_node: column.to_node,
+                to_port: target,
+            });
             continue;
         }
         // The column's transform moves in when it only feeds this one
         // column and nothing drives it: another water's column wire, already
         // taken out of `wires`, would be left reading a node that moved.
-        let movable = nodes.iter().find(|node| node.id == column.from_node).is_some_and(|producer| {
-            producer.type_id == TRANSFORM_3D_TYPE_ID
-                && !wires.iter().any(|wire| wire.from_node == producer.id || wire.to_node == producer.id)
-                && columns_in.iter().filter(|other| other.from_node == producer.id).count() == 1
-                && producer.handle.as_deref().is_none_or(|handle| {
-                    interface.as_deref().is_none_or(|interface| interface.params.iter().all(|param| param.target_handle != handle))
-                })
-        });
+        let movable = nodes
+            .iter()
+            .find(|node| node.id == column.from_node)
+            .is_some_and(|producer| {
+                producer.type_id == TRANSFORM_3D_TYPE_ID
+                    && !wires
+                        .iter()
+                        .any(|wire| wire.from_node == producer.id || wire.to_node == producer.id)
+                    && columns_in
+                        .iter()
+                        .filter(|other| other.from_node == producer.id)
+                        .count()
+                        == 1
+                    && producer.handle.as_deref().is_none_or(|handle| {
+                        interface.as_deref().is_none_or(|interface| {
+                            interface
+                                .params
+                                .iter()
+                                .all(|param| param.target_handle != handle)
+                        })
+                    })
+            });
         let fill_box = if movable {
-            let index = nodes.iter().position(|node| node.id == column.from_node).expect("found above");
+            let index = nodes
+                .iter()
+                .position(|node| node.id == column.from_node)
+                .expect("found above");
             FillBox::Node(Box::new(nodes.remove(index)))
         } else {
             FillBox::Port(column.from_node, column.from_port)
@@ -170,7 +225,11 @@ fn migrate_level(
 /// param grows to hold it.
 fn free_role(nodes: &mut [EffectGraphNode], wires: &[EffectGraphWire], domain: u32) -> String {
     let free = (0..)
-        .find(|k| !wires.iter().any(|wire| wire.to_node == domain && wire.to_port == format!("role_{k}")))
+        .find(|k| {
+            !wires
+                .iter()
+                .any(|wire| wire.to_node == domain && wire.to_port == format!("role_{k}"))
+        })
         .expect("an unwired role input");
     if let Some(node) = nodes.iter_mut().find(|node| node.id == domain) {
         let held = match node.params.get("roles") {
@@ -179,7 +238,12 @@ fn free_role(nodes: &mut [EffectGraphNode], wires: &[EffectGraphWire], domain: u
             _ => DEFAULT_ROLE_PORTS,
         };
         if free >= held {
-            node.params.insert("roles".into(), SerializedParamValue::Int { value: free as i32 + 1 });
+            node.params.insert(
+                "roles".into(),
+                SerializedParamValue::Int {
+                    value: free as i32 + 1,
+                },
+            );
         }
     }
     format!("role_{free}")
@@ -225,8 +289,11 @@ fn place_initial_fill(
     fill_box: FillBox,
     taken: &mut BTreeSet<String>,
 ) -> u32 {
-    let (anchor_id, anchor_pos) =
-        nodes.iter().find(|node| node.id == to_node).map(|node| (node.node_id.to_string(), node.editor_pos)).expect("the target is in this level");
+    let (anchor_id, anchor_pos) = nodes
+        .iter()
+        .find(|node| node.id == to_node)
+        .map(|node| (node.node_id.to_string(), node.editor_pos))
+        .expect("the target is in this level");
     let group_id = nodes.iter().map(|node| node.id).max().unwrap_or(0) + 1;
     let (transform, outer) = match fill_box {
         FillBox::Node(node) => (Some(*node), None),
@@ -236,41 +303,89 @@ fn place_initial_fill(
     // Handles are unique within a level: the flattener prefixes the body's
     // handles with this one.
     let handle = (1..)
-        .map(|n| if n == 1 { INITIAL_FILL_NAME.to_owned() } else { format!("{INITIAL_FILL_NAME} {n}") })
-        .find(|handle| nodes.iter().all(|node| node.handle.as_deref() != Some(handle)))
+        .map(|n| {
+            if n == 1 {
+                INITIAL_FILL_NAME.to_owned()
+            } else {
+                format!("{INITIAL_FILL_NAME} {n}")
+            }
+        })
+        .find(|handle| {
+            nodes
+                .iter()
+                .all(|node| node.handle.as_deref() != Some(handle))
+        })
         .expect("an unused handle");
-    let mut group = bare_node(group_id, GROUP_TYPE_ID, fresh_id(&format!("{anchor_id}_initial_fill"), taken), Some(&handle));
+    let mut group = bare_node(
+        group_id,
+        GROUP_TYPE_ID,
+        fresh_id(&format!("{anchor_id}_initial_fill"), taken),
+        Some(&handle),
+    );
     group.editor_pos = anchor_pos.map(|(x, y)| (x - 260.0, y + 160.0));
     group.group = Some(Box::new(body));
     nodes.push(group);
     if let Some((from_node, from_port)) = outer {
-        wires.push(EffectGraphWire { from_node, from_port, to_node: group_id, to_port: "transform".into() });
+        wires.push(EffectGraphWire {
+            from_node,
+            from_port,
+            to_node: group_id,
+            to_port: "transform".into(),
+        });
     }
-    wires.push(EffectGraphWire { from_node: group_id, from_port: "role".into(), to_node, to_port });
+    wires.push(EffectGraphWire {
+        from_node: group_id,
+        from_port: "role".into(),
+        to_node,
+        to_port,
+    });
     group_id
 }
 
-
-
 /// The Initial Fill group's body: the transform (moved in, or read through
 /// a `transform` input), the role source over its box, and the output.
-fn initial_fill_body(transform: Option<EffectGraphNode>, domain_id: &str, taken: &mut BTreeSet<String>) -> GroupDef {
+fn initial_fill_body(
+    transform: Option<EffectGraphNode>,
+    domain_id: &str,
+    taken: &mut BTreeSet<String>,
+) -> GroupDef {
     let mut inputs = Vec::new();
     // A moved transform keeps its own doc id: card controls stamped from it
     // carry `{doc}_{param}` ids, and only that id marks them as its copies.
     let transform = match transform {
         Some(node) => node,
         None => {
-            inputs.push(InterfacePortDef { name: "transform".into(), port_type: "Transform".into() });
-            bare_node(1, GROUP_INPUT_TYPE_ID, fresh_id(&format!("{domain_id}_initial_fill_input"), taken), None)
+            inputs.push(InterfacePortDef {
+                name: "transform".into(),
+                port_type: "Transform".into(),
+            });
+            bare_node(
+                1,
+                GROUP_INPUT_TYPE_ID,
+                fresh_id(&format!("{domain_id}_initial_fill_input"), taken),
+                None,
+            )
         }
     };
     let (transform_id, role_id, output_id) = (transform.id, transform.id + 1, transform.id + 2);
-    let mut role = bare_node(role_id, FLUID_ROLE_SOURCE_TYPE_ID, fresh_id(&format!("{domain_id}_initial_fill_role"), taken), Some(INITIAL_FILL_NAME));
-    role.params = BTreeMap::from([
-        ("role".to_owned(), SerializedParamValue::Enum { value: INITIAL_FILL_ROLE }),
-    ]);
-    let output = bare_node(output_id, GROUP_OUTPUT_TYPE_ID, fresh_id(&format!("{domain_id}_initial_fill_output"), taken), None);
+    let mut role = bare_node(
+        role_id,
+        FLUID_ROLE_SOURCE_TYPE_ID,
+        fresh_id(&format!("{domain_id}_initial_fill_role"), taken),
+        Some(INITIAL_FILL_NAME),
+    );
+    role.params = BTreeMap::from([(
+        "role".to_owned(),
+        SerializedParamValue::Enum {
+            value: INITIAL_FILL_ROLE,
+        },
+    )]);
+    let output = bare_node(
+        output_id,
+        GROUP_OUTPUT_TYPE_ID,
+        fresh_id(&format!("{domain_id}_initial_fill_output"), taken),
+        None,
+    );
     let wire = |from_node, from_port: &str, to_node, to_port: &str| EffectGraphWire {
         from_node,
         from_port: from_port.into(),
@@ -280,11 +395,17 @@ fn initial_fill_body(transform: Option<EffectGraphNode>, domain_id: &str, taken:
     GroupDef {
         interface: GroupInterface {
             inputs,
-            outputs: vec![InterfacePortDef { name: "role".into(), port_type: "FluidRole".into() }],
+            outputs: vec![InterfacePortDef {
+                name: "role".into(),
+                port_type: "FluidRole".into(),
+            }],
             params: Vec::new(),
         },
         nodes: vec![transform, role, output],
-        wires: vec![wire(transform_id, "transform", role_id, "transform"), wire(role_id, "role", output_id, "role")],
+        wires: vec![
+            wire(transform_id, "transform", role_id, "transform"),
+            wire(role_id, "role", output_id, "role"),
+        ],
         tint: None,
     }
 }
@@ -337,13 +458,28 @@ mod tests {
     }
 
     fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectGraphWire {
-        EffectGraphWire { from_node, from_port: from_port.into(), to_node, to_port: to_port.into() }
+        EffectGraphWire {
+            from_node,
+            from_port: from_port.into(),
+            to_node,
+            to_port: to_port.into(),
+        }
     }
 
     /// The fill group's body, its role output wire, and the group node.
-    fn fill<'a>(nodes: &'a [EffectGraphNode], wires: &[EffectGraphWire]) -> (&'a EffectGraphNode, EffectGraphWire) {
-        let group = nodes.iter().find(|node| node.handle.as_deref() == Some(INITIAL_FILL_NAME)).expect("an Initial Fill group");
-        let out = wires.iter().find(|wire| wire.from_node == group.id && wire.from_port == "role").expect("its role is wired").clone();
+    fn fill<'a>(
+        nodes: &'a [EffectGraphNode],
+        wires: &[EffectGraphWire],
+    ) -> (&'a EffectGraphNode, EffectGraphWire) {
+        let group = nodes
+            .iter()
+            .find(|node| node.handle.as_deref() == Some(INITIAL_FILL_NAME))
+            .expect("an Initial Fill group");
+        let out = wires
+            .iter()
+            .find(|wire| wire.from_node == group.id && wire.from_port == "role")
+            .expect("its role is wired")
+            .clone();
         (group, out)
     }
 
@@ -356,21 +492,59 @@ mod tests {
             "nodes": [{"id": 1, "nodeId": "domain", "typeId": GPU_FLIP_DOMAIN_TYPE_ID}, column(2),
                 {"id": 3, "nodeId": "collider", "typeId": FLUID_ROLE_SOURCE_TYPE_ID}],
             "wires": [wire(2, "transform", 1, INITIAL_VOLUME_PORT), wire(3, "role", 1, "role_0")]}));
-        let saved = graph.nodes.iter().find(|node| node.id == 2).unwrap().clone();
+        let saved = graph
+            .nodes
+            .iter()
+            .find(|node| node.id == 2)
+            .unwrap()
+            .clone();
         assert!(migrate_initial_volume(&mut graph));
         assert!(!carries_initial_volume(&graph));
-        assert!(graph.nodes.iter().all(|node| node.node_id.as_str() != "initial_column" || node.group.is_some()), "the column left the level");
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .all(|node| node.node_id.as_str() != "initial_column" || node.group.is_some()),
+            "the column left the level"
+        );
         let (group, out) = fill(&graph.nodes, &graph.wires);
-        assert_eq!(out, wire(group.id, "role", 1, "role_1"), "the collider keeps role_0");
+        assert_eq!(
+            out,
+            wire(group.id, "role", 1, "role_1"),
+            "the collider keeps role_0"
+        );
         let body = group.group.as_deref().unwrap();
         assert!(body.interface.inputs.is_empty());
-        let moved = body.nodes.iter().find(|node| node.node_id.as_str() == "initial_column").expect("the column moved in");
-        assert_eq!((&moved.params, &moved.handle), (&saved.params, &saved.handle));
-        let role = body.nodes.iter().find(|node| node.type_id == FLUID_ROLE_SOURCE_TYPE_ID).unwrap();
-        assert_eq!(role.params["role"], SerializedParamValue::Enum { value: INITIAL_FILL_ROLE });
-        assert!(body.wires.contains(&wire(moved.id, "transform", role.id, "transform")));
+        let moved = body
+            .nodes
+            .iter()
+            .find(|node| node.node_id.as_str() == "initial_column")
+            .expect("the column moved in");
+        assert_eq!(
+            (&moved.params, &moved.handle),
+            (&saved.params, &saved.handle)
+        );
+        let role = body
+            .nodes
+            .iter()
+            .find(|node| node.type_id == FLUID_ROLE_SOURCE_TYPE_ID)
+            .unwrap();
+        assert_eq!(
+            role.params["role"],
+            SerializedParamValue::Enum {
+                value: INITIAL_FILL_ROLE
+            }
+        );
+        assert!(
+            body.wires
+                .contains(&wire(moved.id, "transform", role.id, "transform"))
+        );
         let ids = document_node_ids(&graph);
-        assert_eq!(ids.len(), graph.nodes.len() + body.nodes.len(), "every stable id is unique");
+        assert_eq!(
+            ids.len(),
+            graph.nodes.len() + body.nodes.len(),
+            "every stable id is unique"
+        );
         let once = graph.clone();
         assert!(!migrate_initial_volume(&mut graph));
         assert_eq!(graph, once);
@@ -387,11 +561,24 @@ mod tests {
         assert!(migrate_initial_volume(&mut graph));
         let (group, out) = fill(&graph.nodes, &graph.wires);
         assert_eq!(out.to_port, "role_0");
-        assert!(graph.nodes.iter().any(|node| node.id == 2), "the column stays");
-        assert!(graph.wires.contains(&wire(2, "transform", group.id, "transform")));
+        assert!(
+            graph.nodes.iter().any(|node| node.id == 2),
+            "the column stays"
+        );
+        assert!(
+            graph
+                .wires
+                .contains(&wire(2, "transform", group.id, "transform"))
+        );
         assert!(graph.wires.contains(&wire(2, "transform", 3, "transform")));
         let body = group.group.as_deref().unwrap();
-        assert_eq!(body.interface.inputs, [InterfacePortDef { name: "transform".into(), port_type: "Transform".into() }]);
+        assert_eq!(
+            body.interface.inputs,
+            [InterfacePortDef {
+                name: "transform".into(),
+                port_type: "Transform".into()
+            }]
+        );
     }
 
     /// A column that reaches the domain through its group's input: the input
@@ -408,12 +595,27 @@ mod tests {
             "wires": [wire(2, "transform", 5, "initialVolume")]}));
         assert!(migrate_initial_volume(&mut graph));
         assert!(!carries_initial_volume(&graph));
-        let live = graph.nodes.iter().find(|node| node.id == 5).unwrap().group.as_deref().unwrap();
+        let live = graph
+            .nodes
+            .iter()
+            .find(|node| node.id == 5)
+            .unwrap()
+            .group
+            .as_deref()
+            .unwrap();
         assert_eq!(live.interface.inputs[0].port_type, "FluidRole");
         assert_eq!(live.wires, [wire(0, "initialVolume", 1, "role_0")]);
         let (group, out) = fill(&graph.nodes, &graph.wires);
         assert_eq!(out, wire(group.id, "role", 5, "initialVolume"));
-        assert!(group.group.as_deref().unwrap().nodes.iter().any(|node| node.node_id.as_str() == "initial_column"));
+        assert!(
+            group
+                .group
+                .as_deref()
+                .unwrap()
+                .nodes
+                .iter()
+                .any(|node| node.node_id.as_str() == "initial_column")
+        );
         assert!(!migrate_initial_volume(&mut graph));
     }
 
@@ -427,11 +629,26 @@ mod tests {
                 {"id": 3, "nodeId": "domain_b", "typeId": GPU_FLIP_DOMAIN_TYPE_ID}],
             "wires": [wire(2, "transform", 1, INITIAL_VOLUME_PORT), wire(2, "transform", 3, INITIAL_VOLUME_PORT)]}));
         assert!(migrate_initial_volume(&mut graph));
-        assert!(graph.nodes.iter().any(|node| node.id == 2), "the shared column stays");
+        assert!(
+            graph.nodes.iter().any(|node| node.id == 2),
+            "the shared column stays"
+        );
         let ids: BTreeSet<u32> = graph.nodes.iter().map(|node| node.id).collect();
-        let dangling: Vec<_> = graph.wires.iter().filter(|wire| !ids.contains(&wire.from_node) || !ids.contains(&wire.to_node)).collect();
+        let dangling: Vec<_> = graph
+            .wires
+            .iter()
+            .filter(|wire| !ids.contains(&wire.from_node) || !ids.contains(&wire.to_node))
+            .collect();
         assert!(dangling.is_empty(), "{dangling:?}");
-        assert_eq!(graph.wires.iter().filter(|wire| wire.from_node == 2 && wire.to_port == "transform").count(), 2, "both fills read it");
+        assert_eq!(
+            graph
+                .wires
+                .iter()
+                .filter(|wire| wire.from_node == 2 && wire.to_port == "transform")
+                .count(),
+            2,
+            "both fills read it"
+        );
         crate::flatten::flatten_groups(&graph).expect("the layer flattens");
     }
 
@@ -449,11 +666,34 @@ mod tests {
             "wires": [wire(2, "transform", 5, "initialVolume")]}));
         assert!(migrate_initial_volume(&mut graph));
         assert!(!carries_initial_volume(&graph));
-        let live = graph.nodes.iter().find(|node| node.id == 5).unwrap().group.as_deref().unwrap();
+        let live = graph
+            .nodes
+            .iter()
+            .find(|node| node.id == 5)
+            .unwrap()
+            .group
+            .as_deref()
+            .unwrap();
         assert_eq!(live.interface.inputs.len(), 1);
         assert_eq!(live.interface.inputs[0].port_type, "FluidRole");
-        assert_eq!(live.wires, [wire(0, "initialVolume", 1, "role_0"), wire(0, "initialVolume", 3, "role_0")]);
-        assert_eq!(graph.nodes.iter().filter(|node| node.handle.as_deref().is_some_and(|h| h.starts_with(INITIAL_FILL_NAME))).count(), 1);
+        assert_eq!(
+            live.wires,
+            [
+                wire(0, "initialVolume", 1, "role_0"),
+                wire(0, "initialVolume", 3, "role_0")
+            ]
+        );
+        assert_eq!(
+            graph
+                .nodes
+                .iter()
+                .filter(|node| node
+                    .handle
+                    .as_deref()
+                    .is_some_and(|h| h.starts_with(INITIAL_FILL_NAME)))
+                .count(),
+            1
+        );
         crate::flatten::flatten_groups(&graph).expect("the layer flattens");
     }
 
@@ -467,9 +707,19 @@ mod tests {
         assert!(migrate_initial_volume(&mut graph));
         let (group, _) = fill(&graph.nodes, &graph.wires);
         let body = group.group.as_deref().unwrap();
-        assert_eq!(body.nodes.iter().find(|node| node.node_id.as_str() == "initial_column").map(|node| node.id), Some(52));
+        assert_eq!(
+            body.nodes
+                .iter()
+                .find(|node| node.node_id.as_str() == "initial_column")
+                .map(|node| node.id),
+            Some(52)
+        );
         let ids: BTreeSet<u32> = body.nodes.iter().map(|node| node.id).collect();
-        assert_eq!(ids.len(), body.nodes.len(), "the body's doc ids are distinct");
+        assert_eq!(
+            ids.len(),
+            body.nodes.len(),
+            "the body's doc ids are distinct"
+        );
         crate::flatten::flatten_groups(&graph).expect("the layer flattens");
     }
 
@@ -477,18 +727,39 @@ mod tests {
     /// scene modifier's graph migrates too.
     #[test]
     fn every_water_gets_its_own_fill() {
-        let level = |base: u32| json!([
+        let level = |base: u32| {
+            json!([
             {"id": base, "nodeId": format!("domain_{base}"), "typeId": GPU_FLIP_DOMAIN_TYPE_ID},
-            {"id": base + 1, "nodeId": format!("column_{base}"), "typeId": TRANSFORM_3D_TYPE_ID}]);
-        let nodes: Vec<serde_json::Value> = level(1).as_array().unwrap().iter().chain(level(3).as_array().unwrap()).cloned().collect();
+            {"id": base + 1, "nodeId": format!("column_{base}"), "typeId": TRANSFORM_3D_TYPE_ID}])
+        };
+        let nodes: Vec<serde_json::Value> = level(1)
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(level(3).as_array().unwrap())
+            .cloned()
+            .collect();
         let mut graph = def(json!({"version": 3, "nodes": nodes,
             "wires": [wire(2, "transform", 1, INITIAL_VOLUME_PORT), wire(4, "transform", 3, INITIAL_VOLUME_PORT)]}));
         let modifier = graph.clone();
-        let force = json!({"id": "force", "scene": "scene", "targets": "allObjects", "graph": modifier});
-        graph.scene_modifiers.push(serde_json::from_value(force).expect("modifier"));
+        let force =
+            json!({"id": "force", "scene": "scene", "targets": "allObjects", "graph": modifier});
+        graph
+            .scene_modifiers
+            .push(serde_json::from_value(force).expect("modifier"));
         assert!(migrate_initial_volume(&mut graph));
-        let handles: BTreeSet<_> = graph.nodes.iter().filter_map(|node| node.handle.clone()).collect();
-        assert_eq!(handles, BTreeSet::from(["Initial Fill".to_owned(), "Initial Fill 2".to_owned()]));
-        assert!(!carries_initial_volume(&graph), "the modifier's graph migrated");
+        let handles: BTreeSet<_> = graph
+            .nodes
+            .iter()
+            .filter_map(|node| node.handle.clone())
+            .collect();
+        assert_eq!(
+            handles,
+            BTreeSet::from(["Initial Fill".to_owned(), "Initial Fill 2".to_owned()])
+        );
+        assert!(
+            !carries_initial_volume(&graph),
+            "the modifier's graph migrated"
+        );
     }
 }

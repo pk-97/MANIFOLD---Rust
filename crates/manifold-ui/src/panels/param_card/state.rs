@@ -179,7 +179,6 @@ impl ParamCardState {
     }
 }
 
-
 impl ParamCardPanel {
     pub fn is_collapsed(&self) -> bool {
         self.is_collapsed
@@ -270,7 +269,8 @@ impl ParamCardPanel {
     /// caller). Restarts `spawn_scale` from 0.94 easing to 1.0 with the
     /// magnetic-snap back-out curve (D15's `Curve::Snap`).
     pub fn fire_spawn_pop(&mut self) {
-        self.spawn_scale = AnimF32::new(0.94, color::MOTION_MED_MS).with_curve(crate::anim::Curve::Snap);
+        self.spawn_scale =
+            AnimF32::new(0.94, color::MOTION_MED_MS).with_curve(crate::anim::Curve::Snap);
         self.spawn_scale.set_target(1.0);
     }
 
@@ -301,9 +301,18 @@ impl ParamCardPanel {
     }
 
     /// Whether this card holds `param` routed from a clip trigger on `target`.
-    pub fn routes_clip_trigger(&self, target: &crate::view::UiGraphTarget, param: &manifold_foundation::ParamId) -> bool {
-        self.rows.iter().any(|row| row.id == *param
-            && row.clip_trigger.as_ref().is_some_and(|source| source.target == *target))
+    pub fn routes_clip_trigger(
+        &self,
+        target: &crate::view::UiGraphTarget,
+        param: &manifold_foundation::ParamId,
+    ) -> bool {
+        self.rows.iter().any(|row| {
+            row.id == *param
+                && row
+                    .clip_trigger
+                    .as_ref()
+                    .is_some_and(|source| source.target == *target)
+        })
     }
 
     /// Whether the card has any drawer sections to fold.
@@ -317,7 +326,9 @@ impl ParamCardPanel {
     pub fn set_all_sections_folded(&mut self, folded: bool) -> Vec<String> {
         let mut changed = Vec::new();
         for row in &self.rows {
-            let Some(section) = &row.spec.section else { continue };
+            let Some(section) = &row.spec.section else {
+                continue;
+            };
             let slot = self.section_folded.entry(section.clone()).or_insert(false);
             if *slot != folded && !changed.contains(section) {
                 *slot = folded;
@@ -331,12 +342,17 @@ impl ParamCardPanel {
     /// tab, without changing anything authored. `false` when the row is not
     /// on this card.
     pub fn reveal_param(&mut self, param: &manifold_foundation::ParamId) -> bool {
-        let Some(i) = self.rows.iter().position(|row| row.id == *param) else { return false; };
+        let Some(i) = self.rows.iter().position(|row| row.id == *param) else {
+            return false;
+        };
         if let Some(section) = &self.rows[i].spec.section {
             self.section_folded.insert(section.clone(), false);
         }
         let active = active_mod_tabs(&self.state.mod_state, &self.rows[i], i);
-        if let Some(tab) = [ModTab::Envelope, ModTab::Audio].into_iter().find(|tab| active.contains(tab)) {
+        if let Some(tab) = [ModTab::Envelope, ModTab::Audio]
+            .into_iter()
+            .find(|tab| active.contains(tab))
+        {
             self.mod_active_tab[i] = tab;
         }
         self.compact = false;
@@ -361,7 +377,13 @@ impl ParamCardPanel {
         let Some(info) = self.rows.get(i) else {
             return 0.0;
         };
-        row_drawer_height(self.compact, &self.state.mod_state, &self.mod_active_tab, info, i)
+        row_drawer_height(
+            self.compact,
+            &self.state.mod_state,
+            &self.mod_active_tab,
+            info,
+            i,
+        )
     }
 
     /// Reserved drawer height for row `i`, following the P1 open/close tween while
@@ -395,7 +417,10 @@ impl ParamCardPanel {
     pub fn skip_to_settled(&mut self, tree: &mut UITree) -> bool {
         let was_animating = self.collapse_anim.is_animating()
             || self.spawn_scale.is_animating()
-            || self.delete_fade.as_ref().is_some_and(|f| f.progress().is_some())
+            || self
+                .delete_fade
+                .as_ref()
+                .is_some_and(|f| f.progress().is_some())
             || self.drawer_height_anim.iter().any(|a| a.is_animating())
             || self.mod_tab_ink.iter().any(|a| a.is_animating())
             || self.value_flash.iter().any(|f| f.progress().is_some());
@@ -481,7 +506,10 @@ impl ParamCardPanel {
         }
         let shown = resolve_active_tab(
             &tabs.iter().map(|(_, t)| *t).collect::<Vec<_>>(),
-            self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
+            self.mod_active_tab
+                .get(i)
+                .copied()
+                .unwrap_or(ModTab::Driver),
         );
         let Some((id, tab)) = shown.and_then(|s| tabs.iter().find(|(_, t)| *t == s).copied())
         else {
@@ -532,7 +560,10 @@ impl ParamCardPanel {
     pub fn structural_motion(&self) -> bool {
         self.collapse_anim.is_animating()
             || self.spawn_scale.is_animating()
-            || self.delete_fade.as_ref().is_some_and(|f| f.progress().is_some())
+            || self
+                .delete_fade
+                .as_ref()
+                .is_some_and(|f| f.progress().is_some())
     }
 
     /// Move the built tree to where the drawer and tab-ink tweens are now
@@ -541,7 +572,11 @@ impl ParamCardPanel {
     /// [`Reflow`] for the column to apply; each sliding ink moves to its
     /// tween's x. Nothing for a card the current tree does not hold: one not
     /// built, or built into an arena that has been rebuilt since.
-    pub fn take_motion(&mut self, tree: &mut UITree, out: &mut Vec<crate::scroll_container::Reflow>) {
+    pub fn take_motion(
+        &mut self,
+        tree: &mut UITree,
+        out: &mut Vec<crate::scroll_container::Reflow>,
+    ) {
         if !self.is_live() || !self.border_id.is_some_and(|id| tree.is_live(id)) {
             return;
         }

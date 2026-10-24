@@ -5,29 +5,44 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use manifold_node_engine::load::preset_loader::{
-    blob_mask, build_catalog_with_overlays, resolve_stock_root, select_assets_root,
-    try_load_catalog, EFFECT_CATALOG, EFFECT_DIRS, GENERATOR_CATALOG, GENERATOR_DIRS,
-    SCENE_MODIFIER_CATALOG, KindDirs, OverlayEntries, PresetAssetsRoot,
+    EFFECT_CATALOG, EFFECT_DIRS, GENERATOR_CATALOG, GENERATOR_DIRS, KindDirs, OverlayEntries,
+    PresetAssetsRoot, SCENE_MODIFIER_CATALOG, blob_mask, build_catalog_with_overlays,
+    resolve_stock_root, select_assets_root, try_load_catalog,
 };
 
 mod tests {
     use crate::contracts::load::preset_loader::*;
 
-
     #[test]
     fn missing_stock_root_lists_bundle_and_registered_assets_candidates() {
-        let dirs = KindDirs::for_test("missing test kind", "missing-preset-loader-test-kind", "missing-preset-loader-test-kind");
+        let dirs = KindDirs::for_test(
+            "missing test kind",
+            "missing-preset-loader-test-kind",
+            "missing-preset-loader-test-kind",
+        );
         let (root, tried) = resolve_stock_root(&dirs);
         assert!(root.is_none());
         let exe = std::env::current_exe().unwrap();
         let assets = select_assets_root(
-            inventory::iter::<PresetAssetsRoot>.into_iter().map(|root| root.dir).collect(),
-        ).expect("renderer must register its assets");
-        assert_eq!(tried, vec![
-            exe.parent().unwrap().join("../Resources/presets").join(dirs.bundle_subdir_for_test()),
-            Path::new(assets).join(dirs.dev_subdir_for_test()),
-        ]);
-        let error = try_load_catalog(&dirs).err().expect("missing stock must fail loudly");
+            inventory::iter::<PresetAssetsRoot>
+                .into_iter()
+                .map(|root| root.dir)
+                .collect(),
+        )
+        .expect("renderer must register its assets");
+        assert_eq!(
+            tried,
+            vec![
+                exe.parent()
+                    .unwrap()
+                    .join("../Resources/presets")
+                    .join(dirs.bundle_subdir_for_test()),
+                Path::new(assets).join(dirs.dev_subdir_for_test()),
+            ]
+        );
+        let error = try_load_catalog(&dirs)
+            .err()
+            .expect("missing stock must fail loudly");
         for candidate in tried {
             assert!(error.contains(&candidate.display().to_string()));
         }

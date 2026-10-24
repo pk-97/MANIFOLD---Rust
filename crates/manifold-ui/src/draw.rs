@@ -132,10 +132,7 @@ pub fn elide_to_width(text: &str, font_size: f32, budget_px: f32) -> std::borrow
     let max_chars = (budget_px / char_w) as usize;
     if text.chars().count() > max_chars && max_chars > 1 {
         let take = max_chars.saturating_sub(1);
-        std::borrow::Cow::Owned(format!(
-            "{}…",
-            text.chars().take(take).collect::<String>()
-        ))
+        std::borrow::Cow::Owned(format!("{}…", text.chars().take(take).collect::<String>()))
     } else {
         std::borrow::Cow::Borrowed(text)
     }

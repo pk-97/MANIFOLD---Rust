@@ -1,7 +1,9 @@
-use half::f16;
-use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureFormat, GpuTextureDimension, GpuTextureUsage};
-use crate::gpu::render_target::RenderTarget;
 use crate::exec::{effect_node::NodeInstanceId, execution_plan::ResourceId};
+use crate::gpu::render_target::RenderTarget;
+use half::f16;
+use manifold_gpu::{
+    GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+};
 
 pub fn test_card_pixel(x: u32, y: u32, w: u32, h: u32) -> [f32; 4] {
     let wm = (w.max(1) - 1).max(1) as f32;
@@ -79,18 +81,27 @@ pub fn build_test_card_input(
         depth: 1,
         format,
         dimension: GpuTextureDimension::D2,
-        usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
+        usage: GpuTextureUsage::CPU_UPLOAD
+            | GpuTextureUsage::SHADER_READ
+            | GpuTextureUsage::COPY_SRC,
         label: "preset-thumb-test-card-input",
         mip_levels: 1,
     });
     let bytes = unsafe {
-        std::slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels.as_slice()))
+        std::slice::from_raw_parts(
+            pixels.as_ptr().cast::<u8>(),
+            std::mem::size_of_val(pixels.as_slice()),
+        )
     };
     device.upload_texture(&tex, bytes);
     RenderTarget::view_of(tex, "preset-thumb-test-card-input")
 }
 
-pub fn output_resource(plan: &crate::exec::execution_plan::ExecutionPlan, node: NodeInstanceId, port: &str) -> Option<ResourceId> {
+pub fn output_resource(
+    plan: &crate::exec::execution_plan::ExecutionPlan,
+    node: NodeInstanceId,
+    port: &str,
+) -> Option<ResourceId> {
     for step in plan.steps() {
         if step.node == node {
             for &(name, id) in &step.outputs {

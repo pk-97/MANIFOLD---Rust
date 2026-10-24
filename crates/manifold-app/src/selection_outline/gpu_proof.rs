@@ -89,7 +89,12 @@ fn render(device: &GpuDevice, runtime: &mut PresetRuntime, picture: &GpuTexture,
     let mut enc = device.create_encoder("d102 scene");
     {
         let mut gpu = RendererGpuEncoder::new(&mut enc, device);
-        runtime.render(&mut gpu, picture, &ctx, &manifold_core::params::ParamManifest::default());
+        runtime.render(
+            &mut gpu,
+            picture,
+            &ctx,
+            &manifold_core::params::ParamManifest::default(),
+        );
     }
     enc.commit_and_wait_completed();
 }
@@ -106,8 +111,16 @@ fn readback_r8(device: &GpuDevice, texture: &GpuTexture) -> Vec<u8> {
 }
 
 fn build(device: &std::sync::Arc<GpuDevice>) -> PresetRuntime {
-    PresetRuntime::from_json_str_with_device(SCENE, &PrimitiveRegistry::with_builtin(), device.clone(), W, H, GpuTextureFormat::Rgba16Float, None)
-        .expect("scene builds")
+    PresetRuntime::from_json_str_with_device(
+        SCENE,
+        &PrimitiveRegistry::with_builtin(),
+        device.clone(),
+        W,
+        H,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    )
+    .expect("scene builds")
 }
 
 /// The mask crosses from the content device to the UI device intact: the
@@ -124,26 +137,50 @@ fn the_mask_crosses_the_bridge_under_its_generation_stamp() {
         runtime.set_selection_mask(&[1]);
         render(&content, &mut runtime, &picture, frame);
     }
-    let mask = runtime.selection_mask().expect("a selection draws a mask").clone();
+    let mask = runtime
+        .selection_mask()
+        .expect("a selection draws a mask")
+        .clone();
     let drawn = readback_r8(&content, &mask);
     assert!(drawn.iter().any(|&v| v > 200), "the panel is in the mask");
 
-    let bridge = std::sync::Arc::new(crate::shared_texture::SharedTextureBridge::with_format(64, 64, GpuTextureFormat::R8Unorm));
+    let bridge = std::sync::Arc::new(crate::shared_texture::SharedTextureBridge::with_format(
+        64,
+        64,
+        GpuTextureFormat::R8Unorm,
+    ));
     let mut masks = super::OutlineMasks::default();
     masks.install(&content, bridge.clone());
     let slot = 2;
     let mut enc = content.create_encoder("d102 transport write");
-    let stamp = masks.write(&content, &mut enc, slot, Some(&mask)).expect("a mask writes a stamp");
+    let stamp = masks
+        .write(&content, &mut enc, slot, Some(&mask))
+        .expect("a mask writes a stamp");
     enc.commit_and_wait_completed();
-    assert_eq!((bridge.width(), bridge.height()), (mask.width, mask.height), "the bridge sizes to the mask");
+    assert_eq!(
+        (bridge.width(), bridge.height()),
+        (mask.width, mask.height),
+        "the bridge sizes to the mask"
+    );
 
     let mut pane = crate::texture_pane::TexturePane::bridged(bridge.clone());
-    let read = super::leased_mask(Some(&mut pane), &ui, slot, Some(stamp)).expect("the stamped surface reads");
-    assert_eq!(readback_r8(&ui, &read), drawn, "the UI reads the mask the scene drew");
-    assert!(super::leased_mask(Some(&mut pane), &ui, slot, None).is_none(), "a frame with no mask reads none");
+    let read = super::leased_mask(Some(&mut pane), &ui, slot, Some(stamp))
+        .expect("the stamped surface reads");
+    assert_eq!(
+        readback_r8(&ui, &read),
+        drawn,
+        "the UI reads the mask the scene drew"
+    );
+    assert!(
+        super::leased_mask(Some(&mut pane), &ui, slot, None).is_none(),
+        "a frame with no mask reads none"
+    );
 
     bridge.resize(32, 32);
-    assert!(super::leased_mask(Some(&mut pane), &ui, slot, Some(stamp)).is_none(), "a stamp from before a resize reads none");
+    assert!(
+        super::leased_mask(Some(&mut pane), &ui, slot, Some(stamp)).is_none(),
+        "a stamp from before a resize reads none"
+    );
 }
 
 /// While the preview navigates, the viewport's mask is drawn through the
@@ -156,31 +193,86 @@ fn the_viewport_mask_follows_the_navigated_camera() {
     let device = std::sync::Arc::new(GpuDevice::new_queued("d102 navigated mask"));
     let mut runtime = build(&device);
     let picture = target(&device, "d102 navigated output");
-    let camera = ViewportCamera { target: [0.0, 1.5, 0.0], yaw: 2.2, pitch: -0.25, distance: 9.0, ..Default::default() };
-    runtime.set_scene_viewport_watched(&manifold_core::NodeId::new("scene"), SceneViewportConfig { camera, width: W, height: H })
+    let camera = ViewportCamera {
+        target: [0.0, 1.5, 0.0],
+        yaw: 2.2,
+        pitch: -0.25,
+        distance: 9.0,
+        ..Default::default()
+    };
+    runtime
+        .set_scene_viewport_watched(
+            &manifold_core::NodeId::new("scene"),
+            SceneViewportConfig {
+                camera,
+                width: W,
+                height: H,
+            },
+        )
         .expect("the scene takes a viewport");
     for frame in 0..3 {
         runtime.set_selection_mask(&[1]);
         runtime.set_scene_viewport_selection_mask(&[1]);
         render(&device, &mut runtime, &picture, frame);
     }
-    let viewed = runtime.scene_viewport_texture().expect("the viewport renders").clone();
-    let mask = runtime.scene_viewport_selection_mask().expect("the viewport draws a mask").clone();
-    let output_mask = runtime.selection_mask().expect("the output draws its own").clone();
-    assert_eq!((mask.width, mask.height), (viewed.width, viewed.height), "the mask matches the navigated picture");
+    let viewed = runtime
+        .scene_viewport_texture()
+        .expect("the viewport renders")
+        .clone();
+    let mask = runtime
+        .scene_viewport_selection_mask()
+        .expect("the viewport draws a mask")
+        .clone();
+    let output_mask = runtime
+        .selection_mask()
+        .expect("the output draws its own")
+        .clone();
+    assert_eq!(
+        (mask.width, mask.height),
+        (viewed.width, viewed.height),
+        "the mask matches the navigated picture"
+    );
 
-    let red: Vec<bool> = readback(&device, &viewed).iter().map(|px| px[0] > 0.3 && px[1] < 0.15 && px[2] < 0.15).collect();
-    let masked: Vec<bool> = readback_r8(&device, &mask).iter().map(|&v| v > 127).collect();
-    let output_masked: Vec<bool> = readback_r8(&device, &output_mask).iter().map(|&v| v > 127).collect();
+    let red: Vec<bool> = readback(&device, &viewed)
+        .iter()
+        .map(|px| px[0] > 0.3 && px[1] < 0.15 && px[2] < 0.15)
+        .collect();
+    let masked: Vec<bool> = readback_r8(&device, &mask)
+        .iter()
+        .map(|&v| v > 127)
+        .collect();
+    let output_masked: Vec<bool> = readback_r8(&device, &output_mask)
+        .iter()
+        .map(|&v| v > 127)
+        .collect();
     let count = |v: &[bool]| v.iter().filter(|&&b| b).count();
     let both = red.iter().zip(&masked).filter(|(r, m)| **r && **m).count();
     let (red_n, masked_n) = (count(&red), count(&masked));
-    eprintln!("d102 navigated: red {red_n}, masked {masked_n}, both {both}, output mask {}", count(&output_masked));
-    assert!(red_n > 2000, "the navigated view sees the panel close up ({red_n} px)");
-    assert!(both as f64 >= red_n as f64 * 0.95, "the mask covers the navigated panel: {both} of {red_n}");
-    assert!((masked_n as f64) < red_n as f64 * 1.1, "and little else: {masked_n} vs {red_n}");
-    let same = masked.iter().zip(&output_masked).filter(|(a, b)| **a && **b).count();
-    assert!((same as f64) < masked_n as f64 * 0.5, "not the output camera's mask: {same} of {masked_n} shared");
+    eprintln!(
+        "d102 navigated: red {red_n}, masked {masked_n}, both {both}, output mask {}",
+        count(&output_masked)
+    );
+    assert!(
+        red_n > 2000,
+        "the navigated view sees the panel close up ({red_n} px)"
+    );
+    assert!(
+        both as f64 >= red_n as f64 * 0.95,
+        "the mask covers the navigated panel: {both} of {red_n}"
+    );
+    assert!(
+        (masked_n as f64) < red_n as f64 * 1.1,
+        "and little else: {masked_n} vs {red_n}"
+    );
+    let same = masked
+        .iter()
+        .zip(&output_masked)
+        .filter(|(a, b)| **a && **b)
+        .count();
+    assert!(
+        (same as f64) < masked_n as f64 * 0.5,
+        "not the output camera's mask: {same} of {masked_n} shared"
+    );
 }
 
 /// An export renders no selection mask: the selection sits out the run and
@@ -190,12 +282,24 @@ fn an_export_with_a_selection_renders_no_mask() {
     use crate::content_command::ContentCommand;
     use manifold_compositor::generator_renderer::GeneratorRenderer;
     let mut project = manifold_core::project::Project::default();
-    (project.settings.output_width, project.settings.output_height) = (64, 64);
-    let mut layer = manifold_core::layer::Layer::new_generator("Scene".into(), manifold_core::PresetTypeId::new("D102Scene"), 0);
+    (
+        project.settings.output_width,
+        project.settings.output_height,
+    ) = (64, 64);
+    let mut layer = manifold_core::layer::Layer::new_generator(
+        "Scene".into(),
+        manifold_core::PresetTypeId::new("D102Scene"),
+        0,
+    );
     let params = layer.gen_params_mut().expect("a generator layer");
     params.graph = Some(serde_json::from_str(SCENE).expect("scene json"));
     params.refresh_manifest_from_graph();
-    layer.clips.push(manifold_core::clip::TimelineClip::new_generator(manifold_core::Beats(0.0), manifold_core::Beats(4.0)));
+    layer
+        .clips
+        .push(manifold_core::clip::TimelineClip::new_generator(
+            manifold_core::Beats(0.0),
+            manifold_core::Beats(4.0),
+        ));
     let layer_id = layer.layer_id.clone();
     project.timeline.layers.push(layer);
 
@@ -203,18 +307,30 @@ fn an_export_with_a_selection_renders_no_mask() {
     let (_cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
     let (state_tx, _state_rx) = crate::content_state::state_channel();
     thread.run_warmup(&cmd_rx, &state_tx);
-    let request = super::OutlineSlots { layer: layer_id.clone(), slots: vec![1] };
+    let request = super::OutlineSlots {
+        layer: layer_id.clone(),
+        slots: vec![1],
+    };
     thread.handle_command(ContentCommand::SetPhysicsOverlay(Some(layer_id.clone())));
-    thread.handle_command(ContentCommand::SetSelectionOutline { output: Some(request.clone()), viewport: None });
+    thread.handle_command(ContentCommand::SetSelectionOutline {
+        output: Some(request.clone()),
+        viewport: None,
+    });
     let masked = |thread: &crate::content_thread::ContentThread| {
-        thread.engine.renderers().iter()
+        thread
+            .engine
+            .renderers()
+            .iter()
             .find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>())
             .is_some_and(|generators| generators.selection_mask(&layer_id).is_some())
     };
     for _ in 0..3 {
         thread.tick_frame(&state_tx);
     }
-    assert!(masked(&thread), "a frame on screen draws the selection mask");
+    assert!(
+        masked(&thread),
+        "a frame on screen draws the selection mask"
+    );
 
     let dir = std::env::temp_dir().join(format!("manifold-outline-export-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("export dir");
@@ -236,24 +352,57 @@ fn an_export_with_a_selection_renders_no_mask() {
     thread.run_export(config, &cmd_rx, &state_tx);
     let _ = std::fs::remove_dir_all(&dir);
     assert!(!masked(&thread), "the export's frames drew no mask");
-    assert_eq!(thread.content_pipeline.take_selection_outline(), (Some(request), None), "the selection is back after the export");
+    assert_eq!(
+        thread.content_pipeline.take_selection_outline(),
+        (Some(request), None),
+        "the selection is back after the export"
+    );
 }
 
 /// The content thread of a project whose one layer is [`SCENE`], warmed up.
-fn scene_thread(w: u32, h: u32) -> (crate::content_thread::ContentThread, manifold_core::LayerId, crossbeam_channel::Sender<crate::content_command::ContentCommand>, crate::content_state::StateTx) {
+fn scene_thread(
+    w: u32,
+    h: u32,
+) -> (
+    crate::content_thread::ContentThread,
+    manifold_core::LayerId,
+    crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    crate::content_state::StateTx,
+) {
     scene_thread_of(SCENE, w, h)
 }
 
 /// [`scene_thread`] for another scene json.
-fn scene_thread_of(scene: &str, w: u32, h: u32) -> (crate::content_thread::ContentThread, manifold_core::LayerId, crossbeam_channel::Sender<crate::content_command::ContentCommand>, crate::content_state::StateTx) {
+fn scene_thread_of(
+    scene: &str,
+    w: u32,
+    h: u32,
+) -> (
+    crate::content_thread::ContentThread,
+    manifold_core::LayerId,
+    crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    crate::content_state::StateTx,
+) {
     use crate::content_command::ContentCommand;
     let mut project = manifold_core::project::Project::default();
-    (project.settings.output_width, project.settings.output_height) = (w as i32, h as i32);
-    let mut layer = manifold_core::layer::Layer::new_generator("Scene".into(), manifold_core::PresetTypeId::new("D102Scene"), 0);
+    (
+        project.settings.output_width,
+        project.settings.output_height,
+    ) = (w as i32, h as i32);
+    let mut layer = manifold_core::layer::Layer::new_generator(
+        "Scene".into(),
+        manifold_core::PresetTypeId::new("D102Scene"),
+        0,
+    );
     let params = layer.gen_params_mut().expect("a generator layer");
     params.graph = Some(serde_json::from_str(scene).expect("scene json"));
     params.refresh_manifest_from_graph();
-    layer.clips.push(manifold_core::clip::TimelineClip::new_generator(manifold_core::Beats(0.0), manifold_core::Beats(4.0)));
+    layer
+        .clips
+        .push(manifold_core::clip::TimelineClip::new_generator(
+            manifold_core::Beats(0.0),
+            manifold_core::Beats(4.0),
+        ));
     let layer_id = layer.layer_id.clone();
     project.timeline.layers.push(layer);
     let mut thread = crate::headless_harness::headless_content_thread(project, w, h);
@@ -263,11 +412,17 @@ fn scene_thread_of(scene: &str, w: u32, h: u32) -> (crate::content_thread::Conte
     (thread, layer_id, cmd_tx, state_tx)
 }
 
-fn overlay(mode: manifold_core::scene_surface::GizmoDrawMode, layer: &manifold_core::LayerId) -> crate::gizmo_overlay::GizmoOverlay {
+fn overlay(
+    mode: manifold_core::scene_surface::GizmoDrawMode,
+    layer: &manifold_core::LayerId,
+) -> crate::gizmo_overlay::GizmoOverlay {
     crate::gizmo_overlay::GizmoOverlay {
         mode,
         scene_layer: Some(layer.clone()),
-        output: Some((layer.clone(), crate::gizmo_overlay::GizmoRequest::panel(GizmoMode::Move, &[], None))),
+        output: Some((
+            layer.clone(),
+            crate::gizmo_overlay::GizmoRequest::panel(GizmoMode::Move, &[], None),
+        )),
         viewport: None,
     }
 }
@@ -281,13 +436,23 @@ fn only_the_depth_testing_modes_keep_scene_depth() {
     use manifold_core::scene_surface::GizmoDrawMode;
     let (mut thread, layer_id, _keep, state_tx) = scene_thread(64, 64);
     let kept = |thread: &crate::content_thread::ContentThread| {
-        thread.engine.renderers().iter()
+        thread
+            .engine
+            .renderers()
+            .iter()
             .find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>())
             .is_some_and(|generators| generators.gizmo_depth(&layer_id).is_some())
     };
     thread.handle_command(ContentCommand::SetPhysicsOverlay(Some(layer_id.clone())));
-    for (mode, expected) in [(GizmoDrawMode::OnTop, false), (GizmoDrawMode::Occluded, true), (GizmoDrawMode::Ghost, true), (GizmoDrawMode::OnTop, false)] {
-        thread.handle_command(ContentCommand::SetGizmoOverlay(Box::new(overlay(mode, &layer_id))));
+    for (mode, expected) in [
+        (GizmoDrawMode::OnTop, false),
+        (GizmoDrawMode::Occluded, true),
+        (GizmoDrawMode::Ghost, true),
+        (GizmoDrawMode::OnTop, false),
+    ] {
+        thread.handle_command(ContentCommand::SetGizmoOverlay(Box::new(overlay(
+            mode, &layer_id,
+        ))));
         for _ in 0..3 {
             thread.tick_frame(&state_tx);
         }
@@ -304,31 +469,51 @@ fn an_export_draws_the_scene_chrome_in_the_set_draw_mode() {
     use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
     const SIZE: (u32, u32) = (320, 180);
     let (mut thread, layer_id, _keep, state_tx) = scene_thread(SIZE.0, SIZE.1);
-    thread.handle_command(ContentCommand::SetGizmoOverlay(Box::new(crate::gizmo_overlay::GizmoOverlay {
-        scene_layer: Some(layer_id.clone()),
-        ..Default::default()
-    })));
+    thread.handle_command(ContentCommand::SetGizmoOverlay(Box::new(
+        crate::gizmo_overlay::GizmoOverlay {
+            scene_layer: Some(layer_id.clone()),
+            ..Default::default()
+        },
+    )));
     let previous = thread.content_pipeline.begin_export_gizmos();
-    assert!(previous.is_some(), "the Scene panel's scene is the one exported");
+    assert!(
+        previous.is_some(),
+        "the Scene panel's scene is the one exported"
+    );
     for _ in 0..3 {
         thread.tick_frame(&state_tx);
     }
     let read = |thread: &crate::content_thread::ContentThread| {
         let pipeline = &thread.content_pipeline;
-        readback_raw_halves(pipeline.native_device().expect("native device"), pipeline.export_output_texture(), SIZE.0, SIZE.1)
+        readback_raw_halves(
+            pipeline.native_device().expect("native device"),
+            pipeline.export_output_texture(),
+            SIZE.0,
+            SIZE.1,
+        )
     };
-    let changed = |a: &[u8], b: &[u8]| a.chunks_exact(8).zip(b.chunks_exact(8)).filter(|(x, y)| x != y).count();
+    let changed = |a: &[u8], b: &[u8]| {
+        a.chunks_exact(8)
+            .zip(b.chunks_exact(8))
+            .filter(|(x, y)| x != y)
+            .count()
+    };
     let base = read(&thread);
     thread.content_pipeline.draw_export_gizmos();
     let on_top = changed(&base, &read(&thread));
     eprintln!("export gizmos: On Top changed {on_top} px");
-    assert!(on_top > 100, "the export frame carries the scene's chrome ({on_top} px)");
+    assert!(
+        on_top > 100,
+        "the export frame carries the scene's chrome ({on_top} px)"
+    );
 
-    thread.handle_command(ContentCommand::SetGizmoOverlay(Box::new(crate::gizmo_overlay::GizmoOverlay {
-        mode: GizmoDrawMode::Occluded,
-        scene_layer: Some(layer_id.clone()),
-        ..Default::default()
-    })));
+    thread.handle_command(ContentCommand::SetGizmoOverlay(Box::new(
+        crate::gizmo_overlay::GizmoOverlay {
+            mode: GizmoDrawMode::Occluded,
+            scene_layer: Some(layer_id.clone()),
+            ..Default::default()
+        },
+    )));
     for _ in 0..3 {
         thread.tick_frame(&state_tx);
     }
@@ -336,7 +521,9 @@ fn an_export_draws_the_scene_chrome_in_the_set_draw_mode() {
     thread.content_pipeline.draw_export_gizmos();
     let occluded = changed(&fresh, &read(&thread));
     eprintln!("export gizmos: Occluded changed {occluded} px");
-    assert!(occluded > 0 && occluded <= on_top, "Occluded draws the visible part ({occluded} of {on_top} px)");
+    assert!(
+        occluded > 0 && occluded <= on_top,
+        "Occluded draws the visible part ({occluded} of {on_top} px)"
+    );
     thread.content_pipeline.end_export_gizmos(previous);
 }
-

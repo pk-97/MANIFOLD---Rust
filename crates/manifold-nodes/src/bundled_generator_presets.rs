@@ -73,9 +73,8 @@ mod tests {
         use manifold_core::effect_graph_def::EffectGraphDef;
         let mut violations: Vec<String> = Vec::new();
         for (preset_id, json) in GENERATOR_CATALOG.load().entries() {
-            let doc: EffectGraphDef = serde_json::from_str(&json).unwrap_or_else(|e| {
-                panic!("bundled preset {preset_id}: parse failed: {e}")
-            });
+            let doc: EffectGraphDef = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("bundled preset {preset_id}: parse failed: {e}"));
             let Some(meta) = doc.preset_metadata.as_ref() else {
                 continue; // legacy preset without metadata — no bindings to validate
             };
@@ -113,9 +112,9 @@ mod tests {
     /// warning in the log. This test catches it at compile time.
     #[test]
     fn every_bundled_preset_chain_builds() {
-        use manifold_node_engine::runtime::PresetRuntime;
-        use manifold_node_engine::persistence::PrimitiveRegistry;
         use manifold_gpu::GpuTextureFormat;
+        use manifold_node_engine::persistence::PrimitiveRegistry;
+        use manifold_node_engine::runtime::PresetRuntime;
         let device = manifold_gpu::testkit::test_device();
         let registry = PrimitiveRegistry::with_builtin();
         let mut failures: Vec<String> = Vec::new();
@@ -169,11 +168,11 @@ mod tests {
     /// are read past t = 0.
     #[test]
     fn every_bundled_preset_executes_one_frame() {
+        use manifold_gpu::GpuTextureFormat;
+        use manifold_node_engine::gpu::render_target::RenderTarget;
+        use manifold_node_engine::persistence::PrimitiveRegistry;
         use manifold_node_engine::runtime::PresetRuntime;
         use manifold_node_engine::runtime::preset_context::PresetContext;
-        use manifold_node_engine::persistence::PrimitiveRegistry;
-        use manifold_node_engine::gpu::render_target::RenderTarget;
-        use manifold_gpu::GpuTextureFormat;
 
         let device = manifold_gpu::testkit::test_device();
         let registry = PrimitiveRegistry::with_builtin();
@@ -210,7 +209,13 @@ mod tests {
                 // too. On one runtime it would follow t=0, and every simulation
                 // would step through the 1.234 s gap first.
                 let mut g = match PresetRuntime::from_json_str_with_device(
-                    &json, &registry, device.arc(), w, h, format, None,
+                    &json,
+                    &registry,
+                    device.arc(),
+                    w,
+                    h,
+                    format,
+                    None,
                 ) {
                     Ok(g) => g,
                     Err(e) => {
@@ -226,8 +231,10 @@ mod tests {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let mut native_enc = device.create_encoder("first-frame-test");
                     {
-                        let mut gpu =
-                            manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native_enc, &device);
+                        let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(
+                            &mut native_enc,
+                            &device,
+                        );
                         g.render(
                             &mut gpu,
                             &target.texture,
@@ -243,7 +250,12 @@ mod tests {
                     failures.push(format!("{preset_id}: {frame} panic: {msg}"));
                     break;
                 }
-                let bytes = manifold_node_engine::gpu::headless_readback::readback_raw_halves(&device, &target.texture, w, h);
+                let bytes = manifold_node_engine::gpu::headless_readback::readback_raw_halves(
+                    &device,
+                    &target.texture,
+                    w,
+                    h,
+                );
                 if let Some(bad) = non_finite_rgba16f(&bytes) {
                     failures.push(format!("{preset_id}: {frame} {bad}"));
                 }

@@ -3,9 +3,7 @@ use super::super::*;
 use crate::command::Command;
 use manifold_core::EffectId;
 use manifold_core::PresetTypeId;
-use manifold_core::effect_graph_def::{
-    GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
-};
+use manifold_core::effect_graph_def::{GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef};
 use manifold_core::effects::PresetInstance;
 
 /// A batch layout sets every listed node's `editor_pos` in one command,
@@ -162,11 +160,8 @@ fn remove_graph_node_also_removes_incident_wires() {
     // Pre-populate graph with the catalog default.
     project.find_effect_by_id_mut(&id).unwrap().graph = Some(mirror_catalog_default());
 
-    let mut cmd = RemoveGraphNodeCommand::new(
-        GraphTarget::Effect(id.clone()),
-        1,
-        mirror_catalog_default(),
-    );
+    let mut cmd =
+        RemoveGraphNodeCommand::new(GraphTarget::Effect(id.clone()), 1, mirror_catalog_default());
     cmd.execute(&mut project);
 
     let def = project
@@ -191,11 +186,8 @@ fn remove_graph_node_undo_restores_node_and_wires() {
     let (mut project, id) = project_with_one_master_effect();
     project.find_effect_by_id_mut(&id).unwrap().graph = Some(mirror_catalog_default());
 
-    let mut cmd = RemoveGraphNodeCommand::new(
-        GraphTarget::Effect(id.clone()),
-        1,
-        mirror_catalog_default(),
-    );
+    let mut cmd =
+        RemoveGraphNodeCommand::new(GraphTarget::Effect(id.clone()), 1, mirror_catalog_default());
     cmd.execute(&mut project);
     cmd.undo(&mut project);
 
@@ -282,11 +274,8 @@ fn remove_graph_node_prunes_bound_card_slider_and_undo_restores() {
             manifold_core::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
     }
 
-    let mut cmd = RemoveGraphNodeCommand::new(
-        GraphTarget::Effect(id.clone()),
-        1,
-        mirror_catalog_default(),
-    );
+    let mut cmd =
+        RemoveGraphNodeCommand::new(GraphTarget::Effect(id.clone()), 1, mirror_catalog_default());
     cmd.execute(&mut project);
 
     let fx = project.find_effect_by_id(&id).unwrap();
@@ -718,9 +707,7 @@ fn calibrated_source_param_rejects_atomically_but_ordinary_node_writes_remain_li
 #[test]
 fn vertices_modifier_allows_host_rt_enabled_with_undo_redo() {
     use manifold_core::NodeId;
-    use manifold_core::scene_modifier_preset::{
-        SceneModifierInstanceDef, SceneTargetSelection,
-    };
+    use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, SceneTargetSelection};
     let mut def = mirror_catalog_default();
     def.nodes.push(EffectGraphNode {
         id: 99,
@@ -774,9 +761,17 @@ fn vertices_modifier_allows_host_rt_enabled_with_undo_redo() {
     assert!(service.take_rejection().is_none());
     assert_eq!(service.data_version(), 1);
     assert!(service.can_undo());
-    let graph = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+    let graph = project
+        .find_effect_by_id(&id)
+        .unwrap()
+        .graph
+        .as_ref()
+        .unwrap();
     let scene = graph.nodes.iter().find(|node| node.id == 99).unwrap();
-    assert_eq!(scene.params.get("rt_enabled"), Some(&SerializedParamValue::Bool { value: true }));
+    assert_eq!(
+        scene.params.get("rt_enabled"),
+        Some(&SerializedParamValue::Bool { value: true })
+    );
     let after = serde_json::to_value(&project).unwrap();
     assert!(service.undo(&mut project));
     assert_eq!(serde_json::to_value(&project).unwrap(), before);
@@ -1180,7 +1175,8 @@ fn revert_clears_generator_graph_and_undo_restores_it() {
         .find_layer_by_id_mut(&lid)
         .unwrap()
         .1
-        .gen_params_mut().unwrap()
+        .gen_params_mut()
+        .unwrap()
         .graph = Some(mirror_catalog_default());
 
     let mut revert = RevertEffectGraphCommand::new(GraphTarget::Generator(lid.clone()));
@@ -1271,13 +1267,21 @@ fn generator_layer_with_scenes(scenes: u32) -> (Project, manifold_core::LayerId)
         .find_layer_by_id_mut(&lid)
         .unwrap()
         .1
-        .gen_params_mut().unwrap()
+        .gen_params_mut()
+        .unwrap()
         .graph = Some(def);
     (project, lid)
 }
 
 fn generator_graph(project: &Project, lid: &manifold_core::LayerId) -> EffectGraphDef {
-    project.timeline.find_layer_by_id(lid).unwrap().1.generator_graph().unwrap().clone()
+    project
+        .timeline
+        .find_layer_by_id(lid)
+        .unwrap()
+        .1
+        .generator_graph()
+        .unwrap()
+        .clone()
 }
 
 fn assert_refused_unchanged(
@@ -1292,7 +1296,10 @@ fn assert_refused_unchanged(
         service.take_rejection().as_deref(),
         Some(manifold_core::effect_graph_def::ONE_SCENE_PER_LAYER)
     );
-    assert!(!service.can_undo(), "a refused edit never reaches the undo stack");
+    assert!(
+        !service.can_undo(),
+        "a refused edit never reaches the undo stack"
+    );
     assert_eq!(generator_graph(&project, lid), before, "graph unchanged");
 }
 
@@ -1373,7 +1380,10 @@ fn existing_two_scene_layer_loads_and_round_trips_unchanged() {
     let (mut project, lid) = generator_layer_with_scenes(2);
     let saved = serde_json::to_value(&project).unwrap();
     let loaded: Project = serde_json::from_value(saved.clone()).unwrap();
-    assert_eq!(generator_graph(&loaded, &lid), generator_graph(&project, &lid));
+    assert_eq!(
+        generator_graph(&loaded, &lid),
+        generator_graph(&project, &lid)
+    );
     assert_eq!(
         manifold_core::effect_graph_def::render_scene_count(&generator_graph(&loaded, &lid).nodes),
         2

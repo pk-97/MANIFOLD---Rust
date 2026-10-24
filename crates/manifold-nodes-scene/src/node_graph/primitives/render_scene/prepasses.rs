@@ -19,7 +19,13 @@ impl RenderScene {
             let rebuild_epoch = ctx.rebuild_epoch;
             let gpu = ctx.gpu_encoder();
             let sampler = self.sampler.as_ref().expect("ensured").clone();
-            self.run_ibl_convolution(gpu, &sampler, pre.envmap_wired, envmap_content, rebuild_epoch);
+            self.run_ibl_convolution(
+                gpu,
+                &sampler,
+                pre.envmap_wired,
+                envmap_content,
+                rebuild_epoch,
+            );
             gpu.checkpoint();
         }
         envmap_content
@@ -39,7 +45,12 @@ impl RenderScene {
         rt_ready: bool,
         has_transparent: bool,
     ) {
-        let FramePrelude { ref casters, rt_enabled, rt_shadows_enabled, .. } = *pre;
+        let FramePrelude {
+            ref casters,
+            rt_enabled,
+            rt_shadows_enabled,
+            ..
+        } = *pre;
         let has_casters = !casters.is_empty();
         let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
         // RAYTRACING_DESIGN.md section 14 ED2 (PBR-only consumers, Peter
@@ -75,12 +86,19 @@ impl RenderScene {
             // ONLY place `cast_shadows == false` removes an object from —
             // it stays in `opaque_draws` (and therefore the prepass/accel
             // above and below) unchanged.
-            let caster_draws: Vec<&ObjectDraw> =
-                opaque_draws.iter().copied().filter(|d| d.cast_shadows).collect();
+            let caster_draws: Vec<&ObjectDraw> = opaque_draws
+                .iter()
+                .copied()
+                .filter(|d| d.cast_shadows)
+                .collect();
             let shadow_pipeline = self.shadow_pipeline.as_ref().expect("ensured").clone();
             let shadow_ds = self.shadow_depth_stencil.as_ref().expect("ensured");
             for (slot, l) in casters.iter().enumerate() {
-                let Some(shadow_map) = self.shadow_maps.as_ref().and_then(|maps| maps.layers.get(slot)) else {
+                let Some(shadow_map) = self
+                    .shadow_maps
+                    .as_ref()
+                    .and_then(|maps| maps.layers.get(slot))
+                else {
                     continue;
                 };
                 let vp = l.shadow_view_proj();
@@ -131,9 +149,12 @@ impl RenderScene {
                 // the array grows — see `ensure_shadow_maps`)
                 // already holds exactly this content, so the depth-only
                 // batch this caster would otherwise issue is redundant.
-                if caster_draws.iter().all(|draw| draw.geometry_content_known && draw.appearance_content_known
-                    && (draw.base_color_map.is_none() || draw.rt_texture_content[0].is_some()))
-                    && self.shadow_cache_keys[slot] == Some(shadow_key) {
+                if caster_draws.iter().all(|draw| {
+                    draw.geometry_content_known
+                        && draw.appearance_content_known
+                        && (draw.base_color_map.is_none() || draw.rt_texture_content[0].is_some())
+                }) && self.shadow_cache_keys[slot] == Some(shadow_key)
+                {
                     continue;
                 }
                 self.shadow_cache_keys[slot] = Some(shadow_key);
@@ -166,8 +187,17 @@ impl RenderScene {
                                 buffer: d.weights.unwrap_or(d.vertices),
                                 offset: 0,
                             },
-                            GpuBinding::Texture { binding: 4, texture: d.base_color_map.unwrap_or(self.dummy_texture.as_ref().expect("ensured")) },
-                            GpuBinding::Sampler { binding: 5, sampler: &self.material_samplers[&Self::sampler_cache_key(d.sampler_descs[0])] },
+                            GpuBinding::Texture {
+                                binding: 4,
+                                texture: d
+                                    .base_color_map
+                                    .unwrap_or(self.dummy_texture.as_ref().expect("ensured")),
+                            },
+                            GpuBinding::Sampler {
+                                binding: 5,
+                                sampler: &self.material_samplers
+                                    [&Self::sampler_cache_key(d.sampler_descs[0])],
+                            },
                         ]
                     })
                     .collect();
@@ -209,10 +239,18 @@ impl RenderScene {
         has_transmission: bool,
         has_subsurface: bool,
     ) {
-        let FramePrelude { view_proj, rt_enabled, .. } = *pre;
+        let FramePrelude {
+            view_proj,
+            rt_enabled,
+            ..
+        } = *pre;
         let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
         if has_transmission || rt_enabled || has_subsurface {
-            let opaque_depth_pipeline = self.shadow_pipeline.as_ref().expect("ensured above").clone();
+            let opaque_depth_pipeline = self
+                .shadow_pipeline
+                .as_ref()
+                .expect("ensured above")
+                .clone();
             let opaque_depth_ds = self.depth_stencil.as_ref().expect("ensured above");
             let opaque_depth_snapshot = self.opaque_depth_snapshot.as_ref().expect("ensured above");
             let cam_uniforms: Vec<ShadowUniforms> = opaque_draws
@@ -243,8 +281,17 @@ impl RenderScene {
                             buffer: d.weights.unwrap_or(d.vertices),
                             offset: 0,
                         },
-                        GpuBinding::Texture { binding: 4, texture: d.base_color_map.unwrap_or(self.dummy_texture.as_ref().expect("ensured")) },
-                        GpuBinding::Sampler { binding: 5, sampler: &self.material_samplers[&Self::sampler_cache_key(d.sampler_descs[0])] },
+                        GpuBinding::Texture {
+                            binding: 4,
+                            texture: d
+                                .base_color_map
+                                .unwrap_or(self.dummy_texture.as_ref().expect("ensured")),
+                        },
+                        GpuBinding::Sampler {
+                            binding: 5,
+                            sampler: &self.material_samplers
+                                [&Self::sampler_cache_key(d.sampler_descs[0])],
+                        },
                     ]
                 })
                 .collect();
@@ -307,7 +354,10 @@ impl RenderScene {
                         binding: 0,
                         data: bytemuck::bytes_of(&uniforms),
                     },
-                    GpuBinding::Texture { binding: 1, texture: lut },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: lut,
+                    },
                 ],
                 [BRDF_LUT_SIZE.div_ceil(16), BRDF_LUT_SIZE.div_ceil(16), 1],
                 "node.render_scene ibl brdf lut",
@@ -355,11 +405,24 @@ impl RenderScene {
                         binding: 0,
                         data: bytemuck::bytes_of(&uniforms),
                     },
-                    GpuBinding::Texture { binding: 1, texture: envmap },
-                    GpuBinding::Sampler { binding: 2, sampler },
-                    GpuBinding::Texture { binding: 3, texture: irradiance },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: envmap,
+                    },
+                    GpuBinding::Sampler {
+                        binding: 2,
+                        sampler,
+                    },
+                    GpuBinding::Texture {
+                        binding: 3,
+                        texture: irradiance,
+                    },
                 ],
-                [IRRADIANCE_WIDTH.div_ceil(8), IRRADIANCE_HEIGHT.div_ceil(8), 1],
+                [
+                    IRRADIANCE_WIDTH.div_ceil(8),
+                    IRRADIANCE_HEIGHT.div_ceil(8),
+                    1,
+                ],
                 "node.render_scene ibl irradiance",
             );
         }
@@ -397,9 +460,18 @@ impl RenderScene {
                             binding: 0,
                             data: bytemuck::bytes_of(&uniforms),
                         },
-                        GpuBinding::Texture { binding: 1, texture: envmap },
-                        GpuBinding::Sampler { binding: 2, sampler },
-                        GpuBinding::Texture { binding: 3, texture: &view },
+                        GpuBinding::Texture {
+                            binding: 1,
+                            texture: envmap,
+                        },
+                        GpuBinding::Sampler {
+                            binding: 2,
+                            sampler,
+                        },
+                        GpuBinding::Texture {
+                            binding: 3,
+                            texture: &view,
+                        },
                     ],
                     [mip_w.div_ceil(16), mip_h.div_ceil(16), 1],
                     "node.render_scene ibl prefilter mip",
@@ -434,8 +506,12 @@ impl ShadowUniforms {
             light_view_proj: view_proj,
             model: draw.uniforms.model,
             appearance: draw.uniforms.appearance,
-            alpha: [draw.uniforms.alpha_params[0], draw.uniforms.alpha_params[1],
-                draw.uniforms.base_color[3], draw.uniforms.texture_flags[2]],
+            alpha: [
+                draw.uniforms.alpha_params[0],
+                draw.uniforms.alpha_params[1],
+                draw.uniforms.base_color[3],
+                draw.uniforms.texture_flags[2],
+            ],
             uv_m: draw.uniforms.base_color_uv_m,
             uv_t: draw.map_uniforms[0].offset_set,
             instance_inner: draw.uniforms.instance_inner,

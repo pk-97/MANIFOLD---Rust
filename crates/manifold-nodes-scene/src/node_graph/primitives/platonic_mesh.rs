@@ -10,12 +10,12 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuComputePipeline};
 
-use manifold_node_engine::mesh::{MeshVertex, PLATONIC_SHAPES};
-use manifold_node_engine::platonic::{platonic_mesh_upload_bytes, PLATONIC_MESH_CAPACITY};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_node_engine::scene::mesh_source::MeshSource;
+use manifold_node_engine::mesh::{MeshVertex, PLATONIC_SHAPES};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::platonic::{PLATONIC_MESH_CAPACITY, platonic_mesh_upload_bytes};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::mesh_source::MeshSource;
 
 manifold_node_engine::primitive! {
     name: PlatonicMesh,

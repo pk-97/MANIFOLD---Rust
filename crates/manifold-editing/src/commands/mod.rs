@@ -54,7 +54,10 @@ pub(crate) const GRAPH_AND_CONTROLS: ChangeSet = GRAPH_EDIT.union(ChangeSet::of(
 /// A scene-modifier edit rewrites the owner graph and reconciles the owner's
 /// controls through `prune_instance_params`, which drops automation lanes too,
 /// so it moves `WHOLE_INSTANCES`. Any other target moves `otherwise`.
-pub(crate) fn graph_edit_touches(target: &manifold_core::GraphTarget, otherwise: ChangeSet) -> ChangeSet {
+pub(crate) fn graph_edit_touches(
+    target: &manifold_core::GraphTarget,
+    otherwise: ChangeSet,
+) -> ChangeSet {
     if matches!(target, manifold_core::GraphTarget::SceneModifier { .. }) {
         WHOLE_INSTANCES
     } else {

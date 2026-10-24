@@ -1,7 +1,7 @@
 //! Effect-group helpers for [`PresetRuntime`].
 
-use super::*;
 use super::errors::record_chain_error;
+use super::*;
 use crate::scene::mesh_change::PreparedMeshRules;
 
 /// State tracked for an open partial-wet-dry group during
@@ -29,9 +29,7 @@ pub(super) fn close_mix_group(
 ) -> Option<(NodeInstanceId, &'static str)> {
     let mix_id = if closing.mask_expected {
         let mask = closing.mask_output?;
-        let id = graph.add_node(Box::new(
-            crate::primitives::masked_mix::MaskedMix::new(),
-        ));
+        let id = graph.add_node(Box::new(crate::primitives::masked_mix::MaskedMix::new()));
         graph.connect(mask, (id, "mask")).ok()?;
         id
     } else {
@@ -80,7 +78,10 @@ fn is_chain_active(fx: &PresetInstance, groups: &[EffectGroup]) -> bool {
         return false;
     }
     !fx.group_id.as_deref().is_some_and(|gid| {
-        groups.iter().find(|g| g.id.as_str() == gid).is_some_and(|g| !g.enabled)
+        groups
+            .iter()
+            .find(|g| g.id.as_str() == gid)
+            .is_some_and(|g| !g.enabled)
     })
 }
 
@@ -150,13 +151,7 @@ pub(crate) fn splice_card_with_canonical_fallback(
     preserve_authored_cpu_flip_graph: bool,
     errors: &mut Vec<ChainError>,
 ) -> Option<(SpliceResult, SplicedDef)> {
-    if let Some(r) = splice_def_into_chain(
-        graph,
-        card_input,
-        splice_def,
-        primitives,
-        mesh_rules,
-    ) {
+    if let Some(r) = splice_def_into_chain(graph, card_input, splice_def, primitives, mesh_rules) {
         return Some((r, SplicedDef::Primary));
     }
     if preserve_authored_cpu_flip_graph {
@@ -168,7 +163,10 @@ pub(crate) fn splice_card_with_canonical_fallback(
     if let Some((effect_id, effect_type)) = divergent {
         record_chain_error(
             errors,
-            ChainError::DivergentGraphFellBack { effect_id, effect_type },
+            ChainError::DivergentGraphFellBack {
+                effect_id,
+                effect_type,
+            },
         );
     }
     match splice_def_into_chain(

@@ -9,25 +9,27 @@ use std::sync::Arc;
 
 use manifold_core::change::{ChangeSet, Part};
 use manifold_core::types::{ClockAuthority, OscSyncMode, PlaybackState, TempoPointSource};
+use manifold_core::work_count::{WorkKind, record_work};
 use manifold_core::{Beats, Bpm, Seconds};
-use manifold_core::work_count::{record_work, WorkKind};
 use manifold_editing::service::EditingService;
+use manifold_node_engine::gpu::context::GpuContext;
+use manifold_playback::audio_layer_playback::AudioLayerPlayback;
 use manifold_playback::clip_launcher::ClipLauncher;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
 use manifold_playback::external_follow::{ExternalSample, FollowProfile};
-use manifold_playback::external_sync::{live_tempo, LinkOffset, LinkTempoGuard, OffsetTake};
-use manifold_playback::sync_calibration::{difference_seconds, CalibratedSource, SyncCalibration};
+use manifold_playback::external_sync::{LinkOffset, LinkTempoGuard, OffsetTake, live_tempo};
 use manifold_playback::midi_input::MidiInputController;
 use manifold_playback::osc_receiver::OscReceiver;
 use manifold_playback::osc_sender::OscPositionSender;
 use manifold_playback::osc_sync::OscSyncController;
 use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
-use manifold_playback::audio_layer_playback::AudioLayerPlayback;
 use manifold_playback::sync::{SyncArbiter, SyncTargetSnapshot};
-use manifold_playback::sync_projection::{map_sample, seconds_between, song_time_beat_at, timecode_seconds_at};
+use manifold_playback::sync_calibration::{CalibratedSource, SyncCalibration, difference_seconds};
+use manifold_playback::sync_projection::{
+    map_sample, seconds_between, song_time_beat_at, timecode_seconds_at,
+};
 use manifold_playback::tempo_recorder::TempoRecorder;
 use manifold_playback::transport_controller::TransportController;
-use manifold_node_engine::gpu::context::GpuContext;
 
 use crate::content_command::ContentCommand;
 use crate::content_pipeline::ContentPipeline;
@@ -61,7 +63,10 @@ impl IssuedPresents {
 
     /// The deadline of the frame `drawable_id` carried, once.
     pub(crate) fn take(&mut self, drawable_id: u64) -> Option<std::time::Instant> {
-        let slot = self.ring.iter_mut().find(|e| e.is_some_and(|(id, _)| id == drawable_id))?;
+        let slot = self
+            .ring
+            .iter_mut()
+            .find(|e| e.is_some_and(|(id, _)| id == drawable_id))?;
         slot.take().map(|(_, deadline)| deadline)
     }
 }
@@ -191,7 +196,8 @@ pub struct ContentThread {
     /// any. Combined with `watched_graph_target` each frame to drive the
     /// per-node output capture. `None` = no preview.
     pub preview_graph_node: Option<manifold_core::NodeId>,
-    pub modifier_preview_context: Option<std::sync::Arc<manifold_node_engine::runtime::ModifierPreviewContext>>,
+    pub modifier_preview_context:
+        Option<std::sync::Arc<manifold_node_engine::runtime::ModifierPreviewContext>>,
     /// Whether the node-output preview applies auto-gain/normalization. Off by
     /// default; toggled from the editor's preview pane ("Smart preview"). Pushed
     /// to the pipeline each frame. Node preview only — never affects the live
@@ -257,8 +263,11 @@ impl ContentThread {
         state_tx: &StateTx,
     ) -> bool {
         match cmd {
-            ContentCommand::LoadProject(project) =>
-                self.load_project_and_warmup(project, cmd_rx, state_tx).warmup.interrupted,
+            ContentCommand::LoadProject(project) => {
+                self.load_project_and_warmup(project, cmd_rx, state_tx)
+                    .warmup
+                    .interrupted
+            }
             cmd => self.handle_command(cmd),
         }
     }
@@ -309,26 +318,37 @@ impl ContentThread {
     /// the pipeline every time), so one held wake stands for any number.
     pub(crate) fn hold_command(&mut self, cmd: ContentCommand) {
         match cmd {
-            ContentCommand::FramePresented { drawable_id, at } => self.frame_presented(drawable_id, at),
+            ContentCommand::FramePresented { drawable_id, at } => {
+                self.frame_presented(drawable_id, at)
+            }
             ContentCommand::SurfaceReady
-                if self.held_commands.iter().any(|c| matches!(c, ContentCommand::SurfaceReady)) => {}
+                if self
+                    .held_commands
+                    .iter()
+                    .any(|c| matches!(c, ContentCommand::SurfaceReady)) => {}
             cmd => self.held_commands.push_back(cmd),
         }
     }
 
     /// A quit is already waiting in the held queue.
     pub(crate) fn quit_is_held(&self) -> bool {
-        self.held_commands.iter().any(|c| matches!(c, ContentCommand::Shutdown))
+        self.held_commands
+            .iter()
+            .any(|c| matches!(c, ContentCommand::Shutdown))
     }
 
     /// Spend a held cancel on the running export: the first CancelExport
     /// held before any later StartExport (a cancel behind a later export
     /// belongs to that one).
     pub(crate) fn take_held_export_cancel(&mut self) -> bool {
-        let position = self.held_commands.iter()
+        let position = self
+            .held_commands
+            .iter()
             .take_while(|c| !matches!(c, ContentCommand::StartExport(_)))
             .position(|c| matches!(c, ContentCommand::CancelExport));
-        position.and_then(|i| self.held_commands.remove(i)).is_some()
+        position
+            .and_then(|i| self.held_commands.remove(i))
+            .is_some()
     }
 
     /// Drains every queued command, coalescing consecutive seeks. During
@@ -376,7 +396,9 @@ impl ContentThread {
                 }
                 #[cfg(target_os = "macos")]
                 Ok(ContentCommand::SurfaceReady) => {}
-                Ok(ContentCommand::FramePresented { drawable_id, at }) => self.frame_presented(drawable_id, at),
+                Ok(ContentCommand::FramePresented { drawable_id, at }) => {
+                    self.frame_presented(drawable_id, at)
+                }
                 Ok(cmd) => {
                     // Flush any pending seek before a non-seek command
                     // to preserve ordering (e.g. Seek then Play).
@@ -515,7 +537,9 @@ impl ContentThread {
                 Ok(ContentCommand::SurfaceReady) => {
                     // GPU wake signal — loop back to check is_surface_ready().
                 }
-                Ok(ContentCommand::FramePresented { drawable_id, at }) => self.frame_presented(drawable_id, at),
+                Ok(ContentCommand::FramePresented { drawable_id, at }) => {
+                    self.frame_presented(drawable_id, at)
+                }
                 Ok(cmd @ ContentCommand::SeekTo(_)) | Ok(cmd @ ContentCommand::SeekToBeat(_)) => {
                     pending_seek = Some(cmd);
                 }
@@ -533,7 +557,9 @@ impl ContentThread {
                     while let Ok(cmd) = self.next_command(cmd_rx) {
                         match cmd {
                             ContentCommand::SurfaceReady => {}
-                            ContentCommand::FramePresented { drawable_id, at } => self.frame_presented(drawable_id, at),
+                            ContentCommand::FramePresented { drawable_id, at } => {
+                                self.frame_presented(drawable_id, at)
+                            }
                             cmd @ ContentCommand::SeekTo(_)
                             | cmd @ ContentCommand::SeekToBeat(_) => {
                                 pending_seek = Some(cmd);
@@ -595,7 +621,8 @@ impl ContentThread {
         let frames = self.timer.consume_frames_at(now).frames;
         // Sources are read for the moment this frame reaches the screen (D19).
         self.frame_deadline = self.timer.tick_deadline().unwrap_or(now);
-        self.link_sample_at = self.frame_deadline + std::time::Duration::from_secs_f64(self.calibration.read_delay());
+        self.link_sample_at =
+            self.frame_deadline + std::time::Duration::from_secs_f64(self.calibration.read_delay());
         let realtime = self.timer.realtime_since_start();
         self.time_since_start = Seconds(realtime);
 
@@ -650,7 +677,10 @@ impl ContentThread {
         // project changes only in Values, the audited tick writes and what
         // the gateway stamps.
         let tick_stamps = self.editing_service.stamps();
-        let tick_window = self.engine.project().map(manifold_editing::edit::tick_audit::open);
+        let tick_window = self
+            .engine
+            .project()
+            .map(manifold_editing::edit::tick_audit::open);
 
         self.tick_sync_controllers(frames);
 
@@ -804,8 +834,9 @@ impl ContentThread {
             }
             Some(target @ manifold_core::GraphTarget::SceneModifier { .. }) => {
                 match target.host_target() {
-                    Some(manifold_core::GraphTarget::Generator(lid)) =>
-                        (None, Some((lid.clone(), self.preview_graph_node.clone()))),
+                    Some(manifold_core::GraphTarget::Generator(lid)) => {
+                        (None, Some((lid.clone(), self.preview_graph_node.clone())))
+                    }
                     _ => (None, None),
                 }
             }
@@ -816,7 +847,10 @@ impl ContentThread {
         self.content_pipeline
             .set_node_preview_generator(generator_preview);
         self.content_pipeline.set_modifier_preview_context(
-            matches!(self.watched_graph_target, Some(manifold_core::GraphTarget::SceneModifier { .. })),
+            matches!(
+                self.watched_graph_target,
+                Some(manifold_core::GraphTarget::SceneModifier { .. })
+            ),
             self.modifier_preview_context.clone(),
         );
         self.content_pipeline
@@ -839,14 +873,26 @@ impl ContentThread {
         if let Some(id) = self.content_pipeline.take_issued_present() {
             self.issued_presents.record(id, self.frame_deadline);
         }
-        for picked in self.content_pipeline.take_scene_picks(self.engine.project()) {
-            let sequence = self.edit_selection_update.as_ref().map_or(1, |update| update.sequence.wrapping_add(1));
+        for picked in self
+            .content_pipeline
+            .take_scene_picks(self.engine.project())
+        {
+            let sequence = self
+                .edit_selection_update
+                .as_ref()
+                .map_or(1, |update| update.sequence.wrapping_add(1));
             let selection = crate::edit_selection::EditSelection::Picked(picked);
-            self.edit_selection_update = Some(std::sync::Arc::new(crate::edit_selection::EditSelectionUpdate { sequence, selection }));
+            self.edit_selection_update = Some(std::sync::Arc::new(
+                crate::edit_selection::EditSelectionUpdate {
+                    sequence,
+                    selection,
+                },
+            ));
         }
         self.physics_metrics = self.content_pipeline.take_sim_metrics(&mut self.engine);
         let render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
-        self.content_pipeline.set_last_render_work_ms(render_work_ms);
+        self.content_pipeline
+            .set_last_render_work_ms(render_work_ms);
 
         // ── Live RT capture (env MANIFOLD_RT_CAPTURE, requires perf-soak) ──
         // Arms RT_CAPTURE_ARM flags before render, drains queue + logs stats after.
@@ -868,14 +914,17 @@ impl ContentThread {
                     // Write stats log.
                     use std::io::Write;
                     let mut line = format!(
-                        "tick={} play={} beat={:.3}", self.frame_count, playing, beat,
+                        "tick={} play={} beat={:.3}",
+                        self.frame_count, playing, beat,
                     );
                     for (label, (hit, luma, sd)) in &stats {
                         line.push_str(&format!(" {}=({:.6},{:.6},{:.6})", label, hit, luma, sd));
                     }
                     line.push('\n');
                     if let Ok(mut f) = std::fs::OpenOptions::new()
-                        .create(true).append(true).open(log_dir.join("stats.log"))
+                        .create(true)
+                        .append(true)
+                        .open(log_dir.join("stats.log"))
                     {
                         let _ = f.write_all(line.as_bytes());
                     }
@@ -913,10 +962,9 @@ impl ContentThread {
         // disabled (which drops the cached frame), None with no controller.
         if let Some(ref mut led) = self.led_controller {
             let native_device = self.content_pipeline.native_device().unwrap();
-            let (brightness, led_gain) = self
-                .engine
-                .project()
-                .map_or((1.0, 1.0), |p| (p.settings.led_brightness, p.settings.led_gain));
+            let (brightness, led_gain) = self.engine.project().map_or((1.0, 1.0), |p| {
+                (p.settings.led_brightness, p.settings.led_gain)
+            });
             if !led.is_enabled() {
                 // Disabled: the strips were blacked out when the toggle went
                 // off; the preview shows a black band and the cached frame is
@@ -1070,8 +1118,10 @@ impl ContentThread {
             let anim_map: Vec<(String, f32)> = {
                 let (renderers, _) = self.engine.split_renderer_project();
                 let gen_renderer = renderers.iter().find_map(|r| {
-                        r.as_any().downcast_ref::<manifold_compositor::generator_renderer::GeneratorRenderer>()
-                    });
+                    r.as_any()
+                        .downcast_ref::<manifold_compositor::generator_renderer::GeneratorRenderer>(
+                        )
+                });
                 tick_result
                     .ready_clips
                     .iter()
@@ -1249,13 +1299,10 @@ impl ContentThread {
         // instead (just param_values Vec<f32> clones — no full Project clone).
         let snapshot = if version_changed {
             // Structural change — create a new Arc with a fresh clone.
-            let arc = self
-                .engine
-                .project()
-                .map(|p| {
-                    record_work(WorkKind::ProjectClone);
-                    std::sync::Arc::new(p.clone())
-                });
+            let arc = self.engine.project().map(|p| {
+                record_work(WorkKind::ProjectClone);
+                std::sync::Arc::new(p.clone())
+            });
             self.cached_project_snapshot = arc.clone();
             arc
         } else {
@@ -1378,7 +1425,11 @@ impl ContentThread {
             let (renderers, _) = self.engine.split_renderer_project();
             renderers
                 .iter()
-                .find_map(|r| r.as_any().downcast_ref::<manifold_compositor::generator_renderer::GeneratorRenderer>())
+                .find_map(|r| {
+                    r.as_any()
+                        .downcast_ref::<manifold_compositor::generator_renderer::GeneratorRenderer>(
+                        )
+                })
                 .map(|renderer| renderer.scene_impulse_diagnostics().clone())
                 .unwrap_or_default()
         };
@@ -1526,7 +1577,8 @@ impl ContentThread {
             export_progress: 0.0,
             export_status: {
                 // One shared empty status: building it per tick allocated.
-                static EMPTY: std::sync::LazyLock<Arc<str>> = std::sync::LazyLock::new(|| Arc::from(""));
+                static EMPTY: std::sync::LazyLock<Arc<str>> =
+                    std::sync::LazyLock::new(|| Arc::from(""));
                 EMPTY.clone()
             },
             export_finished: Vec::new(),
@@ -1556,12 +1608,7 @@ impl ContentThread {
             live_node_params: self.content_pipeline.live_node_params(),
             node_atlas_layout: self.content_pipeline.node_atlas_layout().to_vec(),
             clip_atlas_layout: self.content_pipeline.clip_atlas_layout().clone(),
-            automation_latched_params: self
-                .engine
-                .automation_latches()
-                .keys()
-                .cloned()
-                .collect(),
+            automation_latched_params: self.engine.automation_latches().keys().cloned().collect(),
             automation_armed: self.engine.automation_armed(),
             sync_offsets: self.calibration.offsets(),
             chain_failures: self.reactions.chain_failures.clone(),
@@ -1619,9 +1666,7 @@ impl ContentThread {
             // claims OSC authority as before.
             let osc_receiving = match osc_sync_mode {
                 OscSyncMode::M4L => self.osc_sync.is_receiving_timecode,
-                OscSyncMode::AbletonOsc => {
-                    self.ableton_bridge.is_transport_receiving(now.0)
-                }
+                OscSyncMode::AbletonOsc => self.ableton_bridge.is_transport_receiving(now.0),
             };
             let auto = if self
                 .transport_controller
@@ -1642,7 +1687,10 @@ impl ContentThread {
             } else {
                 ClockAuthority::Internal
             };
-            let previous = self.engine.project().map_or(ClockAuthority::Internal, |p| p.settings.clock_authority);
+            let previous = self
+                .engine
+                .project()
+                .map_or(ClockAuthority::Internal, |p| p.settings.clock_authority);
             manifold_playback::transport_controller::write_clock_authority(&mut self.engine, auto);
             // An authority change swaps the engine's converter before any
             // source acts on it this tick (D6, D8). The second test catches a
@@ -1661,7 +1709,12 @@ impl ContentThread {
 
         // Link sync — poll beat/phase/tempo from Ableton Link network.
         if let Some(ref mut link) = self.transport_controller.link_sync {
-            link.update(&mut self.sync_arbiter, &mut self.engine, authority, self.link_sample_at);
+            link.update(
+                &mut self.sync_arbiter,
+                &mut self.engine,
+                authority,
+                self.link_sample_at,
+            );
             if link.is_link_enabled() {
                 // A Link-initiated start lines MANIFOLD's bar up with Link's;
                 // every due offset is taken here, at the read instant,
@@ -1671,7 +1724,8 @@ impl ContentThread {
                 }
                 if self.link_offset.is_due() {
                     let frame_beat = self.engine.upcoming_frame_beat(frames).0;
-                    self.link_offset.take(link.current_beat.0, frame_beat, link.quantum());
+                    self.link_offset
+                        .take(link.current_beat.0, frame_beat, link.quantum());
                 }
             }
         }
@@ -1714,7 +1768,9 @@ impl ContentThread {
             && let Some(edit) = self.engine.project_edit()
         {
             let router = &self.osc_param_router;
-            let wrote = self.editing_service.mutate(ChangeSet::of(&[Part::Values]), edit, |p| router.apply(p));
+            let wrote = self
+                .editing_service
+                .mutate(ChangeSet::of(&[Part::Values]), edit, |p| router.apply(p));
             // D23: a value that flipped a feature switch changed which rows
             // exist, so the UI needs the project, not just the values.
             self.reactions.publish_pending |= !wrote.minus(ChangeSet::LIVE).is_empty();
@@ -1731,11 +1787,17 @@ impl ContentThread {
         // targets cache, so the listeners rebuild even when no status moved.
         if self.ableton_bridge.take_validation_dirty() {
             self.reactions.session_discovered = true;
-            if self.engine.project().is_some_and(|p| self.ableton_bridge.validation_would_change(p))
+            if self
+                .engine
+                .project()
+                .is_some_and(|p| self.ableton_bridge.validation_would_change(p))
                 && let Some(edit) = self.engine.project_edit()
             {
                 let bridge = &self.ableton_bridge;
-                self.editing_service.mutate(ChangeSet::of(&[Part::Mappings]), edit, |p| bridge.validate_mappings(p));
+                self.editing_service
+                    .mutate(ChangeSet::of(&[Part::Mappings]), edit, |p| {
+                        bridge.validate_mappings(p)
+                    });
                 self.reactions.publish_pending = true;
             }
             self.run_reactions();
@@ -1746,9 +1808,11 @@ impl ContentThread {
         {
             let bridge = &mut self.ableton_bridge;
             let now = self.time_since_start.0;
-            let wrote = self.editing_service.mutate(ChangeSet::of(&[Part::Values]), edit, |p| {
-                bridge.apply(p, now);
-            });
+            let wrote = self
+                .editing_service
+                .mutate(ChangeSet::of(&[Part::Values]), edit, |p| {
+                    bridge.apply(p, now);
+                });
             self.reactions.publish_pending |= !wrote.minus(ChangeSet::LIVE).is_empty();
         }
 
@@ -1823,9 +1887,7 @@ impl ContentThread {
                         );
                     }
                     EngineAction::SeekBeats(beat) => {
-                        let time = self
-                            .engine
-                            .beat_to_timeline_time(Beats::from_f32(beat));
+                        let time = self.engine.beat_to_timeline_time(Beats::from_f32(beat));
                         self.sync_arbiter.seek(
                             ClockAuthority::Osc,
                             ClockAuthority::Osc,
@@ -1843,16 +1905,26 @@ impl ContentThread {
     /// The guard compares Link with the authority's own tempo, and the live
     /// tempo reports the authority's base tempo (D21). After every source
     /// has updated this tick.
-    fn update_tempo_plane(&mut self, authority: ClockAuthority, mode: OscSyncMode, link_bpm: Option<f64>) {
+    fn update_tempo_plane(
+        &mut self,
+        authority: ClockAuthority,
+        mode: OscSyncMode,
+        link_bpm: Option<f64>,
+    ) {
         let now = self.time_since_start.0;
         let clk = self
             .transport_controller
             .midi_clock_sync
             .as_ref()
             .filter(|c| c.is_midi_clock_enabled() && c.is_receiving_clock());
-        let listener = (mode == OscSyncMode::AbletonOsc && self.ableton_bridge.is_transport_receiving(now))
-            .then(|| f64::from(self.ableton_bridge.ableton_tempo()));
-        let link_beat = self.transport_controller.link_sync.as_ref().map(|l| l.current_beat.0);
+        let listener = (mode == OscSyncMode::AbletonOsc
+            && self.ableton_bridge.is_transport_receiving(now))
+        .then(|| f64::from(self.ableton_bridge.ableton_tempo()));
+        let link_beat = self
+            .transport_controller
+            .link_sync
+            .as_ref()
+            .map(|l| l.current_beat.0);
         // The guard watches whenever Link and a comparable source are both
         // live, so it is already latched when that source takes over.
         match (link_bpm, link_beat, clk, listener) {
@@ -1861,20 +1933,35 @@ impl ContentThread {
                     // Link's beat when the tick arrived: Link runs at its
                     // session tempo between the arrival and the read instant.
                     let back = clk.seconds(self.link_sample_at) - arrival;
-                    self.tempo_guard.observe_clock(now, arrival, tick, beat_at_r - back * bpm / 60.0);
+                    self.tempo_guard.observe_clock(
+                        now,
+                        arrival,
+                        tick,
+                        beat_at_r - back * bpm / 60.0,
+                    );
                 }
             }
-            (Some(bpm), _, None, Some(listener)) => self.tempo_guard.observe_listener(now, bpm, listener),
+            (Some(bpm), _, None, Some(listener)) => {
+                self.tempo_guard.observe_listener(now, bpm, listener)
+            }
             _ => self.tempo_guard.release(),
         }
 
         let own = match authority {
-            ClockAuthority::MidiClock => clk.map(|c| (f64::from(c.current_clock_bpm()), TempoPointSource::MidiClock)),
+            ClockAuthority::MidiClock => clk.map(|c| {
+                (
+                    f64::from(c.current_clock_bpm()),
+                    TempoPointSource::MidiClock,
+                )
+            }),
             ClockAuthority::Osc => listener.map(|bpm| (bpm, TempoPointSource::AbletonOsc)),
             _ => None,
         };
-        if let Some((bpm, source)) = live_tempo(authority, link_bpm, own, self.tempo_guard.latched()) {
-            self.engine.set_live_external_tempo(true, Bpm(bpm as f32), source);
+        if let Some((bpm, source)) =
+            live_tempo(authority, link_bpm, own, self.tempo_guard.latched())
+        {
+            self.engine
+                .set_live_external_tempo(true, Bpm(bpm as f32), source);
         }
     }
 
@@ -1906,7 +1993,11 @@ impl ContentThread {
             .filter(|c| c.is_midi_clock_enabled() && c.is_receiving_clock())
             .map(|c| (c.current_clock_beat(), c.current_clock_bpm()));
         let osc = self.ableton_bridge.observed_song_time().map(|(beats, at)| {
-            (beats, self.time_since_start.0 - at, self.ableton_bridge.ableton_tempo())
+            (
+                beats,
+                self.time_since_start.0 - at,
+                self.ableton_bridge.ableton_tempo(),
+            )
         });
         let facts = crate::sync_rig_log::TickFacts {
             frame: self.frame_count,
@@ -1934,7 +2025,8 @@ impl ContentThread {
     /// transport action the sources took this tick (D7): a placement drops
     /// the sample, so it is handed over last. Today's gates stay in front.
     fn hand_external_sample(&mut self, authority: ClockAuthority) {
-        if self.engine.current_state() != PlaybackState::Playing || !self.engine.follows_external() {
+        if self.engine.current_state() != PlaybackState::Playing || !self.engine.follows_external()
+        {
             return;
         }
         let sample = match authority {
@@ -1948,12 +2040,14 @@ impl ContentThread {
                     && link.is_link_enabled()
                     && link.has_active_peers()
                 {
-                    self.link_offset.beat(link.current_beat.0).map(|beat| ExternalSample {
-                        beat,
-                        bpm: link.link_tempo,
-                        fresh: true,
-                        exact: true,
-                    })
+                    self.link_offset
+                        .beat(link.current_beat.0)
+                        .map(|beat| ExternalSample {
+                            beat,
+                            bpm: link.link_tempo,
+                            fresh: true,
+                            exact: true,
+                        })
                 } else {
                     None
                 }
@@ -1963,7 +2057,9 @@ impl ContentThread {
                 // AND while an AbletonOSC transport command awaits its ack
                 // (ABLETON_TRANSPORT_SYNC_DESIGN D5): what Ableton's clock
                 // reports then is the old position.
-                if !self.sync_arbiter.is_seek_cooldown_active(self.time_since_start)
+                if !self
+                    .sync_arbiter
+                    .is_seek_cooldown_active(self.time_since_start)
                     && !self.ableton_bridge.transport_sync_pending()
                 {
                     self.clk_sample(self.source_read_at(CalibratedSource::MidiClock))
@@ -1971,9 +2067,17 @@ impl ContentThread {
                     None
                 }
             }
-            ClockAuthority::Osc => match self.engine.project().map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode) {
-                OscSyncMode::M4L => self.timecode_sample(self.source_read_at(CalibratedSource::Timecode)),
-                OscSyncMode::AbletonOsc => self.ableton_osc_sample(self.source_read_at(CalibratedSource::AbletonOsc)),
+            ClockAuthority::Osc => match self
+                .engine
+                .project()
+                .map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode)
+            {
+                OscSyncMode::M4L => {
+                    self.timecode_sample(self.source_read_at(CalibratedSource::Timecode))
+                }
+                OscSyncMode::AbletonOsc => {
+                    self.ableton_osc_sample(self.source_read_at(CalibratedSource::AbletonOsc))
+                }
             },
             ClockAuthority::Internal => None,
         };
@@ -1987,7 +2091,11 @@ impl ContentThread {
     fn source_read_at(&self, source: CalibratedSource) -> std::time::Instant {
         let offset = self.calibration.offset(source);
         let magnitude = std::time::Duration::from_secs_f64(offset.abs());
-        if offset >= 0.0 { self.link_sample_at + magnitude } else { self.link_sample_at - magnitude }
+        if offset >= 0.0 {
+            self.link_sample_at + magnitude
+        } else {
+            self.link_sample_at - magnitude
+        }
     }
 
     /// The tick filter's beat at `r` (D20), while the clock is live.
@@ -1997,7 +2105,12 @@ impl ContentThread {
             .midi_clock_sync
             .as_ref()
             .filter(|c| c.is_midi_clock_enabled() && c.is_receiving_clock())?;
-        clk.sample_at(r).map(|s| ExternalSample { beat: s.beat, bpm: s.bpm, fresh: true, exact: false })
+        clk.sample_at(r).map(|s| ExternalSample {
+            beat: s.beat,
+            bpm: s.bpm,
+            fresh: true,
+            exact: false,
+        })
     }
 
     /// M4L timecode: the latest message's song seconds projected from its
@@ -2009,7 +2122,12 @@ impl ContentThread {
         let step = 1.0 / f64::from(self.engine.frame_rate());
         let engine = &mut self.engine;
         let (beat, bpm) = map_sample(s, step, |s| engine.time_to_timeline_beat(Seconds(s)).0);
-        Some(ExternalSample { beat, bpm, fresh: true, exact: false })
+        Some(ExternalSample {
+            beat,
+            bpm,
+            fresh: true,
+            exact: false,
+        })
     }
 
     /// The relay's song time projected to `r` at Live's tempo in force (D7).
@@ -2017,10 +2135,23 @@ impl ContentThread {
     /// acknowledgement, not the wire; a constant is the calibration's to
     /// learn (D19). The tempo is Link's while the guard is latched (D21).
     fn ableton_osc_sample(&self, r: std::time::Instant) -> Option<ExternalSample> {
-        let (report, tempo) = self.ableton_bridge.follower_song_time(self.time_since_start.0)?;
-        let beat = song_time_beat_at(report.beat, seconds_between(report.at, r), tempo.before, tempo.bpm, seconds_between(tempo.at, r));
+        let (report, tempo) = self
+            .ableton_bridge
+            .follower_song_time(self.time_since_start.0)?;
+        let beat = song_time_beat_at(
+            report.beat,
+            seconds_between(report.at, r),
+            tempo.before,
+            tempo.bpm,
+            seconds_between(tempo.at, r),
+        );
         let bpm = self.latched_link_tempo().unwrap_or(tempo.bpm);
-        Some(ExternalSample { beat, bpm, fresh: true, exact: false })
+        Some(ExternalSample {
+            beat,
+            bpm,
+            fresh: true,
+            exact: false,
+        })
     }
 
     /// Metal reported a stage frame on screen: its delay after the deadline
@@ -2035,12 +2166,19 @@ impl ContentThread {
 
     /// The operating log's view of this tick, after the engine's tick.
     fn log_sync(&mut self, authority: ClockAuthority) {
-        let mode = self.engine.project().map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode);
+        let mode = self
+            .engine
+            .project()
+            .map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode);
         let (name, calibrated) = match (authority, mode) {
             (ClockAuthority::Link, _) => (Some("Link"), None),
             (ClockAuthority::MidiClock, _) => (Some("CLK"), Some(CalibratedSource::MidiClock)),
-            (ClockAuthority::Osc, OscSyncMode::AbletonOsc) => (Some("OSC"), Some(CalibratedSource::AbletonOsc)),
-            (ClockAuthority::Osc, OscSyncMode::M4L) => (Some("timecode"), Some(CalibratedSource::Timecode)),
+            (ClockAuthority::Osc, OscSyncMode::AbletonOsc) => {
+                (Some("OSC"), Some(CalibratedSource::AbletonOsc))
+            }
+            (ClockAuthority::Osc, OscSyncMode::M4L) => {
+                (Some("timecode"), Some(CalibratedSource::Timecode))
+            }
             (ClockAuthority::Internal, _) => (None, None),
         };
         let tick = manifold_playback::sync_log::SyncTick {
@@ -2073,18 +2211,24 @@ impl ContentThread {
         };
         let steady = !self.engine.follower().catch_up_open();
         let now = self.time_since_start.0;
-        let mode = self.engine.project().map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode);
+        let mode = self
+            .engine
+            .project()
+            .map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode);
         for source in CalibratedSource::ALL {
             let r = self.source_read_at(source);
             let sample = match (source, mode) {
                 (CalibratedSource::MidiClock, _) => self.clk_sample(r),
-                (CalibratedSource::AbletonOsc, OscSyncMode::AbletonOsc) => self.ableton_osc_sample(r),
+                (CalibratedSource::AbletonOsc, OscSyncMode::AbletonOsc) => {
+                    self.ableton_osc_sample(r)
+                }
                 (CalibratedSource::Timecode, OscSyncMode::M4L) => self.timecode_sample(r),
                 _ => None,
             };
             if let Some(sample) = sample {
                 let difference = difference_seconds(link_beat, sample.beat, bpm, quantum);
-                self.calibration.observe_offset(source, now, difference, steady);
+                self.calibration
+                    .observe_offset(source, now, difference, steady);
             }
         }
     }
@@ -2154,14 +2298,25 @@ impl ContentThread {
             let recorder = &mut self.tempo_recorder;
             if let Some(edit) = self.engine.project_edit() {
                 tick_write(TickField::SessionTempoPoints, edit, |p| {
-                    tempo_map_changed =
-                        recorder.try_record_tempo_point(&mut p.tempo_map, current_beat, current_time, bpm, source);
+                    tempo_map_changed = recorder.try_record_tempo_point(
+                        &mut p.tempo_map,
+                        current_beat,
+                        current_time,
+                        bpm,
+                        source,
+                    );
                 });
             }
             if tempo_map_changed && let Some(edit) = self.engine.project_edit() {
                 let recorder = &mut self.tempo_recorder;
                 tick_write(TickField::RecordingProvenance, edit, |p| {
-                    recorder.append_tempo_change(&mut p.recording_provenance, current_time, current_beat, bpm, source);
+                    recorder.append_tempo_change(
+                        &mut p.recording_provenance,
+                        current_time,
+                        current_beat,
+                        bpm,
+                        source,
+                    );
                 });
             }
         }
@@ -2198,14 +2353,15 @@ impl ContentThread {
         self.run_reactions();
         if let Some(edit) = self.engine.project_edit() {
             let recorder = &mut self.tempo_recorder;
-            self.editing_service.mutate(ChangeSet::of(&[Part::Settings]), edit, |p| {
-                recorder.end_session_if_active(
-                    &mut p.recording_provenance,
-                    &mut p.tempo_map,
-                    default_bpm,
-                    &get_source_at_beat,
-                );
-            });
+            self.editing_service
+                .mutate(ChangeSet::of(&[Part::Settings]), edit, |p| {
+                    recorder.end_session_if_active(
+                        &mut p.recording_provenance,
+                        &mut p.tempo_map,
+                        default_bpm,
+                        &get_source_at_beat,
+                    );
+                });
             self.reactions.tempo_retained = None;
             self.reactions.publish_pending = true;
         } else {
@@ -2215,7 +2371,10 @@ impl ContentThread {
 
     /// Execute commands the engine handed back (automation gestures, live
     /// takes, missing layers) through the gateway, one undo step each.
-    fn execute_engine_commits(&mut self, commands: Vec<Box<dyn manifold_editing::command::Command>>) {
+    fn execute_engine_commits(
+        &mut self,
+        commands: Vec<Box<dyn manifold_editing::command::Command>>,
+    ) {
         if commands.is_empty() {
             return;
         }
@@ -2235,29 +2394,35 @@ impl ContentThread {
             self.percussion_orchestrator.tick(now, None);
             return;
         }
-        let Some(edit) = self.engine.project_edit() else { return };
+        let Some(edit) = self.engine.project_edit() else {
+            return;
+        };
         let orchestrator = &mut self.percussion_orchestrator;
-        self.editing_service.mutate_with_history(edit, |p, editing| {
-            let before = DetectionWrite::observe(p);
-            orchestrator.tick(now, Some((p, editing)));
-            ((), before.touches(p))
-        });
+        self.editing_service
+            .mutate_with_history(edit, |p, editing| {
+                let before = DetectionWrite::observe(p);
+                orchestrator.tick(now, Some((p, editing)));
+                ((), before.touches(p))
+            });
         self.reactions.publish_pending = true;
     }
 
     /// Re-place or clear a clip's detected triggers through the gateway.
     pub(crate) fn rewrite_clip_triggers(&mut self, clip_id: manifold_core::ClipId, clear: bool) {
-        let Some(edit) = self.engine.project_edit() else { return };
+        let Some(edit) = self.engine.project_edit() else {
+            return;
+        };
         let orchestrator = &mut self.percussion_orchestrator;
-        self.editing_service.mutate_with_history(edit, |p, editing| {
-            let before = DetectionWrite::observe(p);
-            if clear {
-                orchestrator.clear_clip_triggers(clip_id, p, editing);
-            } else {
-                orchestrator.replan_clip(clip_id, p, editing);
-            }
-            ((), before.touches(p))
-        });
+        self.editing_service
+            .mutate_with_history(edit, |p, editing| {
+                let before = DetectionWrite::observe(p);
+                if clear {
+                    orchestrator.clear_clip_triggers(clip_id, p, editing);
+                } else {
+                    orchestrator.replan_clip(clip_id, p, editing);
+                }
+                ((), before.touches(p))
+            });
         self.reactions.publish_pending = true;
     }
 }
@@ -2273,7 +2438,12 @@ struct DetectionWrite {
 impl DetectionWrite {
     fn observe(p: &manifold_core::project::Project) -> Self {
         let hasher = ahash::RandomState::with_seeds(5, 6, 7, 8);
-        let names = p.timeline.layers.iter().map(|l| hasher.hash_one(&l.name)).fold(0u64, u64::wrapping_add);
+        let names = p
+            .timeline
+            .layers
+            .iter()
+            .map(|l| hasher.hash_one(&l.name))
+            .fold(0u64, u64::wrapping_add);
         Self { names }
     }
 

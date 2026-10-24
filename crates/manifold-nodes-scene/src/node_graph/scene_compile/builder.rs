@@ -4,19 +4,21 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use manifold_core::effect_graph_def::{
-    BindingDef, BindingTarget, EFFECT_GRAPH_VERSION_WITH_METADATA, EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS,
-    EffectGraphDef, EffectGraphNode, EffectGraphWire,
+    BindingDef, BindingTarget, EFFECT_GRAPH_VERSION_WITH_METADATA,
+    EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS, EffectGraphDef, EffectGraphNode, EffectGraphWire,
     ParamSpecDef, PresetMetadata, SerializedParamValue,
 };
-use manifold_core::scene_doc::{Item, SceneDoc, param_id};
-use manifold_foundation::ItemId;
 use manifold_core::param_lookup::NodeParamMetadata;
+use manifold_core::scene_doc::{Item, SceneDoc, param_id};
 use manifold_core::scene_modifier_preset::SceneModifierInstanceDef;
 use manifold_core::scene_schema::{self, CardFacts, Exposure, PropertyRow, Reach};
+use manifold_foundation::ItemId;
 use manifold_foundation::scene_surface::{ControlGroup, SurfaceRole};
 
 use manifold_core::NodeId;
-use manifold_node_engine::load::expand::{TargetPlacement, capture_mesh_frames, resolve_modifier_mesh_frames};
+use manifold_node_engine::load::expand::{
+    TargetPlacement, capture_mesh_frames, resolve_modifier_mesh_frames,
+};
 
 use crate::node_graph::scene_graph::{plain_node, wire};
 
@@ -190,14 +192,21 @@ impl<'d> Builder<'d> {
     /// owner makes many of (a modifier card's per-part nodes).
     pub(crate) fn add_named(&mut self, node_id: NodeId, type_id: &str) -> u32 {
         let id = self.fresh();
-        self.nodes.push(plain_node(id, node_id.as_str(), type_id, node_id.as_str()));
+        self.nodes
+            .push(plain_node(id, node_id.as_str(), type_id, node_id.as_str()));
         id
     }
 
     /// A copy of node `original` under `node_id`: its params, every wire into
     /// it but `except`'s port with each source `remap` names swapped, and
     /// every binding that drives it, so the copy follows the same rows.
-    pub(crate) fn copy_node(&mut self, original: u32, node_id: NodeId, remap: &[(u32, u32)], except: Option<&str>) -> Option<u32> {
+    pub(crate) fn copy_node(
+        &mut self,
+        original: u32,
+        node_id: NodeId,
+        remap: &[(u32, u32)],
+        except: Option<&str>,
+    ) -> Option<u32> {
         let mut node = self.node_mut(original)?.clone();
         let original_id = std::mem::replace(&mut node.node_id, node_id.clone());
         let id = self.fresh();
@@ -212,7 +221,10 @@ impl<'d> Builder<'d> {
             .cloned()
             .collect();
         for mut binding in driven {
-            if let BindingTarget::Node { node_id: target, .. } = &mut binding.target {
+            if let BindingTarget::Node {
+                node_id: target, ..
+            } = &mut binding.target
+            {
                 target.clone_from(&node_id);
             }
             self.bindings.push(binding);
@@ -222,7 +234,13 @@ impl<'d> Builder<'d> {
 
     /// Wire into `to` what feeds `from`, but `except`'s port, with each
     /// source `remap` names swapped.
-    pub(crate) fn copy_inputs(&mut self, from: u32, to: u32, remap: &[(u32, u32)], except: Option<&str>) {
+    pub(crate) fn copy_inputs(
+        &mut self,
+        from: u32,
+        to: u32,
+        remap: &[(u32, u32)],
+        except: Option<&str>,
+    ) {
         let inputs: Vec<EffectGraphWire> = self
             .wires
             .iter()
@@ -230,14 +248,20 @@ impl<'d> Builder<'d> {
             .cloned()
             .collect();
         for wire in inputs {
-            let source = remap.iter().find(|(old, _)| *old == wire.from_node).map_or(wire.from_node, |(_, new)| *new);
+            let source = remap
+                .iter()
+                .find(|(old, _)| *old == wire.from_node)
+                .map_or(wire.from_node, |(_, new)| *new);
             self.wire(source, &wire.from_port, to, &wire.to_port);
         }
     }
 
     /// The copies later swarms draw of scene object `original`.
     pub(crate) fn alike_of(&self, original: u32) -> impl Iterator<Item = u32> + '_ {
-        self.alike.iter().filter(move |(of, _, _)| *of == original).map(|(_, copy, _)| *copy)
+        self.alike
+            .iter()
+            .filter(move |(of, _, _)| *of == original)
+            .map(|(_, copy, _)| *copy)
     }
 
     /// Add a node built elsewhere (a group with its body). Its node ids are
@@ -255,7 +279,10 @@ impl<'d> Builder<'d> {
     /// Bind `to` to every card row bound to `from`, starting at `from`'s
     /// values: a second node that follows the same rows.
     pub(crate) fn mirror(&mut self, from: u32, to: u32) {
-        let Some(source) = self.node_mut(from).map(|node| (node.node_id.clone(), node.params.clone())) else {
+        let Some(source) = self
+            .node_mut(from)
+            .map(|node| (node.node_id.clone(), node.params.clone()))
+        else {
             return;
         };
         let Some(target) = self.node_mut(to) else {
@@ -286,11 +313,24 @@ impl<'d> Builder<'d> {
     }
 
     /// [`Self::follow`], with `to_param` at the control's value plus `offset`.
-    pub(crate) fn follow_offset(&mut self, from: u32, from_param: &str, to: u32, to_param: &str, offset: f32) {
-        let Some(source) = self.node_mut(from).map(|node| (node.node_id.clone(), node.params.get(from_param).cloned())) else {
+    pub(crate) fn follow_offset(
+        &mut self,
+        from: u32,
+        from_param: &str,
+        to: u32,
+        to_param: &str,
+        offset: f32,
+    ) {
+        let Some(source) = self
+            .node_mut(from)
+            .map(|node| (node.node_id.clone(), node.params.get(from_param).cloned()))
+        else {
             return;
         };
-        let Some((target_id, target_type)) = self.node_mut(to).map(|node| (node.node_id.clone(), node.type_id.clone())) else {
+        let Some((target_id, target_type)) = self
+            .node_mut(to)
+            .map(|node| (node.node_id.clone(), node.type_id.clone()))
+        else {
             return;
         };
         if let Some(value) = source.1 {
@@ -298,7 +338,9 @@ impl<'d> Builder<'d> {
         }
         // The target converts the row's number (plus any shift) as its own
         // param is typed, not the source's.
-        let convert = self.param_meta(&target_type, to_param).map(|meta| meta.convert);
+        let convert = self
+            .param_meta(&target_type, to_param)
+            .map(|meta| meta.convert);
         let followed: Vec<BindingDef> = self
             .bindings
             .iter()
@@ -340,7 +382,9 @@ impl<'d> Builder<'d> {
         if let Some(mesh) = self.id(owner, "mesh") {
             return Some((mesh, "vertices"));
         }
-        self.id(owner, scene_schema::SOLID).and_then(|_| self.id(owner, scene_schema::TRIANGLES)).map(|triangles| (triangles, "out"))
+        self.id(owner, scene_schema::SOLID)
+            .and_then(|_| self.id(owner, scene_schema::TRIANGLES))
+            .map(|triangles| (triangles, "out"))
     }
 
     pub(crate) fn scene(&self, role: &'static str) -> u32 {
@@ -353,7 +397,9 @@ impl<'d> Builder<'d> {
 
     /// Whether something already feeds `to`'s `to_port`.
     pub(crate) fn wired_into(&self, to: u32, to_port: &str) -> bool {
-        self.wires.iter().any(|wire| wire.to_node == to && wire.to_port == to_port)
+        self.wires
+            .iter()
+            .any(|wire| wire.to_node == to && wire.to_port == to_port)
     }
 
     /// Put a pass after `from`'s `port`: every wire that read that port now
@@ -385,7 +431,9 @@ impl<'d> Builder<'d> {
     }
 
     fn type_of(&mut self, id: u32) -> String {
-        self.node_mut(id).map(|node| node.type_id.clone()).unwrap_or_default()
+        self.node_mut(id)
+            .map(|node| node.type_id.clone())
+            .unwrap_or_default()
     }
 
     pub(crate) fn set(&mut self, id: u32, param: &str, value: SerializedParamValue) {
@@ -397,11 +445,19 @@ impl<'d> Builder<'d> {
     /// Set a node param from a number, typed as the param declares it.
     pub(crate) fn set_number(&mut self, id: u32, param: &str, value: f32) {
         let type_id = self.type_of(id);
-        let like = self.param_meta(&type_id, param).map(|meta| meta.default_value);
+        let like = self
+            .param_meta(&type_id, param)
+            .map(|meta| meta.default_value);
         let typed = match like {
-            Some(SerializedParamValue::Int { .. }) => SerializedParamValue::Int { value: value.round() as i32 },
-            Some(SerializedParamValue::Bool { .. }) => SerializedParamValue::Bool { value: value > 0.5 },
-            Some(SerializedParamValue::Enum { .. }) => SerializedParamValue::Enum { value: value.max(0.0).round() as u32 },
+            Some(SerializedParamValue::Int { .. }) => SerializedParamValue::Int {
+                value: value.round() as i32,
+            },
+            Some(SerializedParamValue::Bool { .. }) => {
+                SerializedParamValue::Bool { value: value > 0.5 }
+            }
+            Some(SerializedParamValue::Enum { .. }) => SerializedParamValue::Enum {
+                value: value.max(0.0).round() as u32,
+            },
             _ => SerializedParamValue::Float { value },
         };
         self.set(id, param, typed);
@@ -429,25 +485,37 @@ impl<'d> Builder<'d> {
     /// with a kind default write it. A row whose node was not emitted is
     /// skipped. Automatic rows were set by the emitter.
     pub(crate) fn rows(&mut self, item: &Item) {
-        self.apply_rows(item, scene_schema::applicable(&item.fields).filter(|row| row.reach != Reach::Clocks));
+        self.apply_rows(
+            item,
+            scene_schema::applicable(&item.fields).filter(|row| row.reach != Reach::Clocks),
+        );
     }
 
     /// Apply the item's rows that reach the animation clocks below it, once
     /// its parts have compiled.
     pub(crate) fn clock_rows(&mut self, item: &Item) {
-        self.apply_rows(item, scene_schema::applicable(&item.fields).filter(|row| row.reach == Reach::Clocks));
+        self.apply_rows(
+            item,
+            scene_schema::applicable(&item.fields).filter(|row| row.reach == Reach::Clocks),
+        );
     }
 
     /// Apply `rows` of the item's table, as [`Self::rows`] does: for a node
     /// emitted after the item's own rows.
-    pub(crate) fn apply_rows<'r>(&mut self, item: &Item, rows: impl IntoIterator<Item = &'r PropertyRow>) {
+    pub(crate) fn apply_rows<'r>(
+        &mut self,
+        item: &Item,
+        rows: impl IntoIterator<Item = &'r PropertyRow>,
+    ) {
         for row in rows {
             let targets: Vec<u32> = match row.reach {
                 Reach::Own(role) => self.id(item.id.as_str(), role).into_iter().collect(),
                 Reach::Scene(role) => self.id(SCENE, role).into_iter().collect(),
-                Reach::OwnAndScene(own, scene) => {
-                    self.id(item.id.as_str(), own).into_iter().chain(self.id(SCENE, scene)).collect()
-                }
+                Reach::OwnAndScene(own, scene) => self
+                    .id(item.id.as_str(), own)
+                    .into_iter()
+                    .chain(self.id(SCENE, scene))
+                    .collect(),
                 Reach::EveryCameraLens => self.lenses.clone(),
                 Reach::Clocks => self.clocks_below(item),
                 // A scene modifier's params are declared with the modifier.
@@ -480,12 +548,17 @@ impl<'d> Builder<'d> {
             }
         }
         visit(item, &mut inside);
-        self.clocks.iter().filter(|(part, _)| inside.contains(&part)).map(|(_, clock)| *clock).collect()
+        self.clocks
+            .iter()
+            .filter(|(part, _)| inside.contains(&part))
+            .map(|(_, clock)| *clock)
+            .collect()
     }
 
     /// The number a node param was set to, if it was.
     pub(crate) fn started(&mut self, id: u32, param: &str) -> Option<f32> {
-        self.node_mut(id).and_then(|node| node.params.get(param).map(number))
+        self.node_mut(id)
+            .and_then(|node| node.params.get(param).map(number))
     }
 
     fn card(&mut self, item: &Item, row: &PropertyRow, facts: &CardFacts, targets: &[u32]) {
@@ -496,24 +569,48 @@ impl<'d> Builder<'d> {
         let id = param_id(&item.id, row.property);
         // The kind's default, else what the emitter started the node at,
         // else the node's own default.
-        let started = self.node_mut(targets[0]).and_then(|node| node.params.get(row.param).map(number));
-        let default = row.default.or(started).unwrap_or_else(|| number(&meta.default_value));
-        let mut spec = card_spec(id, row.name.unwrap_or(&meta.label), &meta, default, row.section, facts);
+        let started = self
+            .node_mut(targets[0])
+            .and_then(|node| node.params.get(row.param).map(number));
+        let default = row
+            .default
+            .or(started)
+            .unwrap_or_else(|| number(&meta.default_value));
+        let mut spec = card_spec(
+            id,
+            row.name.unwrap_or(&meta.label),
+            &meta,
+            default,
+            row.section,
+            facts,
+        );
         spec.material_role = meta.material_role;
         self.declare(spec, &meta, targets, row.param);
     }
 
     /// A card param `spec` bound to `param` on every target node, each target
     /// set to the spec's default.
-    pub(crate) fn declare(&mut self, spec: ParamSpecDef, meta: &NodeParamMetadata, targets: &[u32], param: &str) {
+    pub(crate) fn declare(
+        &mut self,
+        spec: ParamSpecDef,
+        meta: &NodeParamMetadata,
+        targets: &[u32],
+        param: &str,
+    ) {
         for &target in targets {
             self.set_number(target, param, spec.default_value);
-            let node_id = self.node_mut(target).map(|node| node.node_id.clone()).unwrap_or_default();
+            let node_id = self
+                .node_mut(target)
+                .map(|node| node.node_id.clone())
+                .unwrap_or_default();
             self.bindings.push(BindingDef {
                 id: spec.id.clone(),
                 label: spec.name.clone(),
                 default_value: spec.default_value,
-                target: BindingTarget::Node { node_id, param: param.to_owned() },
+                target: BindingTarget::Node {
+                    node_id,
+                    param: param.to_owned(),
+                },
                 convert: meta.convert,
                 user_added: false,
                 scale: 1.0,
@@ -528,8 +625,20 @@ impl<'d> Builder<'d> {
         let render = self.scene("render");
         let objects = self.objects.clone();
         let lights = self.lights.clone();
-        self.set(render, "objects", SerializedParamValue::Int { value: objects.len().max(1) as i32 });
-        self.set(render, "lights", SerializedParamValue::Int { value: lights.len() as i32 });
+        self.set(
+            render,
+            "objects",
+            SerializedParamValue::Int {
+                value: objects.len().max(1) as i32,
+            },
+        );
+        self.set(
+            render,
+            "lights",
+            SerializedParamValue::Int {
+                value: lights.len() as i32,
+            },
+        );
         for (k, object) in objects.into_iter().enumerate() {
             self.wire(object, "object", render, &format!("object_{k}"));
         }
@@ -559,10 +668,13 @@ impl<'d> Builder<'d> {
             // the rest pose its targets compiled with.
             for modifier in &mut self.modifiers {
                 let frames = match self.frames.get(&modifier.id) {
-                    Some(plan) => capture_mesh_frames(&def, modifier, &plan.placements, plan.radius),
+                    Some(plan) => {
+                        capture_mesh_frames(&def, modifier, &plan.placements, plan.radius)
+                    }
                     None => resolve_modifier_mesh_frames(&def, modifier),
                 };
-                modifier.mesh_frames = frames.map_err(|error| format!("{}: {error}", modifier.id))?;
+                modifier.mesh_frames =
+                    frames.map_err(|error| format!("{}: {error}", modifier.id))?;
             }
             def.scene_modifiers = self.modifiers;
         }
@@ -600,7 +712,10 @@ impl<'d> Builder<'d> {
 
     /// The node and port wired into `to`'s `port`, if any.
     pub(crate) fn input(&self, to: u32, port: &str) -> Option<(u32, String)> {
-        self.wires.iter().find(|wire| wire.to_node == to && wire.to_port == port).map(|wire| (wire.from_node, wire.from_port.clone()))
+        self.wires
+            .iter()
+            .find(|wire| wire.to_node == to && wire.to_port == port)
+            .map(|wire| (wire.from_node, wire.from_port.clone()))
     }
 
     /// The type of node `id`.
@@ -624,13 +739,18 @@ impl<'d> Builder<'d> {
 }
 
 /// The box holding every rest pose in `rests`, each where it is placed.
-pub(crate) fn rest_box<'r>(rests: impl IntoIterator<Item = &'r Rest>) -> Option<([f32; 3], [f32; 3])> {
+pub(crate) fn rest_box<'r>(
+    rests: impl IntoIterator<Item = &'r Rest>,
+) -> Option<([f32; 3], [f32; 3])> {
     let mut found: Option<([f32; 3], [f32; 3])> = None;
     for rest in rests {
         let (lo, hi) = rest.placed.unwrap_or((rest.lo, rest.hi));
         found = Some(match found {
             None => (lo, hi),
-            Some((min, max)) => (std::array::from_fn(|axis| min[axis].min(lo[axis])), std::array::from_fn(|axis| max[axis].max(hi[axis]))),
+            Some((min, max)) => (
+                std::array::from_fn(|axis| min[axis].min(lo[axis])),
+                std::array::from_fn(|axis| max[axis].max(hi[axis])),
+            ),
         });
     }
     found.filter(|(min, max)| min.iter().chain(max.iter()).all(|value| value.is_finite()))
@@ -708,4 +828,3 @@ fn scene_metadata(params: Vec<ParamSpecDef>, bindings: Vec<BindingDef>) -> Prese
         scene_bounds: None,
     }
 }
-

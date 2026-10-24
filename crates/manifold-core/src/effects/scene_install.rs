@@ -14,7 +14,11 @@ impl PresetInstance {
     /// The graph the saved params are described against. A scene layer's
     /// params are described by its kind tables, never by a graph.
     pub(super) fn saved_graph(&self) -> Option<&EffectGraphDef> {
-        if self.scene.is_some() { None } else { self.graph.as_ref() }
+        if self.scene.is_some() {
+            None
+        } else {
+            self.graph.as_ref()
+        }
     }
 
     /// A scene layer's graph as a save writes it: the user's nodes and wires,
@@ -44,7 +48,9 @@ impl PresetInstance {
     /// Whether this scene layer's Scene node holds its compiled scene. A
     /// loaded layer holds an empty one until [`Self::compile_scene_for_load`].
     pub(super) fn scene_compiled(&self) -> bool {
-        self.graph.as_ref().is_some_and(crate::scene_node::is_filled)
+        self.graph
+            .as_ref()
+            .is_some_and(crate::scene_node::is_filled)
     }
 
     /// Load: compile a scene layer's document into its saved graph, so its
@@ -58,7 +64,9 @@ impl PresetInstance {
         if self.scene_compiled() {
             return false;
         }
-        match crate::scene_doc::compile(doc).and_then(|compiled| crate::scene_node::seal(compiled, self.graph.as_ref())) {
+        match crate::scene_doc::compile(doc)
+            .and_then(|compiled| crate::scene_node::seal(compiled, self.graph.as_ref()))
+        {
             Ok(graph) => {
                 self.graph = Some(graph);
                 true

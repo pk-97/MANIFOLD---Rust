@@ -3,8 +3,8 @@
 use std::any::TypeId;
 use std::sync::LazyLock;
 
-use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext};
 use ahash::AHashMap;
+use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext};
 
 /// Observations, coupled inputs and impulse admission owned by native simulations.
 pub trait PhysicsNode: Send {

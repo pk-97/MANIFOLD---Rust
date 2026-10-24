@@ -1,5 +1,3 @@
-#[cfg(test)]
-use crate::{MappingAction, RootAction};
 use crate::color;
 use crate::drag::DragController;
 use crate::draw::{Painter, elide_to_width, text_width};
@@ -7,6 +5,8 @@ use crate::intent::{Gesture, IntentRegistry};
 use crate::node::*;
 use crate::panels::PanelAction;
 use crate::tree::UITree;
+#[cfg(test)]
+use crate::{MappingAction, RootAction};
 
 // ── Layout constants ────────────────────────────────────────────────
 
@@ -64,7 +64,10 @@ impl TrackSpan {
 
     /// The span of a full rect (use when you hold live bounds from the tree).
     pub fn of(rect: Rect) -> Self {
-        Self { x: rect.x, width: rect.width }
+        Self {
+            x: rect.x,
+            width: rect.width,
+        }
     }
 }
 
@@ -72,14 +75,14 @@ impl TrackSpan {
 /// Stored by the owning panel for event routing and value updates.
 #[derive(Debug, Clone, Copy)]
 pub struct SliderNodeIds {
-    pub label: Option<NodeId>,   // None if no label
-    pub track: NodeId,           // interactive — drag target
-    pub fill: NodeId,            // non-interactive — subtle fill from left to value
-    pub thumb: NodeId,           // non-interactive — thin vertical bar at value position
-    pub value_text: NodeId,      // interactive — double-click to type (in the right gutter, D13)
-    pub track_span: TrackSpan,   // cached x/width of the usable track (excludes value gutter);
-                                 // scroll-invariant. For y/height read tree.get_bounds(track) —
-                                 // never cache them (BUG-259).
+    pub label: Option<NodeId>, // None if no label
+    pub track: NodeId,         // interactive — drag target
+    pub fill: NodeId,          // non-interactive — subtle fill from left to value
+    pub thumb: NodeId,         // non-interactive — thin vertical bar at value position
+    pub value_text: NodeId,    // interactive — double-click to type (in the right gutter, D13)
+    pub track_span: TrackSpan, // cached x/width of the usable track (excludes value gutter);
+    // scroll-invariant. For y/height read tree.get_bounds(track) —
+    // never cache them (BUG-259).
     /// The slider's normalized default, for right-click reset.
     pub default_normalized: f32,
 }
@@ -281,8 +284,14 @@ impl BitmapSlider {
     /// `layer_header.rs`'s gain slider, `param_card.rs::register_intents`
     /// (main rows + envelope decay + audio-shape drawer rows), and
     /// `audio_trigger_section.rs::register_intents`.
-    pub fn register_track_reset(ids: &SliderNodeIds, reset: &PanelAction, reg: &mut IntentRegistry) {
-        if let Some(SliderIntent::ResetToDefault) = Self::intent_for(SliderZone::Track, Gesture::RightClick) {
+    pub fn register_track_reset(
+        ids: &SliderNodeIds,
+        reset: &PanelAction,
+        reg: &mut IntentRegistry,
+    ) {
+        if let Some(SliderIntent::ResetToDefault) =
+            Self::intent_for(SliderZone::Track, Gesture::RightClick)
+        {
             reg.on(ids.track, Gesture::RightClick, reset.clone());
         }
     }
@@ -295,9 +304,14 @@ impl BitmapSlider {
     /// for a host that has no mapping surface at all: callers simply don't
     /// call this fn for those hosts (gain / master-chrome / layer-chrome /
     /// audio-trigger — D15's dead-stop record on `intent_for`).
-    pub fn register_label_mapping(ids: &SliderNodeIds, mapping: &PanelAction, reg: &mut IntentRegistry) {
+    pub fn register_label_mapping(
+        ids: &SliderNodeIds,
+        mapping: &PanelAction,
+        reg: &mut IntentRegistry,
+    ) {
         if let Some(label) = ids.label
-            && let Some(SliderIntent::OpenMapping) = Self::intent_for(SliderZone::Label, Gesture::RightClick)
+            && let Some(SliderIntent::OpenMapping) =
+                Self::intent_for(SliderZone::Label, Gesture::RightClick)
         {
             reg.on(label, Gesture::RightClick, mapping.clone());
         }
@@ -369,7 +383,9 @@ impl BitmapSlider {
                 text_align: TextAlign::Right,
                 ..UIStyle::default()
             };
-            let label_rect = z.label.expect("has_label true implies zones() returns a label rect");
+            let label_rect = z
+                .label
+                .expect("has_label true implies zones() returns a label rect");
             ids.label = Some(match key {
                 Some(base) => tree.add_node_keyed(
                     parent_id,
@@ -416,7 +432,14 @@ impl BitmapSlider {
                 UIFlags::INTERACTIVE,
                 base | SLIDER_KEY_TRACK,
             ),
-            None => tree.add_node(parent_id, track_rect, UINodeType::Button, track_style, None, UIFlags::INTERACTIVE),
+            None => tree.add_node(
+                parent_id,
+                track_rect,
+                UINodeType::Button,
+                track_style,
+                None,
+                UIFlags::INTERACTIVE,
+            ),
         };
 
         // ── Fill (child of track, non-interactive) ──
@@ -441,7 +464,13 @@ impl BitmapSlider {
         );
 
         // ── Thumb (child of track, non-interactive) ──
-        let thumb_rect = compute_thumb_rect(track_rect, normalized_value, FILL_INSET, THUMB_WIDTH, THUMB_INSET);
+        let thumb_rect = compute_thumb_rect(
+            track_rect,
+            normalized_value,
+            FILL_INSET,
+            THUMB_WIDTH,
+            THUMB_INSET,
+        );
         ids.thumb = tree.add_node(
             Some(ids.track),
             thumb_rect,
@@ -477,7 +506,14 @@ impl BitmapSlider {
                 UIFlags::empty(),
                 base | SLIDER_KEY_VALUE,
             ),
-            None => tree.add_node(parent_id, value_rect, UINodeType::Label, value_style, Some(value_text), UIFlags::empty()),
+            None => tree.add_node(
+                parent_id,
+                value_rect,
+                UINodeType::Label,
+                value_style,
+                Some(value_text),
+                UIFlags::empty(),
+            ),
         };
         // The value box is the `ValueCell` zone — interactive per this type's
         // own contract (`ids.value_text`: "interactive — double-click to
@@ -493,9 +529,19 @@ impl BitmapSlider {
     /// Move a built slider to `rect` in place, laid out exactly as [`Self::build`]
     /// lays it out there, at `normalized_value`. `ids.track_span` follows the
     /// track, so a holder that re-reads the ids maps drags to the new track.
-    pub fn relayout(tree: &mut UITree, ids: &mut SliderNodeIds, rect: Rect, label_width: f32, normalized_value: f32) {
+    pub fn relayout(
+        tree: &mut UITree,
+        ids: &mut SliderNodeIds,
+        rect: Rect,
+        label_width: f32,
+        normalized_value: f32,
+    ) {
         let metrics = SliderMetrics {
-            label_width: if ids.label.is_some() { label_width } else { 0.0 },
+            label_width: if ids.label.is_some() {
+                label_width
+            } else {
+                0.0
+            },
             value_box_w: VALUE_BOX_W,
             gap: GAP,
             value_gap: VALUE_GAP,
@@ -510,19 +556,42 @@ impl BitmapSlider {
         let fill_w = compute_fill_width(z.track.width, normalized_value, FILL_INSET);
         tree.set_bounds(
             ids.fill,
-            Rect::new(z.track.x + FILL_INSET, z.track.y + FILL_INSET, fill_w, z.track.height - FILL_INSET * 2.0),
+            Rect::new(
+                z.track.x + FILL_INSET,
+                z.track.y + FILL_INSET,
+                fill_w,
+                z.track.height - FILL_INSET * 2.0,
+            ),
         );
-        tree.set_bounds(ids.thumb, compute_thumb_rect(z.track, normalized_value, FILL_INSET, THUMB_WIDTH, THUMB_INSET));
+        tree.set_bounds(
+            ids.thumb,
+            compute_thumb_rect(
+                z.track,
+                normalized_value,
+                FILL_INSET,
+                THUMB_WIDTH,
+                THUMB_INSET,
+            ),
+        );
     }
 
     /// Mark a value past the slider's end: the thumb, already pinned at the
     /// end by the clamped position, turns amber. Only for sliders built with
     /// the default thumb colour (param rows).
     pub fn mark_past_end(tree: &mut UITree, ids: &SliderNodeIds, past_end: bool) {
-        let Some(node) = tree.get_node(ids.thumb) else { return };
-        let bg_color = if past_end { color::SLIDER_PAST_END_C32 } else { color::SLIDER_THUMB_C32 };
+        let Some(node) = tree.get_node(ids.thumb) else {
+            return;
+        };
+        let bg_color = if past_end {
+            color::SLIDER_PAST_END_C32
+        } else {
+            color::SLIDER_THUMB_C32
+        };
         if node.style.bg_color != bg_color {
-            let style = UIStyle { bg_color, ..node.style };
+            let style = UIStyle {
+                bg_color,
+                ..node.style
+            };
             tree.set_style(ids.thumb, style);
         }
     }
@@ -554,7 +623,13 @@ impl BitmapSlider {
         // Thumb
         tree.set_bounds(
             ids.thumb,
-            compute_thumb_rect(track_rect, normalized_value, FILL_INSET, THUMB_WIDTH, THUMB_INSET),
+            compute_thumb_rect(
+                track_rect,
+                normalized_value,
+                FILL_INSET,
+                THUMB_WIDTH,
+                THUMB_INSET,
+            ),
         );
 
         // Value text
@@ -619,7 +694,9 @@ impl BitmapSlider {
         {
             let text = elide_to_width(label_text, font_size, label_width);
             let tw = text_width(&text, font_size);
-            let label_rect = z.label.expect("has_label true implies zones() returns a label rect");
+            let label_rect = z
+                .label
+                .expect("has_label true implies zones() returns a label rect");
             let text_x = label_rect.x + (label_width - tw).max(0.0);
             let text_y = y + (h - font_size) * 0.5;
             ui.draw_text(text_x, text_y, &text, font_size, colors.text.to_array());
@@ -629,8 +706,12 @@ impl BitmapSlider {
         let track_rect = z.track;
 
         ui.draw_rounded_rect(
-            track_rect.x, track_rect.y, track_rect.width, track_rect.height,
-            colors.track, track_radius,
+            track_rect.x,
+            track_rect.y,
+            track_rect.width,
+            track_rect.height,
+            colors.track,
+            track_radius,
         );
 
         let fill_w = compute_fill_width(track_rect.width, normalized_value, fill_inset);
@@ -645,11 +726,20 @@ impl BitmapSlider {
             );
         }
 
-        let thumb_rect =
-            compute_thumb_rect(track_rect, normalized_value, fill_inset, thumb_width, thumb_inset);
+        let thumb_rect = compute_thumb_rect(
+            track_rect,
+            normalized_value,
+            fill_inset,
+            thumb_width,
+            thumb_inset,
+        );
         ui.draw_rounded_rect(
-            thumb_rect.x, thumb_rect.y, thumb_rect.width, thumb_rect.height,
-            colors.thumb, thumb_width * 0.5,
+            thumb_rect.x,
+            thumb_rect.y,
+            thumb_rect.width,
+            thumb_rect.height,
+            colors.thumb,
+            thumb_width * 0.5,
         );
 
         ui.draw_rounded_rect(value_box_x, y, value_box_w, h, colors.track, track_radius);
@@ -906,7 +996,10 @@ mod tests {
     fn placeholder_reset() -> PanelAction {
         PanelAction::slider_reset(
             PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Begin),
-            PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Move(ScrubValue::Scalar(1.0))),
+            PanelAction::Scrub(
+                ValueRef::MasterOpacity,
+                ScrubPhase::Move(ScrubValue::Scalar(1.0)),
+            ),
             PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Commit),
         )
     }
@@ -918,11 +1011,20 @@ mod tests {
     fn intent_for_pins_the_full_contract_table() {
         use Gesture::*;
         use SliderZone::*;
-        assert_eq!(BitmapSlider::intent_for(Track, RightClick), Some(SliderIntent::ResetToDefault));
-        assert_eq!(BitmapSlider::intent_for(Label, RightClick), Some(SliderIntent::OpenMapping));
+        assert_eq!(
+            BitmapSlider::intent_for(Track, RightClick),
+            Some(SliderIntent::ResetToDefault)
+        );
+        assert_eq!(
+            BitmapSlider::intent_for(Label, RightClick),
+            Some(SliderIntent::OpenMapping)
+        );
         // D13 correction (P3): DoubleClick, not Click — chrome's shipped
         // type-in gesture.
-        assert_eq!(BitmapSlider::intent_for(ValueCell, DoubleClick), Some(SliderIntent::EditValue));
+        assert_eq!(
+            BitmapSlider::intent_for(ValueCell, DoubleClick),
+            Some(SliderIntent::EditValue)
+        );
         // Every other (zone, gesture) pair is an explicit dead stop (D3),
         // including ValueCell+Click — chrome's value cell does NOT open on a
         // single click (that's the P1 mistake D13 corrects).
@@ -932,7 +1034,11 @@ mod tests {
                     (zone, g),
                     (Track, RightClick) | (Label, RightClick) | (ValueCell, DoubleClick)
                 );
-                assert_eq!(BitmapSlider::intent_for(zone, g).is_some(), expected, "{zone:?} + {g:?}");
+                assert_eq!(
+                    BitmapSlider::intent_for(zone, g).is_some(),
+                    expected,
+                    "{zone:?} + {g:?}"
+                );
             }
         }
     }
@@ -1003,7 +1109,10 @@ mod tests {
         // PanelAction carries no PartialEq; SliderReset is the marker of
         // interest here (it's what `register_intents` should have replayed
         // — the same `reset` this slider was built with, above).
-        assert!(matches!(resolved, Some(PanelAction::Root(RootAction::SliderReset { .. }))));
+        assert!(matches!(
+            resolved,
+            Some(PanelAction::Root(RootAction::SliderReset { .. }))
+        ));
     }
 
     /// P3/D14: `register_label_mapping` is the label's build-time contract
@@ -1034,7 +1143,10 @@ mod tests {
         let mut reg = IntentRegistry::new();
         BitmapSlider::register_label_mapping(&ids, &mapping, &mut reg);
         let resolved = reg.resolve(&tree, ids.label, Gesture::RightClick);
-        assert!(matches!(resolved, Some(PanelAction::Mapping(MappingAction::MacroLabelRightClick(0)))));
+        assert!(matches!(
+            resolved,
+            Some(PanelAction::Mapping(MappingAction::MacroLabelRightClick(0)))
+        ));
     }
 
     /// P3/D15: a labelless slider has nothing to register the mapping on —
@@ -1192,6 +1304,9 @@ mod tests {
         tree.clear_dirty();
         BitmapSlider::update_value(&mut tree, &ids, 0.25, "0.25");
         assert!(tree.has_dirty());
-        assert_eq!(tree.get_node(ids.value_text).unwrap().text.as_deref(), Some("0.25"));
+        assert_eq!(
+            tree.get_node(ids.value_text).unwrap().text.as_deref(),
+            Some("0.25")
+        );
     }
 }

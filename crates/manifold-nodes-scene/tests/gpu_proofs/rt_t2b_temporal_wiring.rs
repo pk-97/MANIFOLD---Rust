@@ -17,13 +17,12 @@
 //! in `rt_p4_metalfx_temporal.rs`; this file's job is the end-to-end wiring,
 //! not re-proving the reset mechanism at unit-test tightness.
 
-use manifold_nodes_scene::testkit::gpu_harness::readback_rgba_f32;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_nodes_scene::testkit::gpu_harness::readback_rgba_f32;
 
 /// D22 point 1: `RT_TEMPORAL_RENDER_SCALE_NUM`/`_DEN` mirrored here as a
 /// plain oracle (not `use`d from `render_scene.rs` — that fn is private to
@@ -101,7 +100,10 @@ fn scene_json(temporal_upscale: bool) -> String {
     )
 }
 
-fn build_runtime(h: &manifold_node_engine::testkit::gpu_harness::ParityHarness, temporal_upscale: bool) -> PresetRuntime {
+fn build_runtime(
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
+    temporal_upscale: bool,
+) -> PresetRuntime {
     let registry = PrimitiveRegistry::with_builtin();
     let json = scene_json(temporal_upscale);
     let mut runtime = PresetRuntime::from_json_str_with_device(
@@ -113,7 +115,9 @@ fn build_runtime(h: &manifold_node_engine::testkit::gpu_harness::ParityHarness, 
         GpuTextureFormat::Rgba16Float,
         None,
     )
-    .unwrap_or_else(|e| panic!("rt_t2b graph must build (temporal_upscale={temporal_upscale}): {e}\n{json}"));
+    .unwrap_or_else(|e| {
+        panic!("rt_t2b graph must build (temporal_upscale={temporal_upscale}): {e}\n{json}")
+    });
     runtime.set_dump_all(true);
     runtime
 }
@@ -136,17 +140,26 @@ fn ctx(owner_key: i64, frame_count: i64) -> PresetContext {
     }
 }
 
-fn render_frame(runtime: &mut PresetRuntime, h: &manifold_node_engine::testkit::gpu_harness::ParityHarness, target: &manifold_gpu::GpuTexture, owner_key: i64, frame_count: i64) {
+fn render_frame(
+    runtime: &mut PresetRuntime,
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
+    target: &manifold_gpu::GpuTexture,
+    owner_key: i64,
+    frame_count: i64,
+) {
     let c = ctx(owner_key, frame_count);
     let mut enc = h.device.create_encoder("rt-t2b-frame");
     {
         let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-        runtime.render(&mut gpu, target, &c, &manifold_core::params::ParamManifest::default());
+        runtime.render(
+            &mut gpu,
+            target,
+            &c,
+            &manifold_core::params::ParamManifest::default(),
+        );
     }
     enc.commit_and_wait_completed();
 }
-
-
 
 fn mean_abs_diff_rgb(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len());
@@ -178,8 +191,14 @@ fn temporal_upscale_color_output_is_exact_native_res() {
         .iter()
         .find(|(node_id, port, _, _)| node_id == "scene" && port == "color")
         .unwrap_or_else(|| panic!("scene.color must be dumped"));
-    assert_eq!(color.3.width, NATIVE_W, "temporal_upscale color output width must be exact native res");
-    assert_eq!(color.3.height, NATIVE_H, "temporal_upscale color output height must be exact native res");
+    assert_eq!(
+        color.3.width, NATIVE_W,
+        "temporal_upscale color output width must be exact native res"
+    );
+    assert_eq!(
+        color.3.height, NATIVE_H,
+        "temporal_upscale color output height must be exact native res"
+    );
 }
 
 /// D22 point 2: `depth`/`velocity` stay at RENDER res when
@@ -217,9 +236,17 @@ fn temporal_upscale_depth_velocity_outputs_stay_render_res() {
         let (_, _, _, tex) = dumped
             .iter()
             .find(|(node_id, p, _, _)| node_id == "scene" && p == port)
-            .unwrap_or_else(|| panic!("temporal_upscale=true must force `{port}` into consumed_outputs"));
-        assert_eq!(tex.width, expected_w, "`{port}` width must be render res ({expected_w}), not native");
-        assert_eq!(tex.height, expected_h, "`{port}` height must be render res ({expected_h}), not native");
+            .unwrap_or_else(|| {
+                panic!("temporal_upscale=true must force `{port}` into consumed_outputs")
+            });
+        assert_eq!(
+            tex.width, expected_w,
+            "`{port}` width must be render res ({expected_w}), not native"
+        );
+        assert_eq!(
+            tex.height, expected_h,
+            "`{port}` height must be render res ({expected_h}), not native"
+        );
     }
 }
 
@@ -318,7 +345,10 @@ fn native_mode_render_is_deterministic_across_independent_runtimes() {
 
     assert_eq!(pixels_a.len(), pixels_b.len());
     for (i, (&a, &b)) in pixels_a.iter().zip(pixels_b.iter()).enumerate() {
-        assert_eq!(a, b, "native-mode render is not deterministic at component {i}: {a} != {b}");
+        assert_eq!(
+            a, b,
+            "native-mode render is not deterministic at component {i}: {a} != {b}"
+        );
     }
 }
 
@@ -348,9 +378,18 @@ fn temporal_upscale_toggle_never_stalls_past_20ms() {
     // native -> upscaled -> native, a few frames each side, simulating a
     // performer toggling the mode mid-set.
     let sequence: [(&str, i64); 12] = [
-        ("native", 0), ("native", 1), ("native", 2), ("native", 3),
-        ("upscale", 0), ("upscale", 1), ("upscale", 2), ("upscale", 3),
-        ("native", 4), ("native", 5), ("native", 6), ("native", 7),
+        ("native", 0),
+        ("native", 1),
+        ("native", 2),
+        ("native", 3),
+        ("upscale", 0),
+        ("upscale", 1),
+        ("upscale", 2),
+        ("upscale", 3),
+        ("native", 4),
+        ("native", 5),
+        ("native", 6),
+        ("native", 7),
     ];
     // BUG-uo3z (rt first-frame stall assert load-flaky): collect every
     // checked frame's wall time first — the ceiling below is computed from
@@ -375,7 +414,10 @@ fn temporal_upscale_toggle_never_stalls_past_20ms() {
             checked.push((label, frame, elapsed_ms));
         }
     }
-    eprintln!("[T2-B] worst post-warmup frame: {} #{} at {:.2}ms", worst.0, worst.1, worst.2);
+    eprintln!(
+        "[T2-B] worst post-warmup frame: {} #{} at {:.2}ms",
+        worst.0, worst.1, worst.2
+    );
 
     // BUG-uo3z: ceiling relative to THIS run's own steady state, not a
     // bare wall-clock constant — a bare 20ms flaked under full-suite GPU
@@ -385,7 +427,9 @@ fn temporal_upscale_toggle_never_stalls_past_20ms() {
     // `rt_p1_region_probe::STALL_ABS_FLOOR_MS` (old budget, kept as a
     // floor) and `STALL_FACTOR` times that median (a synchronous stall
     // regression is a 100-500ms spike — 8x median still catches it).
-    use crate::rt_p1_region_probe::{stall_ceiling_ms, STALL_ABS_FLOOR_MS, STALL_FACTOR, STEADY_TAIL_COUNT};
+    use crate::rt_p1_region_probe::{
+        STALL_ABS_FLOOR_MS, STALL_FACTOR, STEADY_TAIL_COUNT, stall_ceiling_ms,
+    };
     let steady_ms: Vec<f64> = checked[checked.len().saturating_sub(STEADY_TAIL_COUNT)..]
         .iter()
         .map(|&(_, _, ms)| ms)

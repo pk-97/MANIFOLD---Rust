@@ -29,6 +29,6 @@ pub(crate) mod resolve;
 // and its own top-level `use super::resolve_effects_read;` needs it
 // re-exported here too.
 use super::{
-    editor_dispatch_context, resolve_active_layer_index, resolve_effect_by_id, resolve_effect_id, resolve_effect_target, resolve_effects_read,
+    editor_dispatch_context, resolve_active_layer_index, resolve_effect_by_id, resolve_effect_id,
+    resolve_effect_target, resolve_effects_read,
 };
-

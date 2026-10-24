@@ -4,14 +4,20 @@ use std::ffi::c_void;
 use std::slice;
 use std::sync::{Arc, OnceLock};
 
+use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use crate::gpu::render_target::RenderTarget;
+use crate::{
+    bindings::Slot, exec::backend::Backend, exec::effect_node::EffectNode,
+    exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+    exec::execution_plan::ExecutionPlan, exec::execution_plan::ResourceId,
+    exec::execution_plan::compile, exec::metal_backend::MetalBackend, graph::Graph,
+    ports::PortType, scene::boundary_nodes::FinalOutput, scene::boundary_nodes::Source,
+};
 use half::f16;
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
-use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use crate::{exec::backend::Backend, exec::effect_node::EffectNode, exec::execution_plan::ExecutionPlan, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, ports::PortType, exec::execution_plan::ResourceId, bindings::Slot, scene::boundary_nodes::Source, exec::execution_plan::compile};
-use crate::gpu::render_target::RenderTarget;
 
 /// Fixed render dimensions. Small enough that readbacks finish in
 /// milliseconds; large enough to exercise non-trivial dispatch shapes
@@ -45,10 +51,7 @@ static SHARED: OnceLock<ParityHarness> = OnceLock::new();
 /// this right after building a runtime from a def you mutated — it turns "my
 /// measurement is secretly of the card default" into a failure at the point of
 /// the mistake, instead of a wrong number read as a conclusion.
-pub fn assert_no_shadowed_def_params(
-    runtime: &crate::runtime::PresetRuntime,
-    context: &str,
-) {
+pub fn assert_no_shadowed_def_params(runtime: &crate::runtime::PresetRuntime, context: &str) {
     let findings: Vec<String> = runtime
         .shadowed_def_params()
         .map(|f| f.to_string())
@@ -180,8 +183,12 @@ impl ParityHarness {
         let zeros = vec![f16::from_f32(0.0); (self.width * self.height * 4) as usize];
         let transparent = self.upload_f16_rgba("alpha-probe-transparent", &zeros);
 
-        let mut backend =
-            MetalBackend::new(Arc::clone(&self.device), self.width, self.height, self.format);
+        let mut backend = MetalBackend::new(
+            Arc::clone(&self.device),
+            self.width,
+            self.height,
+            self.format,
+        );
         let mut copy_enc = self.device.create_encoder("alpha-probe-copy-in");
         let mut rts: Vec<RenderTarget> = Vec::with_capacity(sources.len());
         {
@@ -343,7 +350,10 @@ pub struct BackgroundWait {
 
 impl BackgroundWait {
     pub fn new(label: impl Into<String>) -> Self {
-        Self { label: label.into(), started: std::time::Instant::now() }
+        Self {
+            label: label.into(),
+            started: std::time::Instant::now(),
+        }
     }
 
     /// Call once per rendered frame. True while `runtime` has background work
@@ -413,7 +423,10 @@ mod tests {
             }
             42
         });
-        assert_eq!(value, 42, "the retried call must produce the closure's result");
+        assert_eq!(
+            value, 42,
+            "the retried call must produce the closure's result"
+        );
         assert_eq!(
             calls.load(Ordering::SeqCst),
             2,
@@ -430,7 +443,10 @@ mod tests {
                 commit_error_panic();
             })
         }));
-        assert!(outcome.is_err(), "a persistent commit hang must still fail the test");
+        assert!(
+            outcome.is_err(),
+            "a persistent commit hang must still fail the test"
+        );
         assert_eq!(
             calls.load(Ordering::SeqCst),
             2,
@@ -447,7 +463,14 @@ mod tests {
                 panic!("a real value assertion, not a GPU commit error");
             })
         }));
-        assert!(outcome.is_err(), "an unrelated panic must propagate immediately");
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "no retry for non-commit errors");
+        assert!(
+            outcome.is_err(),
+            "an unrelated panic must propagate immediately"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "no retry for non-commit errors"
+        );
     }
 }

@@ -764,7 +764,9 @@ mod tests {
         let mut offset = 0;
         while offset < frame_count {
             let end = (offset + 137).min(frame_count);
-            serial.process(&mid[offset..end], &side[offset..end]).unwrap();
+            serial
+                .process(&mid[offset..end], &side[offset..end])
+                .unwrap();
             offset = end;
         }
 
@@ -913,10 +915,8 @@ mod tests {
         let frames = sample_rate as usize;
         let mut pcm = Vec::with_capacity(frames * 2 * 4);
         for frame in 0..frames {
-            let sample = (std::f32::consts::TAU * 18_000.0 * frame as f32
-                / sample_rate as f32)
-                .sin()
-                * 0.25;
+            let sample =
+                (std::f32::consts::TAU * 18_000.0 * frame as f32 / sample_rate as f32).sin() * 0.25;
             pcm.extend_from_slice(&sample.to_le_bytes());
             pcm.extend_from_slice(&sample.to_le_bytes());
         }

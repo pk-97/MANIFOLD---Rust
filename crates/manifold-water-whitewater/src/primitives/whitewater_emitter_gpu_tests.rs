@@ -1,8 +1,5 @@
 //! Small value proofs for the reference emitters. Run only through gpu_queue.
 //! The turbulence reference is independently checked against the vendored C++ engine.
-use manifold_node_engine::testkit::array_harness::{Harness, params, read};
-use manifold_node_engine::testkit::fused_atoms::run;
-use {crate::primitives::whitewater_particle_cpu as cpu, super::whitewater_particle_cpu::Box3};
 use super::{
     dust_potential::DustPotential,
     energy_potential::EnergyPotential,
@@ -15,7 +12,10 @@ use super::{
     },
 };
 use manifold_node_engine::exec::effect_node::NodeInstanceId;
-use manifold_node_engine::{particles::FluidParticle, freeze::codegen::InputSource};
+use manifold_node_engine::testkit::array_harness::{Harness, params, read};
+use manifold_node_engine::testkit::fused_atoms::run;
+use manifold_node_engine::{freeze::codegen::InputSource, particles::FluidParticle};
+use {super::whitewater_particle_cpu::Box3, crate::primitives::whitewater_particle_cpu as cpu};
 
 fn values(extra: &[(&'static str, f32)]) -> Vec<(&'static str, f32)> {
     let mut v = vec![
@@ -37,7 +37,6 @@ fn values(extra: &[(&'static str, f32)]) -> Vec<(&'static str, f32)> {
     v
 }
 
-
 fn close(actual: &[f32], expected: &[f32]) {
     assert_eq!(actual.len(), expected.len());
     for (i, (a, b)) in actual.iter().zip(expected).enumerate() {
@@ -47,8 +46,6 @@ fn close(actual: &[f32], expected: &[f32]) {
         );
     }
 }
-
-
 
 #[test]
 fn whitewater_inside_dust_counts_and_fusion() {
@@ -135,7 +132,13 @@ fn whitewater_inside_dust_counts_and_fusion() {
                     0
                 } else {
                     super::whitewater_emitter_cpu::emission_count(
-                        1.0, [0.0, potential[i as usize]], [175.0; 2], 2.0, 8.0, 1.0, dt,
+                        1.0,
+                        [0.0, potential[i as usize]],
+                        [175.0; 2],
+                        2.0,
+                        8.0,
+                        1.0,
+                        dt,
                     )
                 }
             })
@@ -231,8 +234,6 @@ fn whitewater_inside_dust_counts_and_fusion() {
     );
     close(&got, &[0.0; 32]);
 }
-
-
 
 #[test]
 fn whitewater_emitter_speed_values_and_fusion() {
@@ -425,8 +426,6 @@ fn whitewater_obstacle_source_closed_and_open_domain() {
     close(&folded, &vec![2.0; 729]);
 }
 
-
-
 #[test]
 fn whitewater_dust_lifecycle_values_and_fusion() {
     use super::{
@@ -491,7 +490,13 @@ fn whitewater_dust_lifecycle_values_and_fusion() {
     let folded = fused::<WhitewaterParticle>(
         &mut h,
         vec![
-            member::<AdvectWhitewater>(0, (0..5).chain(std::iter::repeat_n(4,6)).map(InputSource::External).collect()),
+            member::<AdvectWhitewater>(
+                0,
+                (0..5)
+                    .chain(std::iter::repeat_n(4, 6))
+                    .map(InputSource::External)
+                    .collect(),
+            ),
             member::<AgeWhitewater>(1, vec![InputSource::Node(NodeInstanceId(0))]),
         ],
         &[&input.1, &f[0].1, &f[1].1, &f[2].1, &s.1],
@@ -630,7 +635,8 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
             max_energy: 60.0,
             preserve_foam: false,
         };
-        let inputs = StepInputs { motion: None,
+        let inputs = StepInputs {
+            motion: None,
             particles: &particles.1,
             solid: &solid.1,
             obstacle_source: Some(&source.1),
@@ -657,7 +663,11 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
             ("pool_out", &pool_out.1),
             ("dust_particles", &dust_out.1),
         ] {
-            native.copy_buffer_to_buffer(step.tick_output(port).unwrap(), destination, destination.size);
+            native.copy_buffer_to_buffer(
+                step.tick_output(port).unwrap(),
+                destination,
+                destination.size,
+            );
         }
         native.commit_and_wait_completed();
         let counts: Vec<u32> = read(&counts_out.1, 9);
@@ -683,4 +693,4 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
     }
 }
 
-use manifold_node_engine::testkit::fused_atoms::{member, fused};
+use manifold_node_engine::testkit::fused_atoms::{fused, member};

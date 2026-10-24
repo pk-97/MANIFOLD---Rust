@@ -8,8 +8,8 @@
 
 use std::sync::Arc;
 
-use manifold_core::project::Project;
 use manifold_core::GraphTarget;
+use manifold_core::project::Project;
 use manifold_node_engine::snapshot::GraphSnapshot;
 
 use crate::content_command::ContentCommand;
@@ -40,11 +40,17 @@ pub struct CachedGraphSnapshot {
 /// A target with no host never resolves, so it watches nothing.
 pub(crate) fn watch_command_target(cmd: &ContentCommand) -> Option<Option<GraphTarget>> {
     match cmd {
-        ContentCommand::WatchEffectGraph(effect_id) => Some(effect_id.clone().map(GraphTarget::Effect)),
-        ContentCommand::WatchGeneratorGraph(layer_id) => Some(layer_id.clone().map(GraphTarget::Generator)),
-        ContentCommand::WatchGraphTarget(target) => {
-            Some(target.clone().filter(|target| target.host_target().is_some()))
+        ContentCommand::WatchEffectGraph(effect_id) => {
+            Some(effect_id.clone().map(GraphTarget::Effect))
         }
+        ContentCommand::WatchGeneratorGraph(layer_id) => {
+            Some(layer_id.clone().map(GraphTarget::Generator))
+        }
+        ContentCommand::WatchGraphTarget(target) => Some(
+            target
+                .clone()
+                .filter(|target| target.host_target().is_some()),
+        ),
         _ => None,
     }
 }
@@ -58,8 +64,12 @@ pub(crate) fn active_graph(
     target: Option<&GraphTarget>,
     fingerprint: u64,
 ) -> (Option<Arc<GraphTarget>>, Option<Arc<GraphSnapshot>>) {
-    let snapshot = project.zip(target).and_then(|(project, target)| cached(cache, project, target, fingerprint));
-    let target = snapshot.as_ref().and_then(|_| cache.as_ref().map(|cache| Arc::clone(&cache.target)));
+    let snapshot = project
+        .zip(target)
+        .and_then(|(project, target)| cached(cache, project, target, fingerprint));
+    let target = snapshot
+        .as_ref()
+        .and_then(|_| cache.as_ref().map(|cache| Arc::clone(&cache.target)));
     (target, snapshot)
 }
 
@@ -168,8 +178,12 @@ fn build(project: &Project, target: &GraphTarget) -> Option<GraphSnapshot> {
                     // diverged imported scene loses its group-face rows the
                     // same way the pristine path did. Shared helper so both
                     // arms resolve handles identically.
-                    let mut handle_by_id: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
-                    manifold_node_engine::load::loaded_preset_view::collect_node_handles(&d.nodes, &mut handle_by_id);
+                    let mut handle_by_id: std::collections::HashMap<&str, &str> =
+                        std::collections::HashMap::new();
+                    manifold_node_engine::load::loaded_preset_view::collect_node_handles(
+                        &d.nodes,
+                        &mut handle_by_id,
+                    );
                     let mut declared = manifold_core::param_lookup::Declared::new(&d);
                     snap.outer_routings = meta
                         .bindings
@@ -190,7 +204,8 @@ fn build(project: &Project, target: &GraphTarget) -> Option<GraphSnapshot> {
                                     source: OuterParamSource::Static,
                                 })
                             }
-                            BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => None,
+                            BindingTarget::Composite { .. }
+                            | BindingTarget::SceneModifier { .. } => None,
                         })
                         .collect();
                 }
@@ -209,18 +224,31 @@ fn build(project: &Project, target: &GraphTarget) -> Option<GraphSnapshot> {
             let mut projection = (*local).clone();
             let metadata = projection.preset_metadata.as_mut()?;
             metadata.bindings = crate::graph_target::modifier_bindings(project, target)?;
-            metadata.params = owner.params.iter().map(|param| param.spec.clone()).collect();
+            metadata.params = owner
+                .params
+                .iter()
+                .map(|param| param.spec.clone())
+                .collect();
             let mut handles = std::collections::HashMap::new();
-            manifold_node_engine::load::loaded_preset_view::collect_node_handles(&local.nodes, &mut handles);
+            manifold_node_engine::load::loaded_preset_view::collect_node_handles(
+                &local.nodes,
+                &mut handles,
+            );
             snap.outer_routings = metadata
                 .bindings
                 .iter()
                 .filter_map(|binding| {
-                    let manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } = &binding.target else {
+                    let manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } =
+                        &binding.target
+                    else {
                         return None;
                     };
                     Some(manifold_node_engine::snapshot::OuterParamRouting {
-                        outer_label: owner.params.get(&binding.id).map(|p| p.spec.name.clone()).unwrap_or_default(),
+                        outer_label: owner
+                            .params
+                            .get(&binding.id)
+                            .map(|p| p.spec.name.clone())
+                            .unwrap_or_default(),
                         outer_param_id: binding.id.clone(),
                         node_handle: handles.get(node_id.as_str())?.to_string(),
                         inner_param: param.clone(),

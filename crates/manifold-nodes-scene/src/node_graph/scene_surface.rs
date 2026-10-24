@@ -22,7 +22,11 @@ const SCALE: ParamTriple = [id("scale_x"), id("scale_y"), id("scale_z")];
 /// A box placed, turned and sized by an item's own transform rows.
 const fn transform_box(rotates: bool) -> SceneShapeDecl {
     SceneShapeDecl {
-        shape: SceneShape::Box { center: POS, rotation: if rotates { Some(ROT) } else { None }, size: SCALE },
+        shape: SceneShape::Box {
+            center: POS,
+            rotation: if rotates { Some(ROT) } else { None },
+            size: SCALE,
+        },
         via: None,
         extent_limit: None,
         uniform_scale: false,
@@ -43,7 +47,10 @@ pub static COPY_GROUP_SHAPES: [SceneShapeDecl; 1] = [{
 /// The liquid domain box: each side stays inside what the solvers accept.
 const DOMAIN_BOX: SceneShapeDecl = {
     let mut decl = transform_box(false);
-    decl.extent_limit = Some(HardLimit::Between(DOMAIN_EXTENT_METRES.0, DOMAIN_EXTENT_METRES.1));
+    decl.extent_limit = Some(HardLimit::Between(
+        DOMAIN_EXTENT_METRES.0,
+        DOMAIN_EXTENT_METRES.1,
+    ));
     decl
 };
 
@@ -60,7 +67,15 @@ pub static INITIAL_FILL_SHAPES: [SceneShapeDecl; 1] = [transform_box(false)];
 pub static SWARM_SHAPES: [SceneShapeDecl; 1] = [transform_box(false)];
 
 const fn point(center: ParamTriple, radius: &'static str) -> SceneShapeDecl {
-    SceneShapeDecl { shape: SceneShape::PointRadius { center, radius: id(radius) }, via: None, extent_limit: None, uniform_scale: false }
+    SceneShapeDecl {
+        shape: SceneShape::PointRadius {
+            center,
+            radius: id(radius),
+        },
+        via: None,
+        extent_limit: None,
+        uniform_scale: false,
+    }
 }
 
 /// A Sun, Point or Spot light: it draws no pixels, so its handle is how it
@@ -70,8 +85,20 @@ pub static LAMP_SHAPES: [SceneShapeDecl; 1] = [point(POS, "range")];
 const CENTRE: ParamTriple = [id("center_x"), id("center_y"), id("center_z")];
 
 const fn field(axis: Option<ParamTriple>) -> SceneShapeDecl {
-    let shape = SceneShape::Field { center: CENTRE, radius: id("radius"), falloff: id("falloff"), curve: id("curve"), axis, strength: Some(id("strength")) };
-    SceneShapeDecl { shape, via: None, extent_limit: None, uniform_scale: false }
+    let shape = SceneShape::Field {
+        center: CENTRE,
+        radius: id("radius"),
+        falloff: id("falloff"),
+        curve: id("curve"),
+        axis,
+        strength: Some(id("strength")),
+    };
+    SceneShapeDecl {
+        shape,
+        via: None,
+        extent_limit: None,
+        uniform_scale: false,
+    }
 }
 
 /// A Radial force: moved by its centre, its reach scaled by its radius,
@@ -79,11 +106,16 @@ const fn field(axis: Option<ParamTriple>) -> SceneShapeDecl {
 pub static RADIAL_FORCE_SHAPES: [SceneShapeDecl; 1] = [field(None)];
 
 /// A Vortex: a Radial force's centre and radius, swirling round its axis.
-pub static VORTEX_FORCE_SHAPES: [SceneShapeDecl; 1] = [field(Some([id("axis_x"), id("axis_y"), id("axis_z")]))];
+pub static VORTEX_FORCE_SHAPES: [SceneShapeDecl; 1] =
+    [field(Some([id("axis_x"), id("axis_y"), id("axis_z")]))];
 
 /// A force along a direction (Uniform, Wind): turned by its direction.
 pub static DIRECTED_FORCE_SHAPES: [SceneShapeDecl; 1] = [SceneShapeDecl {
-    shape: SceneShape::Axis { origin: None, direction: [id("direction_x"), id("direction_y"), id("direction_z")], radius: None },
+    shape: SceneShape::Axis {
+        origin: None,
+        direction: [id("direction_x"), id("direction_y"), id("direction_z")],
+        radius: None,
+    },
     via: None,
     extent_limit: None,
     uniform_scale: false,

@@ -27,8 +27,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
@@ -92,23 +92,48 @@ fn window(cam: &Camera, axis: u32, cell_size: f32) -> (i32, u32, u32) {
         CameraMode::Perspective { fov_y } => {
             let up = (fov_y * 0.5).tan();
             let spread = up * WIDEST_ASPECT * across(cam.right) + up * across(cam.up);
-            (far * (spread - forward).max(0.0), far * (forward + spread).max(0.0))
+            (
+                far * (spread - forward).max(0.0),
+                far * (forward + spread).max(0.0),
+            )
         }
         CameraMode::Orthographic { half_height } => {
-            let lateral = half_height * (WIDEST_ASPECT * across(cam.right) + across(cam.up)) / cell_size;
-            (lateral + far * (-forward).max(0.0), lateral + far * forward.max(0.0))
+            let lateral =
+                half_height * (WIDEST_ASPECT * across(cam.right) + across(cam.up)) / cell_size;
+            (
+                lateral + far * (-forward).max(0.0),
+                lateral + far * forward.max(0.0),
+            )
         }
     };
     let base = at.floor();
     // Whole cells, counted from the camera's own, NaN and overflow safe.
-    let cells = |x: f32| if x.is_nan() { 0 } else { x.clamp(0.0, REACH as f32) as u32 };
+    let cells = |x: f32| {
+        if x.is_nan() {
+            0
+        } else {
+            x.clamp(0.0, REACH as f32) as u32
+        }
+    };
     let behind_seen = cells(base - (at - back).floor() + MARGIN);
     let ahead_seen = cells((at + front).floor() - base + MARGIN);
     let looks_ahead = forward >= 0.0;
-    let (toward, away) = if looks_ahead { (ahead_seen, behind_seen) } else { (behind_seen, ahead_seen) };
+    let (toward, away) = if looks_ahead {
+        (ahead_seen, behind_seen)
+    } else {
+        (behind_seen, ahead_seen)
+    };
     let (toward, away) = fit(toward, away.max(BEHIND));
-    let (behind, ahead) = if looks_ahead { (away, toward) } else { (toward, away) };
-    let base = if base.is_nan() { 0 } else { base.clamp(i32::MIN as f32, i32::MAX as f32) as i32 };
+    let (behind, ahead) = if looks_ahead {
+        (away, toward)
+    } else {
+        (toward, away)
+    };
+    let base = if base.is_nan() {
+        0
+    } else {
+        base.clamp(i32::MIN as f32, i32::MAX as f32) as i32
+    };
     (base, behind, ahead)
 }
 
@@ -321,7 +346,11 @@ impl Primitive for SceneArray {
         };
         let cell_size = ctx.scalar_or_param("cell_size", 10.0);
 
-        let jitter_seed = ctx.params.get("jitter_seed").and_then(|v| v.as_u32_clamped(0)).unwrap_or(0);
+        let jitter_seed = ctx
+            .params
+            .get("jitter_seed")
+            .and_then(|v| v.as_u32_clamped(0))
+            .unwrap_or(0);
         let jitter_amount = ctx.scalar_or_param("jitter_amount", 0.0).clamp(0.0, 1.0);
         let twist = ctx.scalar_or_param("twist", 0.0).clamp(-1.0, 1.0);
         let spiral_radius = ctx.scalar_or_param("spiral_radius", 0.0).max(0.0);
@@ -409,7 +438,9 @@ impl Primitive for SceneArray {
             "node.scene_array",
         );
         self.stasis_key = Some(stasis);
-        if content_unchanged { ctx.mark_output_content_unchanged(); }
+        if content_unchanged {
+            ctx.mark_output_content_unchanged();
+        }
     }
 }
 
@@ -468,7 +499,10 @@ mod tests {
         let back = Camera::from_pos_euler(at, 0.0, 0.0, 0.0, 0.8, 0.05, 40.0);
         assert_eq!(window(&back, 4, cell), (3, 6, BEHIND));
         // Seeing past the window: the seen side takes what the shadows leave.
-        let far_back = Camera { far: 10_000.0, ..back };
+        let far_back = Camera {
+            far: 10_000.0,
+            ..back
+        };
         assert_eq!(window(&far_back, 4, cell), (3, REACH - BEHIND, BEHIND));
         // Looking across a long corridor: both ways, evenly.
         let across = Camera::from_pos_euler(at, FRAC_PI_2, 0.0, 0.0, 0.8, 0.05, 10_000.0);
@@ -521,7 +555,10 @@ mod gpu_tests {
         (0..capacity)
             .map(|w| {
                 if w > behind + ahead {
-                    return InstanceTransform { pos_scale: [0.0; 4], rot_pad: [0.0; 4] };
+                    return InstanceTransform {
+                        pos_scale: [0.0; 4],
+                        rot_pad: [0.0; 4],
+                    };
                 }
                 let c = base_cell - behind as i32 + w as i32;
                 let t = c as f32 * cell_size;
@@ -539,7 +576,9 @@ mod gpu_tests {
                 }
                 if jitter_amount > 0.0 {
                     let j = c.rem_euclid(pattern_length.max(1) as i32) as u32;
-                    let k = j.wrapping_mul(3).wrapping_add(jitter_seed.wrapping_mul(7919));
+                    let k = j
+                        .wrapping_mul(3)
+                        .wrapping_add(jitter_seed.wrapping_mul(7919));
                     rot_pad[0] = (hash_u32(k) - 0.5) * 2.0 * jitter_amount;
                     rot_pad[1] = (hash_u32(k + 1) - 0.5) * 2.0 * jitter_amount;
                     rot_pad[2] = (hash_u32(k + 2) - 0.5) * 2.0 * jitter_amount;
@@ -586,8 +625,15 @@ mod gpu_tests {
         enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: &out_buf, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &out_buf,
+                    offset: 0,
+                },
             ],
             [capacity.div_ceil(256), 1, 1],
             "scene_array_test",
@@ -595,12 +641,17 @@ mod gpu_tests {
         enc.commit_and_wait_completed();
 
         let ptr = out_buf.mapped_ptr().expect("shared out buffer");
-        let gpu_data =
-            unsafe { std::slice::from_raw_parts(ptr as *const InstanceTransform, capacity as usize) };
+        let gpu_data = unsafe {
+            std::slice::from_raw_parts(ptr as *const InstanceTransform, capacity as usize)
+        };
         gpu_data.to_vec()
     }
 
-    fn assert_matches_cpu(gpu_data: &[InstanceTransform], expected: &[InstanceTransform], ctx: &str) {
+    fn assert_matches_cpu(
+        gpu_data: &[InstanceTransform],
+        expected: &[InstanceTransform],
+        ctx: &str,
+    ) {
         assert_eq!(gpu_data.len(), expected.len(), "{ctx}: length mismatch");
         for (i, (g, e)) in gpu_data.iter().zip(expected.iter()).enumerate() {
             for c in 0..4 {
@@ -634,11 +685,36 @@ mod gpu_tests {
         let device = manifold_gpu::testkit::test_device();
         let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SceneArray>()
             .expect("scene_array codegen");
-        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "scene_array_test");
+        let pipeline = device.create_compute_pipeline(
+            &wgsl,
+            manifold_node_engine::freeze::codegen::ENTRY,
+            "scene_array_test",
+        );
 
         for base_cell in [0i32, 5, -1, -7, -22] {
-            let gpu_data = dispatch(&device, &pipeline, 3, 4, 10.0, 0, 0.0, base_cell, BEHIND, STANDALONE_AHEAD);
-            let expected = cpu_scene_array_window(3, 4, 10.0, 0, 0.0, base_cell, BEHIND, STANDALONE_AHEAD, WINDOW_CAPACITY);
+            let gpu_data = dispatch(
+                &device,
+                &pipeline,
+                3,
+                4,
+                10.0,
+                0,
+                0.0,
+                base_cell,
+                BEHIND,
+                STANDALONE_AHEAD,
+            );
+            let expected = cpu_scene_array_window(
+                3,
+                4,
+                10.0,
+                0,
+                0.0,
+                base_cell,
+                BEHIND,
+                STANDALONE_AHEAD,
+                WINDOW_CAPACITY,
+            );
             assert_matches_cpu(&gpu_data, &expected, "base {base_cell}");
 
             // Slot 8 (w = behind) is the base cell: pos z = c * cell_size.
@@ -667,11 +743,16 @@ mod gpu_tests {
         let device = manifold_gpu::testkit::test_device();
         let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SceneArray>()
             .expect("scene_array codegen");
-        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "scene_array_test");
+        let pipeline = device.create_compute_pipeline(
+            &wgsl,
+            manifold_node_engine::freeze::codegen::ENTRY,
+            "scene_array_test",
+        );
 
         let ahead = 4u32;
         let gpu_data = dispatch(&device, &pipeline, 1, 4, 10.0, 0, 0.0, 0, BEHIND, ahead);
-        let expected = cpu_scene_array_window(1, 4, 10.0, 0, 0.0, 0, BEHIND, ahead, WINDOW_CAPACITY);
+        let expected =
+            cpu_scene_array_window(1, 4, 10.0, 0, 0.0, 0, BEHIND, ahead, WINDOW_CAPACITY);
         assert_matches_cpu(&gpu_data, &expected, "window mask");
 
         let live = (BEHIND + ahead + 1) as usize;
@@ -697,13 +778,38 @@ mod gpu_tests {
         let device = manifold_gpu::testkit::test_device();
         let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SceneArray>()
             .expect("scene_array codegen");
-        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "scene_array_test");
+        let pipeline = device.create_compute_pipeline(
+            &wgsl,
+            manifold_node_engine::freeze::codegen::ENTRY,
+            "scene_array_test",
+        );
 
         let period = 4u32;
         for (seed, amount) in [(0u32, 0.6f32), (7, 1.0), (1234, 0.25)] {
             let base_cell = -9i32; // cells -17..+13 cross zero twice
-            let gpu_data = dispatch(&device, &pipeline, period, 4, 10.0, seed, amount, base_cell, BEHIND, STANDALONE_AHEAD);
-            let expected = cpu_scene_array_window(period, 4, 10.0, seed, amount, base_cell, BEHIND, STANDALONE_AHEAD, WINDOW_CAPACITY);
+            let gpu_data = dispatch(
+                &device,
+                &pipeline,
+                period,
+                4,
+                10.0,
+                seed,
+                amount,
+                base_cell,
+                BEHIND,
+                STANDALONE_AHEAD,
+            );
+            let expected = cpu_scene_array_window(
+                period,
+                4,
+                10.0,
+                seed,
+                amount,
+                base_cell,
+                BEHIND,
+                STANDALONE_AHEAD,
+                WINDOW_CAPACITY,
+            );
             assert_matches_cpu(&gpu_data, &expected, "seed {seed} amount {amount}");
 
             if amount == 1.0 {
@@ -745,15 +851,68 @@ mod gpu_tests {
         let same = |a: &[InstanceTransform], b: &[InstanceTransform]| {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| field_eq(x, y))
         };
-        let a = cpu_scene_array_window(4, 4, 10.0, 0, 1.0, -3, BEHIND, STANDALONE_AHEAD, WINDOW_CAPACITY);
-        let b = cpu_scene_array_window(4, 4, 10.0, 0, 1.0, -3, BEHIND, STANDALONE_AHEAD, WINDOW_CAPACITY);
-        let c = cpu_scene_array_window(4, 4, 10.0, 1, 1.0, -3, BEHIND, STANDALONE_AHEAD, WINDOW_CAPACITY);
+        let a = cpu_scene_array_window(
+            4,
+            4,
+            10.0,
+            0,
+            1.0,
+            -3,
+            BEHIND,
+            STANDALONE_AHEAD,
+            WINDOW_CAPACITY,
+        );
+        let b = cpu_scene_array_window(
+            4,
+            4,
+            10.0,
+            0,
+            1.0,
+            -3,
+            BEHIND,
+            STANDALONE_AHEAD,
+            WINDOW_CAPACITY,
+        );
+        let c = cpu_scene_array_window(
+            4,
+            4,
+            10.0,
+            1,
+            1.0,
+            -3,
+            BEHIND,
+            STANDALONE_AHEAD,
+            WINDOW_CAPACITY,
+        );
         assert!(same(&a, &b), "same seed must re-roll identically");
-        assert!(!same(&a, &c), "a different seed must change the instance transforms");
+        assert!(
+            !same(&a, &c),
+            "a different seed must change the instance transforms"
+        );
 
         // Zero amount is byte-identical to the no-jitter oracle.
-        let zero = cpu_scene_array_window(4, 4, 10.0, 99, 0.0, -3, BEHIND, STANDALONE_AHEAD, WINDOW_CAPACITY);
-        let plain = cpu_scene_array_window(4, 4, 10.0, 0, 0.0, -3, BEHIND, STANDALONE_AHEAD, WINDOW_CAPACITY);
+        let zero = cpu_scene_array_window(
+            4,
+            4,
+            10.0,
+            99,
+            0.0,
+            -3,
+            BEHIND,
+            STANDALONE_AHEAD,
+            WINDOW_CAPACITY,
+        );
+        let plain = cpu_scene_array_window(
+            4,
+            4,
+            10.0,
+            0,
+            0.0,
+            -3,
+            BEHIND,
+            STANDALONE_AHEAD,
+            WINDOW_CAPACITY,
+        );
         assert!(same(&zero, &plain), "amount 0 must keep identity TRS");
     }
 
@@ -774,21 +933,50 @@ mod gpu_tests {
         let device = manifold_gpu::testkit::test_device();
         let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SceneArray>()
             .expect("scene_array codegen");
-        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "scene_array_test");
+        let pipeline = device.create_compute_pipeline(
+            &wgsl,
+            manifold_node_engine::freeze::codegen::ENTRY,
+            "scene_array_test",
+        );
 
         for p in 2u32..=8u32 {
             for k in [1i32, 2, 3, 5, 8] {
                 for base_cell in [-7i32, -1, 0, 5] {
-                    let phase_0 = dispatch(&device, &pipeline, p, 4, 10.0, 7, 0.8, base_cell, BEHIND, STANDALONE_AHEAD);
+                    let phase_0 = dispatch(
+                        &device,
+                        &pipeline,
+                        p,
+                        4,
+                        10.0,
+                        7,
+                        0.8,
+                        base_cell,
+                        BEHIND,
+                        STANDALONE_AHEAD,
+                    );
                     // Phase ~1: the camera has travelled exactly K·P cells, so
                     // base_cell has advanced by K·P.
-                    let phase_1 = dispatch(&device, &pipeline, p, 4, 10.0, 7, 0.8, base_cell + k * p as i32, BEHIND, STANDALONE_AHEAD);
+                    let phase_1 = dispatch(
+                        &device,
+                        &pipeline,
+                        p,
+                        4,
+                        10.0,
+                        7,
+                        0.8,
+                        base_cell + k * p as i32,
+                        BEHIND,
+                        STANDALONE_AHEAD,
+                    );
                     for (w, (a, b)) in phase_0.iter().zip(phase_1.iter()).enumerate() {
                         // Surplus slots mask to zero-scale in BOTH windows —
                         // no translation demand there.
                         if w as u32 > BEHIND + STANDALONE_AHEAD {
                             assert_eq!(a.pos_scale, [0.0; 4], "slot {w} must be masked at phase 0");
-                            assert_eq!(b.pos_scale, [0.0; 4], "slot {w} must be masked at phase ~1");
+                            assert_eq!(
+                                b.pos_scale, [0.0; 4],
+                                "slot {w} must be masked at phase ~1"
+                            );
                             continue;
                         }
                         // The window at phase ~1 IS the window at phase 0
@@ -806,8 +994,7 @@ mod gpu_tests {
                             base_cell + k * p as i32 - BEHIND as i32 + w as i32
                         );
                         assert_eq!(
-                            a.pos_scale[3],
-                            b.pos_scale[3],
+                            a.pos_scale[3], b.pos_scale[3],
                             "P={p} K={k} base={base_cell}: slot {w} scale differs across the seam"
                         );
                         assert_eq!(
@@ -833,8 +1020,30 @@ mod gpu_tests {
         // Vacuity guard: different pattern lengths genuinely change the
         // window content (a constant buffer would pass the equality above
         // trivially).
-        let p2 = dispatch(&device, &pipeline, 2, 4, 10.0, 7, 0.8, -1, BEHIND, STANDALONE_AHEAD);
-        let p5 = dispatch(&device, &pipeline, 5, 4, 10.0, 7, 0.8, -1, BEHIND, STANDALONE_AHEAD);
+        let p2 = dispatch(
+            &device,
+            &pipeline,
+            2,
+            4,
+            10.0,
+            7,
+            0.8,
+            -1,
+            BEHIND,
+            STANDALONE_AHEAD,
+        );
+        let p5 = dispatch(
+            &device,
+            &pipeline,
+            5,
+            4,
+            10.0,
+            7,
+            0.8,
+            -1,
+            BEHIND,
+            STANDALONE_AHEAD,
+        );
         assert!(
             p2.iter().zip(p5.iter()).any(|(a, b)| !field_eq(a, b)),
             "pattern_length 2 vs 5 must change the window content"

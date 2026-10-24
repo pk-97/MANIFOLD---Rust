@@ -21,9 +21,17 @@ impl KickVerdicts {
     pub fn new(c: &Container) -> Result<Self, ContainerError> {
         let w = c.f64s("kick2.window_s", &[2])?;
         if !(w[0] >= 0.0 && w[1] >= 0.0) {
-            return Err(ContainerError::WrongType { name: "kick2.window_s".into(), want: "two non-negative spans" });
+            return Err(ContainerError::WrongType {
+                name: "kick2.window_s".into(),
+                want: "two non-negative spans",
+            });
         }
-        Ok(Self { before_s: w[0], after_s: w[1], none_dt_ms: super::scalar(c, "kick2.none_dt_ms")?, ring: History::new(VERDICTS) })
+        Ok(Self {
+            before_s: w[0],
+            after_s: w[1],
+            none_dt_ms: super::scalar(c, "kick2.none_dt_ms")?,
+            ring: History::new(VERDICTS),
+        })
     }
 
     pub fn push(&mut self, onset_s: f64, emit_s: f64, p: f64) {
@@ -37,7 +45,10 @@ impl KickVerdicts {
         let (lo, hi) = (on - self.before_s, on + self.after_s);
         let first = self.ring.len().saturating_sub(VERDICTS as u64);
         // KickFed keeps the kick a step ahead, so no verdict in the window has been evicted.
-        debug_assert!(self.ring.len() <= VERDICTS as u64 || self.ring.get(first)[0] < lo, "kick verdicts evicted before they were read");
+        debug_assert!(
+            self.ring.len() <= VERDICTS as u64 || self.ring.get(first)[0] < lo,
+            "kick verdicts evicted before they were read"
+        );
         let mut best: Option<[f64; 3]> = None;
         for i in first..self.ring.len() {
             let v = *self.ring.get(i);

@@ -7,12 +7,11 @@
 
 use std::sync::{Arc, OnceLock};
 
-use manifold_physics::{BodyHandle, TriangleMesh, closed_triangles};
 use manifold_physics::collision_shape::{water_lattice, water_plan};
 use manifold_physics::sdf::DistanceLattice;
+use manifold_physics::{BodyHandle, TriangleMesh, closed_triangles};
 
 use manifold_node_engine::scene::transform::Transform;
-
 
 /// Semantic role a prepared geometry source contributes to the fluid solver.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -41,7 +40,9 @@ impl FluidRoleKind {
 /// The box a water's Initial Fill places, from its Initial Fill roles in
 /// slot order, each `None` while switched off. A water takes one Initial
 /// Fill; a second one switched on is refused by name.
-pub fn initial_fill(fills: impl IntoIterator<Item = Option<Transform>>) -> Result<Option<Transform>, String> {
+pub fn initial_fill(
+    fills: impl IntoIterator<Item = Option<Transform>>,
+) -> Result<Option<Transform>, String> {
     let mut on = fills.into_iter().flatten();
     let fill = on.next();
     if on.next().is_some() {
@@ -54,15 +55,26 @@ pub fn initial_fill(fills: impl IntoIterator<Item = Option<Transform>>) -> Resul
 /// rather than simulating them, and returns the box they place
 /// ([`initial_fill`]).
 pub fn take_initial_fill(roles: &mut [Option<FluidRole>]) -> Result<Option<Transform>, String> {
-    let is_fill = |role: &Option<FluidRole>| role.as_ref().is_some_and(|role| role.kind == FluidRoleKind::InitialFill);
-    let fill = initial_fill(roles.iter().filter(|role| is_fill(role)).flatten().map(|role| role.enabled.then_some(role.transform)));
+    let is_fill = |role: &Option<FluidRole>| {
+        role.as_ref()
+            .is_some_and(|role| role.kind == FluidRoleKind::InitialFill)
+    };
+    let fill = initial_fill(
+        roles
+            .iter()
+            .filter(|role| is_fill(role))
+            .flatten()
+            .map(|role| role.enabled.then_some(role.transform)),
+    );
     for role in roles.iter_mut().filter(|role| is_fill(role)) {
         *role = None;
     }
     fill
 }
 
-pub use manifold_physics::collision_shape::{DISTANCE_NODES_ALONG_LONGEST, LatticePlan, SCALE_STEPS_PER_OCTAVE, scale_steps};
+pub use manifold_physics::collision_shape::{
+    DISTANCE_NODES_ALONG_LONGEST, LatticePlan, SCALE_STEPS_PER_OCTAVE, scale_steps,
+};
 
 /// Immutable prepared local-space geometry for a fluid role. Its lattice
 /// comes from the collision-shape service (SCENE_DOCUMENT_DESIGN.md section
@@ -88,17 +100,28 @@ pub struct PreparedFluidGeometry {
 
 impl PreparedFluidGeometry {
     pub fn new(meshes: Vec<TriangleMesh>) -> Self {
-        Self { meshes, open_parts: OnceLock::new(), fixed: false, body: None }
+        Self {
+            meshes,
+            open_parts: OnceLock::new(),
+            fixed: false,
+            body: None,
+        }
     }
 
     /// A static collider's mesh, which each water crops to its domain.
     pub fn fixed(meshes: Vec<TriangleMesh>) -> Self {
-        Self { fixed: true, ..Self::new(meshes) }
+        Self {
+            fixed: true,
+            ..Self::new(meshes)
+        }
     }
 
     /// This solid as coupled body `body`'s.
     pub fn of_body(self, body: BodyHandle) -> Self {
-        Self { body: Some(body), ..self }
+        Self {
+            body: Some(body),
+            ..self
+        }
     }
 
     pub fn is_fixed(&self) -> bool {
@@ -122,9 +145,20 @@ impl PreparedFluidGeometry {
     /// The lattice a liquid with `cell_size` (world metres) builds for this
     /// geometry at role `scale`, cropped to `domain` (local min then max)
     /// when given ([`manifold_physics::collision_shape::water_plan`]).
-    pub fn lattice_plan(&self, cell_size: f32, scale: [f32; 3], domain: Option<[[f32; 3]; 2]>) -> Result<LatticePlan, String> {
-        water_plan(&self.meshes, self.has_open_parts(), cell_size, scale, domain)
-            .map_err(|error| format!("Fluid role distance lattice: {error}"))
+    pub fn lattice_plan(
+        &self,
+        cell_size: f32,
+        scale: [f32; 3],
+        domain: Option<[[f32; 3]; 2]>,
+    ) -> Result<LatticePlan, String> {
+        water_plan(
+            &self.meshes,
+            self.has_open_parts(),
+            cell_size,
+            scale,
+            domain,
+        )
+        .map_err(|error| format!("Fluid role distance lattice: {error}"))
     }
 
     /// One lattice over the meshes to `plan`: closed parts solid, open parts
@@ -151,8 +185,12 @@ pub struct FluidRole {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_node_engine::{
+        bindings::NodeInputs, bindings::NodeOutputs, exec::backend::Backend,
+        exec::backend::MockBackend, exec::cpu_values::CpuWireWrites,
+        exec::execution_plan::ResourceId, ports::PortType,
+    };
     use manifold_physics::sdf::MAX_LATTICE_NODES;
-    use manifold_node_engine::{exec::backend::Backend, exec::backend::MockBackend, exec::cpu_values::CpuWireWrites, bindings::NodeInputs, bindings::NodeOutputs, ports::PortType, exec::execution_plan::ResourceId};
 
     fn role() -> FluidRole {
         FluidRole {
@@ -180,18 +218,40 @@ mod tests {
     #[test]
     fn a_liquid_takes_one_initial_fill_out_of_its_roles() {
         let fill = |x: f32, enabled: bool| {
-            Some(FluidRole { kind: FluidRoleKind::InitialFill, transform: Transform { pos: [x, 0.0, 0.0], ..Transform::default() }, enabled, ..role() })
+            Some(FluidRole {
+                kind: FluidRoleKind::InitialFill,
+                transform: Transform {
+                    pos: [x, 0.0, 0.0],
+                    ..Transform::default()
+                },
+                enabled,
+                ..role()
+            })
         };
         let mut roles = vec![Some(role()), fill(1.0, true), None, fill(2.0, false)];
-        assert_eq!(take_initial_fill(&mut roles).unwrap().map(|t| t.pos[0]), Some(1.0));
+        assert_eq!(
+            take_initial_fill(&mut roles).unwrap().map(|t| t.pos[0]),
+            Some(1.0)
+        );
         assert!(roles[0].is_some(), "the inflow stays");
-        assert!(roles[1..].iter().all(Option::is_none), "the bodies never see a fill");
+        assert!(
+            roles[1..].iter().all(Option::is_none),
+            "the bodies never see a fill"
+        );
 
         let mut none = vec![Some(role()), fill(2.0, false)];
-        assert_eq!(take_initial_fill(&mut none), Ok(None), "a switched-off fill seeds nothing");
+        assert_eq!(
+            take_initial_fill(&mut none),
+            Ok(None),
+            "a switched-off fill seeds nothing"
+        );
 
         let mut two = vec![fill(1.0, true), fill(2.0, true)];
-        assert!(take_initial_fill(&mut two).unwrap_err().contains("one Initial Fill"));
+        assert!(
+            take_initial_fill(&mut two)
+                .unwrap_err()
+                .contains("one Initial Fill")
+        );
     }
 
     #[test]
@@ -248,13 +308,28 @@ mod tests {
             let v = |x: usize, y: usize, z: usize| [[x0, x1][x], [-0.5, 0.5][y], [-0.5, 0.5][z]];
             TriangleMesh {
                 vertices: vec![
-                    v(0, 0, 0), v(1, 0, 0), v(1, 1, 0), v(0, 1, 0),
-                    v(0, 0, 1), v(1, 0, 1), v(1, 1, 1), v(0, 1, 1),
+                    v(0, 0, 0),
+                    v(1, 0, 0),
+                    v(1, 1, 0),
+                    v(0, 1, 0),
+                    v(0, 0, 1),
+                    v(1, 0, 1),
+                    v(1, 1, 1),
+                    v(0, 1, 1),
                 ],
                 triangles: vec![
-                    [0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7],
-                    [0, 1, 5], [0, 5, 4], [2, 3, 7], [2, 7, 6],
-                    [1, 2, 6], [1, 6, 5], [0, 4, 7], [0, 7, 3],
+                    [0, 2, 1],
+                    [0, 3, 2],
+                    [4, 5, 6],
+                    [4, 6, 7],
+                    [0, 1, 5],
+                    [0, 5, 4],
+                    [2, 3, 7],
+                    [2, 7, 6],
+                    [1, 2, 6],
+                    [1, 6, 5],
+                    [0, 4, 7],
+                    [0, 7, 3],
                 ],
             }
         };
@@ -271,33 +346,61 @@ mod tests {
         let geometry = two_part_cube();
         assert!(!geometry.has_open_parts());
         let plan = geometry.lattice_plan(0.01, [3.0, 1.0, 1.0], None).unwrap();
-        assert_eq!(plan, geometry.lattice_plan(0.5, [1.0; 3], None).unwrap(), "a closed solid ignores cells and scale");
+        assert_eq!(
+            plan,
+            geometry.lattice_plan(0.5, [1.0; 3], None).unwrap(),
+            "a closed solid ignores cells and scale"
+        );
         let lattice = geometry.build_lattice(&plan).unwrap();
         assert_eq!(lattice.spacing, 1.0 / DISTANCE_NODES_ALONG_LONGEST);
         assert_eq!(lattice.dims, [37; 3]);
         // Node 10 is x = −0.25, the middle of the left half.
-        assert!((lattice.value([10, 18, 18]) + 0.25).abs() < 1e-5, "{}", lattice.value([10, 18, 18]));
-        assert!(lattice.value([18, 18, 18]).abs() < 1e-5, "on the touching faces");
+        assert!(
+            (lattice.value([10, 18, 18]) + 0.25).abs() < 1e-5,
+            "{}",
+            lattice.value([10, 18, 18])
+        );
+        assert!(
+            lattice.value([18, 18, 18]).abs() < 1e-5,
+            "on the touching faces"
+        );
         assert!((lattice.value([0, 18, 18]) - 2.0 / 32.0).abs() < 1e-5);
-        assert!((lattice.value([0, 0, 18]) - (2.0f32 * (2.0 / 32.0) * (2.0 / 32.0)).sqrt()).abs() < 1e-5);
+        assert!(
+            (lattice.value([0, 0, 18]) - (2.0f32 * (2.0 / 32.0) * (2.0 / 32.0)).sqrt()).abs()
+                < 1e-5
+        );
     }
 
     fn ground(half: f32) -> TriangleMesh {
         TriangleMesh {
-            vertices: vec![[-half, 0.0, -half], [half, 0.0, -half], [half, 0.0, half], [-half, 0.0, half]],
+            vertices: vec![
+                [-half, 0.0, -half],
+                [half, 0.0, -half],
+                [half, 0.0, half],
+                [-half, 0.0, half],
+            ],
             triangles: vec![[0, 2, 1], [0, 3, 2]],
         }
     }
 
     /// Trilinear distance at a local point, as the solvers sample it.
     fn sample(lattice: &DistanceLattice, p: [f32; 3]) -> f32 {
-        let g: [f32; 3] = std::array::from_fn(|axis| (p[axis] - lattice.origin[axis]) / lattice.spacing);
+        let g: [f32; 3] =
+            std::array::from_fn(|axis| (p[axis] - lattice.origin[axis]) / lattice.spacing);
         let base: [u32; 3] = std::array::from_fn(|axis| g[axis].floor() as u32);
         let t: [f32; 3] = std::array::from_fn(|axis| g[axis] - base[axis] as f32);
         let mut value = 0.0;
         for corner in 0..8u32 {
             let offset: [u32; 3] = std::array::from_fn(|axis| (corner >> axis) & 1);
-            let weight: f32 = (0..3).map(|axis| if offset[axis] == 1 { t[axis] } else { 1.0 - t[axis] }).product();
+            let weight: f32 = (0..3)
+                .map(|axis| {
+                    if offset[axis] == 1 {
+                        t[axis]
+                    } else {
+                        1.0 - t[axis]
+                    }
+                })
+                .product();
             value += weight * lattice.value(std::array::from_fn(|axis| base[axis] + offset[axis]));
         }
         value
@@ -322,8 +425,14 @@ mod tests {
         while sample(&lattice, [0.3, y, -0.7]) < 0.0 {
             y += 0.001;
         }
-        assert!(y > 0.0 && y <= cell + 1e-3, "the water rests {y} m above the floor; a cell is {cell} m");
-        assert!(sample(&lattice, [0.3, -0.5 * y, -0.7]) < 0.0, "the shell holds below the floor too");
+        assert!(
+            y > 0.0 && y <= cell + 1e-3,
+            "the water rests {y} m above the floor; a cell is {cell} m"
+        );
+        assert!(
+            sample(&lattice, [0.3, -0.5 * y, -0.7]) < 0.0,
+            "the shell holds below the floor too"
+        );
     }
 
     /// A plane too wide for the node cap at the liquid's cells coarsens until
@@ -335,7 +444,13 @@ mod tests {
         let geometry = PreparedFluidGeometry::new(vec![ground(500.0)]);
         let plan = geometry.lattice_plan(0.05, [1.0; 3], None).unwrap();
         assert!(plan.capped && plan.spacing > 0.05);
-        let nodes = manifold_physics::sdf::union_lattice_nodes(plan.extent, plan.spacing, 2.0 * plan.spacing, plan.shell_thickness, true);
+        let nodes = manifold_physics::sdf::union_lattice_nodes(
+            plan.extent,
+            plan.spacing,
+            2.0 * plan.spacing,
+            plan.shell_thickness,
+            true,
+        );
         assert!(nodes <= MAX_LATTICE_NODES);
 
         let domain = [[-2.0, -1.0, -2.0], [2.0, 3.0, 2.0]];
@@ -346,10 +461,17 @@ mod tests {
         for axis in [0, 2] {
             let end = lattice.origin[axis] + (lattice.dims[axis] - 1) as f32 * lattice.spacing;
             // The far end rounds up to a whole node.
-            assert!(lattice.origin[axis] >= domain[0][axis] - reach && end <= domain[1][axis] + reach + lattice.spacing, "axis {axis}: {lattice:?}");
+            assert!(
+                lattice.origin[axis] >= domain[0][axis] - reach
+                    && end <= domain[1][axis] + reach + lattice.spacing,
+                "axis {axis}: {lattice:?}"
+            );
         }
         assert!(sample(&lattice, [0.3, 0.0, -0.7]) < 0.0, "the floor holds");
-        assert!(sample(&lattice, [0.3, 0.05 + cropped.spacing, -0.7]) > 0.0, "the water rests within a cell of the floor");
+        assert!(
+            sample(&lattice, [0.3, 0.05 + cropped.spacing, -0.7]) > 0.0,
+            "the water rests within a cell of the floor"
+        );
     }
 
     /// An open quad is a shell two water cells thick, and it is open again
@@ -357,16 +479,25 @@ mod tests {
     #[test]
     fn scene_physics_fluid_role_distance_lattice_open_mesh_is_a_shell() {
         let quad = TriangleMesh {
-            vertices: vec![[-0.5, 0.0, -0.5], [0.5, 0.0, -0.5], [0.5, 0.0, 0.5], [-0.5, 0.0, 0.5]],
+            vertices: vec![
+                [-0.5, 0.0, -0.5],
+                [0.5, 0.0, -0.5],
+                [0.5, 0.0, 0.5],
+                [-0.5, 0.0, 0.5],
+            ],
             triangles: vec![[0, 1, 2], [0, 2, 3]],
         };
         let geometry = PreparedFluidGeometry::new(vec![quad]);
         let plan = geometry.lattice_plan(0.1, [1.0; 3], None).unwrap();
         assert_eq!(plan.shell_thickness, 0.2, "two water cells");
         let lattice = geometry.build_lattice(&plan).unwrap();
-        let centre: [u32; 3] = std::array::from_fn(|axis| (-lattice.origin[axis] / lattice.spacing).round() as u32);
+        let centre: [u32; 3] =
+            std::array::from_fn(|axis| (-lattice.origin[axis] / lattice.spacing).round() as u32);
         let depth = -lattice.value(centre);
-        assert!(depth > 0.0 && (depth - plan.half_shell()).abs() <= lattice.spacing, "{depth}");
+        assert!(
+            depth > 0.0 && (depth - plan.half_shell()).abs() <= lattice.spacing,
+            "{depth}"
+        );
         let restored: PreparedFluidGeometry =
             serde_json::from_slice(&serde_json::to_vec(&geometry).unwrap()).unwrap();
         assert!(restored.has_open_parts());

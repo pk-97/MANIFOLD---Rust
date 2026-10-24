@@ -8,12 +8,12 @@
 
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
-use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
+use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::{parameters::ParamValue, persistence::PrimitiveRegistry};
-use manifold_node_engine::runtime::preset_context::PresetContext;
-use manifold_node_engine::runtime::PresetRuntime;
 
 use manifold_nodes_scene::testkit::gpu_harness as harness;
 
@@ -55,8 +55,16 @@ fn caster_scene(
         if i > 0 {
             lights.push(',');
         }
-        let intensity = if radiance_mask & (1 << i) != 0 { 1.0 } else { 0.0 };
-        let cast_shadows = if shadow_mask & (1 << i) != 0 { 1.0 } else { 0.0 };
+        let intensity = if radiance_mask & (1 << i) != 0 {
+            1.0
+        } else {
+            0.0
+        };
+        let cast_shadows = if shadow_mask & (1 << i) != 0 {
+            1.0
+        } else {
+            0.0
+        };
         lights.push_str(&light_json(i, intensity, cast_shadows));
         wires.push_str(&format!(
             r#"{{"fromNode":{},"fromPort":"out","toNode":20,"toPort":"light_{}"}},"#,
@@ -91,7 +99,10 @@ fn caster_scene(
     )
 }
 
-fn context(frame: i64, h: &manifold_node_engine::testkit::gpu_harness::ParityHarness) -> PresetContext {
+fn context(
+    frame: i64,
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
+) -> PresetContext {
     PresetContext {
         time: frame as f64 / 60.0,
         beat: frame as f64 / 30.0,
@@ -212,7 +223,9 @@ fn slot_probe(target_slot: usize) -> (f64, f64, f64, f64, usize) {
 fn caster_contract_compacted_slots_shadow() {
     for slot in [0, 3, 4, 7] {
         let (occluded, control, lit, lit_control, captures) = slot_probe(slot);
-        eprintln!("caster slot {slot}: shadow={occluded:.6} control={control:.6} lit={lit:.6} lit_control={lit_control:.6} captures={captures}");
+        eprintln!(
+            "caster slot {slot}: shadow={occluded:.6} control={control:.6} lit={lit:.6} lit_control={lit_control:.6} captures={captures}"
+        );
         assert!(captures > 0, "slot {slot} must dispatch RT");
         assert!(
             occluded * 1.02 < control,
@@ -234,13 +247,19 @@ fn caster_contract_ninth_caster_and_sparse_light_indices() {
     let value = region_luma(&ninth, w, h, ocx, ocy);
     let expected = region_luma(&control, w, h, ocx, ocy);
     assert!(captures > 0 && expected > 0.1);
-    assert!(value * 1.02 < expected, "ninth caster must shadow: {value} vs {expected}");
+    assert!(
+        value * 1.02 < expected,
+        "ninth caster must shadow: {value} vs {expected}"
+    );
 
     // A hole in wired-light indices is not a hole in the caster list: the
     // ninth light becomes slot 4 when only four earlier lights cast shadows.
     let (sparse, _, _, _) = render_readback(&caster_scene(0b1_0000_1111, 1 << 8, true, true));
     let shadowed = region_luma(&sparse, w, h, ocx, ocy);
-    assert!(shadowed * 1.02 < expected, "sparse ninth light must reach compacted slot 4");
+    assert!(
+        shadowed * 1.02 < expected,
+        "sparse ninth light must reach compacted slot 4"
+    );
 }
 
 #[test]
@@ -306,9 +325,17 @@ fn caster_contract_live_rt_and_shadow_toggles() {
             status,
         ));
     }
-    assert!(observations.iter().all(|o| o.2 == FrameRenderStatus::Complete));
     assert!(
-        observations[0].1 > 0 && observations[1].1 == 0 && observations[2].1 > 0 && observations[3].1 > 0 && observations[4].1 > 0,
+        observations
+            .iter()
+            .all(|o| o.2 == FrameRenderStatus::Complete)
+    );
+    assert!(
+        observations[0].1 > 0
+            && observations[1].1 == 0
+            && observations[2].1 > 0
+            && observations[3].1 > 0
+            && observations[4].1 > 0,
         "RT dispatch must follow on/off/on"
     );
     // Ray traced or raster, the same lights shadow: with RT switched off
@@ -356,7 +383,10 @@ fn mixed_lights() -> Vec<MixedLight> {
     (0..MIXED_LIGHTS)
         .map(|i| {
             let theta = (i as f32 + 0.5) * std::f32::consts::TAU / MIXED_LIGHTS as f32;
-            let s = [MIXED_SHADOW_DIST * theta.cos(), MIXED_SHADOW_DIST * theta.sin()];
+            let s = [
+                MIXED_SHADOW_DIST * theta.cos(),
+                MIXED_SHADOW_DIST * theta.sin(),
+            ];
             let mode = (i % 3) as u32;
             let height = if mode == 0 { 6.0 } else { 4.0 };
             // From the ground spot through the occluder centre up to `height`.
@@ -378,7 +408,11 @@ fn mixed_scene(cast_mask: u16, radiance_mask: u16, rt_enabled: bool) -> String {
         // The lit lights share one budget so the all-lights frame does not
         // saturate and each shadow stays visible in it.
         let lit = radiance_mask.count_ones().max(1) as f32;
-        let intensity = if radiance_mask & (1 << i) != 0 { 1.5 / lit } else { 0.0 };
+        let intensity = if radiance_mask & (1 << i) != 0 {
+            1.5 / lit
+        } else {
+            0.0
+        };
         let cast = if cast_mask & (1 << i) != 0 { 1.0 } else { 0.0 };
         // A sun's range is its shadow box half-extent; points and spots use it
         // as their reach.
@@ -473,7 +507,10 @@ fn ten_mixed_lights_all_shadow_raster_and_ray_traced() {
                 "{name} light {i} (mode {}): shadow={lit:.4} control={control:.4}",
                 light.mode
             );
-            assert!(control > 0.05, "{name} light {i} must light its probe: {control}");
+            assert!(
+                control > 0.05,
+                "{name} light {i} must light its probe: {control}"
+            );
             if lit < control * 0.8 {
                 shadowed[renderer].push(i);
             }
@@ -492,7 +529,8 @@ fn ten_mixed_lights_all_shadow_raster_and_ray_traced() {
             for y in 0..h {
                 let src = (y * w * 4) as usize;
                 let dst = (((row as u32 * h + y) * cols * w + col as u32 * w) * 4) as usize;
-                sheet[dst..dst + (w * 4) as usize].copy_from_slice(&tile[src..src + (w * 4) as usize]);
+                sheet[dst..dst + (w * 4) as usize]
+                    .copy_from_slice(&tile[src..src + (w * 4) as usize]);
             }
         }
     }
@@ -506,8 +544,14 @@ fn ten_mixed_lights_all_shadow_raster_and_ray_traced() {
     .expect("write contact sheet");
 
     let every: Vec<usize> = (0..MIXED_LIGHTS).collect();
-    assert_eq!(shadowed[0], shadowed[1], "raster and ray traced must shadow the same lights");
-    assert_eq!(shadowed[0], every, "every shadow-casting light must cast a shadow");
+    assert_eq!(
+        shadowed[0], shadowed[1],
+        "raster and ray traced must shadow the same lights"
+    );
+    assert_eq!(
+        shadowed[0], every,
+        "every shadow-casting light must cast a shadow"
+    );
 }
 
 /// Wall-clock, so `rt-perf-proofs` only (run with `--test-threads=1`): in
@@ -537,19 +581,30 @@ fn trace_ms_2vs6_caster_delta_reported_as_number() {
         let mut times = Vec::with_capacity(runs);
         for frame in 0..runs {
             let ctx = PresetContext {
-                time: 0.1, beat: 0.2, dt: 1.0 / 60.0,
-                width: h.width, height: h.height,
-                output_width: h.width, output_height: h.height,
+                time: 0.1,
+                beat: 0.2,
+                dt: 1.0 / 60.0,
+                width: h.width,
+                height: h.height,
+                output_width: h.width,
+                output_height: h.height,
                 aspect: h.width as f32 / h.height as f32,
-                owner_key: 0, is_clip_level: false,
+                owner_key: 0,
+                is_clip_level: false,
                 frame_count: frame as i64,
-                anim_progress: 0.0, trigger_count: 0,
+                anim_progress: 0.0,
+                trigger_count: 0,
             };
             let mut enc = h.device.create_encoder("rt-trace-ms-enc");
             let t0 = std::time::Instant::now();
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-                runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+                runtime.render(
+                    &mut gpu,
+                    &target.texture,
+                    &ctx,
+                    &manifold_core::params::ParamManifest::default(),
+                );
             }
             enc.commit_and_wait_completed();
             times.push(t0.elapsed().as_secs_f64() * 1000.0);
@@ -563,7 +618,10 @@ fn trace_ms_2vs6_caster_delta_reported_as_number() {
         };
         // Max frame after warmup
         let max = tail.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        eprintln!("{label}: median={median:.3}ms max={max:.3}ms over {r} frames (warmup discarded)", r = tail.len());
+        eprintln!(
+            "{label}: median={median:.3}ms max={max:.3}ms over {r} frames (warmup discarded)",
+            r = tail.len()
+        );
         tail
     }
 
@@ -572,18 +630,26 @@ fn trace_ms_2vs6_caster_delta_reported_as_number() {
     let times_6 = measure_frames(&scene_6, "6-caster-trace-ms", 16);
 
     let _med_2 = {
-        let mut s = _times_2.clone(); s.sort_by(|a,b| a.partial_cmp(b).unwrap());
-        s[s.len()/2]
+        let mut s = _times_2.clone();
+        s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        s[s.len() / 2]
     };
     let med_6 = {
-        let mut s = times_6.clone(); s.sort_by(|a,b| a.partial_cmp(b).unwrap());
-        s[s.len()/2]
+        let mut s = times_6.clone();
+        s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        s[s.len() / 2]
     };
     let max_6 = times_6.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
 
-    eprintln!("TRACE_MS 2-caster median = {_med_2:.3}ms, 6-caster median = {med_6:.3}ms, delta = {:.3}ms", med_6 - _med_2);
+    eprintln!(
+        "TRACE_MS 2-caster median = {_med_2:.3}ms, 6-caster median = {med_6:.3}ms, delta = {:.3}ms",
+        med_6 - _med_2
+    );
     eprintln!("TRACE_MS 6-caster max (post-warmup) = {max_6:.3}ms");
 
     // The brief: MANIFOLD_RENDER_TRACE=1, no frame >20ms
-    assert!(max_6 < 20.0, "6-caster max frame {max_6:.3}ms must be under 20ms");
+    assert!(
+        max_6 < 20.0,
+        "6-caster max frame {max_6:.3}ms must be under 20ms"
+    );
 }

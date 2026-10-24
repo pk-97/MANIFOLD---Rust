@@ -12,11 +12,18 @@ impl ScenePanel {
     /// A manifest param the current selection isn't showing simply misses the
     /// join and is ignored; a built manifest row with no manifest entry is
     /// caught by the INV-6 coverage check.
-    pub fn sync_properties_values(&mut self, tree: &mut UITree, slots: &mut dyn Iterator<Item = (&str, crate::view::UiParamSlot)>) {
+    pub fn sync_properties_values(
+        &mut self,
+        tree: &mut UITree,
+        slots: &mut dyn Iterator<Item = (&str, crate::view::UiParamSlot)>,
+    ) {
         if !self.open {
             return;
         }
-        let target = self.live_layer_id().cloned().map(GraphParamTarget::GeneratorOf);
+        let target = self
+            .live_layer_id()
+            .cloned()
+            .map(GraphParamTarget::GeneratorOf);
         let full_params = &mut self.full_params;
         let full_param_id_index = &self.full_param_id_index;
         let card = &mut self.properties_card;
@@ -36,7 +43,14 @@ impl ScenePanel {
                 && let Some((eye_id, _, shown)) = self.outliner_eye_ids.get_mut(eye)
             {
                 if (slot.base > 0.5) != (*shown > 0.5) {
-                    tree.set_text(*eye_id, if slot.base > 0.5 { "\u{1F441}" } else { "\u{2013}" });
+                    tree.set_text(
+                        *eye_id,
+                        if slot.base > 0.5 {
+                            "\u{1F441}"
+                        } else {
+                            "\u{2013}"
+                        },
+                    );
                 }
                 *shown = slot.base;
             }
@@ -57,9 +71,11 @@ impl ScenePanel {
             if value != prev || prev.is_nan() {
                 card.last_pushed_values[i] = value;
                 if card.row_host.toggle_ids[i].is_some() {
-                    card.row_host.push_button_value(tree, i, value, &card.rows[i].spec);
+                    card.row_host
+                        .push_button_value(tree, i, value, &card.rows[i].spec);
                 } else {
-                    card.row_host.push_slider_value(tree, i, value, &card.rows[i].spec, None);
+                    card.row_host
+                        .push_slider_value(tree, i, value, &card.rows[i].spec, None);
                 }
             }
             if let Some(c) = card.row_value_synced.get_mut(i) {
@@ -69,7 +85,11 @@ impl ScenePanel {
         for (i, synced) in card.row_value_synced.iter().enumerate() {
             // A field or helper row has no manifest slot to sync.
             if !*synced && card.rows[i].affordance.is_none() {
-                debug_assert!(false, "BUG-313/INV-6: built scene row {} (id {:?}) has no live manifest entry", i, card.rows[i].id,);
+                debug_assert!(
+                    false,
+                    "BUG-313/INV-6: built scene row {} (id {:?}) has no live manifest entry",
+                    i, card.rows[i].id,
+                );
                 crate::panels::param_slider_shared::warn_join_gap_once(card.rows[i].id.as_ref());
             }
         }
@@ -85,8 +105,13 @@ impl ScenePanel {
     /// here, so a drag previews on the swatch) and repaint the changed ones.
     pub(super) fn sync_swatch_values(&mut self, tree: &mut UITree) {
         for row in 0..self.properties_card.rows.len() {
-            let Some(members) = &self.properties_card.rows[row].rgb_members else { continue };
-            let rgb = members.ids.each_ref().map(|id| self.material_full_value(id));
+            let Some(members) = &self.properties_card.rows[row].rgb_members else {
+                continue;
+            };
+            let rgb = members
+                .ids
+                .each_ref()
+                .map(|id| self.material_full_value(id));
             self.properties_card.row_host.set_swatch_rgb(row, rgb);
         }
         self.properties_card.row_host.paint_swatches(tree);
@@ -94,7 +119,11 @@ impl ScenePanel {
 
     /// The live-scalar push (UI_INVALIDATION D22) for every row the panel
     /// shows. `shapes_of` answers for a row's param id on the live layer.
-    pub fn sync_live_shapes(&mut self, tree: &mut UITree, shapes_of: &mut dyn FnMut(&str) -> crate::panels::param_slider_shared::RowShapes) {
+    pub fn sync_live_shapes(
+        &mut self,
+        tree: &mut UITree,
+        shapes_of: &mut dyn FnMut(&str) -> crate::panels::param_slider_shared::RowShapes,
+    ) {
         if !self.open {
             return;
         }
@@ -104,20 +133,32 @@ impl ScenePanel {
                 continue;
             }
             let shapes = shapes_of(param.id.as_ref());
-            card.row_host.sync_row_shapes(tree, &mut card.mod_state, param, row, &shapes);
+            card.row_host
+                .sync_row_shapes(tree, &mut card.mod_state, param, row, &shapes);
         }
     }
 
-    pub fn sync_driver_frame_rates(&mut self, tree: &mut UITree, rate_of: &mut dyn FnMut(&str) -> Option<(u32, f32)>) {
+    pub fn sync_driver_frame_rates(
+        &mut self,
+        tree: &mut UITree,
+        rate_of: &mut dyn FnMut(&str) -> Option<(u32, f32)>,
+    ) {
         let card = &mut self.properties_card;
         for (row, param) in card.rows.iter_mut().enumerate() {
-            if !card.mod_state.driver_frame_aligned.get(row).copied().unwrap_or(false) {
+            if !card
+                .mod_state
+                .driver_frame_aligned
+                .get(row)
+                .copied()
+                .unwrap_or(false)
+            {
                 continue;
             }
             let rate = rate_of(param.id.as_ref());
             // The row model too, so the next build from these rows agrees.
             param.modulation.driver_frame_rate = rate;
-            card.row_host.sync_driver_frame_rate(tree, &mut card.mod_state, row, rate);
+            card.row_host
+                .sync_driver_frame_rate(tree, &mut card.mod_state, row, rate);
         }
     }
 }

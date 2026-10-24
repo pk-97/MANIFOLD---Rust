@@ -273,8 +273,12 @@ fn fluid_fill_pits_f64_jittered_sheet_flattens_and_zero_is_bit_identical() {
 fn fluid_fill_pits_standalone_shaders_validate() {
     use manifold_node_engine::freeze::codegen::standalone_for_spec;
     for source in [
-        standalone_for_spec::<manifold_water_liquid::primitives::offset_lattice::OffsetLattice>().unwrap(),
-        standalone_for_spec::<manifold_water_liquid::primitives::redistance_lattice::RedistanceLattice>().unwrap(),
+        standalone_for_spec::<manifold_water_liquid::primitives::offset_lattice::OffsetLattice>()
+            .unwrap(),
+        standalone_for_spec::<
+            manifold_water_liquid::primitives::redistance_lattice::RedistanceLattice,
+        >()
+        .unwrap(),
     ] {
         let module = naga::front::wgsl::parse_str(&source)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
@@ -291,7 +295,9 @@ mod gpu_tests;
 
 fn fused_redistance_offset() -> String {
     use manifold_node_engine::exec::effect_node::NodeInstanceId;
-    use manifold_node_engine::freeze::codegen::{FusionRegion, InputSource, RegionNode, generate_fused};
+    use manifold_node_engine::freeze::codegen::{
+        FusionRegion, InputSource, RegionNode, generate_fused,
+    };
     use manifold_node_engine::primitive::PrimitiveSpec;
     fn member<P: PrimitiveSpec>(id: u32, input: InputSource) -> RegionNode<'static> {
         RegionNode {
@@ -314,8 +320,14 @@ fn fused_redistance_offset() -> String {
     }
     generate_fused(&FusionRegion {
         nodes: vec![
-            member::<manifold_water_liquid::primitives::redistance_lattice::RedistanceLattice>(0, InputSource::External(0)),
-            member::<manifold_water_liquid::primitives::offset_lattice::OffsetLattice>(1, InputSource::Node(NodeInstanceId(0))),
+            member::<manifold_water_liquid::primitives::redistance_lattice::RedistanceLattice>(
+                0,
+                InputSource::External(0),
+            ),
+            member::<manifold_water_liquid::primitives::offset_lattice::OffsetLattice>(
+                1,
+                InputSource::Node(NodeInstanceId(0)),
+            ),
         ],
         num_external_inputs: 1,
         outputs: vec![(NodeInstanceId(1), "out".to_string())],
@@ -325,7 +337,9 @@ fn fused_redistance_offset() -> String {
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
-        output_capacity: Some(manifold_node_engine::freeze::classify::CapacityExpr::Slot(0)),
+        output_capacity: Some(manifold_node_engine::freeze::classify::CapacityExpr::Slot(
+            0,
+        )),
     })
     .expect("redistance and shrink fuse")
     .wgsl

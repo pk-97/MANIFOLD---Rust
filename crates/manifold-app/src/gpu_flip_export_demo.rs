@@ -15,8 +15,10 @@ use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::{Beats, Bpm, PresetTypeId};
 use manifold_media::export_config::ExportConfig;
+use manifold_node_engine::gpu::headless_readback::{
+    encode_rgba8_png, linear_to_srgb8, readback_raw_halves,
+};
 use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
-use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, linear_to_srgb8, readback_raw_halves};
 
 use crate::content_command::ContentCommand;
 use crate::headless_harness::headless_content_thread;
@@ -29,7 +31,10 @@ const HEIGHT: u32 = 1080;
 const AT: u32 = 5;
 
 fn out_dir() -> PathBuf {
-    let dir = std::env::var_os("GPU_FLIP_DEMO_DIR").map_or_else(|| PathBuf::from("/tmp/gpu_flip_dam_break_l2"), PathBuf::from);
+    let dir = std::env::var_os("GPU_FLIP_DEMO_DIR").map_or_else(
+        || PathBuf::from("/tmp/gpu_flip_dam_break_l2"),
+        PathBuf::from,
+    );
     std::fs::create_dir_all(&dir).expect("demo directory");
     dir
 }
@@ -46,13 +51,17 @@ fn project_of(preset: &'static str) -> Project {
     project.settings.output_height = HEIGHT as i32;
     let mut layer = Layer::new_generator("GPU FLIP Dam Break".into(), PresetTypeId::new(preset), 0);
     // A minute long, so the live run never reaches its end.
-    layer.clips.push(TimelineClip::new_generator(Beats::ZERO, Beats(128.0)));
+    layer
+        .clips
+        .push(TimelineClip::new_generator(Beats::ZERO, Beats(128.0)));
     project.timeline.layers.push(layer);
     project
 }
 
 fn halves(bytes: &[u8]) -> impl Iterator<Item = f32> + '_ {
-    bytes.chunks_exact(2).map(|h| half::f16::from_bits(u16::from_le_bytes([h[0], h[1]])).to_f32())
+    bytes
+        .chunks_exact(2)
+        .map(|h| half::f16::from_bits(u16::from_le_bytes([h[0], h[1]])).to_f32())
 }
 
 /// Linear SDR halves as an sRGB PNG.
@@ -97,21 +106,43 @@ fn export(fps: u32, dir: &Path) -> Vec<u8> {
     let took = started.elapsed();
     drop(cmd_tx);
     drop(state_tx);
-    let finished = state_rx.try_iter().find_map(|state| state.export_finished.into_iter().next()).expect("the export finished");
-    assert!(finished.success, "{fps} fps export failed: {}", finished.message);
+    let finished = state_rx
+        .try_iter()
+        .find_map(|state| state.export_finished.into_iter().next())
+        .expect("the export finished");
+    assert!(
+        finished.success,
+        "{fps} fps export failed: {}",
+        finished.message
+    );
     let observed: Vec<_> = observation_rx.try_iter().collect();
-    assert_eq!(observed.len(), frames as usize, "{fps} fps export frame count");
+    assert_eq!(
+        observed.len(),
+        frames as usize,
+        "{fps} fps export frame count"
+    );
     for frame in &observed {
-        assert_eq!(frame.status, FrameRenderStatus::Complete, "{fps} fps frame {} status", frame.frame_idx);
+        assert_eq!(
+            frame.status,
+            FrameRenderStatus::Complete,
+            "{fps} fps frame {} status",
+            frame.frame_idx
+        );
     }
     let last = observed.last().expect("frames");
-    assert!((last.time_seconds - f64::from(AT)).abs() < 1e-9, "{fps} fps last frame at {} s", last.time_seconds);
+    assert!(
+        (last.time_seconds - f64::from(AT)).abs() < 1e-9,
+        "{fps} fps last frame at {} s",
+        last.time_seconds
+    );
     println!(
         "GPU FLIP demo: {fps} fps export, {frames} frames in {:.1} s → {}",
         took.as_secs_f64(),
         path.display()
     );
-    last.sdr_mapped_rgba16f.clone().expect("the frame at 5 s was read back")
+    last.sdr_mapped_rgba16f
+        .clone()
+        .expect("the frame at 5 s was read back")
 }
 
 #[test]
@@ -125,22 +156,36 @@ fn gpu_flip_dam_break_export_matches_across_frame_rates() {
     let (mut differing, mut largest) = (0usize, 0.0f32);
     let mut diff = Vec::with_capacity((WIDTH * HEIGHT * 4) as usize);
     for (a, b) in at_60.chunks_exact(8).zip(at_30.chunks_exact(8)) {
-        let delta: Vec<f32> = halves(a).zip(halves(b)).map(|(x, y)| (x - y).abs()).collect();
+        let delta: Vec<f32> = halves(a)
+            .zip(halves(b))
+            .map(|(x, y)| (x - y).abs())
+            .collect();
         let worst = delta.iter().copied().fold(0.0, f32::max);
         if a != b {
             differing += 1;
             largest = largest.max(worst);
         }
         // Any difference shows: sixteen times brighter than it is, at least grey.
-        let shade = if a == b { 0 } else { ((worst * 16.0).clamp(0.0, 1.0) * 255.0).max(64.0) as u8 };
+        let shade = if a == b {
+            0
+        } else {
+            ((worst * 16.0).clamp(0.0, 1.0) * 255.0).max(64.0) as u8
+        };
         diff.extend_from_slice(&[shade, shade, shade, 255]);
     }
-    std::fs::write(dir.join("dam_break_diff.png"), encode_rgba8_png(&diff, WIDTH, HEIGHT)).expect("diff written");
+    std::fs::write(
+        dir.join("dam_break_diff.png"),
+        encode_rgba8_png(&diff, WIDTH, HEIGHT),
+    )
+    .expect("diff written");
     println!(
         "GPU FLIP demo: frame 300 at 60 fps against frame 150 at 30 fps: {differing} of {} pixels differ, largest {largest:.3e}",
         WIDTH * HEIGHT
     );
-    assert_eq!(differing, 0, "the frame at {AT} s differs between 60 and 30 fps");
+    assert_eq!(
+        differing, 0,
+        "the frame at {AT} s differs between 60 and 30 fps"
+    );
 }
 
 /// The Dam Break as a project for the content-thread trace gate:
@@ -161,7 +206,12 @@ fn gpu_flip_dam_break_soak_project() {
 fn liquid_presets_play_without_pipeline_compiles() {
     use manifold_core::cold_touch::{ColdTouchKind, cold_touch_count};
     let mut failures = Vec::new();
-    for preset in [PRESET, "WaterDamBreakMatter", "WaterFloatingBoxMatter", "WaterStillPoolMatter"] {
+    for preset in [
+        PRESET,
+        "WaterDamBreakMatter",
+        "WaterFloatingBoxMatter",
+        "WaterStillPoolMatter",
+    ] {
         let mut content = headless_content_thread(project_of(preset), WIDTH, HEIGHT);
         let (state_tx, _state_rx) = crate::content_state::state_channel();
         crate::headless_harness::warm_project(&mut content, &state_tx);
@@ -176,7 +226,10 @@ fn liquid_presets_play_without_pipeline_compiles() {
             failures.push(format!("{preset}: {compiles}"));
         }
     }
-    assert!(failures.is_empty(), "pipelines compiled while a warmed preset played: {failures:?}");
+    assert!(
+        failures.is_empty(),
+        "pipelines compiled while a warmed preset played: {failures:?}"
+    );
 }
 
 #[test]
@@ -185,28 +238,52 @@ fn gpu_flip_dam_break_paused_live_frames_hold() {
     let mut content = headless_content_thread(project(), WIDTH, HEIGHT);
     let (state_tx, _state_rx) = crate::content_state::state_channel();
     crate::headless_harness::warm_project(&mut content, &state_tx);
-    let device = std::sync::Arc::clone(content.content_pipeline.native_gpu_for_tests().expect("native device"));
+    let device = std::sync::Arc::clone(
+        content
+            .content_pipeline
+            .native_gpu_for_tests()
+            .expect("native device"),
+    );
     let grab = |content: &crate::content_thread::ContentThread| {
         content.content_pipeline.wait_for_render_complete();
-        readback_raw_halves(&device, content.content_pipeline.export_output_texture(), WIDTH, HEIGHT)
+        readback_raw_halves(
+            &device,
+            content.content_pipeline.export_output_texture(),
+            WIDTH,
+            HEIGHT,
+        )
     };
-    let differing = |a: &[u8], b: &[u8]| a.chunks_exact(8).zip(b.chunks_exact(8)).filter(|(x, y)| x != y).count();
+    let differing = |a: &[u8], b: &[u8]| {
+        a.chunks_exact(8)
+            .zip(b.chunks_exact(8))
+            .filter(|(x, y)| x != y)
+            .count()
+    };
     content.handle_command(ContentCommand::Play);
     let mut playing = Vec::new();
     for frame in 0..90 {
         content.tick_frame(&state_tx);
         if frame == 59 {
             playing = grab(&content);
-            println!("GPU FLIP demo: playing frame 60 at {:.2} s", content.engine.current_time().0);
+            println!(
+                "GPU FLIP demo: playing frame 60 at {:.2} s",
+                content.engine.current_time().0
+            );
         }
         std::thread::sleep(Duration::from_millis(16));
     }
     let later = grab(&content);
-    println!("GPU FLIP demo: playing frame 90 at {:.2} s", content.engine.current_time().0);
+    println!(
+        "GPU FLIP demo: playing frame 90 at {:.2} s",
+        content.engine.current_time().0
+    );
     write_png(&dir.join("dam_break_playing_60.png"), &playing);
     write_png(&dir.join("dam_break_playing_90.png"), &later);
     let moved = differing(&playing, &later);
-    println!("GPU FLIP demo: 30 playing frames changed {moved} of {} pixels", WIDTH * HEIGHT);
+    println!(
+        "GPU FLIP demo: 30 playing frames changed {moved} of {} pixels",
+        WIDTH * HEIGHT
+    );
     assert!(moved > 0, "the liquid did not move while playing");
     content.handle_command(ContentCommand::Pause);
     content.tick_frame(&state_tx);
@@ -216,7 +293,11 @@ fn gpu_flip_dam_break_paused_live_frames_hold() {
         std::thread::sleep(Duration::from_millis(16));
         content.tick_frame(&state_tx);
         let changed = differing(&held, &grab(&content));
-        println!("GPU FLIP demo: paused frame {} changed {changed} of {} pixels", frame + 1, WIDTH * HEIGHT);
+        println!(
+            "GPU FLIP demo: paused frame {} changed {changed} of {} pixels",
+            frame + 1,
+            WIDTH * HEIGHT
+        );
         assert_eq!(changed, 0, "paused frame {} changed the picture", frame + 1);
     }
 }
@@ -239,7 +320,10 @@ fn small_exports(runs: usize, frames: u32, dir: &Path, tag: &str) -> Vec<Vec<u8>
         .map(|run| {
             let (cmd_tx, cmd_rx) = unbounded();
             let cfg = ExportConfig {
-                output_path: dir.join(format!("determinism_{tag}_{run}.mp4")).to_string_lossy().into_owned(),
+                output_path: dir
+                    .join(format!("determinism_{tag}_{run}.mp4"))
+                    .to_string_lossy()
+                    .into_owned(),
                 width: W,
                 height: H,
                 fps: 60.0,
@@ -258,14 +342,33 @@ fn small_exports(runs: usize, frames: u32, dir: &Path, tag: &str) -> Vec<Vec<u8>
             crate::content_export::capture_export_sdr_frame(frames - 1);
             content.run_export(cfg, &cmd_rx, &state_tx);
             drop(cmd_tx);
-            let finished = state_rx.try_iter().find_map(|state| state.export_finished.into_iter().next()).expect("the export finished");
-            assert!(finished.success, "{tag} run {run} failed: {}", finished.message);
+            let finished = state_rx
+                .try_iter()
+                .find_map(|state| state.export_finished.into_iter().next())
+                .expect("the export finished");
+            assert!(
+                finished.success,
+                "{tag} run {run} failed: {}",
+                finished.message
+            );
             let observed: Vec<_> = observation_rx.try_iter().collect();
-            assert_eq!(observed.len(), frames as usize, "{tag} run {run} frame count");
+            assert_eq!(
+                observed.len(),
+                frames as usize,
+                "{tag} run {run} frame count"
+            );
             for frame in &observed {
-                assert_eq!(frame.status, FrameRenderStatus::Complete, "{tag} run {run} frame {} status", frame.frame_idx);
+                assert_eq!(
+                    frame.status,
+                    FrameRenderStatus::Complete,
+                    "{tag} run {run} frame {} status",
+                    frame.frame_idx
+                );
             }
-            observed.last().and_then(|frame| frame.sdr_mapped_rgba16f.clone()).expect("the last frame was read back")
+            observed
+                .last()
+                .and_then(|frame| frame.sdr_mapped_rgba16f.clone())
+                .expect("the last frame was read back")
         })
         .collect()
 }
@@ -280,9 +383,21 @@ fn gpu_flip_export_is_deterministic() {
     let first = small_exports(2, frames, &dir, "a");
     let other = small_exports(1, frames, &dir, "b");
     let reference = &first[0];
-    assert!(reference.chunks_exact(8).any(|p| p != reference[..8].as_ref()), "the frame is uniform; nothing rendered");
-    for (name, frame) in [("re-export on the same thread", &first[1]), ("export on a second thread", &other[0])] {
-        let differing = reference.chunks_exact(8).zip(frame.chunks_exact(8)).filter(|(a, b)| a != b).count();
+    assert!(
+        reference
+            .chunks_exact(8)
+            .any(|p| p != reference[..8].as_ref()),
+        "the frame is uniform; nothing rendered"
+    );
+    for (name, frame) in [
+        ("re-export on the same thread", &first[1]),
+        ("export on a second thread", &other[0]),
+    ] {
+        let differing = reference
+            .chunks_exact(8)
+            .zip(frame.chunks_exact(8))
+            .filter(|(a, b)| a != b)
+            .count();
         println!("GPU FLIP determinism: {name}: {differing} pixels differ at frame {frames}");
         assert_eq!(differing, 0, "{name} differs from the first export");
     }

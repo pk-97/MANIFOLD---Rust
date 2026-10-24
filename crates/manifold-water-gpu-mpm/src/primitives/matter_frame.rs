@@ -8,14 +8,14 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
+use crate::matter::{MatterPoint, solid_bytes};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::FluidParticle;
+use manifold_node_engine::primitive::Primitive;
 use manifold_water_liquid::frame_ring::{FrameRing, RING};
 use manifold_water_liquid::grid::{FACE_INPUT_PORTS, PublishedFaces};
 use manifold_water_liquid::lattice::LiquidLattice;
-use crate::matter::{MatterPoint, solid_bytes};
-use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::primitive::Primitive;
 
 use super::matter_face_component::MATTER_FACE_VALID_LAYERS;
 
@@ -83,13 +83,15 @@ manifold_node_engine::primitive! {
 impl Primitive for MatterFrame {
     fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.convert.is_none() {
-            self.convert = Some(device.create_compute_pipeline(SHADER, "cs_main", "node.matter_frame"));
+            self.convert =
+                Some(device.create_compute_pipeline(SHADER, "cs_main", "node.matter_frame"));
         }
         self.faces.prepare(device);
     }
 
     fn provides_array_output(&self, port: &str) -> bool {
-        matches!(port, "particles_a" | "particles_b" | "solid_a" | "solid_b") || PublishedFaces::provides(port)
+        matches!(port, "particles_a" | "particles_b" | "solid_a" | "solid_b")
+            || PublishedFaces::provides(port)
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
@@ -118,7 +120,10 @@ impl Primitive for MatterFrame {
             return;
         };
         let count = ctx.scalar_or_param("count", 0.0).round().max(0.0) as u32;
-        let closed_faces = ctx.scalar_or_param("closed_faces", 63.0).round().clamp(0.0, 63.0) as u32;
+        let closed_faces = ctx
+            .scalar_or_param("closed_faces", 63.0)
+            .round()
+            .clamp(0.0, 63.0) as u32;
         let simulation_time = f64::from(ctx.scalar_or_param("simulation_time", 0.0));
         let display_time = f64::from(ctx.scalar_or_param("display_time", 0.0));
         let epoch = ctx.scalar_or_param("epoch", 0.0).round().max(0.0) as u32;
@@ -130,8 +135,13 @@ impl Primitive for MatterFrame {
 
         let solid_key = (
             [
-                lattice.min()[0].to_bits(), lattice.min()[1].to_bits(), lattice.min()[2].to_bits(),
-                lattice.cell_size().to_bits(), lattice.nodes()[0], lattice.nodes()[1], lattice.nodes()[2],
+                lattice.min()[0].to_bits(),
+                lattice.min()[1].to_bits(),
+                lattice.min()[2].to_bits(),
+                lattice.cell_size().to_bits(),
+                lattice.nodes()[0],
+                lattice.nodes()[1],
+                lattice.nodes()[2],
             ],
             closed_faces,
         );
@@ -141,7 +151,9 @@ impl Primitive for MatterFrame {
             let distances = lattice.wall_distance(closed_faces);
             // A fresh buffer per setup: the previous one may still be read by
             // an in-flight frame; its drop is fence-retired.
-            let buffer = gpu.device.create_buffer_shared((distances.len() * 4).max(4) as u64);
+            let buffer = gpu
+                .device
+                .create_buffer_shared((distances.len() * 4).max(4) as u64);
             // SAFETY: new shared buffer, not yet visible to the GPU.
             unsafe { buffer.write(0, bytemuck::cast_slice(&distances)) };
             self.solid = Some(buffer);
@@ -163,7 +175,10 @@ impl Primitive for MatterFrame {
         let published = ring.is_some();
         if let (Some(slot), Some(points), Some(stats)) = (ring, points, stats) {
             let write = slot.write;
-            let pipeline = self.convert.as_ref().expect("matter frame pipeline prepared at install");
+            let pipeline = self
+                .convert
+                .as_ref()
+                .expect("matter frame pipeline prepared at install");
             let params = FrameParams {
                 count: count.min((points.size / std::mem::size_of::<MatterPoint>() as u64) as u32),
                 previous_count: slot.previous_count,
@@ -174,11 +189,30 @@ impl Primitive for MatterFrame {
                 gpu.native_enc.dispatch_compute(
                     pipeline,
                     &[
-                        GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
-                        GpuBinding::Buffer { binding: 1, buffer: points, offset: 0 },
-                        GpuBinding::Buffer { binding: 2, buffer: stats, offset: 0 },
-                        GpuBinding::Buffer { binding: 3, buffer: self.ring.slot(slot.previous), offset: 0 },
-                        GpuBinding::Buffer { binding: 4, buffer: self.ring.slot(write), offset: 0 },
+                        GpuBinding::Bytes {
+                            binding: 0,
+                            data: bytemuck::bytes_of(&params),
+                        },
+                        GpuBinding::Buffer {
+                            binding: 1,
+                            buffer: points,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 2,
+                            buffer: stats,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 3,
+                            buffer: self.ring.slot(slot.previous),
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 4,
+                            buffer: self.ring.slot(write),
+                            offset: 0,
+                        },
                     ],
                     [params.count.div_ceil(256), 1, 1],
                     "node.matter_frame",
@@ -188,7 +222,8 @@ impl Primitive for MatterFrame {
                 // Each tick's solid lattice sits beside its frame, so A and B
                 // each carry the bodies where their particles were.
                 let bytes = solid_bytes(lattice.nodes());
-                let fresh = self.solid_slots.len() < RING || self.solid_slots.iter().any(|s| s.size < bytes);
+                let fresh = self.solid_slots.len() < RING
+                    || self.solid_slots.iter().any(|s| s.size < bytes);
                 if fresh {
                     // A ring the device cannot give leaves none: this node
                     // names it, and the surface atoms draw nothing without it.
@@ -207,14 +242,26 @@ impl Primitive for MatterFrame {
                         });
                 }
                 let bytes = bytes.min(solid_in.size);
-                let targets = if fresh { 0..self.solid_slots.len() } else { write..write + 1 };
+                let targets = if fresh {
+                    0..self.solid_slots.len()
+                } else {
+                    write..write + 1
+                };
                 for slot in targets {
-                    gpu.native_enc.copy_buffer_to_buffer(solid_in, &self.solid_slots[slot], bytes);
+                    gpu.native_enc
+                        .copy_buffer_to_buffer(solid_in, &self.solid_slots[slot], bytes);
                 }
             }
             self.ring.finish(slot, params.count, epoch, simulation_time);
         }
-        let faces_refused = self.faces.publish(gpu, lattice.cells(), faces_in, stats, published, "Matter Frame");
+        let faces_refused = self.faces.publish(
+            gpu,
+            lattice.cells(),
+            faces_in,
+            stats,
+            published,
+            "Matter Frame",
+        );
 
         let (blend, span) = self.ring.blend(display_time);
         let faces_published = self.faces.complete();
@@ -231,7 +278,14 @@ impl Primitive for MatterFrame {
             ("face_cells_x", lattice.cells()[0] as f32),
             ("face_cells_y", lattice.cells()[1] as f32),
             ("face_cells_z", lattice.cells()[2] as f32),
-            ("face_valid_layers", if faces_published { MATTER_FACE_VALID_LAYERS as f32 } else { 0.0 }),
+            (
+                "face_valid_layers",
+                if faces_published {
+                    MATTER_FACE_VALID_LAYERS as f32
+                } else {
+                    0.0
+                },
+            ),
         ] {
             ctx.outputs.set_scalar(name, ParamValue::Float(value));
         }

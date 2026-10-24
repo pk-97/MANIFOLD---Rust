@@ -7,21 +7,24 @@
 use serde_json::{Value, json};
 
 fn smoothed_surface_with_pointwise_tail() -> manifold_core::effect_graph_def::EffectGraphDef {
-    let source = manifold_nodes::engine_scenes::scene_json(
-        &manifold_core::PresetTypeId::new("WaterDamBreakGpuFlip"),
-    )
+    let source = manifold_nodes::engine_scenes::scene_json(&manifold_core::PresetTypeId::new(
+        "WaterDamBreakGpuFlip",
+    ))
     .expect("WaterDamBreakGpuFlip bundled");
     let mut preset: Value = serde_json::from_str(&source).expect("WaterDamBreakGpuFlip parses");
     let surface = manifold_nodes_water::testkit::conformance::json_node_mut(&mut preset, "surface")
         .expect("Liquid Surface group");
     let group = &mut surface["group"];
     let (normals, output) = {
-        let normals = manifold_nodes_water::testkit::conformance::json_node_mut(group, "liquid_normals")
-            .expect("surface normals")
-            .get("id")
-            .cloned()
-            .expect("surface normals id");
-        let output = group["nodes"].as_array().expect("surface nodes")
+        let normals =
+            manifold_nodes_water::testkit::conformance::json_node_mut(group, "liquid_normals")
+                .expect("surface normals")
+                .get("id")
+                .cloned()
+                .expect("surface normals id");
+        let output = group["nodes"]
+            .as_array()
+            .expect("surface nodes")
             .iter()
             .find(|node| node["typeId"] == "system.group_output")
             .expect("surface group output")
@@ -69,7 +72,11 @@ fn freeze_keeps_surface_stages_and_fuses_the_real_pointwise_tail() {
     let view = manifold_node_engine::freeze::install::fuse_generator_view(&def, &registry)
         .expect("the two rotate nodes must produce a frozen region");
 
-    for type_id in ["node.volume_surface_mesh", "node.smooth_surface_mesh", "node.surface_mesh_normals"] {
+    for type_id in [
+        "node.volume_surface_mesh",
+        "node.smooth_surface_mesh",
+        "node.surface_mesh_normals",
+    ] {
         assert_eq!(
             view.def
                 .nodes
@@ -80,10 +87,20 @@ fn freeze_keeps_surface_stages_and_fuses_the_real_pointwise_tail() {
             "the materialized surface stage must survive freezing: {type_id}"
         );
     }
-    let mesh = view.def.nodes.iter().find(|n| n.type_id == "node.volume_surface_mesh").unwrap();
+    let mesh = view
+        .def
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.volume_surface_mesh")
+        .unwrap();
     for port in ["solid", "solid_nodes_x", "solid_nodes_y", "solid_nodes_z"] {
-        assert!(view.def.wires.iter().any(|w| w.to_node == mesh.id && w.to_port == port),
-            "freeze must preserve mesh contact input {port}");
+        assert!(
+            view.def
+                .wires
+                .iter()
+                .any(|w| w.to_node == mesh.id && w.to_port == port),
+            "freeze must preserve mesh contact input {port}"
+        );
     }
     assert!(view.node_retarget.contains_key("surface_turn_a"));
     assert_eq!(
@@ -102,17 +119,21 @@ fn freeze_keeps_surface_stages_and_fuses_the_real_pointwise_tail() {
 
 #[cfg(feature = "gpu-proofs")]
 mod gpu_tests {
+    use glam::DVec3;
+    use manifold_gpu::GpuBinding;
+    use manifold_node_engine::exec::effect_node::NodeInstanceId;
+    use manifold_node_engine::freeze::codegen::{
+        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused,
+    };
+    use manifold_node_engine::mesh::MeshVertex;
+    use manifold_node_engine::primitive::PrimitiveSpec;
     use manifold_node_engine::testkit::array_harness::{Harness, params, read};
     use manifold_nodes_scene::node_graph::primitives::rotate_3d::Rotate3D;
     use manifold_water_surface::primitives::smooth_surface_mesh::SmoothSurfaceMesh;
     use manifold_water_surface::primitives::surface_mesh_normals::SurfaceMeshNormals;
-    use manifold_water_surface::primitives::surface_mesh_parity::{fixture, flip_normals, flip_smooth};
-    use manifold_node_engine::mesh::MeshVertex;
-    use manifold_node_engine::exec::effect_node::NodeInstanceId;
-    use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused};
-    use manifold_node_engine::primitive::PrimitiveSpec;
-    use glam::DVec3;
-    use manifold_gpu::GpuBinding;
+    use manifold_water_surface::primitives::surface_mesh_parity::{
+        fixture, flip_normals, flip_smooth,
+    };
 
     fn rotate(point: DVec3, angles: [f64; 3]) -> DVec3 {
         let (ax, ay, az) = (angles[0], angles[1], angles[2]);

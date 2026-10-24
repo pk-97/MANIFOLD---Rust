@@ -4,13 +4,12 @@ use crate::freeze::classify::{FusionKind, InputAccess};
 use crate::parameters::{ParamDef, ParamType};
 use crate::ports::{ChannelSpec, NodeInput, NodeOutput, PortType};
 
-use super::params_struct::{emit_derived_args, emit_params_struct, ParamsStructOpts};
+use super::params_struct::{ParamsStructOpts, emit_derived_args, emit_params_struct};
 use super::types::{
-    buffer_element_type, dim_forms, is_texture_input, is_texture_port, wgsl_safe_field,
-    CodegenError, TexDim,
+    CodegenError, TexDim, buffer_element_type, dim_forms, is_texture_input, is_texture_port,
+    wgsl_safe_field,
 };
 use super::uniforms::emit_buffer_struct;
-
 
 /// The bundle of facts one standalone `cs_main` kernel is generated from — the
 /// atom's classification, its `wgsl_body` fragment, its ports/params, and the
@@ -95,10 +94,15 @@ pub fn generate_standalone(spec: &StandaloneKernelSpec<'_>) -> Result<String, Co
     // here MUST be `BufferIndex` — anything else is a codegen-shape error (an
     // Array input the region-grower can't yet express any other way on the
     // texture path).
-    let array_inputs: Vec<&NodeInput> =
-        inputs.iter().filter(|i| matches!(i.ty, PortType::Array(_))).collect();
+    let array_inputs: Vec<&NodeInput> = inputs
+        .iter()
+        .filter(|i| matches!(i.ty, PortType::Array(_)))
+        .collect();
     for (ai, _) in array_inputs.iter().enumerate() {
-        let access = input_access.get(tex_inputs.len() + ai).copied().unwrap_or_default();
+        let access = input_access
+            .get(tex_inputs.len() + ai)
+            .copied()
+            .unwrap_or_default();
         if access != InputAccess::BufferIndex {
             return Err(CodegenError::BadInput);
         }
@@ -139,8 +143,8 @@ pub fn generate_standalone(spec: &StandaloneKernelSpec<'_>) -> Result<String, Co
     // A sampler is bound when any input is sampler-read (Coincident) OR gathered
     // (a Gather body samples the texture itself, so it needs the sampler too).
     // A CoincidentTexel-only atom (dither) binds no sampler.
-    let needs_sampler =
-        (0..tex_inputs.len()).any(|i| matches!(access_of(i), InputAccess::Coincident | InputAccess::Gather));
+    let needs_sampler = (0..tex_inputs.len())
+        .any(|i| matches!(access_of(i), InputAccess::Coincident | InputAccess::Gather));
     let any_texel = (0..tex_inputs.len()).any(|i| access_of(i) == InputAccess::CoincidentTexel);
     // Optional texture inputs get a derived `use_<name>: u32` flag injected into
     // the uniform (run() packs `input.is_some()`); the body falls back to a default
@@ -192,16 +196,17 @@ pub fn generate_standalone(spec: &StandaloneKernelSpec<'_>) -> Result<String, Co
     // multi-output write gates, and the optional-input use flags. Omitted
     // entirely when the atom has no params. ---
     const TABLE_LEN: usize = 16;
-    let table_params: Vec<&ParamDef> =
-        params.iter().filter(|p| p.ty == ParamType::Table).collect();
+    let table_params: Vec<&ParamDef> = params.iter().filter(|p| p.ty == ParamType::Table).collect();
     if has_uniform {
         let write_flag_names: Vec<&str> = if multi_output {
             tex_outputs.iter().map(|o| o.name.as_ref()).collect()
         } else {
             Vec::new()
         };
-        let use_flag_names: Vec<&str> =
-            optional_tex_inputs.iter().map(|i| i.name.as_ref()).collect();
+        let use_flag_names: Vec<&str> = optional_tex_inputs
+            .iter()
+            .map(|i| i.name.as_ref())
+            .collect();
         emit_params_struct(
             &mut out,
             params,
@@ -329,7 +334,12 @@ pub fn generate_standalone(spec: &StandaloneKernelSpec<'_>) -> Result<String, Co
     if multi_output {
         // Any output binding gives the canvas size (run() binds the live slot to
         // every binding, so they share dimensions); use the first.
-        writeln!(out, "    let dims = textureDimensions(dst_{});", tex_outputs[0].name).unwrap();
+        writeln!(
+            out,
+            "    let dims = textureDimensions(dst_{});",
+            tex_outputs[0].name
+        )
+        .unwrap();
     } else {
         out.push_str("    let dims = textureDimensions(dst);\n");
     }
@@ -425,7 +435,9 @@ pub fn generate_standalone(spec: &StandaloneKernelSpec<'_>) -> Result<String, Co
         }
         let f = wgsl_safe_field(p.name.as_ref());
         if p.ty == ParamType::Vec3 {
-            args.push(format!("vec3<f32>(params.{f}_x, params.{f}_y, params.{f}_z)"));
+            args.push(format!(
+                "vec3<f32>(params.{f}_x, params.{f}_y, params.{f}_z)"
+            ));
         } else if matches!(p.ty, ParamType::Vec4 | ParamType::Color) {
             args.push(format!(
                 "vec4<f32>(params.{f}_x, params.{f}_y, params.{f}_z, params.{f}_w)"
@@ -528,8 +540,11 @@ pub(super) fn generate_standalone_buffer_with_options(
     // Optional texture inputs get an injected `use_<name>: u32` flag (run() packs
     // `is_some()`); the body falls back to a default when 0. An unwired optional
     // texture binds a dummy 1×1 so the binding is always present (run()'s job).
-    let optional_textures: Vec<&NodeInput> =
-        texture_inputs.iter().filter(|i| !i.required).copied().collect();
+    let optional_textures: Vec<&NodeInput> = texture_inputs
+        .iter()
+        .filter(|i| !i.required)
+        .copied()
+        .collect();
     let array_outputs: Vec<&NodeOutput> = outputs
         .iter()
         .filter(|o| matches!(o.ty, PortType::Array(_)))
@@ -569,7 +584,12 @@ pub(super) fn generate_standalone_buffer_with_options(
     // Per-output (port name, element type), in declaration order.
     let out_infos: Vec<(&str, String)> = array_outputs
         .iter()
-        .map(|o| (o.name.as_ref(), buffer_element_type(specs_of(&o.ty), &mut structs)))
+        .map(|o| {
+            (
+                o.name.as_ref(),
+                buffer_element_type(specs_of(&o.ty), &mut structs),
+            )
+        })
         .collect();
     // Output array global name. Normally `buf_<port>`, but if the output port
     // shares a name with an input port (e.g. instance_position_jitter's
@@ -608,8 +628,7 @@ pub(super) fn generate_standalone_buffer_with_options(
     // param_wgsl_type (`expand_vectors: false`). The count drives the dispatch
     // guard (buffers have no `textureDimensions`) and is passed to the body as
     // `count`. ---
-    let use_flag_names: Vec<&str> =
-        optional_textures.iter().map(|i| i.name.as_ref()).collect();
+    let use_flag_names: Vec<&str> = optional_textures.iter().map(|i| i.name.as_ref()).collect();
     emit_params_struct(
         &mut out,
         params,
@@ -644,7 +663,12 @@ pub(super) fn generate_standalone_buffer_with_options(
         } else {
             "texture_2d<f32>"
         };
-        writeln!(out, "@group(0) @binding({binding}) var tex_{}: {tex_ty};", inp.name).unwrap();
+        writeln!(
+            out,
+            "@group(0) @binding({binding}) var tex_{}: {tex_ty};",
+            inp.name
+        )
+        .unwrap();
         binding += 1;
     }
     if !texture_inputs.is_empty() {
@@ -738,7 +762,13 @@ pub(super) fn generate_standalone_buffer_with_options(
             writeln!(out, "    body({});", args.join(", ")).unwrap();
         }
         [(name, _)] => {
-            writeln!(out, "    {}[idx] = body({});", out_global(name), args.join(", ")).unwrap();
+            writeln!(
+                out,
+                "    {}[idx] = body({});",
+                out_global(name),
+                args.join(", ")
+            )
+            .unwrap();
         }
         _ => {
             // The body returns one element per plain output; unpack into each.

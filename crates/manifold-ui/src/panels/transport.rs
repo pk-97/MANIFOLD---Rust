@@ -5,8 +5,8 @@
 //! dividers folded into the section gaps as cross-centred fixed cells. See the
 //! footer/header for the integration pattern and `docs/CHROME_API_DESIGN.md`.
 
-use crate::{TransportAction};
 use super::{Panel, PanelAction};
+use crate::TransportAction;
 use crate::chrome::{Align, ChromeHost, Pad, Reconcile, Sizing, View, components};
 use crate::color;
 use crate::input::UIEvent;
@@ -60,9 +60,9 @@ const KEY_BPM_FIELD: u64 = 1;
 const KEY_AUTO_DRAW: u64 = 2;
 const KEY_AUTO_RESTORE: u64 = 3;
 
-const AUTO_DRAW_TOOLTIP: &str = "Draw mode: drag across an automation lane to paint its curve freehand.";
-const AUTO_RESTORE_TOOLTIP: &str =
-    "Hands every parameter you have overridden by hand back to its automation lane. Lights up red while any override is held.";
+const AUTO_DRAW_TOOLTIP: &str =
+    "Draw mode: drag across an automation lane to paint its curve freehand.";
+const AUTO_RESTORE_TOOLTIP: &str = "Hands every parameter you have overridden by hand back to its automation lane. Lights up red while any override is held.";
 
 // ── Style helpers ──────────────────────────────────────────────────
 
@@ -156,8 +156,15 @@ impl TransportPanel {
     }
 
     fn apply_tooltips(&self, tree: &mut UITree) {
-        for (key, help) in [(KEY_AUTO_DRAW, AUTO_DRAW_TOOLTIP), (KEY_AUTO_RESTORE, AUTO_RESTORE_TOOLTIP)] {
-            if let Some(node) = self.host.node_id_for_key(key).and_then(|id| tree.get_node_mut(id)) {
+        for (key, help) in [
+            (KEY_AUTO_DRAW, AUTO_DRAW_TOOLTIP),
+            (KEY_AUTO_RESTORE, AUTO_RESTORE_TOOLTIP),
+        ] {
+            if let Some(node) = self
+                .host
+                .node_id_for_key(key)
+                .and_then(|id| tree.get_node_mut(id))
+            {
                 node.tooltip = Some(help.into());
             }
         }
@@ -332,13 +339,29 @@ impl TransportPanel {
             .fill_h()
             .main_align(Align::Center)
             .cross_align(Align::Center)
-            .child(View::panel().fixed(DIVIDER_W, divider_h).bg(color::DIVIDER_COLOR))
+            .child(
+                View::panel()
+                    .fixed(DIVIDER_W, divider_h)
+                    .bg(color::DIVIDER_COLOR),
+            )
     }
 
     fn left_group(&self) -> View {
-        let link_bg = if self.link_enabled { color::LINK_ORANGE } else { color::BUTTON_INACTIVE_C32 };
-        let clk_bg = if self.clk_enabled { color::MIDI_PURPLE } else { color::BUTTON_INACTIVE_C32 };
-        let sync_bg = if self.sync_enabled { color::SYNC_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+        let link_bg = if self.link_enabled {
+            color::LINK_ORANGE
+        } else {
+            color::BUTTON_INACTIVE_C32
+        };
+        let clk_bg = if self.clk_enabled {
+            color::MIDI_PURPLE
+        } else {
+            color::BUTTON_INACTIVE_C32
+        };
+        let sync_bg = if self.sync_enabled {
+            color::SYNC_ACTIVE
+        } else {
+            color::BUTTON_INACTIVE_C32
+        };
 
         View::row(ITEM_SPACING)
             .fill()
@@ -354,11 +377,24 @@ impl TransportPanel {
                     .inert(),
             )
             .child(self.section_break(SECTION_SPACER))
-            .child(Self::btn("LINK", LINK_BUTTON_W, button_style(link_bg), PanelAction::Transport(TransportAction::ToggleLink)))
+            .child(Self::btn(
+                "LINK",
+                LINK_BUTTON_W,
+                button_style(link_bg),
+                PanelAction::Transport(TransportAction::ToggleLink),
+            ))
             .child(Self::dot(self.link_dot_color))
-            .child(Self::status(self.link_status_text.as_str(), self.link_status_color))
+            .child(Self::status(
+                self.link_status_text.as_str(),
+                self.link_status_color,
+            ))
             .child(self.section_break(SECTION_SPACER))
-            .child(Self::btn("CLK", CLK_BUTTON_W, button_style(clk_bg), PanelAction::Transport(TransportAction::ToggleMidiClock)))
+            .child(Self::btn(
+                "CLK",
+                CLK_BUTTON_W,
+                button_style(clk_bg),
+                PanelAction::Transport(TransportAction::ToggleMidiClock),
+            ))
             .child(Self::btn(
                 self.clk_device_text.as_str(),
                 CLK_DEVICE_W,
@@ -366,17 +402,40 @@ impl TransportPanel {
                 PanelAction::Transport(TransportAction::SelectClkDevice),
             ))
             .child(Self::dot(self.clk_dot_color))
-            .child(Self::status(self.clk_status_text.as_str(), self.clk_status_color))
+            .child(Self::status(
+                self.clk_status_text.as_str(),
+                self.clk_status_color,
+            ))
             .child(self.section_break(SECTION_SPACER))
-            .child(Self::btn("SYNC", SYNC_BUTTON_W, button_style(sync_bg), PanelAction::Transport(TransportAction::ToggleSyncOutput)))
+            .child(Self::btn(
+                "SYNC",
+                SYNC_BUTTON_W,
+                button_style(sync_bg),
+                PanelAction::Transport(TransportAction::ToggleSyncOutput),
+            ))
             .child(Self::dot(self.sync_dot_color))
-            .child(Self::status(self.sync_status_text.as_str(), self.sync_status_color))
+            .child(Self::status(
+                self.sync_status_text.as_str(),
+                self.sync_status_color,
+            ))
     }
 
     fn center_group(&self) -> View {
-        let rec_c = if self.rec_active { color::RECORD_ACTIVE } else { color::RECORD_RED };
-        let reset_c = if self.bpm_reset_active { color::BPM_RESET_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
-        let clear_c = if self.bpm_clear_active { color::BPM_CLEAR_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+        let rec_c = if self.rec_active {
+            color::RECORD_ACTIVE
+        } else {
+            color::RECORD_RED
+        };
+        let reset_c = if self.bpm_reset_active {
+            color::BPM_RESET_ACTIVE
+        } else {
+            color::BUTTON_INACTIVE_C32
+        };
+        let clear_c = if self.bpm_clear_active {
+            color::BPM_CLEAR_ACTIVE
+        } else {
+            color::BUTTON_INACTIVE_C32
+        };
 
         // The BPM type-in field rides the same neutral chip surface as the buttons
         // beside it — one control look across the transport bar.
@@ -396,14 +455,32 @@ impl TransportPanel {
             .main_align(Align::Center)
             .cross_align(Align::Center)
             .child(
-                Self::btn(self.play_text.as_str(), PLAY_BUTTON_W, button_style(self.play_color), PanelAction::Transport(TransportAction::PlayPause))
-                    .name("transport.play"),
+                Self::btn(
+                    self.play_text.as_str(),
+                    PLAY_BUTTON_W,
+                    button_style(self.play_color),
+                    PanelAction::Transport(TransportAction::PlayPause),
+                )
+                .name("transport.play"),
             )
-            .child(Self::btn("STOP", STOP_BUTTON_W, button_style(self.stop_color), PanelAction::Transport(TransportAction::Stop)).name("transport.stop"))
             .child(
-                Self::btn("REC", REC_BUTTON_W, button_style(rec_c), PanelAction::Transport(TransportAction::Record))
-                    .disabled(!self.rec_enabled)
-                    .name("transport.record"),
+                Self::btn(
+                    "STOP",
+                    STOP_BUTTON_W,
+                    button_style(self.stop_color),
+                    PanelAction::Transport(TransportAction::Stop),
+                )
+                .name("transport.stop"),
+            )
+            .child(
+                Self::btn(
+                    "REC",
+                    REC_BUTTON_W,
+                    button_style(rec_c),
+                    PanelAction::Transport(TransportAction::Record),
+                )
+                .disabled(!self.rec_enabled)
+                .name("transport.record"),
             )
             .child(self.section_break(CENTER_SPACER))
             .child(
@@ -423,12 +500,22 @@ impl TransportPanel {
                     .key(KEY_BPM_FIELD),
             )
             .child(
-                Self::btn("R", BPM_RESET_W, button_style(reset_c), PanelAction::Transport(TransportAction::ResetBpm))
-                    .disabled(!self.bpm_reset_active),
+                Self::btn(
+                    "R",
+                    BPM_RESET_W,
+                    button_style(reset_c),
+                    PanelAction::Transport(TransportAction::ResetBpm),
+                )
+                .disabled(!self.bpm_reset_active),
             )
             .child(
-                Self::btn("CLR", BPM_CLEAR_W, button_style(clear_c), PanelAction::Transport(TransportAction::ClearBpm))
-                    .disabled(!self.bpm_clear_active),
+                Self::btn(
+                    "CLR",
+                    BPM_CLEAR_W,
+                    button_style(clear_c),
+                    PanelAction::Transport(TransportAction::ClearBpm),
+                )
+                .disabled(!self.bpm_clear_active),
             )
     }
 
@@ -445,19 +532,61 @@ impl TransportPanel {
     /// matches its neutral siblings (BACK/LANES), armed is amber, never red.
     /// See BUG-048, `docs/TIMELINE_UX_AUDIT_2026-07-07.md` item 2.5.
     fn automation_group(&self) -> View {
-        let arm_bg = if self.automation_armed { color::STATUS_WARNING } else { color::BUTTON_INACTIVE_C32 };
-        let back_bg = if self.automation_overridden { color::RECORD_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
-        let draw_bg = if self.automation_draw_mode { color::AUTOMATION_LINE_COLOR } else { color::BUTTON_INACTIVE_C32 };
-        let lanes_bg = if self.automation_mode_visible { color::AUTOMATION_LINE_COLOR } else { color::BUTTON_INACTIVE_C32 };
+        let arm_bg = if self.automation_armed {
+            color::STATUS_WARNING
+        } else {
+            color::BUTTON_INACTIVE_C32
+        };
+        let back_bg = if self.automation_overridden {
+            color::RECORD_ACTIVE
+        } else {
+            color::BUTTON_INACTIVE_C32
+        };
+        let draw_bg = if self.automation_draw_mode {
+            color::AUTOMATION_LINE_COLOR
+        } else {
+            color::BUTTON_INACTIVE_C32
+        };
+        let lanes_bg = if self.automation_mode_visible {
+            color::AUTOMATION_LINE_COLOR
+        } else {
+            color::BUTTON_INACTIVE_C32
+        };
 
         View::row(ITEM_SPACING)
             .fill()
             .main_align(Align::End)
             .cross_align(Align::Center)
-            .child(Self::btn("AUTOMATION", AUTO_LANES_BUTTON_W, button_style(lanes_bg), PanelAction::Transport(TransportAction::ToggleAutomationMode)))
-            .child(Self::btn("DRAW", AUTO_DRAW_BUTTON_W, button_style(draw_bg), PanelAction::Transport(TransportAction::ToggleAutomationDrawMode)).key(KEY_AUTO_DRAW))
-            .child(Self::btn("RESTORE ALL", AUTO_BACK_BUTTON_W, button_style(back_bg), PanelAction::Transport(TransportAction::AutomationBackToArrangement)).key(KEY_AUTO_RESTORE))
-            .child(Self::btn("ARM", AUTO_ARM_BUTTON_W, button_style(arm_bg), PanelAction::Transport(TransportAction::ToggleAutomationArm)))
+            .child(Self::btn(
+                "AUTOMATION",
+                AUTO_LANES_BUTTON_W,
+                button_style(lanes_bg),
+                PanelAction::Transport(TransportAction::ToggleAutomationMode),
+            ))
+            .child(
+                Self::btn(
+                    "DRAW",
+                    AUTO_DRAW_BUTTON_W,
+                    button_style(draw_bg),
+                    PanelAction::Transport(TransportAction::ToggleAutomationDrawMode),
+                )
+                .key(KEY_AUTO_DRAW),
+            )
+            .child(
+                Self::btn(
+                    "RESTORE ALL",
+                    AUTO_BACK_BUTTON_W,
+                    button_style(back_bg),
+                    PanelAction::Transport(TransportAction::AutomationBackToArrangement),
+                )
+                .key(KEY_AUTO_RESTORE),
+            )
+            .child(Self::btn(
+                "ARM",
+                AUTO_ARM_BUTTON_W,
+                button_style(arm_bg),
+                PanelAction::Transport(TransportAction::ToggleAutomationArm),
+            ))
     }
 
     fn view(&self) -> View {
@@ -469,7 +598,12 @@ impl TransportPanel {
             .fill()
             .bg(color::PANEL_BG_DARK)
             .border(color::BORDER, 1.0)
-            .pad(Pad { l: INSET, t: GROUP_Y_PAD, r: INSET, b: GROUP_Y_PAD })
+            .pad(Pad {
+                l: INSET,
+                t: GROUP_Y_PAD,
+                r: INSET,
+                b: GROUP_Y_PAD,
+            })
             .child(self.left_group())
             .child(self.center_group())
             .child(self.automation_group())
@@ -537,16 +671,36 @@ mod tests {
         got.sort_by(|a, b| a.1.x.partial_cmp(&b.1.x).unwrap());
         let cells: Vec<(&str, Rect)> = got.iter().map(|(t, r)| (t.as_str(), *r)).collect();
         let labels: Vec<&str> = cells.iter().map(|c| c.0).collect();
-        assert_eq!(labels, [
-            "SRC:INT", "LINK", "CLK", "Select...", "SYNC",
-            "PLAY", "STOP", "REC", "120.0", "R", "CLR",
-            "AUTOMATION", "DRAW", "RESTORE ALL", "ARM",
-        ]);
+        assert_eq!(
+            labels,
+            [
+                "SRC:INT",
+                "LINK",
+                "CLK",
+                "Select...",
+                "SYNC",
+                "PLAY",
+                "STOP",
+                "REC",
+                "120.0",
+                "R",
+                "CLR",
+                "AUTOMATION",
+                "DRAW",
+                "RESTORE ALL",
+                "ARM",
+            ]
+        );
         let bar = layout.transport_bar();
         assert_left_to_right(&cells, bar);
 
         let rect_of = |t: &str| cells.iter().find(|c| c.0 == t).unwrap().1;
-        assert_centred("transport cluster", rect_of("PLAY").x, rect_of("CLR").x_max(), bar);
+        assert_centred(
+            "transport cluster",
+            rect_of("PLAY").x,
+            rect_of("CLR").x_max(),
+            bar,
+        );
     }
 
     #[test]
@@ -561,7 +715,10 @@ mod tests {
                 .and_then(|n| n.tooltip.clone())
         };
         assert_eq!(help(&tree, "DRAW").as_deref(), Some(AUTO_DRAW_TOOLTIP));
-        assert_eq!(help(&tree, "RESTORE ALL").as_deref(), Some(AUTO_RESTORE_TOOLTIP));
+        assert_eq!(
+            help(&tree, "RESTORE ALL").as_deref(),
+            Some(AUTO_RESTORE_TOOLTIP)
+        );
         panel.set_automation_draw_mode(true);
         panel.relayout(&mut tree);
         assert_eq!(help(&tree, "DRAW").as_deref(), Some(AUTO_DRAW_TOOLTIP));
@@ -586,13 +743,29 @@ mod tests {
         panel.set_automation_mode_visible(true);
         panel.set_automation_draw_mode(true);
         panel.update(&mut tree);
-        assert_eq!(tree.structure_version(), sv, "automation state toggle must not rebuild");
-        assert_eq!(node(&tree, "ARM").style.bg_color, button_style(color::STATUS_WARNING).bg_color);
-        assert_eq!(node(&tree, "RESTORE ALL").style.bg_color, button_style(color::RECORD_ACTIVE).bg_color);
-        assert_eq!(node(&tree, "AUTOMATION").style.bg_color, button_style(color::AUTOMATION_LINE_COLOR).bg_color);
+        assert_eq!(
+            tree.structure_version(),
+            sv,
+            "automation state toggle must not rebuild"
+        );
+        assert_eq!(
+            node(&tree, "ARM").style.bg_color,
+            button_style(color::STATUS_WARNING).bg_color
+        );
+        assert_eq!(
+            node(&tree, "RESTORE ALL").style.bg_color,
+            button_style(color::RECORD_ACTIVE).bg_color
+        );
+        assert_eq!(
+            node(&tree, "AUTOMATION").style.bg_color,
+            button_style(color::AUTOMATION_LINE_COLOR).bg_color
+        );
 
         panel.set_automation_state(false, false);
-        assert_eq!(node(&tree, "DRAW").style.bg_color, button_style(color::AUTOMATION_LINE_COLOR).bg_color);
+        assert_eq!(
+            node(&tree, "DRAW").style.bg_color,
+            button_style(color::AUTOMATION_LINE_COLOR).bg_color
+        );
         panel.set_automation_mode_visible(false);
         panel.set_automation_draw_mode(false);
         panel.update(&mut tree);
@@ -648,7 +821,11 @@ mod tests {
             .find(|n| n.text.as_deref() == Some("R"))
             .unwrap()
             .id;
-        assert_eq!(tree.structure_version(), sv, "disable toggle must not rebuild");
+        assert_eq!(
+            tree.structure_version(),
+            sv,
+            "disable toggle must not rebuild"
+        );
         assert!(!tree.has_flag(r, UIFlags::DISABLED));
     }
 

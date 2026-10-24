@@ -24,7 +24,7 @@ use ahash::AHashMap;
 use manifold_core::effect_graph_def::EffectGraphDef;
 
 use crate::load::graph_loader::{BoundaryHandling, HandleScope, instantiate_def};
-use crate::{graph::Graph, persistence::PrimitiveRegistry, exec::execution_plan::compile};
+use crate::{exec::execution_plan::compile, graph::Graph, persistence::PrimitiveRegistry};
 
 /// The grid a texture output resolves to in the unfused plan.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -55,7 +55,8 @@ pub fn resolve_output_spaces(
         registry,
         HandleScope::Global,
         BoundaryHandling::Standalone,
-    &crate::scene::mesh_change::PreparedMeshRules::default())
+        &crate::scene::mesh_change::PreparedMeshRules::default(),
+    )
     .ok()?;
     let plan = compile(&graph).ok()?;
 

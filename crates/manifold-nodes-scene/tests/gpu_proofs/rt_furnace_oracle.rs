@@ -24,13 +24,13 @@
 
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
-use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::exec::effect_node::RtQuality;
-use manifold_node_engine::scene::camera::Camera;
-use manifold_node_engine::runtime::preset_context::PresetContext;
-use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::scene::camera::Camera;
 
 use manifold_nodes_scene::testkit::gpu_harness as harness;
 
@@ -183,7 +183,8 @@ fn render_readback_confirmed(json: &str, context: &str) -> (Vec<u8>, u32, u32) {
     // it so the temporal accumulator converges before the readback.
     let mut ready_frame: Option<i64> = None;
     for frame in 0..RT_WARMUP_BUDGET {
-        let dispatched = harness::capture_rt_channels(|| render_frame(&mut runtime, &target, frame));
+        let dispatched =
+            harness::capture_rt_channels(|| render_frame(&mut runtime, &target, frame));
         if !dispatched.is_empty() && ready_frame.is_none() {
             ready_frame = Some(frame);
         }
@@ -221,7 +222,10 @@ fn region_luma(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> f
             let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
             let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
             let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-            assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+            assert!(
+                r.is_finite() && g.is_finite() && b.is_finite(),
+                "non-finite pixel"
+            );
             sum += (0.2126 * r + 0.7152 * g + 0.0722 * b) as f64;
             n += 1;
         }
@@ -397,7 +401,11 @@ fn uniform_environment_white_surface_returns_the_environment_radiance() {
 /// dome alone. The raster (RT-off) leg of each is the unbiased convolution
 /// the traced path must track.
 fn firefly_sun_disc_scene_json(sun_on: bool, rt_on: bool) -> String {
-    let name = if rt_on { "RtFurnaceFireflySunDisc" } else { "RtFurnaceFireflySunDiscOff" };
+    let name = if rt_on {
+        "RtFurnaceFireflySunDisc"
+    } else {
+        "RtFurnaceFireflySunDiscOff"
+    };
     let sun = if sun_on { 10.0 } else { 0.0 };
     format!(
         r#"{{"version":2,"name":"{name}","nodes":[
@@ -472,7 +480,14 @@ fn firefly_sun_disc_scene_json(sun_on: bool, rt_on: bool) -> String {
 /// at 128² hits world y=0 within the 8x8 grid), so every pixel reads the
 /// traced env+GI estimate, never the sky's direct sun disk.
 #[allow(clippy::type_complexity)]
-fn region_stats(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> (f64, f64, f64, f64, f64) {
+fn region_stats(
+    bytes: &[u8],
+    w: u32,
+    h: u32,
+    cx: f32,
+    cy: f32,
+    radius: i32,
+) -> (f64, f64, f64, f64, f64) {
     let cxi = cx.round() as i32;
     let cyi = cy.round() as i32;
     let mut lumas = Vec::new();
@@ -488,7 +503,10 @@ fn region_stats(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> 
             let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
             let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
             let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-            assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+            assert!(
+                r.is_finite() && g.is_finite() && b.is_finite(),
+                "non-finite pixel"
+            );
             lumas.push((0.2126 * r + 0.7152 * g + 0.0722 * b) as f64);
         }
     }
@@ -723,7 +741,9 @@ fn no_env_rt_scene_keeps_ambient_values_linear_in_the_knob() {
         let (bytes, w, h) = render_readback_confirmed(&json, "I-ED1 ambient-only, RT enabled");
         let luma = region_luma(&bytes, w, h, center.px, center.py, RADIUS);
         let expected = ALBEDO * amb as f64 * SCALE; // ao ~ 1 open sky
-        eprintln!("I-ED1 ambient knob={amb}: measured={luma:.6} expected(albedo*amb*SCALE)={expected:.6}");
+        eprintln!(
+            "I-ED1 ambient knob={amb}: measured={luma:.6} expected(albedo*amb*SCALE)={expected:.6}"
+        );
         readings.push((amb, luma));
     }
 
@@ -875,7 +895,8 @@ fn furnace_wall_corner_scene_json(ground_ambient: f32) -> String {
 #[test]
 fn traced_occlusion_darkens_the_shaded_region_relative_to_the_open_plane() {
     let json = furnace_wall_corner_scene_json(0.0);
-    let (bytes, w, h) = render_readback_confirmed(&json, "furnace wall-corner scene, ambient=0.0, RT enabled");
+    let (bytes, w, h) =
+        render_readback_confirmed(&json, "furnace wall-corner scene, ambient=0.0, RT enabled");
 
     write_png(&bytes, w, h, "/tmp/rt_furnace_wall_corner.png");
 
@@ -930,10 +951,14 @@ fn traced_occlusion_darkens_the_shaded_region_relative_to_the_open_plane() {
 fn diagnostic_shaded_region_luma_with_ambient_zero_vs_ambient_one() {
     let zero_json = furnace_wall_corner_scene_json(0.0);
     let one_json = furnace_wall_corner_scene_json(1.0);
-    let (zero_bytes, w, h) =
-        render_readback_confirmed(&zero_json, "furnace wall-corner scene, ambient=0.0, RT enabled");
-    let (one_bytes, _, _) =
-        render_readback_confirmed(&one_json, "furnace wall-corner scene, ambient=1.0, RT enabled");
+    let (zero_bytes, w, h) = render_readback_confirmed(
+        &zero_json,
+        "furnace wall-corner scene, ambient=0.0, RT enabled",
+    );
+    let (one_bytes, _, _) = render_readback_confirmed(
+        &one_json,
+        "furnace wall-corner scene, ambient=1.0, RT enabled",
+    );
 
     let cam = Camera::orbit_perspective(ORBIT, TILT, DISTANCE, FOV_Y, 0.0, 0.0, NEAR, FAR);
     let corner_px = cam

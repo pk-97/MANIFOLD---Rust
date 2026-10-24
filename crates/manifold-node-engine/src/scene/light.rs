@@ -339,12 +339,15 @@ impl Light {
                 let base = match self.falloff {
                     LightFalloff::Legacy => {
                         let r_sq = self.range * self.range;
-                        if r_sq < 1e-10 { 0.0 } else { 1.0 / (1.0 + d_sq / r_sq) }
+                        if r_sq < 1e-10 {
+                            0.0
+                        } else {
+                            1.0 / (1.0 + d_sq / r_sq)
+                        }
                     }
                     LightFalloff::InverseSquare => {
                         if self.range > 0.0 {
-                            (1.0 - (distance / self.range).powi(4)).max(0.0)
-                                / d_sq.max(1e-6)
+                            (1.0 - (distance / self.range).powi(4)).max(0.0) / d_sq.max(1e-6)
                         } else {
                             1.0 / d_sq.max(1e-6)
                         }
@@ -364,7 +367,9 @@ impl Light {
         let c = self.dir[0] * -l[0] + self.dir[1] * -l[1] + self.dir[2] * -l[2];
         let inner = self.inner_cone_angle.cos();
         let outer = self.outer_cone_angle.cos();
-        ((c - outer) / (inner - outer).max(0.001)).clamp(0.0, 1.0).powi(2)
+        ((c - outer) / (inner - outer).max(0.001))
+            .clamp(0.0, 1.0)
+            .powi(2)
     }
 
     /// Light-space view matrix for the shadow pass. Built via right-handed
@@ -401,26 +406,26 @@ impl Light {
                 let d = dist3(self.pos, self.aim);
                 let near = (d - self.range).max(0.05);
                 let far = d + self.range;
-                ortho_rh(
-                    -self.range,
-                    self.range,
-                    -self.range,
-                    self.range,
-                    near,
-                    far,
-                )
+                ortho_rh(-self.range, self.range, -self.range, self.range, near, far)
             }
             LightMode::Point | LightMode::Spot => {
-                let physical_infinite = self.falloff == LightFalloff::InverseSquare && self.range <= 0.0;
+                let physical_infinite =
+                    self.falloff == LightFalloff::InverseSquare && self.range <= 0.0;
                 let extent = if physical_infinite {
                     dist3(self.pos, self.aim).max(1.0)
                 } else {
                     self.range.max(0.01)
                 };
                 let near = (extent * 0.05).clamp(0.0001, extent * 0.5);
-                let far = if physical_infinite { extent } else { extent * 4.0 };
+                let far = if physical_infinite {
+                    extent
+                } else {
+                    extent * 4.0
+                };
                 let fov = match self.mode {
-                    LightMode::Spot => (self.outer_cone_angle * 2.0).clamp(0.01, std::f32::consts::PI - 0.0001),
+                    LightMode::Spot => {
+                        (self.outer_cone_angle * 2.0).clamp(0.01, std::f32::consts::PI - 0.0001)
+                    }
                     _ => std::f32::consts::FRAC_PI_2,
                 };
                 perspective_rh(fov, 1.0, near, far)
@@ -627,13 +632,25 @@ mod tests {
         );
         bounded.falloff = LightFalloff::InverseSquare;
         // max(1 - (d/r)^4, 0) / d².
-        assert!(approx_eq(bounded.attenuation_at([1.0, 0.0, 0.0]), 255.0 / 256.0, 1e-6));
-        assert!(approx_eq(bounded.attenuation_at([2.0, 0.0, 0.0]), 15.0 / 64.0, 1e-6));
+        assert!(approx_eq(
+            bounded.attenuation_at([1.0, 0.0, 0.0]),
+            255.0 / 256.0,
+            1e-6
+        ));
+        assert!(approx_eq(
+            bounded.attenuation_at([2.0, 0.0, 0.0]),
+            15.0 / 64.0,
+            1e-6
+        ));
         assert_eq!(bounded.attenuation_at([4.0, 0.0, 0.0]), 0.0);
 
         let mut infinite = bounded;
         infinite.range = 0.0;
-        assert!(approx_eq(infinite.attenuation_at([2.0, 0.0, 0.0]), 0.25, 1e-6));
+        assert!(approx_eq(
+            infinite.attenuation_at([2.0, 0.0, 0.0]),
+            0.25,
+            1e-6
+        ));
     }
 
     #[test]
@@ -677,14 +694,26 @@ mod tests {
         let packed = light.packed(3.0);
         assert_eq!(packed.len(), 4);
         assert_eq!(packed[0][3], 2.0);
-        assert!(approx_vec3([packed[0][0], packed[0][1], packed[0][2]], light.pos, 1e-6));
-        assert!(approx_vec3([packed[1][0], packed[1][1], packed[1][2]], [0.4, 0.6, 0.8], 1e-6));
+        assert!(approx_vec3(
+            [packed[0][0], packed[0][1], packed[0][2]],
+            light.pos,
+            1e-6
+        ));
+        assert!(approx_vec3(
+            [packed[1][0], packed[1][1], packed[1][2]],
+            [0.4, 0.6, 0.8],
+            1e-6
+        ));
         assert_eq!(packed[1][3], 3.0);
         assert_eq!(packed[2][0], 6.0);
         assert_eq!(packed[2][1], 1.0);
         assert!(approx_eq(packed[2][2], 0.1f32.cos(), 1e-6));
         assert!(approx_eq(packed[2][3], 0.5f32.cos(), 1e-6));
-        assert!(approx_vec3([packed[3][0], packed[3][1], packed[3][2]], light.dir, 1e-6));
+        assert!(approx_vec3(
+            [packed[3][0], packed[3][1], packed[3][2]],
+            light.dir,
+            1e-6
+        ));
     }
 
     #[test]
@@ -750,7 +779,10 @@ mod tests {
             2048,
         );
         let p = l.shadow_proj();
-        assert!((p[2][3] + 1.0).abs() < 1e-6, "perspective m[2][3] should be -1");
+        assert!(
+            (p[2][3] + 1.0).abs() < 1e-6,
+            "perspective m[2][3] should be -1"
+        );
     }
 
     #[test]
@@ -770,9 +802,21 @@ mod tests {
             2048,
         );
         let clip = transform_point(l.shadow_view_proj(), l.aim);
-        assert!((clip[3] - 1.0).abs() < 1e-4, "ortho w should be 1, got {}", clip[3]);
-        assert!((clip[0] / clip[3]).abs() < 1e-3, "aim not centred in x: {}", clip[0]);
-        assert!((clip[1] / clip[3]).abs() < 1e-3, "aim not centred in y: {}", clip[1]);
+        assert!(
+            (clip[3] - 1.0).abs() < 1e-4,
+            "ortho w should be 1, got {}",
+            clip[3]
+        );
+        assert!(
+            (clip[0] / clip[3]).abs() < 1e-3,
+            "aim not centred in x: {}",
+            clip[0]
+        );
+        assert!(
+            (clip[1] / clip[3]).abs() < 1e-3,
+            "aim not centred in y: {}",
+            clip[1]
+        );
     }
 
     #[test]

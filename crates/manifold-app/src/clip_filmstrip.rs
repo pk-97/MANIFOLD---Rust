@@ -145,7 +145,11 @@ pub struct ClipStrips {
 
 impl ClipStrips {
     pub fn refresh(&mut self, layout: &AtlasLayout) {
-        if self.layout.as_ref().is_some_and(|l| std::sync::Arc::ptr_eq(l, layout)) {
+        if self
+            .layout
+            .as_ref()
+            .is_some_and(|l| std::sync::Arc::ptr_eq(l, layout))
+        {
             return;
         }
         self.strips.clear();
@@ -171,7 +175,8 @@ mod tests {
     #[test]
     fn clip_strips_index_once_per_layout_and_last_cell_wins() {
         let a = manifold_core::ClipId::new("a");
-        let layout: AtlasLayout = vec![(a.clone(), 0, 5), (a.clone(), 1, 6), (a.clone(), 0, 7)].into();
+        let layout: AtlasLayout =
+            vec![(a.clone(), 0, 5), (a.clone(), 1, 6), (a.clone(), 0, 7)].into();
         let mut strips = ClipStrips::default();
         strips.refresh(&layout);
         assert_eq!(strips.get(&a), Some(&[(0, 7), (1, 6)][..]));

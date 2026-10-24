@@ -8,8 +8,8 @@ use smallvec::SmallVec;
 
 use crate::interaction::ForceSample;
 use crate::{
-    FalloffCurve, PhysicsError, RadialField, SampledField, TurbulenceField, UniformField, VectorField,
-    VortexField,
+    FalloffCurve, PhysicsError, RadialField, SampledField, TurbulenceField, UniformField,
+    VectorField, VortexField,
 };
 
 mod far;
@@ -41,7 +41,9 @@ enum Operation {
     /// Nothing, where a field was scaled to zero or its air felt at zero.
     /// `air` remembers the field carried air, so a rule about air (multiply
     /// refuses it) holds whether a force is switched on or not.
-    Zero { air: bool },
+    Zero {
+        air: bool,
+    },
 }
 
 /// A dimensionless spatial vector expression. Strength belongs to the
@@ -67,7 +69,10 @@ impl FieldValue {
     fn leaf(operation: Operation) -> Self {
         let mut operations = Program::new();
         operations.push(operation);
-        Self { operations, depth: 1 }
+        Self {
+            operations,
+            depth: 1,
+        }
     }
 
     pub fn uniform(vector: [f32; 3]) -> Result<Self, PhysicsError> {
@@ -113,7 +118,8 @@ impl FieldValue {
     }
 
     pub fn turbulence(size: f32, offset: [f32; 3], seed: u32) -> Result<Self, PhysicsError> {
-        TurbulenceField::new(size, offset, seed).map(|field| Self::leaf(Operation::Turbulence(field)))
+        TurbulenceField::new(size, offset, seed)
+            .map(|field| Self::leaf(Operation::Turbulence(field)))
     }
 
     pub fn sum(&self, other: &Self) -> Result<Self, PhysicsError> {
@@ -159,7 +165,9 @@ impl FieldValue {
             ));
         }
         if strength == 0.0 {
-            return Ok(Self::leaf(Operation::Zero { air: self.carries_air() }));
+            return Ok(Self::leaf(Operation::Zero {
+                air: self.carries_air(),
+            }));
         }
         self.push_unary(Operation::Scale(strength))
     }
@@ -185,7 +193,9 @@ impl FieldValue {
     /// lattice.
     pub fn with_air_drag(&self, air_drag: f32) -> Result<Self, PhysicsError> {
         if !air_drag.is_finite() || air_drag < 0.0 {
-            return Err(PhysicsError::InvalidInput("air drag must be finite and non-negative"));
+            return Err(PhysicsError::InvalidInput(
+                "air drag must be finite and non-negative",
+            ));
         }
         if !self.carries_air() {
             return Ok(self.clone());
@@ -209,7 +219,9 @@ impl FieldValue {
         air_drag: f32,
     ) -> Result<Option<Self>, PhysicsError> {
         if !air_resistance.is_finite() || air_resistance < 0.0 {
-            return Err(PhysicsError::InvalidInput("air resistance must be finite and non-negative"));
+            return Err(PhysicsError::InvalidInput(
+                "air resistance must be finite and non-negative",
+            ));
         }
         let field = if air_resistance == 0.0 {
             forces.cloned()
@@ -421,11 +433,15 @@ mod tests {
 
     #[test]
     fn field_leaves_carry_the_scales_applied_to_them() {
-        let wind = FieldValue::uniform([1.0, 0.0, 0.0]).unwrap().scaled(-2.0).unwrap();
+        let wind = FieldValue::uniform([1.0, 0.0, 0.0])
+            .unwrap()
+            .scaled(-2.0)
+            .unwrap();
         let burst = FieldValue::radial([0.0, 1.0, 0.0], 0.5, 1.0).unwrap();
         let field = wind.sum(&burst).unwrap().scaled(3.0).unwrap();
         let mut seen = Vec::new();
-        field.for_each_leaf(|leaf, scale| seen.push((matches!(leaf, FieldLeaf::Uniform(_)), scale)));
+        field
+            .for_each_leaf(|leaf, scale| seen.push((matches!(leaf, FieldLeaf::Uniform(_)), scale)));
         assert_eq!(seen, [(true, -6.0), (false, 3.0)]);
     }
 
@@ -452,10 +468,16 @@ mod tests {
         assert!(FieldValue::vortex([0.0; 3], [0.0; 3], 1.0, 1.0).is_err());
         let mut field = FieldValue::uniform([1.0; 3]).unwrap();
         assert!(field.scaled(f32::INFINITY).is_err());
-        assert_eq!(field.sample([0.0; 3]), [1.0; 3], "a refused edit leaves the field as it was");
+        assert_eq!(
+            field.sample([0.0; 3]),
+            [1.0; 3],
+            "a refused edit leaves the field as it was"
+        );
         // Many forces summed (ruling 23: no fixed count caps forces).
         for _ in 0..40 {
-            field = field.sum(&FieldValue::uniform([1.0; 3]).unwrap().scaled(0.5).unwrap()).unwrap();
+            field = field
+                .sum(&FieldValue::uniform([1.0; 3]).unwrap().scaled(0.5).unwrap())
+                .unwrap();
         }
         assert_eq!(field.sample([0.0; 3]), [21.0; 3]);
     }

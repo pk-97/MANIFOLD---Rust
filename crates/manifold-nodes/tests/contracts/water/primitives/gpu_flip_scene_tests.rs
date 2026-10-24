@@ -14,18 +14,23 @@ use manifold_water_gpu_flip::primitives::gpu_flip_volume::VolumeDrift;
 #[cfg(test)]
 use manifold_water_liquid::primitives::liquid_stats::SOLVER_WORDS;
 
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::particles::FluidParticle;
+use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;
+use manifold_node_engine::{
+    exec::effect_node::FrameTime, exec::execution::Executor, exec::execution_plan::ExecutionPlan,
+    exec::execution_plan::compile, exec::metal_backend::MetalBackend, graph::Graph,
+    load::graph_loader::pre_allocate_resources, persistence::EffectGraphDefExt,
+    persistence::PrimitiveRegistry, state_store::StateStore,
+};
 use manifold_nodes_water::presets::gpu_flip::{FACE_NODES, STEP_NODE, WaterScene, water_def};
-use manifold_water_liquid::grid::face_len;
 #[cfg(test)]
 use manifold_water_gpu_flip::primitives::gpu_flip_volume::volume_and_area;
 #[cfg(test)]
-use manifold_water_liquid::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
-use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_node_engine::particles::FluidParticle;
-#[cfg(test)]
 use manifold_water_liquid::fluid_particles::FaceSample;
-use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;
-use manifold_node_engine::{persistence::EffectGraphDefExt, exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, persistence::PrimitiveRegistry, state_store::StateStore, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
+use manifold_water_liquid::grid::face_len;
+#[cfg(test)]
+use manifold_water_liquid::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 
 #[cfg(test)]
 const G: f64 = 9.81;
@@ -39,7 +44,10 @@ struct FrameGpuTime {
 
 impl FrameGpuTime {
     fn new() -> Self {
-        use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        };
         let span = Arc::new([AtomicU64::new(u64::MAX), AtomicU64::new(0)]);
         let tapped = Arc::clone(&span);
         let tap = Arc::new(move |start: f64, end: f64| {
@@ -66,15 +74,16 @@ impl FrameGpuTime {
     }
 }
 
-
-
-
-
 /// The node whose id ends with `name`: the flattened surface group's nodes
 /// carry the group's path before their own id.
-fn node_ending(graph: &Graph, name: &str) -> manifold_node_engine::exec::effect_node::NodeInstanceId {
+fn node_ending(
+    graph: &Graph,
+    name: &str,
+) -> manifold_node_engine::exec::effect_node::NodeInstanceId {
     let mut found = graph.nodes().filter(|n| n.node_id.as_str().ends_with(name));
-    let node = found.next().unwrap_or_else(|| panic!("no node ending {name}"));
+    let node = found
+        .next()
+        .unwrap_or_else(|| panic!("no node ending {name}"));
     assert!(found.next().is_none(), "two nodes end {name}");
     node.id
 }
@@ -110,10 +119,18 @@ impl Run {
     pub(super) fn posed(scene: WaterScene, params: &[(&str, &str, f64)]) -> Self {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
-        let mut graph = water_def(scene).into_graph(&registry, &Default::default()).expect("water def builds");
+        let mut graph = water_def(scene)
+            .into_graph(&registry, &Default::default())
+            .expect("water def builds");
         for &(node, name, value) in params {
             let node = node_named(&graph, node);
-            graph.set_param(node, name, manifold_node_engine::parameters::ParamValue::Float(value as f32)).expect(name);
+            graph
+                .set_param(
+                    node,
+                    name,
+                    manifold_node_engine::parameters::ParamValue::Float(value as f32),
+                )
+                .expect(name);
         }
         Self::with_graph(scene, graph)
     }
@@ -122,7 +139,12 @@ impl Run {
         // Every array read after a frame keeps its own storage.
         let mut read = vec![(node_named(&graph, "state"), "out")];
         let step = node_named(&graph, STEP_NODE);
-        read.extend([(step, "out"), (step, "faces"), (step, "capped"), (node_named(&graph, "stats"), "stats_out")]);
+        read.extend([
+            (step, "out"),
+            (step, "faces"),
+            (step, "capped"),
+            (node_named(&graph, "stats"), "stats_out"),
+        ]);
         if scene.surface {
             read.push((node_ending(&graph, "liquid_offsets"), "extent"));
             read.push((node_ending(&graph, "liquid_mesh"), "vertices"));
@@ -133,14 +155,28 @@ impl Run {
             read.extend(FACE_NODES.map(|name| (node_named(&graph, name), "out")));
         }
         for &(node, port) in &read {
-            graph.add_external_output(node, port).expect("a read port exists");
+            graph
+                .add_external_output(node, port)
+                .expect("a read port exists");
         }
         let plan = compile(&graph).expect("water def compiles");
         let device = manifold_gpu::testkit::test_device();
         let mut backend = MetalBackend::new(device.arc(), 64, 64, GpuTextureFormat::Rgba16Float);
         pre_allocate_resources(&mut graph, &plan, &device, &mut backend).expect("pre-allocate");
         let exec = Executor::new(Box::new(backend));
-        let mut run = Self { device, graph, plan, exec, state: StateStore::new(), scene, frames: 0, fps: 60.0, entering: Vec::new(), gpu_time: None, seeded: 0 };
+        let mut run = Self {
+            device,
+            graph,
+            plan,
+            exec,
+            state: StateStore::new(),
+            scene,
+            frames: 0,
+            fps: 60.0,
+            entering: Vec::new(),
+            gpu_time: None,
+            seeded: 0,
+        };
         // The domain's clock restarts on its first frame and ticks none: the
         // state takes the fill. Every later frame is one tick.
         run.frame();
@@ -154,25 +190,39 @@ impl Run {
     #[cfg(test)]
     pub(super) fn surface(&self) -> Vec<[[f32; 3]; 3]> {
         // The running total's `extent` starts with the grand total: triangles.
-        let extent: Vec<u32> = self.read_at(node_ending(&self.graph, "liquid_offsets"), "extent", 1);
+        let extent: Vec<u32> =
+            self.read_at(node_ending(&self.graph, "liquid_offsets"), "extent", 1);
         let mesh = node_ending(&self.graph, "liquid_mesh");
         let count = 3 * extent[0] as usize;
-        let indexed = self.graph.wires_into(mesh).any(|wire| wire.to.1 == "edge_scan");
+        let indexed = self
+            .graph
+            .wires_into(mesh)
+            .any(|wire| wire.to.1 == "edge_scan");
         let indices: Vec<u32> = if indexed {
             self.read_at(mesh, "indices", count)
         } else {
             (0..count as u32).collect()
         };
         let vertex_count = indices.iter().max().map_or(0, |&index| index as usize + 1);
-        let vertices: Vec<manifold_node_engine::mesh::MeshVertex> =
-            self.read_at(node_ending(&self.graph, "liquid_normals"), "out", vertex_count);
-        indices.chunks_exact(3).map(|triangle| [0, 1, 2].map(|i| vertices[triangle[i] as usize].position)).collect()
+        let vertices: Vec<manifold_node_engine::mesh::MeshVertex> = self.read_at(
+            node_ending(&self.graph, "liquid_normals"),
+            "out",
+            vertex_count,
+        );
+        indices
+            .chunks_exact(3)
+            .map(|triangle| [0, 1, 2].map(|i| vertices[triangle[i] as usize].position))
+            .collect()
     }
 
     /// The volume the surface mesh holds in the tank and its free surface's area.
     #[cfg(test)]
     pub(super) fn surface_measure(&self) -> (f64, f64) {
-        volume_and_area(self.surface().into_iter(), self.scene.min(), self.scene.size)
+        volume_and_area(
+            self.surface().into_iter(),
+            self.scene.min(),
+            self.scene.size,
+        )
     }
 
     /// The particles' own volume: `REST_PER_CELL` fill a cell.
@@ -209,7 +259,14 @@ impl Run {
                 frame_count: self.frames,
             };
             let start = std::time::Instant::now();
-            self.exec.execute_frame_with_state(&mut self.graph, &self.plan, time, &mut gpu, &mut self.state, 0);
+            self.exec.execute_frame_with_state(
+                &mut self.graph,
+                &self.plan,
+                time,
+                &mut gpu,
+                &mut self.state,
+                0,
+            );
             cpu_ms = start.elapsed().as_secs_f64() * 1000.0;
             self.frames += 1;
         }
@@ -219,8 +276,20 @@ impl Run {
             enc.commit_and_continue(&self.device);
         }
         let profile = enc.commit_and_wait_profiled(&self.device);
-        assert_eq!(profile.failed_command_buffers, 0, "frame {} failed on the GPU", self.frames - 1);
-        let gpu_ms = if timed { self.gpu_time.as_ref().expect("frame timing enabled").millis() } else { profile.total_ms };
+        assert_eq!(
+            profile.failed_command_buffers,
+            0,
+            "frame {} failed on the GPU",
+            self.frames - 1
+        );
+        let gpu_ms = if timed {
+            self.gpu_time
+                .as_ref()
+                .expect("frame timing enabled")
+                .millis()
+        } else {
+            profile.total_ms
+        };
         (gpu_ms, cpu_ms)
     }
 
@@ -228,13 +297,23 @@ impl Run {
         self.read_at(node_named(&self.graph, node), port, len)
     }
 
-    fn read_at<T: bytemuck::Pod>(&self, node: manifold_node_engine::exec::effect_node::NodeInstanceId, port: &str, len: usize) -> Vec<T> {
+    fn read_at<T: bytemuck::Pod>(
+        &self,
+        node: manifold_node_engine::exec::effect_node::NodeInstanceId,
+        port: &str,
+        len: usize,
+    ) -> Vec<T> {
         let resource = output_of(&self.plan, node, port);
         let buffer = self
             .exec
             .host_array_buffer(&self.graph, &self.plan, resource)
-            .unwrap_or_else(|| panic!("{node:?}.{port} is not declared as a host read in with_graph"));
-        assert!(buffer.size as usize >= len * std::mem::size_of::<T>(), "{node:?}.{port} is shorter than {len} records");
+            .unwrap_or_else(|| {
+                panic!("{node:?}.{port} is not declared as a host read in with_graph")
+            });
+        assert!(
+            buffer.size as usize >= len * std::mem::size_of::<T>(),
+            "{node:?}.{port} is shorter than {len} records"
+        );
         let ptr = buffer.mapped_ptr().expect("shared storage");
         // SAFETY: the frame completed and the buffer holds `len` records.
         unsafe { std::slice::from_raw_parts(ptr.cast::<T>().cast_const(), len) }.to_vec()
@@ -256,8 +335,20 @@ impl Run {
     #[cfg(test)]
     pub(super) fn set_gravity(&mut self, x: f64, y: f64) {
         let domain = node_named(&self.graph, "domain");
-        self.graph.set_param(domain, "gravity_x", manifold_node_engine::parameters::ParamValue::Float(x as f32)).expect("gravity_x");
-        self.graph.set_param(domain, "gravity", manifold_node_engine::parameters::ParamValue::Float(y as f32)).expect("gravity");
+        self.graph
+            .set_param(
+                domain,
+                "gravity_x",
+                manifold_node_engine::parameters::ParamValue::Float(x as f32),
+            )
+            .expect("gravity_x");
+        self.graph
+            .set_param(
+                domain,
+                "gravity",
+                manifold_node_engine::parameters::ParamValue::Float(y as f32),
+            )
+            .expect("gravity");
     }
 
     /// Switch the executor's encode replay; the fill frame already ran
@@ -281,14 +372,21 @@ impl Run {
     /// snap makes an exact touch water). Bodies are not counted. A later
     /// substep's start stays inside the node, so this reads Steps 1 only.
     pub fn water(&self) -> Vec<f32> {
-        assert_eq!(self.scene.steps, 1, "a substep's water mask is read at Steps 1");
+        assert_eq!(
+            self.scene.steps, 1,
+            "a substep's water mask is read at Steps 1"
+        );
         self.water_of(&self.entering)
     }
 
     /// The water cells, 1 or 0, of `particles`: φ < 0 as the step builds it.
     pub(super) fn water_of(&self, particles: &[FluidParticle]) -> Vec<f32> {
         let started = particles;
-        let (n, h, min) = (self.n(), self.scene.cell_size(), self.solver_grid().min().map(f64::from));
+        let (n, h, min) = (
+            self.n(),
+            self.scene.cell_size(),
+            self.solver_grid().min().map(f64::from),
+        );
         let radius = 0.866_025_4 * h;
         let mut water = vec![0.0; n.pow(3)];
         for p in started.iter().filter(|p| p.position_radius[3] > 0.0) {
@@ -301,9 +399,12 @@ impl Run {
                         if cell.iter().any(|&i| i < 0 || i >= n as i64) {
                             continue;
                         }
-                        let d2: f64 = (0..3).map(|a| (min[a] + (cell[a] as f64 + 0.5) * h - q[a]).powi(2)).sum();
+                        let d2: f64 = (0..3)
+                            .map(|a| (min[a] + (cell[a] as f64 + 0.5) * h - q[a]).powi(2))
+                            .sum();
                         if d2 <= radius * radius {
-                            water[cell[0] as usize + n * (cell[1] as usize + n * cell[2] as usize)] = 1.0;
+                            water[cell[0] as usize
+                                + n * (cell[1] as usize + n * cell[2] as usize)] = 1.0;
                         }
                     }
                 }
@@ -315,7 +416,11 @@ impl Run {
     /// The last tick's node.liquid_stats words.
     #[cfg(test)]
     pub(super) fn liquid_stats(&self) -> LiquidTickStats {
-        LiquidTickStats::from_words(&self.read::<u32>("stats", "stats_out", LIQUID_STATS_WORDS as usize))
+        LiquidTickStats::from_words(&self.read::<u32>(
+            "stats",
+            "stats_out",
+            LIQUID_STATS_WORDS as usize,
+        ))
     }
 
     /// The last tick's solver words: pressure and density iterations over
@@ -338,7 +443,9 @@ impl Run {
     /// with `faces`).
     pub fn face_grid(&self) -> [Vec<f32>; 3] {
         let cells = [self.n() as u32; 3];
-        std::array::from_fn(|axis| self.read(FACE_NODES[axis], "out", face_len(cells, axis) as usize))
+        std::array::from_fn(|axis| {
+            self.read(FACE_NODES[axis], "out", face_len(cells, axis) as usize)
+        })
     }
 
     /// Water cells in the step's lattice: the size of its pressure solve.
@@ -359,15 +466,28 @@ pub(super) struct ParticleStats {
 }
 
 pub(super) fn particle_stats(particles: &[FluidParticle]) -> ParticleStats {
-    let mut stats = ParticleStats { live: 0, bad: 0, fastest: 0.0, mean_velocity: [0.0; 3], mean_height: 0.0 };
+    let mut stats = ParticleStats {
+        live: 0,
+        bad: 0,
+        fastest: 0.0,
+        mean_velocity: [0.0; 3],
+        mean_height: 0.0,
+    };
     for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
         stats.live += 1;
-        if !(p.position_radius.iter().chain(&p.velocity).all(|v| v.is_finite())) {
+        if !(p
+            .position_radius
+            .iter()
+            .chain(&p.velocity)
+            .all(|v| v.is_finite()))
+        {
             stats.bad += 1;
             continue;
         }
         let v = p.velocity.map(f64::from);
-        stats.fastest = stats.fastest.max(v.iter().map(|c| c * c).sum::<f64>().sqrt());
+        stats.fastest = stats
+            .fastest
+            .max(v.iter().map(|c| c * c).sum::<f64>().sqrt());
         for (sum, component) in stats.mean_velocity.iter_mut().zip(v) {
             *sum += component;
         }
@@ -395,7 +515,8 @@ pub(super) fn divergence(faces: &[FaceSample], water: &[f32], n: usize, h: f64) 
                     continue;
                 }
                 let at = |p: usize, a: usize| f64::from(faces[p].velocity[a]);
-                let d = (at(pad(i + 1, j, k), 0) - at(pad(i, j, k), 0) + at(pad(i, j + 1, k), 1) - at(pad(i, j, k), 1)
+                let d = (at(pad(i + 1, j, k), 0) - at(pad(i, j, k), 0) + at(pad(i, j + 1, k), 1)
+                    - at(pad(i, j, k), 1)
                     + at(pad(i, j, k + 1), 2)
                     - at(pad(i, j, k), 2))
                     / h;
@@ -430,9 +551,23 @@ fn gpu_flip_free_fall_keeps_g() {
         stats.mean_height,
         run.water_cells()
     );
-    assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0), "every particle lives and stays finite");
-    assert!((stats.mean_velocity[1] - want).abs() <= 0.01 * want.abs(), "fall speed {} against {want}", stats.mean_velocity[1]);
-    assert!(stats.mean_velocity[0].abs().max(stats.mean_velocity[2].abs()) <= 0.01 * want.abs(), "no sideways drift");
+    assert_eq!(
+        (stats.live, stats.bad),
+        (scene.particles() as usize, 0),
+        "every particle lives and stays finite"
+    );
+    assert!(
+        (stats.mean_velocity[1] - want).abs() <= 0.01 * want.abs(),
+        "fall speed {} against {want}",
+        stats.mean_velocity[1]
+    );
+    assert!(
+        stats.mean_velocity[0]
+            .abs()
+            .max(stats.mean_velocity[2].abs())
+            <= 0.01 * want.abs(),
+        "no sideways drift"
+    );
 }
 
 /// The tick hands the state its last step's extended faces, bit for bit, and
@@ -449,17 +584,38 @@ fn gpu_flip_face_grid_is_the_last_ticks_faces() {
         let records = (run.n() + 1).pow(3);
         let state: Vec<FaceSample> = run.read("state", "faces", records);
         let last = run.faces();
-        let differ = state.iter().zip(&last).filter(|(a, b)| bytemuck::bytes_of(*a) != bytemuck::bytes_of(*b)).count();
-        let moving = state.iter().filter(|s| s.velocity.iter().any(|v| *v != 0.0)).count();
+        let differ = state
+            .iter()
+            .zip(&last)
+            .filter(|(a, b)| bytemuck::bytes_of(*a) != bytemuck::bytes_of(*b))
+            .count();
+        let moving = state
+            .iter()
+            .filter(|s| s.velocity.iter().any(|v| *v != 0.0))
+            .count();
         let grid = run.face_grid();
-        let expected = manifold_nodes_water::testkit::conformance::gpu_flip_faces(bytemuck::cast_slice(&state), run.solver_grid().cells());
+        let expected = manifold_nodes_water::testkit::conformance::gpu_flip_faces(
+            bytemuck::cast_slice(&state),
+            run.solver_grid().cells(),
+        );
         let gathered = (0..3)
-            .map(|axis| grid[axis].iter().zip(&expected[axis]).filter(|(a, b)| a.to_bits() != b.to_bits()).count())
+            .map(|axis| {
+                grid[axis]
+                    .iter()
+                    .zip(&expected[axis])
+                    .filter(|(a, b)| a.to_bits() != b.to_bits())
+                    .count()
+            })
             .sum::<usize>();
-        println!("GPU FLIP face grid {n}³: {moving} of {records} face samples moving; state differs at {differ}, gather at {gathered}");
+        println!(
+            "GPU FLIP face grid {n}³: {moving} of {records} face samples moving; state differs at {differ}, gather at {gathered}"
+        );
         assert!(moving > records / 100, "{n}³: the faces barely move");
         assert_eq!(differ, 0, "{n}³: the state's faces are not the last step's");
-        assert_eq!(gathered, 0, "{n}³: the face components differ from the state's faces");
+        assert_eq!(
+            gathered, 0,
+            "{n}³: the face components differ from the state's faces"
+        );
     }
 }
 
@@ -498,11 +654,18 @@ fn gpu_flip_still_pool() {
     let mut run = Run::new(scene);
     // The engine seeds a site only where the solid distance, walls included,
     // is positive: the inset walls hold the pool's four floor-corner sites.
-    assert_eq!(run.seeded, scene.particles() as usize - 4, "the walls hold exactly the four floor-corner sites");
+    assert_eq!(
+        run.seeded,
+        scene.particles() as usize - 4,
+        "the walls hold exactly the four floor-corner sites"
+    );
     let mut fastest = Vec::new();
     for frame in 0..120 {
         run.frame();
-        println!("GPU FLIP still pool frame {frame:3}: dry floor holes {}", run.liquid_stats().dry_floor_cells);
+        println!(
+            "GPU FLIP still pool frame {frame:3}: dry floor holes {}",
+            run.liquid_stats().dry_floor_cells
+        );
         if frame % 10 == 9 {
             let stats = particle_stats(&run.particles());
             let (rms, max) = divergence(&run.faces(), &run.water(), run.n(), scene.cell_size());
@@ -513,7 +676,11 @@ fn gpu_flip_still_pool() {
                 stats.mean_height,
                 run.water_cells()
             );
-            assert_eq!((stats.live, stats.bad), (run.seeded, 0), "frame {frame}: particles lost or not finite");
+            assert_eq!(
+                (stats.live, stats.bad),
+                (run.seeded, 0),
+                "frame {frame}: particles lost or not finite"
+            );
             if frame >= 59 {
                 fastest.push(stats.fastest);
             }
@@ -521,7 +688,10 @@ fn gpu_flip_still_pool() {
     }
     let peak = fastest.iter().copied().fold(0.0, f64::max);
     let bound = NATIVE_STILL_POOL_FASTEST + 5.0 * STILL_POOL_GPU_GAP;
-    assert!(peak < bound, "fastest particle {peak} m/s from 1 s on, past {bound} (native peaks at {NATIVE_STILL_POOL_FASTEST})");
+    assert!(
+        peak < bound,
+        "fastest particle {peak} m/s from 1 s on, past {bound} (native peaks at {NATIVE_STILL_POOL_FASTEST})"
+    );
 }
 
 /// An open −X face drains the pool: the engine removes every particle within
@@ -542,21 +712,40 @@ fn gpu_flip_open_face_drains_the_pool() {
         let stats = particle_stats(&particles);
         let counted = run.liquid_stats();
         assert_eq!(stats.bad, 0, "frame {frame}: a non-finite particle");
-        assert_eq!(counted.live as usize, stats.live, "frame {frame}: liquid_stats counts {} live, the particles {}", counted.live, stats.live);
-        assert!(stats.live <= last, "frame {frame}: live count rose from {last} to {}", stats.live);
+        assert_eq!(
+            counted.live as usize, stats.live,
+            "frame {frame}: liquid_stats counts {} live, the particles {}",
+            counted.live, stats.live
+        );
+        assert!(
+            stats.live <= last,
+            "frame {frame}: live count rose from {last} to {}",
+            stats.live
+        );
         for p in &particles {
             let inside = (0..3).all(|a| {
                 let x = f64::from(p.position_radius[a]);
                 x >= min[a] && x <= min[a] + size
             });
-            assert!(inside, "frame {frame}: a particle at {:?} is outside the tank", p.position_radius);
+            assert!(
+                inside,
+                "frame {frame}: a particle at {:?} is outside the tank",
+                p.position_radius
+            );
         }
         if frame % 30 == 29 {
-            println!("GPU FLIP open −X frame {frame:3}: {} of {fill} live, mean height {:.4} m", stats.live, stats.mean_height);
+            println!(
+                "GPU FLIP open −X frame {frame:3}: {} of {fill} live, mean height {:.4} m",
+                stats.live, stats.mean_height
+            );
         }
         last = stats.live;
     }
-    assert!(last < fill / 2, "the open face drained only {} of {fill} particles", fill - last);
+    assert!(
+        last < fill / 2,
+        "the open face drained only {} of {fill} particles",
+        fill - last
+    );
 }
 
 /// The largest |v| on a vertical face between two water cells at or below
@@ -564,7 +753,12 @@ fn gpu_flip_open_face_drains_the_pool() {
 /// cell (i, j, k), `water` the step's water mask from its entering
 /// particles. Panics on a non-finite face, which a max would skip.
 #[cfg(test)]
-fn inner_vertical_face_speed(face_v: impl Fn(usize, usize, usize) -> f32, water: &[f32], n: usize, deep: usize) -> (f64, Vec<u32>) {
+fn inner_vertical_face_speed(
+    face_v: impl Fn(usize, usize, usize) -> f32,
+    water: &[f32],
+    n: usize,
+    deep: usize,
+) -> (f64, Vec<u32>) {
     let mut worst = 0.0_f64;
     let mut selected = Vec::new();
     for k in 0..n {
@@ -579,7 +773,10 @@ fn inner_vertical_face_speed(face_v: impl Fn(usize, usize, usize) -> f32, water:
             }
         }
     }
-    assert!(!selected.is_empty(), "no inner vertical face under the water");
+    assert!(
+        !selected.is_empty(),
+        "no inner vertical face under the water"
+    );
     (worst, selected)
 }
 
@@ -616,12 +813,20 @@ fn gpu_flip_hydrostatic_column_rests() {
             let p = [idx % m, (idx / m) % m, idx / (m * m)];
             for a in 0..3 {
                 if (0..3).all(|b| b == a || p[b] < n) && (p[a] == 0 || p[a] == n) {
-                    assert!(face.velocity[a].is_finite(), "frame {frame}: wall face {p:?}/{a} is not finite");
+                    assert!(
+                        face.velocity[a].is_finite(),
+                        "frame {frame}: wall face {p:?}/{a} is not finite"
+                    );
                     wall = wall.max(f64::from(face.velocity[a]).abs());
                 }
             }
         }
-        let (worst, _) = inner_vertical_face_speed(|i, j, k| faces[i + m * (j + m * k)].velocity[1], &run.water(), n, deep);
+        let (worst, _) = inner_vertical_face_speed(
+            |i, j, k| faces[i + m * (j + m * k)].velocity[1],
+            &run.water(),
+            n,
+            deep,
+        );
         let stats = particle_stats(&run.particles());
         println!(
             "GPU FLIP hydrostatic {n}³ frame {frame:3}: wall faces max |v| {wall:.1e}, inner vertical faces max |v| {worst:.2e} m/s = {:.3}% of g·dt, fastest particle {:.2e} m/s",
@@ -629,8 +834,18 @@ fn gpu_flip_hydrostatic_column_rests() {
             stats.fastest
         );
         assert_eq!(wall, 0.0, "frame {frame}: a wall face moves");
-        assert!(worst <= bound * g_dt, "frame {frame}: inner vertical faces at {:.3}% of g·dt, past {:.3}% (native {:.3}%)", 100.0 * worst / g_dt, 100.0 * bound, 100.0 * NATIVE_HYDROSTATIC_FACE_SHARE);
-        assert_eq!((stats.live, stats.bad), (run.seeded, 0), "frame {frame}: particles lost or not finite");
+        assert!(
+            worst <= bound * g_dt,
+            "frame {frame}: inner vertical faces at {:.3}% of g·dt, past {:.3}% (native {:.3}%)",
+            100.0 * worst / g_dt,
+            100.0 * bound,
+            100.0 * NATIVE_HYDROSTATIC_FACE_SHARE
+        );
+        assert_eq!(
+            (stats.live, stats.bad),
+            (run.seeded, 0),
+            "frame {frame}: particles lost or not finite"
+        );
     }
 }
 
@@ -673,18 +888,30 @@ fn gpu_flip_dam_break_energy_never_rises() {
                 println!("GPU FLIP energy {steps} steps frame {frame:3}: E/E0 {e:.5}");
             }
         }
-        println!("GPU FLIP energy {steps} steps: most above E0 {:+.2e}", worst);
+        println!(
+            "GPU FLIP energy {steps} steps: most above E0 {:+.2e}",
+            worst
+        );
         // The splash frames converge on the engine's tolerance, well under
         // the cap, which is the physics claim asserted below.
-        println!("GPU FLIP energy {steps} steps: most iterations a tick, pressure {} density {}, unconverged solves {unconverged}", most[0], most[1]);
+        println!(
+            "GPU FLIP energy {steps} steps: most iterations a tick, pressure {} density {}, unconverged solves {unconverged}",
+            most[0], most[1]
+        );
         assert_eq!(unconverged, 0, "{steps} steps: solves reached the cap");
         // A regression guard, not physics. The measured maximum is 17 at 1
         // step on the 64-cell Dam Break with the obstacle box; the ceiling is about
         // twice that, so a broken preconditioner is caught while the
         // splash-dependent variation is not.
-        assert!(most[0] > 0 && most[0] as usize <= 32 * steps, "{steps} steps: pressure iterations a tick {most:?}");
+        assert!(
+            most[0] > 0 && most[0] as usize <= 32 * steps,
+            "{steps} steps: pressure iterations a tick {most:?}"
+        );
         assert_eq!(most[1], 0, "the default must not run density iterations");
-        assert!(worst <= 1e-4, "{steps} steps: energy rose {worst:.2e} of E0 above its start");
+        assert!(
+            worst <= 1e-4,
+            "{steps} steps: energy rose {worst:.2e} of E0 above its start"
+        );
     }
 }
 
@@ -701,13 +928,24 @@ fn gpu_flip_standing_wave_keeps_its_period() {
     let mut centre = Vec::new();
     for frame in 0..600 {
         run.frame();
-        let live: Vec<f64> =
-            run.particles().iter().filter(|p| p.position_radius[3] > 0.0).map(|p| f64::from(p.position_radius[0])).collect();
+        let live: Vec<f64> = run
+            .particles()
+            .iter()
+            .filter(|p| p.position_radius[3] > 0.0)
+            .map(|p| f64::from(p.position_radius[0]))
+            .collect();
         centre.push(live.iter().sum::<f64>() / live.len() as f64);
         if frame % 60 == 59 {
             let stats = particle_stats(&run.particles());
-            println!("GPU FLIP slosh frame {frame:3}: centre x {:+.4} m, fastest {:.3} m/s", centre[frame], stats.fastest);
-            assert_eq!((stats.live, stats.bad), (run.seeded, 0), "frame {frame}: particles lost or not finite");
+            println!(
+                "GPU FLIP slosh frame {frame:3}: centre x {:+.4} m, fastest {:.3} m/s",
+                centre[frame], stats.fastest
+            );
+            assert_eq!(
+                (stats.live, stats.bad),
+                (run.seeded, 0),
+                "frame {frame}: particles lost or not finite"
+            );
         }
     }
     // Crossings of the rest centre, x = 0, interpolated between frames.
@@ -719,10 +957,21 @@ fn gpu_flip_standing_wave_keeps_its_period() {
         .filter(|t| (3.0..9.0).contains(t))
         .collect();
     println!("GPU FLIP slosh crossings (s): {crossings:.3?}");
-    assert!(crossings.len() >= 3, "only {} crossings between 3 s and 9 s", crossings.len());
-    let period = 2.0 * (crossings[crossings.len() - 1] - crossings[0]) / (crossings.len() - 1) as f64;
-    println!("GPU FLIP slosh period {period:.3} s, {:+.2}% off 2.80 s", 100.0 * (period / 2.80 - 1.0));
-    assert!((period / 2.80 - 1.0).abs() <= 0.03, "standing-wave period {period:.3} s, outside 3% of 2.80 s");
+    assert!(
+        crossings.len() >= 3,
+        "only {} crossings between 3 s and 9 s",
+        crossings.len()
+    );
+    let period =
+        2.0 * (crossings[crossings.len() - 1] - crossings[0]) / (crossings.len() - 1) as f64;
+    println!(
+        "GPU FLIP slosh period {period:.3} s, {:+.2}% off 2.80 s",
+        100.0 * (period / 2.80 - 1.0)
+    );
+    assert!(
+        (period / 2.80 - 1.0).abs() <= 0.03,
+        "standing-wave period {period:.3} s, outside 3% of 2.80 s"
+    );
 }
 
 /// Small native/GPU comparisons share seed geometry and simulation time.
@@ -740,23 +989,46 @@ mod native_reference {
         // Native mapping: 1.5 solid cells outside each authored wall.
         let offset = layout.min.map(|v| v - (1.5 * layout.cell_size) as f32);
         let local = |p: [f32; 3]| std::array::from_fn(|a| p[a] - offset[a]);
-        let mut world = FluidWorld::new_seeded(Config {
-            cells: layout.cells.map(|n| n + 3), cell_size: layout.cell_size,
-            surface_subdivisions: 0, apic: false,
-        }, 0).expect("native world");
-        world.set_surface_reconstruction_enabled(false).expect("disable meshing");
+        let mut world = FluidWorld::new_seeded(
+            Config {
+                cells: layout.cells.map(|n| n + 3),
+                cell_size: layout.cell_size,
+                surface_subdivisions: 0,
+                apic: false,
+            },
+            0,
+        )
+        .expect("native world");
+        world
+            .set_surface_reconstruction_enabled(false)
+            .expect("disable meshing");
         world.set_gravity([0.0, -9.81, 0.0]).expect("gravity");
         if scene.fill_height > 0.0 {
             let min = local(layout.min);
-            world.add_fluid_box(Bounds { min, max: [
-                min[0] + layout.size[0], min[1] + scene.fill_height as f32, min[2] + layout.size[2],
-            ] }, [0.0; 3]).expect("pool");
+            world
+                .add_fluid_box(
+                    Bounds {
+                        min,
+                        max: [
+                            min[0] + layout.size[0],
+                            min[1] + scene.fill_height as f32,
+                            min[2] + layout.size[2],
+                        ],
+                    },
+                    [0.0; 3],
+                )
+                .expect("pool");
         }
         if scene.initial_volume().is_some() {
-            world.add_fluid_box(Bounds {
-                min: local(scene.column.map(|p| p[0] as f32)),
-                max: local(scene.column.map(|p| p[1] as f32)),
-            }, [0.0; 3]).expect("column");
+            world
+                .add_fluid_box(
+                    Bounds {
+                        min: local(scene.column.map(|p| p[0] as f32)),
+                        max: local(scene.column.map(|p| p[1] as f32)),
+                    },
+                    [0.0; 3],
+                )
+                .expect("column");
         }
         // Native inserts queued fluid at the end of its first step; GPU Run
         // publishes its fill without stepping. Both now start at rest at t=0.
@@ -765,21 +1037,32 @@ mod native_reference {
     }
 
     #[cfg(test)]
-    fn snapshot(world: &mut FluidWorld, offset: [f32; 3]) -> (Vec<FluidParticle>, Vec<f32>, [u32; 3]) {
+    fn snapshot(
+        world: &mut FluidWorld,
+        offset: [f32; 3],
+    ) -> (Vec<FluidParticle>, Vec<f32>, [u32; 3]) {
         let (mut records, mut solid) = (Vec::new(), Vec::new());
         let info = loop {
             match world.capture_particle_frame(offset, &mut records, &mut solid) {
                 Ok(info) => break info,
-                Err(CaptureError::Capacity { particles, solid: nodes }) => {
+                Err(CaptureError::Capacity {
+                    particles,
+                    solid: nodes,
+                }) => {
                     records.resize(particles as usize, ParticleRecord::default());
                     solid.resize(nodes, 0.0);
                 }
                 Err(CaptureError::Fluid(error)) => panic!("native capture: {error}"),
             }
         };
-        let particles = records[..info.count as usize].iter().map(|p| FluidParticle {
-            position_radius: p.position_radius, velocity: p.velocity, id: p.id,
-        }).collect();
+        let particles = records[..info.count as usize]
+            .iter()
+            .map(|p| FluidParticle {
+                position_radius: p.position_radius,
+                velocity: p.velocity,
+                id: p.id,
+            })
+            .collect();
         (particles, solid, info.solid_nodes)
     }
 
@@ -787,10 +1070,14 @@ mod native_reference {
     fn seed_site(scene: WaterScene, p: &FluidParticle) -> [u32; 3] {
         assert_eq!(p.velocity, [0.0; 3], "seed must be at rest");
         std::array::from_fn(|a| {
-            let site = 2.0 * (f64::from(p.position_radius[a]) - scene.min()[a]) / scene.cell_size() - 0.5;
+            let site =
+                2.0 * (f64::from(p.position_radius[a]) - scene.min()[a]) / scene.cell_size() - 0.5;
             // Native uses .25 * (jitter_factor - .001) * h, even with
             // jitter_factor=0. Its interior positions differ by <= .00025h.
-            assert!((site - site.round()).abs() < 0.00051, "seed off half-cell lattice: {site}");
+            assert!(
+                (site - site.round()).abs() < 0.00051,
+                "seed off half-cell lattice: {site}"
+            );
             assert!(site.round() >= 0.0);
             site.round() as u32
         })
@@ -798,7 +1085,11 @@ mod native_reference {
 
     #[cfg(test)]
     fn seed_sites(scene: WaterScene, particles: &[FluidParticle]) -> Vec<[u32; 3]> {
-        let mut sites: Vec<_> = particles.iter().filter(|p| p.position_radius[3] > 0.0).map(|p| seed_site(scene, p)).collect();
+        let mut sites: Vec<_> = particles
+            .iter()
+            .filter(|p| p.position_radius[3] > 0.0)
+            .map(|p| seed_site(scene, p))
+            .collect();
         sites.sort_unstable();
         sites
     }
@@ -817,7 +1108,9 @@ mod native_reference {
                 for y in 0..2 * n as u32 {
                     for z in 0..2 * n as u32 {
                         let site = [x, y, z];
-                        if y < geometry.setup_for_test().pool_sites_for_test() || (0..3).all(|a| (column[a][0]..column[a][1]).contains(&site[a])) {
+                        if y < geometry.setup_for_test().pool_sites_for_test()
+                            || (0..3).all(|a| (column[a][0]..column[a][1]).contains(&site[a]))
+                        {
                             expected.push(site);
                         }
                     }
@@ -834,13 +1127,28 @@ mod native_reference {
                 let mut phi = 0.0;
                 for corner in 0..8 {
                     let c: [u32; 3] = std::array::from_fn(|a| base[a] + ((corner >> a) & 1));
-                    let weight: f32 = (0..3).map(|a| if corner & (1 << a) == 0 { 1.0 - t[a] } else { t[a] }).product();
+                    let weight: f32 = (0..3)
+                        .map(|a| {
+                            if corner & (1 << a) == 0 {
+                                1.0 - t[a]
+                            } else {
+                                t[a]
+                            }
+                        })
+                        .product();
                     phi += weight * solid[(c[0] + nodes[0] * (c[1] + nodes[1] * c[2])) as usize];
                 }
                 phi > 0.0
             });
-            println!("{n}³ native={} authored={authored} excluded by native solid={}", got.len(), authored - expected.len());
-            assert_eq!(got, expected, "{n}³ native sites after native solid rejection");
+            println!(
+                "{n}³ native={} authored={authored} excluded by native solid={}",
+                got.len(),
+                authored - expected.len()
+            );
+            assert_eq!(
+                got, expected,
+                "{n}³ native sites after native solid rejection"
+            );
         }
     }
 
@@ -857,18 +1165,41 @@ mod native_reference {
         let (_, solid, nodes) = snapshot(&mut native, offset);
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
-        let mut graph = water_def(scene).into_graph(&registry, &Default::default()).expect("water graph");
-        graph.add_external_output(node_named(&graph, STEP_NODE), "distance").expect("distance in the plan");
+        let mut graph = water_def(scene)
+            .into_graph(&registry, &Default::default())
+            .expect("water graph");
+        graph
+            .add_external_output(node_named(&graph, STEP_NODE), "distance")
+            .expect("distance in the plan");
         let mut run = Run::with_graph(scene, graph);
         let step = node_named(&run.graph, STEP_NODE);
-        run.exec.set_dump_array_set(Some([step].into_iter().collect()));
+        run.exec
+            .set_dump_array_set(Some([step].into_iter().collect()));
         run.frame();
         let n = run.n();
-        assert_eq!(nodes, [n as u32 + 1; 3], "native solid on the GPU solver grid");
+        assert_eq!(
+            nodes,
+            [n as u32 + 1; 3],
+            "native solid on the GPU solver grid"
+        );
         let h = scene.cell_size() as f32;
-        let res = run.exec.dump_array_resources().iter()
-            .find(|&&(node, port, _)| node == step && port == "distance").unwrap_or_else(|| panic!("step distance not dumped: {:?}",
-                run.exec.dump_array_resources().iter().filter(|r| r.0 == step).map(|r| r.1).collect::<Vec<_>>())).2;
+        let res = run
+            .exec
+            .dump_array_resources()
+            .iter()
+            .find(|&&(node, port, _)| node == step && port == "distance")
+            .unwrap_or_else(|| {
+                panic!(
+                    "step distance not dumped: {:?}",
+                    run.exec
+                        .dump_array_resources()
+                        .iter()
+                        .filter(|r| r.0 == step)
+                        .map(|r| r.1)
+                        .collect::<Vec<_>>()
+                )
+            })
+            .2;
         let buffer = run.exec.dump_array_buffer(res).expect("distance buffer");
         let bytes = 4 * n * n * n;
         let staging = run.device.create_buffer_shared(bytes as u64);
@@ -877,28 +1208,49 @@ mod native_reference {
         enc.commit_and_wait_completed();
         // SAFETY: the copy completed; staging is shared and `bytes` long.
         let phi: Vec<f32> = unsafe {
-            std::slice::from_raw_parts(staging.mapped_ptr().expect("shared staging").cast::<f32>().cast_const(), n * n * n)
-        }.to_vec();
+            std::slice::from_raw_parts(
+                staging
+                    .mapped_ptr()
+                    .expect("shared staging")
+                    .cast::<f32>()
+                    .cast_const(),
+                n * n * n,
+            )
+        }
+        .to_vec();
         let (mut extended, mut wrong) = (0, Vec::new());
         for k in 0..n {
             for j in 0..n {
                 for i in 0..n {
-                    let centre = (0..8).map(|c| {
-                        let p = [i + (c & 1), j + ((c >> 1) & 1), k + ((c >> 2) & 1)];
-                        solid[p[0] + (n + 1) * (p[1] + (n + 1) * p[2])]
-                    }).sum::<f32>() / 8.0;
+                    let centre = (0..8)
+                        .map(|c| {
+                            let p = [i + (c & 1), j + ((c >> 1) & 1), k + ((c >> 2) & 1)];
+                            solid[p[0] + (n + 1) * (p[1] + (n + 1) * p[2])]
+                        })
+                        .sum::<f32>()
+                        / 8.0;
                     let v = phi[i + n * (j + n * k)];
                     if centre < 0.0 && v < 0.5 * h {
-                        if (v + 0.5 * h).abs() < 1e-5 { extended += 1 } else { wrong.push(([i, j, k], v / h)) }
+                        if (v + 0.5 * h).abs() < 1e-5 {
+                            extended += 1
+                        } else {
+                            wrong.push(([i, j, k], v / h))
+                        }
                     }
                 }
             }
         }
-        println!("wall cells taken as water at -h/2: {extended}, left otherwise: {}", wrong.len());
+        println!(
+            "wall cells taken as water at -h/2: {extended}, left otherwise: {}",
+            wrong.len()
+        );
         assert!(extended > 0, "the pool must touch the wall's cells");
-        assert!(wrong.is_empty(), "wall cells under h/2 not at -h/2 (cell, phi/h): {:?}", &wrong[..wrong.len().min(8)]);
+        assert!(
+            wrong.is_empty(),
+            "wall cells under h/2 not at -h/2 (cell, phi/h): {:?}",
+            &wrong[..wrong.len().min(8)]
+        );
     }
-
 }
 
 /// The measurement must follow the rendered topology and smoothing, in both
@@ -909,7 +1261,9 @@ fn gpu_flip_surface_readback_matches_triangle_list() {
     let indexed = Run::new(scene);
     let mut registry = PrimitiveRegistry::with_builtin();
     register_substep_test_nodes(&mut registry);
-    let mut graph = water_def(scene).into_graph(&registry, &Default::default()).expect("water graph");
+    let mut graph = water_def(scene)
+        .into_graph(&registry, &Default::default())
+        .expect("water graph");
     for name in ["liquid_mesh", "liquid_smooth_mesh", "liquid_normals"] {
         let node = node_ending(&graph, name);
         assert!(graph.disconnect((node, "edge_scan")).is_some());
@@ -921,7 +1275,10 @@ fn gpu_flip_surface_readback_matches_triangle_list() {
     for (triangle, (a, b)) in a.iter().zip(&b).enumerate() {
         for (a, b) in a.iter().flatten().zip(b.iter().flatten()) {
             assert!(a.is_finite() && b.is_finite());
-            assert!((a - b).abs() < 1e-5, "triangle {triangle}: indexed {a}, triangle-list {b}");
+            assert!(
+                (a - b).abs() < 1e-5,
+                "triangle {triangle}: indexed {a}, triangle-list {b}"
+            );
         }
     }
     let (volume, area) = indexed.surface_measure();
@@ -929,10 +1286,17 @@ fn gpu_flip_surface_readback_matches_triangle_list() {
     assert!(volume > 0.0 && area > 0.0);
     assert!((volume - plain_volume).abs() < 1e-5);
     assert!((area - plain_area).abs() < 1e-5);
-    let raw: Vec<manifold_node_engine::mesh::MeshVertex> =
-        plain.read_at(node_ending(&plain.graph, "liquid_mesh"), "vertices", 3 * b.len());
-    assert!(raw.iter().zip(b.iter().flatten()).any(|(raw, smoothed)| raw.position != *smoothed),
-        "fixture must distinguish raw and smoothed positions");
+    let raw: Vec<manifold_node_engine::mesh::MeshVertex> = plain.read_at(
+        node_ending(&plain.graph, "liquid_mesh"),
+        "vertices",
+        3 * b.len(),
+    );
+    assert!(
+        raw.iter()
+            .zip(b.iter().flatten())
+            .any(|(raw, smoothed)| raw.position != *smoothed),
+        "fixture must distinguish raw and smoothed positions"
+    );
 }
 
 /// The volume oracle on water that must not change: a resting pool's meshed
@@ -949,11 +1313,26 @@ fn gpu_flip_still_pool_keeps_its_meshed_volume() {
         measures.push(run.surface_measure());
     }
     let (v0, a0) = measures[0];
-    let drift = measures.iter().map(|(v, _)| (v / v0 - 1.0).abs()).fold(0.0, f64::max);
+    let drift = measures
+        .iter()
+        .map(|(v, _)| (v / v0 - 1.0).abs())
+        .fold(0.0, f64::max);
     let skin = VolumeDrift::new(measures[0], run.particle_volume()).skin();
-    println!("GPU FLIP still pool meshed: frame 0 {v0:.4} m³ over {a0:.3} m², last {:.4} m³, drift max {:.3}%", measures[119].0, 100.0 * drift);
-    println!("GPU FLIP still pool meshed: particles hold {:.4} m³, skin {:.2} mm", run.particle_volume(), 1000.0 * skin);
-    assert!(drift < 5e-3, "a resting pool's meshed volume moved {:.3}%", 100.0 * drift);
+    println!(
+        "GPU FLIP still pool meshed: frame 0 {v0:.4} m³ over {a0:.3} m², last {:.4} m³, drift max {:.3}%",
+        measures[119].0,
+        100.0 * drift
+    );
+    println!(
+        "GPU FLIP still pool meshed: particles hold {:.4} m³, skin {:.2} mm",
+        run.particle_volume(),
+        1000.0 * skin
+    );
+    assert!(
+        drift < 5e-3,
+        "a resting pool's meshed volume moved {:.3}%",
+        100.0 * drift
+    );
 }
 
 /// Encode replay changes nothing the step computes: 60 Dam Break ticks
@@ -974,10 +1353,20 @@ fn gpu_flip_replay_changes_nothing() {
         direct.frame();
         replay.frame();
         let (dp, rp) = (direct.particles(), replay.particles());
-        assert!(bytemuck::cast_slice::<_, u8>(&dp) == bytemuck::cast_slice::<_, u8>(&rp), "tick {frame}: the particles differ with replay on");
+        assert!(
+            bytemuck::cast_slice::<_, u8>(&dp) == bytemuck::cast_slice::<_, u8>(&rp),
+            "tick {frame}: the particles differ with replay on"
+        );
         let (df, rf) = (direct.faces(), replay.faces());
-        assert!(bytemuck::cast_slice::<_, u8>(&df) == bytemuck::cast_slice::<_, u8>(&rf), "tick {frame}: the faces differ with replay on");
-        assert_eq!(direct.solver(), replay.solver(), "tick {frame}: the solver words differ with replay on");
+        assert!(
+            bytemuck::cast_slice::<_, u8>(&df) == bytemuck::cast_slice::<_, u8>(&rf),
+            "tick {frame}: the faces differ with replay on"
+        );
+        assert_eq!(
+            direct.solver(),
+            replay.solver(),
+            "tick {frame}: the solver words differ with replay on"
+        );
         let stats = replay.replay_stats();
         let delta = |take: fn(&manifold_gpu::GpuReplayStats) -> u64| take(&stats) - take(&last);
         if frame <= WARM || frame % 20 == 0 || delta(|s| s.recorded) > 0 {
@@ -996,27 +1385,52 @@ fn gpu_flip_replay_changes_nothing() {
             );
         }
         if frame > WARM {
-            assert_eq!(delta(|s| s.recorded), 0, "tick {frame}: a warm tick records nothing");
-            assert_eq!(delta(|s| s.segments_direct), 0, "tick {frame}: no round runs directly");
-            assert_eq!(delta(|s| s.store_allocations), 0, "tick {frame}: a warm ring allocates nothing");
-            assert!(delta(|s| s.segments_replayed) >= 2, "tick {frame}: the solves' rounds run as segments");
+            assert_eq!(
+                delta(|s| s.recorded),
+                0,
+                "tick {frame}: a warm tick records nothing"
+            );
+            assert_eq!(
+                delta(|s| s.segments_direct),
+                0,
+                "tick {frame}: no round runs directly"
+            );
+            assert_eq!(
+                delta(|s| s.store_allocations),
+                0,
+                "tick {frame}: a warm ring allocates nothing"
+            );
+            assert!(
+                delta(|s| s.segments_replayed) >= 2,
+                "tick {frame}: the solves' rounds run as segments"
+            );
         }
         last = stats;
     }
-    assert_eq!(direct.replay_stats().replayed, 0, "the direct run replayed nothing");
+    assert_eq!(
+        direct.replay_stats().replayed,
+        0,
+        "the direct run replayed nothing"
+    );
 }
 
 #[cfg(test)]
 fn run_with_retired_speed(scene: WaterScene, enabled: bool) -> Run {
     let mut registry = PrimitiveRegistry::with_builtin();
     register_substep_test_nodes(&mut registry);
-    let mut graph = water_def(scene).into_graph(&registry, &Default::default()).expect("slot-cost water graph");
+    let mut graph = water_def(scene)
+        .into_graph(&registry, &Default::default())
+        .expect("slot-cost water graph");
     let step = node_named(&graph, STEP_NODE);
     if !enabled {
         // An unwired custom graph retains the original adaptive loop.
-        graph.disconnect((step, "retired_max_speed")).expect("retired speed wire");
+        graph
+            .disconnect((step, "retired_max_speed"))
+            .expect("retired speed wire");
     }
-    graph.add_external_output(step, "clock_status").expect("clock status read");
+    graph
+        .add_external_output(step, "clock_status")
+        .expect("clock status read");
     Run::with_graph(scene, graph)
 }
 
@@ -1033,16 +1447,30 @@ fn gpu_flip_one_active_slot_matches_six_recorded_slots() {
     fn completed_one_step(run: &Run, n: usize, frame: usize, slots: u32) {
         let status: Vec<u32> = run.read(STEP_NODE, "clock_status", 8);
         let last_dt = if slots == 1 { 1.0f32 / 60.0 } else { 0.0 };
-        assert_eq!(status[0], last_dt.to_bits(),
-            "{n}³ tick {frame}, {slots} recorded slots: final slot proves the loop override took effect");
-        assert_eq!(status[1], (1.0f32 / 60.0).to_bits(),
-            "{n}³ tick {frame}, {slots} recorded slots: exact completed time");
-        assert_eq!(status[2], 0.0f32.to_bits(),
-            "{n}³ tick {frame}, {slots} recorded slots: interval is complete");
-        assert_eq!(status[6], 1,
-            "{n}³ tick {frame}, {slots} recorded slots: fixture must accept exactly one step");
-        assert_eq!((status[4], status[5]), (0, 0),
-            "{n}³ tick {frame}, {slots} recorded slots: no cap or nonfinite clock input");
+        assert_eq!(
+            status[0],
+            last_dt.to_bits(),
+            "{n}³ tick {frame}, {slots} recorded slots: final slot proves the loop override took effect"
+        );
+        assert_eq!(
+            status[1],
+            (1.0f32 / 60.0).to_bits(),
+            "{n}³ tick {frame}, {slots} recorded slots: exact completed time"
+        );
+        assert_eq!(
+            status[2],
+            0.0f32.to_bits(),
+            "{n}³ tick {frame}, {slots} recorded slots: interval is complete"
+        );
+        assert_eq!(
+            status[6], 1,
+            "{n}³ tick {frame}, {slots} recorded slots: fixture must accept exactly one step"
+        );
+        assert_eq!(
+            (status[4], status[5]),
+            (0, 0),
+            "{n}³ tick {frame}, {slots} recorded slots: no cap or nonfinite clock input"
+        );
     }
     for n in [32, 64] {
         let scene = WaterScene::still_pool(n).with_steps(1);
@@ -1064,8 +1492,10 @@ fn gpu_flip_one_active_slot_matches_six_recorded_slots() {
                 (one.timed_frame(), six_time)
             };
             for (label, gpu_ms) in [("one", one_time.0), ("six", six_time.0)] {
-                assert!(gpu_ms.is_finite() && gpu_ms > 0.0,
-                    "{n}³ tick {frame}, {label}: GPU chunk span must be positive and finite, got {gpu_ms}");
+                assert!(
+                    gpu_ms.is_finite() && gpu_ms > 0.0,
+                    "{n}³ tick {frame}, {label}: GPU chunk span must be positive and finite, got {gpu_ms}"
+                );
             }
             if frame >= WARMUP {
                 one_gpu.push(one_time.0);
@@ -1078,14 +1508,21 @@ fn gpu_flip_one_active_slot_matches_six_recorded_slots() {
             let (op, sp) = (one.particles(), six.particles());
             for (label, particles) in [("one", &op), ("six", &sp)] {
                 let stats = particle_stats(particles);
-                assert_eq!((stats.live, stats.bad), (one.seeded, 0),
-                    "{n}³ tick {frame}, {label}: every particle remains live and finite");
+                assert_eq!(
+                    (stats.live, stats.bad),
+                    (one.seeded, 0),
+                    "{n}³ tick {frame}, {label}: every particle remains live and finite"
+                );
             }
-            assert!(bytemuck::cast_slice::<_, u8>(&op) == bytemuck::cast_slice::<_, u8>(&sp),
-                "{n}³ tick {frame}: particle bits differ");
+            assert!(
+                bytemuck::cast_slice::<_, u8>(&op) == bytemuck::cast_slice::<_, u8>(&sp),
+                "{n}³ tick {frame}: particle bits differ"
+            );
             let (of, sf) = (one.faces(), six.faces());
-            assert!(bytemuck::cast_slice::<_, u8>(&of) == bytemuck::cast_slice::<_, u8>(&sf),
-                "{n}³ tick {frame}: final face bits differ");
+            assert!(
+                bytemuck::cast_slice::<_, u8>(&of) == bytemuck::cast_slice::<_, u8>(&sf),
+                "{n}³ tick {frame}: final face bits differ"
+            );
             let os: Vec<u32> = one.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
             let ss: Vec<u32> = six.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
             assert_eq!(os, ss, "{n}³ tick {frame}: full liquid stats differ");
@@ -1099,13 +1536,19 @@ fn gpu_flip_one_active_slot_matches_six_recorded_slots() {
         }
         println!(
             "GPU FLIP {n}³ slot cost, {WARMUP} warmup + {MEASURED} measured ticks/run: median one GPU {:.3} ms CPU {:.3} ms; six GPU {:.3} ms CPU {:.3} ms",
-            median(&mut one_gpu), median(&mut one_cpu), median(&mut six_gpu), median(&mut six_cpu),
+            median(&mut one_gpu),
+            median(&mut one_cpu),
+            median(&mut six_gpu),
+            median(&mut six_cpu),
         );
         for (label, run, warm) in [("one", &one, warm_replay[0]), ("six", &six, warm_replay[1])] {
             let replay = run.replay_stats();
             println!("GPU FLIP {n}³ {label} slots replay: after warmup {warm:?}; final {replay:?}");
-            assert!(replay.replayed > warm.replayed && replay.segments_replayed > warm.segments_replayed,
-                "{n}³ {label}: measured ticks must exercise ordinary encode replay");
+            assert!(
+                replay.replayed > warm.replayed
+                    && replay.segments_replayed > warm.segments_replayed,
+                "{n}³ {label}: measured ticks must exercise ordinary encode replay"
+            );
         }
     }
 }
@@ -1151,10 +1594,16 @@ fn gpu_flip_no_body_solid_clear_matches_six_passes() {
                 (optimized.timed_frame(), original_time)
             };
             for (label, time) in [("clear", optimized_time), ("six passes", original_time)] {
-                assert!(time.0.is_finite() && time.0 > 0.0,
-                    "{n}³ fresh {fresh} tick {frame}, {label}: positive finite GPU chunk span, got {}", time.0);
-                assert!(time.1.is_finite() && time.1 > 0.0,
-                    "{n}³ fresh {fresh} tick {frame}, {label}: positive finite CPU encode time, got {}", time.1);
+                assert!(
+                    time.0.is_finite() && time.0 > 0.0,
+                    "{n}³ fresh {fresh} tick {frame}, {label}: positive finite GPU chunk span, got {}",
+                    time.0
+                );
+                assert!(
+                    time.1.is_finite() && time.1 > 0.0,
+                    "{n}³ fresh {fresh} tick {frame}, {label}: positive finite CPU encode time, got {}",
+                    time.1
+                );
             }
             if frame >= WARMUP {
                 optimized_gpu.push(optimized_time.0);
@@ -1164,50 +1613,108 @@ fn gpu_flip_no_body_solid_clear_matches_six_passes() {
             }
             let a: Vec<u32> = optimized.read(STEP_NODE, "clock_status", 8);
             let b: Vec<u32> = original.read(STEP_NODE, "clock_status", 8);
-            assert_eq!(a, b, "{n}³ fresh {fresh} tick {frame}: complete clock status differs");
-            let final_dt = if fresh && frame > 0 { 1.0f32 / 60.0 } else { 0.0 };
-            assert_eq!(a[0], final_dt.to_bits(), "{n}³ fresh {fresh} tick {frame}: expected recording path");
-            assert_eq!(a[1], (1.0f32 / 60.0).to_bits(), "{n}³ fresh {fresh} tick {frame}: exact completed time");
-            assert_eq!(a[2], 0.0f32.to_bits(), "{n}³ fresh {fresh} tick {frame}: no unfinished interval");
-            assert_eq!(a[6], 1, "{n}³ fresh {fresh} tick {frame}: exactly one active step");
-            assert_eq!((a[4], a[5]), (0, 0), "{n}³ fresh {fresh} tick {frame}: no cap or nonfinite input");
-            let optimized_step: Vec<FluidParticle> = optimized.read(STEP_NODE, "out", scene.particles() as usize);
-            let original_step: Vec<FluidParticle> = original.read(STEP_NODE, "out", scene.particles() as usize);
+            assert_eq!(
+                a, b,
+                "{n}³ fresh {fresh} tick {frame}: complete clock status differs"
+            );
+            let final_dt = if fresh && frame > 0 {
+                1.0f32 / 60.0
+            } else {
+                0.0
+            };
+            assert_eq!(
+                a[0],
+                final_dt.to_bits(),
+                "{n}³ fresh {fresh} tick {frame}: expected recording path"
+            );
+            assert_eq!(
+                a[1],
+                (1.0f32 / 60.0).to_bits(),
+                "{n}³ fresh {fresh} tick {frame}: exact completed time"
+            );
+            assert_eq!(
+                a[2],
+                0.0f32.to_bits(),
+                "{n}³ fresh {fresh} tick {frame}: no unfinished interval"
+            );
+            assert_eq!(
+                a[6], 1,
+                "{n}³ fresh {fresh} tick {frame}: exactly one active step"
+            );
+            assert_eq!(
+                (a[4], a[5]),
+                (0, 0),
+                "{n}³ fresh {fresh} tick {frame}: no cap or nonfinite input"
+            );
+            let optimized_step: Vec<FluidParticle> =
+                optimized.read(STEP_NODE, "out", scene.particles() as usize);
+            let original_step: Vec<FluidParticle> =
+                original.read(STEP_NODE, "out", scene.particles() as usize);
             for (what, a, b) in [
-                ("published particles", optimized.particles(), original.particles()),
+                (
+                    "published particles",
+                    optimized.particles(),
+                    original.particles(),
+                ),
                 ("step particles", optimized_step, original_step),
             ] {
-                assert_eq!(bytemuck::cast_slice::<_, u32>(&a), bytemuck::cast_slice::<_, u32>(&b),
-                    "{n}³ fresh {fresh} tick {frame}: {what} bits differ");
+                assert_eq!(
+                    bytemuck::cast_slice::<_, u32>(&a),
+                    bytemuck::cast_slice::<_, u32>(&b),
+                    "{n}³ fresh {fresh} tick {frame}: {what} bits differ"
+                );
                 for particles in [&a, &b] {
                     let stats = particle_stats(particles);
-                    assert_eq!((stats.live, stats.bad), (optimized.seeded, 0),
-                        "{n}³ fresh {fresh} tick {frame}: every {what} record remains live and finite");
+                    assert_eq!(
+                        (stats.live, stats.bad),
+                        (optimized.seeded, 0),
+                        "{n}³ fresh {fresh} tick {frame}: every {what} record remains live and finite"
+                    );
                 }
             }
             let (a, b) = (optimized.faces(), original.faces());
-            assert_eq!(bytemuck::cast_slice::<_, u32>(&a), bytemuck::cast_slice::<_, u32>(&b),
-                "{n}³ fresh {fresh} tick {frame}: face bits differ");
+            assert_eq!(
+                bytemuck::cast_slice::<_, u32>(&a),
+                bytemuck::cast_slice::<_, u32>(&b),
+                "{n}³ fresh {fresh} tick {frame}: face bits differ"
+            );
             let a: Vec<u32> = optimized.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
             let b: Vec<u32> = original.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
-            assert_eq!(a, b, "{n}³ fresh {fresh} tick {frame}: full liquid stats differ");
+            assert_eq!(
+                a, b,
+                "{n}³ fresh {fresh} tick {frame}: full liquid stats differ"
+            );
             let capped_words = 2 * scene.particles() as usize + SOLVER_WORDS as usize;
             let a: Vec<u32> = optimized.read(STEP_NODE, "capped", capped_words);
             let b: Vec<u32> = original.read(STEP_NODE, "capped", capped_words);
-            assert_eq!(a, b, "{n}³ fresh {fresh} tick {frame}: full capped words differ");
+            assert_eq!(
+                a, b,
+                "{n}³ fresh {fresh} tick {frame}: full capped words differ"
+            );
             if frame + 1 == WARMUP {
                 warm_replay = [optimized.replay_stats(), original.replay_stats()];
             }
         }
         println!(
             "GPU FLIP {n}³ no-body solid velocity, fresh {fresh}, {WARMUP} warmup + {MEASURED} measured ticks/run: median clear GPU {:.3} ms CPU {:.3} ms; six passes GPU {:.3} ms CPU {:.3} ms",
-            median(&mut optimized_gpu), median(&mut optimized_cpu), median(&mut original_gpu), median(&mut original_cpu),
+            median(&mut optimized_gpu),
+            median(&mut optimized_cpu),
+            median(&mut original_gpu),
+            median(&mut original_cpu),
         );
-        for (label, run, warm) in [("clear", &optimized, warm_replay[0]), ("six passes", &original, warm_replay[1])] {
+        for (label, run, warm) in [
+            ("clear", &optimized, warm_replay[0]),
+            ("six passes", &original, warm_replay[1]),
+        ] {
             let replay = run.replay_stats();
-            println!("GPU FLIP {n}³ no-body solid velocity, fresh {fresh}, {label} replay: after warmup {warm:?}; final {replay:?}");
-            assert!(replay.replayed > warm.replayed && replay.segments_replayed > warm.segments_replayed,
-                "{n}³ fresh {fresh}, {label}: measured ticks must exercise ordinary encode replay");
+            println!(
+                "GPU FLIP {n}³ no-body solid velocity, fresh {fresh}, {label} replay: after warmup {warm:?}; final {replay:?}"
+            );
+            assert!(
+                replay.replayed > warm.replayed
+                    && replay.segments_replayed > warm.segments_replayed,
+                "{n}³ fresh {fresh}, {label}: measured ticks must exercise ordinary encode replay"
+            );
         }
     }
 }
@@ -1240,21 +1747,41 @@ fn gpu_flip_pocket_segments_match_indirect_sweeps() {
         let segmented_step: Vec<FluidParticle> = segmented.read(STEP_NODE, "out", count);
         let indirect_step: Vec<FluidParticle> = indirect.read(STEP_NODE, "out", count);
         for (label, a, b) in [
-            ("published particles", segmented.particles(), indirect.particles()),
+            (
+                "published particles",
+                segmented.particles(),
+                indirect.particles(),
+            ),
             ("step particles", segmented_step, indirect_step),
         ] {
-            assert_eq!(bytemuck::cast_slice::<_, u32>(&a), bytemuck::cast_slice::<_, u32>(&b), "frame{frame}: {label}");
+            assert_eq!(
+                bytemuck::cast_slice::<_, u32>(&a),
+                bytemuck::cast_slice::<_, u32>(&b),
+                "frame{frame}: {label}"
+            );
             for particles in [&a, &b] {
                 let stats = particle_stats(particles);
-                assert_eq!((stats.live, stats.bad), (segmented.seeded, 0), "frame{frame}: {label} remain live and finite");
+                assert_eq!(
+                    (stats.live, stats.bad),
+                    (segmented.seeded, 0),
+                    "frame{frame}: {label} remain live and finite"
+                );
             }
         }
-        assert_eq!(bytemuck::cast_slice::<_, u32>(&segmented.faces()), bytemuck::cast_slice::<_, u32>(&indirect.faces()), "frame{frame}: faces");
+        assert_eq!(
+            bytemuck::cast_slice::<_, u32>(&segmented.faces()),
+            bytemuck::cast_slice::<_, u32>(&indirect.faces()),
+            "frame{frame}: faces"
+        );
         for (node, port, words) in [
             ("stats", "stats_out", LIQUID_STATS_WORDS as usize),
             (STEP_NODE, "capped", 2 * count + SOLVER_WORDS as usize),
         ] {
-            assert_eq!(segmented.read::<u32>(node, port, words), indirect.read::<u32>(node, port, words), "frame{frame}: {port}");
+            assert_eq!(
+                segmented.read::<u32>(node, port, words),
+                indirect.read::<u32>(node, port, words),
+                "frame{frame}: {port}"
+            );
         }
     }
     manifold_water_gpu_flip::primitives::gpu_flip_step::set_force_indirect_pockets(false);
@@ -1271,7 +1798,13 @@ fn gpu_flip_pocket_segments_match_indirect_sweeps() {
         if frame == 10 {
             for run in [&mut segmented, &mut indirect] {
                 let step = node_named(&run.graph, STEP_NODE);
-                run.graph.set_param(step, "steps", manifold_node_engine::parameters::ParamValue::Float(1.0)).expect("steps");
+                run.graph
+                    .set_param(
+                        step,
+                        "steps",
+                        manifold_node_engine::parameters::ParamValue::Float(1.0),
+                    )
+                    .expect("steps");
             }
         }
         if frame % 2 == 0 {
@@ -1282,19 +1815,38 @@ fn gpu_flip_pocket_segments_match_indirect_sweeps() {
             segmented.frame();
         }
         compare(&segmented, &indirect, steps, frame);
-        if frame == 9 { warm = Some([segmented.replay_stats(), indirect.replay_stats()]); }
+        if frame == 9 {
+            warm = Some([segmented.replay_stats(), indirect.replay_stats()]);
+        }
     }
     let warm = warm.expect("ten warmup visits");
-    for (label, run, before) in [("segmented", &segmented, warm[0]), ("indirect", &indirect, warm[1])] {
+    for (label, run, before) in [
+        ("segmented", &segmented, warm[0]),
+        ("indirect", &indirect, warm[1]),
+    ] {
         let after = run.replay_stats();
-        assert!(after.replayed > before.replayed, "{label}: changed clock gates exercise warmed replay");
-        assert!(after.segments_replayed > before.segments_replayed, "{label}: warmed solver rounds replay");
-        assert_eq!(after.recorded, before.recorded, "{label}: changed gates do not record new commands");
-        assert_eq!(after.store_allocations, before.store_allocations, "{label}: changed gates reuse replay storage");
+        assert!(
+            after.replayed > before.replayed,
+            "{label}: changed clock gates exercise warmed replay"
+        );
+        assert!(
+            after.segments_replayed > before.segments_replayed,
+            "{label}: warmed solver rounds replay"
+        );
+        assert_eq!(
+            after.recorded, before.recorded,
+            "{label}: changed gates do not record new commands"
+        );
+        assert_eq!(
+            after.store_allocations, before.store_allocations,
+            "{label}: changed gates reuse replay storage"
+        );
     }
-    assert!(segmented.replay_stats().segments_replayed - warm[0].segments_replayed
-        > indirect.replay_stats().segments_replayed - warm[1].segments_replayed,
-        "pocket sweeps add replayed segments");
+    assert!(
+        segmented.replay_stats().segments_replayed - warm[0].segments_replayed
+            > indirect.replay_stats().segments_replayed - warm[1].segments_replayed,
+        "pocket sweeps add replayed segments"
+    );
     segmented.set_encode_replay(false);
     indirect.set_encode_replay(false);
     let before = [segmented.replay_stats(), indirect.replay_stats()];
@@ -1302,8 +1854,16 @@ fn gpu_flip_pocket_segments_match_indirect_sweeps() {
     original_frame(&mut indirect);
     compare(&segmented, &indirect, 1, 14);
     for (run, before) in [(&segmented, before[0]), (&indirect, before[1])] {
-        assert_eq!(run.replay_stats().replayed, before.replayed, "direct frame replays no command chains");
-        assert_eq!(run.replay_stats().segments_replayed, before.segments_replayed, "direct frame replays no segments");
+        assert_eq!(
+            run.replay_stats().replayed,
+            before.replayed,
+            "direct frame replays no command chains"
+        );
+        assert_eq!(
+            run.replay_stats().segments_replayed,
+            before.segments_replayed,
+            "direct frame replays no segments"
+        );
     }
 }
 
@@ -1330,31 +1890,59 @@ fn gpu_flip_inactive_extension_dispatch_matches_dense() {
     }
     fn compare(optimized: &Run, original: &Run, fresh: bool, frame: usize) {
         let scene = optimized.scene;
-        let at = format!("{}³ Steps {} fresh {fresh} tick {frame}", scene.pressure.n, scene.steps);
+        let at = format!(
+            "{}³ Steps {} fresh {fresh} tick {frame}",
+            scene.pressure.n, scene.steps
+        );
         let a: Vec<u32> = optimized.read(STEP_NODE, "clock_status", 8);
         let b: Vec<u32> = original.read(STEP_NODE, "clock_status", 8);
         assert_eq!(a, b, "{at}: complete clock status differs");
-        let final_dt = if fresh && scene.steps == 1 && frame > 0 { 1.0f32 / 60.0 } else { 0.0 };
+        let final_dt = if fresh && scene.steps == 1 && frame > 0 {
+            1.0f32 / 60.0
+        } else {
+            0.0
+        };
         assert_eq!(a[0], final_dt.to_bits(), "{at}: expected recording path");
-        assert_eq!(a[1], (1.0f32 / 60.0).to_bits(), "{at}: exact completed time");
+        assert_eq!(
+            a[1],
+            (1.0f32 / 60.0).to_bits(),
+            "{at}: exact completed time"
+        );
         assert_eq!(a[2], 0.0f32.to_bits(), "{at}: no unfinished interval");
-        assert_eq!(a[6], scene.steps as u32, "{at}: authored Steps accepted exactly");
+        assert_eq!(
+            a[6], scene.steps as u32,
+            "{at}: authored Steps accepted exactly"
+        );
         assert_eq!((a[4], a[5]), (0, 0), "{at}: no cap or nonfinite input");
         let count = scene.particles() as usize;
         let optimized_step: Vec<FluidParticle> = optimized.read(STEP_NODE, "out", count);
         let original_step: Vec<FluidParticle> = original.read(STEP_NODE, "out", count);
         for (what, a, b) in [
-            ("published particles", optimized.particles(), original.particles()),
+            (
+                "published particles",
+                optimized.particles(),
+                original.particles(),
+            ),
             ("step particles", optimized_step, original_step),
         ] {
-            assert!(bytemuck::cast_slice::<_, u32>(&a) == bytemuck::cast_slice::<_, u32>(&b), "{at}: {what} bits differ");
+            assert!(
+                bytemuck::cast_slice::<_, u32>(&a) == bytemuck::cast_slice::<_, u32>(&b),
+                "{at}: {what} bits differ"
+            );
             for particles in [&a, &b] {
                 let stats = particle_stats(particles);
-                assert_eq!((stats.live, stats.bad), (optimized.seeded, 0), "{at}: every {what} record remains live and finite");
+                assert_eq!(
+                    (stats.live, stats.bad),
+                    (optimized.seeded, 0),
+                    "{at}: every {what} record remains live and finite"
+                );
             }
         }
         let (a, b) = (optimized.faces(), original.faces());
-        assert!(bytemuck::cast_slice::<_, u32>(&a) == bytemuck::cast_slice::<_, u32>(&b), "{at}: face bits differ");
+        assert!(
+            bytemuck::cast_slice::<_, u32>(&a) == bytemuck::cast_slice::<_, u32>(&b),
+            "{at}: face bits differ"
+        );
         let a: Vec<u32> = optimized.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
         let b: Vec<u32> = original.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
         assert_eq!(a, b, "{at}: full liquid stats differ");
@@ -1384,8 +1972,14 @@ fn gpu_flip_inactive_extension_dispatch_matches_dense() {
                 (optimized.timed_frame(), original_time)
             };
             for (label, time) in [("indirect", optimized_time), ("dense", original_time)] {
-                assert!(time.0.is_finite() && time.0 > 0.0, "{n}³ Steps {steps}, {label}: positive finite GPU chunk span");
-                assert!(time.1.is_finite() && time.1 > 0.0, "{n}³ Steps {steps}, {label}: positive finite CPU encode time");
+                assert!(
+                    time.0.is_finite() && time.0 > 0.0,
+                    "{n}³ Steps {steps}, {label}: positive finite GPU chunk span"
+                );
+                assert!(
+                    time.1.is_finite() && time.1 > 0.0,
+                    "{n}³ Steps {steps}, {label}: positive finite CPU encode time"
+                );
             }
             if frame >= WARMUP {
                 optimized_gpu.push(optimized_time.0);
@@ -1400,18 +1994,34 @@ fn gpu_flip_inactive_extension_dispatch_matches_dense() {
         }
         println!(
             "GPU FLIP {n}³ inactive extension, Steps {steps} fresh {fresh}, {WARMUP} warmup + {MEASURED} measured ticks/run: median gated GPU {:.3} ms CPU {:.3} ms; dense GPU {:.3} ms CPU {:.3} ms",
-            median(&mut optimized_gpu), median(&mut optimized_cpu), median(&mut original_gpu), median(&mut original_cpu),
+            median(&mut optimized_gpu),
+            median(&mut optimized_cpu),
+            median(&mut original_gpu),
+            median(&mut original_cpu),
         );
-        for (label, run, warm) in [("indirect", &optimized, warm_replay[0]), ("dense", &original, warm_replay[1])] {
+        for (label, run, warm) in [
+            ("indirect", &optimized, warm_replay[0]),
+            ("dense", &original, warm_replay[1]),
+        ] {
             let replay = run.replay_stats();
-            println!("GPU FLIP {n}³ inactive extension, Steps {steps}, {label} replay: after warmup {warm:?}; final {replay:?}");
-            assert!(replay.replayed > warm.replayed && replay.segments_replayed > warm.segments_replayed,
-                "{n}³ Steps {steps}, {label}: measured ticks must exercise ordinary encode replay");
+            println!(
+                "GPU FLIP {n}³ inactive extension, Steps {steps}, {label} replay: after warmup {warm:?}; final {replay:?}"
+            );
+            assert!(
+                replay.replayed > warm.replayed
+                    && replay.segments_replayed > warm.segments_replayed,
+                "{n}³ Steps {steps}, {label}: measured ticks must exercise ordinary encode replay"
+            );
         }
         if !fresh {
-            let gated_segments = optimized.replay_stats().segments_replayed - warm_replay[0].segments_replayed;
-            let dense_segments = original.replay_stats().segments_replayed - warm_replay[1].segments_replayed;
-            assert!(gated_segments > dense_segments, "{n}³ Steps {steps}: extension layers must use gated replay segments");
+            let gated_segments =
+                optimized.replay_stats().segments_replayed - warm_replay[0].segments_replayed;
+            let dense_segments =
+                original.replay_stats().segments_replayed - warm_replay[1].segments_replayed;
+            assert!(
+                gated_segments > dense_segments,
+                "{n}³ Steps {steps}: extension layers must use gated replay segments"
+            );
         }
         if n == 16 && steps == 2 {
             optimized.set_encode_replay(false);
@@ -1421,10 +2031,19 @@ fn gpu_flip_inactive_extension_dispatch_matches_dense() {
             optimized.timed_frame();
             original_frame(&mut original);
             compare(&optimized, &original, fresh, WARMUP + MEASURED);
-            for (label, run, before) in [("indirect", &optimized, direct_before[0]), ("dense", &original, direct_before[1])] {
+            for (label, run, before) in [
+                ("indirect", &optimized, direct_before[0]),
+                ("dense", &original, direct_before[1]),
+            ] {
                 let after = run.replay_stats();
-                assert_eq!(after.replayed, before.replayed, "{label}: the direct frame replayed no command chains");
-                assert_eq!(after.segments_replayed, before.segments_replayed, "{label}: the direct frame replayed no pressure rounds");
+                assert_eq!(
+                    after.replayed, before.replayed,
+                    "{label}: the direct frame replayed no command chains"
+                );
+                assert_eq!(
+                    after.segments_replayed, before.segments_replayed,
+                    "{label}: the direct frame replayed no pressure rounds"
+                );
             }
         }
     }
@@ -1453,14 +2072,28 @@ fn gpu_flip_fresh_speed_preserves_force_changes_and_multiple_intervals() {
             }
             if frame == 8 {
                 let step = node_named(&run.graph, STEP_NODE);
-                run.graph.set_param(step, "steps", manifold_node_engine::parameters::ParamValue::Float(3.0)).unwrap();
+                run.graph
+                    .set_param(
+                        step,
+                        "steps",
+                        manifold_node_engine::parameters::ParamValue::Float(3.0),
+                    )
+                    .unwrap();
             }
             run.frame();
         }
         let a: Vec<u32> = optimized.read(STEP_NODE, "clock_status", 8);
         let b: Vec<u32> = original.read(STEP_NODE, "clock_status", 8);
-        assert_eq!(&a[1..], &b[1..], "frame {frame}: completed time and CFL decisions");
-        assert_eq!(a[2], 0.0f32.to_bits(), "frame {frame}: no unfinished interval");
+        assert_eq!(
+            &a[1..],
+            &b[1..],
+            "frame {frame}: completed time and CFL decisions"
+        );
+        assert_eq!(
+            a[2],
+            0.0f32.to_bits(),
+            "frame {frame}: no unfinished interval"
+        );
         assert_eq!(a[5], 0, "frame {frame}: finite clock input");
         fast_steps += usize::from(a[0] != 0 && a[6] == 1);
         if (3..6).contains(&frame) {
@@ -1470,18 +2103,25 @@ fn gpu_flip_fresh_speed_preserves_force_changes_and_multiple_intervals() {
             assert!(a[6] >= 3, "authored minimum Steps remains active");
         }
         let (ap, bp) = (optimized.particles(), original.particles());
-        assert!(bytemuck::cast_slice::<_, u8>(&ap) == bytemuck::cast_slice::<_, u8>(&bp),
-            "frame {frame}: particle bits differ");
+        assert!(
+            bytemuck::cast_slice::<_, u8>(&ap) == bytemuck::cast_slice::<_, u8>(&bp),
+            "frame {frame}: particle bits differ"
+        );
         assert_eq!(particle_stats(&ap).bad, 0, "frame {frame}: finite water");
         let (af, bf) = (optimized.faces(), original.faces());
-        assert!(bytemuck::cast_slice::<_, u8>(&af) == bytemuck::cast_slice::<_, u8>(&bf),
-            "frame {frame}: face bits differ");
+        assert!(
+            bytemuck::cast_slice::<_, u8>(&af) == bytemuck::cast_slice::<_, u8>(&bf),
+            "frame {frame}: face bits differ"
+        );
         let a: Vec<u32> = optimized.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
         let b: Vec<u32> = original.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
         assert_eq!(a, b, "frame {frame}: full liquid stats differ");
     }
     assert!(fast_steps > 0, "fixture must use the one-step shortcut");
-    assert!(adaptive_steps > 0, "the changed force must require fresh CFL subdivision");
+    assert!(
+        adaptive_steps > 0,
+        "the changed force must require fresh CFL subdivision"
+    );
 }
 
 /// FNV-1a over the state's particles after each frame.
@@ -1523,7 +2163,10 @@ fn gpu_flip_sheeting_off_leaves_the_dam_break_unchanged() {
     // The whole step's pin: only a commit that changes the step on purpose
     // re-records it, and says why. Last re-recorded for the Dam Break losing its box (a scene Collider now), after the tank walls matching
     // the native engine; sheeting with walls and no pressure template gives it too.
-    assert_eq!(default_off, 0xd73f_a72f_e5d9_5fbb, "sheeting off changed the Dam Break");
+    assert_eq!(
+        default_off, 0xd73f_a72f_e5d9_5fbb,
+        "sheeting off changed the Dam Break"
+    );
     assert_eq!(digest(Some(0.0)), default_off, "rate 0 changed the step");
 }
 
@@ -1541,7 +2184,10 @@ fn gpu_flip_sheeting_replay_matches_direct() {
         replayed.frame();
         let a = direct.particles();
         assert!(a == replayed.particles(), "frame {frame}: replay differs");
-        born = a.iter().filter(|p| p.position_radius[3] > 0.0 && p.id > seeded).count();
+        born = a
+            .iter()
+            .filter(|p| p.position_radius[3] > 0.0 && p.id > seeded)
+            .count();
     }
     let stats = replayed.replay_stats();
     eprintln!("SHEETING REPLAY: {born} live births after 24 frames, {stats:?}");
@@ -1559,9 +2205,18 @@ use manifold_node_engine::testkit::atom::{node_named, output_of};
 /// the tick's inflow births and refusals (stats words 1, 28 and 29).
 #[cfg(test)]
 fn inflow_ticks(drain: bool, fill_slots: Option<i32>, seconds: usize) -> Vec<[u32; 3]> {
-    let scene = WaterScene { fill_height: 0.0, column: [[0.0; 2]; 3], ..WaterScene::dam_break(24) };
+    let scene = WaterScene {
+        fill_height: 0.0,
+        column: [[0.0; 2]; 3],
+        ..WaterScene::dam_break(24)
+    };
     let mut def = water_def(scene);
-    let domain = def.nodes.iter().find(|node| node.node_id.as_str() == "domain").expect("domain").id;
+    let domain = def
+        .nodes
+        .iter()
+        .find(|node| node.node_id.as_str() == "domain")
+        .expect("domain")
+        .id;
     let first = def.nodes.iter().map(|node| node.id).max().unwrap_or(0) + 1;
     let float = |v: f64| serde_json::json!({"type": "Float", "value": v});
     let mut sources = vec![(1, [0.0, 3.38, -1.59], [3.94, 0.2, 0.6], [0.0, 0.0, 1.0])];
@@ -1570,32 +2225,62 @@ fn inflow_ticks(drain: bool, fill_slots: Option<i32>, seconds: usize) -> Vec<[u3
     }
     for (k, (role, pos, scale, velocity)) in sources.into_iter().enumerate() {
         let (transform, source) = (first + 2 * k as u32, first + 2 * k as u32 + 1);
-        let node = |id: u32, name: String, type_id: &str, params: serde_json::Value| -> manifold_core::effect_graph_def::EffectGraphNode {
-            serde_json::from_value(serde_json::json!({"id": id, "nodeId": name, "typeId": type_id, "params": params})).expect("source node")
+        let node = |id: u32,
+                    name: String,
+                    type_id: &str,
+                    params: serde_json::Value|
+         -> manifold_core::effect_graph_def::EffectGraphNode {
+            serde_json::from_value(
+                serde_json::json!({"id": id, "nodeId": name, "typeId": type_id, "params": params}),
+            )
+            .expect("source node")
         };
-        def.nodes.push(node(transform, format!("source_transform_{k}"), "node.transform_3d", serde_json::json!({
-            "pos_x": float(pos[0]), "pos_y": float(pos[1]), "pos_z": float(pos[2]),
-            "scale_x": float(scale[0]), "scale_y": float(scale[1]), "scale_z": float(scale[2]),
-        })));
+        def.nodes.push(node(
+            transform,
+            format!("source_transform_{k}"),
+            "node.transform_3d",
+            serde_json::json!({
+                "pos_x": float(pos[0]), "pos_y": float(pos[1]), "pos_z": float(pos[2]),
+                "scale_x": float(scale[0]), "scale_y": float(scale[1]), "scale_z": float(scale[2]),
+            }),
+        ));
         def.nodes.push(node(source, format!("source_{k}"), "node.fluid_role_source", serde_json::json!({
             "role": {"type": "Enum", "value": role},
             "velocity_x": float(velocity[0]), "velocity_y": float(velocity[1]), "velocity_z": float(velocity[2]),
         })));
-        let wire = |from_node: u32, from_port: &str, to_node: u32, to_port: String| manifold_core::effect_graph_def::EffectGraphWire {
-            from_node, from_port: from_port.into(), to_node, to_port,
+        let wire = |from_node: u32, from_port: &str, to_node: u32, to_port: String| {
+            manifold_core::effect_graph_def::EffectGraphWire {
+                from_node,
+                from_port: from_port.into(),
+                to_node,
+                to_port,
+            }
         };
-        def.wires.push(wire(transform, "transform", source, "transform".into()));
-        def.wires.push(wire(source, "role", domain, format!("role_{k}")));
+        def.wires
+            .push(wire(transform, "transform", source, "transform".into()));
+        def.wires
+            .push(wire(source, "role", domain, format!("role_{k}")));
     }
     if let Some(slots) = fill_slots {
-        let fill = def.nodes.iter_mut().find(|node| node.type_id == "node.liquid_fill").expect("fill");
-        fill.params.insert("particle_capacity".into(), serde_json::from_value(serde_json::json!({"type": "Int", "value": slots})).expect("slots"));
+        let fill = def
+            .nodes
+            .iter_mut()
+            .find(|node| node.type_id == "node.liquid_fill")
+            .expect("fill");
+        fill.params.insert(
+            "particle_capacity".into(),
+            serde_json::from_value(serde_json::json!({"type": "Int", "value": slots}))
+                .expect("slots"),
+        );
         let fill = fill.id;
-        def.wires.retain(|wire| !(wire.to_node == fill && wire.to_port == "particle_capacity"));
+        def.wires
+            .retain(|wire| !(wire.to_node == fill && wire.to_port == "particle_capacity"));
     }
     let mut registry = PrimitiveRegistry::with_builtin();
     register_substep_test_nodes(&mut registry);
-    let graph = def.into_graph(&registry, &Default::default()).expect("inflow scene builds");
+    let graph = def
+        .into_graph(&registry, &Default::default())
+        .expect("inflow scene builds");
     let mut run = Run::with_graph(scene, graph);
     (0..seconds * 60)
         .map(|_| {
@@ -1621,18 +2306,35 @@ fn gpu_flip_inflow_flows_for_the_whole_clip() {
         for (second, ticks) in ticks.chunks(60).enumerate() {
             let born: u32 = ticks.iter().map(|tick| tick[1]).sum();
             let refused: u32 = ticks.iter().map(|tick| tick[2]).sum();
-            eprintln!("INFLOW drain={drain} second {second}: live {} births {born} refused {refused}", ticks[59][0]);
-            assert!(second == 0 || born > 0, "drain={drain}: second {second} emitted nothing");
-            assert_eq!(refused, 0, "drain={drain}: second {second} ran short of slots");
+            eprintln!(
+                "INFLOW drain={drain} second {second}: live {} births {born} refused {refused}",
+                ticks[59][0]
+            );
+            assert!(
+                second == 0 || born > 0,
+                "drain={drain}: second {second} emitted nothing"
+            );
+            assert_eq!(
+                refused, 0,
+                "drain={drain}: second {second} ran short of slots"
+            );
         }
         end[usize::from(drain)] = ticks.last().expect("ticks")[0];
     }
-    assert!(end[1] < end[0], "the drain takes water away: {} live with it, {} without", end[1], end[0]);
+    assert!(
+        end[1] < end[0],
+        "the drain takes water away: {} live with it, {} without",
+        end[1],
+        end[0]
+    );
     // The pool as small as it was: the inflow fills it, then every tick it is
     // held back reports what it could not add.
     let ticks = inflow_ticks(false, Some(5_000), 2);
     let last = ticks.last().expect("ticks");
-    eprintln!("INFLOW small pool: last tick live {} births {} refused {}", last[0], last[1], last[2]);
+    eprintln!(
+        "INFLOW small pool: last tick live {} births {} refused {}",
+        last[0], last[1], last[2]
+    );
     assert_eq!(last[0], 5_000, "the pool filled");
     assert_eq!(last[1], 0, "no births past a full pool");
     assert!(last[2] > 0, "a full pool reports the births it refused");

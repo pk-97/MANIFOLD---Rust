@@ -27,9 +27,12 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, card: &ModifierFields) -> R
     let host_id = |param: &str| param_id(&item.id, param);
     let bounds = rest_box(b.drawn.iter().map(|drawn| &drawn.rest));
     let floor = bounds.map_or(0.0, |(lo, _)| lo[1]);
-    let (graph, mut specs) = recipe_card(entry.recipe, &lookup, &host_id, &[("plane_offset", floor)])?;
+    let (graph, mut specs) =
+        recipe_card(entry.recipe, &lookup, &host_id, &[("plane_offset", floor)])?;
     if let Some((lo, hi)) = bounds {
-        let size = (0..3).map(|axis| hi[axis] - lo[axis]).fold(1.0f32, f32::max);
+        let size = (0..3)
+            .map(|axis| hi[axis] - lo[axis])
+            .fold(1.0f32, f32::max);
         let low = lo.iter().copied().fold(f32::INFINITY, f32::min) - OFFSET_REACH * size;
         let high = hi.iter().copied().fold(f32::NEG_INFINITY, f32::max) + OFFSET_REACH * size;
         for (spec, param) in &mut specs {
@@ -41,14 +44,24 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, card: &ModifierFields) -> R
     // The card keeps its params with nothing to act on, so its values,
     // mappings and modulation survive a toggle.
     b.push_params(specs.iter().map(|(spec, _)| spec.clone()));
-    let objects = if card.on { mirrored_objects(b) } else { Vec::new() };
+    let objects = if card.on {
+        mirrored_objects(b)
+    } else {
+        Vec::new()
+    };
     for (chunk, part) in objects.chunks(TARGETS_PER_INSTANCE).enumerate() {
-        let suffix = if chunk == 0 { "mirror".to_owned() } else { format!("mirror:{chunk}") };
+        let suffix = if chunk == 0 {
+            "mirror".to_owned()
+        } else {
+            format!("mirror:{chunk}")
+        };
         let id = node(item.id.as_str(), &suffix);
         let instance = SceneModifierInstanceDef {
             id: id.clone(),
             scene: node(SCENE, "render"),
-            targets: SceneTargetSelection::Explicit { objects: part.to_vec() },
+            targets: SceneTargetSelection::Explicit {
+                objects: part.to_vec(),
+            },
             mesh_frames: Vec::new(),
             legacy_math_view_carrier: None,
             graph: Box::new(graph.clone()),
@@ -60,11 +73,23 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, card: &ModifierFields) -> R
 
 /// Every scene object the render draws.
 fn mirrored_objects(b: &mut Builder<'_>) -> Vec<NodeId> {
-    let objects: Vec<u32> = b.objects.iter().copied().filter(|&object| b.node_type(object) == Some("node.scene_object")).collect();
+    let objects: Vec<u32> = b
+        .objects
+        .iter()
+        .copied()
+        .filter(|&object| b.node_type(object) == Some("node.scene_object"))
+        .collect();
     for &object in &objects {
         if b.input(object, "instances").is_none() {
-            b.set(object, "instances_space", manifold_core::effect_graph_def::SerializedParamValue::Enum { value: 2 });
+            b.set(
+                object,
+                "instances_space",
+                manifold_core::effect_graph_def::SerializedParamValue::Enum { value: 2 },
+            );
         }
     }
-    objects.into_iter().filter_map(|object| b.node_id_of(object)).collect()
+    objects
+        .into_iter()
+        .filter_map(|object| b.node_id_of(object))
+        .collect()
 }

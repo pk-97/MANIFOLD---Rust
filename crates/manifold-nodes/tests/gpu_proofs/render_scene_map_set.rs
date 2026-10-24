@@ -19,9 +19,8 @@ use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 /// `node.linear_gradient` (id `id_base`) -> `node.gradient_map`
 /// (id `id_base+1`) with `color_a == color_b == rgba` -- a solid-colour
@@ -216,7 +215,13 @@ fn normal_map_tilts_the_lit_value_by_the_cotangent_frames_predicted_amount() {
         "{{\"fromNode\":{tex_out},\"fromPort\":\"out\",\"toNode\":20,\"toPort\":\"normal_map_0\"}},"
     );
     let wired_extra_wires = format!("{}{}{}", grid.wires, tex_wires, wire_to_port);
-    let wired_json = assemble("NormalMapWired", &wired_extra_nodes, &wired_extra_wires, 1, 1);
+    let wired_json = assemble(
+        "NormalMapWired",
+        &wired_extra_nodes,
+        &wired_extra_wires,
+        1,
+        1,
+    );
 
     let (unwired_bytes, w, h) = render_readback(&unwired_json);
     let (wired_bytes, _, _) = render_readback(&wired_json);
@@ -232,7 +237,10 @@ fn normal_map_tilts_the_lit_value_by_the_cotangent_frames_predicted_amount() {
         wired_luma / unwired_luma
     );
 
-    assert!(unwired_luma.is_finite() && unwired_luma > 0.01, "unwired baseline must be lit");
+    assert!(
+        unwired_luma.is_finite() && unwired_luma > 0.01,
+        "unwired baseline must be lit"
+    );
     let ratio = wired_luma / unwired_luma;
     assert!(
         (ratio - tz).abs() < 0.03,
@@ -352,12 +360,18 @@ fn mr_map_blue_channel_drives_f0_via_metallic() {
     assert!(d_rgb.iter().all(|c| c.is_finite()) && m_rgb.iter().all(|c| c.is_finite()));
     // Diffuse-dominated dielectric case: strongly tinted toward albedo's
     // r/b ratio (9.0).
-    assert!(d_ratio > 3.0, "dielectric (metallic=0) render should be strongly albedo-tinted, got r/b={d_ratio:.3}");
+    assert!(
+        d_ratio > 3.0,
+        "dielectric (metallic=0) render should be strongly albedo-tinted, got r/b={d_ratio:.3}"
+    );
     // Metal case (diffuse EXACTLY zero, kd_ibl=(1-f)*(1-metallic)=0): F0 =
     // albedo must still tint the specular-only result measurably above
     // neutral (1.0) -- proves mr_map's B channel reached F0, not the
     // untouched dielectric default (which would read near-neutral here).
-    assert!(m_ratio > 1.05, "metallic=1 (F0=albedo) render should be measurably tinted above neutral, got r/b={m_ratio:.3}");
+    assert!(
+        m_ratio > 1.05,
+        "metallic=1 (F0=albedo) render should be measurably tinted above neutral, got r/b={m_ratio:.3}"
+    );
 }
 
 /// D3: emissive adds AFTER lighting -- present in the output even with zero
@@ -443,8 +457,13 @@ fn emissive_map_adds_after_lighting_with_zero_incident_light() {
 #[test]
 fn occlusion_map_darkens_diffuse_ibl_term_only() {
     let scene = |occlusion: f32, tex_id: u32| {
-        let (tex_nodes, tex_wires, tex_out) = solid_texture_nodes(tex_id, [occlusion, 0.0, 0.0, 1.0]);
-        let extra_nodes = format!("{}{}", pbr_scene_nodes([0.6, 0.6, 0.6], 0.4, 0.5, 0.0), tex_nodes);
+        let (tex_nodes, tex_wires, tex_out) =
+            solid_texture_nodes(tex_id, [occlusion, 0.0, 0.0, 1.0]);
+        let extra_nodes = format!(
+            "{}{}",
+            pbr_scene_nodes([0.6, 0.6, 0.6], 0.4, 0.5, 0.0),
+            tex_nodes
+        );
         let wire_to_port = format!(
             "{{\"fromNode\":{tex_out},\"fromPort\":\"out\",\"toNode\":20,\"toPort\":\"occlusion_map_0\"}},"
         );
@@ -464,8 +483,14 @@ fn occlusion_map_darkens_diffuse_ibl_term_only() {
     let l0 = luma(v0);
     let lh = luma(vh);
     let l1 = luma(v1);
-    assert!(l0.is_finite() && l0 > 0.005, "specular_ibl must survive full occlusion (V(0)={l0:.5})");
-    assert!(l1 > l0 * 1.05, "occlusion must measurably darken the result: V(1)={l1:.5} V(0)={l0:.5}");
+    assert!(
+        l0.is_finite() && l0 > 0.005,
+        "specular_ibl must survive full occlusion (V(0)={l0:.5})"
+    );
+    assert!(
+        l1 > l0 * 1.05,
+        "occlusion must measurably darken the result: V(1)={l1:.5} V(0)={l0:.5}"
+    );
     let predicted_mid = (l0 + l1) * 0.5;
     assert!(
         (lh - predicted_mid).abs() < (l1 - l0).max(1e-4) * 0.1,

@@ -50,11 +50,18 @@ fn render(selected: &[u32]) -> (Vec<u8>, Option<Vec<u8>>) {
         let mut enc = h.device.create_encoder("render-scene-selection-mask-enc");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-            runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+            runtime.render(
+                &mut gpu,
+                &target.texture,
+                &ctx,
+                &manifold_core::params::ParamManifest::default(),
+            );
         }
         enc.commit_and_wait_completed();
     }
-    let mask = runtime.selection_mask().map(|mask| read_mask(&h.device, mask));
+    let mask = runtime
+        .selection_mask()
+        .map(|mask| read_mask(&h.device, mask));
     (h.readback(&target.texture), mask)
 }
 
@@ -65,7 +72,8 @@ fn read_mask(device: &manifold_gpu::GpuDevice, mask: &GpuTexture) -> Vec<u8> {
     enc.copy_texture_to_buffer(mask, &buf, mask.width, mask.height, mask.width);
     enc.commit_and_wait_completed();
     let ptr = buf.mapped_ptr().expect("shared readback buffer");
-    unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), (mask.width * mask.height) as usize) }.to_vec()
+    unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), (mask.width * mask.height) as usize) }
+        .to_vec()
 }
 
 /// R above G: only the red occluder is tinted.
@@ -80,22 +88,46 @@ fn selection_mask_covers_the_selected_object_and_leaves_the_output_unchanged() {
     let (plain, no_mask) = render(&[]);
     assert!(no_mask.is_none(), "no selection, no mask");
     let (outlined, mask) = render(&[1]);
-    assert!(plain == outlined, "D9: the output is byte-identical with a selection");
+    assert!(
+        plain == outlined,
+        "D9: the output is byte-identical with a selection"
+    );
     let mask = mask.expect("a selection draws a mask");
     let h = manifold_node_engine::testkit::gpu_harness::shared();
-    assert_eq!(mask.len(), (h.width * h.height) as usize, "the mask is the output's size");
+    assert_eq!(
+        mask.len(),
+        (h.width * h.height) as usize,
+        "the mask is the output's size"
+    );
 
     let covered: Vec<bool> = mask.iter().map(|&m| m > 127).collect();
     let red_px: Vec<bool> = outlined.chunks_exact(8).map(red).collect();
     let covered_n = covered.iter().filter(|&&c| c).count();
     let red_n = red_px.iter().filter(|&&r| r).count();
-    let both = covered.iter().zip(&red_px).filter(|(c, r)| **c && **r).count();
+    let both = covered
+        .iter()
+        .zip(&red_px)
+        .filter(|(c, r)| **c && **r)
+        .count();
     eprintln!("selection mask: covered={covered_n} red={red_n} both={both}");
     assert!(red_n > 500, "the occluder shows ({red_n} px)");
-    assert!(both as f64 > red_n as f64 * 0.95, "the mask covers the occluder: {both} of {red_n}");
-    assert!((covered_n as f64) < red_n as f64 * 1.1, "and nothing else: {covered_n} vs {red_n}");
+    assert!(
+        both as f64 > red_n as f64 * 0.95,
+        "the mask covers the occluder: {both} of {red_n}"
+    );
+    assert!(
+        (covered_n as f64) < red_n as f64 * 1.1,
+        "and nothing else: {covered_n} vs {red_n}"
+    );
 
     let (_, ground) = render(&[0]);
-    let ground_n = ground.expect("ground mask").iter().filter(|&&m| m > 127).count();
-    assert!(ground_n > covered_n * 2, "the other slot masks the ground: {ground_n}");
+    let ground_n = ground
+        .expect("ground mask")
+        .iter()
+        .filter(|&&m| m > 127)
+        .count();
+    assert!(
+        ground_n > covered_n * 2,
+        "the other slot masks the ground: {ground_n}"
+    );
 }

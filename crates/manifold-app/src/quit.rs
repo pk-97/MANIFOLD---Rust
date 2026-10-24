@@ -244,7 +244,8 @@ mod macos {
     /// `NSTerminateCancel`: AppKit keeps running and asks nothing more.
     const NS_TERMINATE_CANCEL: usize = 0;
 
-    type ShouldTerminateFn = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject) -> usize;
+    type ShouldTerminateFn =
+        unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject) -> usize;
     type ReplyFn = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject);
 
     unsafe extern "C-unwind" fn should_terminate(
@@ -272,10 +273,15 @@ mod macos {
     /// Runs from the run loop, outside every winit handler: a yes makes AppKit
     /// post `applicationWillTerminate:`, which winit answers by dispatching
     /// `LoopExiting`, and winit panics if its handler is already running.
-    unsafe extern "C-unwind" fn deliver_reply(_this: *mut AnyObject, _sel: Sel, quit: *mut AnyObject) {
+    unsafe extern "C-unwind" fn deliver_reply(
+        _this: *mut AnyObject,
+        _sel: Sel,
+        quit: *mut AnyObject,
+    ) {
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-            let _: () = msg_send![app, replyToApplicationShouldTerminate: Bool::new(!quit.is_null())];
+            let _: () =
+                msg_send![app, replyToApplicationShouldTerminate: Bool::new(!quit.is_null())];
         }
     }
 
@@ -287,7 +293,10 @@ mod macos {
         }
         // A terminate: that arrived while a prompt was up is answered too.
         REQUESTED.with(|c| c.set(false));
-        log::info!("[quit] terminate: answered {}", if yes { "yes" } else { "no" });
+        log::info!(
+            "[quit] terminate: answered {}",
+            if yes { "yes" } else { "no" }
+        );
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             let delegate: *mut AnyObject = msg_send![app, delegate];
@@ -346,7 +355,9 @@ mod macos {
             )
             .as_bool();
             if !trampoline {
-                log::warn!("[quit] class_addMethod(manifoldDeliverTerminateReply:) failed — ⌘Q quits without asking");
+                log::warn!(
+                    "[quit] class_addMethod(manifoldDeliverTerminateReply:) failed — ⌘Q quits without asking"
+                );
                 return false;
             }
             // NSApplicationTerminateReply is an NSUInteger: "Q" on 64-bit.
@@ -358,7 +369,9 @@ mod macos {
             )
             .as_bool();
             if !added {
-                log::warn!("[quit] class_addMethod(applicationShouldTerminate:) failed — ⌘Q quits without asking");
+                log::warn!(
+                    "[quit] class_addMethod(applicationShouldTerminate:) failed — ⌘Q quits without asking"
+                );
                 return false;
             }
             // winit's EventLoop retains the delegate; NSApplication holds it weakly.
@@ -406,7 +419,10 @@ mod tests {
         let probe = rx.clone();
         let decision = app.request_quit(
             || {
-                assert!(probe.is_empty(), "the prompt is answered before anything is sent");
+                assert!(
+                    probe.is_empty(),
+                    "the prompt is answered before anything is sent"
+                );
                 SaveChoice::DontSave
             },
             no_save,
@@ -420,7 +436,10 @@ mod tests {
         let decision = app.request_quit(|| SaveChoice::Cancel, no_save);
         assert_eq!(decision, QuitDecision::Stay, "Cancel keeps the app open");
         assert!(!app.shutting_down);
-        assert!(app.content_tx.is_some(), "the content thread is still connected");
+        assert!(
+            app.content_tx.is_some(),
+            "the content thread is still connected"
+        );
         assert!(sent(&rx).is_empty(), "Cancel sends nothing");
 
         // No unsaved edits: quits at once without asking.
@@ -447,7 +466,10 @@ mod tests {
         let decision = app.request_quit(|| SaveChoice::Save, |_| false);
         assert_eq!(decision.terminate_reply(), Some(false));
         assert!(!app.shutting_down);
-        assert!(sent(&rx).is_empty(), "a failed save keeps the content thread");
+        assert!(
+            sent(&rx).is_empty(),
+            "a failed save keeps the content thread"
+        );
 
         // Save that lands: yes.
         let (mut app, rx) = app_with_edits(true);
@@ -468,8 +490,15 @@ mod tests {
         app.ws.ui_root.export_progress.begin("show.mp4");
         let decision = app.request_quit(|| panic!("no prompt while the export unwinds"), no_save);
         assert_eq!(decision, QuitDecision::AwaitExport);
-        assert_eq!(sent(&rx), ["CancelExport"], "the quit cancels the export and nothing else");
-        assert!(!app.quit_after_export_ready(), "the prompt waits for the export to end");
+        assert_eq!(
+            sent(&rx),
+            ["CancelExport"],
+            "the quit cancels the export and nothing else"
+        );
+        assert!(
+            !app.quit_after_export_ready(),
+            "the prompt waits for the export to end"
+        );
 
         // A second quit while it unwinds sends no second cancel.
         let decision = app.request_quit(|| panic!("still unwinding"), no_save);
@@ -477,8 +506,14 @@ mod tests {
         assert!(sent(&rx).is_empty());
 
         app.ws.ui_root.export_progress.finish();
-        assert!(app.quit_after_export_ready(), "the export ended, so the quit asks now");
-        assert_eq!(app.request_quit(|| SaveChoice::DontSave, no_save), QuitDecision::Quit);
+        assert!(
+            app.quit_after_export_ready(),
+            "the export ended, so the quit asks now"
+        );
+        assert_eq!(
+            app.request_quit(|| SaveChoice::DontSave, no_save),
+            QuitDecision::Quit
+        );
         assert_eq!(sent(&rx), ["Shutdown"]);
         assert!(!app.quit_after_export);
     }
@@ -488,7 +523,10 @@ mod tests {
         // The content thread's Shutdown cancels the export itself.
         let (mut app, rx) = app_with_edits(false);
         app.ws.ui_root.export_progress.begin("show.mp4");
-        assert_eq!(app.request_quit(|| panic!("a clean project never asks"), no_save), QuitDecision::Quit);
+        assert_eq!(
+            app.request_quit(|| panic!("a clean project never asks"), no_save),
+            QuitDecision::Quit
+        );
         assert_eq!(sent(&rx), ["Shutdown"]);
     }
 }

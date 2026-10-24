@@ -29,8 +29,14 @@ fn parse_line(line: &str) -> RigRecord {
             d1: kv["d1"].parse().unwrap(),
             d2: kv["d2"].parse().unwrap(),
         },
-        "osc_song" => RigRecord::OscSongTime { at_ns: u("t"), beats: f32_("beats") },
-        "osc_tempo" => RigRecord::OscTempo { at_ns: u("t"), bpm: f32_("bpm") },
+        "osc_song" => RigRecord::OscSongTime {
+            at_ns: u("t"),
+            beats: f32_("beats"),
+        },
+        "osc_tempo" => RigRecord::OscTempo {
+            at_ns: u("t"),
+            bpm: f32_("bpm"),
+        },
         "tick" => RigRecord::Tick {
             frame: u("f"),
             wake_ns: u("wake"),
@@ -55,9 +61,21 @@ fn parse_line(line: &str) -> RigRecord {
             osc_age_s: f("oage"),
             osc_bpm: f32_("ot"),
         },
-        "present" => RigRecord::PresentIssued { frame: u("f"), drawable_id: u("d"), at_ns: u("t") },
-        "presented" => RigRecord::Presented { drawable_id: u("d"), presented_s: f("ps"), at_ns: u("t") },
-        "authority" => RigRecord::Authority { at_ns: u("t"), from: authority(kv["from"]), to: authority(kv["to"]) },
+        "present" => RigRecord::PresentIssued {
+            frame: u("f"),
+            drawable_id: u("d"),
+            at_ns: u("t"),
+        },
+        "presented" => RigRecord::Presented {
+            drawable_id: u("d"),
+            presented_s: f("ps"),
+            at_ns: u("t"),
+        },
+        "authority" => RigRecord::Authority {
+            at_ns: u("t"),
+            from: authority(kv["from"]),
+            to: authority(kv["to"]),
+        },
         "transport" => RigRecord::Transport {
             at_ns: u("t"),
             source: match kv["src"] {
@@ -90,10 +108,28 @@ fn same(a: &RigRecord, b: &RigRecord) -> bool {
 
 fn every_kind() -> Vec<RigRecord> {
     vec![
-        RigRecord::ClkByte { at_ns: 1, midir_us: 123_456_789, status: 0xf8, d1: 0, d2: 0 },
-        RigRecord::ClkByte { at_ns: 2, midir_us: 0, status: 0xf2, d1: 127, d2: 3 },
-        RigRecord::OscSongTime { at_ns: 3, beats: 1_234.567_9 },
-        RigRecord::OscTempo { at_ns: 4, bpm: 127.99 },
+        RigRecord::ClkByte {
+            at_ns: 1,
+            midir_us: 123_456_789,
+            status: 0xf8,
+            d1: 0,
+            d2: 0,
+        },
+        RigRecord::ClkByte {
+            at_ns: 2,
+            midir_us: 0,
+            status: 0xf2,
+            d1: 127,
+            d2: 3,
+        },
+        RigRecord::OscSongTime {
+            at_ns: 3,
+            beats: 1_234.567_9,
+        },
+        RigRecord::OscTempo {
+            at_ns: 4,
+            bpm: 127.99,
+        },
         RigRecord::Tick {
             frame: 5,
             wake_ns: 16_700_123,
@@ -131,15 +167,57 @@ fn every_kind() -> Vec<RigRecord> {
             osc_age_s: f64::INFINITY,
             osc_bpm: 0.0,
         },
-        RigRecord::PresentIssued { frame: 7, drawable_id: 42, at_ns: 8 },
-        RigRecord::Presented { drawable_id: 42, presented_s: 812_345.678_901_234, at_ns: 9 },
-        RigRecord::Authority { at_ns: 10, from: ClockAuthority::Internal, to: ClockAuthority::Osc },
-        RigRecord::Transport { at_ns: 11, source: TransportSource::User, kind: TransportKind::SeekToBeat, value: 32.5 },
-        RigRecord::Transport { at_ns: 12, source: TransportSource::Link, kind: TransportKind::Play, value: f64::NAN },
-        RigRecord::Transport { at_ns: 13, source: TransportSource::MidiClock, kind: TransportKind::Seek, value: 1.5 },
-        RigRecord::Transport { at_ns: 14, source: TransportSource::Osc, kind: TransportKind::Pause, value: 0.0 },
-        RigRecord::Transport { at_ns: 15, source: TransportSource::User, kind: TransportKind::LocateToClock, value: 2.0 },
-        RigRecord::Transport { at_ns: 16, source: TransportSource::User, kind: TransportKind::Stop, value: 0.0 },
+        RigRecord::PresentIssued {
+            frame: 7,
+            drawable_id: 42,
+            at_ns: 8,
+        },
+        RigRecord::Presented {
+            drawable_id: 42,
+            presented_s: 812_345.678_901_234,
+            at_ns: 9,
+        },
+        RigRecord::Authority {
+            at_ns: 10,
+            from: ClockAuthority::Internal,
+            to: ClockAuthority::Osc,
+        },
+        RigRecord::Transport {
+            at_ns: 11,
+            source: TransportSource::User,
+            kind: TransportKind::SeekToBeat,
+            value: 32.5,
+        },
+        RigRecord::Transport {
+            at_ns: 12,
+            source: TransportSource::Link,
+            kind: TransportKind::Play,
+            value: f64::NAN,
+        },
+        RigRecord::Transport {
+            at_ns: 13,
+            source: TransportSource::MidiClock,
+            kind: TransportKind::Seek,
+            value: 1.5,
+        },
+        RigRecord::Transport {
+            at_ns: 14,
+            source: TransportSource::Osc,
+            kind: TransportKind::Pause,
+            value: 0.0,
+        },
+        RigRecord::Transport {
+            at_ns: 15,
+            source: TransportSource::User,
+            kind: TransportKind::LocateToClock,
+            value: 2.0,
+        },
+        RigRecord::Transport {
+            at_ns: 16,
+            source: TransportSource::User,
+            kind: TransportKind::Stop,
+            value: 0.0,
+        },
     ]
 }
 
@@ -149,7 +227,10 @@ fn records_round_trip_through_their_line() {
     for record in every_kind() {
         line.clear();
         format_line(&record, &mut line);
-        assert!(line.ends_with('\n') && line.matches('\n').count() == 1, "{line:?}");
+        assert!(
+            line.ends_with('\n') && line.matches('\n').count() == 1,
+            "{line:?}"
+        );
         let back = parse_line(&line);
         assert!(same(&record, &back), "{record:?}\n{line}{back:?}");
     }
@@ -158,7 +239,13 @@ fn records_round_trip_through_their_line() {
 #[test]
 fn emit_never_blocks_when_nobody_drains() {
     let (sink, _rx) = RigSink::new(64);
-    let record = RigRecord::ClkByte { at_ns: 0, midir_us: 0, status: 0xf8, d1: 0, d2: 0 };
+    let record = RigRecord::ClkByte {
+        at_ns: 0,
+        midir_us: 0,
+        status: 0xf8,
+        d1: 0,
+        d2: 0,
+    };
     let mut worst = Duration::ZERO;
     for _ in 0..20_000 {
         let start = Instant::now();
@@ -175,7 +262,10 @@ fn emit_never_blocks_when_nobody_drains() {
 fn emit_after_the_writer_is_gone_counts_and_returns() {
     let (sink, rx) = RigSink::new(8);
     drop(rx);
-    sink.emit(RigRecord::OscTempo { at_ns: 0, bpm: 120.0 });
+    sink.emit(RigRecord::OscTempo {
+        at_ns: 0,
+        bpm: 120.0,
+    });
     assert_eq!(sink.dropped(), 1);
 }
 

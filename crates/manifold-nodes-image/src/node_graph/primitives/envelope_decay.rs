@@ -16,11 +16,15 @@
 //!
 //! [`StateStore`]: crate::node_graph::StateStore
 
-use std::borrow::Cow;
-use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, NodeRequires};
+use manifold_node_engine::exec::effect_node::{
+    EffectNode, EffectNodeContext, EffectNodeType, NodeRequires,
+};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use manifold_node_engine::ports::{
+    NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+};
 use manifold_node_engine::state_store::NodeState;
+use std::borrow::Cow;
 
 pub const ENVELOPE_DECAY_TYPE_ID: &str = "node.envelope_decay";
 

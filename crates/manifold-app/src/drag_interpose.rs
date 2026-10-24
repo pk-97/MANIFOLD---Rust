@@ -75,8 +75,8 @@ mod macos {
     use super::DRAG_POS;
     use manifold_ui::node::Vec2;
     use objc2::ffi::{
-        class_addMethod, class_getInstanceMethod, class_respondsToSelector, method_setImplementation,
-        object_getClass,
+        class_addMethod, class_getInstanceMethod, class_respondsToSelector,
+        method_setImplementation, object_getClass,
     };
     use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, Sel};
     use objc2::{msg_send, sel};
@@ -112,18 +112,24 @@ mod macos {
             let ns_view = appkit.ns_view.as_ptr() as *mut AnyObject;
             let ns_window: *mut AnyObject = msg_send![ns_view, window];
             if ns_window.is_null() {
-                log::warn!("[drag_interpose] NSView has no NSWindow yet — falling back to cursor_pos");
+                log::warn!(
+                    "[drag_interpose] NSView has no NSWindow yet — falling back to cursor_pos"
+                );
                 return false;
             }
             let delegate: *mut AnyObject = msg_send![ns_window, delegate];
             if delegate.is_null() {
-                log::warn!("[drag_interpose] NSWindow has no delegate — falling back to cursor_pos");
+                log::warn!(
+                    "[drag_interpose] NSWindow has no delegate — falling back to cursor_pos"
+                );
                 return false;
             }
 
             let cls = object_getClass(delegate) as *mut AnyClass;
             if cls.is_null() {
-                log::warn!("[drag_interpose] could not resolve delegate class — falling back to cursor_pos");
+                log::warn!(
+                    "[drag_interpose] could not resolve delegate class — falling back to cursor_pos"
+                );
                 return false;
             }
 
@@ -151,7 +157,9 @@ mod macos {
             )
             .as_bool();
             if !added {
-                log::warn!("[drag_interpose] class_addMethod(draggingUpdated:) failed — falling back to cursor_pos");
+                log::warn!(
+                    "[drag_interpose] class_addMethod(draggingUpdated:) failed — falling back to cursor_pos"
+                );
                 return false;
             }
 
@@ -163,7 +171,8 @@ mod macos {
                 );
                 return false;
             }
-            let new_imp = std::mem::transmute::<PerformDragOperationFn, Imp>(perform_drag_operation_wrapper);
+            let new_imp =
+                std::mem::transmute::<PerformDragOperationFn, Imp>(perform_drag_operation_wrapper);
             let Some(original_imp) = method_setImplementation(method, new_imp) else {
                 log::warn!(
                     "[drag_interpose] method_setImplementation(performDragOperation:) returned no prior IMP — falling back to cursor_pos"
@@ -178,11 +187,14 @@ mod macos {
             NS_VIEW.with(|c| c.set(ns_view));
         }
 
-        log::info!("[drag_interpose] installed draggingUpdated:/performDragOperation: interposition");
+        log::info!(
+            "[drag_interpose] installed draggingUpdated:/performDragOperation: interposition"
+        );
         true
     }
 
-    type DraggingUpdatedFn = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject) -> usize;
+    type DraggingUpdatedFn =
+        unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject) -> usize;
     type PerformDragOperationFn =
         unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject) -> Bool;
 
@@ -246,9 +258,12 @@ mod macos {
             // center (the launch-day bug — ghost visible only in the mirror
             // band, drops landing on the wrong lane).
             let logical = Vec2::new(view_pt.x as f32, view_pt.y as f32);
-            log::debug!("[drag_interpose] drag position: {:.1},{:.1}", logical.x, logical.y);
+            log::debug!(
+                "[drag_interpose] drag position: {:.1},{:.1}",
+                logical.x,
+                logical.y
+            );
             DRAG_POS.with(|c| c.set(Some(logical)));
         }
     }
-
 }

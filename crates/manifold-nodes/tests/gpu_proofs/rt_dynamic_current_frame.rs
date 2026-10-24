@@ -7,12 +7,12 @@
 //! the proof cannot pass on RT dispatch alone with stale or degenerate data.
 
 use manifold_gpu::GpuTextureFormat;
-use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
-use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 use manifold_nodes_scene::testkit::gpu_harness as harness;
 

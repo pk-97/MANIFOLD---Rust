@@ -89,7 +89,12 @@ fn in_compile_order(doc: &SceneDoc) -> SceneDoc {
     fn sorted(items: &[Item]) -> Vec<Item> {
         let mut items: Vec<Item> = items
             .iter()
-            .map(|item| Item { id: item.id.clone(), name: item.name.clone(), fields: item.fields.clone(), children: sorted(&item.children) })
+            .map(|item| Item {
+                id: item.id.clone(),
+                name: item.name.clone(),
+                fields: item.fields.clone(),
+                children: sorted(&item.children),
+            })
             .collect();
         // Stable: every Modifier card shares one key, so the chain keeps its order.
         items.sort_by(|a, b| key(a).cmp(&key(b)));
@@ -98,7 +103,11 @@ fn in_compile_order(doc: &SceneDoc) -> SceneDoc {
     fn key(item: &Item) -> Option<&str> {
         (item.kind() != ItemKind::Modifier).then(|| item.id.as_str())
     }
-    SceneDoc { items: sorted(&doc.items), models: doc.models.clone(), next_cut: doc.next_cut }
+    SceneDoc {
+        items: sorted(&doc.items),
+        models: doc.models.clone(),
+        next_cut: doc.next_cut,
+    }
 }
 
 inventory::submit! {

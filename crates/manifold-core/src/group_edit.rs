@@ -177,8 +177,11 @@ pub fn group_selection(
     let go_id = max_id + 3;
 
     // ── body ──
-    let mut body_nodes: Vec<EffectGraphNode> =
-        nodes.iter().filter(|n| selected.contains(&n.id)).cloned().collect();
+    let mut body_nodes: Vec<EffectGraphNode> = nodes
+        .iter()
+        .filter(|n| selected.contains(&n.id))
+        .cloned()
+        .collect();
     body_nodes.push(sentinel_node(gi_id, GROUP_INPUT_TYPE_ID));
     body_nodes.push(sentinel_node(go_id, GROUP_OUTPUT_TYPE_ID));
 
@@ -241,8 +244,11 @@ pub fn group_selection(
     };
 
     // ── parent ──
-    let mut parent_nodes: Vec<EffectGraphNode> =
-        nodes.iter().filter(|n| !selected.contains(&n.id)).cloned().collect();
+    let mut parent_nodes: Vec<EffectGraphNode> = nodes
+        .iter()
+        .filter(|n| !selected.contains(&n.id))
+        .cloned()
+        .collect();
     parent_nodes.push(group_nd);
 
     let mut parent_wires: Vec<EffectGraphWire> = Vec::new();
@@ -251,7 +257,10 @@ pub fn group_selection(
     // by (source, pin) so we emit it once.
     let mut seen_input_wires: BTreeSet<(u32, String, String)> = BTreeSet::new();
     for w in &wires {
-        match (selected.contains(&w.from_node), selected.contains(&w.to_node)) {
+        match (
+            selected.contains(&w.from_node),
+            selected.contains(&w.to_node),
+        ) {
             (false, false) => parent_wires.push(w.clone()),
             (false, true) => {
                 let name = in_name[&(w.to_node, w.to_port.clone())].clone();
@@ -279,18 +288,16 @@ pub fn ungroup(
     wires: Vec<EffectGraphWire>,
     group_node_id: u32,
 ) -> Result<(Vec<EffectGraphNode>, Vec<EffectGraphWire>), GroupEditError> {
-    let group_nd = nodes
-        .iter()
-        .find(|n| n.id == group_node_id)
-        .ok_or(GroupEditError::UnknownNode {
-            node_id: group_node_id,
-        })?;
-    let body = group_nd
-        .group
-        .as_deref()
-        .ok_or(GroupEditError::NotAGroup {
-            node_id: group_node_id,
-        })?;
+    let group_nd =
+        nodes
+            .iter()
+            .find(|n| n.id == group_node_id)
+            .ok_or(GroupEditError::UnknownNode {
+                node_id: group_node_id,
+            })?;
+    let body = group_nd.group.as_deref().ok_or(GroupEditError::NotAGroup {
+        node_id: group_node_id,
+    })?;
 
     let gi_id = body
         .nodes
@@ -345,16 +352,17 @@ pub fn ungroup(
             if let Some(&from) = remap.get(&w.from_node) {
                 output_map.insert(w.to_port.clone(), (from, w.from_port.clone()));
             }
-        } else if let (Some(&from), Some(&to)) =
-            (remap.get(&w.from_node), remap.get(&w.to_node))
-        {
+        } else if let (Some(&from), Some(&to)) = (remap.get(&w.from_node), remap.get(&w.to_node)) {
             inner_wires.push(wire(from, &w.from_port, to, &w.to_port));
         }
     }
 
     // ── rebuild level ──
-    let mut out_nodes: Vec<EffectGraphNode> =
-        nodes.iter().filter(|n| n.id != group_node_id).cloned().collect();
+    let mut out_nodes: Vec<EffectGraphNode> = nodes
+        .iter()
+        .filter(|n| n.id != group_node_id)
+        .cloned()
+        .collect();
     out_nodes.extend(inlined);
 
     let mut out_wires: Vec<EffectGraphWire> = inner_wires;
@@ -445,16 +453,15 @@ mod tests {
 
     /// Canonical handle-space form so two levels compare independent of node-id
     /// renumbering: the set of node handles + the set of wires keyed by handle.
-    fn canonical(
-        nodes: &[EffectGraphNode],
-        wires: &[EffectGraphWire],
-    ) -> Canonical {
+    fn canonical(nodes: &[EffectGraphNode], wires: &[EffectGraphWire]) -> Canonical {
         let key: BTreeMap<u32, String> = nodes
             .iter()
             .map(|n| {
                 (
                     n.id,
-                    n.handle.clone().unwrap_or_else(|| format!("{}#{}", n.type_id, n.id)),
+                    n.handle
+                        .clone()
+                        .unwrap_or_else(|| format!("{}#{}", n.type_id, n.id)),
                 )
             })
             .collect();
@@ -534,7 +541,10 @@ mod tests {
         let (pn, pw) = group_selection(n, w, &sel(&[1]), "g", (10.0, 20.0)).unwrap();
 
         // Parent: a, c, and a group node "g".
-        let g = pn.iter().find(|x| x.handle.as_deref() == Some("g")).unwrap();
+        let g = pn
+            .iter()
+            .find(|x| x.handle.as_deref() == Some("g"))
+            .unwrap();
         assert_eq!(g.type_id, GROUP_TYPE_ID);
         let body = g.group.as_deref().unwrap();
         assert_eq!(g.editor_pos, Some((10.0, 20.0)));
@@ -548,8 +558,14 @@ mod tests {
         let in_name = &body.interface.inputs[0].name;
         let out_name = &body.interface.outputs[0].name;
         let g_id = g.id;
-        assert!(pw.iter().any(|x| x.to_node == g_id && &x.to_port == in_name));
-        assert!(pw.iter().any(|x| x.from_node == g_id && &x.from_port == out_name));
+        assert!(
+            pw.iter()
+                .any(|x| x.to_node == g_id && &x.to_port == in_name)
+        );
+        assert!(
+            pw.iter()
+                .any(|x| x.from_node == g_id && &x.from_port == out_name)
+        );
     }
 
     #[test]
@@ -558,7 +574,11 @@ mod tests {
         let original = canonical(&n, &w);
 
         let (pn, pw) = group_selection(n, w, &sel(&[1]), "g", (0.0, 0.0)).unwrap();
-        let g_id = pn.iter().find(|x| x.handle.as_deref() == Some("g")).unwrap().id;
+        let g_id = pn
+            .iter()
+            .find(|x| x.handle.as_deref() == Some("g"))
+            .unwrap()
+            .id;
         let (un, uw) = ungroup(pn, pw, g_id).unwrap();
 
         assert_eq!(canonical(&un, &uw), original, "ungroup must invert group");
@@ -567,7 +587,12 @@ mod tests {
     #[test]
     fn group_then_ungroup_is_identity_for_multi_node_selection() {
         // src -> m1.in ; m1.out -> m2.in ; m2.out -> sink.in. Group {m1, m2}.
-        let nodes = vec![node(0, "src"), node(1, "m1"), node(2, "m2"), node(3, "sink")];
+        let nodes = vec![
+            node(0, "src"),
+            node(1, "m1"),
+            node(2, "m2"),
+            node(3, "sink"),
+        ];
         let wires = vec![
             wire(0, "out", 1, "in"),
             wire(1, "out", 2, "in"),
@@ -577,7 +602,10 @@ mod tests {
 
         let (pn, pw) = group_selection(nodes, wires, &sel(&[1, 2]), "mid", (0.0, 0.0)).unwrap();
         // Internal wire m1->m2 must live in the body, not the parent.
-        let g = pn.iter().find(|x| x.handle.as_deref() == Some("mid")).unwrap();
+        let g = pn
+            .iter()
+            .find(|x| x.handle.as_deref() == Some("mid"))
+            .unwrap();
         assert!(
             g.group
                 .as_deref()
@@ -596,15 +624,26 @@ mod tests {
         // Group a single node, then group the resulting group node again.
         let (n, w) = abc();
         let (pn, pw) = group_selection(n, w, &sel(&[1]), "inner", (0.0, 0.0)).unwrap();
-        let inner_id = pn.iter().find(|x| x.handle.as_deref() == Some("inner")).unwrap().id;
+        let inner_id = pn
+            .iter()
+            .find(|x| x.handle.as_deref() == Some("inner"))
+            .unwrap()
+            .id;
         let before = canonical(&pn, &pw);
 
         // Wrap the inner group again.
-        let (pn2, pw2) =
-            group_selection(pn, pw, &sel(&[inner_id]), "outer", (0.0, 0.0)).unwrap();
-        let outer_id = pn2.iter().find(|x| x.handle.as_deref() == Some("outer")).unwrap().id;
+        let (pn2, pw2) = group_selection(pn, pw, &sel(&[inner_id]), "outer", (0.0, 0.0)).unwrap();
+        let outer_id = pn2
+            .iter()
+            .find(|x| x.handle.as_deref() == Some("outer"))
+            .unwrap()
+            .id;
         let (un, uw) = ungroup(pn2, pw2, outer_id).unwrap();
-        assert_eq!(canonical(&un, &uw), before, "ungroup of a nested group inverts");
+        assert_eq!(
+            canonical(&un, &uw),
+            before,
+            "ungroup of a nested group inverts"
+        );
     }
 
     #[test]
@@ -632,10 +671,7 @@ mod tests {
     /// Like `canonical`, but strips the group-instance prefix the flattener adds
     /// to inner handles (`g/b` → `b`), so a grouped-then-flattened graph
     /// compares against its ungrouped equivalent.
-    fn canonical_stripped(
-        nodes: &[EffectGraphNode],
-        wires: &[EffectGraphWire],
-    ) -> Canonical {
+    fn canonical_stripped(nodes: &[EffectGraphNode], wires: &[EffectGraphWire]) -> Canonical {
         let strip = |h: &str| h.rsplit('/').next().unwrap_or(h).to_string();
         let key: BTreeMap<u32, String> = nodes
             .iter()
@@ -715,7 +751,10 @@ mod tests {
 
         let (pn, pw) = group_selection(nodes, wires, &sel(&[1, 2]), "g", (0.0, 0.0)).unwrap();
         // The group exposes ONE coalesced input pin for the shared source...
-        let g = pn.iter().find(|x| x.handle.as_deref() == Some("g")).unwrap();
+        let g = pn
+            .iter()
+            .find(|x| x.handle.as_deref() == Some("g"))
+            .unwrap();
         assert_eq!(
             g.group.as_deref().unwrap().interface.inputs.len(),
             1,

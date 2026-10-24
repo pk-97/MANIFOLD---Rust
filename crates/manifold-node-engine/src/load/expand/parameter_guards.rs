@@ -3,9 +3,9 @@
 
 use super::SceneModifierExpandError;
 use crate::graph::Graph;
+use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_core::scene_modifier_preset::SceneEndpoint;
-use manifold_core::NodeId;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) struct PreparedModifierParameterGuards {
@@ -116,10 +116,7 @@ impl PreparedModifierParameterGuards {
                 }
             }
         }
-        Ok(Self {
-            sources,
-            scenes,
-        })
+        Ok(Self { sources, scenes })
     }
 
     pub(crate) fn install(self, graph: &mut Graph) -> Result<(), SceneModifierExpandError> {

@@ -96,7 +96,9 @@ impl AutosaveState {
     /// channel. Call exactly when the background save is spawned.
     pub(crate) fn begin(&mut self, rx: Receiver<Result<(), String>>, version: u64) {
         self.saved_version = version;
-        if self.last_edit_version == version { self.last_edit_at = None; }
+        if self.last_edit_version == version {
+            self.last_edit_at = None;
+        }
         self.in_flight = Some(rx);
     }
 
@@ -221,16 +223,23 @@ impl Application {
 
         let prepared = if let Some((path, rx)) = self.autosave.pending_snapshot.take() {
             match rx.try_recv() {
-                Ok(Some((project, version))) if self.current_project_path.as_ref() == Some(&path) => {
+                Ok(Some((project, version)))
+                    if self.current_project_path.as_ref() == Some(&path) =>
+                {
                     Some((path, Arc::new(project), version))
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     self.autosave.pending_snapshot = Some((path, rx));
                     return;
                 }
-                _ => { log::warn!("Autosave snapshot unavailable or project changed"); return; }
+                _ => {
+                    log::warn!("Autosave snapshot unavailable or project changed");
+                    return;
+                }
             }
-        } else { None };
+        } else {
+            None
+        };
 
         let now = Instant::now();
         self.autosave.observe(
@@ -239,9 +248,12 @@ impl Application {
             now,
         );
 
-        if prepared.is_none() && !self
-            .autosave
-            .should_fire(self.content_state.editing_is_dirty, now, AUTOSAVE_DEBOUNCE)
+        if prepared.is_none()
+            && !self.autosave.should_fire(
+                self.content_state.editing_is_dirty,
+                now,
+                AUTOSAVE_DEBOUNCE,
+            )
         {
             return;
         }
@@ -257,9 +269,13 @@ impl Application {
         let Some(path) = self.current_project_path.clone() else {
             return;
         };
-        let (path, snapshot, version) = if let Some(prepared) = prepared { prepared } else {
+        let (path, snapshot, version) = if let Some(prepared) = prepared {
+            prepared
+        } else {
             let (tx, rx) = std::sync::mpsc::channel();
-            self.send_content_cmd(crate::content_command::ContentCommand::PrepareProjectSave(tx));
+            self.send_content_cmd(crate::content_command::ContentCommand::PrepareProjectSave(
+                tx,
+            ));
             self.autosave.pending_snapshot = Some((path, rx));
             return;
         };
@@ -275,7 +291,12 @@ impl Application {
             master_chrome_collapsed: self.ws.ui_root.inspector.master_chrome().is_collapsed(),
             layer_chrome_collapsed: self.ws.ui_root.inspector.layer_chrome().is_collapsed(),
             clip_chrome_collapsed: self.ws.ui_root.inspector.clip_chrome().is_collapsed(),
-            audio_triggers_collapsed: self.ws.ui_root.inspector.audio_trigger_section().collapsed_setting(),
+            audio_triggers_collapsed: self
+                .ws
+                .ui_root
+                .inspector
+                .audio_trigger_section()
+                .collapsed_setting(),
         };
 
         match spawn_autosave(snapshot, path, stamp) {
@@ -303,12 +324,18 @@ mod tests {
         let mut s = AutosaveState::new();
         let start = t0();
         s.observe(1, true, start);
-        assert!(!s.should_fire(true, start, DEBOUNCE), "no fire before debounce");
+        assert!(
+            !s.should_fire(true, start, DEBOUNCE),
+            "no fire before debounce"
+        );
         assert!(
             !s.should_fire(true, start + Duration::from_secs(59), DEBOUNCE),
             "still inside debounce"
         );
-        assert!(s.should_fire(true, start + DEBOUNCE, DEBOUNCE), "fires at debounce");
+        assert!(
+            s.should_fire(true, start + DEBOUNCE, DEBOUNCE),
+            "fires at debounce"
+        );
     }
 
     #[test]

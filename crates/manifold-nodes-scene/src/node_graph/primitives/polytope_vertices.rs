@@ -30,8 +30,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::{MeshVertex, PLATONIC_MAX_VERTS, PLATONIC_SHAPES};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::{MeshVertex, PLATONIC_MAX_VERTS, PLATONIC_SHAPES};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
@@ -180,13 +180,19 @@ mod gpu_tests {
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
-    use manifold_node_engine::mesh::{MeshVertex, PLATONIC_MAX_VERTS};
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
     use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::mesh::{MeshVertex, PLATONIC_MAX_VERTS};
     use manifold_node_engine::parameters::ParamDef;
-    use manifold_node_engine::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
-    use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::execution_plan::compile};
+    use manifold_node_engine::ports::{
+        ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType,
+    };
+    use manifold_node_engine::{
+        exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+        exec::execution_plan::ExecutionPlan, exec::execution_plan::compile,
+        exec::metal_backend::MetalBackend, graph::Graph, parameters::ParamValue,
+    };
 
     use super::PolytopeVertices;
 
@@ -214,7 +220,9 @@ mod gpu_tests {
     }
 
     impl EffectNode for VertexSink {
-        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+            manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+        } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }

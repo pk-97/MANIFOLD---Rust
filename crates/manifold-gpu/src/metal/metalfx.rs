@@ -329,4 +329,3 @@ pub fn supports_temporal_scaling(device: &ProtocolObject<dyn MTLDevice>) -> bool
     }
     unsafe { MTLFXTemporalScalerDescriptor::supportsDevice(device) }
 }
-

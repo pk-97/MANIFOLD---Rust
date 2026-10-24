@@ -37,11 +37,12 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    GiMaterial, MetalShadowRayTracer, RtObjectGeometry, ShadowRayParams,
-    ShadowRayTracer,
+    GiMaterial, MetalShadowRayTracer, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
+};
+use manifold_gpu::{
+    GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 use manifold_gpu::{ShadowCaster, upload_shadow_casters};
-use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
 use manifold_nodes_scene::testkit::gpu_harness as harness;
 
@@ -84,8 +85,9 @@ fn upload_texture_f32(
         label,
         mip_levels: 1,
     });
-    let bytes =
-        unsafe { slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels)) };
+    let bytes = unsafe {
+        slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels))
+    };
     device.upload_texture(&texture, bytes);
     texture
 }
@@ -104,17 +106,27 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
 
     // ─── Occluder: one quad (2 triangles) at z=1, x in [-1, 0], y in [-1, 1] ──
     let verts = [
-        PackedVertex { pos: [-1.0, -1.0, 1.0] },
-        PackedVertex { pos: [0.0, -1.0, 1.0] },
-        PackedVertex { pos: [0.0, 1.0, 1.0] },
-        PackedVertex { pos: [-1.0, 1.0, 1.0] },
+        PackedVertex {
+            pos: [-1.0, -1.0, 1.0],
+        },
+        PackedVertex {
+            pos: [0.0, -1.0, 1.0],
+        },
+        PackedVertex {
+            pos: [0.0, 1.0, 1.0],
+        },
+        PackedVertex {
+            pos: [-1.0, 1.0, 1.0],
+        },
     ];
     let indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
     let vertex_buffer = write_shared_buffer(device, &verts);
     let index_buffer = write_shared_buffer(device, &indices);
 
     let tracer = MetalShadowRayTracer::new(device);
-    let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+    let objects = [RtObjectGeometry {
+        instance_inner: RtObjectGeometry::NO_INNER,
+        material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertex>() as u32,
         vertex_offset: 0,
@@ -134,16 +146,16 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         base_color_texture: None,
         mr_texture: None,
         normal_texture: None,
-                        emissive_texture: None,
+        emissive_texture: None,
         extra_material_textures: [None; 15],
-                        emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
-                        emissive_uv_t: [0.0, 0.0],
-            cast_shadows: true,
-            instances_addr: 0,
-            instances_buffer: None,
-            instance_slots: 1,
-            appearance_weights: None,
-            appearance_gain: 1.0,
+        emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
+        emissive_uv_t: [0.0, 0.0],
+        cast_shadows: true,
+        instances_addr: 0,
+        instances_buffer: None,
+        instance_slots: 1,
+        appearance_weights: None,
+        appearance_gain: 1.0,
         base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
         mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
         normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
@@ -153,14 +165,25 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     }];
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
     // below (built before the trace dispatch on the same command buffer).
-    let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
+    let plan = tracer
+        .plan_accel(device, None, &objects)
+        .expect("plan accel");
     let mut accel_slot = None;
-    tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+    tracer
+        .prepare_accel(device, &mut accel_slot, plan)
+        .expect("prepare accel");
     let mut accel = accel_slot.unwrap();
 
     // ─── Depth fixture: 2x1, both texels valid (depth=0.3, < 1.0 clear) ──
     let depth_px: [f32; 2] = [0.3, 0.3];
-    let depth_tex = upload_texture_f32(device, 2, 1, GpuTextureFormat::Depth32Float, &depth_px, "rt-p1-depth");
+    let depth_tex = upload_texture_f32(
+        device,
+        2,
+        1,
+        GpuTextureFormat::Depth32Float,
+        &depth_px,
+        "rt-p1-depth",
+    );
 
     let out_sv = device.create_texture(&GpuTextureDesc {
         width: 2,
@@ -230,7 +253,12 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     // Multi-caster shadow fix: a single sun caster in slot 0 — same
     // `sun_dir`/`sun_cone` this proof always used, now expressed as one
     // `ShadowCaster` entry instead of top-level `ShadowRayParams` fields.
-    let casters = [ShadowCaster::traced([0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 0.0], 0)];
+    let casters = [ShadowCaster::traced(
+        [0.0, 0.0, 1.0],
+        0.0,
+        [0.0, 0.0, 0.0],
+        0,
+    )];
     let caster_list: &[ShadowCaster] = &casters;
     let caster_buffer = upload_shadow_casters(device, caster_list);
     let params = ShadowRayParams::new(
@@ -242,35 +270,40 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         [2, 1],
         0.0,
         0,
-        0, // RT-P3: gi_spp — 0, GI gather skipped, this proof only asserts on out_sv
+        0,               // RT-P3: gi_spp — 0, GI gather skipped, this proof only asserts on out_sv
         [0.0, 0.0, 0.0], // RT-T1-B: camera_pos — unused, ao_spp/gi_spp both 0 above
         IDENTITY,
-        0,           // refl_spp — 0, reflections skipped in this fixture
-        0.6,         // refl_max_roughness — RT_REFLECTION_MAX_ROUGHNESS
-        0.1,         // refl_rough_band — blend band width
+        0,   // refl_spp — 0, reflections skipped in this fixture
+        0.6, // refl_max_roughness — RT_REFLECTION_MAX_ROUGHNESS
+        0.1, // refl_rough_band — blend band width
         manifold_gpu::raytrace::SVT_SLOT_NONE,
     );
     // RT-P3: unread by this proof (gi_spp == 0 above), same ABI-stub
     // discipline as `out_irr` — one zeroed entry.
-    let gi_materials_buffer =
-        device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    let gi_materials_buffer = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     // P4a: the GPU emissive preparation indexes one material row per
     // object — this fixture has no emissive geometry, so zeroed rows
     // (luma 0 → zero stats, the old "no emissive table" behavior).
-    let materials = vec![
-        GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]);
-        objects.len()
-    ];
+    let materials = vec![GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]); objects.len()];
     // RT-T1-B: unread by this proof (ao_spp == 0 && gi_spp == 0 above),
     // same ABI-stub discipline as `gi_materials_buffer`.
     let dummy_emissive = harness::dummy_emissive_buffer(device);
-    let normal_sources_buffer =
-        device.create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
+    let normal_sources_buffer = device
+        .create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
 
     let mut encoder = device.create_encoder("rt-p1-shadow-proof");
     let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
     tracer
-        .encode_accel_update(device, &mut encoder, &mut accel, &objects, &changes, &materials, true, true)
+        .encode_accel_update(
+            device,
+            &mut encoder,
+            &mut accel,
+            &objects,
+            &changes,
+            &materials,
+            true,
+            true,
+        )
         .expect("encode accel update");
     let out_svt = device.create_texture(&GpuTextureDesc {
         width: 1,
@@ -361,10 +394,18 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
 
     // ─── Object 0: ground quad at z=0, spanning x,y in [-10,10] ──
     let ground_verts = [
-        PackedVertex { pos: [-10.0, -10.0, 0.0] },
-        PackedVertex { pos: [10.0, -10.0, 0.0] },
-        PackedVertex { pos: [10.0, 10.0, 0.0] },
-        PackedVertex { pos: [-10.0, 10.0, 0.0] },
+        PackedVertex {
+            pos: [-10.0, -10.0, 0.0],
+        },
+        PackedVertex {
+            pos: [10.0, -10.0, 0.0],
+        },
+        PackedVertex {
+            pos: [10.0, 10.0, 0.0],
+        },
+        PackedVertex {
+            pos: [-10.0, 10.0, 0.0],
+        },
     ];
     let ground_indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
     let ground_vertex_buffer = write_shared_buffer(device, &ground_verts);
@@ -373,10 +414,18 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
     // ─── Object 1: occluder quad at z=1, x in [-1, 0], y in [-1, 1] ──
     // (byte-identical to the single-BLAS proof's occluder above.)
     let occ_verts = [
-        PackedVertex { pos: [-1.0, -1.0, 1.0] },
-        PackedVertex { pos: [0.0, -1.0, 1.0] },
-        PackedVertex { pos: [0.0, 1.0, 1.0] },
-        PackedVertex { pos: [-1.0, 1.0, 1.0] },
+        PackedVertex {
+            pos: [-1.0, -1.0, 1.0],
+        },
+        PackedVertex {
+            pos: [0.0, -1.0, 1.0],
+        },
+        PackedVertex {
+            pos: [0.0, 1.0, 1.0],
+        },
+        PackedVertex {
+            pos: [-1.0, 1.0, 1.0],
+        },
     ];
     let occ_indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
     let occ_vertex_buffer = write_shared_buffer(device, &occ_verts);
@@ -384,7 +433,9 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
 
     let tracer = MetalShadowRayTracer::new(device);
     let objects = [
-        RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+        RtObjectGeometry {
+            instance_inner: RtObjectGeometry::NO_INNER,
+            material_attributes: Default::default(),
             vertex_buffer: &ground_vertex_buffer,
             vertex_stride: std::mem::size_of::<PackedVertex>() as u32,
             vertex_offset: 0,
@@ -403,10 +454,10 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             base_color_texture: None,
             mr_texture: None,
             normal_texture: None,
-                        emissive_texture: None,
-        extra_material_textures: [None; 15],
-                        emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
-                        emissive_uv_t: [0.0, 0.0],
+            emissive_texture: None,
+            extra_material_textures: [None; 15],
+            emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
+            emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
             instances_addr: 0,
             instances_buffer: None,
@@ -420,7 +471,9 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             base_color_alpha: 1.0,
             tangent_offset: u32::MAX,
         },
-        RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+        RtObjectGeometry {
+            instance_inner: RtObjectGeometry::NO_INNER,
+            material_attributes: Default::default(),
             vertex_buffer: &occ_vertex_buffer,
             vertex_stride: std::mem::size_of::<PackedVertex>() as u32,
             vertex_offset: 0,
@@ -435,10 +488,10 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             base_color_texture: None,
             mr_texture: None,
             normal_texture: None,
-                        emissive_texture: None,
-        extra_material_textures: [None; 15],
-                        emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
-                        emissive_uv_t: [0.0, 0.0],
+            emissive_texture: None,
+            extra_material_textures: [None; 15],
+            emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
+            emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
             instances_addr: 0,
             instances_buffer: None,
@@ -455,14 +508,25 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
     ];
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
     // below (built before the trace dispatch on the same command buffer).
-    let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
+    let plan = tracer
+        .plan_accel(device, None, &objects)
+        .expect("plan accel");
     let mut accel_slot = None;
-    tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+    tracer
+        .prepare_accel(device, &mut accel_slot, plan)
+        .expect("prepare accel");
     let mut accel = accel_slot.unwrap();
 
     // ─── Depth fixture: identical to the single-BLAS proof ──
     let depth_px: [f32; 2] = [0.3, 0.3];
-    let depth_tex = upload_texture_f32(device, 2, 1, GpuTextureFormat::Depth32Float, &depth_px, "rt-p1-2blas-depth");
+    let depth_tex = upload_texture_f32(
+        device,
+        2,
+        1,
+        GpuTextureFormat::Depth32Float,
+        &depth_px,
+        "rt-p1-2blas-depth",
+    );
 
     let out_sv = device.create_texture(&GpuTextureDesc {
         width: 2,
@@ -532,7 +596,12 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
     // Multi-caster shadow fix: a single sun caster in slot 0 — same
     // `sun_dir`/`sun_cone` this proof always used, now expressed as one
     // `ShadowCaster` entry instead of top-level `ShadowRayParams` fields.
-    let casters = [ShadowCaster::traced([0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 0.0], 0)];
+    let casters = [ShadowCaster::traced(
+        [0.0, 0.0, 1.0],
+        0.0,
+        [0.0, 0.0, 0.0],
+        0,
+    )];
     let caster_list: &[ShadowCaster] = &casters;
     let caster_buffer = upload_shadow_casters(device, caster_list);
     let params = ShadowRayParams::new(
@@ -544,35 +613,40 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         [2, 1],
         0.0,
         0,
-        0, // RT-P3: gi_spp — 0, GI gather skipped, this proof only asserts on out_sv
+        0,               // RT-P3: gi_spp — 0, GI gather skipped, this proof only asserts on out_sv
         [0.0, 0.0, 0.0], // RT-T1-B: camera_pos — unused, ao_spp/gi_spp both 0 above
         IDENTITY,
-        0,           // refl_spp — 0, reflections skipped in this fixture
-        0.6,         // refl_max_roughness — RT_REFLECTION_MAX_ROUGHNESS
-        0.1,         // refl_rough_band — blend band width
+        0,   // refl_spp — 0, reflections skipped in this fixture
+        0.6, // refl_max_roughness — RT_REFLECTION_MAX_ROUGHNESS
+        0.1, // refl_rough_band — blend band width
         manifold_gpu::raytrace::SVT_SLOT_NONE,
     );
     // RT-P3: unread by this proof (gi_spp == 0 above), same ABI-stub
     // discipline as `out_irr` — one zeroed entry.
-    let gi_materials_buffer =
-        device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    let gi_materials_buffer = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     // P4a: the GPU emissive preparation indexes one material row per
     // object — this fixture has no emissive geometry, so zeroed rows
     // (luma 0 → zero stats, the old "no emissive table" behavior).
-    let materials = vec![
-        GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]);
-        objects.len()
-    ];
+    let materials = vec![GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]); objects.len()];
     // RT-T1-B: unread by this proof (ao_spp == 0 && gi_spp == 0 above),
     // same ABI-stub discipline as `gi_materials_buffer`.
     let dummy_emissive = harness::dummy_emissive_buffer(device);
-    let normal_sources_buffer =
-        device.create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
+    let normal_sources_buffer = device
+        .create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
 
     let mut encoder = device.create_encoder("rt-p1-2blas-shadow-proof");
     let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
     tracer
-        .encode_accel_update(device, &mut encoder, &mut accel, &objects, &changes, &materials, true, true)
+        .encode_accel_update(
+            device,
+            &mut encoder,
+            &mut accel,
+            &objects,
+            &changes,
+            &materials,
+            true,
+            true,
+        )
         .expect("encode accel update");
     tracer.dispatch_shadow_rays(
         &mut encoder,

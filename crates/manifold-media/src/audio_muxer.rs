@@ -80,7 +80,13 @@ impl AudioMuxer {
         //     -c:v copy -c:a aac -b:a 256k
         //     -map 0:v -map 1:a -shortest -movflags +faststart+use_metadata_tags OUTPUT
         let mut cmd = Command::new(ffmpeg_path);
-        cmd.args(mux_args(video_path, audio_path, output_path, audio_offset_seconds, metadata));
+        cmd.args(mux_args(
+            video_path,
+            audio_path,
+            output_path,
+            audio_offset_seconds,
+            metadata,
+        ));
 
         let output = cmd.output().map_err(MuxError::ProcessStart)?;
 
@@ -158,8 +164,19 @@ fn mux_args(
         args.push(format!("{audio_offset_seconds:.6}"));
     }
     for a in [
-        "-i", audio_path, "-c:v", "copy", "-c:a", "aac", "-b:a", "256k", "-map", "0:v", "-map",
-        "1:a", "-shortest",
+        "-i",
+        audio_path,
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "256k",
+        "-map",
+        "0:v",
+        "-map",
+        "1:a",
+        "-shortest",
     ] {
         args.push(a.into());
     }
@@ -201,7 +218,12 @@ mod mux_args_tests {
             "a.wav",
             "o.mp4",
             0.5,
-            &[p("title", "My Show; rm -rf"), p("com.manifold.fps", "60"), p("bad=key", "x"), p("", "y")],
+            &[
+                p("title", "My Show; rm -rf"),
+                p("com.manifold.fps", "60"),
+                p("bad=key", "x"),
+                p("", "y"),
+            ],
         );
         assert_eq!(&a[3..5], ["-itsoffset", "0.500000"]);
         let meta: Vec<&str> = a

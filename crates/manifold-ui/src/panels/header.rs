@@ -6,7 +6,6 @@
 //! so the centered group lands at true screen-centre. See the footer for the
 //! integration pattern and `docs/CHROME_API_DESIGN.md`.
 
-use crate::{RootAction, TransportAction};
 use super::{Panel, PanelAction};
 use crate::chrome::{Align, ChromeHost, Pad, Reconcile, Sizing, View, components};
 use crate::color;
@@ -14,6 +13,7 @@ use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::tree::UITree;
+use crate::{RootAction, TransportAction};
 
 // ── Layout constants (from HeaderLayout.cs) ────────────────────────
 
@@ -180,12 +180,20 @@ impl HeaderPanel {
     }
 
     fn left_group(&self, room: f32) -> (View, f32) {
-        let compact = room
-            < PROJECT_NAME_W + SPACER + IMPORT_STATUS_W + PROGRESS_BAR_INSET + PROGRESS_BAR_W;
-        let project_w = if compact { room.min(140.0) } else { PROJECT_NAME_W };
+        let compact =
+            room < PROJECT_NAME_W + SPACER + IMPORT_STATUS_W + PROGRESS_BAR_INSET + PROGRESS_BAR_W;
+        let project_w = if compact {
+            room.min(140.0)
+        } else {
+            PROJECT_NAME_W
+        };
         let detail_visible = !compact;
         let spacer_w = if compact { 0.0 } else { SPACER };
-        let progress_inset = if detail_visible { PROGRESS_BAR_INSET } else { 0.0 };
+        let progress_inset = if detail_visible {
+            PROGRESS_BAR_INSET
+        } else {
+            0.0
+        };
         let status_w = if detail_visible { IMPORT_STATUS_W } else { 0.0 };
         let progress_w = if detail_visible { PROGRESS_BAR_W } else { 0.0 };
         let used_w = project_w + spacer_w + status_w + progress_inset + progress_w;
@@ -273,11 +281,8 @@ impl HeaderPanel {
             .on_click(PanelAction::Root(RootAction::OpenAudioSetup));
 
         // Tight zoom cluster [−][label][+], end-aligned to the inset right edge.
-        let zoom_label_w = (room
-            - dock_button_w
-            - GROUP_SPACING
-            - ZOOM_BUTTON_W * 2.0)
-            .clamp(0.0, ZOOM_LABEL_W);
+        let zoom_label_w =
+            (room - dock_button_w - GROUP_SPACING - ZOOM_BUTTON_W * 2.0).clamp(0.0, ZOOM_LABEL_W);
         let zoom_cluster = View::row(0.0)
             .fill_h()
             .child(
@@ -304,10 +309,7 @@ impl HeaderPanel {
                     .on_click(PanelAction::Transport(TransportAction::ZoomIn)),
             );
 
-        let used_w = dock_button_w
-            + GROUP_SPACING
-            + ZOOM_BUTTON_W * 2.0
-            + zoom_label_w;
+        let used_w = dock_button_w + GROUP_SPACING + ZOOM_BUTTON_W * 2.0 + zoom_label_w;
         (
             View::row(GROUP_SPACING)
                 .fill()
@@ -336,7 +338,12 @@ impl HeaderPanel {
             .fill()
             .bg(color::PANEL_BG_DARK)
             .border(color::BORDER, 1.0)
-            .pad(Pad { l: INSET, t: GROUP_Y_PAD, r: INSET, b: GROUP_Y_PAD })
+            .pad(Pad {
+                l: INSET,
+                t: GROUP_Y_PAD,
+                r: INSET,
+                b: GROUP_Y_PAD,
+            })
             .child(left)
             .child(self.center_group(clock_w))
             .child(right);
@@ -464,7 +471,11 @@ mod tests {
         panel.set_import_status("Decoding…", 0.5, true);
         panel.update(&mut tree);
 
-        assert_eq!(tree.structure_version(), sv, "progress toggle must not rebuild");
+        assert_eq!(
+            tree.structure_version(),
+            sv,
+            "progress toggle must not rebuild"
+        );
     }
 
     /// The clock is the one header element read on stage; docks and the
@@ -483,10 +494,16 @@ mod tests {
             panel.set_time_display(&mut tree, "01:30.50 / 04:00.00  |  4.2.3");
             panel.update(&mut tree);
             let clock = node_with_text(&tree, "01:30.50 / 04:00.00  |  4.2.3");
-            assert_eq!(clock.bounds.width, TIME_DISPLAY_W, "clock keeps its full slot");
+            assert_eq!(
+                clock.bounds.width, TIME_DISPLAY_W,
+                "clock keeps its full slot"
+            );
             let header = layout.header();
             let centre = clock.bounds.x + clock.bounds.width * 0.5;
-            assert!((centre - (header.x + header.width * 0.5)).abs() < 1.0, "clock stays centred");
+            assert!(
+                (centre - (header.x + header.width * 0.5)).abs() < 1.0,
+                "clock stays centred"
+            );
         }
     }
 
@@ -505,7 +522,9 @@ mod tests {
         assert!(zoom_out.x >= header.x);
         assert!(zoom_in.x + zoom_in.width <= header.x + header.width);
         assert!(project.x + project.width <= zoom_out.x);
-        assert!(zoom_in.x > zoom_out.x, "zoom controls retain left-to-right order");
+        assert!(
+            zoom_in.x > zoom_out.x,
+            "zoom controls retain left-to-right order"
+        );
     }
-
 }

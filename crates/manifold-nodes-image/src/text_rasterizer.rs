@@ -322,7 +322,8 @@ impl TextRasterizer {
                         .iter()
                         .map(|p| CGPoint::new(p.x + origin_x, p.y + baseline_y))
                         .collect();
-                    run.font.draw_glyphs(&run.glyphs, &draw_positions, ctx.clone());
+                    run.font
+                        .draw_glyphs(&run.glyphs, &draw_positions, ctx.clone());
                 }
             }
 
@@ -519,7 +520,11 @@ impl TextRasterizer {
             });
         }
 
-        if result.is_empty() { None } else { Some(result) }
+        if result.is_empty() {
+            None
+        } else {
+            Some(result)
+        }
     }
 }
 
@@ -548,7 +553,9 @@ mod tests {
             ..Default::default()
         };
         let rt = rasterizer.rasterize("O", 64.0, &opts).unwrap();
-        let stroke = rt.stroke.expect("stroke mask present when stroke_width > 0");
+        let stroke = rt
+            .stroke
+            .expect("stroke mask present when stroke_width > 0");
         assert_eq!(stroke.len(), (rt.width * rt.height) as usize);
         assert!(stroke.iter().any(|&p| p > 0), "stroke mask should be lit");
     }

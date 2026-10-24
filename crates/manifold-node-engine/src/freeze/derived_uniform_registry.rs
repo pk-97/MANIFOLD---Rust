@@ -36,8 +36,8 @@
 use ahash::AHashMap;
 use std::sync::OnceLock;
 
-use crate::scene::camera::Camera;
 use crate::exec::effect_node::FrameTime;
+use crate::scene::camera::Camera;
 
 /// Ambient context a recompute fn may read. Mirrors exactly what an unfused
 /// `run()` would have had available: the frame clock (`ctx.time`) and — when

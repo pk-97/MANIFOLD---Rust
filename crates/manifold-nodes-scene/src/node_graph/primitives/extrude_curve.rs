@@ -17,8 +17,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::{CurvePoint, MeshVertex};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::{CurvePoint, MeshVertex};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
@@ -140,7 +140,8 @@ impl Primitive for ExtrudeCurve {
             Some(ParamValue::Float(n)) => n.round().max(1.0) as i32,
             _ => 1,
         };
-        let flag = |name: &str| u32::from(matches!(ctx.params.get(name), Some(ParamValue::Bool(true))));
+        let flag =
+            |name: &str| u32::from(matches!(ctx.params.get(name), Some(ParamValue::Bool(true))));
         let (close, symmetric, caps) = (flag("close"), flag("symmetric"), flag("caps"));
 
         let Some(outline) = ctx.inputs.array("outline") else {
@@ -258,9 +259,8 @@ mod gpu_tests {
         unsafe {
             outline_buf.write(0, bytemuck::cast_slice(outline));
         }
-        let dst_buf = device.create_buffer_shared(
-            dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64,
-        );
+        let dst_buf =
+            device.create_buffer_shared(dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64);
 
         let uniforms = ExtrudeCurveUniforms {
             depth,
@@ -274,18 +274,33 @@ mod gpu_tests {
         };
 
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: &outline_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &dst_buf, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &outline_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &dst_buf,
+                offset: 0,
+            },
         ];
         let mut enc = device.create_encoder("extrude-curve-test");
-        enc.dispatch_compute(&pipeline, &bindings, [dst_cap.div_ceil(256), 1, 1], "extrude-curve-test");
+        enc.dispatch_compute(
+            &pipeline,
+            &bindings,
+            [dst_cap.div_ceil(256), 1, 1],
+            "extrude-curve-test",
+        );
         enc.commit_and_wait_completed();
 
         let ptr = dst_buf.mapped_ptr().expect("shared dst buffer");
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, dst_cap as usize) }.to_vec()
     }
-
 
     #[test]
     fn no_end_caps_open_solid_row_zero_and_last_match_outline_exactly() {
@@ -295,13 +310,18 @@ mod gpu_tests {
         const STEPS: i32 = 2;
         const DST_CAP: u32 = 9; // rows=3, cols=3, exact
 
-        let out = dispatch_extrude(&device, &gen_wgsl, &outline, DST_CAP, 5.0, STEPS, false, false);
+        let out = dispatch_extrude(
+            &device, &gen_wgsl, &outline, DST_CAP, 5.0, STEPS, false, false,
+        );
         // Deferred #3: no end caps — row 0 is exactly the outline at z=0.
         for (j, pt) in outline.iter().enumerate() {
             let v = out[j];
             assert!((v.position[0] - pt.xy[0]).abs() < 1e-5);
             assert!((v.position[1] - pt.xy[1]).abs() < 1e-5);
-            assert!(v.position[2].abs() < 1e-5, "row 0 must sit at z=0 (open extrusion)");
+            assert!(
+                v.position[2].abs() < 1e-5,
+                "row 0 must sit at z=0 (open extrusion)"
+            );
         }
     }
 
@@ -319,18 +339,35 @@ mod gpu_tests {
         let outline: Vec<CurvePoint> = points.iter().map(|p| mk_curve(p[0], p[1])).collect();
         const STEPS: i32 = 2;
         for depth in [1.5f32, -1.5] {
-            let grid = manifold_node_engine::scene::curve_sweep::extrude_grid(&points, depth, STEPS as u32, false, false, true);
+            let grid = manifold_node_engine::scene::curve_sweep::extrude_grid(
+                &points,
+                depth,
+                STEPS as u32,
+                false,
+                false,
+                true,
+            );
             let cap = (grid.cols * grid.rows) as u32;
-            let out = dispatch_extrude(&device, &gen_wgsl, &outline, cap, depth, STEPS, false, true);
+            let out =
+                dispatch_extrude(&device, &gen_wgsl, &outline, cap, depth, STEPS, false, true);
             for (k, v) in out.iter().enumerate() {
                 for axis in 0..3 {
-                    assert!((v.position[axis] - grid.positions[k][axis]).abs() < 1e-5, "depth {depth} vertex {k} position");
-                    assert!((v.normal[axis] - grid.normals[k][axis]).abs() < 1e-5, "depth {depth} vertex {k} normal");
+                    assert!(
+                        (v.position[axis] - grid.positions[k][axis]).abs() < 1e-5,
+                        "depth {depth} vertex {k} position"
+                    );
+                    assert!(
+                        (v.normal[axis] - grid.normals[k][axis]).abs() < 1e-5,
+                        "depth {depth} vertex {k} normal"
+                    );
                 }
             }
             // A side vertex's normal points away from the axis.
             let side = &out[3 * grid.cols];
-            assert!(side.position[0] * side.normal[0] + side.position[1] * side.normal[1] > 0.0, "depth {depth}: the side faces in");
+            assert!(
+                side.position[0] * side.normal[0] + side.position[1] * side.normal[1] > 0.0,
+                "depth {depth}: the side faces in"
+            );
         }
     }
 }

@@ -17,7 +17,9 @@ impl GpuContext {
     /// Light unit tests must not wait behind proof runs; proofs queue. Queues
     /// only when the renderer is built with `gpu-proofs`.
     pub fn new_for_tests(label: &str) -> Self {
-        Self { device: test_gpu_device(label) }
+        Self {
+            device: test_gpu_device(label),
+        }
     }
 
     /// Headless and test entry points: waits its turn on the machine-wide GPU

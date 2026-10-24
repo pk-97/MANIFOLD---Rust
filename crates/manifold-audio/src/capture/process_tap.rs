@@ -29,8 +29,8 @@
 
 use std::ffi::{c_char, c_void};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use core_foundation::array::CFArray;
@@ -38,14 +38,14 @@ use core_foundation::base::TCFType;
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::CFString;
+use manifold_core::audio_stream::{AudioClockAnchor, AudioStreamProducer, audio_stream};
+use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
-use objc2::msg_send;
 use objc2_foundation::{NSArray, NSNumber, NSString};
-use manifold_core::audio_stream::{audio_stream, AudioClockAnchor, AudioStreamProducer};
 
-use super::{AudioConsumer, CaptureBackend};
 use super::clock::CallbackClock;
+use super::{AudioConsumer, CaptureBackend};
 use crate::directory::TapHandle;
 
 // ── CoreAudio FFI ────────────────────────────────────────────────────────
@@ -109,11 +109,16 @@ impl AudioTimeStamp {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
-struct MachTimebase { numer: u32, denom: u32 }
+struct MachTimebase {
+    numer: u32,
+    denom: u32,
+}
 
 impl MachTimebase {
     fn duration_since(self, later: u64, earlier: u64) -> Option<Duration> {
-        if self.numer == 0 || self.denom == 0 { return None; }
+        if self.numer == 0 || self.denom == 0 {
+            return None;
+        }
         let nanos = u128::from(later.checked_sub(earlier)?) * u128::from(self.numer)
             / u128::from(self.denom);
         let seconds = u64::try_from(nanos / 1_000_000_000).ok()?;
@@ -155,7 +160,10 @@ unsafe extern "C" {
         in_client_data: *mut c_void,
         out_proc_id: *mut AudioDeviceIOProcID,
     ) -> OSStatus;
-    fn AudioDeviceDestroyIOProcID(in_device: AudioObjectID, in_proc_id: AudioDeviceIOProcID) -> OSStatus;
+    fn AudioDeviceDestroyIOProcID(
+        in_device: AudioObjectID,
+        in_proc_id: AudioDeviceIOProcID,
+    ) -> OSStatus;
     fn AudioDeviceStart(in_device: AudioObjectID, in_proc_id: AudioDeviceIOProcID) -> OSStatus;
     fn AudioDeviceStop(in_device: AudioObjectID, in_proc_id: AudioDeviceIOProcID) -> OSStatus;
 }
@@ -257,16 +265,21 @@ extern "C" fn tap_ioproc(
     }
     // SAFETY: CoreAudio supplies these timestamp pointers for this callback.
     // Missing host-time flags leave the stream explicitly unclocked.
-    let timestamps = unsafe { now.as_ref().and_then(AudioTimeStamp::host_time)
-        .zip(in_time.as_ref().and_then(AudioTimeStamp::host_time)) };
+    let timestamps = unsafe {
+        now.as_ref()
+            .and_then(AudioTimeStamp::host_time)
+            .zip(in_time.as_ref().and_then(AudioTimeStamp::host_time))
+    };
     let timebase = ctx.timebase;
     let source_time = timestamps.and_then(|(callback, capture)| {
-        ctx.clock.map(callback, capture, Instant::now(), |later, earlier| {
-            timebase.duration_since(later, earlier)
-        })
+        ctx.clock
+            .map(callback, capture, Instant::now(), |later, earlier| {
+                timebase.duration_since(later, earlier)
+            })
     });
     let clock = source_time.map(|instant| AudioClockAnchor {
-        instant, frame: ctx.producer.next_frame(),
+        instant,
+        frame: ctx.producer.next_frame(),
     });
     unsafe { write_buffers(in_input, ctx, clock) };
     0
@@ -276,8 +289,18 @@ extern "C" fn tap_ioproc(
 ///
 /// SAFETY: `list_ptr` is a valid `const AudioBufferList*` for the call's
 /// duration, as delivered by CoreAudio.
-unsafe fn write_buffers(list_ptr: *const c_void, ctx: &mut TapCallbackCtx, clock: Option<AudioClockAnchor>) {
-    let TapCallbackCtx { producer, overflow, channels, scratch, .. } = ctx;
+unsafe fn write_buffers(
+    list_ptr: *const c_void,
+    ctx: &mut TapCallbackCtx,
+    clock: Option<AudioClockAnchor>,
+) {
+    let TapCallbackCtx {
+        producer,
+        overflow,
+        channels,
+        scratch,
+        ..
+    } = ctx;
     let ch = (*channels).max(1);
 
     // AudioBufferList { UInt32 mNumberBuffers; AudioBuffer mBuffers[]; }
@@ -370,16 +393,26 @@ fn build(description: Retained<AnyObject>) -> Result<Box<dyn CaptureBackend>, St
 
     // 1. Create the tap.
     let mut tap_id: AudioObjectID = 0;
-    let st = unsafe { (syms.create)(Retained::as_ptr(&description) as *mut AnyObject, &mut tap_id) };
+    let st = unsafe {
+        (syms.create)(
+            Retained::as_ptr(&description) as *mut AnyObject,
+            &mut tap_id,
+        )
+    };
     if st != 0 || tap_id == 0 {
-        return Err(format!("AudioHardwareCreateProcessTap failed (OSStatus {st})"));
+        return Err(format!(
+            "AudioHardwareCreateProcessTap failed (OSStatus {st})"
+        ));
     }
     // A guard so any early return below also destroys the tap.
-    let tap_guard = TapGuard { tap_id, destroy: syms.destroy };
+    let tap_guard = TapGuard {
+        tap_id,
+        destroy: syms.destroy,
+    };
 
     // The tap's UUID string is its sub-tap UID in the aggregate's tap list.
-    let tap_uuid = unsafe { tap_description_uuid(&description) }
-        .ok_or("CATapDescription returned no UUID")?;
+    let tap_uuid =
+        unsafe { tap_description_uuid(&description) }.ok_or("CATapDescription returned no UUID")?;
 
     // 2. Create a private aggregate device that lists the tap.
     let agg_uid = format!("com.latentspace.manifold.tap.{tap_uuid}");
@@ -397,12 +430,7 @@ fn build(description: Retained<AnyObject>) -> Result<Box<dyn CaptureBackend>, St
     // The shared stream allocates whole interleaved frames. Rounding down
     // keeps its sample allocation within the legacy sample budget.
     let frame_capacity = (sample_capacity / channels as usize).max(1);
-    let (producer, consumer) = audio_stream(
-        channels as usize,
-        frame_capacity,
-        2048,
-        sample_rate,
-    );
+    let (producer, consumer) = audio_stream(channels as usize, frame_capacity, 2048, sample_rate);
 
     let running = Arc::new(AtomicBool::new(false));
     let overflow = Arc::new(AtomicU64::new(0));
@@ -410,7 +438,10 @@ fn build(description: Retained<AnyObject>) -> Result<Box<dyn CaptureBackend>, St
     let scratch = vec![0.0f32; 8192.max(channels as usize * 1024)];
     let mut timebase = MachTimebase::default();
     // Resolve the conversion once, outside the realtime callback.
-    if unsafe { mach_timebase_info(&mut timebase) } != 0 || timebase.numer == 0 || timebase.denom == 0 {
+    if unsafe { mach_timebase_info(&mut timebase) } != 0
+        || timebase.numer == 0
+        || timebase.denom == 0
+    {
         return Err("process tap host clock is unavailable".into());
     }
     let ctx = Box::into_raw(Box::new(TapCallbackCtx {
@@ -425,9 +456,8 @@ fn build(description: Retained<AnyObject>) -> Result<Box<dyn CaptureBackend>, St
 
     // 5. Register the IO proc on the aggregate.
     let mut proc_id: AudioDeviceIOProcID = std::ptr::null_mut();
-    let st = unsafe {
-        AudioDeviceCreateIOProcID(agg_id, tap_ioproc, ctx as *mut c_void, &mut proc_id)
-    };
+    let st =
+        unsafe { AudioDeviceCreateIOProcID(agg_id, tap_ioproc, ctx as *mut c_void, &mut proc_id) };
     if st != 0 || proc_id.is_null() {
         // Reclaim the context box; guards destroy the aggregate + tap.
         unsafe { drop(Box::from_raw(ctx)) };
@@ -438,9 +468,7 @@ fn build(description: Retained<AnyObject>) -> Result<Box<dyn CaptureBackend>, St
     std::mem::forget(tap_guard);
     std::mem::forget(agg_guard);
 
-    log::info!(
-        "[ProcessTap] Tap ready: {sample_rate}Hz {channels}ch (tap={tap_id}, agg={agg_id})"
-    );
+    log::info!("[ProcessTap] Tap ready: {sample_rate}Hz {channels}ch (tap={tap_id}, agg={agg_id})");
 
     Ok(Box::new(ProcessTapCapture {
         tap_id,
@@ -498,7 +526,11 @@ fn tap_format(tap_id: AudioObjectID, agg_id: AudioObjectID) -> (u32, u16) {
             &mut rate as *mut _ as *mut c_void,
         )
     };
-    let sr = if st == 0 && rate > 0.0 { rate as u32 } else { 48_000 };
+    let sr = if st == 0 && rate > 0.0 {
+        rate as u32
+    } else {
+        48_000
+    };
     (sr, 2)
 }
 
@@ -512,11 +544,26 @@ fn create_aggregate_with_tap(agg_uid: &str, tap_uuid: &str) -> Result<AudioObjec
     let tap_list = CFArray::from_CFTypes(&[sub_tap.as_CFType()]);
 
     let description = CFDictionary::from_CFType_pairs(&[
-        (CFString::new(KEY_AGG_UID).as_CFType(), CFString::new(agg_uid).as_CFType()),
-        (CFString::new(KEY_AGG_NAME).as_CFType(), CFString::new("Manifold Tap").as_CFType()),
-        (CFString::new(KEY_AGG_PRIVATE).as_CFType(), CFBoolean::true_value().as_CFType()),
-        (CFString::new(KEY_AGG_TAP_AUTOSTART).as_CFType(), CFBoolean::true_value().as_CFType()),
-        (CFString::new(KEY_AGG_TAP_LIST).as_CFType(), tap_list.as_CFType()),
+        (
+            CFString::new(KEY_AGG_UID).as_CFType(),
+            CFString::new(agg_uid).as_CFType(),
+        ),
+        (
+            CFString::new(KEY_AGG_NAME).as_CFType(),
+            CFString::new("Manifold Tap").as_CFType(),
+        ),
+        (
+            CFString::new(KEY_AGG_PRIVATE).as_CFType(),
+            CFBoolean::true_value().as_CFType(),
+        ),
+        (
+            CFString::new(KEY_AGG_TAP_AUTOSTART).as_CFType(),
+            CFBoolean::true_value().as_CFType(),
+        ),
+        (
+            CFString::new(KEY_AGG_TAP_LIST).as_CFType(),
+            tap_list.as_CFType(),
+        ),
     ]);
 
     let mut agg_id: AudioObjectID = 0;
@@ -527,7 +574,9 @@ fn create_aggregate_with_tap(agg_uid: &str, tap_uuid: &str) -> Result<AudioObjec
         )
     };
     if st != 0 || agg_id == 0 {
-        return Err(format!("AudioHardwareCreateAggregateDevice failed (OSStatus {st})"));
+        return Err(format!(
+            "AudioHardwareCreateAggregateDevice failed (OSStatus {st})"
+        ));
     }
     Ok(agg_id)
 }
@@ -548,8 +597,10 @@ unsafe fn tap_description_uuid(description: &Retained<AnyObject>) -> Option<Stri
 /// system mix; non-empty → a stereo mixdown of those process object ids.
 fn make_description(processes: &[TapHandle]) -> Result<Retained<AnyObject>, String> {
     let cls = AnyClass::get(c"CATapDescription").ok_or("CATapDescription class unavailable")?;
-    let numbers: Vec<Retained<NSNumber>> =
-        processes.iter().map(|h| NSNumber::new_u32(*h as u32)).collect();
+    let numbers: Vec<Retained<NSNumber>> = processes
+        .iter()
+        .map(|h| NSNumber::new_u32(*h as u32))
+        .collect();
     let array = NSArray::from_retained_slice(&numbers);
 
     let alloc: *mut AnyObject = unsafe { msg_send![cls, alloc] };
@@ -659,12 +710,21 @@ mod clock_tests {
         assert_eq!(std::mem::size_of::<AudioTimeStamp>(), 64);
         assert_eq!(std::mem::offset_of!(AudioTimeStamp, host_time), 8);
         assert_eq!(std::mem::offset_of!(AudioTimeStamp, flags), 56);
-        let mut stamp = AudioTimeStamp { host_time: 123, ..Default::default() };
+        let mut stamp = AudioTimeStamp {
+            host_time: 123,
+            ..Default::default()
+        };
         assert_eq!(stamp.host_time(), None);
         stamp.flags = 1 << 1;
         assert_eq!(stamp.host_time(), Some(123));
-        let timebase = MachTimebase { numer: 125, denom: 3 };
-        assert_eq!(timebase.duration_since(24_000_003, 3), Some(Duration::from_secs(1)));
+        let timebase = MachTimebase {
+            numer: 125,
+            denom: 3,
+        };
+        assert_eq!(
+            timebase.duration_since(24_000_003, 3),
+            Some(Duration::from_secs(1))
+        );
         assert_eq!(timebase.duration_since(2, 3), None);
         assert_eq!(MachTimebase::default().duration_since(3, 0), None);
     }
@@ -672,31 +732,61 @@ mod clock_tests {
     #[test]
     fn planar_chunks_keep_original_clock_through_a_dropped_tail() {
         #[repr(C)]
-        struct BufferList { count: u32, buffers: [AudioBuffer; 2] }
+        struct BufferList {
+            count: u32,
+            buffers: [AudioBuffer; 2],
+        }
         let mut left = [1_f32, 2., 3., 4., 5., 6.];
         let mut right = [-1_f32, -2., -3., -4., -5., -6.];
-        let list = BufferList { count: 2, buffers: [
-            AudioBuffer { number_channels: 1, data_byte_size: 24, data: left.as_mut_ptr().cast() },
-            AudioBuffer { number_channels: 1, data_byte_size: 24, data: right.as_mut_ptr().cast() },
-        ] };
+        let list = BufferList {
+            count: 2,
+            buffers: [
+                AudioBuffer {
+                    number_channels: 1,
+                    data_byte_size: 24,
+                    data: left.as_mut_ptr().cast(),
+                },
+                AudioBuffer {
+                    number_channels: 1,
+                    data_byte_size: 24,
+                    data: right.as_mut_ptr().cast(),
+                },
+            ],
+        };
         let (producer, mut reader) = audio_stream(2, 3, 8, 3);
         let mut ctx = TapCallbackCtx {
-            producer, running: Arc::new(AtomicBool::new(true)),
-            overflow: Arc::new(AtomicU64::new(0)), channels: 2, scratch: vec![0.; 4],
-            clock: CallbackClock::new(), timebase: MachTimebase { numer: 1, denom: 1 },
+            producer,
+            running: Arc::new(AtomicBool::new(true)),
+            overflow: Arc::new(AtomicU64::new(0)),
+            channels: 2,
+            scratch: vec![0.; 4],
+            clock: CallbackClock::new(),
+            timebase: MachTimebase { numer: 1, denom: 1 },
         };
-        let clock = AudioClockAnchor { instant: Instant::now(), frame: 0 };
+        let clock = AudioClockAnchor {
+            instant: Instant::now(),
+            frame: 0,
+        };
         // SAFETY: repr(C) list has two valid mono buffers for the whole call.
-        unsafe { write_buffers((&list as *const BufferList).cast(), &mut ctx, Some(clock)); }
+        unsafe {
+            write_buffers((&list as *const BufferList).cast(), &mut ctx, Some(clock));
+        }
         assert_eq!(ctx.producer.next_frame(), 6);
         let mut output = [0.; 4];
         for (first_frame, expected) in [(0, &[1., -1., 2., -2.][..]), (2, &[3., -3.][..])] {
-            let Some(AudioStreamRead::Samples { stamp, samples }) = reader.read(&mut output)
-                else { panic!("retained prefix"); };
+            let Some(AudioStreamRead::Samples { stamp, samples }) = reader.read(&mut output) else {
+                panic!("retained prefix");
+            };
             assert_eq!(stamp.first_frame, first_frame);
             assert_eq!(stamp.clock, Some(clock));
             assert_eq!(&output[..samples], expected);
         }
-        assert_eq!(reader.read(&mut output), Some(AudioStreamRead::Gap { first_frame: 3, end_frame: 6 }));
+        assert_eq!(
+            reader.read(&mut output),
+            Some(AudioStreamRead::Gap {
+                first_frame: 3,
+                end_frame: 6
+            })
+        );
     }
 }

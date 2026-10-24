@@ -17,7 +17,11 @@ pub struct Cells {
 
 impl Cells {
     pub fn from_layout(layout: &FluidDomainLayout) -> Self {
-        Self { min: layout.min, size: layout.cell_size as f32, count: layout.cells }
+        Self {
+            min: layout.min,
+            size: layout.cell_size as f32,
+            count: layout.cells,
+        }
     }
 
     fn cell_of(&self, p: [f32; 3]) -> Option<[u32; 3]> {
@@ -33,12 +37,17 @@ impl Cells {
     }
 
     fn index(&self, c: [u32; 3]) -> usize {
-        (c[0] as usize) + self.count[0] as usize * (c[1] as usize + self.count[1] as usize * c[2] as usize)
+        (c[0] as usize)
+            + self.count[0] as usize * (c[1] as usize + self.count[1] as usize * c[2] as usize)
     }
 }
 
 fn position(p: &FluidParticle) -> [f32; 3] {
-    [p.position_radius[0], p.position_radius[1], p.position_radius[2]]
+    [
+        p.position_radius[0],
+        p.position_radius[1],
+        p.position_radius[2],
+    ]
 }
 
 fn is_live(p: &FluidParticle) -> bool {
@@ -86,7 +95,9 @@ pub fn lattice_alignment(frame: &[FluidParticle], cells: &Cells) -> ([f32; 3], u
     let mut interior = 0usize;
     for p in &live {
         let pos = position(p);
-        let Some(c) = cells.cell_of(pos) else { continue };
+        let Some(c) = cells.cell_of(pos) else {
+            continue;
+        };
         if !full(c) {
             continue;
         }
@@ -157,10 +168,19 @@ impl Buckets {
             }
         }
         let dims = std::array::from_fn(|a| (((hi[a] - lo[a]) / size).floor() as usize + 1).max(1));
-        let mut buckets = Self { origin: lo, size, dims, start: Vec::new(), order: Vec::new() };
+        let mut buckets = Self {
+            origin: lo,
+            size,
+            dims,
+            start: Vec::new(),
+            order: Vec::new(),
+        };
         let total = dims[0] * dims[1] * dims[2];
         let mut count = vec![0u32; total + 1];
-        let keys: Vec<usize> = points.iter().map(|p| buckets.key(buckets.bucket(*p))).collect();
+        let keys: Vec<usize> = points
+            .iter()
+            .map(|p| buckets.key(buckets.bucket(*p)))
+            .collect();
         for &k in &keys {
             count[k + 1] += 1;
         }
@@ -179,7 +199,9 @@ impl Buckets {
     }
 
     fn bucket(&self, p: [f32; 3]) -> [usize; 3] {
-        std::array::from_fn(|a| (((p[a] - self.origin[a]) / self.size).floor() as usize).min(self.dims[a] - 1))
+        std::array::from_fn(|a| {
+            (((p[a] - self.origin[a]) / self.size).floor() as usize).min(self.dims[a] - 1)
+        })
     }
 
     fn key(&self, b: [usize; 3]) -> usize {
@@ -254,8 +276,11 @@ fn symmetric_eigenvalues(m: [[f64; 3]; 3]) -> [f64; 3] {
     let q = (m[0][0] + m[1][1] + m[2][2]) / 3.0;
     let p2 = (m[0][0] - q).powi(2) + (m[1][1] - q).powi(2) + (m[2][2] - q).powi(2) + 2.0 * p1;
     let p = (p2 / 6.0).sqrt();
-    let b: [[f64; 3]; 3] = std::array::from_fn(|r| std::array::from_fn(|c| (m[r][c] - if r == c { q } else { 0.0 }) / p));
-    let det = b[0][0] * (b[1][1] * b[2][2] - b[1][2] * b[2][1]) - b[0][1] * (b[1][0] * b[2][2] - b[1][2] * b[2][0])
+    let b: [[f64; 3]; 3] = std::array::from_fn(|r| {
+        std::array::from_fn(|c| (m[r][c] - if r == c { q } else { 0.0 }) / p)
+    });
+    let det = b[0][0] * (b[1][1] * b[2][2] - b[1][2] * b[2][1])
+        - b[0][1] * (b[1][0] * b[2][2] - b[1][2] * b[2][0])
         + b[0][2] * (b[1][0] * b[2][1] - b[1][1] * b[2][0]);
     let phi = (det / 2.0).clamp(-1.0, 1.0).acos() / 3.0;
     let largest = q + 2.0 * p * phi.cos();
@@ -287,7 +312,8 @@ pub fn sheet_fraction(frame: &[FluidParticle], spacing: f32) -> f32 {
             continue;
         }
         let n = neighbours.len() as f64;
-        let mean: [f64; 3] = std::array::from_fn(|a| neighbours.iter().map(|q| q[a]).sum::<f64>() / n);
+        let mean: [f64; 3] =
+            std::array::from_fn(|a| neighbours.iter().map(|q| q[a]).sum::<f64>() / n);
         let mut cov = [[0.0f64; 3]; 3];
         for q in &neighbours {
             let d = [q[0] - mean[0], q[1] - mean[1], q[2] - mean[2]];
@@ -324,8 +350,15 @@ pub fn settling(samples: &[(f32, f32, f32)], speed_threshold: f32, window: f32) 
         .enumerate()
         .max_by(|a, b| a.1.1.total_cmp(&b.1.1))
         .map_or(0, |(i, _)| i);
-    let Some(start) = samples[peak..].iter().position(|s| s.1 < speed_threshold).map(|i| peak + i) else {
-        return Settling { settle_time: None, ringing: 0.0 };
+    let Some(start) = samples[peak..]
+        .iter()
+        .position(|s| s.1 < speed_threshold)
+        .map(|i| peak + i)
+    else {
+        return Settling {
+            settle_time: None,
+            ringing: 0.0,
+        };
     };
     let mut ringing = 0.0f32;
     for i in start..samples.len() {
@@ -337,7 +370,10 @@ pub fn settling(samples: &[(f32, f32, f32)], speed_threshold: f32, window: f32) 
         }
         ringing = ringing.max(hi - lo);
     }
-    Settling { settle_time: Some(samples[start].0), ringing }
+    Settling {
+        settle_time: Some(samples[start].0),
+        ringing,
+    }
 }
 
 /// 60 Hz ticks at which A1 is read (t = 1.5 s and 8 s).
@@ -366,20 +402,33 @@ pub struct LookRecorder {
 
 impl LookRecorder {
     pub fn new(cells: Cells, spacing: f32) -> Self {
-        Self { cells, spacing, samples: Vec::new(), alignment: Vec::new(), splash: Vec::new(), sheets: Vec::new() }
+        Self {
+            cells,
+            spacing,
+            samples: Vec::new(),
+            alignment: Vec::new(),
+            splash: Vec::new(),
+            sheets: Vec::new(),
+        }
     }
 
     /// Record the frame at `time` seconds.
     pub fn observe(&mut self, time: f32, frame: &[FluidParticle]) {
         let tick = (time * 60.0).round() as u32;
-        self.samples.push((time, mean_speed(frame), mean_surface_height(frame, &self.cells)));
+        self.samples.push((
+            time,
+            mean_speed(frame),
+            mean_surface_height(frame, &self.cells),
+        ));
         if ALIGNMENT_TICKS.contains(&tick) {
             let (ratio, interior) = lattice_alignment(frame, &self.cells);
             self.alignment.push((time, ratio, interior));
         }
         if RETENTION_TICKS.contains(&tick) && tick.is_multiple_of(RETENTION_STRIDE) {
-            self.splash.push((time, detached_fraction(frame, self.spacing)));
-            self.sheets.push((time, sheet_fraction(frame, self.spacing)));
+            self.splash
+                .push((time, detached_fraction(frame, self.spacing)));
+            self.sheets
+                .push((time, sheet_fraction(frame, self.spacing)));
         }
     }
 
@@ -401,7 +450,11 @@ mod tests {
     use super::*;
 
     fn particle(p: [f32; 3]) -> FluidParticle {
-        FluidParticle { position_radius: [p[0], p[1], p[2], 0.01], velocity: [0.0; 3], id: 0 }
+        FluidParticle {
+            position_radius: [p[0], p[1], p[2], 0.01],
+            velocity: [0.0; 3],
+            id: 0,
+        }
     }
 
     fn unit(seed: &mut u64) -> f32 {
@@ -412,7 +465,11 @@ mod tests {
     }
 
     fn cells() -> Cells {
-        Cells { min: [0.0; 3], size: 0.1, count: [10, 10, 10] }
+        Cells {
+            min: [0.0; 3],
+            size: 0.1,
+            count: [10, 10, 10],
+        }
     }
 
     fn block(per_axis: usize, spacing: f32, jitter: f32, seed: &mut u64) -> Vec<FluidParticle> {
@@ -421,7 +478,9 @@ mod tests {
             for y in 0..per_axis {
                 for x in 0..per_axis {
                     let base = [x, y, z].map(|i| (i as f32 + 0.5) * spacing);
-                    v.push(particle(std::array::from_fn(|a| base[a] + jitter * (unit(seed) - 0.5) * spacing)));
+                    v.push(particle(std::array::from_fn(|a| {
+                        base[a] + jitter * (unit(seed) - 0.5) * spacing
+                    })));
                 }
             }
         }
@@ -459,16 +518,25 @@ mod tests {
         }
         assert!(sheet_fraction(&sheet, 0.05) > 0.9);
         let solid = block(16, 0.05, 0.3, &mut seed);
-        assert!(sheet_fraction(&solid, 0.05) < 0.02, "{}", sheet_fraction(&solid, 0.05));
+        assert!(
+            sheet_fraction(&solid, 0.05) < 0.02,
+            "{}",
+            sheet_fraction(&solid, 0.05)
+        );
     }
 
     #[test]
     fn look_eigenvalues_match_diagonal_and_rotated() {
         let e = symmetric_eigenvalues([[3.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 2.0]]);
-        assert!((e[0] - 1.0).abs() < 1e-12 && (e[1] - 2.0).abs() < 1e-12 && (e[2] - 3.0).abs() < 1e-12);
+        assert!(
+            (e[0] - 1.0).abs() < 1e-12 && (e[1] - 2.0).abs() < 1e-12 && (e[2] - 3.0).abs() < 1e-12
+        );
         // diag(1, 3) rotated 45° in XY, plus 5 on Z.
         let e = symmetric_eigenvalues([[2.0, 1.0, 0.0], [1.0, 2.0, 0.0], [0.0, 0.0, 5.0]]);
-        assert!((e[0] - 1.0).abs() < 1e-9 && (e[1] - 3.0).abs() < 1e-9 && (e[2] - 5.0).abs() < 1e-9, "{e:?}");
+        assert!(
+            (e[0] - 1.0).abs() < 1e-9 && (e[1] - 3.0).abs() < 1e-9 && (e[2] - 5.0).abs() < 1e-9,
+            "{e:?}"
+        );
     }
 
     #[test]
@@ -476,7 +544,13 @@ mod tests {
         let samples: Vec<(f32, f32, f32)> = (0..600)
             .map(|i| {
                 let t = i as f32 / 60.0;
-                let speed = if t < 0.5 { 0.0 } else if t < 4.0 { 0.5 } else { 0.01 };
+                let speed = if t < 0.5 {
+                    0.0
+                } else if t < 4.0 {
+                    0.5
+                } else {
+                    0.01
+                };
                 (t, speed, 1.0 + 0.002 * (t * 3.0).sin())
             })
             .collect();

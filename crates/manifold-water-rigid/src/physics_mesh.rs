@@ -5,9 +5,9 @@ use std::borrow::Cow;
 use std::path::Path;
 
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_node_engine::ports::{NodeInput, PortKind, PortType};
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::ParamValue;
+use manifold_node_engine::ports::{NodeInput, PortKind, PortType};
 use manifold_node_engine::scene::mesh_selection::MeshSelection;
 use manifold_node_engine::scene::transform::Transform;
 
@@ -94,9 +94,9 @@ pub fn load_compound_materials(
 
 #[cfg(test)]
 mod tests {
+    use bytemuck::Zeroable;
     use manifold_node_engine::mesh::MeshVertex;
     use manifold_node_engine::scene::mesh_selection::select_fragment;
-    use bytemuck::Zeroable;
 
     #[test]
     fn split_preserves_every_triangle_and_attributes_once() {
@@ -140,7 +140,9 @@ pub fn transform_vertices(vertices: &mut [MeshVertex], transform: Transform) -> 
     let m = transform.world();
     for vertex in vertices {
         let p = vertex.position;
-        vertex.position = std::array::from_fn(|row| m[0][row] * p[0] + m[1][row] * p[1] + m[2][row] * p[2] + m[3][row]);
+        vertex.position = std::array::from_fn(|row| {
+            m[0][row] * p[0] + m[1][row] * p[1] + m[2][row] * p[2] + m[3][row]
+        });
     }
     Ok(())
 }
@@ -160,7 +162,6 @@ pub fn validate_transform(transform: Transform) -> Result<(), String> {
     }
     Ok(())
 }
-
 
 #[cfg(test)]
 mod transform_tests {
@@ -191,18 +192,21 @@ mod transform_tests {
 
     #[test]
     fn invalid_collider_transform_is_rejected() {
-        assert!(validate_transform(Transform {
-            scale: [f32::NAN, 1.0, 1.0],
-            ..Transform::default()
-        })
-        .is_err());
-        assert!(validate_transform(Transform {
-            billboard: true,
-            ..Transform::default()
-        })
-        .is_err());
+        assert!(
+            validate_transform(Transform {
+                scale: [f32::NAN, 1.0, 1.0],
+                ..Transform::default()
+            })
+            .is_err()
+        );
+        assert!(
+            validate_transform(Transform {
+                billboard: true,
+                ..Transform::default()
+            })
+            .is_err()
+        );
     }
-
 }
 
 /// The `parts` param: how many compound parts (`mesh_k` with `part_k`) a
@@ -217,7 +221,8 @@ pub fn part_count(params: &ParamValues) -> usize {
 
 /// Whether `port` is one of a body's `mesh_k` part inputs.
 pub fn is_part_mesh(port: &str) -> bool {
-    port.strip_prefix("mesh_").is_some_and(|index| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()))
+    port.strip_prefix("mesh_")
+        .is_some_and(|index| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// A rigid body's part inputs, sized by its `parts` param: the node's fixed
@@ -241,9 +246,22 @@ impl PartPorts {
         self.parts = (0..count).map(|index| format!("part_{index}")).collect();
         self.inputs.clear();
         self.inputs.extend(fixed.iter().cloned());
-        let port = |name: &String, ty| NodeInput { name: Cow::Owned(name.clone()), ty, kind: PortKind::Input, required: false };
-        self.inputs.extend(self.parts.iter().map(|name| port(name, PortType::Transform)));
-        self.inputs.extend(self.meshes.iter().map(|name| port(name, PortType::MeshSource)));
+        let port = |name: &String, ty| NodeInput {
+            name: Cow::Owned(name.clone()),
+            ty,
+            kind: PortKind::Input,
+            required: false,
+        };
+        self.inputs.extend(
+            self.parts
+                .iter()
+                .map(|name| port(name, PortType::Transform)),
+        );
+        self.inputs.extend(
+            self.meshes
+                .iter()
+                .map(|name| port(name, PortType::MeshSource)),
+        );
     }
 
     /// The node's inputs, once configured.

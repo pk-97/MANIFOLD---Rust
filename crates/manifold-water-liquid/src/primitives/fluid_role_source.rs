@@ -12,15 +12,15 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use crate::fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry};
-use manifold_node_engine::scene::mesh_source::MeshSource;
-use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::scene::mesh_selection::MeshSelection;
-use manifold_water_rigid::physics_mesh::{MESH_PORTS, PART_PORTS, parse_compound_materials};
-use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::transform::Transform;
 use geometry::{prepare_geometry, prepare_wired_geometry};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::mesh_selection::MeshSelection;
+use manifold_node_engine::scene::mesh_source::MeshSource;
+use manifold_node_engine::scene::transform::Transform;
+use manifold_water_rigid::physics_mesh::{MESH_PORTS, PART_PORTS, parse_compound_materials};
 
 /// The Role menu: the first kinds of [`FluidRoleKind::ALL`], by the index a
 /// saved project stores.
@@ -320,13 +320,19 @@ impl Primitive for FluidRoleSource {
             ctx.mark_outputs_pending();
             return;
         }
-        let Some(transform) = ctx.inputs.transform("transform").map(crate::world_pose::world_pose) else {
+        let Some(transform) = ctx
+            .inputs
+            .transform("transform")
+            .map(crate::world_pose::world_pose)
+        else {
             return self.fail(ctx, "Fluid Role Source needs a transform".into());
         };
         if let Err(error) = validate_transform(transform, "body transform") {
             return self.fail(ctx, error);
         }
-        let role = match wired_f32(ctx, "role").and_then(|wired| role_kind(wired, ctx.params.get("role"))) {
+        let role = match wired_f32(ctx, "role")
+            .and_then(|wired| role_kind(wired, ctx.params.get("role")))
+        {
             Ok(role) => role,
             Err(error) => return self.fail(ctx, error),
         };
@@ -370,7 +376,15 @@ impl Primitive for FluidRoleSource {
             }
             ctx.outputs.set_cpu_value(
                 "role",
-                FluidRole { geometry: Arc::clone(no_geometry()), kind: role, transform, enabled, velocity, inherit_motion, friction },
+                FluidRole {
+                    geometry: Arc::clone(no_geometry()),
+                    kind: role,
+                    transform,
+                    enabled,
+                    velocity,
+                    inherit_motion,
+                    friction,
+                },
             );
             return;
         }
@@ -443,7 +457,13 @@ impl Primitive for FluidRoleSource {
             }
         };
         let setup_changed = self.last_key.as_ref().is_none_or(|last| {
-            !last.matches(path, selection, source_transform, compound.as_ref(), wired.as_ref())
+            !last.matches(
+                path,
+                selection,
+                source_transform,
+                compound.as_ref(),
+                wired.as_ref(),
+            )
         });
         if setup_changed {
             self.last_key = Some(PreparationKey {
@@ -464,7 +484,12 @@ impl Primitive for FluidRoleSource {
                     let result = if let Some(wired) = wired {
                         prepare_wired_geometry(&wired, source_transform)
                     } else {
-                        prepare_geometry(&path_for_worker, selection, source_transform, compound.as_ref())
+                        prepare_geometry(
+                            &path_for_worker,
+                            selection,
+                            source_transform,
+                            compound.as_ref(),
+                        )
                     }
                     .map(|meshes| {
                         let geometry = PreparedFluidGeometry::new(meshes);
@@ -706,12 +731,24 @@ fn resolve_index(
     default: u32,
     count: u32,
 ) -> Result<u32, String> {
-    index_from(wired_f32(ctx, name)?, ctx.params.get(name), name, default, count)
+    index_from(
+        wired_f32(ctx, name)?,
+        ctx.params.get(name),
+        name,
+        default,
+        count,
+    )
 }
 
 /// An enum index from its wire, else its param, else `default`; refused by
 /// name outside `0..count`.
-fn index_from(wired: Option<f32>, param: Option<&ParamValue>, name: &str, default: u32, count: u32) -> Result<u32, String> {
+fn index_from(
+    wired: Option<f32>,
+    param: Option<&ParamValue>,
+    name: &str,
+    default: u32,
+    count: u32,
+) -> Result<u32, String> {
     let value = if let Some(value) = wired {
         value
     } else {
@@ -746,7 +783,11 @@ fn no_geometry() -> &'static Arc<PreparedFluidGeometry> {
 /// shape is refused by name rather than filled as a box.
 fn initial_fill_is_a_box(ctx: &EffectNodeContext<'_, '_>) -> Result<(), String> {
     let path = matches!(ctx.params.get("path"), Some(ParamValue::String(path)) if !path.is_empty());
-    if path || MESH_PORTS.iter().any(|port| ctx.inputs.slot(port).is_some()) {
+    if path
+        || MESH_PORTS
+            .iter()
+            .any(|port| ctx.inputs.slot(port).is_some())
+    {
         return Err("An Initial Fill fills a box; a mesh cannot be filled yet".into());
     }
     Ok(())
@@ -759,7 +800,6 @@ fn role_kind(wired: Option<f32>, param: Option<&ParamValue>) -> Result<FluidRole
     Ok(FluidRoleKind::ALL[index as usize])
 }
 
-
 fn resolve_bool(
     ctx: &EffectNodeContext<'_, '_>,
     name: &str,
@@ -769,7 +809,12 @@ fn resolve_bool(
 }
 
 /// A switch from its wire, else its param, else `default`.
-fn bool_from(wired: Option<f32>, param: Option<&ParamValue>, name: &str, default: bool) -> Result<bool, String> {
+fn bool_from(
+    wired: Option<f32>,
+    param: Option<&ParamValue>,
+    name: &str,
+    default: bool,
+) -> Result<bool, String> {
     if let Some(value) = wired {
         if value.is_finite() {
             return Ok(value > 0.5);
@@ -783,7 +828,6 @@ fn bool_from(wired: Option<f32>, param: Option<&ParamValue>, name: &str, default
         Some(_) => Err(format!("Fluid role parameter `{name}` must be a bool")),
     }
 }
-
 
 fn resolve_integer(
     ctx: &EffectNodeContext<'_, '_>,
@@ -840,15 +884,15 @@ fn resolve_selection(ctx: &EffectNodeContext<'_, '_>) -> Result<MeshSelection, S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_node_engine::exec::backend::Backend;
+    use crate::testkit::fluid_role_source::{run_inputs, settle_inputs, test_slots};
     use manifold_node_engine::bindings::Slot;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::exec::backend::MockBackend;
     use manifold_node_engine::exec::effect_node::ParamValues;
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::parameters::TableData;
     use manifold_node_engine::ports::PortType;
     use manifold_node_engine::primitive::PrimitiveSpec;
-    use manifold_node_engine::exec::backend::MockBackend;
-    use crate::testkit::fluid_role_source::{run_inputs, test_slots, settle_inputs};
 
     fn run_once(
         primitive: &mut FluidRoleSource,
@@ -956,21 +1000,55 @@ mod tests {
     fn an_initial_fill_publishes_its_box_on_the_first_run() {
         let mut backend = MockBackend::new();
         let (transform_slot, output_slot) = test_slots(&mut backend);
-        let column = Transform { pos: [-1.25, 1.12, 0.0], scale: [1.18, 1.92, 3.5], ..Transform::default() };
+        let column = Transform {
+            pos: [-1.25, 1.12, 0.0],
+            scale: [1.18, 1.92, 3.5],
+            ..Transform::default()
+        };
         backend.set_transform(transform_slot, column);
         let mut params = ParamValues::default();
         params.insert(Cow::Borrowed("role"), ParamValue::Enum(0));
         let mut primitive = FluidRoleSource::new();
-        assert!(!run_once(&mut primitive, &mut backend, transform_slot, output_slot, &params), "no pending frame");
-        let role = backend.cpu_values().get::<FluidRole>(output_slot).expect("published at once");
+        assert!(
+            !run_once(
+                &mut primitive,
+                &mut backend,
+                transform_slot,
+                output_slot,
+                &params
+            ),
+            "no pending frame"
+        );
+        let role = backend
+            .cpu_values()
+            .get::<FluidRole>(output_slot)
+            .expect("published at once");
         assert_eq!(role.kind, FluidRoleKind::InitialFill);
-        assert_eq!(role.transform, column, "the box is the transform, unchanged");
+        assert_eq!(
+            role.transform, column,
+            "the box is the transform, unchanged"
+        );
         assert!(role.enabled);
-        assert!(role.geometry.meshes.is_empty(), "a fill carries no geometry");
+        assert!(
+            role.geometry.meshes.is_empty(),
+            "a fill carries no geometry"
+        );
 
-        params.insert(Cow::Borrowed("path"), ParamValue::String(Arc::new("scan.glb".to_string())));
+        params.insert(
+            Cow::Borrowed("path"),
+            ParamValue::String(Arc::new("scan.glb".to_string())),
+        );
         let mut mesh = FluidRoleSource::new();
-        assert!(run_once(&mut mesh, &mut backend, transform_slot, output_slot, &params), "a mesh fill is refused");
+        assert!(
+            run_once(
+                &mut mesh,
+                &mut backend,
+                transform_slot,
+                output_slot,
+                &params
+            ),
+            "a mesh fill is refused"
+        );
     }
 
     #[test]
@@ -1149,5 +1227,4 @@ mod tests {
         ));
         assert!(primitive.last_key.is_none());
     }
-
 }

@@ -8,7 +8,11 @@ use manifold_physics::force_lattice::ForceLattice;
 fn gpu_flip_face_gravity_adds_gravity_and_holds_the_walls() {
     let faces = random_faces(0x96a7, false);
     let (g, dt) = ([0.5f32, -9.81, 1.25], 1.0f32 / 120.0);
-    let step = StepParams { gravity: g, step_dt: dt, ..lattice() };
+    let step = StepParams {
+        gravity: g,
+        step_dt: dt,
+        ..lattice()
+    };
     let got: Vec<FaceSample> = Pass::new()
         .bind(3, &faces)
         .bind(12, &[0.0f32; 4])
@@ -25,7 +29,12 @@ fn gpu_flip_face_gravity_adds_gravity_and_holds_the_walls() {
             } else {
                 (pushed, f64::from(before.weight[a]))
             };
-            close(face.velocity[a], velocity, 1.0, &format!("velocity {p:?}/{a}"));
+            close(
+                face.velocity[a],
+                velocity,
+                1.0,
+                &format!("velocity {p:?}/{a}"),
+            );
             close(face.weight[a], weight, 1.0, &format!("weight {p:?}/{a}"));
         }
     }
@@ -53,14 +62,18 @@ fn face_gravity_case(air: bool) {
                 let push = [rng.signed(4.0), rng.signed(4.0), rng.signed(4.0)];
                 let drag = if air { 0.25 + 3.0 * rng.unit() } else { 0.0 };
                 let wind = [rng.signed(6.0), rng.signed(6.0), rng.signed(6.0)].map(|w| drag * w);
-                [[push[0], push[1], push[2], drag], [wind[0], wind[1], wind[2], 0.0]]
+                [
+                    [push[0], push[1], push[2], drag],
+                    [wind[0], wind[1], wind[2], 0.0],
+                ]
             })
             .collect()
     };
     // Two force lattices from tick 10; the step runs tick 11, so it reads the second.
     let forces = force_values(2 * field.node_count());
-    let impulses: Vec<[f32; 4]> =
-        (0..field.node_count()).map(|_| [rng.signed(4.0), rng.signed(4.0), rng.signed(4.0), 0.0]).collect();
+    let impulses: Vec<[f32; 4]> = (0..field.node_count())
+        .map(|_| [rng.signed(4.0), rng.signed(4.0), rng.signed(4.0), 0.0])
+        .collect();
     let flat = |values: &[[f32; 4]]| values.iter().flatten().copied().collect::<Vec<f32>>();
     let (g, dt) = ([0.5f32, -9.81, 1.25], 1.0f32 / 120.0);
     for step in [0u32, 1] {
@@ -89,11 +102,24 @@ fn face_gravity_case(air: bool) {
                     continue;
                 }
                 let x: [f32; 3] = std::array::from_fn(|d| {
-                    MIN[d] + H * if d == a { p[d] as f32 } else { p[d] as f32 + 0.5 }
+                    MIN[d]
+                        + H * if d == a {
+                            p[d] as f32
+                        } else {
+                            p[d] as f32 + 0.5
+                        }
                 });
                 let force = field.sample_forces(&forces[2 * field.node_count()..], x);
-                let impulse = if step == 0 { field.sample(&impulses, x)[a] } else { 0.0 };
-                let (v0, accel, k) = (f64::from(before.velocity[a]), f64::from(g[a]) + f64::from(force.push[a]), f64::from(force.drag));
+                let impulse = if step == 0 {
+                    field.sample(&impulses, x)[a]
+                } else {
+                    0.0
+                };
+                let (v0, accel, k) = (
+                    f64::from(before.velocity[a]),
+                    f64::from(g[a]) + f64::from(force.push[a]),
+                    f64::from(force.drag),
+                );
                 let stepped = if k > 0.0 {
                     let decay = (-k * f64::from(dt)).exp();
                     v0 * decay + (accel + f64::from(force.drag_wind[a])) * (1.0 - decay) / k
@@ -101,9 +127,23 @@ fn face_gravity_case(air: bool) {
                     v0 + accel * f64::from(dt)
                 };
                 let pushed = stepped + f64::from(impulse);
-                let velocity = if p[a] == 0 || p[a] == N[a] { 0.0 } else { pushed };
-                close(face.velocity[a], velocity, 1.0, &format!("air {air} step {step} velocity {p:?}/{a}"));
-                close(face.weight[a], f64::from(before.weight[a]), 1.0, &format!("weight {p:?}/{a}"));
+                let velocity = if p[a] == 0 || p[a] == N[a] {
+                    0.0
+                } else {
+                    pushed
+                };
+                close(
+                    face.velocity[a],
+                    velocity,
+                    1.0,
+                    &format!("air {air} step {step} velocity {p:?}/{a}"),
+                );
+                close(
+                    face.weight[a],
+                    f64::from(before.weight[a]),
+                    1.0,
+                    &format!("weight {p:?}/{a}"),
+                );
             }
         }
     }

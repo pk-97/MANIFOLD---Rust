@@ -1,12 +1,12 @@
 //! Area-weighted normals, matching manifold-fluids decode_surface.
 use crate::primitives::count_surface_triangles::MARCHING_CUBES_COMMON;
-use manifold_water_liquid::primitives::liquid_bricks;
 use crate::primitives::relax_surface_mesh::SurfaceMeshPass;
-use manifold_water_liquid::float_param;
-use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::primitives::liquid_bricks;
 use std::borrow::Cow;
 manifold_node_engine::primitive! {
     name: SurfaceMeshNormals,
@@ -89,17 +89,16 @@ mod tests {
         assert!(source.contains("buf_out[slot]"));
         assert!(!source.contains("workgroupBarrier"));
     }
-
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use manifold_node_engine::mesh::MeshVertex;
-    use manifold_node_engine::testkit::array_harness::{Harness, params, read};
     use crate::primitives::smooth_surface_mesh::SmoothSurfaceMesh;
     use crate::primitives::surface_mesh_parity::{fixture, flip_normals, flip_smooth};
     use glam::DVec3;
+    use manifold_node_engine::mesh::MeshVertex;
+    use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 
     #[test]
     fn fluid_indexed_smoothing_and_normals_match_flip_reference() {

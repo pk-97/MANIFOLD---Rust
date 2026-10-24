@@ -31,11 +31,21 @@ fn row(id: &'static str, name: &str, value: f32) -> ParamRow {
             scene: None,
             limit: Default::default(),
         },
-        value: RowValue { base: value, effective: value, exposed: true, driven: false },
+        value: RowValue {
+            base: value,
+            effective: value,
+            exposed: true,
+            driven: false,
+        },
         audio: AudioRowState::default(),
         clip_trigger: None,
         modulation: RowMod::default(),
-        mapping: RowMapping { osc_address: None, ableton_display: None, ableton_range: None, mappable: false },
+        mapping: RowMapping {
+            osc_address: None,
+            ableton_display: None,
+            ableton_range: None,
+            mappable: false,
+        },
         rgb_members: None,
         modulator_stored: false,
         affordance: None,
@@ -51,7 +61,12 @@ fn light_rows(editable: bool) -> Vec<ParamRow> {
         values: [1.0, 0.5, 0.25],
         editable,
     });
-    vec![row("7_intensity", "Intensity", 1.0), red, row(IDS[1], "Colour G", 0.5), row(IDS[2], "Colour B", 0.25)]
+    vec![
+        row("7_intensity", "Intensity", 1.0),
+        red,
+        row(IDS[1], "Colour G", 0.5),
+        row(IDS[2], "Colour B", 0.25),
+    ]
 }
 
 /// A scene card holding [`light_rows`].
@@ -99,14 +114,25 @@ fn only_the_red_channel_of_a_grouped_colour_is_the_colour_row() {
     let rows = light_rows(true);
     let host = RowHost::new();
     assert_eq!(rows[1].kind(true), RowKind::Colour);
-    assert_eq!(rows[1].kind(false), RowKind::Number, "off a scene surface the channels stay sliders");
+    assert_eq!(
+        rows[1].kind(false),
+        RowKind::Number,
+        "off a scene surface the channels stay sliders"
+    );
     assert_eq!(rows[2].kind(true), RowKind::Number);
     assert!(host.is_colour_tail(&rows, 2, true) && host.is_colour_tail(&rows, 3, true));
     assert!(!host.is_colour_tail(&rows, 0, true) && !host.is_colour_tail(&rows, 2, false));
-    assert_eq!(RowHost::colour_channels(&rows, 1), [Some(1), Some(2), Some(3)]);
+    assert_eq!(
+        RowHost::colour_channels(&rows, 1),
+        [Some(1), Some(2), Some(3)]
+    );
     let mut fader = rows[0].clone();
     fader.rgb_members = rows[1].rgb_members.clone();
-    assert_eq!(fader.kind(true), RowKind::Number, "a fader carrying its light's swatch stays a fader");
+    assert_eq!(
+        fader.kind(true),
+        RowKind::Number,
+        "a fader carrying its light's swatch stays a fader"
+    );
 }
 
 /// The colour row replaces the three loose sliders: one swatch, one hex
@@ -116,10 +142,22 @@ fn editable_colour_folds_its_channels_and_opens_on_the_fold() {
     let (mut panel, tree) = scene_card(true);
     let (swatch, _) = panel.row_host.swatch_ids[1].expect("the colour row has a swatch");
     let nodes = panel.row_host.colour_ids[1].expect("the colour row has fold and hex");
-    assert_eq!(tree.get_node(nodes.hex).unwrap().text.as_deref(), Some("#FF8040"));
-    assert!(panel.row_host.slider_ids[1..].iter().all(Option::is_none), "channels start folded");
-    assert!(panel.row_host.slider_ids[0].is_some(), "the fader is untouched");
-    assert!(panel.row_host.swatch_ids[2..].iter().all(Option::is_none), "one swatch per colour");
+    assert_eq!(
+        tree.get_node(nodes.hex).unwrap().text.as_deref(),
+        Some("#FF8040")
+    );
+    assert!(
+        panel.row_host.slider_ids[1..].iter().all(Option::is_none),
+        "channels start folded"
+    );
+    assert!(
+        panel.row_host.slider_ids[0].is_some(),
+        "the fader is untouched"
+    );
+    assert!(
+        panel.row_host.swatch_ids[2..].iter().all(Option::is_none),
+        "one swatch per colour"
+    );
 
     let actions = panel.handle_click(nodes.hex, &tree);
     assert!(
@@ -128,13 +166,28 @@ fn editable_colour_folds_its_channels_and_opens_on_the_fold() {
         "{actions:?}"
     );
     let actions = panel.handle_click(swatch, &tree);
-    assert!(matches!(actions.as_slice(), [PanelAction::Root(RootAction::OpenColourMenu { .. })]), "{actions:?}");
+    assert!(
+        matches!(
+            actions.as_slice(),
+            [PanelAction::Root(RootAction::OpenColourMenu { .. })]
+        ),
+        "{actions:?}"
+    );
 
     let actions = panel.handle_click(nodes.fold, &tree);
-    assert!(matches!(actions.as_slice(), [PanelAction::Params(crate::ParamsAction::SectionFoldToggled)]));
+    assert!(matches!(
+        actions.as_slice(),
+        [PanelAction::Params(crate::ParamsAction::SectionFoldToggled)]
+    ));
     let tree = rebuild(&mut panel);
-    assert!(panel.row_host.slider_ids[1..].iter().all(Option::is_some), "the fold holds all three sliders");
-    assert!(panel.row_host.swatch_ids[1].is_some(), "the R slider does not take the header's swatch");
+    assert!(
+        panel.row_host.slider_ids[1..].iter().all(Option::is_some),
+        "the fold holds all three sliders"
+    );
+    assert!(
+        panel.row_host.swatch_ids[1].is_some(),
+        "the R slider does not take the header's swatch"
+    );
     let header = tree.get_bounds(panel.row_host.colour_ids[1].unwrap().fold);
     let red = tree.get_bounds(panel.row_host.slider_ids[1].as_ref().unwrap().track);
     assert!(red.y > header.y, "the channels sit under their colour row");
@@ -145,8 +198,14 @@ fn editable_colour_folds_its_channels_and_opens_on_the_fold() {
 #[test]
 fn colour_one_write_cannot_own_opens_and_only_shows() {
     let (mut panel, tree) = scene_card(false);
-    assert!(panel.row_host.slider_ids[1..].iter().all(Option::is_some), "open by default");
-    assert!(panel.row_host.driver_btn_ids[2].is_some(), "each channel keeps its D lane");
+    assert!(
+        panel.row_host.slider_ids[1..].iter().all(Option::is_some),
+        "open by default"
+    );
+    assert!(
+        panel.row_host.driver_btn_ids[2].is_some(),
+        "each channel keeps its D lane"
+    );
     let nodes = panel.row_host.colour_ids[1].unwrap();
     assert!(panel.handle_click(nodes.hex, &tree).is_empty());
     let (swatch, _) = panel.row_host.swatch_ids[1].unwrap();
@@ -156,11 +215,18 @@ fn colour_one_write_cannot_own_opens_and_only_shows() {
 #[test]
 fn swatch_and_hex_follow_the_live_channels() {
     let (mut panel, mut tree) = scene_card(true);
-    let mut slots = [IDS[0], IDS[1], IDS[2], "7_intensity"].map(|id| (id, UiParamSlot::exposed(0.0)));
+    let mut slots =
+        [IDS[0], IDS[1], IDS[2], "7_intensity"].map(|id| (id, UiParamSlot::exposed(0.0)));
     slots[0].1 = UiParamSlot::exposed(1.0);
     panel.sync_values(&mut tree, &mut slots.into_iter());
     let nodes = panel.row_host.colour_ids[1].unwrap();
-    assert_eq!(tree.get_node(nodes.hex).unwrap().text.as_deref(), Some("#FF0000"));
+    assert_eq!(
+        tree.get_node(nodes.hex).unwrap().text.as_deref(),
+        Some("#FF0000")
+    );
     let (swatch, _) = panel.row_host.swatch_ids[1].unwrap();
-    assert_eq!(tree.get_node(swatch).unwrap().style.bg_color, swatch_colour([1.0, 0.0, 0.0]));
+    assert_eq!(
+        tree.get_node(swatch).unwrap().style.bg_color,
+        swatch_colour([1.0, 0.0, 0.0])
+    );
 }

@@ -92,9 +92,18 @@ pub struct FluidParticle {
 /// stride 32 (vec3 + u32 pack into one 16-byte slot, as `Particle`'s
 /// velocity/life do).
 pub const FLUID_PARTICLE_SPECS: &[crate::ports::ChannelSpec] = &[
-    crate::ports::ChannelSpec { name: crate::channel_names::well_known::POSITION_RADIUS, ty: crate::ports::ChannelElementType::Vec4F },
-    crate::ports::ChannelSpec { name: crate::channel_names::well_known::VELOCITY, ty: crate::ports::ChannelElementType::Vec3F },
-    crate::ports::ChannelSpec { name: crate::channel_names::well_known::ID, ty: crate::ports::ChannelElementType::U32 },
+    crate::ports::ChannelSpec {
+        name: crate::channel_names::well_known::POSITION_RADIUS,
+        ty: crate::ports::ChannelElementType::Vec4F,
+    },
+    crate::ports::ChannelSpec {
+        name: crate::channel_names::well_known::VELOCITY,
+        ty: crate::ports::ChannelElementType::Vec3F,
+    },
+    crate::ports::ChannelSpec {
+        name: crate::channel_names::well_known::ID,
+        ty: crate::ports::ChannelElementType::U32,
+    },
 ];
 
 impl crate::ports::KnownItem for FluidParticle {

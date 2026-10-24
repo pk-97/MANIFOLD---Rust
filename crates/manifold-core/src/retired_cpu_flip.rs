@@ -5,8 +5,8 @@
 //! only identifies content that must be reported as preserved and must never
 //! be replaced with a bundled generator fallback.
 
-use crate::effect_graph_def::{EffectGraphDef, EffectGraphNode};
 use crate::PresetTypeId;
+use crate::effect_graph_def::{EffectGraphDef, EffectGraphNode};
 
 /// Product preset IDs that used the native CPU FLIP solver.
 pub const RETIRED_CPU_FLIP_PRESET_IDS: &[&str] = &[
@@ -51,8 +51,7 @@ pub fn preserve_authored_cpu_flip_graph(
     generator_type: &PresetTypeId,
     graph: &EffectGraphDef,
 ) -> bool {
-    is_retired_cpu_flip_preset(generator_type)
-        || graph_contains_retired_cpu_flip_node(graph)
+    is_retired_cpu_flip_preset(generator_type) || graph_contains_retired_cpu_flip_node(graph)
 }
 
 fn nodes_contain_retired_cpu_flip_node(nodes: &[EffectGraphNode]) -> bool {
@@ -130,7 +129,9 @@ mod tests {
     #[test]
     fn retired_ids_and_nested_nodes_are_detected() {
         assert!(is_retired_cpu_flip_preset(&PresetTypeId::new("WaterBasin")));
-        assert!(!is_retired_cpu_flip_preset(&PresetTypeId::new("WaterStillPoolMatter")));
+        assert!(!is_retired_cpu_flip_preset(&PresetTypeId::new(
+            "WaterStillPoolMatter"
+        )));
         assert!(graph_contains_retired_cpu_flip_node(&graph(vec![node(
             RETIRED_CPU_FLIP_NODE_TYPE_ID,
         )])));

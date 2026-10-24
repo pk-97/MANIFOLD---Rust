@@ -7,9 +7,7 @@
 
 use std::fmt::Write as _;
 
-use super::types::{
-    param_wgsl_type, param_word_count, wgsl_safe_field, CodegenError,
-};
+use super::types::{CodegenError, param_wgsl_type, param_word_count, wgsl_safe_field};
 use crate::parameters::{ParamDef, ParamType};
 
 /// Per-site knobs for [`emit_params_struct`].
@@ -146,11 +144,7 @@ pub(super) fn emit_derived_fields(
 /// from its three packed f32 words. Mirrors [`emit_derived_fields`]'s struct
 /// layout. `prefix` namespaces the `params.` access (the fused paths use
 /// `n{i}_`; standalone passes `""`).
-pub(super) fn emit_derived_args(
-    args: &mut Vec<String>,
-    derived_uniforms: &[&str],
-    prefix: &str,
-) {
+pub(super) fn emit_derived_args(args: &mut Vec<String>, derived_uniforms: &[&str], prefix: &str) {
     for d in derived_uniforms {
         let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
         if dty == "vec3" {

@@ -6,8 +6,8 @@
 //! the module map.
 
 use super::RtObjectGeometry;
-use objc2_metal::MTLAccelerationStructureInstanceDescriptor;
 use bytemuck::{Pod, Zeroable};
+use objc2_metal::MTLAccelerationStructureInstanceDescriptor;
 
 /// CPU mirror of the MSL `SubsurfaceMaterial` row.  The renderer keeps rows in
 /// canonical object order; the committed instance id selects the normal-source
@@ -67,8 +67,6 @@ pub(crate) struct RtTraceDiagnostics {
     pub(crate) raw_min_distance: f32,
     pub(crate) raw_max_distance: f32,
 }
-
-
 
 /// CPU mirror of `ShadowRayParams` above — field order and packing MUST
 /// match exactly (P0 section 5.1 kernel lesson: `packed_float3` in MSL == dense
@@ -960,7 +958,11 @@ const _: () = assert!(std::mem::size_of::<AtrousPostParams>() == 16);
 
 impl AtrousPostParams {
     pub fn new(size: [u32; 2], step: u32, strength: f32) -> Self {
-        Self { size, step, strength }
+        Self {
+            size,
+            step,
+            strength,
+        }
     }
 }
 

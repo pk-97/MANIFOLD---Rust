@@ -16,11 +16,15 @@
 //! seek / pause clears all state — a re-entered clip starts with no
 //! burst in flight.
 
-use std::borrow::Cow;
-use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, NodeRequires};
+use manifold_node_engine::exec::effect_node::{
+    EffectNode, EffectNodeContext, EffectNodeType, NodeRequires,
+};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use manifold_node_engine::ports::{
+    NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+};
 use manifold_node_engine::state_store::NodeState;
+use std::borrow::Cow;
 
 pub const INJECT_BURST_TYPE_ID: &str = "node.inject_burst";
 
@@ -215,8 +219,10 @@ impl EffectNode for InjectBurst {
             },
         );
 
-        ctx.outputs.set_scalar("active", ParamValue::Float(active_out));
-        ctx.outputs.set_scalar("phase", ParamValue::Float(phase_out));
+        ctx.outputs
+            .set_scalar("active", ParamValue::Float(active_out));
+        ctx.outputs
+            .set_scalar("phase", ParamValue::Float(phase_out));
         ctx.outputs.set_scalar("point_x", ParamValue::Float(px_out));
         ctx.outputs.set_scalar("point_y", ParamValue::Float(py_out));
     }

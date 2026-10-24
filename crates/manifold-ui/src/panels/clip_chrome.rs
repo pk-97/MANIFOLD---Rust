@@ -8,9 +8,9 @@
 //! next blocks to typify). The sliders are materialised by the host; their drag
 //! stays with `SliderDragState`. Public interface unchanged → inspector untouched.
 
-use crate::{ClipAction};
 use super::PanelAction;
 use super::param_slider_shared::dropdown_trigger_view;
+use crate::ClipAction;
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View, components};
 use crate::color;
 use crate::node::*;
@@ -172,7 +172,13 @@ impl ClipChromePanel {
                 h += self
                     .cached_instruments
                     .iter()
-                    .map(|r| if r.enabled { INSTR_ROW_H } else { DISABLED_ROW_H })
+                    .map(|r| {
+                        if r.enabled {
+                            INSTR_ROW_H
+                        } else {
+                            DISABLED_ROW_H
+                        }
+                    })
                     .sum::<f32>();
             } else if self.mode_generator {
                 h += SMALL_ROW_H;
@@ -243,7 +249,10 @@ impl ClipChromePanel {
     // ── View description ──────────────────────────────────────────
 
     fn divider() -> View {
-        View::panel().fill_w().h(Sizing::Fixed(DIVIDER_H)).bg(color::DIVIDER_C32)
+        View::panel()
+            .fill_w()
+            .h(Sizing::Fixed(DIVIDER_H))
+            .bg(color::DIVIDER_C32)
     }
 
     fn section_label(text: &str) -> View {
@@ -303,7 +312,11 @@ impl ClipChromePanel {
             View::row(0.0)
                 .fill_w()
                 .h(Sizing::Fixed(SMALL_ROW_H))
-                .child(View::panel().w(Sizing::Fixed(SOURCE_LABEL_W + GAP)).fill_h())
+                .child(
+                    View::panel()
+                        .w(Sizing::Fixed(SOURCE_LABEL_W + GAP))
+                        .fill_h(),
+                )
                 .child(
                     View::label(self.cached_source_name.as_str())
                         .fill_w()
@@ -315,7 +328,11 @@ impl ClipChromePanel {
         );
         children.push(self.bpm_row("Src BPM"));
         children.push(Self::toggle_button(
-            if self.cached_loop_enabled { "Loop ON" } else { "Loop OFF" },
+            if self.cached_loop_enabled {
+                "Loop ON"
+            } else {
+                "Loop OFF"
+            },
             self.cached_loop_enabled,
             KEY_LOOP,
         ));
@@ -350,7 +367,11 @@ impl ClipChromePanel {
                 .key(KEY_REPLACE_AUDIO),
         );
         children.push(Self::toggle_button(
-            if self.cached_warp_enabled { "Warp ON" } else { "Warp OFF" },
+            if self.cached_warp_enabled {
+                "Warp ON"
+            } else {
+                "Warp OFF"
+            },
             self.cached_warp_enabled,
             KEY_WARP,
         ));
@@ -458,7 +479,11 @@ impl ClipChromePanel {
     }
 
     fn instrument_row(&self, i: usize, inst: &DetectInstrumentRow) -> View {
-        let row_h = if inst.enabled { INSTR_ROW_H } else { DISABLED_ROW_H };
+        let row_h = if inst.enabled {
+            INSTR_ROW_H
+        } else {
+            DISABLED_ROW_H
+        };
         let toggle_h = (row_h - 2.0).max(10.0);
         let enable = View::button(if inst.enabled { "\u{2713}" } else { "" })
             .w(Sizing::Fixed(TOGGLE_W))
@@ -544,7 +569,12 @@ impl ClipChromePanel {
     fn chrome_view(&self) -> View {
         let mut root = View::column(0.0)
             .fill()
-            .pad(Pad { l: PAD_H, t: PAD_V, r: PAD_H, b: PAD_V })
+            .pad(Pad {
+                l: PAD_H,
+                t: PAD_V,
+                r: PAD_H,
+                b: PAD_V,
+            })
             .child(
                 View::label(self.cached_name.as_str())
                     .fill_w()
@@ -563,14 +593,18 @@ impl ClipChromePanel {
             } else if self.mode_generator {
                 self.gen_section(&mut section);
             }
-            root = root.child(Self::divider()).children(section).child(Self::divider()).child(
-                View::label("Effects")
-                    .fill_w()
-                    .h(Sizing::Fixed(SECTION_LABEL_H))
-                    .font(SMALL_FONT_SIZE)
-                    .text_color(color::TEXT_DIMMED_C32)
-                    .align_text(TextAlign::Left),
-            );
+            root = root
+                .child(Self::divider())
+                .children(section)
+                .child(Self::divider())
+                .child(
+                    View::label("Effects")
+                        .fill_w()
+                        .h(Sizing::Fixed(SECTION_LABEL_H))
+                        .font(SMALL_FONT_SIZE)
+                        .text_color(color::TEXT_DIMMED_C32)
+                        .align_text(TextAlign::Left),
+                );
         }
         root
     }
@@ -719,7 +753,13 @@ impl ClipChromePanel {
     }
 
     /// Update the detection status line + progress bar in place (no rebuild).
-    pub fn sync_detect_status(&mut self, tree: &mut UITree, status: &str, progress: f32, show: bool) {
+    pub fn sync_detect_status(
+        &mut self,
+        tree: &mut UITree,
+        status: &str,
+        progress: f32,
+        show: bool,
+    ) {
         self.cached_detect_status = status.into();
         self.cached_detect_progress = progress.clamp(0.0, 1.0);
         self.cached_detect_show = show;
@@ -733,7 +773,12 @@ impl ClipChromePanel {
             let bg = self.detect_progress_bg_rect;
             tree.set_bounds(
                 id,
-                Rect::new(bg.x, bg.y, bg.width * self.cached_detect_progress, bg.height),
+                Rect::new(
+                    bg.x,
+                    bg.y,
+                    bg.width * self.cached_detect_progress,
+                    bg.height,
+                ),
             );
         }
     }
@@ -783,7 +828,9 @@ impl ClipChromePanel {
                 .iter()
                 .position(|&b| b == Some(node_id))
             {
-                return vec![PanelAction::Clip(ClipAction::ClipDetectInstrumentToggled(idx))];
+                return vec![PanelAction::Clip(ClipAction::ClipDetectInstrumentToggled(
+                    idx,
+                ))];
             }
             if let Some(idx) = self
                 .instrument_layer_btn_ids
@@ -831,11 +878,16 @@ impl ClipChromePanel {
 
     pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
         if self.onset_slider.end_drag() {
-            return vec![PanelAction::Clip(ClipAction::ClipDetectOnsetChanged(self.onset_slider.cached_value()))];
+            return vec![PanelAction::Clip(ClipAction::ClipDetectOnsetChanged(
+                self.onset_slider.cached_value(),
+            ))];
         }
         for (i, slider) in self.instrument_sens_sliders.iter_mut().enumerate() {
             if slider.end_drag() {
-                return vec![PanelAction::Clip(ClipAction::ClipDetectSensitivityChanged(i, slider.cached_value()))];
+                return vec![PanelAction::Clip(ClipAction::ClipDetectSensitivityChanged(
+                    i,
+                    slider.cached_value(),
+                ))];
             }
         }
         Vec::new()
@@ -907,7 +959,10 @@ mod tests {
         panel.set_detection(&audio_view());
         panel.build(&mut tree, rect());
 
-        assert!(panel.onset_slider.ids().is_some(), "onset slider materialised");
+        assert!(
+            panel.onset_slider.ids().is_some(),
+            "onset slider materialised"
+        );
         // Enabled instrument (idx 0) has a sensitivity slider; disabled (idx 1) doesn't.
         assert!(panel.instrument_sens_sliders[0].ids().is_some());
         assert!(panel.instrument_sens_sliders[1].ids().is_none());
@@ -932,7 +987,9 @@ mod tests {
         let en0 = panel.host.node_id_for_key(KEY_INSTR_ENABLE_BASE).unwrap();
         assert!(matches!(
             panel.handle_click(en0).as_slice(),
-            [PanelAction::Clip(ClipAction::ClipDetectInstrumentToggled(0))]
+            [PanelAction::Clip(ClipAction::ClipDetectInstrumentToggled(
+                0
+            ))]
         ));
         let clear = panel.host.node_id_for_key(KEY_CLEAR).unwrap();
         assert!(matches!(

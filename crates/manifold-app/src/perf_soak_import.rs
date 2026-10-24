@@ -27,11 +27,11 @@ use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::GpuDevice;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
-use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
-use manifold_node_engine::runtime::preset_context::PresetContext;
-use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 
 /// D7 extension dispatch: `.glb`/`.gltf` (case-insensitive) route to this
 /// module's loop; everything else stays on `perf_soak.rs`'s P1 project soak.
@@ -57,11 +57,16 @@ const PROFILE_SAMPLER_MAX_SPANS: usize = 2048;
 const PROFILE_WORST_FRAMES_K: usize = 5;
 
 fn arg_value(args: &[String], flag: &str) -> Option<String> {
-    args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned()
+    args.iter()
+        .position(|a| a == flag)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
 }
 
 fn parse_size(s: &str) -> Result<(u32, u32), String> {
-    let (w, h) = s.split_once('x').ok_or_else(|| format!("--size wants WxH, got {s}"))?;
+    let (w, h) = s
+        .split_once('x')
+        .ok_or_else(|| format!("--size wants WxH, got {s}"))?;
     let width: u32 = w.parse().map_err(|e| format!("bad --size width: {e}"))?;
     let height: u32 = h.parse().map_err(|e| format!("bad --size height: {e}"))?;
     Ok((width, height))
@@ -105,7 +110,9 @@ pub fn run_import(glb_path_str: &str, args: &[String]) -> Result<bool, String> {
     };
     let frames: u32 = match arg_value(args, "--frames") {
         Some(s) => {
-            let v: u32 = s.parse().map_err(|e| format!("--frames must be a positive integer: {e}"))?;
+            let v: u32 = s
+                .parse()
+                .map_err(|e| format!("--frames must be a positive integer: {e}"))?;
             if v == 0 {
                 return Err("--frames must be > 0".to_string());
             }
@@ -133,7 +140,11 @@ pub fn run_import(glb_path_str: &str, args: &[String]) -> Result<bool, String> {
     // through the loader/content thread (D7).
     let (def, model) = compile_model_scene(glb_path)
         .map_err(|e| format!("import error for {}: {e}", glb_path.display()))?;
-    eprintln!("perf-soak (import): {} -> {} part(s)", glb_path.display(), model.roots.len());
+    eprintln!(
+        "perf-soak (import): {} -> {} part(s)",
+        glb_path.display(),
+        model.roots.len()
+    );
 
     let params: Vec<Param> = def
         .preset_metadata
@@ -154,7 +165,12 @@ pub fn run_import(glb_path_str: &str, args: &[String]) -> Result<bool, String> {
         format,
         Some(&manifest),
     )
-    .map_err(|e| format!("import graph build failed for {}: {e:?}", glb_path.display()))?;
+    .map_err(|e| {
+        format!(
+            "import graph build failed for {}: {e:?}",
+            glb_path.display()
+        )
+    })?;
 
     let target = RenderTarget::new(&device, width, height, format, "perf-soak-import-target");
 
@@ -225,9 +241,27 @@ pub fn run_import(glb_path_str: &str, args: &[String]) -> Result<bool, String> {
     };
 
     let mut stats_json = if profile_mode {
-        run_profiled(&mut runtime, &device, &target, &manifest, width, height, frames, warmup_frame)?
+        run_profiled(
+            &mut runtime,
+            &device,
+            &target,
+            &manifest,
+            width,
+            height,
+            frames,
+            warmup_frame,
+        )?
     } else {
-        run_measured(&mut runtime, &device, &target, &manifest, width, height, frames, warmup_frame)?
+        run_measured(
+            &mut runtime,
+            &device,
+            &target,
+            &manifest,
+            width,
+            height,
+            frames,
+            warmup_frame,
+        )?
     };
     stats_json["execution"] = serde_json::json!({"completed": true});
     stats_json["evaluation"] = crate::perf_soak::Evaluation::not_evaluated(
@@ -244,9 +278,15 @@ pub fn run_import(glb_path_str: &str, args: &[String]) -> Result<bool, String> {
         .unwrap_or_else(|| "import".to_string());
     let suffix = if profile_mode { "profile" } else { "stats" };
     let out_path = out_dir.join(format!("{stem}-import-{suffix}.json"));
-    std::fs::write(&out_path, serde_json::to_string_pretty(&stats_json).unwrap())
-        .map_err(|e| format!("write {}: {e}", out_path.display()))?;
-    eprintln!("perf-soak (import): stats written to {}", out_path.display());
+    std::fs::write(
+        &out_path,
+        serde_json::to_string_pretty(&stats_json).unwrap(),
+    )
+    .map_err(|e| format!("write {}: {e}", out_path.display()))?;
+    eprintln!(
+        "perf-soak (import): stats written to {}",
+        out_path.display()
+    );
 
     // D7/I3/I4: import mode never reaches a baseline write and never returns
     // a failing threshold verdict — every successful run reports `Ok(true)`.
@@ -377,8 +417,10 @@ fn run_profiled(
         }
         let profile = enc.commit_and_wait_profiled(device);
         let cpu_profiles = runtime.take_step_profiles();
-        let cpu_by_tag: std::collections::HashMap<&str, &manifold_node_engine::exec::execution::StepProfile> =
-            cpu_profiles.iter().map(|p| (p.tag.as_str(), p)).collect();
+        let cpu_by_tag: std::collections::HashMap<
+            &str,
+            &manifold_node_engine::exec::execution::StepProfile,
+        > = cpu_profiles.iter().map(|p| (p.tag.as_str(), p)).collect();
 
         let mut frame = ProfiledFrame {
             index: frame_base + i,
@@ -391,11 +433,14 @@ fn run_profiled(
         for span in &profile.spans {
             match cpu_by_tag.get(span.tag.as_str()) {
                 Some(cpu) => {
-                    let agg = frame.nodes.entry(span.tag.clone()).or_insert_with(|| NodeAgg {
-                        type_id: cpu.type_id.clone(),
-                        cpu_us: cpu.cpu_nanos as f64 / 1000.0,
-                        passes: std::collections::HashMap::new(),
-                    });
+                    let agg = frame
+                        .nodes
+                        .entry(span.tag.clone())
+                        .or_insert_with(|| NodeAgg {
+                            type_id: cpu.type_id.clone(),
+                            cpu_us: cpu.cpu_nanos as f64 / 1000.0,
+                            passes: std::collections::HashMap::new(),
+                        });
                     *agg.passes.entry(span.label.clone()).or_insert(0.0) += span.millis;
                 }
                 // D4b: a span whose tag matches no live executor step this
@@ -424,12 +469,20 @@ fn run_profiled(
     }
 
     let mut ranked: Vec<&ProfiledFrame> = recorded.iter().collect();
-    ranked.sort_by(|a, b| b.total_gpu_ms.partial_cmp(&a.total_gpu_ms).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.sort_by(|a, b| {
+        b.total_gpu_ms
+            .partial_cmp(&a.total_gpu_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let worst: Vec<serde_json::Value> = ranked
         .iter()
         .take(PROFILE_WORST_FRAMES_K)
         .map(|f| {
-            let share_denom = if f.total_gpu_ms > 0.0 { f.total_gpu_ms } else { 1.0 };
+            let share_denom = if f.total_gpu_ms > 0.0 {
+                f.total_gpu_ms
+            } else {
+                1.0
+            };
             let mut node_rows: Vec<(&String, &NodeAgg, f64)> = f
                 .nodes
                 .iter()
@@ -444,7 +497,8 @@ fn run_profiled(
                     // share_of_frame} row, sorted descending by gpu_ms,
                     // always an array (even length 1).
                     let mut pass_rows: Vec<(&String, &f64)> = agg.passes.iter().collect();
-                    pass_rows.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
+                    pass_rows
+                        .sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
                     let passes_json: Vec<serde_json::Value> = pass_rows
                         .iter()
                         .map(|(label, pass_ms)| {
@@ -469,7 +523,8 @@ fn run_profiled(
             // live executor step) replace the old collapsed "untagged"
             // scalar.
             let mut unmatched_rows: Vec<(&String, &f64)> = f.unmatched.iter().collect();
-            unmatched_rows.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
+            unmatched_rows
+                .sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
             for (label, gpu_ms) in unmatched_rows {
                 nodes_json.push(serde_json::json!({
                     "tag": label,

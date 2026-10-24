@@ -6,13 +6,13 @@
 //! surface of amplitude 2 cells and wavelength 16.
 
 use super::crossing_distance::CrossingDistance;
-use manifold_node_engine::testkit::array_harness::{Harness, params};
 use super::nearest_crossing::NearestCrossing;
 use super::surface_crossings::SurfaceCrossings;
 use super::whitewater_cpu::Grid;
-use manifold_node_engine::testkit::fused_atoms::run;
 use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::exec::effect_node::ParamValues;
+use manifold_node_engine::testkit::array_harness::{Harness, params};
+use manifold_node_engine::testkit::fused_atoms::run;
 use manifold_water_liquid::whitewater::{SPREAD_STEPS, SurfaceCrossing};
 
 const NODES: [u32; 3] = [71; 3];
@@ -26,16 +26,35 @@ enum Field {
     /// Liquid inside a ball; centre and radius in grid cells.
     Sphere { centre: [f64; 3], radius: f64 },
     /// Liquid below y = y0 + a·sin(2π(x − x0)/λ), extruded along z; in cells.
-    Sine { y0: f64, x0: f64, amplitude: f64, wavelength: f64 },
+    Sine {
+        y0: f64,
+        x0: f64,
+        amplitude: f64,
+        wavelength: f64,
+    },
 }
 
 const SPHERES: [Field; 3] = [
-    Field::Sphere { centre: [35.37, 34.81, 35.58], radius: 4.0 },
-    Field::Sphere { centre: [34.62, 35.29, 34.93], radius: 8.0 },
-    Field::Sphere { centre: [35.13, 35.71, 34.44], radius: 16.0 },
+    Field::Sphere {
+        centre: [35.37, 34.81, 35.58],
+        radius: 4.0,
+    },
+    Field::Sphere {
+        centre: [34.62, 35.29, 34.93],
+        radius: 8.0,
+    },
+    Field::Sphere {
+        centre: [35.13, 35.71, 34.44],
+        radius: 16.0,
+    },
 ];
 
-const SINE: Field = Field::Sine { y0: 35.3, x0: 0.37, amplitude: 2.0, wavelength: 16.0 };
+const SINE: Field = Field::Sine {
+    y0: 35.3,
+    x0: 0.37,
+    amplitude: 2.0,
+    wavelength: 16.0,
+};
 
 /// The radius-4 sphere's re-distance misses, held at what was measured so
 /// they can only shrink; the bound itself stays 0.1 cell. Even the nearest
@@ -50,8 +69,19 @@ impl Field {
     /// negative in the liquid.
     fn exact(&self, p: [f64; 3]) -> f64 {
         match *self {
-            Field::Sphere { centre, radius } => (0..3).map(|a| (p[a] - centre[a]).powi(2)).sum::<f64>().sqrt() - radius,
-            Field::Sine { y0, x0, amplitude, wavelength } => {
+            Field::Sphere { centre, radius } => {
+                (0..3)
+                    .map(|a| (p[a] - centre[a]).powi(2))
+                    .sum::<f64>()
+                    .sqrt()
+                    - radius
+            }
+            Field::Sine {
+                y0,
+                x0,
+                amplitude,
+                wavelength,
+            } => {
                 let k = std::f64::consts::TAU / wavelength;
                 let height = |t: f64| y0 + amplitude * (k * (t - x0)).sin();
                 let slope = |t: f64| amplitude * k * (k * (t - x0)).cos();
@@ -81,7 +111,9 @@ impl Field {
                     }
                     t -= g / dg;
                 }
-                let distance = ((t - x).powi(2) + (height(t) - y).powi(2)).sqrt().min(best.sqrt());
+                let distance = ((t - x).powi(2) + (height(t) - y).powi(2))
+                    .sqrt()
+                    .min(best.sqrt());
                 distance.copysign(vertical)
             }
         }
@@ -100,7 +132,11 @@ fn centre_of(c: [u32; 3]) -> [f64; 3] {
 }
 
 fn grid_params(extra: &[(&'static str, f32)]) -> ParamValues {
-    let mut all = vec![("nodes_x", NODES[0] as f32), ("nodes_y", NODES[1] as f32), ("nodes_z", NODES[2] as f32)];
+    let mut all = vec![
+        ("nodes_x", NODES[0] as f32),
+        ("nodes_y", NODES[1] as f32),
+        ("nodes_z", NODES[2] as f32),
+    ];
     all.extend_from_slice(extra);
     params(&all)
 }
@@ -119,7 +155,11 @@ fn capped_level(field: Field, levels: [u32; 3]) -> Vec<f32> {
     let band = 0.1 * H;
     (0..levels.iter().product::<u32>())
         .map(|i| {
-            let q = [i % levels[0], (i / levels[0]) % levels[1], i / (levels[0] * levels[1])];
+            let q = [
+                i % levels[0],
+                (i / levels[0]) % levels[1],
+                i / (levels[0] * levels[1]),
+            ];
             if (0..3).any(|a| q[a] == 0 || q[a] == levels[a] - 1) {
                 return band;
             }
@@ -132,20 +172,45 @@ fn capped_level(field: Field, levels: [u32; 3]) -> Vec<f32> {
 /// The whitewater chain on `field` in capped form: crossings, the spread at
 /// [`SPREAD_STEPS`], the distance. Returns the spread crossings and the
 /// distance.
-fn redistanced(harness: &mut Harness, grid: &Grid, field: Field, solid: Slot) -> (Vec<SurfaceCrossing>, Vec<f32>) {
+fn redistanced(
+    harness: &mut Harness,
+    grid: &Grid,
+    field: Field,
+    solid: Slot,
+) -> (Vec<SurfaceCrossing>, Vec<f32>) {
     let levels = grid.cells.map(|c| c * S + 1);
     let level = capped_level(field, levels);
     let level_in = harness.array(&level, level.len());
-    let level_params = grid_params(&[("level_nodes_x", levels[0] as f32), ("level_nodes_y", levels[1] as f32), ("level_nodes_z", levels[2] as f32)]);
-    let mut crossings: Vec<SurfaceCrossing> =
-        run(harness, &mut SurfaceCrossings::new(), &[("level_set", level_in.0), ("solid", solid)], grid.total(), &level_params);
+    let level_params = grid_params(&[
+        ("level_nodes_x", levels[0] as f32),
+        ("level_nodes_y", levels[1] as f32),
+        ("level_nodes_z", levels[2] as f32),
+    ]);
+    let mut crossings: Vec<SurfaceCrossing> = run(
+        harness,
+        &mut SurfaceCrossings::new(),
+        &[("level_set", level_in.0), ("solid", solid)],
+        grid.total(),
+        &level_params,
+    );
     for step in SPREAD_STEPS {
         let input = harness.array(&crossings, crossings.len());
-        crossings = run(harness, &mut NearestCrossing::new(), &[("crossings", input.0)], grid.total(), &grid_params(&[("step", step)]));
+        crossings = run(
+            harness,
+            &mut NearestCrossing::new(),
+            &[("crossings", input.0)],
+            grid.total(),
+            &grid_params(&[("step", step)]),
+        );
     }
     let crossings_in = harness.array(&crossings, crossings.len());
-    let distance =
-        run(harness, &mut CrossingDistance::new(), &[("crossings", crossings_in.0), ("solid", solid)], grid.total(), &grid_params(&[("cell_size", H)]));
+    let distance = run(
+        harness,
+        &mut CrossingDistance::new(),
+        &[("crossings", crossings_in.0), ("solid", solid)],
+        grid.total(),
+        &grid_params(&[("cell_size", H)]),
+    );
     (crossings, distance)
 }
 
@@ -182,10 +247,14 @@ fn whitewater_redistance_matches_distance() {
         let mut counts = [[0usize; 5]; 2];
         let (mut over, mut worst_cell) = (0usize, ([0u32; 3], 0.0f32, 0.0f32));
         for (i, &phi) in distance.iter().enumerate() {
-            let Some(d) = measured(&grid, field, i) else { continue };
+            let Some(d) = measured(&grid, field, i) else {
+                continue;
+            };
             let c = grid.coords(i);
             let error = (phi - d).abs() / H;
-            let spread = usize::from(!(0..3).all(|a| (0.0..=1.0).contains(&(crossings[i].crossing[a] - c[a] as f32))));
+            let spread = usize::from(
+                !(0..3).all(|a| (0.0..=1.0).contains(&(crossings[i].crossing[a] - c[a] as f32))),
+            );
             let bucket = edges.iter().position(|&e| d.abs() / H < e).unwrap_or(4);
             worst[spread][bucket] = worst[spread][bucket].max(error);
             counts[spread][bucket] += 1;
@@ -198,9 +267,15 @@ fn whitewater_redistance_matches_distance() {
             "{field:?}: by |d| bucket [<0.25, <0.5, <1, <2, <=3] cells; own crossing: counts {:?} worst {:?}; spread: counts {:?} worst {:?}; {over} over 0.1, worst {worst_cell:?}",
             counts[0], worst[0], counts[1], worst[1]
         );
-        let (allowed, allowed_worst) = if field.radius() == Some(4.0) { R4_REDISTANCE_MISS } else { (0, 0.1) };
+        let (allowed, allowed_worst) = if field.radius() == Some(4.0) {
+            R4_REDISTANCE_MISS
+        } else {
+            (0, 0.1)
+        };
         if over > allowed || worst_cell.2 > allowed_worst.max(0.1) {
-            failures.push(format!("{field:?}: {over} cells over 0.1 cell (recorded {allowed}), worst {worst_cell:?}"));
+            failures.push(format!(
+                "{field:?}: {over} cells over 0.1 cell (recorded {allowed}), worst {worst_cell:?}"
+            ));
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
@@ -237,18 +312,38 @@ fn whitewater_curvature_matches_flip() {
     let curvature_params = grid_params(&[("cell_size", H)]);
     let mut failures = Vec::new();
     for field in SPHERES.into_iter().chain([SINE]) {
-        let phi: Vec<f32> = (0..total).map(|i| (field.exact(centre_of(grid.coords(i))) * f64::from(H)) as f32).collect();
-        let flip = manifold_fluids::whitewater_oracle::curvature(&phi, grid.cells, f64::from(H)).expect("FLIP curvature");
+        let phi: Vec<f32> = (0..total)
+            .map(|i| (field.exact(centre_of(grid.coords(i))) * f64::from(H)) as f32)
+            .collect();
+        let flip = manifold_fluids::whitewater_oracle::curvature(&phi, grid.cells, f64::from(H))
+            .expect("FLIP curvature");
 
         // The whole chain on FLIP's own reinitialised field, against FLIP's grid everywhere.
         let flip_field = harness.array(&flip.surface_phi, total);
-        let mut on_flip: Vec<KnownValue> = run(&mut harness, &mut LatticeCurvature::new(), &[("distance", flip_field.0)], total, &curvature_params);
+        let mut on_flip: Vec<KnownValue> = run(
+            &mut harness,
+            &mut LatticeCurvature::new(),
+            &[("distance", flip_field.0)],
+            total,
+            &curvature_params,
+        );
         for _ in 0..3 {
             let input = harness.array(&on_flip, total);
-            on_flip = run(&mut harness, &mut ExtendLattice::new(), &[("values", input.0)], total, &grid_params(&[]));
+            on_flip = run(
+                &mut harness,
+                &mut ExtendLattice::new(),
+                &[("values", input.0)],
+                total,
+                &grid_params(&[]),
+            );
         }
-        let identity_max = (0..total).map(|i| ((on_flip[i].value - flip.curvature[i]) * H).abs()).fold(0.0f32, f32::max);
-        assert!(identity_max <= 1e-6, "{field:?}: our chain on FLIP's field is off FLIP's grid by {identity_max} in k·h");
+        let identity_max = (0..total)
+            .map(|i| ((on_flip[i].value - flip.curvature[i]) * H).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            identity_max <= 1e-6,
+            "{field:?}: our chain on FLIP's field is off FLIP's grid by {identity_max} in k·h"
+        );
         let Some(radius) = field.radius() else {
             println!("{field:?}: whole chain on FLIP's field max |dkh| {identity_max:.2e}");
             continue;
@@ -261,7 +356,9 @@ fn whitewater_curvature_matches_flip() {
         let mut flip_error: Vec<f32> = (0..total)
             .filter(|&i| {
                 let c = grid.coords(i);
-                !grid.on_border(c) && near[i] && (0..6).all(|f| grid.face(c, f).is_some_and(|n| near[grid.index(n)]))
+                !grid.on_border(c)
+                    && near[i]
+                    && (0..6).all(|f| grid.face(c, f).is_some_and(|n| near[grid.index(n)]))
             })
             .map(|i| (f64::from(flip.curvature[i] * H) - truth(i)).abs() as f32)
             .collect();
@@ -269,12 +366,27 @@ fn whitewater_curvature_matches_flip() {
         // Ours on the exact field and on our re-distanced capped field, over
         // the cells our rule knows.
         let exact_in = harness.array(&phi, total);
-        let on_exact: Vec<KnownValue> = run(&mut harness, &mut LatticeCurvature::new(), &[("distance", exact_in.0)], total, &curvature_params);
+        let on_exact: Vec<KnownValue> = run(
+            &mut harness,
+            &mut LatticeCurvature::new(),
+            &[("distance", exact_in.0)],
+            total,
+            &curvature_params,
+        );
         let (_, distance) = redistanced(&mut harness, &grid, field, solid_in.0);
         let distance_in = harness.array(&distance, total);
-        let on_ours: Vec<KnownValue> = run(&mut harness, &mut LatticeCurvature::new(), &[("distance", distance_in.0)], total, &curvature_params);
+        let on_ours: Vec<KnownValue> = run(
+            &mut harness,
+            &mut LatticeCurvature::new(),
+            &[("distance", distance_in.0)],
+            total,
+            &curvature_params,
+        );
         let error_of = |values: &[KnownValue]| -> Vec<f32> {
-            (0..total).filter(|&i| values[i].known > 0.0).map(|i| (f64::from(values[i].value * H) - truth(i)).abs() as f32).collect()
+            (0..total)
+                .filter(|&i| values[i].known > 0.0)
+                .map(|i| (f64::from(values[i].value * H) - truth(i)).abs() as f32)
+                .collect()
         };
         let (mut exact_error, mut ours_error) = (error_of(&on_exact), error_of(&on_ours));
         let flip_p99 = quantile(&mut flip_error, 0.99);
@@ -286,8 +398,15 @@ fn whitewater_curvature_matches_flip() {
             ours_error.len(),
             quantile(&mut ours_error, 0.5)
         );
-        assert!(exact_p99 <= 0.05, "{field:?}: our curvature of the exact field is off 2/r by {exact_p99} in k·h (p99)");
-        let bound = if radius == 4.0 { flip_p99.max(R4_CURVATURE_MISS) } else { flip_p99 };
+        assert!(
+            exact_p99 <= 0.05,
+            "{field:?}: our curvature of the exact field is off 2/r by {exact_p99} in k·h (p99)"
+        );
+        let bound = if radius == 4.0 {
+            flip_p99.max(R4_CURVATURE_MISS)
+        } else {
+            flip_p99
+        };
         if ours_p99 > bound {
             failures.push(format!("{field:?}: re-distanced curvature p99 {ours_p99} against FLIP's {flip_p99} (bound {bound})"));
         }

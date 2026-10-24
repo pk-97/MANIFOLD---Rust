@@ -17,11 +17,11 @@
 
 use manifold_gpu::{GpuBinding, GpuLoadAction};
 
-use manifold_node_engine::mesh::MeshVertex;
-use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::exec::effect_node::{ConditionalRequirement, EffectNodeContext};
-use manifold_node_engine::scene::material::MaterialKind;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::camera::Camera;
+use manifold_node_engine::scene::material::MaterialKind;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -432,11 +432,7 @@ mod tests {
         let prim = Render3DMesh::new();
         let node: &dyn EffectNode = &prim;
         let rules = node.conditional_requirements();
-        assert_eq!(
-            rules.len(),
-            2,
-            "expected Pbr/Cel rules, got {rules:?}"
-        );
+        assert_eq!(rules.len(), 2, "expected Pbr/Cel rules, got {rules:?}");
         let by_kind = |k: MaterialKind| {
             rules
                 .iter()

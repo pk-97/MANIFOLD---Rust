@@ -215,13 +215,28 @@ pub enum FlowScrubTarget {
     /// `ValueRef::Trim(kind, target, param)`: a modulator's output sub-range.
     /// `effect: None` is the active layer's generator. Moves carry the range
     /// `(0, value)`.
-    Trim { kind: crate::panels::TrimKind, effect: Option<usize>, param: String },
+    Trim {
+        kind: crate::panels::TrimKind,
+        effect: Option<usize>,
+        param: String,
+    },
     /// `ValueRef::EnvelopeTarget(target, param)`.
-    EnvelopeTarget { effect: Option<usize>, param: String },
+    EnvelopeTarget {
+        effect: Option<usize>,
+        param: String,
+    },
     /// `ValueRef::AudioModShape(target, param, shape)`.
-    AudioModShape { effect: Option<usize>, param: String, shape: crate::panels::AudioShapeParam },
+    AudioModShape {
+        effect: Option<usize>,
+        param: String,
+        shape: crate::panels::AudioShapeParam,
+    },
     /// `ValueRef::AudioTriggerShape(layer, index, shape)`; `layer` indexes the timeline.
-    AudioTriggerShape { layer: usize, index: usize, shape: crate::panels::AudioShapeParam },
+    AudioTriggerShape {
+        layer: usize,
+        index: usize,
+        shape: crate::panels::AudioShapeParam,
+    },
     /// `ValueRef::LayerAudioGain(layer)`; `layer` indexes the timeline.
     LayerAudioGain { layer: usize },
     /// `ValueRef::AudioSendGain(send)`; `send` indexes `audio_setup.sends`.
@@ -253,9 +268,13 @@ pub enum AutomationTarget {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Gesture {
-    Click { modifiers: Modifiers },
+    Click {
+        modifiers: Modifiers,
+    },
     /// Split a click across frames to observe press-time feedback.
-    Press { modifiers: Modifiers },
+    Press {
+        modifiers: Modifiers,
+    },
     Release,
     DoubleClick,
     /// The other house intrinsic-reset gesture (BUG-070/BUG-105's "every
@@ -270,13 +289,24 @@ pub enum Gesture {
     Hover,
     /// Down at target, interpolated Move steps (real drag thresholds must
     /// fire), Up at `to`. `steps` ≥ 2.
-    Drag { to: AutomationTarget, steps: u32 },
+    Drag {
+        to: AutomationTarget,
+        steps: u32,
+    },
     /// `Drag` with one UI frame after the press, after each move and after
     /// the release, as the live app processes a held mouse.
-    DragFrames { to: AutomationTarget, steps: u32 },
+    DragFrames {
+        to: AutomationTarget,
+        steps: u32,
+    },
     /// Button-up pointer moves from the target to `to`, one UI frame each.
-    Sweep { to: AutomationTarget, steps: u32 },
-    Scroll { delta: Vec2 },
+    Sweep {
+        to: AutomationTarget,
+        steps: u32,
+    },
+    Scroll {
+        delta: Vec2,
+    },
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -327,8 +357,13 @@ pub struct ResolvedTarget {
 /// that lists the candidates.
 #[derive(Debug, Clone)]
 pub enum ResolveError {
-    NoMatch { query: String },
-    Ambiguous { query: String, candidates: Vec<String> },
+    NoMatch {
+        query: String,
+    },
+    Ambiguous {
+        query: String,
+        candidates: Vec<String>,
+    },
 }
 
 impl std::fmt::Display for ResolveError {
@@ -377,9 +412,11 @@ pub fn resolve_all(
             format!("point({:.1},{:.1})", p.x, p.y),
         ),
         AutomationTarget::Widget(raw) => all_widget_matches(tree, *raw),
-        AutomationTarget::Surface { surface, kind, label } => {
-            all_surface_matches(surfaces, surface, kind, label)
-        }
+        AutomationTarget::Surface {
+            surface,
+            kind,
+            label,
+        } => all_surface_matches(surfaces, surface, kind, label),
         AutomationTarget::Query(q) => all_query_matches(tree, q),
     }
 }
@@ -397,7 +434,11 @@ pub fn resolve(
         0 => Err(ResolveError::NoMatch { query }),
         1 => {
             let m = matches.into_iter().next().expect("len checked above");
-            Ok(ResolvedTarget { node: m.node, rect: m.rect, description: m.description })
+            Ok(ResolvedTarget {
+                node: m.node,
+                rect: m.rect,
+                description: m.description,
+            })
         }
         _ => Err(ResolveError::Ambiguous {
             query,
@@ -410,7 +451,9 @@ fn all_widget_matches(tree: &UITree, raw: u64) -> (Vec<MatchInfo>, String) {
     let query = format!("widget({raw:016x})");
     let matches = tree
         .all_nodes()
-        .filter(|n| n.flags.contains(crate::node::UIFlags::INTERACTIVE) && tree.widget_of(n.id).raw() == raw)
+        .filter(|n| {
+            n.flags.contains(crate::node::UIFlags::INTERACTIVE) && tree.widget_of(n.id).raw() == raw
+        })
         .map(|n| node_match_info(tree, tree.region_nodes(n.id.region()), n.id.slot()))
         .collect();
     (matches, query)
@@ -447,13 +490,20 @@ fn all_query_matches(tree: &UITree, q: &SelectorQuery) -> (Vec<MatchInfo>, Strin
     // build order, so `nth` counts the way it did on the flat tree.
     let hits: Vec<(&[crate::node::UINode], usize)> = (0..crate::tree::MAX_REGIONS as u8)
         .map(|r| tree.region_nodes(r))
-        .flat_map(|nodes| (0..nodes.len()).filter(|&i| node_matches(tree, nodes, i, q)).map(move |i| (nodes, i)))
+        .flat_map(|nodes| {
+            (0..nodes.len())
+                .filter(|&i| node_matches(tree, nodes, i, q))
+                .map(move |i| (nodes, i))
+        })
         .collect();
     let query = describe_query(q);
 
     if let Some(nth) = q.nth {
         return match hits.get(nth).copied() {
-            Some((nodes, i)) => (vec![node_match_info(tree, nodes, i)], format!("{query} [nth={nth}]")),
+            Some((nodes, i)) => (
+                vec![node_match_info(tree, nodes, i)],
+                format!("{query} [nth={nth}]"),
+            ),
             None => (
                 Vec::new(),
                 format!("{query} [nth={nth} of {} candidates]", hits.len()),
@@ -461,7 +511,10 @@ fn all_query_matches(tree: &UITree, q: &SelectorQuery) -> (Vec<MatchInfo>, Strin
         };
     }
 
-    let matches = hits.iter().map(|&(nodes, i)| node_match_info(tree, nodes, i)).collect();
+    let matches = hits
+        .iter()
+        .map(|&(nodes, i)| node_match_info(tree, nodes, i))
+        .collect();
     (matches, query)
 }
 
@@ -474,12 +527,7 @@ fn node_match_info(tree: &UITree, nodes: &[crate::node::UINode], i: usize) -> Ma
     }
 }
 
-fn node_matches(
-    tree: &UITree,
-    nodes: &[crate::node::UINode],
-    i: usize,
-    q: &SelectorQuery,
-) -> bool {
+fn node_matches(tree: &UITree, nodes: &[crate::node::UINode], i: usize, q: &SelectorQuery) -> bool {
     let n = &nodes[i];
     if let Some(name) = &q.name
         && tree.name_of(n.id) != Some(name.as_str())
@@ -487,7 +535,9 @@ fn node_matches(
         return false;
     }
     if let Some(suffix) = &q.name_suffix
-        && !tree.name_of(n.id).is_some_and(|name| name.ends_with(suffix))
+        && !tree
+            .name_of(n.id)
+            .is_some_and(|name| name.ends_with(suffix))
     {
         return false;
     }
@@ -509,10 +559,14 @@ fn node_matches(
     if let Some(under) = &q.under_name {
         let mut parent = tree.parent_of(n.id);
         while let Some(id) = parent {
-            if tree.name_of(id) == Some(under.as_str()) { break; }
+            if tree.name_of(id) == Some(under.as_str()) {
+                break;
+            }
             parent = tree.parent_of(id);
         }
-        if parent.is_none() { return false; }
+        if parent.is_none() {
+            return false;
+        }
     }
     true
 }
@@ -564,8 +618,9 @@ fn under_text_matches(nodes: &[crate::node::UINode], i: usize, under: &str) -> b
         }
         // Nearest-labeled-row case: the closest preceding same-parent
         // sibling that carries ANY text decides this level, match or not.
-        if let Some(found) =
-            (0..level).rev().find(|&j| nodes[j].parent_id == parent && nodes[j].text.is_some())
+        if let Some(found) = (0..level)
+            .rev()
+            .find(|&j| nodes[j].parent_id == parent && nodes[j].text.is_some())
         {
             return nodes[found].text.as_deref() == Some(under);
         }
@@ -615,7 +670,6 @@ fn describe_node(tree: &UITree, nodes: &[crate::node::UINode], i: usize) -> Stri
     )
 }
 
-
 // ── Gesture math (transport-agnostic; the synthesis of real events from
 // this math is `manifold-app`'s job, D4) ─────────────────────────────────
 
@@ -651,7 +705,10 @@ mod tests {
         let mut tree = UITree::new();
         button(&mut tree, "Bloom");
         button(&mut tree, "Mirror");
-        let q = SelectorQuery { text: Some("Bloom".into()), ..Default::default() };
+        let q = SelectorQuery {
+            text: Some("Bloom".into()),
+            ..Default::default()
+        };
         let resolved = resolve(&tree, &[], &AutomationTarget::Query(q)).expect("resolves");
         assert_eq!(resolved.rect.width, 10.0);
     }
@@ -660,9 +717,15 @@ mod tests {
     fn name_suffix_resolves_runtime_ids_and_keeps_ambiguity_checks() {
         let mut tree = UITree::new();
         let first = button(&mut tree, "T");
-        tree.set_name(first, "param_row.sceneModifier:[\"first\",\"flow\"].trigger_btn");
+        tree.set_name(
+            first,
+            "param_row.sceneModifier:[\"first\",\"flow\"].trigger_btn",
+        );
         let other = button(&mut tree, "T");
-        tree.set_name(other, "param_row.sceneModifier:[\"first\",\"bars\"].trigger_btn");
+        tree.set_name(
+            other,
+            "param_row.sceneModifier:[\"first\",\"bars\"].trigger_btn",
+        );
         let q = SelectorQuery {
             name_suffix: Some("\"flow\"].trigger_btn".into()),
             ..Default::default()
@@ -670,15 +733,24 @@ mod tests {
         let target = AutomationTarget::Query(q);
         assert_eq!(resolve(&tree, &[], &target).unwrap().node, Some(first));
         let second = button(&mut tree, "T");
-        tree.set_name(second, "param_row.sceneModifier:[\"second\",\"flow\"].trigger_btn");
-        assert!(matches!(resolve(&tree, &[], &target), Err(ResolveError::Ambiguous { .. })));
+        tree.set_name(
+            second,
+            "param_row.sceneModifier:[\"second\",\"flow\"].trigger_btn",
+        );
+        assert!(matches!(
+            resolve(&tree, &[], &target),
+            Err(ResolveError::Ambiguous { .. })
+        ));
     }
 
     #[test]
     fn zero_match_fails() {
         let mut tree = UITree::new();
         button(&mut tree, "Bloom");
-        let q = SelectorQuery { text: Some("Glow".into()), ..Default::default() };
+        let q = SelectorQuery {
+            text: Some("Glow".into()),
+            ..Default::default()
+        };
         let err = resolve(&tree, &[], &AutomationTarget::Query(q)).unwrap_err();
         assert!(matches!(err, ResolveError::NoMatch { .. }));
     }
@@ -688,7 +760,10 @@ mod tests {
         let mut tree = UITree::new();
         button(&mut tree, "Bloom");
         button(&mut tree, "Bloom");
-        let q = SelectorQuery { text: Some("Bloom".into()), ..Default::default() };
+        let q = SelectorQuery {
+            text: Some("Bloom".into()),
+            ..Default::default()
+        };
         let err = resolve(&tree, &[], &AutomationTarget::Query(q)).unwrap_err();
         match err {
             ResolveError::Ambiguous { candidates, .. } => assert_eq!(candidates.len(), 2),
@@ -701,7 +776,11 @@ mod tests {
         let mut tree = UITree::new();
         button(&mut tree, "Row");
         let second = button(&mut tree, "Row");
-        let q = SelectorQuery { text: Some("Row".into()), nth: Some(1), ..Default::default() };
+        let q = SelectorQuery {
+            text: Some("Row".into()),
+            nth: Some(1),
+            ..Default::default()
+        };
         let resolved = resolve(&tree, &[], &AutomationTarget::Query(q)).expect("resolves");
         let expected = tree.get_node(second).unwrap().bounds;
         assert_eq!(resolved.rect, expected);
@@ -712,20 +791,42 @@ mod tests {
         let mut tree = UITree::new();
         let mut expected = None;
         for name in ["inspector", "scene_setup"] {
-            let region = tree.begin_region(Rect::new(0.0, 0.0, 100.0, 100.0), crate::tree::ZTier::Base, name, UIFlags::empty());
+            let region = tree.begin_region(
+                Rect::new(0.0, 0.0, 100.0, 100.0),
+                crate::tree::ZTier::Base,
+                name,
+                UIFlags::empty(),
+            );
             let start = tree.count();
             let body = tree.add_panel(None, 0.0, 0.0, 100.0, 100.0, UIStyle::default());
-            let control = tree.add_button(Some(body), 0.0, 0.0, 40.0, 20.0, UIStyle::default(), "3.50");
+            let control =
+                tree.add_button(Some(body), 0.0, 0.0, 40.0, 20.0, UIStyle::default(), "3.50");
             tree.set_name(control, "param_row.light_intensity.value");
             tree.end_region(region, start);
-            if name == "scene_setup" { expected = Some(control); }
+            if name == "scene_setup" {
+                expected = Some(control);
+            }
         }
-        let mut query = SelectorQuery { name: Some("param_row.light_intensity.value".into()), ..Default::default() };
-        assert!(matches!(resolve(&tree, &[], &AutomationTarget::Query(query.clone())), Err(ResolveError::Ambiguous { .. })));
+        let mut query = SelectorQuery {
+            name: Some("param_row.light_intensity.value".into()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            resolve(&tree, &[], &AutomationTarget::Query(query.clone())),
+            Err(ResolveError::Ambiguous { .. })
+        ));
         query.under_name = Some("scene_setup".into());
-        assert_eq!(resolve(&tree, &[], &AutomationTarget::Query(query.clone())).unwrap().node, expected);
+        assert_eq!(
+            resolve(&tree, &[], &AutomationTarget::Query(query.clone()))
+                .unwrap()
+                .node,
+            expected
+        );
         query.under_name = Some("missing_panel".into());
-        assert!(matches!(resolve(&tree, &[], &AutomationTarget::Query(query)), Err(ResolveError::NoMatch { .. })));
+        assert!(matches!(
+            resolve(&tree, &[], &AutomationTarget::Query(query)),
+            Err(ResolveError::NoMatch { .. })
+        ));
     }
 
     #[test]
@@ -741,7 +842,15 @@ mod tests {
             UIFlags::empty(),
         );
         let _ = row_a_label;
-        let mute_a = tree.add_button(Some(row_a), 40.0, 0.0, 10.0, 10.0, UIStyle::default(), "mute");
+        let mute_a = tree.add_button(
+            Some(row_a),
+            40.0,
+            0.0,
+            10.0,
+            10.0,
+            UIStyle::default(),
+            "mute",
+        );
 
         let row_b = tree.add_panel(None, 0.0, 20.0, 100.0, 20.0, UIStyle::default());
         tree.add_node(
@@ -752,7 +861,15 @@ mod tests {
             Some("FLOWERS"),
             UIFlags::empty(),
         );
-        tree.add_button(Some(row_b), 40.0, 20.0, 10.0, 10.0, UIStyle::default(), "mute");
+        tree.add_button(
+            Some(row_b),
+            40.0,
+            20.0,
+            10.0,
+            10.0,
+            UIStyle::default(),
+            "mute",
+        );
 
         let q = SelectorQuery {
             text: Some("mute".into()),
@@ -852,7 +969,8 @@ mod tests {
         let mut tree = UITree::new();
         let clip_parent = tree.add_panel(None, 0.0, 0.0, 100.0, 40.0, UIStyle::default());
 
-        let row_a_clip = tree.add_panel(Some(clip_parent), 0.0, 0.0, 100.0, 20.0, UIStyle::default());
+        let row_a_clip =
+            tree.add_panel(Some(clip_parent), 0.0, 0.0, 100.0, 20.0, UIStyle::default());
         tree.add_node(
             Some(row_a_clip),
             crate::node::Rect::new(0.0, 0.0, 40.0, 20.0),
@@ -861,9 +979,24 @@ mod tests {
             Some("PLASMA"),
             UIFlags::empty(),
         );
-        let mute_a = tree.add_button(Some(row_a_clip), 40.0, 0.0, 10.0, 10.0, UIStyle::default(), "mute");
+        let mute_a = tree.add_button(
+            Some(row_a_clip),
+            40.0,
+            0.0,
+            10.0,
+            10.0,
+            UIStyle::default(),
+            "mute",
+        );
 
-        let row_b_clip = tree.add_panel(Some(clip_parent), 0.0, 20.0, 100.0, 20.0, UIStyle::default());
+        let row_b_clip = tree.add_panel(
+            Some(clip_parent),
+            0.0,
+            20.0,
+            100.0,
+            20.0,
+            UIStyle::default(),
+        );
         tree.add_node(
             Some(row_b_clip),
             crate::node::Rect::new(0.0, 20.0, 40.0, 20.0),
@@ -872,7 +1005,15 @@ mod tests {
             Some("FLOWERS"),
             UIFlags::empty(),
         );
-        tree.add_button(Some(row_b_clip), 40.0, 20.0, 10.0, 10.0, UIStyle::default(), "mute");
+        tree.add_button(
+            Some(row_b_clip),
+            40.0,
+            20.0,
+            10.0,
+            10.0,
+            UIStyle::default(),
+            "mute",
+        );
 
         let q = SelectorQuery {
             text: Some("mute".into()),
@@ -903,8 +1044,14 @@ mod tests {
 
     #[test]
     fn interpolate_drag_clamps_steps_below_two() {
-        assert_eq!(interpolate_drag(Vec2::ZERO, Vec2::new(10.0, 0.0), 0).len(), 2);
-        assert_eq!(interpolate_drag(Vec2::ZERO, Vec2::new(10.0, 0.0), 1).len(), 2);
+        assert_eq!(
+            interpolate_drag(Vec2::ZERO, Vec2::new(10.0, 0.0), 0).len(),
+            2
+        );
+        assert_eq!(
+            interpolate_drag(Vec2::ZERO, Vec2::new(10.0, 0.0), 1).len(),
+            2
+        );
     }
 
     #[test]
@@ -915,13 +1062,21 @@ mod tests {
                 kind: "clip".into(),
                 label: "flowers_loop_B.mov".into(),
             },
-            gesture: Gesture::Drag { to: AutomationTarget::Point(Vec2::new(10.0, 20.0)), steps: 6 },
+            gesture: Gesture::Drag {
+                to: AutomationTarget::Point(Vec2::new(10.0, 20.0)),
+                steps: 6,
+            },
         };
         let json = serde_json::to_string(&action).expect("serialize");
         let back: AutomationAction = serde_json::from_str(&json).expect("deserialize");
         match back {
             AutomationAction::Pointer {
-                target: AutomationTarget::Surface { surface, kind, label },
+                target:
+                    AutomationTarget::Surface {
+                        surface,
+                        kind,
+                        label,
+                    },
                 gesture: Gesture::Drag { steps, .. },
             } => {
                 assert_eq!(surface, "timeline_clips");

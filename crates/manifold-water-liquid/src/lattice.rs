@@ -2,11 +2,11 @@
 //! side; [`LiquidLattice::surface`] derives the native FLIP mesh/solid grid
 //! with 1.5-cell padding. Both retain the authored box and uniform spacing.
 
-use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_node_engine::parameters::ParamValue;
 use manifold_core::fluid_domain::FluidDomainLayout;
 #[cfg(test)]
 use manifold_core::fluid_domain::domain_layout;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::scene::transform::Transform;
 
 /// Nodes added outside the authored box on every side (taichi `padding = 3`).
@@ -22,27 +22,35 @@ pub const MAX_LATTICE_NODES: u32 = 1024;
 /// The six-bit closed-wall mask (bits −X +X −Y +Y −Z +Z) from a domain's
 /// `closed_*` toggles; a missing toggle is closed.
 pub fn closed_faces(params: &ParamValues) -> u32 {
-    ["closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z"]
-        .iter()
-        .enumerate()
-        .fold(0, |mask, (bit, name)| {
-            let closed = !matches!(params.get(*name), Some(ParamValue::Bool(false)));
-            mask | (u32::from(closed) << bit)
-        })
+    [
+        "closed_neg_x",
+        "closed_pos_x",
+        "closed_neg_y",
+        "closed_pos_y",
+        "closed_neg_z",
+        "closed_pos_z",
+    ]
+    .iter()
+    .enumerate()
+    .fold(0, |mask, (bit, name)| {
+        let closed = !matches!(params.get(*name), Some(ParamValue::Bool(false)));
+        mask | (u32::from(closed) << bit)
+    })
 }
-
 
 /// The optional cell-centred interior field identifies its physical grid by
 /// exact length. Native FLIP fills all surface cells (nodes − 1); authored
 /// fields from MPM and saved graphs retain their padded-grid counts. The
 /// products are strictly ordered, so no valid length is ambiguous.
 pub fn interior_cells(nodes: [u32; 3], values: u64) -> Option<[u32; 3]> {
-    [1, SURFACE_EXTRA_NODES, 1 + 2 * PADDING_NODES].into_iter().find_map(|extra| {
-        let cells = nodes.map(|n| n.saturating_sub(extra));
-        (cells.iter().all(|&n| n > 0)
-            && cells.into_iter().map(u64::from).product::<u64>() == values)
-            .then_some(cells)
-    })
+    [1, SURFACE_EXTRA_NODES, 1 + 2 * PADDING_NODES]
+        .into_iter()
+        .find_map(|extra| {
+            let cells = nodes.map(|n| n.saturating_sub(extra));
+            (cells.iter().all(|&n| n > 0)
+                && cells.into_iter().map(u64::from).product::<u64>() == values)
+                .then_some(cells)
+        })
 }
 
 /// Native FLIP boundary shrinks the engine box by 3h + 1e-4 total.
@@ -59,20 +67,24 @@ pub struct FlipSolverGrid {
 }
 
 impl FlipSolverGrid {
-manifold_core::testkit_visible! {
-    pub fn from_lattice(authored: LiquidLattice) -> Self {
-        Self { surface: authored.surface() }
+    manifold_core::testkit_visible! {
+        pub fn from_lattice(authored: LiquidLattice) -> Self {
+            Self { surface: authored.surface() }
+        }
     }
-}
 
-manifold_core::testkit_visible! {
-    pub fn cells(self) -> [u32; 3] { self.surface.nodes().map(|n| n - 1) }
-}
-manifold_core::testkit_visible! {
-    pub fn min(self) -> [f32; 3] { self.surface.min() }
-}
-    pub fn nodes(self) -> [u32; 3] { self.surface.nodes() }
-    pub fn bounds(self) -> Transform { self.surface.bounds() }
+    manifold_core::testkit_visible! {
+        pub fn cells(self) -> [u32; 3] { self.surface.nodes().map(|n| n - 1) }
+    }
+    manifold_core::testkit_visible! {
+        pub fn min(self) -> [f32; 3] { self.surface.min() }
+    }
+    pub fn nodes(self) -> [u32; 3] {
+        self.surface.nodes()
+    }
+    pub fn bounds(self) -> Transform {
+        self.surface.bounds()
+    }
     pub fn wall_inset(self) -> f32 {
         SURFACE_PADDING_CELLS + FLIP_WALL_EPSILON / self.surface.cell_size()
     }
@@ -103,7 +115,11 @@ impl LiquidLattice {
 
     /// The force lattice over this lattice.
     pub fn force_lattice(&self) -> manifold_physics::force_lattice::ForceLattice {
-        manifold_physics::force_lattice::ForceLattice::covering(self.min, self.cell_size, self.nodes)
+        manifold_physics::force_lattice::ForceLattice::covering(
+            self.min,
+            self.cell_size,
+            self.nodes,
+        )
     }
 
     /// Native FLIP meshing grid: authored cells + 3, with one more node.
@@ -111,26 +127,28 @@ impl LiquidLattice {
     /// integer node positions; the native origin supplies the half-cell phase.
     pub fn surface(&self) -> Self {
         Self {
-            min: self.box_min().map(|v| v - SURFACE_PADDING_CELLS * self.cell_size),
+            min: self
+                .box_min()
+                .map(|v| v - SURFACE_PADDING_CELLS * self.cell_size),
             nodes: self.cells.map(|n| n + SURFACE_EXTRA_NODES),
             cell_size: self.cell_size,
             cells: self.cells,
         }
     }
 
-manifold_core::testkit_visible! {
-    /// The lattice a domain published on its scalar wires (`lattice_min_x/y/z`,
-    /// `cell_size`, `nodes_x/y/z`; generated uniforms pack scalars only, so
-    /// the lattice travels that way). Defaults are the 4 m Dam Break lattice
-    /// at resolution 64, matching each atom's param defaults. Wires no padded
-    /// layout could have produced are reported as `node`'s error and give
-    /// `None`.
-    pub fn from_wires(ctx: &mut EffectNodeContext<'_, '_>, node: &str) -> Option<Self> {
-        Self::from_scalars(|name, default| ctx.scalar_or_param(name, default))
-            .map_err(|refusal| ctx.error(format!("{node}: {refusal}")))
-            .ok()
+    manifold_core::testkit_visible! {
+        /// The lattice a domain published on its scalar wires (`lattice_min_x/y/z`,
+        /// `cell_size`, `nodes_x/y/z`; generated uniforms pack scalars only, so
+        /// the lattice travels that way). Defaults are the 4 m Dam Break lattice
+        /// at resolution 64, matching each atom's param defaults. Wires no padded
+        /// layout could have produced are reported as `node`'s error and give
+        /// `None`.
+        pub fn from_wires(ctx: &mut EffectNodeContext<'_, '_>, node: &str) -> Option<Self> {
+            Self::from_scalars(|name, default| ctx.scalar_or_param(name, default))
+                .map_err(|refusal| ctx.error(format!("{node}: {refusal}")))
+                .ok()
+        }
     }
-}
 
     /// [`Self::from_wires`] over any `scalar_or_param` reader: the extent
     /// checker reads the same wires without a frame. Node counts must be
@@ -143,20 +161,36 @@ manifold_core::testkit_visible! {
             if value.fract() == 0.0 && (least as f32..=MAX_LATTICE_NODES as f32).contains(&value) {
                 Ok(value as u32)
             } else {
-                Err(format!("lattice wire {name} is {value}; it must be a whole node count from {least} to {MAX_LATTICE_NODES}"))
+                Err(format!(
+                    "lattice wire {name} is {value}; it must be a whole node count from {least} to {MAX_LATTICE_NODES}"
+                ))
             }
         };
         let nodes = [nodes("nodes_x")?, nodes("nodes_y")?, nodes("nodes_z")?];
         let cell_size = read("cell_size", 0.0625);
         if !(cell_size.is_finite() && cell_size > 0.0) {
-            return Err(format!("lattice wire cell_size is {cell_size}; it must be positive"));
+            return Err(format!(
+                "lattice wire cell_size is {cell_size}; it must be positive"
+            ));
         }
         let corner = |name: &str, default: f32| {
             let value = read(name, default);
-            value.is_finite().then_some(value).ok_or_else(|| format!("lattice wire {name} is {value}; it must be finite"))
+            value
+                .is_finite()
+                .then_some(value)
+                .ok_or_else(|| format!("lattice wire {name} is {value}; it must be finite"))
         };
-        let min = [corner("lattice_min_x", -2.1875)?, corner("lattice_min_y", -0.1875)?, corner("lattice_min_z", -2.1875)?];
-        Ok(Self { min, nodes, cell_size, cells: nodes.map(|n| n - (1 + 2 * PADDING_NODES)) })
+        let min = [
+            corner("lattice_min_x", -2.1875)?,
+            corner("lattice_min_y", -0.1875)?,
+            corner("lattice_min_z", -2.1875)?,
+        ];
+        Ok(Self {
+            min,
+            nodes,
+            cell_size,
+            cells: nodes.map(|n| n - (1 + 2 * PADDING_NODES)),
+        })
     }
 
     pub fn min(&self) -> [f32; 3] {
@@ -169,7 +203,9 @@ manifold_core::testkit_visible! {
 
     /// Minimum corner of the authored box: the first cell inside the padding.
     pub fn box_min(&self) -> [f32; 3] {
-        std::array::from_fn(|d| self.min[d] + (self.nodes[d] - self.cells[d] - 1) as f32 * 0.5 * self.cell_size)
+        std::array::from_fn(|d| {
+            self.min[d] + (self.nodes[d] - self.cells[d] - 1) as f32 * 0.5 * self.cell_size
+        })
     }
 
     pub fn cell_size(&self) -> f32 {
@@ -216,8 +252,14 @@ manifold_core::testkit_visible! {
     fn wall_distance_inset(&self, closed_faces: u32, inset: f32) -> Vec<f32> {
         let dx = self.cell_size;
         let low = self.box_min().map(|v| v + inset);
-        let high: [f32; 3] = std::array::from_fn(|d| low[d] + self.cells[d] as f32 * dx - 2.0 * inset);
-        let far = self.nodes.iter().map(|&n| (n as f32 * dx).powi(2)).sum::<f32>().sqrt();
+        let high: [f32; 3] =
+            std::array::from_fn(|d| low[d] + self.cells[d] as f32 * dx - 2.0 * inset);
+        let far = self
+            .nodes
+            .iter()
+            .map(|&n| (n as f32 * dx).powi(2))
+            .sum::<f32>()
+            .sqrt();
         let [nx, ny, nz] = self.nodes;
         let mut out = Vec::with_capacity(self.node_count() as usize);
         for k in 0..nz {
@@ -239,7 +281,11 @@ manifold_core::testkit_visible! {
                             outside_squared += candidate.min(0.0).powi(2);
                         }
                     }
-                    out.push(if outside_squared > 0.0 { -outside_squared.sqrt() } else { distance });
+                    out.push(if outside_squared > 0.0 {
+                        -outside_squared.sqrt()
+                    } else {
+                        distance
+                    });
                 }
             }
         }
@@ -262,13 +308,28 @@ mod tests {
             assert_eq!(authored.box_min(), layout.min);
             assert_eq!(solver.cells(), [resolution + 3; 3]);
             assert_eq!(solver.nodes(), [resolution + 4; 3]);
-            assert_eq!(solver.min(), layout.min.map(|x| x - 1.5 * layout.cell_size as f32));
+            assert_eq!(
+                solver.min(),
+                layout.min.map(|x| x - 1.5 * layout.cell_size as f32)
+            );
             assert_eq!(solver.bounds(), authored.surface().bounds());
-            assert_eq!(authored.surface().solid_bytes(), u64::from(resolution + 4).pow(3) * 4);
-            assert_eq!(crate::grid::face_bytes(solver.cells()),
-                u64::from(resolution + 4).pow(3) * std::mem::size_of::<crate::fluid_particles::FaceSample>() as u64);
-            assert_eq!(interior_cells(solver.nodes(), u64::from(resolution + 3).pow(3)), Some(solver.cells()));
-            assert_eq!(crate::whitewater::face_offset(solver.nodes(), solver.cells()).unwrap(), [0; 3]);
+            assert_eq!(
+                authored.surface().solid_bytes(),
+                u64::from(resolution + 4).pow(3) * 4
+            );
+            assert_eq!(
+                crate::grid::face_bytes(solver.cells()),
+                u64::from(resolution + 4).pow(3)
+                    * std::mem::size_of::<crate::fluid_particles::FaceSample>() as u64
+            );
+            assert_eq!(
+                interior_cells(solver.nodes(), u64::from(resolution + 3).pow(3)),
+                Some(solver.cells())
+            );
+            assert_eq!(
+                crate::whitewater::face_offset(solver.nodes(), solver.cells()).unwrap(),
+                [0; 3]
+            );
         }
     }
 
@@ -284,7 +345,9 @@ mod tests {
             // total. Mesh distance is Euclidean outside the inverted box.
             let half = 0.5 * layout.cell_size + 5e-5;
             for (coord, axes) in [([1, 5, 5], 1.0f64), ([1, 1, 5], 2.0), ([1, 1, 1], 3.0)] {
-                assert!((f64::from(at(coord[0], coord[1], coord[2])) + half * axes.sqrt()).abs() < 1e-6);
+                assert!(
+                    (f64::from(at(coord[0], coord[1], coord[2])) + half * axes.sqrt()).abs() < 1e-6
+                );
             }
             let one_wall = surface.flip_wall_distance(1 << 2);
             let i = (1 + n[0] * (1 + n[1])) as usize;
@@ -295,9 +358,12 @@ mod tests {
     /// The native engine's padded solid lattice: 1.5 cells outside each wall,
     /// three extra cells per axis, one extra node past them.
     fn native_solid_lattice(layout: &FluidDomainLayout) -> (Transform, [u32; 3]) {
-        let origin = layout.min.map(|value| value - (1.5 * layout.cell_size) as f32);
-        let size: [f32; 3] =
-            std::array::from_fn(|axis| (f64::from(layout.cells[axis] + 3) * layout.cell_size) as f32);
+        let origin = layout
+            .min
+            .map(|value| value - (1.5 * layout.cell_size) as f32);
+        let size: [f32; 3] = std::array::from_fn(|axis| {
+            (f64::from(layout.cells[axis] + 3) * layout.cell_size) as f32
+        });
         let bounds = Transform {
             pos: std::array::from_fn(|axis| origin[axis] + size[axis] * 0.5),
             scale: size,
@@ -382,11 +448,24 @@ mod tests {
             _ => lattice.min()[0],
         };
         let read = LiquidLattice::from_scalars(|name, _| wires(name)).unwrap();
-        assert_eq!((read.nodes(), read.cells()), (lattice.nodes(), lattice.cells()));
-        let zeroed = LiquidLattice::from_scalars(|name, default| if name == "nodes_y" { 0.0 } else { default });
+        assert_eq!(
+            (read.nodes(), read.cells()),
+            (lattice.nodes(), lattice.cells())
+        );
+        let zeroed = LiquidLattice::from_scalars(
+            |name, default| if name == "nodes_y" { 0.0 } else { default },
+        );
         assert!(zeroed.unwrap_err().contains("nodes_y is 0"));
-        for (wire, value) in [("nodes_x", 7.0), ("nodes_x", 71.5), ("nodes_z", f32::NAN), ("cell_size", 0.0), ("lattice_min_y", f32::INFINITY)] {
-            let refused = LiquidLattice::from_scalars(|name, default| if name == wire { value } else { default });
+        for (wire, value) in [
+            ("nodes_x", 7.0),
+            ("nodes_x", 71.5),
+            ("nodes_z", f32::NAN),
+            ("cell_size", 0.0),
+            ("lattice_min_y", f32::INFINITY),
+        ] {
+            let refused = LiquidLattice::from_scalars(
+                |name, default| if name == wire { value } else { default },
+            );
             assert!(refused.unwrap_err().contains(wire), "{wire} = {value}");
         }
     }
@@ -442,14 +521,4 @@ mod tests {
             }
         }
     }
-
-
-
-
-
-
-
-
-
-
 }

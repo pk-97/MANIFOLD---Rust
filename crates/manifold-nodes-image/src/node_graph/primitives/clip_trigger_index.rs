@@ -65,8 +65,7 @@ impl Primitive for ClipTriggerIndex {
         // cycle length (BasicShapes feeds a 3/6/3 mux based on fill).
         let modulus = ctx.scalar_or_param("modulus", 3.0).round().max(1.0) as u32;
         let idx = self.cycle.step(raw, modulus);
-        ctx.outputs
-            .set_scalar("out", ParamValue::Float(idx as f32));
+        ctx.outputs.set_scalar("out", ParamValue::Float(idx as f32));
     }
 
     /// BUG-104: release the cycle's idempotence tracking. See
@@ -101,6 +100,10 @@ mod tests {
             node.clear_state();
         }
 
-        assert_eq!(prim.cycle.step(3, 3), 0, "released cycle should re-arm to a fresh computation");
+        assert_eq!(
+            prim.cycle.step(3, 3),
+            0,
+            "released cycle should re-arm to a fresh computation"
+        );
     }
 }

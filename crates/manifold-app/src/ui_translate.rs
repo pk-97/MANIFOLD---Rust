@@ -10,6 +10,7 @@
 //! Shared primitives (ids, `Beats`, `ParamId`) need no conversion — they are the
 //! identical `manifold-foundation` type on both sides.
 
+use manifold_ui::ui_state::AutomationLaneKey;
 use manifold_ui::view::{
     SelectionRegion as UiSelectionRegion, UiAutomationLane, UiAutomationPoint, UiGraphTarget,
     UiLayer, UiMarker, UiParamSlot, UiSegmentShape,
@@ -23,9 +24,9 @@ use manifold_ui::{
     PresetTypeId as UiPresetTypeId, SerializedParamValue as UiSerializedParamValue,
     TonemapCurve as UiTonemapCurve,
 };
-use manifold_ui::ui_state::AutomationLaneKey;
 use std::collections::{HashMap, HashSet};
 
+use manifold_core::PresetTypeId;
 use manifold_core::ableton_mapping::{
     AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus,
 };
@@ -33,13 +34,12 @@ use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind};
 use manifold_core::audio_setup::{AudioDeviceRef, AudioSourceKind};
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::effects::{ParamConvert, PresetInstance, SegmentShape};
-use manifold_core::params::{Param, ParamManifest};
 use manifold_core::layer::Layer;
 use manifold_core::macro_bank::MacroCurve;
 use manifold_core::marker::TimelineMarker;
+use manifold_core::params::{Param, ParamManifest};
 use manifold_core::selection::SelectionRegion;
 use manifold_core::types::{LayerType, MarkerColor, MidiTriggerMode, TonemapCurve};
-use manifold_core::PresetTypeId;
 
 // ── Leaf enums (bidirectional) ──────────────────────────────────────────
 
@@ -218,7 +218,9 @@ pub fn serialized_param_value_to_core(v: &UiSerializedParamValue) -> SerializedP
         UiSerializedParamValue::Vec4 { value } => SerializedParamValue::Vec4 { value: *value },
         UiSerializedParamValue::Color { value } => SerializedParamValue::Color { value: *value },
         UiSerializedParamValue::Enum { value } => SerializedParamValue::Enum { value: *value },
-        UiSerializedParamValue::Table { rows } => SerializedParamValue::Table { rows: rows.clone() },
+        UiSerializedParamValue::Table { rows } => {
+            SerializedParamValue::Table { rows: rows.clone() }
+        }
     }
 }
 
@@ -254,7 +256,10 @@ pub fn layers_to_ui(layers: &[Layer]) -> Vec<UiLayer> {
 pub fn layers_to_ui_for_layout_with_view(
     layers: &[Layer],
     automation_visible: bool,
-    chosen_automation_params: &HashMap<manifold_core::LayerId, (UiGraphTarget, manifold_core::effects::ParamId)>,
+    chosen_automation_params: &HashMap<
+        manifold_core::LayerId,
+        (UiGraphTarget, manifold_core::effects::ParamId),
+    >,
     lane_order: &[AutomationLaneKey],
     hidden_lanes: &HashSet<AutomationLaneKey>,
     pinned_lanes: &[AutomationLaneKey],
@@ -340,9 +345,9 @@ pub fn layer_automation_lanes_to_ui_with_view(
         !hidden_lanes
             .iter()
             .any(|(target, param_id)| target == &lane.target && param_id == &lane.param_id)
-            || pinned_lanes.iter().any(|(target, param_id)| {
-                target == &lane.target && param_id == &lane.param_id
-            })
+            || pinned_lanes
+                .iter()
+                .any(|(target, param_id)| target == &lane.target && param_id == &lane.param_id)
     });
     out.sort_by_key(|lane| {
         let stable_rank = lane_order
@@ -525,7 +530,9 @@ fn segment_shape_to_ui(s: SegmentShape) -> UiSegmentShape {
         SegmentShape::Linear => UiSegmentShape::Linear,
         SegmentShape::Hold => UiSegmentShape::Hold,
         SegmentShape::Curved(bend) => UiSegmentShape::Curved(bend),
-        SegmentShape::CurvedRange { bend, start, end } => UiSegmentShape::CurvedRange { bend, start, end },
+        SegmentShape::CurvedRange { bend, start, end } => {
+            UiSegmentShape::CurvedRange { bend, start, end }
+        }
     }
 }
 
@@ -605,7 +612,9 @@ use manifold_ui::graph_view as gv;
 /// the canvas consumes. The whole nested structure (group bodies, ports, params,
 /// wires, outer routings) is converted; `descriptor_for`/`tooltip_for` are
 /// applied per node so the catalog never leaves the renderer crate.
-pub fn graph_snapshot_to_ui(s: &manifold_node_engine::snapshot::GraphSnapshot) -> gv::GraphSnapshot {
+pub fn graph_snapshot_to_ui(
+    s: &manifold_node_engine::snapshot::GraphSnapshot,
+) -> gv::GraphSnapshot {
     gv::GraphSnapshot {
         nodes: s.nodes.iter().map(graph_node_to_ui).collect(),
         wires: s.wires.iter().map(graph_wire_to_ui).collect(),
@@ -637,10 +646,7 @@ fn graph_node_to_ui(n: &manifold_node_engine::snapshot::NodeSnapshot) -> gv::Nod
             .collect(),
         editor_pos: n.editor_pos,
         breaks_dependency_cycle: n.breaks_dependency_cycle,
-        group: n
-            .group
-            .as_deref()
-            .map(|g| Box::new(graph_group_to_ui(g))),
+        group: n.group.as_deref().map(|g| Box::new(graph_group_to_ui(g))),
         wgsl_source: n.wgsl_source.clone(),
         category,
         tooltip,
@@ -655,7 +661,10 @@ fn graph_group_to_ui(g: &manifold_node_engine::snapshot::GroupSnapshot) -> gv::G
     }
 }
 
-fn graph_param_to_ui(type_id: &str, p: &manifold_node_engine::snapshot::ParamSnapshot) -> gv::ParamSnapshot {
+fn graph_param_to_ui(
+    type_id: &str,
+    p: &manifold_node_engine::snapshot::ParamSnapshot,
+) -> gv::ParamSnapshot {
     gv::ParamSnapshot {
         name: p.name.clone(),
         label: p.label.clone(),
@@ -690,14 +699,18 @@ fn graph_wire_to_ui(w: &manifold_node_engine::snapshot::WireSnapshot) -> gv::Wir
     }
 }
 
-fn outer_routing_to_ui(r: &manifold_node_engine::snapshot::OuterParamRouting) -> gv::OuterParamRouting {
+fn outer_routing_to_ui(
+    r: &manifold_node_engine::snapshot::OuterParamRouting,
+) -> gv::OuterParamRouting {
     gv::OuterParamRouting {
         outer_label: r.outer_label.clone(),
         outer_param_id: r.outer_param_id.clone(),
         node_handle: r.node_handle.clone(),
         inner_param: r.inner_param.clone(),
         source: match r.source {
-            manifold_node_engine::snapshot::OuterParamSource::Static => gv::OuterParamSource::Static,
+            manifold_node_engine::snapshot::OuterParamSource::Static => {
+                gv::OuterParamSource::Static
+            }
             manifold_node_engine::snapshot::OuterParamSource::User => gv::OuterParamSource::User,
         },
     }
@@ -705,11 +718,17 @@ fn outer_routing_to_ui(r: &manifold_node_engine::snapshot::OuterParamRouting) ->
 
 fn port_kind_to_ui(k: &manifold_node_engine::snapshot::PortKindSnapshot) -> gv::PortKindSnapshot {
     match k {
-        manifold_node_engine::snapshot::PortKindSnapshot::Texture2D => gv::PortKindSnapshot::Texture2D,
-        manifold_node_engine::snapshot::PortKindSnapshot::Texture2DTyped { slots } => gv::PortKindSnapshot::Texture2DTyped {
-            slots: slots.clone(),
-        },
-        manifold_node_engine::snapshot::PortKindSnapshot::Texture3D => gv::PortKindSnapshot::Texture3D,
+        manifold_node_engine::snapshot::PortKindSnapshot::Texture2D => {
+            gv::PortKindSnapshot::Texture2D
+        }
+        manifold_node_engine::snapshot::PortKindSnapshot::Texture2DTyped { slots } => {
+            gv::PortKindSnapshot::Texture2DTyped {
+                slots: slots.clone(),
+            }
+        }
+        manifold_node_engine::snapshot::PortKindSnapshot::Texture3D => {
+            gv::PortKindSnapshot::Texture3D
+        }
         manifold_node_engine::snapshot::PortKindSnapshot::Scalar => gv::PortKindSnapshot::Scalar,
         manifold_node_engine::snapshot::PortKindSnapshot::Array {
             channels,
@@ -726,22 +745,40 @@ fn port_kind_to_ui(k: &manifold_node_engine::snapshot::PortKindSnapshot) -> gv::
                 .collect(),
             match_mode: match match_mode {
                 manifold_node_engine::snapshot::ArrayMatchMode::Exact => gv::ArrayMatchMode::Exact,
-                manifold_node_engine::snapshot::ArrayMatchMode::Permissive => gv::ArrayMatchMode::Permissive,
+                manifold_node_engine::snapshot::ArrayMatchMode::Permissive => {
+                    gv::ArrayMatchMode::Permissive
+                }
             },
             item_size: *item_size,
             item_align: *item_align,
         },
         manifold_node_engine::snapshot::PortKindSnapshot::Camera => gv::PortKindSnapshot::Camera,
         manifold_node_engine::snapshot::PortKindSnapshot::Light => gv::PortKindSnapshot::Light,
-        manifold_node_engine::snapshot::PortKindSnapshot::Material => gv::PortKindSnapshot::Material,
-        manifold_node_engine::snapshot::PortKindSnapshot::Transform => gv::PortKindSnapshot::Transform,
-        manifold_node_engine::snapshot::PortKindSnapshot::Atmosphere => gv::PortKindSnapshot::Atmosphere,
-        manifold_node_engine::snapshot::PortKindSnapshot::RenderMode => gv::PortKindSnapshot::RenderMode,
+        manifold_node_engine::snapshot::PortKindSnapshot::Material => {
+            gv::PortKindSnapshot::Material
+        }
+        manifold_node_engine::snapshot::PortKindSnapshot::Transform => {
+            gv::PortKindSnapshot::Transform
+        }
+        manifold_node_engine::snapshot::PortKindSnapshot::Atmosphere => {
+            gv::PortKindSnapshot::Atmosphere
+        }
+        manifold_node_engine::snapshot::PortKindSnapshot::RenderMode => {
+            gv::PortKindSnapshot::RenderMode
+        }
         manifold_node_engine::snapshot::PortKindSnapshot::Object => gv::PortKindSnapshot::Object,
-        manifold_node_engine::snapshot::PortKindSnapshot::RigidBody => gv::PortKindSnapshot::RigidBody,
-        manifold_node_engine::snapshot::PortKindSnapshot::FluidRole => gv::PortKindSnapshot::FluidRole,
-        manifold_node_engine::snapshot::PortKindSnapshot::MeshSource => gv::PortKindSnapshot::MeshSource,
-        manifold_node_engine::snapshot::PortKindSnapshot::VectorField => gv::PortKindSnapshot::VectorField,
+        manifold_node_engine::snapshot::PortKindSnapshot::RigidBody => {
+            gv::PortKindSnapshot::RigidBody
+        }
+        manifold_node_engine::snapshot::PortKindSnapshot::FluidRole => {
+            gv::PortKindSnapshot::FluidRole
+        }
+        manifold_node_engine::snapshot::PortKindSnapshot::MeshSource => {
+            gv::PortKindSnapshot::MeshSource
+        }
+        manifold_node_engine::snapshot::PortKindSnapshot::VectorField => {
+            gv::PortKindSnapshot::VectorField
+        }
     }
 }
 
@@ -749,11 +786,15 @@ fn param_kind_to_ui(k: manifold_node_engine::snapshot::ParamSnapshotKind) -> gv:
     match k {
         manifold_node_engine::snapshot::ParamSnapshotKind::Float => gv::ParamSnapshotKind::Float,
         manifold_node_engine::snapshot::ParamSnapshotKind::Angle => gv::ParamSnapshotKind::Angle,
-        manifold_node_engine::snapshot::ParamSnapshotKind::Frequency => gv::ParamSnapshotKind::Frequency,
+        manifold_node_engine::snapshot::ParamSnapshotKind::Frequency => {
+            gv::ParamSnapshotKind::Frequency
+        }
         manifold_node_engine::snapshot::ParamSnapshotKind::Int => gv::ParamSnapshotKind::Int,
         manifold_node_engine::snapshot::ParamSnapshotKind::Bool => gv::ParamSnapshotKind::Bool,
         manifold_node_engine::snapshot::ParamSnapshotKind::Enum => gv::ParamSnapshotKind::Enum,
-        manifold_node_engine::snapshot::ParamSnapshotKind::Trigger => gv::ParamSnapshotKind::Trigger,
+        manifold_node_engine::snapshot::ParamSnapshotKind::Trigger => {
+            gv::ParamSnapshotKind::Trigger
+        }
         manifold_node_engine::snapshot::ParamSnapshotKind::Color => gv::ParamSnapshotKind::Color,
         manifold_node_engine::snapshot::ParamSnapshotKind::Vec2 => gv::ParamSnapshotKind::Vec2,
         manifold_node_engine::snapshot::ParamSnapshotKind::Vec3 => gv::ParamSnapshotKind::Vec3,
@@ -775,14 +816,20 @@ fn category_to_ui(c: manifold_node_engine::descriptor::Category) -> gv::Category
         manifold_node_engine::descriptor::Category::Mask => gv::Category::Mask,
         manifold_node_engine::descriptor::Category::Composite => gv::Category::Composite,
         manifold_node_engine::descriptor::Category::Geometry3D => gv::Category::Geometry3D,
-        manifold_node_engine::descriptor::Category::MaterialsAndLighting => gv::Category::MaterialsAndLighting,
+        manifold_node_engine::descriptor::Category::MaterialsAndLighting => {
+            gv::Category::MaterialsAndLighting
+        }
         manifold_node_engine::descriptor::Category::Particles2D => gv::Category::Particles2D,
         manifold_node_engine::descriptor::Category::Particles3D => gv::Category::Particles3D,
         manifold_node_engine::descriptor::Category::Control => gv::Category::Control,
-        manifold_node_engine::descriptor::Category::DetectionAndSampling => gv::Category::DetectionAndSampling,
+        manifold_node_engine::descriptor::Category::DetectionAndSampling => {
+            gv::Category::DetectionAndSampling
+        }
         manifold_node_engine::descriptor::Category::MathAndConvert => gv::Category::MathAndConvert,
         manifold_node_engine::descriptor::Category::Routing => gv::Category::Routing,
-        manifold_node_engine::descriptor::Category::FieldsAndCoordinates => gv::Category::FieldsAndCoordinates,
+        manifold_node_engine::descriptor::Category::FieldsAndCoordinates => {
+            gv::Category::FieldsAndCoordinates
+        }
     }
 }
 
@@ -800,7 +847,11 @@ mod feature_kind_parity {
     fn ui_feature_kind_mirror_matches_core_in_order() {
         let core_all = AudioFeatureKind::ALL;
         let ui_all = UiAudioFeatureKind::ALL;
-        assert_eq!(ui_all.len(), core_all.len(), "mirror length must match core");
+        assert_eq!(
+            ui_all.len(),
+            core_all.len(),
+            "mirror length must match core"
+        );
         for (u, c) in ui_all.iter().zip(core_all.iter()) {
             assert_eq!(
                 audio_feature_kind_to_core(*u),
@@ -821,7 +872,8 @@ mod placeholder_lane_owner {
         }))
         .unwrap();
         let mut layer = Layer::new_generator(name.into(), PresetTypeId::NONE, order);
-        layer.gen_params_mut().unwrap().params = ParamManifest::from_params(vec![Param::bundled(spec)]);
+        layer.gen_params_mut().unwrap().params =
+            ParamManifest::from_params(vec![Param::bundled(spec)]);
         layer
     }
 
@@ -864,7 +916,10 @@ mod lane_label_section {
     use super::*;
 
     fn pinned_label(layer: &Layer, param: &str) -> String {
-        let key: AutomationLaneKey = (UiGraphTarget::Generator(layer.layer_id.clone()), param.to_string().into());
+        let key: AutomationLaneKey = (
+            UiGraphTarget::Generator(layer.layer_id.clone()),
+            param.to_string().into(),
+        );
         let lanes = layer_automation_lanes_to_ui_with_view(
             layer,
             None,
@@ -885,7 +940,8 @@ mod lane_label_section {
         }
         let spec = serde_json::from_value(json).unwrap();
         let mut layer = Layer::new_generator("A".into(), PresetTypeId::NONE, 0);
-        layer.gen_params_mut().unwrap().params = ParamManifest::from_params(vec![Param::bundled(spec)]);
+        layer.gen_params_mut().unwrap().params =
+            ParamManifest::from_params(vec![Param::bundled(spec)]);
         pinned_label(&layer, "gain")
     }
 

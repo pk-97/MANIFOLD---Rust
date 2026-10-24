@@ -4,13 +4,13 @@
 //! These tests retain the meaningful gates: canonical insertion, expansion,
 //! bypass state, shared binding identities, and complete inverse edits.
 
-use manifold_nodes as _;
+use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
 use manifold_core::params::{Param, ParamManifest};
-use manifold_core::NodeId;
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
-use manifold_node_engine::{parameters::ParamValue, persistence::PrimitiveRegistry};
 use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::{parameters::ParamValue, persistence::PrimitiveRegistry};
+use manifold_nodes as _;
 
 use manifold_nodes::testkit::scene_modifier as common;
 
@@ -43,7 +43,12 @@ fn binding_id(def: &EffectGraphDef, modifier_id: &str, param_id: &str) -> String
 fn manifest_with(def: &EffectGraphDef, id: &str, value: f32) -> ParamManifest {
     let metadata = def.preset_metadata.as_ref().expect("host metadata");
     let mut manifest = ParamManifest::from_params(
-        metadata.params.iter().cloned().map(Param::bundled).collect(),
+        metadata
+            .params
+            .iter()
+            .cloned()
+            .map(Param::bundled)
+            .collect(),
     );
     let param = manifest
         .get_mut(id)
@@ -61,11 +66,25 @@ fn loop_and_fog_instances_prepare_from_bundled_recipes() {
         assert_eq!(attached.scene_modifiers.len(), 1, "{recipe} inserted once");
         let prepared = prepare_scene_modifiers(&attached, &PrimitiveRegistry::with_builtin())
             .unwrap_or_else(|error| panic!("{recipe} preparation failed: {error}"));
-        assert!(prepared.def.scene_modifiers.is_empty(), "{recipe} expands to ordinary graph");
-        assert!(prepared.routes.iter().any(|route| route.modifier_id == NodeId::new(id)));
-        assert!(attached.preset_metadata.as_ref().unwrap().bindings.iter().any(|binding| {
-            matches!(binding.target, BindingTarget::SceneModifier { .. })
-        }));
+        assert!(
+            prepared.def.scene_modifiers.is_empty(),
+            "{recipe} expands to ordinary graph"
+        );
+        assert!(
+            prepared
+                .routes
+                .iter()
+                .any(|route| route.modifier_id == NodeId::new(id))
+        );
+        assert!(
+            attached
+                .preset_metadata
+                .as_ref()
+                .unwrap()
+                .bindings
+                .iter()
+                .any(|binding| { matches!(binding.target, BindingTarget::SceneModifier { .. }) })
+        );
     }
 }
 
@@ -87,8 +106,7 @@ fn fog_gate_bypass_retains_atmosphere_output_and_enabled_route() {
         .routes
         .iter()
         .find(|route| {
-            route.modifier_id == NodeId::new("fog-bypass")
-                && route.local.as_str() == "fog_enabled"
+            route.modifier_id == NodeId::new("fog-bypass") && route.local.as_str() == "fog_enabled"
         })
         .expect("expanded fog enabled route");
     let runtime_enabled_id = runtime
@@ -96,13 +114,21 @@ fn fog_gate_bypass_retains_atmosphere_output_and_enabled_route() {
         .instance_by_node_id(&enabled_route.copies[0].node_id)
         .expect("runtime fog enabled");
     assert_eq!(
-        runtime.graph.get_node(runtime_enabled_id).unwrap().params.get("value"),
+        runtime
+            .graph
+            .get_node(runtime_enabled_id)
+            .unwrap()
+            .params
+            .get("value"),
         Some(&ParamValue::Float(0.0))
     );
     assert!(prepared.def.wires.iter().any(|wire| {
-        prepared.def.nodes.iter().any(|node| {
-            node.id == wire.from_node && node.type_id == "node.atmosphere"
-        }) && wire.to_port == "atmosphere"
+        prepared
+            .def
+            .nodes
+            .iter()
+            .any(|node| node.id == wire.from_node && node.type_id == "node.atmosphere")
+            && wire.to_port == "atmosphere"
     }));
     assert_eq!(binding_id(&attached, "fog-bypass", "enabled"), enabled_id);
 }

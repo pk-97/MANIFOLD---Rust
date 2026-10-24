@@ -9,7 +9,7 @@
 //! its index and the layout rows alone, so a Count change adds or removes
 //! copies at the tail.
 
-use crate::copies_body::{spacing_unit, SCATTER_JITTER};
+use crate::copies_body::{SCATTER_JITTER, spacing_unit};
 
 /// Stored values: Grid 0, Scatter 1 (once Pile), Line 2, Ring 3, Spiral 4,
 /// Random 5, the order of [`crate::copies_body::COPY_LAYOUT_LABELS`].
@@ -63,7 +63,10 @@ impl Arrangement {
     /// Whether the two differ in Count alone: the bodies that stay keep
     /// their motion, and only the copies that arrive take a rest place.
     pub fn same_places(&self, other: &Self) -> bool {
-        Self { count: other.count, ..*self } == *other
+        Self {
+            count: other.count,
+            ..*self
+        } == *other
     }
 
     /// Copy `index`'s rest pose for a copy whose box is `width` metres. Only
@@ -79,12 +82,27 @@ impl Arrangement {
         };
         match self.layout {
             CopyLayout::Grid => {
-                let (column, row, layer) = (index % columns, (index / columns) % columns, index / (columns * columns));
-                laid([column as f32 * step[0], layer as f32 * step[1], row as f32 * step[2]], self.turn)
+                let (column, row, layer) = (
+                    index % columns,
+                    (index / columns) % columns,
+                    index / (columns * columns),
+                );
+                laid(
+                    [
+                        column as f32 * step[0],
+                        layer as f32 * step[1],
+                        row as f32 * step[2],
+                    ],
+                    self.turn,
+                )
             }
             CopyLayout::Scatter => {
                 let [column, layer, row] = pile_cell(index, columns);
-                let offset = [centred(column) * step[0], layer as f32 * step[1], centred(row) * step[2]];
+                let offset = [
+                    centred(column) * step[0],
+                    layer as f32 * step[1],
+                    centred(row) * step[2],
+                ];
                 let jitter = [0, 1, 2].map(|axis| bounded_jitter(index, axis, step[axis as usize]));
                 let mut turn = self.turn;
                 for (axis, value) in turn.iter_mut().enumerate() {
@@ -105,7 +123,11 @@ impl Arrangement {
                 let on_ring = self.count.saturating_sub(ring * columns).clamp(1, columns);
                 let angle = std::f32::consts::TAU * slot as f32 / on_ring as f32;
                 let radius = ring_radius(columns, step[0], width[2]);
-                let offset = [radius * angle.cos(), ring as f32 * step[1], radius * angle.sin()];
+                let offset = [
+                    radius * angle.cos(),
+                    ring as f32 * step[1],
+                    radius * angle.sin(),
+                ];
                 // Each copy's X runs along the ring, so neighbours meet side to side.
                 let (sin, cos) = (-(angle + std::f32::consts::FRAC_PI_2) * 0.5).sin_cos();
                 let yaw = [0.0, sin, 0.0, cos];
@@ -121,7 +143,11 @@ impl Arrangement {
                 let arm = 2.0 * step[0] / std::f32::consts::TAU;
                 let along = (index as f32 + 0.5) * step[0];
                 let angle = (2.0 * along / arm).sqrt();
-                let offset = [arm * angle * angle.cos(), angle / std::f32::consts::TAU * step[1], arm * angle * angle.sin()];
+                let offset = [
+                    arm * angle * angle.cos(),
+                    angle / std::f32::consts::TAU * step[1],
+                    arm * angle * angle.sin(),
+                ];
                 laid(offset, self.turn)
             }
             CopyLayout::Random => {
@@ -148,9 +174,20 @@ impl Arrangement {
         for index in 0..self.count {
             let pose = self.rest(width, index);
             let at = place(pose.position, pose.rotation, centre);
-            let axes = [[half[0], 0.0, 0.0], [0.0, half[1], 0.0], [0.0, 0.0, half[2]]]
-                .map(|axis| if is_identity(pose.rotation) { axis } else { rotate(pose.rotation, axis) });
-            let reach: [f32; 3] = std::array::from_fn(|k| axes.iter().map(|axis| axis[k].abs()).sum());
+            let axes = [
+                [half[0], 0.0, 0.0],
+                [0.0, half[1], 0.0],
+                [0.0, 0.0, half[2]],
+            ]
+            .map(|axis| {
+                if is_identity(pose.rotation) {
+                    axis
+                } else {
+                    rotate(pose.rotation, axis)
+                }
+            });
+            let reach: [f32; 3] =
+                std::array::from_fn(|k| axes.iter().map(|axis| axis[k].abs()).sum());
             let (min, max) = found.get_or_insert((at, at));
             for k in 0..3 {
                 min[k] = min[k].min(at[k] - reach[k]);
@@ -215,8 +252,16 @@ fn ring_radius(slots: usize, step: f32, depth: f32) -> f32 {
 
 /// `origin + R * offset`, exactly `origin + offset` when the group is unturned.
 fn place(origin: [f32; 3], group: [f32; 4], offset: [f32; 3]) -> [f32; 3] {
-    let offset = if is_identity(group) { offset } else { rotate(group, offset) };
-    [origin[0] + offset[0], origin[1] + offset[1], origin[2] + offset[2]]
+    let offset = if is_identity(group) {
+        offset
+    } else {
+        rotate(group, offset)
+    };
+    [
+        origin[0] + offset[0],
+        origin[1] + offset[1],
+        origin[2] + offset[2],
+    ]
 }
 
 /// The quaternion (xyzw) of XYZ Euler radians in the scene's Rz * Ry * Rx
@@ -258,7 +303,11 @@ fn compose(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
 
 fn rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
     let [x, y, z, w] = q;
-    let t = [2.0 * (y * v[2] - z * v[1]), 2.0 * (z * v[0] - x * v[2]), 2.0 * (x * v[1] - y * v[0])];
+    let t = [
+        2.0 * (y * v[2] - z * v[1]),
+        2.0 * (z * v[0] - x * v[2]),
+        2.0 * (x * v[1] - y * v[0]),
+    ];
     [
         v[0] + w * t[0] + (y * t[2] - z * t[1]),
         v[1] + w * t[1] + (z * t[0] - x * t[2]),

@@ -8,13 +8,24 @@ pub(super) fn reference_shader() -> String {
     let end = source.find("fn bucket_dims()").unwrap();
     let mut source = format!(
         "{}{}\n@compute @workgroup_size(256)\nfn build_buckets() {{}}\n{}",
-        &source[..start], OLD_SELECTION, &source[end..],
+        &source[..start],
+        OLD_SELECTION,
+        &source[end..],
     );
     let row_read = "let row = bucket_flat(nb);\n                let n = sheet_b[row];";
     assert_eq!(source.matches(row_read).count(), 2);
-    assert_eq!(source.matches("let np = selected[32u * row + m].xyz;").count(), 2);
-    source = source.replace(row_read, "let n = fill_bucket(nb);")
-        .replace("let np = selected[32u * row + m].xyz;", "let np = bucket[m].xyz;")
+    assert_eq!(
+        source
+            .matches("let np = selected[32u * row + m].xyz;")
+            .count(),
+        2
+    );
+    source = source
+        .replace(row_read, "let n = fill_bucket(nb);")
+        .replace(
+            "let np = selected[32u * row + m].xyz;",
+            "let np = bucket[m].xyz;",
+        )
         .replace("cell_counts", "selected_count");
     source
 }
@@ -22,10 +33,17 @@ pub(super) fn reference_shader() -> String {
 /// CPU-only: validate both complete WGSL modules, including the test reference.
 #[test]
 fn sheeting_bucket_shaders_validate_on_cpu() {
-    for source in [include_str!("shaders/gpu_flip_sheeting.wgsl").to_owned(), reference_shader()] {
+    for source in [
+        include_str!("shaders/gpu_flip_sheeting.wgsl").to_owned(),
+        reference_shader(),
+    ] {
         let module = naga::front::wgsl::parse_str(&source).expect("WGSL parse");
-        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
-            .validate(&module).expect("WGSL validation");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("WGSL validation");
     }
 }
 
@@ -49,10 +67,16 @@ pub(super) fn bucket_fixture(cells: [usize; 3], saturated: bool) -> BucketFixtur
         indices.swap(i, rng as usize % (i + 1));
     }
     let mut fixture = BucketFixture {
-        counts: vec![0; n], segments: vec![[0xdead_beef; 4]; 32 * rows], merged: vec![Vec::new(); rows],
+        counts: vec![0; n],
+        segments: vec![[0xdead_beef; 4]; 32 * rows],
+        merged: vec![Vec::new(); rows],
     };
     for c in 0..n {
-        let q = [c % cells[0], c / cells[0] % cells[1], c / (cells[0] * cells[1])];
+        let q = [
+            c % cells[0],
+            c / cells[0] % cells[1],
+            c / (cells[0] * cells[1]),
+        ];
         let b = q.map(|v| v / 2);
         let row = b[0] + buckets[0] * (b[1] + buckets[1] * b[2]);
         let lane = (q[0] & 1) + 2 * (q[1] & 1) + 4 * (q[2] & 1);
@@ -62,7 +86,12 @@ pub(super) fn bucket_fixture(cells: [usize; 3], saturated: bool) -> BucketFixtur
         list.sort_unstable();
         for (m, &index) in list.iter().enumerate() {
             // High index bits include NaN encodings: .w is never numeric data.
-            let marker = [(c as f32).to_bits(), (m as f32).to_bits(), (-0.0f32).to_bits(), 0x7fc0_0000 + index];
+            let marker = [
+                (c as f32).to_bits(),
+                (m as f32).to_bits(),
+                (-0.0f32).to_bits(),
+                0x7fc0_0000 + index,
+            ];
             fixture.segments[32 * row + 4 * lane + m] = marker;
             fixture.merged[row].push(marker);
         }
@@ -76,12 +105,24 @@ pub(super) fn bucket_fixture(cells: [usize; 3], saturated: bool) -> BucketFixtur
 #[test]
 fn sheeting_bucket_fixture_covers_padding_and_saturation() {
     let fixture = bucket_fixture([5, 3, 7], true);
-    assert_eq!(fixture.merged.iter().map(Vec::len).sum::<usize>(), 4 * 5 * 3 * 7);
+    assert_eq!(
+        fixture.merged.iter().map(Vec::len).sum::<usize>(),
+        4 * 5 * 3 * 7
+    );
     assert_eq!(fixture.counts.iter().sum::<u32>(), 4 * 5 * 3 * 7);
     assert!(fixture.merged.iter().any(|row| row.len() == 32));
     assert_eq!(fixture.merged.last().unwrap().len(), 4);
-    assert!(fixture.merged.iter().all(|row| row.windows(2).all(|w| w[0][3] < w[1][3])));
-    assert_ne!(&fixture.segments[..32], fixture.merged[0].as_slice(), "merge must reorder unread segments");
+    assert!(
+        fixture
+            .merged
+            .iter()
+            .all(|row| row.windows(2).all(|w| w[0][3] < w[1][3]))
+    );
+    assert_ne!(
+        &fixture.segments[..32],
+        fixture.merged[0].as_slice(),
+        "merge must reorder unread segments"
+    );
     let empty = bucket_fixture([1, 1, 1], false);
     assert!(empty.merged[0].is_empty());
 }

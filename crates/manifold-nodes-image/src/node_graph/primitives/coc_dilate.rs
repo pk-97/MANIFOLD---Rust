@@ -88,9 +88,10 @@ impl Primitive for CocDilate {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let sampler = self
-            .sampler
-            .get_or_insert_with(|| gpu.device.create_sampler(&manifold_gpu::GpuSamplerDesc::default()));
+        let sampler = self.sampler.get_or_insert_with(|| {
+            gpu.device
+                .create_sampler(&manifold_gpu::GpuSamplerDesc::default())
+        });
 
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -258,14 +259,29 @@ mod gpu_tests {
         w: u32,
         h: u32,
     ) -> Vec<[f32; 4]> {
-        let out = RenderTarget::new(device, w, h, GpuTextureFormat::Rgba16Float, "coc-dilate-out");
+        let out = RenderTarget::new(
+            device,
+            w,
+            h,
+            GpuTextureFormat::Rgba16Float,
+            "coc-dilate-out",
+        );
         let mut enc = device.create_encoder("coc-dilate-dispatch");
         enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Texture { binding: 0, texture: input },
-                GpuBinding::Sampler { binding: 1, sampler },
-                GpuBinding::Texture { binding: 2, texture: &out.texture },
+                GpuBinding::Texture {
+                    binding: 0,
+                    texture: input,
+                },
+                GpuBinding::Sampler {
+                    binding: 1,
+                    sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: &out.texture,
+                },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "coc-dilate-dispatch",
@@ -353,8 +369,15 @@ mod gpu_tests {
                 flat_value
             );
             // All sign flags are 0, so the max is 0; B copies R; alpha stays 1.
-            assert!((px[1]).abs() < 1e-6, "texel {i}: flat sign field must stay 0, got {}", px[1]);
-            assert!((px[0] - px[2]).abs() < 1e-6, "texel {i}: R != B on flat field");
+            assert!(
+                (px[1]).abs() < 1e-6,
+                "texel {i}: flat sign field must stay 0, got {}",
+                px[1]
+            );
+            assert!(
+                (px[0] - px[2]).abs() < 1e-6,
+                "texel {i}: R != B on flat field"
+            );
             assert!((px[3] - 1.0).abs() < 1e-6, "texel {i}: alpha != 1.0");
         }
     }

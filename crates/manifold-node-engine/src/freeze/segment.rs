@@ -126,7 +126,10 @@ pub fn concat_defs(cards: &[&EffectGraphDef]) -> Option<EffectGraphDef> {
             prev_tail = if !first && tail_wire.from_node == source_doc_id {
                 Some(prev_tail.clone()?)
             } else {
-                Some((*id_map.get(&tail_wire.from_node)?, tail_wire.from_port.clone()))
+                Some((
+                    *id_map.get(&tail_wire.from_node)?,
+                    tail_wire.from_port.clone(),
+                ))
             };
         }
     }
@@ -200,10 +203,10 @@ fn single_node_of_type(def: &EffectGraphDef, type_id: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-fn card(json: &str) -> EffectGraphDef {
+    fn card(json: &str) -> EffectGraphDef {
         serde_json::from_str(json).expect("parse card def")
     }
-const CARD_A: &str = r#"{
+    const CARD_A: &str = r#"{
         "version": 1, "name": "cardA", "nodes": [
             { "id": 0, "typeId": "system.source", "nodeId": "source" },
             { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
@@ -252,6 +255,9 @@ const CARD_A: &str = r#"{
         }"#,
         );
         assert!(concat_defs(&[&a, &broken]).is_none());
-        assert!(concat_defs(&[&a]).is_none(), "a single card is not a segment");
+        assert!(
+            concat_defs(&[&a]).is_none(),
+            "a single card is not a segment"
+        );
     }
 }

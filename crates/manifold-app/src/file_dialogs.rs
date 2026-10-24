@@ -62,19 +62,97 @@ const AUDIO_EXTS: &[&str] = crate::project_io::AUDIO_EXTENSIONS;
 impl DialogAction {
     fn spec(self) -> Spec {
         use HomeFallback as H;
-        let (title, filters, pref_key, project_folder, home): (_, &'static [(&'static str, &'static [&'static str])], _, _, _) = match self {
-            Self::OpenProject => ("Open MANIFOLD Project", &[("MANIFOLD Project", &["manifold", "json"])], "MANIFOLD_DialogPath_ProjectOpen", false, H::None),
-            Self::SaveProjectAs => ("Save MANIFOLD Project", &[("MANIFOLD Project", &["manifold"])], "MANIFOLD_DialogPath_ProjectSave", false, H::None),
-            Self::ExportVideo => ("Export Video", &[("MP4 Video", &["mp4"])], "MANIFOLD_DialogPath_ExportMP4", true, H::Desktop),
-            Self::ExportFrame => ("Export Frame", &[("PNG Image", &["png"]), ("JPEG Image", &["jpg", "jpeg"])], "MANIFOLD_DialogPath_ExportImage", true, H::Desktop),
-            Self::ImportVideo => ("Import Video", &[("Video Files", VIDEO_EXTS)], "MANIFOLD_DialogPath_VideoImport", true, H::Movies),
-            Self::ImportMidi => ("Import MIDI File", &[("MIDI Files", &["mid", "midi"])], "MANIFOLD_DialogPath_MidiImport", false, H::None),
-            Self::ImportModel => ("Import Model", &[("glTF", &["glb", "gltf"])], "MANIFOLD_DialogPath_ModelImport", true, H::None),
-            Self::ImportPreset => ("Import Preset", &[("MANIFOLD Preset", &["json"])], "MANIFOLD_DialogPath_PresetImport", false, H::None),
-            Self::ExportPreset => ("Export Preset", &[("MANIFOLD Preset", &["json"])], "MANIFOLD_DialogPath_PresetExport", false, H::None),
-            Self::ReplaceAudio => ("Replace Audio File", &[("Audio", AUDIO_EXTS)], "MANIFOLD_DialogPath_AudioReplace", true, H::Music),
-            Self::NodeFile => ("Choose File", &[], "MANIFOLD_DialogPath_NodeFile", true, H::None),
-            Self::NodeFolder => ("Choose Folder", &[], "MANIFOLD_DialogPath_NodeFolder", true, H::None),
+        let (title, filters, pref_key, project_folder, home): (
+            _,
+            &'static [(&'static str, &'static [&'static str])],
+            _,
+            _,
+            _,
+        ) = match self {
+            Self::OpenProject => (
+                "Open MANIFOLD Project",
+                &[("MANIFOLD Project", &["manifold", "json"])],
+                "MANIFOLD_DialogPath_ProjectOpen",
+                false,
+                H::None,
+            ),
+            Self::SaveProjectAs => (
+                "Save MANIFOLD Project",
+                &[("MANIFOLD Project", &["manifold"])],
+                "MANIFOLD_DialogPath_ProjectSave",
+                false,
+                H::None,
+            ),
+            Self::ExportVideo => (
+                "Export Video",
+                &[("MP4 Video", &["mp4"])],
+                "MANIFOLD_DialogPath_ExportMP4",
+                true,
+                H::Desktop,
+            ),
+            Self::ExportFrame => (
+                "Export Frame",
+                &[("PNG Image", &["png"]), ("JPEG Image", &["jpg", "jpeg"])],
+                "MANIFOLD_DialogPath_ExportImage",
+                true,
+                H::Desktop,
+            ),
+            Self::ImportVideo => (
+                "Import Video",
+                &[("Video Files", VIDEO_EXTS)],
+                "MANIFOLD_DialogPath_VideoImport",
+                true,
+                H::Movies,
+            ),
+            Self::ImportMidi => (
+                "Import MIDI File",
+                &[("MIDI Files", &["mid", "midi"])],
+                "MANIFOLD_DialogPath_MidiImport",
+                false,
+                H::None,
+            ),
+            Self::ImportModel => (
+                "Import Model",
+                &[("glTF", &["glb", "gltf"])],
+                "MANIFOLD_DialogPath_ModelImport",
+                true,
+                H::None,
+            ),
+            Self::ImportPreset => (
+                "Import Preset",
+                &[("MANIFOLD Preset", &["json"])],
+                "MANIFOLD_DialogPath_PresetImport",
+                false,
+                H::None,
+            ),
+            Self::ExportPreset => (
+                "Export Preset",
+                &[("MANIFOLD Preset", &["json"])],
+                "MANIFOLD_DialogPath_PresetExport",
+                false,
+                H::None,
+            ),
+            Self::ReplaceAudio => (
+                "Replace Audio File",
+                &[("Audio", AUDIO_EXTS)],
+                "MANIFOLD_DialogPath_AudioReplace",
+                true,
+                H::Music,
+            ),
+            Self::NodeFile => (
+                "Choose File",
+                &[],
+                "MANIFOLD_DialogPath_NodeFile",
+                true,
+                H::None,
+            ),
+            Self::NodeFolder => (
+                "Choose Folder",
+                &[],
+                "MANIFOLD_DialogPath_NodeFolder",
+                true,
+                H::None,
+            ),
         };
         let (remember_name, default_ext) = match self {
             Self::ExportVideo => (true, "mp4"),
@@ -82,7 +160,15 @@ impl DialogAction {
             Self::ExportPreset => (false, "json"),
             _ => (false, ""),
         };
-        Spec { title, filters, pref_key, project_folder, home, remember_name, default_ext }
+        Spec {
+            title,
+            filters,
+            pref_key,
+            project_folder,
+            home,
+            remember_name,
+            default_ext,
+        }
     }
 }
 
@@ -117,7 +203,11 @@ pub(crate) fn host<'a>(
     }
 }
 
-pub(crate) fn pick_file(action: DialogAction, host: DialogHost, prefs: &mut UserPrefs) -> Option<PathBuf> {
+pub(crate) fn pick_file(
+    action: DialogAction,
+    host: DialogHost,
+    prefs: &mut UserPrefs,
+) -> Option<PathBuf> {
     let path = build(action, host, prefs).pick_file()?;
     remember(action, &path, prefs);
     Some(path)
@@ -125,7 +215,12 @@ pub(crate) fn pick_file(action: DialogAction, host: DialogHost, prefs: &mut User
 
 /// `pick_file` offering only `extensions`, a scene file field's own list: a
 /// texture field offers pictures, a model field models.
-pub(crate) fn pick_file_of(action: DialogAction, host: DialogHost, prefs: &mut UserPrefs, extensions: &[String]) -> Option<PathBuf> {
+pub(crate) fn pick_file_of(
+    action: DialogAction,
+    host: DialogHost,
+    prefs: &mut UserPrefs,
+    extensions: &[String],
+) -> Option<PathBuf> {
     let mut dialog = build(action, host, prefs);
     if !extensions.is_empty() {
         dialog = dialog.add_filter(filter_name(extensions), extensions);
@@ -137,7 +232,11 @@ pub(crate) fn pick_file_of(action: DialogAction, host: DialogHost, prefs: &mut U
 
 /// What a file field's extensions are, for the dialog's filter.
 fn filter_name(extensions: &[String]) -> &'static str {
-    let is = |known: &[&str]| extensions.iter().all(|ext| known.iter().any(|k| k.eq_ignore_ascii_case(ext)));
+    let is = |known: &[&str]| {
+        extensions
+            .iter()
+            .all(|ext| known.iter().any(|k| k.eq_ignore_ascii_case(ext)))
+    };
     if is(manifold_core::file_loader::PICTURE_EXTENSIONS) {
         "Pictures"
     } else if is(&["glb", "gltf"]) {
@@ -147,7 +246,11 @@ fn filter_name(extensions: &[String]) -> &'static str {
     }
 }
 
-pub(crate) fn pick_files(action: DialogAction, host: DialogHost, prefs: &mut UserPrefs) -> Option<Vec<PathBuf>> {
+pub(crate) fn pick_files(
+    action: DialogAction,
+    host: DialogHost,
+    prefs: &mut UserPrefs,
+) -> Option<Vec<PathBuf>> {
     let paths = build(action, host, prefs).pick_files()?;
     if let Some(first) = paths.first() {
         remember(action, first, prefs);
@@ -155,7 +258,11 @@ pub(crate) fn pick_files(action: DialogAction, host: DialogHost, prefs: &mut Use
     Some(paths)
 }
 
-pub(crate) fn pick_folder(action: DialogAction, host: DialogHost, prefs: &mut UserPrefs) -> Option<PathBuf> {
+pub(crate) fn pick_folder(
+    action: DialogAction,
+    host: DialogHost,
+    prefs: &mut UserPrefs,
+) -> Option<PathBuf> {
     let path = build(action, host, prefs).pick_folder()?;
     remember(action, &path, prefs);
     Some(path)
@@ -176,12 +283,17 @@ pub(crate) fn save_file(
     let name_key = name_pref_key(action);
     let last = Some(prefs.get_string(&name_key, "")).filter(|s| !s.is_empty());
     let default_name = default_file_name(action, host.project_path, untitled_stem, last.as_deref());
-    let path = build(action, host, prefs).set_file_name(default_name).save_file()?;
+    let path = build(action, host, prefs)
+        .set_file_name(default_name)
+        .save_file()?;
     remember(action, &path, prefs);
     if action.spec().remember_name
         && let Some(name) = path.file_name().and_then(|n| n.to_str())
     {
-        prefs.set_string(&name_key, &format!("{}\n{name}", project_key(host.project_path)));
+        prefs.set_string(
+            &name_key,
+            &format!("{}\n{name}", project_key(host.project_path)),
+        );
         prefs.save();
     }
     Some(path)
@@ -194,7 +306,9 @@ fn name_pref_key(action: DialogAction) -> String {
 /// Identity of the project a remembered export name belongs to. An unsaved
 /// project has none, so its names are never reused.
 fn project_key(project_path: Option<&Path>) -> String {
-    project_path.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+    project_path
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// The file name a save panel opens with. Pure, so the rules are testable.
@@ -210,7 +324,9 @@ fn default_file_name(
     last: Option<&str>,
 ) -> String {
     let spec = action.spec();
-    let project_stem = project_path.and_then(Path::file_stem).and_then(|s| s.to_str());
+    let project_stem = project_path
+        .and_then(Path::file_stem)
+        .and_then(|s| s.to_str());
     if spec.remember_name
         && let Some((key, name)) = last.and_then(|l| l.split_once('\n'))
         && !key.is_empty()
@@ -243,7 +359,13 @@ fn build(action: DialogAction, host: DialogHost, prefs: &UserPrefs) -> rfd::File
         .filter(|s| !s.is_empty())
         .map(|s| memory_dir(action, Path::new(&s)));
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    if let Some(dir) = start_dir(action, remembered, host.project_path, home.as_deref(), |p| p.is_dir()) {
+    if let Some(dir) = start_dir(
+        action,
+        remembered,
+        host.project_path,
+        home.as_deref(),
+        |p| p.is_dir(),
+    ) {
         dialog = dialog.set_directory(dir);
     }
     if let Some(window) = host.parent {
@@ -297,7 +419,10 @@ fn start_dir(
     }
     if action == DialogAction::OpenProject {
         // The folder that holds the current show — where its siblings live.
-        return project_dir.and_then(Path::parent).filter(|d| is_dir(d)).map(Path::to_path_buf);
+        return project_dir
+            .and_then(Path::parent)
+            .filter(|d| is_dir(d))
+            .map(Path::to_path_buf);
     }
     if spec.project_folder
         && let Some(dir) = project_dir
@@ -347,11 +472,26 @@ mod tests {
 
     #[test]
     fn existing_memory_keys_keep_their_names() {
-        assert_eq!(DialogAction::OpenProject.spec().pref_key, "MANIFOLD_DialogPath_ProjectOpen");
-        assert_eq!(DialogAction::SaveProjectAs.spec().pref_key, "MANIFOLD_DialogPath_ProjectSave");
-        assert_eq!(DialogAction::ExportVideo.spec().pref_key, "MANIFOLD_DialogPath_ExportMP4");
-        assert_eq!(DialogAction::ExportFrame.spec().pref_key, "MANIFOLD_DialogPath_ExportImage");
-        assert_eq!(DialogAction::ImportMidi.spec().pref_key, "MANIFOLD_DialogPath_MidiImport");
+        assert_eq!(
+            DialogAction::OpenProject.spec().pref_key,
+            "MANIFOLD_DialogPath_ProjectOpen"
+        );
+        assert_eq!(
+            DialogAction::SaveProjectAs.spec().pref_key,
+            "MANIFOLD_DialogPath_ProjectSave"
+        );
+        assert_eq!(
+            DialogAction::ExportVideo.spec().pref_key,
+            "MANIFOLD_DialogPath_ExportMP4"
+        );
+        assert_eq!(
+            DialogAction::ExportFrame.spec().pref_key,
+            "MANIFOLD_DialogPath_ExportImage"
+        );
+        assert_eq!(
+            DialogAction::ImportMidi.spec().pref_key,
+            "MANIFOLD_DialogPath_MidiImport"
+        );
     }
 
     #[test]
@@ -390,16 +530,28 @@ mod tests {
     #[test]
     fn save_as_defaults_to_project_file_stem() {
         let p = Path::new("/Shows/A/Set_v2.manifold");
-        assert_eq!(default_file_name(DialogAction::SaveProjectAs, Some(p), "stale", None), "Set_v2");
-        assert_eq!(default_file_name(DialogAction::SaveProjectAs, None, "Untitled", None), "Untitled");
+        assert_eq!(
+            default_file_name(DialogAction::SaveProjectAs, Some(p), "stale", None),
+            "Set_v2"
+        );
+        assert_eq!(
+            default_file_name(DialogAction::SaveProjectAs, None, "Untitled", None),
+            "Untitled"
+        );
     }
 
     #[test]
     fn export_defaults_to_project_name_then_last_name() {
         let p = Path::new("/Shows/A/Set.manifold");
-        assert_eq!(default_file_name(DialogAction::ExportVideo, Some(p), "x", None), "Set.mp4");
+        assert_eq!(
+            default_file_name(DialogAction::ExportVideo, Some(p), "x", None),
+            "Set.mp4"
+        );
         let last = format!("{}\nSet_final.mp4", project_key(Some(p)));
-        assert_eq!(default_file_name(DialogAction::ExportVideo, Some(p), "x", Some(&last)), "Set_final.mp4");
+        assert_eq!(
+            default_file_name(DialogAction::ExportVideo, Some(p), "x", Some(&last)),
+            "Set_final.mp4"
+        );
     }
 
     #[test]
@@ -407,9 +559,20 @@ mod tests {
         let other = Path::new("/Shows/B/Other.manifold");
         let p = Path::new("/Shows/A/Set.manifold");
         let last = format!("{}\nOther_cut.png", project_key(Some(other)));
-        assert_eq!(default_file_name(DialogAction::ExportFrame, Some(p), "x", Some(&last)), "Set.png");
+        assert_eq!(
+            default_file_name(DialogAction::ExportFrame, Some(p), "x", Some(&last)),
+            "Set.png"
+        );
         let unsaved = "\nOld.png";
-        assert_eq!(default_file_name(DialogAction::ExportFrame, None, "MANIFOLD_Frame", Some(unsaved)), "MANIFOLD_Frame.png");
+        assert_eq!(
+            default_file_name(
+                DialogAction::ExportFrame,
+                None,
+                "MANIFOLD_Frame",
+                Some(unsaved)
+            ),
+            "MANIFOLD_Frame.png"
+        );
     }
 
     #[test]
@@ -450,7 +613,8 @@ mod tests {
 
     #[test]
     fn save_as_never_remembers_inside_a_show() {
-        let shows = std::env::temp_dir().join(format!("manifold-file-dialogs-{}", std::process::id()));
+        let shows =
+            std::env::temp_dir().join(format!("manifold-file-dialogs-{}", std::process::id()));
         let show = shows.join("MyShow");
         std::fs::create_dir_all(&show).unwrap();
         std::fs::write(show.join("MyShow.manifold"), b"v2").unwrap();
@@ -462,8 +626,21 @@ mod tests {
 
     #[test]
     fn nothing_known_lets_macos_choose() {
-        for action in [DialogAction::ImportPreset, DialogAction::ImportMidi, DialogAction::NodeFile] {
-            assert_eq!(start_dir(action, None, None, Some(Path::new("/Users/p")), dirs(&["/Users/p"])), None);
+        for action in [
+            DialogAction::ImportPreset,
+            DialogAction::ImportMidi,
+            DialogAction::NodeFile,
+        ] {
+            assert_eq!(
+                start_dir(
+                    action,
+                    None,
+                    None,
+                    Some(Path::new("/Users/p")),
+                    dirs(&["/Users/p"])
+                ),
+                None
+            );
         }
     }
 }

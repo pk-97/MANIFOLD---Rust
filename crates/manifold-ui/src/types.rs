@@ -152,7 +152,12 @@ pub enum AudioBand {
 
 impl AudioBand {
     /// All bands in feature-storage order.
-    pub const ALL: [AudioBand; 4] = [AudioBand::Full, AudioBand::Low, AudioBand::Mid, AudioBand::High];
+    pub const ALL: [AudioBand; 4] = [
+        AudioBand::Full,
+        AudioBand::Low,
+        AudioBand::Mid,
+        AudioBand::High,
+    ];
 
     /// Index into a send's per-band feature array.
     pub fn index(self) -> usize {
@@ -314,7 +319,10 @@ impl AudioDeviceRef {
     /// Whether this ref points at a tap source (system or app) rather than a
     /// hardware input device. `None` (no capture) is neither.
     pub fn is_tap(&self) -> bool {
-        matches!(self.kind, AudioSourceKind::SystemAudio | AudioSourceKind::App)
+        matches!(
+            self.kind,
+            AudioSourceKind::SystemAudio | AudioSourceKind::App
+        )
     }
 }
 

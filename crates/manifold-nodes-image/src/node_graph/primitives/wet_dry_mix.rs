@@ -15,7 +15,9 @@ use manifold_gpu::GpuSamplerDesc;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::primitives::standalone_pipeline::{
+    dispatch_standalone_2d, standalone_pipeline,
+};
 
 manifold_node_engine::primitive! {
     name: WetDry,
@@ -119,18 +121,21 @@ mod gpu_tests {
     //! boundary values (wet_dry = 0 → dry, wet_dry = 1 → wet, wet_dry
     //! = 0.5 → exact half).
 
-    
-
     use half::f16;
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use manifold_node_engine::exec::backend::Backend;
     use manifold_node_engine::bindings::Slot;
+    use manifold_node_engine::exec::backend::Backend;
     use manifold_node_engine::exec::execution_plan::ResourceId;
-    use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, scene::boundary_nodes::Source, exec::execution_plan::compile};
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::{
+        exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+        exec::execution_plan::ExecutionPlan, exec::execution_plan::compile,
+        exec::metal_backend::MetalBackend, graph::Graph, parameters::ParamValue,
+        scene::boundary_nodes::FinalOutput, scene::boundary_nodes::Source,
+    };
 
     use super::WetDry;
 
@@ -288,7 +293,8 @@ mod gpu_tests {
 
         // Param says 0.0 (pure dry) — the wire from Value(0.5) must win.
         g.set_param(mix, "wet_dry", ParamValue::Float(0.0)).unwrap();
-        g.set_param(amount, "value", ParamValue::Float(0.5)).unwrap();
+        g.set_param(amount, "value", ParamValue::Float(0.5))
+            .unwrap();
         g.connect((src_dry, "out"), (mix, "dry")).unwrap();
         g.connect((src_wet, "out"), (mix, "wet")).unwrap();
         g.connect((amount, "out"), (mix, "wet_dry")).unwrap();
@@ -306,11 +312,17 @@ mod gpu_tests {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
             gpu.clear_texture(
                 &dry_target.texture,
-                dry[0] as f64, dry[1] as f64, dry[2] as f64, dry[3] as f64,
+                dry[0] as f64,
+                dry[1] as f64,
+                dry[2] as f64,
+                dry[3] as f64,
             );
             gpu.clear_texture(
                 &wet_target.texture,
-                wet[0] as f64, wet[1] as f64, wet[2] as f64, wet[3] as f64,
+                wet[0] as f64,
+                wet[1] as f64,
+                wet[2] as f64,
+                wet[3] as f64,
             );
         }
 
@@ -362,7 +374,8 @@ mod gpu_tests {
             assert!(
                 (out_rgba[c] - expected).abs() < tol,
                 "channel {c}: {} != avg={} (wire 0.5 should override param 0.0)",
-                out_rgba[c], expected
+                out_rgba[c],
+                expected
             );
         }
     }

@@ -10,7 +10,8 @@ use crate::node_graph::material_inspector::material_param_role;
 use manifold_node_engine::parameters::{ParamDef, ParamType};
 use manifold_node_engine::persistence::PrimitiveRegistry;
 
-static NODE_REGISTRY: std::sync::LazyLock<PrimitiveRegistry> = std::sync::LazyLock::new(PrimitiveRegistry::with_builtin);
+static NODE_REGISTRY: std::sync::LazyLock<PrimitiveRegistry> =
+    std::sync::LazyLock::new(PrimitiveRegistry::with_builtin);
 
 /// An unbounded angle has no primitive range to copy into a card row, but a
 /// card still needs a useful initial scrub band. Keep the band in the
@@ -55,7 +56,8 @@ fn params_metadata(type_id: &str, params: &[ParamDef]) -> Vec<NodeParamMetadata>
                     (0.0, 1.0)
                 }
             });
-            let default_value: manifold_core::effect_graph_def::SerializedParamValue = pd.default.clone().into();
+            let default_value: manifold_core::effect_graph_def::SerializedParamValue =
+                pd.default.clone().into();
             let convert = match pd.ty {
                 ParamType::Bool => manifold_core::effects::ParamConvert::BoolThreshold,
                 ParamType::Int => manifold_core::effects::ParamConvert::IntRound,
@@ -92,8 +94,12 @@ fn params_metadata(type_id: &str, params: &[ParamDef]) -> Vec<NodeParamMetadata>
 
 /// The Physics World controls `type_id` declares it takes
 /// (`EffectNode::world_control_inputs`).
-pub fn world_inputs_for_node_type(type_id: &str) -> &'static [manifold_core::scene_world_controls::WorldControlInput] {
-    NODE_REGISTRY.construct(type_id).map_or(&[], |node| node.world_control_inputs())
+pub fn world_inputs_for_node_type(
+    type_id: &str,
+) -> &'static [manifold_core::scene_world_controls::WorldControlInput] {
+    NODE_REGISTRY
+        .construct(type_id)
+        .map_or(&[], |node| node.world_control_inputs())
 }
 
 inventory::submit! {

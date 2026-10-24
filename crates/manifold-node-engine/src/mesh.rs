@@ -58,12 +58,30 @@ const _: () = {
 /// Std430 stride 80 matches the existing `#[repr(C)]` struct
 /// (vec3+vec3+vec2+vec2+vec4+vec4 with std430 alignment producing 80 bytes).
 pub const MESH_VERTEX_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: well_known::POSITION, ty: ChannelElementType::Vec3F },
-    ChannelSpec { name: well_known::NORMAL,   ty: ChannelElementType::Vec3F },
-    ChannelSpec { name: well_known::UV,       ty: ChannelElementType::Vec2F },
-    ChannelSpec { name: well_known::UV1,      ty: ChannelElementType::Vec2F },
-    ChannelSpec { name: well_known::TANGENT,  ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::COLOR,    ty: ChannelElementType::Vec4F },
+    ChannelSpec {
+        name: well_known::POSITION,
+        ty: ChannelElementType::Vec3F,
+    },
+    ChannelSpec {
+        name: well_known::NORMAL,
+        ty: ChannelElementType::Vec3F,
+    },
+    ChannelSpec {
+        name: well_known::UV,
+        ty: ChannelElementType::Vec2F,
+    },
+    ChannelSpec {
+        name: well_known::UV1,
+        ty: ChannelElementType::Vec2F,
+    },
+    ChannelSpec {
+        name: well_known::TANGENT,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::COLOR,
+        ty: ChannelElementType::Vec4F,
+    },
 ];
 
 impl KnownItem for MeshVertex {
@@ -86,10 +104,22 @@ const _: () = assert!(std::mem::size_of::<Vec4Vertex>() == 16);
 /// with `[f32; 4]` consumers. A single `position: Vec4F` would force 16-byte
 /// alignment and break those.
 pub const VEC4_VERTEX_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: well_known::X, ty: ChannelElementType::F32 },
-    ChannelSpec { name: well_known::Y, ty: ChannelElementType::F32 },
-    ChannelSpec { name: well_known::Z, ty: ChannelElementType::F32 },
-    ChannelSpec { name: well_known::W, ty: ChannelElementType::F32 },
+    ChannelSpec {
+        name: well_known::X,
+        ty: ChannelElementType::F32,
+    },
+    ChannelSpec {
+        name: well_known::Y,
+        ty: ChannelElementType::F32,
+    },
+    ChannelSpec {
+        name: well_known::Z,
+        ty: ChannelElementType::F32,
+    },
+    ChannelSpec {
+        name: well_known::W,
+        ty: ChannelElementType::F32,
+    },
 ];
 
 impl KnownItem for Vec4Vertex {
@@ -118,8 +148,14 @@ const _: () = assert!(std::mem::size_of::<InstanceTransform>() == 32);
 /// over at GPU bind time, which is what the existing shaders already
 /// expect.
 pub const INSTANCE_TRANSFORM_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: well_known::POS_SCALE, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::ROT,       ty: ChannelElementType::Vec4F },
+    ChannelSpec {
+        name: well_known::POS_SCALE,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::ROT,
+        ty: ChannelElementType::Vec4F,
+    },
 ];
 
 impl KnownItem for InstanceTransform {
@@ -147,10 +183,22 @@ const _: () = assert!(std::mem::size_of::<JointMatrix>() == 64);
 /// Channels signature for [`JointMatrix`] — four Vec4F columns, std430
 /// stride 64, align 16.
 pub const JOINT_MATRIX_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: well_known::MAT_COL0, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::MAT_COL1, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::MAT_COL2, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::MAT_COL3, ty: ChannelElementType::Vec4F },
+    ChannelSpec {
+        name: well_known::MAT_COL0,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::MAT_COL1,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::MAT_COL2,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::MAT_COL3,
+        ty: ChannelElementType::Vec4F,
+    },
 ];
 
 impl KnownItem for JointMatrix {
@@ -190,8 +238,14 @@ const _: () = assert!(std::mem::size_of::<CurvePoint>() == 8);
 /// the section 13(3) resolution: a Vec2F here would force 8-byte alignment
 /// and break consumers expecting the existing `[f32; 2]` layout.
 pub const CURVE_POINT_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: well_known::X, ty: ChannelElementType::F32 },
-    ChannelSpec { name: well_known::Y, ty: ChannelElementType::F32 },
+    ChannelSpec {
+        name: well_known::X,
+        ty: ChannelElementType::F32,
+    },
+    ChannelSpec {
+        name: well_known::Y,
+        ty: ChannelElementType::F32,
+    },
 ];
 
 impl KnownItem for CurvePoint {
@@ -232,8 +286,14 @@ const _: () = assert!(std::mem::size_of::<EdgePair>() == 8);
 /// 8-byte size; the `SENTINEL` (a == u32::MAX) for unused slots survives
 /// as an associated constant on the Rust struct.
 pub const EDGE_PAIR_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: well_known::A_INDEX, ty: ChannelElementType::U32 },
-    ChannelSpec { name: well_known::B_INDEX, ty: ChannelElementType::U32 },
+    ChannelSpec {
+        name: well_known::A_INDEX,
+        ty: ChannelElementType::U32,
+    },
+    ChannelSpec {
+        name: well_known::B_INDEX,
+        ty: ChannelElementType::U32,
+    },
 ];
 
 impl KnownItem for EdgePair {

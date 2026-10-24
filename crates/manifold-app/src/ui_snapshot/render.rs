@@ -28,15 +28,15 @@ use std::ffi::c_void;
 use std::path::Path;
 use std::slice;
 
-use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
-use manifold_ui_paint::clip_thumb_gpu::ClipThumbGpu;
 use manifold_compositor::display_capture::{AlphaInterpretation, LinearUiReadback, SrgbRgba8};
 use manifold_compositor::presentation::UI_FORMAT;
+use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
 use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_ui_paint::clip_thumb_gpu::ClipThumbGpu;
 use manifold_ui_paint::ui_cache_manager::UICacheManager;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 
-use super::composite_resources::{composite_frame, CompositeResources};
+use super::composite_resources::{CompositeResources, composite_frame};
 use super::thumbs;
 use crate::ui_root::UIRoot;
 
@@ -90,7 +90,11 @@ pub fn render_ui_to_png(
     with_thumbs: bool,
     path: &str,
 ) {
-    assert_eq!(tex_w % 64, 0, "tex_w must be a multiple of 64 for aligned readback");
+    assert_eq!(
+        tex_w % 64,
+        0,
+        "tex_w must be a multiple of 64 for aligned readback"
+    );
 
     let device = GpuDevice::new_queued("ui-snap render");
     let mut renderer = UIRenderer::new(&device, UI_FORMAT);
@@ -138,13 +142,27 @@ pub fn render_ui_to_png(
     // the seam call, so they're bound here even when unused (`with_thumbs ==
     // false` or no non-audio clips) — cheap, and keeps the `Option` borrow
     // shape simple.
-    let quads = if with_thumbs { thumbs::build_quads(&clip_rects) } else { Vec::new() };
-    let atlas = if with_thumbs { Some(thumbs::make_test_atlas(&device)) } else { None };
-    let mut thumb_gpu = if with_thumbs { Some(ClipThumbGpu::new(&device, ATLAS_FORMAT)) } else { None };
+    let quads = if with_thumbs {
+        thumbs::build_quads(&clip_rects)
+    } else {
+        Vec::new()
+    };
+    let atlas = if with_thumbs {
+        Some(thumbs::make_test_atlas(&device))
+    } else {
+        None
+    };
+    let mut thumb_gpu = if with_thumbs {
+        Some(ClipThumbGpu::new(&device, ATLAS_FORMAT))
+    } else {
+        None
+    };
     let thumb = match (thumb_gpu.as_mut(), atlas.as_ref()) {
-        (Some(gpu), Some(atlas)) if !quads.is_empty() => {
-            Some(crate::ui_frame::ThumbPass { gpu, atlas, quads: &quads })
-        }
+        (Some(gpu), Some(atlas)) if !quads.is_empty() => Some(crate::ui_frame::ThumbPass {
+            gpu,
+            atlas,
+            quads: &quads,
+        }),
         _ => None,
     };
 
@@ -211,7 +229,11 @@ pub fn render_graph_to_png(
     use manifold_ui::draw::Painter;
     use manifold_ui::graph_canvas::{GraphCanvas, Rect as CanvasRect};
 
-    assert_eq!(tex_w % 64, 0, "tex_w must be a multiple of 64 for aligned readback");
+    assert_eq!(
+        tex_w % 64,
+        0,
+        "tex_w must be a multiple of 64 for aligned readback"
+    );
 
     // BUG-152: `Arc<GpuDevice>` — see the `render_graph_editor_to_png` call
     // site's comment for why.
@@ -351,13 +373,18 @@ pub fn render_graph_editor_to_png(
     use manifold_ui::graph_canvas::GraphCanvas;
     use manifold_ui::panels::graph_editor::GraphEditorPanel;
 
-    assert_eq!(tex_w % 64, 0, "tex_w must be a multiple of 64 for aligned readback");
+    assert_eq!(
+        tex_w % 64,
+        0,
+        "tex_w must be a multiple of 64 for aligned readback"
+    );
     let logical_w = tex_w as f32 / scale;
     let logical_h = tex_h as f32 / scale;
     // The live editor's geometry: its `Dock` and the 16:9 monitor default (no
     // content pipeline headless to read the project aspect from).
     let dock = manifold_ui::Dock::editor();
-    let layout = crate::editor_frame::EditorLayout::compute(&dock, logical_w as u32, logical_h as u32, None);
+    let layout =
+        crate::editor_frame::EditorLayout::compute(&dock, logical_w as u32, logical_h as u32, None);
 
     // BUG-152: `Arc<GpuDevice>`, not a bare `GpuDevice` — `render_graph_node_
     // textures` below needs an owned `Arc` to hand `MetalBackend::new`
@@ -375,9 +402,11 @@ pub fn render_graph_editor_to_png(
     // the topology fix: no more scratch `tree` + throwaway `editor_ui.tree`.
     let mut ui_root = crate::ui_root::UIRoot::new();
     let active_idx = match target.host_target() {
-        Some(manifold_core::GraphTarget::Generator(lid)) => {
-            project.timeline.layers.iter().position(|l| &l.layer_id == lid)
-        }
+        Some(manifold_core::GraphTarget::Generator(lid)) => project
+            .timeline
+            .layers
+            .iter()
+            .position(|l| &l.layer_id == lid),
         _ => None,
     };
     crate::ui_bridge::sync_project_all(&mut ui_root, project, selection);
@@ -388,7 +417,10 @@ pub fn render_graph_editor_to_png(
     // either — the editor window never uploads the band bitmap.
     crate::ui_bridge::sync_inspector_data(&mut ui_root, project, active_idx, selection, &[], None);
     crate::ui_bridge::sync_audio_dock(&mut ui_root, project);
-    ui_root.build_inspector_in(crate::editor_frame::EditorRegion::CardLane.id(), layout.card_viewport);
+    ui_root.build_inspector_in(
+        crate::editor_frame::EditorRegion::CardLane.id(),
+        layout.card_viewport,
+    );
 
     // Left sidebar preview column. A fresh, unconfigured `GraphEditorPanel`
     // reproduces the live window's pre-selection empty state ("Node Output" /
@@ -425,11 +457,17 @@ pub fn render_graph_editor_to_png(
 
     if let Some(dump_path) = dump_path {
         use manifold_ui::graph_canvas::GraphCanvasTargets;
-        let canvas_targets = GraphCanvasTargets { canvas: &canvas, viewport };
+        let canvas_targets = GraphCanvasTargets {
+            canvas: &canvas,
+            viewport,
+        };
         let surfaces: [&dyn manifold_ui::hit_targets::HitTargets; 1] = [&canvas_targets];
         let json = super::dump::dump_tree_ex(&ui_root.tree, &surfaces);
-        std::fs::write(dump_path, serde_json::to_string_pretty(&json).expect("serialize dump"))
-            .expect("write editor tree json");
+        std::fs::write(
+            dump_path,
+            serde_json::to_string_pretty(&json).expect("serialize dump"),
+        )
+        .expect("write editor tree json");
         println!("ui-snap: wrote {}", dump_path.display());
     }
 
@@ -490,29 +528,31 @@ pub fn render_graph_editor_to_png(
     }
     if open_perf_hud {
         ui_root.perf_hud.toggle();
-        ui_root.perf_hud.set_metrics(manifold_ui::panels::perf_hud::PerfMetrics {
-            ui_fps: 60.0,
-            ui_frame_time_ms: 16.6,
-            render_fps: 60.0,
-            render_frame_time_ms: 16.6,
-            gpu_fence_wait_ms: 0.0,
-            physics_cpu_ms: 0.0,
-            physics_body_count: 0,
-            physics_backlog_seconds: 0.0,
-            sim_step_cap_hit: false,
-            sim_nonfinite: false,
-            render_target_fps: 60.0,
-            active_clips: 0,
-            preparing_clips: 0,
-            current_beat: manifold_core::Beats::ZERO,
-            current_time_secs: 0.0,
-            bpm: manifold_core::Bpm(120.0),
-            clock_source: "Internal",
-            is_playing: false,
-            data_version: 0,
-            profiling_active: false,
-            profiling_frame_count: 0,
-        });
+        ui_root
+            .perf_hud
+            .set_metrics(manifold_ui::panels::perf_hud::PerfMetrics {
+                ui_fps: 60.0,
+                ui_frame_time_ms: 16.6,
+                render_fps: 60.0,
+                render_frame_time_ms: 16.6,
+                gpu_fence_wait_ms: 0.0,
+                physics_cpu_ms: 0.0,
+                physics_body_count: 0,
+                physics_backlog_seconds: 0.0,
+                sim_step_cap_hit: false,
+                sim_nonfinite: false,
+                render_target_fps: 60.0,
+                active_clips: 0,
+                preparing_clips: 0,
+                current_beat: manifold_core::Beats::ZERO,
+                current_time_secs: 0.0,
+                bpm: manifold_core::Bpm(120.0),
+                clock_source: "Internal",
+                is_playing: false,
+                data_version: 0,
+                profiling_active: false,
+                profiling_frame_count: 0,
+            });
     }
     ui_root.build_overlays_for_screen(logical_w, logical_h);
     if open_perf_hud {
@@ -536,7 +576,11 @@ pub fn render_graph_editor_to_png(
     let text_input = crate::text_input::TextInputState::new();
     let frame_timer = crate::frame_timer::FrameTimer::new(60.0);
     let res = super::composite_resources::CompositeResources::new(&device, tex_w, tex_h);
-    let mut cache = UICacheManager::with_slots(ATLAS_FORMAT, dpi, manifold_ui_paint::ui_cache_manager::EDITOR_SLOTS);
+    let mut cache = UICacheManager::with_slots(
+        ATLAS_FORMAT,
+        dpi,
+        manifold_ui_paint::ui_cache_manager::EDITOR_SLOTS,
+    );
     crate::editor_frame::composite_editor_frame(
         &device,
         Some(&mut renderer),
@@ -597,14 +641,20 @@ pub fn render_transform_proof_to_png(path: &str) {
 
     const TEX_W: u32 = 1536;
     const TEX_H: u32 = 768;
-    assert_eq!(TEX_W % 64, 0, "tex_w must be a multiple of 64 for aligned readback");
+    assert_eq!(
+        TEX_W % 64,
+        0,
+        "tex_w must be a multiple of 64 for aligned readback"
+    );
 
     let device = GpuDevice::new_queued("ui-snap render");
     let mut renderer = UIRenderer::new(&device, UI_FORMAT);
     let target = RenderTarget::new(&device, TEX_W, TEX_H, UI_FORMAT, "ui-snap-transform");
 
     let mut tree = UITree::new();
-    tree.set_text_measure(Box::new(manifold_ui_paint::native_text::CachedTextMeasure::new()));
+    tree.set_text_measure(Box::new(
+        manifold_ui_paint::native_text::CachedTextMeasure::new(),
+    ));
     // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D4: a standalone scratch tree
     // local to this function, same reasoning as the sidebar wrap above —
     // still a real `UITree`, still subject to `mint`'s debug assertion.
@@ -623,7 +673,10 @@ pub fn render_transform_proof_to_png(path: &str) {
         0.0,
         TEX_W as f32,
         TEX_H as f32,
-        UIStyle { bg_color: Color32::new(18, 20, 26, 255), ..UIStyle::default() },
+        UIStyle {
+            bg_color: Color32::new(18, 20, 26, 255),
+            ..UIStyle::default()
+        },
     );
 
     let caption_style = UIStyle {
@@ -634,7 +687,15 @@ pub fn render_transform_proof_to_png(path: &str) {
     };
 
     // (a) Rotated rounded rect — crisp AA'd corners under rotation.
-    tree.add_label(None, 140.0, 140.0, 220.0, 24.0, "(a) rotate: rounded rect", caption_style);
+    tree.add_label(
+        None,
+        140.0,
+        140.0,
+        220.0,
+        24.0,
+        "(a) rotate: rounded rect",
+        caption_style,
+    );
     tree.add_panel(
         None,
         140.0,
@@ -651,7 +712,15 @@ pub fn render_transform_proof_to_png(path: &str) {
 
     // (b) Rotated text — the glyph quads rotate with their node; the bordered
     // panel makes the node's rotated bounding box legible alongside the text.
-    tree.add_label(None, 500.0, 140.0, 300.0, 24.0, "(b) rotate: text glyphs", caption_style);
+    tree.add_label(
+        None,
+        500.0,
+        140.0,
+        300.0,
+        24.0,
+        "(b) rotate: text glyphs",
+        caption_style,
+    );
     tree.add_node(
         None,
         UiRect::new(500.0, 220.0, 300.0, 150.0),
@@ -674,7 +743,15 @@ pub fn render_transform_proof_to_png(path: &str) {
     // first; the unscaled reference outline (same bounds, no transform) drawn
     // on top shows the scale bulging equally on all four sides, not anchored
     // to a corner.
-    tree.add_label(None, 900.0, 140.0, 260.0, 24.0, "(c) scale about center", caption_style);
+    tree.add_label(
+        None,
+        900.0,
+        140.0,
+        260.0,
+        24.0,
+        "(c) scale about center",
+        caption_style,
+    );
     let rect_c = UiRect::new(900.0, 220.0, 220.0, 150.0);
     tree.add_node(
         None,
@@ -755,7 +832,12 @@ fn render_graph_node_textures(
     def: &manifold_core::effect_graph_def::EffectGraphDef,
 ) -> Option<GraphNodeTextures> {
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use manifold_node_engine::{exec::execution_plan::compile, persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, persistence::PrimitiveRegistry, scene::boundary_nodes::GENERATOR_INPUT_TYPE_ID, scene::boundary_nodes::SOURCE_TYPE_ID};
+    use manifold_node_engine::{
+        exec::effect_node::FrameTime, exec::execution::Executor, exec::execution_plan::compile,
+        exec::metal_backend::MetalBackend, persistence::EffectGraphDefExt,
+        persistence::PrimitiveRegistry, scene::boundary_nodes::GENERATOR_INPUT_TYPE_ID,
+        scene::boundary_nodes::SOURCE_TYPE_ID,
+    };
 
     // Square render dims for the node outputs; the blit stretches each into its
     // (possibly non-square) thumbnail rect with linear sampling.
@@ -767,7 +849,10 @@ fn render_graph_node_textures(
     // Final Output, Source) that a preset def references — a bare `new()` omits
     // them and `into_graph` fails with UnknownTypeId on `system.generator_input`.
     let registry = PrimitiveRegistry::with_builtin();
-    let mut graph = match def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()) {
+    let mut graph = match def.clone().into_graph(
+        &registry,
+        &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+    ) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("ui-snap graph: into_graph failed: {e:?}");
@@ -820,7 +905,14 @@ fn render_graph_node_textures(
         let fixture = RenderTarget::new(device, GW, GH, GFMT, "ui-snap-graph-source");
         let gradient = make_gradient_pipeline(device, GFMT);
         let mut fenc = device.create_encoder("ui-snap-graph-source-fill");
-        fenc.draw_fullscreen(&gradient, &fixture.texture, &[], true, true, "Source Fixture Gradient");
+        fenc.draw_fullscreen(
+            &gradient,
+            &fixture.texture,
+            &[],
+            true,
+            true,
+            "Source Fixture Gradient",
+        );
         fenc.commit_and_wait_completed();
         backend.pre_bind_texture_2d(res, fixture);
     }
@@ -853,10 +945,12 @@ fn resource_for_output(
     node: manifold_node_engine::exec::effect_node::NodeInstanceId,
     port: &str,
 ) -> Option<manifold_node_engine::exec::execution_plan::ResourceId> {
-    plan.steps()
-        .iter()
-        .find(|s| s.node == node)
-        .and_then(|s| s.outputs.iter().find(|(name, _)| *name == port).map(|(_, id)| *id))
+    plan.steps().iter().find(|s| s.node == node).and_then(|s| {
+        s.outputs
+            .iter()
+            .find(|(name, _)| *name == port)
+            .map(|(_, id)| *id)
+    })
 }
 
 /// A fullscreen-triangle pipeline that fills the target with a UV gradient
@@ -885,7 +979,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(in.uv.x, in.uv.y, (in.uv.x + in.uv.y) * 0.5, 1.0);
 }
 "#;
-    device.create_render_pipeline(shader, "vs_main", "fs_main", format, None, "Source Fixture Gradient")
+    device.create_render_pipeline(
+        shader,
+        "vs_main",
+        "fs_main",
+        format,
+        None,
+        "Source Fixture Gradient",
+    )
 }
 
 /// `pub(super)` (not just `fn`): `ui_harness_p0`'s
@@ -913,8 +1014,14 @@ pub(super) fn readback(device: &GpuDevice, texture: &GpuTexture, w: u32, h: u32)
 /// for the same reason as [`readback`]: shared by `render_ui_to_png`,
 /// `script.rs`'s `Runner` (P2), and `mod.rs`'s `cache_path_full_render`.
 pub(super) fn save_ui_png(bytes: &[u8], w: u32, h: u32, path: &Path) {
-    let capture = LinearUiReadback::from_bytes(bytes, w, h, UI_FORMAT, AlphaInterpretation::PremultipliedOverBlack)
-        .unwrap_or_else(|e| panic!("prepare {}: {e}", path.display()));
+    let capture = LinearUiReadback::from_bytes(
+        bytes,
+        w,
+        h,
+        UI_FORMAT,
+        AlphaInterpretation::PremultipliedOverBlack,
+    )
+    .unwrap_or_else(|e| panic!("prepare {}: {e}", path.display()));
     capture
         .to_srgb_rgba8()
         .write_png(path)
@@ -936,9 +1043,15 @@ pub(super) fn save_filmstrip_png(
     let encoded: Vec<SrgbRgba8> = tiles
         .iter()
         .map(|tile| {
-            LinearUiReadback::from_bytes(tile, tile_w, tile_h, UI_FORMAT, AlphaInterpretation::PremultipliedOverBlack)
-                .unwrap_or_else(|e| panic!("prepare filmstrip tile: {e}"))
-                .to_srgb_rgba8()
+            LinearUiReadback::from_bytes(
+                tile,
+                tile_w,
+                tile_h,
+                UI_FORMAT,
+                AlphaInterpretation::PremultipliedOverBlack,
+            )
+            .unwrap_or_else(|e| panic!("prepare filmstrip tile: {e}"))
+            .to_srgb_rgba8()
         })
         .collect();
     SrgbRgba8::assemble_filmstrip(&encoded, tile_w, tile_h, cols)

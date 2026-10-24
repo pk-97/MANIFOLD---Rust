@@ -23,11 +23,11 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler};
 use manifold_native::blob_detector::BlobDetector;
 
-use manifold_node_engine::runtime::background_worker::BackgroundWorker;
-use manifold_node_engine::gpu::gpu_readback::ReadbackRequest;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::gpu::gpu_readback::ReadbackRequest;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::runtime::background_worker::BackgroundWorker;
 
 /// In-memory representation of one detected blob. Pod-equivalent to a
 /// `Channels[x: F32, y: F32, width: F32, height: F32]` wire (4×f32,
@@ -340,8 +340,7 @@ impl Primitive for BlobDetectFfi {
             .as_ref()
             .map(|bs| bs.cut_score)
             .unwrap_or(0.0);
-        ctx.outputs
-            .set_scalar("cut", ParamValue::Float(cut_score));
+        ctx.outputs.set_scalar("cut", ParamValue::Float(cut_score));
 
         let gpu = ctx.gpu_encoder();
 
@@ -414,16 +413,29 @@ impl Primitive for BlobDetectFfi {
                 // downsample fully overwrites the staging and submit copies it
                 // into its own buffer, so reuse across cadences is safe (a new
                 // submit only runs once the prior readback completed).
-                let pipeline = self.downsample_pipeline.as_ref().expect("downsample pipeline created earlier in this run");
+                let pipeline = self
+                    .downsample_pipeline
+                    .as_ref()
+                    .expect("downsample pipeline created earlier in this run");
                 let sampler = self.downsample_sampler.get_or_insert_with(|| {
-                    gpu.device.create_sampler(&manifold_gpu::GpuSamplerDesc::default())
+                    gpu.device
+                        .create_sampler(&manifold_gpu::GpuSamplerDesc::default())
                 });
                 gpu.native_enc.dispatch_compute(
                     pipeline,
                     &[
-                        GpuBinding::Texture { binding: 0, texture: source },
-                        GpuBinding::Sampler { binding: 1, sampler },
-                        GpuBinding::Texture { binding: 2, texture: &bs.staging_texture },
+                        GpuBinding::Texture {
+                            binding: 0,
+                            texture: source,
+                        },
+                        GpuBinding::Sampler {
+                            binding: 1,
+                            sampler,
+                        },
+                        GpuBinding::Texture {
+                            binding: 2,
+                            texture: &bs.staging_texture,
+                        },
                     ],
                     [aw.div_ceil(8), ah.div_ceil(8), 1],
                     "node.blob_tracker.downsample",
@@ -456,7 +468,10 @@ impl Primitive for BlobDetectFfi {
             _pad1: 0,
         };
 
-        let pipeline = self.upload_pipeline.as_ref().expect("upload pipeline created earlier in this run");
+        let pipeline = self
+            .upload_pipeline
+            .as_ref()
+            .expect("upload pipeline created earlier in this run");
 
         gpu.native_enc.dispatch_compute(
             pipeline,

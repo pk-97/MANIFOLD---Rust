@@ -35,8 +35,6 @@ fn constant_filter(value: f32, passes: usize, fused: bool) -> f32 {
     sum
 }
 
-
-
 #[test]
 fn fluid_bricks_exterior_is_the_exact_dense_filter_not_the_input_band() {
     // Both multiply/add and FMA forms: pruning preserves whichever the GPU

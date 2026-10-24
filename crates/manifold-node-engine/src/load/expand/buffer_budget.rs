@@ -2,7 +2,7 @@
 
 use super::{SceneModifierExpandError, SceneModifierNodeRoute};
 use crate::exec::resource_allocation::{ArrayAllocationAction, ArrayAllocationPlan};
-use crate::{graph::Graph, exec::effect_node::NodeInstanceId};
+use crate::{exec::effect_node::NodeInstanceId, graph::Graph};
 use ahash::{AHashMap, AHashSet};
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
@@ -76,11 +76,8 @@ impl PreparedModifierBufferBudget {
                 .expect("scene inserted above");
             for frame in &modifier.mesh_frames {
                 for role in ["current_samples", "reference_samples"] {
-                    let id = super::compiler::math_resource_node_id(
-                        &modifier.id,
-                        &frame.target,
-                        role,
-                    );
+                    let id =
+                        super::compiler::math_resource_node_id(&modifier.id, &frame.target, role);
                     let target = fused_members.get(&id).unwrap_or(&id);
                     if let Some(runtime) = graph.instance_by_node_id(target) {
                         nodes.insert(runtime);
@@ -321,12 +318,18 @@ pub fn admit_candidate_bytes(
 /// Admit a whole scene before any of its buffers is allocated: the bytes
 /// its plan allocates against what the device offers now (the allowance
 /// less what is already allocated), refused by name with both in MB.
-pub fn admit_scene_bytes(snapshot: Option<manifold_gpu::GpuMemorySnapshot>, needed: u64) -> Result<(), String> {
+pub fn admit_scene_bytes(
+    snapshot: Option<manifold_gpu::GpuMemorySnapshot>,
+    needed: u64,
+) -> Result<(), String> {
     if needed == 0 {
         return Ok(());
     }
-    let snapshot = snapshot.ok_or("The scene's GPU buffers cannot be admitted: device memory limits are unavailable")?;
-    let (allowed, policy) = configured_limit(snapshot.recommended_max_working_set_bytes).map_err(|error| error.to_string())?;
+    let snapshot = snapshot.ok_or(
+        "The scene's GPU buffers cannot be admitted: device memory limits are unavailable",
+    )?;
+    let (allowed, policy) = configured_limit(snapshot.recommended_max_working_set_bytes)
+        .map_err(|error| error.to_string())?;
     let offers = allowed.saturating_sub(snapshot.current_allocated_bytes);
     if needed > offers {
         let mb = |bytes: u64| bytes.div_ceil(1 << 20);
@@ -567,13 +570,24 @@ mod tests {
             })
         };
         let error = admit_scene_bytes(snapshot(1 << 30), 37_700_000_000).unwrap_err();
-        assert!(error.starts_with("The scene needs 35954 MB of GPU buffers; the device offers 20540 MB"), "{error}");
-        assert!(error.contains("1024 MB already in use") && error.contains("Resolution"), "{error}");
+        assert!(
+            error
+                .starts_with("The scene needs 35954 MB of GPU buffers; the device offers 20540 MB"),
+            "{error}"
+        );
+        assert!(
+            error.contains("1024 MB already in use") && error.contains("Resolution"),
+            "{error}"
+        );
         // What is left fits exactly; one byte more does not.
         let left = 30_150_000_000 / 4 * 3 - (1 << 30);
         assert_eq!(admit_scene_bytes(snapshot(1 << 30), left), Ok(()));
         assert!(admit_scene_bytes(snapshot(1 << 30), left + 1).is_err());
-        assert!(admit_scene_bytes(None, 1).unwrap_err().contains("unavailable"));
+        assert!(
+            admit_scene_bytes(None, 1)
+                .unwrap_err()
+                .contains("unavailable")
+        );
     }
 
     #[test]

@@ -35,7 +35,8 @@ use manifold_core::NodeId;
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::physics_members::BODY_TYPE_ID;
 use manifold_core::scene_doc::{
-    Item, ItemFields, ItemId, ItemKind, ModifierFields, ModifierTargets, ModifierType, PhysicsSetting, SceneDoc, param_id,
+    Item, ItemFields, ItemId, ItemKind, ModifierFields, ModifierTargets, ModifierType,
+    PhysicsSetting, SceneDoc, param_id,
 };
 use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, SceneTargetSelection};
 use manifold_core::scene_schema::{acts_on_copies, modifier_type, shatter_parts};
@@ -59,7 +60,11 @@ fn own_radius(drawn: &Drawn) -> f64 {
         .map(|size| size * size * 0.25)
         .sum::<f64>()
         .sqrt();
-    if radius.is_finite() { radius.max(MIN_RADIUS) } else { MIN_RADIUS }
+    if radius.is_finite() {
+        radius.max(MIN_RADIUS)
+    } else {
+        MIN_RADIUS
+    }
 }
 
 use manifold_foundation::mesh_partition::MAX_PIECES;
@@ -69,10 +74,17 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> Result<(), String> {
     let doc = b.doc;
     let mut lineage: BTreeMap<ItemId, Vec<ItemId>> = BTreeMap::new();
     doc.walk(|item, ancestors| {
-        lineage.insert(item.id.clone(), ancestors.iter().map(|above| above.id.clone()).collect());
+        lineage.insert(
+            item.id.clone(),
+            ancestors.iter().map(|above| above.id.clone()).collect(),
+        );
     });
 
-    for item in doc.items.iter().filter(|item| item.kind() == ItemKind::Modifier) {
+    for item in doc
+        .items
+        .iter()
+        .filter(|item| item.kind() == ItemKind::Modifier)
+    {
         let ItemFields::Modifier(card) = &item.fields else {
             continue;
         };
@@ -93,9 +105,13 @@ pub(crate) fn mesh_modified_items(doc: &SceneDoc) -> BTreeSet<ItemId> {
         .items
         .iter()
         .filter_map(|item| match &item.fields {
-            ItemFields::Modifier(card) if card.on
-                && !acts_on_copies(card.modifier)
-                && !matches!(card.modifier, ModifierType::SceneLoop | ModifierType::SceneMirror) =>
+            ItemFields::Modifier(card)
+                if card.on
+                    && !acts_on_copies(card.modifier)
+                    && !matches!(
+                        card.modifier,
+                        ModifierType::SceneLoop | ModifierType::SceneMirror
+                    ) =>
             {
                 Some(&card.targets)
             }
@@ -128,7 +144,9 @@ pub(crate) fn smoothed_items(doc: &SceneDoc) -> BTreeSet<ItemId> {
         .items
         .iter()
         .filter_map(|item| match &item.fields {
-            ItemFields::Modifier(card) if card.on && modifier_type(card.modifier).smooth_detail => Some(&card.targets),
+            ItemFields::Modifier(card) if card.on && modifier_type(card.modifier).smooth_detail => {
+                Some(&card.targets)
+            }
             _ => None,
         })
         .collect();
@@ -162,7 +180,11 @@ fn emit(
     let entry = modifier_type(card.modifier);
     let lookup = |param: &str| entry.rows.iter().find(|row| row.property == param);
     let host_id = |param: &str| param_id(&item.id, param);
-    let mut frames = if card.on { frames(b, card, lineage) } else { Vec::new() };
+    let mut frames = if card.on {
+        frames(b, card, lineage)
+    } else {
+        Vec::new()
+    };
     let mut pieces = card.pieces.clamp(2, MAX_PIECES);
     if card.modifier == ModifierType::Shatter {
         for frame in &mut frames {
@@ -174,7 +196,11 @@ fn emit(
         }
     }
     let held = [("fragments", pieces as f32)];
-    let held: &[(&str, f32)] = if card.modifier == ModifierType::Shatter { &held } else { &[] };
+    let held: &[(&str, f32)] = if card.modifier == ModifierType::Shatter {
+        &held
+    } else {
+        &[]
+    };
     let (mut graph, specs) = recipe_card(entry.recipe, &lookup, &host_id, held)?;
     super::deformers::tune(&mut graph, card);
     // The card keeps its params with nothing to act on, so its values,
@@ -188,30 +214,52 @@ fn emit(
         let mut plan = if acts_on_copies(card.modifier) {
             copies_plan(b, &frame)
         } else {
-            plan(b, item, &frame, lineage, card.modifier == ModifierType::Shatter)
+            plan(
+                b,
+                item,
+                &frame,
+                lineage,
+                card.modifier == ModifierType::Shatter,
+            )
         };
         // A later swarm's copy of a drawn object bends with it, placed as it is.
         let mut targets = Vec::with_capacity(frame.members.len());
         for drawn in &frame.members {
-            let original = b.node_id_of(drawn.object).ok_or("a modifier target has no node id")?;
+            let original = b
+                .node_id_of(drawn.object)
+                .ok_or("a modifier target has no node id")?;
             targets.push(original.clone());
             for copy in b.alike_of(drawn.object).collect::<Vec<_>>() {
-                let copy = b.node_id_of(copy).ok_or("a modifier target has no node id")?;
+                let copy = b
+                    .node_id_of(copy)
+                    .ok_or("a modifier target has no node id")?;
                 let placed: Vec<TargetPlacement> = plan
                     .placements
                     .iter()
                     .filter(|placement| placement.target == original)
-                    .map(|placement| TargetPlacement { target: copy.clone(), ..placement.clone() })
+                    .map(|placement| TargetPlacement {
+                        target: copy.clone(),
+                        ..placement.clone()
+                    })
                     .collect();
                 plan.placements.extend(placed);
                 targets.push(copy);
             }
         }
         for (chunk, part) in targets.chunks(TARGETS_PER_INSTANCE).enumerate() {
-            let suffix = if chunk == 0 { role.clone() } else { format!("{role}:{chunk}") };
+            let suffix = if chunk == 0 {
+                role.clone()
+            } else {
+                format!("{role}:{chunk}")
+            };
             let id = node(item.id.as_str(), &format!("mod:{suffix}"));
             let objects = part.to_vec();
-            let placements = plan.placements.iter().filter(|placement| objects.contains(&placement.target)).cloned().collect();
+            let placements = plan
+                .placements
+                .iter()
+                .filter(|placement| objects.contains(&placement.target))
+                .cloned()
+                .collect();
             let instance = SceneModifierInstanceDef {
                 id: id.clone(),
                 scene: node(SCENE, "render"),
@@ -220,7 +268,10 @@ fn emit(
                 legacy_math_view_carrier: None,
                 graph: Box::new(graph.clone()),
             };
-            let frame = FramePlan { placements, radius: plan.radius };
+            let frame = FramePlan {
+                placements,
+                radius: plan.radius,
+            };
             b.push_modifier(instance, Vec::new(), bindings(&specs, &id), Some(frame));
         }
     }
@@ -249,8 +300,19 @@ struct CardFrame {
 /// The card's frames, one per Object or Group target in the order they are
 /// listed, or one for the whole scene. A part reached by two targets bends
 /// once, in the first one's frame.
-fn frames(b: &Builder<'_>, card: &ModifierFields, lineage: &BTreeMap<ItemId, Vec<ItemId>>) -> Vec<CardFrame> {
-    let scene = || vec![CardFrame { role: "scene".to_owned(), scope: Scope::Scene, root: None, members: b.drawn.clone() }];
+fn frames(
+    b: &Builder<'_>,
+    card: &ModifierFields,
+    lineage: &BTreeMap<ItemId, Vec<ItemId>>,
+) -> Vec<CardFrame> {
+    let scene = || {
+        vec![CardFrame {
+            role: "scene".to_owned(),
+            scope: Scope::Scene,
+            root: None,
+            members: b.drawn.clone(),
+        }]
+    };
     // A scene-wide card (Math View) always reads the whole scene.
     if card.modifier.scene_wide() {
         return scene();
@@ -265,14 +327,29 @@ fn frames(b: &Builder<'_>, card: &ModifierFields, lineage: &BTreeMap<ItemId, Vec
                         .drawn
                         .iter()
                         .filter(|drawn| {
-                            &drawn.item == target || lineage.get(&drawn.item).is_some_and(|above| above.contains(target))
+                            &drawn.item == target
+                                || lineage
+                                    .get(&drawn.item)
+                                    .is_some_and(|above| above.contains(target))
                         })
                         .filter(|drawn| claimed.insert(drawn.object))
                         .cloned()
                         .collect();
-                    let own = b.doc.find(target).is_some_and(|item| item.kind() == ItemKind::Object);
-                    let scope = if own { Scope::Own } else { Scope::Group(target.clone()) };
-                    CardFrame { role: target.to_string(), scope, root: Some(target.clone()), members }
+                    let own = b
+                        .doc
+                        .find(target)
+                        .is_some_and(|item| item.kind() == ItemKind::Object);
+                    let scope = if own {
+                        Scope::Own
+                    } else {
+                        Scope::Group(target.clone())
+                    };
+                    CardFrame {
+                        role: target.to_string(),
+                        scope,
+                        root: Some(target.clone()),
+                        members,
+                    }
                 })
                 .collect()
         }
@@ -283,7 +360,9 @@ fn frames(b: &Builder<'_>, card: &ModifierFields, lineage: &BTreeMap<ItemId, Vec
 fn body_of(b: &Builder<'_>, drawn: &Drawn) -> Option<u32> {
     // Straight from the pose, or through the transforms it is placed in: the
     // body's pose frame, the groups inside a group body.
-    let (mut from, mut port) = b.input(drawn.object, "parent_transform").or_else(|| b.input(drawn.object, "transform"))?;
+    let (mut from, mut port) = b
+        .input(drawn.object, "parent_transform")
+        .or_else(|| b.input(drawn.object, "transform"))?;
     loop {
         match b.node_type(from) {
             Some(BODY_TYPE_ID) => return (port == "pose").then_some(from),
@@ -297,7 +376,12 @@ fn body_of(b: &Builder<'_>, drawn: &Drawn) -> Option<u32> {
 /// [`shatter_parts`] keeps of the Body around each, which is what the
 /// Targets menu reads, posed by that body and drawing a mesh with a rest
 /// pose (the load pass cuts the pieces).
-fn shatterable(b: &Builder<'_>, shatter: &ItemId, members: &[Drawn], lineage: &BTreeMap<ItemId, Vec<ItemId>>) -> Vec<Drawn> {
+fn shatterable(
+    b: &Builder<'_>,
+    shatter: &ItemId,
+    members: &[Drawn],
+    lineage: &BTreeMap<ItemId, Vec<ItemId>>,
+) -> Vec<Drawn> {
     let doc = b.doc;
     let mut breaks: BTreeMap<&ItemId, Vec<ItemId>> = BTreeMap::new();
     members
@@ -306,7 +390,9 @@ fn shatterable(b: &Builder<'_>, shatter: &ItemId, members: &[Drawn], lineage: &B
             let Some(body) = body_item(doc, &drawn.item, lineage) else {
                 return false;
             };
-            let parts = breaks.entry(&body.id).or_insert_with(|| shatter_parts(doc, shatter, body).unwrap_or_default());
+            let parts = breaks
+                .entry(&body.id)
+                .or_insert_with(|| shatter_parts(doc, shatter, body).unwrap_or_default());
             parts.contains(&drawn.item) && body_of(b, drawn).is_some()
         })
         .cloned()
@@ -315,7 +401,11 @@ fn shatterable(b: &Builder<'_>, shatter: &ItemId, members: &[Drawn], lineage: &B
 
 /// The Body item `item` belongs to: itself or the group around it whose
 /// Physics is Body.
-fn body_item<'d>(doc: &'d SceneDoc, item: &ItemId, lineage: &BTreeMap<ItemId, Vec<ItemId>>) -> Option<&'d Item> {
+fn body_item<'d>(
+    doc: &'d SceneDoc,
+    item: &ItemId,
+    lineage: &BTreeMap<ItemId, Vec<ItemId>>,
+) -> Option<&'d Item> {
     let above = lineage.get(item).map_or(&[][..], Vec::as_slice);
     std::iter::once(item)
         .chain(above.iter().rev())
@@ -338,29 +428,45 @@ fn bodies(b: &Builder<'_>, members: &[Drawn]) -> BTreeMap<u32, usize> {
 /// its own position plus every group's between it and the root, as the
 /// compiler starts them. An Object target is its own frame, so it sits at
 /// its own origin.
-fn placement(b: &mut Builder<'_>, drawn: &Drawn, root: Option<&ItemId>, lineage: &BTreeMap<ItemId, Vec<ItemId>>) -> [f64; 3] {
+fn placement(
+    b: &mut Builder<'_>,
+    drawn: &Drawn,
+    root: Option<&ItemId>,
+    lineage: &BTreeMap<ItemId, Vec<ItemId>>,
+) -> [f64; 3] {
     if root == Some(&drawn.item) {
         return [0.0; 3];
     }
     let ancestors = lineage.get(&drawn.item).map_or(&[][..], Vec::as_slice);
     let below = match root {
         None => ancestors,
-        Some(root) => ancestors.iter().position(|above| above == root).map_or(&[][..], |at| &ancestors[at + 1..]),
+        Some(root) => ancestors
+            .iter()
+            .position(|above| above == root)
+            .map_or(&[][..], |at| &ancestors[at + 1..]),
     };
     let mut at = [0.0; 3];
     for item in below.iter().chain(std::iter::once(&drawn.item)) {
         let transform = b.id(item.as_str(), "transform");
         for (axis, param) in ["pos_x", "pos_y", "pos_z"].into_iter().enumerate() {
-            at[axis] += transform.and_then(|node| b.started(node, param)).map_or(0.0, f64::from);
+            at[axis] += transform
+                .and_then(|node| b.started(node, param))
+                .map_or(0.0, f64::from);
         }
     }
     at
 }
 
 /// The import Group nearest above `item`: the Group whose Source is a file.
-fn import_group<'l>(doc: &SceneDoc, item: &ItemId, lineage: &'l BTreeMap<ItemId, Vec<ItemId>>) -> Option<&'l ItemId> {
+fn import_group<'l>(
+    doc: &SceneDoc,
+    item: &ItemId,
+    lineage: &'l BTreeMap<ItemId, Vec<ItemId>>,
+) -> Option<&'l ItemId> {
     lineage.get(item)?.iter().rev().find(|above| {
-        doc.find(above).is_some_and(|found| matches!(&found.fields, ItemFields::Group(group) if group.source.is_some()))
+        doc.find(above).is_some_and(
+            |found| matches!(&found.fields, ItemFields::Group(group) if group.source.is_some()),
+        )
     })
 }
 
@@ -378,7 +484,10 @@ fn plan(
     shatter: bool,
 ) -> FramePlan {
     let members = &frame.members;
-    let placed: Vec<[f64; 3]> = members.iter().map(|drawn| placement(b, drawn, frame.root.as_ref(), lineage)).collect();
+    let placed: Vec<[f64; 3]> = members
+        .iter()
+        .map(|drawn| placement(b, drawn, frame.root.as_ref(), lineage))
+        .collect();
     let mut lo = [f64::INFINITY; 3];
     let mut hi = [f64::NEG_INFINITY; 3];
     for (drawn, at) in members.iter().zip(&placed) {
@@ -386,15 +495,28 @@ fn plan(
         // import Group's placement frame, so add `at` (which includes the
         // persistent File Placement `-center` offset) to `box_in_import`.
         let (part_lo, part_hi): ([f64; 3], [f64; 3]) = match drawn.rest.placed {
-            Some(box_in_import) if frame.root.is_none() || frame.root.as_ref() == import_group(b.doc, &drawn.item, lineage) => {
+            Some(box_in_import)
+                if frame.root.is_none()
+                    || frame.root.as_ref() == import_group(b.doc, &drawn.item, lineage) =>
+            {
                 let placement_shift = import_group(b.doc, &drawn.item, lineage)
-                    .and_then(|imp| b.id(manifold_core::scene_doc::import_placement_id(imp).as_str(), "transform"))
+                    .and_then(|imp| {
+                        b.id(
+                            manifold_core::scene_doc::import_placement_id(imp).as_str(),
+                            "transform",
+                        )
+                    })
                     .map_or([0.0; 3], |node| {
-                        ["pos_x", "pos_y", "pos_z"].map(|param| b.started(node, param).map_or(0.0, f64::from))
+                        ["pos_x", "pos_y", "pos_z"]
+                            .map(|param| b.started(node, param).map_or(0.0, f64::from))
                     });
                 (
-                    std::array::from_fn(|axis| placement_shift[axis] + f64::from(box_in_import.0[axis])),
-                    std::array::from_fn(|axis| placement_shift[axis] + f64::from(box_in_import.1[axis])),
+                    std::array::from_fn(|axis| {
+                        placement_shift[axis] + f64::from(box_in_import.0[axis])
+                    }),
+                    std::array::from_fn(|axis| {
+                        placement_shift[axis] + f64::from(box_in_import.1[axis])
+                    }),
                 )
             }
             _ => (
@@ -437,7 +559,13 @@ fn plan(
         // axes and units as one body with the rest.
         if let Some(centre) = centre_node.filter(|_| drawn.rest.own_space) {
             let frame_transform = b.node_id_of(centre);
-            placements.push(TargetPlacement { target, offset: [0.0; 3], live: None, radius: own_radius(drawn), frame_transform });
+            placements.push(TargetPlacement {
+                target,
+                offset: [0.0; 3],
+                live: None,
+                radius: own_radius(drawn),
+                frame_transform,
+            });
             continue;
         }
         let live = centre_node.and_then(|centre| place(b, card, &frame.role, drawn, centre));
@@ -445,12 +573,20 @@ fn plan(
             let source = b.input(drawn.object, "vertices").map(|(source, _)| source);
             std::array::from_fn(|axis| {
                 let param = ["translate_x", "translate_y", "translate_z"][axis];
-                source.and_then(|source| b.started(source, param)).map_or(0.0, f64::from)
+                source
+                    .and_then(|source| b.started(source, param))
+                    .map_or(0.0, f64::from)
             })
         } else {
             std::array::from_fn(|axis| at[axis] - centre[axis])
         };
-        placements.push(TargetPlacement { target, offset, live, radius: own_radius(drawn), frame_transform: None });
+        placements.push(TargetPlacement {
+            target,
+            offset,
+            live,
+            radius: own_radius(drawn),
+            frame_transform: None,
+        });
     }
     FramePlan { placements, radius }
 }
@@ -460,33 +596,68 @@ fn plan(
 /// target needs no offset. Copy Blend reads the body's own layout rows
 /// through the copies context instead.
 fn copies_plan(b: &mut Builder<'_>, frame: &CardFrame) -> FramePlan {
-    let placements = frame.members.iter()
+    let placements = frame
+        .members
+        .iter()
         .filter_map(|drawn| {
-            Some(TargetPlacement { target: b.node_id_of(drawn.object)?, offset: [0.0; 3], live: None, radius: own_radius(drawn), frame_transform: None })
+            Some(TargetPlacement {
+                target: b.node_id_of(drawn.object)?,
+                offset: [0.0; 3],
+                live: None,
+                radius: own_radius(drawn),
+                frame_transform: None,
+            })
         })
         .collect();
-    FramePlan { placements, radius: MIN_RADIUS }
+    FramePlan {
+        placements,
+        radius: MIN_RADIUS,
+    }
 }
 
 /// The transform a Group's parts are placed in: its frame, or `None` at a
 /// copies root, whose parts each sit inside one copy.
-fn group_frame(b: &Builder<'_>, group: &ItemId, lineage: &BTreeMap<ItemId, Vec<ItemId>>) -> Option<u32> {
-    let copied = |id: &ItemId| b.swarm_draws.contains_key(id) || b.doc.find(id).is_some_and(|item| item.fields.copies());
+fn group_frame(
+    b: &Builder<'_>,
+    group: &ItemId,
+    lineage: &BTreeMap<ItemId, Vec<ItemId>>,
+) -> Option<u32> {
+    let copied = |id: &ItemId| {
+        b.swarm_draws.contains_key(id) || b.doc.find(id).is_some_and(|item| item.fields.copies())
+    };
     let above = lineage.get(group).map_or(&[][..], Vec::as_slice);
     if copied(group) && !above.iter().any(copied) {
         return None;
     }
     // Inside a copy a group records no world frame: its own transform is
     // its place in the copy.
-    b.group_frames.get(group).copied().or_else(|| b.id(group.as_str(), "transform"))
+    b.group_frames
+        .get(group)
+        .copied()
+        .or_else(|| b.id(group.as_str(), "transform"))
 }
 
 /// The frame's rest centre as a transform, inside `held_in` (the world when
 /// `None`): the place every part's live offset is measured from.
-fn frame_centre(b: &mut Builder<'_>, card: &Item, role: &str, centre: [f64; 3], held_in: Option<u32>) -> u32 {
-    let node = b.add_named(node(card.id.as_str(), &format!("centre:{role}")), "node.transform_3d");
+fn frame_centre(
+    b: &mut Builder<'_>,
+    card: &Item,
+    role: &str,
+    centre: [f64; 3],
+    held_in: Option<u32>,
+) -> u32 {
+    let node = b.add_named(
+        node(card.id.as_str(), &format!("centre:{role}")),
+        "node.transform_3d",
+    );
     for (axis, param) in ["pos_x", "pos_y", "pos_z"].into_iter().enumerate() {
-        b.set(node, param, SerializedParamValue::Float { value: centre[axis] as f32 });
+        b.set(
+            node,
+            param,
+            SerializedParamValue::Float {
+                value: centre[axis] as f32,
+            },
+        );
     }
     if let Some(frame) = held_in {
         b.wire(frame, "transform", node, "parent");
@@ -497,11 +668,24 @@ fn frame_centre(b: &mut Builder<'_>, card: &Item, role: &str, centre: [f64; 3], 
 /// The node that measures where `drawn` sits from `centre`, live: its
 /// transform inside the parent it draws in, the same chain the renderer
 /// composes, so it follows rows, modulation and bodies as they move.
-fn place(b: &mut Builder<'_>, card: &Item, role: &str, drawn: &Drawn, centre: u32) -> Option<NodeId> {
-    let node = b.add_named(node(card.id.as_str(), &format!("place:{role}:{}", drawn.item)), "node.transform_components");
+fn place(
+    b: &mut Builder<'_>,
+    card: &Item,
+    role: &str,
+    drawn: &Drawn,
+    centre: u32,
+) -> Option<NodeId> {
+    let node = b.add_named(
+        node(card.id.as_str(), &format!("place:{role}:{}", drawn.item)),
+        "node.transform_components",
+    );
     for port in ["transform", "parent_transform"] {
         if let Some((from, from_port)) = b.input(drawn.object, port) {
-            let to = if port == "transform" { "transform" } else { "parent" };
+            let to = if port == "transform" {
+                "transform"
+            } else {
+                "parent"
+            };
             b.wire(from, &from_port, node, to);
         }
     }

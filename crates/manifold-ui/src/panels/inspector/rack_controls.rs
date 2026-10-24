@@ -62,7 +62,11 @@ pub(super) fn rack_address(
     layer_id: &Option<LayerId>,
     group_id: &EffectGroupId,
 ) -> ValueRef {
-    ValueRef::RackWetDry { tab, layer_id: layer_id.clone(), group_id: group_id.clone() }
+    ValueRef::RackWetDry {
+        tab,
+        layer_id: layer_id.clone(),
+        group_id: group_id.clone(),
+    }
 }
 
 /// The second header row: bypass switch, then the wet/dry slider.
@@ -77,14 +81,22 @@ pub(super) fn rack_controls_row(group: &RackGroupConfig, address: &ValueRef) -> 
         .fill_w()
         .h(Sizing::Fixed(RACK_CONTROLS_H))
         .cross_align(Align::Center)
-        .pad(Pad { l: 4.0, t: 0.0, r: 4.0, b: 4.0 })
+        .pad(Pad {
+            l: 4.0,
+            t: 0.0,
+            r: 4.0,
+            b: 4.0,
+        })
         .child(
-            components::toggle(if group.enabled { "Bypass" } else { "Bypassed" }, !group.enabled)
-                .w(Sizing::Fixed(BYPASS_W))
-                .fill_h()
-                .name(BYPASS_NAME)
-                .key(super::render::rack_group_key(&group.id, "bypass"))
-                .inert(),
+            components::toggle(
+                if group.enabled { "Bypass" } else { "Bypassed" },
+                !group.enabled,
+            )
+            .w(Sizing::Fixed(BYPASS_W))
+            .fill_h()
+            .name(BYPASS_NAME)
+            .key(super::render::rack_group_key(&group.id, "bypass"))
+            .inert(),
         )
         .child(
             View::slider_row(SliderSpec {
@@ -112,10 +124,17 @@ impl InspectorCompositePanel {
     /// A click on the bypass switch flips the rack; a click on the slider
     /// track is the end of a press the drag already handled.
     pub(super) fn rack_click(&self, node_id: NodeId) -> Option<Vec<PanelAction>> {
-        if self.group_nodes.iter().any(|n| n.wet_dry.is_some_and(|ids| ids.track == node_id)) {
+        if self
+            .group_nodes
+            .iter()
+            .any(|n| n.wet_dry.is_some_and(|ids| ids.track == node_id))
+        {
             return Some(Vec::new());
         }
-        let nodes = self.group_nodes.iter().find(|n| n.bypass == Some(node_id))?;
+        let nodes = self
+            .group_nodes
+            .iter()
+            .find(|n| n.bypass == Some(node_id))?;
         let group = self.rack_groups[Self::scope_idx(self.active_tab)]
             .iter()
             .find(|g| g.id == nodes.group_id)?;
@@ -143,7 +162,11 @@ impl InspectorCompositePanel {
             PanelAction::Scrub(address.clone(), ScrubPhase::Begin),
             PanelAction::Scrub(address.clone(), ScrubPhase::Move(ScrubValue::Scalar(value))),
         ];
-        self.rack_drag = Some(RackDrag { address, group_id, slider });
+        self.rack_drag = Some(RackDrag {
+            address,
+            group_id,
+            slider,
+        });
         self.pressed_target = Some(PressedTarget::RackWetDry);
         Some(actions)
     }
@@ -178,7 +201,12 @@ impl InspectorCompositePanel {
         let Some(drag) = self.rack_drag.as_mut() else {
             return;
         };
-        match self.group_nodes.iter().find(|n| n.group_id == drag.group_id).and_then(|n| n.wet_dry) {
+        match self
+            .group_nodes
+            .iter()
+            .find(|n| n.group_id == drag.group_id)
+            .and_then(|n| n.wet_dry)
+        {
             Some(ids) => drag.slider.set_ids(ids),
             None => drag.slider.clear(),
         }
@@ -219,11 +247,16 @@ mod tests {
     #[test]
     fn bypass_click_asks_for_the_flipped_state() {
         let (mut panel, tree) = grouped_fixture(false);
-        let bypass = panel.group_nodes[0].bypass.expect("header builds the switch");
+        let bypass = panel.group_nodes[0]
+            .bypass
+            .expect("header builds the switch");
         let actions = panel.route_click(bypass, Modifiers::NONE, &tree);
         assert!(matches!(
             &actions[..],
-            [PanelAction::Params(ParamsAction::EffectGroupBypass { enabled: false, .. })]
+            [PanelAction::Params(ParamsAction::EffectGroupBypass {
+                enabled: false,
+                ..
+            })]
         ));
     }
 
@@ -236,18 +269,26 @@ mod tests {
         let mut tree = UITree::new();
         panel.build(&mut tree, &super::super::tests::inspector_layout());
         let bypass = panel.group_nodes[0].bypass.unwrap();
-        assert_eq!(tree.get_node(bypass).unwrap().text.as_deref(), Some("Bypassed"));
+        assert_eq!(
+            tree.get_node(bypass).unwrap().text.as_deref(),
+            Some("Bypassed")
+        );
         let actions = panel.route_click(bypass, Modifiers::NONE, &tree);
         assert!(matches!(
             &actions[..],
-            [PanelAction::Params(ParamsAction::EffectGroupBypass { enabled: true, .. })]
+            [PanelAction::Params(ParamsAction::EffectGroupBypass {
+                enabled: true,
+                ..
+            })]
         ));
     }
 
     #[test]
     fn wet_dry_drag_is_one_begin_moves_one_commit() {
         let (mut panel, mut tree) = grouped_fixture(false);
-        let ids = panel.group_nodes[0].wet_dry.expect("header builds the slider");
+        let ids = panel.group_nodes[0]
+            .wet_dry
+            .expect("header builds the slider");
         let span = ids.track_span;
         let y = tree.get_bounds(ids.track).y + 2.0;
         let down = panel.route_pointer_down(
@@ -269,8 +310,14 @@ mod tests {
             [PanelAction::Scrub(_, ScrubPhase::Move(ScrubValue::Scalar(v)))] if *v == 0.0
         ));
         let end = panel.handle_drag_end(&mut tree);
-        assert!(matches!(&end[..], [PanelAction::Scrub(_, ScrubPhase::Commit)]));
-        assert!(panel.handle_drag_end(&mut tree).is_empty(), "one commit per drag");
+        assert!(matches!(
+            &end[..],
+            [PanelAction::Scrub(_, ScrubPhase::Commit)]
+        ));
+        assert!(
+            panel.handle_drag_end(&mut tree).is_empty(),
+            "one commit per drag"
+        );
     }
 
     #[test]
@@ -283,6 +330,10 @@ mod tests {
         let mut rebuilt = UITree::new();
         panel.build(&mut rebuilt, &super::super::tests::inspector_layout());
         let moved = panel.handle_drag(Vec2::new(x + 40.0, y), &mut rebuilt, false);
-        assert_eq!(moved.len(), 1, "the drag keeps tracking after the inspector rebuilds");
+        assert_eq!(
+            moved.len(),
+            1,
+            "the drag keeps tracking after the inspector rebuilds"
+        );
     }
 }

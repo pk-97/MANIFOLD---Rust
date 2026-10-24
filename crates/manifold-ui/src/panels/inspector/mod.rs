@@ -1,21 +1,21 @@
-use crate::{ParamsAction, RootAction, TransportAction};
+use super::audio_trigger_section::AudioTriggerSection;
 use super::clip_chrome::ClipChromePanel;
 use super::layer_chrome::LayerChromePanel;
-use super::audio_trigger_section::AudioTriggerSection;
 use super::macros_panel::MacrosPanel;
 use super::master_chrome::MasterChromePanel;
 use super::param_card::{CardContext, ParamCardPanel, ParamCardStringInfo};
-use crate::param_surface::ParamSurface;
 use super::{AudioDrawerClick, GraphParamTarget, InspectorTab, Panel, PanelAction};
 use crate::chrome::{self, Pad, View};
 use crate::color;
 use crate::input::{Modifiers, UIEvent};
 use crate::layout::ScreenLayout;
 use crate::node::*;
+use crate::param_surface::ParamSurface;
 use crate::scroll_container::{SCROLLBAR_W, ScrollContainer, ScrollbarStyle};
 use crate::tree::{UITree, ZTier};
-use manifold_foundation::{EffectGroupId, EffectId};
+use crate::{ParamsAction, RootAction, TransportAction};
 use manifold_foundation::LayerId;
+use manifold_foundation::{EffectGroupId, EffectId};
 use std::collections::HashSet;
 use std::time::Instant;
 
@@ -81,7 +81,6 @@ const KEY_ADD_EFFECT_BTN: u64 = 95_001;
 /// be one instance per visible group; callers can use the structural query's
 /// `nth` selector when more than one group is present.
 const GROUP_ADD_MODIFIER_NAME: &str = "inspector.effect_group.add_modifier";
-
 
 /// A section-card background — the outer 1px border panel + the inset inner fill,
 /// as a typed Chrome view. Materialised into the section's rect each frame;
@@ -372,10 +371,17 @@ impl InspectorCompositePanel {
     }
 
     pub fn audio_drawer_intent(
-        &mut self, tree: &UITree, node: NodeId, target: GraphParamTarget,
-        param_id: &manifold_foundation::ParamId, click: AudioDrawerClick,
+        &mut self,
+        tree: &UITree,
+        node: NodeId,
+        target: GraphParamTarget,
+        param_id: &manifold_foundation::ParamId,
+        click: AudioDrawerClick,
     ) -> Vec<PanelAction> {
-        for card in self.effects.iter_mut().flatten()
+        for card in self
+            .effects
+            .iter_mut()
+            .flatten()
             .chain(self.gen_params.iter_mut())
         {
             if card.owns_node(tree, node) {
@@ -385,7 +391,12 @@ impl InspectorCompositePanel {
         Vec::new()
     }
 
-    pub fn clip_trigger_drawer_intent(&mut self, layer: &LayerId, row: usize, click: &crate::panels::ClipTriggerDrawerClick) -> Vec<PanelAction> {
+    pub fn clip_trigger_drawer_intent(
+        &mut self,
+        layer: &LayerId,
+        row: usize,
+        click: &crate::panels::ClipTriggerDrawerClick,
+    ) -> Vec<PanelAction> {
         self.audio_trigger_section.drawer_action(layer, row, click)
     }
 
@@ -399,7 +410,10 @@ impl InspectorCompositePanel {
     fn scope_idx(tab: InspectorTab) -> usize {
         match tab {
             InspectorTab::Master => Self::SCOPE_MASTER,
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip | InspectorTab::Scene => Self::SCOPE_LAYER,
+            InspectorTab::Layer
+            | InspectorTab::Group
+            | InspectorTab::Clip
+            | InspectorTab::Scene => Self::SCOPE_LAYER,
         }
     }
 
@@ -540,7 +554,10 @@ impl InspectorCompositePanel {
         let mut moved = false;
         let reflows = &mut self.reflow_scratch;
         reflows.clear();
-        for card in self.effects[Self::SCOPE_MASTER].iter_mut().chain(self.master_dying.iter_mut()) {
+        for card in self.effects[Self::SCOPE_MASTER]
+            .iter_mut()
+            .chain(self.master_dying.iter_mut())
+        {
             card.take_motion(tree, reflows);
         }
         if !reflows.is_empty() {
@@ -589,7 +606,6 @@ impl InspectorCompositePanel {
         self.active_tab == InspectorTab::Scene
     }
 
-
     /// Point the inspector at a single scope. `Group` shares the layer section.
     fn set_active_tab(&mut self, tab: InspectorTab) {
         // Single source of truth — visibility is derived on read, not cached.
@@ -617,16 +633,36 @@ impl InspectorCompositePanel {
     /// state did.
     pub fn toggle_fold(&mut self, fold: InspectorFold) {
         let changed = match fold {
-            InspectorFold::Macros => { self.macros_panel.toggle_collapsed(); true }
-            InspectorFold::MasterChrome => { self.master_chrome.toggle_collapsed(); true }
-            InspectorFold::LayerChrome => { self.layer_chrome.toggle_collapsed(); true }
-            InspectorFold::ClipChrome => { self.clip_chrome.toggle_collapsed(); true }
+            InspectorFold::Macros => {
+                self.macros_panel.toggle_collapsed();
+                true
+            }
+            InspectorFold::MasterChrome => {
+                self.master_chrome.toggle_collapsed();
+                true
+            }
+            InspectorFold::LayerChrome => {
+                self.layer_chrome.toggle_collapsed();
+                true
+            }
+            InspectorFold::ClipChrome => {
+                self.clip_chrome.toggle_collapsed();
+                true
+            }
             InspectorFold::Generator => match self.gen_params.as_mut() {
-                Some(card) => { card.set_collapsed(!card.is_collapsed()); true }
+                Some(card) => {
+                    card.set_collapsed(!card.is_collapsed());
+                    true
+                }
                 None => false,
             },
-            InspectorFold::AudioTriggers => { self.audio_trigger_section.toggle_collapsed(); true }
-            InspectorFold::AudioTriggerRow(index) => self.audio_trigger_section.toggle_row_expanded(index),
+            InspectorFold::AudioTriggers => {
+                self.audio_trigger_section.toggle_collapsed();
+                true
+            }
+            InspectorFold::AudioTriggerRow(index) => {
+                self.audio_trigger_section.toggle_row_expanded(index)
+            }
         };
         if changed {
             self.view_version += 1;
@@ -638,9 +674,15 @@ impl InspectorCompositePanel {
     /// its state. The dispatch of that action calls this, whichever surface
     /// raised it.
     pub fn note_card_view_actions(&mut self, actions: &[PanelAction]) {
-        if actions.iter().any(|a| matches!(a,
-            PanelAction::Params(crate::ParamsAction::SectionFoldToggled | crate::ParamsAction::ModConfigTabChanged)))
-        {
+        if actions.iter().any(|a| {
+            matches!(
+                a,
+                PanelAction::Params(
+                    crate::ParamsAction::SectionFoldToggled
+                        | crate::ParamsAction::ModConfigTabChanged
+                )
+            )
+        }) {
             self.view_version += 1;
         }
     }
@@ -655,8 +697,6 @@ impl InspectorCompositePanel {
             InspectorTab::Scene => "Scene",
         }
     }
-
-
 
     /// section 6b — push the global compact flag onto every card (master + layer effect
     /// cards and the generator-param card) so their drawers hide/show together.
@@ -686,22 +726,21 @@ impl InspectorCompositePanel {
     /// collapse-all control collapses when this holds, expands otherwise.
     fn any_active_card_expanded(&self) -> bool {
         if self.master_visible()
-            && self.effects[Self::SCOPE_MASTER].iter().any(|c| !c.is_collapsed())
+            && self.effects[Self::SCOPE_MASTER]
+                .iter()
+                .any(|c| !c.is_collapsed())
         {
             return true;
         }
         if (self.layer_visible() || self.clip_visible())
-            && self.effects[Self::SCOPE_LAYER].iter().any(|c| !c.is_collapsed())
+            && self.effects[Self::SCOPE_LAYER]
+                .iter()
+                .any(|c| !c.is_collapsed())
         {
             return true;
         }
         false
     }
-
-
-
-
-
 
     /// Screen-space rect of the mapping-drawer chevron for `param_id`,
     /// searched across every card this panel owns (master/layer effects,
@@ -714,7 +753,6 @@ impl InspectorCompositePanel {
             .chain(self.gen_params.iter())
             .find_map(|card| card.mapping_chevron_rect(tree, param_id))
     }
-
 
     // ── Accessors ─────────────────────────────────────────────────
 
@@ -818,7 +856,9 @@ impl InspectorCompositePanel {
     /// (twin of [`Self::effect_has_graph_mod`] for the single generator
     /// card).
     pub fn gen_has_graph_mod(&self) -> bool {
-        self.gen_params.as_ref().is_some_and(|gp| gp.has_graph_mod())
+        self.gen_params
+            .as_ref()
+            .is_some_and(|gp| gp.has_graph_mod())
     }
 
     pub fn master_effect_mut(&mut self, idx: usize) -> Option<&mut ParamCardPanel> {
@@ -832,7 +872,11 @@ impl InspectorCompositePanel {
     /// accessor a card-state dispatch arm needs when it
     /// wants to reach into the specific card's own UI-only state rather than
     /// just mutate the model.
-    pub fn effect_card_mut(&mut self, tab: InspectorTab, idx: usize) -> Option<&mut ParamCardPanel> {
+    pub fn effect_card_mut(
+        &mut self,
+        tab: InspectorTab,
+        idx: usize,
+    ) -> Option<&mut ParamCardPanel> {
         self.cards_for_tab_mut(tab).get_mut(idx)
     }
 
@@ -928,7 +972,8 @@ impl InspectorCompositePanel {
         if let Some(gp) = &self.gen_params {
             gp.update_fire_meters(tree, fire_level, dt);
         }
-        self.audio_trigger_section.update_fire_meters(tree, fire_level, dt);
+        self.audio_trigger_section
+            .update_fire_meters(tree, fire_level, dt);
     }
 
     /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 5):
@@ -982,16 +1027,11 @@ impl InspectorCompositePanel {
 
     // ── Scrolling ─────────────────────────────────────────────────
 
-
-
-
     /// Drain the "scrolled in place this frame" signal. The app calls this once
     /// per frame and invalidates the inspector's cache slot when it returns true.
     pub fn take_scrolled_in_place(&mut self) -> bool {
         std::mem::take(&mut self.scrolled_in_place)
     }
-
-
 
     /// Height of the Clip section card (its own card below the layer section),
     /// or 0 when no clip is selected. BPM / warp / loop chrome lives here.
@@ -1002,7 +1042,6 @@ impl InspectorCompositePanel {
             0.0
         }
     }
-
 
     fn update_scroll_bounds(&mut self) {
         self.master_scroll
@@ -1041,24 +1080,25 @@ impl InspectorCompositePanel {
 
     // ── Effect selection (Unity EffectSelectionManager) ─────────
 
-
     fn last_clicked_for_tab(&self, tab: InspectorTab) -> Option<&EffectId> {
         match tab {
             InspectorTab::Master => self.last_clicked_master.as_ref(),
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip | InspectorTab::Scene => self.last_clicked_layer.as_ref(),
+            InspectorTab::Layer
+            | InspectorTab::Group
+            | InspectorTab::Clip
+            | InspectorTab::Scene => self.last_clicked_layer.as_ref(),
         }
     }
 
     fn set_last_clicked_for_tab(&mut self, tab: InspectorTab, id: Option<EffectId>) {
         match tab {
             InspectorTab::Master => self.last_clicked_master = id,
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip | InspectorTab::Scene => self.last_clicked_layer = id,
+            InspectorTab::Layer
+            | InspectorTab::Group
+            | InspectorTab::Clip
+            | InspectorTab::Scene => self.last_clicked_layer = id,
         }
     }
-
-
-
-
 
     /// Unity EffectSelectionManager.RangeSelectCards (lines 121-139)
     /// Shift+Click: range select from last clicked anchor to this index.
@@ -1119,12 +1159,22 @@ impl InspectorCompositePanel {
     /// This is the SINGLE place that syncs is_selected + tree style together.
     pub fn apply_selection_visuals(&mut self, tree: &mut UITree) {
         for nodes in &self.group_nodes {
-            let selected = self.rack_groups[Self::scope_idx(self.active_tab)].iter()
+            let selected = self.rack_groups[Self::scope_idx(self.active_tab)]
+                .iter()
                 .find(|group| group.id == nodes.group_id)
-                .is_some_and(|group| group.member_ids.iter().all(|id| self.selection_for_tab(self.active_tab).0.contains(id)));
+                .is_some_and(|group| {
+                    group
+                        .member_ids
+                        .iter()
+                        .all(|id| self.selection_for_tab(self.active_tab).0.contains(id))
+                });
             if let Some(node) = tree.get_node(nodes.frame) {
                 let mut style = node.style;
-                style.border_color = if selected { color::ACCENT_BLUE_C32 } else { color::DEFAULT_GROUP_ACCENT };
+                style.border_color = if selected {
+                    color::ACCENT_BLUE_C32
+                } else {
+                    color::DEFAULT_GROUP_ACCENT
+                };
                 tree.set_style(nodes.frame, style);
             }
         }
@@ -1143,7 +1193,6 @@ impl InspectorCompositePanel {
         }
         self.dim_dragged_cards(tree);
     }
-
 
     /// Whether any effects are selected (for keyboard shortcut routing).
     pub fn has_effect_selection(&self) -> bool {
@@ -1165,11 +1214,7 @@ impl InspectorCompositePanel {
         indices
     }
 
-
     // ── Node range ownership ─────────────────────────────────────
-
-
-
 
     // ── Drag event routing (needs &mut UITree) ───────────────────
 
@@ -1178,17 +1223,7 @@ impl InspectorCompositePanel {
         self.pressed_target.is_some() || self.dragging_scrollbar || self.card_drag_active
     }
 
-
-
-
-
     // ── Effect card drag-reorder (Unity EffectsListBitmapPanel) ──
-
-
-
-
-
-
 
     // ── Internal event routing ───────────────────────────────────
 
@@ -1214,9 +1249,6 @@ impl InspectorCompositePanel {
             _ => {}
         }
     }
-
-
-
 }
 
 impl Panel for InspectorCompositePanel {
@@ -1359,14 +1391,21 @@ impl Panel for InspectorCompositePanel {
         self.rack_register_intents(intents);
         self.audio_trigger_section.register_intents(intents);
         for nodes in &self.group_nodes {
-            intents.on(nodes.header, crate::intent::Gesture::RightClick,
-                PanelAction::Params(ParamsAction::EffectGroupRightClicked(nodes.group_id.clone())));
+            intents.on(
+                nodes.header,
+                crate::intent::Gesture::RightClick,
+                PanelAction::Params(ParamsAction::EffectGroupRightClicked(
+                    nodes.group_id.clone(),
+                )),
+            );
         }
         for (node_id, group_id) in &self.group_add_modifier_btns {
             intents.on(
                 *node_id,
                 crate::intent::Gesture::Click,
-                PanelAction::Params(ParamsAction::EffectGroupAddModifierClicked(group_id.clone())),
+                PanelAction::Params(ParamsAction::EffectGroupAddModifierClicked(
+                    group_id.clone(),
+                )),
             );
         }
         if self.master_chrome.node_count() > 0 {
@@ -1385,7 +1424,6 @@ impl Panel for InspectorCompositePanel {
             card.register_intents(intents);
         }
     }
-
 
     fn first_node(&self) -> usize {
         self.cache_first_node
@@ -1424,16 +1462,24 @@ mod tests {
         panel.set_active_tab(tab);
         panel.set_mods_compact(panel.mods_compact);
         assert_eq!(panel.view_version(), v0, "re-setting a value is no change");
-        panel.set_active_tab(if tab == InspectorTab::Master { InspectorTab::Layer } else { InspectorTab::Master });
+        panel.set_active_tab(if tab == InspectorTab::Master {
+            InspectorTab::Layer
+        } else {
+            InspectorTab::Master
+        });
         let v1 = panel.view_version();
         assert!(v1 > v0);
         panel.set_mods_compact(!panel.mods_compact);
         assert!(panel.view_version() > v1);
         let v2 = panel.view_version();
-        panel.note_card_view_actions(&[PanelAction::Params(crate::ParamsAction::SectionFoldToggled)]);
+        panel.note_card_view_actions(&[PanelAction::Params(
+            crate::ParamsAction::SectionFoldToggled,
+        )]);
         assert!(panel.view_version() > v2, "a card fold is a view change");
         let v3 = panel.view_version();
-        panel.note_card_view_actions(&[PanelAction::Params(crate::ParamsAction::MacrosCollapseToggle)]);
+        panel.note_card_view_actions(&[PanelAction::Params(
+            crate::ParamsAction::MacrosCollapseToggle,
+        )]);
         assert_eq!(panel.view_version(), v3);
     }
 
@@ -1493,38 +1539,61 @@ mod tests {
         let mut panel = InspectorCompositePanel::new();
         panel.configure_layer_effects(&[mk_config(ParamCardKind::Effect, "Layer card", 1)], None);
         panel.configure_master_effects(&[mk_config(ParamCardKind::Effect, "Master card", 1)]);
-        panel.configure_tabs(&[InspectorTab::Layer, InspectorTab::Master], InspectorTab::Layer);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
         assert!(panel.select_all_effects());
-        panel.configure_tabs(&[InspectorTab::Layer, InspectorTab::Master], InspectorTab::Master);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Master,
+        );
         assert!(panel.select_all_effects());
         assert_eq!(panel.last_effect_tab(), InspectorTab::Master);
-        assert_eq!(panel.selected_effect_ids(), vec![panel.effects[InspectorCompositePanel::SCOPE_MASTER][0].effect_id().clone()]);
+        assert_eq!(
+            panel.selected_effect_ids(),
+            vec![
+                panel.effects[InspectorCompositePanel::SCOPE_MASTER][0]
+                    .effect_id()
+                    .clone()
+            ]
+        );
     }
 
     #[test]
     fn inserted_card_selection_scrolls_into_view_once() {
         let mut panel = InspectorCompositePanel::new();
-        let configs: Vec<_> = (0..12).map(|i| mk_config(ParamCardKind::Effect, &format!("Card {i}"), 6)).collect();
+        let configs: Vec<_> = (0..12)
+            .map(|i| mk_config(ParamCardKind::Effect, &format!("Card {i}"), 6))
+            .collect();
         panel.configure_master_effects(&configs);
         panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
         let mut tree = UITree::new();
         panel.build_in_rect(&mut tree, Rect::new(0.0, 0.0, 400.0, 400.0));
         panel.select_effect_ids(InspectorTab::Master, &[configs[11].effect_id.clone()]);
         panel.reveal_pending_selection(&mut tree);
-        let bounds = panel.effects[InspectorCompositePanel::SCOPE_MASTER][11].live_bounds(&tree).unwrap();
+        let bounds = panel.effects[InspectorCompositePanel::SCOPE_MASTER][11]
+            .live_bounds(&tree)
+            .unwrap();
         let viewport = panel.master_scroll.viewport();
         assert!(bounds.y >= viewport.y - 0.1);
         assert!(bounds.y < viewport.y + viewport.height);
         assert!(panel.master_scroll.scroll_offset() > 0.0);
         panel.master_scroll.set_scroll_offset(0.0);
         panel.reveal_pending_selection(&mut tree);
-        assert_eq!(panel.master_scroll.scroll_offset(), 0.0, "a receipt does not fight later user scrolling");
+        assert_eq!(
+            panel.master_scroll.scroll_offset(),
+            0.0,
+            "a receipt does not fight later user scrolling"
+        );
     }
 
     #[test]
     fn select_effect_ids_moves_the_view_version_only_on_change() {
         let mut panel = InspectorCompositePanel::new();
-        let configs: Vec<_> = (0..3).map(|i| mk_config(ParamCardKind::Effect, &format!("Card {i}"), 2)).collect();
+        let configs: Vec<_> = (0..3)
+            .map(|i| mk_config(ParamCardKind::Effect, &format!("Card {i}"), 2))
+            .collect();
         panel.configure_master_effects(&configs);
         panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
         let ids = [configs[1].effect_id.clone()];
@@ -1533,11 +1602,18 @@ mod tests {
         let v1 = panel.view_version();
         assert!(v1 > v0, "a new selection and reveal show at the next build");
         panel.select_effect_ids(InspectorTab::Master, &ids);
-        assert_eq!(panel.view_version(), v1, "the same selection with its reveal still pending");
+        assert_eq!(
+            panel.view_version(),
+            v1,
+            "the same selection with its reveal still pending"
+        );
         let mut tree = UITree::new();
         panel.build_in_rect(&mut tree, Rect::new(0.0, 0.0, 400.0, 400.0));
         panel.select_effect_ids(InspectorTab::Master, &ids);
-        assert!(panel.view_version() > v1, "a consumed reveal queued again is a change");
+        assert!(
+            panel.view_version() > v1,
+            "a consumed reveal queued again is a change"
+        );
     }
 
     #[test]
@@ -1570,7 +1646,11 @@ mod tests {
 
         // Clip active → only the clip section.
         panel.configure_tabs(
-            &[InspectorTab::Clip, InspectorTab::Layer, InspectorTab::Master],
+            &[
+                InspectorTab::Clip,
+                InspectorTab::Layer,
+                InspectorTab::Master,
+            ],
             InspectorTab::Clip,
         );
         assert!(panel.clip_visible());
@@ -1604,7 +1684,12 @@ mod tests {
                 scene: None,
                 limit: Default::default(),
             },
-            value: RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
+            value: RowValue {
+                base: 0.5,
+                effective: 0.5,
+                exposed: true,
+                driven: false,
+            },
             audio: crate::panels::param_slider_shared::AudioRowState::default(),
             clip_trigger: None,
             modulation: RowMod::default(),
@@ -1620,7 +1705,11 @@ mod tests {
         }
     }
 
-    fn mk_config(kind: super::super::param_card::ParamCardKind, name: &str, n: usize) -> ParamSurface {
+    fn mk_config(
+        kind: super::super::param_card::ParamCardKind,
+        name: &str,
+        n: usize,
+    ) -> ParamSurface {
         // Unique id per row (D4, `docs/WIDGET_TREE_DESIGN.md`): a real
         // manifest never repeats a `ParamId` within one card, and P2 keys
         // every row widget off it — the old `["a","b","c","d"][i % 4]` cycle
@@ -1655,33 +1744,51 @@ mod tests {
 
     #[test]
     fn drawer_audio_click_uses_clicked_card_when_indices_match() {
-        use crate::panels::param_slider_shared::AudioRowState;
+        use crate::intent::{Gesture, IntentRegistry};
         use crate::panels::param_card::ParamCardKind;
-        use crate::intent::{IntentRegistry, Gesture};
+        use crate::panels::param_slider_shared::AudioRowState;
         let mut inspector = InspectorCompositePanel::new();
         let mut tree = UITree::new();
         for (scope, name) in [(0, "Master"), (1, "Layer")] {
             let mut config = mk_config(ParamCardKind::Effect, name, 1);
-            config.rows[0].audio = AudioRowState { active: true, ..Default::default() };
+            config.rows[0].audio = AudioRowState {
+                active: true,
+                ..Default::default()
+            };
             let mut card = ParamCardPanel::new();
             card.configure(&config);
-            card.build(&mut tree, Rect::new(scope as f32 * 350.0, 0.0, 340.0, 600.0));
+            card.build(
+                &mut tree,
+                Rect::new(scope as f32 * 350.0, 0.0, 340.0, 600.0),
+            );
             inspector.effects[scope].push(card);
         }
         let card = &inspector.effects[1][0];
         let mut registry = IntentRegistry::new();
         card.register_intents(&mut registry);
-        let (button, target, pid) = (card.first_node()..card.first_node() + card.node_count()).find_map(|i| {
-            let node = tree.id_at(i);
-            match registry.resolve(&tree, Some(node), Gesture::Click) {
-                Some(PanelAction::Root(RootAction::AudioDrawerClick(target, pid, AudioDrawerClick::Custom))) => Some((node, target, pid)),
-                _ => None,
-            }
-        }).unwrap();
+        let (button, target, pid) = (card.first_node()..card.first_node() + card.node_count())
+            .find_map(|i| {
+                let node = tree.id_at(i);
+                match registry.resolve(&tree, Some(node), Gesture::Click) {
+                    Some(PanelAction::Root(RootAction::AudioDrawerClick(
+                        target,
+                        pid,
+                        AudioDrawerClick::Custom,
+                    ))) => Some((node, target, pid)),
+                    _ => None,
+                }
+            })
+            .unwrap();
         let master_height = inspector.effects[0][0].compute_height();
         let layer_height = inspector.effects[1][0].compute_height();
-        let actions = inspector.audio_drawer_intent(&tree, button, target, &pid, AudioDrawerClick::Custom);
-        assert!(matches!(actions.as_slice(), [PanelAction::Params(crate::ParamsAction::ModConfigTabChanged)]));
+        let actions =
+            inspector.audio_drawer_intent(&tree, button, target, &pid, AudioDrawerClick::Custom);
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::Params(
+                crate::ParamsAction::ModConfigTabChanged
+            )]
+        ));
         // A rebuild projects the opened matrix without changing the other card.
         inspector.effects[1][0].build(&mut UITree::new(), Rect::new(350.0, 0.0, 340.0, 600.0));
         assert!(inspector.effects[1][0].compute_height() > layer_height);
@@ -1690,8 +1797,8 @@ mod tests {
 
     #[test]
     fn drawer_free_intent_reads_scrolled_bounds() {
+        use crate::intent::{Gesture, IntentRegistry};
         use crate::panels::param_card::ParamCardKind;
-        use crate::intent::{IntentRegistry, Gesture};
         let mut inspector = InspectorCompositePanel::new();
         let mut config = mk_config(ParamCardKind::Effect, "Driver", 1);
         config.rows[0].modulation.driver_active = true;
@@ -1702,18 +1809,26 @@ mod tests {
         card.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 600.0));
         let mut registry = IntentRegistry::new();
         card.register_intents(&mut registry);
-        let (button, action) = (card.first_node()..card.first_node() + card.node_count()).find_map(|i| {
-            let node = tree.id_at(i);
-            match registry.resolve(&tree, Some(node), Gesture::Click) {
-                Some(action @ PanelAction::Root(RootAction::BeginDriverPeriodTextInput { .. })) => Some((node, action)),
-                _ => None,
-            }
-        }).unwrap();
+        let (button, action) = (card.first_node()..card.first_node() + card.node_count())
+            .find_map(|i| {
+                let node = tree.id_at(i);
+                match registry.resolve(&tree, Some(node), Gesture::Click) {
+                    Some(
+                        action @ PanelAction::Root(RootAction::BeginDriverPeriodTextInput {
+                            ..
+                        }),
+                    ) => Some((node, action)),
+                    _ => None,
+                }
+            })
+            .unwrap();
         tree.offset_nodes(card.region(), card.first_node(), card.node_count(), -37.0);
         inspector.effects[0].push(card);
         let refreshed = inspector.refresh_driver_period_intent(button, &tree, action);
-        assert!(matches!(refreshed, PanelAction::Root(RootAction::BeginDriverPeriodTextInput { anchor, value, .. })
-            if anchor == tree.get_bounds(button) && value == 3.5));
+        assert!(
+            matches!(refreshed, PanelAction::Root(RootAction::BeginDriverPeriodTextInput { anchor, value, .. })
+            if anchor == tree.get_bounds(button) && value == 3.5)
+        );
     }
 
     /// Range truthfulness: switching scope must reset the inactive section's
@@ -1786,7 +1901,8 @@ mod tests {
         let gen_range = (genp.first_node(), genp.first_node() + genp.node_count());
         let subs = panel.sub_region_ranges();
         assert!(
-            subs.iter().any(|&(s, e)| s <= gen_range.0 && gen_range.1 <= e),
+            subs.iter()
+                .any(|&(s, e)| s <= gen_range.0 && gen_range.1 <= e),
             "gen card must be covered: gen={gen_range:?} subs={subs:?}"
         );
         // Every reported range is a real, live (non-empty) range.
@@ -2121,9 +2237,8 @@ mod tests {
         let mut missed = Vec::new();
         for i in start..end {
             let n = tree.get_node(tree.id_at(i)).unwrap();
-            let drawable = n.flags.contains(UIFlags::VISIBLE)
-                && n.bounds.width > 0.0
-                && n.bounds.height > 0.0;
+            let drawable =
+                n.flags.contains(UIFlags::VISIBLE) && n.bounds.width > 0.0 && n.bounds.height > 0.0;
             if drawable && !visited.contains(&i) {
                 missed.push((i, n.node_type, n.bounds));
             }
@@ -2232,17 +2347,26 @@ mod tests {
             .map(|i| mk_config(ParamCardKind::Effect, &format!("FX{i}"), 4))
             .collect();
         panel.configure_layer_effects(&configs, None);
-        panel.configure_tabs(&[InspectorTab::Layer, InspectorTab::Master], InspectorTab::Layer);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
         panel.build(&mut tree, &layout);
 
         let columns_y = panel.columns_y;
-        assert!(columns_y > 0.0, "sanity: columns_y must be a real screen position");
+        assert!(
+            columns_y > 0.0,
+            "sanity: columns_y must be a real screen position"
+        );
 
         // Scroll far past any real max — `apply_scroll_delta`/`clamp_scroll`
         // clamp it, so this just guarantees "fully scrolled", not overshoot.
         let cursor_x = layout.inspector().x + layout.inspector().width - 10.0; // right column
         let scrolled = panel.try_scroll_in_place(1_000_000.0, cursor_x, &mut tree);
-        assert!(scrolled, "sanity: the panel must report a live scroll container");
+        assert!(
+            scrolled,
+            "sanity: the panel must report a live scroll container"
+        );
 
         let start = panel.first_node();
         let end = start + panel.node_count();
@@ -2419,7 +2543,10 @@ mod tests {
             .map(|i| {
                 let mut c = mk_config(ParamCardKind::Effect, &format!("FX{i}"), 4);
                 if i % 2 == 0 {
-                    c.rows[0].audio = AudioRowState { active: true, ..Default::default() };
+                    c.rows[0].audio = AudioRowState {
+                        active: true,
+                        ..Default::default()
+                    };
                 }
                 c
             })
@@ -2428,7 +2555,10 @@ mod tests {
         // Single configure call — no prior "unarmed" configure, no ticks —
         // the realistic first-selection / first-render case.
         panel.configure_layer_effects(&configs, None);
-        panel.configure_tabs(&[InspectorTab::Layer, InspectorTab::Master], InspectorTab::Layer);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
         panel.build(&mut tree, &layout);
 
         let reported_height = panel.right_column_height();
@@ -2451,8 +2581,11 @@ mod tests {
 
         // The scroll bound itself must reflect real overflow, not clamp to
         // a near-zero max — this is the actual user-visible symptom.
-        panel.layer_scroll.set_content_height(panel.right_column_height());
-        let scrolled = panel.try_scroll_in_place(-1_000_000.0, layout.inspector().x + 10.0, &mut tree);
+        panel
+            .layer_scroll
+            .set_content_height(panel.right_column_height());
+        let scrolled =
+            panel.try_scroll_in_place(-1_000_000.0, layout.inspector().x + 10.0, &mut tree);
         assert!(scrolled, "sanity: scrollable content must exist");
         assert!(
             panel.layer_scroll.max_scroll() > 200.0,
@@ -2484,7 +2617,10 @@ mod tests {
             InspectorTab::Layer,
         );
         panel.build(&mut tree, &layout);
-        assert!(panel.layer_scroll.max_scroll() > 0.0, "needs scrollable content");
+        assert!(
+            panel.layer_scroll.max_scroll() > 0.0,
+            "needs scrollable content"
+        );
 
         let probe = panel.layer_chrome.first_node();
         let y_before = tree.get_node(tree.id_at(probe)).unwrap().bounds.y;
@@ -2525,14 +2661,29 @@ mod tests {
     }
 
     pub(super) fn grouped_fixture(collapsed: bool) -> (InspectorCompositePanel, UITree) {
-        let configs: Vec<_> = (0..3).map(|i| mk_config(super::super::param_card::ParamCardKind::Effect, &format!("FX{i}"), 1)).collect();
+        let configs: Vec<_> = (0..3)
+            .map(|i| {
+                mk_config(
+                    super::super::param_card::ParamCardKind::Effect,
+                    &format!("FX{i}"),
+                    1,
+                )
+            })
+            .collect();
         let mut panel = InspectorCompositePanel::new();
         panel.configure_master_effects(&configs);
-        panel.configure_rack_groups(InspectorTab::Master, &[RackGroupConfig {
-            id: EffectGroupId::new("group"), name: "Group".into(), collapsed,
-            member_ids: vec![EffectId::new("FX0"), EffectId::new("FX1")], mask_effect_id: None,
-            enabled: true, wet_dry: 1.0,
-        }]);
+        panel.configure_rack_groups(
+            InspectorTab::Master,
+            &[RackGroupConfig {
+                id: EffectGroupId::new("group"),
+                name: "Group".into(),
+                collapsed,
+                member_ids: vec![EffectId::new("FX0"), EffectId::new("FX1")],
+                mask_effect_id: None,
+                enabled: true,
+                wet_dry: 1.0,
+            }],
+        );
         panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
         let mut tree = UITree::new();
         panel.build(&mut tree, &inspector_layout());
@@ -2547,11 +2698,21 @@ mod tests {
         assert!(panel.effects[0][2].live_bounds(&tree).is_some());
         let header = panel.group_nodes[0].header;
         let bounds = tree.get_bounds(header);
-        panel.route_pointer_down(header, Vec2::new(bounds.x + 1.0, bounds.y + 1.0), Modifiers::NONE, &tree);
+        panel.route_pointer_down(
+            header,
+            Vec2::new(bounds.x + 1.0, bounds.y + 1.0),
+            Modifiers::NONE,
+            &tree,
+        );
         assert_eq!(panel.get_selected_effect_indices(), vec![0, 1]);
         let collapse = panel.group_nodes[0].collapse;
-        assert!(matches!(&panel.route_click(collapse, Modifiers::NONE, &tree)[..],
-            [PanelAction::Params(ParamsAction::EffectGroupCollapsed { collapsed: false, .. })]));
+        assert!(matches!(
+            &panel.route_click(collapse, Modifiers::NONE, &tree)[..],
+            [PanelAction::Params(ParamsAction::EffectGroupCollapsed {
+                collapsed: false,
+                ..
+            })]
+        ));
     }
 
     #[test]
@@ -2560,10 +2721,15 @@ mod tests {
         let header = panel.group_nodes[0].header;
         assert!(panel.try_begin_card_drag(Some(header), &mut tree));
         let after = panel.effects[0][2].live_bounds(&tree).unwrap();
-        panel.update_card_drag(Vec2::new(after.x + 8.0, after.y + after.height - 1.0), &mut tree);
+        panel.update_card_drag(
+            Vec2::new(after.x + 8.0, after.y + after.height - 1.0),
+            &mut tree,
+        );
         let actions = panel.end_card_drag(&mut tree);
-        assert!(matches!(&actions[..], [PanelAction::Params(ParamsAction::EffectMove { ids, before: None, preserve_groups: true, .. })]
-            if ids == &[EffectId::new("FX0"), EffectId::new("FX1")]));
+        assert!(
+            matches!(&actions[..], [PanelAction::Params(ParamsAction::EffectMove { ids, before: None, preserve_groups: true, .. })]
+            if ids == &[EffectId::new("FX0"), EffectId::new("FX1")])
+        );
         assert!(panel.try_begin_card_drag(Some(header), &mut tree));
         panel.update_card_drag(Vec2::new(panel.viewport_rect.x - 1.0, after.y), &mut tree);
         assert!(panel.end_card_drag(&mut tree).is_empty());
@@ -2577,14 +2743,21 @@ mod tests {
         assert!(panel.try_begin_card_drag(Some(handle), &mut tree));
         let second = panel.effects[0][1].live_bounds(&tree).unwrap();
         panel.update_card_drag(Vec2::new(second.x + 16.0, second.y + 1.0), &mut tree);
-        assert!(matches!(&panel.end_card_drag(&mut tree)[..], [PanelAction::Params(ParamsAction::EffectMove { before: Some(before), destination_group: Some(group), preserve_groups: false, .. })]
-            if *before == EffectId::new("FX1") && *group == EffectGroupId::new("group")));
+        assert!(
+            matches!(&panel.end_card_drag(&mut tree)[..], [PanelAction::Params(ParamsAction::EffectMove { before: Some(before), destination_group: Some(group), preserve_groups: false, .. })]
+            if *before == EffectId::new("FX1") && *group == EffectGroupId::new("group"))
+        );
         let handle = find_drag_handle_id(&panel.effects[0][0], &tree);
         assert!(panel.try_begin_card_drag(Some(handle), &mut tree));
         let group = tree.get_bounds(panel.group_nodes[0].frame);
-        panel.update_card_drag(Vec2::new(group.x + 1.0, group.y + group.height - 1.0), &mut tree);
-        assert!(matches!(&panel.end_card_drag(&mut tree)[..], [PanelAction::Params(ParamsAction::EffectMove { before: Some(before), destination_group: None, preserve_groups: false, .. })]
-            if *before == EffectId::new("FX2")));
+        panel.update_card_drag(
+            Vec2::new(group.x + 1.0, group.y + group.height - 1.0),
+            &mut tree,
+        );
+        assert!(
+            matches!(&panel.end_card_drag(&mut tree)[..], [PanelAction::Params(ParamsAction::EffectMove { before: Some(before), destination_group: None, preserve_groups: false, .. })]
+            if *before == EffectId::new("FX2"))
+        );
     }
 
     #[test]
@@ -2631,8 +2804,10 @@ mod tests {
 
         // Begin a card drag (the source card is unrelated to the hit-test
         // math below — any drag handle will do).
-        let handle_id =
-            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][0], &tree);
+        let handle_id = find_drag_handle_id(
+            &panel.effects[InspectorCompositePanel::SCOPE_LAYER][0],
+            &tree,
+        );
         assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
 
         // Scroll in place — no rebuild. Content nodes move; `card_y()` does not.
@@ -2707,8 +2882,10 @@ mod tests {
             "sanity: must actually be mid-tween, not settled"
         );
 
-        let handle_id =
-            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][0], &tree);
+        let handle_id = find_drag_handle_id(
+            &panel.effects[InspectorCompositePanel::SCOPE_LAYER][0],
+            &tree,
+        );
         assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
 
         let cursor_x = layout.inspector().x + 10.0;
@@ -2747,8 +2924,10 @@ mod tests {
         );
         panel.build(&mut tree, &layout);
 
-        let handle_id =
-            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][0], &tree);
+        let handle_id = find_drag_handle_id(
+            &panel.effects[InspectorCompositePanel::SCOPE_LAYER][0],
+            &tree,
+        );
         assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
 
         let cursor_x = layout.inspector().x + 10.0;
@@ -2810,8 +2989,10 @@ mod tests {
             "test needs a real height difference: collapsed={collapsed_h} expanded={expanded_h}"
         );
 
-        let handle_id =
-            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][0], &tree);
+        let handle_id = find_drag_handle_id(
+            &panel.effects[InspectorCompositePanel::SCOPE_LAYER][0],
+            &tree,
+        );
         assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
 
         let cursor_x = layout.inspector().x + 10.0;
@@ -2835,18 +3016,27 @@ mod tests {
         use super::super::param_card::ParamCardKind;
         let mut tree = UITree::new();
         let mut panel = InspectorCompositePanel::new();
-        let mut configs: Vec<_> = (0..4).map(|i| mk_config(ParamCardKind::Effect, &format!("FX{i}"), 2)).collect();
-        for (config, index) in configs.iter_mut().zip([7, 1, 3, 2]) { config.effect_index = index; }
+        let mut configs: Vec<_> = (0..4)
+            .map(|i| mk_config(ParamCardKind::Effect, &format!("FX{i}"), 2))
+            .collect();
+        for (config, index) in configs.iter_mut().zip([7, 1, 3, 2]) {
+            config.effect_index = index;
+        }
         panel.configure_layer_effects(&configs, None);
         panel.configure_tabs(&[InspectorTab::Layer], InspectorTab::Layer);
         panel.build(&mut tree, &inspector_layout());
         for (target, before) in [(2, Some(EffectId::new("FX2"))), (4, None)] {
-            let handle = find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][1], &tree);
+            let handle = find_drag_handle_id(
+                &panel.effects[InspectorCompositePanel::SCOPE_LAYER][1],
+                &tree,
+            );
             assert!(panel.try_begin_card_drag(Some(handle), &mut tree));
             panel.card_drag_target_index = target;
             let actions = panel.end_card_drag(&mut tree);
-            assert!(matches!(&actions[..], [PanelAction::Params(ParamsAction::EffectMove { ids, before: actual, .. })]
-                if ids == &[EffectId::new("FX1")] && *actual == before));
+            assert!(
+                matches!(&actions[..], [PanelAction::Params(ParamsAction::EffectMove { ids, before: actual, .. })]
+                if ids == &[EffectId::new("FX1")] && *actual == before)
+            );
         }
     }
 
@@ -2891,8 +3081,10 @@ mod tests {
             "test needs scrollable content"
         );
 
-        let handle_id =
-            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][0], &tree);
+        let handle_id = find_drag_handle_id(
+            &panel.effects[InspectorCompositePanel::SCOPE_LAYER][0],
+            &tree,
+        );
         assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
 
         // Scroll in place via the same API the app uses on wheel/scrollbar
@@ -2905,8 +3097,9 @@ mod tests {
         let target_bounds = panel.effects[InspectorCompositePanel::SCOPE_LAYER][target_idx]
             .live_bounds(&tree)
             .expect("built card has live bounds");
-        let expected_effect_id =
-            panel.effects[InspectorCompositePanel::SCOPE_LAYER][target_idx].effect_id().clone();
+        let expected_effect_id = panel.effects[InspectorCompositePanel::SCOPE_LAYER][target_idx]
+            .effect_id()
+            .clone();
         let cursor_y = target_bounds.y + 1.0;
 
         panel.update_card_drag(Vec2::new(cursor_x, cursor_y), &mut tree);
@@ -2914,8 +3107,11 @@ mod tests {
 
         let actions = panel.end_card_drag(&mut tree);
         assert_eq!(actions.len(), 1, "expected one action: {actions:?}");
-        assert!(matches!(&actions[0], PanelAction::Params(ParamsAction::EffectMove { before: Some(id), .. })
-            if *id == expected_effect_id), "live bounds must resolve the same stable target: {actions:?}");
+        assert!(
+            matches!(&actions[0], PanelAction::Params(ParamsAction::EffectMove { before: Some(id), .. })
+            if *id == expected_effect_id),
+            "live bounds must resolve the same stable target: {actions:?}"
+        );
     }
 
     #[test]
@@ -2925,8 +3121,7 @@ mod tests {
         let layout = inspector_layout();
         panel.build(&mut tree, &layout);
 
-        let target =
-            panel.find_target_for_node(&tree, panel.layer_scroll.track_id().unwrap());
+        let target = panel.find_target_for_node(&tree, panel.layer_scroll.track_id().unwrap());
         assert!(matches!(target, Some(PressedTarget::Scrollbar)));
     }
 
@@ -2991,7 +3186,10 @@ mod tests {
         panel.build(&mut tree, &layout);
 
         // The inactive master effect reports not-built (empty range)…
-        assert_eq!(panel.effects[InspectorCompositePanel::SCOPE_MASTER][0].node_count(), 0);
+        assert_eq!(
+            panel.effects[InspectorCompositePanel::SCOPE_MASTER][0].node_count(),
+            0
+        );
         // …and a node in the live layer effect routes to LayerEffect.
         let lc = &panel.effects[InspectorCompositePanel::SCOPE_LAYER][0];
         assert!(lc.node_count() > 0);
@@ -3077,15 +3275,28 @@ mod tests {
             panel.effects[InspectorCompositePanel::SCOPE_MASTER].is_empty(),
             "no longer a live card"
         );
-        assert_eq!(panel.master_dying.len(), 1, "removed card moves to the exit-state list");
-        assert!(panel.master_dying[0].is_collapse_animating(), "starts collapsing");
-        assert!(!panel.master_dying[0].is_delete_finished(), "not finished the instant it dies");
+        assert_eq!(
+            panel.master_dying.len(),
+            1,
+            "removed card moves to the exit-state list"
+        );
+        assert!(
+            panel.master_dying[0].is_collapse_animating(),
+            "starts collapsing"
+        );
+        assert!(
+            !panel.master_dying[0].is_delete_finished(),
+            "not finished the instant it dies"
+        );
 
         // Run the exit animation to completion.
         for _ in 0..30 {
             panel.master_dying[0].tick_drawers(20.0);
         }
-        assert!(panel.master_dying[0].is_delete_finished(), "exit animation completes");
+        assert!(
+            panel.master_dying[0].is_delete_finished(),
+            "exit animation completes"
+        );
     }
 
     #[test]
@@ -3116,10 +3327,7 @@ mod tests {
         // so they must vanish instantly, never entering the delete-collapse
         // `dying` list (which is what left the stale chain lingering over the
         // new selection for a few frames).
-        panel.configure_layer_effects(
-            &[mk_config(ParamCardKind::Effect, "B1", 2)],
-            Some(&layer_b),
-        );
+        panel.configure_layer_effects(&[mk_config(ParamCardKind::Effect, "B1", 2)], Some(&layer_b));
         assert_eq!(
             panel.effects[InspectorCompositePanel::SCOPE_LAYER].len(),
             1,
@@ -3152,8 +3360,8 @@ mod tests {
     /// artifact (the escaped ON pill measured in the 2026-07-10 atlas dump).
     #[test]
     fn bug060_every_card_node_renders_under_the_column_clip() {
-        use crate::tree::TraversalEvent;
         use crate::ParamCardKind;
+        use crate::tree::TraversalEvent;
 
         let mut tree = UITree::new();
         let mut panel = InspectorCompositePanel::new();
@@ -3163,7 +3371,10 @@ mod tests {
         panel.build(&mut tree, &layout);
 
         let viewport = panel.master_scroll.viewport();
-        assert!(viewport.height > 0.0, "sanity: master column viewport exists");
+        assert!(
+            viewport.height > 0.0,
+            "sanity: master column viewport exists"
+        );
         let card = &panel.effects[InspectorCompositePanel::SCOPE_MASTER][0];
         let (start, end) = (card.first_node(), card.first_node() + card.node_count());
         assert!(end > start, "sanity: card built nodes");
@@ -3179,37 +3390,43 @@ mod tests {
         let mut clip_stack: Vec<Rect> = Vec::new();
         let mut violations: Vec<String> = Vec::new();
         let mut checked = 0usize;
-        tree.traverse_flat_range(crate::tree::DEFAULT_REGION, start, end, false, |ev| match ev {
-            TraversalEvent::PushClip(r) => {
-                let clipped = clip_stack.last().map_or(r, |c| intersect(*c, r));
-                clip_stack.push(clipped);
-            }
-            TraversalEvent::PopClip => {
-                clip_stack.pop();
-            }
-            TraversalEvent::Node(node) => {
-                // Only nodes that draw an opaque fill can deposit artifact
-                // pixels — labels and transparent buttons paint no background.
-                if node.style.bg_color.a == 0 {
-                    return;
+        tree.traverse_flat_range(
+            crate::tree::DEFAULT_REGION,
+            start,
+            end,
+            false,
+            |ev| match ev {
+                TraversalEvent::PushClip(r) => {
+                    let clipped = clip_stack.last().map_or(r, |c| intersect(*c, r));
+                    clip_stack.push(clipped);
                 }
-                checked += 1;
-                let ok = clip_stack.last().is_some_and(|c| {
-                    c.y >= viewport.y - 0.5
-                        && c.y + c.height <= viewport.y + viewport.height + 0.5
-                });
-                if !ok {
-                    violations.push(format!(
-                        "node {:?} text={:?} bounds={:?} effective_clip={:?} (viewport {:?})",
-                        node.id,
-                        node.text,
-                        node.bounds,
-                        clip_stack.last(),
-                        viewport,
-                    ));
+                TraversalEvent::PopClip => {
+                    clip_stack.pop();
                 }
-            }
-        });
+                TraversalEvent::Node(node) => {
+                    // Only nodes that draw an opaque fill can deposit artifact
+                    // pixels — labels and transparent buttons paint no background.
+                    if node.style.bg_color.a == 0 {
+                        return;
+                    }
+                    checked += 1;
+                    let ok = clip_stack.last().is_some_and(|c| {
+                        c.y >= viewport.y - 0.5
+                            && c.y + c.height <= viewport.y + viewport.height + 0.5
+                    });
+                    if !ok {
+                        violations.push(format!(
+                            "node {:?} text={:?} bounds={:?} effective_clip={:?} (viewport {:?})",
+                            node.id,
+                            node.text,
+                            node.bounds,
+                            clip_stack.last(),
+                            viewport,
+                        ));
+                    }
+                }
+            },
+        );
         assert!(checked > 0, "sanity: card produced background-filled nodes");
         assert!(
             violations.is_empty(),

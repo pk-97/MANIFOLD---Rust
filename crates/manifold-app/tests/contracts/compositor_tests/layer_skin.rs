@@ -20,16 +20,16 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 #[cfg(feature = "gpu-proofs")]
 use manifold_compositor::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
 #[cfg(feature = "gpu-proofs")]
-use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-#[cfg(feature = "gpu-proofs")]
 use manifold_compositor::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
 #[cfg(feature = "gpu-proofs")]
-use manifold_node_engine::runtime::preset_context::PresetContext;
-use manifold_node_engine::runtime::PresetRuntime;
+use manifold_compositor::tonemap::TonemapSettings;
+#[cfg(feature = "gpu-proofs")]
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 #[cfg(feature = "gpu-proofs")]
 use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_node_engine::runtime::PresetRuntime;
 #[cfg(feature = "gpu-proofs")]
-use manifold_compositor::tonemap::TonemapSettings;
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 #[cfg(feature = "gpu-proofs")]
 const W: u32 = 320;
@@ -159,8 +159,7 @@ fn scene_skin_json(layer_param: &str) -> String {
 fn layer_param_survives_serde_round_trip() {
     let json = scene_skin_json(LAYER_A);
 
-    let saved: EffectGraphDef =
-        serde_json::from_str(&json).expect("scene_skin_json must parse");
+    let saved: EffectGraphDef = serde_json::from_str(&json).expect("scene_skin_json must parse");
     let reserialized = serde_json::to_string(&saved).expect("def must serialize");
     let reloaded: EffectGraphDef =
         serde_json::from_str(&reserialized).expect("round-tripped def must re-parse");
@@ -376,8 +375,12 @@ fn settle_two_layer(
             .commit_and_wait_completed();
         frame += 1;
         let pending = runtime_b.warmup_pending()
-            || runtime_a.as_deref().is_some_and(PresetRuntime::warmup_pending);
-        if !pending && status == manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete {
+            || runtime_a
+                .as_deref()
+                .is_some_and(PresetRuntime::warmup_pending);
+        if !pending
+            && status == manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete
+        {
             return frame;
         }
         assert!(
@@ -403,8 +406,7 @@ fn region_luma_pixels(
     rb.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     rb.commit_and_wait_completed();
     let ptr = buf.mapped_ptr().expect("shared buffer mapped");
-    let px: &[u16] =
-        unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (W * H * 4) as usize) };
+    let px: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (W * H * 4) as usize) };
 
     let x0 = W * 3 / 8;
     let x1 = W * 5 / 8;
@@ -477,7 +479,9 @@ fn mutual_skin_two_layers_render_300_frames() {
     {
         // Safety: the compositor (and its registry) outlives both runtimes.
         let ptr = manifold_node_engine::runtime::layer_skin::LayerSkinPtr::new(
-            compositor.layer_skin_registry().expect("compositor registry"),
+            compositor
+                .layer_skin_registry()
+                .expect("compositor registry"),
         );
         runtime_a.set_layer_skin_registry(Some(unsafe { ptr.get() }));
         runtime_b.set_layer_skin_registry(Some(unsafe { ptr.get() }));
@@ -567,7 +571,9 @@ fn skin_tracks_source_content_and_missing_id_falls_back() {
 
     {
         let ptr = manifold_node_engine::runtime::layer_skin::LayerSkinPtr::new(
-            compositor.layer_skin_registry().expect("compositor registry"),
+            compositor
+                .layer_skin_registry()
+                .expect("compositor registry"),
         );
         runtime_b.set_layer_skin_registry(Some(unsafe { ptr.get() }));
     }
@@ -637,13 +643,19 @@ fn skin_tracks_source_content_and_missing_id_falls_back() {
             let mut rgba8 = Vec::with_capacity(px.len());
             for c in px.chunks(4) {
                 for v in c.iter().take(3) {
-                    rgba8.push(manifold_node_engine::gpu::headless_readback::linear_to_srgb8(
-                        half::f16::from_bits(*v).to_f32(),
-                    ));
+                    rgba8.push(
+                        manifold_node_engine::gpu::headless_readback::linear_to_srgb8(
+                            half::f16::from_bits(*v).to_f32(),
+                        ),
+                    );
                 }
                 rgba8.push(255);
             }
-            let png = manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba8, texture.width, texture.height);
+            let png = manifold_node_engine::gpu::headless_readback::encode_rgba8_png(
+                &rgba8,
+                texture.width,
+                texture.height,
+            );
             std::fs::write(&path, png).expect("write demo png");
             println!("demo artifact: {}", path.display());
         };

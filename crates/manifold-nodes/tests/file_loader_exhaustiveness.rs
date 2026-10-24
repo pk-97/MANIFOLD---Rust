@@ -5,9 +5,9 @@
 //! skip, and a table entry naming a type that isn't registered is a red test
 //! too.
 
-use manifold_nodes as _;
 use manifold_core::file_loader::{ALL_FILE_LOADER_TYPE_IDS, file_loader_kind};
 use manifold_node_engine::{parameters::ParamType, persistence::PrimitiveRegistry};
+use manifold_nodes as _;
 
 /// Load-bearing externs behind the "is this a file reader?" check.
 ///
@@ -63,7 +63,9 @@ fn every_table_entry_names_a_registered_or_retired_primitive() {
     let missing: Vec<&str> = ALL_FILE_LOADER_TYPE_IDS
         .iter()
         .copied()
-        .filter(|t| *t != manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID && !registry.contains(t))
+        .filter(|t| {
+            *t != manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID && !registry.contains(t)
+        })
         .collect();
     assert!(
         missing.is_empty(),

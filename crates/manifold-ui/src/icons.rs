@@ -217,7 +217,10 @@ mod tests {
         ];
         for i in 0..badges.len() {
             for j in (i + 1)..badges.len() {
-                assert_ne!(badges[i], badges[j], "each layer type gets a distinct badge");
+                assert_ne!(
+                    badges[i], badges[j],
+                    "each layer type gets a distinct badge"
+                );
             }
         }
     }

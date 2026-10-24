@@ -9,9 +9,24 @@
 pub(crate) fn model_matrix(pos: [f32; 3], rot: [f32; 3], scale: [f32; 3]) -> [[f32; 4]; 4] {
     let r = euler_xyz_columns(rot);
     [
-        [r[0][0] * scale[0], r[0][1] * scale[0], r[0][2] * scale[0], 0.0],
-        [r[1][0] * scale[1], r[1][1] * scale[1], r[1][2] * scale[1], 0.0],
-        [r[2][0] * scale[2], r[2][1] * scale[2], r[2][2] * scale[2], 0.0],
+        [
+            r[0][0] * scale[0],
+            r[0][1] * scale[0],
+            r[0][2] * scale[0],
+            0.0,
+        ],
+        [
+            r[1][0] * scale[1],
+            r[1][1] * scale[1],
+            r[1][2] * scale[1],
+            0.0,
+        ],
+        [
+            r[2][0] * scale[2],
+            r[2][1] * scale[2],
+            r[2][2] * scale[2],
+            0.0,
+        ],
         [pos[0], pos[1], pos[2], 1.0],
     ]
 }

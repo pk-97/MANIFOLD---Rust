@@ -44,4 +44,3 @@ impl ExportConfig {
         self.audio_path.as_ref().is_some_and(|p| !p.is_empty())
     }
 }
-

@@ -238,8 +238,10 @@ impl TimelineViewportPanel {
     /// bars to skip between visible bar lines (1 = show every bar).
     pub(super) fn bar_skip(&self) -> u32 {
         crate::timing_grid::timing_grid_policy(
-            self.mapper.pixels_per_beat(), self.beats_per_bar as f32,
-        ).bar_skip
+            self.mapper.pixels_per_beat(),
+            self.beats_per_bar as f32,
+        )
+        .bar_skip
     }
 
     // ── Grid subdivision ──────────────────────────────────────────
@@ -251,7 +253,8 @@ impl TimelineViewportPanel {
     ///   - Show beats when a beat ≥ 6px wide
     pub(super) fn grid_subdivision(&self) -> GridSubdivision {
         let policy = crate::timing_grid::timing_grid_policy(
-            self.mapper.pixels_per_beat(), self.beats_per_bar as f32,
+            self.mapper.pixels_per_beat(),
+            self.beats_per_bar as f32,
         );
         if policy.subdivisions_per_beat == 4 {
             GridSubdivision::Sixteenth

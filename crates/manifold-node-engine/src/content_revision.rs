@@ -25,9 +25,9 @@ pub struct ContentVersion {
 }
 
 impl ContentVersion {
-manifold_core::testkit_visible! {
-    pub(crate) fn new(epoch: u64, resource: ResourceId, revision: u64) -> Self {
-        Self { epoch, resource, revision }
+    manifold_core::testkit_visible! {
+        pub(crate) fn new(epoch: u64, resource: ResourceId, revision: u64) -> Self {
+            Self { epoch, resource, revision }
+        }
     }
-}
 }

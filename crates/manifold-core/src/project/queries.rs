@@ -16,7 +16,12 @@ impl Project {
     /// (SCENE_DOCUMENT_DESIGN.md section 7.1): the one seam every scene host
     /// reads the scene through.
     pub fn scene_of(&self, layer: &crate::LayerId) -> Option<&crate::scene_doc::SceneDoc> {
-        self.timeline.find_layer_by_id(layer.as_str())?.1.gen_params()?.scene.as_ref()
+        self.timeline
+            .find_layer_by_id(layer.as_str())?
+            .1
+            .gen_params()?
+            .scene
+            .as_ref()
     }
 
     /// Whether any layer has an enabled [`crate::audio_trigger::LayerClipTrigger`]
@@ -163,7 +168,10 @@ impl Project {
     /// The owning layer for an effect/clip-effect instance, or `None` for a
     /// master-chain effect (or an unknown id). Used where an `EffectId` needs
     /// its container — e.g. labelling an EffectId-addressed macro mapping.
-    pub fn layer_id_for_effect(&self, effect_id: &crate::id::EffectId) -> Option<crate::id::LayerId> {
+    pub fn layer_id_for_effect(
+        &self,
+        effect_id: &crate::id::EffectId,
+    ) -> Option<crate::id::LayerId> {
         for layer in &self.timeline.layers {
             if let Some(effects) = layer.effects.as_ref()
                 && effects.iter().any(|fx| &fx.id == effect_id)
@@ -199,7 +207,8 @@ impl Project {
                 for m in mods.iter().filter(|m| m.enabled) {
                     if matches!(
                         m.source.feature.kind,
-                        crate::audio_mod::AudioFeatureKind::Pitch | crate::audio_mod::AudioFeatureKind::Presence
+                        crate::audio_mod::AudioFeatureKind::Pitch
+                            | crate::audio_mod::AudioFeatureKind::Presence
                     ) {
                         out.insert(m.source.send_id.clone());
                     }
@@ -300,7 +309,10 @@ impl Project {
     /// not), across master effects, layer effects, and generator params. Used to
     /// warn before deleting a send that sliders still depend on.
     pub fn audio_send_usage_count(&self, send_id: &crate::id::AudioSendId) -> usize {
-        fn inst_count(fx: &crate::effects::PresetInstance, send_id: &crate::id::AudioSendId) -> usize {
+        fn inst_count(
+            fx: &crate::effects::PresetInstance,
+            send_id: &crate::id::AudioSendId,
+        ) -> usize {
             // section 9 U4: a fire-mode mod is a normal `audio_mods` entry — already
             // counted below, no separate arm needed.
             fx.audio_mods
@@ -316,7 +328,10 @@ impl Project {
             .sum::<usize>();
         for layer in &self.timeline.layers {
             if let Some(effects) = layer.effects.as_ref() {
-                count += effects.iter().map(|fx| inst_count(fx, send_id)).sum::<usize>();
+                count += effects
+                    .iter()
+                    .map(|fx| inst_count(fx, send_id))
+                    .sum::<usize>();
             }
             if let Some(gp) = layer.gen_params() {
                 count += inst_count(gp, send_id);
@@ -331,7 +346,10 @@ impl Project {
     /// D1/D3). `layer_id` is `None` for a master-effects mod (nothing to jump
     /// to; the label reads "Master" instead). Walks the same instance set
     /// [`Self::audio_send_usage_count`] does.
-    pub fn audio_mod_consumers(&self, send_id: &crate::id::AudioSendId) -> Vec<(Option<crate::id::LayerId>, String)> {
+    pub fn audio_mod_consumers(
+        &self,
+        send_id: &crate::id::AudioSendId,
+    ) -> Vec<(Option<crate::id::LayerId>, String)> {
         fn collect(
             layer_id: Option<crate::id::LayerId>,
             layer_name: &str,
@@ -343,7 +361,10 @@ impl Project {
             // listed below by its own param name (no more bespoke "Trigger"
             // label; the param the gate card lives on names itself).
             if let Some(mods) = fx.audio_mods.as_ref() {
-                for m in mods.iter().filter(|m| m.enabled && &m.source.send_id == send_id) {
+                for m in mods
+                    .iter()
+                    .filter(|m| m.enabled && &m.source.send_id == send_id)
+                {
                     let effect_name = crate::preset_type_registry::display_name(fx.effect_type());
                     let param_name = fx
                         .params
@@ -364,11 +385,23 @@ impl Project {
         for layer in &self.timeline.layers {
             if let Some(effects) = layer.effects.as_ref() {
                 for fx in effects {
-                    collect(Some(layer.layer_id.clone()), &layer.name, fx, send_id, &mut out);
+                    collect(
+                        Some(layer.layer_id.clone()),
+                        &layer.name,
+                        fx,
+                        send_id,
+                        &mut out,
+                    );
                 }
             }
             if let Some(gp) = layer.gen_params() {
-                collect(Some(layer.layer_id.clone()), &layer.name, gp, send_id, &mut out);
+                collect(
+                    Some(layer.layer_id.clone()),
+                    &layer.name,
+                    gp,
+                    send_id,
+                    &mut out,
+                );
             }
         }
         out
@@ -404,7 +437,10 @@ impl Project {
                 };
                 out.push((
                     Some(layer.layer_id.clone()),
-                    format!("Clip trigger \u{2022} {} \u{2022} {feature_label}", layer.name),
+                    format!(
+                        "Clip trigger \u{2022} {} \u{2022} {feature_label}",
+                        layer.name
+                    ),
                 ));
             }
         }

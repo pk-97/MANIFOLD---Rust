@@ -8,7 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
 use manifold_core::scene_modifier_preset::{
-    SceneContextValue, SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneStageSource, SceneTargetSelection,
+    SceneContextValue, SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneStageSource,
+    SceneTargetSelection,
 };
 use manifold_core::scene_source_identity::{
     SceneSourceIdentityError, scene_source_definition_hash,
@@ -75,21 +76,22 @@ pub(super) fn needs_mesh_frame(instance: &SceneModifierInstanceDef) -> bool {
         .as_ref()
         .and_then(|metadata| metadata.scene_modifier.as_ref())
         .is_some_and(|recipe| {
-            recipe.shatter.is_some() || recipe
-                .stages
-                .iter()
-                .flat_map(|stage| &stage.inputs)
-                .any(|input| {
-                    matches!(
-                        input.source,
-                        SceneStageSource::Context {
-                            value: SceneContextValue::SourceOffsetX
-                                | SceneContextValue::SourceOffsetY
-                                | SceneContextValue::SourceOffsetZ
-                                | SceneContextValue::SceneRadius
-                        }
-                    )
-                })
+            recipe.shatter.is_some()
+                || recipe
+                    .stages
+                    .iter()
+                    .flat_map(|stage| &stage.inputs)
+                    .any(|input| {
+                        matches!(
+                            input.source,
+                            SceneStageSource::Context {
+                                value: SceneContextValue::SourceOffsetX
+                                    | SceneContextValue::SourceOffsetY
+                                    | SceneContextValue::SourceOffsetZ
+                                    | SceneContextValue::SceneRadius
+                            }
+                        )
+                    })
         })
 }
 
@@ -158,13 +160,20 @@ pub fn resolve_modifier_mesh_frames(
                     "per-part fitted sources require a separately qualified coordinate frame",
                 ));
             }
-            let source_offset = if instance.graph.preset_metadata.as_ref()
-                .and_then(|m| m.scene_modifier.as_ref()).is_some_and(|r| r.shatter.is_some()) {
+            let source_offset = if instance
+                .graph
+                .preset_metadata
+                .as_ref()
+                .and_then(|m| m.scene_modifier.as_ref())
+                .is_some_and(|r| r.shatter.is_some())
+            {
                 // Shatter follows the live rigid pose. Only its immutable mesh
                 // selection needs capture; no world-space calibration is used.
-                [scalar(source_node, "translate_x", 0.0)?,
-                 scalar(source_node, "translate_y", 0.0)?,
-                 scalar(source_node, "translate_z", 0.0)?]
+                [
+                    scalar(source_node, "translate_x", 0.0)?,
+                    scalar(source_node, "translate_y", 0.0)?,
+                    scalar(source_node, "translate_z", 0.0)?,
+                ]
             } else {
                 static_offset(&index, &target)?
             };
@@ -308,7 +317,9 @@ fn validate_numbers(frame: &SceneMeshReferenceFrame) -> Result<(), SceneModifier
             .source_offset
             .iter()
             .any(|value| !value.is_finite() || !(*value as f32).is_finite())
-        || frame.item_radius.is_some_and(|radius| !(radius as f32).is_finite() || radius as f32 <= 0.0)
+        || frame
+            .item_radius
+            .is_some_and(|radius| !(radius as f32).is_finite() || radius as f32 <= 0.0)
         || frame.source_definition_hash.is_empty()
     {
         return Err(frame_error(
@@ -344,7 +355,11 @@ fn source_route<'a>(
 /// `in`: a split adds detail, a morph blend and a skin pose it. A modifier
 /// bends what they give, as Blender's stack deforms after skin and shape
 /// keys, and the frame is the root source's rest pose.
-const VERTEX_PASSES: [&str; 3] = ["node.subdivide_mesh", "node.morph_targets_blend", "node.skin_mesh"];
+const VERTEX_PASSES: [&str; 3] = [
+    "node.subdivide_mesh",
+    "node.morph_targets_blend",
+    "node.skin_mesh",
+];
 
 /// The nodes a scene curve shape is built from: a curve swept into a solid.
 /// Its rows move its points live, but nothing in it reads the clock or a
@@ -372,7 +387,12 @@ fn is_static_root(index: &FlatSceneIndex, node: &EffectGraphNode) -> bool {
             if !is_curve(at) {
                 return false;
             }
-            let Some(upstream) = index.flat.nodes.iter().find(|upstream| upstream.id == wire.from_node) else {
+            let Some(upstream) = index
+                .flat
+                .nodes
+                .iter()
+                .find(|upstream| upstream.id == wire.from_node)
+            else {
                 return false;
             };
             if !is_curve(upstream) {
@@ -390,19 +410,31 @@ fn is_static_root(index: &FlatSceneIndex, node: &EffectGraphNode) -> bool {
 /// ([`is_static_root`]). `None` when the chain holds any other node, a pass
 /// is not fed through exactly one `in` wire, or a skinned source is drawn
 /// unposed.
-fn source_chain<'a>(index: &'a FlatSceneIndex, node: &'a EffectGraphNode) -> Option<Vec<&'a EffectGraphNode>> {
+fn source_chain<'a>(
+    index: &'a FlatSceneIndex,
+    node: &'a EffectGraphNode,
+) -> Option<Vec<&'a EffectGraphNode>> {
     let mut chain = vec![node];
     let mut current = node;
     while VERTEX_PASSES.contains(&current.type_id.as_str()) {
-        let mut feeding = index.flat.wires.iter().filter(|wire| wire.to_node == current.id && wire.to_port == "in");
+        let mut feeding = index
+            .flat
+            .wires
+            .iter()
+            .filter(|wire| wire.to_node == current.id && wire.to_port == "in");
         let (Some(wire), None) = (feeding.next(), feeding.next()) else {
             return None;
         };
-        current = index.flat.nodes.iter().find(|upstream| upstream.id == wire.from_node)?;
+        current = index
+            .flat
+            .nodes
+            .iter()
+            .find(|upstream| upstream.id == wire.from_node)?;
         chain.push(current);
     }
     let rooted = is_static_root(index, current);
-    let posed = current.type_id != "node.gltf_skinned_mesh_source" || chain.iter().any(|pass| pass.type_id == "node.skin_mesh");
+    let posed = current.type_id != "node.gltf_skinned_mesh_source"
+        || chain.iter().any(|pass| pass.type_id == "node.skin_mesh");
     (rooted && posed).then_some(chain)
 }
 

@@ -24,12 +24,14 @@ pub(super) fn retain_thumbnail_requests(
     visible: &mut Vec<ClipId>,
     project: Option<&manifold_core::project::Project>,
 ) {
-    visible.retain(|id| project.is_some_and(|p| {
-        p.timeline.layers.iter().any(|layer| {
-            layer.layer_type.supports_clip_thumbnails()
-                && layer.clips.iter().any(|clip| clip.id == *id)
+    visible.retain(|id| {
+        project.is_some_and(|p| {
+            p.timeline.layers.iter().any(|layer| {
+                layer.layer_type.supports_clip_thumbnails()
+                    && layer.clips.iter().any(|clip| clip.id == *id)
+            })
         })
-    }));
+    });
 }
 
 /// section 24 5c cold-start: locate a PARKED generator clip by id — its layer (must be a
@@ -252,8 +254,14 @@ pub(super) fn fill_clip_atlas(
             cell_blit,
             persistent_tex,
             &[
-                manifold_gpu::GpuBinding::Texture { binding: 0, texture: tex },
-                manifold_gpu::GpuBinding::Sampler { binding: 1, sampler },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 0,
+                    texture: tex,
+                },
+                manifold_gpu::GpuBinding::Sampler {
+                    binding: 1,
+                    sampler,
+                },
             ],
             clip_atlas_cell_full(*cell as usize),
             manifold_gpu::GpuLoadAction::Load,
@@ -360,8 +368,14 @@ pub(super) fn restore_clip_atlas(
             raw,
             pt,
             &[
-                manifold_gpu::GpuBinding::Texture { binding: 0, texture: st },
-                manifold_gpu::GpuBinding::Sampler { binding: 1, sampler },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 0,
+                    texture: st,
+                },
+                manifold_gpu::GpuBinding::Sampler {
+                    binding: 1,
+                    sampler,
+                },
             ],
             clip_atlas_cell_full(atlas_cell as usize),
             manifold_gpu::GpuLoadAction::Load,
@@ -372,4 +386,3 @@ pub(super) fn restore_clip_atlas(
     }
     false
 }
-

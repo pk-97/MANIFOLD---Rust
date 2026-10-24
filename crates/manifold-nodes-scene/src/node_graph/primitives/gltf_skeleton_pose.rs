@@ -42,12 +42,13 @@ use std::borrow::Cow;
 use std::sync::{Arc, mpsc};
 
 use super::gltf_anim_shared::{
-    LOOP_MODES, LoopMode, TriggerLatch, clip_duration, resolve_progress, sample_quat_slice, sample_vec3_slice,
+    LOOP_MODES, LoopMode, TriggerLatch, clip_duration, resolve_progress, sample_quat_slice,
+    sample_vec3_slice,
 };
-use manifold_node_engine::mesh::JointMatrix;
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use crate::node_graph::gltf_anim_cache::{AnimClip, GltfAnimSet, LoadedAnimSet, spawn_load};
-use crate::node_graph::gltf_load::{Mat4, MAT4_IDENTITY, mat4_from_trs, mat4_mul};
+use crate::node_graph::gltf_load::{MAT4_IDENTITY, Mat4, mat4_from_trs, mat4_mul};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::JointMatrix;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue, TableData};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::source_asset::loaded_identity;
@@ -364,8 +365,18 @@ fn resolve_world_whole_scene(
 /// bind TRS): what maps the file's world into that node's own space.
 /// Identity when the node is singular (a zero scale).
 fn rest_space(anim_set: &GltfAnimSet, node: usize) -> Mat4 {
-    let rest = AnimClip { duration_s: 0.0, channels: Vec::new() };
-    let world = resolve_world_whole_scene(node, anim_set, &rest, 0.0, &mut std::collections::HashMap::new(), 0);
+    let rest = AnimClip {
+        duration_s: 0.0,
+        channels: Vec::new(),
+    };
+    let world = resolve_world_whole_scene(
+        node,
+        anim_set,
+        &rest,
+        0.0,
+        &mut std::collections::HashMap::new(),
+        0,
+    );
     manifold_core::scene_doc::transform::affine_inverse(world).unwrap_or(MAT4_IDENTITY)
 }
 
@@ -410,7 +421,10 @@ pub(crate) fn sample_node_slot_pose(
     let clip = match anim_set.clips.get(clip_index) {
         Some(c) => c,
         None => {
-            empty_clip = AnimClip { duration_s: 0.0, channels: Vec::new() };
+            empty_clip = AnimClip {
+                duration_s: 0.0,
+                channels: Vec::new(),
+            };
             &empty_clip
         }
     };
@@ -420,7 +434,12 @@ pub(crate) fn sample_node_slot_pose(
     for &node_u32 in &node_slots[..n] {
         let node = node_u32 as usize;
         let m = resolve_world_whole_scene(node, anim_set, clip, t, &mut memo, 0);
-        out.push(JointMatrix { c0: m[0], c1: m[1], c2: m[2], c3: m[3] });
+        out.push(JointMatrix {
+            c0: m[0],
+            c1: m[1],
+            c2: m[2],
+            c3: m[3],
+        });
     }
     out
 }
@@ -438,15 +457,38 @@ fn sample_joint_local(anim_set: &GltfAnimSet, clip: &AnimClip, node: u32, t: f32
     let bind_s = bind.map(|b| b.scale).unwrap_or([1.0, 1.0, 1.0]);
 
     let tr = match clip.translation_channel(node) {
-        Some(c) => sample_vec3_slice(&c.times, &c.values, c.mode, &c.in_tangents, &c.out_tangents, t, bind_t),
+        Some(c) => sample_vec3_slice(
+            &c.times,
+            &c.values,
+            c.mode,
+            &c.in_tangents,
+            &c.out_tangents,
+            t,
+            bind_t,
+        ),
         None => bind_t,
     };
     let rot = match clip.rotation_channel(node) {
-        Some(c) => sample_quat_slice(&c.times, &c.values, c.mode, &c.in_tangents, &c.out_tangents, t),
+        Some(c) => sample_quat_slice(
+            &c.times,
+            &c.values,
+            c.mode,
+            &c.in_tangents,
+            &c.out_tangents,
+            t,
+        ),
         None => bind_r,
     };
     let sc = match clip.scale_channel(node) {
-        Some(c) => sample_vec3_slice(&c.times, &c.values, c.mode, &c.in_tangents, &c.out_tangents, t, bind_s),
+        Some(c) => sample_vec3_slice(
+            &c.times,
+            &c.values,
+            c.mode,
+            &c.in_tangents,
+            &c.out_tangents,
+            t,
+            bind_s,
+        ),
         None => bind_s,
     };
     mat4_from_trs(tr, rot, sc)
@@ -467,8 +509,12 @@ pub(crate) fn sample_skeleton_pose(
     t: f32,
     joint_count: usize,
 ) -> Vec<JointMatrix> {
-    let Some(skin) = anim_set.skins.get(skin_index) else { return Vec::new() };
-    let n = joint_count.min(skin.joint_node_indices.len()).min(MAX_JOINTS);
+    let Some(skin) = anim_set.skins.get(skin_index) else {
+        return Vec::new();
+    };
+    let n = joint_count
+        .min(skin.joint_node_indices.len())
+        .min(MAX_JOINTS);
     if n == 0 {
         return Vec::new();
     }
@@ -476,7 +522,10 @@ pub(crate) fn sample_skeleton_pose(
     let clip = match anim_set.clips.get(clip_index) {
         Some(c) => c,
         None => {
-            empty_clip = AnimClip { duration_s: 0.0, channels: Vec::new() };
+            empty_clip = AnimClip {
+                duration_s: 0.0,
+                channels: Vec::new(),
+            };
             &empty_clip
         }
     };
@@ -489,8 +538,16 @@ pub(crate) fn sample_skeleton_pose(
 
     for j in 0..n {
         parent[j] = skin.joint_parent.get(j).copied().unwrap_or(-1);
-        root_world[j] = skin.joint_root_world.get(j).copied().unwrap_or(MAT4_IDENTITY);
-        inverse_bind[j] = skin.inverse_bind_matrices.get(j).copied().unwrap_or(MAT4_IDENTITY);
+        root_world[j] = skin
+            .joint_root_world
+            .get(j)
+            .copied()
+            .unwrap_or(MAT4_IDENTITY);
+        inverse_bind[j] = skin
+            .inverse_bind_matrices
+            .get(j)
+            .copied()
+            .unwrap_or(MAT4_IDENTITY);
         local[j] = sample_joint_local(anim_set, clip, skin.joint_node_indices[j], t);
     }
 
@@ -524,9 +581,21 @@ pub(crate) fn sample_skeleton_pose(
     // used pre-cache — see that impl's identical comment.
     #[allow(clippy::needless_range_loop)]
     for j in 0..n {
-        let w = resolve_world(j, &parent[..n], &local[..n], &root_world[..n], &mut world[..n], 0);
+        let w = resolve_world(
+            j,
+            &parent[..n],
+            &local[..n],
+            &root_world[..n],
+            &mut world[..n],
+            0,
+        );
         let m = mat4_mul(&w, &inverse_bind[j]);
-        skin_matrices.push(JointMatrix { c0: m[0], c1: m[1], c2: m[2], c3: m[3] });
+        skin_matrices.push(JointMatrix {
+            c0: m[0],
+            c1: m[1],
+            c2: m[2],
+            c3: m[3],
+        });
     }
     skin_matrices
 }
@@ -555,7 +624,10 @@ impl Primitive for GltfSkeletonPose {
         let rate = ctx.param_f32("rate", 1.0);
 
         let loop_mode = LoopMode::from_enum_index(
-            ctx.params.get("loop_mode").and_then(ParamValue::as_scalar).unwrap_or(0.0),
+            ctx.params
+                .get("loop_mode")
+                .and_then(ParamValue::as_scalar)
+                .unwrap_or(0.0),
         );
         let clip_index = ctx
             .inputs
@@ -570,7 +642,11 @@ impl Primitive for GltfSkeletonPose {
             .inputs
             .scalar("trigger_count")
             .and_then(|v| v.as_scalar())
-            .or_else(|| ctx.params.get("trigger_count").and_then(ParamValue::as_scalar));
+            .or_else(|| {
+                ctx.params
+                    .get("trigger_count")
+                    .and_then(ParamValue::as_scalar)
+            });
         self.trigger_latch.update(trigger_count, ctx.time.beats.0);
 
         let joint_count = match ctx.params.get("joint_count") {
@@ -607,7 +683,11 @@ impl Primitive for GltfSkeletonPose {
             self.pending_load = None;
             self.load_error = None;
         }
-        if self.anim_set.is_none() && self.pending_load.is_none() && self.load_error.is_none() && !path.is_empty() {
+        if self.anim_set.is_none()
+            && self.pending_load.is_none()
+            && self.load_error.is_none()
+            && !path.is_empty()
+        {
             self.pending_load = Some(spawn_load(std::path::Path::new(&path)));
         }
         if let Some(rx) = &self.pending_load {
@@ -665,7 +745,13 @@ impl Primitive for GltfSkeletonPose {
         // node-slot rigid palette over a real glTF skin.
         let skin_matrices = if skin_index_raw == NODE_SLOT_MODE {
             let node_slots: Vec<u32> = table_or_empty(ctx.params.get("node_slots"))
-                .map(|t| t.rows().iter().filter_map(|r| r.first()).map(|&v| v.round().max(0.0) as u32).collect())
+                .map(|t| {
+                    t.rows()
+                        .iter()
+                        .filter_map(|r| r.first())
+                        .map(|&v| v.round().max(0.0) as u32)
+                        .collect()
+                })
                 .unwrap_or_default();
             sample_node_slot_pose(&anim_set, &node_slots, clip_index, t)
         } else {
@@ -689,7 +775,12 @@ impl Primitive for GltfSkeletonPose {
             };
             for joint in &mut skin_matrices {
                 let m = mat4_mul(&into_node, &[joint.c0, joint.c1, joint.c2, joint.c3]);
-                *joint = JointMatrix { c0: m[0], c1: m[1], c2: m[2], c3: m[3] };
+                *joint = JointMatrix {
+                    c0: m[0],
+                    c1: m[1],
+                    c2: m[2],
+                    c3: m[3],
+                };
             }
         }
 
@@ -726,7 +817,13 @@ impl Primitive for GltfSkeletonPose {
         &self,
         params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> manifold_node_engine::scene::source_asset::SourceAssetIdentity<'_> {
-        loaded_identity(params, "path", &self.last_path, self.anim_set.as_deref(), self.load_error.as_deref())
+        loaded_identity(
+            params,
+            "path",
+            &self.last_path,
+            self.anim_set.as_deref(),
+            self.load_error.as_deref(),
+        )
     }
 
     fn is_trigger_latch(&self) -> bool {
@@ -741,20 +838,25 @@ mod tests {
 
     fn identity_params(path: &str) -> manifold_node_engine::exec::effect_node::ParamValues {
         let mut params = manifold_node_engine::exec::effect_node::ParamValues::default();
-        params.insert(Cow::Borrowed("path"), ParamValue::String(Arc::new(path.to_owned())));
+        params.insert(
+            Cow::Borrowed("path"),
+            ParamValue::String(Arc::new(path.to_owned())),
+        );
         params
     }
 
     #[test]
     fn source_identity_tracks_ready_pending_failed_and_reset_states() {
         let mut prim = GltfSkeletonPose::new();
-        let loaded: Arc<LoadedAnimSet> = Arc::new(GltfAnimSet {
-            clips: Vec::new(),
-            skins: Vec::new(),
-            node_parents: Vec::new(),
-            node_bind_trs: Vec::new(),
-        }
-        .into());
+        let loaded: Arc<LoadedAnimSet> = Arc::new(
+            GltfAnimSet {
+                clips: Vec::new(),
+                skins: Vec::new(),
+                node_parents: Vec::new(),
+                node_bind_trs: Vec::new(),
+            }
+            .into(),
+        );
         let fingerprint = loaded.identity();
         prim.last_path = "skeleton-a.glb".to_owned();
         prim.anim_set = Some(loaded);
@@ -771,12 +873,17 @@ mod tests {
         prim.load_error = Some("skeleton load failed".to_owned());
         assert_eq!(
             Primitive::source_asset_identity(&prim, &identity_params("skeleton-a.glb")),
-            manifold_node_engine::scene::source_asset::SourceAssetIdentity::Failed("skeleton load failed")
+            manifold_node_engine::scene::source_asset::SourceAssetIdentity::Failed(
+                "skeleton load failed"
+            )
         );
 
         Primitive::clear_state(&mut prim);
         assert!(prim.load_error.is_none());
-        assert_eq!(prim.anim_set.as_ref().map(|set| set.identity()), Some(fingerprint));
+        assert_eq!(
+            prim.anim_set.as_ref().map(|set| set.identity()),
+            Some(fingerprint)
+        );
         assert_eq!(
             Primitive::source_asset_identity(&prim, &identity_params("skeleton-a.glb")),
             manifold_node_engine::scene::source_asset::SourceAssetIdentity::Ready(fingerprint)
@@ -800,8 +907,14 @@ mod tests {
         let w0 = resolve_world(0, &parent, &local, &root_world, &mut world, 0);
         let w1 = resolve_world(1, &parent, &local, &root_world, &mut world, 0);
         assert!((w0[3][0] - 10.0).abs() < 1e-5, "joint 0 world x = 10");
-        assert!((w1[3][0] - 10.0).abs() < 1e-5, "joint 1 world x inherits joint 0's translation");
-        assert!((w1[3][1] - 2.0).abs() < 1e-5, "joint 1 world y is its own local offset");
+        assert!(
+            (w1[3][0] - 10.0).abs() < 1e-5,
+            "joint 1 world x inherits joint 0's translation"
+        );
+        assert!(
+            (w1[3][1] - 2.0).abs() < 1e-5,
+            "joint 1 world y is its own local offset"
+        );
     }
 
     /// Full-pipeline value check without the graph/backend plumbing:
@@ -811,7 +924,11 @@ mod tests {
     #[test]
     fn skin_matrix_is_world_times_inverse_bind() {
         let parent = [-1i32];
-        let local = [mat4_from_trs([3.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0])];
+        let local = [mat4_from_trs(
+            [3.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+        )];
         let root_world = [MAT4_IDENTITY];
         let mut world: [Option<Mat4>; 1] = [None];
         let w = resolve_world(0, &parent, &local, &root_world, &mut world, 0);
@@ -821,7 +938,11 @@ mod tests {
         // (already-world) space composed AFTER world — net translation
         // should be world's rotation/scale applied to -3 then +3 world
         // offset: for pure translations this nets to 0.
-        assert!((skin[3][0]).abs() < 1e-5, "world(+3) * inverse_bind(-3) nets to 0, got {}", skin[3][0]);
+        assert!(
+            (skin[3][0]).abs() < 1e-5,
+            "world(+3) * inverse_bind(-3) nets to 0, got {}",
+            skin[3][0]
+        );
     }
 
     // ─── GLTF_ANIM_RUNTIME_V2_DESIGN.md P1 — cache-backed sampling ─────────
@@ -841,10 +962,17 @@ mod tests {
     #[test]
     fn sample_joint_local_falls_back_to_bind_trs_when_no_channel() {
         let anim_set = GltfAnimSet {
-            clips: vec![AnimClip { duration_s: 1.0, channels: Vec::new() }],
+            clips: vec![AnimClip {
+                duration_s: 1.0,
+                channels: Vec::new(),
+            }],
             skins: Vec::new(),
             node_parents: Vec::new(),
-            node_bind_trs: vec![BindTrs { translation: [1.0, 2.0, 3.0], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] }],
+            node_bind_trs: vec![BindTrs {
+                translation: [1.0, 2.0, 3.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0; 3],
+            }],
         };
         let m = sample_joint_local(&anim_set, &anim_set.clips[0], 0, 0.5);
         assert_eq!(m[3][0], 1.0, "no channel for node 0 -> bind translation x");
@@ -856,13 +984,24 @@ mod tests {
     fn sample_joint_local_samples_the_animated_channel_when_present() {
         let channel = translation_channel(0, &[(0.0, [0.0, 0.0, 0.0]), (1.0, [10.0, 0.0, 0.0])]);
         let anim_set = GltfAnimSet {
-            clips: vec![AnimClip { duration_s: 1.0, channels: vec![channel] }],
+            clips: vec![AnimClip {
+                duration_s: 1.0,
+                channels: vec![channel],
+            }],
             skins: Vec::new(),
             node_parents: Vec::new(),
-            node_bind_trs: vec![BindTrs { translation: [99.0, 99.0, 99.0], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] }],
+            node_bind_trs: vec![BindTrs {
+                translation: [99.0, 99.0, 99.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0; 3],
+            }],
         };
         let m = sample_joint_local(&anim_set, &anim_set.clips[0], 0, 0.5);
-        assert!((m[3][0] - 5.0).abs() < 1e-4, "halfway lerp of the animated channel, not the bind pose, got {}", m[3][0]);
+        assert!(
+            (m[3][0] - 5.0).abs() < 1e-4,
+            "halfway lerp of the animated channel, not the bind pose, got {}",
+            m[3][0]
+        );
     }
 
     /// Two-joint parent chain (same shape as `resolve_world_composes_parent_chain`)
@@ -873,7 +1012,10 @@ mod tests {
     fn sample_skeleton_pose_composes_parent_chain_end_to_end() {
         let channel0 = translation_channel(0, &[(0.0, [0.0, 0.0, 0.0]), (1.0, [10.0, 0.0, 0.0])]);
         let anim_set = GltfAnimSet {
-            clips: vec![AnimClip { duration_s: 1.0, channels: vec![channel0] }],
+            clips: vec![AnimClip {
+                duration_s: 1.0,
+                channels: vec![channel0],
+            }],
             skins: vec![SkinTopology {
                 joint_node_indices: vec![0, 1],
                 joint_parent: vec![-1, 0],
@@ -882,15 +1024,32 @@ mod tests {
             }],
             node_parents: vec![-1, 0],
             node_bind_trs: vec![
-                BindTrs { translation: [0.0; 3], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] },
-                BindTrs { translation: [0.0, 2.0, 0.0], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] },
+                BindTrs {
+                    translation: [0.0; 3],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    scale: [1.0; 3],
+                },
+                BindTrs {
+                    translation: [0.0, 2.0, 0.0],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    scale: [1.0; 3],
+                },
             ],
         };
         let matrices = sample_skeleton_pose(&anim_set, 0, 0, 1.0, 2);
         assert_eq!(matrices.len(), 2);
-        assert!((matrices[0].c3[0] - 10.0).abs() < 1e-4, "joint 0 (animated) world x = 10");
-        assert!((matrices[1].c3[0] - 10.0).abs() < 1e-4, "joint 1 inherits joint 0's translation");
-        assert!((matrices[1].c3[1] - 2.0).abs() < 1e-4, "joint 1 keeps its own bind-pose y offset");
+        assert!(
+            (matrices[0].c3[0] - 10.0).abs() < 1e-4,
+            "joint 0 (animated) world x = 10"
+        );
+        assert!(
+            (matrices[1].c3[0] - 10.0).abs() < 1e-4,
+            "joint 1 inherits joint 0's translation"
+        );
+        assert!(
+            (matrices[1].c3[1] - 2.0).abs() < 1e-4,
+            "joint 1 keeps its own bind-pose y offset"
+        );
     }
 
     #[test]
@@ -912,9 +1071,13 @@ mod tests {
     /// forever; at t=1 the skinned vertex must now sit at x=10.
     #[test]
     fn animated_ancestor_above_joint_tree_moves_the_skin() {
-        let root_channel = translation_channel(0, &[(0.0, [0.0, 0.0, 0.0]), (1.0, [10.0, 0.0, 0.0])]);
+        let root_channel =
+            translation_channel(0, &[(0.0, [0.0, 0.0, 0.0]), (1.0, [10.0, 0.0, 0.0])]);
         let anim_set = GltfAnimSet {
-            clips: vec![AnimClip { duration_s: 1.0, channels: vec![root_channel] }],
+            clips: vec![AnimClip {
+                duration_s: 1.0,
+                channels: vec![root_channel],
+            }],
             skins: vec![SkinTopology {
                 joint_node_indices: vec![1],
                 joint_parent: vec![-1],
@@ -923,8 +1086,16 @@ mod tests {
             }],
             node_parents: vec![-1, 0],
             node_bind_trs: vec![
-                BindTrs { translation: [0.0; 3], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] },
-                BindTrs { translation: [0.0; 3], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] },
+                BindTrs {
+                    translation: [0.0; 3],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    scale: [1.0; 3],
+                },
+                BindTrs {
+                    translation: [0.0; 3],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    scale: [1.0; 3],
+                },
             ],
         };
         let matrices = sample_skeleton_pose(&anim_set, 0, 0, 1.0, 1);
@@ -940,10 +1111,20 @@ mod tests {
         // replaced (bind TRS of every ancestor = the parse-time static
         // product).
         let mut static_set = anim_set.clone();
-        static_set.node_bind_trs[0] =
-            BindTrs { translation: [5.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] };
-        static_set.skins[0].joint_root_world = vec![mat4_from_trs([5.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0], [1.0; 3])];
-        static_set.clips = vec![AnimClip { duration_s: 1.0, channels: Vec::new() }];
+        static_set.node_bind_trs[0] = BindTrs {
+            translation: [5.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0; 3],
+        };
+        static_set.skins[0].joint_root_world = vec![mat4_from_trs(
+            [5.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [1.0; 3],
+        )];
+        static_set.clips = vec![AnimClip {
+            duration_s: 1.0,
+            channels: Vec::new(),
+        }];
         let matrices = sample_skeleton_pose(&static_set, 0, 0, 0.5, 1);
         assert!(
             (matrices[0].c3[0] - 5.0).abs() < 1e-4,
@@ -965,7 +1146,10 @@ mod tests {
         let clips: Vec<AnimClip> = (0..CLIP_COUNT)
             .map(|c| AnimClip {
                 duration_s: 1.0,
-                channels: vec![translation_channel(0, &[(0.0, [0.0, 0.0, 0.0]), (1.0, [(c * 10) as f32, 0.0, 0.0])])],
+                channels: vec![translation_channel(
+                    0,
+                    &[(0.0, [0.0, 0.0, 0.0]), (1.0, [(c * 10) as f32, 0.0, 0.0])],
+                )],
             })
             .collect();
         let anim_set = GltfAnimSet {
@@ -977,7 +1161,11 @@ mod tests {
                 inverse_bind_matrices: vec![MAT4_IDENTITY],
             }],
             node_parents: vec![-1],
-            node_bind_trs: vec![BindTrs { translation: [0.0; 3], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] }],
+            node_bind_trs: vec![BindTrs {
+                translation: [0.0; 3],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0; 3],
+            }],
         };
 
         for &c in &[0usize, 15, 31, 32, 37, 39] {
@@ -1017,7 +1205,9 @@ mod tests {
             for c in 0..CHANNELS_PER_CLIP {
                 let node = (c % JOINT_COUNT) as u32;
                 let times: Vec<f32> = (0..KEYS_PER_CHANNEL).map(|k| k as f32 * 0.01).collect();
-                let values: Vec<f32> = (0..KEYS_PER_CHANNEL * 3).map(|v| (v % 7) as f32 * 0.1).collect();
+                let values: Vec<f32> = (0..KEYS_PER_CHANNEL * 3)
+                    .map(|v| (v % 7) as f32 * 0.1)
+                    .collect();
                 channels.push(Channel {
                     target_node: node,
                     kind: ChannelKind::Translation,
@@ -1029,25 +1219,39 @@ mod tests {
                 });
             }
             channels.sort_by_key(|c| c.target_node);
-            clips.push(AnimClip { duration_s: 1.6, channels });
+            clips.push(AnimClip {
+                duration_s: 1.6,
+                channels,
+            });
         }
 
         let joint_node_indices: Vec<u32> = (0..JOINT_COUNT as u32).collect();
         // A shallow binary tree so parent-chain composition is exercised
         // (not every joint a root).
-        let joint_parent: Vec<i32> =
-            (0..JOINT_COUNT).map(|j| if j == 0 { -1 } else { ((j - 1) / 2) as i32 }).collect();
+        let joint_parent: Vec<i32> = (0..JOINT_COUNT)
+            .map(|j| if j == 0 { -1 } else { ((j - 1) / 2) as i32 })
+            .collect();
         let skin = SkinTopology {
             joint_node_indices,
             joint_parent,
             joint_root_world: vec![MAT4_IDENTITY; JOINT_COUNT],
             inverse_bind_matrices: vec![MAT4_IDENTITY; JOINT_COUNT],
         };
-        let node_bind_trs =
-            vec![BindTrs { translation: [0.0; 3], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] }; JOINT_COUNT];
+        let node_bind_trs = vec![
+            BindTrs {
+                translation: [0.0; 3],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0; 3]
+            };
+            JOINT_COUNT
+        ];
 
-        let anim_set =
-            GltfAnimSet { clips, skins: vec![skin], node_parents: Vec::new(), node_bind_trs };
+        let anim_set = GltfAnimSet {
+            clips,
+            skins: vec![skin],
+            node_parents: Vec::new(),
+            node_bind_trs,
+        };
 
         // Warm the branch predictor / allocator once, then measure a
         // single pose sample (the per-frame cost this gate bounds).
@@ -1083,12 +1287,27 @@ mod tests {
         // Distinct non-trivial bind TRS at every level so the test can't
         // pass by accident (e.g. every level being identity).
         let node_bind_trs = vec![
-            BindTrs { translation: [5.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0, 1.0, 1.0] },
-            BindTrs { translation: [0.0, 3.0, 0.0], rotation: [0.0, 0.0, 0.0, 1.0], scale: [2.0, 2.0, 2.0] },
-            BindTrs { translation: [1.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0, 1.0, 1.0] },
+            BindTrs {
+                translation: [5.0, 0.0, 0.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0, 1.0, 1.0],
+            },
+            BindTrs {
+                translation: [0.0, 3.0, 0.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [2.0, 2.0, 2.0],
+            },
+            BindTrs {
+                translation: [1.0, 0.0, 0.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0, 1.0, 1.0],
+            },
         ];
         let anim_set = GltfAnimSet {
-            clips: vec![AnimClip { duration_s: 1.0, channels: Vec::new() }],
+            clips: vec![AnimClip {
+                duration_s: 1.0,
+                channels: Vec::new(),
+            }],
             skins: Vec::new(),
             node_parents: vec![-1, 0, 1],
             node_bind_trs: node_bind_trs.clone(),
@@ -1097,11 +1316,19 @@ mod tests {
         // Hand-compose the SAME static chain the pre-D4 static path would:
         // world(2) = local(0) * local(1) * local(2).
         let local = |b: &BindTrs| mat4_from_trs(b.translation, b.rotation, b.scale);
-        let expected = mat4_mul(&mat4_mul(&local(&node_bind_trs[0]), &local(&node_bind_trs[1])), &local(&node_bind_trs[2]));
+        let expected = mat4_mul(
+            &mat4_mul(&local(&node_bind_trs[0]), &local(&node_bind_trs[1])),
+            &local(&node_bind_trs[2]),
+        );
 
         let matrices = sample_node_slot_pose(&anim_set, &[2], 0, 0.5);
         assert_eq!(matrices.len(), 1);
-        let m = [matrices[0].c0, matrices[0].c1, matrices[0].c2, matrices[0].c3];
+        let m = [
+            matrices[0].c0,
+            matrices[0].c1,
+            matrices[0].c2,
+            matrices[0].c3,
+        ];
         for col in 0..4 {
             for row in 0..4 {
                 assert!(
@@ -1125,14 +1352,29 @@ mod tests {
     #[test]
     fn node_slot_composes_multiple_independently_animated_ancestors() {
         let node_bind_trs = vec![
-            BindTrs { translation: [0.0; 3], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] },
-            BindTrs { translation: [0.0; 3], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] },
-            BindTrs { translation: [0.0; 3], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] },
+            BindTrs {
+                translation: [0.0; 3],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0; 3],
+            },
+            BindTrs {
+                translation: [0.0; 3],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0; 3],
+            },
+            BindTrs {
+                translation: [0.0; 3],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0; 3],
+            },
         ];
         let chan0 = translation_channel(0, &[(0.0, [0.0, 0.0, 0.0]), (1.0, [10.0, 0.0, 0.0])]);
         let chan1 = translation_channel(1, &[(0.0, [0.0, 0.0, 0.0]), (1.0, [4.0, 0.0, 0.0])]);
         let anim_set = GltfAnimSet {
-            clips: vec![AnimClip { duration_s: 1.0, channels: vec![chan0, chan1] }],
+            clips: vec![AnimClip {
+                duration_s: 1.0,
+                channels: vec![chan0, chan1],
+            }],
             skins: Vec::new(),
             node_parents: vec![-1, 0, 1],
             node_bind_trs,
@@ -1152,20 +1394,42 @@ mod tests {
     #[test]
     fn node_slot_pose_handles_multiple_slots_sharing_an_ancestor() {
         let node_bind_trs = vec![
-            BindTrs { translation: [0.0; 3], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] },
-            BindTrs { translation: [1.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] },
-            BindTrs { translation: [-1.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] },
+            BindTrs {
+                translation: [0.0; 3],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0; 3],
+            },
+            BindTrs {
+                translation: [1.0, 0.0, 0.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0; 3],
+            },
+            BindTrs {
+                translation: [-1.0, 0.0, 0.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0; 3],
+            },
         ];
-        let root_channel = translation_channel(0, &[(0.0, [0.0, 0.0, 0.0]), (1.0, [100.0, 0.0, 0.0])]);
+        let root_channel =
+            translation_channel(0, &[(0.0, [0.0, 0.0, 0.0]), (1.0, [100.0, 0.0, 0.0])]);
         let anim_set = GltfAnimSet {
-            clips: vec![AnimClip { duration_s: 1.0, channels: vec![root_channel] }],
+            clips: vec![AnimClip {
+                duration_s: 1.0,
+                channels: vec![root_channel],
+            }],
             skins: Vec::new(),
             node_parents: vec![-1, 0, 0],
             node_bind_trs,
         };
         let matrices = sample_node_slot_pose(&anim_set, &[1, 2], 0, 1.0);
         assert_eq!(matrices.len(), 2);
-        assert!((matrices[0].c3[0] - 101.0).abs() < 1e-4, "slot 0 (node 1): root(100) + own(1)");
-        assert!((matrices[1].c3[0] - 99.0).abs() < 1e-4, "slot 1 (node 2): root(100) + own(-1)");
+        assert!(
+            (matrices[0].c3[0] - 101.0).abs() < 1e-4,
+            "slot 0 (node 1): root(100) + own(1)"
+        );
+        assert!(
+            (matrices[1].c3[0] - 99.0).abs() < 1e-4,
+            "slot 1 (node 2): root(100) + own(-1)"
+        );
     }
 }

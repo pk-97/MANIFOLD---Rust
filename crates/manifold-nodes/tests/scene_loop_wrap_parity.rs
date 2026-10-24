@@ -24,8 +24,11 @@ use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire, PresetMetadata, SerializedParamValue,
 };
 use manifold_core::preset_type_id::PresetTypeId;
-use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_nodes_scene::node_graph::viewport_render::render_viewport_frame};
 use manifold_node_engine::runtime::preset_context::PresetContext;
+use {
+    manifold_node_engine::persistence::PrimitiveRegistry,
+    manifold_nodes_scene::node_graph::viewport_render::render_viewport_frame,
+};
 
 fn node(
     id: u32,
@@ -70,27 +73,60 @@ fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectG
 ///   render_scene.color → system.final_output.in
 fn build_loop_graph() -> EffectGraphDef {
     let mut params_phase = BTreeMap::new();
-    params_phase.insert("rate".to_string(), SerializedParamValue::Float { value: 0.125 });
-    params_phase.insert("attack".to_string(), SerializedParamValue::Float { value: 1.0 });
+    params_phase.insert(
+        "rate".to_string(),
+        SerializedParamValue::Float { value: 0.125 },
+    );
+    params_phase.insert(
+        "attack".to_string(),
+        SerializedParamValue::Float { value: 1.0 },
+    );
 
     let mut params_array = BTreeMap::new();
-    params_array.insert("pattern_length".to_string(), SerializedParamValue::Float { value: 1.0 });
+    params_array.insert(
+        "pattern_length".to_string(),
+        SerializedParamValue::Float { value: 1.0 },
+    );
     params_array.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 });
-    params_array.insert("cell_size".to_string(), SerializedParamValue::Float { value: 10.0 });
+    params_array.insert(
+        "cell_size".to_string(),
+        SerializedParamValue::Float { value: 10.0 },
+    );
 
     let mut params_camera = BTreeMap::new();
-    params_camera.insert("cell_size".to_string(), SerializedParamValue::Float { value: 10.0 });
+    params_camera.insert(
+        "cell_size".to_string(),
+        SerializedParamValue::Float { value: 10.0 },
+    );
     params_camera.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 });
-    params_camera.insert("fov_y".to_string(), SerializedParamValue::Float { value: 0.9 });
+    params_camera.insert(
+        "fov_y".to_string(),
+        SerializedParamValue::Float { value: 0.9 },
+    );
 
     let mut params_scene = BTreeMap::new();
-    params_scene.insert("objects".to_string(), SerializedParamValue::Float { value: 1.0 });
-    params_scene.insert("lights".to_string(), SerializedParamValue::Float { value: 0.0 });
+    params_scene.insert(
+        "objects".to_string(),
+        SerializedParamValue::Float { value: 1.0 },
+    );
+    params_scene.insert(
+        "lights".to_string(),
+        SerializedParamValue::Float { value: 0.0 },
+    );
 
     let mut params_mat = BTreeMap::new();
-    params_mat.insert("color_r".to_string(), SerializedParamValue::Float { value: 0.8 });
-    params_mat.insert("color_g".to_string(), SerializedParamValue::Float { value: 0.3 });
-    params_mat.insert("color_b".to_string(), SerializedParamValue::Float { value: 0.3 });
+    params_mat.insert(
+        "color_r".to_string(),
+        SerializedParamValue::Float { value: 0.8 },
+    );
+    params_mat.insert(
+        "color_g".to_string(),
+        SerializedParamValue::Float { value: 0.3 },
+    );
+    params_mat.insert(
+        "color_b".to_string(),
+        SerializedParamValue::Float { value: 0.3 },
+    );
 
     EffectGraphDef {
         version: 1,
@@ -105,7 +141,7 @@ fn build_loop_graph() -> EffectGraphDef {
             legacy_discriminant: None,
             available: true,
             is_line_based: false,
-                layer_types: None,
+            layer_types: None,
             params: Vec::new(),
             bindings: Vec::new(),
             param_aliases: Vec::new(),
@@ -181,7 +217,8 @@ fn build_loop_graph_with_fog() -> EffectGraphDef {
         "node.scale_offset_value",
         params_driver,
     ));
-    def.nodes.push(node(10, "loop_fog", "node.atmosphere", params_atmo));
+    def.nodes
+        .push(node(10, "loop_fog", "node.atmosphere", params_atmo));
 
     // beat_ramp.out → fog_driver.a (phase input)
     def.wires.push(wire(1, "out", 9, "a"));
@@ -199,19 +236,46 @@ fn build_loop_graph_with_fog() -> EffectGraphDef {
 /// at the same beat MUST produce different pixel output.
 fn build_red_graph() -> EffectGraphDef {
     let mut params_orbit_cam = BTreeMap::new();
-    params_orbit_cam.insert("orbit".to_string(), SerializedParamValue::Float { value: 0.7 });
-    params_orbit_cam.insert("tilt".to_string(), SerializedParamValue::Float { value: 0.3 });
-    params_orbit_cam.insert("distance".to_string(), SerializedParamValue::Float { value: 5.0 });
-    params_orbit_cam.insert("fov_y".to_string(), SerializedParamValue::Float { value: 0.9 });
+    params_orbit_cam.insert(
+        "orbit".to_string(),
+        SerializedParamValue::Float { value: 0.7 },
+    );
+    params_orbit_cam.insert(
+        "tilt".to_string(),
+        SerializedParamValue::Float { value: 0.3 },
+    );
+    params_orbit_cam.insert(
+        "distance".to_string(),
+        SerializedParamValue::Float { value: 5.0 },
+    );
+    params_orbit_cam.insert(
+        "fov_y".to_string(),
+        SerializedParamValue::Float { value: 0.9 },
+    );
 
     let mut params_scene = BTreeMap::new();
-    params_scene.insert("objects".to_string(), SerializedParamValue::Float { value: 1.0 });
-    params_scene.insert("lights".to_string(), SerializedParamValue::Float { value: 0.0 });
+    params_scene.insert(
+        "objects".to_string(),
+        SerializedParamValue::Float { value: 1.0 },
+    );
+    params_scene.insert(
+        "lights".to_string(),
+        SerializedParamValue::Float { value: 0.0 },
+    );
 
     let mut params_mat = BTreeMap::new();
-    params_mat.insert("color_r".to_string(), SerializedParamValue::Float { value: 0.8 });
-    params_mat.insert("color_g".to_string(), SerializedParamValue::Float { value: 0.3 });
-    params_mat.insert("color_b".to_string(), SerializedParamValue::Float { value: 0.3 });
+    params_mat.insert(
+        "color_r".to_string(),
+        SerializedParamValue::Float { value: 0.8 },
+    );
+    params_mat.insert(
+        "color_g".to_string(),
+        SerializedParamValue::Float { value: 0.3 },
+    );
+    params_mat.insert(
+        "color_b".to_string(),
+        SerializedParamValue::Float { value: 0.3 },
+    );
 
     EffectGraphDef {
         version: 1,
@@ -226,7 +290,7 @@ fn build_red_graph() -> EffectGraphDef {
             legacy_discriminant: None,
             available: true,
             is_line_based: false,
-                layer_types: None,
+            layer_types: None,
             params: Vec::new(),
             bindings: Vec::new(),
             param_aliases: Vec::new(),
@@ -278,15 +342,23 @@ fn build_loop_graph_with_controls() -> EffectGraphDef {
         ("look_sweep_cycles", 1.0),
         ("zoom_pulse_amp", 0.25),
     ] {
-        camera.params.insert(k.to_string(), SerializedParamValue::Float { value: v });
+        camera
+            .params
+            .insert(k.to_string(), SerializedParamValue::Float { value: v });
     }
     let array = def
         .nodes
         .iter_mut()
         .find(|n| n.node_id.as_str() == "scene_array")
         .expect("scene_array");
-    array.params.insert("jitter_amount".to_string(), SerializedParamValue::Float { value: 0.5 });
-    array.params.insert("jitter_seed".to_string(), SerializedParamValue::Float { value: 7.0 });
+    array.params.insert(
+        "jitter_amount".to_string(),
+        SerializedParamValue::Float { value: 0.5 },
+    );
+    array.params.insert(
+        "jitter_seed".to_string(),
+        SerializedParamValue::Float { value: 7.0 },
+    );
     def
 }
 
@@ -314,7 +386,9 @@ fn build_loop_graph_phase_controls() -> EffectGraphDef {
         ("look_sweep_cycles", 1.0),
         ("zoom_pulse_amp", 0.25),
     ] {
-        camera.params.insert(k.to_string(), SerializedParamValue::Float { value: v });
+        camera
+            .params
+            .insert(k.to_string(), SerializedParamValue::Float { value: v });
     }
     def
 }
@@ -322,11 +396,15 @@ fn build_loop_graph_phase_controls() -> EffectGraphDef {
 /// One device and registry per process: nextest runs each test in its own
 /// process, so every test pays device start once, not once per frame.
 fn renderer() -> &'static (std::sync::Arc<manifold_gpu::GpuDevice>, PrimitiveRegistry) {
-    static SHARED: std::sync::OnceLock<(std::sync::Arc<manifold_gpu::GpuDevice>, PrimitiveRegistry)> =
-        std::sync::OnceLock::new();
+    static SHARED: std::sync::OnceLock<(
+        std::sync::Arc<manifold_gpu::GpuDevice>,
+        PrimitiveRegistry,
+    )> = std::sync::OnceLock::new();
     SHARED.get_or_init(|| {
         (
-            std::sync::Arc::new(manifold_gpu::GpuDevice::new_queued("scene_loop_wrap_parity")),
+            std::sync::Arc::new(manifold_gpu::GpuDevice::new_queued(
+                "scene_loop_wrap_parity",
+            )),
             PrimitiveRegistry::with_builtin(),
         )
     })
@@ -385,7 +463,10 @@ fn red_phase_must_differ_with_non_locked_camera() {
     let green_frame = render_frame(&green_def, 0.0);
 
     let red_nonblack = red_frame.iter().filter(|&&v| v > 0).count();
-    assert!(red_nonblack > 0, "orbit_camera scene should render visible pixels");
+    assert!(
+        red_nonblack > 0,
+        "orbit_camera scene should render visible pixels"
+    );
 
     let diff = max_pixel_diff(&red_frame, &green_frame);
     assert!(
@@ -496,8 +577,14 @@ fn wrap_parity_near_seam_measurement() {
         .iter_mut()
         .find(|n| n.node_id.as_str() == "scene_array")
         .expect("scene_array");
-    array.params.insert("jitter_amount".to_string(), SerializedParamValue::Float { value: 0.5 });
-    array.params.insert("jitter_seed".to_string(), SerializedParamValue::Float { value: 7.0 });
+    array.params.insert(
+        "jitter_amount".to_string(),
+        SerializedParamValue::Float { value: 0.5 },
+    );
+    array.params.insert(
+        "jitter_seed".to_string(),
+        SerializedParamValue::Float { value: 7.0 },
+    );
 
     let j_a = render_frame(&jittered, 0.0);
     let j_b = render_frame(&jittered, 8.0 * 0.99999);
@@ -562,7 +649,10 @@ fn bars_rate_change_is_position_continuous_with_controls_live() {
         .find(|n| n.node_id.as_str() == "loop_phase")
         .expect("loop_phase")
         .params
-        .insert("rate".to_string(), SerializedParamValue::Float { value: 0.0625 }); // 1/16
+        .insert(
+            "rate".to_string(),
+            SerializedParamValue::Float { value: 0.0625 },
+        ); // 1/16
 
     let frame_a = render_frame(&def_a, 16.0);
     let frame_b = render_frame(&def_b, 16.0);

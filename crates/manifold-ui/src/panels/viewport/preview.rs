@@ -52,7 +52,8 @@ impl TimelineViewportPanel {
         }
         clip.layer_index = layer_index;
         let dst = &mut self.clips_by_layer[layer_index];
-        self.clip_index.insert(clip_id.clone(), (layer_index, dst.len()));
+        self.clip_index
+            .insert(clip_id.clone(), (layer_index, dst.len()));
         dst.push(clip);
         self.overview_clips_dirty = true;
         self.overview_repaint = true;
@@ -96,7 +97,11 @@ mod tests {
 
     fn overview(panel: &mut TimelineViewportPanel) -> Vec<Color32> {
         panel.repaint_overview();
-        panel.overview_bitmap().expect("the strip repainted").0.to_vec()
+        panel
+            .overview_bitmap()
+            .expect("the strip repainted")
+            .0
+            .to_vec()
     }
 
     /// What a fresh panel, which walks every clip, paints for these clips.
@@ -117,14 +122,25 @@ mod tests {
     fn overview_matches_a_full_walk() {
         let mut panel = laid_out();
         panel.set_clips(vec![clip("a", 0, 0.0, 4.0), clip("b", 1, 4.0, 8.0)]);
-        assert_eq!(overview(&mut panel), walked(vec![clip("a", 0, 0.0, 4.0), clip("b", 1, 4.0, 8.0)], 0.0, None));
+        assert_eq!(
+            overview(&mut panel),
+            walked(
+                vec![clip("a", 0, 0.0, 4.0), clip("b", 1, 4.0, 8.0)],
+                0.0,
+                None
+            )
+        );
 
         // A scroll and a zoom leave the clip data alone.
         panel.set_scroll(8.0, 0.0);
         panel.set_zoom(40.0);
         assert_eq!(
             overview(&mut panel),
-            walked(vec![clip("a", 0, 0.0, 4.0), clip("b", 1, 4.0, 8.0)], 8.0, Some(40.0))
+            walked(
+                vec![clip("a", 0, 0.0, 4.0), clip("b", 1, 4.0, 8.0)],
+                8.0,
+                Some(40.0)
+            )
         );
 
         // A preview move that extends the end is seen on the next repaint.
@@ -132,16 +148,27 @@ mod tests {
         panel.preview_clip_mut(&id).unwrap().start_beat = Beats::from_f32(30.0);
         assert_eq!(
             overview(&mut panel),
-            walked(vec![clip("a", 0, 30.0, 4.0), clip("b", 1, 4.0, 8.0)], 8.0, Some(40.0))
+            walked(
+                vec![clip("a", 0, 30.0, 4.0), clip("b", 1, 4.0, 8.0)],
+                8.0,
+                Some(40.0)
+            )
         );
 
         // A move to another layer; then set_clips again shrinks the end.
         assert!(panel.move_clip_to_layer(&id, 1));
         assert_eq!(
             overview(&mut panel),
-            walked(vec![clip("a", 1, 30.0, 4.0), clip("b", 1, 4.0, 8.0)], 8.0, Some(40.0))
+            walked(
+                vec![clip("a", 1, 30.0, 4.0), clip("b", 1, 4.0, 8.0)],
+                8.0,
+                Some(40.0)
+            )
         );
         panel.set_clips(vec![clip("b", 1, 4.0, 8.0)]);
-        assert_eq!(overview(&mut panel), walked(vec![clip("b", 1, 4.0, 8.0)], 8.0, Some(40.0)));
+        assert_eq!(
+            overview(&mut panel),
+            walked(vec![clip("b", 1, 4.0, 8.0)], 8.0, Some(40.0))
+        );
     }
 }

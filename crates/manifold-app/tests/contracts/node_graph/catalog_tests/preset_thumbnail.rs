@@ -1,14 +1,17 @@
 use manifold_compositor::preset_thumbnail::*;
-use manifold_core::preset_def::PresetKind;
 #[cfg(feature = "gpu-proofs")]
 use manifold_core::effect_graph_def::EffectGraphDef;
+use manifold_core::preset_def::PresetKind;
 
 #[cfg(feature = "gpu-proofs")]
 /// Minimal bundled effect preset (Bloom, a real shipped effect) parsed
 /// from disk — exercises the real `system.source` → primitives →
 /// `system.final_output` shape, not a synthetic fixture.
 fn bloom_def() -> EffectGraphDef {
-    let json = std::fs::read_to_string(std::path::Path::new(manifold_nodes::testkit::assets::CATALOG_ASSETS_ROOT).join("effect-presets/Bloom.json"))
+    let json = std::fs::read_to_string(
+        std::path::Path::new(manifold_nodes::testkit::assets::CATALOG_ASSETS_ROOT)
+            .join("effect-presets/Bloom.json"),
+    )
     .expect("read Bloom.json");
     serde_json::from_str(&json).expect("parse Bloom.json")
 }
@@ -47,7 +50,9 @@ fn render_effect_thumbnail_produces_non_trivial_png() {
         .expect("effect thumbnail render");
     assert!(!png.is_empty(), "PNG bytes must be non-empty");
 
-    let decoded = image::load_from_memory(&png).expect("decode produced PNG").to_rgba8();
+    let decoded = image::load_from_memory(&png)
+        .expect("decode produced PNG")
+        .to_rgba8();
     let mut distinct = std::collections::HashSet::new();
     for px in decoded.pixels() {
         distinct.insert(px.0);
@@ -70,7 +75,9 @@ fn render_generator_thumbnail_produces_non_trivial_png() {
     let png = render_preset_thumbnail(&device.arc(), PresetKind::Generator, &def, 96, 54, false)
         .expect("generator thumbnail render");
     assert!(!png.is_empty());
-    let decoded = image::load_from_memory(&png).expect("decode produced PNG").to_rgba8();
+    let decoded = image::load_from_memory(&png)
+        .expect("decode produced PNG")
+        .to_rgba8();
     // Not asserting non-black here — BlackHole may legitimately render
     // mostly empty space; this confirms the render+encode path itself
     // works and produces a real, decodable image at the right size.
@@ -101,10 +108,12 @@ fn thumbnail_render_deterministic() {
     let mut stateful_ok = false;
     for id in ["FluidSim2D", "StrangeAttractor", "OilyFluid", "StarField"] {
         let def = generator_def(id);
-        let g1 = render_preset_thumbnail(&device.arc(), PresetKind::Generator, &def, 128, 72, false)
-            .unwrap_or_else(|e| panic!("{id} render 1: {e}"));
-        let g2 = render_preset_thumbnail(&device.arc(), PresetKind::Generator, &def, 128, 72, false)
-            .unwrap_or_else(|e| panic!("{id} render 2: {e}"));
+        let g1 =
+            render_preset_thumbnail(&device.arc(), PresetKind::Generator, &def, 128, 72, false)
+                .unwrap_or_else(|e| panic!("{id} render 1: {e}"));
+        let g2 =
+            render_preset_thumbnail(&device.arc(), PresetKind::Generator, &def, 128, 72, false)
+                .unwrap_or_else(|e| panic!("{id} render 2: {e}"));
         if g1 == g2 {
             assert_opaque(&g1, id);
             eprintln!("thumbnail_render_deterministic: stateful pick = {id}");

@@ -14,12 +14,12 @@ use std::ffi::c_void;
 use std::path::Path;
 use std::slice;
 
-use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
 use manifold_compositor::display_capture::{AlphaInterpretation, LinearUiReadback};
 use manifold_compositor::presentation::UI_FORMAT;
+use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
 use manifold_node_engine::gpu::render_target::RenderTarget;
-use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_ui::color;
+use manifold_ui_paint::ui_renderer::UIRenderer;
 
 // W*8 must be 256-byte aligned for the RGBA16Float texture→buffer readback copy.
 // 640*8 = 5120 = 20*256. H is unconstrained.
@@ -36,12 +36,12 @@ const FORMAT: GpuTextureFormat = UI_FORMAT;
 /// in-app display that IS verifiable without a running app.
 #[test]
 fn browser_popup_thumbnails_paint() {
-    use manifold_ui::node::{texture_handle_for_key, Vec2};
+    use manifold_ui::node::{Vec2, texture_handle_for_key};
+    use manifold_ui::panels::InspectorTab;
     use manifold_ui::panels::browser_popup::{
         BrowserPopupMode, BrowserPopupPanel, BrowserPopupRequest,
     };
     use manifold_ui::panels::picker_core::PickerItem;
-    use manifold_ui::panels::InspectorTab;
     use manifold_ui::{Rect, UIFlags, UITree, ZTier};
 
     let device = GpuDevice::new_queued("ui_color_swatches");
@@ -166,7 +166,12 @@ fn font_list_picker_paints() {
             screen_anchor: Vec2::new(30.0, 40.0),
         },
         actions,
-        ActionListOptions { empty_label: "No fonts match", label_in_own_font: true, current, ..Default::default() },
+        ActionListOptions {
+            empty_label: "No fonts match",
+            label_in_own_font: true,
+            current,
+            ..Default::default()
+        },
     );
 
     let mut tree = UITree::new();
@@ -183,7 +188,10 @@ fn font_list_picker_paints() {
     ui.begin_frame();
     ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_3);
     ui.render_tree(&tree, None);
-    assert!(ui.prepare(&device, W, H, 1.0), "font picker produced no draw commands");
+    assert!(
+        ui.prepare(&device, W, H, 1.0),
+        "font picker produced no draw commands"
+    );
     let target = RenderTarget::new(&device, W, H, FORMAT, "font-list-picker");
     {
         let mut enc = device.create_encoder("font-list-picker-render");
@@ -205,11 +213,11 @@ fn font_list_picker_paints() {
 /// waveform texture path.
 #[test]
 fn clip_waveform_sheet() {
-    use manifold_ui_paint::clip_content_gpu::ClipContentGpu;
-    use manifold_ui_paint::clip_draw::{emit_clips, ClipBody};
     use manifold_ui::node::Rect;
     use manifold_ui::panels::viewport::ClipScreenRect;
     use manifold_ui::waveform_renderer::WaveformRenderer;
+    use manifold_ui_paint::clip_content_gpu::ClipContentGpu;
+    use manifold_ui_paint::clip_draw::{ClipBody, emit_clips};
     use std::sync::Arc;
     use std::time::Instant;
 
@@ -237,7 +245,11 @@ fn clip_waveform_sheet() {
                 let mid_gate = if (0.35..6.8).contains(&t) { 0.32 } else { 0.0 };
                 let mid = (t * 800.0 * std::f32::consts::TAU).sin() * mid_gate;
                 let hit_phase = (t * 2.25).fract();
-                let high_gate = if hit_phase < 0.045 { (1.0 - hit_phase / 0.045).sqrt() } else { 0.0 };
+                let high_gate = if hit_phase < 0.045 {
+                    (1.0 - hit_phase / 0.045).sqrt()
+                } else {
+                    0.0
+                };
                 let high = (t * 6000.0 * std::f32::consts::TAU).sin() * 0.62 * high_gate;
                 (low + mid + high).clamp(-1.0, 1.0)
             })
@@ -259,9 +271,24 @@ fn clip_waveform_sheet() {
     // (label, y, source-start, source-end)
     let end = duration.max(0.001);
     let cases: &[(&str, f32, f32, f32)] = &[
-        ("overview · low blue / mid amber / high white", 58.0, 0.0, end),
-        ("beat-level · low blue / mid amber / high white", 248.0, end * 0.20, end * 0.38),
-        ("close-up · low blue / mid amber / high white", 438.0, end * 0.64, end * 0.72),
+        (
+            "overview · low blue / mid amber / high white",
+            58.0,
+            0.0,
+            end,
+        ),
+        (
+            "beat-level · low blue / mid amber / high white",
+            248.0,
+            end * 0.20,
+            end * 0.38,
+        ),
+        (
+            "close-up · low blue / mid amber / high white",
+            438.0,
+            end * 0.64,
+            end * 0.72,
+        ),
     ];
     let tracks = Rect::new(0.0, 40.0, W as f32, H as f32 - 40.0);
     let x = 24.0;
@@ -303,7 +330,13 @@ fn clip_waveform_sheet() {
     // Bodies first (Clear), then the per-clip waveform textures on top (Load).
     ui.begin_frame();
     ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_0);
-    ui.draw_text(24.0, 14.0, "GPU IN-CLIP WAVEFORMS · overview / beat-level / close-up", 13.0, color::TEXT_NORMAL);
+    ui.draw_text(
+        24.0,
+        14.0,
+        "GPU IN-CLIP WAVEFORMS · overview / beat-level / close-up",
+        13.0,
+        color::TEXT_NORMAL,
+    );
     emit_clips(&mut ui, &bodies);
     for &(label, y, ..) in cases {
         ui.draw_text(x, y - 16.0, label, 11.0, color::TEXT_DIMMED);
@@ -319,7 +352,16 @@ fn clip_waveform_sheet() {
     }
     {
         let mut enc = device.create_encoder("clip-waveform-content");
-        content.render(&device, &mut enc, &target.texture, W, H, 1.0, tracks, &clips);
+        content.render(
+            &device,
+            &mut enc,
+            &target.texture,
+            W,
+            H,
+            1.0,
+            tracks,
+            &clips,
+        );
         enc.commit_and_wait_completed();
     }
     let bytes = readback(&device, &target.texture);
@@ -348,9 +390,18 @@ fn clip_waveform_sheet() {
             }
         }
     }
-    assert!(blue > 10, "waveform blue band did not reach the GPU readback");
-    assert!(amber > 10, "waveform amber band did not reach the GPU readback");
-    assert!(white > 10, "waveform white band did not reach the GPU readback");
+    assert!(
+        blue > 10,
+        "waveform blue band did not reach the GPU readback"
+    );
+    assert!(
+        amber > 10,
+        "waveform amber band did not reach the GPU readback"
+    );
+    assert!(
+        white > 10,
+        "waveform white band did not reach the GPU readback"
+    );
     save_capture(&png, &bytes, W, H);
     eprintln!("clip waveform sheet → {png}");
 }
@@ -388,7 +439,8 @@ fn box_downsample_averages_high_frequency() {
         depth: 1,
         format: GpuTextureFormat::Rgba8Unorm,
         dimension: manifold_gpu::GpuTextureDimension::D2,
-        usage: manifold_gpu::GpuTextureUsage::SHADER_READ | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
+        usage: manifold_gpu::GpuTextureUsage::SHADER_READ
+            | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
         label: "ds-source",
         mip_levels: 1,
     });
@@ -401,8 +453,14 @@ fn box_downsample_averages_high_frequency() {
             &pipe,
             &target.texture,
             &[
-                manifold_gpu::GpuBinding::Texture { binding: 0, texture: &src },
-                manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: &sampler },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 0,
+                    texture: &src,
+                },
+                manifold_gpu::GpuBinding::Sampler {
+                    binding: 1,
+                    sampler: &sampler,
+                },
             ],
             true,
             true,
@@ -412,7 +470,8 @@ fn box_downsample_averages_high_frequency() {
     }
     let bytes = readback_w(&device, &target.texture, 64, 64);
     let i = ((32 * 64 + 32) * FORMAT.bytes_per_pixel()) as usize;
-    let r = (half::f16::from_bits(u16::from_le_bytes([bytes[i], bytes[i + 1]])).to_f32() * 255.0).round() as u8;
+    let r = (half::f16::from_bits(u16::from_le_bytes([bytes[i], bytes[i + 1]])).to_f32() * 255.0)
+        .round() as u8;
     assert!(
         (64..=192).contains(&r),
         "box downsample of a checkerboard should read mid-grey, got {r}"
@@ -455,7 +514,6 @@ fn save_capture(path: &str, bytes: &[u8], width: u32, height: u32) {
         .write_png(Path::new(path))
         .unwrap_or_else(|e| panic!("save {path}: {e}"));
 }
-
 
 /// PRESET_BROWSER_AUDITION P1 demo artifact (L2): renders BOTH preset
 /// browsers from the REAL registry — the actual post-recuration item set,
@@ -527,27 +585,30 @@ fn browser_popup_real_registry_p1_demo() {
     // The generator view is rendered for a non-DMX (video/generator) layer —
     // D8's layer_types gate must keep every LED-* preset out of this list.
     let effect_items = items_for(PresetKind::Effect);
-    let generator_items: Vec<PickerItem> = preset_type_registry::available_of_kind(PresetKind::Generator)
-        .iter()
-        .filter(|reg| reg.layer_types.is_none())
-        .map(|reg| PickerItem {
-            label: reg.display_name.to_string(),
-            type_id: reg.id.as_str().to_string(),
-            category: reg.category.map(|c| c.to_string()),
-            search_text: None,
-            source: Some(Source::Factory),
-            thumbnail: manifold_compositor::preset_thumbnail::factory_thumbnail_path(
-                PresetKind::Generator,
-                reg.id.as_str(),
-            )
-            .filter(|p| p.is_file())
-            .map(|p| p.to_string_lossy().into_owned()),
-        })
-        .collect();
+    let generator_items: Vec<PickerItem> =
+        preset_type_registry::available_of_kind(PresetKind::Generator)
+            .iter()
+            .filter(|reg| reg.layer_types.is_none())
+            .map(|reg| PickerItem {
+                label: reg.display_name.to_string(),
+                type_id: reg.id.as_str().to_string(),
+                category: reg.category.map(|c| c.to_string()),
+                search_text: None,
+                source: Some(Source::Factory),
+                thumbnail: manifold_compositor::preset_thumbnail::factory_thumbnail_path(
+                    PresetKind::Generator,
+                    reg.id.as_str(),
+                )
+                .filter(|p| p.is_file())
+                .map(|p| p.to_string_lossy().into_owned()),
+            })
+            .collect();
     let mut generator_items = generator_items;
     generator_items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
     assert!(
-        generator_items.iter().all(|it| !it.type_id.starts_with("LED ")),
+        generator_items
+            .iter()
+            .all(|it| !it.type_id.starts_with("LED ")),
         "D8 gate: LED presets must not appear in the non-DMX generator browser"
     );
 
@@ -559,7 +620,10 @@ fn browser_popup_real_registry_p1_demo() {
                 tab: manifold_ui::panels::InspectorTab::Master,
                 layer_id: None,
                 items: effect_items.clone(),
-                category_names: chip_names(&effect_items, Some(preset_type_registry::ALL_CATEGORIES)),
+                category_names: chip_names(
+                    &effect_items,
+                    Some(preset_type_registry::ALL_CATEGORIES),
+                ),
                 spawn_graph_pos: None,
                 paste_count: 0,
                 screen_anchor: Vec2::new(30.0, 40.0),
@@ -660,25 +724,24 @@ fn browser_popup_real_registry_p3_demo() {
     }
 
     let effect_items = items_for(PresetKind::Effect);
-    let mut generator_items: Vec<PickerItem> = preset_type_registry::available_of_kind(
-        PresetKind::Generator,
-    )
-    .iter()
-    .filter(|reg| reg.layer_types.is_none())
-    .map(|reg| PickerItem {
-        label: reg.display_name.to_string(),
-        type_id: reg.id.as_str().to_string(),
-        category: reg.category.map(|c| c.to_string()),
-        search_text: None,
-        source: Some(Source::Factory),
-        thumbnail: manifold_compositor::preset_thumbnail::factory_thumbnail_path(
-            PresetKind::Generator,
-            reg.id.as_str(),
-        )
-        .filter(|p| p.is_file())
-        .map(|p| p.to_string_lossy().into_owned()),
-    })
-    .collect();
+    let mut generator_items: Vec<PickerItem> =
+        preset_type_registry::available_of_kind(PresetKind::Generator)
+            .iter()
+            .filter(|reg| reg.layer_types.is_none())
+            .map(|reg| PickerItem {
+                label: reg.display_name.to_string(),
+                type_id: reg.id.as_str().to_string(),
+                category: reg.category.map(|c| c.to_string()),
+                search_text: None,
+                source: Some(Source::Factory),
+                thumbnail: manifold_compositor::preset_thumbnail::factory_thumbnail_path(
+                    PresetKind::Generator,
+                    reg.id.as_str(),
+                )
+                .filter(|p| p.is_file())
+                .map(|p| p.to_string_lossy().into_owned()),
+            })
+            .collect();
     generator_items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
 
     // Decode + register every distinct thumbnail up front, exactly as the
@@ -709,7 +772,11 @@ fn browser_popup_real_registry_p3_demo() {
     // derived from the items.
     let effect_chips: Vec<String> = preset_type_registry::ALL_CATEGORIES
         .iter()
-        .filter(|c| effect_items.iter().any(|it| it.category.as_deref() == Some(c)))
+        .filter(|c| {
+            effect_items
+                .iter()
+                .any(|it| it.category.as_deref() == Some(c))
+        })
         .map(|&c| c.to_string())
         .collect();
     let mut gen_chips: Vec<String> = Vec::new();

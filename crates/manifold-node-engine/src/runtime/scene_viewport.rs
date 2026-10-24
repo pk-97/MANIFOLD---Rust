@@ -14,7 +14,9 @@ impl PresetRuntime {
         config: crate::scene::scene_viewport::SceneViewportConfig,
     ) -> Result<(), crate::scene::scene_viewport::SceneViewportError> {
         use crate::scene::scene_viewport::SceneViewportError;
-        let resolved = self.effect_nodes.iter()
+        let resolved = self
+            .effect_nodes
+            .iter()
             .find(|slot| &slot.effect_id == effect_id)
             .and_then(|slot| slot.node_map.iter().find(|(id, _)| id == node_id))
             .and_then(|(_, instance)| self.graph.get_node(*instance));
@@ -27,7 +29,10 @@ impl PresetRuntime {
         };
         match result {
             Ok(node) => {
-                if self.executor.set_scene_viewport(node.id, config, || node.node.viewport_pass()) {
+                if self
+                    .executor
+                    .set_scene_viewport(node.id, config, || node.node.viewport_pass())
+                {
                     Ok(())
                 } else {
                     self.clear_scene_viewport();
@@ -79,6 +84,8 @@ impl PresetRuntime {
         encoder: &mut manifold_gpu::GpuEncoder,
         rays: &[manifold_gpu::raytrace::DebugRayQueryRay],
     ) -> Option<manifold_gpu::GpuBuffer> {
-        self.graph.nodes().find_map(|node| node.node.rt_probe_rays(device, encoder, rays))
+        self.graph
+            .nodes()
+            .find_map(|node| node.node.rt_probe_rays(device, encoder, rays))
     }
 }

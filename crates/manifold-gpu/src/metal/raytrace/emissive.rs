@@ -5,8 +5,8 @@
 //! path, reading CURRENT vertex/index data through raw GPU addresses so
 //! deformed meshes reach the light table with no CPU geometry reads.
 
-use super::{GiMaterial, RtAccel, RtAccelError, RtObjectGeometry, effective_instance_slots};
 use super::tracer::MetalShadowRayTracer;
+use super::{GiMaterial, RtAccel, RtAccelError, RtObjectGeometry, effective_instance_slots};
 use crate::metal::encoder::GpuEncoder;
 use crate::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
@@ -163,9 +163,15 @@ impl EmissiveLightTable {
 }
 
 fn prepare_buffer(device: &GpuDevice, bytes: u64, shared: bool) -> Result<GpuBuffer, RtAccelError> {
-    let result = if shared { device.try_create_buffer_shared(bytes) }
-        else { device.try_create_buffer(bytes) };
-    result.map_err(|_| RtAccelError::Allocation { bytes, resource: "emissive preparation" })
+    let result = if shared {
+        device.try_create_buffer_shared(bytes)
+    } else {
+        device.try_create_buffer(bytes)
+    };
+    result.map_err(|_| RtAccelError::Allocation {
+        bytes,
+        resource: "emissive preparation",
+    })
 }
 
 /// §5.1 candidate/sort workspace, sized at preparation over ALL objects
@@ -183,12 +189,20 @@ pub(crate) struct EmissiveScratch {
 }
 
 impl EmissiveScratch {
-    pub(crate) fn new(device: &GpuDevice, capacity: u32, max_objects: usize) -> Result<Self, RtAccelError> {
+    pub(crate) fn new(
+        device: &GpuDevice,
+        capacity: u32,
+        max_objects: usize,
+    ) -> Result<Self, RtAccelError> {
         let cap = u64::from(capacity.max(1));
         let tiles = u64::from(capacity.div_ceil(EM_TILE).max(1));
-        let params_bytes = 16 + (max_objects.max(1) * std::mem::size_of::<EmissiveObjParams>()) as u64;
+        let params_bytes =
+            16 + (max_objects.max(1) * std::mem::size_of::<EmissiveObjParams>()) as u64;
         Ok(Self {
-            candidates: [prepare_buffer(device, cap * 16, false)?, prepare_buffer(device, cap * 16, false)?],
+            candidates: [
+                prepare_buffer(device, cap * 16, false)?,
+                prepare_buffer(device, cap * 16, false)?,
+            ],
             hist: prepare_buffer(device, tiles * 256 * 4, false)?,
             obj_params: prepare_buffer(device, params_bytes, false)?,
             obj_params_scratch: prepare_buffer(device, params_bytes, true)?,
@@ -235,9 +249,14 @@ pub(crate) fn validate_emissive_inputs(
     if !materials.is_empty() && materials.len() != objects.len() {
         return Err(RtAccelError::Encode("RT emissive material count mismatch"));
     }
-    let scratch = accel.emissive_scratch.as_ref().ok_or(RtAccelError::NeedsPreparation)?;
+    let scratch = accel
+        .emissive_scratch
+        .as_ref()
+        .ok_or(RtAccelError::NeedsPreparation)?;
     if accel.emissive_table.is_none()
-        || objects.len().checked_mul(std::mem::size_of::<EmissiveObjParams>())
+        || objects
+            .len()
+            .checked_mul(std::mem::size_of::<EmissiveObjParams>())
             .and_then(|bytes| bytes.checked_add(16))
             .is_none_or(|bytes| bytes > scratch.obj_params_scratch.size as usize)
     {
@@ -247,16 +266,30 @@ pub(crate) fn validate_emissive_inputs(
     let mut candidates = 0u32;
     for (index, object) in objects.iter().enumerate() {
         let count = effective_instance_slots(object);
-        slots = slots.checked_add(count).ok_or(RtAccelError::Encode("RT emissive slot base overflow"))?;
-        let emission = if materials.is_empty() { 0.0 } else { luma(materials[index].emissive) };
-        if !emission.is_finite() { return Err(RtAccelError::Encode("RT emissive luma must be finite")); }
+        slots = slots
+            .checked_add(count)
+            .ok_or(RtAccelError::Encode("RT emissive slot base overflow"))?;
+        let emission = if materials.is_empty() {
+            0.0
+        } else {
+            luma(materials[index].emissive)
+        };
+        if !emission.is_finite() {
+            return Err(RtAccelError::Encode("RT emissive luma must be finite"));
+        }
         if emission > 0.0 {
-            candidates = candidates.checked_add(count.checked_mul(object.triangle_count)
-                .ok_or(RtAccelError::Encode("RT emissive candidate count overflow"))?)
+            candidates = candidates
+                .checked_add(
+                    count
+                        .checked_mul(object.triangle_count)
+                        .ok_or(RtAccelError::Encode("RT emissive candidate count overflow"))?,
+                )
                 .ok_or(RtAccelError::Encode("RT emissive candidate count overflow"))?;
         }
     }
-    if candidates > scratch.capacity { return Err(RtAccelError::NeedsPreparation); }
+    if candidates > scratch.capacity {
+        return Err(RtAccelError::NeedsPreparation);
+    }
     Ok(())
 }
 
@@ -273,7 +306,9 @@ pub(crate) fn encode_emissive_table(
     if accel.emissive_scratch.is_none() {
         return Err(RtAccelError::NeedsPreparation);
     }
-    if accel.emissive_table.is_none() { return Err(RtAccelError::NeedsPreparation); }
+    if accel.emissive_table.is_none() {
+        return Err(RtAccelError::NeedsPreparation);
+    }
     let instanced = accel.instanced;
 
     // CPU metadata compaction: one row per emissive object (luma > 0), with
@@ -292,10 +327,15 @@ pub(crate) fn encode_emissive_table(
     let mut active_count = 0u32;
     let mut slot_base = 0u32;
     let scratch = accel.emissive_scratch.as_ref().expect("checked above");
-    if objects.len() * std::mem::size_of::<EmissiveObjParams>() + 16 > scratch.obj_params_scratch.size as usize {
+    if objects.len() * std::mem::size_of::<EmissiveObjParams>() + 16
+        > scratch.obj_params_scratch.size as usize
+    {
         return Err(RtAccelError::NeedsPreparation);
     }
-    let ptr = scratch.obj_params_scratch.mapped_ptr().expect("prepared CPU snapshot");
+    let ptr = scratch
+        .obj_params_scratch
+        .mapped_ptr()
+        .expect("prepared CPU snapshot");
     let mut row_count = 0usize;
     for (oi, obj) in objects.iter().enumerate() {
         let obj_slots = effective_instance_slots(obj);
@@ -303,7 +343,11 @@ pub(crate) fn encode_emissive_table(
         slot_base = slot_base
             .checked_add(obj_slots)
             .ok_or(RtAccelError::Encode("RT emissive slot base overflow"))?;
-        let obj_luma = if materials.is_empty() { 0.0 } else { luma(materials[oi].emissive) };
+        let obj_luma = if materials.is_empty() {
+            0.0
+        } else {
+            luma(materials[oi].emissive)
+        };
         if obj_luma <= 0.0 {
             continue;
         }
@@ -322,7 +366,9 @@ pub(crate) fn encode_emissive_table(
             vertex_offset: obj.vertex_offset,
             uv_offset: if obj.material_attributes.sampling[4][0] == 1 {
                 obj.material_attributes.uv1_offset
-            } else { obj.uv_offset },
+            } else {
+                obj.uv_offset
+            },
             tri_count: obj.triangle_count,
             candidate_base,
             slot_base: object_slot_base,
@@ -330,7 +376,11 @@ pub(crate) fn encode_emissive_table(
             luma: obj_luma,
             appearance_weights_addr: obj.appearance_weights.map_or(0, GpuBuffer::gpu_address),
         };
-        unsafe { (ptr.add(16) as *mut EmissiveObjParams).add(row_count).write_unaligned(row); }
+        unsafe {
+            (ptr.add(16) as *mut EmissiveObjParams)
+                .add(row_count)
+                .write_unaligned(row);
+        }
         row_count += 1;
     }
 
@@ -350,7 +400,12 @@ pub(crate) fn encode_emissive_table(
         unsafe {
             std::ptr::write_unaligned(ptr as *mut EmissivePrepHeader, header);
         }
-        let bytes = unsafe { std::slice::from_raw_parts(ptr, 16 + row_count * std::mem::size_of::<EmissiveObjParams>()) };
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                ptr,
+                16 + row_count * std::mem::size_of::<EmissiveObjParams>(),
+            )
+        };
         // Preserve GPU-owned valid_count on a transform-only refresh. Never
         // read it on the CPU: the preceding frame may still be unsubmitted.
         if refresh == EmissiveRefresh::GatherOnly {
@@ -373,9 +428,21 @@ pub(crate) fn encode_emissive_table(
             &pipes.enumerate,
             accel,
             &[
-                GpuBinding::Buffer { binding: 0, buffer: &scratch.obj_params, offset: 0 },
-                GpuBinding::Buffer { binding: 1, buffer: &scratch.obj_params, offset: 16 },
-                GpuBinding::Buffer { binding: 2, buffer: &scratch.candidates[0], offset: 0 },
+                GpuBinding::Buffer {
+                    binding: 0,
+                    buffer: &scratch.obj_params,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &scratch.obj_params,
+                    offset: 16,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: &scratch.candidates[0],
+                    offset: 0,
+                },
             ],
             objects,
             active_count,
@@ -397,10 +464,25 @@ pub(crate) fn encode_emissive_table(
                 &pipes.hist,
                 accel,
                 &[
-                    GpuBinding::Buffer { binding: 0, buffer: &scratch.obj_params, offset: 0 },
-                    GpuBinding::Buffer { binding: 1, buffer: src, offset: 0 },
-                    GpuBinding::Buffer { binding: 2, buffer: &scratch.hist, offset: 0 },
-                    GpuBinding::Bytes { binding: 3, data: &shift_bytes },
+                    GpuBinding::Buffer {
+                        binding: 0,
+                        buffer: &scratch.obj_params,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: src,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: &scratch.hist,
+                        offset: 0,
+                    },
+                    GpuBinding::Bytes {
+                        binding: 3,
+                        data: &shift_bytes,
+                    },
                 ],
                 objects,
                 num_tiles,
@@ -411,8 +493,16 @@ pub(crate) fn encode_emissive_table(
                 &pipes.scan,
                 accel,
                 &[
-                    GpuBinding::Buffer { binding: 0, buffer: &scratch.obj_params, offset: 0 },
-                    GpuBinding::Buffer { binding: 1, buffer: &scratch.hist, offset: 0 },
+                    GpuBinding::Buffer {
+                        binding: 0,
+                        buffer: &scratch.obj_params,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: &scratch.hist,
+                        offset: 0,
+                    },
                 ],
                 objects,
                 1,
@@ -423,11 +513,30 @@ pub(crate) fn encode_emissive_table(
                 &pipes.scatter,
                 accel,
                 &[
-                    GpuBinding::Buffer { binding: 0, buffer: &scratch.obj_params, offset: 0 },
-                    GpuBinding::Buffer { binding: 1, buffer: src, offset: 0 },
-                    GpuBinding::Buffer { binding: 2, buffer: dst, offset: 0 },
-                    GpuBinding::Buffer { binding: 3, buffer: &scratch.hist, offset: 0 },
-                    GpuBinding::Bytes { binding: 4, data: &shift_bytes },
+                    GpuBinding::Buffer {
+                        binding: 0,
+                        buffer: &scratch.obj_params,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: src,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: dst,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: &scratch.hist,
+                        offset: 0,
+                    },
+                    GpuBinding::Bytes {
+                        binding: 4,
+                        data: &shift_bytes,
+                    },
                 ],
                 objects,
                 num_tiles,
@@ -443,12 +552,36 @@ pub(crate) fn encode_emissive_table(
             &pipes.gather,
             accel,
             &[
-                GpuBinding::Buffer { binding: 0, buffer: &scratch.obj_params, offset: 0 },
-                GpuBinding::Buffer { binding: 1, buffer: &scratch.obj_params, offset: 16 },
-                GpuBinding::Buffer { binding: 2, buffer: &scratch.candidates[0], offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: &table.triangles, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: &table.entry_power, offset: 0 },
-                GpuBinding::Buffer { binding: 5, buffer: &accel.instance_buffer, offset: 0 },
+                GpuBinding::Buffer {
+                    binding: 0,
+                    buffer: &scratch.obj_params,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &scratch.obj_params,
+                    offset: 16,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: &scratch.candidates[0],
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: &table.triangles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: &table.entry_power,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: &accel.instance_buffer,
+                    offset: 0,
+                },
             ],
             objects,
             MAX_RT_EMISSIVE_TRIANGLES,
@@ -462,9 +595,21 @@ pub(crate) fn encode_emissive_table(
         &pipes.stats,
         accel,
         &[
-            GpuBinding::Buffer { binding: 0, buffer: &scratch.obj_params, offset: 0 },
-            GpuBinding::Buffer { binding: 1, buffer: &table.entry_power, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &table.stats, offset: 0 },
+            GpuBinding::Buffer {
+                binding: 0,
+                buffer: &scratch.obj_params,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &table.entry_power,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &table.stats,
+                offset: 0,
+            },
         ],
         objects,
         1,
@@ -476,10 +621,26 @@ pub(crate) fn encode_emissive_table(
             &pipes.alias,
             accel,
             &[
-                GpuBinding::Buffer { binding: 0, buffer: &scratch.obj_params, offset: 0 },
-                GpuBinding::Buffer { binding: 1, buffer: &table.entry_power, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: &table.aliases, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: &table.alias_stacks, offset: 0 },
+                GpuBinding::Buffer {
+                    binding: 0,
+                    buffer: &scratch.obj_params,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &table.entry_power,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: &table.aliases,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: &table.alias_stacks,
+                    offset: 0,
+                },
             ],
             objects,
             1,
@@ -509,7 +670,15 @@ fn dispatch_emissive(
         u32::MAX,
         accel,
         bindings,
-        objects.iter().flat_map(|object| [Some(object.vertex_buffer), object.index_buffer, object.appearance_weights].into_iter().flatten()),
+        objects.iter().flat_map(|object| {
+            [
+                Some(object.vertex_buffer),
+                object.index_buffer,
+                object.appearance_weights,
+            ]
+            .into_iter()
+            .flatten()
+        }),
         None,
         [threads.div_ceil(per_group), 1, 1],
         label,

@@ -89,7 +89,10 @@ fn scan() -> Counts {
     let mut files = Vec::new();
     collect_rs(&src, &mut files);
 
-    let mut counts = Counts { color: 0, radius: 0 };
+    let mut counts = Counts {
+        color: 0,
+        radius: 0,
+    };
     for path in &files {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         // `color.rs` is the token home; `node.rs` defines `Color32` and its consts.
@@ -141,8 +144,14 @@ fn classifier_detects_and_exempts() {
     // Raw radius literals flagged; tokens and computed expressions are not.
     assert_eq!(classify("    corner_radius: 2.0,"), (false, true));
     assert_eq!(classify("        .radius(6.0)"), (false, true));
-    assert_eq!(classify("    corner_radius: color::CARD_RADIUS,"), (false, false));
-    assert_eq!(classify("        .radius(SECTION_RADIUS - 1.0)"), (false, false));
+    assert_eq!(
+        classify("    corner_radius: color::CARD_RADIUS,"),
+        (false, false)
+    );
+    assert_eq!(
+        classify("        .radius(SECTION_RADIUS - 1.0)"),
+        (false, false)
+    );
     assert_eq!(classify("    corner_radius: dot * 0.5,"), (false, false));
     // A plain line is clean.
     assert_eq!(classify("    let x = 5;"), (false, false));

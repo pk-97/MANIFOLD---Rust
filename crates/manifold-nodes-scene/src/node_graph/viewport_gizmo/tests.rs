@@ -6,12 +6,20 @@ use manifold_foundation::scene_surface::{SceneShape, SceneShapeDecl};
 
 use super::*;
 use crate::node_graph::scene_surface::{
-    INITIAL_FILL_SHAPES, ITEM_SHAPES, LIQUID_DOMAIN_SHAPES, RADIAL_FORCE_SHAPES, SWARM_SHAPES, VORTEX_FORCE_SHAPES, WATER_SOURCE_SHAPES,
+    INITIAL_FILL_SHAPES, ITEM_SHAPES, LIQUID_DOMAIN_SHAPES, RADIAL_FORCE_SHAPES, SWARM_SHAPES,
+    VORTEX_FORCE_SHAPES, WATER_SOURCE_SHAPES,
 };
 use crate::node_graph::scene_vm::{ParamAddr, ShapeWrite, TransformVm};
 
 fn cam_looking_down_neg_z(pos: [f32; 3]) -> Camera {
-    Camera::look_at(pos, [pos[0], pos[1], pos[2] - 1.0], [0.0, 1.0, 0.0], 0.9, 0.1, 100.0)
+    Camera::look_at(
+        pos,
+        [pos[0], pos[1], pos[2] - 1.0],
+        [0.0, 1.0, 0.0],
+        0.9,
+        0.1,
+        100.0,
+    )
 }
 
 fn item_id(id: u32) -> manifold_foundation::ItemId {
@@ -32,7 +40,11 @@ struct TestObject {
 }
 
 fn known_object(id: u32, pos: (f32, f32, f32), driven: (bool, bool, bool)) -> TestObject {
-    let addr = |n: &str| ParamAddr { scope_path: Vec::new(), node_doc_id: 99, param_id: n.to_string() };
+    let addr = |n: &str| ParamAddr {
+        scope_path: Vec::new(),
+        node_doc_id: 99,
+        param_id: n.to_string(),
+    };
     TestObject {
         id,
         is_group: false,
@@ -59,7 +71,9 @@ fn frame_of(objects: &[TestObject], object: &TestObject) -> Option<[[f32; 4]; 4]
     use manifold_node_engine::scene::transform::{IDENTITY_MAT4, Transform};
     let mut chain = Vec::new();
     let mut parent = object.parent;
-    while let Some(group) = parent.and_then(|id| objects.iter().find(|candidate| candidate.id == id)) {
+    while let Some(group) =
+        parent.and_then(|id| objects.iter().find(|candidate| candidate.id == id))
+    {
         chain.extend(group.transform.as_ref());
         parent = group.parent;
     }
@@ -96,13 +110,27 @@ fn scene_with(objects: Vec<TestObject>) -> SceneVm {
                             "scale_y" => (&t.scale_addr.1, t.scale_value.1, t.scale_driven.1),
                             _ => (&t.scale_addr.2, t.scale_value.2, t.scale_driven.2),
                         };
-                        ShapeParamVm { id: id.to_string(), write: ShapeWrite::Card { id: addr.param_id.clone(), scale: 1.0, offset: 0.0 }, value, wired: driven }
+                        ShapeParamVm {
+                            id: id.to_string(),
+                            write: ShapeWrite::Card {
+                                id: addr.param_id.clone(),
+                                scale: 1.0,
+                                offset: 0.0,
+                            },
+                            value,
+                            wired: driven,
+                        }
                     })
                     .collect(),
                 None => decl
                     .shape
                     .param_ids()
-                    .map(|id| ShapeParamVm { id: id.to_string(), write: ShapeWrite::Unplaced, value: 0.0, wired: false })
+                    .map(|id| ShapeParamVm {
+                        id: id.to_string(),
+                        write: ShapeWrite::Unplaced,
+                        value: 0.0,
+                        wired: false,
+                    })
                     .collect(),
             };
             shapes.push(SceneShapeVm {
@@ -125,22 +153,47 @@ fn scene_of(shapes: Vec<SceneShapeVm>) -> SceneVm {
 }
 
 fn object_id(id: u32) -> GizmoTargetId {
-    GizmoTargetId { owner: ShapeOwner::Item(item_id(id)), shape: 0 }
+    GizmoTargetId {
+        owner: ShapeOwner::Item(item_id(id)),
+        shape: 0,
+    }
 }
 
 /// A shape over card params named by its param ids, valued from `values` by id.
-fn card_rows_shape(owner: ShapeOwner, index: usize, decl: &SceneShapeDecl, values: &[(&str, f32)], wired: &[&str]) -> SceneShapeVm {
+fn card_rows_shape(
+    owner: ShapeOwner,
+    index: usize,
+    decl: &SceneShapeDecl,
+    values: &[(&str, f32)],
+    wired: &[&str],
+) -> SceneShapeVm {
     let params = decl
         .shape
         .param_ids()
         .map(|id| ShapeParamVm {
             id: id.to_string(),
-            write: ShapeWrite::Card { id: id.to_string(), scale: 1.0, offset: 0.0 },
-            value: values.iter().find(|(name, _)| *name == id).map_or(0.0, |(_, v)| *v),
+            write: ShapeWrite::Card {
+                id: id.to_string(),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            value: values
+                .iter()
+                .find(|(name, _)| *name == id)
+                .map_or(0.0, |(_, v)| *v),
             wired: wired.contains(&id),
         })
         .collect();
-    SceneShapeVm { owner, index, decl: decl.clone(), params, frame: None, anchor: [0.0; 3], row: Some(item_id(4)), pickable: true }
+    SceneShapeVm {
+        owner,
+        index,
+        decl: decl.clone(),
+        params,
+        frame: None,
+        anchor: [0.0; 3],
+        row: Some(item_id(4)),
+        pickable: true,
+    }
 }
 
 /// A force shape over host card params named `host_<id>`.
@@ -150,12 +203,28 @@ fn force_shape(decl: SceneShapeDecl, values: &[(&str, f32)], anchor: [f32; 3]) -
         .param_ids()
         .map(|id| ShapeParamVm {
             id: id.to_string(),
-            write: ShapeWrite::Card { id: format!("host_{id}"), scale: 1.0, offset: 0.0 },
-            value: values.iter().find(|(name, _)| *name == id).map_or(0.0, |(_, v)| *v),
+            write: ShapeWrite::Card {
+                id: format!("host_{id}"),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            value: values
+                .iter()
+                .find(|(name, _)| *name == id)
+                .map_or(0.0, |(_, v)| *v),
             wired: false,
         })
         .collect();
-    SceneShapeVm { owner: ShapeOwner::Force(NodeId::new("force")), index: 0, decl, params, frame: None, anchor, row: None, pickable: true }
+    SceneShapeVm {
+        owner: ShapeOwner::Force(NodeId::new("force")),
+        index: 0,
+        decl,
+        params,
+        frame: None,
+        anchor,
+        row: None,
+        pickable: true,
+    }
 }
 
 fn manifest_decl(json: &str) -> SceneShapeDecl {
@@ -163,19 +232,37 @@ fn manifest_decl(json: &str) -> SceneShapeDecl {
 }
 
 /// Drag `axis` of `mode` from the origin's pixel by `delta` pixels.
-fn drag(target: &GizmoTarget, mode: GizmoMode, axis: GizmoAxis, from: (f32, f32), to: (f32, f32)) -> HandleValues {
+fn drag(
+    target: &GizmoTarget,
+    mode: GizmoMode,
+    axis: GizmoAxis,
+    from: (f32, f32),
+    to: (f32, f32),
+) -> HandleValues {
     let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
     let view = GizmoView::new(cam, 640, 480);
-    let mut drag = GizmoDrag::begin(target.clone(), mode, axis, &view, from).expect("handle is draggable");
+    let mut drag =
+        GizmoDrag::begin(target.clone(), mode, axis, &view, from).expect("handle is draggable");
     drag.update(&view, to).expect("drag resolves")
 }
 
 fn written(target: &GizmoTarget, mode: GizmoMode, axis: GizmoAxis) -> Vec<ShapeWrite> {
-    target.handle(mode, axis).unwrap().write.params().iter().map(|param| param.write.clone()).collect()
+    target
+        .handle(mode, axis)
+        .unwrap()
+        .write
+        .params()
+        .iter()
+        .map(|param| param.write.clone())
+        .collect()
 }
 
 fn card_write(param: &str) -> ShapeWrite {
-    ShapeWrite::Card { id: param.to_string(), scale: 1.0, offset: 0.0 }
+    ShapeWrite::Card {
+        id: param.to_string(),
+        scale: 1.0,
+        offset: 0.0,
+    }
 }
 
 /// The 640x480 view every helper projects through.
@@ -189,26 +276,48 @@ fn len_at(point: [f32; 3]) -> f32 {
 }
 
 fn px(point: [f32; 3]) -> (f32, f32) {
-    let p = cam_looking_down_neg_z([0.0, 0.0, 0.0]).project_to_pixel(point, 640, 480).unwrap();
+    let p = cam_looking_down_neg_z([0.0, 0.0, 0.0])
+        .project_to_pixel(point, 640, 480)
+        .unwrap();
     (p.px, p.py)
 }
 
 #[test]
 fn pick_target_finds_the_object_under_the_click() {
-    let scene = scene_with(vec![known_object(1, (0.0, 0.0, -5.0), (false, false, false))]);
+    let scene = scene_with(vec![known_object(
+        1,
+        (0.0, 0.0, -5.0),
+        (false, false, false),
+    )]);
     let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
-    assert_eq!(pick_target(&scene, &GizmoView::new(cam, 640, 480), px([0.0, 0.0, -5.0])), Some(object_id(1)));
-    assert_eq!(pick_target(&scene, &GizmoView::new(cam, 640, 480), (5.0, 5.0)), None);
+    assert_eq!(
+        pick_target(&scene, &GizmoView::new(cam, 640, 480), px([0.0, 0.0, -5.0])),
+        Some(object_id(1))
+    );
+    assert_eq!(
+        pick_target(&scene, &GizmoView::new(cam, 640, 480), (5.0, 5.0)),
+        None
+    );
 }
 
 #[test]
 fn object_target_derives_from_its_box_declaration() {
-    let scene = scene_with(vec![known_object(7, (1.0, 2.0, 3.0), (false, false, false))]);
+    let scene = scene_with(vec![known_object(
+        7,
+        (1.0, 2.0, 3.0),
+        (false, false, false),
+    )]);
     let target = gizmo_target_for(&scene, &object_id(7)).expect("object 7 exists");
     assert_eq!(target.kind, GizmoTargetKind::Object);
     assert_eq!(target.origin, [1.0, 2.0, 3.0]);
-    assert!([GizmoMode::Move, GizmoMode::Rotate, GizmoMode::Scale].into_iter().all(|mode| target.supports_mode(mode)));
-    let ShapeWrite::Card { id, .. } = &written(&target, GizmoMode::Scale, GizmoAxis::Y)[0] else { panic!("card write") };
+    assert!(
+        [GizmoMode::Move, GizmoMode::Rotate, GizmoMode::Scale]
+            .into_iter()
+            .all(|mode| target.supports_mode(mode))
+    );
+    let ShapeWrite::Card { id, .. } = &written(&target, GizmoMode::Scale, GizmoAxis::Y)[0] else {
+        panic!("card write")
+    };
     assert_eq!(id, "scale_y");
     assert!(gizmo_target_for(&scene, &object_id(42)).is_none());
 }
@@ -230,22 +339,50 @@ fn child_gizmo_composes_parent_origin_axes_and_drag_units() {
     assert!((target.origin[1] - 5.0).abs() < 1e-5);
     assert!(!target.pickable, "a child is selected through its parent");
     let start = px(target.origin);
-    let end = px(offset(target.origin, target.axis_direction(GizmoAxis::X), 1.0));
-    let HandleValues::One(value) = drag(&target, GizmoMode::Move, GizmoAxis::X, start, end) else { panic!("one value") };
-    assert!((value - 2.0).abs() < 1e-4, "one local unit includes the parent's rotation and scale, got {value}");
+    let end = px(offset(
+        target.origin,
+        target.axis_direction(GizmoAxis::X),
+        1.0,
+    ));
+    let HandleValues::One(value) = drag(&target, GizmoMode::Move, GizmoAxis::X, start, end) else {
+        panic!("one value")
+    };
+    assert!(
+        (value - 2.0).abs() < 1e-4,
+        "one local unit includes the parent's rotation and scale, got {value}"
+    );
 }
 
 #[test]
 fn wired_param_shows_locked_and_refuses_the_drag() {
-    let scene = scene_with(vec![known_object(1, (0.0, 0.0, -5.0), (true, false, false))]);
+    let scene = scene_with(vec![known_object(
+        1,
+        (0.0, 0.0, -5.0),
+        (true, false, false),
+    )]);
     let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
     let lines = lines_of(GizmoMode::Move, &target);
     assert_eq!(lines.len(), 3);
-    let x_line = lines.iter().find(|l| (l.b[0] - l.a[0]).abs() > 0.1).unwrap();
+    let x_line = lines
+        .iter()
+        .find(|l| (l.b[0] - l.a[0]).abs() > 0.1)
+        .unwrap();
     assert_eq!(x_line.color, LOCKED_COLOR, "wired pos_x draws locked");
-    let y_line = lines.iter().find(|l| (l.b[1] - l.a[1]).abs() > 0.1).unwrap();
+    let y_line = lines
+        .iter()
+        .find(|l| (l.b[1] - l.a[1]).abs() > 0.1)
+        .unwrap();
     assert_eq!(y_line.color, Y_COLOR);
-    assert!(GizmoDrag::begin(target.clone(), GizmoMode::Move, GizmoAxis::X, &view(), (0.0, 0.0)).is_none());
+    assert!(
+        GizmoDrag::begin(
+            target.clone(),
+            GizmoMode::Move,
+            GizmoAxis::X,
+            &view(),
+            (0.0, 0.0)
+        )
+        .is_none()
+    );
     assert!(GizmoDrag::begin(target, GizmoMode::Move, GizmoAxis::Y, &view(), (0.0, 0.0)).is_some());
 }
 
@@ -258,43 +395,121 @@ fn unwired_transform_target_is_unplaced_at_the_origin() {
     let target = gizmo_target_for(&scene, &object_id(5)).unwrap();
     assert_eq!(target.origin, [0.0, 0.0, 0.0]);
     assert!(target.unplaced);
-    assert_eq!(written(&target, GizmoMode::Scale, GizmoAxis::Y), vec![ShapeWrite::Unplaced]);
-    assert_eq!(lines_of(GizmoMode::Move, &target).len(), 3, "the declared handles still draw to grab");
-    assert!(GizmoDrag::begin(target, GizmoMode::Move, GizmoAxis::X, &view(), (0.0, 0.0)).is_none(), "the host places it first");
+    assert_eq!(
+        written(&target, GizmoMode::Scale, GizmoAxis::Y),
+        vec![ShapeWrite::Unplaced]
+    );
+    assert_eq!(
+        lines_of(GizmoMode::Move, &target).len(),
+        3,
+        "the declared handles still draw to grab"
+    );
+    assert!(
+        GizmoDrag::begin(target, GizmoMode::Move, GizmoAxis::X, &view(), (0.0, 0.0)).is_none(),
+        "the host places it first"
+    );
 }
 
 #[test]
 fn fluid_domain_targets_derive_from_the_domain_and_column_boxes() {
     let decls = &LIQUID_DOMAIN_SHAPES[..];
-    assert_eq!(decls.len(), 1, "the domain declares its box alone; the column is an Initial Fill");
+    assert_eq!(
+        decls.len(),
+        1,
+        "the domain declares its box alone; the column is an Initial Fill"
+    );
     let owner = ShapeOwner::LiquidDomain(NodeId::new("domain"));
-    let domain = card_rows_shape(owner.clone(), 0, &decls[0], &[("pos_y", 2.0), ("pos_z", -6.0), ("scale_x", 4.0), ("scale_y", 2.0), ("scale_z", 4.0)], &[]);
-    let fill = ShapeOwner::RoleSource { node: NodeId::new("fill"), role: FluidRole::InitialFill };
-    let column = card_rows_shape(fill.clone(), 0, &INITIAL_FILL_SHAPES[0], &[("pos_x", -1.0), ("pos_z", -6.0), ("scale_x", 1.0)], &[]);
+    let domain = card_rows_shape(
+        owner.clone(),
+        0,
+        &decls[0],
+        &[
+            ("pos_y", 2.0),
+            ("pos_z", -6.0),
+            ("scale_x", 4.0),
+            ("scale_y", 2.0),
+            ("scale_z", 4.0),
+        ],
+        &[],
+    );
+    let fill = ShapeOwner::RoleSource {
+        node: NodeId::new("fill"),
+        role: FluidRole::InitialFill,
+    };
+    let column = card_rows_shape(
+        fill.clone(),
+        0,
+        &INITIAL_FILL_SHAPES[0],
+        &[("pos_x", -1.0), ("pos_z", -6.0), ("scale_x", 1.0)],
+        &[],
+    );
     let scene = scene_of(vec![domain, column]);
     let targets: Vec<_> = gizmo_targets(&scene).collect();
-    assert_eq!(targets.len(), 2, "a domain's box and its Initial Fill are two targets");
+    assert_eq!(
+        targets.len(),
+        2,
+        "a domain's box and its Initial Fill are two targets"
+    );
     let box_target = &targets[0];
     assert_eq!(box_target.kind, GizmoTargetKind::FluidDomain);
     assert_eq!(box_target.origin, [0.0, 2.0, -6.0]);
-    assert!(!box_target.supports_mode(GizmoMode::Rotate), "the declaration gives the domain no rotation");
+    assert!(
+        !box_target.supports_mode(GizmoMode::Rotate),
+        "the declaration gives the domain no rotation"
+    );
     assert!(lines_of(GizmoMode::Rotate, box_target).is_empty());
-    assert_eq!(written(box_target, GizmoMode::Scale, GizmoAxis::X), vec![card_write("scale_x")]);
-    let HandleValues::One(size) = drag(box_target, GizmoMode::Scale, GizmoAxis::X, px([1.0, 2.0, -6.0]), px([-20.0, 2.0, -6.0])) else {
+    assert_eq!(
+        written(box_target, GizmoMode::Scale, GizmoAxis::X),
+        vec![card_write("scale_x")]
+    );
+    let HandleValues::One(size) = drag(
+        box_target,
+        GizmoMode::Scale,
+        GizmoAxis::X,
+        px([1.0, 2.0, -6.0]),
+        px([-20.0, 2.0, -6.0]),
+    ) else {
         panic!("one value")
     };
-    assert_eq!(size, DOMAIN_EXTENT_METRES.0, "a domain never scales below what the solvers accept");
-    let HandleValues::One(size) = drag(box_target, GizmoMode::Scale, GizmoAxis::X, px([1.0, 2.0, -6.0]), px([20.0, 2.0, -6.0])) else {
+    assert_eq!(
+        size, DOMAIN_EXTENT_METRES.0,
+        "a domain never scales below what the solvers accept"
+    );
+    let HandleValues::One(size) = drag(
+        box_target,
+        GizmoMode::Scale,
+        GizmoAxis::X,
+        px([1.0, 2.0, -6.0]),
+        px([20.0, 2.0, -6.0]),
+    ) else {
         panic!("one value")
     };
     assert_eq!(size, DOMAIN_EXTENT_METRES.1, "nor above it");
-    let HandleValues::One(column) = drag(&targets[1], GizmoMode::Scale, GizmoAxis::X, px([0.0, 0.0, -6.0]), px([-20.0, 0.0, -6.0])) else {
+    let HandleValues::One(column) = drag(
+        &targets[1],
+        GizmoMode::Scale,
+        GizmoAxis::X,
+        px([0.0, 0.0, -6.0]),
+        px([-20.0, 0.0, -6.0]),
+    ) else {
         panic!("one value")
     };
-    assert_eq!(column, MIN_EXTENT, "an undeclared box stops only at the smallest extent");
-    assert_eq!(targets[1].id, GizmoTargetId { owner: fill, shape: 0 });
+    assert_eq!(
+        column, MIN_EXTENT,
+        "an undeclared box stops only at the smallest extent"
+    );
+    assert_eq!(
+        targets[1].id,
+        GizmoTargetId {
+            owner: fill,
+            shape: 0
+        }
+    );
     assert_eq!(targets[1].kind, GizmoTargetKind::InitialFill);
-    assert!(!targets[1].supports_mode(GizmoMode::Rotate), "the liquids fill an axis-aligned box");
+    assert!(
+        !targets[1].supports_mode(GizmoMode::Rotate),
+        "the liquids fill an axis-aligned box"
+    );
     assert_eq!(targets[1].origin, [-1.0, 0.0, -6.0]);
 }
 
@@ -306,13 +521,25 @@ fn role_source_targets_derive_their_kind_from_the_role() {
         (FluidRole::Inflow, GizmoTargetKind::Inflow),
         (FluidRole::Outflow, GizmoTargetKind::Drain),
     ] {
-        let owner = ShapeOwner::RoleSource { node: NodeId::new("role"), role };
+        let owner = ShapeOwner::RoleSource {
+            node: NodeId::new("role"),
+            role,
+        };
         let shape = card_rows_shape(owner, 0, decl, &[("pos_x", 1.0), ("pos_z", -5.0)], &[]);
         let target = GizmoTarget::from_shape(&shape);
         assert_eq!(target.kind, kind);
         assert_eq!(target.origin, [1.0, 0.0, -5.0]);
-        assert_eq!(written(&target, GizmoMode::Move, GizmoAxis::X), vec![card_write("pos_x")]);
-        let HandleValues::One(x) = drag(&target, GizmoMode::Move, GizmoAxis::X, px([1.0, 0.0, -5.0]), px([2.0, 0.0, -5.0])) else {
+        assert_eq!(
+            written(&target, GizmoMode::Move, GizmoAxis::X),
+            vec![card_write("pos_x")]
+        );
+        let HandleValues::One(x) = drag(
+            &target,
+            GizmoMode::Move,
+            GizmoAxis::X,
+            px([1.0, 0.0, -5.0]),
+            px([2.0, 0.0, -5.0]),
+        ) else {
             panic!("one value")
         };
         assert!((x - 2.0).abs() < 1e-4, "{kind:?} moved to {x}");
@@ -321,21 +548,63 @@ fn role_source_targets_derive_their_kind_from_the_role() {
 
 #[test]
 fn radial_force_target_derives_from_its_point_radius_declaration() {
-    let decl = manifest_decl(r#"{"kind": "point_radius", "center": ["center_x", "center_y", "center_z"], "radius": "radius"}"#);
-    let target = GizmoTarget::from_shape(&force_shape(decl, &[("center_z", -5.0), ("radius", 2.0)], [9.0; 3]));
+    let decl = manifest_decl(
+        r#"{"kind": "point_radius", "center": ["center_x", "center_y", "center_z"], "radius": "radius"}"#,
+    );
+    let target = GizmoTarget::from_shape(&force_shape(
+        decl,
+        &[("center_z", -5.0), ("radius", 2.0)],
+        [9.0; 3],
+    ));
     assert_eq!(target.kind, GizmoTargetKind::Force);
-    assert_eq!(target.origin, [0.0, 0.0, -5.0], "a placed shape ignores the anchor");
+    assert_eq!(
+        target.origin,
+        [0.0, 0.0, -5.0],
+        "a placed shape ignores the anchor"
+    );
     assert!(!target.supports_mode(GizmoMode::Rotate));
-    let scale = &target.handles.iter().filter(|h| h.mode == GizmoMode::Scale).collect::<Vec<_>>();
+    let scale = &target
+        .handles
+        .iter()
+        .filter(|h| h.mode == GizmoMode::Scale)
+        .collect::<Vec<_>>();
     assert_eq!(scale.len(), 1, "one uniform radius handle");
-    assert_eq!(written(&target, GizmoMode::Scale, GizmoAxis::Uniform), vec![ShapeWrite::Card { id: "host_radius".into(), scale: 1.0, offset: 0.0 }]);
+    assert_eq!(
+        written(&target, GizmoMode::Scale, GizmoAxis::Uniform),
+        vec![ShapeWrite::Card {
+            id: "host_radius".into(),
+            scale: 1.0,
+            offset: 0.0
+        }]
+    );
     let along = |d: f32| px(offset(target.origin, GizmoAxis::Uniform.unit(), d));
-    let HandleValues::One(radius) = drag(&target, GizmoMode::Scale, GizmoAxis::Uniform, along(1.0), along(2.0)) else {
+    let HandleValues::One(radius) = drag(
+        &target,
+        GizmoMode::Scale,
+        GizmoAxis::Uniform,
+        along(1.0),
+        along(2.0),
+    ) else {
         panic!("one value")
     };
-    assert!((radius - 4.0).abs() < 1e-3, "twice as far from the centre doubles the radius, got {radius}");
+    assert!(
+        (radius - 4.0).abs() < 1e-3,
+        "twice as far from the centre doubles the radius, got {radius}"
+    );
     let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
-    assert_eq!(pick_axis(GizmoMode::Scale, &target, &GizmoView::new(cam, 640, 480), px(offset(target.origin, GizmoAxis::Uniform.unit(), len_at(target.origin)))), Some(GizmoAxis::Uniform));
+    assert_eq!(
+        pick_axis(
+            GizmoMode::Scale,
+            &target,
+            &GizmoView::new(cam, 640, 480),
+            px(offset(
+                target.origin,
+                GizmoAxis::Uniform.unit(),
+                len_at(target.origin)
+            ))
+        ),
+        Some(GizmoAxis::Uniform)
+    );
 }
 
 /// A Radial force draws its radius and the balls where its strength falls to
@@ -343,7 +612,13 @@ fn radial_force_target_derives_from_its_point_radius_declaration() {
 /// the axis. A click picks the radius, never a shell.
 #[test]
 fn radial_and_vortex_forces_draw_their_reach() {
-    let radial = |values: &[(&str, f32)]| GizmoTarget::from_shape(&force_shape(RADIAL_FORCE_SHAPES[0].clone(), values, [0.0; 3]));
+    let radial = |values: &[(&str, f32)]| {
+        GizmoTarget::from_shape(&force_shape(
+            RADIAL_FORCE_SHAPES[0].clone(),
+            values,
+            [0.0; 3],
+        ))
+    };
     let shells = |target: &GizmoTarget| match target.outline {
         ShapeOutline::Field { center, shells, .. } => {
             assert_eq!(center, [0.0, 0.0, -5.0]);
@@ -353,34 +628,84 @@ fn radial_and_vortex_forces_draw_their_reach() {
     };
     let near = |a: Option<f32>, b: f32| a.is_some_and(|a| (a - b).abs() < 1e-5);
     // Inverse at power 2: (1/d)² is a half at √2 m and a tenth at √10 m.
-    let inverse = radial(&[("center_z", -5.0), ("radius", 1.0), ("falloff", 2.0), ("curve", 1.0)]);
+    let inverse = radial(&[
+        ("center_z", -5.0),
+        ("radius", 1.0),
+        ("falloff", 2.0),
+        ("curve", 1.0),
+    ]);
     let [half, tenth] = shells(&inverse);
-    assert!(near(half, 2f32.sqrt()) && near(tenth, 10f32.sqrt()), "{half:?} {tenth:?}");
+    assert!(
+        near(half, 2f32.sqrt()) && near(tenth, 10f32.sqrt()),
+        "{half:?} {tenth:?}"
+    );
     // Edge at power 1: 1 − d/2 is a half at 1 m and a tenth at 1.8 m.
-    let [half, tenth] = shells(&radial(&[("center_z", -5.0), ("radius", 2.0), ("falloff", 1.0), ("curve", 0.0)]));
+    let [half, tenth] = shells(&radial(&[
+        ("center_z", -5.0),
+        ("radius", 2.0),
+        ("falloff", 1.0),
+        ("curve", 0.0),
+    ]));
     assert!(near(half, 1.0) && near(tenth, 1.8), "{half:?} {tenth:?}");
     // Power 0 holds full strength to the edge: no shells.
-    assert_eq!(shells(&radial(&[("center_z", -5.0), ("radius", 2.0), ("falloff", 0.0)])), [None, None]);
+    assert_eq!(
+        shells(&radial(&[
+            ("center_z", -5.0),
+            ("radius", 2.0),
+            ("falloff", 0.0)
+        ])),
+        [None, None]
+    );
 
     let mut lines = Vec::new();
     inverse.outline_lines([255, 0, 0, 200], &mut lines);
-    assert_eq!(lines.len(), 9 * OUTLINE_SEGMENTS + 18, "three balls of three circles plus six 3-line radial arrows");
-    let alphas: Vec<u8> = [0, 1, 2].map(|ball| lines[ball * 3 * OUTLINE_SEGMENTS].color[3]).to_vec();
-    assert_eq!(alphas, [200, 120, 70], "the shells draw fainter, the tenth faintest");
+    assert_eq!(
+        lines.len(),
+        9 * OUTLINE_SEGMENTS + 18,
+        "three balls of three circles plus six 3-line radial arrows"
+    );
+    let alphas: Vec<u8> = [0, 1, 2]
+        .map(|ball| lines[ball * 3 * OUTLINE_SEGMENTS].color[3])
+        .to_vec();
+    assert_eq!(
+        alphas,
+        [200, 120, 70],
+        "the shells draw fainter, the tenth faintest"
+    );
     let mut picked = 0;
     inverse.outline.for_each_edge(|_, _| picked += 1);
-    assert_eq!(picked, 3 * OUTLINE_SEGMENTS, "a click picks the radius only");
+    assert_eq!(
+        picked,
+        3 * OUTLINE_SEGMENTS,
+        "a click picks the radius only"
+    );
 
     let vortex = GizmoTarget::from_shape(&force_shape(
         VORTEX_FORCE_SHAPES[0].clone(),
-        &[("center_z", -5.0), ("axis_y", 3.0), ("radius", 2.0), ("falloff", 1.0)],
+        &[
+            ("center_z", -5.0),
+            ("axis_y", 3.0),
+            ("radius", 2.0),
+            ("falloff", 1.0),
+        ],
         [0.0; 3],
     ));
-    assert_eq!(vortex.outline, ShapeOutline::Vortex { center: [0.0, 0.0, -5.0], axis: [0.0, 1.0, 0.0], radius: 2.0, sign: 1.0 });
+    assert_eq!(
+        vortex.outline,
+        ShapeOutline::Vortex {
+            center: [0.0, 0.0, -5.0],
+            axis: [0.0, 1.0, 0.0],
+            radius: 2.0,
+            sign: 1.0
+        }
+    );
     let (mut rim, mut on_axis) = (0, 0);
     vortex.outline.for_each_edge(|a, b| {
         let from_axis = [a, b].map(|p| (p[0] * p[0] + (p[2] + 5.0) * (p[2] + 5.0)).sqrt());
-        assert!([a, b].iter().all(|p| p[1].abs() <= 3.0 + 1e-5), "within the cylinder's height and the axis's reach");
+        assert!(
+            [a, b].iter().all(|p| p[1].abs() <= 3.0 + 1e-5),
+            "within the cylinder's height and the axis's reach"
+        );
         if from_axis.iter().all(|d| (d - 2.0).abs() < 1e-4) {
             rim += 1;
         } else if from_axis.iter().all(|d| d.abs() < 1e-4) {
@@ -389,11 +714,27 @@ fn radial_and_vortex_forces_draw_their_reach() {
             panic!("an edge off the cylinder and the axis: {a:?} {b:?}");
         }
     });
-    assert_eq!((rim, on_axis), (2 * OUTLINE_SEGMENTS + 4, 1), "two rings and four sides round the axis, and the axis");
+    assert_eq!(
+        (rim, on_axis),
+        (2 * OUTLINE_SEGMENTS + 4, 1),
+        "two rings and four sides round the axis, and the axis"
+    );
 
     // Push vs Pull arrows flip direction, and unselected forces skip falloff shells.
-    let push = radial(&[("center_z", -5.0), ("radius", 2.0), ("falloff", 1.0), ("curve", 0.0), ("strength", 10.0)]);
-    let pull = radial(&[("center_z", -5.0), ("radius", 2.0), ("falloff", 1.0), ("curve", 0.0), ("strength", -10.0)]);
+    let push = radial(&[
+        ("center_z", -5.0),
+        ("radius", 2.0),
+        ("falloff", 1.0),
+        ("curve", 0.0),
+        ("strength", 10.0),
+    ]);
+    let pull = radial(&[
+        ("center_z", -5.0),
+        ("radius", 2.0),
+        ("falloff", 1.0),
+        ("curve", 0.0),
+        ("strength", -10.0),
+    ]);
     let mut push_arrows = Vec::new();
     push.outline.for_each_arrow(|a, b| push_arrows.push((a, b)));
     let mut pull_arrows = Vec::new();
@@ -401,14 +742,32 @@ fn radial_and_vortex_forces_draw_their_reach() {
     assert_eq!(push_arrows.len(), 18);
     assert_eq!(pull_arrows.len(), 18);
     // First shaft is along +X: push goes from inner to outer, pull goes from outer to inner.
-    assert!(push_arrows[0].1[0] > push_arrows[0].0[0], "push arrow points outward");
-    assert!(pull_arrows[0].1[0] < pull_arrows[0].0[0], "pull arrow points inward");
+    assert!(
+        push_arrows[0].1[0] > push_arrows[0].0[0],
+        "push arrow points outward"
+    );
+    assert!(
+        pull_arrows[0].1[0] < pull_arrows[0].0[0],
+        "pull arrow points inward"
+    );
     let mut unselected_lines = Vec::new();
-    push.outline_lines_with_shells([230, 90, 220, UNSELECTED_ALPHA], false, &mut unselected_lines);
+    push.outline_lines_with_shells(
+        [230, 90, 220, UNSELECTED_ALPHA],
+        false,
+        &mut unselected_lines,
+    );
     let mut selected_lines = Vec::new();
     push.outline_lines_with_shells([230, 90, 220, 255], true, &mut selected_lines);
-    assert_eq!(unselected_lines.len(), 3 * OUTLINE_SEGMENTS + 18, "unselected force skips falloff shells");
-    assert_eq!(selected_lines.len(), 9 * OUTLINE_SEGMENTS + 18, "selected force includes falloff shells");
+    assert_eq!(
+        unselected_lines.len(),
+        3 * OUTLINE_SEGMENTS + 18,
+        "unselected force skips falloff shells"
+    );
+    assert_eq!(
+        selected_lines.len(),
+        9 * OUTLINE_SEGMENTS + 18,
+        "selected force includes falloff shells"
+    );
 }
 
 #[test]
@@ -416,7 +775,11 @@ fn vortex_force_rotate_turns_its_axis_and_keeps_its_length() {
     let decl = manifest_decl(
         r#"{"kind": "axis", "origin": ["center_x", "center_y", "center_z"], "direction": ["axis_x", "axis_y", "axis_z"], "radius": "radius"}"#,
     );
-    let target = GizmoTarget::from_shape(&force_shape(decl, &[("center_z", -5.0), ("axis_x", 2.0), ("radius", 1.0)], [0.0; 3]));
+    let target = GizmoTarget::from_shape(&force_shape(
+        decl,
+        &[("center_z", -5.0), ("axis_x", 2.0), ("radius", 1.0)],
+        [0.0; 3],
+    ));
     assert!(target.supports_mode(GizmoMode::Move) && target.supports_mode(GizmoMode::Scale));
     let ids: Vec<_> = written(&target, GizmoMode::Rotate, GizmoAxis::Z)
         .into_iter()
@@ -428,55 +791,119 @@ fn vortex_force_rotate_turns_its_axis_and_keeps_its_length() {
     assert_eq!(ids, ["host_axis_x", "host_axis_y", "host_axis_z"]);
     let o = px(target.origin);
     // A quarter turn about Z, swept counter-clockwise on screen.
-    let HandleValues::Three(axis) = drag(&target, GizmoMode::Rotate, GizmoAxis::Z, (o.0 + 100.0, o.1), (o.0, o.1 - 100.0)) else {
+    let HandleValues::Three(axis) = drag(
+        &target,
+        GizmoMode::Rotate,
+        GizmoAxis::Z,
+        (o.0 + 100.0, o.1),
+        (o.0, o.1 - 100.0),
+    ) else {
         panic!("three values")
     };
     let length = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
     assert!((length - 2.0).abs() < 1e-4, "length kept, got {axis:?}");
-    assert!(axis[0].abs() < 0.1 && (axis[1].abs() - 2.0).abs() < 0.1, "turned a quarter, got {axis:?}");
-    assert!(lines_of(GizmoMode::Rotate, &target).iter().any(|line| line.color == DIRECTION_COLOR));
+    assert!(
+        axis[0].abs() < 0.1 && (axis[1].abs() - 2.0).abs() < 0.1,
+        "turned a quarter, got {axis:?}"
+    );
+    assert!(
+        lines_of(GizmoMode::Rotate, &target)
+            .iter()
+            .any(|line| line.color == DIRECTION_COLOR)
+    );
 }
 
 #[test]
 fn uniform_force_without_origin_sits_at_its_anchor() {
-    let decl = manifest_decl(r#"{"kind": "axis", "direction": ["direction_x", "direction_y", "direction_z"]}"#);
+    let decl = manifest_decl(
+        r#"{"kind": "axis", "direction": ["direction_x", "direction_y", "direction_z"]}"#,
+    );
     let shape = force_shape(decl, &[("direction_y", -1.0)], [0.5, 1.0, -4.0]);
     let scene = scene_of(vec![shape]);
     let target = gizmo_targets(&scene).next().unwrap();
     assert_eq!(target.origin, [0.5, 1.0, -4.0]);
-    assert!(!target.supports_mode(GizmoMode::Move), "no origin, no move handle");
+    assert!(
+        !target.supports_mode(GizmoMode::Move),
+        "no origin, no move handle"
+    );
     assert!(target.supports_mode(GizmoMode::Rotate));
     let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
-    assert_eq!(pick_target(&scene, &GizmoView::new(cam, 640, 480), px([0.5, 1.0, -4.0])), Some(target.id.clone()));
+    assert_eq!(
+        pick_target(&scene, &GizmoView::new(cam, 640, 480), px([0.5, 1.0, -4.0])),
+        Some(target.id.clone())
+    );
 }
 
 #[test]
 fn plane_rotate_writes_a_unit_normal() {
     let decl = SceneShapeDecl {
         shape: SceneShape::Plane {
-            center: [Cow::Borrowed("cx"), Cow::Borrowed("cy"), Cow::Borrowed("cz")],
-            normal: [Cow::Borrowed("nx"), Cow::Borrowed("ny"), Cow::Borrowed("nz")],
+            center: [
+                Cow::Borrowed("cx"),
+                Cow::Borrowed("cy"),
+                Cow::Borrowed("cz"),
+            ],
+            normal: [
+                Cow::Borrowed("nx"),
+                Cow::Borrowed("ny"),
+                Cow::Borrowed("nz"),
+            ],
         },
         via: None,
         extent_limit: None,
         uniform_scale: false,
     };
-    let target = GizmoTarget::from_shape(&card_rows_shape(ShapeOwner::Item(item_id(1)), 0, &decl, &[("cz", -5.0), ("ny", 3.0)], &[]));
+    let target = GizmoTarget::from_shape(&card_rows_shape(
+        ShapeOwner::Item(item_id(1)),
+        0,
+        &decl,
+        &[("cz", -5.0), ("ny", 3.0)],
+        &[],
+    ));
     let o = px(target.origin);
-    let HandleValues::Three(n) = drag(&target, GizmoMode::Rotate, GizmoAxis::X, (o.0 + 80.0, o.1 + 10.0), (o.0 + 10.0, o.1 - 80.0)) else {
+    let HandleValues::Three(n) = drag(
+        &target,
+        GizmoMode::Rotate,
+        GizmoAxis::X,
+        (o.0 + 80.0, o.1 + 10.0),
+        (o.0 + 10.0, o.1 - 80.0),
+    ) else {
         panic!("three values")
     };
-    assert!(((n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt() - 1.0).abs() < 1e-5, "{n:?}");
+    assert!(
+        ((n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt() - 1.0).abs() < 1e-5,
+        "{n:?}"
+    );
 }
 
 #[test]
 fn pick_axis_returns_the_handle_under_the_click() {
-    let scene = scene_with(vec![known_object(1, (0.0, 0.0, -5.0), (false, false, false))]);
+    let scene = scene_with(vec![known_object(
+        1,
+        (0.0, 0.0, -5.0),
+        (false, false, false),
+    )]);
     let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
     let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
     let tip = offset(target.origin, GizmoAxis::X.unit(), len_at(target.origin));
-    assert_eq!(pick_axis(GizmoMode::Move, &target, &GizmoView::new(cam, 640, 480), px(tip)), Some(GizmoAxis::X));
-    assert_eq!(pick_axis(GizmoMode::Move, &target, &GizmoView::new(cam, 640, 480), (0.0, 0.0)), None);
+    assert_eq!(
+        pick_axis(
+            GizmoMode::Move,
+            &target,
+            &GizmoView::new(cam, 640, 480),
+            px(tip)
+        ),
+        Some(GizmoAxis::X)
+    );
+    assert_eq!(
+        pick_axis(
+            GizmoMode::Move,
+            &target,
+            &GizmoView::new(cam, 640, 480),
+            (0.0, 0.0)
+        ),
+        None
+    );
 }
 
 #[test]
@@ -484,8 +911,19 @@ fn rotate_drag_delta_quarter_turn_is_roughly_half_pi() {
     let cam = cam_looking_down_neg_z([0.0, 0.0, 0.0]);
     let origin = [0.0, 0.0, -5.0];
     let o = cam.project_to_pixel(origin, 640, 480).unwrap();
-    let d = rotate_drag_delta(origin, &cam, 640, 480, (o.px + 100.0, o.py), (o.px, o.py - 100.0)).unwrap();
-    assert!((d.abs() - std::f32::consts::FRAC_PI_2).abs() < 0.05, "got {d}");
+    let d = rotate_drag_delta(
+        origin,
+        &cam,
+        640,
+        480,
+        (o.px + 100.0, o.py),
+        (o.px, o.py - 100.0),
+    )
+    .unwrap();
+    assert!(
+        (d.abs() - std::f32::consts::FRAC_PI_2).abs() < 0.05,
+        "got {d}"
+    );
 }
 
 #[test]
@@ -499,7 +937,11 @@ fn ring_lines_are_a_closed_loop() {
 
 #[test]
 fn scale_gizmo_lines_have_tick_marks() {
-    let scene = scene_with(vec![known_object(1, (0.0, 0.0, 0.0), (false, false, false))]);
+    let scene = scene_with(vec![known_object(
+        1,
+        (0.0, 0.0, 0.0),
+        (false, false, false),
+    )]);
     let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
     assert_eq!(lines_of(GizmoMode::Move, &target).len(), 3);
     assert_eq!(lines_of(GizmoMode::Scale, &target).len(), 6);
@@ -519,15 +961,41 @@ fn lines_of(mode: GizmoMode, target: &GizmoTarget) -> Vec<WorldLine> {
 fn composition_draws_what_physics_did_faintly_then_the_selected_handles() {
     use manifold_core::fluid_domain::FluidDomainLayout;
     use manifold_core::physics_gizmo::{PhysicsGizmoFamily, PhysicsGizmoShape};
-    let layout = FluidDomainLayout { min: [0.0; 3], size: [1.0; 3], cells: [8; 3], cell_size: 0.125 };
-    let ready = FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout), fit: Default::default(), column_box: None, refusal: None, uncoupled_bodies: 0 };
-    let pending = FluidDomainSnapshot { state: FluidDomainState::Initializing, ..ready.clone() };
+    let layout = FluidDomainLayout {
+        min: [0.0; 3],
+        size: [1.0; 3],
+        cells: [8; 3],
+        cell_size: 0.125,
+    };
+    let ready = FluidDomainSnapshot {
+        epoch: 1,
+        state: FluidDomainState::Ready,
+        accepted_layout: Some(layout),
+        fit: Default::default(),
+        column_box: None,
+        refusal: None,
+        uncoupled_bodies: 0,
+    };
+    let pending = FluidDomainSnapshot {
+        state: FluidDomainState::Initializing,
+        ..ready.clone()
+    };
     let domains = [(NodeId::new("a"), ready), (NodeId::new("b"), pending)];
     let physics = [
         PhysicsGizmo::aabb(PhysicsGizmoFamily::Collider, [0.0; 3], [1.0; 3]),
-        PhysicsGizmo { family: PhysicsGizmoFamily::Force, shape: PhysicsGizmoShape::Arrow { from: [0.0; 3], to: [1.0, 0.0, 0.0] } },
+        PhysicsGizmo {
+            family: PhysicsGizmoFamily::Force,
+            shape: PhysicsGizmoShape::Arrow {
+                from: [0.0; 3],
+                to: [1.0, 0.0, 0.0],
+            },
+        },
     ];
-    let scene = scene_with(vec![known_object(1, (0.0, 0.0, 0.0), (false, false, false))]);
+    let scene = scene_with(vec![known_object(
+        1,
+        (0.0, 0.0, 0.0),
+        (false, false, false),
+    )]);
     let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
     let selection = GizmoSelection::new(&scene, vec![target]);
     let mut chrome = GizmoChrome {
@@ -544,17 +1012,43 @@ fn composition_draws_what_physics_did_faintly_then_the_selected_handles() {
     let mut lines = Vec::new();
     compose_lines(&chrome, &mut lines);
     let (grid, lights) = (GROUND_GRID.len(), 2 * 3);
-    assert_eq!(lines.len(), grid + lights + 12 + 5 + 12 + 3, "an object draws no outline of its own");
-    let collider = crate::node_graph::viewport_overlay::physics_gizmo_color(PhysicsGizmoFamily::Collider);
+    assert_eq!(
+        lines.len(),
+        grid + lights + 12 + 5 + 12 + 3,
+        "an object draws no outline of its own"
+    );
+    let collider =
+        crate::node_graph::viewport_overlay::physics_gizmo_color(PhysicsGizmoFamily::Collider);
     let helpers = &lines[grid + lights..lines.len() - 3];
-    assert_eq!(helpers[0].color, shown(collider, false), "physics shapes follow the lights");
-    assert!(helpers.iter().all(|line| line.color[3] == UNSELECTED_ALPHA), "nothing of theirs is selected");
-    assert!(lines[lines.len() - 3..].iter().all(|line| line.color[3] == 255));
+    assert_eq!(
+        helpers[0].color,
+        shown(collider, false),
+        "physics shapes follow the lights"
+    );
+    assert!(
+        helpers.iter().all(|line| line.color[3] == UNSELECTED_ALPHA),
+        "nothing of theirs is selected"
+    );
+    assert!(
+        lines[lines.len() - 3..]
+            .iter()
+            .all(|line| line.color[3] == 255)
+    );
 
     chrome.fade_handles = true;
     compose_lines(&chrome, &mut lines);
-    assert!(lines[lines.len() - 3..].iter().all(|line| line.color[3] == FADED_HANDLE_ALPHA), "handles fade");
-    assert!(lines[grid + lights..lines.len() - 3].iter().all(|line| line.color[3] == UNSELECTED_ALPHA), "the helpers stay as they were");
+    assert!(
+        lines[lines.len() - 3..]
+            .iter()
+            .all(|line| line.color[3] == FADED_HANDLE_ALPHA),
+        "handles fade"
+    );
+    assert!(
+        lines[grid + lights..lines.len() - 3]
+            .iter()
+            .all(|line| line.color[3] == UNSELECTED_ALPHA),
+        "the helpers stay as they were"
+    );
 }
 
 /// B3: a shape the setup check finds outside its domain draws a red box in
@@ -585,30 +1079,65 @@ fn a_setup_problem_draws_a_red_box_in_the_composed_lines() {
         lines
     };
     let plain = compose(&[]);
-    let unplaced = SetupProblem { bounds: None, ..problem.clone() };
-    assert_eq!(compose(&[unplaced]).len(), plain.len(), "a problem nothing places draws no box");
+    let unplaced = SetupProblem {
+        bounds: None,
+        ..problem.clone()
+    };
+    assert_eq!(
+        compose(&[unplaced]).len(),
+        plain.len(),
+        "a problem nothing places draws no box"
+    );
     let flagged = compose(&[problem]);
     assert_eq!(flagged.len(), plain.len() + 12);
     assert!(
-        flagged.iter().zip(&plain).all(|(a, b)| a.a == b.a && a.b == b.b && a.color == b.color),
+        flagged
+            .iter()
+            .zip(&plain)
+            .all(|(a, b)| a.a == b.a && a.b == b.b && a.color == b.color),
         "the rest of the chrome is untouched"
     );
     let red = &flagged[plain.len()..];
     assert!(red.iter().all(|line| line.color == PROBLEM_COLOR));
-    assert!(red.iter().flat_map(|line| [line.a, line.b]).all(|p| (5.0..=6.0).contains(&p[0]) && (0.0..=1.0).contains(&p[1])));
+    assert!(
+        red.iter()
+            .flat_map(|line| [line.a, line.b])
+            .all(|p| (5.0..=6.0).contains(&p[0]) && (0.0..=1.0).contains(&p[1]))
+    );
 }
 
 #[test]
 fn each_grip_picks_its_own_handle() {
-    let scene = scene_with(vec![known_object(1, (0.0, 0.0, -5.0), (false, false, false))]);
+    let scene = scene_with(vec![known_object(
+        1,
+        (0.0, 0.0, -5.0),
+        (false, false, false),
+    )]);
     let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
     // Oblique, so no ring stands edge-on over another's grip.
-    let cam = Camera::look_at([3.0, 2.5, 0.0], [0.0, 0.0, -5.0], [0.0, 1.0, 0.0], 0.9, 0.1, 100.0);
-    let at = |p: [f32; 3]| cam.project_to_pixel(p, 640, 480).map(|p| (p.px, p.py)).unwrap();
+    let cam = Camera::look_at(
+        [3.0, 2.5, 0.0],
+        [0.0, 0.0, -5.0],
+        [0.0, 1.0, 0.0],
+        0.9,
+        0.1,
+        100.0,
+    );
+    let at = |p: [f32; 3]| {
+        cam.project_to_pixel(p, 640, 480)
+            .map(|p| (p.px, p.py))
+            .unwrap()
+    };
     for mode in [GizmoMode::Move, GizmoMode::Scale, GizmoMode::Rotate] {
         for axis in GizmoAxis::XYZ {
-            let grip = target.grip(mode, axis, &GizmoView::new(cam, 640, 480)).expect("an object has every handle");
-            assert_eq!(pick_axis(mode, &target, &GizmoView::new(cam, 640, 480), at(grip)), Some(axis), "{mode:?} {axis:?}");
+            let grip = target
+                .grip(mode, axis, &GizmoView::new(cam, 640, 480))
+                .expect("an object has every handle");
+            assert_eq!(
+                pick_axis(mode, &target, &GizmoView::new(cam, 640, 480), at(grip)),
+                Some(axis),
+                "{mode:?} {axis:?}"
+            );
         }
     }
 }
@@ -621,15 +1150,27 @@ fn handles_keep_their_screen_length_across_distance_and_field_of_view() {
         let width = height * 16 / 9;
         for fov in [0.3_f32, 0.9, 1.6] {
             for distance in [0.5_f32, 2.0, 30.0, 400.0, 5000.0] {
-                let camera = Camera::look_at([0.0; 3], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], fov, 0.1, 10_000.0);
+                let camera = Camera::look_at(
+                    [0.0; 3],
+                    [0.0, 0.0, -1.0],
+                    [0.0, 1.0, 0.0],
+                    fov,
+                    0.1,
+                    10_000.0,
+                );
                 // Off centre too: the scale follows depth, not distance.
                 let origin = [distance * 0.2, -distance * 0.1, -distance];
                 let len = handle_length(origin, &camera, height);
                 let a = camera.project_to_pixel(origin, width, height).unwrap();
-                let b = camera.project_to_pixel(offset(origin, [1.0, 0.0, 0.0], len), width, height).unwrap();
+                let b = camera
+                    .project_to_pixel(offset(origin, [1.0, 0.0, 0.0], len), width, height)
+                    .unwrap();
                 let on_screen = (b.px - a.px).hypot(b.py - a.py);
                 let want = HANDLE_VIEW_FRACTION * height as f32;
-                assert!((on_screen - want).abs() < want * 0.01, "{height}p fov {fov} at {distance}: {on_screen} px, want {want}");
+                assert!(
+                    (on_screen - want).abs() < want * 0.01,
+                    "{height}p fov {fov} at {distance}: {on_screen} px, want {want}"
+                );
             }
         }
     }
@@ -638,8 +1179,17 @@ fn handles_keep_their_screen_length_across_distance_and_field_of_view() {
     for distance in [1.0_f32, 90.0] {
         let origin = [0.0, 0.0, -distance];
         let a = ortho.project_to_pixel(origin, 640, 480).unwrap();
-        let b = ortho.project_to_pixel(offset(origin, [0.0, 1.0, 0.0], handle_length(origin, &ortho, 480)), 640, 480).unwrap();
-        assert!(((a.py - b.py) - HANDLE_VIEW_FRACTION * 480.0).abs() < 0.5, "ortho at {distance}");
+        let b = ortho
+            .project_to_pixel(
+                offset(origin, [0.0, 1.0, 0.0], handle_length(origin, &ortho, 480)),
+                640,
+                480,
+            )
+            .unwrap();
+        assert!(
+            ((a.py - b.py) - HANDLE_VIEW_FRACTION * 480.0).abs() < 0.5,
+            "ortho at {distance}"
+        );
     }
 }
 
@@ -647,11 +1197,26 @@ fn handles_keep_their_screen_length_across_distance_and_field_of_view() {
 #[test]
 fn a_press_on_the_drawn_tip_grabs_the_handle_at_any_distance() {
     for distance in [1.5_f32, 20.0, 300.0, 4000.0] {
-        let scene = scene_with(vec![known_object(1, (0.0, 0.0, -distance), (false, false, false))]);
+        let scene = scene_with(vec![known_object(
+            1,
+            (0.0, 0.0, -distance),
+            (false, false, false),
+        )]);
         let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
         // Oblique, so no handle stands over another; the same direction at every distance.
-        let eye = [3.0 * distance / 6.32, 2.5 * distance / 6.32, -distance + 5.0 * distance / 6.32];
-        let camera = Camera::look_at(eye, [0.0, 0.0, -distance], [0.0, 1.0, 0.0], 0.9, 0.1, 10_000.0);
+        let eye = [
+            3.0 * distance / 6.32,
+            2.5 * distance / 6.32,
+            -distance + 5.0 * distance / 6.32,
+        ];
+        let camera = Camera::look_at(
+            eye,
+            [0.0, 0.0, -distance],
+            [0.0, 1.0, 0.0],
+            0.9,
+            0.1,
+            10_000.0,
+        );
         let view = GizmoView::new(camera, 1280, 720);
         let selection = GizmoSelection::new(&scene, vec![target.clone()]);
         let chrome = GizmoChrome {
@@ -669,9 +1234,19 @@ fn a_press_on_the_drawn_tip_grabs_the_handle_at_any_distance() {
         compose_lines(&chrome, &mut lines);
         let drawn = &lines[lines.len() - 3..];
         for (axis, line) in GizmoAxis::XYZ.into_iter().zip(drawn) {
-            assert_eq!(Some(line.b), target.grip(GizmoMode::Move, axis, &view), "the grip is the drawn tip");
-            let tip = camera.project_to_pixel(line.b, view.width, view.height).unwrap();
-            assert_eq!(pick_axis(GizmoMode::Move, &target, &view, (tip.px, tip.py)), Some(axis), "{axis:?} at {distance}");
+            assert_eq!(
+                Some(line.b),
+                target.grip(GizmoMode::Move, axis, &view),
+                "the grip is the drawn tip"
+            );
+            let tip = camera
+                .project_to_pixel(line.b, view.width, view.height)
+                .unwrap();
+            assert_eq!(
+                pick_axis(GizmoMode::Move, &target, &view, (tip.px, tip.py)),
+                Some(axis),
+                "{axis:?} at {distance}"
+            );
         }
     }
 }
@@ -681,12 +1256,17 @@ fn a_press_on_the_drawn_tip_grabs_the_handle_at_any_distance() {
 /// handle, and the same miss misses.
 #[test]
 fn hit_tolerances_hold_in_screen_points_at_any_display_scale() {
-    let scene = scene_with(vec![known_object(1, (0.0, 0.0, -5.0), (false, false, false))]);
+    let scene = scene_with(vec![known_object(
+        1,
+        (0.0, 0.0, -5.0),
+        (false, false, false),
+    )]);
     let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
     // (render height, the picture's height on screen in points)
     for (height, points_high) in [(480_u32, 480.0_f32), (960, 480.0), (2160, 458.0)] {
         let width = height * 16 / 9;
-        let view = GizmoView::new(cam_looking_down_neg_z([0.0; 3]), width, height).on_screen(points_high);
+        let view =
+            GizmoView::new(cam_looking_down_neg_z([0.0; 3]), width, height).on_screen(points_high);
         let s = view.px_per_point;
         let at = |p: [f32; 3]| {
             let p = view.camera.project_to_pixel(p, width, height).unwrap();
@@ -694,17 +1274,35 @@ fn hit_tolerances_hold_in_screen_points_at_any_display_scale() {
         };
         let tip = at(view_tip(&target, &view, GizmoAxis::X));
         let below = |points: f32| (tip.0, tip.1 + points * s);
-        assert_eq!(pick_axis(GizmoMode::Move, &target, &view, below(7.0)), Some(GizmoAxis::X), "{height}p: 7 pt off the tip");
-        assert_eq!(pick_axis(GizmoMode::Move, &target, &view, below(14.0)), None, "{height}p: 14 pt off the tip");
+        assert_eq!(
+            pick_axis(GizmoMode::Move, &target, &view, below(7.0)),
+            Some(GizmoAxis::X),
+            "{height}p: 7 pt off the tip"
+        );
+        assert_eq!(
+            pick_axis(GizmoMode::Move, &target, &view, below(14.0)),
+            None,
+            "{height}p: 14 pt off the tip"
+        );
         let origin = at(target.origin);
         let beside = |points: f32| (origin.0 - points * s, origin.1 + points * s);
-        assert_eq!(pick_target(&scene, &view, beside(12.0)), Some(object_id(1)), "{height}p: 17 pt from the origin");
-        assert_eq!(pick_target(&scene, &view, beside(20.0)), None, "{height}p: 28 pt from the origin");
+        assert_eq!(
+            pick_target(&scene, &view, beside(12.0)),
+            Some(object_id(1)),
+            "{height}p: 17 pt from the origin"
+        );
+        assert_eq!(
+            pick_target(&scene, &view, beside(20.0)),
+            None,
+            "{height}p: 28 pt from the origin"
+        );
     }
 }
 
 fn view_tip(target: &GizmoTarget, view: &GizmoView, axis: GizmoAxis) -> [f32; 3] {
-    target.grip(GizmoMode::Move, axis, view).expect("a drawn handle")
+    target
+        .grip(GizmoMode::Move, axis, view)
+        .expect("a drawn handle")
 }
 
 /// A Move drag keeps the grabbed point under the cursor, as Blender and
@@ -714,10 +1312,21 @@ fn view_tip(target: &GizmoTarget, view: &GizmoView, axis: GizmoAxis) -> [f32; 3]
 #[test]
 fn a_move_drag_keeps_the_grabbed_point_under_the_cursor() {
     for distance in [3.0_f32, 40.0, 900.0] {
-        let scene = scene_with(vec![known_object(1, (0.0, 0.0, -distance), (false, false, false))]);
+        let scene = scene_with(vec![known_object(
+            1,
+            (0.0, 0.0, -distance),
+            (false, false, false),
+        )]);
         let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
         let eye = [0.47 * distance, 0.4 * distance, -distance + 0.79 * distance];
-        let camera = Camera::look_at(eye, [0.0, 0.0, -distance], [0.0, 1.0, 0.0], 0.9, 0.1, 10_000.0);
+        let camera = Camera::look_at(
+            eye,
+            [0.0, 0.0, -distance],
+            [0.0, 1.0, 0.0],
+            0.9,
+            0.1,
+            10_000.0,
+        );
         let view = GizmoView::new(camera, 1280, 720);
         let at = |p: [f32; 3]| {
             let p = camera.project_to_pixel(p, 1280, 720).unwrap();
@@ -728,14 +1337,27 @@ fn a_move_drag_keeps_the_grabbed_point_under_the_cursor() {
             let start = target.origin[i];
             let grabbed = view_tip(&target, &view, axis);
             let released = |to: [f32; 3]| {
-                let mut drag = GizmoDrag::begin(target.clone(), GizmoMode::Move, axis, &view, at(grabbed)).unwrap();
-                let HandleValues::One(v) = drag.update(&view, at(to)).expect("drag resolves") else { panic!("one value") };
+                let mut drag =
+                    GizmoDrag::begin(target.clone(), GizmoMode::Move, axis, &view, at(grabbed))
+                        .unwrap();
+                let HandleValues::One(v) = drag.update(&view, at(to)).expect("drag resolves")
+                else {
+                    panic!("one value")
+                };
                 v - start
             };
             let back = released(target.origin);
-            assert!((back + len).abs() < len * 0.01, "{axis:?} at {distance}: moved {back}, want {}", -len);
+            assert!(
+                (back + len).abs() < len * 0.01,
+                "{axis:?} at {distance}: moved {back}, want {}",
+                -len
+            );
             let out = released(offset(target.origin, GizmoAxis::XYZ[i].unit(), 3.0 * len));
-            assert!((out - 2.0 * len).abs() < len * 0.01, "{axis:?} at {distance}: moved {out}, want {}", 2.0 * len);
+            assert!(
+                (out - 2.0 * len).abs() < len * 0.01,
+                "{axis:?} at {distance}: moved {out}, want {}",
+                2.0 * len
+            );
         }
     }
 }
@@ -744,13 +1366,28 @@ fn a_move_drag_keeps_the_grabbed_point_under_the_cursor() {
 /// grip; the handles across the view still do.
 #[test]
 fn an_end_on_handle_takes_no_press() {
-    let scene = scene_with(vec![known_object(1, (0.0, 0.0, -5.0), (false, false, false))]);
+    let scene = scene_with(vec![known_object(
+        1,
+        (0.0, 0.0, -5.0),
+        (false, false, false),
+    )]);
     let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
     let view = view();
-    assert!(target.grip(GizmoMode::Move, GizmoAxis::Z, &view).is_none(), "Z points at the camera");
-    assert_ne!(pick_axis(GizmoMode::Move, &target, &view, px(target.origin)), Some(GizmoAxis::Z));
+    assert!(
+        target.grip(GizmoMode::Move, GizmoAxis::Z, &view).is_none(),
+        "Z points at the camera"
+    );
+    assert_ne!(
+        pick_axis(GizmoMode::Move, &target, &view, px(target.origin)),
+        Some(GizmoAxis::Z)
+    );
     assert!(target.grip(GizmoMode::Move, GizmoAxis::X, &view).is_some());
-    assert!(target.grip(GizmoMode::Rotate, GizmoAxis::Z, &view).is_some(), "the ring facing the camera turns");
+    assert!(
+        target
+            .grip(GizmoMode::Rotate, GizmoAxis::Z, &view)
+            .is_some(),
+        "the ring facing the camera turns"
+    );
 }
 
 /// Dragging toward a receding axis's vanishing point pushes the object out
@@ -762,7 +1399,11 @@ fn a_drag_past_the_vanishing_point_holds_in_front_of_the_camera() {
     let tilt = 25.0_f32.to_radians();
     let fwd = [tilt.cos(), 0.0, -tilt.sin()];
     let origin = fwd.map(|c| c * 5.0);
-    let scene = scene_with(vec![known_object(1, (origin[0], origin[1], origin[2]), (false, false, false))]);
+    let scene = scene_with(vec![known_object(
+        1,
+        (origin[0], origin[1], origin[2]),
+        (false, false, false),
+    )]);
     let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
     let camera = Camera::look_at([0.0; 3], origin, [0.0, 1.0, 0.0], 0.9, 0.1, 1000.0);
     let view = GizmoView::new(camera, 640, 480);
@@ -772,21 +1413,44 @@ fn a_drag_past_the_vanishing_point_holds_in_front_of_the_camera() {
     let pointer = |degrees: f32| {
         let a = degrees.to_radians();
         let dir: [f32; 3] = std::array::from_fn(|i| fwd[i] * a.cos() + side[i] * a.sin());
-        let p = camera.project_to_pixel(dir.map(|c| c * 10.0), 640, 480).unwrap();
+        let p = camera
+            .project_to_pixel(dir.map(|c| c * 10.0), 640, 480)
+            .unwrap();
         (p.px, p.py)
     };
-    let grip = target.grip(GizmoMode::Move, GizmoAxis::X, &view).expect("the receding handle is drawn");
+    let grip = target
+        .grip(GizmoMode::Move, GizmoAxis::X, &view)
+        .expect("the receding handle is drawn");
     let tip = camera.project_to_pixel(grip, 640, 480).unwrap();
     for degrees in [15.0_f32, 30.0, 40.0] {
-        let mut drag = GizmoDrag::begin(target.clone(), GizmoMode::Move, GizmoAxis::X, &view, (tip.px, tip.py)).unwrap();
+        let mut drag = GizmoDrag::begin(
+            target.clone(),
+            GizmoMode::Move,
+            GizmoAxis::X,
+            &view,
+            (tip.px, tip.py),
+        )
+        .unwrap();
         match drag.update(&view, pointer(degrees)) {
             Some(HandleValues::One(x)) => {
                 let moved = [x, origin[1], origin[2]];
-                assert!(dot3(sub3(moved, camera.pos), camera.fwd) > camera.near, "{degrees} deg: the object lands behind the eye at {moved:?}");
-                assert!(degrees < 25.0, "{degrees} deg is at or past the vanishing point and must hold, got x {x}");
-                assert!(x > origin[0], "short of the vanishing point the object recedes along +X");
+                assert!(
+                    dot3(sub3(moved, camera.pos), camera.fwd) > camera.near,
+                    "{degrees} deg: the object lands behind the eye at {moved:?}"
+                );
+                assert!(
+                    degrees < 25.0,
+                    "{degrees} deg is at or past the vanishing point and must hold, got x {x}"
+                );
+                assert!(
+                    x > origin[0],
+                    "short of the vanishing point the object recedes along +X"
+                );
             }
-            None => assert!(degrees >= 25.0, "{degrees} deg is short of the vanishing point and must move"),
+            None => assert!(
+                degrees >= 25.0,
+                "{degrees} deg is short of the vanishing point and must move"
+            ),
             Some(values) => panic!("one value, got {values:?}"),
         }
     }
@@ -798,10 +1462,21 @@ fn a_drag_past_the_vanishing_point_holds_in_front_of_the_camera() {
 #[test]
 fn the_same_on_screen_scale_drag_scales_alike_near_and_far() {
     for distance in [3.0_f32, 40.0, 600.0] {
-        let scene = scene_with(vec![known_object(1, (0.0, 0.0, -distance), (false, false, false))]);
+        let scene = scene_with(vec![known_object(
+            1,
+            (0.0, 0.0, -distance),
+            (false, false, false),
+        )]);
         let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
         let eye = [0.47 * distance, 0.4 * distance, -distance + 0.79 * distance];
-        let camera = Camera::look_at(eye, [0.0, 0.0, -distance], [0.0, 1.0, 0.0], 0.9, 0.1, 10_000.0);
+        let camera = Camera::look_at(
+            eye,
+            [0.0, 0.0, -distance],
+            [0.0, 1.0, 0.0],
+            0.9,
+            0.1,
+            10_000.0,
+        );
         let view = GizmoView::new(camera, 1280, 720);
         let at = |p: [f32; 3]| {
             let p = camera.project_to_pixel(p, 1280, 720).unwrap();
@@ -809,11 +1484,24 @@ fn the_same_on_screen_scale_drag_scales_alike_near_and_far() {
         };
         let len = handle_length(target.origin, &camera, 720);
         let tip = view_tip(&target, &view, GizmoAxis::Y);
-        let mut drag = GizmoDrag::begin(target.clone(), GizmoMode::Scale, GizmoAxis::Y, &view, at(tip)).unwrap();
-        let HandleValues::One(size) = drag.update(&view, at(offset(target.origin, [0.0, 1.0, 0.0], 2.0 * len))).unwrap() else {
+        let mut drag = GizmoDrag::begin(
+            target.clone(),
+            GizmoMode::Scale,
+            GizmoAxis::Y,
+            &view,
+            at(tip),
+        )
+        .unwrap();
+        let HandleValues::One(size) = drag
+            .update(&view, at(offset(target.origin, [0.0, 1.0, 0.0], 2.0 * len)))
+            .unwrap()
+        else {
             panic!("one value")
         };
-        assert!((size - 2.0).abs() < 0.01, "at {distance}: twice out doubles the size, got {size}");
+        assert!(
+            (size - 2.0).abs() < 0.01,
+            "at {distance}: twice out doubles the size, got {size}"
+        );
     }
 }
 
@@ -832,7 +1520,14 @@ fn handles_under_a_scaled_parent_keep_their_size_and_param_units() {
         c.parent = Some(object_ref(7));
         let scene = scene_with(vec![parent, child]);
         let target = gizmo_target_for(&scene, &object_id(8)).unwrap();
-        let camera = Camera::look_at([2.0, 1.5, 0.0], target.origin, [0.0, 1.0, 0.0], 0.9, 0.1, 100.0);
+        let camera = Camera::look_at(
+            [2.0, 1.5, 0.0],
+            target.origin,
+            [0.0, 1.0, 0.0],
+            0.9,
+            0.1,
+            100.0,
+        );
         let view = GizmoView::new(camera, 640, 480);
         let at = |p: [f32; 3]| {
             let p = camera.project_to_pixel(p, 640, 480).unwrap();
@@ -841,16 +1536,37 @@ fn handles_under_a_scaled_parent_keep_their_size_and_param_units() {
         let len = handle_length(target.origin, &camera, 480);
         let mut lines = Vec::new();
         gizmo_lines(GizmoMode::Move, &target, len, &mut lines);
-        let x_line = lines.iter().find(|line| line.color == X_COLOR).expect("the X handle");
+        let x_line = lines
+            .iter()
+            .find(|line| line.color == X_COLOR)
+            .expect("the X handle");
         let d = sub3(x_line.b, x_line.a);
         let world_len = dot3(d, d).sqrt();
-        assert!((world_len - len).abs() < len * 1e-3, "parent {parent_scale}x: the handle is the fixed length, got {world_len} of {len}");
+        assert!(
+            (world_len - len).abs() < len * 1e-3,
+            "parent {parent_scale}x: the handle is the fixed length, got {world_len} of {len}"
+        );
         let tip = view_tip(&target, &view, GizmoAxis::X);
-        assert_eq!(pick_axis(GizmoMode::Move, &target, &view, at(tip)), Some(GizmoAxis::X));
-        let mut drag = GizmoDrag::begin(target.clone(), GizmoMode::Move, GizmoAxis::X, &view, at(tip)).unwrap();
-        let HandleValues::One(x) = drag.update(&view, at(target.origin)).unwrap() else { panic!("one value") };
+        assert_eq!(
+            pick_axis(GizmoMode::Move, &target, &view, at(tip)),
+            Some(GizmoAxis::X)
+        );
+        let mut drag = GizmoDrag::begin(
+            target.clone(),
+            GizmoMode::Move,
+            GizmoAxis::X,
+            &view,
+            at(tip),
+        )
+        .unwrap();
+        let HandleValues::One(x) = drag.update(&view, at(target.origin)).unwrap() else {
+            panic!("one value")
+        };
         let want = 0.5 - len / parent_scale;
-        assert!((x - want).abs() < len * 0.01 / parent_scale, "parent {parent_scale}x: pos_x {x}, want {want}");
+        assert!(
+            (x - want).abs() < len * 0.01 / parent_scale,
+            "parent {parent_scale}x: pos_x {x}, want {want}"
+        );
     }
 }
 
@@ -859,30 +1575,92 @@ fn handles_under_a_scaled_parent_keep_their_size_and_param_units() {
 /// it still moves the object back by the handle length it was grabbed at.
 #[test]
 fn a_camera_moving_mid_drag_never_shifts_the_grab() {
-    let scene = scene_with(vec![known_object(1, (0.0, 0.0, -10.0), (false, false, false))]);
+    let scene = scene_with(vec![known_object(
+        1,
+        (0.0, 0.0, -10.0),
+        (false, false, false),
+    )]);
     let target = gizmo_target_for(&scene, &object_id(1)).unwrap();
-    let pressed = GizmoView::new(Camera::look_at([3.0, 2.0, -2.0], [0.0, 0.0, -10.0], [0.0, 1.0, 0.0], 0.9, 0.1, 100.0), 640, 480);
-    let moved = GizmoView::new(Camera::look_at([-4.0, 3.0, -1.0], [0.0, 0.0, -10.0], [0.0, 1.0, 0.0], 0.9, 0.1, 100.0), 640, 480);
+    let pressed = GizmoView::new(
+        Camera::look_at(
+            [3.0, 2.0, -2.0],
+            [0.0, 0.0, -10.0],
+            [0.0, 1.0, 0.0],
+            0.9,
+            0.1,
+            100.0,
+        ),
+        640,
+        480,
+    );
+    let moved = GizmoView::new(
+        Camera::look_at(
+            [-4.0, 3.0, -1.0],
+            [0.0, 0.0, -10.0],
+            [0.0, 1.0, 0.0],
+            0.9,
+            0.1,
+            100.0,
+        ),
+        640,
+        480,
+    );
     let at = |view: &GizmoView, p: [f32; 3]| {
         let p = view.camera.project_to_pixel(p, 640, 480).unwrap();
         (p.px, p.py)
     };
     let len = handle_length(target.origin, &pressed.camera, 480);
     let tip = view_tip(&target, &pressed, GizmoAxis::X);
-    let mut drag = GizmoDrag::begin(target.clone(), GizmoMode::Move, GizmoAxis::X, &pressed, at(&pressed, tip)).unwrap();
-    let HandleValues::One(x) = drag.update(&moved, at(&moved, target.origin)).unwrap() else { panic!("one value") };
-    assert!((x + len).abs() < len * 0.01, "moved back by the grabbed length {len}, got {x}");
+    let mut drag = GizmoDrag::begin(
+        target.clone(),
+        GizmoMode::Move,
+        GizmoAxis::X,
+        &pressed,
+        at(&pressed, tip),
+    )
+    .unwrap();
+    let HandleValues::One(x) = drag.update(&moved, at(&moved, target.origin)).unwrap() else {
+        panic!("one value")
+    };
+    assert!(
+        (x + len).abs() < len * 0.01,
+        "moved back by the grabbed length {len}, got {x}"
+    );
 }
 
-fn domain_chrome_lines(layout: manifold_core::fluid_domain::FluidDomainLayout, view: GizmoView, selected: bool) -> (Vec<WorldLine>, usize) {
+fn domain_chrome_lines(
+    layout: manifold_core::fluid_domain::FluidDomainLayout,
+    view: GizmoView,
+    selected: bool,
+) -> (Vec<WorldLine>, usize) {
     use manifold_core::fluid_domain::{FluidDomainSnapshot, FluidDomainState};
     let decls = &LIQUID_DOMAIN_SHAPES[..];
     let owner = ShapeOwner::LiquidDomain(NodeId::new("domain"));
-    let shape = card_rows_shape(owner.clone(), 0, &decls[0], &[("scale_x", 4.0), ("scale_y", 2.0), ("scale_z", 4.0)], &[]);
+    let shape = card_rows_shape(
+        owner.clone(),
+        0,
+        &decls[0],
+        &[("scale_x", 4.0), ("scale_y", 2.0), ("scale_z", 4.0)],
+        &[],
+    );
     let scene = scene_of(vec![shape]);
     let target = gizmo_target_for(&scene, &GizmoTargetId { owner, shape: 0 }).unwrap();
-    let domains = [(NodeId::new("domain"), FluidDomainSnapshot { epoch: 1, state: FluidDomainState::Ready, accepted_layout: Some(layout), fit: Default::default(), column_box: None, refusal: None, uncoupled_bodies: 0 })];
-    let selection = GizmoSelection::new(&scene, selected.then(|| target.clone()).into_iter().collect());
+    let domains = [(
+        NodeId::new("domain"),
+        FluidDomainSnapshot {
+            epoch: 1,
+            state: FluidDomainState::Ready,
+            accepted_layout: Some(layout),
+            fit: Default::default(),
+            column_box: None,
+            refusal: None,
+            uncoupled_bodies: 0,
+        },
+    )];
+    let selection = GizmoSelection::new(
+        &scene,
+        selected.then(|| target.clone()).into_iter().collect(),
+    );
     let chrome = GizmoChrome {
         view,
         lights: &[],
@@ -896,7 +1674,11 @@ fn domain_chrome_lines(layout: manifold_core::fluid_domain::FluidDomainLayout, v
     };
     let mut lines = Vec::new();
     compose_lines(&chrome, &mut lines);
-    let handles = if selected { lines_of(GizmoMode::Move, &target).len() } else { 0 };
+    let handles = if selected {
+        lines_of(GizmoMode::Move, &target).len()
+    } else {
+        0
+    };
     // The accepted box stands in for the declared one: twelve edges, once.
     let base = GROUND_GRID.len() + 12;
     let lattice = lines.len() - base - handles;
@@ -911,9 +1693,21 @@ fn is_lattice(line: &WorldLine) -> bool {
 #[test]
 fn selected_domain_draws_cell_boundaries_of_the_reported_layout() {
     use manifold_core::fluid_domain::{DomainBox, domain_layout};
-    let pose = DomainBox { pos: [0.0, 2.0, 0.0], rot_euler: [0.0; 3], scale: [4.0, 2.0, 4.0], billboard: false };
+    let pose = DomainBox {
+        pos: [0.0, 2.0, 0.0],
+        rot_euler: [0.0; 3],
+        scale: [4.0, 2.0, 4.0],
+        billboard: false,
+    };
     let layout = domain_layout(Some(pose), 4.0, 64).unwrap();
-    let eye = Camera::look_at([30.0, 20.0, 40.0], [0.0, 2.0, 0.0], [0.0, 1.0, 0.0], 0.9, 0.1, 500.0);
+    let eye = Camera::look_at(
+        [30.0, 20.0, 40.0],
+        [0.0, 2.0, 0.0],
+        [0.0, 1.0, 0.0],
+        0.9,
+        0.1,
+        500.0,
+    );
     let view = GizmoView::new(eye, 1920, 1080);
     let (_, none) = domain_chrome_lines(layout, view, false);
     assert_eq!(none, 0, "an unselected domain draws no cell grid");
@@ -921,7 +1715,9 @@ fn selected_domain_draws_cell_boundaries_of_the_reported_layout() {
     assert!(count > 0);
     let cell = layout.cell_size as f32;
     for line in lines.iter().filter(|l| is_lattice(l)) {
-        let along = (0..3).find(|&k| (line.a[k] - line.b[k]).abs() > 1e-6).unwrap();
+        let along = (0..3)
+            .find(|&k| (line.a[k] - line.b[k]).abs() > 1e-6)
+            .unwrap();
         let mut fixed = (0..3).filter(|&k| k != along);
         // One fixed axis is the face (a box wall), the other a cell boundary.
         let on_boundary = |k: usize| {
@@ -937,12 +1733,33 @@ fn selected_domain_draws_cell_boundaries_of_the_reported_layout() {
 #[test]
 fn lattice_faces_are_far_outside_and_looked_at_inside() {
     use manifold_core::fluid_domain::FluidDomainLayout;
-    let layout = FluidDomainLayout { min: [-10.0, 0.5, -10.0], size: [20.0, 0.5, 20.0], cells: [320, 8, 320], cell_size: 0.0625 };
-    let outside = crate::node_graph::viewport_overlay::lattice_faces(&layout, [30.0, 5.0, -40.0], [-0.5, -0.1, 0.8]);
-    assert_eq!(outside, [-10.0, 0.5, 10.0], "away from an eye at +x, above, -z");
-    let inside_toward_max = crate::node_graph::viewport_overlay::lattice_faces(&layout, [1.0, 0.7, 2.0], [0.6, 0.0, 0.8]);
+    let layout = FluidDomainLayout {
+        min: [-10.0, 0.5, -10.0],
+        size: [20.0, 0.5, 20.0],
+        cells: [320, 8, 320],
+        cell_size: 0.0625,
+    };
+    let outside = crate::node_graph::viewport_overlay::lattice_faces(
+        &layout,
+        [30.0, 5.0, -40.0],
+        [-0.5, -0.1, 0.8],
+    );
+    assert_eq!(
+        outside,
+        [-10.0, 0.5, 10.0],
+        "away from an eye at +x, above, -z"
+    );
+    let inside_toward_max = crate::node_graph::viewport_overlay::lattice_faces(
+        &layout,
+        [1.0, 0.7, 2.0],
+        [0.6, 0.0, 0.8],
+    );
     assert_eq!(inside_toward_max, [10.0, 1.0, 10.0], "the walls ahead");
-    let inside_toward_min = crate::node_graph::viewport_overlay::lattice_faces(&layout, [1.0, 0.7, 2.0], [-0.6, -0.2, -0.8]);
+    let inside_toward_min = crate::node_graph::viewport_overlay::lattice_faces(
+        &layout,
+        [1.0, 0.7, 2.0],
+        [-0.6, -0.2, -0.8],
+    );
     assert_eq!(inside_toward_min, [-10.0, 0.5, -10.0]);
 }
 
@@ -952,19 +1769,42 @@ fn lattice_faces_are_far_outside_and_looked_at_inside() {
 fn a_wide_domain_strides_within_the_line_budget() {
     use crate::node_graph::viewport_overlay::{LATTICE_LINE_BUDGET, fluid_lattice_lines};
     use manifold_core::fluid_domain::{DomainBox, domain_layout};
-    let pose = DomainBox { pos: [0.0, 4.0, 0.0], rot_euler: [0.0; 3], scale: [20.0, 0.5, 20.0], billboard: false };
+    let pose = DomainBox {
+        pos: [0.0, 4.0, 0.0],
+        rot_euler: [0.0; 3],
+        scale: [20.0, 0.5, 20.0],
+        billboard: false,
+    };
     let layout = domain_layout(Some(pose), 20.0, 1280).unwrap();
     assert!(layout.cells[0] > 257, "{:?}", layout.cells);
     let mut lines = Vec::new();
     // No screen thinning: the cap alone.
-    fluid_lattice_lines(layout, [60.0, 40.0, 60.0], [-0.6, -0.4, -0.6], |_, _| None, &mut lines);
-    assert!(!lines.is_empty() && lines.len() <= LATTICE_LINE_BUDGET, "{} lines", lines.len());
+    fluid_lattice_lines(
+        layout,
+        [60.0, 40.0, 60.0],
+        [-0.6, -0.4, -0.6],
+        |_, _| None,
+        &mut lines,
+    );
+    assert!(
+        !lines.is_empty() && lines.len() <= LATTICE_LINE_BUDGET,
+        "{} lines",
+        lines.len()
+    );
     let cell = layout.cell_size as f32;
     let stride = layout.cells[0].saturating_sub(1).div_ceil(256);
     assert!(stride > 1);
-    let mut xs: Vec<f32> = lines.iter().filter(|l| l.a[0] == l.b[0] && l.a[1] == l.b[1] && l.a[1] == layout.min[1]).map(|l| l.a[0]).collect();
+    let mut xs: Vec<f32> = lines
+        .iter()
+        .filter(|l| l.a[0] == l.b[0] && l.a[1] == l.b[1] && l.a[1] == layout.min[1])
+        .map(|l| l.a[0])
+        .collect();
     xs.sort_by(f32::total_cmp);
-    assert!(xs.windows(2).all(|w| ((w[1] - w[0]) / cell - stride as f32).abs() < 1e-2), "stride {stride}");
+    assert!(
+        xs.windows(2)
+            .all(|w| ((w[1] - w[0]) / cell - stride as f32).abs() < 1e-2),
+        "stride {stride}"
+    );
 }
 
 /// A3: a 256-cell domain from a typical distance keeps neighbouring lines at
@@ -974,51 +1814,102 @@ fn a_wide_domain_strides_within_the_line_budget() {
 fn a_dense_domain_is_thinned_to_the_screen_spacing() {
     use crate::node_graph::viewport_overlay::LATTICE_MIN_POINTS;
     use manifold_core::fluid_domain::{DomainBox, domain_layout};
-    let pose = DomainBox { pos: [0.0, 3.0, 0.0], rot_euler: [0.0; 3], scale: [6.0, 4.0, 6.0], billboard: false };
+    let pose = DomainBox {
+        pos: [0.0, 3.0, 0.0],
+        rot_euler: [0.0; 3],
+        scale: [6.0, 4.0, 6.0],
+        billboard: false,
+    };
     let layout = domain_layout(Some(pose), 6.0, 256).unwrap();
-    let cam = Camera::look_at([9.0, 7.0, 13.0], [0.0, 2.0, 0.0], [0.0, 1.0, 0.0], 0.8, 0.1, 200.0);
+    let cam = Camera::look_at(
+        [9.0, 7.0, 13.0],
+        [0.0, 2.0, 0.0],
+        [0.0, 1.0, 0.0],
+        0.8,
+        0.1,
+        200.0,
+    );
     let view = GizmoView::new(cam, 1280, 720);
     let (lines, count) = domain_chrome_lines(layout, view, true);
     assert!(count > 0 && count <= crate::node_graph::viewport_overlay::LATTICE_LINE_BUDGET);
     let lattice: Vec<&WorldLine> = lines.iter().filter(|l| is_lattice(l)).collect();
     // Group parallel lines of one face; consecutive ones are neighbours.
-    let mut groups: std::collections::BTreeMap<(usize, usize, i64), Vec<(f32, f32)>> = Default::default();
+    let mut groups: std::collections::BTreeMap<(usize, usize, i64), Vec<(f32, f32)>> =
+        Default::default();
     for l in &lattice {
         let along = (0..3).find(|&k| (l.a[k] - l.b[k]).abs() > 1e-6).unwrap();
-        let face = (0..3).find(|&k| k != along && (l.a[k] == layout.min[k] || l.a[k] == layout.min[k] + layout.size[k])).unwrap();
+        let face = (0..3)
+            .find(|&k| {
+                k != along && (l.a[k] == layout.min[k] || l.a[k] == layout.min[k] + layout.size[k])
+            })
+            .unwrap();
         let across = 3 - along - face;
         let mid = [0, 1, 2].map(|k| (l.a[k] + l.b[k]) * 0.5);
         let p = cam.project_to_pixel(mid, 1280, 720).unwrap();
-        groups.entry((along, face, (l.a[face] * 1000.0) as i64)).or_default().push((l.a[across], p.px));
+        groups
+            .entry((along, face, (l.a[face] * 1000.0) as i64))
+            .or_default()
+            .push((l.a[across], p.px));
         let _ = p.py;
     }
     assert!(groups.len() >= 4, "grid faces drawn: {}", groups.len());
     for ((along, face, _), mut v) in groups {
         v.sort_by(|a, b| a.0.total_cmp(&b.0));
         for w in v.windows(2) {
-            let (p0, p1) = (pt(&cam, along, face, &layout, w[0].0), pt(&cam, along, face, &layout, w[1].0));
+            let (p0, p1) = (
+                pt(&cam, along, face, &layout, w[0].0),
+                pt(&cam, along, face, &layout, w[1].0),
+            );
             let gap = (p0.0 - p1.0).hypot(p0.1 - p1.1);
-            assert!(gap >= LATTICE_MIN_POINTS * 0.9, "lines {gap} px apart (axis {along}, face {face})");
+            assert!(
+                gap >= LATTICE_MIN_POINTS * 0.9,
+                "lines {gap} px apart (axis {along}, face {face})"
+            );
         }
     }
     // A floor resting on y = 0 skips its face.
-    let on_ground = manifold_core::fluid_domain::FluidDomainLayout { min: [-3.0, 0.0, -3.0], size: [6.0, 4.0, 6.0], cells: [64, 43, 64], cell_size: 6.0 / 64.0 };
-    let top = Camera::look_at([0.0, 40.0, 0.1], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 0.8, 0.1, 200.0);
+    let on_ground = manifold_core::fluid_domain::FluidDomainLayout {
+        min: [-3.0, 0.0, -3.0],
+        size: [6.0, 4.0, 6.0],
+        cells: [64, 43, 64],
+        cell_size: 6.0 / 64.0,
+    };
+    let top = Camera::look_at(
+        [0.0, 40.0, 0.1],
+        [0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        0.8,
+        0.1,
+        200.0,
+    );
     let (floor_lines, _) = domain_chrome_lines(on_ground, GizmoView::new(top, 1280, 720), true);
     assert!(
-        floor_lines.iter().filter(|l| is_lattice(l)).all(|l| l.a[1] != l.b[1] || l.a[1] != 0.0),
+        floor_lines
+            .iter()
+            .filter(|l| is_lattice(l))
+            .all(|l| l.a[1] != l.b[1] || l.a[1] != 0.0),
         "no cell lines lie flat on the ground plane"
     );
 }
 
 /// Pixel position of the midpoint of the line across `across`=`value` on the
 /// given face, for the spacing check.
-fn pt(cam: &Camera, along: usize, face: usize, layout: &manifold_core::fluid_domain::FluidDomainLayout, value: f32) -> (f32, f32) {
+fn pt(
+    cam: &Camera,
+    along: usize,
+    face: usize,
+    layout: &manifold_core::fluid_domain::FluidDomainLayout,
+    value: f32,
+) -> (f32, f32) {
     let across = 3 - along - face;
     let mut mid = [0.0; 3];
     mid[along] = layout.min[along] + layout.size[along] * 0.5;
     mid[across] = value;
-    mid[face] = if cam.pos[face] < layout.min[face] + layout.size[face] * 0.5 { layout.min[face] + layout.size[face] } else { layout.min[face] };
+    mid[face] = if cam.pos[face] < layout.min[face] + layout.size[face] * 0.5 {
+        layout.min[face] + layout.size[face]
+    } else {
+        layout.min[face]
+    };
     let p = cam.project_to_pixel(mid, 1280, 720).unwrap();
     (p.px, p.py)
 }
@@ -1037,9 +1928,36 @@ fn edge_px(target: &GizmoTarget) -> (f32, f32) {
 fn domain_and_column() -> (SceneVm, GizmoTarget, GizmoTarget) {
     let decls = &LIQUID_DOMAIN_SHAPES[..];
     let owner = ShapeOwner::LiquidDomain(NodeId::new("domain"));
-    let domain = card_rows_shape(owner, 0, &decls[0], &[("pos_z", -10.0), ("scale_x", 6.0), ("scale_y", 4.0), ("scale_z", 6.0)], &[]);
-    let fill = ShapeOwner::RoleSource { node: NodeId::new("fill"), role: FluidRole::InitialFill };
-    let column = card_rows_shape(fill, 0, &INITIAL_FILL_SHAPES[0], &[("pos_x", 1.5), ("pos_y", -1.0), ("pos_z", -10.0), ("scale_x", 2.0), ("scale_y", 2.0), ("scale_z", 2.0)], &[]);
+    let domain = card_rows_shape(
+        owner,
+        0,
+        &decls[0],
+        &[
+            ("pos_z", -10.0),
+            ("scale_x", 6.0),
+            ("scale_y", 4.0),
+            ("scale_z", 6.0),
+        ],
+        &[],
+    );
+    let fill = ShapeOwner::RoleSource {
+        node: NodeId::new("fill"),
+        role: FluidRole::InitialFill,
+    };
+    let column = card_rows_shape(
+        fill,
+        0,
+        &INITIAL_FILL_SHAPES[0],
+        &[
+            ("pos_x", 1.5),
+            ("pos_y", -1.0),
+            ("pos_z", -10.0),
+            ("scale_x", 2.0),
+            ("scale_y", 2.0),
+            ("scale_z", 2.0),
+        ],
+        &[],
+    );
     let scene = scene_of(vec![domain, column]);
     let targets: Vec<_> = gizmo_targets(&scene).collect();
     (scene, targets[0].clone(), targets[1].clone())
@@ -1054,7 +1972,10 @@ fn a_domain_box_is_picked_by_its_own_edges() {
     // The top edge of the box's near face.
     let edge = px([0.0, 2.0, -7.0]);
     let origin = px(domain.origin);
-    assert!(dist2(edge, origin).sqrt() > PICK_RADIUS_PT, "the click is far from the box's centre");
+    assert!(
+        dist2(edge, origin).sqrt() > PICK_RADIUS_PT,
+        "the click is far from the box's centre"
+    );
     assert_eq!(pick_target(&scene, &view(), edge), Some(domain.id.clone()));
     // The column's own edge picks the column, not the box around it.
     let column_edge = px([2.5, 0.0, -9.0]);
@@ -1069,10 +1990,19 @@ fn a_domain_box_is_picked_by_its_own_edges() {
 #[test]
 fn a_camera_inside_the_box_picks_it_by_the_edges_in_view() {
     let (scene, domain, _) = domain_and_column();
-    let inside = Camera::look_at([0.0, 0.0, -8.0], [0.0, 0.0, -20.0], [0.0, 1.0, 0.0], 0.9, 0.1, 100.0);
+    let inside = Camera::look_at(
+        [0.0, 0.0, -8.0],
+        [0.0, 0.0, -20.0],
+        [0.0, 1.0, 0.0],
+        0.9,
+        0.1,
+        100.0,
+    );
     let view = GizmoView::new(inside, 640, 480);
     // A side edge that runs from behind the camera to the far wall.
-    let p = inside.project_to_pixel([3.0, 2.0, -11.0], 640, 480).unwrap();
+    let p = inside
+        .project_to_pixel([3.0, 2.0, -11.0], 640, 480)
+        .unwrap();
     assert_eq!(pick_target(&scene, &view, (p.px, p.py)), Some(domain.id));
 }
 
@@ -1081,40 +2011,91 @@ fn a_camera_inside_the_box_picks_it_by_the_edges_in_view() {
 #[test]
 fn every_declared_shape_is_picked_by_its_own_edges() {
     let source = card_rows_shape(
-        ShapeOwner::RoleSource { node: NodeId::new("inflow"), role: FluidRole::Inflow },
+        ShapeOwner::RoleSource {
+            node: NodeId::new("inflow"),
+            role: FluidRole::Inflow,
+        },
         0,
         &WATER_SOURCE_SHAPES[0],
-        &[("pos_z", -8.0), ("scale_x", 4.0), ("scale_y", 4.0), ("scale_z", 1.0)],
+        &[
+            ("pos_z", -8.0),
+            ("scale_x", 4.0),
+            ("scale_y", 4.0),
+            ("scale_z", 1.0),
+        ],
         &[],
     );
     let swarm = card_rows_shape(
         ShapeOwner::Swarm(NodeId::new("swarm")),
         0,
         &SWARM_SHAPES[0],
-        &[("pos_z", -8.0), ("scale_x", 4.0), ("scale_y", 4.0), ("scale_z", 4.0)],
+        &[
+            ("pos_z", -8.0),
+            ("scale_x", 4.0),
+            ("scale_y", 4.0),
+            ("scale_z", 4.0),
+        ],
         &[],
     );
     let radial = force_shape(
-        manifest_decl(r#"{"kind": "point_radius", "center": ["center_x", "center_y", "center_z"], "radius": "radius"}"#),
+        manifest_decl(
+            r#"{"kind": "point_radius", "center": ["center_x", "center_y", "center_z"], "radius": "radius"}"#,
+        ),
         &[("center_z", -8.0), ("radius", 2.0)],
         [0.0; 3],
     );
     let vortex = force_shape(
-        manifest_decl(r#"{"kind": "axis", "origin": ["center_x", "center_y", "center_z"], "direction": ["axis_x", "axis_y", "axis_z"], "radius": "radius"}"#),
+        manifest_decl(
+            r#"{"kind": "axis", "origin": ["center_x", "center_y", "center_z"], "direction": ["axis_x", "axis_y", "axis_z"], "radius": "radius"}"#,
+        ),
         &[("center_z", -8.0), ("axis_y", 1.0), ("radius", 2.0)],
         [0.0; 3],
     );
-    let field = force_shape(RADIAL_FORCE_SHAPES[0].clone(), &[("center_z", -8.0), ("radius", 2.0), ("falloff", 2.0), ("curve", 1.0)], [0.0; 3]);
-    let swirl = force_shape(VORTEX_FORCE_SHAPES[0].clone(), &[("center_z", -8.0), ("axis_y", 1.0), ("radius", 2.0)], [0.0; 3]);
+    let field = force_shape(
+        RADIAL_FORCE_SHAPES[0].clone(),
+        &[
+            ("center_z", -8.0),
+            ("radius", 2.0),
+            ("falloff", 2.0),
+            ("curve", 1.0),
+        ],
+        [0.0; 3],
+    );
+    let swirl = force_shape(
+        VORTEX_FORCE_SHAPES[0].clone(),
+        &[("center_z", -8.0), ("axis_y", 1.0), ("radius", 2.0)],
+        [0.0; 3],
+    );
     for shape in [source, swarm, radial, vortex, field, swirl] {
         let scene = scene_of(vec![shape]);
         let target = gizmo_targets(&scene).next().unwrap();
         let edge = edge_px(&target);
-        assert!(dist2(edge, px(target.origin)).sqrt() > PICK_RADIUS_PT, "{:?}: the edge is away from the centre", target.kind);
-        assert_eq!(pick_target(&scene, &view(), edge), Some(target.id), "{:?} by its edge", target.kind);
+        assert!(
+            dist2(edge, px(target.origin)).sqrt() > PICK_RADIUS_PT,
+            "{:?}: the edge is away from the centre",
+            target.kind
+        );
+        assert_eq!(
+            pick_target(&scene, &view(), edge),
+            Some(target.id),
+            "{:?} by its edge",
+            target.kind
+        );
     }
-    let object = gizmo_target_for(&scene_with(vec![known_object(1, (0.0, 0.0, -5.0), (false, false, false))]), &object_id(1)).unwrap();
-    assert_eq!(object.outline, ShapeOutline::None, "an object's box is its transform, not its mesh: picked at its origin");
+    let object = gizmo_target_for(
+        &scene_with(vec![known_object(
+            1,
+            (0.0, 0.0, -5.0),
+            (false, false, false),
+        )]),
+        &object_id(1),
+    )
+    .unwrap();
+    assert_eq!(
+        object.outline,
+        ShapeOutline::None,
+        "an object's box is its transform, not its mesh: picked at its origin"
+    );
 }
 
 /// Every pickable helper draws faint; the selected ones draw bright, and
@@ -1144,16 +2125,32 @@ fn helpers_draw_faint_the_selection_bright_with_the_only_handles() {
 
     let one = compose(&GizmoSelection::new(&scene, vec![column.clone()]));
     let (outlines, handles) = one.split_at(24);
-    assert_eq!(outlines[..12].iter().map(|line| line.color[3]).collect::<Vec<_>>(), [UNSELECTED_ALPHA; 12], "the domain stays faint");
-    assert!(outlines[12..].iter().all(|line| line.color[3] == 255), "the selected column draws bright");
+    assert_eq!(
+        outlines[..12]
+            .iter()
+            .map(|line| line.color[3])
+            .collect::<Vec<_>>(),
+        [UNSELECTED_ALPHA; 12],
+        "the domain stays faint"
+    );
+    assert!(
+        outlines[12..].iter().all(|line| line.color[3] == 255),
+        "the selected column draws bright"
+    );
     assert_eq!(handles.len(), 3, "the column's handles, and no one else's");
     assert!(handles.iter().all(|line| line.a == column.origin));
 
-    let both = compose(&GizmoSelection::new(&scene, vec![domain.clone(), column.clone()]));
+    let both = compose(&GizmoSelection::new(
+        &scene,
+        vec![domain.clone(), column.clone()],
+    ));
     let handles = &both[24..];
     let centre: [f32; 3] = std::array::from_fn(|i| (domain.origin[i] + column.origin[i]) * 0.5);
     assert_eq!(handles.len(), 3, "one handle set for the selection");
-    assert!(handles.iter().all(|line| line.a == centre), "at the selection's centre");
+    assert!(
+        handles.iter().all(|line| line.a == centre),
+        "at the selection's centre"
+    );
 }
 
 /// The selection's handles move every member by the same distance, turn
@@ -1161,19 +2158,51 @@ fn helpers_draw_faint_the_selection_bright_with_the_only_handles() {
 /// scale positions and sizes about that centre. Locked params stay put.
 #[test]
 fn the_selection_moves_turns_and_scales_about_its_centre() {
-    let a = gizmo_target_for(&scene_with(vec![known_object(1, (-1.0, 0.0, -5.0), (false, false, false))]), &object_id(1)).unwrap();
-    let b = gizmo_target_for(&scene_with(vec![known_object(2, (1.0, 0.0, -5.0), (false, true, false))]), &object_id(2)).unwrap();
+    let a = gizmo_target_for(
+        &scene_with(vec![known_object(
+            1,
+            (-1.0, 0.0, -5.0),
+            (false, false, false),
+        )]),
+        &object_id(1),
+    )
+    .unwrap();
+    let b = gizmo_target_for(
+        &scene_with(vec![known_object(
+            2,
+            (1.0, 0.0, -5.0),
+            (false, true, false),
+        )]),
+        &object_id(2),
+    )
+    .unwrap();
     let members = [a, b];
     let group = GizmoTarget::selection(&members).unwrap();
     assert_eq!(group.origin, [0.0, 0.0, -5.0]);
-    let value = |writes: &[SelectionWrite], member: usize, id: &str| writes.iter().find(|w| w.member == member && w.param.id == id).map(|w| w.value);
+    let value = |writes: &[SelectionWrite], member: usize, id: &str| {
+        writes
+            .iter()
+            .find(|w| w.member == member && w.param.id == id)
+            .map(|w| w.value)
+    };
     let mut writes = Vec::new();
 
     // Move: the same distance for each; b's wired pos_y never moves.
-    let HandleValues::One(d) = drag(&group, GizmoMode::Move, GizmoAxis::X, px(group.origin), px([1.0, 0.0, -5.0])) else { panic!("one amount") };
+    let HandleValues::One(d) = drag(
+        &group,
+        GizmoMode::Move,
+        GizmoAxis::X,
+        px(group.origin),
+        px([1.0, 0.0, -5.0]),
+    ) else {
+        panic!("one amount")
+    };
     assert!((d - 1.0).abs() < 1e-3, "{d}");
     selection_writes(&members, GizmoMode::Move, GizmoAxis::X, d, &mut writes);
-    assert!((value(&writes, 0, "pos_x").unwrap() - 0.0).abs() < 1e-3 && (value(&writes, 1, "pos_x").unwrap() - 2.0).abs() < 1e-3);
+    assert!(
+        (value(&writes, 0, "pos_x").unwrap() - 0.0).abs() < 1e-3
+            && (value(&writes, 1, "pos_x").unwrap() - 2.0).abs() < 1e-3
+    );
     selection_writes(&members, GizmoMode::Move, GizmoAxis::Y, 1.0, &mut writes);
     assert_eq!(value(&writes, 0, "pos_y"), Some(1.0));
     assert_eq!(value(&writes, 1, "pos_y"), None, "a wired param stays put");
@@ -1181,28 +2210,67 @@ fn the_selection_moves_turns_and_scales_about_its_centre() {
     // Turn a quarter about Y: the pair swings round the centre and each
     // box turns with it, the way a parent would turn them.
     let quarter = std::f32::consts::FRAC_PI_2;
-    selection_writes(&members, GizmoMode::Rotate, GizmoAxis::Y, quarter, &mut writes);
-    let pos = |m: usize| [value(&writes, m, "pos_x").unwrap_or(members[m].origin[0]), members[m].origin[1], value(&writes, m, "pos_z").unwrap_or(members[m].origin[2])];
+    selection_writes(
+        &members,
+        GizmoMode::Rotate,
+        GizmoAxis::Y,
+        quarter,
+        &mut writes,
+    );
+    let pos = |m: usize| {
+        [
+            value(&writes, m, "pos_x").unwrap_or(members[m].origin[0]),
+            members[m].origin[1],
+            value(&writes, m, "pos_z").unwrap_or(members[m].origin[2]),
+        ]
+    };
     let expected = |m: usize| {
         let o = members[m].origin;
         let turned = rotate_about([o[0], 0.0, o[2] + 5.0], [0.0, 1.0, 0.0], quarter);
         [turned[0], o[1], turned[2] - 5.0]
     };
     for m in 0..2 {
-        assert!((0..3).all(|i| (pos(m)[i] - expected(m)[i]).abs() < 1e-4), "member {m} at {:?}, expected {:?}", pos(m), expected(m));
+        assert!(
+            (0..3).all(|i| (pos(m)[i] - expected(m)[i]).abs() < 1e-4),
+            "member {m} at {:?}, expected {:?}",
+            pos(m),
+            expected(m)
+        );
         let rot = ["rot_x", "rot_y", "rot_z"].map(|id| value(&writes, m, id).unwrap_or(0.0));
         let m4 = model_matrix([0.0; 3], rot, [1.0; 3]);
         let local_x = [m4[0][0], m4[0][1], m4[0][2]];
         let want = rotate_about([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], quarter);
-        assert!((0..3).all(|i| (local_x[i] - want[i]).abs() < 1e-4), "member {m}'s box turned with the pair: {local_x:?} vs {want:?}");
+        assert!(
+            (0..3).all(|i| (local_x[i] - want[i]).abs() < 1e-4),
+            "member {m}'s box turned with the pair: {local_x:?} vs {want:?}"
+        );
     }
 
     // Scale X by two: positions spread from the centre, sizes double on X only.
     selection_writes(&members, GizmoMode::Scale, GizmoAxis::X, 2.0, &mut writes);
-    assert_eq!((value(&writes, 0, "pos_x"), value(&writes, 1, "pos_x")), (Some(-2.0), Some(2.0)));
-    assert_eq!((value(&writes, 0, "scale_x"), value(&writes, 0, "scale_y")), (Some(2.0), None));
-    selection_writes(&members, GizmoMode::Scale, GizmoAxis::Uniform, 0.5, &mut writes);
-    assert_eq!((value(&writes, 0, "scale_x"), value(&writes, 0, "scale_y"), value(&writes, 0, "scale_z")), (Some(0.5), Some(0.5), Some(0.5)));
+    assert_eq!(
+        (value(&writes, 0, "pos_x"), value(&writes, 1, "pos_x")),
+        (Some(-2.0), Some(2.0))
+    );
+    assert_eq!(
+        (value(&writes, 0, "scale_x"), value(&writes, 0, "scale_y")),
+        (Some(2.0), None)
+    );
+    selection_writes(
+        &members,
+        GizmoMode::Scale,
+        GizmoAxis::Uniform,
+        0.5,
+        &mut writes,
+    );
+    assert_eq!(
+        (
+            value(&writes, 0, "scale_x"),
+            value(&writes, 0, "scale_y"),
+            value(&writes, 0, "scale_z")
+        ),
+        (Some(0.5), Some(0.5), Some(0.5))
+    );
 }
 
 /// A copy group's gizmo sits at its group transform and scales as one
@@ -1211,19 +2279,52 @@ fn the_selection_moves_turns_and_scales_about_its_centre() {
 fn a_copy_group_gizmo_is_at_the_group_transform_and_scales_uniformly() {
     let decl = &crate::node_graph::scene_surface::COPY_GROUP_SHAPES[0];
     let owner = ShapeOwner::Item(item_id(7));
-    let shape = card_rows_shape(owner, 0, decl, &[("pos_x", 1.0), ("pos_y", 2.0), ("pos_z", -3.0), ("scale_x", 2.0), ("scale_y", 2.0), ("scale_z", 2.0)], &[]);
+    let shape = card_rows_shape(
+        owner,
+        0,
+        decl,
+        &[
+            ("pos_x", 1.0),
+            ("pos_y", 2.0),
+            ("pos_z", -3.0),
+            ("scale_x", 2.0),
+            ("scale_y", 2.0),
+            ("scale_z", 2.0),
+        ],
+        &[],
+    );
     let target = GizmoTarget::from_shape(&shape);
-    assert_eq!(target.origin, [1.0, 2.0, -3.0], "the gizmo is the group transform");
+    assert_eq!(
+        target.origin,
+        [1.0, 2.0, -3.0],
+        "the gizmo is the group transform"
+    );
     assert_eq!(
         written(&target, GizmoMode::Scale, GizmoAxis::Uniform),
-        vec![card_write("scale_x"), card_write("scale_y"), card_write("scale_z")]
+        vec![
+            card_write("scale_x"),
+            card_write("scale_y"),
+            card_write("scale_z")
+        ]
     );
-    assert!(target.handle(GizmoMode::Scale, GizmoAxis::X).is_none(), "no per-axis scale");
+    assert!(
+        target.handle(GizmoMode::Scale, GizmoAxis::X).is_none(),
+        "no per-axis scale"
+    );
     let along = |d: f32| px(offset(target.origin, GizmoAxis::Uniform.unit(), d));
-    let HandleValues::Three(scales) = drag(&target, GizmoMode::Scale, GizmoAxis::Uniform, along(1.0), along(1.5)) else {
+    let HandleValues::Three(scales) = drag(
+        &target,
+        GizmoMode::Scale,
+        GizmoAxis::Uniform,
+        along(1.0),
+        along(1.5),
+    ) else {
         panic!("a uniform scale writes three values")
     };
-    assert!(scales[0] > 2.0 && scales[0] == scales[1] && scales[1] == scales[2], "{scales:?}");
+    assert!(
+        scales[0] > 2.0 && scales[0] == scales[1] && scales[1] == scales[2],
+        "{scales:?}"
+    );
 }
 
 /// A three-level chain: group 7 holds group 8, which holds object 9. Each
@@ -1251,25 +2352,65 @@ fn nested_groups() -> SceneVm {
 fn an_inner_group_gizmo_sits_at_its_world_place_and_drags_in_its_parent_frame() {
     use manifold_node_engine::scene::transform::Transform;
     let scene = nested_groups();
-    let outer = Transform { pos: [2.0, 3.0, -8.0], rot_euler: [0.0, 0.0, std::f32::consts::FRAC_PI_2], scale: [2.0, 1.0, 1.0], ..Transform::default() };
-    let inner = Transform { pos: [1.0, 0.0, 0.0], rot_euler: [0.0, 0.6, 0.0], parent: outer.world(), ..Transform::default() };
-    let object = Transform { pos: [0.5, -0.25, 1.0], parent: inner.world(), ..Transform::default() };
+    let outer = Transform {
+        pos: [2.0, 3.0, -8.0],
+        rot_euler: [0.0, 0.0, std::f32::consts::FRAC_PI_2],
+        scale: [2.0, 1.0, 1.0],
+        ..Transform::default()
+    };
+    let inner = Transform {
+        pos: [1.0, 0.0, 0.0],
+        rot_euler: [0.0, 0.6, 0.0],
+        parent: outer.world(),
+        ..Transform::default()
+    };
+    let object = Transform {
+        pos: [0.5, -0.25, 1.0],
+        parent: inner.world(),
+        ..Transform::default()
+    };
     for (id, reference) in [(8, inner), (9, object)] {
         let target = gizmo_target_for(&scene, &object_id(id)).unwrap();
         let world = reference.world();
         for i in 0..3 {
-            assert!((target.origin[i] - world[3][i]).abs() < 1e-5, "row {id}: origin {:?}, want {:?}", target.origin, world[3]);
+            assert!(
+                (target.origin[i] - world[3][i]).abs() < 1e-5,
+                "row {id}: origin {:?}, want {:?}",
+                target.origin,
+                world[3]
+            );
             for (axis, column) in target.world_axes.iter().zip(reference.parent) {
-                assert!((axis[i] - column[i]).abs() < 1e-5, "row {id}: its handles follow its parent's axes");
+                assert!(
+                    (axis[i] - column[i]).abs() < 1e-5,
+                    "row {id}: its handles follow its parent's axes"
+                );
             }
         }
     }
     let target = gizmo_target_for(&scene, &object_id(8)).unwrap();
-    assert!(!target.pickable, "an inner group is selected through the outer one");
+    assert!(
+        !target.pickable,
+        "an inner group is selected through the outer one"
+    );
     let start = px(target.origin);
-    let end = px(offset(target.origin, target.axis_direction(GizmoAxis::X), 1.0));
-    let HandleValues::One(value) = drag(&target, GizmoMode::Move, GizmoAxis::X, start, end) else { panic!("one value") };
-    assert!((value - 2.0).abs() < 1e-4, "one unit in the outer group's frame moves pos_x by one, got {value}");
-    assert_eq!(written(&target, GizmoMode::Move, GizmoAxis::X), vec![ShapeWrite::Card { id: "pos_x".into(), scale: 1.0, offset: 0.0 }]);
+    let end = px(offset(
+        target.origin,
+        target.axis_direction(GizmoAxis::X),
+        1.0,
+    ));
+    let HandleValues::One(value) = drag(&target, GizmoMode::Move, GizmoAxis::X, start, end) else {
+        panic!("one value")
+    };
+    assert!(
+        (value - 2.0).abs() < 1e-4,
+        "one unit in the outer group's frame moves pos_x by one, got {value}"
+    );
+    assert_eq!(
+        written(&target, GizmoMode::Move, GizmoAxis::X),
+        vec![ShapeWrite::Card {
+            id: "pos_x".into(),
+            scale: 1.0,
+            offset: 0.0
+        }]
+    );
 }
-

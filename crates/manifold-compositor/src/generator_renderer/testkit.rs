@@ -61,7 +61,20 @@ impl GeneratorRendererTestkit for GeneratorRenderer {
         // the reshape sources from the manifest, not the stale shadow (BUG-078).
         manifest: Option<&ParamManifest>,
     ) -> bool {
-        GeneratorRenderer::acquire_clip(self, clip_id, gen_type, layer_id, layer_index, clip_index, override_def, override_version, param_version, clip_edge_enabled, modifier_event, manifest)
+        GeneratorRenderer::acquire_clip(
+            self,
+            clip_id,
+            gen_type,
+            layer_id,
+            layer_index,
+            clip_index,
+            override_def,
+            override_version,
+            param_version,
+            clip_edge_enabled,
+            modifier_event,
+            manifest,
+        )
     }
     #[allow(clippy::too_many_arguments)]
     fn install_layer_generator(
@@ -81,6 +94,17 @@ impl GeneratorRendererTestkit for GeneratorRenderer {
         // (BUG-078). `None` for the type-swap path (fresh bundled build).
         manifest: Option<&ParamManifest>,
     ) -> bool {
-        GeneratorRenderer::install_layer_generator(self, layer_id, gen_type, override_def, override_version, param_version, clip_count, audio_count, layer_string_defaults, manifest)
+        GeneratorRenderer::install_layer_generator(
+            self,
+            layer_id,
+            gen_type,
+            override_def,
+            override_version,
+            param_version,
+            clip_count,
+            audio_count,
+            layer_string_defaults,
+            manifest,
+        )
     }
 }

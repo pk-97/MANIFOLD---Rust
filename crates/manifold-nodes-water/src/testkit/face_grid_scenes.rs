@@ -26,17 +26,36 @@ pub const DIVISOR_ROW: u32 = 65 * 64 * 64;
 /// chosen for its shape, not its meaning, dividing by the length of the u
 /// faces (node.dot_products, a boundary). `consumer` is the v or w axis.
 pub fn matter_dam_break_faces(consumer: Option<usize>) -> EffectGraphDef {
-    let json = include_str!("../../../manifold-nodes/tests/fixtures/presets/WaterDamBreakMatter.json");
+    let json =
+        include_str!("../../../manifold-nodes/tests/fixtures/presets/WaterDamBreakMatter.json");
     let mut preset: Value = serde_json::from_str(json).expect("preset parses");
     let nodes = preset["nodes"].as_array_mut().expect("preset nodes");
-    let group = nodes.iter_mut().find(|n| n["nodeId"] == "Live Matter").expect("Live Matter group");
+    let group = nodes
+        .iter_mut()
+        .find(|n| n["nodeId"] == "Live Matter")
+        .expect("Live Matter group");
     let inner = &mut group["group"];
     let id_of = |inner: &Value, name: &str| -> u64 {
         let nodes = inner["nodes"].as_array().expect("group nodes");
-        nodes.iter().find(|n| n["nodeId"] == name).and_then(|n| n["id"].as_u64()).unwrap_or_else(|| panic!("no {name}"))
+        nodes
+            .iter()
+            .find(|n| n["nodeId"] == name)
+            .and_then(|n| n["id"].as_u64())
+            .unwrap_or_else(|| panic!("no {name}"))
     };
-    let (domain, state, frame) = (id_of(inner, "matter_domain"), id_of(inner, "matter_state"), id_of(inner, "matter_frame"));
-    let next = inner["nodes"].as_array().expect("group nodes").iter().filter_map(|n| n["id"].as_u64()).max().expect("nodes") + 1;
+    let (domain, state, frame) = (
+        id_of(inner, "matter_domain"),
+        id_of(inner, "matter_state"),
+        id_of(inner, "matter_frame"),
+    );
+    let next = inner["nodes"]
+        .as_array()
+        .expect("group nodes")
+        .iter()
+        .filter_map(|n| n["id"].as_u64())
+        .max()
+        .expect("nodes")
+        + 1;
     let mut wires = Vec::new();
     for (axis, name) in MATTER_FACE_NODES.into_iter().enumerate() {
         let id = next + axis as u64;
@@ -62,15 +81,26 @@ pub fn matter_dam_break_faces(consumer: Option<usize>) -> EffectGraphDef {
                     "params": {"row_length": int(DIVISOR_ROW), "rows": int(1), "max_rows": int(1), "root": int(1)},
                 }),
             ]);
-            wires.push(json!({"fromNode": next, "fromPort": "out", "toNode": length, "toPort": "matrix"}));
-            wires.push(json!({"fromNode": next, "fromPort": "out", "toNode": length, "toPort": "vector"}));
-            wires.push(json!({"fromNode": id, "fromPort": "out", "toNode": consumer, "toPort": "values"}));
+            wires.push(
+                json!({"fromNode": next, "fromPort": "out", "toNode": length, "toPort": "matrix"}),
+            );
+            wires.push(
+                json!({"fromNode": next, "fromPort": "out", "toNode": length, "toPort": "vector"}),
+            );
+            wires.push(
+                json!({"fromNode": id, "fromPort": "out", "toNode": consumer, "toPort": "values"}),
+            );
             wires.push(json!({"fromNode": length, "fromPort": "out", "toNode": consumer, "toPort": "divisor"}));
             wires.push(json!({"fromNode": consumer, "fromPort": "out", "toNode": frame, "toPort": to_frame}));
         } else {
-            wires.push(json!({"fromNode": id, "fromPort": "out", "toNode": frame, "toPort": to_frame}));
+            wires.push(
+                json!({"fromNode": id, "fromPort": "out", "toNode": frame, "toPort": to_frame}),
+            );
         }
     }
-    inner["wires"].as_array_mut().expect("group wires").extend(wires);
+    inner["wires"]
+        .as_array_mut()
+        .expect("group wires")
+        .extend(wires);
     serde_json::from_value(preset).expect("matter faces def")
 }

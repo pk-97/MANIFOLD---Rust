@@ -15,10 +15,10 @@
 //! sets it to `[[0, 90, 180, 270, 360]]` so envelope mode starts with
 //! the legacy initial spread.
 
-use std::borrow::Cow;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use std::borrow::Cow;
 
 manifold_node_engine::primitive! {
     name: ScalarArrayAccumulator,
@@ -173,7 +173,10 @@ mod tests {
         use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = ScalarArrayAccumulator::new();
         let mut params = ParamValues::default();
-        params.insert(std::borrow::Cow::Borrowed("capacity"), ParamValue::Float(7.0));
+        params.insert(
+            std::borrow::Cow::Borrowed("capacity"),
+            ParamValue::Float(7.0),
+        );
         let cap = Primitive::array_output_capacity(&prim, "accumulated", &params, &[]);
         assert_eq!(cap, Some(7));
     }

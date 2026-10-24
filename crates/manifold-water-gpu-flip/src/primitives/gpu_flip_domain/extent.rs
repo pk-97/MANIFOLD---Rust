@@ -1,24 +1,28 @@
 //! Buffer extent rule owned by this node.
-use std::mem::size_of;
-use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
+use crate::primitives::gpu_flip_domain::gpu_flip_geometry;
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
-use manifold_water_liquid::extent::walked_roles;
+use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
+use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use manifold_nodes_physics::force_lattice::STAGING_SLOTS as FIELD_STAGING_SLOTS;
+use manifold_physics::clock::TICK;
+use manifold_physics::force_lattice::FORCE_LATTICE_RESERVE;
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::bodies::LiquidShape;
-use manifold_physics::force_lattice::FORCE_LATTICE_RESERVE;
-use manifold_water_liquid::fields::FieldFrame;
-use manifold_nodes_physics::force_lattice::STAGING_SLOTS as FIELD_STAGING_SLOTS;
 use manifold_water_liquid::coupling::REACTION_FLOATS;
-use crate::primitives::gpu_flip_domain::gpu_flip_geometry;
-use manifold_physics::clock::TICK;
-use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use manifold_water_liquid::extent::walked_roles;
+use manifold_water_liquid::fields::FieldFrame;
+use std::mem::size_of;
 
 fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let (fill, kinds) = walked_roles(x, "GPU FLIP")?;
-    let geometry = gpu_flip_geometry(|name, default| x.scalar(name, default), x.transform("domain"), fill)
-        .map_err(Verdict::Refused)?
-        // The pool the allocator gets: room for an inflow when a role is one.
-        .sized_for(kinds);
+    let geometry = gpu_flip_geometry(
+        |name, default| x.scalar(name, default),
+        x.transform("domain"),
+        fill,
+    )
+    .map_err(Verdict::Refused)?
+    // The pool the allocator gets: room for an inflow when a role is one.
+    .sized_for(kinds);
     for (name, value) in geometry.outputs() {
         x.publish(name, value);
     }
@@ -35,14 +39,21 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.publish("interval_duration", TICK as f32);
     // The walk takes a live frame's most force lattices and an impulse tick,
     // so the field reads are checked.
-    let field = FieldFrame { lattice: geometry.field_lattice(), force_lattices: FORCE_LATTICE_RESERVE, impulse_tick: Some(0) };
+    let field = FieldFrame {
+        lattice: geometry.field_lattice(),
+        force_lattices: FORCE_LATTICE_RESERVE,
+        impulse_tick: Some(0),
+    };
     let forces = u64::from(FORCE_LATTICE_RESERVE) * field.lattice.force_bytes();
     for (name, value) in field.outputs() {
         x.publish(name, value);
     }
     for (port, bytes) in [
         ("bodies", size_of::<LiquidBody>() as u64),
-        ("contacts", size_of::<manifold_water_liquid::bodies::BodySupports>() as u64),
+        (
+            "contacts",
+            size_of::<manifold_water_liquid::bodies::BodySupports>() as u64,
+        ),
         ("regions", size_of::<LiquidBody>() as u64),
         ("shapes", size_of::<LiquidShape>() as u64),
         ("atlas", 4),

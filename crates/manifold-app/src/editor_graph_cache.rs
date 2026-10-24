@@ -16,7 +16,13 @@ use manifold_nodes_scene::node_graph::scene_vm::{SceneStructure, SceneVm};
 /// Parts whose writes can change the watched graph or which graph resolves.
 /// Graph edits declare Overrides; Values is left out so a slider drag does not
 /// re-diff the graph.
-const GRAPH_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Effects, Part::Overrides, Part::Shapes, Part::EmbeddedPresets]);
+const GRAPH_PARTS: ChangeSet = ChangeSet::of(&[
+    Part::Layers,
+    Part::Effects,
+    Part::Overrides,
+    Part::Shapes,
+    Part::EmbeddedPresets,
+]);
 
 #[derive(Default)]
 pub(crate) struct EditorGraphCache {
@@ -72,16 +78,22 @@ impl EditorGraphCache {
         }
         let has_mod = target.is_some_and(|target| {
             let instance_graph = match target {
-                GraphTarget::Effect(eid) => project.find_effect_by_id(eid).and_then(|fx| fx.graph.as_ref()),
-                GraphTarget::Generator(lid) => {
-                    project.timeline.find_layer_by_id(lid).and_then(|(_, l)| l.generator_graph())
-                }
+                GraphTarget::Effect(eid) => project
+                    .find_effect_by_id(eid)
+                    .and_then(|fx| fx.graph.as_ref()),
+                GraphTarget::Generator(lid) => project
+                    .timeline
+                    .find_layer_by_id(lid)
+                    .and_then(|(_, l)| l.generator_graph()),
                 GraphTarget::SceneModifier { .. } => project
                     .graph_target_owner(target)
                     .and_then(|owner| owner.graph.as_ref())
                     .and_then(|graph| target.graph_in(graph)),
             };
-            match (instance_graph, catalog_default.and_then(|base| target.graph_in(base))) {
+            match (
+                instance_graph,
+                catalog_default.and_then(|base| target.graph_in(base)),
+            ) {
                 (Some(g), Some(base)) => g.diverges_ignoring_layout(base),
                 // No catalog base to compare against: can't prove the
                 // override is layout-only.
@@ -96,8 +108,17 @@ impl EditorGraphCache {
     /// The scene a gizmo host shows. Its handles sit at the owner's base
     /// values, so it keys on Values too; a value write rebuilds only what
     /// the values place, over the structure cached for the graph parts.
-    pub(crate) fn viewport_def(&mut self, project: &Project, target: Option<&GraphTarget>, parts: &PartStamps) -> ViewportDef {
-        let key = self.key(target, parts, GRAPH_PARTS.union(ChangeSet::of(&[Part::Values])));
+    pub(crate) fn viewport_def(
+        &mut self,
+        project: &Project,
+        target: Option<&GraphTarget>,
+        parts: &PartStamps,
+    ) -> ViewportDef {
+        let key = self.key(
+            target,
+            parts,
+            GRAPH_PARTS.union(ChangeSet::of(&[Part::Values])),
+        );
         if let Some((cached, def)) = &self.viewport
             && *cached == key
         {
@@ -111,14 +132,20 @@ impl EditorGraphCache {
             .map(|(_, structure)| structure);
         let def = target.map_or_else(ViewportDef::default, |target| {
             let scene = crate::scene_gizmo::scene_vm_of(project, target, structure).map(Arc::new);
-            ViewportDef { resolved: scene.is_some() || crate::graph_target::resolve(project, target).is_some(), scene }
+            ViewportDef {
+                resolved: scene.is_some()
+                    || crate::graph_target::resolve(project, target).is_some(),
+                scene,
+            }
         });
-        self.structure = def.scene.as_ref().map(|scene| (structure_key, Arc::clone(scene.structure())));
+        self.structure = def
+            .scene
+            .as_ref()
+            .map(|scene| (structure_key, Arc::clone(scene.structure())));
         self.viewport = Some((key, def.clone()));
         def
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -129,7 +156,8 @@ mod tests {
         let preset = manifold_core::PresetTypeId::from_string("Bloom".to_string());
         let mut fx = PresetInstance::new(preset.clone());
         fx.init_defaults();
-        fx.graph = manifold_nodes::bundled_presets::bundled_preset_def(&preset).map(|def| (*def).clone());
+        fx.graph =
+            manifold_nodes::bundled_presets::bundled_preset_def(&preset).map(|def| (*def).clone());
         assert!(fx.graph.is_some(), "Bloom is a bundled preset");
         let target = GraphTarget::Effect(fx.id.clone());
         let mut project = Project::default();
@@ -172,7 +200,11 @@ mod tests {
     #[test]
     fn viewport_scene_reuses_until_its_inputs_move() {
         let mut project = Project::default();
-        let index = project.timeline.add_layer("Scene", manifold_core::types::LayerType::Generator, manifold_core::PresetTypeId::SCENE);
+        let index = project.timeline.add_layer(
+            "Scene",
+            manifold_core::types::LayerType::Generator,
+            manifold_core::PresetTypeId::SCENE,
+        );
         let target = GraphTarget::Generator(project.timeline.layers[index].layer_id.clone());
         let mut parts = PartStamps::default();
         let mut cache = EditorGraphCache::default();
@@ -181,17 +213,38 @@ mod tests {
         let first = first.scene.expect("a scene layer projects its scene");
 
         bump(&mut parts, Part::Clips);
-        let same = cache.viewport_def(&project, Some(&target), &parts).scene.unwrap();
-        assert!(Arc::ptr_eq(&first, &same), "an unrelated part reuses the scene");
+        let same = cache
+            .viewport_def(&project, Some(&target), &parts)
+            .scene
+            .unwrap();
+        assert!(
+            Arc::ptr_eq(&first, &same),
+            "an unrelated part reuses the scene"
+        );
 
         bump(&mut parts, Part::Values);
-        let fresh = cache.viewport_def(&project, Some(&target), &parts).scene.unwrap();
-        assert!(!Arc::ptr_eq(&first, &fresh), "base values feed the authored projection");
-        assert!(Arc::ptr_eq(first.structure(), fresh.structure()), "a value write never lays out the scene again");
+        let fresh = cache
+            .viewport_def(&project, Some(&target), &parts)
+            .scene
+            .unwrap();
+        assert!(
+            !Arc::ptr_eq(&first, &fresh),
+            "base values feed the authored projection"
+        );
+        assert!(
+            Arc::ptr_eq(first.structure(), fresh.structure()),
+            "a value write never lays out the scene again"
+        );
 
         bump(&mut parts, Part::Overrides);
-        let rebuilt = cache.viewport_def(&project, Some(&target), &parts).scene.unwrap();
-        assert!(!Arc::ptr_eq(fresh.structure(), rebuilt.structure()), "a graph edit does");
+        let rebuilt = cache
+            .viewport_def(&project, Some(&target), &parts)
+            .scene
+            .unwrap();
+        assert!(
+            !Arc::ptr_eq(fresh.structure(), rebuilt.structure()),
+            "a graph edit does"
+        );
 
         let none = cache.viewport_def(&project, None, &parts);
         assert!(!none.resolved && none.scene.is_none());

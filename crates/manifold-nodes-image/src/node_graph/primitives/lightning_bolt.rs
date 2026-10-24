@@ -26,8 +26,8 @@
 
 use std::borrow::Cow;
 
-use manifold_node_engine::mesh::{CurvePoint, EdgePair};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::{CurvePoint, EdgePair};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
@@ -274,7 +274,10 @@ impl LightningBolt {
             self.widths.push(1.0 + (CORE_END_WIDTH - 1.0) * t);
         }
         for i in 0..emit - 1 {
-            self.core_edges.push(EdgePair { a: i as u32, b: (i + 1) as u32 });
+            self.core_edges.push(EdgePair {
+                a: i as u32,
+                b: (i + 1) as u32,
+            });
         }
 
         // ── Branches: two generations off the core ──
@@ -349,7 +352,10 @@ impl LightningBolt {
             self.widths.push(width + (TIP_WIDTH - width) * t);
         }
         for i in 0..n - 1 {
-            self.branch_edges.push(EdgePair { a: base + i as u32, b: base + i as u32 + 1 });
+            self.branch_edges.push(EdgePair {
+                a: base + i as u32,
+                b: base + i as u32 + 1,
+            });
         }
         let mid = poly[n / 2];
         Some((mid, dir))
@@ -533,7 +539,9 @@ impl Primitive for LightningBolt {
                 ("core_edges", &self.core_edges),
                 ("branch_edges", &self.branch_edges),
             ] {
-                let Some(dst) = ctx.outputs.array(port) else { continue };
+                let Some(dst) = ctx.outputs.array(port) else {
+                    continue;
+                };
                 let cap = (dst.size as usize) / std::mem::size_of::<EdgePair>();
                 if scratch.len() != cap {
                     scratch = vec![EdgePair::SENTINEL; cap];
@@ -654,13 +662,19 @@ mod tests {
         let p = params();
         let mut bolt = LightningBolt::new();
         bolt.generate(99, &p);
-        assert!(!bolt.branch_edges.is_empty(), "branch_count=5 must emit branches");
+        assert!(
+            !bolt.branch_edges.is_empty(),
+            "branch_count=5 must emit branches"
+        );
         assert_eq!(bolt.points.len(), bolt.widths.len());
         let core_points = 65;
         for e in &bolt.branch_edges {
             assert!((e.a as usize) < bolt.points.len());
             assert!((e.b as usize) < bolt.points.len());
-            assert!(e.a as usize >= core_points, "branch edges live after the core block");
+            assert!(
+                e.a as usize >= core_points,
+                "branch edges live after the core block"
+            );
         }
         // Every branch width is below the trunk's 1.0 (branch_decay < 1).
         for w in &bolt.widths[core_points..] {

@@ -139,14 +139,23 @@ fn liveschool_resave_keeps_old_ids_and_omits_empty_session() {
     let reloaded = loader::load_project(&out).expect("reload saved project");
     let _ = std::fs::remove_dir_all(&dir);
 
-    let layer_ids = after.get_mut("/timeline/layers/#/layerId").expect("layer ids");
-    let pos = layer_ids.iter().position(|id| *id == new_id).expect("new layer id saved");
+    let layer_ids = after
+        .get_mut("/timeline/layers/#/layerId")
+        .expect("layer ids");
+    let pos = layer_ids
+        .iter()
+        .position(|id| *id == new_id)
+        .expect("new layer id saved");
     layer_ids.remove(pos);
     for (key, ids) in &before {
         assert_eq!(after.get(key), Some(ids), "ids under {key} changed on save");
     }
     assert!(
-        reloaded.timeline.layers.iter().any(|l| l.layer_id.as_str() == new_id),
+        reloaded
+            .timeline
+            .layers
+            .iter()
+            .any(|l| l.layer_id.as_str() == new_id),
         "a 16-char id reloads as itself"
     );
 }

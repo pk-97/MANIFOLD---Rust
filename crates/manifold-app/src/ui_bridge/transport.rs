@@ -151,8 +151,7 @@ pub(super) fn dispatch_transport(
                 let new = old.next();
                 let cmd = ChangeQuantizeModeCommand::new(old, new);
                 {
-                    let boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(cmd);
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                     project.execute(boxed);
                 }
             }
@@ -198,7 +197,6 @@ pub(super) fn dispatch_transport(
             log::debug!("Inspector section clicked: {}", idx);
             DispatchResult::handled()
         }
-
     }
 }
 
@@ -222,10 +220,10 @@ mod view_move_dispatch_tests {
         let mut edits = crate::gesture_preview::UiEdits::default();
         let mut planner = FramePlanner::default();
         let inputs = |planner: &mut FramePlanner,
-                          ui: &crate::ui_root::UIRoot,
-                          selection: &mut manifold_ui::UIState,
-                          project: &manifold_core::project::Project,
-                          edits: &crate::gesture_preview::UiEdits| {
+                      ui: &crate::ui_root::UIRoot,
+                      selection: &mut manifold_ui::UIState,
+                      project: &manifold_core::project::Project,
+                      edits: &crate::gesture_preview::UiEdits| {
             crate::ui_frame::gather_frame_inputs(
                 planner,
                 ui,
@@ -233,7 +231,12 @@ mod view_move_dispatch_tests {
                 &None,
                 edits,
                 &content_state,
-                crate::frame_plan::ChromeSource { project, is_dirty: false, project_path: None, automation_draw_mode: false },
+                crate::frame_plan::ChromeSource {
+                    project,
+                    is_dirty: false,
+                    project_path: None,
+                    automation_draw_mode: false,
+                },
             )
         };
         let seed = inputs(&mut planner, &ui, &mut selection, &project, &edits);
@@ -249,7 +252,11 @@ mod view_move_dispatch_tests {
         for (action, scroll, zoom) in cases {
             {
                 let mut ctx = crate::ui_bridge::DispatchCtx {
-                    project: crate::ui_bridge::ProjectRef::new(&mut project, &mut edits, &content_tx),
+                    project: crate::ui_bridge::ProjectRef::new(
+                        &mut project,
+                        &mut edits,
+                        &content_tx,
+                    ),
                     content_tx: &content_tx,
                     content_state: &content_state,
                     ui: &mut ui,
@@ -269,8 +276,14 @@ mod view_move_dispatch_tests {
                 assert_eq!(plan.viewport.scroll_x, scroll, "{action:?} scroll");
             }
             assert_eq!(plan.viewport.zoom, zoom, "{action:?} zoom");
-            assert!(!plan.projections.contains(Projection::ProjectSync), "{action:?}");
-            assert!(!plan.projections.contains(Projection::InspectorSync), "{action:?}");
+            assert!(
+                !plan.projections.contains(Projection::ProjectSync),
+                "{action:?}"
+            );
+            assert!(
+                !plan.projections.contains(Projection::InspectorSync),
+                "{action:?}"
+            );
         }
     }
 }

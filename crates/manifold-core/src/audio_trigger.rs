@@ -269,7 +269,9 @@ pub const MAX_FIRE_METERS: usize = 512;
 /// how `id.rs`'s ID types moved there for the same reason). Production code
 /// should build keys via the two typed constructors, never the raw
 /// `fire_meter_key`; see `manifold_foundation::hash`'s module doc.
-pub use manifold_foundation::{fire_meter_key, fire_meter_key_for_clip_trigger, fire_meter_key_for_param};
+pub use manifold_foundation::{
+    fire_meter_key, fire_meter_key_for_clip_trigger, fire_meter_key_for_param,
+};
 
 /// Live shaped-signal capture for every enabled audio mod evaluated this
 /// analysis block — the content-thread side of the D6 fire meter
@@ -303,7 +305,11 @@ pub struct FireMeterCapture {
 
 impl Default for FireMeterCapture {
     fn default() -> Self {
-        Self { keys: [0; MAX_FIRE_METERS], levels: [0.0; MAX_FIRE_METERS], count: 0 }
+        Self {
+            keys: [0; MAX_FIRE_METERS],
+            levels: [0.0; MAX_FIRE_METERS],
+            count: 0,
+        }
     }
 }
 
@@ -321,7 +327,10 @@ impl FireMeterCapture {
     /// The most recently captured level for `key`, if any config with that
     /// identity fired this tick's evaluation walk.
     pub fn get(&self, key: u64) -> Option<f32> {
-        self.keys[..self.count].iter().position(|&k| k == key).map(|i| self.levels[i])
+        self.keys[..self.count]
+            .iter()
+            .position(|&k| k == key)
+            .map(|i| self.levels[i])
     }
 }
 
@@ -523,7 +532,10 @@ mod tests {
         }"#;
         let legacy: LegacyAudioTriggerMod = serde_json::from_str(json).unwrap();
         assert!(!legacy.enabled);
-        assert_eq!(legacy.source.send_id, crate::id::AudioSendId::new("e14b42f8"));
+        assert_eq!(
+            legacy.source.send_id,
+            crate::id::AudioSendId::new("e14b42f8")
+        );
         assert_eq!(
             legacy.source.feature,
             AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full)

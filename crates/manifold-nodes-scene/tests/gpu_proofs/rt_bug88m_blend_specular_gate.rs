@@ -22,9 +22,8 @@
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 const ORBIT: f32 = 0.7;
 const TILT: f32 = 0.95;
@@ -152,7 +151,8 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
             last = h.readback(&target.texture);
             let lit = last.chunks(8).filter(|px| {
                 (0..3).any(|c| {
-                    half::f16::from_bits(u16::from_le_bytes([px[c * 2], px[c * 2 + 1]])).to_f32() > 0.02
+                    half::f16::from_bits(u16::from_le_bytes([px[c * 2], px[c * 2 + 1]])).to_f32()
+                        > 0.02
                 })
             });
             if lit.count() * 50 > (h.width * h.height) as usize {
@@ -171,8 +171,12 @@ fn diff_frac(a: &[u8], b: &[u8], thresh: f32) -> f64 {
     for i in 0..n {
         let mut dmax = 0.0f32;
         for c in 0..3 {
-            let av = half::f16::from_bits(u16::from_le_bytes([a[i * 8 + c * 2], a[i * 8 + c * 2 + 1]])).to_f32();
-            let bv = half::f16::from_bits(u16::from_le_bytes([b[i * 8 + c * 2], b[i * 8 + c * 2 + 1]])).to_f32();
+            let av =
+                half::f16::from_bits(u16::from_le_bytes([a[i * 8 + c * 2], a[i * 8 + c * 2 + 1]]))
+                    .to_f32();
+            let bv =
+                half::f16::from_bits(u16::from_le_bytes([b[i * 8 + c * 2], b[i * 8 + c * 2 + 1]]))
+                    .to_f32();
             dmax = dmax.max((av - bv).abs());
         }
         if dmax > thresh {

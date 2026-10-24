@@ -25,14 +25,14 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    ensure_normal_sources, GiMaterial, MetalShadowRayTracer, RtObjectGeometry,
-    ShadowRayParams, ShadowRayTracer,
+    GiMaterial, MetalShadowRayTracer, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
+    ensure_normal_sources,
 };
-use manifold_gpu::{ShadowCaster, upload_shadow_casters};
 use manifold_gpu::{
     GpuBuffer, GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
     GpuTextureUsage,
 };
+use manifold_gpu::{ShadowCaster, upload_shadow_casters};
 use manifold_node_engine::mesh::InstanceTransform;
 
 use manifold_nodes_scene::testkit::gpu_harness as harness;
@@ -52,12 +52,30 @@ struct PackedVertexN {
 /// (model = identity). Half-extent 0.05 keeps neighboring column probes
 /// (0.1875 apart in x at z = 0.5) clear of the wrong quad.
 const QUAD: [PackedVertexN; 6] = [
-    PackedVertexN { pos: [-0.05, -0.05, 0.0], normal: [0.0, 0.0, -1.0] },
-    PackedVertexN { pos: [ 0.05, -0.05, 0.0], normal: [0.0, 0.0, -1.0] },
-    PackedVertexN { pos: [ 0.05,  0.05, 0.0], normal: [0.0, 0.0, -1.0] },
-    PackedVertexN { pos: [-0.05, -0.05, 0.0], normal: [0.0, 0.0, -1.0] },
-    PackedVertexN { pos: [ 0.05,  0.05, 0.0], normal: [0.0, 0.0, -1.0] },
-    PackedVertexN { pos: [-0.05,  0.05, 0.0], normal: [0.0, 0.0, -1.0] },
+    PackedVertexN {
+        pos: [-0.05, -0.05, 0.0],
+        normal: [0.0, 0.0, -1.0],
+    },
+    PackedVertexN {
+        pos: [0.05, -0.05, 0.0],
+        normal: [0.0, 0.0, -1.0],
+    },
+    PackedVertexN {
+        pos: [0.05, 0.05, 0.0],
+        normal: [0.0, 0.0, -1.0],
+    },
+    PackedVertexN {
+        pos: [-0.05, -0.05, 0.0],
+        normal: [0.0, 0.0, -1.0],
+    },
+    PackedVertexN {
+        pos: [0.05, 0.05, 0.0],
+        normal: [0.0, 0.0, -1.0],
+    },
+    PackedVertexN {
+        pos: [-0.05, 0.05, 0.0],
+        normal: [0.0, 0.0, -1.0],
+    },
 ];
 
 const IDENTITY: [[f32; 4]; 4] = [
@@ -119,7 +137,11 @@ fn expected_slot_normal(rot: [f32; 3], marker: u32) -> [f32; 3] {
     let n_local = [0.0f32, 0.0, -1.0];
     mat3_vec(
         euler_xyz(rot),
-        [n_local[0] * msign[0], n_local[1] * msign[1], n_local[2] * msign[2]],
+        [
+            n_local[0] * msign[0],
+            n_local[1] * msign[1],
+            n_local[2] * msign[2],
+        ],
     )
 }
 
@@ -155,7 +177,9 @@ fn dead_slot(pos: [f32; 3]) -> InstanceTransform {
 fn write_shared_buffer<T: Copy>(device: &GpuDevice, data: &[T]) -> GpuBuffer {
     let bytes = std::mem::size_of_val(data) as u64;
     let buf = device.create_buffer_shared(bytes.max(16));
-    let ptr = buf.mapped_ptr().expect("shared buffer must expose a mapped pointer");
+    let ptr = buf
+        .mapped_ptr()
+        .expect("shared buffer must expose a mapped pointer");
     unsafe {
         std::ptr::copy_nonoverlapping(data.as_ptr().cast::<u8>(), ptr, bytes as usize);
     }
@@ -180,8 +204,9 @@ fn upload_texture_f32(
         label,
         mip_levels: 1,
     });
-    let bytes =
-        unsafe { slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels)) };
+    let bytes = unsafe {
+        slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels))
+    };
     device.upload_texture(&texture, bytes);
     texture
 }
@@ -228,43 +253,52 @@ fn run_probes_with_inners(
     let vertex_buffer = write_shared_buffer(device, &QUAD);
     let instances_buffer = write_shared_buffer(device, slots);
 
-    let objects: Vec<RtObjectGeometry> = inners.iter().map(|&inner| RtObjectGeometry { instance_inner: inner, material_attributes: Default::default(),
-        vertex_buffer: &vertex_buffer,
-        vertex_stride: std::mem::size_of::<PackedVertexN>() as u32,
-        vertex_offset: 0,
-        index_buffer: None,
-        triangle_count: 2,
-        transform: IDENTITY,
-        normal_offset: 12,
-        uv_offset: 0, // alpha_mask is false — never read.
-        alpha_mask: false,
-        translucent: false,
-        alpha_cutoff: 0.5,
-        base_color_texture: None,
-        mr_texture: None,
-        normal_texture: None,
-        emissive_texture: None,
-        extra_material_textures: [None; 15],
-        emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
-        emissive_uv_t: [0.0, 0.0],
-        cast_shadows: true,
-        instances_addr: instances_buffer.gpu_address(),
-        instances_buffer: Some(&instances_buffer),
-        instance_slots: slots.len() as u32,
-        appearance_weights: None,
-        appearance_gain: 1.0,
-        base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-        mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-        normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-        normal_scale: 1.0,
-        base_color_alpha: 1.0,
-        tangent_offset: u32::MAX,
-    }).collect();
+    let objects: Vec<RtObjectGeometry> = inners
+        .iter()
+        .map(|&inner| RtObjectGeometry {
+            instance_inner: inner,
+            material_attributes: Default::default(),
+            vertex_buffer: &vertex_buffer,
+            vertex_stride: std::mem::size_of::<PackedVertexN>() as u32,
+            vertex_offset: 0,
+            index_buffer: None,
+            triangle_count: 2,
+            transform: IDENTITY,
+            normal_offset: 12,
+            uv_offset: 0, // alpha_mask is false — never read.
+            alpha_mask: false,
+            translucent: false,
+            alpha_cutoff: 0.5,
+            base_color_texture: None,
+            mr_texture: None,
+            normal_texture: None,
+            emissive_texture: None,
+            extra_material_textures: [None; 15],
+            emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
+            emissive_uv_t: [0.0, 0.0],
+            cast_shadows: true,
+            instances_addr: instances_buffer.gpu_address(),
+            instances_buffer: Some(&instances_buffer),
+            instance_slots: slots.len() as u32,
+            appearance_weights: None,
+            appearance_gain: 1.0,
+            base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_scale: 1.0,
+            base_color_alpha: 1.0,
+            tangent_offset: u32::MAX,
+        })
+        .collect();
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
     // below (built before the trace dispatch on the same command buffer).
-    let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
+    let plan = tracer
+        .plan_accel(device, None, &objects)
+        .expect("plan accel");
     let mut accel_slot = None;
-    tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+    tracer
+        .prepare_accel(device, &mut accel_slot, plan)
+        .expect("prepare accel");
     let mut accel = accel_slot.unwrap();
 
     // D11 tables: canonical row [0, N) + slot rows [N, N+Σ) — production
@@ -301,7 +335,10 @@ fn run_probes_with_inners(
              fixed by the pixel column)"
         );
         let ratio = t[0] / t[2];
-        assert!(ratio.abs() < 1.0, "probe {i} target {t:?} is outside the frustum");
+        assert!(
+            ratio.abs() < 1.0,
+            "probe {i} target {t:?} is outside the frustum"
+        );
         let col = (((ratio + 1.0) * 0.5) * W as f32).floor() as u32;
         let ndc = (col as f32 + 0.5) / W as f32 * 2.0 - 1.0;
         let depth = ndc * t[2] / t[0];
@@ -316,7 +353,14 @@ fn run_probes_with_inners(
         columns.push(col);
         depth_px[col as usize] = depth;
     }
-    let depth_tex = upload_texture_f32(device, W, 1, GpuTextureFormat::Depth32Float, &depth_px, "rt-instancing-depth");
+    let depth_tex = upload_texture_f32(
+        device,
+        W,
+        1,
+        GpuTextureFormat::Depth32Float,
+        &depth_px,
+        "rt-instancing-depth",
+    );
 
     let tex_of = |dimension, label: &str| {
         device.create_texture(&GpuTextureDesc {
@@ -376,15 +420,25 @@ fn run_probes_with_inners(
     // P4a: the GPU emissive preparation indexes one material row per
     // object — this fixture has no emissive geometry, so zeroed rows
     // (luma 0 → zero stats, the old "no emissive table" behavior).
-    let materials = vec![
-        manifold_gpu::raytrace::GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]);
-        objects.len()
-    ];
+    let materials =
+        vec![
+            manifold_gpu::raytrace::GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]);
+            objects.len()
+        ];
 
     let mut encoder = device.create_encoder("rt-instancing-probe");
     let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
     tracer
-        .encode_accel_update(device, &mut encoder, &mut accel, &objects, &changes, &materials, true, true)
+        .encode_accel_update(
+            device,
+            &mut encoder,
+            &mut accel,
+            &objects,
+            &changes,
+            &materials,
+            true,
+            true,
+        )
         .expect("encode accel update");
     tracer.dispatch_shadow_rays(
         &mut encoder,
@@ -419,19 +473,30 @@ fn run_probes_with_inners(
     let mut enc2 = device.create_encoder("rt-instancing-readback");
     enc2.copy_texture_to_buffer(&out_n, &readback, W, 1, W * 4 * 4);
     enc2.commit_and_wait_completed();
-    let ptr = readback.mapped_ptr().expect("readback buffer must be mapped");
+    let ptr = readback
+        .mapped_ptr()
+        .expect("readback buffer must be mapped");
     let floats: &[f32] =
         unsafe { slice::from_raw_parts(ptr.cast::<c_void>().cast::<f32>(), (W * 4) as usize) };
     let mut rows = Vec::with_capacity(probes.len());
     for col in &columns {
         let base = *col as usize * 4;
-        rows.push([floats[base], floats[base + 1], floats[base + 2], floats[base + 3]]);
+        rows.push([
+            floats[base],
+            floats[base + 1],
+            floats[base + 2],
+            floats[base + 3],
+        ]);
     }
     rows
 }
 
 fn assert_hit(row: &[f32; 4], expected_n: [f32; 3], what: &str) {
-    assert_eq!(row[3], 0.0, "{what}: expected a hit (out_n.w == object_index 0), got {:?}", row);
+    assert_eq!(
+        row[3], 0.0,
+        "{what}: expected a hit (out_n.w == object_index 0), got {:?}",
+        row
+    );
     for (axis, (&got, &want)) in row[..3].iter().zip(expected_n.iter()).enumerate() {
         assert!(
             (got - want).abs() < 1e-2,
@@ -447,7 +512,6 @@ fn assert_miss(row: &[f32; 4], what: &str) {
     );
 }
 
-
 // ─── (a) INV-RTI1 — the loop copy set ──────────────────────────────────
 
 /// INV-RTI1: a 4-slot buffer with one live translation-only TRS per slot
@@ -461,16 +525,31 @@ fn loop_copies_trace_at_cpu_expected_positions() {
     let slots = [
         live_slot([-0.45, 0.0, 0.5], [0.0; 3], 0),
         live_slot([-0.20, 0.0, 0.5], [0.0; 3], 0),
-        live_slot([ 0.20, 0.0, 0.5], [0.0; 3], 0),
-        live_slot([ 0.45, 0.0, 0.5], [0.0; 3], 0),
+        live_slot([0.20, 0.0, 0.5], [0.0; 3], 0),
+        live_slot([0.45, 0.0, 0.5], [0.0; 3], 0),
     ];
     let probes = [
-        Probe { target: [-0.45, 0.0, 0.5], expect: Some([0.0, 0.0, -1.0]) },
-        Probe { target: [-0.20, 0.0, 0.5], expect: Some([0.0, 0.0, -1.0]) },
-        Probe { target: [ 0.20, 0.0, 0.5], expect: Some([0.0, 0.0, -1.0]) },
-        Probe { target: [ 0.45, 0.0, 0.5], expect: Some([0.0, 0.0, -1.0]) },
+        Probe {
+            target: [-0.45, 0.0, 0.5],
+            expect: Some([0.0, 0.0, -1.0]),
+        },
+        Probe {
+            target: [-0.20, 0.0, 0.5],
+            expect: Some([0.0, 0.0, -1.0]),
+        },
+        Probe {
+            target: [0.20, 0.0, 0.5],
+            expect: Some([0.0, 0.0, -1.0]),
+        },
+        Probe {
+            target: [0.45, 0.0, 0.5],
+            expect: Some([0.0, 0.0, -1.0]),
+        },
         // No 5th slot exists at column 4 (x = 0.1041667) — must miss.
-        Probe { target: [ 0.1041667, 0.0, 0.5], expect: None },
+        Probe {
+            target: [0.1041667, 0.0, 0.5],
+            expect: None,
+        },
     ];
     let rows = run_probes(&slots, &probes);
     for (i, probe) in probes.iter().enumerate() {
@@ -502,17 +581,37 @@ fn mirror_slots_trace_exact_reflection_with_mirrored_normals() {
     // (marker 2, M=diag(1,-1,1): base Rx(+θ), stored Rx(-θ))
     // (marker 3, M=diag(1,1,-1): base Ry(+θ), stored Ry(-θ))
     let slots = [
-        live_slot([ 0.45, 0.0, 0.5], [0.0,  THETA, 0.0], 0),
+        live_slot([0.45, 0.0, 0.5], [0.0, THETA, 0.0], 0),
         live_slot([-0.45, 0.0, 0.5], [0.0, -THETA, 0.0], 1),
-        live_slot([ 0.20, 0.0, 0.5], [-THETA, 0.0, 0.0], 2),
+        live_slot([0.20, 0.0, 0.5], [-THETA, 0.0, 0.0], 2),
         live_slot([-0.20, 0.0, 0.5], [0.0, -THETA, 0.0], 3),
     ];
     let cases: [(&str, [f32; 3], [f32; 3], u32); 4] = [
         // (name, expected-normal-D3-chain, base-rotation, marker)
-        ("source",        expected_slot_normal([0.0, THETA, 0.0], 0), [0.0, THETA, 0.0], 0),
-        ("mirror-x (k=1)", expected_slot_normal([0.0, -THETA, 0.0], 1), [0.0, THETA, 0.0], 1),
-        ("mirror-y (k=2)", expected_slot_normal([-THETA, 0.0, 0.0], 2), [THETA, 0.0, 0.0], 2),
-        ("mirror-z (k=3)", expected_slot_normal([0.0, -THETA, 0.0], 3), [0.0, THETA, 0.0], 3),
+        (
+            "source",
+            expected_slot_normal([0.0, THETA, 0.0], 0),
+            [0.0, THETA, 0.0],
+            0,
+        ),
+        (
+            "mirror-x (k=1)",
+            expected_slot_normal([0.0, -THETA, 0.0], 1),
+            [0.0, THETA, 0.0],
+            1,
+        ),
+        (
+            "mirror-y (k=2)",
+            expected_slot_normal([-THETA, 0.0, 0.0], 2),
+            [THETA, 0.0, 0.0],
+            2,
+        ),
+        (
+            "mirror-z (k=3)",
+            expected_slot_normal([0.0, -THETA, 0.0], 3),
+            [0.0, THETA, 0.0],
+            3,
+        ),
     ];
     for (name, d3, base, marker) in cases.iter().copied() {
         if marker != 0 {
@@ -527,10 +626,22 @@ fn mirror_slots_trace_exact_reflection_with_mirrored_normals() {
         }
     }
     let probes: [Probe; 4] = [
-        Probe { target: [ 0.45, 0.0, 0.5], expect: Some(cases[0].1) },
-        Probe { target: [-0.45, 0.0, 0.5], expect: Some(cases[1].1) },
-        Probe { target: [ 0.20, 0.0, 0.5], expect: Some(cases[2].1) },
-        Probe { target: [-0.20, 0.0, 0.5], expect: Some(cases[3].1) },
+        Probe {
+            target: [0.45, 0.0, 0.5],
+            expect: Some(cases[0].1),
+        },
+        Probe {
+            target: [-0.45, 0.0, 0.5],
+            expect: Some(cases[1].1),
+        },
+        Probe {
+            target: [0.20, 0.0, 0.5],
+            expect: Some(cases[2].1),
+        },
+        Probe {
+            target: [-0.20, 0.0, 0.5],
+            expect: Some(cases[3].1),
+        },
     ];
     let rows = run_probes(&slots, &probes);
     for (i, (probe, (name, _, _, _))) in probes.iter().zip(cases.iter()).enumerate() {
@@ -553,8 +664,14 @@ fn dead_slot_never_intersects() {
         dead_slot([-0.20, 0.0, 0.5]),
     ];
     let probes = [
-        Probe { target: [ 0.20, 0.0, 0.5], expect: Some([0.0, 0.0, -1.0]) },
-        Probe { target: [-0.20, 0.0, 0.5], expect: None },
+        Probe {
+            target: [0.20, 0.0, 0.5],
+            expect: Some([0.0, 0.0, -1.0]),
+        },
+        Probe {
+            target: [-0.20, 0.0, 0.5],
+            expect: None,
+        },
     ];
     let rows = run_probes(&slots, &probes);
     assert_hit(&rows[0], [0.0, 0.0, -1.0], "live slot");
@@ -572,19 +689,31 @@ fn capacity_buffer_traces_live_slots_only() {
     let slots = [
         live_slot([-0.45, 0.0, 0.5], [0.0; 3], 0),
         live_slot([-0.20, 0.0, 0.5], [0.0; 3], 0),
-        live_slot([ 0.20, 0.0, 0.5], [0.0; 3], 0),
+        live_slot([0.20, 0.0, 0.5], [0.0; 3], 0),
         // Would-be 4th copy at column 7 (x = 0.45) — dead (zero scale).
-        dead_slot([ 0.45, 0.0, 0.5]),
-        dead_slot([ 0.40, 0.20, 0.5]),
+        dead_slot([0.45, 0.0, 0.5]),
+        dead_slot([0.40, 0.20, 0.5]),
         dead_slot([-0.40, 0.20, 0.5]),
-        dead_slot([ 0.40, -0.20, 0.5]),
+        dead_slot([0.40, -0.20, 0.5]),
         dead_slot([-0.40, -0.20, 0.5]),
     ];
     let probes = [
-        Probe { target: [-0.45, 0.0, 0.5], expect: Some([0.0, 0.0, -1.0]) },
-        Probe { target: [-0.20, 0.0, 0.5], expect: Some([0.0, 0.0, -1.0]) },
-        Probe { target: [ 0.20, 0.0, 0.5], expect: Some([0.0, 0.0, -1.0]) },
-        Probe { target: [ 0.45, 0.0, 0.5], expect: None },
+        Probe {
+            target: [-0.45, 0.0, 0.5],
+            expect: Some([0.0, 0.0, -1.0]),
+        },
+        Probe {
+            target: [-0.20, 0.0, 0.5],
+            expect: Some([0.0, 0.0, -1.0]),
+        },
+        Probe {
+            target: [0.20, 0.0, 0.5],
+            expect: Some([0.0, 0.0, -1.0]),
+        },
+        Probe {
+            target: [0.45, 0.0, 0.5],
+            expect: None,
+        },
     ];
     let rows = run_probes(&slots, &probes);
     for (i, probe) in probes.iter().enumerate() {
@@ -610,9 +739,15 @@ fn wired_single_capacity_buffer_uses_gpu_path() {
     let slots = [live_slot([0.20, 0.0, 0.5], [0.0, THETA, 0.0], 0)];
     let expected = expected_slot_normal([0.0, THETA, 0.0], 0);
     let probes = [
-        Probe { target: [0.20, 0.0, 0.5], expect: Some(expected) },
+        Probe {
+            target: [0.20, 0.0, 0.5],
+            expect: Some(expected),
+        },
         // Column 4 stays empty — no copy may exist off the slot's TRS.
-        Probe { target: [ 0.1041667, 0.0, 0.5], expect: None },
+        Probe {
+            target: [0.1041667, 0.0, 0.5],
+            expect: None,
+        },
     ];
     let rows = run_probes(&slots, &probes);
     assert_hit(&rows[0], expected, "wired 1-capacity slot 0 (GPU path)");
@@ -721,7 +856,11 @@ fn probe_worker_static_frames() {
 fn static_instances_trigger_no_per_frame_descriptor_dispatches() {
     let exe = std::env::current_exe().expect("current test binary path");
     let out = std::process::Command::new(exe)
-        .args(["--exact", "rt_instancing::probe_worker_static_frames", "--nocapture"])
+        .args([
+            "--exact",
+            "rt_instancing::probe_worker_static_frames",
+            "--nocapture",
+        ])
         .env("MANIFOLD_PROBE_RT_ACCEL", "1")
         .env("RT_INSTANCING_PROBE_WORKER", "1")
         .output()
@@ -756,10 +895,18 @@ fn group_space_copies_trace_every_part_at_instance_times_part() {
     };
     let inner = |t: [f32; 3], a: f32| {
         let (s, c) = a.sin_cos();
-        [[c, 0.0, -s, 0.0], [0.0, 1.0, 0.0, 0.0], [s, 0.0, c, 0.0], [t[0], t[1], t[2], 1.0]]
+        [
+            [c, 0.0, -s, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [s, 0.0, c, 0.0],
+            [t[0], t[1], t[2], 1.0],
+        ]
     };
     let parts = [([0.1f32, 0.0, 0.05], 0.3f32), ([-0.1, 0.0, 0.05], -0.2)];
-    let copies = [([-0.2309f32, 0.0, 0.5894], 0.4f32), ([0.2309, 0.0, 0.5894], -0.4)];
+    let copies = [
+        ([-0.2309f32, 0.0, 0.5894], 0.4f32),
+        ([0.2309, 0.0, 0.5894], -0.4),
+    ];
     let slots = copies.map(|(pos, turn)| live_slot(pos, [0.0, turn, 0.0], 0));
     let mut probes = Vec::new();
     let mut expect_index = Vec::new();
@@ -768,20 +915,33 @@ fn group_space_copies_trace_every_part_at_instance_times_part() {
             let offset = yaw(turn, *offset);
             let target = [pos[0] + offset[0], pos[1] + offset[1], pos[2] + offset[2]];
             let normal = yaw(turn + part_turn, [0.0, 0.0, -1.0]);
-            probes.push(Probe { target, expect: Some(normal) });
+            probes.push(Probe {
+                target,
+                expect: Some(normal),
+            });
             expect_index.push(index as f32);
         }
     }
     // Nothing sits at column 7.
-    probes.push(Probe { target: [0.45, 0.0, 0.5], expect: None });
+    probes.push(Probe {
+        target: [0.45, 0.0, 0.5],
+        expect: None,
+    });
     let rows = run_probes_with_inners(&slots, &parts.map(|(t, a)| inner(t, a)), &probes);
     for (i, probe) in probes.iter().enumerate() {
         match probe.expect {
             Some(n) => {
                 let row = rows[i];
-                assert_eq!(row[3], expect_index[i], "probe {i} at {:?} hits part {} (row {row:?})", probe.target, expect_index[i]);
+                assert_eq!(
+                    row[3], expect_index[i],
+                    "probe {i} at {:?} hits part {} (row {row:?})",
+                    probe.target, expect_index[i]
+                );
                 for axis in 0..3 {
-                    assert!((row[axis] - n[axis]).abs() < 1e-2, "probe {i}: normal {row:?}, CPU expects {n:?}");
+                    assert!(
+                        (row[axis] - n[axis]).abs() < 1e-2,
+                        "probe {i}: normal {row:?}, CPU expects {n:?}"
+                    );
                 }
             }
             None => assert_miss(&rows[i], "empty column"),

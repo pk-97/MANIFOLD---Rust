@@ -17,17 +17,24 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
 use super::prefix_scan::{PrefixScan, ScanLabels};
+use crate::fluid_particles::{CellRange, MAX_BINS, bin_counts, bin_total, searched_bins};
+use crate::whitewater::WHITEWATER_EMPTY;
 use manifold_node_engine::channel_names::well_known;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_node_engine::particles::{FLUID_PARTICLE_SPECS, FluidParticle};
-use crate::fluid_particles::{CellRange, MAX_BINS, bin_counts, bin_total, searched_bins};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::{FLUID_PARTICLE_SPECS, FluidParticle};
 use manifold_node_engine::ports::{ArrayType, ChannelElementType, std430_channel};
 use manifold_node_engine::primitive::Primitive;
-use crate::whitewater::WHITEWATER_EMPTY;
 
 pub const SHADER: &str = include_str!("shaders/sort_particles_into_cells.wgsl");
-const ENTRIES: [&str; 6] = ["clear_counts", "count_particles", "write_ranges", "clear_tail", "scatter", "stabilise"];
+const ENTRIES: [&str; 6] = [
+    "clear_counts",
+    "count_particles",
+    "write_ranges",
+    "clear_tail",
+    "scatter",
+    "stabilise",
+];
 
 /// Live when the radius word is positive.
 pub const LIVE_BY_RADIUS: u32 = 0;
@@ -88,7 +95,10 @@ pub struct SortLabels {
 const NODE_LABELS: SortLabels = SortLabels {
     clear: "node.sort_particles_into_cells.clear",
     count: "node.sort_particles_into_cells.count",
-    scan: ScanLabels { blocks: "node.sort_particles_into_cells.scan.blocks", add: "node.sort_particles_into_cells.scan.add" },
+    scan: ScanLabels {
+        blocks: "node.sort_particles_into_cells.scan.blocks",
+        add: "node.sort_particles_into_cells.scan.add",
+    },
     ranges: "node.sort_particles_into_cells.ranges",
     tail: "node.sort_particles_into_cells.tail",
     scatter: "node.sort_particles_into_cells.scatter",
@@ -135,7 +145,11 @@ impl ParticleSorter {
     pub fn prepare(&mut self, device: &GpuDevice) {
         if self.pipelines.is_empty() {
             for entry in ENTRIES {
-                self.pipelines.push(device.create_compute_pipeline(SHADER, entry, "node.sort_particles_into_cells"));
+                self.pipelines.push(device.create_compute_pipeline(
+                    SHADER,
+                    entry,
+                    "node.sort_particles_into_cells",
+                ));
             }
         }
         self.scan.prepare(device);
@@ -152,7 +166,11 @@ impl ParticleSorter {
     /// Size the cell ranges for `bins` before anything reads them.
     pub fn reserve_ranges(&mut self, device: &GpuDevice, bins: [u32; 3]) -> Result<(), String> {
         let range_bytes = range_storage_bytes(bins);
-        if self.ranges.as_ref().is_some_and(|ranges| ranges.size >= range_bytes) {
+        if self
+            .ranges
+            .as_ref()
+            .is_some_and(|ranges| ranges.size >= range_bytes)
+        {
             return Ok(());
         }
         let buffer = manifold_node_engine::load::expand::admit_candidate_bytes(
@@ -179,20 +197,33 @@ impl ParticleSorter {
         let bin_total = bin_total(job.bins) as u32;
         let cell_counts = self.scan.buffer(device, bin_total as usize)?.clone();
         let particle_size = std::mem::size_of::<FluidParticle>() as u64;
-        let sorted_capacity = [job.sorted.map(|b| b.size / particle_size), job.order.map(|b| b.size / 4)]
-            .into_iter()
-            .flatten()
-            .fold(u64::from(job.capacity), u64::min) as u32;
+        let sorted_capacity = [
+            job.sorted.map(|b| b.size / particle_size),
+            job.order.map(|b| b.size / 4),
+        ]
+        .into_iter()
+        .flatten()
+        .fold(u64::from(job.capacity), u64::min) as u32;
         let count = job.count.min(sorted_capacity);
         let rank_bytes = u64::from(job.capacity.max(1)) * 4;
         if self.rank.as_ref().is_none_or(|rank| rank.size < rank_bytes) {
             self.rank = Some(device.create_buffer(rank_bytes));
         }
-        if self.slot_input.as_ref().is_none_or(|slots| slots.size < rank_bytes) {
+        if self
+            .slot_input
+            .as_ref()
+            .is_none_or(|slots| slots.size < rank_bytes)
+        {
             self.slot_input = Some(device.create_buffer(rank_bytes));
         }
-        let ranges = self.ranges.as_ref().ok_or("the cell ranges were not reserved")?;
-        let gate = job.gate.or(self.open.as_ref()).expect("sort pipelines prepared");
+        let ranges = self
+            .ranges
+            .as_ref()
+            .ok_or("the cell ranges were not reserved")?;
+        let gate = job
+            .gate
+            .or(self.open.as_ref())
+            .expect("sort pipelines prepared");
         let rank = self.rank.as_ref().expect("rank scratch allocated");
         let slot_input = self.slot_input.as_ref().expect("slot scratch allocated");
         let read = job.read;
@@ -211,19 +242,62 @@ impl ParticleSorter {
             live_rule: read.live_rule,
         };
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: job.particles, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: job.particles,
+                offset: 0,
+            },
             // Unwritten outputs (write flag 0) bind rank to keep the layout.
-            GpuBinding::Buffer { binding: 2, buffer: job.sorted.unwrap_or(rank), offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: ranges, offset: 0 },
-            GpuBinding::Buffer { binding: 4, buffer: &cell_counts, offset: 0 },
-            GpuBinding::Buffer { binding: 5, buffer: rank, offset: 0 },
-            GpuBinding::Buffer { binding: 6, buffer: job.order.unwrap_or(rank), offset: 0 },
-            GpuBinding::Buffer { binding: 7, buffer: slot_input, offset: 0 },
-            GpuBinding::Buffer { binding: 8, buffer: gate, offset: 0 },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: job.sorted.unwrap_or(rank),
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: ranges,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: &cell_counts,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 5,
+                buffer: rank,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 6,
+                buffer: job.order.unwrap_or(rank),
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 7,
+                buffer: slot_input,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 8,
+                buffer: gate,
+                offset: 0,
+            },
         ];
         let groups = |n: u32| [n.div_ceil(256).max(1), 1, 1];
-        let [clear, count_pass, write_ranges, clear_tail, scatter, stabilise] = &self.pipelines[..] else {
+        let [
+            clear,
+            count_pass,
+            write_ranges,
+            clear_tail,
+            scatter,
+            stabilise,
+        ] = &self.pipelines[..]
+        else {
             unreachable!("six sort pipelines");
         };
         encoder.dispatch_compute(clear, &bindings, groups(bin_total), labels.clear);
@@ -231,8 +305,13 @@ impl ParticleSorter {
         encoder.dispatch_compute(count_pass, &bindings, groups(count), labels.count);
         encoder.compute_memory_barrier_buffers();
         match job.gate {
-            Some(gate) => self.scan.encode_labelled_gated(encoder, bin_total as usize, labels.scan, gate),
-            None => self.scan.encode_labelled(encoder, bin_total as usize, labels.scan),
+            Some(gate) => {
+                self.scan
+                    .encode_labelled_gated(encoder, bin_total as usize, labels.scan, gate)
+            }
+            None => self
+                .scan
+                .encode_labelled(encoder, bin_total as usize, labels.scan),
         }
         encoder.dispatch_compute(write_ranges, &bindings, groups(bin_total), labels.ranges);
         encoder.dispatch_compute(clear_tail, &bindings, groups(sorted_capacity), labels.tail);
@@ -253,7 +332,9 @@ pub fn whitewater_record_read() -> RecordRead {
 
 pub fn record_read(layout: &ArrayType) -> Option<RecordRead> {
     let stride_words = layout.item_size / 4;
-    if let Some((offset, ChannelElementType::Vec4F)) = std430_channel(layout.specs, well_known::POSITION_RADIUS) {
+    if let Some((offset, ChannelElementType::Vec4F)) =
+        std430_channel(layout.specs, well_known::POSITION_RADIUS)
+    {
         return Some(RecordRead {
             stride_words,
             position_word: offset / 4,
@@ -261,18 +342,29 @@ pub fn record_read(layout: &ArrayType) -> Option<RecordRead> {
             live_rule: LIVE_BY_RADIUS,
         });
     }
-    if let (Some((position, ChannelElementType::Vec4F)), Some((kind, ChannelElementType::U32))) =
-        (std430_channel(layout.specs, well_known::POSITION_LIFETIME), std430_channel(layout.specs, well_known::KIND))
-    {
-        return Some(RecordRead { stride_words, position_word: position / 4, live_word: kind / 4, live_rule: LIVE_BY_KIND });
-    }
-    match (std430_channel(layout.specs, well_known::POSITION), std430_channel(layout.specs, well_known::ID)) {
-        (Some((position, ChannelElementType::Vec3F)), Some((id, ChannelElementType::U32))) => Some(RecordRead {
+    if let (Some((position, ChannelElementType::Vec4F)), Some((kind, ChannelElementType::U32))) = (
+        std430_channel(layout.specs, well_known::POSITION_LIFETIME),
+        std430_channel(layout.specs, well_known::KIND),
+    ) {
+        return Some(RecordRead {
             stride_words,
             position_word: position / 4,
-            live_word: id / 4,
-            live_rule: LIVE_BY_ID,
-        }),
+            live_word: kind / 4,
+            live_rule: LIVE_BY_KIND,
+        });
+    }
+    match (
+        std430_channel(layout.specs, well_known::POSITION),
+        std430_channel(layout.specs, well_known::ID),
+    ) {
+        (Some((position, ChannelElementType::Vec3F)), Some((id, ChannelElementType::U32))) => {
+            Some(RecordRead {
+                stride_words,
+                position_word: position / 4,
+                live_word: id / 4,
+                live_rule: LIVE_BY_ID,
+            })
+        }
         _ => None,
     }
 }
@@ -343,10 +435,17 @@ pub fn read_searched_bins(
         if ports.iter().all(|port| ctx.inputs.scalar(port).is_none()) {
             let size = ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
             let cell_size = ctx.scalar_or_param("cell_size", 0.0625);
-            if !(cell_size.is_finite() && cell_size > 0.0) || size.iter().any(|v| !(v.is_finite() && *v > 0.0)) {
+            if !(cell_size.is_finite() && cell_size > 0.0)
+                || size.iter().any(|v| !(v.is_finite() && *v > 0.0))
+            {
                 return Ok(None);
             }
-            return searched_bins(bin_counts(size, cell_size).map(|n| n as f32), range_bytes, atom).map(Some);
+            return searched_bins(
+                bin_counts(size, cell_size).map(|n| n as f32),
+                range_bytes,
+                atom,
+            )
+            .map(Some);
         }
     }
     searched_bins(bins, range_bytes, atom).map(Some)
@@ -406,7 +505,9 @@ impl Primitive for SortParticlesIntoCells {
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
-        (port == "cell_ranges").then_some(self.sorter.ranges()).flatten()
+        (port == "cell_ranges")
+            .then_some(self.sorter.ranges())
+            .flatten()
     }
 
     fn array_output_capacity(
@@ -416,7 +517,10 @@ impl Primitive for SortParticlesIntoCells {
         inputs: &[(&str, u32)],
     ) -> Option<u32> {
         match port {
-            "sorted" | "order" => inputs.iter().find(|(name, _)| *name == "particles").map(|&(_, n)| n),
+            "sorted" | "order" => inputs
+                .iter()
+                .find(|(name, _)| *name == "particles")
+                .map(|&(_, n)| n),
             // Provided storage: a one-record hint, sized to the bin grid at run time.
             "cell_ranges" => Some(1),
             _ => None,
@@ -430,7 +534,8 @@ impl Primitive for SortParticlesIntoCells {
             Some(ParamValue::Float(count)) => Some(count),
             _ => None,
         };
-        let center = ["center_x", "center_y", "center_z"].map(|name| ctx.scalar_or_param(name, 0.0));
+        let center =
+            ["center_x", "center_y", "center_z"].map(|name| ctx.scalar_or_param(name, 0.0));
         let size = ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
         let cell_size = ctx.scalar_or_param("cell_size", 0.0625);
         self.sorter.prepare(ctx.gpu_encoder().device);
@@ -484,7 +589,10 @@ impl Primitive for SortParticlesIntoCells {
             ctx.error(error);
         };
         let Some(layout) = ctx.inputs.array_layout("particles") else {
-            refuse(ctx, "Sort Particles Into Cells: the particles wire carries no record layout".into());
+            refuse(
+                ctx,
+                "Sort Particles Into Cells: the particles wire carries no record layout".into(),
+            );
             return;
         };
         let Some(read) = record_read(&layout) else {
@@ -513,14 +621,15 @@ impl Primitive for SortParticlesIntoCells {
             gate: None,
         };
         let gpu = ctx.gpu_encoder();
-        let encoded = self.sorter.encode(gpu.device, gpu.native_enc, &job, &NODE_LABELS);
+        let encoded = self
+            .sorter
+            .encode(gpu.device, gpu.native_enc, &job, &NODE_LABELS);
         match encoded {
             Ok(()) => publish(ctx, bins),
             Err(error) => refuse(ctx, format!("Sort Particles Into Cells: {error}")),
         }
     }
 }
-
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

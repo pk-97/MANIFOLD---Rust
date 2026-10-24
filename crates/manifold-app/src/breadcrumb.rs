@@ -32,8 +32,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use manifold_core::preset_type_id::PresetTypeId;
 use manifold_core::Beats;
+use manifold_core::preset_type_id::PresetTypeId;
 
 use crate::app::Application;
 use crate::content_command::ContentCommand;
@@ -172,7 +172,8 @@ fn write_breadcrumb_atomic(data: &BreadcrumbData) -> std::io::Result<()> {
 /// Parse a breadcrumb sidecar from disk (`--resume` boot path, section 5.2 step 1).
 pub(crate) fn read_breadcrumb(path: &Path) -> std::io::Result<BreadcrumbData> {
     let bytes = std::fs::read(path)?;
-    serde_json::from_slice(&bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    serde_json::from_slice(&bytes)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -381,7 +382,8 @@ impl Application {
     ) -> BreadcrumbData {
         let mut active_pairs: Vec<(usize, usize)> = Vec::new();
         let mut active_indices: Vec<usize> = Vec::new();
-        self.local_project.active_clips_at_beat(beat, &mut active_pairs, &mut active_indices);
+        self.local_project
+            .active_clips_at_beat(beat, &mut active_pairs, &mut active_indices);
 
         let mut active_type_ids: Vec<String> = Vec::new();
         let mut active_clip_ids: Vec<String> = Vec::new();
@@ -397,7 +399,11 @@ impl Application {
                 active_type_ids.push(gen_type.as_str().to_string());
             }
             if let Some(effects) = &layer.effects {
-                active_type_ids.extend(effects.iter().map(|fx| fx.effect_type().as_str().to_string()));
+                active_type_ids.extend(
+                    effects
+                        .iter()
+                        .map(|fx| fx.effect_type().as_str().to_string()),
+                );
             }
         }
         active_type_ids.sort();
@@ -521,14 +527,20 @@ mod tests {
     #[test]
     fn cadence_fires_on_first_observation() {
         let mut c = BreadcrumbCadence::new();
-        assert!(c.should_fire(0.0, false), "first observation is a transport change from unknown");
+        assert!(
+            c.should_fire(0.0, false),
+            "first observation is a transport change from unknown"
+        );
     }
 
     #[test]
     fn cadence_never_fires_mid_beat_while_playing() {
         let mut c = BreadcrumbCadence::new();
         assert!(c.should_fire(4.0, true));
-        assert!(!c.should_fire(4.1, true), "same beat, still playing — no fire");
+        assert!(
+            !c.should_fire(4.1, true),
+            "same beat, still playing — no fire"
+        );
         assert!(!c.should_fire(4.99, true), "still inside beat 4");
     }
 
@@ -582,8 +594,14 @@ mod tests {
         // First observation fire + one per integer-beat crossing (beat ends
         // just under 6.0 after 180 frames at this rate) — well under
         // "never per frame" (180).
-        assert!(fires <= 8, "cadence fired {fires} times over 180 frames — too often");
-        assert!(fires >= 5, "cadence fired only {fires} times — missed beat crossings");
+        assert!(
+            fires <= 8,
+            "cadence fired {fires} times over 180 frames — too often"
+        );
+        assert!(
+            fires >= 5,
+            "cadence fired only {fires} times — missed beat crossings"
+        );
     }
 
     #[test]
@@ -632,7 +650,10 @@ mod tests {
 
         let path = breadcrumb_path_for(&project_path);
         assert!(path.exists(), "breadcrumb file exists");
-        assert!(!tmp_path_for(&path).exists(), "tmp file cleaned up by rename");
+        assert!(
+            !tmp_path_for(&path).exists(),
+            "tmp file cleaned up by rename"
+        );
 
         let back = read_breadcrumb(&path).expect("read");
         assert_eq!(data, back);
@@ -644,7 +665,10 @@ mod tests {
     fn breadcrumb_path_appends_suffix_to_full_project_path() {
         let p = PathBuf::from("/Users/pete/Shows/liveschool.manifold");
         let bc = breadcrumb_path_for(&p);
-        assert_eq!(bc, PathBuf::from("/Users/pete/Shows/liveschool.manifold.breadcrumb"));
+        assert_eq!(
+            bc,
+            PathBuf::from("/Users/pete/Shows/liveschool.manifold.breadcrumb")
+        );
     }
 
     #[test]
@@ -653,6 +677,9 @@ mod tests {
         // this only asserts the sentinel decodes correctly, not ordering
         // relative to other tests' publishes.
         let bits = u64::MAX;
-        assert!(f64::from_bits(bits).is_nan(), "sentinel bit pattern is a NaN, never a real beat");
+        assert!(
+            f64::from_bits(bits).is_nan(),
+            "sentinel bit pattern is a NaN, never a real beat"
+        );
     }
 }

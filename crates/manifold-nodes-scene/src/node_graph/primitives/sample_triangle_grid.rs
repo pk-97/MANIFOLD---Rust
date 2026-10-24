@@ -1,11 +1,11 @@
 //! Bounded sparse triangle samples for Math View overlays.
 
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
-use manifold_node_engine::mesh::MeshVertex;
+use manifold_gpu::GpuBinding;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::{Primitive, PrimitiveSpec};
-use manifold_gpu::GpuBinding;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use std::borrow::Cow;
 
 pub const SAMPLE_TRIANGLE_GRID_CAPACITY: u32 = 8 * 8 * 8 * 3;

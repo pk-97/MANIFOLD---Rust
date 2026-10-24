@@ -166,9 +166,9 @@ pub fn fixture(kind: usize) -> Fixture {
         points,
         triangles,
         gradients,
-    #[cfg(any(test, feature = "gpu-proofs"))]
+        #[cfg(any(test, feature = "gpu-proofs"))]
         edges,
-    #[cfg(any(test, feature = "gpu-proofs"))]
+        #[cfg(any(test, feature = "gpu-proofs"))]
         cell_triangles,
     }
 }
@@ -328,7 +328,8 @@ fn flip_mesh_smoothing_and_normals_match_three_fixtures() {
             // sum can nearly cancel, amplifying tiny position roundoff in
             // the normalized direction. Check that extra range probe one
             // stage at a time; the requested 0.5 fixtures compare end-to-end.
-            let normals = flip_normals(if value > 1.0 { &replica } else { &expected }, &f.triangles);
+            let normals =
+                flip_normals(if value > 1.0 { &replica } else { &expected }, &f.triangles);
             for i in 0..expected.len() {
                 let tolerance = if value > 1.0 {
                     4e-6 * expected[i].length().max(1.0)
@@ -449,7 +450,11 @@ fn flip_field_solid_sign_and_zero_cases_match_negative_inside_convention() {
         let mut gpu_case = 0;
         for (corner, distance) in distances.into_iter().enumerate() {
             let solid = solid_mask & (1 << corner) != 0;
-            let native = if solid { (-distance).min(0.0) } else { -distance };
+            let native = if solid {
+                (-distance).min(0.0)
+            } else {
+                -distance
+            };
             let gpu = if solid { distance.max(0.0) } else { distance };
             native_case |= usize::from(native > 0.0) << corner;
             gpu_case |= usize::from(gpu < 0.0) << corner;

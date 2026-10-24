@@ -37,7 +37,11 @@ impl HardLimit {
     /// `Slider` it passes through, since a range hint never restricts what a
     /// user enters (PARAM_RANGE_CONTRACT_DESIGN.md D3 (hints never restrict)).
     pub fn clamp_input(self, v: f32, declared: (f32, f32)) -> f32 {
-        if self.is_slider() { v } else { self.clamp(v, declared) }
+        if self.is_slider() {
+            v
+        } else {
+            self.clamp(v, declared)
+        }
     }
 }
 
@@ -59,7 +63,11 @@ mod tests {
     #[test]
     fn slider_is_the_default_and_round_trips() {
         assert_eq!(HardLimit::default(), HardLimit::Slider);
-        for limit in [HardLimit::Slider, HardLimit::AtLeast(0.0), HardLimit::Between(1.0, 2.0)] {
+        for limit in [
+            HardLimit::Slider,
+            HardLimit::AtLeast(0.0),
+            HardLimit::Between(1.0, 2.0),
+        ] {
             let json = serde_json::to_string(&limit).unwrap();
             assert_eq!(serde_json::from_str::<HardLimit>(&json).unwrap(), limit);
         }

@@ -1,21 +1,26 @@
 //! Buffer extent rule owned by this node.
-use std::mem::size_of;
-use manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID;
-use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
-use manifold_water_liquid::bodies::LiquidBody;
-use manifold_water_liquid::bodies::LiquidShape;
-use manifold_physics::force_lattice::FORCE_LATTICE_RESERVE;
-use manifold_water_liquid::fields::FieldFrame;
-use manifold_nodes_physics::force_lattice::STAGING_SLOTS as FIELD_STAGING_SLOTS;
 use crate::matter::REACTION_WORDS;
 use crate::primitives::matter_domain::matter_geometry;
+use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
+use manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use manifold_nodes_physics::force_lattice::STAGING_SLOTS as FIELD_STAGING_SLOTS;
+use manifold_physics::force_lattice::FORCE_LATTICE_RESERVE;
+use manifold_water_liquid::bodies::LiquidBody;
+use manifold_water_liquid::bodies::LiquidShape;
 use manifold_water_liquid::extent::walked_roles;
+use manifold_water_liquid::fields::FieldFrame;
+use std::mem::size_of;
 
 fn matter_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let (fill, _) = walked_roles(x, "Matter")?;
-    let geometry =
-        matter_geometry(|name, default| x.scalar(name, default), x.params(), x.transform("domain"), fill).map_err(Verdict::Refused)?;
+    let geometry = matter_geometry(
+        |name, default| x.scalar(name, default),
+        x.params(),
+        x.transform("domain"),
+        fill,
+    )
+    .map_err(Verdict::Refused)?;
     for (name, value) in geometry.outputs() {
         x.publish(name, value);
     }

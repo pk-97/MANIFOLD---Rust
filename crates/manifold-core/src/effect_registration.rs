@@ -3,11 +3,11 @@
 //! Each effect submits an `EffectMetadata` from its implementation file.
 //! The definition and type registries collect these at startup.
 
-use crate::preset_type_id::PresetTypeId;
-use crate::preset_type_registry::PresetTypeRegistration;
 use crate::effects::RegistryParamDef;
 use crate::generator_registration::ParamSpec;
 use crate::preset_def::{PresetDef, PresetKind};
+use crate::preset_type_id::PresetTypeId;
+use crate::preset_type_registry::PresetTypeRegistration;
 
 /// JSON-loaded scene modifier preset metadata source. This inventory bucket
 /// stays separate from effect and generator sources so a modifier recipe is
@@ -155,7 +155,8 @@ inventory::collect!(EffectValueAliasMetadata);
 impl EffectMetadata {
     /// Convert to the unified `PresetDef` (kind = `Effect`).
     pub fn to_effect_def(&self) -> PresetDef {
-        let param_defs: Vec<RegistryParamDef> = self.params.iter().map(|p| p.to_param_def()).collect();
+        let param_defs: Vec<RegistryParamDef> =
+            self.params.iter().map(|p| p.to_param_def()).collect();
         PresetDef {
             kind: PresetKind::Effect,
             display_name: self.display_name.to_string(),

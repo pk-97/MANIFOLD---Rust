@@ -107,9 +107,15 @@ impl TraceTimeBudget {
             worst_seconds_per_pixel.max(self.seconds_per_pixel * 0.5)
         };
         let sized = (TRACE_BUFFER_TARGET_SECONDS / self.seconds_per_pixel).max(1.0);
-        let sized = if sized >= u64::MAX as f64 { u64::MAX } else { sized as u64 };
+        let sized = if sized >= u64::MAX as f64 {
+            u64::MAX
+        } else {
+            sized as u64
+        };
         let grown = self.pixels_per_tile.saturating_mul(TRACE_TILE_MAX_GROWTH);
-        self.pixels_per_tile = sized.min(grown).min(DEFAULT_TRACE_WORK_LIMITS.max_pixels_per_tile);
+        self.pixels_per_tile = sized
+            .min(grown)
+            .min(DEFAULT_TRACE_WORK_LIMITS.max_pixels_per_tile);
         if longest_buffer_seconds > TRACE_BUFFER_CEILING_SECONDS {
             self.pixels_per_tile = self.pixels_per_tile.min(TRACE_RESTART_PIXELS_PER_TILE);
         }
@@ -161,8 +167,7 @@ pub fn estimate_trace_query_units_per_pixel(
     let shadow = caster_count
         .checked_mul(u64::from(shadow_spp))
         .ok_or(TracePlanError::ArithmeticOverflow)?;
-    let primary = u64::from(ao_spp != 0 || gi_spp != 0)
-        + u64::from(reflection_spp != 0);
+    let primary = u64::from(ao_spp != 0 || gi_spp != 0) + u64::from(reflection_spp != 0);
     let ao = u64::from(ao_spp);
     let per_gi_sample = GI_BOUNCES
         .checked_mul(
@@ -390,7 +395,10 @@ mod tests {
     #[test]
     fn time_budget_starts_small_and_never_exceeds_the_default_caps() {
         let budget = TraceTimeBudget::restarted();
-        assert_eq!(budget.limits().max_pixels_per_tile, TRACE_RESTART_PIXELS_PER_TILE);
+        assert_eq!(
+            budget.limits().max_pixels_per_tile,
+            TRACE_RESTART_PIXELS_PER_TILE
+        );
         assert_eq!(
             budget.limits().max_query_units_per_tile,
             DEFAULT_TRACE_WORK_LIMITS.max_query_units_per_tile
@@ -399,7 +407,10 @@ mod tests {
         for _ in 0..8 {
             cheap.observe(1e-12, 1e-6);
         }
-        assert_eq!(cheap.pixels_per_tile(), DEFAULT_TRACE_WORK_LIMITS.max_pixels_per_tile);
+        assert_eq!(
+            cheap.pixels_per_tile(),
+            DEFAULT_TRACE_WORK_LIMITS.max_pixels_per_tile
+        );
     }
 
     #[test]
@@ -409,11 +420,17 @@ mod tests {
         budget.observe(1e-8, 1e-8 * TRACE_RESTART_PIXELS_PER_TILE as f64);
         assert_eq!(budget.pixels_per_tile(), TRACE_RESTART_PIXELS_PER_TILE * 4);
         budget.observe(1e-8, 1e-3);
-        assert_eq!(budget.pixels_per_tile(), DEFAULT_TRACE_WORK_LIMITS.max_pixels_per_tile);
+        assert_eq!(
+            budget.pixels_per_tile(),
+            DEFAULT_TRACE_WORK_LIMITS.max_pixels_per_tile
+        );
         // 1e-6 s per pixel sizes exactly target / cost.
         let mut slow = TraceTimeBudget::restarted();
         slow.observe(1e-6, 1e-3);
-        assert_eq!(slow.pixels_per_tile(), (TRACE_BUFFER_TARGET_SECONDS / 1e-6) as u64);
+        assert_eq!(
+            slow.pixels_per_tile(),
+            (TRACE_BUFFER_TARGET_SECONDS / 1e-6) as u64
+        );
         assert!(slow.pixels_per_tile() as f64 * 1e-6 <= TRACE_BUFFER_TARGET_SECONDS);
     }
 
@@ -423,11 +440,17 @@ mod tests {
         budget.observe(1e-7, 1e-3);
         let before = budget.pixels_per_tile();
         budget.observe(1e-5, 1e-3);
-        assert_eq!(budget.pixels_per_tile(), (TRACE_BUFFER_TARGET_SECONDS / 1e-5) as u64);
+        assert_eq!(
+            budget.pixels_per_tile(),
+            (TRACE_BUFFER_TARGET_SECONDS / 1e-5) as u64
+        );
         assert!(budget.pixels_per_tile() < before);
         // A cheaper round halves the estimate at most.
         budget.observe(1e-9, 1e-4);
-        assert_eq!(budget.pixels_per_tile(), (TRACE_BUFFER_TARGET_SECONDS / 5e-6) as u64);
+        assert_eq!(
+            budget.pixels_per_tile(),
+            (TRACE_BUFFER_TARGET_SECONDS / 5e-6) as u64
+        );
     }
 
     #[test]
@@ -439,7 +462,10 @@ mod tests {
         assert!(budget.pixels_per_tile() > TRACE_RESTART_PIXELS_PER_TILE);
         budget.observe(1e-10, TRACE_BUFFER_CEILING_SECONDS * 2.0);
         assert!(budget.pixels_per_tile() <= TRACE_RESTART_PIXELS_PER_TILE);
-        assert_eq!(budget.worst_buffer_seconds(), TRACE_BUFFER_CEILING_SECONDS * 2.0);
+        assert_eq!(
+            budget.worst_buffer_seconds(),
+            TRACE_BUFFER_CEILING_SECONDS * 2.0
+        );
         budget.restart();
         assert_eq!(budget, TraceTimeBudget::restarted());
     }
@@ -460,7 +486,9 @@ mod tests {
         let mut budget = TraceTimeBudget::restarted();
         budget.observe(2e-7, 1e-3);
         let limits = budget.limits();
-        let regions: Vec<_> = plan_trace_regions(3840, 2160, 8, 8, 40, limits).unwrap().collect();
+        let regions: Vec<_> = plan_trace_regions(3840, 2160, 8, 8, 40, limits)
+            .unwrap()
+            .collect();
         assert!(regions.len() > 1);
         let mut covered = 0u64;
         for region in &regions {

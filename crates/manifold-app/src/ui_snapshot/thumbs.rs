@@ -13,8 +13,8 @@
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
-use manifold_ui_paint::clip_thumb_gpu::ThumbQuad;
 use manifold_ui::panels::viewport::ClipScreenRect;
+use manifold_ui_paint::clip_thumb_gpu::ThumbQuad;
 
 use crate::content_pipeline::{
     CLIP_ATLAS_CELL_H, CLIP_ATLAS_CELL_W, CLIP_ATLAS_COLS, CLIP_ATLAS_H, CLIP_ATLAS_ROWS,
@@ -87,8 +87,8 @@ pub fn build_quads(clip_rects: &[ClipScreenRect]) -> Vec<ThumbQuad> {
         }
         // Reserve the bottom name strip, then inset by CLIP_THUMB_INSET so the well
         // frames the thumbnail as a panel — mirrors the app's clip-thumbnail pass.
-        let strip_h = manifold_ui_paint::clip_draw::clip_strip_height(cr.rect.height)
-            .unwrap_or(0.0);
+        let strip_h =
+            manifold_ui_paint::clip_draw::clip_strip_height(cr.rect.height).unwrap_or(0.0);
         let m = manifold_ui::color::CLIP_THUMB_INSET;
         let preview_h = (cr.rect.height - strip_h).max(1.0);
         let preview = Rect::new(

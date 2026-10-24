@@ -15,19 +15,19 @@
 use ahash::AHashMap;
 use manifold_gpu::{GpuBuffer, GpuTexture};
 
+use crate::content_revision::{ContentVersion, StorageRevision};
 use crate::exec::backend::Backend;
 use crate::exec::cpu_values::CpuWireWrites;
-use crate::scene::camera::Camera;
-use crate::content_revision::{ContentVersion, StorageRevision};
-use crate::scene::light::Light;
-use crate::scene::material::Material;
 use crate::parameters::ParamValue;
 use crate::ports::ArrayType;
 use crate::scene::atmosphere::Atmosphere;
+use crate::scene::camera::Camera;
+use crate::scene::light::Light;
+use crate::scene::material::Material;
+use crate::scene::mesh_source::MeshSource;
 use crate::scene::render_mode::RenderMode;
 use crate::scene::scene_object::SceneObject;
 use crate::scene::transform::Transform;
-use crate::scene::mesh_source::MeshSource;
 
 /// Opaque physical-buffer index handed out by the runtime's resource pool.
 ///
@@ -103,7 +103,10 @@ impl<'a> NodeInputs<'a> {
     }
 
     /// Thread each wired Array input's producer layout through.
-    pub(crate) fn with_array_layouts(mut self, array_layouts: &'a [(&'static str, ArrayType)]) -> Self {
+    pub(crate) fn with_array_layouts(
+        mut self,
+        array_layouts: &'a [(&'static str, ArrayType)],
+    ) -> Self {
         self.array_layouts = array_layouts;
         self
     }
@@ -111,7 +114,10 @@ impl<'a> NodeInputs<'a> {
     /// The producer's layout of the named Array input, or `None` if the port
     /// is unwired or the caller supplied no layouts.
     pub fn array_layout(&self, port: &str) -> Option<ArrayType> {
-        self.array_layouts.iter().find(|(name, _)| *name == port).map(|&(_, layout)| layout)
+        self.array_layouts
+            .iter()
+            .find(|(name, _)| *name == port)
+            .map(|&(_, layout)| layout)
     }
 
     manifold_core::testkit_visible! {
@@ -149,11 +155,7 @@ impl<'a> NodeInputs<'a> {
 
     /// View the same bindings with one camera port replaced for a render-only
     /// pass. No backend value or slot binding is changed.
-    pub fn with_camera_override(
-        mut self,
-        port: &'static str,
-        camera: Camera,
-    ) -> Self {
+    pub fn with_camera_override(mut self, port: &'static str, camera: Camera) -> Self {
         self.camera_override = Some((port, camera));
         self
     }
@@ -167,8 +169,13 @@ impl<'a> NodeInputs<'a> {
 
     /// Logical content version published for a physical slot.
     pub fn content_version_of(&self, slot: Slot) -> Option<ContentVersion> {
-        if !self.slot_content_ready(slot) { return None; }
-        self.content_versions.get(slot.0 as usize).copied().flatten()
+        if !self.slot_content_ready(slot) {
+            return None;
+        }
+        self.content_versions
+            .get(slot.0 as usize)
+            .copied()
+            .flatten()
     }
 
     /// SCENE_MODIFIER_RT_DESIGN.md §3.2: mesh revision of the physical
@@ -182,10 +189,7 @@ impl<'a> NodeInputs<'a> {
 
     /// SCENE_MODIFIER_RT_DESIGN.md §3.2: mesh revision published for a
     /// physical slot, or `None` when no mesh metadata covers it.
-    pub fn mesh_revision_of(
-        &self,
-        slot: Slot,
-    ) -> Option<crate::scene::mesh_change::MeshRevision> {
+    pub fn mesh_revision_of(&self, slot: Slot) -> Option<crate::scene::mesh_change::MeshRevision> {
         self.mesh_revisions.get(slot.0 as usize).copied()
     }
 
@@ -374,7 +378,10 @@ impl<'a> NodeInputs<'a> {
     /// Write generation of an already-resolved [`Slot`] — no name scan,
     /// unlike [`Self::storage_revision`].
     pub fn storage_revision_of(&self, slot: Slot) -> Option<StorageRevision> {
-        self.generations.get(slot.0 as usize).copied().map(StorageRevision)
+        self.generations
+            .get(slot.0 as usize)
+            .copied()
+            .map(StorageRevision)
     }
 
     /// Content availability of an already-resolved [`Slot`]: `false`
@@ -389,7 +396,8 @@ impl<'a> NodeInputs<'a> {
     /// True when the named port is wired and its producer declared it
     /// pending. Unwired ports are never pending.
     pub fn port_pending(&self, port: &str) -> bool {
-        self.slot(port).is_some_and(|slot| !self.slot_content_ready(slot))
+        self.slot(port)
+            .is_some_and(|slot| !self.slot_content_ready(slot))
     }
 
     /// True when any wired input is pending. Only a node that runs with
@@ -582,13 +590,18 @@ impl<'a> NodeOutputs<'a> {
     /// borrow.
     pub fn texture_2d(&self, port: &str) -> Option<&'a GpuTexture> {
         let slot = self.slot(port)?;
-        if self.backend.provided_texture_descriptor(slot).is_some() { return None; }
+        if self.backend.provided_texture_descriptor(slot).is_some() {
+            return None;
+        }
         self.backend.texture_2d(slot)
     }
 
     /// Descriptor for an immutable texture supplied by the node. None means
     /// the caller must use the ordinary writable/prebound output path.
-    pub fn provided_texture_descriptor(&self, port: &str) -> Option<manifold_gpu::GpuTextureDesc<'static>> {
+    pub fn provided_texture_descriptor(
+        &self,
+        port: &str,
+    ) -> Option<manifold_gpu::GpuTextureDesc<'static>> {
         self.backend.provided_texture_descriptor(self.slot(port)?)
     }
 
@@ -707,8 +720,8 @@ mod array_accessor_tests {
     use manifold_gpu::GpuTextureFormat;
 
     use super::*;
-    use crate::exec::metal_backend::MetalBackend;
     use crate::exec::execution_plan::ResourceId;
+    use crate::exec::metal_backend::MetalBackend;
 
     #[test]
     fn inputs_array_resolves_pre_bound_buffer_by_port_name() {
@@ -771,28 +784,11 @@ mod camera_override_tests {
     #[test]
     fn camera_override_is_scoped_to_the_named_port() {
         let mut backend = crate::exec::backend::MockBackend::new();
-        let camera_slot = backend.acquire(
-            ResourceId(0),
-            PortType::Camera,
-            None,
-            (0, 0),
-        );
-        let other_slot = backend.acquire(
-            ResourceId(1),
-            PortType::Camera,
-            None,
-            (0, 0),
-        );
+        let camera_slot = backend.acquire(ResourceId(0), PortType::Camera, None, (0, 0));
+        let other_slot = backend.acquire(ResourceId(1), PortType::Camera, None, (0, 0));
         let underlying = Camera::default_perspective();
-        let override_camera = Camera::from_pos_euler(
-            [1.0, 2.0, -4.0],
-            0.2,
-            -0.1,
-            0.0,
-            0.8,
-            0.05,
-            200.0,
-        );
+        let override_camera =
+            Camera::from_pos_euler([1.0, 2.0, -4.0], 0.2, -0.1, 0.0, 0.8, 0.05, 200.0);
         Backend::set_camera(&mut backend, camera_slot, underlying);
         Backend::set_camera(&mut backend, other_slot, underlying);
         let bindings = [("camera", camera_slot), ("other", other_slot)];

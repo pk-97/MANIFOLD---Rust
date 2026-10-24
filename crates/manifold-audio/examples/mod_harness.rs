@@ -88,8 +88,15 @@ const BAND_COLORS: [[u8; 3]; 4] = [
     [102, 255, 128], // Mid — green (0.40, 1.0, 0.50)
     [115, 184, 255], // High — blue (0.45, 0.72, 1.0)
 ];
-const FEATURE_NAMES: [&str; 7] =
-    ["AMPLITUDE", "BRIGHTNESS", "NOISINESS", "LIVELINESS", "TRANSIENTS", "PITCH", "PRESENCE"];
+const FEATURE_NAMES: [&str; 7] = [
+    "AMPLITUDE",
+    "BRIGHTNESS",
+    "NOISINESS",
+    "LIVELINESS",
+    "TRANSIENTS",
+    "PITCH",
+    "PRESENCE",
+];
 /// Index of `PITCH`/`PRESENCE` in [`FEATURE_NAMES`] — the P2 D5 tracker
 /// outputs, appended below the original five (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P2).
 const PITCH_IDX: usize = 5;
@@ -158,15 +165,21 @@ fn parse_args() -> Result<Args, String> {
     let mut i = 0;
     let next = |i: &mut usize| -> Result<String, String> {
         *i += 1;
-        argv.get(*i).cloned().ok_or_else(|| format!("missing value after {}", argv[*i - 1]))
+        argv.get(*i)
+            .cloned()
+            .ok_or_else(|| format!("missing value after {}", argv[*i - 1]))
     };
     while i < argv.len() {
         match argv[i].as_str() {
             "--out" => args.out = next(&mut i)?,
             "--low" => args.low_hz = next(&mut i)?.parse().map_err(|e| format!("--low: {e}"))?,
             "--mid" => args.mid_hz = next(&mut i)?.parse().map_err(|e| format!("--mid: {e}"))?,
-            "--floor" => args.floor_db = next(&mut i)?.parse().map_err(|e| format!("--floor: {e}"))?,
-            "--start" => args.start_s = next(&mut i)?.parse().map_err(|e| format!("--start: {e}"))?,
+            "--floor" => {
+                args.floor_db = next(&mut i)?.parse().map_err(|e| format!("--floor: {e}"))?
+            }
+            "--start" => {
+                args.start_s = next(&mut i)?.parse().map_err(|e| format!("--start: {e}"))?
+            }
             "--dur" => args.dur_s = next(&mut i)?.parse().map_err(|e| format!("--dur: {e}"))?,
             "--selftest" => args.selftest = true,
             "--csv" => args.csv_dir = Some(next(&mut i)?),
@@ -181,7 +194,10 @@ fn parse_args() -> Result<Args, String> {
     }
     if args.out.is_empty() {
         args.out = match &args.input {
-            Some(p) => format!("{}.features.png", p.trim_end_matches(|c| c != '.').trim_end_matches('.')),
+            Some(p) => format!(
+                "{}.features.png",
+                p.trim_end_matches(|c| c != '.').trim_end_matches('.')
+            ),
             None => "mod_harness_selftest.png".into(),
         };
     }
@@ -195,7 +211,11 @@ fn parse_args() -> Result<Args, String> {
 fn parse_bpm_from_path(path: &str) -> Option<f32> {
     let p = std::path::Path::new(path);
     let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    let parent = p.parent().and_then(|d| d.file_name()).and_then(|s| s.to_str()).unwrap_or("");
+    let parent = p
+        .parent()
+        .and_then(|d| d.file_name())
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
     parse_bpm_from_str(stem).or_else(|| parse_bpm_from_str(parent))
 }
 
@@ -285,7 +305,14 @@ fn main() {
         // File inputs carry no known ground truth; BPM auto-parses from the
         // path unless `--bpm` was given.
         let bpm = args.bpm.or_else(|| parse_bpm_from_path(&path));
-        vec![(path, mono[start..start + len].to_vec(), sr, args.out.clone(), gt_none as GroundTruthFn, bpm)]
+        vec![(
+            path,
+            mono[start..start + len].to_vec(),
+            sr,
+            args.out.clone(),
+            gt_none as GroundTruthFn,
+            bpm,
+        )]
     };
 
     for (label, mono, sr, out, gt, bpm) in &jobs {
@@ -317,7 +344,11 @@ fn analyze_and_render(
     let cfg = SpectrogramConfig::default().with_time_grid_for(sr as f32);
     let mut an = StreamingSendAnalyzer::new(sr, args.low_hz, args.mid_hz);
     let hop = an.hop().max(1);
-    debug_assert_eq!(hop, cfg.hop.max(1), "harness grid must match the analyzer's");
+    debug_assert_eq!(
+        hop,
+        cfg.hop.max(1),
+        "harness grid must match the analyzer's"
+    );
     let dt = hop as f32 / sr as f32;
     an.set_floor_db(args.floor_db);
     an.set_scope(true);
@@ -344,7 +375,8 @@ fn analyze_and_render(
     // The trained kick detector, inline as offline export runs it: its fires are queued
     // before the analyzer sees the same samples, so each lands on the hop that contains it.
     let mut kick =
-        manifold_audio::detectors::detector(manifold_audio::detectors::EventKind::Kick, sr).expect("embedded kick model");
+        manifold_audio::detectors::detector(manifold_audio::detectors::EventKind::Kick, sr)
+            .expect("embedded kick model");
     let mut kick_fires = Vec::new();
 
     for chunk in mono.chunks(hop) {
@@ -388,7 +420,11 @@ fn analyze_and_render(
             };
             // P2: the Full tracker's Hz reading, NaN until it has acquired at
             // least once this clip (see the module doc's CSV column note).
-            let tracked_f0_hz = if f.pitch_confidence > 0.0 { f.pitch_hz } else { f32::NAN };
+            let tracked_f0_hz = if f.pitch_confidence > 0.0 {
+                f.pitch_hz
+            } else {
+                f32::NAN
+            };
             records.push(HopRecord {
                 col,
                 centroid_yfb: scalar.centroids,
@@ -458,13 +494,19 @@ fn analyze_and_render(
             }
             let want = gt_bin(f0);
             total += 1;
-            let tilted: Vec<f32> = r.col.iter().zip(tilt_w.iter()).map(|(&c, &w)| c * w).collect();
+            let tilted: Vec<f32> = r
+                .col
+                .iter()
+                .zip(tilt_w.iter())
+                .map(|(&c, &w)| c * w)
+                .collect();
             if let Some(nb) = naive_argmax_bin(&tilted)
                 && (nb - want).abs() <= 2.0
             {
                 naive_hits += 1;
             }
-            let hit = r.salience_f0_hz.is_finite() && (gt_bin(r.salience_f0_hz) - want).abs() <= 2.0;
+            let hit =
+                r.salience_f0_hz.is_finite() && (gt_bin(r.salience_f0_hz) - want).abs() <= 2.0;
             if hit {
                 sal_hits += 1;
                 miss_run = 0;
@@ -553,8 +595,14 @@ fn print_p3_fires(label: &str, records: &[HopRecord]) {
     const FULL: usize = 0;
     const LOW: usize = 1;
     let post = &records[WARMUP_HOPS.min(records.len())..];
-    let full_fires = post.iter().filter(|r| r.raw[TRANSIENTS_IDX][FULL] > 0.999).count();
-    let low_fires = post.iter().filter(|r| r.raw[TRANSIENTS_IDX][LOW] > 0.999).count();
+    let full_fires = post
+        .iter()
+        .filter(|r| r.raw[TRANSIENTS_IDX][FULL] > 0.999)
+        .count();
+    let low_fires = post
+        .iter()
+        .filter(|r| r.raw[TRANSIENTS_IDX][LOW] > 0.999)
+        .count();
     let kick_fires = post.iter().filter(|r| r.kick > 0.999).count();
     println!(
         "P3 {label}: full_fires={full_fires} low_fires={low_fires} kick_fires={kick_fires} (gates: dive full 0, kicks low == 8, busymix low >= 7, densemix low >= 6, riser full 0, growl full 0)"
@@ -588,12 +636,19 @@ fn print_p2_gates(label: &str, records: &[HopRecord], dt: f32, ground_truth: Gro
     const LOW: usize = 1;
 
     let gate = |metric: &str, value: f64, op: &str, bound: f64, pass: bool| {
-        println!("P2 {label}: {metric}={value:.4} (gate {op} {bound}) {}", if pass { "PASS" } else { "FAIL" });
+        println!(
+            "P2 {label}: {metric}={value:.4} (gate {op} {bound}) {}",
+            if pass { "PASS" } else { "FAIL" }
+        );
     };
 
     match label {
         "dive" => {
-            let acquired: Vec<&HopRecord> = records.iter().skip(WARMUP_HOPS).filter(|r| r.tracked_f0_hz.is_finite()).collect();
+            let acquired: Vec<&HopRecord> = records
+                .iter()
+                .skip(WARMUP_HOPS)
+                .filter(|r| r.tracked_f0_hz.is_finite())
+                .collect();
             if acquired.len() < 2 {
                 gate("max_delta_st", f64::NAN, "<=", 1.0, false);
                 gate("mean_delta_st_per_hop", f64::NAN, "<=", 0.15, false);
@@ -624,9 +679,27 @@ fn print_p2_gates(label: &str, records: &[HopRecord], dt: f32, ground_truth: Gro
             }
             let within_pct = 100.0 * within as f64 / total_gt.max(1) as f64;
 
-            gate("max_delta_st", max_delta as f64, "<=", 1.0, max_delta <= 1.0);
-            gate("mean_delta_st_per_hop", mean_delta, "<=", 0.15, mean_delta <= 0.15);
-            gate("pct_within_1st_of_gt", within_pct, ">=", 95.0, within_pct >= 95.0);
+            gate(
+                "max_delta_st",
+                max_delta as f64,
+                "<=",
+                1.0,
+                max_delta <= 1.0,
+            );
+            gate(
+                "mean_delta_st_per_hop",
+                mean_delta,
+                "<=",
+                0.15,
+                mean_delta <= 0.15,
+            );
+            gate(
+                "pct_within_1st_of_gt",
+                within_pct,
+                ">=",
+                95.0,
+                within_pct >= 95.0,
+            );
         }
         "wobble" | "growl" => {
             let semis: Vec<f64> = records
@@ -646,7 +719,10 @@ fn print_p2_gates(label: &str, records: &[HopRecord], dt: f32, ground_truth: Gro
         }
         "riser" => {
             let post = &records[WARMUP_HOPS.min(records.len())..];
-            let quiet = post.iter().filter(|r| r.raw[PRESENCE_IDX][FULL] <= 0.15).count();
+            let quiet = post
+                .iter()
+                .filter(|r| r.raw[PRESENCE_IDX][FULL] <= 0.15)
+                .count();
             let quiet_pct = 100.0 * quiet as f64 / post.len().max(1) as f64;
 
             // Schmitt counter (BUG-043 follow-up, 2026-07-06): an
@@ -671,14 +747,35 @@ fn print_p2_gates(label: &str, records: &[HopRecord], dt: f32, ground_truth: Gro
                 }
             }
 
-            gate("pct_hops_full_presence_le_0.15", quiet_pct, ">=", 90.0, quiet_pct >= 90.0);
-            gate("distinct_full_acquisitions", acquisitions as f64, "<=", 2.0, acquisitions <= 2);
+            gate(
+                "pct_hops_full_presence_le_0.15",
+                quiet_pct,
+                ">=",
+                90.0,
+                quiet_pct >= 90.0,
+            );
+            gate(
+                "distinct_full_acquisitions",
+                acquisitions as f64,
+                "<=",
+                2.0,
+                acquisitions <= 2,
+            );
         }
         "kicks" => {
             let post = &records[WARMUP_HOPS.min(records.len())..];
-            let hot = post.iter().filter(|r| r.raw[PRESENCE_IDX][LOW] > 0.5).count();
+            let hot = post
+                .iter()
+                .filter(|r| r.raw[PRESENCE_IDX][LOW] > 0.5)
+                .count();
             let hot_pct = 100.0 * hot as f64 / post.len().max(1) as f64;
-            gate("pct_hops_low_presence_gt_0.5", hot_pct, "<=", 20.0, hot_pct <= 20.0);
+            gate(
+                "pct_hops_low_presence_gt_0.5",
+                hot_pct,
+                "<=",
+                20.0,
+                hot_pct <= 20.0,
+            );
         }
         "sub" => {
             // BUG-043 floor-anchor oracle: the Full tracker must sit ON the
@@ -699,12 +796,27 @@ fn print_p2_gates(label: &str, records: &[HopRecord], dt: f32, ground_truth: Gro
                 }
             }
             let within_pct = 100.0 * within as f64 / total_gt.max(1) as f64;
-            gate("pct_within_1st_of_gt", within_pct, ">=", 95.0, within_pct >= 95.0);
+            gate(
+                "pct_within_1st_of_gt",
+                within_pct,
+                ">=",
+                95.0,
+                within_pct >= 95.0,
+            );
 
             let post = &records[WARMUP_HOPS.min(records.len())..];
-            let hot = post.iter().filter(|r| r.raw[PRESENCE_IDX][LOW] >= 0.25).count();
+            let hot = post
+                .iter()
+                .filter(|r| r.raw[PRESENCE_IDX][LOW] >= 0.25)
+                .count();
             let hot_pct = 100.0 * hot as f64 / post.len().max(1) as f64;
-            gate("pct_hops_low_presence_ge_0.25", hot_pct, ">=", 90.0, hot_pct >= 90.0);
+            gate(
+                "pct_hops_low_presence_ge_0.25",
+                hot_pct,
+                ">=",
+                90.0,
+                hot_pct >= 90.0,
+            );
         }
         _ => {}
     }
@@ -725,7 +837,10 @@ fn print_p2b_gates(label: &str, records: &[HopRecord], dt: f32, ground_truth: Gr
     const MID: usize = 2;
 
     let gate = |metric: &str, value: f64, op: &str, bound: f64, pass: bool| {
-        println!("P2b {label}: {metric}={value:.4} (gate {op} {bound}) {}", if pass { "PASS" } else { "FAIL" });
+        println!(
+            "P2b {label}: {metric}={value:.4} (gate {op} {bound}) {}",
+            if pass { "PASS" } else { "FAIL" }
+        );
     };
 
     match label {
@@ -733,11 +848,24 @@ fn print_p2b_gates(label: &str, records: &[HopRecord], dt: f32, ground_truth: Gr
             // A near-empty band must read near-zero presence: the Low-band
             // subharmonic ghost (fundamental still up around 1200 Hz) must
             // not read as present in the clip's first 2.0 s.
-            let early: Vec<&HopRecord> =
-                records.iter().enumerate().filter(|&(idx, _)| (idx as f32 * dt) < 2.0).map(|(_, r)| r).collect();
-            let quiet_low = early.iter().filter(|r| r.raw[PRESENCE_IDX][LOW] < 0.25).count();
+            let early: Vec<&HopRecord> = records
+                .iter()
+                .enumerate()
+                .filter(|&(idx, _)| (idx as f32 * dt) < 2.0)
+                .map(|(_, r)| r)
+                .collect();
+            let quiet_low = early
+                .iter()
+                .filter(|r| r.raw[PRESENCE_IDX][LOW] < 0.25)
+                .count();
             let quiet_low_pct = 100.0 * quiet_low as f64 / early.len().max(1) as f64;
-            gate("pct_hops_low_presence_lt_0.25_first_2s", quiet_low_pct, ">=", 95.0, quiet_low_pct >= 95.0);
+            gate(
+                "pct_hops_low_presence_lt_0.25_first_2s",
+                quiet_low_pct,
+                ">=",
+                95.0,
+                quiet_low_pct >= 95.0,
+            );
 
             // A correctly tracked in-band object must clear the display bar
             // while it's genuinely inside that band: Mid = 250-2000 Hz,
@@ -751,23 +879,56 @@ fn print_p2b_gates(label: &str, records: &[HopRecord], dt: f32, ground_truth: Gr
                 })
                 .map(|(_, r)| r)
                 .collect();
-            let hot_mid = mid_band.iter().filter(|r| r.raw[PRESENCE_IDX][MID] >= 0.25).count();
+            let hot_mid = mid_band
+                .iter()
+                .filter(|r| r.raw[PRESENCE_IDX][MID] >= 0.25)
+                .count();
             let hot_mid_pct = 100.0 * hot_mid as f64 / mid_band.len().max(1) as f64;
-            gate("pct_hops_mid_presence_ge_0.25_while_f0_in_mid", hot_mid_pct, ">=", 90.0, hot_mid_pct >= 90.0);
+            gate(
+                "pct_hops_mid_presence_ge_0.25_while_f0_in_mid",
+                hot_mid_pct,
+                ">=",
+                90.0,
+                hot_mid_pct >= 90.0,
+            );
 
             // Full presence must stay high once the Full tracker has
             // genuinely acquired the glide (same "post-acquisition" filter
             // the P2 dive gate above uses: `tracked_f0_hz` finite).
-            let acquired: Vec<&HopRecord> = records.iter().filter(|r| r.tracked_f0_hz.is_finite()).collect();
-            let hot_full = acquired.iter().filter(|r| r.raw[PRESENCE_IDX][FULL] >= 0.5).count();
+            let acquired: Vec<&HopRecord> = records
+                .iter()
+                .filter(|r| r.tracked_f0_hz.is_finite())
+                .collect();
+            let hot_full = acquired
+                .iter()
+                .filter(|r| r.raw[PRESENCE_IDX][FULL] >= 0.5)
+                .count();
             let hot_full_pct = 100.0 * hot_full as f64 / acquired.len().max(1) as f64;
-            gate("pct_hops_full_presence_ge_0.5_post_acquisition", hot_full_pct, ">=", 90.0, hot_full_pct >= 90.0);
+            gate(
+                "pct_hops_full_presence_ge_0.5_post_acquisition",
+                hot_full_pct,
+                ">=",
+                90.0,
+                hot_full_pct >= 90.0,
+            );
         }
         "growl" => {
-            let acquired: Vec<&HopRecord> = records.iter().filter(|r| r.tracked_f0_hz.is_finite()).collect();
-            let hot_full = acquired.iter().filter(|r| r.raw[PRESENCE_IDX][FULL] >= 0.5).count();
+            let acquired: Vec<&HopRecord> = records
+                .iter()
+                .filter(|r| r.tracked_f0_hz.is_finite())
+                .collect();
+            let hot_full = acquired
+                .iter()
+                .filter(|r| r.raw[PRESENCE_IDX][FULL] >= 0.5)
+                .count();
             let hot_full_pct = 100.0 * hot_full as f64 / acquired.len().max(1) as f64;
-            gate("pct_hops_full_presence_ge_0.5_post_acquisition", hot_full_pct, ">=", 90.0, hot_full_pct >= 90.0);
+            gate(
+                "pct_hops_full_presence_ge_0.5_post_acquisition",
+                hot_full_pct,
+                ">=",
+                90.0,
+                hot_full_pct >= 90.0,
+            );
         }
         _ => {}
     }
@@ -783,7 +944,10 @@ fn print_p2b_gates(label: &str, records: &[HopRecord], dt: f32, ground_truth: Gr
 fn print_p2c_gates(records: &[HopRecord], dt: f32, ground_truth: GroundTruthFn) {
     const FULL: usize = 0;
     let gate = |metric: &str, value: f64, op: &str, bound: f64, pass: bool| {
-        println!("P2c notes: {metric}={value:.4} (gate {op} {bound}) {}", if pass { "PASS" } else { "FAIL" });
+        println!(
+            "P2c notes: {metric}={value:.4} (gate {op} {bound}) {}",
+            if pass { "PASS" } else { "FAIL" }
+        );
     };
 
     let grid = notes_eighth_s();
@@ -802,9 +966,18 @@ fn print_p2c_gates(records: &[HopRecord], dt: f32, ground_truth: GroundTruthFn) 
         })
         .map(|(_, r)| r)
         .collect();
-    let hot = sounding_after_warmup.iter().filter(|r| r.raw[PRESENCE_IDX][FULL] >= 0.4).count();
+    let hot = sounding_after_warmup
+        .iter()
+        .filter(|r| r.raw[PRESENCE_IDX][FULL] >= 0.4)
+        .count();
     let hot_pct = 100.0 * hot as f64 / sounding_after_warmup.len().max(1) as f64;
-    gate("pct_sounding_hops_full_presence_ge_0.4_after_note2", hot_pct, ">=", 60.0, hot_pct >= 60.0);
+    gate(
+        "pct_sounding_hops_full_presence_ge_0.4_after_note2",
+        hot_pct,
+        ">=",
+        60.0,
+        hot_pct >= 60.0,
+    );
 
     // Pitch accuracy: within +/-1 st of ground truth on sounding hops, from
     // the Full tracker's first acquisition onward.
@@ -823,7 +996,13 @@ fn print_p2c_gates(records: &[HopRecord], dt: f32, ground_truth: GroundTruthFn) 
         }
     }
     let within_pct = 100.0 * within as f64 / total.max(1) as f64;
-    gate("pct_sounding_hops_within_1st_of_gt_post_acquisition", within_pct, ">=", 90.0, within_pct >= 90.0);
+    gate(
+        "pct_sounding_hops_within_1st_of_gt_post_acquisition",
+        within_pct,
+        ">=",
+        90.0,
+        within_pct >= 90.0,
+    );
 
     // The octave note (bar 2): tracked pitch must reach within +/-1 st of
     // 300 Hz somewhere inside that note's sounding window (the re-acquire
@@ -844,9 +1023,19 @@ fn print_p2c_gates(records: &[HopRecord], dt: f32, ground_truth: GroundTruthFn) 
     }
     println!(
         "P2c notes: max_tracked_f0_hz_during_jump_note={}",
-        if max_tracked.is_finite() { format!("{max_tracked:.2}") } else { "NaN".to_string() }
+        if max_tracked.is_finite() {
+            format!("{max_tracked:.2}")
+        } else {
+            "NaN".to_string()
+        }
     );
-    gate("octave_note_reaches_within_1st_of_300hz", if reached { 1.0 } else { 0.0 }, "==", 1.0, reached);
+    gate(
+        "octave_note_reaches_within_1st_of_300hz",
+        if reached { 1.0 } else { 0.0 },
+        "==",
+        1.0,
+        reached,
+    );
 }
 
 /// One `<dir>/<label>.csv`, one row per hop: hop index, time, ground-truth
@@ -880,7 +1069,11 @@ fn write_csv(dir: &str, label: &str, records: &[HopRecord], dt: f32, ground_trut
     csv.push('\n');
     for (idx, r) in records.iter().enumerate() {
         let t = idx as f32 * dt;
-        csv.push_str(&format!("{idx},{t:.6},{},{}", ground_truth(t), r.salience_f0_hz));
+        csv.push_str(&format!(
+            "{idx},{t:.6},{},{}",
+            ground_truth(t),
+            r.salience_f0_hz
+        ));
         for b in 0..4 {
             for fi in 0..5 {
                 csv.push_str(&format!(",{}", r.raw[fi][b]));
@@ -888,7 +1081,10 @@ fn write_csv(dir: &str, label: &str, records: &[HopRecord], dt: f32, ground_trut
         }
         csv.push_str(&format!(",{}", r.tracked_f0_hz));
         for b in 0..4 {
-            csv.push_str(&format!(",{},{}", r.raw[PITCH_IDX][b], r.raw[PRESENCE_IDX][b]));
+            csv.push_str(&format!(
+                ",{},{}",
+                r.raw[PITCH_IDX][b], r.raw[PRESENCE_IDX][b]
+            ));
         }
         csv.push('\n');
     }
@@ -937,15 +1133,30 @@ type GroundTruthFn = fn(f32) -> f32;
 /// band fires must still catch most of the 8 kicks.
 fn synth_selftests() -> Vec<(&'static str, Vec<f32>, GroundTruthFn, Option<f32>)> {
     vec![
-        ("dive", soft_clip(synth_dive()), gt_dive as GroundTruthFn, None),
+        (
+            "dive",
+            soft_clip(synth_dive()),
+            gt_dive as GroundTruthFn,
+            None,
+        ),
         ("wobble", soft_clip(synth_wobble()), gt_const_150, None),
         ("kicks", soft_clip(synth_kicks(Vec::new())), gt_none, None),
-        ("busymix", soft_clip(synth_kicks(synth_busy_pad())), gt_none, None),
+        (
+            "busymix",
+            soft_clip(synth_kicks(synth_busy_pad())),
+            gt_none,
+            None,
+        ),
         ("riser", soft_clip(synth_riser()), gt_none, None),
         ("growl", soft_clip(synth_growl()), gt_const_150, None),
         ("notes", soft_clip(synth_notes()), gt_notes, Some(NOTES_BPM)),
         ("sub", soft_clip(synth_sub()), gt_const_45, None),
-        ("densemix", soft_clip(synth_kicks(synth_dense_bed())), gt_none, None),
+        (
+            "densemix",
+            soft_clip(synth_kicks(synth_dense_bed())),
+            gt_none,
+            None,
+        ),
     ]
 }
 
@@ -994,7 +1205,11 @@ fn notes_ramp_s() -> f32 {
 /// `150 Hz` for every note except [`NOTES_JUMP_NOTE_INDEX`], which jumps an
 /// octave to `300 Hz`.
 fn note_freq(i: usize) -> f32 {
-    if i == NOTES_JUMP_NOTE_INDEX { 300.0 } else { 150.0 }
+    if i == NOTES_JUMP_NOTE_INDEX {
+        300.0
+    } else {
+        150.0
+    }
 }
 /// How many notes `synth_notes` actually writes: the last grid slot before
 /// the clip end. `gt_notes` MUST share this bound — an unbounded index
@@ -1017,7 +1232,11 @@ fn gt_notes(t: f32) -> f32 {
         return f32::NAN;
     }
     let note_start = i as f32 * grid;
-    if t < note_start + notes_sound_s() { note_freq(i) } else { f32::NAN }
+    if t < note_start + notes_sound_s() {
+        note_freq(i)
+    } else {
+        f32::NAN
+    }
 }
 
 fn selftest_buf() -> Vec<f32> {
@@ -1078,7 +1297,11 @@ fn synth_busy_pad() -> Vec<f32> {
 /// Kick every 0.5 s — a 90 ms pitch-swept sine 120→45 Hz with exp decay —
 /// added onto `base` (empty ⇒ kicks on silence).
 fn synth_kicks(base: Vec<f32>) -> Vec<f32> {
-    let mut out = if base.is_empty() { selftest_buf() } else { base };
+    let mut out = if base.is_empty() {
+        selftest_buf()
+    } else {
+        base
+    };
     let n = out.len();
     let srf = SELFTEST_SR as f32;
     for k in 0..(2 * SELFTEST_SECS) {
@@ -1327,21 +1550,32 @@ fn render_png(
 
     let lanes = FEATURE_NAMES.len();
     let img_w = w + 2 * MARGIN;
-    let img_h = TITLE_H + SPEC_H + LANE_GAP + lanes * (LANE_LABEL_H + LANE_H + LANE_GAP) + AXIS_H + 2 * MARGIN;
+    let img_h = TITLE_H
+        + SPEC_H
+        + LANE_GAP
+        + lanes * (LANE_LABEL_H + LANE_H + LANE_GAP)
+        + AXIS_H
+        + 2 * MARGIN;
     let mut img = image::RgbImage::from_pixel(img_w as u32, img_h as u32, image::Rgb([12, 12, 16]));
 
     let x0 = MARGIN;
     let mut y = MARGIN;
 
     // Title: config + legend.
-    draw_text(&mut img, x0, y, &format!(
-        "SPECTROGRAM {:.0}-{:.0}HZ  LOW<{:.0}  MID<{:.0}  HOP {:.1}MS   LANES: RAW DIM / SMOOTHED BRIGHT   FULL LOW MID HIGH",
-        cfg.fmin,
-        cfg.effective_fmax(sr as f32),
-        low_hz,
-        mid_hz,
-        dt * 1000.0
-    ), [180, 180, 190]);
+    draw_text(
+        &mut img,
+        x0,
+        y,
+        &format!(
+            "SPECTROGRAM {:.0}-{:.0}HZ  LOW<{:.0}  MID<{:.0}  HOP {:.1}MS   LANES: RAW DIM / SMOOTHED BRIGHT   FULL LOW MID HIGH",
+            cfg.fmin,
+            cfg.effective_fmax(sr as f32),
+            low_hz,
+            mid_hz,
+            dt * 1000.0
+        ),
+        [180, 180, 190],
+    );
     // Legend swatches after the text (positions chosen to sit over the trailing words).
     y += TITLE_H;
     // Top of the spectrogram — also the top of the BPM gridline overlay
@@ -1359,7 +1593,8 @@ fn render_png(
         let (lo, hi) = bucket(x);
         for py in 0..SPEC_H {
             let uv_y = py as f32 / (SPEC_H - 1) as f32; // 0 top → 1 bottom
-            let log_bin_f = ((1.0 - uv_y) * (num_bins - 1) as f32).clamp(0.0, (num_bins - 1) as f32);
+            let log_bin_f =
+                ((1.0 - uv_y) * (num_bins - 1) as f32).clamp(0.0, (num_bins - 1) as f32);
             let b_lo = log_bin_f as usize;
             let b_hi = (b_lo + 1).min(num_bins - 1);
             let frac = log_bin_f - b_lo as f32;
@@ -1380,7 +1615,11 @@ fn render_png(
         ((cfg.bpo as f32 * (hz / cfg.fmin.max(1.0)).max(1e-6).log2()).round() as i64)
             .clamp(1, num_bins as i64 - 1) as usize
     };
-    let inv_nb = if num_bins > 1 { 1.0 / (num_bins - 1) as f32 } else { 0.0 };
+    let inv_nb = if num_bins > 1 {
+        1.0 / (num_bins - 1) as f32
+    } else {
+        0.0
+    };
     for hz in [low_hz, mid_hz] {
         let py = SPEC_H - 1 - (bin_of(hz) as f32 * inv_nb * (SPEC_H - 1) as f32) as usize;
         for x in 0..w {
@@ -1408,7 +1647,13 @@ fn render_png(
             let py = SPEC_H - 1 - (sal_yfb * (SPEC_H - 1) as f32) as usize;
             for dy in 0..2usize {
                 for dx in 0..2usize {
-                    blend_pixel(&mut img, x0 + x + dx, y + py.saturating_sub(dy), [255, 250, 235], 0.95);
+                    blend_pixel(
+                        &mut img,
+                        x0 + x + dx,
+                        y + py.saturating_sub(dy),
+                        [255, 250, 235],
+                        0.95,
+                    );
                 }
             }
         }
@@ -1418,9 +1663,15 @@ fn render_png(
         // up here with no harness change).
         let lane_px = (SPEC_H as f32 * manifold_spectral::LANE_HEIGHT_FRAC) as usize;
         for (oi, [r, g, b]) in ScopeOnsets::LANE_COLORS.into_iter().enumerate() {
-            let tick_color =
-                [(r * 255.0).round() as u8, (g * 255.0).round() as u8, (b * 255.0).round() as u8];
-            if records[lo..hi].iter().any(|rec| rec.onsets.lanes()[oi] > 0.5) {
+            let tick_color = [
+                (r * 255.0).round() as u8,
+                (g * 255.0).round() as u8,
+                (b * 255.0).round() as u8,
+            ];
+            if records[lo..hi]
+                .iter()
+                .any(|rec| rec.onsets.lanes()[oi] > 0.5)
+            {
                 let lane_bottom = SPEC_H - oi * lane_px;
                 for py in (lane_bottom - lane_px)..lane_bottom {
                     blend_pixel(&mut img, x0 + x, y + py, tick_color, 0.85);
@@ -1437,7 +1688,11 @@ fn render_png(
         // Lane background + gridlines at 0.5.
         for py in 0..LANE_H {
             for x in 0..w {
-                let base = if py == LANE_H / 2 { [30, 30, 38] } else { [18, 18, 24] };
+                let base = if py == LANE_H / 2 {
+                    [30, 30, 38]
+                } else {
+                    [18, 18, 24]
+                };
                 img.put_pixel((x0 + x) as u32, (y + py) as u32, image::Rgb(base));
             }
         }
@@ -1448,7 +1703,9 @@ fn render_png(
                 // where that SAME band's presence has cleared the bar — a
                 // low-confidence pitch reading is a held/stale position, not
                 // a real one. PRESENCE (and every other lane) always draws.
-                let visible = |r: &HopRecord| fi != PITCH_IDX || r.raw[PRESENCE_IDX][b] >= PITCH_DISPLAY_PRESENCE;
+                let visible = |r: &HopRecord| {
+                    fi != PITCH_IDX || r.raw[PRESENCE_IDX][b] >= PITCH_DISPLAY_PRESENCE
+                };
 
                 // Raw: min..max span, dim — the honest jitter.
                 let (mut mn, mut mx) = (f32::MAX, f32::MIN);
@@ -1464,7 +1721,8 @@ fn render_png(
                 if !any {
                     continue;
                 }
-                let py_of = |v: f32| LANE_H - 1 - ((v.clamp(0.0, 1.0)) * (LANE_H - 1) as f32) as usize;
+                let py_of =
+                    |v: f32| LANE_H - 1 - ((v.clamp(0.0, 1.0)) * (LANE_H - 1) as f32) as usize;
                 for py in py_of(mx)..=py_of(mn) {
                     blend_pixel(&mut img, x0 + x, y + py, color, 0.22);
                 }
@@ -1521,7 +1779,13 @@ fn render_png(
         for py in 0..5 {
             blend_pixel(&mut img, x0 + x, y + py, [200, 200, 210], 0.8);
         }
-        draw_text(&mut img, x0 + x + 2, y + 6, &format!("{sec}S"), [140, 140, 150]);
+        draw_text(
+            &mut img,
+            x0 + x + 2,
+            y + 6,
+            &format!("{sec}S"),
+            [140, 140, 150],
+        );
         sec += 1;
     }
     // Bar labels ("B1 B2 ...") on the time axis, directly under the
@@ -1535,7 +1799,13 @@ fn render_png(
                 break;
             }
             let x = hop_idx * w / n;
-            draw_text(&mut img, x0 + x + 2, y + 12, &format!("B{}", bar + 1), [230, 230, 240]);
+            draw_text(
+                &mut img,
+                x0 + x + 2,
+                y + 12,
+                &format!("B{}", bar + 1),
+                [230, 230, 240],
+            );
             bar += 1;
         }
     }
@@ -1606,46 +1876,126 @@ fn draw_text(img: &mut image::RgbImage, x: usize, y: usize, text: &str, color: [
 /// Row-major 5-bit rows, top to bottom. None = space / unsupported.
 fn glyph5x7(c: char) -> Option<[u8; 7]> {
     Some(match c {
-        'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
-        'B' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
-        'C' => [0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110],
-        'D' => [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
-        'E' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
-        'F' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
-        'G' => [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111],
-        'H' => [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
-        'I' => [0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
-        'J' => [0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100],
-        'K' => [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
-        'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
-        'M' => [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001],
-        'N' => [0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001],
-        'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
-        'P' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000],
-        'R' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
-        'S' => [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110],
-        'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
-        'U' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
-        'V' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
-        'W' => [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001],
-        'X' => [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
-        'Y' => [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
-        'Z' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111],
-        '0' => [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
-        '1' => [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
-        '2' => [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],
-        '3' => [0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110],
-        '4' => [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010],
-        '5' => [0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110],
-        '6' => [0b01110, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110],
-        '7' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000],
-        '8' => [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
-        '9' => [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110],
-        '.' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00110, 0b00110],
-        ':' => [0b00000, 0b00110, 0b00110, 0b00000, 0b00110, 0b00110, 0b00000],
-        '-' => [0b00000, 0b00000, 0b00000, 0b01110, 0b00000, 0b00000, 0b00000],
-        '<' => [0b00010, 0b00100, 0b01000, 0b10000, 0b01000, 0b00100, 0b00010],
-        '/' => [0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000],
+        'A' => [
+            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'B' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110,
+        ],
+        'C' => [
+            0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110,
+        ],
+        'D' => [
+            0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110,
+        ],
+        'E' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
+        ],
+        'F' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'G' => [
+            0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111,
+        ],
+        'H' => [
+            0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'I' => [
+            0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        'J' => [
+            0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100,
+        ],
+        'K' => [
+            0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
+        ],
+        'L' => [
+            0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
+        ],
+        'M' => [
+            0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
+        ],
+        'N' => [
+            0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
+        ],
+        'O' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'P' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'R' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
+        ],
+        'S' => [
+            0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110,
+        ],
+        'T' => [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'U' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'V' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100,
+        ],
+        'W' => [
+            0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001,
+        ],
+        'X' => [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001,
+        ],
+        'Y' => [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'Z' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111,
+        ],
+        '0' => [
+            0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
+        ],
+        '1' => [
+            0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        '2' => [
+            0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111,
+        ],
+        '3' => [
+            0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110,
+        ],
+        '4' => [
+            0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
+        ],
+        '5' => [
+            0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110,
+        ],
+        '6' => [
+            0b01110, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110,
+        ],
+        '7' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
+        ],
+        '8' => [
+            0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
+        ],
+        '9' => [
+            0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110,
+        ],
+        '.' => [
+            0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00110, 0b00110,
+        ],
+        ':' => [
+            0b00000, 0b00110, 0b00110, 0b00000, 0b00110, 0b00110, 0b00000,
+        ],
+        '-' => [
+            0b00000, 0b00000, 0b00000, 0b01110, 0b00000, 0b00000, 0b00000,
+        ],
+        '<' => [
+            0b00010, 0b00100, 0b01000, 0b10000, 0b01000, 0b00100, 0b00010,
+        ],
+        '/' => [
+            0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000,
+        ],
         _ => return None,
     })
 }

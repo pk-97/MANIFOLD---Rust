@@ -112,7 +112,9 @@ impl AutomationWrite<'static> {
 
 impl AutomationWrite<'_> {
     fn held(&self, target: &GraphTarget, param_id: &str) -> bool {
-        self.holds.iter().any(|(t, p)| t == target && p.as_ref() == param_id)
+        self.holds
+            .iter()
+            .any(|(t, p)| t == target && p.as_ref() == param_id)
     }
 }
 
@@ -176,7 +178,11 @@ impl GestureState {
         let pre_gesture_existed = pre_points.is_some();
         let pre_points = pre_points.unwrap_or_default();
         let curve_capacity = pre_points.len() + PASS_POINT_CAPACITY + 2;
-        let lane = |points| AutomationLane { param_id: param_id.clone(), enabled: true, points };
+        let lane = |points| AutomationLane {
+            param_id: param_id.clone(),
+            enabled: true,
+            points,
+        };
         GestureState {
             target,
             last_touch_beat: current_beat,
@@ -197,7 +203,11 @@ impl GestureState {
     /// first, so the new pass overwrites only the beats it covers. A held-still
     /// control slides one end point forward and never grows the pass.
     fn record(&mut self, point: AutomationPoint, sampled_beat: Beats) {
-        if self.recorded.last().is_some_and(|last| point.beat < last.beat) {
+        if self
+            .recorded
+            .last()
+            .is_some_and(|last| point.beat < last.beat)
+        {
             self.finish_pass();
         }
         self.thinner.push(&mut self.recorded, point);
@@ -213,10 +223,18 @@ impl GestureState {
         // Points sit on their frames' exact beats; the old curve resumes only
         // after the last touched frame's sampled beat, where replay reads it.
         if self.last_touch_beat > last.beat {
-            let end = AutomationPoint { beat: self.last_touch_beat, value: last.value, shape: SegmentShape::Hold };
+            let end = AutomationPoint {
+                beat: self.last_touch_beat,
+                value: last.value,
+                shape: SegmentShape::Hold,
+            };
             self.thinner.push(&mut self.recorded, end);
         }
-        let base = if self.layered_live { &self.layered } else { &self.pre_gesture };
+        let base = if self.layered_live {
+            &self.layered
+        } else {
+            &self.pre_gesture
+        };
         punch_recorded_points_into(base, &self.recorded, &mut self.scratch);
         std::mem::swap(&mut self.layered.points, &mut self.scratch);
         self.layered_live = true;
@@ -227,9 +245,18 @@ impl GestureState {
     /// Finish the take as its one undo entry.
     fn into_command(mut self, param_id: ParamId) -> Box<dyn Command> {
         self.finish_pass();
-        let new_points = if self.layered_live { self.layered.points } else { self.pre_gesture.points.clone() };
+        let new_points = if self.layered_live {
+            self.layered.points
+        } else {
+            self.pre_gesture.points.clone()
+        };
         let old_points = self.pre_gesture_existed.then_some(self.pre_gesture.points);
-        Box::new(CommitRecordedGestureCommand::new(self.target, param_id, new_points, old_points))
+        Box::new(CommitRecordedGestureCommand::new(
+            self.target,
+            param_id,
+            new_points,
+            old_points,
+        ))
     }
 
     /// Whether this gesture's take ends this tick.
@@ -464,7 +491,15 @@ pub fn evaluate_all_automation_with_mode(
     gestures: &mut AutomationGestures,
     mode: AutomationSamplingMode,
 ) -> (bool, Vec<Box<dyn Command>>) {
-    evaluate_all_automation_at(project, current_beat, current_beat, latches, AutomationWrite::unheld(armed), gestures, mode)
+    evaluate_all_automation_at(
+        project,
+        current_beat,
+        current_beat,
+        latches,
+        AutomationWrite::unheld(armed),
+        gestures,
+        mode,
+    )
 }
 
 /// `evaluate_all_automation_with_mode` with the transport's two beats
@@ -481,7 +516,13 @@ pub fn evaluate_all_automation_at(
     mode: AutomationSamplingMode,
 ) -> (bool, Vec<Box<dyn Command>>) {
     if mode != AutomationSamplingMode::Playback {
-        return evaluate_all_automation_inspection(project, current_beat, latches, gestures, mode == AutomationSamplingMode::Export);
+        return evaluate_all_automation_inspection(
+            project,
+            current_beat,
+            latches,
+            gestures,
+            mode == AutomationSamplingMode::Export,
+        );
     }
 
     let mut any_wrote = false;
@@ -603,18 +644,29 @@ fn evaluate_all_automation_inspection(
     let mut any_wrote = false;
 
     for fx in project.settings.master_effects.iter_mut() {
-        any_wrote |= evaluate_instance_automation_inspection(fx, current_beat, latches, gestures, export);
+        any_wrote |=
+            evaluate_instance_automation_inspection(fx, current_beat, latches, gestures, export);
     }
     for layer in project.timeline.layers.iter_mut() {
         if let Some(effects) = &mut layer.effects {
             for fx in effects.iter_mut() {
-                any_wrote |=
-                    evaluate_instance_automation_inspection(fx, current_beat, latches, gestures, export);
+                any_wrote |= evaluate_instance_automation_inspection(
+                    fx,
+                    current_beat,
+                    latches,
+                    gestures,
+                    export,
+                );
             }
         }
         if let Some(gp) = layer.gen_params_mut() {
-            any_wrote |=
-                evaluate_instance_automation_inspection(gp, current_beat, latches, gestures, export);
+            any_wrote |= evaluate_instance_automation_inspection(
+                gp,
+                current_beat,
+                latches,
+                gestures,
+                export,
+            );
         }
     }
 
@@ -659,8 +711,9 @@ fn evaluate_instance_automation_inspection(
             latches.insert((fx_id.clone(), param_id), ());
             continue;
         }
-        if !export && (contains_automation_key(latches, fx_id, &lane.param_id)
-            || contains_automation_key(gestures, fx_id, &lane.param_id))
+        if !export
+            && (contains_automation_key(latches, fx_id, &lane.param_id)
+                || contains_automation_key(gestures, fx_id, &lane.param_id))
         {
             if let Some(param) = fx.params.get_mut(lane.param_id.as_ref()) {
                 param.automated = false;
@@ -774,7 +827,9 @@ fn evaluate_instance_automation(
         let lanes = fx.automation_lanes.as_deref().unwrap_or_default();
         for p in fx.params.iter() {
             if !writing(p)
-                || lanes.iter().any(|l| l.enabled && l.param_id.as_ref() == p.id())
+                || lanes
+                    .iter()
+                    .any(|l| l.enabled && l.param_id.as_ref() == p.id())
             {
                 continue;
             }
@@ -848,8 +903,19 @@ fn evaluate_instance_automation(
         else {
             continue;
         };
-        let shape = if gesture.stepped { SegmentShape::Hold } else { SegmentShape::Linear };
-        gesture.record(AutomationPoint { beat: frame_beat, value: applied_base, shape }, current_beat);
+        let shape = if gesture.stepped {
+            SegmentShape::Hold
+        } else {
+            SegmentShape::Linear
+        };
+        gesture.record(
+            AutomationPoint {
+                beat: frame_beat,
+                value: applied_base,
+                shape,
+            },
+            current_beat,
+        );
         any_wrote = true;
     }
     any_wrote
@@ -873,22 +939,36 @@ fn close_expired_gestures(
         .collect();
     expired
         .into_iter()
-        .filter_map(|key| gestures.remove(&key).map(|gesture| gesture.into_command(key.1)))
+        .filter_map(|key| {
+            gestures
+                .remove(&key)
+                .map(|gesture| gesture.into_command(key.1))
+        })
         .collect()
 }
 
 /// Close every take at an explicit transport/save boundary, using the same
 /// command and punch join as inactivity expiry. Draining is idempotent.
 pub fn finish_all_gestures(gestures: &mut AutomationGestures) -> Vec<Box<dyn Command>> {
-    gestures.drain().map(|((_, param_id), gesture)| gesture.into_command(param_id)).collect()
+    gestures
+        .drain()
+        .map(|((_, param_id), gesture)| gesture.into_command(param_id))
+        .collect()
 }
 
 /// Replace the recorded closed interval while keeping the old curve outside it.
 /// Adjacent representable beats encode the two discontinuities without duplicate
 /// point identities. Restricted curve shapes preserve interpolation on both tails.
 /// Shared by recorded gestures and authored pattern insertion.
-pub fn punch_recorded_points(original: &[AutomationPoint], recorded: &[AutomationPoint]) -> Vec<AutomationPoint> {
-    let old = AutomationLane { param_id: "punch".into(), enabled: true, points: original.to_vec() };
+pub fn punch_recorded_points(
+    original: &[AutomationPoint],
+    recorded: &[AutomationPoint],
+) -> Vec<AutomationPoint> {
+    let old = AutomationLane {
+        param_id: "punch".into(),
+        enabled: true,
+        points: original.to_vec(),
+    };
     let mut points = Vec::with_capacity(original.len() + recorded.len() + 2);
     punch_recorded_points_into(&old, recorded, &mut points);
     points
@@ -896,7 +976,11 @@ pub fn punch_recorded_points(original: &[AutomationPoint], recorded: &[Automatio
 
 /// [`punch_recorded_points`] into a reused buffer: `out` is cleared, and grows
 /// only when the joined curve outgrows its capacity.
-fn punch_recorded_points_into(old: &AutomationLane, recorded: &[AutomationPoint], out: &mut Vec<AutomationPoint>) {
+fn punch_recorded_points_into(
+    old: &AutomationLane,
+    recorded: &[AutomationPoint],
+    out: &mut Vec<AutomationPoint>,
+) {
     out.clear();
     let original = old.points.as_slice();
     let (Some(first), Some(last)) = (recorded.first(), recorded.last()) else {
@@ -914,18 +998,34 @@ fn punch_recorded_points_into(old: &AutomationLane, recorded: &[AutomationPoint]
         if let Some(left) = out.last_mut()
             && let Some(right) = original.iter().find(|p| p.beat > left.beat)
         {
-            let t = ((before.0 - left.beat.0) / (right.beat.0 - left.beat.0)).clamp(0.0, 1.0) as f32;
+            let t =
+                ((before.0 - left.beat.0) / (right.beat.0 - left.beat.0)).clamp(0.0, 1.0) as f32;
             left.shape = left.shape.subrange(0.0, t);
         }
-        out.push(AutomationPoint { beat: before, value: old.value_at(before), shape: SegmentShape::Hold });
+        out.push(AutomationPoint {
+            beat: before,
+            value: old.value_at(before),
+            shape: SegmentShape::Hold,
+        });
     }
     out.extend_from_slice(recorded);
-    let shape = original.iter().enumerate().rfind(|(_, p)| p.beat <= after)
-        .and_then(|(i, left)| original.get(i + 1).map(|right| {
-            let t = ((after.0 - left.beat.0) / (right.beat.0 - left.beat.0)).clamp(0.0, 1.0) as f32;
-            left.shape.subrange(t, 1.0)
-        })).unwrap_or(SegmentShape::Hold);
-    out.push(AutomationPoint { beat: after, value: old.value_at(after), shape });
+    let shape = original
+        .iter()
+        .enumerate()
+        .rfind(|(_, p)| p.beat <= after)
+        .and_then(|(i, left)| {
+            original.get(i + 1).map(|right| {
+                let t =
+                    ((after.0 - left.beat.0) / (right.beat.0 - left.beat.0)).clamp(0.0, 1.0) as f32;
+                left.shape.subrange(t, 1.0)
+            })
+        })
+        .unwrap_or(SegmentShape::Hold);
+    out.push(AutomationPoint {
+        beat: after,
+        value: old.value_at(after),
+        shape,
+    });
     out.extend(original.iter().filter(|p| p.beat > after).copied());
 }
 
@@ -941,13 +1041,13 @@ fn punch_recorded_points_into(old: &AutomationLane, recorded: &[AutomationPoint]
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::PresetTypeId;
     use manifold_core::effect_registration::EffectMetadata;
     use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
     use manifold_core::generator_registration::ParamSpec;
     use manifold_core::layer::Layer;
     use manifold_core::preset_definition_registry::create_default;
     use manifold_core::project::Project;
-    use manifold_core::PresetTypeId;
 
     const TEST_FX: PresetTypeId = PresetTypeId::new("TestAutomationFx");
 
@@ -1000,14 +1100,14 @@ mod tests {
     /// commits (there can't be any with arm off) — the P1-era call shape,
     /// kept as a thin wrapper so the pre-existing P1 tests below didn't need
     /// to change.
-    fn eval_unarmed(
-        project: &mut Project,
-        beat: Beats,
-        latches: &mut AutomationLatches,
-    ) -> bool {
+    fn eval_unarmed(project: &mut Project, beat: Beats, latches: &mut AutomationLatches) -> bool {
         let mut gestures = AutomationGestures::default();
-        let (wrote, commits) = evaluate_all_automation(project, beat, latches, false, &mut gestures);
-        assert!(commits.is_empty(), "arm off must never produce a gesture commit");
+        let (wrote, commits) =
+            evaluate_all_automation(project, beat, latches, false, &mut gestures);
+        assert!(
+            commits.is_empty(),
+            "arm off must never produce a gesture commit"
+        );
         wrote
     }
 
@@ -1048,11 +1148,14 @@ mod tests {
         );
         assert!(wrote);
         assert!(commits.is_empty());
-        assert_eq!(project.timeline.layers[0].effects.as_ref().unwrap()[0]
-            .params
-            .get("amount")
-            .unwrap()
-            .base, 0.5);
+        assert_eq!(
+            project.timeline.layers[0].effects.as_ref().unwrap()[0]
+                .params
+                .get("amount")
+                .unwrap()
+                .base,
+            0.5
+        );
 
         let (wrote, commits) = evaluate_all_automation_with_mode(
             &mut project,
@@ -1062,7 +1165,10 @@ mod tests {
             &mut gestures,
             AutomationSamplingMode::Inspection,
         );
-        assert!(!wrote, "an unchanged inspection sample need not refresh output");
+        assert!(
+            !wrote,
+            "an unchanged inspection sample need not refresh output"
+        );
         assert!(commits.is_empty());
     }
 
@@ -1121,11 +1227,14 @@ mod tests {
         assert!(commits.is_empty());
         assert!(gestures.is_empty());
         assert_eq!(latches.len(), 1);
-        assert_eq!(project.timeline.layers[0].effects.as_ref().unwrap()[0]
-            .params
-            .get("amount")
-            .unwrap()
-            .base, 0.91);
+        assert_eq!(
+            project.timeline.layers[0].effects.as_ref().unwrap()[0]
+                .params
+                .get("amount")
+                .unwrap()
+                .base,
+            0.91
+        );
     }
 
     #[test]
@@ -1175,7 +1284,11 @@ mod tests {
             !fx.params.get("amount").unwrap().touched,
             "the evaluator clears touched once it has latched"
         );
-        assert_eq!(latches.len(), 1, "the touch latches the param as overridden");
+        assert_eq!(
+            latches.len(),
+            1,
+            "the touch latches the param as overridden"
+        );
     }
 
     #[test]
@@ -1214,7 +1327,10 @@ mod tests {
         // Frame 2: still samples normally — proves frame 1's write didn't
         // leave the param looking "touched" to frame 2's evaluator.
         let wrote = eval_unarmed(&mut project, Beats(3.0), &mut latches);
-        assert!(wrote, "automation keeps sampling across frames uninterrupted");
+        assert!(
+            wrote,
+            "automation keeps sampling across frames uninterrupted"
+        );
         assert!(latches.is_empty());
     }
 
@@ -1257,7 +1373,11 @@ mod tests {
 
         assert!(!eval_unarmed(&mut project, Beats(2.0), &mut latches));
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
-        assert_eq!(fx.params.get("amount").unwrap().base, 0.0, "untouched, still the default");
+        assert_eq!(
+            fx.params.get("amount").unwrap().base,
+            0.0,
+            "untouched, still the default"
+        );
     }
 
     #[test]
@@ -1302,7 +1422,10 @@ mod tests {
         // No panic, no growth in unrelated state — the layer/effect list
         // shape is exactly what it started as.
         assert_eq!(project.timeline.layers.len(), 1);
-        assert_eq!(project.timeline.layers[0].effects.as_ref().unwrap().len(), 1);
+        assert_eq!(
+            project.timeline.layers[0].effects.as_ref().unwrap().len(),
+            1
+        );
     }
 
     #[test]
@@ -1311,11 +1434,10 @@ mod tests {
         // `evaluate_all_audio_mods` — not just layer/master effects.
         let mut layer = Layer::new_generator("GenLayer".into(), TEST_FX, 0);
         layer
-            .gen_params_mut().unwrap()
+            .gen_params_mut()
+            .unwrap()
             .init_defaults_for_type(TEST_FX);
-        layer
-            .gen_params_mut().unwrap()
-            .automation_lanes = Some(vec![amount_lane()]);
+        layer.gen_params_mut().unwrap().automation_lanes = Some(vec![amount_lane()]);
         let mut project = project_with(layer);
         let mut latches = AutomationLatches::default();
 
@@ -1335,18 +1457,39 @@ mod tests {
         let mut latches = AutomationLatches::default();
         eval_unarmed(&mut project, Beats(2.0), &mut latches);
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
-        assert!(fx.params.get("amount").unwrap().automated, "the arrangement lane drives the param");
+        assert!(
+            fx.params.get("amount").unwrap().automated,
+            "the arrangement lane drives the param"
+        );
         let mut draft = amount_lane();
         draft.points[1].value = 0.2;
         let mut previews = AutomationLanePreviews::default();
         previews.insert(
-            (manifold_core::GraphTarget::Effect(fx.id.clone()), "amount".into()),
-            AutomationLanePreview { lane: draft, original_base: 0.5 },
+            (
+                manifold_core::GraphTarget::Effect(fx.id.clone()),
+                "amount".into(),
+            ),
+            AutomationLanePreview {
+                lane: draft,
+                original_base: 0.5,
+            },
         );
-        assert!(evaluate_automation_previews(&mut project, Beats(2.0), &mut previews, &latches, &AutomationGestures::default()));
-        let amount = project.timeline.layers[0].effects.as_ref().unwrap()[0].params.get("amount").unwrap();
+        assert!(evaluate_automation_previews(
+            &mut project,
+            Beats(2.0),
+            &mut previews,
+            &latches,
+            &AutomationGestures::default()
+        ));
+        let amount = project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .params
+            .get("amount")
+            .unwrap();
         assert_eq!(amount.base, 0.2);
-        assert!(!amount.automated, "a previewed param is held, not read from the arrangement lane");
+        assert!(
+            !amount.automated,
+            "a previewed param is held, not read from the arrangement lane"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -1419,11 +1562,17 @@ mod tests {
         // Let the gesture go quiet for >= 2 beats to force closure.
         let (_, commits) =
             evaluate_all_automation(&mut project, Beats(3.5), &mut latches, true, &mut gestures);
-        assert_eq!(commits.len(), 1, "the gesture closes after ~2 beats of inactivity");
+        assert_eq!(
+            commits.len(),
+            1,
+            "the gesture closes after ~2 beats of inactivity"
+        );
         assert!(gestures.is_empty());
 
         let mut cmd = commits.into_iter().next().unwrap();
-        let fx_id = project.timeline.layers[0].effects.as_ref().unwrap()[0].id.clone();
+        let fx_id = project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .id
+            .clone();
         cmd.execute(&mut project);
         let fx = project.find_effect_by_id(&fx_id).unwrap();
         let lane = fx
@@ -1433,7 +1582,11 @@ mod tests {
             .iter()
             .find(|l| l.param_id.as_ref() == "amount")
             .unwrap();
-        assert_eq!(lane.points.len(), 1, "one recorded point at the punch-in beat");
+        assert_eq!(
+            lane.points.len(),
+            1,
+            "one recorded point at the punch-in beat"
+        );
         assert!((lane.points[0].value - 0.55).abs() < 1e-6);
 
         cmd.undo(&mut project);
@@ -1458,7 +1611,10 @@ mod tests {
 
         let (wrote, commits) =
             evaluate_all_automation(&mut project, Beats(1.0), &mut latches, true, &mut gestures);
-        assert!(wrote, "still samples normally — no live touch, so no gesture");
+        assert!(
+            wrote,
+            "still samples normally — no live touch, so no gesture"
+        );
         assert!(commits.is_empty());
         assert!(
             gestures.is_empty(),
@@ -1472,18 +1628,14 @@ mod tests {
         let fx = &mut layer.effects.as_mut().unwrap()[0];
         fx.automation_lanes = Some(vec![amount_lane()]); // points at beat 0 (0.2), beat 4 (0.8)
         let mut project = project_with(layer);
-        let fx_id = project.timeline.layers[0].effects.as_ref().unwrap()[0].id.clone();
+        let fx_id = project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .id
+            .clone();
         let mut latches = AutomationLatches::default();
         let mut gestures = AutomationGestures::default();
 
         // Touch at beat 1, recording a new value over the existing curve.
-        project
-            .timeline
-            .layers[0]
-            .effects
-            .as_mut()
-            .unwrap()[0]
-            .set_base_param("amount", 0.6);
+        project.timeline.layers[0].effects.as_mut().unwrap()[0].set_base_param("amount", 0.6);
         evaluate_all_automation(&mut project, Beats(1.0), &mut latches, true, &mut gestures);
 
         // Close the gesture (>= 2 beats quiet).
@@ -1505,9 +1657,21 @@ mod tests {
         // recorded point at beat 1 (0.6) replaces the old curve there; the
         // pre-gesture point at beat 4 survives (after the last touch) —
         // "the old curve resumes exactly" past the gesture.
-        assert!(lane.points.iter().any(|p| p.beat.0 == 0.0 && (p.value - 0.2).abs() < 1e-6));
-        assert!(lane.points.iter().any(|p| p.beat.0 == 1.0 && (p.value - 0.6).abs() < 1e-6));
-        assert!(lane.points.iter().any(|p| p.beat.0 == 4.0 && (p.value - 0.8).abs() < 1e-6));
+        assert!(
+            lane.points
+                .iter()
+                .any(|p| p.beat.0 == 0.0 && (p.value - 0.2).abs() < 1e-6)
+        );
+        assert!(
+            lane.points
+                .iter()
+                .any(|p| p.beat.0 == 1.0 && (p.value - 0.6).abs() < 1e-6)
+        );
+        assert!(
+            lane.points
+                .iter()
+                .any(|p| p.beat.0 == 4.0 && (p.value - 0.8).abs() < 1e-6)
+        );
 
         cmd.undo(&mut project);
         let fx = project.find_effect_by_id(&fx_id).unwrap();
@@ -1518,29 +1682,67 @@ mod tests {
             .iter()
             .find(|l| l.param_id.as_ref() == "amount")
             .unwrap();
-        assert_eq!(lane.points.len(), 2, "undo restores the exact pre-gesture point set");
+        assert_eq!(
+            lane.points.len(),
+            2,
+            "undo restores the exact pre-gesture point set"
+        );
         assert!((lane.points[0].value - 0.2).abs() < 1e-6);
         assert!((lane.points[1].value - 0.8).abs() < 1e-6);
     }
 
     #[test]
     fn recording_punch_preserves_dense_samples_outside_take() {
-        for shape in [SegmentShape::Linear, SegmentShape::Hold, SegmentShape::Curved(0.7), SegmentShape::Curved(-0.8)] {
-            let original = AutomationLane { param_id: "amount".into(), enabled: true, points: vec![
-                AutomationPoint { beat: Beats(0.0), value: 0.0, shape },
-                AutomationPoint { beat: Beats(8.0), value: 1.0, shape: SegmentShape::Linear },
-            ] };
+        for shape in [
+            SegmentShape::Linear,
+            SegmentShape::Hold,
+            SegmentShape::Curved(0.7),
+            SegmentShape::Curved(-0.8),
+        ] {
+            let original = AutomationLane {
+                param_id: "amount".into(),
+                enabled: true,
+                points: vec![
+                    AutomationPoint {
+                        beat: Beats(0.0),
+                        value: 0.0,
+                        shape,
+                    },
+                    AutomationPoint {
+                        beat: Beats(8.0),
+                        value: 1.0,
+                        shape: SegmentShape::Linear,
+                    },
+                ],
+            };
             for (start, end) in [(2.0, 2.0), (2.0, 5.0), (0.0, 3.0), (9.0, 10.0)] {
-                let mut recorded = vec![AutomationPoint { beat: Beats(start), value: 0.9, shape: SegmentShape::Linear }];
-                if end != start { recorded.push(AutomationPoint { beat: Beats(end), value: 0.3, shape: SegmentShape::Linear }); }
-                let changed = AutomationLane { points: punch_recorded_points(&original.points, &recorded), ..original.clone() };
+                let mut recorded = vec![AutomationPoint {
+                    beat: Beats(start),
+                    value: 0.9,
+                    shape: SegmentShape::Linear,
+                }];
+                if end != start {
+                    recorded.push(AutomationPoint {
+                        beat: Beats(end),
+                        value: 0.3,
+                        shape: SegmentShape::Linear,
+                    });
+                }
+                let changed = AutomationLane {
+                    points: punch_recorded_points(&original.points, &recorded),
+                    ..original.clone()
+                };
                 assert!(changed.points.windows(2).all(|w| w[0].beat < w[1].beat));
                 assert_eq!(changed.value_at(Beats(start)), 0.9);
                 for i in 0..1100 {
                     let beat = Beats(i as f64 / 100.0);
-                    if beat.0 >= start && beat.0 <= end { continue; }
-                    assert!((changed.value_at(beat) - original.value_at(beat)).abs() < 2e-6,
-                        "outside punch changed at {beat:?}, {shape:?}, {start}..{end}");
+                    if beat.0 >= start && beat.0 <= end {
+                        continue;
+                    }
+                    assert!(
+                        (changed.value_at(beat) - original.value_at(beat)).abs() < 2e-6,
+                        "outside punch changed at {beat:?}, {shape:?}, {start}..{end}"
+                    );
                 }
             }
         }
@@ -1554,28 +1756,52 @@ mod tests {
         let mut layer = layer_with_one_effect();
         layer.effects.as_mut().unwrap()[0].automation_lanes = Some(vec![amount_lane()]);
         let mut project = project_with(layer);
-        let original = project.timeline.layers[0].effects.as_ref().unwrap()[0].automation_lanes.as_ref().unwrap()[0].clone();
+        let original = project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .automation_lanes
+            .as_ref()
+            .unwrap()[0]
+            .clone();
         let mut latches = AutomationLatches::default();
         let mut gestures = AutomationGestures::default();
         for (beat, value) in [(3.0, 0.9), (3.5, 0.8), (1.0, 0.7), (2.0, 0.6)] {
             project.timeline.layers[0].effects.as_mut().unwrap()[0].set_base_param("amount", value);
-            let (_, commits) = evaluate_all_automation(&mut project, Beats(beat), &mut latches, true, &mut gestures);
+            let (_, commits) = evaluate_all_automation(
+                &mut project,
+                Beats(beat),
+                &mut latches,
+                true,
+                &mut gestures,
+            );
             assert!(commits.is_empty());
         }
         let mut commits = finish_all_gestures(&mut gestures);
         assert_eq!(commits.len(), 1);
         commits[0].execute(&mut project);
-        let lane = &project.timeline.layers[0].effects.as_ref().unwrap()[0].automation_lanes.as_ref().unwrap()[0];
+        let lane = &project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .automation_lanes
+            .as_ref()
+            .unwrap()[0];
         assert!(lane.points.windows(2).all(|p| p[0].beat < p[1].beat));
         assert_eq!(lane.value_at(Beats(1.0)), 0.7);
         assert_eq!(lane.value_at(Beats(2.0)), 0.6);
-        assert_eq!(lane.value_at(Beats(3.0)), 0.9, "the first pass survives past the second");
+        assert_eq!(
+            lane.value_at(Beats(3.0)),
+            0.9,
+            "the first pass survives past the second"
+        );
         assert_eq!(lane.value_at(Beats(3.5)), 0.8);
         for beat in [0.5, 2.5, 4.0] {
             assert!((lane.value_at(Beats(beat)) - original.value_at(Beats(beat))).abs() < 1e-6);
         }
         commits[0].undo(&mut project);
-        assert_eq!(project.timeline.layers[0].effects.as_ref().unwrap()[0].automation_lanes.as_ref().unwrap()[0].points, original.points);
+        assert_eq!(
+            project.timeline.layers[0].effects.as_ref().unwrap()[0]
+                .automation_lanes
+                .as_ref()
+                .unwrap()[0]
+                .points,
+            original.points
+        );
     }
 
     #[test]
@@ -1586,22 +1812,48 @@ mod tests {
         let mut latches = AutomationLatches::default();
         let mut gestures = AutomationGestures::default();
         project.timeline.layers[0].effects.as_mut().unwrap()[0].set_base_param("amount", 0.9);
-        let _ = evaluate_all_automation(&mut project, Beats(2.0), &mut latches, true, &mut gestures);
+        let _ =
+            evaluate_all_automation(&mut project, Beats(2.0), &mut latches, true, &mut gestures);
         let mut commands = finish_all_gestures(&mut gestures);
         assert_eq!(commands.len(), 1);
         assert!(finish_all_gestures(&mut gestures).is_empty());
-        let original = project.timeline.layers[0].effects.as_ref().unwrap()[0].automation_lanes.as_ref().unwrap()[0].points.clone();
+        let original = project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .automation_lanes
+            .as_ref()
+            .unwrap()[0]
+            .points
+            .clone();
         commands[0].execute(&mut project);
-        let lane = &project.timeline.layers[0].effects.as_ref().unwrap()[0].automation_lanes.as_ref().unwrap()[0];
+        let lane = &project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .automation_lanes
+            .as_ref()
+            .unwrap()[0];
         assert!((lane.value_at(Beats(1.0)) - 0.35).abs() < 1e-6);
         assert_eq!(lane.value_at(Beats(2.0)), 0.9);
         commands[0].undo(&mut project);
-        assert_eq!(project.timeline.layers[0].effects.as_ref().unwrap()[0].automation_lanes.as_ref().unwrap()[0].points, original);
+        assert_eq!(
+            project.timeline.layers[0].effects.as_ref().unwrap()[0]
+                .automation_lanes
+                .as_ref()
+                .unwrap()[0]
+                .points,
+            original
+        );
         let fx = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0];
         fx.set_base_param("amount", 0.95);
         latches.insert((fx.id.clone(), "amount".into()), ());
-        let (_, commits) = evaluate_all_automation_with_mode(&mut project, Beats(2.0), &mut latches, true, &mut gestures, AutomationSamplingMode::Export);
-        let p = project.timeline.layers[0].effects.as_ref().unwrap()[0].params.get("amount").unwrap();
+        let (_, commits) = evaluate_all_automation_with_mode(
+            &mut project,
+            Beats(2.0),
+            &mut latches,
+            true,
+            &mut gestures,
+            AutomationSamplingMode::Export,
+        );
+        let p = project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .params
+            .get("amount")
+            .unwrap();
         assert!((p.value - 0.5).abs() < 1e-6);
         assert!(p.touched);
         assert_eq!(latches.len(), 1);
@@ -1623,7 +1875,10 @@ mod tests {
         // Only 1.5 beats of silence — must NOT close yet.
         let (_, commits) =
             evaluate_all_automation(&mut project, Beats(1.5), &mut latches, true, &mut gestures);
-        assert!(commits.is_empty(), "under the ~2 beat threshold, the gesture stays open");
+        assert!(
+            commits.is_empty(),
+            "under the ~2 beat threshold, the gesture stays open"
+        );
         assert_eq!(gestures.len(), 1);
     }
 
@@ -1636,7 +1891,16 @@ mod tests {
         gestures: &mut AutomationGestures,
         write: AutomationWrite<'_>,
     ) -> Vec<Box<dyn Command>> {
-        evaluate_all_automation_at(project, Beats(beat), Beats(beat), latches, write, gestures, AutomationSamplingMode::Playback).1
+        evaluate_all_automation_at(
+            project,
+            Beats(beat),
+            Beats(beat),
+            latches,
+            write,
+            gestures,
+            AutomationSamplingMode::Playback,
+        )
+        .1
     }
 
     fn fx_mut(project: &mut Project) -> &mut PresetInstance {
@@ -1644,7 +1908,11 @@ mod tests {
     }
 
     fn amount_points(project: &Project) -> AutomationLane {
-        project.timeline.layers[0].effects.as_ref().unwrap()[0].automation_lanes.as_ref().unwrap()[0].clone()
+        project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .automation_lanes
+            .as_ref()
+            .unwrap()[0]
+            .clone()
     }
 
     /// 0.2 at beat 0 rising to 0.8 at beat 8.
@@ -1657,7 +1925,11 @@ mod tests {
     }
 
     fn point(beat: f64, value: f32) -> AutomationPoint {
-        AutomationPoint { beat: Beats(beat), value, shape: SegmentShape::Linear }
+        AutomationPoint {
+            beat: Beats(beat),
+            value,
+            shape: SegmentShape::Linear,
+        }
     }
 
     /// One whole pass through the recorder's streaming thinner.
@@ -1670,10 +1942,18 @@ mod tests {
     }
 
     fn assert_within_tolerance(thinned: &[AutomationPoint], played: &[AutomationPoint]) {
-        let lane = AutomationLane { param_id: "amount".into(), enabled: true, points: thinned.to_vec() };
+        let lane = AutomationLane {
+            param_id: "amount".into(),
+            enabled: true,
+            points: thinned.to_vec(),
+        };
         for p in played {
             let error = (lane.value_at(p.beat) - p.value).abs();
-            assert!(f64::from(error) <= THINNING_TOLERANCE + 1e-6, "error {error} at {:?}", p.beat);
+            assert!(
+                f64::from(error) <= THINNING_TOLERANCE + 1e-6,
+                "error {error} at {:?}",
+                p.beat
+            );
         }
     }
 
@@ -1700,8 +1980,16 @@ mod tests {
         }
         take.finish_pass();
         let lane = &take.layered.points;
-        assert_eq!((lane[0], *lane.last().unwrap()), (frames[0], frames[17_999]));
-        assert!(lane.len() < frames.len() / 10, "kept {} of {}", lane.len(), frames.len());
+        assert_eq!(
+            (lane[0], *lane.last().unwrap()),
+            (frames[0], frames[17_999])
+        );
+        assert!(
+            lane.len() < frames.len() / 10,
+            "kept {} of {}",
+            lane.len(),
+            frames.len()
+        );
         assert_within_tolerance(lane, &frames);
     }
 
@@ -1710,22 +1998,33 @@ mod tests {
     /// line.
     #[test]
     fn thinning_a_repeated_beat_keeps_the_newest_value() {
-        let ramp: Vec<_> = (0..=20).map(|i| point(f64::from(i) * 0.1, i as f32 * 0.01)).collect();
+        let ramp: Vec<_> = (0..=20)
+            .map(|i| point(f64::from(i) * 0.1, i as f32 * 0.01))
+            .collect();
         let jump = point(2.0, 0.9);
         let mut thinned = ramp.clone();
         thinned.push(jump);
         thin_recorded_points(&mut thinned, 1.0, false);
         assert_eq!(*thinned.last().unwrap(), jump);
-        assert!(thinned.windows(2).all(|w| w[0].beat < w[1].beat), "beats stay strictly rising");
+        assert!(
+            thinned.windows(2).all(|w| w[0].beat < w[1].beat),
+            "beats stay strictly rising"
+        );
         assert_within_tolerance(&thinned[..thinned.len() - 1], &ramp[..20]);
     }
 
     #[test]
     fn thinning_keeps_endpoints_and_stays_within_tolerance() {
-        let ramp: Vec<_> = (0..=100).map(|i| point(i as f64 * 0.04, i as f32 / 100.0)).collect();
+        let ramp: Vec<_> = (0..=100)
+            .map(|i| point(i as f64 * 0.04, i as f32 / 100.0))
+            .collect();
         let mut thinned = ramp.clone();
         thin_recorded_points(&mut thinned, 1.0, false);
-        assert_eq!(thinned, vec![ramp[0], ramp[100]], "a straight ramp needs only its endpoints");
+        assert_eq!(
+            thinned,
+            vec![ramp[0], ramp[100]],
+            "a straight ramp needs only its endpoints"
+        );
 
         // A sine sweep: thinning drops most points, keeps both ends, and the
         // thinned curve never strays past the tolerance from any sample.
@@ -1734,21 +2033,57 @@ mod tests {
             .collect();
         let mut thinned = sweep.clone();
         thin_recorded_points(&mut thinned, 1.0, false);
-        assert!(thinned.len() < sweep.len() / 4, "kept {} of {}", thinned.len(), sweep.len());
-        assert_eq!((thinned[0], *thinned.last().unwrap()), (sweep[0], sweep[400]));
-        let lane = AutomationLane { param_id: "amount".into(), enabled: true, points: thinned };
+        assert!(
+            thinned.len() < sweep.len() / 4,
+            "kept {} of {}",
+            thinned.len(),
+            sweep.len()
+        );
+        assert_eq!(
+            (thinned[0], *thinned.last().unwrap()),
+            (sweep[0], sweep[400])
+        );
+        let lane = AutomationLane {
+            param_id: "amount".into(),
+            enabled: true,
+            points: thinned,
+        };
         for p in &sweep {
             let error = (lane.value_at(p.beat) - p.value).abs();
-            assert!(f64::from(error) <= THINNING_TOLERANCE + 1e-6, "error {error} at {:?}", p.beat);
+            assert!(
+                f64::from(error) <= THINNING_TOLERANCE + 1e-6,
+                "error {error} at {:?}",
+                p.beat
+            );
         }
     }
 
     #[test]
     fn thinning_a_stepped_param_keeps_only_value_changes() {
-        let hold = |beat, value| AutomationPoint { beat: Beats(beat), value, shape: SegmentShape::Hold };
-        let mut points = vec![hold(0.0, 1.0), hold(0.1, 1.0), hold(0.2, 2.0), hold(0.3, 2.0), hold(0.4, 2.0), hold(0.5, 1.0), hold(0.6, 1.0)];
+        let hold = |beat, value| AutomationPoint {
+            beat: Beats(beat),
+            value,
+            shape: SegmentShape::Hold,
+        };
+        let mut points = vec![
+            hold(0.0, 1.0),
+            hold(0.1, 1.0),
+            hold(0.2, 2.0),
+            hold(0.3, 2.0),
+            hold(0.4, 2.0),
+            hold(0.5, 1.0),
+            hold(0.6, 1.0),
+        ];
         thin_recorded_points(&mut points, 4.0, true);
-        assert_eq!(points, vec![hold(0.0, 1.0), hold(0.2, 2.0), hold(0.5, 1.0), hold(0.6, 1.0)]);
+        assert_eq!(
+            points,
+            vec![
+                hold(0.0, 1.0),
+                hold(0.2, 2.0),
+                hold(0.5, 1.0),
+                hold(0.6, 1.0)
+            ]
+        );
     }
 
     #[test]
@@ -1757,29 +2092,53 @@ mod tests {
         let original = amount_points(&project);
         let fx_id = fx_mut(&mut project).id.clone();
         let holds = vec![(GraphTarget::Effect(fx_id), ParamId::from("amount"))];
-        let held = AutomationWrite { armed: true, holds: &holds };
-        let (mut latches, mut gestures) = (AutomationLatches::default(), AutomationGestures::default());
+        let held = AutomationWrite {
+            armed: true,
+            holds: &holds,
+        };
+        let (mut latches, mut gestures) =
+            (AutomationLatches::default(), AutomationGestures::default());
 
         fx_mut(&mut project).set_base_param("amount", 0.3);
         assert!(eval_write(&mut project, 1.0, &mut latches, &mut gestures, held).is_empty());
         // Held still for four beats: no inactivity punch-out, and the lane
         // does not take the param back.
         for frame in 1..=240 {
-            let commits = eval_write(&mut project, 1.0 + frame as f64 / 60.0, &mut latches, &mut gestures, held);
+            let commits = eval_write(
+                &mut project,
+                1.0 + frame as f64 / 60.0,
+                &mut latches,
+                &mut gestures,
+                held,
+            );
             assert!(commits.is_empty(), "a held control never times out");
         }
         assert_eq!(fx_mut(&mut project).params.get("amount").unwrap().base, 0.3);
         let take = gestures.values().next().unwrap();
-        assert!(take.recorded.len() <= 2, "a still hold slides one point, got {}", take.recorded.len());
+        assert!(
+            take.recorded.len() <= 2,
+            "a still hold slides one point, got {}",
+            take.recorded.len()
+        );
 
         release_hold(&mut gestures, &holds[0].0, "amount");
-        let commits = eval_write(&mut project, 5.0, &mut latches, &mut gestures, AutomationWrite::unheld(true));
+        let commits = eval_write(
+            &mut project,
+            5.0,
+            &mut latches,
+            &mut gestures,
+            AutomationWrite::unheld(true),
+        );
         assert_eq!(commits.len(), 1, "release ends the take on the next tick");
         let mut command = commits.into_iter().next().unwrap();
         command.execute(&mut project);
         let lane = amount_points(&project);
         for beat in [1.0, 3.0, 5.0] {
-            assert_eq!(lane.value_at(Beats(beat)), 0.3, "held value written at {beat}");
+            assert_eq!(
+                lane.value_at(Beats(beat)),
+                0.3,
+                "held value written at {beat}"
+            );
         }
         assert!((lane.value_at(Beats(6.0)) - original.value_at(Beats(6.0))).abs() < 1e-6);
         command.undo(&mut project);
@@ -1793,12 +2152,22 @@ mod tests {
         let mut project = long_lane_project();
         let fx_id = fx_mut(&mut project).id.clone();
         let holds = vec![(GraphTarget::Effect(fx_id), ParamId::from("amount"))];
-        let held = AutomationWrite { armed: true, holds: &holds };
-        let (mut latches, mut gestures) = (AutomationLatches::default(), AutomationGestures::default());
+        let held = AutomationWrite {
+            armed: true,
+            holds: &holds,
+        };
+        let (mut latches, mut gestures) =
+            (AutomationLatches::default(), AutomationGestures::default());
         fx_mut(&mut project).set_base_param("amount", 0.6);
         assert!(eval_write(&mut project, 1.0, &mut latches, &mut gestures, held).is_empty());
         release_hold(&mut gestures, &holds[0].0, "amount");
-        let commits = eval_write(&mut project, 1.25, &mut latches, &mut gestures, AutomationWrite::unheld(true));
+        let commits = eval_write(
+            &mut project,
+            1.25,
+            &mut latches,
+            &mut gestures,
+            AutomationWrite::unheld(true),
+        );
         assert_eq!(commits.len(), 1);
         assert!(gestures.is_empty());
     }
@@ -1820,9 +2189,17 @@ mod tests {
             param_id: "amount".into(),
             enabled: true,
             points: vec![
-                AutomationPoint { beat: Beats(0.0), value: 0.0, shape: SegmentShape::Linear },
+                AutomationPoint {
+                    beat: Beats(0.0),
+                    value: 0.0,
+                    shape: SegmentShape::Linear,
+                },
                 // A continuous multi-turn ramp: 720 = two full rotations.
-                AutomationPoint { beat: Beats(4.0), value: 720.0, shape: SegmentShape::Linear },
+                AutomationPoint {
+                    beat: Beats(4.0),
+                    value: 720.0,
+                    shape: SegmentShape::Linear,
+                },
             ],
         }]);
         let mut project = project_with(layer);
@@ -1853,8 +2230,16 @@ mod tests {
             param_id: "amount".into(),
             enabled: true,
             points: vec![
-                AutomationPoint { beat: Beats(0.0), value: 0.0, shape: SegmentShape::Linear },
-                AutomationPoint { beat: Beats(4.0), value: 720.0, shape: SegmentShape::Linear },
+                AutomationPoint {
+                    beat: Beats(0.0),
+                    value: 0.0,
+                    shape: SegmentShape::Linear,
+                },
+                AutomationPoint {
+                    beat: Beats(4.0),
+                    value: 720.0,
+                    shape: SegmentShape::Linear,
+                },
             ],
         }]);
         let mut project = project_with(layer);

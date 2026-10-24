@@ -21,8 +21,7 @@ impl GraphCanvas {
         let y = viewport.y + (HEADER_HEIGHT - BREADCRUMB_FONT) * 0.5;
         let mut x = viewport.x + 10.0;
         let current_depth = self.scope_titles.len();
-        let labels = std::iter::once("Root".to_string())
-            .chain(self.scope_titles.iter().cloned());
+        let labels = std::iter::once("Root".to_string()).chain(self.scope_titles.iter().cloned());
         let mut segs = Vec::new();
         for (depth, label) in labels.enumerate() {
             let w = label.chars().count() as f32 * cw;
@@ -65,11 +64,7 @@ impl GraphCanvas {
         let (gx, gy) = self.to_graph(viewport, sx, sy);
         for node in self.nodes.iter().rev() {
             let (nx, ny) = node.pos_graph;
-            if gx >= nx
-                && gx <= nx + NODE_WIDTH
-                && gy >= ny
-                && gy <= ny + NODE_HEADER_HEIGHT
-            {
+            if gx >= nx && gx <= nx + NODE_WIDTH && gy >= ny && gy <= ny + NODE_HEADER_HEIGHT {
                 return Some(node.id);
             }
         }
@@ -97,14 +92,14 @@ impl GraphCanvas {
                 let idx = ((sy - block_top) / row_h) as usize;
                 // A row is a param only if it's a Param row; output / input
                 // socket rows return no param hit (they scrub nothing).
-                if let Some(crate::graph_canvas::NodeRow::Param { param, .. }) = node.rows.get(idx) {
+                if let Some(crate::graph_canvas::NodeRow::Param { param, .. }) = node.rows.get(idx)
+                {
                     return Some((node.id, *param));
                 }
             }
         }
         None
     }
-
 
     /// `(node_id, param_index)` when the cursor is over the dot of an
     /// *exposable* param. Built on `param_row_under` + `param_row_rect` +
@@ -149,9 +144,9 @@ impl GraphCanvas {
         let node = self.find_node(node_id)?;
         // Find which body row draws param `pi`, so the rect lands on the right
         // line now that params, outputs, and inputs share one row column.
-        let row_idx = node.rows.iter().position(|r| {
-            matches!(r, crate::graph_canvas::NodeRow::Param { param, .. } if *param == pi)
-        })?;
+        let row_idx = node.rows.iter().position(
+            |r| matches!(r, crate::graph_canvas::NodeRow::Param { param, .. } if *param == pi),
+        )?;
         let header_h = NODE_HEADER_HEIGHT * self.zoom;
         let row_h = PARAM_ROW_H * self.zoom;
         let sw = NODE_WIDTH * self.zoom;
@@ -362,7 +357,12 @@ impl GraphCanvas {
     /// input port. Compatibility is port-category equality (the canvas encodes
     /// category as colour); the real connect still validates server-side, so
     /// this is purely the live hint behind the ghost wire's green/red tint.
-    pub(crate) fn wire_drop_compat(&self, viewport: Rect, from_node: u32, from_color: Color32) -> Option<bool> {
+    pub(crate) fn wire_drop_compat(
+        &self,
+        viewport: Rect,
+        from_node: u32,
+        from_color: Color32,
+    ) -> Option<bool> {
         let hit = self.port_under(viewport, self.cursor.0, self.cursor.1)?;
         if hit.is_output || hit.node_id == from_node {
             return None;
@@ -396,9 +396,7 @@ pub(crate) fn rects_overlap(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) ->
 pub(crate) fn marquee_hits(rect: (f32, f32, f32, f32), nodes: &[NodeView]) -> Vec<u32> {
     nodes
         .iter()
-        .filter(|n| {
-            rects_overlap(rect, (n.pos_graph.0, n.pos_graph.1, NODE_WIDTH, n.height()))
-        })
+        .filter(|n| rects_overlap(rect, (n.pos_graph.0, n.pos_graph.1, NODE_WIDTH, n.height())))
         .map(|n| n.id)
         .collect()
 }
@@ -418,7 +416,11 @@ fn to_node_rect(r: Rect) -> crate::node::Rect {
 /// the node's runtime `u32` id), rendered as a greppable, parseable string
 /// (no serde dependency in this crate — a struct payload would need one).
 fn node_payload(scope: &[u32], node_id: u32) -> String {
-    let scope_str = scope.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+    let scope_str = scope
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
     format!("scope={scope_str}/node={node_id}")
 }
 
@@ -449,7 +451,12 @@ impl HitTargets for GraphCanvasTargets<'_> {
             out.push(HitTargetEntry {
                 kind: "node",
                 label: node.title.clone(),
-                rect: to_node_rect(Rect::new(sx, sy, NODE_WIDTH * c.zoom, node.height() * c.zoom)),
+                rect: to_node_rect(Rect::new(
+                    sx,
+                    sy,
+                    NODE_WIDTH * c.zoom,
+                    node.height() * c.zoom,
+                )),
                 payload: node_payload(scope, node.id),
             });
 
@@ -481,11 +488,7 @@ impl HitTargets for GraphCanvasTargets<'_> {
                     kind: "port",
                     label: format!("{} ← {}", node.title, port.name),
                     rect: to_node_rect(Rect::new(px - half, py - half, half * 2.0, half * 2.0)),
-                    payload: format!(
-                        "{}/port={}/dir=in",
-                        node_payload(scope, node.id),
-                        port.name
-                    ),
+                    payload: format!("{}/port={}/dir=in", node_payload(scope, node.id), port.name),
                 });
             }
         }
@@ -495,8 +498,16 @@ impl HitTargets for GraphCanvasTargets<'_> {
             else {
                 continue; // boundary/anonymous endpoint outside this scope's node list
             };
-            let from_idx = from.outputs.iter().position(|p| p.name == wire.from_port).unwrap_or(0);
-            let to_idx = to.inputs.iter().position(|p| p.name == wire.to_port).unwrap_or(0);
+            let from_idx = from
+                .outputs
+                .iter()
+                .position(|p| p.name == wire.from_port)
+                .unwrap_or(0);
+            let to_idx = to
+                .inputs
+                .iter()
+                .position(|p| p.name == wire.to_port)
+                .unwrap_or(0);
             let (fgx, fgy) = from.output_port_pos_graph(from_idx);
             let (tgx, tgy) = to.input_port_pos_graph(to_idx);
             let (fx, fy) = c.to_screen(self.viewport, fgx, fgy);
@@ -505,11 +516,18 @@ impl HitTargets for GraphCanvasTargets<'_> {
             let (y0, y1) = (fy.min(ty), fy.max(ty));
             out.push(HitTargetEntry {
                 kind: "wire",
-                label: format!("{}.{} → {}.{}", from.title, wire.from_port, to.title, wire.to_port),
+                label: format!(
+                    "{}.{} → {}.{}",
+                    from.title, wire.from_port, to.title, wire.to_port
+                ),
                 rect: to_node_rect(Rect::new(x0, y0, (x1 - x0).max(1.0), (y1 - y0).max(1.0))),
                 payload: format!(
                     "scope={}/from={}:{}/to={}:{}",
-                    scope.iter().map(u32::to_string).collect::<Vec<_>>().join(","),
+                    scope
+                        .iter()
+                        .map(u32::to_string)
+                        .collect::<Vec<_>>()
+                        .join(","),
                     wire.from_node,
                     wire.from_port,
                     wire.to_node,

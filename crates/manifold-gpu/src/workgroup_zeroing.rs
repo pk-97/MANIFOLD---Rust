@@ -63,7 +63,14 @@ pub(crate) fn with_workgroup_zeroing(module: &naga::Module, label: &str) -> Opti
         let mut runs = Vec::new();
         for global in globals {
             let mut steps = Vec::new();
-            collect_runs(&module.types, module.global_variables[global].ty, global, &mut steps, &mut runs, label);
+            collect_runs(
+                &module.types,
+                module.global_variables[global].ty,
+                global,
+                &mut steps,
+                &mut runs,
+                label,
+            );
         }
         planned.push((ep_index, runs));
     }
@@ -73,19 +80,29 @@ pub(crate) fn with_workgroup_zeroing(module: &naga::Module, label: &str) -> Opti
 
     let mut module = module.clone();
     let u32_ty = module.types.insert(
-        Type { name: None, inner: TypeInner::Scalar(Scalar::U32) },
+        Type {
+            name: None,
+            inner: TypeInner::Scalar(Scalar::U32),
+        },
         Span::UNDEFINED,
     );
     for (ep_index, mut regions) in planned {
         for region in &mut regions {
             if let TypeInner::Atomic(scalar) = module.types[region.value].inner {
                 region.value = module.types.insert(
-                    Type { name: None, inner: TypeInner::Scalar(scalar) },
+                    Type {
+                        name: None,
+                        inner: TypeInner::Scalar(scalar),
+                    },
                     Span::UNDEFINED,
                 );
             }
         }
-        let naga::Module { types, entry_points, .. } = &mut module;
+        let naga::Module {
+            types,
+            entry_points,
+            ..
+        } = &mut module;
         let ep = &mut entry_points[ep_index];
         if ep.workgroup_size_overrides.is_some() {
             panic!(
@@ -125,7 +142,9 @@ fn collect_runs(
         }
         TypeInner::Struct { ref members, .. } => {
             for (index, member) in members.iter().enumerate() {
-                steps.push(Step::Member { index: index as u32 });
+                steps.push(Step::Member {
+                    index: index as u32,
+                });
                 collect_runs(types, member.ty, global, steps, runs, label);
                 steps.pop();
             }
@@ -135,8 +154,15 @@ fn collect_runs(
                 Step::Index { len } => n.checked_mul(len),
                 Step::Member { .. } => Some(n),
             });
-            let count = count.unwrap_or_else(|| panic!("{label}: workgroup variable has more than u32::MAX elements"));
-            runs.push(Region { global, steps: steps.clone(), count, value: ty });
+            let count = count.unwrap_or_else(|| {
+                panic!("{label}: workgroup variable has more than u32::MAX elements")
+            });
+            runs.push(Region {
+                global,
+                steps: steps.clone(),
+                count,
+                value: ty,
+            });
         }
     }
 }
@@ -150,7 +176,11 @@ fn build_prologue(
 ) -> Block {
     let mut block = Block::new();
     let invocation = invocation_index(function, types, u32_ty, &mut block);
-    let Function { expressions, local_variables, .. } = function;
+    let Function {
+        expressions,
+        local_variables,
+        ..
+    } = function;
     for region in regions {
         let zero = push(expressions, &mut block, Expression::ZeroValue(region.value));
         if region.count <= threads {
@@ -160,32 +190,66 @@ fn build_prologue(
             if region.count == threads {
                 block.append(&mut body);
             } else {
-                let count = push(expressions, &mut block, Expression::Literal(Literal::U32(region.count)));
+                let count = push(
+                    expressions,
+                    &mut block,
+                    Expression::Literal(Literal::U32(region.count)),
+                );
                 let condition = push(
                     expressions,
                     &mut block,
-                    Expression::Binary { op: BinaryOperator::Less, left: invocation, right: count },
+                    Expression::Binary {
+                        op: BinaryOperator::Less,
+                        left: invocation,
+                        right: count,
+                    },
                 );
                 block.push(
-                    Statement::If { condition, accept: body, reject: Block::new() },
+                    Statement::If {
+                        condition,
+                        accept: body,
+                        reject: Block::new(),
+                    },
                     Span::UNDEFINED,
                 );
             }
         } else {
             // for (i = invocation; i < count; i += threads)
             let counter = local_variables.append(
-                LocalVariable { name: None, ty: u32_ty, init: None },
+                LocalVariable {
+                    name: None,
+                    ty: u32_ty,
+                    init: None,
+                },
                 Span::UNDEFINED,
             );
             let counter = push(expressions, &mut block, Expression::LocalVariable(counter));
-            block.push(Statement::Store { pointer: counter, value: invocation }, Span::UNDEFINED);
+            block.push(
+                Statement::Store {
+                    pointer: counter,
+                    value: invocation,
+                },
+                Span::UNDEFINED,
+            );
             let mut body = Block::new();
-            let i = push(expressions, &mut body, Expression::Load { pointer: counter });
-            let count = push(expressions, &mut body, Expression::Literal(Literal::U32(region.count)));
+            let i = push(
+                expressions,
+                &mut body,
+                Expression::Load { pointer: counter },
+            );
+            let count = push(
+                expressions,
+                &mut body,
+                Expression::Literal(Literal::U32(region.count)),
+            );
             let done = push(
                 expressions,
                 &mut body,
-                Expression::Binary { op: BinaryOperator::GreaterEqual, left: i, right: count },
+                Expression::Binary {
+                    op: BinaryOperator::GreaterEqual,
+                    left: i,
+                    right: count,
+                },
             );
             body.push(
                 Statement::If {
@@ -196,20 +260,41 @@ fn build_prologue(
                 Span::UNDEFINED,
             );
             store_element(expressions, &mut body, region, i, zero);
-            let stride = push(expressions, &mut body, Expression::Literal(Literal::U32(threads)));
+            let stride = push(
+                expressions,
+                &mut body,
+                Expression::Literal(Literal::U32(threads)),
+            );
             let next = push(
                 expressions,
                 &mut body,
-                Expression::Binary { op: BinaryOperator::Add, left: i, right: stride },
+                Expression::Binary {
+                    op: BinaryOperator::Add,
+                    left: i,
+                    right: stride,
+                },
             );
-            body.push(Statement::Store { pointer: counter, value: next }, Span::UNDEFINED);
+            body.push(
+                Statement::Store {
+                    pointer: counter,
+                    value: next,
+                },
+                Span::UNDEFINED,
+            );
             block.push(
-                Statement::Loop { body, continuing: Block::new(), break_if: None },
+                Statement::Loop {
+                    body,
+                    continuing: Block::new(),
+                    break_if: None,
+                },
                 Span::UNDEFINED,
             );
         }
     }
-    block.push(Statement::ControlBarrier(naga::Barrier::WORK_GROUP), Span::UNDEFINED);
+    block.push(
+        Statement::ControlBarrier(naga::Barrier::WORK_GROUP),
+        Span::UNDEFINED,
+    );
     block
 }
 
@@ -222,20 +307,34 @@ fn invocation_index(
     block: &mut Block,
 ) -> Handle<Expression> {
     let is_index = |binding: &Option<Binding>| {
-        matches!(binding, Some(Binding::BuiltIn(BuiltIn::LocalInvocationIndex)))
+        matches!(
+            binding,
+            Some(Binding::BuiltIn(BuiltIn::LocalInvocationIndex))
+        )
     };
     for (arg, argument) in function.arguments.iter().enumerate() {
         if is_index(&argument.binding) {
-            return push(&mut function.expressions, block, Expression::FunctionArgument(arg as u32));
+            return push(
+                &mut function.expressions,
+                block,
+                Expression::FunctionArgument(arg as u32),
+            );
         }
         if let TypeInner::Struct { ref members, .. } = types[argument.ty].inner
             && let Some(member) = members.iter().position(|m| is_index(&m.binding))
         {
-            let base = push(&mut function.expressions, block, Expression::FunctionArgument(arg as u32));
+            let base = push(
+                &mut function.expressions,
+                block,
+                Expression::FunctionArgument(arg as u32),
+            );
             return push(
                 &mut function.expressions,
                 block,
-                Expression::AccessIndex { base, index: member as u32 },
+                Expression::AccessIndex {
+                    base,
+                    index: member as u32,
+                },
             );
         }
     }
@@ -245,7 +344,11 @@ fn invocation_index(
         binding: Some(Binding::BuiltIn(BuiltIn::LocalInvocationIndex)),
     });
     let arg = function.arguments.len() as u32 - 1;
-    push(&mut function.expressions, block, Expression::FunctionArgument(arg))
+    push(
+        &mut function.expressions,
+        block,
+        Expression::FunctionArgument(arg),
+    )
 }
 
 /// Store `zero` into element `index` of the region's run.
@@ -256,23 +359,42 @@ fn store_element(
     index: Handle<Expression>,
     zero: Handle<Expression>,
 ) {
-    let mut pointer = push(expressions, block, Expression::GlobalVariable(region.global));
+    let mut pointer = push(
+        expressions,
+        block,
+        Expression::GlobalVariable(region.global),
+    );
     let mut stride = region.count;
     let mut outermost = true;
     for step in &region.steps {
         match *step {
             Step::Member { index: member } => {
-                pointer = push(expressions, block, Expression::AccessIndex { base: pointer, index: member });
+                pointer = push(
+                    expressions,
+                    block,
+                    Expression::AccessIndex {
+                        base: pointer,
+                        index: member,
+                    },
+                );
             }
             Step::Index { len } => {
                 stride /= len;
                 let mut element = index;
                 if stride > 1 {
-                    let divisor = push(expressions, block, Expression::Literal(Literal::U32(stride)));
+                    let divisor = push(
+                        expressions,
+                        block,
+                        Expression::Literal(Literal::U32(stride)),
+                    );
                     element = push(
                         expressions,
                         block,
-                        Expression::Binary { op: BinaryOperator::Divide, left: element, right: divisor },
+                        Expression::Binary {
+                            op: BinaryOperator::Divide,
+                            left: element,
+                            right: divisor,
+                        },
                     );
                 }
                 // `index < count` already bounds the outermost array.
@@ -281,24 +403,48 @@ fn store_element(
                     element = push(
                         expressions,
                         block,
-                        Expression::Binary { op: BinaryOperator::Modulo, left: element, right: modulus },
+                        Expression::Binary {
+                            op: BinaryOperator::Modulo,
+                            left: element,
+                            right: modulus,
+                        },
                     );
                 }
                 outermost = false;
-                pointer = push(expressions, block, Expression::Access { base: pointer, index: element });
+                pointer = push(
+                    expressions,
+                    block,
+                    Expression::Access {
+                        base: pointer,
+                        index: element,
+                    },
+                );
             }
         }
     }
-    block.push(Statement::Store { pointer, value: zero }, Span::UNDEFINED);
+    block.push(
+        Statement::Store {
+            pointer,
+            value: zero,
+        },
+        Span::UNDEFINED,
+    );
 }
 
 /// Append `expr` and, unless naga treats it as in scope from the function's
 /// start, emit it into `block` where it is used.
-fn push(expressions: &mut Arena<Expression>, block: &mut Block, expr: Expression) -> Handle<Expression> {
+fn push(
+    expressions: &mut Arena<Expression>,
+    block: &mut Block,
+    expr: Expression,
+) -> Handle<Expression> {
     let emit = !expr.needs_pre_emit();
     let handle = expressions.append(expr, Span::UNDEFINED);
     if emit {
-        block.push(Statement::Emit(Range::new_from_bounds(handle, handle)), Span::UNDEFINED);
+        block.push(
+            Statement::Emit(Range::new_from_bounds(handle, handle)),
+            Span::UNDEFINED,
+        );
     }
     handle
 }
@@ -308,9 +454,12 @@ mod tests {
     use super::with_workgroup_zeroing;
 
     fn validate(module: &naga::Module) {
-        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
-            .validate(module)
-            .expect("the zeroed module validates");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(module)
+        .expect("the zeroed module validates");
     }
 
     #[test]
@@ -325,7 +474,8 @@ mod tests {
             fn ignores(@builtin(global_invocation_id) id: vec3<u32>) { out[id.x] = 2.0; }
         "#;
         let module = naga::front::wgsl::parse_str(wgsl).expect("parses");
-        let zeroed = with_workgroup_zeroing(&module, "test").expect("`uses` reaches workgroup memory through a helper");
+        let zeroed = with_workgroup_zeroing(&module, "test")
+            .expect("`uses` reaches workgroup memory through a helper");
         validate(&zeroed);
         for (before, after) in module.entry_points.iter().zip(&zeroed.entry_points) {
             let changed = after.function.body.len() != before.function.body.len()

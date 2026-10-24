@@ -49,7 +49,8 @@ fn int_param(ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32) -> f32 {
 fn shape(size: f32, batch: f32) -> Option<(u32, u32)> {
     let n = size as u32;
     let b = batch as u32;
-    ((16.0..=1024.0).contains(&size) && n.is_power_of_two() && (1.0..=16.0).contains(&batch)).then_some((n, b))
+    ((16.0..=1024.0).contains(&size) && n.is_power_of_two() && (1.0..=16.0).contains(&batch))
+        .then_some((n, b))
 }
 
 impl Primitive for InverseFft2d {
@@ -63,7 +64,10 @@ impl Primitive for InverseFft2d {
             Some(ParamValue::Float(v)) => v.round(),
             _ => default,
         };
-        (port == "field").then(|| shape(get("size", 256.0), get("batch", 6.0))).flatten().map(|(n, b)| b * n * n)
+        (port == "field")
+            .then(|| shape(get("size", 256.0), get("batch", 6.0)))
+            .flatten()
+            .map(|(n, b)| b * n * n)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -72,7 +76,9 @@ impl Primitive for InverseFft2d {
             ctx.error(format!("Inverse FFT 2D: Size must be a power of two in 16..1024 and Batch 1..16 (got {size}, {batch})"));
             return;
         };
-        let (Some(spectrum), Some(field)) = (ctx.inputs.array("spectrum"), ctx.outputs.array("field")) else {
+        let (Some(spectrum), Some(field)) =
+            (ctx.inputs.array("spectrum"), ctx.outputs.array("field"))
+        else {
             return;
         };
         let spectrum_bytes = u64::from(b) * u64::from(n) * u64::from(n / 2 + 1) * 8;
@@ -86,10 +92,17 @@ impl Primitive for InverseFft2d {
         }
         let gpu = ctx.gpu_encoder();
         if !matches!(&self.plan, Some((pn, pb, _)) if (*pn, *pb) == (n, b)) {
-            let fft = GpuFft::new_nd(gpu.device, FftKind::HermiteanToReal, &[b as usize, n as usize, n as usize], &[1, 2]);
+            let fft = GpuFft::new_nd(
+                gpu.device,
+                FftKind::HermiteanToReal,
+                &[b as usize, n as usize, n as usize],
+                &[1, 2],
+            );
             self.plan = Some((n, b, fft));
         }
-        let Some((_, _, fft)) = &self.plan else { return };
+        let Some((_, _, fft)) = &self.plan else {
+            return;
+        };
         fft.encode(gpu.native_enc, spectrum, field);
     }
 }

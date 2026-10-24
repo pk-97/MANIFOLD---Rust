@@ -76,11 +76,16 @@ fn as_bytes<T>(v: &[T]) -> &[u8] {
 
 fn upload_irr(device: &GpuDevice, r: f32, g: f32, b: f32) -> GpuTexture {
     let texture = device.create_texture(&GpuTextureDesc {
-        width: W, height: H, depth: 1,
+        width: W,
+        height: H,
+        depth: 1,
         format: GpuTextureFormat::Rgba16Float,
         dimension: GpuTextureDimension::D2,
-        usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
-        label: "gesture-irr", mip_levels: 1,
+        usage: GpuTextureUsage::CPU_UPLOAD
+            | GpuTextureUsage::SHADER_READ
+            | GpuTextureUsage::COPY_SRC,
+        label: "gesture-irr",
+        mip_levels: 1,
     });
     device.upload_texture(&texture, as_bytes(&flat_rgba_f16(W, H, r, g, b)));
     texture
@@ -88,25 +93,38 @@ fn upload_irr(device: &GpuDevice, r: f32, g: f32, b: f32) -> GpuTexture {
 
 fn make_history(device: &GpuDevice, label: &str) -> GpuTexture {
     device.create_texture(&GpuTextureDesc {
-        width: W, height: H, depth: 1,
+        width: W,
+        height: H,
+        depth: 1,
         format: GpuTextureFormat::Rgba16Float,
         dimension: GpuTextureDimension::D2,
-        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
-        label, mip_levels: 1,
+        usage: GpuTextureUsage::SHADER_WRITE
+            | GpuTextureUsage::SHADER_READ
+            | GpuTextureUsage::COPY_SRC,
+        label,
+        mip_levels: 1,
     })
 }
 
-fn make_history_side_channel(device: &GpuDevice, format: GpuTextureFormat, label: &str) -> GpuTexture {
-    let mut usage = GpuTextureUsage::SHADER_WRITE
-        | GpuTextureUsage::SHADER_READ
-        | GpuTextureUsage::COPY_SRC;
+fn make_history_side_channel(
+    device: &GpuDevice,
+    format: GpuTextureFormat,
+    label: &str,
+) -> GpuTexture {
+    let mut usage =
+        GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC;
     if format == GpuTextureFormat::R16Float {
         usage = usage | GpuTextureUsage::RENDER_TARGET;
     }
     device.create_texture(&GpuTextureDesc {
-        width: W, height: H, depth: 1, format, dimension: GpuTextureDimension::D2,
+        width: W,
+        height: H,
+        depth: 1,
+        format,
+        dimension: GpuTextureDimension::D2,
         usage,
-        label, mip_levels: 1,
+        label,
+        mip_levels: 1,
     })
 }
 
@@ -115,17 +133,20 @@ fn make_history_side_channel(device: &GpuDevice, format: GpuTextureFormat, label
 const SV_LAYERS: u32 = 2;
 
 fn make_sv_history(device: &GpuDevice, format: GpuTextureFormat, label: &str) -> GpuTexture {
-    let mut usage = GpuTextureUsage::SHADER_WRITE
-        | GpuTextureUsage::SHADER_READ
-        | GpuTextureUsage::COPY_SRC;
+    let mut usage =
+        GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC;
     if format == GpuTextureFormat::R16Float {
         usage = usage | GpuTextureUsage::RENDER_TARGET;
     }
     device.create_texture(&GpuTextureDesc {
-        width: W, height: H, depth: SV_LAYERS, format,
+        width: W,
+        height: H,
+        depth: SV_LAYERS,
+        format,
         dimension: GpuTextureDimension::D2Array,
         usage,
-        label, mip_levels: 1,
+        label,
+        mip_levels: 1,
     })
 }
 
@@ -134,11 +155,14 @@ fn make_sv_history(device: &GpuDevice, format: GpuTextureFormat, label: &str) ->
 fn make_sv_layers(device: &GpuDevice, layers: &[f32], label: &str) -> GpuTexture {
     assert_eq!(layers.len() as u32, SV_LAYERS);
     let texture = device.create_texture(&GpuTextureDesc {
-        width: W, height: H, depth: SV_LAYERS,
+        width: W,
+        height: H,
+        depth: SV_LAYERS,
         format: GpuTextureFormat::Rgba16Float,
         dimension: GpuTextureDimension::D2Array,
         usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
-        label, mip_levels: 1,
+        label,
+        mip_levels: 1,
     });
     for (i, &v) in layers.iter().enumerate() {
         let texels = flat_rgba_f16(W, H, v, v, v);
@@ -149,11 +173,14 @@ fn make_sv_layers(device: &GpuDevice, layers: &[f32], label: &str) -> GpuTexture
 
 fn make_pass_through(device: &GpuDevice, r: f32, g: f32, b: f32, label: &str) -> GpuTexture {
     let texture = device.create_texture(&GpuTextureDesc {
-        width: W, height: H, depth: 1,
+        width: W,
+        height: H,
+        depth: 1,
         format: GpuTextureFormat::Rgba16Float,
         dimension: GpuTextureDimension::D2,
         usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
-        label, mip_levels: 1,
+        label,
+        mip_levels: 1,
     });
     device.upload_texture(&texture, as_bytes(&flat_rgba_f16(W, H, r, g, b)));
     texture
@@ -161,15 +188,21 @@ fn make_pass_through(device: &GpuDevice, r: f32, g: f32, b: f32, label: &str) ->
 
 fn make_depth_at(device: &GpuDevice, z: f32) -> GpuTexture {
     let texture = device.create_texture(&GpuTextureDesc {
-        width: W, height: H, depth: 1,
+        width: W,
+        height: H,
+        depth: 1,
         format: GpuTextureFormat::Depth32Float,
         dimension: GpuTextureDimension::D2,
         usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
-        label: "gr-depth", mip_levels: 1,
+        label: "gr-depth",
+        mip_levels: 1,
     });
     let pixels = vec![z; (W * H) as usize];
     let bytes: &[u8] = unsafe {
-        std::slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(&pixels[..]))
+        std::slice::from_raw_parts(
+            pixels.as_ptr().cast::<u8>(),
+            std::mem::size_of_val(&pixels[..]),
+        )
     };
     device.upload_texture(&texture, bytes);
     texture
@@ -197,7 +230,10 @@ impl FullHistorySet {
 
     fn with_hold_format(device: &GpuDevice, hold_format: GpuTextureFormat) -> Self {
         Self {
-            irr: [make_history(device, "gr-irr-a"), make_history(device, "gr-irr-b")],
+            irr: [
+                make_history(device, "gr-irr-a"),
+                make_history(device, "gr-irr-b"),
+            ],
             depth: [
                 make_history_side_channel(device, GpuTextureFormat::R32Float, "gr-depth-a"),
                 make_history_side_channel(device, GpuTextureFormat::R32Float, "gr-depth-b"),
@@ -210,7 +246,10 @@ impl FullHistorySet {
                 make_history_side_channel(device, GpuTextureFormat::Rgba32Float, "gr-moments-a"),
                 make_history_side_channel(device, GpuTextureFormat::Rgba32Float, "gr-moments-b"),
             ],
-            refl: [make_history(device, "gr-refl-a"), make_history(device, "gr-refl-b")],
+            refl: [
+                make_history(device, "gr-refl-a"),
+                make_history(device, "gr-refl-b"),
+            ],
             sv: [
                 make_sv_history(device, GpuTextureFormat::Rgba16Float, "gr-sv-a"),
                 make_sv_history(device, GpuTextureFormat::Rgba16Float, "gr-sv-b"),
@@ -227,31 +266,76 @@ impl FullHistorySet {
                 make_sv_history(device, hold_format, "gr-svh-a"),
                 make_sv_history(device, hold_format, "gr-svh-b"),
             ],
-            svt: [make_history(device, "gr-svt-a"), make_history(device, "gr-svt-b")],
+            svt: [
+                make_history(device, "gr-svt-a"),
+                make_history(device, "gr-svt-b"),
+            ],
             ping: 0,
         }
     }
-    fn read_irr(&self) -> &GpuTexture { &self.irr[self.ping] }
-    fn write_irr(&self) -> &GpuTexture { &self.irr[1 - self.ping] }
-    fn read_depth(&self) -> &GpuTexture { &self.depth[self.ping] }
-    fn write_depth(&self) -> &GpuTexture { &self.depth[1 - self.ping] }
-    fn read_normal(&self) -> &GpuTexture { &self.normal[self.ping] }
-    fn write_normal(&self) -> &GpuTexture { &self.normal[1 - self.ping] }
-    fn read_moments(&self) -> &GpuTexture { &self.moments[self.ping] }
-    fn write_moments(&self) -> &GpuTexture { &self.moments[1 - self.ping] }
-    fn read_refl(&self) -> &GpuTexture { &self.refl[self.ping] }
-    fn write_refl(&self) -> &GpuTexture { &self.refl[1 - self.ping] }
-    fn read_sv(&self) -> &GpuTexture { &self.sv[self.ping] }
-    fn write_sv(&self) -> &GpuTexture { &self.sv[1 - self.ping] }
-    fn read_sv_m1(&self) -> &GpuTexture { &self.sv_m1[self.ping] }
-    fn write_sv_m1(&self) -> &GpuTexture { &self.sv_m1[1 - self.ping] }
-    fn read_sv_m2(&self) -> &GpuTexture { &self.sv_m2[self.ping] }
-    fn write_sv_m2(&self) -> &GpuTexture { &self.sv_m2[1 - self.ping] }
-    fn read_sv_hold(&self) -> &GpuTexture { &self.sv_hold[self.ping] }
-    fn write_sv_hold(&self) -> &GpuTexture { &self.sv_hold[1 - self.ping] }
-    fn read_svt(&self) -> &GpuTexture { &self.svt[self.ping] }
-    fn write_svt(&self) -> &GpuTexture { &self.svt[1 - self.ping] }
-    fn advance(&mut self) { self.ping = 1 - self.ping; }
+    fn read_irr(&self) -> &GpuTexture {
+        &self.irr[self.ping]
+    }
+    fn write_irr(&self) -> &GpuTexture {
+        &self.irr[1 - self.ping]
+    }
+    fn read_depth(&self) -> &GpuTexture {
+        &self.depth[self.ping]
+    }
+    fn write_depth(&self) -> &GpuTexture {
+        &self.depth[1 - self.ping]
+    }
+    fn read_normal(&self) -> &GpuTexture {
+        &self.normal[self.ping]
+    }
+    fn write_normal(&self) -> &GpuTexture {
+        &self.normal[1 - self.ping]
+    }
+    fn read_moments(&self) -> &GpuTexture {
+        &self.moments[self.ping]
+    }
+    fn write_moments(&self) -> &GpuTexture {
+        &self.moments[1 - self.ping]
+    }
+    fn read_refl(&self) -> &GpuTexture {
+        &self.refl[self.ping]
+    }
+    fn write_refl(&self) -> &GpuTexture {
+        &self.refl[1 - self.ping]
+    }
+    fn read_sv(&self) -> &GpuTexture {
+        &self.sv[self.ping]
+    }
+    fn write_sv(&self) -> &GpuTexture {
+        &self.sv[1 - self.ping]
+    }
+    fn read_sv_m1(&self) -> &GpuTexture {
+        &self.sv_m1[self.ping]
+    }
+    fn write_sv_m1(&self) -> &GpuTexture {
+        &self.sv_m1[1 - self.ping]
+    }
+    fn read_sv_m2(&self) -> &GpuTexture {
+        &self.sv_m2[self.ping]
+    }
+    fn write_sv_m2(&self) -> &GpuTexture {
+        &self.sv_m2[1 - self.ping]
+    }
+    fn read_sv_hold(&self) -> &GpuTexture {
+        &self.sv_hold[self.ping]
+    }
+    fn write_sv_hold(&self) -> &GpuTexture {
+        &self.sv_hold[1 - self.ping]
+    }
+    fn read_svt(&self) -> &GpuTexture {
+        &self.svt[self.ping]
+    }
+    fn write_svt(&self) -> &GpuTexture {
+        &self.svt[1 - self.ping]
+    }
+    fn advance(&mut self) {
+        self.ping = 1 - self.ping;
+    }
 }
 
 /// Run one accumulate frame on a FullHistorySet. `reset_flags` ORs into
@@ -275,9 +359,8 @@ fn run_accumulate_frame(
     label: &str,
 ) {
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
-    let mut params = AccumulateParams::new(
-        [W, H], alpha, reset, 1, [0.0; 3], 0.0, IDENTITY, IDENTITY,
-    );
+    let mut params =
+        AccumulateParams::new([W, H], alpha, reset, 1, [0.0; 3], 0.0, IDENTITY, IDENTITY);
     params.reset |= reset_flags;
     let mut enc = device.create_encoder(label);
     {
@@ -329,7 +412,8 @@ fn read_r_center(device: &GpuDevice, texture: &GpuTexture) -> f32 {
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait_completed();
     let ptr = buf.mapped_ptr().expect("shared readback buffer");
-    let f16s: &[f16] = unsafe { std::slice::from_raw_parts(ptr.cast::<f16>(), (W * H * 4) as usize) };
+    let f16s: &[f16] =
+        unsafe { std::slice::from_raw_parts(ptr.cast::<f16>(), (W * H * 4) as usize) };
     f16s[0].to_f32()
 }
 
@@ -342,7 +426,8 @@ fn read_rgba_pixels(device: &GpuDevice, texture: &GpuTexture) -> Vec<[f32; 4]> {
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait_completed();
     let ptr = buf.mapped_ptr().expect("shared readback buffer");
-    let f16s: &[f16] = unsafe { std::slice::from_raw_parts(ptr.cast::<f16>(), (W * H * 4) as usize) };
+    let f16s: &[f16] =
+        unsafe { std::slice::from_raw_parts(ptr.cast::<f16>(), (W * H * 4) as usize) };
     f16s.chunks_exact(4)
         .map(|p| [p[0].to_f32(), p[1].to_f32(), p[2].to_f32(), p[3].to_f32()])
         .collect()
@@ -356,7 +441,8 @@ fn read_rgb_center(device: &GpuDevice, texture: &GpuTexture) -> [f32; 3] {
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait_completed();
     let ptr = buf.mapped_ptr().expect("shared readback buffer");
-    let f16s: &[f16] = unsafe { std::slice::from_raw_parts(ptr.cast::<f16>(), (W * H * 4) as usize) };
+    let f16s: &[f16] =
+        unsafe { std::slice::from_raw_parts(ptr.cast::<f16>(), (W * H * 4) as usize) };
     [f16s[0].to_f32(), f16s[1].to_f32(), f16s[2].to_f32()]
 }
 
@@ -392,7 +478,11 @@ fn assert_history_parity(
     for (name, scalar, rgba) in rgba_pairs {
         let scalar_pixels = read_rgba_pixels(device, scalar);
         let rgba_pixels = read_rgba_pixels(device, rgba);
-        assert_eq!(scalar_pixels.len(), rgba_pixels.len(), "{label}/{name}: pixel count");
+        assert_eq!(
+            scalar_pixels.len(),
+            rgba_pixels.len(),
+            "{label}/{name}: pixel count"
+        );
         for (pixel, (a, b)) in scalar_pixels.iter().zip(rgba_pixels.iter()).enumerate() {
             for channel in 0..4 {
                 assert!(
@@ -407,8 +497,14 @@ fn assert_history_parity(
             }
         }
     }
-    let (hold_a, hold_b) = (layer(compact.read_sv_hold(), 0), layer(reference.read_sv_hold(), 0));
-    let (hold2_a, hold2_b) = (layer(compact.read_sv_hold(), 1), layer(reference.read_sv_hold(), 1));
+    let (hold_a, hold_b) = (
+        layer(compact.read_sv_hold(), 0),
+        layer(reference.read_sv_hold(), 0),
+    );
+    let (hold2_a, hold2_b) = (
+        layer(compact.read_sv_hold(), 1),
+        layer(reference.read_sv_hold(), 1),
+    );
     let hold_pairs = [
         ("sv_hold layer 0", &hold_a, &hold_b),
         ("sv_hold layer 1", &hold2_a, &hold2_b),
@@ -423,7 +519,11 @@ fn assert_history_parity(
                 a.is_finite() && b[0].is_finite(),
                 "{label}/{name}: pixel {pixel} is non-finite"
             );
-            assert_eq!(a.to_bits(), b[0].to_bits(), "{label}/{name}: pixel {pixel} diverged");
+            assert_eq!(
+                a.to_bits(),
+                b[0].to_bits(),
+                "{label}/{name}: pixel {pixel} diverged"
+            );
         }
     }
     holds
@@ -434,7 +534,13 @@ fn make_identity_obj_motion(device: &GpuDevice) -> manifold_gpu::GpuBuffer {
     let buf = device.create_buffer_shared(size_of::<[[f32; 4]; 4]>() as u64);
     let ptr = buf.mapped_ptr().expect("shared buffer");
     let ident: [[f32; 4]; 4] = IDENTITY;
-    unsafe { std::ptr::copy_nonoverlapping(&ident as *const _ as *const u8, ptr, size_of::<[[f32; 4]; 4]>()); }
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            &ident as *const _ as *const u8,
+            ptr,
+            size_of::<[[f32; 4]; 4]>(),
+        );
+    }
     buf
 }
 
@@ -458,27 +564,67 @@ fn step_response_reaches_90_percent_within_4_frames() {
     // Warm up: constant irradiance 0.1 for 20 frames (converges to ~0.1).
     let warm_irr = upload_irr(device, 0.1, 0.1, 0.1);
     run_accumulate_frame(
-        device, &tracer, &warm_irr, &depth, &normal, &sv, &svt, &refl,
-        &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, true, 0, "sr-w-0",
+        device,
+        &tracer,
+        &warm_irr,
+        &depth,
+        &normal,
+        &sv,
+        &svt,
+        &refl,
+        &mut history,
+        &gi_materials_buf,
+        &obj_motion_buf,
+        TEST_ALPHA,
+        true,
+        0,
+        "sr-w-0",
     );
     for i in 1..20 {
         run_accumulate_frame(
-            device, &tracer, &warm_irr, &depth, &normal, &sv, &svt, &refl,
-            &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false, 0,
+            device,
+            &tracer,
+            &warm_irr,
+            &depth,
+            &normal,
+            &sv,
+            &svt,
+            &refl,
+            &mut history,
+            &gi_materials_buf,
+            &obj_motion_buf,
+            TEST_ALPHA,
+            false,
+            0,
             &format!("sr-w-{i}"),
         );
     }
 
     let converged_r = read_r_center(device, history.read_irr());
-    assert!((converged_r - 0.1).abs() < 0.02, "converged r={converged_r:.4}");
+    assert!(
+        (converged_r - 0.1).abs() < 0.02,
+        "converged r={converged_r:.4}"
+    );
 
     // Step: change irradiance to 0.5, lighting_changed.
     let step_irr = upload_irr(device, 0.5, 0.5, 0.5);
     // Frame 0: lighting_changed (no gesture yet — first change).
     run_accumulate_frame(
-        device, &tracer, &step_irr, &depth, &normal, &sv, &svt, &refl,
-        &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false,
-        STEP_FLAG, "sr-step-0",
+        device,
+        &tracer,
+        &step_irr,
+        &depth,
+        &normal,
+        &sv,
+        &svt,
+        &refl,
+        &mut history,
+        &gi_materials_buf,
+        &obj_motion_buf,
+        TEST_ALPHA,
+        false,
+        STEP_FLAG,
+        "sr-step-0",
     );
     let f0 = read_r_center(device, history.read_irr());
     let step_mag = 0.4;
@@ -487,9 +633,21 @@ fn step_response_reaches_90_percent_within_4_frames() {
 
     // Frame 1: second consecutive change → gesture arms, n=2 held.
     run_accumulate_frame(
-        device, &tracer, &step_irr, &depth, &normal, &sv, &svt, &refl,
-        &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false,
-        STEP_FLAG | GESTURE_FLAG, "sr-step-1",
+        device,
+        &tracer,
+        &step_irr,
+        &depth,
+        &normal,
+        &sv,
+        &svt,
+        &refl,
+        &mut history,
+        &gi_materials_buf,
+        &obj_motion_buf,
+        TEST_ALPHA,
+        false,
+        STEP_FLAG | GESTURE_FLAG,
+        "sr-step-1",
     );
     let f1 = read_r_center(device, history.read_irr());
     let f1_pct = (f1 - converged_r) / step_mag;
@@ -497,9 +655,21 @@ fn step_response_reaches_90_percent_within_4_frames() {
 
     // Frame 2: gesture hangover (counter=1, still n=2).
     run_accumulate_frame(
-        device, &tracer, &step_irr, &depth, &normal, &sv, &svt, &refl,
-        &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false,
-        GESTURE_FLAG, "sr-step-2",
+        device,
+        &tracer,
+        &step_irr,
+        &depth,
+        &normal,
+        &sv,
+        &svt,
+        &refl,
+        &mut history,
+        &gi_materials_buf,
+        &obj_motion_buf,
+        TEST_ALPHA,
+        false,
+        GESTURE_FLAG,
+        "sr-step-2",
     );
     let f2 = read_r_center(device, history.read_irr());
     let f2_pct = (f2 - converged_r) / step_mag;
@@ -507,13 +677,28 @@ fn step_response_reaches_90_percent_within_4_frames() {
 
     // Frame 3: gesture expired, normal convergence resumes.
     run_accumulate_frame(
-        device, &tracer, &step_irr, &depth, &normal, &sv, &svt, &refl,
-        &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false,
-        0, "sr-step-3",
+        device,
+        &tracer,
+        &step_irr,
+        &depth,
+        &normal,
+        &sv,
+        &svt,
+        &refl,
+        &mut history,
+        &gi_materials_buf,
+        &obj_motion_buf,
+        TEST_ALPHA,
+        false,
+        0,
+        "sr-step-3",
     );
     let f3 = read_r_center(device, history.read_irr());
     let f3_pct = (f3 - converged_r) / step_mag;
-    assert!(f3_pct > 0.90, "frame 3: {f3_pct:.3} of step (must reach >90%)");
+    assert!(
+        f3_pct > 0.90,
+        "frame 3: {f3_pct:.3} of step (must reach >90%)"
+    );
 }
 
 /// Sub-threshold scrub oracle: continuous small per-frame deltas (simulating
@@ -535,13 +720,38 @@ fn sub_threshold_scrub_tracking_error_bounded() {
     // Warm up from 0.05.
     let warm_irr = upload_irr(device, 0.05, 0.05, 0.05);
     run_accumulate_frame(
-        device, &tracer, &warm_irr, &depth, &normal, &sv, &svt, &refl,
-        &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, true, 0, "so-w-0",
+        device,
+        &tracer,
+        &warm_irr,
+        &depth,
+        &normal,
+        &sv,
+        &svt,
+        &refl,
+        &mut history,
+        &gi_materials_buf,
+        &obj_motion_buf,
+        TEST_ALPHA,
+        true,
+        0,
+        "so-w-0",
     );
     for i in 1..30 {
         run_accumulate_frame(
-            device, &tracer, &warm_irr, &depth, &normal, &sv, &svt, &refl,
-            &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false, 0,
+            device,
+            &tracer,
+            &warm_irr,
+            &depth,
+            &normal,
+            &sv,
+            &svt,
+            &refl,
+            &mut history,
+            &gi_materials_buf,
+            &obj_motion_buf,
+            TEST_ALPHA,
+            false,
+            0,
             &format!("so-w-{i}"),
         );
     }
@@ -557,9 +767,21 @@ fn sub_threshold_scrub_tracking_error_bounded() {
             flags |= GESTURE_FLAG;
         }
         run_accumulate_frame(
-            device, &tracer, &ramp_irr, &depth, &normal, &sv, &svt, &refl,
-            &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false,
-            flags, &format!("so-ramp-{frame}"),
+            device,
+            &tracer,
+            &ramp_irr,
+            &depth,
+            &normal,
+            &sv,
+            &svt,
+            &refl,
+            &mut history,
+            &gi_materials_buf,
+            &obj_motion_buf,
+            TEST_ALPHA,
+            false,
+            flags,
+            &format!("so-ramp-{frame}"),
         );
         prev_was_changed = true;
         let accumulated = read_r_center(device, history.read_irr());
@@ -567,13 +789,19 @@ fn sub_threshold_scrub_tracking_error_bounded() {
         // After gesture active (frame 2+, n=2), tracking error bounded.
         // Bound: 0.08 — the n=2 steady-state ceiling for 0.025/frame ramp.
         if frame >= 2 {
-            assert!(error < 0.08, "frame {frame}: err {error:.4}, acc {accumulated:.4}, input {val:.4}");
+            assert!(
+                error < 0.08,
+                "frame {frame}: err {error:.4}, acc {accumulated:.4}, input {val:.4}"
+            );
         }
     }
 
     let final_val = read_r_center(device, history.read_irr());
     let target = 0.05 + 20.0 * 0.025; // 0.55
-    assert!((final_val - target).abs() < 0.06, "final {final_val:.4} vs target {target:.4}");
+    assert!(
+        (final_val - target).abs() < 0.06,
+        "final {final_val:.4} vs target {target:.4}"
+    );
 }
 
 /// SV-channel leg (i): continuous sun-direction move — sv follows within
@@ -595,13 +823,38 @@ fn sv_channel_follows_geometry_move_within_3_frames() {
     let sv_one = make_sv_layers(device, &[1.0, 1.0], "sgm-sv-one");
     let irr_one = upload_irr(device, 0.5, 0.5, 0.5);
     run_accumulate_frame(
-        device, &tracer, &irr_one, &depth, &normal, &sv_one, &svt, &refl,
-        &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, true, 0, "sgm-w-0",
+        device,
+        &tracer,
+        &irr_one,
+        &depth,
+        &normal,
+        &sv_one,
+        &svt,
+        &refl,
+        &mut history,
+        &gi_materials_buf,
+        &obj_motion_buf,
+        TEST_ALPHA,
+        true,
+        0,
+        "sgm-w-0",
     );
     for i in 1..20 {
         run_accumulate_frame(
-            device, &tracer, &irr_one, &depth, &normal, &sv_one, &svt, &refl,
-            &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false, 0,
+            device,
+            &tracer,
+            &irr_one,
+            &depth,
+            &normal,
+            &sv_one,
+            &svt,
+            &refl,
+            &mut history,
+            &gi_materials_buf,
+            &obj_motion_buf,
+            TEST_ALPHA,
+            false,
+            0,
             &format!("sgm-w-{i}"),
         );
     }
@@ -610,26 +863,65 @@ fn sv_channel_follows_geometry_move_within_3_frames() {
     let sv_zero = make_sv_layers(device, &[0.0, 1.0], "sgm-sv-zero");
     // Frame 0: geo_changed (single change — no gesture yet, sigma gate path).
     run_accumulate_frame(
-        device, &tracer, &irr_one, &depth, &normal, &sv_zero, &svt, &refl,
-        &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false,
-        GEO_CHANGED_FLAG, "sgm-step-0",
+        device,
+        &tracer,
+        &irr_one,
+        &depth,
+        &normal,
+        &sv_zero,
+        &svt,
+        &refl,
+        &mut history,
+        &gi_materials_buf,
+        &obj_motion_buf,
+        TEST_ALPHA,
+        false,
+        GEO_CHANGED_FLAG,
+        "sgm-step-0",
     );
     // Frame 1: geo_gesture arms — sv channel snaps via gesture cue.
     run_accumulate_frame(
-        device, &tracer, &irr_one, &depth, &normal, &sv_zero, &svt, &refl,
-        &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false,
-        GEO_CHANGED_FLAG | GEO_GESTURE_FLAG, "sgm-step-1",
+        device,
+        &tracer,
+        &irr_one,
+        &depth,
+        &normal,
+        &sv_zero,
+        &svt,
+        &refl,
+        &mut history,
+        &gi_materials_buf,
+        &obj_motion_buf,
+        TEST_ALPHA,
+        false,
+        GEO_CHANGED_FLAG | GEO_GESTURE_FLAG,
+        "sgm-step-1",
     );
     // Frame 2: gesture hangover (counter=1, still snapping).
     run_accumulate_frame(
-        device, &tracer, &irr_one, &depth, &normal, &sv_zero, &svt, &refl,
-        &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false,
-        GEO_GESTURE_FLAG, "sgm-step-2",
+        device,
+        &tracer,
+        &irr_one,
+        &depth,
+        &normal,
+        &sv_zero,
+        &svt,
+        &refl,
+        &mut history,
+        &gi_materials_buf,
+        &obj_motion_buf,
+        TEST_ALPHA,
+        false,
+        GEO_GESTURE_FLAG,
+        "sgm-step-2",
     );
 
     // sv should be: frame1 0.5 vs 0.0, frame2 0.25. Converging toward 0.
     let sv_out = read_r_center(device, history.read_sv());
-    assert!(sv_out < 0.30, "sv after 3-frame geo move: {sv_out:.4}, expected < 0.30");
+    assert!(
+        sv_out < 0.30,
+        "sv after 3-frame geo move: {sv_out:.4}, expected < 0.30"
+    );
 }
 
 /// SV-channel leg (ii): pure intensity/color strobe — sv convergence is NOT
@@ -651,13 +943,38 @@ fn sv_channel_holds_through_strobe() {
     let sv_half = make_sv_layers(device, &[0.5, 1.0], "ss-sv-half");
     let irr_base = upload_irr(device, 0.3, 0.3, 0.3);
     run_accumulate_frame(
-        device, &tracer, &irr_base, &depth, &normal, &sv_half, &svt, &refl,
-        &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, true, 0, "ss-w-0",
+        device,
+        &tracer,
+        &irr_base,
+        &depth,
+        &normal,
+        &sv_half,
+        &svt,
+        &refl,
+        &mut history,
+        &gi_materials_buf,
+        &obj_motion_buf,
+        TEST_ALPHA,
+        true,
+        0,
+        "ss-w-0",
     );
     for i in 1..30 {
         run_accumulate_frame(
-            device, &tracer, &irr_base, &depth, &normal, &sv_half, &svt, &refl,
-            &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false, 0,
+            device,
+            &tracer,
+            &irr_base,
+            &depth,
+            &normal,
+            &sv_half,
+            &svt,
+            &refl,
+            &mut history,
+            &gi_materials_buf,
+            &obj_motion_buf,
+            TEST_ALPHA,
+            false,
+            0,
             &format!("ss-w-{i}"),
         );
     }
@@ -672,19 +989,37 @@ fn sv_channel_holds_through_strobe() {
             flags |= GESTURE_FLAG;
         }
         run_accumulate_frame(
-            device, &tracer, &irr_strobe, &depth, &normal, &sv_half, &svt, &refl,
-            &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false,
-            flags, &format!("ss-strobe-{frame}"),
+            device,
+            &tracer,
+            &irr_strobe,
+            &depth,
+            &normal,
+            &sv_half,
+            &svt,
+            &refl,
+            &mut history,
+            &gi_materials_buf,
+            &obj_motion_buf,
+            TEST_ALPHA,
+            false,
+            flags,
+            &format!("ss-strobe-{frame}"),
         );
     }
 
     let sv_after = read_r_center(device, history.read_sv());
     let sv_delta = (sv_after - sv_before).abs();
-    assert!(sv_delta < 0.05, "sv collapse on strobe: {sv_before:.4}→{sv_after:.4}");
+    assert!(
+        sv_delta < 0.05,
+        "sv collapse on strobe: {sv_before:.4}→{sv_after:.4}"
+    );
 
     // Irradiance SHOULD have moved.
     let irr_after = read_r_center(device, history.read_irr());
-    assert!(irr_after > 0.5, "irradiance must track strobe: {irr_after:.4}");
+    assert!(
+        irr_after > 0.5,
+        "irradiance must track strobe: {irr_after:.4}"
+    );
 }
 
 /// SVT leg (iii): tint holds through a strobe. A pure color/intensity strobe
@@ -706,13 +1041,38 @@ fn svt_tint_holds_through_strobe() {
     let svt_red = make_pass_through(device, 0.6, 0.3, 0.3, "sh-svt-red");
     let irr_low = upload_irr(device, 0.2, 0.2, 0.2);
     run_accumulate_frame(
-        device, &tracer, &irr_low, &depth, &normal, &sv, &svt_red, &refl,
-        &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, true, 0, "sh-w-0",
+        device,
+        &tracer,
+        &irr_low,
+        &depth,
+        &normal,
+        &sv,
+        &svt_red,
+        &refl,
+        &mut history,
+        &gi_materials_buf,
+        &obj_motion_buf,
+        TEST_ALPHA,
+        true,
+        0,
+        "sh-w-0",
     );
     for i in 1..30 {
         run_accumulate_frame(
-            device, &tracer, &irr_low, &depth, &normal, &sv, &svt_red, &refl,
-            &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false, 0,
+            device,
+            &tracer,
+            &irr_low,
+            &depth,
+            &normal,
+            &sv,
+            &svt_red,
+            &refl,
+            &mut history,
+            &gi_materials_buf,
+            &obj_motion_buf,
+            TEST_ALPHA,
+            false,
+            0,
             &format!("sh-w-{i}"),
         );
     }
@@ -726,9 +1086,21 @@ fn svt_tint_holds_through_strobe() {
             flags |= GESTURE_FLAG;
         }
         run_accumulate_frame(
-            device, &tracer, &irr_high, &depth, &normal, &sv, &svt_red, &refl,
-            &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false,
-            flags, &format!("sh-strobe-{frame}"),
+            device,
+            &tracer,
+            &irr_high,
+            &depth,
+            &normal,
+            &sv,
+            &svt_red,
+            &refl,
+            &mut history,
+            &gi_materials_buf,
+            &obj_motion_buf,
+            TEST_ALPHA,
+            false,
+            flags,
+            &format!("sh-strobe-{frame}"),
         );
     }
 
@@ -737,7 +1109,8 @@ fn svt_tint_holds_through_strobe() {
         assert!(
             (svt_after[ch] - svt_before[ch]).abs() < 0.05,
             "svt[{ch}] collapsed on strobe: {:.4}→{:.4}",
-            svt_before[ch], svt_after[ch]
+            svt_before[ch],
+            svt_after[ch]
         );
     }
 }
@@ -764,19 +1137,39 @@ fn scalar_hold_r16_matches_rgba16_history() {
     let mut compact = FullHistorySet::new(device);
     let mut reference = FullHistorySet::with_hold_format(device, GpuTextureFormat::Rgba16Float);
 
-    let mut run_pair = |hi_sv: &GpuTexture,
-                        reset: bool,
-                        flags: u32,
-                        label: &str|
-     -> [f32; 2] {
+    let mut run_pair = |hi_sv: &GpuTexture, reset: bool, flags: u32, label: &str| -> [f32; 2] {
         run_accumulate_frame(
-            device, &tracer, &irr, &depth, &normal, hi_sv, &svt, &refl,
-            &mut compact, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, reset, flags,
+            device,
+            &tracer,
+            &irr,
+            &depth,
+            &normal,
+            hi_sv,
+            &svt,
+            &refl,
+            &mut compact,
+            &gi_materials_buf,
+            &obj_motion_buf,
+            TEST_ALPHA,
+            reset,
+            flags,
             &format!("{label}-r16"),
         );
         run_accumulate_frame(
-            device, &tracer, &irr, &depth, &normal, hi_sv, &svt, &refl,
-            &mut reference, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, reset, flags,
+            device,
+            &tracer,
+            &irr,
+            &depth,
+            &normal,
+            hi_sv,
+            &svt,
+            &refl,
+            &mut reference,
+            &gi_materials_buf,
+            &obj_motion_buf,
+            TEST_ALPHA,
+            reset,
+            flags,
             &format!("{label}-rgba16"),
         );
         assert_history_parity(device, &compact, &reference, label)
@@ -784,7 +1177,10 @@ fn scalar_hold_r16_matches_rgba16_history() {
 
     // Reset and converge both independent visibility groups to 1.
     let initial = run_pair(&sv_lit, true, 0, "scalar-hold-reset");
-    assert!(initial[0].abs() < 0.01 && initial[1].abs() < 0.01, "reset hold was not cleared: {initial:?}");
+    assert!(
+        initial[0].abs() < 0.01 && initial[1].abs() < 0.01,
+        "reset hold was not cleared: {initial:?}"
+    );
     for frame in 0..12 {
         run_pair(&sv_lit, false, 0, &format!("scalar-hold-warm-{frame}"));
     }
@@ -792,13 +1188,30 @@ fn scalar_hold_r16_matches_rgba16_history() {
     // First quad crosses independently; its hold must arm while quad two stays
     // at zero. The following frames prove the countdown is actually decaying.
     let first_cross = run_pair(&sv_first_dark, false, 0, "scalar-hold-sv-cross");
-    assert!(first_cross[0] > 3.5, "first-layer hold did not arm: {first_cross:?}");
-    assert!(first_cross[1].abs() < 0.01, "second-layer hold armed during a first-layer crossing: {first_cross:?}");
+    assert!(
+        first_cross[0] > 3.5,
+        "first-layer hold did not arm: {first_cross:?}"
+    );
+    assert!(
+        first_cross[1].abs() < 0.01,
+        "second-layer hold armed during a first-layer crossing: {first_cross:?}"
+    );
     let first_decay = run_pair(&sv_first_dark, false, 0, "scalar-hold-sv-decay-1");
-    assert!(first_decay[0] > 0.0 && first_decay[0] < first_cross[0], "first-layer hold did not decay: {first_cross:?} -> {first_decay:?}");
+    assert!(
+        first_decay[0] > 0.0 && first_decay[0] < first_cross[0],
+        "first-layer hold did not decay: {first_cross:?} -> {first_decay:?}"
+    );
     for frame in 2..=4 {
-        let sample = run_pair(&sv_first_dark, false, 0, &format!("scalar-hold-sv-decay-{frame}"));
-        assert!(sample[0].is_finite(), "first-layer hold became non-finite during decay");
+        let sample = run_pair(
+            &sv_first_dark,
+            false,
+            0,
+            &format!("scalar-hold-sv-decay-{frame}"),
+        );
+        assert!(
+            sample[0].is_finite(),
+            "first-layer hold became non-finite during decay"
+        );
     }
 
     // Re-reset before the second independent crossing so the two group proofs
@@ -808,17 +1221,42 @@ fn scalar_hold_r16_matches_rgba16_history() {
         run_pair(&sv_lit, false, 0, &format!("scalar-hold-rewarm-{frame}"));
     }
     let second_cross = run_pair(&sv_second_dark, false, 0, "scalar-hold-second-layer-cross");
-    assert!(second_cross[1] > 3.5, "second-layer hold did not arm: {second_cross:?}");
-    assert!(second_cross[0].abs() < 0.01, "first-layer hold armed during a second-layer crossing: {second_cross:?}");
-    let second_decay = run_pair(&sv_second_dark, false, 0, "scalar-hold-second-layer-decay-1");
-    assert!(second_decay[1] > 0.0 && second_decay[1] < second_cross[1], "second-layer hold did not decay: {second_cross:?} -> {second_decay:?}");
+    assert!(
+        second_cross[1] > 3.5,
+        "second-layer hold did not arm: {second_cross:?}"
+    );
+    assert!(
+        second_cross[0].abs() < 0.01,
+        "first-layer hold armed during a second-layer crossing: {second_cross:?}"
+    );
+    let second_decay = run_pair(
+        &sv_second_dark,
+        false,
+        0,
+        "scalar-hold-second-layer-decay-1",
+    );
+    assert!(
+        second_decay[1] > 0.0 && second_decay[1] < second_cross[1],
+        "second-layer hold did not decay: {second_cross:?} -> {second_decay:?}"
+    );
     for frame in 2..=4 {
-        let sample = run_pair(&sv_second_dark, false, 0, &format!("scalar-hold-second-layer-decay-{frame}"));
-        assert!(sample[1].is_finite(), "second-layer hold became non-finite during decay");
+        let sample = run_pair(
+            &sv_second_dark,
+            false,
+            0,
+            &format!("scalar-hold-second-layer-decay-{frame}"),
+        );
+        assert!(
+            sample[1].is_finite(),
+            "second-layer hold became non-finite during decay"
+        );
     }
 
     let final_reset = run_pair(&sv_lit, true, 0, "scalar-hold-final-reset");
-    assert!(final_reset[0].abs() < 0.01 && final_reset[1].abs() < 0.01, "final reset hold was not cleared: {final_reset:?}");
+    assert!(
+        final_reset[0].abs() < 0.01 && final_reset[1].abs() < 0.01,
+        "final reset hold was not cleared: {final_reset:?}"
+    );
 }
 
 /// Read the moments texture's `.w` (accumulated history length) at the
@@ -831,7 +1269,8 @@ fn read_moments_w_center(device: &GpuDevice, texture: &GpuTexture) -> f32 {
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait_completed();
     let ptr = buf.mapped_ptr().expect("shared readback buffer");
-    let f32s: &[f32] = unsafe { std::slice::from_raw_parts(ptr.cast::<f32>(), (W * H * 4) as usize) };
+    let f32s: &[f32] =
+        unsafe { std::slice::from_raw_parts(ptr.cast::<f32>(), (W * H * 4) as usize) };
     f32s[3]
 }
 
@@ -858,13 +1297,38 @@ fn denoise_near_raw_caps_history_at_four_frames() {
     // Control: 30 frames, no flag — history length approaches 1/alpha = 20.
     let mut history = FullHistorySet::new(device);
     run_accumulate_frame(
-        device, &tracer, &irr, &depth, &normal, &sv, &svt, &refl,
-        &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, true, 0, "dnl-c-0",
+        device,
+        &tracer,
+        &irr,
+        &depth,
+        &normal,
+        &sv,
+        &svt,
+        &refl,
+        &mut history,
+        &gi_materials_buf,
+        &obj_motion_buf,
+        TEST_ALPHA,
+        true,
+        0,
+        "dnl-c-0",
     );
     for i in 1..30 {
         run_accumulate_frame(
-            device, &tracer, &irr, &depth, &normal, &sv, &svt, &refl,
-            &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false, 0,
+            device,
+            &tracer,
+            &irr,
+            &depth,
+            &normal,
+            &sv,
+            &svt,
+            &refl,
+            &mut history,
+            &gi_materials_buf,
+            &obj_motion_buf,
+            TEST_ALPHA,
+            false,
+            0,
             &format!("dnl-c-{i}"),
         );
     }
@@ -878,20 +1342,57 @@ fn denoise_near_raw_caps_history_at_four_frames() {
     // collapse to ≤ 4 (0.25 floor) and hold there.
     let mut history = FullHistorySet::new(device);
     run_accumulate_frame(
-        device, &tracer, &irr, &depth, &normal, &sv, &svt, &refl,
-        &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, true, 0, "dnl-n-0",
+        device,
+        &tracer,
+        &irr,
+        &depth,
+        &normal,
+        &sv,
+        &svt,
+        &refl,
+        &mut history,
+        &gi_materials_buf,
+        &obj_motion_buf,
+        TEST_ALPHA,
+        true,
+        0,
+        "dnl-n-0",
     );
     for i in 1..30 {
         run_accumulate_frame(
-            device, &tracer, &irr, &depth, &normal, &sv, &svt, &refl,
-            &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false, 0,
+            device,
+            &tracer,
+            &irr,
+            &depth,
+            &normal,
+            &sv,
+            &svt,
+            &refl,
+            &mut history,
+            &gi_materials_buf,
+            &obj_motion_buf,
+            TEST_ALPHA,
+            false,
+            0,
             &format!("dnl-n-{i}"),
         );
     }
     for i in 0..10 {
         run_accumulate_frame(
-            device, &tracer, &irr, &depth, &normal, &sv, &svt, &refl,
-            &mut history, &gi_materials_buf, &obj_motion_buf, TEST_ALPHA, false, NEAR_RAW,
+            device,
+            &tracer,
+            &irr,
+            &depth,
+            &normal,
+            &sv,
+            &svt,
+            &refl,
+            &mut history,
+            &gi_materials_buf,
+            &obj_motion_buf,
+            TEST_ALPHA,
+            false,
+            NEAR_RAW,
             &format!("dnl-nr-{i}"),
         );
     }

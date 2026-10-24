@@ -22,8 +22,18 @@ pub fn add_object_commands(
         fields.material = Some(material.id.clone());
     }
     vec![
-        Box::new(AddSceneItemCommand::with_subtree(layer.clone(), parent.clone(), index, material)),
-        Box::new(AddSceneItemCommand::with_subtree(layer.clone(), parent, index, object)),
+        Box::new(AddSceneItemCommand::with_subtree(
+            layer.clone(),
+            parent.clone(),
+            index,
+            material,
+        )),
+        Box::new(AddSceneItemCommand::with_subtree(
+            layer.clone(),
+            parent,
+            index,
+            object,
+        )),
     ]
 }
 
@@ -43,7 +53,9 @@ pub fn own_material_commands(
     material: ItemId,
     name: &str,
 ) -> Result<Vec<Box<dyn Command>>, String> {
-    let found = doc.find(owner).ok_or("That item is no longer in the scene")?;
+    let found = doc
+        .find(owner)
+        .ok_or("That item is no longer in the scene")?;
     let mut fields = found.fields.clone();
     match &mut fields {
         ItemFields::Object(object) => object.material = Some(material.clone()),
@@ -53,17 +65,37 @@ pub fn own_material_commands(
     }
     let add: Box<dyn Command> = match doc.effective_material(owner) {
         Some(source) => {
-            let (parent, index) = doc.locate(&source).ok_or("That material is no longer in the scene")?;
-            Box::new(AddSceneItemCommand::new(layer.clone(), ItemKind::Material, parent, index + 1, Some(source), material.clone()))
+            let (parent, index) = doc
+                .locate(&source)
+                .ok_or("That material is no longer in the scene")?;
+            Box::new(AddSceneItemCommand::new(
+                layer.clone(),
+                ItemKind::Material,
+                parent,
+                index + 1,
+                Some(source),
+                material.clone(),
+            ))
         }
         None => {
-            let (parent, index) = doc.locate(owner).ok_or("That item is no longer in the scene")?;
-            Box::new(AddSceneItemCommand::with_subtree(layer.clone(), parent, index + 1, new_material(material.clone(), name)))
+            let (parent, index) = doc
+                .locate(owner)
+                .ok_or("That item is no longer in the scene")?;
+            Box::new(AddSceneItemCommand::with_subtree(
+                layer.clone(),
+                parent,
+                index + 1,
+                new_material(material.clone(), name),
+            ))
         }
     };
     Ok(vec![
         add,
         Box::new(RenameSceneItemCommand::new(layer.clone(), material, name)),
-        Box::new(SetSceneItemFieldsCommand::new(layer.clone(), owner.clone(), fields)),
+        Box::new(SetSceneItemFieldsCommand::new(
+            layer.clone(),
+            owner.clone(),
+            fields,
+        )),
     ])
 }

@@ -41,14 +41,14 @@ use manifold_gpu::{
 };
 
 use crate::exec::backend::Backend;
-use crate::scene::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID, SOURCE_TYPE_ID};
 use crate::exec::effect_node::{EffectNode, NodeInstanceId, ParamValues};
 use crate::exec::execution_plan::{ExecutionPlan, ResourceId};
-use crate::graph::Graph;
 use crate::exec::metal_backend::MetalBackend;
+use crate::graph::Graph;
 use crate::parameters::{ParamType, ParamValue};
-use crate::ports::PortType;
 use crate::persistence::{PrimitiveRegistry, format_from_str};
+use crate::ports::PortType;
+use crate::scene::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID, SOURCE_TYPE_ID};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -256,8 +256,15 @@ pub struct NodeInstantiation {
 /// the overwhelmingly common already-current document — every bundled
 /// preset, every project saved since its last rename — passes through
 /// borrowed rather than cloned.
-fn migrate_def_type_ids(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> Option<EffectGraphDef> {
-    fn migrate_nodes(nodes: &mut [EffectGraphNode], registry: &PrimitiveRegistry, changed: &mut bool) {
+fn migrate_def_type_ids(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+) -> Option<EffectGraphDef> {
+    fn migrate_nodes(
+        nodes: &mut [EffectGraphNode],
+        registry: &PrimitiveRegistry,
+        changed: &mut bool,
+    ) {
         for n in nodes {
             let old_id = n.type_id.clone();
             let new_id = manifold_core::type_id_migration::migrate_type_id(&old_id);
@@ -285,8 +292,11 @@ fn migrate_def_type_ids(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> O
                 // per the round-trip gate (DESIGN_DOC_STANDARD section 5), a
                 // migrated load must succeed, not merely a fresh save.
                 if let Some(new_node) = registry.construct(new_id) {
-                    let known: ahash::AHashSet<&str> =
-                        new_node.parameters().iter().map(|p| p.name.as_ref()).collect();
+                    let known: ahash::AHashSet<&str> = new_node
+                        .parameters()
+                        .iter()
+                        .map(|p| p.name.as_ref())
+                        .collect();
                     n.params.retain(|k, _| known.contains(k.as_str()));
                 }
             }
@@ -314,10 +324,17 @@ pub fn configure_from_doc(node: &mut dyn EffectNode, doc: &EffectGraphNode) -> P
     if let Some(source) = doc.wgsl_source.as_deref() {
         node.set_wgsl_source(source);
     }
-    let mut params: ParamValues =
-        node.parameters().iter().map(|param| (param.name.clone(), param.default.clone())).collect();
+    let mut params: ParamValues = node
+        .parameters()
+        .iter()
+        .map(|param| (param.name.clone(), param.default.clone()))
+        .collect();
     for (key, value) in &doc.params {
-        if let Some(param) = node.parameters().iter().find(|param| param.name == key.as_str()) {
+        if let Some(param) = node
+            .parameters()
+            .iter()
+            .find(|param| param.name == key.as_str())
+        {
             params.insert(param.name.clone(), value.clone().into());
         }
     }
@@ -372,16 +389,23 @@ pub(crate) fn retire_params(def: &mut EffectGraphDef) -> bool {
 
     fn declared_ids(nodes: &[EffectGraphNode], ids: &mut AHashSet<String>) {
         for node in nodes {
-            if !node.node_id.is_empty() { ids.insert(node.node_id.to_string()); }
-            if let Some(group) = &node.group { declared_ids(&group.nodes, ids); }
+            if !node.node_id.is_empty() {
+                ids.insert(node.node_id.to_string());
+            }
+            if let Some(group) = &node.group {
+                declared_ids(&group.nodes, ids);
+            }
         }
     }
 
     // Local numeric endpoints drive wires; scoped handles drive group aliases;
     // stable identities drive authored cards. Keep these address spaces separate.
     fn scope(
-        nodes: &mut [EffectGraphNode], wires: &mut Vec<EffectGraphWire>,
-        prefix: &str, declared: &AHashSet<String>, identities: &mut AHashSet<(String, String)>,
+        nodes: &mut [EffectGraphNode],
+        wires: &mut Vec<EffectGraphWire>,
+        prefix: &str,
+        declared: &AHashSet<String>,
+        identities: &mut AHashSet<(String, String)>,
     ) -> (AHashSet<(String, String)>, AHashSet<String>, bool) {
         let mut handles = AHashSet::new();
         let mut endpoints = AHashSet::new();
@@ -389,20 +413,36 @@ pub(crate) fn retire_params(def: &mut EffectGraphDef) -> bool {
         for node in nodes.iter_mut() {
             let handle = node.handle.as_deref().unwrap_or_default();
             let full_handle = format!("{prefix}{handle}");
-            let mut retired: AHashSet<String> = manifold_core::type_id_migration::retired_params(&node.type_id)
-                .map(str::to_string).collect();
+            let mut retired: AHashSet<String> =
+                manifold_core::type_id_migration::retired_params(&node.type_id)
+                    .map(str::to_string)
+                    .collect();
             if let Some(group) = &mut node.group {
                 let (inner, inputs, inner_changed) = scope(
-                    &mut group.nodes, &mut group.wires, &format!("{full_handle}/"), declared, identities,
+                    &mut group.nodes,
+                    &mut group.wires,
+                    &format!("{full_handle}/"),
+                    declared,
+                    identities,
                 );
                 changed |= inner_changed;
                 group.interface.params.retain(|param| {
-                    let dead = inner.contains(&(param.target_handle.clone(), param.target_param.clone()));
-                    if dead { retired.insert(param.name.clone()); changed = true; }
+                    let dead =
+                        inner.contains(&(param.target_handle.clone(), param.target_param.clone()));
+                    if dead {
+                        retired.insert(param.name.clone());
+                        changed = true;
+                    }
                     !dead
                 });
                 group.interface.inputs.retain(|port| {
-                    if inputs.contains(&port.name) { retired.insert(port.name.clone()); changed = true; false } else { true }
+                    if inputs.contains(&port.name) {
+                        retired.insert(port.name.clone());
+                        changed = true;
+                        false
+                    } else {
+                        true
+                    }
                 });
                 for (inner_handle, param) in inner {
                     handles.insert((format!("{handle}/{inner_handle}"), param));
@@ -425,18 +465,26 @@ pub(crate) fn retire_params(def: &mut EffectGraphDef) -> bool {
                 }
             }
         }
-        let boundary_inputs: AHashSet<_> = nodes.iter().filter(|node| node.type_id == GROUP_INPUT_TYPE_ID)
-            .map(|node| node.id).collect();
+        let boundary_inputs: AHashSet<_> = nodes
+            .iter()
+            .filter(|node| node.type_id == GROUP_INPUT_TYPE_ID)
+            .map(|node| node.id)
+            .collect();
         let mut inputs = AHashSet::new();
         wires.retain(|wire| {
             let dead = endpoints.contains(&(wire.to_node, wire.to_port.clone()));
-            if dead && boundary_inputs.contains(&wire.from_node) { inputs.insert(wire.from_port.clone()); }
+            if dead && boundary_inputs.contains(&wire.from_node) {
+                inputs.insert(wire.from_port.clone());
+            }
             changed |= dead;
             !dead
         });
         // An interface input can fan out to a live target as well.
-        inputs.retain(|port| !wires.iter().any(|wire|
-            boundary_inputs.contains(&wire.from_node) && &wire.from_port == port));
+        inputs.retain(|port| {
+            !wires
+                .iter()
+                .any(|wire| boundary_inputs.contains(&wire.from_node) && &wire.from_port == port)
+        });
         changed |= !inputs.is_empty();
         (handles, inputs, changed)
     }
@@ -444,13 +492,21 @@ pub(crate) fn retire_params(def: &mut EffectGraphDef) -> bool {
     let mut declared = AHashSet::new();
     declared_ids(&def.nodes, &mut declared);
     let mut identities = AHashSet::new();
-    let (_, _, mut changed) = scope(&mut def.nodes, &mut def.wires, "", &declared, &mut identities);
+    let (_, _, mut changed) = scope(
+        &mut def.nodes,
+        &mut def.wires,
+        "",
+        &declared,
+        &mut identities,
+    );
     if let Some(metadata) = &mut def.preset_metadata {
         let mut retired_cards = AHashSet::new();
         metadata.bindings.retain(|binding| {
             let dead = matches!(&binding.target, BindingTarget::Node { node_id, param }
                 if identities.contains(&(node_id.to_string(), param.clone())));
-            if dead { retired_cards.insert(binding.id.clone()); }
+            if dead {
+                retired_cards.insert(binding.id.clone());
+            }
             !dead
         });
         changed |= !retired_cards.is_empty();
@@ -459,10 +515,19 @@ pub(crate) fn retire_params(def: &mut EffectGraphDef) -> bool {
         for id in &retired_cards {
             log::warn!("retired param: card '{id}' removed, its only target no longer exists");
         }
-        metadata.params.retain(|param| !retired_cards.contains(&param.id));
-        metadata.param_aliases.retain(|alias| !retired_cards.contains(&alias.old)
-            && alias.new.as_ref().is_none_or(|id| !retired_cards.contains(id)));
-        metadata.value_aliases.retain(|alias| !retired_cards.contains(&alias.param_id));
+        metadata
+            .params
+            .retain(|param| !retired_cards.contains(&param.id));
+        metadata.param_aliases.retain(|alias| {
+            !retired_cards.contains(&alias.old)
+                && alias
+                    .new
+                    .as_ref()
+                    .is_none_or(|id| !retired_cards.contains(id))
+        });
+        metadata
+            .value_aliases
+            .retain(|alias| !retired_cards.contains(&alias.param_id));
     }
     for modifier in &mut def.scene_modifiers {
         changed |= retire_params(&mut modifier.graph);
@@ -502,13 +567,20 @@ pub fn instantiate_def(
     let modifier_owner = def;
     let prepared = if manifold_core::scene_modifier_preset::has_scene_modifier_data(def) {
         if !matches!(boundary, BoundaryHandling::Standalone) {
-            return Err(GraphBuildError::SceneModifier(crate::load::expand::SceneModifierExpandError::InvalidRecipe {
-                path: "sceneModifiers".into(), detail: "scene modifiers require a standalone generator owner".into(),
-            }));
+            return Err(GraphBuildError::SceneModifier(
+                crate::load::expand::SceneModifierExpandError::InvalidRecipe {
+                    path: "sceneModifiers".into(),
+                    detail: "scene modifiers require a standalone generator owner".into(),
+                },
+            ));
         }
-        Some(crate::load::expand::prepare_scene_modifiers(def, registry)
-            .map_err(GraphBuildError::SceneModifier)?)
-    } else { None };
+        Some(
+            crate::load::expand::prepare_scene_modifiers(def, registry)
+                .map_err(GraphBuildError::SceneModifier)?,
+        )
+    } else {
+        None
+    };
     let def = prepared.as_ref().map_or(def, |prepared| &prepared.def);
 
     // Migrate legacy node type_ids before anything else runs, including
@@ -531,7 +603,8 @@ pub fn instantiate_def(
         None => def,
     };
 
-    let before_flatten = super::migration::run_stage(def, super::migration::MigrationStage::BeforeFlatten);
+    let before_flatten =
+        super::migration::run_stage(def, super::migration::MigrationStage::BeforeFlatten);
     let def = before_flatten.as_ref();
 
     // Fold any node groups before anything else runs. After this the def
@@ -543,13 +616,15 @@ pub fn instantiate_def(
     // (`system.source`/`final_output`) handled below is a separate layer.
     let flattened;
     let def = if def.nodes.iter().any(|n| n.group.is_some()) {
-        flattened = manifold_core::flatten::flatten_groups(def).map_err(GraphBuildError::Flatten)?;
+        flattened =
+            manifold_core::flatten::flatten_groups(def).map_err(GraphBuildError::Flatten)?;
         &flattened
     } else {
         def
     };
 
-    let after_flatten = super::migration::run_stage(def, super::migration::MigrationStage::AfterFlatten);
+    let after_flatten =
+        super::migration::run_stage(def, super::migration::MigrationStage::AfterFlatten);
     let def = after_flatten.as_ref();
 
     // A body's alias wires (`pose`, `instances`, `acceleration`) become its
@@ -596,12 +671,12 @@ pub fn instantiate_def(
             return Err(GraphBuildError::DuplicateNodeId(node_doc.id));
         }
 
-        let mut boxed = registry
-            .construct(&node_doc.type_id)
-            .ok_or_else(|| GraphBuildError::UnknownTypeId {
+        let mut boxed = registry.construct(&node_doc.type_id).ok_or_else(|| {
+            GraphBuildError::UnknownTypeId {
                 node_id: node_doc.id,
                 type_id: node_doc.type_id.clone(),
-            })?;
+            }
+        })?;
 
         // (1) WGSL source and reconfigure params BEFORE `add_node` and the
         // param snapshot below, so the declared surface is the doc's.
@@ -693,7 +768,9 @@ pub fn instantiate_def(
                 && is_material_feature_mode(key)
                 && matches!(&pv, ParamValue::Enum(value) if *value > 3)
             {
-                let ParamValue::Enum(value) = pv else { unreachable!() };
+                let ParamValue::Enum(value) = pv else {
+                    unreachable!()
+                };
                 return Err(GraphBuildError::InvalidMaterialFeatureMode {
                     node_id: node_doc.id,
                     param: key.clone(),
@@ -775,35 +852,35 @@ pub fn instantiate_def(
     for (wire_index, w) in def.wires.iter().enumerate() {
         match boundary {
             BoundaryHandling::Standalone => {
-                let from_chain = *id_map
-                    .get(&w.from_node)
+                let from_chain =
+                    *id_map
+                        .get(&w.from_node)
+                        .ok_or(GraphBuildError::UnknownNodeRef {
+                            wire_index,
+                            node_id: w.from_node,
+                            side: WireSide::From,
+                        })?;
+                let to_chain = *id_map
+                    .get(&w.to_node)
                     .ok_or(GraphBuildError::UnknownNodeRef {
-                        wire_index,
-                        node_id: w.from_node,
-                        side: WireSide::From,
-                    })?;
-                let to_chain =
-                    *id_map.get(&w.to_node).ok_or(GraphBuildError::UnknownNodeRef {
                         wire_index,
                         node_id: w.to_node,
                         side: WireSide::To,
                     })?;
-                let from_port = resolve_output_port(graph, from_chain, &w.from_port).ok_or_else(
-                    || GraphBuildError::InvalidWire {
-                        wire_index,
-                        reason: format!(
-                            "from node {} has no output port '{}'",
-                            w.from_node, w.from_port
-                        ),
-                    },
-                )?;
+                let from_port =
+                    resolve_output_port(graph, from_chain, &w.from_port).ok_or_else(|| {
+                        GraphBuildError::InvalidWire {
+                            wire_index,
+                            reason: format!(
+                                "from node {} has no output port '{}'",
+                                w.from_node, w.from_port
+                            ),
+                        }
+                    })?;
                 let to_port = resolve_input_port(graph, to_chain, &w.to_port).ok_or_else(|| {
                     GraphBuildError::InvalidWire {
                         wire_index,
-                        reason: format!(
-                            "to node {} has no input port '{}'",
-                            w.to_node, w.to_port
-                        ),
+                        reason: format!("to node {} has no input port '{}'", w.to_node, w.to_port),
                     }
                 })?;
                 graph
@@ -816,22 +893,24 @@ pub fn instantiate_def(
             BoundaryHandling::Splice { source_endpoint } => {
                 // Source-fanout: re-anchor.
                 if Some(w.from_node) == def_source_id {
-                    let to_chain = *id_map.get(&w.to_node).ok_or(
-                        GraphBuildError::UnknownNodeRef {
-                            wire_index,
-                            node_id: w.to_node,
-                            side: WireSide::To,
-                        },
-                    )?;
-                    let to_port = resolve_input_port(graph, to_chain, &w.to_port).ok_or_else(
-                        || GraphBuildError::InvalidWire {
-                            wire_index,
-                            reason: format!(
-                                "to node {} has no input port '{}'",
-                                w.to_node, w.to_port
-                            ),
-                        },
-                    )?;
+                    let to_chain =
+                        *id_map
+                            .get(&w.to_node)
+                            .ok_or(GraphBuildError::UnknownNodeRef {
+                                wire_index,
+                                node_id: w.to_node,
+                                side: WireSide::To,
+                            })?;
+                    let to_port =
+                        resolve_input_port(graph, to_chain, &w.to_port).ok_or_else(|| {
+                            GraphBuildError::InvalidWire {
+                                wire_index,
+                                reason: format!(
+                                    "to node {} has no input port '{}'",
+                                    w.to_node, w.to_port
+                                ),
+                            }
+                        })?;
                     graph
                         .connect(source_endpoint, (to_chain, to_port))
                         .map_err(|e| GraphBuildError::InvalidWire {
@@ -842,56 +921,55 @@ pub fn instantiate_def(
                 }
                 // FinalOutput-feed: identify output endpoint, do not connect.
                 if Some(w.to_node) == def_final_id {
-                    let from_chain = *id_map.get(&w.from_node).ok_or(
-                        GraphBuildError::UnknownNodeRef {
-                            wire_index,
-                            node_id: w.from_node,
-                            side: WireSide::From,
-                        },
-                    )?;
-                    let from_port =
-                        resolve_output_port(graph, from_chain, &w.from_port).ok_or_else(|| {
-                            GraphBuildError::InvalidWire {
+                    let from_chain =
+                        *id_map
+                            .get(&w.from_node)
+                            .ok_or(GraphBuildError::UnknownNodeRef {
                                 wire_index,
-                                reason: format!(
-                                    "from node {} has no output port '{}'",
-                                    w.from_node, w.from_port
-                                ),
-                            }
+                                node_id: w.from_node,
+                                side: WireSide::From,
+                            })?;
+                    let from_port = resolve_output_port(graph, from_chain, &w.from_port)
+                        .ok_or_else(|| GraphBuildError::InvalidWire {
+                            wire_index,
+                            reason: format!(
+                                "from node {} has no output port '{}'",
+                                w.from_node, w.from_port
+                            ),
                         })?;
                     output_endpoint = Some((from_chain, from_port));
                     continue;
                 }
                 // Normal wire.
-                let from_chain = *id_map.get(&w.from_node).ok_or(
-                    GraphBuildError::UnknownNodeRef {
-                        wire_index,
-                        node_id: w.from_node,
-                        side: WireSide::From,
-                    },
-                )?;
-                let to_chain =
-                    *id_map.get(&w.to_node).ok_or(GraphBuildError::UnknownNodeRef {
+                let from_chain =
+                    *id_map
+                        .get(&w.from_node)
+                        .ok_or(GraphBuildError::UnknownNodeRef {
+                            wire_index,
+                            node_id: w.from_node,
+                            side: WireSide::From,
+                        })?;
+                let to_chain = *id_map
+                    .get(&w.to_node)
+                    .ok_or(GraphBuildError::UnknownNodeRef {
                         wire_index,
                         node_id: w.to_node,
                         side: WireSide::To,
                     })?;
-                let from_port = resolve_output_port(graph, from_chain, &w.from_port).ok_or_else(
-                    || GraphBuildError::InvalidWire {
-                        wire_index,
-                        reason: format!(
-                            "from node {} has no output port '{}'",
-                            w.from_node, w.from_port
-                        ),
-                    },
-                )?;
+                let from_port =
+                    resolve_output_port(graph, from_chain, &w.from_port).ok_or_else(|| {
+                        GraphBuildError::InvalidWire {
+                            wire_index,
+                            reason: format!(
+                                "from node {} has no output port '{}'",
+                                w.from_node, w.from_port
+                            ),
+                        }
+                    })?;
                 let to_port = resolve_input_port(graph, to_chain, &w.to_port).ok_or_else(|| {
                     GraphBuildError::InvalidWire {
                         wire_index,
-                        reason: format!(
-                            "to node {} has no input port '{}'",
-                            w.to_node, w.to_port
-                        ),
+                        reason: format!("to node {} has no input port '{}'", w.to_node, w.to_port),
                     }
                 })?;
                 graph
@@ -916,11 +994,16 @@ pub fn instantiate_def(
 
     if let Some(prepared) = prepared {
         let budget = crate::load::expand::PreparedModifierBufferBudget::prepare(
-            modifier_owner, &prepared.routes, graph, &AHashMap::default(),
-        ).map_err(GraphBuildError::SceneModifier)?;
+            modifier_owner,
+            &prepared.routes,
+            graph,
+            &AHashMap::default(),
+        )
+        .map_err(GraphBuildError::SceneModifier)?;
         graph.set_modifier_buffer_budget(budget);
         crate::load::expand::PreparedModifierParameterGuards::prepare(modifier_owner)
-            .and_then(|guards| guards.install(graph)).map_err(GraphBuildError::SceneModifier)?;
+            .and_then(|guards| guards.install(graph))
+            .map_err(GraphBuildError::SceneModifier)?;
     }
 
     Ok(NodeInstantiation {
@@ -986,12 +1069,12 @@ pub(crate) fn install_prepared_mesh_rules(
                 reason: "instantiated node missing from graph".to_string(),
             });
         };
-        inst.node.install_mesh_output_rules(rule_set).map_err(|e| {
-            GraphBuildError::MeshRules {
+        inst.node
+            .install_mesh_output_rules(rule_set)
+            .map_err(|e| GraphBuildError::MeshRules {
                 node_id: resolved_node_id.clone(),
                 reason: format!("uninstalled: {e}"),
-            }
-        })?;
+            })?;
     }
     for node_id in rules.keys() {
         if !claimed.contains(node_id) {
@@ -1263,7 +1346,10 @@ impl std::fmt::Display for PreAllocationError {
                 port,
                 handle,
             } => {
-                let h = handle.as_deref().map(|s| format!(" (handle `{s}`)")).unwrap_or_default();
+                let h = handle
+                    .as_deref()
+                    .map(|s| format!(" (handle `{s}`)"))
+                    .unwrap_or_default();
                 write!(
                     f,
                     "primitive `{node_type}`{h} Array<T> output port `{port}` has no \
@@ -1277,7 +1363,10 @@ impl std::fmt::Display for PreAllocationError {
                 port,
                 handle,
             } => {
-                let h = handle.as_deref().map(|s| format!(" (handle `{s}`)")).unwrap_or_default();
+                let h = handle
+                    .as_deref()
+                    .map(|s| format!(" (handle `{s}`)"))
+                    .unwrap_or_default();
                 write!(
                     f,
                     "primitive `{node_type}`{h} Texture3D output port `{port}` has no \
@@ -1369,7 +1458,9 @@ fn pre_allocate_array_buffers(
     device: &GpuDevice,
     backend: &mut MetalBackend,
 ) -> Result<(), PreAllocationError> {
-    use crate::exec::resource_allocation::{ArrayAllocationAction, ArrayStorage, plan_array_allocations};
+    use crate::exec::resource_allocation::{
+        ArrayAllocationAction, ArrayStorage, plan_array_allocations,
+    };
 
     // Snapshot existing physical storage once. Several resources may already
     // share a backend slot; preserve that identity in the pure allocation plan.
@@ -1381,15 +1472,25 @@ fn pre_allocate_array_buffers(
         if !matches!(plan.resource_type(resource), Some(PortType::Array(_))) {
             continue;
         }
-        let Some(slot) = backend.slot_for(resource) else { continue; };
-        let Some(buffer) = Backend::array_buffer(backend, slot) else { continue; };
+        let Some(slot) = backend.slot_for(resource) else {
+            continue;
+        };
+        let Some(buffer) = Backend::array_buffer(backend, slot) else {
+            continue;
+        };
         let root = *roots.entry(slot).or_insert(resource);
-        prebound.insert(resource, ArrayStorage { root, bytes: buffer.size });
-        prebound_buffers.entry(root).or_insert_with(|| buffer.clone());
+        prebound.insert(
+            resource,
+            ArrayStorage {
+                root,
+                bytes: buffer.size,
+            },
+        );
+        prebound_buffers
+            .entry(root)
+            .or_insert_with(|| buffer.clone());
     }
-    let allocation = plan_array_allocations(
-        graph, plan, Backend::canvas_dims(backend), &prebound,
-    )?;
+    let allocation = plan_array_allocations(graph, plan, Backend::canvas_dims(backend), &prebound)?;
     if let Some(budget) = graph.modifier_buffer_budget() {
         // Capture immediately before allocation. `currentAllocatedSize`
         // includes the live scene being replaced, so the projected peak must
@@ -1424,34 +1525,43 @@ fn pre_allocate_array_buffers(
                 // Include live resources and earlier staged allocations before
                 // asking Metal for each new buffer, including non-modifier graphs.
                 crate::load::expand::admit_candidate_bytes(
-                    device.modifier_memory_snapshot(), allocation.bytes,
-                ).map_err(|error| PreAllocationError::AllocationFailed(error.to_string()))?;
+                    device.modifier_memory_snapshot(),
+                    allocation.bytes,
+                )
+                .map_err(|error| PreAllocationError::AllocationFailed(error.to_string()))?;
                 #[cfg(all(test, feature = "gpu-proofs"))]
-                crate::gpu::render_target::allocation_checkpoint().map_err(PreAllocationError::AllocationFailed)?;
+                crate::gpu::render_target::allocation_checkpoint()
+                    .map_err(PreAllocationError::AllocationFailed)?;
                 let buffer = device
                     .try_create_buffer_shared(allocation.bytes)
                     .map_err(PreAllocationError::AllocationFailed)?;
-                if allocation.zero_init { buffer.zero_fill(); }
+                if allocation.zero_init {
+                    buffer.zero_fill();
+                }
                 backend.pre_bind_array(allocation.resource, buffer);
             }
             ArrayAllocationAction::Reuse { resource, root } => {
-                let slot = backend.slot_for(root).or_else(|| {
-                    prebound_buffers
-                        .get(&root)
-                        .cloned()
-                        .map(|buffer| backend.pre_bind_array(root, buffer))
-                }).ok_or_else(|| PreAllocationError::UnboundArrayResource {
-                    producer_node_type: "<resize>".into(),
-                    producer_port: format!("resource_{resource:?}"),
-                    producer_handle: None,
-                    cause: "reused array root has no live backing buffer",
-                })?;
+                let slot = backend
+                    .slot_for(root)
+                    .or_else(|| {
+                        prebound_buffers
+                            .get(&root)
+                            .cloned()
+                            .map(|buffer| backend.pre_bind_array(root, buffer))
+                    })
+                    .ok_or_else(|| PreAllocationError::UnboundArrayResource {
+                        producer_node_type: "<resize>".into(),
+                        producer_port: format!("resource_{resource:?}"),
+                        producer_handle: None,
+                        cause: "reused array root has no live backing buffer",
+                    })?;
                 if resource != root {
                     backend.alias_array_resource(resource, slot);
                 }
             }
             ArrayAllocationAction::Alias { resource, input } => {
-                let slot = backend.slot_for(input)
+                let slot = backend
+                    .slot_for(input)
                     .expect("array plan only aliases known storage");
                 backend.alias_array_resource(resource, slot);
             }
@@ -1499,11 +1609,11 @@ fn pre_allocate_texture_3d_volumes(
             if backend.slot_for(*res_id).is_some() {
                 continue;
             }
-            let Some((w, h, d)) = node_inst.node.texture_3d_output_dims(
-                port_name,
-                &node_inst.params,
-                &input_dims,
-            ) else {
+            let Some((w, h, d)) =
+                node_inst
+                    .node
+                    .texture_3d_output_dims(port_name, &node_inst.params, &input_dims)
+            else {
                 return Err(PreAllocationError::UnsizedTexture3DOutput {
                     node_type: node_type.to_string(),
                     port: port_name.to_string(),
@@ -1517,16 +1627,16 @@ fn pre_allocate_texture_3d_volumes(
             let label = format!("graph_loader 3d volume: {node_type}.{port_name}");
             let texture = device
                 .try_create_texture(&GpuTextureDesc {
-                width: w,
-                height: h,
-                depth: d,
-                format,
-                dimension: GpuTextureDimension::D3,
-                usage: GpuTextureUsage::RENDER_TARGET_FULL,
-                label: &label,
-                mip_levels: 1,
-            })
-            .map_err(PreAllocationError::AllocationFailed)?;
+                    width: w,
+                    height: h,
+                    depth: d,
+                    format,
+                    dimension: GpuTextureDimension::D3,
+                    usage: GpuTextureUsage::RENDER_TARGET_FULL,
+                    label: &label,
+                    mip_levels: 1,
+                })
+                .map_err(PreAllocationError::AllocationFailed)?;
             backend.pre_bind_texture_3d(*res_id, texture);
         }
     }
@@ -1572,9 +1682,7 @@ fn audit_array_resource_bindings(
                             .get_node(step.node)
                             .map(|n| n.node.type_id().as_str().to_string())
                             .unwrap_or_else(|| "<unknown>".to_string());
-                        let handle = handle_by_node
-                            .get(&step.node)
-                            .map(|h| h.to_string());
+                        let handle = handle_by_node.get(&step.node).map(|h| h.to_string());
                         (node_type, port_name.to_string(), handle)
                     })
             })
@@ -1620,21 +1728,35 @@ mod tests {
                 "targets": "allObjects",
                 "graph": {"version": 3, "nodes": [], "wires": []}
             }]
-        })).unwrap();
+        }))
+        .unwrap();
         let mut graph = Graph::new();
         let registry = PrimitiveRegistry::new();
         let result = instantiate_def(
-            &mut graph, &doc, &registry, HandleScope::Global, BoundaryHandling::Standalone,
-        &crate::scene::mesh_change::PreparedMeshRules::default());
+            &mut graph,
+            &doc,
+            &registry,
+            HandleScope::Global,
+            BoundaryHandling::Standalone,
+            &crate::scene::mesh_change::PreparedMeshRules::default(),
+        );
         assert!(matches!(result, Err(GraphBuildError::SceneModifier(_))));
         assert_eq!(graph.nodes().count(), 0);
 
         // The malformed attachment is refused before installation. An ordinary
         // v3 graph still takes the existing runtime path.
         doc.scene_modifiers.clear();
-        assert!(instantiate_def(
-            &mut graph, &doc, &registry, HandleScope::Global, BoundaryHandling::Standalone,
-        &crate::scene::mesh_change::PreparedMeshRules::default()).is_ok());
+        assert!(
+            instantiate_def(
+                &mut graph,
+                &doc,
+                &registry,
+                HandleScope::Global,
+                BoundaryHandling::Standalone,
+                &crate::scene::mesh_change::PreparedMeshRules::default()
+            )
+            .is_ok()
+        );
     }
     fn registry() -> PrimitiveRegistry {
         PrimitiveRegistry::with_builtin()
@@ -1662,7 +1784,8 @@ mod tests {
             &registry(),
             HandleScope::Global,
             BoundaryHandling::Standalone,
-        &crate::scene::mesh_change::PreparedMeshRules::default())
+            &crate::scene::mesh_change::PreparedMeshRules::default(),
+        )
         .unwrap_err();
         match err {
             GraphBuildError::UnknownTypeId { node_id, type_id } => {
@@ -1697,7 +1820,8 @@ mod tests {
             BoundaryHandling::Splice {
                 source_endpoint: (host_source, "out"),
             },
-        &crate::scene::mesh_change::PreparedMeshRules::default())
+            &crate::scene::mesh_change::PreparedMeshRules::default(),
+        )
         .unwrap_err();
         assert!(matches!(err, GraphBuildError::MissingBoundarySource));
     }
@@ -1715,8 +1839,8 @@ mod tests {
     /// the shared layer where regressions would surface for both.
     #[test]
     fn audit_fires_on_unbound_array_resource() {
-        use crate::testkit::graph::GraphFixture;
         use crate::exec::{execution_plan::compile, metal_backend::MetalBackend};
+        use crate::testkit::graph::GraphFixture;
 
         let device = crate::gpu::context::test_gpu_device("graph_loader tests");
         let mut graph = Graph::new();
@@ -1730,14 +1854,18 @@ mod tests {
         // Construct a backend but deliberately skip the Array<T>
         // pre-allocation; only run the audit directly so it has to
         // catch the dangling resources on its own.
-        let backend = MetalBackend::new(std::sync::Arc::clone(&device), 256, 256, GpuTextureFormat::Rgba16Float);
+        let backend = MetalBackend::new(
+            std::sync::Arc::clone(&device),
+            256,
+            256,
+            GpuTextureFormat::Rgba16Float,
+        );
         let err = audit_array_resource_bindings(&graph, &plan, &backend)
             .expect_err("audit must reject plan with unbound Array<T> resource");
 
         match err {
             PreAllocationError::UnboundArrayResource {
-                producer_node_type,
-                ..
+                producer_node_type, ..
             } => {
                 assert!(
                     producer_node_type.contains("spawn_particles")
@@ -1756,15 +1884,20 @@ mod tests {
     /// or always-pass fails CI loudly.
     #[test]
     fn pre_allocate_resources_accepts_fully_bound_plan() {
-        use crate::testkit::graph::GraphFixture;
         use crate::exec::{execution_plan::compile, metal_backend::MetalBackend};
+        use crate::testkit::graph::GraphFixture;
 
         let device = crate::gpu::context::test_gpu_device("graph_loader tests");
         let mut graph = Graph::new();
         graph.add_node(Box::new(GraphFixture::particles()));
         let plan = compile(&graph).expect("seed-only graph compiles");
 
-        let mut backend = MetalBackend::new(std::sync::Arc::clone(&device), 256, 256, GpuTextureFormat::Rgba16Float);
+        let mut backend = MetalBackend::new(
+            std::sync::Arc::clone(&device),
+            256,
+            256,
+            GpuTextureFormat::Rgba16Float,
+        );
         pre_allocate_resources(&mut graph, &plan, &device, &mut backend)
             .expect("full pre-allocate pipeline succeeds for seed-only graph");
     }
@@ -1849,8 +1982,8 @@ mod tests {
             wires: vec![],
         };
 
-        let migrated =
-            migrate_def_type_ids(&old_def, &registry).expect("old ids present, migration must produce Some");
+        let migrated = migrate_def_type_ids(&old_def, &registry)
+            .expect("old ids present, migration must produce Some");
         assert_eq!(migrated, new_twin);
 
         // A document already on current ids needs no migration at all —
@@ -1887,18 +2020,22 @@ mod tests {
         assert_eq!(top.type_id, "node.rotate_vector");
         assert_eq!(
             top.params.get("angle"),
-            Some(&manifold_core::effect_graph_def::SerializedParamValue::Float {
-                value: std::f32::consts::FRAC_PI_2
-            })
+            Some(
+                &manifold_core::effect_graph_def::SerializedParamValue::Float {
+                    value: std::f32::consts::FRAC_PI_2
+                }
+            )
         );
 
         let inner = &migrated.nodes[1].group.as_ref().unwrap().nodes[0];
         assert_eq!(inner.type_id, "node.rotate_vector");
         assert_eq!(
             inner.params.get("angle"),
-            Some(&manifold_core::effect_graph_def::SerializedParamValue::Float {
-                value: std::f32::consts::FRAC_PI_2
-            })
+            Some(
+                &manifold_core::effect_graph_def::SerializedParamValue::Float {
+                    value: std::f32::consts::FRAC_PI_2
+                }
+            )
         );
     }
 
@@ -1963,16 +2100,21 @@ mod tests {
                 {"id": 2, "nodeId": "step", "typeId": "node.scalar", "handle": "unrelated",
                  "params": {"top_speed": {"type": "Float", "value": 23.0}}}
             ], "wires": []
-        })).unwrap();
+        }))
+        .unwrap();
         let mut metadata = minimal_preset_metadata();
         metadata.bindings = serde_json::from_value(serde_json::json!([
             {"id": "speed", "label": "Speed", "defaultValue": 23.0,
              "target": {"kind": "node", "nodeId": "step", "param": "top_speed"}}
-        ])).unwrap();
+        ]))
+        .unwrap();
         def.preset_metadata = Some(metadata);
         let original = def.clone();
         assert!(!retire_params(&mut def));
-        assert_eq!(def, original, "the actual stable identity takes precedence over another node's handle");
+        assert_eq!(
+            def, original,
+            "the actual stable identity takes precedence over another node's handle"
+        );
     }
 
     #[test]
@@ -1985,11 +2127,13 @@ mod tests {
                 "graph": {"version": 3, "nodes": [
                     {"id": 1, "nodeId": "step", "typeId": "node.gpu_flip_step", "handle": "step",
                      "params": {"top_speed": {"type": "Float", "value": 137.0}}}], "wires": []}}]
-        })).unwrap();
+        }))
+        .unwrap();
         let binding = serde_json::from_value(serde_json::json!({
             "id": "speed", "label": "Speed", "defaultValue": 23.0,
             "target": {"kind": "node", "nodeId": "step", "param": "top_speed"}
-        })).unwrap();
+        }))
+        .unwrap();
         let mut parent_metadata = minimal_preset_metadata();
         parent_metadata.bindings.push(binding);
         def.preset_metadata = Some(parent_metadata.clone());
@@ -1997,9 +2141,21 @@ mod tests {
         let parent_nodes = def.nodes.clone();
         assert!(retire_params(&mut def));
         assert_eq!(def.nodes, parent_nodes);
-        assert_eq!(def.preset_metadata, Some(parent_metadata), "modifier-local identities cannot erase parent bindings");
+        assert_eq!(
+            def.preset_metadata,
+            Some(parent_metadata),
+            "modifier-local identities cannot erase parent bindings"
+        );
         assert!(def.scene_modifiers[0].graph.nodes[0].params.is_empty());
-        assert!(def.scene_modifiers[0].graph.preset_metadata.as_ref().unwrap().bindings.is_empty());
+        assert!(
+            def.scene_modifiers[0]
+                .graph
+                .preset_metadata
+                .as_ref()
+                .unwrap()
+                .bindings
+                .is_empty()
+        );
         let once = def.clone();
         assert!(!retire_params(&mut def));
         assert_eq!(def, once);
@@ -2038,7 +2194,11 @@ mod tests {
         })).unwrap();
         let mut metadata = minimal_preset_metadata();
         for id in ["retired", "fanout", "group_speed", "legacy"] {
-            metadata.params.push(ParamSpecDef { id: id.into(), name: id.into(), ..Default::default() });
+            metadata.params.push(ParamSpecDef {
+                id: id.into(),
+                name: id.into(),
+                ..Default::default()
+            });
         }
         metadata.bindings = serde_json::from_value(serde_json::json!([
             {"id": "retired", "label": "Retired", "defaultValue": 137.0, "userAdded": true,
@@ -2051,7 +2211,8 @@ mod tests {
              "target": {"kind": "node", "nodeId": "step", "param": "top_speed"}},
             {"id": "fanout", "label": "Mixed", "defaultValue": 23.0,
              "target": {"kind": "node", "nodeId": "unrelated", "param": "top_speed"}}
-        ])).unwrap();
+        ]))
+        .unwrap();
         def.preset_metadata = Some(metadata);
         let unrelated = def.nodes[1].group.as_ref().unwrap().nodes[3].clone();
         assert!(retire_params(&mut def));
@@ -2059,20 +2220,43 @@ mod tests {
         assert!(group_node.params.is_empty() && group_node.exposed_params.is_empty());
         let group = group_node.group.as_ref().unwrap();
         assert!(group.interface.params.is_empty());
-        assert_eq!(group.interface.inputs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["shared"]);
-        assert_eq!(group.nodes[3], unrelated, "same-named unrelated input stays byte-for-byte intact");
+        assert_eq!(
+            group
+                .interface
+                .inputs
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>(),
+            ["shared"]
+        );
+        assert_eq!(
+            group.nodes[3], unrelated,
+            "same-named unrelated input stays byte-for-byte intact"
+        );
         let step = &group.nodes[1].group.as_ref().unwrap().nodes[0];
         assert!(step.params.is_empty() && step.exposed_params.is_empty());
         assert_eq!(group.wires.len(), 1);
         assert_eq!(def.wires.len(), 1);
         let metadata = def.preset_metadata.as_ref().unwrap();
-        assert_eq!(metadata.params.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["fanout"]);
+        assert_eq!(
+            metadata
+                .params
+                .iter()
+                .map(|p| p.id.as_str())
+                .collect::<Vec<_>>(),
+            ["fanout"]
+        );
         assert_eq!(metadata.bindings.len(), 1);
-        assert!(matches!(&metadata.bindings[0].target, BindingTarget::Node {node_id, param}
-            if node_id.as_str() == "unrelated" && param == "top_speed"));
+        assert!(
+            matches!(&metadata.bindings[0].target, BindingTarget::Node {node_id, param}
+            if node_id.as_str() == "unrelated" && param == "top_speed")
+        );
         let once = def.clone();
         assert!(!retire_params(&mut def));
-        assert_eq!(def, once, "repeat migration leaves the normalized document unchanged");
+        assert_eq!(
+            def, once,
+            "repeat migration leaves the normalized document unchanged"
+        );
     }
 
     // ── GLTF_ANIM_RUNTIME_V2_DESIGN.md P2/D5 — old-shape sampler migration ──
@@ -2087,7 +2271,7 @@ mod tests {
             legacy_discriminant: None,
             available: true,
             is_line_based: false,
-                layer_types: None,
+            layer_types: None,
             params: Vec::new(),
             bindings: Vec::new(),
             param_aliases: Vec::new(),
@@ -2134,20 +2318,27 @@ mod tests {
         )
         .expect("system.* boundary ids are unaffected by migration and always construct");
         drop(def);
-        let source = graph.node_id_by_handle("source").expect("owned source handle");
+        let source = graph
+            .node_id_by_handle("source")
+            .expect("owned source handle");
         assert_eq!(
             graph.get_node(source).unwrap().node_id.as_str(),
             "source-stable"
         );
         let saved = <EffectGraphDef as crate::persistence::EffectGraphDefExt>::from_graph(&graph);
         drop(graph);
-        let source = saved.nodes.iter()
-            .find(|node| node.node_id.as_str() == "source-stable").unwrap();
-        let output = saved.nodes.iter()
-            .find(|node| node.node_id.as_str() == "output-stable").unwrap();
+        let source = saved
+            .nodes
+            .iter()
+            .find(|node| node.node_id.as_str() == "source-stable")
+            .unwrap();
+        let output = saved
+            .nodes
+            .iter()
+            .find(|node| node.node_id.as_str() == "output-stable")
+            .unwrap();
         assert_eq!(source.handle.as_deref(), Some("source"));
         assert_eq!(output.handle.as_deref(), Some("final"));
         assert_eq!(saved.wires.len(), 1);
     }
-
 }

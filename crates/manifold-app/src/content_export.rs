@@ -26,8 +26,8 @@ pub(crate) fn export_metadata(
     project: &manifold_core::project::Project,
     config: &manifold_media::export_config::ExportConfig,
 ) -> Vec<(String, String)> {
-    use manifold_core::types::TonemapCurve;
     use manifold_core::settings::{RtQualityTier, RtRayResolution, RtSpatialDenoise};
+    use manifold_core::types::TonemapCurve;
 
     fn tier(t: RtQualityTier) -> &'static str {
         match t {
@@ -68,19 +68,37 @@ pub(crate) fn export_metadata(
     if !project.project_name.is_empty() {
         out.push(kv("title", project.project_name.clone()));
     }
-    out.push(kv("software", format!("MANIFOLD {}", env!("CARGO_PKG_VERSION"))));
-    out.push(kv("com.manifold.resolution", format!("{}x{}", config.width, config.height)));
+    out.push(kv(
+        "software",
+        format!("MANIFOLD {}", env!("CARGO_PKG_VERSION")),
+    ));
+    out.push(kv(
+        "com.manifold.resolution",
+        format!("{}x{}", config.width, config.height),
+    ));
     out.push(kv("com.manifold.fps", format!("{}", config.fps)));
-    out.push(kv("com.manifold.dynamic_range", if config.hdr { "HDR10" } else { "SDR" }.into()));
-    out.push(kv("com.manifold.codec", if config.hdr { "HEVC Main10" } else { "H.264" }.into()));
+    out.push(kv(
+        "com.manifold.dynamic_range",
+        if config.hdr { "HDR10" } else { "SDR" }.into(),
+    ));
+    out.push(kv(
+        "com.manifold.codec",
+        if config.hdr { "HEVC Main10" } else { "H.264" }.into(),
+    ));
     out.push(kv("com.manifold.sdr_tone_map", tonemap.into()));
     out.push(kv("com.manifold.rt_shadows", tier(rt.shadows).into()));
     out.push(kv("com.manifold.rt_ao", tier(rt.ao).into()));
     out.push(kv("com.manifold.rt_gi", tier(rt.gi).into()));
-    out.push(kv("com.manifold.rt_reflections", tier(rt.reflections).into()));
+    out.push(kv(
+        "com.manifold.rt_reflections",
+        tier(rt.reflections).into(),
+    ));
     out.push(kv("com.manifold.rt_ray_resolution", ray_res.into()));
     out.push(kv("com.manifold.rt_denoise", denoise.into()));
-    out.push(kv("com.manifold.bpm", format!("{:.2}", project.settings.bpm.0)));
+    out.push(kv(
+        "com.manifold.bpm",
+        format!("{:.2}", project.settings.bpm.0),
+    ));
     out
 }
 
@@ -97,7 +115,10 @@ struct ExportFrameFailure {
 
 /// Before a hang retry, ask the RT tracer for its most conservative tiles so
 /// the retried frame is less likely to trip the watchdog again.
-fn request_conservative_rt_tiles(_pipeline: &mut crate::content_pipeline::ContentPipeline, attempt: u32) {
+fn request_conservative_rt_tiles(
+    _pipeline: &mut crate::content_pipeline::ContentPipeline,
+    attempt: u32,
+) {
     manifold_gpu::raytrace::request_conservative_trace_tiles();
     log::warn!("[Export] Hang retry {attempt}: re-rendering with conservative RT tiles");
 }
@@ -137,7 +158,9 @@ pub(crate) enum ExportTestFault {
     /// No fault, the fence just never signals: the export fails, the app lives.
     CompletionTimeout,
     /// The first `failing_attempts` renders of the frame hang.
-    Hang { failing_attempts: u32 },
+    Hang {
+        failing_attempts: u32,
+    },
 }
 
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
@@ -221,7 +244,12 @@ fn observe_export_frame(observation: ExportFrameObservation) {
 
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 fn export_test_fault(frame_idx: u32) -> Option<ExportTestFault> {
-    EXPORT_FAILURE_FRAME.with(|frame| frame.get().filter(|(index, _)| *index == frame_idx).map(|(_, fault)| fault))
+    EXPORT_FAILURE_FRAME.with(|frame| {
+        frame
+            .get()
+            .filter(|(index, _)| *index == frame_idx)
+            .map(|(_, fault)| fault)
+    })
 }
 
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
@@ -257,8 +285,16 @@ pub(crate) fn export_gpu_completion(
     timed_out: bool,
 ) -> Option<Result<(), ExportGpuFailure>> {
     if current_faults != initial_faults || submissions_ignored {
-        let kinds = if submissions_ignored { kinds.with(FaultKind::SubmissionsIgnored) } else { kinds };
-        let kinds = if kinds.is_empty() { kinds.with(FaultKind::Other) } else { kinds };
+        let kinds = if submissions_ignored {
+            kinds.with(FaultKind::SubmissionsIgnored)
+        } else {
+            kinds
+        };
+        let kinds = if kinds.is_empty() {
+            kinds.with(FaultKind::Other)
+        } else {
+            kinds
+        };
         let cause = kinds.headline().map_or("GPU error", FaultKind::describe);
         Some(Err(ExportGpuFailure {
             message: format!("{cause} during export; see session encoder diagnostics"),
@@ -288,8 +324,20 @@ mod gpu_completion_tests {
     #[test]
     fn gpu_failure_overrides_signalled_fence() {
         let page = none().with(FaultKind::PageFault);
-        assert!(export_gpu_completion(true, 4, 5, page, false, false).unwrap().unwrap_err().kinds.is_fatal());
-        assert!(export_gpu_completion(true, 4, 4, none(), true, false).unwrap().unwrap_err().kinds.is_fatal());
+        assert!(
+            export_gpu_completion(true, 4, 5, page, false, false)
+                .unwrap()
+                .unwrap_err()
+                .kinds
+                .is_fatal()
+        );
+        assert!(
+            export_gpu_completion(true, 4, 4, none(), true, false)
+                .unwrap()
+                .unwrap_err()
+                .kinds
+                .is_fatal()
+        );
     }
 
     #[test]
@@ -303,16 +351,23 @@ mod gpu_completion_tests {
 
     #[test]
     fn unclassified_fault_is_neither_fatal_nor_retried() {
-        let failure = export_gpu_completion(true, 0, 1, none(), false, false).unwrap().unwrap_err();
+        let failure = export_gpu_completion(true, 0, 1, none(), false, false)
+            .unwrap()
+            .unwrap_err();
         assert!(!failure.kinds.is_fatal() && !failure.kinds.is_recoverable_hang());
     }
 
     #[test]
     fn unfinished_frame_waits_then_fails_at_deadline() {
         assert!(export_gpu_completion(false, 0, 0, none(), false, false).is_none());
-        let timeout = export_gpu_completion(false, 0, 0, none(), false, true).unwrap().unwrap_err();
+        let timeout = export_gpu_completion(false, 0, 0, none(), false, true)
+            .unwrap()
+            .unwrap_err();
         assert!(!timeout.kinds.is_fatal() && !timeout.kinds.is_recoverable_hang());
-        assert_eq!(export_gpu_completion(true, 0, 0, none(), false, true), Some(Ok(())));
+        assert_eq!(
+            export_gpu_completion(true, 0, 0, none(), false, true),
+            Some(Ok(()))
+        );
     }
 }
 
@@ -575,7 +630,6 @@ fn export_disposition(cmd: &ContentCommand) -> ExportDisposition {
     }
 }
 impl ContentThread {
-
     /// True when the export must stop: a cancel, or a quit. The quit is held
     /// so it proceeds after the cancelled export unwinds. Every other command
     /// is classified by [`export_disposition`]: held to run after the export,
@@ -639,13 +693,16 @@ impl ContentThread {
         let (outline_output, outline_viewport) = self.content_pipeline.take_selection_outline();
         // The gizmos an export includes are the Scene panel scene's, drawn
         // in the Scene panel's draw mode.
-        let gizmos = config.include_gizmos.then(|| self.content_pipeline.begin_export_gizmos());
+        let gizmos = config
+            .include_gizmos
+            .then(|| self.content_pipeline.begin_export_gizmos());
         self.run_export_inner(config, cmd_rx, state_tx);
         if let Some(previous) = gizmos {
             self.content_pipeline.end_export_gizmos(previous);
         }
         self.content_pipeline.set_scene_viewport_request(viewport);
-        self.content_pipeline.set_selection_outline(outline_output, outline_viewport);
+        self.content_pipeline
+            .set_selection_outline(outline_output, outline_viewport);
         // Edits sent while it ran were dropped, but a direct UI write may
         // still show one: publish the project once so the UI copy is replaced
         // by this thread's (the existing publish_pending path, no data_version bump).
@@ -779,9 +836,9 @@ impl ContentThread {
             .engine
             .project()
             .map_or(1.0, |p| p.settings.render_scale);
-        if let Err(message) = self
-            .content_pipeline
-            .resize(&mut self.engine, cur_w, cur_h, render_scale)
+        if let Err(message) =
+            self.content_pipeline
+                .resize(&mut self.engine, cur_w, cur_h, render_scale)
         {
             log::error!("[ContentThread] Export restore resize failed: {message}");
             // Keep the engine stopped: resuming with a mismatched pipeline
@@ -865,8 +922,7 @@ impl ContentThread {
         let mut tempo_map = project.tempo_map.clone();
         let start_seconds =
             TempoMapConverter::beat_to_seconds(&mut tempo_map, Beats(start_beat), bpm);
-        let end_seconds =
-            TempoMapConverter::beat_to_seconds(&mut tempo_map, Beats(end_beat), bpm);
+        let end_seconds = TempoMapConverter::beat_to_seconds(&mut tempo_map, Beats(end_beat), bpm);
         let duration = end_seconds - start_seconds;
         let total_frames = (duration * export_config.fps).0.round() as u32;
         let frame_dt = 1.0 / export_config.fps as f64;
@@ -895,7 +951,9 @@ impl ContentThread {
         // `AudioSend::layers()`), so the mixdown renders exactly the taps the
         // driver will need and no more.
         let mut consumed_sends = project.analysis_consumed_sends();
-        consumed_sends.extend(crate::audio_visualization::visualizer_consumed_sends(project));
+        consumed_sends.extend(crate::audio_visualization::visualizer_consumed_sends(
+            project,
+        ));
         let mut tapped_layers_set: ahash::AHashSet<manifold_core::id::LayerId> =
             ahash::AHashSet::new();
         for send in &project.audio_setup.sends {
@@ -945,16 +1003,14 @@ impl ContentThread {
         // The offline audio-mod driver analyzes the rendered buffer directly —
         // independent of whether the WAV muxing above succeeded, since that's
         // a disk-write concern and this is the in-memory render (P2).
-        let mut offline_audio_mod = export_audio
-            .as_ref()
-            .and_then(|audio| {
-                crate::offline_audio_mod::OfflineAudioModDriver::new(
-                    project,
-                    audio,
-                    export_config.fps as f64,
-                    start_seconds,
-                )
-            });
+        let mut offline_audio_mod = export_audio.as_ref().and_then(|audio| {
+            crate::offline_audio_mod::OfflineAudioModDriver::new(
+                project,
+                audio,
+                export_config.fps as f64,
+                start_seconds,
+            )
+        });
 
         // BUG-130: resolve FFmpeg presence up front, before rendering a single
         // frame. `session.finalize()` used to be the only place this was
@@ -1009,7 +1065,9 @@ impl ContentThread {
         // BUG-k1n2w: after a firmware GPU reset, more hangs in the same boot
         // are likely whatever the project; only a reboot cleared them.
         if let Some(resets) = manifold_gpu::firmware_reports::summary_since_boot() {
-            log::warn!("[Export] {resets}. Further GPU hangs are likely until a reboot; reboot before a long export.");
+            log::warn!(
+                "[Export] {resets}. Further GPU hangs are likely until a reboot; reboot before a long export."
+            );
         }
 
         // 4. Create export session (initializes native Metal encoder).
@@ -1053,22 +1111,26 @@ impl ContentThread {
         // until the decoders have a frame (pre_render drains decode results),
         // with no GPU rendering; the engine then re-seeks to the start.
         let start_time = self.engine.beat_to_timeline_time(Beats(start_beat));
-        self.engine.begin_export_run(export_config.fps, start_time, |engine| {
-            if generator_only {
-                return false;
-            }
-            const MAX_WARMUP_TICKS: u32 = 120;
-            for warmup_i in 0..MAX_WARMUP_TICKS {
-                if engine.export_warm_up_tick() {
-                    break;
+        self.engine
+            .begin_export_run(export_config.fps, start_time, |engine| {
+                if generator_only {
+                    return false;
                 }
-                if warmup_i % 30 == 29 {
-                    log::warn!("[Export] Still waiting for decoders after {} warmup ticks", warmup_i + 1);
+                const MAX_WARMUP_TICKS: u32 = 120;
+                for warmup_i in 0..MAX_WARMUP_TICKS {
+                    if engine.export_warm_up_tick() {
+                        break;
+                    }
+                    if warmup_i % 30 == 29 {
+                        log::warn!(
+                            "[Export] Still waiting for decoders after {} warmup ticks",
+                            warmup_i + 1
+                        );
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
                 }
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
-            true
-        });
+                true
+            });
 
         // 5. Export frame loop.
         //    The engine is parked on the export start's grid frame; export
@@ -1077,9 +1139,10 @@ impl ContentThread {
         // imported assets load. Restart simulation and RT sampling once per
         // section so those preparation frames cannot affect exported pixels.
         for renderer in self.engine.renderers_mut() {
-            if let Some(generator) = renderer.as_any_mut().downcast_mut::<
-                manifold_compositor::generator_renderer::GeneratorRenderer,
-            >() {
+            if let Some(generator) = renderer
+                .as_any_mut()
+                .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>(
+            ) {
                 generator.reset_all_generator_state();
             }
         }
@@ -1240,7 +1303,8 @@ impl ContentThread {
         // effect state does not integrate on the first frame (frames 0): it
         // renders the state at the export start, then advances one frame per
         // output frame.
-        let ctx = PlaybackEngine::export_frame_context(frame_idx, Seconds(frame_idx as f64 * frame_dt));
+        let ctx =
+            PlaybackEngine::export_frame_context(frame_idx, Seconds(frame_idx as f64 * frame_dt));
         // P2 (docs/OFFLINE_AUDIO_REACTIVE_EXPORT_DESIGN.md): feed this frame's
         // export-rendered audio through the analyzer chain and write the
         // resulting features into the engine's audio snapshot BEFORE the
@@ -1266,10 +1330,15 @@ impl ContentThread {
                 fatal: false,
             });
         }
-        if let Some(message) = self.engine.project()
+        if let Some(message) = self
+            .engine
+            .project()
             .and_then(manifold_playback::modulation::control_capture_error)
         {
-            return Some(ExportFrameFailure { message, fatal: false });
+            return Some(ExportFrameFailure {
+                message,
+                fatal: false,
+            });
         }
 
         // Wait for any in-flight video decodes to complete before rendering.
@@ -1290,162 +1359,193 @@ impl ContentThread {
         let mut hdr_scene_rgba16f = None;
         let mut tex_ptr;
         loop {
-        let fault_mark = manifold_gpu::gpu_fault::mark();
-        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
-        EXPORT_RENDER_ATTEMPTS.with(|count| count.set(count.get() + 1));
-        self.content_pipeline.render_content(
-            &self.gpu,
-            &mut self.engine,
-            &tick_result,
-            frame_idx as u64,
-            true,
-            self.editing_service.stamps(),
-            offline_audio_mod.as_deref().map(|driver| driver.visuals()),
-        );
+            let fault_mark = manifold_gpu::gpu_fault::mark();
+            #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+            EXPORT_RENDER_ATTEMPTS.with(|count| count.set(count.get() + 1));
+            self.content_pipeline.render_content(
+                &self.gpu,
+                &mut self.engine,
+                &tick_result,
+                frame_idx as u64,
+                true,
+                self.editing_service.stamps(),
+                offline_audio_mod.as_deref().map(|driver| driver.visuals()),
+            );
 
-        // Block until async effect workers complete (blob tracking, wireframe depth,
-        // depth-of-field). During live playback 1-2 frame latency is acceptable, but
-        // export must be frame-perfect: each frame's async results must resolve before
-        // the frame is encoded.
-        self.content_pipeline.flush_all_background_work();
+            // Block until async effect workers complete (blob tracking, wireframe depth,
+            // depth-of-field). During live playback 1-2 frame latency is acceptable, but
+            // export must be frame-perfect: each frame's async results must resolve before
+            // the frame is encoded.
+            self.content_pipeline.flush_all_background_work();
 
-        // SCENE_MODIFIER_RT_DESIGN.md section 5.4 (P5): the frame must be
-        // Complete before its texture is selected and encoded. Pending at
-        // this boundary is an error, never permission to tick again — the
-        // export loop must not rerun the graph to settle RT.
-        let frame_status = self.content_pipeline.frame_render_status();
-        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+            // SCENE_MODIFIER_RT_DESIGN.md section 5.4 (P5): the frame must be
+            // Complete before its texture is selected and encoded. Pending at
+            // this boundary is an error, never permission to tick again — the
+            // export loop must not rerun the graph to settle RT.
+            let frame_status = self.content_pipeline.frame_render_status();
+            #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
         let frame_status = match export_test_fault(frame_idx) {
             Some(ExportTestFault::PendingGeometry) => manifold_node_engine::runtime::frame_status::FrameRenderStatus::PendingGeometry,
             Some(ExportTestFault::Preparation) => manifold_node_engine::runtime::frame_status::FrameRenderStatus::Failed(manifold_node_engine::runtime::frame_status::FrameRenderFailure::RtAllocation),
             Some(ExportTestFault::Encode) => manifold_node_engine::runtime::frame_status::FrameRenderStatus::Failed(manifold_node_engine::runtime::frame_status::FrameRenderFailure::RtEncode),
             _ => frame_status,
         };
-        if frame_status != manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete {
-            let message = format!(
-                "Export frame {frame_idx} is not complete ({frame_status:?}); refusing to encode"
-            );
-            log::error!("[Export] {message}");
-            return Some(ExportFrameFailure { message, fatal: false });
-        }
-
-        if export_config.include_gizmos {
-            self.content_pipeline.draw_export_gizmos();
-        }
-
-        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
-        let mut sdr_mapped_texture = None;
-        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
-        let mut hdr_scene_texture = None;
-        tex_ptr = if export_config.hdr {
-            let paper_white = 200.0f32;
-            let max_nits = 10000.0f32;
-            #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
-            if export_hdr_readback_requested(frame_idx) {
-                // The canonical scene texture is the production source fed to
-                // PQ encoding. Clone only its native handle so readback can
-                // happen after the completion barrier without retaining a
-                // borrow into ContentPipeline.
-                hdr_scene_texture = Some(self.content_pipeline.export_output_texture().clone());
-            }
-            let texture = self
-                .content_pipeline
-                .pq_encode_for_export(paper_white, max_nits);
-            Self::get_metal_texture_ptr(texture)
-        } else {
-            let texture = self.content_pipeline.sdr_export_output_texture();
-            #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
-            if export_sdr_readback_requested(frame_idx) {
-                // Clone only the native texture handle so the readback can
-                // happen after the export completion barrier without holding
-                // a borrow into ContentPipeline across that wait.
-                sdr_mapped_texture = Some(texture.clone());
-            }
-            Self::get_metal_texture_ptr(texture)
-        };
-
-        let completion = self.content_pipeline.wait_for_export_complete(&fault_mark);
-        // Exercise the real completion decision without faulting or hanging
-        // hardware, and only after the actual submitted work has completed.
-        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
-        let completion = completion.and_then(|()| match export_test_fault(frame_idx) {
-            Some(ExportTestFault::GpuFault) => export_gpu_completion(
-                true, 0, 1, FaultKinds::default().with(FaultKind::PageFault), false, false,
-            ).unwrap(),
-            Some(ExportTestFault::IgnoredSubmission) => export_gpu_completion(
-                true, 0, 0, FaultKinds::default(), true, false,
-            ).unwrap(),
-            Some(ExportTestFault::CompletionTimeout) => export_gpu_completion(
-                false, 0, 0, FaultKinds::default(), false, true,
-            ).unwrap(),
-            Some(ExportTestFault::Hang { failing_attempts }) if attempt < failing_attempts => export_gpu_completion(
-                true, 0, 1, FaultKinds::default().with(FaultKind::Hang), false, false,
-            ).unwrap(),
-            _ => Ok(()),
-        });
-        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
-        if completion.is_ok()
-            && let Some(texture) = sdr_mapped_texture.as_ref()
-        {
-            let device = self
-                .content_pipeline
-                .native_device()
-                .expect("SDR colour proof requires the export Metal device");
-            sdr_mapped_rgba16f = Some(manifold_node_engine::gpu::headless_readback::readback_raw_halves(
-                device,
-                texture,
-                texture.width,
-                texture.height,
-            ));
-        }
-        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
-        if completion.is_ok()
-            && let Some(texture) = hdr_scene_texture.as_ref()
-        {
-            let device = self
-                .content_pipeline
-                .native_device()
-                .expect("HDR colour proof requires the export Metal device");
-            hdr_scene_rgba16f = Some(manifold_node_engine::gpu::headless_readback::readback_raw_halves(
-                device,
-                texture,
-                texture.width,
-                texture.height,
-            ));
-        }
-        if let Err(failure) = completion {
-            log::error!("[Export] Frame {frame_idx} attempt {attempt} failed: {}", failure.message);
-            if failure.kinds.is_recoverable_hang() && attempt < EXPORT_HANG_RETRIES {
-                // Victim buffers from the hang must land before the retry
-                // takes its fault mark, or they would be blamed on it.
-                if !manifold_gpu::gpu_fault::drain_completions(std::time::Duration::from_secs(2)) {
-                    return Some(ExportFrameFailure {
-                        message: format!(
-                            "Export stopped at frame {frame_idx}: {}. The GPU did not settle, so the frame was not retried.",
-                            failure.message
-                        ),
-                        fatal: false,
-                    });
-                }
-                attempt += 1;
-                log::warn!(
-                    "[Export] Re-rendering frame {frame_idx} after a GPU hang (retry {attempt} of {EXPORT_HANG_RETRIES}). \
-                     Timeline and audio are not re-run; layers with feedback or simulation state advance twice."
+            if frame_status
+                != manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete
+            {
+                let message = format!(
+                    "Export frame {frame_idx} is not complete ({frame_status:?}); refusing to encode"
                 );
-                request_conservative_rt_tiles(&mut self.content_pipeline, attempt);
-                continue;
+                log::error!("[Export] {message}");
+                return Some(ExportFrameFailure {
+                    message,
+                    fatal: false,
+                });
             }
-            let retried = match attempt {
-                0 => String::new(),
-                1 => " after 1 retry".to_owned(),
-                n => format!(" after {n} retries"),
+
+            if export_config.include_gizmos {
+                self.content_pipeline.draw_export_gizmos();
+            }
+
+            #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+            let mut sdr_mapped_texture = None;
+            #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+            let mut hdr_scene_texture = None;
+            tex_ptr = if export_config.hdr {
+                let paper_white = 200.0f32;
+                let max_nits = 10000.0f32;
+                #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+                if export_hdr_readback_requested(frame_idx) {
+                    // The canonical scene texture is the production source fed to
+                    // PQ encoding. Clone only its native handle so readback can
+                    // happen after the completion barrier without retaining a
+                    // borrow into ContentPipeline.
+                    hdr_scene_texture = Some(self.content_pipeline.export_output_texture().clone());
+                }
+                let texture = self
+                    .content_pipeline
+                    .pq_encode_for_export(paper_white, max_nits);
+                Self::get_metal_texture_ptr(texture)
+            } else {
+                let texture = self.content_pipeline.sdr_export_output_texture();
+                #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+                if export_sdr_readback_requested(frame_idx) {
+                    // Clone only the native texture handle so the readback can
+                    // happen after the export completion barrier without holding
+                    // a borrow into ContentPipeline across that wait.
+                    sdr_mapped_texture = Some(texture.clone());
+                }
+                Self::get_metal_texture_ptr(texture)
             };
-            return Some(ExportFrameFailure {
-                message: format!("Export stopped at frame {frame_idx}{retried}: {}", failure.message),
-                fatal: failure.kinds.is_fatal(),
+
+            let completion = self.content_pipeline.wait_for_export_complete(&fault_mark);
+            // Exercise the real completion decision without faulting or hanging
+            // hardware, and only after the actual submitted work has completed.
+            #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+            let completion = completion.and_then(|()| match export_test_fault(frame_idx) {
+                Some(ExportTestFault::GpuFault) => export_gpu_completion(
+                    true,
+                    0,
+                    1,
+                    FaultKinds::default().with(FaultKind::PageFault),
+                    false,
+                    false,
+                )
+                .unwrap(),
+                Some(ExportTestFault::IgnoredSubmission) => {
+                    export_gpu_completion(true, 0, 0, FaultKinds::default(), true, false).unwrap()
+                }
+                Some(ExportTestFault::CompletionTimeout) => {
+                    export_gpu_completion(false, 0, 0, FaultKinds::default(), false, true).unwrap()
+                }
+                Some(ExportTestFault::Hang { failing_attempts }) if attempt < failing_attempts => {
+                    export_gpu_completion(
+                        true,
+                        0,
+                        1,
+                        FaultKinds::default().with(FaultKind::Hang),
+                        false,
+                        false,
+                    )
+                    .unwrap()
+                }
+                _ => Ok(()),
             });
-        }
-        break;
+            #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+            if completion.is_ok()
+                && let Some(texture) = sdr_mapped_texture.as_ref()
+            {
+                let device = self
+                    .content_pipeline
+                    .native_device()
+                    .expect("SDR colour proof requires the export Metal device");
+                sdr_mapped_rgba16f = Some(
+                    manifold_node_engine::gpu::headless_readback::readback_raw_halves(
+                        device,
+                        texture,
+                        texture.width,
+                        texture.height,
+                    ),
+                );
+            }
+            #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+            if completion.is_ok()
+                && let Some(texture) = hdr_scene_texture.as_ref()
+            {
+                let device = self
+                    .content_pipeline
+                    .native_device()
+                    .expect("HDR colour proof requires the export Metal device");
+                hdr_scene_rgba16f = Some(
+                    manifold_node_engine::gpu::headless_readback::readback_raw_halves(
+                        device,
+                        texture,
+                        texture.width,
+                        texture.height,
+                    ),
+                );
+            }
+            if let Err(failure) = completion {
+                log::error!(
+                    "[Export] Frame {frame_idx} attempt {attempt} failed: {}",
+                    failure.message
+                );
+                if failure.kinds.is_recoverable_hang() && attempt < EXPORT_HANG_RETRIES {
+                    // Victim buffers from the hang must land before the retry
+                    // takes its fault mark, or they would be blamed on it.
+                    if !manifold_gpu::gpu_fault::drain_completions(std::time::Duration::from_secs(
+                        2,
+                    )) {
+                        return Some(ExportFrameFailure {
+                            message: format!(
+                                "Export stopped at frame {frame_idx}: {}. The GPU did not settle, so the frame was not retried.",
+                                failure.message
+                            ),
+                            fatal: false,
+                        });
+                    }
+                    attempt += 1;
+                    log::warn!(
+                        "[Export] Re-rendering frame {frame_idx} after a GPU hang (retry {attempt} of {EXPORT_HANG_RETRIES}). \
+                     Timeline and audio are not re-run; layers with feedback or simulation state advance twice."
+                    );
+                    request_conservative_rt_tiles(&mut self.content_pipeline, attempt);
+                    continue;
+                }
+                let retried = match attempt {
+                    0 => String::new(),
+                    1 => " after 1 retry".to_owned(),
+                    n => format!(" after {n} retries"),
+                };
+                return Some(ExportFrameFailure {
+                    message: format!(
+                        "Export stopped at frame {frame_idx}{retried}: {}",
+                        failure.message
+                    ),
+                    fatal: failure.kinds.is_fatal(),
+                });
+            }
+            break;
         }
 
         #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
@@ -1461,11 +1561,15 @@ impl ContentThread {
                 rt_dispatches,
                 history_resets,
                 beat: self.engine.current_beat().0,
-                generator_values: self.engine.project().into_iter()
+                generator_values: self
+                    .engine
+                    .project()
+                    .into_iter()
                     .flat_map(|project| &project.timeline.layers)
                     .filter_map(|layer| layer.gen_params())
                     .flat_map(|instance| instance.params.iter())
-                    .map(|param| (param.id().to_owned(), param.value)).collect(),
+                    .map(|param| (param.id().to_owned(), param.value))
+                    .collect(),
                 sdr_mapped_rgba16f,
                 hdr_scene_rgba16f,
             });
@@ -1481,12 +1585,18 @@ impl ContentThread {
             Some(ptr) => {
                 if let Err(e) = unsafe { session.encode_frame(ptr) } {
                     log::error!("[ContentThread] Encode failed at frame {frame_idx}: {e}");
-                    return Some(ExportFrameFailure { message: format!("Encode failed at frame {frame_idx}: {e}"), fatal: false });
+                    return Some(ExportFrameFailure {
+                        message: format!("Encode failed at frame {frame_idx}: {e}"),
+                        fatal: false,
+                    });
                 }
             }
             None => {
                 log::error!("[ContentThread] No Metal texture at frame {frame_idx}");
-                return Some(ExportFrameFailure { message: format!("No texture at frame {frame_idx}"), fatal: false });
+                return Some(ExportFrameFailure {
+                    message: format!("No texture at frame {frame_idx}"),
+                    fatal: false,
+                });
             }
         }
 
@@ -1723,8 +1833,14 @@ mod tests {
         assert_eq!(meta_get(&m, "com.manifold.sdr_tone_map"), Some("AgX"));
         // Export column defaults.
         assert_eq!(meta_get(&m, "com.manifold.rt_shadows"), Some("High"));
-        assert_eq!(meta_get(&m, "com.manifold.rt_reflections"), Some("Extra High"));
-        assert_eq!(meta_get(&m, "com.manifold.rt_ray_resolution"), Some("Native"));
+        assert_eq!(
+            meta_get(&m, "com.manifold.rt_reflections"),
+            Some("Extra High")
+        );
+        assert_eq!(
+            meta_get(&m, "com.manifold.rt_ray_resolution"),
+            Some("Native")
+        );
         assert_eq!(meta_get(&m, "com.manifold.rt_denoise"), Some("High"));
         assert!(meta_get(&m, "com.manifold.bpm").is_some());
     }
@@ -1759,20 +1875,30 @@ mod tests {
             None
         });
         assert_eq!(result, Ok(None));
-        assert!(!resolver_called, "resolver should be skipped when there's no audio to mux");
+        assert!(
+            !resolver_called,
+            "resolver should be skipped when there's no audio to mux"
+        );
     }
 
     #[test]
     fn ffmpeg_preflight_aborts_before_frame_0_when_audio_needs_missing_ffmpeg() {
         let result = ContentThread::ffmpeg_preflight(true, || None);
-        assert!(result.is_err(), "must abort, not silently proceed to render frames");
+        assert!(
+            result.is_err(),
+            "must abort, not silently proceed to render frames"
+        );
         let reason = result.unwrap_err();
-        assert!(reason.contains("ffmpeg not found"), "reason should be clear: {reason}");
+        assert!(
+            reason.contains("ffmpeg not found"),
+            "reason should be clear: {reason}"
+        );
     }
 
     #[test]
     fn ffmpeg_preflight_proceeds_when_audio_needs_resolvable_ffmpeg() {
-        let result = ContentThread::ffmpeg_preflight(true, || Some("/opt/homebrew/bin/ffmpeg".to_string()));
+        let result =
+            ContentThread::ffmpeg_preflight(true, || Some("/opt/homebrew/bin/ffmpeg".to_string()));
         assert_eq!(result, Ok(Some("/opt/homebrew/bin/ffmpeg".to_string())));
     }
 
@@ -1824,7 +1950,9 @@ mod tests {
     }
 
     #[cfg(target_os = "macos")]
-    fn timeline_with(markers: Vec<manifold_core::marker::TimelineMarker>) -> manifold_core::timeline::Timeline {
+    fn timeline_with(
+        markers: Vec<manifold_core::marker::TimelineMarker>,
+    ) -> manifold_core::timeline::Timeline {
         let mut t = manifold_core::timeline::Timeline::default();
         for m in markers {
             t.add_marker(m);
@@ -1862,9 +1990,21 @@ mod tests {
             sections,
             vec![
                 (Beats::from_f32(0.0), Beats::from_f32(4.0), String::new()),
-                (Beats::from_f32(4.0), Beats::from_f32(5.0), "Drop".to_string()),
-                (Beats::from_f32(5.0), Beats::from_f32(8.0), "Half".to_string()),
-                (Beats::from_f32(8.0), Beats::from_f32(16.0), "Break".to_string()),
+                (
+                    Beats::from_f32(4.0),
+                    Beats::from_f32(5.0),
+                    "Drop".to_string()
+                ),
+                (
+                    Beats::from_f32(5.0),
+                    Beats::from_f32(8.0),
+                    "Half".to_string()
+                ),
+                (
+                    Beats::from_f32(8.0),
+                    Beats::from_f32(16.0),
+                    "Break".to_string()
+                ),
             ]
         );
     }
@@ -1875,16 +2015,17 @@ mod tests {
         // A marker exactly on `out` is excluded (outside the half-open range):
         // it must not cut and must not name. Marker exactly on `in` names the
         // first section (see `derive_sections_names_first_section_from_marker_on_in`).
-        let t = timeline_with(vec![
-            plain_marker(8.0, "Mid"),
-            plain_marker(16.0, "OnOut"),
-        ]);
+        let t = timeline_with(vec![plain_marker(8.0, "Mid"), plain_marker(16.0, "OnOut")]);
         let sections = derive_sections(&t, Beats::from_f32(0.0), Beats::from_f32(16.0));
         assert_eq!(
             sections,
             vec![
                 (Beats::from_f32(0.0), Beats::from_f32(8.0), String::new()),
-                (Beats::from_f32(8.0), Beats::from_f32(16.0), "Mid".to_string()),
+                (
+                    Beats::from_f32(8.0),
+                    Beats::from_f32(16.0),
+                    "Mid".to_string()
+                ),
             ]
         );
 
@@ -1903,8 +2044,16 @@ mod tests {
             sections,
             vec![
                 (Beats::from_f32(0.0), Beats::from_f32(4.0), String::new()),
-                (Beats::from_f32(4.0), Beats::from_f32(8.0), "First".to_string()),
-                (Beats::from_f32(8.0), Beats::from_f32(16.0), "Next".to_string()),
+                (
+                    Beats::from_f32(4.0),
+                    Beats::from_f32(8.0),
+                    "First".to_string()
+                ),
+                (
+                    Beats::from_f32(8.0),
+                    Beats::from_f32(16.0),
+                    "Next".to_string()
+                ),
             ]
         );
     }
@@ -1915,16 +2064,21 @@ mod tests {
         // A marker exactly on `in` names the first section (doesn't cut), so
         // Peter can place one at the export-in point to name the intro instead
         // of getting `section-1`.
-        let t = timeline_with(vec![
-            plain_marker(0.0, "Intro"),
-            plain_marker(8.0, "Drop"),
-        ]);
+        let t = timeline_with(vec![plain_marker(0.0, "Intro"), plain_marker(8.0, "Drop")]);
         let sections = derive_sections(&t, Beats::from_f32(0.0), Beats::from_f32(16.0));
         assert_eq!(
             sections,
             vec![
-                (Beats::from_f32(0.0), Beats::from_f32(8.0), "Intro".to_string()),
-                (Beats::from_f32(8.0), Beats::from_f32(16.0), "Drop".to_string()),
+                (
+                    Beats::from_f32(0.0),
+                    Beats::from_f32(8.0),
+                    "Intro".to_string()
+                ),
+                (
+                    Beats::from_f32(8.0),
+                    Beats::from_f32(16.0),
+                    "Drop".to_string()
+                ),
             ]
         );
 
@@ -1933,7 +2087,11 @@ mod tests {
         let sections = derive_sections(&t, Beats::from_f32(0.0), Beats::from_f32(16.0));
         assert_eq!(
             sections,
-            vec![(Beats::from_f32(0.0), Beats::from_f32(16.0), "Only".to_string())]
+            vec![(
+                Beats::from_f32(0.0),
+                Beats::from_f32(16.0),
+                "Only".to_string()
+            )]
         );
 
         // Two markers on `in` → first in list order wins.
@@ -1947,8 +2105,16 @@ mod tests {
         assert_eq!(
             sections,
             vec![
-                (Beats::from_f32(0.0), Beats::from_f32(8.0), "First".to_string()),
-                (Beats::from_f32(8.0), Beats::from_f32(16.0), "Drop".to_string()),
+                (
+                    Beats::from_f32(0.0),
+                    Beats::from_f32(8.0),
+                    "First".to_string()
+                ),
+                (
+                    Beats::from_f32(8.0),
+                    Beats::from_f32(16.0),
+                    "Drop".to_string()
+                ),
             ]
         );
     }
@@ -1959,17 +2125,22 @@ mod tests {
         // `add_marker` keeps `markers` sorted, but `derive_sections` must not
         // depend on that: hand it an unsorted `markers` vec directly.
         let mut t = manifold_core::timeline::Timeline::default();
-        t.markers = vec![
-            plain_marker(8.0, "Break"),
-            plain_marker(4.0, "Drop"),
-        ];
+        t.markers = vec![plain_marker(8.0, "Break"), plain_marker(4.0, "Drop")];
         let sections = derive_sections(&t, Beats::from_f32(0.0), Beats::from_f32(16.0));
         assert_eq!(
             sections,
             vec![
                 (Beats::from_f32(0.0), Beats::from_f32(4.0), String::new()),
-                (Beats::from_f32(4.0), Beats::from_f32(8.0), "Drop".to_string()),
-                (Beats::from_f32(8.0), Beats::from_f32(16.0), "Break".to_string()),
+                (
+                    Beats::from_f32(4.0),
+                    Beats::from_f32(8.0),
+                    "Drop".to_string()
+                ),
+                (
+                    Beats::from_f32(8.0),
+                    Beats::from_f32(16.0),
+                    "Break".to_string()
+                ),
             ]
         );
     }
@@ -1986,8 +2157,16 @@ mod tests {
         // Sanitization + the leading unnamed section → `section-1`.
         let sections = vec![
             (Beats::from_f32(0.0), Beats::from_f32(4.0), String::new()),
-            (Beats::from_f32(4.0), Beats::from_f32(8.0), "Drop Build Up!".to_string()),
-            (Beats::from_f32(8.0), Beats::from_f32(16.0), "Drop Build Up!".to_string()),
+            (
+                Beats::from_f32(4.0),
+                Beats::from_f32(8.0),
+                "Drop Build Up!".to_string(),
+            ),
+            (
+                Beats::from_f32(8.0),
+                Beats::from_f32(16.0),
+                "Drop Build Up!".to_string(),
+            ),
         ];
         let paths = section_output_paths(&base, &sections);
         assert_eq!(
@@ -2002,7 +2181,11 @@ mod tests {
         // An empty-but-named fallback colliding with an explicit `section-1`.
         let sections = vec![
             (Beats::from_f32(0.0), Beats::from_f32(4.0), String::new()),
-            (Beats::from_f32(4.0), Beats::from_f32(8.0), "section-1".to_string()),
+            (
+                Beats::from_f32(4.0),
+                Beats::from_f32(8.0),
+                "section-1".to_string(),
+            ),
         ];
         let paths = section_output_paths(&base, &sections);
         assert_eq!(
@@ -2029,7 +2212,9 @@ mod tests {
     fn commands_during_export_are_dropped_and_a_quit_cancels_it() {
         use std::sync::atomic::{AtomicBool, Ordering};
         let mut thread = crate::headless_harness::headless_content_thread(
-            manifold_core::project::Project::default(), 64, 64,
+            manifold_core::project::Project::default(),
+            64,
+            64,
         );
         let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
         let (state_tx, _state_rx) = crate::content_state::state_channel();
@@ -2037,48 +2222,101 @@ mod tests {
         let edited_in_command = Arc::clone(&edited);
 
         cmd_tx.send(ContentCommand::Play).expect("send");
-        cmd_tx.send(ContentCommand::SeekTo(Seconds::from_f32(5.0))).expect("send");
-        cmd_tx.send(ContentCommand::SetFrameRate(24.0)).expect("send");
-        cmd_tx.send(ContentCommand::SetSdrPreview(true)).expect("send");
-        cmd_tx.send(ContentCommand::ResizeWorkspacePreview(320, 180)).expect("send");
+        cmd_tx
+            .send(ContentCommand::SeekTo(Seconds::from_f32(5.0)))
+            .expect("send");
+        cmd_tx
+            .send(ContentCommand::SetFrameRate(24.0))
+            .expect("send");
+        cmd_tx
+            .send(ContentCommand::SetSdrPreview(true))
+            .expect("send");
+        cmd_tx
+            .send(ContentCommand::ResizeWorkspacePreview(320, 180))
+            .expect("send");
         let watched = manifold_core::GraphTarget::Generator(manifold_core::LayerId::new("watched"));
-        cmd_tx.send(ContentCommand::WatchGraphTarget(Some(watched.clone()))).expect("send");
-        cmd_tx.send(ContentCommand::mutate(
-            crate::content_command::touch::VALUES,
-            Box::new(move |_| edited_in_command.store(true, Ordering::SeqCst)),
-        )).expect("send");
+        cmd_tx
+            .send(ContentCommand::WatchGraphTarget(Some(watched.clone())))
+            .expect("send");
+        cmd_tx
+            .send(ContentCommand::mutate(
+                crate::content_command::touch::VALUES,
+                Box::new(move |_| edited_in_command.store(true, Ordering::SeqCst)),
+            ))
+            .expect("send");
         assert!(!poll(&mut thread, &cmd_rx), "edits do not cancel an export");
         // A long export: every frame the UI wakes the surface wait and
         // reports a stage present. Neither may pile up in the held queue.
         let now = std::time::Instant::now();
         for id in 0..1000u64 {
             cmd_tx.send(ContentCommand::SurfaceReady).expect("send");
-            cmd_tx.send(ContentCommand::FramePresented { drawable_id: id, at: now }).expect("send");
+            cmd_tx
+                .send(ContentCommand::FramePresented {
+                    drawable_id: id,
+                    at: now,
+                })
+                .expect("send");
             assert!(!poll(&mut thread, &cmd_rx));
         }
-        assert!(thread.held_commands.len() <= 4, "held queue grew to {}", thread.held_commands.len());
+        assert!(
+            thread.held_commands.len() <= 4,
+            "held queue grew to {}",
+            thread.held_commands.len()
+        );
         cmd_tx.send(ContentCommand::Shutdown).expect("send");
         assert!(poll(&mut thread, &cmd_rx), "a quit cancels the export");
 
-        assert!(thread.drain_commands(&cmd_rx, &state_tx), "the quit proceeds after the export");
-        assert!(!thread.engine.is_playing(), "Play sent during the export was dropped");
-        assert_eq!(thread.engine.current_time(), Seconds::ZERO, "the seek was dropped");
-        assert_ne!(thread.engine.project().map(|p| p.settings.frame_rate), Some(24.0), "the show setting was dropped");
-        assert!(thread.content_pipeline.sdr_preview(), "the view setting was held and ran after the export");
-        assert_eq!(thread.watched_graph_target, Some(watched), "the graph watch was held and ran after the export");
-        assert!(!edited.load(Ordering::SeqCst), "the project edit was dropped");
+        assert!(
+            thread.drain_commands(&cmd_rx, &state_tx),
+            "the quit proceeds after the export"
+        );
+        assert!(
+            !thread.engine.is_playing(),
+            "Play sent during the export was dropped"
+        );
+        assert_eq!(
+            thread.engine.current_time(),
+            Seconds::ZERO,
+            "the seek was dropped"
+        );
+        assert_ne!(
+            thread.engine.project().map(|p| p.settings.frame_rate),
+            Some(24.0),
+            "the show setting was dropped"
+        );
+        assert!(
+            thread.content_pipeline.sdr_preview(),
+            "the view setting was held and ran after the export"
+        );
+        assert_eq!(
+            thread.watched_graph_target,
+            Some(watched),
+            "the graph watch was held and ran after the export"
+        );
+        assert!(
+            !edited.load(Ordering::SeqCst),
+            "the project edit was dropped"
+        );
 
         // Control: the same Play and edit do run outside an export.
         let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
         let edited_after = Arc::clone(&edited);
         cmd_tx.send(ContentCommand::Play).expect("send");
-        cmd_tx.send(ContentCommand::mutate(
-            crate::content_command::touch::VALUES,
-            Box::new(move |_| edited_after.store(true, Ordering::SeqCst)),
-        )).expect("send");
+        cmd_tx
+            .send(ContentCommand::mutate(
+                crate::content_command::touch::VALUES,
+                Box::new(move |_| edited_after.store(true, Ordering::SeqCst)),
+            ))
+            .expect("send");
         thread.drain_commands(&cmd_rx, &state_tx);
-        assert!(thread.engine.is_playing(), "control: Play runs in the normal loop");
-        assert!(edited.load(Ordering::SeqCst), "control: the edit runs in the normal loop");
+        assert!(
+            thread.engine.is_playing(),
+            "control: Play runs in the normal loop"
+        );
+        assert!(
+            edited.load(Ordering::SeqCst),
+            "control: the edit runs in the normal loop"
+        );
     }
 
     /// BUG-v2o9y: an edit the UI applied locally during an export had its
@@ -2088,14 +2326,20 @@ mod tests {
     #[test]
     fn export_end_republishes_the_project_over_a_divergent_ui_copy() {
         let mut thread = crate::headless_harness::headless_content_thread(
-            manifold_core::project::Project::default(), 64, 64,
+            manifold_core::project::Project::default(),
+            64,
+            64,
         );
         let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
         drop(cmd_tx);
         let (state_tx, state_rx) = crate::content_state::state_channel();
         thread.reactions.publish_pending = true;
         thread.publish_snapshot_if_dirty(&state_tx);
-        let published = state_rx.try_iter().filter_map(|s| s.project_snapshot).last().expect("first publish");
+        let published = state_rx
+            .try_iter()
+            .filter_map(|s| s.project_snapshot)
+            .last()
+            .expect("first publish");
         let content_rate = published.settings.frame_rate;
         // The UI took the first publish, then a direct edit changed its copy
         // and its command was dropped by the export.
@@ -2107,12 +2351,28 @@ mod tests {
 
         thread.run_export(meta_config(false), &cmd_rx, &state_tx);
         thread.publish_snapshot_if_dirty(&state_tx);
-        let after = state_rx.try_iter().filter_map(|s| s.project_snapshot).last()
+        let after = state_rx
+            .try_iter()
+            .filter_map(|s| s.project_snapshot)
+            .last()
             .expect("the export end republishes the project");
         // The UI's own intake function; data version and stamps unmoved.
-        assert!(crate::frame_plan::take_project_snapshot(&mut ui_project, &mut stamps, &mut last_arc, after, false));
-        assert_eq!(ui_project.settings.frame_rate, content_rate, "the divergent edit is gone from the UI copy");
-        assert_ne!(stamps.parts(), before, "panels re-project from the corrected copy");
+        assert!(crate::frame_plan::take_project_snapshot(
+            &mut ui_project,
+            &mut stamps,
+            &mut last_arc,
+            after,
+            false
+        ));
+        assert_eq!(
+            ui_project.settings.frame_rate, content_rate,
+            "the divergent edit is gone from the UI copy"
+        );
+        assert_ne!(
+            stamps.parts(),
+            before,
+            "panels re-project from the corrected copy"
+        );
     }
 
     /// Export then Cancel pressed while a show warms up are both held; the
@@ -2121,16 +2381,26 @@ mod tests {
     #[test]
     fn a_cancel_held_behind_its_export_cancels_it() {
         let mut thread = crate::headless_harness::headless_content_thread(
-            manifold_core::project::Project::default(), 64, 64,
+            manifold_core::project::Project::default(),
+            64,
+            64,
         );
         let (_cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
-        thread.held_commands.push_back(ContentCommand::StartExport(Box::new(meta_config(false))));
+        thread
+            .held_commands
+            .push_back(ContentCommand::StartExport(Box::new(meta_config(false))));
         thread.held_commands.push_back(ContentCommand::CancelExport);
 
         let started = thread.next_command(&cmd_rx);
         assert!(matches!(started, Ok(ContentCommand::StartExport(_))));
-        assert!(poll(&mut thread, &cmd_rx), "the held cancel stops the export");
-        assert!(thread.held_commands.is_empty(), "the cancel is spent on its export");
+        assert!(
+            poll(&mut thread, &cmd_rx),
+            "the held cancel stops the export"
+        );
+        assert!(
+            thread.held_commands.is_empty(),
+            "the cancel is spent on its export"
+        );
     }
 
     /// A live scene viewport (here the preview's navigation) sits out an
@@ -2141,16 +2411,30 @@ mod tests {
     fn an_export_renders_no_scene_viewport_and_navigation_resumes_after() {
         use crate::scene_viewport::{SceneViewportNavigation, ViewportHost};
         let mut project = manifold_core::project::Project::default();
-        let mut layer = manifold_core::layer::Layer::new_generator("Scene".into(), manifold_core::PresetTypeId::PLASMA, 0);
-        layer.clips.push(manifold_core::clip::TimelineClip::new_generator(manifold_core::Beats(0.0), manifold_core::Beats(0.5)));
+        let mut layer = manifold_core::layer::Layer::new_generator(
+            "Scene".into(),
+            manifold_core::PresetTypeId::PLASMA,
+            0,
+        );
+        layer
+            .clips
+            .push(manifold_core::clip::TimelineClip::new_generator(
+                manifold_core::Beats(0.0),
+                manifold_core::Beats(0.5),
+            ));
         let target = manifold_core::GraphTarget::Generator(layer.layer_id.clone());
         project.timeline.layers.push(layer);
         let mut thread = crate::headless_harness::headless_content_thread(project, 64, 64);
-        let request = SceneViewportNavigation::new(ViewportHost::OutputPreview, 64, 64)
-            .request(&target, &manifold_core::NodeId::new("scene"), None, None);
+        let request = SceneViewportNavigation::new(ViewportHost::OutputPreview, 64, 64).request(
+            &target,
+            &manifold_core::NodeId::new("scene"),
+            None,
+            None,
+        );
         thread.handle_command(ContentCommand::SetSceneViewport(Some(request.clone())));
 
-        let dir = std::env::temp_dir().join(format!("manifold-viewport-export-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("manifold-viewport-export-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("export dir");
         let mut config = meta_config(false);
         (config.width, config.height, config.fps, config.end_beat) = (64, 64, 30.0, 0.5);
@@ -2158,14 +2442,34 @@ mod tests {
         let (_cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
         let (state_tx, state_rx) = crate::content_state::state_channel();
         thread.run_export(config, &cmd_rx, &state_tx);
-        let finished = state_rx.try_iter().flat_map(|state| state.export_finished.clone()).last();
+        let finished = state_rx
+            .try_iter()
+            .flat_map(|state| state.export_finished.clone())
+            .last();
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(finished.is_some_and(|event| event.success), "the export renders its frames");
+        assert!(
+            finished.is_some_and(|event| event.success),
+            "the export renders its frames"
+        );
 
-        assert!(thread.content_pipeline.scene_viewport_frames().iter().all(Option::is_none),
-            "an export frame rendered the scene viewport");
-        assert_eq!(thread.content_pipeline.scene_viewport_host(), Some(ViewportHost::OutputPreview));
-        assert!(thread.content_pipeline.take_scene_viewport_request().is_some_and(|back| Arc::ptr_eq(&back, &request)),
-            "navigation resumes with the same request");
+        assert!(
+            thread
+                .content_pipeline
+                .scene_viewport_frames()
+                .iter()
+                .all(Option::is_none),
+            "an export frame rendered the scene viewport"
+        );
+        assert_eq!(
+            thread.content_pipeline.scene_viewport_host(),
+            Some(ViewportHost::OutputPreview)
+        );
+        assert!(
+            thread
+                .content_pipeline
+                .take_scene_viewport_request()
+                .is_some_and(|back| Arc::ptr_eq(&back, &request)),
+            "navigation resumes with the same request"
+        );
     }
 }

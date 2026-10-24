@@ -29,11 +29,10 @@
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::scene::camera::Camera;
 
 const ORBIT: f32 = 0.7;
 const TILT: f32 = 0.95;
@@ -111,7 +110,10 @@ fn region_luma(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> f
             let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
             let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
             let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-            assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+            assert!(
+                r.is_finite() && g.is_finite() && b.is_finite(),
+                "non-finite pixel"
+            );
             sum += (0.2126 * r + 0.7152 * g + 0.0722 * b) as f64;
             n += 1;
         }
@@ -386,10 +388,16 @@ fn emissive_gather_brightens_neighbor_region_and_glows_itself() {
 fn volumetric_shaft_region_brightens_with_emissive_on() {
     const FOG_DENSITY: f32 = 0.08;
     const SHAFT_INTENSITY: f32 = 1.5;
-    let (on_bytes, w, h) =
-        render_readback(&ground_emitter_scene_json(true, FOG_DENSITY, SHAFT_INTENSITY));
-    let (off_bytes, _, _) =
-        render_readback(&ground_emitter_scene_json(false, FOG_DENSITY, SHAFT_INTENSITY));
+    let (on_bytes, w, h) = render_readback(&ground_emitter_scene_json(
+        true,
+        FOG_DENSITY,
+        SHAFT_INTENSITY,
+    ));
+    let (off_bytes, _, _) = render_readback(&ground_emitter_scene_json(
+        false,
+        FOG_DENSITY,
+        SHAFT_INTENSITY,
+    ));
 
     let cam = Camera::orbit_perspective(ORBIT, TILT, DISTANCE, FOV_Y, 0.0, 0.0, NEAR, FAR);
     let neighbor_px = cam

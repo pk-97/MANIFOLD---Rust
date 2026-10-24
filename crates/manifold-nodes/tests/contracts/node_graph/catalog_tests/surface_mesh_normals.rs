@@ -2,8 +2,8 @@ use manifold_node_engine::parameters::ParamValue;
 
 #[test]
 fn surface_stage_defaults_and_manifest_bindings() {
-    use manifold_water_surface::primitives::smooth_surface_mesh::SmoothSurfaceMesh;
     use manifold_node_engine::primitive::PrimitiveSpec;
+    use manifold_water_surface::primitives::smooth_surface_mesh::SmoothSurfaceMesh;
     let iterations = SmoothSurfaceMesh::PARAMS
         .iter()
         .find(|p| p.name == "iterations")
@@ -51,8 +51,7 @@ fn surface_stage_defaults_and_manifest_bindings() {
             .any(|n| n.type_id == "node.relax_surface_mesh")
     );
     let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
-    let view =
-        manifold_node_engine::freeze::install::fuse_generator_view(&def, &registry).unwrap();
+    let view = manifold_node_engine::freeze::install::fuse_generator_view(&def, &registry).unwrap();
     for ty in ["node.smooth_surface_mesh", "node.surface_mesh_normals"] {
         assert_eq!(
             view.def.nodes.iter().filter(|n| n.type_id == ty).count(),

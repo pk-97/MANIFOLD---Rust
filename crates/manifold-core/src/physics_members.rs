@@ -62,15 +62,24 @@ struct Declared {
 static BODY: Declared = Declared {
     member_prefix: "body_",
     acceleration_prefix: "body_acceleration_",
-    aliases: &[Alias { body_port: "pose", world_prefix: "pose_" }],
+    aliases: &[Alias {
+        body_port: "pose",
+        world_prefix: "pose_",
+    }],
 };
 
 static COPIES: Declared = Declared {
     member_prefix: "copies_",
     acceleration_prefix: "copies_acceleration_",
     aliases: &[
-        Alias { body_port: "instances", world_prefix: "instances_" },
-        Alias { body_port: "active_count", world_prefix: "active_count_" },
+        Alias {
+            body_port: "instances",
+            world_prefix: "instances_",
+        },
+        Alias {
+            body_port: "active_count",
+            world_prefix: "active_count_",
+        },
     ],
 };
 
@@ -126,12 +135,16 @@ fn number_after(port: &str, prefix: &str) -> Option<u32> {
 /// `body_3` is `(Body, 3)`, `copies_0` is `(Copies, 0)`. A force port such as
 /// `body_acceleration_3` is not one.
 pub fn member_input(port: &str) -> Option<(Family, u32)> {
-    Family::ALL.into_iter().find_map(|family| family.member_index(port).map(|k| (family, k)))
+    Family::ALL
+        .into_iter()
+        .find_map(|family| family.member_index(port).map(|k| (family, k)))
 }
 
 /// Whether `port` is a body alias output (`pose`, `instances`, `active_count`).
 pub fn is_alias_output(port: &str) -> bool {
-    Family::ALL.into_iter().any(|family| family.alias_outputs().any(|alias| alias == port))
+    Family::ALL
+        .into_iter()
+        .any(|family| family.alias_outputs().any(|alias| alias == port))
 }
 
 /// The family whose world output family `port` is, with the member number.
@@ -148,9 +161,9 @@ pub fn member_side_output(port: &str) -> Option<(Family, u32)> {
 
 /// The family and number of a world's per-member force input.
 pub fn member_side_input(port: &str) -> Option<(Family, u32)> {
-    Family::ALL
-        .into_iter()
-        .find_map(|family| number_after(port, family.declared().acceleration_prefix).map(|k| (family, k)))
+    Family::ALL.into_iter().find_map(|family| {
+        number_after(port, family.declared().acceleration_prefix).map(|k| (family, k))
+    })
 }
 
 /// A body's place in a world.
@@ -163,14 +176,25 @@ pub struct WorldMember {
 
 /// The world `body` joins, from one level's nodes and wires (a flattened
 /// graph, or one group level). `None` when no wire carries its membership.
-pub fn world_member(nodes: &[EffectGraphNode], wires: &[EffectGraphWire], body: u32) -> Option<WorldMember> {
-    wires.iter().filter(|wire| wire.from_node == body && wire.from_port == MEMBER_OUTPUT).find_map(|wire| {
-        let (family, k) = member_input(&wire.to_port)?;
-        nodes
-            .iter()
-            .any(|node| node.id == wire.to_node && node.type_id == WORLD_TYPE_ID)
-            .then_some(WorldMember { world: wire.to_node, family, k })
-    })
+pub fn world_member(
+    nodes: &[EffectGraphNode],
+    wires: &[EffectGraphWire],
+    body: u32,
+) -> Option<WorldMember> {
+    wires
+        .iter()
+        .filter(|wire| wire.from_node == body && wire.from_port == MEMBER_OUTPUT)
+        .find_map(|wire| {
+            let (family, k) = member_input(&wire.to_port)?;
+            nodes
+                .iter()
+                .any(|node| node.id == wire.to_node && node.type_id == WORLD_TYPE_ID)
+                .then_some(WorldMember {
+                    world: wire.to_node,
+                    family,
+                    k,
+                })
+        })
 }
 
 /// Every membership wire into `world`, as `(body, family, k)`.
@@ -178,15 +202,26 @@ pub fn members_of(wires: &[EffectGraphWire], world: u32) -> Vec<(u32, Family, u3
     wires
         .iter()
         .filter(|wire| wire.to_node == world && wire.from_port == MEMBER_OUTPUT)
-        .filter_map(|wire| member_input(&wire.to_port).map(|(family, k)| (wire.from_node, family, k)))
+        .filter_map(|wire| {
+            member_input(&wire.to_port).map(|(family, k)| (wire.from_node, family, k))
+        })
         .collect()
 }
 
 /// A wire the built graph uses but an authored graph must not carry: out of a
 /// world's per-member outputs, or into its per-member force inputs.
 pub fn member_side_wires(def: &EffectGraphDef) -> Vec<(u32, EffectGraphWire)> {
-    fn level(nodes: &[EffectGraphNode], wires: &[EffectGraphWire], scope: u32, out: &mut Vec<(u32, EffectGraphWire)>) {
-        let is_world = |id: u32| nodes.iter().any(|node| node.id == id && node.type_id == WORLD_TYPE_ID);
+    fn level(
+        nodes: &[EffectGraphNode],
+        wires: &[EffectGraphWire],
+        scope: u32,
+        out: &mut Vec<(u32, EffectGraphWire)>,
+    ) {
+        let is_world = |id: u32| {
+            nodes
+                .iter()
+                .any(|node| node.id == id && node.type_id == WORLD_TYPE_ID)
+        };
         for wire in wires {
             let from = is_world(wire.from_node) && member_side_output(&wire.from_port).is_some();
             let to = is_world(wire.to_node) && member_side_input(&wire.to_port).is_some();
@@ -210,11 +245,19 @@ mod tests {
     use super::*;
 
     fn node(id: u32, type_id: &str) -> EffectGraphNode {
-        serde_json::from_value(serde_json::json!({"id": id, "nodeId": format!("n{id}"), "typeId": type_id})).unwrap()
+        serde_json::from_value(
+            serde_json::json!({"id": id, "nodeId": format!("n{id}"), "typeId": type_id}),
+        )
+        .unwrap()
     }
 
     fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectGraphWire {
-        EffectGraphWire { from_node, from_port: from_port.into(), to_node, to_port: to_port.into() }
+        EffectGraphWire {
+            from_node,
+            from_port: from_port.into(),
+            to_node,
+            to_port: to_port.into(),
+        }
     }
 
     #[test]
@@ -223,9 +266,18 @@ mod tests {
         assert_eq!(Family::Copies.member_port(0), "copies_0");
         assert_eq!(Family::Body.acceleration_port(7), "body_acceleration_7");
         assert_eq!(Family::Copies.acceleration_port(2), "copies_acceleration_2");
-        assert_eq!(Family::Body.world_output("pose", 4).as_deref(), Some("pose_4"));
-        assert_eq!(Family::Copies.world_output("instances", 1).as_deref(), Some("instances_1"));
-        assert_eq!(Family::Copies.world_output("active_count", 1).as_deref(), Some("active_count_1"));
+        assert_eq!(
+            Family::Body.world_output("pose", 4).as_deref(),
+            Some("pose_4")
+        );
+        assert_eq!(
+            Family::Copies.world_output("instances", 1).as_deref(),
+            Some("instances_1")
+        );
+        assert_eq!(
+            Family::Copies.world_output("active_count", 1).as_deref(),
+            Some("active_count_1")
+        );
         assert_eq!(Family::Body.world_output("instances", 1), None);
     }
 
@@ -237,24 +289,56 @@ mod tests {
         assert_eq!(member_input("copies_acceleration_0"), None);
         assert_eq!(member_input("body_"), None);
         assert_eq!(member_input("copies"), None);
-        assert_eq!(member_side_input("body_acceleration_12"), Some((Family::Body, 12)));
+        assert_eq!(
+            member_side_input("body_acceleration_12"),
+            Some((Family::Body, 12))
+        );
         assert_eq!(member_side_output("pose_3"), Some((Family::Body, 3)));
-        assert_eq!(member_side_output("active_count_0"), Some((Family::Copies, 0)));
+        assert_eq!(
+            member_side_output("active_count_0"),
+            Some((Family::Copies, 0))
+        );
         assert_eq!(member_side_output("physics_ms"), None);
     }
 
     #[test]
     fn world_member_finds_a_plain_body_and_a_copies_body() {
-        let nodes = [node(1, WORLD_TYPE_ID), node(2, BODY_TYPE_ID), node(3, BODY_TYPE_ID), node(4, BODY_TYPE_ID)];
+        let nodes = [
+            node(1, WORLD_TYPE_ID),
+            node(2, BODY_TYPE_ID),
+            node(3, BODY_TYPE_ID),
+            node(4, BODY_TYPE_ID),
+        ];
         let wires = [
             wire(2, "body", 1, "body_5"),
             wire(3, "body", 1, "copies_2"),
             wire(1, "pose_5", 9, "transform"),
         ];
-        assert_eq!(world_member(&nodes, &wires, 2), Some(WorldMember { world: 1, family: Family::Body, k: 5 }));
-        assert_eq!(world_member(&nodes, &wires, 3), Some(WorldMember { world: 1, family: Family::Copies, k: 2 }));
-        assert_eq!(world_member(&nodes, &wires, 4), None, "a body with no membership wire is in no world");
-        assert_eq!(members_of(&wires, 1), [(2, Family::Body, 5), (3, Family::Copies, 2)]);
+        assert_eq!(
+            world_member(&nodes, &wires, 2),
+            Some(WorldMember {
+                world: 1,
+                family: Family::Body,
+                k: 5
+            })
+        );
+        assert_eq!(
+            world_member(&nodes, &wires, 3),
+            Some(WorldMember {
+                world: 1,
+                family: Family::Copies,
+                k: 2
+            })
+        );
+        assert_eq!(
+            world_member(&nodes, &wires, 4),
+            None,
+            "a body with no membership wire is in no world"
+        );
+        assert_eq!(
+            members_of(&wires, 1),
+            [(2, Family::Body, 5), (3, Family::Copies, 2)]
+        );
     }
 
     #[test]
@@ -276,11 +360,25 @@ mod tests {
         }))
         .unwrap();
         let flat = crate::flatten::flatten_groups(&def).unwrap();
-        let body = flat.nodes.iter().find(|node| node.node_id.as_str() == "body").unwrap().id;
-        let world = flat.nodes.iter().find(|node| node.type_id == WORLD_TYPE_ID).unwrap().id;
+        let body = flat
+            .nodes
+            .iter()
+            .find(|node| node.node_id.as_str() == "body")
+            .unwrap()
+            .id;
+        let world = flat
+            .nodes
+            .iter()
+            .find(|node| node.type_id == WORLD_TYPE_ID)
+            .unwrap()
+            .id;
         assert_eq!(
             world_member(&flat.nodes, &flat.wires, body),
-            Some(WorldMember { world, family: Family::Body, k: 3 }),
+            Some(WorldMember {
+                world,
+                family: Family::Body,
+                k: 3
+            }),
             "the group's body output flattens to the body's own membership wire"
         );
     }
@@ -303,6 +401,12 @@ mod tests {
         .unwrap();
         let found = member_side_wires(&def);
         assert_eq!(found.len(), 2);
-        assert!(member_side_wires(&EffectGraphDef { wires: vec![wire(3, "body", 1, "body_0")], ..def }).is_empty());
+        assert!(
+            member_side_wires(&EffectGraphDef {
+                wires: vec![wire(3, "body", 1, "body_0")],
+                ..def
+            })
+            .is_empty()
+        );
     }
 }

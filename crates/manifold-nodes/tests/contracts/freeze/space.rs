@@ -1,8 +1,8 @@
 //! Renderer-owned catalog contract for element-space resolution.
 
-use manifold_node_engine::freeze::install::fuse_canonical_def;
-use manifold_node_engine::freeze::space::{space_of, resolve_output_spaces, ElementSpace};
 use manifold_core::effect_graph_def::EffectGraphDef;
+use manifold_node_engine::freeze::install::fuse_canonical_def;
+use manifold_node_engine::freeze::space::{ElementSpace, resolve_output_spaces, space_of};
 use manifold_node_engine::persistence::PrimitiveRegistry;
 
 #[cfg(test)]
@@ -33,7 +33,16 @@ mod tests {
         let spaces = resolve_output_spaces(&def, &registry).expect("fixture builds");
         assert_eq!(space_of(Some(&spaces), 2, "out"), ElementSpace::Canvas);
         assert_eq!(space_of(Some(&spaces), 3, "out"), ElementSpace::Canvas);
-        let fused = fuse_canonical_def(&def, &registry).expect("camera_sky + over is one fusable region");
-        assert_eq!(fused.def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").count(), 1);
+        let fused =
+            fuse_canonical_def(&def, &registry).expect("camera_sky + over is one fusable region");
+        assert_eq!(
+            fused
+                .def
+                .nodes
+                .iter()
+                .filter(|n| n.type_id == "node.wgsl_compute")
+                .count(),
+            1
+        );
     }
 }

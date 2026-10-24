@@ -181,9 +181,11 @@ fn parse_root(json: &str) -> Result<serde_json::Value, String> {
 /// the app's own archive writer. Status goes to stderr; the error carries its
 /// exit code (1 refused, 2 IO).
 fn write_validated(root: &serde_json::Value, path: &str) -> Result<(), (u8, String)> {
-    let json = serde_json::to_string_pretty(root).map_err(|e| (2, format!("serialize failed: {e}")))?;
+    let json =
+        serde_json::to_string_pretty(root).map_err(|e| (2, format!("serialize failed: {e}")))?;
     eprintln!("(validating through typed loader — param-spec warnings below are expected)");
-    load_project_from_json(&json).map_err(|e| (1, format!("edited project fails to load, NOT saving: {e}")))?;
+    load_project_from_json(&json)
+        .map_err(|e| (1, format!("edited project fails to load, NOT saving: {e}")))?;
     let name = root
         .get("projectName")
         .and_then(|v| v.as_str())
@@ -235,7 +237,11 @@ fn run_info(rest: &[String]) -> ExitCode {
     println!("tempo:    {} point(s)", project.tempo_map.point_count());
     let layers = &project.timeline.layers;
     let clip_total: usize = layers.iter().map(|l| l.clips.len()).sum();
-    println!("timeline: {} layer(s), {} clip(s)", layers.len(), clip_total);
+    println!(
+        "timeline: {} layer(s), {} clip(s)",
+        layers.len(),
+        clip_total
+    );
     for layer in layers {
         if layer.clips.is_empty() {
             continue;
@@ -274,7 +280,10 @@ fn run_json(rest: &[String]) -> ExitCode {
     // migrations, read-only. Registry-less, so layer params the registry
     // would resolve may be missing; graphs come through whole.
     if rest.get(1).is_some_and(|flag| flag == "--loaded") {
-        return match load_project(Path::new(path)).map_err(|e| e.to_string()).and_then(|project| serde_json::to_string(&project).map_err(|e| e.to_string())) {
+        return match load_project(Path::new(path))
+            .map_err(|e| e.to_string())
+            .and_then(|project| serde_json::to_string(&project).map_err(|e| e.to_string()))
+        {
             Ok(json) => {
                 println!("{json}");
                 ExitCode::SUCCESS
@@ -431,7 +440,10 @@ fn tempo_set(rest: &[String]) -> ExitCode {
         // sync_bpm_from_tempo_map contract: settings.bpm mirrors beat 0.
         *bpm_slot = serde_json::json!(beat_zero_bpm.0);
     }
-    println!("tempo map: {count} point(s), beat-0 bpm {}", beat_zero_bpm.0);
+    println!(
+        "tempo map: {count} point(s), beat-0 bpm {}",
+        beat_zero_bpm.0
+    );
     validate_and_save(&root, path)
 }
 
@@ -516,7 +528,9 @@ fn settings_set_sim_rate(rest: &[String]) -> ExitCode {
         print_usage();
         return ExitCode::from(2);
     };
-    let rate = match hz.parse::<u32>().map_err(|e| e.to_string())
+    let rate = match hz
+        .parse::<u32>()
+        .map_err(|e| e.to_string())
         .and_then(manifold_core::settings::SimRate::try_from)
     {
         Ok(rate) => rate,
@@ -668,7 +682,10 @@ fn effect_add(rest: &[String]) -> ExitCode {
         return ExitCode::from(2);
     };
     chain.push(instance_json);
-    println!("added {preset} to layer {layer} ({} effect(s) in chain)", chain.len());
+    println!(
+        "added {preset} to layer {layer} ({} effect(s) in chain)",
+        chain.len()
+    );
     validate_and_save(&root, path)
 }
 
@@ -819,7 +836,10 @@ fn clip_add_audio(rest: &[String]) -> ExitCode {
     let end_beat = start_beat + duration_beats;
     if let Some(clips) = layer.get("clips").and_then(|c| c.as_array()) {
         for clip in clips {
-            let s = clip.get("startBeat").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let s = clip
+                .get("startBeat")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
             let d = clip
                 .get("durationBeats")
                 .and_then(|v| v.as_f64())
@@ -857,7 +877,9 @@ fn clip_add_audio(rest: &[String]) -> ExitCode {
     };
     clips.push(clip_value);
 
-    println!("added audio clip {clip_id} on '{layer_name}': beats {start_beat}..{end_beat} ({audio_path})");
+    println!(
+        "added audio clip {clip_id} on '{layer_name}': beats {start_beat}..{end_beat} ({audio_path})"
+    );
     validate_and_save(&root, path)
 }
 
@@ -919,12 +941,17 @@ fn scene_set_model(rest: &[String]) -> ExitCode {
 
     let layer_idx = if let Some(name) = layer_name {
         // Find layer by name first, fall back to index
-        layers.iter().position(|l| l.get("name").and_then(|n| n.as_str()) == Some(name))
+        layers
+            .iter()
+            .position(|l| l.get("name").and_then(|n| n.as_str()) == Some(name))
             .or(Some(layer_idx).filter(|_| layer_idx < layers.len()))
             .ok_or_else(|| format!("no layer named '{name}' at index {layer_idx}"))
     } else {
         if layer_idx >= layers.len() {
-            Err(format!("layer index {layer_idx} out of bounds ({} layers)", layers.len()))
+            Err(format!(
+                "layer index {layer_idx} out of bounds ({} layers)",
+                layers.len()
+            ))
         } else {
             Ok(layer_idx)
         }
@@ -959,7 +986,8 @@ fn scene_set_model(rest: &[String]) -> ExitCode {
                 };
                 for e in entries.iter() {
                     if let Some(s) = e.get("defaultValue").and_then(|v| v.as_str())
-                        && s.ends_with(".glb") && s.contains("/")
+                        && s.ends_with(".glb")
+                        && s.contains("/")
                     {
                         *counts.entry(s.to_string()).or_default() += 1;
                     }
@@ -1002,7 +1030,9 @@ fn scene_set_model(rest: &[String]) -> ExitCode {
         }
     };
 
-    println!("set model path on layer {}: {} → {} ({} occurrence(s))",
-             layer_idx, old_path, model_path, count);
+    println!(
+        "set model path on layer {}: {} → {} ({} occurrence(s))",
+        layer_idx, old_path, model_path, count
+    );
     validate_and_save(&new_root, path)
 }

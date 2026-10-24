@@ -7,9 +7,7 @@ use std::path::Path;
 
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
-use manifold_core::scene_modifier_preset::{
-    SceneTargetSelection, validate_scene_modifier_schema,
-};
+use manifold_core::scene_modifier_preset::{SceneTargetSelection, validate_scene_modifier_schema};
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_nodes_scene::node_graph::gltf_import::compile_combined_model_scene;
@@ -70,7 +68,10 @@ pub fn qualify_scene_modifier(
         targets,
     )
     .map_err(|error| error.to_string())?;
-    let candidate = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(host, instance)?;
+    let candidate =
+        manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(
+            host, instance,
+        )?;
     prepare_scene_modifiers(&candidate, registry).map_err(|error| error.to_string())?;
     Ok(())
 }

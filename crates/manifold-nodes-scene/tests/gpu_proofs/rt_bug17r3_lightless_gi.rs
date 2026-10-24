@@ -21,11 +21,10 @@
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::scene::camera::Camera;
 
 const ORBIT: f32 = 0.7;
 const TILT: f32 = 0.95;
@@ -102,7 +101,10 @@ fn region_luma(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> f
             let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
             let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
             let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-            assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+            assert!(
+                r.is_finite() && g.is_finite() && b.is_finite(),
+                "non-finite pixel"
+            );
             sum += (0.2126 * r + 0.7152 * g + 0.0722 * b) as f64;
             n += 1;
         }
@@ -116,7 +118,11 @@ fn region_luma(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> f
 /// (no `node.light` node, `lights: 0`) — this is the exact case the
 /// caster gate broke.
 fn lightless_ground_emitter_scene_json(emit_on: bool) -> String {
-    let (er, eg, eb) = if emit_on { (EMIT[0], EMIT[1], EMIT[2]) } else { (0.0, 0.0, 0.0) };
+    let (er, eg, eb) = if emit_on {
+        (EMIT[0], EMIT[1], EMIT[2])
+    } else {
+        (0.0, 0.0, 0.0)
+    };
     format!(
         r#"{{"version":2,"name":"RtBug17r3LightlessGi","nodes":[
         {{"id":0,"typeId":"system.generator_input","nodeId":"input"}},

@@ -1,28 +1,27 @@
-use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use crate::exec::execution_plan::{ExecutionPlan, ResourceId, compile};
+use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use crate::gpu::render_target::RenderTarget;
 use crate::graph::Graph;
 use crate::parameters::ParamValue;
 #[cfg(any(test, feature = "testkit"))]
 use crate::primitives::gain::Gain;
-use crate::{persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, state_store::StateStore};
 #[cfg(any(test, feature = "testkit"))]
 use crate::scene::boundary_nodes::{FinalOutput, Source};
-use crate::gpu::render_target::RenderTarget;
+use crate::{
+    exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+    exec::metal_backend::MetalBackend, persistence::EffectGraphDefExt,
+    persistence::PrimitiveRegistry, state_store::StateStore,
+};
 use half::f16;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::{Beats, Seconds};
 #[cfg(any(test, feature = "testkit"))]
 use manifold_gpu::GpuBinding;
 use manifold_gpu::{
-    GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
-    GpuTextureUsage,
+    GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 
 const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
-
-
-
-
 
 pub fn frame_time() -> FrameTime {
     FrameTime {
@@ -104,7 +103,10 @@ pub fn gradient_input(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
         mip_levels: 1,
     });
     let bytes = unsafe {
-        std::slice::from_raw_parts(px.as_ptr().cast::<u8>(), std::mem::size_of_val(px.as_slice()))
+        std::slice::from_raw_parts(
+            px.as_ptr().cast::<u8>(),
+            std::mem::size_of_val(px.as_slice()),
+        )
     };
     device.upload_texture(&tex, bytes);
     tex
@@ -248,7 +250,12 @@ pub fn render_fused_gain(device: &GpuDevice, input: &GpuTexture, product: f32) -
 /// Build the unfused `Source -> Gain(g1) -> Gain(g2) -> FinalOutput` chain and
 /// render it. Returns (rendered texture, the source ResourceId is internal).
 #[cfg(any(test, feature = "testkit"))]
-pub fn render_unfused_two_gain(device: &std::sync::Arc<GpuDevice>, input: &GpuTexture, g1: f32, g2: f32) -> RenderTarget {
+pub fn render_unfused_two_gain(
+    device: &std::sync::Arc<GpuDevice>,
+    input: &GpuTexture,
+    g1: f32,
+    g2: f32,
+) -> RenderTarget {
     let mut g = Graph::new();
     let src = g.add_node(Box::new(Source::new()));
     let a = g.add_node(Box::new(Gain::new()));
@@ -295,7 +302,10 @@ pub fn gradient_input_varying_alpha(device: &GpuDevice, w: u32, h: u32) -> GpuTe
         mip_levels: 1,
     });
     let bytes = unsafe {
-        std::slice::from_raw_parts(px.as_ptr().cast::<u8>(), std::mem::size_of_val(px.as_slice()))
+        std::slice::from_raw_parts(
+            px.as_ptr().cast::<u8>(),
+            std::mem::size_of_val(px.as_slice()),
+        )
     };
     device.upload_texture(&tex, bytes);
     tex
@@ -339,7 +349,10 @@ pub fn noise_input(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
         mip_levels: 1,
     });
     let bytes = unsafe {
-        std::slice::from_raw_parts(px.as_ptr().cast::<u8>(), std::mem::size_of_val(px.as_slice()))
+        std::slice::from_raw_parts(
+            px.as_ptr().cast::<u8>(),
+            std::mem::size_of_val(px.as_slice()),
+        )
     };
     device.upload_texture(&tex, bytes);
     tex
@@ -357,7 +370,13 @@ pub fn render_effect_frames_with_state(
 ) -> RenderTarget {
     use crate::state_store::StateStore;
     let (w, h) = (input.width, input.height);
-    let mut graph = def.clone().into_graph(registry, &crate::scene::mesh_change::PreparedMeshRules::default()).expect("graph builds");
+    let mut graph = def
+        .clone()
+        .into_graph(
+            registry,
+            &crate::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("graph builds");
     let plan = compile(&graph).expect("compiles");
     let src_res = resource_for_output(&plan, find_node(&graph, "system.source"), "out");
     let final_id = find_node(&graph, "system.final_output");
@@ -399,7 +418,10 @@ pub fn render_effect_frames_with_state(
     }
 
     let result = RenderTarget::new(device, w, h, FMT, "freeze-fb-result");
-    let out_tex = exec.backend().texture_2d(out_slot).expect("output retained");
+    let out_tex = exec
+        .backend()
+        .texture_2d(out_slot)
+        .expect("output retained");
     {
         let mut e = device.create_encoder("freeze-fb-copy");
         e.copy_texture_to_texture(&out_tex.clone(), &result.texture, w, h, 1);
@@ -416,8 +438,8 @@ pub fn render_generator_8_frames(
     w: u32,
     h: u32,
 ) -> RenderTarget {
-    use crate::runtime::preset_context::PresetContext;
     use crate::runtime::PresetRuntime;
+    use crate::runtime::preset_context::PresetContext;
     let ctx = |t: f64| PresetContext {
         time: t,
         beat: t * 2.0,
@@ -433,14 +455,27 @@ pub fn render_generator_8_frames(
         anim_progress: 0.0,
         trigger_count: 0,
     };
-    let mut g = PresetRuntime::from_def_with_device(def, registry, std::sync::Arc::clone(device), w, h, FMT, None)
-        .expect("preset builds");
+    let mut g = PresetRuntime::from_def_with_device(
+        def,
+        registry,
+        std::sync::Arc::clone(device),
+        w,
+        h,
+        FMT,
+        None,
+    )
+    .expect("preset builds");
     let target = RenderTarget::new(device, w, h, FMT, "freeze-gen-fusion");
     for i in 0..8u32 {
         let mut enc = device.create_encoder("freeze-gen-fusion");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, device);
-            g.render(&mut gpu, &target.texture, &ctx(i as f64 / 60.0), &manifold_core::params::ParamManifest::default());
+            g.render(
+                &mut gpu,
+                &target.texture,
+                &ctx(i as f64 / 60.0),
+                &manifold_core::params::ParamManifest::default(),
+            );
         }
         enc.commit_and_wait_completed();
     }
@@ -461,7 +496,8 @@ pub fn strip_reset_wire(def: &mut EffectGraphDef, seed_node_id: &str) {
     else {
         return;
     };
-    def.wires.retain(|w| !(w.to_node == id && w.to_port == "reset_trigger"));
+    def.wires
+        .retain(|w| !(w.to_node == id && w.to_port == "reset_trigger"));
 }
 
 /// Cap every `max_capacity` / `active_count` param in `def` at `cap` — the
@@ -510,7 +546,9 @@ pub fn render_def_capture_node_host(
     pick: &dyn Fn(&EffectGraphDef) -> u32,
     host_params: bool,
 ) -> Option<(RenderTarget, (u32, u32))> {
-    use crate::load::graph_loader::{BoundaryHandling, HandleScope, instantiate_def, pre_allocate_resources};
+    use crate::load::graph_loader::{
+        BoundaryHandling, HandleScope, instantiate_def, pre_allocate_resources,
+    };
     use crate::parameters::ParamValue;
     use crate::{graph::Graph, state_store::StateStore};
 
@@ -521,7 +559,8 @@ pub fn render_def_capture_node_host(
         registry,
         HandleScope::Global,
         BoundaryHandling::Standalone,
-    &crate::scene::mesh_change::PreparedMeshRules::default())
+        &crate::scene::mesh_change::PreparedMeshRules::default(),
+    )
     .ok()?;
     let plan = compile(&graph).ok()?;
     let target_inst = *inst.id_map.get(&pick(def))?;
@@ -613,7 +652,10 @@ pub fn render_graph_at(
     enc.commit_and_wait_completed();
 
     let result = RenderTarget::new(device, out_w, out_h, FMT, "freeze-graph-result");
-    let out_tex = exec.backend().texture_2d(out_slot).expect("graph output retained");
+    let out_tex = exec
+        .backend()
+        .texture_2d(out_slot)
+        .expect("graph output retained");
     {
         let mut e = device.create_encoder("freeze-graph-copy");
         e.copy_texture_to_texture(out_tex, &result.texture, out_w, out_h, 1);

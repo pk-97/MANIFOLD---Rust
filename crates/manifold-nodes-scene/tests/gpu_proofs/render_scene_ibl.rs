@@ -14,9 +14,8 @@ use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 /// A single tilted grid plane (wide FOV, close camera — R = reflect(-V,N)
 /// sweeps a large arc across the visible surface even though N is
@@ -129,7 +128,10 @@ fn luma_image(bytes: &[u8]) -> Vec<f32> {
             let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
             let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
             let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-            assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+            assert!(
+                r.is_finite() && g.is_finite() && b.is_finite(),
+                "non-finite pixel"
+            );
             0.2126 * r + 0.7152 * g + 0.0722 * b
         })
         .collect()
@@ -168,7 +170,10 @@ mod gating_gpu_tests {
     use super::*;
     use manifold_core::effect_graph_def::EffectGraphDef;
 
-    fn frame_ctx(frame_count: i64, h: &manifold_node_engine::testkit::gpu_harness::ParityHarness) -> PresetContext {
+    fn frame_ctx(
+        frame_count: i64,
+        h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
+    ) -> PresetContext {
         PresetContext {
             time: 0.1,
             beat: 0.2,
@@ -186,19 +191,31 @@ mod gating_gpu_tests {
         }
     }
 
-    fn render_one_frame(runtime: &mut PresetRuntime, h: &manifold_node_engine::testkit::gpu_harness::ParityHarness, frame_count: i64) -> Vec<u8> {
+    fn render_one_frame(
+        runtime: &mut PresetRuntime,
+        h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
+        frame_count: i64,
+    ) -> Vec<u8> {
         let target = h.make_target("render-scene-ibl-gate");
         let ctx = frame_ctx(frame_count, h);
         let mut enc = h.device.create_encoder("render-scene-ibl-gate-enc");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-            runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+            runtime.render(
+                &mut gpu,
+                &target.texture,
+                &ctx,
+                &manifold_core::params::ParamManifest::default(),
+            );
         }
         enc.commit_and_wait_completed();
         h.readback(&target.texture)
     }
 
-    fn build_runtime(json: &str, h: &manifold_node_engine::testkit::gpu_harness::ParityHarness) -> PresetRuntime {
+    fn build_runtime(
+        json: &str,
+        h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
+    ) -> PresetRuntime {
         let registry = PrimitiveRegistry::with_builtin();
         PresetRuntime::from_json_str_with_device(
             &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(json),
@@ -254,7 +271,10 @@ mod gating_gpu_tests {
             "intensity":{"type":"Float","value":1.0},
             "horizon_strength":{"type":"Float","value":3.0}}}"#,
         );
-        assert_ne!(json_before, json_after, "the replace must actually change the JSON");
+        assert_ne!(
+            json_before, json_after,
+            "the replace must actually change the JSON"
+        );
 
         // Live executor: settle a few frames at the original params, then
         // push the changed params in place (no rebuild) and render one more
@@ -459,17 +479,30 @@ fn prefilter_and_irradiance_cost_is_measured_and_reported() {
             let mut enc = h.device.create_encoder("render-scene-ibl-cost-warm");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-                runtime.render(&mut gpu, &target.texture, &warm_ctx, &manifold_core::params::ParamManifest::default());
+                runtime.render(
+                    &mut gpu,
+                    &target.texture,
+                    &warm_ctx,
+                    &manifold_core::params::ParamManifest::default(),
+                );
             }
             enc.commit_and_wait_completed();
         }
         let start = std::time::Instant::now();
         for frame in 0..frames {
-            let ctx = PresetContext { frame_count: frame as i64, ..warm_ctx };
+            let ctx = PresetContext {
+                frame_count: frame as i64,
+                ..warm_ctx
+            };
             let mut enc = h.device.create_encoder("render-scene-ibl-cost");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-                runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+                runtime.render(
+                    &mut gpu,
+                    &target.texture,
+                    &ctx,
+                    &manifold_core::params::ParamManifest::default(),
+                );
             }
             enc.commit_and_wait_completed();
         }
@@ -548,17 +581,30 @@ fn hdri_source_default_resolution_prefilter_cost_at_4096x2048_is_measured_and_re
             let mut enc = h.device.create_encoder("render-scene-ibl-cost-4096-warm");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-                runtime.render(&mut gpu, &target.texture, &warm_ctx, &manifold_core::params::ParamManifest::default());
+                runtime.render(
+                    &mut gpu,
+                    &target.texture,
+                    &warm_ctx,
+                    &manifold_core::params::ParamManifest::default(),
+                );
             }
             enc.commit_and_wait_completed();
         }
         let start = std::time::Instant::now();
         for frame in 0..frames {
-            let ctx = PresetContext { frame_count: frame as i64, ..warm_ctx };
+            let ctx = PresetContext {
+                frame_count: frame as i64,
+                ..warm_ctx
+            };
             let mut enc = h.device.create_encoder("render-scene-ibl-cost-4096");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-                runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+                runtime.render(
+                    &mut gpu,
+                    &target.texture,
+                    &ctx,
+                    &manifold_core::params::ParamManifest::default(),
+                );
             }
             enc.commit_and_wait_completed();
         }
@@ -634,17 +680,30 @@ fn hdri_source_default_resolution_prefilter_cost_at_2048x1024_is_measured_and_re
             let mut enc = h.device.create_encoder("render-scene-ibl-cost-2048-warm");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-                runtime.render(&mut gpu, &target.texture, &warm_ctx, &manifold_core::params::ParamManifest::default());
+                runtime.render(
+                    &mut gpu,
+                    &target.texture,
+                    &warm_ctx,
+                    &manifold_core::params::ParamManifest::default(),
+                );
             }
             enc.commit_and_wait_completed();
         }
         let start = std::time::Instant::now();
         for frame in 0..frames {
-            let ctx = PresetContext { frame_count: frame as i64, ..warm_ctx };
+            let ctx = PresetContext {
+                frame_count: frame as i64,
+                ..warm_ctx
+            };
             let mut enc = h.device.create_encoder("render-scene-ibl-cost-2048");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-                runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+                runtime.render(
+                    &mut gpu,
+                    &target.texture,
+                    &ctx,
+                    &manifold_core::params::ParamManifest::default(),
+                );
             }
             enc.commit_and_wait_completed();
         }

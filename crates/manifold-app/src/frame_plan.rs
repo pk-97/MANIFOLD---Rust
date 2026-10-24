@@ -62,7 +62,9 @@ pub(crate) fn take_project_snapshot(
     snapshot: std::sync::Arc<manifold_core::project::Project>,
     version_changed: bool,
 ) -> bool {
-    let is_new_arc = last_arc.as_ref().is_none_or(|prev| !std::sync::Arc::ptr_eq(prev, &snapshot));
+    let is_new_arc = last_arc
+        .as_ref()
+        .is_none_or(|prev| !std::sync::Arc::ptr_eq(prev, &snapshot));
     if is_new_arc {
         manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ProjectClone);
         *local = (*snapshot).clone();
@@ -162,7 +164,9 @@ impl RegionMask {
 
     /// The regions in the mask, in build order.
     pub(crate) fn iter(self) -> impl Iterator<Item = MainRegion> {
-        MainRegion::ALL.into_iter().filter(move |&r| self.contains(r))
+        MainRegion::ALL
+            .into_iter()
+            .filter(move |&r| self.contains(r))
     }
 }
 
@@ -232,14 +236,24 @@ struct ChromeText {
 }
 
 impl ChromeText {
-    fn version(&mut self, content: &crate::content_state::ContentState, path: Option<&std::path::Path>) -> u64 {
+    fn version(
+        &mut self,
+        content: &crate::content_state::ContentState,
+        path: Option<&std::path::Path>,
+    ) -> u64 {
         let mut moved = false;
         for (held, sent) in [
             (&mut self.clock_device, &content.midi_clock_device_name),
-            (&mut self.clock_position, &content.midi_clock_position_display),
+            (
+                &mut self.clock_position,
+                &content.midi_clock_position_display,
+            ),
             (&mut self.detect_status, &content.percussion_status_message),
         ] {
-            if !held.as_ref().is_some_and(|h| std::sync::Arc::ptr_eq(h, sent)) {
+            if !held
+                .as_ref()
+                .is_some_and(|h| std::sync::Arc::ptr_eq(h, sent))
+            {
                 *held = Some(std::sync::Arc::clone(sent));
                 moved = true;
             }
@@ -256,7 +270,10 @@ impl ChromeText {
 }
 
 /// Pack the header clock exactly as `push_clock` computes it.
-pub(crate) fn clock_digits(content: &crate::content_state::ContentState, beats_per_bar: i32) -> u64 {
+pub(crate) fn clock_digits(
+    content: &crate::content_state::ContentState,
+    beats_per_bar: i32,
+) -> u64 {
     let beat = content.current_beat.as_f32();
     let t = content.current_time.0;
     let mins = (t / 60.0).floor() as i32;
@@ -525,8 +542,13 @@ impl FramePlan {
 
 // Section 4 projection-table keys. Values, Shapes and MappingRanges are live
 // scalars and key only in-place pushes (D22).
-const PROJECT_SYNC_PARTS: ChangeSet =
-    ChangeSet::of(&[Part::Layers, Part::Clips, Part::Automation, Part::Markers, Part::Settings]);
+const PROJECT_SYNC_PARTS: ChangeSet = ChangeSet::of(&[
+    Part::Layers,
+    Part::Clips,
+    Part::Automation,
+    Part::Markers,
+    Part::Settings,
+]);
 // Layers: trigger lane names, owners and groups. Effects: which instances and
 // params exist and what their clip triggers target. A clip, a point, a value
 // or a selection moves none of it.
@@ -544,13 +566,20 @@ const INSPECTOR_SYNC_PARTS: ChangeSet = ChangeSet::of(&[
 ]);
 // Layers: the send rows name their feeding layers. Effects: the consumer rows
 // list the audio mods that read each send.
-const AUDIO_DEVICE_PARTS: ChangeSet = ChangeSet::of(&[Part::AudioSetup, Part::Layers, Part::Effects]);
+const AUDIO_DEVICE_PARTS: ChangeSet =
+    ChangeSet::of(&[Part::AudioSetup, Part::Layers, Part::Effects]);
 const CLIP_POSITION_PARTS: ChangeSet = ChangeSet::of(&[Part::Clips, Part::Layers]);
-const LANE_GEOMETRY_PARTS: ChangeSet = ChangeSet::of(&[Part::Automation, Part::Effects, Part::Layers]);
+const LANE_GEOMETRY_PARTS: ChangeSet =
+    ChangeSet::of(&[Part::Automation, Part::Effects, Part::Layers]);
 // Clips: the footer and layer-header clip counts (projection_input_matrix).
 // Effects: the master effect names behind the LED exit path list.
-const CHROME_PARTS: ChangeSet =
-    ChangeSet::of(&[Part::Settings, Part::Mappings, Part::Layers, Part::Clips, Part::Effects]);
+const CHROME_PARTS: ChangeSet = ChangeSet::of(&[
+    Part::Settings,
+    Part::Mappings,
+    Part::Layers,
+    Part::Clips,
+    Part::Effects,
+]);
 const LIVE_VALUE_PARTS: ChangeSet = ChangeSet::of(&[Part::Values, Part::Layers]);
 const DRIVER_READOUT_PARTS: ChangeSet = ChangeSet::of(&[Part::Effects]);
 const PRESET_LIST_PARTS: ChangeSet = ChangeSet::of(&[Part::EmbeddedPresets]);
@@ -579,7 +608,10 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
 
     // A selection or active-layer change repaints the layer highlight through
     // the selection push; it re-projects no layer or track.
-    if moved.intersects(PROJECT_SYNC_PARTS) || automation_view || last.layer_reveal != next.layer_reveal {
+    if moved.intersects(PROJECT_SYNC_PARTS)
+        || automation_view
+        || last.layer_reveal != next.layer_reveal
+    {
         p.insert(Projection::ProjectSync);
     }
     if moved.intersects(TRIGGER_CATALOG_PARTS) {
@@ -634,7 +666,11 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
     }
     // The chrome push also shows the lanes toggle and the primary clip's
     // chrome values.
-    if moved.intersects(CHROME_PARTS) || last.chrome != next.chrome || automation_view || selection_identity {
+    if moved.intersects(CHROME_PARTS)
+        || last.chrome != next.chrome
+        || automation_view
+        || selection_identity
+    {
         p.insert(Projection::ChromePush);
     }
     if last.zoom_bits != next.zoom_bits {
@@ -689,7 +725,17 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
     // the lanes open or close; a selection or active-layer change re-projects
     // them but repaints the same nodes in place (the selection push).
     let timeline_shape = moved.intersects(PROJECT_SYNC_PARTS) || automation_view;
-    plan_regions(&mut plan, last, next, timeline_shape, selection_visual, cursor, active_layer, automation_view, preview);
+    plan_regions(
+        &mut plan,
+        last,
+        next,
+        timeline_shape,
+        selection_visual,
+        cursor,
+        active_layer,
+        automation_view,
+        preview,
+    );
     plan.redraw = true;
     plan
 }
@@ -737,7 +783,11 @@ fn plan_regions(
         || projections.contains(Projection::LiveRanges)
         || projections.contains(Projection::SceneEyes);
 
-    for chrome in [MainRegion::Transport, MainRegion::Header, MainRegion::Footer] {
+    for chrome in [
+        MainRegion::Transport,
+        MainRegion::Header,
+        MainRegion::Footer,
+    ] {
         // A resized bar takes its new rect and lays out in place.
         if size(chrome) {
             resize.insert(chrome);
@@ -768,7 +818,10 @@ fn plan_regions(
 
     // The dock moves when the inspector beside it resizes: it translates.
     let dock = MainRegion::AudioDock;
-    if size(dock) || projections.contains(Projection::AudioDevices) || last.dock_view != next.dock_view {
+    if size(dock)
+        || projections.contains(Projection::AudioDevices)
+        || last.dock_view != next.dock_view
+    {
         rebuild.insert(dock);
     } else if origin(dock) {
         translate.insert(dock);
@@ -833,7 +886,9 @@ fn plan_regions(
     let overlays = MainRegion::Overlays;
     if last.overlays != next.overlays
         || moved(overlays)
-        || ((projections.contains(Projection::ProjectSync) || projections.contains(Projection::TriggerCatalog)) && next.overlay_open)
+        || ((projections.contains(Projection::ProjectSync)
+            || projections.contains(Projection::TriggerCatalog))
+            && next.overlay_open)
     {
         rebuild.insert(overlays);
     }
@@ -962,14 +1017,32 @@ mod tests {
 
     #[test]
     fn row_project_sync() {
-        for part in [Part::Layers, Part::Clips, Part::Automation, Part::Markers, Part::Settings] {
-            assert!(runs(&plan(with_parts(&[part])), Projection::ProjectSync), "{part:?}");
+        for part in [
+            Part::Layers,
+            Part::Clips,
+            Part::Automation,
+            Part::Markers,
+            Part::Settings,
+        ] {
+            assert!(
+                runs(&plan(with_parts(&[part])), Projection::ProjectSync),
+                "{part:?}"
+            );
         }
         let mut next = base();
         next.automation_view = 1;
         assert!(runs(&plan(next), Projection::ProjectSync));
-        for part in [Part::Effects, Part::Mappings, Part::Led, Part::AudioSetup, Part::EmbeddedPresets] {
-            assert!(!runs(&plan(with_parts(&[part])), Projection::ProjectSync), "{part:?}");
+        for part in [
+            Part::Effects,
+            Part::Mappings,
+            Part::Led,
+            Part::AudioSetup,
+            Part::EmbeddedPresets,
+        ] {
+            assert!(
+                !runs(&plan(with_parts(&[part])), Projection::ProjectSync),
+                "{part:?}"
+            );
         }
         // A press selects and focuses; the selection push repaints the
         // highlight, so no layer or track re-projects (P7c).
@@ -990,12 +1063,25 @@ mod tests {
         // Layers: lane names, owners, groups. Effects: instances, params and
         // clip-trigger targets.
         for part in [Part::Layers, Part::Effects] {
-            assert!(runs(&plan(with_parts(&[part])), Projection::TriggerCatalog), "{part:?}");
+            assert!(
+                runs(&plan(with_parts(&[part])), Projection::TriggerCatalog),
+                "{part:?}"
+            );
         }
         // A clip move or commit, an automation commit, a value, a shape, a
         // selection, a zoom and a drag preview never rebuild it.
-        for part in [Part::Clips, Part::Automation, Part::Markers, Part::Settings, Part::Values, Part::Shapes] {
-            assert!(!runs(&plan(with_parts(&[part])), Projection::TriggerCatalog), "{part:?}");
+        for part in [
+            Part::Clips,
+            Part::Automation,
+            Part::Markers,
+            Part::Settings,
+            Part::Values,
+            Part::Shapes,
+        ] {
+            assert!(
+                !runs(&plan(with_parts(&[part])), Projection::TriggerCatalog),
+                "{part:?}"
+            );
         }
         let mut next = base();
         next.preview.clips = 1;
@@ -1020,7 +1106,10 @@ mod tests {
             Part::EmbeddedPresets,
             Part::Settings,
         ] {
-            assert!(runs(&plan(with_parts(&[part])), Projection::InspectorSync), "{part:?}");
+            assert!(
+                runs(&plan(with_parts(&[part])), Projection::InspectorSync),
+                "{part:?}"
+            );
         }
         let mut next = base();
         next.selection_identity = 1;
@@ -1043,7 +1132,10 @@ mod tests {
         let mut next = base();
         next.runtime.layer_notices = 1;
         assert!(runs(&plan(next), Projection::InspectorSync));
-        assert!(!runs(&plan(with_parts(&[Part::Markers])), Projection::InspectorSync));
+        assert!(!runs(
+            &plan(with_parts(&[Part::Markers])),
+            Projection::InspectorSync
+        ));
     }
 
     #[test]
@@ -1051,15 +1143,24 @@ mod tests {
         // ChangeGraphParamCommand touches Values | Effects for a scene.switch
         // param: the dimmed and folded rows gate on that feature (SCENE_SURFACES
         // D12). A plain card param is Values.
-        assert!(runs(&plan(with_parts(&[Part::Values, Part::Effects])), Projection::InspectorSync));
-        assert!(!runs(&plan(with_parts(&[Part::Values])), Projection::InspectorSync));
+        assert!(runs(
+            &plan(with_parts(&[Part::Values, Part::Effects])),
+            Projection::InspectorSync
+        ));
+        assert!(!runs(
+            &plan(with_parts(&[Part::Values])),
+            Projection::InspectorSync
+        ));
     }
 
     #[test]
     fn row_audio_setup_device_list() {
         // Layers name the feeding layers, Effects the consumer rows.
         for part in [Part::AudioSetup, Part::Layers, Part::Effects] {
-            assert!(runs(&plan(with_parts(&[part])), Projection::AudioDevices), "{part:?}");
+            assert!(
+                runs(&plan(with_parts(&[part])), Projection::AudioDevices),
+                "{part:?}"
+            );
         }
         let mut next = base();
         next.audio_directory = 1;
@@ -1068,27 +1169,45 @@ mod tests {
         let mut next = base();
         next.dock_view = 1;
         assert!(runs(&plan(next), Projection::AudioDevices));
-        assert!(!runs(&plan(with_parts(&[Part::Markers])), Projection::AudioDevices));
-        assert!(!runs(&plan(with_parts(&[Part::Values])), Projection::AudioDevices));
+        assert!(!runs(
+            &plan(with_parts(&[Part::Markers])),
+            Projection::AudioDevices
+        ));
+        assert!(!runs(
+            &plan(with_parts(&[Part::Values])),
+            Projection::AudioDevices
+        ));
     }
 
     #[test]
     fn row_clip_positions() {
         for part in [Part::Clips, Part::Layers] {
-            assert!(runs(&plan(with_parts(&[part])), Projection::ClipPositions), "{part:?}");
+            assert!(
+                runs(&plan(with_parts(&[part])), Projection::ClipPositions),
+                "{part:?}"
+            );
         }
         let mut next = base();
         next.preview.clips = 1;
         let p = plan(next);
         assert!(runs(&p, Projection::ClipPreview));
-        assert!(!runs(&p, Projection::ClipPositions), "a drag preview updates the dragged clips only");
-        assert!(!runs(&p, Projection::LanePreview), "a clip drag never re-projects lanes");
+        assert!(
+            !runs(&p, Projection::ClipPositions),
+            "a drag preview updates the dragged clips only"
+        );
+        assert!(
+            !runs(&p, Projection::LanePreview),
+            "a clip drag never re-projects lanes"
+        );
     }
 
     #[test]
     fn row_automation_lane_geometry() {
         for part in [Part::Automation, Part::Effects, Part::Layers] {
-            assert!(runs(&plan(with_parts(&[part])), Projection::LaneGeometry), "{part:?}");
+            assert!(
+                runs(&plan(with_parts(&[part])), Projection::LaneGeometry),
+                "{part:?}"
+            );
         }
         let mut next = base();
         next.automation_view = 1;
@@ -1098,7 +1217,10 @@ mod tests {
         let p = plan(next);
         assert!(runs(&p, Projection::LanePreview));
         assert!(!runs(&p, Projection::LaneGeometry));
-        assert!(!runs(&p, Projection::ClipPreview), "a point drag never re-projects clips");
+        assert!(
+            !runs(&p, Projection::ClipPreview),
+            "a point drag never re-projects clips"
+        );
     }
 
     #[test]
@@ -1106,16 +1228,34 @@ mod tests {
         let mut next = base();
         next.values = 1;
         assert!(runs(&plan(next), Projection::LiveValues));
-        assert!(runs(&plan(with_parts(&[Part::Values])), Projection::LiveValues));
-        assert!(runs(&plan(with_parts(&[Part::Shapes])), Projection::LiveShapes));
-        assert!(runs(&plan(with_parts(&[Part::MappingRanges])), Projection::LiveRanges));
+        assert!(runs(
+            &plan(with_parts(&[Part::Values])),
+            Projection::LiveValues
+        ));
+        assert!(runs(
+            &plan(with_parts(&[Part::Shapes])),
+            Projection::LiveShapes
+        ));
+        assert!(runs(
+            &plan(with_parts(&[Part::MappingRanges])),
+            Projection::LiveRanges
+        ));
         // The eyes follow base-value edits, not the playback values sequence.
-        assert!(runs(&plan(with_parts(&[Part::Values])), Projection::SceneEyes));
-        assert!(runs(&plan(with_parts(&[Part::Shapes])), Projection::SceneEyes));
+        assert!(runs(
+            &plan(with_parts(&[Part::Values])),
+            Projection::SceneEyes
+        ));
+        assert!(runs(
+            &plan(with_parts(&[Part::Shapes])),
+            Projection::SceneEyes
+        ));
         let mut playback = base();
         playback.values = 1;
         assert!(!runs(&plan(playback), Projection::SceneEyes));
-        assert!(runs(&plan(with_parts(&[Part::Layers])), Projection::LiveValues));
+        assert!(runs(
+            &plan(with_parts(&[Part::Layers])),
+            Projection::LiveValues
+        ));
         let mut next = base();
         next.active_layer = 1;
         assert!(runs(&plan(next), Projection::LiveValues));
@@ -1170,8 +1310,17 @@ mod tests {
     #[test]
     fn row_chrome_push() {
         // Effects: the master effect names behind the LED exit path list.
-        for part in [Part::Settings, Part::Mappings, Part::Layers, Part::Clips, Part::Effects] {
-            assert!(runs(&plan(with_parts(&[part])), Projection::ChromePush), "{part:?}");
+        for part in [
+            Part::Settings,
+            Part::Mappings,
+            Part::Layers,
+            Part::Clips,
+            Part::Effects,
+        ] {
+            assert!(
+                runs(&plan(with_parts(&[part])), Projection::ChromePush),
+                "{part:?}"
+            );
         }
         // Each chrome input on its own.
         for edit in [
@@ -1205,7 +1354,11 @@ mod tests {
         let p = plan(next);
         assert!(runs(&p, Projection::ZoomLabelPush));
         assert!(!runs(&p, Projection::ChromePush));
-        for bar in [MainRegion::Transport, MainRegion::Header, MainRegion::Footer] {
+        for bar in [
+            MainRegion::Transport,
+            MainRegion::Header,
+            MainRegion::Footer,
+        ] {
             assert!(!p.in_place.contains(bar), "{bar:?}");
         }
         // A scroll alone moves no label.
@@ -1224,26 +1377,42 @@ mod tests {
         let p = plan(next);
         assert!(runs(&p, Projection::ClockPush));
         assert!(!runs(&p, Projection::ChromePush));
-        for bar in [MainRegion::Transport, MainRegion::Header, MainRegion::Footer] {
+        for bar in [
+            MainRegion::Transport,
+            MainRegion::Header,
+            MainRegion::Footer,
+        ] {
             assert!(!p.in_place.contains(bar), "{bar:?}");
         }
     }
 
     #[test]
     fn row_driver_period_readout() {
-        assert!(runs(&plan(with_parts(&[Part::Effects])), Projection::DriverReadout));
+        assert!(runs(
+            &plan(with_parts(&[Part::Effects])),
+            Projection::DriverReadout
+        ));
         let mut next = base();
         next.driver_period_key = 9;
         let p = plan(next);
         assert!(runs(&p, Projection::DriverReadout));
-        assert!(!runs(&p, Projection::ProjectSync), "never a structural sync (D20)");
+        assert!(
+            !runs(&p, Projection::ProjectSync),
+            "never a structural sync (D20)"
+        );
         assert!(p.rebuild.is_empty());
     }
 
     #[test]
     fn row_embedded_preset_list() {
-        assert!(runs(&plan(with_parts(&[Part::EmbeddedPresets])), Projection::PresetList));
-        assert!(!runs(&plan(with_parts(&[Part::Effects])), Projection::PresetList));
+        assert!(runs(
+            &plan(with_parts(&[Part::EmbeddedPresets])),
+            Projection::PresetList
+        ));
+        assert!(!runs(
+            &plan(with_parts(&[Part::Effects])),
+            Projection::PresetList
+        ));
     }
 
     #[test]
@@ -1266,8 +1435,14 @@ mod tests {
 
     #[test]
     fn row_audio_waveform_requests() {
-        assert!(runs(&plan(with_parts(&[Part::Clips])), Projection::WaveformRequests));
-        assert!(!runs(&plan(with_parts(&[Part::Layers])), Projection::WaveformRequests));
+        assert!(runs(
+            &plan(with_parts(&[Part::Clips])),
+            Projection::WaveformRequests
+        ));
+        assert!(!runs(
+            &plan(with_parts(&[Part::Layers])),
+            Projection::WaveformRequests
+        ));
     }
 
     #[test]
@@ -1301,15 +1476,30 @@ mod tests {
 
     #[test]
     fn region_transport_header_footer() {
-        for region in [MainRegion::Transport, MainRegion::Header, MainRegion::Footer] {
+        for region in [
+            MainRegion::Transport,
+            MainRegion::Header,
+            MainRegion::Footer,
+        ] {
             let p = plan(resized(region));
-            assert!(p.resize.contains(region) && p.in_place.contains(region) && !p.rebuild.contains(region));
+            assert!(
+                p.resize.contains(region)
+                    && p.in_place.contains(region)
+                    && !p.rebuild.contains(region)
+            );
             let p = plan(moved(region));
             assert!(p.translate.contains(region) && !p.rebuild.contains(region));
-            assert!(plan(with_parts(&[Part::Settings])).in_place.contains(region));
+            assert!(
+                plan(with_parts(&[Part::Settings]))
+                    .in_place
+                    .contains(region)
+            );
             let mut next = base();
             next.cursor = 1;
-            assert!(plan(next).in_place.contains(region), "selection push values");
+            assert!(
+                plan(next).in_place.contains(region),
+                "selection push values"
+            );
         }
     }
 
@@ -1337,7 +1527,10 @@ mod tests {
         let p = plan(next);
         assert!(p.in_place.contains(r) && !p.rebuild.contains(r));
         let p = plan(with_parts(&[Part::Values]));
-        assert!(p.in_place.contains(r) && !p.rebuild.contains(r), "card values in place");
+        assert!(
+            p.in_place.contains(r) && !p.rebuild.contains(r),
+            "card values in place"
+        );
     }
 
     #[test]
@@ -1349,11 +1542,17 @@ mod tests {
         next.dock_view = 1;
         assert!(plan(next).rebuild.contains(r));
         let p = plan(moved(r));
-        assert!(p.translate.contains(r) && !p.rebuild.contains(r), "the dock follows the inspector's edge");
+        assert!(
+            p.translate.contains(r) && !p.rebuild.contains(r),
+            "the dock follows the inspector's edge"
+        );
         let mut next = base();
         next.dock_scroll_px = 3;
         let p = plan(next);
-        assert!(p.in_place.contains(r) && !p.rebuild.contains(r), "dock scrolls in place");
+        assert!(
+            p.in_place.contains(r) && !p.rebuild.contains(r),
+            "dock scrolls in place"
+        );
     }
 
     #[test]
@@ -1369,22 +1568,37 @@ mod tests {
     fn region_layer_headers() {
         let r = MainRegion::LayerHeaders;
         assert!(plan(resized(r)).rebuild.contains(r), "width");
-        assert!(plan(with_parts(&[Part::Layers])).rebuild.contains(r), "project projection ran");
+        assert!(
+            plan(with_parts(&[Part::Layers])).rebuild.contains(r),
+            "project projection ran"
+        );
         // A new top or height lays the rows out again in place.
         let p = plan(moved(r));
-        assert!(p.in_place.contains(r) && !p.rebuild.contains(r) && p.viewport.relayout, "top");
+        assert!(
+            p.in_place.contains(r) && !p.rebuild.contains(r) && p.viewport.relayout,
+            "top"
+        );
         let mut next = base();
         let mut rect = next.rects.get(r);
         rect[3] += 5;
         next.rects.set(r, rect);
         let p = plan(next);
-        assert!(p.in_place.contains(r) && !p.rebuild.contains(r) && p.viewport.relayout, "height");
+        assert!(
+            p.in_place.contains(r) && !p.rebuild.contains(r) && p.viewport.relayout,
+            "height"
+        );
         let mut next = base();
         next.lane_heights = 1;
         let p = plan(next);
-        assert!(p.in_place.contains(r) && !p.rebuild.contains(r) && p.viewport.relayout, "lane heights");
+        assert!(
+            p.in_place.contains(r) && !p.rebuild.contains(r) && p.viewport.relayout,
+            "lane heights"
+        );
         assert!(runs(&p, Projection::TrackLayout) && !runs(&p, Projection::ProjectSync));
-        assert!(!runs(&p, Projection::InspectorSync), "a lane resize leaves the inspector alone");
+        assert!(
+            !runs(&p, Projection::InspectorSync),
+            "a lane resize leaves the inspector alone"
+        );
         let in_place: [fn(&mut FrameInputs); 4] = [
             |i| i.scroll_y_px = 9,
             |i| i.selection_visual = 1,
@@ -1404,11 +1618,20 @@ mod tests {
     #[test]
     fn region_viewport() {
         let r = MainRegion::Viewport;
-        assert!(plan(with_parts(&[Part::Clips])).rebuild.contains(r), "project projection ran");
-        assert!(plan(with_parts(&[Part::Markers])).rebuild.contains(r), "markers");
+        assert!(
+            plan(with_parts(&[Part::Clips])).rebuild.contains(r),
+            "project projection ran"
+        );
+        assert!(
+            plan(with_parts(&[Part::Markers])).rebuild.contains(r),
+            "markers"
+        );
         for next in [moved(r), resized(r)] {
             let p = plan(next);
-            assert!(p.in_place.contains(r) && !p.rebuild.contains(r) && p.viewport.relayout, "a rect move lays out in place");
+            assert!(
+                p.in_place.contains(r) && !p.rebuild.contains(r) && p.viewport.relayout,
+                "a rect move lays out in place"
+            );
         }
         let in_place: [fn(&mut FrameInputs); 6] = [
             |i| i.scroll_x_px = 9,
@@ -1426,12 +1649,21 @@ mod tests {
         }
         let mut next = base();
         next.preview.clips = 1;
-        assert!(!plan(next).rebuild.contains(r), "a drag preview never rebuilds");
+        assert!(
+            !plan(next).rebuild.contains(r),
+            "a drag preview never rebuilds"
+        );
         let mut next = base();
         next.preview.markers = 1;
         let p = plan(next);
-        assert!(p.in_place.contains(r) && !p.rebuild.contains(r), "marker flags move in place");
-        assert!(!runs(&p, Projection::ProjectSync), "a marker drag projects only the markers");
+        assert!(
+            p.in_place.contains(r) && !p.rebuild.contains(r),
+            "marker flags move in place"
+        );
+        assert!(
+            !runs(&p, Projection::ProjectSync),
+            "a marker drag projects only the markers"
+        );
     }
 
     #[test]
@@ -1439,18 +1671,37 @@ mod tests {
         let mut next = base();
         next.scroll_x_bits = 0.3f32.to_bits();
         let p = plan(next);
-        assert_eq!(p.viewport, ViewportMoves { scroll_x: true, ..Default::default() }, "a sub-pixel scroll");
+        assert_eq!(
+            p.viewport,
+            ViewportMoves {
+                scroll_x: true,
+                ..Default::default()
+            },
+            "a sub-pixel scroll"
+        );
         assert!(p.in_place.contains(MainRegion::Viewport));
 
         let mut next = base();
         next.scroll_y_bits = 12.0f32.to_bits();
         let p = plan(next);
-        assert_eq!(p.viewport, ViewportMoves { scroll_y: true, ..Default::default() });
+        assert_eq!(
+            p.viewport,
+            ViewportMoves {
+                scroll_y: true,
+                ..Default::default()
+            }
+        );
         assert!(p.in_place.contains(MainRegion::LayerHeaders));
 
         let mut next = base();
         next.zoom_bits = 2;
-        assert_eq!(plan(next).viewport, ViewportMoves { zoom: true, ..Default::default() });
+        assert_eq!(
+            plan(next).viewport,
+            ViewportMoves {
+                zoom: true,
+                ..Default::default()
+            }
+        );
 
         for edit in [
             |i: &mut FrameInputs| i.scroll_x_bits = 1,
@@ -1460,7 +1711,10 @@ mod tests {
             let mut next = base();
             edit(&mut next);
             let p = plan(next);
-            assert!(!runs(&p, Projection::ProjectSync), "a view move never projects");
+            assert!(
+                !runs(&p, Projection::ProjectSync),
+                "a view move never projects"
+            );
             assert!(!runs(&p, Projection::InspectorSync));
             assert!(p.rebuild.is_empty(), "a view move never rebuilds a region");
         }
@@ -1474,7 +1728,10 @@ mod tests {
         assert!(plan(next).rebuild.contains(r));
         // The project projection rewrites the lists an open overlay shows.
         let mut next = with_parts(&[Part::Layers]);
-        assert!(!plan(next).rebuild.contains(r), "nothing open, nothing to rebuild");
+        assert!(
+            !plan(next).rebuild.contains(r),
+            "nothing open, nothing to rebuild"
+        );
         next.overlay_open = true;
         assert!(plan(next).rebuild.contains(r));
         let mut next = base();
@@ -1482,7 +1739,10 @@ mod tests {
         let p = plan(next);
         assert!(p.in_place.contains(r) && !p.rebuild.contains(r));
         // Not keyed until their sequences bump (P4b runtime-sequence rule).
-        for edit in [|i: &mut FrameInputs| i.runtime.warmup = 1, |i: &mut FrameInputs| i.runtime.export_progress = 1] {
+        for edit in [
+            |i: &mut FrameInputs| i.runtime.warmup = 1,
+            |i: &mut FrameInputs| i.runtime.export_progress = 1,
+        ] {
             let mut next = base();
             edit(&mut next);
             assert!(!plan(next).in_place.contains(r));
@@ -1508,8 +1768,14 @@ mod tests {
         }
         let p = plan(next);
         assert!(p.rects_moved);
-        assert!(p.translate.contains(MainRegion::Footer) && p.translate.contains(MainRegion::SplitHandles));
-        assert!(p.viewport.relayout, "the layer headers and viewport lay out again in place");
+        assert!(
+            p.translate.contains(MainRegion::Footer)
+                && p.translate.contains(MainRegion::SplitHandles)
+        );
+        assert!(
+            p.viewport.relayout,
+            "the layer headers and viewport lay out again in place"
+        );
         for untouched in [
             MainRegion::Transport,
             MainRegion::Header,
@@ -1518,11 +1784,17 @@ mod tests {
             MainRegion::LayerHeaders,
             MainRegion::Viewport,
         ] {
-            assert!(!p.rebuild.contains(untouched) && !p.translate.contains(untouched), "{untouched:?}");
+            assert!(
+                !p.rebuild.contains(untouched) && !p.translate.contains(untouched),
+                "{untouched:?}"
+            );
         }
         let mut next = base();
         next.rects.set(MainRegion::Overlays, [0, 0, 9, 9]);
-        assert!(plan(next).rebuild.contains(MainRegion::Overlays), "a resized screen rebuilds the overlays");
+        assert!(
+            plan(next).rebuild.contains(MainRegion::Overlays),
+            "a resized screen rebuilds the overlays"
+        );
     }
 
     #[test]
@@ -1538,7 +1810,10 @@ mod tests {
         let mut mask = RegionMask::NONE;
         mask.insert(MainRegion::Viewport);
         mask.insert(MainRegion::Inspector);
-        assert_eq!(mask.iter().collect::<Vec<_>>(), [MainRegion::Inspector, MainRegion::Viewport]);
+        assert_eq!(
+            mask.iter().collect::<Vec<_>>(),
+            [MainRegion::Inspector, MainRegion::Viewport]
+        );
         mask.remove(MainRegion::Inspector);
         assert_eq!(mask.iter().collect::<Vec<_>>(), [MainRegion::Viewport]);
     }
@@ -1549,13 +1824,25 @@ mod tests {
         let mut content = PartStamps::default();
         content.bump(ChangeSet::of(&[Part::Clips]));
         let before = stamps.parts();
-        assert_eq!(stamps.fold_snapshot(&content), ChangeSet::of(&[Part::Clips]));
-        assert_eq!(stamps.parts().moved_since(&before), ChangeSet::of(&[Part::Clips]));
+        assert_eq!(
+            stamps.fold_snapshot(&content),
+            ChangeSet::of(&[Part::Clips])
+        );
+        assert_eq!(
+            stamps.parts().moved_since(&before),
+            ChangeSet::of(&[Part::Clips])
+        );
         let before = stamps.parts();
-        assert!(stamps.fold_snapshot(&content).is_empty(), "the same snapshot twice moves nothing");
+        assert!(
+            stamps.fold_snapshot(&content).is_empty(),
+            "the same snapshot twice moves nothing"
+        );
         assert_eq!(stamps.parts(), before);
         stamps.bump(ChangeSet::of(&[Part::Effects]));
-        assert_eq!(stamps.parts().moved_since(&before), ChangeSet::of(&[Part::Effects]));
+        assert_eq!(
+            stamps.parts().moved_since(&before),
+            ChangeSet::of(&[Part::Effects])
+        );
     }
 
     #[test]
@@ -1594,7 +1881,10 @@ mod tests {
         assert!(!runs(&p, Projection::InspectorSync));
         assert!(!runs(&p, Projection::ClipPreview));
         assert!(p.viewport.markers && p.in_place.contains(MainRegion::Viewport));
-        assert!(!p.rebuild.contains(MainRegion::Viewport), "a marker drag moves the flags in place");
+        assert!(
+            !p.rebuild.contains(MainRegion::Viewport),
+            "a marker drag moves the flags in place"
+        );
     }
 
     #[test]
@@ -1621,7 +1911,12 @@ mod tests {
         ] {
             assert!(runs(&p, projection), "{projection:?}");
         }
-        for region in [MainRegion::Inspector, MainRegion::AudioDock, MainRegion::LayerHeaders, MainRegion::Viewport] {
+        for region in [
+            MainRegion::Inspector,
+            MainRegion::AudioDock,
+            MainRegion::LayerHeaders,
+            MainRegion::Viewport,
+        ] {
             assert!(p.rebuild.contains(region), "{region:?}");
         }
     }

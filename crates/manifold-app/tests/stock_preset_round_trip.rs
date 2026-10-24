@@ -24,12 +24,12 @@
 //! makes the stock preset resolvable as a template at all, mirroring what the
 //! app does once at startup before any project-local overlay exists.
 
-use manifold_nodes as _;
+use manifold_core::PresetTypeId;
 use manifold_core::effects::ParamId;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
-use manifold_core::PresetTypeId;
 use manifold_node_engine::load::preset_loader::clear_project_presets;
+use manifold_nodes as _;
 
 #[test]
 fn stock_preset_outer_params_and_driver_survive_project_reload() {
@@ -49,7 +49,10 @@ fn stock_preset_outer_params_and_driver_survive_project_reload() {
         let gp = project.timeline.layers[0]
             .gen_params_mut()
             .expect("generator instance");
-        assert!(!gp.params.is_empty(), "the stock template must seed outer-card params");
+        assert!(
+            !gp.params.is_empty(),
+            "the stock template must seed outer-card params"
+        );
 
         let count_id = gp
             .params
@@ -77,7 +80,10 @@ fn stock_preset_outer_params_and_driver_survive_project_reload() {
         // it" means (the driver isn't dropped, and it isn't a static
         // frozen value).
         gp.create_driver(ParamId::Owned(scale_id.clone()));
-        assert!(gp.find_driver(&scale_id).is_some(), "driver should attach before save");
+        assert!(
+            gp.find_driver(&scale_id).is_some(),
+            "driver should attach before save"
+        );
 
         (
             count_id.clone(),
@@ -136,7 +142,10 @@ fn stock_preset_outer_params_and_driver_survive_project_reload() {
         .find(|p| p.id() == scale_id)
         .expect("scale param entry present")
         .spec;
-    assert_eq!(spec.id, scale_id, "resolved against the real stock template spec");
+    assert_eq!(
+        spec.id, scale_id,
+        "resolved against the real stock template spec"
+    );
 
     let evaluated = manifold_core::effects::ParameterDriver::evaluate(
         manifold_core::Beats(0.0),

@@ -1,14 +1,18 @@
 //! Device proofs against the pass-1 publication contract, and byte for byte
 //! against the transcribed 1-bit publisher (`particle_publication::reference`).
-use manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS;
-use manifold_node_engine::testkit::array_harness::read;
 use crate::contracts::node_graph::catalog_tests::particle_frame_blend_tests::publication_contract::publish as reference;
-use manifold_water_liquid::primitives::particle_identity::{BirthReservation, ParticleIdentity};
-use manifold_water_liquid::primitives::particle_publication::reference::{live as live_radius, publish as oracle};
-use manifold_water_liquid::primitives::particle_publication::{ParticlePublication, Publication, scratch_bytes};
-use manifold_node_engine::particles::{FluidParticle};
-use manifold_water_liquid::fluid_particles::CellRange;
 use manifold_gpu::{GpuBinding, GpuBuffer};
+use manifold_node_engine::particles::FluidParticle;
+use manifold_node_engine::testkit::array_harness::read;
+use manifold_water_liquid::fluid_particles::CellRange;
+use manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS;
+use manifold_water_liquid::primitives::particle_identity::{BirthReservation, ParticleIdentity};
+use manifold_water_liquid::primitives::particle_publication::reference::{
+    live as live_radius, publish as oracle,
+};
+use manifold_water_liquid::primitives::particle_publication::{
+    ParticlePublication, Publication, scratch_bytes,
+};
 
 fn shared<T: bytemuck::Pod>(device: &manifold_gpu::testkit::TestDevice, values: &[T]) -> GpuBuffer {
     let buffer = device.create_buffer_shared(std::mem::size_of_val(values).max(16) as u64);
@@ -296,7 +300,18 @@ impl Rng {
 
 /// Ids that cross every digit and the validity order's edge.
 const SPECIAL_IDS: [u32; 12] = [
-    0, 1, 15, 16, 0x0fff_ffff, 0x7fff_ffff, 0x8000_0000, 0x8000_0001, 0xf000_0000, u32::MAX - 1, u32::MAX, 0x1234_5678,
+    0,
+    1,
+    15,
+    16,
+    0x0fff_ffff,
+    0x7fff_ffff,
+    0x8000_0000,
+    0x8000_0001,
+    0xf000_0000,
+    u32::MAX - 1,
+    u32::MAX,
+    0x1234_5678,
 ];
 
 #[derive(Clone, Copy)]
@@ -343,8 +358,17 @@ fn fill(rng: &mut Rng, n: usize, dead: u32, ids: Ids) -> Vec<FluidParticle> {
                 0.001 + 0.1 * rng.unit()
             };
             FluidParticle {
-                position_radius: [rng.unit() * 8.0 - 4.0, rng.unit() * 3.0, rng.unit() * 8.0 - 4.0, radius],
-                velocity: [rng.unit() * 4.0 - 2.0, rng.unit() * 4.0 - 2.0, rng.unit() * 4.0 - 2.0],
+                position_radius: [
+                    rng.unit() * 8.0 - 4.0,
+                    rng.unit() * 3.0,
+                    rng.unit() * 8.0 - 4.0,
+                    radius,
+                ],
+                velocity: [
+                    rng.unit() * 4.0 - 2.0,
+                    rng.unit() * 4.0 - 2.0,
+                    rng.unit() * 4.0 - 2.0,
+                ],
                 id,
             }
         })
@@ -353,22 +377,49 @@ fn fill(rng: &mut Rng, n: usize, dead: u32, ids: Ids) -> Vec<FluidParticle> {
 
 fn cases(rng: &mut Rng) -> Vec<Case> {
     let mut cases = Vec::new();
-    let mut push = |rng: &mut Rng, label: &str, records: Vec<FluidParticle>, count: u32, slots: u32| {
-        let gate = cases.len() as u32;
-        let mut stats = [0u32; LIQUID_STATS_WORDS as usize];
-        stats[0] = u32::from(gate % 5 == 1);
-        stats[manifold_water_liquid::primitives::liquid_stats::NARROW_BAND_SHORTAGE_WORD as usize] = u32::from(gate % 5 == 2);
-        let identity = [rng.next(), rng.next(), rng.next(), u32::from(gate % 5 == 3)];
-        cases.push(Case { label: label.to_owned(), records, count, slots, identity, stats });
-    };
+    let mut push =
+        |rng: &mut Rng, label: &str, records: Vec<FluidParticle>, count: u32, slots: u32| {
+            let gate = cases.len() as u32;
+            let mut stats = [0u32; LIQUID_STATS_WORDS as usize];
+            stats[0] = u32::from(gate % 5 == 1);
+            stats[manifold_water_liquid::primitives::liquid_stats::NARROW_BAND_SHORTAGE_WORD
+                as usize] = u32::from(gate % 5 == 2);
+            let identity = [rng.next(), rng.next(), rng.next(), u32::from(gate % 5 == 3)];
+            cases.push(Case {
+                label: label.to_owned(),
+                records,
+                count,
+                slots,
+                identity,
+                stats,
+            });
+        };
     let records = fill(rng, 100_000, 250, Ids::Mixed);
-    push(rng, "100k slots, a quarter dead, mixed ids", records, 100_000, 100_000);
+    push(
+        rng,
+        "100k slots, a quarter dead, mixed ids",
+        records,
+        100_000,
+        100_000,
+    );
     let records = fill(rng, 1_000_000, 100, Ids::Mixed);
     push(rng, "1M slots, mixed ids", records, 1_000_000, 1_000_000);
     let records = fill(rng, 1_000_000, 50, Ids::Births);
-    push(rng, "1M slots, unique birth ids", records, 1_000_000, 1_000_000);
+    push(
+        rng,
+        "1M slots, unique birth ids",
+        records,
+        1_000_000,
+        1_000_000,
+    );
     let records = fill(rng, 120_000, 200, Ids::Mixed);
-    push(rng, "target larger than the source", records, 120_000, 300_000);
+    push(
+        rng,
+        "target larger than the source",
+        records,
+        120_000,
+        300_000,
+    );
     push(rng, "count 0", vec![FluidParticle::default()], 0, 1000);
     let records = fill(rng, 5000, 1000, Ids::Mixed);
     push(rng, "all dead", records, 5000, 5000);
@@ -380,9 +431,23 @@ fn cases(rng: &mut Rng) -> Vec<Case> {
     push(rng, "low digit only", records, 50_000, 50_000);
     let records = fill(rng, 50_000, 100, Ids::Masked(0xf000_0000));
     push(rng, "high digit only", records, 50_000, 50_000);
-    for (n, slots) in [(1usize, 1u32), (1, 2), (255, 256), (256, 256), (257, 4097), (4096, 4096), (65_537, 65_537)] {
+    for (n, slots) in [
+        (1usize, 1u32),
+        (1, 2),
+        (255, 256),
+        (256, 256),
+        (257, 4097),
+        (4096, 4096),
+        (65_537, 65_537),
+    ] {
         let records = fill(rng, n, 150, Ids::Mixed);
-        push(rng, &format!("{n} of {slots} slots"), records, n as u32, slots);
+        push(
+            rng,
+            &format!("{n} of {slots} slots"),
+            records,
+            n as u32,
+            slots,
+        );
     }
     let mut records = fill(rng, 1, 0, Ids::Equal(u32::MAX));
     push(rng, "one live u32::MAX", records.clone(), 1, 1);
@@ -397,7 +462,11 @@ fn words<T: bytemuck::Pod>(values: &[T]) -> &[u32] {
 
 /// Publishes `case` over a garbage-filled target and metadata: the target's
 /// words and the metadata words.
-fn publish_case(device: &manifold_gpu::testkit::TestDevice, publisher: &mut ParticlePublication, case: &Case) -> Result<(Vec<u32>, Vec<u32>), String> {
+fn publish_case(
+    device: &manifold_gpu::testkit::TestDevice,
+    publisher: &mut ParticlePublication,
+    case: &Case,
+) -> Result<(Vec<u32>, Vec<u32>), String> {
     let source = shared(device, &case.records);
     let target = shared(device, &vec![0xa5a5_a5a5u32; case.slots as usize * 8]);
     let metadata = shared(device, &[0xcafe_babeu32; 4]);
@@ -422,17 +491,30 @@ fn publish_case(device: &manifold_gpu::testkit::TestDevice, publisher: &mut Part
     if read::<u32>(&source, case.records.len() * 8) != words(&case.records) {
         return Err(format!("{}: the source was written", case.label));
     }
-    Ok((read::<u32>(&target, case.slots as usize * 8), read::<u32>(&metadata, 4)))
+    Ok((
+        read::<u32>(&target, case.slots as usize * 8),
+        read::<u32>(&metadata, 4),
+    ))
 }
 
 /// Every target and metadata byte against the reference; a mismatch is
 /// returned, not panicked, so one run names every failing case.
 fn check_case(case: &Case, got: &[u32], got_metadata: &[u32]) -> Result<(), String> {
-    let (want, want_metadata) = oracle(&case.records, case.count, case.slots, case.identity, &case.stats);
+    let (want, want_metadata) = oracle(
+        &case.records,
+        case.count,
+        case.slots,
+        case.identity,
+        &case.stats,
+    );
     let want = words(&want);
     if let Some(word) = got.iter().zip(want).position(|(g, w)| g != w) {
         let record = word / 8;
-        let bad = got.chunks(8).zip(want.chunks(8)).filter(|(g, w)| g != w).count();
+        let bad = got
+            .chunks(8)
+            .zip(want.chunks(8))
+            .filter(|(g, w)| g != w)
+            .count();
         return Err(format!(
             "{}: {bad} of {} records differ, first at record {record}: got {:08x?}, want {:08x?}",
             case.label,
@@ -442,7 +524,10 @@ fn check_case(case: &Case, got: &[u32], got_metadata: &[u32]) -> Result<(), Stri
         ));
     }
     if got_metadata != want_metadata {
-        return Err(format!("{}: metadata {got_metadata:?}, want {want_metadata:?}", case.label));
+        return Err(format!(
+            "{}: metadata {got_metadata:?}, want {want_metadata:?}",
+            case.label
+        ));
     }
     Ok(())
 }
@@ -470,7 +555,11 @@ fn particle_publication_matches_the_reference_byte_for_byte() {
         }
         let held = publisher.held_bytes(&device);
         if held != scratch_bytes(largest) {
-            failures.push(format!("{}: holds {held} bytes, the budget is {}", case.label, scratch_bytes(largest)));
+            failures.push(format!(
+                "{}: holds {held} bytes, the budget is {}",
+                case.label,
+                scratch_bytes(largest)
+            ));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -499,7 +588,12 @@ fn particle_publication_edge_radii_match_the_reference() {
         ("-0", -0.0),
         ("+0", 0.0),
     ];
-    let payloads = [f32::from_bits(0x7fa0_0001), f32::NEG_INFINITY, f32::from_bits(3), -0.0];
+    let payloads = [
+        f32::from_bits(0x7fa0_0001),
+        f32::NEG_INFINITY,
+        f32::from_bits(3),
+        -0.0,
+    ];
     let mut records = Vec::new();
     for (k, &(_, radius)) in edges.iter().enumerate() {
         // Interleaved ordinary live records keep the sort non-trivial.
@@ -527,7 +621,10 @@ fn particle_publication_edge_radii_match_the_reference() {
             .enumerate()
             .map(|(k, (name, radius))| {
                 let live = published.contains(&(1000 - k as u32));
-                format!("{name}: published {live}, reference live {}", live_radius(*radius))
+                format!(
+                    "{name}: published {live}, reference live {}",
+                    live_radius(*radius)
+                )
             })
             .collect();
         panic!("{failure}\n{}", verdicts.join("\n"));

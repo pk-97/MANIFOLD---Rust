@@ -19,9 +19,9 @@
 //! move with the navigation camera) and rasterized with a plain
 //! integer-stepped line draw.
 
-use manifold_node_engine::scene::camera::Camera;
 use manifold_core::fluid_domain::FluidDomainLayout;
 use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily, PhysicsGizmoShape};
+use manifold_node_engine::scene::camera::Camera;
 
 /// One overlay line segment in world space, with its RGBA8 color.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -79,8 +79,13 @@ pub const DOMAIN_BOX_COLOR: [u8; 4] = FRUSTUM_COLOR;
 /// `None` when it lies wholly behind. A line passing beside and behind the
 /// camera keeps its far end exactly where an unclipped point projects.
 pub fn clip_to_near(camera: &Camera, a: [f32; 3], b: [f32; 3]) -> Option<([f32; 3], [f32; 3])> {
-    let depth = |p: [f32; 3]| (0..3).map(|i| (p[i] - camera.pos[i]) * camera.fwd[i]).sum::<f32>();
-    let toward = |from: [f32; 3], to: [f32; 3], t: f32| [0, 1, 2].map(|i| from[i] + (to[i] - from[i]) * t);
+    let depth = |p: [f32; 3]| {
+        (0..3)
+            .map(|i| (p[i] - camera.pos[i]) * camera.fwd[i])
+            .sum::<f32>()
+    };
+    let toward =
+        |from: [f32; 3], to: [f32; 3], t: f32| [0, 1, 2].map(|i| from[i] + (to[i] - from[i]) * t);
     let near = camera.near.max(1e-4);
     let (da, db) = (depth(a), depth(b));
     match (da < near, db < near) {
@@ -116,11 +121,25 @@ pub fn box_lines(min: [f32; 3], max: [f32; 3], color: [u8; 4]) -> [WorldLine; 12
         [max[0], max[1], max[2]],
         [min[0], max[1], max[2]],
     ];
-    let edge = |a: usize, b: usize| WorldLine { a: corners[a], b: corners[b], color, caps: true };
+    let edge = |a: usize, b: usize| WorldLine {
+        a: corners[a],
+        b: corners[b],
+        color,
+        caps: true,
+    };
     [
-        edge(0, 1), edge(1, 2), edge(2, 3), edge(3, 0),
-        edge(4, 5), edge(5, 6), edge(6, 7), edge(7, 4),
-        edge(0, 4), edge(1, 5), edge(2, 6), edge(3, 7),
+        edge(0, 1),
+        edge(1, 2),
+        edge(2, 3),
+        edge(3, 0),
+        edge(4, 5),
+        edge(5, 6),
+        edge(6, 7),
+        edge(7, 4),
+        edge(0, 4),
+        edge(1, 5),
+        edge(2, 6),
+        edge(3, 7),
     ]
 }
 
@@ -146,7 +165,11 @@ const LATTICE_COLOR: [u8; 4] = [230, 200, 60, 70];
 pub fn lattice_faces(layout: &FluidDomainLayout, eye: [f32; 3], fwd: [f32; 3]) -> [f32; 3] {
     std::array::from_fn(|k| {
         let (lo, hi) = (layout.min[k], layout.min[k] + layout.size[k]);
-        let toward_max = if eye[k] > lo && eye[k] < hi { fwd[k] >= 0.0 } else { eye[k] < lo + layout.size[k] * 0.5 };
+        let toward_max = if eye[k] > lo && eye[k] < hi {
+            fwd[k] >= 0.0
+        } else {
+            eye[k] < lo + layout.size[k] * 0.5
+        };
         if toward_max { hi } else { lo }
     })
 }
@@ -186,9 +209,15 @@ pub fn fluid_lattice_lines(
         });
         let (i, j) = ((k + 1) % 3, (k + 2) % 3);
         for (along, across) in [(i, j), (j, i)] {
-            let cap = layout.cells[across].saturating_sub(1).div_ceil(LATTICE_LINES_PER_AXIS);
+            let cap = layout.cells[across]
+                .saturating_sub(1)
+                .div_ceil(LATTICE_LINES_PER_AXIS);
             let mut next = far;
-            next[across] += if far[across] == layout.min[across] { cell } else { -cell };
+            next[across] += if far[across] == layout.min[across] {
+                cell
+            } else {
+                -cell
+            };
             let thin = match screen_points(far, next) {
                 Some(gap) if gap > 1e-4 => (LATTICE_MIN_POINTS / gap).ceil() as u32,
                 _ => 1,
@@ -202,7 +231,12 @@ pub fn fluid_lattice_lines(
                 a[along] = layout.min[along];
                 let mut b = a;
                 b[along] = layout.min[along] + layout.size[along];
-                out.push(WorldLine { a, b, color: LATTICE_COLOR, caps: false });
+                out.push(WorldLine {
+                    a,
+                    b,
+                    color: LATTICE_COLOR,
+                    caps: false,
+                });
                 step += stride;
             }
         }
@@ -220,10 +254,28 @@ pub fn grid_lines(extent: f32, step: f32) -> Vec<WorldLine> {
     let steps = (extent / step).floor() as i32;
     for i in -steps..=steps {
         let p = i as f32 * step;
-        let color = if i == 0 { GRID_AXIS_Z_COLOR } else { GRID_COLOR };
-        lines.push(WorldLine { a: [p, 0.0, -extent], b: [p, 0.0, extent], color, caps: false });
-        let color = if i == 0 { GRID_AXIS_X_COLOR } else { GRID_COLOR };
-        lines.push(WorldLine { a: [-extent, 0.0, p], b: [extent, 0.0, p], color, caps: false });
+        let color = if i == 0 {
+            GRID_AXIS_Z_COLOR
+        } else {
+            GRID_COLOR
+        };
+        lines.push(WorldLine {
+            a: [p, 0.0, -extent],
+            b: [p, 0.0, extent],
+            color,
+            caps: false,
+        });
+        let color = if i == 0 {
+            GRID_AXIS_X_COLOR
+        } else {
+            GRID_COLOR
+        };
+        lines.push(WorldLine {
+            a: [-extent, 0.0, p],
+            b: [extent, 0.0, p],
+            color,
+            caps: false,
+        });
     }
     lines
 }
@@ -235,9 +287,24 @@ pub fn grid_lines(extent: f32, step: f32) -> Vec<WorldLine> {
 pub fn light_billboard_lines(pos: [f32; 3], size: f32) -> [WorldLine; 3] {
     let [x, y, z] = pos;
     [
-        WorldLine { a: [x - size, y, z], b: [x + size, y, z], color: LIGHT_COLOR, caps: false },
-        WorldLine { a: [x, y - size, z], b: [x, y + size, z], color: LIGHT_COLOR, caps: false },
-        WorldLine { a: [x, y, z - size], b: [x, y, z + size], color: LIGHT_COLOR, caps: false },
+        WorldLine {
+            a: [x - size, y, z],
+            b: [x + size, y, z],
+            color: LIGHT_COLOR,
+            caps: false,
+        },
+        WorldLine {
+            a: [x, y - size, z],
+            b: [x, y + size, z],
+            color: LIGHT_COLOR,
+            caps: false,
+        },
+        WorldLine {
+            a: [x, y, z - size],
+            b: [x, y, z + size],
+            color: LIGHT_COLOR,
+            caps: false,
+        },
     ]
 }
 
@@ -263,15 +330,34 @@ pub fn physics_gizmo_color(family: PhysicsGizmoFamily) -> [u8; 4] {
 /// A physics gizmo's wireframe into `out`; returns how many lines it
 /// wrote. A box draws its 12 edges, a sphere three rings around a centre
 /// cross, an arrow its shaft and a four-line head.
-pub fn physics_gizmo_lines(gizmo: &PhysicsGizmo, out: &mut [WorldLine; PHYSICS_GIZMO_LINES]) -> usize {
+pub fn physics_gizmo_lines(
+    gizmo: &PhysicsGizmo,
+    out: &mut [WorldLine; PHYSICS_GIZMO_LINES],
+) -> usize {
     let color = physics_gizmo_color(gizmo.family);
-    let line = |a, b| WorldLine { a, b, color, caps: false };
-    let edge = |a, b| WorldLine { a, b, color, caps: true };
-    let add = |p: [f32; 3], d: [f32; 3], s: f32| -> [f32; 3] { std::array::from_fn(|i| p[i] + d[i] * s) };
+    let line = |a, b| WorldLine {
+        a,
+        b,
+        color,
+        caps: false,
+    };
+    let edge = |a, b| WorldLine {
+        a,
+        b,
+        color,
+        caps: true,
+    };
+    let add =
+        |p: [f32; 3], d: [f32; 3], s: f32| -> [f32; 3] { std::array::from_fn(|i| p[i] + d[i] * s) };
     match gizmo.shape {
-        PhysicsGizmoShape::Box { center, half, rotation } => {
+        PhysicsGizmoShape::Box {
+            center,
+            half,
+            rotation,
+        } => {
             let corner = |k: usize| {
-                let local = std::array::from_fn(|i| if k >> i & 1 == 1 { half[i] } else { -half[i] });
+                let local =
+                    std::array::from_fn(|i| if k >> i & 1 == 1 { half[i] } else { -half[i] });
                 add(center, rotate(rotation, local), 1.0)
             };
             // Corners differ in one bit along an edge.
@@ -319,7 +405,11 @@ pub fn physics_gizmo_lines(gizmo: &PhysicsGizmo, out: &mut [WorldLine; PHYSICS_G
             }
             let dir = d.map(|c| c / length);
             // Any axis not along the arrow gives two perpendiculars.
-            let pick = if dir[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+            let pick = if dir[0].abs() < 0.9 {
+                [1.0, 0.0, 0.0]
+            } else {
+                [0.0, 1.0, 0.0]
+            };
             let p = normalize(cross(dir, pick));
             let q = cross(dir, p);
             let base = add(to, dir, -0.2 * length);
@@ -332,7 +422,11 @@ pub fn physics_gizmo_lines(gizmo: &PhysicsGizmo, out: &mut [WorldLine; PHYSICS_G
 }
 
 fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 fn normalize(v: [f32; 3]) -> [f32; 3] {
@@ -357,7 +451,9 @@ pub fn camera_frustum_lines(cam: &Camera, aspect: f32, far_visual: f32) -> Vec<W
         manifold_node_engine::scene::camera::CameraMode::Perspective { fov_y } => {
             (fov_y * 0.5).tan() * far_visual
         }
-        manifold_node_engine::scene::camera::CameraMode::Orthographic { half_height } => half_height,
+        manifold_node_engine::scene::camera::CameraMode::Orthographic { half_height } => {
+            half_height
+        }
     };
     let half_w = half_h * aspect;
     let center = [
@@ -377,14 +473,54 @@ pub fn camera_frustum_lines(cam: &Camera, aspect: f32, far_visual: f32) -> Vec<W
     let bl = corner(-1.0, -1.0);
     let br = corner(1.0, -1.0);
     vec![
-        WorldLine { a: cam.pos, b: tl, color: FRUSTUM_COLOR, caps: true },
-        WorldLine { a: cam.pos, b: tr, color: FRUSTUM_COLOR, caps: true },
-        WorldLine { a: cam.pos, b: bl, color: FRUSTUM_COLOR, caps: true },
-        WorldLine { a: cam.pos, b: br, color: FRUSTUM_COLOR, caps: true },
-        WorldLine { a: tl, b: tr, color: FRUSTUM_COLOR, caps: true },
-        WorldLine { a: tr, b: br, color: FRUSTUM_COLOR, caps: true },
-        WorldLine { a: br, b: bl, color: FRUSTUM_COLOR, caps: true },
-        WorldLine { a: bl, b: tl, color: FRUSTUM_COLOR, caps: true },
+        WorldLine {
+            a: cam.pos,
+            b: tl,
+            color: FRUSTUM_COLOR,
+            caps: true,
+        },
+        WorldLine {
+            a: cam.pos,
+            b: tr,
+            color: FRUSTUM_COLOR,
+            caps: true,
+        },
+        WorldLine {
+            a: cam.pos,
+            b: bl,
+            color: FRUSTUM_COLOR,
+            caps: true,
+        },
+        WorldLine {
+            a: cam.pos,
+            b: br,
+            color: FRUSTUM_COLOR,
+            caps: true,
+        },
+        WorldLine {
+            a: tl,
+            b: tr,
+            color: FRUSTUM_COLOR,
+            caps: true,
+        },
+        WorldLine {
+            a: tr,
+            b: br,
+            color: FRUSTUM_COLOR,
+            caps: true,
+        },
+        WorldLine {
+            a: br,
+            b: bl,
+            color: FRUSTUM_COLOR,
+            caps: true,
+        },
+        WorldLine {
+            a: bl,
+            b: tl,
+            color: FRUSTUM_COLOR,
+            caps: true,
+        },
     ]
 }
 
@@ -413,7 +549,11 @@ pub fn project_lines(
         .filter_map(|l| {
             let a = editor_cam.project_to_pixel(l.a, width, height)?;
             let b = editor_cam.project_to_pixel(l.b, width, height)?;
-            Some(ScreenLine { a: (a.px, a.py), b: (b.px, b.py), color: l.color })
+            Some(ScreenLine {
+                a: (a.px, a.py),
+                b: (b.px, b.py),
+                color: l.color,
+            })
         })
         .collect()
 }
@@ -455,7 +595,14 @@ pub fn composite_overlay_lines_rgba8(pixels: &mut [u8], w: u32, h: u32, lines: &
     }
 }
 
-fn draw_line_rgba8(pixels: &mut [u8], w: u32, h: u32, a: (f32, f32), b: (f32, f32), color: [u8; 4]) {
+fn draw_line_rgba8(
+    pixels: &mut [u8],
+    w: u32,
+    h: u32,
+    a: (f32, f32),
+    b: (f32, f32),
+    color: [u8; 4],
+) {
     let (x0, y0) = a;
     let (x1, y1) = b;
     let dx = x1 - x0;
@@ -514,12 +661,15 @@ mod tests {
 
     #[test]
     fn fluid_domain_lines_are_twelve_unique_edges_at_translated_bounds() {
-        let lines = fluid_domain_lines(FluidDomainLayout {
-            min: [2.0, -3.0, 4.0],
-            size: [5.0, 6.0, 7.0],
-            cells: [8, 8, 8],
-            cell_size: 1.0,
-        }, DOMAIN_BOX_COLOR);
+        let lines = fluid_domain_lines(
+            FluidDomainLayout {
+                min: [2.0, -3.0, 4.0],
+                size: [5.0, 6.0, 7.0],
+                cells: [8, 8, 8],
+                cell_size: 1.0,
+            },
+            DOMAIN_BOX_COLOR,
+        );
         assert_eq!(lines.len(), 12);
         let min = [2.0, -3.0, 4.0];
         let max = [7.0, 3.0, 11.0];
@@ -542,7 +692,12 @@ mod tests {
 
     #[test]
     fn physics_gizmos_draw_their_shapes_in_their_family_color() {
-        let blank = WorldLine { a: [0.0; 3], b: [0.0; 3], color: [0; 4], caps: false };
+        let blank = WorldLine {
+            a: [0.0; 3],
+            b: [0.0; 3],
+            color: [0; 4],
+            caps: false,
+        };
         let mut lines = [blank; PHYSICS_GIZMO_LINES];
         let close = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-5);
 
@@ -550,34 +705,73 @@ mod tests {
         let s = std::f32::consts::FRAC_1_SQRT_2;
         let turned = PhysicsGizmo {
             family: PhysicsGizmoFamily::Collider,
-            shape: PhysicsGizmoShape::Box { center: [1.0, 0.0, 0.0], half: [0.5, 0.1, 0.2], rotation: [0.0, s, 0.0, s] },
+            shape: PhysicsGizmoShape::Box {
+                center: [1.0, 0.0, 0.0],
+                half: [0.5, 0.1, 0.2],
+                rotation: [0.0, s, 0.0, s],
+            },
         };
         let n = physics_gizmo_lines(&turned, &mut lines);
         assert_eq!(n, 12);
         for line in &lines[..n] {
             for p in [line.a, line.b] {
-                assert!((p[0] - 1.0).abs() <= 0.2 + 1e-5 && p[1].abs() <= 0.1 + 1e-5 && p[2].abs() <= 0.5 + 1e-5, "{p:?}");
+                assert!(
+                    (p[0] - 1.0).abs() <= 0.2 + 1e-5
+                        && p[1].abs() <= 0.1 + 1e-5
+                        && p[2].abs() <= 0.5 + 1e-5,
+                    "{p:?}"
+                );
             }
-            assert_eq!(line.color, physics_gizmo_color(PhysicsGizmoFamily::Collider));
+            assert_eq!(
+                line.color,
+                physics_gizmo_color(PhysicsGizmoFamily::Collider)
+            );
         }
 
-        let sphere = PhysicsGizmo { family: PhysicsGizmoFamily::Force, shape: PhysicsGizmoShape::Sphere { center: [0.0, 1.0, 0.0], radius: 2.0 } };
-        assert_eq!(physics_gizmo_lines(&sphere, &mut lines), PHYSICS_GIZMO_LINES);
+        let sphere = PhysicsGizmo {
+            family: PhysicsGizmoFamily::Force,
+            shape: PhysicsGizmoShape::Sphere {
+                center: [0.0, 1.0, 0.0],
+                radius: 2.0,
+            },
+        };
+        assert_eq!(
+            physics_gizmo_lines(&sphere, &mut lines),
+            PHYSICS_GIZMO_LINES
+        );
         for line in &lines[..3 * RING_SEGMENTS] {
             let r = ((line.a[0]).powi(2) + (line.a[1] - 1.0).powi(2) + line.a[2].powi(2)).sqrt();
             assert!((r - 2.0).abs() < 1e-4, "ring point at radius {r}");
         }
 
-        let arrow = PhysicsGizmo { family: PhysicsGizmoFamily::Force, shape: PhysicsGizmoShape::Arrow { from: [0.0; 3], to: [0.0, 0.0, 1.0] } };
+        let arrow = PhysicsGizmo {
+            family: PhysicsGizmoFamily::Force,
+            shape: PhysicsGizmoShape::Arrow {
+                from: [0.0; 3],
+                to: [0.0, 0.0, 1.0],
+            },
+        };
         assert_eq!(physics_gizmo_lines(&arrow, &mut lines), 5);
         assert!(close(lines[0].b, [0.0, 0.0, 1.0]));
-        assert!(lines[1..5].iter().all(|line| close(line.a, [0.0, 0.0, 1.0]) && (line.b[2] - 0.8).abs() < 1e-5));
+        assert!(
+            lines[1..5]
+                .iter()
+                .all(|line| close(line.a, [0.0, 0.0, 1.0]) && (line.b[2] - 0.8).abs() < 1e-5)
+        );
 
         let families = [
-            PhysicsGizmoFamily::Force, PhysicsGizmoFamily::Collider, PhysicsGizmoFamily::Body,
-            PhysicsGizmoFamily::Source, PhysicsGizmoFamily::Drain, PhysicsGizmoFamily::Fill,
+            PhysicsGizmoFamily::Force,
+            PhysicsGizmoFamily::Collider,
+            PhysicsGizmoFamily::Body,
+            PhysicsGizmoFamily::Source,
+            PhysicsGizmoFamily::Drain,
+            PhysicsGizmoFamily::Fill,
         ];
-        let mut colors: Vec<_> = families.map(physics_gizmo_color).into_iter().chain([FRUSTUM_COLOR, LIGHT_COLOR]).collect();
+        let mut colors: Vec<_> = families
+            .map(physics_gizmo_color)
+            .into_iter()
+            .chain([FRUSTUM_COLOR, LIGHT_COLOR])
+            .collect();
         colors.sort();
         colors.dedup();
         assert_eq!(colors.len(), 8, "every family has its own color");
@@ -601,27 +795,63 @@ mod tests {
 
     #[test]
     fn camera_frustum_has_eight_edges() {
-        let cam = Camera::look_at([0.0, 5.0, -5.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 0.9, 0.1, 100.0);
+        let cam = Camera::look_at(
+            [0.0, 5.0, -5.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            0.9,
+            0.1,
+            100.0,
+        );
         let lines = camera_frustum_lines(&cam, 16.0 / 9.0, 3.0);
         assert_eq!(lines.len(), 8);
     }
 
     #[test]
     fn project_lines_drops_behind_camera_segments() {
-        let cam = Camera::look_at([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], 0.9, 0.1, 100.0);
+        let cam = Camera::look_at(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, -1.0],
+            [0.0, 1.0, 0.0],
+            0.9,
+            0.1,
+            100.0,
+        );
         // A line entirely behind the camera (positive Z, looking down -Z).
-        let behind = WorldLine { a: [0.0, 0.0, 5.0], b: [1.0, 0.0, 5.0], color: [255, 0, 0, 255], caps: false };
-        let visible = WorldLine { a: [0.0, 0.0, -5.0], b: [1.0, 0.0, -5.0], color: [255, 0, 0, 255], caps: false };
+        let behind = WorldLine {
+            a: [0.0, 0.0, 5.0],
+            b: [1.0, 0.0, 5.0],
+            color: [255, 0, 0, 255],
+            caps: false,
+        };
+        let visible = WorldLine {
+            a: [0.0, 0.0, -5.0],
+            b: [1.0, 0.0, -5.0],
+            color: [255, 0, 0, 255],
+            caps: false,
+        };
         let projected = project_lines(&cam, 100, 100, &[behind, visible]);
-        assert_eq!(projected.len(), 1, "only the in-front line should survive projection");
+        assert_eq!(
+            projected.len(),
+            1,
+            "only the in-front line should survive projection"
+        );
     }
 
     #[test]
     fn composite_draws_pixels_without_panicking_at_edges() {
         let mut pixels = vec![0u8; 4 * 4 * 4];
         let lines = [
-            ScreenLine { a: (-2.0, -2.0), b: (10.0, 10.0), color: [255, 0, 0, 255] },
-            ScreenLine { a: (1.0, 1.0), b: (2.0, 2.0), color: [0, 255, 0, 255] },
+            ScreenLine {
+                a: (-2.0, -2.0),
+                b: (10.0, 10.0),
+                color: [255, 0, 0, 255],
+            },
+            ScreenLine {
+                a: (1.0, 1.0),
+                b: (2.0, 2.0),
+                color: [0, 255, 0, 255],
+            },
         ];
         composite_overlay_lines_rgba8(&mut pixels, 4, 4, &lines);
         // Something inside bounds got painted.
@@ -631,7 +861,11 @@ mod tests {
     #[test]
     fn composite_is_a_no_op_when_alpha_zero() {
         let mut pixels = vec![10u8; 4 * 4 * 4];
-        let lines = [ScreenLine { a: (0.0, 0.0), b: (3.0, 3.0), color: [255, 0, 0, 0] }];
+        let lines = [ScreenLine {
+            a: (0.0, 0.0),
+            b: (3.0, 3.0),
+            color: [255, 0, 0, 0],
+        }];
         composite_overlay_lines_rgba8(&mut pixels, 4, 4, &lines);
         // Alpha 0 should leave rgb untouched (only forces alpha channel to 255).
         for px in pixels.chunks_exact(4) {

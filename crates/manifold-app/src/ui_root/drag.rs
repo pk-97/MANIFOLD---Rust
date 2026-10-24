@@ -12,7 +12,11 @@ impl UIRoot {
     /// timeline tracks → nobody. `node_id` is accepted for signature parity
     /// with the design's committed call (`docs/DRAG_CAPTURE_DESIGN.md` section 3.2)
     /// — no resolution step needs it today; every claim is origin/state based.
-    pub(crate) fn resolve_drag_owner(&mut self, origin: Vec2, _node_id: Option<NodeId>) -> Option<DragOwner> {
+    pub(crate) fn resolve_drag_owner(
+        &mut self,
+        origin: Vec2,
+        _node_id: Option<NodeId>,
+    ) -> Option<DragOwner> {
         // 1. Open overlays, z-top-down — same walk as `route_overlay_event`,
         // but this pass only reads `is_open`/`modality`/`claims_drag`; it
         // never delivers the event (that still happens through the normal
@@ -212,7 +216,10 @@ mod drag_capture_tests {
     fn modal_overlay_claims_drag_unconditionally() {
         let mut ui = new_root();
         ui.settings_popup.open();
-        assert!(matches!(ui.settings_popup.modality(), Modality::Modal { .. }));
+        assert!(matches!(
+            ui.settings_popup.modality(),
+            Modality::Modal { .. }
+        ));
 
         let far_away = Vec2::new(W - 1.0, H - 1.0);
         let owner = ui.resolve_drag_owner(far_away, None);
@@ -239,7 +246,10 @@ mod drag_capture_tests {
         let tracks_origin = center(ui.viewport.tracks_rect());
         let owner = ui.resolve_drag_owner(tracks_origin, None);
 
-        assert!(!ui.dropdown.is_open(), "foreign drag dismisses the dropdown");
+        assert!(
+            !ui.dropdown.is_open(),
+            "foreign drag dismisses the dropdown"
+        );
         assert_eq!(
             owner,
             Some(DragOwner::TimelineTracks),
@@ -255,7 +265,10 @@ mod drag_capture_tests {
         let mut ui = new_root();
 
         let ruler_origin = center(ui.viewport.ruler_rect());
-        assert_eq!(ui.resolve_drag_owner(ruler_origin, None), Some(DragOwner::Ruler));
+        assert_eq!(
+            ui.resolve_drag_owner(ruler_origin, None),
+            Some(DragOwner::Ruler)
+        );
 
         let tracks_origin = center(ui.viewport.tracks_rect());
         assert_eq!(
@@ -281,7 +294,11 @@ mod drag_capture_tests {
         let _ = ui.drain_viewport_events();
         ui.pointer_event(Vec2::new(-100.0, -100.0), PointerAction::Up, 0.05);
         let _ = ui.process_events();
-        assert!(ui.drain_viewport_events().iter().any(|event| matches!(event, UIEvent::PointerUp { .. })));
+        assert!(
+            ui.drain_viewport_events()
+                .iter()
+                .any(|event| matches!(event, UIEvent::PointerUp { .. }))
+        );
         assert!(!ui.tracks_press_active);
     }
 
@@ -289,7 +306,10 @@ mod drag_capture_tests {
     fn drag_end_stashes_by_ownership_regardless_of_release_position() {
         let mut ui = new_root();
         let far_outside = Vec2::new(ui.viewport.tracks_rect().x_max() + 500.0, -200.0);
-        let drag_end = UIEvent::DragEnd { node_id: None, pos: far_outside };
+        let drag_end = UIEvent::DragEnd {
+            node_id: None,
+            pos: far_outside,
+        };
 
         ui.drag_owner = Some(DragOwner::TimelineTracks);
         assert!(
@@ -408,11 +428,14 @@ mod drag_capture_tests {
             None,
         );
         let (low_hz, mid_hz, fmin, fmax) = (200.0_f32, 2000.0_f32, 20.0_f32, 20_000.0_f32);
-        ui.audio_setup_panel.set_scope_bands(low_hz, mid_hz, fmin, fmax);
+        ui.audio_setup_panel
+            .set_scope_bands(low_hz, mid_hz, fmin, fmax);
         ui.build();
 
-        let scope =
-            ui.audio_setup_panel.scope_rect().expect("scope present once open, sent, and built");
+        let scope = ui
+            .audio_setup_panel
+            .scope_rect()
+            .expect("scope present once open, sent, and built");
         // Same log-scale mapping `AudioSetupPanel::scope_line_y` documents on
         // `set_scope_bands` — reproduced here from the public scope_rect() +
         // the bands just set, rather than reaching into the panel's private
@@ -425,12 +448,16 @@ mod drag_capture_tests {
         ui.pointer_event(origin, PointerAction::Down, 0.0);
         let down_actions = ui.process_events();
         assert!(
-            down_actions
-                .iter()
-                .any(|a| matches!(a, PanelAction::Scrub(ValueRef::AudioCrossover(_), ScrubPhase::Begin))),
+            down_actions.iter().any(|a| matches!(
+                a,
+                PanelAction::Scrub(ValueRef::AudioCrossover(_), ScrubPhase::Begin)
+            )),
             "PointerDown on the divider should arm the band grab: {down_actions:?}"
         );
-        assert!(ui.audio_setup_panel.is_dragging_band(), "divider grab should be armed");
+        assert!(
+            ui.audio_setup_panel.is_dragging_band(),
+            "divider grab should be armed"
+        );
 
         // First Move: only 1px past the origin. With the global threshold
         // (4px) this would NOT begin a drag — proving this requires the
@@ -451,9 +478,13 @@ mod drag_capture_tests {
         ui.pointer_event(move2, PointerAction::Move, 0.02);
         let move2_actions = ui.process_events();
         assert!(
-            move2_actions
-                .iter()
-                .any(|a| matches!(a, PanelAction::Scrub(ValueRef::AudioCrossover(BandDivider::Low), ScrubPhase::Move(..)))),
+            move2_actions.iter().any(|a| matches!(
+                a,
+                PanelAction::Scrub(
+                    ValueRef::AudioCrossover(BandDivider::Low),
+                    ScrubPhase::Move(..)
+                )
+            )),
             "the Drag following the immediate DragBegin should yield a \
              crossover Move(Low) scrub action: {move2_actions:?}"
         );
@@ -471,8 +502,12 @@ mod drag_capture_tests {
     /// case a consumed press can cause.
     fn settle(ui: &mut UIRoot) {
         let mut signals = crate::ui_frame::UiFrameSignals::default();
-        signals.rebuild.insert(crate::frame_plan::MainRegion::Overlays);
-        signals.rebuild.insert(crate::frame_plan::MainRegion::AudioDock);
+        signals
+            .rebuild
+            .insert(crate::frame_plan::MainRegion::Overlays);
+        signals
+            .rebuild
+            .insert(crate::frame_plan::MainRegion::AudioDock);
         crate::ui_frame::apply_ui_frame_invalidations(ui, None, &mut signals);
     }
 
@@ -497,7 +532,8 @@ mod drag_capture_tests {
             }],
             None,
         );
-        ui.audio_setup_panel.set_scope_bands(200.0, 2000.0, 20.0, 20_000.0);
+        ui.audio_setup_panel
+            .set_scope_bands(200.0, 2000.0, 20.0, 20_000.0);
         ui.build();
     }
 
@@ -527,7 +563,11 @@ mod drag_capture_tests {
             .floor_minus_id()
             .expect("floor stepper builds when a send is selected");
         let fb = ui.tree.get_bounds(floor0);
-        assert_ne!(fb, Rect::ZERO, "floor button must be live in the built tree");
+        assert_ne!(
+            fb,
+            Rect::ZERO,
+            "floor button must be live in the built tree"
+        );
         let p = Vec2::new(fb.x + fb.width * 0.5, fb.y + fb.height * 0.5);
         let w_at_build = ui.tree.widget_of(floor0);
 
@@ -535,7 +575,10 @@ mod drag_capture_tests {
         ui.pointer_event(p, PointerAction::Down, 0.0);
         let _ = ui.process_events();
         settle(&mut ui); // the consumed PointerDown rebuilt the overlay
-        let w_after_rebuild = ui.audio_setup_panel.floor_minus_id().map(|n| ui.tree.widget_of(n));
+        let w_after_rebuild = ui
+            .audio_setup_panel
+            .floor_minus_id()
+            .map(|n| ui.tree.widget_of(n));
         ui.pointer_event(p, PointerAction::Up, 0.05);
         let click1 = ui.process_events();
         settle(&mut ui);
@@ -549,7 +592,12 @@ mod drag_capture_tests {
 
         let steps = |acts: &[PanelAction]| {
             acts.iter()
-                .filter(|a| matches!(a, PanelAction::AudioSetup(AudioSetupAction::AudioSendFloorStep(..))))
+                .filter(|a| {
+                    matches!(
+                        a,
+                        PanelAction::AudioSetup(AudioSetupAction::AudioSendFloorStep(..))
+                    )
+                })
                 .count()
         };
 
@@ -568,7 +616,11 @@ mod drag_capture_tests {
             "the FIRST click on the Floor stepper must fire one step — a second \
              click should not be needed. click1={click1:?}"
         );
-        assert_eq!(steps(&click2), 1, "the second click must also fire one step: click2={click2:?}");
+        assert_eq!(
+            steps(&click2),
+            1,
+            "the second click must also fire one step: click2={click2:?}"
+        );
     }
 
     /// Popup click-through regression: an event an overlay consumed must never

@@ -465,12 +465,7 @@ impl GraphSnapshot {
                             current_value: param_default_to_f32(&current),
                             range: pd.range,
                             enum_labels: if matches!(pd.ty, ParamType::Enum) {
-                                Some(
-                                    pd.enum_values
-                                        .iter()
-                                        .map(|s| (*s).to_string())
-                                        .collect(),
-                                )
+                                Some(pd.enum_values.iter().map(|s| (*s).to_string()).collect())
                             } else {
                                 None
                             },
@@ -547,7 +542,10 @@ impl GraphSnapshot {
         {
             return Self::from_def_structural(def, &registry);
         }
-        let graph = match def.clone().into_graph(&registry, &crate::scene::mesh_change::PreparedMeshRules::default()) {
+        let graph = match def.clone().into_graph(
+            &registry,
+            &crate::scene::mesh_change::PreparedMeshRules::default(),
+        ) {
             Ok(g) => g,
             Err(e) => {
                 eprintln!(
@@ -644,7 +642,11 @@ fn snapshot_level(
                 type_id: dn.type_id.clone(),
                 title: "Scene".to_string(),
                 inputs: Vec::new(),
-                outputs: dn.group.as_deref().map(|group| iface_ports(&group.interface.outputs)).unwrap_or_default(),
+                outputs: dn
+                    .group
+                    .as_deref()
+                    .map(|group| iface_ports(&group.interface.outputs))
+                    .unwrap_or_default(),
                 parameters: Vec::new(),
                 editor_pos: dn.editor_pos,
                 breaks_dependency_cycle: false,
@@ -680,7 +682,9 @@ fn snapshot_level(
                 type_id: dn.type_id.clone(),
                 title: "Group Input".to_string(),
                 inputs: Vec::new(),
-                outputs: parent_interface.map(|i| iface_ports(&i.inputs)).unwrap_or_default(),
+                outputs: parent_interface
+                    .map(|i| iface_ports(&i.inputs))
+                    .unwrap_or_default(),
                 parameters: Vec::new(),
                 editor_pos: dn.editor_pos,
                 breaks_dependency_cycle: false,
@@ -694,7 +698,9 @@ fn snapshot_level(
                 node_handle: None,
                 type_id: dn.type_id.clone(),
                 title: "Group Output".to_string(),
-                inputs: parent_interface.map(|i| iface_ports(&i.outputs)).unwrap_or_default(),
+                inputs: parent_interface
+                    .map(|i| iface_ports(&i.outputs))
+                    .unwrap_or_default(),
                 outputs: Vec::new(),
                 parameters: Vec::new(),
                 editor_pos: dn.editor_pos,
@@ -774,7 +780,10 @@ fn node_snapshot_from_constructed(
         .parameters()
         .iter()
         .map(|pd| {
-            let current = params.get(pd.name.as_ref()).cloned().unwrap_or_else(|| pd.default.clone());
+            let current = params
+                .get(pd.name.as_ref())
+                .cloned()
+                .unwrap_or_else(|| pd.default.clone());
             let summary = match &current {
                 ParamValue::Table(t) => Some(format!("{}×{}", t.row_count(), t.col_count())),
                 ParamValue::String(s) => Some(string_summary(s)),
@@ -997,7 +1006,10 @@ mod tests {
 
     #[test]
     fn display_label_wgsl_marker_still_appends_after_the_compound_form() {
-        let label = display_label(super::super::primitives::wgsl_compute::TYPE_ID, Some("My Shader"));
+        let label = display_label(
+            super::super::primitives::wgsl_compute::TYPE_ID,
+            Some("My Shader"),
+        );
         assert!(label.ends_with(" (WGSL)"), "got {label:?}");
         assert!(label.contains("My Shader"), "got {label:?}");
     }
@@ -1061,7 +1073,11 @@ mod tests {
             wires: vec![w(0, "out", 10, "src"), w(10, "out", 2, "in")],
         };
 
-        let snap = GraphSnapshot::from_def_structural(&def, &crate::testkit::document_fixtures::registry()).expect("structural snapshot built");
+        let snap = GraphSnapshot::from_def_structural(
+            &def,
+            &crate::testkit::document_fixtures::registry(),
+        )
+        .expect("structural snapshot built");
 
         // The group node survived as a group, with interface ports + a body.
         let g = snap
@@ -1105,9 +1121,9 @@ mod tests {
     }
 
     impl EffectNode for StubNode {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -1178,9 +1194,9 @@ mod tests {
         params: Vec<ParamDef>,
     }
     impl EffectNode for ParamfulNode {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -1257,10 +1273,6 @@ mod tests {
         assert!((mode.default_value - 0.0).abs() < f32::EPSILON);
     }
 
-
-
-
-
     /// Regression: when a def's node ids are out of declaration order
     /// (e.g. ids appended later to an existing preset), `from_def` must
     /// still expose doc ids — not the throwaway runtime ids `into_graph`
@@ -1272,7 +1284,7 @@ mod tests {
     #[test]
     fn from_def_exposes_doc_ids_when_def_ids_are_out_of_order() {
         use manifold_core::effect_graph_def::{
-            EffectGraphDef, EffectGraphNode, EffectGraphWire, EFFECT_GRAPH_VERSION,
+            EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, EffectGraphWire,
         };
 
         // Visit order [10, 99] — runtime would assign 0, 1; doc ids are 10, 99.
@@ -1330,7 +1342,9 @@ mod tests {
 
     #[test]
     fn from_def_returns_none_on_unknown_type_id() {
-        use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EFFECT_GRAPH_VERSION};
+        use manifold_core::effect_graph_def::{
+            EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode,
+        };
 
         let bad_def = EffectGraphDef {
             version: EFFECT_GRAPH_VERSION,
@@ -1367,14 +1381,24 @@ mod tests {
         // Synthesize an ArrayType with a known Channels signature and
         // round-trip it through the From<PortType> conversion.
         const SPECS: &[ChannelSpec] = &[
-            ChannelSpec { name: well_known::POSITION, ty: ChannelElementType::Vec3F },
-            ChannelSpec { name: well_known::COLOR,    ty: ChannelElementType::Vec4F },
+            ChannelSpec {
+                name: well_known::POSITION,
+                ty: ChannelElementType::Vec3F,
+            },
+            ChannelSpec {
+                name: well_known::COLOR,
+                ty: ChannelElementType::Vec4F,
+            },
         ];
-        let port_type =
-            PortType::Array(ArrayType::of_channels(SPECS, MatchMode::Exact));
+        let port_type = PortType::Array(ArrayType::of_channels(SPECS, MatchMode::Exact));
         let snap = PortKindSnapshot::from(port_type);
         match snap {
-            PortKindSnapshot::Array { channels, match_mode, item_size, item_align } => {
+            PortKindSnapshot::Array {
+                channels,
+                match_mode,
+                item_size,
+                item_align,
+            } => {
                 assert_eq!(channels.len(), 2);
                 assert_eq!(channels[0].name, "position");
                 assert_eq!(channels[0].ty, "Vec3F");
@@ -1402,7 +1426,11 @@ mod tests {
         });
         let snap = PortKindSnapshot::from(port_type);
         match snap {
-            PortKindSnapshot::Array { channels, match_mode, .. } => {
+            PortKindSnapshot::Array {
+                channels,
+                match_mode,
+                ..
+            } => {
                 assert!(channels.is_empty());
                 assert_eq!(match_mode, ArrayMatchMode::Permissive);
             }
@@ -1412,16 +1440,18 @@ mod tests {
 
     #[test]
     fn unknown_channel_name_falls_back_to_hex_hash() {
-        use crate::ports::{ArrayType, ChannelElementType, ChannelName, ChannelSpec, MatchMode, PortType};
+        use crate::ports::{
+            ArrayType, ChannelElementType, ChannelName, ChannelSpec, MatchMode, PortType,
+        };
 
         // A channel name not in the well_known registry — debug_name
         // returns None and the snapshot formats the hash as hex.
         let local = ChannelName::from_str("internal_debug_counter");
-        let specs: &'static [ChannelSpec] = Box::leak(Box::new([
-            ChannelSpec { name: local, ty: ChannelElementType::U32 },
-        ]));
-        let port_type =
-            PortType::Array(ArrayType::of_channels(specs, MatchMode::Exact));
+        let specs: &'static [ChannelSpec] = Box::leak(Box::new([ChannelSpec {
+            name: local,
+            ty: ChannelElementType::U32,
+        }]));
+        let port_type = PortType::Array(ArrayType::of_channels(specs, MatchMode::Exact));
         let snap = PortKindSnapshot::from(port_type);
         match snap {
             PortKindSnapshot::Array { channels, .. } => {

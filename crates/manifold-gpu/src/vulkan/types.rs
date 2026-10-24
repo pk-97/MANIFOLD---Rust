@@ -70,7 +70,9 @@ impl GpuComputePipeline {
 
     /// The first binding the entry point references that `bindings` leaves out.
     pub fn unbound_binding(&self, bindings: &[crate::GpuBinding]) -> Option<u32> {
-        self.slot_map.bindings().find(|&wanted| !bindings.iter().any(|b| b.binding() == wanted))
+        self.slot_map
+            .bindings()
+            .find(|&wanted| !bindings.iter().any(|b| b.binding() == wanted))
     }
 }
 

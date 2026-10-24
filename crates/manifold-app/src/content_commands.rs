@@ -2,12 +2,12 @@
 //! Contains the `handle_command` method which routes `ContentCommand` variants
 //! to the appropriate subsystem on the content thread.
 
-use manifold_core::change::{ChangeSet, Part};
-use manifold_core::Seconds;
-use manifold_playback::external_sync::OffsetTake;
-use manifold_playback::transport_controller::TransportController;
 use manifold_compositor::generator_renderer::GeneratorRenderer;
+use manifold_core::Seconds;
+use manifold_core::change::{ChangeSet, Part};
+use manifold_playback::external_sync::OffsetTake;
 use manifold_playback::renderer::ClipRenderer;
+use manifold_playback::transport_controller::TransportController;
 
 use crate::content_command::ContentCommand;
 use crate::content_state::{ContentState, StateTx};
@@ -73,11 +73,16 @@ fn commit_recording(
     editing: &mut manifold_editing::service::EditingService,
     finish_active: bool,
 ) {
-    let commands = if finish_active { engine.finish_automation_recording() }
-        else { engine.take_finished_automation() };
+    let commands = if finish_active {
+        engine.finish_automation_recording()
+    } else {
+        engine.take_finished_automation()
+    };
     if !commands.is_empty() {
         if let Some(mut edit) = engine.project_edit() {
-            for command in commands { editing.execute(command, edit.reborrow()); }
+            for command in commands {
+                editing.execute(command, edit.reborrow());
+            }
         }
         engine.mark_compositor_dirty_now();
     }
@@ -89,7 +94,9 @@ fn prepare_project_save(
 ) -> Option<(manifold_core::project::Project, u64)> {
     engine.clear_automation_previews();
     commit_recording(engine, editing, true);
-    engine.project().map(|p| (p.clone(), editing.data_version()))
+    engine
+        .project()
+        .map(|p| (p.clone(), editing.data_version()))
 }
 
 /// Look up the existing Ableton mapping for a target (for undo snapshot).
@@ -129,10 +136,8 @@ impl ContentThread {
         self.engine.clear_automation_previews();
         let (renderers, project) = self.engine.split_renderer_project_edit();
         let applied = if let Some(project) = project {
-            self.editing_service.execute_with_validation(
-                command,
-                project,
-                |candidate| {
+            self.editing_service
+                .execute_with_validation(command, project, |candidate| {
                     let width = candidate.settings.output_width.max(1) as u32;
                     let height = candidate.settings.output_height.max(1) as u32;
                     self.content_pipeline.resize_renderers(
@@ -141,8 +146,7 @@ impl ContentThread {
                         height,
                         candidate.settings.render_scale,
                     )
-                },
-            )
+                })
         } else {
             false
         };
@@ -183,9 +187,14 @@ impl ContentThread {
         state_tx: &StateTx,
     ) -> ProjectLoadReport {
         let start = std::time::Instant::now();
-        let previous_diagnostic = self.graph_edit_diagnostic.as_ref().map(|event| event.sequence);
+        let previous_diagnostic = self
+            .graph_edit_diagnostic
+            .as_ref()
+            .map(|event| event.sequence);
         self.handle_command(ContentCommand::LoadProject(project));
-        let install_error = self.graph_edit_diagnostic.as_ref()
+        let install_error = self
+            .graph_edit_diagnostic
+            .as_ref()
             .filter(|event| Some(event.sequence) != previous_diagnostic)
             .map(|event| event.message.clone());
         let install_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -193,7 +202,11 @@ impl ContentThread {
         // Loading is stopped transport time, not a giant first playback tick.
         // Preserve the application clock used by sync; reset only frame pacing.
         self.timer.resume_after_load();
-        ProjectLoadReport { install_ms, install_error, warmup }
+        ProjectLoadReport {
+            install_ms,
+            install_error,
+            warmup,
+        }
     }
 
     /// Load-time warmup pass (WARMUP_DESIGN.md P1). Runs inside the
@@ -208,7 +221,8 @@ impl ContentThread {
         let start = std::time::Instant::now();
         // Warmup precedes render_content: install the new project's live
         // quality now rather than inheriting defaults or a previous export.
-        self.content_pipeline.apply_rt_quality(&mut self.engine, false);
+        self.content_pipeline
+            .apply_rt_quality(&mut self.engine, false);
         let Some(project) = self.engine.project() else {
             return WarmupReport::default();
         };
@@ -229,7 +243,10 @@ impl ContentThread {
             })
             .map(|(i, l)| (i, l.layer_id.clone(), l.name.clone()))
             .collect();
-        log::info!("[ContentThread] Warmup RT quality: {:?}", project.settings.rt_quality.realtime);
+        log::info!(
+            "[ContentThread] Warmup RT quality: {:?}",
+            project.settings.rt_quality.realtime
+        );
         let total = warmup_layers.len() as u32;
         // MANIFOLD_WARMUP_SCALE stretches every warm-up ceiling by that
         // factor, for headless runs under Metal shader validation, which
@@ -241,7 +258,9 @@ impl ContentThread {
             .unwrap_or(1.0);
         let defaults = manifold_core::WarmupBudget::default();
         let budget = manifold_core::WarmupBudget {
-            frame_interval: std::time::Duration::from_secs_f64(1.0 / f64::from(project.settings.frame_rate)),
+            frame_interval: std::time::Duration::from_secs_f64(
+                1.0 / f64::from(project.settings.frame_rate),
+            ),
             per_layer: defaults.per_layer.mul_f64(scale),
             total: defaults.total.mul_f64(scale),
             ..defaults
@@ -249,7 +268,10 @@ impl ContentThread {
         let mut pass = manifold_core::WarmupPass::new(budget, start);
         let run = pass.run();
         let initial_gpu_faults = manifold_gpu::gpu_fault::fault_count();
-        let mut report = WarmupReport { total_layers: total, ..WarmupReport::default() };
+        let mut report = WarmupReport {
+            total_layers: total,
+            ..WarmupReport::default()
+        };
         let mut any_budget_exhausted = false;
         let mut any_install_failed = false;
         let mut any_preparation_failed = false;
@@ -274,7 +296,8 @@ impl ContentThread {
             manifold_node_engine::freeze::install::pump_segment_results();
             if manifold_node_engine::runtime::prewarm_worker_pending_count() > 0 {
                 std::thread::sleep(run.clamp_wait(
-                    std::time::Instant::now(), std::time::Duration::from_millis(2),
+                    std::time::Instant::now(),
+                    std::time::Duration::from_millis(2),
                 ));
             }
             if !drain_logged && drain_start.elapsed() >= std::time::Duration::from_secs(1) {
@@ -288,7 +311,9 @@ impl ContentThread {
         }
         for (done, (layer_index, _layer_id, layer_name)) in warmup_layers.iter().enumerate() {
             if manifold_gpu::gpu_fault::fault_count() != initial_gpu_faults {
-                crate::abort_gpu_work("GPU failure observed during warmup; stopping remaining layers");
+                crate::abort_gpu_work(
+                    "GPU failure observed during warmup; stopping remaining layers",
+                );
             }
             // Abort early on shutdown so a quit during a long warm doesn't
             // hang. Everything taken off the channel is held back in arrival
@@ -368,18 +393,23 @@ impl ContentThread {
                             any_budget_exhausted = true;
                             layer_completed = false;
                         }
-                        outcome @ (manifold_core::WarmupOutcome::InstallFailed | manifold_core::WarmupOutcome::PreparationFailed) => {
+                        outcome @ (manifold_core::WarmupOutcome::InstallFailed
+                        | manifold_core::WarmupOutcome::PreparationFailed) => {
                             log::error!(
                                 "[ContentThread] Warmup preparation failed for layer '{}' ({}); \
                                  layer will be cold on stage",
                                 layer_name.as_str(),
                                 _layer_id.as_str()
                             );
-                            any_install_failed |= outcome == manifold_core::WarmupOutcome::InstallFailed;
-                            any_preparation_failed |= outcome == manifold_core::WarmupOutcome::PreparationFailed;
+                            any_install_failed |=
+                                outcome == manifold_core::WarmupOutcome::InstallFailed;
+                            any_preparation_failed |=
+                                outcome == manifold_core::WarmupOutcome::PreparationFailed;
                             layer_completed = false;
                         }
-                        manifold_core::WarmupOutcome::GpuFailed => crate::abort_gpu_work("GPU failure during project warmup"),
+                        manifold_core::WarmupOutcome::GpuFailed => {
+                            crate::abort_gpu_work("GPU failure during project warmup")
+                        }
                         manifold_core::WarmupOutcome::Quiescent => {}
                     }
                 }
@@ -389,7 +419,10 @@ impl ContentThread {
             // first clip is still active. Skip if the generator pre-roll or the
             // total load budget already ran out.
             let mut chain_warm_loops = 0;
-            while layer_completed && run.exhausted(std::time::Instant::now(), 0).is_none() && chain_warm_loops < 3 {
+            while layer_completed
+                && run.exhausted(std::time::Instant::now(), 0).is_none()
+                && chain_warm_loops < 3
+            {
                 chain_warm_loops += 1;
 
                 if let Some(layer) = self
@@ -397,19 +430,31 @@ impl ContentThread {
                     .project()
                     .and_then(|p| p.timeline.layers.get(*layer_index))
                 {
-                    let chain_outcome = self.content_pipeline.prewarm_layer_chains(layer, &mut pass);
-                    if matches!(chain_outcome, manifold_core::WarmupOutcome::InstallFailed | manifold_core::WarmupOutcome::PreparationFailed) {
+                    let chain_outcome =
+                        self.content_pipeline.prewarm_layer_chains(layer, &mut pass);
+                    if matches!(
+                        chain_outcome,
+                        manifold_core::WarmupOutcome::InstallFailed
+                            | manifold_core::WarmupOutcome::PreparationFailed
+                    ) {
                         let outcome = chain_outcome;
-                        any_install_failed |= outcome == manifold_core::WarmupOutcome::InstallFailed;
-                        any_preparation_failed |= outcome == manifold_core::WarmupOutcome::PreparationFailed;
+                        any_install_failed |=
+                            outcome == manifold_core::WarmupOutcome::InstallFailed;
+                        any_preparation_failed |=
+                            outcome == manifold_core::WarmupOutcome::PreparationFailed;
                         layer_completed = false;
-                        log::error!("[ContentThread] Warmup chain preparation failed for layer {}", layer_name);
+                        log::error!(
+                            "[ContentThread] Warmup chain preparation failed for layer {}",
+                            layer_name
+                        );
                         break;
                     }
                     if chain_outcome == manifold_core::WarmupOutcome::GpuFailed {
                         crate::abort_gpu_work("GPU failure during layer-chain warmup");
                     }
-                    if let manifold_core::WarmupOutcome::BudgetExhausted { cap, elapsed } = chain_outcome {
+                    if let manifold_core::WarmupOutcome::BudgetExhausted { cap, elapsed } =
+                        chain_outcome
+                    {
                         log::warn!(
                             "[ContentThread] Warmup chain budget exhausted ({cap:?}) for layer '{}' ({}) after {elapsed:.1?}; \
                              chain may first-touch once at play",
@@ -447,11 +492,12 @@ impl ContentThread {
                     }
                     manifold_node_engine::freeze::install::pump_segment_results();
                     if manifold_node_engine::runtime::prewarm_worker_pending_count() > 0 {
-                        std::thread::sleep(run.clamp_wait(std::time::Instant::now(), std::time::Duration::from_millis(2)));
+                        std::thread::sleep(run.clamp_wait(
+                            std::time::Instant::now(),
+                            std::time::Duration::from_millis(2),
+                        ));
                     }
-                    if !drain_logged
-                        && drain_start.elapsed() >= std::time::Duration::from_secs(1)
-                    {
+                    if !drain_logged && drain_start.elapsed() >= std::time::Duration::from_secs(1) {
                         log::info!("[ContentThread] Waiting for chain-fusion drain...");
                         drain_logged = true;
                     }
@@ -476,9 +522,12 @@ impl ContentThread {
                 id: _layer_id.to_string(),
                 name: layer_name.clone(),
                 elapsed_ms: layer_start.elapsed().as_secs_f64() * 1000.0,
-                completed: layer_completed && run.exhausted(std::time::Instant::now(), 0).is_none()
+                completed: layer_completed
+                    && run.exhausted(std::time::Instant::now(), 0).is_none()
                     && manifold_node_engine::runtime::prewarm_worker_pending_count() == 0,
-                allocated_gpu_bytes: self.content_pipeline.native_device()
+                allocated_gpu_bytes: self
+                    .content_pipeline
+                    .native_device()
                     .and_then(|device| device.modifier_memory_snapshot())
                     .map(|memory| memory.current_allocated_bytes),
             });
@@ -522,7 +571,10 @@ impl ContentThread {
         // topologies that built unfused get their fused views compiled and
         // re-built inside the warm, not swapped in on stage.
         if let Some(p) = self.engine.project() {
-            match self.content_pipeline.prewarm_clip_chain_topologies(p, &mut pass) {
+            match self
+                .content_pipeline
+                .prewarm_clip_chain_topologies(p, &mut pass)
+            {
                 manifold_core::WarmupOutcome::BudgetExhausted { cap, elapsed } => {
                     log::warn!(
                         "[ContentThread] Warmup clip-topology budget exhausted ({cap:?}) \
@@ -530,15 +582,19 @@ impl ContentThread {
                     );
                     any_budget_exhausted = true;
                 }
-                outcome @ (manifold_core::WarmupOutcome::InstallFailed | manifold_core::WarmupOutcome::PreparationFailed) => {
+                outcome @ (manifold_core::WarmupOutcome::InstallFailed
+                | manifold_core::WarmupOutcome::PreparationFailed) => {
                     log::error!(
                         "[ContentThread] Warmup clip-topology preparation failed; \
                          that chain topology will be cold on stage"
                     );
                     any_install_failed |= outcome == manifold_core::WarmupOutcome::InstallFailed;
-                    any_preparation_failed |= outcome == manifold_core::WarmupOutcome::PreparationFailed;
+                    any_preparation_failed |=
+                        outcome == manifold_core::WarmupOutcome::PreparationFailed;
                 }
-                manifold_core::WarmupOutcome::GpuFailed => crate::abort_gpu_work("GPU failure during project warmup"),
+                manifold_core::WarmupOutcome::GpuFailed => {
+                    crate::abort_gpu_work("GPU failure during project warmup")
+                }
                 manifold_core::WarmupOutcome::Quiescent => {}
             }
         }
@@ -559,16 +615,21 @@ impl ContentThread {
                         any_budget_exhausted = true;
                         break;
                     }
-                    outcome @ (manifold_core::WarmupOutcome::InstallFailed | manifold_core::WarmupOutcome::PreparationFailed) => {
+                    outcome @ (manifold_core::WarmupOutcome::InstallFailed
+                    | manifold_core::WarmupOutcome::PreparationFailed) => {
                         log::error!(
                             "[ContentThread] Warmup master-chain preparation failed; \
                              master FX will be cold on stage"
                         );
-                        any_install_failed |= outcome == manifold_core::WarmupOutcome::InstallFailed;
-                        any_preparation_failed |= outcome == manifold_core::WarmupOutcome::PreparationFailed;
+                        any_install_failed |=
+                            outcome == manifold_core::WarmupOutcome::InstallFailed;
+                        any_preparation_failed |=
+                            outcome == manifold_core::WarmupOutcome::PreparationFailed;
                         break;
                     }
-                    manifold_core::WarmupOutcome::GpuFailed => crate::abort_gpu_work("GPU failure during project warmup"),
+                    manifold_core::WarmupOutcome::GpuFailed => {
+                        crate::abort_gpu_work("GPU failure during project warmup")
+                    }
                     manifold_core::WarmupOutcome::Quiescent => {}
                 }
 
@@ -590,11 +651,12 @@ impl ContentThread {
                     }
                     manifold_node_engine::freeze::install::pump_segment_results();
                     if manifold_node_engine::runtime::prewarm_worker_pending_count() > 0 {
-                        std::thread::sleep(run.clamp_wait(std::time::Instant::now(), std::time::Duration::from_millis(2)));
+                        std::thread::sleep(run.clamp_wait(
+                            std::time::Instant::now(),
+                            std::time::Duration::from_millis(2),
+                        ));
                     }
-                    if !drain_logged
-                        && drain_start.elapsed() >= std::time::Duration::from_secs(1)
-                    {
+                    if !drain_logged && drain_start.elapsed() >= std::time::Duration::from_secs(1) {
                         log::info!("[ContentThread] Waiting for master-chain fusion drain...");
                         drain_logged = true;
                     }
@@ -606,7 +668,10 @@ impl ContentThread {
                     p.settings.output_width.max(1) as u32,
                     p.settings.output_height.max(1) as u32,
                 );
-                match self.content_pipeline.prewarm_group_chains(p, &mut pass, output_dims) {
+                match self
+                    .content_pipeline
+                    .prewarm_group_chains(p, &mut pass, output_dims)
+                {
                     manifold_core::WarmupOutcome::BudgetExhausted { cap, elapsed } => {
                         log::warn!(
                             "[ContentThread] Warmup group-chain budget exhausted ({cap:?}) after {elapsed:.1?}; \
@@ -614,15 +679,20 @@ impl ContentThread {
                         );
                         any_budget_exhausted = true;
                     }
-                    outcome @ (manifold_core::WarmupOutcome::InstallFailed | manifold_core::WarmupOutcome::PreparationFailed) => {
+                    outcome @ (manifold_core::WarmupOutcome::InstallFailed
+                    | manifold_core::WarmupOutcome::PreparationFailed) => {
                         log::error!(
                             "[ContentThread] Warmup group-chain preparation failed; \
                              group FX will be cold on stage"
                         );
-                        any_install_failed |= outcome == manifold_core::WarmupOutcome::InstallFailed;
-                        any_preparation_failed |= outcome == manifold_core::WarmupOutcome::PreparationFailed;
+                        any_install_failed |=
+                            outcome == manifold_core::WarmupOutcome::InstallFailed;
+                        any_preparation_failed |=
+                            outcome == manifold_core::WarmupOutcome::PreparationFailed;
                     }
-                    manifold_core::WarmupOutcome::GpuFailed => crate::abort_gpu_work("GPU failure during project warmup"),
+                    manifold_core::WarmupOutcome::GpuFailed => {
+                        crate::abort_gpu_work("GPU failure during project warmup")
+                    }
                     manifold_core::WarmupOutcome::Quiescent => {}
                 }
             }
@@ -632,7 +702,10 @@ impl ContentThread {
         if let Some(stats) = self.content_pipeline.finish_warmup_gpu_resources() {
             log::info!(
                 "[ContentThread] Warmup memory: {} allocations, {} bytes / {} budget, residency requested={}",
-                stats.allocation_count, stats.allocated_bytes, stats.budget_bytes, stats.requested
+                stats.allocation_count,
+                stats.allocated_bytes,
+                stats.budget_bytes,
+                stats.requested
             );
             report.residency = Some(WarmupResidencyReport {
                 allocation_count: stats.allocation_count,
@@ -667,11 +740,7 @@ impl ContentThread {
         } else {
             "completed"
         };
-        log::info!(
-            "[ContentThread] Warmup {} in {:?}",
-            status,
-            start.elapsed()
-        );
+        log::info!("[ContentThread] Warmup {} in {:?}", status, start.elapsed());
 
         // Warmup is the boundary where cold touches are *expected*. Reset the
         // detector after the pass so only first-touches that happen during the
@@ -679,23 +748,33 @@ impl ContentThread {
         manifold_core::cold_touch::reset_cold_touch_counts();
         report.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
         report.pending_workers = pending_workers;
-        report.completed = !report.budget_exhausted && !report.install_failed && !report.preparation_failed
-            && gpu_faults == 0 && pending_workers == 0;
+        report.completed = !report.budget_exhausted
+            && !report.install_failed
+            && !report.preparation_failed
+            && gpu_faults == 0
+            && pending_workers == 0;
         report
     }
 
     /// What the editor watches moved: its viewport request is stale. An
     /// output-preview request names its own scene and stays.
     fn clear_editor_scene_viewport(&mut self) {
-        if self.content_pipeline.scene_viewport_host() == Some(crate::scene_viewport::ViewportHost::GraphEditor) {
+        if self.content_pipeline.scene_viewport_host()
+            == Some(crate::scene_viewport::ViewportHost::GraphEditor)
+        {
             self.content_pipeline.set_scene_viewport_request(None);
         }
     }
 
     fn report_graph_edit_rejection(&mut self, message: String) {
         log::warn!("{message}");
-        let sequence = self.graph_edit_diagnostic.as_ref().map_or(1, |event| event.sequence.wrapping_add(1));
-        self.graph_edit_diagnostic = Some(std::sync::Arc::new(crate::content_state::GraphEditDiagnostic { sequence, message }));
+        let sequence = self
+            .graph_edit_diagnostic
+            .as_ref()
+            .map_or(1, |event| event.sequence.wrapping_add(1));
+        self.graph_edit_diagnostic = Some(std::sync::Arc::new(
+            crate::content_state::GraphEditDiagnostic { sequence, message },
+        ));
     }
 
     /// Apply finished recording takes through the same undo service as edits.
@@ -706,11 +785,20 @@ impl ContentThread {
     /// Handle a single command. Returns true if Shutdown.
     pub(crate) fn handle_command(&mut self, cmd: ContentCommand) -> bool {
         let settings_edit = match &cmd {
-            ContentCommand::Execute(c) | ContentCommand::ExecuteOnContent(c)
+            ContentCommand::Execute(c)
+            | ContentCommand::ExecuteOnContent(c)
             | ContentCommand::ExecuteSelecting(c, _) => c.touches().contains(Part::Settings),
-            ContentCommand::ExecuteBatch(cs, _) => cs.iter().any(|c| c.touches().contains(Part::Settings)),
-            ContentCommand::Undo => self.editing_service.peek_undo_touches().contains(Part::Settings),
-            ContentCommand::Redo => self.editing_service.peek_redo_touches().contains(Part::Settings),
+            ContentCommand::ExecuteBatch(cs, _) => {
+                cs.iter().any(|c| c.touches().contains(Part::Settings))
+            }
+            ContentCommand::Undo => self
+                .editing_service
+                .peek_undo_touches()
+                .contains(Part::Settings),
+            ContentCommand::Redo => self
+                .editing_service
+                .peek_redo_touches()
+                .contains(Part::Settings),
             ContentCommand::MutateProject { touches, .. } => touches.contains(Part::Settings),
             ContentCommand::ResetBpm => true,
             _ => false,
@@ -720,13 +808,18 @@ impl ContentThread {
         }
         let (cmd, pending_selection) = match cmd {
             ContentCommand::ExecuteSelecting(command, request) => {
-                let pending = self.engine.project().map(|project| request.capture(project));
+                let pending = self
+                    .engine
+                    .project()
+                    .map(|project| request.capture(project));
                 (ContentCommand::ExecuteOnContent(command), pending)
             }
             cmd => (cmd, None),
         };
         match cmd {
-            ContentCommand::ExecuteSelecting(..) => unreachable!("selection request normalized above"),
+            ContentCommand::ExecuteSelecting(..) => {
+                unreachable!("selection request normalized above")
+            }
             ContentCommand::Shutdown => return true,
 
             ContentCommand::WatchEffectGraph(_)
@@ -734,7 +827,8 @@ impl ContentThread {
             | ContentCommand::WatchGraphTarget(_) => {
                 self.clear_editor_scene_viewport();
                 // One unified watched target; only one canvas active at a time.
-                self.watched_graph_target = crate::graph_snapshot::watch_command_target(&cmd).flatten();
+                self.watched_graph_target =
+                    crate::graph_snapshot::watch_command_target(&cmd).flatten();
                 // Switching what's watched invalidates any node preview.
                 self.preview_graph_node = None;
                 self.modifier_preview_context = None;
@@ -742,10 +836,14 @@ impl ContentThread {
             ContentCommand::SetModifierPreviewContext { object } => {
                 self.clear_editor_scene_viewport();
                 self.modifier_preview_context = match &self.watched_graph_target {
-                    Some(manifold_core::GraphTarget::SceneModifier { modifier_id, .. }) =>
-                        Some(std::sync::Arc::new(manifold_node_engine::runtime::ModifierPreviewContext {
-                            modifier_id: modifier_id.clone(), object,
-                        })),
+                    Some(manifold_core::GraphTarget::SceneModifier { modifier_id, .. }) => {
+                        Some(std::sync::Arc::new(
+                            manifold_node_engine::runtime::ModifierPreviewContext {
+                                modifier_id: modifier_id.clone(),
+                                object,
+                            },
+                        ))
+                    }
                     _ => None,
                 };
             }
@@ -759,13 +857,13 @@ impl ContentThread {
                 // An editor request must still name what the editor watches; the
                 // output preview names its own scene (D7a).
                 if request.as_ref().is_none_or(|request| match request.host {
-                    crate::scene_viewport::ViewportHost::GraphEditor =>
+                    crate::scene_viewport::ViewportHost::GraphEditor => {
                         Some(&request.target) == self.watched_graph_target.as_ref()
                             && Some(&request.node) == self.preview_graph_node.as_ref()
-                            && request.modifier == self.modifier_preview_context,
+                            && request.modifier == self.modifier_preview_context
+                    }
                     crate::scene_viewport::ViewportHost::OutputPreview => true,
-                })
-                {
+                }) {
                     self.content_pipeline.set_scene_viewport_request(request);
                 }
             }
@@ -774,7 +872,9 @@ impl ContentThread {
             }
             ContentCommand::DrawLayerAgain(layer) => {
                 for renderer in self.engine.renderers_mut() {
-                    if let Some(gen_renderer) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
+                    if let Some(gen_renderer) =
+                        renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()
+                    {
                         gen_renderer.draw_layer_again(&layer);
                     }
                 }
@@ -784,7 +884,8 @@ impl ContentThread {
             }
             #[cfg(target_os = "macos")]
             ContentCommand::SetSelectionOutline { output, viewport } => {
-                self.content_pipeline.set_selection_outline(output, viewport);
+                self.content_pipeline
+                    .set_selection_outline(output, viewport);
             }
             #[cfg(not(target_os = "macos"))]
             ContentCommand::SetSelectionOutline { .. } => {}
@@ -801,7 +902,8 @@ impl ContentThread {
                 self.content_pipeline.set_node_atlas_visible(nodes);
             }
             ContentCommand::SetClipAtlasVisible(clips) => {
-                self.content_pipeline.set_clip_atlas_visible(clips, self.engine.project());
+                self.content_pipeline
+                    .set_clip_atlas_visible(clips, self.engine.project());
             }
             ContentCommand::DumpGraphOutputs => {
                 if let Some(manifold_core::GraphTarget::Effect(effect_id)) =
@@ -811,8 +913,7 @@ impl ContentThread {
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_secs())
                         .unwrap_or(0);
-                    let dir =
-                        std::path::PathBuf::from(format!("/tmp/manifold-graph-dump-{ts}"));
+                    let dir = std::path::PathBuf::from(format!("/tmp/manifold-graph-dump-{ts}"));
                     log::info!(
                         "[graph-dump] dumping outputs of effect {} to {}",
                         effect_id.as_str(),
@@ -829,12 +930,20 @@ impl ContentThread {
             // loop re-checks is_surface_ready() after handling.
             #[cfg(target_os = "macos")]
             ContentCommand::SurfaceReady => {}
-            ContentCommand::FramePresented { drawable_id, at } => self.frame_presented(drawable_id, at),
+            ContentCommand::FramePresented { drawable_id, at } => {
+                self.frame_presented(drawable_id, at)
+            }
 
             // ── Sync calibration (D19) ─────────────────────────────
-            ContentCommand::SetSyncCalibration { extra_delay_ms, offsets_ms } => {
+            ContentCommand::SetSyncCalibration {
+                extra_delay_ms,
+                offsets_ms,
+            } => {
                 self.calibration.set_extra_delay_ms(extra_delay_ms);
-                for (source, ms) in manifold_playback::sync_calibration::CalibratedSource::ALL.into_iter().zip(offsets_ms) {
+                for (source, ms) in manifold_playback::sync_calibration::CalibratedSource::ALL
+                    .into_iter()
+                    .zip(offsets_ms)
+                {
                     self.calibration.restore_offset(source, ms / 1000.0);
                 }
             }
@@ -857,7 +966,10 @@ impl ContentThread {
                 }
                 // Under MIDI clock the follower seeds on the first tick at the
                 // armed position (D20, D22): nothing is located here.
-                crate::sync_rig_log::user_transport(manifold_playback::rig_log::TransportKind::Play, f64::NAN);
+                crate::sync_rig_log::user_transport(
+                    manifold_playback::rig_log::TransportKind::Play,
+                    f64::NAN,
+                );
                 self.engine.play();
                 self.link_offset.request(OffsetTake::Exact);
             }
@@ -871,7 +983,10 @@ impl ContentThread {
                 // End tempo recording session on pause.
                 // Port of C# PlaybackController.Pause → tempoRecorder.EndSessionIfActive.
                 self.end_tempo_recording_session();
-                crate::sync_rig_log::user_transport(manifold_playback::rig_log::TransportKind::Pause, f64::NAN);
+                crate::sync_rig_log::user_transport(
+                    manifold_playback::rig_log::TransportKind::Pause,
+                    f64::NAN,
+                );
                 self.engine.pause();
             }
             ContentCommand::Stop => {
@@ -883,7 +998,10 @@ impl ContentThread {
                 }
                 // End tempo recording session on stop.
                 self.end_tempo_recording_session();
-                crate::sync_rig_log::user_transport(manifold_playback::rig_log::TransportKind::Stop, f64::NAN);
+                crate::sync_rig_log::user_transport(
+                    manifold_playback::rig_log::TransportKind::Stop,
+                    f64::NAN,
+                );
                 self.engine.stop();
                 self.link_offset.clear();
                 // BUG-104: release generator-side trigger-edge latches
@@ -897,7 +1015,10 @@ impl ContentThread {
                 self.clear_generator_trigger_state();
             }
             ContentCommand::SeekTo(t) => {
-                crate::sync_rig_log::user_transport(manifold_playback::rig_log::TransportKind::Seek, t.0);
+                crate::sync_rig_log::user_transport(
+                    manifold_playback::rig_log::TransportKind::Seek,
+                    t.0,
+                );
                 self.sync_arbiter.set_user_seek_time(self.time_since_start);
                 self.engine.seek_to(t);
                 // Seeks to Ableton are commanded explicitly, never inferred
@@ -911,7 +1032,10 @@ impl ContentThread {
                 self.link_offset.request(OffsetTake::Exact);
             }
             ContentCommand::SeekToBeat(beat) => {
-                crate::sync_rig_log::user_transport(manifold_playback::rig_log::TransportKind::SeekToBeat, beat.0);
+                crate::sync_rig_log::user_transport(
+                    manifold_playback::rig_log::TransportKind::SeekToBeat,
+                    beat.0,
+                );
                 self.sync_arbiter.set_user_seek_time(self.time_since_start);
                 let time = self.engine.beat_to_timeline_time(beat);
                 self.engine.seek_to(time);
@@ -961,29 +1085,57 @@ impl ContentThread {
                 self.engine.set_automation_armed(armed);
                 self.engine.mark_compositor_dirty_now();
             }
-            ContentCommand::AutomationHold { target, param_id, held } => {
+            ContentCommand::AutomationHold {
+                target,
+                param_id,
+                held,
+            } => {
                 self.engine.set_automation_hold(target, param_id, held);
             }
 
             // ── Editing ────────────────────────────────────────────
             ContentCommand::GraphEditRejected(message) => self.report_graph_edit_rejection(message),
             ContentCommand::ChangeGeneratorType { layer_id, new_type } => {
-                let result = self.engine.project().ok_or_else(|| "Project is no longer available".to_string())
-                    .and_then(|project| crate::generator_change::build_change(project, layer_id.clone(), new_type.clone()));
+                let result = self
+                    .engine
+                    .project()
+                    .ok_or_else(|| "Project is no longer available".to_string())
+                    .and_then(|project| {
+                        crate::generator_change::build_change(
+                            project,
+                            layer_id.clone(),
+                            new_type.clone(),
+                        )
+                    });
                 match result {
                     Ok(command) => {
                         self.handle_command(ContentCommand::Execute(command));
-                        if self.engine.project().and_then(|project| project.graph_target_owner(
-                            &manifold_core::GraphTarget::Generator(layer_id.clone())))
-                            .is_some_and(|host| host.generator_type() == &new_type) {
-                            self.handle_command(ContentCommand::GeneratorTypeChanged { layer_id, new_type });
+                        if self
+                            .engine
+                            .project()
+                            .and_then(|project| {
+                                project.graph_target_owner(&manifold_core::GraphTarget::Generator(
+                                    layer_id.clone(),
+                                ))
+                            })
+                            .is_some_and(|host| host.generator_type() == &new_type)
+                        {
+                            self.handle_command(ContentCommand::GeneratorTypeChanged {
+                                layer_id,
+                                new_type,
+                            });
                         }
                     }
                     Err(message) => self.report_graph_edit_rejection(message),
                 }
             }
-            ContentCommand::PreviewAutomationLane { target, param_id, points } => {
-                self.engine.set_automation_lane_preview(target, param_id, points);
+            ContentCommand::PreviewAutomationLane {
+                target,
+                param_id,
+                points,
+            } => {
+                self.engine
+                    .set_automation_lane_preview(target, param_id, points);
             }
             ContentCommand::ClearAutomationPreviews => {
                 self.engine.clear_automation_previews();
@@ -998,44 +1150,74 @@ impl ContentThread {
                     delta: Seconds::ZERO,
                     frame_count: 0,
                 };
-                let before = self.engine.project().and_then(|project| project.preset_instance(&target))
+                let before = self
+                    .engine
+                    .project()
+                    .and_then(|project| project.preset_instance(&target))
                     .map(|instance| instance.get_base_param(param_id.as_ref()));
                 self.handle_command(ContentCommand::ExecuteOnContent(Box::new(
-                    manifold_editing::commands::effects::FireGraphParamCommand::new(target.clone(), param_id.clone()),
+                    manifold_editing::commands::effects::FireGraphParamCommand::new(
+                        target.clone(),
+                        param_id.clone(),
+                    ),
                 )));
                 let accepted = before.is_some_and(|before| {
-                    self.engine.project().and_then(|project| project.preset_instance(&target))
-                        .is_some_and(|instance| instance.get_base_param(param_id.as_ref()) == before + 1.0
-                            && before + 1.0 > before)
+                    self.engine
+                        .project()
+                        .and_then(|project| project.preset_instance(&target))
+                        .is_some_and(|instance| {
+                            instance.get_base_param(param_id.as_ref()) == before + 1.0
+                                && before + 1.0 > before
+                        })
                 });
                 if accepted && let manifold_core::GraphTarget::Generator(layer_id) = &target {
                     // Between frames: the next frame's target and tempo shift, peeked,
                     // so a hit after a seek in this drain sees the seek.
-                    let (pending_target, tempo_shift) = (self.engine.played_target(), self.engine.tempo_shift());
+                    let (pending_target, tempo_shift) =
+                        (self.engine.played_target(), self.engine.tempo_shift());
                     let (renderers, project) = self.engine.split_renderer_project();
                     // The renderer counts its own refusals into the scene
                     // impulse diagnostics the stage shows; only a missing
                     // renderer is reported here.
                     let mut unavailable = false;
-                    if let Some(layer) = project.and_then(|project|
-                        project.timeline.layers.iter().find(|layer| &layer.layer_id == layer_id))
-                        && GeneratorRenderer::has_scene_impulse(layer, param_id.as_ref())
+                    if let Some(layer) = project.and_then(|project| {
+                        project
+                            .timeline
+                            .layers
+                            .iter()
+                            .find(|layer| &layer.layer_id == layer_id)
+                    }) && GeneratorRenderer::has_scene_impulse(layer, param_id.as_ref())
                     {
-                        let project_tempo = project
-                            .map(|project| manifold_node_engine::runtime::preset_context::ProjectTempo::new(
+                        let project_tempo = project.map(|project| {
+                            manifold_node_engine::runtime::preset_context::ProjectTempo::new(
                                 &project.tempo_map,
                                 project.settings.bpm,
-                            ));
-                        match renderers.iter_mut().find_map(|renderer| renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()) {
+                            )
+                        });
+                        match renderers.iter_mut().find_map(|renderer| {
+                            renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()
+                        }) {
                             Some(renderer) => {
                                 // A refused hit is already in the renderer's impulse
                                 // diagnostics with its reason, which the stage toasts.
-                                let _refusal_is_toasted = renderer.fire_scene_impulse_between_frames(layer, param_id.as_ref(), source, project_tempo.as_ref(), pending_target, tempo_shift);
+                                let _refusal_is_toasted = renderer
+                                    .fire_scene_impulse_between_frames(
+                                        layer,
+                                        param_id.as_ref(),
+                                        source,
+                                        project_tempo.as_ref(),
+                                        pending_target,
+                                        tempo_shift,
+                                    );
                             }
                             None => unavailable = true,
                         }
                     }
-                    if unavailable { self.report_graph_edit_rejection("Impulse: scene renderer is unavailable".into()); }
+                    if unavailable {
+                        self.report_graph_edit_rejection(
+                            "Impulse: scene renderer is unavailable".into(),
+                        );
+                    }
                 }
             }
             ContentCommand::Execute(cmd) | ContentCommand::ExecuteOnContent(cmd) => {
@@ -1049,10 +1231,8 @@ impl ContentThread {
                 });
                 let (renderers, project) = self.engine.split_renderer_project_edit();
                 if let Some(project) = project {
-                    self.editing_service.execute_with_validation(
-                        cmd,
-                        project,
-                        |candidate| {
+                    self.editing_service
+                        .execute_with_validation(cmd, project, |candidate| {
                             let changed = pre.is_some_and(|(pre_w, pre_h, pre_rs)| {
                                 candidate.settings.output_width != pre_w
                                     || candidate.settings.output_height != pre_h
@@ -1067,16 +1247,26 @@ impl ContentThread {
                                 candidate.settings.output_height.max(1) as u32,
                                 candidate.settings.render_scale,
                             )
-                        },
-                    );
+                        });
                 }
-                if let Some(message) = self.editing_service.take_rejection() { self.report_graph_edit_rejection(message); return false; }
+                if let Some(message) = self.editing_service.take_rejection() {
+                    self.report_graph_edit_rejection(message);
+                    return false;
+                }
                 if let Some(pending) = pending_selection
                     && let Some(project) = self.engine.project()
                     && let Some(selection) = pending.resolve(project)
                 {
-                    let sequence = self.edit_selection_update.as_ref().map_or(1, |update| update.sequence.wrapping_add(1));
-                    self.edit_selection_update = Some(std::sync::Arc::new(crate::edit_selection::EditSelectionUpdate { sequence, selection }));
+                    let sequence = self
+                        .edit_selection_update
+                        .as_ref()
+                        .map_or(1, |update| update.sequence.wrapping_add(1));
+                    self.edit_selection_update = Some(std::sync::Arc::new(
+                        crate::edit_selection::EditSelectionUpdate {
+                            sequence,
+                            selection,
+                        },
+                    ));
                 }
             }
             ContentCommand::ExecuteBatch(cmds, desc) => {
@@ -1090,11 +1280,10 @@ impl ContentThread {
                 });
                 let (renderers, project) = self.engine.split_renderer_project_edit();
                 if let Some(project) = project {
-                    let command = Box::new(manifold_editing::command::CompositeCommand::new(cmds, desc));
-                    self.editing_service.execute_with_validation(
-                        command,
-                        project,
-                        |candidate| {
+                    let command =
+                        Box::new(manifold_editing::command::CompositeCommand::new(cmds, desc));
+                    self.editing_service
+                        .execute_with_validation(command, project, |candidate| {
                             let changed = pre.is_some_and(|(pre_w, pre_h, pre_rs)| {
                                 candidate.settings.output_width != pre_w
                                     || candidate.settings.output_height != pre_h
@@ -1109,10 +1298,12 @@ impl ContentThread {
                                 candidate.settings.output_height.max(1) as u32,
                                 candidate.settings.render_scale,
                             )
-                        },
-                    );
+                        });
                 }
-                if let Some(message) = self.editing_service.take_rejection() { self.report_graph_edit_rejection(message); return false; }
+                if let Some(message) = self.editing_service.take_rejection() {
+                    self.report_graph_edit_rejection(message);
+                    return false;
+                }
             }
             ContentCommand::Undo => {
                 self.commit_automation_recording(true);
@@ -1132,26 +1323,30 @@ impl ContentThread {
                 // ABOUT to be undone before calling `undo` — the manager
                 // moves it onto the redo stack once acted on, so peeking
                 // after would need a second (post-undo) accessor.
-                let desc = self.editing_service.peek_undo_description().map(str::to_string);
+                let desc = self
+                    .editing_service
+                    .peek_undo_description()
+                    .map(str::to_string);
                 let undone = {
                     let (renderers, project) = self.engine.split_renderer_project_edit();
                     if let Some(project) = project {
-                        self.editing_service.undo_with_validation(project, |candidate| {
-                            let changed = pre.is_some_and(|(pre_w, pre_h, pre_rs)| {
-                                candidate.settings.output_width != pre_w
-                                    || candidate.settings.output_height != pre_h
-                                    || (candidate.settings.render_scale - pre_rs).abs() > 0.01
-                            });
-                            if !changed {
-                                return Ok(());
-                            }
-                            self.content_pipeline.resize_renderers(
-                                renderers.as_mut_slice(),
-                                candidate.settings.output_width.max(1) as u32,
-                                candidate.settings.output_height.max(1) as u32,
-                                candidate.settings.render_scale,
-                            )
-                        })
+                        self.editing_service
+                            .undo_with_validation(project, |candidate| {
+                                let changed = pre.is_some_and(|(pre_w, pre_h, pre_rs)| {
+                                    candidate.settings.output_width != pre_w
+                                        || candidate.settings.output_height != pre_h
+                                        || (candidate.settings.render_scale - pre_rs).abs() > 0.01
+                                });
+                                if !changed {
+                                    return Ok(());
+                                }
+                                self.content_pipeline.resize_renderers(
+                                    renderers.as_mut_slice(),
+                                    candidate.settings.output_width.max(1) as u32,
+                                    candidate.settings.output_height.max(1) as u32,
+                                    candidate.settings.render_scale,
+                                )
+                            })
                     } else {
                         false
                     }
@@ -1193,26 +1388,30 @@ impl ContentThread {
                 });
                 // D11 undo/redo toast: peek BEFORE calling `redo` — see the
                 // matching comment in the `Undo` arm above.
-                let desc = self.editing_service.peek_redo_description().map(str::to_string);
+                let desc = self
+                    .editing_service
+                    .peek_redo_description()
+                    .map(str::to_string);
                 let redone = {
                     let (renderers, project) = self.engine.split_renderer_project_edit();
                     if let Some(project) = project {
-                        self.editing_service.redo_with_validation(project, |candidate| {
-                            let changed = pre.is_some_and(|(pre_w, pre_h, pre_rs)| {
-                                candidate.settings.output_width != pre_w
-                                    || candidate.settings.output_height != pre_h
-                                    || (candidate.settings.render_scale - pre_rs).abs() > 0.01
-                            });
-                            if !changed {
-                                return Ok(());
-                            }
-                            self.content_pipeline.resize_renderers(
-                                renderers.as_mut_slice(),
-                                candidate.settings.output_width.max(1) as u32,
-                                candidate.settings.output_height.max(1) as u32,
-                                candidate.settings.render_scale,
-                            )
-                        })
+                        self.editing_service
+                            .redo_with_validation(project, |candidate| {
+                                let changed = pre.is_some_and(|(pre_w, pre_h, pre_rs)| {
+                                    candidate.settings.output_width != pre_w
+                                        || candidate.settings.output_height != pre_h
+                                        || (candidate.settings.render_scale - pre_rs).abs() > 0.01
+                                });
+                                if !changed {
+                                    return Ok(());
+                                }
+                                self.content_pipeline.resize_renderers(
+                                    renderers.as_mut_slice(),
+                                    candidate.settings.output_width.max(1) as u32,
+                                    candidate.settings.output_height.max(1) as u32,
+                                    candidate.settings.render_scale,
+                                )
+                            })
                     } else {
                         false
                     }
@@ -1250,10 +1449,14 @@ impl ContentThread {
             }
             ContentCommand::PrepareProjectSave(result_tx) => {
                 let snapshot = prepare_project_save(&mut self.engine, &mut self.editing_service);
-                if result_tx.send(snapshot).is_err() { log::warn!("Save snapshot receiver disconnected"); }
+                if result_tx.send(snapshot).is_err() {
+                    log::warn!("Save snapshot receiver disconnected");
+                }
             }
             ContentCommand::MarkCleanAt(version) => {
-                if self.editing_service.data_version() == version { self.editing_service.mark_clean(); }
+                if self.editing_service.data_version() == version {
+                    self.editing_service.mark_clean();
+                }
             }
             ContentCommand::MarkClean => {
                 self.editing_service.mark_clean();
@@ -1285,7 +1488,9 @@ impl ContentThread {
                     let h = p.settings.output_height.max(1) as u32;
                     let rs = p.settings.render_scale;
                     if let Err(message) = self.content_pipeline.resize(&mut self.engine, w, h, rs) {
-                        self.report_graph_edit_rejection(format!("Project resize rejected: {message}"));
+                        self.report_graph_edit_rejection(format!(
+                            "Project resize rejected: {message}"
+                        ));
                     }
                 }
                 // Prewarm chain-fusion segments for every chain in the project
@@ -1312,11 +1517,17 @@ impl ContentThread {
                 // they don't sit at default Dormant after a project load.
                 // Discovery may already be complete from a prior connect, in
                 // which case `take_validation_dirty` won't fire on its own.
-                if self.engine.project().is_some_and(|p| self.ableton_bridge.validation_would_change(p))
+                if self
+                    .engine
+                    .project()
+                    .is_some_and(|p| self.ableton_bridge.validation_would_change(p))
                     && let Some(edit) = self.engine.project_edit()
                 {
                     let bridge = &self.ableton_bridge;
-                    self.editing_service.mutate(ChangeSet::of(&[Part::Mappings]), edit, |p| bridge.validate_mappings(p));
+                    self.editing_service
+                        .mutate(ChangeSet::of(&[Part::Mappings]), edit, |p| {
+                            bridge.validate_mappings(p)
+                        });
                     self.reactions.publish_pending = true;
                 }
                 if let Some(p) = self.engine.project() {
@@ -1365,10 +1576,10 @@ impl ContentThread {
                 if let Some(project) = self.engine.project() {
                     let old_preset = project.settings.resolution_preset;
                     if old_preset != new_preset {
-                        let command = manifold_editing::commands::settings::ChangeResolutionCommand::new(
-                            old_preset,
-                            new_preset,
-                        );
+                        let command =
+                            manifold_editing::commands::settings::ChangeResolutionCommand::new(
+                                old_preset, new_preset,
+                            );
                         self.execute_resize_command(Box::new(command));
                     }
                 }
@@ -1378,12 +1589,10 @@ impl ContentThread {
                     let old_width = project.settings.output_width;
                     let old_height = project.settings.output_height;
                     if old_width != width || old_height != height {
-                        let command = manifold_editing::commands::settings::SetDisplayDimensionsCommand::new(
-                            old_width,
-                            old_height,
-                            width,
-                            height,
-                        );
+                        let command =
+                            manifold_editing::commands::settings::SetDisplayDimensionsCommand::new(
+                                old_width, old_height, width, height,
+                            );
                         self.execute_resize_command(Box::new(command));
                     }
                 }
@@ -1393,10 +1602,10 @@ impl ContentThread {
                 if let Some(project) = self.engine.project() {
                     let old_scale = project.settings.render_scale;
                     if (new_scale - old_scale).abs() > 0.01 {
-                        let command = manifold_editing::commands::settings::ChangeRenderScaleCommand::new(
-                            old_scale,
-                            new_scale,
-                        );
+                        let command =
+                            manifold_editing::commands::settings::ChangeRenderScaleCommand::new(
+                                old_scale, new_scale,
+                            );
                         self.execute_resize_command(Box::new(command));
                     }
                 }
@@ -1442,27 +1651,32 @@ impl ContentThread {
                     // history, but it must publish a paused snapshot. Force
                     // the existing version-gated publisher without changing
                     // the project's data version or saved state.
-                    self.last_data_version =
-                        self.editing_service.data_version().wrapping_sub(1);
+                    self.last_data_version = self.editing_service.data_version().wrapping_sub(1);
                 }
             }
             ContentCommand::SetFrameRate(fps) => {
                 // The engine's clock and then the content timer follow the
                 // setting on the next tick (FRAME_EXACT_TRANSPORT_DESIGN D10).
                 let fps = fps as f32;
-                if self.engine.project().is_some_and(|p| p.settings.frame_rate != fps)
+                if self
+                    .engine
+                    .project()
+                    .is_some_and(|p| p.settings.frame_rate != fps)
                     && let Some(edit) = self.engine.project_edit()
                 {
-                    self.editing_service.mutate(ChangeSet::of(&[Part::Settings]), edit, |p| p.settings.frame_rate = fps);
+                    self.editing_service
+                        .mutate(ChangeSet::of(&[Part::Settings]), edit, |p| {
+                            p.settings.frame_rate = fps
+                        });
                     self.reactions.publish_pending = true;
                 }
             }
 
             // ── GPU ────────────────────────────────────────────────
             ContentCommand::ResizeContent(w, h, render_scale) => {
-                if let Err(message) = self
-                    .content_pipeline
-                    .resize(&mut self.engine, w, h, render_scale)
+                if let Err(message) =
+                    self.content_pipeline
+                        .resize(&mut self.engine, w, h, render_scale)
                 {
                     self.report_graph_edit_rejection(format!("Content resize rejected: {message}"));
                 }
@@ -1499,7 +1713,11 @@ impl ContentThread {
 
             // ── Direct project mutation ────────────────────────────
             // Reactions run once per drain pass from the stamps (D4).
-            ContentCommand::MutateProject { touches, f, gesture } => {
+            ContentCommand::MutateProject {
+                touches,
+                f,
+                gesture,
+            } => {
                 if let Some(edit) = self.engine.project_edit() {
                     if gesture {
                         self.editing_service.mutate_gesture(touches, edit, f);
@@ -1522,7 +1740,9 @@ impl ContentThread {
                 result_tx,
             } => {
                 if let Some(edit) = self.engine.project_edit() {
-                    let result = self.editing_service.paste_clips_into(edit, target_beat, target_layer);
+                    let result =
+                        self.editing_service
+                            .paste_clips_into(edit, target_beat, target_layer);
                     let _ = result_tx.send((result.pasted_clip_ids, result.skip_reason));
                 } else {
                     let _ = result_tx.send((Vec::new(), None));
@@ -1589,14 +1809,21 @@ impl ContentThread {
                     if let Some(mut edit) = self.engine.project_edit() {
                         self.editing_service.execute(Box::new(cmd), edit.reborrow());
                         if edit.project().settings.ableton_set_context != context {
-                            self.editing_service.mutate(ChangeSet::of(&[Part::Mappings]), edit, |p| p.settings.ableton_set_context = context);
+                            self.editing_service.mutate(
+                                ChangeSet::of(&[Part::Mappings]),
+                                edit,
+                                |p| p.settings.ableton_set_context = context,
+                            );
                         }
                     }
                 }
             }
             ContentCommand::AbletonUnmapParam { target } => {
                 use manifold_editing::commands::ableton::ChangeAbletonMappingCommand;
-                if let Some(old) = self.engine.project().and_then(|p| get_existing_mapping(p, &target))
+                if let Some(old) = self
+                    .engine
+                    .project()
+                    .and_then(|p| get_existing_mapping(p, &target))
                     && let Some(edit) = self.engine.project_edit()
                 {
                     let cmd = ChangeAbletonMappingCommand::unmap(target, old);
@@ -1613,10 +1840,16 @@ impl ContentThread {
                 // Toggle AbletonOSC transport sync on/off.
                 // Sets mode to AbletonOsc and enables/disables transport listeners.
                 let mode = manifold_core::types::OscSyncMode::AbletonOsc;
-                if self.engine.project().is_some_and(|p| p.settings.osc_sync_mode != mode)
+                if self
+                    .engine
+                    .project()
+                    .is_some_and(|p| p.settings.osc_sync_mode != mode)
                     && let Some(edit) = self.engine.project_edit()
                 {
-                    self.editing_service.mutate(ChangeSet::of(&[Part::Settings]), edit, |p| p.settings.osc_sync_mode = mode);
+                    self.editing_service
+                        .mutate(ChangeSet::of(&[Part::Settings]), edit, |p| {
+                            p.settings.osc_sync_mode = mode
+                        });
                     self.reactions.publish_pending = true;
                 }
                 if self.ableton_bridge.is_transport_enabled() {
@@ -1635,9 +1868,19 @@ impl ContentThread {
             }
 
             // ── Display ───────────────────────────────────────────
-            ContentCommand::UpdateDisplayCapabilities { destination, capabilities } => {
-                if self.content_pipeline.presentation.update(destination, capabilities) {
-                    log::info!("[Display] {destination:?}: current headroom {:.2}x", capabilities.current().value());
+            ContentCommand::UpdateDisplayCapabilities {
+                destination,
+                capabilities,
+            } => {
+                if self
+                    .content_pipeline
+                    .presentation
+                    .update(destination, capabilities)
+                {
+                    log::info!(
+                        "[Display] {destination:?}: current headroom {:.2}x",
+                        capabilities.current().value()
+                    );
                     self.engine.mark_compositor_dirty_now();
                 }
             }
@@ -1684,15 +1927,12 @@ impl ContentThread {
                 // immediately through the same prewarm_layer seam. If transport is
                 // playing, the edit previews lazily so the show is not blocked.
                 if !transport_playing {
-                    let layer_index = self
-                        .engine
-                        .project()
-                        .and_then(|p| {
-                            p.timeline
-                                .layers
-                                .iter()
-                                .position(|l| l.layer_id == layer_id)
-                        });
+                    let layer_index = self.engine.project().and_then(|p| {
+                        p.timeline
+                            .layers
+                            .iter()
+                            .position(|l| l.layer_id == layer_id)
+                    });
                     if let Some(layer_index) = layer_index {
                         let (renderers, project) = self.engine.split_renderer_project();
                         if let Some(p) = project
@@ -1776,7 +2016,11 @@ impl ContentThread {
             }
             #[cfg(target_os = "macos")]
             ContentCommand::DiscardStill => {
-                if self.still_export.as_ref().is_some_and(|job| job.dest.is_none()) {
+                if self
+                    .still_export
+                    .as_ref()
+                    .is_some_and(|job| job.dest.is_none())
+                {
                     self.still_export = None;
                 }
             }
@@ -1834,7 +2078,6 @@ impl ContentThread {
             ContentCommand::StartLiveRecording(_) | ContentCommand::StopLiveRecording => {
                 log::warn!("[ContentThread] Live recording not supported on this platform");
             }
-
 
             // ── Profiling ────────────────────────────────────────────
             #[cfg(feature = "profiling")]
@@ -1946,16 +2189,19 @@ impl ContentThread {
 #[cfg(test)]
 mod recording_save_tests {
     use super::*;
-    use manifold_core::effects::PresetInstance;
     use manifold_core::Beats;
-    use manifold_core::params::{Param, ParamManifest};
     use manifold_core::effect_graph_def::ParamSpecDef;
+    use manifold_core::effects::PresetInstance;
+    use manifold_core::params::{Param, ParamManifest};
 
     #[test]
     fn clear_after_recording_boundary_cannot_resurrect_a_pending_first_take() {
         let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("ClearTest"));
         fx.params = ParamManifest::from_params(vec![Param::bundled(ParamSpecDef {
-            id: "amount".into(), min: 0.0, max: 1.0, ..Default::default()
+            id: "amount".into(),
+            min: 0.0,
+            max: 1.0,
+            ..Default::default()
         })]);
         let id = fx.id.clone();
         let mut project = manifold_core::project::Project::default();
@@ -1966,25 +2212,77 @@ mod recording_save_tests {
         engine.set_state(manifold_core::types::PlaybackState::Playing);
         engine.locate(Seconds(1.0));
         engine.set_automation_armed(true);
-        editing.mutate(ChangeSet::of(&[Part::Values]), engine.project_edit().unwrap(), |p| { p.find_effect_by_id_mut(&id).unwrap().set_base_param("amount", 0.7); });
+        editing.mutate(
+            ChangeSet::of(&[Part::Values]),
+            engine.project_edit().unwrap(),
+            |p| {
+                p.find_effect_by_id_mut(&id)
+                    .unwrap()
+                    .set_base_param("amount", 0.7);
+            },
+        );
         // Match the ordered FinishAutomationRecording -> Execute messages.
         commit_recording(&mut engine, &mut editing, true);
-        editing.execute(Box::new(manifold_editing::commands::automation::RemoveLaneCommand::new(
-            manifold_core::GraphTarget::Effect(id.clone()), "amount", 0,
-        )), engine.project_edit().unwrap());
-        assert!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap().is_empty());
-        assert!(engine.finish_automation_recording().is_empty(), "no delayed take can recreate the lane");
+        editing.execute(
+            Box::new(
+                manifold_editing::commands::automation::RemoveLaneCommand::new(
+                    manifold_core::GraphTarget::Effect(id.clone()),
+                    "amount",
+                    0,
+                ),
+            ),
+            engine.project_edit().unwrap(),
+        );
+        assert!(
+            engine
+                .project()
+                .unwrap()
+                .find_effect_by_id(&id)
+                .unwrap()
+                .automation_lanes
+                .as_ref()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            engine.finish_automation_recording().is_empty(),
+            "no delayed take can recreate the lane"
+        );
         assert!(editing.undo(engine.project_edit().unwrap()));
-        assert_eq!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap()[0].value_at(Beats(2.0)), 0.7);
+        assert_eq!(
+            engine
+                .project()
+                .unwrap()
+                .find_effect_by_id(&id)
+                .unwrap()
+                .automation_lanes
+                .as_ref()
+                .unwrap()[0]
+                .value_at(Beats(2.0)),
+            0.7
+        );
         assert!(editing.redo(engine.project_edit().unwrap()));
-        assert!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap().is_empty());
+        assert!(
+            engine
+                .project()
+                .unwrap()
+                .find_effect_by_id(&id)
+                .unwrap()
+                .automation_lanes
+                .as_ref()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
     fn recording_save_snapshot_contains_final_touch_and_stays_undoable() {
         let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("SaveTest"));
         fx.params = ParamManifest::from_params(vec![Param::bundled(ParamSpecDef {
-            id: "amount".into(), min: 0.0, max: 1.0, ..Default::default()
+            id: "amount".into(),
+            min: 0.0,
+            max: 1.0,
+            ..Default::default()
         })]);
         let id = fx.id.clone();
         let mut project = manifold_core::project::Project::default();
@@ -1995,20 +2293,56 @@ mod recording_save_tests {
         engine.set_state(manifold_core::types::PlaybackState::Playing);
         engine.locate(Seconds(1.0));
         engine.set_automation_armed(true);
-        editing.mutate(ChangeSet::of(&[Part::Values]), engine.project_edit().unwrap(), |p| { p.find_effect_by_id_mut(&id).unwrap().set_base_param("amount", 0.7); });
+        editing.mutate(
+            ChangeSet::of(&[Part::Values]),
+            engine.project_edit().unwrap(),
+            |p| {
+                p.find_effect_by_id_mut(&id)
+                    .unwrap()
+                    .set_base_param("amount", 0.7);
+            },
+        );
         let (snapshot, version) = prepare_project_save(&mut engine, &mut editing).unwrap();
         assert_eq!(version, editing.data_version());
         assert!(version > 0);
         let saved = serde_json::to_string(&snapshot).unwrap();
         let reloaded: manifold_core::project::Project = serde_json::from_str(&saved).unwrap();
-        let lane = &reloaded.find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap()[0];
+        let lane = &reloaded
+            .find_effect_by_id(&id)
+            .unwrap()
+            .automation_lanes
+            .as_ref()
+            .unwrap()[0];
         assert_eq!(lane.value_at(Beats(2.0)), 0.7);
         let (_, repeated_version) = prepare_project_save(&mut engine, &mut editing).unwrap();
-        assert_eq!(version, repeated_version, "saving twice must not create a second take");
+        assert_eq!(
+            version, repeated_version,
+            "saving twice must not create a second take"
+        );
         assert!(editing.undo(engine.project_edit().unwrap()));
-        assert!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().is_none_or(Vec::is_empty));
+        assert!(
+            engine
+                .project()
+                .unwrap()
+                .find_effect_by_id(&id)
+                .unwrap()
+                .automation_lanes
+                .as_ref()
+                .is_none_or(Vec::is_empty)
+        );
         assert!(editing.redo(engine.project_edit().unwrap()));
-        assert_eq!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap()[0].points, lane.points);
+        assert_eq!(
+            engine
+                .project()
+                .unwrap()
+                .find_effect_by_id(&id)
+                .unwrap()
+                .automation_lanes
+                .as_ref()
+                .unwrap()[0]
+                .points,
+            lane.points
+        );
     }
 }
 
@@ -2041,24 +2375,34 @@ mod warmup_tests {
     #[test]
     fn commands_queued_during_warmup_keep_arrival_order() {
         use crate::content_command::ContentCommand;
+        use manifold_core::PresetTypeId;
         use manifold_core::layer::Layer;
         use manifold_core::project::Project;
-        use manifold_core::PresetTypeId;
 
         let mut project = Project::default();
-        project.timeline.layers.push(Layer::new_generator("Gen".into(), PresetTypeId::PLASMA, 0));
+        project
+            .timeline
+            .layers
+            .push(Layer::new_generator("Gen".into(), PresetTypeId::PLASMA, 0));
         let mut thread = crate::headless_harness::headless_content_thread(project, 64, 64);
         let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
         let (state_tx, _state_rx) = crate::content_state::state_channel();
 
-        cmd_tx.send(ContentCommand::SetSdrPreview(true)).expect("send");
-        cmd_tx.send(ContentCommand::SetSdrPreview(false)).expect("send");
+        cmd_tx
+            .send(ContentCommand::SetSdrPreview(true))
+            .expect("send");
+        cmd_tx
+            .send(ContentCommand::SetSdrPreview(false))
+            .expect("send");
         let report = thread.run_warmup(&cmd_rx, &state_tx);
         assert_eq!(report.total_layers, 1, "the generator layer warms");
         assert!(!report.interrupted);
 
         assert!(!thread.drain_commands(&cmd_rx, &state_tx), "no shutdown");
-        assert!(!thread.content_pipeline.sdr_preview(), "the later command must win");
+        assert!(
+            !thread.content_pipeline.sdr_preview(),
+            "the later command must win"
+        );
     }
 
     /// A quit already held (behind the show being opened) stops the warmup
@@ -2066,12 +2410,15 @@ mod warmup_tests {
     #[test]
     fn a_held_quit_interrupts_warmup() {
         use crate::content_command::ContentCommand;
+        use manifold_core::PresetTypeId;
         use manifold_core::layer::Layer;
         use manifold_core::project::Project;
-        use manifold_core::PresetTypeId;
 
         let mut project = Project::default();
-        project.timeline.layers.push(Layer::new_generator("Gen".into(), PresetTypeId::PLASMA, 0));
+        project
+            .timeline
+            .layers
+            .push(Layer::new_generator("Gen".into(), PresetTypeId::PLASMA, 0));
         let mut thread = crate::headless_harness::headless_content_thread(project, 64, 64);
         let (_cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
         let (state_tx, _state_rx) = crate::content_state::state_channel();
@@ -2079,13 +2426,18 @@ mod warmup_tests {
 
         let report = thread.run_warmup(&cmd_rx, &state_tx);
         assert!(report.interrupted, "the held quit interrupts the warmup");
-        assert!(matches!(thread.held_commands.front(), Some(ContentCommand::Shutdown)), "the quit stays queued");
+        assert!(
+            matches!(thread.held_commands.front(), Some(ContentCommand::Shutdown)),
+            "the quit stays queued"
+        );
     }
 }
 
 #[cfg(test)]
 mod scene_viewport_host_tests {
-    use crate::content_command::ContentCommand::{SetGraphPreviewNode, SetSceneViewport, WatchGraphTarget};
+    use crate::content_command::ContentCommand::{
+        SetGraphPreviewNode, SetSceneViewport, WatchGraphTarget,
+    };
     use crate::content_thread::ContentThread;
     use crate::scene_viewport::{SceneViewportNavigation, SceneViewportRequest, ViewportHost};
     use manifold_core::{GraphTarget, NodeId};
@@ -2093,14 +2445,26 @@ mod scene_viewport_host_tests {
 
     fn thread_with_scene() -> (ContentThread, GraphTarget) {
         let mut project = manifold_core::project::Project::default();
-        let layer = manifold_core::layer::Layer::new_generator("Scene".into(), manifold_core::PresetTypeId::PLASMA, 0);
+        let layer = manifold_core::layer::Layer::new_generator(
+            "Scene".into(),
+            manifold_core::PresetTypeId::PLASMA,
+            0,
+        );
         let target = GraphTarget::Generator(layer.layer_id.clone());
         project.timeline.layers.push(layer);
-        (crate::headless_harness::headless_content_thread(project, 64, 64), target)
+        (
+            crate::headless_harness::headless_content_thread(project, 64, 64),
+            target,
+        )
     }
 
     fn request(host: ViewportHost, target: &GraphTarget) -> Option<Arc<SceneViewportRequest>> {
-        Some(SceneViewportNavigation::new(host, 64, 64).request(target, &NodeId::new("scene"), None, None))
+        Some(SceneViewportNavigation::new(host, 64, 64).request(
+            target,
+            &NodeId::new("scene"),
+            None,
+            None,
+        ))
     }
 
     /// One request, owned by one host at a time (D7a): the editor may ask
@@ -2116,22 +2480,59 @@ mod scene_viewport_host_tests {
             thread.handle_command(cmd);
             thread.content_pipeline.scene_viewport_host()
         };
-        assert_eq!(send(&mut thread, SetSceneViewport(request(ViewportHost::GraphEditor, &target))), None,
-            "the editor cannot ask for a scene it does not watch");
+        assert_eq!(
+            send(
+                &mut thread,
+                SetSceneViewport(request(ViewportHost::GraphEditor, &target))
+            ),
+            None,
+            "the editor cannot ask for a scene it does not watch"
+        );
         send(&mut thread, WatchGraphTarget(Some(target.clone())));
         send(&mut thread, SetGraphPreviewNode(Some(NodeId::new("scene"))));
-        assert_eq!(send(&mut thread, SetSceneViewport(request(ViewportHost::GraphEditor, &target))), Some(ViewportHost::GraphEditor));
-        assert_eq!(send(&mut thread, SetSceneViewport(request(ViewportHost::OutputPreview, &target))), Some(ViewportHost::OutputPreview),
-            "preview navigation takes the editor's request");
-        assert_eq!(send(&mut thread, SetGraphPreviewNode(Some(NodeId::new("other")))), Some(ViewportHost::OutputPreview),
-            "the preview's request does not follow what the editor watches");
-        assert_eq!(send(&mut thread, WatchGraphTarget(None)), Some(ViewportHost::OutputPreview));
+        assert_eq!(
+            send(
+                &mut thread,
+                SetSceneViewport(request(ViewportHost::GraphEditor, &target))
+            ),
+            Some(ViewportHost::GraphEditor)
+        );
+        assert_eq!(
+            send(
+                &mut thread,
+                SetSceneViewport(request(ViewportHost::OutputPreview, &target))
+            ),
+            Some(ViewportHost::OutputPreview),
+            "preview navigation takes the editor's request"
+        );
+        assert_eq!(
+            send(&mut thread, SetGraphPreviewNode(Some(NodeId::new("other")))),
+            Some(ViewportHost::OutputPreview),
+            "the preview's request does not follow what the editor watches"
+        );
+        assert_eq!(
+            send(&mut thread, WatchGraphTarget(None)),
+            Some(ViewportHost::OutputPreview)
+        );
         send(&mut thread, WatchGraphTarget(Some(target.clone())));
         send(&mut thread, SetGraphPreviewNode(Some(NodeId::new("scene"))));
-        assert_eq!(send(&mut thread, SetSceneViewport(request(ViewportHost::GraphEditor, &target))), Some(ViewportHost::GraphEditor),
-            "the editor's viewport takes the preview's request");
-        assert_eq!(send(&mut thread, SetGraphPreviewNode(Some(NodeId::new("other")))), None,
-            "what the editor watches moved: its request is stale");
-        assert_eq!(thread.editing_service.data_version(), version, "navigation never edits the show");
+        assert_eq!(
+            send(
+                &mut thread,
+                SetSceneViewport(request(ViewportHost::GraphEditor, &target))
+            ),
+            Some(ViewportHost::GraphEditor),
+            "the editor's viewport takes the preview's request"
+        );
+        assert_eq!(
+            send(&mut thread, SetGraphPreviewNode(Some(NodeId::new("other")))),
+            None,
+            "what the editor watches moved: its request is stale"
+        );
+        assert_eq!(
+            thread.editing_service.data_version(),
+            version,
+            "navigation never edits the show"
+        );
     }
 }

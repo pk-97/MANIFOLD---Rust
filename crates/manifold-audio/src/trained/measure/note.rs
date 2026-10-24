@@ -62,19 +62,28 @@ impl NotePitch {
     pub fn new(c: &Container, sr: f64) -> Result<Self, ContainerError> {
         let low_rate = super::scalar_i64(c, "extra.note_low_rate")?;
         if low_rate <= 0 || (sr as i64) % low_rate != 0 {
-            return Err(ContainerError::WrongType { name: "extra.note_low_rate".into(), want: "a divisor of the model rate" });
+            return Err(ContainerError::WrongType {
+                name: "extra.note_low_rate".into(),
+                want: "a divisor of the model rate",
+            });
         }
         let bins = |name: &str| -> Result<(usize, usize), ContainerError> {
             let v = c.i64s(name, &[2])?;
             if v[0] < 0 || v[1] <= 0 || (v[0] + v[1]) as usize > BINS {
-                return Err(ContainerError::WrongType { name: name.into(), want: "bins inside the rfft" });
+                return Err(ContainerError::WrongType {
+                    name: name.into(),
+                    want: "bins inside the rfft",
+                });
             }
             Ok((v[0] as usize, v[1] as usize))
         };
         let chroma = bins("extra.note_chroma_bins")?;
         let class = c.i64s("extra.note_chroma_class", &[chroma.1])?;
         if class.iter().any(|&k| !(0..12).contains(&k)) {
-            return Err(ContainerError::WrongType { name: "extra.note_chroma_class".into(), want: "pitch classes 0..12" });
+            return Err(ContainerError::WrongType {
+                name: "extra.note_chroma_class".into(),
+                want: "pitch classes 0..12",
+            });
         }
         let fft = FftPlanner::new().plan_fft_forward(N_FFT);
         let scratch = vec![Complex::new(0.0, 0.0); fft.get_inplace_scratch_len()];
@@ -132,7 +141,10 @@ impl NotePitch {
 
     /// `yin` on `self.seg`: (f0 Hz or 0, dip).
     fn yin(&mut self) -> (f64, f64) {
-        let (lo, hi) = ((self.low_rate / FMAX) as usize, (self.low_rate / FMIN) as usize);
+        let (lo, hi) = (
+            (self.low_rate / FMAX) as usize,
+            (self.low_rate / FMIN) as usize,
+        );
         let n = self.seg.len();
         if n < hi + lo {
             return (0.0, 1.0);
@@ -140,7 +152,8 @@ impl NotePitch {
         let w = n - hi;
         for k in 0..=hi {
             self.diff.clear();
-            self.diff.extend((0..w).map(|i| (self.seg[i] - self.seg[k + i]).powi(2)));
+            self.diff
+                .extend((0..w).map(|i| (self.seg[i] - self.seg[k + i]).powi(2)));
             self.d[k] = np_sum(&self.diff);
         }
         self.cmnd[0] = 1.0;
@@ -153,13 +166,20 @@ impl NotePitch {
         let mut k = match band.iter().position(|&v| v < YIN_THRESH) {
             Some(k) => k,
             // np.argmin: the first minimum.
-            None => band.iter().enumerate().fold(0, |m, (i, &v)| if v < band[m] { i } else { m }),
+            None => band
+                .iter()
+                .enumerate()
+                .fold(0, |m, (i, &v)| if v < band[m] { i } else { m }),
         };
         while k + 1 < band.len() && band[k + 1] < band[k] {
             k += 1;
         }
         let dip = band[k];
-        if dip < YIN_PITCHED { (self.low_rate / (lo + k) as f64, dip) } else { (0.0, dip) }
+        if dip < YIN_PITCHED {
+            (self.low_rate / (lo + k) as f64, dip)
+        } else {
+            (0.0, dip)
+        }
     }
 
     /// `10 log10(mean(seg^2) + 1e-12)`, or -120 for an empty segment.
@@ -180,8 +200,13 @@ impl NotePitch {
             let v = s.map_or(0.0, |s| *self.x.get(s));
             *b = Complex::new(v * self.window[i], 0.0);
         }
-        self.fft.process_with_scratch(&mut self.buf, &mut self.scratch);
-        let out = if after { &mut self.mag_after } else { &mut self.mag_before };
+        self.fft
+            .process_with_scratch(&mut self.buf, &mut self.scratch);
+        let out = if after {
+            &mut self.mag_after
+        } else {
+            &mut self.mag_before
+        };
         for (o, b) in out.iter_mut().zip(&self.buf) {
             *o = b.norm();
         }
@@ -201,12 +226,24 @@ impl NotePitch {
     /// The 13 numbers for a candidate with onset time `on` and emission time `em` (seconds).
     pub fn features(&mut self, on: f64, em: f64, out: &mut [f64]) {
         self.low_seg(on - BEFORE.0, on - BEFORE.1);
-        let (f0b, db) = if self.seg.is_empty() { (0.0, 1.0) } else { self.yin() };
+        let (f0b, db) = if self.seg.is_empty() {
+            (0.0, 1.0)
+        } else {
+            self.yin()
+        };
         let lb = self.level();
         self.low_seg(em - AFTER_S, em);
-        let (f0a, da) = if self.seg.is_empty() { (0.0, 1.0) } else { self.yin() };
+        let (f0a, da) = if self.seg.is_empty() {
+            (0.0, 1.0)
+        } else {
+            self.yin()
+        };
         let la = self.level();
-        let st = if f0a != 0.0 && f0b != 0.0 { (12.0 * (f0a / f0b).log2()).abs() } else { 0.0 };
+        let st = if f0a != 0.0 && f0b != 0.0 {
+            (12.0 * (f0a / f0b).log2()).abs()
+        } else {
+            0.0
+        };
         self.spectrum_ending(on - SPEC_BEFORE_S, false);
         self.spectrum_ending(em, true);
         let cb = self.chroma(&self.mag_before);
@@ -215,7 +252,11 @@ impl NotePitch {
         let norm = |v: &[f64; 12]| v.iter().map(|a| a * a).sum::<f64>().sqrt();
         let cos = 1.0 - dot / (norm(&cb) * norm(&ca)).max(CHROMA_FLOOR);
         let ent = -np_sum(&ca.map(|p| p * (p + CHROMA_FLOOR).ln()));
-        let rise = ca.iter().zip(&cb).map(|(a, b)| a - b).fold(f64::NEG_INFINITY, f64::max);
+        let rise = ca
+            .iter()
+            .zip(&cb)
+            .map(|(a, b)| a - b)
+            .fold(f64::NEG_INFINITY, f64::max);
         let (lo, n) = self.mid;
         let tmp = &mut self.tmp[..n];
         for (t, m) in tmp.iter_mut().zip(&self.mag_before[lo..lo + n]) {
@@ -243,7 +284,11 @@ impl NotePitch {
                 }
             }
         }
-        let new_share = if peaks > 0 { new as f64 / peaks as f64 } else { 0.0 };
+        let new_share = if peaks > 0 {
+            new as f64 / peaks as f64
+        } else {
+            0.0
+        };
         let l2 = |f: f64| if f != 0.0 { f.log2() } else { 0.0 };
         out.copy_from_slice(&[
             l2(f0b),

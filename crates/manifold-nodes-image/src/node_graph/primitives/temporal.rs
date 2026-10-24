@@ -12,8 +12,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuTexture, GpuTextureFormat};
 
-use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::state_store::NodeState;
@@ -672,8 +672,14 @@ mod gpu_tests {
     use manifold_gpu::GpuTextureFormat;
 
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::execution_plan::ResourceId, scene::boundary_nodes::Source, state_store::StateStore, exec::execution_plan::compile};
     use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::{
+        exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+        exec::execution_plan::ExecutionPlan, exec::execution_plan::ResourceId,
+        exec::execution_plan::compile, exec::metal_backend::MetalBackend, graph::Graph,
+        parameters::ParamValue, scene::boundary_nodes::FinalOutput, scene::boundary_nodes::Source,
+        state_store::StateStore,
+    };
 
     use super::Feedback;
     use manifold_node_engine::primitives::value::Value;
@@ -935,9 +941,9 @@ mod gpu_tests {
     /// bootstrap. The chain's seed-bootstrap test belongs at frame 1.)
     #[test]
     fn feedback_seed_drives_first_frame_output() {
-        use manifold_node_engine::exec::backend::Backend;
-        use manifold_node_engine::bindings::Slot;
         use half::f16;
+        use manifold_node_engine::bindings::Slot;
+        use manifold_node_engine::exec::backend::Backend;
 
         let device = manifold_gpu::testkit::test_device();
         let (w, h) = (4u32, 4u32);

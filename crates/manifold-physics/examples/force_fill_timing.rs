@@ -12,17 +12,31 @@
 use std::time::Instant;
 
 use manifold_physics::FieldValue;
-use manifold_physics::force_lattice::{FILL_THREADS, FillWorkers, ForceLattice, FORCE_LATTICE_STRIDE};
 use manifold_physics::VectorField;
+use manifold_physics::force_lattice::{
+    FILL_THREADS, FORCE_LATTICE_STRIDE, FillWorkers, ForceLattice,
+};
 
 /// The Wind card's graph (Wind.json) at transport time `t`: steady air plus
 /// gusts drifting with the wind, felt at the card's Air Resistance, gated by
 /// Enabled.
 fn wind(t: f64, speed: f32, gusts: f32, enabled: f32) -> FieldValue {
-    let steady = FieldValue::uniform([1.0, 0.0, 0.0]).unwrap().scaled(speed).unwrap();
+    let steady = FieldValue::uniform([1.0, 0.0, 0.0])
+        .unwrap()
+        .scaled(speed)
+        .unwrap();
     let travel = (t * f64::from(speed)) as f32;
-    let turbulence = FieldValue::turbulence(2.0, [travel, 0.0, 0.0], 0).unwrap().scaled(gusts).unwrap();
-    steady.sum(&turbulence).unwrap().air(1.0).unwrap().scaled(enabled).unwrap()
+    let turbulence = FieldValue::turbulence(2.0, [travel, 0.0, 0.0], 0)
+        .unwrap()
+        .scaled(gusts)
+        .unwrap();
+    steady
+        .sum(&turbulence)
+        .unwrap()
+        .air(1.0)
+        .unwrap()
+        .scaled(enabled)
+        .unwrap()
 }
 
 /// The liquid force lattice for a cubic domain of `resolution` cells: the
@@ -39,14 +53,19 @@ fn time_fill(lattice: ForceLattice, field: &FieldValue, workers: &mut FillWorker
     let runs = 3;
     let start = Instant::now();
     for _ in 0..runs {
-        lattice.fill_forces(&mut values, |x| field.sample_force(x)).unwrap();
+        lattice
+            .fill_forces(&mut values, |x| field.sample_force(x))
+            .unwrap();
     }
     let single = start.elapsed().as_secs_f64() * 1e3 / f64::from(runs);
     let start = Instant::now();
     for _ in 0..runs {
         workers.fill(lattice, &mut values, field).unwrap();
     }
-    (single, start.elapsed().as_secs_f64() * 1e3 / f64::from(runs))
+    (
+        single,
+        start.elapsed().as_secs_f64() * 1e3 / f64::from(runs),
+    )
 }
 
 fn main() {
@@ -60,11 +79,18 @@ fn main() {
         ("water 64", water(64)),
         ("water 128", water(128)),
         ("water 256", water(256)),
-        ("swarm detail 64", ForceLattice::over_box([-2.0; 3], [4.0; 3], 64)),
+        (
+            "swarm detail 64",
+            ForceLattice::over_box([-2.0; 3], [4.0; 3], 64),
+        ),
     ];
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(FILL_THREADS);
+    let threads = std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .min(FILL_THREADS);
     let mut workers = FillWorkers::start(threads - 1);
-    println!("force lattice stride {FORCE_LATTICE_STRIDE}; one fill, ms, on 1 and {threads} threads");
+    println!(
+        "force lattice stride {FORCE_LATTICE_STRIDE}; one fill, ms, on 1 and {threads} threads"
+    );
     for (label, lattice) in lattices {
         for (case, speed, gusts, enabled) in cases {
             let now = wind(10.0, speed, gusts, enabled);

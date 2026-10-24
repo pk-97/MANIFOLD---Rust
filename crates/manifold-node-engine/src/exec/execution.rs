@@ -14,19 +14,20 @@
 //!
 //! [`MetalBackend`]: crate::node_graph::MetalBackend
 
-use crate::gpu::gpu_encoder::GpuEncoder;
-use crate::runtime::layer_skin::LayerSkinRegistry;
-use crate::exec::backend::{Backend, MockBackend};
 use crate::bindings::{NodeInputs, NodeOutputs, Slot};
 use crate::content_revision::{ContentVersion, StorageRevision};
+use crate::exec::backend::{Backend, MockBackend};
 use crate::exec::effect_node::{EffectNodeContext, FrameTime, NodeInstanceId, ParamValues};
-use crate::exec::execution_plan::{CompiledMeshRevisionRule, ExecutionPlan, ExecutionStep, ResourceId};
-use crate::scene::mesh_change::{MeshAspect, MeshRevision};
+use crate::exec::execution_plan::{
+    CompiledMeshRevisionRule, ExecutionPlan, ExecutionStep, ResourceId,
+};
+use crate::gpu::gpu_encoder::GpuEncoder;
 use crate::graph::Graph;
 use crate::parameters::ParamValue;
 use crate::ports::{ArrayType, PortType};
+use crate::runtime::layer_skin::LayerSkinRegistry;
+use crate::scene::mesh_change::{MeshAspect, MeshRevision};
 use crate::state_store::{OwnerKey, StateStore};
-
 
 /// Resolve a resource's slot dims for `Backend::acquire` / `release`.
 ///
@@ -137,12 +138,12 @@ enum StepFlow {
     Abort,
 }
 
-mod node_pairs;
 mod array_growth;
-mod substep_region;
-mod scene_viewport;
 #[cfg(test)]
 mod array_passthrough_tests;
+mod node_pairs;
+mod scene_viewport;
+mod substep_region;
 
 pub struct Executor {
     backend: Box<dyn Backend>,
@@ -295,8 +296,12 @@ pub struct Executor {
     /// step actually wrote, regardless of any later swap. `None` only when the
     /// resource has no backing texture (e.g. the mock backend in tests); real
     /// GPU runs always resolve it.
-    dump_resources:
-        Vec<(NodeInstanceId, &'static str, ResourceId, Option<manifold_gpu::GpuTexture>)>,
+    dump_resources: Vec<(
+        NodeInstanceId,
+        &'static str,
+        ResourceId,
+        Option<manifold_gpu::GpuTexture>,
+    )>,
     /// Same, for `Array` (storage-buffer) outputs — particle/instance/edge
     /// buffers. Recorded under [`dump_all`] or for [`dump_array_set`] nodes;
     /// never for the atlas. Read via [`dump_array_buffer`] and decoded against the
@@ -677,7 +682,9 @@ impl Executor {
         self.slot_content_versions.fill(None);
         self.content_shapes.fill(None);
         self.resource_storage_state.fill(None);
-        self.mesh_dep_snapshots.iter_mut().for_each(|snapshot| *snapshot = None);
+        self.mesh_dep_snapshots
+            .iter_mut()
+            .for_each(|snapshot| *snapshot = None);
         self.slot_generations.clear();
         self.mesh_revision_counter = 0;
         self.rebuild_epoch = NEXT_REBUILD_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -790,14 +797,21 @@ impl Executor {
     }
 
     fn dumps_array_of(&self, node: NodeInstanceId) -> bool {
-        self.dump_all || self.dump_array_set.as_ref().is_some_and(|s| s.contains(&node))
+        self.dump_all
+            || self
+                .dump_array_set
+                .as_ref()
+                .is_some_and(|s| s.contains(&node))
     }
 
     /// Whether `node`'s outputs should be recorded into the dump this frame:
     /// everything under the Cmd+D `dump_all`, or only the listed nodes under
     /// the atlas `dump_set` or the `dump_array_set`. False on the live path.
     fn should_dump(&self, node: NodeInstanceId) -> bool {
-        self.dump_all || [&self.dump_set, &self.dump_array_set].iter().any(|set| set.as_ref().is_some_and(|s| s.contains(&node)))
+        self.dump_all
+            || [&self.dump_set, &self.dump_array_set]
+                .iter()
+                .any(|set| set.as_ref().is_some_and(|s| s.contains(&node)))
     }
 
     /// Record every Texture2D / Array output of `step` into the dump buffers,
@@ -821,7 +835,14 @@ impl Executor {
     ) {
         for &(port, res) in &step.outputs {
             match plan.resource_type(res) {
-                Some(t) if t.is_texture_2d() && (self.dump_all || self.dump_set.as_ref().is_some_and(|s| s.contains(&step.node))) => {
+                Some(t)
+                    if t.is_texture_2d()
+                        && (self.dump_all
+                            || self
+                                .dump_set
+                                .as_ref()
+                                .is_some_and(|s| s.contains(&step.node))) =>
+                {
                     let tex = self
                         .backend
                         .slot_for(res)
@@ -831,7 +852,12 @@ impl Executor {
                     self.dump_pinned_resources.insert(res);
                 }
                 Some(crate::ports::PortType::Array(_)) if self.dumps_array_of(step.node) => {
-                    if !self.dump_array_overwritten.get(res.0 as usize).copied().unwrap_or(false) {
+                    if !self
+                        .dump_array_overwritten
+                        .get(res.0 as usize)
+                        .copied()
+                        .unwrap_or(false)
+                    {
                         self.dump_array_snapshots.remove(&res);
                     } else if !self.snapshot_dump_array(res, gpu.as_deref_mut()) {
                         continue;
@@ -848,13 +874,22 @@ impl Executor {
     /// False when there is no GPU, no storage, or no memory for the copy.
     fn snapshot_dump_array(&mut self, res: ResourceId, gpu: Option<&mut GpuEncoder<'_>>) -> bool {
         let Some(gpu) = gpu else { return false };
-        let Some(source) = self.backend.slot_for(res).and_then(|s| self.backend.array_buffer(s)) else {
+        let Some(source) = self
+            .backend
+            .slot_for(res)
+            .and_then(|s| self.backend.array_buffer(s))
+        else {
             return false;
         };
         let size = source.size;
-        if self.dump_array_snapshots.get(&res).is_none_or(|snapshot| snapshot.size != size) {
+        if self
+            .dump_array_snapshots
+            .get(&res)
+            .is_none_or(|snapshot| snapshot.size != size)
+        {
             let admitted = crate::load::expand::admit_candidate_bytes(
-                gpu.device.modifier_memory_snapshot(), size,
+                gpu.device.modifier_memory_snapshot(),
+                size,
             )
             .map_err(|error| error.to_string())
             .and_then(|()| gpu.device.try_create_buffer_shared(size));
@@ -869,7 +904,8 @@ impl Executor {
                 }
             }
         }
-        gpu.native_enc.copy_buffer_to_buffer(source, &self.dump_array_snapshots[&res], size);
+        gpu.native_enc
+            .copy_buffer_to_buffer(source, &self.dump_array_snapshots[&res], size);
         true
     }
 
@@ -880,7 +916,12 @@ impl Executor {
     /// swapped buffer on alternate frames.
     pub fn dump_resources(
         &self,
-    ) -> &[(NodeInstanceId, &'static str, ResourceId, Option<manifold_gpu::GpuTexture>)] {
+    ) -> &[(
+        NodeInstanceId,
+        &'static str,
+        ResourceId,
+        Option<manifold_gpu::GpuTexture>,
+    )] {
         &self.dump_resources
     }
 
@@ -895,9 +936,11 @@ impl Executor {
     /// The buffer holding a dumped array's contents: its snapshot when a
     /// later step took its storage, else its live storage.
     pub fn dump_array_buffer(&self, res: ResourceId) -> Option<&manifold_gpu::GpuBuffer> {
-        self.dump_array_snapshots
-            .get(&res)
-            .or_else(|| self.backend.slot_for(res).and_then(|s| self.backend.array_buffer(s)))
+        self.dump_array_snapshots.get(&res).or_else(|| {
+            self.backend
+                .slot_for(res)
+                .and_then(|s| self.backend.array_buffer(s))
+        })
     }
 
     /// The storage holding `res` after the frame, for a host reading arrays
@@ -917,7 +960,9 @@ impl Executor {
         if overwritten.get(res.0 as usize).copied().unwrap_or(false) {
             return None;
         }
-        backend.slot_for(res).and_then(|slot| backend.array_buffer(slot))
+        backend
+            .slot_for(res)
+            .and_then(|slot| backend.array_buffer(slot))
     }
 
     /// Set the node whose output texture should be preserved for an
@@ -998,7 +1043,10 @@ impl Executor {
     /// `None` if it isn't a `Scalar` port or has no bound slot. `Bool`/`Enum`
     /// collapse to a number for display.
     fn read_scalar_resource(&self, plan: &ExecutionPlan, res: ResourceId) -> Option<f32> {
-        if !matches!(plan.resource_type(res), Some(crate::ports::PortType::Scalar(_))) {
+        if !matches!(
+            plan.resource_type(res),
+            Some(crate::ports::PortType::Scalar(_))
+        ) {
             return None;
         }
         let slot = self.backend.slot_for(res)?;
@@ -1019,17 +1067,20 @@ impl Executor {
     /// Test-only read of the logical per-resource mesh revision — the
     /// §3.2 authority state the slot snapshot is published from.
     #[cfg(any(test, feature = "testkit"))]
-    pub fn mesh_revision_of_res(
-        &self,
-        res: ResourceId,
-    ) -> crate::scene::mesh_change::MeshRevision {
-        self.mesh_revisions.get(res.0 as usize).copied().unwrap_or_default()
+    pub fn mesh_revision_of_res(&self, res: ResourceId) -> crate::scene::mesh_change::MeshRevision {
+        self.mesh_revisions
+            .get(res.0 as usize)
+            .copied()
+            .unwrap_or_default()
     }
 
     /// Logical resource availability, including upstream pending inputs.
     /// Rebuild handoff must not publish a pending CPU value as ready.
     pub fn mesh_pending_of(&self, res: ResourceId) -> bool {
-        self.mesh_pending.get(res.0 as usize).copied().unwrap_or(false)
+        self.mesh_pending
+            .get(res.0 as usize)
+            .copied()
+            .unwrap_or(false)
     }
 
     pub fn backend(&self) -> &dyn Backend {
@@ -1155,9 +1206,9 @@ impl Executor {
         );
         // A pair's second node receives the first node's observation.
         assert!(
-            plan.node_pairs().iter().all(|pair| {
-                !sample_steps[pair.second_step] || sample_steps[pair.first_step]
-            }),
+            plan.node_pairs()
+                .iter()
+                .all(|pair| { !sample_steps[pair.second_step] || sample_steps[pair.first_step] }),
             "a paired second node must not sample without its first node",
         );
         self.execute_frame_inner(
@@ -1293,21 +1344,27 @@ impl Executor {
             for &(port_name, _) in &step.inputs {
                 self.wired_scratch.push(port_name);
             }
-            let selected =
-                inst.node.selected_input_branch(&inst.params, &self.wired_scratch);
+            let selected = inst
+                .node
+                .selected_input_branch(&inst.params, &self.wired_scratch);
             // Branch pruning applies only to the chosen port's SIBLINGS — the
             // ports of the same type (the mux's other `in_N` branches). A
             // control input of a different type (a WIRED selector, whose
             // latched value produced this hint) must stay live or the
             // selector chain itself would be pruned and the latch frozen.
             let chosen_ty = selected.and_then(|chosen| {
-                inst.node.inputs().iter().find(|p| p.name == chosen).map(|p| p.ty)
+                inst.node
+                    .inputs()
+                    .iter()
+                    .find(|p| p.name == chosen)
+                    .map(|p| p.ty)
             });
 
             // Prune disabled skip_passthrough inputs: when a node aliases
             // in_port -> out_port, it never reads its other input ports.
-            let passthrough =
-                inst.node.skip_passthrough(&inst.params, &self.wired_scratch);
+            let passthrough = inst
+                .node
+                .skip_passthrough(&inst.params, &self.wired_scratch);
             let passthrough_in = passthrough.and_then(|(in_port, out_port)| {
                 let r_in = step
                     .inputs
@@ -1401,7 +1458,10 @@ impl Executor {
     /// Logical ResourceId state is authoritative; slot snapshots are refreshed
     /// even on skips so recycled storage cannot inherit another tenant's stamp.
     fn resource_pending(&self, resource: ResourceId) -> bool {
-        self.mesh_pending.get(resource.0 as usize).copied().unwrap_or(false)
+        self.mesh_pending
+            .get(resource.0 as usize)
+            .copied()
+            .unwrap_or(false)
             || self
                 .backend
                 .slot_for(resource)
@@ -1411,9 +1471,14 @@ impl Executor {
 
     /// Whether any of the step's readiness inputs is pending. A mux or alias
     /// counts only its selected source.
-    fn readiness_input_pending(&self, step: &ExecutionStep, selected_source: Option<ResourceId>) -> bool {
+    fn readiness_input_pending(
+        &self,
+        step: &ExecutionStep,
+        selected_source: Option<ResourceId>,
+    ) -> bool {
         step.readiness_inputs.iter().any(|&resource| {
-            selected_source.is_none_or(|selected| resource == selected) && self.resource_pending(resource)
+            selected_source.is_none_or(|selected| resource == selected)
+                && self.resource_pending(resource)
         })
     }
 
@@ -1443,13 +1508,19 @@ impl Executor {
                 .backend
                 .slot_for(res)
                 .and_then(|slot| self.backend.texture_2d(slot))
-                .map(|texture| ContentShape::Texture2D(texture.width, texture.height, texture.format))
-                .or_else(|| self.backend.slot_for(res)
-                    .and_then(|slot| self.backend.array_buffer(slot))
-                    .map(|buffer| ContentShape::Array(buffer.size)))
+                .map(|texture| {
+                    ContentShape::Texture2D(texture.width, texture.height, texture.format)
+                })
                 .or_else(|| {
-                    plan.resource_dims(res)
-                        .map(|(width, height)| ContentShape::DeclaredTexture(width, height, plan.resource_format(res)))
+                    self.backend
+                        .slot_for(res)
+                        .and_then(|slot| self.backend.array_buffer(slot))
+                        .map(|buffer| ContentShape::Array(buffer.size))
+                })
+                .or_else(|| {
+                    plan.resource_dims(res).map(|(width, height)| {
+                        ContentShape::DeclaredTexture(width, height, plan.resource_format(res))
+                    })
                 });
             let shape_changed = self.content_shapes[idx] != shape;
             self.content_shapes[idx] = shape;
@@ -1468,18 +1539,29 @@ impl Executor {
                         CompiledMeshRevisionRule::Written => token,
                         CompiledMeshRevisionRule::Fixed => old.topology,
                         CompiledMeshRevisionRule::Dependencies(deps) => {
-                            if self.mesh_deps_changed(idx, deps) { token } else { old.topology }
+                            if self.mesh_deps_changed(idx, deps) {
+                                token
+                            } else {
+                                old.topology
+                            }
                         }
                     };
                     let positions = match &rule.positions {
                         CompiledMeshRevisionRule::Written => token,
                         CompiledMeshRevisionRule::Fixed => old.positions,
                         CompiledMeshRevisionRule::Dependencies(deps) => {
-                            if self.mesh_deps_changed(idx, deps) { token } else { old.positions }
+                            if self.mesh_deps_changed(idx, deps) {
+                                token
+                            } else {
+                                old.positions
+                            }
                         }
                     };
-                    self.mesh_revisions[idx] =
-                        MeshRevision { topology, positions, content: token };
+                    self.mesh_revisions[idx] = MeshRevision {
+                        topology,
+                        positions,
+                        content: token,
+                    };
                     self.record_mesh_dep_snapshot(idx, rule);
                 } else {
                     // Non-mesh resources still use the existing logical
@@ -1494,26 +1576,28 @@ impl Executor {
             // logical metadata.
             if let Some(slot) = self.backend.slot_for(res) {
                 let s = slot.0 as usize;
-                if self.slot_pending.len() <= s { self.slot_pending.resize(s + 1, false); }
+                if self.slot_pending.len() <= s {
+                    self.slot_pending.resize(s + 1, false);
+                }
                 self.slot_pending[s] = self.mesh_pending[idx];
                 if self.slot_mesh_revisions.len() <= s {
-                    self.slot_mesh_revisions.resize(s + 1, MeshRevision::default());
+                    self.slot_mesh_revisions
+                        .resize(s + 1, MeshRevision::default());
                 }
                 self.slot_mesh_revisions[s] = self.mesh_revisions[idx];
                 if self.slot_content_versions.len() <= s {
                     self.slot_content_versions.resize(s + 1, None);
                 }
-                self.slot_content_versions[s] = if self.mesh_pending[idx]
-                    || self.mesh_revisions[idx].content == 0
-                {
-                    None
-                } else {
-                    Some(ContentVersion::new(
-                        self.rebuild_epoch,
-                        res,
-                        self.mesh_revisions[idx].content,
-                    ))
-                };
+                self.slot_content_versions[s] =
+                    if self.mesh_pending[idx] || self.mesh_revisions[idx].content == 0 {
+                        None
+                    } else {
+                        Some(ContentVersion::new(
+                            self.rebuild_epoch,
+                            res,
+                            self.mesh_revisions[idx].content,
+                        ))
+                    };
             }
         }
     }
@@ -1527,27 +1611,41 @@ impl Executor {
         step.outputs.iter().all(|&(_, res)| {
             let current = self.storage_snapshot(res);
             current.is_some()
-                && self.resource_storage_state.get(res.0 as usize).copied().flatten() == current
+                && self
+                    .resource_storage_state
+                    .get(res.0 as usize)
+                    .copied()
+                    .flatten()
+                    == current
         })
     }
 
     fn storage_snapshot(&self, resource: ResourceId) -> Option<StorageSnapshot> {
         let slot = self.backend.slot_for(resource)?;
         let revision = StorageRevision(*self.slot_generations.get(slot.0 as usize)?);
-        let identity = self.backend.texture_2d(slot).map(|texture| texture.identity_key())
-            .or_else(|| self.backend.array_buffer(slot).map(|buffer| buffer.identity_key()));
-        Some(StorageSnapshot { slot, revision, identity })
+        let identity = self
+            .backend
+            .texture_2d(slot)
+            .map(|texture| texture.identity_key())
+            .or_else(|| {
+                self.backend
+                    .array_buffer(slot)
+                    .map(|buffer| buffer.identity_key())
+            });
+        Some(StorageSnapshot {
+            slot,
+            revision,
+            identity,
+        })
     }
 
     /// §3.2 dependency comparison: true when any watched `(resource,
     /// aspect)` value differs from the snapshot recorded at the output's
     /// last commit. A missing snapshot (first commit) is changed.
-    fn mesh_deps_changed(
-        &self,
-        out_idx: usize,
-        deps: &[(ResourceId, MeshAspect)],
-    ) -> bool {
-        let Some(stored) = &self.mesh_dep_snapshots[out_idx] else { return true };
+    fn mesh_deps_changed(&self, out_idx: usize, deps: &[(ResourceId, MeshAspect)]) -> bool {
+        let Some(stored) = &self.mesh_dep_snapshots[out_idx] else {
+            return true;
+        };
         deps.iter().any(|&(r, a)| {
             let current = self.mesh_revisions[r.0 as usize].aspect(a);
             stored
@@ -1628,7 +1726,8 @@ impl Executor {
         // classified at plan compile time — see ExecutionPlan::held_resources.
         if self.memo_steps_len != Some(plan.steps().len()) {
             self.memo_steps_len = Some(plan.steps().len());
-            self.rebuild_epoch = NEXT_REBUILD_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.rebuild_epoch =
+                NEXT_REBUILD_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.step_memo.clear();
             self.step_memo.resize_with(plan.steps().len(), || None);
             self.resource_epoch.clear();
@@ -1642,29 +1741,40 @@ impl Executor {
             self.content_shapes.clear();
             self.resource_storage_state.clear();
             self.mesh_revision_counter = 0;
-            self.node_declared_unchanged.resize(plan.steps().len(), false);
+            self.node_declared_unchanged
+                .resize(plan.steps().len(), false);
             self.pending_skipped.resize(plan.steps().len(), false);
-            self.node_content_unchanged.resize(plan.steps().len(), false);
+            self.node_content_unchanged
+                .resize(plan.steps().len(), false);
             self.alias_propagation_state.clear();
-            self.alias_propagation_state.resize_with(plan.steps().len(), || None);
+            self.alias_propagation_state
+                .resize_with(plan.steps().len(), || None);
             // SCENE_MODIFIER_RT_DESIGN.md §3.2: (re)size mesh revision
             // state to the plan's resources. Zeroed revisions are
             // conservative: no stored comparison can match, so the first
             // commit after a reshape always issues fresh tokens.
-            self.mesh_revisions
-                .resize(plan.resource_count(), crate::scene::mesh_change::MeshRevision::default());
+            self.mesh_revisions.resize(
+                plan.resource_count(),
+                crate::scene::mesh_change::MeshRevision::default(),
+            );
             self.mesh_pending.resize(plan.resource_count(), false);
             self.growing_arrays = super::resource_allocation::growing_array_resources(graph, plan);
-            self.mesh_dep_snapshots.resize_with(plan.resource_count(), || None);
+            self.mesh_dep_snapshots
+                .resize_with(plan.resource_count(), || None);
             self.content_shapes.resize(plan.resource_count(), None);
-            self.resource_storage_state.resize(plan.resource_count(), None);
+            self.resource_storage_state
+                .resize(plan.resource_count(), None);
         }
         // D5: reset every frame (not sticky like `step_memo`) — a node
         // must re-declare on every frame it wants to skip; the executor
         // never carries last frame's declaration forward.
-        self.node_declared_unchanged.iter_mut().for_each(|v| *v = false);
+        self.node_declared_unchanged
+            .iter_mut()
+            .for_each(|v| *v = false);
         self.pending_skipped.iter_mut().for_each(|v| *v = false);
-        self.node_content_unchanged.iter_mut().for_each(|v| *v = false);
+        self.node_content_unchanged
+            .iter_mut()
+            .for_each(|v| *v = false);
 
         // Reset preview capture for this frame. Re-resolved below if the
         // target node is live and produces a texture.
@@ -1680,9 +1790,10 @@ impl Executor {
         self.dump_pinned_resources.clear();
         if self.dumps_arrays() {
             let backend = &*self.backend;
-            self.dump_array_overwritten = super::resource_allocation::arrays_overwritten_later(
-                graph, plan, |r| backend.slot_for(r).map(|slot| slot.0),
-            );
+            self.dump_array_overwritten =
+                super::resource_allocation::arrays_overwritten_later(graph, plan, |r| {
+                    backend.slot_for(r).map(|slot| slot.0)
+                });
         } else if !self.dump_array_snapshots.is_empty() {
             self.dump_array_snapshots.clear();
         }
@@ -1771,26 +1882,31 @@ impl Executor {
             // A substep region is one contiguous block, boundary first
             // (`docs/GPU_MPM_SOLVER_DESIGN.md` D7); its driver runs the whole
             // block. A physics sample never advances a simulation region.
-            let flow = if let Some(region) =
-                plan.substep_regions().iter().find(|region| region.steps[0] == idx)
+            let flow = if let Some(region) = plan
+                .substep_regions()
+                .iter()
+                .find(|region| region.steps[0] == idx)
             {
                 idx = region.steps[region.steps.len() - 1] + 1;
                 if partial_sample {
                     StepFlow::Next
                 } else {
                     self.run_substep_region(
-                        graph,
-                        plan,
-                        region,
-                        env,
-                        &mut tally,
-                        &mut gpu,
-                        &mut state,
+                        graph, plan, region, env, &mut tally, &mut gpu, &mut state,
                     )
                 }
             } else {
                 idx += 1;
-                self.run_step(graph, plan, idx - 1, StepPass::Frame, env, &mut tally, &mut gpu, &mut state)
+                self.run_step(
+                    graph,
+                    plan,
+                    idx - 1,
+                    StepPass::Frame,
+                    env,
+                    &mut tally,
+                    &mut gpu,
+                    &mut state,
+                )
             };
             if flow == StepFlow::Abort {
                 return;
@@ -1859,7 +1975,11 @@ impl Executor {
         // can recreate that bug as long as it uses `late_capture` for
         // its snapshot. Substep boundaries capture per iteration inside
         // their region instead and are never in this list.
-        for &step_idx in plan.late_capture_step_indices().iter().filter(|_| !partial_sample) {
+        for &step_idx in plan
+            .late_capture_step_indices()
+            .iter()
+            .filter(|_| !partial_sample)
+        {
             if !self.live_steps[step_idx] {
                 continue;
             }
@@ -1918,7 +2038,11 @@ impl Executor {
                 return StepFlow::Next;
             }
 
-            for pair in plan.node_pairs().iter().filter(|pair| pair.first_step == idx) {
+            for pair in plan
+                .node_pairs()
+                .iter()
+                .filter(|pair| pair.first_step == idx)
+            {
                 self.prepare_node_pair(graph, plan, *pair, time, sample);
             }
 
@@ -1944,15 +2068,23 @@ impl Executor {
             if !force_dirty
                 && plan.step_hoistable(idx)
                 && let Some(inst) = graph.get_node(step.node)
-                && inst.node.skip_passthrough(&inst.params, &self.wired_scratch).is_none()
+                && inst
+                    .node
+                    .skip_passthrough(&inst.params, &self.wired_scratch)
+                    .is_none()
                 && let Some(memo) = &self.step_memo[idx]
                 && memo.param_epoch == inst.param_epoch
                 && memo.input_epochs.len() == step.inputs.len()
                 && step.inputs.iter().all(|&(_, resource)| {
-                    self.backend.slot_for(resource)
+                    self.backend
+                        .slot_for(resource)
                         .and_then(|slot| self.slot_content_versions.get(slot.0 as usize))
                         .is_some_and(Option::is_some)
-                        && !self.mesh_pending.get(resource.0 as usize).copied().unwrap_or(true)
+                        && !self
+                            .mesh_pending
+                            .get(resource.0 as usize)
+                            .copied()
+                            .unwrap_or(true)
                 })
                 && self.outputs_retained(step)
                 && step
@@ -1995,9 +2127,7 @@ impl Executor {
             // skip propagates through a declaring chain. Diagnostic modes
             // force-dirty, same as the memo skip above.
             let mut data_skip = false;
-            if !force_dirty
-                && let Some(inst) = graph.get_node(step.node)
-            {
+            if !force_dirty && let Some(inst) = graph.get_node(step.node) {
                 let empty_ports = inst.node.empty_skip_input_ports();
                 if !empty_ports.is_empty()
                     && empty_ports.iter().all(|p| {
@@ -2056,10 +2186,12 @@ impl Executor {
 
             // Capacity follows growing upstream arrays before encoding consumers.
             if let Some(gpu) = gpu.as_deref_mut()
-                && let Err(error) = self.grow_step_arrays(graph, plan, step, gpu.device) {
+                && let Err(error) = self.grow_step_arrays(graph, plan, step, gpu.device)
+            {
                 log::error!("[graph] array growth at {:?}: {error}", step.node);
                 gpu.merge_frame_status(crate::runtime::frame_status::FrameRenderStatus::Failed(
-                    crate::runtime::frame_status::FrameRenderFailure::SurfaceAllocation));
+                    crate::runtime::frame_status::FrameRenderFailure::SurfaceAllocation,
+                ));
                 return StepFlow::Abort;
             }
 
@@ -2140,17 +2272,28 @@ impl Executor {
                     // their complete input set and parameters are unchanged,
                     // even when transient output storage still needs a write.
                     // This does not expand the plan's held-resource set.
-                    self.node_content_unchanged[idx] = self.step_memo[idx].as_ref().is_some_and(|memo| {
-                        memo.param_epoch == inst.param_epoch
-                            && memo.input_epochs.len() == step.inputs.len()
-                            && step.inputs.iter().zip(&memo.input_epochs).all(|(&(_, resource), &epoch)| {
-                                self.resource_epoch.get(&resource).copied() == Some(epoch)
-                                    && self.backend.slot_for(resource)
-                                        .and_then(|slot| self.slot_content_versions.get(slot.0 as usize))
-                                        .is_some_and(Option::is_some)
-                                    && !self.mesh_pending.get(resource.0 as usize).copied().unwrap_or(true)
-                            })
-                    });
+                    self.node_content_unchanged[idx] =
+                        self.step_memo[idx].as_ref().is_some_and(|memo| {
+                            memo.param_epoch == inst.param_epoch
+                                && memo.input_epochs.len() == step.inputs.len()
+                                && step.inputs.iter().zip(&memo.input_epochs).all(
+                                    |(&(_, resource), &epoch)| {
+                                        self.resource_epoch.get(&resource).copied() == Some(epoch)
+                                            && self
+                                                .backend
+                                                .slot_for(resource)
+                                                .and_then(|slot| {
+                                                    self.slot_content_versions.get(slot.0 as usize)
+                                                })
+                                                .is_some_and(Option::is_some)
+                                            && !self
+                                                .mesh_pending
+                                                .get(resource.0 as usize)
+                                                .copied()
+                                                .unwrap_or(true)
+                                    },
+                                )
+                        });
                 }
                 // Query skip-passthrough BEFORE building the full context.
                 // If the node declares itself a no-op, alias the input
@@ -2180,7 +2323,8 @@ impl Executor {
                                 .find(|&&(name, _)| name == port)
                                 .map(|&(_, resource)| resource)
                         });
-                    inst.node.skip_passthrough(&inst.params, &self.wired_scratch)
+                    inst.node
+                        .skip_passthrough(&inst.params, &self.wired_scratch)
                 };
                 // A held step neither aliases nor copies: passing a pending
                 // source through would publish bytes nobody wrote this frame
@@ -2244,7 +2388,9 @@ impl Executor {
                         .outputs
                         .iter()
                         .find(|&&(n, _)| n == out_port)
-                        .is_some_and(|&(_, r)| matches!(plan.resource_type(r), Some(PortType::Array(_))));
+                        .is_some_and(|&(_, r)| {
+                            matches!(plan.resource_type(r), Some(PortType::Array(_)))
+                        });
                     let compatible = match (in_slot, out_slot) {
                         (Some(_), Some(_)) if array => plan.array_passthrough(idx),
                         (Some(i), Some(o)) => compatible(i, o),
@@ -2252,7 +2398,11 @@ impl Executor {
                     };
                     if let (Some(i), Some(o)) = (in_slot, out_slot)
                         && compatible
-                        && if array { self.backend.alias_array(i, o) } else { self.backend.alias_2d(i, o) }
+                        && if array {
+                            self.backend.alias_array(i, o)
+                        } else {
+                            self.backend.alias_2d(i, o)
+                        }
                     {
                         performed_alias = true;
                         // Propagate the empty mark through a data-skip alias
@@ -2370,7 +2520,9 @@ impl Executor {
                     for &(_, resource) in &step.outputs {
                         if let Some(slot) = self.backend.slot_for(resource) {
                             let index = slot.0 as usize;
-                            if self.slot_pending.len() <= index { self.slot_pending.resize(index + 1, false); }
+                            if self.slot_pending.len() <= index {
+                                self.slot_pending.resize(index + 1, false);
+                            }
                             self.slot_pending[index] = false;
                         }
                     }
@@ -2389,7 +2541,9 @@ impl Executor {
                     for &(_, resource) in &step.outputs {
                         if let Some(slot) = self.backend.slot_for(resource) {
                             let index = slot.0 as usize;
-                            if self.slot_pending.len() <= index { self.slot_pending.resize(index + 1, false); }
+                            if self.slot_pending.len() <= index {
+                                self.slot_pending.resize(index + 1, false);
+                            }
                             self.slot_pending[index] = true;
                         }
                     }
@@ -2411,11 +2565,15 @@ impl Executor {
                     let error_object: Option<u32>;
                     {
                         let backend_ref: &dyn Backend = &*self.backend;
-                        let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations)
-                            .with_pending(&self.slot_pending)
-                            .with_mesh_revisions(&self.slot_mesh_revisions)
-                            .with_content_versions(&self.slot_content_versions)
-                            .with_array_layouts(&self.input_layout_scratch);
+                        let inputs = NodeInputs::new(
+                            &self.input_scratch,
+                            backend_ref,
+                            &self.slot_generations,
+                        )
+                        .with_pending(&self.slot_pending)
+                        .with_mesh_revisions(&self.slot_mesh_revisions)
+                        .with_content_versions(&self.slot_content_versions)
+                        .with_array_layouts(&self.input_layout_scratch);
                         let outputs = NodeOutputs::new(
                             &self.output_scratch,
                             backend_ref,
@@ -2443,9 +2601,9 @@ impl Executor {
                         // runtime via a sub-rect render bug.
                         let context_params = sample
                             .map(|sample| {
-                                sample.params[idx]
-                                    .as_ref()
-                                    .expect("selected physics sample step must have retained params")
+                                sample.params[idx].as_ref().expect(
+                                    "selected physics sample step must have retained params",
+                                )
                             })
                             .unwrap_or(&inst.params);
                         let mut ctx = EffectNodeContext::with_state(
@@ -2464,7 +2622,9 @@ impl Executor {
                         .with_errors(&mut self.error_scratch)
                         .with_outputs_retained(outputs_retained)
                         .with_sim_step(self.sim_step)
-                .with_sim_metrics(crate::exec::sim_metrics::SimMetricsSink::new(&self.sim_metrics));
+                        .with_sim_metrics(
+                            crate::exec::sim_metrics::SimMetricsSink::new(&self.sim_metrics),
+                        );
                         let has_gpu_binding = ctx.gpu.is_some();
                         inst.node.evaluate(&mut ctx);
                         // Borrow the same resolved resources before their last
@@ -2479,9 +2639,7 @@ impl Executor {
                             self.scene_viewport_captured = true;
                         }
                         debug_assert!(
-                            !has_gpu_binding
-                                || !ctx.outputs_unchanged
-                                || ctx.outputs_retained(),
+                            !has_gpu_binding || !ctx.outputs_unchanged || ctx.outputs_retained(),
                             "node `{}` declared physical outputs unchanged without retained output storage",
                             inst.node.type_id().as_str(),
                         );
@@ -2541,15 +2699,24 @@ impl Executor {
                     // Publish before revision commit and downstream reads.
                     for &(port, slot) in &self.output_scratch {
                         if let Some(buffer) = inst.node.provided_array_output(port)
-                            && self.backend.array_buffer(slot).is_none_or(|old| old.identity_key() != buffer.identity_key()) {
-                            assert!(self.backend.install_array_buffer(slot, buffer.clone()),
-                                "provided array must have dedicated preallocated storage");
+                            && self
+                                .backend
+                                .array_buffer(slot)
+                                .is_none_or(|old| old.identity_key() != buffer.identity_key())
+                        {
+                            assert!(
+                                self.backend.install_array_buffer(slot, buffer.clone()),
+                                "provided array must have dedicated preallocated storage"
+                            );
                         }
                         if self.backend.provided_texture_descriptor(slot).is_some() {
                             if let Some(texture) = inst.node.provided_texture_output(port) {
                                 self.backend.install_provided_texture(slot, texture);
                             } else {
-                                assert!(gpu.is_none(), "node-owned texture output was not provided");
+                                assert!(
+                                    gpu.is_none(),
+                                    "node-owned texture output was not provided"
+                                );
                             }
                         }
                     }
@@ -2585,7 +2752,8 @@ impl Executor {
                     for (slot, value) in self.render_mode_write_scratch.drain(..) {
                         self.backend.set_render_mode(slot, value);
                     }
-                    self.cpu_value_write_scratch.commit(self.backend.cpu_values_mut());
+                    self.cpu_value_write_scratch
+                        .commit(self.backend.cpu_values_mut());
                     for (slot, value) in self.mesh_source_write_scratch.drain(..) {
                         self.backend.set_mesh_source(slot, value);
                     }
@@ -2602,12 +2770,23 @@ impl Executor {
                     if !self.error_scratch.is_empty()
                         && let Some(g) = gpu.as_deref_mut()
                     {
-                        g.merge_frame_status(crate::runtime::frame_status::FrameRenderStatus::Failed(
-                            crate::runtime::frame_status::FrameRenderFailure::NodeError,
-                        ));
+                        g.merge_frame_status(
+                            crate::runtime::frame_status::FrameRenderStatus::Failed(
+                                crate::runtime::frame_status::FrameRenderFailure::NodeError,
+                            ),
+                        );
                     }
-                    let news = || crate::exec::node_errors::NodeErrorNews { node: inst.node_id.clone(), object: error_object };
-                    if let Some(msg) = self.node_errors.record(step.node, false, news, &mut self.error_scratch, std::time::Instant::now) {
+                    let news = || crate::exec::node_errors::NodeErrorNews {
+                        node: inst.node_id.clone(),
+                        object: error_object,
+                    };
+                    if let Some(msg) = self.node_errors.record(
+                        step.node,
+                        false,
+                        news,
+                        &mut self.error_scratch,
+                        std::time::Instant::now,
+                    ) {
                         eprintln!(
                             "[graph error] node {:?} ({}): {msg}",
                             step.node,
@@ -2630,7 +2809,11 @@ impl Executor {
 
             // Publish the first result to its paired second step before any
             // consumer can observe either output.
-            for pair in plan.node_pairs().iter().filter(|pair| pair.first_step == idx) {
+            for pair in plan
+                .node_pairs()
+                .iter()
+                .filter(|pair| pair.first_step == idx)
+            {
                 let (behavior, first, second) = graph
                     .pair_nodes_mut(pair.pair_index)
                     .expect("compiled pair participants exist");
@@ -2686,9 +2869,11 @@ impl Executor {
                 });
                 memo.param_epoch = param_epoch;
                 memo.input_epochs.clear();
-                memo.input_epochs.extend(step.inputs.iter().map(|&(_, res)| {
-                    self.resource_epoch.get(&res).copied().unwrap_or(0)
-                }));
+                memo.input_epochs.extend(
+                    step.inputs
+                        .iter()
+                        .map(|&(_, res)| self.resource_epoch.get(&res).copied().unwrap_or(0)),
+                );
             } else {
                 self.step_memo[idx] = None;
             }
@@ -2827,7 +3012,8 @@ impl Executor {
             let back_edge_pending = graph.get_node(step.node).is_some_and(|inst| {
                 !inst.node.runs_with_pending_inputs()
                     && step.inputs.iter().any(|&(port, resource)| {
-                        inst.node.state_capture_input_ports().contains(&port) && self.resource_pending(resource)
+                        inst.node.state_capture_input_ports().contains(&port)
+                            && self.resource_pending(resource)
                     })
             });
             if self.pending_skipped[step_idx] || back_edge_pending {
@@ -2875,11 +3061,12 @@ impl Executor {
                 self.object_write_scratch.clear();
                 self.error_scratch.clear();
                 let backend_ref: &dyn Backend = &*self.backend;
-                let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations)
-                    .with_pending(&self.slot_pending)
-                    .with_mesh_revisions(&self.slot_mesh_revisions)
-                    .with_content_versions(&self.slot_content_versions)
-                    .with_array_layouts(&self.input_layout_scratch);
+                let inputs =
+                    NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations)
+                        .with_pending(&self.slot_pending)
+                        .with_mesh_revisions(&self.slot_mesh_revisions)
+                        .with_content_versions(&self.slot_content_versions)
+                        .with_array_layouts(&self.input_layout_scratch);
                 let outputs = NodeOutputs::new(
                     &self.output_scratch,
                     backend_ref,
@@ -2908,7 +3095,9 @@ impl Executor {
                 .with_errors(&mut self.error_scratch)
                 .with_outputs_retained(capture_outputs_retained)
                 .with_sim_step(self.sim_step)
-                .with_sim_metrics(crate::exec::sim_metrics::SimMetricsSink::new(&self.sim_metrics));
+                .with_sim_metrics(crate::exec::sim_metrics::SimMetricsSink::new(
+                    &self.sim_metrics,
+                ));
                 inst.node.late_capture(&mut ctx);
                 let swap_request = ctx.texture_swap_request.take();
                 let error_object = ctx.error_object;
@@ -2943,8 +3132,17 @@ impl Executor {
                         crate::runtime::frame_status::FrameRenderFailure::NodeError,
                     ));
                 }
-                let news = || crate::exec::node_errors::NodeErrorNews { node: inst.node_id.clone(), object: error_object };
-                if let Some(msg) = self.node_errors.record(step.node, true, news, &mut self.error_scratch, std::time::Instant::now) {
+                let news = || crate::exec::node_errors::NodeErrorNews {
+                    node: inst.node_id.clone(),
+                    object: error_object,
+                };
+                if let Some(msg) = self.node_errors.record(
+                    step.node,
+                    true,
+                    news,
+                    &mut self.error_scratch,
+                    std::time::Instant::now,
+                ) {
                     eprintln!(
                         "[graph error] node {:?} ({}) late_capture: {msg}",
                         step.node,
@@ -2974,7 +3172,8 @@ impl Executor {
                         _ => false,
                     };
                     if swapped && let Some(slot) = in_slot {
-                        if let Some(snapshot) = self.slot_content_versions.get_mut(slot.0 as usize) {
+                        if let Some(snapshot) = self.slot_content_versions.get_mut(slot.0 as usize)
+                        {
                             *snapshot = None;
                         }
                         if let Some(revision) = self.slot_generations.get_mut(slot.0 as usize) {
@@ -3004,10 +3203,15 @@ impl Executor {
                     if !swapped {
                         let landed = match (out_slot, in_slot, gpu.as_deref_mut()) {
                             (Some(out_s), Some(in_s), Some(g)) => {
-                                match (self.backend.texture_2d(in_s), self.backend.texture_2d(out_s)) {
+                                match (
+                                    self.backend.texture_2d(in_s),
+                                    self.backend.texture_2d(out_s),
+                                ) {
                                     (Some(src), Some(dst)) if src.format == dst.format => {
                                         if src.width == dst.width && src.height == dst.height {
-                                            g.copy_texture_to_texture(src, dst, dst.width, dst.height);
+                                            g.copy_texture_to_texture(
+                                                src, dst, dst.width, dst.height,
+                                            );
                                         } else {
                                             g.resize_sample(src, dst);
                                         }
@@ -3066,8 +3270,8 @@ mod tests {
     use manifold_core::{Beats, Seconds};
 
     use crate::exec::effect_node::EffectNode;
-    use crate::exec::execution_plan::compile;
     use crate::exec::effect_node::{EffectNodeType, ParamValues};
+    use crate::exec::execution_plan::compile;
     use crate::parameters::ParamDef;
     use crate::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 
@@ -3078,9 +3282,15 @@ mod tests {
 
     impl ViewportPass for CpuViewportPass {
         fn render(&mut self, _: &mut EffectNodeContext<'_, '_>, _: SceneViewportConfig) {}
-        fn texture(&self) -> Option<&manifold_gpu::GpuTexture> { None }
-        fn status(&self) -> crate::runtime::frame_status::FrameRenderStatus { crate::runtime::frame_status::FrameRenderStatus::Complete }
-        fn errors(&self) -> &[String] { &[] }
+        fn texture(&self) -> Option<&manifold_gpu::GpuTexture> {
+            None
+        }
+        fn status(&self) -> crate::runtime::frame_status::FrameRenderStatus {
+            crate::runtime::frame_status::FrameRenderStatus::Complete
+        }
+        fn errors(&self) -> &[String] {
+            &[]
+        }
         fn clear_state(&mut self) {}
     }
 
@@ -3100,7 +3310,11 @@ mod tests {
         assert!(executor.set_scene_viewport(NodeInstanceId(1), config, make));
         config.width = 640;
         executor.scene_viewport_captured = true;
-        assert!(executor.set_scene_viewport(NodeInstanceId(1), config, || panic!("same target must reuse its pass")));
+        assert!(
+            executor.set_scene_viewport(NodeInstanceId(1), config, || panic!(
+                "same target must reuse its pass"
+            ))
+        );
         assert_eq!(executor.scene_viewport.as_ref().unwrap().1.width, 640);
         assert!(!executor.scene_viewport_captured);
         assert!(executor.set_scene_viewport(NodeInstanceId(2), config, make));
@@ -3170,9 +3384,9 @@ mod tests {
     }
 
     impl EffectNode for SilentAliasedNode {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -3216,8 +3430,8 @@ mod tests {
     #[should_panic(expected = "aliased_array_io")]
     #[cfg(debug_assertions)]
     fn aliased_output_assertion_fires_on_silent_primitive() {
-        use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
         use crate::exec::metal_backend::MetalBackend;
+        use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
         use crate::ports::ArrayType;
         use manifold_gpu::GpuTextureFormat;
 
@@ -3228,7 +3442,12 @@ mod tests {
         g.add_node(Box::new(SilentAliasedNode::new(particle_layout)));
         let plan = compile(&g).expect("trivial graph compiles");
 
-        let backend = MetalBackend::new(std::sync::Arc::clone(&device), 256, 256, GpuTextureFormat::Rgba16Float);
+        let backend = MetalBackend::new(
+            std::sync::Arc::clone(&device),
+            256,
+            256,
+            GpuTextureFormat::Rgba16Float,
+        );
         let mut exec = Executor::new(Box::new(backend));
         let mut native_enc = device.create_encoder("aliased-contract-test");
         let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
@@ -3310,9 +3529,9 @@ mod tests {
     }
 
     impl EffectNode for RecordingNode {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -3500,7 +3719,11 @@ mod tests {
         // On: every consumed Texture2D output is recorded.
         exec.set_dump_all(true);
         exec.execute_frame(&mut g, &plan, frame_time());
-        let nodes: Vec<_> = exec.dump_resources().iter().map(|(n, _, _, _)| *n).collect();
+        let nodes: Vec<_> = exec
+            .dump_resources()
+            .iter()
+            .map(|(n, _, _, _)| *n)
+            .collect();
         assert!(nodes.contains(&a), "a's output recorded");
         assert!(nodes.contains(&b), "b's output recorded");
 
@@ -3522,8 +3745,10 @@ mod tests {
         // Pure producer → consumer, so the producer's output gets a resource
         // (a dangling output gets none and never enters the dump).
         let producer = g.add_node(Box::new(PureCountingNode::new(true, evals.clone())));
-        let consumer =
-            g.add_node(Box::new(PureCountingNode::with_input(true, Arc::new(Mutex::new(0)))));
+        let consumer = g.add_node(Box::new(PureCountingNode::with_input(
+            true,
+            Arc::new(Mutex::new(0)),
+        )));
         g.connect((producer, "out"), (consumer, "in")).unwrap();
         let plan = compile(&g).unwrap();
         let mut exec = Executor::with_mock();
@@ -3534,7 +3759,9 @@ mod tests {
         exec.execute_frame(&mut g, &plan, frame_time());
         assert_eq!(*evals.lock().unwrap(), 1);
         assert!(
-            exec.dump_resources().iter().any(|(n, _, _, _)| *n == producer),
+            exec.dump_resources()
+                .iter()
+                .any(|(n, _, _, _)| *n == producer),
             "producer recorded on its executing frame"
         );
 
@@ -3547,7 +3774,9 @@ mod tests {
             "memoized node must not re-execute just to fill the dump"
         );
         assert!(
-            exec.dump_resources().iter().any(|(n, _, _, _)| *n == producer),
+            exec.dump_resources()
+                .iter()
+                .any(|(n, _, _, _)| *n == producer),
             "memoized producer still recorded from its held slot"
         );
     }
@@ -3585,7 +3814,11 @@ mod tests {
         // Only `a` is "visible" on the canvas.
         exec.set_dump_set(Some([a].into_iter().collect()));
         exec.execute_frame(&mut g, &plan, frame_time());
-        let nodes: Vec<_> = exec.dump_resources().iter().map(|(n, _, _, _)| *n).collect();
+        let nodes: Vec<_> = exec
+            .dump_resources()
+            .iter()
+            .map(|(n, _, _, _)| *n)
+            .collect();
         assert!(nodes.contains(&a), "listed node recorded");
         assert!(!nodes.contains(&b), "unlisted (hidden) node NOT recorded");
 
@@ -3603,19 +3836,34 @@ mod tests {
         let array = || PortType::Array(ArrayType::of_known::<crate::mesh::Vec4Vertex>());
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut g = Graph::new();
-        let a = g.add_node(Box::new(RecordingNode::new("a", vec![], vec![output("out", array())], log.clone())));
+        let a = g.add_node(Box::new(RecordingNode::new(
+            "a",
+            vec![],
+            vec![output("out", array())],
+            log.clone(),
+        )));
         let b = g.add_node(Box::new(RecordingNode::new(
             "b",
             vec![input("in", array(), true)],
             vec![output("out", array())],
             log.clone(),
         )));
-        let c = g.add_node(Box::new(RecordingNode::new("c", vec![input("in", array(), true)], vec![], log.clone())));
+        let c = g.add_node(Box::new(RecordingNode::new(
+            "c",
+            vec![input("in", array(), true)],
+            vec![],
+            log.clone(),
+        )));
         g.connect((a, "out"), (b, "in")).unwrap();
         g.connect((b, "out"), (c, "in")).unwrap();
         let plan = compile(&g).unwrap();
         let mut exec = Executor::with_mock();
-        let held = |exec: &Executor| exec.dump_array_resources().iter().map(|(n, _, _)| *n).collect::<Vec<_>>();
+        let held = |exec: &Executor| {
+            exec.dump_array_resources()
+                .iter()
+                .map(|(n, _, _)| *n)
+                .collect::<Vec<_>>()
+        };
 
         exec.set_dump_set(Some([a, b].into_iter().collect()));
         exec.execute_frame(&mut g, &plan, frame_time());
@@ -3625,7 +3873,10 @@ mod tests {
         exec.set_dump_array_set(Some([a].into_iter().collect()));
         exec.execute_frame(&mut g, &plan, frame_time());
         assert_eq!(held(&exec), vec![a], "only the listed node's array");
-        assert!(exec.dump_resources().is_empty(), "the array set holds no textures");
+        assert!(
+            exec.dump_resources().is_empty(),
+            "the array set holds no textures"
+        );
 
         exec.set_dump_array_set(None);
         exec.execute_frame(&mut g, &plan, frame_time());
@@ -3810,9 +4061,9 @@ mod tests {
     }
 
     impl EffectNode for NeedsStateNode {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -4206,7 +4457,10 @@ mod tests {
     #[should_panic(expected = "CPU sample mask must align")]
     fn physics_sample_rejects_misaligned_mask() {
         let mut g = Graph::new();
-        g.add_node(Box::new(PureCountingNode::new(false, Arc::new(Mutex::new(0)))));
+        g.add_node(Box::new(PureCountingNode::new(
+            false,
+            Arc::new(Mutex::new(0)),
+        )));
         let plan = compile(&g).unwrap();
         let mut exec = Executor::with_mock();
         exec.execute_cpu_sample_frame(&mut g, &plan, frame_time(), &[], &[]);
@@ -4235,7 +4489,11 @@ mod tests {
             exec.execute_cpu_sample_frame(&mut g, &plan, frame_time(), &mask, &params);
         }));
         assert!(result.is_err());
-        assert_eq!(exec.backend().slot_count(), 0, "validation must precede resource acquisition");
+        assert_eq!(
+            exec.backend().slot_count(),
+            0,
+            "validation must precede resource acquisition"
+        );
     }
 
     #[test]
@@ -4294,10 +4552,7 @@ mod tests {
         let live_params = g.get_node(value).unwrap().params.clone();
         let live_epoch = g.get_node(value).unwrap().param_epoch;
         let mut retained = live_params.clone();
-        retained.insert(
-            std::borrow::Cow::Borrowed("value"),
-            ParamValue::Float(1.25),
-        );
+        retained.insert(std::borrow::Cow::Borrowed("value"), ParamValue::Float(1.25));
         let sample_params: Vec<_> = plan
             .steps()
             .iter()
@@ -4355,9 +4610,9 @@ mod tests {
     }
 
     impl EffectNode for PureCountingNode {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -4446,13 +4701,21 @@ mod tests {
         // Same-value writes: no epoch bump, still clean.
         g.set_param(n, "k", ParamValue::Float(1.0)).unwrap();
         exec.execute_frame(&mut g, &plan, frame_time());
-        assert_eq!(*evals.lock().unwrap(), 1, "same-value write must stay clean");
+        assert_eq!(
+            *evals.lock().unwrap(),
+            1,
+            "same-value write must stay clean"
+        );
 
         // Real change: one re-execute, then clean again.
         g.set_param(n, "k", ParamValue::Float(2.0)).unwrap();
         exec.execute_frame(&mut g, &plan, frame_time());
         exec.execute_frame(&mut g, &plan, frame_time());
-        assert_eq!(*evals.lock().unwrap(), 2, "changed param re-executes exactly once");
+        assert_eq!(
+            *evals.lock().unwrap(),
+            2,
+            "changed param re-executes exactly once"
+        );
     }
 
     /// A pure chain goes transitively quiet: pure producer → pure consumer,
@@ -4464,7 +4727,10 @@ mod tests {
         let c_evals = Arc::new(Mutex::new(0));
         let mut g = Graph::new();
         let producer = g.add_node(Box::new(PureCountingNode::new(true, p_evals.clone())));
-        let consumer = g.add_node(Box::new(PureCountingNode::with_input(true, c_evals.clone())));
+        let consumer = g.add_node(Box::new(PureCountingNode::with_input(
+            true,
+            c_evals.clone(),
+        )));
         g.connect((producer, "out"), (consumer, "in")).unwrap();
         let plan = compile(&g).unwrap();
         let mut exec = Executor::with_mock();
@@ -4472,7 +4738,11 @@ mod tests {
             exec.execute_frame(&mut g, &plan, frame_time());
         }
         assert_eq!(*p_evals.lock().unwrap(), 1);
-        assert_eq!(*c_evals.lock().unwrap(), 1, "pure consumer of a pure producer must skip");
+        assert_eq!(
+            *c_evals.lock().unwrap(),
+            1,
+            "pure consumer of a pure producer must skip"
+        );
     }
 
     /// A pure node fed by an IMPURE producer is NOT hoistable (the closure
@@ -4484,7 +4754,10 @@ mod tests {
         let c_evals = Arc::new(Mutex::new(0));
         let mut g = Graph::new();
         let producer = g.add_node(Box::new(PureCountingNode::new(false, p_evals.clone())));
-        let consumer = g.add_node(Box::new(PureCountingNode::with_input(true, c_evals.clone())));
+        let consumer = g.add_node(Box::new(PureCountingNode::with_input(
+            true,
+            c_evals.clone(),
+        )));
         g.connect((producer, "out"), (consumer, "in")).unwrap();
         let plan = compile(&g).unwrap();
         let mut exec = Executor::with_mock();
@@ -4492,7 +4765,11 @@ mod tests {
             exec.execute_frame(&mut g, &plan, frame_time());
         }
         assert_eq!(*p_evals.lock().unwrap(), 3);
-        assert_eq!(*c_evals.lock().unwrap(), 3, "dynamic upstream must keep the pure node live");
+        assert_eq!(
+            *c_evals.lock().unwrap(),
+            3,
+            "dynamic upstream must keep the pure node live"
+        );
     }
 
     /// A non-pure consumer keeps running every frame and reads the SAME slot
@@ -4562,9 +4839,9 @@ mod tests {
     }
 
     impl EffectNode for EmptyDrivenNode {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -4608,7 +4885,10 @@ mod tests {
         let c_evals = Arc::new(Mutex::new(0));
         let mut g = Graph::new();
         let reporter = g.add_node(Box::new(EmptyDrivenNode::reporter(empty, r_evals.clone())));
-        let consumer = g.add_node(Box::new(EmptyDrivenNode::consumer(declares, c_evals.clone())));
+        let consumer = g.add_node(Box::new(EmptyDrivenNode::consumer(
+            declares,
+            c_evals.clone(),
+        )));
         g.connect((reporter, "out"), (consumer, "in")).unwrap();
         (g, r_evals, c_evals)
     }
@@ -4626,7 +4906,11 @@ mod tests {
         for _ in 0..4 {
             exec.execute_frame(&mut g, &plan, frame_time());
         }
-        assert_eq!(*r_evals.lock().unwrap(), 4, "the reporter keeps detecting every frame");
+        assert_eq!(
+            *r_evals.lock().unwrap(),
+            4,
+            "the reporter keeps detecting every frame"
+        );
         assert_eq!(
             *c_evals.lock().unwrap(),
             1,
@@ -4695,7 +4979,11 @@ mod tests {
         for _ in 0..5 {
             exec.execute_frame(&mut g, &plan, frame_time());
         }
-        assert_eq!(*a_evals.lock().unwrap(), 1, "first declarer skips from frame 2");
+        assert_eq!(
+            *a_evals.lock().unwrap(),
+            1,
+            "first declarer skips from frame 2"
+        );
         assert_eq!(
             *b_evals.lock().unwrap(),
             2,
@@ -4714,9 +5002,9 @@ mod tests {
     }
 
     impl EffectNode for DrawShapedNode {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -4771,10 +5059,7 @@ mod tests {
         let r_evals = Arc::new(Mutex::new(0));
         let d_evals = Arc::new(Mutex::new(0));
         let mut g = Graph::new();
-        let reporter = g.add_node(Box::new(EmptyDrivenNode::reporter(
-            empty.clone(),
-            r_evals,
-        )));
+        let reporter = g.add_node(Box::new(EmptyDrivenNode::reporter(empty.clone(), r_evals)));
         // A second source standing in for the live video the draw node
         // composites over (the reporter plays the detections producer).
         let video = g.add_node(Box::new(EmptyDrivenNode::reporter(
@@ -4942,10 +5227,17 @@ mod tests {
     }
 
     impl CountingNode {
-        fn new(name: &'static str, inputs: &[&'static str], capture: &'static [&'static str]) -> Self {
+        fn new(
+            name: &'static str,
+            inputs: &[&'static str],
+            capture: &'static [&'static str],
+        ) -> Self {
             Self {
                 type_id: EffectNodeType::new(name),
-                inputs: inputs.iter().map(|&port| input(port, PortType::Texture2D, false)).collect(),
+                inputs: inputs
+                    .iter()
+                    .map(|&port| input(port, PortType::Texture2D, false))
+                    .collect(),
                 capture,
                 evals: Arc::new(Mutex::new(0)),
                 captures: Arc::new(Mutex::new(0)),
@@ -4979,7 +5271,11 @@ mod tests {
             self.capture
         }
         fn persistent_output_ports(&self) -> &[&str] {
-            if self.capture.is_empty() { &[] } else { &["out"] }
+            if self.capture.is_empty() {
+                &[]
+            } else {
+                &["out"]
+            }
         }
         fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {
             *self.evals.lock().unwrap() += 1;
@@ -5015,11 +5311,19 @@ mod tests {
 
         exec.execute_frame(&mut g, &plan, frame_time());
         exec.execute_frame(&mut g, &plan, frame_time());
-        assert_eq!(*mid_evals.lock().unwrap(), 0, "a pending input holds the consumer");
+        assert_eq!(
+            *mid_evals.lock().unwrap(),
+            0,
+            "a pending input holds the consumer"
+        );
         *declare_pending.lock().unwrap() = false;
         exec.execute_frame(&mut g, &plan, frame_time());
 
-        assert_eq!(*mid_evals.lock().unwrap(), 1, "the consumer runs once its input is ready");
+        assert_eq!(
+            *mid_evals.lock().unwrap(),
+            1,
+            "the consumer runs once its input is ready"
+        );
         assert_eq!(log.lock().unwrap().as_slice(), &[false, false, true]);
     }
 
@@ -5051,7 +5355,11 @@ mod tests {
         let plan = compile(&g).unwrap();
         let mut exec = Executor::with_mock();
         let counts = || {
-            (*feedback_evals.lock().unwrap(), *captures.lock().unwrap(), *mix_evals.lock().unwrap())
+            (
+                *feedback_evals.lock().unwrap(),
+                *captures.lock().unwrap(),
+                *mix_evals.lock().unwrap(),
+            )
         };
 
         exec.execute_frame(&mut g, &plan, frame_time());
@@ -5059,10 +5367,18 @@ mod tests {
         *declare_pending.lock().unwrap() = true;
         exec.execute_frame(&mut g, &plan, frame_time());
         exec.execute_frame(&mut g, &plan, frame_time());
-        assert_eq!(counts(), (3, 1, 1), "feedback runs, mix holds, nothing is captured");
+        assert_eq!(
+            counts(),
+            (3, 1, 1),
+            "feedback runs, mix holds, nothing is captured"
+        );
         *declare_pending.lock().unwrap() = false;
         exec.execute_frame(&mut g, &plan, frame_time());
-        assert_eq!(counts(), (4, 2, 2), "the loop resumes the frame the source is ready");
+        assert_eq!(
+            counts(),
+            (4, 2, 2),
+            "the loop resumes the frame the source is ready"
+        );
     }
 
     /// SCENE_MODIFIER_RT_DESIGN.md §3.2 — executor mesh revision and
@@ -5074,8 +5390,8 @@ mod tests {
         use super::*;
         use crate::testkit::mesh_revision::*;
 
-        use crate::scene::mesh_change::{MeshOutputRule, MeshRevisionRule};
         use crate::ports::ArrayType;
+        use crate::scene::mesh_change::{MeshOutputRule, MeshRevisionRule};
 
         /// A1: an undeclared mesh writer compiles to the conservative
         /// `Written`/`Written` rule and every actual write issues fresh
@@ -5090,7 +5406,9 @@ mod tests {
             let plan = compile(&g).unwrap();
             let res = out_res(&plan, n);
 
-            let compiled = plan.mesh_rule(res).expect("MeshVertex output must compile a mesh rule");
+            let compiled = plan
+                .mesh_rule(res)
+                .expect("MeshVertex output must compile a mesh rule");
             assert!(
                 matches!(compiled.topology, CompiledMeshRevisionRule::Written)
                     && matches!(compiled.positions, CompiledMeshRevisionRule::Written),
@@ -5110,9 +5428,7 @@ mod tests {
             exec.execute_frame(&mut g, &plan, frame_time());
             let r2 = exec.mesh_revision_of_res(res);
             assert!(
-                r2.topology > r1.topology
-                    && r2.positions > r1.positions
-                    && r2.content > r1.content,
+                r2.topology > r1.topology && r2.positions > r1.positions && r2.content > r1.content,
                 "every actual write must revise all three aspects, got {r1:?} then {r2:?}"
             );
         }
@@ -5174,7 +5490,10 @@ mod tests {
             let mut exec = Executor::with_mock();
             *src_pending.lock().unwrap() = true;
             exec.execute_frame(&mut g, &plan, frame_time());
-            assert!(exec.mesh_pending_of(res_a), "producer's own declaration must set its pending");
+            assert!(
+                exec.mesh_pending_of(res_a),
+                "producer's own declaration must set its pending"
+            );
             assert!(
                 exec.mesh_pending_of(res_b),
                 "pending must propagate to the downstream mesh consumer"
@@ -5212,7 +5531,9 @@ mod tests {
             let plan = compile(&g).unwrap();
             let res = out_res(&plan, n);
 
-            let compiled = plan.mesh_rule(res).expect("MeshVertex output must compile a mesh rule");
+            let compiled = plan
+                .mesh_rule(res)
+                .expect("MeshVertex output must compile a mesh rule");
             assert!(
                 matches!(compiled.topology, CompiledMeshRevisionRule::Fixed)
                     && matches!(compiled.positions, CompiledMeshRevisionRule::Fixed),
@@ -5281,18 +5602,6 @@ mod tests {
             executor.execute_frame(&mut graph, &plan, frame_time());
             assert!(executor.mesh_revision_of_res(result).topology > reused.topology);
         }
-
-
-
-
-
-
-
-
-
-
-
-
     }
 
     struct SkipPassthroughPruneNode {
@@ -5303,23 +5612,46 @@ mod tests {
         fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
             crate::scene::depth_rule::DepthRule::Terminal
         }
-        fn type_id(&self) -> &EffectNodeType { &self.type_id }
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
         fn inputs(&self) -> &[NodeInput] {
             static INPUTS: [NodeInput; 2] = [
-                NodePort { name: std::borrow::Cow::Borrowed("in"), ty: PortType::Texture2D, kind: PortKind::Input, required: false },
-                NodePort { name: std::borrow::Cow::Borrowed("extra"), ty: PortType::Texture2D, kind: PortKind::Input, required: false },
+                NodePort {
+                    name: std::borrow::Cow::Borrowed("in"),
+                    ty: PortType::Texture2D,
+                    kind: PortKind::Input,
+                    required: false,
+                },
+                NodePort {
+                    name: std::borrow::Cow::Borrowed("extra"),
+                    ty: PortType::Texture2D,
+                    kind: PortKind::Input,
+                    required: false,
+                },
             ];
             &INPUTS
         }
         fn outputs(&self) -> &[NodeOutput] {
-            static OUTPUTS: [NodeOutput; 1] = [NodePort { name: std::borrow::Cow::Borrowed("out"), ty: PortType::Texture2D, kind: PortKind::Output, required: false }];
+            static OUTPUTS: [NodeOutput; 1] = [NodePort {
+                name: std::borrow::Cow::Borrowed("out"),
+                ty: PortType::Texture2D,
+                kind: PortKind::Output,
+                required: false,
+            }];
             &OUTPUTS
         }
-        fn parameters(&self) -> &[ParamDef] { &[] }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
         fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {
             *self.evals.lock().unwrap() += 1;
         }
-        fn skip_passthrough(&self, _: &crate::exec::effect_node::ParamValues, _: &[&str]) -> Option<(&'static str, &'static str)> {
+        fn skip_passthrough(
+            &self,
+            _: &crate::exec::effect_node::ParamValues,
+            _: &[&str],
+        ) -> Option<(&'static str, &'static str)> {
             Some(("in", "out"))
         }
     }
@@ -5353,9 +5685,20 @@ mod tests {
         let plan = compile(&g).unwrap();
         let mut exec = Executor::with_mock();
         exec.execute_frame(&mut g, &plan, frame_time());
-        let names: Vec<String> = log.lock().unwrap().iter().map(|r| r.type_name.clone()).collect();
-        assert!(names.contains(&"src_prod".to_string()), "in-producer must run, got {names:?}");
-        assert!(!names.contains(&"extra_prod".to_string()), "non-in producer must be pruned, got {names:?}");
+        let names: Vec<String> = log
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.type_name.clone())
+            .collect();
+        assert!(
+            names.contains(&"src_prod".to_string()),
+            "in-producer must run, got {names:?}"
+        );
+        assert!(
+            !names.contains(&"extra_prod".to_string()),
+            "non-in producer must be pruned, got {names:?}"
+        );
     }
 }
 
@@ -5379,12 +5722,12 @@ mod tests {
 mod alias_gpu_tests {
     use super::*;
     use crate::exec::effect_node::EffectNode;
-    use crate::exec::metal_backend::MetalBackend;
-    use crate::exec::execution_plan::compile;
     use crate::exec::effect_node::EffectNodeType;
+    use crate::exec::execution_plan::compile;
+    use crate::exec::metal_backend::MetalBackend;
+    use crate::gpu::render_target::RenderTarget;
     use crate::parameters::ParamDef;
     use crate::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
-    use crate::gpu::render_target::RenderTarget;
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
     use std::sync::{Arc, Mutex};
@@ -5400,22 +5743,30 @@ mod alias_gpu_tests {
         fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
             crate::scene::depth_rule::DepthRule::Terminal
         }
-        fn type_id(&self) -> &EffectNodeType { &self.type_id }
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
         fn inputs(&self) -> &[NodeInput] {
             static INPUTS: [NodeInput; 1] = [NodePort {
-                name: std::borrow::Cow::Borrowed("in"), ty: PortType::Texture2D,
-                kind: PortKind::Input, required: true,
+                name: std::borrow::Cow::Borrowed("in"),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: true,
             }];
             if self.source { &[] } else { &INPUTS }
         }
         fn outputs(&self) -> &[NodeOutput] {
             static OUTPUTS: [NodeOutput; 1] = [NodePort {
-                name: std::borrow::Cow::Borrowed("out"), ty: PortType::Texture2D,
-                kind: PortKind::Output, required: false,
+                name: std::borrow::Cow::Borrowed("out"),
+                ty: PortType::Texture2D,
+                kind: PortKind::Output,
+                required: false,
             }];
             &OUTPUTS
         }
-        fn parameters(&self) -> &[ParamDef] { &[] }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
         fn output_format(&self, _: &str) -> Option<GpuTextureFormat> {
             self.source.then_some(GpuTextureFormat::Rgba16Float)
         }
@@ -5423,12 +5774,23 @@ mod alias_gpu_tests {
             (!self.source).then_some(("in", "out"))
         }
         fn skip_passthrough(
-            &self, _: &crate::exec::effect_node::ParamValues, _: &[&str],
-        ) -> Option<(&'static str, &'static str)> { self.skip_passthrough_ports() }
+            &self,
+            _: &crate::exec::effect_node::ParamValues,
+            _: &[&str],
+        ) -> Option<(&'static str, &'static str)> {
+            self.skip_passthrough_ports()
+        }
         fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-            self.evals.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.evals
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let out = ctx.outputs.texture_2d("out").unwrap().clone();
-            ctx.gpu_encoder().clear_texture(&out, if self.source { 0.25 } else { 0.75 }, 0.0, 0.0, 1.0);
+            ctx.gpu_encoder().clear_texture(
+                &out,
+                if self.source { 0.25 } else { 0.75 },
+                0.0,
+                0.0,
+                1.0,
+            );
         }
     }
 
@@ -5438,27 +5800,47 @@ mod alias_gpu_tests {
         let evals = Arc::new(AtomicUsize::new(0));
         let mut graph = Graph::new();
         let src = graph.add_node(Box::new(BypassProbe {
-            source: true, evals: Arc::new(AtomicUsize::new(0)),
+            source: true,
+            evals: Arc::new(AtomicUsize::new(0)),
             type_id: EffectNodeType::new("test.bypass_source"),
         }));
         let effect = graph.add_node(Box::new(BypassProbe {
-            source: false, evals: evals.clone(),
+            source: false,
+            evals: evals.clone(),
             type_id: EffectNodeType::new("test.bypass_effect"),
         }));
         let out = graph.add_node(Box::new(crate::scene::boundary_nodes::FinalOutput::new()));
         graph.connect((src, "out"), (effect, "in")).unwrap();
         graph.connect((effect, "out"), (out, "in")).unwrap();
         let plan = compile(&graph).unwrap();
-        let resource = |node| plan.steps().iter().find(|s| s.node == node).unwrap().outputs[0].1;
+        let resource = |node| {
+            plan.steps()
+                .iter()
+                .find(|s| s.node == node)
+                .unwrap()
+                .outputs[0]
+                .1
+        };
         let (src_res, dst_res) = (resource(src), resource(effect));
-        assert_eq!(plan.resource_format(src_res), Some(GpuTextureFormat::Rgba16Float));
+        assert_eq!(
+            plan.resource_format(src_res),
+            Some(GpuTextureFormat::Rgba16Float)
+        );
         assert_eq!(plan.resource_format(dst_res), None);
         let mut backend = MetalBackend::new(device.arc(), 4, 4, GpuTextureFormat::Rgba16Float);
-        backend.pre_bind_texture_2d(src_res, RenderTarget::new(&device, 4, 4, GpuTextureFormat::Rgba16Float, "bypass-src"));
-        backend.pre_bind_texture_2d(dst_res, RenderTarget::new(&device, size, size, format, "bypass-dst"));
+        backend.pre_bind_texture_2d(
+            src_res,
+            RenderTarget::new(&device, 4, 4, GpuTextureFormat::Rgba16Float, "bypass-src"),
+        );
+        backend.pre_bind_texture_2d(
+            dst_res,
+            RenderTarget::new(&device, size, size, format, "bypass-dst"),
+        );
         let dst_slot = backend.slot_for(dst_res).unwrap();
         let host = RenderTarget::new(&device, size, size, format, "bypass-host");
-        if borrowed { assert!(backend.replace_texture_2d(dst_slot, host.texture.clone())); }
+        if borrowed {
+            assert!(backend.replace_texture_2d(dst_slot, host.texture.clone()));
+        }
         let mut exec = Executor::new(Box::new(backend));
         // Two frames also exercise alias generation bookkeeping and copy freshness.
         for _ in 0..2 {
@@ -5468,18 +5850,28 @@ mod alias_gpu_tests {
             enc.commit_and_wait_completed();
         }
         let compatible = size == 4 && format == GpuTextureFormat::Rgba16Float;
-        assert_eq!(evals.load(Ordering::Relaxed), if compatible { 0 } else { 2 });
+        assert_eq!(
+            evals.load(Ordering::Relaxed),
+            if compatible { 0 } else { 2 }
+        );
         if borrowed && compatible {
-            assert_eq!(exec.backend().texture_2d(dst_slot).unwrap().raw_ptr(), host.texture.raw_ptr());
+            assert_eq!(
+                exec.backend().texture_2d(dst_slot).unwrap().raw_ptr(),
+                host.texture.raw_ptr()
+            );
             let buffer = device.create_buffer_shared(4 * 4 * 8);
             let mut enc = device.create_encoder("bypass-readback");
             enc.copy_texture_to_buffer(&host.texture, &buffer, 4, 4, 32);
             enc.commit_and_wait_completed();
             let bits = unsafe { *buffer.mapped_ptr().unwrap().cast::<u16>() };
             assert_eq!(half::f16::from_bits(bits).to_f32(), 0.25);
-            assert!(exec.alias_propagation_state.iter().flatten().any(|state| {
-                state.source == src_res && state.source_content.is_some()
-            }), "a physical passthrough copy must retain its selected logical dependency");
+            assert!(
+                exec.alias_propagation_state
+                    .iter()
+                    .flatten()
+                    .any(|state| { state.source == src_res && state.source_content.is_some() }),
+                "a physical passthrough copy must retain its selected logical dependency"
+            );
         }
     }
 
@@ -5510,16 +5902,24 @@ mod alias_gpu_tests {
         fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
             crate::scene::depth_rule::DepthRule::Terminal
         }
-        fn type_id(&self) -> &EffectNodeType { &self.type_id }
-        fn inputs(&self) -> &[NodeInput] { &[] }
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &[]
+        }
         fn outputs(&self) -> &[NodeOutput] {
             static OUTPUTS: [NodeOutput; 1] = [NodePort {
-                name: std::borrow::Cow::Borrowed("out"), ty: PortType::Texture2D,
-                kind: PortKind::Output, required: false,
+                name: std::borrow::Cow::Borrowed("out"),
+                ty: PortType::Texture2D,
+                kind: PortKind::Output,
+                required: false,
             }];
             &OUTPUTS
         }
-        fn parameters(&self) -> &[ParamDef] { &[] }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
         fn output_format(&self, _: &str) -> Option<GpuTextureFormat> {
             Some(GpuTextureFormat::Rgba16Float)
         }
@@ -5557,21 +5957,32 @@ mod alias_gpu_tests {
             pending: pending.clone(),
         }));
         let effect = graph.add_node(Box::new(BypassProbe {
-            source: false, evals: evals.clone(),
+            source: false,
+            evals: evals.clone(),
             type_id: EffectNodeType::new("test.bypass_effect"),
         }));
         let out = graph.add_node(Box::new(crate::scene::boundary_nodes::FinalOutput::new()));
         graph.connect((src, "out"), (effect, "in")).unwrap();
         graph.connect((effect, "out"), (out, "in")).unwrap();
         let plan = compile(&graph).unwrap();
-        let resource = |node| plan.steps().iter().find(|s| s.node == node).unwrap().outputs[0].1;
+        let resource = |node| {
+            plan.steps()
+                .iter()
+                .find(|s| s.node == node)
+                .unwrap()
+                .outputs[0]
+                .1
+        };
         let (src_res, dst_res) = (resource(src), resource(effect));
         let format = GpuTextureFormat::Rgba16Float;
         let mut backend = MetalBackend::new(device.arc(), 4, 4, format);
         let src_target = RenderTarget::new(&device, 4, 4, format, "held-src");
         let src_texture = src_target.texture.clone();
         backend.pre_bind_texture_2d(src_res, src_target);
-        backend.pre_bind_texture_2d(dst_res, RenderTarget::new(&device, 4, 4, format, "held-dst"));
+        backend.pre_bind_texture_2d(
+            dst_res,
+            RenderTarget::new(&device, 4, 4, format, "held-dst"),
+        );
         let dst_slot = backend.slot_for(dst_res).unwrap();
         let host = RenderTarget::new(&device, 4, 4, format, "held-host");
         assert!(backend.replace_texture_2d(dst_slot, host.texture.clone()));
@@ -5591,18 +6002,34 @@ mod alias_gpu_tests {
         GpuEncoder::new(&mut enc, &device).clear_texture(&src_texture, 0.9, 0.0, 0.0, 1.0);
         enc.commit_and_wait_completed();
         frame(&mut exec, &mut graph);
-        assert_eq!(first_red(&device, &host.texture), 0.25, "the held terminal keeps the last frame");
-        assert!(exec.mesh_pending_of(dst_res), "the host can see the terminal is held");
+        assert_eq!(
+            first_red(&device, &host.texture),
+            0.25,
+            "the held terminal keeps the last frame"
+        );
+        assert!(
+            exec.mesh_pending_of(dst_res),
+            "the host can see the terminal is held"
+        );
 
         *pending.lock().unwrap() = false;
         frame(&mut exec, &mut graph);
         assert!(!exec.mesh_pending_of(dst_res));
         assert_eq!(first_red(&device, &host.texture), 0.25);
-        assert_eq!(evals.load(Ordering::Relaxed), 0, "a pass-through never evaluates");
+        assert_eq!(
+            evals.load(Ordering::Relaxed),
+            0,
+            "a pass-through never evaluates"
+        );
     }
 
     fn frame_time() -> FrameTime {
-        FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }
+        FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        }
     }
 
     /// A Texture2D producer whose declared-unchanged behavior is driven by
@@ -5615,9 +6042,9 @@ mod alias_gpu_tests {
     }
 
     impl EffectNode for GatedSourceNode {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -5651,9 +6078,9 @@ mod alias_gpu_tests {
     }
 
     impl EffectNode for GenObservingNode {
-    fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-        crate::scene::depth_rule::DepthRule::Terminal
-    }
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -5673,7 +6100,10 @@ mod alias_gpu_tests {
             &[]
         }
         fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-            self.log.lock().unwrap().push(ctx.inputs.storage_revision("in"));
+            self.log
+                .lock()
+                .unwrap()
+                .push(ctx.inputs.storage_revision("in"));
         }
     }
 
@@ -5728,8 +6158,14 @@ mod alias_gpu_tests {
         // Pin BOTH resources to fixed physical slots so the propagation
         // logic is observed in isolation from ordinary pool recycling —
         // see this module's doc comment.
-        backend.pre_bind_texture_2d(r_src_out, RenderTarget::new(&device, w, h, format, "p3b-src-out"));
-        backend.pre_bind_texture_2d(r_mux_out, RenderTarget::new(&device, w, h, format, "p3b-mux-out"));
+        backend.pre_bind_texture_2d(
+            r_src_out,
+            RenderTarget::new(&device, w, h, format, "p3b-src-out"),
+        );
+        backend.pre_bind_texture_2d(
+            r_mux_out,
+            RenderTarget::new(&device, w, h, format, "p3b-mux-out"),
+        );
 
         let mut exec = Executor::new(Box::new(backend));
 
@@ -5749,20 +6185,33 @@ mod alias_gpu_tests {
         exec.execute_frame(&mut g, &plan, frame_time());
 
         let log = log.lock().unwrap();
-        assert_eq!(log.len(), 4, "observer must evaluate every frame (never pruned)");
+        assert_eq!(
+            log.len(),
+            4,
+            "observer must evaluate every frame (never pruned)"
+        );
         let (g1, g2, g3, g4) = (log[0], log[1], log[2], log[3]);
         assert!(g1.is_some(), "aliased input must resolve to a bound slot");
-        assert_eq!(g2, g1, "static input ⇒ mux alias propagates unchanged, generation stable");
-        assert_ne!(g3, g2, "source re-emitting must bump the generation downstream sees");
-        assert_eq!(g4, g3, "re-stabilization after a change must also propagate as unchanged");
+        assert_eq!(
+            g2, g1,
+            "static input ⇒ mux alias propagates unchanged, generation stable"
+        );
+        assert_ne!(
+            g3, g2,
+            "source re-emitting must bump the generation downstream sees"
+        );
+        assert_eq!(
+            g4, g3,
+            "re-stabilization after a change must also propagate as unchanged"
+        );
     }
 }
 
 #[cfg(test)]
 mod content_revision_tests {
     use super::*;
-    use crate::exec::execution_plan::compile;
     use crate::exec::effect_node::{EffectNode, EffectNodeType, ParamValues};
+    use crate::exec::execution_plan::compile;
     use crate::parameters::ParamDef;
     use crate::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
     use manifold_core::{Beats, Seconds};
@@ -5789,8 +6238,12 @@ mod content_revision_tests {
         fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
             crate::scene::depth_rule::DepthRule::Terminal
         }
-        fn type_id(&self) -> &EffectNodeType { &self.type_id }
-        fn inputs(&self) -> &[NodeInput] { &[] }
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &[]
+        }
         fn outputs(&self) -> &[NodeOutput] {
             static OUTPUTS: [NodeOutput; 1] = [NodePort {
                 name: std::borrow::Cow::Borrowed("out"),
@@ -5800,8 +6253,12 @@ mod content_revision_tests {
             }];
             &OUTPUTS
         }
-        fn parameters(&self) -> &[ParamDef] { &[] }
-        fn is_pure(&self) -> bool { self.force_pure_recopy }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn is_pure(&self) -> bool {
+            self.force_pure_recopy
+        }
         fn skip_passthrough(
             &self,
             _params: &ParamValues,
@@ -5837,7 +6294,9 @@ mod content_revision_tests {
         fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
             crate::scene::depth_rule::DepthRule::Terminal
         }
-        fn type_id(&self) -> &EffectNodeType { &self.type_id }
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
         fn inputs(&self) -> &[NodeInput] {
             static INPUTS: [NodeInput; 1] = [NodePort {
                 name: std::borrow::Cow::Borrowed("in"),
@@ -5847,10 +6306,16 @@ mod content_revision_tests {
             }];
             &INPUTS
         }
-        fn outputs(&self) -> &[NodeOutput] { &[] }
-        fn parameters(&self) -> &[ParamDef] { &[] }
+        fn outputs(&self) -> &[NodeOutput] {
+            &[]
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
         // Observes pending publications, so it must run while one is pending.
-        fn runs_with_pending_inputs(&self) -> bool { true }
+        fn runs_with_pending_inputs(&self) -> bool {
+            true
+        }
         fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
             self.log.lock().unwrap().push((
                 ctx.inputs.content_version("in"),
@@ -5888,13 +6353,22 @@ mod content_revision_tests {
         executor.execute_frame(&mut graph, &plan, frame_time());
         let first_two = log.lock().unwrap().clone();
         assert!(first_two[0].0.is_some());
-        assert_eq!(first_two[1].0, first_two[0].0, "semantic copy retains content");
-        assert_ne!(first_two[1].1, first_two[0].1, "physical copy advances storage");
+        assert_eq!(
+            first_two[1].0, first_two[0].0,
+            "semantic copy retains content"
+        );
+        assert_ne!(
+            first_two[1].1, first_two[0].1,
+            "physical copy advances storage"
+        );
 
         *unchanged.lock().unwrap() = false;
         executor.execute_frame(&mut graph, &plan, frame_time());
         let changed = log.lock().unwrap().last().unwrap().0;
-        assert_ne!(changed, first_two[1].0, "a true write gets a fresh content version");
+        assert_ne!(
+            changed, first_two[1].0,
+            "a true write gets a fresh content version"
+        );
 
         *pending.lock().unwrap() = true;
         executor.execute_frame(&mut graph, &plan, frame_time());
@@ -5904,11 +6378,17 @@ mod content_revision_tests {
         executor.execute_frame(&mut graph, &plan, frame_time());
         let ready = log.lock().unwrap().last().unwrap().0;
         assert!(ready.is_some());
-        assert_ne!(ready, changed, "pending to ready forces a fresh publication");
+        assert_ne!(
+            ready, changed,
+            "pending to ready forces a fresh publication"
+        );
         executor.reset_after_resource_replacement();
         executor.execute_frame(&mut graph, &plan, frame_time());
         let after_reset = log.lock().unwrap().last().unwrap().0;
-        assert_ne!(after_reset, ready, "resource reset must issue a new epoch identity");
+        assert_ne!(
+            after_reset, ready,
+            "resource reset must issue a new epoch identity"
+        );
 
         let epoch_log = Arc::new(Mutex::new(Vec::new()));
         let mut epoch_graph = Graph::new();
@@ -5923,7 +6403,9 @@ mod content_revision_tests {
             type_id: EffectNodeType::new("test.content_sink_epoch"),
             log: epoch_log.clone(),
         }));
-        epoch_graph.connect((epoch_source, "out"), (epoch_sink, "in")).unwrap();
+        epoch_graph
+            .connect((epoch_source, "out"), (epoch_sink, "in"))
+            .unwrap();
         let epoch_plan = compile(&epoch_graph).unwrap();
         let mut second = Executor::with_mock();
         second.execute_frame(&mut epoch_graph, &epoch_plan, frame_time());
@@ -5957,11 +6439,17 @@ mod content_revision_tests {
         executor.execute_frame(&mut graph, &plan, frame_time());
         *pending.lock().unwrap() = false;
         executor.execute_frame(&mut graph, &plan, frame_time());
-        assert_eq!(*retained.lock().unwrap(), [false, true],
-            "completed physical copy remains retained while publication was pending");
+        assert_eq!(
+            *retained.lock().unwrap(),
+            [false, true],
+            "completed physical copy remains retained while publication was pending"
+        );
         let log = log.lock().unwrap();
         assert!(log[0].0.is_none());
-        assert!(log[1].0.is_some(), "pending publication must be able to become ready");
+        assert!(
+            log[1].0.is_some(),
+            "pending publication must be able to become ready"
+        );
     }
 
     #[test]
@@ -6049,29 +6537,34 @@ mod content_revision_tests {
         graph.connect((source_a, "out"), (mux, "in_0")).unwrap();
         graph.connect((source_b, "out"), (mux, "in_1")).unwrap();
         graph.connect((mux, "out"), (selected_sink, "in")).unwrap();
-        graph.connect((source_b, "out"), (pending_sink, "in")).unwrap();
-        graph.set_param(
-            mux,
-            "selector",
-            crate::parameters::ParamValue::Float(0.0),
-        ).unwrap();
+        graph
+            .connect((source_b, "out"), (pending_sink, "in"))
+            .unwrap();
+        graph
+            .set_param(mux, "selector", crate::parameters::ParamValue::Float(0.0))
+            .unwrap();
         let plan = compile(&graph).unwrap();
         let mut executor = Executor::with_mock();
         executor.execute_frame(&mut graph, &plan, frame_time());
         let first = selected_log.lock().unwrap().last().copied().unwrap();
         assert!(first.0.is_some(), "selected ready source publishes content");
-        assert_eq!(first.2, Some(true), "unselected pending input must not poison alias");
+        assert_eq!(
+            first.2,
+            Some(true),
+            "unselected pending input must not poison alias"
+        );
 
         *pending_b.lock().unwrap() = false;
-        graph.set_param(
-            mux,
-            "selector",
-            crate::parameters::ParamValue::Float(1.0),
-        ).unwrap();
+        graph
+            .set_param(mux, "selector", crate::parameters::ParamValue::Float(1.0))
+            .unwrap();
         executor.execute_frame(&mut graph, &plan, frame_time());
         let second = selected_log.lock().unwrap().last().copied().unwrap();
         assert!(second.0.is_some());
-        assert_ne!(first.0, second.0, "switching selected source changes output identity");
+        assert_ne!(
+            first.0, second.0,
+            "switching selected source changes output identity"
+        );
     }
 
     struct PureProbe {
@@ -6083,7 +6576,9 @@ mod content_revision_tests {
         fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
             crate::scene::depth_rule::DepthRule::Terminal
         }
-        fn type_id(&self) -> &EffectNodeType { &self.type_id }
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
         fn inputs(&self) -> &[NodeInput] {
             static INPUTS: [NodeInput; 1] = [NodePort {
                 name: std::borrow::Cow::Borrowed("in"),
@@ -6102,8 +6597,12 @@ mod content_revision_tests {
             }];
             &OUTPUTS
         }
-        fn parameters(&self) -> &[ParamDef] { &[] }
-        fn is_pure(&self) -> bool { true }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn is_pure(&self) -> bool {
+            true
+        }
         fn evaluate(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {
             *self.evaluations.lock().unwrap() += 1;
         }
@@ -6169,10 +6668,18 @@ mod content_revision_tests {
         *unchanged.lock().unwrap() = true;
         executor.execute_frame(&mut graph, &plan, frame_time());
         executor.execute_frame(&mut graph, &plan, frame_time());
-        assert_eq!(*evaluations.lock().unwrap(), 3, "transient outputs still execute to populate storage");
+        assert_eq!(
+            *evaluations.lock().unwrap(),
+            3,
+            "transient outputs still execute to populate storage"
+        );
         let observations = log.lock().unwrap();
         assert!(observations[0].0.is_some());
-        assert!(observations.iter().all(|entry| entry.0 == observations[0].0),
-            "pure/fused output content remains stable across identical IO-source recopies");
+        assert!(
+            observations
+                .iter()
+                .all(|entry| entry.0 == observations[0].0),
+            "pure/fused output content remains stable across identical IO-source recopies"
+        );
     }
 }

@@ -166,8 +166,10 @@ pub fn crash_tail() -> String {
         file.seek(SeekFrom::Start(offset))?;
         let mut bytes = Vec::with_capacity(total.min(LIMIT) as usize);
         file.take(LIMIT).read_to_end(&mut bytes)?;
-        Ok(format!("session_tail_offset={offset} total_bytes={total}\n{}",
-            String::from_utf8_lossy(&bytes)))
+        Ok(format!(
+            "session_tail_offset={offset} total_bytes={total}\n{}",
+            String::from_utf8_lossy(&bytes)
+        ))
     };
     read().unwrap_or_else(|err| format!("session_tail_unavailable={err}"))
 }

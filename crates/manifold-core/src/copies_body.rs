@@ -53,7 +53,8 @@ pub const SCATTER_JITTER: f32 = 0.04;
 /// The world measures the same widths from the hulls it installs
 /// (`manifold_node_engine::platonic::platonic_points`); a rigid test holds
 /// the two equal bit for bit.
-pub const PLATONIC_HALF_WIDTH: [f32; 5] = [0.577_350_26, 0.577_350_26, 1.0, 0.850_650_8, 0.934_172_33];
+pub const PLATONIC_HALF_WIDTH: [f32; 5] =
+    [0.577_350_26, 0.577_350_26, 1.0, 0.850_650_8, 0.934_172_33];
 
 /// A Platonic copy's box width per axis at uniform `scale`, metres: what the
 /// world measures from the scaled hull it installs.

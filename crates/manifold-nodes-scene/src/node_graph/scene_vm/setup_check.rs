@@ -8,13 +8,13 @@
 //! under the copies bodies' Count rows ([`copies_problems`]).
 
 use manifold_core::NodeId;
-use manifold_core::physics_members::BodyRefusalRow;
 use manifold_core::copies_body::{PHYSICS_WORLD_TYPE_ID, RIGID_BODY_TYPE_ID, copy_group_of_input};
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 use manifold_core::fluid_domain::{FluidDomainLayout, FluidDomainSnapshot};
 use manifold_core::liquid_setup::{
     AxisFit, BoxFit, ColumnOutcome, FillFit, SetupFit, axis_fits, fit_box, fit_fill_height,
 };
+use manifold_core::physics_members::BodyRefusalRow;
 use manifold_core::scene_doc::{ItemFields, SceneDoc, SourceRole, param_id};
 use manifold_core::scene_schema::DOMAIN_ROLE;
 use manifold_foundation::scene_surface::SceneShape;
@@ -77,7 +77,9 @@ impl SetupProblemKind {
 /// `reason` as a card line: its first letter capitalised.
 fn sentence(reason: &str) -> String {
     let mut chars = reason.chars();
-    chars.next().map_or_else(String::new, |first| first.to_uppercase().chain(chars).collect())
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
 }
 
 impl FluidRole {
@@ -123,13 +125,25 @@ impl SetupProblem {
     /// column is outlined where it is now without rebuilding the list.
     /// `live_columns[i]`, when given, is `domains[i]`'s column box held apart
     /// from its snapshot.
-    pub fn live_bounds(&self, domains: &[(NodeId, FluidDomainSnapshot)], live_columns: &[Option<([f32; 3], [f32; 3])>]) -> Option<([f32; 3], [f32; 3])> {
-        let ShapeOwner::LiquidDomain(node) = &self.owner else { return self.bounds };
-        let Some(at) = domains.iter().position(|(id, _)| id == node) else { return self.bounds };
+    pub fn live_bounds(
+        &self,
+        domains: &[(NodeId, FluidDomainSnapshot)],
+        live_columns: &[Option<([f32; 3], [f32; 3])>],
+    ) -> Option<([f32; 3], [f32; 3])> {
+        let ShapeOwner::LiquidDomain(node) = &self.owner else {
+            return self.bounds;
+        };
+        let Some(at) = domains.iter().position(|(id, _)| id == node) else {
+            return self.bounds;
+        };
         let snapshot = &domains[at].1;
         let live = match self.kind {
             SetupProblemKind::FillCapped => snapshot.accepted_layout.as_ref().map(fill_top),
-            SetupProblemKind::ColumnClipped | SetupProblemKind::ColumnOutside => live_columns.get(at).copied().flatten().or(snapshot.column_box),
+            SetupProblemKind::ColumnClipped | SetupProblemKind::ColumnOutside => live_columns
+                .get(at)
+                .copied()
+                .flatten()
+                .or(snapshot.column_box),
             _ => None,
         };
         live.or(self.bounds)
@@ -139,7 +153,14 @@ impl SetupProblem {
 /// The flat box a capped fill outlines: the domain's top face.
 fn fill_top(layout: &FluidDomainLayout) -> ([f32; 3], [f32; 3]) {
     let y = layout.min[1] + layout.size[1];
-    ([layout.min[0], y, layout.min[2]], [layout.min[0] + layout.size[0], y, layout.min[2] + layout.size[2]])
+    (
+        [layout.min[0], y, layout.min[2]],
+        [
+            layout.min[0] + layout.size[0],
+            y,
+            layout.min[2] + layout.size[2],
+        ],
+    )
 }
 
 /// A domain whose setup is read: the layout the solver takes, or the reason
@@ -154,7 +175,14 @@ pub(super) enum DomainState<'a> {
 /// names a param it lacks, or a wire drives any of them (a wired value is
 /// not the authored one).
 pub(super) fn declared_box(shape: &SceneShapeVm) -> Option<([f32; 3], [f32; 3])> {
-    let SceneShape::Box { center, rotation, size } = &shape.decl.shape else { return None };
+    let SceneShape::Box {
+        center,
+        rotation,
+        size,
+    } = &shape.decl.shape
+    else {
+        return None;
+    };
     let param = |id: &str| shape.params.iter().find(|param| param.id == id);
     let read = |ids: &[std::borrow::Cow<'static, str>; 3]| -> Option<[f32; 3]> {
         let mut out = [0.0; 3];
@@ -175,7 +203,10 @@ pub(super) fn declared_box(shape: &SceneShapeVm) -> Option<([f32; 3], [f32; 3])>
     if turn.iter().any(|angle| angle.abs() > 1e-6) {
         return Some(turned_bounds(centre, turn, size));
     }
-    Some((std::array::from_fn(|d| centre[d] - 0.5 * size[d]), std::array::from_fn(|d| centre[d] + 0.5 * size[d])))
+    Some((
+        std::array::from_fn(|d| centre[d] - 0.5 * size[d]),
+        std::array::from_fn(|d| centre[d] + 0.5 * size[d]),
+    ))
 }
 
 fn turned_bounds(centre: [f32; 3], turn: [f32; 3], size: [f32; 3]) -> ([f32; 3], [f32; 3]) {
@@ -195,22 +226,41 @@ fn turned_bounds(centre: [f32; 3], turn: [f32; 3], size: [f32; 3]) -> ([f32; 3],
 
 /// The card rows of `shape` that place it along `axes` first (size, then
 /// centre), then every other it names.
-fn placing_params(shape: &SceneShapeVm, axes: impl Iterator<Item = usize> + Clone) -> Vec<ParamAddr> {
-    let SceneShape::Box { center, size, .. } = &shape.decl.shape else { return Vec::new() };
-    let addr = |id: &str| {
-        shape.params.iter().find(|param| param.id == id).and_then(|param| match &param.write {
-            ShapeWrite::Card { id, .. } => Some(ParamAddr { scope_path: Vec::new(), node_doc_id: 0, param_id: id.clone() }),
-            ShapeWrite::Unplaced => None,
-        })
+fn placing_params(
+    shape: &SceneShapeVm,
+    axes: impl Iterator<Item = usize> + Clone,
+) -> Vec<ParamAddr> {
+    let SceneShape::Box { center, size, .. } = &shape.decl.shape else {
+        return Vec::new();
     };
-    let ids: Vec<&str> = axes.clone().map(|d| size[d].as_ref()).chain(axes.map(|d| center[d].as_ref())).collect();
+    let addr = |id: &str| {
+        shape
+            .params
+            .iter()
+            .find(|param| param.id == id)
+            .and_then(|param| match &param.write {
+                ShapeWrite::Card { id, .. } => Some(ParamAddr {
+                    scope_path: Vec::new(),
+                    node_doc_id: 0,
+                    param_id: id.clone(),
+                }),
+                ShapeWrite::Unplaced => None,
+            })
+    };
+    let ids: Vec<&str> = axes
+        .clone()
+        .map(|d| size[d].as_ref())
+        .chain(axes.map(|d| center[d].as_ref()))
+        .collect();
     ids.into_iter().filter_map(addr).collect()
 }
 
 /// The axes on which `[lo, hi]` does not sit inside the layout, by the same
 /// test the fit uses; every axis when none leaves.
 fn axes_past(layout: &FluidDomainLayout, lo: [f32; 3], hi: [f32; 3]) -> Vec<usize> {
-    let past: Vec<usize> = (0..3).filter(|&d| axis_fits(layout, lo, hi)[d] != AxisFit::Inside).collect();
+    let past: Vec<usize> = (0..3)
+        .filter(|&d| axis_fits(layout, lo, hi)[d] != AxisFit::Inside)
+        .collect();
     if past.is_empty() { vec![0, 1, 2] } else { past }
 }
 
@@ -244,7 +294,12 @@ pub(super) fn check_domain(
     if let Some((addr, height)) = fill
         && let Ok(FillFit::Capped(_)) = fit_fill_height(layout, height)
     {
-        out.push(SetupProblem { owner: domain.clone(), kind: SetupProblemKind::FillCapped, params: vec![addr], bounds: Some(fill_top(layout)) });
+        out.push(SetupProblem {
+            owner: domain.clone(),
+            kind: SetupProblemKind::FillCapped,
+            params: vec![addr],
+            bounds: Some(fill_top(layout)),
+        });
     }
     if let Some(shape) = column
         && let Some((lo, hi)) = declared_box(shape)
@@ -255,7 +310,12 @@ pub(super) fn check_domain(
             BoxFit::Outside => Some(SetupProblemKind::ColumnOutside),
         };
         if let Some(kind) = kind {
-            out.push(SetupProblem { owner: domain.clone(), kind, params: placing_params(shape, axes_past(layout, lo, hi).into_iter()), bounds: Some((lo, hi)) });
+            out.push(SetupProblem {
+                owner: domain.clone(),
+                kind,
+                params: placing_params(shape, axes_past(layout, lo, hi).into_iter()),
+                bounds: Some((lo, hi)),
+            });
         }
     }
 }
@@ -268,13 +328,20 @@ pub(super) fn check_source(
     shape: &SceneShapeVm,
     out: &mut Vec<SetupProblem>,
 ) {
-    let Some((lo, hi)) = declared_box(shape) else { return };
+    let Some((lo, hi)) = declared_box(shape) else {
+        return;
+    };
     let kind = match fit_box(layout, lo, hi) {
         BoxFit::Inside => return,
         BoxFit::Clipped { .. } => SetupProblemKind::SourceClipped(role),
         BoxFit::Outside => SetupProblemKind::SourceOutside(role),
     };
-    out.push(SetupProblem { owner: owner.clone(), kind, params: placing_params(shape, axes_past(layout, lo, hi).into_iter()), bounds: Some((lo, hi)) });
+    out.push(SetupProblem {
+        owner: owner.clone(),
+        kind,
+        params: placing_params(shape, axes_past(layout, lo, hi).into_iter()),
+        bounds: Some((lo, hi)),
+    });
 }
 
 /// Where a liquid's setup shapes sit in the graph, whether or not a wire
@@ -291,7 +358,12 @@ pub struct SetupAnchor {
 }
 
 impl SetupAnchor {
-    pub(super) fn new(owner: ShapeOwner, fill: ParamAddr, box_shape: Option<&SceneShapeVm>, column: Option<&SceneShapeVm>) -> Self {
+    pub(super) fn new(
+        owner: ShapeOwner,
+        fill: ParamAddr,
+        box_shape: Option<&SceneShapeVm>,
+        column: Option<&SceneShapeVm>,
+    ) -> Self {
         Self {
             owner,
             fill,
@@ -352,13 +424,22 @@ pub fn copies_anchors(def: &EffectGraphDef) -> Vec<CopiesAnchor> {
     out
 }
 
-fn collect_copies_anchors(nodes: &[EffectGraphNode], wires: &[EffectGraphWire], scope: &mut Vec<u32>, out: &mut Vec<CopiesAnchor>) {
+fn collect_copies_anchors(
+    nodes: &[EffectGraphNode],
+    wires: &[EffectGraphWire],
+    scope: &mut Vec<u32>,
+    out: &mut Vec<CopiesAnchor>,
+) {
     for world in nodes.iter().filter(|n| n.type_id == PHYSICS_WORLD_TYPE_ID) {
         let mut groups: Vec<(usize, u32)> = wires
             .iter()
             .filter(|w| w.to_node == world.id)
             .filter_map(|w| Some((copy_group_of_input(&w.to_port)?, w.from_node)))
-            .filter(|(_, body)| nodes.iter().any(|n| n.id == *body && n.type_id == RIGID_BODY_TYPE_ID))
+            .filter(|(_, body)| {
+                nodes
+                    .iter()
+                    .any(|n| n.id == *body && n.type_id == RIGID_BODY_TYPE_ID)
+            })
             .collect();
         if groups.is_empty() {
             continue;
@@ -366,9 +447,16 @@ fn collect_copies_anchors(nodes: &[EffectGraphNode], wires: &[EffectGraphWire], 
         groups.sort_unstable_by(|a, b| b.0.cmp(&a.0));
         let counts = groups
             .into_iter()
-            .map(|(_, body)| ParamAddr { scope_path: scope.clone(), node_doc_id: body, param_id: COPY_COUNT.to_owned() })
+            .map(|(_, body)| ParamAddr {
+                scope_path: scope.clone(),
+                node_doc_id: body,
+                param_id: COPY_COUNT.to_owned(),
+            })
             .collect();
-        out.push(CopiesAnchor { world: world.node_id.clone(), counts });
+        out.push(CopiesAnchor {
+            world: world.node_id.clone(),
+            counts,
+        });
     }
     for node in nodes {
         if let Some(group) = &node.group {
@@ -382,9 +470,18 @@ fn collect_copies_anchors(nodes: &[EffectGraphNode], wires: &[EffectGraphWire], 
 /// Each world's copies its pool could not make, as one warning under its
 /// Count rows, appended to `out`. A world declares no shape, so the
 /// viewport outlines nothing.
-pub fn copies_problems<'a>(anchors: &[CopiesAnchor], runtime: impl IntoIterator<Item = RuntimeFit<'a>>, out: &mut Vec<SetupProblem>) {
-    for report in runtime.into_iter().filter(|report| report.copies_not_made > 0) {
-        let Some(anchor) = anchors.iter().find(|anchor| &anchor.world == report.node) else { continue };
+pub fn copies_problems<'a>(
+    anchors: &[CopiesAnchor],
+    runtime: impl IntoIterator<Item = RuntimeFit<'a>>,
+    out: &mut Vec<SetupProblem>,
+) {
+    for report in runtime
+        .into_iter()
+        .filter(|report| report.copies_not_made > 0)
+    {
+        let Some(anchor) = anchors.iter().find(|anchor| &anchor.world == report.node) else {
+            continue;
+        };
         out.push(SetupProblem {
             owner: ShapeOwner::World(anchor.world.clone()),
             kind: SetupProblemKind::CopiesNotMade(report.copies_not_made),
@@ -422,19 +519,37 @@ pub fn body_anchors(def: &EffectGraphDef) -> Vec<BodyAnchor> {
     out
 }
 
-fn collect_body_anchors(nodes: &[EffectGraphNode], wires: &[EffectGraphWire], scope: &mut Vec<u32>, out: &mut Vec<BodyAnchor>) {
+fn collect_body_anchors(
+    nodes: &[EffectGraphNode],
+    wires: &[EffectGraphWire],
+    scope: &mut Vec<u32>,
+    out: &mut Vec<BodyAnchor>,
+) {
     for world in nodes.iter().filter(|n| n.type_id == PHYSICS_WORLD_TYPE_ID) {
         let inputs: Vec<(String, u32)> = wires
             .iter()
-            .filter(|w| w.to_node == world.id && manifold_core::physics_members::member_input(&w.to_port).is_some())
+            .filter(|w| {
+                w.to_node == world.id
+                    && manifold_core::physics_members::member_input(&w.to_port).is_some()
+            })
             .map(|w| (w.to_port.clone(), w.from_node))
             .collect();
         let transforms = inputs
             .iter()
-            .filter_map(|(_, body)| wires.iter().find(|w| w.to_node == *body && w.to_port == "transform").map(|w| (*body, w.from_node)))
+            .filter_map(|(_, body)| {
+                wires
+                    .iter()
+                    .find(|w| w.to_node == *body && w.to_port == "transform")
+                    .map(|w| (*body, w.from_node))
+            })
             .collect();
         if !inputs.is_empty() {
-            out.push(BodyAnchor { world: world.node_id.clone(), inputs, transforms, scope_path: scope.clone() });
+            out.push(BodyAnchor {
+                world: world.node_id.clone(),
+                inputs,
+                transforms,
+                scope_path: scope.clone(),
+            });
         }
     }
     for node in nodes {
@@ -448,19 +563,37 @@ fn collect_body_anchors(nodes: &[EffectGraphNode], wires: &[EffectGraphWire], sc
 
 /// Each body or copy group a world left out, as a warning on the control it
 /// concerns, then under the body's own rows: `refused` is (world, refusal).
-pub fn body_problems<'a>(anchors: &[BodyAnchor], refused: impl IntoIterator<Item = (&'a NodeId, &'a BodyRefusalRow)>, out: &mut Vec<SetupProblem>) {
+pub fn body_problems<'a>(
+    anchors: &[BodyAnchor],
+    refused: impl IntoIterator<Item = (&'a NodeId, &'a BodyRefusalRow)>,
+    out: &mut Vec<SetupProblem>,
+) {
     for (world, row) in refused {
-        let Some(anchor) = anchors.iter().find(|anchor| &anchor.world == world) else { continue };
-        let Some(&(_, body)) = anchor.inputs.iter().find(|(port, _)| **port == *row.input) else { continue };
-        let at = |node_doc_id: u32, param: &str| ParamAddr { scope_path: anchor.scope_path.clone(), node_doc_id, param_id: param.to_owned() };
+        let Some(anchor) = anchors.iter().find(|anchor| &anchor.world == world) else {
+            continue;
+        };
+        let Some(&(_, body)) = anchor.inputs.iter().find(|(port, _)| **port == *row.input) else {
+            continue;
+        };
+        let at = |node_doc_id: u32, param: &str| ParamAddr {
+            scope_path: anchor.scope_path.clone(),
+            node_doc_id,
+            param_id: param.to_owned(),
+        };
         let concerned = row.param.and_then(|param| {
-            if !TRANSFORM_PREFIXES.iter().any(|prefix| param.starts_with(prefix)) {
+            if !TRANSFORM_PREFIXES
+                .iter()
+                .any(|prefix| param.starts_with(prefix))
+            {
                 return Some(at(body, param));
             }
             let &(_, transform) = anchor.transforms.iter().find(|(of, _)| *of == body)?;
             Some(at(transform, param))
         });
-        let params = concerned.into_iter().chain(BODY_ROWS.iter().map(|param| at(body, param))).collect();
+        let params = concerned
+            .into_iter()
+            .chain(BODY_ROWS.iter().map(|param| at(body, param)))
+            .collect();
         out.push(SetupProblem {
             owner: ShapeOwner::World(anchor.world.clone()),
             kind: SetupProblemKind::BodyRefused(row.reason.to_string()),
@@ -476,7 +609,8 @@ fn same_slot(a: &SetupProblemKind, b: &SetupProblemKind) -> bool {
     use SetupProblemKind::{BodiesNotCoupled, ColumnClipped, ColumnOutside};
     matches!(
         (a, b),
-        (ColumnClipped | ColumnOutside, ColumnClipped | ColumnOutside) | (BodiesNotCoupled(_), BodiesNotCoupled(_))
+        (ColumnClipped | ColumnOutside, ColumnClipped | ColumnOutside)
+            | (BodiesNotCoupled(_), BodiesNotCoupled(_))
     ) || a == b
 }
 
@@ -494,20 +628,34 @@ pub fn problems_with_runtime<'a>(
     out.clear();
     out.extend_from_slice(authored);
     for report in runtime {
-        let Some(anchor) = anchors.iter().find(|anchor| matches!(&anchor.owner, ShapeOwner::LiquidDomain(node) if node == report.node)) else {
+        let Some(anchor) = anchors.iter().find(
+            |anchor| matches!(&anchor.owner, ShapeOwner::LiquidDomain(node) if node == report.node),
+        ) else {
             continue;
         };
-        let mut add = |kind: SetupProblemKind, params: &[ParamAddr], bounds: Option<([f32; 3], [f32; 3])>| {
-            match out.iter_mut().find(|problem| problem.owner == anchor.owner && same_slot(&problem.kind, &kind)) {
-                Some(problem) => {
-                    problem.kind = kind;
-                    problem.bounds = bounds.or(problem.bounds);
+        let mut add =
+            |kind: SetupProblemKind, params: &[ParamAddr], bounds: Option<([f32; 3], [f32; 3])>| {
+                match out.iter_mut().find(|problem| {
+                    problem.owner == anchor.owner && same_slot(&problem.kind, &kind)
+                }) {
+                    Some(problem) => {
+                        problem.kind = kind;
+                        problem.bounds = bounds.or(problem.bounds);
+                    }
+                    None => out.push(SetupProblem {
+                        owner: anchor.owner.clone(),
+                        kind,
+                        params: params.to_vec(),
+                        bounds,
+                    }),
                 }
-                None => out.push(SetupProblem { owner: anchor.owner.clone(), kind, params: params.to_vec(), bounds }),
-            }
-        };
+            };
         if report.fit.fill_capped {
-            add(SetupProblemKind::FillCapped, std::slice::from_ref(&anchor.fill), report.layout.map(fill_top));
+            add(
+                SetupProblemKind::FillCapped,
+                std::slice::from_ref(&anchor.fill),
+                report.layout.map(fill_top),
+            );
         }
         let column = match report.fit.column {
             ColumnOutcome::Fits => None,
@@ -515,24 +663,60 @@ pub fn problems_with_runtime<'a>(
             ColumnOutcome::Outside => Some(SetupProblemKind::ColumnOutside),
         };
         if let Some(kind) = column {
-            add(kind, &anchor.column, report.column_box.or(anchor.column_bounds));
+            add(
+                kind,
+                &anchor.column,
+                report.column_box.or(anchor.column_bounds),
+            );
         }
-        let layout_box = report.layout.map(|layout| (layout.min, std::array::from_fn(|d| layout.min[d] + layout.size[d])));
+        let layout_box = report.layout.map(|layout| {
+            (
+                layout.min,
+                std::array::from_fn(|d| layout.min[d] + layout.size[d]),
+            )
+        });
         if let Some(reason) = report.refusal {
-            let params = if anchor.domain.is_empty() { std::slice::from_ref(&anchor.fill) } else { &anchor.domain[..] };
-            add(SetupProblemKind::DomainRefused(reason.to_owned()), params, anchor.domain_bounds.or(layout_box));
+            let params = if anchor.domain.is_empty() {
+                std::slice::from_ref(&anchor.fill)
+            } else {
+                &anchor.domain[..]
+            };
+            add(
+                SetupProblemKind::DomainRefused(reason.to_owned()),
+                params,
+                anchor.domain_bounds.or(layout_box),
+            );
         }
         if report.uncoupled_bodies > 0 {
             // On the water's own rows; the bodies it skips are not one shape.
-            let params = if anchor.domain.is_empty() { std::slice::from_ref(&anchor.fill) } else { &anchor.domain[..] };
-            add(SetupProblemKind::BodiesNotCoupled(report.uncoupled_bodies), params, None);
+            let params = if anchor.domain.is_empty() {
+                std::slice::from_ref(&anchor.fill)
+            } else {
+                &anchor.domain[..]
+            };
+            add(
+                SetupProblemKind::BodiesNotCoupled(report.uncoupled_bodies),
+                params,
+                None,
+            );
         }
         if report.fit.pool_full {
             // The pool holds a fixed number of sites, so a coarser lattice
             // holds more water; Resolution is the Water's, beside Fill Height.
-            let item = anchor.fill.param_id.strip_suffix("fill_height").unwrap_or_default();
-            let resolution = ParamAddr { param_id: format!("{item}resolution"), ..anchor.fill.clone() };
-            add(SetupProblemKind::PoolFull, &[resolution, anchor.fill.clone()], layout_box.or(anchor.domain_bounds));
+            let item = anchor
+                .fill
+                .param_id
+                .strip_suffix("fill_height")
+                .unwrap_or_default();
+            let resolution = ParamAddr {
+                param_id: format!("{item}resolution"),
+                ..anchor.fill.clone()
+            };
+            add(
+                SetupProblemKind::PoolFull,
+                &[resolution, anchor.fill.clone()],
+                layout_box.or(anchor.domain_bounds),
+            );
         }
     }
 }
@@ -571,15 +755,35 @@ fn at_value(value: SetupValues<'_>, (addr, authored): &(ParamAddr, f32)) -> f32 
 impl SetupSite {
     /// Check the site at `value`, appending its problems and its anchor. With
     /// no override this is the check the scene model was built with.
-    pub(super) fn check(&self, shapes: &[SceneShapeVm], value: SetupValues<'_>, problems: &mut Vec<SetupProblem>, anchors: &mut Vec<SetupAnchor>) {
+    pub(super) fn check(
+        &self,
+        shapes: &[SceneShapeVm],
+        value: SetupValues<'_>,
+        problems: &mut Vec<SetupProblem>,
+        anchors: &mut Vec<SetupAnchor>,
+    ) {
         let at = |index: Option<usize>| index.map(|i| &shapes[i]);
         let (box_shape, column) = (at(self.box_shape), at(self.column));
-        let fill = self.fill_authored.map(|authored| (self.fill.clone(), value(&self.fill).unwrap_or(authored)));
-        anchors.push(SetupAnchor::new(self.owner.clone(), self.fill.clone(), box_shape, column));
+        let fill = self
+            .fill_authored
+            .map(|authored| (self.fill.clone(), value(&self.fill).unwrap_or(authored)));
+        anchors.push(SetupAnchor::new(
+            self.owner.clone(),
+            self.fill.clone(),
+            box_shape,
+            column,
+        ));
         let layout = {
-            let SiteLayout { transform, resolution } = &self.layout;
+            let SiteLayout {
+                transform,
+                resolution,
+            } = &self.layout;
             let triple = |addr: &(ParamAddr, ParamAddr, ParamAddr), v: (f32, f32, f32)| {
-                [at_value(value, &(addr.0.clone(), v.0)), at_value(value, &(addr.1.clone(), v.1)), at_value(value, &(addr.2.clone(), v.2))]
+                [
+                    at_value(value, &(addr.0.clone(), v.0)),
+                    at_value(value, &(addr.1.clone(), v.1)),
+                    at_value(value, &(addr.2.clone(), v.2)),
+                ]
             };
             let pose = manifold_core::fluid_domain::DomainBox {
                 pos: triple(&transform.pos_addr, transform.pos_value),
@@ -588,7 +792,11 @@ impl SetupSite {
                 billboard: false,
             };
             // The box sets the size; the cube size is unread beside it.
-            manifold_core::fluid_domain::domain_layout(Some(pose), 0.0, at_value(value, resolution).round() as u32)
+            manifold_core::fluid_domain::domain_layout(
+                Some(pose),
+                0.0,
+                at_value(value, resolution).round() as u32,
+            )
         };
         let state = match &layout {
             Ok(layout) => DomainState::Layout(layout),
@@ -607,9 +815,15 @@ impl SetupSite {
 /// Every Water's setup site, its domain box and its sources' boxes pushed
 /// onto `shapes` over their card rows. A Fill is the initial column; Inflows
 /// and Drains are checked against the domain.
-pub(super) fn water_sites(doc: &SceneDoc, values: &dyn Fn(&str) -> Option<f32>, shapes: &mut Vec<SceneShapeVm>) -> Vec<SetupSite> {
-    use crate::node_graph::scene_surface::{INITIAL_FILL_SHAPES, LIQUID_DOMAIN_SHAPES, WATER_SOURCE_SHAPES};
+pub(super) fn water_sites(
+    doc: &SceneDoc,
+    values: &dyn Fn(&str) -> Option<f32>,
+    shapes: &mut Vec<SceneShapeVm>,
+) -> Vec<SetupSite> {
     use super::shapes::{card_shape, resting};
+    use crate::node_graph::scene_surface::{
+        INITIAL_FILL_SHAPES, LIQUID_DOMAIN_SHAPES, WATER_SOURCE_SHAPES,
+    };
     let mut sites = Vec::new();
     doc.walk(|item, _| {
         if !matches!(item.fields, ItemFields::Water(_)) {
@@ -617,29 +831,55 @@ pub(super) fn water_sites(doc: &SceneDoc, values: &dyn Fn(&str) -> Option<f32>, 
         }
         let owner = ShapeOwner::LiquidDomain(NodeId::new(format!("{}:{DOMAIN_ROLE}", item.id)));
         let box_shape = shapes.len();
-        shapes.push(card_shape(owner.clone(), item, &LIQUID_DOMAIN_SHAPES[0], values));
+        shapes.push(card_shape(
+            owner.clone(),
+            item,
+            &LIQUID_DOMAIN_SHAPES[0],
+            values,
+        ));
         let (mut column, mut sources) = (None, Vec::new());
         for child in &item.children {
-            let ItemFields::WaterSource(source) = &child.fields else { continue };
+            let ItemFields::WaterSource(source) = &child.fields else {
+                continue;
+            };
             let role = match source.role {
                 SourceRole::Fill => FluidRole::InitialFill,
                 SourceRole::Inflow => FluidRole::Inflow,
                 SourceRole::Drain => FluidRole::Outflow,
             };
-            let decl = if role == FluidRole::InitialFill { &INITIAL_FILL_SHAPES[0] } else { &WATER_SOURCE_SHAPES[0] };
+            let decl = if role == FluidRole::InitialFill {
+                &INITIAL_FILL_SHAPES[0]
+            } else {
+                &WATER_SOURCE_SHAPES[0]
+            };
             let node = NodeId::new(format!("{}:role", child.id));
             let index = shapes.len();
-            shapes.push(card_shape(ShapeOwner::RoleSource { node, role }, child, decl, values));
+            shapes.push(card_shape(
+                ShapeOwner::RoleSource { node, role },
+                child,
+                decl,
+                values,
+            ));
             match role {
                 FluidRole::InitialFill => column = column.or(Some(index)),
                 _ => sources.push((role, index)),
             }
         }
-        let card = |property: &str| ParamAddr { scope_path: Vec::new(), node_doc_id: 0, param_id: param_id(&item.id, property) };
-        let at = |property: &str| values(&param_id(&item.id, property)).unwrap_or_else(|| resting(item, property));
+        let card = |property: &str| ParamAddr {
+            scope_path: Vec::new(),
+            node_doc_id: 0,
+            param_id: param_id(&item.id, property),
+        };
+        let at = |property: &str| {
+            values(&param_id(&item.id, property)).unwrap_or_else(|| resting(item, property))
+        };
         let triple = |axes: [&str; 3]| (card(axes[0]), card(axes[1]), card(axes[2]));
         let value = |axes: [&str; 3]| (at(axes[0]), at(axes[1]), at(axes[2]));
-        let (pos, rot, scale) = (["pos_x", "pos_y", "pos_z"], ["rot_x", "rot_y", "rot_z"], ["scale_x", "scale_y", "scale_z"]);
+        let (pos, rot, scale) = (
+            ["pos_x", "pos_y", "pos_z"],
+            ["rot_x", "rot_y", "rot_z"],
+            ["scale_x", "scale_y", "scale_z"],
+        );
         let transform = super::TransformVm {
             node_doc_id: 0,
             node: NodeId::new(format!("{}:transform", item.id)),
@@ -655,7 +895,10 @@ pub(super) fn water_sites(doc: &SceneDoc, values: &dyn Fn(&str) -> Option<f32>, 
         };
         sites.push(SetupSite {
             owner,
-            layout: SiteLayout { transform: Box::new(transform), resolution: (card("resolution"), at("resolution")) },
+            layout: SiteLayout {
+                transform: Box::new(transform),
+                resolution: (card("resolution"), at("resolution")),
+            },
             box_shape: Some(box_shape),
             column,
             fill: card("fill_height"),
@@ -679,7 +922,12 @@ mod tests {
     use manifold_core::NodeId;
 
     fn layout() -> FluidDomainLayout {
-        FluidDomainLayout { min: [-2.0, 0.0, -2.0], size: [4.0, 4.0, 4.0], cells: [32; 3], cell_size: 0.125 }
+        FluidDomainLayout {
+            min: [-2.0, 0.0, -2.0],
+            size: [4.0, 4.0, 4.0],
+            cells: [32; 3],
+            cell_size: 0.125,
+        }
     }
 
     /// A placed source's box at `centre` of `size`, unturned.
@@ -699,13 +947,20 @@ mod tests {
             .param_ids()
             .map(|id| ShapeParamVm {
                 id: id.to_owned(),
-                write: ShapeWrite::Card { id: id.to_owned(), scale: 1.0, offset: 0.0 },
+                write: ShapeWrite::Card {
+                    id: id.to_owned(),
+                    scale: 1.0,
+                    offset: 0.0,
+                },
                 value: value(id),
                 wired: wired.contains(&id),
             })
             .collect();
         SceneShapeVm {
-            owner: ShapeOwner::RoleSource { node: NodeId::new("inflow"), role: FluidRole::Inflow },
+            owner: ShapeOwner::RoleSource {
+                node: NodeId::new("inflow"),
+                role: FluidRole::Inflow,
+            },
             index: 0,
             decl,
             params,
@@ -728,19 +983,38 @@ mod tests {
         assert_eq!(problem(FluidRole::Inflow, &inside), None);
         let past = source([2.0, 3.0, 0.0], [0.5; 3], &[]);
         let clipped = problem(FluidRole::Inflow, &past).expect("a problem");
-        assert_eq!(clipped.kind, SetupProblemKind::SourceClipped(FluidRole::Inflow));
-        assert_eq!(clipped.kind.message(), "Inflow leaves the domain; the rest is unused");
-        assert_eq!(clipped.bounds, Some(([1.75, 2.75, -0.25], [2.25, 3.25, 0.25])));
+        assert_eq!(
+            clipped.kind,
+            SetupProblemKind::SourceClipped(FluidRole::Inflow)
+        );
+        assert_eq!(
+            clipped.kind.message(),
+            "Inflow leaves the domain; the rest is unused"
+        );
+        assert_eq!(
+            clipped.bounds,
+            Some(([1.75, 2.75, -0.25], [2.25, 3.25, 0.25]))
+        );
         // The x params lead: they are the ones that took it past the wall.
-        assert_eq!(clipped.params.first().map(|addr| addr.param_id.as_str()), Some("scale_x"));
+        assert_eq!(
+            clipped.params.first().map(|addr| addr.param_id.as_str()),
+            Some("scale_x")
+        );
         let away = source([9.0, 3.0, 0.0], [0.5; 3], &[]);
-        assert_eq!(problem(FluidRole::Inflow, &away).expect("a problem").kind, SetupProblemKind::SourceOutside(FluidRole::Inflow));
+        assert_eq!(
+            problem(FluidRole::Inflow, &away).expect("a problem").kind,
+            SetupProblemKind::SourceOutside(FluidRole::Inflow)
+        );
     }
 
     #[test]
     fn a_wired_param_leaves_the_shape_unchecked() {
         let driven = source([9.0, 3.0, 0.0], [0.5; 3], &["pos_x"]);
-        assert_eq!(problem(FluidRole::Inflow, &driven), None, "a wire, not the authored value, places it");
+        assert_eq!(
+            problem(FluidRole::Inflow, &driven),
+            None,
+            "a wire, not the authored value, places it"
+        );
     }
 
     #[test]
@@ -754,11 +1028,18 @@ mod tests {
             }
         }
         let (lo, hi) = declared_box(&slab).expect("a box");
-        assert!(hi[1] - lo[1] > 1.9 && hi[0] - lo[0] < 0.3, "turned about Z: {lo:?} {hi:?}");
+        assert!(
+            hi[1] - lo[1] > 1.9 && hi[0] - lo[0] < 0.3,
+            "turned about Z: {lo:?} {hi:?}"
+        );
     }
 
     fn anchor() -> SetupAnchor {
-        let addr = |param: &str| ParamAddr { scope_path: vec![1], node_doc_id: 3, param_id: param.to_owned() };
+        let addr = |param: &str| ParamAddr {
+            scope_path: vec![1],
+            node_doc_id: 3,
+            param_id: param.to_owned(),
+        };
         SetupAnchor {
             owner: ShapeOwner::LiquidDomain(NodeId::new("water")),
             fill: addr("fill_height"),
@@ -769,7 +1050,11 @@ mod tests {
         }
     }
 
-    fn runtime(anchors: &[SetupAnchor], authored: &[SetupProblem], report: RuntimeFit<'_>) -> Vec<SetupProblem> {
+    fn runtime(
+        anchors: &[SetupAnchor],
+        authored: &[SetupProblem],
+        report: RuntimeFit<'_>,
+    ) -> Vec<SetupProblem> {
         let mut out = Vec::new();
         problems_with_runtime(anchors, authored, [report], &mut out);
         out
@@ -794,12 +1079,26 @@ mod tests {
         let problems = runtime(&anchors, &[], report(12));
         assert_eq!(problems.len(), 1);
         assert_eq!(problems[0].kind, SetupProblemKind::BodiesNotCoupled(12));
-        assert_eq!(problems[0].kind.message(), "12 bodies not coupled; water marks each cell with one byte, so it takes 255 bodies and passes through the rest");
-        assert_eq!(problems[0].params, vec![anchors[0].fill.clone()], "on the water's own rows");
-        assert_eq!(SetupProblemKind::BodiesNotCoupled(1).message(), "1 body not coupled; water marks each cell with one byte, so it takes 255 bodies and passes through the rest");
+        assert_eq!(
+            problems[0].kind.message(),
+            "12 bodies not coupled; water marks each cell with one byte, so it takes 255 bodies and passes through the rest"
+        );
+        assert_eq!(
+            problems[0].params,
+            vec![anchors[0].fill.clone()],
+            "on the water's own rows"
+        );
+        assert_eq!(
+            SetupProblemKind::BodiesNotCoupled(1).message(),
+            "1 body not coupled; water marks each cell with one byte, so it takes 255 bodies and passes through the rest"
+        );
         let mut out = Vec::new();
         problems_with_runtime(&anchors, &[], [report(12), report(3)], &mut out);
-        assert_eq!(out.iter().map(|p| p.kind.clone()).collect::<Vec<_>>(), [SetupProblemKind::BodiesNotCoupled(3)], "one line");
+        assert_eq!(
+            out.iter().map(|p| p.kind.clone()).collect::<Vec<_>>(),
+            [SetupProblemKind::BodiesNotCoupled(3)],
+            "one line"
+        );
     }
 
     #[test]
@@ -809,7 +1108,11 @@ mod tests {
         let ran = ([2.5, 0.0, -0.5], [3.5, 1.0, 0.5]);
         let report = RuntimeFit {
             node: &node,
-            fit: SetupFit { fill_capped: false, column: ColumnOutcome::Outside, pool_full: false },
+            fit: SetupFit {
+                fill_capped: false,
+                column: ColumnOutcome::Outside,
+                pool_full: false,
+            },
             refusal: None,
             layout: Some(&layout()),
             column_box: Some(ran),
@@ -819,19 +1122,38 @@ mod tests {
         let problems = runtime(&anchors, &[], report);
         assert_eq!(problems.len(), 1);
         assert_eq!(problems[0].kind, SetupProblemKind::ColumnOutside);
-        assert_eq!(problems[0].bounds, Some(ran), "the live column, not the whole domain");
+        assert_eq!(
+            problems[0].bounds,
+            Some(ran),
+            "the live column, not the whole domain"
+        );
     }
 
     #[test]
     fn a_refusal_with_nothing_to_outline_still_warns_the_card() {
         let anchors = [anchor()];
         let node = NodeId::new("water");
-        let report = RuntimeFit { node: &node, fit: SetupFit::default(), refusal: Some("Fluid: too big"), layout: None, column_box: None, uncoupled_bodies: 0, copies_not_made: 0 };
+        let report = RuntimeFit {
+            node: &node,
+            fit: SetupFit::default(),
+            refusal: Some("Fluid: too big"),
+            layout: None,
+            column_box: None,
+            uncoupled_bodies: 0,
+            copies_not_made: 0,
+        };
         let problems = runtime(&anchors, &[], report);
         assert_eq!(problems.len(), 1);
-        assert_eq!(problems[0].kind, SetupProblemKind::DomainRefused("Fluid: too big".to_owned()));
+        assert_eq!(
+            problems[0].kind,
+            SetupProblemKind::DomainRefused("Fluid: too big".to_owned())
+        );
         assert_eq!(problems[0].bounds, None);
-        assert_eq!(problems[0].params, vec![anchors[0].fill.clone()], "no domain rows: the warning sits on the fill row");
+        assert_eq!(
+            problems[0].params,
+            vec![anchors[0].fill.clone()],
+            "no domain rows: the warning sits on the fill row"
+        );
     }
 
     #[test]
@@ -846,13 +1168,27 @@ mod tests {
             bounds: Some(([1.5; 3], [2.5; 3])),
         };
         let ran = ([4.0; 3], [5.0; 3]);
-        let report =
-            RuntimeFit { node: &node, fit: SetupFit { fill_capped: false, column: ColumnOutcome::Outside, pool_full: false }, refusal: None, layout: None, column_box: Some(ran), uncoupled_bodies: 0, copies_not_made: 0 };
+        let report = RuntimeFit {
+            node: &node,
+            fit: SetupFit {
+                fill_capped: false,
+                column: ColumnOutcome::Outside,
+                pool_full: false,
+            },
+            refusal: None,
+            layout: None,
+            column_box: Some(ran),
+            uncoupled_bodies: 0,
+            copies_not_made: 0,
+        };
         let problems = runtime(&anchors, std::slice::from_ref(&authored), report);
         assert_eq!(problems.len(), 1, "one column, one warning: {problems:?}");
         assert_eq!(problems[0].kind, SetupProblemKind::ColumnOutside);
         assert_eq!(problems[0].bounds, Some(ran));
-        assert_eq!(problems[0].params, authored.params, "the authored row order stays");
+        assert_eq!(
+            problems[0].params, authored.params,
+            "the authored row order stays"
+        );
     }
 
     /// A world short of copies warns under its copies bodies' Count rows,
@@ -879,8 +1215,18 @@ mod tests {
         }))
         .expect("a world in a group");
         let anchors = copies_anchors(&def);
-        let count = |body: u32| ParamAddr { scope_path: vec![9], node_doc_id: body, param_id: "copy_count".to_owned() };
-        assert_eq!(anchors, [CopiesAnchor { world: NodeId::new("world"), counts: vec![count(131), count(121)] }]);
+        let count = |body: u32| ParamAddr {
+            scope_path: vec![9],
+            node_doc_id: body,
+            param_id: "copy_count".to_owned(),
+        };
+        assert_eq!(
+            anchors,
+            [CopiesAnchor {
+                world: NodeId::new("world"),
+                counts: vec![count(131), count(121)]
+            }]
+        );
 
         let world = NodeId::new("world");
         let report = |copies_not_made| RuntimeFit {
@@ -899,8 +1245,17 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].owner, ShapeOwner::World(world.clone()));
         assert_eq!(out[0].params, anchors[0].counts);
-        assert_eq!((out[0].kind.message(), out[0].bounds), ("250 copies not made; the world's copy pool is full".to_owned(), None));
-        assert_eq!(SetupProblemKind::CopiesNotMade(1).message(), "1 copy not made; the world's copy pool is full");
+        assert_eq!(
+            (out[0].kind.message(), out[0].bounds),
+            (
+                "250 copies not made; the world's copy pool is full".to_owned(),
+                None
+            )
+        );
+        assert_eq!(
+            SetupProblemKind::CopiesNotMade(1).message(),
+            "1 copy not made; the world's copy pool is full"
+        );
     }
 
     /// A refusal warns on the control it concerns: a transform param on the
@@ -923,18 +1278,39 @@ mod tests {
         .expect("a world with one copies body");
         let anchors = body_anchors(&def);
         let world = NodeId::new("world");
-        let at = |node_doc_id: u32, param: &str| ParamAddr { scope_path: Vec::new(), node_doc_id, param_id: param.to_owned() };
-        let refusal = |param: Option<&'static str>, reason: &str| BodyRefusalRow { input: "copies_0".into(), param, reason: reason.into() };
+        let at = |node_doc_id: u32, param: &str| ParamAddr {
+            scope_path: Vec::new(),
+            node_doc_id,
+            param_id: param.to_owned(),
+        };
+        let refusal = |param: Option<&'static str>, reason: &str| BodyRefusalRow {
+            input: "copies_0".into(),
+            param,
+            reason: reason.into(),
+        };
         let rows = [
-            refusal(Some("scale_x"), "scale must be finite and not zero on any axis"),
+            refusal(
+                Some("scale_x"),
+                "scale must be finite and not zero on any axis",
+            ),
             refusal(Some("copy_size_spacing"), "Spacing must be at least 0.01"),
             refusal(None, "Box3D refused the body"),
         ];
         let mut out = Vec::new();
         body_problems(&anchors, rows.iter().map(|row| (&world, row)), &mut out);
         let first: Vec<&ParamAddr> = out.iter().map(|problem| &problem.params[0]).collect();
-        assert_eq!(first, [&at(7, "scale_x"), &at(121, "copy_size_spacing"), &at(121, "bounce")]);
-        assert_eq!(out[0].kind.message(), "Scale must be finite and not zero on any axis");
+        assert_eq!(
+            first,
+            [
+                &at(7, "scale_x"),
+                &at(121, "copy_size_spacing"),
+                &at(121, "bounce")
+            ]
+        );
+        assert_eq!(
+            out[0].kind.message(),
+            "Scale must be finite and not zero on any axis"
+        );
     }
 
     /// BUG-3zq4r (inflow runs out): a pool too full for an inflow is never
@@ -944,15 +1320,32 @@ mod tests {
     fn a_full_pool_warns_on_resolution() {
         let anchors = [anchor()];
         let node = NodeId::new("water");
-        let fit = SetupFit { pool_full: true, ..SetupFit::default() };
-        let report = RuntimeFit { node: &node, fit, refusal: None, layout: Some(&layout()), column_box: None, uncoupled_bodies: 0, copies_not_made: 0 };
+        let fit = SetupFit {
+            pool_full: true,
+            ..SetupFit::default()
+        };
+        let report = RuntimeFit {
+            node: &node,
+            fit,
+            refusal: None,
+            layout: Some(&layout()),
+            column_box: None,
+            uncoupled_bodies: 0,
+            copies_not_made: 0,
+        };
         let problems = runtime(&anchors, &[], report);
         assert_eq!(problems.len(), 1);
         assert_eq!(problems[0].kind, SetupProblemKind::PoolFull);
         assert_eq!(problems[0].params[0].param_id, "resolution");
         assert_eq!(problems[0].params[1], anchors[0].fill);
         let layout = layout();
-        assert_eq!(problems[0].bounds, Some((layout.min, std::array::from_fn(|d| layout.min[d] + layout.size[d]))));
+        assert_eq!(
+            problems[0].bounds,
+            Some((
+                layout.min,
+                std::array::from_fn(|d| layout.min[d] + layout.size[d])
+            ))
+        );
         assert!(problems[0].kind.message().contains("inflow is held back"));
     }
 }

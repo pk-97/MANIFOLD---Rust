@@ -5,14 +5,14 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_physics::clock::TICK;
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
-use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
-use manifold_water_liquid::lattice::{LiquidLattice, PADDING_NODES};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_physics::clock::TICK;
+use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use manifold_water_liquid::lattice::{LiquidLattice, PADDING_NODES};
 
 /// Nearest solid-object properties at a lattice node. Kind: none 0, domain 1, obstacle 2.
 #[repr(C)]
@@ -318,7 +318,9 @@ pub(crate) fn encode_obstacle_source(
 #[cfg(test)]
 mod tests {
     use super::WhitewaterSource;
-    use manifold_node_engine::ports::{ArrayType, ChannelName, KnownItem, MatchMode, std430_channel};
+    use manifold_node_engine::ports::{
+        ArrayType, ChannelName, KnownItem, MatchMode, std430_channel,
+    };
     use std::mem::{offset_of, size_of};
 
     /// The wire record's channels sit where its repr(C) fields do.
@@ -328,8 +330,14 @@ mod tests {
         let at = |name| {
             std430_channel(specs, ChannelName::from_str(name)).map(|(offset, _)| offset as usize)
         };
-        assert_eq!(at("influence"), Some(offset_of!(WhitewaterSource, influence)));
-        assert_eq!(at("dust_strength"), Some(offset_of!(WhitewaterSource, dust_strength)));
+        assert_eq!(
+            at("influence"),
+            Some(offset_of!(WhitewaterSource, influence))
+        );
+        assert_eq!(
+            at("dust_strength"),
+            Some(offset_of!(WhitewaterSource, dust_strength))
+        );
         assert_eq!(at("kind"), Some(offset_of!(WhitewaterSource, kind)));
         assert_eq!(at("pad0"), Some(offset_of!(WhitewaterSource, pad)));
         assert_eq!(

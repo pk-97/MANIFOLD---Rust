@@ -1,7 +1,7 @@
 //! Tests for `instance_serde.rs`, split out so the serde file stays under its
 //! god-file ceiling.
-use super::*;
 use super::super::test_support::*;
+use super::*;
 
 // ── PresetInstance `params` wire format (V1.4, PARAM_STORAGE_DESIGN.md section 4) ──
 //
@@ -267,25 +267,34 @@ fn trigger_source_survives_graph_manifest_refresh() {
     param.clip_trigger_source = ClipTriggerSource::Lane {
         layer_id: crate::LayerId::new("force-pattern"),
     };
-    generator.graph = Some(serde_json::from_value(serde_json::json!({
-        "version": 2,
-        "nodes": [],
-        "wires": [],
-        "presetMetadata": {
-            "id": "TriggerSourceGraph", "displayName": "Test", "category": "Test",
-            "oscPrefix": "test", "params": [param.spec.clone()], "bindings": []
-        }
-    })).unwrap());
+    generator.graph = Some(
+        serde_json::from_value(serde_json::json!({
+            "version": 2,
+            "nodes": [],
+            "wires": [],
+            "presetMetadata": {
+                "id": "TriggerSourceGraph", "displayName": "Test", "category": "Test",
+                "oscPrefix": "test", "params": [param.spec.clone()], "bindings": []
+            }
+        }))
+        .unwrap(),
+    );
     generator.params = crate::params::ParamManifest::from_params(vec![param.clone()]);
 
     generator.refresh_manifest_from_graph();
-    assert_eq!(generator.params.get("force").unwrap().clip_trigger_source, param.clip_trigger_source);
+    assert_eq!(
+        generator.params.get("force").unwrap().clip_trigger_source,
+        param.clip_trigger_source
+    );
     let json = serde_json::to_string(&generator).unwrap();
     let mut deserializer = serde_json::Deserializer::from_str(&json);
     let mut loaded = deserialize_generator_instance(&mut deserializer).unwrap();
     loaded.reconcile_manifest();
     assert!(!loaded.template_unresolved());
-    assert_eq!(loaded.params.get("force").unwrap().clip_trigger_source, param.clip_trigger_source);
+    assert_eq!(
+        loaded.params.get("force").unwrap().clip_trigger_source,
+        param.clip_trigger_source
+    );
 }
 
 #[test]
@@ -345,10 +354,19 @@ fn effect_instance_round_trip_with_user_bindings_against_bloom() {
     // After append, the manifest should carry [amount=0.7, translate=0.25, mix.amount=0.25].
     assert_eq!(fx.params.len(), 3);
     assert_eq!(fx.params.get("amount").unwrap().value, 0.7);
-    assert_eq!(fx.params.get("user.uv_transform.translate.1").unwrap().value, 0.25);
+    assert_eq!(
+        fx.params
+            .get("user.uv_transform.translate.1")
+            .unwrap()
+            .value,
+        0.25
+    );
     assert_eq!(fx.params.get("user.mix.amount.1").unwrap().value, 0.25);
     // Tweak the user-tail values to verify they round-trip.
-    fx.params.get_mut("user.uv_transform.translate.1").unwrap().value = 0.42;
+    fx.params
+        .get_mut("user.uv_transform.translate.1")
+        .unwrap()
+        .value = 0.42;
     fx.params.get_mut("user.mix.amount.1").unwrap().value = 0.91;
 
     let json = serde_json::to_string(&fx).unwrap();
@@ -369,7 +387,13 @@ fn effect_instance_round_trip_with_user_bindings_against_bloom() {
     assert_eq!(back_bindings[1].id, "user.mix.amount.1");
     assert_eq!(back.params.len(), 3);
     assert_eq!(back.params.get("amount").unwrap().value, 0.7);
-    assert_eq!(back.params.get("user.uv_transform.translate.1").unwrap().value, 0.42);
+    assert_eq!(
+        back.params
+            .get("user.uv_transform.translate.1")
+            .unwrap()
+            .value,
+        0.42
+    );
     assert_eq!(back.params.get("user.mix.amount.1").unwrap().value, 0.91);
 }
 
@@ -561,7 +585,11 @@ fn legacy_audio_trigger_migrates_onto_a_parameter_audio_mod_on_the_gate_param() 
         .expect("legacy audioTrigger must migrate onto audio_mods");
     assert_eq!(mods.len(), 1);
     let m = &mods[0];
-    assert_eq!(m.param_id.as_ref(), "clip_trigger", "targets the gate param");
+    assert_eq!(
+        m.param_id.as_ref(),
+        "clip_trigger",
+        "targets the gate param"
+    );
     assert!(!m.enabled, "legacy enabled=false carries over");
     assert_eq!(m.source.send_id, crate::id::AudioSendId::new("e14b42f8"));
     assert_eq!(
@@ -575,7 +603,10 @@ fn legacy_audio_trigger_migrates_onto_a_parameter_audio_mod_on_the_gate_param() 
         m.trigger_mode,
         Some(crate::audio_trigger::TriggerFireMode::Transient)
     );
-    assert_eq!(m.shape.sensitivity, 1.0, "sensitivity approximates onto Amount (U5)");
+    assert_eq!(
+        m.shape.sensitivity, 1.0,
+        "sensitivity approximates onto Amount (U5)"
+    );
 }
 
 #[test]
@@ -599,7 +630,10 @@ fn legacy_audio_trigger_with_no_gate_param_is_dropped_not_guessed() {
 
     let mut de = serde_json::Deserializer::from_str(json);
     let inst = deserialize_generator_instance(&mut de).unwrap();
-    assert!(inst.audio_mods.is_none(), "no gate param means nothing to migrate onto");
+    assert!(
+        inst.audio_mods.is_none(),
+        "no gate param means nothing to migrate onto"
+    );
 }
 
 /// BUG-jxy0p (duplicate param ids at load): a saved graph that declares one
@@ -608,7 +642,8 @@ fn legacy_audio_trigger_with_no_gate_param_is_dropped_not_guessed() {
 /// `ParamManifest::from_params`; a release build kept two params.
 #[test]
 fn a_rename_landing_on_a_repeated_id_loads_one_param() {
-    let spec = r#"{"id": "amount", "name": "Amount", "min": 0.0, "max": 10.0, "defaultValue": 1.0}"#;
+    let spec =
+        r#"{"id": "amount", "name": "Amount", "min": 0.0, "max": 10.0, "defaultValue": 1.0}"#;
     let json = format!(
         r#"{{
         "generatorType": "TestGenDuplicateIds",
@@ -628,6 +663,11 @@ fn a_rename_landing_on_a_repeated_id_loads_one_param() {
     );
     let mut de = serde_json::Deserializer::from_str(&json);
     let inst = deserialize_generator_instance(&mut de).unwrap();
-    let amounts: Vec<f32> = inst.params.iter().filter(|p| p.id() == "amount").map(|p| p.value).collect();
+    let amounts: Vec<f32> = inst
+        .params
+        .iter()
+        .filter(|p| p.id() == "amount")
+        .map(|p| p.value)
+        .collect();
     assert_eq!(amounts, vec![7.0]);
 }

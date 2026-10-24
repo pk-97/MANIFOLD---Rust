@@ -40,8 +40,11 @@ use manifold_nodes as _;
 use std::collections::HashSet;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_node_engine::trigger_shadow_lint::{DISCRETE_REPLACE_ALLOWLIST, find_trigger_driven_switch_value_node_ids, find_trigger_shadow_findings, is_allowlisted};
 use manifold_node_engine::load::preset_loader::{EFFECT_CATALOG, GENERATOR_CATALOG};
+use manifold_node_engine::trigger_shadow_lint::{
+    DISCRETE_REPLACE_ALLOWLIST, find_trigger_driven_switch_value_node_ids,
+    find_trigger_shadow_findings, is_allowlisted,
+};
 
 fn audit_def(
     preset_id: &str,
@@ -49,7 +52,10 @@ fn audit_def(
     violations: &mut Vec<String>,
     allowlist_hits: &mut HashSet<(String, String)>,
 ) {
-    let flat = match manifold_node_engine::load::expand::flatten_expanded(def, &manifold_node_engine::persistence::PrimitiveRegistry::with_builtin()) {
+    let flat = match manifold_node_engine::load::expand::flatten_expanded(
+        def,
+        &manifold_node_engine::persistence::PrimitiveRegistry::with_builtin(),
+    ) {
         Ok(f) => f,
         Err(e) => panic!("preset `{preset_id}`: flatten failed: {e:?}"),
     };
@@ -94,7 +100,8 @@ fn run_catalog_audit(
 
 #[test]
 fn no_trigger_driven_switch_value_shadows_a_continuous_binding_outside_the_allowlist() {
-    let (mut violations, mut allowlist_hits) = run_catalog_audit(GENERATOR_CATALOG.load().entries());
+    let (mut violations, mut allowlist_hits) =
+        run_catalog_audit(GENERATOR_CATALOG.load().entries());
     let (eff_violations, eff_hits) = run_catalog_audit(EFFECT_CATALOG.load().entries());
     violations.extend(eff_violations);
     allowlist_hits.extend(eff_hits);
@@ -170,12 +177,20 @@ fn synthetic_pre_fix_lissajous_shape_is_flagged() {
     let def: EffectGraphDef = serde_json::from_str(json).expect("synthetic doc must parse");
     let mut violations = Vec::new();
     let mut allowlist_hits = HashSet::new();
-    audit_def("SyntheticPreFixShape", &def, &mut violations, &mut allowlist_hits);
+    audit_def(
+        "SyntheticPreFixShape",
+        &def,
+        &mut violations,
+        &mut allowlist_hits,
+    );
     assert_eq!(
         violations.len(),
         1,
         "the pre-fix shape (continuous binding on lfo_x.angular_rate, wired into a \
          trigger-selected mux_x.in_0) must be flagged exactly once — got {violations:?}"
     );
-    assert!(allowlist_hits.is_empty(), "this synthetic node is not in the allowlist");
+    assert!(
+        allowlist_hits.is_empty(),
+        "this synthetic node is not in the allowlist"
+    );
 }

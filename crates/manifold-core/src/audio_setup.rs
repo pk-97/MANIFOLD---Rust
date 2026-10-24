@@ -103,7 +103,10 @@ fn is_default_mid_hz(v: &f32) -> bool {
 
 impl Default for SendAnalysisConfig {
     fn default() -> Self {
-        Self { onset: true, pitch: false }
+        Self {
+            onset: true,
+            pitch: false,
+        }
     }
 }
 
@@ -276,23 +279,39 @@ pub struct AudioDeviceRef {
 impl AudioDeviceRef {
     /// An input-device reference by UID + display name.
     pub fn new(uid: impl Into<String>, name: impl Into<String>) -> Self {
-        Self { uid: uid.into(), name: name.into(), kind: AudioSourceKind::InputDevice }
+        Self {
+            uid: uid.into(),
+            name: name.into(),
+            kind: AudioSourceKind::InputDevice,
+        }
     }
 
     /// No capture source — the device stays dark and sends are fed by timeline
     /// audio layers only (the "None (layers only)" device option).
     pub fn none() -> Self {
-        Self { uid: String::new(), name: "None".to_string(), kind: AudioSourceKind::None }
+        Self {
+            uid: String::new(),
+            name: "None".to_string(),
+            kind: AudioSourceKind::None,
+        }
     }
 
     /// The system-audio tap source (whole-system output mix).
     pub fn system_audio() -> Self {
-        Self { uid: String::new(), name: "System Audio".to_string(), kind: AudioSourceKind::SystemAudio }
+        Self {
+            uid: String::new(),
+            name: "System Audio".to_string(),
+            kind: AudioSourceKind::SystemAudio,
+        }
     }
 
     /// An application-audio tap source, keyed by stable bundle id + display name.
     pub fn app(bundle_id: impl Into<String>, name: impl Into<String>) -> Self {
-        Self { uid: bundle_id.into(), name: name.into(), kind: AudioSourceKind::App }
+        Self {
+            uid: bundle_id.into(),
+            name: name.into(),
+            kind: AudioSourceKind::App,
+        }
     }
 
     /// The UID for resolution, or `None` if this is a legacy name-only ref or a
@@ -306,7 +325,10 @@ impl AudioDeviceRef {
     /// layout instead of a hardware device's channels. `None` (no capture) is
     /// neither a tap nor a hardware device.
     pub fn is_tap(&self) -> bool {
-        matches!(self.kind, AudioSourceKind::SystemAudio | AudioSourceKind::App)
+        matches!(
+            self.kind,
+            AudioSourceKind::SystemAudio | AudioSourceKind::App
+        )
     }
 }
 
@@ -359,7 +381,10 @@ impl AudioSetup {
     /// Stored explicitly, because an absent `device` in an old file means System
     /// Default and must keep meaning that.
     pub fn for_new_project() -> Self {
-        Self { device: Some(AudioDeviceRef::none()), ..Self::default() }
+        Self {
+            device: Some(AudioDeviceRef::none()),
+            ..Self::default()
+        }
     }
 
     /// True when nothing is configured — lets the project skip serializing the
@@ -382,11 +407,17 @@ impl AudioSetup {
         let lo_floor = CROSSOVER_MIN_HZ;
         let hi_ceil = CROSSOVER_MAX_HZ;
         if dragging_low {
-            let low = low.clamp(lo_floor, hi_ceil / (CROSSOVER_MIN_RATIO * CROSSOVER_MIN_RATIO));
+            let low = low.clamp(
+                lo_floor,
+                hi_ceil / (CROSSOVER_MIN_RATIO * CROSSOVER_MIN_RATIO),
+            );
             let mid = mid.max(low * CROSSOVER_MIN_RATIO).min(hi_ceil);
             (low, mid)
         } else {
-            let mid = mid.clamp(lo_floor * (CROSSOVER_MIN_RATIO * CROSSOVER_MIN_RATIO), hi_ceil);
+            let mid = mid.clamp(
+                lo_floor * (CROSSOVER_MIN_RATIO * CROSSOVER_MIN_RATIO),
+                hi_ceil,
+            );
             let low = low.min(mid / CROSSOVER_MIN_RATIO).max(lo_floor);
             (low, mid)
         }
@@ -481,9 +512,15 @@ mod tests {
 
     #[test]
     fn new_project_stores_none_but_an_absent_device_stays_system_default() {
-        assert_eq!(AudioSetup::for_new_project().device, Some(AudioDeviceRef::none()));
+        assert_eq!(
+            AudioSetup::for_new_project().device,
+            Some(AudioDeviceRef::none())
+        );
         let old: AudioSetup = serde_json::from_str(r#"{"sends":[]}"#).unwrap();
-        assert_eq!(old.device, None, "old files without a device keep meaning System Default");
+        assert_eq!(
+            old.device, None,
+            "old files without a device keep meaning System Default"
+        );
     }
 
     #[test]
@@ -548,7 +585,10 @@ mod tests {
         setup.migrate_legacy_device();
         let dev = setup.device.as_ref().expect("migrated device");
         assert_eq!(dev.name, "BlackHole 16ch");
-        assert!(dev.uid.is_empty(), "legacy ref has no UID; resolves by name");
+        assert!(
+            dev.uid.is_empty(),
+            "legacy ref has no UID; resolves by name"
+        );
         assert_eq!(dev.uid_opt(), None);
 
         // Migration is idempotent and never re-serializes the legacy key.
@@ -636,7 +676,10 @@ mod tests {
         let dev = AudioDeviceRef::new("uid-1", "BlackHole 16ch");
         assert_eq!(dev.kind, AudioSourceKind::InputDevice);
         let json = serde_json::to_string(&dev).unwrap();
-        assert!(!json.contains("kind"), "InputDevice kind must be skipped: {json}");
+        assert!(
+            !json.contains("kind"),
+            "InputDevice kind must be skipped: {json}"
+        );
         let back: AudioDeviceRef = serde_json::from_str(&json).unwrap();
         assert_eq!(dev, back);
     }
@@ -655,7 +698,8 @@ mod tests {
         assert_eq!(sys.kind, AudioSourceKind::SystemAudio);
         assert!(sys.is_tap());
         assert_eq!(sys.uid_opt(), None, "system audio carries no uid");
-        let back: AudioDeviceRef = serde_json::from_str(&serde_json::to_string(&sys).unwrap()).unwrap();
+        let back: AudioDeviceRef =
+            serde_json::from_str(&serde_json::to_string(&sys).unwrap()).unwrap();
         assert_eq!(sys, back);
 
         let app = AudioDeviceRef::app("com.ableton.live", "Ableton Live");
@@ -663,7 +707,10 @@ mod tests {
         assert!(app.is_tap());
         assert_eq!(app.uid_opt(), Some("com.ableton.live"));
         let json = serde_json::to_string(&app).unwrap();
-        assert!(json.contains("\"kind\":\"app\""), "kind serializes camelCase: {json}");
+        assert!(
+            json.contains("\"kind\":\"app\""),
+            "kind serializes camelCase: {json}"
+        );
         let back: AudioDeviceRef = serde_json::from_str(&json).unwrap();
         assert_eq!(app, back);
     }
@@ -677,7 +724,10 @@ mod tests {
         assert_eq!(send.source, AudioSendSource::default());
         assert!(!send.is_layer_fed());
         let json = serde_json::to_string(&send).unwrap();
-        assert!(!json.contains("source"), "layerless source must be skipped: {json}");
+        assert!(
+            !json.contains("source"),
+            "layerless source must be skipped: {json}"
+        );
 
         // Layers round-trip.
         let mut mix = AudioSend::new("Bass");
@@ -745,7 +795,10 @@ mod tests {
         assert!(!dev.is_tap(), "none is neither a tap nor a hardware device");
 
         let json = serde_json::to_string(&dev).unwrap();
-        assert!(json.contains("\"kind\":\"none\""), "kind serializes camelCase: {json}");
+        assert!(
+            json.contains("\"kind\":\"none\""),
+            "kind serializes camelCase: {json}"
+        );
         let back: AudioDeviceRef = serde_json::from_str(&json).unwrap();
         assert_eq!(dev, back);
 
@@ -754,7 +807,8 @@ mod tests {
             device: Some(AudioDeviceRef::none()),
             ..Default::default()
         };
-        let back: AudioSetup = serde_json::from_str(&serde_json::to_string(&setup).unwrap()).unwrap();
+        let back: AudioSetup =
+            serde_json::from_str(&serde_json::to_string(&setup).unwrap()).unwrap();
         assert_eq!(back.device, Some(AudioDeviceRef::none()));
     }
 
@@ -773,9 +827,20 @@ mod tests {
 
         setup.migrate_legacy_send_channels();
 
-        assert_eq!(setup.sends[0].channels, vec![0, 1], "1-channel send → stereo");
-        assert_eq!(setup.sends[1].channels, vec![0, 1], "any single channel → stereo");
-        assert!(setup.sends[2].channels.is_empty(), "layer-only send stays untouched");
+        assert_eq!(
+            setup.sends[0].channels,
+            vec![0, 1],
+            "1-channel send → stereo"
+        );
+        assert_eq!(
+            setup.sends[1].channels,
+            vec![0, 1],
+            "any single channel → stereo"
+        );
+        assert!(
+            setup.sends[2].channels.is_empty(),
+            "layer-only send stays untouched"
+        );
         assert_eq!(setup.sends[3].channels, vec![0, 1], "stereo send unchanged");
 
         // Idempotent — a second run changes nothing.

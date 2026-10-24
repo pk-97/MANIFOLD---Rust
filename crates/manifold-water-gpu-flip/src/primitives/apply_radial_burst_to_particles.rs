@@ -18,12 +18,12 @@
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::particles::Particle;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::Particle;
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{active_elements, standalone_pipeline};
 use std::borrow::Cow;
-use manifold_node_engine::primitives::standalone_pipeline::{standalone_pipeline, active_elements};
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`point_x`,
 /// `point_y`, `amplitude`, `envelope`, `radius`, `active_count` Int → i32), then
@@ -175,7 +175,10 @@ impl Primitive for ApplyRadialBurstToParticles {
         let amplitude = ctx.scalar_or_param("amplitude", 0.0);
         let envelope = ctx.scalar_or_param("envelope", 0.0);
         let radius = ctx.scalar_or_param("radius", 0.25);
-        let active_count = ctx.scalar_or_param("active_count", 100_000.0).round().max(0.0) as u32;
+        let active_count = ctx
+            .scalar_or_param("active_count", 100_000.0)
+            .round()
+            .max(0.0) as u32;
 
         let Some(particles) = ctx.inputs.array("in") else {
             return;
@@ -197,7 +200,11 @@ impl Primitive for ApplyRadialBurstToParticles {
         }
 
         let time_val = ctx.time.seconds.0 as f32;
-        let dt_scaled = manifold_water_rigid::physics::particle_frame_duration(ctx.time.delta, ctx.sim_step, ctx.sim_metrics);
+        let dt_scaled = manifold_water_rigid::physics::particle_frame_duration(
+            ctx.time.delta,
+            ctx.sim_step,
+            ctx.sim_metrics,
+        );
 
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
@@ -242,4 +249,3 @@ impl Primitive for ApplyRadialBurstToParticles {
         );
     }
 }
-

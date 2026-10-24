@@ -41,7 +41,11 @@ fn levels(n: usize) -> ([(usize, usize); MAX_LEVELS], usize) {
     loop {
         levels[count] = (offset, length);
         count += 1;
-        let last = if count == 1 { length <= BLOCK } else { length <= TAIL };
+        let last = if count == 1 {
+            length <= BLOCK
+        } else {
+            length <= TAIL
+        };
         if last || count == MAX_LEVELS {
             break;
         }
@@ -97,20 +101,26 @@ pub struct ScanLabels {
 }
 
 impl ScanLabels {
-    pub(crate) const DEFAULT: Self = Self { blocks: "prefix_scan.blocks", add: "prefix_scan.add" };
+    pub(crate) const DEFAULT: Self = Self {
+        blocks: "prefix_scan.blocks",
+        add: "prefix_scan.add",
+    };
 }
 
 impl PrefixScan {
     /// Create the pipelines. Call before any early return (compile contract).
     pub fn prepare(&mut self, device: &GpuDevice) {
         if self.blocks.is_none() {
-            self.blocks = Some(device.create_compute_pipeline(SHADER, "scan_blocks", "prefix_scan.blocks"));
+            self.blocks =
+                Some(device.create_compute_pipeline(SHADER, "scan_blocks", "prefix_scan.blocks"));
         }
         if self.tail.is_none() {
-            self.tail = Some(device.create_compute_pipeline(SHADER, "scan_tail", "prefix_scan.tail"));
+            self.tail =
+                Some(device.create_compute_pipeline(SHADER, "scan_tail", "prefix_scan.tail"));
         }
         if self.add.is_none() {
-            self.add = Some(device.create_compute_pipeline(SHADER, "add_block_totals", "prefix_scan.add"));
+            self.add =
+                Some(device.create_compute_pipeline(SHADER, "add_block_totals", "prefix_scan.add"));
         }
         if self.open.is_none() {
             self.open = Some(open_gate(device));
@@ -151,14 +161,25 @@ impl PrefixScan {
     /// Scan level 0 `[0, n)` of the storage in place, under the caller's
     /// dispatch labels so a profile tells one scan site from another.
     /// `prepare` and `buffer` first.
-    pub fn encode_labelled(&self, encoder: &mut manifold_gpu::GpuEncoder, n: usize, labels: ScanLabels) {
+    pub fn encode_labelled(
+        &self,
+        encoder: &mut manifold_gpu::GpuEncoder,
+        n: usize,
+        labels: ScanLabels,
+    ) {
         let buffer = self.buffer.as_ref().expect("scan storage prepared");
         self.encode_levels(encoder, n, buffer, buffer, 0, labels, None);
     }
 
     /// [`Self::encode_labelled`] under a GPU FLIP clock plan: an inactive
     /// slot's (live, no time to step) scan runs no pass.
-    pub fn encode_labelled_gated(&self, encoder: &mut manifold_gpu::GpuEncoder, n: usize, labels: ScanLabels, gate: &GpuBuffer) {
+    pub fn encode_labelled_gated(
+        &self,
+        encoder: &mut manifold_gpu::GpuEncoder,
+        n: usize,
+        labels: ScanLabels,
+        gate: &GpuBuffer,
+    ) {
         let buffer = self.buffer.as_ref().expect("scan storage prepared");
         self.encode_levels(encoder, n, buffer, buffer, 0, labels, Some(gate));
     }
@@ -188,7 +209,9 @@ impl PrefixScan {
         labels: ScanLabels,
         gate: Option<&GpuBuffer>,
     ) {
-        let gate = gate.or(self.open.as_ref()).expect("scan pipelines prepared");
+        let gate = gate
+            .or(self.open.as_ref())
+            .expect("scan pipelines prepared");
         let blocks = self.blocks.as_ref().expect("scan pipelines prepared");
         let tail = self.tail.as_ref().expect("scan pipelines prepared");
         let add = self.add.as_ref().expect("scan pipelines prepared");
@@ -196,7 +219,11 @@ impl PrefixScan {
         let (levels, count) = levels(n);
         let params = |level: usize| {
             let (offset, length) = levels[level];
-            let own = if level == 0 { 0 } else { offset - level0_offset };
+            let own = if level == 0 {
+                0
+            } else {
+                offset - level0_offset
+            };
             let parent = (level + 1 < count).then(|| levels[level + 1].0 - level0_offset);
             ScanParams {
                 n: length as u32,
@@ -207,23 +234,47 @@ impl PrefixScan {
                 _pad: [0; 3],
             }
         };
-        let dispatch = |encoder: &mut manifold_gpu::GpuEncoder, pipeline, level: usize, groups: u32, label| {
-            let uniforms = params(level);
-            let (src, dst) = if level == 0 { (src, dst) } else { (parents, parents) };
-            encoder.dispatch_compute(
-                pipeline,
-                &[
-                    GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                    GpuBinding::Buffer { binding: 1, buffer: src, offset: 0 },
-                    GpuBinding::Buffer { binding: 2, buffer: dst, offset: 0 },
-                    GpuBinding::Buffer { binding: 3, buffer: parents, offset: 0 },
-                    GpuBinding::Buffer { binding: 4, buffer: gate, offset: 0 },
-                ],
-                [groups, 1, 1],
-                label,
-            );
-            encoder.compute_memory_barrier_buffers();
-        };
+        let dispatch =
+            |encoder: &mut manifold_gpu::GpuEncoder, pipeline, level: usize, groups: u32, label| {
+                let uniforms = params(level);
+                let (src, dst) = if level == 0 {
+                    (src, dst)
+                } else {
+                    (parents, parents)
+                };
+                encoder.dispatch_compute(
+                    pipeline,
+                    &[
+                        GpuBinding::Bytes {
+                            binding: 0,
+                            data: bytemuck::bytes_of(&uniforms),
+                        },
+                        GpuBinding::Buffer {
+                            binding: 1,
+                            buffer: src,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 2,
+                            buffer: dst,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 3,
+                            buffer: parents,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 4,
+                            buffer: gate,
+                            offset: 0,
+                        },
+                    ],
+                    [groups, 1, 1],
+                    label,
+                );
+                encoder.compute_memory_barrier_buffers();
+            };
         let groups = |level: usize| levels[level].1.div_ceil(BLOCK) as u32;
         for level in 0..count - 1 {
             dispatch(encoder, blocks, level, groups(level), labels.blocks);
@@ -302,7 +353,17 @@ mod gpu_tests {
             // SAFETY: shared buffer holding at least n words; GPU work done.
             bytemuck::cast_slice(unsafe { std::slice::from_raw_parts(ptr, n * 4) }).to_vec()
         };
-        for n in [1usize, 255, 256, 257, 65_536, 65_537, (1 << 20) + 3, BLOCK * TAIL, BLOCK * TAIL + 1] {
+        for n in [
+            1usize,
+            255,
+            256,
+            257,
+            65_536,
+            65_537,
+            (1 << 20) + 3,
+            BLOCK * TAIL,
+            BLOCK * TAIL + 1,
+        ] {
             let values: Vec<u32> = (0..n).map(|_| next()).collect();
             let want: Vec<u32> = values
                 .iter()
@@ -313,7 +374,12 @@ mod gpu_tests {
                 .collect();
             let check = |got: &[u32], path: &str| {
                 let first_bad = got.iter().zip(&want).position(|(g, w)| g != w);
-                assert_eq!(first_bad, None, "{path}: n = {n} ({} dispatches): word {first_bad:?} differs", dispatches(n));
+                assert_eq!(
+                    first_bad,
+                    None,
+                    "{path}: n = {n} ({} dispatches): word {first_bad:?} differs",
+                    dispatches(n)
+                );
             };
 
             let buffer = scan.buffer(&device, n).expect("scan storage");
@@ -322,7 +388,10 @@ mod gpu_tests {
             let mut encoder = device.create_encoder("prefix scan proof (in place)");
             scan.encode_labelled(&mut encoder, n, ScanLabels::DEFAULT);
             encoder.commit_and_wait_completed();
-            check(&read(scan.buffer.as_ref().expect("scan storage"), n), "encode_labelled");
+            check(
+                &read(scan.buffer.as_ref().expect("scan storage"), n),
+                "encode_labelled",
+            );
 
             let bytes = (n * 4) as u64;
             let src = device.try_create_buffer_shared(bytes).expect("src");
@@ -334,7 +403,11 @@ mod gpu_tests {
             scan.encode_into(&mut encoder, n, &src, &dst);
             encoder.commit_and_wait_completed();
             check(&read(&dst, n), "encode_into");
-            assert_eq!(read(&src, n), values, "encode_into: n = {n}: src was written");
+            assert_eq!(
+                read(&src, n),
+                values,
+                "encode_into: n = {n}: src was written"
+            );
         }
     }
 }

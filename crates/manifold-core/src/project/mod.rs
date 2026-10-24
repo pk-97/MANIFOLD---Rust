@@ -1,6 +1,6 @@
 use crate::PresetTypeId;
-use crate::id::EffectId;
 use crate::effect_graph_def::EffectGraphDef;
+use crate::id::EffectId;
 use crate::midi::MidiMappingConfig;
 use crate::preset_def::PresetKind;
 use crate::recording::RecordingProvenance;
@@ -17,11 +17,13 @@ use std::collections::HashSet;
 mod test_support;
 mod validate;
 pub use validate::{LoadReport, PurgeResult};
-mod queries;
-mod presets;
 mod load_migration;
+mod presets;
+mod queries;
 mod trigger_sources;
-pub use trigger_sources::{clip_trigger_pattern_digest, clip_trigger_source_is_eligible, ClipTriggerLayer};
+pub use trigger_sources::{
+    ClipTriggerLayer, clip_trigger_pattern_digest, clip_trigger_source_is_eligible,
+};
 
 /// A project-scoped preset (a "fork"): a complete, self-contained preset
 /// (graph + exposed params + ranges, carried in [`EffectGraphDef`]) that lives
@@ -93,7 +95,10 @@ pub struct Project {
     /// `midi_config`. Skipped on serialize when empty so projects that never
     /// configured audio round-trip byte-identically. See
     /// `docs/AUDIO_MODULATION_DESIGN.md`.
-    #[serde(default, skip_serializing_if = "crate::audio_setup::AudioSetup::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "crate::audio_setup::AudioSetup::is_empty"
+    )]
     pub audio_setup: crate::audio_setup::AudioSetup,
     #[serde(default = "ProjectSettings::legacy")]
     pub settings: ProjectSettings,
@@ -146,7 +151,6 @@ impl Project {
             .tempo_map
             .get_bpm_at_beat(Beats::ZERO, self.settings.bpm);
     }
-
 }
 impl Default for Project {
     fn default() -> Self {

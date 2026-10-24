@@ -12,17 +12,17 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer};
 
-use manifold_water_liquid::float_param;
-use manifold_water_liquid::primitives::sort_particles_into_cells::{int_param};
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
-use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_node_engine::particles::FluidParticle;
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
-use manifold_node_engine::ports::EXACT_F32_COUNT;
-use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
-use manifold_water_liquid::lattice::LiquidLattice;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::FluidParticle;
+use manifold_node_engine::ports::EXACT_F32_COUNT;
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::lattice::LiquidLattice;
+use manifold_water_liquid::primitives::sort_particles_into_cells::int_param;
 
 /// Sites per cell: two along each axis.
 pub(super) const SITES_PER_CELL: u32 = 8;
@@ -37,7 +37,11 @@ fn site_lattice(nodes: [u32; 3]) -> [u32; 3] {
 /// of liquid (`_addNewFluidCellsAABB`, `AABB::isPointInside`). The domain
 /// turns its metres into sites with it.
 pub(super) fn site_range(lo: f64, hi: f64, min: f64, cell_size: f64, cells: u32) -> [u32; 2] {
-    let first = |x: f64| (2.0 * (x - min) / cell_size - 0.5).ceil().clamp(0.0, f64::from(2 * cells)) as u32;
+    let first = |x: f64| {
+        (2.0 * (x - min) / cell_size - 0.5)
+            .ceil()
+            .clamp(0.0, f64::from(2 * cells)) as u32
+    };
     [first(lo), first(hi).max(first(lo))]
 }
 
@@ -74,10 +78,15 @@ fn planned_particles(params: &ParamValues) -> u32 {
         Some(ParamValue::Float(v)) => *v,
         _ => default,
     };
-    let Ok(lattice) = LiquidLattice::from_scalars(read) else { return 1 };
+    let Ok(lattice) = LiquidLattice::from_scalars(read) else {
+        return 1;
+    };
     let (pool, sites) = fill_of(read);
-    pool_slots(filled_sites(lattice.cells(), pool, sites), read("particle_capacity", 0.0)).clamp(1, u64::from(EXACT_F32_COUNT))
-        as u32
+    pool_slots(
+        filled_sites(lattice.cells(), pool, sites),
+        read("particle_capacity", 0.0),
+    )
+    .clamp(1, u64::from(EXACT_F32_COUNT)) as u32
 }
 
 /// Particle slots the pool holds: the fill, or `capacity` when larger (0
@@ -187,10 +196,17 @@ impl Primitive for LiquidFill {
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
-        (port == "particles").then_some(self.buffer.as_ref()).flatten()
+        (port == "particles")
+            .then_some(self.buffer.as_ref())
+            .flatten()
     }
 
-    fn array_output_capacity(&self, port: &str, params: &ParamValues, _inputs: &[(&str, u32)]) -> Option<u32> {
+    fn array_output_capacity(
+        &self,
+        port: &str,
+        params: &ParamValues,
+        _inputs: &[(&str, u32)],
+    ) -> Option<u32> {
         (port == "particles").then(|| planned_particles(params))
     }
 
@@ -200,7 +216,8 @@ impl Primitive for LiquidFill {
         };
         let nodes = lattice.cells();
         let (min, cell_size) = (lattice.min(), lattice.cell_size());
-        let int = |name: &str, default: f32| ctx.scalar_or_param(name, default).round().max(0.0) as u32;
+        let int =
+            |name: &str, default: f32| ctx.scalar_or_param(name, default).round().max(0.0) as u32;
         let jitter = ctx.scalar_or_param("jitter", 0.0);
         let wall_inset = ctx.scalar_or_param("wall_inset", 0.0);
         if !(0.0..=8.0).contains(&wall_inset) {
@@ -230,7 +247,8 @@ impl Primitive for LiquidFill {
             return;
         }
         let capacity = (slots as u32).max(1);
-        ctx.outputs.set_scalar("count", ParamValue::Float(slots as f32));
+        ctx.outputs
+            .set_scalar("count", ParamValue::Float(slots as f32));
         let bytes = u64::from(capacity) * std::mem::size_of::<FluidParticle>() as u64;
         if self.buffer.as_ref().is_none_or(|b| b.size != bytes) {
             match ctx.gpu_encoder().device.try_create_buffer_shared(bytes) {
@@ -239,28 +257,51 @@ impl Primitive for LiquidFill {
                     self.filled = None;
                 }
                 Err(error) => {
-                    ctx.error(format!("Liquid Fill needs {bytes} bytes of GPU storage: {error}"));
+                    ctx.error(format!(
+                        "Liquid Fill needs {bytes} bytes of GPU storage: {error}"
+                    ));
                     return;
                 }
             }
         }
-        let colliders = (ctx.inputs.array("bodies"), ctx.inputs.array("shapes"), ctx.inputs.array("atlas"));
+        let colliders = (
+            ctx.inputs.array("bodies"),
+            ctx.inputs.array("shapes"),
+            ctx.inputs.array("atlas"),
+        );
         let gpu = ctx.gpu_encoder();
         let buffer = self.buffer.as_ref().expect("fill storage prepared");
         // Without all three collider arrays no body is read; the particle
         // buffer fills their slots.
         let (bodies, shapes, atlas, body_count) = match colliders {
             (Some(bodies), Some(shapes), Some(atlas)) => {
-                let rows = (bodies.size / std::mem::size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32;
+                let rows = (bodies.size / std::mem::size_of::<LiquidBody>() as u64)
+                    .min(i32::MAX as u64) as i32;
                 (bodies, shapes, atlas, body_count.min(rows))
             }
             _ => (buffer, buffer, buffer, 0),
         };
         let key = [
-            min[0].to_bits(), min[1].to_bits(), min[2].to_bits(), cell_size.to_bits(),
-            nodes[0], nodes[1], nodes[2], pool,
-            sites[0][0], sites[0][1], sites[1][0], sites[1][1], sites[2][0], sites[2][1],
-            jitter.to_bits(), seed, body_count as u32, epoch, capacity, wall_inset.to_bits(),
+            min[0].to_bits(),
+            min[1].to_bits(),
+            min[2].to_bits(),
+            cell_size.to_bits(),
+            nodes[0],
+            nodes[1],
+            nodes[2],
+            pool,
+            sites[0][0],
+            sites[0][1],
+            sites[1][0],
+            sites[1][1],
+            sites[2][0],
+            sites[2][1],
+            jitter.to_bits(),
+            seed,
+            body_count as u32,
+            epoch,
+            capacity,
+            wall_inset.to_bits(),
         ];
         if self.filled == Some((key, buffer.identity_key())) {
             return;
@@ -296,11 +337,30 @@ impl Primitive for LiquidFill {
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: bodies, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: shapes, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: atlas, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: bodies,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: shapes,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: atlas,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer,
+                    offset: 0,
+                },
             ],
             [capacity.div_ceil(256), 1, 1],
             "node.liquid_fill",
@@ -317,11 +377,20 @@ mod tests {
     fn liquid_fill_counts_pool_plus_clipped_box() {
         // Pool 5 site layers of a 64³ floor (128 × 128 sites), box x 5..43,
         // y 0..67 clipped to 5..67, z 8..120.
-        assert_eq!(filled_sites([64; 3], 5, [[5, 43], [0, 67], [8, 120]]), 128 * 5 * 128 + 38 * 62 * 112);
+        assert_eq!(
+            filled_sites([64; 3], 5, [[5, 43], [0, 67], [8, 120]]),
+            128 * 5 * 128 + 38 * 62 * 112
+        );
         // An empty box adds nothing; the pool never passes the lattice top.
-        assert_eq!(filled_sites([8; 3], 40, [[0, 0], [0, 0], [0, 0]]), 16 * 16 * 16);
+        assert_eq!(
+            filled_sites([8; 3], 40, [[0, 0], [0, 0], [0, 0]]),
+            16 * 16 * 16
+        );
         // A box past the lattice is clipped to it.
-        assert_eq!(filled_sites([8; 3], 0, [[12, 40], [0, 16], [0, 16]]), 4 * 16 * 16);
+        assert_eq!(
+            filled_sites([8; 3], 0, [[12, 40], [0, 16], [0, 16]]),
+            4 * 16 * 16
+        );
     }
 
     #[test]

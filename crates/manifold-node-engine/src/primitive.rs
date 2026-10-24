@@ -354,12 +354,16 @@ pub trait Primitive: PrimitiveSpec {
     fn set_wgsl_source(&mut self, _source: &str) {}
 
     /// Mirror of `EffectNode::provides_texture_output`.
-    fn provides_texture_output(&self, _port: &str) -> bool { false }
+    fn provides_texture_output(&self, _port: &str) -> bool {
+        false
+    }
 
     /// A CPU producer may publish a larger array after evaluation. Storage is
     /// dedicated, retained between frames, and installed before consumers run.
     /// Capacity is an allocation hint, not a limit on the produced geometry.
-    fn provides_array_output(&self, _port: &str) -> bool { false }
+    fn provides_array_output(&self, _port: &str) -> bool {
+        false
+    }
 
     fn provided_array_output(&self, _port: &str) -> Option<&manifold_gpu::GpuBuffer> {
         None
@@ -458,10 +462,7 @@ pub trait Primitive: PrimitiveSpec {
     /// Override on a stencil atom for the param shapes whose gather coords all
     /// land on texel centers (integer tap offsets) — e.g. the Linear blur mode.
     /// Default `false` (taps assumed fractional).
-    fn stencil_taps_texel_exact(
-        &self,
-        _params: &crate::exec::effect_node::ParamValues,
-    ) -> bool {
+    fn stencil_taps_texel_exact(&self, _params: &crate::exec::effect_node::ParamValues) -> bool {
         false
     }
 
@@ -550,11 +551,16 @@ pub trait Primitive: PrimitiveSpec {
         false
     }
 
-    fn take_substep_restart_request(&mut self) -> bool { false }
+    fn take_substep_restart_request(&mut self) -> bool {
+        false
+    }
 
     /// The clock's accepted interval for this region iteration. The named
     /// scalar output publishes its duration before the body executes.
-    fn substep_clock_interval(&self, _iteration: u32) -> Option<crate::exec::substeps::SubstepClockOutput<'_>> {
+    fn substep_clock_interval(
+        &self,
+        _iteration: u32,
+    ) -> Option<crate::exec::substeps::SubstepClockOutput<'_>> {
         None
     }
 
@@ -707,7 +713,9 @@ pub trait Primitive: PrimitiveSpec {
 
     /// Mirror of
     /// [`EffectNode::world_control_inputs`](crate::exec::effect_node::EffectNode::world_control_inputs).
-    fn world_control_inputs(&self) -> &'static [manifold_core::scene_world_controls::WorldControlInput] {
+    fn world_control_inputs(
+        &self,
+    ) -> &'static [manifold_core::scene_world_controls::WorldControlInput] {
         &[]
     }
 
@@ -749,9 +757,7 @@ pub trait Primitive: PrimitiveSpec {
         if !is_array_output {
             return None;
         }
-        params
-            .get("max_capacity")
-            .and_then(|v| v.as_u32_clamped(1))
+        params.get("max_capacity").and_then(|v| v.as_u32_clamped(1))
     }
 
     /// Mirror of
@@ -878,10 +884,7 @@ impl<P: Primitive + 'static> EffectNode for P {
     ) -> manifold_gpu::GpuAddressMode {
         Primitive::fused_gather_sampler_mode(self, params)
     }
-    fn stencil_taps_texel_exact(
-        &self,
-        params: &crate::exec::effect_node::ParamValues,
-    ) -> bool {
+    fn stencil_taps_texel_exact(&self, params: &crate::exec::effect_node::ParamValues) -> bool {
         Primitive::stencil_taps_texel_exact(self, params)
     }
     fn output_dims(
@@ -939,7 +942,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn acceleration_input(&self) -> Option<&'static str> {
         Primitive::acceleration_input(self)
     }
-    fn world_control_inputs(&self) -> &'static [manifold_core::scene_world_controls::WorldControlInput] {
+    fn world_control_inputs(
+        &self,
+    ) -> &'static [manifold_core::scene_world_controls::WorldControlInput] {
         Primitive::world_control_inputs(self)
     }
     fn physical_sources(&self, output: &str) -> Option<&'static [&'static str]> {
@@ -970,7 +975,10 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn take_substep_restart_request(&mut self) -> bool {
         Primitive::take_substep_restart_request(self)
     }
-    fn substep_clock_interval(&self, iteration: u32) -> Option<crate::exec::substeps::SubstepClockOutput<'_>> {
+    fn substep_clock_interval(
+        &self,
+        iteration: u32,
+    ) -> Option<crate::exec::substeps::SubstepClockOutput<'_>> {
         Primitive::substep_clock_interval(self, iteration)
     }
     fn set_substep_interval(&mut self, interval: crate::exec::substeps::SubstepInterval) {
@@ -1870,10 +1878,7 @@ mod tests {
         assert_eq!(SmokeTestArrayPorts::INPUTS.len(), 2);
         assert_eq!(SmokeTestArrayPorts::INPUTS[0].name, "items_in");
         assert!(SmokeTestArrayPorts::INPUTS[0].required);
-        assert_eq!(
-            SmokeTestArrayPorts::INPUTS[0].ty,
-            PortType::Array(expected)
-        );
+        assert_eq!(SmokeTestArrayPorts::INPUTS[0].ty, PortType::Array(expected));
         assert_eq!(SmokeTestArrayPorts::INPUTS[1].name, "opt_items");
         assert!(!SmokeTestArrayPorts::INPUTS[1].required);
         assert_eq!(SmokeTestArrayPorts::OUTPUTS.len(), 1);
@@ -1990,8 +1995,14 @@ mod tests {
         assert_eq!(port.name, "edges");
 
         let expected_specs: &[ChannelSpec] = &[
-            ChannelSpec { name: well_known::A_INDEX, ty: ChannelElementType::U32 },
-            ChannelSpec { name: well_known::B_INDEX, ty: ChannelElementType::U32 },
+            ChannelSpec {
+                name: well_known::A_INDEX,
+                ty: ChannelElementType::U32,
+            },
+            ChannelSpec {
+                name: well_known::B_INDEX,
+                ty: ChannelElementType::U32,
+            },
         ];
         let expected = ArrayType::of_channels(expected_specs, MatchMode::Exact);
         assert_eq!(port.ty, PortType::Array(expected));
@@ -2046,7 +2057,10 @@ mod tests {
         match port.ty {
             PortType::Array(at) => {
                 assert_eq!(at.match_mode, MatchMode::Permissive);
-                assert!(at.specs.is_empty(), "permissive ports carry no fixed signature");
+                assert!(
+                    at.specs.is_empty(),
+                    "permissive ports carry no fixed signature"
+                );
             }
             _ => panic!("expected Array port"),
         }
@@ -2097,12 +2111,12 @@ mod tests {
 
         let mut g = Graph::new();
         let producer = g.add_node(Box::new(SmokeTestChannelsProducer::new()));
-        let permissive_consumer =
-            g.add_node(Box::new(SmokeTestChannelsPermissive::new()));
+        let permissive_consumer = g.add_node(Box::new(SmokeTestChannelsPermissive::new()));
         // Producer emits Channels[A_INDEX, B_INDEX]; consumer is
         // Channels[permissive] → must accept.
         assert!(
-            g.connect((producer, "edges"), (permissive_consumer, "input")).is_ok(),
+            g.connect((producer, "edges"), (permissive_consumer, "input"))
+                .is_ok(),
             "Permissive consumer should accept any Channels producer"
         );
     }

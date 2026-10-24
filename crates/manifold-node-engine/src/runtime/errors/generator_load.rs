@@ -131,9 +131,7 @@ impl From<GraphError> for JsonGeneratorLoadError {
     }
 }
 
-impl From<crate::load::expand::SceneModifierExpandError>
-    for JsonGeneratorLoadError
-{
+impl From<crate::load::expand::SceneModifierExpandError> for JsonGeneratorLoadError {
     fn from(error: crate::load::expand::SceneModifierExpandError) -> Self {
         Self::SceneModifier(error)
     }

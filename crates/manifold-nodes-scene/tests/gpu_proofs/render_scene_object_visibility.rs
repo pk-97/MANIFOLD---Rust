@@ -15,9 +15,8 @@ use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 /// `occluder_visible`: the occluder scene_object's `visible` param (0.0 or
 /// 1.0). Ground is object_0 (grid_mesh), occluder is object_1 (grid_mesh,
@@ -301,9 +300,11 @@ fn streaming_occluder_json() -> String {
     let mut scene: serde_json::Value = serde_json::from_str(&scene_json(1.0)).unwrap();
     let nodes = scene["nodes"].as_array_mut().unwrap();
     nodes.retain(|n| n["id"] != 5 && n["id"] != 6);
-    nodes.push(json!({"id":50,"typeId":"node.gltf_mesh_source","nodeId":"occ_glb","params":{
+    nodes.push(
+        json!({"id":50,"typeId":"node.gltf_mesh_source","nodeId":"occ_glb","params":{
         "path":{"type":"String","value":glb.to_string_lossy()},
-        "fit":{"type":"Enum","value":1}}}));
+        "fit":{"type":"Enum","value":1}}}),
+    );
     let wires = scene["wires"].as_array_mut().unwrap();
     wires.retain(|w| w["fromNode"] != 5 && w["fromNode"] != 6);
     wires.push(json!({"fromNode":50,"fromPort":"vertices","toNode":41,"toPort":"vertices"}));
@@ -319,7 +320,9 @@ fn streaming_mesh_drops_only_its_object() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(&streaming_occluder_json()),
+        &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(
+            &streaming_occluder_json(),
+        ),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,
@@ -370,8 +373,18 @@ fn streaming_mesh_drops_only_its_object() {
         frame += 1;
     }
     let landed = h.readback(&target.texture);
-    write_png(&streaming, h.width, h.height, "/tmp/render_scene_streaming_object.png");
-    write_png(&landed, h.width, h.height, "/tmp/render_scene_landed_object.png");
+    write_png(
+        &streaming,
+        h.width,
+        h.height,
+        "/tmp/render_scene_streaming_object.png",
+    );
+    write_png(
+        &landed,
+        h.width,
+        h.height,
+        "/tmp/render_scene_landed_object.png",
+    );
 
     let (_, peak_streaming) = luma(&streaming);
     let red_streaming = red_excess_sum(&streaming);
@@ -379,7 +392,10 @@ fn streaming_mesh_drops_only_its_object() {
     eprintln!(
         "streaming object: peak={peak_streaming:.3} red-excess streaming={red_streaming:.1} landed={red_landed:.1} after {frame} frames"
     );
-    assert!(peak_streaming > 0.2, "the rest of the scene must render while a mesh streams in");
+    assert!(
+        peak_streaming > 0.2,
+        "the rest of the scene must render while a mesh streams in"
+    );
     assert!(red_landed > 1.0, "the landed occluder must draw");
     assert!(
         red_streaming < red_landed * 0.05,
@@ -446,6 +462,8 @@ fn material_inspector_glass_opaque_route_preserves_transmission_lobes() {
     // glass transmission overrides the diffuse BSDF at weight one.
     let (full_glass, _, _) = render_readback(&glass_scene_json(2, 1.0, 0.0, 0.0));
     let (full_with_diffuse, _, _) = render_readback(&glass_scene_json(2, 1.0, 0.0, 0.45));
-    assert_eq!(full_glass, full_with_diffuse,
-        "full glass transmission must replace the diffuse transmission lobe");
+    assert_eq!(
+        full_glass, full_with_diffuse,
+        "full glass transmission must replace the diffuse transmission lobe"
+    );
 }

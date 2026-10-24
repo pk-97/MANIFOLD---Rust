@@ -7,11 +7,11 @@
 //! commands address a mod by its `param_id`.
 
 use crate::command::Command;
-use manifold_core::change::{ChangeSet, Part};
 use crate::commands::effect_target::DriverTarget;
 use crate::commands::graph::KeepOnCard;
 use manifold_core::audio_mod::{AudioModShape, AudioModSource, ParameterAudioMod, TriggerAction};
 use manifold_core::audio_trigger::TriggerFireMode;
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::effects::ParamId;
 use manifold_core::project::Project;
 
@@ -28,7 +28,10 @@ where
         }
         DriverTarget::GeneratorParam { layer_id } => {
             let (_, layer) = project.timeline.find_layer_by_id_mut(layer_id)?;
-            let mods = layer.gen_params_mut()?.audio_mods.get_or_insert_with(Vec::new);
+            let mods = layer
+                .gen_params_mut()?
+                .audio_mods
+                .get_or_insert_with(Vec::new);
             Some(f(mods))
         }
     }
@@ -60,12 +63,18 @@ pub struct AddAudioModCommand {
 
 impl AddAudioModCommand {
     pub fn new(target: DriverTarget, audio_mod: ParameterAudioMod) -> Self {
-        Self { target, audio_mod, keep: KeepOnCard::default() }
+        Self {
+            target,
+            audio_mod,
+            keep: KeepOnCard::default(),
+        }
     }
 }
 
 impl Command for AddAudioModCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes, Part::Values]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects, Part::Shapes, Part::Values])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let m = self.audio_mod.clone();
         with_audio_mods_mut(project, &self.target, |mods| {
@@ -73,7 +82,8 @@ impl Command for AddAudioModCommand {
             mods.retain(|a| a.param_id != m.param_id);
             mods.push(m);
         });
-        self.keep.attach_driver(project, &self.target, &self.audio_mod.param_id);
+        self.keep
+            .attach_driver(project, &self.target, &self.audio_mod.param_id);
     }
 
     fn do_undo(&mut self, project: &mut Project) {
@@ -99,16 +109,24 @@ pub struct RemoveAudioModCommand {
 
 impl RemoveAudioModCommand {
     pub fn new(target: DriverTarget, param_id: ParamId) -> Self {
-        Self { target, param_id, removed: None }
+        Self {
+            target,
+            param_id,
+            removed: None,
+        }
     }
 }
 
 impl Command for RemoveAudioModCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes, Part::Values]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects, Part::Shapes, Part::Values])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let pid = self.param_id.clone();
         let removed = with_audio_mods_mut(project, &self.target, |mods| {
-            mods.iter().position(|a| a.param_id == pid).map(|i| mods.remove(i))
+            mods.iter()
+                .position(|a| a.param_id == pid)
+                .map(|i| mods.remove(i))
         });
         self.removed = removed.flatten();
     }
@@ -135,17 +153,31 @@ pub struct ToggleAudioModEnabledCommand {
 }
 
 impl ToggleAudioModEnabledCommand {
-    pub fn new(target: DriverTarget, param_id: ParamId, old_enabled: bool, new_enabled: bool) -> Self {
-        Self { target, param_id, old_enabled, new_enabled, keep: KeepOnCard::default() }
+    pub fn new(
+        target: DriverTarget,
+        param_id: ParamId,
+        old_enabled: bool,
+        new_enabled: bool,
+    ) -> Self {
+        Self {
+            target,
+            param_id,
+            old_enabled,
+            new_enabled,
+            keep: KeepOnCard::default(),
+        }
     }
 }
 
 impl Command for ToggleAudioModEnabledCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         set_enabled(project, &self.target, &self.param_id, self.new_enabled);
         if self.new_enabled {
-            self.keep.attach_driver(project, &self.target, &self.param_id);
+            self.keep
+                .attach_driver(project, &self.target, &self.param_id);
         }
     }
 
@@ -177,13 +209,25 @@ pub struct SetAudioModSourceCommand {
 }
 
 impl SetAudioModSourceCommand {
-    pub fn new(target: DriverTarget, param_id: ParamId, old: AudioModSource, new: AudioModSource) -> Self {
-        Self { target, param_id, old, new }
+    pub fn new(
+        target: DriverTarget,
+        param_id: ParamId,
+        old: AudioModSource,
+        new: AudioModSource,
+    ) -> Self {
+        Self {
+            target,
+            param_id,
+            old,
+            new,
+        }
     }
 }
 
 impl Command for SetAudioModSourceCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let v = self.new.clone();
         with_audio_mods_mut(project, &self.target, |mods| {
@@ -218,8 +262,18 @@ pub struct SetAudioModShapeCommand {
 }
 
 impl SetAudioModShapeCommand {
-    pub fn new(target: DriverTarget, param_id: ParamId, old: AudioModShape, new: AudioModShape) -> Self {
-        Self { target, param_id, old, new }
+    pub fn new(
+        target: DriverTarget,
+        param_id: ParamId,
+        old: AudioModShape,
+        new: AudioModShape,
+    ) -> Self {
+        Self {
+            target,
+            param_id,
+            old,
+            new,
+        }
     }
 }
 
@@ -277,12 +331,19 @@ impl SetAudioModTriggerModeCommand {
         old: Option<TriggerFireMode>,
         new: Option<TriggerFireMode>,
     ) -> Self {
-        Self { target, param_id, old, new }
+        Self {
+            target,
+            param_id,
+            old,
+            new,
+        }
     }
 }
 
 impl Command for SetAudioModTriggerModeCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let v = self.new;
         with_audio_mods_mut(project, &self.target, |mods| {
@@ -323,8 +384,18 @@ pub struct SetAudioModActionCommand {
 }
 
 impl SetAudioModActionCommand {
-    pub fn new(target: DriverTarget, param_id: ParamId, old: TriggerAction, new: TriggerAction) -> Self {
-        Self { target, param_id, old, new }
+    pub fn new(
+        target: DriverTarget,
+        param_id: ParamId,
+        old: TriggerAction,
+        new: TriggerAction,
+    ) -> Self {
+        Self {
+            target,
+            param_id,
+            old,
+            new,
+        }
     }
 }
 
@@ -362,7 +433,9 @@ mod tests {
     use manifold_core::id::{AudioSendId, EffectId};
 
     fn effect_target() -> DriverTarget {
-        DriverTarget::Effect { effect_id: EffectId::new("fx-1") }
+        DriverTarget::Effect {
+            effect_id: EffectId::new("fx-1"),
+        }
     }
 
     fn make_mod(param: &str) -> ParameterAudioMod {
@@ -399,14 +472,27 @@ mod tests {
     #[test]
     fn toggle_undo_and_redo_restore_the_whole_project() {
         use crate::commands::setter_roundtrip::{SetterCase, assert_setter_cases};
-        assert_setter_cases(project_with_effect, &[SetterCase {
-            name: "enabled toggle",
-            build: |p| {
-                AddAudioModCommand::new(effect_target(), make_mod("intensity")).execute(p);
-                Box::new(ToggleAudioModEnabledCommand::new(effect_target(), "intensity".into(), true, false))
-            },
-            applied: |p| !p.settings.master_effects[0].find_audio_mod("intensity").unwrap().enabled,
-        }]);
+        assert_setter_cases(
+            project_with_effect,
+            &[SetterCase {
+                name: "enabled toggle",
+                build: |p| {
+                    AddAudioModCommand::new(effect_target(), make_mod("intensity")).execute(p);
+                    Box::new(ToggleAudioModEnabledCommand::new(
+                        effect_target(),
+                        "intensity".into(),
+                        true,
+                        false,
+                    ))
+                },
+                applied: |p| {
+                    !p.settings.master_effects[0]
+                        .find_audio_mod("intensity")
+                        .unwrap()
+                        .enabled
+                },
+            }],
+        );
     }
 
     #[test]
@@ -414,7 +500,10 @@ mod tests {
         let mut project = project_with_effect();
         AddAudioModCommand::new(effect_target(), make_mod("clip_trigger")).execute(&mut project);
         assert_eq!(
-            project.settings.master_effects[0].find_audio_mod("clip_trigger").unwrap().trigger_mode,
+            project.settings.master_effects[0]
+                .find_audio_mod("clip_trigger")
+                .unwrap()
+                .trigger_mode,
             None
         );
         let mut cmd = SetAudioModTriggerModeCommand::new(
@@ -425,12 +514,18 @@ mod tests {
         );
         cmd.execute(&mut project);
         assert_eq!(
-            project.settings.master_effects[0].find_audio_mod("clip_trigger").unwrap().trigger_mode,
+            project.settings.master_effects[0]
+                .find_audio_mod("clip_trigger")
+                .unwrap()
+                .trigger_mode,
             Some(TriggerFireMode::Transient)
         );
         cmd.undo(&mut project);
         assert_eq!(
-            project.settings.master_effects[0].find_audio_mod("clip_trigger").unwrap().trigger_mode,
+            project.settings.master_effects[0]
+                .find_audio_mod("clip_trigger")
+                .unwrap()
+                .trigger_mode,
             None
         );
     }
@@ -440,10 +535,16 @@ mod tests {
         let mut project = project_with_effect();
         AddAudioModCommand::new(effect_target(), make_mod("amount")).execute(&mut project);
         assert_eq!(
-            project.settings.master_effects[0].find_audio_mod("amount").unwrap().action,
+            project.settings.master_effects[0]
+                .find_audio_mod("amount")
+                .unwrap()
+                .action,
             TriggerAction::Continuous
         );
-        let step = TriggerAction::Step { amount: 2.0, wrap: manifold_core::audio_mod::WrapMode::Bounce };
+        let step = TriggerAction::Step {
+            amount: 2.0,
+            wrap: manifold_core::audio_mod::WrapMode::Bounce,
+        };
         let mut cmd = SetAudioModActionCommand::new(
             effect_target(),
             "amount".into(),
@@ -452,12 +553,18 @@ mod tests {
         );
         cmd.execute(&mut project);
         assert_eq!(
-            project.settings.master_effects[0].find_audio_mod("amount").unwrap().action,
+            project.settings.master_effects[0]
+                .find_audio_mod("amount")
+                .unwrap()
+                .action,
             step
         );
         cmd.undo(&mut project);
         assert_eq!(
-            project.settings.master_effects[0].find_audio_mod("amount").unwrap().action,
+            project.settings.master_effects[0]
+                .find_audio_mod("amount")
+                .unwrap()
+                .action,
             TriggerAction::Continuous
         );
     }

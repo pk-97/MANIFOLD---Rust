@@ -1,8 +1,11 @@
 //! Borrow the water extension without giving it ownership of the generic runtime.
 
 use super::WaterRuntimeState;
-use manifold_node_engine::{exec::execution::Executor, exec::execution_plan::ExecutionPlan, graph::Graph, runtime::PresetRuntime, runtime::extensions::RuntimeContext, runtime::extensions::RuntimeSlots};
 use manifold_core::PresetTypeId;
+use manifold_node_engine::{
+    exec::execution::Executor, exec::execution_plan::ExecutionPlan, graph::Graph,
+    runtime::PresetRuntime, runtime::extensions::RuntimeContext, runtime::extensions::RuntimeSlots,
+};
 
 pub struct WaterRuntime<'a> {
     pub(super) water: &'a mut WaterRuntimeState,

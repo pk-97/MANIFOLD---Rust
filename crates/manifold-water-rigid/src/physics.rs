@@ -1,19 +1,19 @@
 //! Value descriptions on graph wires; native simulation ownership stays in the world node.
 use manifold_core::{PlayedTime, Seconds};
 use manifold_physics::stepping::{
-    box3d_substep_count, StepCoupling, StepInterval, SubstepExchange, Uncoupled,
+    StepCoupling, StepInterval, SubstepExchange, Uncoupled, box3d_substep_count,
 };
 use manifold_physics::{
-    input::{
-        input_span, input_span_before, AppliedEvent, EventQueue, EventStamp, InputHistory,
-        Timestamped,
-    },
     BodyConfig, BodyHandle, BodyKind, FieldInput, FieldValue, PhysicsWorld, VectorField,
+    input::{
+        AppliedEvent, EventQueue, EventStamp, InputHistory, Timestamped, input_span,
+        input_span_before,
+    },
 };
 use std::sync::Arc;
 
-use manifold_node_engine::scene::transform::Transform;
 use manifold_node_engine::platonic::platonic_points;
+use manifold_node_engine::scene::transform::Transform;
 pub use manifold_physics::collision_shape::Solid;
 
 mod admission;
@@ -29,9 +29,9 @@ mod group_tests;
 mod impulses;
 #[cfg(test)]
 mod parity_tests;
-mod targeted_fields;
 #[cfg(test)]
 mod scan_collider_tests;
+mod targeted_fields;
 #[cfg(test)]
 mod test_scene;
 #[cfg(test)]
@@ -42,15 +42,15 @@ mod world_edit_tests;
 
 pub use admission::{BodyRefusal, Member, RefusalReason};
 use body_history::PackedRows;
-use manifold_core::scene_schema::SPEED_RANGE;
 use copy_group::CopyGroup;
-use copy_layout::{rest_pose, Arrangement};
-pub(crate) use copy_layout::{arrangement_of, requested_count, RestBox};
+use copy_layout::{Arrangement, rest_pose};
+pub(crate) use copy_layout::{RestBox, arrangement_of, requested_count};
 pub use impulses::ResolvedRigidImpulse;
+use manifold_core::scene_schema::SPEED_RANGE;
 use targeted_fields::{TargetedFieldHistory, TargetedFields};
-pub use worker::{RigidSceneInputs, RigidSceneObservation};
 #[cfg(test)]
 use test_scene::{copies_scene, targets};
+pub use worker::{RigidSceneInputs, RigidSceneObservation};
 
 pub use manifold_node_engine::exec::effect_node::SimStep;
 use manifold_node_engine::exec::sim_metrics::SimMetricsSink;
@@ -66,7 +66,10 @@ pub fn particle_frame_duration(delta: Seconds, step: SimStep, metrics: SimMetric
 
 /// The physics clock's view of this frame's live load; None in export.
 pub fn live_load(step: SimStep) -> Option<manifold_physics::clock::LiveLoad> {
-    step.load().map(|load| manifold_physics::clock::LiveLoad { previous: load.previous, budget: load.budget })
+    step.load().map(|load| manifold_physics::clock::LiveLoad {
+        previous: load.previous,
+        budget: load.budget,
+    })
 }
 
 #[cfg(feature = "gpu-proofs")]
@@ -81,7 +84,6 @@ thread_local! {
 pub fn native_ticks_on_this_thread() -> u64 {
     NATIVE_TICKS.get()
 }
-
 
 /// Transport paused or simulation speed zero. A capped simulation timestamp
 /// can remain unchanged while transport advances, so it cannot diagnose pause.
@@ -103,7 +105,6 @@ impl HeldClock {
     pub(crate) fn is_held(self) -> bool {
         self.held
     }
-
 }
 
 /// Field and hit targets (body slots, then copy groups) a world gathers on
@@ -116,7 +117,8 @@ const IMPULSE_CAPACITY: usize = 256;
 const FIXED_TICK: Seconds = Seconds(1.0 / 60.0);
 
 /// Why a worker refused a change of bodies: it needs a fresh world.
-pub(crate) const NEEDS_NEW_WORLD: &str = "Physics worker cannot rebuild native topology within an epoch";
+pub(crate) const NEEDS_NEW_WORLD: &str =
+    "Physics worker cannot rebuild native topology within an epoch";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum AdvancementPolicy {
@@ -138,8 +140,11 @@ impl AdvancementPolicy {
 /// per shape: the world tells shapes apart by identity.
 #[cfg(test)]
 pub(crate) fn platonic_solid(shape: u32) -> Arc<Solid> {
-    static SOLIDS: std::sync::LazyLock<[Arc<Solid>; 5]> =
-        std::sync::LazyLock::new(|| std::array::from_fn(|shape| Arc::new(Solid::Hulls(vec![platonic_points(shape as u32).to_vec()]))));
+    static SOLIDS: std::sync::LazyLock<[Arc<Solid>; 5]> = std::sync::LazyLock::new(|| {
+        std::array::from_fn(|shape| {
+            Arc::new(Solid::Hulls(vec![platonic_points(shape as u32).to_vec()]))
+        })
+    });
     if shape == 1 {
         return default_solid();
     }
@@ -215,7 +220,13 @@ pub struct CopySpawn {
 
 impl Default for CopySpawn {
     fn default() -> Self {
-        Self { count: 100.0, spacing: manifold_core::copies_body::SIZE_SPACING_DEFAULT, columns: 16.0, layout: 0.0, turn: [0.0; 3] }
+        Self {
+            count: 100.0,
+            spacing: manifold_core::copies_body::SIZE_SPACING_DEFAULT,
+            columns: 16.0,
+            layout: 0.0,
+            turn: [0.0; 3],
+        }
     }
 }
 
@@ -391,7 +402,11 @@ fn reshaped(old: &RigidBody, new: &RigidBody) -> bool {
 /// counts as a layout edit.
 fn placed_as(installed: &Arrangement, target: Arrangement, prototype: &RigidBody) -> Arrangement {
     if prototype.kind == 2 {
-        Arrangement { origin: installed.origin, rotation: installed.rotation, ..target }
+        Arrangement {
+            origin: installed.origin,
+            rotation: installed.rotation,
+            ..target
+        }
     } else {
         target
     }
@@ -404,9 +419,14 @@ fn add_body_geometry(
     world: &mut PhysicsWorld,
     body: &RigidBody,
 ) -> Result<(BodyHandle, f32), String> {
-    let solid = body.collider.as_deref().ok_or("the body has no collision shape")?;
+    let solid = body
+        .collider
+        .as_deref()
+        .ok_or("the body has no collision shape")?;
     let scale = body.transform.scale;
-    let handle = solid.install(world, scale, body.config()).map_err(|error| error.to_string())?;
+    let handle = solid
+        .install(world, scale, body.config())
+        .map_err(|error| error.to_string())?;
     let volume = match solid {
         Solid::Hulls(_) => installed_volume(world, handle)?,
         Solid::Mesh(mesh) => mesh_volume(mesh, scale),
@@ -423,7 +443,9 @@ fn reshape(
     scale: [f32; 3],
     config: BodyConfig,
 ) -> Result<f32, String> {
-    solid.replace(world, handle, scale, config).map_err(|error| error.to_string())?;
+    solid
+        .replace(world, handle, scale, config)
+        .map_err(|error| error.to_string())?;
     match solid {
         Solid::Hulls(_) => installed_volume(world, handle),
         Solid::Mesh(mesh) => Ok(mesh_volume(mesh, scale)),
@@ -437,7 +459,8 @@ fn mesh_volume(mesh: &manifold_physics::TriangleMesh, scale: [f32; 3]) -> f32 {
     let mut volume = 0.0f64;
     for triangle in &mesh.triangles {
         let [a, b, c] = triangle.map(point);
-        volume += a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]);
+        volume += a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
+            + a[2] * (b[0] * c[1] - b[1] * c[0]);
     }
     let scale_product = scale.iter().map(|s| f64::from(s.abs())).product::<f64>();
     let volume = (volume / 6.0).abs() * scale_product;
@@ -452,7 +475,9 @@ fn mesh_volume(mesh: &manifold_physics::TriangleMesh, scale: [f32; 3]) -> f32 {
             max[axis] = max[axis].max(f64::from(vertex[axis] * scale[axis]));
         }
     }
-    (0..3).map(|axis| (max[axis] - min[axis]).max(1.0e-3)).product::<f64>() as f32
+    (0..3)
+        .map(|axis| (max[axis] - min[axis]).max(1.0e-3))
+        .product::<f64>() as f32
 }
 
 /// How many copies each group makes from the world's pool of `MAX_COPIES`,
@@ -505,11 +530,19 @@ fn port_map(old: &[u64], new: &[u64], held: impl Fn(usize) -> bool) -> Option<Ve
             return None;
         }
     }
-    let mut anonymous = old.iter().enumerate().filter(|(_, identity)| **identity == 0).map(|(at, _)| at);
+    let mut anonymous = old
+        .iter()
+        .enumerate()
+        .filter(|(_, identity)| **identity == 0)
+        .map(|(at, _)| at);
     let mut used = vec![false; old.len()];
     let mut from = Vec::with_capacity(new.len());
     for &identity in new {
-        let at = if identity == 0 { anonymous.next() } else { by_identity.get(&identity).copied() };
+        let at = if identity == 0 {
+            anonymous.next()
+        } else {
+            by_identity.get(&identity).copied()
+        };
         if let Some(at) = at
             && std::mem::replace(&mut used[at], true)
         {
@@ -517,12 +550,15 @@ fn port_map(old: &[u64], new: &[u64], held: impl Fn(usize) -> bool) -> Option<Ve
         }
         from.push(at);
     }
-    (0..old.len()).all(|at| used[at] || !held(at)).then_some(from)
+    (0..old.len())
+        .all(|at| used[at] || !held(at))
+        .then_some(from)
 }
 
 /// The sink a target's inputs go to: its body, or each active copy of its
 /// group.
-type ApplyInputs<'s> = dyn FnMut(&[FieldInput<'_>]) -> Result<(), manifold_physics::PhysicsError> + 's;
+type ApplyInputs<'s> =
+    dyn FnMut(&[FieldInput<'_>]) -> Result<(), manifold_physics::PhysicsError> + 's;
 
 /// Give every installed body and every active copy its target's inputs (a
 /// body slot, then a copy group) in one batch the world validates whole
@@ -550,7 +586,10 @@ fn apply_by_target(
             for (group, state) in groups.iter().enumerate() {
                 if hit(body_count + group) {
                     visit(body_count + group, &mut |inputs| {
-                        state.handles[..state.active].iter().flatten().try_for_each(|&handle| sink(handle, inputs))
+                        state.handles[..state.active]
+                            .iter()
+                            .flatten()
+                            .try_for_each(|&handle| sink(handle, inputs))
                     })?;
                 }
             }
@@ -764,7 +803,9 @@ impl RigidSimulation {
 
     /// Copy group `group`'s active copies' poses, in copy order.
     pub fn group_poses(&self, group: usize) -> &[Transform] {
-        self.groups.get(group).map_or(&[], |state| &state.poses[..state.shown])
+        self.groups
+            .get(group)
+            .map_or(&[], |state| &state.poses[..state.shown])
     }
 
     /// Copy group `group`'s active copies.
@@ -799,8 +840,22 @@ impl RigidSimulation {
         speed: f32,
         reset_count: f32,
     ) -> Result<(), String> {
-        let scene = SceneRef { bodies, groups: &[], gravity, acceleration_field: None, targeted_fields: &[] };
-        self.advance_inner(scene, Seconds(now.seconds()), speed, reset_count, None, None, &mut Uncoupled)
+        let scene = SceneRef {
+            bodies,
+            groups: &[],
+            gravity,
+            acceleration_field: None,
+            targeted_fields: &[],
+        };
+        self.advance_inner(
+            scene,
+            Seconds(now.seconds()),
+            speed,
+            reset_count,
+            None,
+            None,
+            &mut Uncoupled,
+        )
     }
 
     /// Advance the shared world with every authored input: bodies, copy
@@ -814,7 +869,15 @@ impl RigidSimulation {
         speed: f32,
         reset_count: f32,
     ) -> Result<(), String> {
-        self.advance_inner(SceneRef::of(scene), Seconds(now.seconds()), speed, reset_count, None, None, &mut Uncoupled)
+        self.advance_inner(
+            SceneRef::of(scene),
+            Seconds(now.seconds()),
+            speed,
+            reset_count,
+            None,
+            None,
+            &mut Uncoupled,
+        )
     }
 
     /// Run another native solver inside the existing rigid tick owner. Its
@@ -829,7 +892,15 @@ impl RigidSimulation {
         reset_count: f32,
         coupling: &mut C,
     ) -> Result<(), String> {
-        self.advance_inner(SceneRef::of(scene), Seconds(now.seconds()), speed, reset_count, None, None, coupling)
+        self.advance_inner(
+            SceneRef::of(scene),
+            Seconds(now.seconds()),
+            speed,
+            reset_count,
+            None,
+            None,
+            coupling,
+        )
     }
 
     /// Size every per-body and per-group vector for a world of `bodies`
@@ -852,7 +923,8 @@ impl RigidSimulation {
         self.fragment_parent_released.resize(bodies, false);
         self.poses.resize(bodies, Transform::default());
         self.groups.resize_with(groups, CopyGroup::default);
-        self.authored_bodies.configure(bodies + groups, AUTHORED_HISTORY_CAPACITY);
+        self.authored_bodies
+            .configure(bodies + groups, AUTHORED_HISTORY_CAPACITY);
         self.targeted_fields.set_targets(bodies + groups);
     }
 
@@ -874,7 +946,11 @@ impl RigidSimulation {
         self.admission.admit(scene.bodies, scene.groups);
         let (bodies, groups) = self.admission.take_admitted();
         let result = self.advance_admitted(
-            SceneRef { bodies: &bodies, groups: &groups, ..scene },
+            SceneRef {
+                bodies: &bodies,
+                groups: &groups,
+                ..scene
+            },
             now,
             speed,
             reset_count,
@@ -891,13 +967,22 @@ impl RigidSimulation {
 
     /// What the gate never let in still draws: a body where it stands, a
     /// copy group at rest in its layout, as with physics off.
-    fn show_refused(&mut self, scene: SceneRef<'_>, bodies: &[Option<RigidBody>], groups: &[Option<RigidBody>]) {
-        for ((authored, admitted), pose) in scene.bodies.iter().zip(bodies).zip(self.poses.iter_mut()) {
+    fn show_refused(
+        &mut self,
+        scene: SceneRef<'_>,
+        bodies: &[Option<RigidBody>],
+        groups: &[Option<RigidBody>],
+    ) {
+        for ((authored, admitted), pose) in
+            scene.bodies.iter().zip(bodies).zip(self.poses.iter_mut())
+        {
             if let (Some(authored), None) = (authored, admitted) {
                 *pose = authored.transform;
             }
         }
-        for ((authored, admitted), state) in scene.groups.iter().zip(groups).zip(self.groups.iter_mut()) {
+        for ((authored, admitted), state) in
+            scene.groups.iter().zip(groups).zip(self.groups.iter_mut())
+        {
             if let (Some(authored), None) = (authored, admitted) {
                 state.show_refused(authored);
             }
@@ -915,7 +1000,13 @@ impl RigidSimulation {
         accepted_interval: Option<StepInterval>,
         coupling: &mut C,
     ) -> Result<(), String> {
-        let SceneRef { bodies, groups, gravity, targeted_fields: targeted_fields_input, .. } = scene;
+        let SceneRef {
+            bodies,
+            groups,
+            gravity,
+            targeted_fields: targeted_fields_input,
+            ..
+        } = scene;
         let target_slots = bodies.len() + groups.len();
         if !targeted_fields_input.is_empty() && targeted_fields_input.len() != target_slots {
             return Err(format!(
@@ -940,9 +1031,8 @@ impl RigidSimulation {
             || gravity.iter().any(|v| !v.is_finite())
         {
             if !self.step.offline() {
-                self.metrics.record_simulation(
-                    self.authored_time, self.physics_time, false, true,
-                );
+                self.metrics
+                    .record_simulation(self.authored_time, self.physics_time, false, true);
                 return Ok(());
             }
             return Err("Physics: non-finite clock or control".into());
@@ -954,25 +1044,36 @@ impl RigidSimulation {
                 || !duration.is_finite()
                 || duration <= 0.0
             {
-                self.metrics.record_simulation(self.physics_time, self.physics_time, false, true);
+                self.metrics
+                    .record_simulation(self.physics_time, self.physics_time, false, true);
                 return Ok(());
             }
             if (interval.start.0 - self.physics_time).abs() > 1e-9 {
-                self.metrics.record_simulation(interval.end.0, self.physics_time, false, true);
+                self.metrics
+                    .record_simulation(interval.end.0, self.physics_time, false, true);
                 return Ok(());
             }
         }
         validate_fragments(bodies)?;
-        let topology_changed = bodies.len() != self.descriptions.len()
-            || bodies.iter().zip(self.descriptions.iter()).enumerate().any(|(slot, (new, old))| {
-                slot_needs_rebuild(self.handles.get(slot).is_some_and(Option::is_some), old.as_ref(), new.as_ref())
-            });
+        let topology_changed =
+            bodies.len() != self.descriptions.len()
+                || bodies.iter().zip(self.descriptions.iter()).enumerate().any(
+                    |(slot, (new, old))| {
+                        slot_needs_rebuild(
+                            self.handles.get(slot).is_some_and(Option::is_some),
+                            old.as_ref(),
+                            new.as_ref(),
+                        )
+                    },
+                );
         // A sample behind the last frame is a seek back, except the replay
         // opening at an owed origin: the frame that started that grid landed
         // past it, and the opening samples the span it skipped, Speed at its
         // tick starts included.
         let opening = self.step.authored_sample_only
-            && self.owed_origin.is_some_and(|origin| now.0 >= origin.seconds() - 1e-9);
+            && self
+                .owed_origin
+                .is_some_and(|origin| now.0 >= origin.seconds() - 1e-9);
         let reset = self.reset_count.is_some_and(|old| old != reset_count)
             || (self.last_time.is_some_and(|last| now.0 < last.0) && !opening);
         // A group the world has never laid out joins live
@@ -982,11 +1083,17 @@ impl RigidSimulation {
                 let joins_live = self.world.is_some() && state.is_new() && current.is_some();
                 !joins_live && !same_native_body(current.as_ref(), state.description.as_ref())
             });
-        let rebuild = self.world.is_none() || topology_changed || copy_topology_changed || reset
+        let rebuild = self.world.is_none()
+            || topology_changed
+            || copy_topology_changed
+            || reset
             || (accepted_interval.is_none() && self.clock.rate_changed(self.step.interval.0));
         // A worker's world lives through its owner's epoch: a change it cannot
         // take live is the owner's to restart.
-        if self.advancement_policy.is_worker() && self.world.is_some() && (topology_changed || copy_topology_changed) {
+        if self.advancement_policy.is_worker()
+            && self.world.is_some()
+            && (topology_changed || copy_topology_changed)
+        {
             return Err(NEEDS_NEW_WORLD.into());
         }
         if !rebuild && let Some(error) = &self.impulse_failure {
@@ -999,7 +1106,9 @@ impl RigidSimulation {
                 return Ok(());
             }
             if !self.step.history_drain_active() {
-                let authored_time = self.clock.observe_speed(PlayedTime::from_played(now.0), speed);
+                let authored_time = self
+                    .clock
+                    .observe_speed(PlayedTime::from_played(now.0), speed);
                 let elapsed_simulation = authored_time - self.authored_time;
                 self.ensure_targeted_history(targeted_fields)?;
                 // A world no replay asks for samples keeps every observation,
@@ -1007,7 +1116,9 @@ impl RigidSimulation {
                 if self.replay_driven {
                     self.record_requested_samples(now.0, &scene, targeted_fields)?;
                 } else {
-                    let knot_time = self.owed_origin.map_or(authored_time, |origin| self.clock.simulation_at(origin, live_load(self.step)));
+                    let knot_time = self.owed_origin.map_or(authored_time, |origin| {
+                        self.clock.simulation_at(origin, live_load(self.step))
+                    });
                     self.record_authored_sample(knot_time, &scene, targeted_fields)?;
                 }
                 self.authored_time = authored_time;
@@ -1037,21 +1148,32 @@ impl RigidSimulation {
             None
         };
         if rebuild {
-            self.rebuild(scene, next_impulse_epoch.expect("rebuild has a planned impulse epoch"), now)?;
+            self.rebuild(
+                scene,
+                next_impulse_epoch.expect("rebuild has a planned impulse epoch"),
+                now,
+            )?;
         }
         // Workers receive simulation time already accepted by their owner.
         // Applying the display-frame cap again would truncate retained input
         // history, including a zero-step pose edit after coupled intervals.
         let clock_frame = if !self.advancement_policy.is_worker() {
-            Some(self.clock.advance(PlayedTime::from_played(now.0), self.step.interval.0, speed, reset_count, rebuild,
-                self.step.offline()))
+            Some(self.clock.advance(
+                PlayedTime::from_played(now.0),
+                self.step.interval.0,
+                speed,
+                reset_count,
+                rebuild,
+                self.step.offline(),
+            ))
         } else {
             None
         };
         let authored_time = if self.advancement_policy.is_worker() {
             now.0
         } else {
-            self.clock.simulation_at(PlayedTime::from_played(now.0), live_load(self.step))
+            self.clock
+                .simulation_at(PlayedTime::from_played(now.0), live_load(self.step))
         };
         let elapsed_simulation = authored_time - self.authored_time;
         let stationary_edit = elapsed_simulation == 0.0;
@@ -1074,25 +1196,36 @@ impl RigidSimulation {
             .and_then(|_| self.clock.tick_start(self.clock.ticks_done()))
             .filter(|start| start.seconds() <= now.0 + 1e-9);
         if let Some(start) = new_origin {
-            self.drop_authored_samples_after(self.clock.simulation_at(start, live_load(self.step)))?;
+            self.drop_authored_samples_after(
+                self.clock.simulation_at(start, live_load(self.step)),
+            )?;
             self.owed_origin = (start.seconds() < now.0 - 1e-9).then_some(start);
         } else if clock_frame.is_some() && !held_frame {
             self.owed_origin = None;
         }
-        if self.advancement_policy.is_worker() || !self.replay_driven || held_frame || new_origin.is_some() {
+        if self.advancement_policy.is_worker()
+            || !self.replay_driven
+            || held_frame
+            || new_origin.is_some()
+        {
             let origin = new_origin.or(self.owed_origin);
-            let knot_time = origin.map_or(authored_time, |start| self.clock.simulation_at(start, live_load(self.step)));
+            let knot_time = origin.map_or(authored_time, |start| {
+                self.clock.simulation_at(start, live_load(self.step))
+            });
             self.record_authored_sample(knot_time, &scene, targeted_fields)?;
         }
         self.authored_time = authored_time;
-        self.held.observe(now.0, speed, self.step.authored_sample_only);
+        self.held
+            .observe(now.0, speed, self.step.authored_sample_only);
         let accumulated = self.accumulator + elapsed_simulation;
         const TICK: f64 = FIXED_TICK.0;
         let due_steps = ((accumulated + 1e-9) / TICK).floor() as usize;
         let preview_budget = self.step.budget();
         // Live and export consume the same accepted rate intervals. Explicit
         // fixed workers remain the cache-recording compatibility path.
-        let scheduled_frame = clock_frame.as_ref().filter(|_| matches!(self.advancement_policy, AdvancementPolicy::Preview));
+        let scheduled_frame = clock_frame
+            .as_ref()
+            .filter(|_| matches!(self.advancement_policy, AdvancementPolicy::Preview));
         let steps = if let Some(frame) = scheduled_frame {
             frame.ticks as usize
         } else if accepted_interval.is_some() {
@@ -1109,14 +1242,19 @@ impl RigidSimulation {
         let physics_start = std::time::Instant::now();
         let mut completed = 0;
         for ordinal in 0..steps {
-            let accepted_interval = scheduled_frame.and_then(|frame| frame.interval(ordinal as u64))
+            let accepted_interval = scheduled_frame
+                .and_then(|frame| frame.interval(ordinal as u64))
                 .or(accepted_interval);
             let result = (|| -> Result<(), String> {
                 let (step_start, step_end) = accepted_interval.map_or_else(
                     || (self.physics_time, self.physics_time + FIXED_TICK.0),
                     |interval| (interval.start.0, interval.end.0),
                 );
-                let step_duration = if accepted_interval.is_some() { step_end - step_start } else { TICK };
+                let step_duration = if accepted_interval.is_some() {
+                    step_end - step_start
+                } else {
+                    TICK
+                };
                 self.relayout_due(step_start, bodies.len())?;
                 let tick_gravity = self.interpolated_gravity(step_start);
                 let span = input_span(self.authored_samples.iter(), Seconds(self.physics_time))
@@ -1162,12 +1300,13 @@ impl RigidSimulation {
                             format!("Physics: failed to begin impulse interval: {error}")
                         })?;
                     if let Some(events) = assigned_impulses {
-                        self.impulse_receipts.extend(events.iter().map(|event| AppliedEvent {
-                            source: event.source,
-                            applied: event.applied,
-                            lateness: event.lateness,
-                            value: event.value.clone(),
-                        }));
+                        self.impulse_receipts
+                            .extend(events.iter().map(|event| AppliedEvent {
+                                source: event.source,
+                                applied: event.applied,
+                                lateness: event.lateness,
+                                value: event.value.clone(),
+                            }));
                     }
                     tick
                 } else {
@@ -1280,17 +1419,25 @@ impl RigidSimulation {
                                 targeted_indices,
                             )?;
                             let world = self.world.as_mut().expect("world constructed above");
-                            let duration = exchange.next_substep(world, Seconds(remaining))
+                            let duration = exchange
+                                .next_substep(world, Seconds(remaining))
                                 .map_err(|error| format!("Physics coupling: {error}"))?;
-                            if !duration.0.is_finite() || duration.0 <= 0.0
-                                || duration.0 > remaining || remaining - duration.0 == remaining
+                            if !duration.0.is_finite()
+                                || duration.0 <= 0.0
+                                || duration.0 > remaining
+                                || remaining - duration.0 == remaining
                                 || tick_remaining - duration.0 == tick_remaining
                             {
-                                return Err("Physics coupling returned an invalid substep duration".into());
+                                return Err(
+                                    "Physics coupling returned an invalid substep duration".into(),
+                                );
                             }
-                            exchange.exchange(world, duration)
+                            exchange
+                                .exchange(world, duration)
                                 .map_err(|error| format!("Physics coupling: {error}"))?;
-                            world.step(duration, solver_substeps).map_err(|error| error.to_string())?;
+                            world
+                                .step(duration, solver_substeps)
+                                .map_err(|error| error.to_string())?;
                             remaining -= duration.0;
                             tick_remaining -= duration.0;
                         }
@@ -1360,10 +1507,17 @@ impl RigidSimulation {
         self.physics_ms = physics_start.elapsed().as_secs_f32() * 1000.0;
         if !self.step.offline() {
             if let Some(frame) = &clock_frame {
-                self.dropped_time.record(&mut self.metrics, self.authored_time, self.physics_time,
-                    frame.dropped_seconds, false, frame.numerical_error);
+                self.dropped_time.record(
+                    &mut self.metrics,
+                    self.authored_time,
+                    self.physics_time,
+                    frame.dropped_seconds,
+                    false,
+                    frame.numerical_error,
+                );
             } else {
-                self.metrics.record_simulation(self.authored_time, self.physics_time, false, false);
+                self.metrics
+                    .record_simulation(self.authored_time, self.physics_time, false, false);
             }
         }
         self.accepted_observation = Some((now.0, self.authored_time));
@@ -1374,17 +1528,19 @@ impl RigidSimulation {
     /// copy group in its arrangement, so Reset returns copies to formation.
     /// The groups share the world's copy pool: the later groups, by port,
     /// make what fits.
-    fn rebuild(
-        &mut self,
-        scene: SceneRef<'_>,
-        epoch: u64,
-        now: Seconds,
-    ) -> Result<(), String> {
-        let SceneRef { bodies, groups, gravity, acceleration_field, .. } = scene;
+    fn rebuild(&mut self, scene: SceneRef<'_>, epoch: u64, now: Seconds) -> Result<(), String> {
+        let SceneRef {
+            bodies,
+            groups,
+            gravity,
+            acceleration_field,
+            ..
+        } = scene;
         let mut made = std::mem::take(&mut self.pool_made);
         let not_made = copy_pool(groups.iter().map(Option::as_ref), &mut made);
-        let mut world = PhysicsWorld::with_workers(gravity, manifold_physics::default_worker_count())
-            .map_err(|e| e.to_string())?;
+        let mut world =
+            PhysicsWorld::with_workers(gravity, manifold_physics::default_worker_count())
+                .map_err(|e| e.to_string())?;
         self.admission.clear_lost();
         self.resize_for(bodies.len(), groups.len());
         self.handles.fill(None);
@@ -1418,7 +1574,10 @@ impl RigidSimulation {
                     state.poses.resize(arrangement.count, Transform::default());
                 }
             } else if let Some(prototype) = prototype.as_ref() {
-                state.show_rest(&arrangement_of(prototype, requested_count(prototype.spawn)), prototype.transform.scale);
+                state.show_rest(
+                    &arrangement_of(prototype, requested_count(prototype.spawn)),
+                    prototype.transform.scale,
+                );
             }
             state.description.clone_from(prototype);
         }
@@ -1440,7 +1599,8 @@ impl RigidSimulation {
         self.field_handles
             .extend(self.handles.iter().flatten().copied());
         for state in &self.groups {
-            self.field_handles.extend(state.handles.iter().flatten().copied());
+            self.field_handles
+                .extend(state.handles.iter().flatten().copied());
         }
         self.descriptions.clone_from_slice(bodies);
         self.last_time = Some(now);
@@ -1468,8 +1628,10 @@ impl RigidSimulation {
             .map_err(|error| format!("Physics: authored body history {error}"))?;
         if let Some(targeted_fields) = scene_targeted(scene, &self.targeted_fields) {
             self.ensure_targeted_history(Some(targeted_fields))?;
-            self.targeted_fields
-                .record(targeted_fields, manifold_physics::input::HistoryWrite::Replaced)?;
+            self.targeted_fields.record(
+                targeted_fields,
+                manifold_physics::input::HistoryWrite::Replaced,
+            )?;
         }
         for (index, body) in bodies.iter().enumerate() {
             let Some(body) = body.as_ref().filter(|body| {
@@ -1489,7 +1651,10 @@ impl RigidSimulation {
         let world = self.world.as_mut().expect("world constructed above");
         let mut added = false;
         for (slot, body) in bodies.iter().enumerate() {
-            let Some(body) = body.as_ref().filter(|body| body.enabled && body.fragment_parent.is_none()) else {
+            let Some(body) = body
+                .as_ref()
+                .filter(|body| body.enabled && body.fragment_parent.is_none())
+            else {
                 continue;
             };
             if self.handles[slot].is_some() {
@@ -1506,9 +1671,11 @@ impl RigidSimulation {
         }
         if added {
             self.field_handles.clear();
-            self.field_handles.extend(self.handles.iter().flatten().copied());
+            self.field_handles
+                .extend(self.handles.iter().flatten().copied());
             for state in &self.groups {
-                self.field_handles.extend(state.handles[..state.active].iter().flatten().copied());
+                self.field_handles
+                    .extend(state.handles[..state.active].iter().flatten().copied());
             }
         }
         Ok(())
@@ -1519,15 +1686,20 @@ impl RigidSimulation {
     /// live world and what already moves keeps moving. A new group takes what
     /// the copy pool has left after the groups before it.
     fn install_added_groups(&mut self, groups: &[Option<RigidBody>]) -> Result<(), String> {
-        if !groups.iter().zip(&self.groups).any(|(current, state)| state.is_new() && current.is_some()) {
+        if !groups
+            .iter()
+            .zip(&self.groups)
+            .any(|(current, state)| state.is_new() && current.is_some())
+        {
             return Ok(());
         }
         let mut made = std::mem::take(&mut self.pool_made);
         let not_made = copy_pool(
-            groups
-                .iter()
-                .zip(&self.groups)
-                .map(|(current, state)| current.as_ref().filter(|_| state.arrangement.is_some() || state.is_new())),
+            groups.iter().zip(&self.groups).map(|(current, state)| {
+                current
+                    .as_ref()
+                    .filter(|_| state.arrangement.is_some() || state.is_new())
+            }),
             &mut made,
         );
         let mut result = Ok(());
@@ -1558,9 +1730,11 @@ impl RigidSimulation {
     /// Every installed body and active copy, for fields that reach them all.
     fn refresh_field_handles(&mut self) {
         self.field_handles.clear();
-        self.field_handles.extend(self.handles.iter().flatten().copied());
+        self.field_handles
+            .extend(self.handles.iter().flatten().copied());
         for state in &self.groups {
-            self.field_handles.extend(state.handles[..state.active].iter().flatten().copied());
+            self.field_handles
+                .extend(state.handles[..state.active].iter().flatten().copied());
         }
     }
 
@@ -1574,22 +1748,29 @@ impl RigidSimulation {
     /// does.
     fn follow_ports(&mut self, bodies: &[Option<RigidBody>], groups: &[Option<RigidBody>]) {
         let unchanged = |known: &[u64], slots: &[Option<RigidBody>]| {
-            known.len() == slots.len() && known.iter().zip(slots).all(|(id, body)| *id == identity_of(body))
+            known.len() == slots.len()
+                && known
+                    .iter()
+                    .zip(slots)
+                    .all(|(id, body)| *id == identity_of(body))
         };
         if unchanged(&self.identities, bodies) && unchanged(&self.group_identities, groups) {
             return;
         }
-        let new_ids = |slots: &[Option<RigidBody>]| slots.iter().map(identity_of).collect::<Vec<_>>();
+        let new_ids =
+            |slots: &[Option<RigidBody>]| slots.iter().map(identity_of).collect::<Vec<_>>();
         let (body_ids, group_ids) = (new_ids(bodies), new_ids(groups));
         let installed = self.world.is_some()
             && self.handles.len() == self.identities.len()
             && self.groups.len() == self.group_identities.len();
         if installed {
-            let held_body = |slot: usize| self.handles[slot].is_some() || self.descriptions[slot].is_some();
+            let held_body =
+                |slot: usize| self.handles[slot].is_some() || self.descriptions[slot].is_some();
             let held_group = |group: usize| !self.groups[group].is_new();
-            if let (Some(body_from), Some(group_from)) =
-                (port_map(&self.identities, &body_ids, held_body), port_map(&self.group_identities, &group_ids, held_group))
-            {
+            if let (Some(body_from), Some(group_from)) = (
+                port_map(&self.identities, &body_ids, held_body),
+                port_map(&self.group_identities, &group_ids, held_group),
+            ) {
                 self.move_ports(&body_from, &group_from);
             }
         }
@@ -1603,7 +1784,9 @@ impl RigidSimulation {
     fn move_ports(&mut self, body_from: &[Option<usize>], group_from: &[Option<usize>]) {
         let old_bodies = self.handles.len();
         fn moved<T: Default>(old: &mut [T], from: &[Option<usize>]) -> Vec<T> {
-            from.iter().map(|at| at.map_or_else(T::default, |at| std::mem::take(&mut old[at]))).collect()
+            from.iter()
+                .map(|at| at.map_or_else(T::default, |at| std::mem::take(&mut old[at])))
+                .collect()
         }
         self.handles = moved(&mut self.handles, body_from);
         self.descriptions = moved(&mut self.descriptions, body_from);
@@ -1658,7 +1841,8 @@ impl RigidSimulation {
                 if let (Some(old), Some(geometry)) = (old, body.collider.as_deref())
                     && reshaped(old, body)
                 {
-                    self.volumes[i] = reshape(world, handle, geometry, body.transform.scale, body.config())?;
+                    self.volumes[i] =
+                        reshape(world, handle, geometry, body.transform.scale, body.config())?;
                 }
                 let pose_changed = old.is_none_or(|old| moved(old, body));
                 let animated_edit = body.kind == 2 && stationary_edit && pose_changed;
@@ -1683,7 +1867,10 @@ impl RigidSimulation {
         // lays the copies out at the next tick start (`relayout_due`), except
         // that an Animated group follows its transform kinematically.
         for (prototype, state) in groups.iter().zip(self.groups.iter_mut()) {
-            let (Some(prototype), Some(arrangement)) = (prototype.as_ref(), state.arrangement) else { continue };
+            let (Some(prototype), Some(arrangement)) = (prototype.as_ref(), state.arrangement)
+            else {
+                continue;
+            };
             let old = state.description.as_ref();
             if old.is_some_and(|old| same_body(old, prototype)) {
                 continue;
@@ -1696,7 +1883,9 @@ impl RigidSimulation {
             // its pose and velocity. Later layouts space by the new width.
             if old.is_some_and(|old| reshaped(old, prototype)) && prototype.collider.is_some() {
                 for index in 0..state.handles.len() {
-                    let Some(handle) = state.handles[index] else { continue };
+                    let Some(handle) = state.handles[index] else {
+                        continue;
+                    };
                     let config = state.config(prototype, state.rest(index));
                     state.reshape(world, handle, prototype, config)?;
                 }
@@ -1722,7 +1911,11 @@ impl RigidSimulation {
                     continue;
                 };
                 world
-                    .update_body(handle, state.config(prototype, state.rest(index)), move_pose)
+                    .update_body(
+                        handle,
+                        state.config(prototype, state.rest(index)),
+                        move_pose,
+                    )
                     .map_err(|e| e.to_string())?;
                 if kind_became_dynamic {
                     world.set_bullet(handle, false).map_err(|e| e.to_string())?;
@@ -1754,7 +1947,9 @@ impl RigidSimulation {
             }
             in_effect = Some(index);
         }
-        let Some(sample) = in_effect else { return Ok(()) };
+        let Some(sample) = in_effect else {
+            return Ok(());
+        };
         let groups = self.groups.len();
         let mut made = std::mem::take(&mut self.pool_made);
         let not_made = copy_pool(
@@ -1767,8 +1962,13 @@ impl RigidSimulation {
         let mut changed = false;
         let mut result = Ok(());
         for (group, &made) in made.iter().enumerate() {
-            let Some(installed) = self.groups[group].arrangement else { continue };
-            let Some(prototype) = self.authored_cell(sample, body_count + group).filter(|body| body.enabled) else {
+            let Some(installed) = self.groups[group].arrangement else {
+                continue;
+            };
+            let Some(prototype) = self
+                .authored_cell(sample, body_count + group)
+                .filter(|body| body.enabled)
+            else {
                 continue;
             };
             let target = arrangement_of(prototype, made);
@@ -1792,16 +1992,23 @@ impl RigidSimulation {
         if changed {
             self.copies_not_made = not_made;
             self.field_handles.clear();
-            self.field_handles.extend(self.handles.iter().flatten().copied());
+            self.field_handles
+                .extend(self.handles.iter().flatten().copied());
             for state in &self.groups {
-                self.field_handles.extend(state.handles[..state.active].iter().flatten().copied());
+                self.field_handles
+                    .extend(state.handles[..state.active].iter().flatten().copied());
             }
         }
         Ok(())
     }
 
     /// Put group `group`'s copies at rest in `target`.
-    fn lay_out(&mut self, group: usize, prototype: &RigidBody, target: Arrangement) -> Result<(), String> {
+    fn lay_out(
+        &mut self,
+        group: usize,
+        prototype: &RigidBody,
+        target: Arrangement,
+    ) -> Result<(), String> {
         self.groups[group].deferred_edit = None;
         self.settle(group, prototype, target, 0)
     }
@@ -1809,7 +2016,9 @@ impl RigidSimulation {
     /// Give group `group` `count` copies in the places it rests in: the
     /// copies that stay keep their motion.
     fn resize(&mut self, group: usize, prototype: &RigidBody, count: usize) -> Result<(), String> {
-        let Some(installed) = self.groups[group].arrangement else { return Ok(()) };
+        let Some(installed) = self.groups[group].arrangement else {
+            return Ok(());
+        };
         let keep = self.groups[group].active.min(count);
         self.settle(group, prototype, Arrangement { count, ..installed }, keep)
     }
@@ -1817,7 +2026,13 @@ impl RigidSimulation {
     /// Group `group` in `target`, its copies from `from` on at rest in their
     /// places; those before `from` keep moving. Bodies past `target.count`
     /// park disabled, and bodies install only past the high-water mark.
-    fn settle(&mut self, group: usize, prototype: &RigidBody, target: Arrangement, from: usize) -> Result<(), String> {
+    fn settle(
+        &mut self,
+        group: usize,
+        prototype: &RigidBody,
+        target: Arrangement,
+        from: usize,
+    ) -> Result<(), String> {
         let world = self.world.as_mut().expect("world constructed above");
         let state = &mut self.groups[group];
         let installed = state.handles.len();
@@ -1839,7 +2054,9 @@ impl RigidSimulation {
                     world
                         .update_body(handle, state.config(prototype, pose), true)
                         .map_err(|e| e.to_string())?;
-                    world.set_velocity(handle, [0.0; 3], [0.0; 3]).map_err(|e| e.to_string())?;
+                    world
+                        .set_velocity(handle, [0.0; 3], [0.0; 3])
+                        .map_err(|e| e.to_string())?;
                     if state.bullet_enabled[index] {
                         world.set_bullet(handle, false).map_err(|e| e.to_string())?;
                         state.bullet_enabled[index] = false;
@@ -1850,8 +2067,13 @@ impl RigidSimulation {
                 }
             }
         }
-        for handle in state.handles[target.count..state.active.max(target.count)].iter().flatten() {
-            world.set_enabled(*handle, false).map_err(|e| e.to_string())?;
+        for handle in state.handles[target.count..state.active.max(target.count)]
+            .iter()
+            .flatten()
+        {
+            world
+                .set_enabled(*handle, false)
+                .map_err(|e| e.to_string())?;
         }
         state.active = target.count;
         state.shown = target.count;
@@ -1881,12 +2103,15 @@ impl RigidSimulation {
             };
             let pose = world.pose(handle).map_err(|e| e.to_string())?;
             if !in_range(pose) {
-                world.set_enabled(handle, false).map_err(|e| e.to_string())?;
+                world
+                    .set_enabled(handle, false)
+                    .map_err(|e| e.to_string())?;
                 self.admission.lost(Member::Body(i));
                 self.poses[i] = body.transform;
                 continue;
             }
-            let rot_euler = manifold_node_engine::scene::transform::quat_to_render_scene_euler(pose.rotation);
+            let rot_euler =
+                manifold_node_engine::scene::transform::quat_to_render_scene_euler(pose.rotation);
             self.poses[i] = Transform {
                 pos: pose.position,
                 rot_euler,
@@ -1919,7 +2144,8 @@ impl RigidSimulation {
         }
         let mut made = std::mem::take(&mut self.pool_made);
         copy_pool(groups.iter().map(Option::as_ref), &mut made);
-        for (group, (authored_body, state)) in groups.iter().zip(self.groups.iter_mut()).enumerate() {
+        for (group, (authored_body, state)) in groups.iter().zip(self.groups.iter_mut()).enumerate()
+        {
             let Some(prototype) = authored_body.as_ref() else {
                 state.shown = 0;
                 state.description = None;
@@ -1928,7 +2154,11 @@ impl RigidSimulation {
             let scale = prototype.transform.scale;
             let Some(installed) = state.arrangement else {
                 // Physics off: the copies are drawn at rest and have no bodies.
-                if state.description.as_ref().is_none_or(|old| !same_authored_body(old, prototype)) {
+                if state
+                    .description
+                    .as_ref()
+                    .is_none_or(|old| !same_authored_body(old, prototype))
+                {
                     let count = requested_count(prototype.spawn);
                     state.show_rest(&arrangement_of(prototype, count), scale);
                 }
@@ -1950,13 +2180,18 @@ impl RigidSimulation {
                     };
                     let pose = world.pose(handle).map_err(|e| e.to_string())?;
                     if !in_range(pose) {
-                        world.set_enabled(handle, false).map_err(|e| e.to_string())?;
+                        world
+                            .set_enabled(handle, false)
+                            .map_err(|e| e.to_string())?;
                         self.admission.lost(Member::Copies(group));
                         continue;
                     }
                     state.poses[index] = Transform {
                         pos: pose.position,
-                        rot_euler: manifold_node_engine::scene::transform::quat_to_render_scene_euler(pose.rotation),
+                        rot_euler:
+                            manifold_node_engine::scene::transform::quat_to_render_scene_euler(
+                                pose.rotation,
+                            ),
                         scale,
                         billboard: false,
                         ..Default::default()
@@ -1992,7 +2227,11 @@ impl RigidSimulation {
             return Ok(());
         }
         let microstep_time = duration / microsteps as f64;
-        let mut segment_remaining = if final_segment { *frame_remaining } else { duration };
+        let mut segment_remaining = if final_segment {
+            *frame_remaining
+        } else {
+            duration
+        };
         for microstep in 1..=microsteps {
             let target_time = start
                 + if microstep == microsteps {
@@ -2000,7 +2239,11 @@ impl RigidSimulation {
                 } else {
                     microstep_time * microstep as f64
                 };
-            let mut remaining = if microstep == microsteps { segment_remaining } else { microstep_time };
+            let mut remaining = if microstep == microsteps {
+                segment_remaining
+            } else {
+                microstep_time
+            };
             while remaining > 0.0 {
                 self.prepare_substep(
                     bodies,
@@ -2243,14 +2486,24 @@ impl RigidSimulation {
                 continue;
             };
             let prototype = &edit.body;
-            let Some(arrangement) = state.arrangement else { continue };
-            let placed = Arrangement { origin: prototype.transform.pos, rotation: prototype.transform.rot_euler, ..arrangement };
+            let Some(arrangement) = state.arrangement else {
+                continue;
+            };
+            let placed = Arrangement {
+                origin: prototype.transform.pos,
+                rotation: prototype.transform.rot_euler,
+                ..arrangement
+            };
             for index in 0..state.active {
                 let Some(handle) = state.handles[index] else {
                     continue;
                 };
                 world
-                    .update_body(handle, prototype.config_at(rest_pose(&placed, state.width, index)), true)
+                    .update_body(
+                        handle,
+                        prototype.config_at(rest_pose(&placed, state.width, index)),
+                        true,
+                    )
                     .map_err(|e| e.to_string())?;
             }
             state.arrangement = Some(placed);
@@ -2263,11 +2516,17 @@ impl RigidSimulation {
     /// sample before the next frame: every Sim Rate boundary a tick may start
     /// or end at and every replay grid point, so inputs are recorded only at
     /// times no frame rate moves. Each boundary goes to one frame's window.
-    pub fn request_samples(&mut self, from: PlayedTime, until: PlayedTime, out: &mut Vec<PlayedTime>) {
+    pub fn request_samples(
+        &mut self,
+        from: PlayedTime,
+        until: PlayedTime,
+        out: &mut Vec<PlayedTime>,
+    ) {
         self.replay_driven = true;
         self.requests.clear();
         let requests = &mut self.requests;
-        self.clock.tick_starts(from, until, |played| requests.push(played.seconds()));
+        self.clock
+            .tick_starts(from, until, |played| requests.push(played.seconds()));
         let origin = self.step.replay_origin;
         let rate = manifold_physics::clock::REPLAY_RATE;
         let last = ((until.seconds() - origin.seconds()) * rate + 1e-6).floor();
@@ -2278,7 +2537,11 @@ impl RigidSimulation {
         }
         requests.sort_unstable_by(f64::total_cmp);
         requests.dedup();
-        out.extend(requests.iter().map(|&played| PlayedTime::from_played(played)));
+        out.extend(
+            requests
+                .iter()
+                .map(|&played| PlayedTime::from_played(played)),
+        );
     }
 
     /// Record the inputs a sample at transport `now` reached for each pending
@@ -2289,9 +2552,13 @@ impl RigidSimulation {
         scene: &SceneRef<'_>,
         targeted_fields: Option<TargetedFields<'_>>,
     ) -> Result<(), String> {
-        let reached = self.requests.partition_point(|&transport| transport <= now + 1e-9);
+        let reached = self
+            .requests
+            .partition_point(|&transport| transport <= now + 1e-9);
         if let Some(origin) = self.owed_origin
-            && self.requests[..reached].iter().any(|&request| request >= origin.seconds() - 1e-9)
+            && self.requests[..reached]
+                .iter()
+                .any(|&request| request >= origin.seconds() - 1e-9)
         {
             self.owed_origin = None;
         }
@@ -2300,7 +2567,9 @@ impl RigidSimulation {
             // another formula (grid point 4k/240 against frame k/60): it takes
             // the frame's spelling, so a knot at the frame never lands behind it.
             let request = self.requests[index].min(now);
-            let time = self.clock.simulation_at(PlayedTime::from_played(request), live_load(self.step));
+            let time = self
+                .clock
+                .simulation_at(PlayedTime::from_played(request), live_load(self.step));
             self.record_authored_sample(time, scene, targeted_fields)?;
         }
         self.requests.drain(..reached);
@@ -2329,7 +2598,8 @@ impl RigidSimulation {
                     .iter()
                     .zip(scene.bodies.iter().chain(scene.groups))
                     .all(|(left, right)| same_optional_body(left.as_ref(), right.as_ref()))
-        }) && targeted_fields.is_none_or(|fields| self.targeted_fields.fields_equal(fields));
+        }) && targeted_fields
+            .is_none_or(|fields| self.targeted_fields.fields_equal(fields));
         if unchanged {
             return Ok(());
         }
@@ -2456,11 +2726,16 @@ impl RigidSimulation {
         }
         for (group, (prototype, state)) in groups.iter().zip(self.groups.iter_mut()).enumerate() {
             let active = state.active;
-            let Some(prototype) = prototype.as_ref().filter(|body| body.enabled && body.kind == 1) else {
+            let Some(prototype) = prototype
+                .as_ref()
+                .filter(|body| body.enabled && body.kind == 1)
+            else {
                 state.bullet_enabled[..active].fill(false);
                 continue;
             };
-            let targeted = targeted_span.as_ref().map(|span| span.field(bodies.len() + group));
+            let targeted = targeted_span
+                .as_ref()
+                .map(|span| span.field(bodies.len() + group));
             for index in 0..active {
                 let Some(handle) = state.handles[index] else {
                     continue;
@@ -2523,22 +2798,35 @@ impl RigidSimulation {
                 .map_err(|e| e.to_string())?;
         }
         for (group, prototype) in groups.iter().enumerate() {
-            let Some(prototype) = prototype.as_ref().filter(|prototype| prototype.enabled && prototype.kind == 2) else {
+            let Some(prototype) = prototype
+                .as_ref()
+                .filter(|prototype| prototype.enabled && prototype.kind == 2)
+            else {
                 continue;
             };
             let prototype = self
                 .interpolated_body(bodies.len() + group, target_time.0, prototype.clone())
                 .unwrap_or_else(|| prototype.clone());
             let state = &self.groups[group];
-            let Some(arrangement) = state.arrangement else { continue };
-            let placed = Arrangement { origin: prototype.transform.pos, rotation: prototype.transform.rot_euler, ..arrangement };
+            let Some(arrangement) = state.arrangement else {
+                continue;
+            };
+            let placed = Arrangement {
+                origin: prototype.transform.pos,
+                rotation: prototype.transform.rot_euler,
+                ..arrangement
+            };
             let world = self.world.as_mut().expect("world constructed above");
             for index in 0..state.active {
                 let Some(handle) = state.handles[index] else {
                     continue;
                 };
                 world
-                    .set_animated_target(handle, prototype.config_at(rest_pose(&placed, state.width, index)), dt)
+                    .set_animated_target(
+                        handle,
+                        prototype.config_at(rest_pose(&placed, state.width, index)),
+                        dt,
+                    )
                     .map_err(|e| e.to_string())?;
             }
         }
@@ -2572,12 +2860,31 @@ impl RigidSimulation {
                 .map_err(|error| error.to_string());
         };
         let span = self.targeted_fields.span(before, after, alpha)?;
-        let global = FieldInput { field: global, acceleration: 1.0, delta_velocity: 0.0 };
+        let global = FieldInput {
+            field: global,
+            acceleration: 1.0,
+            delta_velocity: 0.0,
+        };
         let world = self.world.as_mut().expect("world constructed above");
-        apply_by_target(world, &self.handles, &self.groups, body_count, |_| true, dt, |target, apply| {
-            let field = span.field(target);
-            apply(&[global, FieldInput { field: &field, acceleration: 1.0, delta_velocity: 0.0 }])
-        })
+        apply_by_target(
+            world,
+            &self.handles,
+            &self.groups,
+            body_count,
+            |_| true,
+            dt,
+            |target, apply| {
+                let field = span.field(target);
+                apply(&[
+                    global,
+                    FieldInput {
+                        field: &field,
+                        acceleration: 1.0,
+                        delta_velocity: 0.0,
+                    },
+                ])
+            },
+        )
     }
 
     fn animated_microsteps(
@@ -2589,7 +2896,8 @@ impl RigidSimulation {
         // Box3D bullet CCD does not sweep Animated motion. Smaller outer
         // steps put fast moving/rotating colliders into contact with Dynamics.
         const MAX_MICROSTEPS: usize = 512;
-        let group_active = |group: usize| self.groups.get(group).is_some_and(|state| state.active > 0);
+        let group_active =
+            |group: usize| self.groups.get(group).is_some_and(|state| state.active > 0);
         let dynamic_extent = bodies
             .iter()
             .enumerate()
@@ -2626,13 +2934,17 @@ impl RigidSimulation {
                         && !self.fragment_parent_released[*index]
                 })
             })
-            .chain(groups.iter().enumerate().map(|(group, body)| (bodies.len() + group, body)).filter(
-                |(cell, body)| {
-                    body.as_ref().is_some_and(|body| {
-                        body.enabled && body.kind == 2 && group_active(*cell - bodies.len())
-                    })
-                },
-            ));
+            .chain(
+                groups
+                    .iter()
+                    .enumerate()
+                    .map(|(group, body)| (bodies.len() + group, body))
+                    .filter(|(cell, body)| {
+                        body.as_ref().is_some_and(|body| {
+                            body.enabled && body.kind == 2 && group_active(*cell - bodies.len())
+                        })
+                    }),
+            );
         for (cell, body) in animated {
             let body = body.as_ref().expect("filtered to present bodies");
             let start = self
@@ -2853,17 +3165,29 @@ fn body_min_extent(body: &RigidBody) -> f32 {
 
 fn body_collision_radius(body: &RigidBody) -> f32 {
     let Some(geometry) = body.collider.as_ref() else {
-        return body.transform.scale.into_iter().map(f32::abs).fold(0.0, f32::max);
+        return body
+            .transform
+            .scale
+            .into_iter()
+            .map(f32::abs)
+            .fold(0.0, f32::max);
     };
     let mut radius = 0.0f32;
     geometry.for_each_point(|point| {
-        let length = (0..3).map(|axis| (point[axis] * body.transform.scale[axis]).powi(2)).sum::<f32>().sqrt();
+        let length = (0..3)
+            .map(|axis| (point[axis] * body.transform.scale[axis]).powi(2))
+            .sum::<f32>()
+            .sqrt();
         radius = radius.max(length);
     });
     if radius > 0.0 && radius.is_finite() {
         radius
     } else {
-        body.transform.scale.into_iter().map(f32::abs).fold(0.0, f32::max)
+        body.transform
+            .scale
+            .into_iter()
+            .map(f32::abs)
+            .fold(0.0, f32::max)
     }
 }
 
@@ -2871,8 +3195,9 @@ fn body_collision_radius(body: &RigidBody) -> f32 {
 /// [`manifold_physics::collision_shape::MAX_COORDINATE`]. A body that blew up
 /// is taken out before its bounds can corrupt the broad phase.
 fn in_range(pose: manifold_physics::BodyPose) -> bool {
-    pose.position.iter().all(|value| value.is_finite() && value.abs() <= manifold_physics::collision_shape::MAX_COORDINATE)
-        && pose.rotation.iter().all(|value| value.is_finite())
+    pose.position.iter().all(|value| {
+        value.is_finite() && value.abs() <= manifold_physics::collision_shape::MAX_COORDINATE
+    }) && pose.rotation.iter().all(|value| value.is_finite())
 }
 
 fn predicted_dynamic_travel(velocity: [f32; 3], acceleration: [f32; 3], tick: f64) -> f32 {

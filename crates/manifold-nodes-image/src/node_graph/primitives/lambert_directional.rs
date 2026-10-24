@@ -20,8 +20,8 @@
 //!    per-pixel attenuation — that needs a `world_pos`-wired 3D-mesh-mode
 //!    extension, which this atom doesn't have).
 
-use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
+use std::borrow::Cow;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};

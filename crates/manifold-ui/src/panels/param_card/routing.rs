@@ -26,8 +26,7 @@ impl ParamCardPanel {
                     if btn_id == Some(id)
                         && let Some(sp) = self.string_param_info.get(si)
                         && sp.use_dropdown
-                        && let (Some(effect_id), Some(binding_id)) =
-                            (&sp.effect_id, &sp.binding_id)
+                        && let (Some(effect_id), Some(binding_id)) = (&sp.effect_id, &sp.binding_id)
                     {
                         return vec![PanelAction::Params(
                             ParamsAction::EffectStringParamDropdownClicked(
@@ -52,7 +51,9 @@ impl ParamCardPanel {
                     return vec![PanelAction::Params(ParamsAction::GenCollapseToggle)];
                 }
                 if self.change_btn_id == Some(id) {
-                    return vec![PanelAction::Params(ParamsAction::GenTypeClicked(self.layer_id.clone()))];
+                    return vec![PanelAction::Params(ParamsAction::GenTypeClicked(
+                        self.layer_id.clone(),
+                    ))];
                 }
                 if self.cog_btn_id == Some(id) {
                     return vec![PanelAction::Root(RootAction::OpenGeneratorGraphEditor)];
@@ -68,8 +69,14 @@ impl ParamCardPanel {
                 // generator-only array); out of `row_index` scope, kept here.
                 for (si, &btn_id) in self.string_param_btn_ids.iter().enumerate() {
                     if btn_id == Some(id) {
-                        if self.string_param_info.get(si).is_some_and(|sp| sp.use_dropdown) {
-                            return vec![PanelAction::Params(ParamsAction::GenStringParamDropdownClicked(si))];
+                        if self
+                            .string_param_info
+                            .get(si)
+                            .is_some_and(|sp| sp.use_dropdown)
+                        {
+                            return vec![PanelAction::Params(
+                                ParamsAction::GenStringParamDropdownClicked(si),
+                            )];
                         }
                         return vec![PanelAction::Params(ParamsAction::GenStringParamClicked(si))];
                     }
@@ -85,7 +92,11 @@ impl ParamCardPanel {
         if let Some((row, role)) = self.row_host.row_index.get(widget) {
             // A projection-disabled row (`RowSpec.disabled`) is a dead click:
             // no toggle, no drawer, no OSC copy. The greyed label says why.
-            if self.rows.get(row).is_some_and(|r| r.spec.disabled.is_some()) {
+            if self
+                .rows
+                .get(row)
+                .is_some_and(|r| r.spec.disabled.is_some())
+            {
                 return Vec::new();
             }
             let target = self.param_target();
@@ -93,11 +104,20 @@ impl ParamCardPanel {
             // D7): flip it here and let the app save it.
             if role == RowRole::SectionHeader
                 && self.scene_sections
-                && let Some(section) = self.row_host.section_header_ids.iter().find(|(hid, _)| *hid == id).map(|(_, name)| name.clone())
+                && let Some(section) = self
+                    .row_host
+                    .section_header_ids
+                    .iter()
+                    .find(|(hid, _)| *hid == id)
+                    .map(|(_, name)| name.clone())
             {
                 let folded = !self.section_folded.get(&section).copied().unwrap_or(false);
                 self.section_folded.insert(section.clone(), folded);
-                return vec![PanelAction::Params(ParamsAction::CardSectionFolded { target, section, folded })];
+                return vec![PanelAction::Params(ParamsAction::CardSectionFolded {
+                    target,
+                    section,
+                    folded,
+                })];
             }
             return self.row_host.row_action(
                 tree,
@@ -128,7 +148,12 @@ impl ParamCardPanel {
     /// `tree` is read-only and mandatory (BUG-259): all geometry comes from
     /// live bounds, never the build-time cache — in-place scroll shifts node
     /// y without refreshing panel caches (BUG-257).
-    pub fn handle_pointer_down(&mut self, node_id: NodeId, pos: Vec2, tree: &UITree) -> Vec<PanelAction> {
+    pub fn handle_pointer_down(
+        &mut self,
+        node_id: NodeId,
+        pos: Vec2,
+        tree: &UITree,
+    ) -> Vec<PanelAction> {
         let target = self.param_target();
         let row_actions = self.row_host.handle_pointer_down(
             node_id,
@@ -202,7 +227,11 @@ impl ParamCardPanel {
         // descendant without a more specific intent folds here.
         if let Some(border_id) = self.border_id {
             intents.claim_area(border_id);
-            intents.on(border_id, RightClick, PanelAction::Params(ParamsAction::CardRightClicked(target.clone())));
+            intents.on(
+                border_id,
+                RightClick,
+                PanelAction::Params(ParamsAction::CardRightClicked(target.clone())),
+            );
         }
 
         // Every materialised slider's right-click reset — main rows AND every
@@ -218,6 +247,7 @@ impl ParamCardPanel {
         self.row_host.register_intents(intents);
         // Per-param menu on slider, switch and pick-list rows. A fire button
         // has no map gesture and folds to the card claim like a dead zone.
-        self.row_host.register_param_menus(&self.rows, &target, intents);
+        self.row_host
+            .register_param_menus(&self.rows, &target, intents);
     }
 }

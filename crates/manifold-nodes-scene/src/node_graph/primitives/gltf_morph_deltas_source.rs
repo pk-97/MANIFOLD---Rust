@@ -24,9 +24,11 @@
 use std::borrow::Cow;
 use std::sync::mpsc;
 
-use manifold_node_engine::mesh::MeshVertex;
+use crate::node_graph::gltf_load::{
+    DEFAULT_MATERIAL_MESH_PARAM, DEFAULT_MATERIAL_SENTINEL, load_gltf_morph_deltas,
+};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, DEFAULT_MATERIAL_SENTINEL, load_gltf_morph_deltas};
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
@@ -136,7 +138,9 @@ impl Primitive for GltfMorphDeltasSource {
             self.staging = None;
             self.staging_len_bytes = 0;
             self.uploaded = false;
-            if !path.is_empty() && (material_index >= 0 || material_index == DEFAULT_MATERIAL_MESH_PARAM) {
+            if !path.is_empty()
+                && (material_index >= 0 || material_index == DEFAULT_MATERIAL_MESH_PARAM)
+            {
                 // BUG-207: translate the "-2" param sentinel back to the
                 // `gltf_load` sentinel `load_gltf_morph_deltas` expects —
                 // same two-sentinel-space split `gltf_mesh_source.rs` uses
@@ -149,7 +153,12 @@ impl Primitive for GltfMorphDeltasSource {
                 let path_buf = std::path::PathBuf::from(&path);
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
-                    let result = load_gltf_morph_deltas(&path_buf, load_material_index, own_space, &node_path);
+                    let result = load_gltf_morph_deltas(
+                        &path_buf,
+                        load_material_index,
+                        own_space,
+                        &node_path,
+                    );
                     let _ = tx.send(result);
                 });
                 self.pending_load = Some(rx);
@@ -171,7 +180,9 @@ impl Primitive for GltfMorphDeltasSource {
                     self.pending_load = Some(rx);
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    log::error!("node.gltf_morph_deltas_source: background load channel disconnected");
+                    log::error!(
+                        "node.gltf_morph_deltas_source: background load channel disconnected"
+                    );
                 }
             }
         }
@@ -220,11 +231,15 @@ impl Primitive for GltfMorphDeltasSource {
             } else {
                 let copy_size = self.staging_len_bytes.min(dst.size);
                 if copy_size > 0 {
-                    ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(staging, dst, copy_size);
+                    ctx.gpu_encoder()
+                        .native_enc
+                        .copy_buffer_to_buffer(staging, dst, copy_size);
                 }
                 self.last_copied_content_version = self.content_version;
                 self.last_copied_dst_identity = dst_identity;
-                if content_unchanged { ctx.mark_output_content_unchanged(); }
+                if content_unchanged {
+                    ctx.mark_output_content_unchanged();
+                }
             }
         }
     }
@@ -236,19 +251,24 @@ impl Primitive for GltfMorphDeltasSource {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use manifold_node_engine::exec::backend::Backend;
+    use manifold_core::{Beats, Seconds};
+    use manifold_gpu::testkit::TestDevice;
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::backend::Backend;
     use manifold_node_engine::exec::effect_node::ParamValues;
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::exec::{effect_node::FrameTime, metal_backend::MetalBackend};
-    use manifold_gpu::testkit::TestDevice;
-    use manifold_core::{Beats, Seconds};
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 
     const CAPACITY: u32 = 4_000;
 
     fn frame_time() -> FrameTime {
-        FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }
+        FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        }
     }
 
     fn morph_cube_fixture_path() -> std::path::PathBuf {
@@ -258,8 +278,14 @@ mod gpu_tests {
 
     fn params_at(path: &str, material_index: f32, capacity: f32) -> ParamValues {
         let mut p = ahash::AHashMap::default();
-        p.insert(Cow::Borrowed("path"), ParamValue::String(path.to_string().into()));
-        p.insert(Cow::Borrowed("material_index"), ParamValue::Float(material_index));
+        p.insert(
+            Cow::Borrowed("path"),
+            ParamValue::String(path.to_string().into()),
+        );
+        p.insert(
+            Cow::Borrowed("material_index"),
+            ParamValue::Float(material_index),
+        );
         p.insert(Cow::Borrowed("max_capacity"), ParamValue::Float(capacity));
         p
     }
@@ -331,10 +357,15 @@ mod gpu_tests {
     }
 
     fn make_buffer_backend(device: &TestDevice) -> (MetalBackend, ResourceId, Slot) {
-        let mut backend = MetalBackend::new(device.arc(), 64, 64, manifold_gpu::GpuTextureFormat::Rgba8Unorm);
+        let mut backend = MetalBackend::new(
+            device.arc(),
+            64,
+            64,
+            manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+        );
         let r_out = ResourceId(0);
-        let buf =
-            device.create_buffer_shared((CAPACITY as u64) * std::mem::size_of::<MeshVertex>() as u64);
+        let buf = device
+            .create_buffer_shared((CAPACITY as u64) * std::mem::size_of::<MeshVertex>() as u64);
         let slot = backend.pre_bind_array(r_out, buf);
         (backend, r_out, slot)
     }
@@ -343,7 +374,10 @@ mod gpu_tests {
     fn frame2_matches_frame1_on_static_asset_and_declares_unchanged() {
         let path = morph_cube_fixture_path();
         if !path.exists() {
-            println!("frame2_matches_frame1_on_static_asset_and_declares_unchanged: fixture not found at {}, skipping", path.display());
+            println!(
+                "frame2_matches_frame1_on_static_asset_and_declares_unchanged: fixture not found at {}, skipping",
+                path.display()
+            );
             return;
         }
         let device = manifold_gpu::testkit::test_device();
@@ -355,9 +389,22 @@ mod gpu_tests {
         settle(&mut prim, &backend, &device, &scratch, &params);
         let frame1 = readback(&backend, slot);
 
-        let unchanged = run_once(&mut prim, &backend, &device, &scratch, &params, frame_time());
-        assert!(unchanged, "settled static frame must declare mark_outputs_unchanged");
+        let unchanged = run_once(
+            &mut prim,
+            &backend,
+            &device,
+            &scratch,
+            &params,
+            frame_time(),
+        );
+        assert!(
+            unchanged,
+            "settled static frame must declare mark_outputs_unchanged"
+        );
         let frame2 = readback(&backend, slot);
-        assert_eq!(frame1, frame2, "frame 2 must be bit-identical to frame 1 on a static asset");
+        assert_eq!(
+            frame1, frame2,
+            "frame 2 must be bit-identical to frame 1 on a static asset"
+        );
     }
 }

@@ -19,14 +19,14 @@ pub const SURFACE_EDGE_INDEX_WGSL: &str = include_str!("shaders/surface_edge_ind
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use super::count_surface_triangles::MARCHING_CUBES_COMMON;
-use manifold_water_liquid::primitives::liquid_bricks;
-use manifold_water_liquid::float_param;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
-use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_node_engine::scene::live_extent::LiveExtent;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::scene::live_extent::LiveExtent;
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::primitives::liquid_bricks;
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
@@ -337,8 +337,9 @@ mod tests {
             std::mem::size_of::<super::RelaxUniforms>(),
             8 * std::mem::size_of::<u32>()
         );
-        let source = manifold_node_engine::freeze::codegen::standalone_for_spec::<RelaxSurfaceMesh>()
-            .expect("cell-owned relax standalone codegen");
+        let source =
+            manifold_node_engine::freeze::codegen::standalone_for_spec::<RelaxSurfaceMesh>()
+                .expect("cell-owned relax standalone codegen");
         let module =
             naga::front::wgsl::parse_str(&source).expect("generated relax kernel must parse");
         naga::valid::Validator::new(
@@ -364,8 +365,13 @@ mod shared_shader_tests {
     #[test]
     fn surface_mesh_adjacency_bytes_unchanged() {
         use sha2::{Digest, Sha256};
-        assert_eq!(format!("{:x}", Sha256::digest(super::SURFACE_MESH_ADJACENCY_WGSL.as_bytes())),
-            "32f3b339a2e09d8229b860138cb66127d2d963b8318576b4d79b2fd6cd7ca302");
+        assert_eq!(
+            format!(
+                "{:x}",
+                Sha256::digest(super::SURFACE_MESH_ADJACENCY_WGSL.as_bytes())
+            ),
+            "32f3b339a2e09d8229b860138cb66127d2d963b8318576b4d79b2fd6cd7ca302"
+        );
     }
 }
 

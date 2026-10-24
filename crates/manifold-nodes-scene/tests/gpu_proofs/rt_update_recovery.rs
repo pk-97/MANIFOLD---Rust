@@ -22,7 +22,13 @@ struct Frame {
     traced: bool,
 }
 
-fn render(device: &Arc<manifold_gpu::GpuDevice>, runtime: &mut PresetRuntime, target: &RenderTarget, frame: usize, fault: Option<RtAccelError>) -> Frame {
+fn render(
+    device: &Arc<manifold_gpu::GpuDevice>,
+    runtime: &mut PresetRuntime,
+    target: &RenderTarget,
+    frame: usize,
+    fault: Option<RtAccelError>,
+) -> Frame {
     let ctx = PresetContext {
         time: frame as f64 / 60.0,
         beat: frame as f64 / 30.0,
@@ -42,8 +48,16 @@ fn render(device: &Arc<manifold_gpu::GpuDevice>, runtime: &mut PresetRuntime, ta
     let result = {
         let mut gpu = RendererGpuEncoder::new(&mut encoder, device);
         gpu.fail_rt_update = fault;
-        runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
-        Frame { status: gpu.frame_status(), traced: gpu.rt_dispatches > 0 }
+        runtime.render(
+            &mut gpu,
+            &target.texture,
+            &ctx,
+            &manifold_core::params::ParamManifest::default(),
+        );
+        Frame {
+            status: gpu.frame_status(),
+            traced: gpu.rt_dispatches > 0,
+        }
     };
     encoder.commit_and_wait_completed();
     result
@@ -65,7 +79,13 @@ fn ray_tracing_comes_back_after_a_frame_it_could_not_update() {
         None,
     )
     .expect("RT reference scene compiles");
-    let target = RenderTarget::new(&device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "rt-update-recovery");
+    let target = RenderTarget::new(
+        &device,
+        WIDTH,
+        HEIGHT,
+        GpuTextureFormat::Rgba16Float,
+        "rt-update-recovery",
+    );
 
     let mut frame = 0;
     let mut next = |runtime: &mut PresetRuntime, fault| {
@@ -74,29 +94,44 @@ fn ray_tracing_comes_back_after_a_frame_it_could_not_update() {
         rendered
     };
     let warm = (0..8).map(|_| next(&mut runtime, None)).last().unwrap();
-    assert!(warm.status == FrameRenderStatus::Complete && warm.traced, "the scene traces before any fault");
+    assert!(
+        warm.status == FrameRenderStatus::Complete && warm.traced,
+        "the scene traces before any fault"
+    );
 
     // Needs preparation: the renderer prepares and traces the same frame.
     let prepared = next(&mut runtime, Some(RtAccelError::NeedsPreparation));
     let after_prepared = next(&mut runtime, None);
 
     // A real failure: raster this frame, said once; tracing the next.
-    let failed = next(&mut runtime, Some(RtAccelError::Allocation { bytes: 1 << 40, resource: "fault" }));
+    let failed = next(
+        &mut runtime,
+        Some(RtAccelError::Allocation {
+            bytes: 1 << 40,
+            resource: "fault",
+        }),
+    );
     let after_failed: Vec<Frame> = (0..3).map(|_| next(&mut runtime, None)).collect();
 
     assert!(
         prepared.status == FrameRenderStatus::Complete && prepared.traced,
         "a needs-preparation frame prepares and traces in place, got {:?} traced={}",
-        prepared.status, prepared.traced,
+        prepared.status,
+        prepared.traced,
     );
     assert!(after_prepared.status == FrameRenderStatus::Complete && after_prepared.traced);
-    assert_eq!(failed.status, FrameRenderStatus::Failed(FrameRenderFailure::NodeError), "a failed update draws raster and says so");
+    assert_eq!(
+        failed.status,
+        FrameRenderStatus::Failed(FrameRenderFailure::NodeError),
+        "a failed update draws raster and says so"
+    );
     assert!(!failed.traced, "a failed update draws that frame raster");
     for (index, frame) in after_failed.iter().enumerate() {
         assert!(
             frame.status == FrameRenderStatus::Complete && frame.traced,
             "frame {index} after a failure traces again, got {:?} traced={}",
-            frame.status, frame.traced,
+            frame.status,
+            frame.traced,
         );
     }
 }

@@ -2,22 +2,22 @@
 
 #[cfg(feature = "gpu-proofs")]
 #[cfg(any(test, feature = "testkit"))]
+pub mod codegen_support;
+#[cfg(feature = "gpu-proofs")]
+#[cfg(any(test, feature = "testkit"))]
 pub mod gpu;
-#[cfg(feature = "gpu-proofs")]
-#[cfg(any(test, feature = "testkit"))]
-pub mod test_camera_pointwise_fixture;
-#[cfg(any(test, feature = "testkit"))]
-pub mod test_multi_output_atomic_fixture;
-#[cfg(test)]
-pub(crate) mod test_face_lattice_fixture;
-#[cfg(feature = "gpu-proofs")]
-#[cfg(any(test, feature = "testkit"))]
-pub mod test_card;
 #[cfg(test)]
 pub(crate) mod graph;
 #[cfg(feature = "gpu-proofs")]
 #[cfg(any(test, feature = "testkit"))]
-pub mod codegen_support;
+pub mod test_camera_pointwise_fixture;
+#[cfg(feature = "gpu-proofs")]
+#[cfg(any(test, feature = "testkit"))]
+pub mod test_card;
+#[cfg(test)]
+pub(crate) mod test_face_lattice_fixture;
+#[cfg(any(test, feature = "testkit"))]
+pub mod test_multi_output_atomic_fixture;
 
 #[cfg(feature = "gpu-proofs")]
 #[cfg(any(test, feature = "testkit"))]

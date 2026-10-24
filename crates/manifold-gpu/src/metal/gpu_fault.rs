@@ -7,8 +7,8 @@
 //! timeouts with no signal distinguishable from a slow GPU unless it can
 //! ASK. `submissions_ignored` is that ask.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use objc2_foundation::NSError;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Emit Metal's encoder execution diagnostics attached to an NSError.
 pub(crate) fn log_error_diagnostics(err: &NSError, buffer: &str) {
@@ -17,7 +17,9 @@ pub(crate) fn log_error_diagnostics(err: &NSError, buffer: &str) {
     use objc2_metal::{MTLCommandBufferEncoderInfoErrorKey, MTLCommandEncoderErrorState};
     let user_info = err.userInfo();
     let Some(infos) = user_info.objectForKey(unsafe { MTLCommandBufferEncoderInfoErrorKey }) else {
-        emit_diagnostic(format_args!("[GPU] buffer {buffer}: Metal supplied no per-encoder execution details"));
+        emit_diagnostic(format_args!(
+            "[GPU] buffer {buffer}: Metal supplied no per-encoder execution details"
+        ));
         return;
     };
     // Metal documents this key as NSArray<MTLCommandBufferEncoderInfo>.
@@ -26,8 +28,11 @@ pub(crate) fn log_error_diagnostics(err: &NSError, buffer: &str) {
         let info: *mut AnyObject = unsafe { msg_send![&*infos, objectAtIndex: index] };
         let label: Option<Retained<NSString>> = unsafe { msg_send![info, label] };
         let state: MTLCommandEncoderErrorState = unsafe { msg_send![info, errorState] };
-        let signposts: Option<Retained<NSArray<NSString>>> = unsafe { msg_send![info, debugSignposts] };
-        emit_diagnostic(format_args!("[GPU] buffer {buffer} encoder[{index}] label={label:?} state={state:?} signposts={signposts:?}"));
+        let signposts: Option<Retained<NSArray<NSString>>> =
+            unsafe { msg_send![info, debugSignposts] };
+        emit_diagnostic(format_args!(
+            "[GPU] buffer {buffer} encoder[{index}] label={label:?} state={state:?} signposts={signposts:?}"
+        ));
     }
 }
 
@@ -202,13 +207,15 @@ impl FaultMark {
     /// Kinds recorded since this mark was taken.
     pub fn kinds_since(&self) -> FaultKinds {
         let now = mark();
-        FaultKind::ALL.iter().fold(FaultKinds::default(), |set, kind| {
-            if now.kinds[kind.index()] != self.kinds[kind.index()] {
-                set.with(*kind)
-            } else {
-                set
-            }
-        })
+        FaultKind::ALL
+            .iter()
+            .fold(FaultKinds::default(), |set, kind| {
+                if now.kinds[kind.index()] != self.kinds[kind.index()] {
+                    set.with(*kind)
+                } else {
+                    set
+                }
+            })
     }
 }
 
@@ -288,7 +295,9 @@ pub fn diagnostics_enabled() -> bool {
 /// Correlate every buffer, including asynchronous AS builds, without retaining
 /// command buffers after completion. Missing completion means unknown, not hung.
 pub(crate) fn trace_buffer(cb: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLCommandBuffer>) {
-    if !diagnostics_enabled() { return; }
+    if !diagnostics_enabled() {
+        return;
+    }
     use block2::RcBlock;
     use objc2_metal::MTLCommandBuffer;
     use std::ptr::NonNull;
@@ -296,39 +305,60 @@ pub(crate) fn trace_buffer(cb: &objc2::runtime::ProtocolObject<dyn objc2_metal::
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let started = std::time::Instant::now();
     let label = unsafe { cb.label() };
-    let tagged = objc2_foundation::NSString::from_str(&format!("diag#{id} {}", label.as_ref().map(|v| v.to_string()).unwrap_or_default()));
-    unsafe { cb.setLabel(Some(&tagged)); }
+    let tagged = objc2_foundation::NSString::from_str(&format!(
+        "diag#{id} {}",
+        label.as_ref().map(|v| v.to_string()).unwrap_or_default()
+    ));
+    unsafe {
+        cb.setLabel(Some(&tagged));
+    }
     log::info!("[GPU-DIAG] created id={id} label={label:?}");
-    let scheduled = RcBlock::new(move |_cb: NonNull<objc2::runtime::ProtocolObject<dyn MTLCommandBuffer>>| {
-        log::info!("[GPU-DIAG] scheduled id={id} elapsed_us={}", started.elapsed().as_micros());
-    });
-    let complete = RcBlock::new(move |ptr: NonNull<objc2::runtime::ProtocolObject<dyn MTLCommandBuffer>>| {
-        let cb = unsafe { ptr.as_ref() };
-        let status = unsafe { cb.status() };
-        let start = unsafe { cb.GPUStartTime() };
-        let end = unsafe { cb.GPUEndTime() };
-        let gpu_ms = if start > 0.0 && end >= start { Some((end-start)*1000.0) } else { None };
-        log::info!("[GPU-DIAG] completed id={id} label={label:?} status={status:?} elapsed_us={} gpu_ms={gpu_ms:?}", started.elapsed().as_micros());
-    });
+    let scheduled = RcBlock::new(
+        move |_cb: NonNull<objc2::runtime::ProtocolObject<dyn MTLCommandBuffer>>| {
+            log::info!(
+                "[GPU-DIAG] scheduled id={id} elapsed_us={}",
+                started.elapsed().as_micros()
+            );
+        },
+    );
+    let complete = RcBlock::new(
+        move |ptr: NonNull<objc2::runtime::ProtocolObject<dyn MTLCommandBuffer>>| {
+            let cb = unsafe { ptr.as_ref() };
+            let status = unsafe { cb.status() };
+            let start = unsafe { cb.GPUStartTime() };
+            let end = unsafe { cb.GPUEndTime() };
+            let gpu_ms = if start > 0.0 && end >= start {
+                Some((end - start) * 1000.0)
+            } else {
+                None
+            };
+            log::info!(
+                "[GPU-DIAG] completed id={id} label={label:?} status={status:?} elapsed_us={} gpu_ms={gpu_ms:?}",
+                started.elapsed().as_micros()
+            );
+        },
+    );
     unsafe {
         cb.addScheduledHandler(RcBlock::as_ptr(&scheduled));
         cb.addCompletedHandler(RcBlock::as_ptr(&complete));
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     // The exact description strings the driver produced in the BUG-84fv
     // incident log (2026-08-02) — pinning the REAL text, not a remembered
     // paraphrase, is what the BUG-665r original lacked.
-    use super::{classify_fault, complete_submission, begin_submission, drain_completions, is_blacklist_desc,
-        reset_submission_counters_for_test, FaultKind, FaultKinds};
+    use super::{
+        FaultKind, FaultKinds, begin_submission, classify_fault, complete_submission,
+        drain_completions, is_blacklist_desc, reset_submission_counters_for_test,
+    };
 
     #[test]
     fn real_descriptions_classify_by_kind() {
         let hang = "Caused GPU Hang Error (00000003:kIOGPUCommandBufferCallbackErrorHang)";
-        let page = "Caused GPU Address Fault Error (0000000b:kIOGPUCommandBufferCallbackErrorPageFault)";
+        let page =
+            "Caused GPU Address Fault Error (0000000b:kIOGPUCommandBufferCallbackErrorPageFault)";
         let victim = "Discarded (victim of GPU error/recovery) (00000005:kIOGPUCommandBufferCallbackErrorInnocentVictim)";
         let ignored = "Ignored (for causing prior/excessive GPU errors) (00000004:kIOGPUCommandBufferCallbackErrorSubmissionsIgnored)";
         let interactivity = "Impacting Interactivity (0000000e:kIOGPUCommandBufferCallbackErrorImpactingInteractivity)";
@@ -338,7 +368,11 @@ mod tests {
         assert_eq!(classify_fault(1, victim), FaultKind::InnocentVictim);
         assert_eq!(classify_fault(1, ignored), FaultKind::SubmissionsIgnored);
         assert_eq!(classify_fault(1, interactivity), FaultKind::Hang);
-        assert!(FaultKinds::default().with(classify_fault(1, interactivity)).is_recoverable_hang());
+        assert!(
+            FaultKinds::default()
+                .with(classify_fault(1, interactivity))
+                .is_recoverable_hang()
+        );
         assert_eq!(classify_fault(8, "Insufficient Memory"), FaultKind::Other);
         assert_eq!(classify_fault(2, "Execution timed out"), FaultKind::Hang);
         assert_eq!(classify_fault(11, "Device removed"), FaultKind::DeviceLost);
@@ -349,7 +383,11 @@ mod tests {
         let hang = FaultKinds::default().with(FaultKind::Hang);
         let hang_and_victim = hang.with(FaultKind::InnocentVictim);
         assert!(hang.is_recoverable_hang() && hang_and_victim.is_recoverable_hang());
-        assert!(FaultKinds::default().with(FaultKind::InnocentVictim).is_recoverable_hang());
+        assert!(
+            FaultKinds::default()
+                .with(FaultKind::InnocentVictim)
+                .is_recoverable_hang()
+        );
         assert!(!hang_and_victim.is_fatal());
         assert!(hang.with(FaultKind::PageFault).is_fatal());
         assert!(!hang.with(FaultKind::PageFault).is_recoverable_hang());

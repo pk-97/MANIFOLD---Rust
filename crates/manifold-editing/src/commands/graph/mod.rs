@@ -18,17 +18,14 @@
 //! Phase 3 of the per-card-divergence plan in
 //! `docs/NODE_GRAPH_SYSTEM.md`.
 
-
-#[cfg(test)]
-use std::collections::BTreeMap;
 use manifold_core::GraphTarget;
 use manifold_core::NodeId;
-use manifold_core::effect_graph_def::{
-    EffectGraphDef, EffectGraphNode, EffectGraphWire,
-};
 #[cfg(test)]
 use manifold_core::effect_graph_def::SerializedParamValue;
+use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 use manifold_core::project::Project;
+#[cfg(test)]
+use std::collections::BTreeMap;
 
 mod card_owned_write;
 mod card_pin;
@@ -174,14 +171,20 @@ pub enum SiteReach {
 
 impl GraphEditSite {
     pub(super) fn new(target: &GraphTarget, scope: &[u32], reach: SiteReach) -> Self {
-        Self { target: target.clone(), scope: scope.to_vec(), reach }
+        Self {
+            target: target.clone(),
+            scope: scope.to_vec(),
+            reach,
+        }
     }
 }
 
 /// Why `site` must not be written: it lies inside a scene layer's Scene node,
 /// it removes or regroups that node, or it rewrites what the compiler owns.
 pub fn sealed_refusal(project: &Project, site: &GraphEditSite) -> Option<&'static str> {
-    use manifold_core::scene_node::{INSIDE_SCENE_NODE, SCENE_NODE_STAYS, is_scene_node, scope_enters_scene_node};
+    use manifold_core::scene_node::{
+        INSIDE_SCENE_NODE, SCENE_NODE_STAYS, is_scene_node, scope_enters_scene_node,
+    };
     let owner = project.graph_target_owner(&site.target)?;
     owner.scene.as_ref()?;
     if matches!(site.target, GraphTarget::SceneModifier { .. }) {
@@ -199,9 +202,16 @@ pub fn sealed_refusal(project: &Project, site: &GraphEditSite) -> Option<&'stati
     };
     let mut level = graph.nodes.as_slice();
     for hop in &site.scope {
-        level = level.iter().find(|n| n.id == *hop).and_then(|n| n.group.as_deref()).map(|body| body.nodes.as_slice())?;
+        level = level
+            .iter()
+            .find(|n| n.id == *hop)
+            .and_then(|n| n.group.as_deref())
+            .map(|body| body.nodes.as_slice())?;
     }
-    level.iter().any(|n| ids.contains(&n.id) && is_scene_node(n)).then_some(SCENE_NODE_STAYS)
+    level
+        .iter()
+        .any(|n| ids.contains(&n.id) && is_scene_node(n))
+        .then_some(SCENE_NODE_STAYS)
 }
 
 /// Navigate to the node + wire vectors of the sub-graph at `scope` — a list of

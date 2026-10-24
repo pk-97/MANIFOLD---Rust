@@ -54,11 +54,10 @@
 use half::f16;
 use manifold_gpu::{GpuTexture, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::scene::camera::{Camera, linearize_depth};
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::scene::camera::{Camera, linearize_depth};
 
 /// Five distinct depths, near through far, all comfortably inside
 /// `NEAR`/`FAR` below.
@@ -181,7 +180,12 @@ fn render_and_dump_depth(json: &str) -> (Vec<u8>, u32, u32) {
         let mut enc = h.device.create_encoder("gbuffer-depth-enc");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-            runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+            runtime.render(
+                &mut gpu,
+                &target.texture,
+                &ctx,
+                &manifold_core::params::ParamManifest::default(),
+            );
         }
         enc.commit_and_wait_completed();
     }
@@ -193,7 +197,10 @@ fn render_and_dump_depth(json: &str) -> (Vec<u8>, u32, u32) {
         .unwrap_or_else(|| {
             panic!(
                 "no dumped `depth` output on node `scene` — dumped ports: {:?}",
-                dumped.iter().map(|(n, p, _, _)| format!("{n}.{p}")).collect::<Vec<_>>()
+                dumped
+                    .iter()
+                    .map(|(n, p, _, _)| format!("{n}.{p}"))
+                    .collect::<Vec<_>>()
             )
         });
     assert_eq!(
@@ -223,7 +230,10 @@ fn readback_r32float(device: &manifold_gpu::GpuDevice, texture: &GpuTexture) -> 
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");
     let bytes: &[u8] = unsafe {
-        std::slice::from_raw_parts(ptr.cast::<std::ffi::c_void>().cast::<u8>(), total_bytes as usize)
+        std::slice::from_raw_parts(
+            ptr.cast::<std::ffi::c_void>().cast::<u8>(),
+            total_bytes as usize,
+        )
     };
     bytes.to_vec()
 }
@@ -328,7 +338,8 @@ fn render_color_readback(json: &str) -> Vec<u8> {
         None,
     )
     .unwrap_or_else(|e| panic!("reversed-Z precision graph must build: {e}\n{json}"));
-    let target = manifold_node_engine::testkit::gpu_harness::shared().make_target("reversed-z-depth-precision");
+    let target = manifold_node_engine::testkit::gpu_harness::shared()
+        .make_target("reversed-z-depth-precision");
     for frame in 0..2 {
         let ctx = PresetContext {
             time: 0.0,
@@ -376,8 +387,16 @@ fn gbuffer_depth_conformance() {
         );
 
         let (bytes, width, height) = render_and_dump_depth(&scene_json(distance));
-        assert_eq!(bytes.len() as u32, width * height * 4, "R32Float byte count");
-        assert_eq!((width, height), (h.width, h.height), "depth output dims must match the canvas");
+        assert_eq!(
+            bytes.len() as u32,
+            width * height * 4,
+            "R32Float byte count"
+        );
+        assert_eq!(
+            (width, height),
+            (h.width, h.height),
+            "depth output dims must match the canvas"
+        );
 
         // Pixel-CENTER convention (matches `camera_conformance.rs`'s
         // `intensity_centroid`): pixel index `i` occupies continuous
@@ -445,12 +464,23 @@ fn reversed_z_precision_keeps_near_surface_independent_of_draw_order() {
     for reverse_draw_order in [false, true] {
         let bytes = render_color_readback(&overlapping_depth_scene_json(reverse_draw_order));
         if let Some(dir) = std::env::var_os("MANIFOLD_DEPTH_PROOF_DIR") {
-            let pixels: Vec<u8> = bytes.chunks_exact(2).map(|c| {
-                (f16::from_le_bytes([c[0], c[1]]).to_f32().clamp(0.0, 1.0) * 255.0).round() as u8
-            }).collect();
-            let path = std::path::PathBuf::from(dir).join(format!("reversed-z-order-{reverse_draw_order}.png"));
-            image::save_buffer(path, &pixels, h.width, h.height, image::ExtendedColorType::Rgba8)
-                .expect("write reversed-Z verification image");
+            let pixels: Vec<u8> = bytes
+                .chunks_exact(2)
+                .map(|c| {
+                    (f16::from_le_bytes([c[0], c[1]]).to_f32().clamp(0.0, 1.0) * 255.0).round()
+                        as u8
+                })
+                .collect();
+            let path = std::path::PathBuf::from(dir)
+                .join(format!("reversed-z-order-{reverse_draw_order}.png"));
+            image::save_buffer(
+                path,
+                &pixels,
+                h.width,
+                h.height,
+                image::ExtendedColorType::Rgba8,
+            )
+            .expect("write reversed-Z verification image");
         }
         let center = sample_rgba16f(&bytes, h.width, h.width / 2, h.height / 2);
         assert!(
@@ -530,7 +560,12 @@ fn gbuffer_depth_unwired_scene_bundled_smoke_stays_finite() {
     let mut enc = h.device.create_encoder("gbuffer-depth-unwired-enc");
     {
         let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-        runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+        runtime.render(
+            &mut gpu,
+            &target.texture,
+            &ctx,
+            &manifold_core::params::ParamManifest::default(),
+        );
     }
     enc.commit_and_wait_completed();
 

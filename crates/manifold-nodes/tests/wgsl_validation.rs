@@ -70,13 +70,18 @@ const PARTIAL_SHADERS: &[&str] = &[
 ];
 
 const NOISE_COMMON: &str = manifold_node_engine::gpu::shader_sources::NOISE_COMMON_WGSL;
-const PBR_BRDF: &str = include_str!("../../manifold-nodes-scene/src/node_graph/primitives/shaders/pbr_brdf.wgsl");
-const TONEMAP_COMMON: &str = include_str!("../../manifold-compositor/src/effects/shaders/tonemap_common.wgsl");
-const DEPTH_COMMON: &str = include_str!("../../manifold-nodes-image/src/generators/shaders/depth_common.wgsl");
-const VIEW_NORMAL_COMMON: &str =
-    include_str!("../../manifold-nodes-image/src/node_graph/primitives/shaders/view_normal_common.wgsl");
-const SAMPLE_FACE_COMMON: &str =
-    include_str!("../../manifold-nodes-scene/src/node_graph/primitives/shaders/sample_face_common.wgsl");
+const PBR_BRDF: &str =
+    include_str!("../../manifold-nodes-scene/src/node_graph/primitives/shaders/pbr_brdf.wgsl");
+const TONEMAP_COMMON: &str =
+    include_str!("../../manifold-compositor/src/effects/shaders/tonemap_common.wgsl");
+const DEPTH_COMMON: &str =
+    include_str!("../../manifold-nodes-image/src/generators/shaders/depth_common.wgsl");
+const VIEW_NORMAL_COMMON: &str = include_str!(
+    "../../manifold-nodes-image/src/node_graph/primitives/shaders/view_normal_common.wgsl"
+);
+const SAMPLE_FACE_COMMON: &str = include_str!(
+    "../../manifold-nodes-scene/src/node_graph/primitives/shaders/sample_face_common.wgsl"
+);
 /// Shaders whose pipeline prepends a shared helper file at creation time.
 /// Each validates in that composed form, the way production builds it.
 fn composed_shaders() -> Vec<(&'static str, String)> {
@@ -95,15 +100,28 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
     ]
     .map(|(name, prefix)| (name, prefix.to_owned()))
     .into();
-    composed.push(("temporal_accumulate.wgsl", [DEPTH_COMMON, VIEW_NORMAL_COMMON].join("\n")));
+    composed.push((
+        "temporal_accumulate.wgsl",
+        [DEPTH_COMMON, VIEW_NORMAL_COMMON].join("\n"),
+    ));
     // `node.gpu_flip_step`'s prelude, in its `step_source` order.
     composed.push((
         "gpu_flip_step.wgsl",
-        [bodies::LIQUID_POSE, bodies::LIQUID_COLLIDER, manifold_nodes_physics::force_lattice::FORCE_LATTICE].join("\n"),
+        [
+            bodies::LIQUID_POSE,
+            bodies::LIQUID_COLLIDER,
+            manifold_nodes_physics::force_lattice::FORCE_LATTICE,
+        ]
+        .join("\n"),
     ));
     composed.push((
         "whitewater_fused.wgsl",
-        [whitewater::WHITEWATER_COMMON, grid::LIQUID_FACES, manifold_nodes_physics::force_lattice::FORCE_LATTICE].join("\n"),
+        [
+            whitewater::WHITEWATER_COMMON,
+            grid::LIQUID_FACES,
+            manifold_nodes_physics::force_lattice::FORCE_LATTICE,
+        ]
+        .join("\n"),
     ));
     composed
 }
@@ -126,21 +144,32 @@ fn is_partial(path: &std::path::Path) -> bool {
 fn all_wgsl_shaders_validate() {
     let composed = composed_shaders();
     let mut files = find_wgsl_files(&shader_dir());
-    let leaf_shaders = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../manifold-compositor/src");
-    assert!(leaf_shaders.is_dir(), "manifold-compositor shader directory must exist");
+    let leaf_shaders = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../manifold-compositor/src");
+    assert!(
+        leaf_shaders.is_dir(),
+        "manifold-compositor shader directory must exist"
+    );
     files.extend(find_wgsl_files(&leaf_shaders));
-    let leaf_shaders = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../manifold-nodes-scene/src");
-    assert!(leaf_shaders.is_dir(), "manifold-nodes-scene shader directory must exist");
+    let leaf_shaders =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../manifold-nodes-scene/src");
+    assert!(
+        leaf_shaders.is_dir(),
+        "manifold-nodes-scene shader directory must exist"
+    );
     files.extend(find_wgsl_files(&leaf_shaders));
-    let leaf_shaders = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../manifold-nodes-image/src");
-    assert!(leaf_shaders.is_dir(), "manifold-nodes-image shader directory must exist");
+    let leaf_shaders =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../manifold-nodes-image/src");
+    assert!(
+        leaf_shaders.is_dir(),
+        "manifold-nodes-image shader directory must exist"
+    );
     files.extend(find_wgsl_files(&leaf_shaders));
-    let shared_shaders = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../manifold-node-engine/src/gpu/shaders");
-    assert!(shared_shaders.is_dir(), "engine shared shader directory must exist");
+    let shared_shaders =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../manifold-node-engine/src/gpu/shaders");
+    assert!(
+        shared_shaders.is_dir(),
+        "engine shared shader directory must exist"
+    );
     files.extend(find_wgsl_files(&shared_shaders));
     assert!(
         !files.is_empty(),
@@ -168,8 +197,14 @@ fn all_wgsl_shaders_validate() {
             None => source,
         };
         let source = if path.file_name().is_some_and(|name| {
-            ["gpu_flip_step.wgsl", "liquid_stats.wgsl", "particle_publication.wgsl", "liquid_frame_faces.wgsl"]
-                .iter().any(|shader| name == *shader)
+            [
+                "gpu_flip_step.wgsl",
+                "liquid_stats.wgsl",
+                "particle_publication.wgsl",
+                "liquid_frame_faces.wgsl",
+            ]
+            .iter()
+            .any(|shader| name == *shader)
         }) {
             manifold_water_liquid::primitives::liquid_stats::with_stats_layout(&source)
         } else {

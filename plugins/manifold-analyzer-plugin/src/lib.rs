@@ -112,14 +112,17 @@ impl Plugin for ManifoldAnalyzer {
         let fft_size = self.params.fft_size.value().samples();
         self.current_fft_size = fft_size;
         self.gui_shared.resize_stereo_mailboxes(fft_size);
-        self.stereo = FFT_SIZES.iter().map(|&size| {
-            let mut stereo = StereoAnalyzer::new(buffer_config.sample_rate, size);
-            stereo.set_overlap_ratio(OVERLAP_RATIO);
-            stereo.set_attack_release_ms(ATTACK_MS, RELEASE_MS);
-            stereo.set_correlation_smoothing_ms(STEREO_CORR_SMOOTH_MS);
-            stereo.set_balance_smoothing_ms(STEREO_BALANCE_SMOOTH_MS);
-            stereo
-        }).collect();
+        self.stereo = FFT_SIZES
+            .iter()
+            .map(|&size| {
+                let mut stereo = StereoAnalyzer::new(buffer_config.sample_rate, size);
+                stereo.set_overlap_ratio(OVERLAP_RATIO);
+                stereo.set_attack_release_ms(ATTACK_MS, RELEASE_MS);
+                stereo.set_correlation_smoothing_ms(STEREO_CORR_SMOOTH_MS);
+                stereo.set_balance_smoothing_ms(STEREO_BALANCE_SMOOTH_MS);
+                stereo
+            })
+            .collect();
         let max_block = buffer_config.max_buffer_size as usize;
         self.left_scratch = vec![0.0; max_block];
         self.right_scratch = vec![0.0; max_block];
@@ -133,7 +136,10 @@ impl Plugin for ManifoldAnalyzer {
         self.loudness = Some(meter);
         self.gui_shared.request_loudness_reset();
         self.last_loudness_reset_epoch = self.gui_shared.loudness_reset_epoch();
-        self.loudness.as_mut().unwrap().set_generation(self.last_loudness_reset_epoch);
+        self.loudness
+            .as_mut()
+            .unwrap()
+            .set_generation(self.last_loudness_reset_epoch);
         self.gui_shared.advance_audio_generation();
         if self.loudness_worker.is_none() {
             self.loudness_worker = Some(LoudnessWorker::spawn(self.gui_shared.clone()));
@@ -145,7 +151,9 @@ impl Plugin for ManifoldAnalyzer {
     }
 
     fn reset(&mut self) {
-        for s in &mut self.stereo { s.reset(); }
+        for s in &mut self.stereo {
+            s.reset();
+        }
         self.gui_shared.request_loudness_reset();
         self.gui_shared.advance_audio_generation();
         self.last_loudness_reset_epoch = self.gui_shared.loudness_reset_epoch();
@@ -171,17 +179,33 @@ impl Plugin for ManifoldAnalyzer {
             self.total_pushed_samples,
         );
 
-        self.process_audio(buffer, self.params.fft_size.value().samples(),
-            self.params.editor_state.is_open(), transport.tempo, transport.pos_beats())
+        self.process_audio(
+            buffer,
+            self.params.fft_size.value().samples(),
+            self.params.editor_state.is_open(),
+            transport.tempo,
+            transport.pos_beats(),
+        )
     }
 }
 
 impl ManifoldAnalyzer {
     /// The audio callback body, independent of host callbacks for headless proofs.
-    fn process_audio(&mut self, buffer: &mut Buffer, desired_fft: usize,
-        visual_open: bool, bpm: Option<f64>, beat: Option<f64>) -> ProcessStatus {
-        let index = FFT_SIZES.iter().position(|&size| size == desired_fft).unwrap_or(1);
-        let Some(stereo) = self.stereo.get_mut(index) else { return ProcessStatus::Normal; };
+    fn process_audio(
+        &mut self,
+        buffer: &mut Buffer,
+        desired_fft: usize,
+        visual_open: bool,
+        bpm: Option<f64>,
+        beat: Option<f64>,
+    ) -> ProcessStatus {
+        let index = FFT_SIZES
+            .iter()
+            .position(|&size| size == desired_fft)
+            .unwrap_or(1);
+        let Some(stereo) = self.stereo.get_mut(index) else {
+            return ProcessStatus::Normal;
+        };
         if desired_fft != self.current_fft_size || (visual_open && !self.visual_was_open) {
             stereo.reset();
             self.gui_shared.resize_stereo_mailboxes(desired_fft);
@@ -233,11 +257,10 @@ impl ManifoldAnalyzer {
         // correlation all derived in one pass. Publish the active mailboxes
         // on a completed frame.
         if visual_open && stereo.push_stereo(&self.left_scratch[..i], &self.right_scratch[..i]) {
+            self.gui_shared.try_publish_mid_db(stereo.latest_mid_db());
+            self.gui_shared.try_publish_side_db(stereo.latest_side_db());
             self.gui_shared
-                .try_publish_mid_db(stereo.latest_mid_db());
-            self.gui_shared
-                .try_publish_side_db(stereo.latest_side_db());
-            self.gui_shared.try_publish_median_db(stereo.latest_median_db());
+                .try_publish_median_db(stereo.latest_median_db());
             self.gui_shared
                 .try_publish_left_balance_db(stereo.latest_left_balance_db());
             self.gui_shared
@@ -253,10 +276,16 @@ impl ManifoldAnalyzer {
             let beat = beat.unwrap_or(f64::NAN);
             for k in 0..i {
                 if !self.gui_shared.sample_ring.push(StereoSample {
-                    left: self.left_scratch[k], right: self.right_scratch[k],
-                    index: self.total_pushed_samples + k as u64, generation, sample_rate,
-                    beat: beat + k as f64 * bpm / (60.0 * sample_rate as f64), bpm,
-                }) { break; }
+                    left: self.left_scratch[k],
+                    right: self.right_scratch[k],
+                    index: self.total_pushed_samples + k as u64,
+                    generation,
+                    sample_rate,
+                    beat: beat + k as f64 * bpm / (60.0 * sample_rate as f64),
+                    bpm,
+                }) {
+                    break;
+                }
             }
         }
         // Advance across rejected/hidden samples too, exposing discontinuities.
@@ -281,38 +310,75 @@ mod tests {
     use std::cell::Cell;
     thread_local! { static ALLOCATIONS: Cell<Option<usize>> = const { Cell::new(None) }; }
     struct TrackedAllocator;
-    #[global_allocator] static ALLOCATOR: TrackedAllocator = TrackedAllocator;
-    fn record() { let _ = ALLOCATIONS.try_with(|cell| { if let Some(n) = cell.get() { cell.set(Some(n + 1)); } }); }
+    #[global_allocator]
+    static ALLOCATOR: TrackedAllocator = TrackedAllocator;
+    fn record() {
+        let _ = ALLOCATIONS.try_with(|cell| {
+            if let Some(n) = cell.get() {
+                cell.set(Some(n + 1));
+            }
+        });
+    }
     unsafe impl GlobalAlloc for TrackedAllocator {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 { record(); unsafe { System.alloc(layout) } }
-        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) { record(); unsafe { System.dealloc(ptr, layout) } }
-        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 { record(); unsafe { System.realloc(ptr, layout, size) } }
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            record();
+            unsafe { System.alloc(layout) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            record();
+            unsafe { System.dealloc(ptr, layout) }
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            record();
+            unsafe { System.realloc(ptr, layout, size) }
+        }
     }
     struct Init;
     impl InitContext<ManifoldAnalyzer> for Init {
-        fn plugin_api(&self) -> PluginApi { PluginApi::Vst3 }
+        fn plugin_api(&self) -> PluginApi {
+            PluginApi::Vst3
+        }
         fn execute(&self, _: ()) {}
         fn set_latency_samples(&self, _: u32) {}
         fn set_current_voice_capacity(&self, _: u32) {}
     }
     fn initialize(plugin: &mut ManifoldAnalyzer, rate: f32) {
-        assert!(plugin.initialize(&ManifoldAnalyzer::AUDIO_IO_LAYOUTS[0], &BufferConfig {
-            sample_rate: rate, min_buffer_size: Some(32), max_buffer_size: 512,
-            process_mode: ProcessMode::Realtime,
-        }, &mut Init));
+        assert!(plugin.initialize(
+            &ManifoldAnalyzer::AUDIO_IO_LAYOUTS[0],
+            &BufferConfig {
+                sample_rate: rate,
+                min_buffer_size: Some(32),
+                max_buffer_size: 512,
+                process_mode: ProcessMode::Realtime,
+            },
+            &mut Init
+        ));
     }
     #[test]
     fn callback_fft_switches_are_allocation_free_and_audio_is_unchanged() {
-        let mut plugin = ManifoldAnalyzer::default(); initialize(&mut plugin, 48000.0);
-        let left = [0.125;512]; let right = [-0.25;512];
+        let mut plugin = ManifoldAnalyzer::default();
+        initialize(&mut plugin, 48000.0);
+        let left = [0.125; 512];
+        let right = [-0.25; 512];
         for &fft in &FFT_SIZES {
-            let mut l=left; let mut r=right; let mut buffer=Buffer::default();
-            unsafe { buffer.set_slices(512, |v| { v.push(&mut l);v.push(&mut r); }); }
+            let mut l = left;
+            let mut r = right;
+            let mut buffer = Buffer::default();
+            unsafe {
+                buffer.set_slices(512, |v| {
+                    v.push(&mut l);
+                    v.push(&mut r);
+                });
+            }
             ALLOCATIONS.with(|a| a.set(Some(0)));
-            for _ in 0..8 { plugin.process_audio(&mut buffer, fft, true, Some(120.0), Some(0.0)); }
-            let count=ALLOCATIONS.with(|a| a.replace(None)).unwrap();
-            assert_eq!(count,0,"alloc/free during FFT switch {fft}");
-            drop(buffer); assert_eq!(l,left);assert_eq!(r,right);
+            for _ in 0..8 {
+                plugin.process_audio(&mut buffer, fft, true, Some(120.0), Some(0.0));
+            }
+            let count = ALLOCATIONS.with(|a| a.replace(None)).unwrap();
+            assert_eq!(count, 0, "alloc/free during FFT switch {fft}");
+            drop(buffer);
+            assert_eq!(l, left);
+            assert_eq!(r, right);
         }
     }
     #[test]
@@ -334,18 +400,32 @@ mod tests {
 
     #[test]
     fn closed_editor_keeps_loudness_and_rate_reset_starts_new_generation() {
-        let mut plugin=ManifoldAnalyzer::default();initialize(&mut plugin,48000.0);
-        let mut l=[0.25;512];let mut r=l;let mut buffer=Buffer::default();
-        unsafe {buffer.set_slices(512,|v|{v.push(&mut l);v.push(&mut r);});}
-        plugin.process_audio(&mut buffer,4096,false,None,None);
-        assert!(plugin.gui_shared.loudness().elapsed_secs>0.0);
-        let mut samples=Vec::new();plugin.gui_shared.sample_ring.drain_into(&mut samples);assert!(samples.is_empty());
-        let old=plugin.gui_shared.loudness_reset_epoch();
-        plugin.reset();assert_ne!(old,plugin.gui_shared.loudness_reset_epoch());
-        assert_eq!(plugin.gui_shared.loudness().elapsed_secs,0.0);
-        initialize(&mut plugin,44100.0);
-        plugin.process_audio(&mut buffer,4096,true,Some(120.0),Some(4.0));
+        let mut plugin = ManifoldAnalyzer::default();
+        initialize(&mut plugin, 48000.0);
+        let mut l = [0.25; 512];
+        let mut r = l;
+        let mut buffer = Buffer::default();
+        unsafe {
+            buffer.set_slices(512, |v| {
+                v.push(&mut l);
+                v.push(&mut r);
+            });
+        }
+        plugin.process_audio(&mut buffer, 4096, false, None, None);
+        assert!(plugin.gui_shared.loudness().elapsed_secs > 0.0);
+        let mut samples = Vec::new();
         plugin.gui_shared.sample_ring.drain_into(&mut samples);
-        assert!(samples.iter().all(|s|s.sample_rate==44100.0&&s.generation==plugin.gui_shared.audio_generation()));
+        assert!(samples.is_empty());
+        let old = plugin.gui_shared.loudness_reset_epoch();
+        plugin.reset();
+        assert_ne!(old, plugin.gui_shared.loudness_reset_epoch());
+        assert_eq!(plugin.gui_shared.loudness().elapsed_secs, 0.0);
+        initialize(&mut plugin, 44100.0);
+        plugin.process_audio(&mut buffer, 4096, true, Some(120.0), Some(4.0));
+        plugin.gui_shared.sample_ring.drain_into(&mut samples);
+        assert!(samples
+            .iter()
+            .all(|s| s.sample_rate == 44100.0
+                && s.generation == plugin.gui_shared.audio_generation()));
     }
 }

@@ -98,9 +98,12 @@ impl Primitive for MuxScalar {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_node_engine::primitives::value::Value;
-    use manifold_node_engine::{exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::execution_plan::compile};
     use manifold_core::{Beats, Seconds};
+    use manifold_node_engine::primitives::value::Value;
+    use manifold_node_engine::{
+        exec::effect_node::FrameTime, exec::execution::Executor, exec::execution_plan::compile,
+        graph::Graph,
+    };
 
     fn frame_time() -> FrameTime {
         FrameTime {

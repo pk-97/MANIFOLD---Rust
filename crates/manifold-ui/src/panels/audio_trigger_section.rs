@@ -24,26 +24,25 @@
 //! `ParamCardPanel` has with its drawer builder (builder = visuals + the
 //! slider's reset action; click/drag resolution = caller-owned).
 
-use crate::{AudioSetupAction, ScrubValue, ValueRef};
-#[cfg(test)]
-use crate::ScrubPhase;
 use super::drawer::DrawerIds;
 use super::param_slider_shared::{
-    AUDIO_ATTACK_DEFAULT_MS, AUDIO_MOD_ACTIVE_C32, AUDIO_RELEASE_DEFAULT_MS,
-    AudioRowState, AudioSendChoice, DRAWER_BOTTOM_GAP, FONT_SIZE, LENGTH_OPTIONS,
-    ParamModState, ROW_HEIGHT,
+    AUDIO_ATTACK_DEFAULT_MS, AUDIO_MOD_ACTIVE_C32, AUDIO_RELEASE_DEFAULT_MS, AudioRowState,
+    AudioSendChoice, DRAWER_BOTTOM_GAP, FONT_SIZE, LENGTH_OPTIONS, ParamModState, ROW_HEIGHT,
     audio_band_from_index, audio_kind_from_index, build_clip_trigger_drawer,
     clip_trigger_drawer_height, de_btn_style, toggle_btn_style,
 };
+use super::scrub::ScrubGesture;
 use super::{AudioShapeParam, PanelAction};
+#[cfg(test)]
+use crate::ScrubPhase;
 use crate::chrome::{Align, ChromeHost, Sizing, View};
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, TrackSpan};
 use crate::tree::UITree;
 use crate::types::AudioFeature;
+use crate::{AudioSetupAction, ScrubValue, ValueRef};
 use manifold_foundation::{AudioSendId, LayerId};
-use super::scrub::ScrubGesture;
 
 const HEADER_ROW_H: f32 = 22.0;
 const ADD_ROW_H: f32 = 22.0;
@@ -160,7 +159,9 @@ impl AudioTriggerSection {
 
     /// Returns whether a row was there to toggle.
     pub fn toggle_row_expanded(&mut self, index: usize) -> bool {
-        let Some(e) = self.expanded.get_mut(index) else { return false };
+        let Some(e) = self.expanded.get_mut(index) else {
+            return false;
+        };
         *e = !*e;
         true
     }
@@ -213,15 +214,15 @@ impl AudioTriggerSection {
         // trigger never shows are filled with their defaults — inert here:
         // no row displays them and no gesture writes them.
         let audio_rows = config.rows.iter().map(|r| AudioRowState {
-                    active: r.enabled,
-                    send_id: r.send_id.clone(),
-                    kind_idx: r.kind_idx,
-                    band_idx: r.band_idx,
-                    sensitivity: r.sensitivity,
-                    attack_ms: AUDIO_ATTACK_DEFAULT_MS,
-                    release_ms: AUDIO_RELEASE_DEFAULT_MS,
-                    ..Default::default()
-                });
+            active: r.enabled,
+            send_id: r.send_id.clone(),
+            kind_idx: r.kind_idx,
+            band_idx: r.band_idx,
+            sensitivity: r.sensitivity,
+            attack_ms: AUDIO_ATTACK_DEFAULT_MS,
+            release_ms: AUDIO_RELEASE_DEFAULT_MS,
+            ..Default::default()
+        });
         self.mod_state.rebuild(n);
         self.mod_state.sync_audio(audio_rows, &config.sends);
     }
@@ -229,12 +230,23 @@ impl AudioTriggerSection {
     /// Rewrite each row's Sensitivity slider in place (UI_INVALIDATION D22).
     /// `sensitivities` walks `layer`'s clip triggers in order; a different
     /// layer waits for the rebuild.
-    pub fn sync_sensitivities(&mut self, tree: &mut UITree, layer: &LayerId, sensitivities: &mut dyn Iterator<Item = f32>) {
+    pub fn sync_sensitivities(
+        &mut self,
+        tree: &mut UITree,
+        layer: &LayerId,
+        sensitivities: &mut dyn Iterator<Item = f32>,
+    ) {
         if self.layer_id.as_ref() != Some(layer) {
             return;
         }
         let which = AudioShapeParam::Sensitivity;
-        for (i, (row, value)) in self.mod_state.audio_rows.iter_mut().zip(sensitivities).enumerate() {
+        for (i, (row, value)) in self
+            .mod_state
+            .audio_rows
+            .iter_mut()
+            .zip(sensitivities)
+            .enumerate()
+        {
             if row.sensitivity == value {
                 continue;
             }
@@ -261,7 +273,12 @@ impl AudioTriggerSection {
         for i in 0..self.labels.len() {
             h += ROW_HEIGHT + ROW_SPACING;
             if self.expanded.get(i).copied().unwrap_or(false) {
-                let matrix_open = self.mod_state.audio_matrix_open.get(i).copied().unwrap_or(false);
+                let matrix_open = self
+                    .mod_state
+                    .audio_matrix_open
+                    .get(i)
+                    .copied()
+                    .unwrap_or(false);
                 h += clip_trigger_drawer_height(matrix_open) + DRAWER_BOTTOM_GAP + ROW_SPACING;
             }
         }
@@ -286,19 +303,23 @@ impl AudioTriggerSection {
     }
 
     fn chrome_view(&self) -> View {
-        let chevron = View::button(if self.is_collapsed() { "\u{25B6}" } else { "\u{25BC}" })
-            .fixed(CHEVRON_W, CHEVRON_H)
-            .style(UIStyle {
-                bg_color: Color32::TRANSPARENT,
-                hover_bg_color: color::HOVER_OVERLAY,
-                pressed_bg_color: color::PRESS_OVERLAY,
-                text_color: color::CHEVRON_COLOR,
-                font_size: FONT_SIZE,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            })
-            .inert()
-            .key(KEY_CHEVRON);
+        let chevron = View::button(if self.is_collapsed() {
+            "\u{25B6}"
+        } else {
+            "\u{25BC}"
+        })
+        .fixed(CHEVRON_W, CHEVRON_H)
+        .style(UIStyle {
+            bg_color: Color32::TRANSPARENT,
+            hover_bg_color: color::HOVER_OVERLAY,
+            pressed_bg_color: color::PRESS_OVERLAY,
+            text_color: color::CHEVRON_COLOR,
+            font_size: FONT_SIZE,
+            text_align: TextAlign::Center,
+            ..UIStyle::default()
+        })
+        .inert()
+        .key(KEY_CHEVRON);
         let header = View::row(GAP)
             .fill_w()
             .h(Sizing::Fixed(HEADER_ROW_H))
@@ -357,12 +378,18 @@ impl AudioTriggerSection {
                     col = col.child(row_line);
 
                     if expanded {
-                        let matrix_open =
-                            self.mod_state.audio_matrix_open.get(i).copied().unwrap_or(false);
+                        let matrix_open = self
+                            .mod_state
+                            .audio_matrix_open
+                            .get(i)
+                            .copied()
+                            .unwrap_or(false);
                         col = col.child(
                             View::panel()
                                 .fill_w()
-                                .h(Sizing::Fixed(clip_trigger_drawer_height(matrix_open) + DRAWER_BOTTOM_GAP))
+                                .h(Sizing::Fixed(
+                                    clip_trigger_drawer_height(matrix_open) + DRAWER_BOTTOM_GAP,
+                                ))
                                 .key(KEY_ROW_DRAWER_BASE + i as u64),
                         );
                     }
@@ -406,7 +433,9 @@ impl AudioTriggerSection {
                     continue;
                 };
                 let slot = tree.get_bounds(slot_id);
-                let Some(layer_id) = self.layer_id.clone() else { continue };
+                let Some(layer_id) = self.layer_id.clone() else {
+                    continue;
+                };
                 let one_shot = self.one_shot_beats.get(i).copied().unwrap_or(1.0);
                 // Parented under the slot node (a real descendant of this
                 // section's own chrome subtree), not `None` — so the drawer
@@ -436,7 +465,8 @@ impl AudioTriggerSection {
 
     /// Whether `node_id` is one of the nodes this section's latest live build made.
     pub fn owns_node(&self, tree: &UITree, node_id: NodeId) -> bool {
-        self.first_node.is_some_and(|first| tree.range_owns(first, self.node_count, node_id))
+        self.first_node
+            .is_some_and(|first| tree.range_owns(first, self.node_count, node_id))
     }
 
     // ── Click resolution ─────────────────────────────────────────────
@@ -445,8 +475,18 @@ impl AudioTriggerSection {
     /// for clicks that change one axis and keep the other.
     fn current_feature(&self, i: usize) -> AudioFeature {
         AudioFeature::new(
-            audio_kind_from_index(self.mod_state.audio_rows.get(i).map_or(0, |row| row.kind_idx) as usize),
-            audio_band_from_index(self.mod_state.audio_rows.get(i).map_or(0, |row| row.band_idx) as usize),
+            audio_kind_from_index(
+                self.mod_state
+                    .audio_rows
+                    .get(i)
+                    .map_or(0, |row| row.kind_idx) as usize,
+            ),
+            audio_band_from_index(
+                self.mod_state
+                    .audio_rows
+                    .get(i)
+                    .map_or(0, |row| row.band_idx) as usize,
+            ),
         )
     }
 
@@ -455,34 +495,52 @@ impl AudioTriggerSection {
         if idx < 0 {
             return None;
         }
-        self.mod_state.audio_sends.get(idx as usize).map(|send| send.id.clone())
+        self.mod_state
+            .audio_sends
+            .get(idx as usize)
+            .map(|send| send.id.clone())
     }
 
     pub fn handle_click(&mut self, node_id: NodeId) -> Vec<PanelAction> {
         if self.host.node_id_for_key(KEY_CHEVRON) == Some(node_id) {
-            return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerSectionToggle)];
+            return vec![PanelAction::AudioSetup(
+                AudioSetupAction::AudioTriggerSectionToggle,
+            )];
         }
-        let Some(layer_id) = self.layer_id.clone() else { return Vec::new() };
+        let Some(layer_id) = self.layer_id.clone() else {
+            return Vec::new();
+        };
 
         if self.host.node_id_for_key(KEY_ADD_BTN) == Some(node_id) {
-            return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerAdd(layer_id))];
+            return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerAdd(
+                layer_id,
+            ))];
         }
         for i in 0..self.labels.len() {
             if self.host.node_id_for_key(KEY_ROW_TOGGLE_BASE + i as u64) == Some(node_id) {
-                return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerEnabledToggle(layer_id, i))];
+                return vec![PanelAction::AudioSetup(
+                    AudioSetupAction::AudioTriggerEnabledToggle(layer_id, i),
+                )];
             }
             if self.host.node_id_for_key(KEY_ROW_LABEL_BASE + i as u64) == Some(node_id) {
-                return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerRowExpandToggle(layer_id, i))];
+                return vec![PanelAction::AudioSetup(
+                    AudioSetupAction::AudioTriggerRowExpandToggle(layer_id, i),
+                )];
             }
             if self.host.node_id_for_key(KEY_ROW_REMOVE_BASE + i as u64) == Some(node_id) {
-                return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerRemove(layer_id, i))];
+                return vec![PanelAction::AudioSetup(
+                    AudioSetupAction::AudioTriggerRemove(layer_id, i),
+                )];
             }
         }
 
         // Drawer button clicks resolve through retained semantic actions.
         for (i, cfg) in self.audio_configs.iter().enumerate() {
             let Some((dids, _)) = cfg else { continue };
-            if let Some(crate::panels::PanelAction::Root(crate::RootAction::ClipTriggerDrawerClick(_, _, click))) = dids.resolve_action(node_id).cloned() {
+            if let Some(crate::panels::PanelAction::Root(
+                crate::RootAction::ClipTriggerDrawerClick(_, _, click),
+            )) = dids.resolve_action(node_id).cloned()
+            {
                 return self.drawer_action(&layer_id, i, &click);
             }
         }
@@ -490,31 +548,80 @@ impl AudioTriggerSection {
         Vec::new()
     }
 
-    pub fn drawer_action(&mut self, layer_id: &LayerId, i: usize, click: &crate::panels::ClipTriggerDrawerClick) -> Vec<PanelAction> {
-        if self.layer_id.as_ref() != Some(layer_id) || i >= self.audio_configs.len() { return Vec::new(); }
+    pub fn drawer_action(
+        &mut self,
+        layer_id: &LayerId,
+        i: usize,
+        click: &crate::panels::ClipTriggerDrawerClick,
+    ) -> Vec<PanelAction> {
+        if self.layer_id.as_ref() != Some(layer_id) || i >= self.audio_configs.len() {
+            return Vec::new();
+        }
         let feature = self.current_feature(i);
         match click {
             crate::panels::ClipTriggerDrawerClick::Send(k) => {
-                let Some(send_id) = self.mod_state.audio_sends.get(*k).map(|send| send.id.clone()) else { return vec![] };
-                vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerSetSource(layer_id.clone(), i, send_id, feature))]
+                let Some(send_id) = self
+                    .mod_state
+                    .audio_sends
+                    .get(*k)
+                    .map(|send| send.id.clone())
+                else {
+                    return vec![];
+                };
+                vec![PanelAction::AudioSetup(
+                    AudioSetupAction::AudioTriggerSetSource(layer_id.clone(), i, send_id, feature),
+                )]
             }
             crate::panels::ClipTriggerDrawerClick::Feature(f) => {
-                let Some(send_id) = self.current_send_id(i) else { return vec![] };
-                vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerSetSource(layer_id.clone(), i, send_id, *f))]
+                let Some(send_id) = self.current_send_id(i) else {
+                    return vec![];
+                };
+                vec![PanelAction::AudioSetup(
+                    AudioSetupAction::AudioTriggerSetSource(layer_id.clone(), i, send_id, *f),
+                )]
             }
             crate::panels::ClipTriggerDrawerClick::Custom => {
-                if let Some(open) = self.mod_state.audio_matrix_open.get_mut(i) { *open = !*open; }
-                vec![PanelAction::Params(crate::ParamsAction::ModConfigTabChanged)]
+                if let Some(open) = self.mod_state.audio_matrix_open.get_mut(i) {
+                    *open = !*open;
+                }
+                vec![PanelAction::Params(
+                    crate::ParamsAction::ModConfigTabChanged,
+                )]
             }
             crate::panels::ClipTriggerDrawerClick::Kind(k) => {
-                let Some(send_id) = self.current_send_id(i) else { return vec![] };
-                vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerSetSource(layer_id.clone(), i, send_id, AudioFeature::new(audio_kind_from_index(*k), feature.band)))]
+                let Some(send_id) = self.current_send_id(i) else {
+                    return vec![];
+                };
+                vec![PanelAction::AudioSetup(
+                    AudioSetupAction::AudioTriggerSetSource(
+                        layer_id.clone(),
+                        i,
+                        send_id,
+                        AudioFeature::new(audio_kind_from_index(*k), feature.band),
+                    ),
+                )]
             }
             crate::panels::ClipTriggerDrawerClick::Band(b) => {
-                let Some(send_id) = self.current_send_id(i) else { return vec![] };
-                vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerSetSource(layer_id.clone(), i, send_id, AudioFeature::new(feature.kind, audio_band_from_index(*b))))]
+                let Some(send_id) = self.current_send_id(i) else {
+                    return vec![];
+                };
+                vec![PanelAction::AudioSetup(
+                    AudioSetupAction::AudioTriggerSetSource(
+                        layer_id.clone(),
+                        i,
+                        send_id,
+                        AudioFeature::new(feature.kind, audio_band_from_index(*b)),
+                    ),
+                )]
             }
-            crate::panels::ClipTriggerDrawerClick::Length(l) => LENGTH_OPTIONS.get(*l).map(|v| vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerSetLength(layer_id.clone(), i, *v))]).unwrap_or_default(),
+            crate::panels::ClipTriggerDrawerClick::Length(l) => LENGTH_OPTIONS
+                .get(*l)
+                .map(|v| {
+                    vec![PanelAction::AudioSetup(
+                        AudioSetupAction::AudioTriggerSetLength(layer_id.clone(), i, *v),
+                    )]
+                })
+                .unwrap_or_default(),
         }
     }
 
@@ -524,7 +631,9 @@ impl AudioTriggerSection {
     // index and emitting `AudioTrigger*` instead of `AudioMod*`.
 
     pub fn handle_press(&mut self, node_id: NodeId, pos_x: f32, tree: &UITree) -> Vec<PanelAction> {
-        let Some(layer_id) = self.layer_id.clone() else { return Vec::new() };
+        let Some(layer_id) = self.layer_id.clone() else {
+            return Vec::new();
+        };
         for (i, cfg) in self.audio_configs.iter().enumerate() {
             let Some((dids, _)) = cfg else { continue };
             if let Some(sl) = dids.sliders.first()
@@ -537,11 +646,7 @@ impl AudioTriggerSection {
                     norm,
                 );
                 let begin = self.dragging_shape.begin(
-                    ValueRef::AudioTriggerShape(
-                        layer_id,
-                        i,
-                        AudioShapeParam::Sensitivity,
-                    ),
+                    ValueRef::AudioTriggerShape(layer_id, i, AudioShapeParam::Sensitivity),
                     (i, AudioShapeParam::Sensitivity),
                     Vec2::new(pos_x, 0.0),
                 );
@@ -615,14 +720,16 @@ impl AudioTriggerSection {
         fire_level: &dyn Fn(u64) -> Option<f32>,
         dt: f32,
     ) {
-        let Some(layer_id) = self.layer_id.as_ref() else { return };
+        let Some(layer_id) = self.layer_id.as_ref() else {
+            return;
+        };
         for (i, cfg) in self.audio_configs.iter().enumerate() {
             let Some((dids, _)) = cfg else { continue };
-            let Some(Some(meter)) = dids.meters.first() else { continue };
-            let key = manifold_foundation::fire_meter_key_for_clip_trigger(
-                layer_id.as_str(),
-                i as u64,
-            );
+            let Some(Some(meter)) = dids.meters.first() else {
+                continue;
+            };
+            let key =
+                manifold_foundation::fire_meter_key_for_clip_trigger(layer_id.as_str(), i as u64);
             let level = fire_level(key).unwrap_or(0.0);
             meter.update(tree, level, AUDIO_MOD_ACTIVE_C32, dt);
         }
@@ -644,13 +751,20 @@ impl AudioTriggerSection {
         if idx < 0 {
             return None;
         }
-        self.mod_state.audio_sends.get(idx as usize).map(|send| send.id.clone())
+        self.mod_state
+            .audio_sends
+            .get(idx as usize)
+            .map(|send| send.id.clone())
     }
 
     /// The band the currently-open clip-trigger drawer is reading, if any.
     pub fn open_fire_mode_drawer_band(&self) -> Option<crate::types::AudioBand> {
         let i = self.open_fire_mode_drawer_row()?;
-        let idx = self.mod_state.audio_rows.get(i).map_or(0, |row| row.band_idx);
+        let idx = self
+            .mod_state
+            .audio_rows
+            .get(i)
+            .map_or(0, |row| row.band_idx);
         crate::types::AudioBand::ALL.get(idx as usize).copied()
     }
 
@@ -672,8 +786,8 @@ impl AudioTriggerSection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::AudioFeatureKind;
     use crate::panels::param_slider_shared::trigger_source_chips;
+    use crate::types::AudioFeatureKind;
 
     // P7 (`docs/UI_WIDGET_UNIFICATION_DESIGN.md`) behavior-pinning test for the
     // `dragging_shape` grab/release lifecycle, written BEFORE migrating the
@@ -695,11 +809,7 @@ mod tests {
 
         // Simulate `handle_press` having grabbed row 2's Sensitivity slider.
         section.dragging_shape.begin(
-            ValueRef::AudioTriggerShape(
-                LayerId::new("layer-1"),
-                2,
-                AudioShapeParam::Sensitivity,
-            ),
+            ValueRef::AudioTriggerShape(LayerId::new("layer-1"), 2, AudioShapeParam::Sensitivity),
             (2, AudioShapeParam::Sensitivity),
             Vec2::ZERO,
         );
@@ -709,7 +819,10 @@ mod tests {
         assert!(!section.is_dragging(), "release must clear the drag");
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            PanelAction::Scrub(ValueRef::AudioTriggerShape(layer_id, row, _), ScrubPhase::Commit) => {
+            PanelAction::Scrub(
+                ValueRef::AudioTriggerShape(layer_id, row, _),
+                ScrubPhase::Commit,
+            ) => {
                 assert_eq!(layer_id, &LayerId::new("layer-1"));
                 assert_eq!(*row, 2);
             }
@@ -726,11 +839,7 @@ mod tests {
     fn release_uses_captured_layer_and_still_clears_after_host_layer_loss() {
         let mut section = AudioTriggerSection::new();
         section.dragging_shape.begin(
-            ValueRef::AudioTriggerShape(
-                LayerId::new("layer-1"),
-                0,
-                AudioShapeParam::Sensitivity,
-            ),
+            ValueRef::AudioTriggerShape(LayerId::new("layer-1"), 0, AudioShapeParam::Sensitivity),
             (0, AudioShapeParam::Sensitivity),
             Vec2::ZERO,
         );
@@ -758,11 +867,7 @@ mod tests {
         let mut section = AudioTriggerSection::new();
         section.layer_id = Some(LayerId::new("layer-1"));
         section.dragging_shape.begin(
-            ValueRef::AudioTriggerShape(
-                LayerId::new("layer-1"),
-                0,
-                AudioShapeParam::Sensitivity,
-            ),
+            ValueRef::AudioTriggerShape(LayerId::new("layer-1"), 0, AudioShapeParam::Sensitivity),
             (0, AudioShapeParam::Sensitivity),
             Vec2::ZERO,
         );
@@ -850,8 +955,8 @@ mod tests {
 
     #[test]
     fn curated_chips_cover_the_onset_cells_and_fall_back_truthfully() {
-        use crate::types::AudioBand;
         use super::super::param_slider_shared::TRIGGER_SOURCE_CHIPS;
+        use crate::types::AudioBand;
         // Every curated cell highlights exactly its own chip.
         for &(label, kind, band) in TRIGGER_SOURCE_CHIPS.iter() {
             let chips = trigger_source_chips(AudioFeature::new(kind, band));
@@ -862,10 +967,12 @@ mod tests {
         }
         // The Kick detector ignores band — a Kick cell on any band still
         // highlights the Kick chip (never a spurious fallback).
-        let chips = trigger_source_chips(AudioFeature::new(AudioFeatureKind::Kick, AudioBand::Full));
+        let chips =
+            trigger_source_chips(AudioFeature::new(AudioFeatureKind::Kick, AudioBand::Full));
         assert_eq!(chips.len(), 5);
         assert!(chips.iter().any(|c| c.active && c.label == "Kick"));
-        let chips = trigger_source_chips(AudioFeature::new(AudioFeatureKind::Snare, AudioBand::Full));
+        let chips =
+            trigger_source_chips(AudioFeature::new(AudioFeatureKind::Snare, AudioBand::Full));
         assert_eq!(chips.len(), 5);
         assert!(chips.iter().any(|c| c.active && c.label == "Snare"));
         // A non-curated cell (an older project's Flux×Mid) keeps a truthful
@@ -892,7 +999,10 @@ mod tests {
                 send_id: Some(manifold_foundation::AudioSendId::new("send-1")),
                 one_shot_beats: 1.0,
             }],
-            sends: vec![AudioSendChoice { label: "Kick".into(), id: manifold_foundation::AudioSendId::new("send-1") }],
+            sends: vec![AudioSendChoice {
+                label: "Kick".into(),
+                id: manifold_foundation::AudioSendId::new("send-1"),
+            }],
         };
         let mut section = AudioTriggerSection::new();
         section.configure(Some(LayerId::new("layer-1")), &config);
@@ -925,14 +1035,23 @@ mod tests {
             sends: Vec::new(),
         };
         let mut section = AudioTriggerSection::new();
-        section.configure(Some(LayerId::new("empty")), &AudioTriggerSectionConfig::default());
+        section.configure(
+            Some(LayerId::new("empty")),
+            &AudioTriggerSectionConfig::default(),
+        );
         assert!(section.is_collapsed());
         section.configure(Some(LayerId::new("armed")), &one_row);
-        assert!(!section.is_collapsed(), "a loaded layer with triggers must show them");
+        assert!(
+            !section.is_collapsed(),
+            "a loaded layer with triggers must show them"
+        );
 
         section.toggle_collapsed();
         assert_eq!(section.collapsed_setting(), Some(true));
         section.configure(Some(LayerId::new("armed")), &one_row);
-        assert!(section.is_collapsed(), "an explicit toggle outlives resyncs");
+        assert!(
+            section.is_collapsed(),
+            "an explicit toggle outlives resyncs"
+        );
     }
 }

@@ -93,11 +93,16 @@ pub(crate) fn contracted_execution_order(
         if !active.contains(&pair.first) || !active.contains(&pair.second) {
             continue;
         }
-        let cycle = || GraphError::CycleDetected { involves: vec![pair.first, pair.second] };
+        let cycle = || GraphError::CycleDetected {
+            involves: vec![pair.first, pair.second],
+        };
         if block_for.contains_key(&pair.first) || block_for.contains_key(&pair.second) {
             return Err(cycle());
         }
-        match (unit_for.get(&pair.first).copied(), unit_for.get(&pair.second).copied()) {
+        match (
+            unit_for.get(&pair.first).copied(),
+            unit_for.get(&pair.second).copied(),
+        ) {
             (None, None) => {
                 unit_for.insert(pair.first, units.len());
                 unit_for.insert(pair.second, units.len());
@@ -108,7 +113,10 @@ pub(crate) fn contracted_execution_order(
                 units[unit].push(pair.second);
             }
             (None, Some(unit)) => {
-                let at = units[unit].iter().position(|&node| node == pair.second).expect("member of its unit");
+                let at = units[unit]
+                    .iter()
+                    .position(|&node| node == pair.second)
+                    .expect("member of its unit");
                 units[unit].insert(at, pair.first);
                 unit_for.insert(pair.first, unit);
             }
@@ -155,7 +163,11 @@ pub(crate) fn contracted_execution_order(
             for &member in &members {
                 group_for.insert(member, group_index);
             }
-            groups.push(ContractedGroup { members, first_position, internal_wires_allowed: false });
+            groups.push(ContractedGroup {
+                members,
+                first_position,
+                internal_wires_allowed: false,
+            });
         } else {
             groups.push(ContractedGroup {
                 members: vec![node],
@@ -236,7 +248,11 @@ pub(crate) fn contracted_execution_order(
         .filter_map(|(pair_index, pair)| {
             let first_step = step_by_node.get(&pair.first).copied()?;
             let second_step = step_by_node.get(&pair.second).copied()?;
-            Some(NodePairSteps { first_step, second_step, pair_index })
+            Some(NodePairSteps {
+                first_step,
+                second_step,
+                pair_index,
+            })
         })
         .collect::<Vec<_>>();
     node_pairs.sort_by_key(|pair| (pair.first_step, pair.second_step));
@@ -315,22 +331,42 @@ pub(crate) mod tests {
     }
 
     impl EffectNode for TestNode {
-        fn type_id(&self) -> &EffectNodeType { &self.type_id }
-        fn inputs(&self) -> &[NodeInput] { &self.inputs }
-        fn outputs(&self) -> &[NodeOutput] { &self.outputs }
-        fn parameters(&self) -> &[crate::parameters::ParamDef] { &[] }
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &self.inputs
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &self.outputs
+        }
+        fn parameters(&self) -> &[crate::parameters::ParamDef] {
+            &[]
+        }
         fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
             crate::scene::depth_rule::DepthRule::Terminal
         }
         fn evaluate(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
-        fn is_liveness_root(&self) -> bool { self.root }
+        fn is_liveness_root(&self) -> bool {
+            self.root
+        }
     }
 
-    fn node(graph: &mut Graph, name: &'static str, inputs: &[&'static str], outputs: &[&'static str]) -> NodeInstanceId {
+    fn node(
+        graph: &mut Graph,
+        name: &'static str,
+        inputs: &[&'static str],
+        outputs: &[&'static str],
+    ) -> NodeInstanceId {
         graph.add_node(Box::new(TestNode::new(name, inputs, outputs)))
     }
 
-    fn root_node(graph: &mut Graph, name: &'static str, inputs: &[&'static str], outputs: &[&'static str]) -> NodeInstanceId {
+    fn root_node(
+        graph: &mut Graph,
+        name: &'static str,
+        inputs: &[&'static str],
+        outputs: &[&'static str],
+    ) -> NodeInstanceId {
         let mut node = TestNode::new(name, inputs, outputs);
         node.root = true;
         graph.add_node(Box::new(node))
@@ -361,8 +397,12 @@ pub(crate) mod tests {
         let second_consumer = node(&mut graph, "second_consumer", &["in"], &[]);
         graph.connect((ancestor, "out"), (first, "in")).unwrap();
         graph.connect((ancestor, "out"), (second, "in")).unwrap();
-        graph.connect((first, "out"), (first_consumer, "in")).unwrap();
-        graph.connect((second, "out"), (second_consumer, "in")).unwrap();
+        graph
+            .connect((first, "out"), (first_consumer, "in"))
+            .unwrap();
+        graph
+            .connect((second, "out"), (second_consumer, "in"))
+            .unwrap();
         pair(&mut graph, first, second);
 
         let full = crate::validation::topological_sort(&graph).unwrap();
@@ -386,12 +426,16 @@ pub(crate) mod tests {
             .unwrap()
             .outputs[0]
             .1;
-        assert!(plan.steps()[pair.second_step]
-            .free_after
-            .contains(&ancestor_resource));
-        assert!(!plan.steps()[pair.first_step]
-            .free_after
-            .contains(&ancestor_resource));
+        assert!(
+            plan.steps()[pair.second_step]
+                .free_after
+                .contains(&ancestor_resource)
+        );
+        assert!(
+            !plan.steps()[pair.first_step]
+                .free_after
+                .contains(&ancestor_resource)
+        );
         for participant in [pair.first_step, pair.second_step] {
             let resource = plan.steps()[participant].outputs[0].1;
             let free_step = plan
@@ -416,7 +460,10 @@ pub(crate) mod tests {
         graph.connect((first, "out"), (second, "in")).unwrap();
         pair(&mut graph, first, second);
         let full = crate::validation::topological_sort(&graph).unwrap();
-        assert!(matches!(execution_order(&graph, &full, false), Err(GraphError::CycleDetected { .. })));
+        assert!(matches!(
+            execution_order(&graph, &full, false),
+            Err(GraphError::CycleDetected { .. })
+        ));
     }
 
     #[test]
@@ -429,7 +476,10 @@ pub(crate) mod tests {
         graph.connect((middle, "out"), (second, "in")).unwrap();
         pair(&mut graph, first, second);
         let full = crate::validation::topological_sort(&graph).unwrap();
-        assert!(matches!(execution_order(&graph, &full, false), Err(GraphError::CycleDetected { .. })));
+        assert!(matches!(
+            execution_order(&graph, &full, false),
+            Err(GraphError::CycleDetected { .. })
+        ));
     }
 
     #[test]
@@ -446,8 +496,10 @@ pub(crate) mod tests {
         assert_eq!(pairs.len(), 2);
         for pair in pairs {
             assert_eq!(pair.second_step, pair.first_step + 1);
-            assert!((order[pair.first_step] == first_a && order[pair.second_step] == second_a)
-                || (order[pair.first_step] == first_b && order[pair.second_step] == second_b));
+            assert!(
+                (order[pair.first_step] == first_a && order[pair.second_step] == second_a)
+                    || (order[pair.first_step] == first_b && order[pair.second_step] == second_b)
+            );
         }
     }
 
@@ -457,8 +509,12 @@ pub(crate) mod tests {
         let ancestor = node(&mut graph, "ancestor", &[], &["out"]);
         let live_first = root_node(&mut graph, "live_first", &["in"], &[]);
         let live_second = node(&mut graph, "live_second", &["in"], &[]);
-        graph.connect((ancestor, "out"), (live_first, "in")).unwrap();
-        graph.connect((ancestor, "out"), (live_second, "in")).unwrap();
+        graph
+            .connect((ancestor, "out"), (live_first, "in"))
+            .unwrap();
+        graph
+            .connect((ancestor, "out"), (live_second, "in"))
+            .unwrap();
 
         let dead_first = node(&mut graph, "dead_first", &[], &[]);
         let dead_second = node(&mut graph, "dead_second", &[], &[]);

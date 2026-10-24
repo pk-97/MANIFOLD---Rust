@@ -74,11 +74,18 @@ impl GpuSpanTimer {
     /// End the open span in the encoder's current command buffer, which the
     /// caller commits before encoding anything that is not the span's.
     pub fn end(&mut self, encoder: &mut GpuEncoder) {
-        let Some(mut buffers) = encoder.span_buffers.take() else { return };
+        let Some(mut buffers) = encoder.span_buffers.take() else {
+            return;
+        };
         buffers.push(encoder.cmd_buf.clone());
         let count = buffers.len();
         for (index, buffer) in buffers.drain(..).enumerate() {
-            self.push(Pending { key: self.key, frame: self.frame, buffer, last: index + 1 == count });
+            self.push(Pending {
+                key: self.key,
+                frame: self.frame,
+                buffer,
+                last: index + 1 == count,
+            });
         }
         self.scratch = buffers;
     }
@@ -99,9 +106,13 @@ impl GpuSpanTimer {
     /// reading stops at the first unfinished one.
     pub fn poll(&mut self, mut each: impl FnMut(u64, u64, f64)) {
         while self.len > 0 {
-            let Some(pending) = &self.pending[self.oldest] else { break };
+            let Some(pending) = &self.pending[self.oldest] else {
+                break;
+            };
             let status = unsafe { pending.buffer.status() };
-            if status != MTLCommandBufferStatus::Completed && status != MTLCommandBufferStatus::Error {
+            if status != MTLCommandBufferStatus::Completed
+                && status != MTLCommandBufferStatus::Error
+            {
                 break;
             }
             let pending = self.pending[self.oldest].take().expect("checked above");
@@ -111,7 +122,8 @@ impl GpuSpanTimer {
                 self.longest = f64::INFINITY;
             } else {
                 // A buffer that never ran reports zero times.
-                let (start, end) = unsafe { (pending.buffer.GPUStartTime(), pending.buffer.GPUEndTime()) };
+                let (start, end) =
+                    unsafe { (pending.buffer.GPUStartTime(), pending.buffer.GPUEndTime()) };
                 if start > 0.0 && end >= start && (end - start).is_finite() {
                     self.longest = self.longest.max(end - start);
                 }
@@ -129,7 +141,10 @@ impl GpuSpanTimer {
     /// The frame of the oldest span still on the GPU. Every span of an
     /// earlier frame has been handed out by [`Self::poll`].
     pub fn in_flight_frame(&self) -> Option<u64> {
-        self.pending[self.oldest].as_ref().filter(|_| self.len > 0).map(|pending| pending.frame)
+        self.pending[self.oldest]
+            .as_ref()
+            .filter(|_| self.len > 0)
+            .map(|pending| pending.frame)
     }
 }
 
@@ -162,7 +177,17 @@ mod tests {
             let work = loops.to_ne_bytes();
             encoder.dispatch_compute(
                 &pipeline,
-                &[GpuBinding::Buffer { binding: 0, buffer: &buffer, offset: 0 }, GpuBinding::Bytes { binding: 1, data: &work }],
+                &[
+                    GpuBinding::Buffer {
+                        binding: 0,
+                        buffer: &buffer,
+                        offset: 0,
+                    },
+                    GpuBinding::Bytes {
+                        binding: 1,
+                        data: &work,
+                    },
+                ],
                 [4096, 1, 1],
                 "span",
             );
@@ -180,18 +205,34 @@ mod tests {
         dispatch(&mut encoder, 200);
         committed.push(encoder.cmd_buf.clone());
         timer.end(&mut encoder);
-        assert_eq!(timer.in_flight_frame(), Some(3), "the span's buffers are still pending");
+        assert_eq!(
+            timer.in_flight_frame(),
+            Some(3),
+            "the span's buffers are still pending"
+        );
         encoder.commit_and_wait_completed();
 
-        let each: Vec<f64> = committed.iter().map(|b| unsafe { b.GPUEndTime() - b.GPUStartTime() }).collect();
+        let each: Vec<f64> = committed
+            .iter()
+            .map(|b| unsafe { b.GPUEndTime() - b.GPUStartTime() })
+            .collect();
         let mut spans = Vec::new();
         timer.poll(|key, frame, seconds| spans.push((key, frame, seconds)));
         assert_eq!(spans.len(), 1, "one finished span: {spans:?}");
         assert_eq!((spans[0].0, spans[0].1), (7, 3));
         let longest = each.iter().copied().fold(0.0, f64::max);
-        assert_eq!(spans[0].2, longest, "the span is its longest buffer: {each:?}");
-        assert!(spans[0].2 < each.iter().sum::<f64>(), "never the sum: {each:?}");
-        assert!(spans[0].2 < 0.25, "the 400 ms of CPU pauses never count: {spans:?}");
+        assert_eq!(
+            spans[0].2, longest,
+            "the span is its longest buffer: {each:?}"
+        );
+        assert!(
+            spans[0].2 < each.iter().sum::<f64>(),
+            "never the sum: {each:?}"
+        );
+        assert!(
+            spans[0].2 < 0.25,
+            "the 400 ms of CPU pauses never count: {spans:?}"
+        );
         assert_eq!(timer.in_flight_frame(), None);
         let mut again = 0;
         timer.poll(|_, _, _| again += 1);

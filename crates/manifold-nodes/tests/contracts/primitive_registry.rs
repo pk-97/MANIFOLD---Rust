@@ -6,285 +6,26 @@
 //! flat `node.*` type IDs. The atom/effect split is presentation metadata,
 //! not a structural divide.
 
-
-
 // Standalone staged encoder; the step keeps its existing pressure path.
 #[cfg(test)]
 mod surface_mesh_freeze_tests;
 // Crate-visible so the snapshot builder can key the `(WGSL)` header marker on
 // the canonical `TYPE_ID` rather than a duplicated string literal.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #[cfg(test)]
 mod tests {
     use manifold_node_engine::primitives::mix::Mix;
-use manifold_node_engine::validation::validate;
-use manifold_nodes_image::node_graph::primitives::filter::{Blur, Threshold};
+    use manifold_node_engine::validation::validate;
+    use manifold_nodes_image::node_graph::primitives::filter::{Blur, Threshold};
     use std::collections::HashSet;
 
     use manifold_core::{Beats, Seconds};
 
-    use manifold_node_engine::{exec::effect_node::EffectNode, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, parameters::ParamType, parameters::ParamValue, scene::boundary_nodes::Source, exec::execution_plan::compile};
+    use manifold_node_engine::{
+        exec::effect_node::EffectNode, exec::effect_node::FrameTime, exec::execution::Executor,
+        exec::execution_plan::compile, graph::Graph, parameters::ParamType, parameters::ParamValue,
+        scene::boundary_nodes::FinalOutput, scene::boundary_nodes::Source,
+    };
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -305,7 +46,11 @@ use manifold_nodes_image::node_graph::primitives::filter::{Blur, Threshold};
     }
 
     fn assert_no_violations(rule: &str, violations: &[String]) {
-        assert!(violations.is_empty(), "{rule}:\n  {}", violations.join("\n  "));
+        assert!(
+            violations.is_empty(),
+            "{rule}:\n  {}",
+            violations.join("\n  ")
+        );
     }
 
     /// A saved graph finds its node by the registered id, so the node a
@@ -324,13 +69,17 @@ use manifold_nodes_image::node_graph::primitives::filter::{Blur, Threshold};
         for (type_id, node) in nodes {
             let reported = node.type_id().as_str();
             if reported != type_id && !registered.contains(reported) {
-                violations.push(format!("{type_id}: factory builds an unregistered `{reported}`"));
+                violations.push(format!(
+                    "{type_id}: factory builds an unregistered `{reported}`"
+                ));
             }
             if !seen.insert(type_id) {
                 violations.push(format!("{type_id}: registered twice"));
             }
             if !type_id.starts_with("node.") && !type_id.starts_with("system.") {
-                violations.push(format!("{type_id}: id lacks the `node.` or `system.` prefix"));
+                violations.push(format!(
+                    "{type_id}: id lacks the `node.` or `system.` prefix"
+                ));
             }
             // `system.*` sinks end the graph; `node.__*` are test fixtures.
             let is_atom = type_id.starts_with("node.") && !type_id.starts_with("node.__");
@@ -366,7 +115,9 @@ use manifold_nodes_image::node_graph::primitives::filter::{Blur, Threshold};
                     && let ParamValue::Float(stored) = def.default
                     && def.default.as_scalar() != Some(stored)
                 {
-                    violations.push(format!("{type_id} param `{name}`: Int default does not read back through as_scalar"));
+                    violations.push(format!(
+                        "{type_id} param `{name}`: Int default does not read back through as_scalar"
+                    ));
                 }
                 if let ParamValue::Enum(idx) = def.default
                     && idx as usize >= def.enum_values.len()
@@ -442,10 +193,12 @@ use manifold_nodes_image::node_graph::primitives::filter::{Blur, Threshold};
                         "{type_id}: {:?} param `{name}` must not be port-shadowed",
                         def.ty
                     )),
-                    Some(scalar) if port.ty != PortType::Scalar(scalar) => violations.push(format!(
-                        "{type_id}: shadow input `{name}` is {:?}, param wants {scalar:?}",
-                        port.ty
-                    )),
+                    Some(scalar) if port.ty != PortType::Scalar(scalar) => {
+                        violations.push(format!(
+                            "{type_id}: shadow input `{name}` is {:?}, param wants {scalar:?}",
+                            port.ty
+                        ))
+                    }
                     Some(_) => {}
                 }
             }
@@ -456,12 +209,16 @@ use manifold_nodes_image::node_graph::primitives::filter::{Blur, Threshold};
                 }
                 unbounded_seen += 1;
                 if def.range.is_some() {
-                    violations.push(format!("{type_id}: winding angle `{name}` must be unbounded"));
+                    violations.push(format!(
+                        "{type_id}: winding angle `{name}` must be unbounded"
+                    ));
                 }
             }
         }
         if unbounded_seen != UNBOUNDED_WINDING_ANGLES.len() {
-            violations.push("an UNBOUNDED_WINDING_ANGLES entry names a param that no longer exists".into());
+            violations.push(
+                "an UNBOUNDED_WINDING_ANGLES entry names a param that no longer exists".into(),
+            );
         }
         assert_no_violations("port-shadow violations", &violations);
     }
@@ -597,7 +354,3 @@ use manifold_nodes_image::node_graph::primitives::filter::{Blur, Threshold};
         assert!(g.set_param(id, "missing", ParamValue::Float(0.0)).is_err());
     }
 }
-
-
-
-

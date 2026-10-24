@@ -15,28 +15,30 @@
 //! v1, never baked constants). The generated WGSL text is the cross-session
 //! pipeline-cache key, so determinism is load-bearing.
 
-mod types;
-mod params_struct;
-mod uniforms;
+#[cfg(test)]
+mod dispatch_contract_tests;
 mod entry_points;
-mod standalone;
 mod fused;
 mod fused_buffer;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests;
-#[cfg(test)]
-mod dispatch_contract_tests;
+mod params_struct;
+mod standalone;
+mod types;
+mod uniforms;
 
 pub use fused::generate_fused;
 pub(crate) use fused::rename_ident;
 
-pub use standalone::{generate_standalone, StandaloneKernelSpec};
+pub use standalone::{StandaloneKernelSpec, generate_standalone};
 
 pub use entry_points::{
-    standalone_for_boundary_spec, standalone_for_node, standalone_for_spec,
-    standalone_for_spec_fmt,
+    standalone_for_boundary_spec, standalone_for_node, standalone_for_spec, standalone_for_spec_fmt,
 };
 
 pub use types::wgsl_storage_token;
-pub use types::{CodegenError, ENTRY, FusedVirtualChain, FusionRegion, GeneratedFusion, InputSource, RegionNode, VOLUME_WORKGROUP_3D};
+pub use types::{
+    CodegenError, ENTRY, FusedVirtualChain, FusionRegion, GeneratedFusion, InputSource, RegionNode,
+    VOLUME_WORKGROUP_3D,
+};
 pub(crate) use types::{param_is_fusable, param_wgsl_type, wgsl_safe_field};

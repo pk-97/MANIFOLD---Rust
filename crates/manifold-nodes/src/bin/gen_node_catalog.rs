@@ -70,9 +70,7 @@ fn main() {
             drift = true;
         }
         if drift {
-            println!(
-                "\nout of sync — run `cargo run -p manifold-nodes --bin gen_node_catalog`"
-            );
+            println!("\nout of sync — run `cargo run -p manifold-nodes --bin gen_node_catalog`");
             std::process::exit(1);
         }
         println!("node catalog in sync");

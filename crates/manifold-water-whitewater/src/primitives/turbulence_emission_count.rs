@@ -7,11 +7,11 @@
 
 use std::borrow::Cow;
 
-use manifold_water_liquid::float_param;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
+use manifold_water_liquid::float_param;
 
 /// FLIP's wavecrest emission rate, particles per second at full potential.
 pub(crate) const WAVECREST_RATE: f32 = 175.0;

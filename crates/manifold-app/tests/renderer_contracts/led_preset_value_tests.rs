@@ -16,19 +16,19 @@ use manifold_nodes as _;
 use std::sync::Arc;
 
 use half::f16;
+use manifold_compositor::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
+use manifold_compositor::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
+use manifold_compositor::tonemap::TonemapSettings;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::ParamManifest;
 use manifold_core::{BlendMode, LayerId, LayerType};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
-use manifold_compositor::compositor::{Compositor, CompositeLayerDescriptor, CompositorFrame};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
-use manifold_compositor::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
-use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
-use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
-use manifold_compositor::tonemap::TonemapSettings;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 const LED_W: u32 = 8;
 const LED_H: u32 = 120;
@@ -62,8 +62,9 @@ struct LedPresetFixture {
 fn preset_def(id: &str) -> EffectGraphDef {
     // Filename stem = preset id (the bundle contract). Read from disk rather
     // than the catalog so the test pins exactly what ships in this tree.
-    let path = (manifold_nodes::testkit::assets::CATALOG_ASSETS_ROOT.to_owned() + "/generator-presets/")
-    .to_string()
+    let path = (manifold_nodes::testkit::assets::CATALOG_ASSETS_ROOT.to_owned()
+        + "/generator-presets/")
+        .to_string()
         + id
         + ".json";
     let json = std::fs::read_to_string(&path)
@@ -125,8 +126,12 @@ impl LedPresetFixture {
         let mut enc = self.device.create_encoder("led-preset-gen");
         {
             let mut gpu = GpuEncoder::new(&mut enc, &self.device);
-            self.runtime
-                .render(&mut gpu, &self.target.texture, &ctx, &ParamManifest::default());
+            self.runtime.render(
+                &mut gpu,
+                &self.target.texture,
+                &ctx,
+                &ParamManifest::default(),
+            );
         }
         enc.commit_and_wait_completed();
 
@@ -379,11 +384,7 @@ fn step_chase_constant_between_divisions_jumps_at_boundaries() {
         0,
         "head should still sit at column 0 before the boundary (lumas {b:?})"
     );
-    let diff: f32 = a
-        .iter()
-        .zip(b.iter())
-        .map(|(x, y)| (x - y).abs())
-        .sum();
+    let diff: f32 = a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).sum();
     assert!(
         diff < TOL,
         "frames inside one division must be near-identical: summed |delta| {diff}"
@@ -440,9 +441,7 @@ fn burst_flips_at_duty_point_and_retriggers() {
     let tint = luma(tint_rgb(HUE, SAT));
     let mut fx = LedPresetFixture::new("LED Burst");
     // rate=8, duty(attack)=0.3, decay=6. flash(b) = 1 - clamp(fract(8b)/0.3).
-    let flash = |beats: f64| -> f32 {
-        1.0 - (fract(8.0 * beats as f32) / 0.3).clamp(0.0, 1.0)
-    };
+    let flash = |beats: f64| -> f32 { 1.0 - (fract(8.0 * beats as f32) / 0.3).clamp(0.0, 1.0) };
     // Frame 1 arms the envelope (no pulse on first observation).
     let armed = column_lumas(&fx.render_led(0.01, 0));
     assert!(

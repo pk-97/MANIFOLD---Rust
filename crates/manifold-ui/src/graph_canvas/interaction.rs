@@ -21,10 +21,7 @@ pub(crate) enum CanvasDrag {
     Pan { pan_at_grab: (f32, f32) },
     /// Dragging from an output port to draw a wire. On release over an
     /// input port, emits `GraphEditCommand::ConnectPorts`.
-    WireFrom {
-        from_node: u32,
-        from_port: String,
-    },
+    WireFrom { from_node: u32, from_port: String },
     /// Dragging a node by its header. `anchor_offset` is the graph-space
     /// (cursor - node_origin) at button-down so the node doesn't snap
     /// to the cursor on pickup. The undo previous-pos doesn't need a
@@ -166,8 +163,11 @@ impl GraphCanvas {
         if node_ids.is_empty() {
             return;
         }
-        let existing: ahash::AHashSet<&str> =
-            self.nodes.iter().filter_map(|n| n.handle.as_deref()).collect();
+        let existing: ahash::AHashSet<&str> = self
+            .nodes
+            .iter()
+            .filter_map(|n| n.handle.as_deref())
+            .collect();
         let mut i = 1u32;
         let mut handle = format!("group_{i}");
         while existing.contains(handle.as_str()) {
@@ -330,7 +330,12 @@ impl GraphCanvas {
     /// no translation for `OpenMapping` here — the existing popover path
     /// covers it independently). Wire-driven rows are skipped — read-only,
     /// same guard the scrub uses.
-    pub fn on_right_button_down(&mut self, viewport: Rect, sx: f32, sy: f32) -> Option<(u32, usize)> {
+    pub fn on_right_button_down(
+        &mut self,
+        viewport: Rect,
+        sx: f32,
+        sy: f32,
+    ) -> Option<(u32, usize)> {
         // A right-click outside the open popover dismisses it (and is
         // otherwise treated as a fresh hit-test).
         if self.mapping_popover.is_open() && !self.mapping_popover.contains_point(sx, sy) {
@@ -339,7 +344,9 @@ impl GraphCanvas {
         }
         let hit = self.param_row_under(viewport, sx, sy)?;
         let (node_id, pi) = hit;
-        let track_hit = self.param_slider_track_x(viewport, node_id).is_some_and(|track_x| sx >= track_x);
+        let track_hit = self
+            .param_slider_track_x(viewport, node_id)
+            .is_some_and(|track_x| sx >= track_x);
         let wants_reset = track_hit
             && matches!(
                 crate::slider::BitmapSlider::intent_for(
@@ -349,7 +356,9 @@ impl GraphCanvas {
                 Some(crate::slider::SliderIntent::ResetToDefault)
             );
         if wants_reset
-            && let Some(p) = self.find_node(node_id).and_then(|n| n.params.get(pi).cloned())
+            && let Some(p) = self
+                .find_node(node_id)
+                .and_then(|n| n.params.get(pi).cloned())
             && p.scrub.is_some()
             && !p.wire_driven
         {
@@ -361,13 +370,14 @@ impl GraphCanvas {
                     new_value: p.default_value,
                 });
             } else {
-                self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
-                    node_id,
-                    param_name: p.name,
-                    new_value: crate::SerializedParamValue::Float {
-                        value: p.default_value,
-                    },
-                });
+                self.pending_actions
+                    .push(GraphEditCommand::SetGraphNodeParam {
+                        node_id,
+                        param_name: p.name,
+                        new_value: crate::SerializedParamValue::Float {
+                            value: p.default_value,
+                        },
+                    });
             }
             return None;
         }
@@ -425,8 +435,8 @@ impl GraphCanvas {
             (viewport.h - HEADER_HEIGHT).max(0.0),
         );
         self.mapping_popover.open(
-            target, binding_id, label, min, max, invert, curve, scale, offset, range, is_angle, section, anchor,
-            clip,
+            target, binding_id, label, min, max, invert, curve, scale, offset, range, is_angle,
+            section, anchor, clip,
         );
         self.bump_view();
     }
@@ -542,10 +552,7 @@ impl GraphCanvas {
                 let offset = *anchor_offset;
                 let (gx, gy) = self.to_graph(viewport, sx, sy);
                 if let Some(n) = self.nodes.iter_mut().find(|n| n.id == nid) {
-                    n.pos_graph = (
-                        snap_to_grid(gx - offset.0),
-                        snap_to_grid(gy - offset.1),
-                    );
+                    n.pos_graph = (snap_to_grid(gx - offset.0), snap_to_grid(gy - offset.1));
                 }
             }
             CanvasDrag::WireFrom { .. } | CanvasDrag::Marquee => {
@@ -582,11 +589,12 @@ impl GraphCanvas {
                         new_value: v,
                     });
                 } else {
-                    self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
-                        node_id,
-                        param_name,
-                        new_value: crate::SerializedParamValue::Float { value: v },
-                    });
+                    self.pending_actions
+                        .push(GraphEditCommand::SetGraphNodeParam {
+                            node_id,
+                            param_name,
+                            new_value: crate::SerializedParamValue::Float { value: v },
+                        });
                 }
             }
             CanvasDrag::VecScrub {
@@ -612,11 +620,12 @@ impl GraphCanvas {
                 let mut full = base;
                 full[channel] = v;
                 if let Some(new_value) = vec_serialized(kind, full) {
-                    self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
-                        node_id,
-                        param_name,
-                        new_value,
-                    });
+                    self.pending_actions
+                        .push(GraphEditCommand::SetGraphNodeParam {
+                            node_id,
+                            param_name,
+                            new_value,
+                        });
                 }
             }
         }
@@ -625,7 +634,9 @@ impl GraphCanvas {
     /// Begin panning unconditionally (e.g. middle-mouse drag).
     pub fn on_pan_button_down(&mut self, sx: f32, sy: f32) {
         self.drag.start(
-            CanvasDrag::Pan { pan_at_grab: self.pan },
+            CanvasDrag::Pan {
+                pan_at_grab: self.pan,
+            },
             crate::node::Vec2::new(sx, sy),
         );
         self.bump_view();
@@ -671,14 +682,7 @@ impl GraphCanvas {
     /// Resolves, in priority order: breadcrumb bar → reset button → collapse
     /// chevron → port (wire/disconnect) → param-row scrub → group double-click
     /// → header drag → node select → empty (picker / marquee / pan).
-    pub fn on_left_button_down(
-        &mut self,
-        viewport: Rect,
-        sx: f32,
-        sy: f32,
-        now: f32,
-        shift: bool,
-    ) {
+    pub fn on_left_button_down(&mut self, viewport: Rect, sx: f32, sy: f32, now: f32, shift: bool) {
         // Every press resolves to something the canvas draws: a dropdown or
         // editor closing, a selection, a drag starting, a popover opening.
         self.bump_view();
@@ -694,11 +698,12 @@ impl GraphCanvas {
                             new_value: idx as f32,
                         });
                     } else {
-                        self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
-                            node_id: dd.node_id,
-                            param_name: dd.param_name.clone(),
-                            new_value: crate::SerializedParamValue::Enum { value: idx as u32 },
-                        });
+                        self.pending_actions
+                            .push(GraphEditCommand::SetGraphNodeParam {
+                                node_id: dd.node_id,
+                                param_name: dd.param_name.clone(),
+                                new_value: crate::SerializedParamValue::Enum { value: idx as u32 },
+                            });
                     }
                 }
                 return;
@@ -779,16 +784,21 @@ impl GraphCanvas {
                     .and_then(|n| n.params.iter().find(|p| p.name == param_name))
                     .and_then(|p| p.table_value.clone())
                 {
-                    let current = rows.get(r).and_then(|row| row.get(c)).copied().unwrap_or(0.0);
-                    self.pending_actions.push(GraphEditCommand::EditGraphNodeTableCell {
-                        node_id,
-                        param_name,
-                        row: r,
-                        col: c,
-                        current,
-                        rows,
-                        anchor: (rect.x, rect.y, rect.w, rect.h),
-                    });
+                    let current = rows
+                        .get(r)
+                        .and_then(|row| row.get(c))
+                        .copied()
+                        .unwrap_or(0.0);
+                    self.pending_actions
+                        .push(GraphEditCommand::EditGraphNodeTableCell {
+                            node_id,
+                            param_name,
+                            row: r,
+                            col: c,
+                            current,
+                            rows,
+                            anchor: (rect.x, rect.y, rect.w, rect.h),
+                        });
                 }
                 return;
             }
@@ -809,7 +819,8 @@ impl GraphCanvas {
         if self.has_graph_mod {
             let rect = self.reset_button_rect(viewport);
             if sx >= rect.x && sx <= rect.x + rect.w && sy >= rect.y && sy <= rect.y + rect.h {
-                self.pending_actions.push(GraphEditCommand::RevertEffectGraph);
+                self.pending_actions
+                    .push(GraphEditCommand::RevertEffectGraph);
                 return;
             }
         }
@@ -818,17 +829,27 @@ impl GraphCanvas {
         // active graph (mirrors the render-side gate).
         if !self.nodes.is_empty() {
             let sp_rect = self.save_to_project_button_rect(viewport);
-            if sx >= sp_rect.x && sx <= sp_rect.x + sp_rect.w && sy >= sp_rect.y && sy <= sp_rect.y + sp_rect.h {
-                self.pending_actions.push(GraphEditCommand::SaveGraphToProject {
-                    anchor: (sp_rect.x, sp_rect.y, sp_rect.w, sp_rect.h),
-                });
+            if sx >= sp_rect.x
+                && sx <= sp_rect.x + sp_rect.w
+                && sy >= sp_rect.y
+                && sy <= sp_rect.y + sp_rect.h
+            {
+                self.pending_actions
+                    .push(GraphEditCommand::SaveGraphToProject {
+                        anchor: (sp_rect.x, sp_rect.y, sp_rect.w, sp_rect.h),
+                    });
                 return;
             }
             let sl_rect = self.save_to_library_button_rect(viewport);
-            if sx >= sl_rect.x && sx <= sl_rect.x + sl_rect.w && sy >= sl_rect.y && sy <= sl_rect.y + sl_rect.h {
-                self.pending_actions.push(GraphEditCommand::SaveGraphToLibrary {
-                    anchor: (sl_rect.x, sl_rect.y, sl_rect.w, sl_rect.h),
-                });
+            if sx >= sl_rect.x
+                && sx <= sl_rect.x + sl_rect.w
+                && sy >= sl_rect.y
+                && sy <= sl_rect.y + sl_rect.h
+            {
+                self.pending_actions
+                    .push(GraphEditCommand::SaveGraphToLibrary {
+                        anchor: (sl_rect.x, sl_rect.y, sl_rect.w, sl_rect.h),
+                    });
                 return;
             }
         }
@@ -837,10 +858,15 @@ impl GraphCanvas {
         // render-side gate).
         if self.has_graph_mod {
             let pl_rect = self.push_to_library_button_rect(viewport);
-            if sx >= pl_rect.x && sx <= pl_rect.x + pl_rect.w && sy >= pl_rect.y && sy <= pl_rect.y + pl_rect.h {
-                self.pending_actions.push(GraphEditCommand::PushGraphToLibrary {
-                    anchor: (pl_rect.x, pl_rect.y, pl_rect.w, pl_rect.h),
-                });
+            if sx >= pl_rect.x
+                && sx <= pl_rect.x + pl_rect.w
+                && sy >= pl_rect.y
+                && sy <= pl_rect.y + pl_rect.h
+            {
+                self.pending_actions
+                    .push(GraphEditCommand::PushGraphToLibrary {
+                        anchor: (pl_rect.x, pl_rect.y, pl_rect.w, pl_rect.h),
+                    });
                 return;
             }
         }
@@ -860,10 +886,11 @@ impl GraphCanvas {
             // Input port — if a wire feeds this port, breaking it on
             // click. Otherwise swallow so the click doesn't start a pan.
             if self.wire_into(hit.node_id, &hit.port_name).is_some() {
-                self.pending_actions.push(GraphEditCommand::DisconnectPorts {
-                    to_node: hit.node_id,
-                    to_port: hit.port_name,
-                });
+                self.pending_actions
+                    .push(GraphEditCommand::DisconnectPorts {
+                        to_node: hit.node_id,
+                        to_port: hit.port_name,
+                    });
             }
             return;
         }
@@ -923,9 +950,10 @@ impl GraphCanvas {
                 // numeric type-in instead of arming a scrub; single-clicks
                 // anywhere else on the row keep scrubbing exactly as before.
                 if let Some(s) = p.scrub {
-                    let in_value_cell = self.param_slider_zones(viewport, node_id).is_some_and(|z| {
-                        sx >= z.value_cell.x && sx <= z.value_cell.x + z.value_cell.width
-                    });
+                    let in_value_cell =
+                        self.param_slider_zones(viewport, node_id).is_some_and(|z| {
+                            sx >= z.value_cell.x && sx <= z.value_cell.x + z.value_cell.width
+                        });
                     let wants_edit = in_value_cell
                         && self.is_double_click(sx, sy, now, Some(node_id))
                         && matches!(
@@ -939,16 +967,18 @@ impl GraphCanvas {
                     if wants_edit {
                         self.last_click_time = None; // latch so a 3rd press is fresh
                         if let Some(anchor) = self.param_row_rect(viewport, node_id, pi) {
-                            self.pending_actions.push(GraphEditCommand::EditGraphNodeNumericParam {
-                                node_id,
-                                param_name: p.name,
-                                current: s.current_value,
-                                min: s.range.0,
-                                max: s.range.1,
-                                whole_numbers: s.is_int,
-                                outer_param_id: p.outer_param_id,
-                                anchor: (anchor.x, anchor.y, anchor.w, anchor.h),
-                            });
+                            self.pending_actions.push(
+                                GraphEditCommand::EditGraphNodeNumericParam {
+                                    node_id,
+                                    param_name: p.name,
+                                    current: s.current_value,
+                                    min: s.range.0,
+                                    max: s.range.1,
+                                    whole_numbers: s.is_int,
+                                    outer_param_id: p.outer_param_id,
+                                    anchor: (anchor.x, anchor.y, anchor.w, anchor.h),
+                                },
+                            );
                         }
                         return;
                     }
@@ -1001,13 +1031,14 @@ impl GraphCanvas {
                                 new_value,
                             });
                         } else {
-                            self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
-                                node_id,
-                                param_name: p.name,
-                                new_value: crate::SerializedParamValue::Bool {
-                                    value: new_value >= 0.5,
-                                },
-                            });
+                            self.pending_actions
+                                .push(GraphEditCommand::SetGraphNodeParam {
+                                    node_id,
+                                    param_name: p.name,
+                                    new_value: crate::SerializedParamValue::Bool {
+                                        value: new_value >= 0.5,
+                                    },
+                                });
                         }
                     }
                     K::Trigger => {
@@ -1018,11 +1049,14 @@ impl GraphCanvas {
                                 new_value,
                             });
                         } else {
-                            self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
-                                node_id,
-                                param_name: p.name,
-                                new_value: crate::SerializedParamValue::Float { value: new_value },
-                            });
+                            self.pending_actions
+                                .push(GraphEditCommand::SetGraphNodeParam {
+                                    node_id,
+                                    param_name: p.name,
+                                    new_value: crate::SerializedParamValue::Float {
+                                        value: new_value,
+                                    },
+                                });
                         }
                     }
                     // Enum → open a dropdown anchored on this row; picking an
@@ -1064,10 +1098,11 @@ impl GraphCanvas {
                     // cell / Browse button.
                     K::String => {
                         if p.is_path {
-                            self.pending_actions.push(GraphEditCommand::BrowseGraphNodePath {
-                                node_id,
-                                param_name: p.name,
-                            });
+                            self.pending_actions
+                                .push(GraphEditCommand::BrowseGraphNodePath {
+                                    node_id,
+                                    param_name: p.name,
+                                });
                         } else if let Some(anchor) = self.param_row_rect(viewport, node_id, pi) {
                             self.pending_actions
                                 .push(GraphEditCommand::EditGraphNodeStringParam {
@@ -1098,11 +1133,12 @@ impl GraphCanvas {
                 .and_then(|n| n.wgsl_source.clone())
                 .unwrap_or_default();
             self.select_single(node_id);
-            self.pending_actions.push(GraphEditCommand::EditGraphNodeWgsl {
-                node_id,
-                current,
-                anchor: (0.0, 0.0, 0.0, 0.0),
-            });
+            self.pending_actions
+                .push(GraphEditCommand::EditGraphNodeWgsl {
+                    node_id,
+                    current,
+                    anchor: (0.0, 0.0, 0.0, 0.0),
+                });
             return;
         }
         // "Reveal / hide unused sockets" chip on the node header → flip this
@@ -1179,13 +1215,16 @@ impl GraphCanvas {
                     // Shift+drag = rubber-band box select (replaces the
                     // selection with whatever the box covers). A shift-press
                     // with no drag is a no-op (guarded on release).
-                    self.drag.start(CanvasDrag::Marquee, crate::node::Vec2::new(sx, sy));
+                    self.drag
+                        .start(CanvasDrag::Marquee, crate::node::Vec2::new(sx, sy));
                 } else {
                     // Plain left-drag = pan, so the canvas stays navigable on a
                     // trackpad. A left-click with no drag clears the selection
                     // (handled on release).
                     self.drag.start(
-                        CanvasDrag::Pan { pan_at_grab: self.pan },
+                        CanvasDrag::Pan {
+                            pan_at_grab: self.pan,
+                        },
                         crate::node::Vec2::new(sx, sy),
                     );
                 }
@@ -1269,7 +1308,11 @@ impl GraphCanvas {
         let mut sx = 0.0;
         let mut sy = 0.0;
         let mut n = 0.0;
-        for node in self.nodes.iter().filter(|nv| self.selected.contains(&nv.id)) {
+        for node in self
+            .nodes
+            .iter()
+            .filter(|nv| self.selected.contains(&nv.id))
+        {
             sx += node.pos_graph.0;
             sy += node.pos_graph.1;
             n += 1.0;
@@ -1316,8 +1359,10 @@ impl GraphCanvas {
                         // command below.
                         if let (Some(from_n), Some(to_n)) =
                             (self.find_node(from_node), self.find_node(hit.node_id))
-                            && let Some(fi) = from_n.outputs.iter().position(|p| p.name == from_port)
-                            && let Some(ti) = to_n.inputs.iter().position(|p| p.name == hit.port_name)
+                            && let Some(fi) =
+                                from_n.outputs.iter().position(|p| p.name == from_port)
+                            && let Some(ti) =
+                                to_n.inputs.iter().position(|p| p.name == hit.port_name)
                         {
                             let (fgx, fgy) = from_n.output_port_pos_graph(fi);
                             let (tgx, tgy) = to_n.input_port_pos_graph(ti);
@@ -1358,14 +1403,19 @@ impl GraphCanvas {
             // click) never emitted a `SetGraphNodeParam` in the first place,
             // so there is nothing to close out — matches the existing
             // "zero-move press+release emits nothing" contract.
-            CanvasDrag::ParamScrub { node_id, param_name, .. } => {
+            CanvasDrag::ParamScrub {
+                node_id,
+                param_name,
+                ..
+            } => {
                 let start = start.expect("a ParamScrub session always has a start position");
                 let moved = (sx - start.x).hypot(sy - start.y) >= CLICK_MOVE_SLOP_PX;
                 if moved {
-                    self.pending_actions.push(GraphEditCommand::EndGraphNodeParamScrub {
-                        node_id,
-                        param_name,
-                    });
+                    self.pending_actions
+                        .push(GraphEditCommand::EndGraphNodeParamScrub {
+                            node_id,
+                            param_name,
+                        });
                 }
             }
             // The Color/Vec editor stays open on release so the next channel
@@ -1375,14 +1425,19 @@ impl GraphCanvas {
             // needs the same `EndGraphNodeParamScrub` moved-guard emit
             // `ParamScrub` uses, or the app never closes out its
             // `unbound_node_param_drag` session for this channel grab.
-            CanvasDrag::VecScrub { node_id, param_name, .. } => {
+            CanvasDrag::VecScrub {
+                node_id,
+                param_name,
+                ..
+            } => {
                 let start = start.expect("a VecScrub session always has a start position");
                 let moved = (sx - start.x).hypot(sy - start.y) >= CLICK_MOVE_SLOP_PX;
                 if moved {
-                    self.pending_actions.push(GraphEditCommand::EndGraphNodeParamScrub {
-                        node_id,
-                        param_name,
-                    });
+                    self.pending_actions
+                        .push(GraphEditCommand::EndGraphNodeParamScrub {
+                            node_id,
+                            param_name,
+                        });
                 }
             }
             CanvasDrag::Marquee => {

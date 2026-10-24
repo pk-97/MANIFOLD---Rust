@@ -15,18 +15,23 @@ use std::sync::Arc;
 
 use manifold_core::params::ParamManifest;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
-use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_physics::clock::TICK;
-use manifold_node_engine::particles::FluidParticle;
-use manifold_water_liquid::bodies::LiquidBody;
-use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-use manifold_node_engine::{ports::ArrayType, exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, parameters::ParamDef, persistence::PrimitiveRegistry, scene::transform::Transform};
-use manifold_node_engine::runtime::preset_context::PresetContext;
-use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_node_engine::particles::FluidParticle;
+use manifold_node_engine::ports::{
+    NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+};
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::{
+    exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext,
+    exec::effect_node::EffectNodeType, parameters::ParamDef, persistence::PrimitiveRegistry,
+    ports::ArrayType, scene::transform::Transform,
+};
+use manifold_physics::clock::TICK;
+use manifold_water_liquid::bodies::LiquidBody;
 use serde_json::{Value, json};
-
 
 const PRESET: &str = include_str!("../fixtures/presets/WaterFloatingBoxMatter.json");
 const PROBE_TYPE: &str = "test.matter_coupling_probe";
@@ -56,7 +61,12 @@ thread_local! {
 }
 
 const fn optional(name: &'static str, ty: PortType) -> NodeInput {
-    NodePort { name: Cow::Borrowed(name), ty, kind: PortKind::Input, required: false }
+    NodePort {
+        name: Cow::Borrowed(name),
+        ty,
+        kind: PortKind::Input,
+        required: false,
+    }
 }
 
 const SCALAR: PortType = PortType::Scalar(ScalarType::F32);
@@ -80,7 +90,10 @@ impl CouplingProbe {
                 optional("simulation_time", SCALAR),
                 optional("blend", SCALAR),
                 optional("count_a", SCALAR),
-                optional("particles_b", PortType::Array(ArrayType::of_known::<FluidParticle>())),
+                optional(
+                    "particles_b",
+                    PortType::Array(ArrayType::of_known::<FluidParticle>()),
+                ),
             ],
         }
     }
@@ -150,7 +163,10 @@ fn float(value: f32) -> Value {
 }
 
 fn node_mut(nodes: &mut [Value], id: u64) -> &mut Value {
-    nodes.iter_mut().find(|n| n["id"] == id).unwrap_or_else(|| panic!("preset has node {id}"))
+    nodes
+        .iter_mut()
+        .find(|n| n["id"] == id)
+        .unwrap_or_else(|| panic!("preset has node {id}"))
 }
 
 /// The Floating Box preset with the scene's settings and both probes.
@@ -165,12 +181,25 @@ fn preset(scene: &Scene) -> String {
         params["resolution"] = json!({"type": "Int", "value": scene.resolution});
         params["fill_height"] = float(scene.fill);
         params["gravity"] = float(scene.liquid_gravity);
-        for face in ["closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z"] {
+        for face in [
+            "closed_neg_x",
+            "closed_pos_x",
+            "closed_neg_y",
+            "closed_pos_y",
+            "closed_neg_z",
+            "closed_pos_z",
+        ] {
             params[face] = json!({"type": "Bool", "value": !scene.open_faces});
         }
         inner.push(json!({"id": 90, "typeId": PROBE_TYPE, "nodeId": "coupling_probe_liquid"}));
         let wires = group["wires"].as_array_mut().expect("group wires");
-        for (from, port) in [(1, "display_time"), (1, "simulation_time"), (9, "blend"), (9, "count_a"), (9, "particles_b")] {
+        for (from, port) in [
+            (1, "display_time"),
+            (1, "simulation_time"),
+            (9, "blend"),
+            (9, "count_a"),
+            (9, "particles_b"),
+        ] {
             wires.push(json!({"fromNode": from, "fromPort": port, "toNode": 90, "toPort": port}));
         }
     }
@@ -186,9 +215,16 @@ fn preset(scene: &Scene) -> String {
     // The body takes its mass in kg.
     node_mut(nodes, 72)["params"]["mass"] = float(scene.mass);
     // Card params own their bound node params, so the scene sets them there.
-    for (id, value) in [("resolution", scene.resolution as f64), ("box_mass", f64::from(scene.mass))] {
+    for (id, value) in [
+        ("resolution", scene.resolution as f64),
+        ("box_mass", f64::from(scene.mass)),
+    ] {
         for list in ["params", "bindings"] {
-            for card in doc["presetMetadata"][list].as_array_mut().expect("card list").iter_mut() {
+            for card in doc["presetMetadata"][list]
+                .as_array_mut()
+                .expect("card list")
+                .iter_mut()
+            {
                 if card["id"] == id {
                     card["defaultValue"] = json!(value);
                 }
@@ -229,9 +265,22 @@ impl Run {
         )
         .unwrap_or_else(|e| panic!("coupled preset builds: {e}"));
         runtime.set_dump_all(true);
-        let target = RenderTarget::new(&device, SIZE, SIZE, GpuTextureFormat::Rgba16Float, "matter-coupling");
-        let mut run = Self { runtime, target, device, frame: 0 };
-        let wait = manifold_node_engine::testkit::gpu_harness::BackgroundWait::new("matter coupling asset warmup");
+        let target = RenderTarget::new(
+            &device,
+            SIZE,
+            SIZE,
+            GpuTextureFormat::Rgba16Float,
+            "matter-coupling",
+        );
+        let mut run = Self {
+            runtime,
+            target,
+            device,
+            frame: 0,
+        };
+        let wait = manifold_node_engine::testkit::gpu_harness::BackgroundWait::new(
+            "matter coupling asset warmup",
+        );
         loop {
             run.render(0, true);
             if !run.runtime.warmup_pending() {
@@ -262,12 +311,18 @@ impl Run {
         let mut encoder = self.device.create_encoder("matter-coupling-frame");
         let status = {
             let mut gpu = GpuEncoder::new(&mut encoder, &self.device);
-            self.runtime.render(&mut gpu, &self.target.texture, &ctx, &ParamManifest::default());
+            self.runtime.render(
+                &mut gpu,
+                &self.target.texture,
+                &ctx,
+                &ParamManifest::default(),
+            );
             gpu.frame_status()
         };
         encoder.commit_and_wait_completed();
         assert!(
-            status == FrameRenderStatus::Complete || (warming && status == FrameRenderStatus::PendingGeometry),
+            status == FrameRenderStatus::Complete
+                || (warming && status == FrameRenderStatus::PendingGeometry),
             "frame {frame} rendered with status {status:?}"
         );
         status
@@ -301,7 +356,10 @@ impl Run {
 
     /// The coupled body's Box3D state at this frame's display time.
     fn body(&self) -> LiquidBody {
-        self.read::<LiquidBody>(manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID, "bodies")[0]
+        self.read::<LiquidBody>(
+            manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID,
+            "bodies",
+        )[0]
     }
 
     fn frame_particles(&self, port: &str, count: usize) -> Vec<FluidParticle> {
@@ -318,14 +376,22 @@ impl Run {
 #[test]
 fn matter_coupling_presentation_shares_display_time() {
     let doc: Value = serde_json::from_str(PRESET).expect("preset parses");
-    let group = doc["nodes"].as_array().expect("nodes").iter().find(|n| n["id"] == 51).expect("Live Matter group");
+    let group = doc["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .find(|n| n["id"] == 51)
+        .expect("Live Matter group");
     let drawn = group["group"]["wires"]
         .as_array()
         .expect("group wires")
         .iter()
         .find(|w| w["toNode"] == 10 && w["toPort"] == "particles")
         .expect("group output particles wire");
-    assert_eq!((drawn["fromNode"].as_u64(), drawn["fromPort"].as_str()), (Some(9), Some("particles_a")));
+    assert_eq!(
+        (drawn["fromNode"].as_u64(), drawn["fromPort"].as_str()),
+        (Some(9), Some("particles_a"))
+    );
 
     // A tilted box released over a shallow pool, in and out of contact.
     let scene = Scene {
@@ -344,7 +410,10 @@ fn matter_coupling_presentation_shares_display_time() {
     let mut last_simulation_time = 0.0;
     for _ in 0..40 {
         let probe = run.step();
-        assert!(probe.simulation_time > last_simulation_time, "an offline coupled frame ran no tick");
+        assert!(
+            probe.simulation_time > last_simulation_time,
+            "an offline coupled frame ran no tick"
+        );
         last_simulation_time = probe.simulation_time;
         let display = f64::from(probe.display_time);
         assert!(
@@ -366,7 +435,10 @@ fn matter_coupling_presentation_shares_display_time() {
         let count = probe.count_a as usize;
         let a = run.frame_particles("particles_a", count);
         if let Some(b) = previous_b.take() {
-            assert!(count > 0 && a == b[..count.min(b.len())], "frame A is not the previous tick's frame B");
+            assert!(
+                count > 0 && a == b[..count.min(b.len())],
+                "frame A is not the previous tick's frame B"
+            );
         }
         previous_b = Some(run.frame_particles("particles_b", usize::MAX));
     }

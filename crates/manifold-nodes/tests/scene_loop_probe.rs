@@ -20,8 +20,11 @@ use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire, PresetMetadata, SerializedParamValue,
 };
 use manifold_core::preset_type_id::PresetTypeId;
-use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_nodes_scene::node_graph::viewport_render::render_viewport_frame};
 use manifold_node_engine::runtime::preset_context::PresetContext;
+use {
+    manifold_node_engine::persistence::PrimitiveRegistry,
+    manifold_nodes_scene::node_graph::viewport_render::render_viewport_frame,
+};
 
 fn node(
     id: u32,
@@ -98,7 +101,9 @@ fn max_pixel_diff(a: &[u8], b: &[u8]) -> u8 {
 /// real fan-out shape. `jitter_amount` is the live differentiator (the old
 /// `count` param is gone with the corridor window).
 fn fanout_loop_def(jitter_amount: f32) -> EffectGraphDef {
-    use manifold_core::effect_graph_def::{GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef};
+    use manifold_core::effect_graph_def::{
+        GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
+    };
     let groups: Vec<EffectGraphNode> = vec![50, 60, 70, 80]
         .into_iter()
         .map(|gid| {
@@ -132,18 +137,40 @@ fn fanout_loop_def(jitter_amount: f32) -> EffectGraphDef {
                         params: Vec::new(),
                     },
                     nodes: vec![
-                        node(bind, &format!("obj_{gid}_bind"), "node.scene_object", BTreeMap::new()),
-                        node(mesh, &format!("mesh_{gid}"), "node.cube_mesh", BTreeMap::new()),
+                        node(
+                            bind,
+                            &format!("obj_{gid}_bind"),
+                            "node.scene_object",
+                            BTreeMap::new(),
+                        ),
+                        node(
+                            mesh,
+                            &format!("mesh_{gid}"),
+                            "node.cube_mesh",
+                            BTreeMap::new(),
+                        ),
                         node(mat, &format!("mat_{gid}"), "node.unlit_material", {
                             let mut p = BTreeMap::new();
                             p.insert(
                                 "color_r".to_string(),
-                                SerializedParamValue::Float { value: 0.5 + (gid % 3) as f32 * 0.2 },
+                                SerializedParamValue::Float {
+                                    value: 0.5 + (gid % 3) as f32 * 0.2,
+                                },
                             );
                             p
                         }),
-                        node(gi, &format!("gi_{gid}"), "system.group_input", BTreeMap::new()),
-                        node(go, &format!("go_{gid}"), "system.group_output", BTreeMap::new()),
+                        node(
+                            gi,
+                            &format!("gi_{gid}"),
+                            "system.group_input",
+                            BTreeMap::new(),
+                        ),
+                        node(
+                            go,
+                            &format!("go_{gid}"),
+                            "system.group_output",
+                            BTreeMap::new(),
+                        ),
                     ],
                     wires: vec![
                         wire(mesh, "vertices", bind, "vertices"),
@@ -161,29 +188,58 @@ fn fanout_loop_def(jitter_amount: f32) -> EffectGraphDef {
         node(0, "input", "system.generator_input", BTreeMap::new()),
         node(1, "loop_phase", "node.beat_ramp", {
             let mut p = BTreeMap::new();
-            p.insert("rate".to_string(), SerializedParamValue::Float { value: 0.125 });
-            p.insert("attack".to_string(), SerializedParamValue::Float { value: 1.0 });
+            p.insert(
+                "rate".to_string(),
+                SerializedParamValue::Float { value: 0.125 },
+            );
+            p.insert(
+                "attack".to_string(),
+                SerializedParamValue::Float { value: 1.0 },
+            );
             p
         }),
         node(2, "scene_array", "node.scene_array", {
             let mut p = BTreeMap::new();
             p.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 });
-            p.insert("cell_size".to_string(), SerializedParamValue::Float { value: 10.0 });
-            p.insert("jitter_seed".to_string(), SerializedParamValue::Float { value: 7.0 });
-            p.insert("jitter_amount".to_string(), SerializedParamValue::Float { value: jitter_amount });
+            p.insert(
+                "cell_size".to_string(),
+                SerializedParamValue::Float { value: 10.0 },
+            );
+            p.insert(
+                "jitter_seed".to_string(),
+                SerializedParamValue::Float { value: 7.0 },
+            );
+            p.insert(
+                "jitter_amount".to_string(),
+                SerializedParamValue::Float {
+                    value: jitter_amount,
+                },
+            );
             p
         }),
         node(3, "loop_camera", "node.loop_camera", {
             let mut p = BTreeMap::new();
-            p.insert("cell_size".to_string(), SerializedParamValue::Float { value: 10.0 });
+            p.insert(
+                "cell_size".to_string(),
+                SerializedParamValue::Float { value: 10.0 },
+            );
             p.insert("axis".to_string(), SerializedParamValue::Enum { value: 4 });
-            p.insert("fov_y".to_string(), SerializedParamValue::Float { value: 0.9 });
+            p.insert(
+                "fov_y".to_string(),
+                SerializedParamValue::Float { value: 0.9 },
+            );
             p
         }),
         node(7, "scene", "node.render_scene", {
             let mut p = BTreeMap::new();
-            p.insert("objects".to_string(), SerializedParamValue::Float { value: 4.0 });
-            p.insert("lights".to_string(), SerializedParamValue::Float { value: 0.0 });
+            p.insert(
+                "objects".to_string(),
+                SerializedParamValue::Float { value: 4.0 },
+            );
+            p.insert(
+                "lights".to_string(),
+                SerializedParamValue::Float { value: 0.0 },
+            );
             p
         }),
         node(8, "out", "system.final_output", BTreeMap::new()),
@@ -216,7 +272,7 @@ fn fanout_loop_def(jitter_amount: f32) -> EffectGraphDef {
             legacy_discriminant: None,
             available: true,
             is_line_based: false,
-                layer_types: None,
+            layer_types: None,
             params: Vec::new(),
             bindings: Vec::new(),
             param_aliases: Vec::new(),

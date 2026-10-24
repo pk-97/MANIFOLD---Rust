@@ -26,17 +26,44 @@ const WARMUP: u64 = 12;
 const STEADY: u64 = 40;
 
 /// Build one variant (tail present or stripped), warm it, then return (max, mean) steady-state frame ms.
-fn measure_tail(h: &ParityHarness, glb: &std::path::Path, strip_tail: bool, w: u32, hh: u32) -> (f64, f64) {
+fn measure_tail(
+    h: &ParityHarness,
+    glb: &std::path::Path,
+    strip_tail: bool,
+    w: u32,
+    hh: u32,
+) -> (f64, f64) {
     let (def, _report) = compile_model_scene(glb).expect("import must succeed");
     let mut flat = flatten_groups(&def).expect("flatten_groups must succeed");
     if strip_tail {
-        const TAIL_TYPES: [&str; 4] = ["node.coc_from_depth", "node.coc_dilate", "node.bokeh_gather", "node.motion_blur"];
-        let keep: Vec<u32> = flat.nodes.iter().filter(|n| !TAIL_TYPES.contains(&n.type_id.as_str())).map(|n| n.id).collect();
+        const TAIL_TYPES: [&str; 4] = [
+            "node.coc_from_depth",
+            "node.coc_dilate",
+            "node.bokeh_gather",
+            "node.motion_blur",
+        ];
+        let keep: Vec<u32> = flat
+            .nodes
+            .iter()
+            .filter(|n| !TAIL_TYPES.contains(&n.type_id.as_str()))
+            .map(|n| n.id)
+            .collect();
         flat.nodes.retain(|n| keep.contains(&n.id));
-        flat.wires.retain(|w| keep.contains(&w.from_node) && keep.contains(&w.to_node));
+        flat.wires
+            .retain(|w| keep.contains(&w.from_node) && keep.contains(&w.to_node));
         // The scene's colour before the tail: the render's own colour output.
-        let render = flat.nodes.iter().find(|n| n.type_id == "node.render_scene").expect("render present").id;
-        let final_id = flat.nodes.iter().find(|n| n.type_id == "system.final_output").expect("final output").id;
+        let render = flat
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.render_scene")
+            .expect("render present")
+            .id;
+        let final_id = flat
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "system.final_output")
+            .expect("final output")
+            .id;
         flat.wires.push(EffectGraphWire {
             from_node: render,
             from_port: "color".to_string(),
@@ -46,7 +73,10 @@ fn measure_tail(h: &ParityHarness, glb: &std::path::Path, strip_tail: bool, w: u
     }
     let registry = PrimitiveRegistry::with_builtin();
     let manifest = ParamManifest::from_params(
-        def.preset_metadata.as_ref().map(|m| m.params.iter().cloned().map(Param::bundled).collect()).unwrap_or_default(),
+        def.preset_metadata
+            .as_ref()
+            .map(|m| m.params.iter().cloned().map(Param::bundled).collect())
+            .unwrap_or_default(),
     );
     let mut runtime = PresetRuntime::from_def_with_device(
         flat,
@@ -88,7 +118,9 @@ fn measure_tail(h: &ParityHarness, glb: &std::path::Path, strip_tail: bool, w: u
             enc.commit_and_wait_completed();
         });
         // An empty commit waits every earlier buffer on the single queue, so wall time is the frame's cost.
-        h.device.create_encoder("cinematic-tail-cost-drain").commit_and_wait_completed();
+        h.device
+            .create_encoder("cinematic-tail-cost-drain")
+            .commit_and_wait_completed();
         let ms = t.elapsed().as_secs_f64() * 1000.0;
         if frame >= WARMUP {
             max_steady_ms = max_steady_ms.max(ms);
@@ -100,7 +132,15 @@ fn measure_tail(h: &ParityHarness, glb: &std::path::Path, strip_tail: bool, w: u
 
 /// Contention only adds wall time, so the rep with the smallest mean delta is the tail's cost. `any_frame`
 /// also holds the max delta to the target (the 4K target is per frame, the 1080p one a mean).
-fn report(h: &ParityHarness, glb: &std::path::Path, w: u32, hh: u32, reps: u32, target_ms: f64, any_frame: bool) {
+fn report(
+    h: &ParityHarness,
+    glb: &std::path::Path,
+    w: u32,
+    hh: u32,
+    reps: u32,
+    target_ms: f64,
+    any_frame: bool,
+) {
     let mut best: Option<(f64, f64)> = None;
     for _ in 0..reps {
         let (tail_max, tail_mean) = measure_tail(h, glb, false, w, hh);
@@ -116,7 +156,9 @@ fn report(h: &ParityHarness, glb: &std::path::Path, w: u32, hh: u32, reps: u32, 
         }
     }
     let (delta_max, delta_mean) = best.expect("at least one rep ran");
-    println!("{w}x{hh} best tail delta: max {delta_max:+.2} ms, mean {delta_mean:+.2} ms (target {target_ms} ms)");
+    println!(
+        "{w}x{hh} best tail delta: max {delta_max:+.2} ms, mean {delta_mean:+.2} ms (target {target_ms} ms)"
+    );
     if delta_mean > target_ms || (any_frame && delta_max > target_ms) {
         println!("WARNING: {w}x{hh} tail exceeds the {target_ms} ms target");
     }
@@ -124,7 +166,8 @@ fn report(h: &ParityHarness, glb: &std::path::Path, w: u32, hh: u32, reps: u32, 
 
 fn main() {
     let h = gpu_harness::shared();
-    let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf/apricot_tl05.glb");
+    let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/apricot_tl05.glb");
     assert!(glb.exists(), "fixture missing: {glb:?}");
     report(h, &glb, 1920, 1080, 3, 3.0, false);
     report(h, &glb, 3840, 2160, 2, 20.0, true);

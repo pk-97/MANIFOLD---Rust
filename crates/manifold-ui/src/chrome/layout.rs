@@ -15,7 +15,7 @@
 //! child on the cross axis at its own size. `Stack`/`Leaf` place every child in
 //! the padded box (horizontal by `main_align`, vertical by `cross_align`).
 
-use crate::chrome::view::{Align, Layout, SliderSpec, Sizing, View, ViewIntent};
+use crate::chrome::view::{Align, Layout, Sizing, SliderSpec, View, ViewIntent};
 use crate::node::{Rect, UINodeType, UIStyle, Vec2};
 use crate::text::TextMeasure;
 
@@ -77,7 +77,11 @@ fn measure_hug(view: &View, measure: &dyn TextMeasure) -> Vec2 {
     }
 
     let n = view.children.len();
-    let gap_total = if n > 1 { view.gap * (n - 1) as f32 } else { 0.0 };
+    let gap_total = if n > 1 {
+        view.gap * (n - 1) as f32
+    } else {
+        0.0
+    };
 
     // Natural size of a child on one axis: Fixed takes its value, Hug/Fill both
     // contribute the child's content extent (Fill's growth only applies once
@@ -141,7 +145,13 @@ fn cross_place(sizing: Sizing, natural: f32, start: f32, avail: f32, align: Alig
     }
 }
 
-fn place(view: &View, rect: Rect, parent: Option<usize>, measure: &dyn TextMeasure, out: &mut Vec<LaidNode>) {
+fn place(
+    view: &View,
+    rect: Rect,
+    parent: Option<usize>,
+    measure: &dyn TextMeasure,
+    out: &mut Vec<LaidNode>,
+) {
     let me = out.len();
     out.push(LaidNode {
         rect,
@@ -178,7 +188,8 @@ fn place(view: &View, rect: Rect, parent: Option<usize>, measure: &dyn TextMeasu
             for child in &view.children {
                 let nat = measure_hug(child, measure);
                 let (x, w) = cross_place(child.width, nat.x, inner.x, inner.width, view.main_align);
-                let (y, h) = cross_place(child.height, nat.y, inner.y, inner.height, view.cross_align);
+                let (y, h) =
+                    cross_place(child.height, nat.y, inner.y, inner.height, view.cross_align);
                 place(child, Rect::new(x, y, w, h), Some(me), measure, out);
             }
         }
@@ -195,15 +206,27 @@ fn place_linear(
     out: &mut Vec<LaidNode>,
 ) {
     let n = view.children.len();
-    let avail_main = if horizontal { inner.width } else { inner.height };
-    let gap_total = if n > 1 { view.gap * (n - 1) as f32 } else { 0.0 };
+    let avail_main = if horizontal {
+        inner.width
+    } else {
+        inner.height
+    };
+    let gap_total = if n > 1 {
+        view.gap * (n - 1) as f32
+    } else {
+        0.0
+    };
 
     // First pass: main-axis size of each child; Fill children deferred.
     let mut main_size = vec![0.0_f32; n];
     let mut fill_count = 0usize;
     let mut used = 0.0_f32;
     for (i, child) in view.children.iter().enumerate() {
-        let sizing = if horizontal { child.width } else { child.height };
+        let sizing = if horizontal {
+            child.width
+        } else {
+            child.height
+        };
         match sizing {
             Sizing::Fixed(v) => {
                 main_size[i] = v;
@@ -224,7 +247,11 @@ fn place_linear(
     if fill_count > 0 {
         let each = (leftover / fill_count as f32).max(0.0);
         for (i, child) in view.children.iter().enumerate() {
-            let sizing = if horizontal { child.width } else { child.height };
+            let sizing = if horizontal {
+                child.width
+            } else {
+                child.height
+            };
             if sizing == Sizing::Fill {
                 main_size[i] = each;
             }
@@ -244,10 +271,22 @@ fn place_linear(
     for (i, child) in view.children.iter().enumerate() {
         let nat = measure_hug(child, measure);
         let child_rect = if horizontal {
-            let (y, h) = cross_place(child.height, nat.y, cross_start, cross_avail, view.cross_align);
+            let (y, h) = cross_place(
+                child.height,
+                nat.y,
+                cross_start,
+                cross_avail,
+                view.cross_align,
+            );
             Rect::new(cursor, y, main_size[i], h)
         } else {
-            let (x, w) = cross_place(child.width, nat.x, cross_start, cross_avail, view.cross_align);
+            let (x, w) = cross_place(
+                child.width,
+                nat.x,
+                cross_start,
+                cross_avail,
+                view.cross_align,
+            );
             Rect::new(x, cursor, w, main_size[i])
         };
         place(child, child_rect, Some(me), measure, out);
@@ -309,9 +348,17 @@ mod tests {
     fn spacer_pushes_sibling_to_end() {
         // label | spacer | label → second label pinned to the right edge.
         let v = View::row(0.0)
-            .child(View::label("L").w(Sizing::Fixed(10.0)).h(Sizing::Fixed(16.0)))
+            .child(
+                View::label("L")
+                    .w(Sizing::Fixed(10.0))
+                    .h(Sizing::Fixed(16.0)),
+            )
             .child(View::spacer())
-            .child(View::label("R").w(Sizing::Fixed(10.0)).h(Sizing::Fixed(16.0)));
+            .child(
+                View::label("R")
+                    .w(Sizing::Fixed(10.0))
+                    .h(Sizing::Fixed(16.0)),
+            );
         let laid = solve(&v, r(0.0, 0.0, 100.0, 16.0), &Mono);
         assert_eq!(laid[1].rect.x, 0.0);
         assert_eq!(laid[3].rect.x, 90.0, "right label pinned to edge");
@@ -371,7 +418,11 @@ mod tests {
     #[test]
     fn dfs_preorder_with_parents() {
         let v = View::column(0.0)
-            .child(View::row(0.0).child(View::label("a")).child(View::label("b")))
+            .child(
+                View::row(0.0)
+                    .child(View::label("a"))
+                    .child(View::label("b")),
+            )
             .child(View::label("c"));
         let laid = solve(&v, r(0.0, 0.0, 100.0, 100.0), &Mono);
         // root, row, a, b, c

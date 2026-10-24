@@ -63,7 +63,11 @@ impl LiveDrawArgs {
             ));
         }
         let bytes = objects.max(1) as u64 * ARGS_BYTES;
-        if self.buffer.as_ref().is_none_or(|buffer| buffer.size < bytes) {
+        if self
+            .buffer
+            .as_ref()
+            .is_none_or(|buffer| buffer.size < bytes)
+        {
             self.buffer = Some(device.create_buffer_shared(bytes));
         }
         self.buffer.clone().expect("arguments buffer allocated")
@@ -90,8 +94,15 @@ impl LiveDrawArgs {
         encoder.dispatch_compute(
             self.pipeline.as_ref().expect("prepare before write"),
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
-                GpuBinding::Buffer { binding: 1, buffer: &extent.counts, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&params),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &extent.counts,
+                    offset: 0,
+                },
                 GpuBinding::Buffer {
                     binding: 2,
                     buffer: self.buffer.as_ref().expect("prepare before write"),
@@ -106,12 +117,24 @@ impl LiveDrawArgs {
     /// Encode block `slot` for a mesh without a live extent: `vertices`
     /// (indices when indexed) and zero instances, for [`Self::trim`].
     pub(super) fn write_fixed(&self, encoder: &mut GpuEncoder, slot: usize, vertices: u32) {
-        let params = TrimArgs { slot: slot as u32, count: 0, vertices, _pad: 0 };
+        let params = TrimArgs {
+            slot: slot as u32,
+            count: 0,
+            vertices,
+            _pad: 0,
+        };
         encoder.dispatch_compute(
             self.fixed.as_ref().expect("prepare before write"),
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
-                GpuBinding::Buffer { binding: 2, buffer: self.buffer.as_ref().expect("prepare before write"), offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&params),
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: self.buffer.as_ref().expect("prepare before write"),
+                    offset: 0,
+                },
             ],
             [1, 1, 1],
             "node.render_scene fixed draw args",
@@ -121,14 +144,36 @@ impl LiveDrawArgs {
     /// Raise block `slot`'s instance word, written as zero and behind a
     /// buffer barrier, to one past the last of the first `count` instances
     /// that is not all zero.
-    pub(super) fn trim(&self, encoder: &mut GpuEncoder, slot: usize, instances: &GpuBuffer, count: u32) {
-        let params = TrimArgs { slot: slot as u32, count, vertices: 0, _pad: 0 };
+    pub(super) fn trim(
+        &self,
+        encoder: &mut GpuEncoder,
+        slot: usize,
+        instances: &GpuBuffer,
+        count: u32,
+    ) {
+        let params = TrimArgs {
+            slot: slot as u32,
+            count,
+            vertices: 0,
+            _pad: 0,
+        };
         encoder.dispatch_compute(
             self.trim.as_ref().expect("prepare before trim"),
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
-                GpuBinding::Buffer { binding: 1, buffer: instances, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: self.buffer.as_ref().expect("prepare before trim"), offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&params),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: instances,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: self.buffer.as_ref().expect("prepare before trim"),
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256).clamp(1, TRIM_GROUPS), 1, 1],
             "node.render_scene live instances",
@@ -152,12 +197,21 @@ mod tests {
             unsafe { counts.write(0, bytemuck::cast_slice(&[0u32, triangles])) };
             let args = writer.prepare(&device, 2);
             let mut encoder = device.create_encoder("live draw args test");
-            let extent = LiveExtent { counts, offset: 4, per_item: 3, bound: 18 };
+            let extent = LiveExtent {
+                counts,
+                offset: 4,
+                per_item: 3,
+                bound: 18,
+            };
             writer.write(&mut encoder, 1, &extent, 18, 5);
             encoder.commit_and_wait_completed();
             let ptr = args.mapped_ptr().expect("shared arguments buffer");
             let words = unsafe { std::slice::from_raw_parts(ptr as *const u32, 16) };
-            assert_eq!(&words[8..13], &[expected, 5, 0, 0, 0], "{triangles} triangles in an 18-vertex buffer");
+            assert_eq!(
+                &words[8..13],
+                &[expected, 5, 0, 0, 0],
+                "{triangles} triangles in an 18-vertex buffer"
+            );
         }
     }
 
@@ -194,7 +248,12 @@ mod tests {
             encoder.commit_and_wait_completed();
             let ptr = args.mapped_ptr().expect("shared arguments buffer");
             let words = unsafe { std::slice::from_raw_parts(ptr as *const u32, 16) };
-            assert_eq!(&words[8..13], &[36, expected, 0, 0, 0], "{} instances, count {count}", instances.len());
+            assert_eq!(
+                &words[8..13],
+                &[36, expected, 0, 0, 0],
+                "{} instances, count {count}",
+                instances.len()
+            );
         }
     }
 }

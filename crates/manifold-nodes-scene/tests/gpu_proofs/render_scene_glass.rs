@@ -19,10 +19,15 @@ use manifold_gpu::GpuBuffer;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::mesh::MeshVertex;
-use manifold_node_engine::scene::depth_rule::DepthRule;
-use manifold_node_engine::{ports::ArrayType, exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, ports::NodeInput, ports::NodeOutput, ports::NodePort, parameters::ParamDef, exec::effect_node::ParamValues, ports::PortKind, ports::PortType, persistence::PrimitiveRegistry};
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::scene::depth_rule::DepthRule;
+use manifold_node_engine::{
+    exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext,
+    exec::effect_node::EffectNodeType, exec::effect_node::ParamValues, parameters::ParamDef,
+    persistence::PrimitiveRegistry, ports::ArrayType, ports::NodeInput, ports::NodeOutput,
+    ports::NodePort, ports::PortKind, ports::PortType,
+};
 
 use manifold_nodes_scene::testkit::gpu_harness as harness;
 
@@ -157,11 +162,9 @@ impl EffectNode for GlassMeshSource {
                 .create_buffer_shared(bytes.len() as u64)
         });
         unsafe { staging.write(0, bytes) };
-        ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(
-            staging,
-            dst,
-            bytes.len() as u64,
-        );
+        ctx.gpu_encoder()
+            .native_enc
+            .copy_buffer_to_buffer(staging, dst, bytes.len() as u64);
     }
 
     fn array_output_capacity(
@@ -201,12 +204,62 @@ fn closed_glass_mesh() -> Vec<MeshVertex> {
     };
     let p = 0.9;
     let n = -0.9;
-    face(&mut vertices, [[-1.2, p, -1.2], [1.2, p, -1.2], [1.2, p, 1.2], [-1.2, p, 1.2]], [0.0, 1.0, 0.0], [1.0; 4]);
-    face(&mut vertices, [[1.2, n, -1.2], [-1.2, n, -1.2], [-1.2, n, 1.2], [1.2, n, 1.2]], [0.0, -1.0, 0.0], [0.15, 0.9, 0.3, 1.0]);
-    face(&mut vertices, [[-1.2, n, -1.2], [1.2, n, -1.2], [1.2, p, -1.2], [-1.2, p, -1.2]], [0.0, 0.0, -1.0], [1.0; 4]);
-    face(&mut vertices, [[1.2, n, 1.2], [-1.2, n, 1.2], [-1.2, p, 1.2], [1.2, p, 1.2]], [0.0, 0.0, 1.0], [1.0; 4]);
-    face(&mut vertices, [[-1.2, n, 1.2], [-1.2, n, -1.2], [-1.2, p, -1.2], [-1.2, p, 1.2]], [-1.0, 0.0, 0.0], [1.0; 4]);
-    face(&mut vertices, [[1.2, n, -1.2], [1.2, n, 1.2], [1.2, p, 1.2], [1.2, p, -1.2]], [1.0, 0.0, 0.0], [1.0; 4]);
+    face(
+        &mut vertices,
+        [
+            [-1.2, p, -1.2],
+            [1.2, p, -1.2],
+            [1.2, p, 1.2],
+            [-1.2, p, 1.2],
+        ],
+        [0.0, 1.0, 0.0],
+        [1.0; 4],
+    );
+    face(
+        &mut vertices,
+        [
+            [1.2, n, -1.2],
+            [-1.2, n, -1.2],
+            [-1.2, n, 1.2],
+            [1.2, n, 1.2],
+        ],
+        [0.0, -1.0, 0.0],
+        [0.15, 0.9, 0.3, 1.0],
+    );
+    face(
+        &mut vertices,
+        [
+            [-1.2, n, -1.2],
+            [1.2, n, -1.2],
+            [1.2, p, -1.2],
+            [-1.2, p, -1.2],
+        ],
+        [0.0, 0.0, -1.0],
+        [1.0; 4],
+    );
+    face(
+        &mut vertices,
+        [[1.2, n, 1.2], [-1.2, n, 1.2], [-1.2, p, 1.2], [1.2, p, 1.2]],
+        [0.0, 0.0, 1.0],
+        [1.0; 4],
+    );
+    face(
+        &mut vertices,
+        [
+            [-1.2, n, 1.2],
+            [-1.2, n, -1.2],
+            [-1.2, p, -1.2],
+            [-1.2, p, 1.2],
+        ],
+        [-1.0, 0.0, 0.0],
+        [1.0; 4],
+    );
+    face(
+        &mut vertices,
+        [[1.2, n, -1.2], [1.2, n, 1.2], [1.2, p, 1.2], [1.2, p, -1.2]],
+        [1.0, 0.0, 0.0],
+        [1.0; 4],
+    );
     vertices
 }
 
@@ -689,9 +742,10 @@ fn solid_transmission_is_invariant_to_triangle_order() {
         .iter_mut()
         .find(|node| node["id"] == 20)
         .unwrap()["params"]["objects"]["value"] = serde_json::json!(1);
-    control["nodes"].as_array_mut().unwrap().retain(|node| {
-        !matches!(node["id"].as_u64(), Some(200..=203))
-    });
+    control["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|node| !matches!(node["id"].as_u64(), Some(200..=203)));
     control["wires"].as_array_mut().unwrap().retain(|wire| {
         !matches!(wire["fromNode"].as_u64(), Some(200..=203))
             && !matches!(wire["toNode"].as_u64(), Some(200..=203))
@@ -792,8 +846,11 @@ fn blend_pane_with_glass(glass_pos_x: f32, glass_pos_y: f32, blend_pos_y: f32) -
     let (blend_nodes, blend_ids) = plane_object(300, blend_pos_y, [1.0, 0.2, 0.2], 0.4, 2);
     let blend_nodes: Vec<serde_json::Value> =
         serde_json::from_str(&format!("[{}]", blend_nodes.trim_end_matches(','))).unwrap();
-    let blend_wires: Vec<serde_json::Value> =
-        serde_json::from_str(&format!("[{}]", wire_object(&blend_ids, 2).trim_end_matches(','))).unwrap();
+    let blend_wires: Vec<serde_json::Value> = serde_json::from_str(&format!(
+        "[{}]",
+        wire_object(&blend_ids, 2).trim_end_matches(',')
+    ))
+    .unwrap();
     let nodes = graph["nodes"].as_array_mut().unwrap();
     let glass_transform = nodes.iter_mut().find(|n| n["id"] == 202).unwrap();
     glass_transform["params"]["pos_x"] = json!({"type":"Float", "value":glass_pos_x});
@@ -811,7 +868,12 @@ fn blend_pane_with_glass(glass_pos_x: f32, glass_pos_y: f32, blend_pos_y: f32) -
 fn blend_layer_composites_exactly_when_glass_shares_the_frame() {
     let (bytes, w, h) = render_readback(&blend_pane_with_glass(20.0, 1.0, 1.0));
     let expected = over([1.0, 0.2, 0.2], 0.4, [0.15, 0.3, 0.6]);
-    assert_rgb_close(center_rgb(&bytes, w, h), expected, 0.02, "blend pane beside glass");
+    assert_rgb_close(
+        center_rgb(&bytes, w, h),
+        expected,
+        0.02,
+        "blend pane beside glass",
+    );
 }
 
 /// Glass drawn after a Blend layer takes its own snapshot right before its
@@ -820,7 +882,12 @@ fn blend_layer_composites_exactly_when_glass_shares_the_frame() {
 fn glass_above_a_blend_layer_transmits_the_blended_colour() {
     let (bytes, w, h) = render_readback(&blend_pane_with_glass(0.0, 2.0, 1.0));
     let expected = over([1.0, 0.2, 0.2], 0.4, [0.15, 0.3, 0.6]);
-    assert_rgb_close(center_rgb(&bytes, w, h), expected, 0.025, "glass over blend pane");
+    assert_rgb_close(
+        center_rgb(&bytes, w, h),
+        expected,
+        0.025,
+        "glass over blend pane",
+    );
 }
 
 /// Compare every output byte with the former Pass B schedule, including a
@@ -831,24 +898,30 @@ fn blend_snapshot_elision_is_bit_exact() {
     use manifold_nodes_scene::node_graph::primitives::render_scene::blend_snapshot_proof;
     for (glass_x, glass_y, blend_y) in [(20.0, 1.0, 1.0), (0.0, 2.0, 1.0), (0.0, 1.0, 2.0)] {
         for roughness in [0.0, 0.6] {
-            let mut graph: serde_json::Value = serde_json::from_str(
-                &blend_pane_with_glass(glass_x, glass_y, blend_y),
-            ).unwrap();
-            let glass = graph["nodes"].as_array_mut().unwrap().iter_mut()
-                .find(|node| node["id"] == 203).unwrap();
+            let mut graph: serde_json::Value =
+                serde_json::from_str(&blend_pane_with_glass(glass_x, glass_y, blend_y)).unwrap();
+            let glass = graph["nodes"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|node| node["id"] == 203)
+                .unwrap();
             glass["params"]["roughness"] = serde_json::json!({"type":"Float", "value":roughness});
             let json = graph.to_string();
             let legacy = blend_snapshot_proof::with_legacy_snapshots(|| render_readback(&json));
             let optimized = render_readback(&json);
-            assert_eq!(optimized, legacy,
-                "snapshot elision changed pixels: glass=({glass_x}, {glass_y}), blend={blend_y}, roughness={roughness}");
+            assert_eq!(
+                optimized, legacy,
+                "snapshot elision changed pixels: glass=({glass_x}, {glass_y}), blend={blend_y}, roughness={roughness}"
+            );
         }
     }
 }
 
 fn scaled_authored_glass_scene(instance_scale: f32, object_scale: f32, thickness: f32) -> String {
     use serde_json::json;
-    let mut graph: serde_json::Value = serde_json::from_str(&transmission_scene(0.0, 1.0, false)).unwrap();
+    let mut graph: serde_json::Value =
+        serde_json::from_str(&transmission_scene(0.0, 1.0, false)).unwrap();
     let nodes = graph["nodes"].as_array_mut().unwrap();
     let transform = nodes.iter_mut().find(|n| n["id"] == 202).unwrap();
     for axis in ["scale_x", "scale_y", "scale_z"] {
@@ -856,7 +929,9 @@ fn scaled_authored_glass_scene(instance_scale: f32, object_scale: f32, thickness
     }
     let glass = nodes.iter_mut().find(|n| n["id"] == 203).unwrap();
     for (key, value) in [
-        ("ior", 1.5), ("roughness", 0.0), ("volume_thickness", thickness),
+        ("ior", 1.5),
+        ("roughness", 0.0),
+        ("volume_thickness", thickness),
         ("volume_attenuation_distance", 1.0),
         ("volume_attenuation_color_r", 0.2),
         ("volume_attenuation_color_g", 0.5),
@@ -864,11 +939,13 @@ fn scaled_authored_glass_scene(instance_scale: f32, object_scale: f32, thickness
     ] {
         glass["params"][key] = json!({"type":"Float","value":value});
     }
-    nodes.push(json!({"id":400,"nodeId":"scaled_glass_instance","typeId":"node.arrange_copies",
+    nodes.push(
+        json!({"id":400,"nodeId":"scaled_glass_instance","typeId":"node.arrange_copies",
         "params":{
             "max_capacity":{"type":"Int","value":1},"active_count":{"type":"Int","value":1},
             "base_scale":{"type":"Float","value":instance_scale}
-        }}));
+        }}),
+    );
     graph["wires"].as_array_mut().unwrap().push(json!({
         "fromNode":400,"fromPort":"instances","toNode":20,"toPort":"instances_1"
     }));
@@ -883,27 +960,44 @@ fn authored_glass_thickness_matches_equivalent_object_and_instance_scale() {
     let object_rgb = center_rgb(&object, w, h);
     let instance_rgb = center_rgb(&instance, w, h);
     let thin_rgb = center_rgb(&thin_control, w, h);
-    assert_rgb_close(instance_rgb, object_rgb, 0.002, "equivalent world optical distance");
-    assert!(instance_rgb[0] < thin_rgb[0] * 0.7,
-        "doubled path must increase Beer-Lambert absorption: thick={instance_rgb:?}, thin={thin_rgb:?}");
+    assert_rgb_close(
+        instance_rgb,
+        object_rgb,
+        0.002,
+        "equivalent world optical distance",
+    );
+    assert!(
+        instance_rgb[0] < thin_rgb[0] * 0.7,
+        "doubled path must increase Beer-Lambert absorption: thick={instance_rgb:?}, thin={thin_rgb:?}"
+    );
     // Compare the entire image, including refracted background boundaries,
     // so matching absorption alone cannot hide a refraction-distance mismatch.
     for (actual, expected) in instance.chunks_exact(2).zip(object.chunks_exact(2)) {
         let actual = f16::from_le_bytes([actual[0], actual[1]]).to_f32();
         let expected = f16::from_le_bytes([expected[0], expected[1]]).to_f32();
-        assert!((actual - expected).abs() <= 0.002, "equivalent-scale pixel: {actual} vs {expected}");
+        assert!(
+            (actual - expected).abs() <= 0.002,
+            "equivalent-scale pixel: {actual} vs {expected}"
+        );
     }
     if let Some(dir) = std::env::var_os("MANIFOLD_MATERIAL_PROOF_DIR") {
         let dir = std::path::PathBuf::from(dir);
         std::fs::create_dir_all(&dir).expect("create glass proof directory");
-        for (name, bytes) in [("glass-object-scale", object), ("glass-instance-scale", instance), ("glass-half-thickness", thin_control)] {
-            let rgba: Vec<u8> = bytes.chunks_exact(8).flat_map(|pixel| {
-                let channel = |i| {
-                    let linear = f16::from_le_bytes([pixel[i], pixel[i + 1]]).to_f32();
-                    manifold_node_engine::testkit::gpu::linear_to_srgb8(linear)
-                };
-                [channel(0), channel(2), channel(4), 255]
-            }).collect();
+        for (name, bytes) in [
+            ("glass-object-scale", object),
+            ("glass-instance-scale", instance),
+            ("glass-half-thickness", thin_control),
+        ] {
+            let rgba: Vec<u8> = bytes
+                .chunks_exact(8)
+                .flat_map(|pixel| {
+                    let channel = |i| {
+                        let linear = f16::from_le_bytes([pixel[i], pixel[i + 1]]).to_f32();
+                        manifold_node_engine::testkit::gpu::linear_to_srgb8(linear)
+                    };
+                    [channel(0), channel(2), channel(4), 255]
+                })
+                .collect();
             let png = manifold_node_engine::testkit::gpu::encode_rgba8_png(&rgba, w, h);
             std::fs::write(dir.join(format!("{name}.png")), png).expect("write glass proof image");
         }

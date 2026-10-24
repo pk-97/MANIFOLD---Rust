@@ -10,8 +10,8 @@
 
 use std::collections::VecDeque;
 
-use crate::clock::{ClockFrame, SimulationClock};
 use crate::PlayedTime;
+use crate::clock::{ClockFrame, SimulationClock};
 
 /// A tick start this close to the frame's played time (seconds) starts now:
 /// the frame's own value belongs to it.
@@ -72,7 +72,13 @@ impl<T: Clone> TickSamples<T> {
     /// Each boundary a not-yet-run tick may start at under `clock` in
     /// `(from, until]`, into `out`, whatever the Speed: Speed observed during
     /// the replay can start or stop ticks there. Replaces earlier requests.
-    pub fn request(&mut self, clock: &SimulationClock, from: PlayedTime, until: PlayedTime, out: &mut Vec<PlayedTime>) {
+    pub fn request(
+        &mut self,
+        clock: &SimulationClock,
+        from: PlayedTime,
+        until: PlayedTime,
+        out: &mut Vec<PlayedTime>,
+    ) {
         self.requests.clear();
         let requests = &mut self.requests;
         clock.tick_starts(from, until, |transport| {
@@ -89,7 +95,9 @@ impl<T: Clone> TickSamples<T> {
     /// sample takes one a rounding past the frame. `None` (an input still
     /// pending) records nothing, so those ticks stay unsampled.
     pub fn observe(&mut self, clock: &SimulationClock, now: PlayedTime, value: Option<&T>) {
-        let reached = self.requests.partition_point(|transport| transport.seconds() <= now.seconds() + NOW);
+        let reached = self
+            .requests
+            .partition_point(|transport| transport.seconds() <= now.seconds() + NOW);
         if reached == 0 {
             return;
         }
@@ -160,19 +168,35 @@ impl<T: Clone> TickSamples<T> {
                 self.spare.push(held);
             }
         }
-        self.settle_now(clock, value, if frame.reanchored { Settle::Reanchor } else { Settle::Fill });
+        self.settle_now(
+            clock,
+            value,
+            if frame.reanchored {
+                Settle::Reanchor
+            } else {
+                Settle::Fill
+            },
+        );
     }
 
     fn settle_now(&mut self, clock: &SimulationClock, value: &T, settle: Settle) {
         let now = clock.transport().seconds();
         let mut tick = clock.ticks_done();
-        while let Some(start) = clock.tick_start(tick).map(PlayedTime::seconds).filter(|&start| start <= now + NOW) {
+        while let Some(start) = clock
+            .tick_start(tick)
+            .map(PlayedTime::seconds)
+            .filter(|&start| start <= now + NOW)
+        {
             let starts_now = (start - now).abs() <= NOW;
             let sampled = self.get(tick).is_some();
             match settle {
                 Settle::Restart => record(&mut self.ticks, &mut self.spare, tick, value),
-                Settle::Reanchor if starts_now => record(&mut self.ticks, &mut self.spare, tick, value),
-                Settle::Fill if starts_now && !sampled => record(&mut self.ticks, &mut self.spare, tick, value),
+                Settle::Reanchor if starts_now => {
+                    record(&mut self.ticks, &mut self.spare, tick, value)
+                }
+                Settle::Fill if starts_now && !sampled => {
+                    record(&mut self.ticks, &mut self.spare, tick, value)
+                }
                 _ => {}
             }
             tick += 1;
@@ -181,11 +205,21 @@ impl<T: Clone> TickSamples<T> {
 
     /// The `(tick, value)` pairs for ticks `first..first + count`, or the
     /// first tick nobody sampled.
-    pub fn span(&self, first: u64, count: usize) -> Result<std::collections::vec_deque::Iter<'_, (u64, T)>, u64> {
-        let start = self.ticks.partition_point(|(recorded, _)| *recorded < first);
+    pub fn span(
+        &self,
+        first: u64,
+        count: usize,
+    ) -> Result<std::collections::vec_deque::Iter<'_, (u64, T)>, u64> {
+        let start = self
+            .ticks
+            .partition_point(|(recorded, _)| *recorded < first);
         for offset in 0..count {
             let tick = first + offset as u64;
-            if self.ticks.get(start + offset).is_none_or(|(recorded, _)| *recorded != tick) {
+            if self
+                .ticks
+                .get(start + offset)
+                .is_none_or(|(recorded, _)| *recorded != tick)
+            {
                 return Err(tick);
             }
         }
@@ -194,13 +228,18 @@ impl<T: Clone> TickSamples<T> {
 
     /// The value at `tick`'s start, if sampled.
     pub fn get(&self, tick: u64) -> Option<&T> {
-        self.span(tick, 1).ok().and_then(|mut span| span.next()).map(|(_, value)| value)
+        self.span(tick, 1)
+            .ok()
+            .and_then(|mut span| span.next())
+            .map(|(_, value)| value)
     }
 
     /// The value closing the tick before `tick`: its end before any
     /// discarded transport gap or Speed 0 stretch, else `tick`'s start.
     pub fn endpoint(&self, tick: u64) -> Option<&T> {
-        self.previous_endpoint.as_ref().filter(|(recorded, _)| *recorded == tick)
+        self.previous_endpoint
+            .as_ref()
+            .filter(|(recorded, _)| *recorded == tick)
             .map(|(_, value)| value)
             .or_else(|| find(&self.closings, tick))
             .or_else(|| self.get(tick))
@@ -210,19 +249,30 @@ impl<T: Clone> TickSamples<T> {
     /// discarded transport gap or a Speed 0 stretch. The previous endpoint
     /// must settle first.
     pub fn reanchored_start(&self, tick: u64) -> Option<&T> {
-        let closed = self.previous_endpoint.as_ref().is_some_and(|(recorded, _)| *recorded == tick)
+        let closed = self
+            .previous_endpoint
+            .as_ref()
+            .is_some_and(|(recorded, _)| *recorded == tick)
             || find(&self.closings, tick).is_some();
         self.get(tick).filter(|_| closed)
     }
 
     /// Forget ticks before `tick`.
     pub fn prune_before(&mut self, tick: u64) {
-        while self.ticks.front().is_some_and(|(recorded, _)| *recorded < tick) {
+        while self
+            .ticks
+            .front()
+            .is_some_and(|(recorded, _)| *recorded < tick)
+        {
             if let Some((_, value)) = self.ticks.pop_front() {
                 self.spare.push(value);
             }
         }
-        while self.closings.front().is_some_and(|(recorded, _)| *recorded < tick) {
+        while self
+            .closings
+            .front()
+            .is_some_and(|(recorded, _)| *recorded < tick)
+        {
             if let Some((_, value)) = self.closings.pop_front() {
                 self.spare.push(value);
             }
@@ -230,9 +280,12 @@ impl<T: Clone> TickSamples<T> {
     }
 
     pub fn clear(&mut self) {
-        self.spare.extend(self.ticks.drain(..).map(|(_, value)| value));
-        self.spare.extend(self.closings.drain(..).map(|(_, value)| value));
-        self.spare.extend(self.previous_endpoint.take().map(|(_, value)| value));
+        self.spare
+            .extend(self.ticks.drain(..).map(|(_, value)| value));
+        self.spare
+            .extend(self.closings.drain(..).map(|(_, value)| value));
+        self.spare
+            .extend(self.previous_endpoint.take().map(|(_, value)| value));
     }
 }
 
@@ -261,7 +314,10 @@ fn reuse<T: Clone>(spare: &mut Vec<T>, value: &T) -> T {
 
 fn find<T>(samples: &VecDeque<(u64, T)>, tick: u64) -> Option<&T> {
     let at = samples.partition_point(|(recorded, _)| *recorded < tick);
-    samples.get(at).filter(|(recorded, _)| *recorded == tick).map(|(_, value)| value)
+    samples
+        .get(at)
+        .filter(|(recorded, _)| *recorded == tick)
+        .map(|(_, value)| value)
 }
 
 #[cfg(test)]
@@ -275,7 +331,13 @@ mod tests {
     }
 
     /// [`TickSamples::request`] into bare seconds.
-    fn request(samples: &mut TickSamples<f64>, clock: &SimulationClock, from: f64, until: f64, out: &mut Vec<f64>) {
+    fn request(
+        samples: &mut TickSamples<f64>,
+        clock: &SimulationClock,
+        from: f64,
+        until: f64,
+        out: &mut Vec<f64>,
+    ) {
         let mut played = Vec::new();
         samples.request(clock, p(from), p(until), &mut played);
         out.extend(played.into_iter().map(PlayedTime::seconds));
@@ -350,7 +412,11 @@ mod tests {
     /// advances. Every tick run must have its start sampled. Returns each
     /// tick run with the transport its sample was taken at (the closing sample
     /// stands in for a boundary on the frame itself) and its interval.
-    fn run_with_speed(fps: u32, offline: bool, speed: impl Fn(f64) -> f32) -> Vec<(u64, u64, u64, u64)> {
+    fn run_with_speed(
+        fps: u32,
+        offline: bool,
+        speed: impl Fn(f64) -> f32,
+    ) -> Vec<(u64, u64, u64, u64)> {
         let mut clock = SimulationClock::default();
         let mut samples = TickSamples::default();
         let frame = clock.advance(p(0.0), TICK, speed(0.0), 0.0, false, offline);
@@ -374,11 +440,19 @@ mod tests {
             }
             let frame = clock.advance(p(now), TICK, speed(now), 0.0, false, offline);
             samples.settle(&clock, &frame, Some(&now));
-            let span = samples.span(frame.first_sequence, frame.ticks as usize)
-                .unwrap_or_else(|tick| panic!("{fps} fps, offline {offline}: tick {tick} ran unsampled at {now}"));
+            let span = samples
+                .span(frame.first_sequence, frame.ticks as usize)
+                .unwrap_or_else(|tick| {
+                    panic!("{fps} fps, offline {offline}: tick {tick} ran unsampled at {now}")
+                });
             for (ordinal, &(tick, sampled)) in span.enumerate() {
                 let interval = frame.interval(ordinal as u64).unwrap();
-                ran.push((tick, sampled.to_bits(), interval.start.0.to_bits(), interval.end.0.to_bits()));
+                ran.push((
+                    tick,
+                    sampled.to_bits(),
+                    interval.start.0.to_bits(),
+                    interval.end.0.to_bits(),
+                ));
             }
             samples.prune_before(frame.first_sequence + u64::from(frame.ticks));
             previous = now;
@@ -394,17 +468,31 @@ mod tests {
     fn speed_crossing_zero_between_frames_samples_every_tick_it_runs() {
         let speed = |t: f64| (2.0 * (std::f64::consts::TAU * 1.3 * t).cos()).max(0.0) as f32;
         let reference = run_with_speed(60, true, speed);
-        assert!(reference.len() > 40 && reference.len() < 100, "Speed 0 stretches run no tick: {} ran", reference.len());
+        assert!(
+            reference.len() > 40 && reference.len() < 100,
+            "Speed 0 stretches run no tick: {} ran",
+            reference.len()
+        );
         for &(tick, sampled, start, end) in &reference {
             let at = f64::from_bits(sampled);
-            assert!(((at / TICK).round() * TICK - at).abs() < 1e-12, "tick {tick} sampled off a boundary at {at}");
+            assert!(
+                ((at / TICK).round() * TICK - at).abs() < 1e-12,
+                "tick {tick} sampled off a boundary at {at}"
+            );
             assert!(speed(at) > 0.0, "tick {tick} starts where Speed is 0");
             assert!(f64::from_bits(end) > f64::from_bits(start));
         }
         for fps in [30, 60, 120, 144] {
             for offline in [false, true] {
-                let intervals = |ran: &[(u64, u64, u64, u64)]| ran.iter().map(|&(tick, _, start, end)| (tick, start, end)).collect::<Vec<_>>();
-                assert!(intervals(&run_with_speed(fps, offline, speed)) == intervals(&reference), "{fps} fps, offline {offline}");
+                let intervals = |ran: &[(u64, u64, u64, u64)]| {
+                    ran.iter()
+                        .map(|&(tick, _, start, end)| (tick, start, end))
+                        .collect::<Vec<_>>()
+                };
+                assert!(
+                    intervals(&run_with_speed(fps, offline, speed)) == intervals(&reference),
+                    "{fps} fps, offline {offline}"
+                );
             }
         }
     }

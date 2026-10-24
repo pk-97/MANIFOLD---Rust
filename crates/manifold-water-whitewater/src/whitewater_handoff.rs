@@ -10,13 +10,14 @@
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 
 use manifold_fluids::{
-    WhitewaterFields, WhitewaterGrid, WhitewaterKind, WhitewaterLifecycle as NativeLifecycle, WhitewaterParticle, WhitewaterSpawn,
+    WhitewaterFields, WhitewaterGrid, WhitewaterKind, WhitewaterLifecycle as NativeLifecycle,
+    WhitewaterParticle, WhitewaterSpawn,
 };
 use manifold_gpu::{FrameClock, GpuBuffer, GpuDevice};
 
-use manifold_water_liquid::clock::whitewater_fade;
-use manifold_physics::clock::TICK;
 use manifold_node_engine::particles::FluidParticle;
+use manifold_physics::clock::TICK;
+use manifold_water_liquid::clock::whitewater_fade;
 use manifold_water_liquid::grid::face_len;
 
 /// The frame-completion clock the rings stamp and check.
@@ -100,7 +101,11 @@ impl SnapshotShape {
 
     /// Every byte one slot holds (9.2 MB at 64 with the default capacity).
     pub fn slot_bytes(&self) -> u64 {
-        self.spawn_bytes() + 4 + (0..3).map(|a| self.face_bytes(a)).sum::<u64>() + self.level_bytes() + self.solid_bytes()
+        self.spawn_bytes()
+            + 4
+            + (0..3).map(|a| self.face_bytes(a)).sum::<u64>()
+            + self.level_bytes()
+            + self.solid_bytes()
     }
 }
 
@@ -135,13 +140,23 @@ pub(crate) struct Snapshot {
 }
 
 fn shared(device: &GpuDevice, bytes: u64, what: &str) -> Result<GpuBuffer, String> {
-    device.try_create_buffer_shared(bytes.max(4)).map_err(|error| format!("Whitewater {what} needs {bytes} bytes: {error}"))
+    device
+        .try_create_buffer_shared(bytes.max(4))
+        .map_err(|error| format!("Whitewater {what} needs {bytes} bytes: {error}"))
 }
 
 impl Snapshot {
     fn allocate(device: &GpuDevice, shape: SnapshotShape) -> Result<Self, String> {
-        manifold_node_engine::load::expand::admit_candidate_bytes(device.modifier_memory_snapshot(), shape.slot_bytes())
-            .map_err(|error| format!("Whitewater snapshot needs {} bytes: {error}", shape.slot_bytes()))?;
+        manifold_node_engine::load::expand::admit_candidate_bytes(
+            device.modifier_memory_snapshot(),
+            shape.slot_bytes(),
+        )
+        .map_err(|error| {
+            format!(
+                "Whitewater snapshot needs {} bytes: {error}",
+                shape.slot_bytes()
+            )
+        })?;
         Ok(Self {
             spawns: shared(device, shape.spawn_bytes(), "spawn snapshot")?,
             emitted: shared(device, 4, "emitted count")?,
@@ -173,14 +188,20 @@ impl Snapshot {
         ticks: u32,
         gravity: [f32; 3],
     ) -> Result<(), String> {
-        assert!(!self.pending, "a pending snapshot slot is never captured over");
+        assert!(
+            !self.pending,
+            "a pending snapshot slot is never captured over"
+        );
         let shape = self.shape;
         let short = |what: &str, have: u64, need: u64| {
-            (have < need).then(|| format!("Whitewater: the {what} array holds {have} bytes; the grid needs {need}"))
+            (have < need).then(|| {
+                format!("Whitewater: the {what} array holds {have} bytes; the grid needs {need}")
+            })
         };
         let mut refusal = None;
         for axis in 0..3 {
-            refusal = refusal.or_else(|| short("face", inputs.faces[axis].size, shape.face_bytes(axis)));
+            refusal =
+                refusal.or_else(|| short("face", inputs.faces[axis].size, shape.face_bytes(axis)));
         }
         refusal = refusal
             .or_else(|| short("level", inputs.level.size, shape.level_bytes()))
@@ -194,14 +215,20 @@ impl Snapshot {
             enc.copy_buffer_to_buffer(inputs.spawns, &self.spawns, spawn_bytes);
         }
         match inputs.offsets {
-            Some((offsets, emitters)) if emitters > 0 && u64::from(emitters) * 4 <= offsets.size => {
+            Some((offsets, emitters))
+                if emitters > 0 && u64::from(emitters) * 4 <= offsets.size =>
+            {
                 enc.copy_buffer_range(offsets, (u64::from(emitters) - 1) * 4, &self.emitted, 0, 4);
             }
             // SAFETY: the slot is free, so no GPU work touches it.
             _ => unsafe { self.emitted.write(0, &0u32.to_ne_bytes()) },
         }
         for axis in 0..3 {
-            enc.copy_buffer_to_buffer(inputs.faces[axis], &self.faces[axis], shape.face_bytes(axis));
+            enc.copy_buffer_to_buffer(
+                inputs.faces[axis],
+                &self.faces[axis],
+                shape.face_bytes(axis),
+            );
         }
         enc.copy_buffer_to_buffer(inputs.level, &self.level, shape.level_bytes());
         enc.copy_buffer_to_buffer(inputs.solid, &self.solid, shape.solid_bytes());
@@ -217,7 +244,9 @@ impl Snapshot {
     /// # Safety
     /// The frame stamped on this slot has retired and no capture since.
     unsafe fn floats(buffer: &GpuBuffer, bytes: u64) -> &[f32] {
-        let ptr = buffer.mapped_ptr().expect("snapshot slots are shared storage");
+        let ptr = buffer
+            .mapped_ptr()
+            .expect("snapshot slots are shared storage");
         // SAFETY: shared storage of at least `bytes`, written by a retired frame.
         unsafe { std::slice::from_raw_parts(ptr.cast::<f32>().cast_const(), (bytes / 4) as usize) }
     }
@@ -248,9 +277,17 @@ impl Snapshot {
     /// # Safety
     /// The frame stamped on this slot has retired and no capture since.
     pub unsafe fn spawns(&self) -> &[WhitewaterSpawn] {
-        let ptr = self.spawns.mapped_ptr().expect("snapshot slots are shared storage");
+        let ptr = self
+            .spawns
+            .mapped_ptr()
+            .expect("snapshot slots are shared storage");
         // SAFETY: the copy filled `spawn_records` records; the caller's contract.
-        unsafe { std::slice::from_raw_parts(ptr.cast::<WhitewaterSpawn>().cast_const(), self.spawn_records as usize) }
+        unsafe {
+            std::slice::from_raw_parts(
+                ptr.cast::<WhitewaterSpawn>().cast_const(),
+                self.spawn_records as usize,
+            )
+        }
     }
 
     /// Spawns the emitters asked for this frame, before capacity.
@@ -258,7 +295,10 @@ impl Snapshot {
     /// # Safety
     /// The frame stamped on this slot has retired and no capture since.
     pub unsafe fn emitted(&self) -> u32 {
-        let ptr = self.emitted.mapped_ptr().expect("snapshot slots are shared storage");
+        let ptr = self
+            .emitted
+            .mapped_ptr()
+            .expect("snapshot slots are shared storage");
         // SAFETY: four bytes of shared storage; the caller's contract.
         unsafe { ptr.cast::<u32>().read_unaligned() }
     }
@@ -276,8 +316,16 @@ impl SnapshotRing {
     /// A free slot sized for `shape`, allocating up to [`SNAPSHOT_SLOTS`] and
     /// replacing a free slot of another shape. None when every slot is
     /// pending or on loan.
-    pub fn free_slot(&mut self, device: &GpuDevice, shape: SnapshotShape) -> Result<Option<usize>, String> {
-        if let Some(index) = self.slots.iter().position(|s| !s.pending && s.shape == shape) {
+    pub fn free_slot(
+        &mut self,
+        device: &GpuDevice,
+        shape: SnapshotShape,
+    ) -> Result<Option<usize>, String> {
+        if let Some(index) = self
+            .slots
+            .iter()
+            .position(|s| !s.pending && s.shape == shape)
+        {
             return Ok(Some(index));
         }
         if let Some(index) = self.slots.iter().position(|s| !s.pending) {
@@ -294,7 +342,9 @@ impl SnapshotRing {
 
     /// The pending slot captured first.
     fn oldest_pending(&self) -> Option<usize> {
-        (0..self.slots.len()).filter(|&i| self.slots[i].pending).min_by_key(|&i| self.slots[i].stamp)
+        (0..self.slots.len())
+            .filter(|&i| self.slots[i].pending)
+            .min_by_key(|&i| self.slots[i].stamp)
     }
 
     pub fn pending_count(&self) -> usize {
@@ -319,7 +369,9 @@ impl SnapshotRing {
                     break;
                 }
                 if !fence.wait(stamp) {
-                    return Err("a frame's snapshot did not finish on the GPU within 5 seconds".into());
+                    return Err(
+                        "a frame's snapshot did not finish on the GPU within 5 seconds".into(),
+                    );
                 }
             }
             if self.slots[index].epoch != epoch || self.slots[index].shape != shape {
@@ -366,14 +418,22 @@ fn population_of(kind: WhitewaterKind) -> usize {
 impl OutputSlot {
     fn allocate(device: &GpuDevice, records: usize) -> Result<Self, String> {
         let bytes = (records * std::mem::size_of::<FluidParticle>()) as u64;
-        manifold_node_engine::load::expand::admit_candidate_bytes(device.modifier_memory_snapshot(), 3 * bytes)
-            .map_err(|error| format!("Whitewater output needs {} bytes: {error}", 3 * bytes))?;
+        manifold_node_engine::load::expand::admit_candidate_bytes(
+            device.modifier_memory_snapshot(),
+            3 * bytes,
+        )
+        .map_err(|error| format!("Whitewater output needs {} bytes: {error}", 3 * bytes))?;
         let buffer = || -> Result<GpuBuffer, String> {
             let buffer = shared(device, bytes, "output")?;
             buffer.zero_fill();
             Ok(buffer)
         };
-        Ok(Self { buffers: [buffer()?, buffer()?, buffer()?], records, counts: [0; 3], read_stamp: 0 })
+        Ok(Self {
+            buffers: [buffer()?, buffer()?, buffer()?],
+            records,
+            counts: [0; 3],
+            read_stamp: 0,
+        })
     }
 
     /// Worker side: write `particles` into this loaned slot, faded as FLIP's
@@ -384,12 +444,21 @@ impl OutputSlot {
         for particle in particles {
             counts[population_of(particle.kind)] += 1;
         }
-        let records = counts.iter().copied().max().unwrap_or(0).max(1).div_ceil(OUTPUT_ROUNDING) * OUTPUT_ROUNDING;
+        let records = counts
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(0)
+            .max(1)
+            .div_ceil(OUTPUT_ROUNDING)
+            * OUTPUT_ROUNDING;
         if self.records < records {
             return Err(records);
         }
         let outs: [&mut [FluidParticle]; 3] = self.buffers.each_ref().map(|buffer| {
-            let ptr = buffer.mapped_ptr().expect("output slots are shared storage");
+            let ptr = buffer
+                .mapped_ptr()
+                .expect("output slots are shared storage");
             // SAFETY: shared storage of `self.records` particles; the slot is
             // loaned only once every frame that read it retired, and the
             // three buffers are distinct.
@@ -427,10 +496,18 @@ impl OutputRing {
     /// A slot for the worker to write the population into, every reader of
     /// which retired, grown on this thread to the records the population
     /// last needed. None when none has retired: the current one stays.
-    pub fn loan(&mut self, device: &GpuDevice, fence: &dyn Fence) -> Result<Option<OutputSlot>, String> {
+    pub fn loan(
+        &mut self,
+        device: &GpuDevice,
+        fence: &dyn Fence,
+    ) -> Result<Option<OutputSlot>, String> {
         let records = self.records.max(OUTPUT_ROUNDING);
         let retired = |slot: &OutputSlot| fence.is_complete(slot.read_stamp);
-        if let Some(index) = self.free.iter().position(|slot| retired(slot) && slot.records >= records) {
+        if let Some(index) = self
+            .free
+            .iter()
+            .position(|slot| retired(slot) && slot.records >= records)
+        {
             return Ok(Some(self.free.swap_remove(index)));
         }
         if let Some(index) = self.free.iter().position(retired) {
@@ -567,7 +644,10 @@ impl Lifecycle {
             #[cfg(all(test, feature = "gpu-proofs"))]
             updated_on: std::thread::current().id(),
         };
-        reply.failure = self.step(request.reset, &mut reply).and_then(|()| self.write(&mut reply)).err();
+        reply.failure = self
+            .step(request.reset, &mut reply)
+            .and_then(|()| self.write(&mut reply))
+            .err();
         reply.worker_ms = start.elapsed().as_secs_f64() * 1000.0;
         reply
     }
@@ -575,23 +655,38 @@ impl Lifecycle {
     /// Load each snapshot, oldest first, and step it its ticks (I4).
     fn step(&mut self, reset: Option<Reset>, reply: &mut Reply) -> Result<(), String> {
         if let Some(reset) = reset {
-            let fits = self.native.as_ref().is_some_and(|l| l.grid() == reset.grid && l.capacity() == reset.capacity);
+            let fits = self
+                .native
+                .as_ref()
+                .is_some_and(|l| l.grid() == reset.grid && l.capacity() == reset.capacity);
             if fits {
-                self.native.as_mut().expect("lifecycle").clear(u64::from(reset.epoch)).map_err(|e| e.to_string())?;
+                self.native
+                    .as_mut()
+                    .expect("lifecycle")
+                    .clear(u64::from(reset.epoch))
+                    .map_err(|e| e.to_string())?;
             } else {
                 self.native = None;
-                self.native = Some(NativeLifecycle::new(reset.grid, reset.capacity, u64::from(reset.epoch)).map_err(|e| e.to_string())?);
+                self.native = Some(
+                    NativeLifecycle::new(reset.grid, reset.capacity, u64::from(reset.epoch))
+                        .map_err(|e| e.to_string())?,
+                );
             }
         }
-        let native = self.native.as_mut().ok_or("no lifecycle: the first request resets it")?;
+        let native = self
+            .native
+            .as_mut()
+            .ok_or("no lifecycle: the first request resets it")?;
         for slot in &reply.snapshots {
             // SAFETY: the slot's frame retired and the slot is on loan to this
             // thread alone.
-            let (fields, spawns, emitted) = unsafe { (slot.fields(), slot.spawns(), slot.emitted()) };
+            let (fields, spawns, emitted) =
+                unsafe { (slot.fields(), slot.spawns(), slot.emitted()) };
             native.set_fields(&fields).map_err(|e| e.to_string())?;
             let (_, load_thinned) = native.load(spawns).map_err(|e| e.to_string())?;
             reply.emitted += u64::from(emitted);
-            reply.thinned += u64::from(emitted.saturating_sub(slot.shape.capacity)) + u64::from(load_thinned);
+            reply.thinned +=
+                u64::from(emitted.saturating_sub(slot.shape.capacity)) + u64::from(load_thinned);
             for _ in 0..slot.ticks {
                 native.step(TICK).map_err(|e| e.to_string())?;
             }
@@ -603,8 +698,13 @@ impl Lifecycle {
         let Some(slot) = reply.output.as_mut() else {
             return Ok(());
         };
-        let native = self.native.as_mut().ok_or("no lifecycle: the first request resets it")?;
-        native.particles(&mut self.population).map_err(|e| e.to_string())?;
+        let native = self
+            .native
+            .as_mut()
+            .ok_or("no lifecycle: the first request resets it")?;
+        native
+            .particles(&mut self.population)
+            .map_err(|e| e.to_string())?;
         match slot.write(&self.population) {
             Ok(()) => reply.written = true,
             Err(records) => reply.needs = Some(records),
@@ -640,10 +740,14 @@ impl Worker {
 
     /// Only while no request is in flight.
     pub fn send(&self, request: Request) -> Result<(), String> {
-        self.requests.try_send(request).map_err(|error| match error {
-            mpsc::TrySendError::Full(_) => "a whitewater request was sent while one was in flight".to_owned(),
-            mpsc::TrySendError::Disconnected(_) => "the whitewater worker stopped".to_owned(),
-        })
+        self.requests
+            .try_send(request)
+            .map_err(|error| match error {
+                mpsc::TrySendError::Full(_) => {
+                    "a whitewater request was sent while one was in flight".to_owned()
+                }
+                mpsc::TrySendError::Disconnected(_) => "the whitewater worker stopped".to_owned(),
+            })
     }
 
     /// The reply, if the worker finished. Never blocks.
@@ -657,7 +761,9 @@ impl Worker {
 
     /// Offline only: block until the worker finishes.
     pub fn reply(&self) -> Result<Reply, String> {
-        self.replies.recv().map_err(|_| "the whitewater worker stopped".to_owned())
+        self.replies
+            .recv()
+            .map_err(|_| "the whitewater worker stopped".to_owned())
     }
 }
 
@@ -670,8 +776,21 @@ mod tests {
     #[test]
     #[should_panic(expected = "runs only on its own thread")]
     fn whitewater_update_refuses_other_threads() {
-        let grid = WhitewaterGrid { cells: [4; 3], cell_size: 0.1, origin: [0.0; 3] };
-        let request = Request { reset: Some(Reset { grid, capacity: 8, epoch: 0 }), snapshots: Vec::new(), output: None, hold: None };
+        let grid = WhitewaterGrid {
+            cells: [4; 3],
+            cell_size: 0.1,
+            origin: [0.0; 3],
+        };
+        let request = Request {
+            reset: Some(Reset {
+                grid,
+                capacity: 8,
+                epoch: 0,
+            }),
+            snapshots: Vec::new(),
+            output: None,
+            hold: None,
+        };
         Lifecycle::default().process(request);
     }
 }

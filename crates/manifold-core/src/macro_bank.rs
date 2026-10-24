@@ -5,9 +5,9 @@
 //! optional response curves. Targets are identified by the same addressing scheme
 //! as `OscParamTarget` so the fan-out reuses the existing parameter write path.
 
-use crate::preset_type_id::PresetTypeId;
 use crate::effects::ParamId;
 use crate::id::{EffectId, LayerId};
+use crate::preset_type_id::PresetTypeId;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
@@ -683,7 +683,10 @@ mod tests {
         }"#;
         let m: MacroMapping = serde_json::from_str(json).unwrap();
         match &m.target {
-            MacroMappingTarget::Effect { effect_id, param_id } => {
+            MacroMappingTarget::Effect {
+                effect_id,
+                param_id,
+            } => {
                 assert_eq!(effect_id.as_str(), "fx-9");
                 assert_eq!(param_id, "amount");
             }
@@ -709,7 +712,10 @@ mod tests {
         }"#;
         let m: MacroMapping = serde_json::from_str(json).unwrap();
         match &m.target {
-            MacroMappingTarget::Effect { effect_id, param_id } => {
+            MacroMappingTarget::Effect {
+                effect_id,
+                param_id,
+            } => {
                 assert!(effect_id.is_empty(), "unresolved until migration");
                 assert!(param_id.is_empty());
             }
@@ -733,7 +739,10 @@ mod tests {
         }"#;
         let m: MacroMapping = serde_json::from_str(json).unwrap();
         match &m.target {
-            MacroMappingTarget::Effect { effect_id, param_id } => {
+            MacroMappingTarget::Effect {
+                effect_id,
+                param_id,
+            } => {
                 assert!(effect_id.is_empty(), "unresolved until migration");
                 assert_eq!(param_id, "amount");
             }

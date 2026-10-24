@@ -221,9 +221,8 @@ impl Primitive for ArrayMath {
         let a_ptr = a_buf
             .mapped_ptr()
             .expect("array_math: `a` input must be shared-memory");
-        let a_slice: &[f32] = unsafe {
-            std::slice::from_raw_parts(a_ptr as *const f32, a_capacity as usize)
-        };
+        let a_slice: &[f32] =
+            unsafe { std::slice::from_raw_parts(a_ptr as *const f32, a_capacity as usize) };
         // For unary ops the `b` slot is unread — pass an empty slice
         // and `eval_op` ignores the value. For binary ops we require
         // a real `b` source: when not wired, fall back to `a` so the
@@ -291,10 +290,18 @@ mod tests {
     #[test]
     fn op_is_binary_classifies_each_op_correctly() {
         for code in 0..6 {
-            assert!(op_is_binary(code), "{} (idx {code}) is binary", ARRAY_MATH_OPS[code as usize]);
+            assert!(
+                op_is_binary(code),
+                "{} (idx {code}) is binary",
+                ARRAY_MATH_OPS[code as usize]
+            );
         }
         for code in 6..=12 {
-            assert!(!op_is_binary(code), "{} (idx {code}) is unary", ARRAY_MATH_OPS[code as usize]);
+            assert!(
+                !op_is_binary(code),
+                "{} (idx {code}) is unary",
+                ARRAY_MATH_OPS[code as usize]
+            );
         }
         assert!(op_is_binary(13), "Mix (idx 13) is binary");
     }

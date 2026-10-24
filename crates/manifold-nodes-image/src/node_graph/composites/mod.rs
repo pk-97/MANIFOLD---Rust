@@ -50,14 +50,19 @@ use manifold_node_engine::param_binding::composite_handle::CompositeHandle;
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use manifold_node_engine::validation::validate;
-use super::*;
-    use manifold_node_engine::{exec::effect_node::NodeInstanceId, validation::GraphError, parameters::ParamValue};
+    use manifold_node_engine::{
+        exec::effect_node::NodeInstanceId, parameters::ParamValue, validation::GraphError,
+    };
     use std::collections::HashSet;
 
     use manifold_core::{Beats, Seconds};
 
-    use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, scene::boundary_nodes::Source, exec::execution_plan::compile};
+    use manifold_node_engine::{
+        exec::effect_node::FrameTime, exec::execution::Executor, exec::execution_plan::compile,
+        graph::Graph, scene::boundary_nodes::FinalOutput, scene::boundary_nodes::Source,
+    };
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -97,12 +102,7 @@ use super::*;
 
         // Build each composite into its own scratch graph (cheap) just to
         // collect their type IDs and assert the invariants.
-        let ids: HashSet<&str> = [
-            INFRARED_TYPE_ID,
-            SOFT_FOCUS_TYPE_ID,
-        ]
-        .into_iter()
-        .collect();
+        let ids: HashSet<&str> = [INFRARED_TYPE_ID, SOFT_FOCUS_TYPE_ID].into_iter().collect();
         assert_eq!(ids.len(), 2, "composite type IDs must be unique");
 
         for id in ids {

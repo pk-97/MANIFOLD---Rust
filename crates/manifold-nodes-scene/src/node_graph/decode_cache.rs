@@ -25,11 +25,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use manifold_foundation::cold_touch::{ColdTouchKind, record_cold_touch};
 use sha2::{Digest, Sha256};
 
-use manifold_node_engine::mesh::MeshVertex;
 use crate::node_graph::gltf_load::{
     GltfMeshSelector, load_gltf_mesh_from_buffers, parse_buffer_snapshot,
 };
 use crate::node_graph::primitives::hdri_source::load_hdri as load_hdri_uncached;
+use manifold_node_engine::mesh::MeshVertex;
 
 /// On-disk format version. Bumped whenever the header or payload layout
 /// changes so old entries are treated as corrupt and re-decoded.
@@ -385,7 +385,11 @@ fn mesh_selector_key(selector: &GltfMeshSelector) -> String {
         }
         GltfMeshSelector::Material { material_index } => format!("material:{material_index}"),
         GltfMeshSelector::DefaultMaterial => "default-material".to_string(),
-        GltfMeshSelector::Node { path, material, own_space } => {
+        GltfMeshSelector::Node {
+            path,
+            material,
+            own_space,
+        } => {
             let space = if *own_space { "@own" } else { "" };
             match material {
                 -1 => format!("node:{path}{space}"),
@@ -1271,8 +1275,8 @@ mod tests {
         let root = temp_cache_root();
         let selector = GltfMeshSelector::WholeScene;
 
-        let v1 =
-            cached_load_gltf_mesh_with_root(&path, selector.clone(), Some(root.to_path_buf())).unwrap();
+        let v1 = cached_load_gltf_mesh_with_root(&path, selector.clone(), Some(root.to_path_buf()))
+            .unwrap();
 
         let file_hash = parse_buffer_snapshot(&path).unwrap().identity;
         let key = key_hash(

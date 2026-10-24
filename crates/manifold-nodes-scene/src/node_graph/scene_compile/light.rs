@@ -18,7 +18,10 @@ use crate::node_graph::scene_graph::float;
 /// light type (`node.light`'s Sun 0, Point 1, Spot 2).
 pub(crate) fn lamp_params(mode: u32) -> BTreeMap<String, SerializedParamValue> {
     BTreeMap::from([
-        ("mode".to_owned(), SerializedParamValue::Enum { value: mode }),
+        (
+            "mode".to_owned(),
+            SerializedParamValue::Enum { value: mode },
+        ),
         ("pos_x".to_owned(), float(0.0)),
         ("pos_y".to_owned(), float(7.0)),
         ("pos_z".to_owned(), float(7.0)),
@@ -84,15 +87,29 @@ fn emit_environment(b: &mut Builder<'_>, item: &Item, sun: Option<u32>) {
             b.rows(item);
             return;
         }
-        EnvironmentSource::Sky { style: SkyStyle::Gradient } => 0,
-        EnvironmentSource::Sky { style: SkyStyle::Softbox } => 1,
+        EnvironmentSource::Sky {
+            style: SkyStyle::Gradient,
+        } => 0,
+        EnvironmentSource::Sky {
+            style: SkyStyle::Softbox,
+        } => 1,
         EnvironmentSource::Hdri { .. } | EnvironmentSource::SeaHorizon { .. } => 2,
     };
     let environment = b.add(owner, "environment", "node.bake_environment");
-    b.set(environment, "mode", SerializedParamValue::Enum { value: mode });
+    b.set(
+        environment,
+        "mode",
+        SerializedParamValue::Enum { value: mode },
+    );
     if let EnvironmentSource::Hdri { file } | EnvironmentSource::SeaHorizon { file } = source {
         let hdri = b.add(owner, "hdri", "node.hdri_source");
-        b.set(hdri, "path", SerializedParamValue::String { value: file.clone() });
+        b.set(
+            hdri,
+            "path",
+            SerializedParamValue::String {
+                value: file.clone(),
+            },
+        );
         if matches!(source, EnvironmentSource::SeaHorizon { .. }) {
             // The photo's lower half is whatever stood under its camera; the sea
             // replaces it before the bake, so lighting, reflections and the
@@ -128,7 +145,11 @@ fn background(b: &mut Builder<'_>, owner: &str, environment: u32) {
     let over = b.add(owner, "bg_over", "node.over");
     let select = b.add(owner, "bg_select", "node.switch_texture");
     b.set(select, "num_inputs", SerializedParamValue::Int { value: 2 });
-    b.set(select, "selector", SerializedParamValue::Float { value: 0.0 });
+    b.set(
+        select,
+        "selector",
+        SerializedParamValue::Float { value: 0.0 },
+    );
     b.set(blur, "radius", SerializedParamValue::Float { value: 0.0 });
     b.wire(tail, "out", select, "in_0");
     b.wire(tail, "out", over, "top");

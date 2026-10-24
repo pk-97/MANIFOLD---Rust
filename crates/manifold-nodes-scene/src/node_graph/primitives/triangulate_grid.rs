@@ -14,8 +14,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
@@ -112,7 +112,10 @@ impl Primitive for TriangulateGrid {
             Some(ParamValue::Float(n)) => n.round().max(2_f32) as u32,
             _ => 256,
         };
-        let keep_normals = u32::from(matches!(ctx.params.get("keep_normals"), Some(ParamValue::Bool(true))));
+        let keep_normals = u32::from(matches!(
+            ctx.params.get("keep_normals"),
+            Some(ParamValue::Bool(true))
+        ));
 
         let Some(src) = ctx.inputs.array("in") else {
             return;
@@ -168,16 +171,35 @@ mod gpu_tests {
     use super::*;
 
     fn grid_vertex(pos: [f32; 3], uv: [f32; 2]) -> MeshVertex {
-        MeshVertex { position: pos, _pad0: 0.0, normal: [0.0; 3], _pad1: 0.0, uv, _pad2: [0.0; 2], tangent: [0.0; 4], color: [1.0; 4] }
+        MeshVertex {
+            position: pos,
+            _pad0: 0.0,
+            normal: [0.0; 3],
+            _pad1: 0.0,
+            uv,
+            _pad2: [0.0; 2],
+            tangent: [0.0; 4],
+            color: [1.0; 4],
+        }
     }
 
-    fn dispatch_tri(grid: &[MeshVertex], dst_cap: u32, uniform: &TriangulateUniforms) -> Vec<MeshVertex> {
-        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<TriangulateGrid>().expect("make_triangles codegen");
+    fn dispatch_tri(
+        grid: &[MeshVertex],
+        dst_cap: u32,
+        uniform: &TriangulateUniforms,
+    ) -> Vec<MeshVertex> {
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<TriangulateGrid>()
+            .expect("make_triangles codegen");
         let uniform = bytemuck::bytes_of(uniform);
         let device = manifold_gpu::testkit::test_device();
-        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "tri-oracle");
+        let pipeline = device.create_compute_pipeline(
+            &wgsl,
+            manifold_node_engine::freeze::codegen::ENTRY,
+            "tri-oracle",
+        );
         let src_buf = device.create_buffer_shared(std::mem::size_of_val(grid) as u64);
-        let dst_buf = device.create_buffer_shared(u64::from(dst_cap) * std::mem::size_of::<MeshVertex>() as u64);
+        let dst_buf = device
+            .create_buffer_shared(u64::from(dst_cap) * std::mem::size_of::<MeshVertex>() as u64);
         unsafe {
             src_buf.write(0, bytemuck::cast_slice(grid));
         }
@@ -185,19 +207,30 @@ mod gpu_tests {
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: uniform },
-                GpuBinding::Buffer { binding: 1, buffer: &src_buf, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: &dst_buf, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: uniform,
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &src_buf,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: &dst_buf,
+                    offset: 0,
+                },
             ],
             [dst_cap.div_ceil(256), 1, 1],
             "tri-oracle",
         );
         enc.commit_and_wait_completed();
         let ptr = dst_buf.mapped_ptr().expect("shared dst buffer");
-        let slice = unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, dst_cap as usize) };
+        let slice =
+            unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, dst_cap as usize) };
         slice.to_vec()
     }
-
 
     /// BUG-120: on a flat XZ grid the per-vertex normal is always the
     /// declared +Y up-vector (`tg_compute_normal`'s finite difference has no
@@ -218,7 +251,12 @@ mod gpu_tests {
         }
         const DST_CAP: u32 = 24; // (3-1)*(3-1)*6, no padding needed.
 
-        let uniforms = TriangulateUniforms { src_cols: COLS as i32, src_rows: ROWS as i32, keep_normals: 0, dispatch_count: DST_CAP };
+        let uniforms = TriangulateUniforms {
+            src_cols: COLS as i32,
+            src_rows: ROWS as i32,
+            keep_normals: 0,
+            dispatch_count: DST_CAP,
+        };
         let verts = dispatch_tri(&grid, DST_CAP, &uniforms);
 
         fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {

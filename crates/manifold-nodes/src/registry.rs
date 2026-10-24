@@ -1,9 +1,14 @@
 use crate::bundled_presets::{bundled_preset_def, bundled_preset_json, bundled_preset_type_ids};
-use {manifold_nodes_scene::node_graph::primitives::gltf_texture_source::GltfTextureSource, manifold_nodes_scene::node_graph::primitives::render_scene::RenderScene, manifold_nodes_scene::node_graph::primitives::scatter_on_mesh::ScatterOnMesh, manifold_nodes_image::node_graph::primitives::seed_particles_from_texture::SeedParticlesFromTexture};
-use manifold_node_engine::runtime::PresetRuntime;
 use manifold_core::preset_def::PresetKind;
-use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::PresetRuntime;
+use {
+    manifold_nodes_image::node_graph::primitives::seed_particles_from_texture::SeedParticlesFromTexture,
+    manifold_nodes_scene::node_graph::primitives::gltf_texture_source::GltfTextureSource,
+    manifold_nodes_scene::node_graph::primitives::render_scene::RenderScene,
+    manifold_nodes_scene::node_graph::primitives::scatter_on_mesh::ScatterOnMesh,
+};
 
 mod provider;
 
@@ -77,13 +82,23 @@ impl GeneratorRegistry {
         ScatterOnMesh::prewarm_pipelines(device);
         SeedParticlesFromTexture::prewarm_pipelines(device);
 
-        manifold_nodes_image::node_graph::primitives::watercolor::Watercolor::prewarm_pipelines(device);
-        manifold_nodes_scene::node_graph::primitives::hdri_source::HdriSource::prewarm_pipeline(device);
-        manifold_nodes_image::node_graph::primitives::layer_source::LayerSource::prewarm_pipeline(device);
+        manifold_nodes_image::node_graph::primitives::watercolor::Watercolor::prewarm_pipelines(
+            device,
+        );
+        manifold_nodes_scene::node_graph::primitives::hdri_source::HdriSource::prewarm_pipeline(
+            device,
+        );
+        manifold_nodes_image::node_graph::primitives::layer_source::LayerSource::prewarm_pipeline(
+            device,
+        );
         manifold_nodes_image::node_graph::primitives::gaussian_blur_variable_width::GaussianBlurVariableWidth::prewarm_pipelines(device);
-        manifold_nodes_image::node_graph::primitives::multi_blend::MultiBlend::prewarm_pipelines(device);
+        manifold_nodes_image::node_graph::primitives::multi_blend::MultiBlend::prewarm_pipelines(
+            device,
+        );
         manifold_nodes_image::node_graph::primitives::filter::Blur::prewarm_pipelines(device);
-        manifold_nodes_image::node_graph::primitives::bokeh_gather::BokehGather::prewarm_pipelines(device);
+        manifold_nodes_image::node_graph::primitives::bokeh_gather::BokehGather::prewarm_pipelines(
+            device,
+        );
 
         // Sweep every registered generic atom so standalone codegen pipelines
         // are ready before live graph execution. Hand-written and
@@ -151,9 +166,7 @@ impl GeneratorRegistry {
             // An authored CPU-FLIP graph is project content. If it cannot
             // instantiate, do not replace it with the catalog canonical.
             let preserve_authored_graph = override_def.is_some_and(|def| {
-                manifold_core::retired_cpu_flip::preserve_authored_cpu_flip_graph(
-                    gen_type, def,
-                )
+                manifold_core::retired_cpu_flip::preserve_authored_cpu_flip_graph(gen_type, def)
             });
 
             // Watched graphs stay unfused for live editing; otherwise the
@@ -163,9 +176,15 @@ impl GeneratorRegistry {
                 &registry,
                 manifest,
                 manifold_node_engine::freeze::install::should_render_fused(is_watched),
-            ).and_then(|runtime| runtime.with_generator_device(
-                std::sync::Arc::clone(&device), width, height, self.target_format,
-            )) {
+            )
+            .and_then(|runtime| {
+                runtime.with_generator_device(
+                    std::sync::Arc::clone(&device),
+                    width,
+                    height,
+                    self.target_format,
+                )
+            }) {
                 Ok(g) => return Some(Box::new(g)),
                 Err(e) => {
                     log::warn!(
@@ -182,7 +201,8 @@ impl GeneratorRegistry {
             if is_override
                 && !preserve_authored_graph
                 && override_def.is_none_or(|def| def.scene_modifiers.is_empty())
-                && let Some(def) = bundled_preset_def(gen_type) {
+                && let Some(def) = bundled_preset_def(gen_type)
+            {
                 match PresetRuntime::from_def_with_device(
                     (*def).clone(),
                     &registry,
@@ -203,7 +223,10 @@ impl GeneratorRegistry {
             }
         }
 
-        log::warn!("Generator type {:?} not found in the preset catalog", gen_type);
+        log::warn!(
+            "Generator type {:?} not found in the preset catalog",
+            gen_type
+        );
         None
     }
 }
@@ -280,7 +303,11 @@ mod gpu_tests {
     fn prewarm_populates_the_shared_cache_for_representative_converted_atoms() {
         let device = manifold_gpu::testkit::test_device();
         let registry = PrimitiveRegistry::with_builtin();
-        let sample = ["node.grid_mesh", "node.shininess", "node.rotate_coordinates"];
+        let sample = [
+            "node.grid_mesh",
+            "node.shininess",
+            "node.rotate_coordinates",
+        ];
 
         let before = device.compute_pipeline_cache_len();
         prewarm_all_atom_codegen_pipelines(&device.arc());

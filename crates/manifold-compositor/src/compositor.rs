@@ -1,15 +1,15 @@
-use manifold_node_engine::runtime::instrumentation::ArrayDump;
-use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use crate::layer_compositor::CompositeClipDescriptor;
-use manifold_node_engine::runtime::preset_context::ProjectTempo;
 use crate::tonemap::TonemapSettings;
 use manifold_core::BlendMode;
 use manifold_core::LayerId;
 use manifold_core::LayerType;
 use manifold_core::effects::{EffectGroup, PresetInstance};
-use manifold_core::{EffectId, NodeId, WarmupOutcome, WarmupPass};
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
+use manifold_core::{EffectId, NodeId, WarmupOutcome, WarmupPass};
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::runtime::instrumentation::ArrayDump;
+use manifold_node_engine::runtime::preset_context::ProjectTempo;
 
 /// Per-layer metadata passed to the compositor.
 pub struct CompositeLayerDescriptor<'a> {
@@ -147,8 +147,12 @@ pub trait Compositor: Send {
     ) -> &manifold_gpu::GpuTexture;
 
     /// Stage replacements without changing the live compositor.
-    fn prepare_resize(&self, device: &manifold_gpu::GpuDevice, width: u32, height: u32)
-        -> Result<crate::layer_compositor::PreparedCompositorResize, String>;
+    fn prepare_resize(
+        &self,
+        device: &manifold_gpu::GpuDevice,
+        width: u32,
+        height: u32,
+    ) -> Result<crate::layer_compositor::PreparedCompositorResize, String>;
     fn commit_resize(&mut self, prepared: crate::layer_compositor::PreparedCompositorResize);
 
     /// Get current output dimensions.
@@ -204,10 +208,7 @@ pub trait Compositor: Send {
 
     fn write_scene_viewport_fluid_domains(
         &self,
-        _output: &mut Vec<(
-            NodeId,
-            manifold_core::fluid_domain::FluidDomainSnapshot,
-        )>,
+        _output: &mut Vec<(NodeId, manifold_core::fluid_domain::FluidDomainSnapshot)>,
     ) {
     }
 
@@ -317,14 +318,20 @@ pub trait Compositor: Send {
 
     /// Visit every screen effect chain whose last build failed, with its owner
     /// (`None` for the master chain) and the performer-facing reason.
-    fn visit_chain_failures(&self, _visit: &mut dyn FnMut(Option<&manifold_core::LayerId>, &std::sync::Arc<str>)) {}
+    fn visit_chain_failures(
+        &self,
+        _visit: &mut dyn FnMut(Option<&manifold_core::LayerId>, &std::sync::Arc<str>),
+    ) {
+    }
 
     /// SCENE_FX P4a — the compositor's layer-skin registry: previous-frame
     /// composited output per layer, published at end of frame. The host
     /// hands this to the generator renderer so `node.layer_source` can
     /// emit it during graph execution. Default `None` for compositors
     /// without one.
-    fn layer_skin_registry(&self) -> Option<&manifold_node_engine::runtime::layer_skin::LayerSkinRegistry> {
+    fn layer_skin_registry(
+        &self,
+    ) -> Option<&manifold_node_engine::runtime::layer_skin::LayerSkinRegistry> {
         None
     }
 

@@ -150,11 +150,14 @@ pub(crate) fn start_video_import(
 
         // Send library update FIRST so content thread has the VideoClip
         // entries before AddClipCommand triggers sync_clips_to_time.
-        let _ = content_tx.send(ContentCommand::mutate(crate::content_command::touch::MEDIA, Box::new(move |p| {
-            for vc in video_clips {
-                p.video_library.add_clip(vc);
-            }
-        })));
+        let _ = content_tx.send(ContentCommand::mutate(
+            crate::content_command::touch::MEDIA,
+            Box::new(move |p| {
+                for vc in video_clips {
+                    p.video_library.add_clip(vc);
+                }
+            }),
+        ));
 
         // Then send AddClipCommands
         for cmd in commands {
@@ -185,31 +188,28 @@ impl Application {
     /// save snapshot's settings.
     fn save_viewport_state(&mut self) {
         let settings = &mut self.local_project.intake().settings;
-        settings.viewport_scroll_x_beats =
-            self.ws.ui_root.viewport.scroll_x_beats().as_f32();
+        settings.viewport_scroll_x_beats = self.ws.ui_root.viewport.scroll_x_beats().as_f32();
         settings.viewport_scroll_y_px = self.ws.ui_root.viewport.scroll_y_px();
-        settings.viewport_pixels_per_beat =
-            self.ws.ui_root.viewport.pixels_per_beat();
+        settings.viewport_pixels_per_beat = self.ws.ui_root.viewport.pixels_per_beat();
 
         // Persist panel sizing. These read from the live UI layout (which is
         // never clobbered by content-thread snapshots) rather than relying on a
         // drag-end write into local_project.settings — that write gets wiped by
         // the next snapshot clone before save can capture it.
         settings.inspector_width = self.ws.ui_root.layout.inspector_width;
-        settings.timeline_height_percent =
-            self.ws.ui_root.layout.timeline_split_ratio;
+        settings.timeline_height_percent = self.ws.ui_root.layout.timeline_split_ratio;
 
         // Persist inspector collapse states
-        settings.macros_collapsed =
-            self.ws.ui_root.inspector.macros_panel().is_collapsed();
-        settings.master_chrome_collapsed =
-            self.ws.ui_root.inspector.master_chrome().is_collapsed();
-        settings.layer_chrome_collapsed =
-            self.ws.ui_root.inspector.layer_chrome().is_collapsed();
-        settings.clip_chrome_collapsed =
-            self.ws.ui_root.inspector.clip_chrome().is_collapsed();
-        settings.audio_triggers_collapsed =
-            self.ws.ui_root.inspector.audio_trigger_section().collapsed_setting();
+        settings.macros_collapsed = self.ws.ui_root.inspector.macros_panel().is_collapsed();
+        settings.master_chrome_collapsed = self.ws.ui_root.inspector.master_chrome().is_collapsed();
+        settings.layer_chrome_collapsed = self.ws.ui_root.inspector.layer_chrome().is_collapsed();
+        settings.clip_chrome_collapsed = self.ws.ui_root.inspector.clip_chrome().is_collapsed();
+        settings.audio_triggers_collapsed = self
+            .ws
+            .ui_root
+            .inspector
+            .audio_trigger_section()
+            .collapsed_setting();
     }
 
     /// Save. Delegates to ProjectIOService.save_project.
@@ -219,7 +219,10 @@ impl Application {
         // The content thread owns the project while it renders an export and
         // would drop the request; say why instead of timing out.
         if self.content_state.is_exporting {
-            crate::alerts::error("Export Running", "An export is running, so the project cannot be saved now. Cancel the export, then save.");
+            crate::alerts::error(
+                "Export Running",
+                "An export is running, so the project cannot be saved now. Cancel the export, then save.",
+            );
             return None;
         }
         let (tx, rx) = std::sync::mpsc::channel();
@@ -232,7 +235,10 @@ impl Application {
             }
             result => {
                 log::error!("Cannot obtain authoritative save snapshot: {result:?}");
-                crate::alerts::error("Save Failed", "The content engine did not finish preparing the project. Your work has not been saved; please try again.");
+                crate::alerts::error(
+                    "Save Failed",
+                    "The content engine did not finish preparing the project. Your work has not been saved; please try again.",
+                );
                 None
             }
         }
@@ -242,8 +248,12 @@ impl Application {
     /// True once the project is on disk. False when the save failed (its
     /// error is already shown) or the Save As dialog was cancelled.
     pub(crate) fn save_project(&mut self) -> bool {
-        let Some(path) = self.current_project_path.clone() else { return self.save_project_as(); };
-        let Some(save_version) = self.prepare_recording_save() else { return false; };
+        let Some(path) = self.current_project_path.clone() else {
+            return self.save_project_as();
+        };
+        let Some(save_version) = self.prepare_recording_save() else {
+            return false;
+        };
         let current_time = self.content_state.current_time;
         // Stamp UI layout onto the authoritative snapshot.
         self.local_project.intake().saved_playhead_time = current_time.as_f32();
@@ -278,7 +288,9 @@ impl Application {
     /// Save As. Delegates to ProjectIOService.save_project_as. True once the
     /// project is on disk; false when it failed or the dialog was cancelled.
     pub(crate) fn save_project_as(&mut self) -> bool {
-        let Some(save_version) = self.prepare_recording_save() else { return false; };
+        let Some(save_version) = self.prepare_recording_save() else {
+            return false;
+        };
         let current_time = self.content_state.current_time;
         self.local_project.intake().saved_playhead_time = current_time.as_f32();
         self.save_viewport_state();
@@ -312,7 +324,9 @@ impl Application {
     /// (synchronous): P4 defers the background-thread split until a large-media
     /// collect shows copy cost worth offloading.
     pub(crate) fn collect_all_and_save(&mut self) {
-        let Some(save_version) = self.prepare_recording_save() else { return; };
+        let Some(save_version) = self.prepare_recording_save() else {
+            return;
+        };
         let current_time = self.content_state.current_time;
         let Some(current_path) = self.current_project_path.clone() else {
             // Untitled: no folder to collect into. Save As first (creates the
@@ -325,7 +339,8 @@ impl Application {
         self.save_viewport_state();
         crate::project_io::snapshot_and_prune_embedded_presets(self.local_project.intake());
 
-        match manifold_io::collect::collect_all_and_save(self.local_project.intake(), &current_path) {
+        match manifold_io::collect::collect_all_and_save(self.local_project.intake(), &current_path)
+        {
             Ok(report) => {
                 // The content thread owns the project the next save reads, so
                 // it takes the same re-points (a non-undoable write; the copies
@@ -333,10 +348,18 @@ impl Application {
                 use manifold_core::change::{ChangeSet, Part};
                 let moves = report.moves.clone();
                 let path = current_path.clone();
-                let touches = ChangeSet::of(&[Part::Media, Part::Layers, Part::Clips, Part::Effects, Part::Overrides]);
+                let touches = ChangeSet::of(&[
+                    Part::Media,
+                    Part::Layers,
+                    Part::Clips,
+                    Part::Effects,
+                    Part::Overrides,
+                ]);
                 self.send_content_cmd(ContentCommand::mutate(
                     touches,
-                    Box::new(move |project| manifold_io::collect::re_point_moves(project, &moves, &path)),
+                    Box::new(move |project| {
+                        manifold_io::collect::re_point_moves(project, &moves, &path)
+                    }),
                 ));
                 self.send_content_cmd(ContentCommand::MarkCleanAt(save_version));
                 log::info!(
@@ -429,7 +452,10 @@ impl Application {
             config.output_path
         );
         self.ws.ui_root.export_progress.begin(
-            path.file_name().map(|name| name.to_string_lossy()).as_deref().unwrap_or("Video"),
+            path.file_name()
+                .map(|name| name.to_string_lossy())
+                .as_deref()
+                .unwrap_or("Video"),
         );
         self.ws.ui_root.mark_overlay_dirty();
         self.send_content_cmd(ContentCommand::StartExport(Box::new(config)));
@@ -541,7 +567,10 @@ impl Application {
             Ok(failures) => {
                 self.import_failures_rx = None;
                 if !failures.is_empty() {
-                    log::error!("[Import] {} file(s) failed to import: {failures:?}", failures.len());
+                    log::error!(
+                        "[Import] {} file(s) failed to import: {failures:?}",
+                        failures.len()
+                    );
                     crate::alerts::error(
                         "Couldn't Import Video",
                         &format!(
@@ -653,12 +682,22 @@ impl Application {
         let under = layer_under_cursor
             .and_then(|i| self.local_project.timeline.layers.get(i))
             .map(|layer| layer.layer_id.clone());
-        self.queue_import(path, crate::import_worker::ImportTarget::Drop { beat: drop_beat, under });
+        self.queue_import(
+            path,
+            crate::import_worker::ImportTarget::Drop {
+                beat: drop_beat,
+                under,
+            },
+        );
     }
 
     /// Start the worker on `path` for `target`, or queue it behind the one
     /// in flight.
-    pub(crate) fn queue_import(&mut self, path: &std::path::Path, target: crate::import_worker::ImportTarget) {
+    pub(crate) fn queue_import(
+        &mut self,
+        path: &std::path::Path,
+        target: crate::import_worker::ImportTarget,
+    ) {
         if self.content_tx.is_none() {
             return;
         }
@@ -712,20 +751,31 @@ impl Application {
 
     /// Put `path`'s facts on the scene documents that need them, on both
     /// threads (`crate::scene_models::attach`).
-    fn attach_model_facts(&mut self, layer: Option<manifold_core::LayerId>, path: String, facts: manifold_core::scene_doc::ModelFacts) {
+    fn attach_model_facts(
+        &mut self,
+        layer: Option<manifold_core::LayerId>,
+        path: String,
+        facts: manifold_core::scene_doc::ModelFacts,
+    ) {
         let Some(content_tx) = self.content_tx.clone() else {
             return;
         };
-        self.local_project.edit(&mut self.ui_edits, &content_tx).mutate(manifold_editing::commands::WHOLE_INSTANCES, move |project| {
-            crate::scene_models::attach(project, layer.as_ref(), &path, &facts)
-        });
+        self.local_project
+            .edit(&mut self.ui_edits, &content_tx)
+            .mutate(
+                manifold_editing::commands::WHOLE_INSTANCES,
+                move |project| crate::scene_models::attach(project, layer.as_ref(), &path, &facts),
+            );
     }
 
     /// Give every scene document the facts of the model files it names,
     /// when a layer or an instance's structure moved: from the store, or
     /// read on a worker.
     pub(crate) fn sweep_model_facts(&mut self) {
-        let Some(sweep) = self.model_store.sweep(&self.local_project, &self.ui_edits.stamps.parts()) else {
+        let Some(sweep) = self
+            .model_store
+            .sweep(&self.local_project, &self.ui_edits.stamps.parts())
+        else {
             return;
         };
         for (path, facts) in sweep.attach {
@@ -766,7 +816,14 @@ impl Application {
                     let file_str = file.to_string_lossy().into_owned();
                     log_model_warnings(&file_str, &warnings);
                     self.model_store.arrived(file_str, facts.clone());
-                    self.finish_import_model(&path, &file, *model, facts, conversion_report_line, target);
+                    self.finish_import_model(
+                        &path,
+                        &file,
+                        *model,
+                        facts,
+                        conversion_report_line,
+                        target,
+                    );
                     self.import_worker_busy = false;
                     if let Some(next) = self.import_queue.pop_front() {
                         self.spawn_import_worker(next);
@@ -828,7 +885,9 @@ impl Application {
         };
         let content_tx = content_tx.clone();
 
-        let file_name = path.file_name().map_or_else(|| "model".to_string(), |n| n.to_string_lossy().to_string());
+        let file_name = path
+            .file_name()
+            .map_or_else(|| "model".to_string(), |n| n.to_string_lossy().to_string());
         let file_str = file.to_string_lossy().into_owned();
         let layer_gone = |app: &mut Self| {
             log::warn!("[Import] {file_name} was dropped: its layer is gone");
@@ -837,26 +896,39 @@ impl Application {
                 manifold_ui::color::RED_BASE,
             );
         };
-        let is_scene = |layer: &manifold_core::layer::Layer| layer.gen_params().is_some_and(|fx| fx.scene.is_some());
+        let is_scene = |layer: &manifold_core::layer::Layer| {
+            layer.gen_params().is_some_and(|fx| fx.scene.is_some())
+        };
 
         let (into, insert_index, drop_beat) = match target {
             ImportTarget::Swap { layer, item } => {
                 // The facts first, so the swap compiles once, with them.
                 self.attach_model_facts(Some(layer.clone()), file_str.clone(), facts);
-                let swapped = crate::scene_import::swap_model_file(&self.local_project, &layer, &item, &file_str, &model);
+                let swapped = crate::scene_import::swap_model_file(
+                    &self.local_project,
+                    &layer,
+                    &item,
+                    &file_str,
+                    &model,
+                );
                 match swapped {
                     Ok(swap) => {
-                        self.local_project.edit(&mut self.ui_edits, &content_tx).execute_batch(swap.commands, "Swap Model File".to_string());
+                        self.local_project
+                            .edit(&mut self.ui_edits, &content_tx)
+                            .execute_batch(swap.commands, "Swap Model File".to_string());
                         if let Some(toast) = swap.toast {
                             self.ws.ui_root.toast.show(toast);
                         }
                     }
                     Err(e) => {
-                        log::warn!("[Scene Setup] Model File swap failed for {}: {e}", path.display());
-                        self.ws
-                            .ui_root
-                            .toast
-                            .show_with_accent(format!("Couldn't swap the model file: {e}"), manifold_ui::color::RED_BASE);
+                        log::warn!(
+                            "[Scene Setup] Model File swap failed for {}: {e}",
+                            path.display()
+                        );
+                        self.ws.ui_root.toast.show_with_accent(
+                            format!("Couldn't swap the model file: {e}"),
+                            manifold_ui::color::RED_BASE,
+                        );
                     }
                 }
                 return;
@@ -868,7 +940,12 @@ impl Application {
                 // Under the selected Group, else at the top, as every Add.
                 let parent = parent
                     .and_then(|id| doc.find(&id))
-                    .filter(|item| manifold_core::scene_doc::can_hold(Some(item.kind()), manifold_core::scene_doc::ItemKind::Group))
+                    .filter(|item| {
+                        manifold_core::scene_doc::can_hold(
+                            Some(item.kind()),
+                            manifold_core::scene_doc::ItemKind::Group,
+                        )
+                    })
                     .map(|item| item.id.clone());
                 (Some((layer, parent)), 0, 0.0)
             }
@@ -902,14 +979,28 @@ impl Application {
 
         let group = manifold_core::scene_doc::ItemId::new(manifold_core::math::short_id());
         if let Some((layer_id, parent)) = into {
-            let center = manifold_nodes_scene::node_graph::gltf_import::world_bounds(&facts).map(|(c, _)| c);
+            let center =
+                manifold_nodes_scene::node_graph::gltf_import::world_bounds(&facts).map(|(c, _)| c);
             self.attach_model_facts(Some(layer_id.clone()), file_str.clone(), facts);
-            let commands =
-                manifold_editing::commands::scene_doc::import_model_commands(&layer_id, parent.clone(), usize::MAX, group.clone(), &file_str, &model, center);
-            let command = Box::new(manifold_editing::command::CompositeCommand::new(commands, "Import 3D Model".to_string()));
+            let commands = manifold_editing::commands::scene_doc::import_model_commands(
+                &layer_id,
+                parent.clone(),
+                usize::MAX,
+                group.clone(),
+                &file_str,
+                &model,
+                center,
+            );
+            let command = Box::new(manifold_editing::command::CompositeCommand::new(
+                commands,
+                "Import 3D Model".to_string(),
+            ));
             ContentCommand::send(
                 &content_tx,
-                ContentCommand::ExecuteSelecting(command, crate::edit_selection::SelectAfterEdit::NewItem(layer_id, group)),
+                ContentCommand::ExecuteSelecting(
+                    command,
+                    crate::edit_selection::SelectAfterEdit::NewItem(layer_id, group),
+                ),
             );
             return;
         }
@@ -918,13 +1009,16 @@ impl Application {
         // Insert above the layer under the cursor, or at the top when dropped
         // outside the tracks area.
         let insert_index = insert_index.min(local.timeline.layers.len());
-        let center = manifold_nodes_scene::node_graph::gltf_import::world_bounds(&facts).map(|(c, _)| c);
+        let center =
+            manifold_nodes_scene::node_graph::gltf_import::world_bounds(&facts).map(|(c, _)| c);
         let mut doc = model.scene_doc(&file_str, group.clone());
         doc.models.insert(file_str.clone(), facts);
         let values = model
             .starting_values(&group, center)
             .into_iter()
-            .map(|(item, property, value)| (manifold_core::scene_doc::param_id(&item, property), value))
+            .map(|(item, property, value)| {
+                (manifold_core::scene_doc::param_id(&item, property), value)
+            })
             .collect::<Vec<_>>();
         let display_name = model.name.clone();
 
@@ -964,7 +1058,9 @@ impl Application {
             manifold_core::Beats::from_f32(drop_beat.max(0.0)),
             manifold_core::Beats::from_f32(DEFAULT_MODEL_DURATION_BEATS),
         );
-        local.execute(Box::new(manifold_editing::commands::clip::AddClipCommand::new(clip, layer_id.clone())));
+        local.execute(Box::new(
+            manifold_editing::commands::clip::AddClipCommand::new(clip, layer_id.clone()),
+        ));
 
         // The import root is selected at once, as every Add selects (section
         // 7.7 (Imports)); the layer landed here, so there is no receipt.
@@ -1394,9 +1490,12 @@ impl Application {
             self.send_content_cmd(crate::content_command::ContentCommand::SetOutputSurface(
                 surface,
             ));
-            self.send_content_cmd(crate::content_command::ContentCommand::UpdateDisplayCapabilities {
-                destination: manifold_compositor::presentation::DisplayDestination::Output, capabilities,
-            });
+            self.send_content_cmd(
+                crate::content_command::ContentCommand::UpdateDisplayCapabilities {
+                    destination: manifold_compositor::presentation::DisplayDestination::Output,
+                    capabilities,
+                },
+            );
         }
 
         let state = WindowState {
@@ -1513,12 +1612,16 @@ impl Application {
         surface.configure_edr();
         let capabilities = crate::edr_surface::query_window_capabilities(&window);
         self.graph_display_capabilities = capabilities;
-        self.send_content_cmd(crate::content_command::ContentCommand::UpdateDisplayCapabilities {
-            destination: manifold_compositor::presentation::DisplayDestination::GraphEditor,
-            capabilities,
-        });
+        self.send_content_cmd(
+            crate::content_command::ContentCommand::UpdateDisplayCapabilities {
+                destination: manifold_compositor::presentation::DisplayDestination::GraphEditor,
+                capabilities,
+            },
+        );
 
-        let Some(gpu) = &self.gpu else { return; };
+        let Some(gpu) = &self.gpu else {
+            return;
+        };
         let offscreen = gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
             width: size.width.max(1),
             height: size.height.max(1),
@@ -1599,7 +1702,10 @@ impl Application {
         if let Some(wid) = self.graph_editor_window_id.take() {
             self.window_registry.remove(&wid);
         }
-        let gesture = self.graph_editor.as_mut().and_then(|ed| ed.viewport_gizmo_drag.take());
+        let gesture = self
+            .graph_editor
+            .as_mut()
+            .and_then(|ed| ed.viewport_gizmo_drag.take());
         self.end_gizmo_gesture(gesture);
         self.graph_editor = None;
         self.graph_canvas = None;
@@ -1716,12 +1822,8 @@ mod bug_133_import_probe_rejection_tests {
         let also_missing = dir.join("does_not_exist.avi");
 
         let layer_id = manifold_core::LayerId::new("test-layer");
-        let (video_clips, commands, failures) = build_video_import_batch(
-            &[fake_webm, also_missing],
-            120.0,
-            0.0,
-            &layer_id,
-        );
+        let (video_clips, commands, failures) =
+            build_video_import_batch(&[fake_webm, also_missing], 120.0, 0.0, &layer_id);
 
         assert!(video_clips.is_empty());
         assert!(commands.is_empty());

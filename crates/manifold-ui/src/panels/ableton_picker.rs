@@ -599,11 +599,7 @@ impl AbletonPickerPopup {
         }
 
         // Track row → select, update right column next build
-        if let Some((_, track_idx)) = self
-            .track_row_ids
-            .iter()
-            .find(|(tid, _)| *tid == node_id)
-        {
+        if let Some((_, track_idx)) = self.track_row_ids.iter().find(|(tid, _)| *tid == node_id) {
             self.selected_track_idx = Some(*track_idx);
             // Right column content changed — start it from the top.
             self.scroll.reset();
@@ -743,12 +739,15 @@ impl Overlay for AbletonPickerPopup {
             return OverlayResponse::Ignored;
         }
         match event {
-            UIEvent::KeyDown { key: Key::Escape, .. } => {
+            UIEvent::KeyDown {
+                key: Key::Escape, ..
+            } => {
                 self.handle_escape();
                 OverlayResponse::Consumed(Vec::new())
             }
             UIEvent::Click { node_id, .. } => {
-                if let Some(AbletonPickerAction::Selected(addr)) = self.handle_click(tree, *node_id) {
+                if let Some(AbletonPickerAction::Selected(addr)) = self.handle_click(tree, *node_id)
+                {
                     // Stash; the app drains and lowers against its picker context.
                     self.pending_selection = Some(addr);
                 }
@@ -798,15 +797,15 @@ mod tests {
     }
 
     fn session(tracks: Vec<PickerTrack>) -> AbletonPickerSession {
-        AbletonPickerSession { rack_tracks: tracks }
+        AbletonPickerSession {
+            rack_tracks: tracks,
+        }
     }
 
     /// Open + build through the same path the overlay driver uses, on a
     /// fresh tree each call so stale nodes from an earlier build never
     /// pollute assertions.
-    fn open_and_build(
-        tracks: Vec<PickerTrack>,
-    ) -> (AbletonPickerPopup, UITree) {
+    fn open_and_build(tracks: Vec<PickerTrack>) -> (AbletonPickerPopup, UITree) {
         let mut dd = AbletonPickerPopup::new();
         dd.open(session(tracks), Vec2::new(100.0, 100.0));
         let mut tree = UITree::new();
@@ -857,7 +856,13 @@ mod tests {
 
         let region = dd.first_id.region();
         tree.clear();
-        let token = tree.begin_region_in(region, Rect::new(0.0, 0.0, 10.0, 10.0), ZTier::Overlay, "other", UIFlags::empty());
+        let token = tree.begin_region_in(
+            region,
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            ZTier::Overlay,
+            "other",
+            UIFlags::empty(),
+        );
         let start = tree.count();
         for _ in 0..dd.first_node + dd.node_count {
             tree.add_button(None, 0.0, 0.0, 10.0, 10.0, UIStyle::default(), "");
@@ -866,7 +871,10 @@ mod tests {
         let reused: Vec<NodeId> = (dd.first_node..dd.first_node + dd.node_count)
             .map(|slot| tree.id_in(region, slot))
             .collect();
-        assert!(reused.iter().all(|&id| tree.is_live(id)), "the other build fills the picker's slots");
+        assert!(
+            reused.iter().all(|&id| tree.is_live(id)),
+            "the other build fills the picker's slots"
+        );
         assert!(reused.iter().all(|&id| !dd.contains_node(&tree, id)));
     }
 
@@ -988,10 +996,7 @@ mod tests {
             vec![macro_named("Macro 1"), macro_named("Macro 2")],
         );
         let visible_device = device("Visible Rack", vec![macro_named("Resonance")]);
-        let (dd, _tree) = open_and_build(vec![track(
-            "Bass",
-            vec![hidden_device, visible_device],
-        )]);
+        let (dd, _tree) = open_and_build(vec![track("Bass", vec![hidden_device, visible_device])]);
 
         let expected_body = ITEM_H.max(SECTION_H + 2.0 + ITEM_H);
         let expected_h = (BORDER * 2.0 + PADDING * 2.0 + HEADER_H + 3.0 + expected_body)

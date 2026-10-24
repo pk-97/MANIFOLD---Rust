@@ -88,7 +88,13 @@ manifold_node_engine::primitive! {
 }
 
 /// Sample `i` of `count` on the outline with `sides` corners.
-pub(crate) fn outline_point(i: usize, count: usize, sides: f32, radius: f32, pinch: f32) -> [f32; 2] {
+pub(crate) fn outline_point(
+    i: usize,
+    count: usize,
+    sides: f32,
+    radius: f32,
+    pinch: f32,
+) -> [f32; 2] {
     let t = i as f32 / (count.max(2) - 1) as f32;
     let u = t * 2.0 * sides;
     let corner = u.floor();
@@ -147,17 +153,30 @@ mod tests {
     fn the_outline_is_closed_and_its_hull_is_the_polygon() {
         let (count, sides, radius) = (241, 6.0, 0.5);
         for pinch in [0.0, 0.5] {
-            let points: Vec<[f32; 2]> = (0..count).map(|i| outline_point(i, count, sides, radius, pinch)).collect();
-            assert!(is_loop(&points), "pinch {pinch}: the outline ends where it starts");
+            let points: Vec<[f32; 2]> = (0..count)
+                .map(|i| outline_point(i, count, sides, radius, pinch))
+                .collect();
+            assert!(
+                is_loop(&points),
+                "pinch {pinch}: the outline ends where it starts"
+            );
             let inner = radius * (PI / sides).cos() * (1.0 - pinch);
             // 241 samples land on every corner: corner c at sample 20c.
             for corner in 0..12 {
                 let [x, y] = points[corner * 20];
                 let angle = FRAC_PI_2 + corner as f32 * PI / sides;
                 let r = if corner % 2 == 0 { radius } else { inner };
-                assert!((x - r * angle.cos()).abs() < 1e-5 && (y - r * angle.sin()).abs() < 1e-5, "pinch {pinch}: corner {corner} at {x}, {y}");
+                assert!(
+                    (x - r * angle.cos()).abs() < 1e-5 && (y - r * angle.sin()).abs() < 1e-5,
+                    "pinch {pinch}: corner {corner} at {x}, {y}"
+                );
             }
-            assert!(points.iter().all(|[x, y]| (x * x + y * y).sqrt() <= radius + 1e-5), "pinch {pinch}: a sample is past the outer corners");
+            assert!(
+                points
+                    .iter()
+                    .all(|[x, y]| (x * x + y * y).sqrt() <= radius + 1e-5),
+                "pinch {pinch}: a sample is past the outer corners"
+            );
         }
     }
 }

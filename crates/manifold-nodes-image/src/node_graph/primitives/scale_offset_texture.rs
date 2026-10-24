@@ -5,8 +5,8 @@
 //! generators output [0, 1] for storage convenience; this primitive
 //! is the affine inverse / re-range step.
 
-use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
+use std::borrow::Cow;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
@@ -116,8 +116,9 @@ impl Primitive for ScaleOffsetTexture {
             .output_format_override
             .unwrap_or(manifold_gpu::GpuTextureFormat::Rgba16Float);
         let pipeline = self.pipeline.get_or_insert_with(|| {
-            let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec_fmt::<Self>(out_fmt)
-                .expect("node.scale_offset_image standalone codegen");
+            let wgsl =
+                manifold_node_engine::freeze::codegen::standalone_for_spec_fmt::<Self>(out_fmt)
+                    .expect("node.scale_offset_image standalone codegen");
             gpu.device.create_compute_pipeline(
                 &wgsl,
                 manifold_node_engine::freeze::codegen::ENTRY,

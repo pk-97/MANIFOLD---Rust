@@ -28,18 +28,20 @@ use manifold_nodes as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_core::params::{Param, ParamManifest};
+use manifold_core::scene_doc::{ImportedModel, ImportedTransform};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
-use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, non_black_fraction, readback_tonemapped_rgba8};
+use manifold_node_engine::gpu::headless_readback::{
+    encode_rgba8_png, non_black_fraction, readback_tonemapped_rgba8,
+};
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_core::scene_doc::{ImportedModel, ImportedTransform};
-use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 
 const WIDTH: u32 = 1280;
 const HEIGHT: u32 = 720;
@@ -114,7 +116,11 @@ enum CheckSpec {
     /// moves ~74%). `region`'s max luminance must exceed `value *
     /// reference_region`'s max luminance.
     #[serde(rename = "region_max_luminance_above")]
-    RegionMaxLuminanceAbove { region: [f64; 4], reference_region: [f64; 4], value: f64 },
+    RegionMaxLuminanceAbove {
+        region: [f64; 4],
+        reference_region: [f64; 4],
+        value: f64,
+    },
     /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: "the transmissive region is
     /// NOT simply base_color.a-blended-flat" (D3's rejected-approximation
     /// criterion), expressed as luminance variance rather than mean/max —
@@ -130,7 +136,11 @@ enum CheckSpec {
     /// plain-background patch's ~27, a >2x ratio) before picking the
     /// threshold, same discipline as every other kind here.
     #[serde(rename = "region_stddev_above")]
-    RegionStdDevAbove { region: [f64; 4], reference_region: [f64; 4], value: f64 },
+    RegionStdDevAbove {
+        region: [f64; 4],
+        reference_region: [f64; 4],
+        value: f64,
+    },
 }
 
 /// Mean luminance over a normalized `[x0,y0,x1,y1]` rect of a tonemapped
@@ -243,7 +253,12 @@ fn region_mean_rgb(rgba: &[u8], region: [f64; 4]) -> (f64, f64, f64) {
 
 type Mat4 = [[f32; 4]; 4];
 
-const MAT4_IDENTITY: Mat4 = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+const MAT4_IDENTITY: Mat4 = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+];
 
 /// Column-major `a * b` (`m[col][row]`, glTF's convention).
 fn mat4_mul(a: &Mat4, b: &Mat4) -> Mat4 {
@@ -263,9 +278,24 @@ fn mat4_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
 fn mat4_from_trs(t: [f32; 3], q: [f32; 4], s: [f32; 3]) -> Mat4 {
     let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
     [
-        [(1.0 - 2.0 * (y * y + z * z)) * s[0], 2.0 * (x * y + w * z) * s[0], 2.0 * (x * z - w * y) * s[0], 0.0],
-        [2.0 * (x * y - w * z) * s[1], (1.0 - 2.0 * (x * x + z * z)) * s[1], 2.0 * (y * z + w * x) * s[1], 0.0],
-        [2.0 * (x * z + w * y) * s[2], 2.0 * (y * z - w * x) * s[2], (1.0 - 2.0 * (x * x + y * y)) * s[2], 0.0],
+        [
+            (1.0 - 2.0 * (y * y + z * z)) * s[0],
+            2.0 * (x * y + w * z) * s[0],
+            2.0 * (x * z - w * y) * s[0],
+            0.0,
+        ],
+        [
+            2.0 * (x * y - w * z) * s[1],
+            (1.0 - 2.0 * (x * x + z * z)) * s[1],
+            2.0 * (y * z + w * x) * s[1],
+            0.0,
+        ],
+        [
+            2.0 * (x * z + w * y) * s[2],
+            2.0 * (y * z - w * x) * s[2],
+            (1.0 - 2.0 * (x * x + y * y)) * s[2],
+            0.0,
+        ],
         [t[0], t[1], t[2], 1.0],
     ]
 }
@@ -285,28 +315,45 @@ fn read_f32s(accessor: &gltf::Accessor, buffers: &[gltf::buffer::Data]) -> Optio
     for i in 0..accessor.count() {
         for c in 0..width {
             let at = base + i * stride + c * 4;
-            out.push(f32::from_le_bytes(buffer.0.get(at..at + 4)?.try_into().ok()?));
+            out.push(f32::from_le_bytes(
+                buffer.0.get(at..at + 4)?.try_into().ok()?,
+            ));
         }
     }
     Some(out)
 }
 
 /// `EXT_mesh_gpu_instancing`'s per-instance transforms, none without it.
-fn instance_transforms(node: &gltf::Node, document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Option<Vec<Mat4>> {
-    let attributes = node.extension_value("EXT_mesh_gpu_instancing")?.get("attributes")?.clone();
+fn instance_transforms(
+    node: &gltf::Node,
+    document: &gltf::Document,
+    buffers: &[gltf::buffer::Data],
+) -> Option<Vec<Mat4>> {
+    let attributes = node
+        .extension_value("EXT_mesh_gpu_instancing")?
+        .get("attributes")?
+        .clone();
     let read = |name: &str| {
         let index = attributes.get(name)?.as_u64()? as usize;
         read_f32s(&document.accessors().nth(index)?, buffers)
     };
     let (t, r, s) = (read("TRANSLATION"), read("ROTATION"), read("SCALE"));
-    let count = t.as_ref().map(|d| d.len() / 3).or(r.as_ref().map(|d| d.len() / 4)).or(s.as_ref().map(|d| d.len() / 3))?;
+    let count = t
+        .as_ref()
+        .map(|d| d.len() / 3)
+        .or(r.as_ref().map(|d| d.len() / 4))
+        .or(s.as_ref().map(|d| d.len() / 3))?;
     Some(
         (0..count)
             .map(|i| {
                 mat4_from_trs(
-                    t.as_ref().map_or([0.0; 3], |d| [d[i * 3], d[i * 3 + 1], d[i * 3 + 2]]),
-                    r.as_ref().map_or([0.0, 0.0, 0.0, 1.0], |d| [d[i * 4], d[i * 4 + 1], d[i * 4 + 2], d[i * 4 + 3]]),
-                    s.as_ref().map_or([1.0; 3], |d| [d[i * 3], d[i * 3 + 1], d[i * 3 + 2]]),
+                    t.as_ref()
+                        .map_or([0.0; 3], |d| [d[i * 3], d[i * 3 + 1], d[i * 3 + 2]]),
+                    r.as_ref().map_or([0.0, 0.0, 0.0, 1.0], |d| {
+                        [d[i * 4], d[i * 4 + 1], d[i * 4 + 2], d[i * 4 + 3]]
+                    }),
+                    s.as_ref()
+                        .map_or([1.0; 3], |d| [d[i * 3], d[i * 3 + 1], d[i * 3 + 2]]),
                 )
             })
             .collect(),
@@ -318,7 +365,8 @@ fn instance_transforms(node: &gltf::Node, document: &gltf::Document, buffers: &[
 /// as glTF draws it), an instanced mesh's through every instance.
 fn old_import_bounds(path: &Path) -> Result<([f32; 3], [f32; 3]), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let gltf = gltf::Gltf::from_slice_without_validation(&bytes).map_err(|e| format!("parse {}: {e}", path.display()))?;
+    let gltf = gltf::Gltf::from_slice_without_validation(&bytes)
+        .map_err(|e| format!("parse {}: {e}", path.display()))?;
     let buffers = gltf::import_buffers(&gltf.document, path.parent(), gltf.blob.clone())
         .map_err(|e| format!("buffers {}: {e}", path.display()))?;
     let document = &gltf.document;
@@ -333,7 +381,12 @@ fn old_import_bounds(path: &Path) -> Result<([f32; 3], [f32; 3]), String> {
         while let Some(parent) = parent_of[*chain.last().unwrap()] {
             chain.push(parent);
         }
-        chain.iter().rev().fold(MAT4_IDENTITY, |world, &i| mat4_mul(&world, &document.nodes().nth(i).unwrap().transform().matrix()))
+        chain.iter().rev().fold(MAT4_IDENTITY, |world, &i| {
+            mat4_mul(
+                &world,
+                &document.nodes().nth(i).unwrap().transform().matrix(),
+            )
+        })
     };
     // The roots the importer walks: the default scene, else every scene's
     // nodes, else every parentless node.
@@ -341,9 +394,16 @@ fn old_import_bounds(path: &Path) -> Result<([f32; 3], [f32; 3]), String> {
         Some(scene) => scene.nodes().collect(),
         None if document.scenes().len() > 0 => {
             let mut seen = std::collections::BTreeSet::new();
-            document.scenes().flat_map(|s| s.nodes()).filter(|n| seen.insert(n.index())).collect()
+            document
+                .scenes()
+                .flat_map(|s| s.nodes())
+                .filter(|n| seen.insert(n.index()))
+                .collect()
         }
-        None => document.nodes().filter(|n| parent_of[n.index()].is_none()).collect(),
+        None => document
+            .nodes()
+            .filter(|n| parent_of[n.index()].is_none())
+            .collect(),
     };
     let mut lo = [f32::INFINITY; 3];
     let mut hi = [f32::NEG_INFINITY; 3];
@@ -353,7 +413,8 @@ fn old_import_bounds(path: &Path) -> Result<([f32; 3], [f32; 3]), String> {
             hi[axis] = hi[axis].max(p[axis]);
         }
     };
-    let mut stack: Vec<(gltf::Node, Mat4)> = roots.into_iter().map(|n| (n, MAT4_IDENTITY)).collect();
+    let mut stack: Vec<(gltf::Node, Mat4)> =
+        roots.into_iter().map(|n| (n, MAT4_IDENTITY)).collect();
     while let Some((node, parent)) = stack.pop() {
         let world = mat4_mul(&parent, &node.transform().matrix());
         if let Some(mesh) = node.mesh() {
@@ -363,26 +424,40 @@ fn old_import_bounds(path: &Path) -> Result<([f32; 3], [f32; 3]), String> {
             };
             let skin_matrices: Option<Vec<Mat4>> = node.skin().map(|skin| {
                 let reader = skin.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
-                let inverse_binds: Vec<Mat4> = reader
-                    .read_inverse_bind_matrices()
-                    .map_or_else(|| vec![MAT4_IDENTITY; skin.joints().count()], |it| it.collect());
+                let inverse_binds: Vec<Mat4> = reader.read_inverse_bind_matrices().map_or_else(
+                    || vec![MAT4_IDENTITY; skin.joints().count()],
+                    |it| it.collect(),
+                );
                 skin.joints()
                     .enumerate()
-                    .map(|(k, joint)| mat4_mul(&static_world(joint.index()), inverse_binds.get(k).unwrap_or(&MAT4_IDENTITY)))
+                    .map(|(k, joint)| {
+                        mat4_mul(
+                            &static_world(joint.index()),
+                            inverse_binds.get(k).unwrap_or(&MAT4_IDENTITY),
+                        )
+                    })
                     .collect()
             });
             for primitive in mesh.primitives() {
                 let reader = primitive.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
-                let Some(positions) = reader.read_positions() else { continue };
+                let Some(positions) = reader.read_positions() else {
+                    continue;
+                };
                 let positions: Vec<[f32; 3]> = positions.collect();
-                let joints: Option<Vec<[u16; 4]>> = reader.read_joints(0).map(|it| it.into_u16().collect());
-                let weights: Option<Vec<[f32; 4]>> = reader.read_weights(0).map(|it| it.into_f32().collect());
-                if let (Some(skin), Some(joints), Some(weights)) = (&skin_matrices, &joints, &weights) {
+                let joints: Option<Vec<[u16; 4]>> =
+                    reader.read_joints(0).map(|it| it.into_u16().collect());
+                let weights: Option<Vec<[f32; 4]>> =
+                    reader.read_weights(0).map(|it| it.into_f32().collect());
+                if let (Some(skin), Some(joints), Some(weights)) =
+                    (&skin_matrices, &joints, &weights)
+                {
                     for (i, p) in positions.iter().enumerate() {
                         let total: f32 = weights[i].iter().sum::<f32>().max(1e-8);
                         let mut posed = [0.0f32; 3];
                         for k in 0..4 {
-                            let Some(m) = skin.get(joints[i][k] as usize) else { continue };
+                            let Some(m) = skin.get(joints[i][k] as usize) else {
+                                continue;
+                            };
                             let q = mat4_point(m, *p);
                             for axis in 0..3 {
                                 posed[axis] += weights[i][k] / total * q[axis];
@@ -393,14 +468,19 @@ fn old_import_bounds(path: &Path) -> Result<([f32; 3], [f32; 3]), String> {
                     continue;
                 }
                 for instance in &instance_worlds {
-                    positions.iter().for_each(|p| grow(mat4_point(instance, *p)));
+                    positions
+                        .iter()
+                        .for_each(|p| grow(mat4_point(instance, *p)));
                 }
             }
         }
         stack.extend(node.children().map(|child| (child, world)));
     }
     if !lo[0].is_finite() {
-        return Err(format!("{}: no geometry for the old framing box", path.display()));
+        return Err(format!(
+            "{}: no geometry for the old framing box",
+            path.display()
+        ));
     }
     Ok((lo, hi))
 }
@@ -410,10 +490,14 @@ fn old_import_setup(path: &Path, model: &ImportedModel) -> Result<Vec<(String, f
     let (lo, hi) = old_import_bounds(path)?;
     let center = [0, 1, 2].map(|axis| (lo[axis] + hi[axis]) * 0.5);
     let dims = [0, 1, 2].map(|axis| hi[axis] - lo[axis]);
-    let radius = ((dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5).max(1e-3);
+    let radius =
+        ((dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5).max(1e-3);
     let fov_y = 0.9_f32;
     let half_fov_tan = (fov_y * 0.5).tan();
-    let per_axis_fit = dims.iter().map(|&extent| (extent * 0.5) / half_fov_tan * 1.15).fold(0.0f32, f32::max);
+    let per_axis_fit = dims
+        .iter()
+        .map(|&extent| (extent * 0.5) / half_fov_tan * 1.15)
+        .fold(0.0f32, f32::max);
     let distance = (2.2 * radius).max(per_axis_fit);
     let near = (distance - radius).max(1e-4) * 0.5;
     // 200 is `node.orbit_camera`'s default far plane, 10000 its range max.
@@ -422,7 +506,10 @@ fn old_import_setup(path: &Path, model: &ImportedModel) -> Result<Vec<(String, f
     // The model at its true size with the old box centre at the origin. A
     // single Object keeps its file node's transform (it is drawn about the
     // node's origin); a Group starts at rest.
-    let own = model.only_part().filter(|_| model.is_single_mesh()).map_or(ImportedTransform::IDENTITY, |part| part.transform);
+    let own = model
+        .only_part()
+        .filter(|_| model.is_single_mesh())
+        .map_or(ImportedTransform::IDENTITY, |part| part.transform);
     let model_position = [0, 1, 2].map(|a| own.position[a] - center[a]);
 
     let mut setup: Vec<(String, f32)> = vec![
@@ -443,7 +530,10 @@ fn old_import_setup(path: &Path, model: &ImportedModel) -> Result<Vec<(String, f
         ("camera.f_stop".into(), 32.0),
         ("camera.shutter_angle".into(), 180.0),
         // The old contact-shadow reach: half the model's radius.
-        ("world.ao_distance".into(), (radius * 0.5).clamp((0.001 * radius).max(0.01), 2.0 * radius)),
+        (
+            "world.ao_distance".into(),
+            (radius * 0.5).clamp((0.001 * radius).max(0.01), 2.0 * radius),
+        ),
         // Softbox at full strength with the old import's fill and strips.
         // The old environment had no sun wired in, so no sun disc.
         ("environment.env_intensity".into(), 1.0),
@@ -470,7 +560,10 @@ fn old_import_setup(path: &Path, model: &ImportedModel) -> Result<Vec<(String, f
         ]);
     } else {
         // The old import lit a file with its own lights only.
-        setup.extend([("sun.intensity".into(), 0.0), ("sun.cast_shadows".into(), 0.0)]);
+        setup.extend([
+            ("sun.intensity".into(), 0.0),
+            ("sun.cast_shadows".into(), 0.0),
+        ]);
     }
     Ok(setup)
 }
@@ -485,7 +578,12 @@ fn old_import_setup(path: &Path, model: &ImportedModel) -> Result<Vec<(String, f
 /// "every background texture decode is still mid-flight"), reimplemented
 /// here rather than shelling out to the bin so a test failure carries a Rust
 /// backtrace, not a subprocess exit code.
-fn render_asset(device: &Arc<GpuDevice>, path: &Path, overrides: &[(&str, f32)], non_black_floor: f64) -> Result<Vec<u8>, String> {
+fn render_asset(
+    device: &Arc<GpuDevice>,
+    path: &Path,
+    overrides: &[(&str, f32)],
+    non_black_floor: f64,
+) -> Result<Vec<u8>, String> {
     let (def, model) = compile_model_scene(path)?;
 
     let mut params: Vec<Param> = def
@@ -565,7 +663,9 @@ fn render_asset(device: &Arc<GpuDevice>, path: &Path, overrides: &[(&str, f32)],
         // settled frame is one no viewer can tell from the last: a mean
         // change under one 8-bit step, the measure `check_golden` judges by.
         // A per-pixel max never settles while the accumulated noise jitters.
-        let change = prev.as_deref().map_or(f64::INFINITY, |p| mean_abs_diff(p, &rgba));
+        let change = prev
+            .as_deref()
+            .map_or(f64::INFINITY, |p| mean_abs_diff(p, &rgba));
         prev = Some(rgba);
         // Loading is file IO plus the load-time work the app's own pre-roll
         // waits for: meshes and animations load on background threads and
@@ -617,10 +717,13 @@ fn render_asset(device: &Arc<GpuDevice>, path: &Path, overrides: &[(&str, f32)],
 fn accumulation_frames(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> u32 {
     const TYPE_ID: &str = "node.temporal_accumulate";
     let default = registry.construct(TYPE_ID).and_then(|node| {
-        node.parameters().iter().find(|p| p.name == "frames").and_then(|p| match p.default {
-            ParamValue::Float(f) => Some(f),
-            _ => None,
-        })
+        node.parameters()
+            .iter()
+            .find(|p| p.name == "frames")
+            .and_then(|p| match p.default {
+                ParamValue::Float(f) => Some(f),
+                _ => None,
+            })
     });
     def.nodes
         .iter()
@@ -637,7 +740,11 @@ fn accumulation_frames(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> u3
 
 /// Mean absolute difference of two RGBA8 frames, in 8-bit steps.
 fn mean_abs_diff(a: &[u8], b: &[u8]) -> f64 {
-    let sum: f64 = a.iter().zip(b).map(|(x, y)| (f64::from(*x) - f64::from(*y)).abs()).sum();
+    let sum: f64 = a
+        .iter()
+        .zip(b)
+        .map(|(x, y)| (f64::from(*x) - f64::from(*y)).abs())
+        .sum();
     sum / a.len() as f64
 }
 
@@ -656,7 +763,10 @@ fn check_golden(rgba: &[u8], rel_file: &str, mean_abs_tol: f64) -> Result<(), St
         let png = encode_rgba8_png(rgba, WIDTH, HEIGHT);
         std::fs::write(&golden_path, &png)
             .map_err(|e| format!("write golden {}: {e}", golden_path.display()))?;
-        println!("  UPDATE_CONFORMANCE_GOLDENS=1 — wrote {}", golden_path.display());
+        println!(
+            "  UPDATE_CONFORMANCE_GOLDENS=1 — wrote {}",
+            golden_path.display()
+        );
         return Ok(());
     }
 
@@ -708,7 +818,13 @@ fn check_golden(rgba: &[u8], rel_file: &str, mean_abs_tol: f64) -> Result<(), St
 /// convergence heuristic never mistakes "genuinely dim" for "still loading"
 /// (see `render_import.rs`'s `--non-black-floor` doc comment for why this
 /// must never be a single global constant).
-fn run_check(device: &Arc<GpuDevice>, asset: &str, path: &Path, check: &CheckSpec, assert: bool) -> Result<(), String> {
+fn run_check(
+    device: &Arc<GpuDevice>,
+    asset: &str,
+    path: &Path,
+    check: &CheckSpec,
+    assert: bool,
+) -> Result<(), String> {
     match check {
         CheckSpec::NonBlackFractionMin { value } => {
             let rgba = render_asset(device, path, &[], 0.02)?;
@@ -732,7 +848,9 @@ fn run_check(device: &Arc<GpuDevice>, asset: &str, path: &Path, check: &CheckSpe
             if !assert || frac > *value {
                 Ok(())
             } else {
-                Err(format!("lights-off non_black_fraction {frac:.4} <= floor {value}"))
+                Err(format!(
+                    "lights-off non_black_fraction {frac:.4} <= floor {value}"
+                ))
             }
         }
         CheckSpec::Golden { file, mean_abs_tol } => {
@@ -740,7 +858,11 @@ fn run_check(device: &Arc<GpuDevice>, asset: &str, path: &Path, check: &CheckSpe
             let result = check_golden(&rgba, file, *mean_abs_tol);
             if assert { result } else { Ok(()) }
         }
-        CheckSpec::RegionMeanLuminanceBelow { region, reference_region, value } => {
+        CheckSpec::RegionMeanLuminanceBelow {
+            region,
+            reference_region,
+            value,
+        } => {
             let rgba = render_asset(device, path, &[], 0.02)?;
             let region_mean = region_mean_luminance(&rgba, *region);
             let reference_mean = region_mean_luminance(&rgba, *reference_region);
@@ -770,7 +892,11 @@ fn run_check(device: &Arc<GpuDevice>, asset: &str, path: &Path, check: &CheckSpe
                 Err(format!("region mean G-R {diff:.2} <= floor {value}"))
             }
         }
-        CheckSpec::RegionMaxLuminanceAbove { region, reference_region, value } => {
+        CheckSpec::RegionMaxLuminanceAbove {
+            region,
+            reference_region,
+            value,
+        } => {
             let rgba = render_asset(device, path, &[], 0.02)?;
             let region_max = region_max_luminance(&rgba, *region);
             let reference_max = region_max_luminance(&rgba, *reference_region);
@@ -789,7 +915,11 @@ fn run_check(device: &Arc<GpuDevice>, asset: &str, path: &Path, check: &CheckSpe
                 ))
             }
         }
-        CheckSpec::RegionStdDevAbove { region, reference_region, value } => {
+        CheckSpec::RegionStdDevAbove {
+            region,
+            reference_region,
+            value,
+        } => {
             let rgba = render_asset(device, path, &[], 0.02)?;
             let region_std = region_stddev_luminance(&rgba, *region);
             let reference_std = region_stddev_luminance(&rgba, *reference_region);
@@ -822,13 +952,22 @@ fn glb_conformance_sweep() {
         .unwrap_or_else(|e| panic!("read {}: {e}", manifest_path.display()));
     let entries: Vec<ManifestEntry> =
         serde_json::from_str(&manifest_json).expect("parse manifest.json");
-    assert!(!entries.is_empty(), "manifest.json must name at least one asset");
+    assert!(
+        !entries.is_empty(),
+        "manifest.json must name at least one asset"
+    );
     // Exact asset names let a failed visual contract be reproduced without
     // rendering the whole corpus. An unset filter still runs every entry.
     let selected = std::env::var("GLTF_CONFORMANCE_ASSETS").ok();
-    let selected: Vec<&str> = selected.as_deref().map(|s| s.split(',').collect()).unwrap_or_default();
+    let selected: Vec<&str> = selected
+        .as_deref()
+        .map(|s| s.split(',').collect())
+        .unwrap_or_default();
     for asset in &selected {
-        assert!(entries.iter().any(|entry| entry.asset == *asset), "unknown conformance asset: {asset}");
+        assert!(
+            entries.iter().any(|entry| entry.asset == *asset),
+            "unknown conformance asset: {asset}"
+        );
     }
 
     // Every graph and render remains fresh; only device pipelines are shared.
@@ -851,7 +990,10 @@ fn glb_conformance_sweep() {
         if let Some(reason) = entry.status.strip_prefix("xfail:") {
             xfail_count += 1;
             if have_fixture {
-                println!("XFAIL {} ({reason}) — running checks informationally, not asserted:", entry.asset);
+                println!(
+                    "XFAIL {} ({reason}) — running checks informationally, not asserted:",
+                    entry.asset
+                );
                 for check in &entry.checks {
                     if let Err(e) = run_check(&device, &entry.asset, &asset_path, check, false) {
                         println!("  (xfail, no assertion) {e}");

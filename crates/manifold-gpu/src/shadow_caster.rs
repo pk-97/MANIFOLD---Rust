@@ -78,9 +78,13 @@ impl ShadowCaster {
 
 /// Upload a caster table into a fresh shared buffer. For proofs and one-off
 /// callers; the renderer writes its table into its per-frame light ring.
-pub fn upload_shadow_casters(device: &crate::GpuDevice, casters: &[ShadowCaster]) -> crate::GpuBuffer {
+pub fn upload_shadow_casters(
+    device: &crate::GpuDevice,
+    casters: &[ShadowCaster],
+) -> crate::GpuBuffer {
     let bytes: &[u8] = bytemuck::cast_slice(casters);
-    let buffer = device.create_buffer_shared(bytes.len().max(std::mem::size_of::<ShadowCaster>()) as u64);
+    let buffer =
+        device.create_buffer_shared(bytes.len().max(std::mem::size_of::<ShadowCaster>()) as u64);
     // SAFETY: the buffer was just created with room for `bytes`.
     unsafe { buffer.write(0, bytes) };
     buffer

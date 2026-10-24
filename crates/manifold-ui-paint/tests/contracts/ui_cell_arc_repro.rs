@@ -23,9 +23,9 @@ use manifold_gpu::{
     GpuDevice, GpuLoadAction, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
     GpuTextureUsage,
 };
-use manifold_ui_paint::ui_renderer::UIRenderer;
-use manifold_ui::node::{texture_handle_for_key, UIFlags};
+use manifold_ui::node::{UIFlags, texture_handle_for_key};
 use manifold_ui::{Rect, UITree, ZTier};
+use manifold_ui_paint::ui_renderer::UIRenderer;
 
 // W*4 must be 256-byte aligned for the texture→buffer readback copy.
 // 1024*4 = 4096 = 16*256. H is unconstrained.
@@ -109,20 +109,22 @@ fn build_atlas() -> Vec<u8> {
     rgba
 }
 
-fn render_with(
-    tree: &UITree,
-    device: &GpuDevice,
-    ui: &mut UIRenderer,
-    h: u32,
-) -> Vec<u8> {
+fn render_with(tree: &UITree, device: &GpuDevice, ui: &mut UIRenderer, h: u32) -> Vec<u8> {
     ui.begin_frame();
     ui.render_tree(tree, None);
-    assert!(ui.prepare(device, W, h, 1.0), "cell repro produced no draw commands");
+    assert!(
+        ui.prepare(device, W, h, 1.0),
+        "cell repro produced no draw commands"
+    );
     let target = device.create_texture(&manifold_gpu::GpuTextureDesc {
-        width: W, height: h, depth: 1, format: FORMAT,
+        width: W,
+        height: h,
+        depth: 1,
+        format: FORMAT,
         dimension: manifold_gpu::GpuTextureDimension::D2,
         usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-        label: "cell-arc-render", mip_levels: 1,
+        label: "cell-arc-render",
+        mip_levels: 1,
     });
     {
         let mut enc = device.create_encoder("cell-arc-render");
@@ -228,7 +230,16 @@ fn rounded_mask_is_symmetric_for_atlas_sub_rect_cells() {
         );
         let start = tree.count();
         for &(col, row, x, y) in CELLS {
-            tree.add_image_uv(None, x, y, DRAW_W, DRAW_H, radius, handle, cell_uv(col, row));
+            tree.add_image_uv(
+                None,
+                x,
+                y,
+                DRAW_W,
+                DRAW_H,
+                radius,
+                handle,
+                cell_uv(col, row),
+            );
         }
         tree.end_region(region, start);
         *slot = render_with(&tree, &device, &mut ui, CANVAS_H);
@@ -289,8 +300,16 @@ fn rounded_mask_is_symmetric_for_atlas_sub_rect_cells() {
         let y = y as u32;
         for (cx, cy, which) in [
             (x + corner_inset, y + corner_inset, "top-left"),
-            (x + DRAW_W as u32 - 1 - corner_inset, y + corner_inset, "top-right"),
-            (x + corner_inset, y + DRAW_H as u32 - 1 - corner_inset, "bottom-left"),
+            (
+                x + DRAW_W as u32 - 1 - corner_inset,
+                y + corner_inset,
+                "top-right",
+            ),
+            (
+                x + corner_inset,
+                y + DRAW_H as u32 - 1 - corner_inset,
+                "bottom-left",
+            ),
             (
                 x + DRAW_W as u32 - 1 - corner_inset,
                 y + DRAW_H as u32 - 1 - corner_inset,

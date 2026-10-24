@@ -7,21 +7,35 @@ use manifold_water_liquid::fluid_particles::FaceSample;
 // Engine _removeMarkerParticles counts before testing speed: an extreme
 // marker still consumes one of the first 250 places in its cell.
 pub(super) fn native_cell_survivors(speeds: &[f64], limit: f64) -> Vec<usize> {
-    speeds.iter().enumerate().filter_map(|(i, &speed)|
-        (i < 250 && speed * speed <= limit * limit).then_some(i)).collect()
+    speeds
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &speed)| (i < 250 && speed * speed <= limit * limit).then_some(i))
+        .collect()
 }
 
 #[test]
 fn gpu_flip_native_marker_cap_and_extreme_reference() {
     use manifold_core::Seconds;
-    use manifold_physics::stepping::{marker_particle_speed_limit, MarkerSpeedLimitConfig};
+    use manifold_physics::stepping::{MarkerSpeedLimitConfig, marker_particle_speed_limit};
     for duration in [0.25, 0.5, 1.0] {
         let mut speeds = vec![1.0; 300];
         speeds[0] = 1000.0;
-        let limit = marker_particle_speed_limit(&speeds, Seconds(duration), 0.2, 5.0, 6,
-            MarkerSpeedLimitConfig::default(), &mut [0; 6]).value;
+        let limit = marker_particle_speed_limit(
+            &speeds,
+            Seconds(duration),
+            0.2,
+            5.0,
+            6,
+            MarkerSpeedLimitConfig::default(),
+            &mut [0; 6],
+        )
+        .value;
         assert_eq!(limit, 6.0 / duration);
-        assert_eq!(native_cell_survivors(&speeds, limit), (1..250).collect::<Vec<_>>());
+        assert_eq!(
+            native_cell_survivors(&speeds, limit),
+            (1..250).collect::<Vec<_>>()
+        );
         assert_eq!(native_cell_survivors(&[limit; 300], limit).len(), 250);
     }
 }
@@ -95,13 +109,23 @@ pub(super) fn cpu_extend(faces: &[FaceSample], n: [usize; 3]) -> Vec<FaceSample>
             .collect();
         let mut status = vec![Status::Unknown; faces.len()];
         for &g in &cells {
-            status[at(g)] = if border(g) { Status::Done } else if faces[at(g)].weight[a] > 0.0 { Status::Known } else { Status::Unknown };
+            status[at(g)] = if border(g) {
+                Status::Done
+            } else if faces[at(g)].weight[a] > 0.0 {
+                Status::Known
+            } else {
+                Status::Unknown
+            };
         }
         let neighbours = |g: [usize; 3]| {
             (0..6).filter_map(move |s| {
                 let (b, d) = (s / 2, if s % 2 == 0 { 1i64 } else { -1 });
                 let q = g[b] as i64 + d;
-                (q >= 0 && q < dims[b] as i64).then(|| { let mut r = g; r[b] = q as usize; r })
+                (q >= 0 && q < dims[b] as i64).then(|| {
+                    let mut r = g;
+                    r[b] = q as usize;
+                    r
+                })
             })
         };
         let mut waiting = Vec::new();
@@ -122,8 +146,10 @@ pub(super) fn cpu_extend(faces: &[FaceSample], n: [usize; 3]) -> Vec<FaceSample>
             out[at(g)].weight[a] = faces[at(g)].weight[a];
         }
         for g in waiting {
-            let done: Vec<f64> = neighbours(g).filter(|&r| status[at(r)] == Status::Done)
-                .map(|r| f64::from(faces[at(r)].velocity[a])).collect();
+            let done: Vec<f64> = neighbours(g)
+                .filter(|&r| status[at(r)] == Status::Done)
+                .map(|r| f64::from(faces[at(r)].velocity[a]))
+                .collect();
             out[at(g)].velocity[a] = (done.iter().sum::<f64>() / done.len() as f64) as f32;
             out[at(g)].weight[a] = 1.0;
         }
@@ -139,7 +165,8 @@ pub(super) fn transverse_wall_fixture(n: [usize; 3], corner: bool) -> Vec<FaceSa
     let mut faces = vec![FaceSample::default(); n.map(|v| v + 1).iter().product()];
     for (i, face) in faces.iter_mut().enumerate() {
         let p = coords(i, n);
-        let inner = p[0] > 0 && p[0] < n[0] && p[1] > 0 && p[1] < n[1] - 1 && p[2] > 0 && p[2] < n[2] - 1;
+        let inner =
+            p[0] > 0 && p[0] < n[0] && p[1] > 0 && p[1] < n[1] - 1 && p[2] > 0 && p[2] < n[2] - 1;
         if inner && p[1] >= 2 && (!corner || p[2] >= 2) {
             face.velocity[0] = 2.0;
             face.weight[0] = 1.0;
@@ -262,7 +289,10 @@ fn gpu_flip_step_order_dispatch_extents() {
     let cell_count: u64 = cells.iter().product();
     let face_count: u64 = cells.map(|n| n + 1).iter().product();
     assert_eq!((cell_count, face_count), (120, 210));
-    assert_eq!(manifold_water_liquid::grid::face_bytes([6, 5, 4]), face_count * 32);
+    assert_eq!(
+        manifold_water_liquid::grid::face_bytes([6, 5, 4]),
+        face_count * 32
+    );
     assert_eq!(super::gpu_flip_step::emit_sites([6, 5, 4]), cell_count * 8);
     for threads in [cell_count, face_count, cell_count * 8, 300, 512] {
         assert!(threads.div_ceil(256) * 256 >= threads);
@@ -273,8 +303,10 @@ fn gpu_flip_step_order_dispatch_extents() {
         let groups = u64::from(count.div_ceil(64));
         // Both vec4 reduction scratch buffers, three maxima, histogram,
         // outlier counters and plan. Histogram index is clamped below six.
-        assert_eq!(super::gpu_flip_clock::GpuFlipClock::held_bytes(count, 1, 1),
-            2 * groups * 16 + 3 * 16 + 64 * 4 + 16 + 48);
+        assert_eq!(
+            super::gpu_flip_clock::GpuFlipClock::held_bytes(count, 1, 1),
+            2 * groups * 16 + 3 * 16 + 64 * 4 + 16 + 48
+        );
     }
     // Removal binds one CellRange per cell and writes only start..start+count.
     let ranges = [(0usize, 300usize), (300, 212)];

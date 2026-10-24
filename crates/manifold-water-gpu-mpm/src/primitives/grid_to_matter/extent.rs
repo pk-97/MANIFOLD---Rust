@@ -1,8 +1,8 @@
 //! Buffer extent rule owned by this node.
-use manifold_water_liquid::extent::liquid_lattice;
 use crate::matter::grid_bytes;
-use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use crate::matter::node_extent;
+use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use manifold_water_liquid::extent::liquid_lattice;
 
 fn grid_to_matter(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let lattice = liquid_lattice(x)?;

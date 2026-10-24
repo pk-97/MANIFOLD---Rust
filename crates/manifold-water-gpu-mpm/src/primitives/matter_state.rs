@@ -7,21 +7,34 @@
 
 use manifold_gpu::GpuBuffer;
 
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use crate::matter::{
+    MatterGridNode, MatterPoint, MatterTickStats, REACTION_WORDS, STATS_WORDS, grid_accum_bytes,
+    grid_bytes, substep_duration,
+};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
-use crate::matter::{MatterGridNode, MatterPoint, MatterTickStats, REACTION_WORDS, STATS_WORDS, grid_accum_bytes, grid_bytes, substep_duration};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::exec::substeps::{
+    SubstepBoundaryPorts, SubstepInterval, SubstepResultPorts,
+};
 use manifold_node_engine::parameters::ParamValue;
-use manifold_water_rigid::physics_metrics::DroppedTimeTracker;
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::exec::substeps::{SubstepBoundaryPorts, SubstepInterval, SubstepResultPorts};
+use manifold_water_rigid::physics_metrics::DroppedTimeTracker;
 
 /// `reaction_in` closes the reaction chain (node.matter_body_reaction, then
 /// node.grid_to_matter) into the region, so the coupling sum runs every
 /// substep; the words themselves live in the domain's reaction slot, which
 /// the domain reads back.
 const RESULTS: &[SubstepResultPorts] = &[
-    SubstepResultPorts { capture: "stats_in", output: "stats", optional: false },
-    SubstepResultPorts { capture: "reaction_in", output: "reaction", optional: false },
+    SubstepResultPorts {
+        capture: "stats_in",
+        output: "stats",
+        optional: false,
+    },
+    SubstepResultPorts {
+        capture: "reaction_in",
+        output: "reaction",
+        optional: false,
+    },
 ];
 
 /// The region's contract. Iteration scalars, in order: substep length in
@@ -156,7 +169,9 @@ impl MatterState {
             if slot.epoch != epoch {
                 continue;
             }
-            let Some(ptr) = slot.buffer.mapped_ptr() else { continue };
+            let Some(ptr) = slot.buffer.mapped_ptr() else {
+                continue;
+            };
             // SAFETY: the frame that wrote this shared slot has retired.
             let words = unsafe {
                 std::slice::from_raw_parts(ptr.cast::<u32>().cast_const(), STATS_WORDS as usize)
@@ -207,7 +222,10 @@ impl Primitive for MatterState {
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         match port_name {
-            "out" => input_capacities.iter().find(|(p, _)| *p == "seed").map(|&(_, n)| n),
+            "out" => input_capacities
+                .iter()
+                .find(|(p, _)| *p == "seed")
+                .map(|&(_, n)| n),
             "stats" => Some(STATS_WORDS),
             "reaction" => Some(MAX_LIQUID_BODIES as u32 * REACTION_WORDS),
             // Provided storage, sized to the lattice at run time.
@@ -230,10 +248,8 @@ impl Primitive for MatterState {
         let dropped_seconds = f64::from(ctx.scalar_or_param("dropped_seconds", 0.0));
         self.submitted_cap = ctx.scalar_or_param("step_cap_hit", 0.0) > 0.0;
         // A graph saved without the domain's interval wire runs on the project's Sim Rate.
-        let interval_duration = ctx.scalar_or_param(
-            "interval_duration",
-            ctx.sim_step.interval.0 as f32,
-        );
+        let interval_duration =
+            ctx.scalar_or_param("interval_duration", ctx.sim_step.interval.0 as f32);
         let ticks = whole(ctx.scalar_or_param("ticks", 0.0));
         let substeps = whole(ctx.scalar_or_param("substeps_per_tick", 1.0)).max(1);
         let epoch = whole(ctx.scalar_or_param("epoch", 0.0));
@@ -247,14 +263,20 @@ impl Primitive for MatterState {
         // a lattice the device cannot hold stops the solver before any tick.
         let device = gpu.device;
         let mut refused = None;
-        for (buffer, bytes) in [(&mut self.grid_accum, grid_accum_bytes(nodes)), (&mut self.grid, grid_bytes(nodes))] {
+        for (buffer, bytes) in [
+            (&mut self.grid_accum, grid_accum_bytes(nodes)),
+            (&mut self.grid, grid_bytes(nodes)),
+        ] {
             if buffer.as_ref().is_some_and(|b| b.size >= bytes) {
                 continue;
             }
             let bytes = bytes.max(32);
-            match manifold_node_engine::load::expand::admit_candidate_bytes(device.modifier_memory_snapshot(), bytes)
-                .map_err(|error| error.to_string())
-                .and_then(|()| device.try_create_buffer(bytes))
+            match manifold_node_engine::load::expand::admit_candidate_bytes(
+                device.modifier_memory_snapshot(),
+                bytes,
+            )
+            .map_err(|error| error.to_string())
+            .and_then(|()| device.try_create_buffer(bytes))
             {
                 Ok(created) => *buffer = Some(created),
                 Err(error) => {
@@ -289,7 +311,8 @@ impl Primitive for MatterState {
             }
             if let Some(stats) = stats {
                 gpu.native_enc.clear_buffer(zero_stats);
-                gpu.native_enc.copy_buffer_to_buffer(zero_stats, stats, u64::from(STATS_WORDS) * 4);
+                gpu.native_enc
+                    .copy_buffer_to_buffer(zero_stats, stats, u64::from(STATS_WORDS) * 4);
             }
         }
         self.poll_readbacks(clock.as_ref(), live_mode);
@@ -301,31 +324,42 @@ impl Primitive for MatterState {
                 .copy_buffer_to_buffer(seed, out, seed.size.min(out.size));
         }
         let dropped_time = &mut self.dropped_time;
-        ctx.sim_metrics.record(|metrics| dropped_time.record(
-            metrics,
-            target,
-            self.completed_time,
-            dropped_seconds,
-            self.completed_cap,
-            self.faulted,
-        ));
+        ctx.sim_metrics.record(|metrics| {
+            dropped_time.record(
+                metrics,
+                target,
+                self.completed_time,
+                dropped_seconds,
+                self.completed_cap,
+                self.faulted,
+            )
+        });
 
         self.substeps = substeps;
         self.step_dt = substep_duration(interval_duration, substeps);
         self.interval = None;
-        self.pending = if (self.faulted && !live_mode) || refused.is_some() { 0 } else { ticks.saturating_mul(substeps) };
+        self.pending = if (self.faulted && !live_mode) || refused.is_some() {
+            0
+        } else {
+            ticks.saturating_mul(substeps)
+        };
         self.captures = 0;
         self.captured_ticks = 0;
         let live = self.last_stats.map_or(count, |s| s.live);
-        ctx.outputs.set_scalar("live_count", ParamValue::Float(live as f32));
-        ctx.outputs.set_scalar("fault", ParamValue::Float(if self.faulted { 1.0 } else { 0.0 }));
+        ctx.outputs
+            .set_scalar("live_count", ParamValue::Float(live as f32));
+        ctx.outputs.set_scalar(
+            "fault",
+            ParamValue::Float(if self.faulted { 1.0 } else { 0.0 }),
+        );
         if let Some(error) = refused {
             ctx.error(error);
         } else if self.faulted {
             ctx.error(if live_mode {
                 "Matter: non-finite values detected; reseeding while the show continues"
             } else {
-                "Matter: a tick produced non-finite values; the liquid is halted until Reset"});
+                "Matter: a tick produced non-finite values; the liquid is halted until Reset"
+            });
         }
     }
 
@@ -363,11 +397,14 @@ impl Primitive for MatterState {
         // writes fresh storage is accepted by copy.
         let pairs = [("in", "out"), ("stats_in", "stats")];
         for (candidate, state) in pairs {
-            if let (Some(candidate), Some(state)) = (ctx.inputs.array(candidate), ctx.outputs.array(state))
+            if let (Some(candidate), Some(state)) =
+                (ctx.inputs.array(candidate), ctx.outputs.array(state))
                 && !candidate.ptr_eq(state)
             {
                 let size = candidate.size.min(state.size);
-                ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(candidate, state, size);
+                ctx.gpu_encoder()
+                    .native_enc
+                    .copy_buffer_to_buffer(candidate, state, size);
             }
         }
         if !self.capture_iteration() {
@@ -375,17 +412,25 @@ impl Primitive for MatterState {
         }
         // The reaction words stay in the domain's slot for its fenced
         // readback; the result carries only the region's final sums.
-        if let (Some(candidate), Some(state)) = (ctx.inputs.array("reaction_in"), ctx.outputs.array("reaction"))
-            && !candidate.ptr_eq(state)
+        if let (Some(candidate), Some(state)) = (
+            ctx.inputs.array("reaction_in"),
+            ctx.outputs.array("reaction"),
+        ) && !candidate.ptr_eq(state)
         {
             let size = candidate.size.min(state.size);
-            ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(candidate, state, size);
+            ctx.gpu_encoder()
+                .native_enc
+                .copy_buffer_to_buffer(candidate, state, size);
         }
-        let Some(stats) = ctx.outputs.array("stats") else { return };
+        let Some(stats) = ctx.outputs.array("stats") else {
+            return;
+        };
         let Some(epoch) = self.epoch else { return };
         let gpu = ctx.gpu_encoder();
         let clock = gpu.device.frame_clock();
-        let complete = |slot: &ReadbackSlot| !slot.pending || clock.as_ref().is_none_or(|c| c.is_complete(slot.stamp));
+        let complete = |slot: &ReadbackSlot| {
+            !slot.pending || clock.as_ref().is_none_or(|c| c.is_complete(slot.stamp))
+        };
         let index = match self.readback.iter().position(complete) {
             Some(index) => index,
             None if self.readback.len() < READBACK_SLOTS => {
@@ -408,7 +453,8 @@ impl Primitive for MatterState {
             // Retired but unread: poll will not see it again, so read it now.
             slot.pending = false;
         }
-        gpu.native_enc.copy_buffer_to_buffer(stats, &slot.buffer, u64::from(STATS_WORDS) * 4);
+        gpu.native_enc
+            .copy_buffer_to_buffer(stats, &slot.buffer, u64::from(STATS_WORDS) * 4);
         slot.stamp = clock.as_ref().map_or(0, |c| c.stamp());
         slot.epoch = epoch;
         slot.pending = true;
@@ -452,12 +498,20 @@ mod tests {
         state.ticks_done = 10;
         let timings = [
             SubstepInterval {
-                start: Seconds(0.0), end: Seconds(0.02),
-                ordinal: 0, first_iteration: 0, iterations: 2, total_iterations: 7,
+                start: Seconds(0.0),
+                end: Seconds(0.02),
+                ordinal: 0,
+                first_iteration: 0,
+                iterations: 2,
+                total_iterations: 7,
             },
             SubstepInterval {
-                start: Seconds(0.02), end: Seconds(0.07),
-                ordinal: 1, first_iteration: 2, iterations: 5, total_iterations: 7,
+                start: Seconds(0.02),
+                end: Seconds(0.07),
+                ordinal: 1,
+                first_iteration: 2,
+                iterations: 5,
+                total_iterations: 7,
             },
         ];
         let mut scalars = [0.0; 6];
@@ -465,14 +519,26 @@ mod tests {
             for local in 0..timing.iterations {
                 EffectNode::set_substep_interval(&mut state, timing);
                 let iteration = timing.first_iteration + local;
-                assert!(EffectNode::substep_iteration(&mut state, iteration, &mut scalars));
-                assert_eq!(scalars, [
-                    substep_duration(timing.duration().0 as f32, timing.iterations),
-                    iteration as f32, local as f32,
-                    if local == 0 { 1.0 } else { 0.0 },
-                    if local + 1 == timing.iterations { 1.0 } else { 0.0 },
-                    (10 + timing.ordinal) as f32,
-                ]);
+                assert!(EffectNode::substep_iteration(
+                    &mut state,
+                    iteration,
+                    &mut scalars
+                ));
+                assert_eq!(
+                    scalars,
+                    [
+                        substep_duration(timing.duration().0 as f32, timing.iterations),
+                        iteration as f32,
+                        local as f32,
+                        if local == 0 { 1.0 } else { 0.0 },
+                        if local + 1 == timing.iterations {
+                            1.0
+                        } else {
+                            0.0
+                        },
+                        (10 + timing.ordinal) as f32,
+                    ]
+                );
                 assert_eq!(state.capture_iteration(), iteration == 6);
             }
         }
@@ -484,7 +550,10 @@ mod tests {
         state.pending = 0;
         state.faulted = true;
         EffectNode::set_substep_interval(&mut state, timings[0]);
-        assert_eq!(state.pending, 0, "interval metadata cannot restart a halted boundary");
+        assert_eq!(
+            state.pending, 0,
+            "interval metadata cannot restart a halted boundary"
+        );
         assert!(!EffectNode::substep_iteration(&mut state, 0, &mut scalars));
     }
 

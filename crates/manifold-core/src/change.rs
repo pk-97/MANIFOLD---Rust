@@ -127,7 +127,9 @@ impl PartStamps {
     /// Sum of the stamps in `set`. Stamps only grow, so the key changes exactly
     /// when a part in `set` moved. For consumers that keep one `u64` cache key.
     pub fn key(&self, set: ChangeSet) -> u64 {
-        set.parts().map(|p| self.0[p as usize]).fold(0u64, u64::wrapping_add)
+        set.parts()
+            .map(|p| self.0[p as usize])
+            .fold(0u64, u64::wrapping_add)
     }
 }
 
@@ -146,17 +148,64 @@ pub enum Reads {
 pub type ConsumerRow = (&'static str, Part, &'static [(&'static str, Reads)]);
 
 pub const LIVE_SCALAR_CONSUMERS: &[ConsumerRow] = &[
-    ("param base and value", Part::Values, &[("modulation", Reads::Fresh), ("render", Reads::Fresh)]),
-    ("layer and master opacity", Part::Values, &[("compositor", Reads::Fresh)]),
-    ("macro values", Part::Values, &[("modulation", Reads::Fresh)]),
-    ("led_brightness, led_gain", Part::Values, &[("led output", Reads::Fresh)]),
-    ("driver, envelope and audio-mod shapes", Part::Shapes, &[("modulation", Reads::Fresh)]),
-    ("clip-trigger shape", Part::Shapes, &[("live trigger", Reads::Fresh)]),
-    ("param-mapping reshape", Part::Shapes, &[("modulation", Reads::Fresh), ("render", Reads::Fresh)]),
-    ("unbound graph node param values", Part::Shapes, &[("render", Reads::Fresh)]),
-    ("layer.audio_gain_db", Part::Shapes, &[("audio layer playback", Reads::Fresh)]),
-    ("audio send gain_db", Part::Shapes, &[("modulation", Reads::Fresh), ("capture GainBank", Reads::CachedWithRow)]),
-    ("band split low_hz, mid_hz", Part::Shapes, &[("analysis", Reads::Fresh)]),
+    (
+        "param base and value",
+        Part::Values,
+        &[("modulation", Reads::Fresh), ("render", Reads::Fresh)],
+    ),
+    (
+        "layer and master opacity",
+        Part::Values,
+        &[("compositor", Reads::Fresh)],
+    ),
+    (
+        "macro values",
+        Part::Values,
+        &[("modulation", Reads::Fresh)],
+    ),
+    (
+        "led_brightness, led_gain",
+        Part::Values,
+        &[("led output", Reads::Fresh)],
+    ),
+    (
+        "driver, envelope and audio-mod shapes",
+        Part::Shapes,
+        &[("modulation", Reads::Fresh)],
+    ),
+    (
+        "clip-trigger shape",
+        Part::Shapes,
+        &[("live trigger", Reads::Fresh)],
+    ),
+    (
+        "param-mapping reshape",
+        Part::Shapes,
+        &[("modulation", Reads::Fresh), ("render", Reads::Fresh)],
+    ),
+    (
+        "unbound graph node param values",
+        Part::Shapes,
+        &[("render", Reads::Fresh)],
+    ),
+    (
+        "layer.audio_gain_db",
+        Part::Shapes,
+        &[("audio layer playback", Reads::Fresh)],
+    ),
+    (
+        "audio send gain_db",
+        Part::Shapes,
+        &[
+            ("modulation", Reads::Fresh),
+            ("capture GainBank", Reads::CachedWithRow),
+        ],
+    ),
+    (
+        "band split low_hz, mid_hz",
+        Part::Shapes,
+        &[("analysis", Reads::Fresh)],
+    ),
 ];
 
 /// A key over every card param's row fact (`ParamSpecDef::row_fact`): what
@@ -205,9 +254,17 @@ mod tests {
     fn live_scalar_table_names_only_live_parts() {
         let mut cached = Vec::new();
         for (field, part, consumers) in LIVE_SCALAR_CONSUMERS {
-            assert!(matches!(part, Part::Values | Part::Shapes), "{field} is not a live scalar part");
+            assert!(
+                matches!(part, Part::Values | Part::Shapes),
+                "{field} is not a live scalar part"
+            );
             assert!(!consumers.is_empty(), "{field} lists no consumer");
-            cached.extend(consumers.iter().filter(|(_, r)| *r == Reads::CachedWithRow).map(|(c, _)| (*field, *c)));
+            cached.extend(
+                consumers
+                    .iter()
+                    .filter(|(_, r)| *r == Reads::CachedWithRow)
+                    .map(|(c, _)| (*field, *c)),
+            );
         }
         assert_eq!(cached, vec![("audio send gain_db", "capture GainBank")]);
     }
@@ -217,7 +274,10 @@ mod tests {
         let a = PartStamps::default();
         let mut b = a;
         b.bump(ChangeSet::of(&[Part::Clips, Part::Shapes]));
-        assert_eq!(b.moved_since(&a), ChangeSet::of(&[Part::Clips, Part::Shapes]));
+        assert_eq!(
+            b.moved_since(&a),
+            ChangeSet::of(&[Part::Clips, Part::Shapes])
+        );
         assert!(ChangeSet::ALL.contains(Part::ViewPrefs));
         assert!(!ChangeSet::LIVE.contains(Part::Effects));
     }

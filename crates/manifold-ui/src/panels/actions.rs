@@ -13,8 +13,8 @@ use super::{browser_popup, picker_core};
 use crate::input::Modifiers;
 use crate::node::Rect;
 use crate::types::{
-    AbletonMacroAddress, AudioDeviceRef, AudioFeature, MacroCurve, MidiTriggerMode,
-    PresetTypeId, TonemapCurve,
+    AbletonMacroAddress, AudioDeviceRef, AudioFeature, MacroCurve, MidiTriggerMode, PresetTypeId,
+    TonemapCurve,
 };
 use crate::view::{UiGraphTarget, UiSegmentShape};
 use manifold_foundation::scene_surface::FieldPick;
@@ -83,7 +83,7 @@ pub enum TransportAction {
     OverviewScrub(f32),
     /// Horizontal scrollbar drag/jump — an absolute scroll-x in beats (section 24 5e).
     TimelineScrollbarH(f32),
-    SetMidiClockDevice(i32),            // MIDI device index
+    SetMidiClockDevice(i32), // MIDI device index
 }
 
 #[derive(Debug, Clone)]
@@ -110,12 +110,7 @@ pub enum EditingAction {
     ContextSelectAllAutomation(UiGraphTarget, ParamId),
     ContextDeleteSelectedAutomation(UiGraphTarget, ParamId),
     ContextOpenAutomationShapePicker(UiGraphTarget, ParamId, Beats),
-    ContextInsertAutomationShape(
-        UiGraphTarget,
-        ParamId,
-        Beats,
-        AutomationShape,
-    ),
+    ContextInsertAutomationShape(UiGraphTarget, ParamId, Beats, AutomationShape),
     /// Change the shape leaving the captured point. The app dispatches this
     /// through `MoveAutomationPointCommand`, so one menu choice is one undo.
     ContextAutomationSetShape(UiGraphTarget, ParamId, Beats, f32, UiSegmentShape),
@@ -124,18 +119,18 @@ pub enum EditingAction {
     /// Opens the existing point time editor for the addressed point.
     AutomationPointEditTime(UiGraphTarget, ParamId, Beats, f32),
     LayerHeaderRightClicked(LayerId),
-    ContextSplitAtPlayhead(String),  // clip_id
-    ContextDeleteClip(String),       // clip_id
-    ContextDuplicateClip(String),    // clip_id
+    ContextSplitAtPlayhead(String),    // clip_id
+    ContextDeleteClip(String),         // clip_id
+    ContextDuplicateClip(String),      // clip_id
     ContextPasteAtTrack(f32, usize), // beat, layer (track-content click; positional by design — no stable layer identity at that hit-test site)
-    ContextAddVideoLayer(LayerId),     // after_layer
+    ContextAddVideoLayer(LayerId),   // after_layer
     ContextAddGeneratorLayer(LayerId), // after_layer
-    ContextAddLedLayer(LayerId),       // after_layer
-    ContextAddAudioLayer(LayerId),     // after_layer
-    ContextDeleteLayer(LayerId),       // layer
-    ContextDuplicateLayer(LayerId),    // layer
-    ContextPasteAtLayer(LayerId),      // layer
-    ContextImportMidi(LayerId),        // layer
+    ContextAddLedLayer(LayerId),     // after_layer
+    ContextAddAudioLayer(LayerId),   // after_layer
+    ContextDeleteLayer(LayerId),     // layer
+    ContextDuplicateLayer(LayerId),  // layer
+    ContextPasteAtLayer(LayerId),    // layer
+    ContextImportMidi(LayerId),      // layer
     ContextGroupSelectedLayers,
     ContextUngroup(LayerId),                             // layer
     ContextSetLayerColor(LayerId, crate::node::Color32), // layer, color
@@ -206,7 +201,12 @@ pub enum ProjectAction {
     /// An Add menu entry: add the entry's item to the layer's scene, under
     /// `parent` when it is a group. A Modifier aims at the `selected` Objects
     /// and Groups, or the whole scene when there are none. One undo step.
-    SceneAdd { layer_id: LayerId, entry: String, parent: Option<ItemId>, selected: Vec<ItemId> },
+    SceneAdd {
+        layer_id: LayerId,
+        entry: String,
+        parent: Option<ItemId>,
+        selected: Vec<ItemId>,
+    },
     /// Remove the items and everything under them. One undo step.
     SceneRemove(LayerId, Vec<ItemId>),
     /// Duplicate an item with everything under it. One undo step.
@@ -217,23 +217,46 @@ pub enum ProjectAction {
     /// undo step.
     SceneUngroup(LayerId, ItemId),
     /// A pick on a structural field row: `SetSceneItemFieldsCommand`.
-    SceneFieldSet { layer_id: LayerId, item: ItemId, field: String, pick: FieldPick },
+    SceneFieldSet {
+        layer_id: LayerId,
+        item: ItemId,
+        field: String,
+        pick: FieldPick,
+    },
     /// Add a feature to a Material, or take it off again: one `Set` of its
     /// features with the feature's seed values, so one undo reverses it.
-    SceneMaterialFeature { layer_id: LayerId, material: ItemId, feature: crate::param_surface::MaterialFeature, add: bool },
+    SceneMaterialFeature {
+        layer_id: LayerId,
+        material: ItemId,
+        feature: crate::param_surface::MaterialFeature,
+        add: bool,
+    },
     /// Move the Modifier card `item` to place `to` in the chain, counted
     /// without the card itself. One undo step.
-    SceneChainMove { layer_id: LayerId, item: ItemId, to: usize },
+    SceneChainMove {
+        layer_id: LayerId,
+        item: ItemId,
+        to: usize,
+    },
     /// A tree row dropped in a new place: `item` goes under `parent` (the
     /// top level when `None`), before `before` (at the end when `None`),
     /// and stays where it is in the world. One undo step.
-    SceneTreeMove { layer_id: LayerId, item: ItemId, parent: Option<ItemId>, before: Option<ItemId> },
+    SceneTreeMove {
+        layer_id: LayerId,
+        item: ItemId,
+        parent: Option<ItemId>,
+        before: Option<ItemId>,
+    },
     /// Give an item a Material for it alone: a copy of the one it draws with
     /// (Make Unique), or a new one when it draws with none (New Material).
     SceneMakeMaterialUnique(LayerId, ItemId),
     /// Apply a starting look to a Material: its features and factors, one
     /// undo step.
-    SceneMaterialLook { layer_id: LayerId, material: ItemId, look: crate::param_surface::MaterialLook },
+    SceneMaterialLook {
+        layer_id: LayerId,
+        material: ItemId,
+        look: crate::param_surface::MaterialLook,
+    },
     /// "Aim Sun at HDRI": turn the scene's Sun toward the brightest region of
     /// the HDRI file at the given path. `(layer_id, hdri_file)`.
     SceneSetupAimSunAtHdri(LayerId, String),
@@ -266,7 +289,7 @@ pub enum ProjectAction {
     SetResolution(usize),           // preset index
     SetDisplayResolution(i32, i32), // direct width, height (no undo, matches Unity)
     SetSimRate(manifold_foundation::settings::SimRate),
-    SetRenderScale(f32),            // render scale: 1.0 (native), 0.75 (quality), 0.5 (performance)
+    SetRenderScale(f32), // render scale: 1.0 (native), 0.75 (quality), 0.5 (performance)
     SetTonemapCurve(TonemapCurve),
     SetTonemapEnabled(bool),
     SetSdrPreview(bool),
@@ -379,10 +402,18 @@ pub enum ParamsAction {
     /// A scene card section header's fold triangle was clicked; the card
     /// already flipped its own state. The app saves the choice in the
     /// instance's fold lists (SCENE_SURFACES_DESIGN.md D7 (user choices)).
-    CardSectionFolded { target: GraphParamTarget, section: String, folded: bool },
+    CardSectionFolded {
+        target: GraphParamTarget,
+        section: String,
+        folded: bool,
+    },
     /// Show on Card / Remove from Card; `None` hands the row back to its
     /// role (D10 (cross-surface gestures)).
-    SetCardPin(GraphParamTarget, ParamId, Option<manifold_foundation::scene_surface::CardPin>),
+    SetCardPin(
+        GraphParamTarget,
+        ParamId,
+        Option<manifold_foundation::scene_surface::CardPin>,
+    ),
     /// Set slider range / Reset slider range: the user's slider span for one
     /// control, `None` to clear it (SCENE_SURFACES_DESIGN.md D15 (slider range
     /// and hard limit)). Display only; the value is never moved.
@@ -522,7 +553,7 @@ pub enum ParamsAction {
     MacrosCollapseToggle,
     // Macro scrub trio migrated to `PanelAction::Scrub` (`ValueRef::Macro`,
     // P-I / D4).
-    MacroLabelRename(usize),     // macro_index — opens inline rename input
+    MacroLabelRename(usize), // macro_index — opens inline rename input
     ParamLabelRightClick(GraphParamTarget, ParamId),
     /// Reveal this parameter's arrangement lane without touching its value.
     ShowAutomation(GraphParamTarget, ParamId),
@@ -536,7 +567,11 @@ pub enum ParamsAction {
     OpenClipTriggerSource(crate::view::UiGraphTarget, ParamId),
     OpenTriggerTargets(LayerId),
     ShowClipTriggerResponse(crate::view::UiGraphTarget, ParamId),
-    AssignClipTriggerSource(crate::view::UiGraphTarget, ParamId, crate::view::UiClipTriggerSource),
+    AssignClipTriggerSource(
+        crate::view::UiGraphTarget,
+        ParamId,
+        crate::view::UiClipTriggerSource,
+    ),
     CreateTriggerLane {
         owner: LayerId,
         assignment: Option<(crate::view::UiGraphTarget, ParamId)>,
@@ -579,12 +614,7 @@ pub enum ModulationAction {
     /// Setup defines one). See `docs/AUDIO_MODULATION_DESIGN.md`.
     AudioModToggle(GraphParamTarget, ParamId),
     /// Set an audio modulation's source: which send + which feature.
-    AudioModSetSource(
-        GraphParamTarget,
-        ParamId,
-        AudioSendId,
-        AudioFeature,
-    ),
+    AudioModSetSource(GraphParamTarget, ParamId, AudioSendId, AudioFeature),
     /// Remove the audio modulation from a param.
     AudioModRemove(GraphParamTarget, ParamId),
     /// Toggle an audio modulation's invert flag (`AudioModShape::invert`) — the
@@ -639,13 +669,9 @@ pub enum ModulationAction {
 pub enum MappingAction {
     MacroLabelRightClick(usize), // macro_index — opens mappings dropdown
     MapParamToMacro(GraphParamTarget, ParamId, usize), // gpt, param_id, macro_idx
-    UnmapMacro(usize, usize),                                                  // macro_idx, mapping_idx
-    ClearMacroMappings(usize),                                                 // macro_idx
-    MapParamToAbleton(
-        GraphParamTarget,
-        ParamId,
-        AbletonMacroAddress,
-    ), // gpt, param_id, address
+    UnmapMacro(usize, usize),    // macro_idx, mapping_idx
+    ClearMacroMappings(usize),   // macro_idx
+    MapParamToAbleton(GraphParamTarget, ParamId, AbletonMacroAddress), // gpt, param_id, address
     UnmapParamAbleton(GraphParamTarget, ParamId), // gpt, param_id
     /// Ableton mapping for macro slots.
     MapMacroToAbleton(usize, AbletonMacroAddress),
@@ -655,7 +681,7 @@ pub enum MappingAction {
     // (`ValueRef::AbletonMacroTrim`, P-I / D4): keyed by the macro slot index,
     // the `(min, max)` range rides `ScrubValue::Range` on Move.
     AbletonInvertToggle(GraphParamTarget, ParamId),
-    AbletonMacroInvertToggle(usize),                             // slot_idx
+    AbletonMacroInvertToggle(usize), // slot_idx
 }
 
 #[derive(Debug, Clone)]
@@ -753,7 +779,11 @@ pub enum RootAction {
         changed: Box<PanelAction>, // carries the default value
         commit: Box<PanelAction>,
     },
-    AudioDrawerClick(GraphParamTarget, manifold_foundation::ParamId, AudioDrawerClick),
+    AudioDrawerClick(
+        GraphParamTarget,
+        manifold_foundation::ParamId,
+        AudioDrawerClick,
+    ),
     /// Open (toggle) the Audio Setup panel — the central place to route audio
     /// in and define named sends. Header button; also bound to ⌘⇧A.
     OpenAudioSetup,
@@ -791,7 +821,12 @@ pub enum RootAction {
     SceneRenameClicked(LayerId, ItemId, String),
     /// A file field's picker: the app opens the file dialog and sends the
     /// picked path as a `ProjectAction::SceneFieldSet`.
-    SceneFieldFileClicked { layer_id: LayerId, item: ItemId, field: String, extensions: Vec<String> },
+    SceneFieldFileClicked {
+        layer_id: LayerId,
+        item: ItemId,
+        field: String,
+        extensions: Vec<String>,
+    },
     /// P4 (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` D8): double-click on a dock
     /// numeric value cell opens its type-in box. Carries the row's write
     /// address (mirroring `SceneSetupParamChanged`'s tuple shape), the
@@ -841,10 +876,16 @@ pub enum RootAction {
     },
     /// RT quality panel: click on a ray-resolution cell — same mechanics as
     /// [`RootAction::OpenRtQualityTierDropdown`], items = the four fractions.
-    OpenRtQualityResDropdown { realtime: bool, anchor: Rect },
+    OpenRtQualityResDropdown {
+        realtime: bool,
+        anchor: Rect,
+    },
     /// RT quality panel: click on a spatial-denoise cell — items = the four
     /// intensity levels (Off/Low/Medium/High).
-    OpenRtQualityDenoiseDropdown { realtime: bool, anchor: Rect },
+    OpenRtQualityDenoiseDropdown {
+        realtime: bool,
+        anchor: Rect,
+    },
     /// Double-click on a numeric param's value cell → open a type-in box. Carries
     /// the target + id, the value-cell anchor rect, the base value to prefill, the
     /// clamp range, and whether the param rounds to an integer — everything the
@@ -1017,38 +1058,62 @@ pub enum RootAction {
 // builder returns the domain type naturally, though the sweep prefers explicit
 // `PanelAction::Domain(DomainAction::X(..))` wrapping.
 impl From<TransportAction> for PanelAction {
-    fn from(a: TransportAction) -> Self { PanelAction::Transport(a) }
+    fn from(a: TransportAction) -> Self {
+        PanelAction::Transport(a)
+    }
 }
 impl From<EditingAction> for PanelAction {
-    fn from(a: EditingAction) -> Self { PanelAction::Editing(a) }
+    fn from(a: EditingAction) -> Self {
+        PanelAction::Editing(a)
+    }
 }
 impl From<LayerAction> for PanelAction {
-    fn from(a: LayerAction) -> Self { PanelAction::Layer(a) }
+    fn from(a: LayerAction) -> Self {
+        PanelAction::Layer(a)
+    }
 }
 impl From<MarkerAction> for PanelAction {
-    fn from(a: MarkerAction) -> Self { PanelAction::Marker(a) }
+    fn from(a: MarkerAction) -> Self {
+        PanelAction::Marker(a)
+    }
 }
 impl From<ProjectAction> for PanelAction {
-    fn from(a: ProjectAction) -> Self { PanelAction::Project(a) }
+    fn from(a: ProjectAction) -> Self {
+        PanelAction::Project(a)
+    }
 }
 impl From<BrowserAction> for PanelAction {
-    fn from(a: BrowserAction) -> Self { PanelAction::Browser(a) }
+    fn from(a: BrowserAction) -> Self {
+        PanelAction::Browser(a)
+    }
 }
 impl From<ClipAction> for PanelAction {
-    fn from(a: ClipAction) -> Self { PanelAction::Clip(a) }
+    fn from(a: ClipAction) -> Self {
+        PanelAction::Clip(a)
+    }
 }
 impl From<ParamsAction> for PanelAction {
-    fn from(a: ParamsAction) -> Self { PanelAction::Params(a) }
+    fn from(a: ParamsAction) -> Self {
+        PanelAction::Params(a)
+    }
 }
 impl From<ModulationAction> for PanelAction {
-    fn from(a: ModulationAction) -> Self { PanelAction::Modulation(a) }
+    fn from(a: ModulationAction) -> Self {
+        PanelAction::Modulation(a)
+    }
 }
 impl From<MappingAction> for PanelAction {
-    fn from(a: MappingAction) -> Self { PanelAction::Mapping(a) }
+    fn from(a: MappingAction) -> Self {
+        PanelAction::Mapping(a)
+    }
 }
 impl From<AudioSetupAction> for PanelAction {
-    fn from(a: AudioSetupAction) -> Self { PanelAction::AudioSetup(a) }
+    fn from(a: AudioSetupAction) -> Self {
+        PanelAction::AudioSetup(a)
+    }
 }
 impl From<RootAction> for PanelAction {
-    fn from(a: RootAction) -> Self { PanelAction::Root(a) }
+    fn from(a: RootAction) -> Self {
+        PanelAction::Root(a)
+    }
 }

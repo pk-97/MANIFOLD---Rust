@@ -7,8 +7,8 @@ use std::sync::Arc;
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 
-use super::dsp::History;
 use super::HIST_FRAMES;
+use super::dsp::History;
 use crate::trained::container::{Container, ContainerError};
 
 pub(super) const N_FFT: usize = 1024;
@@ -36,7 +36,10 @@ impl BandSpec {
         let window = c.f64s("extra.spec_window", &[N_FFT])?.to_vec();
         let band_of_bin = c.i64s("extra.spec_band_of_bin", &[N_FFT / 2 + 1])?.to_vec();
         if band_of_bin.iter().any(|&b| b < -1 || b >= BANDS as i64) {
-            return Err(ContainerError::WrongType { name: "extra.spec_band_of_bin".into(), want: "band index in -1..32" });
+            return Err(ContainerError::WrongType {
+                name: "extra.spec_band_of_bin".into(),
+                want: "band index in -1..32",
+            });
         }
         let fft = FftPlanner::new().plan_fft_forward(N_FFT);
         let scratch = vec![Complex::new(0.0, 0.0); fft.get_inplace_scratch_len()];
@@ -69,7 +72,8 @@ impl BandSpec {
         for (i, b) in self.buf.iter_mut().enumerate() {
             *b = Complex::new(self.ring[(self.pos + i) % N_FFT] * self.window[i], 0.0);
         }
-        self.fft.process_with_scratch(&mut self.buf, &mut self.scratch);
+        self.fft
+            .process_with_scratch(&mut self.buf, &mut self.scratch);
         let mut power = [0.0; BANDS];
         for (bin, &band) in self.band_of_bin.iter().enumerate() {
             if band >= 0 {
@@ -85,7 +89,6 @@ impl BandSpec {
         self.frames.push(spec);
         self.paired.push(paired);
     }
-
 
     pub fn holds(&self, first: u64, last: u64) -> bool {
         self.frames.holds(first, last)

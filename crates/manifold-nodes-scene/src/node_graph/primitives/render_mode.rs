@@ -168,13 +168,13 @@ impl Primitive for RenderModeNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_node_engine::exec::backend::MockBackend;
-    use manifold_node_engine::exec::backend::Backend;
+    use manifold_core::{Beats, Seconds};
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::exec::backend::MockBackend;
     use manifold_node_engine::exec::effect_node::{FrameTime, ParamValues};
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::ports::PortType;
-    use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -265,7 +265,9 @@ mod tests {
         for (slot, value) in render_mode_scratch.drain(..) {
             backend.set_render_mode(slot, value);
         }
-        backend.render_mode(out_slot).expect("render_mode should be set")
+        backend
+            .render_mode(out_slot)
+            .expect("render_mode should be set")
     }
 
     #[test]
@@ -277,13 +279,16 @@ mod tests {
 
     #[test]
     fn params_flow_through_to_render_mode_fields() {
-        let m = run_with(&[
-            ("mode", 2.0),
-            ("clay_color_r", 0.25),
-            ("line_color_g", 0.5),
-            ("line_brightness", 3.0),
-            ("point_size", 8.0),
-        ], &[]);
+        let m = run_with(
+            &[
+                ("mode", 2.0),
+                ("clay_color_r", 0.25),
+                ("line_color_g", 0.5),
+                ("line_brightness", 3.0),
+                ("point_size", 8.0),
+            ],
+            &[],
+        );
         assert_eq!(m.mode, 2, "Wireframe");
         assert_eq!(m.clay_color, [0.25, 0.8, 0.8, 1.0]);
         assert_eq!(m.line_color, [0.1, 0.5, 1.0, 1.0]);
@@ -293,9 +298,21 @@ mod tests {
 
     #[test]
     fn mode_scalar_rounds_and_clamps() {
-        assert_eq!(run_with(&[("mode", 1.7)], &[]).mode, 2, "continuous wire values round");
-        assert_eq!(run_with(&[("mode", 9.0)], &[]).mode, (RENDER_MODE_LABELS.len() - 1) as u32, "out of range clamps to the last mode");
-        assert_eq!(run_with(&[("mode", -1.0)], &[]).mode, 0, "negative clamps to Rendered");
+        assert_eq!(
+            run_with(&[("mode", 1.7)], &[]).mode,
+            2,
+            "continuous wire values round"
+        );
+        assert_eq!(
+            run_with(&[("mode", 9.0)], &[]).mode,
+            (RENDER_MODE_LABELS.len() - 1) as u32,
+            "out of range clamps to the last mode"
+        );
+        assert_eq!(
+            run_with(&[("mode", -1.0)], &[]).mode,
+            0,
+            "negative clamps to Rendered"
+        );
         assert_eq!(run_with(&[("mode", 2.0)], &[]).mode, 2);
     }
 

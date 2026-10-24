@@ -59,7 +59,9 @@ pub struct TexturePane {
 impl TexturePane {
     /// A pane backed by a UI-device texture the caller renders into each frame.
     pub fn local(texture: GpuTexture) -> Self {
-        Self { source: PaneSource::Local(texture) }
+        Self {
+            source: PaneSource::Local(texture),
+        }
     }
 
     /// A pane backed by a cross-device IOSurface bridge.
@@ -112,7 +114,11 @@ impl TexturePane {
     fn surface(&mut self, ui_device: &GpuDevice, slot: usize) -> Option<&GpuTexture> {
         match &mut self.source {
             PaneSource::Local(tex) => Some(tex),
-            PaneSource::Bridged { bridge, imported, last_generation } => {
+            PaneSource::Bridged {
+                bridge,
+                imported,
+                last_generation,
+            } => {
                 let generation = bridge.generation();
                 if *last_generation != Some(generation) {
                     for (i, surface) in imported.iter_mut().enumerate() {
@@ -178,8 +184,14 @@ pub fn blit_texture_pane(
         pipeline,
         target,
         &[
-            GpuBinding::Texture { binding: 0, texture },
-            GpuBinding::Sampler { binding: 1, sampler },
+            GpuBinding::Texture {
+                binding: 0,
+                texture,
+            },
+            GpuBinding::Sampler {
+                binding: 1,
+                sampler,
+            },
         ],
         (x * scale, y * scale, w * scale, h * scale),
         GpuLoadAction::Load,

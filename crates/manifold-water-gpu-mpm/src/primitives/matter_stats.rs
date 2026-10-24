@@ -11,11 +11,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_water_liquid::lattice::LiquidLattice;
 use crate::matter::{MatterGridNode, MatterPoint, STATS_WORDS};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_water_liquid::lattice::LiquidLattice;
 
 const SHADER: &str = include_str!("shaders/matter_stats.wgsl");
 /// Elements one workgroup folds: 256 threads × 8.
@@ -53,9 +53,17 @@ pub struct StatsPipelines {
 impl StatsPipelines {
     fn new(device: &manifold_gpu::GpuDevice) -> Self {
         Self {
-            points: device.create_compute_pipeline(SHADER, "points_main", "node.matter_stats.points"),
+            points: device.create_compute_pipeline(
+                SHADER,
+                "points_main",
+                "node.matter_stats.points",
+            ),
             grid: device.create_compute_pipeline(SHADER, "grid_main", "node.matter_stats.grid"),
-            finish: device.create_compute_pipeline(SHADER, "finish_main", "node.matter_stats.finish"),
+            finish: device.create_compute_pipeline(
+                SHADER,
+                "finish_main",
+                "node.matter_stats.finish",
+            ),
         }
     }
 }
@@ -128,7 +136,12 @@ impl Primitive for MatterStats {
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         (port_name == "stats_out")
-            .then(|| input_capacities.iter().find(|(p, _)| *p == "stats").map(|&(_, n)| n))
+            .then(|| {
+                input_capacities
+                    .iter()
+                    .find(|(p, _)| *p == "stats")
+                    .map(|&(_, n)| n)
+            })
             .flatten()
     }
 
@@ -168,7 +181,8 @@ impl Primitive for MatterStats {
             ctx.error("Matter stats: the stats array holds fewer than 16 words");
             return;
         }
-        let point_count = requested.min((points.size / std::mem::size_of::<MatterPoint>() as u64) as u32);
+        let point_count =
+            requested.min((points.size / std::mem::size_of::<MatterPoint>() as u64) as u32);
         let node_count = lattice
             .node_count()
             .min((grid.size / 32) as u32)
@@ -177,8 +191,15 @@ impl Primitive for MatterStats {
         let node_groups = node_count.div_ceil(BLOCK);
         let partial_bytes = u64::from((point_groups + node_groups).max(1)) * PARTIAL_BYTES;
         let gpu = ctx.gpu_encoder();
-        let pipelines = self.pipelines.as_ref().expect("matter stats pipelines built by prepare_pipelines at install");
-        if self.partials.as_ref().is_none_or(|b| b.size < partial_bytes) {
+        let pipelines = self
+            .pipelines
+            .as_ref()
+            .expect("matter stats pipelines built by prepare_pipelines at install");
+        if self
+            .partials
+            .as_ref()
+            .is_none_or(|b| b.size < partial_bytes)
+        {
             self.partials = Some(gpu.device.create_buffer(partial_bytes));
         }
         let partials = self.partials.as_ref().expect("partials prepared");
@@ -201,20 +222,58 @@ impl Primitive for MatterStats {
             _pad1: 0,
         };
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
-            GpuBinding::Buffer { binding: 1, buffer: points, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: grid, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: accum, offset: 0 },
-            GpuBinding::Buffer { binding: 4, buffer: partials, offset: 0 },
-            GpuBinding::Buffer { binding: 5, buffer: stats, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&params),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: points,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: grid,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: accum,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: partials,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 5,
+                buffer: stats,
+                offset: 0,
+            },
         ];
         if point_groups > 0 {
-            gpu.native_enc.dispatch_compute(&pipelines.points, &bindings, [point_groups, 1, 1], "node.matter_stats.points");
+            gpu.native_enc.dispatch_compute(
+                &pipelines.points,
+                &bindings,
+                [point_groups, 1, 1],
+                "node.matter_stats.points",
+            );
         }
         if node_groups > 0 {
-            gpu.native_enc.dispatch_compute(&pipelines.grid, &bindings, [node_groups, 1, 1], "node.matter_stats.grid");
+            gpu.native_enc.dispatch_compute(
+                &pipelines.grid,
+                &bindings,
+                [node_groups, 1, 1],
+                "node.matter_stats.grid",
+            );
         }
-        gpu.native_enc.dispatch_compute(&pipelines.finish, &bindings, [1, 1, 1], "node.matter_stats.finish");
+        gpu.native_enc.dispatch_compute(
+            &pipelines.finish,
+            &bindings,
+            [1, 1, 1],
+            "node.matter_stats.finish",
+        );
     }
 }
 

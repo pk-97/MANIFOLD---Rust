@@ -19,7 +19,7 @@
 use crate::path_resolver::PathResolver;
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
 use manifold_core::effects::PresetInstance;
-use manifold_core::file_loader::{file_loader_kind, AssetFamily, NodeFileLoad};
+use manifold_core::file_loader::{AssetFamily, NodeFileLoad, file_loader_kind};
 use manifold_core::id::{ClipId, LayerId};
 use manifold_core::project::Project;
 use sha2::{Digest, Sha256};
@@ -58,7 +58,11 @@ pub enum AssetTarget {
     /// per-clip (`TimelineClip.string_params`) with a fallback to the
     /// preset-def default. `load` preserves whether the bound node reads a
     /// file or a folder when paths are re-linked after a move.
-    StringParam { layer_id: LayerId, key: String, load: NodeFileLoad },
+    StringParam {
+        layer_id: LayerId,
+        key: String,
+        load: NodeFileLoad,
+    },
     /// A string param stored in an authored scene-modifier snapshot on a
     /// generator layer. The local default is the source of truth; host
     /// bindings are collected through `StringParam` and take precedence.
@@ -212,9 +216,10 @@ pub fn collect_asset_paths(project: &Project) -> Vec<AssetRef> {
                     meta.string_bindings
                         .iter()
                         .filter_map(|binding| match &binding.target {
-                            BindingTarget::SceneModifier { modifier_id, param_id } => {
-                                Some((modifier_id.clone(), param_id.clone()))
-                            }
+                            BindingTarget::SceneModifier {
+                                modifier_id,
+                                param_id,
+                            } => Some((modifier_id.clone(), param_id.clone())),
                             _ => None,
                         })
                         .collect()
@@ -253,7 +258,9 @@ pub fn collect_asset_paths(project: &Project) -> Vec<AssetRef> {
                 out.push(AssetRef {
                     kind,
                     path: PathBuf::from(path),
-                    target: AssetTarget::SceneFile { layer_id: layer.layer_id.clone() },
+                    target: AssetTarget::SceneFile {
+                        layer_id: layer.layer_id.clone(),
+                    },
                 });
             }
         }
@@ -280,7 +287,10 @@ pub fn collect_asset_paths(project: &Project) -> Vec<AssetRef> {
 /// carry `is_file_path` as their author's declaration, which is the best
 /// binding signal available there — still independent of the io layer naming
 /// any id.
-fn resolve_string_defs(project: &Project, inst: &PresetInstance) -> Vec<(String, String, NodeFileLoad)> {
+fn resolve_string_defs(
+    project: &Project,
+    inst: &PresetInstance,
+) -> Vec<(String, String, NodeFileLoad)> {
     // 1. The instance's own graph metadata carries the full `StringParamSpecDef`
     //    list when it has diverged (or was just imported as an embedded graph).
     if let Some(graph) = inst_graph(inst)
@@ -305,7 +315,9 @@ fn resolve_string_defs(project: &Project, inst: &PresetInstance) -> Vec<(String,
                 // No graph to walk bindings against here — the extension hint
                 // is the only family signal (pre-P5 behavior for this fallback).
                 let family = match sp.default_value.rsplit('.').next() {
-                    Some(ext) if ext.eq_ignore_ascii_case("exr") || ext.eq_ignore_ascii_case("hdr") => {
+                    Some(ext)
+                        if ext.eq_ignore_ascii_case("exr") || ext.eq_ignore_ascii_case("hdr") =>
+                    {
                         AssetFamily::Hdri
                     }
                     _ => AssetFamily::Mesh,
@@ -327,7 +339,9 @@ fn resolve_graph_def<'a>(
     if let Some(graph) = inst_graph(inst) {
         return Some(graph);
     }
-    project.embedded_preset(inst.generator_type()).map(|preset| &preset.def)
+    project
+        .embedded_preset(inst.generator_type())
+        .map(|preset| &preset.def)
 }
 
 /// The `StringParamSpecDef`s of a graph that carry a file-loading binding.
@@ -363,9 +377,20 @@ fn binding_file_loader(graph: &EffectGraphDef, target: &BindingTarget) -> Option
         BindingTarget::Node { node_id, .. } => {
             find_node_type(&graph.nodes, node_id).and_then(file_loader_kind)
         }
-        BindingTarget::SceneModifier { modifier_id, param_id } => {
-            let local = &graph.scene_modifiers.iter().find(|m| &m.id == modifier_id)?.graph;
-            local.preset_metadata.as_ref()?.string_bindings.iter()
+        BindingTarget::SceneModifier {
+            modifier_id,
+            param_id,
+        } => {
+            let local = &graph
+                .scene_modifiers
+                .iter()
+                .find(|m| &m.id == modifier_id)?
+                .graph;
+            local
+                .preset_metadata
+                .as_ref()?
+                .string_bindings
+                .iter()
                 .filter(|binding| &binding.id == param_id)
                 .find_map(|binding| binding_file_loader(local, &binding.target))
         }
@@ -407,7 +432,8 @@ fn inst_graph(inst: &PresetInstance) -> Option<&EffectGraphDef> {
 fn kind_of(load: NodeFileLoad, path: &str) -> AssetKind {
     // A picture read by a model's texture loader (a Material's File
     // texture through node.gltf_texture_source) collects with the images.
-    if load == NodeFileLoad::File(AssetFamily::Mesh) && manifold_core::file_loader::is_picture(path) {
+    if load == NodeFileLoad::File(AssetFamily::Mesh) && manifold_core::file_loader::is_picture(path)
+    {
         return AssetKind::Images;
     }
     match load {
@@ -552,7 +578,9 @@ pub fn collect_all_and_save(
                 existing.clone()
             } else {
                 let family_dir = media_family_dir(&project_dir, r.kind);
-                let name = src.file_stem().unwrap_or_else(|| std::ffi::OsStr::new("model"));
+                let name = src
+                    .file_stem()
+                    .unwrap_or_else(|| std::ffi::OsStr::new("model"));
                 let directory = reserve_directory_target(&family_dir, name)?;
                 let (target, bytes) = bundle.copy_to(&directory)?;
                 report.copied += 1;
@@ -632,7 +660,11 @@ fn sha256_file(path: &Path) -> Result<[u8; 32], CollectError> {
 /// already occupies it with DIFFERENT content — then a `_1`, `_2`, … suffix is
 /// appended before the extension. Same-content is reused (a prior collect left
 /// it); different content is never overwritten.
-fn resolve_target_path(dir: &Path, name: &std::ffi::OsStr, new_hash: [u8; 32]) -> Result<PathBuf, CollectError> {
+fn resolve_target_path(
+    dir: &Path,
+    name: &std::ffi::OsStr,
+    new_hash: [u8; 32],
+) -> Result<PathBuf, CollectError> {
     let candidate = dir.join(name);
     if !candidate.exists() {
         return Ok(candidate);
@@ -680,11 +712,19 @@ fn reserve_directory_target(dir: &Path, name: &std::ffi::OsStr) -> Result<PathBu
         let target = dir.join(numbered);
         match std::fs::create_dir(&target) {
             Ok(()) => return Ok(target),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {},
-            Err(error) => return Err(CollectError::Io(format!("create {}: {error}", target.display()))),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(CollectError::Io(format!(
+                    "create {}: {error}",
+                    target.display()
+                )));
+            }
         }
     }
-    Err(CollectError::Io(format!("no free directory name in {}", dir.display())))
+    Err(CollectError::Io(format!(
+        "no free directory name in {}",
+        dir.display()
+    )))
 }
 
 /// Copy a directory tree (`src` → `dst`), adding bytes written to `bytes`.
@@ -721,7 +761,12 @@ fn re_point(
 
     let changed = match target {
         AssetTarget::VideoClip { clip_id } => {
-            if let Some(clip) = project.video_library.clips.iter_mut().find(|c| &c.id == clip_id) {
+            if let Some(clip) = project
+                .video_library
+                .clips
+                .iter_mut()
+                .find(|c| &c.id == clip_id)
+            {
                 clip.file_path = new_str.clone();
                 clip.relative_file_path = relative;
                 true
@@ -766,19 +811,29 @@ fn re_point(
         AssetTarget::SceneModifierStringParam { .. } => {
             re_point_scene_modifier_asset(project, target, &old_str, &new_str)
         }
-        AssetTarget::SceneFile { layer_id } => re_point_scene_file(project, layer_id, &old_str, &new_str),
+        AssetTarget::SceneFile { layer_id } => {
+            re_point_scene_file(project, layer_id, &old_str, &new_str)
+        }
     };
 
     if changed {
         report.re_pointed += 1;
-        report.moves.push((target.clone(), old_path.to_path_buf(), new_path.to_path_buf()));
+        report.moves.push((
+            target.clone(),
+            old_path.to_path_buf(),
+            new_path.to_path_buf(),
+        ));
     }
 }
 
 /// Apply a collect's re-points to another copy of the project saved at
 /// `project_path`: the content thread's, after the UI thread collected and
 /// saved its own copy, so a later save keeps the collected paths.
-pub fn re_point_moves(project: &mut Project, moves: &[(AssetTarget, PathBuf, PathBuf)], project_path: &Path) {
+pub fn re_point_moves(
+    project: &mut Project,
+    moves: &[(AssetTarget, PathBuf, PathBuf)],
+    project_path: &Path,
+) {
     let Some(project_dir) = project_path.parent() else {
         return;
     };
@@ -791,7 +846,12 @@ pub fn re_point_moves(project: &mut Project, moves: &[(AssetTarget, PathBuf, Pat
 /// Re-point every field of `layer_id`'s scene document that names `old` to
 /// `new`. Only the document changes: a save writes it as is, and a caller
 /// that renders from the project recompiles it ([`PathResolver::resolve_all`]).
-pub(crate) fn re_point_scene_file(project: &mut Project, layer_id: &LayerId, old: &str, new: &str) -> bool {
+pub(crate) fn re_point_scene_file(
+    project: &mut Project,
+    layer_id: &LayerId,
+    old: &str,
+    new: &str,
+) -> bool {
     if old == new {
         return false;
     }
@@ -822,7 +882,13 @@ pub(crate) fn re_point_scene_modifier_asset(
     if old == new {
         return false;
     }
-    let AssetTarget::SceneModifierStringParam { layer_id, modifier_id, key, .. } = target else {
+    let AssetTarget::SceneModifierStringParam {
+        layer_id,
+        modifier_id,
+        key,
+        ..
+    } = target
+    else {
         return false;
     };
     let valid = project
@@ -831,7 +897,9 @@ pub(crate) fn re_point_scene_modifier_asset(
         .and_then(|(_, layer)| layer.gen_params())
         .and_then(|inst| {
             inst.graph.as_ref().or_else(|| {
-                project.embedded_preset(inst.generator_type()).map(|preset| &preset.def)
+                project
+                    .embedded_preset(inst.generator_type())
+                    .map(|preset| &preset.def)
             })
         })
         .and_then(|graph| graph.scene_modifiers.iter().find(|m| &m.id == modifier_id))
@@ -874,7 +942,11 @@ pub(crate) fn re_point_scene_modifier_asset(
     let Some(graph) = inst.graph.as_mut() else {
         return false;
     };
-    let Some(modifier) = graph.scene_modifiers.iter_mut().find(|m| &m.id == modifier_id) else {
+    let Some(modifier) = graph
+        .scene_modifiers
+        .iter_mut()
+        .find(|m| &m.id == modifier_id)
+    else {
         return false;
     };
     let Some(meta) = modifier.graph.preset_metadata.as_mut() else {
@@ -913,12 +985,20 @@ pub(crate) fn re_point_string_param(
     new: &str,
 ) -> bool {
     let relocated_graph = if has_calibrated_scene_asset(project, layer_id, key) {
-        let graph = project.timeline.find_layer_by_id(layer_id.as_str())
+        let graph = project
+            .timeline
+            .find_layer_by_id(layer_id.as_str())
             .and_then(|(_, layer)| layer.gen_params())
-            .and_then(|inst| inst.graph.as_ref().or_else(|| {
-                project.embedded_preset(inst.generator_type()).map(|preset| &preset.def)
-            }));
-        match graph.map(|graph| manifold_core::scene_source_identity::relocate_scene_source_asset(graph, old, new)) {
+            .and_then(|inst| {
+                inst.graph.as_ref().or_else(|| {
+                    project
+                        .embedded_preset(inst.generator_type())
+                        .map(|preset| &preset.def)
+                })
+            });
+        match graph.map(|graph| {
+            manifold_core::scene_source_identity::relocate_scene_source_asset(graph, old, new)
+        }) {
             Some(Ok(graph)) => graph,
             Some(Err(error)) => {
                 log::warn!("asset relocation rejected for calibrated scene on {layer_id}: {error}");
@@ -926,7 +1006,9 @@ pub(crate) fn re_point_string_param(
             }
             None => return false,
         }
-    } else { None };
+    } else {
+        None
+    };
     // Resolve the def default via the same chain collect_asset_paths uses, so
     // "is this the def-default value" is answered by the same source that
     // enumerated it. Owned so the immutable borrow ends before the mutation.
@@ -944,7 +1026,9 @@ pub(crate) fn re_point_string_param(
     };
 
     let empty_layer_graph = if def_default.as_deref() == Some(old) {
-        project.timeline.find_layer_by_id(layer_id.as_str())
+        project
+            .timeline
+            .find_layer_by_id(layer_id.as_str())
             .filter(|(_, layer)| layer.clips.is_empty())
             .and_then(|(_, layer)| layer.gen_params())
             .and_then(|inst| resolve_graph_def(project, inst))
@@ -964,7 +1048,9 @@ pub(crate) fn re_point_string_param(
                 }
                 graph
             })
-    } else { None };
+    } else {
+        None
+    };
 
     let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str()) else {
         return false;
@@ -1006,16 +1092,27 @@ pub(crate) fn re_point_string_param(
 /// rewrite when an asset is explicitly relocated. Ordinary clip strings keep
 /// their existing per-clip ownership and collection behavior.
 pub(crate) fn has_calibrated_scene_asset(project: &Project, layer_id: &LayerId, key: &str) -> bool {
-    let Some(graph) = project.timeline.find_layer_by_id(layer_id.as_str())
+    let Some(graph) = project
+        .timeline
+        .find_layer_by_id(layer_id.as_str())
         .and_then(|(_, layer)| layer.gen_params())
-        .and_then(|inst| inst.graph.as_ref().or_else(|| {
-            project.embedded_preset(inst.generator_type()).map(|preset| &preset.def)
-        })) else { return false };
+        .and_then(|inst| {
+            inst.graph.as_ref().or_else(|| {
+                project
+                    .embedded_preset(inst.generator_type())
+                    .map(|preset| &preset.def)
+            })
+        })
+    else {
+        return false;
+    };
     graph.preset_metadata.as_ref().is_some_and(|meta| {
-        meta.string_bindings.iter().any(|binding| binding.id == key &&
-            matches!(&binding.target, BindingTarget::Node { node_id, param }
+        meta.string_bindings.iter().any(|binding| {
+            binding.id == key
+                && matches!(&binding.target, BindingTarget::Node { node_id, param }
                 if param == "path" && graph.scene_modifiers.iter().any(|modifier|
-                    modifier.mesh_frames.iter().any(|frame| frame.source == *node_id))))
+                    modifier.mesh_frames.iter().any(|frame| frame.source == *node_id)))
+        })
     })
 }
 
@@ -1042,10 +1139,16 @@ mod tests {
 
     fn empty_glb() -> Vec<u8> {
         gltf::binary::Glb {
-            header: gltf::binary::Header { magic: *b"glTF", version: 2, length: 0 },
+            header: gltf::binary::Header {
+                magic: *b"glTF",
+                version: 2,
+                length: 0,
+            },
             json: std::borrow::Cow::Borrowed(br#"{"asset":{"version":"2.0"}}"#),
             bin: None,
-        }.to_vec().expect("valid empty GLB")
+        }
+        .to_vec()
+        .expect("valid empty GLB")
     }
 
     fn sp(id: &str, default: &str, file_path: bool) -> StringParamSpecDef {
@@ -1082,19 +1185,29 @@ mod tests {
             SceneModifierInstanceDef, SceneTargetSelection,
         };
         let local = path_preset(
-            "Local", vec![sp("model", "scan.glb", false)],
+            "Local",
+            vec![sp("model", "scan.glb", false)],
             vec![StringBindingDef {
-                id: "model".into(), label: "Model".into(), default_value: "scan.glb".into(),
-                target: BindingTarget::Node { node_id: NodeId::new("asset"), param: "path".into() },
+                id: "model".into(),
+                label: "Model".into(),
+                default_value: "scan.glb".into(),
+                target: BindingTarget::Node {
+                    node_id: NodeId::new("asset"),
+                    param: "path".into(),
+                },
             }],
             vec![node("asset", "node.gltf_mesh_source")],
         );
         let mut host = path_preset(
-            "Host", vec![sp("modifier_model", "scan.glb", false)],
+            "Host",
+            vec![sp("modifier_model", "scan.glb", false)],
             vec![StringBindingDef {
-                id: "modifier_model".into(), label: "Model".into(), default_value: "scan.glb".into(),
+                id: "modifier_model".into(),
+                label: "Model".into(),
+                default_value: "scan.glb".into(),
                 target: BindingTarget::SceneModifier {
-                    modifier_id: NodeId::new("modifier/a:b"), param_id: "model".into(),
+                    modifier_id: NodeId::new("modifier/a:b"),
+                    param_id: "model".into(),
                 },
             }],
             // The same local ID in the host must not change the resolved family.
@@ -1108,9 +1221,14 @@ mod tests {
             legacy_math_view_carrier: None,
             graph: Box::new(local.def),
         });
-        assert_eq!(defs_from_meta(&host.def), vec![(
-            "modifier_model".into(), "scan.glb".into(), NodeFileLoad::File(AssetFamily::Mesh),
-        )]);
+        assert_eq!(
+            defs_from_meta(&host.def),
+            vec![(
+                "modifier_model".into(),
+                "scan.glb".into(),
+                NodeFileLoad::File(AssetFamily::Mesh),
+            )]
+        );
     }
 
     fn scene_modifier_asset_project(host_exposes: bool) -> (Project, LayerId, String) {
@@ -1128,7 +1246,9 @@ mod tests {
         let local_path = "/missing/local-images".to_string();
         let local_key = "local_images".to_string();
         let local_meta = local.preset_metadata.as_mut().expect("fixture metadata");
-        local_meta.string_params.push(sp(&local_key, &local_path, false));
+        local_meta
+            .string_params
+            .push(sp(&local_key, &local_path, false));
         local_meta.string_bindings.push(StringBindingDef {
             id: local_key.clone(),
             label: "Local Images".into(),
@@ -1140,7 +1260,11 @@ mod tests {
         });
         let mut group = node("nested", "group");
         group.group = Some(Box::new(GroupDef {
-            interface: GroupInterface { inputs: vec![], outputs: vec![], params: vec![] },
+            interface: GroupInterface {
+                inputs: vec![],
+                outputs: vec![],
+                params: vec![],
+            },
             nodes: vec![node("nested/image-folder", "node.image_folder")],
             wires: vec![],
             tint: None,
@@ -1164,7 +1288,11 @@ mod tests {
         };
         let host = path_preset(
             "scene-modifier-host",
-            if host_exposes { vec![sp(&host_key, &host_path, false)] } else { vec![] },
+            if host_exposes {
+                vec![sp(&host_key, &host_path, false)]
+            } else {
+                vec![]
+            },
             host_binding,
             vec![],
         );
@@ -1186,9 +1314,10 @@ mod tests {
             PresetTypeId::new("scene-modifier-host"),
             0,
         );
-        layer
-            .clips
-            .push(TimelineClip::new_generator(manifold_core::Beats::ZERO, manifold_core::Beats::from_f32(4.0)));
+        layer.clips.push(TimelineClip::new_generator(
+            manifold_core::Beats::ZERO,
+            manifold_core::Beats::from_f32(4.0),
+        ));
         let layer_id = layer.layer_id.clone();
         project.timeline.layers.push(layer);
         (project, layer_id, modifier_id.as_str().to_string())
@@ -1198,15 +1327,18 @@ mod tests {
     fn scene_modifier_v3_collects_unexposed_nested_local_folder() {
         let (project, layer_id, modifier_id) = scene_modifier_asset_project(false);
         let refs = collect_asset_paths(&project);
-        assert!(refs.iter().any(|asset| {
-            asset.kind == AssetKind::Images
-                && asset.path == Path::new("/missing/local-images")
-                && matches!(
-                    &asset.target,
-                    AssetTarget::SceneModifierStringParam { layer_id: id, key, .. }
-                        if id == &layer_id && key == "local_images"
-                )
-        }), "unexposed local ref missing: {refs:?}");
+        assert!(
+            refs.iter().any(|asset| {
+                asset.kind == AssetKind::Images
+                    && asset.path == Path::new("/missing/local-images")
+                    && matches!(
+                        &asset.target,
+                        AssetTarget::SceneModifierStringParam { layer_id: id, key, .. }
+                            if id == &layer_id && key == "local_images"
+                    )
+            }),
+            "unexposed local ref missing: {refs:?}"
+        );
         assert!(!modifier_id.is_empty());
     }
 
@@ -1215,11 +1347,17 @@ mod tests {
         let (mut project, _, _) = scene_modifier_asset_project(false);
         project.embedded_presets[0].def.version = 999;
         let before = serde_json::to_value(&project).unwrap();
-        let root = std::env::temp_dir().join(format!("manifold-invalid-local-collect-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "manifold-invalid-local-collect-{}",
+            std::process::id()
+        ));
         assert!(!root.exists());
         assert!(collect_all_and_save(&mut project, &root.join("show.manifold")).is_err());
         assert_eq!(serde_json::to_value(&project).unwrap(), before);
-        assert!(!root.exists(), "invalid schema must not create output directories");
+        assert!(
+            !root.exists(),
+            "invalid schema must not create output directories"
+        );
     }
 
     #[test]
@@ -1229,49 +1367,99 @@ mod tests {
         assert!(refs.iter().any(|asset| {
             matches!(&asset.target, AssetTarget::StringParam { layer_id: id, key, .. } if id == &layer_id && key == "host_local_images")
         }));
-        assert!(!refs.iter().any(|asset| {
-            matches!(&asset.target, AssetTarget::SceneModifierStringParam { .. })
-        }), "host-exposed local default must not be separately collected");
+        assert!(
+            !refs.iter().any(|asset| {
+                matches!(&asset.target, AssetTarget::SceneModifierStringParam { .. })
+            }),
+            "host-exposed local default must not be separately collected"
+        );
     }
 
     #[test]
     fn scene_modifier_v3_resolve_moved_local_folder_clones_and_updates_snapshot() {
         let (mut project, layer_id, _) = scene_modifier_asset_project(false);
-        let root = std::env::temp_dir().join(format!("manifold-local-asset-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("manifold-local-asset-{}", std::process::id()));
         let moved = root.join("local-images");
         std::fs::create_dir_all(&moved).expect("create moved folder");
         let project_path = root.join("show").join("show.manifold");
         let result = PathResolver::resolve_all(&mut project, &project_path.to_string_lossy());
-        assert_eq!(result.resolved_count, 1, "local folder should resolve: {result:?}");
-        let layer = project.timeline.find_layer_by_id(layer_id.as_str()).unwrap().1;
-        let graph = layer.generator_graph().expect("fallback host cloned on repoint");
+        assert_eq!(
+            result.resolved_count, 1,
+            "local folder should resolve: {result:?}"
+        );
+        let layer = project
+            .timeline
+            .find_layer_by_id(layer_id.as_str())
+            .unwrap()
+            .1;
+        let graph = layer
+            .generator_graph()
+            .expect("fallback host cloned on repoint");
         let local = &graph.scene_modifiers[0].graph;
         let meta = local.preset_metadata.as_ref().unwrap();
-        assert_eq!(meta.string_params.iter().find(|p| p.id == "local_images").unwrap().default_value, moved.to_string_lossy());
-        assert_eq!(meta.string_bindings[0].default_value, moved.to_string_lossy());
+        assert_eq!(
+            meta.string_params
+                .iter()
+                .find(|p| p.id == "local_images")
+                .unwrap()
+                .default_value,
+            moved.to_string_lossy()
+        );
+        assert_eq!(
+            meta.string_bindings[0].default_value,
+            moved.to_string_lossy()
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn scene_modifier_v3_collect_save_reload_repoints_local_snapshot() {
         let (mut project, layer_id, _) = scene_modifier_asset_project(false);
-        let root = std::env::temp_dir().join(format!("manifold-local-collect-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("manifold-local-collect-{}", std::process::id()));
         let source = root.join("source").join("local-images");
         std::fs::create_dir_all(&source).expect("create source folder");
         std::fs::write(source.join("frame.png"), b"frame").expect("write source asset");
         let source_path = source.to_string_lossy().to_string();
         let embedded = project.embedded_presets.first_mut().unwrap();
-        let meta = embedded.def.scene_modifiers[0].graph.preset_metadata.as_mut().unwrap();
-        meta.string_params.iter_mut().find(|p| p.id == "local_images").unwrap().default_value = source_path.clone();
+        let meta = embedded.def.scene_modifiers[0]
+            .graph
+            .preset_metadata
+            .as_mut()
+            .unwrap();
+        meta.string_params
+            .iter_mut()
+            .find(|p| p.id == "local_images")
+            .unwrap()
+            .default_value = source_path.clone();
         meta.string_bindings[0].default_value = source_path;
         let project_path = root.join("show").join("show.manifold");
         let report = collect_all_and_save(&mut project, &project_path).expect("collect and save");
         assert_eq!(report.re_pointed, 1);
         let loaded = crate::loader::load_project(&project_path).expect("reload collected project");
-        let layer = loaded.timeline.find_layer_by_id(layer_id.as_str()).unwrap().1;
-        let graph = layer.generator_graph().expect("local snapshot persisted on layer");
-        let value = &graph.scene_modifiers[0].graph.preset_metadata.as_ref().unwrap().string_params.iter().find(|p| p.id == "local_images").unwrap().default_value;
-        assert!(value.ends_with("Media/Images/local-images") || value.ends_with("Media\\Images\\local-images"));
+        let layer = loaded
+            .timeline
+            .find_layer_by_id(layer_id.as_str())
+            .unwrap()
+            .1;
+        let graph = layer
+            .generator_graph()
+            .expect("local snapshot persisted on layer");
+        let value = &graph.scene_modifiers[0]
+            .graph
+            .preset_metadata
+            .as_ref()
+            .unwrap()
+            .string_params
+            .iter()
+            .find(|p| p.id == "local_images")
+            .unwrap()
+            .default_value;
+        assert!(
+            value.ends_with("Media/Images/local-images")
+                || value.ends_with("Media\\Images\\local-images")
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1291,7 +1479,7 @@ mod tests {
             legacy_discriminant: None,
             available: true,
             is_line_based: false,
-                layer_types: None,
+            layer_types: None,
             params: Vec::new(),
             bindings: Vec::new(),
             param_aliases: Vec::new(),
@@ -1393,9 +1581,10 @@ mod tests {
         let preset_id = PresetTypeId::new("azalea");
         let mut gen_layer = Layer::new_generator("Azalea".into(), preset_id, 2);
         // A clip on the generator layer so the layer renders.
-        gen_layer
-            .clips
-            .push(TimelineClip::new_generator(manifold_core::Beats::ZERO, manifold_core::Beats::from_f32(16.0)));
+        gen_layer.clips.push(TimelineClip::new_generator(
+            manifold_core::Beats::ZERO,
+            manifold_core::Beats::from_f32(16.0),
+        ));
         project.timeline.layers.push(gen_layer);
 
         (project, folder_layer_id, audio_layer_id)
@@ -1410,13 +1599,19 @@ mod tests {
         assert!(refs.iter().any(|r| {
             r.kind == AssetKind::Video
                 && r.path == std::path::Path::new("/mnt/video/clip1.mp4")
-                && r.target == AssetTarget::VideoClip { clip_id: "vc1".to_string() }
+                && r.target
+                    == AssetTarget::VideoClip {
+                        clip_id: "vc1".to_string(),
+                    }
         }));
         // Layer video folder.
         assert!(refs.iter().any(|r| {
             r.kind == AssetKind::Video
                 && r.path == std::path::Path::new("/mnt/footage")
-                && r.target == AssetTarget::LayerVideoFolder { layer_id: folder_layer_id.clone() }
+                && r.target
+                    == AssetTarget::LayerVideoFolder {
+                        layer_id: folder_layer_id.clone(),
+                    }
         }));
         // Audio clip.
         assert!(refs.iter().any(|r| {
@@ -1487,9 +1682,10 @@ mod tests {
         project.upsert_embedded_preset(embedded);
         let preset_id = PresetTypeId::new("periwinkle");
         let mut gen_layer = Layer::new_generator("Periwinkle".into(), preset_id, 0);
-        gen_layer
-            .clips
-            .push(TimelineClip::new_generator(manifold_core::Beats::ZERO, manifold_core::Beats::from_f32(16.0)));
+        gen_layer.clips.push(TimelineClip::new_generator(
+            manifold_core::Beats::ZERO,
+            manifold_core::Beats::from_f32(16.0),
+        ));
         project.timeline.layers.push(gen_layer);
 
         let refs = collect_asset_paths(&project);
@@ -1514,20 +1710,35 @@ mod tests {
             id: "model_file".to_string(),
             label: "Model File".to_string(),
             default_value: path.to_string(),
-            target: BindingTarget::Node { node_id: NodeId::new(node_id), param: "path".to_string() },
+            target: BindingTarget::Node {
+                node_id: NodeId::new(node_id),
+                param: "path".to_string(),
+            },
         };
         let mut embedded = path_preset(
             "cliftest",
             vec![sp("model_file", files[0], true)],
-            files.iter().enumerate().map(|(k, path)| bind(&format!("mesh_{k}"), path)).collect(),
-            (0..3).map(|k| node(&format!("mesh_{k}"), "node.gltf_mesh_source")).collect(),
+            files
+                .iter()
+                .enumerate()
+                .map(|(k, path)| bind(&format!("mesh_{k}"), path))
+                .collect(),
+            (0..3)
+                .map(|k| node(&format!("mesh_{k}"), "node.gltf_mesh_source"))
+                .collect(),
         );
         let meshes = |project: &Project| {
-            collect_asset_paths(project).into_iter().filter(|r| r.kind == AssetKind::Mesh).count()
+            collect_asset_paths(project)
+                .into_iter()
+                .filter(|r| r.kind == AssetKind::Mesh)
+                .count()
         };
         let layer = || {
             let mut layer = Layer::new_generator("Cliff".into(), PresetTypeId::new("cliftest"), 0);
-            layer.clips.push(TimelineClip::new_generator(manifold_core::Beats::ZERO, manifold_core::Beats::from_f32(16.0)));
+            layer.clips.push(TimelineClip::new_generator(
+                manifold_core::Beats::ZERO,
+                manifold_core::Beats::from_f32(16.0),
+            ));
             layer
         };
         let mut before = Project::default();
@@ -1562,7 +1773,11 @@ mod tests {
         assert!(refs.iter().any(|r| {
             r.kind == AssetKind::Mesh && r.path == std::path::Path::new("/mnt/models/swap.glb")
         }));
-        assert!(!refs.iter().any(|r| r.path == std::path::Path::new("/mnt/models/azalea.glb")));
+        assert!(
+            !refs
+                .iter()
+                .any(|r| r.path == std::path::Path::new("/mnt/models/azalea.glb"))
+        );
     }
 
     #[test]
@@ -1664,7 +1879,10 @@ mod tests {
         };
         // Serialize emits the literal snake_case `"file_path": true`.
         let json = serde_json::to_string(&sp).unwrap();
-        assert!(json.contains("\"file_path\":true"), "marker not on wire: {json}");
+        assert!(
+            json.contains("\"file_path\":true"),
+            "marker not on wire: {json}"
+        );
         // And round-trips back.
         let back: StringParamSpecDef = serde_json::from_str(&json).unwrap();
         assert!(back.is_file_path);
@@ -1777,25 +1995,43 @@ mod tests {
         std::fs::write(&texture_src, b"fake png").unwrap();
         let scene_layer_id = {
             use manifold_core::scene_doc::{
-                EnvironmentSource, GroupFields, Item, ItemFields, ItemId, LightFields, LightType, MaterialFields,
-                ObjectFields, SceneDoc, Shape, TextureSource,
+                EnvironmentSource, GroupFields, Item, ItemFields, ItemId, LightFields, LightType,
+                MaterialFields, ObjectFields, SceneDoc, Shape, TextureSource,
             };
             let hdri = hdri_src.to_string_lossy().to_string();
             let texture = texture_src.to_string_lossy().to_string();
-            let mut group = Item::new(ItemId::new("scan"), "Scan", ItemFields::Group(GroupFields { source: Some(glb_path.clone()), ..GroupFields::default() }));
+            let mut group = Item::new(
+                ItemId::new("scan"),
+                "Scan",
+                ItemFields::Group(GroupFields {
+                    source: Some(glb_path.clone()),
+                    ..GroupFields::default()
+                }),
+            );
             group.children = vec![
                 Item::new(
                     ItemId::new("scan-part"),
                     "Part",
                     ItemFields::Object(ObjectFields {
-                        shape: Shape::Mesh { file: glb_path.clone(), node_path: "0".into(), vertex_count: 0, primitives: Default::default() },
+                        shape: Shape::Mesh {
+                            file: glb_path.clone(),
+                            node_path: "0".into(),
+                            vertex_count: 0,
+                            primitives: Default::default(),
+                        },
                         ..ObjectFields::default()
                     }),
                 ),
                 Item::new(
                     ItemId::new("scan-mat"),
                     "Scan Material",
-                    ItemFields::Material(MaterialFields { texture: TextureSource::Model { file: glb_path.clone(), material: Some(0) }, ..MaterialFields::default() }),
+                    ItemFields::Material(MaterialFields {
+                        texture: TextureSource::Model {
+                            file: glb_path.clone(),
+                            material: Some(0),
+                        },
+                        ..MaterialFields::default()
+                    }),
                 ),
             ];
             let doc = SceneDoc {
@@ -1804,17 +2040,25 @@ mod tests {
                     Item::new(
                         ItemId::new("environment"),
                         "Environment",
-                        ItemFields::Light(LightFields { light: LightType::Environment { source: EnvironmentSource::Hdri { file: hdri } } }),
+                        ItemFields::Light(LightFields {
+                            light: LightType::Environment {
+                                source: EnvironmentSource::Hdri { file: hdri },
+                            },
+                        }),
                     ),
                     Item::new(
                         ItemId::new("paint"),
                         "Paint",
-                        ItemFields::Material(MaterialFields { texture: TextureSource::File { path: texture }, ..MaterialFields::default() }),
+                        ItemFields::Material(MaterialFields {
+                            texture: TextureSource::File { path: texture },
+                            ..MaterialFields::default()
+                        }),
                     ),
                 ],
                 ..SceneDoc::default()
             };
-            let mut scene_layer = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 3);
+            let mut scene_layer =
+                Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 3);
             scene_layer.gen_params_mut().unwrap().scene = Some(doc);
             let id = scene_layer.layer_id.clone();
             project.timeline.layers.push(scene_layer);
@@ -1848,15 +2092,23 @@ mod tests {
         assert!(proj_dir.join("Media/Audio/loop1.wav").is_file());
         assert!(proj_dir.join("Media/Meshes/azalea.glb").is_file());
 
-
         // The scene layer's files: copied, and every document field that
         // named one now names the copy, before and after a reload.
         assert!(proj_dir.join("Media/HDRIs/sky.hdr").is_file());
         assert!(proj_dir.join("Media/Images/paint.png").is_file());
         let scene_files = |project: &Project| {
             let mut files = Vec::new();
-            let (_, layer) = project.timeline.find_layer_by_id(scene_layer_id.as_str()).unwrap();
-            layer.gen_params().unwrap().scene.clone().unwrap().files_mut(|_, path| files.push(path.clone()));
+            let (_, layer) = project
+                .timeline
+                .find_layer_by_id(scene_layer_id.as_str())
+                .unwrap();
+            layer
+                .gen_params()
+                .unwrap()
+                .scene
+                .clone()
+                .unwrap()
+                .files_mut(|_, path| files.push(path.clone()));
             files
         };
         let collected = scene_files(&project);
@@ -1864,18 +2116,34 @@ mod tests {
         // The twin takes the same re-points, so its next save keeps them.
         re_point_moves(&mut twin, &report.moves, &project_path);
         assert_eq!(scene_files(&twin), collected);
-        assert_eq!(twin.video_library.clips[0].file_path, project.video_library.clips[0].file_path);
+        assert_eq!(
+            twin.video_library.clips[0].file_path,
+            project.video_library.clips[0].file_path
+        );
         for file in &collected {
-            assert!(std::path::Path::new(file).starts_with(&proj_dir), "a scene file still points outside the project: {file}");
+            assert!(
+                std::path::Path::new(file).starts_with(&proj_dir),
+                "a scene file still points outside the project: {file}"
+            );
             assert!(std::path::Path::new(file).is_file(), "{file}");
         }
 
         // Report: five unique files copied, none missing, none already local.
-        assert_eq!(report.copied, 5, "one file per distinct source: the scene shares the GLB");
-        assert_eq!(report.re_pointed, 6, "every ref re-pointed, the scene's GLB, HDRI and texture included");
+        assert_eq!(
+            report.copied, 5,
+            "one file per distinct source: the scene shares the GLB"
+        );
+        assert_eq!(
+            report.re_pointed, 6,
+            "every ref re-pointed, the scene's GLB, HDRI and texture included"
+        );
         assert_eq!(report.missing, 0);
         assert_eq!(report.already_local, 0);
-        assert_eq!(report.bytes_copied, 44 + glb_bytes.len() as u64, "sum of the five fixture file sizes");
+        assert_eq!(
+            report.bytes_copied,
+            44 + glb_bytes.len() as u64,
+            "sum of the five fixture file sizes"
+        );
 
         // Copy-only invariant: sources untouched.
         assert_eq!(super::sha256_file(&video_src).unwrap(), video_before);
@@ -1884,22 +2152,39 @@ mod tests {
 
         // Video re-pointed to the relative form.
         let vc = &project.video_library.clips[0];
-        assert_eq!(vc.relative_file_path.as_deref(), Some("Media/Video/clip1.mp4"));
-        assert!(vc.file_path.ends_with("Media/Video/clip1.mp4"), "{}", vc.file_path);
+        assert_eq!(
+            vc.relative_file_path.as_deref(),
+            Some("Media/Video/clip1.mp4")
+        );
+        assert!(
+            vc.file_path.ends_with("Media/Video/clip1.mp4"),
+            "{}",
+            vc.file_path
+        );
         assert!(std::path::Path::new(&vc.file_path).exists());
 
         // Audio re-pointed to the relative form.
-        let (_, audio_layer) = project.timeline.find_layer_by_id(audio_layer_id.as_str()).unwrap();
+        let (_, audio_layer) = project
+            .timeline
+            .find_layer_by_id(audio_layer_id.as_str())
+            .unwrap();
         let audio_clip = &audio_layer.clips[0];
         assert_eq!(
             audio_clip.relative_audio_file_path.as_deref(),
             Some("Media/Audio/loop1.wav")
         );
-        assert!(audio_clip.audio_file_path.ends_with("Media/Audio/loop1.wav"));
+        assert!(
+            audio_clip
+                .audio_file_path
+                .ends_with("Media/Audio/loop1.wav")
+        );
         assert!(std::path::Path::new(&audio_clip.audio_file_path).exists());
 
         // The GLB def-default-only param was materialized as a per-clip override.
-        let (_, gen_layer) = project.timeline.find_layer_by_id(gen_layer_id.as_str()).unwrap();
+        let (_, gen_layer) = project
+            .timeline
+            .find_layer_by_id(gen_layer_id.as_str())
+            .unwrap();
         let model = gen_layer.clips[0]
             .string_params
             .as_ref()
@@ -1910,7 +2195,9 @@ mod tests {
         assert!(std::path::Path::new(model).exists());
 
         // D5a: the def default is untouched — it still names the ORIGINAL source.
-        let def = project.embedded_preset(&PresetTypeId::new("azalea")).unwrap();
+        let def = project
+            .embedded_preset(&PresetTypeId::new("azalea"))
+            .unwrap();
         let def_default = def
             .def
             .preset_metadata
@@ -1928,18 +2215,30 @@ mod tests {
         let reloaded = crate::loader::load_project(&project_path).unwrap();
         let vc2 = &reloaded.video_library.clips[0];
         assert!(std::path::Path::new(&vc2.file_path).exists());
-        let (_, al2) = reloaded.timeline.find_layer_by_id(audio_layer_id.as_str()).unwrap();
+        let (_, al2) = reloaded
+            .timeline
+            .find_layer_by_id(audio_layer_id.as_str())
+            .unwrap();
         assert!(std::path::Path::new(&al2.clips[0].audio_file_path).exists());
-        let (_, gl2) = reloaded.timeline.find_layer_by_id(gen_layer_id.as_str()).unwrap();
+        let (_, gl2) = reloaded
+            .timeline
+            .find_layer_by_id(gen_layer_id.as_str())
+            .unwrap();
         let model2 = gl2.clips[0]
             .string_params
             .as_ref()
             .unwrap()
             .get("model_path")
             .unwrap();
-        assert!(std::path::Path::new(model2).exists(), "reloaded GLB path resolves: {model2}");
+        assert!(
+            std::path::Path::new(model2).exists(),
+            "reloaded GLB path resolves: {model2}"
+        );
         for file in scene_files(&reloaded) {
-            assert!(std::path::Path::new(&file).is_file(), "reloaded scene file resolves: {file}");
+            assert!(
+                std::path::Path::new(&file).is_file(),
+                "reloaded scene file resolves: {file}"
+            );
         }
 
         let _ = std::fs::remove_dir_all(&base);
@@ -2016,10 +2315,16 @@ mod tests {
             .default_value
             .clone();
         assert_eq!(def_folder, folder_path);
-        let (_, layer) = project.timeline.find_layer_by_id(gen_layer_id.as_str()).unwrap();
+        let (_, layer) = project
+            .timeline
+            .find_layer_by_id(gen_layer_id.as_str())
+            .unwrap();
         let stored = layer.clips[0].string_params.as_ref().unwrap()["volume_folder"].clone();
         let stored_path = std::path::Path::new(&stored);
-        assert!(stored_path.is_dir(), "override re-pointed to in-folder tree: {stored}");
+        assert!(
+            stored_path.is_dir(),
+            "override re-pointed to in-folder tree: {stored}"
+        );
         assert!(
             stored_path.starts_with(proj_dir.join("Media/Images")),
             "re-pointed folder lives under Media/Images: {stored}"
@@ -2081,7 +2386,10 @@ mod tests {
         assert_eq!(report.copied, 1);
         assert_eq!(report.re_pointed, 1);
         assert_eq!(std::fs::read(source.join("take.json")).unwrap(), b"journal");
-        assert_eq!(std::fs::read(source.join("cache.bin")).unwrap(), b"paired cache");
+        assert_eq!(
+            std::fs::read(source.join("cache.bin")).unwrap(),
+            b"paired cache"
+        );
 
         let loaded = crate::loader::load_project(&project_path).unwrap();
         let stored = loaded.timeline.layers[0].clips[0]
@@ -2100,7 +2408,13 @@ mod tests {
         let copied = crate::loader::load_project(&copied_project.join("Show.manifold")).unwrap();
         let refs = collect_asset_paths(&copied);
         assert_eq!(refs.len(), 1);
-        assert!(refs[0].path.starts_with(std::fs::canonicalize(&copied_project).unwrap()), "copied project still uses {:?}", refs[0].path);
+        assert!(
+            refs[0]
+                .path
+                .starts_with(std::fs::canonicalize(&copied_project).unwrap()),
+            "copied project still uses {:?}",
+            refs[0].path
+        );
         let legacy = crate::loader::load_project(&copied_project.join("Legacy.manifold")).unwrap();
         assert_eq!(collect_asset_paths(&legacy)[0].path, refs[0].path);
         let _ = std::fs::remove_dir_all(&base);
@@ -2108,7 +2422,8 @@ mod tests {
 
     #[test]
     fn physics_cache_empty_layer_collects_an_owned_default() {
-        let base = std::env::temp_dir().join(format!("manifold-physics-empty-{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("manifold-physics-empty-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let source = base.join("source/take");
         std::fs::create_dir_all(&source).unwrap();
@@ -2117,7 +2432,8 @@ mod tests {
         project.timeline.layers[0].clips.clear();
         let embedded_before = project.embedded_presets[0].def.clone();
         let original_dir = base.join("Show");
-        let report = collect_all_and_save(&mut project, &original_dir.join("Show.manifold")).unwrap();
+        let report =
+            collect_all_and_save(&mut project, &original_dir.join("Show.manifold")).unwrap();
         assert_eq!(report.re_pointed, 1);
         assert!(project.timeline.layers[0].clips.is_empty());
         assert_eq!(project.embedded_presets[0].def, embedded_before);
@@ -2127,14 +2443,22 @@ mod tests {
         assert!(copied.timeline.layers[0].clips.is_empty());
         let refs = collect_asset_paths(&copied);
         assert_eq!(refs.len(), 1);
-        assert!(refs[0].path.starts_with(std::fs::canonicalize(&copied_dir).unwrap()));
-        assert_eq!(std::fs::read(refs[0].path.join("take-header.zst")).unwrap(), b"inputs");
+        assert!(
+            refs[0]
+                .path
+                .starts_with(std::fs::canonicalize(&copied_dir).unwrap())
+        );
+        assert_eq!(
+            std::fs::read(refs[0].path.join("take-header.zst")).unwrap(),
+            b"inputs"
+        );
         let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]
     fn physics_cache_resolution_handles_moved_and_missing_folders() {
-        let base = std::env::temp_dir().join(format!("manifold-physics-resolve-{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("manifold-physics-resolve-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let moved = base.join("moved").join("take");
         let project_dir = base.join("Show");
@@ -2145,7 +2469,10 @@ mod tests {
         let mut project = physics_project(&[&missing]);
         let project_path = project_dir.join("Show.manifold");
         let result = PathResolver::resolve_all(&mut project, &project_path.to_string_lossy());
-        assert_eq!(result.resolved_count, 1, "moved cache folder should resolve: {result:?}");
+        assert_eq!(
+            result.resolved_count, 1,
+            "moved cache folder should resolve: {result:?}"
+        );
         assert_eq!(result.unresolved_count, 0);
         let stored = project.timeline.layers[0].clips[0]
             .string_params
@@ -2161,7 +2488,8 @@ mod tests {
             .to_string_lossy()
             .to_string();
         let mut missing_project = physics_project(&[&missing]);
-        let result = PathResolver::resolve_all(&mut missing_project, &project_path.to_string_lossy());
+        let result =
+            PathResolver::resolve_all(&mut missing_project, &project_path.to_string_lossy());
         assert_eq!(result.resolved_count, 0);
         assert_eq!(result.unresolved_count, 1);
         assert_eq!(result.unresolved, vec![missing]);
@@ -2172,7 +2500,8 @@ mod tests {
     fn physics_cache_modifier_local_and_host_bindings_collect_and_reload() {
         for host_exposes in [false, true] {
             let base = std::env::temp_dir().join(format!(
-                "manifold-physics-modifier-{}-{host_exposes}", std::process::id(),
+                "manifold-physics-modifier-{}-{host_exposes}",
+                std::process::id(),
             ));
             let _ = std::fs::remove_dir_all(&base);
             let source = base.join("source/take");
@@ -2200,7 +2529,10 @@ mod tests {
             let refs = collect_asset_paths(&project);
             assert_eq!(refs.len(), 1);
             assert_eq!(refs[0].kind, AssetKind::Physics);
-            assert_eq!(matches!(refs[0].target, AssetTarget::StringParam { .. }), host_exposes);
+            assert_eq!(
+                matches!(refs[0].target, AssetTarget::StringParam { .. }),
+                host_exposes
+            );
             let project_path = base.join("Show/Show.manifold");
             let report = collect_all_and_save(&mut project, &project_path).unwrap();
             assert_eq!(report.copied, 1);
@@ -2209,21 +2541,32 @@ mod tests {
             let refs = collect_asset_paths(&loaded);
             assert_eq!(refs.len(), 1);
             assert_eq!(refs[0].kind, AssetKind::Physics);
-            assert_eq!(std::fs::read(refs[0].path.join("take-header.zst")).unwrap(), b"recorded inputs");
-            assert_eq!(std::fs::read(source.join("take-header.zst")).unwrap(), b"recorded inputs");
+            assert_eq!(
+                std::fs::read(refs[0].path.join("take-header.zst")).unwrap(),
+                b"recorded inputs"
+            );
+            assert_eq!(
+                std::fs::read(source.join("take-header.zst")).unwrap(),
+                b"recorded inputs"
+            );
             let copied_dir = base.join("Copied");
             copy_dir_recursive(project_path.parent().unwrap(), &copied_dir, &mut 0).unwrap();
             let copied = crate::loader::load_project(&copied_dir.join("Show.manifold")).unwrap();
             let copied_refs = collect_asset_paths(&copied);
             assert_eq!(copied_refs.len(), 1);
-            assert!(copied_refs[0].path.starts_with(std::fs::canonicalize(&copied_dir).unwrap()));
+            assert!(
+                copied_refs[0]
+                    .path
+                    .starts_with(std::fs::canonicalize(&copied_dir).unwrap())
+            );
             let _ = std::fs::remove_dir_all(base);
         }
     }
 
     #[test]
     fn physics_cache_same_basename_folders_get_distinct_destinations() {
-        let base = std::env::temp_dir().join(format!("manifold-physics-collision-{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("manifold-physics-collision-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let first = base.join("one").join("take");
         let second = base.join("two").join("take");
@@ -2243,20 +2586,40 @@ mod tests {
         let report = collect_all_and_save(&mut project, &project_path).unwrap();
 
         assert_eq!(report.copied, 2);
-        assert_eq!(std::fs::read(existing.join("existing.bin")).unwrap(), b"keep me");
-        assert_eq!(std::fs::read(project_dir.join("Media/Physics/take_1/cache.bin")).unwrap(), b"first");
-        assert_eq!(std::fs::read(project_dir.join("Media/Physics/take_2/cache.bin")).unwrap(), b"second");
+        assert_eq!(
+            std::fs::read(existing.join("existing.bin")).unwrap(),
+            b"keep me"
+        );
+        assert_eq!(
+            std::fs::read(project_dir.join("Media/Physics/take_1/cache.bin")).unwrap(),
+            b"first"
+        );
+        assert_eq!(
+            std::fs::read(project_dir.join("Media/Physics/take_2/cache.bin")).unwrap(),
+            b"second"
+        );
         assert_eq!(std::fs::read(first.join("cache.bin")).unwrap(), b"first");
         assert_eq!(std::fs::read(second.join("cache.bin")).unwrap(), b"second");
         let clips = &project.timeline.layers[0].clips;
         let first_stored = clips[0].string_params.as_ref().unwrap()["cache_path"].clone();
         let second_stored = clips[1].string_params.as_ref().unwrap()["cache_path"].clone();
         assert_ne!(first_stored, second_stored);
-        assert!(first_stored.ends_with("Media/Physics/take_1") || first_stored.ends_with("Media\\Physics\\take_1"));
-        assert!(second_stored.ends_with("Media/Physics/take_2") || second_stored.ends_with("Media\\Physics\\take_2"));
+        assert!(
+            first_stored.ends_with("Media/Physics/take_1")
+                || first_stored.ends_with("Media\\Physics\\take_1")
+        );
+        assert!(
+            second_stored.ends_with("Media/Physics/take_2")
+                || second_stored.ends_with("Media\\Physics\\take_2")
+        );
         let loaded = crate::loader::load_project(&project_path).unwrap();
         for clip in &loaded.timeline.layers[0].clips {
-            let stored = clip.string_params.as_ref().unwrap().get("cache_path").unwrap();
+            let stored = clip
+                .string_params
+                .as_ref()
+                .unwrap()
+                .get("cache_path")
+                .unwrap();
             assert!(Path::new(stored).is_dir(), "reloaded cache path: {stored}");
         }
         let _ = std::fs::remove_dir_all(&base);
@@ -2298,17 +2661,33 @@ mod tests {
         assert!(proj_dir.join("Media/Images/logo.png").is_file());
         assert_eq!(report.copied, 1);
         assert_eq!(report.re_pointed, 1);
-        assert_eq!(super::sha256_file(&img_src).unwrap(), img_before, "copy-only invariant");
+        assert_eq!(
+            super::sha256_file(&img_src).unwrap(),
+            img_before,
+            "copy-only invariant"
+        );
 
-        let (_, l) = project.timeline.find_layer_by_id(layer_id.as_str()).unwrap();
-        assert_eq!(l.clips[0].relative_image_path.as_deref(), Some("Media/Images/logo.png"));
+        let (_, l) = project
+            .timeline
+            .find_layer_by_id(layer_id.as_str())
+            .unwrap();
+        assert_eq!(
+            l.clips[0].relative_image_path.as_deref(),
+            Some("Media/Images/logo.png")
+        );
         assert!(l.clips[0].image_path.ends_with("Media/Images/logo.png"));
         assert!(std::path::Path::new(&l.clips[0].image_path).exists());
 
         // Reload through the full load pipeline → the image path resolves.
         let reloaded = crate::loader::load_project(&project_path).unwrap();
-        let (_, rl) = reloaded.timeline.find_layer_by_id(layer_id.as_str()).unwrap();
-        assert!(std::path::Path::new(&rl.clips[0].image_path).exists(), "reloaded image resolves");
+        let (_, rl) = reloaded
+            .timeline
+            .find_layer_by_id(layer_id.as_str())
+            .unwrap();
+        assert!(
+            std::path::Path::new(&rl.clips[0].image_path).exists(),
+            "reloaded image resolves"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -2347,9 +2726,13 @@ mod tests {
                 let t = line.trim();
                 // Match `pub name: String` / `pub name: Option<String>` /
                 // `pub relative_image_path: Option<String>`.
-                let Some(start) = t.find("pub ") else { continue };
+                let Some(start) = t.find("pub ") else {
+                    continue;
+                };
                 let body = &t[start + 4..];
-                let Some(colon) = body.find(':') else { continue };
+                let Some(colon) = body.find(':') else {
+                    continue;
+                };
                 let (name, ty) = body.split_at(colon);
                 let name = name.trim();
                 let ty = ty

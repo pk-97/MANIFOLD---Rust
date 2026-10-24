@@ -1,7 +1,12 @@
 mod tests {
-use manifold_node_engine::preview_encoding::PreviewEncoding;
-use manifold_core::{NodeId, effect_graph_def::{EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, EffectGraphWire}};
-use std::collections::{BTreeMap,BTreeSet};
+    use manifold_core::{
+        NodeId,
+        effect_graph_def::{
+            EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, EffectGraphWire,
+        },
+    };
+    use manifold_node_engine::preview_encoding::PreviewEncoding;
+    use std::collections::{BTreeMap, BTreeSet};
     #[test]
     fn field_node_descriptor_picks_vector() {
         // gradient_central_diff / rotate_vec2_by_angle are FieldsAndCoordinates.

@@ -9,7 +9,7 @@ use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
 
 use crate::parameters::ParamValue;
-use crate::{graph::Graph, exec::effect_node::NodeInstanceId};
+use crate::{exec::effect_node::NodeInstanceId, graph::Graph};
 
 use super::SceneModifierExpandError;
 
@@ -420,8 +420,11 @@ mod scene_modifier_event_tests {
             "wires": []
         }))
         .expect("runtime graph parses");
-        def.into_graph(&PrimitiveRegistry::with_builtin(), &crate::scene::mesh_change::PreparedMeshRules::default())
-            .expect("runtime graph builds")
+        def.into_graph(
+            &PrimitiveRegistry::with_builtin(),
+            &crate::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("runtime graph builds")
     }
 
     fn route(modifier_id: &str, count_node: &str, baseline_node: &str) -> SceneModifierEventRoute {

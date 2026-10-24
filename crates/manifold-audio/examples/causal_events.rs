@@ -42,10 +42,26 @@ use manifold_playback::live_trigger::LiveTriggerState;
 
 /// The five routes, as (kind label, feature). Order is the layer order.
 const ROUTES: [(&str, AudioFeatureKind, AudioBand); 5] = [
-    ("transients_full", AudioFeatureKind::Transients, AudioBand::Full),
-    ("transients_low", AudioFeatureKind::Transients, AudioBand::Low),
-    ("transients_mid", AudioFeatureKind::Transients, AudioBand::Mid),
-    ("transients_high", AudioFeatureKind::Transients, AudioBand::High),
+    (
+        "transients_full",
+        AudioFeatureKind::Transients,
+        AudioBand::Full,
+    ),
+    (
+        "transients_low",
+        AudioFeatureKind::Transients,
+        AudioBand::Low,
+    ),
+    (
+        "transients_mid",
+        AudioFeatureKind::Transients,
+        AudioBand::Mid,
+    ),
+    (
+        "transients_high",
+        AudioFeatureKind::Transients,
+        AudioBand::High,
+    ),
     ("kick_low", AudioFeatureKind::Kick, AudioBand::Low),
 ];
 
@@ -73,21 +89,31 @@ fn parse_args() -> Result<Args, String> {
     let mut i = 0;
     let next = |i: &mut usize| -> Result<String, String> {
         *i += 1;
-        argv.get(*i).cloned().ok_or_else(|| format!("missing value after {}", argv[*i - 1]))
+        argv.get(*i)
+            .cloned()
+            .ok_or_else(|| format!("missing value after {}", argv[*i - 1]))
     };
     while i < argv.len() {
         match argv[i].as_str() {
             "--out" => args.out = next(&mut i)?,
-            "--start" => args.start_s = next(&mut i)?.parse().map_err(|e| format!("--start: {e}"))?,
+            "--start" => {
+                args.start_s = next(&mut i)?.parse().map_err(|e| format!("--start: {e}"))?
+            }
             "--dur" => args.dur_s = next(&mut i)?.parse().map_err(|e| format!("--dur: {e}"))?,
             "--sensitivity" => {
-                args.sensitivity = next(&mut i)?.parse().map_err(|e| format!("--sensitivity: {e}"))?
+                args.sensitivity = next(&mut i)?
+                    .parse()
+                    .map_err(|e| format!("--sensitivity: {e}"))?
             }
             "--attack-ms" => {
-                args.attack_ms = next(&mut i)?.parse().map_err(|e| format!("--attack-ms: {e}"))?
+                args.attack_ms = next(&mut i)?
+                    .parse()
+                    .map_err(|e| format!("--attack-ms: {e}"))?
             }
             "--release-ms" => {
-                args.release_ms = next(&mut i)?.parse().map_err(|e| format!("--release-ms: {e}"))?
+                args.release_ms = next(&mut i)?
+                    .parse()
+                    .map_err(|e| format!("--release-ms: {e}"))?
             }
             s if s.starts_with("--") => return Err(format!("unknown flag {s}")),
             s => args.input = s.to_string(),
@@ -97,11 +123,15 @@ fn parse_args() -> Result<Args, String> {
     if args.input.is_empty() {
         return Err(
             "usage: causal_events <clip> [--out events.json] [--start s] [--dur s] \
-             [--sensitivity 1.0] [--attack-ms 5.0] [--release-ms 120.0]".into(),
+             [--sensitivity 1.0] [--attack-ms 5.0] [--release-ms 120.0]"
+                .into(),
         );
     }
     if args.out.is_empty() {
-        let stem = args.input.trim_end_matches(|c| c != '.').trim_end_matches('.');
+        let stem = args
+            .input
+            .trim_end_matches(|c| c != '.')
+            .trim_end_matches('.');
         args.out = format!(
             "{stem}.s{:.2}.a{:.1}.r{:.1}.causal_events.json",
             args.sensitivity, args.attack_ms, args.release_ms
@@ -186,7 +216,10 @@ fn main() {
         if chunk.len() < hop {
             break;
         }
-        let snapshot = AudioFeatureSnapshot { sends: vec![an.latest()], ..Default::default() };
+        let snapshot = AudioFeatureSnapshot {
+            sends: vec![an.latest()],
+            ..Default::default()
+        };
         let fires = trigger.evaluate(
             &snapshot,
             &setup,
@@ -224,7 +257,9 @@ fn main() {
     let mut json = String::from("[\n");
     for (i, (t, kind)) in events.iter().enumerate() {
         let comma = if i + 1 < events.len() { "," } else { "" };
-        json.push_str(&format!("  {{\"time_sec\": {t:.6}, \"kind\": \"{kind}\"}}{comma}\n"));
+        json.push_str(&format!(
+            "  {{\"time_sec\": {t:.6}, \"kind\": \"{kind}\"}}{comma}\n"
+        ));
     }
     json.push_str("]\n");
     std::fs::write(&args.out, &json).unwrap_or_else(|e| {

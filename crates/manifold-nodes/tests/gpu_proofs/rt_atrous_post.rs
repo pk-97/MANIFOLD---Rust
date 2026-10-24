@@ -25,7 +25,6 @@
 
 use manifold_gpu::raytrace::MetalShadowRayTracer;
 
-
 const TOLERANCE: f32 = 1e-4;
 
 fn luma(c: [f32; 3]) -> f32 {
@@ -76,15 +75,25 @@ fn atrous_post_center_cpu(
     // Spatial luma spread at step=1 dilation (3x3 neighborhood).
     let center_luma = luma([src[0], src[1], src[2]]);
     let offsets: [(i32, i32); 8] = [
-        (1, 0), (-1, 0), (0, 1), (0, -1),
-        (1, 1), (1, -1), (-1, 1), (-1, -1),
+        (1, 0),
+        (-1, 0),
+        (0, 1),
+        (0, -1),
+        (1, 1),
+        (1, -1),
+        (-1, 1),
+        (-1, -1),
     ];
     let mut sm1 = center_luma;
     let mut sm2 = center_luma * center_luma;
     for &(dr, dc) in &offsets {
         let r = (1i32 + dr * step as i32).clamp(0, 2) as usize;
         let c = (1i32 + dc * step as i32).clamp(0, 2) as usize;
-        let ql = luma([src_irr[idx(r, c)][0], src_irr[idx(r, c)][1], src_irr[idx(r, c)][2]]);
+        let ql = luma([
+            src_irr[idx(r, c)][0],
+            src_irr[idx(r, c)][1],
+            src_irr[idx(r, c)][2],
+        ]);
         sm1 += ql;
         sm2 += ql * ql;
     }
@@ -100,7 +109,11 @@ fn atrous_post_center_cpu(
         return src;
     }
 
-    let center_n = [normal[idx(1, 1)][0], normal[idx(1, 1)][1], normal[idx(1, 1)][2]];
+    let center_n = [
+        normal[idx(1, 1)][0],
+        normal[idx(1, 1)][1],
+        normal[idx(1, 1)][2],
+    ];
     let mut acc = [src[0], src[1], src[2]];
     let mut wsum = 1.0f32;
 
@@ -117,8 +130,7 @@ fn atrous_post_center_cpu(
         let w_depth = (-((qd - center_depth).abs()) / 3e-3_f32).exp();
         let dot_cn = (center_n[0] * qn[0] + center_n[1] * qn[1] + center_n[2] * qn[2]).max(0.0);
         let w_normal = dot_cn.powf(16.0);
-        let w_luma =
-            (-((luma([qr[0], qr[1], qr[2]]) - center_luma).abs()) / sigma).exp();
+        let w_luma = (-((luma([qr[0], qr[1], qr[2]]) - center_luma).abs()) / sigma).exp();
         let w = w_depth * w_normal * w_luma;
         acc[0] += qr[0] * w;
         acc[1] += qr[1] * w;
@@ -179,7 +191,11 @@ fn atrous_post_void_center_passthrough() {
     let normal: [[f32; 4]; 9] = std::array::from_fn(|_| [0.0, 0.0, 1.0, 0.0]);
     let moments: [[f32; 4]; 9] = std::array::from_fn(|_| [0.5, 0.25, 0.8, 10.0]);
     let src_irr: [[f32; 4]; 9] = std::array::from_fn(|i| {
-        if i == 4 { src_val } else { [0.1, 0.2, 0.3, 0.4] }
+        if i == 4 {
+            src_val
+        } else {
+            [0.1, 0.2, 0.3, 0.4]
+        }
     });
 
     let expected = atrous_post_center_cpu(&depth, &normal, &moments, &src_irr, 1, 1.0);
@@ -252,11 +268,7 @@ fn atrous_post_edge_rejection() {
 
     // Left+center columns (depth 0.5), right column (depth 0.8 — delta 0.3
     // >> 3e-3 → w_depth = exp(-0.3/0.003) ≈ 0).
-    let depth = [
-        0.5, 0.5, 0.8,
-        0.5, 0.5, 0.8,
-        0.5, 0.5, 0.8,
-    ];
+    let depth = [0.5, 0.5, 0.8, 0.5, 0.5, 0.8, 0.5, 0.5, 0.8];
     let normal: [[f32; 4]; 9] = std::array::from_fn(|_| [0.0, 0.0, 1.0, 0.0]);
     // High variance so the filter doesn't early-out.
     let moments: [[f32; 4]; 9] = std::array::from_fn(|_| [0.5, 0.8, 0.8, 2.0]);
@@ -307,7 +319,11 @@ fn atrous_post_strength_blend() {
 
     let expected = atrous_post_center_cpu(&depth, &normal, &moments, &src_irr, 1, 0.5);
     // With uniform src, filtered = src, so mix(src, src, 0.5) = src.
-    assert_close(expected, src_val, "mirror sanity: uniform src → strength irrelevant");
+    assert_close(
+        expected,
+        src_val,
+        "mirror sanity: uniform src → strength irrelevant",
+    );
 
     let got = tracer.debug_atrous_post(&h.device, &depth, &normal, &moments, &src_irr, 1, 0.5);
     assert_close(got, expected, "strength blend with uniform src");
@@ -328,8 +344,7 @@ fn atrous_post_strength_blend() {
         atrous_post_center_cpu(&depth, &normal, &moments, &src_irr_varied, 1, 0.5);
 
     // Compute filtered (strength=1.0) to verify the blend.
-    let filtered_full =
-        atrous_post_center_cpu(&depth, &normal, &moments, &src_irr_varied, 1, 1.0);
+    let filtered_full = atrous_post_center_cpu(&depth, &normal, &moments, &src_irr_varied, 1, 1.0);
     let blended = [
         src_irr_varied[4][0] + (filtered_full[0] - src_irr_varied[4][0]) * 0.5,
         src_irr_varied[4][1] + (filtered_full[1] - src_irr_varied[4][1]) * 0.5,
@@ -345,7 +360,18 @@ fn atrous_post_strength_blend() {
         );
     }
 
-    let got_varied =
-        tracer.debug_atrous_post(&h.device, &depth, &normal, &moments, &src_irr_varied, 1, 0.5);
-    assert_close(got_varied, expected_varied, "strength blend with varied src");
+    let got_varied = tracer.debug_atrous_post(
+        &h.device,
+        &depth,
+        &normal,
+        &moments,
+        &src_irr_varied,
+        1,
+        0.5,
+    );
+    assert_close(
+        got_varied,
+        expected_varied,
+        "strength blend with varied src",
+    );
 }

@@ -8,12 +8,12 @@
 //! Pair with `node.resolve_scatter_3d` to lift the u32 grid into
 //! a float Texture3D for downstream volumetric primitives.
 
-use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
+use std::borrow::Cow;
 
-use manifold_node_engine::particles::Particle;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::Particle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
@@ -119,8 +119,10 @@ impl Primitive for ScatterParticles3D {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let active_count =
-            ctx.scalar_or_param("active_count", 100_000.0).round().max(0.0) as u32;
+        let active_count = ctx
+            .scalar_or_param("active_count", 100_000.0)
+            .round()
+            .max(0.0) as u32;
         let vol_res = match ctx.params.get("vol_res") {
             Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
             _ => 128,
@@ -129,8 +131,10 @@ impl Primitive for ScatterParticles3D {
             Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
             _ => 128,
         };
-        let scaled_energy =
-            ctx.scalar_or_param("scaled_energy", 4096.0).round().max(0.0) as u32;
+        let scaled_energy = ctx
+            .scalar_or_param("scaled_energy", 4096.0)
+            .round()
+            .max(0.0) as u32;
 
         let Some(particles) = ctx.inputs.array("particles") else {
             return;
@@ -183,4 +187,3 @@ impl Primitive for ScatterParticles3D {
         );
     }
 }
-

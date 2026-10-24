@@ -17,10 +17,10 @@
 
 use std::borrow::Cow;
 
+use crate::node_graph::primitives::note_rates::NOTE_RATE_VALUES;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use crate::node_graph::primitives::note_rates::NOTE_RATE_VALUES;
 
 /// Display labels for the `rate` enum. Indices match
 /// [`NOTE_RATE_VALUES`] (the shared note-rate table). Kept in sync with
@@ -110,7 +110,8 @@ impl Primitive for BeatGate {
         // Bit-for-bit identical to the inline gate inside `node.strobe`
         // for the upcoming Strobe-as-graph migration's parity test.
         let on = if p >= duty { 1.0 } else { 0.0 };
-        ctx.outputs.set_scalar("out", ParamValue::Float(amount * on));
+        ctx.outputs
+            .set_scalar("out", ParamValue::Float(amount * on));
     }
 }
 
@@ -120,10 +121,12 @@ mod tests {
     use manifold_core::{Beats, Seconds};
 
     use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeType, FrameTime};
+    use manifold_node_engine::exec::execution::Executor;
     use manifold_node_engine::exec::execution_plan::compile;
     use manifold_node_engine::graph::Graph;
-    use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-    use manifold_node_engine::exec::execution::Executor;
+    use manifold_node_engine::ports::{
+        NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+    };
 
     fn frame_at_beats(b: f32) -> FrameTime {
         FrameTime {
@@ -139,9 +142,9 @@ mod tests {
         seen: std::sync::Arc<std::sync::Mutex<Option<ParamValue>>>,
     }
     impl EffectNode for Capture {
-    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
-        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
-    }
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+            manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+        }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -173,10 +176,13 @@ mod tests {
             type_id: EffectNodeType::new("test.capture"),
             seen: seen.clone(),
         }));
-        g.set_param(gate, "rate", ParamValue::Enum(rate_idx)).unwrap();
-        g.set_param(gate, "amount", ParamValue::Float(amount)).unwrap();
+        g.set_param(gate, "rate", ParamValue::Enum(rate_idx))
+            .unwrap();
+        g.set_param(gate, "amount", ParamValue::Float(amount))
+            .unwrap();
         g.set_param(gate, "duty", ParamValue::Float(duty)).unwrap();
-        g.set_param(gate, "phase", ParamValue::Float(phase)).unwrap();
+        g.set_param(gate, "phase", ParamValue::Float(phase))
+            .unwrap();
         g.connect((gate, "out"), (sink, "in")).unwrap();
         let plan = compile(&g).unwrap();
         let mut exec = Executor::with_mock();

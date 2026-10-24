@@ -4,8 +4,7 @@ use crate::freeze::markers::Marker;
 use crate::parameters::ParamType;
 use crate::ports::ChannelSpec;
 
-use super::types::{InputSource, channel_wgsl_ty, FusionRegion};
-
+use super::types::{FusionRegion, InputSource, channel_wgsl_ty};
 
 /// Emit a WGSL struct definition for a multi-channel element. Field names come
 /// from each channel's debug name (the well-known registry), falling back to
@@ -38,8 +37,15 @@ pub(super) fn emit_derived_uniform_markers(
 ) {
     emit_bool_uniform_markers(out, region);
     for e in 0..region.camera_externals {
-        writeln!(out, "{}", Marker::CameraExternal { name: format!("camera_ext_{e}") }.emit())
-            .unwrap();
+        writeln!(
+            out,
+            "{}",
+            Marker::CameraExternal {
+                name: format!("camera_ext_{e}")
+            }
+            .emit()
+        )
+        .unwrap();
     }
     for (i, node) in region.nodes.iter().enumerate() {
         if node.derived_uniforms.is_empty() {
@@ -53,8 +59,9 @@ pub(super) fn emit_derived_uniform_markers(
                 if dty == "vec3" { 3 } else { 1 }
             })
             .sum();
-        let (first_dname, first_dty) =
-            node.derived_uniforms[0].split_once(':').unwrap_or((node.derived_uniforms[0], "f32"));
+        let (first_dname, first_dty) = node.derived_uniforms[0]
+            .split_once(':')
+            .unwrap_or((node.derived_uniforms[0], "f32"));
         let first_field = if first_dty == "vec3" {
             format!("n{i}_{first_dname}_x")
         } else {
@@ -80,9 +87,7 @@ pub(super) fn emit_derived_uniform_markers(
                     let arr: Vec<&crate::ports::NodeInput> = node
                         .node_inputs
                         .iter()
-                        .filter(|p| {
-                            matches!(p.ty, crate::ports::PortType::Array(_))
-                        })
+                        .filter(|p| matches!(p.ty, crate::ports::PortType::Array(_)))
                         .collect();
                     let idx = arr.iter().position(|p| p.name.as_ref() == *member_port)?;
                     match node.inputs.get(idx)? {
@@ -123,7 +128,10 @@ fn emit_bool_uniform_markers(out: &mut String, region: &FusionRegion<'_>) {
                 writeln!(
                     out,
                     "{}",
-                    Marker::BoolUniform { field: format!("n{i}_{}", param.name) }.emit()
+                    Marker::BoolUniform {
+                        field: format!("n{i}_{}", param.name)
+                    }
+                    .emit()
                 )
                 .unwrap();
             }

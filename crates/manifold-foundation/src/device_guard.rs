@@ -91,7 +91,10 @@ mod tests {
 
     #[test]
     fn gate_is_shut_until_the_app_opens_it() {
-        assert!(!real_devices_enabled(), "a test process starts with real devices refused");
+        assert!(
+            !real_devices_enabled(),
+            "a test process starts with real devices refused"
+        );
         assert!(!allowed(RealDevice::AudioInput));
         assert!(std::panic::catch_unwind(|| require(RealDevice::AudioInput)).is_err());
         allow_real_devices();

@@ -1,8 +1,10 @@
 //! Stack-only binding/uniform packing for the whitewater control atoms.
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
-use manifold_node_engine::{exec::effect_node::EffectNodeContext, parameters::ParamValue, primitive::Primitive};
 use arrayvec::ArrayVec;
 use manifold_gpu::{GpuBinding, GpuComputePipeline};
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::{
+    exec::effect_node::EffectNodeContext, parameters::ParamValue, primitive::Primitive,
+};
 
 pub(super) fn run<P: Primitive>(
     ctx: &mut EffectNodeContext<'_, '_>,

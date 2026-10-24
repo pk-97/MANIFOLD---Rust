@@ -37,7 +37,11 @@ fn screen_delay_settles_and_ignores_jitter() {
     }
     let settled_at = settled_at.expect("settles");
     assert!(settled_at <= 3.0, "settled at {settled_at:.2} s");
-    assert_eq!(values.len(), 1, "moved on jitter after settling: {values:?}");
+    assert_eq!(
+        values.len(),
+        1,
+        "moved on jitter after settling: {values:?}"
+    );
 }
 
 #[test]
@@ -67,9 +71,20 @@ fn offset_is_learned_over_steady_play_and_then_holds() {
         }
     }
     let at = adopted_at.expect("learned");
-    assert!((LEARN_WINDOW..LEARN_WINDOW + 1.5).contains(&at), "learned at {at:.2} s");
-    assert!((cal.offset(src) - 0.007).abs() < 0.0003, "offset {}", cal.offset(src));
-    assert_eq!(cal.offset(CalibratedSource::Timecode), 0.0, "other sources untouched");
+    assert!(
+        (LEARN_WINDOW..LEARN_WINDOW + 1.5).contains(&at),
+        "learned at {at:.2} s"
+    );
+    assert!(
+        (cal.offset(src) - 0.007).abs() < 0.0003,
+        "offset {}",
+        cal.offset(src)
+    );
+    assert_eq!(
+        cal.offset(CalibratedSource::Timecode),
+        0.0,
+        "other sources untouched"
+    );
 }
 
 #[test]
@@ -86,7 +101,11 @@ fn unsteady_play_restarts_the_window() {
     for k in 0..(60 * 32) {
         // Large or noisy differences are not learned either.
         let d = if k % 2 == 0 { 0.008 } else { 0.0 };
-        assert_eq!(cal.observe_offset(src, 100.0 + k as f64 * STEP, d, true), None, "spread too large");
+        assert_eq!(
+            cal.observe_offset(src, 100.0 + k as f64 * STEP, d, true),
+            None,
+            "spread too large"
+        );
     }
     assert_eq!(cal.offset(src), 0.0);
 }

@@ -157,8 +157,12 @@ mod tests {
     fn each_source_tints_to_its_own_surface() {
         // The bug the mock had (one baked `:root` tint for all) can't recur: the
         // surface derives per-accent, so two sources never share a surface.
-        let env = Theme::INSPECTOR.with_accent(color::ENVELOPE_ACTIVE_C32).tinted();
-        let aud = Theme::INSPECTOR.with_accent(color::AUDIO_TRIM_BAR_C32).tinted();
+        let env = Theme::INSPECTOR
+            .with_accent(color::ENVELOPE_ACTIVE_C32)
+            .tinted();
+        let aud = Theme::INSPECTOR
+            .with_accent(color::AUDIO_TRIM_BAR_C32)
+            .tinted();
         assert_ne!(env.surface, aud.surface);
     }
 }

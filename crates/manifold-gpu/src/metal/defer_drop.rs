@@ -31,12 +31,15 @@ static LABEL_PATTERN: OnceLock<Option<String>> = OnceLock::new();
 static KIND: OnceLock<Option<String>> = OnceLock::new();
 static TEXTURES: Mutex<VecDeque<(usize, Option<String>, SendTexture)>> =
     Mutex::new(VecDeque::new());
-static BUFFERS: Mutex<VecDeque<(usize, Option<String>, SendBuffer)>> =
-    Mutex::new(VecDeque::new());
+static BUFFERS: Mutex<VecDeque<(usize, Option<String>, SendBuffer)>> = Mutex::new(VecDeque::new());
 
 fn defer_kind() -> Option<String> {
-    KIND.get_or_init(|| std::env::var("MANIFOLD_DEFER_DROP_KIND").ok().filter(|s| !s.is_empty()))
-        .clone()
+    KIND.get_or_init(|| {
+        std::env::var("MANIFOLD_DEFER_DROP_KIND")
+            .ok()
+            .filter(|s| !s.is_empty())
+    })
+    .clone()
 }
 
 /// No-op mode (lead's discriminator): same probe path — label read, kind /
@@ -71,7 +74,11 @@ fn defer_frames() -> Option<usize> {
 
 fn label_pattern() -> Option<String> {
     LABEL_PATTERN
-        .get_or_init(|| std::env::var("MANIFOLD_DEFER_DROP_LABEL").ok().filter(|s| !s.is_empty()))
+        .get_or_init(|| {
+            std::env::var("MANIFOLD_DEFER_DROP_LABEL")
+                .ok()
+                .filter(|s| !s.is_empty())
+        })
         .clone()
 }
 

@@ -1,9 +1,9 @@
 //! Buffer extent rule owned by this node.
 use crate::extent::liquid_lattice;
+use crate::grid::face_bytes;
 use crate::grid::face_len;
 use crate::lattice::FlipSolverGrid;
 use crate::primitives::face_sample_component::axis_param;
-use crate::grid::face_bytes;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn face_sample_component(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {

@@ -46,11 +46,13 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    ensure_normal_sources, GiMaterial, MetalShadowRayTracer, RtObjectGeometry,
-    ShadowRayParams, ShadowRayTracer,
+    GiMaterial, MetalShadowRayTracer, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
+    ensure_normal_sources,
+};
+use manifold_gpu::{
+    GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 use manifold_gpu::{ShadowCaster, upload_shadow_casters};
-use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
 use manifold_nodes_scene::testkit::gpu_harness as harness;
 
@@ -85,8 +87,13 @@ fn upload_texture_f32(
     pixels: &[f32],
     label: &str,
 ) -> manifold_gpu::GpuTexture {
-    assert!(matches!(format, GpuTextureFormat::Rgba32Float | GpuTextureFormat::Depth32Float),
-        "f32 fixture uploads require a 32-bit channel format");
+    assert!(
+        matches!(
+            format,
+            GpuTextureFormat::Rgba32Float | GpuTextureFormat::Depth32Float
+        ),
+        "f32 fixture uploads require a 32-bit channel format"
+    );
     let texture = device.create_texture(&GpuTextureDesc {
         width,
         height,
@@ -97,8 +104,9 @@ fn upload_texture_f32(
         label,
         mip_levels: 1,
     });
-    let bytes =
-        unsafe { slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels)) };
+    let bytes = unsafe {
+        slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels))
+    };
     device.upload_texture(&texture, bytes);
     texture
 }
@@ -136,10 +144,10 @@ impl SurfaceExtensions {
 }
 
 const DEFAULT_LIGHTS: [[f32; 4]; 4] = [
-    [0.0, 0.0, 0.0, 1.0], // point position, kind = point
+    [0.0, 0.0, 0.0, 1.0],  // point position, kind = point
     [1.0, 1.0, 1.0, -1.0], // RGB, w < 0 disables the shadow query
     [10.0, 0.0, 0.0, 0.0], // smooth range attenuation
-    [0.0, 1.0, 0.0, 0.0], // unused for a point light
+    [0.0, 1.0, 0.0, 0.0],  // unused for a point light
 ];
 
 #[derive(Clone, Copy)]
@@ -204,38 +212,92 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
 
     // ─── Floor: y=0, x in [-1,1], z in [0,1], normal (0,1,0), uv=((x+1)/2, z) ──
     let floor_verts = [
-        PackedVertexNUV { pos: [-1.0, 0.0, 0.0], normal: [0.0, 1.0, 0.0], uv: [0.0, 0.0] },
-        PackedVertexNUV { pos: [1.0, 0.0, 0.0], normal: [0.0, 1.0, 0.0], uv: [1.0, 0.0] },
-        PackedVertexNUV { pos: [1.0, 0.0, 1.0], normal: [0.0, 1.0, 0.0], uv: [1.0, 1.0] },
-        PackedVertexNUV { pos: [-1.0, 0.0, 0.0], normal: [0.0, 1.0, 0.0], uv: [0.0, 0.0] },
-        PackedVertexNUV { pos: [1.0, 0.0, 1.0], normal: [0.0, 1.0, 0.0], uv: [1.0, 1.0] },
-        PackedVertexNUV { pos: [-1.0, 0.0, 1.0], normal: [0.0, 1.0, 0.0], uv: [0.0, 1.0] },
+        PackedVertexNUV {
+            pos: [-1.0, 0.0, 0.0],
+            normal: [0.0, 1.0, 0.0],
+            uv: [0.0, 0.0],
+        },
+        PackedVertexNUV {
+            pos: [1.0, 0.0, 0.0],
+            normal: [0.0, 1.0, 0.0],
+            uv: [1.0, 0.0],
+        },
+        PackedVertexNUV {
+            pos: [1.0, 0.0, 1.0],
+            normal: [0.0, 1.0, 0.0],
+            uv: [1.0, 1.0],
+        },
+        PackedVertexNUV {
+            pos: [-1.0, 0.0, 0.0],
+            normal: [0.0, 1.0, 0.0],
+            uv: [0.0, 0.0],
+        },
+        PackedVertexNUV {
+            pos: [1.0, 0.0, 1.0],
+            normal: [0.0, 1.0, 0.0],
+            uv: [1.0, 1.0],
+        },
+        PackedVertexNUV {
+            pos: [-1.0, 0.0, 1.0],
+            normal: [0.0, 1.0, 0.0],
+            uv: [0.0, 1.0],
+        },
     ];
     let floor_vertex_buffer = write_shared_buffer(device, &floor_verts);
 
     // ─── Emitter: wide quad at y=2.0, x in [-5,5], z in [-2,2] — catches
     // both texels' reflection directions (CPU math: x=-1.5 / x=+1.5) ──
     let emitter_verts = [
-        PackedVertexNUV { pos: [config.emitter_bounds[0], 2.0, config.emitter_bounds[2]], normal: [0.0, -1.0, 0.0], uv: [0.0, 0.0] },
-        PackedVertexNUV { pos: [config.emitter_bounds[1], 2.0, config.emitter_bounds[2]], normal: [0.0, -1.0, 0.0], uv: [1.0, 0.0] },
-        PackedVertexNUV { pos: [config.emitter_bounds[1], 2.0, config.emitter_bounds[3]], normal: [0.0, -1.0, 0.0], uv: [1.0, 1.0] },
-        PackedVertexNUV { pos: [config.emitter_bounds[0], 2.0, config.emitter_bounds[2]], normal: [0.0, -1.0, 0.0], uv: [0.0, 0.0] },
-        PackedVertexNUV { pos: [config.emitter_bounds[1], 2.0, config.emitter_bounds[3]], normal: [0.0, -1.0, 0.0], uv: [1.0, 1.0] },
-        PackedVertexNUV { pos: [config.emitter_bounds[0], 2.0, config.emitter_bounds[3]], normal: [0.0, -1.0, 0.0], uv: [0.0, 1.0] },
+        PackedVertexNUV {
+            pos: [config.emitter_bounds[0], 2.0, config.emitter_bounds[2]],
+            normal: [0.0, -1.0, 0.0],
+            uv: [0.0, 0.0],
+        },
+        PackedVertexNUV {
+            pos: [config.emitter_bounds[1], 2.0, config.emitter_bounds[2]],
+            normal: [0.0, -1.0, 0.0],
+            uv: [1.0, 0.0],
+        },
+        PackedVertexNUV {
+            pos: [config.emitter_bounds[1], 2.0, config.emitter_bounds[3]],
+            normal: [0.0, -1.0, 0.0],
+            uv: [1.0, 1.0],
+        },
+        PackedVertexNUV {
+            pos: [config.emitter_bounds[0], 2.0, config.emitter_bounds[2]],
+            normal: [0.0, -1.0, 0.0],
+            uv: [0.0, 0.0],
+        },
+        PackedVertexNUV {
+            pos: [config.emitter_bounds[1], 2.0, config.emitter_bounds[3]],
+            normal: [0.0, -1.0, 0.0],
+            uv: [1.0, 1.0],
+        },
+        PackedVertexNUV {
+            pos: [config.emitter_bounds[0], 2.0, config.emitter_bounds[3]],
+            normal: [0.0, -1.0, 0.0],
+            uv: [0.0, 1.0],
+        },
     ];
     // A separate UV1 orientation exercises selected-map frame derivation.
     // Keep UV0 and all geometry identical for the existing fixture users.
     #[repr(C)]
     #[derive(Clone, Copy)]
-    struct VertexWithUv1 { base: PackedVertexNUV, uv1: [f32; 2] }
+    struct VertexWithUv1 {
+        base: PackedVertexNUV,
+        uv1: [f32; 2],
+    }
     let emitter_verts = emitter_verts.map(|base| VertexWithUv1 {
-        uv1: [base.uv[1], 1.0 - base.uv[0]], base,
+        uv1: [base.uv[1], 1.0 - base.uv[0]],
+        base,
     });
     let emitter_vertex_buffer = write_shared_buffer(device, &emitter_verts);
 
     let vsize = std::mem::size_of::<PackedVertexNUV>() as u32;
     let objects = [
-        RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+        RtObjectGeometry {
+            instance_inner: RtObjectGeometry::NO_INNER,
+            material_attributes: Default::default(),
             vertex_buffer: &floor_vertex_buffer,
             vertex_stride: vsize,
             vertex_offset: 0,
@@ -250,10 +312,10 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
             base_color_texture: None,
             mr_texture: config.mr_texture,
             normal_texture: None,
-                        emissive_texture: None,
-        extra_material_textures: config.floor_extra_material_textures,
-                        emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
-                        emissive_uv_t: [0.0, 0.0],
+            emissive_texture: None,
+            extra_material_textures: config.floor_extra_material_textures,
+            emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
+            emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
             instances_addr: 0,
             instances_buffer: None,
@@ -267,7 +329,9 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
             base_color_alpha: 1.0,
             tangent_offset: u32::MAX,
         },
-        RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: config.emitter_attributes,
+        RtObjectGeometry {
+            instance_inner: RtObjectGeometry::NO_INNER,
+            material_attributes: config.emitter_attributes,
             vertex_buffer: &emitter_vertex_buffer,
             vertex_stride: std::mem::size_of::<VertexWithUv1>() as u32,
             vertex_offset: 0,
@@ -282,10 +346,10 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
             base_color_texture: None,
             mr_texture: None,
             normal_texture: None,
-                        emissive_texture: None,
-        extra_material_textures: config.emitter_extra_material_textures,
-                        emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
-                        emissive_uv_t: [0.0, 0.0],
+            emissive_texture: None,
+            extra_material_textures: config.emitter_extra_material_textures,
+            emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
+            emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
             instances_addr: 0,
             instances_buffer: None,
@@ -304,21 +368,36 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
     let mut tracer = MetalShadowRayTracer::new(device);
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
     // below (built before the trace dispatch on the same command buffer).
-    let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
+    let plan = tracer
+        .plan_accel(device, None, &objects)
+        .expect("plan accel");
     let mut accel_slot = None;
-    tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+    tracer
+        .prepare_accel(device, &mut accel_slot, plan)
+        .expect("prepare accel");
     let mut accel = accel_slot.unwrap();
 
     let mut normal_sources_slot = None;
     let mut normal_sources_capacity = 0usize;
-    let material_textures =
-        ensure_normal_sources(&mut normal_sources_slot, &mut normal_sources_capacity, device, &objects);
+    let material_textures = ensure_normal_sources(
+        &mut normal_sources_slot,
+        &mut normal_sources_capacity,
+        device,
+        &objects,
+    );
     let normal_sources_buffer = normal_sources_slot.expect("ensure_normal_sources must allocate");
 
     // ─── Depth fixture: 2x1, both texels valid (depth=0.3) — identical to
     // rt_p1_shadow.rs / rt_t2a_alpha_mask.rs's fixture ──
     let depth_px: [f32; 2] = [0.3, 0.3];
-    let depth_tex = upload_texture_f32(device, 2, 1, GpuTextureFormat::Depth32Float, &depth_px, "rt-r3-depth");
+    let depth_tex = upload_texture_f32(
+        device,
+        2,
+        1,
+        GpuTextureFormat::Depth32Float,
+        &depth_px,
+        "rt-r3-depth",
+    );
 
     let out_sv = device.create_texture(&GpuTextureDesc {
         width: 2,
@@ -401,7 +480,10 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
         );
         tracer.set_secondary_lighting(&light_buffer, &irradiance, &brdf_lut, &prefiltered_sheen);
         let light_data_addr = light_buffer.gpu_address();
-        (Some((light_buffer, irradiance, brdf_lut, prefiltered_sheen)), light_data_addr)
+        (
+            Some((light_buffer, irradiance, brdf_lut, prefiltered_sheen)),
+            light_data_addr,
+        )
     } else {
         (None, 0)
     };
@@ -424,24 +506,47 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
         0.1, // refl_rough_band
         manifold_gpu::raytrace::SVT_SLOT_NONE,
     )
-    .with_lights(if config.complete_lighting { 1 } else { 0 }, light_data_addr);
+    .with_lights(
+        if config.complete_lighting { 1 } else { 0 },
+        light_data_addr,
+    );
 
     // gi_materials[0] = floor (albedo/emissive unused on the primary-hit
     // path; only .y (roughness) is read as the flat-factor fallback).
     // gi_materials[1] = emitter (only .emissive is read on the reflection
     // HIT path — env/specular terms multiply through the zero dummy).
     let gi_materials = [
-        GiMaterial::new([0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [config.floor_metallic, config.floor_roughness, config.floor_anisotropy[0], config.floor_anisotropy[1]], [0.0, 0.0, 0.0, 0.0]),
-        GiMaterial::new(config.emitter_albedo, config.emitter_emissive, [config.emitter_metallic, config.emitter_roughness, config.emitter_anisotropy, 0.0], config.emitter_translucency)
-            .with_surface(2.0, config.emitter_specular)
-            .with_extensions(
-                config.emitter_extensions.clearcoat,
-                config.emitter_extensions.sheen,
-                config.emitter_extensions.iridescence,
-                config.emitter_extensions.transmission,
-                config.emitter_extensions.attenuation,
-                config.emitter_extensions.surface_misc,
-            ),
+        GiMaterial::new(
+            [0.5, 0.5, 0.5],
+            [0.0, 0.0, 0.0],
+            [
+                config.floor_metallic,
+                config.floor_roughness,
+                config.floor_anisotropy[0],
+                config.floor_anisotropy[1],
+            ],
+            [0.0, 0.0, 0.0, 0.0],
+        ),
+        GiMaterial::new(
+            config.emitter_albedo,
+            config.emitter_emissive,
+            [
+                config.emitter_metallic,
+                config.emitter_roughness,
+                config.emitter_anisotropy,
+                0.0,
+            ],
+            config.emitter_translucency,
+        )
+        .with_surface(2.0, config.emitter_specular)
+        .with_extensions(
+            config.emitter_extensions.clearcoat,
+            config.emitter_extensions.sheen,
+            config.emitter_extensions.iridescence,
+            config.emitter_extensions.transmission,
+            config.emitter_extensions.attenuation,
+            config.emitter_extensions.surface_misc,
+        ),
     ];
     let dummy_emissive = harness::dummy_emissive_buffer(device);
     let gi_materials_buffer = write_shared_buffer(device, &gi_materials);
@@ -449,15 +554,22 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
     // object. The fixture's real `gi_materials` above feeds the
     // reflection-hit shading buffer only — the accel update historically
     // got `&[]` (no emissive table), so zeroed rows keep that behavior.
-    let emissive_prep_materials = vec![
-        GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]);
-        objects.len()
-    ];
+    let emissive_prep_materials =
+        vec![GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]); objects.len()];
 
     let mut encoder = device.create_encoder("rt-r3-textured-roughness-proof");
     let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
     tracer
-        .encode_accel_update(device, &mut encoder, &mut accel, &objects, &changes, &emissive_prep_materials, true, true)
+        .encode_accel_update(
+            device,
+            &mut encoder,
+            &mut accel,
+            &objects,
+            &changes,
+            &emissive_prep_materials,
+            true,
+            true,
+        )
         .expect("encode accel update");
     let out_svt = device.create_texture(&GpuTextureDesc {
         width: 1,
@@ -508,10 +620,16 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
     let bytes: &[u8] = unsafe { slice::from_raw_parts(ptr.cast::<c_void>().cast::<u8>(), 32) };
     let floats: &[f32] = unsafe { slice::from_raw_parts(bytes.as_ptr().cast::<f32>(), 8) };
 
-    [[floats[0], floats[1], floats[2]], [floats[4], floats[5], floats[6]]]
+    [
+        [floats[0], floats[1], floats[2]],
+        [floats[4], floats[5], floats[6]],
+    ]
 }
 
-fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f32) -> [[f32; 3]; 2] {
+fn run_fixture(
+    mr_texture: Option<&manifold_gpu::GpuTexture>,
+    floor_roughness: f32,
+) -> [[f32; 3]; 2] {
     run_fixture_config(FixtureConfig::base(mr_texture, floor_roughness), 1)
 }
 
@@ -537,7 +655,10 @@ fn luma(c: [f32; 3]) -> f32 {
     0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
 }
 
-fn white_extension_maps<'a>(mut config: FixtureConfig<'a>, texture: &'a manifold_gpu::GpuTexture) -> FixtureConfig<'a> {
+fn white_extension_maps<'a>(
+    mut config: FixtureConfig<'a>,
+    texture: &'a manifold_gpu::GpuTexture,
+) -> FixtureConfig<'a> {
     for slot in 3..15 {
         if slot != 9 {
             config.emitter_extra_material_textures[slot] = Some(texture);
@@ -587,7 +708,9 @@ fn mr_texture_multiplies_flat_factors_per_texel() {
     );
     let [refl0, refl1] = run_fixture(Some(&mr_tex), 0.5);
     let (luma0, luma1) = (luma(refl0), luma(refl1));
-    eprintln!("mr_texture_multiplies_flat_factors_per_texel: texel0={refl0:?} luma={luma0:.4} texel1={refl1:?} luma={luma1:.4}");
+    eprintln!(
+        "mr_texture_multiplies_flat_factors_per_texel: texel0={refl0:?} luma={luma0:.4} texel1={refl1:?} luma={luma1:.4}"
+    );
 
     const BRIGHT_THRESHOLD: f32 = 1.5; // emitter luma is exactly 2.0 (luma of gray [2,2,2])
     assert!(
@@ -773,9 +896,18 @@ fn colored_specular_map_tints_f0_against_white_environment() {
     tinted.emitter_extra_material_textures[2] = Some(&color_map);
     let mean = mean_frames(tinted, EXTENSION_MEAN_FRAMES);
     let rgb = mean[0];
-    assert!(rgb[0] > 1e-3, "white environment should produce a nonzero F0 response: {rgb:?}");
-    assert!((rgb[1] / rgb[0] - 0.25).abs() < 0.02, "green F0 tint ratio is wrong: {rgb:?}");
-    assert!((rgb[2] / rgb[0] - 0.1).abs() < 0.02, "blue F0 tint ratio is wrong: {rgb:?}");
+    assert!(
+        rgb[0] > 1e-3,
+        "white environment should produce a nonzero F0 response: {rgb:?}"
+    );
+    assert!(
+        (rgb[1] / rgb[0] - 0.25).abs() < 0.02,
+        "green F0 tint ratio is wrong: {rgb:?}"
+    );
+    assert!(
+        (rgb[2] / rgb[0] - 0.1).abs() < 0.02,
+        "blue F0 tint ratio is wrong: {rgb:?}"
+    );
 }
 
 #[test]
@@ -860,17 +992,45 @@ fn secondary_hit_iridescence_changes_with_view_angle_and_stays_bounded() {
     let flat_rgb = mean_frames(flat, EXTENSION_MEAN_FRAMES);
     let film_rgb = mean_frames(film, EXTENSION_MEAN_FRAMES);
     assert!(
-        flat_rgb.iter().zip(film_rgb.iter()).any(|(a, b)| (luma(*a) - luma(*b)).abs() > 1e-3),
+        flat_rgb
+            .iter()
+            .zip(film_rgb.iter())
+            .any(|(a, b)| (luma(*a) - luma(*b)).abs() > 1e-3),
         "changing the angular iridescence film must change at least one secondary-hit sample"
     );
-    assert!(film_rgb.iter().flatten().all(|v| v.is_finite() && *v >= 0.0 && *v < 32.0), "film radiance must remain bounded: {film_rgb:?}");
+    assert!(
+        film_rgb
+            .iter()
+            .flatten()
+            .all(|v| v.is_finite() && *v >= 0.0 && *v < 32.0),
+        "film radiance must remain bounded: {film_rgb:?}"
+    );
 }
 
 #[test]
 fn secondary_hit_ao_only_modulates_diffuse_ibl() {
-    let black_light = [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, -1.0], [10.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]];
-    let black = upload_texture_f32(&manifold_node_engine::testkit::gpu_harness::shared().device, 1, 1, GpuTextureFormat::Rgba32Float, &[0.0; 4], "rt-secondary-ao-black");
-    let white = upload_texture_f32(&manifold_node_engine::testkit::gpu_harness::shared().device, 1, 1, GpuTextureFormat::Rgba32Float, &[1.0; 4], "rt-secondary-ao-white");
+    let black_light = [
+        [0.0, 0.0, 0.0, 1.0],
+        [0.0, 0.0, 0.0, -1.0],
+        [10.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+    ];
+    let black = upload_texture_f32(
+        &manifold_node_engine::testkit::gpu_harness::shared().device,
+        1,
+        1,
+        GpuTextureFormat::Rgba32Float,
+        &[0.0; 4],
+        "rt-secondary-ao-black",
+    );
+    let white = upload_texture_f32(
+        &manifold_node_engine::testkit::gpu_harness::shared().device,
+        1,
+        1,
+        GpuTextureFormat::Rgba32Float,
+        &[1.0; 4],
+        "rt-secondary-ao-white",
+    );
     let mut diffuse = FixtureConfig::base(None, 0.0);
     diffuse.complete_lighting = true;
     diffuse.light_rows = black_light;
@@ -878,13 +1038,21 @@ fn secondary_hit_ao_only_modulates_diffuse_ibl() {
     diffuse.emitter_emissive = [0.0; 3];
     let white_rgb = run_fixture_config(white_extension_maps(diffuse, &white), 3);
     let black_rgb = run_fixture_config(white_extension_maps(diffuse, &black), 3);
-    assert!(luma(white_rgb[0]) > luma(black_rgb[0]) + 1e-3, "AO must reduce diffuse IBL: white={white_rgb:?} black={black_rgb:?}");
+    assert!(
+        luma(white_rgb[0]) > luma(black_rgb[0]) + 1e-3,
+        "AO must reduce diffuse IBL: white={white_rgb:?} black={black_rgb:?}"
+    );
 
     let mut metallic = diffuse;
     metallic.emitter_metallic = 1.0;
     let metallic_white = run_fixture_config(white_extension_maps(metallic, &white), 4);
     let metallic_black = run_fixture_config(white_extension_maps(metallic, &black), 4);
-    assert_rgb_close(metallic_white, metallic_black, 2e-3, "AO must not modulate the specular IBL");
+    assert_rgb_close(
+        metallic_white,
+        metallic_black,
+        2e-3,
+        "AO must not modulate the specular IBL",
+    );
 }
 
 #[test]
@@ -905,8 +1073,14 @@ fn secondary_hit_punctual_point_range_and_disabled_shadow_are_numeric() {
     let far_rgb = run_fixture_config(far, 5);
     let expected_near = (1.0 - 1.0 / 256.0) / std::f32::consts::PI;
     let expected_far = (1.0 - 81.0 / 256.0) / (9.0 * std::f32::consts::PI);
-    assert!((near_rgb[0][0] - expected_near).abs() < 1e-3, "near physical point light mismatch: actual={near_rgb:?} expected={expected_near}");
-    assert!((far_rgb[0][0] - expected_far).abs() < 1e-3, "far physical point light mismatch: actual={far_rgb:?} expected={expected_far}");
+    assert!(
+        (near_rgb[0][0] - expected_near).abs() < 1e-3,
+        "near physical point light mismatch: actual={near_rgb:?} expected={expected_near}"
+    );
+    assert!(
+        (far_rgb[0][0] - expected_far).abs() < 1e-3,
+        "far physical point light mismatch: actual={far_rgb:?} expected={expected_far}"
+    );
 
     // The analytic vertical rays above lie outside the narrow floor. Move
     // the light sideways so this independent visibility ray crosses it.
@@ -916,7 +1090,10 @@ fn secondary_hit_punctual_point_range_and_disabled_shadow_are_numeric() {
     let mut shadowed = occluded;
     shadowed.light_rows[1][3] = 1.0;
     let shadowed_rgb = run_fixture_config(shadowed, 6);
-    assert!(luma(disabled_rgb[0]) > luma(shadowed_rgb[0]) + 1e-3, "shadow-disabled punctual light must illuminate through the floor occluder: disabled={disabled_rgb:?} enabled={shadowed_rgb:?}");
+    assert!(
+        luma(disabled_rgb[0]) > luma(shadowed_rgb[0]) + 1e-3,
+        "shadow-disabled punctual light must illuminate through the floor occluder: disabled={disabled_rgb:?} enabled={shadowed_rgb:?}"
+    );
 }
 
 #[test]
@@ -934,16 +1111,31 @@ fn secondary_hit_punctual_spot_cone_rejects_outside_direction() {
     let mut outside = center;
     outside.light_rows[3] = [1.0, 0.0, 0.0, 0.0];
     let outside_rgb = run_fixture_config(outside, 7);
-    assert!(luma(center_rgb[0]) > luma(outside_rgb[0]) * 4.0, "spot cone must reject the outside direction: center={center_rgb:?} outside={outside_rgb:?}");
+    assert!(
+        luma(center_rgb[0]) > luma(outside_rgb[0]) * 4.0,
+        "spot cone must reject the outside direction: center={center_rgb:?} outside={outside_rgb:?}"
+    );
 }
 
 #[test]
 fn secondary_clearcoat_only_normal_uses_transformed_uv1_frame() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
-    let tilted_t = upload_texture_f32(&h.device, 1, 1, GpuTextureFormat::Rgba32Float,
-        &[0.8, 0.5, 0.9, 1.0], "coat-uv1-tilt");
-    let tilted_minus_b = upload_texture_f32(&h.device, 1, 1, GpuTextureFormat::Rgba32Float,
-        &[0.5, 0.2, 0.9, 1.0], "coat-uv0-reference");
+    let tilted_t = upload_texture_f32(
+        &h.device,
+        1,
+        1,
+        GpuTextureFormat::Rgba32Float,
+        &[0.8, 0.5, 0.9, 1.0],
+        "coat-uv1-tilt",
+    );
+    let tilted_minus_b = upload_texture_f32(
+        &h.device,
+        1,
+        1,
+        GpuTextureFormat::Rgba32Float,
+        &[0.5, 0.2, 0.9, 1.0],
+        "coat-uv0-reference",
+    );
     let mut reference = FixtureConfig::base(None, 0.0);
     reference.complete_lighting = true;
     reference.emitter_albedo = [0.0; 3];
@@ -965,12 +1157,17 @@ fn secondary_clearcoat_only_normal_uses_transformed_uv1_frame() {
     // UV1=(v,1-u), then mirrored U, has T=-world Z. Its +T tilt
     // equals a -B tilt in UV0, independently of texture sampling (constant maps).
     assert_rgb_close(actual, expected, 0.002, "coat-only transformed UV1 frame");
-    assert!(expected.iter().flatten().any(|value| *value > 0.005), "coat lobe must be observable: {expected:?}");
+    assert!(
+        expected.iter().flatten().any(|value| *value > 0.005),
+        "coat lobe must be observable: {expected:?}"
+    );
     let mut wrong_frame = reference;
     wrong_frame.emitter_extra_material_textures[9] = Some(&tilted_t);
     let wrong = run_fixture_config(wrong_frame, 0);
-    assert!((wrong[0][0] - expected[0][0]).abs() > 0.005,
-        "UV0 control must distinguish frame orientation: expected={expected:?}, wrong={wrong:?}");
+    assert!(
+        (wrong[0][0] - expected[0][0]).abs() > 0.005,
+        "UV0 control must distinguish frame orientation: expected={expected:?}, wrong={wrong:?}"
+    );
 }
 
 #[test]
@@ -1001,15 +1198,20 @@ fn secondary_low_roughness_anisotropy_preserves_peak_and_zero_continuity() {
             let fresnel = 0.04 + 0.96 * (1.0 - nv).powi(5);
             let expected = (d * visibility * fresnel * nv * intensity as f64) as f32;
             for channel in actual {
-                assert!((channel - expected).abs() < expected * 0.04,
-                    "RT peak roughness={roughness} anisotropy={strength}: actual={actual:?}, expected={expected}");
+                assert!(
+                    (channel - expected).abs() < expected * 0.04,
+                    "RT peak roughness={roughness} anisotropy={strength}: actual={actual:?}, expected={expected}"
+                );
             }
             results.push(actual);
         }
         for actual in &results[1..] {
             for channel in 0..3 {
-                assert!((actual[channel] - results[0][channel]).abs() < results[0][channel] * 0.02,
-                    "RT zero-strength continuity: zero={:?}, positive={actual:?}", results[0]);
+                assert!(
+                    (actual[channel] - results[0][channel]).abs() < results[0][channel] * 0.02,
+                    "RT zero-strength continuity: zero={:?}, positive={actual:?}",
+                    results[0]
+                );
             }
         }
     }
@@ -1031,8 +1233,12 @@ fn opposite_secondary_light_skips_specular_but_preserves_thin_transmission() {
     config.light_rows[0] = [0.0, 1.0, 0.0, 0.0];
     config.light_rows[1] = [1.0, 1.0, 1.0, -1.0];
     let opaque = run_fixture_config(config, 0)[0];
-    assert!(opaque.iter().all(|value| value.is_finite() && value.abs() < 1e-6),
-        "opposite light must contribute no reflection: {opaque:?}");
+    assert!(
+        opaque
+            .iter()
+            .all(|value| value.is_finite() && value.abs() < 1e-6),
+        "opposite light must contribute no reflection: {opaque:?}"
+    );
 
     config.emitter_extensions.clearcoat[0] = 0.0;
     config.emitter_translucency = [0.5, 1.0, 0.3, 0.1];
@@ -1040,7 +1246,9 @@ fn opposite_secondary_light_skips_specular_but_preserves_thin_transmission() {
     let kd = 1.0 - (0.04 + 0.96 * (1.0_f64 - 0.001).powi(5));
     for (channel, tint) in [1.0, 0.3, 0.1].into_iter().enumerate() {
         let expected = (0.5 * tint * kd / std::f64::consts::PI) as f32;
-        assert!((transmitted[channel] - expected).abs() < 1e-5,
-            "backlit transmission channel {channel}: actual={transmitted:?}, expected={expected}");
+        assert!(
+            (transmitted[channel] - expected).abs() < 1e-5,
+            "backlit transmission channel {channel}: actual={transmitted:?}, expected={expected}"
+        );
     }
 }

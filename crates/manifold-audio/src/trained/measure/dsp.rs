@@ -9,7 +9,10 @@ pub(super) struct History<T> {
 
 impl<T: Copy + Default> History<T> {
     pub fn new(cap: usize) -> Self {
-        Self { buf: vec![T::default(); cap], pushed: 0 }
+        Self {
+            buf: vec![T::default(); cap],
+            pushed: 0,
+        }
     }
 
     pub fn push(&mut self, v: T) {
@@ -29,7 +32,12 @@ impl<T: Copy + Default> History<T> {
     }
 
     pub fn get(&self, i: u64) -> &T {
-        debug_assert!(self.holds(i, i), "history index {i} outside [{}, {})", self.pushed.saturating_sub(self.buf.len() as u64), self.pushed);
+        debug_assert!(
+            self.holds(i, i),
+            "history index {i} outside [{}, {})",
+            self.pushed.saturating_sub(self.buf.len() as u64),
+            self.pushed
+        );
         &self.buf[(i % self.buf.len() as u64) as usize]
     }
 }
@@ -42,7 +50,10 @@ pub(crate) struct Sos {
 
 impl Sos {
     pub fn new(flat: &[f64]) -> Self {
-        let coef: Vec<[f64; 6]> = flat.chunks_exact(6).map(|c| c.try_into().expect("6 coefficients")).collect();
+        let coef: Vec<[f64; 6]> = flat
+            .chunks_exact(6)
+            .map(|c| c.try_into().expect("6 coefficients"))
+            .collect();
         let z = vec![[0.0; 2]; coef.len()];
         Self { coef, z }
     }
@@ -110,7 +121,11 @@ pub(super) struct RunningMean {
 
 impl RunningMean {
     pub fn new(k: usize) -> Self {
-        Self { cum: History::new(k + 1), sum: 0.0, k: k as u64 }
+        Self {
+            cum: History::new(k + 1),
+            sum: 0.0,
+            k: k as u64,
+        }
     }
 
     /// Adds sample `s = self.len()` and returns its moving average.
@@ -119,7 +134,11 @@ impl RunningMean {
         self.sum += y;
         let s = self.cum.len();
         self.cum.push(self.sum);
-        let old = if s >= self.k { *self.cum.get(s - self.k) } else { 0.0 };
+        let old = if s >= self.k {
+            *self.cum.get(s - self.k)
+        } else {
+            0.0
+        };
         (self.sum - old) / self.k as f64
     }
 }
@@ -135,7 +154,12 @@ pub(super) struct MsGrid {
 
 impl MsGrid {
     pub fn new(ms: f64, sr: f64) -> Self {
-        Self { ms, sr, next: 0, next_sample: 0 }
+        Self {
+            ms,
+            sr,
+            next: 0,
+            next_sample: 0,
+        }
     }
 
     /// The sample index of grid point `j`.

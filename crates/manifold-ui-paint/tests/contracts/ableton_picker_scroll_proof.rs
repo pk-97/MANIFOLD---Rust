@@ -16,13 +16,13 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
-use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_ui::node::{UIFlags, Vec2};
 use manifold_ui::panels::ableton_picker::{
     AbletonPickerPopup, AbletonPickerSession, PickerDevice, PickerMacro, PickerTrack,
 };
 use manifold_ui::panels::overlay::{Overlay, OverlayPlacement};
 use manifold_ui::{Rect, UITree, ZTier};
+use manifold_ui_paint::ui_renderer::UIRenderer;
 
 // W*4 must be 256-byte aligned for the texture→buffer readback copy.
 const W: u32 = 640;
@@ -38,9 +38,18 @@ fn session(n_tracks: usize) -> AbletonPickerSession {
                 device_name: "Auto Filter".to_string(),
                 device_class_name: "AutoFilter".to_string(),
                 macros: vec![
-                    PickerMacro { param_id: 1, name: "Filter Cut".to_string() },
-                    PickerMacro { param_id: 2, name: "Resonance".to_string() },
-                    PickerMacro { param_id: 3, name: "Drive".to_string() },
+                    PickerMacro {
+                        param_id: 1,
+                        name: "Filter Cut".to_string(),
+                    },
+                    PickerMacro {
+                        param_id: 2,
+                        name: "Resonance".to_string(),
+                    },
+                    PickerMacro {
+                        param_id: 3,
+                        name: "Drive".to_string(),
+                    },
                 ],
             }]
         } else {
@@ -52,7 +61,9 @@ fn session(n_tracks: usize) -> AbletonPickerSession {
             devices,
         });
     }
-    AbletonPickerSession { rack_tracks: tracks }
+    AbletonPickerSession {
+        rack_tracks: tracks,
+    }
 }
 
 /// Build the open picker through the overlay-driver path on a fresh tree.
@@ -82,12 +93,19 @@ fn render(tree: &UITree) -> (Vec<u8>, GpuTexture) {
     let mut ui = UIRenderer::new(&device, FORMAT);
     ui.begin_frame();
     ui.render_tree(tree, None);
-    assert!(ui.prepare(&device, W, H, 1.0), "picker produced no draw commands");
+    assert!(
+        ui.prepare(&device, W, H, 1.0),
+        "picker produced no draw commands"
+    );
     let target = device.create_texture(&manifold_gpu::GpuTextureDesc {
-        width: W, height: H, depth: 1, format: FORMAT,
+        width: W,
+        height: H,
+        depth: 1,
+        format: FORMAT,
         dimension: manifold_gpu::GpuTextureDimension::D2,
         usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-        label: "picker-scroll", mip_levels: 1,
+        label: "picker-scroll",
+        mip_levels: 1,
     });
     {
         let mut enc = device.create_encoder("picker-render");
@@ -183,7 +201,10 @@ fn clipped_list_scrolls_from_top_to_bottom() {
             break;
         }
     }
-    assert!(found_last_row, "scrolled to the bottom: last track row paints");
+    assert!(
+        found_last_row,
+        "scrolled to the bottom: last track row paints"
+    );
 }
 
 fn readback(device: &GpuDevice, texture: &GpuTexture) -> Vec<u8> {

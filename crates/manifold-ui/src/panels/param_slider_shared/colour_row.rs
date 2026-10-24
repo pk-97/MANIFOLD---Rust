@@ -50,7 +50,9 @@ pub fn colour_hex(rgb: [f32; 3]) -> String {
 /// The colour's name: its R channel's name without the channel suffix
 /// ("Base Colour R" reads "Base Colour").
 pub(crate) fn colour_name(name: &str) -> &str {
-    name.strip_suffix(" R").or_else(|| name.strip_suffix(" Red")).unwrap_or(name)
+    name.strip_suffix(" R")
+        .or_else(|| name.strip_suffix(" Red"))
+        .unwrap_or(name)
 }
 
 /// A swatch showing `rgb` at `x`, clickable when one RGB write owns its
@@ -65,7 +67,12 @@ pub(crate) fn build_colour_swatch(
     row_key_base: Option<u64>,
 ) -> Option<(NodeId, ColourGroup)> {
     let members = info.rgb_members.as_ref()?;
-    let rect = Rect::new(x, cy + (ROW_HEIGHT - SWATCH_SIZE) * 0.5, SWATCH_SIZE, SWATCH_SIZE);
+    let rect = Rect::new(
+        x,
+        cy + (ROW_HEIGHT - SWATCH_SIZE) * 0.5,
+        SWATCH_SIZE,
+        SWATCH_SIZE,
+    );
     let style = UIStyle {
         bg_color: swatch_colour(rgb),
         border_color: color::BORDER,
@@ -73,9 +80,21 @@ pub(crate) fn build_colour_swatch(
         corner_radius: color::SMALL_RADIUS,
         ..UIStyle::default()
     };
-    let flags = if members.editable { UIFlags::VISIBLE | UIFlags::INTERACTIVE } else { UIFlags::VISIBLE };
+    let flags = if members.editable {
+        UIFlags::VISIBLE | UIFlags::INTERACTIVE
+    } else {
+        UIFlags::VISIBLE
+    };
     let id = match row_key_base {
-        Some(base) => tree.add_node_keyed(parent, rect, UINodeType::Button, style, None, flags, base | ROW_ROLE_SWATCH),
+        Some(base) => tree.add_node_keyed(
+            parent,
+            rect,
+            UINodeType::Button,
+            style,
+            None,
+            flags,
+            base | ROW_ROLE_SWATCH,
+        ),
         None => tree.add_node(parent, rect, UINodeType::Button, style, None, flags),
     };
     tree.set_name(id, format!("param_row.{}.swatch", info.id));
@@ -121,13 +140,40 @@ pub(crate) fn build_colour_row(
         ..UIStyle::default()
     };
     let fold = match row_key_base {
-        Some(base) => tree.add_button_keyed(parent, x, cy, label_w, ROW_HEIGHT, fold_style, "", base | ROW_ROLE_COLOUR_FOLD),
+        Some(base) => tree.add_button_keyed(
+            parent,
+            x,
+            cy,
+            label_w,
+            ROW_HEIGHT,
+            fold_style,
+            "",
+            base | ROW_ROLE_COLOUR_FOLD,
+        ),
         None => tree.add_button(parent, x, cy, label_w, ROW_HEIGHT, fold_style, ""),
     };
     tree.set_name(fold, format!("param_row.{}.colour", info.id));
-    let dimmed = UIStyle { text_color: color::TEXT_DIMMED_C32, font_size: FONT_SIZE, text_align: TextAlign::Center, ..UIStyle::default() };
-    tree.add_label(Some(fold), x, cy, FOLD_TRIANGLE_W, ROW_HEIGHT, if open { "\u{25BE}" } else { "\u{25B8}" }, dimmed);
-    let name_style = UIStyle { text_color: color::SLIDER_TEXT_C32, font_size: FONT_SIZE, text_align: TextAlign::Left, ..UIStyle::default() };
+    let dimmed = UIStyle {
+        text_color: color::TEXT_DIMMED_C32,
+        font_size: FONT_SIZE,
+        text_align: TextAlign::Center,
+        ..UIStyle::default()
+    };
+    tree.add_label(
+        Some(fold),
+        x,
+        cy,
+        FOLD_TRIANGLE_W,
+        ROW_HEIGHT,
+        if open { "\u{25BE}" } else { "\u{25B8}" },
+        dimmed,
+    );
+    let name_style = UIStyle {
+        text_color: color::SLIDER_TEXT_C32,
+        font_size: FONT_SIZE,
+        text_align: TextAlign::Left,
+        ..UIStyle::default()
+    };
     tree.add_label(
         Some(fold),
         x + FOLD_TRIANGLE_W,
@@ -146,21 +192,53 @@ pub(crate) fn build_colour_row(
         bg_color: color::INSPECTOR_BG,
         hover_bg_color: color::HOVER_OVERLAY,
         pressed_bg_color: color::PRESS_OVERLAY,
-        text_color: if members.editable { color::TEXT_WHITE_C32 } else { color::TEXT_DIMMED_C32 },
+        text_color: if members.editable {
+            color::TEXT_WHITE_C32
+        } else {
+            color::TEXT_DIMMED_C32
+        },
         font_size: FONT_SIZE,
         text_align: TextAlign::Left,
         corner_radius: color::SMALL_RADIUS,
         ..UIStyle::default()
     };
-    let rect = Rect::new(hex_x, cy + (ROW_HEIGHT - TOGGLE_BTN_H) * 0.5, hex_w, TOGGLE_BTN_H);
-    let flags = if members.editable { UIFlags::VISIBLE | UIFlags::INTERACTIVE } else { UIFlags::VISIBLE };
+    let rect = Rect::new(
+        hex_x,
+        cy + (ROW_HEIGHT - TOGGLE_BTN_H) * 0.5,
+        hex_w,
+        TOGGLE_BTN_H,
+    );
+    let flags = if members.editable {
+        UIFlags::VISIBLE | UIFlags::INTERACTIVE
+    } else {
+        UIFlags::VISIBLE
+    };
     let text = colour_hex_into(rgb, &mut [0; 7]).to_string();
     let hex = match row_key_base {
-        Some(base) => tree.add_node_keyed(parent, rect, UINodeType::Button, hex_style, Some(&text), flags, base | ROW_ROLE_COLOUR_HEX),
-        None => tree.add_node(parent, rect, UINodeType::Button, hex_style, Some(&text), flags),
+        Some(base) => tree.add_node_keyed(
+            parent,
+            rect,
+            UINodeType::Button,
+            hex_style,
+            Some(&text),
+            flags,
+            base | ROW_ROLE_COLOUR_HEX,
+        ),
+        None => tree.add_node(
+            parent,
+            rect,
+            UINodeType::Button,
+            hex_style,
+            Some(&text),
+            flags,
+        ),
     };
     tree.set_name(hex, format!("param_row.{}.hex", info.id));
-    Some(ColourRowIds { swatch, nodes: ColourRowNodes { fold, hex }, new_cy: cy + ROW_HEIGHT + ROW_SPACING })
+    Some(ColourRowIds {
+        swatch,
+        nodes: ColourRowNodes { fold, hex },
+        new_cy: cy + ROW_HEIGHT + ROW_SPACING,
+    })
 }
 
 impl RowHost {
@@ -170,19 +248,27 @@ impl RowHost {
         self.swatch_ids[row] = ids.swatch;
         self.colour_ids[row] = Some(ids.nodes);
         if let Some((swatch, group)) = ids.swatch {
-            self.row_index.insert(tree.widget_of(swatch), row, RowRole::ColourSwatch(group));
+            self.row_index
+                .insert(tree.widget_of(swatch), row, RowRole::ColourSwatch(group));
         }
-        self.row_index.insert(tree.widget_of(ids.nodes.fold), row, RowRole::ColourFold);
-        self.row_index.insert(tree.widget_of(ids.nodes.hex), row, RowRole::ColourHex);
+        self.row_index
+            .insert(tree.widget_of(ids.nodes.fold), row, RowRole::ColourFold);
+        self.row_index
+            .insert(tree.widget_of(ids.nodes.hex), row, RowRole::ColourHex);
     }
 
     /// Whether a colour row shows its channel sliders: the user's choice
     /// this session, else open exactly when one RGB write cannot own the
     /// three, so a modulated or wired channel's slider and lane show.
     pub(crate) fn colour_open(&self, info: &ParamRow) -> bool {
-        self.colour_open.get(info.id.as_ref()).copied().unwrap_or_else(|| {
-            info.rgb_members.as_ref().is_some_and(|members| !members.editable)
-        })
+        self.colour_open
+            .get(info.id.as_ref())
+            .copied()
+            .unwrap_or_else(|| {
+                info.rgb_members
+                    .as_ref()
+                    .is_some_and(|members| !members.editable)
+            })
     }
 
     /// Flip a colour row's fold.
@@ -196,7 +282,10 @@ impl RowHost {
     pub(crate) fn open_colour_of(&mut self, rows: &[ParamRow], id: &str) {
         let head = rows.iter().find(|row| {
             row.kind(true) == RowKind::Colour
-                && row.rgb_members.as_ref().is_some_and(|members| members.ids.iter().any(|member| member == id))
+                && row
+                    .rgb_members
+                    .as_ref()
+                    .is_some_and(|members| members.ids.iter().any(|member| member == id))
         });
         if let Some(head) = head {
             self.colour_open.insert(head.id.to_string(), true);
@@ -209,15 +298,23 @@ impl RowHost {
         rows[i].kind(scene) != RowKind::Colour
             && rows.iter().any(|head| {
                 head.kind(scene) == RowKind::Colour
-                    && head.rgb_members.as_ref().is_some_and(|members| members.ids[1..].contains(&rows[i].id))
+                    && head
+                        .rgb_members
+                        .as_ref()
+                        .is_some_and(|members| members.ids[1..].contains(&rows[i].id))
             })
     }
 
     /// The rows of colour row `head`'s three channels on this surface, in
     /// R, G, B order; `None` for a channel the surface does not show.
     pub(crate) fn colour_channels(rows: &[ParamRow], head: usize) -> [Option<usize>; 3] {
-        let Some(members) = rows[head].rgb_members.as_ref() else { return [None; 3] };
-        members.ids.each_ref().map(|id| rows.iter().position(|row| row.id == *id))
+        let Some(members) = rows[head].rgb_members.as_ref() else {
+            return [None; 3];
+        };
+        members
+            .ids
+            .each_ref()
+            .map(|id| rows.iter().position(|row| row.id == *id))
     }
 
     /// The live colour a swatch row shows.
@@ -231,7 +328,9 @@ impl RowHost {
         self.swatch_members.clear();
         self.swatch_rgb.resize(rows.len(), [0.0; 3]);
         for (row, info) in rows.iter().enumerate() {
-            let Some(members) = &info.rgb_members else { continue };
+            let Some(members) = &info.rgb_members else {
+                continue;
+            };
             self.swatch_rgb[row] = members.values;
             for (channel, id) in members.ids.iter().enumerate() {
                 self.swatch_members.insert(id.to_string(), (row, channel));
@@ -263,7 +362,10 @@ impl RowHost {
         for (row, (swatch, rgb)) in self.swatch_ids.iter().zip(&self.swatch_rgb).enumerate() {
             let Some((node, _)) = swatch else { continue };
             let colour = swatch_colour(*rgb);
-            if tree.get_node(*node).is_some_and(|n| n.style.bg_color != colour) {
+            if tree
+                .get_node(*node)
+                .is_some_and(|n| n.style.bg_color != colour)
+            {
                 let mut style = tree.get_node(*node).map(|n| n.style).unwrap_or_default();
                 style.bg_color = colour;
                 tree.set_style(*node, style);

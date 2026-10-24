@@ -3,27 +3,34 @@
 //! modifier label helpers. Moved from state_sync.rs (P-P,
 //! UI_FUNNEL_DECOMPOSITION_DESIGN.md).
 
+use crate::app::SelectionState;
+use crate::ui_root::UIRoot;
 use manifold_core::PresetTypeId;
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, LayerType};
+use manifold_ui::panels::inspector::RackGroupConfig;
 use manifold_ui::panels::param_card::RowMod;
 use manifold_ui::panels::param_slider_shared::AudioRowState;
-use manifold_ui::panels::inspector::RackGroupConfig;
-use manifold_ui::param_surface::ParamSurface;
 use manifold_ui::panels::scene_setup_panel::SceneSetupState;
+use manifold_ui::param_surface::ParamSurface;
 use manifold_ui::view::UiGraphTarget;
-use crate::app::SelectionState;
-use crate::ui_root::UIRoot;
 
 use super::cards::{
     OscScope, SurfaceVisibility, attach_project_sources, audio_send_choices, effects_to_surfaces,
     gen_params_to_surface, scene_card_folds,
 };
 
-fn mark_selected_automation_row(surface: &mut ParamSurface, layer_id: &manifold_core::LayerId, target: &UiGraphTarget, param_id: &manifold_core::effects::ParamId) {
+fn mark_selected_automation_row(
+    surface: &mut ParamSurface,
+    layer_id: &manifold_core::LayerId,
+    target: &UiGraphTarget,
+    param_id: &manifold_core::effects::ParamId,
+) {
     let surface_target = match surface.kind {
-        manifold_ui::panels::param_card::ParamCardKind::Effect => UiGraphTarget::Effect(surface.effect_id.clone()),
+        manifold_ui::panels::param_card::ParamCardKind::Effect => {
+            UiGraphTarget::Effect(surface.effect_id.clone())
+        }
         manifold_ui::panels::param_card::ParamCardKind::Generator => {
             UiGraphTarget::Generator(layer_id.clone())
         }
@@ -100,7 +107,10 @@ pub fn sync_inspector_data(
     led_preview: Option<&crate::content_state::LedPreview>,
 ) {
     manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::InspectorSync);
-    let driver_timing = (ui.driver_bpm.unwrap_or(project.settings.bpm), project.settings.frame_rate);
+    let driver_timing = (
+        ui.driver_bpm.unwrap_or(project.settings.bpm),
+        project.settings.frame_rate,
+    );
     // The same stable layer projection feeds the mask-source picker and the
     // audio clip detector. Keep groups out: layer_source resolves visual
     // surfaces, while group compositing is not a source texture.
@@ -110,14 +120,31 @@ pub fn sync_inspector_data(
             .layers
             .iter()
             .enumerate()
-            .filter(|(_, layer)| matches!(layer.layer_type, LayerType::Video | LayerType::Generator))
-            .map(|(index, layer)| (layer.layer_id.clone(), format!("{} · {}", index + 1, layer.name)))
+            .filter(|(_, layer)| {
+                matches!(layer.layer_type, LayerType::Video | LayerType::Generator)
+            })
+            .map(|(index, layer)| {
+                (
+                    layer.layer_id.clone(),
+                    format!("{} · {}", index + 1, layer.name),
+                )
+            })
             .collect(),
     );
     let selected_automation = |layer_id: &manifold_core::LayerId| {
-        if !selection.automation_mode_visible() { return None; }
-        selection.selected_automation_point.as_ref().map(|point| (&point.target, &point.param_id))
-            .or_else(|| selection.chosen_automation_params().get(layer_id).map(|(target, param_id)| (target, param_id)))
+        if !selection.automation_mode_visible() {
+            return None;
+        }
+        selection
+            .selected_automation_point
+            .as_ref()
+            .map(|point| (&point.target, &point.param_id))
+            .or_else(|| {
+                selection
+                    .chosen_automation_params()
+                    .get(layer_id)
+                    .map(|(target, param_id)| (target, param_id))
+            })
     };
     ui.inspector
         .macros_panel_mut()
@@ -137,7 +164,12 @@ pub fn sync_inspector_data(
             .and_then(|id| project.timeline.find_layer_index_by_id(id))
             .or(active_layer);
         let layer = sel_layer_idx.and_then(|i| project.timeline.layers.get(i));
-        let state = super::scene::scene_state(project, layer, &ui.layer_notices, &ui.scene_setup_panel.selected_scene_items());
+        let state = super::scene::scene_state(
+            project,
+            layer,
+            &ui.layer_notices,
+            &ui.scene_setup_panel.selected_scene_items(),
+        );
         // The layer's FULL generator `ParamSurface`, built by the same
         // `gen_params_to_surface` the main inspector's generator card uses,
         // for THIS panel's bound layer (never `active_layer`). `All`: the
@@ -176,7 +208,11 @@ pub fn sync_inspector_data(
     ui.inspector.configure_rack_groups(
         manifold_ui::InspectorTab::Master,
         &rack_groups(
-            project.settings.master_effect_groups.as_deref().unwrap_or(&[]),
+            project
+                .settings
+                .master_effect_groups
+                .as_deref()
+                .unwrap_or(&[]),
             &project.settings.master_effects,
         ),
     );
@@ -196,11 +232,20 @@ pub fn sync_inspector_data(
     {
         let failures = std::sync::Arc::clone(&ui.chain_failures);
         let failure = |owner: Option<&manifold_core::LayerId>| {
-            failures.iter().find(|(o, _)| o.as_ref() == owner).map(|(_, message)| &**message)
+            failures
+                .iter()
+                .find(|(o, _)| o.as_ref() == owner)
+                .map(|(_, message)| &**message)
         };
-        let layer_id = active_layer.and_then(|i| project.timeline.layers.get(i)).map(|l| &l.layer_id);
-        ui.inspector.layer_chrome_mut().set_chain_error(layer_id.and_then(|id| failure(Some(id))));
-        ui.inspector.master_chrome_mut().set_chain_error(failure(None));
+        let layer_id = active_layer
+            .and_then(|i| project.timeline.layers.get(i))
+            .map(|l| &l.layer_id);
+        ui.inspector
+            .layer_chrome_mut()
+            .set_chain_error(layer_id.and_then(|id| failure(Some(id))));
+        ui.inspector
+            .master_chrome_mut()
+            .set_chain_error(failure(None));
     }
 
     // Active layer effects + gen params → inspector
@@ -224,7 +269,11 @@ pub fn sync_inspector_data(
                         let feature = t.source.feature;
                         AudioTriggerRowConfig {
                             enabled: t.enabled,
-                            label: format!("{} \u{2192} {}", feature.band.label(), feature.kind.label()),
+                            label: format!(
+                                "{} \u{2192} {}",
+                                feature.band.label(),
+                                feature.kind.label()
+                            ),
                             kind_idx: feature.kind.index() as i32,
                             band_idx: feature.band.index() as i32,
                             sensitivity: t.shape.sensitivity,
@@ -244,17 +293,24 @@ pub fn sync_inspector_data(
             let mut layer_effects = layer
                 .effects
                 .as_ref()
-                .map(|e| effects_to_surfaces(e, OscScope::Layer(lid), automation_latched, driver_timing))
+                .map(|e| {
+                    effects_to_surfaces(e, OscScope::Layer(lid), automation_latched, driver_timing)
+                })
                 .unwrap_or_default();
             if let Some((target, param_id)) = selected_automation(&layer.layer_id) {
-                for surface in &mut layer_effects { mark_selected_automation_row(surface, &layer.layer_id, target, param_id); }
+                for surface in &mut layer_effects {
+                    mark_selected_automation_row(surface, &layer.layer_id, target, param_id);
+                }
             }
             attach_project_sources(&mut layer_effects, project);
             ui.inspector
                 .configure_layer_effects(&layer_effects, Some(&layer.layer_id));
             ui.inspector.configure_rack_groups(
                 manifold_ui::InspectorTab::Layer,
-                &rack_groups(layer.effect_groups.as_deref().unwrap_or(&[]), layer.effects.as_deref().unwrap_or(&[])),
+                &rack_groups(
+                    layer.effect_groups.as_deref().unwrap_or(&[]),
+                    layer.effects.as_deref().unwrap_or(&[]),
+                ),
             );
 
             // Generator params — find clip's string_params for text fields.
@@ -287,25 +343,32 @@ pub fn sync_inspector_data(
                 crate::setup_check::mark_layer_card(c, layer, &ui.setup_fits);
             }
             let layer_id = layer.layer_id.clone();
-            let scene_folds = gen_config.as_ref().zip(layer.gen_params()).and_then(|(card, gp)| scene_card_folds(gp, card));
+            let scene_folds = gen_config
+                .as_ref()
+                .zip(layer.gen_params())
+                .and_then(|(card, gp)| scene_card_folds(gp, card));
             ui.inspector
                 .configure_gen_params(gen_config.as_ref(), Some(layer_id));
             ui.inspector.set_gen_scene_sections(scene_folds.as_deref());
         } else {
             ui.inspector.configure_layer_effects(&[], None);
-            ui.inspector.configure_rack_groups(manifold_ui::InspectorTab::Layer, &[]);
-            ui.inspector.configure_gen_params(None, None);
             ui.inspector
-                .audio_trigger_section_mut()
-                .configure(None, &manifold_ui::panels::audio_trigger_section::AudioTriggerSectionConfig::default());
+                .configure_rack_groups(manifold_ui::InspectorTab::Layer, &[]);
+            ui.inspector.configure_gen_params(None, None);
+            ui.inspector.audio_trigger_section_mut().configure(
+                None,
+                &manifold_ui::panels::audio_trigger_section::AudioTriggerSectionConfig::default(),
+            );
         }
     } else {
         ui.inspector.configure_layer_effects(&[], None);
-        ui.inspector.configure_rack_groups(manifold_ui::InspectorTab::Layer, &[]);
-        ui.inspector.configure_gen_params(None, None);
         ui.inspector
-            .audio_trigger_section_mut()
-            .configure(None, &manifold_ui::panels::audio_trigger_section::AudioTriggerSectionConfig::default());
+            .configure_rack_groups(manifold_ui::InspectorTab::Layer, &[]);
+        ui.inspector.configure_gen_params(None, None);
+        ui.inspector.audio_trigger_section_mut().configure(
+            None,
+            &manifold_ui::panels::audio_trigger_section::AudioTriggerSectionConfig::default(),
+        );
     }
 
     // Clip chrome → inspector (per-clip effects removed)
@@ -322,14 +385,16 @@ pub fn sync_inspector_data(
             let is_video = !clip.video_clip_id.is_empty();
             let is_gen = clip.generator_type != PresetTypeId::NONE;
             let is_audio = clip.is_audio();
-            ui.inspector
-                .clip_chrome_mut()
-                .set_mode(true, is_video, is_gen, is_audio, clip.is_looping);
+            ui.inspector.clip_chrome_mut().set_mode(
+                true,
+                is_video,
+                is_gen,
+                is_audio,
+                clip.is_looping,
+            );
             // Feed the detection rows before build so the row count drives layout.
             if is_audio {
-                use manifold_core::audio_clip_detection::{
-                    quantize_grid_label, DetectionConfig,
-                };
+                use manifold_core::audio_clip_detection::{DetectionConfig, quantize_grid_label};
                 use manifold_core::types::LayerType;
                 use manifold_ui::panels::clip_chrome::{DetectInstrumentRow, DetectionView};
 
@@ -356,13 +421,15 @@ pub fn sync_inspector_data(
                     .instruments
                     .iter()
                     .map(|inst| {
-                        let count =
-                            detection.map_or(0, |d| d.count(inst.trigger_type));
+                        let count = detection.map_or(0, |d| d.count(inst.trigger_type));
                         let layer_label = inst
                             .target_layer
                             .as_ref()
                             .and_then(|id| {
-                                candidates.iter().find(|(lid, _)| lid == id).map(|(_, n)| n.clone())
+                                candidates
+                                    .iter()
+                                    .find(|(lid, _)| lid == id)
+                                    .map(|(_, n)| n.clone())
                             })
                             .unwrap_or_else(|| "Auto".to_string());
                         DetectInstrumentRow {
@@ -439,7 +506,8 @@ fn configure_inspector_tabs(
     active_layer: Option<usize>,
     selection: &SelectionState,
 ) {
-    let (tabs, active) = inspector_tabs(project, active_layer, selection, ui.inspector.active_tab());
+    let (tabs, active) =
+        inspector_tabs(project, active_layer, selection, ui.inspector.active_tab());
     ui.inspector.configure_tabs(&tabs, active);
     let scene = active == manifold_ui::InspectorTab::Scene;
     if scene {
@@ -565,7 +633,9 @@ pub(crate) fn build_card_modulation(
             row.driver_frame_rate = if d.frame_aligned {
                 d.effective_period_frames(timing.0, timing.1)
                     .map(|frames| (frames, timing.1 / frames as f32))
-            } else { None };
+            } else {
+                None
+            };
         }
     }
     if let Some(ref envelopes) = inst.envelopes {
@@ -643,8 +713,10 @@ pub(crate) fn audio_row_state(
     // Step/Random defaults use audio transients, while gate/continuous rows
     // retain the evaluator's Both fallback.
     let default_mode = if is_fire
-        || !matches!(am.action, manifold_core::audio_mod::TriggerAction::Continuous)
-    {
+        || !matches!(
+            am.action,
+            manifold_core::audio_mod::TriggerAction::Continuous
+        ) {
         manifold_core::audio_trigger::TriggerFireMode::Transient
     } else {
         manifold_core::audio_trigger::TriggerFireMode::Both
@@ -694,7 +766,8 @@ pub(crate) fn lookup_param_mod_for_id(
         .map(|am| audio_row_state(am, is_fire))
         .unwrap_or_default();
     let modulation = build_card_modulation(inst, 1, resolve, automation_latched, timing)
-        .pop().expect("one requested modulation row");
+        .pop()
+        .expect("one requested modulation row");
     (modulation, audio)
 }
 
@@ -743,8 +816,12 @@ mod param_mod_lookup_tests {
         assert!(!ui.sync_driver_bpm(&project, manifold_core::Bpm(164.0)));
         assert!(!ui.sync_driver_bpm(&project, manifold_core::Bpm(165.0)));
         assert!(ui.sync_driver_bpm(&project, manifold_core::Bpm(100.0)));
-        let (rows, _) = lookup_param_mod_for_id(&project.settings.master_effects[0],
-            "intensity", &[], (ui.driver_bpm.unwrap(), 24.0));
+        let (rows, _) = lookup_param_mod_for_id(
+            &project.settings.master_effects[0],
+            "intensity",
+            &[],
+            (ui.driver_bpm.unwrap(), 24.0),
+        );
         assert_eq!(rows.driver_frame_rate, Some((4, 6.0)));
     }
 
@@ -753,7 +830,8 @@ mod param_mod_lookup_tests {
         let mut inst = PresetInstance::new(PresetTypeId::new("digital_plants"));
         inst.drivers = Some(vec![driver_for("intensity")]);
 
-        let (modulation, _audio) = lookup_param_mod_for_id(&inst, "intensity", &[], (manifold_core::Bpm::DEFAULT, 60.0));
+        let (modulation, _audio) =
+            lookup_param_mod_for_id(&inst, "intensity", &[], (manifold_core::Bpm::DEFAULT, 60.0));
         assert!(modulation.driver_active);
         assert_eq!(modulation.trim_min, 0.1);
         assert_eq!(modulation.trim_max, 0.9);
@@ -767,7 +845,8 @@ mod param_mod_lookup_tests {
         let mut inst = PresetInstance::new(PresetTypeId::new("digital_plants"));
         inst.drivers = Some(vec![driver_for("fill")]);
 
-        let (modulation, audio) = lookup_param_mod_for_id(&inst, "intensity", &[], (manifold_core::Bpm::DEFAULT, 60.0));
+        let (modulation, audio) =
+            lookup_param_mod_for_id(&inst, "intensity", &[], (manifold_core::Bpm::DEFAULT, 60.0));
         assert!(!modulation.driver_active);
         assert!(!audio.active);
     }
@@ -778,7 +857,8 @@ mod param_mod_lookup_tests {
     #[test]
     fn lookup_on_unmodulated_param_returns_idle_slot() {
         let inst = PresetInstance::new(PresetTypeId::new("digital_plants"));
-        let (modulation, audio) = lookup_param_mod_for_id(&inst, "intensity", &[], (manifold_core::Bpm::DEFAULT, 60.0));
+        let (modulation, audio) =
+            lookup_param_mod_for_id(&inst, "intensity", &[], (manifold_core::Bpm::DEFAULT, 60.0));
         assert!(!modulation.driver_active);
         assert!(!modulation.envelope_active);
         assert!(!audio.active);
@@ -825,8 +905,14 @@ mod audio_row_state_trigger_mode_tests {
         m.trigger_mode = Some(TriggerFireMode::Both);
         inst.audio_mods = Some(vec![m]);
 
-        let (_, idle) = lookup_param_mod_for_id(&inst, "amount", &[], (manifold_core::Bpm::DEFAULT, 60.0));
-        let (_, row) = lookup_param_mod_for_id(&inst, "clip_trigger", &[], (manifold_core::Bpm::DEFAULT, 60.0));
+        let (_, idle) =
+            lookup_param_mod_for_id(&inst, "amount", &[], (manifold_core::Bpm::DEFAULT, 60.0));
+        let (_, row) = lookup_param_mod_for_id(
+            &inst,
+            "clip_trigger",
+            &[],
+            (manifold_core::Bpm::DEFAULT, 60.0),
+        );
 
         assert!(!idle.active);
         assert!(row.active);
@@ -852,7 +938,12 @@ mod audio_row_state_trigger_mode_tests {
         m.trigger_mode = Some(TriggerFireMode::ClipEdge);
         inst.audio_mods = Some(vec![m]);
 
-        let (_, row) = lookup_param_mod_for_id(&inst, "clip_trigger", &[], (manifold_core::Bpm::DEFAULT, 60.0));
+        let (_, row) = lookup_param_mod_for_id(
+            &inst,
+            "clip_trigger",
+            &[],
+            (manifold_core::Bpm::DEFAULT, 60.0),
+        );
         assert!(!row.active);
     }
 
@@ -872,7 +963,12 @@ mod audio_row_state_trigger_mode_tests {
         assert_eq!(m.trigger_mode, None);
         inst.audio_mods = Some(vec![m]);
 
-        let (_, row) = lookup_param_mod_for_id(&inst, "clip_trigger", &[], (manifold_core::Bpm::DEFAULT, 60.0));
+        let (_, row) = lookup_param_mod_for_id(
+            &inst,
+            "clip_trigger",
+            &[],
+            (manifold_core::Bpm::DEFAULT, 60.0),
+        );
         assert_eq!(row.trigger_mode_idx, 2); // Both
     }
 
@@ -898,19 +994,17 @@ mod audio_row_state_trigger_mode_tests {
 
         // ParameterAudioMod::new starts Continuous. The ordinary Fire row's
         // projection still defaults to Audio/Transient so its badge matches firing.
-        let (_, row) = lookup_param_mod_for_id(
-            &inst,
-            "fire",
-            &[],
-            (manifold_core::Bpm::DEFAULT, 60.0),
-        );
+        let (_, row) =
+            lookup_param_mod_for_id(&inst, "fire", &[], (manifold_core::Bpm::DEFAULT, 60.0));
         assert_eq!(row.trigger_mode_idx, 1); // Transient
     }
 
     #[test]
     fn unassigned_clip_fire_source_does_not_request_an_audio_scope() {
         let mut modulation = ParameterAudioMod::new(
-            "fire".into(), AudioSendId::default(), AudioFeature::default(),
+            "fire".into(),
+            AudioSendId::default(),
+            AudioFeature::default(),
         );
         modulation.trigger_mode = Some(TriggerFireMode::ClipEdge);
         let row = audio_row_state(&modulation, true);
@@ -919,7 +1013,6 @@ mod audio_row_state_trigger_mode_tests {
         assert_eq!(row.trigger_mode_idx, 0);
     }
 }
-
 
 /// End-to-end round-trip: every fire-meter key the UI's `update_fire_meters`
 /// requests must resolve in the SAME `FireMeterCapture` the content-thread
@@ -1063,7 +1156,14 @@ mod fire_meter_roundtrip_tests {
         project.audio_setup.sends.push(send);
         project.timeline.layers.push(layer);
 
-        Fixture { project, layer_id, bloom_id, bloom_param, strobe_id, plasma_id }
+        Fixture {
+            project,
+            layer_id,
+            bloom_id,
+            bloom_param,
+            strobe_id,
+            plasma_id,
+        }
     }
 
     /// One send ("Kick") with a nonzero level on every band/feature the
@@ -1076,14 +1176,24 @@ mod fire_meter_roundtrip_tests {
         bands[AudioBand::Low.index()].transients = 0.8; // (c) Strobe gate
         bands[AudioBand::Low.index()].kick = 0.8; // (d) clip-trigger row (Kick always reads Low)
         manifold_core::audio_features::AudioFeatureSnapshot {
-            sends: vec![manifold_core::SendFeatures { bands, ..Default::default() }], ..Default::default()
+            sends: vec![manifold_core::SendFeatures {
+                bands,
+                ..Default::default()
+            }],
+            ..Default::default()
         }
     }
 
     #[test]
     fn every_ui_requested_fire_meter_key_resolves_in_the_producer_capture() {
-        let Fixture { mut project, layer_id, bloom_id, bloom_param, strobe_id, plasma_id } =
-            build_fixture();
+        let Fixture {
+            mut project,
+            layer_id,
+            bloom_id,
+            bloom_param,
+            strobe_id,
+            plasma_id,
+        } = build_fixture();
 
         // ── Producer: the SAME two evaluators the content thread runs every
         // tick (`manifold_playback::modulation::evaluate_all_audio_mods` for
@@ -1094,10 +1204,23 @@ mod fire_meter_roundtrip_tests {
         let dt = Seconds(1.0 / 60.0);
         let mut fire_meters = FireMeterCapture::default();
         let mut pulses: Vec<TriggerPulse> = Vec::new();
-        evaluate_all_audio_mods(&mut project, &snapshot, dt, Seconds::ZERO,
-            &manifold_playback::clip_controls::ClipControlFrame::default(), &mut pulses, &mut fire_meters);
+        evaluate_all_audio_mods(
+            &mut project,
+            &snapshot,
+            dt,
+            Seconds::ZERO,
+            &manifold_playback::clip_controls::ClipControlFrame::default(),
+            &mut pulses,
+            &mut fire_meters,
+        );
         let mut live_trigger = LiveTriggerState::default();
-        live_trigger.evaluate(&snapshot, &project.audio_setup, &project.timeline.layers, dt, &mut fire_meters);
+        live_trigger.evaluate(
+            &snapshot,
+            &project.audio_setup,
+            &project.timeline.layers,
+            dt,
+            &mut fire_meters,
+        );
 
         // ── Consumer: the real UI build — `sync_inspector_data` (the same
         // function `ui_snapshot::render_ui_scene` calls) configures the
@@ -1118,8 +1241,12 @@ mod fire_meter_roundtrip_tests {
         // the AUDIO TRIGGERS section's clip-trigger row (d) is gated behind
         // its OWN collapse/expand UI state (`AudioTriggerSection`), which
         // `configure()` never touches — so it must be opened explicitly here.
-        ui.inspector.audio_trigger_section_mut().set_collapsed(Some(false));
-        ui.inspector.audio_trigger_section_mut().toggle_row_expanded(0);
+        ui.inspector
+            .audio_trigger_section_mut()
+            .set_collapsed(Some(false));
+        ui.inspector
+            .audio_trigger_section_mut()
+            .toggle_row_expanded(0);
 
         ui.build_inspector_in_rect(Rect::new(0.0, 0.0, 640.0, 4000.0));
 
@@ -1131,7 +1258,8 @@ mod fire_meter_roundtrip_tests {
             requested.borrow_mut().push(key);
             fire_meters.get(key)
         };
-        ui.inspector.update_fire_meters(&mut ui.tree, &record, dt.0 as f32);
+        ui.inspector
+            .update_fire_meters(&mut ui.tree, &record, dt.0 as f32);
         let requested = requested.into_inner();
 
         // The four keys the PRODUCER computed for the exact same instances —
@@ -1222,7 +1350,11 @@ mod scene_tab_tests {
         let scene = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 0);
         let plain = Layer::new_generator("Plasma".into(), PresetTypeId::new("Plasma"), 1);
         let other = Layer::new_generator("Scene 2".into(), PresetTypeId::new("Scene"), 2);
-        let ids = (scene.layer_id.clone(), plain.layer_id.clone(), other.layer_id.clone());
+        let ids = (
+            scene.layer_id.clone(),
+            plain.layer_id.clone(),
+            other.layer_id.clone(),
+        );
         project.timeline.layers.extend([scene, plain, other]);
         (project, ids.0, ids.1, ids.2)
     }
@@ -1237,7 +1369,14 @@ mod scene_tab_tests {
         let mut selection = manifold_ui::UIState::new();
         selection.select_layer(scene);
         let (tabs, _) = super::inspector_tabs(&project, None, &selection, InspectorTab::Layer);
-        assert_eq!(tabs, [InspectorTab::Layer, InspectorTab::Scene, InspectorTab::Master]);
+        assert_eq!(
+            tabs,
+            [
+                InspectorTab::Layer,
+                InspectorTab::Scene,
+                InspectorTab::Master
+            ]
+        );
 
         selection.select_layer(plain);
         let (tabs, _) = super::inspector_tabs(&project, None, &selection, InspectorTab::Layer);
@@ -1253,7 +1392,10 @@ mod scene_tab_tests {
         selection.pin_scope(InspectorTab::Scene);
         sync(&mut ui, &project, &selection);
         assert_eq!(ui.inspector.active_tab(), InspectorTab::Scene);
-        assert!(ui.scene_setup_panel.is_open(), "the Scene tab hosts the scene panel");
+        assert!(
+            ui.scene_setup_panel.is_open(),
+            "the Scene tab hosts the scene panel"
+        );
 
         // Another scene layer keeps the Scene tab, as the old dock stayed open.
         selection.select_layer(other.clone());
@@ -1346,8 +1488,11 @@ pub fn sync_audio_dock(ui: &mut UIRoot, project: &Project) {
                     })
                     .collect();
             // Inputs section: audio layers feeding this send (id + name).
-            let feeding_layers: Vec<(manifold_core::LayerId, String)> =
-                s.layers().iter().map(|lid| (lid.clone(), layer_name(lid))).collect();
+            let feeding_layers: Vec<(manifold_core::LayerId, String)> = s
+                .layers()
+                .iter()
+                .map(|lid| (lid.clone(), layer_name(lid)))
+                .collect();
 
             AudioSendRow {
                 id: s.id.clone(),

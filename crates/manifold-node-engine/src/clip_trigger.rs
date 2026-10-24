@@ -68,9 +68,7 @@ impl ClipTriggerCycle {
             return self.last_emitted;
         }
         let candidate = trigger_count % n;
-        let result = if self.last_trigger_count.is_some()
-            && candidate == self.last_emitted
-            && n > 1
+        let result = if self.last_trigger_count.is_some() && candidate == self.last_emitted && n > 1
         {
             (candidate + 1) % n
         } else {

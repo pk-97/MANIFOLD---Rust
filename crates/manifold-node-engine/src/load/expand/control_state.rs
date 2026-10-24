@@ -10,7 +10,7 @@ use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use sha2::{Digest, Sha256};
 
-use crate::{graph::Graph, exec::effect_node::NodeInstanceId, state_store::StateStore};
+use crate::{exec::effect_node::NodeInstanceId, graph::Graph, state_store::StateStore};
 
 use super::{SceneModifierExpandError, routes::SceneModifierNodeRoute};
 
@@ -37,7 +37,10 @@ pub struct PreparedModifierControlState {
 impl PreparedModifierControlState {
     #[cfg(any(test, feature = "testkit"))]
     pub fn node_types_for_test(&self, modifier: usize) -> impl ExactSizeIterator<Item = &str> {
-        self.modifiers[modifier].nodes.iter().map(|node| node.primitive_type.as_str())
+        self.modifiers[modifier]
+            .nodes
+            .iter()
+            .map(|node| node.primitive_type.as_str())
     }
 
     /// Capture routed CPU trigger-latch nodes from a prepared graph.

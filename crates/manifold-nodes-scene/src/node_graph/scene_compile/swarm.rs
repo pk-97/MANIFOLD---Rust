@@ -50,19 +50,45 @@ const BOUNDS_SIZE: f32 = 6.0;
 
 /// Where a swarm's particles spread, in its emitter's frame: the lattice
 /// box, which the stirred cloud fills. The Scene Loop sizes its cells by it.
-pub(crate) const SPREAD: Rest = Rest { lo: [-0.5 * BOUNDS_SIZE; 3], hi: [0.5 * BOUNDS_SIZE; 3], placed: None, own_space: false, vertices: 0 };
+pub(crate) const SPREAD: Rest = Rest {
+    lo: [-0.5 * BOUNDS_SIZE; 3],
+    hi: [0.5 * BOUNDS_SIZE; 3],
+    placed: None,
+    own_space: false,
+    vertices: 0,
+};
 
 /// The forces node's clock and field scalars go to the mover port for port;
 /// `epoch` also restarts the seed and the particle loop.
 const CLOCK_PORTS: [&str; 16] = [
-    "forces", "ticks", "first_tick", "force_lattices", "field_nodes_x", "field_nodes_y", "field_nodes_z", "field_spacing",
-    "field_min_x", "field_min_y", "field_min_z", "tick_seconds", "impulses", "impulse_tick", "far_forces", "far_terms",
+    "forces",
+    "ticks",
+    "first_tick",
+    "force_lattices",
+    "field_nodes_x",
+    "field_nodes_y",
+    "field_nodes_z",
+    "field_spacing",
+    "field_min_x",
+    "field_min_y",
+    "field_min_z",
+    "tick_seconds",
+    "impulses",
+    "impulse_tick",
+    "far_forces",
+    "far_terms",
 ];
 
 /// The value node that follows each World control a swarm takes, in
 /// `WORLD_INPUTS` order.
-const FOLLOWS: [&str; 6] =
-    ["world_gravity_x", "world_gravity_y", "world_gravity_z", "world_air_resistance", "world_speed", "world_reset"];
+const FOLLOWS: [&str; 6] = [
+    "world_gravity_x",
+    "world_gravity_y",
+    "world_gravity_z",
+    "world_air_resistance",
+    "world_speed",
+    "world_reset",
+];
 
 /// Emit every Swarm's particle loop and its draw, in tree order.
 pub(crate) fn emit_all(b: &mut Builder<'_>) {
@@ -109,7 +135,11 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
 
     let seed = b.add(owner, "seed", "node.spawn_from_mesh");
     // A Box fills its volume; a Sphere and an item emit from their surface.
-    let mode = if fields.emit_from == EmitFrom::Box { VOLUME } else { SURFACE };
+    let mode = if fields.emit_from == EmitFrom::Box {
+        VOLUME
+    } else {
+        SURFACE
+    };
     b.set(seed, "mode", SerializedParamValue::Enum { value: mode });
     b.set_number(seed, "max_capacity", SWARM_MAX_COUNT);
     match &fields.emit_from {
@@ -174,7 +204,9 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
                 // layout in).
                 let keeps_copies = match b.doc.find(prototype).map(|item| &item.fields) {
                     Some(ItemFields::Group(group)) => group.copies,
-                    Some(ItemFields::Object(object)) => object.copies && manifold_core::scene_schema::can_copy(&object.shape),
+                    Some(ItemFields::Object(object)) => {
+                        object.copies && manifold_core::scene_schema::can_copy(&object.shape)
+                    }
                     _ => false,
                 };
                 let draws = if keeps_copies {
@@ -187,7 +219,8 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
                 };
                 b.swarm_frames.insert(draws, (transform, live));
                 if b.swarm_draws.contains_key(prototype) {
-                    b.swarm_extra.push((prototype.clone(), item.id.clone(), draws));
+                    b.swarm_extra
+                        .push((prototype.clone(), item.id.clone(), draws));
                 } else {
                     b.swarm_draws.insert(prototype.clone(), draws);
                 }
@@ -216,7 +249,9 @@ pub(crate) fn draw_alike(b: &mut Builder<'_>) {
         let Some(&first) = b.swarm_draws.get(&prototype) else {
             continue;
         };
-        let (Some(&(first_frame, first_live)), Some(&(frame, live))) = (b.swarm_frames.get(&first), b.swarm_frames.get(&draws)) else {
+        let (Some(&(first_frame, first_live)), Some(&(frame, live))) =
+            (b.swarm_frames.get(&first), b.swarm_frames.get(&draws))
+        else {
             continue;
         };
         let remap = [(first, draws), (first_frame, frame), (first_live, live)];
@@ -228,7 +263,10 @@ pub(crate) fn draw_alike(b: &mut Builder<'_>) {
             .objects
             .iter()
             .zip(&b.object_items)
-            .filter(|(object, _)| b.input(**object, "instances").is_some_and(|(source, _)| source == first))
+            .filter(|(object, _)| {
+                b.input(**object, "instances")
+                    .is_some_and(|(source, _)| source == first)
+            })
             .map(|(&object, item)| (object, item.clone()))
             .collect();
         for (object, item) in originals {
@@ -262,7 +300,9 @@ pub(crate) fn finish(b: &mut Builder<'_>) {
             continue;
         };
         let enclosing = nearest_group(doc, &id);
-        let mut frame = enclosing.as_ref().and_then(|group| b.group_frames.get(group).copied());
+        let mut frame = enclosing
+            .as_ref()
+            .and_then(|group| b.group_frames.get(group).copied());
         if let EmitFrom::Item(target) = &fields.emit_from
             && let Some(target) = doc.find(target)
         {
@@ -287,7 +327,11 @@ fn nearest_group(doc: &manifold_core::scene_doc::SceneDoc, id: &ItemId) -> Optio
     let mut found = None;
     doc.walk(|candidate, ancestors| {
         if candidate.id == *id {
-            found = ancestors.iter().rev().find(|holder| matches!(holder.fields, ItemFields::Group(_))).map(|group| group.id.clone());
+            found = ancestors
+                .iter()
+                .rev()
+                .find(|holder| matches!(holder.fields, ItemFields::Group(_)))
+                .map(|group| group.id.clone());
         }
     });
     found
@@ -308,11 +352,20 @@ fn emit_mesh(b: &mut Builder<'_>, owner: &str, target: &Item) -> Option<(u32, &'
     // inside its nearest group's frame, and the merge brings it into this
     // group's.
     let in_group = group.copies || b.swarm_draws.contains_key(&target.id);
-    let frame = (!in_group).then(|| b.group_frames.get(&target.id).copied()).flatten();
+    let frame = (!in_group)
+        .then(|| b.group_frames.get(&target.id).copied())
+        .flatten();
     // A group with Combine Meshes on is one shape, placed by its combined
     // transform inside the group.
-    let parts = match (b.id(target.id.as_str(), "mesh"), b.id(target.id.as_str(), "combined_transform")) {
-        (Some(shape), Some(placed)) => vec![((shape, "vertices"), placed, frame.filter(|_| !b.wired_into(placed, "parent")))],
+    let parts = match (
+        b.id(target.id.as_str(), "mesh"),
+        b.id(target.id.as_str(), "combined_transform"),
+    ) {
+        (Some(shape), Some(placed)) => vec![(
+            (shape, "vertices"),
+            placed,
+            frame.filter(|_| !b.wired_into(placed, "parent")),
+        )],
         _ => {
             let mut parts = Vec::new();
             parts_below(b, target, in_group, &mut parts);
@@ -348,7 +401,10 @@ type Part = ((u32, &'static str), u32, Option<u32>);
 /// Every Object at or below `item` with a mesh.
 fn parts_below(b: &Builder<'_>, item: &Item, in_group: bool, out: &mut Vec<Part>) {
     if matches!(item.fields, ItemFields::Object(_))
-        && let (Some(mesh), Some(placed)) = (b.mesh_vertices(item.id.as_str()), b.id(item.id.as_str(), "transform"))
+        && let (Some(mesh), Some(placed)) = (
+            b.mesh_vertices(item.id.as_str()),
+            b.id(item.id.as_str(), "transform"),
+        )
     {
         let within = if in_group || b.wired_into(placed, "parent") {
             None

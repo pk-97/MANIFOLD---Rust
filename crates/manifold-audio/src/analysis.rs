@@ -44,7 +44,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use manifold_core::audio_stream::{
-    audio_stream, AudioStreamConsumer, AudioStreamProducer, AudioStreamRead,
+    AudioStreamConsumer, AudioStreamProducer, AudioStreamRead, audio_stream,
 };
 
 pub use manifold_core::audio_features::SendFeatures;
@@ -147,10 +147,11 @@ impl MonoReader {
                 _ => 0,
             };
             consume(read, &self.scratch[..samples]);
-            if read == AudioStreamRead::InvalidInput { break; }
+            if read == AudioStreamRead::InvalidInput {
+                break;
+            }
         }
     }
-
 }
 
 /// Spawns and owns the capture downmix worker thread. Stops the thread on
@@ -344,10 +345,15 @@ impl MonoWorkerLoop {
     /// Downmix one stamped source block. Returning after a block bounds each
     /// drain and preserves the source order through both handoffs.
     fn drain_and_downmix(&mut self) -> bool {
-        let Some(read) = self.consumer.read(&mut self.drain_buf) else { return false; };
+        let Some(read) = self.consumer.read(&mut self.drain_buf) else {
+            return false;
+        };
         let (stamp, samples) = match read {
             AudioStreamRead::Samples { stamp, samples } => (stamp, samples),
-            AudioStreamRead::Gap { first_frame, end_frame } => {
+            AudioStreamRead::Gap {
+                first_frame,
+                end_frame,
+            } => {
                 self.producer.skip_frames(end_frame - first_frame);
                 return true;
             }
@@ -367,13 +373,14 @@ impl MonoWorkerLoop {
             }
         }
         if self.out.is_empty() {
-            self.producer.skip_frames((samples / self.device_channels) as u64);
+            self.producer
+                .skip_frames((samples / self.device_channels) as u64);
         } else {
-            self.producer.push_interleaved_clocked(&self.out, stamp.clock);
+            self.producer
+                .push_interleaved_clocked(&self.out, stamp.clock);
         }
         true
     }
-
 }
 
 /// Downmix the channels of one interleaved frame to a single mono sample
@@ -1813,7 +1820,12 @@ struct FireQueue {
 
 impl FireQueue {
     const fn new(name: &'static str) -> Self {
-        Self { name, fires: [0; FIRE_QUEUE], len: 0, dropped: 0 }
+        Self {
+            name,
+            fires: [0; FIRE_QUEUE],
+            len: 0,
+            dropped: 0,
+        }
     }
 
     fn queue(&mut self, fires: impl IntoIterator<Item = u64>) {
@@ -1821,7 +1833,11 @@ impl FireQueue {
             if self.len == FIRE_QUEUE {
                 self.dropped += 1;
                 if self.dropped.is_power_of_two() {
-                    log::warn!("[Audio] {} fire queue full: {} fires dropped", self.name, self.dropped);
+                    log::warn!(
+                        "[Audio] {} fire queue full: {} fires dropped",
+                        self.name,
+                        self.dropped
+                    );
                 }
                 continue;
             }
@@ -2003,8 +2019,18 @@ impl StreamingSendAnalyzer {
     /// Routes trained-detector events to their queues: kicks to the Low band, snares to Mid.
     pub fn queue_detector_events(&mut self, events: &[crate::detectors::DetectorEvent]) {
         use crate::detectors::EventKind;
-        self.queue_kick_fires(events.iter().filter(|e| e.kind == EventKind::Kick).map(|e| e.sample));
-        self.queue_snare_fires(events.iter().filter(|e| e.kind == EventKind::Snare).map(|e| e.sample));
+        self.queue_kick_fires(
+            events
+                .iter()
+                .filter(|e| e.kind == EventKind::Kick)
+                .map(|e| e.sample),
+        );
+        self.queue_snare_fires(
+            events
+                .iter()
+                .filter(|e| e.kind == EventKind::Snare)
+                .map(|e| e.sample),
+        );
     }
 
     /// Push freshly produced mono samples and run every completed VQT hop,
@@ -2826,20 +2852,37 @@ mod tests {
         let gains = Arc::new(GainBank::new(&[1.0, 2.0]));
         let mut worker = MonoWorkerLoop::new(capture, mono, 2, vec![vec![0], vec![1]], gains);
         // Capture keeps frames 0..3; the mono handoff only fits frames 0..2.
-        assert_eq!(source.push_interleaved(&[0.5, -0.25, 0.6, -0.3, 0.7, -0.35, 0.8, -0.4]), 6);
+        assert_eq!(
+            source.push_interleaved(&[0.5, -0.25, 0.6, -0.3, 0.7, -0.35, 0.8, -0.4]),
+            6
+        );
         assert!(worker.drain_and_downmix());
         assert!(worker.drain_and_downmix()); // forward capture's missing frame 3
         let mut out = [0.; 8];
-        assert!(matches!(reader.read(&mut out), Some(AudioStreamRead::Samples {
-            stamp: manifold_core::audio_stream::AudioBlockStamp { first_frame: 0, .. }, samples: 4,
-        })));
+        assert!(matches!(
+            reader.read(&mut out),
+            Some(AudioStreamRead::Samples {
+                stamp: manifold_core::audio_stream::AudioBlockStamp { first_frame: 0, .. },
+                samples: 4,
+            })
+        ));
         assert_eq!(&out[..4], &[0.5, -0.5, 0.6, -0.6]);
-        assert_eq!(reader.read(&mut out), Some(AudioStreamRead::Gap { first_frame: 2, end_frame: 4 }));
+        assert_eq!(
+            reader.read(&mut out),
+            Some(AudioStreamRead::Gap {
+                first_frame: 2,
+                end_frame: 4
+            })
+        );
         source.push_interleaved(&[0.9, -0.45]);
         worker.drain_and_downmix();
-        assert!(matches!(reader.read(&mut out), Some(AudioStreamRead::Samples {
-            stamp: manifold_core::audio_stream::AudioBlockStamp { first_frame: 4, .. }, samples: 2,
-        })));
+        assert!(matches!(
+            reader.read(&mut out),
+            Some(AudioStreamRead::Samples {
+                stamp: manifold_core::audio_stream::AudioBlockStamp { first_frame: 4, .. },
+                samples: 2,
+            })
+        ));
         assert_eq!(&out[..2], &[0.9, -0.9]);
         assert_eq!(reader.read(&mut out), None);
     }
@@ -2849,20 +2892,35 @@ mod tests {
         use manifold_core::audio_stream::{AudioBlockStamp, AudioClockAnchor};
         let (mut source, capture) = audio_stream(2, 5000, 8, SR);
         let (mono, mut reader) = audio_stream(1, 5000, 8, SR);
-        let clock = AudioClockAnchor { instant: std::time::Instant::now(), frame: 0 };
+        let clock = AudioClockAnchor {
+            instant: std::time::Instant::now(),
+            frame: 0,
+        };
         let gains = Arc::new(GainBank::new(&[1.0]));
         let mut worker = MonoWorkerLoop::new(capture, mono, 2, vec![vec![0, 1]], gains);
-        assert_eq!(source.push_interleaved_clocked(&vec![0.5; 10_000], Some(clock)), 10_000);
+        assert_eq!(
+            source.push_interleaved_clocked(&vec![0.5; 10_000], Some(clock)),
+            10_000
+        );
         while worker.drain_and_downmix() {}
         let mut scratch = [0.; 997];
         let mut next = 0;
         while let Some(read) = reader.read(&mut scratch) {
-            let AudioStreamRead::Samples { stamp, samples } = read else { panic!("no missing frames"); };
+            let AudioStreamRead::Samples { stamp, samples } = read else {
+                panic!("no missing frames");
+            };
             assert_eq!(stamp.first_frame, next);
             assert_eq!(stamp.clock, Some(clock));
-            assert_eq!(stamp.source_time(), AudioBlockStamp {
-                first_frame: next, clock: Some(clock), generation: 0, sample_rate: SR,
-            }.source_time());
+            assert_eq!(
+                stamp.source_time(),
+                AudioBlockStamp {
+                    first_frame: next,
+                    clock: Some(clock),
+                    generation: 0,
+                    sample_rate: SR,
+                }
+                .source_time()
+            );
             assert!(scratch[..samples].iter().all(|sample| *sample == 0.5));
             next += samples as u64;
         }
@@ -2900,7 +2958,9 @@ mod tests {
             reader.drain_stamped(|read, samples| {
                 assert!(matches!(read, AudioStreamRead::Samples { .. }));
                 for frame in samples.chunks_exact(2) {
-                    for (index, value) in frame.iter().enumerate() { per_send[index].push(*value); }
+                    for (index, value) in frame.iter().enumerate() {
+                        per_send[index].push(*value);
+                    }
                 }
             });
             if per_send[0].len() >= frames {
@@ -2910,11 +2970,13 @@ mod tests {
         }
         worker.stop();
         reader.drain_stamped(|read, samples| {
-                assert!(matches!(read, AudioStreamRead::Samples { .. }));
-                for frame in samples.chunks_exact(2) {
-                    for (index, value) in frame.iter().enumerate() { per_send[index].push(*value); }
+            assert!(matches!(read, AudioStreamRead::Samples { .. }));
+            for frame in samples.chunks_exact(2) {
+                for (index, value) in frame.iter().enumerate() {
+                    per_send[index].push(*value);
                 }
-            });
+            }
+        });
 
         assert!(
             per_send[0].len() >= frames - 64,
@@ -3256,16 +3318,26 @@ mod tests {
         let mut kicks = Vec::new();
         // Inside hop 4 (samples 3 * hop .. 4 * hop).
         a.queue_kick_fires([hop * 3 + 10]);
-        a.push_with_hops(&vec![0.0; hop as usize * 6], |h, _| kicks.push((h.end_sample, h.features.bands[1].kick)));
+        a.push_with_hops(&vec![0.0; hop as usize * 6], |h, _| {
+            kicks.push((h.end_sample, h.features.bands[1].kick))
+        });
         assert_eq!(kicks[2], (hop * 3, 0.0));
         assert_eq!(kicks[3], (hop * 4, 1.0));
         assert_eq!(kicks[4], (hop * 5, ONSET_DECAY));
         // A fire whose hop already passed lands on the next hop analysed.
         a.queue_kick_fires([hop * 2, hop * 5 + 1]);
         kicks.clear();
-        a.push_with_hops(&vec![0.0; hop as usize], |h, _| kicks.push((h.end_sample, h.features.bands[1].kick)));
+        a.push_with_hops(&vec![0.0; hop as usize], |h, _| {
+            kicks.push((h.end_sample, h.features.bands[1].kick))
+        });
         assert_eq!(kicks, [(hop * 7, 1.0)]);
-        assert!(a.latest().bands.iter().enumerate().all(|(b, f)| b == 1 || f.kick == 0.0));
+        assert!(
+            a.latest()
+                .bands
+                .iter()
+                .enumerate()
+                .all(|(b, f)| b == 1 || f.kick == 0.0)
+        );
     }
 
     #[test]
@@ -3274,12 +3346,20 @@ mod tests {
         let hop = a.hop() as u64;
         let mut snares = Vec::new();
         a.queue_snare_fires([hop * 3 + 10]);
-        a.push_with_hops(&vec![0.0; hop as usize * 6], |h, _| snares.push((h.end_sample, h.features.bands[2].snare)));
+        a.push_with_hops(&vec![0.0; hop as usize * 6], |h, _| {
+            snares.push((h.end_sample, h.features.bands[2].snare))
+        });
         assert_eq!(snares[2], (hop * 3, 0.0));
         assert_eq!(snares[3], (hop * 4, 1.0));
         assert_eq!(snares[4], (hop * 5, ONSET_DECAY));
         assert!(a.latest().bands.iter().all(|f| f.kick == 0.0));
-        assert!(a.latest().bands.iter().enumerate().all(|(b, f)| b == 2 || f.snare == 0.0));
+        assert!(
+            a.latest()
+                .bands
+                .iter()
+                .enumerate()
+                .all(|(b, f)| b == 2 || f.snare == 0.0)
+        );
     }
 
     // ── Salience (D1) — synthetic columns, no FFT ────────────────────────

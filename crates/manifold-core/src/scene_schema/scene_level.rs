@@ -26,10 +26,43 @@ pub static SCENE_LEVEL_ROWS: [PropertyRow; 14] = [
     row("output_width", INPUT, RenderMode, HOST),
     row("output_height", INPUT, RenderMode, HOST),
     row("trigger_baseline", INPUT, RenderMode, HOST),
-    row("objects", RENDER, RenderMode, Exposure::Automatic("the number of objects drawn")),
-    row("lights", RENDER, RenderMode, Exposure::Automatic("the number of lights")),
-    row("env_rotation", RENDER, RenderMode, Exposure::Automatic("the Environment's HDRI Rotation turns it")),
-    row("loop_cell_boxes", LOOP_CELL, RenderMode, Exposure::Automatic("one box for each object, copy group and swarm the Scene Loop tiles")).param("boxes"),
-    row("loop_cell_axis", LOOP_CELL, RenderMode, Exposure::Internal("the corridor runs along Z")).param("axis"),
-    row("loop_cell_gap", LOOP_CELL, RenderMode, Exposure::Automatic("the Scene Loop's Spacing")).param("gap"),
+    row(
+        "objects",
+        RENDER,
+        RenderMode,
+        Exposure::Automatic("the number of objects drawn"),
+    ),
+    row(
+        "lights",
+        RENDER,
+        RenderMode,
+        Exposure::Automatic("the number of lights"),
+    ),
+    row(
+        "env_rotation",
+        RENDER,
+        RenderMode,
+        Exposure::Automatic("the Environment's HDRI Rotation turns it"),
+    ),
+    row(
+        "loop_cell_boxes",
+        LOOP_CELL,
+        RenderMode,
+        Exposure::Automatic("one box for each object, copy group and swarm the Scene Loop tiles"),
+    )
+    .param("boxes"),
+    row(
+        "loop_cell_axis",
+        LOOP_CELL,
+        RenderMode,
+        Exposure::Internal("the corridor runs along Z"),
+    )
+    .param("axis"),
+    row(
+        "loop_cell_gap",
+        LOOP_CELL,
+        RenderMode,
+        Exposure::Automatic("the Scene Loop's Spacing"),
+    )
+    .param("gap"),
 ];

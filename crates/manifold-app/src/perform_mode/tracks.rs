@@ -21,7 +21,12 @@ pub(crate) fn plays_in_range(track: &TrackArrangement, range_start: f64, range_e
         return false;
     }
     // Tracks with "ignore" anywhere in the name are hidden from the HUD.
-    if track.name.as_bytes().windows(6).any(|w| w.eq_ignore_ascii_case(b"ignore")) {
+    if track
+        .name
+        .as_bytes()
+        .windows(6)
+        .any(|w| w.eq_ignore_ascii_case(b"ignore"))
+    {
         return false;
     }
     track

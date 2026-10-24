@@ -22,9 +22,13 @@ use manifold_gpu::{
     GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::{persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, exec::execution_plan::compile};
 use manifold_node_engine::gpu::render_target::RenderTarget;
-
+use manifold_node_engine::{
+    exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+    exec::execution_plan::ResourceId, exec::execution_plan::compile,
+    exec::metal_backend::MetalBackend, persistence::EffectGraphDefExt,
+    persistence::PrimitiveRegistry, state_store::StateStore,
+};
 
 /// The old thumbnail gradient fixture (R=u, G=v, B=(u+v)/2), reproduced
 /// here (test-only) rather than exporting a production helper just for this.
@@ -57,18 +61,27 @@ fn build_gradient_input(
         depth: 1,
         format,
         dimension: GpuTextureDimension::D2,
-        usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
+        usage: GpuTextureUsage::CPU_UPLOAD
+            | GpuTextureUsage::SHADER_READ
+            | GpuTextureUsage::COPY_SRC,
         label: "film-grain-decorrelation-gradient-input",
         mip_levels: 1,
     });
     let bytes = unsafe {
-        std::slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels.as_slice()))
+        std::slice::from_raw_parts(
+            pixels.as_ptr().cast::<u8>(),
+            std::mem::size_of_val(pixels.as_slice()),
+        )
     };
     device.upload_texture(&tex, bytes);
     RenderTarget::view_of(tex, "film-grain-decorrelation-gradient-input")
 }
 
-fn output_resource(plan: &manifold_node_engine::exec::execution_plan::ExecutionPlan, node: NodeInstanceId, port: &str) -> Option<ResourceId> {
+fn output_resource(
+    plan: &manifold_node_engine::exec::execution_plan::ExecutionPlan,
+    node: NodeInstanceId,
+    port: &str,
+) -> Option<ResourceId> {
     for step in plan.steps() {
         if step.node == node {
             for &(name, id) in &step.outputs {
@@ -100,8 +113,8 @@ fn render_film_grain_frame(w: u32, h: u32, frame_count: i64) -> FilmGrainFrame {
     let device = &h_ctx.device;
     let format = GpuTextureFormat::Rgba16Float;
 
-    let json_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("assets/effect-presets/FilmGrain.json");
+    let json_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/effect-presets/FilmGrain.json");
     let json = std::fs::read_to_string(&json_path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", json_path.display()));
     let def: EffectGraphDef =
@@ -109,18 +122,26 @@ fn render_film_grain_frame(w: u32, h: u32, frame_count: i64) -> FilmGrainFrame {
 
     let registry = PrimitiveRegistry::with_builtin();
     let mut graph = def
-        .into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
         .unwrap_or_else(|e| panic!("FilmGrain graph load failed: {e}"));
     let plan = compile(&graph).unwrap_or_else(|e| panic!("FilmGrain compile failed: {e:?}"));
 
     let source_id = graph
         .nodes()
-        .find(|n| n.node.type_id().as_str() == manifold_node_engine::scene::boundary_nodes::SOURCE_TYPE_ID)
+        .find(|n| {
+            n.node.type_id().as_str() == manifold_node_engine::scene::boundary_nodes::SOURCE_TYPE_ID
+        })
         .map(|n| n.id)
         .expect("FilmGrain has a system.source node");
     let final_id = graph
         .nodes()
-        .find(|n| n.node.type_id().as_str() == manifold_node_engine::scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID)
+        .find(|n| {
+            n.node.type_id().as_str()
+                == manifold_node_engine::scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID
+        })
         .map(|n| n.id)
         .expect("FilmGrain has a system.final_output node");
 
@@ -133,7 +154,8 @@ fn render_film_grain_frame(w: u32, h: u32, frame_count: i64) -> FilmGrainFrame {
         .map(|n| n.id)
         .expect("FilmGrain has a node.channel_mixer (grain_mono) node");
 
-    let source_out = output_resource(&plan, source_id, "out").expect("source has an `out` resource");
+    let source_out =
+        output_resource(&plan, source_id, "out").expect("source has an `out` resource");
     let final_in = plan
         .steps()
         .iter()
@@ -141,7 +163,8 @@ fn render_film_grain_frame(w: u32, h: u32, frame_count: i64) -> FilmGrainFrame {
         .and_then(|s| s.inputs.iter().find(|(n, _)| *n == "in"))
         .map(|(_, r)| *r)
         .expect("final_output has a bound `in`");
-    let grain_out = output_resource(&plan, grain_mono_id, "out").expect("grain_mono has an `out` resource");
+    let grain_out =
+        output_resource(&plan, grain_mono_id, "out").expect("grain_mono has an `out` resource");
 
     let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, format);
     let input_target = build_gradient_input(device, w, h, format);
@@ -160,7 +183,8 @@ fn render_film_grain_frame(w: u32, h: u32, frame_count: i64) -> FilmGrainFrame {
     } else if grain_out == final_in {
         output_slot
     } else {
-        let grain_target = RenderTarget::new(device, w, h, format, "film-grain-decorrelation-grain");
+        let grain_target =
+            RenderTarget::new(device, w, h, format, "film-grain-decorrelation-grain");
         backend.pre_bind_texture_2d(grain_out, grain_target)
     };
 
@@ -198,7 +222,12 @@ fn render_film_grain_frame(w: u32, h: u32, frame_count: i64) -> FilmGrainFrame {
     FilmGrainFrame { grain, composited }
 }
 
-fn readback_rgba_f32(device: &manifold_gpu::GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<[f32; 4]> {
+fn readback_rgba_f32(
+    device: &manifold_gpu::GpuDevice,
+    tex: &GpuTexture,
+    w: u32,
+    h: u32,
+) -> Vec<[f32; 4]> {
     let bytes_per_row = w * 8; // Rgba16Float = 8 bytes/pixel
     let total = u64::from(h * bytes_per_row);
     let buf = device.create_buffer_shared(total);
@@ -206,8 +235,11 @@ fn readback_rgba_f32(device: &manifold_gpu::GpuDevice, tex: &GpuTexture, w: u32,
     enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
     enc.commit_and_wait_completed();
 
-    let ptr = buf.mapped_ptr().expect("shared readback buffer must expose mapped pointer");
-    let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+    let ptr = buf
+        .mapped_ptr()
+        .expect("shared readback buffer must expose mapped pointer");
+    let halves: &[u16] =
+        unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
 
     halves
         .chunks_exact(4)
@@ -280,7 +312,9 @@ fn consecutive_frames_are_decorrelated_at_1080p_and_4k() {
         let luma_b: Vec<f32> = frame_b.grain.iter().map(luma).collect();
         let corr = pearson_correlation(&luma_a, &luma_b);
 
-        println!("[film_grain_decorrelation] {label}: frame 500 vs 501 grain-layer correlation = {corr:.4}");
+        println!(
+            "[film_grain_decorrelation] {label}: frame 500 vs 501 grain-layer correlation = {corr:.4}"
+        );
 
         assert!(
             corr.abs() < 0.15,
@@ -289,10 +323,26 @@ fn consecutive_frames_are_decorrelated_at_1080p_and_4k() {
         );
 
         if label == "4k" {
-            let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/gpu_proofs_out");
-            tonemap_and_save_png(&frame_a.composited, w, h, &out_dir.join("film_grain_4k_frame500.png"));
-            tonemap_and_save_png(&frame_b.composited, w, h, &out_dir.join("film_grain_4k_frame501.png"));
-            tonemap_and_save_png(&frame_a.grain, w, h, &out_dir.join("film_grain_4k_frame500_grain_only.png"));
+            let out_dir =
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/gpu_proofs_out");
+            tonemap_and_save_png(
+                &frame_a.composited,
+                w,
+                h,
+                &out_dir.join("film_grain_4k_frame500.png"),
+            );
+            tonemap_and_save_png(
+                &frame_b.composited,
+                w,
+                h,
+                &out_dir.join("film_grain_4k_frame501.png"),
+            );
+            tonemap_and_save_png(
+                &frame_a.grain,
+                w,
+                h,
+                &out_dir.join("film_grain_4k_frame500_grain_only.png"),
+            );
             println!(
                 "[film_grain_decorrelation] wrote {}",
                 out_dir.join("film_grain_4k_frame500.png").display()

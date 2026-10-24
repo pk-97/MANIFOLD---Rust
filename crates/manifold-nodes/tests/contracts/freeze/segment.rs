@@ -53,11 +53,17 @@ mod tests {
         // Boundaries: exactly one Source (card 0's) and one FinalOutput
         // (card 1's) survive.
         assert_eq!(
-            seg.nodes.iter().filter(|n| n.type_id == "system.source").count(),
+            seg.nodes
+                .iter()
+                .filter(|n| n.type_id == "system.source")
+                .count(),
             1
         );
         assert_eq!(
-            seg.nodes.iter().filter(|n| n.type_id == "system.final_output").count(),
+            seg.nodes
+                .iter()
+                .filter(|n| n.type_id == "system.final_output")
+                .count(),
             1
         );
 
@@ -69,7 +75,11 @@ mod tests {
                 .iter()
                 .map(|n| (n.id, n.node_id.as_str()))
                 .collect();
-            regions[0].members.iter().map(|m| by_doc[&m.doc_id]).collect()
+            regions[0]
+                .members
+                .iter()
+                .map(|m| by_doc[&m.doc_id])
+                .collect()
         };
         assert_eq!(
             member_ids,
@@ -77,10 +87,6 @@ mod tests {
             "the region spans both cards' atoms in chain order"
         );
     }
-
-
-
-
 
     /// BUG-009: a card holding a StateStore-backed scalar primitive
     /// (`compressor_envelope`, as shipped in AutoGain) is NOT segment-stateless.

@@ -48,23 +48,13 @@ fn perf_metrics_from_content_state(
     }
 }
 
-pub(crate) use crate::frame::present::format_scope_readout;
 pub(crate) use crate::frame::present::fmt_table_cell_seed;
+pub(crate) use crate::frame::present::format_scope_readout;
 
 pub(crate) use crate::editor_bridge::build_mapping_command;
-pub(crate) use crate::editor_bridge::seed_def_for_project;
 pub(crate) use crate::editor_bridge::resolve_canvas_binding;
+pub(crate) use crate::editor_bridge::seed_def_for_project;
 pub(crate) use crate::editor_bridge::serialized_value_as_f32;
-
-
-
-
-
-
-
-
-
-
 
 /// A node-face scrub session currently rerouted through a card binding's
 /// write-back path (`PARAM_TWO_WAY_BINDING_DESIGN.md` D1). Opened at the
@@ -102,7 +92,6 @@ mod unbound_node_param_drag;
 pub(crate) use unbound_node_param_drag::UnboundNodeParamDrag;
 
 impl Application {
-
     /// Take the newest state from the content thread: its export notice, its
     /// project snapshot and stamps, its modulation capture and spectrogram
     /// columns, then the state itself. The one reader of the handoff, for the
@@ -144,7 +133,9 @@ impl Application {
             // MappingRanges move alone never re-projects (D23).
             let moved = self.ui_edits.stamps.fold_snapshot(&state.stamps);
             let version_changed = state.data_version != self.content_state.data_version
-                || !moved.minus(manifold_core::change::ChangeSet::LIVE).is_empty();
+                || !moved
+                    .minus(manifold_core::change::ChangeSet::LIVE)
+                    .is_empty();
             // Only a different allocation is cloned (see `take_project_snapshot`);
             // modulation-only frames send the same Arc.
             let is_new_arc = crate::frame_plan::take_project_snapshot(
@@ -180,20 +171,20 @@ impl Application {
             // the selection drops references the edit removed.
             if version_changed {
                 // Prune selection references to deleted clips/layers
-                let valid_clips: std::collections::HashSet<manifold_core::ClipId> =
-                    self.local_project
-                        .timeline
-                        .layers
-                        .iter()
-                        .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
-                        .collect();
-                let valid_layers: std::collections::HashSet<manifold_core::LayerId> =
-                    self.local_project
-                        .timeline
-                        .layers
-                        .iter()
-                        .map(|l| l.layer_id.clone())
-                        .collect();
+                let valid_clips: std::collections::HashSet<manifold_core::ClipId> = self
+                    .local_project
+                    .timeline
+                    .layers
+                    .iter()
+                    .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
+                    .collect();
+                let valid_layers: std::collections::HashSet<manifold_core::LayerId> = self
+                    .local_project
+                    .timeline
+                    .layers
+                    .iter()
+                    .map(|l| l.layer_id.clone())
+                    .collect();
                 self.selection
                     .prune_stale_references(&valid_clips, &valid_layers);
 
@@ -212,9 +203,7 @@ impl Application {
         }
         // Apply lightweight modulation snapshot (param_values only)
         // to local_project — no full Project clone needed.
-        if !suppressed
-            && let Some(ref mod_snap) = state.modulation_snapshot
-        {
+        if !suppressed && let Some(ref mod_snap) = state.modulation_snapshot {
             mod_snap.apply(self.local_project.intake());
             // Restore the one actively-dragged gesture so modulation
             // doesn't overwrite the value the user is manipulating —
@@ -238,9 +227,9 @@ impl Application {
             );
         }
         self.content_state = ContentState {
-            project_snapshot: None,      // consumed above
-            modulation_snapshot: None,   // consumed above
-            spectrogram_columns: Vec::new(), // accumulated above
+            project_snapshot: None,              // consumed above
+            modulation_snapshot: None,           // consumed above
+            spectrogram_columns: Vec::new(),     // accumulated above
             spectrogram_col_scalars: Vec::new(), // accumulated above
             ..state
         };
@@ -275,9 +264,11 @@ impl Application {
 
         // The applied selection moves its own versions.
         crate::edit_selection::apply_update(
-            &mut self.ws.ui_root, &self.local_project,
+            &mut self.ws.ui_root,
+            &self.local_project,
             self.content_state.edit_selection_update.as_deref(),
-            &mut self.selection, &mut self.active_layer_id,
+            &mut self.selection,
+            &mut self.active_layer_id,
         );
 
         // 1a. Debounced background autosave (GIG_RESILIENCE_DESIGN section 6). Runs
@@ -305,7 +296,12 @@ impl Application {
         if self.show_crash_notice && self.frame_count >= 2 {
             self.show_crash_notice = false;
             let log_dir = std::env::var_os("HOME")
-                .map(|h| format!("{}/Library/Logs/com.latentspace.manifold", h.to_string_lossy()))
+                .map(|h| {
+                    format!(
+                        "{}/Library/Logs/com.latentspace.manifold",
+                        h.to_string_lossy()
+                    )
+                })
                 .unwrap_or_default();
             crate::alerts::info(
                 "MANIFOLD crashed last session",
@@ -320,10 +316,14 @@ impl Application {
         // finished peaks, and evict departed clips. The peaks are attached to
         // each ViewportClip on the next sync. See docs/AUDIO_LAYER_DESIGN.md.
         // The clip list is walked only when Clips or Layers moved (P4c).
-        let clips_key = self.ui_edits.stamps.parts().key(manifold_core::change::ChangeSet::of(&[
-            manifold_core::change::Part::Clips,
-            manifold_core::change::Part::Layers,
-        ]));
+        let clips_key = self
+            .ui_edits
+            .stamps
+            .parts()
+            .key(manifold_core::change::ChangeSet::of(&[
+                manifold_core::change::Part::Clips,
+                manifold_core::change::Part::Layers,
+            ]));
         let project = &self.local_project;
         let gather = || -> Vec<(manifold_core::id::ClipId, String)> {
             project
@@ -361,9 +361,11 @@ impl Application {
             .filter(|(_, h)| *h > 0)
             .map(|(w, h)| w as f32 / h as f32);
         let ui_snap = self.editor_ui_snapshot();
-        if let (Some(canvas), Some(ui_snap), Some(ed)) =
-            (self.graph_canvas.as_mut(), ui_snap, self.graph_editor.as_mut())
-        {
+        if let (Some(canvas), Some(ui_snap), Some(ed)) = (
+            self.graph_canvas.as_mut(),
+            ui_snap,
+            self.graph_editor.as_mut(),
+        ) {
             // The "Reset to Default" pill shows only when the watched graph
             // diverges from its bundled preset; keyed on its inputs.
             let has_mod = self.editor_graph.has_graph_mod(
@@ -560,8 +562,14 @@ impl Application {
         {
             let viewport_events = self.ws.ui_root.drain_viewport_events();
             if !viewport_events.is_empty() {
-                if viewport_events.iter().any(|event| matches!(event, manifold_ui::input::UIEvent::PointerDown { .. })) {
-                    crate::ui_bridge::sync_automation_lane_order(&self.local_project, &mut self.selection);
+                if viewport_events
+                    .iter()
+                    .any(|event| matches!(event, manifold_ui::input::UIEvent::PointerDown { .. }))
+                {
+                    crate::ui_bridge::sync_automation_lane_order(
+                        &self.local_project,
+                        &mut self.selection,
+                    );
                 }
                 // Sync modifier state to overlay (Unity reads Keyboard.current inline)
                 self.overlay.set_modifiers(self.modifiers);
@@ -577,18 +585,21 @@ impl Application {
                 for event in &viewport_events {
                     use manifold_ui::input::UIEvent;
                     if let UIEvent::PointerDown { modifiers, .. }
-                        | UIEvent::Click { modifiers, .. }
-                        | UIEvent::DoubleClick { modifiers, .. }
-                        | UIEvent::RightClick { modifiers, .. }
-                        | UIEvent::DragBegin { modifiers, .. }
-                        | UIEvent::Drag { modifiers, .. } = event
+                    | UIEvent::Click { modifiers, .. }
+                    | UIEvent::DoubleClick { modifiers, .. }
+                    | UIEvent::RightClick { modifiers, .. }
+                    | UIEvent::DragBegin { modifiers, .. }
+                    | UIEvent::Drag { modifiers, .. } = event
                     {
                         self.overlay.set_modifiers(*modifiers);
                     }
                     match event {
                         UIEvent::PointerDown { pos, .. } => {
                             self.overlay.on_pointer_down(
-                                *pos, &mut host, &mut self.selection, &self.ws.ui_root.viewport,
+                                *pos,
+                                &mut host,
+                                &mut self.selection,
+                                &self.ws.ui_root.viewport,
                             );
                         }
                         UIEvent::PointerUp { .. } => {
@@ -639,7 +650,10 @@ impl Application {
                             );
                             if self.overlay.is_automation_drag() {
                                 self.overlay.on_drag(
-                                    *pos, &mut host, &mut self.selection, &mut self.ws.ui_root.viewport,
+                                    *pos,
+                                    &mut host,
+                                    &mut self.selection,
+                                    &mut self.ws.ui_root.viewport,
                                 );
                             }
                         }
@@ -654,7 +668,10 @@ impl Application {
                         UIEvent::DragEnd { pos, .. } => {
                             if self.overlay.is_automation_drag() {
                                 self.overlay.on_drag(
-                                    *pos, &mut host, &mut self.selection, &mut self.ws.ui_root.viewport,
+                                    *pos,
+                                    &mut host,
+                                    &mut self.selection,
+                                    &mut self.ws.ui_root.viewport,
                                 );
                             }
                             self.overlay.on_end_drag(&mut host);
@@ -707,7 +724,9 @@ impl Application {
             {
                 continue;
             }
-            if self.dispatch_inspector_host_action(action, false) { continue; }
+            if self.dispatch_inspector_host_action(action, false) {
+                continue;
+            }
             if crate::text_session::begin_for_action(
                 &mut self.text_input,
                 &mut self.ws.ui_root,
@@ -795,11 +814,18 @@ impl Application {
                 }
                 PanelAction::Root(RootAction::SceneSetupCopyViewportCamera(layer_id, camera)) => {
                     let preview_view = self.ws.preview_navigation.camera_for(layer_id);
-                    let view = self.graph_editor.as_ref().and_then(|ws| crate::scene_view_copy::live_view(ws, layer_id)).or(preview_view);
+                    let view = self
+                        .graph_editor
+                        .as_ref()
+                        .and_then(|ws| crate::scene_view_copy::live_view(ws, layer_id))
+                        .or(preview_view);
                     if let Some(content_tx) = self.content_tx.as_ref() {
                         crate::scene_view_copy::run(
                             &mut self.local_project.edit(&mut self.ui_edits, content_tx),
-                            &mut self.ws.ui_root, layer_id, camera, view.as_ref(),
+                            &mut self.ws.ui_root,
+                            layer_id,
+                            camera,
+                            view.as_ref(),
                         );
                     }
                     if preview_view.is_some() {
@@ -807,10 +833,18 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::Root(RootAction::SceneResetPreviewView) => { self.end_preview_navigation(); continue; }
+                PanelAction::Root(RootAction::SceneResetPreviewView) => {
+                    self.end_preview_navigation();
+                    continue;
+                }
                 PanelAction::Root(RootAction::SceneDrawAgain(layer_id)) => {
                     if let Some(content_tx) = self.content_tx.as_ref() {
-                        crate::content_command::ContentCommand::send(content_tx, crate::content_command::ContentCommand::DrawLayerAgain(layer_id.clone()));
+                        crate::content_command::ContentCommand::send(
+                            content_tx,
+                            crate::content_command::ContentCommand::DrawLayerAgain(
+                                layer_id.clone(),
+                            ),
+                        );
                     }
                     continue;
                 }
@@ -897,7 +931,13 @@ impl Application {
                     beat,
                     value_norm,
                 )) => {
-                    crate::app::automation_point_input::begin_value(self, target, param_id, *beat, *value_norm);
+                    crate::app::automation_point_input::begin_value(
+                        self,
+                        target,
+                        param_id,
+                        *beat,
+                        *value_norm,
+                    );
                     continue;
                 }
                 PanelAction::Editing(EditingAction::AutomationPointEditTime(
@@ -906,14 +946,22 @@ impl Application {
                     beat,
                     value_norm,
                 )) => {
-                    crate::app::automation_point_input::begin_time(self, target, param_id, *beat, *value_norm);
+                    crate::app::automation_point_input::begin_time(
+                        self,
+                        target,
+                        param_id,
+                        *beat,
+                        *value_norm,
+                    );
                     continue;
                 }
                 PanelAction::Params(ParamsAction::GenStringParamDropdownClicked(sp_idx)) => {
                     // The font param opens the searchable font list: each
                     // name in its own font, opened on the current font.
                     let font_pick = self.ws.ui_root.inspector.gen_params().and_then(|gp| {
-                        let sp = gp.string_param(*sp_idx).filter(|sp| sp.key == "fontFamily")?;
+                        let sp = gp
+                            .string_param(*sp_idx)
+                            .filter(|sp| sp.key == "fontFamily")?;
                         let r = gp.string_param_rect(&self.ws.ui_root.tree, *sp_idx)?;
                         Some((sp.value.clone(), r))
                     });
@@ -922,7 +970,12 @@ impl Application {
                             manifold_nodes_image::text_rasterizer::TextRasterizer::available_font_families();
                         let actions = families
                             .iter()
-                            .map(|name| PanelAction::Params(ParamsAction::GenStringParamSelected(*sp_idx, name.clone())))
+                            .map(|name| {
+                                PanelAction::Params(ParamsAction::GenStringParamSelected(
+                                    *sp_idx,
+                                    name.clone(),
+                                ))
+                            })
                             .collect();
                         let list = manifold_ui::panels::browser_popup::ActionListOptions {
                             empty_label: "No fonts match",
@@ -931,7 +984,9 @@ impl Application {
                             ..Default::default()
                         };
                         let trigger = manifold_ui::node::Rect::new(r.x, r.y, r.width, r.height);
-                        self.ws.ui_root.open_action_list(families, actions, list, trigger);
+                        self.ws
+                            .ui_root
+                            .open_action_list(families, actions, list, trigger);
                         continue;
                     }
                     // Other string params open a plain dropdown.
@@ -945,8 +1000,9 @@ impl Application {
                             // projected onto the generator card by
                             // `attach_audio_sends`, so this reuses the same
                             // stable payload path as effect cards.
-                            let items: Vec<manifold_ui::panels::dropdown::DropdownItem> = if key == "audioSend" {
-                                sp.dropdown_choices
+                            let items: Vec<manifold_ui::panels::dropdown::DropdownItem> =
+                                if key == "audioSend" {
+                                    sp.dropdown_choices
                                     .iter()
                                     .map(|choice| {
                                         if choice.disabled {
@@ -966,9 +1022,9 @@ impl Application {
                                         }
                                     })
                                     .collect()
-                            } else {
-                                vec![]
-                            };
+                                } else {
+                                    vec![]
+                                };
                             if !items.is_empty() {
                                 let trigger =
                                     manifold_ui::node::Rect::new(r.x, r.y, r.width, r.height);
@@ -1049,7 +1105,12 @@ impl Application {
                 user_prefs: &mut self.user_prefs,
                 editor_target: None,
                 scrub: &mut self.scrub,
-                dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
+                dialogs: crate::file_dialogs::host(
+                    &self.window_registry,
+                    self.dialog_window_id,
+                    self.primary_window_id,
+                    self.current_project_path.as_deref(),
+                ),
             };
             let result = crate::ui_bridge::dispatch(action, &mut dctx);
             if let Some((kind, def, destination)) = result.begin_save_preset {
@@ -1092,8 +1153,12 @@ impl Application {
                 None => Vec::new(),
             };
             for (target, param_id, anchor_node_id) in mappings {
-                self.open_card_mapping(target, param_id, anchor_node_id,
-                    manifold_ui::graph_canvas::Rect::new(0.0, 0.0, screen_w, screen_h));
+                self.open_card_mapping(
+                    target,
+                    param_id,
+                    anchor_node_id,
+                    manifold_ui::graph_canvas::Rect::new(0.0, 0.0, screen_w, screen_h),
+                );
             }
             let outcome = match (self.graph_editor.as_mut(), self.content_tx.as_ref()) {
                 (Some(ed), Some(content_tx)) => crate::editor_input::dispatch_card_lane(
@@ -1106,7 +1171,12 @@ impl Application {
                         active_layer: &mut self.active_layer_id,
                         user_prefs: &mut self.user_prefs,
                         scrub: &mut self.scrub,
-                        dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
+                        dialogs: crate::file_dialogs::host(
+                            &self.window_registry,
+                            self.dialog_window_id,
+                            self.primary_window_id,
+                            self.current_project_path.as_deref(),
+                        ),
                     },
                     card_actions,
                 ),
@@ -1224,8 +1294,10 @@ impl Application {
                             }
                         })
                         .collect();
-                    let cat_names: Vec<String> =
-                        Category::ALL.iter().map(|c| c.label().to_string()).collect();
+                    let cat_names: Vec<String> = Category::ALL
+                        .iter()
+                        .map(|c| c.label().to_string())
+                        .collect();
 
                     if let Some(ed) = self.graph_editor.as_mut() {
                         ed.ui_root.browser_popup.set_screen_size(screen_w, screen_h);
@@ -1304,9 +1376,15 @@ impl Application {
                                 eid.clone(),
                             );
                         if matches!(eid, manifold_core::GraphTarget::SceneModifier { .. }) {
-                            let Some(id) = self.local_project.instance_preset_id(eid) else { continue; };
-                            let Some(def) = manifold_nodes::bundled_presets::bundled_preset_def(&id) else {
-                                log::error!("[preset] local modifier preset {id} is unavailable for revert");
+                            let Some(id) = self.local_project.instance_preset_id(eid) else {
+                                continue;
+                            };
+                            let Some(def) =
+                                manifold_nodes::bundled_presets::bundled_preset_def(&id)
+                            else {
+                                log::error!(
+                                    "[preset] local modifier preset {id} is unavailable for revert"
+                                );
                                 continue;
                             };
                             cmd = cmd.with_resolved_def(def.as_ref().clone());
@@ -1324,25 +1402,31 @@ impl Application {
                     // with the card's live slider values snapshotted in, same
                     // resolution `ui_bridge::inspector::preset_source_def`
                     // does for the card-menu path.
-                    if let Some(reason) = self.watched_graph_target.as_ref()
-                        .and_then(|target| crate::editor_bridge::scene_graph_save_refusal(&self.local_project, target))
-                    {
+                    if let Some(reason) = self.watched_graph_target.as_ref().and_then(|target| {
+                        crate::editor_bridge::scene_graph_save_refusal(&self.local_project, target)
+                    }) {
                         self.ws.ui_root.toast.show(reason.to_string());
                         continue;
                     }
-                    let destination = if matches!(cmd, manifold_ui::GraphEditCommand::SaveGraphToLibrary { .. }) {
+                    let destination = if matches!(
+                        cmd,
+                        manifold_ui::GraphEditCommand::SaveGraphToLibrary { .. }
+                    ) {
                         crate::text_input::SavePresetDestination::Library
                     } else {
                         crate::text_input::SavePresetDestination::Project
                     };
                     if let Some(target) = self.watched_graph_target.clone()
-                        && let Some((def, _)) = crate::ui_bridge::preset_source_def(&target, &self.local_project)
+                        && let Some((def, _)) =
+                            crate::ui_bridge::preset_source_def(&target, &self.local_project)
                     {
                         let kind = target.preset_kind();
                         self.text_input.begin(
                             crate::text_input::TextInputField::SavePresetName,
                             "",
-                            crate::text_input::AnchorRect::new(anchor.0, anchor.1, anchor.2, anchor.3),
+                            crate::text_input::AnchorRect::new(
+                                anchor.0, anchor.1, anchor.2, anchor.3,
+                            ),
                             11.0,
                         );
                         self.text_input.save_preset = Some(crate::text_input::SavePresetCtx {
@@ -1354,9 +1438,9 @@ impl Application {
                     continue;
                 }
                 manifold_ui::GraphEditCommand::PushGraphToLibrary { anchor } => {
-                    if let Some(reason) = self.watched_graph_target.as_ref()
-                        .and_then(|target| crate::editor_bridge::scene_graph_save_refusal(&self.local_project, target))
-                    {
+                    if let Some(reason) = self.watched_graph_target.as_ref().and_then(|target| {
+                        crate::editor_bridge::scene_graph_save_refusal(&self.local_project, target)
+                    }) {
                         self.ws.ui_root.toast.show(reason.to_string());
                         continue;
                     }
@@ -1366,7 +1450,8 @@ impl Application {
                     // diverged graph — no catalog-default fallback (there
                     // would be nothing meaningful to push).
                     if let Some(target) = self.watched_graph_target.clone()
-                        && let Some((def, preset_id)) = crate::ui_bridge::preset_source_def(&target, &self.local_project)
+                        && let Some((def, preset_id)) =
+                            crate::ui_bridge::preset_source_def(&target, &self.local_project)
                     {
                         let kind = target.preset_kind();
                         let lib = crate::user_library::UserLibrary::new();
@@ -1503,7 +1588,7 @@ impl Application {
                         // reroute. Step 3: unbound → existing path,
                         // unchanged.
                         let wired =
-                        self.watched_node_param_is_wired(&canvas_scope, *node_id, param_name);
+                            self.watched_node_param_is_wired(&canvas_scope, *node_id, param_name);
 
                         debug_assert!(
                             !wired,
@@ -1520,15 +1605,16 @@ impl Application {
                             let core_value =
                                 crate::ui_translate::serialized_param_value_to_core(new_value);
                             if let Some(gesture_value) = serialized_value_as_f32(&core_value)
-                                && let Some(card_value) = manifold_core::effects::invert_card_reshape(
-                                    gesture_value,
-                                    min,
-                                    max,
-                                    invert,
-                                    curve,
-                                    scale,
-                                    offset,
-                                )
+                                && let Some(card_value) =
+                                    manifold_core::effects::invert_card_reshape(
+                                        gesture_value,
+                                        min,
+                                        max,
+                                        invert,
+                                        curve,
+                                        scale,
+                                        offset,
+                                    )
                             {
                                 let is_new_session = !matches!(
                                     &self.scrub.active,
@@ -1574,14 +1660,16 @@ impl Application {
                                 if let Some(tx) = self.content_tx.as_ref() {
                                     let t = target.clone();
                                     let oid = outer_id.clone();
-                                    self.local_project.edit(&mut self.ui_edits, tx).gesture_move(
-                                        crate::content_command::touch::VALUES,
-                                        move |p| {
-                                            p.with_preset_graph_mut(&t, |inst| {
-                                                inst.set_base_param(&oid, card_value);
-                                            });
-                                        },
-                                    );
+                                    self.local_project
+                                        .edit(&mut self.ui_edits, tx)
+                                        .gesture_move(
+                                            crate::content_command::touch::VALUES,
+                                            move |p| {
+                                                p.with_preset_graph_mut(&t, |inst| {
+                                                    inst.set_base_param(&oid, card_value);
+                                                });
+                                            },
+                                        );
                                 }
                             }
                             // else: degenerate scale (D1 section 3) — read-only, no
@@ -1606,15 +1694,16 @@ impl Application {
                                     && d.scope_path == canvas_scope
                         );
                         if is_new_session {
-                            self.scrub.check_single_active_on_begin("unbound-node-param");
+                            self.scrub
+                                .check_single_active_on_begin("unbound-node-param");
                             let pre_drag_value = self.watched_current_node_param_value(
                                 &canvas_scope,
                                 *node_id,
                                 param_name,
                                 default,
                             );
-                            self.scrub.active = Some(
-                                crate::ui_bridge::scrub::ResolvedScrub::UnboundNodeParam(
+                            self.scrub.active =
+                                Some(crate::ui_bridge::scrub::ResolvedScrub::UnboundNodeParam(
                                     Box::new(UnboundNodeParamDrag::new(
                                         target.clone(),
                                         canvas_scope.clone(),
@@ -1624,8 +1713,7 @@ impl Application {
                                         pre_drag_value,
                                         core_value.clone(),
                                     )),
-                                ),
-                            );
+                                ));
                         }
                         let Some(crate::ui_bridge::scrub::ResolvedScrub::UnboundNodeParam(drag)) =
                             self.scrub.active.as_mut()
@@ -1643,15 +1731,19 @@ impl Application {
                         let touches = crate::content_command::touch::shapes_first_move(
                             is_new_session && graph_absent,
                         );
-                        self.send_content_cmd(ContentCommand::gesture_move(touches, Box::new(
-                            move |p| {
+                        self.send_content_cmd(ContentCommand::gesture_move(
+                            touches,
+                            Box::new(move |p| {
                                 live_cmd.execute(p);
-                            },
-                        )));
+                            }),
+                        ));
                     }
                     continue;
                 }
-                manifold_ui::GraphEditCommand::EndGraphNodeParamScrub { node_id, param_name } => {
+                manifold_ui::GraphEditCommand::EndGraphNodeParamScrub {
+                    node_id,
+                    param_name,
+                } => {
                     // Close out whichever node-param gesture `active` holds — a
                     // bound (D1) or unbound (BUG-282) session — with ONE
                     // undo-worthy command for the whole drag. A foreign gesture
@@ -1679,7 +1771,10 @@ impl Application {
                             // post-drag value `execute()`'s self-capture would
                             // otherwise see). No-op if the drag never touched this
                             // `(node_id, param_name)`, or never actually moved.
-                            if drag.node_id == *node_id && drag.param_name == *param_name && drag.moved() {
+                            if drag.node_id == *node_id
+                                && drag.param_name == *param_name
+                                && drag.moved()
+                            {
                                 let cmd = drag.into_command();
                                 self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                             }
@@ -1733,13 +1828,21 @@ impl Application {
                             user_prefs: &mut self.user_prefs,
                             editor_target,
                             scrub: &mut self.scrub,
-                            dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
+                            dialogs: crate::file_dialogs::host(
+                                &self.window_registry,
+                                self.dialog_window_id,
+                                self.primary_window_id,
+                                self.current_project_path.as_deref(),
+                            ),
                         };
                         let _ = crate::ui_bridge::dispatch(&action, &mut dctx);
                     }
                     continue;
                 }
-                manifold_ui::GraphEditCommand::BrowseGraphNodePath { node_id, param_name } => {
+                manifold_ui::GraphEditCommand::BrowseGraphNodePath {
+                    node_id,
+                    param_name,
+                } => {
                     // Blocking native picker — fine for authoring (same as preset
                     // import/export). `is_path_param` (graph_canvas/model.rs)
                     // groups "folder"/"path"/"file"/"dir" together to decide
@@ -1868,18 +1971,17 @@ impl Application {
                     self.text_input.begin(
                         crate::text_input::TextInputField::GraphNumericParam(*node_id),
                         &initial,
-                        crate::text_input::AnchorRect::new(
-                            anchor.0, anchor.1, anchor.2, anchor.3,
-                        ),
+                        crate::text_input::AnchorRect::new(anchor.0, anchor.1, anchor.2, anchor.3),
                         11.0,
                     );
-                    self.text_input.graph_numeric_param = Some(crate::text_input::GraphNumericParamCtx {
-                        param_name: param_name.clone(),
-                        min: *min,
-                        max: *max,
-                        whole_numbers: *whole_numbers,
-                        outer_param_id: outer_param_id.clone(),
-                    });
+                    self.text_input.graph_numeric_param =
+                        Some(crate::text_input::GraphNumericParamCtx {
+                            param_name: param_name.clone(),
+                            min: *min,
+                            max: *max,
+                            whole_numbers: *whole_numbers,
+                            outer_param_id: outer_param_id.clone(),
+                        });
                     continue;
                 }
                 manifold_ui::GraphEditCommand::EditGraphNodeTableCell {
@@ -2040,7 +2142,10 @@ impl Application {
         let automation_draw_mode = self.selection.automation_draw_mode;
         let inputs = crate::frame_plan::FrameInputs {
             gizmo_view: self.ws.preview_gizmo.version(),
-            preview_navigation: self.ws.preview_navigation.frame_input(&self.content_state.scene_viewport_frames),
+            preview_navigation: self
+                .ws
+                .preview_navigation
+                .frame_input(&self.content_state.scene_viewport_frames),
             ..crate::ui_frame::gather_frame_inputs(
                 &mut self.frame_planner,
                 &self.ws.ui_root,
@@ -2100,7 +2205,10 @@ impl Application {
                 let drag_mode = overlay.drag_mode();
                 if matches!(
                     drag_mode,
-                    DragMode::Move | DragMode::TrimLeft | DragMode::TrimRight | DragMode::RegionSelect
+                    DragMode::Move
+                        | DragMode::TrimLeft
+                        | DragMode::TrimRight
+                        | DragMode::RegionSelect
                 ) || InteractionOverlay::autoscrolls_at_edge(drag_mode)
                 {
                     let tx = content_tx.expect("content thread spawned before a drag");
@@ -2123,7 +2231,10 @@ impl Application {
                 }
                 ui_profile.add("process_events", seg_ref.elapsed());
                 *seg_ref = std::time::Instant::now();
-                matches!(overlay.drag_mode(), DragMode::Move | DragMode::TrimLeft | DragMode::TrimRight)
+                matches!(
+                    overlay.drag_mode(),
+                    DragMode::Move | DragMode::TrimLeft | DragMode::TrimRight
+                )
             },
         );
 
@@ -2157,9 +2268,7 @@ impl Application {
             if self.ws.ui_root.perf_hud.is_visible() {
                 self.ws.ui_root.perf_hud.set_metrics(metrics);
             }
-            if editor_perf_hud_visible
-                && let Some(ed) = self.graph_editor.as_mut()
-            {
+            if editor_perf_hud_visible && let Some(ed) = self.graph_editor.as_mut() {
                 ed.ui_root.perf_hud.set_metrics(metrics);
             }
         }
@@ -2196,7 +2305,9 @@ impl Application {
         // not the Audio Setup dock is. `dt` (BUG-109 P5) drives each meter's
         // UI-side peak-hold — the same frame delta `tick_and_render` already
         // computed at the top of this function.
-        self.ws.ui_root.update_fire_meters(&self.content_state.fire_meters, dt as f32);
+        self.ws
+            .ui_root
+            .update_fire_meters(&self.content_state.fire_meters, dt as f32);
 
         // 6·audio. Live per-send level meters in the Audio Setup modal — in-place
         // node resize from the latest content-state levels, no rebuild.
@@ -2210,7 +2321,11 @@ impl Application {
             // (1-frame stale is imperceptible); freq is geometric.
             let fmin = self.content_state.spectrogram_fmin;
             let fmax = self.content_state.spectrogram_fmax;
-            let freq_log_ratio = if fmin > 0.0 && fmax > fmin { (fmax / fmin).log2() } else { 0.0 };
+            let freq_log_ratio = if fmin > 0.0 && fmax > fmin {
+                (fmax / fmin).log2()
+            } else {
+                0.0
+            };
 
             // Feed the panel the current crossovers + range so it can hit-test the
             // band-divider lines for dragging.
@@ -2248,7 +2363,9 @@ impl Application {
                     format_scope_readout(freq, db)
                 })
             };
-            self.ws.ui_root.update_audio_scope_readout(readout.as_deref());
+            self.ws
+                .ui_root
+                .update_audio_scope_readout(readout.as_deref());
         }
 
         // 6·audio·scope. Push the scope's selected send to the content thread
@@ -2407,11 +2524,6 @@ impl Application {
         );
         self.frame_count += 1;
     }
-
-
-
-
-
 }
 
 /// Build the graph editor's bottom mini-timeline view-model from a project +
@@ -2426,7 +2538,14 @@ impl Application {
 #[derive(Default)]
 pub(crate) struct MiniTimelineCache {
     key: Option<(u64, i64, i64)>,
-    data: (Vec<manifold_ui::MiniClip>, Vec<manifold_ui::MiniLayerLabel>, usize, f32, f32, String),
+    data: (
+        Vec<manifold_ui::MiniClip>,
+        Vec<manifold_ui::MiniLayerLabel>,
+        usize,
+        f32,
+        f32,
+        String,
+    ),
 }
 
 impl MiniTimelineCache {
@@ -2435,12 +2554,23 @@ impl MiniTimelineCache {
         project: &manifold_core::project::Project,
         current_beat: f32,
         parts: &manifold_core::change::PartStamps,
-    ) -> &(Vec<manifold_ui::MiniClip>, Vec<manifold_ui::MiniLayerLabel>, usize, f32, f32, String) {
+    ) -> &(
+        Vec<manifold_ui::MiniClip>,
+        Vec<manifold_ui::MiniLayerLabel>,
+        usize,
+        f32,
+        f32,
+        String,
+    ) {
         use manifold_core::change::{ChangeSet, Part};
         let bpb = project.settings.time_signature_numerator.max(1) as f32;
         let bar = (current_beat / bpb).floor() as i64 + 1;
         let beat_in_bar = (current_beat - (bar - 1) as f32 * bpb).floor() as i64 + 1;
-        let key = (parts.key(ChangeSet::of(&[Part::Clips, Part::Layers, Part::Settings])), bar, beat_in_bar);
+        let key = (
+            parts.key(ChangeSet::of(&[Part::Clips, Part::Layers, Part::Settings])),
+            bar,
+            beat_in_bar,
+        );
         if self.key != Some(key) {
             self.key = Some(key);
             self.data = mini_timeline_data(project, current_beat);
@@ -2455,7 +2585,16 @@ impl MiniTimelineCache {
     }
 
     /// The strip as the last [`Self::get`] left it.
-    pub(crate) fn data(&self) -> &(Vec<manifold_ui::MiniClip>, Vec<manifold_ui::MiniLayerLabel>, usize, f32, f32, String) {
+    pub(crate) fn data(
+        &self,
+    ) -> &(
+        Vec<manifold_ui::MiniClip>,
+        Vec<manifold_ui::MiniLayerLabel>,
+        usize,
+        f32,
+        f32,
+        String,
+    ) {
         &self.data
     }
 }
@@ -2463,7 +2602,14 @@ impl MiniTimelineCache {
 pub(crate) fn mini_timeline_data(
     project: &manifold_core::project::Project,
     current_beat: f32,
-) -> (Vec<manifold_ui::MiniClip>, Vec<manifold_ui::MiniLayerLabel>, usize, f32, f32, String) {
+) -> (
+    Vec<manifold_ui::MiniClip>,
+    Vec<manifold_ui::MiniLayerLabel>,
+    usize,
+    f32,
+    f32,
+    String,
+) {
     let mut clips: Vec<manifold_ui::MiniClip> = Vec::new();
     let mut layer_labels: Vec<manifold_ui::MiniLayerLabel> = Vec::new();
     for (row, layer) in project.timeline.layers.iter().enumerate() {
@@ -2521,7 +2667,6 @@ pub(crate) fn mini_timeline_data(
     )
 }
 
-
 // ── Text input overlay rendering (free function to avoid borrow conflicts) ──
 
 /// Render the text input overlay using immediate-mode draw calls.
@@ -2578,31 +2723,23 @@ pub(crate) fn render_text_input_overlay(
             let i = manifold_ui::text_edit::line_of(&lines, caret);
             let cursor_x = g.text_x + width(&text[lines[i].start..caret]);
             let cursor_y = g.text_y + i as f32 * line_h;
-            ui.draw_rect(cursor_x, cursor_y, TEXT_INPUT_CURSOR_W, line_h, TEXT_INPUT_CURSOR);
+            ui.draw_rect(
+                cursor_x,
+                cursor_y,
+                TEXT_INPUT_CURSOR_W,
+                line_h,
+                TEXT_INPUT_CURSOR,
+            );
         }
     }
     ui.pop_immediate_clip();
 }
-
-
-
-
-
-
-
-
-
 
 // The `build_card_exposures` / `build_outer_driven_map` / `build_wire_driven_keys`
 // / `build_static_block_targets` joins that fed the deleted inner-node param
 // sidebar are gone: the canvas now derives exposed / wire-driven / outer-driven
 // state itself from the snapshot (see `GraphCanvas::apply_driven_state`), and the
 // per-node expose checkbox lives on the node face.
-
-
-
-
-
 
 /// BUG-281 regression. A card-bound graph-node-face scrub live-writes
 /// `local_project` every tick via `bound_node_param_drag` (the reroute arm
@@ -2721,7 +2858,11 @@ mod live_sim_hud_flow_tests {
         };
 
         for (expected_lag, expected_cap, expected_state) in [
-            ("sim behind by 125.0 ms", "step cap: WARNING — CAP HIT", "sim state: ERROR — SHOW RUNNING"),
+            (
+                "sim behind by 125.0 ms",
+                "step cap: WARNING — CAP HIT",
+                "sim state: ERROR — SHOW RUNNING",
+            ),
             ("sim behind by 250.0 ms", "step cap: OK", "sim state: OK"),
             ("sim behind by 250.0 ms", "step cap: OK", "sim state: OK"),
         ] {

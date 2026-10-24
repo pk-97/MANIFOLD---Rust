@@ -157,9 +157,14 @@ impl LiveClipManager {
             return true;
         }
         for idx in have.max(self.pending_layer_count)..need {
-            let layer = manifold_core::layer::Layer::new(format!("Layer {}", idx + 1), LayerType::Video, idx as i32);
-            self.pending_commands
-                .push(Box::new(manifold_editing::commands::layer::AddLayerCommand::from_layer(layer, idx)));
+            let layer = manifold_core::layer::Layer::new(
+                format!("Layer {}", idx + 1),
+                LayerType::Video,
+                idx as i32,
+            );
+            self.pending_commands.push(Box::new(
+                manifold_editing::commands::layer::AddLayerCommand::from_layer(layer, idx),
+            ));
         }
         self.pending_layer_count = self.pending_layer_count.max(need);
         self.dropped_note = true;
@@ -360,12 +365,7 @@ impl LiveClipManager {
 
     // ─── Activation ───
 
-    fn retain_completed_control(
-        &mut self,
-        layer_index: i32,
-        clip: &TimelineClip,
-        end_beat: Beats,
-    ) {
+    fn retain_completed_control(&mut self, layer_index: i32, clip: &TimelineClip, end_beat: Beats) {
         let duration_beats = end_beat - clip.start_beat;
         if !end_beat.0.is_finite()
             || !clip.start_beat.0.is_finite()
@@ -421,7 +421,12 @@ impl LiveClipManager {
 
     /// Internal activation without host stop callback (used by trigger methods
     /// that manage their own host interaction).
-    fn activate_live_slot_now(&mut self, layer_index: i32, clip: TimelineClip, current_beat: Beats) {
+    fn activate_live_slot_now(
+        &mut self,
+        layer_index: i32,
+        clip: TimelineClip,
+        current_beat: Beats,
+    ) {
         let mut noop = |_: &str| {};
         self.activate_live_slot_now_with_stop(layer_index, clip, current_beat, &mut noop);
     }
@@ -476,7 +481,9 @@ impl LiveClipManager {
             duration_beats,
             Seconds::from_f32(in_point),
         );
-        clip.layer_id = project.timeline.layers[layer_index as usize].layer_id.clone();
+        clip.layer_id = project.timeline.layers[layer_index as usize]
+            .layer_id
+            .clone();
         clip.recorded_bpm = host.get_bpm_at_beat(snap_beat);
 
         if event_absolute_tick >= 0 {
@@ -538,14 +545,15 @@ impl LiveClipManager {
             project.settings.time_signature_numerator,
         );
 
-        let mut clip = if project.timeline.layers[layer_index as usize].layer_type
-            == LayerType::Trigger
-        {
-            TimelineClip::new_trigger(snap_beat, duration_beats)
-        } else {
-            TimelineClip::new_generator(snap_beat, duration_beats)
-        };
-        clip.layer_id = project.timeline.layers[layer_index as usize].layer_id.clone();
+        let mut clip =
+            if project.timeline.layers[layer_index as usize].layer_type == LayerType::Trigger {
+                TimelineClip::new_trigger(snap_beat, duration_beats)
+            } else {
+                TimelineClip::new_generator(snap_beat, duration_beats)
+            };
+        clip.layer_id = project.timeline.layers[layer_index as usize]
+            .layer_id
+            .clone();
         clip.recorded_bpm = host.get_bpm_at_beat(snap_beat);
 
         if event_absolute_tick >= 0 {
@@ -1117,30 +1125,58 @@ mod tests {
 
     impl TestHost {
         fn new() -> Self {
-            Self { beat: Beats::ZERO, time: Seconds::ZERO, stopped: Vec::new() }
+            Self {
+                beat: Beats::ZERO,
+                time: Seconds::ZERO,
+                stopped: Vec::new(),
+            }
         }
     }
 
     impl LiveClipHost for TestHost {
-        fn current_beat(&self) -> Beats { self.beat }
-        fn current_time(&self) -> Seconds { self.time }
-        fn is_recording(&self) -> bool { false }
-        fn is_playing(&self) -> bool { true }
-        fn show_debug_logs(&self) -> bool { false }
-        fn get_bpm_at_beat(&self, _beat: Beats) -> f32 { 120.0 }
-        fn get_tempo_source_at_beat(&self, _beat: Beats) -> TempoPointSource { TempoPointSource::Unknown }
-        fn get_beat_snapped_beat(&self) -> Beats { self.beat }
-        fn get_current_absolute_tick(&self) -> i32 { -1 }
-        fn stop_clip(&mut self, clip_id: &str) { self.stopped.push(clip_id.to_owned()); }
+        fn current_beat(&self) -> Beats {
+            self.beat
+        }
+        fn current_time(&self) -> Seconds {
+            self.time
+        }
+        fn is_recording(&self) -> bool {
+            false
+        }
+        fn is_playing(&self) -> bool {
+            true
+        }
+        fn show_debug_logs(&self) -> bool {
+            false
+        }
+        fn get_bpm_at_beat(&self, _beat: Beats) -> f32 {
+            120.0
+        }
+        fn get_tempo_source_at_beat(&self, _beat: Beats) -> TempoPointSource {
+            TempoPointSource::Unknown
+        }
+        fn get_beat_snapped_beat(&self) -> Beats {
+            self.beat
+        }
+        fn get_current_absolute_tick(&self) -> i32 {
+            -1
+        }
+        fn stop_clip(&mut self, clip_id: &str) {
+            self.stopped.push(clip_id.to_owned());
+        }
         fn mark_compositor_dirty(&mut self) {}
         fn invalidate_lookahead_prewarm(&mut self) {}
         fn register_clip_lookup(&mut self, _clip_id: &str, _clip: &TimelineClip) {}
-        fn beat_to_timeline_time(&self, beat: Beats) -> Seconds { Seconds(beat.0 * 0.5) }
+        fn beat_to_timeline_time(&self, beat: Beats) -> Seconds {
+            Seconds(beat.0 * 0.5)
+        }
     }
 
     fn project() -> Project {
         let mut project = Project::default();
-        project.timeline.insert_layer(0, Layer::new("Live".into(), LayerType::Video, 0));
+        project
+            .timeline
+            .insert_layer(0, Layer::new("Live".into(), LayerType::Video, 0));
         project
     }
 
@@ -1161,7 +1197,10 @@ mod tests {
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].clip_id, clip.id);
         assert_eq!(refs[0].layer_index, 4);
-        assert_eq!(refs[0].clip_index, crate::scheduler::ActiveClipRef::LIVE_SLOT);
+        assert_eq!(
+            refs[0].clip_index,
+            crate::scheduler::ActiveClipRef::LIVE_SLOT
+        );
         assert_eq!(refs[0].layer_id, clip.layer_id);
         assert_eq!(refs[0].start_beat, Beats(2.0));
         assert_eq!(refs[0].duration_beats, Beats(0.375));
@@ -1176,11 +1215,18 @@ mod tests {
         let mut manager = LiveClipManager::new();
         project.settings.quantize_mode = QuantizeMode::Beat;
         let clip = manager
-            .trigger_live_content_clip(
-                &mut project, &host, 0, 4.0, None, -1, false, 1.0, 60,
-            )
+            .trigger_live_content_clip(&mut project, &host, 0, 4.0, None, -1, false, 1.0, 60)
             .unwrap();
-        manager.commit_live_clip(&mut project, &mut host, 0, Some(&clip.id), None, 30, 1.1, 60);
+        manager.commit_live_clip(
+            &mut project,
+            &mut host,
+            0,
+            Some(&clip.id),
+            None,
+            30,
+            1.1,
+            60,
+        );
         let mut refs = Vec::new();
         manager.drain_completed_controls(&mut refs);
         assert_eq!(refs.len(), 1);
@@ -1188,11 +1234,18 @@ mod tests {
         refs.clear();
 
         let clip = manager
-            .trigger_live_content_clip(
-                &mut project, &host, 0, 4.0, None, -1, false, 2.0, 60,
-            )
+            .trigger_live_content_clip(&mut project, &host, 0, 4.0, None, -1, false, 2.0, 60)
             .unwrap();
-        manager.commit_live_clip(&mut project, &mut host, 0, Some(&clip.id), None, -1, 2.001, 60);
+        manager.commit_live_clip(
+            &mut project,
+            &mut host,
+            0,
+            Some(&clip.id),
+            None,
+            -1,
+            2.001,
+            60,
+        );
         manager.drain_completed_controls(&mut refs);
         assert!(refs.is_empty());
     }
@@ -1203,15 +1256,11 @@ mod tests {
         let mut host = TestHost::new();
         let mut manager = LiveClipManager::new();
         let first = manager
-            .trigger_live_content_clip(
-                &mut project, &host, 0, 4.0, None, -1, false, 1.0, 60,
-            )
+            .trigger_live_content_clip(&mut project, &host, 0, 4.0, None, -1, false, 1.0, 60)
             .unwrap();
         host.beat = Beats(0.25);
         manager
-            .trigger_live_content_clip(
-                &mut project, &host, 0, 4.0, None, -1, false, 1.1, 60,
-            )
+            .trigger_live_content_clip(&mut project, &host, 0, 4.0, None, -1, false, 1.1, 60)
             .unwrap();
         let mut refs = Vec::new();
         manager.drain_completed_controls(&mut refs);
@@ -1222,9 +1271,14 @@ mod tests {
         host.beat = Beats(0.0);
         project.timeline.layers[0].source_clip_ids = vec!["source".into()];
         let mut manager = LiveClipManager::new();
-        let oneshot = manager.fire_layer_oneshot(&mut project, &host, 0, Beats(1.0), 0.0).unwrap();
+        let oneshot = manager
+            .fire_layer_oneshot(&mut project, &host, 0, Beats(1.0), 0.0)
+            .unwrap();
         assert!(manager.expire_due_oneshots(0.5).is_empty());
-        assert_eq!(manager.expire_due_oneshots(1.0), vec![(0, oneshot.id.clone())]);
+        assert_eq!(
+            manager.expire_due_oneshots(1.0),
+            vec![(0, oneshot.id.clone())]
+        );
         refs.clear();
         manager.drain_completed_controls(&mut refs);
         assert_eq!(refs.len(), 1);
@@ -1233,11 +1287,18 @@ mod tests {
         host.beat = Beats(2.0);
         let mut manager = LiveClipManager::new();
         let future = manager
-            .trigger_live_content_clip(
-                &mut project, &host, 0, 4.0, None, -1, false, 3.0, 60,
-            )
+            .trigger_live_content_clip(&mut project, &host, 0, 4.0, None, -1, false, 3.0, 60)
             .unwrap();
-        manager.commit_live_clip(&mut project, &mut host, 0, Some(&future.id), None, 0, 3.1, 60);
+        manager.commit_live_clip(
+            &mut project,
+            &mut host,
+            0,
+            Some(&future.id),
+            None,
+            0,
+            3.1,
+            60,
+        );
         refs.clear();
         manager.drain_completed_controls(&mut refs);
         assert!(refs.is_empty());
@@ -1266,13 +1327,7 @@ mod tests {
         let mut manager = LiveClipManager::new();
 
         let clip = manager
-            .fire_layer_oneshot(
-                &mut project,
-                &host,
-                trigger_index as i32,
-                Beats(1.0),
-                0.0,
-            )
+            .fire_layer_oneshot(&mut project, &host, trigger_index as i32, Beats(1.0), 0.0)
             .expect("trigger one-shot");
         assert_eq!(
             manager.expire_due_oneshots(2.5),

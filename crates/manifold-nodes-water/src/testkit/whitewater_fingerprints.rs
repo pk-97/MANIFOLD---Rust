@@ -23,19 +23,38 @@ const ID_LIMIT: u32 = 256;
 /// recorded run or the golden proves nothing about it. Compaction moving a
 /// survivor is not visible in the outputs alone: [`compaction_moves_a_survivor`]
 /// proves it on a constructed pool.
-pub const EVENTS: [&str; 6] = ["spawn candidate", "spawn placed", "removal", "capacity overflow", "id wrap", "dust spawn"];
+pub const EVENTS: [&str; 6] = [
+    "spawn candidate",
+    "spawn placed",
+    "removal",
+    "capacity overflow",
+    "id wrap",
+    "dust spawn",
+];
 
 fn fnv(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    })
 }
 fn words(bytes: &[u8]) -> Vec<u32> {
-    bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    bytes
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
 }
 /// One fixture's fingerprint lines and the first tick each event was seen.
-pub fn run(label: &str, def: EffectGraphDef, lines: &mut Vec<String>) -> [Option<u32>; EVENTS.len()] {
+pub fn run(
+    label: &str,
+    def: EffectGraphDef,
+    lines: &mut Vec<String>,
+) -> [Option<u32>; EVENTS.len()] {
     let mut show = Show::new(def, (96, 54), true, &[]);
     show.restart();
-    assert!(!show.warmup_pending(), "{label}: warmup did not finish inside its frame bound");
+    assert!(
+        !show.warmup_pending(),
+        "{label}: warmup did not finish inside its frame bound"
+    );
     let mut seen = [None; EVENTS.len()];
     let mut previous: Option<(Vec<u32>, Vec<u32>)> = None;
     let accepted = |show: &Show| {
@@ -53,24 +72,41 @@ pub fn run(label: &str, def: EffectGraphDef, lines: &mut Vec<String>) -> [Option
     while tick < TICKS {
         show.frame(false);
         frames += 1;
-        assert!(frames <= 2 * TICKS, "{label}: {tick} ticks in {frames} frames; dues {dues:?}");
+        assert!(
+            frames <= 2 * TICKS,
+            "{label}: {tick} ticks in {frames} frames; dues {dues:?}"
+        );
         // At most one tick per frame, so the captures are that tick's and no
         // earlier tick of the frame goes unseen. A frame with no tick due
         // publishes nothing new and is not a tick.
         let [due, dropped] = show.probes(["ticks", "dropped_seconds"]);
         dues.push(due);
-        assert!(due == 0.0 || due == 1.0, "{label}: frame {frames} ran {due} ticks; dues {dues:?}");
-        assert_eq!(dropped, 0.0, "{label}: frame {frames} dropped simulation time");
+        assert!(
+            due == 0.0 || due == 1.0,
+            "{label}: frame {frames} ran {due} ticks; dues {dues:?}"
+        );
+        assert_eq!(
+            dropped, 0.0,
+            "{label}: frame {frames} dropped simulation time"
+        );
         // The clock accepted exactly the ticks it scheduled, in one epoch.
         let (epoch, step) = accepted(&show);
         if frames == 1 {
             let [time] = show.probes(["simulation_time"]);
-            assert_eq!(epoch, was_epoch + 1.0, "{label}: frame 1 is not the rewind's restart");
+            assert_eq!(
+                epoch,
+                was_epoch + 1.0,
+                "{label}: frame 1 is not the rewind's restart"
+            );
             assert_eq!(due, 0.0, "{label}: the rewind's restart ran a tick");
             assert_eq!(time, 0.0, "{label}: the rewind's restart accepted time");
         } else {
             assert_eq!(epoch, was_epoch, "{label}: frame {frames} changed epoch");
-            assert_eq!(step, was_step + due as i64, "{label}: frame {frames} clock at tick {step}, was {was_step}, due {due}");
+            assert_eq!(
+                step,
+                was_step + due as i64,
+                "{label}: frame {frames} clock at tick {step}, was {was_step}, due {due}"
+            );
         }
         (was_epoch, was_step) = (epoch, step);
         if due == 0.0 {
@@ -79,12 +115,26 @@ pub fn run(label: &str, def: EffectGraphDef, lines: &mut Vec<String>) -> [Option
         tick += 1;
         // The stage's own outputs, which the boundary's captures must equal
         // whole: a skipped or truncated capture fails here.
-        let bytes: Vec<Vec<u8>> = PORTS.iter().map(|(port, _)| show.provided_all_bytes(WHITEWATER, port)).collect();
+        let bytes: Vec<Vec<u8>> = PORTS
+            .iter()
+            .map(|(port, _)| show.provided_all_bytes(WHITEWATER, port))
+            .collect();
         for ((port, capture), stage) in PORTS.iter().zip(&bytes) {
             let captured = show.provided_all_bytes(BOUNDARY, capture);
-            assert_eq!(stage.len(), captured.len(), "{label} tick {tick}: {port} and its capture differ in length");
-            assert!(*stage == captured, "{label} tick {tick}: {port} and its capture differ");
-            lines.push(format!("{label} tick {tick} {port} {} {:016x}", stage.len(), fnv(stage)));
+            assert_eq!(
+                stage.len(),
+                captured.len(),
+                "{label} tick {tick}: {port} and its capture differ in length"
+            );
+            assert!(
+                *stage == captured,
+                "{label} tick {tick}: {port} and its capture differ"
+            );
+            lines.push(format!(
+                "{label} tick {tick} {port} {} {:016x}",
+                stage.len(),
+                fnv(stage)
+            ));
         }
         let state = words(&bytes[1])[..8].to_vec();
         let counts = words(&bytes[2])[..9].to_vec();

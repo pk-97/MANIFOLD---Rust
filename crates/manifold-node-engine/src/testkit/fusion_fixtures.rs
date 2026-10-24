@@ -13,9 +13,9 @@ use std::sync::OnceLock;
 use crate::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
 use crate::freeze::classify::{BoundaryReason, FusionKind, InputAccess};
 use crate::parameters::{ParamDef, ParamType, ParamValue};
+use crate::particles::Particle;
 use crate::persistence::PrimitiveRegistry;
 use crate::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
-use crate::particles::Particle;
 use crate::primitive::{Primitive, PrimitiveSpec};
 
 const INPUTS: &[NodeInput] = &[NodePort {
@@ -44,18 +44,21 @@ const NO_PARAMS: &[ParamDef] = &[];
 /// parameter name stable makes install-time retarget assertions independent
 /// of a production catalog node's parameter naming.
 const POINTWISE_BODY: &str = "fn body(c_in: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, gain: f32) -> vec4<f32> { return c_in * gain; }";
-const SOURCE_BODY: &str = "fn body(uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> { return vec4<f32>(uv, 0.0, 1.0); }";
+const SOURCE_BODY: &str =
+    "fn body(uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> { return vec4<f32>(uv, 0.0, 1.0); }";
 
 pub struct TestFusionMap;
 
 impl PrimitiveSpec for TestFusionMap {
     const TYPE_ID: &'static str = "test.fusion_map";
-    const PURPOSE: &'static str = "TEST FIXTURE ONLY — scalar pointwise texture map for freeze mechanics.";
+    const PURPOSE: &'static str =
+        "TEST FIXTURE ONLY — scalar pointwise texture map for freeze mechanics.";
     const INPUTS: &'static [NodeInput] = INPUTS;
     const OUTPUTS: &'static [NodeOutput] = OUTPUTS;
     const PARAMS: &'static [ParamDef] = PARAMS;
     const FUSION_KIND: FusionKind = FusionKind::Pointwise;
-    const DEPTH_RULE: crate::scene::depth_rule::DepthRule = crate::scene::depth_rule::DepthRule::Inherit;
+    const DEPTH_RULE: crate::scene::depth_rule::DepthRule =
+        crate::scene::depth_rule::DepthRule::Inherit;
     const WGSL_BODY: Option<&'static str> = Some(POINTWISE_BODY);
 
     fn cached_type_id() -> &'static EffectNodeType {
@@ -72,13 +75,15 @@ pub struct TestFusionBoundary;
 
 impl PrimitiveSpec for TestFusionBoundary {
     const TYPE_ID: &'static str = "test.fusion_boundary";
-    const PURPOSE: &'static str = "TEST FIXTURE ONLY — scalar texture boundary for freeze mechanics.";
+    const PURPOSE: &'static str =
+        "TEST FIXTURE ONLY — scalar texture boundary for freeze mechanics.";
     const INPUTS: &'static [NodeInput] = INPUTS;
     const OUTPUTS: &'static [NodeOutput] = OUTPUTS;
     const PARAMS: &'static [ParamDef] = NO_PARAMS;
     const FUSION_KIND: FusionKind = FusionKind::Boundary;
     const BOUNDARY_REASON: Option<BoundaryReason> = Some(BoundaryReason::Blocked);
-    const DEPTH_RULE: crate::scene::depth_rule::DepthRule = crate::scene::depth_rule::DepthRule::Inherit;
+    const DEPTH_RULE: crate::scene::depth_rule::DepthRule =
+        crate::scene::depth_rule::DepthRule::Inherit;
 
     fn cached_type_id() -> &'static EffectNodeType {
         static CELL: OnceLock<EffectNodeType> = OnceLock::new();
@@ -99,7 +104,8 @@ impl PrimitiveSpec for TestFusionSource {
     const OUTPUTS: &'static [NodeOutput] = OUTPUTS;
     const PARAMS: &'static [ParamDef] = NO_PARAMS;
     const FUSION_KIND: FusionKind = FusionKind::Source;
-    const DEPTH_RULE: crate::scene::depth_rule::DepthRule = crate::scene::depth_rule::DepthRule::Inherit;
+    const DEPTH_RULE: crate::scene::depth_rule::DepthRule =
+        crate::scene::depth_rule::DepthRule::Inherit;
     const WGSL_BODY: Option<&'static str> = Some(SOURCE_BODY);
 
     fn cached_type_id() -> &'static EffectNodeType {
@@ -116,15 +122,19 @@ pub struct TestFusionGather;
 
 impl PrimitiveSpec for TestFusionGather {
     const TYPE_ID: &'static str = "test.fusion_gather";
-    const PURPOSE: &'static str = "TEST FIXTURE ONLY — scalar texture gather seam for freeze mechanics.";
+    const PURPOSE: &'static str =
+        "TEST FIXTURE ONLY — scalar texture gather seam for freeze mechanics.";
     const INPUTS: &'static [NodeInput] = INPUTS;
     const OUTPUTS: &'static [NodeOutput] = OUTPUTS;
     const PARAMS: &'static [ParamDef] = PARAMS;
     const FUSION_KIND: FusionKind = FusionKind::Pointwise;
     const INPUT_ACCESS: &'static [InputAccess] = &[InputAccess::Gather];
     const STENCIL_FETCH: bool = false;
-    const DEPTH_RULE: crate::scene::depth_rule::DepthRule = crate::scene::depth_rule::DepthRule::Inherit;
-    const WGSL_BODY: Option<&'static str> = Some("fn body(tex_in: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, gain: f32) -> vec4<f32> { return textureSampleLevel(tex_in, samp, uv, 0.0) * gain; }");
+    const DEPTH_RULE: crate::scene::depth_rule::DepthRule =
+        crate::scene::depth_rule::DepthRule::Inherit;
+    const WGSL_BODY: Option<&'static str> = Some(
+        "fn body(tex_in: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, gain: f32) -> vec4<f32> { return textureSampleLevel(tex_in, samp, uv, 0.0) * gain; }",
+    );
 
     fn cached_type_id() -> &'static EffectNodeType {
         static CELL: OnceLock<EffectNodeType> = OnceLock::new();
@@ -151,16 +161,30 @@ pub struct TestFusionJoin;
 
 impl PrimitiveSpec for TestFusionJoin {
     const TYPE_ID: &'static str = "test.fusion_join";
-    const PURPOSE: &'static str = "TEST FIXTURE ONLY — two-input coincident texture join for freeze mechanics.";
+    const PURPOSE: &'static str =
+        "TEST FIXTURE ONLY — two-input coincident texture join for freeze mechanics.";
     const INPUTS: &'static [NodeInput] = &[
-        NodePort { name: Cow::Borrowed("a"), ty: PortType::Texture2D, kind: PortKind::Input, required: true },
-        NodePort { name: Cow::Borrowed("b"), ty: PortType::Texture2D, kind: PortKind::Input, required: true },
+        NodePort {
+            name: Cow::Borrowed("a"),
+            ty: PortType::Texture2D,
+            kind: PortKind::Input,
+            required: true,
+        },
+        NodePort {
+            name: Cow::Borrowed("b"),
+            ty: PortType::Texture2D,
+            kind: PortKind::Input,
+            required: true,
+        },
     ];
     const OUTPUTS: &'static [NodeOutput] = OUTPUTS;
     const PARAMS: &'static [ParamDef] = NO_PARAMS;
     const FUSION_KIND: FusionKind = FusionKind::MultiInputCoincident;
-    const DEPTH_RULE: crate::scene::depth_rule::DepthRule = crate::scene::depth_rule::DepthRule::Inherit;
-    const WGSL_BODY: Option<&'static str> = Some("fn body(c_a: vec4<f32>, c_b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> { return (c_a + c_b) * 0.5; }");
+    const DEPTH_RULE: crate::scene::depth_rule::DepthRule =
+        crate::scene::depth_rule::DepthRule::Inherit;
+    const WGSL_BODY: Option<&'static str> = Some(
+        "fn body(c_a: vec4<f32>, c_b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> { return (c_a + c_b) * 0.5; }",
+    );
 
     fn cached_type_id() -> &'static EffectNodeType {
         static CELL: OnceLock<EffectNodeType> = OnceLock::new();
@@ -188,30 +212,48 @@ impl EffectNode for TestParticleMap {
         INPUTS.get_or_init(|| {
             let particles = PortType::Array(ArrayType::of_known::<Particle>());
             vec![
-                NodePort { name: Cow::Borrowed("in"), ty: particles, kind: PortKind::Input, required: true },
-                NodePort { name: Cow::Borrowed("forces"), ty: particles, kind: PortKind::Input, required: true },
+                NodePort {
+                    name: Cow::Borrowed("in"),
+                    ty: particles,
+                    kind: PortKind::Input,
+                    required: true,
+                },
+                NodePort {
+                    name: Cow::Borrowed("forces"),
+                    ty: particles,
+                    kind: PortKind::Input,
+                    required: true,
+                },
             ]
         })
     }
 
     fn outputs(&self) -> &[NodeOutput] {
         static OUTPUTS: OnceLock<Vec<NodeOutput>> = OnceLock::new();
-        OUTPUTS.get_or_init(|| vec![NodePort {
-            name: Cow::Borrowed("out"),
-            ty: PortType::Array(ArrayType::of_known::<Particle>()),
-            kind: PortKind::Output,
-            required: false,
-        }])
+        OUTPUTS.get_or_init(|| {
+            vec![NodePort {
+                name: Cow::Borrowed("out"),
+                ty: PortType::Array(ArrayType::of_known::<Particle>()),
+                kind: PortKind::Output,
+                required: false,
+            }]
+        })
     }
 
-    fn parameters(&self) -> &[ParamDef] { &[] }
+    fn parameters(&self) -> &[ParamDef] {
+        &[]
+    }
 
     fn evaluate(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
 
-    fn fusion_kind(&self) -> FusionKind { FusionKind::Pointwise }
+    fn fusion_kind(&self) -> FusionKind {
+        FusionKind::Pointwise
+    }
 
     fn wgsl_body(&self) -> Option<&'static str> {
-        Some("fn body(idx: u32, count: u32, e_in: Element, e_forces: Element) -> Element { return e_in; }")
+        Some(
+            "fn body(idx: u32, count: u32, e_in: Element, e_forces: Element) -> Element { return e_in; }",
+        )
     }
 
     fn array_output_capacity(
@@ -220,13 +262,15 @@ impl EffectNode for TestParticleMap {
         _params: &ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
-        (port_name == "out").then(|| {
-            input_capacities
-                .iter()
-                .filter(|(name, _)| *name == "in" || *name == "forces")
-                .map(|(_, n)| *n)
-                .min()
-        }).flatten()
+        (port_name == "out")
+            .then(|| {
+                input_capacities
+                    .iter()
+                    .filter(|(name, _)| *name == "in" || *name == "forces")
+                    .map(|(_, n)| *n)
+                    .min()
+            })
+            .flatten()
     }
 
     fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {

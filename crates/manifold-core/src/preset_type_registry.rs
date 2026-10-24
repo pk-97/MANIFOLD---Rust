@@ -157,7 +157,12 @@ pub fn all() -> Vec<PresetTypeRegistration> {
 
 /// All registered types of a given kind, in registry order.
 pub fn all_of_kind(kind: PresetKind) -> Vec<PresetTypeRegistration> {
-    REGISTRY.load().iter().filter(|r| r.kind == kind).cloned().collect()
+    REGISTRY
+        .load()
+        .iter()
+        .filter(|r| r.kind == kind)
+        .cloned()
+        .collect()
 }
 
 /// Display name for a preset type. The generator `None` sentinel → "None";
@@ -237,7 +242,10 @@ mod tests {
     #[test]
     fn rebuild_swaps_in_new_entries_and_drops_stale_ones() {
         let id = PresetTypeId::from_string("__preset_type_registry_test_probe__".to_string());
-        assert!(!is_registered(&id), "probe id must not pre-exist in the real registry");
+        assert!(
+            !is_registered(&id),
+            "probe id must not pre-exist in the real registry"
+        );
 
         rebuild(&[probe_meta(id.as_str(), "Probe")], &[]);
         assert!(

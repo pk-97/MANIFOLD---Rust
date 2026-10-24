@@ -1,12 +1,12 @@
 //! Clip-triggered decay envelope modulation (`ParamEnvelope`). Extracted
 //! from effects.rs (P2-E, design D4).
 
-use std::borrow::Cow;
-use serde::{Deserialize, Serialize};
-use crate::audio_mod::TriggerAction;
-use crate::units::Beats;
 use super::ParamId;
 use super::{default_one, default_true};
+use crate::audio_mod::TriggerAction;
+use crate::units::Beats;
+use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 // ─── Param Envelope (triggered decay modulation) ───
 
@@ -304,15 +304,24 @@ mod tests {
     #[test]
     fn envelope_action_round_trips_step_and_random() {
         for action in [
-            TriggerAction::Step { amount: 2.0, wrap: WrapMode::Bounce },
+            TriggerAction::Step {
+                amount: 2.0,
+                wrap: WrapMode::Bounce,
+            },
             TriggerAction::Random,
         ] {
             let mut env = ParamEnvelope::new("amount");
             env.action = action;
             let json = serde_json::to_string(&env).unwrap();
-            assert!(json.contains("\"action\""), "non-Continuous action must serialize; got: {json}");
+            assert!(
+                json.contains("\"action\""),
+                "non-Continuous action must serialize; got: {json}"
+            );
             let back: ParamEnvelope = serde_json::from_str(&json).unwrap();
-            assert_eq!(back.action, action, "action round-trip failed for {action:?}");
+            assert_eq!(
+                back.action, action,
+                "action round-trip failed for {action:?}"
+            );
             // Runtime-only stepping state must never round-trip.
             assert_eq!(back.step_value, None);
             assert_eq!(back.step_dir, 1.0);
@@ -333,5 +342,4 @@ mod tests {
         assert!((e.target_normalized - 0.8).abs() < 1e-6);
         assert!((e.decay_beats - 0.5).abs() < 1e-6);
     }
-
 }

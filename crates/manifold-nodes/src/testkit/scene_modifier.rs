@@ -1,13 +1,13 @@
 //! Shared test wiring for authored v3 scene-modifier recipes.
 
+use crate::bundled_presets::bundled_preset_def;
+use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::effect_graph_def::EffectGraphNode;
 use manifold_core::preset_type_id::PresetTypeId;
 use manifold_core::scene_modifier_preset::SceneTargetSelection;
-use manifold_core::NodeId;
 use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
 use manifold_nodes_scene::node_graph::scene_modifier_authoring::scene_modifier_objects;
-use crate::bundled_presets::bundled_preset_def;
 
 pub fn stock_recipe(name: &str) -> EffectGraphDef {
     bundled_preset_def(&PresetTypeId::from_string(name.to_string()))
@@ -25,11 +25,7 @@ pub fn render_scene(owner: &EffectGraphDef) -> NodeId {
     node.node_id.clone()
 }
 
-pub fn attach(
-    owner: &EffectGraphDef,
-    recipe_name: &str,
-    instance_id: &str,
-) -> EffectGraphDef {
+pub fn attach(owner: &EffectGraphDef, recipe_name: &str, instance_id: &str) -> EffectGraphDef {
     let instance = prepare_new_scene_modifier(
         owner,
         &stock_recipe(recipe_name),
@@ -38,13 +34,13 @@ pub fn attach(
         SceneTargetSelection::AllObjects,
     )
     .unwrap_or_else(|error| panic!("{recipe_name} preparation failed: {error}"));
-    manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(owner, instance)
+    manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(
+        owner, instance,
+    )
     .unwrap_or_else(|error| panic!("{recipe_name} insertion failed: {error}"))
 }
 
-pub fn scene_objects(
-    owner: &EffectGraphDef,
-) -> Vec<manifold_core::NodeId> {
+pub fn scene_objects(owner: &EffectGraphDef) -> Vec<manifold_core::NodeId> {
     scene_modifier_objects(owner, &render_scene(owner))
         .unwrap_or_else(|error| panic!("scene object enumeration failed: {error}"))
 }

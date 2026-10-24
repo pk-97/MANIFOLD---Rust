@@ -18,8 +18,8 @@
 
 use super::*;
 use crate::panels::copy_to_clipboard_label::CopyToClipboardLabelState;
-use crate::param_surface::{ColourGroup, ParamRow, RowIndex, RowRole, RowSpec};
 use crate::panels::scrub::ScrubGesture;
+use crate::param_surface::{ColourGroup, ParamRow, RowIndex, RowRole, RowSpec};
 use crate::slider::TrackSpan;
 use crate::{ModulationAction, ParamsAction};
 
@@ -55,16 +55,27 @@ struct RowDrag {
     last_pos: Vec2,
 }
 
-fn set_audio_shape_value(state: &mut ParamModState, row: usize, which: AudioShapeParam, value: f32) {
+fn set_audio_shape_value(
+    state: &mut ParamModState,
+    row: usize,
+    which: AudioShapeParam,
+    value: f32,
+) {
     match which {
         AudioShapeParam::Sensitivity => {
-            if let Some(slot) = state.audio_rows.get_mut(row) { slot.sensitivity = value; }
+            if let Some(slot) = state.audio_rows.get_mut(row) {
+                slot.sensitivity = value;
+            }
         }
         AudioShapeParam::Attack => {
-            if let Some(slot) = state.audio_rows.get_mut(row) { slot.attack_ms = value; }
+            if let Some(slot) = state.audio_rows.get_mut(row) {
+                slot.attack_ms = value;
+            }
         }
         AudioShapeParam::Release => {
-            if let Some(slot) = state.audio_rows.get_mut(row) { slot.release_ms = value; }
+            if let Some(slot) = state.audio_rows.get_mut(row) {
+                slot.release_ms = value;
+            }
         }
     }
 }
@@ -93,8 +104,16 @@ fn current_trim_range(ctx: &RowInteraction<'_>, row: usize, kind: TrimKind) -> O
         )),
         TrimKind::Ableton => ctx.rows.get(row).and_then(|r| r.mapping.ableton_range),
         TrimKind::Audio => Some((
-            ctx.modulation.audio_rows.get(row).map(|r| r.range_min).unwrap_or(0.0),
-            ctx.modulation.audio_rows.get(row).map(|r| r.range_max).unwrap_or(1.0),
+            ctx.modulation
+                .audio_rows
+                .get(row)
+                .map(|r| r.range_min)
+                .unwrap_or(0.0),
+            ctx.modulation
+                .audio_rows
+                .get(row)
+                .map(|r| r.range_max)
+                .unwrap_or(1.0),
         )),
     }
 }
@@ -257,7 +276,6 @@ impl RowHost {
         self.swatch_ids.resize_with(n, || None);
         self.swatch_rgb.resize(n, [0.0; 3]);
         self.colour_ids.resize_with(n, || None);
-
     }
 
     /// Forget every node id from the last build, keeping the row count and the
@@ -308,8 +326,17 @@ impl RowHost {
             return;
         }
         *shown = rate;
-        let aligned = mod_state.driver_frame_aligned.get(row).copied().unwrap_or(false);
-        if let Some(button) = self.driver_config_ids.get(row).and_then(Option::as_ref).and_then(|ids| ids.last_button()) {
+        let aligned = mod_state
+            .driver_frame_aligned
+            .get(row)
+            .copied()
+            .unwrap_or(false);
+        if let Some(button) = self
+            .driver_config_ids
+            .get(row)
+            .and_then(Option::as_ref)
+            .and_then(|ids| ids.last_button())
+        {
             tree.set_text(button, &super::builders::driver_frame_label(aligned, rate));
         }
     }
@@ -328,7 +355,11 @@ impl RowHost {
         row: usize,
         shapes: &RowShapes,
     ) {
-        let track = self.slider_ids.get(row).and_then(Option::as_ref).map(|s| tree.get_bounds(s.track));
+        let track = self
+            .slider_ids
+            .get(row)
+            .and_then(Option::as_ref)
+            .map(|s| tree.get_bounds(s.track));
         let trims = |ids: &[Option<TrimHandleIds>], tree: &mut UITree, (lo, hi): (f32, f32)| {
             if let (Some(ids), Some(rect)) = (ids.get(row).and_then(Option::as_ref), track) {
                 reposition_trim_bars(tree, rect, ids, lo, hi);
@@ -352,7 +383,9 @@ impl RowHost {
             if mod_state.target_norm[row] != env.target_norm {
                 mod_state.target_norm[row] = env.target_norm;
                 model.modulation.target_norm = env.target_norm;
-                if let (Some(ids), Some(rect)) = (self.target_ids.get(row).and_then(Option::as_ref), track) {
+                if let (Some(ids), Some(rect)) =
+                    (self.target_ids.get(row).and_then(Option::as_ref), track)
+                {
                     tree.set_bounds(ids.target_bar_id, target_bar_rect(rect, env.target_norm));
                 }
             }
@@ -361,7 +394,12 @@ impl RowHost {
                 mod_state.env_decay[row] = env.decay;
                 model.modulation.env_decay = env.decay;
                 if let Some(slider) = config.and_then(|c| c.decay_slider.as_ref()) {
-                    BitmapSlider::update_value(tree, slider, env.decay / ENV_DECAY_MAX, &format!("{:.2}", env.decay));
+                    BitmapSlider::update_value(
+                        tree,
+                        slider,
+                        env.decay / ENV_DECAY_MAX,
+                        &format!("{:.2}", env.decay),
+                    );
                 }
             }
             if let Some(amount) = env.step_amount
@@ -371,7 +409,12 @@ impl RowHost {
                 model.modulation.envelope_step_amount = amount;
                 if let Some(slider) = config.and_then(|c| c.step_slider.as_ref()) {
                     let norm = step_amount_to_norm(amount, model.spec.min, model.spec.max);
-                    BitmapSlider::update_value(tree, slider, norm, &step_amount_text(amount, model.spec.whole_numbers));
+                    BitmapSlider::update_value(
+                        tree,
+                        slider,
+                        norm,
+                        &step_amount_text(amount, model.spec.whole_numbers),
+                    );
                 }
             }
         }
@@ -383,9 +426,17 @@ impl RowHost {
             if (shown.range_min, shown.range_max) != (audio.range_min, audio.range_max) {
                 shown.range_min = audio.range_min;
                 shown.range_max = audio.range_max;
-                trims(&self.audio_trim_ids, tree, (audio.range_min, audio.range_max));
+                trims(
+                    &self.audio_trim_ids,
+                    tree,
+                    (audio.range_min, audio.range_max),
+                );
             }
-            let drawer = self.audio_configs.get(row).and_then(Option::as_ref).map(|(d, _)| d);
+            let drawer = self
+                .audio_configs
+                .get(row)
+                .and_then(Option::as_ref)
+                .map(|(d, _)| d);
             // Attack and Release exist only where the drawer offers shaping.
             let shaping = !model.spec.is_trigger_gate;
             for (which, value) in [
@@ -403,7 +454,10 @@ impl RowHost {
                 }
                 *shown_value = value;
                 let offered = shaping || which == AudioShapeParam::Sensitivity;
-                if offered && let Some(slider) = drawer.and_then(|d| d.sliders.get(audio_shape_index(which))) {
+                if offered
+                    && let Some(slider) =
+                        drawer.and_then(|d| d.sliders.get(audio_shape_index(which)))
+                {
                     BitmapSlider::update_value(
                         tree,
                         slider,
@@ -418,12 +472,21 @@ impl RowHost {
                     d.button_ids().iter().copied().find(|&id| {
                         matches!(
                             d.resolve_action(id),
-                            Some(PanelAction::Root(RootAction::AudioDrawerClick(_, _, crate::panels::AudioDrawerClick::Invert)))
+                            Some(PanelAction::Root(RootAction::AudioDrawerClick(
+                                _,
+                                _,
+                                crate::panels::AudioDrawerClick::Invert
+                            )))
                         )
                     })
                 }) {
-                    let font = tree.get_node(button).map_or(FONT_SIZE, |n| n.style.font_size);
-                    tree.set_style(button, audio_drawer_theme().option_style(audio.invert, font));
+                    let font = tree
+                        .get_node(button)
+                        .map_or(FONT_SIZE, |n| n.style.font_size);
+                    tree.set_style(
+                        button,
+                        audio_drawer_theme().option_style(audio.invert, font),
+                    );
                 }
             }
             if let Some(amount) = audio.step_amount
@@ -433,12 +496,18 @@ impl RowHost {
                 shown.step_amount = amount;
                 if shaping && let Some(slider) = drawer.and_then(|d| d.sliders.get(3)) {
                     let norm = step_amount_to_norm(amount, model.spec.min, model.spec.max);
-                    BitmapSlider::update_value(tree, slider, norm, &step_amount_text(amount, model.spec.whole_numbers));
+                    BitmapSlider::update_value(
+                        tree,
+                        slider,
+                        norm,
+                        &step_amount_text(amount, model.spec.whole_numbers),
+                    );
                 }
             }
             let m = &mut model.audio;
             (m.range_min, m.range_max) = (shown.range_min, shown.range_max);
-            (m.sensitivity, m.attack_ms, m.release_ms) = (shown.sensitivity, shown.attack_ms, shown.release_ms);
+            (m.sensitivity, m.attack_ms, m.release_ms) =
+                (shown.sensitivity, shown.attack_ms, shown.release_ms);
             (m.invert, m.step_amount) = (shown.invert, shown.step_amount);
         }
 
@@ -537,8 +606,10 @@ impl RowHost {
         if ctx.rows.get(row).is_some_and(|r| r.spec.disabled.is_some()) {
             return Vec::new();
         }
-        if !matches!(role, RowRole::Slider | RowRole::EnvelopeConfig | RowRole::AudioConfig)
-            || row >= ctx.rows.len()
+        if !matches!(
+            role,
+            RowRole::Slider | RowRole::EnvelopeConfig | RowRole::AudioConfig
+        ) || row >= ctx.rows.len()
         {
             return Vec::new();
         }
@@ -550,8 +621,12 @@ impl RowHost {
             let Some(config) = self.envelope_config_ids.get(row).and_then(Option::as_ref) else {
                 return Vec::new();
             };
-            let Some(decay) = &config.decay_slider else { return Vec::new() };
-            if node != decay.track { return Vec::new(); }
+            let Some(decay) = &config.decay_slider else {
+                return Vec::new();
+            };
+            if node != decay.track {
+                return Vec::new();
+            }
             let track = tree.get_bounds(decay.track);
             let norm = BitmapSlider::x_to_normalized(TrackSpan::of(track), pos.x).clamp(0.0, 1.0);
             let value = norm * ENV_DECAY_MAX;
@@ -580,9 +655,14 @@ impl RowHost {
                 return Vec::new();
             };
             let slider_index = (0..4).find(|&index| {
-                drawer.sliders.get(index).is_some_and(|slider| node == slider.track)
+                drawer
+                    .sliders
+                    .get(index)
+                    .is_some_and(|slider| node == slider.track)
             });
-            let Some(slider_index) = slider_index else { return Vec::new() };
+            let Some(slider_index) = slider_index else {
+                return Vec::new();
+            };
             let track = tree.get_bounds(drawer.sliders[slider_index].track);
             let norm = BitmapSlider::x_to_normalized(TrackSpan::of(track), pos.x).clamp(0.0, 1.0);
             let (value, address, drag_kind) = match slider_index {
@@ -603,7 +683,9 @@ impl RowHost {
                 ),
                 _ => {
                     let mut amount = norm_to_step_amount(norm, info.spec.min, info.spec.max);
-                    if info.spec.whole_numbers { amount = amount.round(); }
+                    if info.spec.whole_numbers {
+                        amount = amount.round();
+                    }
                     (
                         amount,
                         ValueRef::AudioModStepAmount(target, param_id.clone()),
@@ -612,9 +694,13 @@ impl RowHost {
                 }
             };
             match drag_kind {
-                RowDragKind::AudioShape(which) => set_audio_shape_value(ctx.modulation, row, which, value),
+                RowDragKind::AudioShape(which) => {
+                    set_audio_shape_value(ctx.modulation, row, which, value)
+                }
                 RowDragKind::AudioStepAmount => {
-                    if let Some(audio) = ctx.modulation.audio_rows.get_mut(row) { audio.step_amount = value; }
+                    if let Some(audio) = ctx.modulation.audio_rows.get_mut(row) {
+                        audio.step_amount = value;
+                    }
                 }
                 _ => {}
             }
@@ -661,8 +747,13 @@ impl RowHost {
             return vec![begin];
         }
 
-        let driver_range = current_trim_range(&ctx, row, TrimKind::Driver)
-            .filter(|_| ctx.modulation.driver_expanded.get(row).copied().unwrap_or(false));
+        let driver_range = current_trim_range(&ctx, row, TrimKind::Driver).filter(|_| {
+            ctx.modulation
+                .driver_expanded
+                .get(row)
+                .copied()
+                .unwrap_or(false)
+        });
         if let Some((kind, is_min)) = self.trim_hit(row, node, pos, tree, driver_range) {
             let current = current_trim_range(&ctx, row, kind).unwrap_or((0.0, 1.0));
             let begin = self.gesture.begin(
@@ -681,15 +772,31 @@ impl RowHost {
             return vec![begin];
         }
 
-        let is_fill = [self.trim_ids[row], self.ableton_trim_ids[row], self.audio_trim_ids[row]]
-            .into_iter().flatten().any(|trim| trim.fill_id == node);
+        let is_fill = [
+            self.trim_ids[row],
+            self.ableton_trim_ids[row],
+            self.audio_trim_ids[row],
+        ]
+        .into_iter()
+        .flatten()
+        .any(|trim| trim.fill_id == node);
         if (node != slider.track && !is_fill) || info.spec.is_toggle || info.spec.is_trigger {
             return Vec::new();
         }
         if self.target_ids[row].is_some()
-            && ctx.modulation.envelope_expanded.get(row).copied().unwrap_or(false)
+            && ctx
+                .modulation
+                .envelope_expanded
+                .get(row)
+                .copied()
+                .unwrap_or(false)
         {
-            let norm = ctx.modulation.target_norm.get(row).copied().unwrap_or(info.modulation.target_norm);
+            let norm = ctx
+                .modulation
+                .target_norm
+                .get(row)
+                .copied()
+                .unwrap_or(info.modulation.target_norm);
             let target_center = target_bar_rect(track, norm).x + TARGET_BAR_W * 0.5;
             if (pos.x - target_center).abs() < 8.0 {
                 let begin = self.gesture.begin(
@@ -712,7 +819,11 @@ impl RowHost {
         // A press jumps the value to the pointer, except when the value sits
         // past the slider's end: then the drag starts from it, so grabbing
         // the pinned thumb never snaps the value back under the hand (D15).
-        let current = ctx.values.get(row).copied().filter(|v| super::state::past_slider_end(*v, &info.spec));
+        let current = ctx
+            .values
+            .get(row)
+            .copied()
+            .filter(|v| super::state::past_slider_end(*v, &info.spec));
         let mut value = current.unwrap_or_else(|| {
             let norm = BitmapSlider::x_to_normalized(TrackSpan::of(track), pos.x);
             BitmapSlider::normalized_to_value(norm, info.spec.min, info.spec.max)
@@ -758,7 +869,9 @@ impl RowHost {
             .address()
             .is_some_and(|address| captured_target_matches(address, ctx.target));
         if !target_matches {
-            if let Some(active) = self.gesture.payload_mut() { active.last_pos = pos; }
+            if let Some(active) = self.gesture.payload_mut() {
+                active.last_pos = pos;
+            }
             return Vec::new();
         }
         let Some(&row) = ctx.row_indices.get(payload.param_id.as_ref()) else {
@@ -768,9 +881,11 @@ impl RowHost {
             return Vec::new();
         };
         let track = match payload.kind {
-            RowDragKind::Param | RowDragKind::Trim { .. } | RowDragKind::EnvelopeTarget => {
-                self.slider_ids.get(row).and_then(Option::as_ref).map(|s| s.track)
-            }
+            RowDragKind::Param | RowDragKind::Trim { .. } | RowDragKind::EnvelopeTarget => self
+                .slider_ids
+                .get(row)
+                .and_then(Option::as_ref)
+                .map(|s| s.track),
             RowDragKind::EnvelopeDecay => self
                 .envelope_config_ids
                 .get(row)
@@ -787,9 +902,16 @@ impl RowHost {
                 .and_then(Option::as_ref)
                 .and_then(|(d, _)| d.sliders.get(3).map(|s| s.track)),
         };
-        let Some(track) = track else { return Vec::new() };
+        let Some(track) = track else {
+            return Vec::new();
+        };
         let rect = tree.get_bounds(track);
-        let dx = pos.x - self.gesture.start().map(|p| p.x).unwrap_or(payload.last_pos.x);
+        let dx = pos.x
+            - self
+                .gesture
+                .start()
+                .map(|p| p.x)
+                .unwrap_or(payload.last_pos.x);
         let mut value = match payload.kind {
             // Relative to the press: past the slider's end it keeps going to
             // the row's hard limit (D15).
@@ -808,22 +930,25 @@ impl RowHost {
                 BitmapSlider::x_to_normalized(TrackSpan::of(rect), pos.x).clamp(0.0, 1.0)
             }
             RowDragKind::EnvelopeDecay => {
-                BitmapSlider::x_to_normalized(TrackSpan::of(rect), pos.x).clamp(0.0, 1.0) * ENV_DECAY_MAX
+                BitmapSlider::x_to_normalized(TrackSpan::of(rect), pos.x).clamp(0.0, 1.0)
+                    * ENV_DECAY_MAX
             }
             RowDragKind::AudioShape(which) => audio_shape_value_from_norm(
                 which,
                 BitmapSlider::x_to_normalized(TrackSpan::of(rect), pos.x).clamp(0.0, 1.0),
             ),
             RowDragKind::AudioStepAmount => {
-                let norm = BitmapSlider::x_to_normalized(TrackSpan::of(rect), pos.x).clamp(0.0, 1.0);
-                let mut amount = norm_to_step_amount(norm, ctx.rows[row].spec.min, ctx.rows[row].spec.max);
-                if ctx.rows[row].spec.whole_numbers { amount = amount.round(); }
+                let norm =
+                    BitmapSlider::x_to_normalized(TrackSpan::of(rect), pos.x).clamp(0.0, 1.0);
+                let mut amount =
+                    norm_to_step_amount(norm, ctx.rows[row].spec.min, ctx.rows[row].spec.max);
+                if ctx.rows[row].spec.whole_numbers {
+                    amount = amount.round();
+                }
                 amount
             }
         };
-        if matches!(payload.kind, RowDragKind::Param)
-            && ctx.rows[row].spec.whole_numbers
-        {
+        if matches!(payload.kind, RowDragKind::Param) && ctx.rows[row].spec.whole_numbers {
             value = value.round();
         }
         let move_value = match payload.kind {
@@ -836,7 +961,9 @@ impl RowHost {
             }
             RowDragKind::EnvelopeTarget => {
                 ctx.rows[row].modulation.target_norm = value;
-                if let Some(target_norm) = ctx.modulation.target_norm.get_mut(row) { *target_norm = value; }
+                if let Some(target_norm) = ctx.modulation.target_norm.get_mut(row) {
+                    *target_norm = value;
+                }
                 if let Some(target_ids) = self.target_ids.get(row).and_then(Option::as_ref) {
                     tree.set_bounds(target_ids.target_bar_id, target_bar_rect(rect, value));
                 }
@@ -848,8 +975,12 @@ impl RowHost {
                     TrimKind::Driver => {
                         ctx.rows[row].modulation.trim_min = range.0;
                         ctx.rows[row].modulation.trim_max = range.1;
-                        if let Some(trim_min) = ctx.modulation.trim_min.get_mut(row) { *trim_min = range.0; }
-                        if let Some(trim_max) = ctx.modulation.trim_max.get_mut(row) { *trim_max = range.1; }
+                        if let Some(trim_min) = ctx.modulation.trim_min.get_mut(row) {
+                            *trim_min = range.0;
+                        }
+                        if let Some(trim_max) = ctx.modulation.trim_max.get_mut(row) {
+                            *trim_max = range.1;
+                        }
                     }
                     TrimKind::Ableton => {
                         ctx.rows[row].mapping.ableton_range = Some(range);
@@ -875,11 +1006,18 @@ impl RowHost {
                 ScrubValue::Range(range.0, range.1)
             }
             RowDragKind::EnvelopeDecay => {
-                if let Some(decay) = ctx.modulation.env_decay.get_mut(row) { *decay = value; }
+                if let Some(decay) = ctx.modulation.env_decay.get_mut(row) {
+                    *decay = value;
+                }
                 if let Some(config) = self.envelope_config_ids.get(row).and_then(Option::as_ref)
                     && let Some(slider) = config.decay_slider.as_ref()
                 {
-                    BitmapSlider::update_value(tree, slider, value / ENV_DECAY_MAX, &format!("{value:.2}"));
+                    BitmapSlider::update_value(
+                        tree,
+                        slider,
+                        value / ENV_DECAY_MAX,
+                        &format!("{value:.2}"),
+                    );
                 }
                 ScrubValue::Scalar(value)
             }
@@ -898,7 +1036,9 @@ impl RowHost {
                 ScrubValue::Scalar(value)
             }
             RowDragKind::AudioStepAmount => {
-                if let Some(audio) = ctx.modulation.audio_rows.get_mut(row) { audio.step_amount = value; }
+                if let Some(audio) = ctx.modulation.audio_rows.get_mut(row) {
+                    audio.step_amount = value;
+                }
                 if let Some(config) = self.audio_configs.get(row).and_then(Option::as_ref)
                     && let Some(slider) = config.0.sliders.get(3)
                 {
@@ -906,7 +1046,11 @@ impl RowHost {
                         tree,
                         slider,
                         step_amount_to_norm(value, ctx.rows[row].spec.min, ctx.rows[row].spec.max),
-                        &if ctx.rows[row].spec.whole_numbers { format!("{value:.0}") } else { format!("{value:.2}") },
+                        &if ctx.rows[row].spec.whole_numbers {
+                            format!("{value:.0}")
+                        } else {
+                            format!("{value:.2}")
+                        },
                     );
                 }
                 ScrubValue::Scalar(value)
@@ -929,7 +1073,9 @@ impl RowHost {
 
     /// Reapply an in-flight live value after a structural snapshot rebuild.
     pub(crate) fn restore_live(&self, ctx: RowInteraction<'_>) {
-        let Some(payload) = self.gesture.payload() else { return };
+        let Some(payload) = self.gesture.payload() else {
+            return;
+        };
         let target_matches = self
             .gesture
             .address()
@@ -937,7 +1083,9 @@ impl RowHost {
         if !target_matches {
             return;
         }
-        let Some(&row) = ctx.row_indices.get(payload.param_id.as_ref()) else { return };
+        let Some(&row) = ctx.row_indices.get(payload.param_id.as_ref()) else {
+            return;
+        };
         match payload.kind {
             RowDragKind::Param => {
                 if let Some(display) = ctx.values.get_mut(row) {
@@ -954,8 +1102,12 @@ impl RowHost {
                 TrimKind::Driver => {
                     ctx.rows[row].modulation.trim_min = payload.last_range.0;
                     ctx.rows[row].modulation.trim_max = payload.last_range.1;
-                    if let Some(trim_min) = ctx.modulation.trim_min.get_mut(row) { *trim_min = payload.last_range.0; }
-                    if let Some(trim_max) = ctx.modulation.trim_max.get_mut(row) { *trim_max = payload.last_range.1; }
+                    if let Some(trim_min) = ctx.modulation.trim_min.get_mut(row) {
+                        *trim_min = payload.last_range.0;
+                    }
+                    if let Some(trim_max) = ctx.modulation.trim_max.get_mut(row) {
+                        *trim_max = payload.last_range.1;
+                    }
                 }
                 TrimKind::Ableton => ctx.rows[row].mapping.ableton_range = Some(payload.last_range),
                 TrimKind::Audio => {
@@ -964,7 +1116,7 @@ impl RowHost {
                         audio.range_max = payload.last_range.1;
                     }
                 }
-            }
+            },
             RowDragKind::EnvelopeDecay => {
                 if let Some(decay) = ctx.modulation.env_decay.get_mut(row) {
                     *decay = payload.last_value;
@@ -981,7 +1133,11 @@ impl RowHost {
         }
     }
 
-    pub(crate) fn active_param_index(&self, target: &GraphParamTarget, rows: &[ParamRow]) -> Option<usize> {
+    pub(crate) fn active_param_index(
+        &self,
+        target: &GraphParamTarget,
+        rows: &[ParamRow],
+    ) -> Option<usize> {
         let payload = self.gesture.payload()?;
         if !matches!(payload.kind, RowDragKind::Param)
             || !captured_target_matches(self.gesture.address()?, target)
@@ -997,8 +1153,11 @@ impl RowHost {
         id: &manifold_foundation::ParamId,
     ) -> Option<f32> {
         let payload = self.gesture.payload()?;
-        let ValueRef::Param(active_target, active_id) = self.gesture.address()? else { return None };
-        if active_target == target && active_id == id && matches!(payload.kind, RowDragKind::Param) {
+        let ValueRef::Param(active_target, active_id) = self.gesture.address()? else {
+            return None;
+        };
+        if active_target == target && active_id == id && matches!(payload.kind, RowDragKind::Param)
+        {
             Some(payload.last_value)
         } else {
             None
@@ -1014,8 +1173,10 @@ impl RowHost {
     /// name the sub-element).
     pub(crate) fn reindex_row(&mut self, tree: &UITree, i: usize) {
         if let Some(s) = &self.slider_ids[i] {
-            self.row_index.insert(tree.widget_of(s.track), i, RowRole::Slider);
-            self.row_index.insert(tree.widget_of(s.value_text), i, RowRole::Slider);
+            self.row_index
+                .insert(tree.widget_of(s.track), i, RowRole::Slider);
+            self.row_index
+                .insert(tree.widget_of(s.value_text), i, RowRole::Slider);
             if let Some(l) = s.label {
                 self.row_index.insert(tree.widget_of(l), i, RowRole::Slider);
             }
@@ -1025,90 +1186,127 @@ impl RowHost {
         // the slider bundle functionally; indexed under the same role so
         // `handle_pointer_down` resolves them by row instead of scanning.
         if let Some(t) = &self.trim_ids[i] {
-            self.row_index.insert(tree.widget_of(t.fill_id), i, RowRole::Slider);
-            self.row_index.insert(tree.widget_of(t.min_bar_id), i, RowRole::Slider);
-            self.row_index.insert(tree.widget_of(t.max_bar_id), i, RowRole::Slider);
+            self.row_index
+                .insert(tree.widget_of(t.fill_id), i, RowRole::Slider);
+            self.row_index
+                .insert(tree.widget_of(t.min_bar_id), i, RowRole::Slider);
+            self.row_index
+                .insert(tree.widget_of(t.max_bar_id), i, RowRole::Slider);
         }
         if let Some(t) = &self.ableton_trim_ids[i] {
-            self.row_index.insert(tree.widget_of(t.fill_id), i, RowRole::Slider);
-            self.row_index.insert(tree.widget_of(t.min_bar_id), i, RowRole::Slider);
-            self.row_index.insert(tree.widget_of(t.max_bar_id), i, RowRole::Slider);
+            self.row_index
+                .insert(tree.widget_of(t.fill_id), i, RowRole::Slider);
+            self.row_index
+                .insert(tree.widget_of(t.min_bar_id), i, RowRole::Slider);
+            self.row_index
+                .insert(tree.widget_of(t.max_bar_id), i, RowRole::Slider);
         }
         if let Some(t) = &self.audio_trim_ids[i] {
-            self.row_index.insert(tree.widget_of(t.fill_id), i, RowRole::Slider);
-            self.row_index.insert(tree.widget_of(t.min_bar_id), i, RowRole::Slider);
-            self.row_index.insert(tree.widget_of(t.max_bar_id), i, RowRole::Slider);
+            self.row_index
+                .insert(tree.widget_of(t.fill_id), i, RowRole::Slider);
+            self.row_index
+                .insert(tree.widget_of(t.min_bar_id), i, RowRole::Slider);
+            self.row_index
+                .insert(tree.widget_of(t.max_bar_id), i, RowRole::Slider);
         }
         if let Some(t) = &self.target_ids[i] {
-            self.row_index.insert(tree.widget_of(t.target_bar_id), i, RowRole::Slider);
+            self.row_index
+                .insert(tree.widget_of(t.target_bar_id), i, RowRole::Slider);
         }
         if let Some(rc) = self.row_catcher_ids[i] {
-            self.row_index.insert(tree.widget_of(rc), i, RowRole::RowCatcher);
+            self.row_index
+                .insert(tree.widget_of(rc), i, RowRole::RowCatcher);
         }
         if let Some((swatch, group)) = self.swatch_ids[i] {
-            self.row_index.insert(tree.widget_of(swatch), i, RowRole::ColourSwatch(group));
+            self.row_index
+                .insert(tree.widget_of(swatch), i, RowRole::ColourSwatch(group));
         }
         if let Some(b) = self.driver_btn_ids[i] {
-            self.row_index.insert(tree.widget_of(b), i, RowRole::DriverBtn);
+            self.row_index
+                .insert(tree.widget_of(b), i, RowRole::DriverBtn);
         }
         if let Some(b) = self.envelope_btn_ids[i] {
-            self.row_index.insert(tree.widget_of(b), i, RowRole::EnvelopeBtn);
+            self.row_index
+                .insert(tree.widget_of(b), i, RowRole::EnvelopeBtn);
         }
         if let Some(b) = self.audio_btn_ids[i] {
-            self.row_index.insert(tree.widget_of(b), i, RowRole::AudioBtn);
+            self.row_index
+                .insert(tree.widget_of(b), i, RowRole::AudioBtn);
         }
         if let Some(t) = &self.toggle_ids[i] {
-            self.row_index.insert(tree.widget_of(t.button_id), i, RowRole::ToggleBtn);
+            self.row_index
+                .insert(tree.widget_of(t.button_id), i, RowRole::ToggleBtn);
             if let Some(l) = t.label_id {
                 self.row_index.insert(tree.widget_of(l), i, RowRole::Label);
             }
         }
         if let Some(c) = &self.driver_config_ids[i] {
             for &b in c.button_ids() {
-                self.row_index.insert(tree.widget_of(b), i, RowRole::DriverConfig);
+                self.row_index
+                    .insert(tree.widget_of(b), i, RowRole::DriverConfig);
             }
         }
         if let Some(c) = &self.envelope_config_ids[i] {
             if let Some(ds) = &c.decay_slider {
-                self.row_index.insert(tree.widget_of(ds.track), i, RowRole::EnvelopeConfig);
-                self.row_index.insert(tree.widget_of(ds.value_text), i, RowRole::EnvelopeConfig);
+                self.row_index
+                    .insert(tree.widget_of(ds.track), i, RowRole::EnvelopeConfig);
+                self.row_index
+                    .insert(tree.widget_of(ds.value_text), i, RowRole::EnvelopeConfig);
                 if let Some(l) = ds.label {
-                    self.row_index.insert(tree.widget_of(l), i, RowRole::EnvelopeConfig);
+                    self.row_index
+                        .insert(tree.widget_of(l), i, RowRole::EnvelopeConfig);
                 }
             }
             for &b in c.drawer.button_ids() {
-                self.row_index.insert(tree.widget_of(b), i, RowRole::EnvelopeConfig);
+                self.row_index
+                    .insert(tree.widget_of(b), i, RowRole::EnvelopeConfig);
             }
             if let Some(step_slider) = &c.step_slider {
-                self.row_index.insert(tree.widget_of(step_slider.track), i, RowRole::EnvelopeConfig);
-                self.row_index.insert(tree.widget_of(step_slider.value_text), i, RowRole::EnvelopeConfig);
+                self.row_index.insert(
+                    tree.widget_of(step_slider.track),
+                    i,
+                    RowRole::EnvelopeConfig,
+                );
+                self.row_index.insert(
+                    tree.widget_of(step_slider.value_text),
+                    i,
+                    RowRole::EnvelopeConfig,
+                );
                 if let Some(l) = step_slider.label {
-                    self.row_index.insert(tree.widget_of(l), i, RowRole::EnvelopeConfig);
+                    self.row_index
+                        .insert(tree.widget_of(l), i, RowRole::EnvelopeConfig);
                 }
             }
         }
         if let Some(c) = &self.ableton_config_ids[i] {
             for &b in c.button_ids() {
-                self.row_index.insert(tree.widget_of(b), i, RowRole::AbletonConfig);
+                self.row_index
+                    .insert(tree.widget_of(b), i, RowRole::AbletonConfig);
             }
         }
         if let Some((dids, _)) = &self.audio_configs[i] {
             for &b in dids.button_ids() {
-                self.row_index.insert(tree.widget_of(b), i, RowRole::AudioConfig);
+                self.row_index
+                    .insert(tree.widget_of(b), i, RowRole::AudioConfig);
             }
             for s in &dids.sliders {
-                self.row_index.insert(tree.widget_of(s.track), i, RowRole::AudioConfig);
-                self.row_index.insert(tree.widget_of(s.value_text), i, RowRole::AudioConfig);
+                self.row_index
+                    .insert(tree.widget_of(s.track), i, RowRole::AudioConfig);
+                self.row_index
+                    .insert(tree.widget_of(s.value_text), i, RowRole::AudioConfig);
                 if let Some(l) = s.label {
-                    self.row_index.insert(tree.widget_of(l), i, RowRole::AudioConfig);
+                    self.row_index
+                        .insert(tree.widget_of(l), i, RowRole::AudioConfig);
                 }
             }
         }
         if let Some(c) = self.mapping_chevron_ids[i] {
-            self.row_index.insert(tree.widget_of(c), i, RowRole::MappingChevron);
+            self.row_index
+                .insert(tree.widget_of(c), i, RowRole::MappingChevron);
         }
         for &(node, _tab) in &self.mod_tab_ids[i] {
-            self.row_index.insert(tree.widget_of(node), i, RowRole::ModTab);
+            self.row_index
+                .insert(tree.widget_of(node), i, RowRole::ModTab);
         }
     }
 
@@ -1176,13 +1374,24 @@ impl RowHost {
     /// The button-row twin of [`Self::push_slider_value`]: redraw row `i`'s
     /// switch (on/off) or pick list (its label) for `value`. A fire button
     /// shows no value. No-op for a row built without a button.
-    pub(crate) fn push_button_value(&self, tree: &mut UITree, i: usize, value: f32, spec: &RowSpec) {
+    pub(crate) fn push_button_value(
+        &self,
+        tree: &mut UITree,
+        i: usize,
+        value: f32,
+        spec: &RowSpec,
+    ) {
         use crate::param_surface::RowKind;
-        let Some(ids) = self.toggle_ids.get(i).and_then(Option::as_ref) else { return };
+        let Some(ids) = self.toggle_ids.get(i).and_then(Option::as_ref) else {
+            return;
+        };
         match ids.kind {
             RowKind::Switch => {
                 let on = value > 0.5;
-                tree.set_style(ids.button_id, switch_style(on, spec.inactive_reason.is_some()));
+                tree.set_style(
+                    ids.button_id,
+                    switch_style(on, spec.inactive_reason.is_some()),
+                );
                 tree.set_text(ids.button_id, switch_text(on));
             }
             RowKind::Choice => {
@@ -1227,8 +1436,17 @@ impl RowHost {
             super::FONT_SIZE,
             super::state::CARD_VALUE_TEXT_W,
         );
-        crate::slider::BitmapSlider::update_value(tree, ids, display_norm_override.unwrap_or(norm), text);
-        crate::slider::BitmapSlider::mark_past_end(tree, ids, super::state::past_slider_end(value, spec));
+        crate::slider::BitmapSlider::update_value(
+            tree,
+            ids,
+            display_norm_override.unwrap_or(norm),
+            text,
+        );
+        crate::slider::BitmapSlider::mark_past_end(
+            tree,
+            ids,
+            super::state::past_slider_end(value, spec),
+        );
     }
 
     /// The one param menu (`ParamLabelRightClick`, where mapping lives) on
@@ -1250,22 +1468,32 @@ impl RowHost {
         use crate::param_surface::RowKind;
         use crate::slider::BitmapSlider;
         for (pi, buttons) in self.toggle_ids.iter().enumerate() {
-            let (Some(ids), Some(row)) = (buttons, rows.get(pi)) else { continue };
+            let (Some(ids), Some(row)) = (buttons, rows.get(pi)) else {
+                continue;
+            };
             if !matches!(ids.kind, RowKind::Switch | RowKind::Choice) || row.affordance.is_some() {
                 continue;
             }
-            let menu = PanelAction::Params(ParamsAction::ParamLabelRightClick(target.clone(), row.id.clone()));
+            let menu = PanelAction::Params(ParamsAction::ParamLabelRightClick(
+                target.clone(),
+                row.id.clone(),
+            ));
             if let Some(label) = ids.label_id {
                 intents.on(label, RightClick, menu.clone());
             }
             intents.on(ids.button_id, RightClick, menu);
         }
         for (pi, slider) in self.slider_ids.iter().enumerate() {
-            let (Some(ids), Some(row)) = (slider, rows.get(pi)) else { continue };
+            let (Some(ids), Some(row)) = (slider, rows.get(pi)) else {
+                continue;
+            };
             if row.affordance.is_some() {
                 continue;
             }
-            let menu = PanelAction::Params(ParamsAction::ParamLabelRightClick(target.clone(), row.id.clone()));
+            let menu = PanelAction::Params(ParamsAction::ParamLabelRightClick(
+                target.clone(),
+                row.id.clone(),
+            ));
             BitmapSlider::register_label_mapping(ids, &menu, intents);
             if let Some(Some(catcher)) = self.row_catcher_ids.get(pi).copied() {
                 intents.claim_area(catcher);
@@ -1303,7 +1531,9 @@ impl RowHost {
             if let Some((ds, dr)) = cfg.decay_slider.as_ref().zip(cfg.decay_reset.as_ref()) {
                 BitmapSlider::register_track_reset(ds, dr, intents);
             }
-            if let Some((step_slider, step_reset)) = cfg.step_slider.as_ref().zip(cfg.step_reset.as_ref()) {
+            if let Some((step_slider, step_reset)) =
+                cfg.step_slider.as_ref().zip(cfg.step_reset.as_ref())
+            {
                 BitmapSlider::register_track_reset(step_slider, step_reset, intents);
             }
         }
@@ -1359,7 +1589,14 @@ impl RowHost {
             .map(|s| s.value_text)
             .unwrap_or(clicked);
         let value = base_values.get(pi).copied().unwrap_or(info.spec.default);
-        enum_value_cell_actions(target, rows[pi].id.clone(), &labels, value, info.spec.min, cell)
+        enum_value_cell_actions(
+            target,
+            rows[pi].id.clone(),
+            &labels,
+            value,
+            info.spec.min,
+            cell,
+        )
     }
 
     /// The "A" audio-mod button action — always opens (arms) or closes
@@ -1378,14 +1615,20 @@ impl RowHost {
         let ms = mod_state;
         if ms.audio_rows.get(pi).is_some_and(|row| row.active) {
             // Already armed → disarm (closes the drawer), regardless of sends.
-            vec![PanelAction::Modulation(ModulationAction::AudioModToggle(target, rows[pi].id.clone()))]
+            vec![PanelAction::Modulation(ModulationAction::AudioModToggle(
+                target,
+                rows[pi].id.clone(),
+            ))]
         } else if ms.audio_sends.is_empty() {
             // Not armed, no send to point at → open Audio Setup so the user can
             // create one. Sends are defined there, never from the drawer.
             vec![PanelAction::Root(RootAction::OpenAudioSetup)]
         } else {
             // Not armed, sends exist → arm at the project's first send.
-            vec![PanelAction::Modulation(ModulationAction::AudioModToggle(target, rows[pi].id.clone()))]
+            vec![PanelAction::Modulation(ModulationAction::AudioModToggle(
+                target,
+                rows[pi].id.clone(),
+            ))]
         }
     }
 
@@ -1403,20 +1646,30 @@ impl RowHost {
         mod_state: &ParamModState,
     ) -> Vec<PanelAction> {
         let ms = mod_state;
-        let send_k = send_override.map(|k| k as i32).unwrap_or_else(|| ms.audio_send_index(pi));
+        let send_k = send_override
+            .map(|k| k as i32)
+            .unwrap_or_else(|| ms.audio_send_index(pi));
         let Some(send_id) = (send_k >= 0)
-            .then(|| ms.audio_sends.get(send_k as usize).map(|send| send.id.clone()))
+            .then(|| {
+                ms.audio_sends
+                    .get(send_k as usize)
+                    .map(|send| send.id.clone())
+            })
             .flatten()
         else {
             return vec![];
         };
-        let kind_idx = kind_override.unwrap_or_else(|| ms.audio_rows.get(pi).map_or(0, |row| row.kind_idx) as usize);
-        let band_idx = band_override.unwrap_or_else(|| ms.audio_rows.get(pi).map_or(0, |row| row.band_idx) as usize);
+        let kind_idx = kind_override
+            .unwrap_or_else(|| ms.audio_rows.get(pi).map_or(0, |row| row.kind_idx) as usize);
+        let band_idx = band_override
+            .unwrap_or_else(|| ms.audio_rows.get(pi).map_or(0, |row| row.band_idx) as usize);
         let feature = crate::types::AudioFeature::new(
             audio_kind_from_index(kind_idx),
             audio_band_from_index(band_idx),
         );
-        vec![PanelAction::Modulation(ModulationAction::AudioModSetSource(target, rows[pi].id.clone(), send_id, feature))]
+        vec![PanelAction::Modulation(
+            ModulationAction::AudioModSetSource(target, rows[pi].id.clone(), send_id, feature),
+        )]
     }
 
     pub(crate) fn audio_drawer_action(
@@ -1429,22 +1682,52 @@ impl RowHost {
     ) -> Vec<PanelAction> {
         use crate::panels::AudioDrawerClick::*;
         match click {
-            Send(k) => self.audio_set_source_action(target, row, Some(k), None, None, rows, mod_state),
+            Send(k) => {
+                self.audio_set_source_action(target, row, Some(k), None, None, rows, mod_state)
+            }
             Feature(feature) => {
-                let kind = crate::types::AudioFeatureKind::ALL.iter().position(|&v| v == feature.kind).unwrap_or(0);
-                let band = crate::types::AudioBand::ALL.iter().position(|&v| v == feature.band).unwrap_or(0);
-                self.audio_set_source_action(target, row, None, Some(kind), Some(band), rows, mod_state)
+                let kind = crate::types::AudioFeatureKind::ALL
+                    .iter()
+                    .position(|&v| v == feature.kind)
+                    .unwrap_or(0);
+                let band = crate::types::AudioBand::ALL
+                    .iter()
+                    .position(|&v| v == feature.band)
+                    .unwrap_or(0);
+                self.audio_set_source_action(
+                    target,
+                    row,
+                    None,
+                    Some(kind),
+                    Some(band),
+                    rows,
+                    mod_state,
+                )
             }
             Custom => {
-                if let Some(open) = mod_state.audio_matrix_open.get_mut(row) { *open = !*open; }
+                if let Some(open) = mod_state.audio_matrix_open.get_mut(row) {
+                    *open = !*open;
+                }
                 vec![PanelAction::Params(ParamsAction::ModConfigTabChanged)]
             }
-            Kind(k) => self.audio_set_source_action(target, row, None, Some(k), None, rows, mod_state),
-            Band(b) => self.audio_set_source_action(target, row, None, None, Some(b), rows, mod_state),
-            Invert => vec![PanelAction::Modulation(ModulationAction::AudioModSetInvert(target, rows[row].id.clone()))],
+            Kind(k) => {
+                self.audio_set_source_action(target, row, None, Some(k), None, rows, mod_state)
+            }
+            Band(b) => {
+                self.audio_set_source_action(target, row, None, None, Some(b), rows, mod_state)
+            }
+            Invert => vec![PanelAction::Modulation(
+                ModulationAction::AudioModSetInvert(target, rows[row].id.clone()),
+            )],
             TriggerMode(m) => self.audio_set_trigger_mode_action(target, row, m, rows),
-            Action(k) => vec![PanelAction::Modulation(ModulationAction::AudioModSetActionKind(target, rows[row].id.clone(), k))],
-            Wrap(w) => vec![PanelAction::Modulation(ModulationAction::AudioModSetWrap(target, rows[row].id.clone(), w))],
+            Action(k) => vec![PanelAction::Modulation(
+                ModulationAction::AudioModSetActionKind(target, rows[row].id.clone(), k),
+            )],
+            Wrap(w) => vec![PanelAction::Modulation(ModulationAction::AudioModSetWrap(
+                target,
+                rows[row].id.clone(),
+                w,
+            ))],
         }
     }
 
@@ -1459,7 +1742,9 @@ impl RowHost {
         mode_idx: usize,
         rows: &[ParamRow],
     ) -> Vec<PanelAction> {
-        vec![PanelAction::Modulation(ModulationAction::AudioModSetTriggerMode(target, rows[pi].id.clone(), mode_idx))]
+        vec![PanelAction::Modulation(
+            ModulationAction::AudioModSetTriggerMode(target, rows[pi].id.clone(), mode_idx),
+        )]
     }
 
     /// If `node_id` is a numeric param's value cell, build the
@@ -1575,11 +1860,17 @@ impl RowHost {
             }
             RowRole::DriverBtn => {
                 self.focus_mod_tab(mod_active_tab, row, ModTab::Driver);
-                vec![PanelAction::Modulation(ModulationAction::DriverToggle(target, rows[row].id.clone()))]
+                vec![PanelAction::Modulation(ModulationAction::DriverToggle(
+                    target,
+                    rows[row].id.clone(),
+                ))]
             }
             RowRole::EnvelopeBtn => {
                 self.focus_mod_tab(mod_active_tab, row, ModTab::Envelope);
-                vec![PanelAction::Modulation(ModulationAction::EnvelopeToggle(target, rows[row].id.clone()))]
+                vec![PanelAction::Modulation(ModulationAction::EnvelopeToggle(
+                    target,
+                    rows[row].id.clone(),
+                ))]
             }
             RowRole::AudioBtn => {
                 self.focus_mod_tab(mod_active_tab, row, ModTab::Audio);
@@ -1589,16 +1880,25 @@ impl RowHost {
             // `ChangeGraphParamCommand` through the editing service.
             RowRole::ToggleBtn => {
                 use crate::param_surface::RowKind;
-                let Some(info) = rows.get(row) else { return Vec::new() };
-                if matches!(info.affordance, Some(crate::param_surface::RowAffordance::Field { .. })) {
+                let Some(info) = rows.get(row) else {
+                    return Vec::new();
+                };
+                if matches!(
+                    info.affordance,
+                    Some(crate::param_surface::RowAffordance::Field { .. })
+                ) {
                     return field_row_action(&target, info, node);
                 }
                 let pid = info.id.clone();
                 match self.toggle_ids[row].as_ref().map(|ids| ids.kind) {
-                    Some(RowKind::Trigger) => vec![PanelAction::Params(ParamsAction::ParamFire(target, pid))],
+                    Some(RowKind::Trigger) => {
+                        vec![PanelAction::Params(ParamsAction::ParamFire(target, pid))]
+                    }
                     Some(RowKind::Choice) => {
                         let value = base_values.get(row).copied().unwrap_or(info.value.base);
-                        pick_list_action(target, pid, &info.spec, value, node).into_iter().collect()
+                        pick_list_action(target, pid, &info.spec, value, node)
+                            .into_iter()
+                            .collect()
                     }
                     _ => vec![PanelAction::Params(ParamsAction::ParamToggle(target, pid))],
                 }
@@ -1617,13 +1917,19 @@ impl RowHost {
                 let Some(cfg) = &self.envelope_config_ids[row] else {
                     return Vec::new();
                 };
-                cfg.drawer.resolve_action(node).cloned().into_iter().collect()
+                cfg.drawer
+                    .resolve_action(node)
+                    .cloned()
+                    .into_iter()
+                    .collect()
             }
             RowRole::AudioConfig => {
                 let Some((dids, _send_count)) = self.audio_configs[row].as_ref() else {
                     return Vec::new();
                 };
-                if let Some(PanelAction::Root(RootAction::AudioDrawerClick(_, _, click))) = dids.resolve_action(node).cloned() {
+                if let Some(PanelAction::Root(RootAction::AudioDrawerClick(_, _, click))) =
+                    dids.resolve_action(node).cloned()
+                {
                     self.audio_drawer_action(target, row, click, rows, mod_state)
                 } else {
                     dids.resolve_action(node).cloned().into_iter().collect()
@@ -1670,7 +1976,9 @@ impl RowHost {
                         .take_while(|r| r.spec.section == first.spec.section)
                         .map(|r| r.id.clone())
                         .collect();
-                    vec![PanelAction::Params(ParamsAction::RevealSectionInSceneTab(target, section))]
+                    vec![PanelAction::Params(ParamsAction::RevealSectionInSceneTab(
+                        target, section,
+                    ))]
                 })
                 .unwrap_or_default(),
             // A colour one RGB write cannot own only shows; its channels are

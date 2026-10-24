@@ -11,9 +11,11 @@ use manifold_editing::commands::automation::{
     CommitRecordedGestureCommand, RemoveAutomationPointCommand,
 };
 use manifold_ui::panels::actions::AutomationShape;
-use manifold_ui::ui_state::{AutomationClipboard, AutomationClipboardPoint, AutomationTimeSelection, UIState};
-use manifold_ui::view::{UiAutomationPointRef, UiGraphTarget, UiSegmentShape};
 use manifold_ui::slider::BitmapSlider;
+use manifold_ui::ui_state::{
+    AutomationClipboard, AutomationClipboardPoint, AutomationTimeSelection, UIState,
+};
+use manifold_ui::view::{UiAutomationPointRef, UiGraphTarget, UiSegmentShape};
 
 use crate::content_command::ContentCommand;
 
@@ -23,7 +25,9 @@ fn point_matches_ref(
     min: f32,
     max: f32,
 ) -> bool {
-    if point.beat != point_ref.beat { return false; }
+    if point.beat != point_ref.beat {
+        return false;
+    }
     BitmapSlider::value_to_normalized(point.value, min, max) == point_ref.value_norm
 }
 
@@ -117,7 +121,9 @@ pub(crate) fn select_all_in_lane(
 
 fn destination(selection: &UIState) -> Option<(UiGraphTarget, manifold_core::effects::ParamId)> {
     if let Some(range) = &selection.automation_time_selection {
-        return selection.automation_paste_context.as_ref()
+        return selection
+            .automation_paste_context
+            .as_ref()
             .filter(|context| range.lanes.contains(context))
             .or_else(|| range.lanes.first())
             .cloned();
@@ -246,19 +252,29 @@ fn copy_time_selection(
     let mut copied = Vec::new();
     for (target, param_id) in &time.lanes {
         let graph_target = graph_target(target);
-        let Some(instance) = project.preset_instance(&graph_target) else { continue; };
+        let Some(instance) = project.preset_instance(&graph_target) else {
+            continue;
+        };
         let Some(lane) = instance.automation_lanes.as_ref().and_then(|lanes| {
-            lanes.iter().find(|lane| lane.param_id == *param_id && lane.enabled)
+            lanes
+                .iter()
+                .find(|lane| lane.param_id == *param_id && lane.enabled)
         }) else {
             continue;
         };
-        let Some(param) = instance.params.get(param_id.as_ref()) else { continue; };
+        let Some(param) = instance.params.get(param_id.as_ref()) else {
+            continue;
+        };
         for point in clip_lane_to_range(lane, start, end) {
             copied.push(AutomationClipboardPoint {
                 target: target.clone(),
                 param_id: param_id.clone(),
                 beat_offset: point.beat - start,
-                value_norm: normalized_value(point.value, param.slider_span().0, param.slider_span().1),
+                value_norm: normalized_value(
+                    point.value,
+                    param.slider_span().0,
+                    param.slider_span().1,
+                ),
                 value: point.value,
                 source_min: param.slider_span().0,
                 source_max: param.slider_span().1,
@@ -308,11 +324,20 @@ pub(crate) fn copy_selected(
         }) else {
             continue;
         };
-        let Some(param) = instance.params.get(point_ref.param_id.as_ref()) else { continue; };
+        let Some(param) = instance.params.get(point_ref.param_id.as_ref()) else {
+            continue;
+        };
         let Some(point) = lane
             .points
             .iter()
-            .find(|point| point_matches_ref(point, &point_ref, param.slider_span().0, param.slider_span().1))
+            .find(|point| {
+                point_matches_ref(
+                    point,
+                    &point_ref,
+                    param.slider_span().0,
+                    param.slider_span().1,
+                )
+            })
             .copied()
         else {
             continue;
@@ -372,9 +397,13 @@ fn flatten_time_selection(
     let mut commands: Vec<Box<dyn Command>> = Vec::new();
     for (ui_target, param_id) in &time.lanes {
         let target = graph_target(ui_target);
-        let Some(instance) = project.preset_instance(&target) else { continue; };
+        let Some(instance) = project.preset_instance(&target) else {
+            continue;
+        };
         let Some(lane) = instance.automation_lanes.as_ref().and_then(|lanes| {
-            lanes.iter().find(|lane| lane.param_id == *param_id && lane.enabled)
+            lanes
+                .iter()
+                .find(|lane| lane.param_id == *param_id && lane.enabled)
         }) else {
             continue;
         };
@@ -383,18 +412,28 @@ fn flatten_time_selection(
         }
         let entry = lane.value_at(start);
         let replacement = if start == end {
-            vec![AutomationPoint { beat: start, value: entry, shape: SegmentShape::Hold }]
+            vec![AutomationPoint {
+                beat: start,
+                value: entry,
+                shape: SegmentShape::Hold,
+            }]
         } else {
             vec![
-                AutomationPoint { beat: start, value: entry, shape: SegmentShape::Hold },
-                AutomationPoint { beat: end, value: entry, shape: SegmentShape::Hold },
+                AutomationPoint {
+                    beat: start,
+                    value: entry,
+                    shape: SegmentShape::Hold,
+                },
+                AutomationPoint {
+                    beat: end,
+                    value: entry,
+                    shape: SegmentShape::Hold,
+                },
             ]
         };
         let old_points = lane.points.clone();
-        let new_points = manifold_playback::automation::punch_recorded_points(
-            &old_points,
-            &replacement,
-        );
+        let new_points =
+            manifold_playback::automation::punch_recorded_points(&old_points, &replacement);
         let mut command = CommitRecordedGestureCommand::new(
             target,
             param_id.as_ref(),
@@ -423,7 +462,10 @@ pub(crate) fn delete_selected(
 ) {
     if selection.automation_time_selection.is_some() {
         flatten_time_selection(project, selection, content_tx);
-        selection.automation_insert_beat = selection.automation_time_selection.as_ref().map(|range| range.start);
+        selection.automation_insert_beat = selection
+            .automation_time_selection
+            .as_ref()
+            .map(|range| range.start);
         selection.automation_time_selection = None;
         selection.selected_automation_point = None;
         selection.selected_automation_points.clear();
@@ -459,10 +501,21 @@ pub(crate) fn delete_selected(
         else {
             continue;
         };
-        let Some(param) = inst.params.get(&param_id) else { continue; };
+        let Some(param) = inst.params.get(&param_id) else {
+            continue;
+        };
         let mut indices: Vec<usize> = refs
             .iter()
-            .filter_map(|point_ref| lane.points.iter().position(|point| point_matches_ref(point, point_ref, param.slider_span().0, param.slider_span().1)))
+            .filter_map(|point_ref| {
+                lane.points.iter().position(|point| {
+                    point_matches_ref(
+                        point,
+                        point_ref,
+                        param.slider_span().0,
+                        param.slider_span().1,
+                    )
+                })
+            })
             .collect();
         indices.sort_unstable_by(|a, b| b.cmp(a));
         indices.dedup();
@@ -536,17 +589,25 @@ pub(crate) fn nudge_selected(
     let mut resolved: Vec<Resolved> = Vec::with_capacity(refs.len());
     for point_ref in &refs {
         let target = graph_target(&point_ref.target);
-        let Some(inst) = project.preset_instance(&target) else { continue };
-        let Some(param) = inst.params.get(point_ref.param_id.as_ref()) else { continue };
-        let Some(lane) = inst
-            .automation_lanes
-            .as_ref()
-            .and_then(|lanes| lanes.iter().find(|lane| lane.param_id.as_ref() == point_ref.param_id.as_ref()))
-        else {
+        let Some(inst) = project.preset_instance(&target) else {
+            continue;
+        };
+        let Some(param) = inst.params.get(point_ref.param_id.as_ref()) else {
+            continue;
+        };
+        let Some(lane) = inst.automation_lanes.as_ref().and_then(|lanes| {
+            lanes
+                .iter()
+                .find(|lane| lane.param_id.as_ref() == point_ref.param_id.as_ref())
+        }) else {
             continue;
         };
         let (min, max) = param.slider_span();
-        let Some(index) = lane.points.iter().position(|p| point_matches_ref(p, point_ref, min, max)) else {
+        let Some(index) = lane
+            .points
+            .iter()
+            .position(|p| point_matches_ref(p, point_ref, min, max))
+        else {
             continue;
         };
         let old = lane.points[index];
@@ -580,9 +641,18 @@ pub(crate) fn nudge_selected(
     // One shared delta keeps the group's shape. It stops at beat zero and at
     // the nearest unselected point on any lane, so a nudge never crosses (and
     // never overwrites) a point it was not asked to move.
-    let min_beat = resolved.iter().map(|r| r.old.beat.0).fold(f64::INFINITY, f64::min);
-    let room_right = resolved.iter().map(|r| r.room_right).fold(f64::INFINITY, f64::min);
-    let room_left = resolved.iter().map(|r| r.room_left).fold(f64::INFINITY, f64::min);
+    let min_beat = resolved
+        .iter()
+        .map(|r| r.old.beat.0)
+        .fold(f64::INFINITY, f64::min);
+    let room_right = resolved
+        .iter()
+        .map(|r| r.room_right)
+        .fold(f64::INFINITY, f64::min);
+    let room_left = resolved
+        .iter()
+        .map(|r| r.room_left)
+        .fold(f64::INFINITY, f64::min);
     let beat_delta = Beats(manifold_ui::automation_drag::clamp_group_beat_delta(
         beat_delta.0,
         min_beat,
@@ -612,7 +682,10 @@ pub(crate) fn nudge_selected(
         ));
         let target = graph_target(&r.point_ref.target);
         let param_id = r.point_ref.param_id.as_ref().to_string();
-        match lanes.iter_mut().find(|(t, p, _)| *t == target && *p == param_id) {
+        match lanes
+            .iter_mut()
+            .find(|(t, p, _)| *t == target && *p == param_id)
+        {
             Some((_, _, moves)) => moves.push((r.old, new)),
             None => lanes.push((target, param_id, vec![(r.old, new)])),
         }
@@ -623,7 +696,9 @@ pub(crate) fn nudge_selected(
     let mut commands: Vec<Box<dyn Command>> = lanes
         .into_iter()
         .map(|(target, param_id, moves)| {
-            Box::new(MoveAutomationPointCommand::for_group(target, param_id, moves)) as Box<dyn Command>
+            Box::new(MoveAutomationPointCommand::for_group(
+                target, param_id, moves,
+            )) as Box<dyn Command>
         })
         .collect();
     for command in &mut commands {
@@ -642,14 +717,19 @@ pub(crate) fn nudge_selected(
     if let Some(single) = selection.selected_automation_point.as_mut() {
         follow(single);
     }
-    selection.selected_automation_points.iter_mut().for_each(follow);
+    selection
+        .selected_automation_points
+        .iter_mut()
+        .for_each(follow);
     if beat_delta != Beats::ZERO
         && let Some(range) = selection.automation_time_selection.as_mut()
     {
         range.start = (range.start + beat_delta).max(Beats::ZERO);
         range.end = (range.end + beat_delta).max(Beats::ZERO);
     }
-    selection.automation_insert_beat = selection.automation_insert_beat.map(|beat| beat + beat_delta);
+    selection.automation_insert_beat = selection
+        .automation_insert_beat
+        .map(|beat| beat + beat_delta);
     true
 }
 
@@ -662,7 +742,10 @@ pub(crate) fn cut_selected(
         if copy_selected(project, selection) {
             flatten_time_selection(project, selection, content_tx);
         }
-        selection.automation_insert_beat = selection.automation_time_selection.as_ref().map(|range| range.start);
+        selection.automation_insert_beat = selection
+            .automation_time_selection
+            .as_ref()
+            .map(|range| range.start);
         selection.automation_time_selection = None;
         selection.selected_automation_point = None;
         selection.selected_automation_points.clear();
@@ -709,7 +792,9 @@ pub(crate) fn paste(
     let mut plans = Vec::new();
     for source_key in source_lanes {
         let (ui_target, param_id) = if single_lane {
-            destination.clone().expect("single-lane paste has a destination")
+            destination
+                .clone()
+                .expect("single-lane paste has a destination")
         } else {
             source_key.clone()
         };
@@ -720,8 +805,11 @@ pub(crate) fn paste(
         let Some(param) = instance.params.get(param_id.as_ref()) else {
             return;
         };
-        let (param_min, param_max, whole_numbers) =
-            (param.slider_span().0, param.slider_span().1, param.whole_numbers());
+        let (param_min, param_max, whole_numbers) = (
+            param.slider_span().0,
+            param.slider_span().1,
+            param.whole_numbers(),
+        );
         let mut phrase: Vec<_> = clipboard
             .points
             .iter()
@@ -736,7 +824,9 @@ pub(crate) fn paste(
                 };
                 value = value.clamp(param_min, param_max);
                 if whole_numbers {
-                    value = manifold_ui::automation_drag::quantise_whole_number(value, param_min, param_max);
+                    value = manifold_ui::automation_drag::quantise_whole_number(
+                        value, param_min, param_max,
+                    );
                 }
                 AutomationPoint {
                     beat: target_beat + point.beat_offset,
@@ -784,12 +874,8 @@ pub(crate) fn paste(
                 &phrase,
             )
         };
-        let mut command = CommitRecordedGestureCommand::new(
-            target,
-            param_id.as_ref(),
-            new_points,
-            old_points,
-        );
+        let mut command =
+            CommitRecordedGestureCommand::new(target, param_id.as_ref(), new_points, old_points);
         command.execute(project);
         for point in phrase {
             inserted.push(UiAutomationPointRef {
@@ -826,14 +912,25 @@ pub(crate) fn duplicate_selected(
         (time.start.min(time.end), time.start.max(time.end))
     } else {
         let refs = selected_refs(selection);
-        if refs.is_empty() { return; }
-        let start = refs.iter().map(|point| point.beat.0).fold(f64::INFINITY, f64::min);
-        let end = refs.iter().map(|point| point.beat.0).fold(f64::NEG_INFINITY, f64::max);
+        if refs.is_empty() {
+            return;
+        }
+        let start = refs
+            .iter()
+            .map(|point| point.beat.0)
+            .fold(f64::INFINITY, f64::min);
+        let end = refs
+            .iter()
+            .map(|point| point.beat.0)
+            .fold(f64::NEG_INFINITY, f64::max);
         (Beats(start), Beats(end))
     };
-    let destination = end + if start == end {
-        Beats(f64::from(grid_step.max(f32::EPSILON)))
-    } else { Beats::ZERO };
+    let destination = end
+        + if start == end {
+            Beats(f64::from(grid_step.max(f32::EPSILON)))
+        } else {
+            Beats::ZERO
+        };
     let saved_clipboard = selection.automation_clipboard.clone();
     let saved_context = selection.automation_paste_context.clone();
     if !copy_selected(project, selection) {
@@ -948,7 +1045,11 @@ pub(crate) fn insert_shape(
     let Some(param) = instance.params.get(param_id.as_ref()) else {
         return;
     };
-    let (param_min, param_max, whole_numbers) = (param.slider_span().0, param.slider_span().1, param.whole_numbers());
+    let (param_min, param_max, whole_numbers) = (
+        param.slider_span().0,
+        param.slider_span().1,
+        param.whole_numbers(),
+    );
     let lane_points = instance
         .automation_lanes
         .as_ref()
@@ -963,7 +1064,9 @@ pub(crate) fn insert_shape(
     selected_beats.sort_by(f64::total_cmp);
     selected_beats.dedup();
     let beats_per_bar = project.settings.time_signature_numerator.max(1) as f64;
-    let (start, end) = selection.automation_time_selection.as_ref()
+    let (start, end) = selection
+        .automation_time_selection
+        .as_ref()
         .filter(|range| range.end > range.start)
         .map(|range| (range.start, range.end))
         .unwrap_or_else(|| shape_range(&selected_beats, click_beat, beats_per_bar));
@@ -1139,7 +1242,11 @@ mod tests {
     fn nudged_value_steps_percent_of_range_or_one_whole_step() {
         assert!((nudged_value(0.5, 1.0, 0.0, 1.0, false) - 0.51).abs() < 1e-6);
         assert!((nudged_value(0.5, -0.1, 0.0, 1.0, false) - 0.499).abs() < 1e-6);
-        assert_eq!(nudged_value(0.995, 1.0, 0.0, 1.0, false), 1.0, "clamped to the range");
+        assert_eq!(
+            nudged_value(0.995, 1.0, 0.0, 1.0, false),
+            1.0,
+            "clamped to the range"
+        );
         // Stepped lanes move one whole step whatever the fine setting says.
         assert_eq!(nudged_value(2.0, 0.1, 0.0, 5.0, true), 3.0);
         assert_eq!(nudged_value(2.0, -1.0, 0.0, 5.0, true), 1.0);
@@ -1167,7 +1274,11 @@ mod tests {
         project.settings.master_effects.push(fx);
         let original = project.clone();
         let before = serde_json::to_value(&project).unwrap();
-        let (min, max) = project.settings.master_effects[0].params.get("amount").unwrap().slider_span();
+        let (min, max) = project.settings.master_effects[0]
+            .params
+            .get("amount")
+            .unwrap()
+            .slider_span();
         let span = max - min;
         let select = |beat: f64, value: f32| UiAutomationPointRef {
             target: ui_target.clone(),
@@ -1180,16 +1291,30 @@ mod tests {
         let (tx, rx) = crossbeam_channel::unbounded();
 
         // Right one grid step, up one percent.
-        assert!(nudge_selected(&mut project, &mut selection, &tx, Beats(0.25), 1.0));
-        let lane = &project.settings.master_effects[0].automation_lanes.as_ref().unwrap()[0];
+        assert!(nudge_selected(
+            &mut project,
+            &mut selection,
+            &tx,
+            Beats(0.25),
+            1.0
+        ));
+        let lane = &project.settings.master_effects[0]
+            .automation_lanes
+            .as_ref()
+            .unwrap()[0];
         assert_eq!(lane.points[1].beat, Beats(4.25));
         assert!((lane.points[1].value - (0.6 + 0.01 * span)).abs() < 1e-5);
-        assert_eq!(selection.selected_automation_points[0].beat, Beats(4.25), "selection follows the point");
+        assert_eq!(
+            selection.selected_automation_points[0].beat,
+            Beats(4.25),
+            "selection follows the point"
+        );
 
         // One undo entry for the whole keypress.
         let commands: Vec<_> = rx.try_iter().collect();
         assert_eq!(commands.len(), 1);
-        let ContentCommand::ExecuteBatch(batch, description) = commands.into_iter().next().unwrap() else {
+        let ContentCommand::ExecuteBatch(batch, description) = commands.into_iter().next().unwrap()
+        else {
             panic!("a nudge is one batch");
         };
         let mut undo_project = original.clone();
@@ -1201,15 +1326,28 @@ mod tests {
 
         // A point at beat 0 pins the group: a left nudge moves nothing and
         // still consumes the key.
-        selection.selected_automation_points = vec![select(0.0, 0.2), select(4.25, lane.points[1].value)];
+        selection.selected_automation_points =
+            vec![select(0.0, 0.2), select(4.25, lane.points[1].value)];
         let after = serde_json::to_value(&project).unwrap();
-        assert!(nudge_selected(&mut project, &mut selection, &tx, Beats(-0.25), 0.0));
+        assert!(nudge_selected(
+            &mut project,
+            &mut selection,
+            &tx,
+            Beats(-0.25),
+            0.0
+        ));
         assert_eq!(serde_json::to_value(&project).unwrap(), after);
         assert!(rx.try_recv().is_err(), "nothing moved, nothing sent");
 
         // No selection: the key is not consumed.
         selection.selected_automation_points.clear();
-        assert!(!nudge_selected(&mut project, &mut selection, &tx, Beats(0.25), 0.0));
+        assert!(!nudge_selected(
+            &mut project,
+            &mut selection,
+            &tx,
+            Beats(0.25),
+            0.0
+        ));
     }
 
     /// A Mirror effect whose "amount" lane holds `points`, plus the lane's
@@ -1217,18 +1355,26 @@ mod tests {
     fn project_with_amount_lane(
         points: Vec<AutomationPoint>,
     ) -> (manifold_core::project::Project, UiGraphTarget, f32, f32) {
-        let mut fx = manifold_core::effects::PresetInstance::new(manifold_core::PresetTypeId::new("Mirror"));
+        let mut fx =
+            manifold_core::effects::PresetInstance::new(manifold_core::PresetTypeId::new("Mirror"));
         fx.init_defaults();
         let ui_target = UiGraphTarget::Effect(fx.id.clone());
         let (min, max) = fx.params.get("amount").unwrap().slider_span();
-        fx.automation_lanes = Some(vec![AutomationLane { param_id: "amount".into(), enabled: true, points }]);
+        fx.automation_lanes = Some(vec![AutomationLane {
+            param_id: "amount".into(),
+            enabled: true,
+            points,
+        }]);
         let mut project = manifold_core::project::Project::default();
         project.settings.master_effects.push(fx);
         (project, ui_target, min, max)
     }
 
     fn lane_points(project: &manifold_core::project::Project) -> Vec<(f64, f32)> {
-        project.settings.master_effects[0].automation_lanes.as_ref().unwrap()[0]
+        project.settings.master_effects[0]
+            .automation_lanes
+            .as_ref()
+            .unwrap()[0]
             .points
             .iter()
             .map(|p| (p.beat.0, p.value))
@@ -1248,7 +1394,13 @@ mod tests {
             value_norm: normalized_value(0.3, min, max),
         }];
         let (tx, rx) = crossbeam_channel::unbounded();
-        assert!(!nudge_selected(&mut project, &mut selection, &tx, Beats(0.25), 1.0));
+        assert!(!nudge_selected(
+            &mut project,
+            &mut selection,
+            &tx,
+            Beats(0.25),
+            1.0
+        ));
         assert_eq!(serde_json::to_value(&project).unwrap(), before);
         assert!(rx.try_recv().is_err());
     }
@@ -1269,14 +1421,32 @@ mod tests {
         }];
         let (tx, _rx) = crossbeam_channel::unbounded();
 
-        assert!(nudge_selected(&mut project, &mut selection, &tx, Beats(0.25), 0.0));
+        assert!(nudge_selected(
+            &mut project,
+            &mut selection,
+            &tx,
+            Beats(0.25),
+            0.0
+        ));
         let points = lane_points(&project);
         assert_eq!(points.len(), 3, "a nudge never deletes a point");
-        assert!((points[1].0 - 4.1).abs() < 1e-9, "stops on the neighbour's beat, got {points:?}");
-        assert_eq!(selection.selected_automation_points[0].beat, Beats(points[1].0));
+        assert!(
+            (points[1].0 - 4.1).abs() < 1e-9,
+            "stops on the neighbour's beat, got {points:?}"
+        );
+        assert_eq!(
+            selection.selected_automation_points[0].beat,
+            Beats(points[1].0)
+        );
 
         // Already against the neighbour: further presses move nothing.
-        assert!(nudge_selected(&mut project, &mut selection, &tx, Beats(0.25), 0.0));
+        assert!(nudge_selected(
+            &mut project,
+            &mut selection,
+            &tx,
+            Beats(0.25),
+            0.0
+        ));
         assert_eq!(lane_points(&project), points);
     }
 
@@ -1285,7 +1455,10 @@ mod tests {
         let (mut project, ui_target, lane_min, lane_max) =
             project_with_amount_lane(vec![point(4.0, 0.5, SegmentShape::Linear)]);
         let twin = nudged_value(0.5, 1.0, lane_min, lane_max, false);
-        project.settings.master_effects[0].automation_lanes.as_mut().unwrap()[0]
+        project.settings.master_effects[0]
+            .automation_lanes
+            .as_mut()
+            .unwrap()[0]
             .points
             .push(point(4.0, twin, SegmentShape::Linear));
         let mut selection = UIState::new();
@@ -1296,7 +1469,13 @@ mod tests {
             value_norm: normalized_value(0.5, lane_min, lane_max),
         }];
         let (tx, _rx) = crossbeam_channel::unbounded();
-        assert!(nudge_selected(&mut project, &mut selection, &tx, Beats(0.0), 1.0));
+        assert!(nudge_selected(
+            &mut project,
+            &mut selection,
+            &tx,
+            Beats(0.0),
+            1.0
+        ));
         let points = lane_points(&project);
         assert_eq!(points.len(), 2, "the twin survives the move: {points:?}");
         assert!(points.iter().all(|p| p.1 == twin));

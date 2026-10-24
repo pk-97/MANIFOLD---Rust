@@ -1,13 +1,13 @@
 //! Buffer extent rule owned by this node.
-use std::mem::size_of;
+use crate::extent::search_fits;
 use crate::fluid_particles::CellRange;
-use manifold_node_engine::particles::FluidParticle;
 use crate::fluid_particles::MAX_BINS;
 use crate::fluid_particles::bin_counts;
 use crate::fluid_particles::bin_total;
 use crate::primitives::sort_particles_into_cells::range_storage_bytes;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::extent::search_fits;
+use manifold_node_engine::particles::FluidParticle;
+use std::mem::size_of;
 
 fn sort_particles_into_cells(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let capacity = x.items("particles").unwrap_or(0);
@@ -21,8 +21,13 @@ fn sort_particles_into_cells(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let size = ["size_x", "size_y", "size_z"].map(|name| x.scalar(name, 4.0));
     let cell_size = x.scalar("cell_size", 0.0625);
     let center = ["center_x", "center_y", "center_z"].map(|name| x.scalar(name, 0.0));
-    if !(cell_size.is_finite() && cell_size > 0.0) || center.iter().chain(&size).any(|v| !v.is_finite()) || size.iter().any(|v| *v <= 0.0) {
-        return Err(x.uncovered(format!("box {center:?} {size:?} and cell size {cell_size} must be finite and positive")));
+    if !(cell_size.is_finite() && cell_size > 0.0)
+        || center.iter().chain(&size).any(|v| !v.is_finite())
+        || size.iter().any(|v| *v <= 0.0)
+    {
+        return Err(x.uncovered(format!(
+            "box {center:?} {size:?} and cell size {cell_size} must be finite and positive"
+        )));
     }
     let bins = bin_counts(size, cell_size);
     if bin_total(bins) > MAX_BINS {

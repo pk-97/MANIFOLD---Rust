@@ -1,4 +1,3 @@
-
 // ─── Camera helpers ─────────────────────────────────────────────────
 
 /// Build a perspective projection matrix (right-handed, depth [0,1] for Metal).

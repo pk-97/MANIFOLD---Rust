@@ -19,10 +19,10 @@
 
 use std::borrow::Cow;
 
-use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::camera::Camera;
 
 pub const LOOP_CAMERA_AXIS_LABELS: &[&str] = &["+X", "-X", "+Y", "-Y", "+Z", "-Z"];
 
@@ -273,13 +273,24 @@ impl Primitive for LoopCamera {
         // above). Unset/absent reads as "off": flow 0 = linear travel,
         // K = P = 1 = one cell per loop, sway/look/zoom 0 = no effect.
         let flow = ctx.scalar_or_param("flow", 0.0).clamp(0.0, 0.95);
-        let patterns_per_loop = ctx.scalar_or_param("patterns_per_loop", 1.0).round().clamp(1.0, 8.0);
-        let pattern_length = ctx.scalar_or_param("pattern_length", 1.0).round().clamp(1.0, 8.0);
+        let patterns_per_loop = ctx
+            .scalar_or_param("patterns_per_loop", 1.0)
+            .round()
+            .clamp(1.0, 8.0);
+        let pattern_length = ctx
+            .scalar_or_param("pattern_length", 1.0)
+            .round()
+            .clamp(1.0, 8.0);
         let sway_amp = ctx.scalar_or_param("sway_amp", 0.0);
-        let sway_cycles = ctx.scalar_or_param("sway_cycles", 1.0).round().clamp(1.0, 8.0);
+        let sway_cycles = ctx
+            .scalar_or_param("sway_cycles", 1.0)
+            .round()
+            .clamp(1.0, 8.0);
         let look_sweep_amp = ctx.scalar_or_param("look_sweep_amp", 0.0);
-        let look_sweep_cycles =
-            ctx.scalar_or_param("look_sweep_cycles", 1.0).round().clamp(1.0, 8.0);
+        let look_sweep_cycles = ctx
+            .scalar_or_param("look_sweep_cycles", 1.0)
+            .round()
+            .clamp(1.0, 8.0);
         let zoom_pulse_amp = ctx.scalar_or_param("zoom_pulse_amp", 0.0).clamp(0.0, 0.5);
 
         // Framing offsets — static constants (BUG-gsql). No phase read, so
@@ -316,12 +327,12 @@ impl Primitive for LoopCamera {
         // Build position: travel along axis + lateral/height offsets.
         // Lateral offsets perpendicular to travel; height is Y offset.
         let (pos, fwd): ([f32; 3], [f32; 3]) = match axis {
-            0 => ([travel, height, lateral], [1.0, 0.0, 0.0]),       // +X
-            1 => ([-travel, height, lateral], [-1.0, 0.0, 0.0]),     // -X
-            2 => ([lateral, travel, height], [0.0, 1.0, 0.0]),       // +Y
-            3 => ([lateral, -travel, height], [0.0, -1.0, 0.0]),     // -Y
-            4 => ([lateral, height, travel], [0.0, 0.0, 1.0]),       // +Z
-            _ => ([lateral, height, -travel], [0.0, 0.0, -1.0]),     // -Z
+            0 => ([travel, height, lateral], [1.0, 0.0, 0.0]), // +X
+            1 => ([-travel, height, lateral], [-1.0, 0.0, 0.0]), // -X
+            2 => ([lateral, travel, height], [0.0, 1.0, 0.0]), // +Y
+            3 => ([lateral, -travel, height], [0.0, -1.0, 0.0]), // -Y
+            4 => ([lateral, height, travel], [0.0, 0.0, 1.0]), // +Z
+            _ => ([lateral, height, -travel], [0.0, 0.0, -1.0]), // -Z
         };
 
         // The lateral direction of each axis arm — the look sweep drifts
@@ -345,7 +356,8 @@ impl Primitive for LoopCamera {
         let fov = (fov_y + zoom_pulse_amp * (std::f32::consts::PI * phase).sin()).max(0.01);
         let mut cam = Camera::look_at(pos, target, [0.0, 1.0, 0.0], fov, near, far);
         cam.rotate_local(yaw, pitch, roll);
-        cam.world_period = Some(fwd.map(|component| component * patterns_per_loop * pattern_length * cell_size));
+        cam.world_period =
+            Some(fwd.map(|component| component * patterns_per_loop * pattern_length * cell_size));
 
         ctx.outputs.set_camera("out", cam);
         ctx.outputs.set_scalar("pos_x", ParamValue::Float(pos[0]));
@@ -391,7 +403,11 @@ mod tests {
         let zoom = |phase: f32| 0.25 * (std::f32::consts::PI * phase).sin();
 
         assert_eq!(sway(0.0, 2.0), 0.0, "sway must be exactly 0 at the seam");
-        assert_eq!(look(0.0, 1.0), 0.0, "look sweep must be exactly 0 at the seam");
+        assert_eq!(
+            look(0.0, 1.0),
+            0.0,
+            "look sweep must be exactly 0 at the seam"
+        );
         assert_eq!(zoom(0.0), 0.0, "zoom pulse must be exactly 0 at the seam");
 
         // Wrap mechanics: the phase reader fract()'s its input, so the seam
@@ -441,12 +457,12 @@ mod tests {
     // scalar input so both the fract()'d seam path and the movement terms
     // are exercised end to end.
 
-    use manifold_node_engine::exec::backend::Backend;
+    use manifold_core::{Beats, Seconds};
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs};
+    use manifold_node_engine::exec::backend::Backend;
     use manifold_node_engine::exec::effect_node::{EffectNodeContext, FrameTime, ParamValues};
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::{exec::backend::MockBackend, ports::ScalarType};
-    use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -487,7 +503,12 @@ mod tests {
             (0, 0),
         );
         backend.set_scalar(phase_slot, ParamValue::Float(phase));
-        let out_slot = backend.acquire(ResourceId(1), manifold_node_engine::ports::PortType::Camera, None, (0, 0));
+        let out_slot = backend.acquire(
+            ResourceId(1),
+            manifold_node_engine::ports::PortType::Camera,
+            None,
+            (0, 0),
+        );
 
         let mut params = ParamValues::default();
         for &(name, default) in defaults {
@@ -535,7 +556,9 @@ mod tests {
         for (slot, value) in camera_scratch.drain(..) {
             backend.set_camera(slot, value);
         }
-        backend.camera(out_slot).expect("camera output should be set")
+        backend
+            .camera(out_slot)
+            .expect("camera output should be set")
     }
 
     /// INV-3 with the framing offsets live: nonzero roll/pitch/yaw plus every
@@ -583,7 +606,11 @@ mod tests {
             "yaw π/2 must face +X, got fwd {:?}",
             cam.fwd
         );
-        assert!(cam.fwd[1].abs() < 1e-5 && cam.fwd[2].abs() < 1e-5, "fwd {:?}", cam.fwd);
+        assert!(
+            cam.fwd[1].abs() < 1e-5 && cam.fwd[2].abs() < 1e-5,
+            "fwd {:?}",
+            cam.fwd
+        );
     }
 
     /// Zero offsets are byte-identical to the pre-offset camera: existing
@@ -599,6 +626,9 @@ mod tests {
         let target = [pos[0], pos[1], pos[2] + 1.0];
         let mut expected = Camera::look_at(pos, target, [0.0, 1.0, 0.0], 0.9, 0.05, 200.0);
         expected.world_period = Some([0.0, 0.0, cell]);
-        assert_eq!(base, expected, "zero roll/pitch/yaw must not perturb the camera at all");
+        assert_eq!(
+            base, expected,
+            "zero roll/pitch/yaw must not perturb the camera at all"
+        );
     }
 }

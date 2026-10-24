@@ -244,7 +244,10 @@ mod tests {
             "peak at {peak_freq} Hz, expected 1000"
         );
         // Normalised so a unit sine reads ≈ 1.0 at its bin.
-        assert!((peak - 1.0).abs() < 0.2, "peak magnitude {peak}, expected ≈1.0");
+        assert!(
+            (peak - 1.0).abs() < 0.2,
+            "peak magnitude {peak}, expected ≈1.0"
+        );
     }
 
     #[test]

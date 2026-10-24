@@ -118,7 +118,11 @@ impl Camera {
     /// Both frames must declare the same period. As with any sampled periodic
     /// signal, correspondence needs less than half a period of travel per
     /// sample. The shared reset detector handles cuts and seeks first.
-    pub fn previous_world_offset(&self, previous_pos: [f32; 3], previous_period: Option<[f32; 3]>) -> [f32; 3] {
+    pub fn previous_world_offset(
+        &self,
+        previous_pos: [f32; 3],
+        previous_period: Option<[f32; 3]>,
+    ) -> [f32; 3] {
         let Some(period) = self.world_period.filter(|p| Some(*p) == previous_period) else {
             return [0.0; 3];
         };
@@ -349,7 +353,14 @@ impl Camera {
         let right = normalize3(cross3(fwd, up_hint));
         let up = normalize3(cross3(right, fwd));
         let target = [pos[0] + fwd[0], pos[1] + fwd[1], pos[2] + fwd[2]];
-        Self { pos, fwd, right, up, view: look_at_rh(pos, target, up), ..self }
+        Self {
+            pos,
+            fwd,
+            right,
+            up,
+            view: look_at_rh(pos, target, up),
+            ..self
+        }
     }
 
     /// Rotate the basis by camera-local Euler angles (radians), applied in
@@ -412,9 +423,14 @@ impl Camera {
     pub fn nudge_local(&mut self, offset: [f32; 3], turn: [f32; 3]) {
         if offset != [0.0; 3] {
             for axis in 0..3 {
-                self.pos[axis] += self.right[axis] * offset[0] + self.up[axis] * offset[1] - self.fwd[axis] * offset[2];
+                self.pos[axis] += self.right[axis] * offset[0] + self.up[axis] * offset[1]
+                    - self.fwd[axis] * offset[2];
             }
-            let target = [self.pos[0] + self.fwd[0], self.pos[1] + self.fwd[1], self.pos[2] + self.fwd[2]];
+            let target = [
+                self.pos[0] + self.fwd[0],
+                self.pos[1] + self.fwd[1],
+                self.pos[2] + self.fwd[2],
+            ];
             self.view = look_at_rh(self.pos, target, self.up);
         }
         self.rotate_local(turn[1], turn[0], turn[2]);
@@ -457,7 +473,12 @@ impl Camera {
     /// in a `width x height` render target using this camera's `view_proj`.
     /// Returns `None` when the point is behind the near plane (`clip.w <=
     /// 0`), matching the standard perspective-divide cull.
-    pub fn project_to_pixel(&self, world: [f32; 3], width: u32, height: u32) -> Option<PixelProjection> {
+    pub fn project_to_pixel(
+        &self,
+        world: [f32; 3],
+        width: u32,
+        height: u32,
+    ) -> Option<PixelProjection> {
         let aspect = width as f32 / (height.max(1) as f32);
         let vp = self.view_proj(aspect);
         let clip = mat4_mul_vec4(vp, [world[0], world[1], world[2], 1.0]);
@@ -469,7 +490,13 @@ impl Camera {
         let px = (ndc[0] * 0.5 + 0.5) * width as f32;
         let py = (1.0 - (ndc[1] * 0.5 + 0.5)) * height as f32;
         let view_z = dot3(sub3(world, self.pos), self.fwd);
-        Some(PixelProjection { px, py, ndc, depth: clip[2] / clip[3], view_z })
+        Some(PixelProjection {
+            px,
+            py,
+            ndc,
+            depth: clip[2] / clip[3],
+            view_z,
+        })
     }
 
     /// The world ray under pixel (`px`, `py`) of a `width x height` render:
@@ -486,11 +513,15 @@ impl Camera {
         match self.mode {
             CameraMode::Perspective { fov_y } => {
                 let t = (fov_y * 0.5).tan();
-                (self.pos, normalize3(across(self.fwd, x * t * aspect, y * t)))
+                (
+                    self.pos,
+                    normalize3(across(self.fwd, x * t * aspect, y * t)),
+                )
             }
-            CameraMode::Orthographic { half_height } => {
-                (across(self.pos, x * half_height * aspect, y * half_height), self.fwd)
-            }
+            CameraMode::Orthographic { half_height } => (
+                across(self.pos, x * half_height * aspect, y * half_height),
+                self.fwd,
+            ),
         }
     }
 }
@@ -572,14 +603,7 @@ fn normalize3(v: [f32; 3]) -> [f32; 3] {
 
 /// Right-handed orthographic camera projection, near = 1 and far = 0.
 /// Light shadow maps use the separate forward helper in `mesh_pipeline`.
-fn ortho_rh(
-    left: f32,
-    right: f32,
-    bottom: f32,
-    top: f32,
-    near: f32,
-    far: f32,
-) -> [[f32; 4]; 4] {
+fn ortho_rh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> [[f32; 4]; 4] {
     let rml = right - left;
     let tmb = top - bottom;
     let fmn = far - near;
@@ -587,12 +611,7 @@ fn ortho_rh(
         [2.0 / rml, 0.0, 0.0, 0.0],
         [0.0, 2.0 / tmb, 0.0, 0.0],
         [0.0, 0.0, 1.0 / fmn, 0.0],
-        [
-            -(right + left) / rml,
-            -(top + bottom) / tmb,
-            far / fmn,
-            1.0,
-        ],
+        [-(right + left) / rml, -(top + bottom) / tmb, far / fmn, 1.0],
     ]
 }
 
@@ -613,7 +632,11 @@ mod tests {
                 for s in [0.5_f32, 6.0, 40.0] {
                     let point = std::array::from_fn(|i| origin[i] + dir[i] * s);
                     let p = cam.project_to_pixel(point, 640, 480).expect("in front");
-                    assert!((p.px - px).abs() < 0.02 && (p.py - py).abs() < 0.02, "{:?} at {s}: {p:?}", (px, py));
+                    assert!(
+                        (p.px - px).abs() < 0.02 && (p.py - py).abs() < 0.02,
+                        "{:?} at {s}: {p:?}",
+                        (px, py)
+                    );
                 }
             }
         }
@@ -628,10 +651,18 @@ mod tests {
             Camera::from_pos_euler([0.0; 3], 0.0, 0.0, 0.0, 0.9, 20.0, 20.0),
             Camera::look_at([0.0, 0.0, 5.0], [0.0; 3], [0.0, 1.0, 0.0], 0.9, 1e-6, 0.5),
         ] {
-            assert!(cam.near > 0.0 && cam.far > cam.near, "near {} far {}", cam.near, cam.far);
+            assert!(
+                cam.near > 0.0 && cam.far > cam.near,
+                "near {} far {}",
+                cam.near,
+                cam.far
+            );
             assert!(cam.proj(1.5).iter().flatten().all(|v| v.is_finite()));
         }
-        assert_eq!(Camera::orbit_perspective(0.7, 0.3, 4.0, 0.9, 0.0, 0.0, 20.0, 6.0).near, 20.0);
+        assert_eq!(
+            Camera::orbit_perspective(0.7, 0.3, 4.0, 0.9, 0.0, 0.0, 20.0, 6.0).near,
+            20.0
+        );
     }
 
     #[test]
@@ -696,17 +727,15 @@ mod tests {
         let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
         let half_pi = std::f32::consts::FRAC_PI_2;
         // Sample tilt densely across the full wrap, including both poles.
-        let mut prev = Camera::orbit_perspective(0.7, -half_pi * 2.0, 4.0, 0.9, 0.0, 0.0, 0.05, 200.0);
+        let mut prev =
+            Camera::orbit_perspective(0.7, -half_pi * 2.0, 4.0, 0.9, 0.0, 0.0, 0.05, 200.0);
         let steps = 720;
         for i in 1..=steps {
             let tilt = -half_pi * 2.0 + (i as f32 / steps as f32) * half_pi * 4.0;
             let cam = Camera::orbit_perspective(0.7, tilt, 4.0, 0.9, 0.0, 0.0, 0.05, 200.0);
             // Adjacent samples (0.5° apart) must keep near-identical frames:
             // a pole flip shows up as dot ≈ -1 on `up`/`right`.
-            for (name, a, b) in [
-                ("right", prev.right, cam.right),
-                ("up", prev.up, cam.up),
-            ] {
+            for (name, a, b) in [("right", prev.right, cam.right), ("up", prev.up, cam.up)] {
                 assert!(
                     dot(a, b) > 0.99,
                     "{name} flipped at tilt {tilt}: dot = {}",
@@ -714,8 +743,14 @@ mod tests {
                 );
             }
             // Basis stays orthonormal everywhere, poles included.
-            assert!((dot(cam.up, cam.up) - 1.0).abs() < 1e-4, "unit up at {tilt}");
-            assert!((dot(cam.right, cam.right) - 1.0).abs() < 1e-4, "unit right at {tilt}");
+            assert!(
+                (dot(cam.up, cam.up) - 1.0).abs() < 1e-4,
+                "unit up at {tilt}"
+            );
+            assert!(
+                (dot(cam.right, cam.right) - 1.0).abs() < 1e-4,
+                "unit right at {tilt}"
+            );
             assert!(dot(cam.fwd, cam.up).abs() < 1e-4, "fwd⊥up at {tilt}");
             prev = cam;
         }
@@ -732,7 +767,10 @@ mod tests {
             let pitch = -pi + (i as f32 / steps as f32) * 2.0 * pi;
             let cam = Camera::from_pos_euler([0.0, 0.0, 5.0], 0.4, pitch, 0.0, 0.9, 0.05, 200.0);
             assert!(dot(prev.up, cam.up) > 0.99, "up flipped at pitch {pitch}");
-            assert!(dot(prev.right, cam.right) > 0.99, "right flipped at pitch {pitch}");
+            assert!(
+                dot(prev.right, cam.right) > 0.99,
+                "right flipped at pitch {pitch}"
+            );
             prev = cam;
         }
     }
@@ -749,9 +787,15 @@ mod tests {
         let cam = Camera::from_pos_euler([1.0, 2.0, 3.0], 0.0, 0.0, 0.0, 0.9, 0.05, 200.0);
         assert!((cam.fwd[0] - 0.0).abs() < 1e-6);
         assert!((cam.fwd[1] - 0.0).abs() < 1e-6);
-        assert!((cam.fwd[2] - -1.0).abs() < 1e-6, "expected -Z forward, got {:?}", cam.fwd);
+        assert!(
+            (cam.fwd[2] - -1.0).abs() < 1e-6,
+            "expected -Z forward, got {:?}",
+            cam.fwd
+        );
         assert_eq!(cam.pos, [1.0, 2.0, 3.0]);
-        assert!(matches!(cam.mode, CameraMode::Perspective { fov_y } if (fov_y - 0.9).abs() < 1e-6));
+        assert!(
+            matches!(cam.mode, CameraMode::Perspective { fov_y } if (fov_y - 0.9).abs() < 1e-6)
+        );
     }
 
     #[test]
@@ -789,7 +833,14 @@ mod tests {
     #[test]
     fn look_at_basis_is_orthonormal() {
         let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-        let cam = Camera::look_at([1.0, 2.0, 3.0], [-4.0, 0.5, 2.0], [0.0, 1.0, 0.0], 1.0, 0.1, 100.0);
+        let cam = Camera::look_at(
+            [1.0, 2.0, 3.0],
+            [-4.0, 0.5, 2.0],
+            [0.0, 1.0, 0.0],
+            1.0,
+            0.1,
+            100.0,
+        );
         assert!((dot(cam.fwd, cam.fwd) - 1.0).abs() < 1e-5);
         assert!((dot(cam.right, cam.right) - 1.0).abs() < 1e-5);
         assert!((dot(cam.up, cam.up) - 1.0).abs() < 1e-5);
@@ -800,7 +851,14 @@ mod tests {
 
     #[test]
     fn rotate_local_zero_angles_is_an_exact_noop() {
-        let mut cam = Camera::look_at([2.0, 1.0, 0.0], [2.0, 1.0, 5.0], [0.0, 1.0, 0.0], 0.9, 0.05, 200.0);
+        let mut cam = Camera::look_at(
+            [2.0, 1.0, 0.0],
+            [2.0, 1.0, 5.0],
+            [0.0, 1.0, 0.0],
+            0.9,
+            0.05,
+            200.0,
+        );
         let before = cam;
         cam.rotate_local(0.0, 0.0, 0.0);
         assert_eq!(cam, before, "zero angles must not touch a single field");
@@ -811,28 +869,67 @@ mod tests {
         // look_at down +Z gives fwd +Z, right -X, up +Y. A quarter-turn yaw
         // about up must face +X (positive yaw looks left — the
         // from_pos_euler turn direction).
-        let mut cam = Camera::look_at([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0], 0.9, 0.05, 200.0);
+        let mut cam = Camera::look_at(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0],
+            0.9,
+            0.05,
+            200.0,
+        );
         cam.rotate_local(std::f32::consts::FRAC_PI_2, 0.0, 0.0);
         assert!((cam.fwd[0] - 1.0).abs() < 1e-5, "fwd.x = {}", cam.fwd[0]);
-        assert!(cam.fwd[1].abs() < 1e-5 && cam.fwd[2].abs() < 1e-5, "fwd = {:?}", cam.fwd);
+        assert!(
+            cam.fwd[1].abs() < 1e-5 && cam.fwd[2].abs() < 1e-5,
+            "fwd = {:?}",
+            cam.fwd
+        );
         // Position and projection params are rotation-invariant.
         assert_eq!(cam.pos, [0.0, 0.0, 0.0]);
-        assert!(matches!(cam.mode, CameraMode::Perspective { fov_y } if (fov_y - 0.9).abs() < 1e-6));
+        assert!(
+            matches!(cam.mode, CameraMode::Perspective { fov_y } if (fov_y - 0.9).abs() < 1e-6)
+        );
     }
 
     #[test]
     fn rotate_local_pitch_looks_up_and_roll_banks_around_fwd() {
-        let mut cam = Camera::look_at([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0], 0.9, 0.05, 200.0);
+        let mut cam = Camera::look_at(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0],
+            0.9,
+            0.05,
+            200.0,
+        );
         cam.rotate_local(0.0, 0.5, 0.0);
-        assert!(cam.fwd[1] > 0.4, "positive pitch must tilt fwd up: {:?}", cam.fwd);
+        assert!(
+            cam.fwd[1] > 0.4,
+            "positive pitch must tilt fwd up: {:?}",
+            cam.fwd
+        );
 
         // Roll alone must leave pos and fwd bit-identical and rotate right
         // toward up — the orbit_perspective roll convention.
-        let mut rolled = Camera::look_at([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0], 0.9, 0.05, 200.0);
+        let mut rolled = Camera::look_at(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0],
+            0.9,
+            0.05,
+            200.0,
+        );
         rolled.rotate_local(0.0, 0.0, 1.5);
         assert_eq!(rolled.pos, [0.0, 0.0, 0.0]);
-        assert!(rolled.fwd[2] > 0.99, "roll must not move fwd: {:?}", rolled.fwd);
-        assert!(rolled.right[1] > 0.9, "right must bank toward up: {:?}", rolled.right);
+        assert!(
+            rolled.fwd[2] > 0.99,
+            "roll must not move fwd: {:?}",
+            rolled.fwd
+        );
+        assert!(
+            rolled.right[1] > 0.9,
+            "right must bank toward up: {:?}",
+            rolled.right
+        );
     }
 
     #[test]
@@ -844,14 +941,39 @@ mod tests {
             (3.1, -3.1, 3.1),
             (0.0, 3.1, 0.0),
         ] {
-            let mut cam = Camera::look_at([1.0, 2.0, 3.0], [-4.0, 0.5, 2.0], [0.0, 1.0, 0.0], 1.0, 0.1, 100.0);
+            let mut cam = Camera::look_at(
+                [1.0, 2.0, 3.0],
+                [-4.0, 0.5, 2.0],
+                [0.0, 1.0, 0.0],
+                1.0,
+                0.1,
+                100.0,
+            );
             cam.rotate_local(yaw, pitch, roll);
-            assert!((dot(cam.fwd, cam.fwd) - 1.0).abs() < 1e-4, "unit fwd at {yaw},{pitch},{roll}");
-            assert!((dot(cam.right, cam.right) - 1.0).abs() < 1e-4, "unit right at {yaw},{pitch},{roll}");
-            assert!((dot(cam.up, cam.up) - 1.0).abs() < 1e-4, "unit up at {yaw},{pitch},{roll}");
-            assert!(dot(cam.fwd, cam.right).abs() < 1e-4, "fwd⊥right at {yaw},{pitch},{roll}");
-            assert!(dot(cam.fwd, cam.up).abs() < 1e-4, "fwd⊥up at {yaw},{pitch},{roll}");
-            assert!(dot(cam.right, cam.up).abs() < 1e-4, "right⊥up at {yaw},{pitch},{roll}");
+            assert!(
+                (dot(cam.fwd, cam.fwd) - 1.0).abs() < 1e-4,
+                "unit fwd at {yaw},{pitch},{roll}"
+            );
+            assert!(
+                (dot(cam.right, cam.right) - 1.0).abs() < 1e-4,
+                "unit right at {yaw},{pitch},{roll}"
+            );
+            assert!(
+                (dot(cam.up, cam.up) - 1.0).abs() < 1e-4,
+                "unit up at {yaw},{pitch},{roll}"
+            );
+            assert!(
+                dot(cam.fwd, cam.right).abs() < 1e-4,
+                "fwd⊥right at {yaw},{pitch},{roll}"
+            );
+            assert!(
+                dot(cam.fwd, cam.up).abs() < 1e-4,
+                "fwd⊥up at {yaw},{pitch},{roll}"
+            );
+            assert!(
+                dot(cam.right, cam.up).abs() < 1e-4,
+                "right⊥up at {yaw},{pitch},{roll}"
+            );
         }
     }
 
@@ -859,8 +981,17 @@ mod tests {
     fn project_to_pixel_center_point_lands_on_center_pixel() {
         // Camera at origin looking down -Z (fov_y irrelevant for an
         // on-axis point — s=0 regardless of the perspective scale factor).
-        let cam = Camera::look_at([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], std::f32::consts::FRAC_PI_2, 0.1, 100.0);
-        let proj = cam.project_to_pixel([0.0, 0.0, -5.0], 800, 600).expect("in front of camera");
+        let cam = Camera::look_at(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, -1.0],
+            [0.0, 1.0, 0.0],
+            std::f32::consts::FRAC_PI_2,
+            0.1,
+            100.0,
+        );
+        let proj = cam
+            .project_to_pixel([0.0, 0.0, -5.0], 800, 600)
+            .expect("in front of camera");
         assert!((proj.ndc[0] - 0.0).abs() < 1e-5, "ndc.x = {}", proj.ndc[0]);
         assert!((proj.ndc[1] - 0.0).abs() < 1e-5, "ndc.y = {}", proj.ndc[1]);
         assert!((proj.px - 400.0).abs() < 1e-3, "px = {}", proj.px);
@@ -872,8 +1003,17 @@ mod tests {
         // fov_y = 90 deg (half-angle 45 deg, f = 1/tan(45 deg) = 1) so a
         // point at view-space (1, 0, -1) sits exactly on the right frustum
         // edge: clip.x = f/aspect * 1 = 1, clip.w = 1 -> ndc.x = 1.
-        let cam = Camera::look_at([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], std::f32::consts::FRAC_PI_2, 0.1, 100.0);
-        let proj = cam.project_to_pixel([1.0, 0.0, -1.0], 512, 512).expect("in front of camera");
+        let cam = Camera::look_at(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, -1.0],
+            [0.0, 1.0, 0.0],
+            std::f32::consts::FRAC_PI_2,
+            0.1,
+            100.0,
+        );
+        let proj = cam
+            .project_to_pixel([1.0, 0.0, -1.0], 512, 512)
+            .expect("in front of camera");
         assert!((proj.ndc[0] - 1.0).abs() < 1e-5, "ndc.x = {}", proj.ndc[0]);
         assert!((proj.ndc[1] - 0.0).abs() < 1e-5, "ndc.y = {}", proj.ndc[1]);
         assert!((proj.px - 512.0).abs() < 1e-3, "px = {}", proj.px);
@@ -882,14 +1022,28 @@ mod tests {
 
     #[test]
     fn project_to_pixel_behind_camera_is_none() {
-        let cam = Camera::look_at([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], std::f32::consts::FRAC_PI_2, 0.1, 100.0);
+        let cam = Camera::look_at(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, -1.0],
+            [0.0, 1.0, 0.0],
+            std::f32::consts::FRAC_PI_2,
+            0.1,
+            100.0,
+        );
         // +Z is behind a camera looking down -Z.
         assert_eq!(cam.project_to_pixel([0.0, 0.0, 1.0], 512, 512), None);
     }
 
     #[test]
     fn reversed_depth_preserves_close_surfaces_with_small_near_plane() {
-        let cam = Camera::look_at([0.0; 3], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], 0.9, 0.001, 200.0);
+        let cam = Camera::look_at(
+            [0.0; 3],
+            [0.0, 0.0, -1.0],
+            [0.0, 1.0, 0.0],
+            0.9,
+            0.001,
+            200.0,
+        );
         let front = cam.project_to_pixel([0.0, 0.0, -23.0], 256, 256).unwrap();
         let back = cam.project_to_pixel([0.0, 0.0, -23.001], 256, 256).unwrap();
         assert!(front.depth > back.depth);
@@ -906,7 +1060,10 @@ mod tests {
             for d in [near, near * 2.0, 23.0, 200.0, far] {
                 let p = cam.project_to_pixel([0.0, 0.0, -d], 256, 256).unwrap();
                 let recovered = linearize_depth(p.depth, near, far);
-                assert!((recovered - d).abs() <= d * 2e-6, "near={near}, d={d}, recovered={recovered}");
+                assert!(
+                    (recovered - d).abs() <= d * 2e-6,
+                    "near={near}, d={d}, recovered={recovered}"
+                );
             }
         }
     }
@@ -914,10 +1071,17 @@ mod tests {
     #[test]
     fn camera_projection_endpoints_are_reversed_for_both_modes() {
         let mut cam = Camera::look_at([0.0; 3], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], 0.9, 0.1, 200.0);
-        for mode in [CameraMode::Perspective { fov_y: 0.9 }, CameraMode::Orthographic { half_height: 2.0 }] {
+        for mode in [
+            CameraMode::Perspective { fov_y: 0.9 },
+            CameraMode::Orthographic { half_height: 2.0 },
+        ] {
             cam.mode = mode;
-            let near = cam.project_to_pixel([0.0, 0.0, -cam.near], 256, 256).unwrap();
-            let far = cam.project_to_pixel([0.0, 0.0, -cam.far], 256, 256).unwrap();
+            let near = cam
+                .project_to_pixel([0.0, 0.0, -cam.near], 256, 256)
+                .unwrap();
+            let far = cam
+                .project_to_pixel([0.0, 0.0, -cam.far], 256, 256)
+                .unwrap();
             assert!((near.depth - 1.0).abs() < 1e-6, "{mode:?}: {near:?}");
             assert!(far.depth.abs() < 1e-6, "{mode:?}: {far:?}");
         }
@@ -936,7 +1100,11 @@ mod tests {
             let mut current = Camera::default_perspective();
             current.pos = [0.1, 0.1, 0.1];
             current.world_period = Some(period);
-            let previous = [current.pos[0] + axis[0] - 0.2, current.pos[1] + axis[1] - 0.2, current.pos[2] + axis[2] - 0.2];
+            let previous = [
+                current.pos[0] + axis[0] - 0.2,
+                current.pos[1] + axis[1] - 0.2,
+                current.pos[2] + axis[2] - 0.2,
+            ];
             assert_eq!(current.previous_world_offset(previous, Some(period)), axis);
         }
     }
@@ -947,11 +1115,23 @@ mod tests {
         current.pos = [0.1, 0.0, 0.0];
         current.world_period = Some([10.0, 0.0, 0.0]);
 
-        assert_eq!(current.previous_world_offset([0.3, 0.0, 0.0], Some([10.0, 0.0, 0.0])), [0.0; 3]);
-        assert_eq!(current.previous_world_offset([9.9, 0.0, 0.0], None), [0.0; 3]);
-        assert_eq!(current.previous_world_offset([9.9, 0.0, 0.0], Some([12.0, 0.0, 0.0])), [0.0; 3]);
+        assert_eq!(
+            current.previous_world_offset([0.3, 0.0, 0.0], Some([10.0, 0.0, 0.0])),
+            [0.0; 3]
+        );
+        assert_eq!(
+            current.previous_world_offset([9.9, 0.0, 0.0], None),
+            [0.0; 3]
+        );
+        assert_eq!(
+            current.previous_world_offset([9.9, 0.0, 0.0], Some([12.0, 0.0, 0.0])),
+            [0.0; 3]
+        );
         current.world_period = None;
-        assert_eq!(current.previous_world_offset([100.0, 0.0, 0.0], Some([10.0, 0.0, 0.0])), [0.0; 3]);
+        assert_eq!(
+            current.previous_world_offset([100.0, 0.0, 0.0], Some([10.0, 0.0, 0.0])),
+            [0.0; 3]
+        );
     }
 
     #[test]
@@ -982,9 +1162,18 @@ mod tests {
     #[test]
     fn pinhole_lens_is_neutral_per_committed_field_semantics() {
         let p = LensParams::PINHOLE;
-        assert!(p.focus_distance <= 0.0, "focus_distance should be <= 0 (neutral)");
-        assert!(p.f_stop.is_infinite() && p.f_stop > 0.0, "f_stop should be +infinity (pinhole)");
-        assert_eq!(p.shutter_angle, 0.0, "shutter_angle should be 0 (no motion blur)");
+        assert!(
+            p.focus_distance <= 0.0,
+            "focus_distance should be <= 0 (neutral)"
+        );
+        assert!(
+            p.f_stop.is_infinite() && p.f_stop > 0.0,
+            "f_stop should be +infinity (pinhole)"
+        );
+        assert_eq!(
+            p.shutter_angle, 0.0,
+            "shutter_angle should be 0 (no motion blur)"
+        );
         assert_eq!(p.exposure_ev, 0.0, "exposure_ev should be 0 (neutral)");
     }
 
@@ -992,9 +1181,25 @@ mod tests {
     fn every_constructor_lens_defaults_to_pinhole() {
         for (label, cam) in [
             ("default_perspective", Camera::default_perspective()),
-            ("orbit_perspective", Camera::orbit_perspective(0.7, 0.3, 4.0, 0.9, 0.0, 0.0, 0.05, 200.0)),
-            ("from_pos_euler", Camera::from_pos_euler([1.0, 2.0, 3.0], 0.0, 0.0, 0.0, 0.9, 0.05, 200.0)),
-            ("look_at", Camera::look_at([1.0, 2.0, 3.0], [-4.0, 0.5, 2.0], [0.0, 1.0, 0.0], 1.0, 0.1, 100.0)),
+            (
+                "orbit_perspective",
+                Camera::orbit_perspective(0.7, 0.3, 4.0, 0.9, 0.0, 0.0, 0.05, 200.0),
+            ),
+            (
+                "from_pos_euler",
+                Camera::from_pos_euler([1.0, 2.0, 3.0], 0.0, 0.0, 0.0, 0.9, 0.05, 200.0),
+            ),
+            (
+                "look_at",
+                Camera::look_at(
+                    [1.0, 2.0, 3.0],
+                    [-4.0, 0.5, 2.0],
+                    [0.0, 1.0, 0.0],
+                    1.0,
+                    0.1,
+                    100.0,
+                ),
+            ),
         ] {
             assert_eq!(cam.lens, LensParams::PINHOLE, "{label}");
         }

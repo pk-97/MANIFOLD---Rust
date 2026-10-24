@@ -14,14 +14,23 @@ pub(crate) struct SegmentRefusal {
 
 impl SegmentRefusal {
     pub(crate) fn new(key: u64, members: &[&PresetInstance], reason: String) -> Self {
-        Self { key, effect_ids: members.iter().map(|fx| fx.id.clone()).collect(), reason }
+        Self {
+            key,
+            effect_ids: members.iter().map(|fx| fx.id.clone()).collect(),
+            reason,
+        }
     }
 }
 
 impl std::fmt::Display for SegmentRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let ids: Vec<&str> = self.effect_ids.iter().map(|id| id.as_str()).collect();
-        write!(f, "segment of effects [{}] refused: {}", ids.join(", "), self.reason)
+        write!(
+            f,
+            "segment of effects [{}] refused: {}",
+            ids.join(", "),
+            self.reason
+        )
     }
 }
 
@@ -55,7 +64,10 @@ pub(crate) fn resolve_segment_bindings(
             // Repoint into the segment namespace: a fused-away target goes
             // through the segment retarget map; a surviving target resolves
             // by prefixing its stable node id.
-            let prefixed_key = (format!("{prefix}{}", core.node_id.as_str()), core.inner_param.clone());
+            let prefixed_key = (
+                format!("{prefix}{}", core.node_id.as_str()),
+                core.inner_param.clone(),
+            );
             let mut c = core.clone();
             if let Some((fused_id, field)) = view.retarget.get(&prefixed_key) {
                 c.node_id = fused_id.clone();

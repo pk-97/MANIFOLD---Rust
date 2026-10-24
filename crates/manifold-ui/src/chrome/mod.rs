@@ -22,7 +22,7 @@ pub mod layout;
 pub mod theme;
 pub mod view;
 
-pub use diff::{materialize, materialize_sliders, ChromeHost, Reconcile};
-pub use layout::{solve, solve_into, LaidNode};
+pub use diff::{ChromeHost, Reconcile, materialize, materialize_sliders};
+pub use layout::{LaidNode, solve, solve_into};
 pub use theme::Theme;
-pub use view::{validate, Align, Layout, Pad, Sizing, SliderSpec, View, ViewIntent};
+pub use view::{Align, Layout, Pad, Sizing, SliderSpec, View, ViewIntent, validate};

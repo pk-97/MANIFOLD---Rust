@@ -1,15 +1,18 @@
 mod tests {
-use manifold_node_engine::palette::*;
-use manifold_core::PresetTypeId;
+    use manifold_core::PresetTypeId;
+    use manifold_node_engine::palette::*;
 
     #[test]
     fn retired_cpu_flip_is_reference_only() {
-        use manifold_node_engine::persistence::PrimitiveRegistry;
         use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
+        use manifold_node_engine::persistence::PrimitiveRegistry;
 
         assert!(!PrimitiveRegistry::with_builtin().contains(FLIP_DOMAIN_TYPE_ID));
-        assert!(!manifold_node_engine::palette::palette_atoms().iter()
-            .any(|atom| atom.type_id == FLIP_DOMAIN_TYPE_ID));
+        assert!(
+            !manifold_node_engine::palette::palette_atoms()
+                .iter()
+                .any(|atom| atom.type_id == FLIP_DOMAIN_TYPE_ID)
+        );
     }
 
     #[test]
@@ -43,7 +46,10 @@ use manifold_core::PresetTypeId;
             "node.upwind_distance",
             "node.emission_count",
         ] {
-            assert!(registry.contains(type_id), "{type_id} must remain registered");
+            assert!(
+                registry.contains(type_id),
+                "{type_id} must remain registered"
+            );
             assert!(
                 !atoms.iter().any(|atom| atom.type_id == type_id),
                 "{type_id} must stay hidden from the palette",

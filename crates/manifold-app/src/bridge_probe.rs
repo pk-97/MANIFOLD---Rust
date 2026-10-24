@@ -166,8 +166,16 @@ pub fn run(args: &[String]) -> ! {
                 &fill,
                 &tex,
                 &[
-                    manifold_gpu::GpuBinding::Buffer { binding: 0, buffer: &params_buf, offset: 0 },
-                    manifold_gpu::GpuBinding::Buffer { binding: 1, buffer: &sink, offset: 0 },
+                    manifold_gpu::GpuBinding::Buffer {
+                        binding: 0,
+                        buffer: &params_buf,
+                        offset: 0,
+                    },
+                    manifold_gpu::GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: &sink,
+                        offset: 0,
+                    },
                 ],
                 false,
                 true,
@@ -273,8 +281,12 @@ pub fn run(args: &[String]) -> ! {
                         // holding two frames' colours from that alone).
                         let params_buf = writer_dev.create_buffer_shared(24);
                         let params = [
-                            colour[0], colour[1], colour[2], colour[3],
-                            band as f32, BANDS as f32,
+                            colour[0],
+                            colour[1],
+                            colour[2],
+                            colour[3],
+                            band as f32,
+                            BANDS as f32,
                         ];
                         unsafe {
                             let ptr = params_buf.mapped_ptr().expect("params mapped");
@@ -295,7 +307,12 @@ pub fn run(args: &[String]) -> ! {
                                     offset: 0,
                                 },
                             ],
-                            (0.0, band as f32 * (H / BANDS) as f32, W as f32, (H / BANDS) as f32),
+                            (
+                                0.0,
+                                band as f32 * (H / BANDS) as f32,
+                                W as f32,
+                                (H / BANDS) as f32,
+                            ),
                             manifold_gpu::GpuLoadAction::Load,
                             "fill-band",
                         );
@@ -312,7 +329,10 @@ pub fn run(args: &[String]) -> ! {
                 });
             }
             stop.store(true, Ordering::Release);
-            eprintln!("[bridge-probe] writer done: {frames} frames in {:.1?}", t0.elapsed());
+            eprintln!(
+                "[bridge-probe] writer done: {frames} frames in {:.1?}",
+                t0.elapsed()
+            );
         })
     };
 
@@ -343,7 +363,9 @@ pub fn run(args: &[String]) -> ! {
             );
             let read_bufs = Arc::new(
                 (0..3)
-                    .map(|_| reader_dev.create_buffer_shared(u64::from(BYTES_PER_ROW) * u64::from(H)))
+                    .map(|_| {
+                        reader_dev.create_buffer_shared(u64::from(BYTES_PER_ROW) * u64::from(H))
+                    })
                     .collect::<Vec<manifold_gpu::GpuBuffer>>(),
             );
             let read_issued = Arc::new([AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)]);
@@ -435,7 +457,8 @@ pub fn run(args: &[String]) -> ! {
                         // (slot's adjacent occupants, k and k+3) vs anything
                         // else (coherency, probe bug).
                         #[cfg(debug_assertions)]
-                        if mismatch > 0 && std::env::var_os("MANIFOLD_PROBE_TORN").is_some()
+                        if mismatch > 0
+                            && std::env::var_os("MANIFOLD_PROBE_TORN").is_some()
                             && let Some(ptr) = buf.mapped_ptr()
                         {
                             let px = unsafe {
@@ -472,7 +495,11 @@ pub fn run(args: &[String]) -> ! {
     let torn = torn_reads.load(Ordering::Relaxed);
     println!(
         "[bridge-probe] reads={reads} torn={torn} ({:.1}%)",
-        if reads > 0 { torn as f64 * 100.0 / reads as f64 } else { 0.0 }
+        if reads > 0 {
+            torn as f64 * 100.0 / reads as f64
+        } else {
+            0.0
+        }
     );
     if torn > 0 {
         println!("[bridge-probe] VERDICT: RACE PRESENT — reader sampled a surface mid-write");

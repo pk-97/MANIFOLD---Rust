@@ -16,9 +16,9 @@ use manifold_core::NodeId;
 use manifold_core::params::ParamManifest;
 
 pub mod composite_handle;
-use crate::param_binding::composite_handle::CompositeHandle;
 use crate::exec::effect_node::NodeInstanceId;
 use crate::graph::Graph;
+use crate::param_binding::composite_handle::CompositeHandle;
 use crate::parameters::{ParamType, ParamValue};
 use crate::validation::GraphError;
 
@@ -168,7 +168,9 @@ pub enum BindingSource {
 /// constructed.
 #[derive(Debug, Clone)]
 pub enum ResolvedTarget {
-    Composite { outer_name: Cow<'static, str> },
+    Composite {
+        outer_name: Cow<'static, str>,
+    },
     Node {
         node: NodeInstanceId,
         /// Same `Cow` rationale as [`ParamTarget::Node::param`] — a resolved
@@ -273,14 +275,14 @@ impl Reshape {
             || curve != manifold_core::macro_bank::MacroCurve::Linear
             || scale != 1.0
             || offset != 0.0)
-        .then_some(Self {
-            min,
-            max,
-            invert,
-            curve,
-            scale,
-            offset,
-        })
+            .then_some(Self {
+                min,
+                max,
+                invert,
+                curve,
+                scale,
+                offset,
+            })
     }
 
     /// Apply the slider response (clamped, only when invert/curve is set) then
@@ -292,7 +294,13 @@ impl Reshape {
     /// exactly.
     fn apply(&self, value: f32) -> f32 {
         manifold_core::effects::apply_card_reshape(
-            value, self.min, self.max, self.invert, self.curve, self.scale, self.offset,
+            value,
+            self.min,
+            self.max,
+            self.invert,
+            self.curve,
+            self.scale,
+            self.offset,
         )
     }
 }
@@ -330,22 +338,28 @@ impl ResolvedBinding {
     /// (Linear, no invert, scale 1, offset 0) yield `None` and pay nothing;
     /// a preset-authored curve / a widened range (via a per-instance graph
     /// override or a fork) takes effect through this same path.
-    pub fn from_static(
-        decl: &ParamBinding,
-        node_map: &[(NodeId, NodeInstanceId)],
-    ) -> Option<Self> {
+    pub fn from_static(decl: &ParamBinding, node_map: &[(NodeId, NodeInstanceId)]) -> Option<Self> {
         let target = match &decl.target {
             ParamTarget::Composite { outer_name } => ResolvedTarget::Composite {
                 outer_name: outer_name.clone(),
             },
             ParamTarget::Node { node_id, param } => {
                 let node = resolve_node_id(node_map, node_id)?;
-                ResolvedTarget::Node { node, param: param.clone() }
+                ResolvedTarget::Node {
+                    node,
+                    param: param.clone(),
+                }
             }
             ParamTarget::Custom(f) => ResolvedTarget::Custom(*f),
         };
-        let reshape =
-            Reshape::from_preset_response(decl.min, decl.max, decl.curve, decl.invert, decl.scale, decl.offset);
+        let reshape = Reshape::from_preset_response(
+            decl.min,
+            decl.max,
+            decl.curve,
+            decl.invert,
+            decl.scale,
+            decl.offset,
+        );
         Some(Self::assemble(
             decl.id.clone(),
             decl.label.clone(),
@@ -434,41 +448,41 @@ impl ResolvedBinding {
         ))
     }
 
-manifold_core::testkit_visible! {
-    /// The single field-assembly point for a resolved binding. Every
-    /// constructor — `from_static`, `from_user`, and the generator path in
-    /// [`crate::generators::json_graph_generator`] — funnels through here, so
-    /// a newly-added field can't be silently dropped by a second hand-rolled
-    /// literal. (The generator copy once hard-coded `reshape: None` and
-    /// over-drove a folded deg→rad affine 57×; this constructor is why that
-    /// can't recur — there is no second literal to forget.)
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn assemble(
-        id: ParamId,
-        label: Cow<'static, str>,
-        default_value: f32,
-        target: ResolvedTarget,
-        convert: ParamConvert,
-        source: BindingSource,
-        source_id: ParamId,
-        reshape: Option<Reshape>,
-        wraps_angle: bool,
-        default_mirrors_node_param: bool,
-    ) -> Self {
-        Self {
-            id,
-            label,
-            default_value,
-            target,
-            convert,
-            source,
-            source_id,
-            reshape,
-            wraps_angle,
-            default_mirrors_node_param,
+    manifold_core::testkit_visible! {
+        /// The single field-assembly point for a resolved binding. Every
+        /// constructor — `from_static`, `from_user`, and the generator path in
+        /// [`crate::generators::json_graph_generator`] — funnels through here, so
+        /// a newly-added field can't be silently dropped by a second hand-rolled
+        /// literal. (The generator copy once hard-coded `reshape: None` and
+        /// over-drove a folded deg→rad affine 57×; this constructor is why that
+        /// can't recur — there is no second literal to forget.)
+        #[allow(clippy::too_many_arguments)]
+        pub(crate) fn assemble(
+            id: ParamId,
+            label: Cow<'static, str>,
+            default_value: f32,
+            target: ResolvedTarget,
+            convert: ParamConvert,
+            source: BindingSource,
+            source_id: ParamId,
+            reshape: Option<Reshape>,
+            wraps_angle: bool,
+            default_mirrors_node_param: bool,
+        ) -> Self {
+            Self {
+                id,
+                label,
+                default_value,
+                target,
+                convert,
+                source,
+                source_id,
+                reshape,
+                wraps_angle,
+                default_mirrors_node_param,
+            }
         }
     }
-}
 
     /// Re-bake the card reshape from the live manifest spec (min/max/curve/
     /// invert — the D4 authority) plus a scale/offset pair: the override
@@ -486,7 +500,12 @@ manifold_core::testkit_visible! {
         let (scale, offset) = scale_offset
             .unwrap_or_else(|| self.reshape.map_or((1.0, 0.0), |r| (r.scale, r.offset)));
         self.reshape = Reshape::from_preset_response(
-            spec.min, spec.max, spec.curve, spec.invert, scale, offset,
+            spec.min,
+            spec.max,
+            spec.curve,
+            spec.invert,
+            scale,
+            offset,
         );
     }
 
@@ -767,13 +786,14 @@ impl LastAppliedCache {
         self.entries.clear();
         self.entries.reserve(bindings.len());
         for b in bindings {
-            let holds_default = matches!(b.convert, ParamConvert::Trigger) || match &b.target {
-                ResolvedTarget::Node { node, param } => graph
-                    .get_node(*node)
-                    .and_then(|inst| inst.params.get(param.as_ref()))
-                    .is_some_and(|held| *held == b.write_value(b.default_value)),
-                ResolvedTarget::Composite { .. } | ResolvedTarget::Custom(_) => true,
-            };
+            let holds_default = matches!(b.convert, ParamConvert::Trigger)
+                || match &b.target {
+                    ResolvedTarget::Node { node, param } => graph
+                        .get_node(*node)
+                        .and_then(|inst| inst.params.get(param.as_ref()))
+                        .is_some_and(|held| *held == b.write_value(b.default_value)),
+                    ResolvedTarget::Composite { .. } | ResolvedTarget::Custom(_) => true,
+                };
             self.entries.push(if holds_default {
                 BindingCacheEntry::Applied(b.default_value)
             } else {
@@ -924,22 +944,52 @@ mod tests {
 
     #[test]
     fn float_passes_through_unchanged() {
-        assert_eq!(convert_param_value(ParamConvert::Float, 0.0), ParamValue::Float(0.0));
-        assert_eq!(convert_param_value(ParamConvert::Float, 0.5), ParamValue::Float(0.5));
-        assert_eq!(convert_param_value(ParamConvert::Float, -1.5), ParamValue::Float(-1.5));
-        assert_eq!(convert_param_value(ParamConvert::Float, 42.0), ParamValue::Float(42.0));
+        assert_eq!(
+            convert_param_value(ParamConvert::Float, 0.0),
+            ParamValue::Float(0.0)
+        );
+        assert_eq!(
+            convert_param_value(ParamConvert::Float, 0.5),
+            ParamValue::Float(0.5)
+        );
+        assert_eq!(
+            convert_param_value(ParamConvert::Float, -1.5),
+            ParamValue::Float(-1.5)
+        );
+        assert_eq!(
+            convert_param_value(ParamConvert::Float, 42.0),
+            ParamValue::Float(42.0)
+        );
     }
 
     #[test]
     fn int_round_uses_half_away_from_zero() {
         // f32::round is half-away-from-zero, NOT banker's rounding.
         // Document the actual behavior so it's expected.
-        assert_eq!(convert_param_value(ParamConvert::IntRound, 0.0), ParamValue::Float(0.0));
-        assert_eq!(convert_param_value(ParamConvert::IntRound, 0.4), ParamValue::Float(0.0));
-        assert_eq!(convert_param_value(ParamConvert::IntRound, 0.5), ParamValue::Float(1.0));
-        assert_eq!(convert_param_value(ParamConvert::IntRound, 0.6), ParamValue::Float(1.0));
-        assert_eq!(convert_param_value(ParamConvert::IntRound, -0.5), ParamValue::Float(-1.0));
-        assert_eq!(convert_param_value(ParamConvert::IntRound, 2.5), ParamValue::Float(3.0));
+        assert_eq!(
+            convert_param_value(ParamConvert::IntRound, 0.0),
+            ParamValue::Float(0.0)
+        );
+        assert_eq!(
+            convert_param_value(ParamConvert::IntRound, 0.4),
+            ParamValue::Float(0.0)
+        );
+        assert_eq!(
+            convert_param_value(ParamConvert::IntRound, 0.5),
+            ParamValue::Float(1.0)
+        );
+        assert_eq!(
+            convert_param_value(ParamConvert::IntRound, 0.6),
+            ParamValue::Float(1.0)
+        );
+        assert_eq!(
+            convert_param_value(ParamConvert::IntRound, -0.5),
+            ParamValue::Float(-1.0)
+        );
+        assert_eq!(
+            convert_param_value(ParamConvert::IntRound, 2.5),
+            ParamValue::Float(3.0)
+        );
     }
 
     #[test]
@@ -968,11 +1018,26 @@ mod tests {
 
     #[test]
     fn enum_round_clamps_negatives_to_zero() {
-        assert_eq!(convert_param_value(ParamConvert::EnumRound, 0.0), ParamValue::Enum(0));
-        assert_eq!(convert_param_value(ParamConvert::EnumRound, 1.4), ParamValue::Enum(1));
-        assert_eq!(convert_param_value(ParamConvert::EnumRound, 1.6), ParamValue::Enum(2));
-        assert_eq!(convert_param_value(ParamConvert::EnumRound, -1.0), ParamValue::Enum(0));
-        assert_eq!(convert_param_value(ParamConvert::EnumRound, -0.4), ParamValue::Enum(0));
+        assert_eq!(
+            convert_param_value(ParamConvert::EnumRound, 0.0),
+            ParamValue::Enum(0)
+        );
+        assert_eq!(
+            convert_param_value(ParamConvert::EnumRound, 1.4),
+            ParamValue::Enum(1)
+        );
+        assert_eq!(
+            convert_param_value(ParamConvert::EnumRound, 1.6),
+            ParamValue::Enum(2)
+        );
+        assert_eq!(
+            convert_param_value(ParamConvert::EnumRound, -1.0),
+            ParamValue::Enum(0)
+        );
+        assert_eq!(
+            convert_param_value(ParamConvert::EnumRound, -0.4),
+            ParamValue::Enum(0)
+        );
     }
 
     // EnumRemap and FloatTransform variants were removed in Phase 4
@@ -1042,8 +1107,8 @@ mod tests {
         let feedback = add_feedback_node(&mut g);
         let mut decl = static_amount_binding();
         decl.label = Cow::Owned("Catalog amount".to_string());
-        let resolved = ResolvedBinding::from_static(&decl, &node_map_for(feedback))
-            .expect("node id present");
+        let resolved =
+            ResolvedBinding::from_static(&decl, &node_map_for(feedback)).expect("node id present");
         drop(decl);
         assert_eq!(resolved.label, "Catalog amount");
         match resolved.target {
@@ -1375,7 +1440,10 @@ mod tests {
         );
         let inst = g.get_node(feedback).unwrap();
         assert_eq!(inst.params.get("scale"), Some(&ParamValue::Float(0.5)));
-        assert_eq!(inst.params.get("translate_x"), Some(&ParamValue::Float(0.95)));
+        assert_eq!(
+            inst.params.get("translate_x"),
+            Some(&ParamValue::Float(0.95))
+        );
     }
 
     /// Combined static + user bindings in one slice. Both halves
@@ -1421,7 +1489,10 @@ mod tests {
         );
         let inst = g.get_node(feedback).unwrap();
         assert_eq!(inst.params.get("scale"), Some(&ParamValue::Float(0.5)));
-        assert_eq!(inst.params.get("translate_x"), Some(&ParamValue::Float(1.05)));
+        assert_eq!(
+            inst.params.get("translate_x"),
+            Some(&ParamValue::Float(1.05))
+        );
     }
 
     #[test]
@@ -1460,7 +1531,10 @@ mod tests {
             &mut LastAppliedCache::new(),
         );
         let inst = g.get_node(feedback).unwrap();
-        assert_eq!(inst.params.get("translate_x"), Some(&ParamValue::Float(0.97)));
+        assert_eq!(
+            inst.params.get("translate_x"),
+            Some(&ParamValue::Float(0.97))
+        );
     }
 
     /// Architectural guard that mirrors the generator-side regression

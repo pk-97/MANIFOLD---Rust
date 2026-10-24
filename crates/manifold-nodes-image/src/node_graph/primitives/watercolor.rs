@@ -29,10 +29,12 @@ use std::sync::OnceLock;
 use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc, GpuTextureFormat};
 
 use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
-use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-use manifold_node_engine::primitive::PrimitiveDescription;
 use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::ports::{
+    NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+};
+use manifold_node_engine::primitive::PrimitiveDescription;
 
 const WATERCOLOR_WGSL: &str = include_str!("../../effects/shaders/fx_watercolor_compute.wgsl");
 

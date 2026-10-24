@@ -117,18 +117,12 @@ impl ExportSession {
         tempo_map: &mut TempoMap,
     ) -> Result<Self, ExportError> {
         let fallback = Bpm(bpm);
-        let start_seconds = TempoMapConverter::beat_to_seconds(
-            tempo_map,
-            Beats(config.start_beat),
-            fallback,
-        )
-        .as_f32();
-        let end_seconds = TempoMapConverter::beat_to_seconds(
-            tempo_map,
-            Beats(config.end_beat),
-            fallback,
-        )
-        .as_f32();
+        let start_seconds =
+            TempoMapConverter::beat_to_seconds(tempo_map, Beats(config.start_beat), fallback)
+                .as_f32();
+        let end_seconds =
+            TempoMapConverter::beat_to_seconds(tempo_map, Beats(config.end_beat), fallback)
+                .as_f32();
 
         if end_seconds <= start_seconds {
             return Err(ExportError::InvalidRange {
@@ -216,18 +210,12 @@ impl ExportSession {
         device_ptr: *mut std::ffi::c_void,
     ) -> Result<Self, ExportError> {
         let fallback = Bpm(bpm);
-        let start_seconds = TempoMapConverter::beat_to_seconds(
-            tempo_map,
-            Beats(config.start_beat),
-            fallback,
-        )
-        .as_f32();
-        let end_seconds = TempoMapConverter::beat_to_seconds(
-            tempo_map,
-            Beats(config.end_beat),
-            fallback,
-        )
-        .as_f32();
+        let start_seconds =
+            TempoMapConverter::beat_to_seconds(tempo_map, Beats(config.start_beat), fallback)
+                .as_f32();
+        let end_seconds =
+            TempoMapConverter::beat_to_seconds(tempo_map, Beats(config.end_beat), fallback)
+                .as_f32();
 
         if end_seconds <= start_seconds {
             return Err(ExportError::InvalidRange {
@@ -397,7 +385,9 @@ impl ExportSession {
             // the video-only temp file is redundant.
             let _ = std::fs::remove_file(&encoder_output);
         } else if !config.metadata.is_empty() {
-            log::info!("[ExportSession] Video-only export: no ffmpeg mux, so no header metadata is written");
+            log::info!(
+                "[ExportSession] Video-only export: no ffmpeg mux, so no header metadata is written"
+            );
         }
 
         log::info!(

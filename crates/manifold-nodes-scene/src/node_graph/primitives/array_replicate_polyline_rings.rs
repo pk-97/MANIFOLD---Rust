@@ -21,8 +21,8 @@
 
 use std::borrow::Cow;
 
-use manifold_node_engine::mesh::{CurvePoint, EdgePair};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::{CurvePoint, EdgePair};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
@@ -169,17 +169,13 @@ impl Primitive for ArrayReplicatePolylineRings {
             .expect("array_replicate_polyline_rings: scales input must be shared-memory");
 
         let in_outline: &[CurvePoint] = unsafe {
-            std::slice::from_raw_parts(
-                outline_in_ptr as *const CurvePoint,
-                in_outline_cap as usize,
-            )
+            std::slice::from_raw_parts(outline_in_ptr as *const CurvePoint, in_outline_cap as usize)
         };
         let in_edges: &[EdgePair] = unsafe {
             std::slice::from_raw_parts(edges_in_ptr as *const EdgePair, in_edges_cap as usize)
         };
-        let scales: &[f32] = unsafe {
-            std::slice::from_raw_parts(scales_ptr as *const f32, scales_cap as usize)
-        };
+        let scales: &[f32] =
+            unsafe { std::slice::from_raw_parts(scales_ptr as *const f32, scales_cap as usize) };
 
         let outline_items = (ring_count as usize) * (in_outline_cap as usize);
         let edges_items = (ring_count as usize) * (in_edges_cap as usize);
@@ -215,8 +211,7 @@ impl Primitive for ArrayReplicatePolylineRings {
             // Outline: per-vertex uniform scale into stack scratch.
             let outline_chunk =
                 (outline_write_count - ring_outline_offset).min(in_outline_cap as usize);
-            let mut outline_scratch =
-                [CurvePoint { xy: [0.0, 0.0] }; REPLICATE_INLINE_SCRATCH];
+            let mut outline_scratch = [CurvePoint { xy: [0.0, 0.0] }; REPLICATE_INLINE_SCRATCH];
             for j in 0..outline_chunk {
                 let p = in_outline[j].xy;
                 outline_scratch[j] = CurvePoint {
@@ -276,11 +271,7 @@ mod tests {
         let prim = ArrayReplicatePolylineRings::new();
 
         let default_params = ParamValues::default();
-        let inputs = [
-            ("outline", 64_u32),
-            ("edges", 64_u32),
-            ("scales", 16_u32),
-        ];
+        let inputs = [("outline", 64_u32), ("edges", 64_u32), ("scales", 16_u32)];
         // Default max_rings = 16, outline cap 64 → output 1024.
         assert_eq!(
             Primitive::array_output_capacity(&prim, "outline", &default_params, &inputs),
@@ -293,7 +284,10 @@ mod tests {
 
         // Clamped to REPLICATE_MAX_RINGS = 32 when the param exceeds it.
         let mut huge = ParamValues::default();
-        huge.insert(std::borrow::Cow::Borrowed("max_rings"), ParamValue::Float(128.0));
+        huge.insert(
+            std::borrow::Cow::Borrowed("max_rings"),
+            ParamValue::Float(128.0),
+        );
         assert_eq!(
             Primitive::array_output_capacity(&prim, "outline", &huge, &inputs),
             Some(64 * REPLICATE_MAX_RINGS),

@@ -405,23 +405,10 @@ pub(super) const LOGS: &[Passage] = &[
 
 pub(super) const INSPECT: &[Passage] = &[
     &[
-        b"%A  %X",
-        b"%A  %X",
-        b"%A  %X",
-        b"%A  %X",
-        b"%A  %X",
-        b"%A  %X",
-        b"%A  %X",
-        b"%A  %X",
+        b"%A  %X", b"%A  %X", b"%A  %X", b"%A  %X", b"%A  %X", b"%A  %X", b"%A  %X", b"%A  %X",
     ],
     &[
-        b"%A:  %D",
-        b"%A:  %D",
-        b"%A:  %D",
-        b"%A:  %D",
-        b"%A:  %D",
-        b"%A:  %D",
-        b"%A:  %D",
+        b"%A:  %D", b"%A:  %D", b"%A:  %D", b"%A:  %D", b"%A:  %D", b"%A:  %D", b"%A:  %D",
         b"%A:  %D",
     ],
     &[

@@ -16,8 +16,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::{CurvePoint, MeshVertex};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::{CurvePoint, MeshVertex};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
@@ -166,7 +166,10 @@ mod tests {
         use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = RevolveCurve::new();
         let mut params = ParamValues::default();
-        params.insert(std::borrow::Cow::Borrowed("segments"), ParamValue::Float(8.0));
+        params.insert(
+            std::borrow::Cow::Borrowed("segments"),
+            ParamValue::Float(8.0),
+        );
         let inputs = [("profile", 5_u32)];
         // profile_len=5, segments=8 -> cols=9 -> 5*9=45.
         assert_eq!(
@@ -209,9 +212,8 @@ mod gpu_tests {
         unsafe {
             profile_buf.write(0, bytemuck::cast_slice(profile));
         }
-        let dst_buf = device.create_buffer_shared(
-            dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64,
-        );
+        let dst_buf =
+            device.create_buffer_shared(dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64);
 
         let uniforms = RevolveCurveUniforms {
             segments,
@@ -221,18 +223,33 @@ mod gpu_tests {
         };
 
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: &profile_buf, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &dst_buf, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &profile_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &dst_buf,
+                offset: 0,
+            },
         ];
         let mut enc = device.create_encoder("revolve-curve-test");
-        enc.dispatch_compute(&pipeline, &bindings, [dst_cap.div_ceil(256), 1, 1], "revolve-curve-test");
+        enc.dispatch_compute(
+            &pipeline,
+            &bindings,
+            [dst_cap.div_ceil(256), 1, 1],
+            "revolve-curve-test",
+        );
         enc.commit_and_wait_completed();
 
         let ptr = dst_buf.mapped_ptr().expect("shared dst buffer");
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, dst_cap as usize) }.to_vec()
     }
-
 
     /// The chain rule (DECOMPOSING_GENERATORS.md section 9 / design section 4 invariant
     /// table): revolve -> make_triangles on a small profile, assert the
@@ -251,19 +268,41 @@ mod gpu_tests {
         let grid_cap = ROWS * COLS; // 15, exact
 
         let revolved = dispatch_revolve(
-            &device, &gen_wgsl, &profile, grid_cap, SEGMENTS, std::f32::consts::TAU,
+            &device,
+            &gen_wgsl,
+            &profile,
+            grid_cap,
+            SEGMENTS,
+            std::f32::consts::TAU,
         );
 
         // Hand-computed anchor: row=1 (radius=1, height=0), col=0 -> phi=0.
         let v10 = revolved[COLS as usize];
-        assert!((v10.position[0] - 1.0).abs() < 1e-5, "row1 col0 x: {}", v10.position[0]);
-        assert!(v10.position[1].abs() < 1e-5, "row1 col0 y: {}", v10.position[1]);
-        assert!(v10.position[2].abs() < 1e-5, "row1 col0 z: {}", v10.position[2]);
-        assert!((v10.uv[0] - 0.0).abs() < 1e-5 && (v10.uv[1] - 0.5).abs() < 1e-5, "row1 col0 uv: {:?}", v10.uv);
+        assert!(
+            (v10.position[0] - 1.0).abs() < 1e-5,
+            "row1 col0 x: {}",
+            v10.position[0]
+        );
+        assert!(
+            v10.position[1].abs() < 1e-5,
+            "row1 col0 y: {}",
+            v10.position[1]
+        );
+        assert!(
+            v10.position[2].abs() < 1e-5,
+            "row1 col0 z: {}",
+            v10.position[2]
+        );
+        assert!(
+            (v10.uv[0] - 0.0).abs() < 1e-5 && (v10.uv[1] - 0.5).abs() < 1e-5,
+            "row1 col0 uv: {:?}",
+            v10.uv
+        );
 
         // Now triangulate the revolved grid and check the triangle count.
-        let tri_pipeline = manifold_node_engine::freeze::codegen::standalone_for_spec::<TriangulateGrid>()
-            .expect("triangulate_grid codegen");
+        let tri_pipeline =
+            manifold_node_engine::freeze::codegen::standalone_for_spec::<TriangulateGrid>()
+                .expect("triangulate_grid codegen");
         let tri_expected_count = (COLS - 1) * (ROWS - 1) * 6; // (5-1)*(3-1)*6 = 48
 
         let src_buf = device.create_buffer_shared(std::mem::size_of_val(&revolved[..]) as u64);
@@ -271,9 +310,8 @@ mod gpu_tests {
             src_buf.write(0, bytemuck::cast_slice(&revolved));
         }
         let tri_dst_cap = tri_expected_count;
-        let tri_dst_buf = device.create_buffer_shared(
-            tri_dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64,
-        );
+        let tri_dst_buf = device
+            .create_buffer_shared(tri_dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64);
 
         #[repr(C)]
         #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -298,9 +336,20 @@ mod gpu_tests {
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&tri_uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: &src_buf, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: &tri_dst_buf, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&tri_uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &src_buf,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: &tri_dst_buf,
+                    offset: 0,
+                },
             ],
             [tri_dst_cap.div_ceil(256), 1, 1],
             "revolve-chain-tri",
@@ -311,12 +360,21 @@ mod gpu_tests {
         // (the grid is triangulate_grid-compatible — the D5 claim under
         // test) — spot check the first triangle's normals are unit length.
         let ptr = tri_dst_buf.mapped_ptr().expect("shared tri dst buffer");
-        let tris = unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, tri_dst_cap as usize) };
-        assert_eq!(tris.len() as u32, tri_expected_count, "triangle vertex count matches (cols-1)*(rows-1)*6");
+        let tris =
+            unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, tri_dst_cap as usize) };
+        assert_eq!(
+            tris.len() as u32,
+            tri_expected_count,
+            "triangle vertex count matches (cols-1)*(rows-1)*6"
+        );
         for v in &tris[0..6] {
             let n = v.normal;
             let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-            assert!((len - 1.0).abs() < 1e-3, "normal not unit length: {:?} (len={len})", n);
+            assert!(
+                (len - 1.0).abs() < 1e-3,
+                "normal not unit length: {:?} (len={len})",
+                n
+            );
         }
     }
 }

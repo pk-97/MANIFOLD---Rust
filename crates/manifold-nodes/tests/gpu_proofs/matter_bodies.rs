@@ -2,18 +2,24 @@
 //! prescribed pose each substep, the collider projection in the grid update,
 //! and the solid lattice, each against CPU-computed values.
 
+use manifold_core::fluid_domain::domain_layout;
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_physics::sdf::signed_distance_lattice;
-use manifold_core::fluid_domain::{domain_layout};
-use manifold_physics::clock::TICK;
-use manifold_water_liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
-use manifold_physics::force_lattice::ForceLattice;
+use manifold_node_engine::{
+    exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+    exec::execution_plan::ExecutionPlan, exec::execution_plan::ResourceId,
+    exec::execution_plan::compile, exec::metal_backend::MetalBackend, graph::Graph,
+    load::graph_loader::pre_allocate_resources, persistence::PrimitiveRegistry,
+    state_store::StateStore,
+};
 use manifold_physics::ForceSample;
-use manifold_water_liquid::lattice::LiquidLattice;
+use manifold_physics::clock::TICK;
+use manifold_physics::force_lattice::ForceLattice;
+use manifold_physics::sdf::signed_distance_lattice;
 use manifold_water_gpu_mpm::matter::{MatterGridNode, MatterPoint, REACTION_WORDS, momentum_unit};
-use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
+use manifold_water_liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
+use manifold_water_liquid::lattice::LiquidLattice;
 
 use manifold_node_engine::scene::transform::Transform;
 
@@ -45,26 +51,45 @@ impl Bench {
         let mut host_nodes = Vec::new();
         for (port, host) in inputs {
             let host_node = graph.add_node(Box::new(host));
-            graph.connect((host_node, "out"), (node, port)).unwrap_or_else(|e| panic!("{port}: {e:?}"));
+            graph
+                .connect((host_node, "out"), (node, port))
+                .unwrap_or_else(|e| panic!("{port}: {e:?}"));
             host_nodes.push(host_node);
         }
         configure(&mut graph, node);
         for port in outputs {
-            graph.add_external_output(node, port).unwrap_or_else(|e| panic!("{port}: {e:?}"));
+            graph
+                .add_external_output(node, port)
+                .unwrap_or_else(|e| panic!("{port}: {e:?}"));
         }
         let plan = compile(&graph).expect("bench compiles");
         let device = &manifold_node_engine::testkit::gpu_harness::shared().device;
         let mut backend = MetalBackend::new(device.clone(), 64, 64, GpuTextureFormat::Rgba16Float);
         pre_allocate_resources(&mut graph, &plan, device, &mut backend).expect("pre-allocate");
-        let hosts = host_nodes.iter().map(|&h| (h, output_of(&plan, h, "out"))).collect();
-        Self { graph, plan, executor: Executor::new(Box::new(backend)), state: StateStore::new(), hosts, node }
+        let hosts = host_nodes
+            .iter()
+            .map(|&h| (h, output_of(&plan, h, "out")))
+            .collect();
+        Self {
+            graph,
+            plan,
+            executor: Executor::new(Box::new(backend)),
+            state: StateStore::new(),
+            hosts,
+            node,
+        }
     }
 
     /// Fill the `index`th host array.
     pub(crate) fn fill<T: bytemuck::Pod>(&self, index: usize, data: &[T]) {
         let backend = self.executor.backend();
-        let buffer = backend.array_buffer(backend.slot_for(self.hosts[index].1).expect("bound")).expect("array");
-        assert!(std::mem::size_of_val(data) as u64 <= buffer.size, "host array {index} too small");
+        let buffer = backend
+            .array_buffer(backend.slot_for(self.hosts[index].1).expect("bound"))
+            .expect("array");
+        assert!(
+            std::mem::size_of_val(data) as u64 <= buffer.size,
+            "host array {index} too small"
+        );
         // SAFETY: shared storage, nothing in flight.
         unsafe { buffer.write(0, bytemuck::cast_slice(data)) };
     }
@@ -75,11 +100,23 @@ impl Bench {
 
     pub(crate) fn run(&mut self) {
         let device = &manifold_node_engine::testkit::gpu_harness::shared().device;
-        let time = FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(TICK), frame_count: 0 };
+        let time = FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(TICK),
+            frame_count: 0,
+        };
         let mut enc = device.create_encoder("matter-bodies");
         {
             let mut gpu = GpuEncoder::new(&mut enc, device);
-            self.executor.execute_frame_with_state(&mut self.graph, &self.plan, time, &mut gpu, &mut self.state, 0);
+            self.executor.execute_frame_with_state(
+                &mut self.graph,
+                &self.plan,
+                time,
+                &mut gpu,
+                &mut self.state,
+                0,
+            );
         }
         enc.commit_and_wait_completed();
     }
@@ -121,7 +158,12 @@ fn matter_prescribed_pose_interpolates() {
         // Tick 11.
         row([0.0; 3], [0.0; 3], [0.0; 4], 0.0),
         row([1.0 + 0.3 * tick, 0.5, 0.0], [0.3, 0.0, 0.0], [0.0; 4], 1.0),
-        row([-1.0, 0.2 - 0.6 * tick, 0.4 + 0.1 * tick], [0.0, -0.9, 0.1], turning(-3.5), 0.0),
+        row(
+            [-1.0, 0.2 - 0.6 * tick, 0.4 + 0.1 * tick],
+            [0.0, -0.9, 0.1],
+            turning(-3.5),
+            0.0,
+        ),
     ];
     let mut bench = Bench::new(
         "node.matter_move_bodies",
@@ -132,7 +174,13 @@ fn matter_prescribed_pose_interpolates() {
     bench.fill(0, &rows);
     let substeps = 34;
     let step_dt = tick / substeps as f32;
-    for (name, value) in [("tick_index", 11.0), ("first_tick", 10.0), ("step_dt", step_dt), ("body_count", 3.0), ("rows", 6.0)] {
+    for (name, value) in [
+        ("tick_index", 11.0),
+        ("first_tick", 10.0),
+        ("step_dt", step_dt),
+        ("body_count", 3.0),
+        ("rows", 6.0),
+    ] {
         bench.set(name, value);
     }
     let mut worst = (0.0f32, 0.0f32);
@@ -149,24 +197,39 @@ fn matter_prescribed_pose_interpolates() {
             for (got, want) in got.rotation.iter().zip(rotation) {
                 worst.1 = worst.1.max((got - want).abs());
             }
-            assert_eq!(got.linear_velocity, source.linear_velocity, "velocity passes through");
+            assert_eq!(
+                got.linear_velocity, source.linear_velocity,
+                "velocity passes through"
+            );
             assert_eq!(got.accel_shape, source.accel_shape, "shape passes through");
         }
     }
-    eprintln!("matter_prescribed_pose_interpolates: worst position {:e} m, rotation {:e}", worst.0, worst.1);
+    eprintln!(
+        "matter_prescribed_pose_interpolates: worst position {:e} m, rotation {:e}",
+        worst.0, worst.1
+    );
     assert!(worst.0 < 1e-6 && worst.1 < 1e-6, "{worst:?}");
     // At the tick's last substep the turning body has made the full slerp.
     let out: Vec<LiquidBody> = bench.read("bodies_out");
     let half = 0.5 * 3.5 * tick;
     let q = rows[5].rotation;
-    let d = [-axis[0] * half.sin(), 0.0, -axis[2] * half.sin(), half.cos()];
+    let d = [
+        -axis[0] * half.sin(),
+        0.0,
+        -axis[2] * half.sin(),
+        half.cos(),
+    ];
     let end = [
         d[3] * q[0] + d[0] * q[3] + d[1] * q[2] - d[2] * q[1],
         d[3] * q[1] - d[0] * q[2] + d[1] * q[3] + d[2] * q[0],
         d[3] * q[2] + d[0] * q[1] - d[1] * q[0] + d[2] * q[3],
         d[3] * q[3] - d[0] * q[0] - d[1] * q[1] - d[2] * q[2],
     ];
-    assert!((0..4).all(|c| (out[2].rotation[c] - end[c]).abs() < 1e-5), "{:?} vs {end:?}", out[2].rotation);
+    assert!(
+        (0..4).all(|c| (out[2].rotation[c] - end[c]).abs() < 1e-5),
+        "{:?} vs {end:?}",
+        out[2].rotation
+    );
     // A row past `rows` is disabled.
     bench.set("rows", 4.0);
     bench.run();
@@ -178,24 +241,49 @@ fn matter_prescribed_pose_interpolates() {
 /// An axis-aligned box mesh, outward wound.
 pub(crate) fn box_mesh(half: [f32; 3]) -> manifold_physics::TriangleMesh {
     let v = |x: usize, y: usize, z: usize| {
-        [[-half[0], half[0]][x], [-half[1], half[1]][y], [-half[2], half[2]][z]]
+        [
+            [-half[0], half[0]][x],
+            [-half[1], half[1]][y],
+            [-half[2], half[2]][z],
+        ]
     };
     manifold_physics::TriangleMesh {
         vertices: vec![
-            v(0, 0, 0), v(1, 0, 0), v(1, 1, 0), v(0, 1, 0),
-            v(0, 0, 1), v(1, 0, 1), v(1, 1, 1), v(0, 1, 1),
+            v(0, 0, 0),
+            v(1, 0, 0),
+            v(1, 1, 0),
+            v(0, 1, 0),
+            v(0, 0, 1),
+            v(1, 0, 1),
+            v(1, 1, 1),
+            v(0, 1, 1),
         ],
         triangles: vec![
-            [0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7],
-            [0, 1, 5], [0, 5, 4], [2, 3, 7], [2, 7, 6],
-            [1, 2, 6], [1, 6, 5], [0, 4, 7], [0, 7, 3],
+            [0, 2, 1],
+            [0, 3, 2],
+            [4, 5, 6],
+            [4, 6, 7],
+            [0, 1, 5],
+            [0, 5, 4],
+            [2, 3, 7],
+            [2, 7, 6],
+            [1, 2, 6],
+            [1, 6, 5],
+            [0, 4, 7],
+            [0, 7, 3],
         ],
     }
 }
 
 fn rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
     let u = [q[0], q[1], q[2]];
-    let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let cross = |a: [f32; 3], b: [f32; 3]| {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
     let t = cross(u, v).map(|c| 2.0 * c);
     let ut = cross(u, t);
     std::array::from_fn(|i| v[i] + q[3] * t[i] + ut[i])
@@ -215,7 +303,9 @@ fn lattice_at(atlas: &[u32], shape: &LiquidShape, g: [f32; 3]) -> f32 {
     let mut sum = 0.0;
     for corner in 0..8u32 {
         let o = [corner & 1, (corner >> 1) & 1, (corner >> 2) & 1];
-        let w: f32 = (0..3).map(|a| if o[a] == 1 { f[a] } else { 1.0 - f[a] }).product();
+        let w: f32 = (0..3)
+            .map(|a| if o[a] == 1 { f[a] } else { 1.0 - f[a] })
+            .product();
         sum += w * value([base[0] + o[0], base[1] + o[1], base[2] + o[2]]);
     }
     sum
@@ -231,11 +321,17 @@ fn matter_grid_update_projects_colliders() {
     let dx = lat.cell_size();
     let dt = 1.0e-3f32;
     let unit = momentum_unit(dx, f64::from(dt));
-    let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025, 0.0).expect("box lattice");
+    let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025, 0.0)
+        .expect("box lattice");
     let mut atlas = Vec::new();
     pack_distance_atlas(&lattice.values, &mut atlas);
     let shape = LiquidShape {
-        origin_spacing: [lattice.origin[0], lattice.origin[1], lattice.origin[2], lattice.spacing],
+        origin_spacing: [
+            lattice.origin[0],
+            lattice.origin[1],
+            lattice.origin[2],
+            lattice.spacing,
+        ],
         dims_x: lattice.dims[0],
         dims_y: lattice.dims[1],
         dims_z: lattice.dims[2],
@@ -255,7 +351,9 @@ fn matter_grid_update_projects_colliders() {
     let m_raw = 8 * 65_536i32;
     let to_raw = |v: f32| (v * m_raw as f32 / (unit * (65_536.0 / 134_217_728.0))).round() as i32;
     let nodes = lat.node_count() as usize;
-    let accum: Vec<i32> = (0..nodes).flat_map(|_| [to_raw(v0[0]), to_raw(v0[1]), to_raw(v0[2]), m_raw]).collect();
+    let accum: Vec<i32> = (0..nodes)
+        .flat_map(|_| [to_raw(v0[0]), to_raw(v0[1]), to_raw(v0[2]), m_raw])
+        .collect();
     let mut bench = Bench::new(
         "node.matter_grid_update",
         vec![
@@ -273,10 +371,20 @@ fn matter_grid_update_projects_colliders() {
     bench.fill(3, &[shape]);
     bench.fill(4, &atlas);
     for (name, value) in [
-        ("nodes_x", lat.nodes()[0] as f32), ("nodes_y", lat.nodes()[1] as f32), ("nodes_z", lat.nodes()[2] as f32),
-        ("cell_size", dx), ("step_dt", dt), ("gravity_x", 0.0), ("gravity", 0.0), ("gravity_z", 0.0),
-        ("closed_faces", 0.0), ("momentum_unit", unit), ("lattice_min_x", lat.min()[0]),
-        ("lattice_min_y", lat.min()[1]), ("lattice_min_z", lat.min()[2]), ("body_count", 1.0),
+        ("nodes_x", lat.nodes()[0] as f32),
+        ("nodes_y", lat.nodes()[1] as f32),
+        ("nodes_z", lat.nodes()[2] as f32),
+        ("cell_size", dx),
+        ("step_dt", dt),
+        ("gravity_x", 0.0),
+        ("gravity", 0.0),
+        ("gravity_z", 0.0),
+        ("closed_faces", 0.0),
+        ("momentum_unit", unit),
+        ("lattice_min_x", lat.min()[0]),
+        ("lattice_min_y", lat.min()[1]),
+        ("lattice_min_z", lat.min()[2]),
+        ("body_count", 1.0),
     ] {
         bench.set(name, value);
     }
@@ -286,28 +394,51 @@ fn matter_grid_update_projects_colliders() {
     let n = lat.nodes();
     let (mut projected, mut worst) = (0, 0.0f32);
     for idx in 0..nodes {
-        let coord = [idx as u32 % n[0], (idx as u32 / n[0]) % n[1], idx as u32 / (n[0] * n[1])];
+        let coord = [
+            idx as u32 % n[0],
+            (idx as u32 / n[0]) % n[1],
+            idx as u32 / (n[0] * n[1]),
+        ];
         let x: [f32; 3] = std::array::from_fn(|a| lat.min()[a] + coord[a] as f32 * dx);
-        let v_before: [f32; 3] = std::array::from_fn(|a| accum[idx * 4 + a] as f32 / m_raw as f32 * (unit * (65_536.0 / 134_217_728.0)));
+        let v_before: [f32; 3] = std::array::from_fn(|a| {
+            accum[idx * 4 + a] as f32 / m_raw as f32 * (unit * (65_536.0 / 134_217_728.0))
+        });
         let mut v = v_before;
-        let p = [body.position_inv_mass[0], body.position_inv_mass[1], body.position_inv_mass[2]];
+        let p = [
+            body.position_inv_mass[0],
+            body.position_inv_mass[1],
+            body.position_inv_mass[2],
+        ];
         let q = body.rotation;
         let rel: [f32; 3] = std::array::from_fn(|a| x[a] - p[a]);
         let local = rotate([-q[0], -q[1], -q[2], q[3]], rel);
-        let g: [f32; 3] = std::array::from_fn(|a| (local[a] / shape.scale_min[a] - shape.origin_spacing[a]) / shape.origin_spacing[3]);
+        let g: [f32; 3] = std::array::from_fn(|a| {
+            (local[a] / shape.scale_min[a] - shape.origin_spacing[a]) / shape.origin_spacing[3]
+        });
         let dims = [shape.dims_x, shape.dims_y, shape.dims_z];
-        if (0..3).all(|a| g[a] >= 0.0 && g[a] <= (dims[a] - 1) as f32) && lattice_at(&atlas, &shape, g) < 0.0 {
+        if (0..3).all(|a| g[a] >= 0.0 && g[a] <= (dims[a] - 1) as f32)
+            && lattice_at(&atlas, &shape, g) < 0.0
+        {
             let d = |a: usize, s: f32| {
                 let mut h = g;
                 h[a] += s;
                 lattice_at(&atlas, &shape, h)
             };
-            let grad: [f32; 3] = std::array::from_fn(|a| (d(a, 0.5) - d(a, -0.5)) / shape.scale_min[a]);
+            let grad: [f32; 3] =
+                std::array::from_fn(|a| (d(a, 0.5) - d(a, -0.5)) / shape.scale_min[a]);
             let world = rotate(q, grad);
             let len = world.iter().map(|c| c * c).sum::<f32>().sqrt();
             let normal = world.map(|c| c / len);
-            let w = [body.angular_velocity[0], body.angular_velocity[1], body.angular_velocity[2]];
-            let spin = [w[1] * rel[2] - w[2] * rel[1], w[2] * rel[0] - w[0] * rel[2], w[0] * rel[1] - w[1] * rel[0]];
+            let w = [
+                body.angular_velocity[0],
+                body.angular_velocity[1],
+                body.angular_velocity[2],
+            ];
+            let spin = [
+                w[1] * rel[2] - w[2] * rel[1],
+                w[2] * rel[0] - w[0] * rel[2],
+                w[0] * rel[1] - w[1] * rel[0],
+            ];
             let v_body: [f32; 3] = std::array::from_fn(|a| body.linear_velocity[a] + spin[a]);
             let v_rel: [f32; 3] = std::array::from_fn(|a| v[a] - v_body[a]);
             let v_n: f32 = (0..3).map(|a| v_rel[a] * normal[a]).sum();
@@ -315,28 +446,51 @@ fn matter_grid_update_projects_colliders() {
                 let t: [f32; 3] = std::array::from_fn(|a| v_rel[a] - v_n * normal[a]);
                 let t_len = t.iter().map(|c| c * c).sum::<f32>().sqrt();
                 let keep = (t_len + v_n * body.linear_velocity[3]).max(0.0);
-                v = std::array::from_fn(|a| v_body[a] + if t_len > 0.0 { t[a] * keep / t_len } else { 0.0 });
+                v = std::array::from_fn(|a| {
+                    v_body[a]
+                        + if t_len > 0.0 {
+                            t[a] * keep / t_len
+                        } else {
+                            0.0
+                        }
+                });
                 projected += 1;
-                let after: f32 = (0..3).map(|a| (grid[idx].velocity_mass[a] - v_body[a]) * normal[a]).sum();
-                assert!(after > -1e-4, "node {idx} still moves into the box: {after}");
+                let after: f32 = (0..3)
+                    .map(|a| (grid[idx].velocity_mass[a] - v_body[a]) * normal[a])
+                    .sum();
+                assert!(
+                    after > -1e-4,
+                    "node {idx} still moves into the box: {after}"
+                );
             }
         }
         for (got, want) in grid[idx].velocity_mass.iter().zip(v) {
             worst = worst.max((got - want).abs());
         }
     }
-    eprintln!("matter_grid_update_projects_colliders: {projected} nodes projected, worst {worst:e} m/s");
+    eprintln!(
+        "matter_grid_update_projects_colliders: {projected} nodes projected, worst {worst:e} m/s"
+    );
     assert!(projected > 50, "the box projected few nodes: {projected}");
-    assert!(worst < 1e-4, "GPU and CPU projections differ by {worst} m/s");
+    assert!(
+        worst < 1e-4,
+        "GPU and CPU projections differ by {worst} m/s"
+    );
 }
 
 /// A force or impulse lattice over `lat` holding `f` at each field node.
-fn field_values(lat: &LiquidLattice, field: &ForceLattice, f: impl Fn([f32; 3]) -> [f32; 3]) -> Vec<[f32; 4]> {
+fn field_values(
+    lat: &LiquidLattice,
+    field: &ForceLattice,
+    f: impl Fn([f32; 3]) -> [f32; 3],
+) -> Vec<[f32; 4]> {
     let [nx, ny, _] = field.nodes().map(|n| n as usize);
     (0..field.node_count())
         .map(|i| {
             let coord = [i % nx, (i / nx) % ny, i / (nx * ny)];
-            let v = f(std::array::from_fn(|a| lat.min()[a] + coord[a] as f32 * field.spacing()));
+            let v = f(std::array::from_fn(|a| {
+                lat.min()[a] + coord[a] as f32 * field.spacing()
+            }));
             [v[0], v[1], v[2], 0.0]
         })
         .collect()
@@ -350,7 +504,10 @@ fn force_records(pushes: &[[f32; 4]], air: impl Fn(usize) -> (f32, [f32; 3])) ->
         .enumerate()
         .flat_map(|(i, p)| {
             let (k, wind) = air(i);
-            [[p[0], p[1], p[2], k], [k * wind[0], k * wind[1], k * wind[2], 0.0]]
+            [
+                [p[0], p[1], p[2], k],
+                [k * wind[0], k * wind[1], k * wind[2], 0.0],
+            ]
         })
         .collect()
 }
@@ -361,8 +518,10 @@ fn still_air(_: usize) -> (f32, [f32; 3]) {
 
 fn set_field(bench: &mut Bench, field: &ForceLattice) {
     for (name, value) in [
-        ("field_nodes_x", field.nodes()[0] as f32), ("field_nodes_y", field.nodes()[1] as f32),
-        ("field_nodes_z", field.nodes()[2] as f32), ("field_spacing", field.spacing()),
+        ("field_nodes_x", field.nodes()[0] as f32),
+        ("field_nodes_y", field.nodes()[1] as f32),
+        ("field_nodes_z", field.nodes()[2] as f32),
+        ("field_spacing", field.spacing()),
     ] {
         bench.set(name, value);
     }
@@ -385,25 +544,48 @@ fn matter_grid_update_applies_field_lattices() {
     let m_raw = 8 * 65_536i32;
     let to_raw = |v: f32| (v * m_raw as f32 / scale).round() as i32;
     let nodes = lat.node_count() as usize;
-    let accum: Vec<i32> = (0..nodes).flat_map(|_| [to_raw(v0[0]), to_raw(v0[1]), to_raw(v0[2]), m_raw]).collect();
+    let accum: Vec<i32> = (0..nodes)
+        .flat_map(|_| [to_raw(v0[0]), to_raw(v0[1]), to_raw(v0[2]), m_raw])
+        .collect();
     let field = lat.force_lattice();
     // Not linear, so the trilinear weights matter. Two lattices, one per tick
     // from tick 7, so each tick must read its own; the second carries air.
     let tick_forces = [
-        force_records(&field_values(&lat, &field, |p| [30.0 * p[1], -20.0 + 40.0 * p[0] * p[2], 15.0 * p[0]]), still_air),
-        force_records(&field_values(&lat, &field, |p| [-12.0 * p[2], 25.0 * p[0] * p[1], 8.0 - 18.0 * p[1]]), |i| {
-            (0.5 + (i % 5) as f32 * 0.6, [2.0, -1.0 + (i % 3) as f32, 0.5])
-        }),
+        force_records(
+            &field_values(&lat, &field, |p| {
+                [30.0 * p[1], -20.0 + 40.0 * p[0] * p[2], 15.0 * p[0]]
+            }),
+            still_air,
+        ),
+        force_records(
+            &field_values(&lat, &field, |p| {
+                [-12.0 * p[2], 25.0 * p[0] * p[1], 8.0 - 18.0 * p[1]]
+            }),
+            |i| {
+                (
+                    0.5 + (i % 5) as f32 * 0.6,
+                    [2.0, -1.0 + (i % 3) as f32, 0.5],
+                )
+            },
+        ),
     ];
     let forces: Vec<[f32; 4]> = tick_forces.concat();
-    let impulses = field_values(&lat, &field, |p| [0.5 - p[2], 2.0 * p[0] * p[1], 0.8 * p[1]]);
+    let impulses = field_values(&lat, &field, |p| {
+        [0.5 - p[2], 2.0 * p[0] * p[1], 0.8 * p[1]]
+    });
     let mut bench = Bench::new(
         "node.matter_grid_update",
         vec![
             ("accum", HostArray::new::<i32>(accum.len() as u32)),
             ("grid", HostArray::new::<MatterGridNode>(nodes as u32)),
-            ("forces", HostArray::new::<f32>(16 * field.node_count() as u32)),
-            ("impulses", HostArray::new::<f32>(4 * field.node_count() as u32)),
+            (
+                "forces",
+                HostArray::new::<f32>(16 * field.node_count() as u32),
+            ),
+            (
+                "impulses",
+                HostArray::new::<f32>(4 * field.node_count() as u32),
+            ),
         ],
         &["grid_out"],
         |_, _| {},
@@ -413,10 +595,20 @@ fn matter_grid_update_applies_field_lattices() {
     bench.fill(3, &impulses);
     let gravity = [0.0f32, -9.81, 0.0];
     for (name, value) in [
-        ("nodes_x", lat.nodes()[0] as f32), ("nodes_y", lat.nodes()[1] as f32), ("nodes_z", lat.nodes()[2] as f32),
-        ("cell_size", dx), ("step_dt", dt), ("gravity_x", gravity[0]), ("gravity", gravity[1]),
-        ("gravity_z", gravity[2]), ("closed_faces", 0.0), ("momentum_unit", unit), ("lattice_min_x", lat.min()[0]),
-        ("lattice_min_y", lat.min()[1]), ("lattice_min_z", lat.min()[2]), ("impulse_tick", 7.0),
+        ("nodes_x", lat.nodes()[0] as f32),
+        ("nodes_y", lat.nodes()[1] as f32),
+        ("nodes_z", lat.nodes()[2] as f32),
+        ("cell_size", dx),
+        ("step_dt", dt),
+        ("gravity_x", gravity[0]),
+        ("gravity", gravity[1]),
+        ("gravity_z", gravity[2]),
+        ("closed_faces", 0.0),
+        ("momentum_unit", unit),
+        ("lattice_min_x", lat.min()[0]),
+        ("lattice_min_y", lat.min()[1]),
+        ("lattice_min_z", lat.min()[2]),
+        ("impulse_tick", 7.0),
         ("first_tick", 7.0),
     ] {
         bench.set(name, value);
@@ -425,9 +617,14 @@ fn matter_grid_update_applies_field_lattices() {
     let n = lat.nodes();
     // (force lattices, tick, substep, impulse applied): with one lattice every
     // tick reads it; with one per tick, tick 8 reads the second.
-    for (lattices, tick, substep, impulse) in
-        [(2, 7, 0, true), (2, 7, 1, false), (2, 8, 0, false), (1, 8, 0, false), (0, 7, 0, true), (0, 6, 0, false)]
-    {
+    for (lattices, tick, substep, impulse) in [
+        (2, 7, 0, true),
+        (2, 7, 1, false),
+        (2, 8, 0, false),
+        (1, 8, 0, false),
+        (0, 7, 0, true),
+        (0, 6, 0, false),
+    ] {
         bench.set("force_lattices", lattices as f32);
         bench.set("tick_index", tick as f32);
         bench.set("substep_in_tick", substep as f32);
@@ -435,16 +632,29 @@ fn matter_grid_update_applies_field_lattices() {
         let grid: Vec<MatterGridNode> = bench.read("grid_out");
         let mut worst = 0.0f32;
         for idx in 0..nodes {
-            let coord = [idx as u32 % n[0], (idx as u32 / n[0]) % n[1], idx as u32 / (n[0] * n[1])];
+            let coord = [
+                idx as u32 % n[0],
+                (idx as u32 / n[0]) % n[1],
+                idx as u32 / (n[0] * n[1]),
+            ];
             let x: [f32; 3] = std::array::from_fn(|a| lat.min()[a] + coord[a] as f32 * dx);
-            let v_before: [f32; 3] = std::array::from_fn(|a| accum[idx * 4 + a] as f32 / m_raw as f32 * scale);
+            let v_before: [f32; 3] =
+                std::array::from_fn(|a| accum[idx * 4 + a] as f32 / m_raw as f32 * scale);
             let force = match lattices {
                 0 => ForceSample::default(),
                 1 => field.sample_forces(&tick_forces[0], x),
                 _ => field.sample_forces(&tick_forces[(tick - 7) as usize], x),
             };
-            let stepped = ForceSample { push: std::array::from_fn(|a| gravity[a] + force.push[a]), ..force }.step_velocity(v_before, dt);
-            let kick = if impulse { field.sample(&impulses, x) } else { [0.0; 3] };
+            let stepped = ForceSample {
+                push: std::array::from_fn(|a| gravity[a] + force.push[a]),
+                ..force
+            }
+            .step_velocity(v_before, dt);
+            let kick = if impulse {
+                field.sample(&impulses, x)
+            } else {
+                [0.0; 3]
+            };
             for a in 0..3 {
                 let want = stepped[a] + kick[a];
                 worst = worst.max((grid[idx].velocity_mass[a] - want).abs());
@@ -453,20 +663,36 @@ fn matter_grid_update_applies_field_lattices() {
         eprintln!(
             "matter_grid_update_applies_field_lattices: force lattices {lattices}, tick {tick}, substep {substep}: worst {worst:e} m/s"
         );
-        assert!(worst < 1e-5, "force lattices {lattices}, tick {tick}, substep {substep}: GPU differs from CPU by {worst} m/s");
+        assert!(
+            worst < 1e-5,
+            "force lattices {lattices}, tick {tick}, substep {substep}: GPU differs from CPU by {worst} m/s"
+        );
     }
 }
 
 /// Inside the box, the outward normal at `x`, as `liquid_collider_project`
 /// takes it from the atlas.
-fn collider_normal(atlas: &[u32], shape: &LiquidShape, body: &LiquidBody, x: [f32; 3]) -> Option<[f32; 3]> {
-    let p = [body.position_inv_mass[0], body.position_inv_mass[1], body.position_inv_mass[2]];
+fn collider_normal(
+    atlas: &[u32],
+    shape: &LiquidShape,
+    body: &LiquidBody,
+    x: [f32; 3],
+) -> Option<[f32; 3]> {
+    let p = [
+        body.position_inv_mass[0],
+        body.position_inv_mass[1],
+        body.position_inv_mass[2],
+    ];
     let q = body.rotation;
     let rel: [f32; 3] = std::array::from_fn(|a| x[a] - p[a]);
     let local = rotate([-q[0], -q[1], -q[2], q[3]], rel);
-    let g: [f32; 3] = std::array::from_fn(|a| (local[a] / shape.scale_min[a] - shape.origin_spacing[a]) / shape.origin_spacing[3]);
+    let g: [f32; 3] = std::array::from_fn(|a| {
+        (local[a] / shape.scale_min[a] - shape.origin_spacing[a]) / shape.origin_spacing[3]
+    });
     let dims = [shape.dims_x, shape.dims_y, shape.dims_z];
-    if !(0..3).all(|a| g[a] >= 0.0 && g[a] <= (dims[a] - 1) as f32) || lattice_at(atlas, shape, g) >= 0.0 {
+    if !(0..3).all(|a| g[a] >= 0.0 && g[a] <= (dims[a] - 1) as f32)
+        || lattice_at(atlas, shape, g) >= 0.0
+    {
         return None;
     }
     let d = |a: usize, s: f32| {
@@ -492,11 +718,17 @@ fn matter_body_reaction_counts_field_velocity() {
     let dx = lat.cell_size();
     let dt = 1.0e-3f32;
     let unit = momentum_unit(dx, f64::from(dt));
-    let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025, 0.0).expect("box lattice");
+    let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025, 0.0)
+        .expect("box lattice");
     let mut atlas = Vec::new();
     pack_distance_atlas(&lattice.values, &mut atlas);
     let shape = LiquidShape {
-        origin_spacing: [lattice.origin[0], lattice.origin[1], lattice.origin[2], lattice.spacing],
+        origin_spacing: [
+            lattice.origin[0],
+            lattice.origin[1],
+            lattice.origin[2],
+            lattice.spacing,
+        ],
         dims_x: lattice.dims[0],
         dims_y: lattice.dims[1],
         dims_z: lattice.dims[2],
@@ -512,13 +744,26 @@ fn matter_body_reaction_counts_field_velocity() {
     };
     let mass = 0.01f32;
     let nodes = lat.node_count();
-    let grid = vec![MatterGridNode { velocity_mass: [0.0, 0.0, 0.0, mass], velocity_before: [0.0; 4] }; nodes as usize];
+    let grid = vec![
+        MatterGridNode {
+            velocity_mass: [0.0, 0.0, 0.0, mass],
+            velocity_before: [0.0; 4]
+        };
+        nodes as usize
+    ];
     let field = lat.force_lattice();
-    let inward = |k: f32| move |p: [f32; 3]| -> [f32; 3] { std::array::from_fn(|a| k * (centre[a] - p[a]) + 0.1 * k * p[(a + 1) % 3]) };
+    let inward = |k: f32| {
+        move |p: [f32; 3]| -> [f32; 3] {
+            std::array::from_fn(|a| k * (centre[a] - p[a]) + 0.1 * k * p[(a + 1) % 3])
+        }
+    };
     let forces = field_values(&lat, &field, inward(1000.0));
     // Tick 3 of a frame from tick 2 reads the second lattice; the first is a decoy.
-    let tick_forces: Vec<[f32; 4]> =
-        [force_records(&field_values(&lat, &field, inward(-700.0)), still_air), force_records(&forces, still_air)].concat();
+    let tick_forces: Vec<[f32; 4]> = [
+        force_records(&field_values(&lat, &field, inward(-700.0)), still_air),
+        force_records(&forces, still_air),
+    ]
+    .concat();
     let impulses = field_values(&lat, &field, inward(2.0));
     let substeps = 4.0f32;
     let mut bench = Bench::new(
@@ -529,8 +774,14 @@ fn matter_body_reaction_counts_field_velocity() {
             ("shapes", HostArray::new::<LiquidShape>(1)),
             ("atlas", HostArray::new::<u32>(atlas.len() as u32)),
             ("reaction", HostArray::new::<i32>(REACTION_WORDS)),
-            ("forces", HostArray::new::<f32>(16 * field.node_count() as u32)),
-            ("impulses", HostArray::new::<f32>(4 * field.node_count() as u32)),
+            (
+                "forces",
+                HostArray::new::<f32>(16 * field.node_count() as u32),
+            ),
+            (
+                "impulses",
+                HostArray::new::<f32>(4 * field.node_count() as u32),
+            ),
         ],
         &["reaction_out"],
         |_, _| {},
@@ -542,11 +793,24 @@ fn matter_body_reaction_counts_field_velocity() {
     bench.fill(5, &tick_forces);
     bench.fill(6, &impulses);
     for (name, value) in [
-        ("nodes_x", lat.nodes()[0] as f32), ("nodes_y", lat.nodes()[1] as f32), ("nodes_z", lat.nodes()[2] as f32),
-        ("cell_size", dx), ("step_dt", dt), ("gravity_x", 0.0), ("gravity", 0.0), ("gravity_z", 0.0),
-        ("closed_faces", 0.0), ("momentum_unit", unit), ("lattice_min_x", lat.min()[0]),
-        ("lattice_min_y", lat.min()[1]), ("lattice_min_z", lat.min()[2]), ("body_count", 1.0),
-        ("dynamic_count", 1.0), ("substeps_per_tick", substeps), ("impulse_tick", 3.0), ("tick_index", 3.0),
+        ("nodes_x", lat.nodes()[0] as f32),
+        ("nodes_y", lat.nodes()[1] as f32),
+        ("nodes_z", lat.nodes()[2] as f32),
+        ("cell_size", dx),
+        ("step_dt", dt),
+        ("gravity_x", 0.0),
+        ("gravity", 0.0),
+        ("gravity_z", 0.0),
+        ("closed_faces", 0.0),
+        ("momentum_unit", unit),
+        ("lattice_min_x", lat.min()[0]),
+        ("lattice_min_y", lat.min()[1]),
+        ("lattice_min_z", lat.min()[2]),
+        ("body_count", 1.0),
+        ("dynamic_count", 1.0),
+        ("substeps_per_tick", substeps),
+        ("impulse_tick", 3.0),
+        ("tick_index", 3.0),
         ("first_tick", 2.0),
     ] {
         bench.set(name, value);
@@ -556,7 +820,11 @@ fn matter_body_reaction_counts_field_velocity() {
     let inv_mass = f64::from(body.position_inv_mass[3]);
     let n = lat.nodes();
     // (case, forces on, substep): the impulse lands on substep 0 only.
-    for (case, forces_on, substep) in [("still", false, 1.0f32), ("impulse", false, 0.0), ("force", true, 2.0)] {
+    for (case, forces_on, substep) in [
+        ("still", false, 1.0f32),
+        ("impulse", false, 0.0),
+        ("force", true, 2.0),
+    ] {
         bench.set("force_lattices", if forces_on { 2.0 } else { 0.0 });
         bench.set("substep_in_tick", substep);
         bench.fill(4, &[0i32; REACTION_WORDS as usize]);
@@ -571,7 +839,9 @@ fn matter_body_reaction_counts_field_velocity() {
                 "force" => field.sample(&forces, x).map(|f| dt * f),
                 _ => [0.0; 3],
             };
-            let Some(normal) = collider_normal(&atlas, &shape, &body, x) else { continue };
+            let Some(normal) = collider_normal(&atlas, &shape, &body, x) else {
+                continue;
+            };
             let v_n: f32 = (0..3).map(|a| v[a] * normal[a]).sum();
             if v_n >= 0.0 {
                 continue;
@@ -579,7 +849,8 @@ fn matter_body_reaction_counts_field_velocity() {
             // A still frictionless body keeps the tangential part, so the
             // node loses v_n·n.
             pushed += 1;
-            let impulse: [f64; 3] = std::array::from_fn(|a| f64::from(mass) * f64::from(v_n * normal[a]));
+            let impulse: [f64; 3] =
+                std::array::from_fn(|a| f64::from(mass) * f64::from(v_n * normal[a]));
             let arm: [f64; 3] = std::array::from_fn(|a| f64::from(x[a] - centre[a]));
             let moment = [
                 arm[1] * impulse[2] - arm[2] * impulse[1],
@@ -593,20 +864,36 @@ fn matter_body_reaction_counts_field_velocity() {
         }
         let weight = f64::from(substep / substeps);
         let expected: Vec<f64> = [dv, dv.map(|v| weight * v), dl, dl.map(|v| weight * v)].concat();
-        let worst = expected.iter().zip(&words).map(|(e, &w)| (f64::from(w) - e).abs()).fold(0.0, f64::max);
+        let worst = expected
+            .iter()
+            .zip(&words)
+            .map(|(e, &w)| (f64::from(w) - e).abs())
+            .fold(0.0, f64::max);
         let size = dv.iter().map(|v| v * v).sum::<f64>().sqrt();
         eprintln!(
             "matter_body_reaction_counts_field_velocity {case}: {pushed} nodes pushed, |Σ Δv| {size:.0} counts, worst word {worst:.2} counts"
         );
         if case == "still" {
-            assert!(words.iter().all(|&w| w == 0), "a still grid pushes nothing: {words:?}");
+            assert!(
+                words.iter().all(|&w| w == 0),
+                "a still grid pushes nothing: {words:?}"
+            );
             continue;
         }
-        assert!(pushed > 50, "{case}: the field pushed few nodes into the box: {pushed}");
-        assert!(size > 1.0e4, "{case}: the field moved little momentum: {dv:?}");
+        assert!(
+            pushed > 50,
+            "{case}: the field pushed few nodes into the box: {pushed}"
+        );
+        assert!(
+            size > 1.0e4,
+            "{case}: the field moved little momentum: {dv:?}"
+        );
         // Each add rounds by under one count, stochastically; the f32
         // products add well under one more per word.
-        assert!(worst < f64::from(pushed) + 1.0, "{case}: reaction words {words:?} against {expected:?}");
+        assert!(
+            worst < f64::from(pushed) + 1.0,
+            "{case}: reaction words {words:?} against {expected:?}"
+        );
     }
 }
 
@@ -625,11 +912,17 @@ fn matter_push_out_reaction_matches_removed_momentum() {
     let dt = 1.0e-3f32;
     let unit = momentum_unit(dx, f64::from(dt));
     let density = 1000.0f32;
-    let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025, 0.0).expect("box lattice");
+    let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025, 0.0)
+        .expect("box lattice");
     let mut atlas = Vec::new();
     pack_distance_atlas(&lattice.values, &mut atlas);
     let shape = LiquidShape {
-        origin_spacing: [lattice.origin[0], lattice.origin[1], lattice.origin[2], lattice.spacing],
+        origin_spacing: [
+            lattice.origin[0],
+            lattice.origin[1],
+            lattice.origin[2],
+            lattice.spacing,
+        ],
         dims_x: lattice.dims[0],
         dims_y: lattice.dims[1],
         dims_z: lattice.dims[2],
@@ -652,7 +945,8 @@ fn matter_push_out_reaction_matches_removed_momentum() {
     let points: Vec<MatterPoint> = (0..12u32 * 12 * 12)
         .map(|i| {
             let c = [i % 12, (i / 12) % 12, i / 144];
-            let position: [f32; 3] = std::array::from_fn(|a| centre[a] as f32 - 0.33 + 0.06 * c[a] as f32);
+            let position: [f32; 3] =
+                std::array::from_fn(|a| centre[a] as f32 - 0.33 + 0.06 * c[a] as f32);
             MatterPoint {
                 position,
                 id: i + 1,
@@ -683,11 +977,23 @@ fn matter_push_out_reaction_matches_removed_momentum() {
     bench.fill(3, &[shape]);
     bench.fill(4, &atlas);
     for (name, value) in [
-        ("nodes_x", lat.nodes()[0] as f32), ("nodes_y", lat.nodes()[1] as f32), ("nodes_z", lat.nodes()[2] as f32),
-        ("cell_size", dx), ("step_dt", dt), ("lattice_min_x", lat.min()[0]), ("lattice_min_y", lat.min()[1]),
-        ("lattice_min_z", lat.min()[2]), ("liveliness", 1.0), ("active_count", points.len() as f32),
-        ("body_count", 1.0), ("density", density), ("momentum_unit", unit), ("tick_index", 7.0),
-        ("substep_in_tick", substep), ("substeps_per_tick", substeps), ("dynamic_count", 1.0),
+        ("nodes_x", lat.nodes()[0] as f32),
+        ("nodes_y", lat.nodes()[1] as f32),
+        ("nodes_z", lat.nodes()[2] as f32),
+        ("cell_size", dx),
+        ("step_dt", dt),
+        ("lattice_min_x", lat.min()[0]),
+        ("lattice_min_y", lat.min()[1]),
+        ("lattice_min_z", lat.min()[2]),
+        ("liveliness", 1.0),
+        ("active_count", points.len() as f32),
+        ("body_count", 1.0),
+        ("density", density),
+        ("momentum_unit", unit),
+        ("tick_index", 7.0),
+        ("substep_in_tick", substep),
+        ("substeps_per_tick", substeps),
+        ("dynamic_count", 1.0),
     ] {
         bench.set(name, value);
     }
@@ -705,7 +1011,8 @@ fn matter_push_out_reaction_matches_removed_momentum() {
     let (mut dv, mut dl, mut pushed) = ([0.0f64; 3], [0.0f64; 3], 0u32);
     for (before, after) in points.iter().zip(&moved) {
         assert_eq!(after.id, before.id, "no point leaves the lattice");
-        let lost: [f64; 3] = std::array::from_fn(|a| f64::from(before.velocity[a]) - f64::from(after.velocity[a]));
+        let lost: [f64; 3] =
+            std::array::from_fn(|a| f64::from(before.velocity[a]) - f64::from(after.velocity[a]));
         if lost == [0.0; 3] {
             continue;
         }
@@ -724,25 +1031,51 @@ fn matter_push_out_reaction_matches_removed_momentum() {
     }
     let weight = f64::from(substep / substeps);
     let expected: Vec<f64> = [dv, dv.map(|v| weight * v), dl, dl.map(|v| weight * v)].concat();
-    let worst = expected.iter().zip(&words).map(|(e, &w)| (f64::from(w) - e).abs()).fold(0.0, f64::max);
+    let worst = expected
+        .iter()
+        .zip(&words)
+        .map(|(e, &w)| (f64::from(w) - e).abs())
+        .fold(0.0, f64::max);
     eprintln!(
         "matter_push_out_reaction_matches_removed_momentum: {pushed} points pushed out, Σ Δv {:?} counts, worst word {worst:.2} counts",
         dv.map(|v| v.round())
     );
     assert!(pushed > 50, "the box pushed out few points: {pushed}");
-    assert!(dv.iter().map(|v| v * v).sum::<f64>().sqrt() > 1.0e5, "the push-out moved little momentum: {dv:?}");
+    assert!(
+        dv.iter().map(|v| v * v).sum::<f64>().sqrt() > 1.0e5,
+        "the push-out moved little momentum: {dv:?}"
+    );
     // Each add rounds by under one count, stochastically; f32 products add
     // well under one more per word.
-    assert!(worst < f64::from(pushed) + 1.0, "reaction words {words:?} against {expected:?}");
-    assert!(words[12..16].iter().all(|&w| w == 0), "padding untouched: {words:?}");
+    assert!(
+        worst < f64::from(pushed) + 1.0,
+        "reaction words {words:?} against {expected:?}"
+    );
+    assert!(
+        words[12..16].iter().all(|&w| w == 0),
+        "padding untouched: {words:?}"
+    );
 
-    let prescribed = LiquidBody { position_inv_mass: [0.0, 0.5, 0.0, 0.0], ..dynamic };
+    let prescribed = LiquidBody {
+        position_inv_mass: [0.0, 0.5, 0.0, 0.0],
+        ..dynamic
+    };
     let (unchanged, words) = run(&mut bench, prescribed);
-    assert!(words.iter().all(|&w| w == 0), "a prescribed body takes no reaction: {words:?}");
-    assert_eq!(bytemuck::cast_slice::<MatterPoint, u32>(&unchanged), bytemuck::cast_slice::<MatterPoint, u32>(&moved), "the push-out itself does not depend on the body's mass");
+    assert!(
+        words.iter().all(|&w| w == 0),
+        "a prescribed body takes no reaction: {words:?}"
+    );
+    assert_eq!(
+        bytemuck::cast_slice::<MatterPoint, u32>(&unchanged),
+        bytemuck::cast_slice::<MatterPoint, u32>(&moved),
+        "the push-out itself does not depend on the body's mass"
+    );
     bench.set("dynamic_count", 0.0);
     let (_, words) = run(&mut bench, dynamic);
-    assert!(words.iter().all(|&w| w == 0), "dynamic_count 0 writes nothing: {words:?}");
+    assert!(
+        words.iter().all(|&w| w == 0),
+        "dynamic_count 0 writes nothing: {words:?}"
+    );
 }
 
 /// Signed distance to a box of `size` centred at `centre`, turned `yaw`
@@ -753,7 +1086,8 @@ fn box_distance(p: [f32; 3], centre: [f32; 3], yaw: f32, size: [f32; 3]) -> f32 
     let local = [d[0] * c - d[2] * s, d[1], d[0] * s + d[2] * c];
     let q: [f32; 3] = std::array::from_fn(|i| local[i].abs() - 0.5 * size[i]);
     let outside = q.map(|v| v.max(0.0));
-    (outside[0] * outside[0] + outside[1] * outside[1] + outside[2] * outside[2]).sqrt() + q[0].max(q[1]).max(q[2]).min(0.0)
+    (outside[0] * outside[0] + outside[1] * outside[1] + outside[2] * outside[2]).sqrt()
+        + q[0].max(q[1]).max(q[2]).min(0.0)
 }
 
 /// Run frames until the domain has taken its colliders and ticked once.
@@ -778,7 +1112,12 @@ fn matter_collider_penetration_bounded() {
     let pose = |t: f32| ([0.0, 0.6 - 0.35 * (t / 1.0).min(1.0), 0.0], 1.5 * t);
     let transform = |t: f32| {
         let (pos, yaw) = pose(t);
-        Transform { pos, rot_euler: [0.0, yaw, 0.0], scale: size, ..Transform::default() }
+        Transform {
+            pos,
+            rot_euler: [0.0, yaw, 0.0],
+            scale: size,
+            ..Transform::default()
+        }
     };
     let mut scene = MatterScene::new(&SceneSettings {
         fill_height: 0.3,
@@ -803,13 +1142,19 @@ fn matter_collider_penetration_bounded() {
             deep += usize::from(phi < -0.5 * dx);
             if phi < tick_worst {
                 tick_worst = phi;
-                let d = [point.position[0] - centre[0], point.position[1] - centre[1], point.position[2] - centre[2]];
+                let d = [
+                    point.position[0] - centre[0],
+                    point.position[1] - centre[1],
+                    point.position[2] - centre[2],
+                ];
                 let (s, c) = yaw.sin_cos();
                 at = [d[0] * c - d[2] * s, d[1], d[0] * s + d[2] * c];
             }
         }
         if std::env::var_os("MATTER_PENETRATION_TRACE").is_some() {
-            eprintln!("  t {now:.3}: deepest {tick_worst:.4} at local {at:.3?}, {deep} points deeper than dx/2");
+            eprintln!(
+                "  t {now:.3}: deepest {tick_worst:.4} at local {at:.3?}, {deep} points deeper than dx/2"
+            );
         }
         assert_eq!(scene.stats().nonfinite, 0);
     }
@@ -817,7 +1162,10 @@ fn matter_collider_penetration_bounded() {
         "matter_collider_penetration_bounded: deepest point {worst:.5} m (bound {:.5}), {touching} point-ticks within a cell of the box",
         -0.5 * dx
     );
-    assert!(touching > 1000, "the box never reached the liquid: {touching}");
+    assert!(
+        touching > 1000,
+        "the box never reached the liquid: {touching}"
+    );
     assert!(worst >= -0.5 * dx, "a point sits {worst} m inside the box");
 }
 
@@ -830,10 +1178,18 @@ fn matter_open_mesh_collider_holds_liquid() {
     let quad = manifold_nodes::testkit::open_mesh::write_open_quad_gltf();
     let plane_y = 0.45;
     // Wider than the domain, so the liquid cannot run round its edge.
-    let transform = Transform { pos: [0.0, plane_y, 0.0], scale: [1.2; 3], ..Transform::default() };
+    let transform = Transform {
+        pos: [0.0, plane_y, 0.0],
+        scale: [1.2; 3],
+        ..Transform::default()
+    };
     let mut scene = MatterScene::new(&SceneSettings {
         fill_height: 0.0,
-        column: Some(Transform { pos: [0.0, 0.75, 0.0], scale: [0.5, 0.2, 0.5], ..Transform::default() }),
+        column: Some(Transform {
+            pos: [0.0, 0.75, 0.0],
+            scale: [0.5, 0.2, 0.5],
+            ..Transform::default()
+        }),
         colliders: vec![transform],
         collider_mesh: Some(quad.clone()),
         ..SceneSettings::default()
@@ -850,15 +1206,23 @@ fn matter_open_mesh_collider_holds_liquid() {
         let points = scene.points();
         let live = points.iter().filter(|p| p.id != 0);
         lowest = live.clone().fold(lowest, |low, p| low.min(p.position[1]));
-        resting = live.filter(|p| p.position[1] < plane_y + half_shell + dx).count();
+        resting = live
+            .filter(|p| p.position[1] < plane_y + half_shell + dx)
+            .count();
     }
     eprintln!(
         "matter_open_mesh_collider_holds_liquid: lowest point {lowest:.4} m, shell faces at {:.4} and {:.4} m, {resting} points resting on it",
         plane_y - half_shell,
         plane_y + half_shell
     );
-    assert!(resting > 100, "the liquid never reached the plane: {resting}");
-    assert!(lowest > plane_y - half_shell, "a point passed through the open mesh to {lowest} m");
+    assert!(
+        resting > 100,
+        "the liquid never reached the plane: {resting}"
+    );
+    assert!(
+        lowest > plane_y - half_shell,
+        "a point passed through the open mesh to {lowest} m"
+    );
     let _ = std::fs::remove_dir_all(quad.parent().unwrap());
 }
 
@@ -870,7 +1234,12 @@ fn matter_open_mesh_collider_holds_liquid() {
 fn matter_solid_lattice_matches_bodies() {
     let size = [0.25; 3];
     let (centre, yaw) = ([0.1, 0.55, -0.05], 0.4);
-    let transform = Transform { pos: centre, rot_euler: [0.0, yaw, 0.0], scale: size, ..Transform::default() };
+    let transform = Transform {
+        pos: centre,
+        rot_euler: [0.0, yaw, 0.0],
+        scale: size,
+        ..Transform::default()
+    };
     let mut scene = MatterScene::new(&SceneSettings {
         fill_height: 0.2,
         colliders: vec![transform],
@@ -883,17 +1252,30 @@ fn matter_solid_lattice_matches_bodies() {
     let solid = scene.solid_b();
     let low: [f32; 3] = std::array::from_fn(|d| lat.min()[d] + 3.0 * dx);
     let high: [f32; 3] = std::array::from_fn(|d| low[d] + lat.cells()[d] as f32 * dx);
-    let far = lat.nodes().iter().map(|&n| (n as f32 * dx).powi(2)).sum::<f32>().sqrt();
+    let far = lat
+        .nodes()
+        .iter()
+        .map(|&n| (n as f32 * dx).powi(2))
+        .sum::<f32>()
+        .sqrt();
     let n = lat.nodes();
     let (mut near, mut worst_near, mut worst_far, mut worst_reach) = (0, 0.0f32, 0.0f32, 0.0f32);
     for (idx, &value) in solid.iter().enumerate().take(lat.node_count() as usize) {
-        let coord = [idx as u32 % n[0], (idx as u32 / n[0]) % n[1], idx as u32 / (n[0] * n[1])];
+        let coord = [
+            idx as u32 % n[0],
+            (idx as u32 / n[0]) % n[1],
+            idx as u32 / (n[0] * n[1]),
+        ];
         let x: [f32; 3] = std::array::from_fn(|d| lat.min()[d] + coord[d] as f32 * dx);
         // Inside the walls the nearest one; past them the Euclidean depth
         // into the solid, as the FLIP engine's inverted box measures it.
         let gap: [f32; 3] = std::array::from_fn(|d| (x[d] - low[d]).min(high[d] - x[d]));
         let depth = gap.iter().map(|g| g.min(0.0).powi(2)).sum::<f32>().sqrt();
-        let walls = if depth > 0.0 { -depth } else { gap.iter().fold(far, |m, &g| m.min(g)) };
+        let walls = if depth > 0.0 {
+            -depth
+        } else {
+            gap.iter().fold(far, |m, &g| m.min(g))
+        };
         let body = box_distance(x, centre, yaw, size);
         // The cube's lattice reaches two spacings (1/16 of its side) past it.
         // Trilinear sampling of a box's distance is off by up to 0.21 spacings
@@ -913,17 +1295,28 @@ fn matter_solid_lattice_matches_bodies() {
             }
         }
     }
-    eprintln!("matter_solid_lattice_matches_bodies: {near} nodes at the cube within {worst_near:.5} m, walls within {worst_far:e} m, the cube past its lattice within {worst_reach:.5} m");
+    eprintln!(
+        "matter_solid_lattice_matches_bodies: {near} nodes at the cube within {worst_near:.5} m, walls within {worst_far:e} m, the cube past its lattice within {worst_reach:.5} m"
+    );
     assert!(near > 100, "few nodes near the cube: {near}");
     let spacing = 0.25 / 32.0;
-    assert!(worst_near < 0.3 * spacing, "near the cube the lattice is off by {worst_near} m");
-    assert!(worst_far < 1e-5, "away from it the walls are off by {worst_far} m");
+    assert!(
+        worst_near < 0.3 * spacing,
+        "near the cube the lattice is off by {worst_near} m"
+    );
+    assert!(
+        worst_far < 1e-5,
+        "away from it the walls are off by {worst_far} m"
+    );
     // Past the lattice the edge point c's distance plus the gap: the true
     // distance is at least the gap plus the two-spacing padding p, and d(c)
     // is at most √3·p, so the excess is under (√3 − 1)·p, plus the sampling
     // bound at c.
     let padding = 2.0 * spacing;
-    assert!(worst_reach < (3f32.sqrt() - 1.0) * padding + 0.3 * spacing, "past its lattice the cube is off by {worst_reach} m");
+    assert!(
+        worst_reach < (3f32.sqrt() - 1.0) * padding + 0.3 * spacing,
+        "past its lattice the cube is off by {worst_reach} m"
+    );
 }
 
 /// D11 with the fill (section 3.2): a box standing in the pool from the
@@ -933,7 +1326,12 @@ fn matter_solid_lattice_matches_bodies() {
 fn matter_fill_skips_colliders() {
     let size = [0.3, 0.4, 0.25];
     let (centre, yaw) = ([0.05, 0.15, 0.0], 0.3);
-    let transform = Transform { pos: centre, rot_euler: [0.0, yaw, 0.0], scale: size, ..Transform::default() };
+    let transform = Transform {
+        pos: centre,
+        rot_euler: [0.0, yaw, 0.0],
+        scale: size,
+        ..Transform::default()
+    };
     let mut scene = MatterScene::new(&SceneSettings {
         fill_height: 0.25,
         colliders: vec![transform],
@@ -949,8 +1347,17 @@ fn matter_fill_skips_colliders() {
         .map(|p| box_distance(p.position, centre, yaw, size))
         .fold(f32::INFINITY, f32::min);
     // The box's submerged volume at 8 points per cell.
-    let expected = (size[0] * size[2] * (0.25 - (centre[1] - 0.5 * size[1])) / (dx * dx * dx) * 8.0) as usize;
-    eprintln!("matter_fill_skips_colliders: {unused} unused slots (about {expected} expected), deepest live point {deepest:.4} m after one tick");
-    assert!(unused * 10 > expected * 8 && unused * 10 < expected * 12, "{unused} unused, {expected} expected");
-    assert!(deepest > -0.5 * dx, "a live point starts {deepest} m inside the box");
+    let expected =
+        (size[0] * size[2] * (0.25 - (centre[1] - 0.5 * size[1])) / (dx * dx * dx) * 8.0) as usize;
+    eprintln!(
+        "matter_fill_skips_colliders: {unused} unused slots (about {expected} expected), deepest live point {deepest:.4} m after one tick"
+    );
+    assert!(
+        unused * 10 > expected * 8 && unused * 10 < expected * 12,
+        "{unused} unused, {expected} expected"
+    );
+    assert!(
+        deepest > -0.5 * dx,
+        "a live point starts {deepest} m inside the box"
+    );
 }

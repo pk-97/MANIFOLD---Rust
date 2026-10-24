@@ -1,5 +1,5 @@
-use ahash::{AHashMap, AHashSet};
 use crate::clip_controls::{ClipControlFrame, ClipControlSpan, ClipControlStart};
+use ahash::{AHashMap, AHashSet};
 use manifold_core::ClipId;
 use manifold_core::LayerId;
 use manifold_core::{Beats, Seconds};
@@ -140,18 +140,27 @@ impl ClipScheduler {
         // An observed session span can end at current even while the same clip
         // remains active; its event belongs to the current-membership walk below.
         self.control_window_ids.clear();
-        for entry in source_window.iter().filter(|entry| entry.end_beat() <= current) {
+        for entry in source_window
+            .iter()
+            .filter(|entry| entry.end_beat() <= current)
+        {
             if entry.is_visible() {
-                controls.record_span(entry.layer_id.clone(), ClipControlSpan {
-                    clip_id: entry.clip_id.clone(),
-                    start_beat: entry.start_beat,
-                    control_from: entry.control_from,
-                    end_beat: Some(entry.end_beat()),
-                });
+                controls.record_span(
+                    entry.layer_id.clone(),
+                    ClipControlSpan {
+                        clip_id: entry.clip_id.clone(),
+                        start_beat: entry.start_beat,
+                        control_from: entry.control_from,
+                        end_beat: Some(entry.end_beat()),
+                    },
+                );
             }
             let is_current = self.should_be_active_ids.contains(&entry.clip_id)
-                && result.should_be_active.iter().any(|active| active.clip_id == entry.clip_id
-                    && active.layer_id == entry.layer_id && active.start_beat == entry.start_beat);
+                && result.should_be_active.iter().any(|active| {
+                    active.clip_id == entry.clip_id
+                        && active.layer_id == entry.layer_id
+                        && active.start_beat == entry.start_beat
+                });
             let starts = if entry.is_live_slot() {
                 // A complete note can arrive at the previous sync boundary.
                 // Keep its membership until modulation consumes this window.
@@ -161,43 +170,59 @@ impl ClipScheduler {
                 from.is_some_and(|from| from < entry.start_beat && entry.start_beat <= current)
             };
             if !is_current && starts && entry.start_beat >= entry.control_from {
-                controls.record_start(entry.layer_id.clone(), ClipControlStart {
-                    sequence: 0,
-                    clip_id: entry.clip_id.clone(),
-                    beat: entry.start_beat,
-                    is_muted: entry.is_muted,
-                    is_live: entry.is_live_slot() || entry.is_session_slot(),
-                });
+                controls.record_start(
+                    entry.layer_id.clone(),
+                    ClipControlStart {
+                        sequence: 0,
+                        clip_id: entry.clip_id.clone(),
+                        beat: entry.start_beat,
+                        is_muted: entry.is_muted,
+                        is_live: entry.is_live_slot() || entry.is_session_slot(),
+                    },
+                );
             }
             if entry.is_live_slot() && !is_current {
-                self.control_active.insert(entry.clip_id.clone(), entry.clone());
+                self.control_active
+                    .insert(entry.clip_id.clone(), entry.clone());
             }
         }
-        self.control_active.retain(|id, _| self.should_be_active_ids.contains(id)
-            || self.control_window_ids.contains(id));
+        self.control_active.retain(|id, _| {
+            self.should_be_active_ids.contains(id) || self.control_window_ids.contains(id)
+        });
         for entry in &result.should_be_active {
             if entry.is_visible() {
-                controls.record_span(entry.layer_id.clone(), ClipControlSpan {
-                    clip_id: entry.clip_id.clone(),
-                    start_beat: entry.start_beat,
-                    control_from: entry.control_from,
-                    end_beat: (!entry.is_live_slot()).then(|| entry.end_beat()),
-                });
+                controls.record_span(
+                    entry.layer_id.clone(),
+                    ClipControlSpan {
+                        clip_id: entry.clip_id.clone(),
+                        start_beat: entry.start_beat,
+                        control_from: entry.control_from,
+                        end_beat: (!entry.is_live_slot()).then(|| entry.end_beat()),
+                    },
+                );
             }
             let starts = match self.control_active.get(&entry.clip_id) {
                 None => true,
-                Some(previous) => previous.layer_id == entry.layer_id
-                    && entry.is_session_slot() && previous.start_beat != entry.start_beat,
+                Some(previous) => {
+                    previous.layer_id == entry.layer_id
+                        && entry.is_session_slot()
+                        && previous.start_beat != entry.start_beat
+                }
             };
             if starts && entry.start_beat >= entry.control_from {
-                controls.record_start(entry.layer_id.clone(), ClipControlStart {
-                    sequence: 0,
-                    clip_id: entry.clip_id.clone(), beat: entry.start_beat,
-                    is_muted: entry.is_muted,
-                    is_live: entry.is_live_slot() || entry.is_session_slot(),
-                });
+                controls.record_start(
+                    entry.layer_id.clone(),
+                    ClipControlStart {
+                        sequence: 0,
+                        clip_id: entry.clip_id.clone(),
+                        beat: entry.start_beat,
+                        is_muted: entry.is_muted,
+                        is_live: entry.is_live_slot() || entry.is_session_slot(),
+                    },
+                );
             }
-            self.control_active.insert(entry.clip_id.clone(), entry.clone());
+            self.control_active
+                .insert(entry.clip_id.clone(), entry.clone());
         }
     }
 
@@ -329,7 +354,14 @@ mod tests {
         beat: Beats,
     ) {
         let result = scheduler.compute_sync(
-            Seconds::ZERO, beat, refs, &[], &[], &AHashSet::new(), &AHashSet::new(), Beats(1.0),
+            Seconds::ZERO,
+            beat,
+            refs,
+            &[],
+            &[],
+            &AHashSet::new(),
+            &AHashSet::new(),
+            Beats(1.0),
         );
         controls.clear_spans();
         scheduler.record_controls(&result, &[], None, beat, controls);
@@ -344,14 +376,31 @@ mod tests {
         let mut controls = ClipControlFrame::default();
         let clip = make_ref("short", 0, 0.0, 0.01);
         let owner = clip.layer_id.clone();
-        controls_tick(&mut scheduler, &mut controls, std::slice::from_ref(&clip), Beats(0.005));
-        assert_eq!(controls.starts(&ClipTriggerSource::OwnLayer, Some(&owner)).len(), 1);
-        assert_eq!(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(0.005)), Some(Beats(0.005)));
+        controls_tick(
+            &mut scheduler,
+            &mut controls,
+            std::slice::from_ref(&clip),
+            Beats(0.005),
+        );
+        assert_eq!(
+            controls
+                .starts(&ClipTriggerSource::OwnLayer, Some(&owner))
+                .len(),
+            1
+        );
+        assert_eq!(
+            controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(0.005)),
+            Some(Beats(0.005))
+        );
         controls.clear_starts();
         // The renderer remains absent, so another media start is attempted.
         // Source membership nevertheless remains unchanged.
         controls_tick(&mut scheduler, &mut controls, &[clip], Beats(0.006));
-        assert!(controls.starts(&ClipTriggerSource::OwnLayer, Some(&owner)).is_empty());
+        assert!(
+            controls
+                .starts(&ClipTriggerSource::OwnLayer, Some(&owner))
+                .is_empty()
+        );
     }
 
     #[test]
@@ -361,15 +410,47 @@ mod tests {
         let mut controls = ClipControlFrame::default();
         let mut clip = make_ref("session", 0, 0.0, 4.0);
         clip.clip_index = ActiveClipRef::SESSION_SLOT;
-        controls_tick(&mut scheduler, &mut controls, std::slice::from_ref(&clip), Beats(1.0));
+        controls_tick(
+            &mut scheduler,
+            &mut controls,
+            std::slice::from_ref(&clip),
+            Beats(1.0),
+        );
         controls.clear_starts();
         clip.layer_id = LayerId::new("moved-owner");
-        controls_tick(&mut scheduler, &mut controls, std::slice::from_ref(&clip), Beats(1.0));
-        assert!(controls.starts(&ClipTriggerSource::OwnLayer, Some(&clip.layer_id)).is_empty());
-        assert!(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&clip.layer_id), Beats(1.0)).is_some());
+        controls_tick(
+            &mut scheduler,
+            &mut controls,
+            std::slice::from_ref(&clip),
+            Beats(1.0),
+        );
+        assert!(
+            controls
+                .starts(&ClipTriggerSource::OwnLayer, Some(&clip.layer_id))
+                .is_empty()
+        );
+        assert!(
+            controls
+                .elapsed(
+                    &ClipTriggerSource::OwnLayer,
+                    Some(&clip.layer_id),
+                    Beats(1.0)
+                )
+                .is_some()
+        );
         clip.start_beat = Beats(4.0);
-        controls_tick(&mut scheduler, &mut controls, std::slice::from_ref(&clip), Beats(4.0));
-        assert_eq!(controls.starts(&ClipTriggerSource::OwnLayer, Some(&clip.layer_id)).len(), 1);
+        controls_tick(
+            &mut scheduler,
+            &mut controls,
+            std::slice::from_ref(&clip),
+            Beats(4.0),
+        );
+        assert_eq!(
+            controls
+                .starts(&ClipTriggerSource::OwnLayer, Some(&clip.layer_id))
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -381,25 +462,57 @@ mod tests {
             let clip = make_live_ref("short-note", 0, 1.0, 0.25);
             let owner = clip.layer_id.clone();
             if observed_live {
-                controls_tick(&mut scheduler, &mut controls, std::slice::from_ref(&clip), Beats(1.0));
+                controls_tick(
+                    &mut scheduler,
+                    &mut controls,
+                    std::slice::from_ref(&clip),
+                    Beats(1.0),
+                );
             }
             // NoteOn can equal the previous sync beat. NoteOff has already
             // removed the slot, but the interval survives until modulation.
             for beat in [Beats(1.5), Beats(1.75)] {
                 let result = scheduler.compute_sync(
-                    Seconds::ZERO, beat, &[], &[], &[],
-                    &AHashSet::new(), &AHashSet::new(), Beats::ZERO,
+                    Seconds::ZERO,
+                    beat,
+                    &[],
+                    &[],
+                    &[],
+                    &AHashSet::new(),
+                    &AHashSet::new(),
+                    Beats::ZERO,
                 );
                 controls.clear_spans();
-                scheduler.record_controls(&result, std::slice::from_ref(&clip), Some(Beats(1.0)), beat, &mut controls);
-                assert_eq!(controls.starts(&ClipTriggerSource::OwnLayer, Some(&owner)).len(), 1);
-                assert_eq!(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(1.125)), Some(Beats(0.125)));
-                assert_eq!(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(1.25)), None);
+                scheduler.record_controls(
+                    &result,
+                    std::slice::from_ref(&clip),
+                    Some(Beats(1.0)),
+                    beat,
+                    &mut controls,
+                );
+                assert_eq!(
+                    controls
+                        .starts(&ClipTriggerSource::OwnLayer, Some(&owner))
+                        .len(),
+                    1
+                );
+                assert_eq!(
+                    controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(1.125)),
+                    Some(Beats(0.125))
+                );
+                assert_eq!(
+                    controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(1.25)),
+                    None
+                );
                 scheduler.reclaim(result);
             }
             controls.clear_starts();
             controls_tick(&mut scheduler, &mut controls, &[], Beats(2.0));
-            assert!(controls.starts(&ClipTriggerSource::OwnLayer, Some(&owner)).is_empty());
+            assert!(
+                controls
+                    .starts(&ClipTriggerSource::OwnLayer, Some(&owner))
+                    .is_empty()
+            );
             assert!(scheduler.control_active.is_empty());
         }
     }
@@ -413,15 +526,36 @@ mod tests {
         let second = make_live_ref("second-note", 0, 1.25, 4.0);
         let owner = first.layer_id.clone();
         let result = scheduler.compute_sync(
-            Seconds::ZERO, Beats(1.5), &[], &[second], &[],
-            &AHashSet::new(), &AHashSet::new(), Beats::ZERO,
+            Seconds::ZERO,
+            Beats(1.5),
+            &[],
+            &[second],
+            &[],
+            &AHashSet::new(),
+            &AHashSet::new(),
+            Beats::ZERO,
         );
-        scheduler.record_controls(&result, &[first], Some(Beats(1.0)), Beats(1.5), &mut controls);
+        scheduler.record_controls(
+            &result,
+            &[first],
+            Some(Beats(1.0)),
+            Beats(1.5),
+            &mut controls,
+        );
         controls.finish();
         let starts = controls.starts(&ClipTriggerSource::OwnLayer, Some(&owner));
-        assert_eq!(starts.iter().map(|start| start.beat).collect::<Vec<_>>(), vec![Beats(1.0), Beats(1.25)]);
-        assert_eq!(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(1.125)), Some(Beats(0.125)));
-        assert_eq!(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(1.375)), Some(Beats(0.125)));
+        assert_eq!(
+            starts.iter().map(|start| start.beat).collect::<Vec<_>>(),
+            vec![Beats(1.0), Beats(1.25)]
+        );
+        assert_eq!(
+            controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(1.125)),
+            Some(Beats(0.125))
+        );
+        assert_eq!(
+            controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(1.375)),
+            Some(Beats(0.125))
+        );
     }
 
     fn make_ref(id: &str, layer_index: i32, start_beat: f32, duration_beats: f32) -> ActiveClipRef {

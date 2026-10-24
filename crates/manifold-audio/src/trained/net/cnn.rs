@@ -24,11 +24,18 @@ struct Conv {
 }
 
 impl Conv {
-    fn new(c: &Container, prefix: &str, name: &str, cin: usize, cout: usize) -> Result<Self, ContainerError> {
+    fn new(
+        c: &Container,
+        prefix: &str,
+        name: &str,
+        cin: usize,
+        cout: usize,
+    ) -> Result<Self, ContainerError> {
         Ok(Self {
             cin,
             cout,
-            w: c.f32s(&format!("{prefix}{name}.weight"), &[cout, cin, 3, 3])?.to_vec(),
+            w: c.f32s(&format!("{prefix}{name}.weight"), &[cout, cin, 3, 3])?
+                .to_vec(),
             b: c.f32s(&format!("{prefix}{name}.bias"), &[cout])?.to_vec(),
         })
     }
@@ -141,18 +148,30 @@ impl Cnn {
         let w0 = c.shape(&key("conv.0.weight"))?;
         let channels = if w0.len() == 4 { w0[1] } else { 0 };
         if !(2..=MAX_IN_CH).contains(&channels) {
-            return Err(ContainerError::WrongShape { name: key("conv.0.weight"), want: vec![C1, 2, 3, 3], got: w0.to_vec() });
+            return Err(ContainerError::WrongShape {
+                name: key("conv.0.weight"),
+                want: vec![C1, 2, 3, 3],
+                got: w0.to_vec(),
+            });
         }
         let h0 = c.shape(&key("head.0.weight"))?;
         let width = if h0.len() == 2 { h0[1] } else { 0 };
         let tbins = width / (C3 * ROWS);
         let (w1, w2) = (frames / 2, frames / 4);
         if tbins == 0 || tbins * C3 * ROWS != width || tbins > w2 {
-            return Err(ContainerError::WrongShape { name: key("head.0.weight"), want: vec![HIDDEN, C3 * ROWS], got: h0.to_vec() });
+            return Err(ContainerError::WrongShape {
+                name: key("head.0.weight"),
+                want: vec![HIDDEN, C3 * ROWS],
+                got: h0.to_vec(),
+            });
         }
         for (name, v) in [("net.channels", channels), ("net.tbins", tbins)] {
             if c.i64s(name, &[])?[0] != v as i64 {
-                return Err(ContainerError::WrongShape { name: name.into(), want: vec![v], got: vec![c.i64s(name, &[])?[0] as usize] });
+                return Err(ContainerError::WrongShape {
+                    name: name.into(),
+                    want: vec![v],
+                    got: vec![c.i64s(name, &[])?[0] as usize],
+                });
             }
         }
         let pooled_len = C3 * ROWS * tbins;
@@ -164,7 +183,9 @@ impl Cnn {
             conv1: Conv::new(c, prefix, "conv.0", channels, C1)?,
             conv2: Conv::new(c, prefix, "conv.3", C1, C2)?,
             conv3: Conv::new(c, prefix, "conv.6", C2, C3)?,
-            fc1_w: c.f32s(&key("head.0.weight"), &[HIDDEN, pooled_len])?.to_vec(),
+            fc1_w: c
+                .f32s(&key("head.0.weight"), &[HIDDEN, pooled_len])?
+                .to_vec(),
             fc1_b: c.f32s(&key("head.0.bias"), &[HIDDEN])?.to_vec(),
             fc2_w: c.f32s(&key("head.2.weight"), &[1, HIDDEN])?.to_vec(),
             fc2_b: c.f32s(&key("head.2.bias"), &[1])?[0],
@@ -195,7 +216,11 @@ impl Cnn {
         self.conv3.forward(&self.in3, h2, w2, &mut self.out3);
         // AdaptiveMaxPool2d((BANDS / 4, tbins)): each row's max over each (possibly overlapping) time bin;
         // the flatten order is (channel, band, tbin).
-        for (bins, row) in self.pooled.chunks_exact_mut(self.tbins).zip(self.out3.chunks_exact(w2)) {
+        for (bins, row) in self
+            .pooled
+            .chunks_exact_mut(self.tbins)
+            .zip(self.out3.chunks_exact(w2))
+        {
             for (i, p) in bins.iter_mut().enumerate() {
                 let (s, e) = adaptive_bin(i, self.tbins, w2);
                 *p = row[s..e].iter().copied().fold(f32::NEG_INFINITY, f32::max);
@@ -207,7 +232,12 @@ impl Cnn {
             let s: f32 = w.iter().zip(&self.pooled).map(|(a, b)| a * b).sum();
             *hid = (s + self.fc1_b[j]).max(0.0);
         }
-        let s: f32 = self.fc2_w.iter().zip(&self.hidden).map(|(a, b)| a * b).sum();
+        let s: f32 = self
+            .fc2_w
+            .iter()
+            .zip(&self.hidden)
+            .map(|(a, b)| a * b)
+            .sum();
         s + self.fc2_b
     }
 }

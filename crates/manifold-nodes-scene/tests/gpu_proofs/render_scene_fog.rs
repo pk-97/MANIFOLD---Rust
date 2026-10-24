@@ -17,11 +17,10 @@
 use half::f16;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
-use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
-
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 /// A large ground plane lit by one overhead sun, viewed at a grazing angle.
 /// `fog` is `Some((density, r, g, b))` to wire a `node.atmosphere`, or `None`
@@ -85,7 +84,9 @@ fn fog_scene_json(fog: Option<(f32, f32, f32, f32)>) -> String {
                 "fog_density":{{"type":"Float","value":{density}}},
                 "height_falloff":{{"type":"Float","value":0.0}}}}}}"#,
         ));
-        wires.push_str(r#",{"fromNode":40,"fromPort":"atmosphere","toNode":20,"toPort":"atmosphere"}"#);
+        wires.push_str(
+            r#",{"fromNode":40,"fromPort":"atmosphere","toNode":20,"toPort":"atmosphere"}"#,
+        );
     }
 
     format!(r#"{{"version":2,"name":"RenderSceneFogProof","nodes":[{nodes}],"wires":[{wires}]}}"#)
@@ -242,7 +243,9 @@ fn shaft_and_fog_scene_json(fog_density: f32, shaft_intensity: f32) -> String {
         {"fromNode":40,"fromPort":"atmosphere","toNode":20,"toPort":"atmosphere"},
         {"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}"#;
 
-    format!(r#"{{"version":2,"name":"RenderSceneShaftFogProof","nodes":[{nodes}],"wires":[{wires}]}}"#)
+    format!(
+        r#"{{"version":2,"name":"RenderSceneShaftFogProof","nodes":[{nodes}],"wires":[{wires}]}}"#
+    )
 }
 
 #[test]
@@ -254,7 +257,10 @@ fn shafts_two_runs_bit_identical() {
     let json = shaft_and_fog_scene_json(0.15, 1.2);
     let (first, _, _) = render_readback(&json);
     let (second, _, _) = render_readback(&json);
-    assert_eq!(first, second, "two runs of the same shaft graph must be bit-identical (D5, no temporal accumulation)");
+    assert_eq!(
+        first, second,
+        "two runs of the same shaft graph must be bit-identical (D5, no temporal accumulation)"
+    );
 }
 
 #[test]
@@ -316,7 +322,10 @@ fn shaft_intensity_is_a_monotonic_performer_fader() {
         );
         prev_sum = sum;
     }
-    assert!(prev_sum > 0.0, "sanity: the final (hottest) frame must have nonzero total light");
+    assert!(
+        prev_sum > 0.0,
+        "sanity: the final (hottest) frame must have nonzero total light"
+    );
 }
 
 /// P3: a ground plane lit by ONE Point light (`cast_shadows` toggle exposed
@@ -389,7 +398,9 @@ fn point_light_shaft_scene_json(
         {"fromNode":40,"fromPort":"atmosphere","toNode":20,"toPort":"atmosphere"},
         {"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}"#;
 
-    format!(r#"{{"version":2,"name":"RenderScenePointShaftProof","nodes":[{nodes}],"wires":[{wires}]}}"#)
+    format!(
+        r#"{{"version":2,"name":"RenderScenePointShaftProof","nodes":[{nodes}],"wires":[{wires}]}}"#
+    )
 }
 
 /// VOLUMETRIC_LIGHT_DESIGN.md P3 performer gesture: "key light color bound
@@ -484,7 +495,10 @@ fn mean_lit_rgb(bytes: &[u8]) -> (f64, f64, f64) {
         let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
         let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
         let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-        assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+        assert!(
+            r.is_finite() && g.is_finite() && b.is_finite(),
+            "non-finite pixel"
+        );
         if r + g + b > 0.02 {
             sr += r as f64;
             sg += g as f64;
@@ -529,8 +543,14 @@ fn blue_fog_tints_the_scene_toward_the_fog_color() {
     // toward (0.1,0.3,0.9): a sub-white colour, so it lowers ALL channels,
     // but far more in red/green than blue — leaving BLUE the dominant channel
     // where it was tied before. That flip is the decisive readout of fog.
-    assert!(cr > 0.2 && (cr - cb).abs() < 0.05, "clear scene should be ~neutral white");
-    assert!(fb > fr + 0.05 && fb > fg + 0.02, "blue fog must make blue the dominant channel: fog rgb=({fr:.3},{fg:.3},{fb:.3})");
+    assert!(
+        cr > 0.2 && (cr - cb).abs() < 0.05,
+        "clear scene should be ~neutral white"
+    );
+    assert!(
+        fb > fr + 0.05 && fb > fg + 0.02,
+        "blue fog must make blue the dominant channel: fog rgb=({fr:.3},{fg:.3},{fb:.3})"
+    );
     // And the blue/red balance shifts markedly bluer than the clear scene.
     assert!(
         fb / fr.max(1e-4) > cb / cr.max(1e-4) + 0.1,
@@ -769,8 +789,16 @@ fn write_checkerboard_composite_png(bytes: &[u8], w: u32, h: u32, path: &std::pa
             let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
             let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
             let a = f16::from_le_bytes([px[6], px[7]]).to_f32().clamp(0.0, 1.0);
-            let checker = if ((x / tile) + (y / tile)).is_multiple_of(2) { 0.25f32 } else { 0.35f32 };
-            let comp = [r + checker * (1.0 - a), g + checker * (1.0 - a), b + checker * (1.0 - a)];
+            let checker = if ((x / tile) + (y / tile)).is_multiple_of(2) {
+                0.25f32
+            } else {
+                0.35f32
+            };
+            let comp = [
+                r + checker * (1.0 - a),
+                g + checker * (1.0 - a),
+                b + checker * (1.0 - a),
+            ];
             for v in comp {
                 let mapped = (v / (1.0 + v)).clamp(0.0, 1.0);
                 out.push((mapped.powf(1.0 / 2.2) * 255.0).round() as u8);
@@ -854,7 +882,10 @@ fn p3_night_garden_acceptance_demo() {
         // silent no-op) — total additive response over the whole frame must
         // be well above the numeric noise floor.
         let sum = total_rgb_sum(&bytes);
-        assert!(sum > 1.0, "quality {quality}: night-garden total rgb sum {sum:.4} looks like a no-op");
+        assert!(
+            sum > 1.0,
+            "quality {quality}: night-garden total rgb sum {sum:.4} looks like a no-op"
+        );
         if let Some(dir) = &artifact_dir {
             let low_path = dir.join(format!("vol_light_p3_night_garden_{label}.png"));
             write_checkerboard_composite_png(&bytes, w, h, &low_path);
@@ -944,5 +975,8 @@ fn beam_color_tracks_light_color_modulation() {
         );
         prev_sum = sum;
     }
-    assert!(prev_sum > 0.0, "sanity: the final (brightest colour) frame must have nonzero total light");
+    assert!(
+        prev_sum > 0.0,
+        "sanity: the final (brightest colour) frame must have nonzero total light"
+    );
 }

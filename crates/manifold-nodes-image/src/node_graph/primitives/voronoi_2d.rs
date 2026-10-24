@@ -192,12 +192,15 @@ mod gpu_tests {
     use manifold_gpu::GpuTextureFormat;
 
     use super::Voronoi2D;
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use manifold_node_engine::exec::execution_plan::{ExecutionPlan, ResourceId, compile};
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_node_engine::graph::Graph;
     use manifold_node_engine::parameters::ParamValue;
-    use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId};
-    use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::{
+        exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+        exec::metal_backend::MetalBackend, scene::boundary_nodes::FinalOutput,
+    };
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -230,8 +233,10 @@ mod gpu_tests {
         let mut g = Graph::new();
         let node = g.add_node(Box::new(Voronoi2D::new()));
         let sink = g.add_node(Box::new(FinalOutput::new()));
-        g.set_param(node, "scale", ParamValue::Float(scale)).unwrap();
-        g.set_param(node, "jitter", ParamValue::Float(jitter)).unwrap();
+        g.set_param(node, "scale", ParamValue::Float(scale))
+            .unwrap();
+        g.set_param(node, "jitter", ParamValue::Float(jitter))
+            .unwrap();
         g.connect((node, "out"), (sink, "in")).unwrap();
         let plan = compile(&g).unwrap();
         let r_out = output_resource(&plan, node, "out");
@@ -307,16 +312,15 @@ mod gpu_tests {
         // One sample deep inside each of cells (0,0), (1,0), (2,0),
         // (3,0), (0,1), (0,2), (0,3) — 7 different cells.
         let samples = [
-            alpha_at(&pixels, 1, 1, w),    // cell (0,0)
-            alpha_at(&pixels, 5, 1, w),    // cell (1,0)
-            alpha_at(&pixels, 9, 1, w),    // cell (2,0)
-            alpha_at(&pixels, 13, 1, w),   // cell (3,0)
-            alpha_at(&pixels, 1, 5, w),    // cell (0,1)
-            alpha_at(&pixels, 1, 9, w),    // cell (0,2)
-            alpha_at(&pixels, 1, 13, w),   // cell (0,3)
+            alpha_at(&pixels, 1, 1, w),  // cell (0,0)
+            alpha_at(&pixels, 5, 1, w),  // cell (1,0)
+            alpha_at(&pixels, 9, 1, w),  // cell (2,0)
+            alpha_at(&pixels, 13, 1, w), // cell (3,0)
+            alpha_at(&pixels, 1, 5, w),  // cell (0,1)
+            alpha_at(&pixels, 1, 9, w),  // cell (0,2)
+            alpha_at(&pixels, 1, 13, w), // cell (0,3)
         ];
-        let unique: std::collections::HashSet<u32> =
-            samples.iter().map(|f| f.to_bits()).collect();
+        let unique: std::collections::HashSet<u32> = samples.iter().map(|f| f.to_bits()).collect();
         assert!(
             unique.len() >= 5,
             "expected ≥5 distinct cell hashes across 7 cells, got {unique:?} from {samples:?}",

@@ -42,7 +42,9 @@ static GPU_TEST_LOCK: Mutex<()> = Mutex::new(());
 /// remainder of the calling test. Hold the returned guard for the test's
 /// full body.
 pub fn gpu_guard() -> MutexGuard<'static, ()> {
-    GPU_TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    GPU_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Shared headless `GpuDevice` for the proof suite. `GpuDevice::new()` warms
@@ -52,7 +54,9 @@ pub fn gpu_guard() -> MutexGuard<'static, ()> {
 /// concurrently by other tests in the same binary.
 pub fn test_device() -> Arc<GpuDevice> {
     static SHARED: OnceLock<Arc<GpuDevice>> = OnceLock::new();
-    SHARED.get_or_init(|| Arc::new(GpuDevice::new_queued("recording proofs"))).clone()
+    SHARED
+        .get_or_init(|| Arc::new(GpuDevice::new_queued("recording proofs")))
+        .clone()
 }
 
 /// Allocate a fresh Rgba16Float texture usable as both a compute-shader
@@ -227,7 +231,9 @@ fn parse_video_stream(streams: &serde_json::Value) -> Result<(String, u32, u32, 
         .as_str()
         .ok_or("video stream missing codec_name")?
         .to_string();
-    let width = video["width"].as_u64().ok_or("video stream missing width")? as u32;
+    let width = video["width"]
+        .as_u64()
+        .ok_or("video stream missing width")? as u32;
     let height = video["height"]
         .as_u64()
         .ok_or("video stream missing height")? as u32;
@@ -242,7 +248,9 @@ fn parse_video_stream(streams: &serde_json::Value) -> Result<(String, u32, u32, 
 fn parse_audio_duration(streams: &serde_json::Value) -> Option<f64> {
     let arr = streams["streams"].as_array()?;
     let audio = arr.iter().find(|s| s["codec_type"] == "audio")?;
-    audio["duration"].as_str().and_then(|s| s.parse::<f64>().ok())
+    audio["duration"]
+        .as_str()
+        .and_then(|s| s.parse::<f64>().ok())
 }
 
 fn probe_pts(path: &Path) -> Result<Vec<i64>, String> {

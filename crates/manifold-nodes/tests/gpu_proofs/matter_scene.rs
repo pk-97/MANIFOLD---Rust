@@ -3,18 +3,23 @@
 //! harness drives one fixed tick per frame and reads the point state, the
 //! per-tick stats and the published frames back.
 
-use manifold_core::{Beats, Seconds};
+use manifold_core::fluid_domain::domain_layout;
 use manifold_core::scene_impulse::RigidImpulseTargets;
+use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuFrameProfile, GpuTextureFormat, GpuTimestampSampler};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_core::fluid_domain::{domain_layout};
+use manifold_node_engine::particles::FluidParticle;
+use manifold_node_engine::{
+    exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+    exec::execution_plan::ExecutionPlan, exec::execution_plan::ResourceId,
+    exec::execution_plan::compile, exec::metal_backend::MetalBackend, graph::Graph,
+    load::graph_loader::pre_allocate_resources, parameters::ParamValue,
+    persistence::PrimitiveRegistry, scene::transform::Transform, state_store::StateStore,
+};
 use manifold_physics::clock::TICK;
-use manifold_node_engine::particles::{FluidParticle};
+use manifold_water_gpu_mpm::matter::{MatterPoint, MatterTickStats, STATS_WORDS, lattice_blocks};
 use manifold_water_liquid::fluid_particles::CellRange;
 use manifold_water_liquid::lattice::LiquidLattice;
-use manifold_water_gpu_mpm::matter::{MatterPoint, MatterTickStats, STATS_WORDS, lattice_blocks};
-use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, scene::transform::Transform, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
-
 
 /// Scene settings, in the domain node's own terms.
 #[derive(Clone, Debug)]
@@ -88,7 +93,13 @@ pub(crate) struct MatterScene {
 }
 
 const LATTICE: [&str; 7] = [
-    "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y", "nodes_z",
+    "lattice_min_x",
+    "lattice_min_y",
+    "lattice_min_z",
+    "cell_size",
+    "nodes_x",
+    "nodes_y",
+    "nodes_z",
 ];
 
 impl MatterScene {
@@ -96,7 +107,10 @@ impl MatterScene {
         let registry = PrimitiveRegistry::with_builtin();
         let mut graph = Graph::new();
         let add = |graph: &mut Graph, id: &str| graph.add_node(registry.construct(id).expect(id));
-        let domain = add(&mut graph, manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID);
+        let domain = add(
+            &mut graph,
+            manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID,
+        );
         let fill = add(&mut graph, "node.matter_fill");
         let state = add(&mut graph, "node.matter_state");
         let zero = add(&mut graph, "node.zero_array");
@@ -105,8 +119,14 @@ impl MatterScene {
         let g2p = add(&mut graph, "node.grid_to_matter");
         let stats = add(&mut graph, "node.matter_stats");
         let frame = add(&mut graph, "node.matter_frame");
-        fn wire(graph: &mut Graph, from: (NodeInstanceId, &'static str), to: (NodeInstanceId, &'static str)) {
-            graph.connect(from, to).unwrap_or_else(|e| panic!("{from:?} -> {to:?}: {e:?}"));
+        fn wire(
+            graph: &mut Graph,
+            from: (NodeInstanceId, &'static str),
+            to: (NodeInstanceId, &'static str),
+        ) {
+            graph
+                .connect(from, to)
+                .unwrap_or_else(|e| panic!("{from:?} -> {to:?}: {e:?}"));
         }
         for port in LATTICE {
             for node in [fill, p2g, g2p, frame] {
@@ -130,8 +150,14 @@ impl MatterScene {
             wire(&mut graph, (domain, port), (stats, port));
         }
         for port in [
-            "pool_cells", "column_x0", "column_x1", "column_y0", "column_y1", "column_z0",
-            "column_z1", "points_per_cell",
+            "pool_cells",
+            "column_x0",
+            "column_x1",
+            "column_y0",
+            "column_y1",
+            "column_z0",
+            "column_z1",
+            "points_per_cell",
         ] {
             wire(&mut graph, (domain, port), (fill, port));
         }
@@ -146,13 +172,27 @@ impl MatterScene {
             wire(&mut graph, (domain, port), (p2g, port));
             wire(&mut graph, (domain, port), (stats, port));
         }
-        wire(&mut graph, (domain, "momentum_unit"), (p2g, "momentum_unit"));
-        wire(&mut graph, (domain, "momentum_unit"), (update, "momentum_unit"));
+        wire(
+            &mut graph,
+            (domain, "momentum_unit"),
+            (p2g, "momentum_unit"),
+        );
+        wire(
+            &mut graph,
+            (domain, "momentum_unit"),
+            (update, "momentum_unit"),
+        );
         wire(&mut graph, (domain, "liveliness"), (g2p, "liveliness"));
         wire(&mut graph, (domain, "cohesion"), (g2p, "cohesion"));
 
         wire(&mut graph, (fill, "points"), (state, "seed"));
-        for (node, port) in [(state, "count"), (p2g, "active_count"), (g2p, "active_count"), (stats, "active_count"), (frame, "count")] {
+        for (node, port) in [
+            (state, "count"),
+            (p2g, "active_count"),
+            (g2p, "active_count"),
+            (stats, "active_count"),
+            (frame, "count"),
+        ] {
             wire(&mut graph, (fill, "count"), (node, port));
         }
         wire(&mut graph, (state, "grid_accum"), (zero, "in"));
@@ -173,10 +213,20 @@ impl MatterScene {
         let reaction = add(&mut graph, "node.matter_body_reaction");
         wire(&mut graph, (update, "grid_out"), (reaction, "grid"));
         wire(&mut graph, (domain, "reaction"), (reaction, "reaction"));
-        wire(&mut graph, (reaction, "reaction_out"), (state, "reaction_in"));
+        wire(
+            &mut graph,
+            (reaction, "reaction_out"),
+            (state, "reaction_in"),
+        );
         for port in LATTICE.into_iter().chain([
-            "gravity_x", "gravity", "gravity_z", "closed_faces", "momentum_unit", "body_count",
-            "substeps_per_tick", "dynamic_count",
+            "gravity_x",
+            "gravity",
+            "gravity_z",
+            "closed_faces",
+            "momentum_unit",
+            "body_count",
+            "substeps_per_tick",
+            "dynamic_count",
         ]) {
             wire(&mut graph, (domain, port), (reaction, port));
         }
@@ -189,16 +239,26 @@ impl MatterScene {
         wire(&mut graph, (state, "tick_end"), (stats, "tick_end"));
         wire(&mut graph, (state, "tick_index"), (stats, "tick_index"));
         wire(&mut graph, (state, "tick_index"), (p2g, "tick_index"));
-        wire(&mut graph, (state, "substep_in_tick"), (p2g, "substep_in_tick"));
-        let sort_node = settings.block_p2g.then(|| add(&mut graph, "node.sort_particles_into_cells"));
+        wire(
+            &mut graph,
+            (state, "substep_in_tick"),
+            (p2g, "substep_in_tick"),
+        );
+        let sort_node = settings
+            .block_p2g
+            .then(|| add(&mut graph, "node.sort_particles_into_cells"));
         if let Some(sort) = sort_node {
             wire(&mut graph, (state, "out"), (sort, "particles"));
             wire(&mut graph, (fill, "count"), (sort, "count"));
             // Sort once per tick; later substeps reuse its order and ranges.
             wire(&mut graph, (state, "tick_start"), (sort, "enabled"));
             for (from, to) in [
-                ("block_center_x", "center_x"), ("block_center_y", "center_y"), ("block_center_z", "center_z"),
-                ("block_size_x", "size_x"), ("block_size_y", "size_y"), ("block_size_z", "size_z"),
+                ("block_center_x", "center_x"),
+                ("block_center_y", "center_y"),
+                ("block_center_z", "center_z"),
+                ("block_size_x", "size_x"),
+                ("block_size_y", "size_y"),
+                ("block_size_z", "size_z"),
                 ("block_cell_size", "cell_size"),
             ] {
                 wire(&mut graph, (domain, from), (sort, to));
@@ -211,37 +271,99 @@ impl MatterScene {
         }
         wire(&mut graph, (state, "out"), (frame, "points"));
         wire(&mut graph, (state, "stats"), (frame, "stats"));
-        let colliders =
-            Self::wire_colliders(&mut graph, &registry, settings, [domain, fill, state, update, reaction, g2p, frame]);
-        graph.add_external_output(frame, "particles_b").expect("frame output");
+        let colliders = Self::wire_colliders(
+            &mut graph,
+            &registry,
+            settings,
+            [domain, fill, state, update, reaction, g2p, frame],
+        );
+        graph
+            .add_external_output(frame, "particles_b")
+            .expect("frame output");
 
         let set = |graph: &mut Graph, name: &str, value: ParamValue| {
-            graph.set_param(domain, name, value).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            graph
+                .set_param(domain, name, value)
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
         };
-        set(&mut graph, "domain_size", ParamValue::Float(settings.domain_size));
-        set(&mut graph, "resolution", ParamValue::Float(settings.resolution as f32));
-        set(&mut graph, "fill_height", ParamValue::Float(settings.fill_height));
-        set(&mut graph, "gravity_x", ParamValue::Float(settings.gravity[0]));
-        set(&mut graph, "gravity", ParamValue::Float(settings.gravity[1]));
-        set(&mut graph, "gravity_z", ParamValue::Float(settings.gravity[2]));
-        set(&mut graph, "stiffness", ParamValue::Float(settings.stiffness));
+        set(
+            &mut graph,
+            "domain_size",
+            ParamValue::Float(settings.domain_size),
+        );
+        set(
+            &mut graph,
+            "resolution",
+            ParamValue::Float(settings.resolution as f32),
+        );
+        set(
+            &mut graph,
+            "fill_height",
+            ParamValue::Float(settings.fill_height),
+        );
+        set(
+            &mut graph,
+            "gravity_x",
+            ParamValue::Float(settings.gravity[0]),
+        );
+        set(
+            &mut graph,
+            "gravity",
+            ParamValue::Float(settings.gravity[1]),
+        );
+        set(
+            &mut graph,
+            "gravity_z",
+            ParamValue::Float(settings.gravity[2]),
+        );
+        set(
+            &mut graph,
+            "stiffness",
+            ParamValue::Float(settings.stiffness),
+        );
         set(&mut graph, "cohesion", ParamValue::Float(settings.cohesion));
-        set(&mut graph, "liveliness", ParamValue::Float(settings.liveliness));
+        set(
+            &mut graph,
+            "liveliness",
+            ParamValue::Float(settings.liveliness),
+        );
         set(&mut graph, "seed", ParamValue::Float(settings.seed as f32));
-        set(&mut graph, "points_per_cell", ParamValue::Enum(u32::from(settings.points_per_cell_27)));
-        for (i, name) in ["closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z"].iter().enumerate() {
+        set(
+            &mut graph,
+            "points_per_cell",
+            ParamValue::Enum(u32::from(settings.points_per_cell_27)),
+        );
+        for (i, name) in [
+            "closed_neg_x",
+            "closed_pos_x",
+            "closed_neg_y",
+            "closed_pos_y",
+            "closed_neg_z",
+            "closed_pos_z",
+        ]
+        .iter()
+        .enumerate()
+        {
             set(&mut graph, name, ParamValue::Bool(settings.closed[i]));
         }
         if let Some(column) = settings.column {
             let t = add(&mut graph, "node.transform_3d");
             for (name, value) in [
-                ("pos_x", column.pos[0]), ("pos_y", column.pos[1]), ("pos_z", column.pos[2]),
-                ("scale_x", column.scale[0]), ("scale_y", column.scale[1]), ("scale_z", column.scale[2]),
+                ("pos_x", column.pos[0]),
+                ("pos_y", column.pos[1]),
+                ("pos_z", column.pos[2]),
+                ("scale_x", column.scale[0]),
+                ("scale_y", column.scale[1]),
+                ("scale_z", column.scale[2]),
             ] {
-                graph.set_param(t, name, ParamValue::Float(value)).expect(name);
+                graph
+                    .set_param(t, name, ParamValue::Float(value))
+                    .expect(name);
             }
             let fill = add(&mut graph, "node.fluid_role_source");
-            graph.set_param(fill, "role", ParamValue::Enum(0)).expect("role");
+            graph
+                .set_param(fill, "role", ParamValue::Enum(0))
+                .expect("role");
             wire(&mut graph, (t, "transform"), (fill, "transform"));
             // A role input the default count holds.
             wire(&mut graph, (fill, "role"), (domain, "role_0"));
@@ -306,12 +428,20 @@ impl MatterScene {
             return Vec::new();
         }
         let add = |graph: &mut Graph, id: &str| graph.add_node(registry.construct(id).expect(id));
-        fn wire(graph: &mut Graph, from: (NodeInstanceId, &'static str), to: (NodeInstanceId, &'static str)) {
-            graph.connect(from, to).unwrap_or_else(|e| panic!("{from:?} -> {to:?}: {e:?}"));
+        fn wire(
+            graph: &mut Graph,
+            from: (NodeInstanceId, &'static str),
+            to: (NodeInstanceId, &'static str),
+        ) {
+            graph
+                .connect(from, to)
+                .unwrap_or_else(|e| panic!("{from:?} -> {to:?}: {e:?}"));
         }
         const BODIES: [&str; 4] = ["body_0", "body_1", "body_2", "body_3"];
         let set = |graph: &mut Graph, node: NodeInstanceId, name: &str, value: ParamValue| {
-            graph.set_param(node, name, value).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            graph
+                .set_param(node, name, value)
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
         };
         let world = add(graph, "node.physics_world");
         let mut colliders = RigidImpulseTargets::default();
@@ -319,20 +449,35 @@ impl MatterScene {
         for (index, port) in BODIES.iter().take(settings.colliders.len()).enumerate() {
             let transform = add(graph, "node.transform_3d");
             let body = add(graph, "node.rigid_body");
-            set(graph, body, "motion", ParamValue::Enum(settings.collider_motion));
+            set(
+                graph,
+                body,
+                "motion",
+                ParamValue::Enum(settings.collider_motion),
+            );
             if let Some(path) = &settings.collider_mesh {
-                set(graph, body, "path", ParamValue::String(std::sync::Arc::new(path.to_str().expect("utf-8 path").to_owned())));
+                set(
+                    graph,
+                    body,
+                    "path",
+                    ParamValue::String(std::sync::Arc::new(
+                        path.to_str().expect("utf-8 path").to_owned(),
+                    )),
+                );
             } else {
                 let cube = add(graph, "node.cube_mesh");
                 wire(graph, (cube, "source"), (body, "source"));
             }
             wire(graph, (transform, "transform"), (body, "transform"));
             wire(graph, (body, "body"), (world, port));
-            graph.add_external_output(body, "pose").expect("body pose output");
+            graph
+                .add_external_output(body, "pose")
+                .expect("body pose output");
             colliders = colliders.union(RigidImpulseTargets::body(index).expect("a body slot"));
             transforms.push(transform);
         }
-        manifold_nodes_water::testkit::couple(graph, domain, world, colliders).expect("couple the liquid with its bodies");
+        manifold_nodes_water::testkit::couple(graph, domain, world, colliders)
+            .expect("couple the liquid with its bodies");
         // The fill leaves seeds inside a collider's starting pose unused.
         for port in ["bodies", "shapes", "atlas", "body_count", "epoch"] {
             wire(graph, (domain, port), (fill, port));
@@ -340,9 +485,14 @@ impl MatterScene {
         let bodies = add(graph, "node.matter_move_bodies");
         wire(graph, (domain, "bodies"), (bodies, "bodies"));
         for (from, to) in [
-            ("first_tick", "first_tick"), ("body_count", "body_count"), ("body_rows", "rows"),
-            ("reaction", "reaction"), ("substeps_per_tick", "substeps_per_tick"),
-            ("momentum_unit", "momentum_unit"), ("cell_size", "cell_size"), ("dynamic_count", "dynamic_count"),
+            ("first_tick", "first_tick"),
+            ("body_count", "body_count"),
+            ("body_rows", "rows"),
+            ("reaction", "reaction"),
+            ("substeps_per_tick", "substeps_per_tick"),
+            ("momentum_unit", "momentum_unit"),
+            ("cell_size", "cell_size"),
+            ("dynamic_count", "dynamic_count"),
         ] {
             wire(graph, (domain, from), (bodies, to));
         }
@@ -354,7 +504,14 @@ impl MatterScene {
         for port in ["shapes", "atlas"] {
             wire(graph, (domain, port), (reaction, port));
         }
-        for port in ["shapes", "atlas", "body_count", "lattice_min_x", "lattice_min_y", "lattice_min_z"] {
+        for port in [
+            "shapes",
+            "atlas",
+            "body_count",
+            "lattice_min_x",
+            "lattice_min_y",
+            "lattice_min_z",
+        ] {
             wire(graph, (domain, port), (update, port));
         }
         wire(graph, (bodies, "bodies_out"), (g2p, "bodies"));
@@ -363,14 +520,26 @@ impl MatterScene {
         }
         let solid = add(graph, "node.liquid_solid_distance");
         for port in [
-            "bodies", "shapes", "atlas", "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size",
-            "nodes_x", "nodes_y", "nodes_z", "closed_faces", "body_count",
+            "bodies",
+            "shapes",
+            "atlas",
+            "lattice_min_x",
+            "lattice_min_y",
+            "lattice_min_z",
+            "cell_size",
+            "nodes_x",
+            "nodes_y",
+            "nodes_z",
+            "closed_faces",
+            "body_count",
         ] {
             wire(graph, (domain, port), (solid, port));
         }
         wire(graph, (domain, "body_rows"), (solid, "rows"));
         wire(graph, (solid, "solid"), (frame, "solid"));
-        graph.add_external_output(frame, "solid_b").expect("solid output");
+        graph
+            .add_external_output(frame, "solid_b")
+            .expect("solid output");
         transforms
     }
 
@@ -385,18 +554,28 @@ impl MatterScene {
 
     /// Simulated seconds at the end of the last frame's ticks; 0 before any frame.
     pub(crate) fn simulation_time(&self) -> f32 {
-        self.executor.live_scalar_input(self.frame_node, "simulation_time").unwrap_or(0.0)
+        self.executor
+            .live_scalar_input(self.frame_node, "simulation_time")
+            .unwrap_or(0.0)
     }
 
     /// Pose collider `index` from now on (its node.transform_3d).
     pub(crate) fn set_collider(&mut self, index: usize, transform: Transform) {
         let node = self.colliders[index];
         for (name, value) in [
-            ("pos_x", transform.pos[0]), ("pos_y", transform.pos[1]), ("pos_z", transform.pos[2]),
-            ("rot_x", transform.rot_euler[0]), ("rot_y", transform.rot_euler[1]), ("rot_z", transform.rot_euler[2]),
-            ("scale_x", transform.scale[0]), ("scale_y", transform.scale[1]), ("scale_z", transform.scale[2]),
+            ("pos_x", transform.pos[0]),
+            ("pos_y", transform.pos[1]),
+            ("pos_z", transform.pos[2]),
+            ("rot_x", transform.rot_euler[0]),
+            ("rot_y", transform.rot_euler[1]),
+            ("rot_z", transform.rot_euler[2]),
+            ("scale_x", transform.scale[0]),
+            ("scale_y", transform.scale[1]),
+            ("scale_z", transform.scale[2]),
         ] {
-            self.graph.set_param(node, name, ParamValue::Float(value)).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            self.graph
+                .set_param(node, name, ParamValue::Float(value))
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
         }
     }
 
@@ -433,8 +612,14 @@ impl MatterScene {
         }
         {
             let mut gpu = GpuEncoder::new(&mut enc, device);
-            self.executor
-                .execute_frame_with_state(&mut self.graph, &self.plan, time, &mut gpu, &mut self.state, 0);
+            self.executor.execute_frame_with_state(
+                &mut self.graph,
+                &self.plan,
+                time,
+                &mut gpu,
+                &mut self.state,
+                0,
+            );
         }
         self.frame_count += 1;
         enc.commit_and_wait_profiled(device)
@@ -453,7 +638,10 @@ impl MatterScene {
 
     /// Live points (id ≠ 0) in storage order.
     pub(crate) fn points(&self) -> Vec<MatterPoint> {
-        let count = self.executor.live_scalar_input(self.frame_node, "count").unwrap_or(0.0) as usize;
+        let count = self
+            .executor
+            .live_scalar_input(self.frame_node, "count")
+            .unwrap_or(0.0) as usize;
         let mut all: Vec<MatterPoint> = self.read(self.points);
         all.truncate(count);
         all
@@ -465,7 +653,10 @@ impl MatterScene {
     }
 
     pub(crate) fn frame(&self) -> Vec<FluidParticle> {
-        let count = self.executor.live_scalar_input(self.frame_node, "count").unwrap_or(0.0) as usize;
+        let count = self
+            .executor
+            .live_scalar_input(self.frame_node, "count")
+            .unwrap_or(0.0) as usize;
         let mut all: Vec<FluidParticle> = self.read(self.frame_b);
         all.truncate(count);
         all
@@ -489,7 +680,9 @@ impl MatterScene {
             p.affine_z = [0.0; 4];
         }
         let backend = self.executor.backend();
-        let buffer = backend.array_buffer(backend.slot_for(self.points).expect("bound")).expect("array");
+        let buffer = backend
+            .array_buffer(backend.slot_for(self.points).expect("bound"))
+            .expect("array");
         // SAFETY: shared storage, no GPU work in flight.
         unsafe { buffer.write(0, bytemuck::cast_slice(&points)) };
     }
@@ -512,18 +705,31 @@ impl MatterScene {
         let ranges: Vec<CellRange> = self.read(ranges);
         let blocks = lattice_blocks(&self.lattice);
         let (mut live, mut left) = (0u64, 0u64);
-        for (bin, range) in ranges.iter().take(blocks.iter().product::<u32>() as usize).enumerate() {
+        for (bin, range) in ranges
+            .iter()
+            .take(blocks.iter().product::<u32>() as usize)
+            .enumerate()
+        {
             let bin = bin as u32;
-            let block = [bin % blocks[0], (bin / blocks[0]) % blocks[1], bin / (blocks[0] * blocks[1])].map(i64::from);
+            let block = [
+                bin % blocks[0],
+                (bin / blocks[0]) % blocks[1],
+                bin / (blocks[0] * blocks[1]),
+            ]
+            .map(i64::from);
             for &index in &order[range.start as usize..(range.start + range.count) as usize] {
                 let Some(point) = points.get(index as usize).filter(|p| p.id != 0) else {
                     continue;
                 };
                 let base: [i64; 3] = std::array::from_fn(|axis| {
-                    ((point.position[axis] - self.lattice.min()[axis]) / self.lattice.cell_size() - 0.5).floor() as i64
+                    ((point.position[axis] - self.lattice.min()[axis]) / self.lattice.cell_size()
+                        - 0.5)
+                        .floor() as i64
                 });
                 live += 1;
-                left += u64::from((0..3).any(|axis| !(0..=3).contains(&(base[axis] - block[axis] * 4))));
+                left += u64::from(
+                    (0..3).any(|axis| !(0..=3).contains(&(base[axis] - block[axis] * 4))),
+                );
             }
         }
         left as f64 / live.max(1) as f64
@@ -555,7 +761,10 @@ fn matter_frame_ids_strictly_increasing() {
     assert_eq!(frame.len(), points.len());
     let ids: Vec<u32> = frame.iter().map(|p| p.id).filter(|&id| id != 0).collect();
     assert!(!ids.is_empty());
-    assert!(ids.windows(2).all(|w| w[0] < w[1]), "frame ids are not strictly increasing");
+    assert!(
+        ids.windows(2).all(|w| w[0] < w[1]),
+        "frame ids are not strictly increasing"
+    );
     // The frame carries the points it was written from, at their rest radius.
     let dx = 1.0f32 / 32.0;
     let radius = (3.0 * dx * dx * dx / 8.0 / (4.0 * std::f32::consts::PI)).cbrt();
@@ -569,7 +778,10 @@ fn matter_frame_ids_strictly_increasing() {
 #[test]
 fn matter_deterministic_under_seed() {
     let run = |seed: u32, ticks: u32| {
-        let mut scene = MatterScene::new(&SceneSettings { seed, ..small_dam_break() });
+        let mut scene = MatterScene::new(&SceneSettings {
+            seed,
+            ..small_dam_break()
+        });
         for _ in 0..ticks {
             scene.tick();
         }
@@ -586,25 +798,48 @@ fn matter_deterministic_under_seed() {
 /// fixed-point unit when export groups both into one display frame.
 #[test]
 fn matter_variable_speed_export_grouping_matches_raw_points() {
-    use manifold_water_gpu_mpm::matter::{MAX_SUBSTEPS, WATER_DENSITY, free_fall_speed, momentum_unit, substeps_for_interval, substeps_per_tick, water_lambda, wave_speed};
+    use manifold_water_gpu_mpm::matter::{
+        MAX_SUBSTEPS, WATER_DENSITY, free_fall_speed, momentum_unit, substeps_for_interval,
+        substeps_per_tick, water_lambda, wave_speed,
+    };
 
-    let settings = SceneSettings { resolution: 16, domain_size: 1.0, stiffness: 1.0, ..SceneSettings::default() };
+    let settings = SceneSettings {
+        resolution: 16,
+        domain_size: 1.0,
+        stiffness: 1.0,
+        ..SceneSettings::default()
+    };
     let dx = settings.domain_size / settings.resolution as f32;
     let nominal = substeps_per_tick(
         dx,
-        wave_speed(water_lambda(f64::from(settings.domain_size), f64::from(settings.stiffness)),
-            f64::from(WATER_DENSITY)) as f32,
+        wave_speed(
+            water_lambda(
+                f64::from(settings.domain_size),
+                f64::from(settings.stiffness),
+            ),
+            f64::from(WATER_DENSITY),
+        ) as f32,
         free_fall_speed(f64::from(settings.domain_size)) as f32,
-        None, None,
+        None,
+        None,
     );
     let expected = [0.25, 4.0].map(|speed| {
         let duration = speed * TICK;
         let subdivisions = substeps_for_interval(duration as f32, nominal).min(MAX_SUBSTEPS);
-        (subdivisions, momentum_unit(dx, duration / f64::from(subdivisions)))
+        (
+            subdivisions,
+            momentum_unit(dx, duration / f64::from(subdivisions)),
+        )
     });
     assert_eq!(expected, [(5, 128.0), (68, 64.0)]);
-    assert_ne!(expected[0].0, expected[1].0, "fixture must vary subdivision counts");
-    assert_ne!(expected[0].1, expected[1].1, "fixture must vary momentum units");
+    assert_ne!(
+        expected[0].0, expected[1].0,
+        "fixture must vary subdivision counts"
+    );
+    assert_ne!(
+        expected[0].1, expected[1].1,
+        "fixture must vary momentum units"
+    );
 
     let run = |grouped| {
         let mut scene = MatterScene::new(&settings);
@@ -612,7 +847,12 @@ fn matter_variable_speed_export_grouping_matches_raw_points() {
         scene.tick(); // Seed at transport 0, before either accepted interval.
         assert_eq!(scene.state_input("ticks"), 0.0);
         scene.set_domain("speed", 4.0);
-        let domain_step = scene.plan.steps().iter().position(|step| step.node == scene.domain).unwrap();
+        let domain_step = scene
+            .plan
+            .steps()
+            .iter()
+            .position(|step| step.node == scene.domain)
+            .unwrap();
         let mut mask = vec![false; scene.plan.steps().len()];
         let mut params = vec![None; scene.plan.steps().len()];
         mask[domain_step] = true;
@@ -621,15 +861,32 @@ fn matter_variable_speed_export_grouping_matches_raw_points() {
         // grouped run whose next full render is at 2*TICK.
         manifold_nodes_water::runtime::physics_sampling::execute_physics_sample_frame(
             &mut scene.executor,
-            &mut scene.graph, &scene.plan,
-            FrameTime { beats: Beats(0.0), seconds: Seconds(TICK), delta: Seconds(0.0), frame_count: 1 },
-            &mask, &params,
+            &mut scene.graph,
+            &scene.plan,
+            FrameTime {
+                beats: Beats(0.0),
+                seconds: Seconds(TICK),
+                delta: Seconds(0.0),
+                frame_count: 1,
+            },
+            &mask,
+            &params,
             manifold_water_rigid::physics::SimStep::default(),
         );
         let interval_settings = |scene: &MatterScene, iteration| {
-            let output = scene.graph.get_node(scene.domain).unwrap().node
-                .substep_clock_interval(iteration).expect("accepted interval metadata");
-            let unit = output.scalars.iter().find(|(port, _)| *port == "momentum_unit").unwrap().1;
+            let output = scene
+                .graph
+                .get_node(scene.domain)
+                .unwrap()
+                .node
+                .substep_clock_interval(iteration)
+                .expect("accepted interval metadata");
+            let unit = output
+                .scalars
+                .iter()
+                .find(|(port, _)| *port == "momentum_unit")
+                .unwrap()
+                .1;
             (output.timing.iterations, unit)
         };
         let ticks = if grouped {
@@ -650,22 +907,41 @@ fn matter_variable_speed_export_grouping_matches_raw_points() {
         let points = scene.points();
         let stats = scene.stats();
         assert!(!points.is_empty());
-        assert!(points.iter().any(|point| point.id != 0), "fixture must contain live points");
-        assert!(points.iter().all(|point| point.position.iter().chain(&point.velocity)
-            .chain(std::iter::once(&point.volume_ratio)).chain(&point.affine_x)
-            .chain(&point.affine_y).chain(&point.affine_z).all(|value| value.is_finite())));
+        assert!(
+            points.iter().any(|point| point.id != 0),
+            "fixture must contain live points"
+        );
+        assert!(points.iter().all(|point| {
+            point
+                .position
+                .iter()
+                .chain(&point.velocity)
+                .chain(std::iter::once(&point.volume_ratio))
+                .chain(&point.affine_x)
+                .chain(&point.affine_y)
+                .chain(&point.affine_z)
+                .all(|value| value.is_finite())
+        }));
         assert_eq!(stats.nonfinite, 0);
         assert!(stats.live > 0);
-        assert_eq!(stats.tick, 1, "two completed ticks have zero-based final index 1");
-        assert_eq!(scene.simulation_time().to_bits(), (((0.25 + 4.0) * TICK) as f32).to_bits());
+        assert_eq!(
+            stats.tick, 1,
+            "two completed ticks have zero-based final index 1"
+        );
+        assert_eq!(
+            scene.simulation_time().to_bits(),
+            (((0.25 + 4.0) * TICK) as f32).to_bits()
+        );
         (points, stats, scene.simulation_time())
     };
     let (grouped, grouped_stats, grouped_time) = run(true);
     let (separate, separate_stats, separate_time) = run(false);
     assert_eq!(grouped.len(), separate.len());
-    assert!(bytemuck::cast_slice::<MatterPoint, u8>(&grouped)
-        == bytemuck::cast_slice::<MatterPoint, u8>(&separate),
-        "raw Matter points differ between grouped and separate export frames");
+    assert!(
+        bytemuck::cast_slice::<MatterPoint, u8>(&grouped)
+            == bytemuck::cast_slice::<MatterPoint, u8>(&separate),
+        "raw Matter points differ between grouped and separate export frames"
+    );
     assert_eq!(grouped_stats, separate_stats);
     assert_eq!(grouped_time.to_bits(), separate_time.to_bits());
 }
@@ -676,7 +952,10 @@ fn matter_variable_speed_export_grouping_matches_raw_points() {
 #[test]
 fn matter_block_path_matches_per_point() {
     let run = |block_p2g: bool| {
-        let mut scene = MatterScene::new(&SceneSettings { block_p2g, ..small_dam_break() });
+        let mut scene = MatterScene::new(&SceneSettings {
+            block_p2g,
+            ..small_dam_break()
+        });
         let mut left_tile = 0.0f64;
         for _ in 0..120 {
             scene.tick();
@@ -697,22 +976,36 @@ fn matter_block_path_matches_per_point() {
         .zip(&block)
         .filter(|(a, b)| bytemuck::bytes_of(*a) != bytemuck::bytes_of(*b))
         .count();
-    eprintln!("matter_block_path_matches_per_point: {} points, {differ} differ after 120 ticks", point.len());
+    eprintln!(
+        "matter_block_path_matches_per_point: {} points, {differ} differ after 120 ticks",
+        point.len()
+    );
     assert_eq!(differ, 0, "the block path diverged from the per-point path");
 }
 
 #[test]
 fn matter_seed_changes_jitter() {
     let first = |seed: u32| {
-        let mut scene = MatterScene::new(&SceneSettings { seed, ..small_dam_break() });
+        let mut scene = MatterScene::new(&SceneSettings {
+            seed,
+            ..small_dam_break()
+        });
         scene.tick();
         scene.points()
     };
     let a = first(0);
     let b = first(1);
     assert_eq!(a.len(), b.len());
-    let moved = a.iter().zip(&b).filter(|(p, q)| p.position != q.position).count();
-    assert!(moved > a.len() * 9 / 10, "only {moved} of {} points moved with the seed", a.len());
+    let moved = a
+        .iter()
+        .zip(&b)
+        .filter(|(p, q)| p.position != q.position)
+        .count();
+    assert!(
+        moved > a.len() * 9 / 10,
+        "only {moved} of {} points moved with the seed",
+        a.len()
+    );
 }
 
 #[test]
@@ -766,7 +1059,10 @@ fn matter_fixed_point_headroom() {
             );
         }
     }
-    eprintln!("matter_fixed_point_headroom: peak accumulator {peak} ({:.1}% of 2^30)", 100.0 * f64::from(peak) / f64::from(1u32 << 30));
+    eprintln!(
+        "matter_fixed_point_headroom: peak accumulator {peak} ({:.1}% of 2^30)",
+        100.0 * f64::from(peak) / f64::from(1u32 << 30)
+    );
     assert!(peak < 1 << 30, "accumulator reached {peak}");
     assert_eq!(scene.state_input("substeps_per_tick"), 34.0);
 }
@@ -777,7 +1073,11 @@ fn matter_fixed_point_headroom() {
 #[test]
 fn matter_domain_holds_on_nonfinite_gravity() {
     let mut scene = MatterScene::new(&small_dam_break());
-    scene.executor.set_sim_step(manifold_water_rigid::physics::SimStep::live(Seconds(1.0 / 60.0)));
+    scene
+        .executor
+        .set_sim_step(manifold_water_rigid::physics::SimStep::live(Seconds(
+            1.0 / 60.0,
+        )));
     for _ in 0..5 {
         scene.tick();
     }
@@ -786,7 +1086,10 @@ fn matter_domain_holds_on_nonfinite_gravity() {
     let held = scene.points();
     assert_eq!(scene.state_input("ticks"), 0.0);
     scene.tick();
-    assert_eq!(bytemuck::cast_slice::<MatterPoint, u8>(&held), bytemuck::cast_slice::<MatterPoint, u8>(&scene.points()));
+    assert_eq!(
+        bytemuck::cast_slice::<MatterPoint, u8>(&held),
+        bytemuck::cast_slice::<MatterPoint, u8>(&scene.points())
+    );
     scene.set_domain("gravity", -9.81);
     scene.tick();
     assert_eq!(scene.state_input("ticks"), 2.0);
@@ -798,7 +1101,12 @@ fn matter_domain_holds_on_nonfinite_gravity() {
 
 #[test]
 fn matter_substeps_follow_stiffness_live() {
-    let mut scene = MatterScene::new(&SceneSettings { domain_size: 4.0, resolution: 64, fill_height: 0.2, ..SceneSettings::default() });
+    let mut scene = MatterScene::new(&SceneSettings {
+        domain_size: 4.0,
+        resolution: 64,
+        fill_height: 0.2,
+        ..SceneSettings::default()
+    });
     scene.tick();
     assert_eq!(scene.state_input("substeps_per_tick"), 34.0);
     scene.set_domain("stiffness", 0.5);

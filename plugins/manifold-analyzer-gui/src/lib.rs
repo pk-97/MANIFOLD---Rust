@@ -28,25 +28,25 @@ mod spectrum_worker;
 
 pub use loudness_worker::LoudnessWorker;
 
-use manifold_analyzer_dsp::{SpectrumBandwidth, SpectrumSmoothingPlan};
+use crossbeam_queue::ArrayQueue;
 use gl_paint::{PainterState, QuadPainter, SharedPainterState};
 use manifold_analyzer_dsp::{
-    LoudnessSnapshot, MIN_DB, REF_FREQ_MAX, REF_FREQ_MIN, RefAnalysis, analyze_ref_file,
+    analyze_ref_file, LoudnessSnapshot, RefAnalysis, MIN_DB, REF_FREQ_MAX, REF_FREQ_MIN,
 };
+use manifold_analyzer_dsp::{SpectrumBandwidth, SpectrumSmoothingPlan};
 use manifold_gpu::GpuDevice;
 use nih_plug::prelude::*;
-use nih_plug_egui::{EguiState, create_egui_editor, egui};
+use nih_plug_egui::{create_egui_editor, egui, EguiState};
+use parking_lot::{Mutex, RwLock};
 use sample_ring::SampleRing;
 pub use sample_ring::StereoSample;
 use serde::{Deserialize, Serialize};
 use spectrum_gpu::{
-    CQT_BINS_PER_OCTAVE, CQT_FMIN_HZ, DisplayConfig, HISTORY_COLS, SpectrumGpuRenderer,
+    DisplayConfig, SpectrumGpuRenderer, CQT_BINS_PER_OCTAVE, CQT_FMIN_HZ, HISTORY_COLS,
 };
 use spectrum_worker::{CqtWorker, WorkerConfig};
-use crossbeam_queue::ArrayQueue;
-use parking_lot::{Mutex, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 // Initial render-target size; `SpectrumGpuRenderer::ensure_size` resizes every
 // frame to match the current rect × pixels_per_point for pixel-perfect output.
@@ -84,10 +84,10 @@ pub const REF_SLOT_COUNT: usize = 4;
 ///    lightness (cyan light, magenta mid, violet dark, near-white max)
 ///    so each curve reads as its own line even with all four loaded.
 const REF_SLOT_COLORS: [[u8; 3]; REF_SLOT_COUNT] = [
-    [50, 210, 255],   // cyan        — light, cool blue
-    [255, 75, 205],   // hot magenta — saturated, warm pink (not red)
-    [140, 100, 255],  // violet      — deep blue-purple, darker than the others
-    [240, 240, 240],  // near-white  — neutral, maximum contrast vs every fill
+    [50, 210, 255],  // cyan        — light, cool blue
+    [255, 75, 205],  // hot magenta — saturated, warm pink (not red)
+    [140, 100, 255], // violet      — deep blue-purple, darker than the others
+    [240, 240, 240], // near-white  — neutral, maximum contrast vs every fill
 ];
 
 /// Reference frequency for the Flat/Pink/Tilted weighting slopes.
@@ -118,7 +118,10 @@ struct WeightingStats {
 /// positive half doesn't clip off the top of the MS plot.
 fn weighting_stats(weighting: Weighting, freq_min: f32, freq_max: f32) -> WeightingStats {
     match weighting {
-        Weighting::Flat => WeightingStats { mean: 0.0, max: 0.0 },
+        Weighting::Flat => WeightingStats {
+            mean: 0.0,
+            max: 0.0,
+        },
         Weighting::Pink | Weighting::Tilted => {
             let slope = weighting.slope_db_per_oct();
             let gm = (freq_min * freq_max).sqrt();
@@ -236,8 +239,8 @@ const FREQ_MAJORS: &[f32] = &[
 ];
 /// Unlabeled minor ticks for finer readability inside each decade.
 const FREQ_MINORS: &[f32] = &[
-    30.0, 40.0, 60.0, 70.0, 80.0, 90.0, 300.0, 400.0, 600.0, 700.0, 800.0, 900.0, 3_000.0,
-    4_000.0, 6_000.0, 7_000.0, 8_000.0, 9_000.0,
+    30.0, 40.0, 60.0, 70.0, 80.0, 90.0, 300.0, 400.0, 600.0, 700.0, 800.0, 900.0, 3_000.0, 4_000.0,
+    6_000.0, 7_000.0, 8_000.0, 9_000.0,
 ];
 
 /// dB grid ticks for the top MS graph. Linear spacing: 20 dB majors,
@@ -455,7 +458,6 @@ impl FreqSmoothing {
             FreqSmoothing::Erb => None,
         }
     }
-
 }
 
 /// Chosen FFT size for the front-of-pipeline stereo analyser. Bigger
@@ -740,12 +742,18 @@ impl AnalyzerParams {
             freq_max_hz: IntParam::new(
                 "Max Hz",
                 20_000,
-                IntRange::Linear { min: 1000, max: 25_000 },
+                IntRange::Linear {
+                    min: 1000,
+                    max: 25_000,
+                },
             ),
             synchro_gate_db: FloatParam::new(
                 "SS Gate",
                 -35.0,
-                FloatRange::Linear { min: SS_GATE_DB_MIN, max: SS_GATE_DB_MAX },
+                FloatRange::Linear {
+                    min: SS_GATE_DB_MIN,
+                    max: SS_GATE_DB_MAX,
+                },
             )
             .with_unit(" dB")
             .with_step_size(1.0),
@@ -949,7 +957,11 @@ impl AnalyzerGuiShared {
     }
 
     pub fn set_top_fraction(&self, f: f32) {
-        let clean = if f.is_finite() { f.clamp(0.0, 1.0) } else { TOP_FRACTION_DEFAULT };
+        let clean = if f.is_finite() {
+            f.clamp(0.0, 1.0)
+        } else {
+            TOP_FRACTION_DEFAULT
+        };
         self.top_fraction_bits
             .store(clean.to_bits(), Ordering::Relaxed);
     }
@@ -1026,14 +1038,16 @@ impl AnalyzerGuiShared {
         // even. `playing` lives outside the seqlock — it's a 1-bit
         // signal, no need for coherence with the anchor triple.
         let seq = self.transport_seq.load(Ordering::Relaxed);
-        self.transport_seq.store(seq.wrapping_add(1), Ordering::Release);
+        self.transport_seq
+            .store(seq.wrapping_add(1), Ordering::Release);
         self.bpm_bits
             .store(bpm.unwrap_or(f64::NAN).to_bits(), Ordering::Relaxed);
         self.beat_pos_bits
             .store(beat_pos.unwrap_or(f64::NAN).to_bits(), Ordering::Relaxed);
         self.pushed_at_publish_bits
             .store(pushed_at_publish, Ordering::Relaxed);
-        self.transport_seq.store(seq.wrapping_add(2), Ordering::Release);
+        self.transport_seq
+            .store(seq.wrapping_add(2), Ordering::Release);
         self.playing.store(playing, Ordering::Relaxed);
     }
 
@@ -1042,7 +1056,11 @@ impl AnalyzerGuiShared {
         let beat = f64::from_bits(self.beat_pos_bits.load(Ordering::Relaxed));
         let playing = self.playing.load(Ordering::Relaxed);
         (
-            if bpm.is_finite() && bpm > 0.0 { Some(bpm) } else { None },
+            if bpm.is_finite() && bpm > 0.0 {
+                Some(bpm)
+            } else {
+                None
+            },
             if beat.is_finite() { Some(beat) } else { None },
             playing,
         )
@@ -1150,7 +1168,8 @@ impl AnalyzerGuiShared {
             .store(s.short_term_lufs.to_bits(), Ordering::Relaxed);
         self.publish_slow_loudness(self.loudness_reset_epoch(), s.integrated_lufs, s.lra_lu);
         self.dr_lu_bits.store(s.dr_lu.to_bits(), Ordering::Relaxed);
-        self.plr_lu_bits.store(s.plr_lu.to_bits(), Ordering::Relaxed);
+        self.plr_lu_bits
+            .store(s.plr_lu.to_bits(), Ordering::Relaxed);
         self.momentary_max_lufs_bits
             .store(s.momentary_max_lufs.to_bits(), Ordering::Relaxed);
         self.short_term_max_lufs_bits
@@ -1161,7 +1180,8 @@ impl AnalyzerGuiShared {
             .store(s.sample_peak_db.to_bits(), Ordering::Relaxed);
         self.sample_peak_max_db_bits
             .store(s.sample_peak_max_db.to_bits(), Ordering::Relaxed);
-        self.rms_db_bits.store(s.rms_db.to_bits(), Ordering::Relaxed);
+        self.rms_db_bits
+            .store(s.rms_db.to_bits(), Ordering::Relaxed);
         self.rms_max_db_bits
             .store(s.rms_max_db.to_bits(), Ordering::Relaxed);
         self.correlation_bits
@@ -1180,7 +1200,8 @@ impl AnalyzerGuiShared {
         self.short_term_lufs_bits
             .store(s.short_term_lufs.to_bits(), Ordering::Relaxed);
         self.dr_lu_bits.store(s.dr_lu.to_bits(), Ordering::Relaxed);
-        self.plr_lu_bits.store(s.plr_lu.to_bits(), Ordering::Relaxed);
+        self.plr_lu_bits
+            .store(s.plr_lu.to_bits(), Ordering::Relaxed);
         self.momentary_max_lufs_bits
             .store(s.momentary_max_lufs.to_bits(), Ordering::Relaxed);
         self.short_term_max_lufs_bits
@@ -1191,7 +1212,8 @@ impl AnalyzerGuiShared {
             .store(s.sample_peak_db.to_bits(), Ordering::Relaxed);
         self.sample_peak_max_db_bits
             .store(s.sample_peak_max_db.to_bits(), Ordering::Relaxed);
-        self.rms_db_bits.store(s.rms_db.to_bits(), Ordering::Relaxed);
+        self.rms_db_bits
+            .store(s.rms_db.to_bits(), Ordering::Relaxed);
         self.rms_max_db_bits
             .store(s.rms_max_db.to_bits(), Ordering::Relaxed);
         self.correlation_bits
@@ -1204,14 +1226,17 @@ impl AnalyzerGuiShared {
     /// computation cannot become visible after a reset, even if it finishes late.
     pub fn publish_slow_loudness(&self, epoch: u32, integrated: f32, lra: f32) {
         let pack = |v: f32| ((epoch as u64) << 32) | v.to_bits() as u64;
-        self.integrated_lufs_bits.store(pack(integrated), Ordering::Release);
+        self.integrated_lufs_bits
+            .store(pack(integrated), Ordering::Release);
         self.lra_lu_bits.store(pack(lra), Ordering::Release);
     }
     fn read_slow(&self, value: &AtomicU64, empty: f32) -> f32 {
         let bits = value.load(Ordering::Acquire);
         if (bits >> 32) as u32 == self.loudness_reset_epoch() {
             f32::from_bits(bits as u32)
-        } else { empty }
+        } else {
+            empty
+        }
     }
     pub fn integrated_lufs(&self) -> f32 {
         self.read_slow(&self.integrated_lufs_bits, MIN_DB)
@@ -1314,8 +1339,13 @@ struct RefCacheEntry {
 }
 #[derive(Clone, Copy, PartialEq)]
 struct ProjectionKey {
-    sample_rate: f32, fft_size: usize, min: f32, max: f32, columns: usize,
-    smoothing: FreqSmoothing, weighting: Weighting,
+    sample_rate: f32,
+    fft_size: usize,
+    min: f32,
+    max: f32,
+    columns: usize,
+    smoothing: FreqSmoothing,
+    weighting: Weighting,
 }
 #[derive(Default)]
 struct CurveProjection {
@@ -1326,39 +1356,57 @@ struct CurveProjection {
 }
 impl CurveProjection {
     fn prepare(&mut self, key: ProjectionKey) {
-        if self.key == Some(key) { return; }
+        if self.key == Some(key) {
+            return;
+        }
         let bandwidth = match key.smoothing {
             FreqSmoothing::None => SpectrumBandwidth::None,
             FreqSmoothing::Erb => SpectrumBandwidth::Erb,
             mode => SpectrumBandwidth::FixedHalfOctaves(mode.fixed_half_octaves().unwrap()),
         };
-        let plan = SpectrumSmoothingPlan::new(key.sample_rate, key.fft_size,
-            key.min, key.max, key.columns, bandwidth);
+        let plan = SpectrumSmoothingPlan::new(
+            key.sample_rate,
+            key.fft_size,
+            key.min,
+            key.max,
+            key.columns,
+            bandwidth,
+        );
         let align = weighting_align_offset(key.weighting, key.min, key.max);
         self.gains.resize(plan.num_bins(), 0.0);
-        for (i,g) in self.gains.iter_mut().enumerate() {
+        for (i, g) in self.gains.iter_mut().enumerate() {
             let freq = (i as f32 * key.sample_rate / key.fft_size as f32).max(1e-3);
             *g = weighting_db_at(key.weighting, freq) + align;
         }
         self.powers.resize(plan.num_bins(), 0.0);
-        self.plan = Some(plan); self.key = Some(key);
+        self.plan = Some(plan);
+        self.key = Some(key);
     }
     fn project(&mut self, bins: &[f32], out: &mut [f32]) {
-        assert_eq!(bins.len(),self.powers.len());
-        for ((p,db),gain) in self.powers.iter_mut().zip(bins).zip(&self.gains) {
+        assert_eq!(bins.len(), self.powers.len());
+        for ((p, db), gain) in self.powers.iter_mut().zip(bins).zip(&self.gains) {
             *p = if !db.is_finite() || *db <= MIN_DB {
                 0.0
             } else {
                 10.0_f32.powf((*db + *gain) * 0.1)
             };
         }
-        self.plan.as_ref().expect("projection prepared").apply_powers(&self.powers, out);
+        self.plan
+            .as_ref()
+            .expect("projection prepared")
+            .apply_powers(&self.powers, out);
     }
 }
-fn curve_mean_db(values: impl Iterator<Item=f32>) -> Option<f32> {
-    let mut sum=0.0_f64; let mut count=0usize; let mut peak=MIN_DB;
-    for db in values { sum+=10.0_f64.powf(db as f64*0.1);count+=1;peak=peak.max(db); }
-    (count>0 && peak>MIN_DB+1.0).then(||(10.0*(sum/count as f64).log10()) as f32)
+fn curve_mean_db(values: impl Iterator<Item = f32>) -> Option<f32> {
+    let mut sum = 0.0_f64;
+    let mut count = 0usize;
+    let mut peak = MIN_DB;
+    for db in values {
+        sum += 10.0_f64.powf(db as f64 * 0.1);
+        count += 1;
+        peak = peak.max(db);
+    }
+    (count > 0 && peak > MIN_DB + 1.0).then(|| (10.0 * (sum / count as f64).log10()) as f32)
 }
 
 /// Apply per-bin weighting to a CQT (log-spaced) column in place. Bin
@@ -1516,7 +1564,11 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     if state.device.is_none() {
         state.device = Some(Arc::new(GpuDevice::new()));
     }
-    if state.worker.as_ref().is_some_and(|worker| worker.sample_rate() != sr) {
+    if state
+        .worker
+        .as_ref()
+        .is_some_and(|worker| worker.sample_rate() != sr)
+    {
         state.worker = None;
         state.spectrum = None;
         let mut painter = state.quad.lock();
@@ -1601,7 +1653,9 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         };
 
         state.live_mid_median_db.resize(num_bins, MIN_DB);
-        state.shared.try_read_median_db(&mut state.live_mid_median_db);
+        state
+            .shared
+            .try_read_median_db(&mut state.live_mid_median_db);
 
         let weight_align = weighting_align_offset(weighting, freq_min_for_lut, freq_max_for_lut);
 
@@ -1655,7 +1709,13 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         let cqt_log_scale = (CQT_BINS_PER_OCTAVE as f32).recip();
         let cqt_fmin = CQT_FMIN_HZ;
         worker.drain_columns(|msg| {
-            tilt_cqt_column(&mut msg.data, weighting, weight_align, cqt_fmin, cqt_log_scale);
+            tilt_cqt_column(
+                &mut msg.data,
+                weighting,
+                weight_align,
+                cqt_fmin,
+                cqt_log_scale,
+            );
             if let Some(d2) = msg.data2.as_mut().filter(|_| msg.secondary_active) {
                 tilt_cqt_column(d2, weighting, weight_align, cqt_fmin, cqt_log_scale);
             }
@@ -1677,12 +1737,26 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             state.side_smoothed_columns.resize(cols, MIN_DB);
         }
         state.median_smoothed_columns.resize(cols, MIN_DB);
-        state.curve_projection.prepare(ProjectionKey { sample_rate: sr, fft_size,
-            min: freq_min, max: freq_max, columns: cols,
-            smoothing: state.params.freq_smoothing.value(), weighting });
-        state.curve_projection.project(&state.mid_scratch, &mut state.mid_smoothed_columns[..cols]);
-        state.curve_projection.project(&state.side_scratch, &mut state.side_smoothed_columns[..cols]);
-        state.curve_projection.project(&state.live_mid_median_db, &mut state.median_smoothed_columns[..cols]);
+        state.curve_projection.prepare(ProjectionKey {
+            sample_rate: sr,
+            fft_size,
+            min: freq_min,
+            max: freq_max,
+            columns: cols,
+            smoothing: state.params.freq_smoothing.value(),
+            weighting,
+        });
+        state
+            .curve_projection
+            .project(&state.mid_scratch, &mut state.mid_smoothed_columns[..cols]);
+        state.curve_projection.project(
+            &state.side_scratch,
+            &mut state.side_smoothed_columns[..cols],
+        );
+        state.curve_projection.project(
+            &state.live_mid_median_db,
+            &mut state.median_smoothed_columns[..cols],
+        );
 
         spec.render(
             device,
@@ -1712,10 +1786,8 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         rect.min,
         egui::pos2(rect.max.x, rect.top() + rect.height() * top_fraction),
     );
-    let spectrogram_rect = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), spectrum_rect.bottom()),
-        rect.max,
-    );
+    let spectrogram_rect =
+        egui::Rect::from_min_max(egui::pos2(rect.left(), spectrum_rect.bottom()), rect.max);
 
     let grid_major = egui::Color32::from_gray(52);
     let grid_minor = egui::Color32::from_gray(32);
@@ -1870,8 +1942,11 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     //     signal. Drawn after the ref bands so it sits on top, giving
     //     the user a direct "where is my mix vs where the ref sits"
     //     side-by-side.
-    draw_live_median(&painter, spectrum_rect,
-        &state.median_smoothed_columns[..state.curve_projection.key.map_or(0, |k| k.columns)]);
+    draw_live_median(
+        &painter,
+        spectrum_rect,
+        &state.median_smoothed_columns[..state.curve_projection.key.map_or(0, |k| k.columns)],
+    );
 
     // 3. Spectrum-region labels. Transparent shader lets these sit on
     //    top of the curves for readability.
@@ -1906,13 +1981,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     // 4. Spectrogram chrome — drawn AFTER the paint callback because
     //    the colourmap is opaque and would hide grid/labels drawn
     //    beneath.
-    draw_spectrogram_chrome(
-        &painter,
-        spectrogram_rect,
-        freq_min,
-        freq_max,
-        state,
-    );
+    draw_spectrogram_chrome(&painter, spectrogram_rect, freq_min, freq_max, state);
 
     // Source / Sharpen / Floor / L/R range live in the global top
     // toolbar (`draw_controls`). Earlier iterations overlaid them on
@@ -1930,9 +1999,9 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             let freq = x_to_freq(cursor.x, freq_min, freq_max, spectrum_rect);
             let cursor_db = y_to_db(cursor.y, DB_MIN, DB_MAX, spectrum_rect);
             let columns = state.curve_projection.key.map_or(0, |key| key.columns);
-            let position = (cursor.x-spectrum_rect.left())/spectrum_rect.width();
-            let mid_db = projected_readout(&state.mid_smoothed_columns[..columns],position);
-            let side_db = projected_readout(&state.side_smoothed_columns[..columns],position);
+            let position = (cursor.x - spectrum_rect.left()) / spectrum_rect.width();
+            let mid_db = projected_readout(&state.mid_smoothed_columns[..columns], position);
+            let side_db = projected_readout(&state.side_smoothed_columns[..columns], position);
             let lines = vec![
                 format_hz_readout(freq),
                 format!("y: {:>6.1} dB", cursor_db),
@@ -2010,7 +2079,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
                 let col = if sync_active {
                     let frac = ((cursor.x - spectrogram_rect.left())
                         / spectrogram_rect.width().max(1.0))
-                        .clamp(0.0, 0.9999);
+                    .clamp(0.0, 0.9999);
                     frac * HISTORY_COLS as f32
                 } else {
                     let ppp = ui.ctx().pixels_per_point();
@@ -2022,8 +2091,12 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
                     c as f32
                 };
                 let physical_height = spectrogram_rect.height() * ui.ctx().pixels_per_point()
-                    / if state.shared.spectrogram_source() == SpectrogramSource::LeftRight { 2.0 } else { 1.0 };
-                let bin_span = CQT_BINS_PER_OCTAVE as f32 * (freq_max/freq_min).log2()
+                    / if state.shared.spectrogram_source() == SpectrogramSource::LeftRight {
+                        2.0
+                    } else {
+                        1.0
+                    };
+                let bin_span = CQT_BINS_PER_OCTAVE as f32 * (freq_max / freq_min).log2()
                     / physical_height.max(1.0);
                 if let Some(raw_db) = spec.sample_history_db(buffer_id, col, log_bin_f, bin_span) {
                     // Floor reads on freshly-cleared columns come back at
@@ -2105,77 +2178,161 @@ const REF_AUTO_GAIN_TAU_SECS: f32 = 1.0;
 /// MP3 codec lowpass (if detected) clips the curves at the brickwall
 /// so they don't misleadingly fall off above the codec cutoff.
 fn draw_ref_bands(
-    painter: &egui::Painter, rect: egui::Rect, freq_min: f32, freq_max: f32,
-    slots: &RefSlots, live_fft_size: usize, _live_sample_rate: f32,
-    live_columns: &[f32], weighting: Weighting, smoothing_mode: FreqSmoothing,
-    cache: &mut RefEnvelopeCache, frame_dt: f32,
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    freq_min: f32,
+    freq_max: f32,
+    slots: &RefSlots,
+    live_fft_size: usize,
+    _live_sample_rate: f32,
+    live_columns: &[f32],
+    weighting: Weighting,
+    smoothing_mode: FreqSmoothing,
+    cache: &mut RefEnvelopeCache,
+    frame_dt: f32,
 ) {
-    if live_columns.len()<2 || rect.width()<=0.0 || rect.height()<=0.0 { return; }
-    let alpha=1.0-(-frame_dt/REF_AUTO_GAIN_TAU_SECS).exp();
-    for (slot_idx,slot) in slots.slots.iter().enumerate() {
-        if !slot.visible { continue; }
-        let Some(analysis)=&slot.analysis else { continue; };
-        let Some(envelope)=analysis.mid.for_fft(live_fft_size) else { continue; };
-        let key=ProjectionKey { sample_rate:analysis.source_sample_rate,fft_size:envelope.fft_size,
-            min:freq_min,max:freq_max,columns:live_columns.len(),smoothing:smoothing_mode,weighting };
+    if live_columns.len() < 2 || rect.width() <= 0.0 || rect.height() <= 0.0 {
+        return;
+    }
+    let alpha = 1.0 - (-frame_dt / REF_AUTO_GAIN_TAU_SECS).exp();
+    for (slot_idx, slot) in slots.slots.iter().enumerate() {
+        if !slot.visible {
+            continue;
+        }
+        let Some(analysis) = &slot.analysis else {
+            continue;
+        };
+        let Some(envelope) = analysis.mid.for_fft(live_fft_size) else {
+            continue;
+        };
+        let key = ProjectionKey {
+            sample_rate: analysis.source_sample_rate,
+            fft_size: envelope.fft_size,
+            min: freq_min,
+            max: freq_max,
+            columns: live_columns.len(),
+            smoothing: smoothing_mode,
+            weighting,
+        };
         let revision = slot.revision;
-        if cache.entries[slot_idx].as_ref().is_none_or(|e|e.revision!=revision || e.key!=key) {
-            let bins=reference_bins(envelope,analysis.source_sample_rate);
-            let mut project=CurveProjection::default();project.prepare(key);
-            let mut src=vec![MIN_DB;bins.len()];let mut output=vec![MIN_DB;key.columns];
-            let mut smoothed=vec![[MIN_DB;3];key.columns];
+        if cache.entries[slot_idx]
+            .as_ref()
+            .is_none_or(|e| e.revision != revision || e.key != key)
+        {
+            let bins = reference_bins(envelope, analysis.source_sample_rate);
+            let mut project = CurveProjection::default();
+            project.prepare(key);
+            let mut src = vec![MIN_DB; bins.len()];
+            let mut output = vec![MIN_DB; key.columns];
+            let mut smoothed = vec![[MIN_DB; 3]; key.columns];
             for channel in 0..3 {
-                for (dst,bin) in src.iter_mut().zip(&bins) { *dst=bin[channel]; }
-                project.project(&src,&mut output);
-                for (dst,&db) in smoothed.iter_mut().zip(&output) { dst[channel]=db; }
-            }
-            cache.entries[slot_idx]=Some(RefCacheEntry{revision,key,smoothed,auto_gain_db:0.0,auto_gain_warm:false});
-        }
-        let cutoff=analysis.lowpass_hz.unwrap_or(analysis.source_sample_rate*0.5).min(analysis.source_sample_rate*0.5);
-        let common_columns=(((cutoff.min(freq_max)/freq_min).ln()/(freq_max/freq_min).ln()
-            *(key.columns-1) as f32).floor()+1.0).clamp(0.0,key.columns as f32) as usize;
-        let live_mean=curve_mean_db(live_columns[..common_columns].iter().copied());
-        let entry=cache.entries[slot_idx].as_mut().unwrap();
-        if let (Some(live),Some(reference))=(live_mean,curve_mean_db(entry.smoothed[..common_columns].iter().map(|v|v[1]))) {
-            let target=live-reference;
-            entry.auto_gain_db=if entry.auto_gain_warm {entry.auto_gain_db+alpha*(target-entry.auto_gain_db)}else{target};
-            entry.auto_gain_warm=true;
-        }
-
-        let c=REF_SLOT_COLORS[slot_idx];let color=egui::Color32::from_rgba_unmultiplied(c[0],c[1],c[2],220);
-        for channel in 0..3 {
-            let mut pts=Vec::with_capacity(key.columns);
-            for (i,bin) in entry.smoothed.iter().enumerate() {
-                let t=i as f32/(key.columns-1) as f32;let freq=freq_min*(freq_max/freq_min).powf(t);
-                if freq>cutoff { break; }
-                if curve_value_is_drawable(bin[channel]) {
-                    let db = bin[channel]+entry.auto_gain_db;
-                    if db.is_finite() {
-                        pts.push(egui::pos2(rect.left()+t*rect.width(),db_to_y(db,DB_MIN,DB_MAX,rect)));
-                    } else {
-                        draw_curve_segment(painter, &mut pts, if channel==1 {2.25}else{1.0}, color);
-                    }
-                } else {
-                    draw_curve_segment(painter, &mut pts, if channel==1 {2.25}else{1.0}, color);
+                for (dst, bin) in src.iter_mut().zip(&bins) {
+                    *dst = bin[channel];
+                }
+                project.project(&src, &mut output);
+                for (dst, &db) in smoothed.iter_mut().zip(&output) {
+                    dst[channel] = db;
                 }
             }
-            draw_curve_segment(painter, &mut pts, if channel==1 {2.25}else{1.0}, color);
+            cache.entries[slot_idx] = Some(RefCacheEntry {
+                revision,
+                key,
+                smoothed,
+                auto_gain_db: 0.0,
+                auto_gain_warm: false,
+            });
+        }
+        let cutoff = analysis
+            .lowpass_hz
+            .unwrap_or(analysis.source_sample_rate * 0.5)
+            .min(analysis.source_sample_rate * 0.5);
+        let common_columns = (((cutoff.min(freq_max) / freq_min).ln() / (freq_max / freq_min).ln()
+            * (key.columns - 1) as f32)
+            .floor()
+            + 1.0)
+            .clamp(0.0, key.columns as f32) as usize;
+        let live_mean = curve_mean_db(live_columns[..common_columns].iter().copied());
+        let entry = cache.entries[slot_idx].as_mut().unwrap();
+        if let (Some(live), Some(reference)) = (
+            live_mean,
+            curve_mean_db(entry.smoothed[..common_columns].iter().map(|v| v[1])),
+        ) {
+            let target = live - reference;
+            entry.auto_gain_db = if entry.auto_gain_warm {
+                entry.auto_gain_db + alpha * (target - entry.auto_gain_db)
+            } else {
+                target
+            };
+            entry.auto_gain_warm = true;
+        }
+
+        let c = REF_SLOT_COLORS[slot_idx];
+        let color = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], 220);
+        for channel in 0..3 {
+            let mut pts = Vec::with_capacity(key.columns);
+            for (i, bin) in entry.smoothed.iter().enumerate() {
+                let t = i as f32 / (key.columns - 1) as f32;
+                let freq = freq_min * (freq_max / freq_min).powf(t);
+                if freq > cutoff {
+                    break;
+                }
+                if curve_value_is_drawable(bin[channel]) {
+                    let db = bin[channel] + entry.auto_gain_db;
+                    if db.is_finite() {
+                        pts.push(egui::pos2(
+                            rect.left() + t * rect.width(),
+                            db_to_y(db, DB_MIN, DB_MAX, rect),
+                        ));
+                    } else {
+                        draw_curve_segment(
+                            painter,
+                            &mut pts,
+                            if channel == 1 { 2.25 } else { 1.0 },
+                            color,
+                        );
+                    }
+                } else {
+                    draw_curve_segment(
+                        painter,
+                        &mut pts,
+                        if channel == 1 { 2.25 } else { 1.0 },
+                        color,
+                    );
+                }
+            }
+            draw_curve_segment(
+                painter,
+                &mut pts,
+                if channel == 1 { 2.25 } else { 1.0 },
+                color,
+            );
         }
     }
 }
 
 /// Legacy saved references contain only the old log envelope. It remains readable,
 /// but recovering discarded detail requires reloading the original audio file.
-fn reference_bins(e: &manifold_analyzer_dsp::RefEnvelopeAtFft, sr: f32) -> Vec<[f32;3]> {
-    if e.bin_bounds.len()==e.fft_size/2+1 { return e.bin_bounds.clone(); }
-    let mut bins=vec![[MIN_DB;3];e.fft_size/2+1];
-    if e.bounds.len()<2 { return bins; }
-    for (i,dst) in bins.iter_mut().enumerate() {
-        let freq=i as f32*sr/e.fft_size as f32;
-        if !(REF_FREQ_MIN..=REF_FREQ_MAX).contains(&freq) {continue;}
-        let pos=(freq/REF_FREQ_MIN).ln()/(REF_FREQ_MAX/REF_FREQ_MIN).ln()*(e.bounds.len()-1) as f32;
-        let lo=(pos.floor() as usize).min(e.bounds.len()-1);let hi=(lo+1).min(e.bounds.len()-1);let t=pos-lo as f32;
-        for (c,v) in dst.iter_mut().enumerate() {*v=e.bounds[lo][c]*(1.0-t)+e.bounds[hi][c]*t;}
+fn reference_bins(e: &manifold_analyzer_dsp::RefEnvelopeAtFft, sr: f32) -> Vec<[f32; 3]> {
+    if e.bin_bounds.len() == e.fft_size / 2 + 1 {
+        return e.bin_bounds.clone();
+    }
+    let mut bins = vec![[MIN_DB; 3]; e.fft_size / 2 + 1];
+    if e.bounds.len() < 2 {
+        return bins;
+    }
+    for (i, dst) in bins.iter_mut().enumerate() {
+        let freq = i as f32 * sr / e.fft_size as f32;
+        if !(REF_FREQ_MIN..=REF_FREQ_MAX).contains(&freq) {
+            continue;
+        }
+        let pos = (freq / REF_FREQ_MIN).ln() / (REF_FREQ_MAX / REF_FREQ_MIN).ln()
+            * (e.bounds.len() - 1) as f32;
+        let lo = (pos.floor() as usize).min(e.bounds.len() - 1);
+        let hi = (lo + 1).min(e.bounds.len() - 1);
+        let t = pos - lo as f32;
+        for (c, v) in dst.iter_mut().enumerate() {
+            *v = e.bounds[lo][c] * (1.0 - t) + e.bounds[hi][c] * t;
+        }
     }
     bins
 }
@@ -2183,7 +2340,7 @@ fn reference_bins(e: &manifold_analyzer_dsp::RefEnvelopeAtFft, sr: f32) -> Vec<[
 #[cfg(test)]
 mod precision_tests {
     use super::*;
-    use manifold_analyzer_dsp::{REF_POINTS, RefEnvelope, RefEnvelopeAtFft};
+    use manifold_analyzer_dsp::{RefEnvelope, RefEnvelopeAtFft, REF_POINTS};
 
     const TEST_SR: f32 = 48_000.0;
     const TEST_FFT: usize = 32_768;
@@ -2284,7 +2441,10 @@ mod precision_tests {
         let bins = narrow_18khz_bins();
         let none = project(&bins, FreqSmoothing::None, Weighting::Flat);
         let none_peak = none.iter().copied().fold(MIN_DB, f32::max);
-        assert!((none_peak + 12.0412).abs() < 0.01, "None peak {none_peak} dB");
+        assert!(
+            (none_peak + 12.0412).abs() < 0.01,
+            "None peak {none_peak} dB"
+        );
         for mode in [
             FreqSmoothing::TwentyFourth,
             FreqSmoothing::Twelfth,
@@ -2304,11 +2464,8 @@ mod precision_tests {
     #[test]
     fn identical_live_and_full_bin_reference_inputs_project_identically() {
         let live = narrow_18khz_bins();
-        let analysis = analysis_with_bins(
-            live.iter()
-                .map(|&value| [value, value, value])
-                .collect(),
-        );
+        let analysis =
+            analysis_with_bins(live.iter().map(|&value| [value, value, value]).collect());
         let reference = reference_bins(&analysis.mid.per_fft[0], TEST_SR);
         let reference_mid: Vec<f32> = reference.iter().map(|bounds| bounds[1]).collect();
         assert_eq!(live, reference_mid);
@@ -2377,10 +2534,7 @@ mod precision_tests {
         };
         let mut cache = RefEnvelopeCache::default();
         let live = vec![-20.0; TEST_COLUMNS];
-        slots.slots[0].analysis = Some(analysis_with_bins(vec![
-            [MIN_DB; 3];
-            TEST_FFT / 2 + 1
-        ]));
+        slots.slots[0].analysis = Some(analysis_with_bins(vec![[MIN_DB; 3]; TEST_FFT / 2 + 1]));
         assert!(rendered_paths(|painter| {
             draw_ref_bands(
                 painter,
@@ -2437,10 +2591,8 @@ mod precision_tests {
         assert!(first.analysis.is_some());
         assert_ne!(first.revision, second.revision);
 
-        let old: RefSlot = serde_json::from_str(
-            r#"{"name":"old","analysis":null,"visible":true}"#,
-        )
-        .unwrap();
+        let old: RefSlot =
+            serde_json::from_str(r#"{"name":"old","analysis":null,"visible":true}"#).unwrap();
         assert_eq!(old.name, "old");
         assert!(old.analysis.is_none());
 
@@ -2494,13 +2646,15 @@ mod precision_tests {
 /// Draw the streaming median estimate published by the analyzer. The estimate
 /// advances with analysis frames, independently of editor refresh frequency.
 fn draw_live_median(painter: &egui::Painter, rect: egui::Rect, columns: &[f32]) {
-    if columns.len()<2 { return; }
-    let mut pts=Vec::with_capacity(columns.len());
-    for (i,&db) in columns.iter().enumerate() {
+    if columns.len() < 2 {
+        return;
+    }
+    let mut pts = Vec::with_capacity(columns.len());
+    for (i, &db) in columns.iter().enumerate() {
         if curve_value_is_drawable(db) {
             pts.push(egui::pos2(
-                rect.left()+i as f32/(columns.len()-1) as f32*rect.width(),
-                db_to_y(db,DB_MIN,DB_MAX,rect),
+                rect.left() + i as f32 / (columns.len() - 1) as f32 * rect.width(),
+                db_to_y(db, DB_MIN, DB_MAX, rect),
             ));
         } else {
             draw_curve_segment(painter, &mut pts, 2.5, egui::Color32::WHITE);
@@ -2562,7 +2716,10 @@ fn draw_spectrogram_chrome(
                 let t = (freq / freq_min).ln() / (freq_max / freq_min).ln();
                 let y = sub_rect.bottom() - t.clamp(0.0, 1.0) * sub_rect.height();
                 painter.line_segment(
-                    [egui::pos2(sub_rect.left(), y), egui::pos2(sub_rect.right(), y)],
+                    [
+                        egui::pos2(sub_rect.left(), y),
+                        egui::pos2(sub_rect.right(), y),
+                    ],
                     (1.0, grid_over),
                 );
                 draw_outlined_text(
@@ -2591,7 +2748,10 @@ fn draw_spectrogram_chrome(
         // Hairline between top (L) and bottom (R). 1.5 px so it stays
         // visible against bright spectrogram content.
         painter.line_segment(
-            [egui::pos2(rect.left(), mid_y), egui::pos2(rect.right(), mid_y)],
+            [
+                egui::pos2(rect.left(), mid_y),
+                egui::pos2(rect.right(), mid_y),
+            ],
             (1.5, egui::Color32::from_white_alpha(140)),
         );
     } else {
@@ -2710,8 +2870,14 @@ fn draw_outlined_text(
     color: egui::Color32,
 ) {
     const OUTLINE_OFFSETS: [(f32, f32); 8] = [
-        (-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0),
-        (-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0),
+        (-1.0, 0.0),
+        (1.0, 0.0),
+        (0.0, -1.0),
+        (0.0, 1.0),
+        (-1.0, -1.0),
+        (1.0, -1.0),
+        (-1.0, 1.0),
+        (1.0, 1.0),
     ];
     let outline = egui::Color32::BLACK;
     for (dx, dy) in OUTLINE_OFFSETS {
@@ -2817,15 +2983,29 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     // publishes. Packs the balance-line vertices and correlation-strip
     // mesh in a single pass.
     let rows = rect.height().ceil() as i32 + 1;
-    let count=rows as usize;
-    state.lr_projection.prepare(ProjectionKey{sample_rate:sr,fft_size,min:freq_min,max:freq_max,
-        columns:count,smoothing,weighting});
-    state.lr_left_columns.resize(count,MIN_DB);
-    state.lr_right_columns.resize(count,MIN_DB);
-    state.lr_correlation_columns.resize(count,0.0);
-    state.lr_projection.project(&state.left_scratch,&mut state.lr_left_columns);
-    state.lr_projection.project(&state.right_scratch,&mut state.lr_right_columns);
-    state.lr_projection.plan.as_ref().unwrap().apply_values(&state.correlation_scratch,&mut state.lr_correlation_columns);
+    let count = rows as usize;
+    state.lr_projection.prepare(ProjectionKey {
+        sample_rate: sr,
+        fft_size,
+        min: freq_min,
+        max: freq_max,
+        columns: count,
+        smoothing,
+        weighting,
+    });
+    state.lr_left_columns.resize(count, MIN_DB);
+    state.lr_right_columns.resize(count, MIN_DB);
+    state.lr_correlation_columns.resize(count, 0.0);
+    state
+        .lr_projection
+        .project(&state.left_scratch, &mut state.lr_left_columns);
+    state
+        .lr_projection
+        .project(&state.right_scratch, &mut state.lr_right_columns);
+    state.lr_projection.plan.as_ref().unwrap().apply_values(
+        &state.correlation_scratch,
+        &mut state.lr_correlation_columns,
+    );
     let mut pts = Vec::with_capacity(rows as usize);
     let mut strip_mesh = egui::epaint::Mesh::default();
     strip_mesh.vertices.reserve((rows as usize) * 2);
@@ -2838,9 +3018,9 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
         if y < rect.top() {
             break;
         }
-        let l_db=state.lr_left_columns[row as usize];
-        let r_db=state.lr_right_columns[row as usize];
-        let corr=state.lr_correlation_columns[row as usize].clamp(-1.0,1.0);
+        let l_db = state.lr_left_columns[row as usize];
+        let r_db = state.lr_right_columns[row as usize];
+        let corr = state.lr_correlation_columns[row as usize].clamp(-1.0, 1.0);
 
         // Soft silence gate: multiply the raw delta by a 0..1 fade
         // based on the louder channel's level. Below `LR_SILENCE_DB`
@@ -2875,10 +3055,9 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
             color,
         });
         if vi >= 2 {
-            strip_mesh.indices.extend_from_slice(&[
-                vi - 2, vi - 1, vi,
-                vi - 1, vi + 1, vi,
-            ]);
+            strip_mesh
+                .indices
+                .extend_from_slice(&[vi - 2, vi - 1, vi, vi - 1, vi + 1, vi]);
         }
     }
     if !strip_mesh.indices.is_empty() {
@@ -2985,10 +3164,10 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
         if rect.contains(cursor) {
             let freq = y_to_freq_log(cursor.y, freq_min, freq_max, rect);
             let delta_db = (center_x - cursor.x) / px_per_db.max(1e-6);
-            let position=(rect.bottom()-cursor.y)/rect.height();
-            let l_db=projected_readout(&state.lr_left_columns,position);
-            let r_db=projected_readout(&state.lr_right_columns,position);
-            let corr=projected_readout(&state.lr_correlation_columns,position);
+            let position = (rect.bottom() - cursor.y) / rect.height();
+            let l_db = projected_readout(&state.lr_left_columns, position);
+            let r_db = projected_readout(&state.lr_right_columns, position);
+            let corr = projected_readout(&state.lr_correlation_columns, position);
             let balance = if delta_db.abs() < 0.05 {
                 "0.0 dB (centred)".to_string()
             } else if delta_db > 0.0 {
@@ -3075,7 +3254,9 @@ fn spectrogram_colormap(t_in: f32) -> egui::Color32 {
 fn lerp_color_rgb(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
     let t = t.clamp(0.0, 1.0);
     let lerp_u = |x: u8, y: u8| {
-        (x as f32 * (1.0 - t) + y as f32 * t).round().clamp(0.0, 255.0) as u8
+        (x as f32 * (1.0 - t) + y as f32 * t)
+            .round()
+            .clamp(0.0, 255.0) as u8
     };
     egui::Color32::from_rgb(
         lerp_u(a.r(), b.r()),
@@ -3102,8 +3283,7 @@ fn draw_right_column(ui: &mut egui::Ui, state: &mut EditorState) {
     let top_h = total.y * top_fraction;
     let bottom_h = total.y - top_h;
 
-    let (top_rect, _) =
-        ui.allocate_exact_size(egui::vec2(total.x, top_h), egui::Sense::hover());
+    let (top_rect, _) = ui.allocate_exact_size(egui::vec2(total.x, top_h), egui::Sense::hover());
     let mut top_child = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(top_rect)
@@ -3112,8 +3292,7 @@ fn draw_right_column(ui: &mut egui::Ui, state: &mut EditorState) {
     top_child.set_clip_rect(top_rect);
     draw_loudness_panel(&mut top_child, state);
 
-    let (bot_rect, _) =
-        ui.allocate_exact_size(egui::vec2(total.x, bottom_h), egui::Sense::hover());
+    let (bot_rect, _) = ui.allocate_exact_size(egui::vec2(total.x, bottom_h), egui::Sense::hover());
     let mut bot_child = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(bot_rect)
@@ -3204,11 +3383,11 @@ fn draw_layout_grab_handle(ctx: &egui::Context, state: &EditorState) {
         // back toward the centre. Centre stays empty so the icon reads
         // as "drag in any direction" rather than a target reticle.
         let c = handle_rect.center();
-        let tip = 9.0_f32;     // outermost point of each arrow
-        let base = 5.5_f32;    // arrowhead base distance from centre
-        let head_w = 3.5_f32;  // half-width of the arrowhead base
-        let shaft_w = 1.25_f32;// half-width of the shaft
-        let shaft_in = 1.5_f32;// inner end of the shaft (centre gap)
+        let tip = 9.0_f32; // outermost point of each arrow
+        let base = 5.5_f32; // arrowhead base distance from centre
+        let head_w = 3.5_f32; // half-width of the arrowhead base
+        let shaft_w = 1.25_f32; // half-width of the shaft
+        let shaft_in = 1.5_f32; // inner end of the shaft (centre gap)
 
         // Horizontal shafts.
         painter.rect_filled(
@@ -3336,9 +3515,11 @@ fn draw_loudness_panel(ui: &mut egui::Ui, state: &mut EditorState) {
             // comparison column. Matches MS-plot semantics: toggle
             // slot visibility to pick which ref the numbers chase.
             let slots = state.params.ref_slots.read();
-            let active_ref = slots.slots.iter().enumerate().find_map(|(i, s)| {
-                s.analysis.as_ref().filter(|_| s.visible).map(|a| (i, a))
-            });
+            let active_ref = slots
+                .slots
+                .iter()
+                .enumerate()
+                .find_map(|(i, s)| s.analysis.as_ref().filter(|_| s.visible).map(|a| (i, a)));
             let (ref_analysis, ref_color) = match active_ref {
                 Some((i, a)) => {
                     let c = REF_SLOT_COLORS[i];
@@ -3369,8 +3550,12 @@ fn draw_meter_column(painter: egui::Painter, rect: egui::Rect, snap: &LoudnessSn
     // Meter range: 0 LUFS at top, -54 LUFS at bottom.
     const METER_TOP: f32 = 0.0;
     const METER_BOTTOM: f32 = -54.0;
-    const MAJOR_TICKS: &[f32] = &[0.0, -3.0, -6.0, -9.0, -18.0, -23.0, -27.0, -36.0, -45.0, -54.0];
-    const LABELED_TICKS: &[f32] = &[0.0, -3.0, -6.0, -9.0, -18.0, -23.0, -27.0, -36.0, -45.0, -54.0];
+    const MAJOR_TICKS: &[f32] = &[
+        0.0, -3.0, -6.0, -9.0, -18.0, -23.0, -27.0, -36.0, -45.0, -54.0,
+    ];
+    const LABELED_TICKS: &[f32] = &[
+        0.0, -3.0, -6.0, -9.0, -18.0, -23.0, -27.0, -36.0, -45.0, -54.0,
+    ];
     const TARGET_BAND: (f32, f32) = (-23.0, -18.0);
 
     // Vertical padding keeps the top (`0`) and bottom (`-54`) tick
@@ -3396,10 +3581,8 @@ fn draw_meter_column(painter: egui::Painter, rect: egui::Rect, snap: &LoudnessSn
     let col_left = content_left + left_tick_len + tick_gap;
     let col_right = col_left + col_width;
 
-    let col_rect = egui::Rect::from_min_max(
-        egui::pos2(col_left, top),
-        egui::pos2(col_right, bottom),
-    );
+    let col_rect =
+        egui::Rect::from_min_max(egui::pos2(col_left, top), egui::pos2(col_right, bottom));
 
     let lufs_to_y = |lufs: f32| -> f32 {
         let clamped = lufs.clamp(METER_BOTTOM, METER_TOP);
@@ -3427,10 +3610,8 @@ fn draw_meter_column(painter: egui::Painter, rect: egui::Rect, snap: &LoudnessSn
     let m_lufs = snap.momentary_lufs;
     if m_lufs > METER_BOTTOM {
         let m_y = lufs_to_y(m_lufs);
-        let fill_rect = egui::Rect::from_min_max(
-            egui::pos2(col_left, m_y),
-            egui::pos2(col_right, bottom),
-        );
+        let fill_rect =
+            egui::Rect::from_min_max(egui::pos2(col_left, m_y), egui::pos2(col_right, bottom));
         let colour = meter_fill_colour(m_lufs);
         painter.rect_filled(fill_rect, 1.0, colour);
     }
@@ -3560,10 +3741,8 @@ fn draw_loudness_readouts(
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(label).color(label_color).size(11.0),
-                        )
-                        .truncate(),
+                        egui::Label::new(egui::RichText::new(label).color(label_color).size(11.0))
+                            .truncate(),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Right-to-left: delta sits rightmost, then live
@@ -3585,14 +3764,14 @@ fn draw_loudness_readouts(
                                 )
                                 .truncate(),
                             );
-                            resp.on_hover_text(format!(
-                                "ref: {}",
-                                fmt_absolute(ref_val, unit)
-                            ));
+                            resp.on_hover_text(format!("ref: {}", fmt_absolute(ref_val, unit)));
                         }
                         ui.add(
                             egui::Label::new(
-                                egui::RichText::new(text).color(value_color).size(12.0).strong(),
+                                egui::RichText::new(text)
+                                    .color(value_color)
+                                    .size(12.0)
+                                    .strong(),
                             )
                             .truncate(),
                         );
@@ -3604,13 +3783,14 @@ fn draw_loudness_readouts(
     // Delta = live − ref, only when both numbers are valid signal (not
     // the MIN_DB sentinel). Returns `None` otherwise so the row renders
     // live-only, same as when no ref is loaded.
-    let delta_lufs = |live: f32, reference: f32, unit: DeltaUnit| -> Option<(f32, f32, DeltaUnit)> {
-        if live > MIN_DB + 1.0 && reference > MIN_DB + 1.0 {
-            Some((live - reference, reference, unit))
-        } else {
-            None
-        }
-    };
+    let delta_lufs =
+        |live: f32, reference: f32, unit: DeltaUnit| -> Option<(f32, f32, DeltaUnit)> {
+            if live > MIN_DB + 1.0 && reference > MIN_DB + 1.0 {
+                Some((live - reference, reference, unit))
+            } else {
+                None
+            }
+        };
     let delta_lu = |live: f32, reference: f32| -> Option<(f32, f32, DeltaUnit)> {
         // LU/LRA/DR/PLR never carry a MIN_DB sentinel — they're 0 for
         // "no signal" — so we take the numbers as-is.
@@ -3639,15 +3819,14 @@ fn draw_loudness_readouts(
             placeholder.to_string()
         }
     };
-    let gate_delta = |threshold: f32,
-                      d: Option<(f32, f32, DeltaUnit)>|
-     -> Option<(f32, f32, DeltaUnit)> {
-        if elapsed >= threshold {
-            d
-        } else {
-            None
-        }
-    };
+    let gate_delta =
+        |threshold: f32, d: Option<(f32, f32, DeltaUnit)>| -> Option<(f32, f32, DeltaUnit)> {
+            if elapsed >= threshold {
+                d
+            } else {
+                None
+            }
+        };
 
     // Short-term gets its own oversized hero row — it's the live "now"
     // value the user reads from across a room, so it needs to be the
@@ -4306,7 +4485,11 @@ fn launch_ref_picker(
         // binwidth offset. Adds a few seconds to the analysis but only
         // happens once per ref load.
         let fft_sizes: Vec<usize> = [
-            FftSize::K2, FftSize::K4, FftSize::K8, FftSize::K16, FftSize::K32,
+            FftSize::K2,
+            FftSize::K4,
+            FftSize::K8,
+            FftSize::K16,
+            FftSize::K32,
         ]
         .iter()
         .map(|s| s.samples())
@@ -4335,8 +4518,8 @@ mod macos {
     use objc2_app_kit::{NSApplication, NSView};
     use objc2_foundation::MainThreadMarker;
     use raw_window_handle::{
-        AppKitDisplayHandle, AppKitWindowHandle, DisplayHandle, HasDisplayHandle,
-        HasWindowHandle, RawDisplayHandle, RawWindowHandle, WindowHandle,
+        AppKitDisplayHandle, AppKitWindowHandle, DisplayHandle, HasDisplayHandle, HasWindowHandle,
+        RawDisplayHandle, RawWindowHandle, WindowHandle,
     };
     use std::ptr::NonNull;
 
@@ -4352,9 +4535,7 @@ mod macos {
     unsafe impl Sync for KeyWindowParent {}
 
     impl HasWindowHandle for KeyWindowParent {
-        fn window_handle(
-            &self,
-        ) -> Result<WindowHandle<'_>, raw_window_handle::HandleError> {
+        fn window_handle(&self) -> Result<WindowHandle<'_>, raw_window_handle::HandleError> {
             let ptr: *const NSView = &*self.view;
             let nn = NonNull::new(ptr as *mut std::ffi::c_void)
                 .ok_or(raw_window_handle::HandleError::Unavailable)?;
@@ -4366,9 +4547,7 @@ mod macos {
     }
 
     impl HasDisplayHandle for KeyWindowParent {
-        fn display_handle(
-            &self,
-        ) -> Result<DisplayHandle<'_>, raw_window_handle::HandleError> {
+        fn display_handle(&self) -> Result<DisplayHandle<'_>, raw_window_handle::HandleError> {
             // SAFETY: AppKitDisplayHandle carries no data to invalidate.
             Ok(unsafe {
                 DisplayHandle::borrow_raw(RawDisplayHandle::AppKit(AppKitDisplayHandle::new()))
@@ -4415,8 +4594,10 @@ fn y_to_freq_log(y: f32, fmin: f32, fmax: f32, rect: egui::Rect) -> f32 {
 
 /// Read the same projected values used to draw the curve, including weighting and smoothing.
 fn projected_readout(columns: &[f32], position: f32) -> f32 {
-    if columns.is_empty() { return MIN_DB; }
-    let index=(position.clamp(0.0,1.0)*(columns.len()-1) as f32).round() as usize;
+    if columns.is_empty() {
+        return MIN_DB;
+    }
+    let index = (position.clamp(0.0, 1.0) * (columns.len() - 1) as f32).round() as usize;
     columns[index]
 }
 
@@ -4439,12 +4620,7 @@ fn format_hz_readout(freq: f32) -> String {
 /// hovers it. Lines stack vertically inside a small panel near the
 /// cursor; the panel flips quadrant if the default position would clip
 /// outside `rect`.
-fn draw_crosshair(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    cursor: egui::Pos2,
-    lines: &[String],
-) {
+fn draw_crosshair(painter: &egui::Painter, rect: egui::Rect, cursor: egui::Pos2, lines: &[String]) {
     let line_color = egui::Color32::from_white_alpha(170);
     painter.line_segment(
         [
@@ -4477,7 +4653,10 @@ fn draw_crosshair(
                 .x
         })
         .fold(0.0_f32, f32::max);
-    let box_size = egui::vec2(max_w + pad.x * 2.0, line_h * lines.len() as f32 + pad.y * 2.0);
+    let box_size = egui::vec2(
+        max_w + pad.x * 2.0,
+        line_h * lines.len() as f32 + pad.y * 2.0,
+    );
     let mut origin = cursor + egui::vec2(12.0, -box_size.y - 12.0);
     if origin.x + box_size.x > rect.right() - 2.0 {
         origin.x = cursor.x - box_size.x - 12.0;

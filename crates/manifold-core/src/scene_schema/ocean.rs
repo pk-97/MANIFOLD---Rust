@@ -20,12 +20,26 @@ fn ocean(fields: &ItemFields) -> bool {
     matches!(fields, ItemFields::Object(o) if o.shape == Shape::Ocean)
 }
 
-const fn fixed(property: &'static str, role: &'static str, param: &'static str, why: &'static str) -> PropertyRow {
-    row(property, Reach::Own(role), S, Exposure::Internal(why)).param(param).when(ocean)
+const fn fixed(
+    property: &'static str,
+    role: &'static str,
+    param: &'static str,
+    why: &'static str,
+) -> PropertyRow {
+    row(property, Reach::Own(role), S, Exposure::Internal(why))
+        .param(param)
+        .when(ocean)
 }
 
-const fn auto(property: &'static str, role: &'static str, param: &'static str, why: &'static str) -> PropertyRow {
-    row(property, Reach::Own(role), S, Exposure::Automatic(why)).param(param).when(ocean)
+const fn auto(
+    property: &'static str,
+    role: &'static str,
+    param: &'static str,
+    why: &'static str,
+) -> PropertyRow {
+    row(property, Reach::Own(role), S, Exposure::Automatic(why))
+        .param(param)
+        .when(ocean)
 }
 
 const CASCADE: &str = "the starter sea's cascade split: three tiles that never double-count a wave";
@@ -46,8 +60,20 @@ macro_rules! cascade {
             fixed(concat!($p, "_tile_size"), $role, "tile_size", CASCADE).default($tile),
             fixed(concat!($p, "_band_low"), $role, "band_low", CASCADE).default($low),
             fixed(concat!($p, "_band_high"), $role, "band_high", CASCADE).default($high),
-            fixed(concat!($p, "_fetch"), $role, "fetch_km", "the starter sea's open-water fetch").default(60.0),
-            fixed(concat!($p, "_seed"), $role, "seed", "each cascade has its own random phases").default($seed),
+            fixed(
+                concat!($p, "_fetch"),
+                $role,
+                "fetch_km",
+                "the starter sea's open-water fetch",
+            )
+            .default(60.0),
+            fixed(
+                concat!($p, "_seed"),
+                $role,
+                "seed",
+                "each cascade has its own random phases",
+            )
+            .default($seed),
             auto(concat!($p, "_time"), $role, "time", CLOCK),
             $wind,
             $dir,
@@ -58,7 +84,14 @@ macro_rules! cascade {
 }
 
 const fn dial(property: &'static str, param: &'static str, order: u8) -> PropertyRow {
-    row(property, Reach::Own("swell_spectrum"), S, perform(CardBand::Scene, order)).param(param).when(ocean)
+    row(
+        property,
+        Reach::Own("swell_spectrum"),
+        S,
+        perform(CardBand::Scene, order),
+    )
+    .param(param)
+    .when(ocean)
 }
 
 const fn follows(property: &'static str, role: &'static str, param: &'static str) -> PropertyRow {
@@ -98,11 +131,26 @@ static RIPPLE: [PropertyRow; 11] = cascade!(
 
 static FIELDS: [PropertyRow; 6] = [
     fixed("swell_field_size", "swell_field", "size", FFT),
-    fixed("swell_field_batch", "swell_field", "batch", "a spectrum is six fields"),
+    fixed(
+        "swell_field_batch",
+        "swell_field",
+        "batch",
+        "a spectrum is six fields",
+    ),
     fixed("chop_field_size", "chop_field", "size", FFT),
-    fixed("chop_field_batch", "chop_field", "batch", "a spectrum is six fields"),
+    fixed(
+        "chop_field_batch",
+        "chop_field",
+        "batch",
+        "a spectrum is six fields",
+    ),
     fixed("ripple_field_size", "ripple_field", "size", FFT),
-    fixed("ripple_field_batch", "ripple_field", "batch", "a spectrum is six fields"),
+    fixed(
+        "ripple_field_batch",
+        "ripple_field",
+        "batch",
+        "a spectrum is six fields",
+    ),
 ];
 
 const GRID: &str = "the grid is cast from the camera at a fixed density";
@@ -113,22 +161,68 @@ const FADE: &str = "the cascade fades out with distance at the starter sea's ran
 static SURFACE: [PropertyRow; 27] = [
     fixed("grid_columns", "grid", "columns", GRID).default(640.0),
     fixed("grid_rows", "grid", "rows", GRID).default(360.0),
-    fixed("grid_level", "grid", "level", "the Object's Position Y lifts the sea"),
-    fixed("grid_max_distance", "grid", "max_distance", "the sea runs to the horizon"),
+    fixed(
+        "grid_level",
+        "grid",
+        "level",
+        "the Object's Position Y lifts the sea",
+    ),
+    fixed(
+        "grid_max_distance",
+        "grid",
+        "max_distance",
+        "the sea runs to the horizon",
+    ),
     fixed("grid_margin", "grid", "margin", GRID),
-    fixed("water_color_r", "grid", "color_r", "the deep water colour; Material tints it").default(0.012),
-    fixed("water_color_g", "grid", "color_g", "the deep water colour; Material tints it").default(0.034),
-    fixed("water_color_b", "grid", "color_b", "the deep water colour; Material tints it").default(0.045),
+    fixed(
+        "water_color_r",
+        "grid",
+        "color_r",
+        "the deep water colour; Material tints it",
+    )
+    .default(0.012),
+    fixed(
+        "water_color_g",
+        "grid",
+        "color_g",
+        "the deep water colour; Material tints it",
+    )
+    .default(0.034),
+    fixed(
+        "water_color_b",
+        "grid",
+        "color_b",
+        "the deep water colour; Material tints it",
+    )
+    .default(0.045),
     auto("grid_width", "grid", "width", FROM_CAMERA),
     auto("grid_height", "grid", "height", FROM_CAMERA),
-    row("choppiness", Reach::Own("displace"), S, perform(CardBand::Scene, 2)).range(0.0, 2.5).default(1.8).when(ocean),
-    row("foam", Reach::Own("displace"), S, perform(CardBand::Scene, 5))
-        .param("foam_threshold")
-        .name("Foam")
-        .range(-0.5, 1.0)
-        .default(0.45)
-        .when(ocean),
-    fixed("foam_softness", "displace", "foam_width", "the foam edge's softness is part of the look"),
+    row(
+        "choppiness",
+        Reach::Own("displace"),
+        S,
+        perform(CardBand::Scene, 2),
+    )
+    .range(0.0, 2.5)
+    .default(1.8)
+    .when(ocean),
+    row(
+        "foam",
+        Reach::Own("displace"),
+        S,
+        perform(CardBand::Scene, 5),
+    )
+    .param("foam_threshold")
+    .name("Foam")
+    .range(-0.5, 1.0)
+    .default(0.45)
+    .when(ocean),
+    fixed(
+        "foam_softness",
+        "displace",
+        "foam_width",
+        "the foam edge's softness is part of the look",
+    ),
     fixed("swell_displace_size", "displace", "size_0", FFT),
     fixed("swell_displace_tile", "displace", "tile_size_0", TILES),
     fixed("swell_fade_start", "displace", "fade_start_0", FADE),
@@ -141,7 +235,12 @@ static SURFACE: [PropertyRow; 27] = [
     fixed("ripple_displace_tile", "displace", "tile_size_2", TILES),
     fixed("ripple_fade_start", "displace", "fade_start_2", FADE),
     fixed("ripple_fade_end", "displace", "fade_end_2", FADE),
-    auto("triangle_columns", "triangles", "src_cols", "the grid's columns"),
+    auto(
+        "triangle_columns",
+        "triangles",
+        "src_cols",
+        "the grid's columns",
+    ),
     auto("triangle_rows", "triangles", "src_rows", "the grid's rows"),
 ];
 

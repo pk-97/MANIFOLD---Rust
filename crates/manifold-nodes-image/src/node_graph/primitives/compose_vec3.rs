@@ -72,13 +72,13 @@ impl Primitive for ComposeVec3 {
 mod tests {
     use super::*;
 
-    use manifold_node_engine::exec::backend::Backend;
+    use manifold_core::{Beats, Seconds};
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::exec::backend::MockBackend;
     use manifold_node_engine::exec::effect_node::{FrameTime, ParamValues};
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::ports::{PortType, ScalarType};
-    use manifold_node_engine::exec::backend::MockBackend;
-    use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -91,7 +91,12 @@ mod tests {
 
     fn evaluate(params: [f32; 3], wires: &[(&'static str, f32)]) -> [f32; 3] {
         let mut backend = MockBackend::new();
-        let out_slot = backend.acquire(ResourceId(0), PortType::Scalar(ScalarType::Vec3), None, (0, 0));
+        let out_slot = backend.acquire(
+            ResourceId(0),
+            PortType::Scalar(ScalarType::Vec3),
+            None,
+            (0, 0),
+        );
 
         let mut values = ParamValues::default();
         for (name, value) in [("x", params[0]), ("y", params[1]), ("z", params[2])] {
@@ -133,13 +138,7 @@ mod tests {
             &mut render_mode_scratch,
             &mut object_scratch,
         );
-        let mut context = EffectNodeContext::new(
-            frame_time(),
-            &values,
-            inputs,
-            outputs,
-            None,
-        );
+        let mut context = EffectNodeContext::new(frame_time(), &values, inputs, outputs, None);
         Primitive::run(&mut primitive, &mut context);
 
         for (slot, value) in scalar_scratch.drain(..) {
@@ -158,10 +157,7 @@ mod tests {
 
     #[test]
     fn compose_vec3_wired_component_overrides_only_that_param() {
-        assert_eq!(
-            evaluate([1.0, 2.0, 3.0], &[("y", 9.0)]),
-            [1.0, 9.0, 3.0]
-        );
+        assert_eq!(evaluate([1.0, 2.0, 3.0], &[("y", 9.0)]), [1.0, 9.0, 3.0]);
     }
 
     #[test]

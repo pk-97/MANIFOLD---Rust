@@ -35,14 +35,15 @@ mod blob_v2 {
         path::Path,
     };
 
-    use manifold_node_engine::persistence::PrimitiveRegistry;
     use manifold_node_engine::freeze::codegen::standalone_for_node;
-    use support::uniform_abi::{assert_wgsl_layout, resolve_source_path};
+    use manifold_node_engine::persistence::PrimitiveRegistry;
     use support::uniform_abi::shader_declaration;
+    use support::uniform_abi::{assert_wgsl_layout, resolve_source_path};
 
     #[test]
     fn blob_v2_uniform_mirrors_match_generated_or_custom_layout() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../manifold-nodes-image/src/node_graph/primitives");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../manifold-nodes-image/src/node_graph/primitives");
         let registry = PrimitiveRegistry::with_builtin();
         let mut failures = Vec::new();
         for &(source, rust_struct) in BLOB_V2_UNIFORM_MIRRORS {
@@ -129,8 +130,8 @@ mod blob_v2 {
 mod texture {
     use super::support;
 
-    use manifold_node_engine::persistence::PrimitiveRegistry;
     use manifold_node_engine::freeze::codegen::standalone_for_node;
+    use manifold_node_engine::persistence::PrimitiveRegistry;
     use support::texture_abi_cases::CASES;
     use support::uniform_abi::{assert_wgsl_layout, resolve_source_path};
 
@@ -172,14 +173,10 @@ mod texture {
     }
 }
 mod custom {
-    use manifold_nodes::testkit::source_roots::verify_wgsl_roots;
     use super::support;
+    use manifold_nodes::testkit::source_roots::verify_wgsl_roots;
     use std::{collections::BTreeSet, path::Path};
-    use support::{
-        custom_abi_cases,
-        texture_abi_cases,
-        uniform_abi::*,
-    };
+    use support::{custom_abi_cases, texture_abi_cases, uniform_abi::*};
 
     const INLINE_CASES: &[(&str, &str, &str, &str)] = &[
         (
@@ -214,12 +211,14 @@ mod custom {
     }
     #[test]
     fn custom_gpu_uniforms_match_their_actual_shader_declarations() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../manifold-nodes-image/src/node_graph/primitives");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../manifold-nodes-image/src/node_graph/primitives");
         let mut failures = Vec::new();
         for case in custom_abi_cases::CASES {
             let result = (|| {
                 let source_path = resolve_source_path(case.source)?;
-                let mut source = std::fs::read_to_string(&source_path).map_err(|e| e.to_string())?;
+                let mut source =
+                    std::fs::read_to_string(&source_path).map_err(|e| e.to_string())?;
                 // A file module `x.rs` with a sibling `x/` directory is one host:
                 // its submodules may hold the shader's include site.
                 let submodules = source_path.with_extension("");
@@ -227,7 +226,8 @@ mod custom {
                     let mut files = Vec::new();
                     source_files(&submodules, &mut files);
                     for file in files {
-                        source.push_str(&std::fs::read_to_string(&file).map_err(|e| e.to_string())?);
+                        source
+                            .push_str(&std::fs::read_to_string(&file).map_err(|e| e.to_string())?);
                     }
                 }
                 if !source.contains(case.shader) {
@@ -317,58 +317,42 @@ mod custom {
                     c.rust_struct.into(),
                 )
             })
-            .chain(
-                custom_abi_cases::CASES
-                    .iter()
-                    .map(|c| {
-                        (
-                            resolve_source_path(c.source)
-                                .expect("custom ABI source")
-                                .display()
-                                .to_string(),
-                            c.rust_struct.into(),
-                        )
-                    }),
-            )
-            .chain(
-                INLINE_CASES
-                    .iter()
-                    .map(|(f, h, _, _)| {
-                        (
-                            resolve_source_path(f)
-                                .expect("inline ABI source")
-                                .display()
-                                .to_string(),
-                            (*h).into(),
-                        )
-                    }),
-            )
-            .chain(
-                super::BLOB_V2_UNIFORM_MIRRORS
-                    .iter()
-                    .map(|(f, h)| {
-                        (
-                            resolve_source_path(f)
-                                .expect("Blob V2 ABI source")
-                                .display()
-                                .to_string(),
-                            (*h).into(),
-                        )
-                    }),
-            )
-            .chain(
-                super::BLOB_V2_WIRE_MIRRORS
-                    .iter()
-                    .map(|(f, h)| {
-                        (
-                            resolve_source_path(f)
-                                .expect("Blob V2 ABI source")
-                                .display()
-                                .to_string(),
-                            (*h).into(),
-                        )
-                    }),
-            )
+            .chain(custom_abi_cases::CASES.iter().map(|c| {
+                (
+                    resolve_source_path(c.source)
+                        .expect("custom ABI source")
+                        .display()
+                        .to_string(),
+                    c.rust_struct.into(),
+                )
+            }))
+            .chain(INLINE_CASES.iter().map(|(f, h, _, _)| {
+                (
+                    resolve_source_path(f)
+                        .expect("inline ABI source")
+                        .display()
+                        .to_string(),
+                    (*h).into(),
+                )
+            }))
+            .chain(super::BLOB_V2_UNIFORM_MIRRORS.iter().map(|(f, h)| {
+                (
+                    resolve_source_path(f)
+                        .expect("Blob V2 ABI source")
+                        .display()
+                        .to_string(),
+                    (*h).into(),
+                )
+            }))
+            .chain(super::BLOB_V2_WIRE_MIRRORS.iter().map(|(f, h)| {
+                (
+                    resolve_source_path(f)
+                        .expect("Blob V2 ABI source")
+                        .display()
+                        .to_string(),
+                    (*h).into(),
+                )
+            }))
             .collect();
         // Not uniforms: two vertex payloads, whose vertex descriptor owns the
         // layout, and one Channels wire record, whose KnownItem specs own it
@@ -391,9 +375,9 @@ mod custom {
             ),
             (
                 resolve_source_path("whitewater_obstacle_source.rs")
-                .expect("whitewater obstacle source")
-                .display()
-                .to_string(),
+                    .expect("whitewater obstacle source")
+                    .display()
+                    .to_string(),
                 "WhitewaterSource".into(),
             ),
             (
@@ -480,7 +464,11 @@ mod custom {
 #[cfg(test)]
 mod dispatch_regression {
     use manifold_node_engine::freeze::codegen::{standalone_for_node, standalone_for_spec};
-    use manifold_nodes_image::node_graph::primitives::{blob_overlay_render::BlobOverlayRender, draw_connections::DrawConnections, draw_dots::DrawDots, draw_gauge::DrawGauge, draw_markers::DrawMarkers, draw_ticks::DrawTicks};
+    use manifold_nodes_image::node_graph::primitives::{
+        blob_overlay_render::BlobOverlayRender, draw_connections::DrawConnections,
+        draw_dots::DrawDots, draw_gauge::DrawGauge, draw_markers::DrawMarkers,
+        draw_ticks::DrawTicks,
+    };
 
     fn same<P: manifold_node_engine::primitive::Primitive + Default + 'static>() {
         let typed = standalone_for_spec::<P>().expect("typed standalone codegen");

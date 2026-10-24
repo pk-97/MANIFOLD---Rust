@@ -1,7 +1,7 @@
 mod classify;
+mod codegen;
 mod install;
 mod region;
-mod codegen;
 mod segment;
 mod space;
 

@@ -62,15 +62,9 @@ pub enum FlattenError {
         producers: usize,
     },
     /// Two interface ports or two interface params share a name.
-    DuplicateInterfaceName {
-        group_handle: String,
-        name: String,
-    },
+    DuplicateInterfaceName { group_handle: String, name: String },
     /// A group instance's `params` key isn't declared in `interface.params`.
-    UnknownGroupParam {
-        group_handle: String,
-        param: String,
-    },
+    UnknownGroupParam { group_handle: String, param: String },
     /// An `interface.params` entry points at an inner `(handle, param)` that
     /// doesn't exist among the group's direct children.
     GroupParamTargetMissing {
@@ -87,11 +81,19 @@ pub enum FlattenError {
     /// or out of a `group_output`).
     MalformedBoundaryWire { node_id: u32, side: WireSide },
     /// A direct boundary alias has more than one external producer.
-    AmbiguousGroupInput { group_handle: String, port: String, producers: usize },
+    AmbiguousGroupInput {
+        group_handle: String,
+        port: String,
+        producers: usize,
+    },
     /// A chain of direct boundary aliases feeds back into itself.
     PassthroughCycle { group_handle: String, port: String },
     /// A direct alias cannot change its declared wire type.
-    PassthroughTypeMismatch { group_handle: String, input: String, output: String },
+    PassthroughTypeMismatch {
+        group_handle: String,
+        input: String,
+        output: String,
+    },
     /// Nesting exceeded [`MAX_DEPTH`] (pathological input or a reference cycle).
     GroupCycle { depth: usize },
 }
@@ -99,7 +101,10 @@ pub enum FlattenError {
 impl std::fmt::Display for FlattenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FlattenError::UnexpandedSceneModifiers => write!(f, "scene modifiers require attachment expansion before group flattening"),
+            FlattenError::UnexpandedSceneModifiers => write!(
+                f,
+                "scene modifiers require attachment expansion before group flattening"
+            ),
             FlattenError::UnknownGroupPort {
                 group_handle,
                 port,
@@ -117,7 +122,10 @@ impl std::fmt::Display for FlattenError {
                 "group '{group_handle}': output '{port}' has {producers} inner producers (need exactly 1)"
             ),
             FlattenError::DuplicateInterfaceName { group_handle, name } => {
-                write!(f, "group '{group_handle}': duplicate interface name '{name}'")
+                write!(
+                    f,
+                    "group '{group_handle}': duplicate interface name '{name}'"
+                )
             }
             FlattenError::UnknownGroupParam {
                 group_handle,
@@ -142,11 +150,31 @@ impl std::fmt::Display for FlattenError {
                 "group node {node_id} has no handle (a group instance must be named)"
             ),
             FlattenError::MalformedBoundaryWire { node_id, side } => {
-                write!(f, "node {node_id}: wire {side:?} misuses a group boundary node")
+                write!(
+                    f,
+                    "node {node_id}: wire {side:?} misuses a group boundary node"
+                )
             }
-            FlattenError::AmbiguousGroupInput { group_handle, port, producers } => write!(f, "group '{group_handle}': passthrough input '{port}' has {producers} producers"),
-            FlattenError::PassthroughCycle { group_handle, port } => write!(f, "group '{group_handle}': passthrough output '{port}' forms a cycle"),
-            FlattenError::PassthroughTypeMismatch { group_handle, input, output } => write!(f, "group '{group_handle}': passthrough '{input}' -> '{output}' has different declared port types"),
+            FlattenError::AmbiguousGroupInput {
+                group_handle,
+                port,
+                producers,
+            } => write!(
+                f,
+                "group '{group_handle}': passthrough input '{port}' has {producers} producers"
+            ),
+            FlattenError::PassthroughCycle { group_handle, port } => write!(
+                f,
+                "group '{group_handle}': passthrough output '{port}' forms a cycle"
+            ),
+            FlattenError::PassthroughTypeMismatch {
+                group_handle,
+                input,
+                output,
+            } => write!(
+                f,
+                "group '{group_handle}': passthrough '{input}' -> '{output}' has different declared port types"
+            ),
             FlattenError::GroupCycle { depth } => write!(
                 f,
                 "group nesting exceeded depth {depth} (reference cycle or pathological nesting)"
@@ -280,25 +308,61 @@ fn flatten_fragment(
             check_unique_interface(group, handle)?;
 
             let child_prefix = format!("{prefix}{handle}{HANDLE_DELIM}");
-            let mut body =
-                flatten_fragment(&group.nodes, &group.wires, &child_prefix, handle, alloc, depth + 1)?;
+            let mut body = flatten_fragment(
+                &group.nodes,
+                &group.wires,
+                &child_prefix,
+                handle,
+                alloc,
+                depth + 1,
+            )?;
 
             apply_param_overrides(node, group, &child_prefix, &mut body.nodes)?;
 
             for (output, producer) in &body.output_producer {
                 if let Producer::FromFragmentInput(input) = producer {
-                    let from = group.interface.inputs.iter().find(|p| p.name == *input)
-                        .ok_or_else(|| FlattenError::UnknownGroupPort { group_handle: handle.into(), port: input.clone(), side: WireSide::To })?;
-                    let to = group.interface.outputs.iter().find(|p| p.name == *output)
-                        .ok_or_else(|| FlattenError::UnknownGroupPort { group_handle: handle.into(), port: output.clone(), side: WireSide::From })?;
+                    let from = group
+                        .interface
+                        .inputs
+                        .iter()
+                        .find(|p| p.name == *input)
+                        .ok_or_else(|| FlattenError::UnknownGroupPort {
+                            group_handle: handle.into(),
+                            port: input.clone(),
+                            side: WireSide::To,
+                        })?;
+                    let to = group
+                        .interface
+                        .outputs
+                        .iter()
+                        .find(|p| p.name == *output)
+                        .ok_or_else(|| FlattenError::UnknownGroupPort {
+                            group_handle: handle.into(),
+                            port: output.clone(),
+                            side: WireSide::From,
+                        })?;
                     if from.port_type != to.port_type {
-                        return Err(FlattenError::PassthroughTypeMismatch { group_handle: handle.into(), input: input.clone(), output: output.clone() });
+                        return Err(FlattenError::PassthroughTypeMismatch {
+                            group_handle: handle.into(),
+                            input: input.clone(),
+                            output: output.clone(),
+                        });
                     }
                 }
             }
 
-            let valid_inputs = group.interface.inputs.iter().map(|p| p.name.clone()).collect();
-            let valid_outputs = group.interface.outputs.iter().map(|p| p.name.clone()).collect();
+            let valid_inputs = group
+                .interface
+                .inputs
+                .iter()
+                .map(|p| p.name.clone())
+                .collect();
+            let valid_outputs = group
+                .interface
+                .outputs
+                .iter()
+                .map(|p| p.name.clone())
+                .collect();
 
             out_nodes.append(&mut body.nodes);
             out_wires.append(&mut body.wires);
@@ -386,32 +450,78 @@ fn resolve_from(
     loop {
         match resolved.get(&from_node) {
             Some(Resolved::Plain(id)) => return Ok(Producer::Concrete(*id, from_port.into())),
-            Some(Resolved::FragmentInput) => return Ok(Producer::FromFragmentInput(from_port.into())),
-            Some(Resolved::FragmentOutput) => return Err(FlattenError::MalformedBoundaryWire { node_id: from_node, side: WireSide::From }),
-            Some(Resolved::Group { handle, output_producer, valid_inputs, valid_outputs, .. }) => {
+            Some(Resolved::FragmentInput) => {
+                return Ok(Producer::FromFragmentInput(from_port.into()));
+            }
+            Some(Resolved::FragmentOutput) => {
+                return Err(FlattenError::MalformedBoundaryWire {
+                    node_id: from_node,
+                    side: WireSide::From,
+                });
+            }
+            Some(Resolved::Group {
+                handle,
+                output_producer,
+                valid_inputs,
+                valid_outputs,
+                ..
+            }) => {
                 if !valid_outputs.contains(from_port) {
-                    return Err(FlattenError::UnknownGroupPort { group_handle: handle.clone(), port: from_port.into(), side: WireSide::From });
+                    return Err(FlattenError::UnknownGroupPort {
+                        group_handle: handle.clone(),
+                        port: from_port.into(),
+                        side: WireSide::From,
+                    });
                 }
                 if !visited.insert((from_node, from_port.to_string())) {
-                    return Err(FlattenError::PassthroughCycle { group_handle: handle.clone(), port: from_port.into() });
+                    return Err(FlattenError::PassthroughCycle {
+                        group_handle: handle.clone(),
+                        port: from_port.into(),
+                    });
                 }
                 match output_producer.get(from_port) {
                     Some(Producer::FromFragmentInput(input)) => {
                         if !valid_inputs.contains(input) {
-                            return Err(FlattenError::UnknownGroupPort { group_handle: handle.clone(), port: input.clone(), side: WireSide::To });
+                            return Err(FlattenError::UnknownGroupPort {
+                                group_handle: handle.clone(),
+                                port: input.clone(),
+                                side: WireSide::To,
+                            });
                         }
-                        let mut producers = wires.iter().filter(|w| w.to_node == from_node && w.to_port == *input);
-                        let Some(upstream) = producers.next() else { return Ok(Producer::Unconnected); };
+                        let mut producers = wires
+                            .iter()
+                            .filter(|w| w.to_node == from_node && w.to_port == *input);
+                        let Some(upstream) = producers.next() else {
+                            return Ok(Producer::Unconnected);
+                        };
                         let extras = producers.count();
-                        if extras > 0 { return Err(FlattenError::AmbiguousGroupInput { group_handle: handle.clone(), port: input.clone(), producers: extras + 1 }); }
+                        if extras > 0 {
+                            return Err(FlattenError::AmbiguousGroupInput {
+                                group_handle: handle.clone(),
+                                port: input.clone(),
+                                producers: extras + 1,
+                            });
+                        }
                         from_node = upstream.from_node;
                         from_port = &upstream.from_port;
                     }
                     Some(producer) => return Ok(producer.clone()),
-                    None => return Err(FlattenError::AmbiguousGroupOutput { group_handle: handle.clone(), port: from_port.into(), producers: 0 }),
+                    None => {
+                        return Err(FlattenError::AmbiguousGroupOutput {
+                            group_handle: handle.clone(),
+                            port: from_port.into(),
+                            producers: 0,
+                        });
+                    }
                 }
             }
-            None => return Err(FlattenError::UnknownGroupPort { group_handle: scope_label.into(), port: from_port.into(), side: WireSide::From }),
+            None => {
+                return Err(FlattenError::UnknownGroupPort {
+                    group_handle: scope_label.into(),
+                    port: from_port.into(),
+                    side: WireSide::From,
+                });
+            }
         }
     }
 }
@@ -711,7 +821,12 @@ mod tests {
         let id_to_handle: BTreeMap<u32, String> = d
             .nodes
             .iter()
-            .map(|n| (n.id, n.handle.clone().unwrap_or_else(|| format!("#{}", n.id))))
+            .map(|n| {
+                (
+                    n.id,
+                    n.handle.clone().unwrap_or_else(|| format!("#{}", n.id)),
+                )
+            })
             .collect();
         let mut out: Vec<_> = d
             .wires
@@ -786,10 +901,30 @@ mod tests {
         assert_eq!(
             wires_by_handle(&flat),
             vec![
-                ("soft_focus/blur".into(), "out".into(), "soft_focus/mix".into(), "b".into()),
-                ("soft_focus/mix".into(), "out".into(), "final".into(), "in".into()),
-                ("source".into(), "out".into(), "soft_focus/blur".into(), "src".into()),
-                ("source".into(), "out".into(), "soft_focus/mix".into(), "a".into()),
+                (
+                    "soft_focus/blur".into(),
+                    "out".into(),
+                    "soft_focus/mix".into(),
+                    "b".into()
+                ),
+                (
+                    "soft_focus/mix".into(),
+                    "out".into(),
+                    "final".into(),
+                    "in".into()
+                ),
+                (
+                    "source".into(),
+                    "out".into(),
+                    "soft_focus/blur".into(),
+                    "src".into()
+                ),
+                (
+                    "source".into(),
+                    "out".into(),
+                    "soft_focus/mix".into(),
+                    "a".into()
+                ),
             ]
         );
     }
@@ -837,7 +972,10 @@ mod tests {
     #[test]
     fn fans_out_group_input_to_all_inner_consumers() {
         let d = def(
-            vec![node(0, "system.source", Some("source")), soft_focus_group(1, "g")],
+            vec![
+                node(0, "system.source", Some("source")),
+                soft_focus_group(1, "g"),
+            ],
             vec![wire(0, "out", 1, "src")],
         );
         let flat = flatten_groups(&d).unwrap();
@@ -852,8 +990,10 @@ mod tests {
     #[test]
     fn routes_group_param_override_to_inner_target() {
         let mut g = soft_focus_group(1, "g");
-        g.params
-            .insert("amount".to_string(), SerializedParamValue::Float { value: 0.9 });
+        g.params.insert(
+            "amount".to_string(),
+            SerializedParamValue::Float { value: 0.9 },
+        );
         let d = def(vec![g], vec![]);
         let flat = flatten_groups(&d).unwrap();
         let mix = find(&flat, "g/mix");
@@ -901,12 +1041,20 @@ mod tests {
                 outputs: vec![port("out")],
                 params: vec![],
             },
-            nodes: vec![node(0, GROUP_INPUT_TYPE_ID, None), inner, node(2, GROUP_OUTPUT_TYPE_ID, None)],
+            nodes: vec![
+                node(0, GROUP_INPUT_TYPE_ID, None),
+                inner,
+                node(2, GROUP_OUTPUT_TYPE_ID, None),
+            ],
             wires: vec![wire(0, "src", 1, "src"), wire(1, "out", 2, "out")],
             tint: None,
         }));
         let d = def(
-            vec![node(0, "system.source", Some("source")), outer, node(9, "system.final_output", Some("final"))],
+            vec![
+                node(0, "system.source", Some("source")),
+                outer,
+                node(9, "system.final_output", Some("final")),
+            ],
             vec![wire(0, "out", 5, "src"), wire(5, "out", 9, "in")],
         );
         let flat = flatten_groups(&d).unwrap();
@@ -948,12 +1096,18 @@ mod tests {
     #[test]
     fn unknown_group_port_errors() {
         let d = def(
-            vec![node(0, "system.source", Some("source")), soft_focus_group(1, "g")],
+            vec![
+                node(0, "system.source", Some("source")),
+                soft_focus_group(1, "g"),
+            ],
             vec![wire(0, "out", 1, "nope")],
         );
         assert!(matches!(
             flatten_groups(&d),
-            Err(FlattenError::UnknownGroupPort { side: WireSide::To, .. })
+            Err(FlattenError::UnknownGroupPort {
+                side: WireSide::To,
+                ..
+            })
         ));
     }
 
@@ -987,8 +1141,10 @@ mod tests {
     #[test]
     fn unknown_group_param_errors() {
         let mut g = soft_focus_group(1, "g");
-        g.params
-            .insert("bogus".to_string(), SerializedParamValue::Float { value: 1.0 });
+        g.params.insert(
+            "bogus".to_string(),
+            SerializedParamValue::Float { value: 1.0 },
+        );
         let d = def(vec![g], vec![]);
         assert!(matches!(
             flatten_groups(&d),
@@ -1036,9 +1192,17 @@ mod tests {
     fn identity_group(id: u32, handle: &str) -> EffectGraphNode {
         let mut g = node(id, GROUP_TYPE_ID, Some(handle));
         g.group = Some(Box::new(GroupDef {
-            interface: GroupInterface { inputs: vec![port("src")], outputs: vec![port("out")], params: Vec::new() },
-            nodes: vec![node(0, GROUP_INPUT_TYPE_ID, None), node(1, GROUP_OUTPUT_TYPE_ID, None)],
-            wires: vec![wire(0, "src", 1, "out")], tint: None,
+            interface: GroupInterface {
+                inputs: vec![port("src")],
+                outputs: vec![port("out")],
+                params: Vec::new(),
+            },
+            nodes: vec![
+                node(0, GROUP_INPUT_TYPE_ID, None),
+                node(1, GROUP_OUTPUT_TYPE_ID, None),
+            ],
+            wires: vec![wire(0, "src", 1, "out")],
+            tint: None,
         }));
         g
     }
@@ -1047,35 +1211,87 @@ mod tests {
     fn passthrough_chains_nested_groups_and_fanout_without_nodes_or_copies() {
         let mut nested = identity_group(3, "outer");
         let body = nested.group.as_mut().unwrap();
-        body.nodes.push(identity_group(2,"inner"));
-        body.wires = vec![wire(0,"src",2,"src"),wire(2,"out",1,"out")];
-        let original = def(vec![node(0,"source",Some("source")),node(1,"sink",Some("a")),node(2,"sink",Some("b")),nested,identity_group(4,"next")], vec![wire(0,"out",3,"src"),wire(3,"out",4,"src"),wire(4,"out",1,"in"),wire(4,"out",2,"in")]);
+        body.nodes.push(identity_group(2, "inner"));
+        body.wires = vec![wire(0, "src", 2, "src"), wire(2, "out", 1, "out")];
+        let original = def(
+            vec![
+                node(0, "source", Some("source")),
+                node(1, "sink", Some("a")),
+                node(2, "sink", Some("b")),
+                nested,
+                identity_group(4, "next"),
+            ],
+            vec![
+                wire(0, "out", 3, "src"),
+                wire(3, "out", 4, "src"),
+                wire(4, "out", 1, "in"),
+                wire(4, "out", 2, "in"),
+            ],
+        );
         let flat = flatten_groups(&original).unwrap();
-        assert_eq!(flat.nodes.len(),3);
-        let source=flat.nodes.iter().find(|n|n.handle.as_deref()==Some("source")).unwrap().id;
-        assert_eq!(flat.wires.len(),2);
-        assert!(flat.wires.iter().all(|w|w.from_node==source&&w.from_port=="out"&&w.to_port=="in"));
+        assert_eq!(flat.nodes.len(), 3);
+        let source = flat
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("source"))
+            .unwrap()
+            .id;
+        assert_eq!(flat.wires.len(), 2);
+        assert!(
+            flat.wires
+                .iter()
+                .all(|w| w.from_node == source && w.from_port == "out" && w.to_port == "in")
+        );
     }
 
     #[test]
     fn passthrough_missing_input_stays_unwired_and_ambiguous_input_fails() {
-        let mut graph=def(vec![node(0,"source",Some("source")),identity_group(1,"alias"),node(2,"sink",Some("sink"))],vec![wire(1,"out",2,"in")]);
+        let mut graph = def(
+            vec![
+                node(0, "source", Some("source")),
+                identity_group(1, "alias"),
+                node(2, "sink", Some("sink")),
+            ],
+            vec![wire(1, "out", 2, "in")],
+        );
         assert!(flatten_groups(&graph).unwrap().wires.is_empty());
-        graph.wires.extend([wire(0,"a",1,"src"),wire(0,"b",1,"src")]);
-        assert!(matches!(flatten_groups(&graph),Err(FlattenError::AmbiguousGroupInput {producers:2,..})));
+        graph
+            .wires
+            .extend([wire(0, "a", 1, "src"), wire(0, "b", 1, "src")]);
+        assert!(matches!(
+            flatten_groups(&graph),
+            Err(FlattenError::AmbiguousGroupInput { producers: 2, .. })
+        ));
     }
 
     #[test]
     fn passthrough_feedback_is_rejected_before_runtime() {
-        let graph=def(vec![identity_group(1,"a"),identity_group(2,"b"),node(3,"sink",Some("sink"))],vec![wire(1,"out",2,"src"),wire(2,"out",1,"src"),wire(1,"out",3,"in")]);
-        assert!(matches!(flatten_groups(&graph),Err(FlattenError::PassthroughCycle {..})));
+        let graph = def(
+            vec![
+                identity_group(1, "a"),
+                identity_group(2, "b"),
+                node(3, "sink", Some("sink")),
+            ],
+            vec![
+                wire(1, "out", 2, "src"),
+                wire(2, "out", 1, "src"),
+                wire(1, "out", 3, "in"),
+            ],
+        );
+        assert!(matches!(
+            flatten_groups(&graph),
+            Err(FlattenError::PassthroughCycle { .. })
+        ));
     }
 
     #[test]
     fn passthrough_cannot_relabel_a_wire_type() {
-        let mut alias=identity_group(1,"alias");
-        alias.group.as_mut().unwrap().interface.outputs[0].port_type="Camera".into();
-        assert!(matches!(flatten_groups(&def(vec![alias],vec![])),Err(FlattenError::PassthroughTypeMismatch {..})));
+        let mut alias = identity_group(1, "alias");
+        alias.group.as_mut().unwrap().interface.outputs[0].port_type = "Camera".into();
+        assert!(matches!(
+            flatten_groups(&def(vec![alias], vec![])),
+            Err(FlattenError::PassthroughTypeMismatch { .. })
+        ));
     }
 
     /// Set a node's stable id by handle inside a (possibly nested) body.
@@ -1094,7 +1310,10 @@ mod tests {
             }
             false
         }
-        assert!(walk(&mut d.nodes, handle, id), "no node with handle {handle}");
+        assert!(
+            walk(&mut d.nodes, handle, id),
+            "no node with handle {handle}"
+        );
     }
 
     /// A flat (groupless) document produces an empty map.

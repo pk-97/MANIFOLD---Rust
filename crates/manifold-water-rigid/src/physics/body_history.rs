@@ -15,7 +15,14 @@ pub(crate) struct PackedRows<T> {
 
 impl<T: Clone> PackedRows<T> {
     pub fn new(filler: T) -> Self {
-        Self { cells: Vec::new(), filler, stride: 0, capacity: 0, head: 0, len: 0 }
+        Self {
+            cells: Vec::new(),
+            filler,
+            stride: 0,
+            capacity: 0,
+            head: 0,
+            len: 0,
+        }
     }
 
     /// Hold `capacity` rows of `stride` cells and forget every row. Storage
@@ -41,7 +48,8 @@ impl<T: Clone> PackedRows<T> {
         for index in 0..self.len {
             let from = self.physical(index);
             let to = index * stride;
-            wider.cells[to..to + self.stride].clone_from_slice(&self.cells[from..from + self.stride]);
+            wider.cells[to..to + self.stride]
+                .clone_from_slice(&self.cells[from..from + self.stride]);
         }
         wider.len = self.len;
         *self = wider;
@@ -188,17 +196,26 @@ mod tests {
         let mut rows = PackedRows::new(None::<u32>);
         rows.configure(3, 2);
         let storage = rows.storage_ptr();
-        rows.record(HistoryWrite::Appended, &[Some(1), None, Some(3)]).unwrap();
-        rows.record(HistoryWrite::Appended, &[Some(4), Some(5), None]).unwrap();
-        assert!(rows.record(HistoryWrite::Appended, &[None, None, None]).is_err());
-        rows.record(HistoryWrite::Replaced, &[Some(7), Some(8), Some(9)]).unwrap();
+        rows.record(HistoryWrite::Appended, &[Some(1), None, Some(3)])
+            .unwrap();
+        rows.record(HistoryWrite::Appended, &[Some(4), Some(5), None])
+            .unwrap();
+        assert!(
+            rows.record(HistoryWrite::Appended, &[None, None, None])
+                .is_err()
+        );
+        rows.record(HistoryWrite::Replaced, &[Some(7), Some(8), Some(9)])
+            .unwrap();
         assert_eq!(rows.row(0), Some(&[Some(1), None, Some(3)][..]));
         assert_eq!(rows.back(), Some(&[Some(7), Some(8), Some(9)][..]));
         rows.prune(1).unwrap();
         assert_eq!(rows.row(0), Some(&[Some(7), Some(8), Some(9)][..]));
         rows.record_filler(HistoryWrite::Appended).unwrap();
         assert_eq!(rows.back(), Some(&[None, None, None][..]));
-        assert!(rows.record(HistoryWrite::Replaced, &[None, None]).is_err(), "a short row is refused");
+        assert!(
+            rows.record(HistoryWrite::Replaced, &[None, None]).is_err(),
+            "a short row is refused"
+        );
         assert_eq!(rows.storage_ptr(), storage);
     }
 }

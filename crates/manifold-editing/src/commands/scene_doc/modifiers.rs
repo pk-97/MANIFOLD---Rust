@@ -6,16 +6,31 @@
 //! never moves a mapping.
 
 use manifold_core::LayerId;
-use manifold_core::scene_doc::{Item, ItemFields, ItemId, ItemKind, ModifierFields, ModifierType, SceneDoc};
+use manifold_core::scene_doc::{
+    Item, ItemFields, ItemId, ItemKind, ModifierFields, ModifierType, SceneDoc,
+};
 use manifold_core::scene_schema::{modifier_type, new_card_targets};
 
 use super::commands::{AddSceneItemCommand, ReparentSceneItemCommand};
 
 /// A new card of `modifier`, named after its type, aimed at the Objects and
 /// Groups in `selection`, or at the whole scene when none is selected.
-pub fn new_modifier(doc: &SceneDoc, id: ItemId, modifier: ModifierType, selection: &[ItemId]) -> Item {
-    let fields = ModifierFields { modifier, targets: new_card_targets(doc, selection), ..ModifierFields::default() };
-    Item::new(id, modifier_type(modifier).label, ItemFields::Modifier(fields))
+pub fn new_modifier(
+    doc: &SceneDoc,
+    id: ItemId,
+    modifier: ModifierType,
+    selection: &[ItemId],
+) -> Item {
+    let fields = ModifierFields {
+        modifier,
+        targets: new_card_targets(doc, selection),
+        ..ModifierFields::default()
+    };
+    Item::new(
+        id,
+        modifier_type(modifier).label,
+        ItemFields::Modifier(fields),
+    )
 }
 
 /// Add `card` at the end of the chain.
@@ -35,11 +50,20 @@ pub fn move_modifier(
     };
     // Reparent places the card after taking it out, so count without it.
     let rest: Vec<&Item> = doc.items.iter().filter(|item| &item.id != card).collect();
-    let chain: Vec<usize> =
-        rest.iter().enumerate().filter(|(_, item)| item.kind() == ItemKind::Modifier).map(|(at, _)| at).collect();
+    let chain: Vec<usize> = rest
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.kind() == ItemKind::Modifier)
+        .map(|(at, _)| at)
+        .collect();
     let index = match chain.get(to) {
         Some(at) => *at,
         None => chain.last().map_or(rest.len(), |last| last + 1),
     };
-    Ok(ReparentSceneItemCommand::new(layer.clone(), card.clone(), None, index))
+    Ok(ReparentSceneItemCommand::new(
+        layer.clone(),
+        card.clone(),
+        None,
+        index,
+    ))
 }

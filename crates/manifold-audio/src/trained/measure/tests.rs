@@ -7,15 +7,25 @@ const TAIL_CAUSAL_FROM_MS: i64 = 1999 + 5;
 
 /// Streams `audio` in seeded chunks and writes `measures` (hstacked) for every candidate once it is ready.
 /// Candidates within a hop of the clip end are left NaN: the reference truncates windows there.
-fn run(bank: &mut MeasureBank, audio: &[f64], cands: &[Candidate], measures: &[Measure], seed: u64) -> Vec<Vec<f64>> {
+fn run(
+    bank: &mut MeasureBank,
+    audio: &[f64],
+    cands: &[Candidate],
+    measures: &[Measure],
+    seed: u64,
+) -> Vec<Vec<f64>> {
     let width: usize = measures.iter().map(|m| m.width()).sum();
     let ready: Vec<u64> = cands.iter().map(|c| bank.ready_sample(c)).collect();
     let mut got = vec![vec![f64::NAN; width]; cands.len()];
-    let mut order: Vec<usize> = (0..cands.len()).filter(|&i| ready[i] + 256 <= audio.len() as u64).collect();
+    let mut order: Vec<usize> = (0..cands.len())
+        .filter(|&i| ready[i] + 256 <= audio.len() as u64)
+        .collect();
     order.sort_by_key(|&i| ready[i]);
     let (mut seed, mut at, mut next) = (seed, 0usize, 0usize);
     while at < audio.len() {
-        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let end = (at + 256 + ((seed >> 33) % 769) as usize).min(audio.len());
         bank.push(&audio[at..end]);
         at = end;
@@ -34,7 +44,11 @@ fn run(bank: &mut MeasureBank, audio: &[f64], cands: &[Candidate], measures: &[M
 
 /// Max abs error per measure against `want[m]` (n, width); tail3's pre_rel_db is skipped for onsets the
 /// reference computes with its reflected (non-causal) start. Returns (measure, max err, values over 1e-6).
-fn compare(got: &[Vec<f64>], want: &[(Measure, &[f64])], onset_s: &[f64]) -> Vec<(Measure, f64, usize)> {
+fn compare(
+    got: &[Vec<f64>],
+    want: &[(Measure, &[f64])],
+    onset_s: &[f64],
+) -> Vec<(Measure, f64, usize)> {
     let mut col = 0;
     let mut out = Vec::new();
     for &(m, w) in want {
@@ -72,26 +86,51 @@ fn compare(got: &[Vec<f64>], want: &[(Measure, &[f64])], onset_s: &[f64]) -> Vec
 fn tmpl3_matches_the_lab_on_any_candidates() {
     let g = golden::unit("tmpl3.mkick");
     let mut model = golden::model("kick");
-    for name in ["fit.tmpl3.all", "fit.tmpl3.low", "fit.tmpl3.high", "fit.tmpl3.span"] {
+    for name in [
+        "fit.tmpl3.all",
+        "fit.tmpl3.low",
+        "fit.tmpl3.high",
+        "fit.tmpl3.span",
+    ] {
         model.insert(name, g.get(name).unwrap().clone());
     }
     let measures = [Measure::Tmpl3];
     let audio = golden::audio_f64(&g);
     let k = g.shape("cand_hop").unwrap()[0];
-    let (cand, avail) = (g.i64s("cand_hop", &[k]).unwrap(), g.i64s("avail_hop", &[k]).unwrap());
-    let cands: Vec<Candidate> =
-        (0..k).map(|i| Candidate { cand_hop: cand[i] as u64, avail_hop: avail[i] as u64, f15: [0.0; 15] }).collect();
+    let (cand, avail) = (
+        g.i64s("cand_hop", &[k]).unwrap(),
+        g.i64s("avail_hop", &[k]).unwrap(),
+    );
+    let cands: Vec<Candidate> = (0..k)
+        .map(|i| Candidate {
+            cand_hop: cand[i] as u64,
+            avail_hop: avail[i] as u64,
+            f15: [0.0; 15],
+        })
+        .collect();
     let mut bank = MeasureBank::new(&model, &measures).unwrap();
     let got = run(&mut bank, &audio, &cands, &measures, 5);
     let compared = got.iter().filter(|r| !r[0].is_nan()).count();
-    assert!(compared + 2 >= k, "only {compared} of {k} candidates compared");
+    assert!(
+        compared + 2 >= k,
+        "only {compared} of {k} candidates compared"
+    );
     let want = g.f64s("m.tmpl3", &[k, 3]).unwrap();
-    for (m, err, bad) in compare(&got, &[(Measure::Tmpl3, want)], g.f64s("onset_s", &[k]).unwrap()) {
-        println!("unit {}: {compared} of {k} candidates, max abs err {err:.3e}, {bad} over 1e-6", m.name());
+    for (m, err, bad) in compare(
+        &got,
+        &[(Measure::Tmpl3, want)],
+        g.f64s("onset_s", &[k]).unwrap(),
+    ) {
+        println!(
+            "unit {}: {compared} of {k} candidates, max abs err {err:.3e}, {bad} over 1e-6",
+            m.name()
+        );
         assert_eq!(bad, 0, "{}: {bad} values over 1e-6", m.name());
     }
     // Similarities spread: the comparison means something.
-    let (lo, hi) = want.iter().fold((f64::MAX, f64::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+    let (lo, hi) = want
+        .iter()
+        .fold((f64::MAX, f64::MIN), |(a, b), &v| (a.min(v), b.max(v)));
     assert!(hi - lo > 0.1, "tmpl3 fixture is degenerate ({lo}..{hi})");
 }
 
@@ -103,26 +142,51 @@ fn tmpl3_matches_the_lab_on_any_candidates() {
 fn measures_match_the_lab_on_any_candidates() {
     let model = golden::model("kick");
     let g = golden::unit("measures.mkick");
-    let measures = [Measure::Tail3, Measure::Prof32, Measure::Fall16, Measure::Low16];
+    let measures = [
+        Measure::Tail3,
+        Measure::Prof32,
+        Measure::Fall16,
+        Measure::Low16,
+    ];
     let audio = golden::audio_f64(&g);
     let k = g.shape("cand_hop").unwrap()[0];
-    let (cand, avail) = (g.i64s("cand_hop", &[k]).unwrap(), g.i64s("avail_hop", &[k]).unwrap());
-    let cands: Vec<Candidate> =
-        (0..k).map(|i| Candidate { cand_hop: cand[i] as u64, avail_hop: avail[i] as u64, f15: [0.0; 15] }).collect();
+    let (cand, avail) = (
+        g.i64s("cand_hop", &[k]).unwrap(),
+        g.i64s("avail_hop", &[k]).unwrap(),
+    );
+    let cands: Vec<Candidate> = (0..k)
+        .map(|i| Candidate {
+            cand_hop: cand[i] as u64,
+            avail_hop: avail[i] as u64,
+            f15: [0.0; 15],
+        })
+        .collect();
     let mut bank = MeasureBank::new(&model, &measures).unwrap();
     let got = run(&mut bank, &audio, &cands, &measures, 3);
     let compared = got.iter().filter(|r| !r[0].is_nan()).count();
-    assert!(compared + 2 >= k, "only {compared} of {k} candidates compared");
+    assert!(
+        compared + 2 >= k,
+        "only {compared} of {k} candidates compared"
+    );
     let names: Vec<String> = measures.iter().map(|m| format!("m.{}", m.name())).collect();
-    let want: Vec<(Measure, &[f64])> =
-        measures.iter().zip(&names).map(|(&m, n)| (m, g.f64s(n, &[k, m.width()]).unwrap())).collect();
+    let want: Vec<(Measure, &[f64])> = measures
+        .iter()
+        .zip(&names)
+        .map(|(&m, n)| (m, g.f64s(n, &[k, m.width()]).unwrap()))
+        .collect();
     for (m, err, bad) in compare(&got, &want, g.f64s("onset_s", &[k]).unwrap()) {
-        println!("unit {}: {compared} of {k} candidates, max abs err {err:.3e}, {bad} over 1e-6", m.name());
+        println!(
+            "unit {}: {compared} of {k} candidates, max abs err {err:.3e}, {bad} over 1e-6",
+            m.name()
+        );
         assert_eq!(bad, 0, "{}: {bad} values over 1e-6", m.name());
     }
     // fall16 is not all zeros on this clip: the comparison means something.
     let fall = want[2].1;
-    assert!(fall.iter().filter(|v| v.abs() > 1.0).count() > k, "fall16 fixture is degenerate");
+    assert!(
+        fall.iter().filter(|v| v.abs() > 1.0).count() > k,
+        "fall16 fixture is degenerate"
+    );
 }
 
 #[test]
@@ -131,5 +195,10 @@ fn builds_only_the_streams_its_measures_read() {
     let bank = MeasureBank::new(&model, &[Measure::F15]).unwrap();
     assert!(bank.k.is_none() && bank.spec.is_none() && bank.tail.is_none() && bank.low.is_none());
     let bank = MeasureBank::new(&model, &[Measure::Fall16]).unwrap();
-    assert!(bank.spec.is_some() && bank.templates.is_none() && bank.tail.is_none() && bank.low.is_none());
+    assert!(
+        bank.spec.is_some()
+            && bank.templates.is_none()
+            && bank.tail.is_none()
+            && bank.low.is_none()
+    );
 }

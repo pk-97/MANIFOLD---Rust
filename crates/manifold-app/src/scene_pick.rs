@@ -37,7 +37,10 @@ pub(crate) struct ScenePick {
 /// Where `point` (render pixels of `view`) sits in the picture, as a
 /// fraction from its top left.
 pub(crate) fn uv_of(view: &crate::scene_gizmo::GizmoView, point: (f32, f32)) -> [f32; 2] {
-    [point.0 / view.width.max(1) as f32, point.1 / view.height.max(1) as f32]
+    [
+        point.0 / view.width.max(1) as f32,
+        point.1 / view.height.max(1) as f32,
+    ]
 }
 
 /// What a pick found: the item drawn at the point, or `None` for empty space.
@@ -71,12 +74,18 @@ impl ScenePicks {
     pub fn send(&mut self, generators: &mut GeneratorRenderer) {
         for pick in self.unsent.drain(..) {
             // A picture answers one pick at a time: the newer click wins.
-            self.pending.retain(|(older, ..)| older.layer != pick.layer || older.surface != pick.surface);
+            self.pending
+                .retain(|(older, ..)| older.layer != pick.layer || older.surface != pick.surface);
             self.next_id += 1;
-            let request = PickRequest { id: self.next_id, uv: pick.uv };
+            let request = PickRequest {
+                id: self.next_id,
+                uv: pick.uv,
+            };
             match pick.surface {
                 PickSurface::Output => generators.request_pick(&pick.layer, request),
-                PickSurface::Viewport => generators.request_scene_viewport_pick(&pick.layer, request),
+                PickSurface::Viewport => {
+                    generators.request_scene_viewport_pick(&pick.layer, request)
+                }
             }
             self.pending.push((pick, self.next_id, 0));
         }
@@ -116,9 +125,13 @@ impl ScenePicks {
         self.answered
             .drain(..)
             .map(|(pick, slot)| {
-                let item = slot.zip(project.and_then(|project| project.scene_of(&pick.layer))).and_then(|(slot, doc)| {
-                    manifold_nodes_scene::node_graph::scene_compile::drawn_items(doc).into_iter().nth(slot as usize)
-                });
+                let item = slot
+                    .zip(project.and_then(|project| project.scene_of(&pick.layer)))
+                    .and_then(|(slot, doc)| {
+                        manifold_nodes_scene::node_graph::scene_compile::drawn_items(doc)
+                            .into_iter()
+                            .nth(slot as usize)
+                    });
                 PickedItem { pick, item }
             })
             .collect()

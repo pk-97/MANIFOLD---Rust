@@ -64,7 +64,11 @@ impl InspectorCompositePanel {
     /// D7): its region is what the ghost pass paints, and the frame refills
     /// the region when it holds anything else.
     pub fn card_drag_ghost_root(&self) -> Option<NodeId> {
-        if self.card_drag_active { self.card_drag_region_root } else { None }
+        if self.card_drag_active {
+            self.card_drag_region_root
+        } else {
+            None
+        }
     }
 
     /// Route drag events to the pressed sub-panel.
@@ -90,7 +94,9 @@ impl InspectorCompositePanel {
             if moved {
                 self.scrolled_in_place = true;
             }
-            return vec![PanelAction::Transport(TransportAction::InspectorScrolled(0.0))];
+            return vec![PanelAction::Transport(TransportAction::InspectorScrolled(
+                0.0,
+            ))];
         }
 
         if let Some(target) = self.pressed_target {
@@ -172,14 +178,33 @@ impl InspectorCompositePanel {
         let Some(node_id) = node_id else {
             return false;
         };
-        let group_drag = self.group_nodes.iter().find(|nodes| nodes.header == node_id)
-            .and_then(|nodes| self.rack_groups[Self::scope_idx(self.active_tab)].iter().find(|group| group.id == nodes.group_id))
+        let group_drag = self
+            .group_nodes
+            .iter()
+            .find(|nodes| nodes.header == node_id)
+            .and_then(|nodes| {
+                self.rack_groups[Self::scope_idx(self.active_tab)]
+                    .iter()
+                    .find(|group| group.id == nodes.group_id)
+            })
             .cloned();
-        let handle = group_drag.as_ref().and_then(|group| {
-            self.cards_for_tab(self.active_tab).iter().enumerate()
-                .find(|(_, card)| group.member_ids.contains(card.effect_id()))
-                .map(|(index, card)| (self.active_tab, index, card.effect_index(), group.name.clone()))
-        }).or_else(|| self.find_drag_handle(node_id));
+        let handle = group_drag
+            .as_ref()
+            .and_then(|group| {
+                self.cards_for_tab(self.active_tab)
+                    .iter()
+                    .enumerate()
+                    .find(|(_, card)| group.member_ids.contains(card.effect_id()))
+                    .map(|(index, card)| {
+                        (
+                            self.active_tab,
+                            index,
+                            card.effect_index(),
+                            group.name.clone(),
+                        )
+                    })
+            })
+            .or_else(|| self.find_drag_handle(node_id));
         if let Some(group) = group_drag.as_ref() {
             self.select_rack_group(&group.id, false);
         }
@@ -191,13 +216,33 @@ impl InspectorCompositePanel {
             self.card_drag_destination_group = None;
             let (selection, cards) = self.selection_for_tab(tab);
             let dragged = cards[card_idx].effect_id();
-            self.card_drag_effect_ids = cards.iter()
-                .filter(|card| if selection.contains(dragged) { selection.contains(card.effect_id()) } else { card.effect_id() == dragged })
-                .map(|card| card.effect_id().clone()).collect();
+            self.card_drag_effect_ids = cards
+                .iter()
+                .filter(|card| {
+                    if selection.contains(dragged) {
+                        selection.contains(card.effect_id())
+                    } else {
+                        card.effect_id() == dragged
+                    }
+                })
+                .map(|card| card.effect_id().clone())
+                .collect();
             let groups = &self.rack_groups[Self::scope_idx(tab)];
-            let selected_groups: Vec<_> = groups.iter().filter(|group|
-                group.member_ids.iter().any(|id| self.card_drag_effect_ids.contains(id))).collect();
-            if selected_groups.iter().all(|group| group.member_ids.iter().all(|id| self.card_drag_effect_ids.contains(id))) {
+            let selected_groups: Vec<_> = groups
+                .iter()
+                .filter(|group| {
+                    group
+                        .member_ids
+                        .iter()
+                        .any(|id| self.card_drag_effect_ids.contains(id))
+                })
+                .collect();
+            if selected_groups.iter().all(|group| {
+                group
+                    .member_ids
+                    .iter()
+                    .all(|id| self.card_drag_effect_ids.contains(id))
+            }) {
                 self.card_drag_group = selected_groups.first().map(|group| group.id.clone());
             }
             self.card_drag_tab = tab;
@@ -232,7 +277,9 @@ impl InspectorCompositePanel {
 
     /// Tree rebuilds replace every widget id, including the active drag overlay.
     pub fn rebuild_card_drag_overlay(&mut self, tree: &mut UITree) {
-        if !self.card_drag_active { return; }
+        if !self.card_drag_active {
+            return;
+        }
         // Create ghost + indicator nodes — scoped to the correct column
         // Single full-width active column — both tabs drag within it.
         //
@@ -287,7 +334,9 @@ impl InspectorCompositePanel {
         tree.end_region(region, region_start);
         self.card_drag_region_root = Some(region.root);
 
-        if let Some(pos) = self.card_drag_pos { self.update_card_drag(pos, tree); }
+        if let Some(pos) = self.card_drag_pos {
+            self.update_card_drag(pos, tree);
+        }
     }
 
     /// Update card drag ghost + indicator during drag.
@@ -316,10 +365,7 @@ impl InspectorCompositePanel {
         let ghost_y = (pos.y - DRAG_GHOST_H * 0.5).clamp(vp.y, vp.y + vp.height - DRAG_GHOST_H);
 
         if let Some(ghost_id) = self.card_drag_ghost_id {
-            tree.set_bounds(
-                ghost_id,
-                Rect::new(ghost_x, ghost_y, ghost_w, DRAG_GHOST_H),
-            );
+            tree.set_bounds(ghost_id, Rect::new(ghost_x, ghost_y, ghost_w, DRAG_GHOST_H));
         }
 
         // Compute target card index from Y position. Hit-test against live
@@ -360,10 +406,26 @@ impl InspectorCompositePanel {
             let cards = self.cards_for_tab(tab);
             for nodes in &self.group_nodes {
                 let bounds = tree.get_bounds(nodes.frame);
-                if pos.y < bounds.y || pos.y > bounds.y + bounds.height { continue; }
-                let Some(group) = self.rack_groups[Self::scope_idx(tab)].iter().find(|group| group.id == nodes.group_id) else { continue; };
-                let Some(first) = cards.iter().position(|card| group.member_ids.contains(card.effect_id())) else { continue; };
-                let last = cards.iter().rposition(|card| group.member_ids.contains(card.effect_id())).unwrap() + 1;
+                if pos.y < bounds.y || pos.y > bounds.y + bounds.height {
+                    continue;
+                }
+                let Some(group) = self.rack_groups[Self::scope_idx(tab)]
+                    .iter()
+                    .find(|group| group.id == nodes.group_id)
+                else {
+                    continue;
+                };
+                let Some(first) = cards
+                    .iter()
+                    .position(|card| group.member_ids.contains(card.effect_id()))
+                else {
+                    continue;
+                };
+                let last = cards
+                    .iter()
+                    .rposition(|card| group.member_ids.contains(card.effect_id()))
+                    .unwrap()
+                    + 1;
                 if self.card_drag_group.is_some() || pos.x < bounds.x + Self::RACK_INDENT {
                     // A group stays a unit. Its outside edge is also the explicit
                     // route for pulling individual cards out of a group.
@@ -416,7 +478,10 @@ impl InspectorCompositePanel {
         let tab = self.card_drag_tab;
         let to_card = self.card_drag_target_index;
 
-        let before = self.cards_for_tab(tab).iter().skip(to_card)
+        let before = self
+            .cards_for_tab(tab)
+            .iter()
+            .skip(to_card)
             .find(|card| !self.card_drag_effect_ids.contains(card.effect_id()))
             .map(|card| card.effect_id().clone());
         let action = PanelAction::Params(ParamsAction::EffectMove {
@@ -434,7 +499,9 @@ impl InspectorCompositePanel {
     /// Cancel without mutating the stack, including release outside its viewport.
     pub fn cancel_card_drag(&mut self, tree: &mut UITree) {
         for cards in &self.effects {
-            for card in cards { card.set_drag_dimmed(tree, false); }
+            for card in cards {
+                card.set_drag_dimmed(tree, false);
+            }
         }
         self.hide_card_drag_overlay(tree);
         self.card_drag_active = false;
@@ -448,15 +515,23 @@ impl InspectorCompositePanel {
     }
 
     pub(super) fn tick_card_drag_scroll(&mut self, tree: &mut UITree, dt_ms: f32) {
-        let Some(pos) = self.card_drag_pos.filter(|_| self.card_drag_active && self.card_drag_valid) else { return; };
+        let Some(pos) = self
+            .card_drag_pos
+            .filter(|_| self.card_drag_active && self.card_drag_valid)
+        else {
+            return;
+        };
         let viewport = self.viewport_rect;
         const EDGE: f32 = 32.0;
         let direction = if pos.y < viewport.y + EDGE {
             (viewport.y + EDGE - pos.y) / EDGE
         } else if pos.y > viewport.y + viewport.height - EDGE {
             -(pos.y - (viewport.y + viewport.height - EDGE)) / EDGE
-        } else { return; };
-        let delta = direction * 360.0 * dt_ms.min(50.0) / 1000.0 / crate::scroll_container::SCROLL_SPEED;
+        } else {
+            return;
+        };
+        let delta =
+            direction * 360.0 * dt_ms.min(50.0) / 1000.0 / crate::scroll_container::SCROLL_SPEED;
         if self.try_scroll_in_place(delta, pos.x, tree) {
             self.update_card_drag(pos, tree);
         }

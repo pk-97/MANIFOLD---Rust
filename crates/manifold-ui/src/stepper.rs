@@ -68,7 +68,10 @@ mod tests {
     #[test]
     fn every_zone_right_click_resets() {
         for zone in [StepperZone::Minus, StepperZone::Value, StepperZone::Plus] {
-            assert_eq!(Stepper::intent_for(zone, Gesture::RightClick), Some(StepperIntent::ResetToDefault));
+            assert_eq!(
+                Stepper::intent_for(zone, Gesture::RightClick),
+                Some(StepperIntent::ResetToDefault)
+            );
             assert_eq!(Stepper::intent_for(zone, Gesture::Click), None);
         }
     }
@@ -78,8 +81,17 @@ mod tests {
     /// fast discrete-step clicks, never text entry).
     #[test]
     fn only_value_zone_double_click_opens_type_in() {
-        assert_eq!(Stepper::intent_for(StepperZone::Value, Gesture::DoubleClick), Some(StepperIntent::EditValue));
-        assert_eq!(Stepper::intent_for(StepperZone::Minus, Gesture::DoubleClick), None);
-        assert_eq!(Stepper::intent_for(StepperZone::Plus, Gesture::DoubleClick), None);
+        assert_eq!(
+            Stepper::intent_for(StepperZone::Value, Gesture::DoubleClick),
+            Some(StepperIntent::EditValue)
+        );
+        assert_eq!(
+            Stepper::intent_for(StepperZone::Minus, Gesture::DoubleClick),
+            None
+        );
+        assert_eq!(
+            Stepper::intent_for(StepperZone::Plus, Gesture::DoubleClick),
+            None
+        );
     }
 }

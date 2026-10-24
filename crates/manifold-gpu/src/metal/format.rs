@@ -4,8 +4,8 @@
 
 use objc2_metal::{
     MTLBlendFactor, MTLBlendOperation, MTLCompareFunction, MTLPixelFormat, MTLPrimitiveType,
-    MTLSamplerAddressMode, MTLSamplerMinMagFilter, MTLSamplerMipFilter,
-    MTLTextureType, MTLTextureUsage, MTLTriangleFillMode, MTLVertexFormat,
+    MTLSamplerAddressMode, MTLSamplerMinMagFilter, MTLSamplerMipFilter, MTLTextureType,
+    MTLTextureUsage, MTLTriangleFillMode, MTLVertexFormat,
 };
 
 use crate::types::*;

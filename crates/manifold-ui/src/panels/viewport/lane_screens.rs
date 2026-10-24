@@ -64,12 +64,22 @@ impl TimelineViewportPanel {
         };
         let above: f32 = (0..lane_index).map(height_of).sum();
         let strip_y = self.track_y(layer) + color::TRACK_HEIGHT + above;
-        Rect::new(g.tx0, strip_y, (g.tx1 - g.tx0).max(0.0), height_of(lane_index))
+        Rect::new(
+            g.tx0,
+            strip_y,
+            (g.tx1 - g.tx0).max(0.0),
+            height_of(lane_index),
+        )
     }
 
     /// A lane's screen with its facts copied from the lane and its geometry
     /// filled by [`Self::fill_lane_geometry`].
-    fn new_lane_screen(&self, g: &LaneGeometry, strip_rect: Rect, lane: &UiAutomationLane) -> AutomationLaneScreen {
+    fn new_lane_screen(
+        &self,
+        g: &LaneGeometry,
+        strip_rect: Rect,
+        lane: &UiAutomationLane,
+    ) -> AutomationLaneScreen {
         let mut screen = AutomationLaneScreen {
             strip_rect,
             pixels_per_beat: g.pixels_per_beat,
@@ -107,7 +117,8 @@ impl TimelineViewportPanel {
         screen: &mut AutomationLaneScreen,
     ) {
         let graph = AutomationLaneScreen::curve_rect_for(strip_rect);
-        let (title_rect, title_value_w) = model::automation_title_rect(&*self.text_measure, strip_rect, lane);
+        let (title_rect, title_value_w) =
+            model::automation_title_rect(&*self.text_measure, strip_rect, lane);
 
         // Segment-aware geometry keeps exact breakpoint attachment and gives
         // Hold segments their vertical edge. Curves receive more samples as
@@ -133,17 +144,23 @@ impl TimelineViewportPanel {
             // Those endpoints are needed to identify and drag a segment
             // crossing the viewport edge, while the binary-search bounds keep
             // the work proportional to the visible points.
-            let lower = lane.points.partition_point(|p| p.beat.as_f32() < g.min_beat);
-            let upper = lane.points.partition_point(|p| p.beat.as_f32() <= g.max_beat);
+            let lower = lane
+                .points
+                .partition_point(|p| p.beat.as_f32() < g.min_beat);
+            let upper = lane
+                .points
+                .partition_point(|p| p.beat.as_f32() <= g.max_beat);
             let first = lower.saturating_sub(1);
             let last = (upper + 1).min(lane.points.len());
-            screen.dots.extend(lane.points[first..last].iter().map(|p| model::AutomationDotScreen {
-                x: self.beat_to_pixel(p.beat),
-                y: graph.y + graph.height * (1.0 - p.value_norm),
-                beat: p.beat,
-                value_norm: p.value_norm,
-                shape: p.shape,
-                past_end: p.past_end,
+            screen.dots.extend(lane.points[first..last].iter().map(|p| {
+                model::AutomationDotScreen {
+                    x: self.beat_to_pixel(p.beat),
+                    y: graph.y + graph.height * (1.0 - p.value_norm),
+                    beat: p.beat,
+                    value_norm: p.value_norm,
+                    shape: p.shape,
+                    past_end: p.past_end,
+                }
             }));
         }
 
@@ -197,12 +214,17 @@ impl TimelineViewportPanel {
         param_id: &ParamId,
         fill: impl FnOnce(&mut UiAutomationLane),
     ) -> bool {
-        let Some((layer, lane_index)) = self.automation_lanes_by_layer.iter().enumerate().find_map(|(i, lanes)| {
-            lanes
+        let Some((layer, lane_index)) =
+            self.automation_lanes_by_layer
                 .iter()
-                .position(|l| l.target == *target && l.param_id == *param_id)
-                .map(|k| (i, k))
-        }) else {
+                .enumerate()
+                .find_map(|(i, lanes)| {
+                    lanes
+                        .iter()
+                        .position(|l| l.target == *target && l.param_id == *param_id)
+                        .map(|k| (i, k))
+                })
+        else {
             return false;
         };
         let lane = &mut self.automation_lanes_by_layer[layer][lane_index];
@@ -212,7 +234,11 @@ impl TimelineViewportPanel {
         fill(lane);
         let g = self.lane_geometry();
         // A lane whose track is off screen has no screen to rebuild.
-        let Some(slot) = self.automation_lane_sources.iter().position(|&s| s == (layer, lane_index)) else {
+        let Some(slot) = self
+            .automation_lane_sources
+            .iter()
+            .position(|&s| s == (layer, lane_index))
+        else {
             return true;
         };
         let strip_rect = self.lane_strip_rect(&g, layer, lane_index);

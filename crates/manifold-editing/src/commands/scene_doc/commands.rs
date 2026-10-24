@@ -55,7 +55,11 @@ pub trait SceneEdit {
     fn layer(&self) -> &LayerId;
     /// Edit the document only. `values` reads the layer's params as they
     /// were before the edit.
-    fn edit_doc(&mut self, doc: &mut SceneDoc, values: &dyn Fn(&str) -> Option<f32>) -> Result<(), SceneEditError>;
+    fn edit_doc(
+        &mut self,
+        doc: &mut SceneDoc,
+        values: &dyn Fn(&str) -> Option<f32>,
+    ) -> Result<(), SceneEditError>;
     /// Once the edited document is installed: write what needs its params.
     /// Returns each written param's value and base before, for undo.
     fn after_install(&mut self, _project: &mut Project) -> Vec<(String, f32, f32)> {
@@ -69,7 +73,9 @@ macro_rules! scene_command_common {
         fn do_execute(&mut self, project: &mut Project) {
             let layer = self.layer.clone();
             let mut step = std::mem::take(&mut self.step);
-            let applied = step.run(project, &layer, |doc, values| SceneEdit::edit_doc(self, doc, values));
+            let applied = step.run(project, &layer, |doc, values| {
+                SceneEdit::edit_doc(self, doc, values)
+            });
             self.step = step;
             if applied {
                 let written = SceneEdit::after_install(self, project);
@@ -126,7 +132,17 @@ impl AddSceneItemCommand {
     pub fn with_subtree(layer: LayerId, parent: Option<ItemId>, index: usize, item: Item) -> Self {
         let kind = item.kind();
         let id = item.id.clone();
-        Self { layer, kind, parent, index, source: None, id, prepared: Some((item, BTreeMap::new())), rows: None, step: Step::default() }
+        Self {
+            layer,
+            kind,
+            parent,
+            index,
+            source: None,
+            id,
+            prepared: Some((item, BTreeMap::new())),
+            rows: None,
+            step: Step::default(),
+        }
     }
 
     /// Also put `rows` onto the copies `map` names once the item is in, in
@@ -144,19 +160,36 @@ impl AddSceneItemCommand {
         source: Option<ItemId>,
         id: ItemId,
     ) -> Self {
-        Self { layer, kind, parent, index, source, id, prepared: None, rows: None, step: Step::default() }
+        Self {
+            layer,
+            kind,
+            parent,
+            index,
+            source,
+            id,
+            prepared: None,
+            rows: None,
+            step: Step::default(),
+        }
     }
 
     fn prepare(&self, doc: &SceneDoc) -> Result<(Item, BTreeMap<ItemId, ItemId>), SceneEditError> {
         let Some(source) = &self.source else {
-            let item = Item::new(self.id.clone(), self.kind.default_name(), ItemFields::default_for(self.kind));
+            let item = Item::new(
+                self.id.clone(),
+                self.kind.default_name(),
+                ItemFields::default_for(self.kind),
+            );
             return Ok((item, BTreeMap::new()));
         };
         let root = self.id.clone();
         doc.copy_subtree(source, |old| {
             if old == source {
                 root.clone()
-            } else if let Some(rest) = old.as_str().strip_prefix(source.as_str()).and_then(|r| r.strip_prefix('-'))
+            } else if let Some(rest) = old
+                .as_str()
+                .strip_prefix(source.as_str())
+                .and_then(|r| r.strip_prefix('-'))
             {
                 // An import's parts stay keyed by file node path under the copy's id.
                 ItemId::new(format!("{root}-{rest}"))
@@ -172,7 +205,11 @@ impl SceneEdit for AddSceneItemCommand {
         &self.layer
     }
 
-    fn edit_doc(&mut self, doc: &mut SceneDoc, _: &dyn Fn(&str) -> Option<f32>) -> Result<(), SceneEditError> {
+    fn edit_doc(
+        &mut self,
+        doc: &mut SceneDoc,
+        _: &dyn Fn(&str) -> Option<f32>,
+    ) -> Result<(), SceneEditError> {
         if self.prepared.is_none() {
             self.prepared = Some(self.prepare(doc)?);
         }
@@ -200,7 +237,11 @@ impl SceneEdit for AddSceneItemCommand {
 
 impl Command for AddSceneItemCommand {
     fn description(&self) -> &str {
-        if self.source.is_some() { "Duplicate Item" } else { "Add Item" }
+        if self.source.is_some() {
+            "Duplicate Item"
+        } else {
+            "Add Item"
+        }
     }
 
     scene_command_common!();
@@ -217,7 +258,11 @@ pub struct RemoveSceneItemCommand {
 
 impl RemoveSceneItemCommand {
     pub fn new(layer: LayerId, id: ItemId) -> Self {
-        Self { layer, id, step: Step::default() }
+        Self {
+            layer,
+            id,
+            step: Step::default(),
+        }
     }
 }
 
@@ -226,13 +271,16 @@ impl SceneEdit for RemoveSceneItemCommand {
         &self.layer
     }
 
-    fn edit_doc(&mut self, doc: &mut SceneDoc, _: &dyn Fn(&str) -> Option<f32>) -> Result<(), SceneEditError> {
+    fn edit_doc(
+        &mut self,
+        doc: &mut SceneDoc,
+        _: &dyn Fn(&str) -> Option<f32>,
+    ) -> Result<(), SceneEditError> {
         doc.remove(&self.id).map(|_| ())
     }
 }
 
 impl Command for RemoveSceneItemCommand {
-
     fn description(&self) -> &str {
         "Remove Item"
     }
@@ -256,7 +304,14 @@ pub struct ReparentSceneItemCommand {
 
 impl ReparentSceneItemCommand {
     pub fn new(layer: LayerId, id: ItemId, parent: Option<ItemId>, index: usize) -> Self {
-        Self { layer, id, parent, index, keep: Vec::new(), step: Step::default() }
+        Self {
+            layer,
+            id,
+            parent,
+            index,
+            keep: Vec::new(),
+            step: Step::default(),
+        }
     }
 }
 
@@ -265,13 +320,22 @@ impl SceneEdit for ReparentSceneItemCommand {
         &self.layer
     }
 
-    fn edit_doc(&mut self, doc: &mut SceneDoc, values: &dyn Fn(&str) -> Option<f32>) -> Result<(), SceneEditError> {
+    fn edit_doc(
+        &mut self,
+        doc: &mut SceneDoc,
+        values: &dyn Fn(&str) -> Option<f32>,
+    ) -> Result<(), SceneEditError> {
         use manifold_core::scene_doc::transform::{frame_of, keep_world};
-        let (old_parent, _) = doc.locate(&self.id).ok_or_else(|| SceneEditError::UnknownItem(self.id.clone()))?;
+        let (old_parent, _) = doc
+            .locate(&self.id)
+            .ok_or_else(|| SceneEditError::UnknownItem(self.id.clone()))?;
         let from = frame_of(doc, old_parent.as_ref(), values);
         doc.reparent(&self.id, self.parent.as_ref(), self.index)?;
         let to = frame_of(doc, self.parent.as_ref(), values);
-        self.keep = doc.find(&self.id).map(|item| keep_world(item, from, to, values)).unwrap_or_default();
+        self.keep = doc
+            .find(&self.id)
+            .map(|item| keep_world(item, from, to, values))
+            .unwrap_or_default();
         Ok(())
     }
 
@@ -292,7 +356,6 @@ impl SceneEdit for ReparentSceneItemCommand {
 }
 
 impl Command for ReparentSceneItemCommand {
-
     fn description(&self) -> &str {
         "Move Item"
     }
@@ -310,7 +373,12 @@ pub struct RenameSceneItemCommand {
 
 impl RenameSceneItemCommand {
     pub fn new(layer: LayerId, id: ItemId, name: impl Into<String>) -> Self {
-        Self { layer, id, name: name.into(), step: Step::default() }
+        Self {
+            layer,
+            id,
+            name: name.into(),
+            step: Step::default(),
+        }
     }
 }
 
@@ -319,14 +387,19 @@ impl SceneEdit for RenameSceneItemCommand {
         &self.layer
     }
 
-    fn edit_doc(&mut self, doc: &mut SceneDoc, _: &dyn Fn(&str) -> Option<f32>) -> Result<(), SceneEditError> {
-        doc.find_mut(&self.id).ok_or_else(|| SceneEditError::UnknownItem(self.id.clone()))?.name = self.name.clone();
+    fn edit_doc(
+        &mut self,
+        doc: &mut SceneDoc,
+        _: &dyn Fn(&str) -> Option<f32>,
+    ) -> Result<(), SceneEditError> {
+        doc.find_mut(&self.id)
+            .ok_or_else(|| SceneEditError::UnknownItem(self.id.clone()))?
+            .name = self.name.clone();
         Ok(())
     }
 }
 
 impl Command for RenameSceneItemCommand {
-
     fn description(&self) -> &str {
         "Rename Item"
     }
@@ -346,7 +419,12 @@ pub struct SetSceneItemFieldsCommand {
 
 impl SetSceneItemFieldsCommand {
     pub fn new(layer: LayerId, id: ItemId, fields: ItemFields) -> Self {
-        Self { layer, id, fields, step: Step::default() }
+        Self {
+            layer,
+            id,
+            fields,
+            step: Step::default(),
+        }
     }
 }
 
@@ -355,7 +433,11 @@ impl SceneEdit for SetSceneItemFieldsCommand {
         &self.layer
     }
 
-    fn edit_doc(&mut self, doc: &mut SceneDoc, _: &dyn Fn(&str) -> Option<f32>) -> Result<(), SceneEditError> {
+    fn edit_doc(
+        &mut self,
+        doc: &mut SceneDoc,
+        _: &dyn Fn(&str) -> Option<f32>,
+    ) -> Result<(), SceneEditError> {
         doc.set_fields(&self.id, self.fields.clone())?;
         match doc.second_fill(&self.id) {
             Some(reason) => Err(SceneEditError::SecondOfType(reason)),
@@ -365,7 +447,6 @@ impl SceneEdit for SetSceneItemFieldsCommand {
 }
 
 impl Command for SetSceneItemFieldsCommand {
-
     fn description(&self) -> &str {
         "Set Item"
     }

@@ -1,5 +1,5 @@
-use super::*;
 use super::super::test_support::*;
+use super::*;
 use crate::PresetTypeId;
 use crate::effects::{ParamId, PresetInstance};
 
@@ -103,7 +103,10 @@ fn has_active_clip_triggers_true_only_when_some_layer_has_an_enabled_config() {
         crate::audio_mod::AudioBand::Low,
         false,
     ));
-    assert!(!p.has_active_clip_triggers(), "disabled config doesn't count");
+    assert!(
+        !p.has_active_clip_triggers(),
+        "disabled config doesn't count"
+    );
 
     p.timeline.layers[0].clip_triggers[0].enabled = true;
     assert!(p.has_active_clip_triggers());
@@ -149,16 +152,24 @@ fn armed_trigger_gate_mod_turns_the_analysis_gate_on_and_claims_its_send() {
     let send_a = send_with_id("A", "send-a");
     p.audio_setup.sends.push(send_a.clone());
 
-    let mut layer = crate::layer::Layer::new("PLASMA".into(), crate::types::LayerType::Generator, 0);
+    let mut layer =
+        crate::layer::Layer::new("PLASMA".into(), crate::types::LayerType::Generator, 0);
     layer.layer_id = crate::LayerId::new("plasma-layer");
     let gp = layer.gen_params_mut().unwrap();
     gp.params.push(gate_param("clip_trigger"));
-    gp.audio_mods_mut().push(armed_trigger_gate_mod(send_a.id.clone()));
+    gp.audio_mods_mut()
+        .push(armed_trigger_gate_mod(send_a.id.clone()));
     p.timeline.layers.push(layer);
 
-    assert!(p.has_active_audio_mods(), "armed trigger-gate mod must start capture");
+    assert!(
+        p.has_active_audio_mods(),
+        "armed trigger-gate mod must start capture"
+    );
     let consumed = p.analysis_consumed_sends();
-    assert!(consumed.contains(&send_a.id), "armed trigger's send must be analyzed");
+    assert!(
+        consumed.contains(&send_a.id),
+        "armed trigger's send must be analyzed"
+    );
     assert_eq!(p.audio_send_usage_count(&send_a.id), 1);
     let consumers = p.audio_mod_consumers(&send_a.id);
     assert_eq!(consumers.len(), 1);
@@ -175,7 +186,8 @@ fn disarmed_trigger_gate_mod_does_not_gate_analysis_but_still_counts_as_send_usa
     let send_a = send_with_id("A", "send-a");
     p.audio_setup.sends.push(send_a.clone());
 
-    let mut layer = crate::layer::Layer::new("PLASMA".into(), crate::types::LayerType::Generator, 0);
+    let mut layer =
+        crate::layer::Layer::new("PLASMA".into(), crate::types::LayerType::Generator, 0);
     layer.layer_id = crate::LayerId::new("plasma-layer");
     let gp = layer.gen_params_mut().unwrap();
     gp.params.push(gate_param("clip_trigger"));
@@ -184,13 +196,19 @@ fn disarmed_trigger_gate_mod_does_not_gate_analysis_but_still_counts_as_send_usa
     gp.audio_mods_mut().push(m);
     p.timeline.layers.push(layer);
 
-    assert!(!p.has_active_audio_mods(), "disarmed mod must not run capture");
+    assert!(
+        !p.has_active_audio_mods(),
+        "disarmed mod must not run capture"
+    );
     assert!(p.analysis_consumed_sends().is_empty());
     // Usage matches the plain audio-mod semantics: the mod still
     // references the send whether enabled or not, so deleting it should
     // warn.
     assert_eq!(p.audio_send_usage_count(&send_a.id), 1);
-    assert!(p.audio_mod_consumers(&send_a.id).is_empty(), "consumers lists armed only");
+    assert!(
+        p.audio_mod_consumers(&send_a.id).is_empty(),
+        "consumers lists armed only"
+    );
 }
 
 #[test]
@@ -199,7 +217,8 @@ fn audio_mod_consumers_resolves_layer_effect_and_param_names() {
     let send_a = send_with_id("A", "send-a");
     p.audio_setup.sends.push(send_a.clone());
 
-    let mut layer = crate::layer::Layer::new("BLOOM LAYER".into(), crate::types::LayerType::Video, 0);
+    let mut layer =
+        crate::layer::Layer::new("BLOOM LAYER".into(), crate::types::LayerType::Video, 0);
     layer.layer_id = crate::LayerId::new("bloom-layer");
     let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
     fx.audio_mods_mut().push(amplitude_mod(send_a.id.clone()));
@@ -210,7 +229,9 @@ fn audio_mod_consumers_resolves_layer_effect_and_param_names() {
     assert_eq!(consumers.len(), 1);
     assert_eq!(consumers[0].0, Some(crate::LayerId::new("bloom-layer")));
     assert!(
-        consumers[0].1.starts_with("BLOOM LAYER \u{2022} Bloom \u{2022} "),
+        consumers[0]
+            .1
+            .starts_with("BLOOM LAYER \u{2022} Bloom \u{2022} "),
         "label should read 'LayerName \u{2022} EffectName \u{2022} ParamName', got {}",
         consumers[0].1
     );
@@ -231,10 +252,16 @@ fn audio_mod_consumers_excludes_disabled_mods_and_other_sends() {
     mods.push(amplitude_mod(send_b.id.clone()));
     p.settings.master_effects.push(fx);
 
-    assert!(p.audio_mod_consumers(&send_a.id).is_empty(), "disabled mod excluded");
+    assert!(
+        p.audio_mod_consumers(&send_a.id).is_empty(),
+        "disabled mod excluded"
+    );
     let b_consumers = p.audio_mod_consumers(&send_b.id);
     assert_eq!(b_consumers.len(), 1);
-    assert_eq!(b_consumers[0].0, None, "master-effects mod has no owning layer");
+    assert_eq!(
+        b_consumers[0].0, None,
+        "master-effects mod has no owning layer"
+    );
     assert!(b_consumers[0].1.starts_with("Master \u{2022} "));
 }
 
@@ -261,8 +288,7 @@ fn clip_trigger_consumers_resolves_layer_and_band_label() {
     assert_eq!(consumers.len(), 1);
     assert_eq!(consumers[0].0, Some(crate::LayerId::new("strobe-layer")));
     assert_eq!(
-        consumers[0].1,
-        "Clip trigger \u{2022} STROBE \u{2022} Low",
+        consumers[0].1, "Clip trigger \u{2022} STROBE \u{2022} Low",
         "Transients formats as the bare band label"
     );
 }
@@ -296,12 +322,14 @@ fn clip_trigger_consumers_excludes_disabled_configs_and_other_sends() {
     layer.clip_triggers.push(other_send);
     p.timeline.layers.push(layer);
 
-    assert!(p.clip_trigger_consumers(&send_a.id).is_empty(), "disabled config excluded");
+    assert!(
+        p.clip_trigger_consumers(&send_a.id).is_empty(),
+        "disabled config excluded"
+    );
     let b_consumers = p.clip_trigger_consumers(&send_b.id);
     assert_eq!(b_consumers.len(), 1);
     assert_eq!(
-        b_consumers[0].1,
-        "Clip trigger \u{2022} L \u{2022} Centroid Full",
+        b_consumers[0].1, "Clip trigger \u{2022} L \u{2022} Centroid Full",
         "non-Transients spells out the detector"
     );
 }
@@ -310,19 +338,17 @@ fn clip_trigger_consumers_excludes_disabled_configs_and_other_sends() {
 fn scene_modifier_target_reads_and_mutates_only_local_snapshot() {
     let mut project = Project::default();
     let mut host = graph_def_with_id("host", "Host");
-    host.scene_modifiers.push(crate::scene_modifier_preset::SceneModifierInstanceDef {
-        id: crate::NodeId::new("modifier"),
-        scene: "scene".into(),
-        targets: crate::scene_modifier_preset::SceneTargetSelection::AllObjects,
-        mesh_frames: Vec::new(),
-        legacy_math_view_carrier: None,
-        graph: Box::new(graph_def_with_id("local", "Local")),
-    });
-    let mut layer = crate::layer::Layer::new_generator(
-        "Generator".into(),
-        PresetTypeId::new("PLASMA"),
-        0,
-    );
+    host.scene_modifiers
+        .push(crate::scene_modifier_preset::SceneModifierInstanceDef {
+            id: crate::NodeId::new("modifier"),
+            scene: "scene".into(),
+            targets: crate::scene_modifier_preset::SceneTargetSelection::AllObjects,
+            mesh_frames: Vec::new(),
+            legacy_math_view_carrier: None,
+            graph: Box::new(graph_def_with_id("local", "Local")),
+        });
+    let mut layer =
+        crate::layer::Layer::new_generator("Generator".into(), PresetTypeId::new("PLASMA"), 0);
     layer.layer_id = crate::LayerId::new("layer");
     layer.gen_params_mut().unwrap().graph = Some(host);
     project.timeline.layers.push(layer);
@@ -332,7 +358,10 @@ fn scene_modifier_target_reads_and_mutates_only_local_snapshot() {
         modifier_id: crate::NodeId::new("modifier"),
     };
     assert!(project.preset_instance(&target).is_none());
-    assert_eq!(project.instance_preset_id(&target).unwrap().as_str(), "local");
+    assert_eq!(
+        project.instance_preset_id(&target).unwrap().as_str(),
+        "local"
+    );
     let version = project.graph_target_owner(&target).unwrap().graph_version;
     project
         .with_graph_for_target_mut(&target, None, false, |graph| {
@@ -340,16 +369,27 @@ fn scene_modifier_target_reads_and_mutates_only_local_snapshot() {
         })
         .expect("local snapshot resolves");
     assert_eq!(
-        project.graph_for_target(&target, None).unwrap().name.as_deref(),
+        project
+            .graph_for_target(&target, None)
+            .unwrap()
+            .name
+            .as_deref(),
         Some("Changed")
     );
-    assert_eq!(project.graph_target_owner(&target).unwrap().graph_version, version + 1);
+    assert_eq!(
+        project.graph_target_owner(&target).unwrap().graph_version,
+        version + 1
+    );
 
     let new_id = PresetTypeId::new("local-renamed");
     assert!(project.set_instance_preset_id(&target, new_id.clone()));
     assert_eq!(project.instance_preset_id(&target).unwrap(), new_id);
     assert_eq!(
-        project.graph_target_owner(&target).unwrap().generator_type().as_str(),
+        project
+            .graph_target_owner(&target)
+            .unwrap()
+            .generator_type()
+            .as_str(),
         "PLASMA"
     );
 }
@@ -357,11 +397,8 @@ fn scene_modifier_target_reads_and_mutates_only_local_snapshot() {
 #[test]
 fn scene_modifier_target_invalid_lookup_does_not_materialize_the_graph() {
     let mut project = Project::default();
-    let mut layer = crate::layer::Layer::new(
-        "Generator".into(),
-        crate::types::LayerType::Generator,
-        0,
-    );
+    let mut layer =
+        crate::layer::Layer::new("Generator".into(), crate::types::LayerType::Generator, 0);
     layer.layer_id = crate::LayerId::new("layer");
     project.timeline.layers.push(layer);
     let target = crate::GraphTarget::SceneModifier {
@@ -369,20 +406,19 @@ fn scene_modifier_target_invalid_lookup_does_not_materialize_the_graph() {
         modifier_id: crate::NodeId::new("missing"),
     };
     let default = graph_def_with_id("host", "Host");
-    assert!(project
-        .with_graph_for_target_mut(&target, Some(&default), true, |_| {})
-        .is_none());
+    assert!(
+        project
+            .with_graph_for_target_mut(&target, Some(&default), true, |_| {})
+            .is_none()
+    );
     assert!(project.timeline.layers[0].generator_graph().is_none());
 }
 
 #[test]
 fn scene_modifier_target_materializes_default_and_bumps_versions() {
     let mut project = Project::default();
-    let mut layer = crate::layer::Layer::new(
-        "Generator".into(),
-        crate::types::LayerType::Generator,
-        0,
-    );
+    let mut layer =
+        crate::layer::Layer::new("Generator".into(), crate::types::LayerType::Generator, 0);
     layer.layer_id = crate::LayerId::new("layer");
     project.timeline.layers.push(layer);
     let target = crate::GraphTarget::Generator(crate::LayerId::new("layer"));
@@ -396,7 +432,10 @@ fn scene_modifier_target_materializes_default_and_bumps_versions() {
     let owner = project.graph_target_owner(&target).unwrap();
     assert_eq!(owner.graph_version, 1);
     assert_eq!(owner.graph_structure_version, 0);
-    assert_eq!(owner.graph.as_ref().unwrap().name.as_deref(), Some("Edited"));
+    assert_eq!(
+        owner.graph.as_ref().unwrap().name.as_deref(),
+        Some("Edited")
+    );
 
     project
         .with_graph_for_target_mut(&target, None, true, |_| {})
@@ -420,11 +459,8 @@ fn scene_modifier_target_duplicate_lookup_is_atomic() {
     };
     host.scene_modifiers.push(modifier.clone());
     host.scene_modifiers.push(modifier);
-    let mut layer = crate::layer::Layer::new_generator(
-        "Generator".into(),
-        PresetTypeId::new("PLASMA"),
-        0,
-    );
+    let mut layer =
+        crate::layer::Layer::new_generator("Generator".into(), PresetTypeId::new("PLASMA"), 0);
     layer.layer_id = crate::LayerId::new("layer");
     layer.gen_params_mut().unwrap().graph = Some(host);
     project.timeline.layers.push(layer);
@@ -437,9 +473,11 @@ fn scene_modifier_target_duplicate_lookup_is_atomic() {
         let owner = project.graph_target_owner(&target).unwrap();
         (owner.graph_version, owner.graph_structure_version)
     };
-    assert!(project
-        .with_graph_for_target_mut(&target, None, true, |_| {})
-        .is_none());
+    assert!(
+        project
+            .with_graph_for_target_mut(&target, None, true, |_| {})
+            .is_none()
+    );
     let owner = project.graph_target_owner(&target).unwrap();
     assert_eq!(owner.graph, before);
     assert_eq!(

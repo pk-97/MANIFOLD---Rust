@@ -112,13 +112,19 @@ impl DisplayCursor {
             None => {
                 // The epoch's first retirement, or a switch from exact: start
                 // at the picture already shown when it is comparable.
-                let shown = core.current_pin().map_or(bounds.earliest, |p| p.presented_time());
+                let shown = core
+                    .current_pin()
+                    .map_or(bounds.earliest, |p| p.presented_time());
                 self.fill_end = self.advancing + FILL;
                 shown.max(bounds.earliest).min(bounds.newest)
             }
             Some(_) if delta == 0.0 && core.pinned().is_some() => return core.pinned().copied(),
             Some(c) => {
-                debug_assert!(c <= bounds.newest, "the cursor never passes N: {c} > {}", bounds.newest);
+                debug_assert!(
+                    c <= bounds.newest,
+                    "the cursor never passes N: {c} > {}",
+                    bounds.newest
+                );
                 // A reanchor's jump is transport the clock dropped, not
                 // retirement delay: it neither ages nor feeds the window.
                 if delta > 0.0 && !reanchored {
@@ -126,11 +132,17 @@ impl DisplayCursor {
                     self.record((r - bounds.newest).max(0.0));
                 }
                 let deficit = self.deficit();
-                let guard = bounds.second.map_or(0.0, |second| (bounds.newest - second) / 4.0);
+                let guard = bounds
+                    .second
+                    .map_or(0.0, |second| (bounds.newest - second) / 4.0);
                 self.trace = CursorTrace { deficit, guard };
                 let target = r - deficit - guard;
                 let base = c + delta;
-                let k = if self.advancing < self.fill_end { FILL_RATE } else { RATE };
+                let k = if self.advancing < self.fill_end {
+                    FILL_RATE
+                } else {
+                    RATE
+                };
                 let u = ((target - base) / HORIZON).clamp(-k, k);
                 (base + delta * u).min(bounds.newest)
             }
@@ -173,13 +185,17 @@ impl DisplayCursor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frame_history::{Layout, FIELDS};
+    use crate::frame_history::{FIELDS, Layout};
     use manifold_physics::clock::{ClockFrame, SimulationClock};
 
     const LATTICE: [u32; 7] = [0, 0, 0, 1, 8, 8, 8];
 
     fn layout(epoch: u32) -> Layout {
-        Layout { epoch, lattice: LATTICE, fields: [0; FIELDS] }
+        Layout {
+            epoch,
+            lattice: LATTICE,
+            fields: [0; FIELDS],
+        }
     }
 
     #[derive(Clone, Debug)]
@@ -246,12 +262,22 @@ mod tests {
         /// One frame at transport `t`.
         fn at(&mut self, t: f64) -> Shown {
             self.transport = t;
-            let frame = self.clock.advance(manifold_physics::PlayedTime::from_played(t), 1.0 / self.hz, self.speed, self.reset, false, self.offline);
+            let frame = self.clock.advance(
+                manifold_physics::PlayedTime::from_played(t),
+                1.0 / self.hz,
+                self.speed,
+                self.reset,
+                false,
+                self.offline,
+            );
             self.frame += 1;
             let now = self.frame;
             let delay = &self.delay;
             let complete = |stamp: u64| stamp == 0 || stamp + delay(stamp) <= now;
-            let layout = Layout { epoch: frame.epoch, ..self.layout };
+            let layout = Layout {
+                epoch: frame.epoch,
+                ..self.layout
+            };
             self.core.set_layout(layout);
             let identity = self.identity;
             self.core.retire(complete, |_| Some([10, identity, 1, 0]));
@@ -259,12 +285,15 @@ mod tests {
             let requested = f64::from(frame.display_time as f32);
             let simulation = f64::from(frame.simulation_time as f32);
             let pin = if self.cursor_on && !self.offline {
-                self.cursor.present(&mut self.core, CursorFrame {
-                    epoch: frame.epoch,
-                    requested,
-                    transport: manifold_physics::PlayedTime::from_played(t),
-                    dropped: f64::from(frame.dropped_seconds as f32),
-                })
+                self.cursor.present(
+                    &mut self.core,
+                    CursorFrame {
+                        epoch: frame.epoch,
+                        requested,
+                        transport: manifold_physics::PlayedTime::from_played(t),
+                        dropped: f64::from(frame.dropped_seconds as f32),
+                    },
+                )
             } else {
                 self.cursor.clear();
                 self.core.select(requested)
@@ -274,7 +303,11 @@ mod tests {
             self.core.reclaim(complete);
             let mut published = false;
             if self.core.wants_publication(simulation) {
-                match self.core.free_slot(|_| true).or_else(|| self.core.can_grow().then(|| self.core.push_free())) {
+                match self
+                    .core
+                    .free_slot(|_| true)
+                    .or_else(|| self.core.can_grow().then(|| self.core.push_free()))
+                {
                     Some(slot) => {
                         self.core.begin(slot, simulation, now);
                         published = true;
@@ -286,7 +319,8 @@ mod tests {
                 }
             }
             let pin = if self.offline {
-                self.core.retire(|stamp| stamp == 0, |_| Some([10, identity, 1, 0]));
+                self.core
+                    .retire(|stamp| stamp == 0, |_| Some([10, identity, 1, 0]));
                 self.core.select(requested)
             } else {
                 pin
@@ -321,7 +355,11 @@ mod tests {
             Shown {
                 frame,
                 pin,
-                c: if self.cursor_on && !self.offline { self.cursor.cursor() } else { Some(requested) },
+                c: if self.cursor_on && !self.offline {
+                    self.cursor.cursor()
+                } else {
+                    Some(requested)
+                },
                 newest: self.core.retired_bounds().map(|b| b.newest),
                 trace: self.cursor.trace(),
                 published,
@@ -331,7 +369,9 @@ mod tests {
         /// `frames` frames at `fps` from the current transport.
         fn run(&mut self, fps: f64, frames: usize) -> Vec<Shown> {
             let start = self.transport;
-            (1..=frames).map(|i| self.at(start + i as f64 / fps)).collect()
+            (1..=frames)
+                .map(|i| self.at(start + i as f64 / fps))
+                .collect()
         }
     }
 
@@ -356,7 +396,10 @@ mod tests {
         frames
             .windows(2)
             .filter(|w| {
-                let (a, b) = (w[0].pin.map(|p| p.presented_time()), w[1].pin.map(|p| p.presented_time()));
+                let (a, b) = (
+                    w[0].pin.map(|p| p.presented_time()),
+                    w[1].pin.map(|p| p.presented_time()),
+                );
                 w[1].frame.display_time > w[0].frame.display_time && a.is_some() && a == b
             })
             .count()
@@ -381,17 +424,33 @@ mod tests {
             assert_monotone(&frames);
             let settled = &frames[(3.0 * fps) as usize..];
             let lag = median(settled.iter().map(Shown::lag).collect());
-            assert!((lag - expected).abs() <= 0.002, "{fps}/{hz} R{delay} speed {speed}: r − c {lag:.4}, table {expected}");
-            assert_eq!(holds(settled), 0, "{fps}/{hz} R{delay}: no hold after warm-up");
-            let interior = settled.iter().filter(|s| s.pin.is_some_and(|p| p.blend > 0.0 && p.blend < 1.0)).count();
-            assert!(interior * 10 >= settled.len() * 9, "{fps}/{hz} R{delay}: blend interior on {interior}/{}", settled.len());
+            assert!(
+                (lag - expected).abs() <= 0.002,
+                "{fps}/{hz} R{delay} speed {speed}: r − c {lag:.4}, table {expected}"
+            );
+            assert_eq!(
+                holds(settled),
+                0,
+                "{fps}/{hz} R{delay}: no hold after warm-up"
+            );
+            let interior = settled
+                .iter()
+                .filter(|s| s.pin.is_some_and(|p| p.blend > 0.0 && p.blend < 1.0))
+                .count();
+            assert!(
+                interior * 10 >= settled.len() * 9,
+                "{fps}/{hz} R{delay}: blend interior on {interior}/{}",
+                settled.len()
+            );
         }
     }
 
     #[test]
     fn cursor_retire_stall_holds_at_newest_then_recovers() {
         // R 3 → 6 for publications stamped in frames 361..=420 (seconds 6–7).
-        let mut rig = Rig::with_delay(Box::new(|stamp| if (361..=420).contains(&stamp) { 6 } else { 3 }));
+        let mut rig = Rig::with_delay(Box::new(
+            |stamp| if (361..=420).contains(&stamp) { 6 } else { 3 },
+        ));
         let frames = rig.run(60.0, 900);
         assert_monotone(&frames);
         let before = median(frames[300..360].iter().map(Shown::lag).collect());
@@ -404,7 +463,11 @@ mod tests {
         // 4 s of advancing transport later the lag is back within 10%.
         let after = &frames[426 + 240..426 + 300];
         for s in after {
-            assert!((s.lag() - before).abs() <= 0.1 * before, "recovered: {:.4} vs {before:.4}", s.lag());
+            assert!(
+                (s.lag() - before).abs() <= 0.1 * before,
+                "recovered: {:.4} vs {before:.4}",
+                s.lag()
+            );
         }
     }
 
@@ -442,15 +505,24 @@ mod tests {
             assert!(seek.frame.reanchored, "a jump of {jump} s reanchors");
             assert_eq!(seek.c, seek.newest, "the seek frame catches up to N");
             let pin = seek.pin.expect("shown");
-            assert!(pin.t_b <= retired_before, "the jump shows an already finished snapshot");
+            assert!(
+                pin.t_b <= retired_before,
+                "the jump shows an already finished snapshot"
+            );
             assert!(seek.published as u32 <= 1, "no extra publication");
-            assert!((seek.trace.deficit - deficit).abs() < 1e-9, "the reanchor frame records no deficit");
+            assert!(
+                (seek.trace.deficit - deficit).abs() < 1e-9,
+                "the reanchor frame records no deficit"
+            );
             // The jump leaves c about one Sim Rate interval further behind
             // than equilibrium; it closes with time constant HORIZON.
             let after = rig.run(60.0, 150);
             assert_monotone(&after);
             let settled = median(after[120..].iter().map(Shown::lag).collect());
-            assert!((settled - before).abs() <= 0.1 * before, "jump {jump}: lag {settled:.4} vs {before:.4}");
+            assert!(
+                (settled - before).abs() <= 0.1 * before,
+                "jump {jump}: lag {settled:.4} vs {before:.4}"
+            );
         }
     }
 
@@ -466,13 +538,28 @@ mod tests {
                 rig.reset = 1.0;
             }
             let frames = rig.run(60.0, 60);
-            let first = frames.iter().position(|s| s.c.is_some()).expect("the new epoch retires");
+            let first = frames
+                .iter()
+                .position(|s| s.c.is_some())
+                .expect("the new epoch retires");
             for s in &frames[..first] {
-                assert_eq!(s.pin, Some(old), "the old water shows until the first retirement");
+                assert_eq!(
+                    s.pin,
+                    Some(old),
+                    "the old water shows until the first retirement"
+                );
             }
-            assert_eq!(frames[first].c, Some(0.0), "the cursor starts at the earliest endpoint");
+            assert_eq!(
+                frames[first].c,
+                Some(0.0),
+                "the cursor starts at the earliest endpoint"
+            );
             assert_monotone(&frames[first..]);
-            assert!(holds(&frames[first..]) <= 2, "backward {backward}: {} holds", holds(&frames[first..]));
+            assert!(
+                holds(&frames[first..]) <= 2,
+                "backward {backward}: {} holds",
+                holds(&frames[first..])
+            );
         }
     }
 
@@ -492,7 +579,11 @@ mod tests {
             rig.speed = 1.0;
             let resumed = rig.run(60.0, 120);
             assert_monotone(&resumed);
-            assert!(holds(&resumed) <= 1, "R{delay}: {} holds after resuming", holds(&resumed));
+            assert!(
+                holds(&resumed) <= 1,
+                "R{delay}: {} holds after resuming",
+                holds(&resumed)
+            );
         }
     }
 
@@ -509,7 +600,10 @@ mod tests {
             assert_eq!((s.c, s.pin), (c, pin), "paused frames hold");
         }
         let resumed = rig.at(transport + 1.0 / 60.0);
-        assert_eq!(resumed.trace.deficit, deficit, "a 5 s pause does not age the window");
+        assert_eq!(
+            resumed.trace.deficit, deficit,
+            "a 5 s pause does not age the window"
+        );
     }
 
     #[test]
@@ -529,7 +623,10 @@ mod tests {
             let held = rig.core.pinned().copied();
             for _ in 0..10 {
                 let s = rig.at(t);
-                assert_eq!(s.pin, held, "generation {generation}: a late cut does not move a paused picture");
+                assert_eq!(
+                    s.pin, held,
+                    "generation {generation}: a late cut does not move a paused picture"
+                );
             }
         }
         // A reset while paused shows the new epoch when it retires.
@@ -539,7 +636,10 @@ mod tests {
         let old = rig.core.pinned().copied();
         rig.reset = 1.0;
         let frames: Vec<Shown> = (0..10).map(|_| rig.at(t)).collect();
-        assert!(frames.iter().any(|s| s.pin != old), "the reset is shown while paused");
+        assert!(
+            frames.iter().any(|s| s.pin != old),
+            "the reset is shown while paused"
+        );
     }
 
     #[test]
@@ -550,7 +650,10 @@ mod tests {
         let exact = rig.core.pinned().copied().expect("shown").presented_time();
         rig.cursor_on = true;
         let flipped = rig.run(60.0, 120);
-        assert!(flipped[0].c.expect("cursor") >= exact, "exact → cursor starts at the shown picture");
+        assert!(
+            flipped[0].c.expect("cursor") >= exact,
+            "exact → cursor starts at the shown picture"
+        );
         assert_monotone(&flipped);
         rig.cursor_on = false;
         let back = rig.at(rig.transport + 1.0 / 60.0);
@@ -560,10 +663,22 @@ mod tests {
         let pin = back.pin.expect("shown");
         let newest = back.newest.expect("retired");
         if r >= newest {
-            assert_eq!((pin.t_b, pin.blend), (newest, 1.0), "past N the exact pin is N whole");
+            assert_eq!(
+                (pin.t_b, pin.blend),
+                (newest, 1.0),
+                "past N the exact pin is N whole"
+            );
         } else {
-            assert!(pin.t_a <= r && r < pin.t_b, "the exact pin brackets r: {} {r} {}", pin.t_a, pin.t_b);
-            assert!((pin.presented_time() - r).abs() < 1e-6, "the exact pin presents r");
+            assert!(
+                pin.t_a <= r && r < pin.t_b,
+                "the exact pin brackets r: {} {r} {}",
+                pin.t_a,
+                pin.t_b
+            );
+            assert!(
+                (pin.presented_time() - r).abs() < 1e-6,
+                "the exact pin presents r"
+            );
         }
     }
 
@@ -578,13 +693,21 @@ mod tests {
             let settled = &frames[240..];
             // Per frame, after settling: the advance stays within ±RATE of Δ.
             for pair in settled.windows(2) {
-                let delta = f64::from(pair[1].frame.display_time as f32) - f64::from(pair[0].frame.display_time as f32);
+                let delta = f64::from(pair[1].frame.display_time as f32)
+                    - f64::from(pair[0].frame.display_time as f32);
                 let step = pair[1].c.expect("c") - pair[0].c.expect("c");
-                assert!((step - delta).abs() <= RATE * delta + 1e-6, "speed {speed}: step {step} for Δ {delta}");
+                assert!(
+                    (step - delta).abs() <= RATE * delta + 1e-6,
+                    "speed {speed}: step {step} for Δ {delta}"
+                );
             }
             let advanced = settled.last().and_then(|s| s.c).expect("c") - settled[0].c.expect("c");
-            let requested = f64::from(settled.last().expect("frame").frame.display_time as f32) - f64::from(settled[0].frame.display_time as f32);
-            assert!((advanced / requested - 1.0).abs() <= 0.05, "speed {speed}: {advanced} vs {requested}");
+            let requested = f64::from(settled.last().expect("frame").frame.display_time as f32)
+                - f64::from(settled[0].frame.display_time as f32);
+            assert!(
+                (advanced / requested - 1.0).abs() <= 0.05,
+                "speed {speed}: {advanced} vs {requested}"
+            );
         }
     }
 
@@ -642,6 +765,9 @@ mod tests {
             assert_eq!(again.pin, first.pin);
             assert_eq!(again.c, first.c);
         }
-        assert_eq!(rig.cursor.advancing, advancing, "held frames do not age the window");
+        assert_eq!(
+            rig.cursor.advancing, advancing,
+            "held frames do not age the window"
+        );
     }
 }

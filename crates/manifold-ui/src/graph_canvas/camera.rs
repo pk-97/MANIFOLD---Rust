@@ -113,7 +113,9 @@ impl GraphCanvas {
         // hand. A tall generator (e.g. an 8-object glTF import, ~30 nodes in one
         // column) needs ~0.1 to frame; the old 0.25 floor left most of it below
         // the viewport on open.
-        self.zoom = (content_w / bbox_w).min(content_h / bbox_h).clamp(MIN_ZOOM, 1.0);
+        self.zoom = (content_w / bbox_w)
+            .min(content_h / bbox_h)
+            .clamp(MIN_ZOOM, 1.0);
         // Centre the bbox: invert `to_screen` so the bbox centre lands at the
         // canvas content centre. `screen = origin + (graph + pan) * zoom`.
         let bbox_cx = (min_x + max_x) * 0.5;

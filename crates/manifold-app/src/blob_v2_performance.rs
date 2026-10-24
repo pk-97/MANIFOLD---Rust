@@ -263,7 +263,8 @@ fn set_graph_analysis_resolution(instance: &mut PresetInstance, max_dim: i64) {
     if max_dim == 0 {
         return;
     }
-    let mut graph = manifold_nodes::bundled_presets::bundled_preset_def(instance.effect_type()).map(|def| (*def).clone())
+    let mut graph = manifold_nodes::bundled_presets::bundled_preset_def(instance.effect_type())
+        .map(|def| (*def).clone())
         .unwrap_or_else(|| panic!("missing bundled graph for {}", instance.effect_type()));
     fn visit(nodes: &mut [manifold_core::effect_graph_def::EffectGraphNode], max_dim: i64) {
         for node in nodes {
@@ -466,7 +467,8 @@ fn measure_case(
             samples.memory.push(snapshot.current_allocated_bytes);
         }
     }
-    let region_perf = manifold_nodes_image::node_graph::primitives::detect_regions::take_region_perf_samples();
+    let region_perf =
+        manifold_nodes_image::node_graph::primitives::detect_regions::take_region_perf_samples();
     let malloc_after = malloc_snapshot();
     if spec.name != "legacy_default" {
         assert_eq!(

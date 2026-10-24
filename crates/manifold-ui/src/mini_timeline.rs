@@ -98,7 +98,12 @@ impl MiniTimeline {
     /// ruler above it).
     pub fn minimap_rect(area: Rect) -> Rect {
         let body = Self::body_rect(area);
-        Rect::new(body.x, body.y + RULER_H, body.width, (body.height - RULER_H).max(0.0))
+        Rect::new(
+            body.x,
+            body.y + RULER_H,
+            body.width,
+            (body.height - RULER_H).max(0.0),
+        )
     }
 
     /// The play/pause button rect in the readout row's left edge.
@@ -179,14 +184,33 @@ impl MiniTimeline {
         // solid strip rather than sharing the ruler's lighter band).
         ui.draw_rect(area.x, area.y, area.width, area.height, color::PANEL_BG);
         ui.draw_rect(ruler.x, ruler.y, ruler.width, ruler.height, color::BG_1);
-        ui.draw_rect(gutter.x, gutter.y, gutter.width, gutter.height, LAYER_GUTTER_BG);
+        ui.draw_rect(
+            gutter.x,
+            gutter.y,
+            gutter.width,
+            gutter.height,
+            LAYER_GUTTER_BG,
+        );
 
         // Top readout row: play/pause button + "Bar x · BPM · sig".
         let pb = Self::play_button_rect(area);
         ui.draw_rounded_rect(pb.x, pb.y, pb.width, pb.height, color::BG_2, 3.0);
         Self::draw_transport_icon(pb, is_playing, ui);
-        ui.draw_text(pb.x_max() + 8.0, area.y + (TOP_H - 11.0) * 0.5, readout, 11.0, READOUT_TEXT);
-        ui.draw_line(area.x, area.y + TOP_H, area.x_max(), area.y + TOP_H, 1.0, color::DIVIDER_COLOR);
+        ui.draw_text(
+            pb.x_max() + 8.0,
+            area.y + (TOP_H - 11.0) * 0.5,
+            readout,
+            11.0,
+            READOUT_TEXT,
+        );
+        ui.draw_line(
+            area.x,
+            area.y + TOP_H,
+            area.x_max(),
+            area.y + TOP_H,
+            1.0,
+            color::DIVIDER_COLOR,
+        );
 
         // Bar ticks + labels. Label density backs off when bars get tight so
         // numbers never overlap.
@@ -206,7 +230,13 @@ impl MiniTimeline {
             let x = Self::beat_to_x(area, total, beat);
             ui.draw_line(x, ruler.y, x, ruler.y_max(), 1.0, color::GRID_BAR_LINE);
             if bar.is_multiple_of(label_every) {
-                ui.draw_text(x + 2.0, ruler.y + 1.0, &format!("{}", bar + 1), 9.0, TICK_LABEL);
+                ui.draw_text(
+                    x + 2.0,
+                    ruler.y + 1.0,
+                    &format!("{}", bar + 1),
+                    9.0,
+                    TICK_LABEL,
+                );
             }
             beat += bpb;
             bar += 1;
@@ -219,7 +249,11 @@ impl MiniTimeline {
         let row_h = mm.height / rows as f32;
         for r in 0..rows {
             let y = mm.y + r as f32 * row_h;
-            let bg = if r % 2 == 0 { color::TRACK_BG } else { color::TRACK_BG_ALT };
+            let bg = if r % 2 == 0 {
+                color::TRACK_BG
+            } else {
+                color::TRACK_BG_ALT
+            };
             ui.draw_rect(mm.x, y, mm.width, row_h, bg);
             if r > 0 {
                 ui.draw_line(mm.x, y, mm.x_max(), y, 1.0, color::DIVIDER_COLOR);
@@ -233,10 +267,23 @@ impl MiniTimeline {
                 let text_x = swatch_x + swatch_d + 5.0;
                 let text_budget = (gutter.x_max() - 4.0 - text_x).max(0.0);
                 let name = crate::draw::elide_to_width(&label.name, 10.0, text_budget);
-                ui.draw_text(text_x, y + (row_h - 10.0) * 0.5, &name, 10.0, LAYER_LABEL_TEXT);
+                ui.draw_text(
+                    text_x,
+                    y + (row_h - 10.0) * 0.5,
+                    &name,
+                    10.0,
+                    LAYER_LABEL_TEXT,
+                );
             }
         }
-        ui.draw_line(gutter.x_max(), mm.y, gutter.x_max(), mm.y_max(), 1.0, color::DIVIDER_COLOR);
+        ui.draw_line(
+            gutter.x_max(),
+            mm.y,
+            gutter.x_max(),
+            mm.y_max(),
+            1.0,
+            color::DIVIDER_COLOR,
+        );
 
         // Clips as coloured bars on their layer row.
         for c in clips {
@@ -246,7 +293,14 @@ impl MiniTimeline {
             let x0 = Self::beat_to_x(area, total, c.start_beat);
             let x1 = Self::beat_to_x(area, total, c.end_beat);
             let y = mm.y + c.row as f32 * row_h;
-            ui.draw_rounded_rect(x0, y + 1.0, (x1 - x0).max(1.0), (row_h - 2.0).max(1.0), c.color, 2.0);
+            ui.draw_rounded_rect(
+                x0,
+                y + 1.0,
+                (x1 - x0).max(1.0),
+                (row_h - 2.0).max(1.0),
+                c.color,
+                2.0,
+            );
         }
 
         // Playhead — one red line across ruler + minimap, like the main timeline.
@@ -344,7 +398,10 @@ mod tests {
         let pb = MiniTimeline::play_button_rect(a);
         assert!(pb.y >= a.y && pb.y_max() <= a.y + TOP_H);
         assert!(MiniTimeline::hit_play(a, Vec2::new(pb.x + 2.0, pb.y + 2.0)));
-        assert!(!MiniTimeline::hit_play(a, Vec2::new(a.x + 400.0, a.y + 8.0)));
+        assert!(!MiniTimeline::hit_play(
+            a,
+            Vec2::new(a.x + 400.0, a.y + 8.0)
+        ));
     }
 
     #[test]
@@ -362,10 +419,19 @@ mod tests {
         let a = area();
         let mm = MiniTimeline::minimap_rect(a);
         // Right of the gutter (over the body/ruler instead).
-        assert_eq!(MiniTimeline::row_at_y(a, 3, Vec2::new(a.x + LABEL_GUTTER_W + 10.0, mm.y + 5.0)), None);
+        assert_eq!(
+            MiniTimeline::row_at_y(a, 3, Vec2::new(a.x + LABEL_GUTTER_W + 10.0, mm.y + 5.0)),
+            None
+        );
         // Above the row band (over the ruler's sliver of the gutter).
-        assert_eq!(MiniTimeline::row_at_y(a, 3, Vec2::new(a.x + 4.0, a.y + TOP_H + 2.0)), None);
+        assert_eq!(
+            MiniTimeline::row_at_y(a, 3, Vec2::new(a.x + 4.0, a.y + TOP_H + 2.0)),
+            None
+        );
         // Past the last row.
-        assert_eq!(MiniTimeline::row_at_y(a, 3, Vec2::new(a.x + 4.0, mm.y_max() + 5.0)), None);
+        assert_eq!(
+            MiniTimeline::row_at_y(a, 3, Vec2::new(a.x + 4.0, mm.y_max() + 5.0)),
+            None
+        );
     }
 }

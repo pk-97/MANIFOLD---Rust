@@ -6,8 +6,8 @@
 //! import on a Model File swap.
 
 use super::{
-    CameraFields, CameraRig, GroupFields, Item, ItemFields, ItemId, LightFields, LightType, MaterialFields,
-    MeshPrimitives, ObjectFields, SceneDoc, Shape, TextureSource,
+    CameraFields, CameraRig, GroupFields, Item, ItemFields, ItemId, LightFields, LightType,
+    MaterialFields, MeshPrimitives, ObjectFields, SceneDoc, Shape, TextureSource,
 };
 
 /// One part of an imported model: the primitives of one material on a
@@ -47,15 +47,32 @@ pub struct ImportedTransform {
 }
 
 impl ImportedTransform {
-    pub const IDENTITY: Self = Self { position: [0.0; 3], rotation: [0.0; 3], scale: [1.0; 3] };
+    pub const IDENTITY: Self = Self {
+        position: [0.0; 3],
+        rotation: [0.0; 3],
+        scale: [1.0; 3],
+    };
 
     /// `(property, value)` for every Transform row away from its rest.
     pub fn values(&self) -> impl Iterator<Item = (&'static str, f32)> + '_ {
-        const ROWS: [[&str; 3]; 3] = [["pos_x", "pos_y", "pos_z"], ["rot_x", "rot_y", "rot_z"], ["scale_x", "scale_y", "scale_z"]];
-        [(self.position, 0.0), (self.rotation, 0.0), (self.scale, 1.0)]
-            .into_iter()
-            .zip(ROWS)
-            .flat_map(|((values, rest), names)| names.into_iter().zip(values).filter(move |(_, value)| *value != rest))
+        const ROWS: [[&str; 3]; 3] = [
+            ["pos_x", "pos_y", "pos_z"],
+            ["rot_x", "rot_y", "rot_z"],
+            ["scale_x", "scale_y", "scale_z"],
+        ];
+        [
+            (self.position, 0.0),
+            (self.rotation, 0.0),
+            (self.scale, 1.0),
+        ]
+        .into_iter()
+        .zip(ROWS)
+        .flat_map(|((values, rest), names)| {
+            names
+                .into_iter()
+                .zip(values)
+                .filter(move |(_, value)| *value != rest)
+        })
     }
 }
 
@@ -119,7 +136,9 @@ pub fn import_child_id(group: &ItemId, key: &str) -> ItemId {
 
 /// Whether `id` was derived from import `group` by [`import_child_id`].
 pub fn is_import_child(group: &ItemId, id: &ItemId) -> bool {
-    id.as_str().strip_prefix(group.as_str()).is_some_and(|rest| rest.starts_with('-'))
+    id.as_str()
+        .strip_prefix(group.as_str())
+        .is_some_and(|rest| rest.starts_with('-'))
 }
 
 /// The id of the persistent placement Group under import `group`: it carries
@@ -150,14 +169,32 @@ impl ImportedModel {
     /// every file node starts at its authored transform
     /// ([`Self::starting_values`]).
     pub fn into_items(&self, file: &str, id: ItemId) -> Vec<Item> {
-        let fields = ItemFields::Group(GroupFields { source: Some(file.to_owned()), clip_names: self.clips.clone(), ..GroupFields::default() });
+        let fields = ItemFields::Group(GroupFields {
+            source: Some(file.to_owned()),
+            clip_names: self.clips.clone(),
+            ..GroupFields::default()
+        });
         let mut group = Item::new(id.clone(), self.name.clone(), fields);
         let placement_id = import_placement_id(&id);
-        let mut placement = Item::new(placement_id, "File Placement".to_owned(), ItemFields::Group(GroupFields::default()));
-        placement.children = self.group_children().iter().map(|node| node_item(&id, node, file)).collect();
-        placement.children.extend(self.materials.iter().map(|m| material_item(&id, m, file)));
-        placement.children.extend(self.lights.iter().map(|l| light_item(&id, l)));
-        placement.children.extend(self.cameras.iter().map(|c| camera_item(&id, c)));
+        let mut placement = Item::new(
+            placement_id,
+            "File Placement".to_owned(),
+            ItemFields::Group(GroupFields::default()),
+        );
+        placement.children = self
+            .group_children()
+            .iter()
+            .map(|node| node_item(&id, node, file))
+            .collect();
+        placement
+            .children
+            .extend(self.materials.iter().map(|m| material_item(&id, m, file)));
+        placement
+            .children
+            .extend(self.lights.iter().map(|l| light_item(&id, l)));
+        placement
+            .children
+            .extend(self.cameras.iter().map(|c| camera_item(&id, c)));
         group.children = vec![placement];
         vec![group]
     }
@@ -167,7 +204,9 @@ impl ImportedModel {
     /// project with no scene makes).
     pub fn scene_doc(&self, file: &str, id: ItemId) -> SceneDoc {
         let mut doc = SceneDoc::base();
-        doc.items.retain(|item| ![super::BASE_CUBE, super::BASE_CUBE_MATERIAL].contains(&item.id.as_str()));
+        doc.items.retain(|item| {
+            ![super::BASE_CUBE, super::BASE_CUBE_MATERIAL].contains(&item.id.as_str())
+        });
         for mut item in self.into_items(file, id) {
             doc.number_cameras(&mut item);
             doc.items.push(item);
@@ -179,7 +218,9 @@ impl ImportedModel {
     /// root group that does not move its parts is the import Group itself.
     pub fn group_children(&self) -> &[ImportedNode] {
         match self.roots.as_slice() {
-            [only] if only.mesh_node.is_none() && only.transform == ImportedTransform::IDENTITY => &only.children,
+            [only] if only.mesh_node.is_none() && only.transform == ImportedTransform::IDENTITY => {
+                &only.children
+            }
             roots => roots,
         }
     }
@@ -190,7 +231,8 @@ impl ImportedModel {
     pub fn is_single_mesh(&self) -> bool {
         fn unmoved(nodes: &[ImportedNode]) -> bool {
             nodes.iter().all(|node| {
-                node.mesh_node.is_some() || (node.transform == ImportedTransform::IDENTITY && unmoved(&node.children))
+                node.mesh_node.is_some()
+                    || (node.transform == ImportedTransform::IDENTITY && unmoved(&node.children))
             })
         }
         self.mesh_nodes().len() == 1
@@ -210,13 +252,20 @@ impl ImportedModel {
 
     /// Every mesh part's vertex count, summed.
     pub fn vertex_count(&self) -> u32 {
-        self.mesh_nodes().iter().map(|node| node.vertex_count).fold(0, u32::saturating_add)
+        self.mesh_nodes()
+            .iter()
+            .map(|node| node.vertex_count)
+            .fold(0, u32::saturating_add)
     }
 
     /// The card values the import `id` starts at: the placement's optional
     /// `-center` translation, each file node's authored transform, and the
     /// file's lights and cameras. `(item, property, value)`.
-    pub fn starting_values(&self, id: &ItemId, center: Option<[f32; 3]>) -> Vec<(ItemId, &'static str, f32)> {
+    pub fn starting_values(
+        &self,
+        id: &ItemId,
+        center: Option<[f32; 3]>,
+    ) -> Vec<(ItemId, &'static str, f32)> {
         let mut out = Vec::new();
         let placement = import_placement_id(id);
         if let Some(center) = center {
@@ -231,7 +280,11 @@ impl ImportedModel {
         let cameras = self.cameras.iter().map(|c| (&c.key, &c.values));
         for (key, values) in lights.chain(cameras) {
             let item = import_child_id(id, key);
-            out.extend(values.iter().map(|(property, value)| (item.clone(), *property, *value)));
+            out.extend(
+                values
+                    .iter()
+                    .map(|(property, value)| (item.clone(), *property, *value)),
+            );
         }
         out
     }
@@ -242,7 +295,11 @@ impl ImportedNode {
     /// at, and its children's.
     pub fn starting_values(&self, group: &ItemId, out: &mut Vec<(ItemId, &'static str, f32)>) {
         let item = import_child_id(group, &self.key);
-        out.extend(self.transform.values().map(|(property, value)| (item.clone(), property, value)));
+        out.extend(
+            self.transform
+                .values()
+                .map(|(property, value)| (item.clone(), property, value)),
+        );
         for child in &self.children {
             child.starting_values(group, out);
         }
@@ -261,14 +318,25 @@ pub fn node_item(group: &ItemId, node: &ImportedNode, file: &str) -> Item {
                     vertex_count: node.vertex_count,
                     primitives: node.primitives,
                 },
-                material: node.material.as_ref().map(|key| import_child_id(group, key)),
+                material: node
+                    .material
+                    .as_ref()
+                    .map(|key| import_child_id(group, key)),
                 ..ObjectFields::default()
             };
             Item::new(id, node.name.clone(), ItemFields::Object(fields))
         }
         _ => {
-            let mut item = Item::new(id, node.name.clone(), ItemFields::Group(GroupFields::default()));
-            item.children = node.children.iter().map(|child| node_item(group, child, file)).collect();
+            let mut item = Item::new(
+                id,
+                node.name.clone(),
+                ItemFields::Group(GroupFields::default()),
+            );
+            item.children = node
+                .children
+                .iter()
+                .map(|child| node_item(group, child, file))
+                .collect();
             item
         }
     }
@@ -276,19 +344,42 @@ pub fn node_item(group: &ItemId, node: &ImportedNode, file: &str) -> Item {
 
 /// The Material item for the file's material `material` under import `group`.
 pub fn material_item(group: &ItemId, material: &ImportedMaterial, file: &str) -> Item {
-    let texture = TextureSource::Model { file: file.to_owned(), material: material.material };
-    let fields = ItemFields::Material(MaterialFields { texture, ..MaterialFields::default() });
-    Item::new(import_child_id(group, &material.key), material.name.clone(), fields)
+    let texture = TextureSource::Model {
+        file: file.to_owned(),
+        material: material.material,
+    };
+    let fields = ItemFields::Material(MaterialFields {
+        texture,
+        ..MaterialFields::default()
+    });
+    Item::new(
+        import_child_id(group, &material.key),
+        material.name.clone(),
+        fields,
+    )
 }
 
 /// The Light item for the file's light `light` under import `group`.
 pub fn light_item(group: &ItemId, light: &ImportedLight) -> Item {
-    let fields = ItemFields::Light(LightFields { light: light.light.clone() });
-    Item::new(import_child_id(group, &light.key), light.name.clone(), fields)
+    let fields = ItemFields::Light(LightFields {
+        light: light.light.clone(),
+    });
+    Item::new(
+        import_child_id(group, &light.key),
+        light.name.clone(),
+        fields,
+    )
 }
 
 /// The Camera item for the file's camera `camera` under import `group`.
 pub fn camera_item(group: &ItemId, camera: &ImportedCamera) -> Item {
-    let fields = ItemFields::Camera(CameraFields { rig: CameraRig::Free, ..CameraFields::default() });
-    Item::new(import_child_id(group, &camera.key), camera.name.clone(), fields)
+    let fields = ItemFields::Camera(CameraFields {
+        rig: CameraRig::Free,
+        ..CameraFields::default()
+    });
+    Item::new(
+        import_child_id(group, &camera.key),
+        camera.name.clone(),
+        fields,
+    )
 }

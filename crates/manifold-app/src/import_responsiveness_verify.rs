@@ -17,8 +17,8 @@
 #![cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use manifold_core::Seconds;
 use manifold_playback::engine::TickContext;
@@ -32,9 +32,7 @@ use crate::user_prefs::UserPrefs;
 fn headless_application() -> Application {
     let mut app = Application::new();
     let (tx, rx) = crossbeam_channel::unbounded::<ContentCommand>();
-    std::thread::spawn(move || {
-        while rx.recv().is_ok() {}
-    });
+    std::thread::spawn(move || while rx.recv().is_ok() {});
     app.content_tx = Some(tx);
     app.user_prefs = UserPrefs::for_test();
     app
@@ -67,7 +65,10 @@ fn corrupt_glb_fails_through_worker_as_failed_event() {
     let repo_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let req = ImportRequest {
         path: bad_path.clone(),
-        target: crate::import_worker::ImportTarget::Drop { beat: 0.0, under: None },
+        target: crate::import_worker::ImportTarget::Drop {
+            beat: 0.0,
+            under: None,
+        },
         blender_path_pref: String::new(),
     };
 
@@ -112,7 +113,10 @@ fn corrupt_glb_fails_through_worker_as_failed_event() {
         .unwrap();
     app.drain_import_progress();
     use manifold_ui::panels::overlay::Overlay;
-    assert!(app.ws.ui_root.toast.is_open(), "Failed must always show a toast");
+    assert!(
+        app.ws.ui_root.toast.is_open(),
+        "Failed must always show a toast"
+    );
 
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -173,7 +177,9 @@ fn content_thread_keeps_advancing_while_a_large_import_runs_in_the_background() 
     // can take several seconds — wait for at least a few real ticks before
     // treating the counter's baseline as meaningful.
     let warmup_started = std::time::Instant::now();
-    while frame_counter.load(Ordering::Relaxed) < 3 && warmup_started.elapsed() < std::time::Duration::from_secs(30) {
+    while frame_counter.load(Ordering::Relaxed) < 3
+        && warmup_started.elapsed() < std::time::Duration::from_secs(30)
+    {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     eprintln!(
@@ -185,7 +191,10 @@ fn content_thread_keeps_advancing_while_a_large_import_runs_in_the_background() 
     let mut app = headless_application();
     let start_frame = frame_counter.load(Ordering::Relaxed);
     app.import_model_file(&path, 0.0, None);
-    assert!(app.import_worker_busy, "the drop must have started a background worker");
+    assert!(
+        app.import_worker_busy,
+        "the drop must have started a background worker"
+    );
 
     let mut samples: Vec<u64> = vec![start_frame];
     let started = std::time::Instant::now();
@@ -204,7 +213,9 @@ fn content_thread_keeps_advancing_while_a_large_import_runs_in_the_background() 
 
     stop.store(true, Ordering::Relaxed);
 
-    eprintln!("[IMPORT_RESPONSIVENESS gate 3] content-thread frame samples across the import: {samples:?}");
+    eprintln!(
+        "[IMPORT_RESPONSIVENESS gate 3] content-thread frame samples across the import: {samples:?}"
+    );
     assert!(
         samples.len() >= 3,
         "expected several samples across the import span, got {}",

@@ -21,7 +21,13 @@ fn create(
     manifest: Option<&ParamManifest>,
 ) -> Option<Box<PresetRuntime>> {
     GeneratorRegistry::new(format).create_with_override(
-        device, gen_type, override_def, width, height, is_watched, manifest,
+        device,
+        gen_type,
+        override_def,
+        width,
+        height,
+        is_watched,
+        manifest,
     )
 }
 
@@ -36,8 +42,13 @@ mod tests {
     #[test]
     fn catalog_is_the_single_generator_provider() {
         let provider = manifold_node_engine::runtime::generator_provider::generator_provider();
-        assert!(std::ptr::fn_addr_eq(provider.prewarm, prewarm as fn(&Arc<GpuDevice>, GpuTextureFormat)));
-        assert!(std::ptr::fn_addr_eq(provider.create, create as manifold_node_engine::runtime::generator_provider::CreateGenerator));
+        assert!(std::ptr::fn_addr_eq(
+            provider.prewarm,
+            prewarm as fn(&Arc<GpuDevice>, GpuTextureFormat)
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            provider.create,
+            create as manifold_node_engine::runtime::generator_provider::CreateGenerator
+        ));
     }
-
 }

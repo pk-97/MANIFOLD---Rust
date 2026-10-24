@@ -53,7 +53,10 @@ pub struct TestCameraPointwise {
 
 impl TestCameraPointwise {
     pub fn new() -> Self {
-        Self { pipeline: None, sampler: None }
+        Self {
+            pipeline: None,
+            sampler: None,
+        }
     }
 }
 
@@ -142,8 +145,12 @@ impl Primitive for TestCameraPointwise {
             .inputs
             .camera("camera")
             .unwrap_or_else(crate::scene::camera::Camera::default_perspective);
-        let Some(in_tex) = ctx.inputs.texture_2d("in") else { return };
-        let Some(out_tex) = ctx.outputs.texture_2d("out") else { return };
+        let Some(in_tex) = ctx.inputs.texture_2d("in") else {
+            return;
+        };
+        let Some(out_tex) = ctx.outputs.texture_2d("out") else {
+            return;
+        };
         let (w, h) = (out_tex.width, out_tex.height);
 
         let gpu = ctx.gpu_encoder();
@@ -161,10 +168,22 @@ impl Primitive for TestCameraPointwise {
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Texture { binding: 1, texture: in_tex },
-                GpuBinding::Sampler { binding: 2, sampler },
-                GpuBinding::Texture { binding: 3, texture: out_tex },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: in_tex,
+                },
+                GpuBinding::Sampler {
+                    binding: 2,
+                    sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: out_tex,
+                },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "test.camera_pointwise",

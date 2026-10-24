@@ -6,8 +6,8 @@
 use std::{borrow::Cow, error::Error, fs, path::Path};
 
 use manifold_foundation::{Beats, Bpm};
-use manifold_physics::{BodyConfig, BodyKind, PhysicsWorld, Seconds};
 use manifold_physics::collision_shape::CollisionShape;
+use manifold_physics::{BodyConfig, BodyKind, PhysicsWorld, Seconds};
 use serde_json::{Value, json};
 
 use manifold_foundation::mesh_partition as fracture;
@@ -386,8 +386,12 @@ fn run(
         .map(|count| fracture::partition(&vertices, &triangles, count))
         .transpose()?;
     let hulls_for = |vertices: &[[f32; 3]], triangles: &[[u32; 3]]| {
-        let list: Vec<[f32; 3]> = triangles.iter().flat_map(|tri| tri.iter().map(|&index| vertices[index as usize])).collect();
-        CollisionShape::from_triangle_lists([list.as_slice()]).and_then(|shape| shape.body_hulls([1.0; 3]))
+        let list: Vec<[f32; 3]> = triangles
+            .iter()
+            .flat_map(|tri| tri.iter().map(|&index| vertices[index as usize]))
+            .collect();
+        CollisionShape::from_triangle_lists([list.as_slice()])
+            .and_then(|shape| shape.body_hulls([1.0; 3]))
     };
     let collider = hulls_for(&vertices, &triangles)?;
     let fragment_colliders = fragments

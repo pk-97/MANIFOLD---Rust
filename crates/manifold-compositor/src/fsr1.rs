@@ -66,12 +66,15 @@ impl Fsr1Upscaler {
         dst_w: u32,
         dst_h: u32,
     ) -> Self {
-        Self::try_new(device, src_w, src_h, dst_w, dst_h)
-            .expect("FSR1 allocation failed")
+        Self::try_new(device, src_w, src_h, dst_w, dst_h).expect("FSR1 allocation failed")
     }
 
     pub fn try_new(
-        device: &manifold_gpu::GpuDevice, src_w: u32, src_h: u32, dst_w: u32, dst_h: u32,
+        device: &manifold_gpu::GpuDevice,
+        src_w: u32,
+        src_h: u32,
+        dst_w: u32,
+        dst_h: u32,
     ) -> Result<Self, String> {
         let fmt = manifold_gpu::GpuTextureFormat::Rgba16Float;
         let easu_pipeline = device.create_compute_pipeline(

@@ -13,8 +13,8 @@
 //!   router.apply(&mut project);                    // write pending values to project
 
 use crate::osc_receiver::OscReceiver;
-use manifold_core::PresetTypeId;
 use manifold_core::LayerId;
+use manifold_core::PresetTypeId;
 use manifold_core::project::Project;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -57,12 +57,21 @@ struct OscRange {
 }
 
 impl OscRange {
-    const UNIT: Self = Self { span: (0.0, 1.0), bounds: (f32::NEG_INFINITY, f32::INFINITY) };
+    const UNIT: Self = Self {
+        span: (0.0, 1.0),
+        bounds: (f32::NEG_INFINITY, f32::INFINITY),
+    };
 
     fn of(p: &manifold_core::params::Param) -> Self {
         // The input clamp is monotonic, so its image of the infinities is its bounds.
-        let bounds = (p.spec.clamp_input(f32::NEG_INFINITY), p.spec.clamp_input(f32::INFINITY));
-        Self { span: p.slider_span(), bounds }
+        let bounds = (
+            p.spec.clamp_input(f32::NEG_INFINITY),
+            p.spec.clamp_input(f32::INFINITY),
+        );
+        Self {
+            span: p.slider_span(),
+            bounds,
+        }
     }
 }
 
@@ -104,7 +113,9 @@ impl OscParamRouter {
     /// Unsubscribes old addresses, subscribes new ones on the receiver.
     /// Call on project load and after structural changes (layer/effect add/remove).
     pub fn rebuild(&mut self, project: &Project, receiver: &mut OscReceiver) {
-        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::OscRouteRebuild);
+        manifold_core::work_count::record_work(
+            manifold_core::work_count::WorkKind::OscRouteRebuild,
+        );
         // Unsubscribe old
         for addr in &self.registered_addresses {
             receiver.unsubscribe_all(addr);
@@ -316,10 +327,7 @@ impl OscParamRouter {
                         fx.set_base_param(param_id, write.value);
                     }
                 }
-                OscParamTarget::GenParam {
-                    layer_id,
-                    param_id,
-                } => {
+                OscParamTarget::GenParam { layer_id, param_id } => {
                     if let Some((_, layer)) =
                         project.timeline.find_layer_by_id_mut(layer_id.as_str())
                         && let Some(gp) = layer.gen_params_mut()
@@ -425,7 +433,10 @@ mod tests {
     fn osc_bundled_addresses_are_byte_identical_to_positional() {
         let (ty, prefix) = effect_with_osc_prefix();
         let defaults = manifold_core::preset_definition_registry::get_defaults(&ty);
-        assert!(!defaults.is_empty(), "chosen effect must have bundled params");
+        assert!(
+            !defaults.is_empty(),
+            "chosen effect must have bundled params"
+        );
 
         let mut fx = PresetInstance::new(ty.clone());
         fx.params = ParamManifest::from_params(defaults.clone());
@@ -441,7 +452,8 @@ mod tests {
                 manifold_core::preset_definition_registry::get_osc_address_by_id(&ty, p.id())
                     .expect("id-keyed address must exist");
             assert_eq!(
-                addr, expected,
+                addr,
+                expected,
                 "address for bundled param (id {}) must be well-formed",
                 p.id()
             );
@@ -477,7 +489,10 @@ mod tests {
             .get("user_glow")
             .unwrap()
             .value;
-        assert!((v - 0.42).abs() < 1e-6, "dispatch must write user param by id; got {v}");
+        assert!(
+            (v - 0.42).abs() < 1e-6,
+            "dispatch must write user param by id; got {v}"
+        );
     }
 
     /// BUG-fqbxo (OSC writes to a scene feature switch leave rows stale): the
@@ -488,7 +503,9 @@ mod tests {
     #[test]
     fn osc_switch_write_through_the_gateway_moves_effects() {
         use manifold_core::change::{ChangeSet, Part};
-        use manifold_core::scene_surface::{CardLabel, ControlGroup, Feature, SceneParamDesc, SurfaceRole};
+        use manifold_core::scene_surface::{
+            CardLabel, ControlGroup, Feature, SceneParamDesc, SurfaceRole,
+        };
         let (ty, prefix) = effect_with_osc_prefix();
         let mut switch = user_spec("dof_on");
         switch.scene = Some(SceneParamDesc {
@@ -514,13 +531,25 @@ mod tests {
             receiver.update();
             let before = service.stamps();
             let wrote = service.mutate(values, &mut *project, |p| router.apply(p));
-            assert_eq!(service.stamps().moved_since(&before), wrote, "the gateway stamps what it returns");
+            assert_eq!(
+                service.stamps().moved_since(&before),
+                wrote,
+                "the gateway stamps what it returns"
+            );
             wrote
         };
 
-        assert_eq!(send(1.0, &mut project), values.union(ChangeSet::of(&[Part::Effects])), "switching on");
+        assert_eq!(
+            send(1.0, &mut project),
+            values.union(ChangeSet::of(&[Part::Effects])),
+            "switching on"
+        );
         assert_eq!(send(0.9, &mut project), values, "still on");
-        assert_eq!(send(0.0, &mut project), values.union(ChangeSet::of(&[Part::Effects])), "switching off");
+        assert_eq!(
+            send(0.0, &mut project),
+            values.union(ChangeSet::of(&[Part::Effects])),
+            "switching off"
+        );
     }
 
     /// D15: a full 0–1 controller sweep covers the user's slider range, past
@@ -531,8 +560,10 @@ mod tests {
         let (ty, prefix) = effect_with_osc_prefix();
         let mut free = Param::user_added(user_spec("user_glow"));
         free.choices.slider = Some((-2.0, 3.0));
-        let mut limited =
-            Param::user_added(ParamSpecDef { limit: HardLimit::AtLeast(0.0), ..user_spec("user_lim") });
+        let mut limited = Param::user_added(ParamSpecDef {
+            limit: HardLimit::AtLeast(0.0),
+            ..user_spec("user_lim")
+        });
         limited.choices.slider = Some((-2.0, 3.0));
         let mut fx = PresetInstance::new(ty);
         fx.params = ParamManifest::from_params(vec![free, limited]);
@@ -550,9 +581,15 @@ mod tests {
             let params = &project.settings.master_effects[0].params;
             let want = -2.0 + 5.0 * v;
             let got = params.get("user_glow").unwrap().value;
-            assert!((got - want).abs() < 1e-5, "sweep {v}: got {got}, want {want}");
+            assert!(
+                (got - want).abs() < 1e-5,
+                "sweep {v}: got {got}, want {want}"
+            );
             let capped = params.get("user_lim").unwrap().value;
-            assert!((capped - want.max(0.0)).abs() < 1e-5, "limited sweep {v}: got {capped}");
+            assert!(
+                (capped - want.max(0.0)).abs() < 1e-5,
+                "limited sweep {v}: got {capped}"
+            );
         }
     }
 
@@ -581,9 +618,17 @@ mod tests {
         p.choices.rename = Some("Renamed By User".into());
         let choices = p.choices.clone();
         choices.apply(&mut p.spec);
-        assert_eq!(addresses(&fx), before, "a rename choice must not move an address");
+        assert_eq!(
+            addresses(&fx),
+            before,
+            "a rename choice must not move an address"
+        );
 
         fx.params.get_mut(&id).unwrap().spec.name = "Renamed In Code".into();
-        assert_eq!(addresses(&fx), before, "a code label change must not move an address");
+        assert_eq!(
+            addresses(&fx),
+            before,
+            "a code label change must not move an address"
+        );
     }
 }

@@ -11,13 +11,13 @@ use manifold_water_surface as _;
 use manifold_water_whitewater as _;
 
 pub mod graph_install;
-pub(crate) mod physics_scene;
+#[cfg(test)]
+mod live_sim_clock_reference;
 pub(crate) mod migration;
+pub(crate) mod physics_scene;
 pub mod presets;
 pub mod primitives;
 pub mod runtime;
-#[cfg(test)]
-mod live_sim_clock_reference;
 #[cfg(test)]
 mod liquid {
     mod scene_contract;

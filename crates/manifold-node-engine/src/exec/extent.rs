@@ -15,9 +15,6 @@
 //! The walk is over the unfused graph. What a fused region allocates is the
 //! freeze compiler's contract (BUG-2efy (fused output capacity probe)).
 
-use std::cell::RefCell;
-use ahash::AHashMap;
-use manifold_core::{Beats, Seconds};
 use crate::bindings::{NodeInputs, NodeOutputs, Slot};
 use crate::exec::backend::{Backend, MockBackend};
 use crate::exec::effect_node::{EffectNodeContext, FrameTime, ParamValues};
@@ -28,6 +25,9 @@ use crate::graph::{Graph, NodeInstance};
 use crate::parameters::ParamValue;
 use crate::ports::{EXACT_F32_COUNT, PortType};
 use crate::scene::transform::Transform;
+use ahash::AHashMap;
+use manifold_core::{Beats, Seconds};
+use std::cell::RefCell;
 /// The canvas canvas-sized arrays are planned at: the stage.
 const CANVAS: (u32, u32) = (1920, 1080);
 
@@ -40,7 +40,10 @@ pub enum Wire {
     /// Initial Fill) and where it is placed, `None` while it is switched
     /// off. Its producer's rule publishes it for a consumer whose storage
     /// depends on what arrives.
-    Object { kind: u32, placed: Option<Transform> },
+    Object {
+        kind: u32,
+        placed: Option<Transform>,
+    },
 }
 
 /// Why a rule stopped.
@@ -83,7 +86,10 @@ impl std::fmt::Display for ExtentError {
             Self::Refused { node, reason } => write!(f, "{node} refuses: {reason}"),
             Self::Uncovered { node, detail } => write!(f, "{node}: {detail}"),
             Self::NoRule { node, type_id } => write!(f, "{node}: no extent rule for {type_id}"),
-            Self::Unresolved { node, port } => write!(f, "{node}.{port}: the wire's value is not resolved on the CPU"),
+            Self::Unresolved { node, port } => write!(
+                f,
+                "{node}.{port}: the wire's value is not resolved on the CPU"
+            ),
         }
     }
 }
@@ -112,15 +118,27 @@ pub struct AtomExtent<'a> {
 
 impl AtomExtent<'_> {
     fn name(&self) -> String {
-        format!("{} ({})", self.node.node_id.as_str(), self.node.node.type_id().as_str())
+        format!(
+            "{} ({})",
+            self.node.node_id.as_str(),
+            self.node.node.type_id().as_str()
+        )
     }
 
     pub fn input(&self, port: &str) -> Option<ResourceId> {
-        self.step.inputs.iter().find(|(name, _)| *name == port).map(|&(_, resource)| resource)
+        self.step
+            .inputs
+            .iter()
+            .find(|(name, _)| *name == port)
+            .map(|&(_, resource)| resource)
     }
 
     fn output(&self, port: &str) -> Option<ResourceId> {
-        self.step.outputs.iter().find(|(name, _)| *name == port).map(|&(_, resource)| resource)
+        self.step
+            .outputs
+            .iter()
+            .find(|(name, _)| *name == port)
+            .map(|&(_, resource)| resource)
     }
 
     pub fn params(&self) -> &ParamValues {
@@ -146,11 +164,20 @@ impl AtomExtent<'_> {
 
     /// `scalar_or_param`: the wire, else a Float param, else `default`.
     pub fn scalar(&self, name: &str, default: f32) -> f32 {
-        let Some(resource) = self.input(name) else { return self.param(name, default) };
+        let Some(resource) = self.input(name) else {
+            return self.param(name, default);
+        };
         match self.wires.get(&resource) {
             Some(Wire::F32(value)) => *value,
             _ => {
-                self.unresolved.borrow_mut().get_or_insert(self.step.inputs.iter().find(|(n, _)| *n == name).expect("wired").0);
+                self.unresolved.borrow_mut().get_or_insert(
+                    self.step
+                        .inputs
+                        .iter()
+                        .find(|(n, _)| *n == name)
+                        .expect("wired")
+                        .0,
+                );
                 default
             }
         }
@@ -161,7 +188,14 @@ impl AtomExtent<'_> {
         match self.wires.get(&resource) {
             Some(Wire::Transform(value)) => Some(*value),
             _ => {
-                self.unresolved.borrow_mut().get_or_insert(self.step.inputs.iter().find(|(n, _)| *n == name).expect("wired").0);
+                self.unresolved.borrow_mut().get_or_insert(
+                    self.step
+                        .inputs
+                        .iter()
+                        .find(|(n, _)| *n == name)
+                        .expect("wired")
+                        .0,
+                );
                 None
             }
         }
@@ -174,7 +208,14 @@ impl AtomExtent<'_> {
         match self.wires.get(&resource) {
             Some(Wire::Object { kind, placed }) => Some((*kind, *placed)),
             _ => {
-                self.unresolved.borrow_mut().get_or_insert(self.step.inputs.iter().find(|(n, _)| *n == name).expect("wired").0);
+                self.unresolved.borrow_mut().get_or_insert(
+                    self.step
+                        .inputs
+                        .iter()
+                        .find(|(n, _)| *n == name)
+                        .expect("wired")
+                        .0,
+                );
                 None
             }
         }
@@ -185,7 +226,9 @@ impl AtomExtent<'_> {
     pub fn count(&self, name: &str, default: f32) -> Result<u32, Verdict> {
         let value = self.scalar(name, default).round().max(0.0);
         if value > EXACT_F32_COUNT as f32 {
-            return Err(self.uncovered(format!("{name} {value} exceeds the exact f32 range ({EXACT_F32_COUNT})")));
+            return Err(self.uncovered(format!(
+                "{name} {value} exceeds the exact f32 range ({EXACT_F32_COUNT})"
+            )));
         }
         Ok(value as u32)
     }
@@ -217,7 +260,9 @@ impl AtomExtent<'_> {
     pub fn covers(&self, port: &str, need: u64) -> Result<(), Verdict> {
         match self.bytes(port) {
             Some(have) if have >= need => Ok(()),
-            Some(have) => Err(self.uncovered(format!("{port} holds {have} bytes; the dispatch reaches {need}"))),
+            Some(have) => Err(self.uncovered(format!(
+                "{port} holds {have} bytes; the dispatch reaches {need}"
+            ))),
             None => Err(self.uncovered(format!("{port} is unbound"))),
         }
     }
@@ -225,7 +270,11 @@ impl AtomExtent<'_> {
     /// As [`Self::covers`] when the port is bound; an unbound optional port
     /// is never written.
     pub fn covers_if_bound(&self, port: &str, need: u64) -> Result<(), Verdict> {
-        if self.bytes(port).is_some() { self.covers(port, need) } else { Ok(()) }
+        if self.bytes(port).is_some() {
+            self.covers(port, need)
+        } else {
+            Ok(())
+        }
     }
 
     pub fn uncovered(&self, detail: String) -> Verdict {
@@ -257,7 +306,13 @@ impl AtomExtent<'_> {
 }
 
 /// Scalar plumbing whose outputs the walk takes from the real node.
-const PLUMBING: &[&str] = &["node.value", "node.math", "node.transform_components", "node.transform_3d", "node.lfo"];
+const PLUMBING: &[&str] = &[
+    "node.value",
+    "node.math",
+    "node.transform_components",
+    "node.transform_3d",
+    "node.lfo",
+];
 
 /// A node needs a rule when it touches an array or does GPU work.
 fn needs_rule(node: &NodeInstance) -> bool {
@@ -268,10 +323,19 @@ fn needs_rule(node: &NodeInstance) -> bool {
 }
 
 /// Walk `graph` under `plan` with `rules`.
-pub fn check_graph(graph: &mut Graph, plan: &ExecutionPlan, rules: &[ExtentRule]) -> Result<ExtentReport, ExtentError> {
+pub fn check_graph(
+    graph: &mut Graph,
+    plan: &ExecutionPlan,
+    rules: &[ExtentRule],
+) -> Result<ExtentReport, ExtentError> {
     for (index, rule) in rules.iter().enumerate() {
-        if rules[..index].iter().any(|prior| prior.type_id == rule.type_id) {
-            return Err(ExtentError::DuplicateRule { type_id: rule.type_id.to_string() });
+        if rules[..index]
+            .iter()
+            .any(|prior| prior.type_id == rule.type_id)
+        {
+            return Err(ExtentError::DuplicateRule {
+                type_id: rule.type_id.to_string(),
+            });
         }
     }
     let planned = plan_array_allocations(graph, plan, CANVAS, &AHashMap::default())
@@ -279,7 +343,10 @@ pub fn check_graph(graph: &mut Graph, plan: &ExecutionPlan, rules: &[ExtentRule]
     let mut bytes: AHashMap<ResourceId, u64> = AHashMap::default();
     let mut provided: AHashMap<ResourceId, u64> = AHashMap::default();
     // State captures read what a later step writes: the second pass sees them.
-    let mut report = ExtentReport { checked: 0, scene_bytes: 0 };
+    let mut report = ExtentReport {
+        checked: 0,
+        scene_bytes: 0,
+    };
     for pass in 0..2 {
         let last = pass == 1;
         let mut wires: AHashMap<ResourceId, Wire> = AHashMap::default();
@@ -294,18 +361,34 @@ pub fn check_graph(graph: &mut Graph, plan: &ExecutionPlan, rules: &[ExtentRule]
                 if let Some(PortType::Array(layout)) = plan.resource_type(resource)
                     && let Some(&have) = bytes.get(&resource)
                 {
-                    capacities.push((port, u32::try_from(have / u64::from(layout.item_size)).unwrap_or(u32::MAX)));
+                    capacities.push((
+                        port,
+                        u32::try_from(have / u64::from(layout.item_size)).unwrap_or(u32::MAX),
+                    ));
                 }
             }
             for &(port, resource) in &step.outputs {
-                let Some(PortType::Array(layout)) = plan.resource_type(resource) else { continue };
+                let Some(PortType::Array(layout)) = plan.resource_type(resource) else {
+                    continue;
+                };
                 if node.node.provides_array_output(port) {
                     continue;
                 }
-                let planned_bytes = planned.storage.get(&resource).map_or(0, |storage| storage.bytes);
-                let aliased = node.node.aliased_array_io().iter().find(|(_, output)| *output == port).and_then(|(input, _)| {
-                    step.inputs.iter().find(|(name, _)| name == input).map(|&(_, resource)| resource)
-                });
+                let planned_bytes = planned
+                    .storage
+                    .get(&resource)
+                    .map_or(0, |storage| storage.bytes);
+                let aliased = node
+                    .node
+                    .aliased_array_io()
+                    .iter()
+                    .find(|(_, output)| *output == port)
+                    .and_then(|(input, _)| {
+                        step.inputs
+                            .iter()
+                            .find(|(name, _)| name == input)
+                            .map(|&(_, resource)| resource)
+                    });
                 let size = if let Some(input) = aliased {
                     bytes.get(&input).copied().unwrap_or(planned_bytes)
                 } else if node.node.canvas_sized_array_outputs().contains(&port) {
@@ -334,33 +417,55 @@ pub fn check_graph(graph: &mut Graph, plan: &ExecutionPlan, rules: &[ExtentRule]
                 let verdict = (rule.check)(&mut atom);
                 let name = atom.name();
                 if let Some(port) = atom.unresolved.take() {
-                    return Err(ExtentError::Unresolved { node: name, port: port.to_string() });
+                    return Err(ExtentError::Unresolved {
+                        node: name,
+                        port: port.to_string(),
+                    });
                 }
                 match verdict {
-                    Err(Verdict::Refused(reason)) => return Err(ExtentError::Refused { node: name, reason }),
-                    Err(Verdict::Uncovered(detail)) if last => return Err(ExtentError::Uncovered { node: name, detail }),
+                    Err(Verdict::Refused(reason)) => {
+                        return Err(ExtentError::Refused { node: name, reason });
+                    }
+                    Err(Verdict::Uncovered(detail)) if last => {
+                        return Err(ExtentError::Uncovered { node: name, detail });
+                    }
                     _ => {}
                 }
-                let AtomExtent { provided: sizes, published, held: node_held, .. } = atom;
+                let AtomExtent {
+                    provided: sizes,
+                    published,
+                    held: node_held,
+                    ..
+                } = atom;
                 for &(port, resource) in &step.outputs {
-                    if !matches!(plan.resource_type(resource), Some(PortType::Array(_))) || !node.node.provides_array_output(port) {
+                    if !matches!(plan.resource_type(resource), Some(PortType::Array(_)))
+                        || !node.node.provides_array_output(port)
+                    {
                         continue;
                     }
                     let Some(&(_, size)) = sizes.iter().find(|(name, _)| *name == port) else {
-                        return Err(ExtentError::Uncovered { node: name, detail: format!("the rule does not size provided {port}") });
+                        return Err(ExtentError::Uncovered {
+                            node: name,
+                            detail: format!("the rule does not size provided {port}"),
+                        });
                     };
                     bytes.insert(resource, size);
                     provided.insert(resource, size);
                 }
                 for (port, value) in published {
-                    if let Some(&(_, resource)) = step.outputs.iter().find(|(name, _)| *name == port) {
+                    if let Some(&(_, resource)) =
+                        step.outputs.iter().find(|(name, _)| *name == port)
+                    {
                         wires.insert(resource, value);
                     }
                 }
                 held += node_held;
                 checked += 1;
             } else if needs_rule(node) {
-                return Err(ExtentError::NoRule { node: node.node_id.as_str().to_string(), type_id: type_id.to_string() });
+                return Err(ExtentError::NoRule {
+                    node: node.node_id.as_str().to_string(),
+                    type_id: type_id.to_string(),
+                });
             } else if PLUMBING.contains(&type_id) {
                 evaluate_plumbing(graph, plan, step, &mut wires);
             }
@@ -377,7 +482,10 @@ pub fn check_graph(graph: &mut Graph, plan: &ExecutionPlan, rules: &[ExtentRule]
                 let root = roots.entry(storage.root).or_default();
                 *root = (*root).max(size);
             }
-            report = ExtentReport { checked, scene_bytes: roots.values().sum::<u64>() + held };
+            report = ExtentReport {
+                checked,
+                scene_bytes: roots.values().sum::<u64>() + held,
+            };
         }
     }
     Ok(report)
@@ -386,12 +494,21 @@ pub fn check_graph(graph: &mut Graph, plan: &ExecutionPlan, rules: &[ExtentRule]
 /// Run a plumbing node on its resolved inputs and record its scalar and
 /// transform outputs. A node with an unresolved input publishes nothing, so
 /// a rule reading through it fails by name.
-fn evaluate_plumbing(graph: &mut Graph, plan: &ExecutionPlan, step: &ExecutionStep, wires: &mut AHashMap<ResourceId, Wire>) {
+fn evaluate_plumbing(
+    graph: &mut Graph,
+    plan: &ExecutionPlan,
+    step: &ExecutionStep,
+    wires: &mut AHashMap<ResourceId, Wire>,
+) {
     let mut backend = MockBackend::new();
     let mut inputs = Vec::new();
     for &(port, resource) in &step.inputs {
-        let Some(wire) = wires.get(&resource) else { return };
-        let Some(ty) = plan.resource_type(resource) else { return };
+        let Some(wire) = wires.get(&resource) else {
+            return;
+        };
+        let Some(ty) = plan.resource_type(resource) else {
+            return;
+        };
         let slot = backend.acquire(resource, ty, None, (0, 0));
         match *wire {
             Wire::F32(value) => backend.set_scalar(slot, ParamValue::Float(value)),
@@ -403,19 +520,43 @@ fn evaluate_plumbing(graph: &mut Graph, plan: &ExecutionPlan, step: &ExecutionSt
     let mut outputs: Vec<(&'static str, Slot)> = Vec::new();
     let mut resources: AHashMap<u32, ResourceId> = AHashMap::default();
     for &(port, resource) in &step.outputs {
-        let Some(ty) = plan.resource_type(resource) else { continue };
+        let Some(ty) = plan.resource_type(resource) else {
+            continue;
+        };
         if matches!(ty, PortType::Scalar(_) | PortType::Transform) {
             let slot = backend.acquire(resource, ty, None, (0, 0));
             resources.insert(slot.0, resource);
             outputs.push((port, slot));
         }
     }
-    let (mut scalars, mut cameras, mut lights, mut materials, mut transforms, mut atmospheres, mut modes, mut objects) =
-        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (
+        mut scalars,
+        mut cameras,
+        mut lights,
+        mut materials,
+        mut transforms,
+        mut atmospheres,
+        mut modes,
+        mut objects,
+    ) = (
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
     {
         let node = graph.get_node_mut(step.node).expect("plan node");
         let params = node.params.clone();
-        let time = FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 };
+        let time = FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        };
         let node_inputs = NodeInputs::new(&inputs, &backend, &[]);
         let node_outputs = NodeOutputs::new(
             &outputs,
@@ -444,7 +585,6 @@ fn evaluate_plumbing(graph: &mut Graph, plan: &ExecutionPlan, step: &ExecutionSt
     }
 }
 
-
 // Registered rules are collected here so the generic checker has no dependency on a solver.
 pub static EXTENT_RULES: std::sync::LazyLock<Vec<ExtentRule>> = std::sync::LazyLock::new(|| {
     let mut rules: Vec<_> = inventory::iter::<ExtentRule>.into_iter().copied().collect();
@@ -458,7 +598,9 @@ pub static EXTENT_RULES: std::sync::LazyLock<Vec<ExtentRule>> = std::sync::LazyL
 /// writes by the destination texture; this does not account texture memory.
 pub fn texture_only(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let array = |ty: &PortType| matches!(ty, PortType::Array(_));
-    if x.node.node.inputs().iter().any(|p| array(&p.ty)) || x.node.node.outputs().iter().any(|p| array(&p.ty)) {
+    if x.node.node.inputs().iter().any(|p| array(&p.ty))
+        || x.node.node.outputs().iter().any(|p| array(&p.ty))
+    {
         return Err(x.uncovered("an array port on a texture-only rule".into()));
     }
     Ok(())
@@ -481,7 +623,6 @@ pub fn in_place(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 pub fn whole_param(x: &AtomExtent<'_>, name: &str, default: f32) -> u32 {
     x.param(name, default).round().max(0.0) as u32
 }
-
 
 #[cfg(any(test, feature = "testkit"))]
 #[doc(hidden)]

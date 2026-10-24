@@ -79,7 +79,10 @@ mod tests {
     #[test]
     fn default_is_shafts_off_med_quality() {
         let a = Atmosphere::default();
-        assert_eq!(a.shaft_intensity, 0.0, "default must be shafts-off (THE fader)");
+        assert_eq!(
+            a.shaft_intensity, 0.0,
+            "default must be shafts-off (THE fader)"
+        );
         assert_eq!(a.shaft_anisotropy, 0.6);
         assert_eq!(a.shaft_quality, 1, "default quality is Med (1)");
     }

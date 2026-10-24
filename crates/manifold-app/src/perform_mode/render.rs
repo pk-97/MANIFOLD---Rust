@@ -4,9 +4,9 @@
 //! and the HUD's draw helpers.
 
 use manifold_core::types::ClockAuthority;
+use manifold_ui::node::{Color32, FontWeight, Rect};
 use manifold_ui::text::TextMeasure;
 use manifold_ui_paint::ui_renderer::UIRenderer;
-use manifold_ui::node::{Color32, FontWeight, Rect};
 
 use crate::app::Application;
 use crate::perform_mode::frame::{PerformHud, SyncStatus};
@@ -66,7 +66,10 @@ impl Application {
             logical_h,
         );
         let (lw, lh) = (logical_w as f32, logical_h as f32);
-        let pipeline_dims = self.content_pipeline_output.as_ref().map(|p| p.get_dimensions());
+        let pipeline_dims = self
+            .content_pipeline_output
+            .as_ref()
+            .map(|p| p.get_dimensions());
         let session = self.ws.ui_root.ableton_session.as_deref();
         let inputs = frame::PerformHudInputs::derive(
             &self.perform,
@@ -92,7 +95,11 @@ impl Application {
             // The session Arc is snapshotted (a refcount bump) so the HUD's
             // cue and track names borrow from it, not from `ui_root`.
             let session_snapshot = self.ws.ui_root.ableton_session.clone();
-            let hud = PerformHud::derive(&self.content_state, session_snapshot.as_deref(), &self.local_project);
+            let hud = PerformHud::derive(
+                &self.content_state,
+                session_snapshot.as_deref(),
+                &self.local_project,
+            );
             frame::composite_perform_frame(
                 &gpu.device,
                 &mut encoder,
@@ -346,9 +353,7 @@ pub(super) fn draw_sync_indicators(ui: &mut UIRenderer, tm: &dyn TextMeasure, sy
 
     // Helper: draw a badge (rounded rect with centered text).
     let draw_badge = |ui: &mut UIRenderer, x: f32, label: &str, bg: Color32| -> f32 {
-        let text_w = tm
-            .measure_text(label, badge_font, FontWeight::Medium)
-            .x;
+        let text_w = tm.measure_text(label, badge_font, FontWeight::Medium).x;
         let w = text_w + badge_pad_h * 2.0;
         ui.draw_rounded_rect(x, y, w, badge_h, bg, badge_radius);
         ui.draw_text(x + badge_pad_h, text_y, label, badge_font as f32, white);
@@ -481,7 +486,12 @@ fn draw_numeric_text(
 /// be clicked accidentally during a performance — the cue HUD is the
 /// primary visual, and the exit affordance is deliberate-only.
 /// Caller must have already called `ui.begin_frame()`.
-pub(super) fn draw_exit_button(ui: &mut UIRenderer, tm: &dyn TextMeasure, button: Rect, hover: bool) {
+pub(super) fn draw_exit_button(
+    ui: &mut UIRenderer,
+    tm: &dyn TextMeasure,
+    button: Rect,
+    hover: bool,
+) {
     let (btn_x, btn_y, btn_w, btn_h) = (button.x, button.y, button.width, button.height);
     // Muted bg by default; brighter on hover so the user gets visual
     // confirmation they're aiming at it before pressing.
@@ -525,14 +535,25 @@ pub(crate) fn section_fill_px(lw: f32, progress: f64) -> u16 {
 /// BEAT, since bar.beat replaces it).
 ///
 /// Caller must have already called `ui.begin_frame()`.
-pub(super) fn draw_cue_hud(ui: &mut UIRenderer, tm: &dyn TextMeasure, lw: f32, lh: f32, hud: &PerformHud<'_>) {
+pub(super) fn draw_cue_hud(
+    ui: &mut UIRenderer,
+    tm: &dyn TextMeasure,
+    lw: f32,
+    lh: f32,
+    hud: &PerformHud<'_>,
+) {
     let (current_name, next_name) = (hud.current_name, hud.next_name);
     let countdown: Option<&cue::CountdownDisplay> = hud.countdown.as_ref();
     let section_progress = hud.section_progress;
     let bar_beat = &hud.bar_beat;
-    let (now_section_tracks, next_section_tracks) = (&hud.now_section_tracks, &hud.next_section_tracks);
-    let (bpm, is_playing, ableton_connected, cues_empty) =
-        (hud.bpm, hud.is_playing, hud.ableton_connected, hud.cues_empty);
+    let (now_section_tracks, next_section_tracks) =
+        (&hud.now_section_tracks, &hud.next_section_tracks);
+    let (bpm, is_playing, ableton_connected, cues_empty) = (
+        hud.bpm,
+        hud.is_playing,
+        hud.ableton_connected,
+        hud.cues_empty,
+    );
     // Color palette.
     let dim = [140u8, 140u8, 145u8, 255u8];
     let white = [240u8, 240u8, 240u8, 255u8];
@@ -589,9 +610,7 @@ pub(super) fn draw_cue_hud(ui: &mut UIRenderer, tm: &dyn TextMeasure, lw: f32, l
     if !now_section_tracks.is_empty() {
         let mut ny = now_track_top;
         for name in now_section_tracks.iter().take(MAX_TRACKS) {
-            let w = tm
-                .measure_text(name, track_size, FontWeight::Medium)
-                .x;
+            let w = tm.measure_text(name, track_size, FontWeight::Medium).x;
             ui.draw_text((lw - w) * 0.5, ny, name, track_size as f32, now_green_dim);
             ny += track_line_h;
         }
@@ -625,9 +644,7 @@ pub(super) fn draw_cue_hud(ui: &mut UIRenderer, tm: &dyn TextMeasure, lw: f32, l
     if !next_section_tracks.is_empty() {
         next_content_y += 10.0;
         for name in next_section_tracks.iter().take(MAX_TRACKS) {
-            let w = tm
-                .measure_text(name, track_size, FontWeight::Medium)
-                .x;
+            let w = tm.measure_text(name, track_size, FontWeight::Medium).x;
             ui.draw_text(
                 (lw - w) * 0.5,
                 next_content_y,
@@ -768,9 +785,7 @@ pub(super) fn draw_cue_hud(ui: &mut UIRenderer, tm: &dyn TextMeasure, lw: f32, l
     let label_value_gap = 8.0_f32;
 
     let draw_numeric_cell = |ui: &mut UIRenderer, center_x: f32, label: &str, value: &str| {
-        let label_w = tm
-            .measure_text(label, status_size, FontWeight::Medium)
-            .x;
+        let label_w = tm.measure_text(label, status_size, FontWeight::Medium).x;
         let value_w = numeric_text_width(tm, value, status_size);
         let total_w = label_w + label_value_gap + value_w;
         let start_x = center_x - total_w * 0.5;
@@ -795,15 +810,12 @@ pub(super) fn draw_cue_hud(ui: &mut UIRenderer, tm: &dyn TextMeasure, lw: f32, l
         let label_w = if label.is_empty() {
             0.0
         } else {
-            tm.measure_text(label, status_size, FontWeight::Medium)
-                .x
+            tm.measure_text(label, status_size, FontWeight::Medium).x
         };
         let slot_w = tm
             .measure_text(max_value, status_size, FontWeight::Medium)
             .x;
-        let value_w = tm
-            .measure_text(value, status_size, FontWeight::Medium)
-            .x;
+        let value_w = tm.measure_text(value, status_size, FontWeight::Medium).x;
         let gap = if label.is_empty() {
             0.0
         } else {
@@ -838,7 +850,11 @@ pub(super) fn draw_cue_hud(ui: &mut UIRenderer, tm: &dyn TextMeasure, lw: f32, l
 /// caller when the snapshot is empty (no macros mapped).
 ///
 /// Caller must have already called `ui.begin_frame()`.
-pub(super) fn draw_macros_column(ui: &mut UIRenderer, lh: f32, macros: &[perform_macros::MacroDisplay]) {
+pub(super) fn draw_macros_column(
+    ui: &mut UIRenderer,
+    lh: f32,
+    macros: &[perform_macros::MacroDisplay],
+) {
     let dim = [140u8, 140u8, 145u8, 255u8];
     let white = [240u8, 240u8, 240u8, 255u8];
     // Ableton purple — matches the macro accent used elsewhere in the
@@ -878,7 +894,7 @@ pub(super) fn draw_macros_column(ui: &mut UIRenderer, lh: f32, macros: &[perform
 #[cfg(test)]
 mod tests {
     use crate::app::Application;
-    use crate::content_state::{state_channel, ContentState};
+    use crate::content_state::{ContentState, state_channel};
     use std::sync::Arc;
 
     /// BUG-znzgo (project snapshot published during perform mode lost on

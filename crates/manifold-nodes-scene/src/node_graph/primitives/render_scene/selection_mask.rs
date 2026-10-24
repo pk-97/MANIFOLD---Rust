@@ -58,18 +58,24 @@ impl RenderScene {
         let (width, height) = (pre.native_width.max(1), pre.native_height.max(1));
         let rebuild_epoch = ctx.rebuild_epoch;
         let gpu = ctx.gpu_encoder();
-        let recreated = self.selection.texture.as_ref().is_none_or(|mask| mask.width != width || mask.height != height);
+        let recreated = self
+            .selection
+            .texture
+            .as_ref()
+            .is_none_or(|mask| mask.width != width || mask.height != height);
         if recreated {
-            self.selection.texture = Some(gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
-                width,
-                height,
-                depth: 1,
-                format: manifold_gpu::GpuTextureFormat::R8Unorm,
-                dimension: manifold_gpu::GpuTextureDimension::D2,
-                usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET | manifold_gpu::GpuTextureUsage::SHADER_READ,
-                label: "node.render_scene selection mask",
-                mip_levels: 1,
-            }));
+            self.selection.texture =
+                Some(gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
+                    width,
+                    height,
+                    depth: 1,
+                    format: manifold_gpu::GpuTextureFormat::R8Unorm,
+                    dimension: manifold_gpu::GpuTextureDimension::D2,
+                    usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+                        | manifold_gpu::GpuTextureUsage::SHADER_READ,
+                    label: "node.render_scene selection mask",
+                    mip_levels: 1,
+                }));
             self.selection.cache_key = None;
         }
         let pipeline = self
@@ -133,14 +139,42 @@ impl RenderScene {
         for d in selected_draws {
             let uniforms = ShadowUniforms::for_draw(view_proj, d);
             let bindings = [
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: d.vertices, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: d.instances.unwrap_or(identity_stub), offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: d.weights.unwrap_or(d.vertices), offset: 0 },
-                GpuBinding::Texture { binding: 4, texture: d.base_color_map.unwrap_or(dummy) },
-                GpuBinding::Sampler { binding: 5, sampler: &self.material_samplers[&Self::sampler_cache_key(d.sampler_descs[0])] },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: d.vertices,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: d.instances.unwrap_or(identity_stub),
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: d.weights.unwrap_or(d.vertices),
+                    offset: 0,
+                },
+                GpuBinding::Texture {
+                    binding: 4,
+                    texture: d.base_color_map.unwrap_or(dummy),
+                },
+                GpuBinding::Sampler {
+                    binding: 5,
+                    sampler: &self.material_samplers[&Self::sampler_cache_key(d.sampler_descs[0])],
+                },
             ];
-            gpu.native_enc.draw_instanced(&pipeline, mask, &bindings, d.draw_count(), load, "node.render_scene selection mask");
+            gpu.native_enc.draw_instanced(
+                &pipeline,
+                mask,
+                &bindings,
+                d.draw_count(),
+                load,
+                "node.render_scene selection mask",
+            );
             load = manifold_gpu::GpuLoadAction::Load;
         }
         if load == manifold_gpu::GpuLoadAction::Clear {

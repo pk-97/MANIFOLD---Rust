@@ -34,9 +34,8 @@ use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 /// Ground plane (10×10 at y=0) + a small plate occluder (3×3) at height
 /// `occluder_y`, lit by one Sun at `(3, 20, 3)` aimed at the origin — the
@@ -171,7 +170,10 @@ fn luma_image(bytes: &[u8]) -> Vec<f32> {
             let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
             let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
             let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-            assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+            assert!(
+                r.is_finite() && g.is_finite() && b.is_finite(),
+                "non-finite pixel"
+            );
             0.2126 * r + 0.7152 * g + 0.0722 * b
         })
         .collect()
@@ -182,7 +184,9 @@ fn luma_image(bytes: &[u8]) -> Vec<f32> {
 /// fully lit, independent of overall scene exposure.
 fn shade_column(luma: &[f32], w: u32, h: u32, col: u32) -> Vec<f32> {
     let reference = luma[(REF_ROW * w + REF_COL) as usize].max(1e-6);
-    (0..h).map(|row| luma[(row * w + col) as usize] / reference).collect()
+    (0..h)
+        .map(|row| luma[(row * w + col) as usize] / reference)
+        .collect()
 }
 
 /// Count of samples with shade strictly between `lo` and `hi` — the PCSS
@@ -265,7 +269,11 @@ fn existing_softness_tiers_are_unaffected_by_contact() {
     // checks via total luma, exercised here as an independent witness
     // through this file's own scene builder and column-based measure.
     let (soft_bytes, w, h) = render_readback(&pcss_scene_json(FAR_HEIGHT, 1, 0.0));
-    let soft_width = gradient_width(&shade_column(&luma_image(&soft_bytes), w, h, SCANLINE_COL), 0.05, 0.95);
+    let soft_width = gradient_width(
+        &shade_column(&luma_image(&soft_bytes), w, h, SCANLINE_COL),
+        0.05,
+        0.95,
+    );
     eprintln!("Soft-tier gradient width at height {FAR_HEIGHT}: {soft_width}px");
     assert!(
         soft_width >= 1,

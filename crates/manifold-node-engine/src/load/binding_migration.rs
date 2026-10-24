@@ -93,8 +93,7 @@ fn complete_stub_graph(fx: &mut PresetInstance) {
             for b in stub_meta.bindings.into_iter().filter(|b| b.user_added) {
                 if !canon_meta.bindings.iter().any(|x| x.id == b.id) {
                     // Pull the matching spec across too.
-                    if let Some(spec) =
-                        stub_meta.params.iter().find(|p| p.id == b.id).cloned()
+                    if let Some(spec) = stub_meta.params.iter().find(|p| p.id == b.id).cloned()
                         && !canon_meta.params.iter().any(|p| p.id == spec.id)
                     {
                         canon_meta.params.push(spec);

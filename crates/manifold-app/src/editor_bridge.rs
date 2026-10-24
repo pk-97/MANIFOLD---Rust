@@ -40,7 +40,9 @@ pub(crate) fn seed_def_for_project(
     target: &manifold_core::GraphTarget,
 ) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
     let owner = project.graph_target_owner(target)?;
-    if owner.graph.is_some() { return None; }
+    if owner.graph.is_some() {
+        return None;
+    }
     crate::graph_target::owner_default(project, target)
 }
 
@@ -171,9 +173,10 @@ fn binding_for_node_param(
         return None;
     }
     let binding = meta.bindings.iter().find(|b| match &b.target {
-        BindingTarget::Node { node_id: nid, param } => {
-            *nid == node.node_id && param == param_name
-        }
+        BindingTarget::Node {
+            node_id: nid,
+            param,
+        } => *nid == node.node_id && param == param_name,
         BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => false,
     })?;
     let param = params.get(&binding.id)?;
@@ -204,7 +207,10 @@ fn node_param_is_wired(
     let mut wires = &def.wires;
     let mut level_nodes = &def.nodes;
     for &gid in scope_path {
-        let Some(group) = level_nodes.iter().find(|n| n.id == gid).and_then(|n| n.group.as_ref())
+        let Some(group) = level_nodes
+            .iter()
+            .find(|n| n.id == gid)
+            .and_then(|n| n.group.as_ref())
         else {
             return false;
         };
@@ -245,9 +251,12 @@ pub(crate) fn serialized_value_as_f32(
         V::Int { value } => Some(*value as f32),
         V::Bool { value } => Some(if *value { 1.0 } else { 0.0 }),
         V::Enum { value } => Some(*value as f32),
-        V::Vec2 { .. } | V::Vec3 { .. } | V::Vec4 { .. } | V::Color { .. } | V::Table { .. } | V::String { .. } => {
-            None
-        }
+        V::Vec2 { .. }
+        | V::Vec3 { .. }
+        | V::Vec4 { .. }
+        | V::Color { .. }
+        | V::Table { .. }
+        | V::String { .. } => None,
     }
 }
 
@@ -279,7 +288,11 @@ impl NodeInspectorKey {
         info: &crate::content_state::NodePreviewInfo,
         snapshot: Option<&std::sync::Arc<manifold_node_engine::snapshot::GraphSnapshot>>,
     ) -> Self {
-        Self { node: info.node_id.clone(), diagnostic: info.diagnostic, snapshot: snapshot.cloned() }
+        Self {
+            node: info.node_id.clone(),
+            diagnostic: info.diagnostic,
+            snapshot: snapshot.cloned(),
+        }
     }
 
     fn matches(
@@ -354,8 +367,8 @@ fn resolve_boundary_node(
             // The enclosing group's output. Send the group container's node_id;
             // the content side maps it to the producer (+ port name) itself.
             let (group_u32, parent) = scope.split_last()?;
-            let (p_nodes, _) =
-                crate::graph_canvas::resolve_level(snap, parent).unwrap_or((&snap.nodes, &snap.wires));
+            let (p_nodes, _) = crate::graph_canvas::resolve_level(snap, parent)
+                .unwrap_or((&snap.nodes, &snap.wires));
             non_empty_node_id(&p_nodes.iter().find(|n| n.id == *group_u32)?.node_id)
         }
         GROUP_INPUT_TYPE_ID => {
@@ -363,8 +376,8 @@ fn resolve_boundary_node(
             // The boundary's outputs are the group's input ports.
             let port = primary_texture_port(&node.outputs)?;
             let (group_u32, parent) = scope.split_last()?;
-            let (p_nodes, p_wires) =
-                crate::graph_canvas::resolve_level(snap, parent).unwrap_or((&snap.nodes, &snap.wires));
+            let (p_nodes, p_wires) = crate::graph_canvas::resolve_level(snap, parent)
+                .unwrap_or((&snap.nodes, &snap.wires));
             let producer = producer_into(*group_u32, port, p_nodes, p_wires)?;
             resolve_producer(producer, p_nodes, p_wires, snap, parent)
         }
@@ -415,12 +428,16 @@ fn resolve_preview_target_with_scope(
             let (group_id, parent_scope) = scope.split_last()?;
             let (parent_nodes, _) = crate::graph_canvas::resolve_level(snap, parent_scope)?;
             let group = parent_nodes.iter().find(|node| node.id == *group_id)?;
-            Some((non_empty_node_id(&group.node_id)?, stable_scope_path(snap, parent_scope)?))
+            Some((
+                non_empty_node_id(&group.node_id)?,
+                stable_scope_path(snap, parent_scope)?,
+            ))
         }
         GROUP_INPUT_TYPE_ID => {
             let port = primary_texture_port(&node.outputs)?;
             let (group_id, parent_scope) = scope.split_last()?;
-            let (parent_nodes, parent_wires) = crate::graph_canvas::resolve_level(snap, parent_scope)?;
+            let (parent_nodes, parent_wires) =
+                crate::graph_canvas::resolve_level(snap, parent_scope)?;
             let producer = producer_into(*group_id, port, parent_nodes, parent_wires)?;
             resolve_preview_target_with_scope(snap, parent_scope, producer.id)
         }
@@ -570,28 +587,34 @@ pub(crate) fn resolve_canvas_binding(
             .find(|binding| matches!(&binding.target,
                 manifold_core::effect_graph_def::BindingTarget::SceneModifier { modifier_id, param_id }
                     if target_modifier_id(target) == Some(modifier_id) && param_id == &local_binding.id))?;
-        return crate::graph_target::modifier_host_binding(
-            project,
-            target,
-            &outer.id,
-            |outer| {
-                let param = owner.params.get(&outer.id)?;
-                let (span_min, span_max) = param.slider_span();
-                let spec = param.spec.clone();
-                Some((
-                    outer.id.clone(), outer.label.clone(), span_min, span_max,
-                    spec.invert, spec.curve, outer.scale, outer.offset,
-                    range, is_angle, spec.section,
-                ))
-            },
-        ).flatten();
+        return crate::graph_target::modifier_host_binding(project, target, &outer.id, |outer| {
+            let param = owner.params.get(&outer.id)?;
+            let (span_min, span_max) = param.slider_span();
+            let spec = param.spec.clone();
+            Some((
+                outer.id.clone(),
+                outer.label.clone(),
+                span_min,
+                span_max,
+                spec.invert,
+                spec.curve,
+                outer.scale,
+                outer.offset,
+                range,
+                is_angle,
+                spec.section,
+            ))
+        })
+        .flatten();
     }
     let instance = project.preset_instance(target?)?;
     let view;
     let def = if let Some(def) = instance.graph.as_ref() {
         def
     } else {
-        view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(instance.effect_type())?;
+        view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(
+            instance.effect_type(),
+        )?;
         view.canonical_def.as_ref()
     };
     let binding = def.preset_metadata.as_ref()?.bindings.iter().find(|b| {
@@ -600,8 +623,19 @@ pub(crate) fn resolve_canvas_binding(
     })?;
     let (label, min, max, invert, curve, scale, offset) =
         full_reshape_from_instance(instance, def, &binding.id)?;
-    Some((binding.id.clone(), label, min, max, invert, curve, scale, offset,
-        range, is_angle, instance.params.get(&binding.id)?.spec.section.clone()))
+    Some((
+        binding.id.clone(),
+        label,
+        min,
+        max,
+        invert,
+        curve,
+        scale,
+        offset,
+        range,
+        is_angle,
+        instance.params.get(&binding.id)?.spec.section.clone(),
+    ))
 }
 
 fn target_modifier_id(target: &manifold_core::GraphTarget) -> Option<&manifold_core::NodeId> {
@@ -639,9 +673,11 @@ fn modifier_binding_for_node_param(
         .as_ref()?
         .bindings
         .iter()
-        .find(|binding| matches!(&binding.target,
+        .find(|binding| {
+            matches!(&binding.target,
             manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
-                if *node_id == node.node_id && param == param_name))?;
+                if *node_id == node.node_id && param == param_name)
+        })?;
     let owner_binding = owner
         .graph
         .as_ref()
@@ -655,7 +691,11 @@ fn modifier_binding_for_node_param(
     let spec = &param.spec;
     let (span_min, span_max) = param.slider_span();
     Some((
-        owner_binding.id.clone(), span_min, span_max, spec.invert, spec.curve,
+        owner_binding.id.clone(),
+        span_min,
+        span_max,
+        spec.invert,
+        spec.curve,
         owner_binding.scale * local_binding.scale,
         owner_binding.offset * local_binding.scale + local_binding.offset,
     ))
@@ -702,8 +742,14 @@ pub(crate) fn effect_card_id(
     ei: usize,
 ) -> Option<manifold_core::EffectId> {
     match tab {
-        manifold_ui::InspectorTab::Master => project.settings.master_effects.get(ei).map(|e| e.id.clone()),
-        manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group | manifold_ui::InspectorTab::Scene => active_layer
+        manifold_ui::InspectorTab::Master => project
+            .settings
+            .master_effects
+            .get(ei)
+            .map(|e| e.id.clone()),
+        manifold_ui::InspectorTab::Layer
+        | manifold_ui::InspectorTab::Group
+        | manifold_ui::InspectorTab::Scene => active_layer
             .and_then(|id| project.timeline.find_layer_by_id(id))
             .and_then(|(_, l)| l.effects.as_ref())
             .and_then(|effects| effects.get(ei))
@@ -711,7 +757,14 @@ pub(crate) fn effect_card_id(
         manifold_ui::InspectorTab::Clip => selection
             .primary_selected_clip_id()
             .as_ref()
-            .and_then(|cid| project.timeline.layers.iter().flat_map(|l| l.clips.iter()).find(|c| c.id == **cid))
+            .and_then(|cid| {
+                project
+                    .timeline
+                    .layers
+                    .iter()
+                    .flat_map(|l| l.clips.iter())
+                    .find(|c| c.id == **cid)
+            })
             .and_then(|c| c.effects.get(ei))
             .map(|e| e.id.clone()),
     }
@@ -722,28 +775,41 @@ pub(crate) fn target_full_reshape(
     project: &manifold_core::project::Project,
     target: &manifold_core::GraphTarget,
     param_id: &str,
-) -> Option<(String, f32, f32, bool, manifold_core::macro_bank::MacroCurve, f32, f32)> {
+) -> Option<(
+    String,
+    f32,
+    f32,
+    bool,
+    manifold_core::macro_bank::MacroCurve,
+    f32,
+    f32,
+)> {
     if matches!(target, manifold_core::GraphTarget::SceneModifier { .. }) {
         let owner = project.graph_target_owner(target)?;
-        let binding = crate::graph_target::modifier_host_binding(
-            project,
-            target,
-            param_id,
-            |binding| (binding.scale, binding.offset),
-        )?;
+        let binding =
+            crate::graph_target::modifier_host_binding(project, target, param_id, |binding| {
+                (binding.scale, binding.offset)
+            })?;
         let param = owner.params.get(param_id)?;
         let spec = &param.spec;
         let (span_min, span_max) = param.slider_span();
         return Some((
-            spec.name.clone(), span_min, span_max, spec.invert, spec.curve,
-            binding.0, binding.1,
+            spec.name.clone(),
+            span_min,
+            span_max,
+            spec.invert,
+            spec.curve,
+            binding.0,
+            binding.1,
         ));
     }
     let instance = project.preset_instance(target)?;
     if let Some(def) = instance.graph.as_ref() {
         return full_reshape_from_instance(instance, def, param_id);
     }
-    let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(instance.effect_type())?;
+    let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(
+        instance.effect_type(),
+    )?;
     full_reshape_from_instance(instance, view.canonical_def.as_ref(), param_id)
 }
 
@@ -784,9 +850,20 @@ pub(crate) struct CardMapping {
 impl CardMapping {
     pub(crate) fn open(self, popover: &mut crate::mapping_popover::MappingPopover) {
         popover.open(
-            crate::editing_host::to_ui_graph_target(&self.owner), self.param_id, self.label,
-            self.min, self.max, self.invert, crate::ui_translate::macro_curve_to_ui(self.curve),
-            self.scale, self.offset, None, self.is_angle, self.section, self.anchor, self.clip,
+            crate::editing_host::to_ui_graph_target(&self.owner),
+            self.param_id,
+            self.label,
+            self.min,
+            self.max,
+            self.invert,
+            crate::ui_translate::macro_curve_to_ui(self.curve),
+            self.scale,
+            self.offset,
+            None,
+            self.is_angle,
+            self.section,
+            self.anchor,
+            self.clip,
         );
     }
 }
@@ -807,14 +884,22 @@ pub(crate) fn resolve_card_mapping(
     clip: manifold_ui::graph_canvas::Rect,
 ) -> Option<CardMapping> {
     let resolved_owner = crate::ui_bridge::resolve_graph_target(
-        target, None, editor.inspector.last_effect_tab(), active_layer, selection, project,
+        target,
+        None,
+        editor.inspector.last_effect_tab(),
+        active_layer,
+        selection,
+        project,
     )?;
     let owner = watched
         .filter(|watched| watched.host_target() == Some(&resolved_owner))
         .cloned()
         .unwrap_or(resolved_owner);
-    let (label, min, max, invert, curve, scale, offset) = target_full_reshape(project, &owner, param_id)?;
-    let param = project.graph_target_owner(&owner).and_then(|instance| instance.params.get(param_id));
+    let (label, min, max, invert, curve, scale, offset) =
+        target_full_reshape(project, &owner, param_id)?;
+    let param = project
+        .graph_target_owner(&owner)
+        .and_then(|instance| instance.params.get(param_id));
     let is_angle = param.is_some_and(|param| param.spec.is_angle);
     let section = param.and_then(|p| p.spec.section.clone());
     editor.tree.get_node(anchor_node_id)?;
@@ -822,8 +907,21 @@ pub(crate) fn resolve_card_mapping(
     Some(CardMapping {
         owner,
         param_id: param_id.to_owned(),
-        label, min, max, invert, curve, scale, offset, is_angle, section,
-        anchor: manifold_ui::graph_canvas::Rect::new(anchor.x, anchor.y, anchor.width, anchor.height),
+        label,
+        min,
+        max,
+        invert,
+        curve,
+        scale,
+        offset,
+        is_angle,
+        section,
+        anchor: manifold_ui::graph_canvas::Rect::new(
+            anchor.x,
+            anchor.y,
+            anchor.width,
+            anchor.height,
+        ),
         clip,
     })
 }
@@ -871,8 +969,15 @@ impl MappingHost<'_> {
     /// Reuses the edit command's own apply logic (it picks user-binding vs
     /// note + seeds copy-on-write), so the preview can never diverge from
     /// the commit.
-    fn preview(&mut self, target: &manifold_core::GraphTarget, param_id: &str, edit: BindingMappingEdit) {
-        let Some(target) = mapping_write_target(&self.project, target, param_id) else { return; };
+    fn preview(
+        &mut self,
+        target: &manifold_core::GraphTarget,
+        param_id: &str,
+        edit: BindingMappingEdit,
+    ) {
+        let Some(target) = mapping_write_target(&self.project, target, param_id) else {
+            return;
+        };
         let seed_def = seed_def_for_project(&self.project, &target);
         // A reshape is a live scalar (Shapes, no reaction); the first tick may
         // also materialize the graph override (D21).
@@ -896,10 +1001,19 @@ impl MappingHost<'_> {
     /// Commit / single-shot: send the reshape edit as one undoable command.
     /// Self-captures the reverse (correct for single-shot — nothing mutated
     /// the store first).
-    fn commit(&self, target: &manifold_core::GraphTarget, param_id: &str, edit: BindingMappingEdit) {
-        let Some(target) = mapping_write_target(&self.project, target, param_id) else { return; };
+    fn commit(
+        &self,
+        target: &manifold_core::GraphTarget,
+        param_id: &str,
+        edit: BindingMappingEdit,
+    ) {
+        let Some(target) = mapping_write_target(&self.project, target, param_id) else {
+            return;
+        };
         let seed_def = seed_def_for_project(&self.project, &target);
-        self.send(ContentCommand::Execute(build_mapping_command(&target, param_id, edit, seed_def)));
+        self.send(ContentCommand::Execute(build_mapping_command(
+            &target, param_id, edit, seed_def,
+        )));
     }
 
     /// Drag commit: one undoable command carrying the explicit pre-drag
@@ -912,7 +1026,9 @@ impl MappingHost<'_> {
         new: BindingMappingEdit,
         reverse: BindingMappingEdit,
     ) {
-        let Some(target) = mapping_write_target(&self.project, target, param_id) else { return; };
+        let Some(target) = mapping_write_target(&self.project, target, param_id) else {
+            return;
+        };
         let seed_def = seed_def_for_project(&self.project, &target);
         self.send(ContentCommand::Execute(build_mapping_command_with_reverse(
             &target, param_id, new, reverse, seed_def,
@@ -922,28 +1038,47 @@ impl MappingHost<'_> {
     /// The mapping action handler, shared by both modal entry points. Every
     /// event carries the owner captured at open; selection is irrelevant.
     pub(crate) fn dispatch(&mut self, action: &manifold_ui::RootAction) -> MappingDispatch {
-        use manifold_ui::RootAction;
         use crate::ui_bridge::scrub::ResolvedScrub;
+        use manifold_ui::RootAction;
         match action {
             RootAction::EffectMappingRangeSnapshot { target, binding_id } => {
                 let target = &crate::editing_host::to_graph_target(target);
                 if let Some(shape) = target_full_reshape(&self.project, target, binding_id) {
                     self.scrub.check_single_active_on_begin("mapping-range");
                     self.scrub.active = Some(ResolvedScrub::MappingRange {
-                        target: target.clone(), param_id: binding_id.clone(),
-                        baseline: (shape.1, shape.2), live: (shape.1, shape.2),
+                        target: target.clone(),
+                        param_id: binding_id.clone(),
+                        baseline: (shape.1, shape.2),
+                        live: (shape.1, shape.2),
                     });
                 }
             }
-            RootAction::EffectMappingRangeChanged { target, binding_id, min, max } => {
+            RootAction::EffectMappingRangeChanged {
+                target,
+                binding_id,
+                min,
+                max,
+            } => {
                 let target = &crate::editing_host::to_graph_target(target);
-                if let Some(ResolvedScrub::MappingRange { target: owner, param_id, live, .. }) = &mut self.scrub.active
-                    && owner == target && param_id == binding_id
+                if let Some(ResolvedScrub::MappingRange {
+                    target: owner,
+                    param_id,
+                    live,
+                    ..
+                }) = &mut self.scrub.active
+                    && owner == target
+                    && param_id == binding_id
                 {
                     *live = (*min, *max);
-                    self.preview(target, binding_id, BindingMappingEdit {
-                        min: Some(*min), max: Some(*max), ..Default::default()
-                    });
+                    self.preview(
+                        target,
+                        binding_id,
+                        BindingMappingEdit {
+                            min: Some(*min),
+                            max: Some(*max),
+                            ..Default::default()
+                        },
+                    );
                 }
             }
             RootAction::EffectMappingRangeCommit { target, binding_id } => {
@@ -951,12 +1086,24 @@ impl MappingHost<'_> {
                 if matches!(&self.scrub.active,
                     Some(ResolvedScrub::MappingRange { target: owner, param_id, .. })
                     if owner == target && param_id == binding_id)
-                    && let Some(ResolvedScrub::MappingRange { baseline, live, .. }) = self.scrub.active.take()
-                    && ((baseline.0 - live.0).abs() > f32::EPSILON || (baseline.1 - live.1).abs() > f32::EPSILON)
+                    && let Some(ResolvedScrub::MappingRange { baseline, live, .. }) =
+                        self.scrub.active.take()
+                    && ((baseline.0 - live.0).abs() > f32::EPSILON
+                        || (baseline.1 - live.1).abs() > f32::EPSILON)
                 {
-                    self.commit_with_reverse(target, binding_id,
-                        BindingMappingEdit { min: Some(live.0), max: Some(live.1), ..Default::default() },
-                        BindingMappingEdit { min: Some(baseline.0), max: Some(baseline.1), ..Default::default() },
+                    self.commit_with_reverse(
+                        target,
+                        binding_id,
+                        BindingMappingEdit {
+                            min: Some(live.0),
+                            max: Some(live.1),
+                            ..Default::default()
+                        },
+                        BindingMappingEdit {
+                            min: Some(baseline.0),
+                            max: Some(baseline.1),
+                            ..Default::default()
+                        },
                     );
                 }
             }
@@ -965,20 +1112,39 @@ impl MappingHost<'_> {
                 if let Some(shape) = target_full_reshape(&self.project, target, binding_id) {
                     self.scrub.check_single_active_on_begin("mapping-affine");
                     self.scrub.active = Some(ResolvedScrub::MappingAffine {
-                        target: target.clone(), param_id: binding_id.clone(),
-                        baseline: (shape.5, shape.6), live: (shape.5, shape.6),
+                        target: target.clone(),
+                        param_id: binding_id.clone(),
+                        baseline: (shape.5, shape.6),
+                        live: (shape.5, shape.6),
                     });
                 }
             }
-            RootAction::EffectMappingAffineChanged { target, binding_id, scale, offset } => {
+            RootAction::EffectMappingAffineChanged {
+                target,
+                binding_id,
+                scale,
+                offset,
+            } => {
                 let target = &crate::editing_host::to_graph_target(target);
-                if let Some(ResolvedScrub::MappingAffine { target: owner, param_id, live, .. }) = &mut self.scrub.active
-                    && owner == target && param_id == binding_id
+                if let Some(ResolvedScrub::MappingAffine {
+                    target: owner,
+                    param_id,
+                    live,
+                    ..
+                }) = &mut self.scrub.active
+                    && owner == target
+                    && param_id == binding_id
                 {
                     *live = (*scale, *offset);
-                    self.preview(target, binding_id, BindingMappingEdit {
-                        scale: Some(*scale), offset: Some(*offset), ..Default::default()
-                    });
+                    self.preview(
+                        target,
+                        binding_id,
+                        BindingMappingEdit {
+                            scale: Some(*scale),
+                            offset: Some(*offset),
+                            ..Default::default()
+                        },
+                    );
                 }
             }
             RootAction::EffectMappingAffineCommit { target, binding_id } => {
@@ -986,51 +1152,116 @@ impl MappingHost<'_> {
                 if matches!(&self.scrub.active,
                     Some(ResolvedScrub::MappingAffine { target: owner, param_id, .. })
                     if owner == target && param_id == binding_id)
-                    && let Some(ResolvedScrub::MappingAffine { baseline, live, .. }) = self.scrub.active.take()
-                    && ((baseline.0 - live.0).abs() > f32::EPSILON || (baseline.1 - live.1).abs() > f32::EPSILON)
+                    && let Some(ResolvedScrub::MappingAffine { baseline, live, .. }) =
+                        self.scrub.active.take()
+                    && ((baseline.0 - live.0).abs() > f32::EPSILON
+                        || (baseline.1 - live.1).abs() > f32::EPSILON)
                 {
-                    self.commit_with_reverse(target, binding_id,
-                        BindingMappingEdit { scale: Some(live.0), offset: Some(live.1), ..Default::default() },
-                        BindingMappingEdit { scale: Some(baseline.0), offset: Some(baseline.1), ..Default::default() },
+                    self.commit_with_reverse(
+                        target,
+                        binding_id,
+                        BindingMappingEdit {
+                            scale: Some(live.0),
+                            offset: Some(live.1),
+                            ..Default::default()
+                        },
+                        BindingMappingEdit {
+                            scale: Some(baseline.0),
+                            offset: Some(baseline.1),
+                            ..Default::default()
+                        },
                     );
                 }
             }
-            RootAction::EffectMappingLabel { target, binding_id, label } => {
+            RootAction::EffectMappingLabel {
+                target,
+                binding_id,
+                label,
+            } => {
                 let target = &crate::editing_host::to_graph_target(target);
-                self.commit(target, binding_id, BindingMappingEdit {
-                    label: Some(label.clone()), ..Default::default()
-                });
+                self.commit(
+                    target,
+                    binding_id,
+                    BindingMappingEdit {
+                        label: Some(label.clone()),
+                        ..Default::default()
+                    },
+                );
             }
-            RootAction::EffectMappingSection { target, binding_id, section } => {
+            RootAction::EffectMappingSection {
+                target,
+                binding_id,
+                section,
+            } => {
                 let target = &crate::editing_host::to_graph_target(target);
-                self.commit(target, binding_id, BindingMappingEdit {
-                    section: Some(section.clone()), ..Default::default()
-                });
+                self.commit(
+                    target,
+                    binding_id,
+                    BindingMappingEdit {
+                        section: Some(section.clone()),
+                        ..Default::default()
+                    },
+                );
             }
-            RootAction::EffectMappingInvert { target, binding_id, invert } => {
+            RootAction::EffectMappingInvert {
+                target,
+                binding_id,
+                invert,
+            } => {
                 let target = &crate::editing_host::to_graph_target(target);
-                self.commit(target, binding_id, BindingMappingEdit {
-                    invert: Some(*invert), ..Default::default()
-                });
+                self.commit(
+                    target,
+                    binding_id,
+                    BindingMappingEdit {
+                        invert: Some(*invert),
+                        ..Default::default()
+                    },
+                );
             }
-            RootAction::EffectMappingCurve { target, binding_id, curve } => {
+            RootAction::EffectMappingCurve {
+                target,
+                binding_id,
+                curve,
+            } => {
                 let target = &crate::editing_host::to_graph_target(target);
-                self.commit(target, binding_id, BindingMappingEdit {
-                    curve: Some(crate::ui_translate::macro_curve_to_core(*curve)), ..Default::default()
-                });
+                self.commit(
+                    target,
+                    binding_id,
+                    BindingMappingEdit {
+                        curve: Some(crate::ui_translate::macro_curve_to_core(*curve)),
+                        ..Default::default()
+                    },
+                );
             }
             RootAction::EffectMappingGotoNode { target, binding_id } => {
-                return MappingDispatch::GotoNode(crate::editing_host::to_graph_target(target), binding_id.clone());
+                return MappingDispatch::GotoNode(
+                    crate::editing_host::to_graph_target(target),
+                    binding_id.clone(),
+                );
             }
             RootAction::EffectMappingCancel { target, binding_id } => {
                 let target = &crate::editing_host::to_graph_target(target);
                 let reverse = match &self.scrub.active {
-                    Some(ResolvedScrub::MappingRange { target: owner, param_id, baseline, .. })
-                        if owner == target && param_id == binding_id =>
-                        Some(BindingMappingEdit { min: Some(baseline.0), max: Some(baseline.1), ..Default::default() }),
-                    Some(ResolvedScrub::MappingAffine { target: owner, param_id, baseline, .. })
-                        if owner == target && param_id == binding_id =>
-                        Some(BindingMappingEdit { scale: Some(baseline.0), offset: Some(baseline.1), ..Default::default() }),
+                    Some(ResolvedScrub::MappingRange {
+                        target: owner,
+                        param_id,
+                        baseline,
+                        ..
+                    }) if owner == target && param_id == binding_id => Some(BindingMappingEdit {
+                        min: Some(baseline.0),
+                        max: Some(baseline.1),
+                        ..Default::default()
+                    }),
+                    Some(ResolvedScrub::MappingAffine {
+                        target: owner,
+                        param_id,
+                        baseline,
+                        ..
+                    }) if owner == target && param_id == binding_id => Some(BindingMappingEdit {
+                        scale: Some(baseline.0),
+                        offset: Some(baseline.1),
+                        ..Default::default()
+                    }),
                     _ => None,
                 };
                 if let Some(reverse) = reverse {
@@ -1079,11 +1310,22 @@ impl Application {
         anchor_node_id: manifold_ui::node::NodeId,
         clip: manifold_ui::graph_canvas::Rect,
     ) -> bool {
-        let Some(ed) = self.graph_editor.as_ref() else { return false; };
+        let Some(ed) = self.graph_editor.as_ref() else {
+            return false;
+        };
         let Some(open) = resolve_card_mapping(
-            &ed.ui_root, &self.local_project, &self.active_layer_id, &self.selection,
-            self.watched_graph_target.as_ref(), target, param_id, anchor_node_id, clip,
-        ) else { return false; };
+            &ed.ui_root,
+            &self.local_project,
+            &self.active_layer_id,
+            &self.selection,
+            self.watched_graph_target.as_ref(),
+            target,
+            param_id,
+            anchor_node_id,
+            clip,
+        ) else {
+            return false;
+        };
         // Modifiers have no card selection-follow action. Bring their graph
         // into view through the same watched-target path as other cards.
         if self.watched_graph_target.as_ref() != Some(&open.owner) {
@@ -1096,18 +1338,28 @@ impl Application {
     /// The mapping action handler both modal entry points share
     /// ([`MappingHost::dispatch`]). False when `action` is not a mapping action.
     pub(crate) fn dispatch_mapping_action(&mut self, action: &manifold_ui::RootAction) -> bool {
-        let Some(mut host) = self.mapping_host() else { return false; };
+        let Some(mut host) = self.mapping_host() else {
+            return false;
+        };
         let outcome = host.dispatch(action);
         if let MappingDispatch::GotoNode(target, binding_id) = &outcome {
             let snapshot = self.editor_ui_snapshot();
-            goto_mapped_node(self.watched_graph_target.as_ref(), snapshot.as_ref(), self.graph_canvas.as_mut(), target, binding_id);
+            goto_mapped_node(
+                self.watched_graph_target.as_ref(),
+                snapshot.as_ref(),
+                self.graph_canvas.as_mut(),
+                target,
+                binding_id,
+            );
         }
         !matches!(outcome, MappingDispatch::NotMapping)
     }
 
     fn mapping_host(&mut self) -> Option<MappingHost<'_>> {
         Some(MappingHost {
-            project: self.local_project.edit(&mut self.ui_edits, self.content_tx.as_ref()?),
+            project: self
+                .local_project
+                .edit(&mut self.ui_edits, self.content_tx.as_ref()?),
             scrub: &mut self.scrub,
         })
     }
@@ -1157,15 +1409,29 @@ impl Application {
             && matches!(target, manifold_core::GraphTarget::SceneModifier { .. })
         {
             return modifier_binding_for_node_param(
-                &self.local_project, target, scope_path, node_id, param_name,
+                &self.local_project,
+                target,
+                scope_path,
+                node_id,
+                param_name,
             );
         }
-        let instance = self.local_project.preset_instance(self.watched_graph_target.as_ref()?)?;
+        let instance = self
+            .local_project
+            .preset_instance(self.watched_graph_target.as_ref()?)?;
         if let Some(def) = instance.graph.as_ref() {
             return binding_for_node_param(&instance.params, def, scope_path, node_id, param_name);
         }
-        let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(instance.effect_type())?;
-        binding_for_node_param(&instance.params, view.canonical_def.as_ref(), scope_path, node_id, param_name)
+        let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(
+            instance.effect_type(),
+        )?;
+        binding_for_node_param(
+            &instance.params,
+            view.canonical_def.as_ref(),
+            scope_path,
+            node_id,
+            param_name,
+        )
     }
 
     /// BUG-282: the current value of `(node_id, param_name)` on the watched
@@ -1183,7 +1449,9 @@ impl Application {
         catalog_default: &manifold_core::effect_graph_def::EffectGraphDef,
     ) -> Option<manifold_core::effect_graph_def::SerializedParamValue> {
         let target = self.watched_graph_target.as_ref()?;
-        let def = self.local_project.graph_for_target(target, Some(catalog_default))?;
+        let def = self
+            .local_project
+            .graph_for_target(target, Some(catalog_default))?;
         node_param_value(def, scope_path, node_id, param_name)
     }
 
@@ -1192,7 +1460,12 @@ impl Application {
     /// fallback as [`Self::watched_binding_for_node_param`]. The P1
     /// enforcement backstop (Invariants section 4): a wired param is never rerouted
     /// through the card write-back path, matching D5/D6 (wire beats binding).
-    pub(crate) fn watched_node_param_is_wired(&self, scope_path: &[u32], node_id: u32, param_name: &str) -> bool {
+    pub(crate) fn watched_node_param_is_wired(
+        &self,
+        scope_path: &[u32],
+        node_id: u32,
+        param_name: &str,
+    ) -> bool {
         let Some(target) = self.watched_graph_target.as_ref() else {
             return false;
         };
@@ -1204,7 +1477,9 @@ impl Application {
     /// per-instance override if it has diverged, else the catalog / bundled
     /// default. Cloned (copy is a rare authoring action). `None` when nothing is
     /// watched.
-    pub(crate) fn watched_def_cloned(&self) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
+    pub(crate) fn watched_def_cloned(
+        &self,
+    ) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
         crate::graph_target::resolve(&self.local_project, self.watched_graph_target.as_ref()?)
             .map(|graph| (*graph).clone())
     }
@@ -1227,7 +1502,11 @@ impl Application {
         let scope = canvas.scope_path().to_vec();
         let def = self.watched_def_cloned()?;
         let (nodes, wires) = descend_def_level(&def, &scope)?;
-        let sel_nodes: Vec<_> = nodes.iter().filter(|n| ids.contains(&n.id)).cloned().collect();
+        let sel_nodes: Vec<_> = nodes
+            .iter()
+            .filter(|n| ids.contains(&n.id))
+            .cloned()
+            .collect();
         if sel_nodes.is_empty() {
             return None;
         }
@@ -1332,8 +1611,17 @@ impl Application {
         } else {
             crate::text_input::AnchorRect::new(120.0, 120.0, 220.0, 24.0)
         };
-        self.text_input.begin(crate::text_input::TextInputField::SavePresetName, "", anchor, 12.0);
-        self.text_input.save_preset = Some(crate::text_input::SavePresetCtx { kind, def, destination });
+        self.text_input.begin(
+            crate::text_input::TextInputField::SavePresetName,
+            "",
+            anchor,
+            12.0,
+        );
+        self.text_input.save_preset = Some(crate::text_input::SavePresetCtx {
+            kind,
+            def,
+            destination,
+        });
     }
 
     /// Open the browser management-menu Rename prompt (PRESET_LIBRARY_DESIGN
@@ -1361,7 +1649,8 @@ impl Application {
             anchor,
             12.0,
         );
-        self.text_input.rename_preset = Some(crate::text_input::RenamePresetCtx { kind, id, source });
+        self.text_input.rename_preset =
+            Some(crate::text_input::RenamePresetCtx { kind, id, source });
     }
 
     /// Render and present one frame to the graph editor window.
@@ -1399,7 +1688,12 @@ impl Application {
     pub(crate) fn editor_ui_snapshot(
         &mut self,
     ) -> Option<std::sync::Arc<manifold_ui::graph_view::GraphSnapshot>> {
-        editor_ui_graph(&mut self.editor_ui_graph, &self.content_state, self.watched_graph_target.as_ref(), &self.local_project)
+        editor_ui_graph(
+            &mut self.editor_ui_graph,
+            &self.content_state,
+            self.watched_graph_target.as_ref(),
+            &self.local_project,
+        )
     }
 
     pub(crate) fn present_graph_editor_window(&mut self, dt: f32) {
@@ -1419,40 +1713,42 @@ impl Application {
             self.watched_graph_target.as_ref(),
             Some(manifold_core::GraphTarget::SceneModifier { .. })
         );
-        let (preview_node, modifier_context) = match (self.graph_canvas.as_ref(), editor_ui_snap.as_ref()) {
-            (Some(canvas), Some(snap)) if scene_modifier_watched => {
-                let selected = canvas.selected_node_id();
-                let canvas_scope = canvas.scope_path();
-                let unchanged = self.last_modifier_preview_selection.as_ref().is_some_and(
-                    |(cached_snap, cached_scope, cached_selected)| {
-                        std::sync::Arc::ptr_eq(cached_snap, snap)
-                            && cached_scope.as_slice() == canvas_scope
-                            && *cached_selected == selected
-                    },
-                );
-                if unchanged {
-                    (self.last_preview_node.clone(), None)
-                } else {
-                    let node = modifier_preview_selection(snap, canvas_scope, selected);
-                    self.last_modifier_preview_selection = Some((snap.clone(), canvas_scope.to_vec(), selected));
-                    (node, Some(None))
+        let (preview_node, modifier_context) =
+            match (self.graph_canvas.as_ref(), editor_ui_snap.as_ref()) {
+                (Some(canvas), Some(snap)) if scene_modifier_watched => {
+                    let selected = canvas.selected_node_id();
+                    let canvas_scope = canvas.scope_path();
+                    let unchanged = self.last_modifier_preview_selection.as_ref().is_some_and(
+                        |(cached_snap, cached_scope, cached_selected)| {
+                            std::sync::Arc::ptr_eq(cached_snap, snap)
+                                && cached_scope.as_slice() == canvas_scope
+                                && *cached_selected == selected
+                        },
+                    );
+                    if unchanged {
+                        (self.last_preview_node.clone(), None)
+                    } else {
+                        let node = modifier_preview_selection(snap, canvas_scope, selected);
+                        self.last_modifier_preview_selection =
+                            Some((snap.clone(), canvas_scope.to_vec(), selected));
+                        (node, Some(None))
+                    }
                 }
-            }
-            (Some(canvas), Some(snap)) => (
-                canvas
-                    .selected_node_id()
-                    .and_then(|id| resolve_preview_target(snap, canvas.scope_path(), id)),
-                None,
-            ),
-            _ if scene_modifier_watched => {
-                self.last_modifier_preview_selection = None;
-                (None, Some(None))
-            }
-            _ => {
-                self.last_modifier_preview_selection = None;
-                (None, None)
-            }
-        };
+                (Some(canvas), Some(snap)) => (
+                    canvas
+                        .selected_node_id()
+                        .and_then(|id| resolve_preview_target(snap, canvas.scope_path(), id)),
+                    None,
+                ),
+                _ if scene_modifier_watched => {
+                    self.last_modifier_preview_selection = None;
+                    (None, Some(None))
+                }
+                _ => {
+                    self.last_modifier_preview_selection = None;
+                    (None, None)
+                }
+            };
         if preview_node != self.last_preview_node {
             if let Some(tx) = self.content_tx.as_ref() {
                 crate::content_command::ContentCommand::send(
@@ -1465,9 +1761,12 @@ impl Application {
             self.last_preview_node = preview_node;
         }
         if let Some(context) = modifier_context
-            && self.last_modifier_preview_context.as_ref() != Some(&context) {
-                self.send_content_cmd(ContentCommand::SetModifierPreviewContext { object: context.clone() });
-                self.last_modifier_preview_context = Some(context);
+            && self.last_modifier_preview_context.as_ref() != Some(&context)
+        {
+            self.send_content_cmd(ContentCommand::SetModifierPreviewContext {
+                object: context.clone(),
+            });
+            self.last_modifier_preview_context = Some(context);
         }
 
         // Scene navigation requests go to the live runtime. The authored
@@ -1480,9 +1779,16 @@ impl Application {
                 .and_then(|s| find_snapshot_node(&s.nodes, id))
                 .is_some_and(|n| n.type_id == "node.render_scene")
         });
-        let viewport_open = self.graph_editor.as_ref().is_some_and(|ed| ed.viewport_open);
+        let viewport_open = self
+            .graph_editor
+            .as_ref()
+            .is_some_and(|ed| ed.viewport_open);
         let viewport_def = if viewport_is_scene_node && viewport_open {
-            self.editor_graph.viewport_def(&self.local_project, self.watched_graph_target.as_ref(), &self.ui_edits.stamps.parts())
+            self.editor_graph.viewport_def(
+                &self.local_project,
+                self.watched_graph_target.as_ref(),
+                &self.ui_edits.stamps.parts(),
+            )
         } else {
             crate::editor_graph_cache::ViewportDef::default()
         };
@@ -1504,26 +1810,26 @@ impl Application {
             self.atlas_visible_snap = editor_ui_snap.clone();
             self.atlas_visible_scope.clear();
             self.atlas_visible_scope.extend_from_slice(scope);
-            manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::EditorProjection);
-            let visible_nodes: Vec<manifold_core::NodeId> = match (
-                self.graph_canvas.as_ref(),
-                editor_ui_snap.as_deref(),
-            ) {
-                (Some(canvas), Some(snap)) => {
-                    let (nodes, _) =
-                        crate::graph_canvas::resolve_level(snap, canvas.scope_path())
-                            .unwrap_or((&snap.nodes, &snap.wires));
-                    nodes
-                        .iter()
-                        .filter_map(crate::graph_canvas::node_preview_target)
-                        .collect()
-                }
-                _ => Vec::new(),
-            };
+            manifold_core::work_count::record_work(
+                manifold_core::work_count::WorkKind::EditorProjection,
+            );
+            let visible_nodes: Vec<manifold_core::NodeId> =
+                match (self.graph_canvas.as_ref(), editor_ui_snap.as_deref()) {
+                    (Some(canvas), Some(snap)) => {
+                        let (nodes, _) =
+                            crate::graph_canvas::resolve_level(snap, canvas.scope_path())
+                                .unwrap_or((&snap.nodes, &snap.wires));
+                        nodes
+                            .iter()
+                            .filter_map(crate::graph_canvas::node_preview_target)
+                            .collect()
+                    }
+                    _ => Vec::new(),
+                };
             if visible_nodes != self.last_atlas_visible_sent {
-                self.send_content_cmd(
-                    crate::content_command::ContentCommand::SetNodeAtlasVisible(visible_nodes.clone()),
-                );
+                self.send_content_cmd(crate::content_command::ContentCommand::SetNodeAtlasVisible(
+                    visible_nodes.clone(),
+                ));
                 self.last_atlas_visible_sent = visible_nodes;
             }
         }
@@ -1536,10 +1842,17 @@ impl Application {
         let mini_current_beat = self.content_state.current_beat.as_f32();
         let mini_is_playing = self.content_state.is_playing;
         let parts = self.ui_edits.stamps.parts();
-        self.mini_timeline.get(&self.local_project, mini_current_beat, &parts);
+        self.mini_timeline
+            .get(&self.local_project, mini_current_beat, &parts);
         let mini_key = self.mini_timeline.key();
-        let &(ref mini_clips, ref mini_layer_labels, mini_rows, mini_total_beats, mini_beats_per_bar, ref mini_readout) =
-            self.mini_timeline.data();
+        let &(
+            ref mini_clips,
+            ref mini_layer_labels,
+            mini_rows,
+            mini_total_beats,
+            mini_beats_per_bar,
+            ref mini_readout,
+        ) = self.mini_timeline.data();
 
         let Some(gpu) = &self.gpu else { return };
         let Some(wid) = self.graph_editor_window_id else {
@@ -1548,9 +1861,17 @@ impl Application {
         // Resolve the open popover's live value before borrowing the editor
         // window state mutably. Its owner may differ from the watched graph.
         let popover_live_value = if self.editor_mapping_popover.is_open() {
-            self.editor_mapping_popover.target()
-                .and_then(|target| self.local_project.graph_target_owner(&crate::editing_host::to_graph_target(target)))
-                .and_then(|instance| instance.params.get(self.editor_mapping_popover.binding_id()))
+            self.editor_mapping_popover
+                .target()
+                .and_then(|target| {
+                    self.local_project
+                        .graph_target_owner(&crate::editing_host::to_graph_target(target))
+                })
+                .and_then(|instance| {
+                    instance
+                        .params
+                        .get(self.editor_mapping_popover.binding_id())
+                })
                 .map(|param| param.value)
         } else {
             None
@@ -1605,11 +1926,17 @@ impl Application {
             .map(|p| p.get_dimensions())
             .filter(|(_, h)| *h > 0)
             .map(|(w, h)| w as f32 / h as f32);
-        let layout = crate::editor_frame::EditorLayout::compute(&ws.dock, logical_w, logical_h, output_aspect);
+        let layout = crate::editor_frame::EditorLayout::compute(
+            &ws.dock,
+            logical_w,
+            logical_h,
+            output_aspect,
+        );
         let monitor_aspect = layout.monitor_aspect;
         let canvas_x = layout.canvas.x;
         let canvas_width = layout.canvas.width;
-        let (preview_x, preview_w, preview_h) = (layout.preview_x, layout.preview_w, layout.preview_h);
+        let (preview_x, preview_w, preview_h) =
+            (layout.preview_x, layout.preview_w, layout.preview_h);
         let (node_img_y, master_img_y) = (layout.node_img_y, layout.master_img_y);
         // The node pane's body shows the selected node's image, or its value
         // inspector text for a node with no image, or a placeholder; the
@@ -1633,7 +1960,10 @@ impl Application {
             && let Some(target) = self.watched_graph_target.as_ref()
             && let Some(node) = self.last_preview_node.as_ref()
         {
-            if !ws.viewport_target.as_ref().is_some_and(|(owner, render)| owner == target && render == node)
+            if !ws
+                .viewport_target
+                .as_ref()
+                .is_some_and(|(owner, render)| owner == target && render == node)
                 || ws.viewport_session.is_none()
             {
                 // Opening the editor's viewport ends the output preview's
@@ -1644,16 +1974,34 @@ impl Application {
                     ContentCommand::send(tx, ContentCommand::SetSceneViewport(None));
                 }
                 ws.viewport_session = Some(crate::scene_viewport::SceneViewportNavigation::new(
-                    crate::scene_viewport::ViewportHost::GraphEditor, viewport_tex_w, viewport_tex_h));
+                    crate::scene_viewport::ViewportHost::GraphEditor,
+                    viewport_tex_w,
+                    viewport_tex_h,
+                ));
                 ws.viewport_target = Some((target.clone(), node.clone()));
             }
-            let session = ws.viewport_session.as_mut().expect("navigation was created above");
+            let session = ws
+                .viewport_session
+                .as_mut()
+                .expect("navigation was created above");
             session.config.width = viewport_tex_w;
             session.config.height = viewport_tex_h;
-            let request = session.request(target, node, self.last_modifier_preview_context.as_ref(), ws.viewport_request_sent.as_ref());
-            if !ws.viewport_request_sent.as_ref().is_some_and(|sent| std::sync::Arc::ptr_eq(sent, &request)) {
+            let request = session.request(
+                target,
+                node,
+                self.last_modifier_preview_context.as_ref(),
+                ws.viewport_request_sent.as_ref(),
+            );
+            if !ws
+                .viewport_request_sent
+                .as_ref()
+                .is_some_and(|sent| std::sync::Arc::ptr_eq(sent, &request))
+            {
                 if let Some(tx) = self.content_tx.as_ref() {
-                    ContentCommand::send(tx, ContentCommand::SetSceneViewport(Some(request.clone())));
+                    ContentCommand::send(
+                        tx,
+                        ContentCommand::SetSceneViewport(Some(request.clone())),
+                    );
                 }
                 ws.viewport_request_sent = Some(request.clone());
             }
@@ -1661,9 +2009,19 @@ impl Application {
             #[cfg(target_os = "macos")]
             if let Some(pane) = self.scene_viewport_pane.as_mut()
                 && let Some((frame, texture, slot)) = crate::scene_viewport::lease_frame(
-                    pane, &gpu.device, &self.content_state.scene_viewport_frames, &request, &mut bridge_leases)
+                    pane,
+                    &gpu.device,
+                    &self.content_state.scene_viewport_frames,
+                    &request,
+                    &mut bridge_leases,
+                )
             {
-                viewport_mask = crate::selection_outline::leased_mask(self.outline_viewport_pane.as_mut(), &gpu.device, slot, frame.outline);
+                viewport_mask = crate::selection_outline::leased_mask(
+                    self.outline_viewport_pane.as_mut(),
+                    &gpu.device,
+                    slot,
+                    frame.outline,
+                );
                 if let Some(texture) = texture
                     && let Some(ui) = self.ui_renderer.as_mut()
                 {
@@ -1680,28 +2038,49 @@ impl Application {
                 ContentCommand::send(tx, ContentCommand::SetSceneViewport(None));
             }
         }
-        ws.viewport_rect = ws.viewport_session.is_some()
+        ws.viewport_rect = ws
+            .viewport_session
+            .is_some()
             .then(|| manifold_ui::Rect::new(preview_x, node_img_y, preview_w, preview_h));
         ws.viewport_outline.clear();
         if let Some(session) = ws.viewport_session.as_ref() {
-            show_image = session.displayed.as_ref().is_some_and(|frame| frame.has_image());
+            show_image = session
+                .displayed
+                .as_ref()
+                .is_some_and(|frame| frame.has_image());
             if let Some(node) = self.last_preview_node.as_ref() {
-                let info = node_preview_info.get_or_insert_with(|| crate::content_state::NodePreviewInfo {
-                    node_id: node.clone(), has_image: false, diagnostic: None,
-                    inputs: Vec::new(), outputs: Vec::new(),
+                let info = node_preview_info.get_or_insert_with(|| {
+                    crate::content_state::NodePreviewInfo {
+                        node_id: node.clone(),
+                        has_image: false,
+                        diagnostic: None,
+                        inputs: Vec::new(),
+                        outputs: Vec::new(),
+                    }
                 });
                 info.has_image = show_image;
-                info.diagnostic = session.displayed.as_ref().map_or(Some("Waiting for the scene to render…"), |frame| frame.diagnostic());
+                info.diagnostic = session
+                    .displayed
+                    .as_ref()
+                    .map_or(Some("Waiting for the scene to render…"), |frame| {
+                        frame.diagnostic()
+                    });
             }
             // The Scene panel's selection over the authored scene: the outline
             // slots, and the handles a press grabs. The handle lines are the
             // content thread's, built from the scene it renders
             // (`gizmo_overlay.rs`).
             let items = match self.watched_graph_target.as_ref() {
-                Some(manifold_core::GraphTarget::Generator(layer)) => self.ws.ui_root.scene_setup_panel.selected_of(layer),
+                Some(manifold_core::GraphTarget::Generator(layer)) => {
+                    self.ws.ui_root.scene_setup_panel.selected_of(layer)
+                }
                 _ => &[],
             };
-            let drawn = crate::viewport_selection::ViewportSelection::refresh(&mut ws.viewport_selection, viewport_def.scene.as_ref(), items);
+            let drawn = crate::viewport_selection::ViewportSelection::refresh(
+                &mut ws.viewport_selection,
+                viewport_def.scene.as_ref(),
+                items,
+            );
             if let Some(drawn) = drawn {
                 drawn.outline(&mut ws.viewport_outline);
             }
@@ -1724,41 +2103,46 @@ impl Application {
             self.node_inspector_key
                 .as_ref()
                 .is_some_and(|key| key.matches(info, snap_arc.as_ref()))
-                && self.graph_editor_panel.update_node_inspector_io(&info.inputs, &info.outputs)
+                && self
+                    .graph_editor_panel
+                    .update_node_inspector_io(&info.inputs, &info.outputs)
         });
         self.node_inspector_key = shown.map(|info| NodeInspectorKey::of(info, snap_arc.as_ref()));
-        let node_inspector = shown
-            .filter(|_| !keep)
-            .map(|info| {
-                let snap_node = snap_arc
-                    .as_deref()
-                    .and_then(|s| find_snapshot_node(&s.nodes, &info.node_id));
-                let title = snap_node
-                    .map(|n| n.title.clone())
-                    .filter(|t| !t.is_empty())
-                    .unwrap_or_else(|| info.node_id.to_string());
-                let description = info.diagnostic
-                    .map(str::to_owned)
-                    .or_else(|| {
-                        snap_node
-                            .and_then(|n| manifold_node_engine::descriptor::descriptor_for(&n.type_id))
-                            .map(|d| {
-                                if !d.summary.is_empty() {
-                                    d.summary.to_string()
-                                } else {
-                                    // First sentence of the technical purpose keeps it short.
-                                    d.purpose.split(". ").next().unwrap_or(d.purpose).to_string()
-                                }
-                            })
-                    })
-                    .unwrap_or_default();
-                manifold_ui::panels::graph_editor::NodeInspector {
-                    title,
-                    description,
-                    inputs: info.inputs.clone(),
-                    outputs: info.outputs.clone(),
-                }
-            });
+        let node_inspector = shown.filter(|_| !keep).map(|info| {
+            let snap_node = snap_arc
+                .as_deref()
+                .and_then(|s| find_snapshot_node(&s.nodes, &info.node_id));
+            let title = snap_node
+                .map(|n| n.title.clone())
+                .filter(|t| !t.is_empty())
+                .unwrap_or_else(|| info.node_id.to_string());
+            let description = info
+                .diagnostic
+                .map(str::to_owned)
+                .or_else(|| {
+                    snap_node
+                        .and_then(|n| manifold_node_engine::descriptor::descriptor_for(&n.type_id))
+                        .map(|d| {
+                            if !d.summary.is_empty() {
+                                d.summary.to_string()
+                            } else {
+                                // First sentence of the technical purpose keeps it short.
+                                d.purpose
+                                    .split(". ")
+                                    .next()
+                                    .unwrap_or(d.purpose)
+                                    .to_string()
+                            }
+                        })
+                })
+                .unwrap_or_default();
+            manifold_ui::panels::graph_editor::NodeInspector {
+                title,
+                description,
+                inputs: info.inputs.clone(),
+                outputs: info.outputs.clone(),
+            }
+        });
         if !keep {
             self.graph_editor_panel.set_node_inspector(node_inspector);
         }
@@ -1829,7 +2213,12 @@ impl Application {
                     ui.register_external_texture(atlas_handle, atlas_tex);
                 }
                 if let Some(canvas) = self.graph_canvas.as_mut() {
-                    let vp = crate::graph_canvas::Rect::new(canvas_x, 0.0, canvas_width, logical_h as f32);
+                    let vp = crate::graph_canvas::Rect::new(
+                        canvas_x,
+                        0.0,
+                        canvas_width,
+                        logical_h as f32,
+                    );
                     // Each source is letterboxed into its 16:9 cell; the
                     // on-canvas screen takes the project aspect, so sample only
                     // the letterboxed content sub-rect. Edge-straddle clipping
@@ -1840,7 +2229,10 @@ impl Application {
                     let layout = &self.content_state.node_atlas_layout;
                     previews_visible = canvas.refill_node_preview_src(vp, |id| {
                         let &(_, cell) = layout.iter().find(|(node, _)| node == id)?;
-                        Some((atlas_handle, crate::content_pipeline::atlas_cell_uv(cell, monitor_aspect)))
+                        Some((
+                            atlas_handle,
+                            crate::content_pipeline::atlas_cell_uv(cell, monitor_aspect),
+                        ))
                     });
                 }
             }
@@ -1849,13 +2241,18 @@ impl Application {
         // ── Composite the offscreen, only when something on it moved ──
         // Shared with the headless editor harness (`editor_frame.rs`). The
         // drawable still gets the offscreen and the monitors every pulse.
-        let viewport_image = ws.viewport_session.as_ref()
+        let viewport_image = ws
+            .viewport_session
+            .as_ref()
             .and_then(|session| session.displayed.as_ref())
             .is_some_and(|frame| frame.has_image());
         let key = crate::editor_frame::CompositeKey {
             size: [logical_w, logical_h],
             dock: ws.dock.draw_key(),
-            canvas: self.graph_canvas.as_ref().map_or(0, |canvas| canvas.view_version()),
+            canvas: self
+                .graph_canvas
+                .as_ref()
+                .map_or(0, |canvas| canvas.view_version()),
             mini: mini_key,
             playhead: mini_current_beat.to_bits(),
             playing: mini_is_playing,
@@ -1866,7 +2263,12 @@ impl Application {
                 text_input: self.text_input.is_owned_by_editor(),
             },
         };
-        let redraw = crate::editor_frame::needs_composite(&mut ws.editor_frame, &ws.ui_root, ws.offscreen_dirty, key);
+        let redraw = crate::editor_frame::needs_composite(
+            &mut ws.editor_frame,
+            &ws.ui_root,
+            ws.offscreen_dirty,
+            key,
+        );
         let cache = ws.editor_frame.cache.get_or_insert_with(|| {
             manifold_ui_paint::ui_cache_manager::UICacheManager::with_slots(
                 manifold_compositor::presentation::UI_FORMAT,
@@ -1875,7 +2277,8 @@ impl Application {
             )
         });
         if redraw
-            && let (Some(atlas_pipeline), Some(atlas_sampler)) = (&self.atlas_pipeline, &self.atlas_sampler)
+            && let (Some(atlas_pipeline), Some(atlas_sampler)) =
+                (&self.atlas_pipeline, &self.atlas_sampler)
         {
             crate::editor_frame::composite_editor_frame(
                 &gpu.device,
@@ -2145,10 +2548,19 @@ mod preview_target_tests {
     #[test]
     fn plain_node_previews_itself() {
         let s = snap(
-            vec![node(1, "blur", "node.blur", vec![tex("in")], vec![tex("out")])],
+            vec![node(
+                1,
+                "blur",
+                "node.blur",
+                vec![tex("in")],
+                vec![tex("out")],
+            )],
             vec![],
         );
-        assert_eq!(resolve_preview_target(&s, &[], 1), Some(NodeId::new("blur")));
+        assert_eq!(
+            resolve_preview_target(&s, &[], 1),
+            Some(NodeId::new("blur"))
+        );
     }
 
     #[test]
@@ -2162,7 +2574,10 @@ mod preview_target_tests {
         );
         // Inside the group, the output boundary previews the group container,
         // so the content side maps it (+ port name) via group_preview_map.
-        assert_eq!(resolve_preview_target(&s, &[5], 2), Some(NodeId::new("grp")));
+        assert_eq!(
+            resolve_preview_target(&s, &[5], 2),
+            Some(NodeId::new("grp"))
+        );
     }
 
     #[test]
@@ -2176,7 +2591,10 @@ mod preview_target_tests {
         );
         // Inside the group, the input boundary previews whatever feeds the
         // group from outside (the source).
-        assert_eq!(resolve_preview_target(&s, &[5], 0), Some(NodeId::new("src")));
+        assert_eq!(
+            resolve_preview_target(&s, &[5], 0),
+            Some(NodeId::new("src"))
+        );
     }
 
     #[test]
@@ -2206,14 +2624,23 @@ mod preview_target_tests {
         // lives at the parent scope rather than inside the canvas scope.
         let resolved = resolve_preview_target(&s, &[5], 2).unwrap();
         assert_eq!(resolved, NodeId::new("grp"));
-        assert_eq!(modifier_preview_selection(&s, &[5], Some(2)), Some(resolved));
-        assert_eq!(modifier_preview_selection(&s, &[5], Some(1)), Some(NodeId::new("inner")));
+        assert_eq!(
+            modifier_preview_selection(&s, &[5], Some(2)),
+            Some(resolved)
+        );
+        assert_eq!(
+            modifier_preview_selection(&s, &[5], Some(1)),
+            Some(NodeId::new("inner"))
+        );
 
         let mut sibling = group_container();
         sibling.id = 6;
         sibling.node_id = NodeId::new("sibling");
         let siblings = snap(vec![group_container(), sibling], vec![]);
-        assert_eq!(modifier_preview_selection(&siblings, &[6], Some(1)), Some(NodeId::new("inner")));
+        assert_eq!(
+            modifier_preview_selection(&siblings, &[6], Some(1)),
+            Some(NodeId::new("inner"))
+        );
     }
 }
 
@@ -2238,9 +2665,7 @@ mod binding_reroute_tests {
         PresetMetadata,
     };
     use manifold_core::macro_bank::MacroCurve;
-    use manifold_core::scene_modifier_preset::{
-        SceneModifierInstanceDef, SceneTargetSelection,
-    };
+    use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, SceneTargetSelection};
     use std::collections::{BTreeMap, BTreeSet};
 
     fn node(id: u32, node_id: &str) -> EffectGraphNode {
@@ -2276,7 +2701,7 @@ mod binding_reroute_tests {
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
-                    layer_types: None,
+                layer_types: None,
                 params: vec![ParamSpecDef {
                     tooltip: None,
                     id: "amount".into(),
@@ -2297,7 +2722,7 @@ mod binding_reroute_tests {
                     wraps: false,
                     section: None,
                     card_visible: true,
-            material_role: None,
+                    material_role: None,
                     limit: Default::default(),
                     unit: None,
                     scene: None,
@@ -2335,8 +2760,12 @@ mod binding_reroute_tests {
         params
     }
 
-    fn mapping_test_app() -> (Application, manifold_core::GraphTarget, manifold_core::GraphTarget) {
-        use manifold_core::{effects::PresetInstance, GraphTarget, PresetTypeId};
+    fn mapping_test_app() -> (
+        Application,
+        manifold_core::GraphTarget,
+        manifold_core::GraphTarget,
+    ) {
+        use manifold_core::{GraphTarget, PresetTypeId, effects::PresetInstance};
         let mut app = Application::new();
         app.user_prefs = crate::user_prefs::UserPrefs::for_test();
         let def = def_with_binding();
@@ -2344,8 +2773,13 @@ mod binding_reroute_tests {
         effect.params = manifest_for(&def);
         effect.graph = Some(def.clone());
         let a = GraphTarget::Effect(effect.id.clone());
-        app.local_project.intake().settings.master_effects.push(effect);
-        let mut layer = manifold_core::layer::Layer::new_generator("Test".into(), PresetTypeId::new("Test"), 0);
+        app.local_project
+            .intake()
+            .settings
+            .master_effects
+            .push(effect);
+        let mut layer =
+            manifold_core::layer::Layer::new_generator("Test".into(), PresetTypeId::new("Test"), 0);
         let b = GraphTarget::Generator(layer.layer_id.clone());
         let generator = layer.gen_params_mut().unwrap();
         generator.params = manifest_for(&def);
@@ -2361,7 +2795,8 @@ mod binding_reroute_tests {
         // Effect cards require a registered preset definition. Keep the real
         // Bloom identity and add a parameter, as the projection tests do.
         let mut project = manifold_core::project::Project::default();
-        let mut effect = manifold_core::effects::PresetInstance::new(manifold_core::PresetTypeId::BLOOM);
+        let mut effect =
+            manifold_core::effects::PresetInstance::new(manifold_core::PresetTypeId::BLOOM);
         let spec = def_with_binding().preset_metadata.unwrap().params.remove(0);
         effect.params = manifold_core::params::ParamManifest::from_params(vec![
             manifold_core::params::Param::user_added(spec),
@@ -2369,43 +2804,60 @@ mod binding_reroute_tests {
         project.settings.master_effects.push(effect);
         let mut ui = crate::ui_root::UIRoot::new();
         crate::ui_bridge::sync_inspector_data(
-            &mut ui, &project, None,
-            &crate::app::SelectionState::default(), &[], None,
+            &mut ui,
+            &project,
+            None,
+            &crate::app::SelectionState::default(),
+            &[],
+            None,
         );
         let mut state = crate::editor_frame::EditorFrameState::default();
         let panel = manifold_ui::panels::graph_editor::GraphEditorPanel::new();
-        let layout = crate::editor_frame::EditorLayout::compute(&manifold_ui::Dock::editor(), 1600, 2000, None);
+        let layout = crate::editor_frame::EditorLayout::compute(
+            &manifold_ui::Dock::editor(),
+            1600,
+            2000,
+            None,
+        );
         let content_state = crate::content_state::ContentState::default();
         let mut live = crate::frame_plan::LiveInputs::default();
-        let mut run = |ui: &mut crate::ui_root::UIRoot, project: &manifold_core::project::Project, live| {
-            let start = manifold_core::work_count::thread_work_snapshot();
-            crate::editor_frame::run_editor_frame(
-                ui,
-                &mut state,
-                &panel,
-                None,
-                &layout,
-                crate::editor_frame::EditorFrameInputs {
-                    project,
-                    content_state: &content_state,
-                    active_layer: None,
-                    live,
-                    dt: 1.0 / 60.0,
-                    show_image: false,
-                },
-                false,
-            );
-            manifold_core::work_count::thread_work_snapshot()
-                .since(&start)
-                .get(manifold_core::work_count::WorkKind::EditorTreeBuild)
-        };
+        let mut run =
+            |ui: &mut crate::ui_root::UIRoot, project: &manifold_core::project::Project, live| {
+                let start = manifold_core::work_count::thread_work_snapshot();
+                crate::editor_frame::run_editor_frame(
+                    ui,
+                    &mut state,
+                    &panel,
+                    None,
+                    &layout,
+                    crate::editor_frame::EditorFrameInputs {
+                        project,
+                        content_state: &content_state,
+                        active_layer: None,
+                        live,
+                        dt: 1.0 / 60.0,
+                        show_image: false,
+                    },
+                    false,
+                );
+                manifold_core::work_count::thread_work_snapshot()
+                    .since(&start)
+                    .get(manifold_core::work_count::WorkKind::EditorTreeBuild)
+            };
         // The card lane is built on the first frame; once its spawn tweens
         // settle, values reach it through the live push alone. A repeated
         // value is an unchanged frame.
         let mut last = None;
-        for (frame, (value, expected)) in [(0.0, "0.00"), (0.3, "0.30"), (0.3, "0.30"), (0.8, "0.80")].into_iter().enumerate() {
+        for (frame, (value, expected)) in
+            [(0.0, "0.00"), (0.3, "0.30"), (0.3, "0.30"), (0.8, "0.80")]
+                .into_iter()
+                .enumerate()
+        {
             project.settings.master_effects[0]
-                .params.get_mut("amount").unwrap().value = value;
+                .params
+                .get_mut("amount")
+                .unwrap()
+                .value = value;
             if last != Some(value) {
                 live.values += 1;
             }
@@ -2414,8 +2866,12 @@ mod binding_reroute_tests {
             let rebuilt = run(&mut ui, &project, live);
             assert_eq!(rebuilt > 0, frame == 0);
             assert!(frame == 0 || built_before == ui.inspector.first_node());
-            assert!(ui.tree.all_nodes().any(|node| node.text.as_deref() == Some(expected)),
-                "the card lane must show live value {expected}");
+            assert!(
+                ui.tree
+                    .all_nodes()
+                    .any(|node| node.text.as_deref() == Some(expected)),
+                "the card lane must show live value {expected}"
+            );
             if frame == 0 {
                 ui.inspector.skip_to_settled(&mut ui.tree);
                 run(&mut ui, &project, live);
@@ -2425,16 +2881,23 @@ mod binding_reroute_tests {
 
     #[test]
     fn inspector_numeric_entry_owns_emitting_window_and_commits_one_undo() {
-        use manifold_ui::{GraphParamTarget, PanelAction, RootAction, Rect};
         use crate::text_input::TextInputField;
         use manifold_editing::undo::UndoRedoManager;
+        use manifold_ui::{GraphParamTarget, PanelAction, Rect, RootAction};
         for in_editor in [false, true] {
             let (mut app, _, owner) = mapping_test_app();
-            let manifold_core::GraphTarget::Generator(layer) = &owner else { unreachable!() };
+            let manifold_core::GraphTarget::Generator(layer) = &owner else {
+                unreachable!()
+            };
             let action = PanelAction::Root(RootAction::BeginParamTextInput {
-                target: GraphParamTarget::GeneratorOf(layer.clone()), param_id: "amount".into(),
-                anchor: Rect::new(100.0, 300.0, 56.0, 24.0), value: 0.0,
-                min: 0.0, max: 1.0, whole_numbers: false, degrees: false,
+                target: GraphParamTarget::GeneratorOf(layer.clone()),
+                param_id: "amount".into(),
+                anchor: Rect::new(100.0, 300.0, 56.0, 24.0),
+                value: 0.0,
+                min: 0.0,
+                max: 1.0,
+                whole_numbers: false,
+                degrees: false,
             });
             let mut project = app.local_project.clone();
             let (tx, rx) = crossbeam_channel::unbounded();
@@ -2442,9 +2905,14 @@ mod binding_reroute_tests {
             assert!(app.dispatch_inspector_host_action(&action, in_editor));
             assert_eq!(app.text_input.is_owned_by_editor(), in_editor);
             assert_eq!(app.text_input.is_owned_by_main(), !in_editor);
-            assert_eq!(app.text_input.field, if in_editor {
-                TextInputField::EditorInspectorParam
-            } else { TextInputField::InspectorParam });
+            assert_eq!(
+                app.text_input.field,
+                if in_editor {
+                    TextInputField::EditorInspectorParam
+                } else {
+                    TextInputField::InspectorParam
+                }
+            );
             app.text_input.paste("0.8");
             let (field, text) = app.text_input.commit();
             app.handle_text_input_commit(field, &text);
@@ -2452,7 +2920,9 @@ mod binding_reroute_tests {
             for command in rx.try_iter() {
                 match command {
                     ContentCommand::MutateProject { f: edit, .. } => edit(&mut project),
-                    ContentCommand::Execute(command) => { undo.execute(command, &mut project); }
+                    ContentCommand::Execute(command) => {
+                        undo.execute(command, &mut project);
+                    }
                     // Typed entry runs the slider gesture, so it holds and releases the
                     // param for armed recording; holds never touch the project.
                     ContentCommand::AutomationHold { .. } => {}
@@ -2460,7 +2930,12 @@ mod binding_reroute_tests {
                 }
             }
             let value = |p: &manifold_core::project::Project| {
-                p.preset_instance(&owner).unwrap().params.get("amount").unwrap().base
+                p.preset_instance(&owner)
+                    .unwrap()
+                    .params
+                    .get("amount")
+                    .unwrap()
+                    .base
             };
             assert_eq!(value(&project), 0.8);
             assert_eq!(undo.undo_count(), 1);
@@ -2471,8 +2946,9 @@ mod binding_reroute_tests {
         }
     }
 
-    fn scene_mapping_test_project() -> (manifold_core::project::Project, manifold_core::GraphTarget) {
-        use manifold_core::{layer::Layer, GraphTarget, PresetTypeId};
+    fn scene_mapping_test_project() -> (manifold_core::project::Project, manifold_core::GraphTarget)
+    {
+        use manifold_core::{GraphTarget, PresetTypeId, layer::Layer};
         let local = def_with_binding();
         let mut host = def_with_binding();
         let metadata = host.preset_metadata.as_mut().unwrap();
@@ -2518,55 +2994,106 @@ mod binding_reroute_tests {
     fn mapping_first_open_uses_card_owner_and_clicked_anchor() {
         use manifold_ui::{GraphParamTarget, node::Rect};
         let (mut app, previous, owner) = mapping_test_app();
-        let manifold_core::GraphTarget::Generator(layer) = &owner else { unreachable!() };
-        let mut editor = crate::workspace::Workspace::new(crate::workspace::WorkspaceKind::GraphEditor);
-        let region = editor.ui_root.tree.begin_region(Rect::new(0.0, 0.0, 1000.0, 900.0),
-            manifold_ui::tree::ZTier::Base, "mapping-test", manifold_ui::UIFlags::empty());
+        let manifold_core::GraphTarget::Generator(layer) = &owner else {
+            unreachable!()
+        };
+        let mut editor =
+            crate::workspace::Workspace::new(crate::workspace::WorkspaceKind::GraphEditor);
+        let region = editor.ui_root.tree.begin_region(
+            Rect::new(0.0, 0.0, 1000.0, 900.0),
+            manifold_ui::tree::ZTier::Base,
+            "mapping-test",
+            manifold_ui::UIFlags::empty(),
+        );
         let start = editor.ui_root.tree.count();
-        let upper = editor.ui_root.tree.add_node(None, Rect::new(50.0, 30.0, 16.0, 18.0),
-            manifold_ui::node::UINodeType::Button, Default::default(), None, manifold_ui::UIFlags::empty());
-        let lower = editor.ui_root.tree.add_node(None, Rect::new(50.0, 330.0, 16.0, 18.0),
-            manifold_ui::node::UINodeType::Button, Default::default(), None, manifold_ui::UIFlags::empty());
+        let upper = editor.ui_root.tree.add_node(
+            None,
+            Rect::new(50.0, 30.0, 16.0, 18.0),
+            manifold_ui::node::UINodeType::Button,
+            Default::default(),
+            None,
+            manifold_ui::UIFlags::empty(),
+        );
+        let lower = editor.ui_root.tree.add_node(
+            None,
+            Rect::new(50.0, 330.0, 16.0, 18.0),
+            manifold_ui::node::UINodeType::Button,
+            Default::default(),
+            None,
+            manifold_ui::UIFlags::empty(),
+        );
         assert_ne!(upper, lower);
         editor.ui_root.tree.end_region(region, start);
         app.graph_editor = Some(editor);
-        assert!(app.open_card_mapping(&GraphParamTarget::GeneratorOf(layer.clone()), "amount", lower,
-            manifold_ui::graph_canvas::Rect::new(0.0, 0.0, 1000.0, 900.0)));
-        assert_eq!(app.editor_mapping_popover.target(), Some(&crate::editing_host::to_ui_graph_target(&owner)));
+        assert!(app.open_card_mapping(
+            &GraphParamTarget::GeneratorOf(layer.clone()),
+            "amount",
+            lower,
+            manifold_ui::graph_canvas::Rect::new(0.0, 0.0, 1000.0, 900.0)
+        ));
+        assert_eq!(
+            app.editor_mapping_popover.target(),
+            Some(&crate::editing_host::to_ui_graph_target(&owner))
+        );
         assert_eq!(app.watched_graph_target.as_ref(), Some(&owner));
         // A press beside the lower row reaches the modal; the upper-row
         // position must not. Same parameter name cannot choose its anchor.
         assert!(!app.editor_mapping_popover.on_press(80.0, 40.0));
         assert!(app.editor_mapping_popover.on_press(80.0, 340.0));
-        let manifold_core::GraphTarget::Effect(id) = previous else { unreachable!() };
+        let manifold_core::GraphTarget::Effect(id) = previous else {
+            unreachable!()
+        };
         app.watch_effect_graph(id);
-        assert!(!app.editor_mapping_popover.is_open(), "changing graphs dismisses the old modal");
+        assert!(
+            !app.editor_mapping_popover.is_open(),
+            "changing graphs dismisses the old modal"
+        );
     }
 
     #[test]
     fn mapping_gesture_survives_selection_change_and_commits_one_undo() {
-        use manifold_ui::RootAction;
         use manifold_editing::undo::UndoRedoManager;
+        use manifold_ui::RootAction;
         let (mut app, owner, other) = mapping_test_app();
         let (tx, rx) = crossbeam_channel::unbounded();
         app.content_tx = Some(tx);
         let mut content_project = app.local_project.clone();
         let target = crate::editing_host::to_ui_graph_target(&owner);
-        app.dispatch_mapping_action(&RootAction::EffectMappingRangeSnapshot { target: target.clone(), binding_id: "amount".into() });
+        app.dispatch_mapping_action(&RootAction::EffectMappingRangeSnapshot {
+            target: target.clone(),
+            binding_id: "amount".into(),
+        });
         app.watched_graph_target = Some(other.clone());
         for max in [2.0, 4.0, 7.0] {
             app.dispatch_mapping_action(&RootAction::EffectMappingRangeChanged {
-                target: target.clone(), binding_id: "amount".into(), min: 0.0, max,
+                target: target.clone(),
+                binding_id: "amount".into(),
+                min: 0.0,
+                max,
             });
         }
         // A stale terminal event for a different card must not steal this drag.
         app.dispatch_mapping_action(&RootAction::EffectMappingRangeCommit {
-            target: crate::editing_host::to_ui_graph_target(&other), binding_id: "amount".into(),
+            target: crate::editing_host::to_ui_graph_target(&other),
+            binding_id: "amount".into(),
         });
         assert!(app.scrub.active.is_some());
-        assert_eq!(super::target_full_reshape(&app.local_project, &owner, "amount").unwrap().2, 7.0);
-        assert_eq!(super::target_full_reshape(&app.local_project, &other, "amount").unwrap().2, 1.0);
-        app.dispatch_mapping_action(&RootAction::EffectMappingRangeCommit { target, binding_id: "amount".into() });
+        assert_eq!(
+            super::target_full_reshape(&app.local_project, &owner, "amount")
+                .unwrap()
+                .2,
+            7.0
+        );
+        assert_eq!(
+            super::target_full_reshape(&app.local_project, &other, "amount")
+                .unwrap()
+                .2,
+            1.0
+        );
+        app.dispatch_mapping_action(&RootAction::EffectMappingRangeCommit {
+            target,
+            binding_id: "amount".into(),
+        });
         assert!(app.scrub.active.is_none());
         let mut undo = UndoRedoManager::new();
         for command in rx.try_iter() {
@@ -2579,11 +3106,41 @@ mod binding_reroute_tests {
             }
         }
         assert_eq!(undo.undo_count(), 1);
-        assert_eq!(content_project.preset_instance(&owner).unwrap().params.get("amount").unwrap().slider_span().1, 7.0);
+        assert_eq!(
+            content_project
+                .preset_instance(&owner)
+                .unwrap()
+                .params
+                .get("amount")
+                .unwrap()
+                .slider_span()
+                .1,
+            7.0
+        );
         assert!(undo.undo(&mut content_project));
-        assert_eq!(content_project.preset_instance(&owner).unwrap().params.get("amount").unwrap().slider_span().1, 1.0);
+        assert_eq!(
+            content_project
+                .preset_instance(&owner)
+                .unwrap()
+                .params
+                .get("amount")
+                .unwrap()
+                .slider_span()
+                .1,
+            1.0
+        );
         assert!(undo.redo(&mut content_project));
-        assert_eq!(content_project.preset_instance(&owner).unwrap().params.get("amount").unwrap().slider_span().1, 7.0);
+        assert_eq!(
+            content_project
+                .preset_instance(&owner)
+                .unwrap()
+                .params
+                .get("amount")
+                .unwrap()
+                .slider_span()
+                .1,
+            7.0
+        );
     }
 
     #[test]
@@ -2593,14 +3150,40 @@ mod binding_reroute_tests {
         let (tx, rx) = crossbeam_channel::unbounded();
         app.content_tx = Some(tx);
         let target = crate::editing_host::to_ui_graph_target(&owner);
-        app.dispatch_mapping_action(&RootAction::EffectMappingAffineSnapshot { target: target.clone(), binding_id: "amount".into() });
+        app.dispatch_mapping_action(&RootAction::EffectMappingAffineSnapshot {
+            target: target.clone(),
+            binding_id: "amount".into(),
+        });
         app.watched_graph_target = Some(other.clone());
-        app.dispatch_mapping_action(&RootAction::EffectMappingAffineChanged { target: target.clone(), binding_id: "amount".into(), scale: 9.0, offset: 4.0 });
-        assert_eq!(super::target_full_reshape(&app.local_project, &owner, "amount").unwrap().5, 9.0);
-        app.dispatch_mapping_action(&RootAction::EffectMappingCancel { target, binding_id: "amount".into() });
+        app.dispatch_mapping_action(&RootAction::EffectMappingAffineChanged {
+            target: target.clone(),
+            binding_id: "amount".into(),
+            scale: 9.0,
+            offset: 4.0,
+        });
+        assert_eq!(
+            super::target_full_reshape(&app.local_project, &owner, "amount")
+                .unwrap()
+                .5,
+            9.0
+        );
+        app.dispatch_mapping_action(&RootAction::EffectMappingCancel {
+            target,
+            binding_id: "amount".into(),
+        });
         assert!(app.scrub.active.is_none());
-        assert_eq!(super::target_full_reshape(&app.local_project, &owner, "amount").unwrap().5, 2.0);
-        assert_eq!(super::target_full_reshape(&app.local_project, &other, "amount").unwrap().5, 2.0);
+        assert_eq!(
+            super::target_full_reshape(&app.local_project, &owner, "amount")
+                .unwrap()
+                .5,
+            2.0
+        );
+        assert_eq!(
+            super::target_full_reshape(&app.local_project, &other, "amount")
+                .unwrap()
+                .5,
+            2.0
+        );
         assert!(rx.try_iter().all(|cmd| matches!(cmd, ContentCommand::MutateProject { touches, .. } if touches.minus(crate::content_command::touch::OVERRIDES_SHAPES).is_empty())));
     }
 
@@ -2618,12 +3201,23 @@ mod binding_reroute_tests {
         app.local_project = crate::ui_bridge::LocalProject::new(project.clone());
         // The mapping surface edits the public macro affine once; node-face
         // inversion above alone uses the composed leaf affine.
-        assert_eq!(super::target_full_reshape(&app.local_project, &target, "macro").unwrap().5, 3.0);
+        assert_eq!(
+            super::target_full_reshape(&app.local_project, &target, "macro")
+                .unwrap()
+                .5,
+            3.0
+        );
         let (tx, rx) = crossbeam_channel::unbounded();
         app.content_tx = Some(tx);
-        app.mapping_host().unwrap().commit(&target, "macro", BindingMappingEdit {
-            max: Some(7.0), scale: Some(4.0), ..Default::default()
-        });
+        app.mapping_host().unwrap().commit(
+            &target,
+            "macro",
+            BindingMappingEdit {
+                max: Some(7.0),
+                scale: Some(4.0),
+                ..Default::default()
+            },
+        );
         let mut content_project = project;
         let command = rx
             .try_iter()
@@ -2634,10 +3228,35 @@ mod binding_reroute_tests {
             .expect("valid local mapping queues a host command");
         let mut undo = manifold_editing::undo::UndoRedoManager::new();
         undo.execute(command, &mut content_project);
-        assert_eq!(content_project.graph_target_owner(&target).unwrap().params.get("macro").unwrap().slider_span().1, 7.0);
-        assert_eq!(super::modifier_binding_for_node_param(&content_project, &target, &[], 1, "amount").unwrap().5, 8.0);
+        assert_eq!(
+            content_project
+                .graph_target_owner(&target)
+                .unwrap()
+                .params
+                .get("macro")
+                .unwrap()
+                .slider_span()
+                .1,
+            7.0
+        );
+        assert_eq!(
+            super::modifier_binding_for_node_param(&content_project, &target, &[], 1, "amount")
+                .unwrap()
+                .5,
+            8.0
+        );
         assert!(undo.undo(&mut content_project));
-        assert_eq!(content_project.graph_target_owner(&target).unwrap().params.get("macro").unwrap().slider_span().1, 1.0);
+        assert_eq!(
+            content_project
+                .graph_target_owner(&target)
+                .unwrap()
+                .params
+                .get("macro")
+                .unwrap()
+                .slider_span()
+                .1,
+            1.0
+        );
     }
 
     #[test]
@@ -2661,83 +3280,182 @@ mod binding_reroute_tests {
         app.local_project = crate::ui_bridge::LocalProject::new(project);
         let (tx, rx) = crossbeam_channel::unbounded();
         app.content_tx = Some(tx);
-        app.mapping_host().unwrap().commit(&target, "macro", BindingMappingEdit {
-            max: Some(9.0), ..Default::default()
-        });
-        assert!(rx.try_iter().next().is_none(), "invalid local mapping must be atomic");
+        app.mapping_host().unwrap().commit(
+            &target,
+            "macro",
+            BindingMappingEdit {
+                max: Some(9.0),
+                ..Default::default()
+            },
+        );
+        assert!(
+            rx.try_iter().next().is_none(),
+            "invalid local mapping must be atomic"
+        );
     }
 
     #[test]
     fn binding_for_node_param_resolves_and_inverts() {
         let def = def_with_binding();
         let (outer_id, min, max, invert, curve, scale, offset) =
-            binding_for_node_param(&manifest_for(&def), &def, &[], 1, "amount").expect("binding resolves");
+            binding_for_node_param(&manifest_for(&def), &def, &[], 1, "amount")
+                .expect("binding resolves");
         assert_eq!(outer_id, "amount");
         let target =
             manifold_core::effects::apply_card_reshape(0.5, min, max, invert, curve, scale, offset);
-        let back =
-            manifold_core::effects::invert_card_reshape(target, min, max, invert, curve, scale, offset)
-                .expect("non-degenerate scale");
+        let back = manifold_core::effects::invert_card_reshape(
+            target, min, max, invert, curve, scale, offset,
+        )
+        .expect("non-degenerate scale");
         assert!((back - 0.5).abs() < 1e-3, "expected ~0.5, got {back}");
     }
 
     // Regression probes retained from the initial audit.
     #[test]
     fn mapping_reader_follows_live_manifest() {
-        use manifold_core::{effects::PresetInstance, params::Param, GraphTarget};
+        use manifold_core::{GraphTarget, effects::PresetInstance, params::Param};
         use manifold_editing::command::Command;
         use manifold_editing::commands::effects::{BindingMappingEdit, EditParamMappingCommand};
         let def = def_with_binding();
         let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("Audit"));
-        fx.params.push(Param::bundled(def.preset_metadata.as_ref().unwrap().params[0].clone()));
+        fx.params.push(Param::bundled(
+            def.preset_metadata.as_ref().unwrap().params[0].clone(),
+        ));
         fx.graph = Some(def);
         let target = GraphTarget::Effect(fx.id.clone());
         let mut project = manifold_core::project::Project::default();
         project.settings.master_effects.push(fx);
-        let before = super::full_reshape_from_instance(&project.settings.master_effects[0], project.settings.master_effects[0].graph.as_ref().unwrap(), "amount").unwrap();
-        EditParamMappingCommand::new(target, "amount".into(), BindingMappingEdit {
-            max: Some(7.0), ..Default::default()
-        }, None).execute(&mut project);
+        let before = super::full_reshape_from_instance(
+            &project.settings.master_effects[0],
+            project.settings.master_effects[0].graph.as_ref().unwrap(),
+            "amount",
+        )
+        .unwrap();
+        EditParamMappingCommand::new(
+            target,
+            "amount".into(),
+            BindingMappingEdit {
+                max: Some(7.0),
+                ..Default::default()
+            },
+            None,
+        )
+        .execute(&mut project);
         let fx = &project.settings.master_effects[0];
-        assert_eq!(fx.params.get("amount").unwrap().slider_span().1, 7.0, "production edit landed");
-        let after = super::full_reshape_from_instance(fx, fx.graph.as_ref().unwrap(), "amount").unwrap();
-        eprintln!("AUDIT: before max={}, live manifest max=7, editor reader max={}; range commit detects change={}", before.2, after.2, (before.2-after.2).abs() > f32::EPSILON);
-        assert_eq!(after.2, 7.0, "mapping opener and commit reader must see the live edit");
-        let inverse = binding_for_node_param(&fx.params, fx.graph.as_ref().unwrap(), &[], 1, "amount").unwrap();
-        assert_eq!(inverse.2, 7.0, "node-face inverse mapping must use the same live range");
+        assert_eq!(
+            fx.params.get("amount").unwrap().slider_span().1,
+            7.0,
+            "production edit landed"
+        );
+        let after =
+            super::full_reshape_from_instance(fx, fx.graph.as_ref().unwrap(), "amount").unwrap();
+        eprintln!(
+            "AUDIT: before max={}, live manifest max=7, editor reader max={}; range commit detects change={}",
+            before.2,
+            after.2,
+            (before.2 - after.2).abs() > f32::EPSILON
+        );
+        assert_eq!(
+            after.2, 7.0,
+            "mapping opener and commit reader must see the live edit"
+        );
+        let inverse =
+            binding_for_node_param(&fx.params, fx.graph.as_ref().unwrap(), &[], 1, "amount")
+                .unwrap();
+        assert_eq!(
+            inverse.2, 7.0,
+            "node-face inverse mapping must use the same live range"
+        );
     }
 
     #[test]
     fn mapping_canvas_supports_generator_and_stock_bindings() {
-        use manifold_core::{effects::PresetInstance, params::Param, GraphTarget};
+        use manifold_core::{GraphTarget, effects::PresetInstance, params::Param};
         use manifold_node_engine::snapshot::{GraphSnapshot, NodeSnapshot};
         let mut def = def_with_binding();
         def.preset_metadata.as_mut().unwrap().bindings[0].user_added = true;
         let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("Audit"));
-        fx.params.push(Param::bundled(def.preset_metadata.as_ref().unwrap().params[0].clone()));
+        fx.params.push(Param::bundled(
+            def.preset_metadata.as_ref().unwrap().params[0].clone(),
+        ));
         fx.graph = Some(def.clone());
         let effect_target = GraphTarget::Effect(fx.id.clone());
         let mut project = manifold_core::project::Project::default();
         project.settings.master_effects.push(fx);
-        let mut layer = manifold_core::layer::Layer::new_generator("Audit".into(), manifold_core::PresetTypeId::new("Audit"), 0);
+        let mut layer = manifold_core::layer::Layer::new_generator(
+            "Audit".into(),
+            manifold_core::PresetTypeId::new("Audit"),
+            0,
+        );
         let generator_target = GraphTarget::Generator(layer.layer_id.clone());
         let gp = layer.gen_params_mut().unwrap();
-        gp.params.push(Param::bundled(def.preset_metadata.as_ref().unwrap().params[0].clone()));
+        gp.params.push(Param::bundled(
+            def.preset_metadata.as_ref().unwrap().params[0].clone(),
+        ));
         gp.graph = Some(def);
         project.timeline.layers.push(layer);
-        let snapshot = GraphSnapshot { nodes: vec![NodeSnapshot {
-            id: 1, node_id: NodeId::new("blur1"), node_handle: Some("blur1".into()),
-            type_id: "node.blur".into(), title: "Blur".into(), inputs: vec![], outputs: vec![],
-            parameters: vec![], editor_pos: None, breaks_dependency_cycle: false,
-            group: None, wgsl_source: None,
-        }], wires: vec![], outer_routings: vec![] };
-        let effect_user = super::resolve_canvas_binding(Some(&snapshot), Some(&effect_target), &project, 1, "amount").is_some();
-        assert!(effect_user, "positive control: effect user binding resolves");
-        let generator_user = super::resolve_canvas_binding(Some(&snapshot), Some(&generator_target), &project, 1, "amount").is_some();
-        project.settings.master_effects[0].graph.as_mut().unwrap().preset_metadata.as_mut().unwrap().bindings[0].user_added = false;
-        let effect_stock = super::resolve_canvas_binding(Some(&snapshot), Some(&effect_target), &project, 1, "amount").is_some();
-        eprintln!("AUDIT: effect user={effect_user}, generator user={generator_user}, effect stock={effect_stock}");
-        assert!(generator_user && effect_stock, "equivalent bound rows should expose the same mapping workflow");
+        let snapshot = GraphSnapshot {
+            nodes: vec![NodeSnapshot {
+                id: 1,
+                node_id: NodeId::new("blur1"),
+                node_handle: Some("blur1".into()),
+                type_id: "node.blur".into(),
+                title: "Blur".into(),
+                inputs: vec![],
+                outputs: vec![],
+                parameters: vec![],
+                editor_pos: None,
+                breaks_dependency_cycle: false,
+                group: None,
+                wgsl_source: None,
+            }],
+            wires: vec![],
+            outer_routings: vec![],
+        };
+        let effect_user = super::resolve_canvas_binding(
+            Some(&snapshot),
+            Some(&effect_target),
+            &project,
+            1,
+            "amount",
+        )
+        .is_some();
+        assert!(
+            effect_user,
+            "positive control: effect user binding resolves"
+        );
+        let generator_user = super::resolve_canvas_binding(
+            Some(&snapshot),
+            Some(&generator_target),
+            &project,
+            1,
+            "amount",
+        )
+        .is_some();
+        project.settings.master_effects[0]
+            .graph
+            .as_mut()
+            .unwrap()
+            .preset_metadata
+            .as_mut()
+            .unwrap()
+            .bindings[0]
+            .user_added = false;
+        let effect_stock = super::resolve_canvas_binding(
+            Some(&snapshot),
+            Some(&effect_target),
+            &project,
+            1,
+            "amount",
+        )
+        .is_some();
+        eprintln!(
+            "AUDIT: effect user={effect_user}, generator user={generator_user}, effect stock={effect_stock}"
+        );
+        assert!(
+            generator_user && effect_stock,
+            "equivalent bound rows should expose the same mapping workflow"
+        );
     }
 
     #[test]
@@ -2800,8 +3518,12 @@ fn annotate_preparation_controls(
     nodes: &mut [manifold_ui::graph_view::NodeSnapshot],
     local: &manifold_core::effect_graph_def::EffectGraphDef,
 ) {
-    let Some(metadata) = local.preset_metadata.as_ref() else { return; };
-    let Some(recipe) = metadata.scene_modifier.as_ref() else { return; };
+    let Some(metadata) = local.preset_metadata.as_ref() else {
+        return;
+    };
+    let Some(recipe) = metadata.scene_modifier.as_ref() else {
+        return;
+    };
     for node in nodes {
         for param in &mut node.parameters {
             let preparation = metadata.bindings.iter().any(|binding|

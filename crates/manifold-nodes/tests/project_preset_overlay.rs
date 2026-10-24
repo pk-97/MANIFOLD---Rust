@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex};
 
 use manifold_core::PresetTypeId;
 use manifold_core::project::EmbeddedOrigin;
-use manifold_node_engine::load::preset_loader::{EFFECT_CATALOG, GENERATOR_CATALOG, clear_project_presets, set_project_presets};
+use manifold_node_engine::load::preset_loader::{
+    EFFECT_CATALOG, GENERATOR_CATALOG, clear_project_presets, set_project_presets,
+};
 
 /// The test harness runs `#[test]` fns in this binary on separate threads by
 /// default; every test here mutates the same process-global overlay statics
@@ -55,7 +57,11 @@ fn project_generator_preset_resolves_via_overlay_then_clears() {
     // Install the project overlay.
     set_project_presets(
         Vec::new(),
-        vec![(id.to_string(), fake_generator_preset(id), EmbeddedOrigin::Saved)],
+        vec![(
+            id.to_string(),
+            fake_generator_preset(id),
+            EmbeddedOrigin::Saved,
+        )],
         Vec::new(),
     );
 
@@ -70,7 +76,8 @@ fn project_generator_preset_resolves_via_overlay_then_clears() {
     assert_eq!(def.display_name, format!("Test Fork {id}"));
 
     let graph = manifold_nodes::bundled_presets::bundled_preset_def(&preset_id).unwrap();
-    let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&preset_id).unwrap();
+    let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&preset_id)
+        .unwrap();
     assert!(Arc::ptr_eq(&graph, &view.canonical_def));
     let old_graph = Arc::downgrade(&graph);
     let old_view = Arc::downgrade(&view);
@@ -86,7 +93,10 @@ fn project_generator_preset_resolves_via_overlay_then_clears() {
         "clearing the overlay must remove the project preset from the core registry"
     );
     assert!(manifold_nodes::bundled_presets::bundled_preset_def(&preset_id).is_none());
-    assert!(manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&preset_id).is_none());
+    assert!(
+        manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&preset_id)
+            .is_none()
+    );
     // Readers keep the old generation valid, but releasing them frees it.
     assert_eq!(graph.preset_metadata.as_ref().unwrap().id, preset_id);
     assert_eq!(view.type_id, preset_id);
@@ -127,7 +137,11 @@ fn snapshot_tier_never_shadows_a_real_disk_preset() {
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let marker = "SNAPSHOT_MUST_NOT_WIN_OVER_DISK";
     set_project_presets(
-        vec![("Bloom".to_string(), fake_effect_preset("Bloom", marker), EmbeddedOrigin::Snapshot)],
+        vec![(
+            "Bloom".to_string(),
+            fake_effect_preset("Bloom", marker),
+            EmbeddedOrigin::Snapshot,
+        )],
         Vec::new(),
         Vec::new(),
     );
@@ -160,7 +174,11 @@ fn snapshot_tier_resolves_when_disk_is_absent() {
     );
 
     set_project_presets(
-        vec![(id.to_string(), fake_effect_preset(id, marker), EmbeddedOrigin::Snapshot)],
+        vec![(
+            id.to_string(),
+            fake_effect_preset(id, marker),
+            EmbeddedOrigin::Snapshot,
+        )],
         Vec::new(),
         Vec::new(),
     );
@@ -169,7 +187,10 @@ fn snapshot_tier_resolves_when_disk_is_absent() {
         .load()
         .json(id)
         .expect("a Snapshot entry with no disk file must still resolve (D5 fallback)");
-    assert!(resolved.contains(marker), "resolved value must be the snapshot's own content");
+    assert!(
+        resolved.contains(marker),
+        "resolved value must be the snapshot's own content"
+    );
 
     clear_project_presets();
 }
@@ -182,7 +203,11 @@ fn saved_tier_still_overrides_disk_like_before_p2() {
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let marker = "SAVED_TIER_ON_TOP_MARKER";
     set_project_presets(
-        vec![("Bloom".to_string(), fake_effect_preset("Bloom", marker), EmbeddedOrigin::Saved)],
+        vec![(
+            "Bloom".to_string(),
+            fake_effect_preset("Bloom", marker),
+            EmbeddedOrigin::Saved,
+        )],
         Vec::new(),
         Vec::new(),
     );

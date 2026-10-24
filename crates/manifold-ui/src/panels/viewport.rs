@@ -40,8 +40,8 @@ const MAX_RULER_TICKS: usize = 1500;
 mod coordinate;
 mod interaction;
 mod lane_screens;
-mod preview;
 mod model;
+mod preview;
 mod render;
 
 // One hit-result type for the whole timeline: defined in `clip_hit_tester` (the
@@ -51,10 +51,10 @@ pub use crate::clip_hit_tester::{ClipHitResult, HitRegion};
 #[cfg(test)]
 use coordinate::GridSubdivision;
 pub use model::{
-    AutomationDotScreen, AutomationLaneScreen, ClipScreenRect, ClipZones, SelectionRegion, clip_overlaps_region,
-    TimelineOverlays, TrackInfo, ViewportAutomationLane, ViewportClip, clip_zones,
     AUTOMATION_TITLE_NAME_H, AUTOMATION_TITLE_PAD_TOP, AUTOMATION_TITLE_VALUE_GAP,
-    AUTOMATION_TITLE_VALUE_H, automation_label_prefix, automation_title_has_value_line,
+    AUTOMATION_TITLE_VALUE_H, AutomationDotScreen, AutomationLaneScreen, ClipScreenRect, ClipZones,
+    SelectionRegion, TimelineOverlays, TrackInfo, ViewportAutomationLane, ViewportClip,
+    automation_label_prefix, automation_title_has_value_line, clip_overlaps_region, clip_zones,
 };
 use model::{CollapsedGroupBitmap, MarkerNodeGroup, TrackBgGroup};
 // `zone_widths` is the trim-rule core `clip_zones` wraps — `clip_hit_tester`
@@ -578,7 +578,8 @@ impl TimelineViewportPanel {
         for clip in clips {
             if clip.layer_index < self.clips_by_layer.len() {
                 let bucket = &mut self.clips_by_layer[clip.layer_index];
-                self.clip_index.insert(clip.clip_id.clone(), (clip.layer_index, bucket.len()));
+                self.clip_index
+                    .insert(clip.clip_id.clone(), (clip.layer_index, bucket.len()));
                 bucket.push(clip);
             }
         }
@@ -822,8 +823,15 @@ impl TimelineViewportPanel {
             let clip_top = track_y + CLIP_VERTICAL_PAD;
             // Lane strips stack below the base card (see automation_lane_screens),
             // so a clip body and its name strip end at the card, not under the lanes.
-            let has_lanes = self.automation_lanes_by_layer.get(i).is_some_and(|l| !l.is_empty());
-            let body_h = if has_lanes { track_h.min(color::TRACK_HEIGHT) } else { track_h };
+            let has_lanes = self
+                .automation_lanes_by_layer
+                .get(i)
+                .is_some_and(|l| !l.is_empty());
+            let body_h = if has_lanes {
+                track_h.min(color::TRACK_HEIGHT)
+            } else {
+                track_h
+            };
             let clip_h = body_h - CLIP_VERTICAL_PAD * 2.0;
             if clip_h <= 0.0 {
                 continue;
@@ -1232,7 +1240,11 @@ impl TimelineViewportPanel {
             .iter_mut()
             .zip(&self.automation_lane_sources)
         {
-            if let Some(lane) = self.automation_lanes_by_layer.get(layer).and_then(|l| l.get(index)) {
+            if let Some(lane) = self
+                .automation_lanes_by_layer
+                .get(layer)
+                .and_then(|l| l.get(index))
+            {
                 screen.playhead_value = lane.denormalize(lane.value_at_norm(beat));
             }
         }
@@ -2262,7 +2274,9 @@ mod tests {
     #[test]
     fn automation_lane_screens_cached_and_follow_scroll() {
         use crate::types::LayerType;
-        use crate::view::{UiAutomationLane, UiAutomationPoint, UiGraphTarget, UiLayer, UiSegmentShape};
+        use crate::view::{
+            UiAutomationLane, UiAutomationPoint, UiGraphTarget, UiLayer, UiSegmentShape,
+        };
 
         let mut panel = TimelineViewportPanel::new();
         panel.tracks_rect = Rect::new(0.0, 0.0, 1000.0, 400.0);
@@ -2283,8 +2297,18 @@ mod tests {
                 target: UiGraphTarget::Effect(EffectId::new("fx")),
                 label: "Fx: amount".into(),
                 points: vec![
-                    UiAutomationPoint { beat: Beats::from_f32(4.0), value_norm: 0.5, shape: UiSegmentShape::Linear, past_end: false },
-                    UiAutomationPoint { beat: Beats::from_f32(8.0), value_norm: 0.8, shape: UiSegmentShape::Linear, past_end: false },
+                    UiAutomationPoint {
+                        beat: Beats::from_f32(4.0),
+                        value_norm: 0.5,
+                        shape: UiSegmentShape::Linear,
+                        past_end: false,
+                    },
+                    UiAutomationPoint {
+                        beat: Beats::from_f32(8.0),
+                        value_norm: 0.8,
+                        shape: UiSegmentShape::Linear,
+                        past_end: false,
+                    },
                 ],
                 param_min: 0.0,
                 param_max: 1.0,
@@ -2298,13 +2322,21 @@ mod tests {
         let second = panel.automation_lane_screens();
         assert_eq!(first.len(), 1);
         assert!(std::ptr::eq(first.as_ptr(), second.as_ptr()));
-        assert!(std::ptr::eq(first[0].dots.as_ptr(), second[0].dots.as_ptr()));
+        assert!(std::ptr::eq(
+            first[0].dots.as_ptr(),
+            second[0].dots.as_ptr()
+        ));
         let before = first[0].dots[0].x;
 
         assert!(panel.set_scroll(2.0, 0.0));
         let ppb = panel.pixels_per_beat();
         let after = panel.automation_lane_screens()[0].dots[0].x;
-        assert!((before - after - 2.0 * ppb).abs() < 0.01, "dot moved {} px, want {}", before - after, 2.0 * ppb);
+        assert!(
+            (before - after - 2.0 * ppb).abs() < 0.01,
+            "dot moved {} px, want {}",
+            before - after,
+            2.0 * ppb
+        );
         assert_eq!(after, panel.beat_to_pixel(Beats::from_f32(4.0)));
     }
 

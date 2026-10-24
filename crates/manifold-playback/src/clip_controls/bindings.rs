@@ -69,10 +69,13 @@ impl ClipControlFrame {
                 layer.layer_type,
                 layer.parent_layer_id.clone(),
             );
-            self.by_source.get_mut(&layer.layer_id).unwrap().observe_pattern(
-                layer,
-                manifold_core::project::clip_trigger_pattern_digest(layer, &project.session),
-            );
+            self.by_source
+                .get_mut(&layer.layer_id)
+                .unwrap()
+                .observe_pattern(
+                    layer,
+                    manifold_core::project::clip_trigger_pattern_digest(layer, &project.session),
+                );
         }
         for layer in &mut project.timeline.layers {
             let owner = layer.layer_id.clone();
@@ -106,9 +109,13 @@ impl ClipControlFrame {
     ) {
         for param in instance.params.iter_mut() {
             let source = if instance.enabled {
-                self.source_layer(&param.clip_trigger_source, Some(owner)).cloned()
-            } else { None };
-            param.clip_control_digest = source.as_ref()
+                self.source_layer(&param.clip_trigger_source, Some(owner))
+                    .cloned()
+            } else {
+                None
+            };
+            param.clip_control_digest = source
+                .as_ref()
                 .and_then(|id| self.by_source.get(id))
                 .and_then(|source| source.pattern_digest);
             let cutoff = EventCutoff {
@@ -179,7 +186,8 @@ mod tests {
     fn cutoff_rejects_late_history_but_accepts_new_equal_beat_starts() {
         let mut owner = Layer::new_generator("Owner".into(), PresetTypeId::new("Test"), 0);
         owner
-            .gen_params_mut().unwrap()
+            .gen_params_mut()
+            .unwrap()
             .params
             .push(Param::bundled(ParamSpecDef {
                 id: "value".into(),

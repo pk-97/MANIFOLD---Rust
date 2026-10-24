@@ -153,8 +153,11 @@ pub fn coupled_state_at(
         v0[r] += dv[r];
         w0[r] += dw[r];
     }
-    let mut dv: [f32; 3] = std::array::from_fn(|r| start.linear_acceleration[r] * t + start.inverse_mass * linear_push[r]);
-    let mut dw: [f32; 3] = std::array::from_fn(|r| start.angular_acceleration[r] * t + dot(i[r], angular_push));
+    let mut dv: [f32; 3] = std::array::from_fn(|r| {
+        start.linear_acceleration[r] * t + start.inverse_mass * linear_push[r]
+    });
+    let mut dw: [f32; 3] =
+        std::array::from_fn(|r| start.angular_acceleration[r] * t + dot(i[r], angular_push));
     let held = project_off(start, supports, v0, w0, &mut dv, &mut dw);
     let x0 = start.position;
     let turn: [f32; 3] = std::array::from_fn(|r| w0[r] * t + dw[r] * lead);
@@ -184,7 +187,11 @@ pub const fn mobility_index(i: usize, j: usize) -> usize {
 /// run twice), the mobility is (L·P)·(L·P)ᵀ: symmetric and positive
 /// semidefinite however it rounds, and an impulse moves no held row. Nothing
 /// held gives M⁻¹ itself.
-pub fn constrained_mobility(start: &CoupledStart, supports: &[SupportPoint], held: Held) -> Mobility {
+pub fn constrained_mobility(
+    start: &CoupledStart,
+    supports: &[SupportPoint],
+    held: Held,
+) -> Mobility {
     let mut free = [[0.0f32; 6]; 6];
     for r in 0..3 {
         free[r][r] = start.inverse_mass;
@@ -243,9 +250,13 @@ pub fn constrained_mobility(start: &CoupledStart, supports: &[SupportPoint], hel
         }
     }
     let projector: [[f32; 6]; 6] = std::array::from_fn(|r| {
-        std::array::from_fn(|c| f32::from(u8::from(r == c)) - basis[..rank].iter().map(|q| q[r] * q[c]).sum::<f32>())
+        std::array::from_fn(|c| {
+            f32::from(u8::from(r == c)) - basis[..rank].iter().map(|q| q[r] * q[c]).sum::<f32>()
+        })
     });
-    let a: [[f32; 6]; 6] = std::array::from_fn(|r| std::array::from_fn(|c| (0..6).map(|k| l[r][k] * projector[k][c]).sum()));
+    let a: [[f32; 6]; 6] = std::array::from_fn(|r| {
+        std::array::from_fn(|c| (0..6).map(|k| l[r][k] * projector[k][c]).sum())
+    });
     let mut out = [0.0; 21];
     for r in 0..6 {
         for c in r..6 {
@@ -295,7 +306,12 @@ fn project_off(
             }
             let n = lead.normal;
             let (mut total, mut twist_limit) = (0.0, 0.0);
-            for (q, point) in points.iter().enumerate().skip(p).filter(|(_, point)| point.patch == lead.patch) {
+            for (q, point) in points
+                .iter()
+                .enumerate()
+                .skip(p)
+                .filter(|(_, point)| point.patch == lead.patch)
+            {
                 let arm = cross(point.lever, n);
                 let turn = response(arm);
                 let mass = m + dot(arm, turn);
@@ -333,7 +349,10 @@ fn project_off(
             if det > 0.0 {
                 let v = relative(c, lead.patch_velocity, dv, dw);
                 let (s1, s2) = (dot(t1, v), dot(t2, v));
-                let mut next = [slide[p][0] - (k22 * s1 - k12 * s2) / det, slide[p][1] - (k11 * s2 - k12 * s1) / det];
+                let mut next = [
+                    slide[p][0] - (k22 * s1 - k12 * s2) / det,
+                    slide[p][1] - (k11 * s2 - k12 * s1) / det,
+                ];
                 let size = (next[0] * next[0] + next[1] * next[1]).sqrt();
                 if size > limits[p][0] {
                     let scale = if size > 0.0 { limits[p][0] / size } else { 0.0 };
@@ -353,12 +372,18 @@ fn project_off(
         let n = point.normal;
         let arm = cross(point.lever, n);
         let mass = m + dot(arm, response(arm));
-        if mass > 0.0 && dot(n, relative(point.lever, point.support_velocity, dv, dw)) <= HELD_SPEED {
+        if mass > 0.0 && dot(n, relative(point.lever, point.support_velocity, dv, dw)) <= HELD_SPEED
+        {
             held.closed |= 1 << p;
         }
-        let lead = (0..=p).find(|&q| points[q].patch == point.patch).unwrap_or(p);
+        let lead = (0..=p)
+            .find(|&q| points[q].patch == point.patch)
+            .unwrap_or(p);
         let [slide_limit, twist_limit] = limits[lead].map(|limit| STICK_MARGIN * limit);
-        if slide_limit > 0.0 && (slide[lead][0] * slide[lead][0] + slide[lead][1] * slide[lead][1]).sqrt() < slide_limit {
+        if slide_limit > 0.0
+            && (slide[lead][0] * slide[lead][0] + slide[lead][1] * slide[lead][1]).sqrt()
+                < slide_limit
+        {
             held.stuck |= 1 << p;
         }
         if twist_limit > 0.0 && twist[lead].abs() < twist_limit {
@@ -374,7 +399,11 @@ fn directions(n: [f32; 3]) -> [[f32; 3]; 3] {
     let sign = if n[2] >= 0.0 { 1.0 } else { -1.0 };
     let a = -1.0 / (sign + n[2]);
     let b = n[0] * n[1] * a;
-    [n, [1.0 + sign * n[0] * n[0] * a, sign * b, -sign * n[0]], [b, sign + n[1] * n[1] * a, -n[1]]]
+    [
+        n,
+        [1.0 + sign * n[0] * n[0] * a, sign * b, -sign * n[0]],
+        [b, sign + n[1] * n[1] * a, -n[1]],
+    ]
 }
 
 /// L with L·Lᵀ = `free`, block diagonal: √m⁻¹ on the linear block, the
@@ -416,7 +445,11 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
 }
 
 fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -451,11 +484,16 @@ mod tests {
     const G: [f32; 3] = [0.0, -9.81, 0.0];
 
     fn cuboid(half: [f32; 3]) -> Vec<[f32; 3]> {
-        (0..8).map(|k| std::array::from_fn(|a| if k >> a & 1 == 1 { half[a] } else { -half[a] })).collect()
+        (0..8)
+            .map(|k| std::array::from_fn(|a| if k >> a & 1 == 1 { half[a] } else { -half[a] }))
+            .collect()
     }
 
     fn start_of(world: &PhysicsWorld, body: BodyHandle) -> CoupledStart {
-        CoupledStart::new(&world.dynamics(body).unwrap(), world.pose(body).unwrap().rotation)
+        CoupledStart::new(
+            &world.dynamics(body).unwrap(),
+            world.pose(body).unwrap().rotation,
+        )
     }
 
     fn supports_of(world: &PhysicsWorld, body: BodyHandle) -> Vec<SupportPoint> {
@@ -480,7 +518,9 @@ mod tests {
             a[3] * b[2] - a[0] * b[1] + a[1] * b[0] - a[2] * b[3],
             a[3] * b[3] + a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
         ];
-        2.0 * (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt().atan2(r[3].abs())
+        2.0 * (r[0] * r[0] + r[1] * r[1] + r[2] * r[2])
+            .sqrt()
+            .atan2(r[3].abs())
     }
 
     fn gap(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -495,7 +535,8 @@ mod tests {
     /// above zero once the law has projected.
     fn closing(state: &CoupledState, point: &SupportPoint) -> f32 {
         let spin = cross(state.angular_velocity, point.lever);
-        let v: [f32; 3] = std::array::from_fn(|r| state.linear_velocity[r] + spin[r] - point.support_velocity[r]);
+        let v: [f32; 3] =
+            std::array::from_fn(|r| state.linear_velocity[r] + spin[r] - point.support_velocity[r]);
         -dot(point.normal, v)
     }
 
@@ -514,13 +555,29 @@ mod tests {
             let body = world
                 .add_hull(
                     &cuboid([0.3, 0.2, 0.5]),
-                    BodyConfig { position: [0.0, 5.0, 0.0], rotation: [0.1, 0.2, 0.05, 0.97], mass: 6.0, ..BodyConfig::default() },
+                    BodyConfig {
+                        position: [0.0, 5.0, 0.0],
+                        rotation: [0.1, 0.2, 0.05, 0.97],
+                        mass: 6.0,
+                        ..BodyConfig::default()
+                    },
                 )
                 .unwrap();
-            world.set_velocity(body, [0.4, 1.0, -0.3], [0.3, -0.2, 0.5]).unwrap();
+            world
+                .set_velocity(body, [0.4, 1.0, -0.3], [0.3, -0.2, 0.5])
+                .unwrap();
             let start = start_of(&world, body);
             let (push, turn) = ([3.0, 40.0, -2.0], [0.4, -0.3, 0.2]);
-            world.queue_reaction_over_step(&[BodyImpulse { body, linear: push, angular: turn }], dt).unwrap();
+            world
+                .queue_reaction_over_step(
+                    &[BodyImpulse {
+                        body,
+                        linear: push,
+                        angular: turn,
+                    }],
+                    dt,
+                )
+                .unwrap();
             world.step(dt, box3d_substep_count(dt).value).unwrap();
             let law = coupled_state_at(&start, &[], push, turn, dt.0 as f32, coupled_substep(dt));
             let end = world.dynamics(body).unwrap();
@@ -533,10 +590,22 @@ mod tests {
             eprintln!(
                 "{hz} Hz: position {position:.2e} m, velocity {velocity:.2e} m/s, spin {spin:.2e} of {spun:.2e} rad/s, rotation {turned:.2e} rad"
             );
-            assert!(position < 2e-6, "{hz} Hz: the law ends {position} m from Box3D");
-            assert!(velocity < 2e-5, "{hz} Hz: the law ends {velocity} m/s from Box3D");
-            assert!(spin < 0.025 * spun, "{hz} Hz: the law's spin is {spin} rad/s from Box3D's, of {spun} rad/s gained");
-            assert!(turned < 0.1f32.to_radians(), "{hz} Hz: the law's rotation is {turned} rad from Box3D's");
+            assert!(
+                position < 2e-6,
+                "{hz} Hz: the law ends {position} m from Box3D"
+            );
+            assert!(
+                velocity < 2e-5,
+                "{hz} Hz: the law ends {velocity} m/s from Box3D"
+            );
+            assert!(
+                spin < 0.025 * spun,
+                "{hz} Hz: the law's spin is {spin} rad/s from Box3D's, of {spun} rad/s gained"
+            );
+            assert!(
+                turned < 0.1f32.to_radians(),
+                "{hz} Hz: the law's rotation is {turned} rad from Box3D's"
+            );
         }
     }
 
@@ -546,24 +615,75 @@ mod tests {
     fn coupled_motion_matches_box3d_while_slow() {
         let dt = Seconds(1.0 / 30.0);
         let mut world = PhysicsWorld::new(G).unwrap();
-        let body = world.add_hull(&cuboid([0.2; 3]), BodyConfig { position: [0.0, 5.0, 0.0], mass: 8.0, ..BodyConfig::default() }).unwrap();
-        world.set_velocity(body, [0.01, 0.0, 0.0], [0.0; 3]).unwrap();
+        let body = world
+            .add_hull(
+                &cuboid([0.2; 3]),
+                BodyConfig {
+                    position: [0.0, 5.0, 0.0],
+                    mass: 8.0,
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        world
+            .set_velocity(body, [0.01, 0.0, 0.0], [0.0; 3])
+            .unwrap();
         let push = [0.0, -8.0 * G[1] * dt.0 as f32, 0.0];
         for tick in 0..60 {
             let start = start_of(&world, body);
-            world.queue_reaction_over_step(&[BodyImpulse { body, linear: push, angular: [0.0; 3] }], dt).unwrap();
+            world
+                .queue_reaction_over_step(
+                    &[BodyImpulse {
+                        body,
+                        linear: push,
+                        angular: [0.0; 3],
+                    }],
+                    dt,
+                )
+                .unwrap();
             world.step(dt, box3d_substep_count(dt).value).unwrap();
-            let law = coupled_state_at(&start, &[], push, [0.0; 3], dt.0 as f32, coupled_substep(dt));
+            let law = coupled_state_at(
+                &start,
+                &[],
+                push,
+                [0.0; 3],
+                dt.0 as f32,
+                coupled_substep(dt),
+            );
             let end = world.dynamics(body).unwrap();
             let velocity = gap(law.linear_velocity, end.linear_velocity);
-            assert!(velocity < 2e-5, "tick {tick}: the law ends {velocity} m/s from Box3D, awake {}", end.awake);
+            assert!(
+                velocity < 2e-5,
+                "tick {tick}: the law ends {velocity} m/s from Box3D, awake {}",
+                end.awake
+            );
         }
         // Handed nothing more, it sleeps again.
         let mut drifting = PhysicsWorld::new([0.0; 3]).unwrap();
-        let body = drifting.add_hull(&cuboid([0.2; 3]), BodyConfig { mass: 8.0, ..BodyConfig::default() }).unwrap();
-        drifting.queue_reaction_over_step(&[BodyImpulse { body, linear: [0.08, 0.0, 0.0], angular: [0.0; 3] }], dt).unwrap();
+        let body = drifting
+            .add_hull(
+                &cuboid([0.2; 3]),
+                BodyConfig {
+                    mass: 8.0,
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        drifting
+            .queue_reaction_over_step(
+                &[BodyImpulse {
+                    body,
+                    linear: [0.08, 0.0, 0.0],
+                    angular: [0.0; 3],
+                }],
+                dt,
+            )
+            .unwrap();
         settle(&mut drifting, dt, 30);
-        assert!(!drifting.dynamics(body).unwrap().awake, "a body no longer handed a reaction falls asleep");
+        assert!(
+            !drifting.dynamics(body).unwrap().awake,
+            "a body no longer handed a reaction falls asleep"
+        );
     }
 
     /// A reaction whose J/dt overflows is refused before any body is
@@ -572,12 +692,36 @@ mod tests {
     fn an_overflowing_reaction_touches_no_body() {
         let dt = Seconds(1e-3);
         let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
-        let first = world.add_hull(&cuboid([0.2; 3]), BodyConfig { mass: 8.0, ..BodyConfig::default() }).unwrap();
-        let second =
-            world.add_hull(&cuboid([0.2; 3]), BodyConfig { position: [2.0, 0.0, 0.0], mass: 8.0, ..BodyConfig::default() }).unwrap();
+        let first = world
+            .add_hull(
+                &cuboid([0.2; 3]),
+                BodyConfig {
+                    mass: 8.0,
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let second = world
+            .add_hull(
+                &cuboid([0.2; 3]),
+                BodyConfig {
+                    position: [2.0, 0.0, 0.0],
+                    mass: 8.0,
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
         let reactions = [
-            BodyImpulse { body: first, linear: [1.0, 0.0, 0.0], angular: [0.0; 3] },
-            BodyImpulse { body: second, linear: [3e37, 0.0, 0.0], angular: [0.0; 3] },
+            BodyImpulse {
+                body: first,
+                linear: [1.0, 0.0, 0.0],
+                angular: [0.0; 3],
+            },
+            BodyImpulse {
+                body: second,
+                linear: [3e37, 0.0, 0.0],
+                angular: [0.0; 3],
+            },
         ];
         assert!(world.queue_reaction_over_step(&reactions, dt).is_err());
         world.step(dt, box3d_substep_count(dt).value).unwrap();
@@ -592,29 +736,73 @@ mod tests {
     fn coupled_motion_holds_a_resting_box_on_its_support() {
         let mut world = PhysicsWorld::new(G).unwrap();
         world
-            .add_hull(&cuboid([2.0, 0.5, 2.0]), BodyConfig { kind: BodyKind::Fixed, position: [0.0, -0.5, 0.0], ..BodyConfig::default() })
+            .add_hull(
+                &cuboid([2.0, 0.5, 2.0]),
+                BodyConfig {
+                    kind: BodyKind::Fixed,
+                    position: [0.0, -0.5, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
             .unwrap();
-        let body = world.add_hull(&cuboid([0.2; 3]), BodyConfig { position: [0.0, 0.2, 0.0], mass: 8.0, ..BodyConfig::default() }).unwrap();
+        let body = world
+            .add_hull(
+                &cuboid([0.2; 3]),
+                BodyConfig {
+                    position: [0.0, 0.2, 0.0],
+                    mass: 8.0,
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
         let dt = Seconds(1.0 / 30.0);
         settle(&mut world, dt, 30);
         let supports = supports_of(&world, body);
         assert_eq!(supports.len(), 4, "the bottom face's corners: {supports:?}");
         for point in &supports {
-            assert!(gap(point.normal, [0.0, 1.0, 0.0]) < 1e-4, "the floor's normal points up into the box: {point:?}");
+            assert!(
+                gap(point.normal, [0.0, 1.0, 0.0]) < 1e-4,
+                "the floor's normal points up into the box: {point:?}"
+            );
         }
         let start = start_of(&world, body);
         let (t, h) = (dt.0 as f32, coupled_substep(dt));
         let held = coupled_state_at(&start, &supports, [0.0, -20.0, 0.0], [0.3, 0.0, 0.2], t, h);
-        assert!(length(held.linear_velocity) < 1e-3, "pressed into the floor, the box is predicted still: {held:?}");
-        assert!(length(held.angular_velocity) < 1e-3, "turned against the floor, the box does not tip: {held:?}");
-        assert_eq!(held.held.closed, 0b1111, "all four corners stay closed: {held:?}");
+        assert!(
+            length(held.linear_velocity) < 1e-3,
+            "pressed into the floor, the box is predicted still: {held:?}"
+        );
+        assert!(
+            length(held.angular_velocity) < 1e-3,
+            "turned against the floor, the box does not tip: {held:?}"
+        );
+        assert_eq!(
+            held.held.closed, 0b1111,
+            "all four corners stay closed: {held:?}"
+        );
         for point in &supports {
-            assert!(closing(&held, point) < 1e-4, "no corner moves into the floor: {held:?}");
+            assert!(
+                closing(&held, point) < 1e-4,
+                "no corner moves into the floor: {held:?}"
+            );
         }
-        let lifted = coupled_state_at(&start, &supports, [0.0, 8.0 * 9.81 * t * 1.5, 0.0], [0.0; 3], t, h);
+        let lifted = coupled_state_at(
+            &start,
+            &supports,
+            [0.0, 8.0 * 9.81 * t * 1.5, 0.0],
+            [0.0; 3],
+            t,
+            h,
+        );
         let rise = 0.5 * 9.81 * t;
-        assert!((lifted.linear_velocity[1] - rise).abs() < 1e-3, "pushed up by half again its weight, it rises at {rise}: {lifted:?}");
-        assert_eq!(lifted.held.closed, 0, "rising, it leaves the floor: {lifted:?}");
+        assert!(
+            (lifted.linear_velocity[1] - rise).abs() < 1e-3,
+            "pushed up by half again its weight, it rises at {rise}: {lifted:?}"
+        );
+        assert_eq!(
+            lifted.held.closed, 0,
+            "rising, it leaves the floor: {lifted:?}"
+        );
     }
 
     /// A box resting on a fixed floor, pushed hard enough to slide on a
@@ -640,18 +828,43 @@ mod tests {
                 let t = dt.0 as f32;
                 let mut world = PhysicsWorld::new(G).unwrap();
                 world
-                    .add_hull(&cuboid([2.0, 0.5, 2.0]), BodyConfig { kind: BodyKind::Fixed, position: [0.0, -0.5, 0.0], ..BodyConfig::default() })
+                    .add_hull(
+                        &cuboid([2.0, 0.5, 2.0]),
+                        BodyConfig {
+                            kind: BodyKind::Fixed,
+                            position: [0.0, -0.5, 0.0],
+                            ..BodyConfig::default()
+                        },
+                    )
                     .unwrap();
-                let body =
-                    world.add_hull(&cuboid([0.2; 3]), BodyConfig { position: [0.0, 0.2, 0.0], mass: 8.0, ..BodyConfig::default() }).unwrap();
+                let body = world
+                    .add_hull(
+                        &cuboid([0.2; 3]),
+                        BodyConfig {
+                            position: [0.0, 0.2, 0.0],
+                            mass: 8.0,
+                            ..BodyConfig::default()
+                        },
+                    )
+                    .unwrap();
                 settle(&mut world, dt, 30);
                 for tick in 0..3 {
                     let supports = supports_of(&world, body);
                     let start = start_of(&world, body);
                     let (push, turn) = (force.map(|f| f * t), torque.map(|f| f * t));
-                    world.queue_reaction_over_step(&[BodyImpulse { body, linear: push, angular: turn }], dt).unwrap();
+                    world
+                        .queue_reaction_over_step(
+                            &[BodyImpulse {
+                                body,
+                                linear: push,
+                                angular: turn,
+                            }],
+                            dt,
+                        )
+                        .unwrap();
                     world.step(dt, box3d_substep_count(dt).value).unwrap();
-                    let law = coupled_state_at(&start, &supports, push, turn, t, coupled_substep(dt));
+                    let law =
+                        coupled_state_at(&start, &supports, push, turn, t, coupled_substep(dt));
                     let end = world.dynamics(body).unwrap();
                     let position = gap(law.position, end.center_of_mass);
                     let velocity = gap(law.linear_velocity, end.linear_velocity);
@@ -661,7 +874,11 @@ mod tests {
                          Box3D v {:.4?} w {:.4?}",
                         end.linear_velocity, end.angular_velocity
                     );
-                    let (near, slow) = if tick == 0 { (1e-3, 2e-2) } else { (5e-4, 5e-3) };
+                    let (near, slow) = if tick == 0 {
+                        (1e-3, 2e-2)
+                    } else {
+                        (5e-4, 5e-3)
+                    };
                     if position >= near || velocity >= slow || turned >= 0.1f32.to_radians() {
                         misses.push(format!("{hz} Hz {what} tick {tick}"));
                     }
@@ -678,41 +895,93 @@ mod tests {
     #[test]
     fn coupled_motion_holds_a_leaning_plank_by_friction() {
         let mut world = PhysicsWorld::new(G).unwrap();
-        let fixed = |position| BodyConfig { kind: BodyKind::Fixed, position, ..BodyConfig::default() };
-        world.add_hull(&cuboid([2.0, 0.5, 2.0]), fixed([0.0, -0.5, 0.0])).unwrap();
-        world.add_hull(&cuboid([0.5, 2.0, 2.0]), fixed([-0.5, 2.0, 0.0])).unwrap();
+        let fixed = |position| BodyConfig {
+            kind: BodyKind::Fixed,
+            position,
+            ..BodyConfig::default()
+        };
+        world
+            .add_hull(&cuboid([2.0, 0.5, 2.0]), fixed([0.0, -0.5, 0.0]))
+            .unwrap();
+        world
+            .add_hull(&cuboid([0.5, 2.0, 2.0]), fixed([-0.5, 2.0, 0.0]))
+            .unwrap();
         let lean = 0.25f32;
         let rotation = [0.0, 0.0, (0.5 * lean).sin(), (0.5 * lean).cos()];
         let position = [0.1226 + 2e-3, 0.303 + 2e-3, 0.0];
         let plank = world
-            .add_hull(&cuboid([0.05, 0.3, 0.2]), BodyConfig { position, rotation, mass: 4.0, ..BodyConfig::default() })
+            .add_hull(
+                &cuboid([0.05, 0.3, 0.2]),
+                BodyConfig {
+                    position,
+                    rotation,
+                    mass: 4.0,
+                    ..BodyConfig::default()
+                },
+            )
             .unwrap();
         let dt = Seconds(1.0 / 30.0);
         settle(&mut world, dt, 60);
         let resting = world.dynamics(plank).unwrap();
-        assert!(length(resting.linear_velocity) < 1e-3, "Box3D holds the plank up: {resting:?}");
+        assert!(
+            length(resting.linear_velocity) < 1e-3,
+            "Box3D holds the plank up: {resting:?}"
+        );
         let supports = supports_of(&world, plank);
         let on = |n: [f32; 3]| supports.iter().filter(|p| gap(p.normal, n) < 1e-3).count();
-        assert!(on([0.0, 1.0, 0.0]) > 0 && on([1.0, 0.0, 0.0]) > 0, "the plank stands on the floor and the wall: {supports:?}");
+        assert!(
+            on([0.0, 1.0, 0.0]) > 0 && on([1.0, 0.0, 0.0]) > 0,
+            "the plank stands on the floor and the wall: {supports:?}"
+        );
         // Two slots still hold both supports, whichever manifold points touch.
         let mut two = [SupportPoint::default(); 2];
         let count = world.support_points(plank, &mut two).unwrap();
-        assert_eq!((count.kept, count.found, count.unread), (2, supports.len(), 0));
-        assert_ne!(two[0].patch, two[1].patch, "one point of each support: {two:?}");
+        assert_eq!(
+            (count.kept, count.found, count.unread),
+            (2, supports.len(), 0)
+        );
+        assert_ne!(
+            two[0].patch, two[1].patch,
+            "one point of each support: {two:?}"
+        );
         let start = start_of(&world, plank);
         let (t, h) = (dt.0 as f32, coupled_substep(dt));
         let held = coupled_state_at(&start, &supports, [0.0; 3], [0.0; 3], t, h);
-        assert!(length(held.linear_velocity) < 1e-3 && length(held.angular_velocity) < 1e-2, "friction holds it: {held:?}");
-        assert_eq!(held.held.closed.count_ones() as usize, supports.len(), "every support stays closed: {held:?}");
+        assert!(
+            length(held.linear_velocity) < 1e-3 && length(held.angular_velocity) < 1e-2,
+            "friction holds it: {held:?}"
+        );
+        assert_eq!(
+            held.held.closed.count_ones() as usize,
+            supports.len(),
+            "every support stays closed: {held:?}"
+        );
         let fast = unpack(&constrained_mobility(&start, &supports, held.held));
         let free = largest(&free_of(&start));
-        assert!(largest(&fast) < 1e-4 * free, "the solve holds it fast: {:?}, held {:?}", fast, held.held);
-        let slick: Vec<SupportPoint> = supports.iter().map(|p| SupportPoint { friction: 0.0, ..*p }).collect();
+        assert!(
+            largest(&fast) < 1e-4 * free,
+            "the solve holds it fast: {:?}, held {:?}",
+            fast,
+            held.held
+        );
+        let slick: Vec<SupportPoint> = supports
+            .iter()
+            .map(|p| SupportPoint {
+                friction: 0.0,
+                ..*p
+            })
+            .collect();
         let slides = coupled_state_at(&start, &slick, [0.0; 3], [0.0; 3], t, h);
-        assert!(length(slides.linear_velocity) > 0.02, "without friction the plank slides: {slides:?}");
+        assert!(
+            length(slides.linear_velocity) > 0.02,
+            "without friction the plank slides: {slides:?}"
+        );
         assert_eq!(slides.held.stuck, 0, "{slides:?}");
         for point in &slick {
-            assert!(closing(&slides, point) < 1e-4, "sliding, it still never moves into a support: {slides:?}");
+            assert!(
+                closing(&slides, point) < 1e-4,
+                "sliding, it still never moves into a support: {slides:?}"
+            );
         }
     }
 
@@ -724,29 +993,76 @@ mod tests {
     fn a_box_resting_on_a_box_stands_on_it() {
         let mut world = PhysicsWorld::new(G).unwrap();
         world
-            .add_hull(&cuboid([2.0, 0.5, 2.0]), BodyConfig { kind: BodyKind::Fixed, position: [0.0, -0.5, 0.0], ..BodyConfig::default() })
+            .add_hull(
+                &cuboid([2.0, 0.5, 2.0]),
+                BodyConfig {
+                    kind: BodyKind::Fixed,
+                    position: [0.0, -0.5, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
             .unwrap();
-        let lower = world.add_hull(&cuboid([0.2; 3]), BodyConfig { position: [0.0, 0.2, 0.0], mass: 8.0, ..BodyConfig::default() }).unwrap();
-        let upper = world.add_hull(&cuboid([0.2; 3]), BodyConfig { position: [0.0, 0.6, 0.0], mass: 8.0, ..BodyConfig::default() }).unwrap();
+        let lower = world
+            .add_hull(
+                &cuboid([0.2; 3]),
+                BodyConfig {
+                    position: [0.0, 0.2, 0.0],
+                    mass: 8.0,
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let upper = world
+            .add_hull(
+                &cuboid([0.2; 3]),
+                BodyConfig {
+                    position: [0.0, 0.6, 0.0],
+                    mass: 8.0,
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
         let dt = Seconds(1.0 / 30.0);
         settle(&mut world, dt, 60);
         let on_lower = supports_of(&world, lower);
-        assert!(!on_lower.is_empty() && on_lower.iter().all(|p| p.normal[1] > 0.99), "the lower box stands on the floor only: {on_lower:?}");
-        assert!(on_lower.iter().all(|p| p.lever[1] < 0.0), "nothing from the box above: {on_lower:?}");
+        assert!(
+            !on_lower.is_empty() && on_lower.iter().all(|p| p.normal[1] > 0.99),
+            "the lower box stands on the floor only: {on_lower:?}"
+        );
+        assert!(
+            on_lower.iter().all(|p| p.lever[1] < 0.0),
+            "nothing from the box above: {on_lower:?}"
+        );
         let on_upper = supports_of(&world, upper);
-        assert!(!on_upper.is_empty() && on_upper.iter().all(|p| p.normal[1] > 0.99 && p.lever[1] < 0.0), "the upper box stands on the lower: {on_upper:?}");
+        assert!(
+            !on_upper.is_empty()
+                && on_upper
+                    .iter()
+                    .all(|p| p.normal[1] > 0.99 && p.lever[1] < 0.0),
+            "the upper box stands on the lower: {on_upper:?}"
+        );
         for (body, supports) in [(lower, &on_lower), (upper, &on_upper)] {
             let start = start_of(&world, body);
             let (t, h) = (dt.0 as f32, coupled_substep(dt));
             let held = coupled_state_at(&start, supports, [0.0; 3], [0.0; 3], t, h);
-            assert!(length(held.linear_velocity) < 1e-3, "the law holds it on its support: {held:?}");
+            assert!(
+                length(held.linear_velocity) < 1e-3,
+                "the law holds it on its support: {held:?}"
+            );
             let fast = unpack(&constrained_mobility(&start, supports, held.held));
-            assert!(largest(&fast) < 1e-4 * largest(&free_of(&start)), "the solve holds it fast: {fast:?}");
+            assert!(
+                largest(&fast) < 1e-4 * largest(&free_of(&start)),
+                "the solve holds it fast: {fast:?}"
+            );
         }
         let before = world.dynamics(upper).unwrap().center_of_mass;
         world.step(dt, box3d_substep_count(dt).value).unwrap();
         let after = world.dynamics(upper).unwrap().center_of_mass;
-        assert!(gap(before, after) < 5e-4, "Box3D holds it too: moved {} m", gap(before, after));
+        assert!(
+            gap(before, after) < 5e-4,
+            "Box3D holds it too: moved {} m",
+            gap(before, after)
+        );
     }
 
     /// A box touching the floor while moving down at 1 m/s is stopped at the
@@ -756,18 +1072,39 @@ mod tests {
     fn coupled_motion_stops_a_closing_body_at_the_start() {
         let mut world = PhysicsWorld::new(G).unwrap();
         world
-            .add_hull(&cuboid([2.0, 0.5, 2.0]), BodyConfig { kind: BodyKind::Fixed, position: [0.0, -0.5, 0.0], ..BodyConfig::default() })
+            .add_hull(
+                &cuboid([2.0, 0.5, 2.0]),
+                BodyConfig {
+                    kind: BodyKind::Fixed,
+                    position: [0.0, -0.5, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
             .unwrap();
-        let body = world.add_hull(&cuboid([0.2; 3]), BodyConfig { position: [0.0, 0.2, 0.0], mass: 8.0, ..BodyConfig::default() }).unwrap();
+        let body = world
+            .add_hull(
+                &cuboid([0.2; 3]),
+                BodyConfig {
+                    position: [0.0, 0.2, 0.0],
+                    mass: 8.0,
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
         let dt = Seconds(1.0 / 30.0);
         settle(&mut world, dt, 30);
-        world.set_velocity(body, [0.0, -1.0, 0.0], [0.0; 3]).unwrap();
+        world
+            .set_velocity(body, [0.0, -1.0, 0.0], [0.0; 3])
+            .unwrap();
         let supports = supports_of(&world, body);
         let start = start_of(&world, body);
         let (t, h) = (dt.0 as f32, coupled_substep(dt));
         let state = coupled_state_at(&start, &supports, [0.0; 3], [0.0; 3], t, h);
         assert!(state.linear_velocity[1] > -1e-3, "stopped: {state:?}");
-        assert!(state.position[1] > start.position[1] - 1e-4, "placed no deeper: {state:?} from {start:?}");
+        assert!(
+            state.position[1] > start.position[1] - 1e-4,
+            "placed no deeper: {state:?} from {start:?}"
+        );
     }
 
     /// A box riding a kinematic platform that slides sideways moves with it.
@@ -775,20 +1112,51 @@ mod tests {
     fn coupled_motion_rides_a_moving_support() {
         let mut world = PhysicsWorld::new(G).unwrap();
         let platform = world
-            .add_hull(&cuboid([2.0, 0.5, 2.0]), BodyConfig { kind: BodyKind::Animated, position: [0.0, -0.5, 0.0], ..BodyConfig::default() })
+            .add_hull(
+                &cuboid([2.0, 0.5, 2.0]),
+                BodyConfig {
+                    kind: BodyKind::Animated,
+                    position: [0.0, -0.5, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
             .unwrap();
-        world.set_velocity(platform, [0.5, 0.0, 0.0], [0.0; 3]).unwrap();
-        let body = world.add_hull(&cuboid([0.2; 3]), BodyConfig { position: [0.0, 0.2, 0.0], mass: 8.0, ..BodyConfig::default() }).unwrap();
+        world
+            .set_velocity(platform, [0.5, 0.0, 0.0], [0.0; 3])
+            .unwrap();
+        let body = world
+            .add_hull(
+                &cuboid([0.2; 3]),
+                BodyConfig {
+                    position: [0.0, 0.2, 0.0],
+                    mass: 8.0,
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
         let dt = Seconds(1.0 / 30.0);
         settle(&mut world, dt, 30);
         let supports = supports_of(&world, body);
         assert!(!supports.is_empty());
         for point in &supports {
-            assert!(gap(point.support_velocity, [0.5, 0.0, 0.0]) < 1e-4, "{point:?}");
+            assert!(
+                gap(point.support_velocity, [0.5, 0.0, 0.0]) < 1e-4,
+                "{point:?}"
+            );
         }
         let start = start_of(&world, body);
-        let state = coupled_state_at(&start, &supports, [0.0; 3], [0.0; 3], dt.0 as f32, coupled_substep(dt));
-        assert!(gap(state.linear_velocity, [0.5, 0.0, 0.0]) < 1e-2, "{state:?}");
+        let state = coupled_state_at(
+            &start,
+            &supports,
+            [0.0; 3],
+            [0.0; 3],
+            dt.0 as f32,
+            coupled_substep(dt),
+        );
+        assert!(
+            gap(state.linear_velocity, [0.5, 0.0, 0.0]) < 1e-2,
+            "{state:?}"
+        );
     }
 
     /// A box resting on a dynamic box reads no support: only static and
@@ -796,8 +1164,24 @@ mod tests {
     #[test]
     fn coupled_motion_ignores_dynamic_supports() {
         let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
-        world.add_hull(&cuboid([0.2; 3]), BodyConfig { position: [0.0, 0.0, 0.0], ..BodyConfig::default() }).unwrap();
-        let top = world.add_hull(&cuboid([0.2; 3]), BodyConfig { position: [0.0, 0.399, 0.0], ..BodyConfig::default() }).unwrap();
+        world
+            .add_hull(
+                &cuboid([0.2; 3]),
+                BodyConfig {
+                    position: [0.0, 0.0, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
+        let top = world
+            .add_hull(
+                &cuboid([0.2; 3]),
+                BodyConfig {
+                    position: [0.0, 0.399, 0.0],
+                    ..BodyConfig::default()
+                },
+            )
+            .unwrap();
         world.step(Seconds(1.0 / 60.0), 4).unwrap();
         assert!(supports_of(&world, top).is_empty());
     }
@@ -806,11 +1190,26 @@ mod tests {
     /// pushed down and into the wall keeps only its motion along the wall.
     #[test]
     fn coupled_motion_projects_off_a_corner() {
-        let start = CoupledStart { inverse_inertia: [[0.0; 3]; 3], ..floor_box().0 };
-        let point = |lever, normal, patch| SupportPoint { lever, normal, patch, patch_lever: lever, ..SupportPoint::default() };
-        let corner = [point([0.0, -0.2, 0.0], [0.0, 1.0, 0.0], 0), point([-0.2, 0.0, 0.0], [1.0, 0.0, 0.0], 1)];
+        let start = CoupledStart {
+            inverse_inertia: [[0.0; 3]; 3],
+            ..floor_box().0
+        };
+        let point = |lever, normal, patch| SupportPoint {
+            lever,
+            normal,
+            patch,
+            patch_lever: lever,
+            ..SupportPoint::default()
+        };
+        let corner = [
+            point([0.0, -0.2, 0.0], [0.0, 1.0, 0.0], 0),
+            point([-0.2, 0.0, 0.0], [1.0, 0.0, 0.0], 1),
+        ];
         let state = coupled_state_at(&start, &corner, [-16.0, -24.0, 12.0], [0.0; 3], 0.1, 0.025);
-        assert!(gap(state.linear_velocity, [0.0, 0.0, 1.5]) < 1e-5, "{state:?}");
+        assert!(
+            gap(state.linear_velocity, [0.0, 0.0, 1.5]) < 1e-5,
+            "{state:?}"
+        );
     }
 
     /// A 0.4 m, 8 kg cube resting flat on a floor, its bottom corners touching.
@@ -822,13 +1221,30 @@ mod tests {
             linear_velocity: [0.0; 3],
             angular_velocity: [0.0; 3],
             inverse_mass: 1.0 / 8.0,
-            inverse_inertia: [[1.0 / inertia, 0.0, 0.0], [0.0, 1.0 / inertia, 0.0], [0.0, 0.0, 1.0 / inertia]],
+            inverse_inertia: [
+                [1.0 / inertia, 0.0, 0.0],
+                [0.0, 1.0 / inertia, 0.0],
+                [0.0, 0.0, 1.0 / inertia],
+            ],
             linear_acceleration: G,
             angular_acceleration: [0.0; 3],
         };
-        let corners = [[0.2, -0.2, 0.2], [-0.2, -0.2, 0.2], [-0.2, -0.2, -0.2], [0.2, -0.2, -0.2]];
-        let supports =
-            corners.iter().map(|&lever| SupportPoint { lever, normal: [0.0, 1.0, 0.0], friction: 0.5, patch_lever: [0.0, -0.2, 0.0], ..SupportPoint::default() }).collect();
+        let corners = [
+            [0.2, -0.2, 0.2],
+            [-0.2, -0.2, 0.2],
+            [-0.2, -0.2, -0.2],
+            [0.2, -0.2, -0.2],
+        ];
+        let supports = corners
+            .iter()
+            .map(|&lever| SupportPoint {
+                lever,
+                normal: [0.0, 1.0, 0.0],
+                friction: 0.5,
+                patch_lever: [0.0, -0.2, 0.0],
+                ..SupportPoint::default()
+            })
+            .collect();
         (start, supports)
     }
 
@@ -879,7 +1295,10 @@ mod tests {
         for row in held_rows(supports, held) {
             let moved: [f32; 6] = std::array::from_fn(|r| (0..6).map(|c| m[r][c] * row[c]).sum());
             let size = row.iter().map(|x| x * x).sum::<f32>().sqrt();
-            assert!(moved.iter().all(|x| x.abs() < 1e-5 * scale * size), "a held row moves: {moved:?} for {row:?}");
+            assert!(
+                moved.iter().all(|x| x.abs() < 1e-5 * scale * size),
+                "a held row moves: {moved:?} for {row:?}"
+            );
         }
         let mut seed = 0x9e37_79b9u32;
         for _ in 0..64 {
@@ -887,7 +1306,9 @@ mod tests {
                 seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
                 (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5
             });
-            let work: f32 = (0..6).map(|r| x[r] * (0..6).map(|c| m[r][c] * x[c]).sum::<f32>()).sum();
+            let work: f32 = (0..6)
+                .map(|r| x[r] * (0..6).map(|c| m[r][c] * x[c]).sum::<f32>())
+                .sum();
             assert!(work > -1e-6 * scale, "negative work {work} for {x:?}");
         }
         m
@@ -897,7 +1318,10 @@ mod tests {
     #[test]
     fn constrained_mobility_without_supports_is_the_free_mobility() {
         let (start, supports) = floor_box();
-        assert_eq!(unpack(&constrained_mobility(&start, &supports, Held::default())), free_of(&start));
+        assert_eq!(
+            unpack(&constrained_mobility(&start, &supports, Held::default())),
+            free_of(&start)
+        );
     }
 
     /// A box closed on a floor still slides and spins freely about the
@@ -907,17 +1331,52 @@ mod tests {
     fn constrained_mobility_holds_a_box_on_its_floor() {
         let (start, supports) = floor_box();
         let free = free_of(&start);
-        let closed = assert_sound(&start, &supports, Held { closed: 0b1111, ..Held::default() });
+        let closed = assert_sound(
+            &start,
+            &supports,
+            Held {
+                closed: 0b1111,
+                ..Held::default()
+            },
+        );
         for (r, c) in [(0, 0), (2, 2), (4, 4)] {
-            assert!((closed[r][c] - free[r][c]).abs() < 1e-5 * free[r][c], "({r}, {c}) stays free: {closed:?}");
+            assert!(
+                (closed[r][c] - free[r][c]).abs() < 1e-5 * free[r][c],
+                "({r}, {c}) stays free: {closed:?}"
+            );
         }
         for k in [1, 3, 5] {
-            assert!(closed[k][k].abs() < 1e-5 * largest(&free), "{k} is held: {closed:?}");
+            assert!(
+                closed[k][k].abs() < 1e-5 * largest(&free),
+                "{k} is held: {closed:?}"
+            );
         }
-        let stuck = assert_sound(&start, &supports, Held { closed: 0b1111, stuck: 0b1111, unturned: 0 });
-        assert!((stuck[4][4] - free[4][4]).abs() < 1e-5 * free[4][4], "it still spins: {stuck:?}");
-        let fast = assert_sound(&start, &supports, Held { closed: 0b1111, stuck: 0b1111, unturned: 0b1111 });
-        assert!(largest(&fast) < 1e-5 * largest(&free), "held fast: {fast:?}");
+        let stuck = assert_sound(
+            &start,
+            &supports,
+            Held {
+                closed: 0b1111,
+                stuck: 0b1111,
+                unturned: 0,
+            },
+        );
+        assert!(
+            (stuck[4][4] - free[4][4]).abs() < 1e-5 * free[4][4],
+            "it still spins: {stuck:?}"
+        );
+        let fast = assert_sound(
+            &start,
+            &supports,
+            Held {
+                closed: 0b1111,
+                stuck: 0b1111,
+                unturned: 0b1111,
+            },
+        );
+        assert!(
+            largest(&fast) < 1e-5 * largest(&free),
+            "held fast: {fast:?}"
+        );
     }
 
     /// The order the points come in and a nearly repeated point change the
@@ -925,16 +1384,37 @@ mod tests {
     #[test]
     fn constrained_mobility_ignores_order_and_near_repeats() {
         let (start, supports) = floor_box();
-        let held = Held { closed: 0b1111, stuck: 0b1111, unturned: 0 };
+        let held = Held {
+            closed: 0b1111,
+            stuck: 0b1111,
+            unturned: 0,
+        };
         let base = assert_sound(&start, &supports, held);
         let reversed: Vec<SupportPoint> = supports.iter().rev().copied().collect();
         let mut nudged = supports.clone();
         nudged[3].lever[0] += 1e-5;
-        nudged.push(SupportPoint { lever: [0.2, -0.2, -0.19999], ..supports[3] });
+        nudged.push(SupportPoint {
+            lever: [0.2, -0.2, -0.19999],
+            ..supports[3]
+        });
         let scale = largest(&free_of(&start));
-        for (what, other, bits) in [("reversed", &reversed, held), ("nudged", &nudged, Held { closed: 0b11111, stuck: 0b11111, unturned: 0 })] {
+        for (what, other, bits) in [
+            ("reversed", &reversed, held),
+            (
+                "nudged",
+                &nudged,
+                Held {
+                    closed: 0b11111,
+                    stuck: 0b11111,
+                    unturned: 0,
+                },
+            ),
+        ] {
             let m = assert_sound(&start, other, bits);
-            let worst = (0..6).flat_map(|r| (0..6).map(move |c| (r, c))).map(|(r, c)| (m[r][c] - base[r][c]).abs()).fold(0.0, f32::max);
+            let worst = (0..6)
+                .flat_map(|r| (0..6).map(move |c| (r, c)))
+                .map(|(r, c)| (m[r][c] - base[r][c]).abs())
+                .fold(0.0, f32::max);
             assert!(worst < 1e-4 * scale, "{what}: off by {worst}");
         }
     }
@@ -944,17 +1424,33 @@ mod tests {
     #[test]
     fn constrained_mobility_survives_scale_and_locked_axes() {
         let (start, supports) = floor_box();
-        let held = Held { closed: 0b1111, stuck: 0b1111, unturned: 0b1111 };
+        let held = Held {
+            closed: 0b1111,
+            stuck: 0b1111,
+            unturned: 0b1111,
+        };
         for (inverse_mass, turn) in [(1e-4, 1e3), (1e3, 1e-4), (1.0 / 8.0, 0.0)] {
             let mut inverse_inertia = start.inverse_inertia;
             if turn > 0.0 {
-                inverse_inertia = [[turn, 0.1 * turn, 0.0], [0.1 * turn, turn, 0.0], [0.0, 0.0, turn]];
+                inverse_inertia = [
+                    [turn, 0.1 * turn, 0.0],
+                    [0.1 * turn, turn, 0.0],
+                    [0.0, 0.0, turn],
+                ];
             } else {
                 inverse_inertia[0] = [0.0; 3];
                 inverse_inertia[1][0] = 0.0;
                 inverse_inertia[2][0] = 0.0;
             }
-            assert_sound(&CoupledStart { inverse_mass, inverse_inertia, ..start }, &supports, held);
+            assert_sound(
+                &CoupledStart {
+                    inverse_mass,
+                    inverse_inertia,
+                    ..start
+                },
+                &supports,
+                held,
+            );
         }
     }
 }

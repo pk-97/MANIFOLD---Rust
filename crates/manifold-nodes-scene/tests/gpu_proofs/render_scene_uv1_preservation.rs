@@ -6,10 +6,9 @@
 //! Metal, and read back from the output buffer.
 
 use manifold_gpu::GpuBinding;
+use manifold_node_engine::freeze::codegen::{ENTRY, standalone_for_spec};
 use manifold_node_engine::mesh::MeshVertex;
-use manifold_node_engine::freeze::codegen::{standalone_for_spec, ENTRY};
 use manifold_nodes_scene::node_graph::primitives::morph_mesh::MorphMesh;
-
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -27,10 +26,16 @@ fn dispatch_production_morph(source: MeshVertex, target: MeshVertex) -> MeshVert
         .device
         .create_compute_pipeline(&wgsl, ENTRY, "uv1-preservation-morph");
 
-    let source_buf = h.device.create_buffer_shared(std::mem::size_of::<MeshVertex>() as u64);
-    let target_buf = h.device.create_buffer_shared(std::mem::size_of::<MeshVertex>() as u64);
+    let source_buf = h
+        .device
+        .create_buffer_shared(std::mem::size_of::<MeshVertex>() as u64);
+    let target_buf = h
+        .device
+        .create_buffer_shared(std::mem::size_of::<MeshVertex>() as u64);
     let weights_buf = h.device.create_buffer_shared(4);
-    let output_buf = h.device.create_buffer_shared(std::mem::size_of::<MeshVertex>() as u64);
+    let output_buf = h
+        .device
+        .create_buffer_shared(std::mem::size_of::<MeshVertex>() as u64);
     unsafe {
         source_buf.write(0, bytemuck::bytes_of(&source));
         target_buf.write(0, bytemuck::bytes_of(&target));
@@ -44,17 +49,38 @@ fn dispatch_production_morph(source: MeshVertex, target: MeshVertex) -> MeshVert
         dispatch_count: 1,
     };
     let bindings = [
-        GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-        GpuBinding::Buffer { binding: 1, buffer: &source_buf, offset: 0 },
-        GpuBinding::Buffer { binding: 2, buffer: &target_buf, offset: 0 },
-        GpuBinding::Buffer { binding: 3, buffer: &weights_buf, offset: 0 },
-        GpuBinding::Buffer { binding: 4, buffer: &output_buf, offset: 0 },
+        GpuBinding::Bytes {
+            binding: 0,
+            data: bytemuck::bytes_of(&uniforms),
+        },
+        GpuBinding::Buffer {
+            binding: 1,
+            buffer: &source_buf,
+            offset: 0,
+        },
+        GpuBinding::Buffer {
+            binding: 2,
+            buffer: &target_buf,
+            offset: 0,
+        },
+        GpuBinding::Buffer {
+            binding: 3,
+            buffer: &weights_buf,
+            offset: 0,
+        },
+        GpuBinding::Buffer {
+            binding: 4,
+            buffer: &output_buf,
+            offset: 0,
+        },
     ];
     let mut encoder = h.device.create_encoder("uv1-preservation-morph");
     encoder.dispatch_compute(&pipeline, &bindings, [1, 1, 1], "uv1-preservation-morph");
     encoder.commit_and_wait_completed();
 
-    let ptr = output_buf.mapped_ptr().expect("production morph output must be mapped");
+    let ptr = output_buf
+        .mapped_ptr()
+        .expect("production morph output must be mapped");
     unsafe { *(ptr as *const MeshVertex) }
 }
 
@@ -82,6 +108,12 @@ fn production_morph_preserves_nonzero_uv1() {
     };
 
     let output = dispatch_production_morph(source, target);
-    assert_eq!(output._pad2, source._pad2, "morph must preserve source TEXCOORD_1");
-    assert_eq!(output.color, source.color, "morph must preserve source COLOR_0");
+    assert_eq!(
+        output._pad2, source._pad2,
+        "morph must preserve source TEXCOORD_1"
+    );
+    assert_eq!(
+        output.color, source.color,
+        "morph must preserve source COLOR_0"
+    );
 }

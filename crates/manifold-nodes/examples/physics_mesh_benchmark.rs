@@ -1,9 +1,14 @@
 //! Bounded measurement of imported objects through the production RigidSimulation.
 //! Usage: physics_mesh_benchmark model.glb [pieces=1]
 use manifold_core::PlayedTime;
-use {manifold_water_rigid::physics::RigidBody, manifold_water_rigid::physics::RigidSimulation, manifold_node_engine::scene::mesh_selection::MeshSelection, manifold_node_engine::scene::mesh_selection::select_fragment, manifold_node_engine::scene::transform::Transform};
-use std::{path::Path, sync::Arc, time::Instant};
 use manifold_physics::collision_shape::{CollisionShape, Solid};
+use std::{path::Path, sync::Arc, time::Instant};
+use {
+    manifold_node_engine::scene::mesh_selection::MeshSelection,
+    manifold_node_engine::scene::mesh_selection::select_fragment,
+    manifold_node_engine::scene::transform::Transform, manifold_water_rigid::physics::RigidBody,
+    manifold_water_rigid::physics::RigidSimulation,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -40,7 +45,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for index in 0..count {
         let part = select_fragment(vertices.clone(), count as u32, index as u32)?;
         let positions: Vec<[f32; 3]> = part.iter().map(|vertex| vertex.position).collect();
-        let hulls = CollisionShape::from_triangle_lists([positions.as_slice()])?.body_hulls([2.2; 3])?;
+        let hulls =
+            CollisionShape::from_triangle_lists([positions.as_slice()])?.body_hulls([2.2; 3])?;
         let collider = Arc::new(Solid::Hulls(hulls));
         bodies[index + 1] = Some(RigidBody {
             transform: Transform {

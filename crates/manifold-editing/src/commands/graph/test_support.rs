@@ -11,9 +11,7 @@ use super::*;
 use manifold_core::EffectId;
 use manifold_core::LayerId;
 use manifold_core::PresetTypeId;
-use manifold_core::effect_graph_def::{
-    EFFECT_GRAPH_VERSION,
-};
+use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION;
 use manifold_core::effects::PresetInstance;
 use manifold_core::layer::Layer;
 use manifold_core::types::LayerType;
@@ -220,5 +218,3 @@ pub(super) fn project_with_one_generator_layer() -> (Project, LayerId) {
     project.timeline.layers.push(layer);
     (project, lid)
 }
-
-

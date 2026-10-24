@@ -1,9 +1,11 @@
-use manifold_water_whitewater::primitives::testkit::whitewater as whitewater_nodes;
-use manifold_node_engine::testkit::array_harness::{Harness, params};
 use manifold_node_engine::exec::effect_node::NodeInstanceId;
-use manifold_node_engine::freeze::{classify::CapacityExpr, codegen::FusionRegion, codegen::InputSource, codegen::generate_fused};
-use manifold_node_engine::testkit::fused_atoms::{member, fused, run};
+use manifold_node_engine::freeze::{
+    classify::CapacityExpr, codegen::FusionRegion, codegen::InputSource, codegen::generate_fused,
+};
+use manifold_node_engine::testkit::array_harness::{Harness, params};
+use manifold_node_engine::testkit::fused_atoms::{fused, member, run};
 use manifold_nodes_image::node_graph::primitives::divide_by_value::DivideByValue;
+use manifold_water_whitewater::primitives::testkit::whitewater as whitewater_nodes;
 
 use manifold_water_whitewater::primitives::testkit::whitewater::GridBox as Box3;
 fn values(extra: &[(&'static str, f32)]) -> Vec<(&'static str, f32)> {
@@ -36,7 +38,6 @@ fn close(actual: &[f32], expected: &[f32]) {
     }
 }
 
-
 #[test]
 fn whitewater_turbulence_values_and_fusion() {
     let grid = Box3::new([8; 3], [4.0; 3], [8.0; 3]);
@@ -48,7 +49,8 @@ fn whitewater_turbulence_values_and_fusion() {
     let phi: Vec<f32> = (0..512)
         .map(|i| if i % 7 == 0 { 1.0 } else { -1.0 })
         .collect();
-    let want = whitewater_nodes::turbulence(faces.each_ref().map(Vec::as_slice), [8; 3], &phi, grid);
+    let want =
+        whitewater_nodes::turbulence(faces.each_ref().map(Vec::as_slice), [8; 3], &phi, grid);
     let mut h = Harness::new();
     let d = h.array(&phi, 512);
     let f = faces.each_ref().map(|v| h.array(v, 576));
@@ -79,7 +81,11 @@ fn whitewater_turbulence_values_and_fusion() {
     let fused = fused::<f32>(
         &mut h,
         vec![
-            whitewater_nodes::member("turbulence_field", 0, (0..4).map(InputSource::External).collect()),
+            whitewater_nodes::member(
+                "turbulence_field",
+                0,
+                (0..4).map(InputSource::External).collect(),
+            ),
             member::<DivideByValue>(
                 1,
                 vec![
@@ -129,7 +135,11 @@ fn whitewater_influence_values_and_fusion() {
     let folded = fused::<f32>(
         &mut h,
         vec![
-            whitewater_nodes::member("whitewater_influence", 0, (0..3).map(InputSource::External).collect()),
+            whitewater_nodes::member(
+                "whitewater_influence",
+                0,
+                (0..3).map(InputSource::External).collect(),
+            ),
             member::<DivideByValue>(
                 1,
                 vec![
@@ -159,15 +169,27 @@ fn whitewater_emitter_fusion_compiles_without_device() {
         ),
         (
             vec![
-                whitewater_nodes::member("inside_turbulence_potential", 0, (0..4).map(ext).collect()),
-                whitewater_nodes::member("turbulence_emission_count", 1, vec![ext(0), ext(4), ext(5), node(0), ext(6)]),
+                whitewater_nodes::member(
+                    "inside_turbulence_potential",
+                    0,
+                    (0..4).map(ext).collect(),
+                ),
+                whitewater_nodes::member(
+                    "turbulence_emission_count",
+                    1,
+                    vec![ext(0), ext(4), ext(5), node(0), ext(6)],
+                ),
             ],
             7,
         ),
         (
             vec![
                 whitewater_nodes::member("dust_potential", 0, (0..4).map(ext).collect()),
-                whitewater_nodes::member("turbulence_emission_count", 1, vec![ext(0), ext(4), ext(5), node(0), ext(6)]),
+                whitewater_nodes::member(
+                    "turbulence_emission_count",
+                    1,
+                    vec![ext(0), ext(4), ext(5), node(0), ext(6)],
+                ),
             ],
             7,
         ),
@@ -180,14 +202,22 @@ fn whitewater_emitter_fusion_compiles_without_device() {
         ),
         (
             vec![
-                whitewater_nodes::member("whitewater_emitter_velocity", 0, (0..3).map(ext).collect()),
+                whitewater_nodes::member(
+                    "whitewater_emitter_velocity",
+                    0,
+                    (0..3).map(ext).collect(),
+                ),
                 whitewater_nodes::member("energy_potential", 1, vec![node(0)]),
             ],
             3,
         ),
         (
             vec![
-                whitewater_nodes::member("whitewater_obstacle_source", 0, (1..4).map(ext).collect()),
+                whitewater_nodes::member(
+                    "whitewater_obstacle_source",
+                    0,
+                    (1..4).map(ext).collect(),
+                ),
                 whitewater_nodes::member("whitewater_influence", 1, vec![ext(0), ext(4), node(0)]),
             ],
             5,

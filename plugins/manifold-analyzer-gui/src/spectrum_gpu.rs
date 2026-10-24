@@ -20,9 +20,7 @@
 
 use crate::gpu_bridge::IoSurfaceMtlTexture;
 use crate::spectrum_worker::{CqtBuildParams, CqtColumnMsg};
-use manifold_gpu::{
-    GpuBinding, GpuBuffer, GpuDevice, GpuRenderPipeline, GpuTextureFormat,
-};
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuDevice, GpuRenderPipeline, GpuTextureFormat};
 use std::ffi::c_void;
 
 const SHADER: &str = include_str!("../shaders/spectrum_line.wgsl");
@@ -65,8 +63,8 @@ pub fn cqt_build_params(sample_rate: f32) -> CqtBuildParams {
     let n_fft = kernel_len(CQT_FMIN_HZ).next_power_of_two();
     let shortest_kernel = kernel_len(fmax);
     let hop_limit = (shortest_kernel / 4).max(1);
-    let hop_samples = (1usize << (usize::BITS - hop_limit.leading_zeros() - 1))
-        .min(CQT_HOP_SAMPLES);
+    let hop_samples =
+        (1usize << (usize::BITS - hop_limit.leading_zeros() - 1)).min(CQT_HOP_SAMPLES);
     CqtBuildParams {
         n_fft,
         fmin: CQT_FMIN_HZ,
@@ -249,8 +247,7 @@ impl SpectrumGpuRenderer {
         for buf in [&history_buf, &history_buf2] {
             if let Some(ptr) = buf.mapped_ptr() {
                 let num_elems = cqt_num_bins * HISTORY_COLS as usize;
-                let slice =
-                    unsafe { std::slice::from_raw_parts_mut(ptr as *mut f32, num_elems) };
+                let slice = unsafe { std::slice::from_raw_parts_mut(ptr as *mut f32, num_elems) };
                 slice.fill(FLOOR_DB);
             }
         }
@@ -288,16 +285,23 @@ impl SpectrumGpuRenderer {
     /// Reweight retained history only when its display calibration changes.
     /// Old and new columns must use one colour/readout scale immediately.
     pub fn set_history_weighting(&mut self, weighting: crate::Weighting, align: f32) {
-        if self.history_weighting == Some((weighting, align)) { return; }
+        if self.history_weighting == Some((weighting, align)) {
+            return;
+        }
         if let Some((old_weighting, old_align)) = self.history_weighting {
             for bin in 0..self.cqt_num_bins {
                 let frequency = CQT_FMIN_HZ * (bin as f32 / CQT_BINS_PER_OCTAVE as f32).exp2();
                 let delta = crate::weighting_db_at(weighting, frequency) + align
-                    - crate::weighting_db_at(old_weighting, frequency) - old_align;
+                    - crate::weighting_db_at(old_weighting, frequency)
+                    - old_align;
                 for buffer in [&self.history_buf, &self.history_buf2] {
                     if let Some(ptr) = buffer.mapped_ptr() {
-                        let values = unsafe { std::slice::from_raw_parts_mut(ptr as *mut f32,
-                            self.cqt_num_bins * HISTORY_COLS as usize) };
+                        let values = unsafe {
+                            std::slice::from_raw_parts_mut(
+                                ptr as *mut f32,
+                                self.cqt_num_bins * HISTORY_COLS as usize,
+                            )
+                        };
                         for column in values.chunks_exact_mut(self.cqt_num_bins) {
                             column[bin] += delta;
                         }
@@ -376,8 +380,7 @@ impl SpectrumGpuRenderer {
         let num_elems = self.cqt_num_bins * HISTORY_COLS as usize;
         for buf in [&self.history_buf, &self.history_buf2] {
             if let Some(ptr) = buf.mapped_ptr() {
-                let slice =
-                    unsafe { std::slice::from_raw_parts_mut(ptr as *mut f32, num_elems) };
+                let slice = unsafe { std::slice::from_raw_parts_mut(ptr as *mut f32, num_elems) };
                 slice.fill(FLOOR_DB);
             }
         }
@@ -400,14 +403,22 @@ impl SpectrumGpuRenderer {
     /// Read the same power interpolation / pixel footprint as the shader.
     /// Fractional columns are used for beat-sync interpolation.
     pub fn sample_history_db(
-        &self, buffer_id: u32, col: f32, log_bin: f32, bin_span: f32,
+        &self,
+        buffer_id: u32,
+        col: f32,
+        log_bin: f32,
+        bin_span: f32,
     ) -> Option<f32> {
         let buf = match buffer_id {
-            0 => &self.history_buf, 1 => &self.history_buf2, _ => return None,
+            0 => &self.history_buf,
+            1 => &self.history_buf2,
+            _ => return None,
         };
         let ptr = buf.mapped_ptr()? as *const f32;
         let bins = self.cqt_num_bins;
-        if bins == 0 { return None; }
+        if bins == 0 {
+            return None;
+        }
         let column = col.clamp(0.0, (HISTORY_COLS - 1) as f32);
         let lo = column.floor() as usize;
         let hi = (lo + 1).min(HISTORY_COLS as usize - 1);
@@ -416,7 +427,7 @@ impl SpectrumGpuRenderer {
             history_pixel_power(values, log_bin, bin_span)
         };
         let fraction = column - lo as f32;
-        Some(10.0 * (power(lo) * (1.0-fraction) + power(hi)*fraction + 1e-24).log10())
+        Some(10.0 * (power(lo) * (1.0 - fraction) + power(hi) * fraction + 1e-24).log10())
     }
 
     /// Render one frame. `mid_columns` / `side_columns` are pre-smoothed
@@ -441,20 +452,12 @@ impl SpectrumGpuRenderer {
         // Zero-copy upload into the shared-storage column buffers.
         if let Some(ptr) = self.mid_buf.mapped_ptr() {
             unsafe {
-                std::ptr::copy_nonoverlapping(
-                    mid_columns.as_ptr() as *const u8,
-                    ptr,
-                    n_cols * 4,
-                );
+                std::ptr::copy_nonoverlapping(mid_columns.as_ptr() as *const u8, ptr, n_cols * 4);
             }
         }
         if let Some(ptr) = self.side_buf.mapped_ptr() {
             unsafe {
-                std::ptr::copy_nonoverlapping(
-                    side_columns.as_ptr() as *const u8,
-                    ptr,
-                    n_cols * 4,
-                );
+                std::ptr::copy_nonoverlapping(side_columns.as_ptr() as *const u8, ptr, n_cols * 4);
             }
         }
 
@@ -537,25 +540,30 @@ impl SpectrumGpuRenderer {
     }
 }
 
-
 // Exact box integral of the piecewise-linear power reconstruction.
 // Used by hover readout; the shader uses the same footprint.
 fn history_pixel_power(values: &[f32], bin: f32, span: f32) -> f32 {
-    let center = bin.clamp(0.0, (values.len()-1) as f32);
-    let power = |i: i32| 10.0_f32.powf(values[i.clamp(0,values.len() as i32-1) as usize]*0.1);
+    let center = bin.clamp(0.0, (values.len() - 1) as f32);
+    let power = |i: i32| 10.0_f32.powf(values[i.clamp(0, values.len() as i32 - 1) as usize] * 0.1);
     if span <= 1.0 {
-        let lo=center.floor() as i32;let fraction=center-lo as f32;
-        return power(lo)*(1.0-fraction)+power(lo+1)*fraction;
+        let lo = center.floor() as i32;
+        let fraction = center - lo as f32;
+        return power(lo) * (1.0 - fraction) + power(lo + 1) * fraction;
     }
-    let mut at=center-span*0.5;let end=center+span*0.5;let mut sum=0.0;
-    while at<end {
-        let lo=at.floor() as i32;let stop=end.min((lo+1) as f32);
-        let p0=power(lo);let p1=power(lo+1);
-        let left=p0+(p1-p0)*(at-lo as f32);
-        let right=p0+(p1-p0)*(stop-lo as f32);
-        sum+=(left+right)*0.5*(stop-at);at=stop;
+    let mut at = center - span * 0.5;
+    let end = center + span * 0.5;
+    let mut sum = 0.0;
+    while at < end {
+        let lo = at.floor() as i32;
+        let stop = end.min((lo + 1) as f32);
+        let p0 = power(lo);
+        let p1 = power(lo + 1);
+        let left = p0 + (p1 - p0) * (at - lo as f32);
+        let right = p0 + (p1 - p0) * (stop - lo as f32);
+        sum += (left + right) * 0.5 * (stop - at);
+        at = stop;
     }
-    sum/span
+    sum / span
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]

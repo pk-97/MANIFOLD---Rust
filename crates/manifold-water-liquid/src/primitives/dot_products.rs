@@ -74,7 +74,12 @@ fn whole(params: &ParamValues, name: &str, default: u32) -> u32 {
 }
 
 impl Primitive for DotProducts {
-    fn array_output_capacity(&self, port: &str, params: &ParamValues, _inputs: &[(&str, u32)]) -> Option<u32> {
+    fn array_output_capacity(
+        &self,
+        port: &str,
+        params: &ParamValues,
+        _inputs: &[(&str, u32)],
+    ) -> Option<u32> {
         (port == "out").then(|| whole(params, "max_rows", 1).clamp(1, MAX_ROWS))
     }
 
@@ -87,15 +92,24 @@ impl Primitive for DotProducts {
         {
             let gpu = ctx.gpu_encoder();
             if self.partial.is_none() {
-                self.partial = Some(gpu.device.create_compute_pipeline(SHADER, "partial_main", "node.dot_products"));
-                self.finalize = Some(gpu.device.create_compute_pipeline(SHADER, "finalize_main", "node.dot_products"));
+                self.partial = Some(gpu.device.create_compute_pipeline(
+                    SHADER,
+                    "partial_main",
+                    "node.dot_products",
+                ));
+                self.finalize = Some(gpu.device.create_compute_pipeline(
+                    SHADER,
+                    "finalize_main",
+                    "node.dot_products",
+                ));
             }
             let bytes = u64::from(MAX_ROWS * MAX_GROUPS) * 4;
             if self.partials.is_none() {
                 self.partials = Some(gpu.device.create_buffer(bytes));
             }
         }
-        let (Some(matrix), Some(out)) = (ctx.inputs.array("matrix"), ctx.outputs.array("out")) else {
+        let (Some(matrix), Some(out)) = (ctx.inputs.array("matrix"), ctx.outputs.array("out"))
+        else {
             return;
         };
         let vector = ctx.inputs.array("vector");
@@ -103,7 +117,9 @@ impl Primitive for DotProducts {
             || vector.is_some_and(|v| u64::from(length) * 4 > v.size)
             || u64::from(max_rows) * 4 > out.size
         {
-            ctx.error(format!("Dot Products: {rows} rows of {length} are larger than the arrays"));
+            ctx.error(format!(
+                "Dot Products: {rows} rows of {length} are larger than the arrays"
+            ));
             return;
         }
         let uniforms = DotParams {
@@ -118,11 +134,30 @@ impl Primitive for DotProducts {
         };
         let partials = self.partials.as_ref().expect("partials allocated");
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: matrix, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: vector.unwrap_or(matrix), offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: partials, offset: 0 },
-            GpuBinding::Buffer { binding: 4, buffer: out, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: matrix,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: vector.unwrap_or(matrix),
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: partials,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: out,
+                offset: 0,
+            },
         ];
         let gpu = ctx.gpu_encoder();
         if rows > 0 {

@@ -100,7 +100,10 @@ impl Application {
             .get(&window_id)
             .map(|ws| ws.window.scale_factor())
             .unwrap_or(1.0);
-        Vec2::new(position.x as f32 / scale as f32, position.y as f32 / scale as f32)
+        Vec2::new(
+            position.x as f32 / scale as f32,
+            position.y as f32 / scale as f32,
+        )
     }
 
     /// Whether `last_click` (a handle's own timestamp, e.g.
@@ -156,7 +159,13 @@ impl Application {
     pub(crate) fn text_input_pointer_down(&mut self, pos: Vec2) -> bool {
         use crate::text_session::PointerDown;
         let tree = self.ui_renderer.as_ref().map(|_| &self.ws.ui_root.tree);
-        match crate::text_session::pointer_down(&mut self.text_input, tree, pos, self.time_since_start, self.modifiers.shift) {
+        match crate::text_session::pointer_down(
+            &mut self.text_input,
+            tree,
+            pos,
+            self.time_since_start,
+            self.modifiers.shift,
+        ) {
             PointerDown::Idle => false,
             PointerDown::Inside => true,
             PointerDown::Committed(field, text) => {
@@ -349,7 +358,7 @@ impl Application {
                         &self.content_state,
                         &mut self.cursor_manager,
                         &mut self.active_layer_id,
-                                                &mut self.ws.offscreen_dirty,
+                        &mut self.ws.offscreen_dirty,
                     );
                     self.overlay.on_pointer_move(
                         self.cursor_pos,
@@ -370,13 +379,19 @@ impl Application {
 
     /// Menus retain their source focus; direct presses choose the card host.
     fn update_card_keyboard_focus(&mut self) {
-        let on_picture = self.preview_fit().is_some_and(|fit| fit.contains(self.cursor_pos));
+        let on_picture = self
+            .preview_fit()
+            .is_some_and(|fit| fit.contains(self.cursor_pos));
         let ui = &mut self.ws.ui_root;
-        if ui.background_input_blocked() { return; }
+        if ui.background_input_blocked() {
+            return;
+        }
         let in_inspector = ui.layout.inspector().contains(self.cursor_pos);
         // A click on the Scene panel's picture picks its items, so the item
         // keys (copy, paste, duplicate, delete) follow it there too.
-        let on_scene_picture = on_picture && ui.scene_setup_panel.live_layer_id().is_some() && !ui.overlay_contains_point(self.cursor_pos);
+        let on_scene_picture = on_picture
+            && ui.scene_setup_panel.live_layer_id().is_some()
+            && !ui.overlay_contains_point(self.cursor_pos);
         let in_objects = (ui.scene_setup_panel.is_open()
             && ui.inspector.scene_content_rect().contains(self.cursor_pos))
             || on_scene_picture;
@@ -485,7 +500,8 @@ impl Application {
                                     self.audio_setup_handle_last_click = None;
                                     self.ws.ui_root.layout.reset_audio_setup_width();
                                 } else {
-                                    self.audio_setup_handle_last_click = Some(std::time::Instant::now());
+                                    self.audio_setup_handle_last_click =
+                                        Some(std::time::Instant::now());
                                     self.ws.ui_root.begin_audio_setup_resize(self.cursor_pos.x);
                                     self.ws.ui_root.set_audio_setup_handle_drag();
                                 }
@@ -498,7 +514,8 @@ impl Application {
                                     self.inspector_handle_last_click = None;
                                     self.ws.ui_root.layout.reset_inspector_width();
                                 } else {
-                                    self.inspector_handle_last_click = Some(std::time::Instant::now());
+                                    self.inspector_handle_last_click =
+                                        Some(std::time::Instant::now());
                                     self.ws.ui_root.begin_inspector_resize(self.cursor_pos.x);
                                     self.ws.ui_root.set_inspector_handle_drag();
                                     if manifold_ui::input::input_trace_enabled() {
@@ -509,7 +526,9 @@ impl Application {
                                         );
                                     }
                                 }
-                            } else if !self.preview_gizmo_press() && !self.preview_navigation_press(MouseButton::Left) {
+                            } else if !self.preview_gizmo_press()
+                                && !self.preview_navigation_press(MouseButton::Left)
+                            {
                                 self.ws.ui_root.pointer_event(
                                     self.cursor_pos,
                                     PointerAction::Down,
@@ -641,9 +660,10 @@ impl Application {
                         #[cfg(target_os = "macos")]
                         crate::edr_surface::set_window_shadow(&ws.window, true);
                         if let Some(frame) = self.output_saved_frame.take() {
-                            ws.window.set_outer_position(winit::dpi::PhysicalPosition::new(
-                                frame[0], frame[1],
-                            ));
+                            ws.window
+                                .set_outer_position(winit::dpi::PhysicalPosition::new(
+                                    frame[0], frame[1],
+                                ));
                             let _ = ws.window.request_inner_size(winit::dpi::PhysicalSize::new(
                                 frame[2], frame[3],
                             ));
@@ -676,9 +696,7 @@ impl Application {
             // Modal pickers must receive the wheel before background scrolling
             // is blocked. The overlay driver handles their viewport hit-test
             // and schedules a redraw, just as it does for the dropdown.
-            if self.ws.ui_root.dropdown.is_open()
-                || self.ws.ui_root.background_input_blocked()
-            {
+            if self.ws.ui_root.dropdown.is_open() || self.ws.ui_root.background_input_blocked() {
                 let (dx, dy) = normalize_scroll_delta(delta);
                 self.ws
                     .ui_root
@@ -742,8 +760,7 @@ impl Application {
                     let beat_delta = dy * manifold_ui::color::SCROLL_SENSITIVITY / ppb;
                     let new_x =
                         (self.ws.ui_root.viewport.scroll_x_beats().as_f32() - beat_delta).max(0.0);
-                    self
-                        .ws
+                    self.ws
                         .ui_root
                         .viewport
                         .set_scroll(new_x, self.ws.ui_root.viewport.scroll_y_px());
@@ -754,10 +771,10 @@ impl Application {
                 } else {
                     // Plain scroll → vertical track scroll
                     let new_y = (self.ws.ui_root.viewport.scroll_y_px() - dy).max(0.0);
-                    self.ws.ui_root.viewport.set_scroll(
-                        self.ws.ui_root.viewport.scroll_x_beats().as_f32(),
-                        new_y,
-                    );
+                    self.ws
+                        .ui_root
+                        .viewport
+                        .set_scroll(self.ws.ui_root.viewport.scroll_x_beats().as_f32(), new_y);
                 }
                 // Native horizontal scroll (trackpad two-finger swipe)
                 if dx.abs() > 0.01 && !self.modifiers.alt {
@@ -765,8 +782,7 @@ impl Application {
                     let beat_delta = dx * manifold_ui::color::SCROLL_SENSITIVITY / ppb;
                     let new_x =
                         (self.ws.ui_root.viewport.scroll_x_beats().as_f32() - beat_delta).max(0.0);
-                    self
-                        .ws
+                    self.ws
                         .ui_root
                         .viewport
                         .set_scroll(new_x, self.ws.ui_root.viewport.scroll_y_px());
@@ -783,7 +799,10 @@ impl Application {
         let pos = self.cursor_pos;
         let beat_at_cursor = self.ws.ui_root.viewport.pixel_to_beat(pos.x).as_f32();
         let new_ppb = self.ws.ui_root.viewport.zoom_continuous(factor);
-        self.ws.ui_root.viewport.zoom_to(new_ppb, beat_at_cursor, pos.x);
+        self.ws
+            .ui_root
+            .viewport
+            .zoom_to(new_ppb, beat_at_cursor, pos.x);
     }
 
     /// Trackpad pinch in any window. `magnification` is winit's per-event
@@ -809,7 +828,13 @@ impl Application {
             {
                 return;
             }
-            if self.ws.ui_root.layout.timeline_tracks().contains(self.cursor_pos) {
+            if self
+                .ws
+                .ui_root
+                .layout
+                .timeline_tracks()
+                .contains(self.cursor_pos)
+            {
                 self.zoom_timeline_at_cursor(
                     (magnification * manifold_ui::color::ZOOM_PINCH_GAIN).exp(),
                 );
@@ -819,7 +844,10 @@ impl Application {
 
     /// This App's borrow for one editor-window event through the editor-input
     /// seam (`editor_input.rs`). `None` when the editor is closed.
-    fn editor_pointer(&mut self, window_id: WindowId) -> Option<crate::editor_input::EditorPointer<'_>> {
+    fn editor_pointer(
+        &mut self,
+        window_id: WindowId,
+    ) -> Option<crate::editor_input::EditorPointer<'_>> {
         let (w, h) = editor_logical_size(&self.window_registry, window_id);
         Some(crate::editor_input::EditorPointer {
             ws: self.graph_editor.as_mut()?,
@@ -846,7 +874,9 @@ impl Application {
         position: PhysicalPosition<f64>,
     ) {
         let pos = self.logical_cursor(window_id, position);
-        let Some(mut cx) = self.editor_pointer(window_id) else { return };
+        let Some(mut cx) = self.editor_pointer(window_id) else {
+            return;
+        };
         let moved = crate::editor_input::cursor_moved(&mut cx, pos);
         self.cursor_manager.set(moved.cursor);
         self.apply_pending_cursor(window_id);
@@ -858,7 +888,10 @@ impl Application {
     /// Ends every editor-owned pointer gesture on focus loss or Escape
     /// (`editor_input::cancel_capture`). True when something was cancelled.
     pub(crate) fn cancel_editor_pointer_capture(&mut self, window_id: WindowId) -> bool {
-        let Some(cancelled) = self.editor_pointer(window_id).map(|mut cx| crate::editor_input::cancel_capture(&mut cx)) else {
+        let Some(cancelled) = self
+            .editor_pointer(window_id)
+            .map(|mut cx| crate::editor_input::cancel_capture(&mut cx))
+        else {
             return false;
         };
         self.end_gizmo_gesture(cancelled.gizmo_release);
@@ -877,31 +910,63 @@ impl Application {
     /// `false` so the orbit arm still fires: drag-on-nothing orbits.
     fn editor_viewport_gizmo_press(&mut self, cx: f32, cy: f32) -> bool {
         use crate::scene_gizmo::{GizmoPress, GizmoView};
-        let Some(manifold_core::GraphTarget::Generator(layer_id)) = self.watched_graph_target.clone() else {
+        let Some(manifold_core::GraphTarget::Generator(layer_id)) =
+            self.watched_graph_target.clone()
+        else {
             return false;
         };
-        if !self.graph_editor.as_ref().and_then(|ed| ed.viewport_target.as_ref())
-            .is_some_and(|(target, node)| Some(target) == self.watched_graph_target.as_ref()
-                && Some(node) == self.last_preview_node.as_ref())
+        if !self
+            .graph_editor
+            .as_ref()
+            .and_then(|ed| ed.viewport_target.as_ref())
+            .is_some_and(|(target, node)| {
+                Some(target) == self.watched_graph_target.as_ref()
+                    && Some(node) == self.last_preview_node.as_ref()
+            })
         {
             return false;
         }
         let (view, mode, rect) = {
-            let Some(ed) = self.graph_editor.as_ref() else { return false };
-            let Some(config) = ed.viewport_session.as_ref().and_then(|session| session.displayed_config()) else {
+            let Some(ed) = self.graph_editor.as_ref() else {
                 return false;
             };
-            let Some(rect) = ed.viewport_rect else { return false };
-            (GizmoView::new(config.camera.to_camera(), config.width, config.height), ed.viewport_gizmo_mode, rect)
+            let Some(config) = ed
+                .viewport_session
+                .as_ref()
+                .and_then(|session| session.displayed_config())
+            else {
+                return false;
+            };
+            let Some(rect) = ed.viewport_rect else {
+                return false;
+            };
+            (
+                GizmoView::new(config.camera.to_camera(), config.width, config.height),
+                ed.viewport_gizmo_mode,
+                rect,
+            )
         };
-        let Some((view, point)) = crate::viewport_input::gizmo_pointer(rect, view, (cx, cy)) else { return false };
+        let Some((view, point)) = crate::viewport_input::gizmo_pointer(rect, view, (cx, cy)) else {
+            return false;
+        };
         let extend = self.modifiers.shift;
-        let drawn = self.graph_editor.as_mut().and_then(|ed| ed.viewport_selection.take());
+        let drawn = self
+            .graph_editor
+            .as_mut()
+            .and_then(|ed| ed.viewport_selection.take());
         let pressed = drawn.as_ref().and_then(|drawn| {
-            let at = crate::scene_gizmo::PressAt { view: &view, point, extend };
-            self.with_dispatch_ctx(|ctx| crate::scene_gizmo::press(ctx, &layer_id, &drawn.scene, &drawn.selection, mode, at))
+            let at = crate::scene_gizmo::PressAt {
+                view: &view,
+                point,
+                extend,
+            };
+            self.with_dispatch_ctx(|ctx| {
+                crate::scene_gizmo::press(ctx, &layer_id, &drawn.scene, &drawn.selection, mode, at)
+            })
         });
-        let Some(ed) = self.graph_editor.as_mut() else { return false };
+        let Some(ed) = self.graph_editor.as_mut() else {
+            return false;
+        };
         ed.viewport_selection = drawn;
         match pressed {
             Some(GizmoPress::Handle(gesture)) => {
@@ -928,7 +993,10 @@ impl Application {
 
     /// Run `f` in the context a card scrub dispatches in, with the editor's
     /// watched graph as the target. `None` without a content thread.
-    fn with_dispatch_ctx<R>(&mut self, f: impl FnOnce(&mut crate::ui_bridge::DispatchCtx) -> R) -> Option<R> {
+    fn with_dispatch_ctx<R>(
+        &mut self,
+        f: impl FnOnce(&mut crate::ui_bridge::DispatchCtx) -> R,
+    ) -> Option<R> {
         let content_tx = self.content_tx.as_ref()?;
         let mut dctx = crate::ui_bridge::DispatchCtx {
             project: self.local_project.edit(&mut self.ui_edits, content_tx),
@@ -940,7 +1008,12 @@ impl Application {
             user_prefs: &mut self.user_prefs,
             editor_target: self.watched_graph_target.as_ref(),
             scrub: &mut self.scrub,
-            dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
+            dialogs: crate::file_dialogs::host(
+                &self.window_registry,
+                self.dialog_window_id,
+                self.primary_window_id,
+                self.current_project_path.as_deref(),
+            ),
         };
         Some(f(&mut dctx))
     }
@@ -948,7 +1021,10 @@ impl Application {
     /// Run `f` with the main preview's gizmo host and a dispatch context.
     fn with_preview_gizmo<R>(
         &mut self,
-        f: impl FnOnce(&mut crate::physics_overlay::PreviewGizmo, &mut crate::ui_bridge::DispatchCtx) -> R,
+        f: impl FnOnce(
+            &mut crate::physics_overlay::PreviewGizmo,
+            &mut crate::ui_bridge::DispatchCtx,
+        ) -> R,
     ) -> Option<R> {
         let mut host = std::mem::take(&mut self.ws.preview_gizmo);
         let out = self.with_dispatch_ctx(|ctx| f(&mut host, ctx));
@@ -959,7 +1035,10 @@ impl Application {
     /// Where the show picture sits in the main window: the same fit of the
     /// same render size the draw path blits (`ui_frame::composite_main_ui_frame`).
     pub(crate) fn preview_fit(&self) -> Option<manifold_ui::Rect> {
-        crate::ui_frame::video_fit_rect(self.ws.ui_root.layout.video_area(), self.video_source_dims())
+        crate::ui_frame::video_fit_rect(
+            self.ws.ui_root.layout.video_area(),
+            self.video_source_dims(),
+        )
     }
 
     /// D7a: a left press on the main output preview, through the gizmo
@@ -967,7 +1046,8 @@ impl Application {
     /// when the preview took it; a miss falls through to the UI below.
     fn preview_gizmo_press(&mut self) -> bool {
         let (fit, pos, extend) = (self.preview_fit(), self.cursor_pos, self.modifiers.shift);
-        self.with_preview_gizmo(|host, ctx| host.press(ctx, fit, pos, extend)).unwrap_or(false)
+        self.with_preview_gizmo(|host, ctx| host.press(ctx, fit, pos, extend))
+            .unwrap_or(false)
     }
 
     /// A left release: a click on the preview picks what is drawn there.
@@ -987,7 +1067,10 @@ impl Application {
     /// End a preview drag (release, Escape, focus loss, perform mode, or
     /// Show gizmos switched off): one undo entry. True when one ended.
     pub(crate) fn preview_gizmo_release(&mut self) -> bool {
-        self.ws.preview_gizmo.dragging() && self.with_preview_gizmo(|host, ctx| host.release(ctx)).unwrap_or(false)
+        self.ws.preview_gizmo.dragging()
+            && self
+                .with_preview_gizmo(|host, ctx| host.release(ctx))
+                .unwrap_or(false)
     }
 
     /// The content thread reports the rendered view of whichever scene the
@@ -1003,7 +1086,10 @@ impl Application {
             && let Some(tx) = self.content_tx.as_ref()
         {
             self.ws.gizmo_layer_sent = gizmo_layer.cloned();
-            ContentCommand::send(tx, ContentCommand::SetPhysicsOverlay(self.ws.gizmo_layer_sent.clone()));
+            ContentCommand::send(
+                tx,
+                ContentCommand::SetPhysicsOverlay(self.ws.gizmo_layer_sent.clone()),
+            );
         }
         self.sync_preview_navigation();
     }
@@ -1012,11 +1098,25 @@ impl Application {
     /// scrubs each param's knob, so the write is the live, non-undoable one
     /// the knob makes. Returns `true` if a drag was armed.
     fn editor_viewport_gizmo_drag_move(&mut self, x: f32, y: f32) -> bool {
-        let Some(ed) = self.graph_editor.as_mut() else { return false };
-        let Some(mut gesture) = ed.viewport_gizmo_drag.take() else { return false };
-        let point = ed.viewport_rect.zip(ed.viewport_session.as_ref().and_then(|session| session.displayed_config()))
+        let Some(ed) = self.graph_editor.as_mut() else {
+            return false;
+        };
+        let Some(mut gesture) = ed.viewport_gizmo_drag.take() else {
+            return false;
+        };
+        let point = ed
+            .viewport_rect
+            .zip(
+                ed.viewport_session
+                    .as_ref()
+                    .and_then(|session| session.displayed_config()),
+            )
             .and_then(|(rect, config)| {
-                let view = crate::scene_gizmo::GizmoView::new(config.camera.to_camera(), config.width, config.height);
+                let view = crate::scene_gizmo::GizmoView::new(
+                    config.camera.to_camera(),
+                    config.width,
+                    config.height,
+                );
                 crate::viewport_input::gizmo_pointer(rect, view, (x, y))
             });
         if let Some((view, point)) = point {
@@ -1044,7 +1144,9 @@ impl Application {
         button: MouseButton,
         state: ElementState,
     ) {
-        let Some(mut cx) = self.editor_pointer(window_id) else { return };
+        let Some(mut cx) = self.editor_pointer(window_id) else {
+            return;
+        };
         let out = crate::editor_input::button(&mut cx, button, state);
         self.end_gizmo_gesture(out.gizmo_release);
         if let Some(pos) = out.viewport_press
@@ -1056,8 +1158,13 @@ impl Application {
     }
 
     /// `MouseWheel` in the editor window. False when no canvas took it.
-    pub(crate) fn editor_mouse_wheel(&mut self, window_id: WindowId, delta: MouseScrollDelta) -> bool {
-        self.editor_pointer(window_id).is_some_and(|mut cx| crate::editor_input::wheel(&mut cx, delta))
+    pub(crate) fn editor_mouse_wheel(
+        &mut self,
+        window_id: WindowId,
+        delta: MouseScrollDelta,
+    ) -> bool {
+        self.editor_pointer(window_id)
+            .is_some_and(|mut cx| crate::editor_input::wheel(&mut cx, delta))
     }
 
     /// Pinch in the editor window zooms the graph canvas around the cursor.
@@ -1200,14 +1307,11 @@ impl Application {
         // wgsl / node search) is active → keystrokes type into it. Ahead
         // of node-delete + navigation so Backspace edits text and Esc
         // cancels the edit rather than deleting a node or leaving a group.
-        if is_graph_editor
-            && self.text_input.active
-            && self.text_input.field.is_graph_field()
-        {
+        if is_graph_editor && self.text_input.active && self.text_input.field.is_graph_field() {
             use winit::keyboard::{Key, NamedKey};
             let typing = !self.modifiers.command && !self.modifiers.ctrl;
-            let was_search = self.text_input.field
-                == crate::text_input::TextInputField::GraphNodeSearch;
+            let was_search =
+                self.text_input.field == crate::text_input::TextInputField::GraphNodeSearch;
             match &logical_key {
                 Key::Named(NamedKey::Escape) => {
                     if let Some(window_id) = self.graph_editor_window_id {
@@ -1330,7 +1434,9 @@ impl Application {
                 // on bare backtick. Shift+backtick opens the performance HUD,
                 // so the new presentation surface does not steal the debug
                 // command that graph editing already exposed.
-                Key::Character(c) if matches!(c.as_str(), "`" | "~") && self.modifiers.is_shift_only() => {
+                Key::Character(c)
+                    if matches!(c.as_str(), "`" | "~") && self.modifiers.is_shift_only() =>
+                {
                     if let Some(ed) = self.graph_editor.as_mut() {
                         ed.ui_root.perf_hud.toggle();
                     }
@@ -1347,7 +1453,10 @@ impl Application {
                         ed.viewport_open = !ed.viewport_open;
                         ed.viewport_drag = None;
                     }
-                    let gesture = self.graph_editor.as_mut().and_then(|ed| ed.viewport_gizmo_drag.take());
+                    let gesture = self
+                        .graph_editor
+                        .as_mut()
+                        .and_then(|ed| ed.viewport_gizmo_drag.take());
                     self.end_gizmo_gesture(gesture);
                     if let Some(ed) = self.graph_editor.as_mut()
                         && !ed.viewport_open
@@ -1366,7 +1475,10 @@ impl Application {
                 // unbound in the editor, but scoping to "viewport open"
                 // keeps the door closed for a future collision).
                 Key::Character(c)
-                    if self.graph_editor.as_ref().is_some_and(|ed| ed.viewport_open)
+                    if self
+                        .graph_editor
+                        .as_ref()
+                        .is_some_and(|ed| ed.viewport_open)
                         && (c.eq_ignore_ascii_case("w")
                             || c.eq_ignore_ascii_case("e")
                             || c.eq_ignore_ascii_case("r")) =>
@@ -1469,12 +1581,8 @@ impl Application {
         {
             let anchor = self
                 .editor_canvas_viewport()
-                .map(|vp| {
-                    crate::text_input::AnchorRect::new(vp.x + 12.0, 12.0, 220.0, 18.0)
-                })
-                .unwrap_or_else(|| {
-                    crate::text_input::AnchorRect::new(120.0, 12.0, 220.0, 18.0)
-                });
+                .map(|vp| crate::text_input::AnchorRect::new(vp.x + 12.0, 12.0, 220.0, 18.0))
+                .unwrap_or_else(|| crate::text_input::AnchorRect::new(120.0, 12.0, 220.0, 18.0));
             let initial = self
                 .graph_canvas
                 .as_ref()
@@ -1589,11 +1697,7 @@ impl Application {
     /// `ScaleFactorChanged` in the editor window: re-resize from the new
     /// physical inner size (scale_factor itself is unused — the inner size
     /// already reflects it).
-    pub(crate) fn editor_scale_factor_changed(
-        &mut self,
-        window_id: WindowId,
-        scale_factor: f64,
-    ) {
+    pub(crate) fn editor_scale_factor_changed(&mut self, window_id: WindowId, scale_factor: f64) {
         let mut new_size = (1u32, 1u32);
         if let Some(ws) = self.window_registry.get_mut(&window_id)
             && let Some(surface) = &mut ws.surface
@@ -1665,36 +1769,38 @@ impl Application {
             // "restore and close batch", never commit-then-undo) that must
             // be rolled back before anything else touches the project.
             if matches!(logical_key, Key::Named(NamedKey::Escape))
-                && (self.overlay.has_pending_automation_press() || matches!(
-                    self.overlay.drag_mode(),
-                    DragMode::Move
-                        | DragMode::TrimLeft
-                        | DragMode::TrimRight
-                        | DragMode::AutomationPoint
-                        | DragMode::AutomationSegmentBend
-                        | DragMode::AutomationSegmentDrag
-                        | DragMode::AutomationMarquee
-                        | DragMode::AutomationGroupMove
-                        | DragMode::AutomationDraw
-                ))
+                && (self.overlay.has_pending_automation_press()
+                    || matches!(
+                        self.overlay.drag_mode(),
+                        DragMode::Move
+                            | DragMode::TrimLeft
+                            | DragMode::TrimRight
+                            | DragMode::AutomationPoint
+                            | DragMode::AutomationSegmentBend
+                            | DragMode::AutomationSegmentDrag
+                            | DragMode::AutomationMarquee
+                            | DragMode::AutomationGroupMove
+                            | DragMode::AutomationDraw
+                    ))
                 && let Some(content_tx) = self.content_tx.as_ref()
             {
-                let automation_cancel = self.overlay.has_pending_automation_press() || matches!(
-                    self.overlay.drag_mode(),
-                    DragMode::AutomationPoint
-                        | DragMode::AutomationSegmentBend
-                        | DragMode::AutomationSegmentDrag
-                        | DragMode::AutomationMarquee
-                        | DragMode::AutomationGroupMove
-                        | DragMode::AutomationDraw
-                );
+                let automation_cancel = self.overlay.has_pending_automation_press()
+                    || matches!(
+                        self.overlay.drag_mode(),
+                        DragMode::AutomationPoint
+                            | DragMode::AutomationSegmentBend
+                            | DragMode::AutomationSegmentDrag
+                            | DragMode::AutomationMarquee
+                            | DragMode::AutomationGroupMove
+                            | DragMode::AutomationDraw
+                    );
                 let mut host = crate::editing_host::AppEditingHost::new(
                     self.local_project.edit(&mut self.ui_edits, content_tx),
                     content_tx,
                     &self.content_state,
                     &mut self.cursor_manager,
                     &mut self.active_layer_id,
-                                        &mut self.ws.offscreen_dirty,
+                    &mut self.ws.offscreen_dirty,
                 );
                 self.overlay.cancel_drag(&mut host);
                 if automation_cancel {
@@ -1712,7 +1818,8 @@ impl Application {
                 self.ui_renderer.is_some(),
             ) {
                 crate::text_session::KeyOutcome::NotTyping => {}
-                crate::text_session::KeyOutcome::Consumed | crate::text_session::KeyOutcome::Filtered => return,
+                crate::text_session::KeyOutcome::Consumed
+                | crate::text_session::KeyOutcome::Filtered => return,
                 crate::text_session::KeyOutcome::Committed(field, text) => {
                     self.handle_text_input_commit(field, &text);
                     return;
@@ -1836,9 +1943,15 @@ mod tests {
 
         let mut app = Application::new();
         let labels: Vec<String> = (0..100).map(|i| format!("Font {i:03}")).collect();
-        let actions = labels.iter().map(|label| {
-            manifold_ui::PanelAction::Params(manifold_ui::ParamsAction::GenStringParamSelected(0, label.clone()))
-        }).collect();
+        let actions = labels
+            .iter()
+            .map(|label| {
+                manifold_ui::PanelAction::Params(manifold_ui::ParamsAction::GenStringParamSelected(
+                    0,
+                    label.clone(),
+                ))
+            })
+            .collect();
         app.ws.ui_root.open_action_list(
             labels,
             actions,
@@ -1851,14 +1964,28 @@ mod tests {
             Rect::new(100.0, 100.0, 100.0, 30.0),
         );
         app.ws.ui_root.build_overlays_for_screen(1280.0, 800.0);
-        let viewport = app.ws.ui_root.browser_popup.picker().unwrap().scroll.viewport();
+        let viewport = app
+            .ws
+            .ui_root
+            .browser_popup
+            .picker()
+            .unwrap()
+            .scroll
+            .viewport();
         app.cursor_pos = Vec2::new(viewport.x + 20.0, viewport.y + 20.0);
         let timeline_y = app.ws.ui_root.viewport.scroll_y_px();
         for delta in [
             MouseScrollDelta::LineDelta(0.0, -3.0),
             MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, -45.0)),
         ] {
-            let before = app.ws.ui_root.browser_popup.picker().unwrap().scroll.scroll_offset();
+            let before = app
+                .ws
+                .ui_root
+                .browser_popup
+                .picker()
+                .unwrap()
+                .scroll
+                .scroll_offset();
             let version = app.ws.ui_root.overlays_version();
             app.primary_mouse_wheel(true, delta);
             let events = app.ws.ui_root.input.drain_events();
@@ -1866,10 +1993,23 @@ mod tests {
             let mut actions = Vec::new();
             assert!(app.ws.ui_root.route_overlay_event(&events[0], &mut actions));
             assert!(actions.is_empty());
-            assert_ne!(app.ws.ui_root.overlays_version(), version, "scrolling must rebuild the overlays");
+            assert_ne!(
+                app.ws.ui_root.overlays_version(),
+                version,
+                "scrolling must rebuild the overlays"
+            );
             app.ws.ui_root.tree.clear();
             app.ws.ui_root.build_overlays_for_screen(1280.0, 800.0);
-            assert!(app.ws.ui_root.browser_popup.picker().unwrap().scroll.scroll_offset() > before);
+            assert!(
+                app.ws
+                    .ui_root
+                    .browser_popup
+                    .picker()
+                    .unwrap()
+                    .scroll
+                    .scroll_offset()
+                    > before
+            );
             assert_eq!(app.ws.ui_root.viewport.scroll_y_px(), timeline_y);
         }
     }
@@ -1887,8 +2027,9 @@ mod tests {
 
     #[test]
     fn pixel_delta_passes_through() {
-        let (dx, dy) =
-            normalize_scroll_delta(MouseScrollDelta::PixelDelta(PhysicalPosition::new(7.5, -4.25)));
+        let (dx, dy) = normalize_scroll_delta(MouseScrollDelta::PixelDelta(PhysicalPosition::new(
+            7.5, -4.25,
+        )));
         assert_eq!(dx, 7.5);
         assert_eq!(dy, -4.25);
     }

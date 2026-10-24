@@ -9,13 +9,16 @@
 
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
+use manifold_gpu::raytrace::{
+    EmissiveAliasEntry, EmissiveTableStats, EmissiveTriangleGpu, GiMaterial, MetalShadowRayTracer,
+    RtGeometryChange, RtObjectGeometry, ShadowRayTracer,
+};
+use manifold_gpu::{GpuBuffer, GpuDevice};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-use manifold_gpu::raytrace::{EmissiveAliasEntry,EmissiveTableStats,EmissiveTriangleGpu,GiMaterial,MetalShadowRayTracer,RtGeometryChange,RtObjectGeometry,ShadowRayTracer};
-use manifold_gpu::{GpuBuffer,GpuDevice};
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::scene::camera::Camera;
 #[cfg(feature = "rt-perf-proofs")]
 use std::time::Instant;
 
@@ -27,19 +30,28 @@ const EMIT_Y: f32 = 1.5;
 const EMIT_R: f32 = 1000.0;
 
 fn region_luma(b: &[u8], w: u32, h: u32, cx: f32, cy: f32, r: i32) -> f64 {
-    let cxi=cx.round() as i32; let cyi=cy.round() as i32;
-    let mut s=0.0f64; let mut n=0u64;
-    for dy in -r..=r{for dx in -r..=r{
-        let x=cxi+dx;let y=cyi+dy;
-        if x<0||y<0||x>=w as i32||y>=h as i32{continue;}
-        let idx=((y as u32*w+x as u32)*8)as usize;
-        let r=f16::from_le_bytes([b[idx],b[idx+1]]).to_f32();
-        let g=f16::from_le_bytes([b[idx+2],b[idx+3]]).to_f32();
-        let b2=f16::from_le_bytes([b[idx+4],b[idx+5]]).to_f32();
-        assert!(r.is_finite()&&g.is_finite()&&b2.is_finite());
-        s+=(0.2126*r+0.7152*g+0.0722*b2)as f64;n+=1;
-    }}
-    assert!(n>0);s/n as f64
+    let cxi = cx.round() as i32;
+    let cyi = cy.round() as i32;
+    let mut s = 0.0f64;
+    let mut n = 0u64;
+    for dy in -r..=r {
+        for dx in -r..=r {
+            let x = cxi + dx;
+            let y = cyi + dy;
+            if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
+                continue;
+            }
+            let idx = ((y as u32 * w + x as u32) * 8) as usize;
+            let r = f16::from_le_bytes([b[idx], b[idx + 1]]).to_f32();
+            let g = f16::from_le_bytes([b[idx + 2], b[idx + 3]]).to_f32();
+            let b2 = f16::from_le_bytes([b[idx + 4], b[idx + 5]]).to_f32();
+            assert!(r.is_finite() && g.is_finite() && b2.is_finite());
+            s += (0.2126 * r + 0.7152 * g + 0.0722 * b2) as f64;
+            n += 1;
+        }
+    }
+    assert!(n > 0);
+    s / n as f64
 }
 
 /// Analytic pixel luma through the FULL WGSL PBR shading chain.
@@ -53,29 +65,65 @@ fn region_luma(b: &[u8], w: u32, h: u32, cx: f32, cy: f32, r: i32) -> f64 {
 /// 32-frame accumulation — heavy-tailed GGX-like variance from geometric
 /// cos_theta*cos_emit peak near emitter).
 fn analytic(em: f32, sz: f32, y: f32) -> f64 {
-    let ng=64; let h=sz*0.5; let y2=y*y; let da=sz*sz/(ng*ng)as f32;
-    let mut e=0.0f64;
-    for ix in 0..ng{for iy in 0..ng{
-        let qx=-h+sz*(ix as f32+0.5)/ng as f32;
-        let qz=-h+sz*(iy as f32+0.5)/ng as f32;
-        let l2=qx*qx+y2+qz*qz;
-        e+=(em as f64 * y2 as f64 / (l2 as f64 * l2 as f64)) * da as f64;
-    }}
+    let ng = 64;
+    let h = sz * 0.5;
+    let y2 = y * y;
+    let da = sz * sz / (ng * ng) as f32;
+    let mut e = 0.0f64;
+    for ix in 0..ng {
+        for iy in 0..ng {
+            let qx = -h + sz * (ix as f32 + 0.5) / ng as f32;
+            let qz = -h + sz * (iy as f32 + 0.5) / ng as f32;
+            let l2 = qx * qx + y2 + qz * qz;
+            e += (em as f64 * y2 as f64 / (l2 as f64 * l2 as f64)) * da as f64;
+        }
+    }
     // kd_ibl * albedo_luma * luma_weight * E
     0.96 * 1.0 * 0.2126 * e
 }
 
 fn render(json: &str) -> (f64, f64) {
     // frame-0 luma (before accumulation fills in) + converged luma
-    let h=manifold_node_engine::testkit::gpu_harness::shared();
-    let reg=PrimitiveRegistry::with_builtin();
-    let mut rt=PresetRuntime::from_json_str_with_device(&manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(json),&reg,std::sync::Arc::clone(&h.device),h.width,h.height,GpuTextureFormat::Rgba16Float,None).expect("scene");
-    let tgt=h.make_target("rs-c");
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
+    let reg = PrimitiveRegistry::with_builtin();
+    let mut rt = PresetRuntime::from_json_str_with_device(
+        &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(json),
+        &reg,
+        std::sync::Arc::clone(&h.device),
+        h.width,
+        h.height,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    )
+    .expect("scene");
+    let tgt = h.make_target("rs-c");
     let mut f0: Option<f64> = None;
-    for fr in 0..ACCUM_FRAMES{
-        let ctx=PresetContext{time:0.1,beat:0.2,dt:1.0/60.0,width:h.width,height:h.height,output_width:h.width,output_height:h.height,aspect:h.width as f32/h.height as f32,owner_key:0,is_clip_level:false,frame_count:fr,anim_progress:0.0,trigger_count:0};
-        let mut enc=h.device.create_encoder("rs-c");
-        {let mut gpu=RendererGpuEncoder::new(&mut enc,&h.device);rt.render(&mut gpu,&tgt.texture,&ctx,&manifold_core::params::ParamManifest::default());}
+    for fr in 0..ACCUM_FRAMES {
+        let ctx = PresetContext {
+            time: 0.1,
+            beat: 0.2,
+            dt: 1.0 / 60.0,
+            width: h.width,
+            height: h.height,
+            output_width: h.width,
+            output_height: h.height,
+            aspect: h.width as f32 / h.height as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: fr,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let mut enc = h.device.create_encoder("rs-c");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
+            rt.render(
+                &mut gpu,
+                &tgt.texture,
+                &ctx,
+                &manifold_core::params::ParamManifest::default(),
+            );
+        }
         enc.commit_and_wait_completed();
         if fr == 0 {
             let bytes = h.readback(&tgt.texture);
@@ -87,7 +135,8 @@ fn render(json: &str) -> (f64, f64) {
 }
 
 fn scene_json(er: f32) -> String {
-    format!(r###"{{"version":2,"name":"RsC","nodes":[
+    format!(
+        r###"{{"version":2,"name":"RsC","nodes":[
 {{"id":0,"typeId":"system.generator_input","nodeId":"input"}},
 {{"id":9,"typeId":"node.bake_environment","nodeId":"env","params":{{"width":{{"type":"Int","value":16}},"height":{{"type":"Int","value":8}},"intensity":{{"type":"Float","value":0.0}}}}}},
 {{"id":1,"typeId":"node.grid_mesh","nodeId":"gnd","params":{{"max_capacity":{{"type":"Int","value":8192}},"resolution_x":{{"type":"Int","value":20}},"resolution_y":{{"type":"Int","value":20}},"size_x":{{"type":"Float","value":8.0}},"size_y":{{"type":"Float","value":8.0}}}}}},
@@ -113,13 +162,17 @@ fn scene_json(er: f32) -> String {
 {{"fromNode":9,"fromPort":"envmap","toNode":20,"toPort":"envmap"}},
 {{"fromNode":30,"fromPort":"out","toNode":20,"toPort":"light_0"}},
 {{"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}}
-]}}"###, sz=EMIT_SIZE, ey=EMIT_Y, ER=er)
+]}}"###,
+        sz = EMIT_SIZE,
+        ey = EMIT_Y,
+        ER = er
+    )
 }
 
 fn probe_luma(b: &[u8], w: u32, h: u32) -> f64 {
-    let cam=Camera::orbit_perspective(0.7,0.95,10.0,0.8,0.0,0.0,0.05,200.0);
-    let pp=cam.project_to_pixel([0.0,0.0,0.0],w,h).expect("probe");
-    region_luma(b,w,h,pp.px,pp.py,PROBE_RADIUS)
+    let cam = Camera::orbit_perspective(0.7, 0.95, 10.0, 0.8, 0.0, 0.0, 0.05, 200.0);
+    let pp = cam.project_to_pixel([0.0, 0.0, 0.0], w, h).expect("probe");
+    region_luma(b, w, h, pp.px, pp.py, PROBE_RADIUS)
 }
 
 #[test]
@@ -143,63 +196,200 @@ fn i_rs3_sampler_converges_to_cpu_analytic_gather_misses() {
     let delta = on_converged - off_converged;
     let r = delta / a.max(1e-9);
     println!("  I-RS3: delta(converged)={delta:.6} delta/analytic={r:.3} (±30%)");
-    assert!(r>0.7, "leg1: {r:.3}<0.7");
-    assert!(r<1.3, "leg1: {r:.3}>1.3");
-    assert!(delta > 0.001, "I-RS3: sampler produces no measurable irradiance");
+    assert!(r > 0.7, "leg1: {r:.3}<0.7");
+    assert!(r < 1.3, "leg1: {r:.3}>1.3");
+    assert!(
+        delta > 0.001,
+        "I-RS3: sampler produces no measurable irradiance"
+    );
 }
 
 // Wall-clock, so `rt-perf-proofs` only (run with `--test-threads=1`): in the
 // parallel correctness binary a frame time measures the other tests.
 #[cfg(feature = "rt-perf-proofs")]
-fn ms(json:&str,label:&str,n:usize)->(f64,f64){
-    let h=manifold_node_engine::testkit::gpu_harness::shared();let reg=PrimitiveRegistry::with_builtin();
-    let mut rt=PresetRuntime::from_json_str_with_device(&manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(json),&reg,std::sync::Arc::clone(&h.device),h.width,h.height,GpuTextureFormat::Rgba16Float,None).expect("tms");
-    let tgt=h.make_target("tms");let mut ts=Vec::with_capacity(n);
-    for fr in 0..n{let ctx=PresetContext{time:0.1,beat:0.2,dt:1.0/60.0,width:h.width,height:h.height,output_width:h.width,output_height:h.height,aspect:h.width as f32/h.height as f32,owner_key:0,is_clip_level:false,frame_count:fr as i64,anim_progress:0.0,trigger_count:0};
-        let mut enc=h.device.create_encoder("tms");let t0=Instant::now();
-        {let mut gpu=RendererGpuEncoder::new(&mut enc,&h.device);rt.render(&mut gpu,&tgt.texture,&ctx,&manifold_core::params::ParamManifest::default());}
-        enc.commit_and_wait_completed();ts.push(t0.elapsed().as_secs_f64()*1000.0);
+fn ms(json: &str, label: &str, n: usize) -> (f64, f64) {
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
+    let reg = PrimitiveRegistry::with_builtin();
+    let mut rt = PresetRuntime::from_json_str_with_device(
+        &manifold_nodes_scene::testkit::scene_objects::bundle_scene_objects(json),
+        &reg,
+        std::sync::Arc::clone(&h.device),
+        h.width,
+        h.height,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    )
+    .expect("tms");
+    let tgt = h.make_target("tms");
+    let mut ts = Vec::with_capacity(n);
+    for fr in 0..n {
+        let ctx = PresetContext {
+            time: 0.1,
+            beat: 0.2,
+            dt: 1.0 / 60.0,
+            width: h.width,
+            height: h.height,
+            output_width: h.width,
+            output_height: h.height,
+            aspect: h.width as f32 / h.height as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: fr as i64,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let mut enc = h.device.create_encoder("tms");
+        let t0 = Instant::now();
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
+            rt.render(
+                &mut gpu,
+                &tgt.texture,
+                &ctx,
+                &manifold_core::params::ParamManifest::default(),
+            );
+        }
+        enc.commit_and_wait_completed();
+        ts.push(t0.elapsed().as_secs_f64() * 1000.0);
     }
-    let tail:Vec<f64>=ts[4..].to_vec();let mut s=tail.clone();s.sort_by(|a,b|a.partial_cmp(b).unwrap());
-    let med=s[s.len()/2];let mx=tail.iter().cloned().fold(f64::NEG_INFINITY,f64::max);
-    eprintln!("{label}: median={med:.3}ms max={mx:.3}ms over {} frames",tail.len());(med,mx)
+    let tail: Vec<f64> = ts[4..].to_vec();
+    let mut s = tail.clone();
+    s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let med = s[s.len() / 2];
+    let mx = tail.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    eprintln!(
+        "{label}: median={med:.3}ms max={mx:.3}ms over {} frames",
+        tail.len()
+    );
+    (med, mx)
 }
 
 #[cfg(feature = "rt-perf-proofs")]
-#[test]fn trace_ms(){let j=scene_json(EMIT_R);let(mon,_)=ms(&j,"on",16);let(moff,_)=ms(&scene_json(0.),"off",16);eprintln!("TRACE_MS on={mon:.3} off={moff:.3} d={:+.3}ms",mon-moff);assert!(mon.max(1.)<20.);}
+#[test]
+fn trace_ms() {
+    let j = scene_json(EMIT_R);
+    let (mon, _) = ms(&j, "on", 16);
+    let (moff, _) = ms(&scene_json(0.), "off", 16);
+    eprintln!("TRACE_MS on={mon:.3} off={moff:.3} d={:+.3}ms", mon - moff);
+    assert!(mon.max(1.) < 20.);
+}
 
 // Structural
-#[repr(C)]#[derive(Clone,Copy)]struct Pv{pos:[f32;3]}
-fn wb(d:&GpuDevice,v:&[Pv])->GpuBuffer{let b=d.create_buffer_shared(((v.len()*12)as u64).max(16));unsafe{std::ptr::copy_nonoverlapping(v.as_ptr().cast::<u8>(),b.mapped_ptr().unwrap(),v.len()*12);}b}
-const I:[[f32;4];4]=[[1.,0.,0.,0.],[0.,1.,0.,0.],[0.,0.,1.,0.],[0.,0.,0.,1.]];
-fn o<'a>(v:&'a GpuBuffer,n:u32)->RtObjectGeometry<'a>{RtObjectGeometry{instance_inner:RtObjectGeometry::NO_INNER,material_attributes:Default::default(),vertex_buffer:v,vertex_stride:12,vertex_offset:0,index_buffer:None,triangle_count:n,transform:I,normal_offset:0,uv_offset:0,alpha_mask:false,translucent:false,alpha_cutoff:0.5,base_color_texture:None,mr_texture:None,normal_texture:None,emissive_texture:None,extra_material_textures:[None;15],emissive_uv_m:[1.,0.,0.,1.],emissive_uv_t:[0.,0.],cast_shadows:true,instances_addr:0,instances_buffer:None,instance_slots:1,appearance_weights:None,appearance_gain:1.0,
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Pv {
+    pos: [f32; 3],
+}
+fn wb(d: &GpuDevice, v: &[Pv]) -> GpuBuffer {
+    let b = d.create_buffer_shared(((v.len() * 12) as u64).max(16));
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            v.as_ptr().cast::<u8>(),
+            b.mapped_ptr().unwrap(),
+            v.len() * 12,
+        );
+    }
+    b
+}
+const I: [[f32; 4]; 4] = [
+    [1., 0., 0., 0.],
+    [0., 1., 0., 0.],
+    [0., 0., 1., 0.],
+    [0., 0., 0., 1.],
+];
+fn o<'a>(v: &'a GpuBuffer, n: u32) -> RtObjectGeometry<'a> {
+    RtObjectGeometry {
+        instance_inner: RtObjectGeometry::NO_INNER,
+        material_attributes: Default::default(),
+        vertex_buffer: v,
+        vertex_stride: 12,
+        vertex_offset: 0,
+        index_buffer: None,
+        triangle_count: n,
+        transform: I,
+        normal_offset: 0,
+        uv_offset: 0,
+        alpha_mask: false,
+        translucent: false,
+        alpha_cutoff: 0.5,
+        base_color_texture: None,
+        mr_texture: None,
+        normal_texture: None,
+        emissive_texture: None,
+        extra_material_textures: [None; 15],
+        emissive_uv_m: [1., 0., 0., 1.],
+        emissive_uv_t: [0., 0.],
+        cast_shadows: true,
+        instances_addr: 0,
+        instances_buffer: None,
+        instance_slots: 1,
+        appearance_weights: None,
+        appearance_gain: 1.0,
         base_color_uv_transform: [1., 0., 0., 1., 0., 0.],
         mr_uv_transform: [1., 0., 0., 1., 0., 0.],
         normal_uv_transform: [1., 0., 0., 1., 0., 0.],
         normal_scale: 1.,
         base_color_alpha: 1.,
         tangent_offset: u32::MAX,
-    }}
-#[test]fn sz(){assert_eq!(std::mem::size_of::<EmissiveTriangleGpu>(),96);assert_eq!(std::mem::size_of::<EmissiveAliasEntry>(),8);}
-#[test]fn at(){
-    let h=manifold_node_engine::testkit::gpu_harness::shared();let d=&h.device;
-    let vs=[Pv{pos:[0.,0.,0.]},Pv{pos:[1.,0.,0.]},Pv{pos:[0.,1.,0.]},Pv{pos:[1.,0.,0.]},Pv{pos:[0.,1.,0.]},Pv{pos:[1.,1.,0.]}];
-    let b=wb(d,&vs);let o=[o(&b,2)];let m=[GiMaterial::new([0.5,0.5,0.5],[1.,0.,0.],[0.,0.5,0.,0.],[0.,0.,0.,0.])];
+    }
+}
+#[test]
+fn sz() {
+    assert_eq!(std::mem::size_of::<EmissiveTriangleGpu>(), 96);
+    assert_eq!(std::mem::size_of::<EmissiveAliasEntry>(), 8);
+}
+#[test]
+fn at() {
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
+    let d = &h.device;
+    let vs = [
+        Pv { pos: [0., 0., 0.] },
+        Pv { pos: [1., 0., 0.] },
+        Pv { pos: [0., 1., 0.] },
+        Pv { pos: [1., 0., 0.] },
+        Pv { pos: [0., 1., 0.] },
+        Pv { pos: [1., 1., 0.] },
+    ];
+    let b = wb(d, &vs);
+    let o = [o(&b, 2)];
+    let m = [GiMaterial::new(
+        [0.5, 0.5, 0.5],
+        [1., 0., 0.],
+        [0., 0.5, 0., 0.],
+        [0., 0., 0., 0.],
+    )];
     // P4a: production GPU preparation (same enumerate/sort/gather/alias/
     // stats kernels as the shared AS update path), read back through the
     // mapped shared buffers.
-    let tracer=MetalShadowRayTracer::new(d);
-    let plan=tracer.plan_accel(d,None,&o).expect("plan");
-    let mut slot=None;
-    tracer.prepare_accel(d,&mut slot,plan).expect("prepare");
-    let mut accel=slot.unwrap();
-    let mut enc=d.create_encoder("rs-c-alias-proof");
-    tracer.encode_accel_update(d,&mut enc,&mut accel,&o,&[RtGeometryChange::Rebuild],&m,true,true).expect("encode");
+    let tracer = MetalShadowRayTracer::new(d);
+    let plan = tracer.plan_accel(d, None, &o).expect("plan");
+    let mut slot = None;
+    tracer.prepare_accel(d, &mut slot, plan).expect("prepare");
+    let mut accel = slot.unwrap();
+    let mut enc = d.create_encoder("rs-c-alias-proof");
+    tracer
+        .encode_accel_update(
+            d,
+            &mut enc,
+            &mut accel,
+            &o,
+            &[RtGeometryChange::Rebuild],
+            &m,
+            true,
+            true,
+        )
+        .expect("encode");
     enc.commit_and_wait_completed();
-    let t=accel.emissive_table.as_ref().expect("table");
-    let stats=unsafe{(t.stats.mapped_ptr().unwrap() as *const EmissiveTableStats).read_unaligned()};
-    let ap=t.aliases.mapped_ptr().unwrap();
-    let a:&[EmissiveAliasEntry]=unsafe{std::slice::from_raw_parts(ap as *const EmissiveAliasEntry,stats.entry_count as usize)};
-    for(i,a)in a.iter().enumerate(){assert!(a.prob>=0.&&a.prob<=1.01,"{i}:p {}",a.prob);assert!(a.alias<stats.entry_count);}
-    assert!(stats.entry_count>0);
+    let t = accel.emissive_table.as_ref().expect("table");
+    let stats =
+        unsafe { (t.stats.mapped_ptr().unwrap() as *const EmissiveTableStats).read_unaligned() };
+    let ap = t.aliases.mapped_ptr().unwrap();
+    let a: &[EmissiveAliasEntry] = unsafe {
+        std::slice::from_raw_parts(ap as *const EmissiveAliasEntry, stats.entry_count as usize)
+    };
+    for (i, a) in a.iter().enumerate() {
+        assert!(a.prob >= 0. && a.prob <= 1.01, "{i}:p {}", a.prob);
+        assert!(a.alias < stats.entry_count);
+    }
+    assert!(stats.entry_count > 0);
 }

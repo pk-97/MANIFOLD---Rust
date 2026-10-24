@@ -42,11 +42,15 @@ use std::sync::Arc;
 
 use manifold_core::{Beats, NodeId, Seconds, effect_graph_def::EffectGraphDef};
 use manifold_gpu::GpuTextureFormat;
-use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::freeze::install::fused_generator_view_for;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::scene::mesh_change::PreparedMeshRules;
-use manifold_node_engine::{persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
-
+use manifold_node_engine::{
+    exec::effect_node::FrameTime, exec::execution::Executor, exec::execution_plan::ResourceId,
+    exec::execution_plan::compile, exec::metal_backend::MetalBackend,
+    load::graph_loader::pre_allocate_resources, persistence::EffectGraphDefExt,
+    persistence::PrimitiveRegistry,
+};
 
 /// 3×3 grid in the XZ plane (y=0), smooth +Y normals, distinct UVs — the
 /// layout `render_scene`'s MeshVertex carries (pos 0, normal 4, uv0 8,
@@ -197,10 +201,7 @@ fn render_and_readback(
 
     let mut backend = MetalBackend::new(Arc::clone(device), 64, 64, GpuTextureFormat::Rgba16Float);
     let vertex_bytes = unsafe {
-        std::slice::from_raw_parts(
-            input.as_ptr().cast::<u8>(),
-            std::mem::size_of_val(input),
-        )
+        std::slice::from_raw_parts(input.as_ptr().cast::<u8>(), std::mem::size_of_val(input))
     };
     let vertex_buf = device.create_buffer_shared(vertex_bytes.len() as u64);
     unsafe { vertex_buf.write(0, vertex_bytes) };
@@ -209,8 +210,7 @@ fn render_and_readback(
         backend.pre_bind_array(res_of(mesh_ref, "vertices"), vertex_buf);
     }
     if let Some(weights) = weights {
-        let weights_buf =
-            device.create_buffer_shared(std::mem::size_of_val(weights) as u64);
+        let weights_buf = device.create_buffer_shared(std::mem::size_of_val(weights) as u64);
         unsafe { weights_buf.write(0, bytemuck::cast_slice(weights)) };
         backend.pre_bind_array(res_of(mesh_in, "weights"), weights_buf);
     }

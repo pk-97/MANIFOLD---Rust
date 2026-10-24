@@ -51,13 +51,15 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
             w,
             h,
         )),
-        Box::new(manifold_compositor::generator_renderer::GeneratorRenderer::new(
-            Arc::clone(&native_device),
-            w,
-            h,
-            gen_format,
-            8,
-        )),
+        Box::new(
+            manifold_compositor::generator_renderer::GeneratorRenderer::new(
+                Arc::clone(&native_device),
+                w,
+                h,
+                gen_format,
+                8,
+            ),
+        ),
     ];
     let mut engine = PlaybackEngine::new(renderers);
     engine.initialize(project);
@@ -77,10 +79,11 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
         editing_service: manifold_editing::service::EditingService::new(),
         content_pipeline,
         audio_layer_playback: None,
-        percussion_orchestrator: manifold_playback::percussion_orchestrator::PercussionImportOrchestrator::new(
-            None,
-            String::new(),
-        ),
+        percussion_orchestrator:
+            manifold_playback::percussion_orchestrator::PercussionImportOrchestrator::new(
+                None,
+                String::new(),
+            ),
         transport_controller: manifold_playback::transport_controller::TransportController::new(),
         // Same: unqueued unless the renderer is built with gpu-proofs.
         gpu: manifold_node_engine::gpu::context::GpuContext::new_for_tests("app headless harness"),
@@ -148,17 +151,37 @@ pub(crate) fn warm_project(ct: &mut ContentThread, state_tx: &crate::content_sta
 
 /// Set one generator param through the real undoable command.
 #[cfg(all(test, feature = "journey-proofs"))]
-pub(crate) fn set_generator_param(ct: &mut ContentThread, layer_id: &manifold_core::LayerId, param_id: &str, value: f32) {
+pub(crate) fn set_generator_param(
+    ct: &mut ContentThread,
+    layer_id: &manifold_core::LayerId,
+    param_id: &str,
+    value: f32,
+) {
     let target = manifold_core::GraphTarget::Generator(layer_id.clone());
     let old = ct
         .engine
         .project()
         .expect("journey project")
         .preset_instance(&target)
-        .and_then(|instance| instance.params.contains(param_id).then(|| instance.get_base_param(param_id)))
+        .and_then(|instance| {
+            instance
+                .params
+                .contains(param_id)
+                .then(|| instance.get_base_param(param_id))
+        })
         .unwrap_or_else(|| panic!("missing generator parameter {param_id}"));
-    assert!(!ct.handle_command(crate::content_command::ContentCommand::Execute(Box::new(
-        manifold_editing::commands::effects::ChangeGraphParamCommand::new(target, param_id.to_string(), old, value),
-    ))));
-    assert!(ct.graph_edit_diagnostic.is_none(), "parameter edit rejected");
+    assert!(
+        !ct.handle_command(crate::content_command::ContentCommand::Execute(Box::new(
+            manifold_editing::commands::effects::ChangeGraphParamCommand::new(
+                target,
+                param_id.to_string(),
+                old,
+                value
+            ),
+        )))
+    );
+    assert!(
+        ct.graph_edit_diagnostic.is_none(),
+        "parameter edit rejected"
+    );
 }

@@ -80,7 +80,9 @@ fn scene_panel_file(path: &Path) -> bool {
     let Ok(relative) = path.strip_prefix(panels_dir()) else {
         return false;
     };
-    let relative = relative.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
+    let relative = relative
+        .to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/");
     relative.starts_with("scene_setup_") || relative.starts_with("scene_setup_panel/")
 }
 
@@ -193,7 +195,11 @@ fn no_scene_panel_bespoke_manifest_row_infra() {
         }
         let source = fs::read_to_string(&path).expect("read scene panel source");
         for (needle, description) in &needles {
-            for (line, text) in source.lines().enumerate().filter(|(_, text)| text.contains(needle)) {
+            for (line, text) in source
+                .lines()
+                .enumerate()
+                .filter(|(_, text)| text.contains(needle))
+            {
                 violations.push(format!(
                     "{}:{}: scene-panel {} (`{}`); manifest-backed rows must use ParamSurface/RowHost",
                     path.display(),
@@ -261,16 +267,29 @@ fn shared_scene_cards_draw_by_their_host() {
     let forced = [".kind(", "false)"].concat();
     let scene = [".kind(", "true)"].concat();
     let mut violations = Vec::new();
-    for path in files.iter().filter(|path| !path.to_string_lossy().ends_with("_tests.rs")) {
+    for path in files
+        .iter()
+        .filter(|path| !path.to_string_lossy().ends_with("_tests.rs"))
+    {
         let source = fs::read_to_string(path).expect("read panel source");
         let production = source.split("#[cfg(test)]").next().unwrap();
-        let scene_surface = scene_panel_file(path) || is_allowlisted(path, &["param_slider_shared/colour_row.rs"]);
-        if production.contains(forced.as_str()) || (!scene_surface && production.contains(scene.as_str())) {
+        let scene_surface =
+            scene_panel_file(path) || is_allowlisted(path, &["param_slider_shared/colour_row.rs"]);
+        if production.contains(forced.as_str())
+            || (!scene_surface && production.contains(scene.as_str()))
+        {
             violations.push(path.display().to_string());
         }
     }
-    assert!(violations.is_empty(), "row kinds come from the card host (`draws_by_kind`): {violations:?}");
+    assert!(
+        violations.is_empty(),
+        "row kinds come from the card host (`draws_by_kind`): {violations:?}"
+    );
 
-    let source = fs::read_to_string(panels_dir().join("inspector/render.rs")).expect("read card host source");
-    assert!(source.contains("CardHost::SceneCard"), "inspector/render.rs hosts shared scene cards without CardHost::SceneCard");
+    let source = fs::read_to_string(panels_dir().join("inspector/render.rs"))
+        .expect("read card host source");
+    assert!(
+        source.contains("CardHost::SceneCard"),
+        "inspector/render.rs hosts shared scene cards without CardHost::SceneCard"
+    );
 }

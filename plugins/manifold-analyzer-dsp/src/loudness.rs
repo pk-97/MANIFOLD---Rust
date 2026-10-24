@@ -32,7 +32,11 @@ const MIN_LUFS: f32 = -120.0;
 /// Amplitude → dB with a floor matching `MIN_LUFS` so silent
 /// passages report the same "no signal" sentinel as the LUFS track.
 fn amp_to_db(a: f32) -> f32 {
-    if a <= 1e-12 { MIN_LUFS } else { 20.0 * a.log10() }
+    if a <= 1e-12 {
+        MIN_LUFS
+    } else {
+        20.0 * a.log10()
+    }
 }
 
 const BLOCK_MS: f32 = 100.0;
@@ -177,9 +181,8 @@ impl TruePeakDetector {
             } else {
                 arg.sin() / arg
             };
-            let w = 0.5
-                - 0.5
-                    * (2.0 * std::f32::consts::PI * n as f32 / (total as f32 - 1.0)).cos();
+            let w =
+                0.5 - 0.5 * (2.0 * std::f32::consts::PI * n as f32 / (total as f32 - 1.0)).cos();
             *coef = sinc * w;
         }
         // Normalise so each phase has unity gain at DC (sum → 1).
@@ -322,14 +325,14 @@ pub struct LoudnessMeter {
     // Per-sample live readouts for Peak / RMS / Correlation. All
     // 300 ms-time-constant — fast enough for mastering, slow enough
     // that the numbers don't chatter.
-    peak_hold: f32,        // max(|L|, |R|) with exponential release
+    peak_hold: f32, // max(|L|, |R|) with exponential release
     peak_release_coef: f32,
     sm_l_mean_sq: f32,     // 1-pole smoothed L²
     sm_r_mean_sq: f32,     // 1-pole smoothed R²
     sm_lr_mean: f32,       // 1-pole smoothed L·R (correlation numerator)
     sm_coef: f32,          // 1 − (1-pole decay factor per sample)
     raw_peak_abs_max: f32, // monotonic max of |L|, |R| raw samples
-    rms_max_mean_sq: f32,   // monotonic max of smoothed stereo power
+    rms_max_mean_sq: f32,  // monotonic max of smoothed stereo power
 
     // 100 ms accumulator, per channel, sum of squares.
     block_sum_sq_l: f64,
@@ -390,8 +393,8 @@ impl LoudnessMeter {
         // audio-thread push never allocates in the common case. Beyond
         // that, Vec amortised growth kicks in (still bounded memcpy).
         const PRESIZE_BINS: usize = 18_000; // 30 min × 10 bins/sec
-        // 300 ms time constant for peak release and RMS/correlation
-        // smoothing. `coef^N = e^-1` at N = sr·0.3 samples.
+                                            // 300 ms time constant for peak release and RMS/correlation
+                                            // smoothing. `coef^N = e^-1` at N = sr·0.3 samples.
         const READOUT_TC_S: f32 = 0.3;
         let sm_coef = (-1.0 / (sample_rate * READOUT_TC_S).max(1.0)).exp();
         Self {
@@ -477,7 +480,9 @@ impl LoudnessMeter {
         result
     }
 
-    pub fn set_generation(&mut self, generation: u32) { self.generation = generation; }
+    pub fn set_generation(&mut self, generation: u32) {
+        self.generation = generation;
+    }
 
     pub fn sample_rate(&self) -> f32 {
         self.sample_rate
@@ -557,7 +562,9 @@ impl LoudnessMeter {
             self.sm_l_mean_sq = sm_coef * self.sm_l_mean_sq + one_minus * (xl * xl);
             self.sm_r_mean_sq = sm_coef * self.sm_r_mean_sq + one_minus * (xr * xr);
             self.sm_lr_mean = sm_coef * self.sm_lr_mean + one_minus * (xl * xr);
-            self.rms_max_mean_sq = self.rms_max_mean_sq.max(0.5 * (self.sm_l_mean_sq + self.sm_r_mean_sq));
+            self.rms_max_mean_sq = self
+                .rms_max_mean_sq
+                .max(0.5 * (self.sm_l_mean_sq + self.sm_r_mean_sq));
         }
         // Publish sample-accurate windows and maxima at each callback boundary.
         self.update_running_readouts();
@@ -581,7 +588,10 @@ impl LoudnessMeter {
             // thread. Integrated / LRA will land on the atomics a few
             // hops later; consumers already treat those readouts as
             // slow-moving.
-            let _ = sink.force_push(LoudnessBlock { generation: self.generation, mean_square: z });
+            let _ = sink.force_push(LoudnessBlock {
+                generation: self.generation,
+                mean_square: z,
+            });
         } else {
             // In-line path (CLI, unit tests): keep full history +
             // recompute integrated / LRA in-line on every tick.
@@ -819,7 +829,9 @@ fn compute_integrated_and_lra_in_place(
         if gated_count == 0 {
             None
         } else {
-            Some(loudness_from_mean_sq((gated_sum / gated_count as f64) as f32))
+            Some(loudness_from_mean_sq(
+                (gated_sum / gated_count as f64) as f32,
+            ))
         }
     };
 
@@ -832,8 +844,8 @@ fn compute_integrated_and_lra_in_place(
         let mut lra_ungated_sum = 0.0_f64;
         let mut lra_ungated_count = 0_usize;
         for start in 0..lra_end {
-            let m = ((prefix_sums[start + lra_window] - prefix_sums[start])
-                / lra_window as f64) as f32;
+            let m =
+                ((prefix_sums[start + lra_window] - prefix_sums[start]) / lra_window as f64) as f32;
             let lufs = loudness_from_mean_sq(m);
             if lufs >= ABSOLUTE_GATE_LUFS {
                 lra_ungated_sum += m as f64;
@@ -878,15 +890,11 @@ fn percentile_select(values: &mut [f32], p: f32) -> f32 {
     let lo = pos.floor() as usize;
     let hi = (lo + 1).min(n - 1);
     let frac = pos - lo as f32;
-    let lo_value = *values
-        .select_nth_unstable_by(lo, |a, b| a.total_cmp(b))
-        .1;
+    let lo_value = *values.select_nth_unstable_by(lo, |a, b| a.total_cmp(b)).1;
     if hi == lo {
         return lo_value;
     }
-    let hi_value = *values
-        .select_nth_unstable_by(hi, |a, b| a.total_cmp(b))
-        .1;
+    let hi_value = *values.select_nth_unstable_by(hi, |a, b| a.total_cmp(b)).1;
     lo_value + (hi_value - lo_value) * frac
 }
 
@@ -922,9 +930,7 @@ mod tests {
                     1.0
                 };
                 let envelope = fade_in.min(fade_out).clamp(0.0, 1.0);
-                envelope
-                    * amp
-                    * (2.0 * std::f32::consts::PI * freq * i as f32 / sr + phase).sin()
+                envelope * amp * (2.0 * std::f32::consts::PI * freq * i as f32 / sr + phase).sin()
             })
             .collect()
     }
@@ -935,9 +941,10 @@ mod tests {
         let mut signal = Vec::with_capacity((high + low) * repetitions);
         let mut sample = 0_usize;
         for _ in 0..repetitions {
-            for (count, amp) in [(high, 10.0_f32.powf(-20.0 / 20.0)),
-                (low, 10.0_f32.powf(-30.0 / 20.0))]
-            {
+            for (count, amp) in [
+                (high, 10.0_f32.powf(-20.0 / 20.0)),
+                (low, 10.0_f32.powf(-30.0 / 20.0)),
+            ] {
                 for _ in 0..count {
                     signal.push(
                         amp * (2.0 * std::f32::consts::PI * 1000.0 * sample as f32 / sr).sin(),
@@ -1019,9 +1026,7 @@ mod tests {
         let signals = [
             gen_sine(1000.0, 1.0, sr, n),
             (0..n)
-                .map(|i| {
-                    (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / sr).cos()
-                })
+                .map(|i| (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / sr).cos())
                 .collect::<Vec<_>>(),
         ];
 
@@ -1066,7 +1071,10 @@ mod tests {
             reset_snapshot.momentary_max_lufs,
             fresh_snapshot.momentary_max_lufs
         );
-        assert_eq!(reset_snapshot.short_term_lufs, fresh_snapshot.short_term_lufs);
+        assert_eq!(
+            reset_snapshot.short_term_lufs,
+            fresh_snapshot.short_term_lufs
+        );
         assert_eq!(
             reset_snapshot.short_term_max_lufs,
             fresh_snapshot.short_term_max_lufs
@@ -1150,7 +1158,9 @@ mod tests {
         let mut whole = LoudnessMeter::new(48000.0);
         whole.process(&signal, &signal);
         let mut blocks = LoudnessMeter::new(48000.0);
-        for block in signal.chunks(137) { blocks.process(block, block); }
+        for block in signal.chunks(137) {
+            blocks.process(block, block);
+        }
         assert!((whole.snapshot().rms_max_db - blocks.snapshot().rms_max_db).abs() < 1e-5);
         assert!(whole.snapshot().rms_max_db > whole.snapshot().rms_db + 6.0);
     }
@@ -1162,7 +1172,10 @@ mod tests {
         let mut meter = LoudnessMeter::new(sr);
         process_in_chunks(&mut meter, &signal, &signal);
         let short_term = meter.snapshot().short_term_lufs;
-        assert!((short_term + 23.0).abs() <= 0.1, "case 9 S was {short_term}");
+        assert!(
+            (short_term + 23.0).abs() <= 0.1,
+            "case 9 S was {short_term}"
+        );
     }
 
     #[test]

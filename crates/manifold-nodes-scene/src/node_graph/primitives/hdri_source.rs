@@ -94,7 +94,11 @@ pub(crate) fn load_hdri(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
     // env convention (`pbr_equirect_uv`: v = elevation/π + 0.5) puts the
     // nadir at texture row 0. Rows go in bottom first so up stays up.
     let row_len = w as usize * 3;
-    for px in raw.chunks_exact(row_len).rev().flat_map(|row| row.chunks_exact(3)) {
+    for px in raw
+        .chunks_exact(row_len)
+        .rev()
+        .flat_map(|row| row.chunks_exact(3))
+    {
         out.extend_from_slice(&f16::from_f32(px[0]).to_le_bytes());
         out.extend_from_slice(&f16::from_f32(px[1]).to_le_bytes());
         out.extend_from_slice(&f16::from_f32(px[2]).to_le_bytes());
@@ -451,8 +455,14 @@ mod tests {
 
     fn params_at(width: f32, height: f32) -> ParamValues {
         let mut p = ahash::AHashMap::default();
-        p.insert(std::borrow::Cow::Borrowed("width"), ParamValue::Float(width));
-        p.insert(std::borrow::Cow::Borrowed("height"), ParamValue::Float(height));
+        p.insert(
+            std::borrow::Cow::Borrowed("width"),
+            ParamValue::Float(width),
+        );
+        p.insert(
+            std::borrow::Cow::Borrowed("height"),
+            ParamValue::Float(height),
+        );
         p
     }
 
@@ -479,7 +489,10 @@ mod tests {
         let prim = HdriSource::new();
         let node: &dyn EffectNode = &prim;
         let params = params_at(2048.0, 1024.0);
-        assert_eq!(node.output_dims("nonexistent", (1920, 1080), &[], &params), None);
+        assert_eq!(
+            node.output_dims("nonexistent", (1920, 1080), &[], &params),
+            None
+        );
     }
 
     /// Generates a tiny 64x32 EXR fixture in-process (via the `image`
@@ -538,15 +551,36 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("sky_over_ground.exr");
         let (w, h) = (8u32, 4u32);
-        let buf: image::Rgb32FImage =
-            image::ImageBuffer::from_fn(w, h, |_, y| if y < h / 2 { image::Rgb([3.0, 3.0, 3.0]) } else { image::Rgb([0.25, 0.25, 0.25]) });
-        image::DynamicImage::ImageRgb32F(buf).save_with_format(&path, image::ImageFormat::OpenExr).unwrap();
+        let buf: image::Rgb32FImage = image::ImageBuffer::from_fn(w, h, |_, y| {
+            if y < h / 2 {
+                image::Rgb([3.0, 3.0, 3.0])
+            } else {
+                image::Rgb([0.25, 0.25, 0.25])
+            }
+        });
+        image::DynamicImage::ImageRgb32F(buf)
+            .save_with_format(&path, image::ImageFormat::OpenExr)
+            .unwrap();
 
         let (_, _, bytes) = load_hdri(&path).unwrap();
-        let red = |row: u32| f16::from_le_bytes([bytes[(row * w * 8) as usize], bytes[(row * w * 8) as usize + 1]]).to_f32();
+        let red = |row: u32| {
+            f16::from_le_bytes([
+                bytes[(row * w * 8) as usize],
+                bytes[(row * w * 8) as usize + 1],
+            ])
+            .to_f32()
+        };
         // v = (row + 0.5) / h; elevation = (v − 0.5)·π, so row 0 looks down.
-        assert_eq!(red(0), 0.25, "texture row 0 is the nadir: the file's ground");
-        assert_eq!(red(h - 1), 3.0, "the last texture row is the zenith: the file's sky");
+        assert_eq!(
+            red(0),
+            0.25,
+            "texture row 0 is the nadir: the file's ground"
+        );
+        assert_eq!(
+            red(h - 1),
+            3.0,
+            "the last texture row is the zenith: the file's sky"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -568,7 +602,10 @@ mod tests {
         prim.pending_load = None;
         prim.pending_upload = Some((1, 1, vec![0u8; 8]));
         let node: &dyn EffectNode = &prim;
-        assert!(node.io_pending(), "decoded-but-not-uploaded must report pending");
+        assert!(
+            node.io_pending(),
+            "decoded-but-not-uploaded must report pending"
+        );
 
         prim.pending_upload = None;
         let node: &dyn EffectNode = &prim;
@@ -578,7 +615,10 @@ mod tests {
     #[test]
     fn decode_reports_a_loud_error_for_a_missing_file() {
         let err = load_hdri(Path::new("/nonexistent/does-not-exist.exr")).unwrap_err();
-        assert!(err.contains("does-not-exist.exr"), "error must name the path: {err}");
+        assert!(
+            err.contains("does-not-exist.exr"),
+            "error must name the path: {err}"
+        );
     }
 
     /// BUG-182 reproduction: the two HDRI fixtures committed for this lane
@@ -590,8 +630,7 @@ mod tests {
     /// EXR) is reproduced separately below.
     #[test]
     fn committed_hdri_fixtures_decode_with_hdr_range_intact() {
-        let fixtures_dir =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/hdri");
+        let fixtures_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/hdri");
         for name in ["hdri_float32.exr", "hdri_half16.exr"] {
             let path = fixtures_dir.join(name);
             let (w, h, rgba16f) = load_hdri(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -629,7 +668,10 @@ mod tests {
             err.contains("multi-layer") || err.contains("multi-part"),
             "error must name multi-layer/multi-part EXR as the cause: {err}"
         );
-        assert!(err.contains("Blender"), "error must name the common real-world source: {err}");
+        assert!(
+            err.contains("Blender"),
+            "error must name the common real-world source: {err}"
+        );
     }
 }
 
@@ -729,10 +771,22 @@ mod gpu_tests {
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Texture { binding: 1, texture: &src },
-                GpuBinding::Sampler { binding: 2, sampler: &sampler },
-                GpuBinding::Texture { binding: 3, texture: &out },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &src,
+                },
+                GpuBinding::Sampler {
+                    binding: 2,
+                    sampler: &sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: &out,
+                },
             ],
             [dw.div_ceil(16), dh.div_ceil(16), 1],
             "hdri gpu test",
@@ -748,8 +802,16 @@ mod gpu_tests {
             let idx = ((y * dw + x) * 4) as usize + c;
             f16::from_bits(halves[idx]).to_f32()
         };
-        let (r, g, b, a) = (px(dw / 2, dh / 2, 0), px(dw / 2, dh / 2, 1), px(dw / 2, dh / 2, 2), px(dw / 2, dh / 2, 3));
-        assert!((r - 2.0).abs() < 0.05, "r={r} — must survive unclamped (>1.0 HDR value)");
+        let (r, g, b, a) = (
+            px(dw / 2, dh / 2, 0),
+            px(dw / 2, dh / 2, 1),
+            px(dw / 2, dh / 2, 2),
+            px(dw / 2, dh / 2, 3),
+        );
+        assert!(
+            (r - 2.0).abs() < 0.05,
+            "r={r} — must survive unclamped (>1.0 HDR value)"
+        );
         assert!((g - 1.0).abs() < 0.05, "g={g}");
         assert!((b - 0.25).abs() < 0.05, "b={b}");
         assert!((a - 1.0).abs() < 0.05, "a={a}");
@@ -766,24 +828,32 @@ mod gpu_tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gate_gpu_tests {
     use super::*;
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use manifold_node_engine::exec::backend::Backend;
-    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
-    use manifold_node_engine::exec::execution_plan::ResourceId;
-    use manifold_node_engine::exec::{effect_node::FrameTime, metal_backend::MetalBackend};
-    use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::exec::{effect_node::FrameTime, metal_backend::MetalBackend};
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn frame_time() -> FrameTime {
-        FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }
+        FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        }
     }
 
     fn write_fixture_exr(dir_tag: &str, w: u32, h: u32, rgb: [f32; 3]) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "manifold-hdri-gate-{dir_tag}-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("fixture.exr");
@@ -799,7 +869,10 @@ mod gate_gpu_tests {
 
     fn params_at(path: &str, w: f32, h: f32) -> ParamValues {
         let mut p = ahash::AHashMap::default();
-        p.insert(Cow::Borrowed("path"), ParamValue::String(path.to_string().into()));
+        p.insert(
+            Cow::Borrowed("path"),
+            ParamValue::String(path.to_string().into()),
+        );
         p.insert(Cow::Borrowed("width"), ParamValue::Float(w));
         p.insert(Cow::Borrowed("height"), ParamValue::Float(h));
         p
@@ -849,7 +922,13 @@ mod gate_gpu_tests {
         unchanged
     }
 
-    fn readback(device: &manifold_gpu::GpuDevice, backend: &MetalBackend, slot: Slot, w: u32, h: u32) -> Vec<u8> {
+    fn readback(
+        device: &manifold_gpu::GpuDevice,
+        backend: &MetalBackend,
+        slot: Slot,
+        w: u32,
+        h: u32,
+    ) -> Vec<u8> {
         let tex = backend.texture_2d(slot).expect("texture retained");
         let bytes_per_row = w * 8; // Rgba16Float
         let total = u64::from(h * bytes_per_row);
@@ -898,10 +977,23 @@ mod gate_gpu_tests {
         settle(&mut prim, &backend, &device, &output_scratch, &params);
         let frame_settled = readback(&device, &backend, out_slot, w, h);
 
-        let unchanged = run_once(&mut prim, &backend, &device, &output_scratch, &params, frame_time());
-        assert!(unchanged, "settled static file must declare mark_outputs_unchanged");
+        let unchanged = run_once(
+            &mut prim,
+            &backend,
+            &device,
+            &output_scratch,
+            &params,
+            frame_time(),
+        );
+        assert!(
+            unchanged,
+            "settled static file must declare mark_outputs_unchanged"
+        );
         let frame_next = readback(&device, &backend, out_slot, w, h);
-        assert_eq!(frame_settled, frame_next, "next frame must be bit-identical once settled on a static file");
+        assert_eq!(
+            frame_settled, frame_next,
+            "next frame must be bit-identical once settled on a static file"
+        );
 
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
@@ -928,8 +1020,18 @@ mod gate_gpu_tests {
 
         let params_2 = params_at(path_2.to_str().unwrap(), w as f32, h as f32);
         settle(&mut prim_a, &backend_a, &device, &scratch_a, &params_2);
-        let unchanged = run_once(&mut prim_a, &backend_a, &device, &scratch_a, &params_2, frame_time());
-        assert!(unchanged, "settled after the path change, the following frame must be gated");
+        let unchanged = run_once(
+            &mut prim_a,
+            &backend_a,
+            &device,
+            &scratch_a,
+            &params_2,
+            frame_time(),
+        );
+        assert!(
+            unchanged,
+            "settled after the path change, the following frame must be gated"
+        );
         let changed_output = readback(&device, &backend_a, slot_a, w, h);
 
         let mut backend_b = MetalBackend::new(device.arc(), w, h, format);

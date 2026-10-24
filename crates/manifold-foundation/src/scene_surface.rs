@@ -33,7 +33,8 @@ impl GizmoDrawMode {
 
     /// The next mode in `ALL`, wrapping.
     pub fn next(self) -> Self {
-        Self::ALL[(Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0) + 1) % Self::ALL.len()]
+        Self::ALL
+            [(Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0) + 1) % Self::ALL.len()]
     }
 }
 
@@ -190,7 +191,14 @@ pub enum Feature {
 impl Feature {
     /// Whether the switch picks a mode rather than turning the feature on.
     pub fn has_modes(self) -> bool {
-        matches!(self, Self::LightType | Self::EnvironmentMode | Self::Background | Self::SourceRole | Self::RenderMode)
+        matches!(
+            self,
+            Self::LightType
+                | Self::EnvironmentMode
+                | Self::Background
+                | Self::SourceRole
+                | Self::RenderMode
+        )
     }
 
     /// Why a row gated on this feature does nothing right now.
@@ -434,12 +442,21 @@ pub enum SceneShape {
         size: ParamTriple,
     },
     /// A solid ball: `center` moves, `radius` scales uniformly.
-    Sphere { center: ParamTriple, radius: Cow<'static, str> },
+    Sphere {
+        center: ParamTriple,
+        radius: Cow<'static, str>,
+    },
     /// An infinite plane through `center`; rotating writes `normal`
     /// normalized.
-    Plane { center: ParamTriple, normal: ParamTriple },
+    Plane {
+        center: ParamTriple,
+        normal: ParamTriple,
+    },
     /// A point with a reach: `center` moves, `radius` scales uniformly.
-    PointRadius { center: ParamTriple, radius: Cow<'static, str> },
+    PointRadius {
+        center: ParamTriple,
+        radius: Cow<'static, str>,
+    },
     /// A direction, optionally placed and bounded. Rotating writes
     /// `direction` with its length kept.
     Axis {
@@ -468,19 +485,49 @@ impl SceneShape {
     /// Every param id the shape names.
     pub fn param_ids(&self) -> impl Iterator<Item = &str> {
         let (triples, singles): (Vec<&ParamTriple>, Vec<&Cow<'static, str>>) = match self {
-            Self::Box { center, rotation, size } => {
-                (std::iter::once(center).chain(rotation).chain(std::iter::once(size)).collect(), Vec::new())
+            Self::Box {
+                center,
+                rotation,
+                size,
+            } => (
+                std::iter::once(center)
+                    .chain(rotation)
+                    .chain(std::iter::once(size))
+                    .collect(),
+                Vec::new(),
+            ),
+            Self::Sphere { center, radius } | Self::PointRadius { center, radius } => {
+                (vec![center], vec![radius])
             }
-            Self::Sphere { center, radius } | Self::PointRadius { center, radius } => (vec![center], vec![radius]),
             Self::Plane { center, normal } => (vec![center, normal], Vec::new()),
-            Self::Axis { origin, direction, radius } => {
-                (origin.iter().chain(std::iter::once(direction)).collect(), radius.iter().collect())
-            }
-            Self::Field { center, radius, falloff, curve, axis, strength } => {
-                (std::iter::once(center).chain(axis).collect(), [radius, falloff, curve].into_iter().chain(strength).collect())
-            }
+            Self::Axis {
+                origin,
+                direction,
+                radius,
+            } => (
+                origin.iter().chain(std::iter::once(direction)).collect(),
+                radius.iter().collect(),
+            ),
+            Self::Field {
+                center,
+                radius,
+                falloff,
+                curve,
+                axis,
+                strength,
+            } => (
+                std::iter::once(center).chain(axis).collect(),
+                [radius, falloff, curve]
+                    .into_iter()
+                    .chain(strength)
+                    .collect(),
+            ),
         };
-        triples.into_iter().flatten().chain(singles).map(|id| id.as_ref())
+        triples
+            .into_iter()
+            .flatten()
+            .chain(singles)
+            .map(|id| id.as_ref())
     }
 }
 
@@ -520,7 +567,11 @@ mod shape_tests {
             decl,
             SceneShapeDecl {
                 shape: SceneShape::PointRadius {
-                    center: [Cow::Borrowed("center_x"), Cow::Borrowed("center_y"), Cow::Borrowed("center_z")],
+                    center: [
+                        Cow::Borrowed("center_x"),
+                        Cow::Borrowed("center_y"),
+                        Cow::Borrowed("center_z")
+                    ],
                     radius: Cow::Borrowed("radius"),
                 },
                 via: None,
@@ -528,11 +579,21 @@ mod shape_tests {
                 uniform_scale: false,
             }
         );
-        let axis: SceneShapeDecl =
-            serde_json::from_str(r#"{"kind": "axis", "direction": ["x", "y", "z"], "via": "transform"}"#).unwrap();
-        assert!(matches!(axis.shape, SceneShape::Axis { origin: None, radius: None, .. }));
+        let axis: SceneShapeDecl = serde_json::from_str(
+            r#"{"kind": "axis", "direction": ["x", "y", "z"], "via": "transform"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            axis.shape,
+            SceneShape::Axis {
+                origin: None,
+                radius: None,
+                ..
+            }
+        ));
         assert_eq!(axis.via.as_deref(), Some("transform"));
-        let round: SceneShapeDecl = serde_json::from_str(&serde_json::to_string(&axis).unwrap()).unwrap();
+        let round: SceneShapeDecl =
+            serde_json::from_str(&serde_json::to_string(&axis).unwrap()).unwrap();
         assert_eq!(round, axis);
     }
 }

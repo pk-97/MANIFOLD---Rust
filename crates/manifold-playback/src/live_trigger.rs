@@ -35,7 +35,9 @@ use ahash::AHashMap;
 use manifold_core::audio_features::{AudioFeatureSnapshot, AudioHopCursor, AudioHopStamp};
 use manifold_core::audio_mod::AudioModSource;
 use manifold_core::audio_setup::AudioSetup;
-use manifold_core::audio_trigger::{FireMeterCapture, TransientEdge, fire_meter_key_for_clip_trigger};
+use manifold_core::audio_trigger::{
+    FireMeterCapture, TransientEdge, fire_meter_key_for_clip_trigger,
+};
 use manifold_core::id::LayerId;
 use manifold_core::layer::Layer;
 use manifold_core::units::{Beats, Seconds};
@@ -147,8 +149,7 @@ impl LiveTriggerState {
                 if !cfg.enabled {
                     continue;
                 }
-                let Some(send_idx) =
-                    setup.sends.iter().position(|s| s.id == cfg.source.send_id)
+                let Some(send_idx) = setup.sends.iter().position(|s| s.id == cfg.source.send_id)
                 else {
                     continue;
                 };
@@ -211,7 +212,11 @@ impl LiveTriggerState {
                 }
             }
         }
-        if fires.iter().all(|fire| fire.audio_stamp.and_then(|stamp| stamp.timeline_time).is_some()) {
+        if fires.iter().all(|fire| {
+            fire.audio_stamp
+                .and_then(|stamp| stamp.timeline_time)
+                .is_some()
+        }) {
             // Stable insertion sort keeps the established layer/config/hop order
             // for equal timestamps and uses no scratch allocation.
             for index in 1..fires.len() {
@@ -270,13 +275,11 @@ impl LiveTriggerState {
         }
     }
 
-    fn push_meter(
-        layer: &Layer,
-        idx: usize,
-        level: f32,
-        fire_meters: &mut FireMeterCapture,
-    ) {
-        fire_meters.push(fire_meter_key_for_clip_trigger(layer.layer_id.as_str(), idx as u64), level);
+    fn push_meter(layer: &Layer, idx: usize, level: f32, fire_meters: &mut FireMeterCapture) {
+        fire_meters.push(
+            fire_meter_key_for_clip_trigger(layer.layer_id.as_str(), idx as u64),
+            level,
+        );
     }
 
     /// Re-arm fire edges on transport stop / project reset so a stale "fired,
@@ -293,8 +296,8 @@ impl LiveTriggerState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, AudioModSource};
     use manifold_core::audio_features::{AudioFeatureHop, AudioHopBatch, AudioHopError};
+    use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, AudioModSource};
     use manifold_core::audio_setup::AudioSend;
     use manifold_core::audio_trigger::LayerClipTrigger;
     use manifold_core::types::LayerType;
@@ -331,7 +334,10 @@ mod tests {
     fn snapshot_with_transient(band: AudioBand, level: f32) -> AudioFeatureSnapshot {
         let mut f = manifold_core::SendFeatures::default();
         f.bands[band.index()].transients = level;
-        AudioFeatureSnapshot { sends: vec![f], ..Default::default() }
+        AudioFeatureSnapshot {
+            sends: vec![f],
+            ..Default::default()
+        }
     }
 
     fn snapshot_with_hops(
@@ -354,7 +360,8 @@ mod tests {
                         end_sample,
                         sample_rate: 48_000,
                         source_time: None,
-                        timeline_time: timeline_start.map(|time| Seconds(time + index as f64 * 0.01)),
+                        timeline_time: timeline_start
+                            .map(|time| Seconds(time + index as f64 * 0.01)),
                     },
                     dt: Seconds(0.01),
                     features,
@@ -385,18 +392,38 @@ mod tests {
 
         // Onset above the fixed 0.5 edge → one fire.
         let hot = snapshot_with_transient(AudioBand::Full, 0.9);
-        assert_eq!(state.evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default()).len(), 1);
+        assert_eq!(
+            state
+                .evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default())
+                .len(),
+            1
+        );
 
         // Impulse still high (plateau / slow decay) → no re-fire.
-        assert_eq!(state.evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default()).len(), 0);
+        assert_eq!(
+            state
+                .evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default())
+                .len(),
+            0
+        );
 
         // Impulse decays below the re-arm floor (0.5 * REARM_RATIO = 0.3) →
         // re-arms (no fire on the dip).
         let cold = snapshot_with_transient(AudioBand::Full, 0.0);
-        assert_eq!(state.evaluate(&cold, &setup, &layers, DT, &mut FireMeterCapture::default()).len(), 0);
+        assert_eq!(
+            state
+                .evaluate(&cold, &setup, &layers, DT, &mut FireMeterCapture::default())
+                .len(),
+            0
+        );
 
         // Next onset fires again.
-        assert_eq!(state.evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default()).len(), 1);
+        assert_eq!(
+            state
+                .evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default())
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -405,10 +432,26 @@ mod tests {
         let snapshot = snapshot_with_hops(AudioBand::Full, &[0.9, 0.0, 0.9], 10, 480, None);
         let mut state = LiveTriggerState::default();
 
-        let fires = state.evaluate(&snapshot, &setup, &layers, DT, &mut FireMeterCapture::default());
+        let fires = state.evaluate(
+            &snapshot,
+            &setup,
+            &layers,
+            DT,
+            &mut FireMeterCapture::default(),
+        );
         assert_eq!(fires.len(), 2);
         assert!(fires.iter().all(|fire| fire.audio_stamp.is_some()));
-        assert!(state.evaluate(&snapshot, &setup, &layers, DT, &mut FireMeterCapture::default()).is_empty());
+        assert!(
+            state
+                .evaluate(
+                    &snapshot,
+                    &setup,
+                    &layers,
+                    DT,
+                    &mut FireMeterCapture::default()
+                )
+                .is_empty()
+        );
     }
 
     #[test]
@@ -420,7 +463,13 @@ mod tests {
 
         let whole = snapshot_with_hops(AudioBand::Full, &[0.0, 1.0, 0.0, 1.0], 11, 480, None);
         let mut whole_state = LiveTriggerState::default();
-        let whole_fires = whole_state.evaluate(&whole, &setup, &layers, DT, &mut FireMeterCapture::default());
+        let whole_fires = whole_state.evaluate(
+            &whole,
+            &setup,
+            &layers,
+            DT,
+            &mut FireMeterCapture::default(),
+        );
 
         let mut split_state = LiveTriggerState::default();
         let mut split_fires = Vec::new();
@@ -468,16 +517,58 @@ mod tests {
         snapshot.sends.push(manifold_core::SendFeatures::default());
         snapshot.hop_batches.push(b_snapshot.hop_batches.remove(0));
         let mut state = LiveTriggerState::default();
-        assert_eq!(state.evaluate(&snapshot, &setup, &layers, DT, &mut FireMeterCapture::default()).len(), 1);
+        assert_eq!(
+            state
+                .evaluate(
+                    &snapshot,
+                    &setup,
+                    &layers,
+                    DT,
+                    &mut FireMeterCapture::default()
+                )
+                .len(),
+            1
+        );
 
         layers[0].clip_triggers[0].source.send_id = send_b_id;
-        assert_eq!(state.evaluate(&snapshot, &setup, &layers, DT, &mut FireMeterCapture::default()).len(), 1);
+        assert_eq!(
+            state
+                .evaluate(
+                    &snapshot,
+                    &setup,
+                    &layers,
+                    DT,
+                    &mut FireMeterCapture::default()
+                )
+                .len(),
+            1
+        );
 
         setup.sends.remove(1);
-        assert!(state.evaluate(&snapshot, &setup, &layers, DT, &mut FireMeterCapture::default()).is_empty());
+        assert!(
+            state
+                .evaluate(
+                    &snapshot,
+                    &setup,
+                    &layers,
+                    DT,
+                    &mut FireMeterCapture::default()
+                )
+                .is_empty()
+        );
         setup.sends.push(AudioSend::new("B"));
         setup.sends[1].id = layers[0].clip_triggers[0].source.send_id.clone();
-        assert!(state.evaluate(&snapshot, &setup, &layers, DT, &mut FireMeterCapture::default()).is_empty());
+        assert!(
+            state
+                .evaluate(
+                    &snapshot,
+                    &setup,
+                    &layers,
+                    DT,
+                    &mut FireMeterCapture::default()
+                )
+                .is_empty()
+        );
     }
 
     #[test]
@@ -485,7 +576,18 @@ mod tests {
         let (setup, layers) = setup_and_layer("Kick", AudioBand::Full, 1.0);
         let mut state = LiveTriggerState::default();
         let valid = snapshot_with_hops(AudioBand::Full, &[0.9], 10, 480, None);
-        assert_eq!(state.evaluate(&valid, &setup, &layers, DT, &mut FireMeterCapture::default()).len(), 1);
+        assert_eq!(
+            state
+                .evaluate(
+                    &valid,
+                    &setup,
+                    &layers,
+                    DT,
+                    &mut FireMeterCapture::default()
+                )
+                .len(),
+            1
+        );
 
         let mut stale_fault = empty_batch_snapshot(9);
         stale_fault.hop_batches[0].invalidate(AudioHopError::InvalidInput);
@@ -539,12 +641,39 @@ mod tests {
         let (setup, layers) = setup_and_layer("Kick", AudioBand::Full, 1.0);
         let snapshot = snapshot_with_hops(AudioBand::Full, &[0.9], 10, 480, None);
         let mut state = LiveTriggerState::default();
-        state.evaluate_meter_only(&snapshot, &setup, &layers, DT, &mut FireMeterCapture::default());
+        state.evaluate_meter_only(
+            &snapshot,
+            &setup,
+            &layers,
+            DT,
+            &mut FireMeterCapture::default(),
+        );
         state.clear();
-        assert!(state.evaluate(&snapshot, &setup, &layers, DT, &mut FireMeterCapture::default()).is_empty());
+        assert!(
+            state
+                .evaluate(
+                    &snapshot,
+                    &setup,
+                    &layers,
+                    DT,
+                    &mut FireMeterCapture::default()
+                )
+                .is_empty()
+        );
 
         let fresh = snapshot_with_hops(AudioBand::Full, &[0.9], 10, 960, None);
-        assert_eq!(state.evaluate(&fresh, &setup, &layers, DT, &mut FireMeterCapture::default()).len(), 1);
+        assert_eq!(
+            state
+                .evaluate(
+                    &fresh,
+                    &setup,
+                    &layers,
+                    DT,
+                    &mut FireMeterCapture::default()
+                )
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -563,7 +692,7 @@ mod tests {
                 feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
             });
             cfg.enabled = true;
-        cfg.shape.attack_ms = 0.0;
+            cfg.shape.attack_ms = 0.0;
             cfg.shape.release_ms = 0.0;
             layer.clip_triggers.push(cfg);
             layers.push(layer);
@@ -574,7 +703,13 @@ mod tests {
         snapshot.sends.push(manifold_core::SendFeatures::default());
         snapshot.hop_batches.push(second.hop_batches.remove(0));
         let mut state = LiveTriggerState::default();
-        let fires = state.evaluate(&snapshot, &setup, &layers, DT, &mut FireMeterCapture::default());
+        let fires = state.evaluate(
+            &snapshot,
+            &setup,
+            &layers,
+            DT,
+            &mut FireMeterCapture::default(),
+        );
         assert_eq!(fires[0].target_layer, layers[1].layer_id);
         assert_eq!(fires[1].target_layer, layers[0].layer_id);
 
@@ -583,7 +718,13 @@ mod tests {
         equal.sends.push(manifold_core::SendFeatures::default());
         equal.hop_batches.push(equal_second.hop_batches.remove(0));
         let mut state = LiveTriggerState::default();
-        let fires = state.evaluate(&equal, &setup, &layers, DT, &mut FireMeterCapture::default());
+        let fires = state.evaluate(
+            &equal,
+            &setup,
+            &layers,
+            DT,
+            &mut FireMeterCapture::default(),
+        );
         assert_eq!(fires[0].target_layer, layers[0].layer_id);
         assert_eq!(fires[1].target_layer, layers[1].layer_id);
     }
@@ -619,7 +760,9 @@ mod tests {
         let cold = snapshot_with_transient(AudioBand::Full, 0.0);
 
         assert_eq!(
-            state.evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default()).len(),
+            state
+                .evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default())
+                .len(),
             1,
             "first onset must fire"
         );
@@ -631,7 +774,9 @@ mod tests {
         }
 
         assert_eq!(
-            state.evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default()).len(),
+            state
+                .evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default())
+                .len(),
             1,
             "second onset ~80ms later, inside the shape's 120ms release tail, must still fire (BUG-242)"
         );
@@ -642,7 +787,11 @@ mod tests {
         let (setup, layers) = setup_and_layer("Kick", AudioBand::Low, 1.0);
         let mut state = LiveTriggerState::default();
         let weak = snapshot_with_transient(AudioBand::Low, 0.3);
-        assert!(state.evaluate(&weak, &setup, &layers, DT, &mut FireMeterCapture::default()).is_empty());
+        assert!(
+            state
+                .evaluate(&weak, &setup, &layers, DT, &mut FireMeterCapture::default())
+                .is_empty()
+        );
     }
 
     #[test]
@@ -655,7 +804,11 @@ mod tests {
         let mut state = LiveTriggerState::default();
         // raw=0.9 * sensitivity=0.4 = 0.36, under the 0.5 edge.
         let hot = snapshot_with_transient(AudioBand::Full, 0.9);
-        assert!(state.evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default()).is_empty());
+        assert!(
+            state
+                .evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default())
+                .is_empty()
+        );
     }
 
     #[test]
@@ -664,7 +817,11 @@ mod tests {
         layers[0].clip_triggers[0].enabled = false;
         let mut state = LiveTriggerState::default();
         let hot = snapshot_with_transient(AudioBand::Full, 0.99);
-        assert!(state.evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default()).is_empty());
+        assert!(
+            state
+                .evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default())
+                .is_empty()
+        );
     }
 
     #[test]
@@ -682,10 +839,25 @@ mod tests {
         let (setup, layers) = setup_and_layer("Kick", AudioBand::Full, 1.0);
         let mut state = LiveTriggerState::default();
         let hot = snapshot_with_transient(AudioBand::Full, 0.99);
-        assert_eq!(state.evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default()).len(), 1);
-        assert_eq!(state.evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default()).len(), 0); // disarmed
+        assert_eq!(
+            state
+                .evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default())
+                .len(),
+            1
+        );
+        assert_eq!(
+            state
+                .evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default())
+                .len(),
+            0
+        ); // disarmed
         state.clear();
-        assert_eq!(state.evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default()).len(), 1); // re-armed
+        assert_eq!(
+            state
+                .evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default())
+                .len(),
+            1
+        ); // re-armed
     }
 
     #[test]
@@ -725,6 +897,10 @@ mod tests {
         setup.sends.clear(); // the config's send_id now resolves to nothing
         let mut state = LiveTriggerState::default();
         let hot = snapshot_with_transient(AudioBand::Full, 0.99);
-        assert!(state.evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default()).is_empty());
+        assert!(
+            state
+                .evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default())
+                .is_empty()
+        );
     }
 }

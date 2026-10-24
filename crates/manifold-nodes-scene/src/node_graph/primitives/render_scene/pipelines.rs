@@ -129,7 +129,10 @@ impl RenderScene {
 
     /// Denoise + velocity + ao_mask: velocity at location 1, ao_mask at 2,
     /// denoise at 3–6.
-    pub(super) const DENOISE_VELOCITY_AO_MASK_SPECIALIZATIONS: &'static [(&'static str, &'static str)] = &[
+    pub(super) const DENOISE_VELOCITY_AO_MASK_SPECIALIZATIONS: &'static [(
+        &'static str,
+        &'static str,
+    )] = &[
         (
             "// GBUFFER_FSOUT_VELOCITY_STRUCT",
             "struct FsOut {\n    @location(0) color: vec4<f32>,\n    @location(1) velocity: vec2<f32>,\n    @location(2) ao_mask: f32,\n    @location(3) normals: vec4<f32>,\n    @location(4) roughness: f32,\n    @location(5) diffuse_albedo: vec4<f32>,\n    @location(6) specular_albedo: vec4<f32>,\n    @location(7) reactive: f32,\n};",
@@ -163,7 +166,7 @@ impl RenderScene {
         &'static [manifold_gpu::GpuTextureFormat],
         &'static str,
     )> {
-        use manifold_gpu::GpuTextureFormat::{R16Float, R8Unorm, Rg16Float, Rgba16Float};
+        use manifold_gpu::GpuTextureFormat::{R8Unorm, R16Float, Rg16Float, Rgba16Float};
         match (emit_velocity, emit_ao_mask, emit_denoise_feed) {
             (false, false, false) => None,
             (true, false, false) => Some((
@@ -191,13 +194,27 @@ impl RenderScene {
             // Denoise + velocity.
             (true, false, true) => Some((
                 Self::DENOISE_VELOCITY_SPECIALIZATIONS,
-                &[Rg16Float, Rgba16Float, R16Float, Rgba16Float, Rgba16Float, R16Float],
+                &[
+                    Rg16Float,
+                    Rgba16Float,
+                    R16Float,
+                    Rgba16Float,
+                    Rgba16Float,
+                    R16Float,
+                ],
                 "node.render_scene.velocity.denoise",
             )),
             // Denoise + ao_mask.
             (false, true, true) => Some((
                 Self::DENOISE_AO_MASK_SPECIALIZATIONS,
-                &[R8Unorm, Rgba16Float, R16Float, Rgba16Float, Rgba16Float, R16Float],
+                &[
+                    R8Unorm,
+                    Rgba16Float,
+                    R16Float,
+                    Rgba16Float,
+                    Rgba16Float,
+                    R16Float,
+                ],
                 "node.render_scene.ao_mask.denoise",
             )),
             // Denoise + velocity + ao_mask. 7 aux + color = 8 attachments,
@@ -205,7 +222,15 @@ impl RenderScene {
             // output to this variant without dropping one.
             (true, true, true) => Some((
                 Self::DENOISE_VELOCITY_AO_MASK_SPECIALIZATIONS,
-                &[Rg16Float, R8Unorm, Rgba16Float, R16Float, Rgba16Float, Rgba16Float, R16Float],
+                &[
+                    Rg16Float,
+                    R8Unorm,
+                    Rgba16Float,
+                    R16Float,
+                    Rgba16Float,
+                    Rgba16Float,
+                    R16Float,
+                ],
                 "node.render_scene.velocity.ao_mask.denoise",
             )),
         }
@@ -264,7 +289,15 @@ impl RenderScene {
             // in one place.
             return self
                 .pipelines
-                .entry((MaterialKind::Unlit, false, false, false, false, true, MSAA_SAMPLES))
+                .entry((
+                    MaterialKind::Unlit,
+                    false,
+                    false,
+                    false,
+                    false,
+                    true,
+                    MSAA_SAMPLES,
+                ))
                 .or_insert_with(|| {
                     device.create_render_pipeline_depth_msaa_point_size(
                         include_str!("../shaders/render_scene.wgsl"),
@@ -286,9 +319,21 @@ impl RenderScene {
             MaterialKind::Cel => "fs_cel",
         };
         self.pipelines
-            .entry((kind, emit_velocity, emit_ao_mask, emit_denoise_feed, blend, false, MSAA_SAMPLES))
+            .entry((
+                kind,
+                emit_velocity,
+                emit_ao_mask,
+                emit_denoise_feed,
+                blend,
+                false,
+                MSAA_SAMPLES,
+            ))
             .or_insert_with(|| {
-                let blend_state = if blend { Some(Self::blend_state()) } else { None };
+                let blend_state = if blend {
+                    Some(Self::blend_state())
+                } else {
+                    None
+                };
                 if let Some((specs, aux_formats, label)) =
                     Self::aux_variant(emit_velocity, emit_ao_mask, emit_denoise_feed)
                 {
@@ -338,7 +383,10 @@ impl RenderScene {
             .or_insert_with(|| Self::create_pass_b_pipeline(device, kind))
     }
 
-    pub(super) fn create_pass_b_pipeline(device: &manifold_gpu::GpuDevice, kind: MaterialKind) -> manifold_gpu::GpuRenderPipeline {
+    pub(super) fn create_pass_b_pipeline(
+        device: &manifold_gpu::GpuDevice,
+        kind: MaterialKind,
+    ) -> manifold_gpu::GpuRenderPipeline {
         let fs_entry = match kind {
             MaterialKind::Unlit => "fs_unlit",
             MaterialKind::Pbr => "fs_pbr",
@@ -372,11 +420,7 @@ impl RenderScene {
     /// sanctioned "compile pipelines ahead of the hot path" mechanism used
     /// for the bundled JSON generator presets.
     pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
-        for kind in [
-            MaterialKind::Unlit,
-            MaterialKind::Pbr,
-            MaterialKind::Cel,
-        ] {
+        for kind in [MaterialKind::Unlit, MaterialKind::Pbr, MaterialKind::Cel] {
             let fs_entry = match kind {
                 MaterialKind::Unlit => "fs_unlit",
                 MaterialKind::Pbr => "fs_pbr",

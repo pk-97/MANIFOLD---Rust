@@ -17,14 +17,14 @@
 use std::fmt::Write as _;
 
 use manifold_ui::input::PointerAction;
+use manifold_ui::node::WidgetId;
 use manifold_ui::node::{UIFlags, UINode, Vec2};
 use manifold_ui::tree::TraversalEvent;
-use manifold_ui::node::WidgetId;
 
 use super::fixtures;
-use super::{sync_build, LOGICAL_H, LOGICAL_W};
+use super::{LOGICAL_H, LOGICAL_W, sync_build};
 use crate::frame_plan::{MainRegion, RegionMask};
-use crate::ui_frame::{apply_ui_frame_invalidations, UiFrameSignals};
+use crate::ui_frame::{UiFrameSignals, apply_ui_frame_invalidations};
 use crate::ui_root::UIRoot;
 
 const GOLDEN: &str = "src/ui_snapshot/order_golden.txt";
@@ -54,7 +54,10 @@ fn describe(n: &UINode) -> String {
 fn event(out: &mut Vec<String>, ev: TraversalEvent) {
     match ev {
         TraversalEvent::Node(n) => out.push(describe(n)),
-        TraversalEvent::PushClip(r) => out.push(format!("push {:.1},{:.1},{:.1},{:.1}", r.x, r.y, r.width, r.height)),
+        TraversalEvent::PushClip(r) => out.push(format!(
+            "push {:.1},{:.1},{:.1},{:.1}",
+            r.x, r.y, r.width, r.height
+        )),
         TraversalEvent::PopClip => out.push("pop".into()),
     }
 }
@@ -70,7 +73,9 @@ fn record(ui: &UIRoot) -> Vec<(&'static str, Vec<String>)> {
     ui.panel_cache_info_into(&mut subs, &mut infos);
     for info in &infos {
         panels.push(format!("slot {:?}", info.slot));
-        tree.traverse_flat_range(info.region, info.start, info.end, false, |ev| event(&mut panels, ev));
+        tree.traverse_flat_range(info.region, info.start, info.end, false, |ev| {
+            event(&mut panels, ev)
+        });
         for (s, e) in info.sub_regions.into_iter().flatten() {
             panels.push(format!("sub {}", e - s));
             tree.traverse_flat_range(info.region, *s, *e, false, |ev| event(&mut panels, ev));
@@ -81,7 +86,9 @@ fn record(ui: &UIRoot) -> Vec<(&'static str, Vec<String>)> {
     let overlay_region = MainRegion::Overlays.id();
     for &(start, end) in &ui.overlay_draw {
         overlays.push("overlay".into());
-        tree.traverse_flat_range(overlay_region, start, end, false, |ev| event(&mut overlays, ev));
+        tree.traverse_flat_range(overlay_region, start, end, false, |ev| {
+            event(&mut overlays, ev)
+        });
     }
 
     let mut ghost = Vec::new();
@@ -94,13 +101,22 @@ fn record(ui: &UIRoot) -> Vec<(&'static str, Vec<String>)> {
     while y < LOGICAL_H {
         let mut x = 0.0;
         while x < LOGICAL_W {
-            let hit = tree.hit_test(Vec2::new(x, y)).and_then(|id| tree.get_node(id)).map(describe);
+            let hit = tree
+                .hit_test(Vec2::new(x, y))
+                .and_then(|id| tree.get_node(id))
+                .map(describe);
             hits.push(hit.unwrap_or_default());
             x += HIT_STEP;
         }
         y += HIT_STEP;
     }
-    vec![("paint", paint), ("panels", panels), ("overlays", overlays), ("ghost", ghost), ("hits", hits)]
+    vec![
+        ("paint", paint),
+        ("panels", panels),
+        ("overlays", overlays),
+        ("ghost", ghost),
+        ("hits", hits),
+    ]
 }
 
 fn fnv(lines: &[String]) -> u64 {
@@ -131,7 +147,11 @@ fn stacked_surfaces() -> UIRoot {
     ui.resize(LOGICAL_W, LOGICAL_H);
     sync_build(&mut ui, &data, 24.0);
 
-    ui.warmup = Some(manifold_core::WarmupProgress { done: 2, total: 5, label: "Flowers".into() });
+    ui.warmup = Some(manifold_core::WarmupProgress {
+        done: 2,
+        total: 5,
+        label: "Flowers".into(),
+    });
     ui.toast.show("Undo: Move Clip");
     let items = vec![
         manifold_ui::panels::dropdown::DropdownItem::new("Normal"),
@@ -140,7 +160,9 @@ fn stacked_surfaces() -> UIRoot {
     ];
     let trigger = manifold_ui::node::Rect::new(400.0, 300.0, 120.0, 20.0);
     ui.dropdown.open(items, trigger, 120.0, &mut ui.tree);
-    use manifold_ui::panels::ableton_picker::{AbletonPickerSession, PickerDevice, PickerMacro, PickerTrack};
+    use manifold_ui::panels::ableton_picker::{
+        AbletonPickerSession, PickerDevice, PickerMacro, PickerTrack,
+    };
     let session = AbletonPickerSession {
         rack_tracks: vec![PickerTrack {
             track_id: 1,
@@ -149,7 +171,12 @@ fn stacked_surfaces() -> UIRoot {
                 device_id: 7,
                 device_name: "Rack".into(),
                 device_class_name: "InstrumentGroupDevice".into(),
-                macros: (0..4).map(|i| PickerMacro { param_id: i, name: format!("Macro {i}") }).collect(),
+                macros: (0..4)
+                    .map(|i| PickerMacro {
+                        param_id: i,
+                        name: format!("Macro {i}"),
+                    })
+                    .collect(),
             }],
         }],
     };
@@ -175,14 +202,28 @@ fn stacked_ui() -> UIRoot {
         })
         .map(|n| n.bounds);
     let hover = hover.expect("a visible inspector control");
-    ui.pointer_event(Vec2::new(hover.x + 1.0, hover.y + 1.0), PointerAction::Move, 0.0);
+    ui.pointer_event(
+        Vec2::new(hover.x + 1.0, hover.y + 1.0),
+        PointerAction::Move,
+        0.0,
+    );
 
     // Grab an effect card by its drag handle and move the ghost.
-    let ids: Vec<_> = ui.tree.all_nodes().filter(|n| n.flags.contains(UIFlags::INTERACTIVE)).map(|n| n.id).collect();
-    let started = ids.into_iter().any(|id| ui.inspector.try_begin_card_drag(Some(id), &mut ui.tree));
+    let ids: Vec<_> = ui
+        .tree
+        .all_nodes()
+        .filter(|n| n.flags.contains(UIFlags::INTERACTIVE))
+        .map(|n| n.id)
+        .collect();
+    let started = ids
+        .into_iter()
+        .any(|id| ui.inspector.try_begin_card_drag(Some(id), &mut ui.tree));
     assert!(started, "an effect card drag handle in the inspector");
     let insp = ui.layout.inspector();
-    ui.inspector.update_card_drag(Vec2::new(insp.x + insp.width * 0.5, insp.y + 200.0), &mut ui.tree);
+    ui.inspector.update_card_drag(
+        Vec2::new(insp.x + insp.width * 0.5, insp.y + 200.0),
+        &mut ui.tree,
+    );
     ui
 }
 
@@ -214,7 +255,10 @@ fn paint_and_hit_order_match_full_build() {
 }
 
 fn widget_ids(ui: &UIRoot) -> Vec<WidgetId> {
-    ui.tree.all_nodes().map(|n| ui.tree.widget_of(n.id)).collect()
+    ui.tree
+        .all_nodes()
+        .map(|n| ui.tree.widget_of(n.id))
+        .collect()
 }
 
 /// Each main region rebuilt alone through the frame seam reproduces the full
@@ -228,10 +272,20 @@ fn each_region_rebuilt_alone_matches_full_build() {
     for region in MainRegion::ALL {
         let mut rebuild = RegionMask::default();
         rebuild.insert(region);
-        let mut signals = UiFrameSignals { rebuild, ..Default::default() };
+        let mut signals = UiFrameSignals {
+            rebuild,
+            ..Default::default()
+        };
         apply_ui_frame_invalidations(&mut ui, None, &mut signals);
-        assert_eq!(summary(&record(&ui)), want, "{region:?} rebuilt alone moved paint or hit order");
-        assert!(widget_ids(&ui) == want_ids, "{region:?} rebuilt alone changed a widget id");
+        assert_eq!(
+            summary(&record(&ui)),
+            want,
+            "{region:?} rebuilt alone moved paint or hit order"
+        );
+        assert!(
+            widget_ids(&ui) == want_ids,
+            "{region:?} rebuilt alone changed a widget id"
+        );
     }
 }
 
@@ -243,7 +297,11 @@ fn widget_ids_unique_across_main_regions() {
     let mut seen = std::collections::HashSet::new();
     for n in ui.tree.all_nodes() {
         let id = ui.tree.widget_of(n.id);
-        assert!(seen.insert(id), "widget id {id:?} minted twice (node {:?})", n.id);
+        assert!(
+            seen.insert(id),
+            "widget id {id:?} minted twice (node {:?})",
+            n.id
+        );
     }
 }
 
@@ -254,15 +312,24 @@ fn atlas_ranges_cover_every_region_node() {
     let ui = stacked_ui();
     let (mut subs, mut infos) = (Vec::new(), Vec::new());
     ui.panel_cache_info_into(&mut subs, &mut infos);
-    for region in MainRegion::ALL.into_iter().filter(|r| r.panel_slot().is_some()) {
+    for region in MainRegion::ALL
+        .into_iter()
+        .filter(|r| r.panel_slot().is_some())
+    {
         let id = region.id();
         for slot in 0..ui.tree.region_len(id) {
-            let covering = infos.iter().filter(|i| i.region == id && (i.start..i.end).contains(&slot)).count();
+            let covering = infos
+                .iter()
+                .filter(|i| i.region == id && (i.start..i.end).contains(&slot))
+                .count();
             let node = ui.tree.id_in(id, slot);
             if ui.tree.parent_of(node).is_none() {
                 continue;
             }
-            assert_eq!(covering, 1, "{region:?} slot {slot} lies in {covering} panel ranges");
+            assert_eq!(
+                covering, 1,
+                "{region:?} slot {slot} lies in {covering} panel ranges"
+            );
         }
     }
 }

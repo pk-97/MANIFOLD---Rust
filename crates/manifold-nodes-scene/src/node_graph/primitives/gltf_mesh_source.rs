@@ -14,15 +14,15 @@ use std::borrow::Cow;
 use std::sync::mpsc;
 use std::sync::{Arc, OnceLock};
 
-use manifold_node_engine::mesh::MeshVertex;
 use crate::node_graph::decode_cache::{cached_load_gltf_mesh, cached_load_gltf_mesh_indexed};
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, GltfMeshSelector};
-use manifold_node_engine::scene::mesh_source::MeshSource;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::scene::mesh_selection::MeshSelection;
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::source_asset::{mesh_identity, LoadedAsset, SourceAssetIdentity};
+use manifold_node_engine::scene::mesh_selection::MeshSelection;
+use manifold_node_engine::scene::mesh_source::MeshSource;
+use manifold_node_engine::scene::source_asset::{LoadedAsset, SourceAssetIdentity, mesh_identity};
 
 /// `fit` enum labels (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D7). Index 0
 /// (`none`) is the default and a strict no-op — every scan arrives at
@@ -50,7 +50,11 @@ fn source_trace_enabled() -> bool {
 /// `fit_unit_box = false` is a STRICT no-op (early return, no float math at
 /// all) — this is what keeps every pre-existing gltf preset byte-identical
 /// after this extension ships (`fit` defaults to `none`).
-pub(crate) fn apply_mesh_fit(verts: Vec<MeshVertex>, fit_unit_box: bool, recenter: bool) -> Vec<MeshVertex> {
+pub(crate) fn apply_mesh_fit(
+    verts: Vec<MeshVertex>,
+    fit_unit_box: bool,
+    recenter: bool,
+) -> Vec<MeshVertex> {
     if !fit_unit_box || verts.is_empty() {
         return verts;
     }
@@ -424,7 +428,8 @@ impl Primitive for GltfMeshSource {
         let requested_translate_x = float_param("translate_x", 0.0);
         let requested_translate_y = float_param("translate_y", 0.0);
         let requested_translate_z = float_param("translate_z", 0.0);
-        let requested_fragment_count = float_param("fragment_count", 1.0).round().clamp(1.0, 64.0) as u32;
+        let requested_fragment_count =
+            float_param("fragment_count", 1.0).round().clamp(1.0, 64.0) as u32;
         let requested_fragment_index = float_param("fragment_index", 0.0).round().max(0.0) as u32;
         let requested_node_path = match params.get("node_path") {
             Some(ParamValue::String(s)) => s.as_str(),
@@ -492,7 +497,10 @@ impl Primitive for GltfMeshSource {
             _ => 0,
         };
         let recenter = matches!(ctx.params.get("recenter"), Some(ParamValue::Bool(true)));
-        let vertex_colors = matches!(ctx.params.get("vertex_colors"), Some(ParamValue::Bool(true)));
+        let vertex_colors = matches!(
+            ctx.params.get("vertex_colors"),
+            Some(ParamValue::Bool(true))
+        );
         let fit_unit_box = fit_idx == 1;
         let translate_x = ctx.param_f32("translate_x", 0.0);
 
@@ -501,7 +509,10 @@ impl Primitive for GltfMeshSource {
         let translate_z = ctx.param_f32("translate_z", 0.0);
 
         let translate = [translate_x, translate_y, translate_z];
-        let fragment_count = ctx.param_f32("fragment_count", 1.0).round().clamp(1.0, 64.0) as u32;
+        let fragment_count = ctx
+            .param_f32("fragment_count", 1.0)
+            .round()
+            .clamp(1.0, 64.0) as u32;
         let fragment_index = ctx.param_f32("fragment_index", 0.0).round().max(0.0) as u32;
         let node_path = match ctx.params.get("node_path") {
             Some(ParamValue::String(s)) => s.as_str().to_owned(),
@@ -527,12 +538,23 @@ impl Primitive for GltfMeshSource {
             (node_path.clone(), own_space),
         );
         let want_indexed = ctx.outputs.array("indices").is_some() && fragment_count == 1;
-        if (key != self.last_key || want_indexed != self.last_indexed) && self.pending_load.is_none() {
+        if (key != self.last_key || want_indexed != self.last_indexed)
+            && self.pending_load.is_none()
+        {
             if source_trace_enabled() {
                 log::info!(
                     "[RT-SOURCE] request frame={} path={} mesh={} primitive={} material={} fit={} recenter={} translate=({:.3},{:.3},{:.3}) previous_content_version={}",
-                    ctx.time.frame_count, path, mesh_index, primitive_index, material_index, fit_idx, recenter,
-                    translate_x, translate_y, translate_z, self.content_version
+                    ctx.time.frame_count,
+                    path,
+                    mesh_index,
+                    primitive_index,
+                    material_index,
+                    fit_idx,
+                    recenter,
+                    translate_x,
+                    translate_y,
+                    translate_z,
+                    self.content_version
                 );
             }
             self.last_key = key.clone();
@@ -560,7 +582,11 @@ impl Primitive for GltfMeshSource {
                 // (the importer's per-material object). Otherwise the
                 // mesh_index / primitive_index path applies.
                 let selector = if !node_path.is_empty() {
-                    GltfMeshSelector::Node { path: node_path.as_str().into(), material: material_index, own_space }
+                    GltfMeshSelector::Node {
+                        path: node_path.as_str().into(),
+                        material: material_index,
+                        own_space,
+                    }
                 } else if material_index == DEFAULT_MATERIAL_MESH_PARAM {
                     // GLB_XFAIL_BURNDOWN_DESIGN.md D4 (BUG-171): the
                     // synthetic default-material object — every primitive
@@ -586,14 +612,15 @@ impl Primitive for GltfMeshSource {
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
                     let result = if want_indexed {
-                        cached_load_gltf_mesh_indexed(&path_buf, selector)
-                            .map(|(verts, indices)| {
+                        cached_load_gltf_mesh_indexed(&path_buf, selector).map(
+                            |(verts, indices)| {
                                 let verts = apply_vertex_color_compat(verts, vertex_colors);
                                 let verts = apply_mesh_fit(verts, fit_unit_box, recenter);
                                 let verts = apply_translate(verts, translate);
                                 let identity = mesh_identity(&verts);
                                 LoadedAsset::new((verts, indices), identity)
-                            })
+                            },
+                        )
                     } else {
                         cached_load_gltf_mesh(&path_buf, selector)
                             .map(|verts| apply_vertex_color_compat(verts, vertex_colors))
@@ -636,7 +663,9 @@ impl Primitive for GltfMeshSource {
                         if source_trace_enabled() {
                             log::info!(
                                 "[RT-SOURCE] load-complete frame={} path={} content_version={}",
-                                ctx.time.frame_count, self.last_key.0, self.content_version.wrapping_add(1)
+                                ctx.time.frame_count,
+                                self.last_key.0,
+                                self.content_version.wrapping_add(1)
                             );
                         }
                         self.source_identity = Some(loaded.identity());
@@ -647,7 +676,8 @@ impl Primitive for GltfMeshSource {
                         self.content_version = self.content_version.wrapping_add(1);
                         self.published_source = Some(MeshSource::Gltf {
                             path: Arc::from(self.last_key.0.as_str()),
-                            node_path: (!self.last_key.11.0.is_empty()).then(|| Arc::from(self.last_key.11.0.as_str())),
+                            node_path: (!self.last_key.11.0.is_empty())
+                                .then(|| Arc::from(self.last_key.11.0.as_str())),
                             selection: MeshSelection {
                                 mesh: mesh_index,
                                 primitive: primitive_index,
@@ -670,7 +700,11 @@ impl Primitive for GltfMeshSource {
                         ctx.error(e.clone());
                     }
                     if source_trace_enabled() {
-                        log::warn!("[RT-SOURCE] load-failed frame={} path={} error={e}", ctx.time.frame_count, self.last_key.0);
+                        log::warn!(
+                            "[RT-SOURCE] load-failed frame={} path={} error={e}",
+                            ctx.time.frame_count,
+                            self.last_key.0
+                        );
                     }
                 }
                 Err(mpsc::TryRecvError::Empty) => {
@@ -683,7 +717,11 @@ impl Primitive for GltfMeshSource {
                         ctx.error("background load channel disconnected");
                     }
                     if source_trace_enabled() {
-                        log::warn!("[RT-SOURCE] load-failed frame={} path={} error=channel-disconnected", ctx.time.frame_count, self.last_key.0);
+                        log::warn!(
+                            "[RT-SOURCE] load-failed frame={} path={} error=channel-disconnected",
+                            ctx.time.frame_count,
+                            self.last_key.0
+                        );
                     }
                 }
             }
@@ -726,7 +764,8 @@ impl Primitive for GltfMeshSource {
         if self.copy_in_flight {
             self.copy_in_flight = false;
             let idx_dst = ctx.outputs.array("indices");
-            let idx_unchanged = idx_dst.is_none_or(|b| self.last_copied_idx_identity == b.identity_key());
+            let idx_unchanged =
+                idx_dst.is_none_or(|b| self.last_copied_idx_identity == b.identity_key());
             self.published = self.uploaded
                 && self.last_copied_content_version == self.content_version
                 && self.last_copied_dst_identity == dst.identity_key()
@@ -738,7 +777,12 @@ impl Primitive for GltfMeshSource {
             if !self.trace_pending_logged || self.trace_pending_destination != pending_destination {
                 log::info!(
                     "[RT-SOURCE] pending frame={} path={} destination_identity={} destination_size={} declared_capacity={} cached_vertices={}",
-                    ctx.time.frame_count, self.last_key.0, pending_destination.0, pending_destination.1, capacity, self.cached_verts.len()
+                    ctx.time.frame_count,
+                    self.last_key.0,
+                    pending_destination.0,
+                    pending_destination.1,
+                    capacity,
+                    self.cached_verts.len()
                 );
                 self.trace_pending_logged = true;
                 self.trace_pending_destination = pending_destination;
@@ -794,7 +838,10 @@ impl Primitive for GltfMeshSource {
                     let n_idx = self.cached_indices.len();
                     if n_idx > (idx_buf.size / 4) as usize {
                         if self.load_error.is_none() {
-                            let reason = format!("mesh has {n_idx} indices but its buffer holds {}", idx_buf.size / 4);
+                            let reason = format!(
+                                "mesh has {n_idx} indices but its buffer holds {}",
+                                idx_buf.size / 4
+                            );
                             log::error!("node.gltf_mesh_source: {reason}");
                             ctx.error(reason.clone());
                             self.load_error = Some(reason);
@@ -818,7 +865,11 @@ impl Primitive for GltfMeshSource {
             if source_trace_enabled() {
                 log::info!(
                     "[RT-SOURCE] staging-ready frame={} path={} bytes={} staging_identity={} content_version={}",
-                    ctx.time.frame_count, self.last_key.0, len_bytes, staging_identity, self.content_version
+                    ctx.time.frame_count,
+                    self.last_key.0,
+                    len_bytes,
+                    staging_identity,
+                    self.content_version
                 );
             }
         }
@@ -850,15 +901,23 @@ impl Primitive for GltfMeshSource {
                     if source_trace_enabled() {
                         let frame_count = ctx.time.frame_count;
                         let encoder = ctx.gpu_encoder();
-                        let command_buffer_identity = encoder.native_enc.raw_cmd_buf() as *const _ as usize;
+                        let command_buffer_identity =
+                            encoder.native_enc.raw_cmd_buf() as *const _ as usize;
                         encoder
                             .native_enc
                             .copy_buffer_to_buffer(staging, dst, copy_size);
-                        encoder.native_enc.add_completed_handler_with_status("RT source copy");
+                        encoder
+                            .native_enc
+                            .add_completed_handler_with_status("RT source copy");
                         log::info!(
                             "[RT-SOURCE] copy-encoded frame={} path={} bytes={} destination_identity={} destination_size={} content_version={} queue=same-render-encoder command_buffer_identity={:#x} completion=status-handler",
-                            frame_count, self.last_key.0, copy_size, dst_identity, dst.size,
-                            self.content_version, command_buffer_identity
+                            frame_count,
+                            self.last_key.0,
+                            copy_size,
+                            dst_identity,
+                            dst.size,
+                            self.content_version,
+                            command_buffer_identity
                         );
                     } else {
                         ctx.gpu_encoder()
@@ -869,9 +928,11 @@ impl Primitive for GltfMeshSource {
                 if let (Some(idx_staging), Some(idx_dst)) = (&self.index_staging, idx_dst) {
                     let idx_copy_size = self.index_staging_len_bytes.min(idx_dst.size);
                     if idx_copy_size > 0 {
-                        ctx.gpu_encoder()
-                            .native_enc
-                            .copy_buffer_to_buffer(idx_staging, idx_dst, idx_copy_size);
+                        ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(
+                            idx_staging,
+                            idx_dst,
+                            idx_copy_size,
+                        );
                     }
                 }
                 self.last_copied_content_version = self.content_version;
@@ -903,25 +964,31 @@ impl Primitive for GltfMeshSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_node_engine::exec::backend::Backend;
+    use manifold_core::{Beats, Seconds};
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::exec::backend::MockBackend;
     use manifold_node_engine::exec::effect_node::{EffectNodeContext, FrameTime, ParamValues};
     use manifold_node_engine::exec::execution_plan::ResourceId;
-    use manifold_node_engine::primitive::PrimitiveSpec;
     use manifold_node_engine::ports::PortType;
-    use manifold_node_engine::exec::backend::MockBackend;
-    use manifold_core::{Beats, Seconds};
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     #[test]
     fn fit_defaults_to_none_and_recenter_defaults_to_true() {
-        let fit = GltfMeshSource::PARAMS.iter().find(|p| p.name == "fit").unwrap();
+        let fit = GltfMeshSource::PARAMS
+            .iter()
+            .find(|p| p.name == "fit")
+            .unwrap();
         assert_eq!(fit.ty, ParamType::Enum);
         assert_eq!(fit.default, ParamValue::Enum(0));
         assert_eq!(fit.enum_values, GLTF_FIT_MODES);
         assert_eq!(GLTF_FIT_MODES[0], "none");
         assert_eq!(GLTF_FIT_MODES[1], "unit_box");
 
-        let recenter = GltfMeshSource::PARAMS.iter().find(|p| p.name == "recenter").unwrap();
+        let recenter = GltfMeshSource::PARAMS
+            .iter()
+            .find(|p| p.name == "recenter")
+            .unwrap();
         assert_eq!(recenter.ty, ParamType::Bool);
         assert_eq!(recenter.default, ParamValue::Bool(true));
     }
@@ -952,7 +1019,10 @@ mod tests {
 
     fn cpu_params(path: &str, mesh_index: f32) -> ParamValues {
         let mut params = ahash::AHashMap::default();
-        params.insert(Cow::Borrowed("path"), ParamValue::String(path.to_string().into()));
+        params.insert(
+            Cow::Borrowed("path"),
+            ParamValue::String(path.to_string().into()),
+        );
         params.insert(Cow::Borrowed("mesh_index"), ParamValue::Float(mesh_index));
         params.insert(Cow::Borrowed("primitive_index"), ParamValue::Float(-1.0));
         params.insert(Cow::Borrowed("material_index"), ParamValue::Float(-1.0));
@@ -963,7 +1033,20 @@ mod tests {
         params
     }
 
-    type SourceKey = (String, i32, i32, i32, u32, bool, bool, f32, f32, f32, (u32, u32), (String, bool));
+    type SourceKey = (
+        String,
+        i32,
+        i32,
+        i32,
+        u32,
+        bool,
+        bool,
+        f32,
+        f32,
+        f32,
+        (u32, u32),
+        (String, bool),
+    );
 
     fn source_key(path: &str, mesh_index: i32) -> SourceKey {
         (
@@ -998,7 +1081,10 @@ mod tests {
         );
 
         let mut changed_path = params.clone();
-        changed_path.insert(Cow::Borrowed("path"), ParamValue::String("/tmp/other.glb".to_owned().into()));
+        changed_path.insert(
+            Cow::Borrowed("path"),
+            ParamValue::String("/tmp/other.glb".to_owned().into()),
+        );
         assert_eq!(
             Primitive::source_asset_identity(&primitive, &changed_path),
             SourceAssetIdentity::Pending
@@ -1089,7 +1175,8 @@ mod tests {
         .with_mesh_source_writes(&mut mesh_source_scratch);
         let pending;
         {
-            let mut ctx = EffectNodeContext::new(frame_time(), params, inputs, outputs, None).with_errors(errors);
+            let mut ctx = EffectNodeContext::new(frame_time(), params, inputs, outputs, None)
+                .with_errors(errors);
             primitive.run(&mut ctx);
             pending = ctx.outputs_pending;
         }
@@ -1103,29 +1190,54 @@ mod tests {
     /// stage turns into one toast naming the layer and the part.
     #[test]
     fn an_unreadable_model_file_is_a_node_error() {
-        let path = std::env::temp_dir().join(format!("manifold-missing-{}.glb", manifold_core::short_id()));
+        let path = std::env::temp_dir().join(format!(
+            "manifold-missing-{}.glb",
+            manifold_core::short_id()
+        ));
         let params = cpu_params(&path.to_string_lossy(), -1.0);
         let mut backend = MockBackend::new();
         let source_slot = backend.acquire(ResourceId(0), PortType::MeshSource, None, (0, 0));
         let mut primitive = GltfMeshSource::new();
         let mut errors = Vec::new();
         for _ in 0..200 {
-            assert!(run_cpu_only_reporting(&mut primitive, &mut backend, source_slot, &params, &mut errors), "nothing draws");
+            assert!(
+                run_cpu_only_reporting(
+                    &mut primitive,
+                    &mut backend,
+                    source_slot,
+                    &params,
+                    &mut errors
+                ),
+                "nothing draws"
+            );
             if !errors.is_empty() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        assert_eq!(errors.len(), 1, "the failed read is reported once: {errors:?}");
+        assert_eq!(
+            errors.len(),
+            1,
+            "the failed read is reported once: {errors:?}"
+        );
         assert!(primitive.load_error.is_some());
         errors.clear();
-        run_cpu_only_reporting(&mut primitive, &mut backend, source_slot, &params, &mut errors);
+        run_cpu_only_reporting(
+            &mut primitive,
+            &mut backend,
+            source_slot,
+            &params,
+            &mut errors,
+        );
         assert!(errors.is_empty(), "and not again every frame");
     }
 
     #[test]
     fn cpu_only_source_lifecycle_does_not_publish_stale_or_touch_gpu() {
-        let dir = std::env::temp_dir().join(format!("manifold-source-wire-{}", manifold_core::short_id()));
+        let dir = std::env::temp_dir().join(format!(
+            "manifold-source-wire-{}",
+            manifold_core::short_id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let positions = [[0.0_f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
         std::fs::write(dir.join("positions.bin"), bytemuck::cast_slice(&positions)).unwrap();
@@ -1161,35 +1273,57 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        let Some(MeshSource::Gltf { path: loaded_path, selection: loaded_selection, .. }) = source_a else {
+        let Some(MeshSource::Gltf {
+            path: loaded_path,
+            selection: loaded_selection,
+            ..
+        }) = source_a
+        else {
             panic!("CPU-only glTF source did not settle");
         };
         assert_eq!(loaded_path.as_ref(), path_a);
         assert_eq!(loaded_selection.mesh, -1);
         assert_eq!(primitive.cached_verts.capacity(), 0);
-        let SourceAssetIdentity::Ready(identity_a) = Primitive::source_asset_identity(&primitive, &params_a) else {
+        let SourceAssetIdentity::Ready(identity_a) =
+            Primitive::source_asset_identity(&primitive, &params_a)
+        else {
             panic!("published CPU source must expose its loaded identity");
         };
 
         // The next source load must fingerprint its own decoded buffer, even
         // when an older mesh snapshot is still resident in this node.
         let changed_positions = [[0.0_f32, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
-        std::fs::write(dir.join("positions.bin"), bytemuck::cast_slice(&changed_positions)).unwrap();
-        assert_eq!(Primitive::source_asset_identity(&primitive, &params_a), SourceAssetIdentity::Ready(identity_a));
+        std::fs::write(
+            dir.join("positions.bin"),
+            bytemuck::cast_slice(&changed_positions),
+        )
+        .unwrap();
+        assert_eq!(
+            Primitive::source_asset_identity(&primitive, &params_a),
+            SourceAssetIdentity::Ready(identity_a)
+        );
 
         let params_b = cpu_params(&path_b, 0.0);
         // Control an in-flight parse explicitly, so pending/stale behaviour
         // does not depend on disk-cache or thread scheduling speed.
         let (tx, rx) = mpsc::channel();
         primitive.pending_load = Some(rx);
-        assert!(run_cpu_only_once(&mut primitive, &mut backend, source_slot, &params_b));
+        assert!(run_cpu_only_once(
+            &mut primitive,
+            &mut backend,
+            source_slot,
+            &params_b
+        ));
         assert_eq!(
             Primitive::source_asset_identity(&primitive, &params_b),
             SourceAssetIdentity::Pending
         );
-        tx.send(Ok(LoadedAsset::new((Vec::new(), Vec::new()), [0; 32]))).unwrap();
-        assert!(run_cpu_only_once(&mut primitive, &mut backend, source_slot, &params_b),
-            "a completed stale parse must not publish the old descriptor as ready");
+        tx.send(Ok(LoadedAsset::new((Vec::new(), Vec::new()), [0; 32])))
+            .unwrap();
+        assert!(
+            run_cpu_only_once(&mut primitive, &mut backend, source_slot, &params_b),
+            "a completed stale parse must not publish the old descriptor as ready"
+        );
         assert_eq!(
             Primitive::source_asset_identity(&primitive, &params_b),
             SourceAssetIdentity::Pending
@@ -1201,7 +1335,9 @@ mod tests {
             if !pending {
                 source_b = backend.mesh_source(source_slot);
                 if source_b.as_ref().is_some_and(|source| match source {
-                    MeshSource::Gltf { path, selection, .. } => path.as_ref() == path_b && selection.mesh == 0,
+                    MeshSource::Gltf {
+                        path, selection, ..
+                    } => path.as_ref() == path_b && selection.mesh == 0,
                     _ => false,
                 }) {
                     break;
@@ -1209,13 +1345,20 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        let Some(MeshSource::Gltf { path: loaded_path, selection: loaded_selection, .. }) = source_b else {
+        let Some(MeshSource::Gltf {
+            path: loaded_path,
+            selection: loaded_selection,
+            ..
+        }) = source_b
+        else {
             panic!("changed CPU-only glTF source did not settle");
         };
         assert_eq!(loaded_path.as_ref(), path_b);
         assert_eq!(loaded_selection.mesh, 0);
         assert_eq!(primitive.cached_verts.capacity(), 0);
-        let SourceAssetIdentity::Ready(identity_b) = Primitive::source_asset_identity(&primitive, &params_b) else {
+        let SourceAssetIdentity::Ready(identity_b) =
+            Primitive::source_asset_identity(&primitive, &params_b)
+        else {
             panic!("replacement CPU source must publish its own loaded identity");
         };
         assert_ne!(identity_b, identity_a);
@@ -1233,7 +1376,7 @@ mod tests {
             tangent: [0.0; 4],
             color: [1.0; 4],
         }
-}
+    }
 
     /// An off-scale, off-center vertex set: bounding box spans
     /// x:[10,14], y:[100,102], z:[-5,-1] — center (12,101,-3), longest
@@ -1331,31 +1474,40 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use manifold_node_engine::exec::backend::Backend;
-    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
-    use manifold_node_engine::exec::execution_plan::ResourceId;
-    use manifold_node_engine::exec::effect_node::ParamValues;
     use crate::node_graph::gltf_load::load_gltf_mesh;
-    use manifold_node_engine::exec::{effect_node::FrameTime, metal_backend::MetalBackend};
-    use manifold_gpu::testkit::TestDevice;
     use manifold_core::{Beats, Seconds};
+    use manifold_gpu::testkit::TestDevice;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::exec::effect_node::ParamValues;
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::exec::{effect_node::FrameTime, metal_backend::MetalBackend};
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 
     // The node's own default Max Capacity, as a hand-built graph gets it. A
     // buffer smaller than the mesh refuses it rather than cutting it short.
     const CAPACITY: u32 = 200_000;
 
     fn frame_time() -> FrameTime {
-        FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }
+        FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        }
     }
 
     fn helmet_fixture_path() -> std::path::PathBuf {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf/DamagedHelmet.glb")
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/DamagedHelmet.glb")
     }
 
     fn params_at(path: &str, mesh_index: f32, capacity: f32) -> ParamValues {
         let mut p = ahash::AHashMap::default();
-        p.insert(Cow::Borrowed("path"), ParamValue::String(path.to_string().into()));
+        p.insert(
+            Cow::Borrowed("path"),
+            ParamValue::String(path.to_string().into()),
+        );
         p.insert(Cow::Borrowed("mesh_index"), ParamValue::Float(mesh_index));
         p.insert(Cow::Borrowed("primitive_index"), ParamValue::Float(-1.0));
         p.insert(Cow::Borrowed("material_index"), ParamValue::Float(-1.0));
@@ -1420,9 +1572,14 @@ mod gpu_tests {
     fn readback_vertices(backend: &MetalBackend, slot: Slot, count: usize) -> Vec<MeshVertex> {
         let bytes = readback(backend, slot);
         let byte_count = count * std::mem::size_of::<MeshVertex>();
-        assert!(bytes.len() >= byte_count, "vertex readback is smaller than the loaded mesh");
-        bytes[..byte_count].chunks_exact(std::mem::size_of::<MeshVertex>())
-            .map(bytemuck::pod_read_unaligned::<MeshVertex>).collect()
+        assert!(
+            bytes.len() >= byte_count,
+            "vertex readback is smaller than the loaded mesh"
+        );
+        bytes[..byte_count]
+            .chunks_exact(std::mem::size_of::<MeshVertex>())
+            .map(bytemuck::pod_read_unaligned::<MeshVertex>)
+            .collect()
     }
 
     fn settle(
@@ -1439,14 +1596,22 @@ mod gpu_tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        panic!("gltf_mesh_source: parse never settled ({:?})", prim.load_error);
+        panic!(
+            "gltf_mesh_source: parse never settled ({:?})",
+            prim.load_error
+        );
     }
 
     fn make_buffer_backend(device: &TestDevice) -> (MetalBackend, ResourceId, Slot) {
-        let mut backend = MetalBackend::new(device.arc(), 64, 64, manifold_gpu::GpuTextureFormat::Rgba8Unorm);
+        let mut backend = MetalBackend::new(
+            device.arc(),
+            64,
+            64,
+            manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+        );
         let r_out = ResourceId(0);
-        let buf =
-            device.create_buffer_shared((CAPACITY as u64) * std::mem::size_of::<MeshVertex>() as u64);
+        let buf = device
+            .create_buffer_shared((CAPACITY as u64) * std::mem::size_of::<MeshVertex>() as u64);
         let slot = backend.pre_bind_array(r_out, buf);
         (backend, r_out, slot)
     }
@@ -1458,7 +1623,10 @@ mod gpu_tests {
     fn frame2_matches_frame1_on_static_asset_and_declares_unchanged() {
         let path = helmet_fixture_path();
         if !path.exists() {
-            println!("frame2_matches_frame1_on_static_asset_and_declares_unchanged: fixture not found at {}, skipping", path.display());
+            println!(
+                "frame2_matches_frame1_on_static_asset_and_declares_unchanged: fixture not found at {}, skipping",
+                path.display()
+            );
             return;
         }
         let device = manifold_gpu::testkit::test_device();
@@ -1468,22 +1636,47 @@ mod gpu_tests {
         let params = params_at(path.to_str().unwrap(), -1.0, CAPACITY as f32);
         let mut prim = GltfMeshSource::new();
         settle(&mut prim, &backend, &device, &scratch, &params);
-        assert!(Primitive::warmup_pending(&prim), "the first upload is not published yet");
-        assert!(prim.cached_verts.is_empty(), "staging upload should release CPU vertices");
-        assert_eq!(prim.cached_verts.capacity(), 0, "staging upload should free CPU vertex backing");
+        assert!(
+            Primitive::warmup_pending(&prim),
+            "the first upload is not published yet"
+        );
+        assert!(
+            prim.cached_verts.is_empty(),
+            "staging upload should release CPU vertices"
+        );
+        assert_eq!(
+            prim.cached_verts.capacity(),
+            0,
+            "staging upload should free CPU vertex backing"
+        );
         let frame1 = readback(&backend, slot);
 
-        let unchanged = run_once(&mut prim, &backend, &device, &scratch, &params, frame_time());
-        assert!(!Primitive::warmup_pending(&prim), "published geometry finishes warmup");
-        assert!(unchanged, "settled static frame must declare mark_outputs_unchanged");
+        let unchanged = run_once(
+            &mut prim,
+            &backend,
+            &device,
+            &scratch,
+            &params,
+            frame_time(),
+        );
+        assert!(
+            !Primitive::warmup_pending(&prim),
+            "published geometry finishes warmup"
+        );
+        assert!(
+            unchanged,
+            "settled static frame must declare mark_outputs_unchanged"
+        );
         let frame2 = readback(&backend, slot);
-        assert_eq!(frame1, frame2, "frame 2 must be bit-identical to frame 1 on a static asset");
+        assert_eq!(
+            frame1, frame2,
+            "frame 2 must be bit-identical to frame 1 on a static asset"
+        );
 
         // A replacement destination still receives the retained staging copy
         // after the CPU vertex backing has been released.
-        let replacement = device.create_buffer_shared(
-            (CAPACITY as u64) * std::mem::size_of::<MeshVertex>() as u64,
-        );
+        let replacement = device
+            .create_buffer_shared((CAPACITY as u64) * std::mem::size_of::<MeshVertex>() as u64);
         let replacement_slot = backend.pre_bind_array(r_out, replacement);
         let replacement_scratch: Vec<(&'static str, Slot)> = vec![("vertices", replacement_slot)];
         let replacement_unchanged = run_once(
@@ -1512,7 +1705,10 @@ mod gpu_tests {
     fn fit_param_change_matches_fresh_executor() {
         let path = helmet_fixture_path();
         if !path.exists() {
-            println!("fit_param_change_matches_fresh_executor: fixture not found at {}, skipping", path.display());
+            println!(
+                "fit_param_change_matches_fresh_executor: fixture not found at {}, skipping",
+                path.display()
+            );
             return;
         }
         let device = manifold_gpu::testkit::test_device();
@@ -1528,16 +1724,33 @@ mod gpu_tests {
         // Re-triggers a background parse (fit is part of `last_key`) — poll
         // until it lands, same as the initial settle.
         for _ in 0..200 {
-            let unchanged = run_once(&mut prim_a, &backend_a, &device, &scratch_a, &params_fit, frame_time());
+            let unchanged = run_once(
+                &mut prim_a,
+                &backend_a,
+                &device,
+                &scratch_a,
+                &params_fit,
+                frame_time(),
+            );
             if prim_a.pending_load.is_none() && prim_a.last_key.4 == 1 {
-                assert!(!unchanged, "a content-changing param must not gate as unchanged");
+                assert!(
+                    !unchanged,
+                    "a content-changing param must not gate as unchanged"
+                );
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(prim_a.uploaded, "replacement content must reach staging");
-        assert!(prim_a.cached_verts.is_empty(), "replacement upload should release CPU vertices");
-        assert_eq!(prim_a.cached_verts.capacity(), 0, "replacement upload should free CPU vertex backing");
+        assert!(
+            prim_a.cached_verts.is_empty(),
+            "replacement upload should release CPU vertices"
+        );
+        assert_eq!(
+            prim_a.cached_verts.capacity(),
+            0,
+            "replacement upload should free CPU vertex backing"
+        );
         let a_output = readback(&backend_a, slot_a);
 
         let (backend_b, _r_out_b, slot_b) = make_buffer_backend(&device);
@@ -1560,16 +1773,22 @@ mod gpu_tests {
     fn vertex_colors_toggle_republishes_static_colored_fixture() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/gltf/khronos/BoxVertexColors.glb");
-        assert!(path.exists(), "required colored fixture missing: {}", path.display());
-        let authored = load_gltf_mesh(&path, GltfMeshSelector::WholeScene)
-            .expect("load BoxVertexColors.glb");
+        assert!(
+            path.exists(),
+            "required colored fixture missing: {}",
+            path.display()
+        );
+        let authored =
+            load_gltf_mesh(&path, GltfMeshSelector::WholeScene).expect("load BoxVertexColors.glb");
         assert!(!authored.is_empty());
         assert!(
             authored.iter().any(|vertex| vertex.color != [1.0; 4]),
             "fixture must contain authored nonwhite COLOR_0 values"
         );
         assert!(
-            authored.iter().any(|vertex| vertex.color != authored[0].color),
+            authored
+                .iter()
+                .any(|vertex| vertex.color != authored[0].color),
             "fixture must contain varying COLOR_0 values"
         );
 
@@ -1586,8 +1805,18 @@ mod gpu_tests {
         let legacy = readback_vertices(&backend, slot, count);
         assert!(legacy.iter().all(|vertex| vertex.color == [1.0; 4]));
         let legacy_colors: Vec<[f32; 4]> = legacy.iter().map(|vertex| vertex.color).collect();
-        assert!(run_once(&mut prim, &backend, &device, &scratch, &params_legacy, frame_time()));
-        assert_eq!(prim.content_version, legacy_version, "unchanged legacy frame must not reload");
+        assert!(run_once(
+            &mut prim,
+            &backend,
+            &device,
+            &scratch,
+            &params_legacy,
+            frame_time()
+        ));
+        assert_eq!(
+            prim.content_version, legacy_version,
+            "unchanged legacy frame must not reload"
+        );
         let next_colors: Vec<[f32; 4]> = readback_vertices(&backend, slot, count)
             .iter()
             .map(|vertex| vertex.color)
@@ -1598,18 +1827,38 @@ mod gpu_tests {
         let mut params_opt_in = params_legacy.clone();
         params_opt_in.insert(Cow::Borrowed("vertex_colors"), ParamValue::Bool(true));
         for _ in 0..200 {
-            run_once(&mut prim, &backend, &device, &scratch, &params_opt_in, frame_time());
+            run_once(
+                &mut prim,
+                &backend,
+                &device,
+                &scratch,
+                &params_opt_in,
+                frame_time(),
+            );
             if prim.content_version > legacy_version && prim.uploaded && prim.staging.is_some() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert!(prim.content_version > legacy_version, "enabling vertex colors must reload content");
+        assert!(
+            prim.content_version > legacy_version,
+            "enabling vertex colors must reload content"
+        );
         let opt_in_version = prim.content_version;
-        run_once(&mut prim, &backend, &device, &scratch, &params_opt_in, frame_time());
+        run_once(
+            &mut prim,
+            &backend,
+            &device,
+            &scratch,
+            &params_opt_in,
+            frame_time(),
+        );
         let opt_in = readback_vertices(&backend, slot, count);
         for (actual, expected) in opt_in.iter().zip(authored.iter()) {
-            assert_eq!(actual.color, expected.color, "opt-in output must retain authored COLOR_0");
+            assert_eq!(
+                actual.color, expected.color,
+                "opt-in output must retain authored COLOR_0"
+            );
         }
 
         // Explicit false is another compatibility reload, not a stale reuse
@@ -1617,14 +1866,31 @@ mod gpu_tests {
         let mut params_false = params_legacy;
         params_false.insert(Cow::Borrowed("vertex_colors"), ParamValue::Bool(false));
         for _ in 0..200 {
-            run_once(&mut prim, &backend, &device, &scratch, &params_false, frame_time());
+            run_once(
+                &mut prim,
+                &backend,
+                &device,
+                &scratch,
+                &params_false,
+                frame_time(),
+            );
             if prim.content_version > opt_in_version && prim.uploaded && prim.staging.is_some() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert!(prim.content_version > opt_in_version, "disabling vertex colors must reload content");
-        run_once(&mut prim, &backend, &device, &scratch, &params_false, frame_time());
+        assert!(
+            prim.content_version > opt_in_version,
+            "disabling vertex colors must reload content"
+        );
+        run_once(
+            &mut prim,
+            &backend,
+            &device,
+            &scratch,
+            &params_false,
+            frame_time(),
+        );
         let explicit_false = readback_vertices(&backend, slot, count);
         assert!(explicit_false.iter().all(|vertex| vertex.color == [1.0; 4]));
     }
@@ -1635,33 +1901,37 @@ fn load_physics_mesh_asset(
     node: Option<&str>,
     selection: &manifold_node_engine::scene::mesh_selection::MeshSelection,
 ) -> Result<Vec<MeshVertex>, String> {
-    use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, GltfMeshSelector};
     use crate::node_graph::decode_cache::cached_load_gltf_mesh;
-        let selector = if let Some(node) = node.filter(|node| !node.is_empty()) {
-            GltfMeshSelector::Node { path: node.into(), material: selection.material, own_space: selection.own_space }
-        } else if selection.material == DEFAULT_MATERIAL_MESH_PARAM {
-            GltfMeshSelector::DefaultMaterial
-        } else if selection.material >= 0 {
-            GltfMeshSelector::Material {
-                material_index: selection.material as u32,
-            }
-        } else if selection.mesh < 0 {
-            GltfMeshSelector::WholeScene
-        } else if selection.primitive < 0 {
-            GltfMeshSelector::Mesh {
-                mesh_index: selection.mesh as u32,
-            }
-        } else {
-            GltfMeshSelector::Primitive {
-                mesh_index: selection.mesh as u32,
-                primitive_index: selection.primitive as u32,
-            }
-        };
-        let vertices = cached_load_gltf_mesh(path, selector)?;
-        let vertices = apply_translate(
-            apply_mesh_fit(vertices, selection.fit, selection.recenter),
-            selection.translate,
-        );
+    use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, GltfMeshSelector};
+    let selector = if let Some(node) = node.filter(|node| !node.is_empty()) {
+        GltfMeshSelector::Node {
+            path: node.into(),
+            material: selection.material,
+            own_space: selection.own_space,
+        }
+    } else if selection.material == DEFAULT_MATERIAL_MESH_PARAM {
+        GltfMeshSelector::DefaultMaterial
+    } else if selection.material >= 0 {
+        GltfMeshSelector::Material {
+            material_index: selection.material as u32,
+        }
+    } else if selection.mesh < 0 {
+        GltfMeshSelector::WholeScene
+    } else if selection.primitive < 0 {
+        GltfMeshSelector::Mesh {
+            mesh_index: selection.mesh as u32,
+        }
+    } else {
+        GltfMeshSelector::Primitive {
+            mesh_index: selection.mesh as u32,
+            primitive_index: selection.primitive as u32,
+        }
+    };
+    let vertices = cached_load_gltf_mesh(path, selector)?;
+    let vertices = apply_translate(
+        apply_mesh_fit(vertices, selection.fit, selection.recenter),
+        selection.translate,
+    );
     Ok(vertices)
 }
 
@@ -1673,7 +1943,8 @@ inventory::submit! {
 mod mesh_asset_source_tests {
     #[test]
     fn mesh_asset_registration_preserves_selection_fit_and_translation() {
-        let dir = std::env::temp_dir().join(format!("manifold-mesh-seam-{}", manifold_core::short_id()));
+        let dir =
+            std::env::temp_dir().join(format!("manifold-mesh-seam-{}", manifold_core::short_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let positions = [[0.0_f32, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]];
         std::fs::write(dir.join("positions.bin"), bytemuck::cast_slice(&positions)).unwrap();
@@ -1690,15 +1961,30 @@ mod mesh_asset_source_tests {
         std::fs::write(&path, document.to_string()).unwrap();
         for (mesh, primitive) in [(-1, -1), (0, -1), (0, 0)] {
             let selection = manifold_node_engine::scene::mesh_selection::MeshSelection {
-                mesh, primitive, material: -1, fit: true, recenter: true,
-                translate: [2.0, 3.0, 4.0], fragment_count: 1, fragment_index: 0, own_space: false,
+                mesh,
+                primitive,
+                material: -1,
+                fit: true,
+                recenter: true,
+                translate: [2.0, 3.0, 4.0],
+                fragment_count: 1,
+                fragment_index: 0,
+                own_space: false,
             };
             let direct = super::load_physics_mesh_asset(&path, None, &selection).unwrap();
-            let registered = manifold_node_engine::scene::mesh_asset_source::load_mesh(&path, &selection).unwrap();
+            let registered =
+                manifold_node_engine::scene::mesh_asset_source::load_mesh(&path, &selection)
+                    .unwrap();
             let selected = selection.load(&path).unwrap();
             assert_eq!(direct.len(), 3);
-            assert_eq!(bytemuck::cast_slice::<_, u8>(&direct), bytemuck::cast_slice::<_, u8>(&registered));
-            assert_eq!(bytemuck::cast_slice::<_, u8>(&direct), bytemuck::cast_slice::<_, u8>(&selected));
+            assert_eq!(
+                bytemuck::cast_slice::<_, u8>(&direct),
+                bytemuck::cast_slice::<_, u8>(&registered)
+            );
+            assert_eq!(
+                bytemuck::cast_slice::<_, u8>(&direct),
+                bytemuck::cast_slice::<_, u8>(&selected)
+            );
         }
         std::fs::remove_dir_all(dir).unwrap();
     }

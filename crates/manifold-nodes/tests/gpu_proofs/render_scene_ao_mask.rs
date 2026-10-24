@@ -36,11 +36,10 @@
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::scene::camera::Camera;
 
 const ORBIT: f32 = 0.0;
 const TILT: f32 = 0.0;
@@ -166,7 +165,10 @@ fn scene_json(wire_ao_mask: bool, rt_enabled: bool) -> String {
 }
 
 /// Read an `R8Unorm` texture back to host memory as raw bytes (1 byte/px).
-fn readback_r8unorm(device: &manifold_gpu::GpuDevice, texture: &manifold_gpu::GpuTexture) -> Vec<u8> {
+fn readback_r8unorm(
+    device: &manifold_gpu::GpuDevice,
+    texture: &manifold_gpu::GpuTexture,
+) -> Vec<u8> {
     const BYTES_PER_PIXEL: u32 = 1;
     let bytes_per_row = texture.width * BYTES_PER_PIXEL;
     let total_bytes = u64::from(texture.height * bytes_per_row);
@@ -180,7 +182,10 @@ fn readback_r8unorm(device: &manifold_gpu::GpuDevice, texture: &manifold_gpu::Gp
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");
     let bytes: &[u8] = unsafe {
-        std::slice::from_raw_parts(ptr.cast::<std::ffi::c_void>().cast::<u8>(), total_bytes as usize)
+        std::slice::from_raw_parts(
+            ptr.cast::<std::ffi::c_void>().cast::<u8>(),
+            total_bytes as usize,
+        )
     };
     bytes.to_vec()
 }
@@ -247,7 +252,12 @@ fn render_and_read(json: &str, frames: i64) -> (Vec<u8>, u32, u32, Vec<u8>) {
         let mut enc = h.device.create_encoder("render-scene-ao-mask-enc");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-            runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+            runtime.render(
+                &mut gpu,
+                &target.texture,
+                &ctx,
+                &manifold_core::params::ParamManifest::default(),
+            );
         }
         enc.commit_and_wait_completed();
     }
@@ -275,7 +285,14 @@ fn render_and_read(json: &str, frames: i64) -> (Vec<u8>, u32, u32, Vec<u8>) {
 fn lit_vs_baked_look_rt_off() {
     let json = scene_json(true, false);
     let (ao_bytes, w, h, _color) = render_and_read(&json, 2);
-    assert_eq!((w, h), (manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH, manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT), "ao_mask dims must match canvas");
+    assert_eq!(
+        (w, h),
+        (
+            manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH,
+            manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT
+        ),
+        "ao_mask dims must match canvas"
+    );
 
     let camera = cam();
     let lit_px = camera
@@ -368,7 +385,12 @@ fn rt_enabled_and_ready_forces_zero_everywhere_drawn() {
         let mut enc = h.device.create_encoder("render-scene-ao-mask-rt-enc");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-            runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+            runtime.render(
+                &mut gpu,
+                &target.texture,
+                &ctx,
+                &manifold_core::params::ParamManifest::default(),
+            );
         }
         enc.commit_and_wait_completed();
     }
@@ -380,7 +402,10 @@ fn rt_enabled_and_ready_forces_zero_everywhere_drawn() {
         .expect("ao_mask must be dumped once wired");
     assert_eq!(ao_tex.format, GpuTextureFormat::R8Unorm);
     let (w, h_) = (ao_tex.width, ao_tex.height);
-    let ao_bytes = readback_r8unorm(&manifold_node_engine::testkit::gpu_harness::shared().device, ao_tex);
+    let ao_bytes = readback_r8unorm(
+        &manifold_node_engine::testkit::gpu_harness::shared().device,
+        ao_tex,
+    );
 
     let camera = cam();
     let lit_px = camera
@@ -434,7 +459,10 @@ fn unwired_ao_mask_stays_inert_color_output_matches_within_epsilon() {
 
     let unwired_json = scene_json(false, false);
     let (ao_bytes, aw, ah, unwired_color) = render_and_read(&unwired_json, 2);
-    assert!(ao_bytes.is_empty() && aw == 0 && ah == 0, "ao_mask must not be dumped when unwired");
+    assert!(
+        ao_bytes.is_empty() && aw == 0 && ah == 0,
+        "ao_mask must not be dumped when unwired"
+    );
 
     let camera = cam();
     let probes = [
@@ -445,7 +473,11 @@ fn unwired_ao_mask_stays_inert_color_output_matches_within_epsilon() {
 
     for (name, world) in probes {
         let px = camera
-            .project_to_pixel(world, manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH, manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT)
+            .project_to_pixel(
+                world,
+                manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH,
+                manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT,
+            )
             .unwrap_or_else(|| panic!("{name} probe point must project in front of the camera"));
         let cx = px.px.round() as i32;
         let cy = px.py.round() as i32;
@@ -454,20 +486,39 @@ fn unwired_ao_mask_stays_inert_color_output_matches_within_epsilon() {
             for dx in -RADIUS..=RADIUS {
                 let x = cx + dx;
                 let y = cy + dy;
-                if x < 0 || y < 0 || x >= manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH as i32 || y >= manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT as i32 {
+                if x < 0
+                    || y < 0
+                    || x >= manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH as i32
+                    || y >= manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT as i32
+                {
                     continue;
                 }
-                let idx = ((y as u32 * manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH + x as u32) * 8) as usize;
+                let idx = ((y as u32 * manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH
+                    + x as u32)
+                    * 8) as usize;
                 for c in 0..4 {
-                    let a = f16::from_le_bytes([wired_color[idx + c * 2], wired_color[idx + c * 2 + 1]]).to_f32();
-                    let b =
-                        f16::from_le_bytes([unwired_color[idx + c * 2], unwired_color[idx + c * 2 + 1]]).to_f32();
-                    assert!(a.is_finite() && b.is_finite(), "{name} region: non-finite color channel");
+                    let a = f16::from_le_bytes([
+                        wired_color[idx + c * 2],
+                        wired_color[idx + c * 2 + 1],
+                    ])
+                    .to_f32();
+                    let b = f16::from_le_bytes([
+                        unwired_color[idx + c * 2],
+                        unwired_color[idx + c * 2 + 1],
+                    ])
+                    .to_f32();
+                    assert!(
+                        a.is_finite() && b.is_finite(),
+                        "{name} region: non-finite color channel"
+                    );
                     max_delta = max_delta.max((a - b).abs());
                 }
             }
         }
-        eprintln!("{name} region ({:.0},{:.0}): max color delta = {max_delta:.6}", px.px, px.py);
+        eprintln!(
+            "{name} region ({:.0},{:.0}): max color delta = {max_delta:.6}",
+            px.px, px.py
+        );
         assert!(
             max_delta < COLOR_EPS,
             "{name} region ({:.0},{:.0}): color delta {max_delta:.6} exceeds epsilon {COLOR_EPS} — \
@@ -628,7 +679,16 @@ fn ao_group_scene_json(rt_enabled: bool) -> String {
 }
 
 fn ao_group_cam() -> Camera {
-    Camera::orbit_perspective(AO_ORBIT, AO_TILT, AO_DISTANCE, AO_FOV_Y, 0.0, 0.0, AO_NEAR, AO_FAR)
+    Camera::orbit_perspective(
+        AO_ORBIT,
+        AO_TILT,
+        AO_DISTANCE,
+        AO_FOV_Y,
+        0.0,
+        0.0,
+        AO_NEAR,
+        AO_FAR,
+    )
 }
 
 /// Render `json` for `frames` committed calls, returning `(group_input,
@@ -671,7 +731,12 @@ fn render_ao_group(json: &str, frames: i64) -> (Vec<u8>, Vec<u8>, u32, u32) {
         let mut enc = h.device.create_encoder("render-scene-ao-group-enc");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-            runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+            runtime.render(
+                &mut gpu,
+                &target.texture,
+                &ctx,
+                &manifold_core::params::ParamManifest::default(),
+            );
         }
         enc.commit_and_wait_completed();
     }
@@ -684,7 +749,10 @@ fn render_ao_group(json: &str, frames: i64) -> (Vec<u8>, Vec<u8>, u32, u32) {
             .unwrap_or_else(|| {
                 panic!(
                     "no dumped `{port}` output on node `{node}` — dumped ports: {:?}",
-                    dumped.iter().map(|(n, p, _, _)| format!("{n}.{p}")).collect::<Vec<_>>()
+                    dumped
+                        .iter()
+                        .map(|(n, p, _, _)| format!("{n}.{p}"))
+                        .collect::<Vec<_>>()
                 )
             });
         (h.readback(tex), tex.width, tex.height)
@@ -728,9 +796,14 @@ fn ao_region_probe(
             }
             let idx = ((y as u32 * w + x as u32) * 8) as usize;
             for c in 0..4 {
-                let a = f16::from_le_bytes([group_in[idx + c * 2], group_in[idx + c * 2 + 1]]).to_f32();
-                let b = f16::from_le_bytes([group_out[idx + c * 2], group_out[idx + c * 2 + 1]]).to_f32();
-                assert!(a.is_finite() && b.is_finite(), "non-finite AO-group channel at ({x},{y})");
+                let a =
+                    f16::from_le_bytes([group_in[idx + c * 2], group_in[idx + c * 2 + 1]]).to_f32();
+                let b = f16::from_le_bytes([group_out[idx + c * 2], group_out[idx + c * 2 + 1]])
+                    .to_f32();
+                assert!(
+                    a.is_finite() && b.is_finite(),
+                    "non-finite AO-group channel at ({x},{y})"
+                );
                 max_delta = max_delta.max((a - b).abs());
             }
             luma_in_sum += luma_rgba16f(group_in, idx) as f64;
@@ -784,7 +857,12 @@ fn rt_ready_makes_ao_group_identity_on_color() {
         let mut enc = h.device.create_encoder("ao-group-rt-identity-enc");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-            runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+            runtime.render(
+                &mut gpu,
+                &target.texture,
+                &ctx,
+                &manifold_core::params::ParamManifest::default(),
+            );
         }
         enc.commit_and_wait_completed();
     }
@@ -806,8 +884,15 @@ fn rt_ready_makes_ao_group_identity_on_color() {
         .expect("lit cube base must project in front of the camera");
 
     const AO_RADIUS_PX: i32 = 6;
-    let (max_delta, luma_in, luma_out) =
-        ao_region_probe(&group_in, &group_out, w, ht, lit_px.px, lit_px.py, AO_RADIUS_PX);
+    let (max_delta, luma_in, luma_out) = ao_region_probe(
+        &group_in,
+        &group_out,
+        w,
+        ht,
+        lit_px.px,
+        lit_px.py,
+        AO_RADIUS_PX,
+    );
 
     eprintln!(
         "[I-AM2] RT-on AO-group identity check at lit-cube-base region ({:.0},{:.0}): \
@@ -847,10 +932,24 @@ fn baked_look_passes_through_lit_neighbour_darkens() {
         .expect("baked-look cube base must project in front of the camera");
 
     const AO_RADIUS_PX: i32 = 6;
-    let (lit_delta, lit_luma_in, lit_luma_out) =
-        ao_region_probe(&group_in, &group_out, w, h, lit_px.px, lit_px.py, AO_RADIUS_PX);
-    let (baked_delta, baked_luma_in, baked_luma_out) =
-        ao_region_probe(&group_in, &group_out, w, h, baked_px.px, baked_px.py, AO_RADIUS_PX);
+    let (lit_delta, lit_luma_in, lit_luma_out) = ao_region_probe(
+        &group_in,
+        &group_out,
+        w,
+        h,
+        lit_px.px,
+        lit_px.py,
+        AO_RADIUS_PX,
+    );
+    let (baked_delta, baked_luma_in, baked_luma_out) = ao_region_probe(
+        &group_in,
+        &group_out,
+        w,
+        h,
+        baked_px.px,
+        baked_px.py,
+        AO_RADIUS_PX,
+    );
 
     let lit_darkening = (lit_luma_in - lit_luma_out) / lit_luma_in.max(1e-9);
     eprintln!(

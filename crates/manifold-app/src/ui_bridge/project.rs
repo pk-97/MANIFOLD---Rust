@@ -48,7 +48,9 @@ pub(super) fn dispatch_project(
             DispatchResult::handled()
         }
         ProjectAction::ToggleExportGizmos => {
-            let cmd = manifold_editing::commands::settings::ToggleExportGizmosCommand::new(project.settings.export_gizmos);
+            let cmd = manifold_editing::commands::settings::ToggleExportGizmosCommand::new(
+                project.settings.export_gizmos,
+            );
             let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
             project.execute(boxed);
             DispatchResult::handled()
@@ -70,7 +72,10 @@ pub(super) fn dispatch_project(
             );
             DispatchResult::handled()
         }
-        ProjectAction::ExportVideo | ProjectAction::CancelExport | ProjectAction::ExportFrame | ProjectAction::ExportXml => {
+        ProjectAction::ExportVideo
+        | ProjectAction::CancelExport
+        | ProjectAction::ExportFrame
+        | ProjectAction::ExportXml => {
             log::info!("Export action: {:?} (not yet wired)", action);
             DispatchResult::handled()
         }
@@ -84,8 +89,7 @@ pub(super) fn dispatch_project(
                     layer_id, old_note, *note,
                 );
                 {
-                    let boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(cmd);
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                     project.execute(boxed);
                 }
             }
@@ -101,8 +105,7 @@ pub(super) fn dispatch_project(
                     *channel,
                 );
                 {
-                    let boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(cmd);
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                     project.execute(boxed);
                 }
             }
@@ -169,7 +172,8 @@ pub(super) fn dispatch_project(
         ProjectAction::SetSimRate(rate) => {
             if project.settings.physics.sim_rate != *rate {
                 let command = manifold_editing::commands::settings::ChangeSimRateCommand::new(
-                    project.settings.physics.sim_rate, *rate,
+                    project.settings.physics.sim_rate,
+                    *rate,
                 );
                 ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(command)));
             }
@@ -200,8 +204,7 @@ pub(super) fn dispatch_project(
                     *new_settings,
                 );
                 {
-                    let boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(cmd);
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                     project.execute(boxed);
                 }
             }
@@ -239,15 +242,33 @@ pub(super) fn dispatch_project(
         // built here from the document and sent as one undo step.
         // An entry with no fields is "Mesh from file": the native picker, then
         // the same import a drop runs, into this layer.
-        ProjectAction::SceneAdd { layer_id, entry, parent, selected } => {
-            if manifold_core::scene_schema::add_entry(entry).is_some_and(|found| found.fields.is_none()) {
-                let Some(path) = crate::file_dialogs::pick_file(crate::file_dialogs::DialogAction::ImportModel, dialogs, user_prefs) else {
+        ProjectAction::SceneAdd {
+            layer_id,
+            entry,
+            parent,
+            selected,
+        } => {
+            if manifold_core::scene_schema::add_entry(entry)
+                .is_some_and(|found| found.fields.is_none())
+            {
+                let Some(path) = crate::file_dialogs::pick_file(
+                    crate::file_dialogs::DialogAction::ImportModel,
+                    dialogs,
+                    user_prefs,
+                ) else {
                     return DispatchResult::handled();
                 };
-                let target = crate::import_worker::ImportTarget::Into { layer: layer_id.clone(), parent: parent.clone() };
-                return DispatchResult { import_model: Some((path, target)), ..DispatchResult::handled() };
+                let target = crate::import_worker::ImportTarget::Into {
+                    layer: layer_id.clone(),
+                    parent: parent.clone(),
+                };
+                return DispatchResult {
+                    import_model: Some((path, target)),
+                    ..DispatchResult::handled()
+                };
             }
-            let built = crate::scene_edit::add(project, layer_id, entry, parent.as_ref(), selected).map(Some);
+            let built = crate::scene_edit::add(project, layer_id, entry, parent.as_ref(), selected)
+                .map(Some);
             send_scene_edit(content_tx, layer_id, built)
         }
         ProjectAction::SceneRemove(layer_id, items) => {
@@ -255,7 +276,8 @@ pub(super) fn dispatch_project(
             send_scene_edit(content_tx, layer_id, built)
         }
         ProjectAction::SceneDuplicate(layer_id, item) => {
-            let built = crate::scene_edit::duplicate(project, layer_id, std::slice::from_ref(item)).map(Some);
+            let built = crate::scene_edit::duplicate(project, layer_id, std::slice::from_ref(item))
+                .map(Some);
             send_scene_edit(content_tx, layer_id, built)
         }
         ProjectAction::SceneGroup(layer_id, items) => {
@@ -266,23 +288,49 @@ pub(super) fn dispatch_project(
             let built = crate::scene_edit::ungroup(project, layer_id, group).map(Some);
             send_scene_edit(content_tx, layer_id, built)
         }
-        ProjectAction::SceneFieldSet { layer_id, item, field, pick } => {
+        ProjectAction::SceneFieldSet {
+            layer_id,
+            item,
+            field,
+            pick,
+        } => {
             let built = crate::scene_edit::set_field(project, layer_id, item, field, pick);
             send_scene_edit(content_tx, layer_id, built)
         }
-        ProjectAction::SceneMaterialFeature { layer_id, material, feature, add } => {
-            let built = crate::scene_edit::material_feature(project, layer_id, material, *feature, *add);
+        ProjectAction::SceneMaterialFeature {
+            layer_id,
+            material,
+            feature,
+            add,
+        } => {
+            let built =
+                crate::scene_edit::material_feature(project, layer_id, material, *feature, *add);
             send_scene_edit(content_tx, layer_id, built)
         }
         ProjectAction::SceneChainMove { layer_id, item, to } => {
             let built = crate::scene_edit::chain_move(project, layer_id, item, *to).map(Some);
             send_scene_edit(content_tx, layer_id, built)
         }
-        ProjectAction::SceneTreeMove { layer_id, item, parent, before } => {
-            let built = crate::scene_tree_move::tree_move(project, layer_id, item, parent.as_ref(), before.as_ref());
+        ProjectAction::SceneTreeMove {
+            layer_id,
+            item,
+            parent,
+            before,
+        } => {
+            let built = crate::scene_tree_move::tree_move(
+                project,
+                layer_id,
+                item,
+                parent.as_ref(),
+                before.as_ref(),
+            );
             send_scene_edit(content_tx, layer_id, built)
         }
-        ProjectAction::SceneMaterialLook { layer_id, material, look } => {
+        ProjectAction::SceneMaterialLook {
+            layer_id,
+            material,
+            look,
+        } => {
             let built = crate::scene_edit::material_look(project, layer_id, material, *look);
             send_scene_edit(content_tx, layer_id, built)
         }
@@ -306,7 +354,10 @@ pub(super) fn dispatch_project(
         ProjectAction::SceneNew(layer_id) => {
             ContentCommand::send(
                 content_tx,
-                ContentCommand::ChangeGeneratorType { layer_id: layer_id.clone(), new_type: PresetTypeId::SCENE },
+                ContentCommand::ChangeGeneratorType {
+                    layer_id: layer_id.clone(),
+                    new_type: PresetTypeId::SCENE,
+                },
             );
             DispatchResult::handled()
         }
@@ -323,8 +374,14 @@ pub(super) fn dispatch_project(
             ) else {
                 return DispatchResult::handled();
             };
-            let target = crate::import_worker::ImportTarget::Swap { layer: layer_id.clone(), item: item.clone() };
-            DispatchResult { import_model: Some((path, target)), ..DispatchResult::handled() }
+            let target = crate::import_worker::ImportTarget::Swap {
+                layer: layer_id.clone(),
+                item: item.clone(),
+            };
+            DispatchResult {
+                import_model: Some((path, target)),
+                ..DispatchResult::handled()
+            }
         }
         // BUG-184: the automation-lane right-click context menu's two items
         // — `ClearLaneCommand`/`RemoveLaneCommand` had zero UI callers before
@@ -424,9 +481,14 @@ pub(crate) fn send_scene_edit(
         Ok(Some(edit)) => match edit.select {
             Some(item) => ContentCommand::send(
                 content_tx,
-                ContentCommand::ExecuteSelecting(edit.command, crate::edit_selection::SelectAfterEdit::NewItem(layer_id.clone(), item)),
+                ContentCommand::ExecuteSelecting(
+                    edit.command,
+                    crate::edit_selection::SelectAfterEdit::NewItem(layer_id.clone(), item),
+                ),
             ),
-            None => ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(edit.command)),
+            None => {
+                ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(edit.command))
+            }
         },
         Ok(None) => {}
         Err(reason) => ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(reason)),

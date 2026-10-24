@@ -8,12 +8,12 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_water_liquid::float_param;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::freeze::classify::FusedOutputCapacity;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_water_liquid::float_param;
 use manifold_water_liquid::whitewater::WhitewaterParticle;
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`,
@@ -68,15 +68,30 @@ manifold_node_engine::primitive! {
 }
 
 impl Primitive for AgeWhitewater {
-    fn array_output_capacity(&self, port: &str, _params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
-        (port == "out").then(|| inputs.iter().find(|(name, _)| *name == "pool").map(|&(_, n)| n)).flatten()
+    fn array_output_capacity(
+        &self,
+        port: &str,
+        _params: &ParamValues,
+        inputs: &[(&str, u32)],
+    ) -> Option<u32> {
+        (port == "out")
+            .then(|| {
+                inputs
+                    .iter()
+                    .find(|(name, _)| *name == "pool")
+                    .map(|&(_, n)| n)
+            })
+            .flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(pool), Some(out)) = (ctx.inputs.array("pool"), ctx.outputs.array("out")) else { return };
-        let count = (pool.size.min(out.size) / std::mem::size_of::<WhitewaterParticle>() as u64) as u32;
+        let (Some(pool), Some(out)) = (ctx.inputs.array("pool"), ctx.outputs.array("out")) else {
+            return;
+        };
+        let count =
+            (pool.size.min(out.size) / std::mem::size_of::<WhitewaterParticle>() as u64) as u32;
         if count == 0 {
             return;
         }
@@ -94,9 +109,20 @@ impl Primitive for AgeWhitewater {
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: pool, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: pool,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: out,
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256), 1, 1],
             "node.age_whitewater",

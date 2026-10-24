@@ -10,14 +10,20 @@
 /// keeps compounding across frames instead of freezing after frame 1.
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod bug_216_gpu_tests {
-use manifold_core::{Beats, Seconds};
     use half::f16;
-    
+    use manifold_core::{Beats, Seconds};
+
     use manifold_gpu::GpuTextureFormat;
 
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, scene::boundary_nodes::Source, state_store::StateStore, exec::execution_plan::compile};
     use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::{
+        exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+        exec::execution_plan::ExecutionPlan, exec::execution_plan::ResourceId,
+        exec::execution_plan::compile, exec::metal_backend::MetalBackend, graph::Graph,
+        persistence::PrimitiveRegistry, scene::boundary_nodes::FinalOutput,
+        scene::boundary_nodes::Source, state_store::StateStore,
+    };
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -90,8 +96,11 @@ use manifold_core::{Beats, Seconds};
         let mut g = Graph::new();
         let src = g.add_node(Box::new(Source::new()));
         let mix = g.add_node(registry.construct("node.mix").expect("node.mix registered"));
-        let fb = g
-            .add_node(registry.construct("node.feedback").expect("node.feedback registered"));
+        let fb = g.add_node(
+            registry
+                .construct("node.feedback")
+                .expect("node.feedback registered"),
+        );
         let out = g.add_node(Box::new(FinalOutput::new()));
 
         g.connect((src, "out"), (mix, "a")).unwrap();
@@ -190,25 +199,26 @@ use manifold_core::{Beats, Seconds};
     }
 }
 
-mod tests { mod mesh_revision_tests {
-use manifold_core::Beats;
-use manifold_core::Seconds;
-use manifold_node_engine::testkit::mesh_revision::*;
-use manifold_node_engine::graph::Graph;
-use manifold_node_engine::exec::execution::*;
-use manifold_node_engine::exec::execution_plan::*;
-use manifold_node_engine::exec::effect_node::*;
-use manifold_node_engine::scene::mesh_change::*;
-use std::sync::{Arc, Mutex};
+mod tests {
+    mod mesh_revision_tests {
+        use manifold_core::Beats;
+        use manifold_core::Seconds;
+        use manifold_node_engine::exec::effect_node::*;
+        use manifold_node_engine::exec::execution::*;
+        use manifold_node_engine::exec::execution_plan::*;
+        use manifold_node_engine::graph::Graph;
+        use manifold_node_engine::scene::mesh_change::*;
+        use manifold_node_engine::testkit::mesh_revision::*;
+        use std::sync::{Arc, Mutex};
 
-fn frame_time() -> FrameTime {
-        FrameTime {
-            beats: Beats(0.0),
-            seconds: Seconds(0.0),
-            delta: Seconds(1.0 / 60.0),
-            frame_count: 0,
+        fn frame_time() -> FrameTime {
+            FrameTime {
+                beats: Beats(0.0),
+                seconds: Seconds(0.0),
+                delta: Seconds(1.0 / 60.0),
+                frame_count: 0,
+            }
         }
-    }
         /// P2 (BUG-e3p6.4, design §3.3) — fused/unfused parity. The chain is
         /// P2 (BUG-e3p6.4, design §3.3) — fused/unfused parity on a REAL
         /// fused mesh kernel. The chain is two coincident `ripple_mesh`
@@ -225,12 +235,14 @@ fn frame_time() -> FrameTime {
         /// on both paths — every actual write revises all three aspects.
         #[test]
         fn mesh_change_fused_rules_match_unfused() {
-            use manifold_node_engine::freeze::install::{FusedDef, fuse_canonical_def};
-            use manifold_node_engine::scene::mesh_change::{PreparedMeshRevisionRule, PreparedMeshRules};
-            use manifold_node_engine::persistence::EffectGraphDefExt;
-            use manifold_node_engine::persistence::PrimitiveRegistry;
             use manifold_core::NodeId;
             use manifold_core::effect_graph_def::EffectGraphDef;
+            use manifold_node_engine::freeze::install::{FusedDef, fuse_canonical_def};
+            use manifold_node_engine::persistence::EffectGraphDefExt;
+            use manifold_node_engine::persistence::PrimitiveRegistry;
+            use manifold_node_engine::scene::mesh_change::{
+                PreparedMeshRevisionRule, PreparedMeshRules,
+            };
 
             let json = r#"{
                 "version": 1, "name": "p2_fused_parity",
@@ -272,8 +284,10 @@ fn frame_time() -> FrameTime {
                 };
 
             // ── Path A: canonical def, empty sidecar (the unfused chain) ──
-            let mut graph_a =
-                def.clone().into_graph(&registry, &PreparedMeshRules::default()).unwrap();
+            let mut graph_a = def
+                .clone()
+                .into_graph(&registry, &PreparedMeshRules::default())
+                .unwrap();
             let _src_a = swap_source(&mut graph_a, &shared_rule(None));
             let r1_a = graph_a.instance_by_node_id(&NodeId::new("r1")).unwrap();
             let r2_a = graph_a.instance_by_node_id(&NodeId::new("r2")).unwrap();
@@ -282,12 +296,15 @@ fn frame_time() -> FrameTime {
                     &mut graph_a.get_node_mut(id).unwrap().node,
                     Box::new(MeshNode::sink()),
                 );
-                graph_a.get_node_mut(id).unwrap().node = Box::new(DeclaredPrimitiveProbe::new(inner));
+                graph_a.get_node_mut(id).unwrap().node =
+                    Box::new(DeclaredPrimitiveProbe::new(inner));
             }
             let plan_a = compile(&graph_a).unwrap();
             let res_r2 = out_res(&plan_a, r2_a);
             // No declaration on ripple: the conservative Written/Written class.
-            let unfused_rule = plan_a.mesh_rule(res_r2).expect("r2 output compiles a mesh rule");
+            let unfused_rule = plan_a
+                .mesh_rule(res_r2)
+                .expect("r2 output compiles a mesh rule");
             assert!(
                 matches!(unfused_rule.topology, CompiledMeshRevisionRule::Written)
                     && matches!(unfused_rule.positions, CompiledMeshRevisionRule::Written),
@@ -295,8 +312,8 @@ fn frame_time() -> FrameTime {
             );
 
             // ── Path B: fuse the same def and install the sidecar ──
-            let fused = fuse_canonical_def(&def, &registry)
-                .expect("the ripple+ripple region must fuse");
+            let fused =
+                fuse_canonical_def(&def, &registry).expect("the ripple+ripple region must fuse");
             let fused_key = {
                 let doc = fused
                     .def
@@ -305,7 +322,9 @@ fn frame_time() -> FrameTime {
                     .find(|n| n.type_id == "node.wgsl_compute")
                     .expect("the fused def carries the fused kernel node");
                 if doc.node_id.is_empty() {
-                    doc.handle.clone().expect("fused node carries an id or handle")
+                    doc.handle
+                        .clone()
+                        .expect("fused node carries an id or handle")
                 } else {
                     doc.node_id.as_str().to_string()
                 }
@@ -314,20 +333,30 @@ fn frame_time() -> FrameTime {
             // declarations — no silent class change from fusion.
             {
                 let mut entries = fused.mesh_rules.values().flatten();
-                let rule = entries.next().expect("the fused node carries a mesh-rule sidecar");
+                let rule = entries
+                    .next()
+                    .expect("the fused node carries a mesh-rule sidecar");
                 assert!(
                     entries.next().is_none(),
                     "exactly one fused node carries mesh rules, got {:?}",
                     fused.mesh_rules
                 );
-                assert_eq!(rule.output, "dst", "single-output region emits dst, got {:?}", rule);
+                assert_eq!(
+                    rule.output, "dst",
+                    "single-output region emits dst, got {:?}",
+                    rule
+                );
                 assert!(
                     matches!(rule.topology, PreparedMeshRevisionRule::Written)
                         && matches!(rule.positions, PreparedMeshRevisionRule::Written),
                     "fused sidecar must compose to Written/Written, got {rule:?}"
                 );
             }
-            let FusedDef { def: fused_def, mesh_rules, .. } = fused;
+            let FusedDef {
+                def: fused_def,
+                mesh_rules,
+                ..
+            } = fused;
             let mut graph_b = fused_def.into_graph(&registry, &mesh_rules).unwrap();
             let _src_b = swap_source(&mut graph_b, &shared_rule(None));
             let fused_rt = graph_b
@@ -377,9 +406,14 @@ fn frame_time() -> FrameTime {
             let mut exec_a = Executor::with_mock();
             let mut exec_b = Executor::with_mock();
             let (first_a, first_b) = run_frame_pair(
-                &mut graph_a, &plan_a, &mut exec_a,
-                &mut graph_b, &plan_b, &mut exec_b,
-                res_r2, res_fused,
+                &mut graph_a,
+                &plan_a,
+                &mut exec_a,
+                &mut graph_b,
+                &plan_b,
+                &mut exec_b,
+                res_r2,
+                res_fused,
             );
             assert!(
                 first_a.topology > 0 && first_b.topology > 0,
@@ -388,14 +422,16 @@ fn frame_time() -> FrameTime {
             let (mut prev_a, mut prev_b) = (first_a, first_b);
             for _ in 1..4 {
                 let (next_a, next_b) = run_frame_pair(
-                    &mut graph_a, &plan_a, &mut exec_a,
-                    &mut graph_b, &plan_b, &mut exec_b,
-                    res_r2, res_fused,
+                    &mut graph_a,
+                    &plan_a,
+                    &mut exec_a,
+                    &mut graph_b,
+                    &plan_b,
+                    &mut exec_b,
+                    res_r2,
+                    res_fused,
                 );
-                for (side, next, prev) in [
-                    ("unfused", next_a, prev_a),
-                    ("fused", next_b, prev_b),
-                ] {
+                for (side, next, prev) in [("unfused", next_a, prev_a), ("fused", next_b, prev_b)] {
                     assert!(
                         next.topology > prev.topology
                             && next.positions > prev.positions
@@ -407,8 +443,5 @@ fn frame_time() -> FrameTime {
                 (prev_a, prev_b) = (next_a, next_b);
             }
         }
-
-
-
-
-} }
+    }
+}

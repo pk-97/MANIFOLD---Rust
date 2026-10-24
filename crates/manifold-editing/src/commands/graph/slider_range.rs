@@ -27,10 +27,19 @@ impl SetSliderRangeCommand {
         let range = range
             .map(|(a, b)| (a.min(b), a.max(b)))
             .filter(|(lo, hi)| lo.is_finite() && hi.is_finite() && hi > lo);
-        Self { target, param_id, range, previous: None }
+        Self {
+            target,
+            param_id,
+            range,
+            previous: None,
+        }
     }
 
-    fn write(&self, project: &mut Project, range: Option<(f32, f32)>) -> Option<Option<(f32, f32)>> {
+    fn write(
+        &self,
+        project: &mut Project,
+        range: Option<(f32, f32)>,
+    ) -> Option<Option<(f32, f32)>> {
         project
             .with_preset_graph_mut(&self.target, |host| {
                 host.params.get_mut(&self.param_id).map(|param| {
@@ -63,7 +72,11 @@ impl Command for SetSliderRangeCommand {
     }
 
     fn description(&self) -> &str {
-        if self.range.is_some() { "Set Slider Range" } else { "Reset Slider Range" }
+        if self.range.is_some() {
+            "Set Slider Range"
+        } else {
+            "Reset Slider Range"
+        }
     }
 }
 
@@ -73,26 +86,41 @@ mod tests {
     use super::*;
 
     fn param(project: &Project, target: &GraphTarget) -> manifold_core::params::Param {
-        let GraphTarget::Generator(layer) = target else { unreachable!() };
+        let GraphTarget::Generator(layer) = target else {
+            unreachable!()
+        };
         let (_, layer) = project.timeline.find_layer_by_id(layer.as_str()).unwrap();
-        layer.gen_params().unwrap().params.get("position_x").unwrap().clone()
+        layer
+            .gen_params()
+            .unwrap()
+            .params
+            .get("position_x")
+            .unwrap()
+            .clone()
     }
 
     #[test]
     fn set_slider_range_undo_redo() {
         let (mut project, layer) = project_with_one_generator_layer();
         let target = GraphTarget::Generator(layer);
-        project.with_preset_graph_mut(&target, |host| host.params.push(slot("position_x", 0.5, true)));
+        project.with_preset_graph_mut(&target, |host| {
+            host.params.push(slot("position_x", 0.5, true))
+        });
         let declared = {
             let p = param(&project, &target);
             (p.spec.min, p.spec.max)
         };
 
-        let mut set = SetSliderRangeCommand::new(target.clone(), "position_x".into(), Some((-1.0, 1.0)));
+        let mut set =
+            SetSliderRangeCommand::new(target.clone(), "position_x".into(), Some((-1.0, 1.0)));
         set.execute(&mut project);
         let p = param(&project, &target);
         assert_eq!(p.slider_span(), (-1.0, 1.0));
-        assert_eq!((p.spec.min, p.spec.max), declared, "the declared range never moves");
+        assert_eq!(
+            (p.spec.min, p.spec.max),
+            declared,
+            "the declared range never moves"
+        );
 
         let mut reset = SetSliderRangeCommand::new(target.clone(), "position_x".into(), None);
         reset.execute(&mut project);
@@ -103,14 +131,28 @@ mod tests {
         set.undo(&mut project);
         assert_eq!(param(&project, &target).choices.slider, None);
         set.execute(&mut project);
-        assert_eq!(param(&project, &target).choices.slider, Some((-1.0, 1.0)), "redo");
+        assert_eq!(
+            param(&project, &target).choices.slider,
+            Some((-1.0, 1.0)),
+            "redo"
+        );
 
-        let mut same = SetSliderRangeCommand::new(target.clone(), "position_x".into(), Some(declared));
+        let mut same =
+            SetSliderRangeCommand::new(target.clone(), "position_x".into(), Some(declared));
         same.execute(&mut project);
-        assert_eq!(param(&project, &target).choices.slider, None, "the declared range is no choice");
-        let mut inverted = SetSliderRangeCommand::new(target.clone(), "position_x".into(), Some((2.0, -2.0)));
+        assert_eq!(
+            param(&project, &target).choices.slider,
+            None,
+            "the declared range is no choice"
+        );
+        let mut inverted =
+            SetSliderRangeCommand::new(target.clone(), "position_x".into(), Some((2.0, -2.0)));
         inverted.execute(&mut project);
-        assert_eq!(param(&project, &target).choices.slider, Some((-2.0, 2.0)), "ends are swapped");
+        assert_eq!(
+            param(&project, &target).choices.slider,
+            Some((-2.0, 2.0)),
+            "ends are swapped"
+        );
 
         use manifold_core::change::Part;
         assert!(set.touches().contains(Part::Effects));

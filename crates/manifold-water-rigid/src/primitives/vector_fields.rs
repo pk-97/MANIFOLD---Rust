@@ -354,14 +354,24 @@ manifold_node_engine::primitive! {
 impl Primitive for TurbulenceVectorField {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let size = ctx.scalar_or_param("size", 2.0);
-        let drift = [ctx.scalar_or_param("drift_x", 1.0), ctx.scalar_or_param("drift_y", 0.0), ctx.scalar_or_param("drift_z", 0.0)];
+        let drift = [
+            ctx.scalar_or_param("drift_x", 1.0),
+            ctx.scalar_or_param("drift_y", 0.0),
+            ctx.scalar_or_param("drift_z", 0.0),
+        ];
         let speed = ctx.scalar_or_param("drift_speed", 0.0);
         let seed = ctx.scalar_or_param("seed", 0.0).round().max(0.0) as u32;
         let length = drift.iter().map(|c| c * c).sum::<f32>().sqrt();
         // The drift travelled so far, in f64 and wrapped to the noise period,
         // so the gusts keep their precision through a long set.
-        let velocity = if length > 0.0 { drift.map(|c| f64::from(c / length) * f64::from(speed)) } else { [0.0; 3] };
-        let offset = self.drift.advance(ctx.played(), ctx.sim_step.replay_origin, velocity);
+        let velocity = if length > 0.0 {
+            drift.map(|c| f64::from(c / length) * f64::from(speed))
+        } else {
+            [0.0; 3]
+        };
+        let offset = self
+            .drift
+            .advance(ctx.played(), ctx.sim_step.replay_origin, velocity);
         // A size that is not positive is refused before the offset is read.
         let field = FieldValue::turbulence(size, TurbulenceField::wrap_offset(size, offset), seed);
         write_result(ctx, field, "turbulence vector field");
@@ -410,16 +420,16 @@ impl Primitive for WindField {
 
 #[cfg(test)]
 mod tests {
-    use manifold_node_engine::exec::cpu_values::CpuWireWrites;
     use super::*;
+    use manifold_node_engine::exec::cpu_values::CpuWireWrites;
 
-    use manifold_node_engine::exec::backend::Backend;
+    use manifold_core::{Beats, Seconds};
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs};
+    use manifold_node_engine::exec::backend::Backend;
     use manifold_node_engine::exec::effect_node::{EffectNodeContext, FrameTime, ParamValues};
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::ports::{PortType, ScalarType};
-    use manifold_node_engine::{exec::backend::MockBackend, bindings::Slot};
-    use manifold_core::{Beats, Seconds};
+    use manifold_node_engine::{bindings::Slot, exec::backend::MockBackend};
     use manifold_physics::VectorField;
 
     fn frame_time() -> FrameTime {
@@ -493,7 +503,11 @@ mod tests {
             outputs_pending = context.outputs_pending;
         }
         vector_field_scratch.commit(backend.cpu_values_mut());
-        (backend.cpu_values().get::<FieldValue>(output_slot), outputs_pending, errors)
+        (
+            backend.cpu_values().get::<FieldValue>(output_slot),
+            outputs_pending,
+            errors,
+        )
     }
 
     #[test]
@@ -564,10 +578,16 @@ mod tests {
         let mut params = ParamValues::default();
         params.insert(Cow::Borrowed("radius"), ParamValue::Float(1.0));
         params.insert(Cow::Borrowed("curve"), ParamValue::Enum(1));
-        let (inverse, _, errors) = run_node(&mut RadialVectorField::new(), params.clone(), &[], &[]);
+        let (inverse, _, errors) =
+            run_node(&mut RadialVectorField::new(), params.clone(), &[], &[]);
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(inverse.unwrap().sample([2.0, 0.0, 0.0]), [0.5, 0.0, 0.0]);
-        let (edge, _, _) = run_node(&mut RadialVectorField::new(), params, &[], &[("curve", 0.0)]);
+        let (edge, _, _) = run_node(
+            &mut RadialVectorField::new(),
+            params,
+            &[],
+            &[("curve", 0.0)],
+        );
         assert_eq!(edge.unwrap().sample([2.0, 0.0, 0.0]), [0.0; 3]);
     }
 
@@ -576,22 +596,40 @@ mod tests {
     #[test]
     fn wind_field_carries_air_at_its_drag_rate() {
         let velocity = FieldValue::uniform([3.0, 0.0, 0.0]).unwrap();
-        let (wind, pending, errors) =
-            run_node(&mut WindField::new(), ParamValues::default(), &[("velocity", velocity.clone())], &[("drag_rate", 2.0)]);
+        let (wind, pending, errors) = run_node(
+            &mut WindField::new(),
+            ParamValues::default(),
+            &[("velocity", velocity.clone())],
+            &[("drag_rate", 2.0)],
+        );
         assert!(!pending, "{errors:?}");
         let sample = wind.unwrap().sample_force([0.0; 3]);
-        assert_eq!((sample.push, sample.drag, sample.drag_wind), ([0.0; 3], 2.0, [6.0, 0.0, 0.0]));
-        let (_, pending, errors) =
-            run_node(&mut WindField::new(), ParamValues::default(), &[("velocity", velocity)], &[("drag_rate", -1.0)]);
+        assert_eq!(
+            (sample.push, sample.drag, sample.drag_wind),
+            ([0.0; 3], 2.0, [6.0, 0.0, 0.0])
+        );
+        let (_, pending, errors) = run_node(
+            &mut WindField::new(),
+            ParamValues::default(),
+            &[("velocity", velocity)],
+            &[("drag_rate", -1.0)],
+        );
         assert!(pending && errors.len() == 1);
     }
 
     #[test]
     fn turbulence_field_is_a_unit_scale_swirl() {
-        let (field, pending, errors) =
-            run_node(&mut TurbulenceVectorField::new(), ParamValues::default(), &[], &[("size", 3.0), ("seed", 2.0)]);
+        let (field, pending, errors) = run_node(
+            &mut TurbulenceVectorField::new(),
+            ParamValues::default(),
+            &[],
+            &[("size", 3.0), ("seed", 2.0)],
+        );
         assert!(!pending, "{errors:?}");
         let expected = manifold_physics::TurbulenceField::new(3.0, [0.0; 3], 2).unwrap();
-        assert_eq!(field.unwrap().sample([0.4, 1.1, -0.7]), expected.sample([0.4, 1.1, -0.7]));
+        assert_eq!(
+            field.unwrap().sample([0.4, 1.1, -0.7]),
+            expected.sample([0.4, 1.1, -0.7])
+        );
     }
 }

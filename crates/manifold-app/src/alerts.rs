@@ -52,7 +52,9 @@ pub(crate) fn save_changes(project_name: &str) -> SaveChoice {
     const DONT_SAVE: &str = "Don't Save";
     const CANCEL: &str = "Cancel";
     let answer = rfd::MessageDialog::new()
-        .set_title(format!("Do you want to save the changes to \u{201c}{project_name}\u{201d}?"))
+        .set_title(format!(
+            "Do you want to save the changes to \u{201c}{project_name}\u{201d}?"
+        ))
         .set_description("Your changes will be lost if you don't save them.")
         .set_buttons(rfd::MessageButtons::YesNoCancelCustom(
             SAVE.into(),

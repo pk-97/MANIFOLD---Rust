@@ -20,8 +20,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::{
     GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuFilterMode, GpuLoadAction,
-    GpuRenderPipeline, GpuSampler, GpuSamplerDesc, GpuTexture, GpuTextureDesc,
-    GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+    GpuRenderPipeline, GpuSampler, GpuSamplerDesc, GpuTexture, GpuTextureDesc, GpuTextureDimension,
+    GpuTextureFormat, GpuTextureUsage,
 };
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
@@ -70,8 +70,12 @@ fn uv_to_clip(x: f32, y: f32) -> (f32, f32) {
 
 fn push_glyph(
     quads: &mut Vec<GlyphQuad>,
-    x0: f32, y0: f32, x1: f32, y1: f32,
-    char_code: f32, alpha: f32,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    char_code: f32,
+    alpha: f32,
 ) {
     if quads.len() >= MAX_QUADS {
         return;
@@ -88,8 +92,13 @@ fn push_glyph(
 
 fn push_digits_3(
     quads: &mut Vec<GlyphQuad>,
-    value: f32, x: f32, y: f32,
-    glyph_w: f32, glyph_h: f32, digit_w: f32, alpha: f32,
+    value: f32,
+    x: f32,
+    y: f32,
+    glyph_w: f32,
+    glyph_h: f32,
+    digit_w: f32,
+    alpha: f32,
 ) {
     let v = value.floor().clamp(0.0, 999.0);
     let h = (v / 100.0).floor();
@@ -207,27 +216,69 @@ fn create_font_atlas(device: &manifold_gpu::GpuDevice) -> GpuTexture {
     let tex_h = ROWS * GH;
 
     let glyphs: &[&[&str]] = &[
-        &[".###.", "#...#", "#..##", "#.#.#", "##..#", "#...#", ".###."], // 0
-        &["..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###."], // 1
-        &[".###.", "#...#", "....#", "..##.", ".#...", "#....", "#####"], // 2
-        &[".###.", "#...#", "....#", "..##.", "....#", "#...#", ".###."], // 3
-        &["...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#."], // 4
-        &["#####", "#....", "####.", "....#", "....#", "#...#", ".###."], // 5
-        &[".###.", "#....", "#....", "####.", "#...#", "#...#", ".###."], // 6
-        &["#####", "....#", "...#.", "..#..", ".#...", ".#...", ".#..."], // 7
-        &[".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."], // 8
-        &[".###.", "#...#", "#...#", ".####", "....#", "...#.", ".##.."], // 9
-        &[".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"], // A
-        &["####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."], // B
-        &[".###.", "#...#", "#....", "#....", "#....", "#...#", ".###."], // C
-        &["####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."], // D
-        &["#####", "#....", "#....", "####.", "#....", "#....", "#####"], // E
-        &["#####", "#....", "#....", "####.", "#....", "#....", "#...."], // F
-        &["#...#", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "#...#"], // X (16)
-        &["#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."], // Y (17)
-        &[".....", ".....", ".....", ".....", ".....", ".....", "..#.."], // . (18)
-        &[".....", "..#..", "..#..", ".....", "..#..", "..#..", "....."], // : (19)
-        &["##..#", "##.#.", "..#..", "..#..", "..#..", ".#.##", "#..##"], // % (20)
+        &[
+            ".###.", "#...#", "#..##", "#.#.#", "##..#", "#...#", ".###.",
+        ], // 0
+        &[
+            "..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###.",
+        ], // 1
+        &[
+            ".###.", "#...#", "....#", "..##.", ".#...", "#....", "#####",
+        ], // 2
+        &[
+            ".###.", "#...#", "....#", "..##.", "....#", "#...#", ".###.",
+        ], // 3
+        &[
+            "...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#.",
+        ], // 4
+        &[
+            "#####", "#....", "####.", "....#", "....#", "#...#", ".###.",
+        ], // 5
+        &[
+            ".###.", "#....", "#....", "####.", "#...#", "#...#", ".###.",
+        ], // 6
+        &[
+            "#####", "....#", "...#.", "..#..", ".#...", ".#...", ".#...",
+        ], // 7
+        &[
+            ".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###.",
+        ], // 8
+        &[
+            ".###.", "#...#", "#...#", ".####", "....#", "...#.", ".##..",
+        ], // 9
+        &[
+            ".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#",
+        ], // A
+        &[
+            "####.", "#...#", "#...#", "####.", "#...#", "#...#", "####.",
+        ], // B
+        &[
+            ".###.", "#...#", "#....", "#....", "#....", "#...#", ".###.",
+        ], // C
+        &[
+            "####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####.",
+        ], // D
+        &[
+            "#####", "#....", "#....", "####.", "#....", "#....", "#####",
+        ], // E
+        &[
+            "#####", "#....", "#....", "####.", "#....", "#....", "#....",
+        ], // F
+        &[
+            "#...#", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "#...#",
+        ], // X (16)
+        &[
+            "#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#..",
+        ], // Y (17)
+        &[
+            ".....", ".....", ".....", ".....", ".....", ".....", "..#..",
+        ], // . (18)
+        &[
+            ".....", "..#..", "..#..", ".....", "..#..", "..#..", ".....",
+        ], // : (19)
+        &[
+            "##..#", "##.#.", "..#..", "..#..", "..#..", ".#.##", "#..##",
+        ], // % (20)
     ];
 
     let mut pixels = vec![[0u8; 4]; tex_w * tex_h];
@@ -358,19 +409,27 @@ impl Primitive for RenderValueOverlay {
             _ => 0,
         };
 
-        let Some(in_tex) = ctx.inputs.texture_2d("in") else { return };
-        let Some(pos_buf) = ctx.inputs.array("positions") else { return };
-        let Some(out_tex) = ctx.outputs.texture_2d("out") else { return };
+        let Some(in_tex) = ctx.inputs.texture_2d("in") else {
+            return;
+        };
+        let Some(pos_buf) = ctx.inputs.array("positions") else {
+            return;
+        };
+        let Some(out_tex) = ctx.outputs.texture_2d("out") else {
+            return;
+        };
         let (w, h) = (out_tex.width, out_tex.height);
-        if w == 0 || h == 0 || label_count == 0 { return }
+        if w == 0 || h == 0 || label_count == 0 {
+            return;
+        }
 
         let item_size = 16u64;
         let pos_capacity = (pos_buf.size / item_size) as usize;
-        let pos_ptr = pos_buf.mapped_ptr()
+        let pos_ptr = pos_buf
+            .mapped_ptr()
             .expect("render_value_overlay: positions must be shared-memory");
-        let pos_floats: &[f32] = unsafe {
-            std::slice::from_raw_parts(pos_ptr as *const f32, pos_capacity * 4)
-        };
+        let pos_floats: &[f32] =
+            unsafe { std::slice::from_raw_parts(pos_ptr as *const f32, pos_capacity * 4) };
 
         let values_buf = ctx.inputs.array("values");
         let val_floats: Option<&[f32]> = values_buf.map(|vb| {
@@ -391,22 +450,26 @@ impl Primitive for RenderValueOverlay {
         let count = label_count.min(pos_capacity);
 
         for i in 0..count {
-            if self.quads.len() >= MAX_QUADS { break }
+            if self.quads.len() >= MAX_QUADS {
+                break;
+            }
             let px = pos_floats[i * 4];
             let py = pos_floats[i * 4 + 1];
             let pw = pos_floats[i * 4 + 2];
             let ph = pos_floats[i * 4 + 3];
-            if pw <= 0.0001 && ph <= 0.0001 { continue }
+            if pw <= 0.0001 && ph <= 0.0001 {
+                continue;
+            }
 
             // Anchor: select which corner / center of the (px, py, pw, ph)
             // rectangle the label's top-left text origin sits on. Static
             // offset_x / offset_y stack on top after anchor resolution.
             let (anchor_x, anchor_y) = match anchor_idx {
-                1 => (px + pw, py),            // TopRight
-                2 => (px, py + ph),            // BottomLeft
-                3 => (px + pw, py + ph),       // BottomRight
+                1 => (px + pw, py),                  // TopRight
+                2 => (px, py + ph),                  // BottomLeft
+                3 => (px + pw, py + ph),             // BottomRight
                 4 => (px + pw * 0.5, py + ph * 0.5), // Center
-                _ => (px, py),                  // TopLeft (default)
+                _ => (px, py),                       // TopLeft (default)
             };
             let lx = anchor_x + offset_x;
             let ly = anchor_y + offset_y;
@@ -414,17 +477,24 @@ impl Primitive for RenderValueOverlay {
             match format_idx {
                 0 => {
                     // Index: decimal 3-digit
-                    push_digits_3(&mut self.quads, i as f32, lx, ly,
-                        glyph_w, glyph_h, digit_w, 1.0);
+                    push_digits_3(
+                        &mut self.quads,
+                        i as f32,
+                        lx,
+                        ly,
+                        glyph_w,
+                        glyph_h,
+                        digit_w,
+                        1.0,
+                    );
                 }
                 1 => {
                     // Hex: "0X" + 2 hex digits
                     let hex_id = (i as f32 * 17.0 + 48.0).floor().clamp(0.0, 255.0);
                     let hi = (hex_id / 16.0).floor();
                     let lo = hex_id % 16.0;
-                    for &(ch, px_off) in &[
-                        (0.0_f32, 0.0_f32), (16.0, 6.0), (hi, 13.0), (lo, 19.0),
-                    ] {
+                    for &(ch, px_off) in &[(0.0_f32, 0.0_f32), (16.0, 6.0), (hi, 13.0), (lo, 19.0)]
+                    {
                         let gx = lx + px_off * digit_w;
                         push_glyph(&mut self.quads, gx, ly, gx + glyph_w, ly + glyph_h, ch, 1.0);
                     }
@@ -445,9 +515,13 @@ impl Primitive for RenderValueOverlay {
                     let y_t = ((y_val % 100.0) / 10.0).floor();
                     let y_o = y_val % 10.0;
                     for &(ch, px_off) in &[
-                        (x_h, 0.0_f32), (x_t, 6.0), (x_o, 12.0),
+                        (x_h, 0.0_f32),
+                        (x_t, 6.0),
+                        (x_o, 12.0),
                         (18.0, 17.0), // separator (period char code 18)
-                        (y_h, 22.0), (y_t, 28.0), (y_o, 34.0),
+                        (y_h, 22.0),
+                        (y_t, 28.0),
+                        (y_o, 34.0),
                     ] {
                         let gx = lx + px_off * digit_w;
                         push_glyph(&mut self.quads, gx, ly, gx + glyph_w, ly + glyph_h, ch, 1.0);
@@ -455,11 +529,17 @@ impl Primitive for RenderValueOverlay {
                 }
                 _ => {
                     // Float3: value × 1000, 3 digits
-                    let v = val_floats
-                        .and_then(|vf| vf.get(i).copied())
-                        .unwrap_or(0.0);
-                    push_digits_3(&mut self.quads, v * 1000.0, lx, ly,
-                        glyph_w, glyph_h, digit_w, 1.0);
+                    let v = val_floats.and_then(|vf| vf.get(i).copied()).unwrap_or(0.0);
+                    push_digits_3(
+                        &mut self.quads,
+                        v * 1000.0,
+                        lx,
+                        ly,
+                        glyph_w,
+                        glyph_h,
+                        digit_w,
+                        1.0,
+                    );
                 }
             }
         }
@@ -490,9 +570,13 @@ impl Primitive for RenderValueOverlay {
         gpu.copy_texture_to_texture(in_tex, out_tex, w, h);
 
         let quad_count = self.quads.len();
-        if quad_count == 0 { return }
+        if quad_count == 0 {
+            return;
+        }
 
-        let font_atlas = self.font_atlas.get_or_insert_with(|| create_font_atlas(gpu.device));
+        let font_atlas = self
+            .font_atlas
+            .get_or_insert_with(|| create_font_atlas(gpu.device));
         let point_sampler = self.font_sampler.get_or_insert_with(|| {
             gpu.device.create_sampler(&GpuSamplerDesc {
                 min_filter: GpuFilterMode::Nearest,
@@ -501,9 +585,8 @@ impl Primitive for RenderValueOverlay {
             })
         });
         let quad_buf = self.quad_buf.get_or_insert_with(|| {
-            gpu.device.create_buffer_shared(
-                (MAX_QUADS * std::mem::size_of::<GlyphQuad>()) as u64,
-            )
+            gpu.device
+                .create_buffer_shared((MAX_QUADS * std::mem::size_of::<GlyphQuad>()) as u64)
         });
 
         let quad_bytes = bytemuck::cast_slice(&self.quads[..quad_count]);
@@ -514,12 +597,28 @@ impl Primitive for RenderValueOverlay {
             pipeline,
             out_tex,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: quad_buf, offset: 0 },
-                GpuBinding::Texture { binding: 2, texture: font_atlas },
-                GpuBinding::Sampler { binding: 3, sampler: point_sampler },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: quad_buf,
+                    offset: 0,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: font_atlas,
+                },
+                GpuBinding::Sampler {
+                    binding: 3,
+                    sampler: point_sampler,
+                },
             ],
-            manifold_gpu::DrawCount::Direct { vertices: 6, instances: quad_count as u32 },
+            manifold_gpu::DrawCount::Direct {
+                vertices: 6,
+                instances: quad_count as u32,
+            },
             GpuLoadAction::Load,
             "node.value_overlay",
         );

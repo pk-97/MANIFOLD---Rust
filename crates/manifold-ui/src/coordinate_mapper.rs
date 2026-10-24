@@ -151,7 +151,8 @@ impl CoordinateMapper {
     /// [`color::ZOOM_LEVELS`] range. Used by cursor-anchored scroll-wheel zoom so
     /// zoom is smooth, not a jump between fixed steps (section 24 5e).
     pub fn zoom_continuous(&self, factor: f32) -> f32 {
-        (self.pixels_per_beat * factor).clamp(color::MIN_PIXELS_PER_BEAT, color::MAX_PIXELS_PER_BEAT)
+        (self.pixels_per_beat * factor)
+            .clamp(color::MIN_PIXELS_PER_BEAT, color::MAX_PIXELS_PER_BEAT)
     }
 
     // ── Y-axis layout (variable track heights) ──────────────────────
@@ -228,13 +229,21 @@ impl CoordinateMapper {
 
     fn layer_height_with_overrides(&self, layers: &[UiLayer], index: usize) -> f32 {
         let base = Self::layer_height(layers, index);
-        let Some(layer) = layers.get(index) else { return base };
-        if base <= 0.0 { return base; }
+        let Some(layer) = layers.get(index) else {
+            return base;
+        };
+        if base <= 0.0 {
+            return base;
+        }
         if layer.is_collapsed || layer.is_group() || layer.automation_lane_count == 0 {
             return base;
         }
         let minimum = 64.0 * layer.automation_lane_count as f32;
-        let lane_extra = self.automation_lane_heights.get(index).copied().unwrap_or(0.0);
+        let lane_extra = self
+            .automation_lane_heights
+            .get(index)
+            .copied()
+            .unwrap_or(0.0);
         if lane_extra == 0.0 {
             base
         } else {
@@ -349,7 +358,10 @@ mod tests {
         mapper.set_automation_lane_heights(&[0.0, 128.0, 0.0]);
         mapper.rebuild_y_layout(&layers);
         assert_eq!(mapper.get_layer_height(1), color::TRACK_HEIGHT + 128.0);
-        assert_eq!(mapper.get_layer_y_offset(2), color::GROUP_TRACK_HEIGHT + color::TRACK_HEIGHT + 128.0);
+        assert_eq!(
+            mapper.get_layer_y_offset(2),
+            color::GROUP_TRACK_HEIGHT + color::TRACK_HEIGHT + 128.0
+        );
         layers[0].is_collapsed = true;
         mapper.rebuild_y_layout(&layers);
         assert_eq!(mapper.get_layer_height(1), 0.0);

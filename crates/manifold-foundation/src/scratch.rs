@@ -44,7 +44,10 @@ impl<const N: usize> StackText<N> {
 
 impl<const N: usize> Default for StackText<N> {
     fn default() -> Self {
-        Self { bytes: [0; N], len: 0 }
+        Self {
+            bytes: [0; N],
+            len: 0,
+        }
     }
 }
 

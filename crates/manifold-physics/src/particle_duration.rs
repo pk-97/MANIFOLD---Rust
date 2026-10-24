@@ -53,7 +53,10 @@ mod tests {
     fn offline_particle_duration_preserves_nominal_f32_arithmetic() {
         for delta in [0.0, 1.0 / 60.0, 1.0 / 24.0, 0.037] {
             let expected = (delta as f32) * 60.0;
-            assert_eq!(scaled(Seconds(delta), true).value.to_bits(), expected.to_bits());
+            assert_eq!(
+                scaled(Seconds(delta), true).value.to_bits(),
+                expected.to_bits()
+            );
         }
         let invalid = scaled(Seconds(f64::NAN), true);
         assert_eq!(invalid.value, 0.0);

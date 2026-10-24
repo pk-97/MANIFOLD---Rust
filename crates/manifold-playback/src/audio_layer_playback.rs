@@ -25,25 +25,28 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use ahash::AHashMap;
-use parking_lot::Mutex;
 use kira::clock::clock_info::ClockInfoProvider;
 use kira::effect::{Effect, EffectBuilder};
 use kira::modulator::value_provider::ModulatorValueProvider;
 use kira::track::{TrackBuilder, TrackHandle};
 use kira::{
     Frame,
-    manager::{AudioManager, AudioManagerSettings, backend::{Backend, DefaultBackend}},
+    manager::{
+        AudioManager, AudioManagerSettings,
+        backend::{Backend, DefaultBackend},
+    },
     sound::PlaybackState as KiraPlaybackState,
     sound::static_sound::{StaticSoundData, StaticSoundHandle},
     tween::Tween,
 };
 use manifold_core::audio_stream::{
-    audio_stream, AudioStreamConsumer, AudioStreamProducer, AudioStreamRead,
+    AudioStreamConsumer, AudioStreamProducer, AudioStreamRead, audio_stream,
 };
 use manifold_core::id::{ClipId, LayerId};
 use manifold_core::project::Project;
 use manifold_core::types::PlaybackState;
 use manifold_core::{Beats, Seconds};
+use parking_lot::Mutex;
 
 use crate::audio_sync::preload_audio;
 use crate::engine::PlaybackEngine;
@@ -69,7 +72,10 @@ const TAP_STAGING_CAPACITY: usize = 64;
 
 /// A short volume/transport tween that declicks an edge (start, stop, seek-jump).
 fn declick() -> Tween {
-    Tween { duration: Duration::from_millis(DECLICK_MS), ..Default::default() }
+    Tween {
+        duration: Duration::from_millis(DECLICK_MS),
+        ..Default::default()
+    }
 }
 
 /// Pure function: compute the warped source file position (seconds) for a given beat.
@@ -108,7 +114,10 @@ fn local_bpm_at_beat(beat: Beats, project: &Project, engine: &PlaybackEngine) ->
         return live_bpm;
     }
     // Priority 2: tempo map (allocation-free immutable scan)
-    project.tempo_map.get_bpm_at_beat_immut(beat, project.settings.bpm).0
+    project
+        .tempo_map
+        .get_bpm_at_beat_immut(beat, project.settings.bpm)
+        .0
 }
 
 /// Pass-through tap effect on a layer's sub-track: copies the post-fader mono
@@ -127,7 +136,6 @@ struct LayerTap {
     sample_rate: Arc<AtomicU32>,
     staging: [f32; TAP_STAGING_CAPACITY],
     staging_len: usize,
-
 }
 
 impl Effect for LayerTap {
@@ -178,13 +186,16 @@ impl LayerTap {
     }
 
     fn flush_staging(&mut self) {
-        if self.staging_len == 0 { return; }
+        if self.staging_len == 0 {
+            return;
+        }
         // Capacity loss is reported by the stream at the original source frame
         // positions. The existing mutex holder is accessed without locking.
-        self.prod.get_mut().push_interleaved(&self.staging[..self.staging_len]);
+        self.prod
+            .get_mut()
+            .push_interleaved(&self.staging[..self.staging_len]);
         self.staging_len = 0;
     }
-
 }
 
 /// Builds a [`LayerTap`] when the sub-track is created. The handle is unused —
@@ -325,7 +336,11 @@ impl<B: Backend> AudioLayerPlayback<B> {
     /// Wrap an already-built manager (tests use kira's mock backend).
     #[cfg(test)]
     fn with_manager(manager: AudioManager<B>) -> Self {
-        Self { manager, layer_tracks: AHashMap::new(), voices: AHashMap::new() }
+        Self {
+            manager,
+            layer_tracks: AHashMap::new(),
+            voices: AHashMap::new(),
+        }
     }
 
     /// Drive every audio clip under the playhead. Called each content tick.
@@ -334,7 +349,11 @@ impl<B: Backend> AudioLayerPlayback<B> {
         let state = engine.current_state();
         // Audio layers have their own solo bus (design section 5): a soloed audio layer
         // silences other audio layers, independent of the visual solo.
-        let any_solo = project.timeline.layers.iter().any(|l| l.is_audio() && l.is_solo);
+        let any_solo = project
+            .timeline
+            .layers
+            .iter()
+            .any(|l| l.is_audio() && l.is_solo);
 
         let mut active: HashSet<ClipId> = HashSet::new();
         for layer in project.timeline.layers.iter().filter(|l| l.is_audio()) {
@@ -424,18 +443,26 @@ impl<B: Backend> AudioLayerPlayback<B> {
         let (prod, cons) = audio_stream(1, TAP_RING_FRAME_CAPACITY, TAP_BLOCK_CAPACITY, 0);
         let sample_rate = Arc::new(AtomicU32::new(0));
         let mut builder = TrackBuilder::new();
-        builder.add_effect(LayerTapBuilder { prod, sample_rate: sample_rate.clone() });
+        builder.add_effect(LayerTapBuilder {
+            prod,
+            sample_rate: sample_rate.clone(),
+        });
         match self.manager.add_sub_track(builder) {
             Ok(track) => {
-                self.layer_tracks
-                    .insert(layer_id.clone(), LayerTrack { track, tap: cons, sample_rate });
+                self.layer_tracks.insert(
+                    layer_id.clone(),
+                    LayerTrack {
+                        track,
+                        tap: cons,
+                        sample_rate,
+                    },
+                );
             }
             Err(e) => {
                 log::warn!("[AudioLayerPlayback] failed to create layer sub-track: {e}");
             }
         }
     }
-
 }
 
 impl AudioLayerPlayback {
@@ -477,9 +504,7 @@ impl AudioLayerPlayback {
                     ) {
                         Ok(handle) => handle,
                         Err(()) => {
-                            log::warn!(
-                                "[AudioLayerPlayback] reroute failed for '{path}'"
-                            );
+                            log::warn!("[AudioLayerPlayback] reroute failed for '{path}'");
                             return;
                         }
                     };
@@ -509,8 +534,10 @@ impl AudioLayerPlayback {
         voice.handle.set_playback_rate(ratio as f64, declick());
         let duration = voice.duration;
         let in_range = expected >= Seconds::ZERO && expected < duration;
-        let target = (expected + voice.encoder_delay)
-            .clamp(Seconds::ZERO, (duration - Seconds(0.001)).max(Seconds::ZERO));
+        let target = (expected + voice.encoder_delay).clamp(
+            Seconds::ZERO,
+            (duration - Seconds(0.001)).max(Seconds::ZERO),
+        );
         let playing = voice.handle.state() == KiraPlaybackState::Playing;
 
         match state {
@@ -573,7 +600,6 @@ impl AudioLayerPlayback {
 }
 
 impl<B: Backend> AudioLayerPlayback<B> {
-
     /// Drain the layer's post-fader tap, handing each stamped event and its mono
     /// samples to `f` (oldest → newest). Gap events carry an empty sample slice;
     /// invalid streams are reported and stop the drain. No-op for a layer with no
@@ -696,15 +722,17 @@ impl<B: Backend> AudioLayerPlayback<B> {
 mod layer_tap_tests {
     use std::sync::Arc;
 
+    use kira::Frame;
     use kira::manager::backend::mock::{MockBackend, MockBackendSettings};
     use kira::sound::static_sound::{StaticSoundData, StaticSoundSettings};
-    use kira::Frame;
 
     use super::*;
 
     fn mock_playback() -> AudioLayerPlayback<MockBackend> {
         let manager = AudioManager::<MockBackend>::new(AudioManagerSettings {
-            backend_settings: MockBackendSettings { sample_rate: 48_000 },
+            backend_settings: MockBackendSettings {
+                sample_rate: 48_000,
+            },
             ..Default::default()
         })
         .expect("mock audio manager");
@@ -728,7 +756,11 @@ mod layer_tap_tests {
 
         // Create the layer's sub-track + tap, then route a tone to it.
         playback.ensure_layer_track(&layer_id);
-        let track = &playback.layer_tracks.get(&layer_id).expect("layer track").track;
+        let track = &playback
+            .layer_tracks
+            .get(&layer_id)
+            .expect("layer track")
+            .track;
 
         let sr = 48_000u32;
         let frames: Arc<[Frame]> = (0..sr / 20)
@@ -744,7 +776,10 @@ mod layer_tap_tests {
             slice: None,
         }
         .output_destination(track);
-        let _handle = playback.manager.play(data).expect("play tone on layer track");
+        let _handle = playback
+            .manager
+            .play(data)
+            .expect("play tone on layer track");
 
         render(&mut playback, 7_200);
 
@@ -753,8 +788,14 @@ mod layer_tap_tests {
         let n = captured.len();
         let peak = captured.iter().fold(0.0f32, |a, &x| a.max(x.abs()));
         println!("[layer_tap] drained {n} samples, peak {peak:.4}");
-        assert!(n > 1000, "tap saw too few samples ({n}); effect not on the played path");
-        assert!(peak > 0.05, "tap saw silence (peak {peak:.4}); routing/fader applied after the tap?");
+        assert!(
+            n > 1000,
+            "tap saw too few samples ({n}); effect not on the played path"
+        );
+        assert!(
+            peak > 0.05,
+            "tap saw silence (peak {peak:.4}); routing/fader applied after the tap?"
+        );
         assert_eq!(
             playback.layer_tap_sample_rate(&layer_id),
             Some(sr),
@@ -781,7 +822,11 @@ mod layer_tap_tests {
             .track
             .set_volume(0.0_f64, Tween::default());
 
-        let track = &playback.layer_tracks.get(&layer_id).expect("layer track").track;
+        let track = &playback
+            .layer_tracks
+            .get(&layer_id)
+            .expect("layer track")
+            .track;
         let sr = 48_000u32;
         let frames: Arc<[Frame]> = (0..sr / 20)
             .map(|i| {
@@ -796,7 +841,10 @@ mod layer_tap_tests {
             slice: None,
         }
         .output_destination(track);
-        let _handle = playback.manager.play(data).expect("play tone on layer track");
+        let _handle = playback
+            .manager
+            .play(data)
+            .expect("play tone on layer track");
 
         render(&mut playback, 7_200);
 
@@ -818,14 +866,15 @@ mod routed_voice_tests {
 
     use super::*;
 
-    fn mock_track(
-        manager: &mut AudioManager<MockBackend>,
-    ) -> (TrackHandle, AudioStreamConsumer) {
+    fn mock_track(manager: &mut AudioManager<MockBackend>) -> (TrackHandle, AudioStreamConsumer) {
         let (prod, cons) = audio_stream(1, 512, 32, 48_000);
         let sample_rate = Arc::new(AtomicU32::new(0));
         let mut builder = TrackBuilder::new();
         builder.add_effect(LayerTapBuilder { prod, sample_rate });
-        (manager.add_sub_track(builder).expect("mock sub-track"), cons)
+        (
+            manager.add_sub_track(builder).expect("mock sub-track"),
+            cons,
+        )
     }
 
     fn tap_peak(consumer: &mut AudioStreamConsumer) -> f32 {
@@ -847,7 +896,9 @@ mod routed_voice_tests {
     #[test]
     fn reroute_reuses_samples_and_moves_signal_to_new_track() {
         let mut manager = AudioManager::<MockBackend>::new(AudioManagerSettings {
-            backend_settings: MockBackendSettings { sample_rate: 48_000 },
+            backend_settings: MockBackendSettings {
+                sample_rate: 48_000,
+            },
             ..Default::default()
         })
         .expect("mock audio manager");
@@ -881,7 +932,9 @@ mod routed_voice_tests {
         )
         .expect("initial routed voice");
         for i in 0..512 {
-            if i % 64 == 0 { manager.backend_mut().on_start_processing(); }
+            if i % 64 == 0 {
+                manager.backend_mut().on_start_processing();
+            }
             let _ = manager.backend_mut().process();
         }
         assert!(
@@ -915,13 +968,17 @@ mod routed_voice_tests {
         );
         // Let the existing declick envelopes settle, then measure fresh blocks.
         for i in 0..512 {
-            if i % 64 == 0 { manager.backend_mut().on_start_processing(); }
+            if i % 64 == 0 {
+                manager.backend_mut().on_start_processing();
+            }
             let _ = manager.backend_mut().process();
         }
         tap_peak(&mut tap_a);
         tap_peak(&mut tap_b);
         for i in 0..128 {
-            if i % 64 == 0 { manager.backend_mut().on_start_processing(); }
+            if i % 64 == 0 {
+                manager.backend_mut().on_start_processing();
+            }
             let _ = manager.backend_mut().process();
         }
 
@@ -1083,7 +1140,10 @@ mod warped_position_tests {
         let pos_at_12 = warped_source_position_at_beat(Beats::from_f32(12.0), &clip, project_ref);
 
         // pos(4) = 2.0 + (4-4) × (60/120) = 2.0
-        assert!((pos_at_4 - 2.0).abs() < 1e-6, "at start beat, position = in_point");
+        assert!(
+            (pos_at_4 - 2.0).abs() < 1e-6,
+            "at start beat, position = in_point"
+        );
         // pos(8) = 2.0 + 4 × 0.5 = 4.0
         assert!((pos_at_8 - 4.0).abs() < 1e-6, "mid-clip position");
         // pos(12) = 2.0 + 8 × 0.5 = 6.0
@@ -1095,9 +1155,19 @@ mod warped_position_tests {
     fn warped_position_tempo_map_step() {
         let mut project = Project::default();
         project.settings.bpm = Bpm(120.0);
-        project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(
+            Beats::ZERO,
+            Bpm(120.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
         // Tempo step at beat 6 (inside the clip)
-        project.tempo_map.add_or_replace_point(Beats::from_f32(6.0), Bpm(60.0), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(
+            Beats::from_f32(6.0),
+            Bpm(60.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
 
         let mut clip = TimelineClip::new_audio(
             "test.wav".to_string(),
@@ -1130,9 +1200,19 @@ mod warped_position_tests {
     fn unwarped_position_tempo_map() {
         let mut project = Project::default();
         project.settings.bpm = Bpm(120.0);
-        project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(
+            Beats::ZERO,
+            Bpm(120.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
         // Tempo halves at beat 6
-        project.tempo_map.add_or_replace_point(Beats::from_f32(6.0), Bpm(60.0), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(
+            Beats::from_f32(6.0),
+            Bpm(60.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
 
         let clip = TimelineClip::new_audio(
             "test.wav".to_string(),
@@ -1149,7 +1229,10 @@ mod warped_position_tests {
 
         // Unwarped: pos(beat) = in_point + secs(beat) - secs(start_beat)
         let pos_4 = warped_source_position_at_beat(Beats::from_f32(4.0), &clip, project_ref);
-        assert!((pos_4 - 1.5).abs() < 1e-6, "unwarped at start: in_point only");
+        assert!(
+            (pos_4 - 1.5).abs() < 1e-6,
+            "unwarped at start: in_point only"
+        );
 
         // At beat 6: secs(6) = 6 × (60/120) = 3.0, secs(4) = 2.0, so pos = 1.5 + 3.0 - 2.0 = 2.5
         let pos_6 = warped_source_position_at_beat(Beats::from_f32(6.0), &clip, project_ref);

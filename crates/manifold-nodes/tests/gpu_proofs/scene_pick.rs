@@ -19,13 +19,24 @@ fn a_click_returns_the_drawn_item_a_part_in_a_group_included() {
 
     let mut doc = SceneDoc::base();
     let (rig, cube, part) = (ItemId::new("rig"), ItemId::new("cube"), ItemId::new("part"));
-    doc.insert(None, 0, Item::new(rig.clone(), "Rig", ItemFields::default_for(ItemKind::Group))).unwrap();
+    doc.insert(
+        None,
+        0,
+        Item::new(rig.clone(), "Rig", ItemFields::default_for(ItemKind::Group)),
+    )
+    .unwrap();
     doc.reparent(&cube, Some(&rig), 0).unwrap();
     let fields = doc.find(&cube).unwrap().fields.clone();
-    doc.insert(Some(&rig), 1, Item::new(part.clone(), "Part", fields)).unwrap();
-    let mut fx = manifold_core::effects::PresetInstance::new_generator(manifold_core::PresetTypeId::from_string("Scene".into()));
+    doc.insert(Some(&rig), 1, Item::new(part.clone(), "Part", fields))
+        .unwrap();
+    let mut fx = manifold_core::effects::PresetInstance::new_generator(
+        manifold_core::PresetTypeId::from_string("Scene".into()),
+    );
     fx.install_scene_document(doc.clone()).unwrap();
-    assert!(fx.set_base_param("part.pos_x", 2.5), "the part has a Position X");
+    assert!(
+        fx.set_base_param("part.pos_x", 2.5),
+        "the part has a Position X"
+    );
 
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
@@ -67,10 +78,15 @@ fn a_click_returns_the_drawn_item_a_part_in_a_group_included() {
         enc.commit_and_wait_completed();
     };
     render(&mut runtime);
-    let (_, camera) = runtime.write_rendered_view(&mut Vec::new()).expect("the scene reports its camera");
+    let (_, camera) = runtime
+        .write_rendered_view(&mut Vec::new())
+        .expect("the scene reports its camera");
     let at = |item: &str| {
-        let world = ["pos_x", "pos_y", "pos_z"].map(|axis| fx.get_base_param(&format!("{item}.{axis}")));
-        let p = camera.project_to_pixel(world, h.width, h.height).expect("the item is in front of the camera");
+        let world =
+            ["pos_x", "pos_y", "pos_z"].map(|axis| fx.get_base_param(&format!("{item}.{axis}")));
+        let p = camera
+            .project_to_pixel(world, h.width, h.height)
+            .expect("the item is in front of the camera");
         [p.px / h.width as f32, p.py / h.height as f32]
     };
     let drawn = manifold_nodes_scene::node_graph::scene_compile::drawn_items(&doc);
@@ -78,11 +94,17 @@ fn a_click_returns_the_drawn_item_a_part_in_a_group_included() {
         runtime.request_pick(PickRequest { id, uv });
         render(&mut runtime);
         render(&mut runtime);
-        let hit = runtime.take_pick().expect("a pick is answered the frame after it draws");
+        let hit = runtime
+            .take_pick()
+            .expect("a pick is answered the frame after it draws");
         assert_eq!(hit.id, id);
         hit.slot.map(|slot| drawn[slot as usize].clone())
     };
-    assert_eq!(click(1, at("part")), Some(part), "the part inside the group");
+    assert_eq!(
+        click(1, at("part")),
+        Some(part),
+        "the part inside the group"
+    );
     assert_eq!(click(2, at("cube")), Some(cube), "its sibling");
     assert_eq!(click(3, [0.02, 0.02]), None, "empty space");
 }

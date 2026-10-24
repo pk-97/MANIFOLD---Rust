@@ -98,7 +98,11 @@ impl GraphEditorPanel {
     /// Move the shown inspector's live port values in place, allocating
     /// nothing. False when no inspector shows or its ports are not these
     /// (by name, in order); the host then sets a new inspector.
-    pub fn update_node_inspector_io(&mut self, inputs: &[(String, f32)], outputs: &[(String, f32)]) -> bool {
+    pub fn update_node_inspector_io(
+        &mut self,
+        inputs: &[(String, f32)],
+        outputs: &[(String, f32)],
+    ) -> bool {
         let Some(insp) = self.node_inspector.as_mut() else {
             return false;
         };
@@ -109,7 +113,12 @@ impl GraphEditorPanel {
             return false;
         }
         let mut moved = false;
-        for (shown, live) in insp.inputs.iter_mut().zip(inputs).chain(insp.outputs.iter_mut().zip(outputs)) {
+        for (shown, live) in insp
+            .inputs
+            .iter_mut()
+            .zip(inputs)
+            .chain(insp.outputs.iter_mut().zip(outputs))
+        {
             if shown.1 != live.1 {
                 shown.1 = live.1;
                 moved = true;
@@ -350,7 +359,10 @@ mod tests {
         let mut tree = UITree::new();
         let drew = panel.render_node_inspector(&mut tree, Rect::new(0.0, 0.0, 240.0, 200.0));
         assert!(drew, "a value-inspector node fills the pane");
-        assert!(!panel.wants_smart_preview_toggle(), "no toggle for a non-image node");
+        assert!(
+            !panel.wants_smart_preview_toggle(),
+            "no toggle for a non-image node"
+        );
     }
 
     #[test]
@@ -358,7 +370,10 @@ mod tests {
         let panel = GraphEditorPanel::new();
         let mut tree = UITree::new();
         assert!(!panel.render_node_inspector(&mut tree, Rect::new(0.0, 0.0, 240.0, 200.0)));
-        assert!(panel.wants_smart_preview_toggle(), "image preview → toggle shows");
+        assert!(
+            panel.wants_smart_preview_toggle(),
+            "image preview → toggle shows"
+        );
     }
 
     #[test]

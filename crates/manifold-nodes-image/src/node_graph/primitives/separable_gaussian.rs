@@ -11,13 +11,15 @@
 //! per-pixel; DoF's variable-width variant needs a separate primitive
 //! when section 6.4 lands).
 
-use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
+use std::borrow::Cow;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::primitives::standalone_pipeline::{
+    dispatch_standalone_2d, standalone_pipeline,
+};
 
 /// Display labels for the `kernel_size` enum, indexed by enum value.
 pub const GAUSSIAN_BLUR_KERNELS: &[&str] = &["9-tap", "17-tap", "25-tap"];
@@ -288,18 +290,21 @@ mod gpu_tests {
     //! invariants: DC preservation, axis isolation, and known
     //! kernel response on a delta-function input.
 
-    
-
     use half::f16;
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use manifold_node_engine::exec::backend::Backend;
     use manifold_node_engine::bindings::Slot;
+    use manifold_node_engine::exec::backend::Backend;
     use manifold_node_engine::exec::execution_plan::ResourceId;
-    use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, scene::boundary_nodes::Source, exec::execution_plan::compile};
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::{
+        exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+        exec::execution_plan::ExecutionPlan, exec::execution_plan::compile,
+        exec::metal_backend::MetalBackend, graph::Graph, parameters::ParamValue,
+        scene::boundary_nodes::FinalOutput, scene::boundary_nodes::Source,
+    };
 
     use super::GaussianBlur;
 
@@ -510,8 +515,10 @@ mod gpu_tests {
         let gauss = g.add_node(Box::new(GaussianBlur::new()));
         let out = g.add_node(Box::new(FinalOutput::new()));
         g.set_param(gauss, "axis", ParamValue::Enum(axis)).unwrap();
-        g.set_param(gauss, "radius_mode", ParamValue::Enum(1)).unwrap();
-        g.set_param(gauss, "radius", ParamValue::Float(radius)).unwrap();
+        g.set_param(gauss, "radius_mode", ParamValue::Enum(1))
+            .unwrap();
+        g.set_param(gauss, "radius", ParamValue::Float(radius))
+            .unwrap();
         g.connect((src, "out"), (gauss, "in")).unwrap();
         g.connect((gauss, "out"), (out, "in")).unwrap();
         let plan = compile(&g).unwrap();

@@ -124,7 +124,10 @@ impl Dock {
             // with the main inspector's, so the fit rule (D3) has to hold
             // across one range, not two: no narrower/wider than the main
             // window's inspector can ever legally be.
-            right_range: (crate::color::MIN_INSPECTOR_WIDTH, crate::color::MAX_INSPECTOR_WIDTH),
+            right_range: (
+                crate::color::MIN_INSPECTOR_WIDTH,
+                crate::color::MAX_INSPECTOR_WIDTH,
+            ),
             bottom_range: (90.0, 320.0),
             show_left: true,
             show_right: true,
@@ -268,7 +271,11 @@ impl Dock {
     /// redraws only when what it paints moved.
     pub fn draw_key(&self) -> DockDrawKey {
         DockDrawKey {
-            sizes: [self.left_w.to_bits(), self.right_w.to_bits(), self.bottom_h.to_bits()],
+            sizes: [
+                self.left_w.to_bits(),
+                self.right_w.to_bits(),
+                self.bottom_h.to_bits(),
+            ],
             shown: [self.show_left, self.show_right, self.show_bottom],
             drag: self.drag.payload().copied(),
             hover: self.hover,
@@ -283,7 +290,11 @@ impl Dock {
     pub fn draw(&self, area: Rect, ui: &mut dyn crate::draw::Painter) {
         let r = self.rects(area);
         let mut seam = |edge: DockEdge, handle: Rect, vertical: bool| {
-            let full = if vertical { handle.width } else { handle.height };
+            let full = if vertical {
+                handle.width
+            } else {
+                handle.height
+            };
             let (c, thickness): (Color32, f32) = if self.drag.payload() == Some(&edge) {
                 (color::RESIZE_HANDLE_DRAG, full)
             } else if self.hover == Some(edge) {
@@ -330,7 +341,10 @@ mod tests {
         let d = Dock::editor();
         let r = d.rects(area());
         assert_eq!(r.canvas.x, EDITOR_LEFT_DEFAULT);
-        assert_eq!(r.canvas.width, 1600.0 - EDITOR_LEFT_DEFAULT - EDITOR_RIGHT_DEFAULT);
+        assert_eq!(
+            r.canvas.width,
+            1600.0 - EDITOR_LEFT_DEFAULT - EDITOR_RIGHT_DEFAULT
+        );
         // Bottom strip is on by default; the canvas gives up its height for it.
         assert_eq!(r.canvas.height, 900.0 - d.bottom_h);
         // The strip spans the FULL width and sits under all three columns.

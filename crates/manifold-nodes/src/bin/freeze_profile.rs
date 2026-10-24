@@ -19,18 +19,25 @@
 //!
 //! Run: `cargo run --release -p manifold-nodes --bin freeze-profile`
 
-use manifold_nodes as _;
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
+use manifold_core::params::ParamManifest;
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
-use manifold_node_engine::runtime::PresetRuntime;
-use manifold_core::params::ParamManifest;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::primitives::gain::Gain;
-use manifold_node_engine::{persistence::EffectGraphDefExt, exec::effect_node::EffectNode, exec::execution_plan::ExecutionPlan, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, scene::boundary_nodes::Source, exec::execution_plan::compile};
 use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_node_engine::primitives::gain::Gain;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::{
+    exec::effect_node::EffectNode, exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId,
+    exec::execution::Executor, exec::execution_plan::ExecutionPlan,
+    exec::execution_plan::ResourceId, exec::execution_plan::compile,
+    exec::metal_backend::MetalBackend, graph::Graph, persistence::EffectGraphDefExt,
+    persistence::PrimitiveRegistry, scene::boundary_nodes::FinalOutput,
+    scene::boundary_nodes::Source,
+};
+use manifold_nodes as _;
 
 const FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 const WARMUP: u32 = 8;
@@ -161,7 +168,10 @@ fn main() {
         };
 
         for &(w, h) in RESOLUTIONS {
-            let mut graph = match def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()) {
+            let mut graph = match def.clone().into_graph(
+                &registry,
+                &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+            ) {
                 Ok(g) => g,
                 Err(e) => {
                     eprintln!("skip {name}@{w}x{h}: build {e}");
@@ -266,7 +276,8 @@ fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuD
     use manifold_node_engine::state_store::StateStore;
     let (w, h) = (1920u32, 1080u32);
     let path = format!("{GENERATOR_PRESETS_DIR}/FluidSim2D.json");
-    let def: EffectGraphDef = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let def: EffectGraphDef =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
 
     println!("=== reconcile FluidSim2D @ {w}x{h} ===\n");
 
@@ -276,50 +287,124 @@ fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuD
     println!("--- A) raw executor, full plan, accumulating state, vary warmup ---");
     println!("{:<10} {:>11} {:>11}", "warmup", "no-prealloc", "prealloc");
     for &warm in &[5u32, 30, 120] {
-      let mut row = [0.0f64; 2];
-      for (col, prealloc) in [false, true].into_iter().enumerate() {
-        let mut graph = def.clone().into_graph(registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).unwrap();
-        let plan = compile(&graph).unwrap();
-        let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, FORMAT);
-        if prealloc {
-            manifold_node_engine::load::graph_loader::pre_allocate_resources(&mut graph, &plan, device, &mut backend).unwrap();
+        let mut row = [0.0f64; 2];
+        for (col, prealloc) in [false, true].into_iter().enumerate() {
+            let mut graph = def
+                .clone()
+                .into_graph(
+                    registry,
+                    &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+                )
+                .unwrap();
+            let plan = compile(&graph).unwrap();
+            let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, FORMAT);
+            if prealloc {
+                manifold_node_engine::load::graph_loader::pre_allocate_resources(
+                    &mut graph,
+                    &plan,
+                    device,
+                    &mut backend,
+                )
+                .unwrap();
+            }
+            let mut exec = Executor::new(Box::new(backend));
+            let mut state = StateStore::new();
+            let ft = FrameTime {
+                beats: Beats(1.0),
+                seconds: Seconds(1.0),
+                delta: Seconds(1.0 / 60.0),
+                frame_count: 0,
+            };
+            for i in 0..warm {
+                let mut enc = device.create_encoder("rec-warm");
+                {
+                    let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+                    // advance time so animated seeding evolves
+                    let ft = FrameTime {
+                        seconds: Seconds(f64::from(i) / 60.0),
+                        beats: Beats(f64::from(i) / 30.0),
+                        ..ft
+                    };
+                    exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0);
+                }
+                enc.commit_and_wait_completed();
+            }
+            let mut secs = 0.0;
+            for i in 0..30u32 {
+                let mut enc = device.create_encoder("rec-timed");
+                {
+                    let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+                    let ft = FrameTime {
+                        seconds: Seconds(f64::from(warm + i) / 60.0),
+                        beats: Beats(f64::from(warm + i) / 30.0),
+                        ..ft
+                    };
+                    exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0);
+                }
+                secs += enc.commit_and_wait_completed_timed();
+            }
+            row[col] = secs * 1000.0 / 30.0;
         }
-        let mut exec = Executor::new(Box::new(backend));
-        let mut state = StateStore::new();
-        let ft = FrameTime { beats: Beats(1.0), seconds: Seconds(1.0), delta: Seconds(1.0/60.0), frame_count: 0 };
-        for i in 0..warm {
-            let mut enc = device.create_encoder("rec-warm");
-            { let mut gpu = RendererGpuEncoder::new(&mut enc, device);
-              // advance time so animated seeding evolves
-              let ft = FrameTime { seconds: Seconds(f64::from(i)/60.0), beats: Beats(f64::from(i)/30.0), ..ft };
-              exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0); }
-            enc.commit_and_wait_completed();
-        }
-        let mut secs = 0.0;
-        for i in 0..30u32 {
-            let mut enc = device.create_encoder("rec-timed");
-            { let mut gpu = RendererGpuEncoder::new(&mut enc, device);
-              let ft = FrameTime { seconds: Seconds(f64::from(warm+i)/60.0), beats: Beats(f64::from(warm+i)/30.0), ..ft };
-              exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0); }
-            secs += enc.commit_and_wait_completed_timed();
-        }
-        row[col] = secs * 1000.0 / 30.0;
-      }
-      println!("{:<10} {:>11.4} {:>11.4}", warm, row[0], row[1]);
+        println!("{:<10} {:>11.4} {:>11.4}", warm, row[0], row[1]);
     }
 
     // B) Production path: PresetRuntime::from_def_with_device + render, exactly
     //    like profile_generators (the 11.7ms number).
     println!("\n--- B) PresetRuntime::render (production path) ---");
     {
-        let mut generator = PresetRuntime::from_def_with_device(def.clone(), registry, std::sync::Arc::clone(device), w, h, FORMAT, None).unwrap();
+        let mut generator = PresetRuntime::from_def_with_device(
+            def.clone(),
+            registry,
+            std::sync::Arc::clone(device),
+            w,
+            h,
+            FORMAT,
+            None,
+        )
+        .unwrap();
         let target = RenderTarget::new(device, w, h, FORMAT, "rec-prod");
-        let mk = |t: f64| PresetContext { time: t, beat: t*2.0, dt: 1.0/60.0, width: w, height: h, output_width: w, output_height: h, aspect: w as f32 / h as f32, owner_key: 0, is_clip_level: false, frame_count: 0, anim_progress: 0.0, trigger_count: 0 };
+        let mk = |t: f64| PresetContext {
+            time: t,
+            beat: t * 2.0,
+            dt: 1.0 / 60.0,
+            width: w,
+            height: h,
+            output_width: w,
+            output_height: h,
+            aspect: w as f32 / h as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
         let params = ParamManifest::default();
-        for i in 0..30 { let mut enc = device.create_encoder("rec-prod-warm"); { let mut gpu = RendererGpuEncoder::new(&mut enc, device); generator.render(&mut gpu, &target.texture, &mk(f64::from(i)/60.0), &params); } enc.commit_and_wait_completed(); }
+        for i in 0..30 {
+            let mut enc = device.create_encoder("rec-prod-warm");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+                generator.render(&mut gpu, &target.texture, &mk(f64::from(i) / 60.0), &params);
+            }
+            enc.commit_and_wait_completed();
+        }
         let mut secs = 0.0;
-        for i in 0..30u32 { let mut enc = device.create_encoder("rec-prod-timed"); { let mut gpu = RendererGpuEncoder::new(&mut enc, device); generator.render(&mut gpu, &target.texture, &mk(f64::from(30+i)/60.0), &params); } secs += enc.commit_and_wait_completed_timed(); }
-        println!("PresetRuntime::render: {:.4} ms/frame", secs * 1000.0 / 30.0);
+        for i in 0..30u32 {
+            let mut enc = device.create_encoder("rec-prod-timed");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+                generator.render(
+                    &mut gpu,
+                    &target.texture,
+                    &mk(f64::from(30 + i) / 60.0),
+                    &params,
+                );
+            }
+            secs += enc.commit_and_wait_completed_timed();
+        }
+        println!(
+            "PresetRuntime::render: {:.4} ms/frame",
+            secs * 1000.0 / 30.0
+        );
     }
 }
 
@@ -349,7 +434,13 @@ fn profile_per_dispatch(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gp
     // Time one truncated plan against a freshly built graph (fresh state), pre-
     // binding a black input to the generator-input boundary when it's live.
     let time_prefix = |def: &EffectGraphDef, k: usize| -> Option<f64> {
-        let mut graph = def.clone().into_graph(registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).ok()?;
+        let mut graph = def
+            .clone()
+            .into_graph(
+                registry,
+                &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+            )
+            .ok()?;
         let full = compile(&graph).ok()?;
         let plan = full.truncated(k);
         let input_res = graph
@@ -365,8 +456,13 @@ fn profile_per_dispatch(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gp
         // Allocate the full-size Array (particle) + Texture3D buffers, exactly
         // like the production generator path — without this the particle
         // dispatches run on empty buffers and read as ~free.
-        manifold_node_engine::load::graph_loader::pre_allocate_resources(&mut graph, &full, device, &mut backend)
-            .ok()?;
+        manifold_node_engine::load::graph_loader::pre_allocate_resources(
+            &mut graph,
+            &full,
+            device,
+            &mut backend,
+        )
+        .ok()?;
         let mut exec = Executor::new(Box::new(backend));
         exec.set_profile_force_all_live(true);
         let mut state = StateStore::new();
@@ -407,7 +503,10 @@ fn profile_per_dispatch(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gp
             continue;
         };
         // Step → node-type label from one canonical build.
-        let Ok(graph0) = def.clone().into_graph(registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()) else {
+        let Ok(graph0) = def.clone().into_graph(
+            registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        ) else {
             eprintln!("skip {name}: build");
             continue;
         };
@@ -430,7 +529,10 @@ fn profile_per_dispatch(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gp
         println!(
             "\n=== per-dispatch breakdown: {name} @ {w}x{h} ({n} steps), avg over {PROF_FRAMES} frames ==="
         );
-        println!("{:>4} {:<34} {:>11} {:>11}", "step", "node type", "marginal", "cumulative");
+        println!(
+            "{:>4} {:<34} {:>11} {:>11}",
+            "step", "node type", "marginal", "cumulative"
+        );
         println!("{}", "-".repeat(64));
 
         let mut prev = 0.0_f64;
@@ -444,8 +546,15 @@ fn profile_per_dispatch(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gp
             prev = ms;
             let ty = &labels[k - 1];
             *per_type.entry(ty.clone()).or_default() += marginal.max(0.0);
-            let flag = if marginal < 0.0 { " (overlap/noise)" } else { "" };
-            println!("{:>4} {:<34} {:>10.4} {:>11.4}{}", k, ty, marginal, ms, flag);
+            let flag = if marginal < 0.0 {
+                " (overlap/noise)"
+            } else {
+                ""
+            };
+            println!(
+                "{:>4} {:<34} {:>10.4} {:>11.4}{}",
+                k, ty, marginal, ms, flag
+            );
         }
         println!("  full-frame cumulative: {prev:.3} ms");
 
@@ -485,7 +594,10 @@ fn profile_synthetic_buffer(device: &GpuDevice) {
         "\n--- synthetic buffer chains ({M} particles, vec4, in-place): N separate dispatches \
          vs 1 fused kernel, real GPU time ---"
     );
-    println!("{:<8} {:>13} {:>13} {:>10}", "N ops", "separate ms", "fused ms", "speedup");
+    println!(
+        "{:<8} {:>13} {:>13} {:>10}",
+        "N ops", "separate ms", "fused ms", "speedup"
+    );
     println!("{}", "-".repeat(48));
 
     // Representative per-particle step (force + integrate): non-trivial compute so
@@ -523,7 +635,11 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
             for _ in 0..n {
                 enc.dispatch_compute(
                     &step_pipe,
-                    &[GpuBinding::Buffer { binding: 0, buffer: &buffer, offset: 0 }],
+                    &[GpuBinding::Buffer {
+                        binding: 0,
+                        buffer: &buffer,
+                        offset: 0,
+                    }],
                     [groups, 1, 1],
                     "syn-buf-step",
                 );
@@ -536,7 +652,11 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
             for _ in 0..n {
                 enc.dispatch_compute(
                     &step_pipe,
-                    &[GpuBinding::Buffer { binding: 0, buffer: &buffer, offset: 0 }],
+                    &[GpuBinding::Buffer {
+                        binding: 0,
+                        buffer: &buffer,
+                        offset: 0,
+                    }],
                     [groups, 1, 1],
                     "syn-buf-step",
                 );
@@ -552,7 +672,11 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
             let mut enc = device.create_encoder("syn-buf-fused-warmup");
             enc.dispatch_compute(
                 &fused_pipe,
-                &[GpuBinding::Buffer { binding: 0, buffer: &buffer, offset: 0 }],
+                &[GpuBinding::Buffer {
+                    binding: 0,
+                    buffer: &buffer,
+                    offset: 0,
+                }],
                 [groups, 1, 1],
                 "syn-buf-fused",
             );
@@ -563,7 +687,11 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
             let mut enc = device.create_encoder("syn-buf-fused-timed");
             enc.dispatch_compute(
                 &fused_pipe,
-                &[GpuBinding::Buffer { binding: 0, buffer: &buffer, offset: 0 }],
+                &[GpuBinding::Buffer {
+                    binding: 0,
+                    buffer: &buffer,
+                    offset: 0,
+                }],
                 [groups, 1, 1],
                 "syn-buf-fused",
             );
@@ -572,7 +700,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
         let fus_ms = fus_secs * 1000.0 / f64::from(FRAMES);
 
         let speedup = if fus_ms > 0.0 { sep_ms / fus_ms } else { 0.0 };
-        println!("{:<8} {:>13.4} {:>13.4} {:>9.2}x", n, sep_ms, fus_ms, speedup);
+        println!(
+            "{:<8} {:>13.4} {:>13.4} {:>9.2}x",
+            n, sep_ms, fus_ms, speedup
+        );
     }
     println!(
         "speedup climbing with N → buffer fusion pays (saves re-reads/writes + dispatch overhead); \
@@ -602,8 +733,7 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice
     use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 
     const SCENE_WARMUP: u32 = 60;
-    let scene_frames: usize =
-        args.get(2).and_then(|s| s.parse().ok()).unwrap_or(300);
+    let scene_frames: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(300);
     let default_glb = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb"
@@ -623,7 +753,12 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice
         return;
     };
     let manifest_base = ParamManifest::from_params(
-        metadata.params.iter().cloned().map(Param::bundled).collect(),
+        metadata
+            .params
+            .iter()
+            .cloned()
+            .map(Param::bundled)
+            .collect(),
     );
     let swept_id = manifest_base
         .iter()
@@ -632,7 +767,11 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice
     let Some(swept_id) = swept_id else {
         eprintln!(
             "scene: no card param matching '{param_pref}' (have: {})",
-            manifest_base.iter().map(|p| p.id().to_string()).collect::<Vec<_>>().join(", ")
+            manifest_base
+                .iter()
+                .map(|p| p.id().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         );
         return;
     };
@@ -655,9 +794,8 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice
         enc.copy_texture_to_buffer(&target.texture, &buf, w, h, bytes_per_row);
         enc.commit_and_wait_completed();
         let ptr = buf.mapped_ptr().expect("shared readback");
-        let bytes: Vec<u8> = unsafe {
-            std::slice::from_raw_parts(ptr.cast::<u8>(), (w * h * 8) as usize).to_vec()
-        };
+        let bytes: Vec<u8> =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), (w * h * 8) as usize).to_vec() };
         let halves: &[u16] = unsafe {
             std::slice::from_raw_parts(bytes.as_ptr().cast::<u16>(), (w * h * 4) as usize)
         };
@@ -675,18 +813,29 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice
     // arm is a no-op and its numbers are void.
     {
         let (w, h) = (640u32, 360u32);
-        let mut generator =
-            match PresetRuntime::from_def_with_device(def.clone(), registry, std::sync::Arc::clone(device), w, h, FORMAT, None)
-            {
-                Ok(g) => g,
-                Err(e) => {
-                    eprintln!("scene: sanity runtime build failed: {e}");
-                    return;
-                }
-            };
+        let mut generator = match PresetRuntime::from_def_with_device(
+            def.clone(),
+            registry,
+            std::sync::Arc::clone(device),
+            w,
+            h,
+            FORMAT,
+            None,
+        ) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("scene: sanity runtime build failed: {e}");
+                return;
+            }
+        };
         let target = RenderTarget::new(device, w, h, FORMAT, "scene-sanity");
         let mut params = ParamManifest::from_params(
-            metadata.params.iter().cloned().map(Param::bundled).collect(),
+            metadata
+                .params
+                .iter()
+                .cloned()
+                .map(Param::bundled)
+                .collect(),
         );
         let (pmin, pmax) = {
             let p = params.get(&swept_id).unwrap();
@@ -869,7 +1018,12 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice
             println!(
                 "    cpu spikes >1ms: {} of {scene_frames} — {}",
                 spikes.len(),
-                spikes.iter().take(24).cloned().collect::<Vec<_>>().join("  "),
+                spikes
+                    .iter()
+                    .take(24)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("  "),
             );
         }
     }
@@ -951,7 +1105,10 @@ fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::syn
     println!(
         "\n--- ColorGrade: unfused graph vs AUTO-fused graph, both via executor (production path) ---"
     );
-    println!("{:<8} {:>13} {:>13} {:>10}", "res", "unfused ms", "fused ms", "speedup");
+    println!(
+        "{:<8} {:>13} {:>13} {:>10}",
+        "res", "unfused ms", "fused ms", "speedup"
+    );
     println!("{}", "-".repeat(48));
 
     let source_type_id = Source::new().type_id().as_str().to_string();
@@ -978,7 +1135,12 @@ fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::syn
     // time over FRAMES. Returns None if the graph can't be built/compiled.
     // `mesh_rules` must be the def's own sidecar: the fused arm passes the
     // fused view's composed rules, not an empty map.
-    let time_def = |def: &EffectGraphDef, mesh_rules: &manifold_node_engine::scene::mesh_change::PreparedMeshRules, w: u32, h: u32, label: &str| -> Option<f64> {
+    let time_def = |def: &EffectGraphDef,
+                    mesh_rules: &manifold_node_engine::scene::mesh_change::PreparedMeshRules,
+                    w: u32,
+                    h: u32,
+                    label: &str|
+     -> Option<f64> {
         let mut graph = def.clone().into_graph(registry, mesh_rules).ok()?;
         let plan = compile(&graph).ok()?;
         let source_id = graph
@@ -1017,22 +1179,41 @@ fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::syn
     };
 
     for &(w, h) in RESOLUTIONS {
-        let unfused_ms = match time_def(&unfused_def, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(), w, h, "auto-cg-unfused-timed") {
+        let unfused_ms = match time_def(
+            &unfused_def,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+            w,
+            h,
+            "auto-cg-unfused-timed",
+        ) {
             Some(ms) => ms,
             None => {
                 eprintln!("skip auto-fused-colorgrade@{w}x{h}: unfused build");
                 continue;
             }
         };
-        let fused_ms = match time_def(&fused_view.canonical_def, &fused_view.mesh_rules, w, h, "auto-cg-fused-timed") {
+        let fused_ms = match time_def(
+            &fused_view.canonical_def,
+            &fused_view.mesh_rules,
+            w,
+            h,
+            "auto-cg-fused-timed",
+        ) {
             Some(ms) => ms,
             None => {
                 eprintln!("skip auto-fused-colorgrade@{w}x{h}: fused build");
                 continue;
             }
         };
-        let speedup = if fused_ms > 0.0 { unfused_ms / fused_ms } else { 0.0 };
-        println!("{:>5}p {:>13.3} {:>13.3} {:>9.2}x", h, unfused_ms, fused_ms, speedup);
+        let speedup = if fused_ms > 0.0 {
+            unfused_ms / fused_ms
+        } else {
+            0.0
+        };
+        println!(
+            "{:>5}p {:>13.3} {:>13.3} {:>9.2}x",
+            h, unfused_ms, fused_ms, speedup
+        );
     }
 }
 
@@ -1044,12 +1225,15 @@ fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::syn
 /// fusion forfeits, so the real speedup may sit below the naive
 /// steps-×-ms/step projection. Measured, not projected.
 fn profile_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice>) {
-    use manifold_node_engine::freeze::reference::{ColorGradeParams, colorgrade_pipeline, dispatch_fused_colorgrade};
+    use manifold_node_engine::freeze::reference::{
+        ColorGradeParams, colorgrade_pipeline, dispatch_fused_colorgrade,
+    };
 
+    println!("\n--- ColorGrade: unfused graph (9 steps) vs hand-fused 1 kernel, real GPU time ---");
     println!(
-        "\n--- ColorGrade: unfused graph (9 steps) vs hand-fused 1 kernel, real GPU time ---"
+        "{:<8} {:>13} {:>13} {:>10}",
+        "res", "unfused ms", "fused ms", "speedup"
     );
-    println!("{:<8} {:>13} {:>13} {:>10}", "res", "unfused ms", "fused ms", "speedup");
     println!("{}", "-".repeat(48));
 
     let source_type_id = Source::new().type_id().as_str().to_string();
@@ -1097,7 +1281,10 @@ fn profile_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::sync::Ar
 
     for &(w, h) in RESOLUTIONS {
         // --- unfused: the shipped graph through the executor ---
-        let mut graph = match def.clone().into_graph(registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()) {
+        let mut graph = match def.clone().into_graph(
+            registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        ) {
             Ok(g) => g,
             Err(e) => {
                 eprintln!("skip fused-colorgrade@{w}x{h}: build {e}");
@@ -1150,19 +1337,38 @@ fn profile_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::sync::Ar
         let output = RenderTarget::new(device, w, h, FORMAT, "cg-fused-output");
         for _ in 0..WARMUP {
             let mut enc = device.create_encoder("cg-fused-warmup");
-            dispatch_fused_colorgrade(&mut enc, &pipeline, &input.texture, &output.texture, &params);
+            dispatch_fused_colorgrade(
+                &mut enc,
+                &pipeline,
+                &input.texture,
+                &output.texture,
+                &params,
+            );
             enc.commit_and_wait_completed();
         }
         let mut f_secs = 0.0_f64;
         for _ in 0..FRAMES {
             let mut enc = device.create_encoder("cg-fused-timed");
-            dispatch_fused_colorgrade(&mut enc, &pipeline, &input.texture, &output.texture, &params);
+            dispatch_fused_colorgrade(
+                &mut enc,
+                &pipeline,
+                &input.texture,
+                &output.texture,
+                &params,
+            );
             f_secs += enc.commit_and_wait_completed_timed();
         }
         let fused_ms = f_secs * 1000.0 / f64::from(FRAMES);
 
-        let speedup = if fused_ms > 0.0 { unfused_ms / fused_ms } else { 0.0 };
-        println!("{:>5}p {:>13.3} {:>13.3} {:>9.2}x", h, unfused_ms, fused_ms, speedup);
+        let speedup = if fused_ms > 0.0 {
+            unfused_ms / fused_ms
+        } else {
+            0.0
+        };
+        println!(
+            "{:>5}p {:>13.3} {:>13.3} {:>9.2}x",
+            h, unfused_ms, fused_ms, speedup
+        );
     }
 }
 
@@ -1177,7 +1383,11 @@ fn profile_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::sync::Ar
 /// samples at stage boundaries), so absolute ms run slightly above
 /// production; the per-node SHARES are the signal. Work the spans can't see
 /// (MPS/MetalFX internal encoders) shows as "unattributed".
-fn profile_attribution(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice>, names: &[&str]) {
+fn profile_attribution(
+    registry: &PrimitiveRegistry,
+    device: &std::sync::Arc<GpuDevice>,
+    names: &[&str],
+) {
     use manifold_node_engine::freeze::install;
 
     const DEFAULT_NAMES: &[&str] = &[
@@ -1226,12 +1436,26 @@ fn profile_attribution(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gpu
             }
         };
 
-        attribute_def(registry, device, &sampler, &def, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(), &format!("{name} — unfused"));
+        attribute_def(
+            registry,
+            device,
+            &sampler,
+            &def,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+            &format!("{name} — unfused"),
+        );
 
         if is_gen {
             match install::fused_generator_view_for(&def) {
                 Some(view) => {
-                    attribute_def(registry, device, &sampler, &view.def, &view.mesh_rules, &format!("{name} — fused"));
+                    attribute_def(
+                        registry,
+                        device,
+                        &sampler,
+                        &view.def,
+                        &view.mesh_rules,
+                        &format!("{name} — fused"),
+                    );
                 }
                 None => println!("{name} — fused: no fusable region (renders unfused)\n"),
             }
@@ -1294,8 +1518,7 @@ fn attribute_def(
             .map(|n| n.id)
             && let Some(res) = resource_for_output(&plan, id, "out")
         {
-            backend
-                .pre_bind_texture_2d(res, RenderTarget::new(device, w, h, FORMAT, "attr-input"));
+            backend.pre_bind_texture_2d(res, RenderTarget::new(device, w, h, FORMAT, "attr-input"));
         }
     }
     // Full-size Array/Texture3D allocation, like the production generator
@@ -1360,7 +1583,12 @@ fn attribute_def(
         for span in &profile.spans {
             *by_label.entry(span.label.clone()).or_default() += span.millis;
             // The executor tags `"{scope}:s{step_idx}"`.
-            let step = span.tag.rsplit(':').next().and_then(|t| t.strip_prefix('s')).and_then(|s| s.parse::<usize>().ok());
+            let step = span
+                .tag
+                .rsplit(':')
+                .next()
+                .and_then(|t| t.strip_prefix('s'))
+                .and_then(|s| s.parse::<usize>().ok());
             match step {
                 Some(idx) => {
                     let acc = per_step.entry(idx).or_default();
@@ -1391,7 +1619,11 @@ fn attribute_def(
     }
 
     let mut rows: Vec<(usize, Acc)> = per_step.into_iter().collect();
-    rows.sort_by(|a, b| b.1.gpu_ms.partial_cmp(&a.1.gpu_ms).unwrap_or(std::cmp::Ordering::Equal));
+    rows.sort_by(|a, b| {
+        b.1.gpu_ms
+            .partial_cmp(&a.1.gpu_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     println!(
         "{:>5} {:<38} {:>9} {:>6} {:>9} {:>6}",
         "step", "node type", "gpu ms", "%gpu", "cpu µs", "disp"
@@ -1407,7 +1639,11 @@ fn attribute_def(
         }
         shown_gpu += acc.gpu_ms;
         let gpu_ms = acc.gpu_ms / frames;
-        let pct = if grand_gpu > 0.0 { acc.gpu_ms / grand_gpu * 100.0 } else { 0.0 };
+        let pct = if grand_gpu > 0.0 {
+            acc.gpu_ms / grand_gpu * 100.0
+        } else {
+            0.0
+        };
         println!(
             "{:>5} {:<38} {:>9.4} {:>5.1}% {:>9.1} {:>6}",
             idx,
@@ -1428,7 +1664,11 @@ fn attribute_def(
     rolled.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     println!("    --- by node type ---");
     for (ty, ms) in rolled.iter().take(8) {
-        let pct = if grand_gpu > 0.0 { ms / grand_gpu * 100.0 } else { 0.0 };
+        let pct = if grand_gpu > 0.0 {
+            ms / grand_gpu * 100.0
+        } else {
+            0.0
+        };
         println!("    {:<38} {:>9.4} ms {:>5.1}%", ty, ms / frames, pct);
     }
     // The passes inside a step (render_scene's depth, shading, velocity…).
@@ -1458,12 +1698,16 @@ fn profile_synthetic_pointwise(device: &std::sync::Arc<GpuDevice>) {
     println!(
         "\n--- synthetic pointwise chains (Source → Gain×N → FinalOutput) @ {w}x{h}, real GPU time ---"
     );
-    println!("{:<10} {:>11} {:>16}", "N passes", "ms/frame", "marginal/pass");
+    println!(
+        "{:<10} {:>11} {:>16}",
+        "N passes", "ms/frame", "marginal/pass"
+    );
     println!("{}", "-".repeat(40));
 
     // Port names from a throwaway probe (avoid hardcoding "in"/"out").
     let probe = Gain::new();
-    let in_port: &'static str = manifold_node_engine::exec::effect_node::intern_name(&probe.inputs()[0].name);
+    let in_port: &'static str =
+        manifold_node_engine::exec::effect_node::intern_name(&probe.inputs()[0].name);
     let out_port: &'static str =
         manifold_node_engine::exec::effect_node::intern_name(&probe.outputs()[0].name);
     drop(probe);
@@ -1484,8 +1728,7 @@ fn profile_synthetic_pointwise(device: &std::sync::Arc<GpuDevice>) {
         graph.connect((last, last_out), (fout, "in")).unwrap();
 
         let plan = compile(&graph).expect("synthetic graph compiles");
-        let source_res =
-            resource_for_output(&plan, source, "out").expect("Source.out resolves");
+        let source_res = resource_for_output(&plan, source, "out").expect("Source.out resolves");
         let input_rt = RenderTarget::new(device, w, h, FORMAT, "syn-input");
         let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, FORMAT);
         backend.pre_bind_texture_2d(source_res, input_rt);
@@ -1519,7 +1762,9 @@ fn profile_synthetic_pointwise(device: &std::sync::Arc<GpuDevice>) {
         prev = ms;
         println!("{:<10} {:>11.4} {:>16.4}", n, ms, marginal);
     }
-    println!("marginal/pass ≈ true cost of one full-canvas pointwise dispatch (what fusion removes).");
+    println!(
+        "marginal/pass ≈ true cost of one full-canvas pointwise dispatch (what fusion removes)."
+    );
 }
 
 /// Profile generator presets (the BUFFER / particle domain) via the
@@ -1581,7 +1826,12 @@ fn profile_generators(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuD
                     let mut enc = device.create_encoder("freeze-profile-gen-warmup");
                     {
                         let mut gpu = RendererGpuEncoder::new(&mut enc, device);
-                        generator.render(&mut gpu, &target.texture, &mk_ctx(f64::from(i) / 60.0), &ParamManifest::default());
+                        generator.render(
+                            &mut gpu,
+                            &target.texture,
+                            &mk_ctx(f64::from(i) / 60.0),
+                            &ParamManifest::default(),
+                        );
                     }
                     enc.commit_and_wait_completed();
                 }
@@ -1633,7 +1883,10 @@ fn profile_generators(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuD
 /// overhead. This decomposes the 11 ms by measurement, not inference, and
 /// answers "does buffer fusion help FluidSim, or does it need a different
 /// lever."
-fn profile_fluidsim_particle_sweep(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice>) {
+fn profile_fluidsim_particle_sweep(
+    registry: &PrimitiveRegistry,
+    device: &std::sync::Arc<GpuDevice>,
+) {
     const COUNTS: &[i32] = &[1_000_000, 2_000_000, 4_000_000, 8_000_000];
     let (w, h) = (1920u32, 1080u32);
 
@@ -1641,7 +1894,10 @@ fn profile_fluidsim_particle_sweep(registry: &PrimitiveRegistry, device: &std::s
         "\n--- FluidSim pool-capacity sweep @ {w}x{h} (resolution fixed; max_capacity + \
          active_count tracked together), avg over {GEN_FRAMES} frames ---"
     );
-    println!("{:<14} {:>11} {:>16}", "pool size", "ms/frame", "ns/particle");
+    println!(
+        "{:<14} {:>11} {:>16}",
+        "pool size", "ms/frame", "ns/particle"
+    );
     println!("{}", "-".repeat(44));
 
     let path = format!("{GENERATOR_PRESETS_DIR}/FluidSim2D.json");
@@ -1668,19 +1924,30 @@ fn profile_fluidsim_particle_sweep(registry: &PrimitiveRegistry, device: &std::s
         let mut def = base_def.clone();
         for node in &mut def.nodes {
             if node.params.contains_key("active_count") {
-                node.params
-                    .insert("active_count".to_string(), SerializedParamValue::Int { value: count });
+                node.params.insert(
+                    "active_count".to_string(),
+                    SerializedParamValue::Int { value: count },
+                );
             }
             if node.params.contains_key("max_capacity") {
-                node.params
-                    .insert("max_capacity".to_string(), SerializedParamValue::Int { value: count });
+                node.params.insert(
+                    "max_capacity".to_string(),
+                    SerializedParamValue::Int { value: count },
+                );
             }
         }
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut generator =
-                PresetRuntime::from_def_with_device(def, registry, std::sync::Arc::clone(device), w, h, FORMAT, None)
-                    .map_err(|e| e.to_string())?;
+            let mut generator = PresetRuntime::from_def_with_device(
+                def,
+                registry,
+                std::sync::Arc::clone(device),
+                w,
+                h,
+                FORMAT,
+                None,
+            )
+            .map_err(|e| e.to_string())?;
             let target = RenderTarget::new(device, w, h, FORMAT, "fluidsweep-gen");
             let mk_ctx = |t: f64| PresetContext {
                 time: t,
@@ -1702,7 +1969,12 @@ fn profile_fluidsim_particle_sweep(registry: &PrimitiveRegistry, device: &std::s
                 let mut enc = device.create_encoder("fluidsweep-warmup");
                 {
                     let mut gpu = RendererGpuEncoder::new(&mut enc, device);
-                    generator.render(&mut gpu, &target.texture, &mk_ctx(f64::from(i) / 60.0), &ParamManifest::default());
+                    generator.render(
+                        &mut gpu,
+                        &target.texture,
+                        &mk_ctx(f64::from(i) / 60.0),
+                        &ParamManifest::default(),
+                    );
                 }
                 enc.commit_and_wait_completed();
             }

@@ -65,7 +65,12 @@ manifold_node_engine::primitive! {
     extra_fields: { state: SmoothState = SmoothState::default() },
 }
 
-fn pipeline<'a>(slot: &'a mut Option<GpuComputePipeline>, device: &manifold_gpu::GpuDevice, entry: &str, label: &str) -> &'a GpuComputePipeline {
+fn pipeline<'a>(
+    slot: &'a mut Option<GpuComputePipeline>,
+    device: &manifold_gpu::GpuDevice,
+    entry: &str,
+    label: &str,
+) -> &'a GpuComputePipeline {
     slot.get_or_insert_with(|| device.create_compute_pipeline(SHADER, entry, label))
 }
 
@@ -76,19 +81,40 @@ impl Primitive for SmoothNormals {
         _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
-        (port_name == "out").then(|| input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)).flatten()
+        (port_name == "out")
+            .then(|| {
+                input_capacities
+                    .iter()
+                    .find(|(p, _)| *p == "in")
+                    .map(|(_, n)| *n)
+            })
+            .flatten()
     }
 
     /// Only normals are written: topology and positions track `in`.
-    fn mesh_output_rule(&self, port: &str) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
-        use manifold_node_engine::scene::mesh_change::{MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule};
+    fn mesh_output_rule(
+        &self,
+        port: &str,
+    ) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
+        use manifold_node_engine::scene::mesh_change::{
+            MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule,
+        };
         if port == "out" {
             return MeshOutputRule {
-                topology: MeshRevisionRule::Dependencies(&[MeshDependency { input: std::borrow::Cow::Borrowed("in"), aspect: MeshAspect::Topology }]),
-                positions: MeshRevisionRule::Dependencies(&[MeshDependency { input: std::borrow::Cow::Borrowed("in"), aspect: MeshAspect::Positions }]),
+                topology: MeshRevisionRule::Dependencies(&[MeshDependency {
+                    input: std::borrow::Cow::Borrowed("in"),
+                    aspect: MeshAspect::Topology,
+                }]),
+                positions: MeshRevisionRule::Dependencies(&[MeshDependency {
+                    input: std::borrow::Cow::Borrowed("in"),
+                    aspect: MeshAspect::Positions,
+                }]),
             };
         }
-        MeshOutputRule { topology: MeshRevisionRule::Written, positions: MeshRevisionRule::Written }
+        MeshOutputRule {
+            topology: MeshRevisionRule::Written,
+            positions: MeshRevisionRule::Written,
+        }
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -111,22 +137,75 @@ impl Primitive for SmoothNormals {
             state.table = Some(gpu.device.create_buffer(u64::from(slots) * SLOT_BYTES));
             state.slots = slots;
         }
-        let table = state.table.as_ref().expect("smooth-normals table allocated");
-        let uniforms = SmoothUniforms { count, slots: state.slots, _pad0: 0, _pad1: 0 };
+        let table = state
+            .table
+            .as_ref()
+            .expect("smooth-normals table allocated");
+        let uniforms = SmoothUniforms {
+            count,
+            slots: state.slots,
+            _pad0: 0,
+            _pad1: 0,
+        };
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: src, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: table, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: dst, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: src,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: table,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: dst,
+                offset: 0,
+            },
         ];
-        let clear = pipeline(&mut state.clear, gpu.device, "clear_main", "node.smooth_normals.clear");
-        gpu.native_enc.dispatch_compute(clear, &bindings, [state.slots.div_ceil(256), 1, 1], "node.smooth_normals.clear");
+        let clear = pipeline(
+            &mut state.clear,
+            gpu.device,
+            "clear_main",
+            "node.smooth_normals.clear",
+        );
+        gpu.native_enc.dispatch_compute(
+            clear,
+            &bindings,
+            [state.slots.div_ceil(256), 1, 1],
+            "node.smooth_normals.clear",
+        );
         gpu.native_enc.compute_memory_barrier_buffers();
-        let accumulate = pipeline(&mut state.accumulate, gpu.device, "accumulate_main", "node.smooth_normals.accumulate");
-        gpu.native_enc.dispatch_compute(accumulate, &bindings, [count.div_ceil(256), 1, 1], "node.smooth_normals.accumulate");
+        let accumulate = pipeline(
+            &mut state.accumulate,
+            gpu.device,
+            "accumulate_main",
+            "node.smooth_normals.accumulate",
+        );
+        gpu.native_enc.dispatch_compute(
+            accumulate,
+            &bindings,
+            [count.div_ceil(256), 1, 1],
+            "node.smooth_normals.accumulate",
+        );
         gpu.native_enc.compute_memory_barrier_buffers();
-        let resolve = pipeline(&mut state.resolve, gpu.device, "resolve_main", "node.smooth_normals.resolve");
-        gpu.native_enc.dispatch_compute(resolve, &bindings, [count.div_ceil(256), 1, 1], "node.smooth_normals.resolve");
+        let resolve = pipeline(
+            &mut state.resolve,
+            gpu.device,
+            "resolve_main",
+            "node.smooth_normals.resolve",
+        );
+        gpu.native_enc.dispatch_compute(
+            resolve,
+            &bindings,
+            [count.div_ceil(256), 1, 1],
+            "node.smooth_normals.resolve",
+        );
     }
 }
 
@@ -138,7 +217,13 @@ mod gpu_tests {
     use super::*;
 
     fn vertex(position: [f32; 3], normal: [f32; 3]) -> MeshVertex {
-        MeshVertex { position, normal, uv: [position[0], position[2]], color: [1.0; 4], ..bytemuck::Zeroable::zeroed() }
+        MeshVertex {
+            position,
+            normal,
+            uv: [position[0], position[2]],
+            color: [1.0; 4],
+            ..bytemuck::Zeroable::zeroed()
+        }
     }
 
     fn sub(a: [f32; 3], b: [f32; 3]) -> [f64; 3] {
@@ -146,7 +231,11 @@ mod gpu_tests {
     }
 
     fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-        [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
     }
 
     fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -171,7 +260,10 @@ mod gpu_tests {
             let p = src[i].position;
             let a = sub(src[base + (i - base + 1) % 3].position, p);
             let b = sub(src[base + (i - base + 2) % 3].position, p);
-            let face = cross(sub(src[base + 1].position, src[base].position), sub(src[base + 2].position, src[base].position));
+            let face = cross(
+                sub(src[base + 1].position, src[base].position),
+                sub(src[base + 2].position, src[base].position),
+            );
             let (area, la, lb) = (length(face), length(a), length(b));
             if area <= 1e-12 || la <= 1e-12 || lb <= 1e-12 {
                 continue;
@@ -203,17 +295,46 @@ mod gpu_tests {
         }
         let table = device.create_buffer(u64::from(slots) * SLOT_BYTES);
         let output = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
-        let uniforms = SmoothUniforms { count, slots, _pad0: 0, _pad1: 0 };
+        let uniforms = SmoothUniforms {
+            count,
+            slots,
+            _pad0: 0,
+            _pad1: 0,
+        };
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: &input, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &table, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &output, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &input,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &table,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &output,
+                offset: 0,
+            },
         ];
         let mut enc = device.create_encoder("smooth-normals-test");
-        for (entry, threads) in [("clear_main", slots), ("accumulate_main", count), ("resolve_main", count)] {
+        for (entry, threads) in [
+            ("clear_main", slots),
+            ("accumulate_main", count),
+            ("resolve_main", count),
+        ] {
             let pipeline = device.create_compute_pipeline(SHADER, entry, "smooth-normals-test");
-            enc.dispatch_compute(&pipeline, &bindings, [threads.div_ceil(256), 1, 1], "smooth-normals-test");
+            enc.dispatch_compute(
+                &pipeline,
+                &bindings,
+                [threads.div_ceil(256), 1, 1],
+                "smooth-normals-test",
+            );
             enc.compute_memory_barrier_buffers();
         }
         enc.commit_and_wait_completed();
@@ -223,7 +344,12 @@ mod gpu_tests {
 
     #[test]
     fn split_corners_share_the_angle_weighted_normal() {
-        let (o, x, y, z) = ([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]);
+        let (o, x, y, z) = (
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        );
         let src = vec![
             // A cube's corner: three faces meet at the origin, each corner a
             // split copy with its own face's normal.
@@ -247,14 +373,25 @@ mod gpu_tests {
         let want = expected(&src);
         for (i, (got, want)) in got.iter().zip(&want).enumerate() {
             for k in 0..3 {
-                assert!((got.normal[k] - want[k]).abs() < 1e-3, "vertex {i} normal {:?}, want {want:?}", got.normal);
+                assert!(
+                    (got.normal[k] - want[k]).abs() < 1e-3,
+                    "vertex {i} normal {:?}, want {want:?}",
+                    got.normal
+                );
             }
-            assert_eq!(got.position, src[i].position, "vertex {i} keeps its position");
+            assert_eq!(
+                got.position, src[i].position,
+                "vertex {i} keeps its position"
+            );
             assert_eq!(got.uv, src[i].uv, "vertex {i} keeps its uv");
         }
         let corner = -1.0 / 3f32.sqrt();
         for i in [0, 3, 6] {
-            assert!(got[i].normal.iter().all(|n| (n - corner).abs() < 1e-3), "the corner's three copies weld: {:?}", got[i].normal);
+            assert!(
+                got[i].normal.iter().all(|n| (n - corner).abs() < 1e-3),
+                "the corner's three copies weld: {:?}",
+                got[i].normal
+            );
         }
     }
 }

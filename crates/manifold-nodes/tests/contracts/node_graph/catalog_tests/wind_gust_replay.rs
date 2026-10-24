@@ -5,11 +5,15 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::scene_modifier_preset::SceneTargetSelection;
 use manifold_core::{Beats, NodeId, PlayedTime, Seconds};
-use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, FrameTime, SimStep};
+use manifold_node_engine::exec::effect_node::{
+    EffectNode, EffectNodeContext, EffectNodeType, FrameTime, SimStep,
+};
+use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::parameters::ParamDef;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::mesh::InstanceTransform;
-use manifold_node_engine::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use manifold_node_engine::ports::{
+    ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+};
 use manifold_node_engine::runtime::*;
 use manifold_physics::{FieldValue, VectorField};
 use std::{borrow::Cow, cell::RefCell};
@@ -58,7 +62,12 @@ impl EffectNode for TickedConsumer {
         // A liquid is recognised by the surface built from its cell size,
         // a swarm by the copies it places.
         static OUTPUTS: [NodeOutput; 2] = [
-            NodePort { name: Cow::Borrowed("cell_size"), ty: PortType::Scalar(ScalarType::F32), kind: PortKind::Output, required: false },
+            NodePort {
+                name: Cow::Borrowed("cell_size"),
+                ty: PortType::Scalar(ScalarType::F32),
+                kind: PortKind::Output,
+                required: false,
+            },
             NodePort {
                 name: Cow::Borrowed("copies"),
                 ty: PortType::Array(ArrayType::of_known::<InstanceTransform>()),
@@ -83,21 +92,42 @@ impl EffectNode for TickedConsumer {
         if reached == 0 {
             return;
         }
-        let field = ctx.inputs.cpu_value::<FieldValue>("acceleration_field").unwrap_or_else(|| panic!("the wind reaches the {} at {}", self.name, ctx.time.seconds.0));
+        let field = ctx
+            .inputs
+            .cpu_value::<FieldValue>("acceleration_field")
+            .unwrap_or_else(|| {
+                panic!(
+                    "the wind reaches the {} at {}",
+                    self.name, ctx.time.seconds.0
+                )
+            });
         let reading = POINTS.map(|point| field.sample_force(point));
         let bits = [
-            reading[0].push[0], reading[0].drag_wind[0], reading[0].drag_wind[2],
-            reading[1].push[1], reading[1].drag_wind[1], reading[1].drag,
+            reading[0].push[0],
+            reading[0].drag_wind[0],
+            reading[0].drag_wind[2],
+            reading[1].push[1],
+            reading[1].drag_wind[1],
+            reading[1].drag,
         ]
         .map(f32::to_bits);
         READINGS.with_borrow_mut(|readings| {
-            readings.extend(self.pending.drain(..reached).map(|tick| (self.name, tick.to_bits(), bits)));
+            readings.extend(
+                self.pending
+                    .drain(..reached)
+                    .map(|tick| (self.name, tick.to_bits(), bits)),
+            );
         });
     }
 }
 
 impl manifold_nodes_physics::tick_sampled::TickSampled for TickedConsumer {
-    fn request_physics_samples(&mut self, from: PlayedTime, until: PlayedTime, out: &mut Vec<PlayedTime>) {
+    fn request_physics_samples(
+        &mut self,
+        from: PlayedTime,
+        until: PlayedTime,
+        out: &mut Vec<PlayedTime>,
+    ) {
         let (from, until) = (from.seconds(), until.seconds());
         let mut tick = (from * self.rate + 1e-9).floor() + 1.0;
         while tick / self.rate <= until + 1e-12 {
@@ -117,10 +147,22 @@ fn registry() -> PrimitiveRegistry {
     // The liquid ticks at 120 Hz and the swarm at 90 Hz: they share every
     // thirtieth of a second and interleave in between.
     registry.register(LIQUID, || {
-        Box::new(TickedConsumer { kind: EffectNodeType::new(LIQUID), name: "liquid", rate: 120.0, swarm: false, pending: Vec::new() })
+        Box::new(TickedConsumer {
+            kind: EffectNodeType::new(LIQUID),
+            name: "liquid",
+            rate: 120.0,
+            swarm: false,
+            pending: Vec::new(),
+        })
     });
     registry.register(SWARM, || {
-        Box::new(TickedConsumer { kind: EffectNodeType::new(SWARM), name: "swarm", rate: 90.0, swarm: true, pending: Vec::new() })
+        Box::new(TickedConsumer {
+            kind: EffectNodeType::new(SWARM),
+            name: "swarm",
+            rate: 90.0,
+            swarm: true,
+            pending: Vec::new(),
+        })
     });
     registry
 }
@@ -133,7 +175,10 @@ fn windy_scene() -> String {
         "/tests/fixtures/presets/PhysicsSolids.json"
     )))
     .unwrap();
-    for (offset, (node_id, type_id)) in [("liquid", LIQUID), ("swarm", SWARM)].into_iter().enumerate() {
+    for (offset, (node_id, type_id)) in [("liquid", LIQUID), ("swarm", SWARM)]
+        .into_iter()
+        .enumerate()
+    {
         let id = 900 + 10 * offset as u64;
         let nodes = doc["nodes"].as_array_mut().unwrap();
         nodes.push(serde_json::json!({"id": id, "nodeId": node_id, "typeId": type_id}));
@@ -148,7 +193,12 @@ fn windy_scene() -> String {
         wires.push(serde_json::json!({"fromNode": id + 1, "fromPort": "vertices", "toNode": id + 2, "toPort": "vertices"}));
         wires.push(serde_json::json!({"fromNode": id + 2, "fromPort": "object", "toNode": 30, "toPort": format!("object_{}", 6 + offset)}));
     }
-    let scene = doc["nodes"].as_array_mut().unwrap().iter_mut().find(|node| node["typeId"] == "node.render_scene").unwrap();
+    let scene = doc["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|node| node["typeId"] == "node.render_scene")
+        .unwrap();
     scene["params"]["objects"]["value"] = 8.0.into();
     let owner: EffectGraphDef = serde_json::from_value(doc).unwrap();
 
@@ -158,37 +208,63 @@ fn windy_scene() -> String {
     )))
     .unwrap();
     let metadata = wind.preset_metadata.as_mut().unwrap();
-    for (id, value) in [("turbulence", 6.0), ("turbulence_size", 1.5), ("speed", 7.0)] {
-        metadata.params.iter_mut().find(|param| param.id == id).unwrap().default_value = value;
-        for binding in metadata.bindings.iter_mut().filter(|binding| binding.id == id) {
+    for (id, value) in [
+        ("turbulence", 6.0),
+        ("turbulence_size", 1.5),
+        ("speed", 7.0),
+    ] {
+        metadata
+            .params
+            .iter_mut()
+            .find(|param| param.id == id)
+            .unwrap()
+            .default_value = value;
+        for binding in metadata
+            .bindings
+            .iter_mut()
+            .filter(|binding| binding.id == id)
+        {
             binding.default_value = value;
         }
     }
     let scene = NodeId::new("scene");
-    let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
-        &owner,
-        &wind,
-        NodeId::new("wind"),
-        scene,
-        SceneTargetSelection::AllObjects,
+    let instance =
+        manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+            &owner,
+            &wind,
+            NodeId::new("wind"),
+            scene,
+            SceneTargetSelection::AllObjects,
+        )
+        .expect("the Wind card prepares on every object");
+    let def = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(
+        &owner, instance,
     )
-    .expect("the Wind card prepares on every object");
-    let def = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(&owner, instance).expect("the Wind card attaches");
+    .expect("the Wind card attaches");
     serde_json::to_string(&def).unwrap()
 }
 
 fn build(json: &str) -> PresetRuntime {
-    PresetRuntime::from_json_str(json, &registry()).expect("a Wind with turbulence builds over solids, a liquid and a swarm")
+    PresetRuntime::from_json_str(json, &registry())
+        .expect("a Wind with turbulence builds over solids, a liquid and a swarm")
 }
 
 fn frame(runtime: &mut PresetRuntime, fps: u32, frame: u32, export: bool) {
     let seconds = f64::from(frame) / f64::from(fps);
     let interval = Seconds(1.0 / 60.0);
-    runtime.set_sim_step(if export { SimStep::export(interval) } else { SimStep::live(interval) });
+    runtime.set_sim_step(if export {
+        SimStep::export(interval)
+    } else {
+        SimStep::live(interval)
+    });
     runtime.execute_frame(FrameTime {
         seconds: Seconds(seconds),
         beats: Beats(seconds * 2.0),
-        delta: Seconds(if frame == 0 { 0.0 } else { 1.0 / f64::from(fps) }),
+        delta: Seconds(if frame == 0 {
+            0.0
+        } else {
+            1.0 / f64::from(fps)
+        }),
         frame_count: i64::from(frame),
     });
 }
@@ -212,32 +288,72 @@ fn play(json: &str, fps: u32, export: bool, rebuild: bool) -> Vec<Reading> {
 fn wind_gusts_drift_the_same_for_every_consumer_at_any_rate_live_and_export() {
     let json = windy_scene();
     let runtime = build(&json);
-    let mask = manifold_nodes_water::runtime::testkit::sampling_mask(&runtime).expect("the consumers replay their ticks");
+    let mask = manifold_nodes_water::runtime::testkit::sampling_mask(&runtime)
+        .expect("the consumers replay their ticks");
     let replayed = |kind: &str| {
-        runtime.plan.steps().iter().zip(mask).any(|(step, &on)| on && runtime.graph.get_node(step.node).unwrap().node.type_id().as_str() == kind)
+        runtime.plan.steps().iter().zip(mask).any(|(step, &on)| {
+            on && runtime
+                .graph
+                .get_node(step.node)
+                .unwrap()
+                .node
+                .type_id()
+                .as_str()
+                == kind
+        })
     };
-    assert!(replayed("node.turbulence_vector_field"), "the gusts replay with the ticks");
+    assert!(
+        replayed("node.turbulence_vector_field"),
+        "the gusts replay with the ticks"
+    );
     assert!(replayed("node.physics_world"), "the solids share the wind");
 
     let baseline = play(&json, 120, false, false);
     let ticks = |name: &str| baseline.iter().filter(|reading| reading.0 == name).count();
-    assert_eq!((ticks("liquid"), ticks("swarm")), (60, 45), "one reading per tick of each consumer");
+    assert_eq!(
+        (ticks("liquid"), ticks("swarm")),
+        (60, 45),
+        "one reading per tick of each consumer"
+    );
 
     // Where both consumers tick, they read the same gust.
     let mut shared = 0;
     for liquid in baseline.iter().filter(|reading| reading.0 == "liquid") {
-        if let Some(swarm) = baseline.iter().find(|reading| reading.0 == "swarm" && reading.1 == liquid.1) {
-            assert_eq!(swarm.2, liquid.2, "the drift at tick {}", f64::from_bits(liquid.1));
+        if let Some(swarm) = baseline
+            .iter()
+            .find(|reading| reading.0 == "swarm" && reading.1 == liquid.1)
+        {
+            assert_eq!(
+                swarm.2,
+                liquid.2,
+                "the drift at tick {}",
+                f64::from_bits(liquid.1)
+            );
             shared += 1;
         }
     }
     assert_eq!(shared, 15, "every thirtieth of a second is a tick of both");
 
     // The gusts move from tick to tick.
-    let liquid: Vec<_> = baseline.iter().filter(|reading| reading.0 == "liquid").map(|reading| reading.2).collect();
-    assert!(liquid.windows(2).all(|pair| pair[0] != pair[1]), "the gust drifts every tick");
+    let liquid: Vec<_> = baseline
+        .iter()
+        .filter(|reading| reading.0 == "liquid")
+        .map(|reading| reading.2)
+        .collect();
+    assert!(
+        liquid.windows(2).all(|pair| pair[0] != pair[1]),
+        "the gust drifts every tick"
+    );
 
-    for (fps, export, rebuild) in [(144, false, false), (144, true, false), (30, false, false), (30, true, false), (120, true, false), (120, false, true), (30, true, true)] {
+    for (fps, export, rebuild) in [
+        (144, false, false),
+        (144, true, false),
+        (30, false, false),
+        (30, true, false),
+        (120, true, false),
+        (120, false, true),
+        (30, true, true),
+    ] {
         let mut run = play(&json, fps, export, rebuild);
         let mut expected = baseline.clone();
         // Readings are compared per consumer in tick order.

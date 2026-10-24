@@ -1,7 +1,7 @@
 use crate::command::Command;
-use manifold_core::change::{ChangeSet, Part};
 use crate::commands::effect_target::DriverTarget;
 use crate::commands::graph::KeepOnCard;
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::effects::ParameterDriver;
 use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, DriverWaveform};
@@ -34,18 +34,25 @@ pub struct AddDriverCommand {
 
 impl AddDriverCommand {
     pub fn new(target: DriverTarget, driver: ParameterDriver) -> Self {
-        Self { target, driver, keep: KeepOnCard::default() }
+        Self {
+            target,
+            driver,
+            keep: KeepOnCard::default(),
+        }
     }
 }
 
 impl Command for AddDriverCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects, Part::Shapes])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let driver = self.driver.clone();
         with_drivers_mut(project, &self.target, |drivers| {
             drivers.push(driver);
         });
-        self.keep.attach_driver(project, &self.target, &self.driver.param_id);
+        self.keep
+            .attach_driver(project, &self.target, &self.driver.param_id);
     }
 
     fn do_undo(&mut self, project: &mut Project) {
@@ -91,7 +98,9 @@ impl ToggleDriverEnabledCommand {
 }
 
 impl Command for ToggleDriverEnabledCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects, Part::Shapes])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.new_enabled;
@@ -155,7 +164,9 @@ impl ChangeDriverBeatDivCommand {
 }
 
 impl Command for ChangeDriverBeatDivCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects, Part::Shapes])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.new_div;
@@ -212,7 +223,9 @@ impl SetDriverFreePeriodCommand {
 }
 
 impl Command for SetDriverFreePeriodCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects, Part::Shapes])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.new_free;
@@ -264,7 +277,9 @@ impl ChangeDriverWaveformCommand {
 }
 
 impl Command for ChangeDriverWaveformCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects, Part::Shapes])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.new_waveform;
@@ -316,7 +331,9 @@ impl ToggleDriverReversedCommand {
 }
 
 impl Command for ToggleDriverReversedCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects, Part::Shapes])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.new_reversed;
@@ -404,7 +421,6 @@ impl Command for ChangeTrimCommand {
     }
 }
 
-
 #[derive(Debug)]
 pub struct ToggleDriverFrameAlignedCommand {
     target: DriverTarget,
@@ -430,7 +446,9 @@ impl ToggleDriverFrameAlignedCommand {
 }
 
 impl Command for ToggleDriverFrameAlignedCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects, Part::Shapes])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.new_aligned;

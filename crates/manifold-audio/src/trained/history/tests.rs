@@ -53,12 +53,48 @@ fn matches_the_python_stage_on_a_hand_made_stream() {
     ];
     let want_x = [
         [1.7917594692280556, 0.0, 0.0, 0.0, 0.0],
-        [-1.791759469228055, 0.4992034811813095, -3.5835189384561104, -3.0, 0.2556937210025549],
-        [2.5708317782513297, 0.43419068203529493, 0.779074442556656, 2.0000017861214787, 0.25569385533139927],
-        [0.6263814842476834, 0.5654751113254876, -1.676127593927203, -1.8111750943225196, 0.6129969929811535],
-        [5.750937314391587, 0.5061644557133708, 3.2878219310204937, -0.3615079089287918, 0.4619228524941818],
-        [1.738049344917636, 0.5591452721733352, -2.7771003663117853, 1.3641206848569767, 0.940805627286397],
-        [-0.30306790178515775, 0.6631057822110182, -4.404270946171403, -3.8392112571636527, 1.0422759115106217],
+        [
+            -1.791759469228055,
+            0.4992034811813095,
+            -3.5835189384561104,
+            -3.0,
+            0.2556937210025549,
+        ],
+        [
+            2.5708317782513297,
+            0.43419068203529493,
+            0.779074442556656,
+            2.0000017861214787,
+            0.25569385533139927,
+        ],
+        [
+            0.6263814842476834,
+            0.5654751113254876,
+            -1.676127593927203,
+            -1.8111750943225196,
+            0.6129969929811535,
+        ],
+        [
+            5.750937314391587,
+            0.5061644557133708,
+            3.2878219310204937,
+            -0.3615079089287918,
+            0.4619228524941818,
+        ],
+        [
+            1.738049344917636,
+            0.5591452721733352,
+            -2.7771003663117853,
+            1.3641206848569767,
+            0.940805627286397,
+        ],
+        [
+            -0.30306790178515775,
+            0.6631057822110182,
+            -4.404270946171403,
+            -3.8392112571636527,
+            1.0422759115106217,
+        ],
     ];
     let mut s = History::new(&model(), &kick_stage(), 256, 48_000).unwrap();
     let mut rule = FireRule::new(0.5, 0.06);
@@ -123,7 +159,10 @@ fn unit_history(file: &str, shape: Vec<Measure>, level: Option<(Measure, usize)>
         lp_clip: 1e-6,
         q_clip: 1e-6,
     };
-    assert_eq!(g.i64s("has_level", &[]).unwrap()[0] == 1, st.level.is_some());
+    assert_eq!(
+        g.i64s("has_level", &[]).unwrap()[0] == 1,
+        st.level.is_some()
+    );
     let width = st.shape_width();
     let n_in = st.inputs();
     let avail = g.i64s("avail_hop", &[k]).unwrap();
@@ -132,15 +171,24 @@ fn unit_history(file: &str, shape: Vec<Measure>, level: Option<(Measure, usize)>
     let level_v = g.f64s("level", &[k]).unwrap();
     let z = g.f32s("net.logit", &[k, nets]).unwrap();
     let p_k = g.f64s("p.k", &[k, nets]).unwrap();
-    let (p_net, p_trees, p_comb) =
-        (g.f64s("p.net", &[k]).unwrap(), g.f64s("p.trees", &[k]).unwrap(), g.f64s("p.combined", &[k]).unwrap());
-    let (want_x, want_q, want_final) =
-        (g.f64s("stage.x", &[k, n_in]).unwrap(), g.f64s("p.stage", &[k]).unwrap(), g.f64s("p.final", &[k]).unwrap());
+    let (p_net, p_trees, p_comb) = (
+        g.f64s("p.net", &[k]).unwrap(),
+        g.f64s("p.trees", &[k]).unwrap(),
+        g.f64s("p.combined", &[k]).unwrap(),
+    );
+    let (want_x, want_q, want_final) = (
+        g.f64s("stage.x", &[k, n_in]).unwrap(),
+        g.f64s("p.stage", &[k]).unwrap(),
+        g.f64s("p.final", &[k]).unwrap(),
+    );
     let nf = g.shape("fires").unwrap()[0];
     let want_fires = g.i64s("fires", &[nf]).unwrap();
 
     let mut h = History::new(&g, &st, 256, 48_000).unwrap();
-    let mut rule = FireRule::new(g.f64s("cutoff", &[]).unwrap()[0], g.f64s("refractory_s", &[]).unwrap()[0]);
+    let mut rule = FireRule::new(
+        g.f64s("cutoff", &[]).unwrap()[0],
+        g.f64s("refractory_s", &[]).unwrap()[0],
+    );
     let mut err = [0.0f64; 6];
     let mut fires = vec![];
     for i in 0..k {
@@ -150,11 +198,17 @@ fn unit_history(file: &str, shape: Vec<Measure>, level: Option<(Measure, usize)>
         }
         // D17 and the combine on Rust's own net probabilities: within the f32 sigmoid's last bit.
         err[1] = err[1].max((crate::trained::net::average(zi, 1e-6) - p_net[i]).abs());
-        err[2] = err[2].max((combine(Combine::MeanLogit, p_net[i], p_trees[i], 1e-6) - p_comb[i]).abs());
+        err[2] =
+            err[2].max((combine(Combine::MeanLogit, p_net[i], p_trees[i], 1e-6) - p_comb[i]).abs());
         let a = avail[i] as u64;
         assert_eq!(((a + 1) * 256) as f64 / 48_000.0, emit_s[i], "emit_s {i}");
         // The history fed the golden p.combined: part parity.
-        let (x, q, p_final) = h.decide(p_comb[i], &shape_rows[i * width..][..width], level_v[i], a + 1);
+        let (x, q, p_final) = h.decide(
+            p_comb[i],
+            &shape_rows[i * width..][..width],
+            level_v[i],
+            a + 1,
+        );
         for (c, v) in x.iter().enumerate() {
             err[3] = err[3].max((v - want_x[i * n_in + c]).abs());
         }
@@ -175,19 +229,33 @@ fn unit_history(file: &str, shape: Vec<Measure>, level: Option<(Measure, usize)>
         fires.len(),
         want_fires.len()
     );
-    assert!(err[0] <= 1e-6 && err[1] <= 1e-6, "{file}: net probabilities {err:?}");
+    assert!(
+        err[0] <= 1e-6 && err[1] <= 1e-6,
+        "{file}: net probabilities {err:?}"
+    );
     assert!(err[2] <= 1e-12, "{file}: combine {err:?}");
-    assert!(err[3] <= 1e-12 && err[4] <= 1e-12 && err[5] <= 1e-12, "{file}: history {err:?}");
+    assert!(
+        err[3] <= 1e-12 && err[4] <= 1e-12 && err[5] <= 1e-12,
+        "{file}: history {err:?}"
+    );
     assert_eq!(fires, want_fires, "{file}: fires");
     assert_eq!(h.dropped(), 0);
 }
 
 #[test]
 fn matches_the_lab_with_gate_two_windows_and_level() {
-    unit_history("history_gate.mkick", vec![Measure::Prof32, Measure::Low16], Some((Measure::F15, 0)));
+    unit_history(
+        "history_gate.mkick",
+        vec![Measure::Prof32, Measure::Low16],
+        Some((Measure::F15, 0)),
+    );
 }
 
 #[test]
 fn matches_the_lab_without_gate_or_level() {
-    unit_history("history_plain.mkick", vec![Measure::Prof32, Measure::Low16], None);
+    unit_history(
+        "history_plain.mkick",
+        vec![Measure::Prof32, Measure::Low16],
+        None,
+    );
 }

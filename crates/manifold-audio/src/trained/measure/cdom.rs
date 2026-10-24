@@ -8,8 +8,8 @@ use std::sync::Arc;
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 
-use super::dsp::History;
 use super::HIST_FRAMES;
+use super::dsp::History;
 use crate::trained::container::{Container, ContainerError};
 
 pub(super) const N_FFT: usize = 2048;
@@ -42,7 +42,10 @@ impl ComplexOnset {
         let lo = super::scalar_i64(c, "extra.cdom_bin_lo")?;
         let n = super::scalar_i64(c, "extra.cdom_bin_n")?;
         if lo < 0 || n <= 0 || (lo + n) as usize > N_FFT / 2 + 1 {
-            return Err(ContainerError::WrongType { name: "extra.cdom_bin_lo/extra.cdom_bin_n".into(), want: "bins inside the rfft" });
+            return Err(ContainerError::WrongType {
+                name: "extra.cdom_bin_lo/extra.cdom_bin_n".into(),
+                want: "bins inside the rfft",
+            });
         }
         let (bin_lo, bin_n) = (lo as usize, n as usize);
         let fft = FftPlanner::new().plan_fft_forward(N_FFT);
@@ -81,7 +84,8 @@ impl ComplexOnset {
         for (i, b) in self.buf.iter_mut().enumerate() {
             *b = Complex::new(self.ring[(self.pos + i) % N_FFT] * self.window[i], 0.0);
         }
-        self.fft.process_with_scratch(&mut self.buf, &mut self.scratch);
+        self.fft
+            .process_with_scratch(&mut self.buf, &mut self.scratch);
         let cur = &self.buf[self.bin_lo..self.bin_lo + self.bin_n];
         let (mut nrm, mut raw) = (0.0, 0.0);
         if self.hops.len() >= 2 {

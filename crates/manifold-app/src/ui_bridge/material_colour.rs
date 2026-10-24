@@ -107,7 +107,8 @@ impl Command for ChangeMaterialColourCommand {
     /// when the colour crosses a feature's default (the inner commands
     /// measure it, since a scrub commit's value is already live).
     fn touches(&self) -> manifold_core::change::ChangeSet {
-        manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Values]).union(self.inner.touches())
+        manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Values])
+            .union(self.inner.touches())
     }
     fn was_applied(&self) -> bool {
         !self.rejected && self.inner.was_applied()

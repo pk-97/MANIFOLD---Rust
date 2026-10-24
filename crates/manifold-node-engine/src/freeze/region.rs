@@ -43,12 +43,12 @@
 use ahash::{AHashMap, AHashSet};
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 
-use crate::persistence::PrimitiveRegistry;
-use crate::scene::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
 use crate::freeze::classify::{CapacityExpr, FusedOutputCapacity, InputAccess};
 use crate::freeze::codegen::param_wgsl_type;
 use crate::freeze::space::{ElementSpace, resolve_output_spaces, space_of};
+use crate::persistence::PrimitiveRegistry;
 use crate::ports::PortType;
+use crate::scene::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
 
 /// Resolved per-output element spaces, or `None` when the def didn't build
 /// standalone (synthetic fixtures) — every lookup then defaults to
@@ -483,8 +483,10 @@ fn absorb_virtual_chains(
         .iter()
         .flat_map(|(rep, ns)| ns.iter().map(move |&n| (n, *rep)))
         .collect();
-    let comp_nodes: AHashMap<u32, &[u32]> =
-        comps.iter().map(|(rep, ns)| (*rep, ns.as_slice())).collect();
+    let comp_nodes: AHashMap<u32, &[u32]> = comps
+        .iter()
+        .map(|(rep, ns)| (*rep, ns.as_slice()))
+        .collect();
 
     // Running chain-rep → region-rep merges, so each candidate's convexity test
     // sees every previously accepted absorption (same incremental invariant the
@@ -503,24 +505,26 @@ fn absorb_virtual_chains(
             .first()
             .and_then(|m| comp_of.get(&m.doc_id))
             .copied();
-        let Some(region_rep) = region_rep else { continue;
+        let Some(region_rep) = region_rep else {
+            continue;
         };
         for member in &region.members {
             let Some(doc_node) = def.nodes.iter().find(|n| n.id == member.doc_id) else {
                 continue;
             };
-            let Some(node) = configured_construct(registry, doc_node) else { continue;
+            let Some(node) = configured_construct(registry, doc_node) else {
+                continue;
             };
             if !node.stencil_fetch() {
                 continue;
             }
-            for (idx, (input, access)) in
-                member.inputs.iter().zip(&member.input_access).enumerate()
+            for (idx, (input, access)) in member.inputs.iter().zip(&member.input_access).enumerate()
             {
                 if *access != InputAccess::Gather {
                     continue;
                 }
-                let RegionInput::External(e) = input else { continue;
+                let RegionInput::External(e) = input else {
+                    continue;
                 };
                 let prod = region.externals[*e].from_node;
                 let Some(&rep) = comp_of.get(&prod) else {
@@ -538,8 +542,7 @@ fn absorb_virtual_chains(
                 {
                     continue;
                 }
-                if !chain_is_absorbable(def, registry, nodes, member.doc_id, region_space, spaces)
-                {
+                if !chain_is_absorbable(def, registry, nodes, member.doc_id, region_space, spaces) {
                     continue;
                 }
                 // Convexity under the tentative merge: every eligible node maps
@@ -593,8 +596,10 @@ fn absorb_virtual_chains(
                 let mut inputs: Vec<RegionInput> = Vec::with_capacity(tex_ports.len());
                 let mut input_access: Vec<InputAccess> = Vec::with_capacity(tex_ports.len());
                 for (pidx, port) in tex_ports.iter().enumerate() {
-                    let access =
-                        access_list.get(pidx).copied().unwrap_or(InputAccess::Coincident);
+                    let access = access_list
+                        .get(pidx)
+                        .copied()
+                        .unwrap_or(InputAccess::Coincident);
                     let Some(wire) = def
                         .wires
                         .iter()
@@ -644,7 +649,11 @@ fn absorb_virtual_chains(
                 // tier-A in-loop rounding never applies; the codegen q16s the
                 // chain TAIL unconditionally to reproduce the f16 store the
                 // unfused chain made for the blur to sample.
-                members.push(RegionMember { doc_id, inputs, input_access, quantize_f16: false,
+                members.push(RegionMember {
+                    doc_id,
+                    inputs,
+                    input_access,
+                    quantize_f16: false,
                 });
             }
             Some((members, new_externals))
@@ -690,8 +699,11 @@ fn absorb_virtual_chains(
             }
         }
         used.sort_unstable();
-        let remap: AHashMap<usize, usize> =
-            used.iter().enumerate().map(|(new, &old)| (old, new)).collect();
+        let remap: AHashMap<usize, usize> = used
+            .iter()
+            .enumerate()
+            .map(|(new, &old)| (old, new))
+            .collect();
         let rewrite = |inputs: &mut Vec<RegionInput>| {
             for input in inputs {
                 if let RegionInput::External(e) = input {
@@ -804,7 +816,10 @@ fn chain_is_absorbable(
         let Some(n) = configured_construct(registry, doc) else {
             return false;
         };
-        if n.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
+        if n.outputs()
+            .iter()
+            .any(|o| matches!(o.ty, PortType::Array(_)))
+        {
             return false; // buffer atom — no texture grid
         }
         // Coincident reads re-anchor as sampled corner reads; a sampler-Gather
@@ -997,7 +1012,11 @@ fn cycle_contains_array(start: u32, def: &EffectGraphDef, registry: &PrimitiveRe
         let Some(n) = configured_construct(registry, node) else {
             continue;
         };
-        if !n.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
+        if !n
+            .outputs()
+            .iter()
+            .any(|o| matches!(o.ty, PortType::Array(_)))
+        {
             continue;
         }
         let mut back: AHashSet<u32> = AHashSet::default();
@@ -1059,7 +1078,11 @@ fn configured_params(
         params.insert(p.name.clone(), p.default.clone());
     }
     for (key, value) in &node.params {
-        if let Some(p) = constructed.parameters().iter().find(|p| p.name == key.as_str()) {
+        if let Some(p) = constructed
+            .parameters()
+            .iter()
+            .find(|p| p.name == key.as_str())
+        {
             params.insert(p.name.clone(), value.clone().into());
         }
     }
@@ -1112,14 +1135,21 @@ fn lattice_count(
     coincident_slots: &[usize],
     params: &crate::exec::effect_node::ParamValues,
 ) -> Result<CapacityExpr, &'static str> {
-    let clamps = member_expr.iter().flatten().cloned().chain(coincident_slots.iter().map(|&e| CapacityExpr::Slot(e)));
+    let clamps = member_expr
+        .iter()
+        .flatten()
+        .cloned()
+        .chain(coincident_slots.iter().map(|&e| CapacityExpr::Slot(e)));
     let mut children = vec![output.clone()];
     for clamp in clamps {
         if capacity_bounded_by(output, &clamp) || children.contains(&clamp) {
             continue;
         }
         let slot_free = |e: &CapacityExpr| e.eval_with(&[], params).is_some();
-        if slot_free(&clamp) && slot_free(output) && clamp.eval_with(&[], params) < output.eval_with(&[], params) {
+        if slot_free(&clamp)
+            && slot_free(output)
+            && clamp.eval_with(&[], params) < output.eval_with(&[], params)
+        {
             return Err("a member's lattice is smaller than the region output's");
         }
         children.push(clamp);
@@ -1577,8 +1607,16 @@ fn classify_buffer_node(
     {
         return NodeClass::Boundary;
     }
-    let arr_in = n.inputs().iter().filter(|i| matches!(i.ty, PortType::Array(_))).count();
-    let arr_out = n.outputs().iter().filter(|o| matches!(o.ty, PortType::Array(_))).count();
+    let arr_in = n
+        .inputs()
+        .iter()
+        .filter(|i| matches!(i.ty, PortType::Array(_)))
+        .count();
+    let arr_out = n
+        .outputs()
+        .iter()
+        .filter(|o| matches!(o.ty, PortType::Array(_)))
+        .count();
     // Any atomic output — a scatter's sole output, or a side output next to a
     // coincident one (BUG-agfh, Codegen: buffer atom with several outputs, one
     // atomic) — is a cut. The body `atomicAdd`s at data-dependent cells, and the
@@ -2507,7 +2545,10 @@ fn topo_sort(
 /// declares its input ports + their access modes only after `wgsl_source` is
 /// parsed — a bare construct sees the default kernel, so a gather input would read
 /// as coincident and wrongly union into a region.
-fn input_port_access(registry: &PrimitiveRegistry, node: &EffectGraphNode, port: &str,
+fn input_port_access(
+    registry: &PrimitiveRegistry,
+    node: &EffectGraphNode,
+    port: &str,
 ) -> InputAccess {
     let Some(node) = configured_construct(registry, node) else {
         return InputAccess::Coincident;
@@ -2527,17 +2568,28 @@ fn input_port_access(registry: &PrimitiveRegistry, node: &EffectGraphNode, port:
     // OUTPUT), so `is_buffer_atom` is true and this offset is never applied to
     // shipped atoms — additive, zero behavior change for anything but the new
     // mixed shape.
-    let is_buffer_atom = node.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_)));
+    let is_buffer_atom = node
+        .outputs()
+        .iter()
+        .any(|o| matches!(o.ty, PortType::Array(_)));
     let port_ty = node.inputs().iter().find(|i| i.name == port).map(|i| i.ty);
     let idx = match port_ty {
-        Some(ty) if is_texture_port(&ty) => node.inputs().iter().filter(|i| is_texture_port(&i.ty)).position(|i| i.name == port),
+        Some(ty) if is_texture_port(&ty) => node
+            .inputs()
+            .iter()
+            .filter(|i| is_texture_port(&i.ty))
+            .position(|i| i.name == port),
         Some(PortType::Array(_)) if is_buffer_atom => node
             .inputs()
             .iter()
             .filter(|i| matches!(i.ty, PortType::Array(_)))
             .position(|i| i.name == port),
         Some(PortType::Array(_)) => {
-            let tex_count = node.inputs().iter().filter(|i| is_texture_port(&i.ty)).count();
+            let tex_count = node
+                .inputs()
+                .iter()
+                .filter(|i| is_texture_port(&i.ty))
+                .count();
             node.inputs()
                 .iter()
                 .filter(|i| matches!(i.ty, PortType::Array(_)))
@@ -2651,7 +2703,8 @@ fn is_state_capture_wire(
     let Some(node) = configured_construct(registry, to) else {
         return false;
     };
-    node.state_capture_input_ports().contains(&w.to_port.as_str())
+    node.state_capture_input_ports()
+        .contains(&w.to_port.as_str())
 }
 
 /// The substep region each node belongs to: boundary and body nodes map to
@@ -2671,7 +2724,8 @@ fn substep_sides(
         .nodes
         .iter()
         .filter_map(|n| {
-            let ports = configured_construct(registry, n).and_then(|node| node.substep_boundary())?;
+            let ports =
+                configured_construct(registry, n).and_then(|node| node.substep_boundary())?;
             let producers = def
                 .wires
                 .iter()
@@ -2693,7 +2747,10 @@ fn substep_sides(
     let is_boundary = |node: u32| boundaries.iter().any(|(b, _)| *b == node);
     for (boundary, producers) in &boundaries {
         let body = crate::exec::substeps::region_body(*boundary, producers, &fwd, &rev);
-        if body.iter().any(|&node| is_boundary(node) || sides.contains_key(&node)) {
+        if body
+            .iter()
+            .any(|&node| is_boundary(node) || sides.contains_key(&node))
+        {
             sides.clear();
             for node in &def.nodes {
                 sides.insert(node.id, node.id);
@@ -2739,7 +2796,7 @@ fn collapsed_has_cycle(forward: &[(u32, u32)], key: &impl Fn(u32) -> u32) -> boo
                 stack.last_mut().unwrap().1 += 1;
                 let m = succs[idx];
                 match color[&m] {
-                    1 => return true,                          // grey → back edge → cycle
+                    1 => return true, // grey → back edge → cycle
                     0 => {
                         color.insert(m, 1);
                         stack.push((m, 0));
@@ -2868,7 +2925,9 @@ fn node_is_buffer_atom(def: &EffectGraphDef, registry: &PrimitiveRegistry, id: u
         .find(|n| n.id == id)
         .and_then(|n| configured_construct(registry, n))
         .map(|c| {
-            c.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_)))
+            c.outputs()
+                .iter()
+                .any(|o| matches!(o.ty, PortType::Array(_)))
         })
         .unwrap_or(false)
 }
@@ -2886,7 +2945,9 @@ fn region_is_buffer(nodes: &[u32], def: &EffectGraphDef, registry: &PrimitiveReg
             .find(|n| n.id == id)
             .and_then(|n| configured_construct(registry, n))
             .map(|c| {
-                c.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_)))
+                c.outputs()
+                    .iter()
+                    .any(|o| matches!(o.ty, PortType::Array(_)))
             })
             .unwrap_or(false)
     })
@@ -2951,16 +3012,6 @@ mod tests {
         assert!(!capacity_bounded_by(&map, &count));
     }
 
-
-
-
-
-
-
-
-
-
-
     /// A true boundary in the middle splits the graph into TWO regions — the
     /// headline generalisation. source → gain → contrast → multi_blend(boundary)
     /// → saturation → clamp → final yields {gain, contrast} feeding the blend,
@@ -2991,22 +3042,43 @@ mod tests {
         }"#;
         let def: EffectGraphDef = serde_json::from_str(json).unwrap();
         let mut regions = partition_regions(&def, &registry());
-        assert_eq!(regions.len(), 2, "the threshold boundary splits the graph in two");
+        assert_eq!(
+            regions.len(),
+            2,
+            "the threshold boundary splits the graph in two"
+        );
         regions.sort_by_key(|r| r.members[0].doc_id);
 
         // Region 1: gain(1) → contrast(2), reads the source, output = contrast.
         let r1 = &regions[0];
-        assert_eq!(r1.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![1, 2]);
+        assert_eq!(
+            r1.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
         assert_eq!(r1.externals.len(), 1, "region 1 reads the source");
         assert_eq!(r1.externals[0].from_node, 0);
-        assert_eq!(r1.outputs, vec![(2, "out".to_string())], "contrast feeds the threshold");
+        assert_eq!(
+            r1.outputs,
+            vec![(2, "out".to_string())],
+            "contrast feeds the threshold"
+        );
 
         // Region 2: saturation(4) → clamp(5), reads the threshold, output = clamp.
         let r2 = &regions[1];
-        assert_eq!(r2.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![4, 5]);
+        assert_eq!(
+            r2.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![4, 5]
+        );
         assert_eq!(r2.externals.len(), 1, "region 2 reads the threshold output");
-        assert_eq!(r2.externals[0].from_node, 3, "the threshold is region 2's external");
-        assert_eq!(r2.outputs, vec![(5, "out".to_string())], "clamp feeds final_output");
+        assert_eq!(
+            r2.externals[0].from_node, 3,
+            "the threshold is region 2's external"
+        );
+        assert_eq!(
+            r2.outputs,
+            vec![(5, "out".to_string())],
+            "clamp feeds final_output"
+        );
     }
 
     /// Tier 3 — a gather atom folds INTO a region (it does NOT split it). source →
@@ -3034,8 +3106,15 @@ mod tests {
         let regions = partition_regions(&def, &registry());
         assert_eq!(regions.len(), 1, "sharpen (gather) + invert are one region");
         let r = &regions[0];
-        assert_eq!(r.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![1, 2]);
-        assert_eq!(r.externals.len(), 1, "sharpen gathers the source as an external");
+        assert_eq!(
+            r.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(
+            r.externals.len(),
+            1,
+            "sharpen gathers the source as an external"
+        );
         assert_eq!(r.externals[0].from_node, 0);
         // sharpen's one input is Gather, resolved to the external; invert reads
         // sharpen's register coincidentally.
@@ -3072,7 +3151,6 @@ mod tests {
             "the gather cut leaves gain and sharpen as lone atoms — neither fuses"
         );
     }
-
 
     /// A lone fusable atom is not a region (fusing one node changes nothing). The
     /// MIN_REGION_LEN gate drops it; the card renders unfused.
@@ -3136,12 +3214,23 @@ mod tests {
         assert_eq!(regions.len(), 1, "the generator + invert form one region");
         let r = &regions[0];
         assert_eq!(r.members.len(), 2, "checkerboard + invert");
-        assert!(r.externals.is_empty(), "a pure-generator region reads no external texture");
-        assert_eq!(r.outputs, vec![(2, "out".to_string())], "invert feeds final_output");
+        assert!(
+            r.externals.is_empty(),
+            "a pure-generator region reads no external texture"
+        );
+        assert_eq!(
+            r.outputs,
+            vec![(2, "out".to_string())],
+            "invert feeds final_output"
+        );
         let checker = r.members.iter().find(|m| m.doc_id == 1).unwrap();
         assert!(checker.inputs.is_empty(), "the Source head reads nothing");
         let invert = r.members.iter().find(|m| m.doc_id == 2).unwrap();
-        assert_eq!(invert.inputs, vec![RegionInput::Member(1)], "invert threads the generator");
+        assert_eq!(
+            invert.inputs,
+            vec![RegionInput::Member(1)],
+            "invert threads the generator"
+        );
     }
 
     /// A Source generator blended with the incoming source texture: the system
@@ -3167,9 +3256,17 @@ mod tests {
         assert_eq!(regions.len(), 1, "checkerboard + mix are one region");
         let r = &regions[0];
         assert_eq!(r.members.len(), 2, "checkerboard + mix");
-        assert_eq!(r.externals.len(), 1, "the system source is the one external");
+        assert_eq!(
+            r.externals.len(),
+            1,
+            "the system source is the one external"
+        );
         assert_eq!(r.externals[0].from_node, 0);
-        assert_eq!(r.outputs, vec![(2, "out".to_string())], "mix feeds final_output");
+        assert_eq!(
+            r.outputs,
+            vec![(2, "out".to_string())],
+            "mix feeds final_output"
+        );
     }
 
     /// Fan-out — an interior member feeds two distinct downstream boundaries, so
@@ -3205,7 +3302,11 @@ mod tests {
         let regions = partition_regions(&def, &registry());
         // mix reads two boundaries, so it's a lone 1-node component (dropped);
         // the thresholds are boundaries. Exactly one real region: the fork.
-        assert_eq!(regions.len(), 1, "the gain fork is the one region (mix is dropped)");
+        assert_eq!(
+            regions.len(),
+            1,
+            "the gain fork is the one region (mix is dropped)"
+        );
         let r = &regions[0];
         assert_eq!(
             r.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
@@ -3285,21 +3386,31 @@ mod tests {
         }"#;
         let def: EffectGraphDef = serde_json::from_str(json).unwrap();
         let mut regions = partition_regions(&def, &registry());
-        assert_eq!(regions.len(), 2, "the non-convex group splits at the threshold");
+        assert_eq!(
+            regions.len(),
+            2,
+            "the non-convex group splits at the threshold"
+        );
         regions.sort_by_key(|r| r.members[0].doc_id);
         assert_eq!(
-            regions[0].members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            regions[0]
+                .members
+                .iter()
+                .map(|m| m.doc_id)
+                .collect::<Vec<_>>(),
             vec![1, 2],
             "gain + invert before the threshold"
         );
         assert_eq!(
-            regions[1].members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            regions[1]
+                .members
+                .iter()
+                .map(|m| m.doc_id)
+                .collect::<Vec<_>>(),
             vec![4, 5],
             "contrast + mix after the threshold"
         );
     }
-
-
 
     /// A specialization param that an outer binding targets keeps the atom a
     /// BOUNDARY — the baked token value could diverge from the live binding.
@@ -3334,7 +3445,6 @@ mod tests {
             "a binding-targeted specialization param keeps the blur a boundary"
         );
     }
-
 
     /// A producer with a SECOND consumer (the blur and a mix both read the
     /// gain) is NOT absorbed — its texture must still exist for the other
@@ -3385,19 +3495,21 @@ mod tests {
         }"#;
         let def: EffectGraphDef = serde_json::from_str(json).unwrap();
         let regions = partition_regions(&def, &registry());
-        assert_eq!(regions.len(), 1, "the gain+contrast pair fuses; the blur stays standalone");
         assert_eq!(
-            regions[0].members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            regions.len(),
+            1,
+            "the gain+contrast pair fuses; the blur stays standalone"
+        );
+        assert_eq!(
+            regions[0]
+                .members
+                .iter()
+                .map(|m| m.doc_id)
+                .collect::<Vec<_>>(),
             vec![1, 2]
         );
         assert!(regions[0].virtual_chains.is_empty());
     }
-
-
-
-
-
-
 
     /// A control wire into a scalar PARAM no longer cuts the consumer — it fuses,
     /// and the producer stays a boundary. `texture_dimensions` (a scalar reducer,
@@ -3423,20 +3535,21 @@ mod tests {
         }"#;
         let def: EffectGraphDef = serde_json::from_str(json).unwrap();
         let regions = partition_regions(&def, &registry());
-        assert_eq!(regions.len(), 1, "gain (control-wired) + invert are one region");
         assert_eq!(
-            regions[0].members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            regions.len(),
+            1,
+            "gain (control-wired) + invert are one region"
+        );
+        assert_eq!(
+            regions[0]
+                .members
+                .iter()
+                .map(|m| m.doc_id)
+                .collect::<Vec<_>>(),
             vec![2, 3],
             "gain + invert fuse; texture_dimensions stays a boundary producer"
         );
     }
-
-
-
-
-
-
-
 
     /// A lattice's params, `n` a side, as def params.
     fn lattice_params(n: [f64; 3]) -> serde_json::Value {
@@ -3451,7 +3564,9 @@ mod tests {
     fn face_lattice_product(member: usize) -> CapacityExpr {
         CapacityExpr::Product(
             ["nodes_x", "nodes_y", "nodes_z"]
-                .map(|p| CapacityExpr::Add(1, Box::new(CapacityExpr::Param(format!("n{member}_{p}")))))
+                .map(|p| {
+                    CapacityExpr::Add(1, Box::new(CapacityExpr::Param(format!("n{member}_{p}"))))
+                })
                 .to_vec(),
         )
     }
@@ -3493,16 +3608,29 @@ mod tests {
         let regions = partition_regions(&def(8.0), &registry);
         assert_eq!(regions.len(), 1, "the two face lattices fuse");
         let region = &regions[0];
-        assert_eq!(region.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![2, 3]);
-        let open = region.externals.iter().position(|e| e.from_node == 6).expect("the open faces are an external");
+        assert_eq!(
+            region.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        let open = region
+            .externals
+            .iter()
+            .position(|e| e.from_node == 6)
+            .expect("the open faces are an external");
         assert_eq!(
             region.output_capacity,
-            Some(CapacityExpr::Min(vec![face_lattice_product(1), face_lattice_product(0), CapacityExpr::Slot(open)])),
+            Some(CapacityExpr::Min(vec![
+                face_lattice_product(1),
+                face_lattice_product(0),
+                CapacityExpr::Slot(open)
+            ])),
             "the second lattice, clamped by the first lattice and the faces it pre-reads"
         );
-        assert!(partition_regions(&def(6.0), &registry).is_empty(), "a first lattice smaller than the second refuses");
+        assert!(
+            partition_regions(&def(6.0), &registry).is_empty(),
+            "a first lattice smaller than the second refuses"
+        );
     }
-
 }
 
 pub mod census;

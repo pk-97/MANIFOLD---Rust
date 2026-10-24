@@ -13,9 +13,9 @@
 //! (`material_block.rs`).
 
 use super::material_block::{material_bucket, row_feature};
-use crate::panels::param_card::{ParamCardPanel, row_geometry};
 use super::scale_link::SCALE_AXES;
 use super::*;
+use crate::panels::param_card::{ParamCardPanel, row_geometry};
 use crate::param_surface::{MaterialFeature, MaterialParamRole, RowAffordance, RowValue};
 use manifold_foundation::ParamId;
 
@@ -50,7 +50,9 @@ pub(super) fn field_param_row(item: &ItemId, field: &FieldRowVm) -> ParamRow {
             let name = if path.is_empty() {
                 "None".to_owned()
             } else {
-                std::path::Path::new(path).file_name().map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned())
+                std::path::Path::new(path)
+                    .file_name()
+                    .map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned())
             };
             row.spec.value_labels = Some(vec![name]);
             0.0
@@ -68,8 +70,17 @@ pub(super) fn field_param_row(item: &ItemId, field: &FieldRowVm) -> ParamRow {
         switch: None,
         colour: None,
     });
-    row.value = RowValue { base: on, effective: on, exposed: false, driven: false };
-    row.affordance = Some(RowAffordance::Field { item: item.clone(), field: field.id.clone(), control: field.control.clone() });
+    row.value = RowValue {
+        base: on,
+        effective: on,
+        exposed: false,
+        driven: false,
+    };
+    row.affordance = Some(RowAffordance::Field {
+        item: item.clone(),
+        field: field.id.clone(),
+        control: field.control.clone(),
+    });
     row
 }
 
@@ -88,16 +99,43 @@ impl ScenePanel {
             SceneSelection::Item(id) => {
                 let Some(item) = vm.item(&id) else { return cy };
                 cy = self.build_item_header(tree, (inner_x, inner_w), cy, item);
-                self.build_blocks(tree, inner_x, inner_w, cy, &[Block { item, sub_header: false }])
+                self.build_blocks(
+                    tree,
+                    inner_x,
+                    inner_w,
+                    cy,
+                    &[Block {
+                        item,
+                        sub_header: false,
+                    }],
+                )
             }
             SceneSelection::Lighting => {
-                let name = tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Lighting", header_label_style());
+                let name = tree.add_label(
+                    Some(self.content_parent),
+                    inner_x,
+                    cy,
+                    inner_w,
+                    ROW_H,
+                    "Lighting",
+                    header_label_style(),
+                );
                 tree.set_name(name, "scene_setup.properties.name_value");
                 cy += ROW_H + ROW_GAP;
-                let mut lights: Vec<&SceneItemVm> = vm.items.iter().filter(|item| item.kind == ItemKind::Light).collect();
+                let mut lights: Vec<&SceneItemVm> = vm
+                    .items
+                    .iter()
+                    .filter(|item| item.kind == ItemKind::Light)
+                    .collect();
                 // The environment leads: its source and exposure come first.
                 lights.sort_by_key(|item| !item.environment);
-                let blocks: Vec<Block<'_>> = lights.into_iter().map(|item| Block { item, sub_header: true }).collect();
+                let blocks: Vec<Block<'_>> = lights
+                    .into_iter()
+                    .map(|item| Block {
+                        item,
+                        sub_header: true,
+                    })
+                    .collect();
                 self.build_blocks(tree, inner_x, inner_w, cy, &blocks)
             }
         }
@@ -106,13 +144,24 @@ impl ScenePanel {
     /// Lay out `blocks`' rows as one card: every block's rows are retained
     /// into one filtered card (one id join, one set of widget ids), then drawn
     /// block by block.
-    fn build_blocks(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32, blocks: &[Block<'_>]) -> f32 {
+    fn build_blocks(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+        blocks: &[Block<'_>],
+    ) -> f32 {
         let Some(mut config) = self.full_params.clone() else {
             self.properties_card.resize(0);
             return cy;
         };
         // BUG-292: rows dispatch to the panel's own bound layer.
-        let Some(target) = self.live_layer_id().cloned().map(GraphParamTarget::GeneratorOf) else {
+        let Some(target) = self
+            .live_layer_id()
+            .cloned()
+            .map(GraphParamTarget::GeneratorOf)
+        else {
             self.properties_card.resize(0);
             return cy;
         };
@@ -125,17 +174,30 @@ impl ScenePanel {
             self.retain_block_rows(&mut config, manifest_len, block, &mut retained, &mut slots);
             ranges.push(start..retained.len());
         }
-        self.properties_card.configure_from_filtered(&config, &retained);
+        self.properties_card
+            .configure_from_filtered(&config, &retained);
         self.prepare_pending_parameter_properties();
         self.properties_card.restore_live(&target);
 
-        let RowGeometry { label_width, slider_w } = row_geometry(inner_w, false);
+        let RowGeometry {
+            label_width,
+            slider_w,
+        } = row_geometry(inner_w, false);
         self.properties_card.row_host.section_header_ids.clear();
         for (block, range) in blocks.iter().zip(ranges) {
             if block.sub_header {
                 cy = self.build_light_header(tree, (inner_x, inner_w), cy, block.item);
             }
-            cy = self.draw_block(tree, (inner_x, inner_w), cy, block, range, &slots, (label_width, slider_w), &target);
+            cy = self.draw_block(
+                tree,
+                (inner_x, inner_w),
+                cy,
+                block,
+                range,
+                &slots,
+                (label_width, slider_w),
+                &target,
+            );
         }
         cy + ROW_GAP
     }
@@ -157,7 +219,12 @@ impl ScenePanel {
         let modes: Vec<(Feature, u32)> = config.rows[..manifest_len]
             .iter()
             .filter(|row| owned.contains(row.id.as_ref()))
-            .filter_map(|row| Some((row.spec.scene?.switch?, row.value.base.round().max(0.0) as u32)))
+            .filter_map(|row| {
+                Some((
+                    row.spec.scene?.switch?,
+                    row.value.base.round().max(0.0) as u32,
+                ))
+            })
             .collect();
         // (sort key, index into config.rows)
         let mut picked: Vec<((usize, u32), usize)> = Vec::new();
@@ -179,14 +246,19 @@ impl ScenePanel {
                 config.rows[i].spec.inactive_reason = Some(feature.off_reason().into());
             }
             // A row under a switch that is off stays, dimmed with the reason.
-            if let Some(Gate::Dim(feature) | Gate::Fold(feature)) = config.rows[i].spec.scene.and_then(|scene| scene.gate)
+            if let Some(Gate::Dim(feature) | Gate::Fold(feature)) =
+                config.rows[i].spec.scene.and_then(|scene| scene.gate)
                 && modes.contains(&(feature, 0))
             {
                 config.rows[i].spec.inactive_reason = Some(feature.off_reason().into());
             }
             // Why the item cannot use the row now (an Impulse with nothing to
             // push, a body the world has no room for): dimmed, reason on hover.
-            if let Some((_, reason)) = item.row_reasons.iter().find(|(id, _)| id.as_str() == config.rows[i].id.as_ref()) {
+            if let Some((_, reason)) = item
+                .row_reasons
+                .iter()
+                .find(|(id, _)| id.as_str() == config.rows[i].id.as_ref())
+            {
                 config.rows[i].spec.inactive_reason = Some(reason.clone());
             }
             let p = &config.rows[i];
@@ -195,10 +267,18 @@ impl ScenePanel {
             }
             // A Hidden control shows while a modulator is stored on it, armed
             // or not: the row is the only way back to a disarmed one.
-            let hidden_role = p.spec.scene.is_some_and(|scene| scene.role == SurfaceRole::Hidden) && !(p.modulator_stored || p.is_attached());
-            let hidden = (hidden_role || (unread.is_some() && !p.is_attached())) && !self.property_explicitly_revealed(p);
+            let hidden_role = p
+                .spec
+                .scene
+                .is_some_and(|scene| scene.role == SurfaceRole::Hidden)
+                && !(p.modulator_stored || p.is_attached());
+            let hidden = (hidden_role || (unread.is_some() && !p.is_attached()))
+                && !self.property_explicitly_revealed(p);
             // Render Mode is drawn in the header, beside Show gizmos.
-            let in_header = p.spec.scene.is_some_and(|scene| scene.group == ControlGroup::RenderMode);
+            let in_header = p
+                .spec
+                .scene
+                .is_some_and(|scene| scene.group == ControlGroup::RenderMode);
             if hidden || in_header {
                 continue;
             }
@@ -208,9 +288,17 @@ impl ScenePanel {
         // Structural fields: the item's own, then its Material's, each
         // addressed at the item that holds it. Fields the header carries are
         // not rows.
-        let mut field_rows: Vec<(&ItemId, &FieldRowVm)> =
-            item.fields.iter().filter(|field| !field.header).map(|field| (&item.id, field)).collect();
-        if let Some(material) = item.material.as_ref().filter(|material| material.item != item.id) {
+        let mut field_rows: Vec<(&ItemId, &FieldRowVm)> = item
+            .fields
+            .iter()
+            .filter(|field| !field.header)
+            .map(|field| (&item.id, field))
+            .collect();
+        if let Some(material) = item
+            .material
+            .as_ref()
+            .filter(|material| material.item != item.id)
+        {
             field_rows.extend(material.fields.iter().map(|field| (&material.item, field)));
         }
         for (owner, field) in field_rows {
@@ -220,22 +308,38 @@ impl ScenePanel {
         }
         // The Material block's rows.
         if let Some(material) = item.material.as_ref() {
-            let ids: ahash::AHashSet<&str> = material.parameter_ids.iter().map(String::as_str).collect();
+            let ids: ahash::AHashSet<&str> =
+                material.parameter_ids.iter().map(String::as_str).collect();
             for i in 0..manifest_len {
                 let p = &config.rows[i];
-                let Some(role) = p.spec.material_role else { continue };
-                if !ids.contains(p.id.as_ref()) || matches!(role, MaterialParamRole::FeatureMode(_)) {
+                let Some(role) = p.spec.material_role else {
+                    continue;
+                };
+                if !ids.contains(p.id.as_ref()) || matches!(role, MaterialParamRole::FeatureMode(_))
+                {
                     continue;
                 }
                 let revealed = self.property_explicitly_revealed(p);
                 // A Hidden material row belongs to a map with no texture.
-                let dormant = matches!(role, MaterialParamRole::Placement(..) | MaterialParamRole::Sampler(..))
-                    || p.spec.scene.is_some_and(|scene| scene.role == SurfaceRole::Hidden);
-                let feature_off = row_feature(p).is_some_and(|feature| !material.features.contains(&feature));
+                let dormant = matches!(
+                    role,
+                    MaterialParamRole::Placement(..) | MaterialParamRole::Sampler(..)
+                ) || p
+                    .spec
+                    .scene
+                    .is_some_and(|scene| scene.role == SurfaceRole::Hidden);
+                let feature_off =
+                    row_feature(p).is_some_and(|feature| !material.features.contains(&feature));
                 if (dormant || feature_off) && !revealed {
                     continue;
                 }
-                picked.push(((ControlGroup::Material as usize * 2, 10 + material_bucket(p, &material.features) as u32), i));
+                picked.push((
+                    (
+                        ControlGroup::Material as usize * 2,
+                        10 + material_bucket(p, &material.features) as u32,
+                    ),
+                    i,
+                ));
             }
         }
         picked.sort_by_key(|(key, _)| *key);
@@ -243,7 +347,9 @@ impl ScenePanel {
         // The Scale link sits right under the last Scale axis.
         let last_scale = order.iter().rposition(|&index| {
             let id = config.rows[index].id.as_ref();
-            id.split_once('.').is_some_and(|(owner, property)| owner == item.id.as_str() && SCALE_AXES.contains(&property))
+            id.split_once('.').is_some_and(|(owner, property)| {
+                owner == item.id.as_str() && SCALE_AXES.contains(&property)
+            })
         });
         if let Some(position) = last_scale {
             let index = config.rows.len();
@@ -254,7 +360,12 @@ impl ScenePanel {
             let row = &config.rows[index];
             let group = self.property_group(row);
             let section = self.material_section_name(row).unwrap_or_default();
-            slots.push(Slot { group, section, feature: row_feature(row), material: row.spec.material_role.is_some() });
+            slots.push(Slot {
+                group,
+                section,
+                feature: row_feature(row),
+                material: row.spec.material_role.is_some(),
+            });
             retained.push(index);
         }
     }
@@ -284,10 +395,16 @@ impl ScenePanel {
         let mut i = range.start;
         while i < range.end {
             let name = slots[i].section.clone();
-            let run_end = (i..range.end).find(|&j| slots[j].section != name).unwrap_or(range.end);
+            let run_end = (i..range.end)
+                .find(|&j| slots[j].section != name)
+                .unwrap_or(range.end);
             let feature = slots[i].feature.filter(|_| slots[i].material);
             let removable = feature.zip(item.material.as_ref());
-            let header_w = if removable.is_some() { inner_w - ROW_H - ROW_GAP } else { inner_w };
+            let header_w = if removable.is_some() {
+                inner_w - ROW_H - ROW_GAP
+            } else {
+                inner_w
+            };
             let folded = self.material_section_folded(&name);
             self.section_folded.entry(name.clone()).or_insert(folded);
             let folded = self.section_folded.get(&name).copied().unwrap_or(folded);
@@ -305,24 +422,56 @@ impl ScenePanel {
             if slots[i].material {
                 tree.set_name(header_id, format!("material.section.{first_row_id}"));
             }
-            self.properties_card.row_host.section_header_ids.push((header_id, name.clone()));
-            self.properties_card.row_host.row_index.insert(tree.widget_of(header_id), i, RowRole::SectionHeader);
+            self.properties_card
+                .row_host
+                .section_header_ids
+                .push((header_id, name.clone()));
+            self.properties_card.row_host.row_index.insert(
+                tree.widget_of(header_id),
+                i,
+                RowRole::SectionHeader,
+            );
             if let Some((feature, material)) = removable {
-                self.build_feature_remove(tree, inner_x + inner_w - ROW_H, cy, &material.item, feature);
+                self.build_feature_remove(
+                    tree,
+                    inner_x + inner_w - ROW_H,
+                    cy,
+                    &material.item,
+                    feature,
+                );
             }
             cy += ROW_H;
             if !folded {
                 for row in i..run_end {
-                    cy = self.build_properties_block(tree, inner_x, cy, row, label_width, slider_w, target.clone());
+                    cy = self.build_properties_block(
+                        tree,
+                        inner_x,
+                        cy,
+                        row,
+                        label_width,
+                        slider_w,
+                        target.clone(),
+                    );
                 }
                 // The Material's summary closes the Material section's fields:
                 // on an Object or Group with no Material too, which gets New
                 // Material there.
                 if !slots[i].material
                     && slots[i].group == ControlGroup::Material
-                    && (item.material.is_some() || matches!(item.kind, ItemKind::Object | ItemKind::Group | ItemKind::Water))
+                    && (item.material.is_some()
+                        || matches!(
+                            item.kind,
+                            ItemKind::Object | ItemKind::Group | ItemKind::Water
+                        ))
                 {
-                    cy = self.build_material_summary(tree, (inner_x, inner_w), cy, item, item.material.as_ref(), (label_width, slider_w));
+                    cy = self.build_material_summary(
+                        tree,
+                        (inner_x, inner_w),
+                        cy,
+                        item,
+                        item.material.as_ref(),
+                        (label_width, slider_w),
+                    );
                 }
             }
             // "+ Add feature" closes the last of the Material's sections.
@@ -344,13 +493,23 @@ impl ScenePanel {
         if row.spec.material_role.is_some() {
             return ControlGroup::Material;
         }
-        row.spec.scene.map_or(ControlGroup::Transform, |scene| scene.group)
+        row.spec
+            .scene
+            .map_or(ControlGroup::Transform, |scene| scene.group)
     }
 
     /// Inside Lighting the camera's exposure is its own section.
     pub(super) fn lighting_section_title(&self, row: &ParamRow) -> Option<&'static str> {
-        let lighting = self.state.as_live().is_some_and(|vm| self.selection.get(&vm.layer_id) == Some(&SceneSelection::Lighting));
-        (lighting && row.spec.scene.is_some_and(|scene| scene.group == ControlGroup::Lens)).then_some("Exposure")
+        let lighting = self
+            .state
+            .as_live()
+            .is_some_and(|vm| self.selection.get(&vm.layer_id) == Some(&SceneSelection::Lighting));
+        (lighting
+            && row
+                .spec
+                .scene
+                .is_some_and(|scene| scene.group == ControlGroup::Lens))
+        .then_some("Exposure")
     }
 
     /// One properties-card row as the Scene tab walks them: a colour row
@@ -367,11 +526,23 @@ impl ScenePanel {
         target: GraphParamTarget,
     ) -> f32 {
         let rows = &self.properties_card.rows;
-        if self.properties_card.row_host.is_colour_tail(rows, slot, true) {
+        if self
+            .properties_card
+            .row_host
+            .is_colour_tail(rows, slot, true)
+        {
             return cy;
         }
         if rows[slot].kind(true) != RowKind::Colour {
-            return self.build_properties_row(tree, inner_x, cy, slot, label_width, slider_w, target);
+            return self.build_properties_row(
+                tree,
+                inner_x,
+                cy,
+                slot,
+                label_width,
+                slider_w,
+                target,
+            );
         }
         let host = &self.properties_card.row_host;
         let open = host.colour_open(&rows[slot]);
@@ -393,10 +564,20 @@ impl ScenePanel {
         let mut cy = ids.new_cy;
         if open {
             for channel in RowHost::colour_channels(rows, slot).into_iter().flatten() {
-                cy = self.build_properties_row(tree, inner_x, cy, channel, label_width, slider_w, target.clone());
+                cy = self.build_properties_row(
+                    tree,
+                    inner_x,
+                    cy,
+                    channel,
+                    label_width,
+                    slider_w,
+                    target.clone(),
+                );
             }
         }
-        self.properties_card.row_host.install_colour_row(tree, slot, &ids);
+        self.properties_card
+            .row_host
+            .install_colour_row(tree, slot, &ids);
         cy
     }
 
@@ -467,9 +648,18 @@ impl ScenePanel {
         // sync will compare against and push this same frame.
         let display_value = match self.properties_card.last_pushed_values.get(slot) {
             Some(&v) if !v.is_nan() => v,
-            _ => self.properties_card.current_values.get(slot).copied().unwrap_or(info.spec.default),
+            _ => self
+                .properties_card
+                .current_values
+                .get(slot)
+                .copied()
+                .unwrap_or(info.spec.default),
         };
-        let display_value = self.properties_card.row_host.active_param_value(&target, &info.id).unwrap_or(display_value);
+        let display_value = self
+            .properties_card
+            .row_host
+            .active_param_value(&target, &info.id)
+            .unwrap_or(display_value);
 
         let built = build_param_row(
             tree,
@@ -485,7 +675,11 @@ impl ScenePanel {
             color::FONT_LABEL,
             true,
             label_width,
-            self.properties_card.mod_active_tab.get(slot).copied().unwrap_or(ModTab::Driver),
+            self.properties_card
+                .mod_active_tab
+                .get(slot)
+                .copied()
+                .unwrap_or(ModTab::Driver),
             true,
             Some(param_row_key_base(info.id.as_ref())),
             None,

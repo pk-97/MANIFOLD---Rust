@@ -75,7 +75,10 @@ impl GpuTimestampSampler {
 
     /// The buffer holding frame-wide sample `index`, and the index inside it.
     fn slot(&self, index: usize) -> (&Retained<ProtocolObject<dyn MTLCounterSampleBuffer>>, usize) {
-        (&self.buffers[index / self.per_buffer], index % self.per_buffer)
+        (
+            &self.buffers[index / self.per_buffer],
+            index % self.per_buffer,
+        )
     }
 }
 
@@ -200,7 +203,11 @@ impl ProfileState {
 }
 
 /// A reserved span's sample buffer and its start/end sample indices.
-pub(crate) type SpanSlot = (Retained<ProtocolObject<dyn MTLCounterSampleBuffer>>, usize, usize);
+pub(crate) type SpanSlot = (
+    Retained<ProtocolObject<dyn MTLCounterSampleBuffer>>,
+    usize,
+    usize,
+);
 
 #[repr(C)]
 struct MachTimebaseInfo {
@@ -245,8 +252,7 @@ pub(crate) fn timestamp_counter_set(
     }
     let sets = device.counterSets()?;
     let want: &NSString = unsafe { objc2_metal::MTLCommonCounterSetTimestamp };
-    sets.iter()
-        .find(|set| set.name().isEqualToString(want))
+    sets.iter().find(|set| set.name().isEqualToString(want))
 }
 
 /// Create shared-storage timestamp sample buffers with capacity for
@@ -422,11 +428,19 @@ mod tests {
     use super::*;
 
     fn span(label: &str) -> PendingSpan {
-        PendingSpan { tag: String::new(), label: label.to_owned(), kind: GpuWorkKind::Compute, threadgroup_bytes: 0 }
+        PendingSpan {
+            tag: String::new(),
+            label: label.to_owned(),
+            kind: GpuWorkKind::Compute,
+            threadgroup_bytes: 0,
+        }
     }
 
     fn profile(total_ms: f64) -> GpuFrameProfile {
-        GpuFrameProfile { total_ms, ..Default::default() }
+        GpuFrameProfile {
+            total_ms,
+            ..Default::default()
+        }
     }
 
     /// A slot left over from an older frame (a zero-group dispatch never
@@ -438,13 +452,27 @@ mod tests {
         let spans = [span("fresh a"), span("stale"), span("fresh b")];
         // Fresh window 1_000_100..1_000_300 = 200 ticks for a 10 ms frame.
         let stamps = [1_000_100, 1_000_150, 400, 450, 1_000_200, 1_000_300];
-        let out = resolve_stamps(&spans, &stamps, (0, enable_tick), (0, enable_tick + 400), profile(10.0));
+        let out = resolve_stamps(
+            &spans,
+            &stamps,
+            (0, enable_tick),
+            (0, enable_tick + 400),
+            profile(10.0),
+        );
         assert_eq!(out.invalid, 1);
         assert_eq!(out.spans.len(), 2);
         let a = &out.spans[0];
         let b = &out.spans[1];
-        assert!((a.start_ms - 0.0).abs() < 1e-9, "fresh a starts the frame, got {}", a.start_ms);
-        assert!((a.millis - 2.5).abs() < 1e-9, "50 of 200 ticks is 2.5 ms, got {}", a.millis);
+        assert!(
+            (a.start_ms - 0.0).abs() < 1e-9,
+            "fresh a starts the frame, got {}",
+            a.start_ms
+        );
+        assert!(
+            (a.millis - 2.5).abs() < 1e-9,
+            "50 of 200 ticks is 2.5 ms, got {}",
+            a.millis
+        );
         assert!((b.start_ms - 5.0).abs() < 1e-9, "got {}", b.start_ms);
         assert!((b.millis - 5.0).abs() < 1e-9, "got {}", b.millis);
     }
@@ -458,7 +486,11 @@ mod tests {
         assert_eq!(out.spans.len(), 1);
         // The fresh window is 100..300 (the invalid spans' fresh end stamps
         // still bound it): span a is 100 of 200 ticks.
-        assert!((out.spans[0].millis - 0.5).abs() < 1e-9, "got {}", out.spans[0].millis);
+        assert!(
+            (out.spans[0].millis - 0.5).abs() < 1e-9,
+            "got {}",
+            out.spans[0].millis
+        );
     }
 
     #[test]

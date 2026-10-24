@@ -1,13 +1,13 @@
 //! Layered, tile-bounded depth of field. See CINEMATIC_POST_DESIGN.md D10.
 //! Runtime and proofs use the same encoding method; caches belong to the node.
-use manifold_node_engine::primitives::standalone_pipeline::dispatch_standalone_2d;
-use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::primitive::Primitive;
 use manifold_gpu::{
     GpuBinding, GpuComputePipeline, GpuDevice, GpuFilterMode, GpuSamplerDesc, GpuTexture,
     GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::dispatch_standalone_2d;
 use std::borrow::Cow;
 
 #[repr(C)]
@@ -253,259 +253,259 @@ impl BokehGather {
     }
 
     // Shared production encoding seam for the node and image/performance proofs.
-manifold_core::testkit_visible! {
-    pub(crate) fn encode(
-        &mut self,
-        gpu: &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder<'_>,
-        source: &GpuTexture,
-        width_tex: &GpuTexture,
-        out: &GpuTexture,
-        settings: BokehSettings,
-    ) {
-        let (w, h) = (out.width, out.height);
-        if w == 0 || h == 0 {
-            return;
-        }
-        let radius = if settings.radius.is_finite() {
-            settings.radius.max(0.0)
-        } else {
-            0.0
-        };
-        if self
-            .resources
-            .as_ref()
-            .is_none_or(|r| r.width != w || r.height != h)
-        {
-            self.resources = Some(BokehResources::new(gpu.device, w, h));
-        }
-        let r = self.resources.as_ref().expect("bokeh resources allocated");
-        let p = self
-            .pipelines
-            .get_or_insert_with(|| BokehPipelines::new(gpu.device));
-        let gather = self.pipeline.get_or_insert_with(|| {
-            let shader = manifold_node_engine::freeze::codegen::standalone_for_boundary_spec::<Self>()
-                .expect("bokeh gather codegen");
-            gpu.device.create_compute_pipeline(
-                &shader,
-                manifold_node_engine::freeze::codegen::ENTRY,
-                "node.bokeh_gather",
-            )
-        });
-        let sampler = self.sampler.get_or_insert_with(|| {
-            gpu.device.create_sampler(&GpuSamplerDesc {
-                mip_filter: GpuFilterMode::Linear,
-                ..GpuSamplerDesc::default()
-            })
-        });
-        let grid = [r.guide.width.div_ceil(16), r.guide.height.div_ceil(16), 1];
-        let composite = BokehCompositeUniforms {
-            radius,
-            blur_alpha: u32::from(settings.blur_alpha),
-            _pad0: 0.0,
-            _pad1: 0.0,
-        };
-        gpu.native_enc.dispatch_compute(
-            &p.prefilter,
-            &[
-                GpuBinding::Texture {
-                    binding: 0,
-                    texture: source,
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: width_tex,
-                },
-                GpuBinding::Texture {
-                    binding: 2,
-                    texture: &r.far_views[0],
-                },
-                GpuBinding::Texture {
-                    binding: 3,
-                    texture: &r.near_views[0],
-                },
-                GpuBinding::Texture {
-                    binding: 4,
-                    texture: &r.guide,
-                },
-                GpuBinding::Bytes {
-                    binding: 5,
-                    data: bytemuck::bytes_of(&composite),
-                },
-            ],
-            grid,
-            "bokeh separate layers",
-        );
-        for views in [&r.far_views, &r.near_views] {
-            for l in 1..active_mip_levels(radius, settings.quality, views.len()) {
-                let dst = &views[l];
+    manifold_core::testkit_visible! {
+        pub(crate) fn encode(
+            &mut self,
+            gpu: &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder<'_>,
+            source: &GpuTexture,
+            width_tex: &GpuTexture,
+            out: &GpuTexture,
+            settings: BokehSettings,
+        ) {
+            let (w, h) = (out.width, out.height);
+            if w == 0 || h == 0 {
+                return;
+            }
+            let radius = if settings.radius.is_finite() {
+                settings.radius.max(0.0)
+            } else {
+                0.0
+            };
+            if self
+                .resources
+                .as_ref()
+                .is_none_or(|r| r.width != w || r.height != h)
+            {
+                self.resources = Some(BokehResources::new(gpu.device, w, h));
+            }
+            let r = self.resources.as_ref().expect("bokeh resources allocated");
+            let p = self
+                .pipelines
+                .get_or_insert_with(|| BokehPipelines::new(gpu.device));
+            let gather = self.pipeline.get_or_insert_with(|| {
+                let shader = manifold_node_engine::freeze::codegen::standalone_for_boundary_spec::<Self>()
+                    .expect("bokeh gather codegen");
+                gpu.device.create_compute_pipeline(
+                    &shader,
+                    manifold_node_engine::freeze::codegen::ENTRY,
+                    "node.bokeh_gather",
+                )
+            });
+            let sampler = self.sampler.get_or_insert_with(|| {
+                gpu.device.create_sampler(&GpuSamplerDesc {
+                    mip_filter: GpuFilterMode::Linear,
+                    ..GpuSamplerDesc::default()
+                })
+            });
+            let grid = [r.guide.width.div_ceil(16), r.guide.height.div_ceil(16), 1];
+            let composite = BokehCompositeUniforms {
+                radius,
+                blur_alpha: u32::from(settings.blur_alpha),
+                _pad0: 0.0,
+                _pad1: 0.0,
+            };
+            gpu.native_enc.dispatch_compute(
+                &p.prefilter,
+                &[
+                    GpuBinding::Texture {
+                        binding: 0,
+                        texture: source,
+                    },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: width_tex,
+                    },
+                    GpuBinding::Texture {
+                        binding: 2,
+                        texture: &r.far_views[0],
+                    },
+                    GpuBinding::Texture {
+                        binding: 3,
+                        texture: &r.near_views[0],
+                    },
+                    GpuBinding::Texture {
+                        binding: 4,
+                        texture: &r.guide,
+                    },
+                    GpuBinding::Bytes {
+                        binding: 5,
+                        data: bytemuck::bytes_of(&composite),
+                    },
+                ],
+                grid,
+                "bokeh separate layers",
+            );
+            for views in [&r.far_views, &r.near_views] {
+                for l in 1..active_mip_levels(radius, settings.quality, views.len()) {
+                    let dst = &views[l];
+                    gpu.native_enc.dispatch_compute(
+                        &p.downsample,
+                        &[
+                            GpuBinding::Texture {
+                                binding: 0,
+                                texture: &views[l - 1],
+                            },
+                            GpuBinding::Sampler {
+                                binding: 1,
+                                sampler,
+                            },
+                            GpuBinding::Texture {
+                                binding: 2,
+                                texture: dst,
+                            },
+                        ],
+                        [dst.width.div_ceil(16), dst.height.div_ceil(16), 1],
+                        "bokeh layer mip",
+                    );
+                }
+            }
+            let tile_grid = [r.tiles.width.div_ceil(8), r.tiles.height.div_ceil(8), 1];
+            gpu.native_enc.dispatch_compute(
+                &p.tiles,
+                &[
+                    GpuBinding::Texture {
+                        binding: 0,
+                        texture: &r.guide,
+                    },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: &r.tiles,
+                    },
+                ],
+                tile_grid,
+                "bokeh tile bounds",
+            );
+            let half_radius = BokehRadiusUniforms {
+                radius: radius * 0.5,
+                _pad0: 0.0,
+                _pad1: 0.0,
+                _pad2: 0.0,
+            };
+            gpu.native_enc.dispatch_compute(
+                &p.reach,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&half_radius),
+                    },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: &r.tiles,
+                    },
+                    GpuBinding::Texture {
+                        binding: 2,
+                        texture: &r.reach,
+                    },
+                ],
+                tile_grid,
+                "bokeh tile reach",
+            );
+            gpu.native_enc.dispatch_compute(
+                &p.pack,
+                &[
+                    GpuBinding::Texture {
+                        binding: 0,
+                        texture: &r.guide,
+                    },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: &r.reach,
+                    },
+                    GpuBinding::Texture {
+                        binding: 2,
+                        texture: &r.packed_views[0],
+                    },
+                ],
+                grid,
+                "bokeh packed guide",
+            );
+            for l in 1..active_mip_levels(radius, settings.quality, r.packed_views.len()) {
+                let dst = &r.packed_views[l];
                 gpu.native_enc.dispatch_compute(
-                    &p.downsample,
+                    &p.guide_downsample,
                     &[
                         GpuBinding::Texture {
                             binding: 0,
-                            texture: &views[l - 1],
-                        },
-                        GpuBinding::Sampler {
-                            binding: 1,
-                            sampler,
+                            texture: &r.packed_views[l - 1],
                         },
                         GpuBinding::Texture {
-                            binding: 2,
+                            binding: 1,
                             texture: dst,
                         },
                     ],
                     [dst.width.div_ceil(16), dst.height.div_ceil(16), 1],
-                    "bokeh layer mip",
+                    "bokeh guide mip",
                 );
             }
-        }
-        let tile_grid = [r.tiles.width.div_ceil(8), r.tiles.height.div_ceil(8), 1];
-        gpu.native_enc.dispatch_compute(
-            &p.tiles,
-            &[
-                GpuBinding::Texture {
-                    binding: 0,
-                    texture: &r.guide,
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: &r.tiles,
-                },
-            ],
-            tile_grid,
-            "bokeh tile bounds",
-        );
-        let half_radius = BokehRadiusUniforms {
-            radius: radius * 0.5,
-            _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
-        };
-        gpu.native_enc.dispatch_compute(
-            &p.reach,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&half_radius),
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: &r.tiles,
-                },
-                GpuBinding::Texture {
-                    binding: 2,
-                    texture: &r.reach,
-                },
-            ],
-            tile_grid,
-            "bokeh tile reach",
-        );
-        gpu.native_enc.dispatch_compute(
-            &p.pack,
-            &[
-                GpuBinding::Texture {
-                    binding: 0,
-                    texture: &r.guide,
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: &r.reach,
-                },
-                GpuBinding::Texture {
-                    binding: 2,
-                    texture: &r.packed_views[0],
-                },
-            ],
-            grid,
-            "bokeh packed guide",
-        );
-        for l in 1..active_mip_levels(radius, settings.quality, r.packed_views.len()) {
-            let dst = &r.packed_views[l];
+            for (field, chain, dst) in [
+                (0, &r.far_chain, &r.far_result),
+                (1, &r.near_chain, &r.near_result),
+            ] {
+                let uniforms = BokehGatherUniforms {
+                    max_radius: radius * 0.5,
+                    enabled: field,
+                    aperture: settings.aperture.min(2),
+                    quality: settings.quality.min(2),
+                    blur_alpha: u32::from(settings.blur_alpha),
+                    _pad0: 0,
+                    _pad1: 0,
+                    _pad2: 0,
+                };
+                dispatch_standalone_2d(
+                    gpu,
+                    gather,
+                    bytemuck::bytes_of(&uniforms),
+                    &[chain, &r.packed],
+                    Some(sampler),
+                    dst,
+                    if field == 0 {
+                        "bokeh far gather"
+                    } else {
+                        "bokeh near gather"
+                    },
+                );
+            }
             gpu.native_enc.dispatch_compute(
-                &p.guide_downsample,
+                &p.reconstruct,
                 &[
-                    GpuBinding::Texture {
+                    GpuBinding::Bytes {
                         binding: 0,
-                        texture: &r.packed_views[l - 1],
+                        data: bytemuck::bytes_of(&composite),
                     },
                     GpuBinding::Texture {
                         binding: 1,
-                        texture: dst,
+                        texture: source,
+                    },
+                    GpuBinding::Texture {
+                        binding: 2,
+                        texture: width_tex,
+                    },
+                    GpuBinding::Texture {
+                        binding: 3,
+                        texture: &r.packed,
+                    },
+                    GpuBinding::Texture {
+                        binding: 4,
+                        texture: &r.far_result,
+                    },
+                    GpuBinding::Texture {
+                        binding: 5,
+                        texture: &r.near_result,
+                    },
+                    GpuBinding::Sampler {
+                        binding: 6,
+                        sampler,
+                    },
+                    GpuBinding::Texture {
+                        binding: 7,
+                        texture: out,
                     },
                 ],
-                [dst.width.div_ceil(16), dst.height.div_ceil(16), 1],
-                "bokeh guide mip",
+                [w.div_ceil(16), h.div_ceil(16), 1],
+                "bokeh reconstruction",
             );
         }
-        for (field, chain, dst) in [
-            (0, &r.far_chain, &r.far_result),
-            (1, &r.near_chain, &r.near_result),
-        ] {
-            let uniforms = BokehGatherUniforms {
-                max_radius: radius * 0.5,
-                enabled: field,
-                aperture: settings.aperture.min(2),
-                quality: settings.quality.min(2),
-                blur_alpha: u32::from(settings.blur_alpha),
-                _pad0: 0,
-                _pad1: 0,
-                _pad2: 0,
-            };
-            dispatch_standalone_2d(
-                gpu,
-                gather,
-                bytemuck::bytes_of(&uniforms),
-                &[chain, &r.packed],
-                Some(sampler),
-                dst,
-                if field == 0 {
-                    "bokeh far gather"
-                } else {
-                    "bokeh near gather"
-                },
-            );
-        }
-        gpu.native_enc.dispatch_compute(
-            &p.reconstruct,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&composite),
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: source,
-                },
-                GpuBinding::Texture {
-                    binding: 2,
-                    texture: width_tex,
-                },
-                GpuBinding::Texture {
-                    binding: 3,
-                    texture: &r.packed,
-                },
-                GpuBinding::Texture {
-                    binding: 4,
-                    texture: &r.far_result,
-                },
-                GpuBinding::Texture {
-                    binding: 5,
-                    texture: &r.near_result,
-                },
-                GpuBinding::Sampler {
-                    binding: 6,
-                    sampler,
-                },
-                GpuBinding::Texture {
-                    binding: 7,
-                    texture: out,
-                },
-            ],
-            [w.div_ceil(16), h.div_ceil(16), 1],
-            "bokeh reconstruction",
-        );
     }
-}
 }
 impl Primitive for BokehGather {
     fn skip_passthrough(

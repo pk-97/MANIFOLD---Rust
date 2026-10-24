@@ -22,22 +22,24 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use manifold_core::ClipId;
+use manifold_core::LayerId;
 use manifold_core::audio_clip_detection::AudioClipDetection;
+use manifold_core::audio_setup::AudioSend;
+use manifold_core::layer::{DetectStemRole, Layer};
 use manifold_core::percussion_analysis::{
     ClipDetectionAnchor, PercussionAnalysisData, PercussionTriggerType, ProjectBeatTimeConverter,
 };
 use manifold_core::percussion_binding::ProjectPercussionBindingResolver;
 use manifold_core::percussion_settings::PercussionPipelineSettings;
-use manifold_core::LayerId;
-use manifold_core::audio_setup::AudioSend;
-use manifold_core::layer::{DetectStemRole, Layer};
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::commands::audio_setup::{
     AddAudioSendCommand, RenameAudioSendCommand, SetLayerAudioSendCommand,
 };
-use manifold_editing::commands::clip::{AddClipCommand, ChangeClipRecordedBpmCommand, DeleteClipCommand};
+use manifold_editing::commands::clip::{
+    AddClipCommand, ChangeClipRecordedBpmCommand, DeleteClipCommand,
+};
 use manifold_editing::commands::layer::{AddLayerCommand, GroupLayersCommand, RenameLayerCommand};
 
 use crate::percussion_backend::{PercussionPipelineBackendResolver, PercussionPipelineInvocation};
@@ -242,7 +244,6 @@ impl PercussionImportOrchestrator {
     // PUBLIC ENTRY POINTS
     // ──────────────────────────────────────
 
-
     /// Per-clip detection entry (audio-clip-detection). Analyze one audio clip's
     /// file and place its triggers, owned by that clip. Runs the same backend as
     /// the legacy wizard but caches the analysis on the clip and writes no
@@ -262,7 +263,13 @@ impl PercussionImportOrchestrator {
         }
 
         // Resolve the clip's audio file (geometry is read at apply time).
-        let audio_path = match project.timeline.layers.iter().flat_map(|l| l.clips.iter()).find(|c| c.id == clip_id) {
+        let audio_path = match project
+            .timeline
+            .layers
+            .iter()
+            .flat_map(|l| l.clips.iter())
+            .find(|c| c.id == clip_id)
+        {
             Some(c) if c.is_audio() => c.audio_file_path.clone(),
             _ => {
                 self.set_percussion_import_status(
@@ -345,7 +352,6 @@ impl PercussionImportOrchestrator {
         }));
     }
 
-
     fn tick_detect_clip(
         &mut self,
         project: Option<(&mut Project, &mut manifold_editing::service::EditingService)>,
@@ -404,7 +410,9 @@ impl PercussionImportOrchestrator {
             }
 
             DetectClipSubPhase::ApplyingResult { pipeline_ok } => {
-                let Some((project, editing_service)) = project else { return };
+                let Some((project, editing_service)) = project else {
+                    return;
+                };
                 let pipeline_ok = *pipeline_ok;
                 let (clip_id, temp_json) = if let OrchestratorPhase::DetectClip(s) = &self.phase {
                     (s.clip_id.clone(), s.temp_output_json.clone())
@@ -413,16 +421,24 @@ impl PercussionImportOrchestrator {
                 };
 
                 let source_unchanged = if let OrchestratorPhase::DetectClip(s) = &self.phase {
-                    project.timeline.find_clip_by_id(&clip_id)
+                    project
+                        .timeline
+                        .find_clip_by_id(&clip_id)
                         .is_some_and(|clip| clip.audio_file_path == s.audio_path)
-                } else { false };
+                } else {
+                    false
+                };
                 if pipeline_ok && source_unchanged {
                     self.apply_clip_detection(&clip_id, &temp_json, project, editing_service);
                 }
                 if !source_unchanged {
                     self.set_percussion_import_status(
-                        "Detect: source changed; result discarded", COLOR_ORANGE,
-                        false, 4.0, PERCUSSION_PROGRESS_UNKNOWN, false,
+                        "Detect: source changed; result discarded",
+                        COLOR_ORANGE,
+                        false,
+                        4.0,
+                        PERCUSSION_PROGRESS_UNKNOWN,
+                        false,
                     );
                 }
                 let _ = std::fs::remove_file(&temp_json);
@@ -486,7 +502,10 @@ impl PercussionImportOrchestrator {
             && analysis.bpm_confidence >= CLIP_BPM_CONFIDENCE
         {
             editing_service.execute(
-                Box::new(ChangeClipRecordedBpmCommand::new_detected(clip_id.clone(), detected)),
+                Box::new(ChangeClipRecordedBpmCommand::new_detected(
+                    clip_id.clone(),
+                    detected,
+                )),
                 &mut *project,
             );
         }
@@ -557,7 +576,8 @@ impl PercussionImportOrchestrator {
                     c.audio_file_path.clone(),
                 )
             })
-        }) else {
+        })
+        else {
             return;
         };
 
@@ -697,11 +717,8 @@ impl PercussionImportOrchestrator {
                         {
                             let send_id = send.id.clone();
                             let old_label = send.label.clone();
-                            let mut rename_send = RenameAudioSendCommand::new(
-                                send_id,
-                                old_label,
-                                lane_name.clone(),
-                            );
+                            let mut rename_send =
+                                RenameAudioSendCommand::new(send_id, old_label, lane_name.clone());
                             rename_send.execute(project);
                             commands.push(Box::new(rename_send));
                         }
@@ -925,7 +942,10 @@ impl PercussionImportOrchestrator {
                 .cloned()
                 .collect();
             for clip in owned {
-                commands.push(Box::new(DeleteClipCommand::new(clip.clone(), layer_lid.clone())));
+                commands.push(Box::new(DeleteClipCommand::new(
+                    clip.clone(),
+                    layer_lid.clone(),
+                )));
                 layer.remove_clip(&clip.id);
             }
         }
@@ -980,13 +1000,21 @@ impl PercussionImportOrchestrator {
         // detection config, and build the clip-anchored, warp-aware converter
         // from the clip's geometry. The energy envelope rides inside the cached
         // analysis, so no project-global state is written.
-        let Some(clip) = project.timeline.layers.iter().flat_map(|layer| &layer.clips)
-            .find(|clip| clip.id == *clip_id) else {
+        let Some(clip) = project
+            .timeline
+            .layers
+            .iter()
+            .flat_map(|layer| &layer.clips)
+            .find(|clip| clip.id == *clip_id)
+        else {
             return false;
         };
         let anchor = ClipDetectionAnchor::from_clip(clip, project);
         let config = {
-            let clip = project.timeline.find_clip_by_id_mut(clip_id).expect("clip resolved above");
+            let clip = project
+                .timeline
+                .find_clip_by_id_mut(clip_id)
+                .expect("clip resolved above");
             let detection = clip
                 .audio_detection
                 .get_or_insert_with(AudioClipDetection::new);
@@ -1034,10 +1062,16 @@ impl PercussionImportOrchestrator {
 
         let import_service =
             PercussionImportService::new_with_settings(self.pipeline_settings.as_ref());
-        let result =
-            import_service.apply_placement_plan(project, Some(&plan), Some(&options), Some(clip_id));
+        let result = import_service.apply_placement_plan(
+            project,
+            Some(&plan),
+            Some(&options),
+            Some(clip_id),
+        );
 
-        if result.success && let Some(cmd) = result.undo_command {
+        if result.success
+            && let Some(cmd) = result.undo_command
+        {
             editing_service.record(cmd);
         }
 
@@ -1102,7 +1136,6 @@ impl PercussionImportOrchestrator {
         self.percussion_import_status_progress01 = PERCUSSION_PROGRESS_UNKNOWN;
         self.percussion_import_status_show_progress = false;
     }
-
 
     // ──────────────────────────────────────
     // STATIC HELPERS
@@ -1337,18 +1370,16 @@ fn is_auto_stem_name(name: &str, stem_display: &str) -> bool {
     name.ends_with(&format!(" \u{00b7} {stem_display}"))
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use manifold_core::Beats;
+    use manifold_core::PresetTypeId;
     use manifold_core::audio_clip_detection::AudioClipDetection;
     use manifold_core::clip::TimelineClip;
     use manifold_core::percussion_analysis::{PercussionEvent, PercussionTriggerType};
     use manifold_core::types::LayerType;
     use manifold_core::units::{Bpm, Seconds};
-    use manifold_core::PresetTypeId;
     use manifold_editing::service::EditingService;
 
     fn orchestrator() -> PercussionImportOrchestrator {
@@ -1358,9 +1389,11 @@ mod tests {
     #[test]
     fn clear_clip_triggers_removes_only_tagged() {
         let mut project = Project::default();
-        let idx = project
-            .timeline
-            .add_layer("Kick", LayerType::Generator, PresetTypeId::from_string("Gen".into()));
+        let idx = project.timeline.add_layer(
+            "Kick",
+            LayerType::Generator,
+            PresetTypeId::from_string("Gen".into()),
+        );
         let audio_a = ClipId::new("audioA");
         {
             let layer = &mut project.timeline.layers[idx];
@@ -1379,9 +1412,17 @@ mod tests {
 
         let clips = &project.timeline.layers[idx].clips;
         assert_eq!(clips.len(), 2, "only audioA's trigger removed");
-        assert!(clips.iter().all(|c| c.detection_source.as_ref() != Some(&audio_a)));
+        assert!(
+            clips
+                .iter()
+                .all(|c| c.detection_source.as_ref() != Some(&audio_a))
+        );
         assert!(es.undo(&mut project), "clear is one undoable step");
-        assert_eq!(project.timeline.layers[idx].clips.len(), 3, "undo restores it");
+        assert_eq!(
+            project.timeline.layers[idx].clips.len(),
+            3,
+            "undo restores it"
+        );
     }
 
     #[test]
@@ -1390,13 +1431,23 @@ mod tests {
         let aidx = project
             .timeline
             .add_layer("Audio", LayerType::Audio, PresetTypeId::NONE);
-        let mut clip =
-            TimelineClip::new_audio("song.wav".into(), Beats(0.0), Beats(64.0), Seconds(0.0), Seconds(120.0));
+        let mut clip = TimelineClip::new_audio(
+            "song.wav".into(),
+            Beats(0.0),
+            Beats(64.0),
+            Seconds(0.0),
+            Seconds(120.0),
+        );
         // Seed a cached analysis with one kick (as if a prior Detect ran).
         let analysis = PercussionAnalysisData::new_simple(
             "t",
             Bpm(120.0),
-            vec![PercussionEvent::new(PercussionTriggerType::Kick, 0.5, 0.9, 0.0)],
+            vec![PercussionEvent::new(
+                PercussionTriggerType::Kick,
+                0.5,
+                0.9,
+                0.0,
+            )],
         );
         clip.audio_detection = Some(AudioClipDetection {
             config: Default::default(),
@@ -1436,8 +1487,13 @@ mod tests {
         let aidx = project
             .timeline
             .add_layer("Audio", LayerType::Audio, PresetTypeId::NONE);
-        let clip =
-            TimelineClip::new_audio("song.wav".into(), Beats(0.0), Beats(8.0), Seconds(0.0), Seconds(8.0));
+        let clip = TimelineClip::new_audio(
+            "song.wav".into(),
+            Beats(0.0),
+            Beats(8.0),
+            Seconds(0.0),
+            Seconds(8.0),
+        );
         let clip_id = clip.id.clone();
         project.timeline.layers[aidx].restore_clip(clip);
         project.timeline.mark_clip_lookup_dirty();
@@ -1605,7 +1661,11 @@ mod tests {
         let empty: Vec<Option<String>> = vec![None, None, None, None];
         orchestrator().build_detect_group(&clip_id, &empty, &mut project, &mut es);
 
-        assert_eq!(project.timeline.layers.len(), layers_before, "no stems -> no lanes/group");
+        assert_eq!(
+            project.timeline.layers.len(),
+            layers_before,
+            "no stems -> no lanes/group"
+        );
         assert!(project.audio_setup.sends.is_empty(), "no stems -> no sends");
     }
 
@@ -1640,7 +1700,10 @@ mod tests {
         let layers_before = project.timeline.layers.len();
         let mut es = EditingService::new();
         orchestrator().build_detect_group(&clip_id, &stems, &mut project, &mut es);
-        assert!(project.timeline.layers.len() > layers_before, "set was built");
+        assert!(
+            project.timeline.layers.len() > layers_before,
+            "set was built"
+        );
         assert_eq!(project.audio_setup.sends.len(), 4, "four sends created");
 
         // One undo reverses the whole set — lanes, group, and sends — in a single
@@ -1651,7 +1714,10 @@ mod tests {
             layers_before,
             "undo removes the stem lanes + group"
         );
-        assert!(project.audio_setup.sends.is_empty(), "undo removes the sends");
+        assert!(
+            project.audio_setup.sends.is_empty(),
+            "undo removes the sends"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1702,7 +1768,11 @@ mod tests {
             .filter(|l| l.is_audio() && l.detect_stem_role.is_some())
             .map(|l| l.layer_id.clone())
             .collect();
-        assert_eq!(lane_ids_before.len(), 4, "four role-tagged stem lanes exist");
+        assert_eq!(
+            lane_ids_before.len(),
+            4,
+            "four role-tagged stem lanes exist"
+        );
         let send_ids_before: std::collections::HashSet<_> = project
             .audio_setup
             .sends
@@ -1734,7 +1804,10 @@ mod tests {
             .iter()
             .map(|s| s.id.clone())
             .collect();
-        assert_eq!(send_ids_after, send_ids_before, "same sends reused, zero new sends");
+        assert_eq!(
+            send_ids_after, send_ids_before,
+            "same sends reused, zero new sends"
+        );
 
         let lane_ids_after: std::collections::HashSet<LayerId> = project
             .timeline
@@ -1743,7 +1816,10 @@ mod tests {
             .filter(|l| l.is_audio() && l.detect_stem_role.is_some())
             .map(|l| l.layer_id.clone())
             .collect();
-        assert_eq!(lane_ids_after, lane_ids_before, "same lane IDs reused, zero new lanes");
+        assert_eq!(
+            lane_ids_after, lane_ids_before,
+            "same lane IDs reused, zero new lanes"
+        );
 
         // Names followed the rename: lane, its send, and the group.
         for stem in ["Drums", "Bass", "Other", "Vocals"] {
@@ -1768,7 +1844,10 @@ mod tests {
             .iter()
             .find(|l| l.layer_type == LayerType::Group)
             .unwrap();
-        assert_eq!(group.name, "DifferentSong", "group name followed the rename");
+        assert_eq!(
+            group.name, "DifferentSong",
+            "group name followed the rename"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1839,7 +1918,10 @@ mod tests {
             .find_layer_by_id(&drums_id)
             .map(|(_, l)| l)
             .expect("hand-renamed lane is still reused by role, not recreated");
-        assert_eq!(drums.name, "Kick Stems", "hand-renamed lane is never clobbered");
+        assert_eq!(
+            drums.name, "Kick Stems",
+            "hand-renamed lane is never clobbered"
+        );
         assert_eq!(
             drums.clips.len(),
             1,

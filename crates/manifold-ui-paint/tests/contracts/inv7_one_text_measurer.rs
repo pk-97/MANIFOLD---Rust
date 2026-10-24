@@ -30,7 +30,9 @@ fn non_test_source(src: &str) -> &str {
     let mut lines = src.split_inclusive('\n').peekable();
     while let Some(line) = lines.next() {
         if line.trim() == "#[cfg(test)]"
-            && lines.peek().is_some_and(|next| next.trim_start().starts_with("mod "))
+            && lines
+                .peek()
+                .is_some_and(|next| next.trim_start().starts_with("mod "))
         {
             return &src[..offset];
         }
@@ -44,7 +46,11 @@ fn one_text_measurer_outside_tests() {
     let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let mut files = Vec::new();
     rust_files(&crates, &mut files);
-    assert!(files.len() > 100, "scan found only {} files under {crates:?}", files.len());
+    assert!(
+        files.len() > 100,
+        "scan found only {} files under {crates:?}",
+        files.len()
+    );
 
     let mut impls = Vec::new();
     let mut ct_calls = Vec::new();
@@ -53,7 +59,10 @@ fn one_text_measurer_outside_tests() {
         let src = non_test_source(&src);
         for line in src.lines() {
             if let Some(rest) = line.trim_start().strip_prefix("impl TextMeasure for ") {
-                let ty = rest.split(|c: char| !c.is_alphanumeric() && c != '_').next().unwrap_or("");
+                let ty = rest
+                    .split(|c: char| !c.is_alphanumeric() && c != '_')
+                    .next()
+                    .unwrap_or("");
                 impls.push(ty.to_string());
             }
             if line.contains("measure_text_ct(") && !line.contains("fn measure_text_ct(") {
@@ -62,7 +71,18 @@ fn one_text_measurer_outside_tests() {
         }
     }
     impls.sort();
-    assert_eq!(impls, ["CachedTextMeasure", "HeuristicTextMeasure"], "TextMeasure impls outside tests");
-    assert_eq!(ct_calls.len(), 1, "measure_text_ct called outside the cache-miss path: {ct_calls:#?}");
-    assert!(ct_calls[0].contains("cache.fonts"), "the one call is the miss path: {ct_calls:?}");
+    assert_eq!(
+        impls,
+        ["CachedTextMeasure", "HeuristicTextMeasure"],
+        "TextMeasure impls outside tests"
+    );
+    assert_eq!(
+        ct_calls.len(),
+        1,
+        "measure_text_ct called outside the cache-miss path: {ct_calls:#?}"
+    );
+    assert!(
+        ct_calls[0].contains("cache.fonts"),
+        "the one call is the miss path: {ct_calls:?}"
+    );
 }

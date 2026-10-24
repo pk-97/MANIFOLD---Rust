@@ -263,7 +263,11 @@ pub fn render_export_audio(
     let per_layer_mono: AHashMap<LayerId, Vec<f32>> = per_layer_lr
         .into_iter()
         .map(|(id, (pl, pr))| {
-            let mono: Vec<f32> = pl.iter().zip(pr.iter()).map(|(l, r)| (l + r) * 0.5).collect();
+            let mono: Vec<f32> = pl
+                .iter()
+                .zip(pr.iter())
+                .map(|(l, r)| (l + r) * 0.5)
+                .collect();
             (id, mono)
         })
         .collect();
@@ -367,9 +371,9 @@ fn write_wav_i16(path: &str, sample_rate: u32, left: &[f32], right: &[f32]) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::Seconds;
     use manifold_core::clip::TimelineClip;
     use manifold_core::layer::Layer;
-    use manifold_core::Seconds;
     use std::f32::consts::PI;
 
     /// FNV-1a 64-bit hash — inline, no dependency, good enough to catch any
@@ -584,9 +588,15 @@ mod tests {
     fn render_export_audio_pre_roll_is_exactly_one_second() {
         let (project, _dir) = build_fixture_project();
         let mut tempo_map = TempoMap::default();
-        let audio =
-            render_export_audio(&project, Beats(2.0), Beats(6.0), Bpm(120.0), &mut tempo_map, &[])
-                .expect("render_export_audio should succeed");
+        let audio = render_export_audio(
+            &project,
+            Beats(2.0),
+            Beats(6.0),
+            Bpm(120.0),
+            &mut tempo_map,
+            &[],
+        )
+        .expect("render_export_audio should succeed");
         assert_eq!(audio.pre_roll_samples, 48_000);
         assert_eq!(audio.left.len(), audio.pre_roll_samples + 96_000); // 2s @ 48kHz main range
         assert_eq!(audio.right.len(), audio.left.len());
@@ -597,9 +607,15 @@ mod tests {
     fn render_export_audio_master_mono_is_lr_downmix() {
         let (project, _dir) = build_fixture_project();
         let mut tempo_map = TempoMap::default();
-        let audio =
-            render_export_audio(&project, Beats(2.0), Beats(6.0), Bpm(120.0), &mut tempo_map, &[])
-                .expect("render_export_audio should succeed");
+        let audio = render_export_audio(
+            &project,
+            Beats(2.0),
+            Beats(6.0),
+            Bpm(120.0),
+            &mut tempo_map,
+            &[],
+        )
+        .expect("render_export_audio should succeed");
         for i in 0..audio.left.len() {
             let expected = (audio.left[i] + audio.right[i]) * 0.5;
             assert_eq!(audio.master_mono[i], expected, "mismatch at frame {i}");
@@ -709,8 +725,14 @@ mod tests {
         )
         .expect("baseline render_export_audio should succeed");
 
-        assert_eq!(audio.left, baseline.left, "analysis-only layer altered master left");
-        assert_eq!(audio.right, baseline.right, "analysis-only layer altered master right");
+        assert_eq!(
+            audio.left, baseline.left,
+            "analysis-only layer altered master left"
+        );
+        assert_eq!(
+            audio.right, baseline.right,
+            "analysis-only layer altered master right"
+        );
     }
 
     #[test]
@@ -766,7 +788,10 @@ mod tests {
         )
         .expect("baseline render_export_audio should succeed");
         assert_eq!(audio.left, baseline.left, "muted clip altered master left");
-        assert_eq!(audio.right, baseline.right, "muted clip altered master right");
+        assert_eq!(
+            audio.right, baseline.right,
+            "muted clip altered master right"
+        );
     }
 
     #[test]
@@ -795,9 +820,15 @@ mod tests {
         project.timeline.layers.push(layer);
 
         let mut tempo_map = TempoMap::default();
-        let audio =
-            render_export_audio(&project, Beats(4.0), Beats(8.0), Bpm(120.0), &mut tempo_map, &[])
-                .expect("render_export_audio should succeed");
+        let audio = render_export_audio(
+            &project,
+            Beats(4.0),
+            Beats(8.0),
+            Bpm(120.0),
+            &mut tempo_map,
+            &[],
+        )
+        .expect("render_export_audio should succeed");
         assert!(
             !audio.audible_in_range,
             "clip lying entirely in the pre-roll second must not set audible_in_range"

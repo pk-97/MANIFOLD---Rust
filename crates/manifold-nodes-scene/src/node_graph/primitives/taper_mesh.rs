@@ -13,8 +13,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
@@ -161,7 +161,10 @@ impl Primitive for TaperMesh {
         if port_name != "out" {
             return None;
         }
-        input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)
+        input_capacities
+            .iter()
+            .find(|(p, _)| *p == "in")
+            .map(|(_, n)| *n)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -259,7 +262,7 @@ mod gpu_tests {
             tangent: [0.0; 4],
             color: [1.0; 4],
         }
-}
+    }
 
     /// The generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {
@@ -341,7 +344,10 @@ mod gpu_tests {
                 }
                 (b, weights_len_override.unwrap_or(w.len() as u32))
             }
-            None => (device.create_buffer_shared(std::mem::size_of_val(src) as u64), 0),
+            None => (
+                device.create_buffer_shared(std::mem::size_of_val(src) as u64),
+                0,
+            ),
         };
 
         let uniforms = TaperUniforms {
@@ -360,10 +366,25 @@ mod gpu_tests {
         };
 
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: &sbuf, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &wbuf, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &dbuf, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &sbuf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &wbuf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &dbuf,
+                offset: 0,
+            },
         ];
         let mut enc = device.create_encoder("taper-mesh-test");
         enc.dispatch_compute(
@@ -378,7 +399,6 @@ mod gpu_tests {
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, src.len()) }.to_vec()
     }
 
-
     #[test]
     fn matches_hand_formula_analytically() {
         let device = manifold_gpu::testkit::test_device();
@@ -390,7 +410,9 @@ mod gpu_tests {
         ];
         let (taper, center, length) = (0.2f32, -0.5f32, 1.7f32);
         for axis in [0u32, 1, 2] {
-            let out = dispatch_taper(&device, &gen_wgsl, &src, None, None, axis, taper, center, length);
+            let out = dispatch_taper(
+                &device, &gen_wgsl, &src, None, None, axis, taper, center, length,
+            );
             for (i, v) in src.iter().enumerate() {
                 let (exp_pos, exp_n) =
                     expected_taper(v.position, v.normal, axis, taper, center, length, 1.0);
@@ -424,7 +446,10 @@ mod gpu_tests {
         let out = dispatch_taper(&device, &gen_wgsl, &src, None, None, 1, 0.4, 0.0, 1.0);
         assert_eq!(out.len(), src.len());
         for i in 0..src.len() {
-            assert_eq!(out[i].uv, src[i].uv, "uv must pass through unchanged at {i}");
+            assert_eq!(
+                out[i].uv, src[i].uv,
+                "uv must pass through unchanged at {i}"
+            );
         }
     }
 
@@ -440,9 +465,35 @@ mod gpu_tests {
         let weights = [0.0f32, 0.0];
         let (taper, center, length) = (0.0f32, 0.0f32, 1.0f32);
 
-        let out = dispatch_taper(&device, &gen_wgsl, &src, Some(&weights), Some(2), 1, taper, center, length);
-        let full = expected_taper([1.0, 1.0, 1.0], [1.0, 0.0, 0.0], 1, taper, center, length, 1.0);
-        let zero = expected_taper([1.0, 1.0, 1.0], [1.0, 0.0, 0.0], 1, taper, center, length, 0.0);
+        let out = dispatch_taper(
+            &device,
+            &gen_wgsl,
+            &src,
+            Some(&weights),
+            Some(2),
+            1,
+            taper,
+            center,
+            length,
+        );
+        let full = expected_taper(
+            [1.0, 1.0, 1.0],
+            [1.0, 0.0, 0.0],
+            1,
+            taper,
+            center,
+            length,
+            1.0,
+        );
+        let zero = expected_taper(
+            [1.0, 1.0, 1.0],
+            [1.0, 0.0, 0.0],
+            1,
+            taper,
+            center,
+            length,
+            0.0,
+        );
 
         assert!(
             (out[0].position[0] - zero.0[0]).abs() < 1e-5,

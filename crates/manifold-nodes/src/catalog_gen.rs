@@ -38,8 +38,7 @@ use manifold_node_engine::persistence::PrimitiveFactory;
 use manifold_node_engine::ports::{PortType, ScalarType};
 
 /// Opening marker of the generated block in `docs/NODE_CATALOG.md`.
-pub const BEGIN_MARKER: &str =
-    "<!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-nodes --bin gen_node_catalog` -->";
+pub const BEGIN_MARKER: &str = "<!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-nodes --bin gen_node_catalog` -->";
 /// Closing marker of the generated block.
 pub const END_MARKER: &str = "<!-- END GENERATED: registered-node-index -->";
 
@@ -203,10 +202,17 @@ fn collect_rows() -> Vec<NodeRow> {
                 category: desc.map(|d| d.category).unwrap_or(Category::Uncategorized),
                 role: desc.map(|d| d.role).unwrap_or(Role::Unknown),
                 aliases: desc.map(|d| d.aliases).unwrap_or(&[]),
-                examples: examples_by_type_id.get(f.type_id).cloned().unwrap_or_default(),
+                examples: examples_by_type_id
+                    .get(f.type_id)
+                    .cloned()
+                    .unwrap_or_default(),
                 inputs: node.inputs().iter().map(port_row).collect(),
                 outputs,
-                params: node.parameters().iter().map(|p| param_row(p, node.as_ref())).collect(),
+                params: node
+                    .parameters()
+                    .iter()
+                    .map(|p| param_row(p, node.as_ref()))
+                    .collect(),
                 fusion,
                 trigger_latch: node.is_trigger_latch(),
                 derived_uniforms: node.derived_uniforms(),
@@ -238,14 +244,20 @@ fn port_row(p: &manifold_node_engine::ports::NodePort) -> PortRow {
 /// - `inputs:<a>@1000,<b>@1024` — derived from the inputs some other way.
 /// - `none` — unresolvable; `every_array_output_declares_a_valid_capacity_source`
 ///   fails any such node.
-fn capacity_rule(node: &dyn manifold_node_engine::exec::effect_node::EffectNode, port: &str) -> String {
+fn capacity_rule(
+    node: &dyn manifold_node_engine::exec::effect_node::EffectNode,
+    port: &str,
+) -> String {
     use manifold_node_engine::exec::effect_node::ParamValues;
 
     if node.canvas_sized_array_outputs().contains(&port) {
         return "canvas".into();
     }
-    let defaults: ParamValues =
-        node.parameters().iter().map(|d| (d.name.clone(), d.default.clone())).collect();
+    let defaults: ParamValues = node
+        .parameters()
+        .iter()
+        .map(|d| (d.name.clone(), d.default.clone()))
+        .collect();
     let arrays: Vec<&str> = node
         .inputs()
         .iter()
@@ -257,7 +269,16 @@ fn capacity_rule(node: &dyn manifold_node_engine::exec::effect_node::EffectNode,
     let bound = |pick: Option<&str>, n: u32, other: u32| -> Vec<(&str, u32)> {
         arrays
             .iter()
-            .map(|&a| (a, if pick.is_none_or(|p| p == a) { n } else { other }))
+            .map(|&a| {
+                (
+                    a,
+                    if pick.is_none_or(|p| p == a) {
+                        n
+                    } else {
+                        other
+                    },
+                )
+            })
             .collect()
     };
     let probe = |params: &ParamValues, inputs: &[(&str, u32)]| {
@@ -424,9 +445,7 @@ fn node_json(r: &NodeRow) -> serde_json::Value {
     let inputs: Vec<serde_json::Value> = r
         .inputs
         .iter()
-        .map(|p| {
-            serde_json::json!({ "name": p.name, "type": p.ty, "required": p.required })
-        })
+        .map(|p| serde_json::json!({ "name": p.name, "type": p.ty, "required": p.required }))
         .collect();
     let outputs: Vec<serde_json::Value> = r
         .outputs
@@ -457,7 +476,9 @@ fn node_json(r: &NodeRow) -> serde_json::Value {
                     manifold_core::effects::RangeReason::Index => "index",
                     manifold_core::effects::RangeReason::Count => "count",
                     manifold_core::effects::RangeReason::DegenerateFloor => "degenerate_floor",
-                    manifold_core::effects::RangeReason::DegenerateGeometry => "degenerate_geometry",
+                    manifold_core::effects::RangeReason::DegenerateGeometry => {
+                        "degenerate_geometry"
+                    }
                     manifold_core::effects::RangeReason::ShaderClamp => "shader_clamp",
                     manifold_core::effects::RangeReason::NormalizedDomain => "normalized_domain",
                 };
@@ -563,7 +584,8 @@ fn collect_presets() -> Vec<PresetRow> {
     effect_ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     for id in &effect_ids {
         if let Some(def) = bundled_preset_def(id)
-            && let Some(meta) = def.preset_metadata.as_ref() {
+            && let Some(meta) = def.preset_metadata.as_ref()
+        {
             rows.push(preset_row_from_meta(meta, "effect"));
         }
     }

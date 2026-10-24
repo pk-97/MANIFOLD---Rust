@@ -185,8 +185,11 @@ impl Application {
         // view replaces the output on the preview only; the output is
         // untouched (D9).
         #[cfg(target_os = "macos")]
-        let mut bridge_leases: crate::shared_texture::BridgeLeaseBatch =
-            preview_lease.zip(self.preview_texture_bridge.clone()).map(|(lease, bridge)| (bridge, lease)).into_iter().collect();
+        let mut bridge_leases: crate::shared_texture::BridgeLeaseBatch = preview_lease
+            .zip(self.preview_texture_bridge.clone())
+            .map(|(lease, bridge)| (bridge, lease))
+            .into_iter()
+            .collect();
         #[cfg(target_os = "macos")]
         let navigated = crate::preview_navigation::lease_navigated_frame(
             &mut self.ws.preview_navigation,
@@ -215,7 +218,8 @@ impl Application {
             .and_then(|(lease, bridge)| bridge.leased_frame(lease))
             .and_then(|published| {
                 let layer = self.ws.ui_root.scene_setup_panel.live_layer_id();
-                self.content_state.physics_overlay_frames[preview_slot].as_ref()
+                self.content_state.physics_overlay_frames[preview_slot]
+                    .as_ref()
                     .filter(|frame| frame.matches(layer, published))
             });
         #[cfg(not(target_os = "macos"))]
@@ -227,19 +231,38 @@ impl Application {
             None
         } else {
             match navigated.as_ref() {
-                Some((_, slot, outline)) => crate::selection_outline::leased_mask(self.outline_viewport_pane.as_mut(), &gpu.device, *slot, *outline),
+                Some((_, slot, outline)) => crate::selection_outline::leased_mask(
+                    self.outline_viewport_pane.as_mut(),
+                    &gpu.device,
+                    *slot,
+                    *outline,
+                ),
                 None => crate::selection_outline::leased_mask(
-                    self.outline_output_pane.as_mut(), &gpu.device, preview_slot, gizmo_frame.and_then(|frame| frame.outline)),
+                    self.outline_output_pane.as_mut(),
+                    &gpu.device,
+                    preview_slot,
+                    gizmo_frame.and_then(|frame| frame.outline),
+                ),
             }
         };
         #[cfg(not(target_os = "macos"))]
         let outline_mask: Option<manifold_gpu::GpuTexture> = None;
-        self.ws.preview_gizmo.show(gizmo_frame, (video_source_dims.0 as u32, video_source_dims.1 as u32), navigated_view);
+        self.ws.preview_gizmo.show(
+            gizmo_frame,
+            (video_source_dims.0 as u32, video_source_dims.1 as u32),
+            navigated_view,
+        );
         let gizmos = self
             .ws
             .preview_gizmo
-            .refresh(&self.local_project, &self.ws.ui_root.scene_setup_panel, &self.ui_edits.stamps.parts())
-            .then(|| crate::ui_frame::MainGizmos { outline: self.selection_outline.as_ref().zip(outline_mask.as_ref()) });
+            .refresh(
+                &self.local_project,
+                &self.ws.ui_root.scene_setup_panel,
+                &self.ui_edits.stamps.parts(),
+            )
+            .then(|| crate::ui_frame::MainGizmos {
+                outline: self.selection_outline.as_ref().zip(outline_mask.as_ref()),
+            });
         if let (
             Some(cm),
             Some(ui),
@@ -271,7 +294,8 @@ impl Application {
                 gizmos,
             );
         }
-        self.ui_profile.add("present.clear_atlas_compositor", pseg.elapsed());
+        self.ui_profile
+            .add("present.clear_atlas_compositor", pseg.elapsed());
         pseg = std::time::Instant::now();
 
         // ── Passes 4a→5 + VQT + overlay dirty-clear — the shared seam
@@ -324,40 +348,47 @@ impl Application {
             // a "New lane: <filename>" floating label for the non-audio-lane
             // case — no existing floating-text-over-viewport primitive to
             // reuse, and inventing one wasn't in scope for this pass.
-            let ghost_body = self.drag_tracker.first_hovered_audio_seconds().and_then(|source_secs| {
-                let pos = self.drag_tracker.drop_position().unwrap_or(self.cursor_pos);
-                let vp = &self.ws.ui_root.viewport;
-                let in_tracks = vp.get_tracks_rect().contains(pos);
-                if !in_tracks {
-                    return None;
-                }
-                let layer_index = vp.layer_at_y(pos.y)?;
-                let layer = self.local_project.timeline.layers.get(layer_index)?;
-                if !layer.is_audio() {
-                    return None;
-                }
-                let start_beat = vp.pixel_to_beat(pos.x).as_f32().max(0.0);
-                let spb = manifold_core::tempo::TempoMapConverter::seconds_per_beat_from_bpm(
-                    self.local_project.settings.bpm.0,
-                );
-                let duration_beats =
-                    if spb > 0.0 { source_secs.as_f32() / spb } else { 0.0 };
-                Some(manifold_ui_paint::clip_draw::ClipBody {
-                    rect: manifold_ui::node::Rect::new(
-                        vp.beat_to_pixel(manifold_core::Beats::from_f32(start_beat)),
-                        vp.track_y(layer_index),
-                        vp.beat_duration_to_width(duration_beats),
-                        vp.track_height(layer_index),
-                    ),
-                    base_color: manifold_ui::color::AUDIO_TRIM_BAR_C32,
-                    selected: true,
-                    hovered: false,
-                    muted: false,
-                    locked: false,
-                    generator: false,
-                    alpha: 0.5,
-                })
-            });
+            let ghost_body =
+                self.drag_tracker
+                    .first_hovered_audio_seconds()
+                    .and_then(|source_secs| {
+                        let pos = self.drag_tracker.drop_position().unwrap_or(self.cursor_pos);
+                        let vp = &self.ws.ui_root.viewport;
+                        let in_tracks = vp.get_tracks_rect().contains(pos);
+                        if !in_tracks {
+                            return None;
+                        }
+                        let layer_index = vp.layer_at_y(pos.y)?;
+                        let layer = self.local_project.timeline.layers.get(layer_index)?;
+                        if !layer.is_audio() {
+                            return None;
+                        }
+                        let start_beat = vp.pixel_to_beat(pos.x).as_f32().max(0.0);
+                        let spb =
+                            manifold_core::tempo::TempoMapConverter::seconds_per_beat_from_bpm(
+                                self.local_project.settings.bpm.0,
+                            );
+                        let duration_beats = if spb > 0.0 {
+                            source_secs.as_f32() / spb
+                        } else {
+                            0.0
+                        };
+                        Some(manifold_ui_paint::clip_draw::ClipBody {
+                            rect: manifold_ui::node::Rect::new(
+                                vp.beat_to_pixel(manifold_core::Beats::from_f32(start_beat)),
+                                vp.track_y(layer_index),
+                                vp.beat_duration_to_width(duration_beats),
+                                vp.track_height(layer_index),
+                            ),
+                            base_color: manifold_ui::color::AUDIO_TRIM_BAR_C32,
+                            selected: true,
+                            hovered: false,
+                            muted: false,
+                            locked: false,
+                            generator: false,
+                            alpha: 0.5,
+                        })
+                    });
             if !self.clip_rect_scratch.is_empty() || ghost_body.is_some() {
                 // Resolve per-clip selection (incl. the marquee case: when the
                 // region IS the selection, clips it covers style as selected —
@@ -428,7 +459,8 @@ impl Application {
             let layers = &self.local_project.timeline.layers;
             let wants_thumb = |cr: &&manifold_ui::panels::viewport::ClipScreenRect| {
                 cr.rect.width >= MIN_THUMB_W
-                    && layers.get(cr.layer_index)
+                    && layers
+                        .get(cr.layer_index)
                         .is_some_and(|layer| layer.layer_type.supports_clip_thumbnails())
             };
             let unchanged = self
@@ -444,9 +476,9 @@ impl Application {
                     .filter(wants_thumb)
                     .map(|cr| cr.clip_id.clone())
                     .collect();
-                self.send_content_cmd(
-                    crate::content_command::ContentCommand::SetClipAtlasVisible(thumb_clips.clone()),
-                );
+                self.send_content_cmd(crate::content_command::ContentCommand::SetClipAtlasVisible(
+                    thumb_clips.clone(),
+                ));
                 self.last_clip_atlas_visible_sent = thumb_clips;
             }
         }
@@ -496,9 +528,7 @@ impl Application {
         #[cfg(not(target_os = "macos"))]
         let thumb_pass: Option<crate::ui_frame::ThumbPass> = None;
         #[cfg(target_os = "macos")]
-        if !self.clip_rect_scratch.is_empty()
-            && !self.content_state.clip_atlas_layout.is_empty()
-        {
+        if !self.clip_rect_scratch.is_empty() && !self.content_state.clip_atlas_layout.is_empty() {
             // Single shared surface (BUG-119) — no front-buffer index to resolve;
             // the imported texture always reflects the content thread's latest
             // cell blits directly (no clear after init, so at worst a cell mid-blit
@@ -506,7 +536,8 @@ impl Application {
             if let Some(atlas) = self.ui_clip_atlas_texture.as_ref() {
                 // clip → its captured cells, from the published layout. Each clip
                 // tiles its captured bar cells across its body.
-                self.clip_thumb_strips.refresh(&self.content_state.clip_atlas_layout);
+                self.clip_thumb_strips
+                    .refresh(&self.content_state.clip_atlas_layout);
                 let cell_aspect = crate::content_pipeline::CLIP_ATLAS_CELL_W as f32
                     / crate::content_pipeline::CLIP_ATLAS_CELL_H as f32;
                 let inv_cols = 1.0 / crate::content_pipeline::CLIP_ATLAS_COLS as f32;
@@ -520,7 +551,11 @@ impl Application {
                     // Match the SetClipAtlasVisible filter so a clip too narrow to
                     // have requested a cell never draws one.
                     if cr.rect.width < 24.0
-                        || !self.local_project.timeline.layers.get(cr.layer_index)
+                        || !self
+                            .local_project
+                            .timeline
+                            .layers
+                            .get(cr.layer_index)
                             .is_some_and(|layer| layer.layer_type.supports_clip_thumbnails())
                     {
                         continue;
@@ -652,16 +687,25 @@ impl Application {
             self.selection.automation_feedback = None;
         } else {
             let viewport = &self.ws.ui_root.viewport;
-            self.overlay.refresh_automation_feedback(self.cursor_pos, viewport.automation_lane_screens(),
-                &mut self.selection, viewport);
+            self.overlay.refresh_automation_feedback(
+                self.cursor_pos,
+                viewport.automation_lane_screens(),
+                &mut self.selection,
+                viewport,
+            );
         }
         if had_automation_feedback || self.selection.automation_feedback.is_some() {
-            self.cursor_manager.set(self.selection.automation_feedback.as_ref()
-                .map_or(manifold_ui::cursors::TimelineCursor::Default, manifold_ui::cursors::TimelineCursor::from));
+            self.cursor_manager
+                .set(self.selection.automation_feedback.as_ref().map_or(
+                    manifold_ui::cursors::TimelineCursor::Default,
+                    manifold_ui::cursors::TimelineCursor::from,
+                ));
             if self.cursor_manager.needs_update()
                 && let Some(ws) = self.window_registry.get(&window_id)
             {
-                let icon = crate::window_input::native_timeline_cursor(self.cursor_manager.pending_cursor_icon());
+                let icon = crate::window_input::native_timeline_cursor(
+                    self.cursor_manager.pending_cursor_icon(),
+                );
                 ws.window.set_cursor(icon);
                 self.cursor_manager.mark_applied();
             }
@@ -673,9 +717,11 @@ impl Application {
         // `(ui_renderer, blit_pipeline, blit_sampler)` all `Some` — see
         // module doc deviation #9 (`ui_frame.rs`) for why this reproduces
         // the old per-pass gating on every reachable frame.
-        if let (Some(ui), Some(blit_pipeline), Some(blit_sampler)) =
-            (self.ui_renderer.as_mut(), &self.blit_pipeline, &self.blit_sampler)
-        {
+        if let (Some(ui), Some(blit_pipeline), Some(blit_sampler)) = (
+            self.ui_renderer.as_mut(),
+            &self.blit_pipeline,
+            &self.blit_sampler,
+        ) {
             crate::ui_frame::render_main_ui_passes(
                 &gpu.device,
                 ui,
@@ -707,7 +753,8 @@ impl Application {
                 },
             );
         }
-        self.ui_profile.add("present.main_ui_passes", pseg.elapsed());
+        self.ui_profile
+            .add("present.main_ui_passes", pseg.elapsed());
         pseg = std::time::Instant::now();
 
         // ── Late drawable acquisition ──
@@ -725,7 +772,11 @@ impl Application {
             // sampling encoder IS in flight — retire the bridge lease on a
             // marker buffer committed after it (same queue, so ordered).
             #[cfg(target_os = "macos")]
-            crate::shared_texture::retire_leases_via_marker(&gpu.device, self.content_tx.clone(), bridge_leases);
+            crate::shared_texture::retire_leases_via_marker(
+                &gpu.device,
+                self.content_tx.clone(),
+                bridge_leases,
+            );
             return;
         }
         let drawable = {
@@ -783,7 +834,11 @@ impl Application {
         // implies the sample has retired. The SurfaceReady wake is what the
         // content thread's surface wait sleeps on.
         #[cfg(target_os = "macos")]
-        crate::shared_texture::attach_lease_retire(&present_enc, self.content_tx.clone(), bridge_leases);
+        crate::shared_texture::attach_lease_retire(
+            &present_enc,
+            self.content_tx.clone(),
+            bridge_leases,
+        );
         present_enc.commit();
         self.ui_profile.add("present.blit_present", pseg.elapsed());
     }
@@ -798,7 +853,11 @@ impl Application {
     /// present the identical cached pixels; only whether the redraw is
     /// considered "done" differs, so the callers own that bookkeeping, not
     /// this helper.
-    pub(crate) fn represent_cached_offscreen(&mut self, window_id: winit::window::WindowId, pseg: &mut std::time::Instant) {
+    pub(crate) fn represent_cached_offscreen(
+        &mut self,
+        window_id: winit::window::WindowId,
+        pseg: &mut std::time::Instant,
+    ) {
         let Some(gpu) = &self.gpu else { return };
         let Some(offscreen) = self.ws.ui_offscreen.as_ref() else {
             return;
@@ -843,6 +902,7 @@ impl Application {
             enc.present_drawable(&drawable);
             enc.commit();
         }
-        self.ui_profile.add("present.fast_blit_present", pseg.elapsed());
+        self.ui_profile
+            .add("present.fast_blit_present", pseg.elapsed());
     }
 }

@@ -23,7 +23,9 @@ pub const NAMES: [&str; 9] = [
 ];
 
 fn path(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/presets").join(format!("{name}.json"))
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/presets")
+        .join(format!("{name}.json"))
 }
 
 /// The scene's JSON, as saved.
@@ -33,7 +35,11 @@ pub fn json(name: &str) -> String {
 
 /// The scene as the preset catalog would load it.
 pub fn def(name: &str) -> Arc<EffectGraphDef> {
-    Arc::new(crate::bundled_presets::parse_bundled_preset(PresetKind::Generator, name, &json(name)))
+    Arc::new(crate::bundled_presets::parse_bundled_preset(
+        PresetKind::Generator,
+        name,
+        &json(name),
+    ))
 }
 
 /// Every engine scene, parsed.
@@ -43,7 +49,9 @@ pub fn all() -> impl Iterator<Item = (&'static str, Arc<EffectGraphDef>)> {
 
 /// The scene named by `id`, as saved, or `None` for any other preset.
 pub fn scene_json(id: &manifold_core::PresetTypeId) -> Option<Arc<str>> {
-    NAMES.contains(&id.as_str()).then(|| Arc::from(json(id.as_str())))
+    NAMES
+        .contains(&id.as_str())
+        .then(|| Arc::from(json(id.as_str())))
 }
 
 /// The scene named by `id`, as the catalog would load it, or `None`.
@@ -60,7 +68,14 @@ pub fn install() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         use manifold_core::project::EmbeddedOrigin;
-        let scenes = NAMES.iter().map(|name| ((*name).to_owned(), json(name), EmbeddedOrigin::Snapshot)).collect();
-        manifold_node_engine::load::preset_loader::set_project_presets(Vec::new(), scenes, Vec::new());
+        let scenes = NAMES
+            .iter()
+            .map(|name| ((*name).to_owned(), json(name), EmbeddedOrigin::Snapshot))
+            .collect();
+        manifold_node_engine::load::preset_loader::set_project_presets(
+            Vec::new(),
+            scenes,
+            Vec::new(),
+        );
     });
 }

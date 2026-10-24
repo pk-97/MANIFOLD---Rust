@@ -14,15 +14,13 @@ use std::sync::Arc;
 
 use ahash::AHashMap;
 use arc_swap::ArcSwap;
-use manifold_core::PresetTypeId;
 use manifold_core::NodeId;
-use manifold_core::effect_graph_def::{
-    BindingDef, BindingTarget, EffectGraphDef, PresetMetadata,
-};
+use manifold_core::PresetTypeId;
+use manifold_core::effect_graph_def::{BindingDef, BindingTarget, EffectGraphDef, PresetMetadata};
 
 use crate::load::catalog_source::preset_def as bundled_preset_def;
-use crate::scene::mesh_change::PreparedMeshRules;
 use crate::param_binding::{ParamBinding, ParamId, ParamTarget};
+use crate::scene::mesh_change::PreparedMeshRules;
 use crate::snapshot::{GraphSnapshot, OuterParamRouting, OuterParamSource};
 
 /// Runtime view assembled from a catalog preset. The chain builder splices
@@ -100,7 +98,8 @@ fn build_view(type_id: &PresetTypeId) -> Option<LoadedPresetView> {
     let prepared;
     let metadata = if manifold_core::scene_modifier_preset::has_scene_modifier_data(&def) {
         prepared = match crate::load::expand::prepare_scene_modifiers(
-            &def, &crate::persistence::PrimitiveRegistry::with_builtin(),
+            &def,
+            &crate::persistence::PrimitiveRegistry::with_builtin(),
         ) {
             Ok(prepared) => prepared,
             Err(error) => {
@@ -109,7 +108,9 @@ fn build_view(type_id: &PresetTypeId) -> Option<LoadedPresetView> {
             }
         };
         prepared.def.preset_metadata.as_ref()?
-    } else { def.preset_metadata.as_ref()? };
+    } else {
+        def.preset_metadata.as_ref()?
+    };
     let bindings = owned_bindings(metadata)?;
     Some(LoadedPresetView {
         type_id: type_id.clone(),
@@ -135,9 +136,12 @@ fn binding_def_to_runtime(
     let target = target_def_to_runtime(&def.target)?;
     // Slider response and range come from the owning card parameter. Composite
     // bindings without a matching parameter use the identity response.
-    let (min, max, curve, invert) = param
-        .map(|p| (p.min, p.max, p.curve, p.invert))
-        .unwrap_or((0.0, 1.0, Default::default(), false));
+    let (min, max, curve, invert) = param.map(|p| (p.min, p.max, p.curve, p.invert)).unwrap_or((
+        0.0,
+        1.0,
+        Default::default(),
+        false,
+    ));
     Some(ParamBinding {
         id: ParamId::Owned(def.id.clone()),
         label: Cow::Owned(param.map(|p| p.name.clone()).unwrap_or_default()),
@@ -165,7 +169,9 @@ fn target_def_to_runtime(def: &BindingTarget) -> Option<ParamTarget> {
             outer_name: Cow::Owned(outer_name.clone()),
         },
         BindingTarget::SceneModifier { .. } => {
-            log::error!("scene modifier bindings require host attachment expansion before runtime view creation");
+            log::error!(
+                "scene modifier bindings require host attachment expansion before runtime view creation"
+            );
             return None;
         }
     })
@@ -204,8 +210,7 @@ pub fn outer_routings_from_view(view: &LoadedPresetView) -> Vec<OuterParamRoutin
     // The editor keys rows by handle while bindings address nodes by id.
     // Group bodies use the same raw handles in the display definition, so the
     // recursive map resolves grouped targets too.
-    let mut handle_by_id: std::collections::HashMap<&str, &str> =
-        std::collections::HashMap::new();
+    let mut handle_by_id: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
     collect_node_handles(&view.canonical_def.nodes, &mut handle_by_id);
     let mut out = Vec::with_capacity(view.bindings.len());
     for decl in &view.bindings {
@@ -238,8 +243,6 @@ mod tests {
         let unknown = PresetTypeId::from_string("NotARealEffect".to_string());
         assert!(loaded_preset_view_by_id(&unknown).is_none());
     }
-
-
 }
 
 #[cfg(any(test, feature = "testkit"))]

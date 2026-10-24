@@ -7,11 +7,10 @@ use crate::parameters::ParamType;
 use crate::ports::{ChannelSpec, NodeInput, NodeOutput, PortType};
 
 use super::types::{
-    buffer_element_type, is_texture_input, is_texture_port, param_wgsl_type, param_word_count,
-    CodegenError, FusionRegion, GeneratedFusion, InputSource, RegionNode,
+    CodegenError, FusionRegion, GeneratedFusion, InputSource, RegionNode, buffer_element_type,
+    is_texture_input, is_texture_port, param_wgsl_type, param_word_count,
 };
 use super::uniforms::{emit_buffer_struct, emit_derived_uniform_markers};
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct FnBlock {
@@ -50,7 +49,10 @@ pub(super) fn split_fns(fragment: &str) -> (Vec<String>, Vec<FnBlock>) {
     for line in fragment.lines() {
         if let Some(rest) = line.strip_prefix("fn ") {
             if let Some((name, lines)) = current.take() {
-                blocks.push(FnBlock { name, text: lines.join("\n") });
+                blocks.push(FnBlock {
+                    name,
+                    text: lines.join("\n"),
+                });
             }
             let name = rest.split('(').next().unwrap_or("").trim().to_string();
             current = Some((name, vec![line.to_string()]));
@@ -79,7 +81,10 @@ pub(super) fn split_fns(fragment: &str) -> (Vec<String>, Vec<FnBlock>) {
         }
     }
     if let Some((name, lines)) = current.take() {
-        blocks.push(FnBlock { name, text: lines.join("\n") });
+        blocks.push(FnBlock {
+            name,
+            text: lines.join("\n"),
+        });
     }
     (prelude, blocks)
 }
@@ -116,7 +121,6 @@ fn is_top_level_decl(line: &str) -> bool {
         || t.starts_with("override ")
 }
 
-
 /// Generate one fused kernel for a region. Errors if a node isn't fusable, a
 /// body lacks `fn body`, an input references an unknown/later node, or two
 /// helpers share a name with different bodies (un-dedupable collision).
@@ -126,11 +130,11 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     // particle/element dispatch, element structs threaded as registers. A region
     // is homogeneous (texture and Array wires never connect — different port
     // types), so the output member's output kind decides the whole region.
-    if region
-        .nodes
-        .iter()
-        .any(|n| n.node_outputs.iter().any(|o| matches!(o.ty, PortType::Array(_))))
-    {
+    if region.nodes.iter().any(|n| {
+        n.node_outputs
+            .iter()
+            .any(|o| matches!(o.ty, PortType::Array(_)))
+    }) {
         return super::fused_buffer::generate_fused_buffer(region);
     }
     // node_id -> region index (for resolving InputSource::Node to a register).
@@ -152,9 +156,16 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     }
     let mut ext_kinds: Vec<ExtKind> = vec![ExtKind::Texture; region.num_external_inputs];
     for node in region.nodes.iter() {
-        let tex_count = node.node_inputs.iter().filter(|p| is_texture_input(p)).count();
-        let array_ports: Vec<&NodeInput> =
-            node.node_inputs.iter().filter(|p| matches!(p.ty, PortType::Array(_))).collect();
+        let tex_count = node
+            .node_inputs
+            .iter()
+            .filter(|p| is_texture_input(p))
+            .count();
+        let array_ports: Vec<&NodeInput> = node
+            .node_inputs
+            .iter()
+            .filter(|p| matches!(p.ty, PortType::Array(_)))
+            .collect();
         for (idx, src) in node.inputs.iter().enumerate() {
             if node.input_access.get(idx).copied().unwrap_or_default() != InputAccess::BufferIndex {
                 continue;
@@ -164,7 +175,10 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
                     return Err(CodegenError::BadInput);
                 }
                 let specs = match array_ports.get(idx - tex_count) {
-                    Some(NodeInput { ty: PortType::Array(at), .. }) => at.specs,
+                    Some(NodeInput {
+                        ty: PortType::Array(at),
+                        ..
+                    }) => at.specs,
                     _ => return Err(CodegenError::BadInput),
                 };
                 ext_kinds[*e] = ExtKind::Array(specs);
@@ -206,20 +220,31 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         // to the region's resolved external slot `src_<e>` — the array
         // analogue of the stencil-fetch renaming below, riding the same
         // whole-fragment namespacing this codegen already does for structs.
-        let tex_count = node.node_inputs.iter().filter(|p| is_texture_input(p)).count();
-        let array_ports: Vec<&NodeInput> =
-            node.node_inputs.iter().filter(|p| matches!(p.ty, PortType::Array(_))).collect();
+        let tex_count = node
+            .node_inputs
+            .iter()
+            .filter(|p| is_texture_input(p))
+            .count();
+        let array_ports: Vec<&NodeInput> = node
+            .node_inputs
+            .iter()
+            .filter(|p| matches!(p.ty, PortType::Array(_)))
+            .collect();
         let mut member_body = node.body.to_string();
         for (arr_idx, port) in array_ports.iter().enumerate() {
             let slot_idx = tex_count + arr_idx;
-            if node.input_access.get(slot_idx).copied().unwrap_or_default() != InputAccess::BufferIndex
+            if node.input_access.get(slot_idx).copied().unwrap_or_default()
+                != InputAccess::BufferIndex
             {
                 continue;
             }
             match node.inputs.get(slot_idx) {
                 Some(InputSource::External(e)) => {
-                    member_body =
-                        rename_ident(&member_body, &format!("buf_{}", port.name), &format!("src_{e}"));
+                    member_body = rename_ident(
+                        &member_body,
+                        &format!("buf_{}", port.name),
+                        &format!("src_{e}"),
+                    );
                 }
                 _ => return Err(CodegenError::BadInput),
             }
@@ -234,8 +259,11 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         // there because a standalone kernel has exactly one member). Every
         // member with exactly one (or zero) texture outputs is untouched —
         // byte-identical for every existing region.
-        let member_tex_outputs: Vec<&NodeOutput> =
-            node.node_outputs.iter().filter(|o| is_texture_port(&o.ty)).collect();
+        let member_tex_outputs: Vec<&NodeOutput> = node
+            .node_outputs
+            .iter()
+            .filter(|o| is_texture_port(&o.ty))
+            .collect();
         if member_tex_outputs.len() > 1 {
             let struct_name = format!("N{i}BodyOutputs");
             member_body = rename_ident(&member_body, "BodyOutputs", &struct_name);
@@ -364,7 +392,8 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         writeln!(struct_body, "    _pad{k}: u32,").unwrap();
     }
     if field_count == 0 {
-        struct_body.push_str("    _pad0: u32,\n    _pad1: u32,\n    _pad2: u32,\n    _pad3: u32,\n");
+        struct_body
+            .push_str("    _pad0: u32,\n    _pad1: u32,\n    _pad2: u32,\n    _pad3: u32,\n");
     }
 
     let mut out = String::new();
@@ -400,7 +429,11 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     let mut coincident_ext: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     for (i, node) in region.nodes.iter().enumerate() {
         for (idx, src) in node.inputs.iter().enumerate() {
-            let access = node.input_access.get(idx).copied().unwrap_or(InputAccess::Coincident);
+            let access = node
+                .input_access
+                .get(idx)
+                .copied()
+                .unwrap_or(InputAccess::Coincident);
             if access == InputAccess::Gather && matches!(src, InputSource::External(_)) {
                 needs_sampler = true;
             }
@@ -437,8 +470,12 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
                 e + 1
             )
             .unwrap(),
-            None => writeln!(out, "@group(0) @binding({}) var src_{e}: texture_2d<f32>;", e + 1)
-                .unwrap(),
+            None => writeln!(
+                out,
+                "@group(0) @binding({}) var src_{e}: texture_2d<f32>;",
+                e + 1
+            )
+            .unwrap(),
         }
     }
     let mut next_binding = region.num_external_inputs + 1;
@@ -452,8 +489,9 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         if region.sampler_address_mode == "clamp" {
             writeln!(out, "@group(0) @binding({next_binding}) var samp: sampler;").unwrap();
         } else {
-            let marker =
-                Marker::SamplerAddressMode { mode: region.sampler_address_mode.to_string() };
+            let marker = Marker::SamplerAddressMode {
+                mode: region.sampler_address_mode.to_string(),
+            };
             writeln!(
                 out,
                 "@group(0) @binding({next_binding}) var samp: sampler; {}",
@@ -559,13 +597,20 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         if !node.stencil_fetch {
             continue;
         }
-        let tex_specs: Vec<&NodeInput> =
-            node.node_inputs.iter().filter(|p| is_texture_input(p)).collect();
+        let tex_specs: Vec<&NodeInput> = node
+            .node_inputs
+            .iter()
+            .filter(|p| is_texture_input(p))
+            .collect();
         if tex_specs.len() != node.inputs.len() {
             return Err(CodegenError::BadInput); // need port names for fetch fns
         }
         for (idx, src) in node.inputs.iter().enumerate() {
-            let access = node.input_access.get(idx).copied().unwrap_or(InputAccess::Coincident);
+            let access = node
+                .input_access
+                .get(idx)
+                .copied()
+                .unwrap_or(InputAccess::Coincident);
             if access != InputAccess::Gather {
                 continue;
             }
@@ -606,12 +651,13 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
                     );
                     for &j in &chain.members {
                         let cnode = region.nodes.get(j).ok_or(CodegenError::BadInput)?;
-                        let args =
-                            chain_member_args(j, cnode, region, &index_of, &chain.members)?;
+                        let args = chain_member_args(j, cnode, region, &index_of, &chain.members)?;
                         writeln!(vsrc, "    let v{j} = n{j}_body({});", args.join(", ")).unwrap();
                     }
-                    let out_node =
-                        region.nodes.get(chain.output).ok_or(CodegenError::BadInput)?;
+                    let out_node = region
+                        .nodes
+                        .get(chain.output)
+                        .ok_or(CodegenError::BadInput)?;
                     if out_node.output_storage == "rgba32float" {
                         writeln!(vsrc, "    return v{};\n}}", chain.output).unwrap();
                     } else {
@@ -659,7 +705,11 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         // resolution-robust read the unfused atom makes; a textureLoad here would
         // misread the wrong texel. The body receives `ext_{e}` either way.
         if region.sampled_externals.contains(&e) {
-            writeln!(out, "    let ext_{e} = textureSampleLevel(src_{e}, samp, uv, 0.0);").unwrap();
+            writeln!(
+                out,
+                "    let ext_{e} = textureSampleLevel(src_{e}, samp, uv, 0.0);"
+            )
+            .unwrap();
         } else {
             writeln!(out, "    let ext_{e} = textureLoad(src_{e}, coord, 0);").unwrap();
         }
@@ -670,7 +720,11 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         }
         let mut args: Vec<String> = Vec::new();
         for (idx, src) in node.inputs.iter().enumerate() {
-            let access = node.input_access.get(idx).copied().unwrap_or(InputAccess::Coincident);
+            let access = node
+                .input_access
+                .get(idx)
+                .copied()
+                .unwrap_or(InputAccess::Coincident);
             match (access, src) {
                 // A gathered input: the body samples the bound texture itself at a
                 // coord it computes, so it gets the texture handle (+ the shared
@@ -808,8 +862,11 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         // the def, so each flag folds to a literal here. `node_inputs` describes
         // the texture ports when install built the region; synthetic test regions
         // leave it empty → no flags pushed, generated WGSL byte-identical.
-        let tex_specs: Vec<&NodeInput> =
-            node.node_inputs.iter().filter(|p| is_texture_input(p)).collect();
+        let tex_specs: Vec<&NodeInput> = node
+            .node_inputs
+            .iter()
+            .filter(|p| is_texture_input(p))
+            .collect();
         if tex_specs.len() == node.inputs.len() {
             for (idx, spec) in tex_specs.iter().enumerate() {
                 if !spec.required {
@@ -817,7 +874,11 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
                     args.push(if wired { "1u" } else { "0u" }.to_string());
                 }
             }
-        } else if node.inputs.iter().any(|s| matches!(s, InputSource::Unwired)) {
+        } else if node
+            .inputs
+            .iter()
+            .any(|s| matches!(s, InputSource::Unwired))
+        {
             // An unwired optional without port specs to read optionality from
             // can't satisfy the body's use-flag signature — don't miscompile.
             return Err(CodegenError::BadInput);
@@ -830,8 +891,11 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
             // bug (structurally unreachable: quantize_f16 requires the member
             // sit on a feedback cycle, and every multi-output atom today is a
             // 0-texture-input Source, which can't read its own output back).
-            let member_tex_outputs =
-                node.node_outputs.iter().filter(|o| is_texture_port(&o.ty)).count();
+            let member_tex_outputs = node
+                .node_outputs
+                .iter()
+                .filter(|o| is_texture_port(&o.ty))
+                .count();
             if member_tex_outputs > 1 {
                 return Err(CodegenError::BadInput);
             }
@@ -844,8 +908,12 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     // struct, not the value — the escaping port picks the field. Single-output
     // members keep the bare register, byte-identical to before.
     let store_expr = |idx: usize, port: &str| -> String {
-        let is_multi_output_member =
-            region.nodes[idx].node_outputs.iter().filter(|o| is_texture_port(&o.ty)).count() > 1;
+        let is_multi_output_member = region.nodes[idx]
+            .node_outputs
+            .iter()
+            .filter(|o| is_texture_port(&o.ty))
+            .count()
+            > 1;
         if is_multi_output_member {
             format!("r{idx}.{port}")
         } else {
@@ -874,7 +942,10 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     }
     out.push_str("}\n");
 
-    Ok(GeneratedFusion { wgsl: out, param_order })
+    Ok(GeneratedFusion {
+        wgsl: out,
+        param_order,
+    })
 }
 
 /// Body-arg marshalling for one VIRTUAL chain member, evaluated inside a
@@ -896,7 +967,11 @@ fn chain_member_args(
 ) -> Result<Vec<String>, CodegenError> {
     let mut args: Vec<String> = Vec::new();
     for (idx, src) in node.inputs.iter().enumerate() {
-        let access = node.input_access.get(idx).copied().unwrap_or(InputAccess::Coincident);
+        let access = node
+            .input_access
+            .get(idx)
+            .copied()
+            .unwrap_or(InputAccess::Coincident);
         if !matches!(access, InputAccess::Coincident | InputAccess::Gather) {
             return Err(CodegenError::BadInput);
         }
@@ -967,8 +1042,11 @@ fn chain_member_args(
             args.push(format!("params.n{j}_{dname}"));
         }
     }
-    let tex_specs: Vec<&NodeInput> =
-        node.node_inputs.iter().filter(|p| is_texture_input(p)).collect();
+    let tex_specs: Vec<&NodeInput> = node
+        .node_inputs
+        .iter()
+        .filter(|p| is_texture_input(p))
+        .collect();
     if tex_specs.len() == node.inputs.len() {
         for (idx, spec) in tex_specs.iter().enumerate() {
             if !spec.required {
@@ -976,7 +1054,11 @@ fn chain_member_args(
                 args.push(if wired { "1u" } else { "0u" }.to_string());
             }
         }
-    } else if node.inputs.iter().any(|s| matches!(s, InputSource::Unwired)) {
+    } else if node
+        .inputs
+        .iter()
+        .any(|s| matches!(s, InputSource::Unwired))
+    {
         return Err(CodegenError::BadInput);
     }
     Ok(args)

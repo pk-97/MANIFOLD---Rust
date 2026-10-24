@@ -100,8 +100,6 @@ mod tests {
     use manifold_core::{LayerId, NodeId, PresetTypeId};
     use std::collections::BTreeMap;
 
-
-
     fn spec(id: &str, default: f32, curve: MacroCurve) -> ParamSpecDef {
         ParamSpecDef {
             tooltip: None,

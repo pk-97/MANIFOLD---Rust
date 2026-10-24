@@ -12,8 +12,8 @@
 //! independently gate-tested per primitive) avoids tripling a bug surface
 //! that has real correctness coupling.
 
-use manifold_node_engine::exec::effect_node::FrameTime;
 use crate::node_graph::gltf_load::GltfInterp;
+use manifold_node_engine::exec::effect_node::FrameTime;
 use manifold_node_engine::parameters::TableData;
 
 /// How `progress` maps into `[0, 1]` past the wrap point. Applies uniformly
@@ -118,7 +118,11 @@ pub(crate) fn resolve_progress(
         None => {
             let beats = time.beats.0 - trigger_origin_beats.unwrap_or(0.0);
             let seconds = time.seconds.0;
-            let beats_per_second = if seconds.abs() > 1e-6 { time.beats.0 / seconds } else { 2.0 };
+            let beats_per_second = if seconds.abs() > 1e-6 {
+                time.beats.0 / seconds
+            } else {
+                2.0
+            };
             let clip_beats = (duration_s as f64 * beats_per_second).max(1e-6);
             (beats * rate as f64 / clip_beats) as f32
         }
@@ -146,7 +150,14 @@ pub(crate) fn clip_duration(table: Option<&TableData>, clip_index: usize, fallba
 /// keyframes' values, `m0` is `p0`'s OUT-tangent, `m1` is `p1`'s IN-tangent,
 /// `t` the normalized `[0,1]` fraction between them, `td` the real keyframe
 /// time delta (tangents are scaled by the interval, not by `t`).
-fn hermite<const N: usize>(p0: [f32; N], m0: [f32; N], p1: [f32; N], m1: [f32; N], t: f32, td: f32) -> [f32; N] {
+fn hermite<const N: usize>(
+    p0: [f32; N],
+    m0: [f32; N],
+    p1: [f32; N],
+    m1: [f32; N],
+    t: f32,
+    td: f32,
+) -> [f32; N] {
     let t2 = t * t;
     let t3 = t2 * t;
     let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
@@ -205,19 +216,35 @@ pub(crate) fn sample_vec3_slice(
     }
     let (lo, hi) = bracket_slice(times, t);
     let (t0, t1) = (times[lo], times[hi]);
-    let f = if (t1 - t0).abs() > 1e-9 { (t - t0) / (t1 - t0) } else { 0.0 };
+    let f = if (t1 - t0).abs() > 1e-9 {
+        (t - t0) / (t1 - t0)
+    } else {
+        0.0
+    };
     match mode {
         GltfInterp::Step => get(lo),
         GltfInterp::CubicSpline => {
             let p0 = get(lo);
             let p1 = get(hi);
-            let m0 = [out_tangents[lo * 3], out_tangents[lo * 3 + 1], out_tangents[lo * 3 + 2]];
-            let m1 = [in_tangents[hi * 3], in_tangents[hi * 3 + 1], in_tangents[hi * 3 + 2]];
+            let m0 = [
+                out_tangents[lo * 3],
+                out_tangents[lo * 3 + 1],
+                out_tangents[lo * 3 + 2],
+            ];
+            let m1 = [
+                in_tangents[hi * 3],
+                in_tangents[hi * 3 + 1],
+                in_tangents[hi * 3 + 2],
+            ];
             hermite(p0, m0, p1, m1, f, t1 - t0)
         }
         GltfInterp::Linear => {
             let (a, b) = (get(lo), get(hi));
-            [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f]
+            [
+                a[0] + (b[0] - a[0]) * f,
+                a[1] + (b[1] - a[1]) * f,
+                a[2] + (b[2] - a[2]) * f,
+            ]
         }
     }
 }
@@ -238,7 +265,12 @@ pub(crate) fn sample_quat_slice(
         return default;
     }
     let get = |i: usize| -> [f32; 4] {
-        [values[i * 4], values[i * 4 + 1], values[i * 4 + 2], values[i * 4 + 3]]
+        [
+            values[i * 4],
+            values[i * 4 + 1],
+            values[i * 4 + 2],
+            values[i * 4 + 3],
+        ]
     };
     if n == 1 {
         return get(0);
@@ -251,7 +283,11 @@ pub(crate) fn sample_quat_slice(
     }
     let (lo, hi) = bracket_slice(times, t);
     let (t0, t1) = (times[lo], times[hi]);
-    let f = if (t1 - t0).abs() > 1e-9 { (t - t0) / (t1 - t0) } else { 0.0 };
+    let f = if (t1 - t0).abs() > 1e-9 {
+        (t - t0) / (t1 - t0)
+    } else {
+        0.0
+    };
     match mode {
         GltfInterp::Step => get(lo),
         GltfInterp::CubicSpline => {
@@ -312,14 +348,22 @@ pub(crate) fn sample_weight_slice(
     }
     let (lo, hi) = bracket_slice(times, t);
     let (t0, t1) = (times[lo], times[hi]);
-    let f = if (t1 - t0).abs() > 1e-9 { (t - t0) / (t1 - t0) } else { 0.0 };
+    let f = if (t1 - t0).abs() > 1e-9 {
+        (t - t0) / (t1 - t0)
+    } else {
+        0.0
+    };
     let (a, b) = (get(lo), get(hi));
     a + (b - a) * f
 }
 
 fn slerp(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     let dot0 = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
-    let (b, dot) = if dot0 < 0.0 { ([-b[0], -b[1], -b[2], -b[3]], -dot0) } else { (b, dot0) };
+    let (b, dot) = if dot0 < 0.0 {
+        ([-b[0], -b[1], -b[2], -b[3]], -dot0)
+    } else {
+        (b, dot0)
+    };
     if dot > 0.9995 {
         let lerped = [
             a[0] + (b[0] - a[0]) * t,
@@ -344,7 +388,11 @@ fn slerp(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
 
 fn normalize_quat(q: [f32; 4]) -> [f32; 4] {
     let len = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
-    if len < 1e-12 { [0.0, 0.0, 0.0, 1.0] } else { [q[0] / len, q[1] / len, q[2] / len, q[3] / len] }
+    if len < 1e-12 {
+        [0.0, 0.0, 0.0, 1.0]
+    } else {
+        [q[0] / len, q[1] / len, q[2] / len, q[3] / len]
+    }
 }
 
 #[cfg(test)]
@@ -377,15 +425,25 @@ mod tests {
     #[test]
     fn pingpong_mode_reflects_past_one_cycle() {
         assert!((LoopMode::PingPong.apply(0.25) - 0.25).abs() < 1e-6);
-        assert!((LoopMode::PingPong.apply(1.25) - 0.75).abs() < 1e-6, "reflects past 1.0");
-        assert!((LoopMode::PingPong.apply(2.25) - 0.25).abs() < 1e-6, "wraps into the next cycle");
+        assert!(
+            (LoopMode::PingPong.apply(1.25) - 0.75).abs() < 1e-6,
+            "reflects past 1.0"
+        );
+        assert!(
+            (LoopMode::PingPong.apply(2.25) - 0.25).abs() < 1e-6,
+            "wraps into the next cycle"
+        );
     }
 
     #[test]
     fn trigger_latch_first_frame_establishes_baseline_without_firing() {
         let mut latch = TriggerLatch::new();
         latch.update(Some(3.0), 10.0);
-        assert_eq!(latch.origin_beats(), None, "first frame must not consume a trigger");
+        assert_eq!(
+            latch.origin_beats(),
+            None,
+            "first frame must not consume a trigger"
+        );
     }
 
     #[test]
@@ -414,20 +472,49 @@ mod tests {
     fn resolve_progress_retriggers_from_zero_on_the_default_path() {
         // duration=1, rate=1, 120bpm-equivalent fallback ratio (beats=2*seconds).
         let p_before = resolve_progress(frame_time(4.0, 2.0), None, 1.0, 1.0, LoopMode::Loop, None);
-        assert!((p_before - 0.0).abs() < 1e-3, "beats=4, clip_beats=2 -> wraps to 0");
+        assert!(
+            (p_before - 0.0).abs() < 1e-3,
+            "beats=4, clip_beats=2 -> wraps to 0"
+        );
         // Retrigger at beats=4: elapsed-since-origin is 0 -> progress 0,
         // regardless of absolute beats.
-        let p_after = resolve_progress(frame_time(4.0, 2.0), None, 1.0, 1.0, LoopMode::Loop, Some(4.0));
+        let p_after = resolve_progress(
+            frame_time(4.0, 2.0),
+            None,
+            1.0,
+            1.0,
+            LoopMode::Loop,
+            Some(4.0),
+        );
         assert!((p_after - 0.0).abs() < 1e-3);
-        let p_one_beat_later =
-            resolve_progress(frame_time(5.0, 2.5), None, 1.0, 1.0, LoopMode::Loop, Some(4.0));
-        assert!((p_one_beat_later - 0.5).abs() < 1e-3, "1 beat elapsed of a 2-beat clip -> progress 0.5");
+        let p_one_beat_later = resolve_progress(
+            frame_time(5.0, 2.5),
+            None,
+            1.0,
+            1.0,
+            LoopMode::Loop,
+            Some(4.0),
+        );
+        assert!(
+            (p_one_beat_later - 0.5).abs() < 1e-3,
+            "1 beat elapsed of a 2-beat clip -> progress 0.5"
+        );
     }
 
     #[test]
     fn resolve_progress_ignores_trigger_origin_when_wired() {
-        let p = resolve_progress(frame_time(100.0, 50.0), Some(0.5), 1.0, 1.0, LoopMode::Loop, Some(90.0));
-        assert!((p - 0.5).abs() < 1e-6, "wired progress is authoritative regardless of trigger state");
+        let p = resolve_progress(
+            frame_time(100.0, 50.0),
+            Some(0.5),
+            1.0,
+            1.0,
+            LoopMode::Loop,
+            Some(90.0),
+        );
+        assert!(
+            (p - 0.5).abs() < 1e-6,
+            "wired progress is authoritative regardless of trigger state"
+        );
     }
 
     #[test]
@@ -435,7 +522,11 @@ mod tests {
         assert_eq!(clip_duration(None, 0, 2.5), 2.5);
         let table = TableData::new(vec![vec![0.0, 1.0], vec![1.0, 3.0]]).unwrap();
         assert_eq!(clip_duration(Some(&table), 1, 2.5), 3.0);
-        assert_eq!(clip_duration(Some(&table), 5, 2.5), 2.5, "no row for clip 5 -> fallback");
+        assert_eq!(
+            clip_duration(Some(&table), 5, 2.5),
+            2.5,
+            "no row for clip 5 -> fallback"
+        );
     }
 
     // ─── GLTF_ANIM_RUNTIME_V2_DESIGN.md P1 — slice samplers ────────────────
@@ -449,10 +540,24 @@ mod tests {
         let values = [0.0f32, 0.0, 0.0, 10.0, 0.0, 0.0];
         let mid = sample_vec3_slice(&times, &values, GltfInterp::Linear, &[], &[], 0.5, [0.0; 3]);
         assert!((mid[0] - 5.0).abs() < 1e-4, "halfway lerp, got {}", mid[0]);
-        let before = sample_vec3_slice(&times, &values, GltfInterp::Linear, &[], &[], -1.0, [0.0; 3]);
-        assert!((before[0] - 0.0).abs() < 1e-4, "holds first keyframe before range");
+        let before = sample_vec3_slice(
+            &times,
+            &values,
+            GltfInterp::Linear,
+            &[],
+            &[],
+            -1.0,
+            [0.0; 3],
+        );
+        assert!(
+            (before[0] - 0.0).abs() < 1e-4,
+            "holds first keyframe before range"
+        );
         let after = sample_vec3_slice(&times, &values, GltfInterp::Linear, &[], &[], 5.0, [0.0; 3]);
-        assert!((after[0] - 10.0).abs() < 1e-4, "holds last keyframe after range");
+        assert!(
+            (after[0] - 10.0).abs() < 1e-4,
+            "holds last keyframe after range"
+        );
     }
 
     #[test]
@@ -464,7 +569,9 @@ mod tests {
     #[test]
     fn slice_step_holds_the_lower_keyframe_value() {
         let times = [0.0f32, 0.5, 1.0, 1.5];
-        let values = [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+        let values = [
+            0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0,
+        ];
         let at_025 = sample_vec3_slice(&times, &values, GltfInterp::Step, &[], &[], 0.25, [9.0; 3]);
         assert!(
             (at_025[0] - 0.0).abs() < 1e-4 && (at_025[1] - 0.0).abs() < 1e-4,
@@ -480,7 +587,9 @@ mod tests {
     #[test]
     fn slice_cubicspline_with_zero_tangents_hermite_blends_the_bracketing_values() {
         let times = [0.0f32, 0.5, 1.0, 1.5];
-        let values = [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+        let values = [
+            0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0,
+        ];
         let zero_tangents = [0.0f32; 12];
         let at_025 = sample_vec3_slice(
             &times,
@@ -503,7 +612,11 @@ mod tests {
         let times = [0.0f32];
         let values = [0.1f32, 0.2, 0.3, 0.9];
         let q = sample_quat_slice(&times, &values, GltfInterp::Linear, &[], &[], 0.7);
-        assert_eq!(q, [0.1, 0.2, 0.3, 0.9], "single-keyframe slice returns the static value at any t");
+        assert_eq!(
+            q,
+            [0.1, 0.2, 0.3, 0.9],
+            "single-keyframe slice returns the static value at any t"
+        );
     }
 
     #[test]
@@ -529,7 +642,10 @@ mod tests {
             0.5,
         );
         let len_sq = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
-        assert!((len_sq - 1.0).abs() < 1e-4, "Hermite quat blend must be renormalized, got {q:?}");
+        assert!(
+            (len_sq - 1.0).abs() < 1e-4,
+            "Hermite quat blend must be renormalized, got {q:?}"
+        );
     }
 
     // ─── GLTF_ANIM_RUNTIME_V2_DESIGN.md P2 — weight-channel slice sampler ──
@@ -543,8 +659,14 @@ mod tests {
         let values = [0.0f32, 0.0, 1.0, 0.2];
         let t0_mid = sample_weight_slice(&times, &values, 2, 0, 0.5, -1.0);
         let t1_mid = sample_weight_slice(&times, &values, 2, 1, 0.5, -1.0);
-        assert!((t0_mid - 0.5).abs() < 1e-4, "target 0 halfway: got {t0_mid}");
-        assert!((t1_mid - 0.1).abs() < 1e-4, "target 1 halfway: got {t1_mid}");
+        assert!(
+            (t0_mid - 0.5).abs() < 1e-4,
+            "target 0 halfway: got {t0_mid}"
+        );
+        assert!(
+            (t1_mid - 0.1).abs() < 1e-4,
+            "target 1 halfway: got {t1_mid}"
+        );
     }
 
     #[test]
@@ -552,12 +674,19 @@ mod tests {
         let times = [0.0f32];
         let values = [0.5f32];
         let held = sample_weight_slice(&times, &values, 1, 0, 0.73, -1.0);
-        assert_eq!(held, 0.5, "single-row channel holds its static value at any t");
+        assert_eq!(
+            held, 0.5,
+            "single-row channel holds its static value at any t"
+        );
     }
 
     #[test]
     fn sample_weight_slice_falls_back_to_default_out_of_bounds() {
-        assert_eq!(sample_weight_slice(&[], &[], 0, 0, 0.5, 0.25), 0.25, "empty channel");
+        assert_eq!(
+            sample_weight_slice(&[], &[], 0, 0, 0.5, 0.25),
+            0.25,
+            "empty channel"
+        );
         let times = [0.0f32, 1.0];
         let values = [0.0f32, 1.0];
         assert_eq!(

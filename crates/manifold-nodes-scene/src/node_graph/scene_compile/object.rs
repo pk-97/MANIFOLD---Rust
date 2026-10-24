@@ -17,7 +17,12 @@ use crate::node_graph::scene_graph::wire;
 
 /// The wires that bind one object's mesh, material and transform to its
 /// draw.
-pub(crate) fn object_wires(mesh: u32, material: u32, transform: u32, object: u32) -> Vec<EffectGraphWire> {
+pub(crate) fn object_wires(
+    mesh: u32,
+    material: u32,
+    transform: u32,
+    object: u32,
+) -> Vec<EffectGraphWire> {
     vec![
         wire(mesh, "vertices", object, "vertices"),
         wire(material, "out", object, "material"),
@@ -39,7 +44,11 @@ fn mesh_type(shape: &Shape) -> Option<(&'static str, Option<u32>)> {
         Shape::Octahedron => ("node.platonic_solid_mesh", Some(2)),
         Shape::Icosahedron => ("node.platonic_solid_mesh", Some(3)),
         Shape::Dodecahedron => ("node.platonic_solid_mesh", Some(4)),
-        Shape::Ocean | Shape::Mesh { .. } | Shape::Extrude { .. } | Shape::Revolve { .. } | Shape::Tube { .. } => return None,
+        Shape::Ocean
+        | Shape::Mesh { .. }
+        | Shape::Extrude { .. }
+        | Shape::Revolve { .. }
+        | Shape::Tube { .. } => return None,
     })
 }
 
@@ -47,16 +56,27 @@ fn mesh_type(shape: &Shape) -> Option<(&'static str, Option<u32>)> {
 /// mesh node makes at its own size, read from the same mesh source the node
 /// describes, so every shape is measured the same way.
 fn builtin_rest(b: &mut Builder<'_>, mesh_type: &str, solid: Option<u32>) -> Option<Rest> {
-    let mut param = |name: &str| b.param_meta(mesh_type, name).map(|meta| number(&meta.default_value));
+    let mut param = |name: &str| {
+        b.param_meta(mesh_type, name)
+            .map(|meta| number(&meta.default_value))
+    };
     let source = match mesh_type {
-        "node.cube_mesh" => MeshSource::Cube { size: param("size")? },
+        "node.cube_mesh" => MeshSource::Cube {
+            size: param("size")?,
+        },
         "node.sphere_mesh" => MeshSource::Sphere {
             radius: param("radius")?,
             segments: param("segments")? as u32,
             rings: param("rings")? as u32,
         },
-        "node.plane_mesh" => MeshSource::Plane { width: param("width")?, height: param("height")? },
-        "node.platonic_solid_mesh" => MeshSource::Platonic { shape: solid?, radius: param("radius")? },
+        "node.plane_mesh" => MeshSource::Plane {
+            width: param("width")?,
+            height: param("height")?,
+        },
+        "node.platonic_solid_mesh" => MeshSource::Platonic {
+            shape: solid?,
+            radius: param("radius")?,
+        },
         _ => return None,
     };
     let vertices = source.load_vertices().ok()?;
@@ -68,13 +88,16 @@ fn builtin_rest(b: &mut Builder<'_>, mesh_type: &str, solid: Option<u32>) -> Opt
             hi[axis] = hi[axis].max(vertex.position[axis]);
         }
     }
-    lo.iter().chain(hi.iter()).all(|value| value.is_finite()).then_some(Rest {
-        lo,
-        hi,
-        placed: None,
-        own_space: false,
-        vertices: u32::try_from(vertices.len()).unwrap_or(u32::MAX),
-    })
+    lo.iter()
+        .chain(hi.iter())
+        .all(|value| value.is_finite())
+        .then_some(Rest {
+            lo,
+            hi,
+            placed: None,
+            own_space: false,
+            vertices: u32::try_from(vertices.len()).unwrap_or(u32::MAX),
+        })
 }
 
 /// The vertex count a smoothly bent built-in shape is split up to: enough for a
@@ -113,7 +136,10 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     // Inside a copied group, or drawn as a swarm's particles.
     // An Ocean is one surface drawn once: it has no mesh source to copy.
     let ocean = fields.shape == Shape::Ocean;
-    let group_copies = frame.and_then(|frame| frame.copies).or_else(|| b.swarm_draws.get(&item.id).copied()).filter(|_| !ocean);
+    let group_copies = frame
+        .and_then(|frame| frame.copies)
+        .or_else(|| b.swarm_draws.get(&item.id).copied())
+        .filter(|_| !ocean);
     let own_copies = fields.copies && can_copy(&fields.shape) && group_copies.is_none();
     // A swarm drawing this object with Copies on carries its layout to every
     // particle, as it does a Group's (`swarm::nest_layout`).
@@ -122,7 +148,13 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         && frame.and_then(|frame| frame.copies).is_none()
         && group_copies.is_some_and(|nest| b.nests.contains_key(&nest));
     let rest;
-    let (mesh, vertices, indices) = if let Shape::Mesh { file, node_path, vertex_count, primitives } = &fields.shape {
+    let (mesh, vertices, indices) = if let Shape::Mesh {
+        file,
+        node_path,
+        vertex_count,
+        primitives,
+    } = &fields.shape
+    {
         let part = super::mesh::emit_part(b, item, file, node_path, *vertex_count, *primitives);
         rest = part.rest;
         (part.source, part.vertices, part.indices)
@@ -147,7 +179,13 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         let level = detail_level(b, item, rest.as_ref());
         if level > 0 {
             let detail = b.add(owner, "detail", "node.subdivide_mesh");
-            b.set(detail, "level", SerializedParamValue::Int { value: level as i32 });
+            b.set(
+                detail,
+                "level",
+                SerializedParamValue::Int {
+                    value: level as i32,
+                },
+            );
             b.wire(mesh, "vertices", detail, "in");
             (mesh, (detail, "out"), None)
         } else {
@@ -158,15 +196,27 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     let object = b.add(owner, "object", "node.scene_object");
     if ocean {
         // A sea does not shadow itself; the Shadows row turns it on.
-        b.set(object, "cast_shadows", SerializedParamValue::Float { value: 0.0 });
+        b.set(
+            object,
+            "cast_shadows",
+            SerializedParamValue::Float { value: 0.0 },
+        );
     }
     if let Some(rest) = rest {
-        b.drawn.push(Drawn { object, item: item.id.clone(), rest });
+        b.drawn.push(Drawn {
+            object,
+            item: item.id.clone(),
+            rest,
+        });
     }
     let (surface, maps) = surface_for(b, &item.id);
     // An object that is its own body draws at the body's solved pose.
     // A surface made on the GPU each frame has no collision mesh.
-    let pose = if ocean { None } else { super::physics::object(b, item, frame, mesh, transform) };
+    let pose = if ocean {
+        None
+    } else {
+        super::physics::object(b, item, frame, mesh, transform)
+    };
     for w in object_wires(mesh, surface, transform, object) {
         if w.to_port == "vertices" {
             b.wire(vertices.0, vertices.1, object, "vertices");

@@ -43,7 +43,10 @@ const STAMP_REBASE_US: i128 = 5_000_000;
 
 impl StampMap {
     fn new() -> Self {
-        Self { origin: Instant::now(), min_offset_us: None }
+        Self {
+            origin: Instant::now(),
+            min_offset_us: None,
+        }
     }
 
     fn map(&mut self, stamp_us: u64, now: Instant) -> Instant {
@@ -73,9 +76,9 @@ fn clock_kind(message: &[u8]) -> Option<ClockKind> {
         0xFA => Some(ClockKind::Start),
         0xFB => Some(ClockKind::Continue),
         0xFC => Some(ClockKind::Stop),
-        0xF2 if message.len() >= 3 => {
-            Some(ClockKind::SongPosition((u16::from(message[2]) << 7) | u16::from(message[1])))
-        }
+        0xF2 if message.len() >= 3 => Some(ClockKind::SongPosition(
+            (u16::from(message[2]) << 7) | u16::from(message[1]),
+        )),
         _ => None,
     }
 }
@@ -92,7 +95,10 @@ struct MidiClockReceiver {
 
 impl MidiClockReceiver {
     fn new() -> Self {
-        Self { events: None, connection: None }
+        Self {
+            events: None,
+            connection: None,
+        }
     }
 
     /// Open a midir connection to the port at `source_index`.
@@ -120,7 +126,10 @@ impl MidiClockReceiver {
         };
 
         let (tx, rx) = mpsc::channel();
-        let sender = ClockSender { tx, stamps: StampMap::new() };
+        let sender = ClockSender {
+            tx,
+            stamps: StampMap::new(),
+        };
 
         let connection = match midi_in.connect(
             port,
@@ -422,15 +431,31 @@ impl MidiClockSyncController {
             // The map's tempo at the armed position seeds a filter with no
             // estimate yet (D20).
             let armed = Beats(self.tracker.next_tick() as f64 / 24.0);
-            let beat_seconds = (sync_target.timeline_beat_to_time(armed + Beats(1.0)) - sync_target.timeline_beat_to_time(armed)).0;
-            let fallback_bpm = if beat_seconds > 0.0 { 60.0 / beat_seconds } else { 120.0 };
+            let beat_seconds = (sync_target.timeline_beat_to_time(armed + Beats(1.0))
+                - sync_target.timeline_beat_to_time(armed))
+            .0;
+            let fallback_bpm = if beat_seconds > 0.0 {
+                60.0 / beat_seconds
+            } else {
+                120.0
+            };
             while let Ok(event) = events.try_recv() {
-                let at = event.at.saturating_duration_since(self.origin).as_secs_f64();
+                let at = event
+                    .at
+                    .saturating_duration_since(self.origin)
+                    .as_secs_f64();
                 self.tracker.event(event.kind, at, fallback_bpm);
                 self.last_clock_activity_time = now;
             }
         }
-        self.apply(now, arbiter, arb_target, sync_target, authority, suppress_clock_plane);
+        self.apply(
+            now,
+            arbiter,
+            arb_target,
+            sync_target,
+            authority,
+            suppress_clock_plane,
+        );
     }
 
     fn apply(
@@ -495,7 +520,9 @@ impl MidiClockSyncController {
         // the clock plane is gated: the clock is reporting a stale position.
         if has_recent_clock_activity && !suppress_clock_plane {
             let ticks = if is_playing {
-                self.tracker.landed_tick().unwrap_or(self.tracker.next_tick())
+                self.tracker
+                    .landed_tick()
+                    .unwrap_or(self.tracker.next_tick())
             } else {
                 self.tracker.next_tick()
             };
@@ -592,7 +619,7 @@ mod tests {
     use manifold_core::project::Project;
     use manifold_core::types::PlaybackState;
 
-    use tick_filter::{period_of_bpm, TickFilter};
+    use tick_filter::{TickFilter, period_of_bpm};
 
     // ── D20: position rules ──────────────────────────────────────────────
 
@@ -613,10 +640,16 @@ mod tests {
     fn first_clock_after_start_is_the_start_position() {
         let mut tracker = ClockTracker::new();
         tracker.event(ClockKind::Start, 0.0, 120.0);
-        assert_eq!(tracker.sample_at(0.0), None, "no beat before the first tick");
+        assert_eq!(
+            tracker.sample_at(0.0),
+            None,
+            "no beat before the first tick"
+        );
         tracker.event(ClockKind::Tick, 0.001, 120.0);
         assert_eq!(tracker.landed_tick(), Some(0));
-        let s = tracker.sample_at(0.001).expect("a beat after the first tick");
+        let s = tracker
+            .sample_at(0.001)
+            .expect("a beat after the first tick");
         assert!(s.beat.abs() < 1e-12, "beat {}", s.beat);
         ticks(&mut tracker, 0.001 + P120, 23, P120);
         assert_eq!(tracker.landed_tick(), Some(23));
@@ -634,7 +667,11 @@ mod tests {
         assert_eq!(tracker.sample_at(t), None, "no sample while stopped");
         tracker.event(ClockKind::Continue, t, 120.0);
         tracker.event(ClockKind::Tick, t + 0.001, 120.0);
-        assert_eq!(tracker.landed_tick(), Some(48), "Continue lands on the current position");
+        assert_eq!(
+            tracker.landed_tick(),
+            Some(48),
+            "Continue lands on the current position"
+        );
     }
 
     #[test]
@@ -663,7 +700,11 @@ mod tests {
             filter.tick(k, k as f64 * P120);
         }
         filter.tick(481, 481.0 * P120 + 0.004);
-        assert!((filter.time_of(481.0) - 481.0 * P120).abs() < 0.0005, "one late tick moved the phase {}", filter.time_of(481.0) - 481.0 * P120);
+        assert!(
+            (filter.time_of(481.0) - 481.0 * P120).abs() < 0.0005,
+            "one late tick moved the phase {}",
+            filter.time_of(481.0) - 481.0 * P120
+        );
         for k in 482..=600 {
             filter.tick(k, k as f64 * P120);
         }
@@ -686,12 +727,18 @@ mod tests {
         for n in 1..=12 {
             let before = filter.period();
             filter.tick(240 + n, base + n as f64 * p140);
-            if refit_at.is_none() && (filter.period() - p140).abs() < 0.02 * p140 && (before - p140).abs() > 0.05 * p140 {
+            if refit_at.is_none()
+                && (filter.period() - p140).abs() < 0.02 * p140
+                && (before - p140).abs() > 0.05 * p140
+            {
                 refit_at = Some(n);
             }
         }
         let refit_at = refit_at.expect("the tempo change was refit");
-        assert!(refit_at >= 3, "refit after {refit_at} ticks, before three misses");
+        assert!(
+            refit_at >= 3,
+            "refit after {refit_at} ticks, before three misses"
+        );
         assert!(refit_at <= 8, "refit only after {refit_at} ticks");
     }
 
@@ -708,7 +755,10 @@ mod tests {
             let late = if k % 2 == 0 { 0.0003 } else { 0.0 };
             tracker.event(ClockKind::Tick, k as f64 * p128 + late, 120.0);
         }
-        assert!((tracker.bpm().unwrap() - 128.0).abs() < 1e-9, "the period is Link's, not an estimate");
+        assert!(
+            (tracker.bpm().unwrap() - 128.0).abs() < 1e-9,
+            "the period is Link's, not an estimate"
+        );
         // Link and Live jump to 174 together: the next tick takes Link's
         // period, with no wait for misses to refit.
         tracker.set_link_tempo(Some(174.0));
@@ -736,18 +786,29 @@ mod tests {
                 if true_at > 20.0 {
                     break;
                 }
-                let at = if true_at >= held_from && true_at < release { release } else { true_at };
+                let at = if true_at >= held_from && true_at < release {
+                    release
+                } else {
+                    true_at
+                };
                 tracker.event(ClockKind::Tick, at, 120.0);
                 let bpm = tracker.bpm().unwrap();
                 assert!((20.0..=300.0).contains(&bpm), "stall {stall}: bpm {bpm}");
                 if true_at >= release {
                     let s = tracker.sample_at(true_at).unwrap();
-                    assert!((s.beat - k as f64 / 24.0).abs() * 0.5 < 0.020, "stall {stall}: tick {k} off by {} ms", (s.beat - k as f64 / 24.0) * 500.0);
+                    assert!(
+                        (s.beat - k as f64 / 24.0).abs() * 0.5 < 0.020,
+                        "stall {stall}: tick {k} off by {} ms",
+                        (s.beat - k as f64 / 24.0) * 500.0
+                    );
                 }
                 k += 1;
             }
             let bpm = tracker.bpm().unwrap();
-            assert!((bpm - 120.0).abs() < 1.0, "stall {stall}: bpm {bpm} at the end");
+            assert!(
+                (bpm - 120.0).abs() < 1.0,
+                "stall {stall}: bpm {bpm} at the end"
+            );
         }
     }
 
@@ -764,7 +825,11 @@ mod tests {
         tracker.event(ClockKind::Start, t, 120.0);
         tracker.event(ClockKind::Tick, t + 0.001, 120.0);
         assert_eq!(tracker.landed_tick(), Some(0));
-        assert_eq!(tracker.bpm(), Some(bpm_before), "a restart keeps the estimate");
+        assert_eq!(
+            tracker.bpm(),
+            Some(bpm_before),
+            "a restart keeps the estimate"
+        );
     }
 
     /// The stamp map takes the fastest delivery as zero lag: a later message
@@ -783,7 +848,11 @@ mod tests {
         // Delivered 200 ms late (a stall): mapped to its own stamp.
         let stalled = map.map(1_000_000 + 30_000, at(230_000));
         assert_eq!(stalled, at(30_100));
-        assert_eq!(map.map(0, at(500_000)), at(500_000), "no stamp: the delivery time");
+        assert_eq!(
+            map.map(0, at(500_000)),
+            at(500_000),
+            "no stamp: the delivery time"
+        );
     }
 
     // ── Seek-or-trim position sync ─────────────────────────────────────
@@ -955,7 +1024,10 @@ mod tests {
             &sync_target,
             ClockAuthority::MidiClock,
         );
-        assert_eq!(arb_target.seek_count, 1, "first observed position must seek");
+        assert_eq!(
+            arb_target.seek_count, 1,
+            "first observed position must seek"
+        );
 
         // Same sixteenths again -> no new seek.
         ctrl.sync_position_to_playback(
@@ -981,8 +1053,18 @@ mod tests {
         use manifold_core::units::Bpm;
 
         let mut project = Project::default();
-        project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
-        project.tempo_map.add_or_replace_point(Beats(64.0), Bpm(90.0), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(
+            Beats::ZERO,
+            Bpm(120.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
+        project.tempo_map.add_or_replace_point(
+            Beats(64.0),
+            Bpm(90.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
         project.settings.bpm = Bpm(120.0);
         let mut engine = crate::engine::PlaybackEngine::new(Vec::new());
         engine.initialize(project);
@@ -991,20 +1073,41 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let mut ctrl = MidiClockSyncController::new();
         ctrl.is_midi_clock_enabled = true;
-        ctrl.receiver = Some(MidiClockReceiver { events: Some(rx), connection: None });
+        ctrl.receiver = Some(MidiClockReceiver {
+            events: Some(rx),
+            connection: None,
+        });
         let origin = ctrl.origin;
         let mut arbiter = SyncArbiter::new();
         let mut arb_target = FakeArbTarget::default();
         let mut update = |ctrl: &mut MidiClockSyncController, now: f64| {
-            ctrl.update(Seconds(now), &mut arbiter, &mut arb_target, &snapshot, ClockAuthority::MidiClock, false);
+            ctrl.update(
+                Seconds(now),
+                &mut arbiter,
+                &mut arb_target,
+                &snapshot,
+                ClockAuthority::MidiClock,
+                false,
+            );
         };
 
         // Song position: beat 128 (512 sixteenths), in the 90 BPM section.
-        tx.send(ClockEvent { kind: ClockKind::SongPosition(512), at: origin + Duration::from_millis(10) })
-            .unwrap();
+        tx.send(ClockEvent {
+            kind: ClockKind::SongPosition(512),
+            at: origin + Duration::from_millis(10),
+        })
+        .unwrap();
         update(&mut ctrl, 0.01);
-        tx.send(ClockEvent { kind: ClockKind::Continue, at: origin + Duration::from_millis(20) }).unwrap();
-        tx.send(ClockEvent { kind: ClockKind::Tick, at: origin + Duration::from_millis(21) }).unwrap();
+        tx.send(ClockEvent {
+            kind: ClockKind::Continue,
+            at: origin + Duration::from_millis(20),
+        })
+        .unwrap();
+        tx.send(ClockEvent {
+            kind: ClockKind::Tick,
+            at: origin + Duration::from_millis(21),
+        })
+        .unwrap();
         update(&mut ctrl, 0.03);
 
         assert_eq!(ctrl.tracker.landed_tick(), Some(512 * 6));

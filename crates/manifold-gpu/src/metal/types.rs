@@ -149,18 +149,19 @@ impl GpuTexture {
     pub fn mip_level_view(&self, level: u32, mip_width: u32, mip_height: u32) -> GpuTexture {
         let mtl_format = super::format::to_mtl_pixel_format(self.format);
         let view = unsafe {
-            self.raw.newTextureViewWithPixelFormat_textureType_levels_slices(
-                mtl_format,
-                objc2_metal::MTLTextureType::Type2D,
-                objc2_foundation::NSRange {
-                    location: level as usize,
-                    length: 1,
-                },
-                objc2_foundation::NSRange {
-                    location: 0,
-                    length: 1,
-                },
-            )
+            self.raw
+                .newTextureViewWithPixelFormat_textureType_levels_slices(
+                    mtl_format,
+                    objc2_metal::MTLTextureType::Type2D,
+                    objc2_foundation::NSRange {
+                        location: level as usize,
+                        length: 1,
+                    },
+                    objc2_foundation::NSRange {
+                        location: 0,
+                        length: 1,
+                    },
+                )
         }
         .expect("newTextureViewWithPixelFormat_textureType_levels_slices failed");
         // The view shares the parent's storage — mark it too so a bare view
@@ -184,15 +185,26 @@ impl GpuTexture {
     /// light). Views are Metal objects: create them when the array is
     /// allocated and keep them, never per frame.
     pub fn layer_view(&self, layer: u32) -> GpuTexture {
-        assert!(layer < self.depth, "layer {layer} out of range ({} layers)", self.depth);
+        assert!(
+            layer < self.depth,
+            "layer {layer} out of range ({} layers)",
+            self.depth
+        );
         let mtl_format = super::format::to_mtl_pixel_format(self.format);
         let view = unsafe {
-            self.raw.newTextureViewWithPixelFormat_textureType_levels_slices(
-                mtl_format,
-                objc2_metal::MTLTextureType::Type2D,
-                objc2_foundation::NSRange { location: 0, length: 1 },
-                objc2_foundation::NSRange { location: layer as usize, length: 1 },
-            )
+            self.raw
+                .newTextureViewWithPixelFormat_textureType_levels_slices(
+                    mtl_format,
+                    objc2_metal::MTLTextureType::Type2D,
+                    objc2_foundation::NSRange {
+                        location: 0,
+                        length: 1,
+                    },
+                    objc2_foundation::NSRange {
+                        location: layer as usize,
+                        length: 1,
+                    },
+                )
         }
         .expect("newTextureViewWithPixelFormat_textureType_levels_slices failed");
         GpuTexture {
@@ -375,7 +387,9 @@ impl GpuComputePipeline {
     /// out. Metal binds only what a dispatch names, so a referenced binding
     /// left out reads whatever the slot last held.
     pub fn unbound_binding(&self, bindings: &[crate::GpuBinding]) -> Option<u32> {
-        self.slot_map.bindings().find(|&wanted| !bindings.iter().any(|b| b.binding() == wanted))
+        self.slot_map
+            .bindings()
+            .find(|&wanted| !bindings.iter().any(|b| b.binding() == wanted))
     }
 }
 

@@ -3,8 +3,8 @@
 use manifold_physics::FieldValue;
 use manifold_physics::input::AppliedEvent;
 
-use manifold_core::scene_impulse::ImpulseTarget;
 use crate::physics::ResolvedRigidImpulse;
+use manifold_core::scene_impulse::ImpulseTarget;
 
 /// An owned, resolved impulse ready for native fixed-tick admission.
 #[derive(Clone, Debug, PartialEq)]

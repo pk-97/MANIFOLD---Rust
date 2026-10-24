@@ -10,60 +10,60 @@
 //! `bundled_generator_presets::tests::every_bundled_preset_executes_one_frame` in the lib.
 
 use manifold_nodes as _;
-mod scene_viewport_session;
-mod scene_pick;
 mod glb_conformance;
+mod scene_pick;
+mod scene_viewport_session;
 
 mod alpha_contract;
-mod node_error_status;
 mod bug237_light_camera_commit_render_proof;
 mod cinematic_scene_tail;
+mod copy_blend_layout;
+mod encode_replay;
 mod film_grain_decorrelation;
 mod fragment_storage;
 mod gbuffer_depth;
 mod gbuffer_velocity;
+mod liquid_indexed;
+mod matter_bodies;
+mod matter_coupling;
+mod matter_look;
+mod matter_scene;
+mod matter_transfer;
 mod motion_blur_visibility;
-mod render_scene_pbr_fidelity;
-mod render_scene_subsurface;
+mod node_error_status;
 mod render_legacy_parity;
-mod render_scene_map_set;
-mod scene_swarm;
-mod scene_loop_copies;
-mod copy_blend_layout;
 mod render_scene_ao_mask;
+mod render_scene_map_set;
+mod render_scene_pbr_fidelity;
 mod render_scene_shadow_cache;
-mod rt_object_motion_shadow;
-mod rt_p2_soft_ao_temporal;
-mod rt_p3_emissive_texture;
-mod rt_t1b_vertex_normals;
+mod render_scene_subsurface;
+mod rt_atrous_post;
 #[path = "catalog/rt_bug318_import_toggle.rs"]
 mod rt_bug318_import_toggle;
 #[path = "catalog/rt_bug326_fix_gate.rs"]
 mod rt_bug326_fix_gate;
 #[path = "catalog/rt_bugmajv_kernel_toggle.rs"]
 mod rt_bugmajv_kernel_toggle;
+mod rt_dynamic_current_frame;
+mod rt_dynamic_geometry;
+mod rt_dynamic_refit;
+mod rt_dynamic_shading;
 mod rt_emissive_instancing;
 mod rt_emissive_light_table;
 mod rt_firefly_clamp;
-mod rt_atrous_post;
 mod rt_gesture_response;
-mod rt_dynamic_geometry;
-mod rt_dynamic_current_frame;
-mod rt_dynamic_refit;
-mod rt_dynamic_shading;
 #[path = "catalog/rt_normal_tangent_mirror.rs"]
 mod rt_normal_tangent_mirror;
+mod rt_object_motion_shadow;
+mod rt_p2_soft_ao_temporal;
+mod rt_p3_emissive_texture;
 mod rt_r2_accumulation;
 mod rt_r2_clamp;
 #[path = "catalog/rt_r3_heldout_gltf.rs"]
 mod rt_r3_heldout_gltf;
+mod rt_t1b_vertex_normals;
 mod rt_t38_multibounce;
 mod rt_w0_gbuffer;
-mod matter_look;
-mod matter_scene;
-mod matter_transfer;
-mod matter_bodies;
-mod matter_coupling;
-mod liquid_indexed;
+mod scene_loop_copies;
+mod scene_swarm;
 mod substeps;
-mod encode_replay;

@@ -1,12 +1,12 @@
 //! Validate retained trigger identities against the current authored project.
 
 use ahash::AHashMap;
+use manifold_compositor::generator_renderer::GeneratorRenderer;
 use manifold_core::audio_trigger::fire_meter_key_for_param;
 use manifold_core::effects::PresetInstance;
-use manifold_core::project::Project;
 use manifold_core::layer::Layer;
+use manifold_core::project::Project;
 use manifold_core::{EffectId, LayerId};
-use manifold_compositor::generator_renderer::GeneratorRenderer;
 use manifold_playback::modulation::{TriggerPulse, TriggerPulseKind};
 
 struct Owner {
@@ -33,7 +33,9 @@ impl TriggerTargets {
         if self.version == Some((version, epoch)) {
             return;
         }
-        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::TriggerTargetRefresh);
+        manifold_core::work_count::record_work(
+            manifold_core::work_count::WorkKind::TriggerTargetRefresh,
+        );
         for owner in self.owners.values_mut() {
             owner.seen = false;
             owner.ambiguous = false;
@@ -127,7 +129,10 @@ impl TriggerTargets {
             return None;
         }
         let owner = self.owners.get(&pulse.owner_id)?;
-        Some((owner.layer.as_ref()?, owner.impulses.get(&pulse.param_key)?.as_str()))
+        Some((
+            owner.layer.as_ref()?,
+            owner.impulses.get(&pulse.param_key)?.as_str(),
+        ))
     }
 }
 
@@ -160,9 +165,13 @@ mod tests {
     #[test]
     fn trigger_delivery_parameter_kind_must_match_the_authored_parameter() {
         let (mut project, mut pulse) = fixture();
-        project.settings.master_effects[0].params.push(Param::bundled(ParamSpecDef {
-            id: "fire".into(), is_trigger: true, ..Default::default()
-        }));
+        project.settings.master_effects[0]
+            .params
+            .push(Param::bundled(ParamSpecDef {
+                id: "fire".into(),
+                is_trigger: true,
+                ..Default::default()
+            }));
         let mut targets = TriggerTargets::default();
         targets.refresh(Some(&project), 1, 1);
         let gate = pulse.clone();
@@ -173,9 +182,17 @@ mod tests {
         pulse.kind = TriggerPulseKind::Gate;
         assert!(!targets.accepts(&pulse));
         pulse.kind = TriggerPulseKind::Parameter;
-        project.settings.master_effects[0].params.get_mut("fire").unwrap().spec.is_trigger_gate = true;
+        project.settings.master_effects[0]
+            .params
+            .get_mut("fire")
+            .unwrap()
+            .spec
+            .is_trigger_gate = true;
         targets.refresh(Some(&project), 2, 1);
-        assert!(!targets.accepts(&pulse), "old event cannot become a different trigger kind");
+        assert!(
+            !targets.accepts(&pulse),
+            "old event cannot become a different trigger kind"
+        );
         pulse.kind = TriggerPulseKind::Gate;
         assert!(targets.accepts(&pulse));
     }
@@ -266,21 +283,35 @@ mod tests {
         let host_graph = manifold_nodes::scene_modifier_qualify::mushroom_host()
             .expect("the mushroom scene must import and compile");
         let modifier = manifold_core::NodeId::new("force");
-        let scene = host_graph.nodes.iter()
+        let scene = host_graph
+            .nodes
+            .iter()
             .find(|node| node.type_id == "node.render_scene")
             .map(|node| node.node_id.clone())
             .expect("the mushroom scene renders");
         let recipe = manifold_nodes::bundled_presets::bundled_preset_def(
             &manifold_core::PresetTypeId::new("RadialForce"),
-        ).expect("RadialForce ships");
-        let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
-            &host_graph, recipe.as_ref(), modifier.clone(), scene,
-            manifold_core::scene_modifier_preset::SceneTargetSelection::AllObjects,
-        ).expect("RadialForce prepares");
-        let graph = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(&host_graph, instance)
+        )
+        .expect("RadialForce ships");
+        let instance =
+            manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+                &host_graph,
+                recipe.as_ref(),
+                modifier.clone(),
+                scene,
+                manifold_core::scene_modifier_preset::SceneTargetSelection::AllObjects,
+            )
+            .expect("RadialForce prepares");
+        let graph =
+            manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(
+                &host_graph,
+                instance,
+            )
             .expect("RadialForce attaches");
         let mut layer = manifold_core::layer::Layer::new_generator(
-            "Mushroom".into(), manifold_core::PresetTypeId::new("PhotoscanBaseline"), 0,
+            "Mushroom".into(),
+            manifold_core::PresetTypeId::new("PhotoscanBaseline"),
+            0,
         );
         let layer_id = manifold_core::LayerId::new("admission-layer");
         layer.layer_id = layer_id.clone();
@@ -298,8 +329,10 @@ mod tests {
             .bindings
             .iter()
             .find_map(|binding| match &binding.target {
-                BindingTarget::SceneModifier { modifier_id, param_id }
-                    if *modifier_id == modifier && param_id == "fire" => Some(binding.id.clone()),
+                BindingTarget::SceneModifier {
+                    modifier_id,
+                    param_id,
+                } if *modifier_id == modifier && param_id == "fire" => Some(binding.id.clone()),
                 _ => None,
             })
             .expect("Fire is bound on the host generator");
@@ -322,7 +355,9 @@ mod tests {
         };
         editing.execute(
             Box::new(AddAudioModCommand::new(
-                DriverTarget::GeneratorParam { layer_id: layer_id.clone() },
+                DriverTarget::GeneratorParam {
+                    layer_id: layer_id.clone(),
+                },
                 arm,
             )),
             &mut project,
@@ -331,7 +366,10 @@ mod tests {
 
         let mut features = SendFeatures::default();
         features.bands[AudioBand::Low.index()].kick = 1.0;
-        let mut snapshot = AudioFeatureSnapshot { sends: vec![features], ..Default::default() };
+        let mut snapshot = AudioFeatureSnapshot {
+            sends: vec![features],
+            ..Default::default()
+        };
         let mut batch = AudioHopBatch::with_capacity(1);
         batch.begin(1);
         batch

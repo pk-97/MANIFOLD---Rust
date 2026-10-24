@@ -19,9 +19,9 @@
 //! data (the resolved core target captured for the mid-gesture snapshot-stomp
 //! guard) lives app-side in `ui_bridge::scrub::ScrubState`, not here.
 
-use manifold_foundation::{AudioSendId, LayerId, ParamId};
 use crate::drag::DragController;
 use crate::node::Vec2;
+use manifold_foundation::{AudioSendId, LayerId, ParamId};
 
 use super::{AudioShapeParam, BandDivider, GraphParamTarget, PanelAction, TrimKind};
 
@@ -188,7 +188,9 @@ struct ScrubSession<T> {
 
 impl<T> ScrubGesture<T> {
     pub(crate) fn new() -> Self {
-        Self { drag: DragController::new() }
+        Self {
+            drag: DragController::new(),
+        }
     }
 
     pub(crate) fn is_active(&self) -> bool {
@@ -212,15 +214,17 @@ impl<T> ScrubGesture<T> {
     }
 
     pub(crate) fn begin(&mut self, address: ValueRef, payload: T, pos: Vec2) -> PanelAction {
-        self.drag.start(ScrubSession { address: address.clone(), payload }, pos);
+        self.drag.start(
+            ScrubSession {
+                address: address.clone(),
+                payload,
+            },
+            pos,
+        );
         PanelAction::Scrub(address, ScrubPhase::Begin)
     }
 
-    pub(crate) fn update(
-        &mut self,
-        pos: Vec2,
-        value: ScrubValue,
-    ) -> Option<PanelAction> {
+    pub(crate) fn update(&mut self, pos: Vec2, value: ScrubValue) -> Option<PanelAction> {
         self.drag.track(pos)?;
         let address = self.drag.payload()?.address.clone();
         Some(PanelAction::Scrub(address, ScrubPhase::Move(value)))

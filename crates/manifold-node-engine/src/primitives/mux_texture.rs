@@ -154,7 +154,9 @@ impl MuxTexture {
     /// no upper limit). Always leads with the required `selector` port.
     fn rebuild_ports(&mut self, n: u32) {
         let n = n.max(1) as usize;
-        self.names = (0..n).map(|k| crate::exec::effect_node::intern_name(&Cow::Owned(format!("in_{k}")))).collect();
+        self.names = (0..n)
+            .map(|k| crate::exec::effect_node::intern_name(&Cow::Owned(format!("in_{k}"))))
+            .collect();
         let mut ports = Vec::with_capacity(n + 1);
         ports.push(SELECTOR_INPUT);
         for &name in &self.names {
@@ -173,8 +175,6 @@ impl MuxTexture {
     fn num_inputs(&self) -> usize {
         self.inputs.len().saturating_sub(1)
     }
-
-
 }
 
 impl Default for MuxTexture {
@@ -401,9 +401,10 @@ impl EffectNode for MuxTexture {
         hasher.write_u64(ctx.rebuild_epoch);
         let gate_key = hasher.finish();
 
-        let content_unchanged = selected_content_known
-            && self.last_content_key == Some(content_key);
-        if self.last_gate_key == Some(gate_key) && selected_content_known && ctx.outputs_retained() {
+        let content_unchanged =
+            selected_content_known && self.last_content_key == Some(content_key);
+        if self.last_gate_key == Some(gate_key) && selected_content_known && ctx.outputs_retained()
+        {
             ctx.mark_outputs_unchanged();
             return;
         }
@@ -472,8 +473,14 @@ mod tests {
 
     fn params_with(num_inputs: f32, selector: f32) -> ParamValues {
         let mut p = ParamValues::default();
-        p.insert(std::borrow::Cow::Borrowed("num_inputs"), ParamValue::Float(num_inputs));
-        p.insert(std::borrow::Cow::Borrowed("selector"), ParamValue::Float(selector));
+        p.insert(
+            std::borrow::Cow::Borrowed("num_inputs"),
+            ParamValue::Float(num_inputs),
+        );
+        p.insert(
+            std::borrow::Cow::Borrowed("selector"),
+            ParamValue::Float(selector),
+        );
         p
     }
 
@@ -495,7 +502,10 @@ mod tests {
         let mut m = MuxTexture::new();
         m.reconfigure(&params_with(40.0, 39.0));
         assert_eq!(m.num_inputs(), 40);
-        assert_eq!(m.selected_input_branch(&params_with(40.0, 39.0), &[]), Some("in_39"));
+        assert_eq!(
+            m.selected_input_branch(&params_with(40.0, 39.0), &[]),
+            Some("in_39")
+        );
     }
 
     #[test]
@@ -504,13 +514,25 @@ mod tests {
         m.reconfigure(&params_with(10.0, 0.0));
         let node: &dyn EffectNode = &m;
         // In range.
-        assert_eq!(node.selected_input_branch(&params_with(10.0, 9.0), &[]), Some("in_9"));
+        assert_eq!(
+            node.selected_input_branch(&params_with(10.0, 9.0), &[]),
+            Some("in_9")
+        );
         // Over the current count clamps to the last input.
-        assert_eq!(node.selected_input_branch(&params_with(10.0, 50.0), &[]), Some("in_9"));
+        assert_eq!(
+            node.selected_input_branch(&params_with(10.0, 50.0), &[]),
+            Some("in_9")
+        );
         // Rounds.
-        assert_eq!(node.selected_input_branch(&params_with(10.0, 2.6), &[]), Some("in_3"));
+        assert_eq!(
+            node.selected_input_branch(&params_with(10.0, 2.6), &[]),
+            Some("in_3")
+        );
         // Negative clamps to in_0.
-        assert_eq!(node.selected_input_branch(&params_with(10.0, -5.0), &[]), Some("in_0"));
+        assert_eq!(
+            node.selected_input_branch(&params_with(10.0, -5.0), &[]),
+            Some("in_0")
+        );
     }
 
     #[test]
@@ -518,7 +540,10 @@ mod tests {
         let m = MuxTexture::new();
         let node: &dyn EffectNode = &m;
         let wired = ["selector", "in_0", "in_1"];
-        assert_eq!(node.selected_input_branch(&params_with(8.0, 2.0), &wired), None);
+        assert_eq!(
+            node.selected_input_branch(&params_with(8.0, 2.0), &wired),
+            None
+        );
     }
 }
 
@@ -530,24 +555,35 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::exec::backend::Backend;
     use crate::bindings::{NodeInputs, NodeOutputs, Slot};
     use crate::content_revision::ContentVersion;
+    use crate::exec::backend::Backend;
     use crate::exec::execution_plan::ResourceId;
     use crate::exec::{effect_node::FrameTime, metal_backend::MetalBackend};
+    use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use crate::gpu::render_target::RenderTarget;
     use half::f16;
     use manifold_core::{Beats, Seconds};
-    use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
+    use manifold_gpu::{
+        GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+    };
 
     fn frame_time() -> FrameTime {
-        FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }
+        FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        }
     }
 
     fn solid_rgba16f(w: u32, h: u32, rgba: [f32; 4]) -> Vec<u8> {
-        let px: [u16; 4] =
-            [f16::from_f32(rgba[0]).to_bits(), f16::from_f32(rgba[1]).to_bits(), f16::from_f32(rgba[2]).to_bits(), f16::from_f32(rgba[3]).to_bits()];
+        let px: [u16; 4] = [
+            f16::from_f32(rgba[0]).to_bits(),
+            f16::from_f32(rgba[1]).to_bits(),
+            f16::from_f32(rgba[2]).to_bits(),
+            f16::from_f32(rgba[3]).to_bits(),
+        ];
         let mut bytes = Vec::with_capacity((w * h) as usize * 8);
         for _ in 0..(w * h) {
             for v in px {
@@ -557,7 +593,13 @@ mod gpu_tests {
         bytes
     }
 
-    fn upload_solid_texture(device: &GpuDevice, w: u32, h: u32, rgba: [f32; 4], label: &str) -> manifold_gpu::GpuTexture {
+    fn upload_solid_texture(
+        device: &GpuDevice,
+        w: u32,
+        h: u32,
+        rgba: [f32; 4],
+        label: &str,
+    ) -> manifold_gpu::GpuTexture {
         let tex = device.create_texture(&GpuTextureDesc {
             width: w,
             height: h,
@@ -611,10 +653,7 @@ mod gpu_tests {
             .unwrap_or(0);
         let mut content_versions = vec![None; max_slot + 1];
         for (_, slot) in input_scratch {
-            let revision = generations
-                .get(slot.0 as usize)
-                .copied()
-                .unwrap_or(0) + 1;
+            let revision = generations.get(slot.0 as usize).copied().unwrap_or(0) + 1;
             content_versions[slot.0 as usize] =
                 Some(ContentVersion::new(1, ResourceId(slot.0), revision));
         }
@@ -675,16 +714,41 @@ mod gpu_tests {
         let params = base_params(8.0, 0.0);
         let mut prim = MuxTexture::new();
 
-        let unchanged1 =
-            run_once(&mut prim, &backend, &device, &input_scratch, &output_scratch, &[], &params, frame_time());
-        assert!(!unchanged1, "first frame must actually dispatch (no prior gate key)");
+        let unchanged1 = run_once(
+            &mut prim,
+            &backend,
+            &device,
+            &input_scratch,
+            &output_scratch,
+            &[],
+            &params,
+            frame_time(),
+        );
+        assert!(
+            !unchanged1,
+            "first frame must actually dispatch (no prior gate key)"
+        );
         let frame1 = readback(&device, &backend, out_slot, w, h);
 
-        let unchanged2 =
-            run_once(&mut prim, &backend, &device, &input_scratch, &output_scratch, &[], &params, frame_time());
-        assert!(unchanged2, "static frame must declare mark_outputs_unchanged");
+        let unchanged2 = run_once(
+            &mut prim,
+            &backend,
+            &device,
+            &input_scratch,
+            &output_scratch,
+            &[],
+            &params,
+            frame_time(),
+        );
+        assert!(
+            unchanged2,
+            "static frame must declare mark_outputs_unchanged"
+        );
         let frame2 = readback(&device, &backend, out_slot, w, h);
-        assert_eq!(frame1, frame2, "frame 2 must be bit-identical to frame 1 on a static source");
+        assert_eq!(
+            frame1, frame2,
+            "frame 2 must be bit-identical to frame 1 on a static source"
+        );
     }
 
     /// I2-analog (the documented staleness trap this design guards
@@ -705,7 +769,8 @@ mod gpu_tests {
         let r_in0 = ResourceId(0);
         let in0_slot = backend.pre_bind_texture_2d(r_in0, RenderTarget::view_of(src, "view"));
         let r_out = ResourceId(1);
-        let out_slot = backend.pre_bind_texture_2d(r_out, RenderTarget::new(&device, w, h, format, "mux-out"));
+        let out_slot =
+            backend.pre_bind_texture_2d(r_out, RenderTarget::new(&device, w, h, format, "mux-out"));
 
         let input_scratch: Vec<(&'static str, Slot)> = vec![("in_0", in0_slot)];
         let output_scratch: Vec<(&'static str, Slot)> = vec![("out", out_slot)];
@@ -715,7 +780,16 @@ mod gpu_tests {
         // Frame 1: generation 1 (index by in0_slot.0).
         let mut gens = vec![0u64; (in0_slot.0 as usize) + 1];
         gens[in0_slot.0 as usize] = 1;
-        run_once(&mut prim, &backend, &device, &input_scratch, &output_scratch, &gens, &params, frame_time());
+        run_once(
+            &mut prim,
+            &backend,
+            &device,
+            &input_scratch,
+            &output_scratch,
+            &gens,
+            &params,
+            frame_time(),
+        );
         let frame1 = readback(&device, &backend, out_slot, w, h);
 
         // Frame 2: SAME texture object, rewritten in place to green, and the
@@ -723,18 +797,43 @@ mod gpu_tests {
         let same_tex = backend.texture_2d(in0_slot).expect("bound").clone();
         device.upload_texture(&same_tex, &solid_rgba16f(w, h, [0.0, 1.0, 0.0, 1.0]));
         gens[in0_slot.0 as usize] = 2;
-        let unchanged2 =
-            run_once(&mut prim, &backend, &device, &input_scratch, &output_scratch, &gens, &params, frame_time());
-        assert!(!unchanged2, "a generation bump must force a re-dispatch even with unchanged identity");
+        let unchanged2 = run_once(
+            &mut prim,
+            &backend,
+            &device,
+            &input_scratch,
+            &output_scratch,
+            &gens,
+            &params,
+            frame_time(),
+        );
+        assert!(
+            !unchanged2,
+            "a generation bump must force a re-dispatch even with unchanged identity"
+        );
         let frame2 = readback(&device, &backend, out_slot, w, h);
-        assert_ne!(frame1, frame2, "the rewritten content must actually reach the output");
+        assert_ne!(
+            frame1, frame2,
+            "the rewritten content must actually reach the output"
+        );
 
         // Frame 3: generation holds at 2 — must settle back to unchanged.
-        let unchanged3 =
-            run_once(&mut prim, &backend, &device, &input_scratch, &output_scratch, &gens, &params, frame_time());
+        let unchanged3 = run_once(
+            &mut prim,
+            &backend,
+            &device,
+            &input_scratch,
+            &output_scratch,
+            &gens,
+            &params,
+            frame_time(),
+        );
         assert!(unchanged3, "a held generation must re-declare unchanged");
         let frame3 = readback(&device, &backend, out_slot, w, h);
-        assert_eq!(frame2, frame3, "frame 3 must be bit-identical to frame 2 once the generation holds");
+        assert_eq!(
+            frame2, frame3,
+            "frame 3 must be bit-identical to frame 2 once the generation holds"
+        );
     }
 
     /// Changing the INLINE selector (unwired) must switch branches and
@@ -754,33 +853,73 @@ mod gpu_tests {
         let r_in1 = ResourceId(1);
         let in1_slot = backend.pre_bind_texture_2d(r_in1, RenderTarget::view_of(src1, "view"));
         let r_out = ResourceId(2);
-        let out_slot = backend.pre_bind_texture_2d(r_out, RenderTarget::new(&device, w, h, format, "mux-out"));
+        let out_slot =
+            backend.pre_bind_texture_2d(r_out, RenderTarget::new(&device, w, h, format, "mux-out"));
 
         let input_scratch: Vec<(&'static str, Slot)> = vec![("in_0", in0_slot), ("in_1", in1_slot)];
         let output_scratch: Vec<(&'static str, Slot)> = vec![("out", out_slot)];
         let mut prim = MuxTexture::new();
 
-        run_once(&mut prim, &backend, &device, &input_scratch, &output_scratch, &[], &base_params(8.0, 0.0), frame_time());
+        run_once(
+            &mut prim,
+            &backend,
+            &device,
+            &input_scratch,
+            &output_scratch,
+            &[],
+            &base_params(8.0, 0.0),
+            frame_time(),
+        );
         let frame_branch0 = readback(&device, &backend, out_slot, w, h);
 
-        let unchanged =
-            run_once(&mut prim, &backend, &device, &input_scratch, &output_scratch, &[], &base_params(8.0, 1.0), frame_time());
+        let unchanged = run_once(
+            &mut prim,
+            &backend,
+            &device,
+            &input_scratch,
+            &output_scratch,
+            &[],
+            &base_params(8.0, 1.0),
+            frame_time(),
+        );
         assert!(!unchanged, "a selector flip must NOT be gated as unchanged");
         let frame_branch1 = readback(&device, &backend, out_slot, w, h);
-        assert_ne!(frame_branch0, frame_branch1, "switching branches must change the output");
+        assert_ne!(
+            frame_branch0, frame_branch1,
+            "switching branches must change the output"
+        );
 
         // Must match a FRESH render of branch 1 from scratch.
         let mut backend_fresh = MetalBackend::new(device.arc(), w, h, format);
-        let src1_fresh = upload_solid_texture(&device, w, h, [0.0, 0.0, 1.0, 1.0], "mux-src1-fresh");
-        let in0_fresh = backend_fresh.pre_bind_texture_2d(r_in0, RenderTarget::new(&device, w, h, format, "unused"));
-        let in1_fresh = backend_fresh.pre_bind_texture_2d(r_in1, RenderTarget::view_of(src1_fresh, "view"));
-        let out_fresh = backend_fresh.pre_bind_texture_2d(r_out, RenderTarget::new(&device, w, h, format, "mux-out-fresh"));
-        let input_scratch_fresh: Vec<(&'static str, Slot)> = vec![("in_0", in0_fresh), ("in_1", in1_fresh)];
+        let src1_fresh =
+            upload_solid_texture(&device, w, h, [0.0, 0.0, 1.0, 1.0], "mux-src1-fresh");
+        let in0_fresh = backend_fresh
+            .pre_bind_texture_2d(r_in0, RenderTarget::new(&device, w, h, format, "unused"));
+        let in1_fresh =
+            backend_fresh.pre_bind_texture_2d(r_in1, RenderTarget::view_of(src1_fresh, "view"));
+        let out_fresh = backend_fresh.pre_bind_texture_2d(
+            r_out,
+            RenderTarget::new(&device, w, h, format, "mux-out-fresh"),
+        );
+        let input_scratch_fresh: Vec<(&'static str, Slot)> =
+            vec![("in_0", in0_fresh), ("in_1", in1_fresh)];
         let output_scratch_fresh: Vec<(&'static str, Slot)> = vec![("out", out_fresh)];
         let mut prim_fresh = MuxTexture::new();
-        run_once(&mut prim_fresh, &backend_fresh, &device, &input_scratch_fresh, &output_scratch_fresh, &[], &base_params(8.0, 1.0), frame_time());
+        run_once(
+            &mut prim_fresh,
+            &backend_fresh,
+            &device,
+            &input_scratch_fresh,
+            &output_scratch_fresh,
+            &[],
+            &base_params(8.0, 1.0),
+            frame_time(),
+        );
         let fresh = readback(&device, &backend_fresh, out_fresh, w, h);
-        assert_eq!(frame_branch1, fresh, "a live selector flip must match a fresh executor built with that selector");
+        assert_eq!(
+            frame_branch1, fresh,
+            "a live selector flip must match a fresh executor built with that selector"
+        );
     }
 
     /// Changing a WIRED selector renders with the LATCHED (previous
@@ -801,13 +940,17 @@ mod gpu_tests {
         let r_in1 = ResourceId(1);
         let in1_slot = backend.pre_bind_texture_2d(r_in1, RenderTarget::view_of(src1, "view"));
         let r_out = ResourceId(2);
-        let out_slot = backend.pre_bind_texture_2d(r_out, RenderTarget::new(&device, w, h, format, "mux-out"));
+        let out_slot =
+            backend.pre_bind_texture_2d(r_out, RenderTarget::new(&device, w, h, format, "mux-out"));
         // Selector is WIRED: pick an arbitrary slot number distinct from
         // the texture slots above and drive it via `set_scalar`.
         let selector_slot = Slot(1000);
 
-        let input_scratch: Vec<(&'static str, Slot)> =
-            vec![("selector", selector_slot), ("in_0", in0_slot), ("in_1", in1_slot)];
+        let input_scratch: Vec<(&'static str, Slot)> = vec![
+            ("selector", selector_slot),
+            ("in_0", in0_slot),
+            ("in_1", in1_slot),
+        ];
         let output_scratch: Vec<(&'static str, Slot)> = vec![("out", out_slot)];
         let params = base_params(8.0, 0.0);
         let mut prim = MuxTexture::new();
@@ -815,21 +958,54 @@ mod gpu_tests {
         // Frame 1: wire = 0 (branch 0). No latch yet, so `evaluate` reads
         // the CURRENT wire value this first time.
         backend.set_scalar(selector_slot, ParamValue::Float(0.0));
-        run_once(&mut prim, &backend, &device, &input_scratch, &output_scratch, &[], &params, frame_time());
+        run_once(
+            &mut prim,
+            &backend,
+            &device,
+            &input_scratch,
+            &output_scratch,
+            &[],
+            &params,
+            frame_time(),
+        );
         let frame1 = readback(&device, &backend, out_slot, w, h);
 
         // Frame 2: wire flips to 1 — must still render branch 0 (the
         // LATCHED value from frame 1), not branch 1 yet.
         backend.set_scalar(selector_slot, ParamValue::Float(1.0));
-        run_once(&mut prim, &backend, &device, &input_scratch, &output_scratch, &[], &params, frame_time());
+        run_once(
+            &mut prim,
+            &backend,
+            &device,
+            &input_scratch,
+            &output_scratch,
+            &[],
+            &params,
+            frame_time(),
+        );
         let frame2 = readback(&device, &backend, out_slot, w, h);
-        assert_eq!(frame1, frame2, "the frame the wire flips must still render the LATCHED (old) branch");
+        assert_eq!(
+            frame1, frame2,
+            "the frame the wire flips must still render the LATCHED (old) branch"
+        );
 
         // Frame 3: wire holds at 1 — the latch has caught up, branch 1 now.
         backend.set_scalar(selector_slot, ParamValue::Float(1.0));
-        run_once(&mut prim, &backend, &device, &input_scratch, &output_scratch, &[], &params, frame_time());
+        run_once(
+            &mut prim,
+            &backend,
+            &device,
+            &input_scratch,
+            &output_scratch,
+            &[],
+            &params,
+            frame_time(),
+        );
         let frame3 = readback(&device, &backend, out_slot, w, h);
-        assert_ne!(frame2, frame3, "one frame after the wire flip, the latch must have caught up to branch 1");
+        assert_ne!(
+            frame2, frame3,
+            "one frame after the wire flip, the latch must have caught up to branch 1"
+        );
     }
 }
 

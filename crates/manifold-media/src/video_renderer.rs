@@ -342,8 +342,9 @@ impl VideoRenderer {
             if let Some(clip) = self.poster_clips.remove(key.as_str()) {
                 self.release_rt(clip.render_target);
                 // Close the isolated poster decoder so its file handle is freed.
-                self.scheduler
-                    .submit(DecodeJob::Close { clip_id: key.clone() });
+                self.scheduler.submit(DecodeJob::Close {
+                    clip_id: key.clone(),
+                });
             }
             self.poster_filmstrip.remove(key.as_str());
         }

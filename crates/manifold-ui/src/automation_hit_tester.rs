@@ -70,9 +70,17 @@ pub fn resolve_feedback(
     draw_mode: bool,
 ) -> Option<(usize, AutomationOperation, Option<usize>)> {
     for (lane_index, lane) in lanes.iter().enumerate() {
-        if !lane.strip_rect.contains(pos) { continue; }
-        let editable = lane.param_min.is_finite() && lane.param_max.is_finite() && lane.param_max > lane.param_min;
-        let hit = if editable { hit_test_automation(pos, std::slice::from_ref(lane)) } else { None };
+        if !lane.strip_rect.contains(pos) {
+            continue;
+        }
+        let editable = lane.param_min.is_finite()
+            && lane.param_max.is_finite()
+            && lane.param_max > lane.param_min;
+        let hit = if editable {
+            hit_test_automation(pos, std::slice::from_ref(lane))
+        } else {
+            None
+        };
         if lane.resize_rect().contains(pos) && !hit.is_some_and(|h| h.is_line_or_point()) {
             return Some((lane_index, AutomationOperation::Resize, None));
         }
@@ -80,15 +88,25 @@ pub fn resolve_feedback(
             return Some((lane_index, AutomationOperation::Draw, None));
         }
         return Some(match hit {
-            _ if !editable && lane.title_rect.contains(pos) =>
-                (lane_index, AutomationOperation::Title, None),
+            _ if !editable && lane.title_rect.contains(pos) => {
+                (lane_index, AutomationOperation::Title, None)
+            }
             _ if !editable => (lane_index, AutomationOperation::Blocked, None),
-            Some(AutomationHit::Dot { dot_index, .. }) =>
-                (lane_index, AutomationOperation::Point, Some(dot_index)),
-            Some(AutomationHit::Segment { left_dot_index, .. }) =>
-                (lane_index, if alt && !lane.whole_numbers { AutomationOperation::Bend } else { AutomationOperation::Segment }, Some(left_dot_index)),
-            Some(AutomationHit::Tail { dot_index, .. }) =>
-                (lane_index, AutomationOperation::Segment, dot_index),
+            Some(AutomationHit::Dot { dot_index, .. }) => {
+                (lane_index, AutomationOperation::Point, Some(dot_index))
+            }
+            Some(AutomationHit::Segment { left_dot_index, .. }) => (
+                lane_index,
+                if alt && !lane.whole_numbers {
+                    AutomationOperation::Bend
+                } else {
+                    AutomationOperation::Segment
+                },
+                Some(left_dot_index),
+            ),
+            Some(AutomationHit::Tail { dot_index, .. }) => {
+                (lane_index, AutomationOperation::Segment, dot_index)
+            }
             _ if lane.title_rect.contains(pos) => (lane_index, AutomationOperation::Title, None),
             _ => (lane_index, AutomationOperation::Insert, None),
         });
@@ -99,11 +117,15 @@ pub fn resolve_feedback(
 /// The lane whose resize grip is under `pos`, unless a point or the line is
 /// there too: those win the press.
 pub fn resize_grip_lane(pos: Vec2, lanes: &[AutomationLaneScreen]) -> Option<usize> {
-    let index = lanes.iter().position(|l| l.strip_rect.contains(pos) && l.resize_rect().contains(pos))?;
+    let index = lanes
+        .iter()
+        .position(|l| l.strip_rect.contains(pos) && l.resize_rect().contains(pos))?;
     let lane = &lanes[index];
-    let editable = lane.param_min.is_finite() && lane.param_max.is_finite() && lane.param_max > lane.param_min;
+    let editable =
+        lane.param_min.is_finite() && lane.param_max.is_finite() && lane.param_max > lane.param_min;
     let on_line = editable
-        && hit_test_automation(pos, std::slice::from_ref(lane)).is_some_and(|h| h.is_line_or_point());
+        && hit_test_automation(pos, std::slice::from_ref(lane))
+            .is_some_and(|h| h.is_line_or_point());
     (!on_line).then_some(index)
 }
 
@@ -122,12 +144,18 @@ pub enum AutomationHit {
     /// describes it, matching `AutomationPoint::shape`'s "shape of the
     /// segment leaving this point" convention. The right endpoint is
     /// `left_dot_index + 1`.
-    Segment { lane_index: usize, left_dot_index: usize },
+    Segment {
+        lane_index: usize,
+        left_dot_index: usize,
+    },
     /// The flat run before the first point or after the last, or a
     /// placeholder lane's full-width flat line. `dot_index` is the end point
     /// the run extends from; a placeholder has none. There is no right
     /// endpoint, so a tail has no segment end.
-    Tail { lane_index: usize, dot_index: Option<usize> },
+    Tail {
+        lane_index: usize,
+        dot_index: Option<usize>,
+    },
     /// Empty strip area — clicking here adds a new breakpoint at `pos`.
     Strip { lane_index: usize },
 }
@@ -164,7 +192,9 @@ enum LineHit {
 fn nearest_line(lane: &AutomationLaneScreen, pos: Vec2) -> Option<LineHit> {
     let line = &lane.polyline;
     let reach = SEGMENT_HIT_DISTANCE_PX;
-    let start = line.partition_point(|p| p.0 < pos.x - reach).saturating_sub(1);
+    let start = line
+        .partition_point(|p| p.0 < pos.x - reach)
+        .saturating_sub(1);
     let mut best: Option<(f32, f32)> = None;
     for edge in line[start..].windows(2) {
         let (a, b) = (edge[0], edge[1]);
@@ -190,12 +220,20 @@ fn nearest_line(lane: &AutomationLaneScreen, pos: Vec2) -> Option<LineHit> {
     if lane.dots.is_empty() {
         return Some(LineHit::Tail(None));
     }
-    if let Some(left) = lane.dots.windows(2).position(|pair| pair[0].x < edge_x && edge_x <= pair[1].x) {
+    if let Some(left) = lane
+        .dots
+        .windows(2)
+        .position(|pair| pair[0].x < edge_x && edge_x <= pair[1].x)
+    {
         return Some(LineHit::Between(left));
     }
     // Not between two dots: the flat run before the first or after the last.
     let last = lane.dots.len().checked_sub(1);
-    Some(LineHit::Tail(if edge_x <= lane.dots.first()?.x { Some(0) } else { last }))
+    Some(LineHit::Tail(if edge_x <= lane.dots.first()?.x {
+        Some(0)
+    } else {
+        last
+    }))
 }
 
 /// Hit-test `pos` (screen-space, same coordinates `AutomationLaneScreen::
@@ -230,17 +268,28 @@ pub fn hit_test_automation(pos: Vec2, lanes: &[AutomationLaneScreen]) -> Option<
             }
         }
         if let Some((dot_index, _)) = nearest {
-            return Some(AutomationHit::Dot { lane_index, dot_index });
+            return Some(AutomationHit::Dot {
+                lane_index,
+                dot_index,
+            });
         }
 
         // No dot grabbed: a press on the drawn line grabs it. Between two
         // points that is the segment (drag moves it, Alt-drag bends it);
         // past the end points, or on a placeholder, it is a tail.
         match nearest_line(lane, pos) {
-            Some(LineHit::Between(left_dot_index)) =>
-                return Some(AutomationHit::Segment { lane_index, left_dot_index }),
-            Some(LineHit::Tail(dot_index)) =>
-                return Some(AutomationHit::Tail { lane_index, dot_index }),
+            Some(LineHit::Between(left_dot_index)) => {
+                return Some(AutomationHit::Segment {
+                    lane_index,
+                    left_dot_index,
+                });
+            }
+            Some(LineHit::Tail(dot_index)) => {
+                return Some(AutomationHit::Tail {
+                    lane_index,
+                    dot_index,
+                });
+            }
             None => {}
         }
 
@@ -323,7 +372,9 @@ mod tests {
 
     fn test_lane(strip_rect: Rect, mut dots: Vec<AutomationDotScreen>) -> AutomationLaneScreen {
         let graph = AutomationLaneScreen::curve_rect_for(strip_rect);
-        for dot in &mut dots { dot.y = graph.y + graph.height * ((dot.y - strip_rect.y) / strip_rect.height); }
+        for dot in &mut dots {
+            dot.y = graph.y + graph.height * ((dot.y - strip_rect.y) / strip_rect.height);
+        }
         // The drawn stroke, sampled densely from each segment's shape.
         let mut polyline = Vec::new();
         for pair in dots.windows(2) {
@@ -368,7 +419,6 @@ mod tests {
         }
     }
 
-
     fn graph_hit(mut pos: Vec2, lanes: &[AutomationLaneScreen]) -> Option<AutomationHit> {
         if let Some(lane) = lanes.iter().find(|l| l.strip_rect.contains(pos)) {
             let norm = 1.0 - (pos.y - lane.strip_rect.y) / lane.strip_rect.height;
@@ -396,7 +446,10 @@ mod tests {
 
     #[test]
     fn empty_strip_area_hits_strip_not_dot() {
-        let lanes = vec![test_lane(Rect::new(0.0, 0.0, 100.0, 28.0), vec![dot(10.0, 14.0)])];
+        let lanes = vec![test_lane(
+            Rect::new(0.0, 0.0, 100.0, 28.0),
+            vec![dot(10.0, 14.0)],
+        )];
         // Far from the one dot and clear of its flat run, but inside the strip rect.
         let hit = hit_test_automation(Vec2::new(90.0, 2.0), &lanes);
         assert_eq!(hit, Some(AutomationHit::Strip { lane_index: 0 }));
@@ -417,30 +470,68 @@ mod tests {
         let lane = &lanes[0];
         let before = Vec2::new(10.0, lane.dots[0].y);
         let after = Vec2::new(90.0, lane.dots[1].y);
-        assert_eq!(hit_test_automation(before, &lanes), Some(AutomationHit::Tail { lane_index: 0, dot_index: Some(0) }));
-        assert_eq!(hit_test_automation(after, &lanes), Some(AutomationHit::Tail { lane_index: 0, dot_index: Some(1) }));
+        assert_eq!(
+            hit_test_automation(before, &lanes),
+            Some(AutomationHit::Tail {
+                lane_index: 0,
+                dot_index: Some(0)
+            })
+        );
+        assert_eq!(
+            hit_test_automation(after, &lanes),
+            Some(AutomationHit::Tail {
+                lane_index: 0,
+                dot_index: Some(1)
+            })
+        );
         // A tail is a Segment operation with no right endpoint to name.
-        assert_eq!(resolve_feedback(before, &lanes, false, false), Some((0, AutomationOperation::Segment, Some(0))));
-        assert_eq!(resolve_feedback(after, &lanes, false, false), Some((0, AutomationOperation::Segment, Some(1))));
+        assert_eq!(
+            resolve_feedback(before, &lanes, false, false),
+            Some((0, AutomationOperation::Segment, Some(0)))
+        );
+        assert_eq!(
+            resolve_feedback(after, &lanes, false, false),
+            Some((0, AutomationOperation::Segment, Some(1)))
+        );
         // Alt still bends a segment only: a tail has nothing to bend.
-        assert_eq!(resolve_feedback(after, &lanes, true, false).map(|f| f.1), Some(AutomationOperation::Segment));
+        assert_eq!(
+            resolve_feedback(after, &lanes, true, false).map(|f| f.1),
+            Some(AutomationOperation::Segment)
+        );
         // The same distance rule as a segment: off the stroke is bare strip.
         let off = Vec2::new(90.0, lane.dots[1].y + SEGMENT_HIT_DISTANCE_PX + 2.0);
-        assert_eq!(hit_test_automation(off, &lanes), Some(AutomationHit::Strip { lane_index: 0 }));
+        assert_eq!(
+            hit_test_automation(off, &lanes),
+            Some(AutomationHit::Strip { lane_index: 0 })
+        );
     }
 
     #[test]
     fn single_point_lane_has_a_tail_either_side_of_its_dot() {
-        let lanes = vec![flat_lane(vec![dot_v(50.0, 0.4, UiSegmentShape::Linear, 100.0)])];
+        let lanes = vec![flat_lane(vec![dot_v(
+            50.0,
+            0.4,
+            UiSegmentShape::Linear,
+            100.0,
+        )])];
         let y = lanes[0].dots[0].y;
         for x in [10.0, 90.0] {
             assert_eq!(
                 hit_test_automation(Vec2::new(x, y), &lanes),
-                Some(AutomationHit::Tail { lane_index: 0, dot_index: Some(0) }),
+                Some(AutomationHit::Tail {
+                    lane_index: 0,
+                    dot_index: Some(0)
+                }),
                 "x {x}"
             );
         }
-        assert_eq!(hit_test_automation(Vec2::new(50.0, y), &lanes), Some(AutomationHit::Dot { lane_index: 0, dot_index: 0 }));
+        assert_eq!(
+            hit_test_automation(Vec2::new(50.0, y), &lanes),
+            Some(AutomationHit::Dot {
+                lane_index: 0,
+                dot_index: 0
+            })
+        );
     }
 
     #[test]
@@ -451,10 +542,22 @@ mod tests {
         lane.placeholder_value = Some(0.3);
         let lanes = vec![lane];
         let on = Vec2::new(60.0, y);
-        assert_eq!(hit_test_automation(on, &lanes), Some(AutomationHit::Tail { lane_index: 0, dot_index: None }));
-        assert_eq!(resolve_feedback(on, &lanes, false, false), Some((0, AutomationOperation::Segment, None)));
+        assert_eq!(
+            hit_test_automation(on, &lanes),
+            Some(AutomationHit::Tail {
+                lane_index: 0,
+                dot_index: None
+            })
+        );
+        assert_eq!(
+            resolve_feedback(on, &lanes, false, false),
+            Some((0, AutomationOperation::Segment, None))
+        );
         let off = Vec2::new(60.0, y + SEGMENT_HIT_DISTANCE_PX + 2.0);
-        assert_eq!(hit_test_automation(off, &lanes), Some(AutomationHit::Strip { lane_index: 0 }));
+        assert_eq!(
+            hit_test_automation(off, &lanes),
+            Some(AutomationHit::Strip { lane_index: 0 })
+        );
     }
 
     #[test]
@@ -466,21 +569,36 @@ mod tests {
         let grip = lane.resize_rect();
         let inside = Vec2::new(10.0, grip.y + 2.0);
         let lanes_with_line = vec![lane.clone()];
-        assert_eq!(resolve_feedback(inside, &lanes_with_line, false, false).map(|f| f.1), Some(AutomationOperation::Segment));
+        assert_eq!(
+            resolve_feedback(inside, &lanes_with_line, false, false).map(|f| f.1),
+            Some(AutomationOperation::Segment)
+        );
         assert_eq!(resize_grip_lane(inside, &lanes_with_line), None);
         // With no line there, the grip is the grip.
         lane.polyline.clear();
         lane.dots.clear();
         let lanes = vec![lane];
-        assert_eq!(resolve_feedback(inside, &lanes, false, false).map(|f| f.1), Some(AutomationOperation::Resize));
+        assert_eq!(
+            resolve_feedback(inside, &lanes, false, false).map(|f| f.1),
+            Some(AutomationOperation::Resize)
+        );
         assert_eq!(resize_grip_lane(inside, &lanes), Some(0));
     }
 
     #[test]
     fn click_within_radius_grabs_the_dot() {
-        let lanes = vec![test_lane(Rect::new(0.0, 0.0, 100.0, 28.0), vec![dot(10.0, 14.0)])];
+        let lanes = vec![test_lane(
+            Rect::new(0.0, 0.0, 100.0, 28.0),
+            vec![dot(10.0, 14.0)],
+        )];
         let hit = graph_hit(Vec2::new(12.0, 15.0), &lanes);
-        assert_eq!(hit, Some(AutomationHit::Dot { lane_index: 0, dot_index: 0 }));
+        assert_eq!(
+            hit,
+            Some(AutomationHit::Dot {
+                lane_index: 0,
+                dot_index: 0
+            })
+        );
     }
 
     #[test]
@@ -491,7 +609,13 @@ mod tests {
         )];
         // Closer to the second dot (index 1) than the first.
         let hit = graph_hit(Vec2::new(12.5, 14.0), &lanes);
-        assert_eq!(hit, Some(AutomationHit::Dot { lane_index: 0, dot_index: 1 }));
+        assert_eq!(
+            hit,
+            Some(AutomationHit::Dot {
+                lane_index: 0,
+                dot_index: 1
+            })
+        );
     }
 
     #[test]
@@ -501,7 +625,13 @@ mod tests {
             test_lane(Rect::new(0.0, 28.0, 100.0, 28.0), vec![dot(10.0, 42.0)]),
         ];
         let hit = graph_hit(Vec2::new(10.0, 42.0), &lanes);
-        assert_eq!(hit, Some(AutomationHit::Dot { lane_index: 1, dot_index: 0 }));
+        assert_eq!(
+            hit,
+            Some(AutomationHit::Dot {
+                lane_index: 1,
+                dot_index: 0
+            })
+        );
     }
 
     // ── Segment hit-testing (P4 Unit B) ─────────────────────────────
@@ -529,7 +659,13 @@ mod tests {
             ],
         )];
         let hit = graph_hit(Vec2::new(50.0, 50.0), &lanes);
-        assert_eq!(hit, Some(AutomationHit::Segment { lane_index: 0, left_dot_index: 0 }));
+        assert_eq!(
+            hit,
+            Some(AutomationHit::Segment {
+                lane_index: 0,
+                left_dot_index: 0
+            })
+        );
     }
 
     #[test]
@@ -554,7 +690,13 @@ mod tests {
         );
         // The curve's real position at x=50 IS a hit.
         let hit = graph_hit(Vec2::new(50.0, 93.75), &lanes);
-        assert_eq!(hit, Some(AutomationHit::Segment { lane_index: 0, left_dot_index: 0 }));
+        assert_eq!(
+            hit,
+            Some(AutomationHit::Segment {
+                lane_index: 0,
+                left_dot_index: 0
+            })
+        );
     }
 
     #[test]
@@ -570,7 +712,13 @@ mod tests {
         )];
         let flat_y = 100.0 * (1.0 - 0.2);
         let hit = graph_hit(Vec2::new(60.0, flat_y), &lanes);
-        assert_eq!(hit, Some(AutomationHit::Segment { lane_index: 0, left_dot_index: 0 }));
+        assert_eq!(
+            hit,
+            Some(AutomationHit::Segment {
+                lane_index: 0,
+                left_dot_index: 0
+            })
+        );
     }
 
     #[test]
@@ -585,7 +733,13 @@ mod tests {
             ],
         )];
         let hit = graph_hit(Vec2::new(2.0, 1.0), &lanes);
-        assert_eq!(hit, Some(AutomationHit::Dot { lane_index: 0, dot_index: 0 }));
+        assert_eq!(
+            hit,
+            Some(AutomationHit::Dot {
+                lane_index: 0,
+                dot_index: 0
+            })
+        );
     }
 
     #[test]
@@ -617,8 +771,13 @@ mod tests {
         let t = (50.0 + 20.0) / 140.0;
         let shaped = UiSegmentShape::Curved(-0.5).sample(t);
         let y = 100.0 * (1.0 - (1.0 - shaped));
-        assert_eq!(graph_hit(Vec2::new(50.0, y), &lanes),
-            Some(AutomationHit::Segment { lane_index: 0, left_dot_index: 0 }));
+        assert_eq!(
+            graph_hit(Vec2::new(50.0, y), &lanes),
+            Some(AutomationHit::Segment {
+                lane_index: 0,
+                left_dot_index: 0
+            })
+        );
     }
 
     #[test]
@@ -636,12 +795,21 @@ mod tests {
         // the grab distance away vertically, well within it in true distance.
         let pos = Vec2::new(91.0, on_curve(0.95));
         assert!((pos.y - on_curve(0.91)).abs() > SEGMENT_HIT_DISTANCE_PX);
-        assert_eq!(hit_test_automation(pos, &lanes),
-            Some(AutomationHit::Segment { lane_index: 0, left_dot_index: 0 }));
-        assert_eq!(resolve_feedback(pos, &lanes, false, false).map(|f| f.1),
-            Some(AutomationOperation::Segment));
-        assert_eq!(resolve_feedback(pos, &lanes, true, false).map(|f| f.1),
-            Some(AutomationOperation::Bend));
+        assert_eq!(
+            hit_test_automation(pos, &lanes),
+            Some(AutomationHit::Segment {
+                lane_index: 0,
+                left_dot_index: 0
+            })
+        );
+        assert_eq!(
+            resolve_feedback(pos, &lanes, false, false).map(|f| f.1),
+            Some(AutomationOperation::Segment)
+        );
+        assert_eq!(
+            resolve_feedback(pos, &lanes, true, false).map(|f| f.1),
+            Some(AutomationOperation::Bend)
+        );
     }
 
     #[test]
@@ -650,7 +818,8 @@ mod tests {
         let mut lane = test_lane(strip, vec![dot_v(165.0, 0.9, UiSegmentShape::Linear, 60.0)]);
         lane.title_rect = Rect::new(150.0, 3.0, 40.0, 30.0);
         let lanes = vec![lane];
-        let op = |x: f32, y: f32| resolve_feedback(Vec2::new(x, y), &lanes, false, false).map(|f| f.1);
+        let op =
+            |x: f32, y: f32| resolve_feedback(Vec2::new(x, y), &lanes, false, false).map(|f| f.1);
         assert_eq!(op(185.0, 25.0), Some(AutomationOperation::Title));
         // A point under the title text is still grabbed.
         let dot = lanes[0].dots[0];
@@ -661,8 +830,10 @@ mod tests {
         assert_eq!(op(185.0, 0.5), Some(AutomationOperation::Insert));
         assert_eq!(op(185.0, 59.5), Some(AutomationOperation::Insert));
         // Draw mode owns the whole strip, title included.
-        assert_eq!(resolve_feedback(Vec2::new(185.0, 25.0), &lanes, false, true).map(|f| f.1),
-            Some(AutomationOperation::Draw));
+        assert_eq!(
+            resolve_feedback(Vec2::new(185.0, 25.0), &lanes, false, true).map(|f| f.1),
+            Some(AutomationOperation::Draw)
+        );
     }
 
     #[test]
@@ -671,8 +842,10 @@ mod tests {
             Rect::new(0.0, 0.0, 100.0, 28.0),
             vec![dot(-1.0, 14.0)],
         )];
-        assert_eq!(graph_hit(Vec2::new(0.0, 14.0), &lanes),
-            Some(AutomationHit::Strip { lane_index: 0 }));
+        assert_eq!(
+            graph_hit(Vec2::new(0.0, 14.0), &lanes),
+            Some(AutomationHit::Strip { lane_index: 0 })
+        );
     }
 
     // ── HitTargets (UI_AUTOMATION_DESIGN.md P1) ──────────────────────
@@ -708,7 +881,12 @@ mod tests {
         )];
         let mut out = Vec::new();
         AutomationHitTargets(&lanes).enumerate(&mut out);
-        assert_eq!(out.iter().filter(|entry| entry.kind == "automation_point").count(), 1);
+        assert_eq!(
+            out.iter()
+                .filter(|entry| entry.kind == "automation_point")
+                .count(),
+            1
+        );
         assert_eq!(out[1].payload, "effect:fx|amount|1");
     }
 }

@@ -59,9 +59,15 @@ impl MslCache {
 
     fn put_atomic(&self, hash: u64, write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>) {
         let temp = self.cache_dir.join(format!(
-            ".{hash:016x}.{}.{}.tmp", std::process::id(), NEXT_TEMP.fetch_add(1, Ordering::Relaxed),
+            ".{hash:016x}.{}.{}.tmp",
+            std::process::id(),
+            NEXT_TEMP.fetch_add(1, Ordering::Relaxed),
         ));
-        let Ok(mut file) = std::fs::OpenOptions::new().write(true).create_new(true).open(&temp) else {
+        let Ok(mut file) = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+        else {
             return;
         };
         let written = write(&mut file);
@@ -132,7 +138,11 @@ impl MslCache {
         self.put_atomic(hash, |file| {
             writeln!(file, "{COMPUTE_HEADER}")?;
             write_slot_map(file, slot_map)?;
-            writeln!(file, "{} {} {}", workgroup_size[0], workgroup_size[1], workgroup_size[2])?;
+            writeln!(
+                file,
+                "{} {} {}",
+                workgroup_size[0], workgroup_size[1], workgroup_size[2]
+            )?;
             writeln!(file, "{msl_entry_name}")?;
             writeln!(file, "{MSL_SEPARATOR}")?;
             write!(file, "{msl_source}")
@@ -244,7 +254,14 @@ fn read_slot_map(
             _ => return None,
         };
         let metal_index: u32 = parts[2].parse().ok()?;
-        slot_map.insert(binding, Slot { kind, metal_index, writes: parts[1] == "W" });
+        slot_map.insert(
+            binding,
+            Slot {
+                kind,
+                metal_index,
+                writes: parts[1] == "W",
+            },
+        );
     }
     Some(slot_map)
 }
@@ -267,7 +284,14 @@ fn read_slot_map_from_str(section: &str) -> Option<SlotMap> {
             _ => return None,
         };
         let metal_index: u32 = parts[2].parse().ok()?;
-        slot_map.insert(binding, Slot { kind, metal_index, writes: parts[1] == "W" });
+        slot_map.insert(
+            binding,
+            Slot {
+                kind,
+                metal_index,
+                writes: parts[1] == "W",
+            },
+        );
     }
     Some(slot_map)
 }
@@ -279,14 +303,38 @@ mod tests {
 
     #[test]
     fn puts_round_trip_through_atomic_replacement() {
-        let dir = std::env::temp_dir()
-            .join(format!("msl-cache-{}-{}", std::process::id(), NEXT_TEMP.fetch_add(1, Ordering::Relaxed)));
+        let dir = std::env::temp_dir().join(format!(
+            "msl-cache-{}-{}",
+            std::process::id(),
+            NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let mut cache = MslCache::new(dir.clone());
         let mut slots = SlotMap::new();
-        slots.insert(0, Slot { kind: SlotKind::Buffer, metal_index: 3, writes: false });
-        slots.insert(2, Slot { kind: SlotKind::Texture, metal_index: 5, writes: true });
-        slots.insert(SIZES_BUFFER_BINDING, Slot { kind: SlotKind::Buffer, metal_index: 7, writes: false });
+        slots.insert(
+            0,
+            Slot {
+                kind: SlotKind::Buffer,
+                metal_index: 3,
+                writes: false,
+            },
+        );
+        slots.insert(
+            2,
+            Slot {
+                kind: SlotKind::Texture,
+                metal_index: 5,
+                writes: true,
+            },
+        );
+        slots.insert(
+            SIZES_BUFFER_BINDING,
+            Slot {
+                kind: SlotKind::Buffer,
+                metal_index: 7,
+                writes: false,
+            },
+        );
 
         cache.put_compute(1, &slots, "old compute", "main", [8, 4, 2]);
         let old_bytes = std::fs::read(cache.path_for(1)).unwrap();
@@ -294,12 +342,18 @@ mod tests {
         cache.put_compute(1, &slots, "new compute", "next", [16, 2, 1]);
         let mut held_bytes = Vec::new();
         old_reader.read_to_end(&mut held_bytes).unwrap();
-        assert_eq!(held_bytes, old_bytes, "replacement must not truncate an open reader");
+        assert_eq!(
+            held_bytes, old_bytes,
+            "replacement must not truncate an open reader"
+        );
         let compute = cache.get_compute(1).unwrap();
         assert_eq!(compute.msl_source, "new compute");
         assert_eq!(compute.msl_entry_name, "next");
         assert_eq!(compute.workgroup_size, [16, 2, 1]);
-        assert!(compute.slot_map.get(2).unwrap().writes, "texture write access must survive the cache");
+        assert!(
+            compute.slot_map.get(2).unwrap().writes,
+            "texture write access must survive the cache"
+        );
 
         cache.put_render(2, &slots, "old vertex", "old fragment");
         let old_bytes = std::fs::read(cache.path_for(2)).unwrap();
@@ -307,7 +361,10 @@ mod tests {
         cache.put_render(2, &slots, "new vertex", "new fragment");
         let mut held_bytes = Vec::new();
         old_reader.read_to_end(&mut held_bytes).unwrap();
-        assert_eq!(held_bytes, old_bytes, "render replacement must preserve an open reader");
+        assert_eq!(
+            held_bytes, old_bytes,
+            "render replacement must preserve an open reader"
+        );
         let render = cache.get_render(2).unwrap();
         assert_eq!(render.vs_msl, "new vertex");
         assert_eq!(render.fs_msl, "new fragment");
@@ -324,7 +381,11 @@ mod tests {
             Err(std::io::Error::other("injected write failure"))
         });
         assert_eq!(cache.get_compute(1).unwrap().msl_source, "new compute");
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "no temporary files remain");
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            2,
+            "no temporary files remain"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

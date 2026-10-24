@@ -193,10 +193,26 @@ impl ClipThumbGpu {
         let vertex_layout = GpuVertexLayout {
             stride: std::mem::size_of::<ThumbVertex>() as u32,
             attributes: vec![
-                GpuVertexAttribute { format: GpuVertexFormat::Float32x2, offset: 0, shader_location: 0 },
-                GpuVertexAttribute { format: GpuVertexFormat::Float32x2, offset: 8, shader_location: 1 },
-                GpuVertexAttribute { format: GpuVertexFormat::Float32x4, offset: 16, shader_location: 2 },
-                GpuVertexAttribute { format: GpuVertexFormat::Float32x4, offset: 32, shader_location: 3 },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x2,
+                    offset: 0,
+                    shader_location: 0,
+                },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x2,
+                    offset: 8,
+                    shader_location: 1,
+                },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x4,
+                    offset: 16,
+                    shader_location: 2,
+                },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x4,
+                    offset: 32,
+                    shader_location: 3,
+                },
             ],
         };
 
@@ -320,10 +336,30 @@ impl ClipThumbGpu {
             let (u0, v0) = (q.uv_min[0], q.uv_min[1]);
             let (u1, v1) = (q.uv_max[0], q.uv_max[1]);
             let verts = [
-                ThumbVertex { position: [x0, y0], uv: [u0, v0], rect, misc },
-                ThumbVertex { position: [x1, y0], uv: [u1, v0], rect, misc },
-                ThumbVertex { position: [x1, y1], uv: [u1, v1], rect, misc },
-                ThumbVertex { position: [x0, y1], uv: [u0, v1], rect, misc },
+                ThumbVertex {
+                    position: [x0, y0],
+                    uv: [u0, v0],
+                    rect,
+                    misc,
+                },
+                ThumbVertex {
+                    position: [x1, y0],
+                    uv: [u1, v0],
+                    rect,
+                    misc,
+                },
+                ThumbVertex {
+                    position: [x1, y1],
+                    uv: [u1, v1],
+                    rect,
+                    misc,
+                },
+                ThumbVertex {
+                    position: [x0, y1],
+                    uv: [u0, v1],
+                    rect,
+                    misc,
+                },
             ];
             unsafe {
                 std::ptr::copy_nonoverlapping(verts.as_ptr(), ptr.add(n * 4), 4);
@@ -341,8 +377,12 @@ impl ClipThumbGpu {
         let phys_h = (screen_h as f32 * scale).round().max(0.0);
         let sx0 = (tracks_rect.x * scale).round().clamp(0.0, phys_w);
         let sy0 = (tracks_rect.y * scale).round().clamp(0.0, phys_h);
-        let sx1 = ((tracks_rect.x + tracks_rect.width) * scale).round().clamp(0.0, phys_w);
-        let sy1 = ((tracks_rect.y + tracks_rect.height) * scale).round().clamp(0.0, phys_h);
+        let sx1 = ((tracks_rect.x + tracks_rect.width) * scale)
+            .round()
+            .clamp(0.0, phys_w);
+        let sy1 = ((tracks_rect.y + tracks_rect.height) * scale)
+            .round()
+            .clamp(0.0, phys_h);
         encoder.set_scissor_rect(
             sx0 as u32,
             sy0 as u32,
@@ -354,9 +394,18 @@ impl ClipThumbGpu {
             encoder.draw_in_render_pass(
                 &self.pipeline,
                 &[
-                    GpuBinding::Bytes { binding: 0, data: globals_bytes },
-                    GpuBinding::Texture { binding: 1, texture: atlas },
-                    GpuBinding::Sampler { binding: 2, sampler: &self.sampler },
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: globals_bytes,
+                    },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: atlas,
+                    },
+                    GpuBinding::Sampler {
+                        binding: 2,
+                        sampler: &self.sampler,
+                    },
                 ],
                 vbuf,
                 vertex_offset,

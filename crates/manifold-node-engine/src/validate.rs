@@ -20,8 +20,11 @@ use manifold_core::preset_def::PresetKind;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
 use crate::parameters::ParamType;
-use crate::{persistence::EffectGraphDefExt, validation::GraphError, persistence::LoadError, persistence::PrimitiveRegistry, exec::execution_plan::compile};
 use crate::runtime::{JsonGeneratorLoadError, PresetRuntime};
+use crate::{
+    exec::execution_plan::compile, persistence::EffectGraphDefExt, persistence::LoadError,
+    persistence::PrimitiveRegistry, validation::GraphError,
+};
 
 /// Blend/mix-family atoms whose declared param is a continuous
 /// crossfade weight between two authored "looks" — the structural
@@ -120,9 +123,11 @@ impl From<&LoadError> for ValidationIssue {
                 param,
                 ..
             } => (Some(*node_id), Some(type_id.clone()), Some(param.clone())),
-            InvalidMaterialFeatureMode {
-                node_id, param, ..
-            } => (Some(*node_id), Some("node.pbr_material".to_string()), Some(param.clone())),
+            InvalidMaterialFeatureMode { node_id, param, .. } => (
+                Some(*node_id),
+                Some("node.pbr_material".to_string()),
+                Some(param.clone()),
+            ),
             UnknownOutputFormat {
                 node_id,
                 type_id,
@@ -164,9 +169,7 @@ impl From<&GraphError> for ValidationIssue {
             PortKindMismatch { node, port, .. } => (Some(node.0), Some(port.clone())),
             PortTypeMismatch { .. } => (None, None),
             ChannelMismatch(info) => (Some(info.from_node.0), Some(info.from_port.clone())),
-            TextureChannelMismatch(info) => {
-                (Some(info.from_node.0), Some(info.from_port.clone()))
-            }
+            TextureChannelMismatch(info) => (Some(info.from_node.0), Some(info.from_port.clone())),
             RequiredInputUnwired { node, port } => (Some(node.0), Some(port.clone())),
             ParamNotFound { node, param } => (Some(node.0), Some(param.clone())),
             CycleDetected { involves } => (involves.first().map(|n| n.0), None),
@@ -224,14 +227,18 @@ impl From<&JsonGeneratorLoadError> for ValidationIssue {
                 port: Some(producer_port.clone()),
                 message: e.to_string(),
             },
-            Resize(_) | SceneModifier(_) | Json(_) | PhysicsSamplingUnsupported(_) | MissingGeneratorInput | MissingFinalOutput | MultipleFinalOutputs { .. } => {
-                ValidationIssue {
-                    node_id: None,
-                    type_id: None,
-                    port: None,
-                    message: e.to_string(),
-                }
-            }
+            Resize(_)
+            | SceneModifier(_)
+            | Json(_)
+            | PhysicsSamplingUnsupported(_)
+            | MissingGeneratorInput
+            | MissingFinalOutput
+            | MultipleFinalOutputs { .. } => ValidationIssue {
+                node_id: None,
+                type_id: None,
+                port: None,
+                message: e.to_string(),
+            },
         }
     }
 }
@@ -297,7 +304,10 @@ pub fn validate_def(
     // doc comment for why a bare registry lookup isn't fidelity-safe
     // here) — so they run against the same `graph` this function
     // builds for `compile`, not a second parse.
-    let graph = match def.clone().into_graph(registry, &crate::scene::mesh_change::PreparedMeshRules::default()) {
+    let graph = match def.clone().into_graph(
+        registry,
+        &crate::scene::mesh_change::PreparedMeshRules::default(),
+    ) {
         Ok(g) => g,
         Err(e) => {
             let (card_errors, card_warnings) = check_card_lints(def, None);
@@ -348,11 +358,15 @@ pub fn check_member_side_wires(def: &EffectGraphDef) -> Vec<ValidationIssue> {
     manifold_core::physics_members::member_side_wires(def)
         .into_iter()
         .map(|(_, wire)| {
-            let (port, alias) = if manifold_core::physics_members::member_side_input(&wire.to_port).is_some() {
-                (wire.to_port.clone(), "the body's acceleration input")
-            } else {
-                (wire.from_port.clone(), "the body's pose, instances or active_count output")
-            };
+            let (port, alias) =
+                if manifold_core::physics_members::member_side_input(&wire.to_port).is_some() {
+                    (wire.to_port.clone(), "the body's acceleration input")
+                } else {
+                    (
+                        wire.from_port.clone(),
+                        "the body's pose, instances or active_count output",
+                    )
+                };
             ValidationIssue {
                 node_id: None,
                 type_id: Some(manifold_core::physics_members::WORLD_TYPE_ID.to_string()),
@@ -437,7 +451,12 @@ fn resolve_target_param(
 ) -> Option<ResolvedTargetParam> {
     let instance_id = graph.instance_by_node_id(node_id)?;
     let inst = graph.get_node(instance_id)?;
-    let param_def = inst.node.parameters().iter().find(|p| p.name == param)?.clone();
+    let param_def = inst
+        .node
+        .parameters()
+        .iter()
+        .find(|p| p.name == param)?
+        .clone();
     let contract = inst.node.param_contract(param);
     Some(ResolvedTargetParam {
         type_id: inst.node.type_id().as_str().to_string(),
@@ -448,10 +467,15 @@ fn resolve_target_param(
 
 /// `carrier`'s `out` wire feeds `node`'s own `input`.
 fn feeds_input(graph: &crate::graph::Graph, carrier: &NodeId, node: &NodeId, input: &str) -> bool {
-    let (Some(from), Some(to)) = (graph.instance_by_node_id(carrier), graph.instance_by_node_id(node)) else {
+    let (Some(from), Some(to)) = (
+        graph.instance_by_node_id(carrier),
+        graph.instance_by_node_id(node),
+    ) else {
         return false;
     };
-    graph.wires_from(from).any(|wire| wire.from.1 == "out" && wire.to.0 == to && wire.to.1 == input)
+    graph
+        .wires_from(from)
+        .any(|wire| wire.from.1 == "out" && wire.to.0 == to && wire.to.1 == input)
 }
 
 manifold_core::testkit_visible! {
@@ -743,14 +767,7 @@ mod tests {
         assert!(issue.message.contains("one scene"), "{}", issue.message);
     }
 
-
     use crate::persistence::PrimitiveRegistry;
-
-
-
-
-
-
 
     // ── PARAM_RANGE_CONTRACT_DESIGN.md P1 fixture ───────────────────
     //
@@ -845,7 +862,10 @@ mod tests {
         let registry = registry();
         let graph = def
             .clone()
-            .into_graph(&registry, &crate::scene::mesh_change::PreparedMeshRules::default())
+            .into_graph(
+                &registry,
+                &crate::scene::mesh_change::PreparedMeshRules::default(),
+            )
             .unwrap_or_else(|e| panic!("fixture into_graph failed: {e}"));
         check_card_lints(def, Some(&graph))
     }
@@ -879,7 +899,8 @@ mod tests {
         assert!(
             errors
                 .iter()
-                .any(|e| e.message.contains("does_not_exist") && e.message.contains("does not exist")),
+                .any(|e| e.message.contains("does_not_exist")
+                    && e.message.contains("does not exist")),
             "expected a dangling-target error, got: {errors:?}"
         );
     }
@@ -911,9 +932,8 @@ mod tests {
         );
         let (errors, _) = lint(&def);
         assert!(
-            errors
-                .iter()
-                .any(|e| e.message.contains("no_such_param") && e.message.contains("declares no such param")),
+            errors.iter().any(|e| e.message.contains("no_such_param")
+                && e.message.contains("declares no such param")),
             "expected a dangling-param error, got: {errors:?}"
         );
     }
@@ -1018,9 +1038,8 @@ mod tests {
         );
         let (errors, _) = lint(&def);
         assert!(
-            errors
-                .iter()
-                .any(|e| e.message.contains("is_trigger") && e.message.contains("not a trigger-typed param")),
+            errors.iter().any(|e| e.message.contains("is_trigger")
+                && e.message.contains("not a trigger-typed param")),
             "expected a trigger-type-mismatch error, got: {errors:?}"
         );
     }
@@ -1067,7 +1086,9 @@ mod tests {
     fn card_lint_trigger_may_feed_only_the_value_its_input_shadows() {
         let def = |first: &str, second: &str, wired_to: Option<u32>| {
             let wires = wired_to.map_or(String::new(), |node| {
-                format!(r#"{{"fromNode": 1, "fromPort": "out", "toNode": {node}, "toPort": "next"}}"#)
+                format!(
+                    r#"{{"fromNode": 1, "fromPort": "out", "toNode": {node}, "toPort": "next"}}"#
+                )
             });
             parse(&format!(
                 r#"{{
@@ -1091,15 +1112,28 @@ mod tests {
                 if second == "folder" { "next" } else { "value" },
             ))
         };
-        let refused = |errors: &[ValidationIssue]| errors.iter().any(|e| e.message.contains("not a trigger-typed param"));
+        let refused = |errors: &[ValidationIssue]| {
+            errors
+                .iter()
+                .any(|e| e.message.contains("not a trigger-typed param"))
+        };
         let (errors, _) = lint(&def("folder", "carrier", Some(0)));
-        assert!(errors.is_empty(), "the value the trigger input shadows is clean: {errors:?}");
+        assert!(
+            errors.is_empty(),
+            "the value the trigger input shadows is clean: {errors:?}"
+        );
         let (errors, _) = lint(&def("folder", "carrier", None));
         assert!(refused(&errors), "an unwired value errs: {errors:?}");
         let (errors, _) = lint(&def("folder", "carrier", Some(2)));
-        assert!(refused(&errors), "a value wired into another node's input errs: {errors:?}");
+        assert!(
+            refused(&errors),
+            "a value wired into another node's input errs: {errors:?}"
+        );
         let (errors, _) = lint(&def("carrier", "folder", Some(0)));
-        assert!(refused(&errors), "a value as the first target errs: {errors:?}");
+        assert!(
+            refused(&errors),
+            "a value as the first target errs: {errors:?}"
+        );
     }
 
     /// (e) ERROR — duplicate non-empty osc_suffix across one card's params.
@@ -1171,7 +1205,9 @@ mod tests {
         let (errors, warnings) = lint(&def);
         assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
         assert!(
-            warnings.iter().any(|w| w.message.contains("mux switches branches and skips the dead one")
+            warnings.iter().any(|w| w
+                .message
+                .contains("mux switches branches and skips the dead one")
                 && w.message.contains("blend renders both every frame")),
             "expected the mux-vs-blend warning, got: {warnings:?}"
         );
@@ -1245,7 +1281,10 @@ mod tests {
         );
         let (errors, warnings) = lint(&def);
         assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
-        assert!(warnings.is_empty(), "expected no warnings, got: {warnings:?}");
+        assert!(
+            warnings.is_empty(),
+            "expected no warnings, got: {warnings:?}"
+        );
     }
 
     /// (h) ERROR — card range mapped through scale/offset escapes a
@@ -1350,7 +1389,10 @@ mod tests {
         );
         let (errors, warnings) = lint(&def);
         assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
-        assert!(warnings.is_empty(), "expected no warnings, got: {warnings:?}");
+        assert!(
+            warnings.is_empty(),
+            "expected no warnings, got: {warnings:?}"
+        );
     }
 
     /// The world's per-body ports exist only in the built graph: a body's pose,
@@ -1373,17 +1415,32 @@ mod tests {
         );
         assert!(check_member_side_wires(&authored).is_empty());
 
-        for (from_port, to_port) in [("pose_0", "transform"), ("instances_0", "instances"), ("active_count_0", "instance_count")] {
+        for (from_port, to_port) in [
+            ("pose_0", "transform"),
+            ("instances_0", "instances"),
+            ("active_count_0", "instance_count"),
+        ] {
             let mut old = authored.clone();
             old.wires[1].from_node = 1;
             old.wires[1].from_port = from_port.into();
             old.wires[1].to_port = to_port.into();
             let issues = check_member_side_wires(&old);
             assert_eq!(issues.len(), 1, "{from_port}");
-            assert!(issues[0].message.contains(from_port), "{}", issues[0].message);
+            assert!(
+                issues[0].message.contains(from_port),
+                "{}",
+                issues[0].message
+            );
         }
         let mut force = authored;
-        force.wires.push(manifold_core::effect_graph_def::EffectGraphWire { from_node: 3, from_port: "out".into(), to_node: 1, to_port: "body_acceleration_0".into() });
+        force
+            .wires
+            .push(manifold_core::effect_graph_def::EffectGraphWire {
+                from_node: 3,
+                from_port: "out".into(),
+                to_node: 1,
+                to_port: "body_acceleration_0".into(),
+            });
         assert_eq!(check_member_side_wires(&force).len(), 1);
     }
 }

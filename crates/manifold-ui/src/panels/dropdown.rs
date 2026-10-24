@@ -10,9 +10,9 @@
 //! 3. Acting on the returned `DropdownAction`.
 //! 4. The dropdown auto-dismisses on selection or click-outside.
 
+use super::PanelAction;
 use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
 use super::popup_shell;
-use super::PanelAction;
 use crate::color;
 use crate::input::UIEvent;
 use crate::node::*;
@@ -722,13 +722,7 @@ impl DropdownPanel {
         for offset in 0..count {
             let idx = (start + offset) % count;
             let item = &self.items[idx];
-            if item.enabled
-                && item
-                    .label
-                    .trim_start()
-                    .to_ascii_lowercase()
-                    .starts_with(ch)
-            {
+            if item.enabled && item.label.trim_start().to_ascii_lowercase().starts_with(ch) {
                 self.hovered_index = idx as i32;
                 self.ensure_hovered_visible();
                 return;
@@ -836,7 +830,9 @@ impl Overlay for DropdownPanel {
         // Modal capture so the background never sees hover/cursor/seam events
         // through the dropdown. `dim_background: false` keeps the shell look;
         // the dropdown still self-closes on an outside click.
-        Modality::Modal { dim_background: false }
+        Modality::Modal {
+            dim_background: false,
+        }
     }
 
     fn anchor(&self) -> Anchor {
@@ -931,7 +927,10 @@ mod tests {
         // repeatedly must not change anything.
         dd.update(&mut tree);
         let container = tree.get_node(dd.root_id.unwrap()).unwrap();
-        assert_eq!(container.style.bg_color.a, popup_shell::PopupStyle::DROPDOWN.bg.a);
+        assert_eq!(
+            container.style.bg_color.a,
+            popup_shell::PopupStyle::DROPDOWN.bg.a
+        );
     }
 
     #[test]
@@ -946,8 +945,9 @@ mod tests {
         let (screen_w, screen_h) = (1920.0, 1080.0);
         dd.set_screen_size(screen_w, screen_h);
 
-        let items: Vec<DropdownItem> =
-            (0..40).map(|i| DropdownItem::new(&format!("Item {i}"))).collect();
+        let items: Vec<DropdownItem> = (0..40)
+            .map(|i| DropdownItem::new(&format!("Item {i}")))
+            .collect();
 
         // Trigger hugging the bottom-right corner — the pathological case
         // for both the vertical flip-above clamp and horizontal clamp.
@@ -979,8 +979,9 @@ mod tests {
         // Same check, hugging the TOP-LEFT corner.
         let mut dd2 = DropdownPanel::new();
         dd2.set_screen_size(screen_w, screen_h);
-        let items2: Vec<DropdownItem> =
-            (0..40).map(|i| DropdownItem::new(&format!("Item {i}"))).collect();
+        let items2: Vec<DropdownItem> = (0..40)
+            .map(|i| DropdownItem::new(&format!("Item {i}")))
+            .collect();
         let trigger2 = Rect::new(0.0, 0.0, 40.0, 24.0);
         dd2.open(items2, trigger2, 120.0, &mut tree);
         let b2 = dd2.container_bounds();
@@ -993,13 +994,22 @@ mod tests {
         // final `.clamp(0.0, ..)` was added.
         let mut dd3 = DropdownPanel::new();
         dd3.set_screen_size(screen_w, screen_h);
-        let items3: Vec<DropdownItem> =
-            (0..40).map(|i| DropdownItem::new(&format!("Item {i}"))).collect();
+        let items3: Vec<DropdownItem> = (0..40)
+            .map(|i| DropdownItem::new(&format!("Item {i}")))
+            .collect();
         let trigger3 = Rect::new(-30.0, -10.0, 40.0, 24.0);
         dd3.open(items3, trigger3, 120.0, &mut tree);
         let b3 = dd3.container_bounds();
-        assert!(b3.x >= 0.0, "left edge on-screen despite negative anchor: x={}", b3.x);
-        assert!(b3.y >= 0.0, "top edge on-screen despite negative anchor: y={}", b3.y);
+        assert!(
+            b3.x >= 0.0,
+            "left edge on-screen despite negative anchor: x={}",
+            b3.x
+        );
+        assert!(
+            b3.y >= 0.0,
+            "top edge on-screen despite negative anchor: y={}",
+            b3.y
+        );
         assert!(b3.x_max() <= screen_w + 0.01);
         assert!(b3.y_max() <= screen_h + 0.01);
     }
@@ -1252,8 +1262,9 @@ mod tests {
         let mut dd = DropdownPanel::new();
         dd.set_screen_size(1920.0, 1080.0);
 
-        let items: Vec<DropdownItem> =
-            (0..6).map(|i| DropdownItem::new(&format!("Item {i}"))).collect();
+        let items: Vec<DropdownItem> = (0..6)
+            .map(|i| DropdownItem::new(&format!("Item {i}")))
+            .collect();
         dd.open_context_with_colors(
             items,
             crate::color::COLOR_GRID.to_vec(),
@@ -1306,8 +1317,9 @@ mod tests {
         let mut dd = DropdownPanel::new();
         dd.set_screen_size(1920.0, 420.0);
 
-        let items: Vec<DropdownItem> =
-            (0..9).map(|i| DropdownItem::new(&format!("Item {i}"))).collect();
+        let items: Vec<DropdownItem> = (0..9)
+            .map(|i| DropdownItem::new(&format!("Item {i}")))
+            .collect();
         dd.open_context_with_colors(
             items,
             crate::color::COLOR_GRID.to_vec(),
@@ -1351,7 +1363,8 @@ mod tests {
         let below = Vec2::new(container.x + 30.0, container.y_max() + 8.0);
         let hit = tree.hit_test(below);
         assert!(
-            !dd.color_swatch_ids.contains(&hit.unwrap_or(NodeId::PLACEHOLDER)),
+            !dd.color_swatch_ids
+                .contains(&hit.unwrap_or(NodeId::PLACEHOLDER)),
             "no swatch is hittable below the container"
         );
 
@@ -1372,17 +1385,16 @@ mod tests {
         let last = *dd.color_swatch_ids.last().unwrap();
         let last_node = tree.get_node(last).unwrap();
         assert!(
-            last_node.flags.contains(UIFlags::VISIBLE | UIFlags::INTERACTIVE),
+            last_node
+                .flags
+                .contains(UIFlags::VISIBLE | UIFlags::INTERACTIVE),
             "the last swatch row is reachable by scrolling"
         );
 
         // Clicking that now-visible swatch selects its color and closes.
         let click = UIEvent::Click {
             node_id: last,
-            pos: Vec2::new(
-                last_node.bounds.x + 1.0,
-                last_node.bounds.y + 1.0,
-            ),
+            pos: Vec2::new(last_node.bounds.x + 1.0, last_node.bounds.y + 1.0),
             modifiers: crate::input::Modifiers::default(),
         };
         let result = dd.handle_event(&click, &mut tree);

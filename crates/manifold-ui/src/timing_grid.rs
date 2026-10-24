@@ -139,7 +139,9 @@ impl Iterator for TimingGridLines {
             self.remaining -= 1;
             let beat = self.beat;
             self.beat += self.step;
-            if self.beat <= beat { self.beat = f32::INFINITY; }
+            if self.beat <= beat {
+                self.beat = f32::INFINITY;
+            }
             let beat_in_bar = beat - (beat / self.beats_per_bar).floor() * self.beats_per_bar;
             let is_bar = beat_in_bar.abs() < 0.001;
             let is_beat = (beat - beat.round()).abs() < 0.001;
@@ -200,7 +202,10 @@ mod tests {
 
     #[test]
     fn timing_grid_marks_eighths_and_terminates_at_large_beats() {
-        assert_eq!(timing_grid_lines(0.5, 0.5, 12.0, 4.0).next(), Some((0.5, TimingGridLineKind::Eighth)));
+        assert_eq!(
+            timing_grid_lines(0.5, 0.5, 12.0, 4.0).next(),
+            Some((0.5, TimingGridLineKind::Eighth))
+        );
         assert!(timing_grid_lines(1.0e20, 1.0e21, 24.0, 4.0).count() <= 1);
         assert_eq!(timing_grid_lines(f32::NAN, 4.0, 24.0, 4.0).count(), 0);
     }

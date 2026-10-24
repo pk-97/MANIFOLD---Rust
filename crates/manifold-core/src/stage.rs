@@ -299,8 +299,12 @@ pub fn derive_stage(layout: &StageLayout) -> DerivedStage {
     let mut cursor_x = 0u32;
     let mut atlas_h = 0u32;
     for island in &mut islands {
-        let w_px = (island.stage_rect_mm[2] * island.px_per_mm).round().max(1.0) as u32;
-        let h_px = (island.stage_rect_mm[3] * island.px_per_mm).round().max(1.0) as u32;
+        let w_px = (island.stage_rect_mm[2] * island.px_per_mm)
+            .round()
+            .max(1.0) as u32;
+        let h_px = (island.stage_rect_mm[3] * island.px_per_mm)
+            .round()
+            .max(1.0) as u32;
         island.atlas_region_px = [cursor_x, 0, w_px, h_px];
         atlas_h = atlas_h.max(h_px);
         cursor_x += w_px + ATLAS_GUTTER_PX;
@@ -327,9 +331,7 @@ fn rects_touch(a: [f32; 4], b: [f32; 4], tol: f32) -> bool {
 
 /// Union-find clustering of placements whose post-rotation stage rects touch
 /// within [`SNAP_TOLERANCE_MM`].
-fn cluster_placements<'a>(
-    placements: &[&'a DisplayPlacement],
-) -> Vec<Vec<&'a DisplayPlacement>> {
+fn cluster_placements<'a>(placements: &[&'a DisplayPlacement]) -> Vec<Vec<&'a DisplayPlacement>> {
     let n = placements.len();
     let mut parent: Vec<usize> = (0..n).collect();
 
@@ -431,7 +433,10 @@ mod tests {
         };
         let derived = derive_stage(&layout);
         assert_eq!(derived.islands.len(), 1, "abutting panels form one island");
-        assert_eq!(derived.islands[0].display_ids, vec![OutputId(0), OutputId(1)]);
+        assert_eq!(
+            derived.islands[0].display_ids,
+            vec![OutputId(0), OutputId(1)]
+        );
         assert_eq!(derived.islands[0].stage_rect_mm, [0.0, 0.0, 1000.0, 1000.0]);
     }
 
@@ -519,7 +524,10 @@ mod tests {
             placements: vec![p],
         };
         let derived = derive_stage(&layout);
-        assert_eq!(derived.islands[0].stage_rect_mm, [10.0, 20.0, 1000.0, 500.0]);
+        assert_eq!(
+            derived.islands[0].stage_rect_mm,
+            [10.0, 20.0, 1000.0, 500.0]
+        );
     }
 
     // ── Packing ──

@@ -30,11 +30,16 @@ const ALLOW_CALLERS: &[&str] = &[
 ];
 
 fn workspace_crates() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf()
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 fn rust_files(dir: &Path, with_tests: bool, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -54,7 +59,9 @@ fn production_lines(text: &str) -> Vec<&str> {
     let lines: Vec<&str> = text.lines().collect();
     for i in 0..lines.len() {
         if lines[i].trim() == "#[cfg(test)]"
-            && lines.get(i + 1).is_some_and(|next| next.trim_start().starts_with("mod "))
+            && lines
+                .get(i + 1)
+                .is_some_and(|next| next.trim_start().starts_with("mod "))
         {
             return lines[..i].to_vec();
         }
@@ -64,21 +71,31 @@ fn production_lines(text: &str) -> Vec<&str> {
 
 fn is_fn_header(line: &str) -> bool {
     let t = line.trim_start();
-    let t = t.strip_prefix("pub(crate) ").or_else(|| t.strip_prefix("pub ")).unwrap_or(t);
+    let t = t
+        .strip_prefix("pub(crate) ")
+        .or_else(|| t.strip_prefix("pub "))
+        .unwrap_or(t);
     let t = t.strip_prefix("unsafe ").unwrap_or(t);
     t.starts_with("fn ")
 }
 
 fn relative(path: &Path) -> String {
     let root = workspace_crates().parent().unwrap().to_path_buf();
-    path.strip_prefix(&root).unwrap_or(path).display().to_string()
+    path.strip_prefix(&root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
 }
 
 #[test]
 fn every_real_device_opener_asks_the_guard_first() {
     let mut files = Vec::new();
     rust_files(&workspace_crates(), false, &mut files);
-    assert!(files.len() > 100, "scan found too few files ({}); wrong root?", files.len());
+    assert!(
+        files.len() > 100,
+        "scan found too few files ({}); wrong root?",
+        files.len()
+    );
 
     let mut seen_openers = 0;
     let mut unguarded = Vec::new();
@@ -90,20 +107,25 @@ fn every_real_device_opener_asks_the_guard_first() {
             if code.starts_with("//") || is_fn_header(line) {
                 continue;
             }
-            let Some(opener) = OPENERS.iter().find(|o| code.contains(*o)) else { continue };
+            let Some(opener) = OPENERS.iter().find(|o| code.contains(*o)) else {
+                continue;
+            };
             seen_openers += 1;
             let start = (0..i).rev().find(|&j| is_fn_header(lines[j]));
             let guarded = start.is_some_and(|s| {
-                lines[s..i]
-                    .iter()
-                    .any(|l| l.contains("device_guard::allowed(") || l.contains("device_guard::require("))
+                lines[s..i].iter().any(|l| {
+                    l.contains("device_guard::allowed(") || l.contains("device_guard::require(")
+                })
             });
             if !guarded {
                 unguarded.push(format!("{}:{} calls {opener}", relative(path), i + 1));
             }
         }
     }
-    assert!(seen_openers >= 10, "only {seen_openers} openers found; the scan is broken");
+    assert!(
+        seen_openers >= 10,
+        "only {seen_openers} openers found; the scan is broken"
+    );
     assert!(
         unguarded.is_empty(),
         "real-device openers that do not ask manifold_foundation::device_guard first \

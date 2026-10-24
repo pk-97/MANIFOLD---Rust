@@ -105,8 +105,8 @@ impl PercussionBindingResolver for ProjectPercussionBindingResolver {
 mod tests {
     use super::*;
     use crate::percussion_analysis::PercussionImportOptions;
-    use crate::types::LayerType;
     use crate::preset_type_id::PresetTypeId;
+    use crate::types::LayerType;
     use crate::units::Beats;
     use crate::video::VideoClip;
 
@@ -122,7 +122,9 @@ mod tests {
             .add_layer("Kick", LayerType::Video, PresetTypeId::NONE);
         project.video_library.add_clip(clip("lib_first"));
         project.video_library.add_clip(clip("on_layer"));
-        project.timeline.layers[layer_idx].source_clip_ids.push("on_layer".to_string());
+        project.timeline.layers[layer_idx]
+            .source_clip_ids
+            .push("on_layer".to_string());
 
         let mut options = PercussionImportOptions::default();
         options.bindings.push(PercussionClipBinding::new(

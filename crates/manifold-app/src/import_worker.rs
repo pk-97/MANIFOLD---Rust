@@ -49,12 +49,21 @@ pub(crate) enum ImportTarget {
     /// A drop at `beat`: the scene layer `under` the cursor, else the active
     /// one, takes the model; with neither, a new scene layer sits above
     /// `under` (at the top when the drop missed the tracks).
-    Drop { beat: f32, under: Option<manifold_core::LayerId> },
+    Drop {
+        beat: f32,
+        under: Option<manifold_core::LayerId>,
+    },
     /// Add > Mesh from file: into scene layer `layer`, under `parent` when it
     /// is a Group.
-    Into { layer: manifold_core::LayerId, parent: Option<manifold_core::scene_doc::ItemId> },
+    Into {
+        layer: manifold_core::LayerId,
+        parent: Option<manifold_core::scene_doc::ItemId>,
+    },
     /// Model File swap: `item` of scene layer `layer` reads the new file.
-    Swap { layer: manifold_core::LayerId, item: manifold_core::scene_doc::ItemId },
+    Swap {
+        layer: manifold_core::LayerId,
+        item: manifold_core::scene_doc::ItemId,
+    },
 }
 
 /// One event on the background-import channel (D3's committed shape).

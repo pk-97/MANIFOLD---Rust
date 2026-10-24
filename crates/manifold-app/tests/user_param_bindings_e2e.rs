@@ -32,8 +32,8 @@ use manifold_core::PresetTypeId;
 use manifold_core::ableton_mapping::{
     AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus, AbletonParamMapping,
 };
+use manifold_core::effects::{ParamConvert, ParameterDriver};
 use manifold_core::preset_definition_registry;
-use manifold_core::effects::{ParameterDriver, ParamConvert};
 use manifold_core::types::{BeatDivision, DriverWaveform};
 use manifold_editing::command::Command;
 use manifold_editing::commands::effects::{InnerParamMeta, ToggleEffectParamExposeCommand};
@@ -154,10 +154,11 @@ fn expose_mirror_inner_param_survives_save_reload_with_driver_and_ableton() {
         "user binding must be in graph.presetMetadata.bindings as userAdded"
     );
     let wire: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
-    let user_entry = &wire["settings"]["masterEffects"][0]["params"]["user.uv_transform.translate.1"];
-    let user_value = user_entry["value"]
-        .as_f64()
-        .unwrap_or_else(|| panic!("user-tail entry must be in the params map (pretty-printed JSON): {json}"));
+    let user_entry =
+        &wire["settings"]["masterEffects"][0]["params"]["user.uv_transform.translate.1"];
+    let user_value = user_entry["value"].as_f64().unwrap_or_else(|| {
+        panic!("user-tail entry must be in the params map (pretty-printed JSON): {json}")
+    });
     assert!(
         (user_value - 0.42).abs() < 1e-4,
         "user-tail slot value must be 0.42, got {user_value} (pretty-printed JSON): {json}"

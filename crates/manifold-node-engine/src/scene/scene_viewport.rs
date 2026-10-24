@@ -4,8 +4,8 @@ use std::fmt;
 
 use manifold_gpu::GpuTexture;
 
-use crate::runtime::frame_status::FrameRenderStatus;
 use crate::exec::effect_node::EffectNodeContext;
+use crate::runtime::frame_status::FrameRenderStatus;
 use crate::scene::viewport_camera::ViewportCamera;
 
 /// The camera and canvas used by one render-only viewport pass.
@@ -72,9 +72,15 @@ impl SceneViewportHostError {
     pub fn message(self) -> &'static str {
         match self {
             Self::MissingRuntime => "This scene is not active at the current time.",
-            Self::InvalidTarget(SceneViewportError::TargetNotFound) => "This scene is not available in the current render.",
-            Self::InvalidTarget(SceneViewportError::NotSceneRenderer) => "Select a scene renderer to use the 3D viewport.",
-            Self::InvalidTarget(SceneViewportError::InvalidConfiguration) => "The viewport camera or dimensions are invalid.",
+            Self::InvalidTarget(SceneViewportError::TargetNotFound) => {
+                "This scene is not available in the current render."
+            }
+            Self::InvalidTarget(SceneViewportError::NotSceneRenderer) => {
+                "Select a scene renderer to use the 3D viewport."
+            }
+            Self::InvalidTarget(SceneViewportError::InvalidConfiguration) => {
+                "The viewport camera or dimensions are invalid."
+            }
             Self::Modifier(error) => error.message(),
         }
     }

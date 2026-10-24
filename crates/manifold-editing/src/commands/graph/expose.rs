@@ -10,7 +10,6 @@ use manifold_core::project::Project;
 
 use crate::command::Command;
 
-
 use super::{
     descend_level, innermost_group_display_name, with_existing_target_graph_mut,
     with_target_graph_mut,
@@ -310,7 +309,11 @@ impl Command for ToggleNodeParamExposeCommand {
     fn graph_edit_sites(&self, sites: &mut Vec<super::GraphEditSite>) {
         // A node around a scene layer's Scene node puts its controls on the
         // card like any graph's; the Scene node itself has none to expose.
-        sites.push(super::GraphEditSite::new(&self.target, &self.scope_path, super::SiteReach::Nodes(vec![self.node_u32_id])));
+        sites.push(super::GraphEditSite::new(
+            &self.target,
+            &self.scope_path,
+            super::SiteReach::Nodes(vec![self.node_u32_id]),
+        ));
     }
     /// Exposing adds a card param; unexposing drops it with its controls.
     fn touches(&self) -> manifold_core::change::ChangeSet {
@@ -1945,7 +1948,8 @@ mod tests {
             .find_layer_by_id_mut(&lid)
             .unwrap()
             .1
-            .gen_params_mut().unwrap()
+            .gen_params_mut()
+            .unwrap()
             .graph = Some(preset_def_with_pattern_binding());
 
         // UNCHECK Pattern.

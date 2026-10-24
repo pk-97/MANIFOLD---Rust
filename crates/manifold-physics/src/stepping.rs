@@ -355,9 +355,7 @@ impl LiveStepSchedule {
             Seconds::ZERO
         };
         let (min_steps, max_steps) = if min_steps == 0 || max_steps == 0 {
-            diagnostic.get_or_insert(LiveStepError::InvalidInput(
-                "step counts must be positive",
-            ));
+            diagnostic.get_or_insert(LiveStepError::InvalidInput("step counts must be positive"));
             (1, 1)
         } else {
             (min_steps, max_steps)
@@ -808,7 +806,9 @@ pub fn box3d_substep_count(duration: Seconds) -> LiveStepOutcome<u32> {
     // that same duration and nominal tick: subtracting f64 clock endpoints
     // can otherwise turn an identical native step into four or five substeps
     // depending on how display frames grouped the accepted intervals.
-    let count = (4.0 * f64::from(duration as f32) / f64::from(NOMINAL_TICK_SECONDS as f32)).ceil().max(4.0);
+    let count = (4.0 * f64::from(duration as f32) / f64::from(NOMINAL_TICK_SECONDS as f32))
+        .ceil()
+        .max(4.0);
     if !count.is_finite() || count > f64::from(u32::MAX) {
         return LiveStepOutcome::diagnostic(
             u32::MAX,
@@ -1014,7 +1014,10 @@ mod tests {
         );
         assert!(outcome.value.is_some());
         let overflow = LiveStepSchedule::new(Seconds(f64::MAX), Seconds(f64::MAX), 1, 6);
-        assert_eq!(overflow.diagnostic, Some(LiveStepError::NonFinite("schedule endpoint")));
+        assert_eq!(
+            overflow.diagnostic,
+            Some(LiveStepError::NonFinite("schedule endpoint"))
+        );
         assert!(overflow.value.is_complete());
     }
 
@@ -1043,19 +1046,38 @@ mod tests {
 
     #[test]
     fn box3d_substeps_are_independent_of_live_frame_grouping() {
-        for (rate, speed, expected) in [(60, 1.0, 4), (60, 2.0, 8), (30, 1.0, 8), (60, 4.0, 16), (120, 1.0, 4)] {
+        for (rate, speed, expected) in [
+            (60, 1.0, 4),
+            (60, 2.0, 8),
+            (30, 1.0, 8),
+            (60, 4.0, 16),
+            (120, 1.0, 4),
+        ] {
             let interval = 1.0 / f64::from(rate);
             for fps in [20u32, 24, 30, 60] {
                 let mut clock = crate::clock::SimulationClock::default();
                 clock.advance(crate::PlayedTime::ZERO, interval, speed, 0.0, false, false);
                 for frame in 1..=fps {
-                    let accepted = clock.advance(crate::PlayedTime::from_played(f64::from(frame) / f64::from(fps)), interval, speed, 0.0, false, false);
+                    let accepted = clock.advance(
+                        crate::PlayedTime::from_played(f64::from(frame) / f64::from(fps)),
+                        interval,
+                        speed,
+                        0.0,
+                        false,
+                        false,
+                    );
                     for ordinal in 0..u64::from(accepted.ticks) {
                         let duration = accepted.interval(ordinal).unwrap().duration();
-                        assert_eq!(duration.0 as f32, (interval * f64::from(speed)) as f32,
-                            "the native solver receives the same fixed duration");
-                        assert_eq!(box3d_substep_count(duration).value, expected,
-                            "{rate} Hz speed {speed}, {fps} fps frame {frame} interval {ordinal}: {duration:?}");
+                        assert_eq!(
+                            duration.0 as f32,
+                            (interval * f64::from(speed)) as f32,
+                            "the native solver receives the same fixed duration"
+                        );
+                        assert_eq!(
+                            box3d_substep_count(duration).value,
+                            expected,
+                            "{rate} Hz speed {speed}, {fps} fps frame {frame} interval {ordinal}: {duration:?}"
+                        );
                     }
                 }
             }

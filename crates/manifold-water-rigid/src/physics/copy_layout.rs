@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 pub(crate) use manifold_core::copy_layout::{Arrangement, CopyLayout};
 
-use super::{CopySpawn, RigidBody, Solid, MAX_COPIES};
+use super::{CopySpawn, MAX_COPIES, RigidBody, Solid};
 
 /// The copies `spawn` asks for, before the world's copy pool is shared.
 pub(crate) fn requested_count(spawn: CopySpawn) -> usize {
@@ -36,7 +36,10 @@ pub(crate) fn arrangement_of(prototype: &RigidBody, count: usize) -> Arrangement
 /// `width` metres, as the solver takes it.
 pub(crate) fn rest_pose(arrangement: &Arrangement, width: [f32; 3], index: usize) -> BodyPose {
     let rest = arrangement.rest(width, index);
-    BodyPose { position: rest.position, rotation: rest.rotation }
+    BodyPose {
+        position: rest.position,
+        rotation: rest.rotation,
+    }
 }
 
 /// A copy's box width per axis at its scale, metres, measured from the

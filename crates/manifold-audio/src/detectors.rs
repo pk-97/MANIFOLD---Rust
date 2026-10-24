@@ -2,8 +2,8 @@
 //! worker thread that runs one analysed send's detectors off the content thread
 //! (docs/KICK_REALTIME_DESIGN.md section 1b). Offline paths run the same detectors inline.
 
-use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -54,12 +54,19 @@ pub trait EventDetector: Send {
 /// The shipped models, one per family, built into the app (docs/DETECTOR_RUNTIME_DESIGN.md section 5.2). Each
 /// file's `family` must equal its slot; `tests/fixtures/detectors/<family>/model.mkick` is the same bytes.
 pub(crate) const EMBEDDED: [(EventKind, &[u8]); 2] = [
-    (EventKind::Kick, include_bytes!("../assets/kick_model.mkick")),
-    (EventKind::Snare, include_bytes!("../assets/snare_model.mkick")),
+    (
+        EventKind::Kick,
+        include_bytes!("../assets/kick_model.mkick"),
+    ),
+    (
+        EventKind::Snare,
+        include_bytes!("../assets/snare_model.mkick"),
+    ),
 ];
 
 /// Each embedded file parsed once per process.
-static MODELS: [OnceLock<Result<Container, ContainerError>>; 2] = [OnceLock::new(), OnceLock::new()];
+static MODELS: [OnceLock<Result<Container, ContainerError>>; 2] =
+    [OnceLock::new(), OnceLock::new()];
 /// Per family: a refusal or a load was logged.
 static LOGGED: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
 
@@ -75,12 +82,19 @@ const fn slot(kind: EventKind) -> usize {
 /// family is then not built and its feature stays 0 (D8).
 pub fn build_detector(kind: EventKind, rate: u32) -> Result<TrainedDetector, DetectorError> {
     let i = slot(kind);
-    let model = MODELS[i].get_or_init(|| Container::parse(EMBEDDED[i].1)).as_ref().map_err(|e| DetectorError::from(e.clone()))?;
+    let model = MODELS[i]
+        .get_or_init(|| Container::parse(EMBEDDED[i].1))
+        .as_ref()
+        .map_err(|e| DetectorError::from(e.clone()))?;
     let det = TrainedDetector::from_container(model, rate)?;
     if det.kind() != kind {
         return Err(DetectorError::Spec(SpecError::Mismatch {
             what: "family",
-            detail: format!("the {} slot holds a {} model", kind.name(), det.kind().name()),
+            detail: format!(
+                "the {} slot holds a {} model",
+                kind.name(),
+                det.kind().name()
+            ),
         }));
     }
     Ok(det)
@@ -131,7 +145,11 @@ impl KickFed {
 
     /// Runs the pair on `samples` step by step: the kick, its decisions handed to the reader in emission
     /// order, then the reader on the same step. Every decision of both goes to `on_decision`.
-    pub fn push_traced(&mut self, samples: &[f32], mut on_decision: impl FnMut(Side, &Decision<'_>, Option<Fire>)) {
+    pub fn push_traced(
+        &mut self,
+        samples: &[f32],
+        mut on_decision: impl FnMut(Side, &Decision<'_>, Option<Fire>),
+    ) {
         for step in samples.chunks(Self::STEP) {
             let reader = &mut self.reader;
             self.kick.push_traced(step, |d, fire| {
@@ -139,7 +157,8 @@ impl KickFed {
                 on_decision(Side::Kick, d, fire);
             });
             self.reader.kick_settled(self.kick.settled_avail());
-            self.reader.push_traced(step, |d, fire| on_decision(Side::Reader, d, fire));
+            self.reader
+                .push_traced(step, |d, fire| on_decision(Side::Reader, d, fire));
         }
     }
 
@@ -152,8 +171,15 @@ impl EventDetector for KickFed {
     fn push(&mut self, samples: &[f32], events: &mut Vec<DetectorEvent>) {
         let (kick_kind, reader_kind) = (self.kick.kind(), self.reader.kind());
         self.push_traced(samples, |side, _, fire| {
-            let kind = if side == Side::Kick { kick_kind } else { reader_kind };
-            events.extend(fire.map(|f| DetectorEvent { kind, sample: f.sample }));
+            let kind = if side == Side::Kick {
+                kick_kind
+            } else {
+                reader_kind
+            };
+            events.extend(fire.map(|f| DetectorEvent {
+                kind,
+                sample: f.sample,
+            }));
         });
     }
 
@@ -170,7 +196,9 @@ pub fn send_detectors(rate: u32) -> Vec<Box<dyn EventDetector>> {
     let mut out: Vec<Box<dyn EventDetector>> = Vec::new();
     let mut readers = Vec::new();
     for (kind, _) in EMBEDDED.iter().filter(|(k, _)| *k != EventKind::Kick) {
-        let Some(d) = detector(*kind, rate) else { continue };
+        let Some(d) = detector(*kind, rate) else {
+            continue;
+        };
         if d.wants_kick().is_some() {
             readers.push(d);
         } else {
@@ -180,7 +208,10 @@ pub fn send_detectors(rate: u32) -> Vec<Box<dyn EventDetector>> {
     for reader in readers {
         let kind = reader.kind();
         let Some(k) = kick.take() else {
-            log::error!("[Audio] {} detector disabled: it reads the kick's verdicts and the kick did not load", kind.name());
+            log::error!(
+                "[Audio] {} detector disabled: it reads the kick's verdicts and the kick did not load",
+                kind.name()
+            );
             continue;
         };
         match KickFed::new(k, reader) {
@@ -241,29 +272,32 @@ impl DetectorWorker {
             event_overflow: AtomicU64::new(0),
         });
         let worker = shared.clone();
-        let thread = std::thread::Builder::new().name("detector-worker".into()).spawn(move || {
-            let mut buf = vec![0.0f32; WORK_STEP];
-            let mut scratch = Vec::with_capacity(detectors.iter().map(|d| d.max_events(WORK_STEP)).sum());
-            while worker.running.load(Ordering::Acquire) {
-                let n = sample_cons.pop_slice(&mut buf);
-                if n == 0 {
-                    std::thread::park_timeout(Duration::from_millis(5));
-                    continue;
-                }
-                // Each detector's events go out as soon as it has run, so a slow later detector (the
-                // snare's net) never holds an earlier one's fires (the kick's) past the content
-                // thread's wait.
-                for d in detectors.iter_mut() {
-                    d.push(&buf[..n], &mut scratch);
-                    for e in scratch.drain(..) {
-                        if event_prod.try_push(e).is_err() {
-                            worker.event_overflow.fetch_add(1, Ordering::Relaxed);
+        let thread = std::thread::Builder::new()
+            .name("detector-worker".into())
+            .spawn(move || {
+                let mut buf = vec![0.0f32; WORK_STEP];
+                let mut scratch =
+                    Vec::with_capacity(detectors.iter().map(|d| d.max_events(WORK_STEP)).sum());
+                while worker.running.load(Ordering::Acquire) {
+                    let n = sample_cons.pop_slice(&mut buf);
+                    if n == 0 {
+                        std::thread::park_timeout(Duration::from_millis(5));
+                        continue;
+                    }
+                    // Each detector's events go out as soon as it has run, so a slow later detector (the
+                    // snare's net) never holds an earlier one's fires (the kick's) past the content
+                    // thread's wait.
+                    for d in detectors.iter_mut() {
+                        d.push(&buf[..n], &mut scratch);
+                        for e in scratch.drain(..) {
+                            if event_prod.try_push(e).is_err() {
+                                worker.event_overflow.fetch_add(1, Ordering::Relaxed);
+                            }
                         }
                     }
+                    worker.processed.fetch_add(n as u64, Ordering::Release);
                 }
-                worker.processed.fetch_add(n as u64, Ordering::Release);
-            }
-        })?;
+            })?;
         Ok(Self {
             samples,
             events,
@@ -290,11 +324,22 @@ impl DetectorWorker {
         if self.samples.vacant_len() < samples.len() {
             self.overflows += 1;
             self.dropped_samples += n;
-            let last = if self.gap_len > 0 { self.gaps[self.gap_len - 1] } else { (u64::MAX, self.gap_base) };
+            let last = if self.gap_len > 0 {
+                self.gaps[self.gap_len - 1]
+            } else {
+                (u64::MAX, self.gap_base)
+            };
             if last.0 == self.pushed || self.gap_len == GAPS {
                 // Same position, or out of slots: fold into the last span. When out of slots,
                 // events between the two drops are stamped late by this drop's length.
-                self.gaps[self.gap_len.max(1) - 1] = (if self.gap_len > 0 { last.0 } else { self.pushed }, last.1 + n);
+                self.gaps[self.gap_len.max(1) - 1] = (
+                    if self.gap_len > 0 {
+                        last.0
+                    } else {
+                        self.pushed
+                    },
+                    last.1 + n,
+                );
                 self.gap_len = self.gap_len.max(1);
             } else {
                 self.gaps[self.gap_len] = (self.pushed, last.1 + n);
@@ -343,7 +388,10 @@ impl DetectorWorker {
             e.sample += self.dropped_before(e.sample);
             out.push(e);
         }
-        let retired = self.gaps[..self.gap_len].iter().take_while(|g| g.0 <= p).count();
+        let retired = self.gaps[..self.gap_len]
+            .iter()
+            .take_while(|g| g.0 <= p)
+            .count();
         if retired > 0 {
             self.gap_base = self.gaps[retired - 1].1;
             self.gaps.copy_within(retired..self.gap_len, 0);
@@ -359,7 +407,11 @@ impl DetectorWorker {
 
     /// Input samples dropped before ring position `s` (a span at `s` itself came after it).
     fn dropped_before(&self, s: u64) -> u64 {
-        self.gaps[..self.gap_len].iter().rev().find(|g| g.0 < s).map_or(self.gap_base, |g| g.1)
+        self.gaps[..self.gap_len]
+            .iter()
+            .rev()
+            .find(|g| g.0 < s)
+            .map_or(self.gap_base, |g| g.1)
     }
 
     /// Submits that were dropped because the ring was full.
@@ -395,7 +447,10 @@ mod tests {
             for _ in samples {
                 self.n += 1;
                 if self.n.is_multiple_of(self.every) {
-                    events.push(DetectorEvent { kind: EventKind::Kick, sample: self.n });
+                    events.push(DetectorEvent {
+                        kind: EventKind::Kick,
+                        sample: self.n,
+                    });
                 }
             }
         }
@@ -410,7 +465,8 @@ mod tests {
         assert_eq!(EventKind::ALL.len(), EMBEDDED.len());
         for kind in EventKind::ALL {
             assert_eq!(EMBEDDED[slot(kind)].0, kind);
-            let det = build_detector(kind, 48_000).unwrap_or_else(|e| panic!("{}: {e}", kind.name()));
+            let det =
+                build_detector(kind, 48_000).unwrap_or_else(|e| panic!("{}: {e}", kind.name()));
             assert_eq!(det.kind(), kind);
             assert_eq!(EventKind::parse(kind.name()), Some(kind));
         }
@@ -429,7 +485,8 @@ mod tests {
                     d.push(chunk, &mut events);
                 }
             }
-            let mut out: Vec<(&str, u64)> = events.iter().map(|e| (e.kind.name(), e.sample)).collect();
+            let mut out: Vec<(&str, u64)> =
+                events.iter().map(|e| (e.kind.name(), e.sample)).collect();
             out.sort_unstable();
             out
         };
@@ -440,8 +497,17 @@ mod tests {
 
     #[test]
     fn worker_returns_the_inline_events() {
-        let mut inline = Ticker { every: 300, n: 0, delay: Duration::ZERO };
-        let mut worker = DetectorWorker::spawn(vec![Box::new(Ticker { every: 300, n: 0, delay: Duration::ZERO })]).unwrap();
+        let mut inline = Ticker {
+            every: 300,
+            n: 0,
+            delay: Duration::ZERO,
+        };
+        let mut worker = DetectorWorker::spawn(vec![Box::new(Ticker {
+            every: 300,
+            n: 0,
+            delay: Duration::ZERO,
+        })])
+        .unwrap();
         let input = vec![0.0f32; 10_000];
         let (mut want, mut got) = (Vec::new(), Vec::with_capacity(64));
         for chunk in input.chunks(733) {
@@ -454,13 +520,20 @@ mod tests {
 
     #[test]
     fn a_slow_worker_misses_the_deadline_and_delivers_later() {
-        let mut worker =
-            DetectorWorker::spawn(vec![Box::new(Ticker { every: 100, n: 0, delay: Duration::from_millis(30) })]).unwrap();
+        let mut worker = DetectorWorker::spawn(vec![Box::new(Ticker {
+            every: 100,
+            n: 0,
+            delay: Duration::from_millis(30),
+        })])
+        .unwrap();
         let mut got = Vec::with_capacity(64);
         worker.submit(&[0.0; 200]);
         let t0 = Instant::now();
         assert!(!worker.collect(t0 + Duration::from_millis(2), &mut got));
-        assert!(t0.elapsed() < Duration::from_millis(20), "collect overran its deadline");
+        assert!(
+            t0.elapsed() < Duration::from_millis(20),
+            "collect overran its deadline"
+        );
         assert!(got.is_empty());
         assert!(worker.collect(Instant::now() + Duration::from_secs(5), &mut got));
         assert_eq!(got.iter().map(|e| e.sample).collect::<Vec<_>>(), [100, 200]);
@@ -468,8 +541,12 @@ mod tests {
 
     #[test]
     fn dropped_input_keeps_stamps_on_the_input_clock() {
-        let mut worker =
-            DetectorWorker::spawn(vec![Box::new(Ticker { every: 1000, n: 0, delay: Duration::from_millis(50) })]).unwrap();
+        let mut worker = DetectorWorker::spawn(vec![Box::new(Ticker {
+            every: 1000,
+            n: 0,
+            delay: Duration::from_millis(50),
+        })])
+        .unwrap();
         let mut got = Vec::with_capacity(512);
         // Fill the ring while the worker sleeps, so the next submit is dropped.
         let block = vec![0.0f32; SAMPLE_RING / 2];
@@ -482,8 +559,10 @@ mod tests {
         assert!(worker.collect(Instant::now() + Duration::from_secs(10), &mut got));
         let ring = SAMPLE_RING as u64;
         // Ring position p maps to input p before the drop and p + 5000 after it.
-        let want: Vec<u64> =
-            (1..=(ring + 3000) / 1000).map(|k| k * 1000).map(|p| if p <= ring { p } else { p + 5000 }).collect();
+        let want: Vec<u64> = (1..=(ring + 3000) / 1000)
+            .map(|k| k * 1000)
+            .map(|p| if p <= ring { p } else { p + 5000 })
+            .collect();
         assert_eq!(got.iter().map(|e| e.sample).collect::<Vec<_>>(), want);
     }
 }

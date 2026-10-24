@@ -4,17 +4,19 @@
 //! allow. No GPU: every size comes from the functions the atoms size and
 //! dispatch with.
 
-use manifold_water_liquid::primitives::face_sample_component::FaceSampleComponent;
-use manifold_water_liquid::grid::face_bytes;
-use manifold_water_gpu_mpm::primitives::matter_face_component::{MatterFaceComponent, matter_cells};
-use manifold_node_engine::exec::effect_node::ParamValues;
-use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_core::fluid_domain::domain_layout;
-use manifold_water_liquid::grid::{face_dims, face_len};
-use manifold_water_liquid::lattice::{LiquidLattice, PADDING_NODES};
-use manifold_water_gpu_mpm::matter::lattice_nodes;
+use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
+use manifold_water_gpu_mpm::matter::lattice_nodes;
+use manifold_water_gpu_mpm::primitives::matter_face_component::{
+    MatterFaceComponent, matter_cells,
+};
+use manifold_water_liquid::fluid_particles::FaceSample;
+use manifold_water_liquid::grid::face_bytes;
+use manifold_water_liquid::grid::{face_dims, face_len};
+use manifold_water_liquid::lattice::{LiquidLattice, PADDING_NODES};
+use manifold_water_liquid::primitives::face_sample_component::FaceSampleComponent;
 
 fn axis_params(axis: u32) -> ParamValues {
     let mut params = ParamValues::default();
@@ -35,7 +37,8 @@ fn gpu_flip_last_read(cells: [u32; 3], axis: usize) -> u64 {
 fn matter_last_read(nodes: [u32; 3], axis: usize) -> u64 {
     let cells = matter_cells(nodes).expect("a lattice with cells");
     let last = face_dims(cells, axis).map(|d| u64::from(d) - 1);
-    let q: [u64; 3] = std::array::from_fn(|b| last[b] + u64::from(PADDING_NODES) + u64::from(b != axis));
+    let q: [u64; 3] =
+        std::array::from_fn(|b| last[b] + u64::from(PADDING_NODES) + u64::from(b != axis));
     let n = nodes.map(u64::from);
     q[0] + n[0] * (q[1] + n[1] * q[2])
 }
@@ -47,25 +50,55 @@ fn check_gpu_flip(cells: [u32; 3]) {
     for axis in 0..3 {
         let count = face_len(cells, axis);
         let capacity = FaceSampleComponent::new()
-            .array_output_capacity("out", &axis_params(axis as u32), &[("faces", records as u32)])
+            .array_output_capacity(
+                "out",
+                &axis_params(axis as u32),
+                &[("faces", records as u32)],
+            )
             .expect("out capacity");
-        assert_eq!(u64::from(capacity), records, "{cells:?} axis {axis}: out follows the face grid");
-        assert!(count <= records, "{cells:?} axis {axis}: out is shorter than the faces");
-        assert!(gpu_flip_last_read(cells, axis) < records, "{cells:?} axis {axis}: read past the lattice");
-        assert!(count <= u64::from(u32::MAX), "{cells:?} axis {axis}: dispatch count");
+        assert_eq!(
+            u64::from(capacity),
+            records,
+            "{cells:?} axis {axis}: out follows the face grid"
+        );
+        assert!(
+            count <= records,
+            "{cells:?} axis {axis}: out is shorter than the faces"
+        );
+        assert!(
+            gpu_flip_last_read(cells, axis) < records,
+            "{cells:?} axis {axis}: read past the lattice"
+        );
+        assert!(
+            count <= u64::from(u32::MAX),
+            "{cells:?} axis {axis}: dispatch count"
+        );
     }
 }
 
 fn check_matter(lattice: &LiquidLattice) {
     let nodes = lattice_nodes(lattice.nodes());
-    assert_eq!(matter_cells(lattice.nodes()), Some(lattice.cells()), "{:?}", lattice.nodes());
+    assert_eq!(
+        matter_cells(lattice.nodes()),
+        Some(lattice.cells()),
+        "{:?}",
+        lattice.nodes()
+    );
     for axis in 0..3 {
         let count = face_len(lattice.cells(), axis);
         let capacity = MatterFaceComponent::new()
             .array_output_capacity("out", &ParamValues::default(), &[("grid", nodes as u32)])
             .expect("out capacity");
-        assert!(count <= u64::from(capacity), "{:?} axis {axis}: out is shorter than the faces", lattice.nodes());
-        assert!(matter_last_read(lattice.nodes(), axis) < nodes, "{:?} axis {axis}: read past the grid", lattice.nodes());
+        assert!(
+            count <= u64::from(capacity),
+            "{:?} axis {axis}: out is shorter than the faces",
+            lattice.nodes()
+        );
+        assert!(
+            matter_last_read(lattice.nodes(), axis) < nodes,
+            "{:?} axis {axis}: read past the grid",
+            lattice.nodes()
+        );
     }
 }
 
@@ -88,17 +121,33 @@ fn face_grid_extents_at_64() {
 #[test]
 fn whitewater_refuses_unextended_faces() {
     use manifold_water_liquid::whitewater::require_extended_faces;
-    assert!(require_extended_faces(manifold_water_gpu_flip::primitives::gpu_flip_step::FACE_VALID_LAYERS as f32).is_ok());
+    assert!(
+        require_extended_faces(
+            manifold_water_gpu_flip::primitives::gpu_flip_step::FACE_VALID_LAYERS as f32
+        )
+        .is_ok()
+    );
     assert!(require_extended_faces(1.0).is_ok());
-    let layers = manifold_water_gpu_mpm::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS as f32;
-    assert!(require_extended_faces(layers).expect_err("MPM refused").contains("needs at least 1"));
+    let layers =
+        manifold_water_gpu_mpm::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS as f32;
+    assert!(
+        require_extended_faces(layers)
+            .expect_err("MPM refused")
+            .contains("needs at least 1")
+    );
 }
 
 /// Every Resolution the matter presets allow keeps its reads inside the grid.
 #[test]
 fn face_grid_extents_at_every_matter_resolution() {
     for res in 8..=512 {
-        check_matter(&LiquidLattice::from_layout(&domain_layout(None, 4.0, res).expect("layout")));
+        check_matter(&LiquidLattice::from_layout(
+            &domain_layout(None, 4.0, res).expect("layout"),
+        ));
     }
-    assert_eq!(matter_cells([7, 20, 20]), None, "a lattice with no cells is refused");
+    assert_eq!(
+        matter_cells([7, 20, 20]),
+        None,
+        "a lattice with no cells is refused"
+    );
 }

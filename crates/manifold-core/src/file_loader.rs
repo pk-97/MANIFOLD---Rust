@@ -46,7 +46,11 @@ pub fn is_picture(path: &str) -> bool {
     std::path::Path::new(path)
         .extension()
         .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| PICTURE_EXTENSIONS.iter().any(|known| known.eq_ignore_ascii_case(ext)))
+        .is_some_and(|ext| {
+            PICTURE_EXTENSIONS
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(ext))
+        })
 }
 
 /// The table: `type_id` → what that node reads from disk. Names only nodes

@@ -28,11 +28,10 @@
 use half::f16;
 use manifold_gpu::{GpuTexture, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::scene::camera::Camera;
 
 const ORBIT: f32 = 0.0;
 const TILT: f32 = 0.0;
@@ -142,7 +141,10 @@ fn readback_rg16float(device: &manifold_gpu::GpuDevice, texture: &GpuTexture) ->
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");
     let bytes: &[u8] = unsafe {
-        std::slice::from_raw_parts(ptr.cast::<std::ffi::c_void>().cast::<u8>(), total_bytes as usize)
+        std::slice::from_raw_parts(
+            ptr.cast::<std::ffi::c_void>().cast::<u8>(),
+            total_bytes as usize,
+        )
     };
     bytes.to_vec()
 }
@@ -177,47 +179,56 @@ fn gbuffer_velocity_two_frame_conformance() {
     // `Rg16Float` bytes + dims. Reuses the SAME `runtime` (and therefore
     // the SAME `RenderScene` node instance) across every call — the
     // `prev_model`/`prev_view_proj` continuity I5 depends on.
-    let render_at_beat = |runtime: &mut PresetRuntime, beat: f64, frame_count: i64| -> (Vec<u8>, u32, u32) {
-        let ctx = PresetContext {
-            time: 0.0,
-            beat,
-            dt: 1.0 / 60.0,
-            width: h.width,
-            height: h.height,
-            output_width: h.width,
-            output_height: h.height,
-            aspect: h.width as f32 / h.height as f32,
-            owner_key: 0,
-            is_clip_level: false,
-            frame_count,
-            anim_progress: 0.0,
-            trigger_count: 0,
-        };
-        let mut enc = h.device.create_encoder("gbuffer-velocity-enc");
-        {
-            let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-            runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
-        }
-        enc.commit_and_wait_completed();
+    let render_at_beat =
+        |runtime: &mut PresetRuntime, beat: f64, frame_count: i64| -> (Vec<u8>, u32, u32) {
+            let ctx = PresetContext {
+                time: 0.0,
+                beat,
+                dt: 1.0 / 60.0,
+                width: h.width,
+                height: h.height,
+                output_width: h.width,
+                output_height: h.height,
+                aspect: h.width as f32 / h.height as f32,
+                owner_key: 0,
+                is_clip_level: false,
+                frame_count,
+                anim_progress: 0.0,
+                trigger_count: 0,
+            };
+            let mut enc = h.device.create_encoder("gbuffer-velocity-enc");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
+                runtime.render(
+                    &mut gpu,
+                    &target.texture,
+                    &ctx,
+                    &manifold_core::params::ParamManifest::default(),
+                );
+            }
+            enc.commit_and_wait_completed();
 
-        let dumped = runtime.dump_textures_all();
-        let (_, _, _, vel_tex): &(String, String, String, &GpuTexture) = dumped
-            .iter()
-            .find(|(node_id, port, _, _)| node_id == "scene" && port == "velocity")
-            .unwrap_or_else(|| {
-                panic!(
-                    "no dumped `velocity` output on node `scene` — dumped ports: {:?}",
-                    dumped.iter().map(|(n, p, _, _)| format!("{n}.{p}")).collect::<Vec<_>>()
-                )
-            });
-        assert_eq!(
-            vel_tex.format,
-            GpuTextureFormat::Rg16Float,
-            "velocity's allocated texture must be Rg16Float (output_format override)"
-        );
-        let bytes = readback_rg16float(&h.device, vel_tex);
-        (bytes, vel_tex.width, vel_tex.height)
-    };
+            let dumped = runtime.dump_textures_all();
+            let (_, _, _, vel_tex): &(String, String, String, &GpuTexture) = dumped
+                .iter()
+                .find(|(node_id, port, _, _)| node_id == "scene" && port == "velocity")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "no dumped `velocity` output on node `scene` — dumped ports: {:?}",
+                        dumped
+                            .iter()
+                            .map(|(n, p, _, _)| format!("{n}.{p}"))
+                            .collect::<Vec<_>>()
+                    )
+                });
+            assert_eq!(
+                vel_tex.format,
+                GpuTextureFormat::Rg16Float,
+                "velocity's allocated texture must be Rg16Float (output_format override)"
+            );
+            let bytes = readback_rg16float(&h.device, vel_tex);
+            (bytes, vel_tex.width, vel_tex.height)
+        };
 
     // Warm-up at beat 0.0 (pos_y = 0) — primes the texture pool / ring
     // buffers. Harmless to the frame-0 exactness check below: prev and
@@ -237,10 +248,20 @@ fn gbuffer_velocity_two_frame_conformance() {
     let py0 = (proj0.py.floor() as i64).clamp(0, h.height as i64 - 1) as u32;
 
     let (bytes0, w, ht) = render_at_beat(&mut runtime, 0.0, 2);
-    assert_eq!((w, ht), (h.width, h.height), "velocity output dims must match the canvas");
+    assert_eq!(
+        (w, ht),
+        (h.width, h.height),
+        "velocity output dims must match the canvas"
+    );
     let (vx0, vy0) = sample_rg16float(&bytes0, w, px0, py0);
-    assert_eq!(vx0, 0.0, "frame-0 velocity.x must be BIT-EXACT zero, not approximate — got {vx0}");
-    assert_eq!(vy0, 0.0, "frame-0 velocity.y must be BIT-EXACT zero, not approximate — got {vy0}");
+    assert_eq!(
+        vx0, 0.0,
+        "frame-0 velocity.x must be BIT-EXACT zero, not approximate — got {vx0}"
+    );
+    assert_eq!(
+        vy0, 0.0,
+        "frame-0 velocity.y must be BIT-EXACT zero, not approximate — got {vy0}"
+    );
 
     // ---- I5, part 2: a translated object's velocity matches the CPU
     // NDC-delta oracle within 1e-4. ----
@@ -252,9 +273,16 @@ fn gbuffer_velocity_two_frame_conformance() {
     let py1 = (proj1.py.floor() as i64).clamp(0, h.height as i64 - 1) as u32;
 
     let (bytes1, w1, ht1) = render_at_beat(&mut runtime, BEAT_FRAME1 as f64, 3);
-    assert_eq!((w1, ht1), (h.width, h.height), "velocity output dims must match the canvas");
+    assert_eq!(
+        (w1, ht1),
+        (h.width, h.height),
+        "velocity output dims must match the canvas"
+    );
     let (vx1, vy1) = sample_rg16float(&bytes1, w1, px1, py1);
-    assert!(vx1.is_finite() && vy1.is_finite(), "frame-1 velocity is not finite: ({vx1}, {vy1})");
+    assert!(
+        vx1.is_finite() && vy1.is_finite(),
+        "frame-1 velocity is not finite: ({vx1}, {vy1})"
+    );
     assert!(
         (vx1 - oracle_vel[0]).abs() < 1e-4,
         "frame-1 velocity.x {vx1} vs oracle {} — diff {} exceeds 1e-4",
@@ -339,7 +367,12 @@ fn gbuffer_velocity_unwired_scene_bundled_smoke_stays_finite() {
     let mut enc = h.device.create_encoder("gbuffer-velocity-unwired-enc");
     {
         let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-        runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+        runtime.render(
+            &mut gpu,
+            &target.texture,
+            &ctx,
+            &manifold_core::params::ParamManifest::default(),
+        );
     }
     enc.commit_and_wait_completed();
 

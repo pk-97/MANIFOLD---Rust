@@ -1,7 +1,7 @@
 //! Buffer extent rule owned by this node.
+use crate::primitives::emission_count::extent::emission_count;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use manifold_water_liquid::extent::whitewater_grid;
-use crate::primitives::emission_count::extent::emission_count;
 
 fn turbulence_emission_count(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     emission_count(x)?;

@@ -81,7 +81,10 @@ pub(crate) fn migrate(root: &mut Value) {
 /// `embeddedPresets[].def` carries the same `nodes`/`wires`/`presetMetadata`
 /// shape as an instance's `graph` — walk it identically (D4).
 fn migrate_embedded_presets(root: &mut Value) {
-    let Some(presets) = root.get_mut("embeddedPresets").and_then(|v| v.as_array_mut()) else {
+    let Some(presets) = root
+        .get_mut("embeddedPresets")
+        .and_then(|v| v.as_array_mut())
+    else {
         return;
     };
     for preset in presets.iter_mut() {
@@ -137,7 +140,9 @@ impl IdGen {
 /// `node.render_scene`, then re-point this graph's own
 /// `presetMetadata.bindings` for every object migrated.
 fn migrate_graph_value(graph: &mut Value) {
-    let Value::Object(graph_map) = graph else { return };
+    let Value::Object(graph_map) = graph else {
+        return;
+    };
 
     let mut next_id: u32 = 0;
     let mut used_node_ids: HashSet<String> = HashSet::new();
@@ -153,7 +158,10 @@ fn migrate_graph_value(graph: &mut Value) {
         _ => Vec::new(),
     };
 
-    let mut id_gen = IdGen { next_id, used_node_ids };
+    let mut id_gen = IdGen {
+        next_id,
+        used_node_ids,
+    };
     let renames = migrate_level(&mut nodes, &mut wires, &mut id_gen);
 
     graph_map.insert("nodes".to_string(), Value::Array(nodes));
@@ -196,7 +204,11 @@ fn scan_ids(nodes: &[Value], next_id: &mut u32, used_node_ids: &mut HashSet<Stri
 /// covered too), then migrate every `node.render_scene` node found AT this
 /// level. Returns every object migrated at or below this level, so the one
 /// caller-level `presetMetadata.bindings` re-point sees all of them.
-fn migrate_level(nodes: &mut Vec<Value>, wires: &mut Vec<Value>, id_gen: &mut IdGen) -> Vec<RenameRecord> {
+fn migrate_level(
+    nodes: &mut Vec<Value>,
+    wires: &mut Vec<Value>,
+    id_gen: &mut IdGen,
+) -> Vec<RenameRecord> {
     let mut renames = Vec::new();
 
     for node in nodes.iter_mut() {
@@ -244,7 +256,10 @@ fn migrate_render_scene_node(
     id_gen: &mut IdGen,
     renames: &mut Vec<RenameRecord>,
 ) {
-    let Some(render_id_u32) = nodes[render_idx].get("id").and_then(|v| v.as_u64()).map(|v| v as u32)
+    let Some(render_id_u32) = nodes[render_idx]
+        .get("id")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
     else {
         return;
     };
@@ -340,8 +355,12 @@ fn migrate_one_object(
             // regardless (an exposed slot for a dropped param would
             // dangle), and carry it to the new node only when the value
             // itself migrated cleanly.
-            if let Some(exposed) = render_map.get_mut("exposedParams").and_then(|v| v.as_array_mut())
-                && let Some(pos) = exposed.iter().position(|e| e.as_str() == Some(key.as_str()))
+            if let Some(exposed) = render_map
+                .get_mut("exposedParams")
+                .and_then(|v| v.as_array_mut())
+                && let Some(pos) = exposed
+                    .iter()
+                    .position(|e| e.as_str() == Some(key.as_str()))
             {
                 exposed.remove(pos);
                 if is_valid_float {
@@ -393,11 +412,24 @@ fn migrate_one_object(
 
     let mut placed_in_group = false;
     if let Some(group_idx) = producer_group_idx {
-        placed_in_group = place_inside_group(nodes, wires, group_idx, new_node.clone(), new_id, render_id_u32, k);
+        placed_in_group = place_inside_group(
+            nodes,
+            wires,
+            group_idx,
+            new_node.clone(),
+            new_id,
+            render_id_u32,
+            k,
+        );
     }
     if !placed_in_group {
         nodes.push(new_node);
-        wires.push(wire_json(new_id, "transform", render_id_u32, &format!("transform_{k}")));
+        wires.push(wire_json(
+            new_id,
+            "transform",
+            render_id_u32,
+            &format!("transform_{k}"),
+        ));
     }
 
     renames.push(RenameRecord {
@@ -425,7 +457,10 @@ fn place_inside_group(
     render_id_u32: u32,
     k: u32,
 ) -> bool {
-    let Some(group_outer_id) = nodes[group_idx].get("id").and_then(|v| v.as_u64()).map(|v| v as u32)
+    let Some(group_outer_id) = nodes[group_idx]
+        .get("id")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
     else {
         return false;
     };
@@ -461,7 +496,10 @@ fn place_inside_group(
         _ => return false,
     }
 
-    if let Some(interface) = group_def.get_mut("interface").and_then(|v| v.as_object_mut()) {
+    if let Some(interface) = group_def
+        .get_mut("interface")
+        .and_then(|v| v.as_object_mut())
+    {
         let outputs = interface
             .entry("outputs")
             .or_insert_with(|| Value::Array(Vec::new()));
@@ -475,7 +513,12 @@ fn place_inside_group(
         }
     }
 
-    wires.push(wire_json(group_outer_id, "transform", render_id_u32, &format!("transform_{k}")));
+    wires.push(wire_json(
+        group_outer_id,
+        "transform",
+        render_id_u32,
+        &format!("transform_{k}"),
+    ));
     true
 }
 
@@ -498,7 +541,10 @@ fn wire_json(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> Va
 /// case this fallback exists for in the first place, not a regression this
 /// migration introduces.
 fn repoint_bindings(graph_map: &mut Map<String, Value>, renames: &[RenameRecord]) {
-    let Some(meta) = graph_map.get_mut("presetMetadata").and_then(|v| v.as_object_mut()) else {
+    let Some(meta) = graph_map
+        .get_mut("presetMetadata")
+        .and_then(|v| v.as_object_mut())
+    else {
         return;
     };
     let Some(Value::Array(bindings)) = meta.get_mut("bindings") else {
@@ -529,16 +575,32 @@ fn repoint_bindings(graph_map: &mut Map<String, Value>, renames: &[RenameRecord]
         let Some(target) = binding.get_mut("target").and_then(|v| v.as_object_mut()) else {
             continue;
         };
-        let Some(kind) = target.get("kind").and_then(|v| v.as_str()).map(str::to_string) else {
+        let Some(kind) = target
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+        else {
             continue;
         };
         let target_key = match kind.as_str() {
-            "node" => target.get("nodeId").and_then(|v| v.as_str()).map(str::to_string),
-            "handleNode" => target.get("handle").and_then(|v| v.as_str()).map(str::to_string),
+            "node" => target
+                .get("nodeId")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            "handleNode" => target
+                .get("handle")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
             _ => None,
         };
-        let Some(target_key) = target_key else { continue };
-        let Some(param) = target.get("param").and_then(|v| v.as_str()).map(str::to_string) else {
+        let Some(target_key) = target_key else {
+            continue;
+        };
+        let Some(param) = target
+            .get("param")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+        else {
             continue;
         };
 
@@ -585,23 +647,44 @@ mod tests {
         migrate_graph_value(&mut graph);
 
         let nodes = graph["nodes"].as_array().unwrap();
-        assert_eq!(nodes.len(), 2, "render_scene + one synthesized transform node");
+        assert_eq!(
+            nodes.len(),
+            2,
+            "render_scene + one synthesized transform node"
+        );
         let render = nodes.iter().find(|n| n["nodeId"] == "render").unwrap();
-        assert!(render["params"].get("pos_x_0").is_none(), "legacy param removed");
+        assert!(
+            render["params"].get("pos_x_0").is_none(),
+            "legacy param removed"
+        );
         assert!(render["params"].get("rot_y_0").is_none());
         assert!(render["params"].get("scale_z_0").is_none());
-        assert_eq!(render["params"]["objects"]["value"].as_f64(), Some(1.0), "unrelated params untouched");
+        assert_eq!(
+            render["params"]["objects"]["value"].as_f64(),
+            Some(1.0),
+            "unrelated params untouched"
+        );
         assert!(
-            render.get("exposedParams").and_then(|v| v.as_array()).map(|a| a.is_empty()).unwrap_or(true),
+            render
+                .get("exposedParams")
+                .and_then(|v| v.as_array())
+                .map(|a| a.is_empty())
+                .unwrap_or(true),
             "exposed pos_x_0 entry removed from render node"
         );
 
-        let t = nodes.iter().find(|n| n["typeId"] == "node.transform_3d").unwrap();
+        let t = nodes
+            .iter()
+            .find(|n| n["typeId"] == "node.transform_3d")
+            .unwrap();
         assert_eq!(t["handle"], "transform_0");
         assert_eq!(t["params"]["pos_x"]["value"].as_f64(), Some(2.5));
         assert_eq!(t["params"]["rot_y"]["value"].as_f64(), Some(0.75));
         assert_eq!(t["params"]["scale_z"]["value"].as_f64(), Some(1.5));
-        assert_eq!(t["exposedParams"][0], "pos_x", "exposed slot carried over, un-suffixed");
+        assert_eq!(
+            t["exposedParams"][0], "pos_x",
+            "exposed slot carried over, un-suffixed"
+        );
 
         let wires = graph["wires"].as_array().unwrap();
         let t_id = t["id"].as_u64().unwrap();
@@ -640,11 +723,20 @@ mod tests {
         let nodes = graph["nodes"].as_array().unwrap();
         let render = nodes.iter().find(|n| n["nodeId"] == "render").unwrap();
         assert!(render["params"].get("pos_x_2").is_none());
-        assert!(render["params"].get("rot_y_2").is_none(), "malformed key still removed, not left dangling");
+        assert!(
+            render["params"].get("rot_y_2").is_none(),
+            "malformed key still removed, not left dangling"
+        );
 
-        let t = nodes.iter().find(|n| n["typeId"] == "node.transform_3d").unwrap();
+        let t = nodes
+            .iter()
+            .find(|n| n["typeId"] == "node.transform_3d")
+            .unwrap();
         assert_eq!(t["params"]["pos_x"]["value"].as_f64(), Some(5.0));
-        assert!(t["params"].get("rot_y").is_none(), "malformed value never transferred");
+        assert!(
+            t["params"].get("rot_y").is_none(),
+            "malformed value never transferred"
+        );
         assert_eq!(t["handle"], "transform_2");
     }
 
@@ -746,20 +838,31 @@ mod tests {
 
         let nodes = graph["nodes"].as_array().unwrap();
         // Still exactly 3 top-level nodes — nothing landed top-level.
-        assert_eq!(nodes.len(), 3, "no top-level transform node — both objects placed inside their groups");
+        assert_eq!(
+            nodes.len(),
+            3,
+            "no top-level transform node — both objects placed inside their groups"
+        );
 
         let leaf = nodes.iter().find(|n| n["nodeId"] == "leaf_group").unwrap();
         let leaf_inner = leaf["group"]["nodes"].as_array().unwrap();
         assert!(
-            leaf_inner.iter().any(|n| n["typeId"] == "node.transform_3d" && n["handle"] == "transform_0"),
+            leaf_inner
+                .iter()
+                .any(|n| n["typeId"] == "node.transform_3d" && n["handle"] == "transform_0"),
             "Leaf's own transform node lives inside its group"
         );
-        let leaf_t = leaf_inner.iter().find(|n| n["typeId"] == "node.transform_3d").unwrap();
+        let leaf_t = leaf_inner
+            .iter()
+            .find(|n| n["typeId"] == "node.transform_3d")
+            .unwrap();
         assert_eq!(leaf_t["params"]["pos_x"]["value"].as_f64(), Some(-1.0));
 
         let leaf_outputs = leaf["group"]["interface"]["outputs"].as_array().unwrap();
         assert!(
-            leaf_outputs.iter().any(|o| o["name"] == "transform" && o["portType"] == "Transform"),
+            leaf_outputs
+                .iter()
+                .any(|o| o["name"] == "transform" && o["portType"] == "Transform"),
             "Leaf's interface gains a transform output"
         );
         let leaf_out_id = leaf["group"]["nodes"]
@@ -788,7 +891,10 @@ mod tests {
         assert_eq!(bark_t["handle"], "transform_1");
         assert_eq!(bark_t["params"]["pos_x"]["value"].as_f64(), Some(2.5));
         assert_eq!(bark_t["params"]["rot_y"]["value"].as_f64(), Some(0.5));
-        assert_eq!(bark_t["exposedParams"][0], "pos_x", "exposed slot carried into Bark's inner node");
+        assert_eq!(
+            bark_t["exposedParams"][0], "pos_x",
+            "exposed slot carried into Bark's inner node"
+        );
 
         // Outer wires: each group's OWN "transform" output feeds render's
         // transform_k port directly (crossing the group boundary at the top
@@ -797,10 +903,22 @@ mod tests {
         let render_id = 2u64;
         let leaf_group_id = leaf["id"].as_u64().unwrap();
         let bark_group_id = bark["id"].as_u64().unwrap();
-        assert!(outer_wires.iter().any(|w| w["fromNode"].as_u64() == Some(leaf_group_id)
-            && w["fromPort"] == "transform" && w["toNode"].as_u64() == Some(render_id) && w["toPort"] == "transform_0"));
-        assert!(outer_wires.iter().any(|w| w["fromNode"].as_u64() == Some(bark_group_id)
-            && w["fromPort"] == "transform" && w["toNode"].as_u64() == Some(render_id) && w["toPort"] == "transform_1"));
+        assert!(
+            outer_wires
+                .iter()
+                .any(|w| w["fromNode"].as_u64() == Some(leaf_group_id)
+                    && w["fromPort"] == "transform"
+                    && w["toNode"].as_u64() == Some(render_id)
+                    && w["toPort"] == "transform_0")
+        );
+        assert!(
+            outer_wires
+                .iter()
+                .any(|w| w["fromNode"].as_u64() == Some(bark_group_id)
+                    && w["fromPort"] == "transform"
+                    && w["toNode"].as_u64() == Some(render_id)
+                    && w["toPort"] == "transform_1")
+        );
 
         // Render node itself is clean.
         let render = nodes.iter().find(|n| n["nodeId"] == "render").unwrap();
@@ -812,7 +930,10 @@ mod tests {
         // Bark's synthesized node's un-suffixed pos_x — the slider keeps
         // driving the same value with the same public binding id.
         let binding = &graph["presetMetadata"]["bindings"][0];
-        assert_eq!(binding["id"], "obj2_x", "public binding id (what drivers/OSC address) unchanged");
+        assert_eq!(
+            binding["id"], "obj2_x",
+            "public binding id (what drivers/OSC address) unchanged"
+        );
         assert_eq!(binding["target"]["kind"], "node");
         assert_eq!(binding["target"]["nodeId"], bark_t["nodeId"]);
         assert_eq!(binding["target"]["param"], "pos_x");
@@ -826,7 +947,10 @@ mod tests {
         migrate_graph_value(&mut graph);
         let once = graph.clone();
         migrate_graph_value(&mut graph);
-        assert_eq!(graph, once, "idempotent: nothing left to migrate on a second pass");
+        assert_eq!(
+            graph, once,
+            "idempotent: nothing left to migrate on a second pass"
+        );
     }
 
     /// `embeddedPresets[].def` is walked with the same migration (D4).
@@ -875,7 +999,10 @@ mod tests {
         });
         migrate_graph_value(&mut graph);
         let binding = &graph["presetMetadata"]["bindings"][0];
-        assert_eq!(binding["target"]["kind"], "node", "upgraded to the node form");
+        assert_eq!(
+            binding["target"]["kind"], "node",
+            "upgraded to the node form"
+        );
         assert_eq!(binding["target"]["param"], "pos_x");
         let t = graph["nodes"]
             .as_array()

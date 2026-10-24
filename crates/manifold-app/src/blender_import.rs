@@ -155,9 +155,13 @@ pub fn run_blender_conversion(
 
     let start = Instant::now();
     let status = loop {
-        if let Some(status) = child.try_wait().map_err(|e| BlenderConversionError::ConversionFailed {
-            detail: format!("error waiting on Blender subprocess: {e}"),
-        })? {
+        if let Some(status) =
+            child
+                .try_wait()
+                .map_err(|e| BlenderConversionError::ConversionFailed {
+                    detail: format!("error waiting on Blender subprocess: {e}"),
+                })?
+        {
             break status;
         }
         if start.elapsed() > CONVERSION_TIMEOUT {
@@ -326,10 +330,7 @@ mod tests {
     /// the subprocess spawn (which would surface a much less clear error).
     #[test]
     fn discover_blender_falls_through_when_pref_path_is_missing() {
-        let prefs = prefs_with(
-            BLENDER_PATH_PREF_KEY,
-            "/definitely/not/a/real/path/blender",
-        );
+        let prefs = prefs_with(BLENDER_PATH_PREF_KEY, "/definitely/not/a/real/path/blender");
         // Whatever this resolves to (bundled app or `which`, or None on a
         // host with neither) must NOT be the bogus pref path.
         let found = discover_blender(&prefs);
@@ -349,10 +350,8 @@ mod tests {
 
     #[test]
     fn run_blender_conversion_reports_not_found_style_error_for_bad_binary() {
-        let dir = std::env::temp_dir().join(format!(
-            "manifold_blender_test_{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("manifold_blender_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("in.fbx");
         std::fs::write(&src, b"not a real fbx").unwrap();
@@ -402,9 +401,8 @@ mod tests {
             .canonicalize()
             .expect("repo root must resolve");
 
-        let blender = discover_blender(&prefs).expect(
-            "MANIFOLD_RUN_BLENDER_TESTS=1 was set but no Blender install was discovered",
-        );
+        let blender = discover_blender(&prefs)
+            .expect("MANIFOLD_RUN_BLENDER_TESTS=1 was set but no Blender install was discovered");
 
         let tmp_dir = std::env::temp_dir().join(format!(
             "manifold_blender_integration_test_{}",
@@ -441,7 +439,10 @@ mod tests {
         // Import through the same path a dropped .glb takes.
         let model = manifold_nodes_scene::node_graph::gltf_import::import_model(&outcome.glb_path)
             .expect("import_model must succeed on the converted glb");
-        assert!(!model.roots.is_empty(), "converted rig must import at least one part");
+        assert!(
+            !model.roots.is_empty(),
+            "converted rig must import at least one part"
+        );
 
         std::fs::remove_dir_all(&tmp_dir).ok();
     }

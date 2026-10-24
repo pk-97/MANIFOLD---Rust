@@ -18,7 +18,11 @@ mod tests {
     /// The text of `fn <prefix>_<name>` (or `fn <name>` for the hand kernel's
     /// own module) up to its closing brace, with the prefix removed.
     fn helper(source: &str, prefix: &str, name: &str) -> String {
-        let head = if prefix.is_empty() { format!("fn {name}(") } else { format!("fn {prefix}_{name}(") };
+        let head = if prefix.is_empty() {
+            format!("fn {name}(")
+        } else {
+            format!("fn {prefix}_{name}(")
+        };
         let start = source.find(&head).unwrap_or_else(|| panic!("no {head}"));
         let end = start + source[start..].find("\n}\n").expect("helper ends") + 3;
         if prefix.is_empty() {
@@ -43,7 +47,10 @@ mod tests {
             assert_eq!(helper(P2G, "", name), helper(G2P, "g2m", name));
         }
         // The body-reaction words take the push-out's share the same way.
-        assert_eq!(helper(REACTION, "", "reaction_add").replace("reaction_", ""), helper(G2P, "g2m", "reaction_add").replace("reaction_", ""));
+        assert_eq!(
+            helper(REACTION, "", "reaction_add").replace("reaction_", ""),
+            helper(G2P, "g2m", "reaction_add").replace("reaction_", "")
+        );
     }
 
     #[test]
@@ -52,7 +59,13 @@ mod tests {
             source
                 .lines()
                 .map(str::trim)
-                .filter(|l| l.starts_with("let base = ") || l.starts_with("let f = ") || l.starts_with("let w0 = ") || l.starts_with("let w1 = ") || l.starts_with("let w2 = "))
+                .filter(|l| {
+                    l.starts_with("let base = ")
+                        || l.starts_with("let f = ")
+                        || l.starts_with("let w0 = ")
+                        || l.starts_with("let w1 = ")
+                        || l.starts_with("let w2 = ")
+                })
                 .map(String::from)
                 .collect::<Vec<_>>()
         };

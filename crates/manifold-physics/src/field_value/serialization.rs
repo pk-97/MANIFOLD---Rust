@@ -138,7 +138,9 @@ impl Serialize for FieldValue {
                 Operation::Scale(strength) => OperationRecord::Scale {
                     strength: *strength,
                 },
-                Operation::Air(drag_rate) => OperationRecord::Air { drag_rate: *drag_rate },
+                Operation::Air(drag_rate) => OperationRecord::Air {
+                    drag_rate: *drag_rate,
+                },
                 Operation::AirDrag(weight) => OperationRecord::AirDrag { weight: *weight },
             })
             .collect();
@@ -155,7 +157,9 @@ impl<'de> Deserialize<'de> for FieldValue {
     {
         let record = FieldValueRecord::deserialize(deserializer)?;
         if record.operations.is_empty() {
-            return Err(de::Error::custom("field value requires at least one operation"));
+            return Err(de::Error::custom(
+                "field value requires at least one operation",
+            ));
         }
         let mut operations = Program::with_capacity(record.operations.len());
         let mut depth = 0usize;
@@ -230,14 +234,18 @@ impl<'de> Deserialize<'de> for FieldValue {
                 }
                 OperationRecord::Air { drag_rate } => {
                     if !drag_rate.is_finite() || drag_rate < 0.0 {
-                        return Err(de::Error::custom("air drag rate must be finite and non-negative"));
+                        return Err(de::Error::custom(
+                            "air drag rate must be finite and non-negative",
+                        ));
                     }
                     require_stack(&mut depth, 1).map_err(invalid_message::<D::Error>)?;
                     Operation::Air(drag_rate)
                 }
                 OperationRecord::AirDrag { weight } => {
                     if !weight.is_finite() || weight < 0.0 {
-                        return Err(de::Error::custom("air drag must be finite and non-negative"));
+                        return Err(de::Error::custom(
+                            "air drag must be finite and non-negative",
+                        ));
                     }
                     require_stack(&mut depth, 1).map_err(invalid_message::<D::Error>)?;
                     Operation::AirDrag(weight)
@@ -333,7 +341,16 @@ mod tests {
             .unwrap()
             .sum(&FieldValue::radial_curve([0.0; 3], 2.0, 2.0, FalloffCurve::Inverse).unwrap())
             .unwrap()
-            .sum(&FieldValue::vortex_curve([0.0; 3], [0.0, 1.0, 0.0], 2.0, 1.0, FalloffCurve::Inverse).unwrap())
+            .sum(
+                &FieldValue::vortex_curve(
+                    [0.0; 3],
+                    [0.0, 1.0, 0.0],
+                    2.0,
+                    1.0,
+                    FalloffCurve::Inverse,
+                )
+                .unwrap(),
+            )
             .unwrap()
             .with_air_drag(0.5)
             .unwrap();
@@ -341,9 +358,13 @@ mod tests {
         let restored: FieldValue = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, field, "{json}");
         for position in [[0.0, 0.0, 0.0], [0.25, 0.5, 0.75], [3.0, -1.0, 2.0]] {
-            assert_eq!(restored.sample_force(position), field.sample_force(position));
+            assert_eq!(
+                restored.sample_force(position),
+                field.sample_force(position)
+            );
         }
-        let plain = serde_json::to_string(&FieldValue::radial([0.0; 3], 1.0, 1.0).unwrap()).unwrap();
+        let plain =
+            serde_json::to_string(&FieldValue::radial([0.0; 3], 1.0, 1.0).unwrap()).unwrap();
         assert!(!plain.contains("curve"), "{plain}");
     }
 
@@ -381,7 +402,9 @@ mod tests {
     fn field_value_serde_round_trips_a_long_program() {
         let mut field = FieldValue::uniform([1.0, 0.0, 0.0]).unwrap();
         for _ in 0..40 {
-            field = field.sum(&FieldValue::uniform([1.0, 0.0, 0.0]).unwrap()).unwrap();
+            field = field
+                .sum(&FieldValue::uniform([1.0, 0.0, 0.0]).unwrap())
+                .unwrap();
         }
         let json = serde_json::to_value(&field).unwrap();
         assert_eq!(serde_json::from_value::<FieldValue>(json).unwrap(), field);

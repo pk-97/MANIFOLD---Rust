@@ -21,7 +21,11 @@ pub fn dense_source<P: crate::primitive::PrimitiveSpec>(original: &str) -> Strin
         })
         .collect();
     // The retained dense oracle emits only the original triangle-list output.
-    let outputs: Vec<_> = P::OUTPUTS.iter().filter(|output| output.name != "indices").cloned().collect();
+    let outputs: Vec<_> = P::OUTPUTS
+        .iter()
+        .filter(|output| output.name != "indices")
+        .cloned()
+        .collect();
     generate_standalone(&StandaloneKernelSpec {
         fusion_kind: P::FUSION_KIND,
         body: &body,

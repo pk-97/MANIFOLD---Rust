@@ -125,5 +125,4 @@ pub struct PreparedMeshOutputRule {
 /// See design §3.3. Unfused views use an empty map; node declarations
 /// supply their rules; cache keys must include a mesh-rule schema
 /// revision.
-pub type PreparedMeshRules =
-    ahash::AHashMap<manifold_core::NodeId, Vec<PreparedMeshOutputRule>>;
+pub type PreparedMeshRules = ahash::AHashMap<manifold_core::NodeId, Vec<PreparedMeshOutputRule>>;

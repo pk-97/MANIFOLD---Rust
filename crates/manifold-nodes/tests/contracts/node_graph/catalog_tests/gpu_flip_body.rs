@@ -10,13 +10,21 @@
 //! (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md D-9).
 
 use manifold_gpu::{GpuBuffer, GpuDevice, GpuReplayCache};
-use manifold_physics::coupled_motion::{Held, Mobility, SupportPoint, constrained_mobility, mobility_index};
+use manifold_physics::coupled_motion::{
+    Held, Mobility, SupportPoint, constrained_mobility, mobility_index,
+};
 
-use manifold_node_engine::testkit::atom::{FACE_FLOATS, assert_close, face_grid_len, random_values, random_water};
-use manifold_water_gpu_flip::primitives::gpu_flip_bodies::{BodyPasses, Bodies};
-use manifold_water_gpu_flip::primitives::gpu_flip_pressure::{MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, Solve, Stop, Water};
-use manifold_water_gpu_flip::primitives::gpu_flip_step::{TILE, set_all_tiles, set_gate_off, set_poison};
 use manifold_node_engine::testkit::array_harness::read;
+use manifold_node_engine::testkit::atom::{
+    FACE_FLOATS, assert_close, face_grid_len, random_values, random_water,
+};
+use manifold_water_gpu_flip::primitives::gpu_flip_bodies::{Bodies, BodyPasses};
+use manifold_water_gpu_flip::primitives::gpu_flip_pressure::{
+    MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, Solve, Stop, Water,
+};
+use manifold_water_gpu_flip::primitives::gpu_flip_step::{
+    TILE, set_all_tiles, set_gate_off, set_poison,
+};
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::coupling::coupled_start;
 use manifold_water_liquid::primitives::liquid_stats::SOLVER_WORDS;
@@ -74,7 +82,13 @@ fn fixture(seed: u64) -> (Vec<f32>, Vec<f32>) {
                 continue;
             }
             let w = r(1 + a);
-            let fraction = if w < 0.2 { 0.0 } else if w < 0.45 { 1.0 } else { 0.05 + 0.9 * (w - 0.45) / 0.55 };
+            let fraction = if w < 0.2 {
+                0.0
+            } else if w < 0.45 {
+                1.0
+            } else {
+                0.05 + 0.9 * (w - 0.45) / 0.55
+            };
             open[i * FACE_FLOATS + 4 + a] = fraction;
             solid[i * FACE_FLOATS + a] = 2.0 * (r(4 + a) - 0.5);
             solid[i * FACE_FLOATS + 4 + a] = r(7 + a);
@@ -90,7 +104,13 @@ fn fixture(seed: u64) -> (Vec<f32>, Vec<f32>) {
 
 /// A junk row, then a dynamic turning body and a prescribed one.
 fn bodies() -> Vec<LiquidBody> {
-    let mut rows = vec![LiquidBody { position_inv_mass: [9.0, 9.0, 9.0, 3.0], ..LiquidBody::default() }; ROWS];
+    let mut rows = vec![
+        LiquidBody {
+            position_inv_mass: [9.0, 9.0, 9.0, 3.0],
+            ..LiquidBody::default()
+        };
+        ROWS
+    ];
     rows[1] = LiquidBody {
         position_inv_mass: [-0.05, 0.42, -0.02, 0.4],
         linear_velocity: [0.3, -0.6, 0.1, 0.5],
@@ -115,7 +135,9 @@ fn dynamic(row: &LiquidBody) -> bool {
 
 /// The face centre of axis a's face on record p.
 fn face_centre(p: [usize; 3], a: usize) -> [f64; 3] {
-    std::array::from_fn(|b| f64::from(MIN[b]) + (p[b] as f64 + if b == a { 0.0 } else { 0.5 }) * f64::from(H))
+    std::array::from_fn(|b| {
+        f64::from(MIN[b]) + (p[b] as f64 + if b == a { 0.0 } else { 0.5 }) * f64::from(H)
+    })
 }
 
 /// A row's centre of mass: the passes read rows the step has already posed
@@ -125,7 +147,11 @@ fn posed(row: &LiquidBody) -> [f64; 3] {
 }
 
 fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 // ── CPU references ─────────────────────────────────────────────────────────
@@ -160,7 +186,12 @@ fn cpu_pressure_impulse(x: &[f32], water: &[f32], open: &[f32], solid: &[f32]) -
 /// impulse, and its mobility times them for a dynamic body; 0 for any other.
 /// Also the sum of |term| per float, the scale an f32 reduction's rounding
 /// grows with.
-fn cpu_body_sums(impulses: &[f64], solid: &[f32], rows: &[LiquidBody], mobility: &[Mobility]) -> (Vec<f64>, Vec<f64>) {
+fn cpu_body_sums(
+    impulses: &[f64],
+    solid: &[f32],
+    rows: &[LiquidBody],
+    mobility: &[Mobility],
+) -> (Vec<f64>, Vec<f64>) {
     let mut out = vec![0.0; BODIES * SUM_FLOATS];
     let mut scale = vec![0.0; BODIES * SUM_FLOATS];
     for b in 0..BODIES {
@@ -194,12 +225,18 @@ fn cpu_body_sums(impulses: &[f64], solid: &[f32], rows: &[LiquidBody], mobility:
         record[..3].copy_from_slice(&linear);
         record[4..7].copy_from_slice(&angular);
         let m = &mobility[FIRST + b];
-        let pushed = [linear[0], linear[1], linear[2], angular[0], angular[1], angular[2]];
+        let pushed = [
+            linear[0], linear[1], linear[2], angular[0], angular[1], angular[2],
+        ];
         let size = [s[0], s[1], s[2], s[4], s[5], s[6]];
         for i in 0..6 {
             let at = 8 + i + i / 3;
-            record[at] = (0..6).map(|j| f64::from(m[mobility_index(i, j)]) * pushed[j]).sum();
-            s[at] = (0..6).map(|j| f64::from(m[mobility_index(i, j)]).abs() * size[j]).sum();
+            record[at] = (0..6)
+                .map(|j| f64::from(m[mobility_index(i, j)]) * pushed[j])
+                .sum();
+            s[at] = (0..6)
+                .map(|j| f64::from(m[mobility_index(i, j)]).abs() * size[j])
+                .sum();
         }
     }
     (out, scale)
@@ -218,7 +255,14 @@ fn change_along(sums: &[f32], rows: &[LiquidBody], b: usize, f: [usize; 3], a: u
 
 /// `base` plus (1/h)·Σ sign·(c − w)·(dv + dω × r)[a] over each water cell's
 /// owned inner faces.
-fn cpu_body_product(base: &[f32], water: &[f32], open: &[f32], solid: &[f32], sums: &[f32], rows: &[LiquidBody]) -> Vec<f64> {
+fn cpu_body_product(
+    base: &[f32],
+    water: &[f32],
+    open: &[f32],
+    solid: &[f32],
+    sums: &[f32],
+    rows: &[LiquidBody],
+) -> Vec<f64> {
     (0..N.iter().product::<usize>())
         .map(|c| {
             if water[c] <= 0.5 {
@@ -235,7 +279,9 @@ fn cpu_body_product(base: &[f32], water: &[f32], open: &[f32], solid: &[f32], su
                         continue;
                     }
                     let i = at(f, m());
-                    let Some(b) = owner(solid[i * FACE_FLOATS + 3], a) else { continue };
+                    let Some(b) = owner(solid[i * FACE_FLOATS + 3], a) else {
+                        continue;
+                    };
                     let sign = if side == 1 { 1.0 } else { -1.0 };
                     let w = f64::from(open[i * FACE_FLOATS + 4 + a]);
                     total += sign * (volume - w) * change_along(sums, rows, b, f, a);
@@ -281,7 +327,10 @@ fn shared<T: bytemuck::Pod>(device: &GpuDevice, values: &[T]) -> GpuBuffer {
 
 fn assert_sums(got: &[f32], want: &[f64], scale: &[f64], what: &str) {
     for (k, ((g, w), s)) in got.iter().zip(want).zip(scale).enumerate() {
-        assert!((f64::from(*g) - w).abs() <= 1e-5 * (s + 1.0), "{what}[{k}]: {g} vs {w} (scale {s})");
+        assert!(
+            (f64::from(*g) - w).abs() <= 1e-5 * (s + 1.0),
+            "{what}[{k}]: {g} vs {w} (scale {s})"
+        );
     }
 }
 
@@ -312,7 +361,10 @@ impl Scene {
         let device = manifold_gpu::testkit::test_device();
         let (open, solid) = fixture(seed);
         let rows = bodies();
-        let mobility: Vec<Mobility> = rows.iter().map(|row| constrained_mobility(&coupled_start(row), &[], Held::default())).collect();
+        let mobility: Vec<Mobility> = rows
+            .iter()
+            .map(|row| constrained_mobility(&coupled_start(row), &[], Held::default()))
+            .collect();
         let buffers = [
             shared(&device, &water),
             shared(&device, &open),
@@ -322,28 +374,64 @@ impl Scene {
         ];
         let mut passes = BodyPasses::default();
         passes.prepare_pipelines(&device);
-        passes.prepare(&device, N.map(|v| v as u32), BODIES as u32).expect("body passes");
+        passes
+            .prepare(&device, N.map(|v| v as u32), BODIES as u32)
+            .expect("body passes");
         let mut solver = PressureSolver::default();
         solver.prepare_pipelines(&device);
         let mut enc = device.create_encoder("body scene tiles");
         set_all_tiles(all);
-        let lattice = Water { lattice: N.map(|v| v as u32), cell_size: H, water: &buffers[0], faces: &buffers[1], phi: None };
-        solver.prepare(&device, &mut enc, &lattice).expect("the solver prepares its tile lists");
+        let lattice = Water {
+            lattice: N.map(|v| v as u32),
+            cell_size: H,
+            water: &buffers[0],
+            faces: &buffers[1],
+            phi: None,
+        };
+        solver
+            .prepare(&device, &mut enc, &lattice)
+            .expect("the solver prepares its tile lists");
         set_all_tiles(false);
         enc.commit_and_wait_completed();
-        Self { device, open, solid, water, rows, mobility, buffers, passes, solver }
+        Self {
+            device,
+            open,
+            solid,
+            water,
+            rows,
+            mobility,
+            buffers,
+            passes,
+            solver,
+        }
     }
 
     /// The dynamic body held on a floor under it: its bottom corners closed
     /// and their patch unturned: it can only slide along the floor.
     fn hold(&mut self) {
-        let corners = [[0.2, -0.2, 0.2], [-0.2, -0.2, 0.2], [-0.2, -0.2, -0.2], [0.2, -0.2, -0.2]];
+        let corners = [
+            [0.2, -0.2, 0.2],
+            [-0.2, -0.2, 0.2],
+            [-0.2, -0.2, -0.2],
+            [0.2, -0.2, -0.2],
+        ];
         let supports: Vec<SupportPoint> = corners
             .iter()
-            .map(|&lever| SupportPoint { lever, normal: [0.0, 1.0, 0.0], friction: 0.5, patch_lever: [0.0, -0.2, 0.0], ..SupportPoint::default() })
+            .map(|&lever| SupportPoint {
+                lever,
+                normal: [0.0, 1.0, 0.0],
+                friction: 0.5,
+                patch_lever: [0.0, -0.2, 0.0],
+                ..SupportPoint::default()
+            })
             .collect();
-        let held = Held { closed: 0b1111, stuck: 0, unturned: 0b1111 };
-        self.mobility[FIRST] = constrained_mobility(&coupled_start(&self.rows[FIRST]), &supports, held);
+        let held = Held {
+            closed: 0b1111,
+            stuck: 0,
+            unturned: 0b1111,
+        };
+        self.mobility[FIRST] =
+            constrained_mobility(&coupled_start(&self.rows[FIRST]), &supports, held);
         self.buffers[4] = shared(&self.device, &gpu_mobility(&self.mobility));
     }
 
@@ -381,21 +469,47 @@ fn gpu_flip_body_operator_matches_cpu() {
     let cells: usize = N.iter().product();
     let direction = random_values(cells, 0xb0d2);
     let base = random_values(cells, 0xb0d3);
-    let (direction_gpu, s) = (shared(&scene.device, &direction), shared(&scene.device, &base));
+    let (direction_gpu, s) = (
+        shared(&scene.device, &direction),
+        shared(&scene.device, &base),
+    );
     let mut enc = scene.device.create_encoder("body operator");
-    scene.passes.apply(&mut enc, &scene.bodies(), scene.tiles(), &direction_gpu, &s).expect("apply");
+    scene
+        .passes
+        .apply(&mut enc, &scene.bodies(), scene.tiles(), &direction_gpu, &s)
+        .expect("apply");
     enc.commit_and_wait_completed();
 
     let impulses = cpu_pressure_impulse(&direction, &scene.water, &scene.open, &scene.solid);
     let (want, scale) = cpu_body_sums(&impulses, &scene.solid, &scene.rows, &scene.mobility);
-    assert!(want[..3].iter().any(|&v| v.abs() > 1.0), "the dynamic body owns pushed faces");
-    assert!(want[SUM_FLOATS..].iter().all(|&v| v == 0.0), "the prescribed body takes no impulse");
+    assert!(
+        want[..3].iter().any(|&v| v.abs() > 1.0),
+        "the dynamic body owns pushed faces"
+    );
+    assert!(
+        want[SUM_FLOATS..].iter().all(|&v| v == 0.0),
+        "the prescribed body takes no impulse"
+    );
     let sums = scene.sums();
     assert_sums(&sums, &want, &scale, "pressure sums");
 
-    let product = cpu_body_product(&base, &scene.water, &scene.open, &scene.solid, &sums, &scene.rows);
-    let moved = product.iter().zip(&base).filter(|(w, b)| (**w - f64::from(**b)).abs() > 1e-3).count();
-    assert!(moved > 50, "water cells beside the dynamic body's faces change: {moved}");
+    let product = cpu_body_product(
+        &base,
+        &scene.water,
+        &scene.open,
+        &scene.solid,
+        &sums,
+        &scene.rows,
+    );
+    let moved = product
+        .iter()
+        .zip(&base)
+        .filter(|(w, b)| (**w - f64::from(**b)).abs() > 1e-3)
+        .count();
+    assert!(
+        moved > 50,
+        "water cells beside the dynamic body's faces change: {moved}"
+    );
     assert_close(&read(&s, cells), &product, "body operator");
 }
 
@@ -413,21 +527,50 @@ fn gpu_flip_body_reaction_matches_cpu() {
 
     // The same impulse react starts with, on its own, to read its sums.
     let mut enc = scene.device.create_encoder("pressure sums");
-    scene.passes.apply(&mut enc, &scene.bodies(), scene.tiles(), &pressure_gpu, &scratch).expect("apply");
+    scene
+        .passes
+        .apply(
+            &mut enc,
+            &scene.bodies(),
+            scene.tiles(),
+            &pressure_gpu,
+            &scratch,
+        )
+        .expect("apply");
     enc.commit_and_wait_completed();
     let pushed = scene.sums();
-    let (want, scale) =
-        cpu_body_sums(&cpu_pressure_impulse(&pressure, &scene.water, &scene.open, &scene.solid), &scene.solid, &scene.rows, &scene.mobility);
+    let (want, scale) = cpu_body_sums(
+        &cpu_pressure_impulse(&pressure, &scene.water, &scene.open, &scene.solid),
+        &scene.solid,
+        &scene.rows,
+        &scene.mobility,
+    );
     assert_sums(&pushed, &want, &scale, "pressure sums");
 
     let mut enc = scene.device.create_encoder("react");
-    scene.passes.react(&mut enc, &scene.bodies(), scene.tiles(), &pressure_gpu, &reaction).expect("react");
+    scene
+        .passes
+        .react(
+            &mut enc,
+            &scene.bodies(),
+            scene.tiles(),
+            &pressure_gpu,
+            &reaction,
+        )
+        .expect("react");
     enc.commit_and_wait_completed();
 
     let changed: Vec<f32> = read(&scene.buffers[2], face_grid_len(N));
     let want_changed = cpu_velocity_change(&scene.solid, &pushed, &scene.rows);
-    let touched = want_changed.iter().zip(&scene.solid).filter(|(w, s)| (**w - f64::from(**s)).abs() > 1e-4).count();
-    assert!(touched > 50, "the dynamic body's faces gain its velocity change: {touched}");
+    let touched = want_changed
+        .iter()
+        .zip(&scene.solid)
+        .filter(|(w, s)| (**w - f64::from(**s)).abs() > 1e-4)
+        .count();
+    assert!(
+        touched > 50,
+        "the dynamic body's faces gain its velocity change: {touched}"
+    );
     assert_close(&changed, &want_changed, "velocity change");
 
     // The pressure is the only reaction; the water's drag on the body never
@@ -456,29 +599,65 @@ fn gpu_flip_body_operator_holds_a_supported_body_symmetric() {
     let product = |x: &[f32]| -> Vec<f32> {
         let (x_gpu, s) = (shared(&scene.device, x), shared(&scene.device, &zeros));
         let mut enc = scene.device.create_encoder("held body operator");
-        scene.passes.apply(&mut enc, &scene.bodies(), scene.tiles(), &x_gpu, &s).expect("apply");
+        scene
+            .passes
+            .apply(&mut enc, &scene.bodies(), scene.tiles(), &x_gpu, &s)
+            .expect("apply");
         enc.commit_and_wait_completed();
         read(&s, cells)
     };
     let (x, y) = (random_values(cells, 0x5e1e), random_values(cells, 0x5e1f));
     let bx = product(&x);
     let sums = scene.sums();
-    let (want, scale) =
-        cpu_body_sums(&cpu_pressure_impulse(&x, &scene.water, &scene.open, &scene.solid), &scene.solid, &scene.rows, &scene.mobility);
+    let (want, scale) = cpu_body_sums(
+        &cpu_pressure_impulse(&x, &scene.water, &scene.open, &scene.solid),
+        &scene.solid,
+        &scene.rows,
+        &scene.mobility,
+    );
     assert_sums(&sums, &want, &scale, "held sums");
-    assert!(want[..3].iter().any(|&v| v.abs() > 1.0), "the held body owns pushed faces");
+    assert!(
+        want[..3].iter().any(|&v| v.abs() > 1.0),
+        "the held body owns pushed faces"
+    );
     for (k, what) in [(9, "sinks"), (12, "tips about x"), (14, "tips about z")] {
-        assert!(want[k].abs() <= 1e-5 * (scale[k] + 1.0), "the held body {what}: {}", want[k]);
+        assert!(
+            want[k].abs() <= 1e-5 * (scale[k] + 1.0),
+            "the held body {what}: {}",
+            want[k]
+        );
     }
-    assert_close(&bx, &cpu_body_product(&zeros, &scene.water, &scene.open, &scene.solid, &sums, &scene.rows), "held body operator");
+    assert_close(
+        &bx,
+        &cpu_body_product(
+            &zeros,
+            &scene.water,
+            &scene.open,
+            &scene.solid,
+            &sums,
+            &scene.rows,
+        ),
+        "held body operator",
+    );
 
     let by = product(&y);
     let in_water: Vec<usize> = (0..cells).filter(|&k| scene.water[k] > 0.5).collect();
-    let dot = |a: &[f32], b: &[f32]| in_water.iter().map(|&k| f64::from(a[k]) * f64::from(b[k])).sum::<f64>();
-    let size = in_water.iter().map(|&k| (f64::from(y[k]) * f64::from(bx[k])).abs()).sum::<f64>();
+    let dot = |a: &[f32], b: &[f32]| {
+        in_water
+            .iter()
+            .map(|&k| f64::from(a[k]) * f64::from(b[k]))
+            .sum::<f64>()
+    };
+    let size = in_water
+        .iter()
+        .map(|&k| (f64::from(y[k]) * f64::from(bx[k])).abs())
+        .sum::<f64>();
     let (ybx, xby, xbx) = (dot(&y, &bx), dot(&x, &by), dot(&x, &bx));
     assert!(size > 1.0, "the operator acts: {size}");
-    assert!((ybx - xby).abs() <= 1e-4 * size, "yᵀBx {ybx} against xᵀBy {xby} (scale {size})");
+    assert!(
+        (ybx - xby).abs() <= 1e-4 * size,
+        "yᵀBx {ybx} against xᵀBy {xby} (scale {size})"
+    );
     assert!(xbx >= -1e-4 * size, "xᵀBx {xbx} is negative (scale {size})");
 }
 
@@ -500,7 +679,8 @@ fn gpu_flip_coupled_round_replay_matches_direct() {
 
     impl Run {
         fn new(replay: bool) -> Self {
-            let mut scene = Scene::with_water(0xc09e, random_water(N.iter().product(), 0xc09f), false);
+            let mut scene =
+                Scene::with_water(0xc09e, random_water(N.iter().product(), 0xc09f), false);
             let cells = N.iter().product::<usize>();
             let rhs = shared(&scene.device, &vec![0.0_f32; cells]);
             let pressure = shared(&scene.device, &vec![0.0_f32; cells]);
@@ -510,10 +690,23 @@ fn gpu_flip_coupled_round_replay_matches_direct() {
             let mut solver = PressureSolver::default();
             solver.prepare_pipelines(&scene.device);
             solver.set_clock_plan(&plan);
-            Self { scene, solver, rhs, pressure, progress, plan, cache: replay.then(GpuReplayCache::default) }
+            Self {
+                scene,
+                solver,
+                rhs,
+                pressure,
+                progress,
+                plan,
+                cache: replay.then(GpuReplayCache::default),
+            }
         }
 
-        fn solve(&mut self, rhs: &[f32], stop: Stop, active: bool) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
+        fn solve(
+            &mut self,
+            rhs: &[f32],
+            stop: Stop,
+            active: bool,
+        ) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
             let mut plan = [0_u32; 12];
             plan[0] = if active { TICK.to_bits() } else { 0 };
             plan[11] = 1;
@@ -523,20 +716,43 @@ fn gpu_flip_coupled_round_replay_matches_direct() {
                 self.plan.write(0, bytemuck::cast_slice(&plan));
             }
             let mut enc = self.scene.device.create_encoder("coupled pressure replay");
-            let replay = self.cache.take().map(|cache| enc.begin_replay(&self.scene.device, cache)).is_some();
+            let replay = self
+                .cache
+                .take()
+                .map(|cache| enc.begin_replay(&self.scene.device, cache))
+                .is_some();
             let water = Water {
-                lattice: N.map(|v| v as u32), cell_size: H,
-                water: &self.scene.buffers[0], faces: &self.scene.buffers[1], phi: None,
+                lattice: N.map(|v| v as u32),
+                cell_size: H,
+                water: &self.scene.buffers[0],
+                faces: &self.scene.buffers[1],
+                phi: None,
             };
-            self.solver.prepare(&self.scene.device, &mut enc, &water).expect("prepare coupled solve");
-            self.solver.solve(&mut enc, &water, Solve {
-                rhs: &self.rhs, pressure: &self.pressure, stop,
-                bodies: Some((&self.scene.passes, &self.scene.bodies())), level: 0, coarse_rhs: None,
-            }).expect("coupled solve");
+            self.solver
+                .prepare(&self.scene.device, &mut enc, &water)
+                .expect("prepare coupled solve");
+            self.solver
+                .solve(
+                    &mut enc,
+                    &water,
+                    Solve {
+                        rhs: &self.rhs,
+                        pressure: &self.pressure,
+                        stop,
+                        bodies: Some((&self.scene.passes, &self.scene.bodies())),
+                        level: 0,
+                        coarse_rhs: None,
+                    },
+                )
+                .expect("coupled solve");
             if replay {
                 self.cache = Some(enc.end_replay());
             }
-            enc.copy_buffer_to_buffer(self.solver.progress().expect("prepared"), &self.progress, self.progress.size);
+            enc.copy_buffer_to_buffer(
+                self.solver.progress().expect("prepared"),
+                &self.progress,
+                self.progress.size,
+            );
             enc.commit_and_wait_completed();
             (
                 read(&self.pressure, N.iter().product()),
@@ -561,31 +777,78 @@ fn gpu_flip_coupled_round_replay_matches_direct() {
         };
         let want = direct.solve(input, stop, active);
         let got = replay.solve(input, stop, active);
-        assert_eq!(got, want, "visit {visit}: pressure, body sums and progress match direct bits");
-        assert!(got.0.iter().chain(&got.1).all(|&v| f32::from_bits(v).is_finite()), "visit {visit}: finite outputs");
+        assert_eq!(
+            got, want,
+            "visit {visit}: pressure, body sums and progress match direct bits"
+        );
+        assert!(
+            got.0
+                .iter()
+                .chain(&got.1)
+                .all(|&v| f32::from_bits(v).is_finite()),
+            "visit {visit}: finite outputs"
+        );
         if visit == 4 {
-            assert!(got.0.iter().all(|&v| v == 0), "zero RHS leaves zero pressure");
+            assert!(
+                got.0.iter().all(|&v| v == 0),
+                "zero RHS leaves zero pressure"
+            );
             assert_eq!(got.2[0], 0);
             assert_eq!(got.2[1], 0, "zero RHS stops before the first iteration");
             assert_eq!(got.2[2], 1.0_f32.to_bits());
             stopped = Some(got.clone());
         } else if visit == 5 {
-            assert_eq!(Some(&got), stopped.as_ref(), "inactive slot preserves pressure, body sums and progress");
+            assert_eq!(
+                Some(&got),
+                stopped.as_ref(),
+                "inactive slot preserves pressure, body sums and progress"
+            );
         } else {
-            assert_eq!(got.2[1], (ROUNDS as f32).to_bits(), "visit {visit}: all fixed rounds ran");
+            assert_eq!(
+                got.2[1],
+                (ROUNDS as f32).to_bits(),
+                "visit {visit}: all fixed rounds ran"
+            );
             assert_eq!(got.2[2], 0, "fixed solve has no convergence stop");
-            assert!(got.0.iter().any(|&v| f32::from_bits(v).abs() > 1e-6), "visit {visit}: nonzero pressure");
-            assert!(got.1[..3].iter().any(|&v| f32::from_bits(v).abs() > 1e-6), "visit {visit}: the dynamic body participates");
+            assert!(
+                got.0.iter().any(|&v| f32::from_bits(v).abs() > 1e-6),
+                "visit {visit}: nonzero pressure"
+            );
+            assert!(
+                got.1[..3].iter().any(|&v| f32::from_bits(v).abs() > 1e-6),
+                "visit {visit}: the dynamic body participates"
+            );
         }
-        let stats = replay.cache.as_ref().expect("replay cache returned").stats();
+        let stats = replay
+            .cache
+            .as_ref()
+            .expect("replay cache returned")
+            .stats();
         let template = replay.solver.template_stats();
         // The first visit records its entry; the second grows the recording.
         if visit >= 2 {
-            assert_eq!(stats.recorded, last.recorded, "visit {visit}: warm recordings unchanged");
-            assert_eq!(stats.store_allocations, last.store_allocations, "visit {visit}: warm storage unchanged");
-            assert_eq!(stats.segments_direct, last.segments_direct, "visit {visit}: no direct round dispatches");
-            assert_eq!(template.executes - last_template.executes, manifold_gpu::template_chunks(ROUNDS, 32).count() as u64, "visit {visit}: one execute per chunk of rounds, including stopped/inactive rounds");
-            assert_eq!(template.walks - last_template.walks, 1, "visit {visit}: one walked round");
+            assert_eq!(
+                stats.recorded, last.recorded,
+                "visit {visit}: warm recordings unchanged"
+            );
+            assert_eq!(
+                stats.store_allocations, last.store_allocations,
+                "visit {visit}: warm storage unchanged"
+            );
+            assert_eq!(
+                stats.segments_direct, last.segments_direct,
+                "visit {visit}: no direct round dispatches"
+            );
+            assert_eq!(
+                template.executes - last_template.executes,
+                manifold_gpu::template_chunks(ROUNDS, 32).count() as u64,
+                "visit {visit}: one execute per chunk of rounds, including stopped/inactive rounds"
+            );
+            assert_eq!(
+                template.walks - last_template.walks,
+                1,
+                "visit {visit}: one walked round"
+            );
         }
         last = stats;
         last_template = template;
@@ -612,9 +875,11 @@ fn active_tiles(water: &[f32]) -> Vec<bool> {
         .map(|t| {
             let origin = coords(t, dims).map(|v| v * TILE as usize);
             let first = origin.map(|v| v.saturating_sub(1));
-            let last: [usize; 3] = std::array::from_fn(|a| (origin[a] + TILE as usize).min(N[a] - 1));
+            let last: [usize; 3] =
+                std::array::from_fn(|a| (origin[a] + TILE as usize).min(N[a] - 1));
             (first[2]..=last[2]).any(|z| {
-                (first[1]..=last[1]).any(|y| (first[0]..=last[0]).any(|x| water[at([x, y, z], N)] > 0.5))
+                (first[1]..=last[1])
+                    .any(|y| (first[0]..=last[0]).any(|x| water[at([x, y, z], N)] > 0.5))
             })
         })
         .collect()
@@ -650,18 +915,34 @@ fn first_differing(a: &[u32], b: &[u32]) -> Option<usize> {
 fn gpu_flip_body_passes_sparse_match_all_tiles() {
     let seed = 0x5a5e;
     let cells: usize = N.iter().product();
-    let water: Vec<f32> =
-        random_water(cells, seed + 1).iter().enumerate().map(|(i, &w)| if coords(i, N)[0] < 6 { w } else { 0.0 }).collect();
+    let water: Vec<f32> = random_water(cells, seed + 1)
+        .iter()
+        .enumerate()
+        .map(|(i, &w)| if coords(i, N)[0] < 6 { w } else { 0.0 })
+        .collect();
     let active = active_tiles(&water);
     let inactive = active.iter().filter(|a| !**a).count();
-    assert!(inactive >= 6, "{inactive} of {} tiles inactive", active.len());
+    assert!(
+        inactive >= 6,
+        "{inactive} of {} tiles inactive",
+        active.len()
+    );
     let x = random_values(cells, seed + 2);
     let base = random_values(cells, seed + 3);
     let reaction_base = random_values(BODIES * 8, seed + 5);
     let run = |all: bool, poison: bool| -> Left {
         let scene = Scene::with_water(seed, water.clone(), all);
         let outside = |v: &[f32]| -> Vec<f32> {
-            v.iter().enumerate().map(|(i, &v)| if poison && !active[tile_of(i)] { f32::NAN } else { v }).collect()
+            v.iter()
+                .enumerate()
+                .map(|(i, &v)| {
+                    if poison && !active[tile_of(i)] {
+                        f32::NAN
+                    } else {
+                        v
+                    }
+                })
+                .collect()
         };
         let x_gpu = shared(&scene.device, &outside(&x));
         let s = shared(&scene.device, &outside(&base));
@@ -670,19 +951,35 @@ fn gpu_flip_body_passes_sparse_match_all_tiles() {
         if poison {
             scene.passes.poison(&mut enc, &scene.bodies());
         }
-        scene.passes.apply(&mut enc, &scene.bodies(), scene.tiles(), &x_gpu, &s).expect("apply");
+        scene
+            .passes
+            .apply(&mut enc, &scene.bodies(), scene.tiles(), &x_gpu, &s)
+            .expect("apply");
         enc.commit_and_wait_completed();
         let pushed = bits(&scene.sums());
         let mut enc = scene.device.create_encoder("sparse react");
         if poison {
             scene.passes.poison(&mut enc, &scene.bodies());
         }
-        scene.passes.react(&mut enc, &scene.bodies(), scene.tiles(), &x_gpu, &reaction).expect("react");
+        scene
+            .passes
+            .react(&mut enc, &scene.bodies(), scene.tiles(), &x_gpu, &reaction)
+            .expect("react");
         enc.commit_and_wait_completed();
         let s: Vec<f32> = read(&s, cells);
         // Only the active tiles' s is compared under poison: the rest holds
         // the NaN written in, which nothing touched.
-        let s = s.iter().enumerate().map(|(i, v)| if active[tile_of(i)] { v.to_bits() } else { base[i].to_bits() }).collect();
+        let s = s
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                if active[tile_of(i)] {
+                    v.to_bits()
+                } else {
+                    base[i].to_bits()
+                }
+            })
+            .collect();
         Left {
             pushed,
             s,
@@ -692,8 +989,16 @@ fn gpu_flip_body_passes_sparse_match_all_tiles() {
         }
     };
     let dense = run(true, false);
-    assert!(dense.pushed[..3].iter().any(|&b| f32::from_bits(b).abs() > 1.0), "the dynamic body is pushed");
-    for (name, left) in [("sparse", run(false, false)), ("poisoned", run(false, true))] {
+    assert!(
+        dense.pushed[..3]
+            .iter()
+            .any(|&b| f32::from_bits(b).abs() > 1.0),
+        "the dynamic body is pushed"
+    );
+    for (name, left) in [
+        ("sparse", run(false, false)),
+        ("poisoned", run(false, true)),
+    ] {
         for (what, a, b) in [
             ("pressure sums", &dense.pushed, &left.pushed),
             ("s", &dense.s, &left.s),
@@ -702,7 +1007,11 @@ fn gpu_flip_body_passes_sparse_match_all_tiles() {
             ("reaction", &dense.reaction, &left.reaction),
         ] {
             if let Some(i) = first_differing(a, b) {
-                panic!("{name} {what} differs from all tiles first at {i}: {} vs {}", f32::from_bits(a[i]), f32::from_bits(b[i]));
+                panic!(
+                    "{name} {what} differs from all tiles first at {i}: {} vs {}",
+                    f32::from_bits(a[i]),
+                    f32::from_bits(b[i])
+                );
             }
         }
     }
@@ -728,7 +1037,9 @@ struct BoxRun {
 
 const BOX_SIZE: u32 = 64;
 
-fn box_def(fixture: manifold_nodes_water::testkit::conformance::Fixture) -> manifold_core::effect_graph_def::EffectGraphDef {
+fn box_def(
+    fixture: manifold_nodes_water::testkit::conformance::Fixture,
+) -> manifold_core::effect_graph_def::EffectGraphDef {
     use manifold_nodes::testkit::liquid_conformance_fixtures::LIQUID_SOLVERS;
     let row = LIQUID_SOLVERS
         .iter()
@@ -738,7 +1049,12 @@ fn box_def(fixture: manifold_nodes_water::testkit::conformance::Fixture) -> mani
 }
 
 impl BoxRun {
-    fn new(fixture: manifold_nodes_water::testkit::conformance::Fixture, all: bool, poison: bool, level: i32) -> Self {
+    fn new(
+        fixture: manifold_nodes_water::testkit::conformance::Fixture,
+        all: bool,
+        poison: bool,
+        level: i32,
+    ) -> Self {
         Self::of(Self::at_level(fixture, level), all, poison)
     }
 
@@ -748,7 +1064,10 @@ impl BoxRun {
         Self::with_levers(Self::at_level(fixture, level), false, false, true)
     }
 
-    fn at_level(fixture: manifold_nodes_water::testkit::conformance::Fixture, level: i32) -> manifold_core::effect_graph_def::EffectGraphDef {
+    fn at_level(
+        fixture: manifold_nodes_water::testkit::conformance::Fixture,
+        level: i32,
+    ) -> manifold_core::effect_graph_def::EffectGraphDef {
         let mut def = box_def(fixture);
         manifold_nodes_water::testkit::conformance::set_node_param(
             &mut def,
@@ -763,14 +1082,25 @@ impl BoxRun {
         Self::with_levers(def, all, poison, false)
     }
 
-    fn with_levers(def: manifold_core::effect_graph_def::EffectGraphDef, all: bool, poison: bool, ungated: bool) -> Self {
+    fn with_levers(
+        def: manifold_core::effect_graph_def::EffectGraphDef,
+        all: bool,
+        poison: bool,
+        ungated: bool,
+    ) -> Self {
         let fixture = "box scene";
         let device = manifold_gpu::testkit::test_device();
         let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
         let manifest = manifold_core::params::ParamManifest::from_params(
             def.preset_metadata
                 .iter()
-                .flat_map(|metadata| metadata.params.iter().cloned().map(manifold_core::params::Param::bundled))
+                .flat_map(|metadata| {
+                    metadata
+                        .params
+                        .iter()
+                        .cloned()
+                        .map(manifold_core::params::Param::bundled)
+                })
                 .collect(),
         );
         let mut runtime = manifold_node_engine::runtime::PresetRuntime::from_def_with_device(
@@ -784,9 +1114,24 @@ impl BoxRun {
         )
         .unwrap_or_else(|error| panic!("{fixture:?} builds: {error}"));
         runtime.set_dump_all(true);
-        let target =
-            manifold_node_engine::gpu::render_target::RenderTarget::new(&device, BOX_SIZE, BOX_SIZE, manifold_gpu::GpuTextureFormat::Rgba16Float, "body sparse");
-        let mut run = Self { device, runtime, target, manifest, frame: 0, all, poison, ungated, ticks_per_frame: 1 };
+        let target = manifold_node_engine::gpu::render_target::RenderTarget::new(
+            &device,
+            BOX_SIZE,
+            BOX_SIZE,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            "body sparse",
+        );
+        let mut run = Self {
+            device,
+            runtime,
+            target,
+            manifest,
+            frame: 0,
+            all,
+            poison,
+            ungated,
+            ticks_per_frame: 1,
+        };
         // A poll count, not a wall-clock budget, so a loaded machine cannot fail it.
         let mut polls = 0u32;
         loop {
@@ -825,8 +1170,10 @@ impl BoxRun {
         set_poison(self.poison);
         set_gate_off(self.ungated);
         let status = {
-            let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut encoder, &self.device);
-            self.runtime.render(&mut gpu, &self.target.texture, &ctx, &self.manifest);
+            let mut gpu =
+                manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut encoder, &self.device);
+            self.runtime
+                .render(&mut gpu, &self.target.texture, &ctx, &self.manifest);
             gpu.frame_status()
         };
         encoder.commit_and_wait_completed();
@@ -835,7 +1182,8 @@ impl BoxRun {
         set_gate_off(false);
         use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
         assert!(
-            status == FrameRenderStatus::Complete || (warming && status == FrameRenderStatus::PendingGeometry),
+            status == FrameRenderStatus::Complete
+                || (warming && status == FrameRenderStatus::PendingGeometry),
             "frame {} rendered with status {status:?}",
             self.frame
         );
@@ -880,15 +1228,28 @@ impl BoxRun {
         };
         let capped = self.words("node.gpu_flip_step", "capped");
         let particles = (capped.len() - SOLVER_WORDS as usize) / 2;
-        let particle_words = std::mem::size_of::<manifold_node_engine::particles::FluidParticle>() / 4;
+        let particle_words =
+            std::mem::size_of::<manifold_node_engine::particles::FluidParticle>() / 4;
         // The active-tile share differs between sparse and all-tiles by design
         // (see `tile_share`); every other solver word must match bit for bit.
         let mut solver = capped[2 * particles..].to_vec();
         solver.remove(TILE_SHARE);
         vec![
-            ("body row", cut(self.words(domain, "bodies"), std::mem::size_of::<LiquidBody>() / 4)),
+            (
+                "body row",
+                cut(
+                    self.words(domain, "bodies"),
+                    std::mem::size_of::<LiquidBody>() / 4,
+                ),
+            ),
             ("reaction", cut(self.words(domain, "reaction"), 8)),
-            ("particles", cut(self.words("node.gpu_flip_step", "out"), particles * particle_words)),
+            (
+                "particles",
+                cut(
+                    self.words("node.gpu_flip_step", "out"),
+                    particles * particle_words,
+                ),
+            ),
             ("solver words", solver),
         ]
     }
@@ -903,7 +1264,12 @@ impl BoxRun {
 #[test]
 fn gpu_flip_body_step_sparse_matches_all_tiles() {
     use manifold_nodes_water::testkit::conformance::Fixture;
-    for (fixture, level) in [(Fixture::SubmergedBox, 0), (Fixture::FloatingBox, 0), (Fixture::SubmergedBox, 1), (Fixture::FloatingBox, 1)] {
+    for (fixture, level) in [
+        (Fixture::SubmergedBox, 0),
+        (Fixture::FloatingBox, 0),
+        (Fixture::SubmergedBox, 1),
+        (Fixture::FloatingBox, 1),
+    ] {
         let mut dense = BoxRun::new(fixture, true, false, level);
         let mut sparse = BoxRun::new(fixture, false, false, level);
         let mut poisoned = BoxRun::new(fixture, false, true, level);
@@ -913,10 +1279,22 @@ fn gpu_flip_body_step_sparse_matches_all_tiles() {
             poisoned.step();
             let want = dense.left();
             for (name, run) in [("sparse", &sparse), ("poisoned", &poisoned)] {
-                assert_eq!(dense.tile_share(), 1.0, "{fixture:?} level {level} tick {tick}: all-tiles share");
-                assert!(run.tile_share() <= dense.tile_share(), "{fixture:?} level {level} tick {tick}: {name} share {} exceeds all-tiles", run.tile_share());
+                assert_eq!(
+                    dense.tile_share(),
+                    1.0,
+                    "{fixture:?} level {level} tick {tick}: all-tiles share"
+                );
+                assert!(
+                    run.tile_share() <= dense.tile_share(),
+                    "{fixture:?} level {level} tick {tick}: {name} share {} exceeds all-tiles",
+                    run.tile_share()
+                );
                 for ((what, a), (_, b)) in want.iter().zip(run.left()) {
-                    assert_eq!(a.len(), b.len(), "{fixture:?} level {level} tick {tick}: {name} {what} is sized differently");
+                    assert_eq!(
+                        a.len(),
+                        b.len(),
+                        "{fixture:?} level {level} tick {tick}: {name} {what} is sized differently"
+                    );
                     if let Some(i) = first_differing(a, &b) {
                         panic!(
                             "{fixture:?} level {level} tick {tick}: {name} {what} differs from all tiles first at word {i}: {} ({}) vs {} ({})",
@@ -931,7 +1309,10 @@ fn gpu_flip_body_step_sparse_matches_all_tiles() {
         }
         let words = dense.words("node.gpu_flip_step", "capped");
         let tail = &words[words.len() - SOLVER_WORDS as usize..];
-        println!("{fixture:?} level {level}: 10 ticks bitwise; last solve {} iterations, capped {}", tail[0], tail[2]);
+        println!(
+            "{fixture:?} level {level}: 10 ticks bitwise; last solve {} iterations, capped {}",
+            tail[0], tail[2]
+        );
     }
 }
 
@@ -953,7 +1334,11 @@ fn gpu_flip_inactive_slots_match_the_ungated_step() {
     use manifold_nodes_water::testkit::conformance::Fixture;
     const STEP: &str = "node.gpu_flip_step";
     const TICKS: u32 = 30;
-    for (fixture, level) in [(Fixture::SubmergedBox, 0), (Fixture::FloatingBox, 0), (Fixture::FloatingBox, 1)] {
+    for (fixture, level) in [
+        (Fixture::SubmergedBox, 0),
+        (Fixture::FloatingBox, 0),
+        (Fixture::FloatingBox, 1),
+    ] {
         let mut gated = BoxRun::new(fixture, false, false, level);
         let mut ungated = BoxRun::ungated(fixture, level);
         let (mut inactive, mut slots, mut canonical_cells) = (0usize, 0usize, 0usize);
@@ -963,7 +1348,13 @@ fn gpu_flip_inactive_slots_match_the_ungated_step() {
             let at = format!("{fixture:?} level {level} tick {tick}");
             let read = |run: &BoxRun| {
                 let mut arrays = run.left();
-                for port in ["faces", "substep_schedule", "substep_u", "substep_v", "substep_w"] {
+                for port in [
+                    "faces",
+                    "substep_schedule",
+                    "substep_u",
+                    "substep_v",
+                    "substep_w",
+                ] {
                     arrays.push((port, run.words(STEP, port)));
                 }
                 arrays
@@ -972,26 +1363,56 @@ fn gpu_flip_inactive_slots_match_the_ungated_step() {
             for ((what, a), (_, b)) in arrays.iter().zip(&got) {
                 assert_eq!(a.len(), b.len(), "{at}: {what} is sized differently");
                 if let Some(i) = first_differing(a, b) {
-                    panic!("{at}: gated {what} differs first at word {i}: {} ({}) vs ungated {} ({})", b[i], f32::from_bits(b[i]), a[i], f32::from_bits(a[i]));
+                    panic!(
+                        "{at}: gated {what} differs first at word {i}: {} ({}) vs ungated {} ({})",
+                        b[i],
+                        f32::from_bits(b[i]),
+                        a[i],
+                        f32::from_bits(a[i])
+                    );
                 }
             }
             assert_eq!(gated.tile_share(), ungated.tile_share(), "{at}: tile share");
-            let schedule = &got.iter().find(|(what, _)| *what == "substep_schedule").expect("the schedule").1;
+            let schedule = &got
+                .iter()
+                .find(|(what, _)| *what == "substep_schedule")
+                .expect("the schedule")
+                .1;
             slots += schedule.len() / 4;
-            inactive += schedule.chunks_exact(4).filter(|row| f32::from_bits(row[0]) == 0.0).count();
-            let (a, b) = (ungated.words(STEP, "distance"), gated.words(STEP, "distance"));
+            inactive += schedule
+                .chunks_exact(4)
+                .filter(|row| f32::from_bits(row[0]) == 0.0)
+                .count();
+            let (a, b) = (
+                ungated.words(STEP, "distance"),
+                gated.words(STEP, "distance"),
+            );
             assert_eq!(a.len(), b.len(), "{at}: distance is sized differently");
-            let three_h = b.iter().map(|&w| f32::from_bits(w)).fold(f32::MIN, f32::max);
+            let three_h = b
+                .iter()
+                .map(|&w| f32::from_bits(w))
+                .fold(f32::MIN, f32::max);
             assert!(three_h > 0.0, "{at}: no cell holds the canonical distance");
             for (i, (&old, &new)) in a.iter().zip(&b).enumerate() {
                 if old != new {
-                    assert_eq!(new, three_h.to_bits(), "{at}: distance cell {i} differs and the gated one is not canonical: {} vs ungated {}", f32::from_bits(new), f32::from_bits(old));
+                    assert_eq!(
+                        new,
+                        three_h.to_bits(),
+                        "{at}: distance cell {i} differs and the gated one is not canonical: {} vs ungated {}",
+                        f32::from_bits(new),
+                        f32::from_bits(old)
+                    );
                     canonical_cells += 1;
                 }
             }
         }
-        assert!(inactive > 0, "{fixture:?} level {level}: no inactive slot in {slots}, so nothing was gated");
-        println!("{fixture:?} level {level}: {TICKS} ticks bitwise; {inactive} of {slots} slots inactive; {canonical_cells} distance cells canonical where ungated kept a stale φ");
+        assert!(
+            inactive > 0,
+            "{fixture:?} level {level}: no inactive slot in {slots}, so nothing was gated"
+        );
+        println!(
+            "{fixture:?} level {level}: {TICKS} ticks bitwise; {inactive} of {slots} slots inactive; {canonical_cells} distance cells canonical where ungated kept a stale φ"
+        );
     }
 }
 
@@ -1015,25 +1436,46 @@ fn fresh_speed_preserves_coupled_bodies(ticks_per_frame: u32) {
     use manifold_nodes_water::testkit::conformance::Fixture;
     const STEP: &str = "node.gpu_flip_step";
     const TICKS: u32 = 8;
-    fn baseline(def: manifold_core::effect_graph_def::EffectGraphDef) -> manifold_core::effect_graph_def::EffectGraphDef {
+    fn baseline(
+        def: manifold_core::effect_graph_def::EffectGraphDef,
+    ) -> manifold_core::effect_graph_def::EffectGraphDef {
         use manifold_core::effect_graph_def::EffectGraphWire;
         // The runtime builds this same flattened graph, so the edit lands on
         // the step it runs, wherever the scene groups it.
         let mut def = manifold_core::flatten::flatten_groups(&def).expect("box scene flattens");
-        let steps: Vec<_> = def.nodes.iter().filter(|node| node.type_id == STEP).map(|node| node.id).collect();
-        let [step] = steps[..] else { panic!("coupled proof requires exactly one GPU FLIP step") };
-        let id = def.nodes.iter().map(|node| node.id).max().expect("box scene nodes")
-            .checked_add(1).expect("room for baseline scalar id");
-        def.nodes.push(serde_json::from_value(serde_json::json!({
-            "id": id,
-            "nodeId": "full_gpu_clock",
-            "typeId": "node.value",
-            "params": {"value": {"type": "Float", "value": -1.0}}
-        })).expect("baseline negative speed scalar"));
-        def.wires.retain(|wire| !(wire.to_node == step && wire.to_port == "retired_max_speed"));
+        let steps: Vec<_> = def
+            .nodes
+            .iter()
+            .filter(|node| node.type_id == STEP)
+            .map(|node| node.id)
+            .collect();
+        let [step] = steps[..] else {
+            panic!("coupled proof requires exactly one GPU FLIP step")
+        };
+        let id = def
+            .nodes
+            .iter()
+            .map(|node| node.id)
+            .max()
+            .expect("box scene nodes")
+            .checked_add(1)
+            .expect("room for baseline scalar id");
+        def.nodes.push(
+            serde_json::from_value(serde_json::json!({
+                "id": id,
+                "nodeId": "full_gpu_clock",
+                "typeId": "node.value",
+                "params": {"value": {"type": "Float", "value": -1.0}}
+            }))
+            .expect("baseline negative speed scalar"),
+        );
+        def.wires
+            .retain(|wire| !(wire.to_node == step && wire.to_port == "retired_max_speed"));
         def.wires.push(EffectGraphWire {
-            from_node: id, from_port: "out".into(),
-            to_node: step, to_port: "retired_max_speed".into(),
+            from_node: id,
+            from_port: "out".into(),
+            to_node: step,
+            to_port: "retired_max_speed".into(),
         });
         def
     }
@@ -1049,7 +1491,11 @@ fn fresh_speed_preserves_coupled_bodies(ticks_per_frame: u32) {
             full.step();
             let at = format!("{fixture:?} level 0, {ticks_per_frame} ticks a frame, frame {tick}");
             let (mut got, mut want) = (automatic.left(), full.left());
-            let reaction = &got.iter().find(|(what, _)| *what == "reaction").expect("body reaction").1;
+            let reaction = &got
+                .iter()
+                .find(|(what, _)| *what == "reaction")
+                .expect("body reaction")
+                .1;
             reacting_ticks += u32::from(reaction.iter().any(|&word| {
                 let value = f32::from_bits(word);
                 value.is_finite() && value != 0.0
@@ -1066,28 +1512,55 @@ fn fresh_speed_preserves_coupled_bodies(ticks_per_frame: u32) {
                 assert_eq!(what, expected_what, "{at}: matching array labels");
                 assert_eq!(a.len(), b.len(), "{at}: {what} is sized differently");
                 if let Some(i) = first_differing(a, b) {
-                    panic!("{at}: automatic {what} differs first at word {i}: {} ({}) vs full scheduler {} ({})",
-                        a[i], f32::from_bits(a[i]), b[i], f32::from_bits(b[i]));
+                    panic!(
+                        "{at}: automatic {what} differs first at word {i}: {} ({}) vs full scheduler {} ({})",
+                        a[i],
+                        f32::from_bits(a[i]),
+                        b[i],
+                        f32::from_bits(b[i])
+                    );
                 }
             }
-            let (a, b) = (automatic.words(STEP, "clock_status"), full.words(STEP, "clock_status"));
+            let (a, b) = (
+                automatic.words(STEP, "clock_status"),
+                full.words(STEP, "clock_status"),
+            );
             assert!(a.len() >= 8 && b.len() >= 8, "{at}: complete clock status");
-            assert_eq!(&a[1..8], &b[1..8], "{at}: identical completed interval and clock diagnostics");
+            assert_eq!(
+                &a[1..8],
+                &b[1..8],
+                "{at}: identical completed interval and clock diagnostics"
+            );
             for (label, status) in [("automatic", &a), ("full scheduler", &b)] {
-                assert_eq!(status[2], 0.0f32.to_bits(), "{at}: {label} completed the interval");
+                assert_eq!(
+                    status[2],
+                    0.0f32.to_bits(),
+                    "{at}: {label} completed the interval"
+                );
                 assert_eq!(status[5], 0, "{at}: {label} has no nonfinite clock input");
             }
-            assert_eq!(b[0], 0.0f32.to_bits(), "{at}: baseline must retain its inactive tail slots");
+            assert_eq!(
+                b[0],
+                0.0f32.to_bits(),
+                "{at}: baseline must retain its inactive tail slots"
+            );
             if f32::from_bits(a[0]) > 0.0 && a[6] == 1 {
                 shortcuts += 1;
             }
         }
-        assert!(shortcuts > 0, "{fixture:?}, {ticks_per_frame} ticks a frame: a frame's last tick never took the fresh one-step path");
-        assert!(reacting_ticks > 0, "{fixture:?}: no nonzero finite body reaction, so coupling was not exercised");
-        println!("{fixture:?} level 0, {ticks_per_frame} ticks a frame: {TICKS} coupled frames bitwise; {shortcuts} fresh one-step final ticks; {reacting_ticks} frames with body reaction");
+        assert!(
+            shortcuts > 0,
+            "{fixture:?}, {ticks_per_frame} ticks a frame: a frame's last tick never took the fresh one-step path"
+        );
+        assert!(
+            reacting_ticks > 0,
+            "{fixture:?}: no nonzero finite body reaction, so coupling was not exercised"
+        );
+        println!(
+            "{fixture:?} level 0, {ticks_per_frame} ticks a frame: {TICKS} coupled frames bitwise; {shortcuts} fresh one-step final ticks; {reacting_ticks} frames with body reaction"
+        );
     }
 }
-
 
 // ── The body golden (docs/GPU_FLIP_PRESSURE_CAP_DESIGN.md section 9 (Phasing), C0) ──
 
@@ -1096,7 +1569,9 @@ const BODY_GOLDEN: &str = "gpu_flip_body_golden.txt";
 const BODY_SENTINEL: u32 = 0x7fc0_dead;
 
 fn fnv(words: &[u32]) -> u64 {
-    words.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &w| (h ^ u64::from(w)).wrapping_mul(0x0000_0100_0000_01b3))
+    words.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &w| {
+        (h ^ u64::from(w)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
 }
 
 thread_local! {
@@ -1112,8 +1587,17 @@ fn body_golden_lines() -> Vec<String> {
     let cells = N.iter().product::<usize>();
     let rhs_values = random_values(cells, 0xc0a0);
     let mut lines = Vec::new();
-    for (name, level, gate_off) in [("gated", 0usize, false), ("plain", 0, true), ("level1", 1, false)] {
-        for stop in [Stop::Fixed(1), Stop::Fixed(3), Stop::Fixed(16), Stop::Converged(64)] {
+    for (name, level, gate_off) in [
+        ("gated", 0usize, false),
+        ("plain", 0, true),
+        ("level1", 1, false),
+    ] {
+        for stop in [
+            Stop::Fixed(1),
+            Stop::Fixed(3),
+            Stop::Fixed(16),
+            Stop::Converged(64),
+        ] {
             for replay in [false, true] {
                 let mut scene = Scene::with_water(0xc09e, random_water(cells, 0xc09f), false);
                 let rhs = shared(&scene.device, &rhs_values);
@@ -1126,7 +1610,10 @@ fn body_golden_lines() -> Vec<String> {
                 let mut solver = PressureSolver::default();
                 solver.prepare_pipelines(&scene.device);
                 solver.set_clock_plan(&plan);
-                let sentinel = shared(&scene.device, &vec![BODY_SENTINEL; 2 * MAX_ITERATIONS as usize + PROGRESS_FLOATS as usize]);
+                let sentinel = shared(
+                    &scene.device,
+                    &vec![BODY_SENTINEL; 2 * MAX_ITERATIONS as usize + PROGRESS_FLOATS as usize],
+                );
                 let scalars = shared(&scene.device, &vec![0_u32; 2 * MAX_ITERATIONS as usize]);
                 let record = shared(&scene.device, &vec![0_u32; PROGRESS_FLOATS as usize]);
                 let mut cache = replay.then(GpuReplayCache::default);
@@ -1140,25 +1627,60 @@ fn body_golden_lines() -> Vec<String> {
                         thread_local! {
                             static SAMPLER: std::cell::OnceCell<manifold_gpu::GpuTimestampSampler> = const { std::cell::OnceCell::new() };
                         }
-                        let sampler = SAMPLER.with(|s| s.get_or_init(|| scene.device.create_timestamp_sampler(4096).expect("timestamp sampling")).clone());
+                        let sampler = SAMPLER.with(|s| {
+                            s.get_or_init(|| {
+                                scene
+                                    .device
+                                    .create_timestamp_sampler(4096)
+                                    .expect("timestamp sampling")
+                            })
+                            .clone()
+                        });
                         enc.enable_profiling_at(sampler, &scene.device, granularity);
                     }
-                    let water = Water { lattice: N.map(|v| v as u32), cell_size: H, water: &scene.buffers[0], faces: &scene.buffers[1], phi: None };
+                    let water = Water {
+                        lattice: N.map(|v| v as u32),
+                        cell_size: H,
+                        water: &scene.buffers[0],
+                        faces: &scene.buffers[1],
+                        phi: None,
+                    };
                     // SAFETY: a shared buffer sized for the lattice; the last solve completed.
                     unsafe { pressure.write(0, bytemuck::cast_slice(&vec![0u32; cells])) };
-                    solver.prepare(&scene.device, &mut enc, &water).expect("prepares");
+                    solver
+                        .prepare(&scene.device, &mut enc, &water)
+                        .expect("prepares");
                     solver.seed_records(&mut enc, &sentinel);
-                    let spanned = cache.take().map(|c| enc.begin_replay(&scene.device, c)).is_some();
-                    let solve = Solve { rhs: &rhs, pressure: &pressure, stop, bodies: Some((&scene.passes, &scene.bodies())), level, coarse_rhs: None };
-                    solver.solve(&mut enc, &water, solve).expect("coupled solve");
+                    let spanned = cache
+                        .take()
+                        .map(|c| enc.begin_replay(&scene.device, c))
+                        .is_some();
+                    let solve = Solve {
+                        rhs: &rhs,
+                        pressure: &pressure,
+                        stop,
+                        bodies: Some((&scene.passes, &scene.bodies())),
+                        level,
+                        coarse_rhs: None,
+                    };
+                    solver
+                        .solve(&mut enc, &water, solve)
+                        .expect("coupled solve");
                     if spanned {
                         cache = Some(enc.end_replay());
                     }
                     solver.copy_scalars(&mut enc, &scalars);
-                    enc.copy_buffer_to_buffer(solver.progress().expect("prepared"), &record, record.size);
+                    enc.copy_buffer_to_buffer(
+                        solver.progress().expect("prepared"),
+                        &record,
+                        record.size,
+                    );
                     if profiled.is_some() {
                         let profile = enc.commit_and_wait_profiled(&scene.device);
-                        assert_eq!(profile.failed_command_buffers, 0, "{name} {stop:?}: the profiled solve ran");
+                        assert_eq!(
+                            profile.failed_command_buffers, 0,
+                            "{name} {stop:?}: the profiled solve ran"
+                        );
                     } else {
                         enc.commit_and_wait_completed();
                     }
@@ -1186,10 +1708,14 @@ fn body_golden_lines() -> Vec<String> {
 /// fixture; only ever from main's solver code.
 #[test]
 fn gpu_flip_body_solve_matches_main_golden() {
-    let path = format!("{}/tests/fixtures/{BODY_GOLDEN}", env!("CARGO_MANIFEST_DIR"));
+    let path = format!(
+        "{}/tests/fixtures/{BODY_GOLDEN}",
+        env!("CARGO_MANIFEST_DIR")
+    );
     let lines = body_golden_lines();
     if std::env::var("MANIFOLD_RECORD_GOLDEN").is_ok_and(|v| v == "1") {
-        let solver = std::env::var("MANIFOLD_GOLDEN_SOLVER").expect("MANIFOLD_GOLDEN_SOLVER names the main commit the solver code is from");
+        let solver = std::env::var("MANIFOLD_GOLDEN_SOLVER")
+            .expect("MANIFOLD_GOLDEN_SOLVER names the main commit the solver code is from");
         let header = format!(
             "# GPU FLIP coupled-body golden (gpu_flip_body_solve_matches_main_golden)\n# solver code of {solver}\n# inputs: body scene water 0xc09f, rhs 0xc0a0, pressure zeroed, scalars and record seeded {BODY_SENTINEL:#010x}\n# fingerprints: FNV-1a over the pressure, the body sums, scalars[..128], progress[..68]\n"
         );
@@ -1200,9 +1726,19 @@ fn gpu_flip_body_solve_matches_main_golden() {
     let golden = std::fs::read_to_string(&path).expect("golden fixture reads");
     let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
     assert_eq!(expected.len(), lines.len(), "golden case count");
-    let moved: Vec<String> =
-        expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
-    assert!(moved.is_empty(), "{} of {} golden cases moved:\n{}", moved.len(), lines.len(), moved.join("\n"));
+    let moved: Vec<String> = expected
+        .iter()
+        .zip(&lines)
+        .filter(|(e, l)| **e != l.as_str())
+        .map(|(e, l)| format!("want {e}\n got {l}"))
+        .collect();
+    assert!(
+        moved.is_empty(),
+        "{} of {} golden cases moved:\n{}",
+        moved.len(),
+        lines.len(),
+        moved.join("\n")
+    );
 }
 
 /// The coupled-body golden on a profiled encoder at both granularities:
@@ -1210,16 +1746,32 @@ fn gpu_flip_body_solve_matches_main_golden() {
 /// and every case matches main's unrolled solve bit for bit.
 #[test]
 fn gpu_flip_body_golden_holds_profiled() {
-    let path = format!("{}/tests/fixtures/{BODY_GOLDEN}", env!("CARGO_MANIFEST_DIR"));
+    let path = format!(
+        "{}/tests/fixtures/{BODY_GOLDEN}",
+        env!("CARGO_MANIFEST_DIR")
+    );
     let golden = std::fs::read_to_string(&path).expect("golden fixture reads");
     let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
-    for granularity in [manifold_gpu::ProfileGranularity::Tag, manifold_gpu::ProfileGranularity::Dispatch] {
+    for granularity in [
+        manifold_gpu::ProfileGranularity::Tag,
+        manifold_gpu::ProfileGranularity::Dispatch,
+    ] {
         BODY_PROFILE.set(Some(granularity));
         let lines = std::panic::catch_unwind(body_golden_lines);
         BODY_PROFILE.set(None);
         let lines = lines.unwrap_or_else(|e| std::panic::resume_unwind(e));
-        let moved: Vec<String> = expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
-        assert!(moved.is_empty(), "{granularity:?}: {} golden cases moved:\n{}", moved.len(), moved.join("\n"));
+        let moved: Vec<String> = expected
+            .iter()
+            .zip(&lines)
+            .filter(|(e, l)| **e != l.as_str())
+            .map(|(e, l)| format!("want {e}\n got {l}"))
+            .collect();
+        assert!(
+            moved.is_empty(),
+            "{granularity:?}: {} golden cases moved:\n{}",
+            moved.len(),
+            moved.join("\n")
+        );
     }
 }
 
@@ -1231,22 +1783,49 @@ fn gpu_flip_body_rounds_past_the_stop_write_nothing() {
     manifold_water_gpu_flip::primitives::gpu_flip_pressure::set_keep_ranges(true);
     let lines = body_golden_lines();
     manifold_water_gpu_flip::primitives::gpu_flip_pressure::set_keep_ranges(false);
-    let golden = std::fs::read_to_string(format!("{}/tests/fixtures/{BODY_GOLDEN}", env!("CARGO_MANIFEST_DIR"))).expect("golden fixture reads");
+    let golden = std::fs::read_to_string(format!(
+        "{}/tests/fixtures/{BODY_GOLDEN}",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("golden fixture reads");
     let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
-    let moved: Vec<String> = expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
-    assert!(moved.is_empty(), "coupled rounds past the stop wrote something:\n{}", moved.join("\n"));
+    let moved: Vec<String> = expected
+        .iter()
+        .zip(&lines)
+        .filter(|(e, l)| **e != l.as_str())
+        .map(|(e, l)| format!("want {e}\n got {l}"))
+        .collect();
+    assert!(
+        moved.is_empty(),
+        "coupled rounds past the stop wrote something:\n{}",
+        moved.join("\n")
+    );
 }
 
 /// Chunked executes change no bit in the coupled solve either: at one round
 /// an execute, at 3 and at the default, every body golden case matches main.
 #[test]
 fn gpu_flip_body_chunk_sizes_match_main_golden() {
-    let golden = std::fs::read_to_string(format!("{}/tests/fixtures/{BODY_GOLDEN}", env!("CARGO_MANIFEST_DIR"))).expect("golden fixture reads");
+    let golden = std::fs::read_to_string(format!(
+        "{}/tests/fixtures/{BODY_GOLDEN}",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("golden fixture reads");
     let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
     for chunk in [1, 3, 32] {
         let _chunk = manifold_water_gpu_flip::primitives::gpu_flip_pressure::set_round_chunk(chunk);
         let lines = body_golden_lines();
-        let moved: Vec<String> = expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
-        assert!(moved.is_empty(), "chunk {chunk}: {} body golden cases moved:\n{}", moved.len(), moved.join("\n"));
+        let moved: Vec<String> = expected
+            .iter()
+            .zip(&lines)
+            .filter(|(e, l)| **e != l.as_str())
+            .map(|(e, l)| format!("want {e}\n got {l}"))
+            .collect();
+        assert!(
+            moved.is_empty(),
+            "chunk {chunk}: {} body golden cases moved:\n{}",
+            moved.len(),
+            moved.join("\n")
+        );
     }
 }

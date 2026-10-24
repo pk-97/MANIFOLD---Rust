@@ -30,10 +30,14 @@ struct Timings {
 
 fn run_preset(replay: bool, frames: u32) -> Timings {
     let h = gpu_harness::shared();
-    let json = manifold_nodes::engine_scenes::scene_json(&PresetTypeId::new(DAM_BREAK)).expect("bundled preset");
+    let json = manifold_nodes::engine_scenes::scene_json(&PresetTypeId::new(DAM_BREAK))
+        .expect("bundled preset");
     let def: EffectGraphDef = serde_json::from_str(&json).expect("preset parses");
     let manifest = ParamManifest::from_params(
-        def.preset_metadata.as_ref().map(|m| m.params.iter().cloned().map(Param::bundled).collect()).unwrap_or_default(),
+        def.preset_metadata
+            .as_ref()
+            .map(|m| m.params.iter().cloned().map(Param::bundled).collect())
+            .unwrap_or_default(),
     );
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
@@ -48,7 +52,11 @@ fn run_preset(replay: bool, frames: u32) -> Timings {
     .expect("preset builds");
     runtime.set_encode_replay(replay);
     let target = h.make_target("encode-replay-probe");
-    let mut out = Timings { stats_by_frame: Vec::new(), cpu_ms: Vec::new(), gpu_ms: Vec::new() };
+    let mut out = Timings {
+        stats_by_frame: Vec::new(),
+        cpu_ms: Vec::new(),
+        gpu_ms: Vec::new(),
+    };
     for frame in 0..frames {
         let ctx = PresetContext {
             time: f64::from(frame) / 60.0,
@@ -73,7 +81,10 @@ fn run_preset(replay: bool, frames: u32) -> Timings {
         }
         out.cpu_ms.push(start.elapsed().as_secs_f64() * 1e3);
         let profile = enc.commit_and_wait_profiled(&h.device);
-        assert_eq!(profile.failed_command_buffers, 0, "{DAM_BREAK} frame {frame} failed on the GPU");
+        assert_eq!(
+            profile.failed_command_buffers, 0,
+            "{DAM_BREAK} frame {frame} failed on the GPU"
+        );
         out.gpu_ms.push(profile.total_ms);
         out.stats_by_frame.push(runtime.replay_stats());
     }
@@ -93,7 +104,11 @@ fn main() {
     for round in 0..3 {
         let runs = [false, true].map(|replay| run_preset(replay, WARM as u32 + MEASURED));
         if round == 0 {
-            let k = runs[1].stats_by_frame.iter().position(|s| s.recorded > 0).expect("the region recorded");
+            let k = runs[1]
+                .stats_by_frame
+                .iter()
+                .position(|s| s.recorded > 0)
+                .expect("the region recorded");
             first_visit = (k, [runs[0].cpu_ms[k], runs[1].cpu_ms[k]]);
         }
         for (side, run) in runs.iter().enumerate() {

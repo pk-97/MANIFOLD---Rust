@@ -67,8 +67,13 @@ pub enum MaterialLook {
 }
 
 impl MaterialLook {
-    pub const ALL: [MaterialLook; 5] =
-        [MaterialLook::Default, MaterialLook::Matte, MaterialLook::Coated, MaterialLook::BrushedMetal, MaterialLook::Glass];
+    pub const ALL: [MaterialLook; 5] = [
+        MaterialLook::Default,
+        MaterialLook::Matte,
+        MaterialLook::Coated,
+        MaterialLook::BrushedMetal,
+        MaterialLook::Glass,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -306,7 +311,11 @@ pub struct ParamRow {
 pub enum RowAffordance {
     /// A structural field of a scene item. A pick sends
     /// `ProjectAction::SceneFieldSet`.
-    Field { item: manifold_foundation::ItemId, field: String, control: crate::panels::scene_setup_panel::FieldControlVm },
+    Field {
+        item: manifold_foundation::ItemId,
+        field: String,
+        control: crate::panels::scene_setup_panel::FieldControlVm,
+    },
     /// The Scale link switch of an item's Transform section (section 7.17):
     /// a card editing helper, never a param.
     ScaleLink { item: manifold_foundation::ItemId },
@@ -350,7 +359,10 @@ impl ParamRow {
     pub fn kind(&self, scene: bool) -> RowKind {
         let spec = &self.spec;
         match self.affordance {
-            Some(RowAffordance::Field { control: crate::panels::scene_setup_panel::FieldControlVm::Switch { .. }, .. }) => {
+            Some(RowAffordance::Field {
+                control: crate::panels::scene_setup_panel::FieldControlVm::Switch { .. },
+                ..
+            }) => {
                 return RowKind::Switch;
             }
             Some(RowAffordance::Field { .. }) => return RowKind::Choice,
@@ -363,7 +375,12 @@ impl ParamRow {
         if spec.is_toggle {
             return RowKind::Switch;
         }
-        if scene && self.rgb_members.as_ref().is_some_and(|members| members.ids[0] == self.id) {
+        if scene
+            && self
+                .rgb_members
+                .as_ref()
+                .is_some_and(|members| members.ids[0] == self.id)
+        {
             return RowKind::Colour;
         }
         let labels = spec.value_labels.as_deref().map_or(0, <[String]>::len);

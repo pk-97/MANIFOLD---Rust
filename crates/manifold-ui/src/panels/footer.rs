@@ -5,8 +5,8 @@
 //! is no `build()`/`update()` dual write and no hand-stored `self.*_id` fields.
 //! See `docs/CHROME_API_DESIGN.md`.
 
-use crate::{TransportAction};
 use super::{Panel, PanelAction};
+use crate::TransportAction;
 use crate::chrome::{ChromeHost, Pad, Reconcile, Sizing, View, components};
 use crate::color;
 use crate::input::UIEvent;
@@ -155,7 +155,12 @@ impl FooterPanel {
             .fill()
             .bg(color::PANEL_BG_DARK)
             .border(color::BORDER, 1.0)
-            .pad(Pad { l: PAD, t: ELEM_Y_PAD, r: RIGHT_GUTTER, b: ELEM_Y_PAD })
+            .pad(Pad {
+                l: PAD,
+                t: ELEM_Y_PAD,
+                r: RIGHT_GUTTER,
+                b: ELEM_Y_PAD,
+            })
             .child(
                 View::label(self.selection_info.as_str())
                     .fill_w()
@@ -267,6 +272,9 @@ mod tests {
             sv,
             "value change must not bump structure_version"
         );
-        assert_eq!(tree.get_node(fps_id).unwrap().text.as_deref(), Some("30 FPS"));
+        assert_eq!(
+            tree.get_node(fps_id).unwrap().text.as_deref(),
+            Some("30 FPS")
+        );
     }
 }

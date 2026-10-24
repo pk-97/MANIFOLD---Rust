@@ -8,10 +8,10 @@
 
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 
 use manifold_nodes_scene::testkit::gpu_harness as harness;
 
@@ -92,13 +92,17 @@ fn live_rt_toggle_on_imported_glb_scene_never_magenta_clears() {
         Some(&manifest),
     )
     .expect("imported def must build a runtime");
-    manifold_node_engine::testkit::gpu_harness::assert_no_shadowed_def_params(&runtime, "bug318 mixamo import");
+    manifold_node_engine::testkit::gpu_harness::assert_no_shadowed_def_params(
+        &runtime,
+        "bug318 mixamo import",
+    );
 
     let target = h.make_target("bug318-import");
     for f in 0..4 {
         frame(&mut runtime, h, &target.texture, f, &manifest);
     }
-    let before = manifold_nodes_scene::testkit::gpu_harness::readback_rgba_f32(&h.device, &target.texture);
+    let before =
+        manifold_nodes_scene::testkit::gpu_harness::readback_rgba_f32(&h.device, &target.texture);
     assert!(
         magenta_fraction(&before) < 0.5,
         "scene must render sanely BEFORE the toggle (magenta fraction {})",
@@ -148,7 +152,8 @@ fn live_rt_toggle_on_imported_glb_scene_never_magenta_clears() {
     for f in 12..18 {
         frame(&mut runtime, h, &target.texture, f, &manifest);
     }
-    let after = manifold_nodes_scene::testkit::gpu_harness::readback_rgba_f32(&h.device, &target.texture);
+    let after =
+        manifold_nodes_scene::testkit::gpu_harness::readback_rgba_f32(&h.device, &target.texture);
     let frac = magenta_fraction(&after);
     assert!(
         frac < 0.5,
@@ -184,7 +189,10 @@ fn live_temporal_upscale_off_from_reduced_import_scene_stays_finite() {
         Some(&manifest),
     )
     .expect("imported def must build a runtime");
-    manifold_node_engine::testkit::gpu_harness::assert_no_shadowed_def_params(&runtime, "bug318 reduced import");
+    manifold_node_engine::testkit::gpu_harness::assert_no_shadowed_def_params(
+        &runtime,
+        "bug318 reduced import",
+    );
     let target = h.make_target("bug318-reduced-off");
     let scene_node = runtime
         .graph
@@ -229,15 +237,18 @@ fn live_temporal_upscale_off_from_reduced_import_scene_stays_finite() {
         .expect("temporal_upscale exists");
     frame(&mut runtime, h, &target.texture, 4, &manifest);
 
-    let px = manifold_nodes_scene::testkit::gpu_harness::readback_rgba_f32(&h.device, &target.texture);
-    assert!(px.iter().all(|v| v.is_finite()), "reduced→native toggle produced non-finite output");
+    let px =
+        manifold_nodes_scene::testkit::gpu_harness::readback_rgba_f32(&h.device, &target.texture);
+    assert!(
+        px.iter().all(|v| v.is_finite()),
+        "reduced→native toggle produced non-finite output"
+    );
     assert!(
         magenta_fraction(&px) < 0.5,
         "reduced→native toggle produced magenta fallback (fraction {})",
         magenta_fraction(&px)
     );
 }
-
 
 /// BUG-319 — Peter's ACTUAL break, with the ACTUAL asset (held-out fixture;
 /// skip if absent): fresh import of the apricot GLB, render, live rt_enabled
@@ -269,7 +280,10 @@ fn live_rt_toggle_on_apricot_static_buffers_never_magenta_clears() {
         None,
     )
     .expect("apricot def must build a runtime");
-    manifold_node_engine::testkit::gpu_harness::assert_no_shadowed_def_params(&runtime, "bug319 apricot import");
+    manifold_node_engine::testkit::gpu_harness::assert_no_shadowed_def_params(
+        &runtime,
+        "bug319 apricot import",
+    );
 
     // This case toggles RT on the LIVE graph rather than at build, which does
     // survive: the skip-on-unchanged cache only writes a binding when the card
@@ -280,7 +294,8 @@ fn live_rt_toggle_on_apricot_static_buffers_never_magenta_clears() {
     for f in 0..4 {
         frame(&mut runtime, h, &target.texture, f, &empty);
     }
-    let before = manifold_nodes_scene::testkit::gpu_harness::readback_rgba_f32(&h.device, &target.texture);
+    let before =
+        manifold_nodes_scene::testkit::gpu_harness::readback_rgba_f32(&h.device, &target.texture);
     assert!(
         magenta_fraction(&before) < 0.5,
         "apricot must render sanely BEFORE the toggle (magenta fraction {})",
@@ -304,7 +319,8 @@ fn live_rt_toggle_on_apricot_static_buffers_never_magenta_clears() {
     for f in 4..10 {
         frame(&mut runtime, h, &target.texture, f, &empty);
     }
-    let after = manifold_nodes_scene::testkit::gpu_harness::readback_rgba_f32(&h.device, &target.texture);
+    let after =
+        manifold_nodes_scene::testkit::gpu_harness::readback_rgba_f32(&h.device, &target.texture);
     let frac = magenta_fraction(&after);
     assert!(
         frac < 0.5,

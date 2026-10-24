@@ -15,7 +15,12 @@ fn array() -> PortType {
 }
 
 fn port(name: &'static str, kind: PortKind) -> NodePort {
-    NodePort { name: std::borrow::Cow::Borrowed(name), ty: array(), kind, required: false }
+    NodePort {
+        name: std::borrow::Cow::Borrowed(name),
+        ty: array(),
+        kind,
+        required: false,
+    }
 }
 
 /// A two-way array switch that passes `in_0` through, counting the frames it
@@ -46,7 +51,11 @@ impl EffectNode for Switch {
     fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {
         *self.runs.lock().unwrap() += 1;
     }
-    fn skip_passthrough(&self, _: &ParamValues, wired: &[&str]) -> Option<(&'static str, &'static str)> {
+    fn skip_passthrough(
+        &self,
+        _: &ParamValues,
+        wired: &[&str],
+    ) -> Option<(&'static str, &'static str)> {
         wired.contains(&"in_0").then_some(("in_0", "out"))
     }
     fn variadic_skip_passthrough_out(&self) -> Option<&'static str> {
@@ -67,8 +76,16 @@ impl Stage {
     fn new(name: &str, input: bool, output: bool) -> Self {
         Self {
             type_id: EffectNodeType::new(name),
-            inputs: if input { vec![port("in", PortKind::Input)] } else { Vec::new() },
-            outputs: if output { vec![port("out", PortKind::Output)] } else { Vec::new() },
+            inputs: if input {
+                vec![port("in", PortKind::Input)]
+            } else {
+                Vec::new()
+            },
+            outputs: if output {
+                vec![port("out", PortKind::Output)]
+            } else {
+                Vec::new()
+            },
             in_place: false,
             root: !output,
         }
@@ -129,7 +146,11 @@ fn run(in_place_reader: bool) -> (u32, Vec<(Slot, Slot)>) {
     for _ in 0..3 {
         executor.execute_frame(&mut graph, &plan, time);
     }
-    let mock = executor.backend().as_any().and_then(|any| any.downcast_ref::<MockBackend>()).expect("mock backend");
+    let mock = executor
+        .backend()
+        .as_any()
+        .and_then(|any| any.downcast_ref::<MockBackend>())
+        .expect("mock backend");
     (*runs.lock().unwrap(), mock.array_aliases().to_vec())
 }
 

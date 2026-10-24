@@ -95,7 +95,11 @@ impl ClockMetrics {
 }
 
 fn finite_non_negative(value: f32) -> f32 {
-    if value.is_finite() { value.max(0.0) } else { 0.0 }
+    if value.is_finite() {
+        value.max(0.0)
+    } else {
+        0.0
+    }
 }
 
 impl SimMetrics {
@@ -104,12 +108,20 @@ impl SimMetrics {
     pub fn record_frame(&mut self, cpu_ms: f32, body_count: u32, pending_seconds: f32) {
         self.cpu_ms += finite_non_negative(cpu_ms);
         self.body_count = self.body_count.saturating_add(body_count);
-        self.backlog_seconds = self.backlog_seconds.max(finite_non_negative(pending_seconds));
+        self.backlog_seconds = self
+            .backlog_seconds
+            .max(finite_non_negative(pending_seconds));
     }
 
     /// Add completed-time telemetry from a world without counting bodies or
     /// CPU cost. Submitted GPU endpoints are not completion.
-    pub fn record_simulation(&mut self, target: f64, completed: f64, cap_hit: bool, nonfinite: bool) {
+    pub fn record_simulation(
+        &mut self,
+        target: f64,
+        completed: f64,
+        cap_hit: bool,
+        nonfinite: bool,
+    ) {
         self.record_simulation_with_drop(target, completed, 0.0, cap_hit, nonfinite);
     }
 
@@ -182,7 +194,11 @@ impl<'a> SimMetricsSink<'a> {
 
 impl std::fmt::Debug for SimMetricsSink<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(if self.0.is_some() { "SimMetricsSink(slot)" } else { "SimMetricsSink(discard)" })
+        f.write_str(if self.0.is_some() {
+            "SimMetricsSink(slot)"
+        } else {
+            "SimMetricsSink(discard)"
+        })
     }
 }
 
@@ -211,14 +227,23 @@ mod tests {
         metrics.record_frame(0.75, 3, 0.75);
         assert_eq!(
             metrics.take(),
-            SimMetrics { cpu_ms: 2.0, body_count: 5, backlog_seconds: 0.75, ..SimMetrics::default() }
+            SimMetrics {
+                cpu_ms: 2.0,
+                body_count: 5,
+                backlog_seconds: 0.75,
+                ..SimMetrics::default()
+            }
         );
         assert_eq!(metrics.take(), SimMetrics::default());
     }
 
     #[test]
     fn merge_matches_recording_into_one_slot() {
-        let record = |id| ClockRecord { id, accepted: 2, ..ClockRecord::default() };
+        let record = |id| ClockRecord {
+            id,
+            accepted: 2,
+            ..ClockRecord::default()
+        };
         let mut a = SimMetrics::default();
         a.record_frame(1.0, 2, 0.5);
         a.clock.push(record(1));

@@ -17,8 +17,6 @@ pub struct ArrayDump<'a> {
     pub fields: Vec<(String, &'static str, u32)>,
 }
 
-
-
 impl PresetRuntime {
     /// Aim the authoring-time output preview at `node_id` within effect
     /// `effect_id`, or clear it. Resolves the editor's stable [`NodeId`] to
@@ -126,7 +124,10 @@ impl PresetRuntime {
     /// port-shadows-param resolution order, so the editor's live value tap
     /// doesn't freeze on a wire-driven scalar param while the render keeps
     /// moving (PARAM_TWO_WAY_BINDING_DESIGN.md P2 D5).
-    pub fn live_node_params(&self, effect_id: &EffectId) -> crate::preview_encoding::LiveNodeParams {
+    pub fn live_node_params(
+        &self,
+        effect_id: &EffectId,
+    ) -> crate::preview_encoding::LiveNodeParams {
         let Some(slot) = self.effect_nodes.iter().find(|s| &s.effect_id == effect_id) else {
             return Vec::new();
         };
@@ -359,8 +360,10 @@ impl PresetRuntime {
             }
             // Group container: capture its producer.
             let seg = self.effect_nodes.first()?;
-            if let Some((_, producer, port)) =
-                seg.group_preview_map.iter().find(|(group, _, _)| group == nid)
+            if let Some((_, producer, port)) = seg
+                .group_preview_map
+                .iter()
+                .find(|(group, _, _)| group == nid)
                 && let Some(inst) = self.graph.instance_by_node_id(producer)
             {
                 encoding = PreviewEncoding::from_port_name(port)
@@ -454,5 +457,4 @@ impl PresetRuntime {
         }
         out
     }
-
 }

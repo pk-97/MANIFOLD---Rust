@@ -91,9 +91,17 @@ fn count_param(params: &ParamValues, name: &str, default: u32, min: u32) -> u32 
 }
 
 impl Primitive for SphereMesh {
-    fn array_output_capacity(&self, port_name: &str, params: &ParamValues, _input_capacities: &[(&str, u32)]) -> Option<u32> {
+    fn array_output_capacity(
+        &self,
+        port_name: &str,
+        params: &ParamValues,
+        _input_capacities: &[(&str, u32)],
+    ) -> Option<u32> {
         (port_name == "vertices").then(|| {
-            sphere_vertex_count(count_param(params, "segments", DEFAULT_SEGMENTS, 3), count_param(params, "rings", DEFAULT_RINGS, 2))
+            sphere_vertex_count(
+                count_param(params, "segments", DEFAULT_SEGMENTS, 3),
+                count_param(params, "rings", DEFAULT_RINGS, 2),
+            )
         })
     }
 
@@ -101,7 +109,14 @@ impl Primitive for SphereMesh {
         let segments = count_param(ctx.params, "segments", DEFAULT_SEGMENTS, 3);
         let rings = count_param(ctx.params, "rings", DEFAULT_RINGS, 2);
         let radius = ctx.scalar_or_param("radius", 0.5);
-        ctx.outputs.set_mesh_source("source", MeshSource::Sphere { radius, segments, rings });
+        ctx.outputs.set_mesh_source(
+            "source",
+            MeshSource::Sphere {
+                radius,
+                segments,
+                rings,
+            },
+        );
 
         let Some(dst) = ctx.outputs.array("vertices") else {
             return;
@@ -112,12 +127,24 @@ impl Primitive for SphereMesh {
         }
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let uniforms = SphereUniforms { segments: segments as i32, rings: rings as i32, radius, dispatch_count: capacity };
+        let uniforms = SphereUniforms {
+            segments: segments as i32,
+            rings: rings as i32,
+            radius,
+            dispatch_count: capacity,
+        };
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: dst, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: dst,
+                    offset: 0,
+                },
             ],
             [capacity.div_ceil(256), 1, 1],
             "node.sphere_mesh",
@@ -137,31 +164,54 @@ mod gpu_tests {
         let (segments, rings, radius) = (9u32, 5u32, 0.75f32);
         let live = sphere_vertex_count(segments, rings);
         let capacity = live + 4;
-        let uniforms = SphereUniforms { segments: segments as i32, rings: rings as i32, radius, dispatch_count: capacity };
-        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SphereMesh>().expect("sphere_mesh buffer codegen");
+        let uniforms = SphereUniforms {
+            segments: segments as i32,
+            rings: rings as i32,
+            radius,
+            dispatch_count: capacity,
+        };
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SphereMesh>()
+            .expect("sphere_mesh buffer codegen");
         let device = manifold_gpu::testkit::test_device();
         let pipeline = device.create_compute_pipeline(&wgsl, "cs_main", "sphere-mesh-oracle");
-        let out = device.create_buffer_shared(capacity as u64 * std::mem::size_of::<MeshVertex>() as u64);
+        let out =
+            device.create_buffer_shared(capacity as u64 * std::mem::size_of::<MeshVertex>() as u64);
         let mut enc = device.create_encoder("sphere-mesh-oracle");
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: &out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &out,
+                    offset: 0,
+                },
             ],
             [capacity.div_ceil(256), 1, 1],
             "sphere-mesh-oracle",
         );
         enc.commit_and_wait_completed();
         let ptr = out.mapped_ptr().expect("shared out buffer");
-        let got = unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, capacity as usize) };
+        let got =
+            unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, capacity as usize) };
         for (idx, vertex) in got.iter().enumerate().take(live as usize) {
             let want = sphere_vertex(idx as u32, segments, rings, radius);
             let close = |a: &[f32], b: &[f32]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1.0e-5);
-            assert!(close(&vertex.position, &want.position), "vertex {idx} position {:?} vs {:?}", vertex.position, want.position);
+            assert!(
+                close(&vertex.position, &want.position),
+                "vertex {idx} position {:?} vs {:?}",
+                vertex.position,
+                want.position
+            );
             assert!(close(&vertex.normal, &want.normal), "vertex {idx} normal");
             assert!(close(&vertex.uv, &want.uv), "vertex {idx} uv");
-            assert!(close(&vertex.tangent, &want.tangent), "vertex {idx} tangent");
+            assert!(
+                close(&vertex.tangent, &want.tangent),
+                "vertex {idx} tangent"
+            );
         }
         for (idx, vertex) in got.iter().enumerate().skip(live as usize) {
             assert_eq!(vertex.position, [0.0; 3], "padding {idx}");

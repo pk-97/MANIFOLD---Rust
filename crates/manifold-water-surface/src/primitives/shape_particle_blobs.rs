@@ -7,14 +7,14 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_water_liquid::float_param;
-use manifold_water_liquid::primitives::sort_particles_into_cells::{bin_param, read_searched_bins};
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_node_engine::particles::FluidParticle;
-use manifold_water_liquid::fluid_particles::{CellRange, FluidBlob};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::fluid_particles::{CellRange, FluidBlob};
+use manifold_water_liquid::primitives::sort_particles_into_cells::{bin_param, read_searched_bins};
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
@@ -103,14 +103,20 @@ impl Primitive for ShapeParticleBlobs {
         inputs: &[(&str, u32)],
     ) -> Option<u32> {
         (port == "blobs")
-            .then(|| inputs.iter().find(|(name, _)| *name == "sorted").map(|&(_, n)| n))
+            .then(|| {
+                inputs
+                    .iter()
+                    .find(|(name, _)| *name == "sorted")
+                    .map(|&(_, n)| n)
+            })
             .flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let [center_x, center_y, center_z] =
             ["center_x", "center_y", "center_z"].map(|name| ctx.scalar_or_param(name, 0.0));
-        let [size_x, size_y, size_z] = ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
+        let [size_x, size_y, size_z] =
+            ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
         let uniforms = BlobUniforms {
             center_x,
             center_y,
@@ -147,20 +153,42 @@ impl Primitive for ShapeParticleBlobs {
             }
         };
         let count = (blobs.size / std::mem::size_of::<FluidBlob>() as u64)
-            .min(sorted.size / std::mem::size_of::<FluidParticle>() as u64) as u32;
+            .min(sorted.size / std::mem::size_of::<FluidParticle>() as u64)
+            as u32;
         if count == 0 {
             return;
         }
         let [bins_x, bins_y, bins_z] = bins.map(|n| n as i32);
-        let uniforms = BlobUniforms { bins_x, bins_y, bins_z, dispatch_count: count, ..uniforms };
+        let uniforms = BlobUniforms {
+            bins_x,
+            bins_y,
+            bins_z,
+            dispatch_count: count,
+            ..uniforms
+        };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: sorted, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: ranges, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: blobs, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: sorted,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: ranges,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: blobs,
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256), 1, 1],
             "node.shape_particle_blobs",
@@ -179,21 +207,25 @@ mod tests {
     fn fluid_shape_fixed_sphere_shader_validates() {
         let source = manifold_node_engine::freeze::codegen::standalone_for_spec::<
             super::ShapeParticleBlobs,
-        >().expect("shape codegen");
+        >()
+        .expect("shape codegen");
         let module = naga::front::wgsl::parse_str(&source).expect("shape WGSL");
         naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all(),
-        ).validate(&module).expect("shape validation");
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("shape validation");
     }
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use manifold_node_engine::freeze::codegen;
-    use manifold_node_engine::testkit::array_harness::{Harness, read};
     use crate::testkit::liquid_surface::{Lattice, sort_and_shape};
     use bytemuck::Zeroable;
+    use manifold_node_engine::freeze::codegen;
+    use manifold_node_engine::testkit::array_harness::{Harness, read};
 
     #[test]
     fn fluid_shape_fixed_spheres_match_neighbour_gather() {
@@ -263,7 +295,9 @@ mod gpu_tests {
             assert!(errors.is_empty(), "{errors:?}");
             let expected = read::<FluidBlob>(&buffer, particles.len());
             for (word, (&actual, &expected)) in bytemuck::cast_slice::<_, u32>(&actual)
-                .iter().zip(bytemuck::cast_slice::<_, u32>(&expected)).enumerate()
+                .iter()
+                .zip(bytemuck::cast_slice::<_, u32>(&expected))
+                .enumerate()
             {
                 assert_eq!(actual, expected, "scale {scale}, blob word {word}");
             }

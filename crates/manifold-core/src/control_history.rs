@@ -175,7 +175,9 @@ fn observation_is_valid(observation: &ControlObservation) -> bool {
     if !observation.time.0.is_finite()
         || !observation.dt.0.is_finite()
         || observation.dt.0 < 0.0
-        || observation.evaluation_time.is_some_and(|time| !time.0.is_finite())
+        || observation
+            .evaluation_time
+            .is_some_and(|time| !time.0.is_finite())
         || !contribution_is_finite(observation.contribution)
     {
         return false;
@@ -190,11 +192,11 @@ fn observation_is_valid(observation: &ControlObservation) -> bool {
                 && stamp.epoch != 0
                 && stamp.end_sample > 0
                 && stamp.sample_rate > 0
-                && stamp.timeline_time.is_none_or(|mapped| mapped.0.is_finite())
+                && stamp
+                    .timeline_time
+                    .is_none_or(|mapped| mapped.0.is_finite())
         }
-        TriggerSourceStamp::Clip { beat, .. } => {
-            observation.dt.0 == 0.0 && beat.0.is_finite()
-        }
+        TriggerSourceStamp::Clip { beat, .. } => observation.dt.0 == 0.0 && beat.0.is_finite(),
     }
 }
 
@@ -261,17 +263,29 @@ mod tests {
         history.push(audio(1.0, 1)).unwrap();
         let mut backwards = clip(0.5, "backwards");
         backwards.time = Seconds(0.5);
-        assert_eq!(history.push(backwards), Err(ControlHistoryError::InvalidInput));
+        assert_eq!(
+            history.push(backwards),
+            Err(ControlHistoryError::InvalidInput)
+        );
         assert!(history.observations().is_empty());
-        assert_eq!(history.push(clip(2.0, "latched")), Err(ControlHistoryError::InvalidInput));
+        assert_eq!(
+            history.push(clip(2.0, "latched")),
+            Err(ControlHistoryError::InvalidInput)
+        );
 
         history.reset(1);
         history.push(audio(1.0, 1)).unwrap();
         history.push(audio(2.0, 2)).unwrap();
-        assert_eq!(history.push(audio(3.0, 3)), Err(ControlHistoryError::CapacityExceeded));
+        assert_eq!(
+            history.push(audio(3.0, 3)),
+            Err(ControlHistoryError::CapacityExceeded)
+        );
         assert!(history.observations().is_empty());
         history.begin(1);
-        assert_eq!(history.push(audio(4.0, 4)), Err(ControlHistoryError::CapacityExceeded));
+        assert_eq!(
+            history.push(audio(4.0, 4)),
+            Err(ControlHistoryError::CapacityExceeded)
+        );
         history.reset(2);
         history.push(clip(0.0, "recovered")).unwrap();
     }

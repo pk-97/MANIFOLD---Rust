@@ -161,19 +161,16 @@ impl MetalFxDenoisedScaler {
         depth_reversed: bool,
     ) -> Option<Self> {
         if !denoiser_available() {
-            log::info!(
-                "[MetalFX Denoiser] Not available on this system (pre-Tahoe)"
-            );
+            log::info!("[MetalFX Denoiser] Not available on this system (pre-Tahoe)");
             return None;
         }
 
         let color_pixel_format = to_mtl_pixel_format(color_format);
 
         let desc = unsafe {
-            let desc =
-                MTLFXTemporalDenoisedScalerDescriptor::init(
-                    MTLFXTemporalDenoisedScalerDescriptor::alloc(),
-                );
+            let desc = MTLFXTemporalDenoisedScalerDescriptor::init(
+                MTLFXTemporalDenoisedScalerDescriptor::alloc(),
+            );
             desc.setInputWidth(input_width as usize);
             desc.setInputHeight(input_height as usize);
             desc.setOutputWidth(output_width as usize);
@@ -306,8 +303,10 @@ impl GpuDenoiser for MetalFxDenoisedScaler {
             self.scaler.setMotionTexture(Some(&motion.raw));
             self.scaler.setNormalTexture(Some(&normal.raw));
             self.scaler.setRoughnessTexture(Some(&roughness.raw));
-            self.scaler.setDiffuseAlbedoTexture(Some(&diffuse_albedo.raw));
-            self.scaler.setSpecularAlbedoTexture(Some(&specular_albedo.raw));
+            self.scaler
+                .setDiffuseAlbedoTexture(Some(&diffuse_albedo.raw));
+            self.scaler
+                .setSpecularAlbedoTexture(Some(&specular_albedo.raw));
             self.scaler
                 .setSpecularHitDistanceTexture(Some(&specular_hit_distance.raw));
             self.scaler
@@ -375,8 +374,10 @@ mod tests {
 
         // Number of f32 elements per pixel for this format.
         let ch = match format {
-            GpuTextureFormat::Rgba32Float | GpuTextureFormat::Rgba16Float
-            | GpuTextureFormat::Rgba8Unorm | GpuTextureFormat::Rgba8UnormSrgb => 4,
+            GpuTextureFormat::Rgba32Float
+            | GpuTextureFormat::Rgba16Float
+            | GpuTextureFormat::Rgba8Unorm
+            | GpuTextureFormat::Rgba8UnormSrgb => 4,
             GpuTextureFormat::Rg32Float | GpuTextureFormat::Rg16Float => 2,
             _ => 1,
         };
@@ -392,8 +393,7 @@ mod tests {
                 | GpuTextureFormat::Rg32Float => {
                     for c in 0..(bpp as usize / 4) {
                         let v: f32 = data.get(src + c).copied().unwrap_or(0.0);
-                        bytes[dst + c * 4..dst + c * 4 + 4]
-                            .copy_from_slice(&f32::to_ne_bytes(v));
+                        bytes[dst + c * 4..dst + c * 4 + 4].copy_from_slice(&f32::to_ne_bytes(v));
                     }
                 }
                 // half-float: f32 -> f16 truncation
@@ -402,8 +402,7 @@ mod tests {
                 | GpuTextureFormat::Rg16Float => {
                     for c in 0..(bpp as usize / 2) {
                         let v: f32 = data.get(src + c).copied().unwrap_or(0.0);
-                        bytes[dst + c * 2..dst + c * 2 + 2]
-                            .copy_from_slice(&f32_to_f16(v));
+                        bytes[dst + c * 2..dst + c * 2 + 2].copy_from_slice(&f32_to_f16(v));
                     }
                 }
                 _ => {
@@ -443,11 +442,7 @@ mod tests {
     }
 
     /// Read back a texture into a f32 slice via a shared buffer blit.
-    fn readback_texture_via_buffer(
-        device: &GpuDevice,
-        tex: &GpuTexture,
-        buf: &mut [f32],
-    ) {
+    fn readback_texture_via_buffer(device: &GpuDevice, tex: &GpuTexture, buf: &mut [f32]) {
         let bpp = tex.format.bytes_per_pixel();
         let row_bytes = bpp * tex.width;
         let total = (row_bytes * tex.height) as u64;
@@ -455,9 +450,7 @@ mod tests {
         let mut enc = device.create_encoder("readback");
         enc.copy_texture_to_buffer(tex, &readback, tex.width, tex.height, row_bytes);
         enc.commit_and_wait_completed();
-        let ptr = readback
-            .mapped_ptr()
-            .expect("shared buffer mapped pointer");
+        let ptr = readback.mapped_ptr().expect("shared buffer mapped pointer");
         let f32_len = (total / 4) as usize;
         assert!(buf.len() >= f32_len);
         unsafe {
@@ -502,7 +495,6 @@ mod tests {
                  or construction failed for another reason"
             );
         };
-
 
         // Clean ramp: R channel = (x+y)/(W+H-2), G=B=0, A=1.
         let npixels = (W * H) as usize;
@@ -550,33 +542,68 @@ mod tests {
         // Upload inputs. Color uses Rgba32Float for clean f32 readback;
         // auxiliary formats must match the denoiser descriptor exactly.
         let color_noisy = upload_texture(
-            &device, W, H, GpuTextureFormat::Rgba32Float, &noisy, "color_noisy",
+            &device,
+            W,
+            H,
+            GpuTextureFormat::Rgba32Float,
+            &noisy,
+            "color_noisy",
         );
         let depth_tex = upload_texture(
-            &device, W, H, GpuTextureFormat::R32Float,
-            &vec![0.5f32; npixels], "depth",
+            &device,
+            W,
+            H,
+            GpuTextureFormat::R32Float,
+            &vec![0.5f32; npixels],
+            "depth",
         );
         let motion_tex = upload_texture(
-            &device, W, H, GpuTextureFormat::Rg16Float,
-            &vec![0.0f32; npixels * 2], "motion",
+            &device,
+            W,
+            H,
+            GpuTextureFormat::Rg16Float,
+            &vec![0.0f32; npixels * 2],
+            "motion",
         );
         let normal_tex = upload_texture(
-            &device, W, H, GpuTextureFormat::Rgba16Float, &normal_data, "normal",
+            &device,
+            W,
+            H,
+            GpuTextureFormat::Rgba16Float,
+            &normal_data,
+            "normal",
         );
         let roughness_tex = upload_texture(
-            &device, W, H, GpuTextureFormat::R16Float,
-            &vec![0.5f32; npixels], "roughness",
+            &device,
+            W,
+            H,
+            GpuTextureFormat::R16Float,
+            &vec![0.5f32; npixels],
+            "roughness",
         );
         let diffuse_tex = upload_texture(
-            &device, W, H, GpuTextureFormat::Rgba16Float, &albedo_data, "diffuse_albedo",
+            &device,
+            W,
+            H,
+            GpuTextureFormat::Rgba16Float,
+            &albedo_data,
+            "diffuse_albedo",
         );
         let specular_tex = upload_texture(
-            &device, W, H, GpuTextureFormat::Rgba16Float,
-            &vec![0.0f32; ncomponents], "specular_albedo",
+            &device,
+            W,
+            H,
+            GpuTextureFormat::Rgba16Float,
+            &vec![0.0f32; ncomponents],
+            "specular_albedo",
         );
         let hit_distance_tex = upload_texture(
-            &device, W, H, GpuTextureFormat::R16Float,
-            &vec![0.0f32; npixels], "specular_hit_distance",
+            &device,
+            W,
+            H,
+            GpuTextureFormat::R16Float,
+            &vec![0.0f32; npixels],
+            "specular_hit_distance",
         );
 
         // Output texture.
@@ -605,8 +632,8 @@ mod tests {
             &hit_distance_tex,
             None,
             &output_tex,
-            true,  // reset
-            None,  // no reactive mask
+            true, // reset
+            None, // no reactive mask
         );
         enc.commit_and_wait_completed();
 

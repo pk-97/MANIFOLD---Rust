@@ -66,7 +66,10 @@ mod tests {
         for _ in 0..1000 {
             let id = short_id();
             assert_eq!(id.len(), 16, "{id}");
-            assert!(id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')), "{id}");
+            assert!(
+                id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+                "{id}"
+            );
         }
     }
 

@@ -12,8 +12,8 @@
 //! CPU-write into shared MTLBuffer, sentinel-padded inactive tail —
 //! same family as `node.grid_edges` / `node.platonic_solid_edges`.
 
-use manifold_node_engine::mesh::{EdgePair, MeshVertex};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::{EdgePair, MeshVertex};
 use manifold_node_engine::primitive::Primitive;
 
 manifold_node_engine::primitive! {
@@ -89,7 +89,10 @@ impl Primitive for EdgesFromMesh {
         // buffer-capacity-derived vertex count so a source sized larger
         // than the loaded asset (max_capacity > real vertex count)
         // doesn't emit degenerate edges from its zero-filled tail.
-        let active_count_input = ctx.inputs.scalar("active_count").and_then(|v| v.as_scalar());
+        let active_count_input = ctx
+            .inputs
+            .scalar("active_count")
+            .and_then(|v| v.as_scalar());
         let vert_count = resolve_vert_count(buffer_vert_count, active_count_input);
         let edge_capacity = (edge_dst.size / edge_size) as u32;
         if edge_capacity == 0 {
@@ -99,12 +102,22 @@ impl Primitive for EdgesFromMesh {
         let tri_count = vert_count / 3;
         let active_edges = (tri_count * 3) as usize;
         self.scratch.clear();
-        self.scratch.reserve(active_edges.min(edge_capacity as usize));
+        self.scratch
+            .reserve(active_edges.min(edge_capacity as usize));
         for t in 0..tri_count {
             let base = t * 3;
-            self.scratch.push(EdgePair { a: base, b: base + 1 });
-            self.scratch.push(EdgePair { a: base + 1, b: base + 2 });
-            self.scratch.push(EdgePair { a: base + 2, b: base });
+            self.scratch.push(EdgePair {
+                a: base,
+                b: base + 1,
+            });
+            self.scratch.push(EdgePair {
+                a: base + 1,
+                b: base + 2,
+            });
+            self.scratch.push(EdgePair {
+                a: base + 2,
+                b: base,
+            });
         }
 
         let write_count = (edge_capacity as usize).min(active_edges);

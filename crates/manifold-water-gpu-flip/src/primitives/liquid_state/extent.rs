@@ -1,13 +1,13 @@
 //! Buffer extent rule owned by this node.
-use manifold_water_liquid::extent::liquid_lattice;
-use std::mem::size_of;
-use manifold_water_liquid::lattice::FlipSolverGrid;
-use manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS;
-use manifold_water_liquid::grid::face_bytes;
-use manifold_water_liquid::whitewater::DEFAULT_CAPACITY as STEP_CAPACITY;
-use manifold_water_liquid::whitewater::MAX_CAPACITY as STEP_MAX_CAPACITY;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use manifold_water_liquid::extent::PARTICLE;
+use manifold_water_liquid::extent::liquid_lattice;
+use manifold_water_liquid::grid::face_bytes;
+use manifold_water_liquid::lattice::FlipSolverGrid;
+use manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS;
+use manifold_water_liquid::whitewater::DEFAULT_CAPACITY as STEP_CAPACITY;
+use manifold_water_liquid::whitewater::MAX_CAPACITY as STEP_MAX_CAPACITY;
+use std::mem::size_of;
 
 fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.provide("identity", 16);
@@ -16,17 +16,36 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let mut whitewater_check = Ok(());
     let capacity = x.count("whitewater_capacity", STEP_CAPACITY as f32)?;
     if !(1..=STEP_MAX_CAPACITY).contains(&capacity) {
-        return Err(Verdict::Refused(format!("whitewater capacity {capacity} is outside 1 to {STEP_MAX_CAPACITY}")));
+        return Err(Verdict::Refused(format!(
+            "whitewater capacity {capacity} is outside 1 to {STEP_MAX_CAPACITY}"
+        )));
     }
-    let pool = u64::from(capacity) * size_of::<manifold_water_liquid::whitewater::WhitewaterParticle>() as u64;
+    let pool = u64::from(capacity)
+        * size_of::<manifold_water_liquid::whitewater::WhitewaterParticle>() as u64;
     for (capture, output, bytes) in [
         ("whitewater_pool_in", "whitewater_pool", pool),
         ("whitewater_state_in", "whitewater_state", 32),
         ("whitewater_counts_in", "whitewater_counts", 36),
-        ("foam_particles_in", "foam_particles", u64::from(capacity) * PARTICLE),
-        ("bubble_particles_in", "bubble_particles", u64::from(capacity) * PARTICLE),
-        ("spray_particles_in", "spray_particles", u64::from(capacity) * PARTICLE),
-        ("dust_particles_in", "dust_particles", u64::from(capacity) * PARTICLE),
+        (
+            "foam_particles_in",
+            "foam_particles",
+            u64::from(capacity) * PARTICLE,
+        ),
+        (
+            "bubble_particles_in",
+            "bubble_particles",
+            u64::from(capacity) * PARTICLE,
+        ),
+        (
+            "spray_particles_in",
+            "spray_particles",
+            u64::from(capacity) * PARTICLE,
+        ),
+        (
+            "dust_particles_in",
+            "dust_particles",
+            u64::from(capacity) * PARTICLE,
+        ),
     ] {
         let active = x.input(capture).is_some();
         x.provide(output, if active { bytes } else { 0 });
@@ -37,15 +56,21 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
             whitewater_check = whitewater_check.and(x.covers(capture, bytes));
         }
     }
-    if x.input("whitewater_pool_in").is_some() { x.hold(pool); }
+    if x.input("whitewater_pool_in").is_some() {
+        x.hold(pool);
+    }
 
     let mut interior_check = Ok(());
     if x.wired("interior_in") {
-        let bytes = manifold_water_liquid::grid::interior_bytes(FlipSolverGrid::from_lattice(liquid_lattice(x)?).cells());
+        let bytes = manifold_water_liquid::grid::interior_bytes(
+            FlipSolverGrid::from_lattice(liquid_lattice(x)?).cells(),
+        );
         x.provide("interior", bytes);
         x.hold(bytes);
         if x.bytes("interior_in") != Some(bytes) {
-            interior_check = Err(x.uncovered(format!("interior_in must hold exactly {bytes} bytes for the cell-centred lattice")));
+            interior_check = Err(x.uncovered(format!(
+                "interior_in must hold exactly {bytes} bytes for the cell-centred lattice"
+            )));
         }
     } else {
         x.provide("interior", 0);
@@ -55,8 +80,13 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // in the plan: the second pass sees them) must be exactly that grid.
     let mut faces_check = Ok(());
     if x.input("faces_in").is_some() {
-        if ["nodes_x", "nodes_y", "nodes_z"].iter().any(|port| x.input(port).is_none()) {
-            return Err(Verdict::Refused("Liquid State: faces_in needs the lattice on nodes_x, nodes_y and nodes_z".into()));
+        if ["nodes_x", "nodes_y", "nodes_z"]
+            .iter()
+            .any(|port| x.input(port).is_none())
+        {
+            return Err(Verdict::Refused(
+                "Liquid State: faces_in needs the lattice on nodes_x, nodes_y and nodes_z".into(),
+            ));
         }
         let faces = face_bytes(FlipSolverGrid::from_lattice(liquid_lattice(x)?).cells());
         let fed = x.feeds("faces");
@@ -65,7 +95,9 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
             x.hold(faces);
             faces_check = match x.bytes("faces_in") {
                 Some(have) if have == faces => Ok(()),
-                Some(have) => Err(x.uncovered(format!("faces_in holds {have} bytes; the lattice's face grid is {faces}"))),
+                Some(have) => Err(x.uncovered(format!(
+                    "faces_in holds {have} bytes; the lattice's face grid is {faces}"
+                ))),
                 None => Err(x.uncovered("faces_in is unbound".into())),
             };
         }

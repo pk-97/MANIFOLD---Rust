@@ -239,7 +239,11 @@ pub struct PhysicsSettings {
 
 impl PhysicsSettings {
     /// Files predating authored physics settings retain their 60 Hz rate.
-    pub const fn legacy() -> Self { Self { sim_rate: SimRate::Hz60 } }
+    pub const fn legacy() -> Self {
+        Self {
+            sim_rate: SimRate::Hz60,
+        }
+    }
 }
 
 /// Simulation updates per transport second, independent of display/export fps.
@@ -255,21 +259,34 @@ pub enum SimRate {
 
 impl SimRate {
     pub const ALL: [Self; 4] = [Self::Hz15, Self::Hz20, Self::Hz30, Self::Hz60];
-    pub const fn legacy() -> Self { Self::Hz60 }
-    pub const fn hz(self) -> u32 {
-        match self { Self::Hz15 => 15, Self::Hz20 => 20, Self::Hz30 => 30, Self::Hz60 => 60 }
+    pub const fn legacy() -> Self {
+        Self::Hz60
     }
-    pub fn interval(self) -> f64 { 1.0 / f64::from(self.hz()) }
+    pub const fn hz(self) -> u32 {
+        match self {
+            Self::Hz15 => 15,
+            Self::Hz20 => 20,
+            Self::Hz30 => 30,
+            Self::Hz60 => 60,
+        }
+    }
+    pub fn interval(self) -> f64 {
+        1.0 / f64::from(self.hz())
+    }
 }
 
 impl From<SimRate> for u32 {
-    fn from(rate: SimRate) -> Self { rate.hz() }
+    fn from(rate: SimRate) -> Self {
+        rate.hz()
+    }
 }
 
 impl TryFrom<u32> for SimRate {
     type Error = String;
     fn try_from(hz: u32) -> Result<Self, Self::Error> {
-        Self::ALL.into_iter().find(|rate| rate.hz() == hz)
+        Self::ALL
+            .into_iter()
+            .find(|rate| rate.hz() == hz)
             .ok_or_else(|| format!("Sim Rate must be 15, 20, 30 or 60 Hz, got {hz}"))
     }
 }
@@ -362,14 +379,20 @@ mod tests {
         assert_eq!(deserialized.realtime.ao, RtQualityTier::ExtraHigh);
         assert_eq!(deserialized.realtime.gi, RtQualityTier::High);
         assert_eq!(deserialized.realtime.reflections, RtQualityTier::Ultra);
-        assert_eq!(deserialized.realtime.ray_resolution, RtRayResolution::Quarter);
+        assert_eq!(
+            deserialized.realtime.ray_resolution,
+            RtRayResolution::Quarter
+        );
         assert_eq!(deserialized.realtime.spatial_denoise, RtSpatialDenoise::Off);
 
         assert_eq!(deserialized.export.shadows, RtQualityTier::ExtraHigh);
         assert_eq!(deserialized.export.ao, RtQualityTier::Ultra);
         assert_eq!(deserialized.export.gi, RtQualityTier::ExtraHigh);
         assert_eq!(deserialized.export.reflections, RtQualityTier::Ultra);
-        assert_eq!(deserialized.export.ray_resolution, RtRayResolution::ThreeQuarter);
+        assert_eq!(
+            deserialized.export.ray_resolution,
+            RtRayResolution::ThreeQuarter
+        );
         assert_eq!(deserialized.export.spatial_denoise, RtSpatialDenoise::High);
     }
 

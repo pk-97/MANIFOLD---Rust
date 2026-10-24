@@ -14,25 +14,40 @@ use manifold_ui::MappingAction;
 
 use super::super::DispatchResult;
 use super::resolve::{
-    ableton_mapping_target, macro_mapping_target, manifest_holds, resolve_graph_target, resolve_param_range,
+    ableton_mapping_target, macro_mapping_target, manifest_holds, resolve_graph_target,
+    resolve_param_range,
 };
 use crate::content_command::ContentCommand;
 
-pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
-    let (effective_tab, effective_active_layer) = super::editor_dispatch_context(ctx.editor_target, &ctx.project, ctx.ui.inspector.last_effect_tab(), ctx.active_layer);
+pub(crate) fn dispatch_mapping(
+    action: &MappingAction,
+    ctx: &mut super::super::DispatchCtx,
+) -> DispatchResult {
+    let (effective_tab, effective_active_layer) = super::editor_dispatch_context(
+        ctx.editor_target,
+        &ctx.project,
+        ctx.ui.inspector.last_effect_tab(),
+        ctx.active_layer,
+    );
     let active_layer = &effective_active_layer;
     match action {
         MappingAction::MapParamToMacro(gpt, param_id, macro_idx) => {
             use manifold_core::{MacroCurve, MacroMapping};
             let macro_idx = *macro_idx;
-            if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project)
-                && manifest_holds(&ctx.project, &target, param_id.as_ref())
+            if let Some(target) = resolve_graph_target(
+                gpt,
+                ctx.editor_target,
+                effective_tab,
+                active_layer,
+                ctx.selection,
+                &ctx.project,
+            ) && manifest_holds(&ctx.project, &target, param_id.as_ref())
                 && let Some(mapping_target) = macro_mapping_target(&target, param_id)
             {
                 // Graph-authority-first range so a generator's (or graph-backed
                 // effect's) true slider range isn't squashed to the registry's.
-                let (min, max) = ctx.project
+                let (min, max) = ctx
+                    .project
                     .with_preset_graph(&target, |inst| resolve_param_range(inst, param_id.as_ref()))
                     .unwrap_or((0.0, 1.0));
                 let mapping = MacroMapping {
@@ -45,9 +60,12 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
                 };
                 // Mapping keeps the control on the Layer-tab card (D6); like
                 // the mapping itself, the pin is not undoable.
-                let keep = matches!(target, manifold_core::GraphTarget::Generator(_)).then(|| (target.clone(), param_id.clone()));
+                let keep = matches!(target, manifold_core::GraphTarget::Generator(_))
+                    .then(|| (target.clone(), param_id.clone()));
                 ctx.mutate(crate::content_command::touch::EFFECTS_SHAPES, move |p| {
-                    p.settings.macro_bank.slots[macro_idx].mappings.push(mapping);
+                    p.settings.macro_bank.slots[macro_idx]
+                        .mappings
+                        .push(mapping);
                     if let Some((target, param_id)) = keep {
                         p.with_preset_graph_mut(&target, |host| host.keep_on_card(&param_id));
                     }
@@ -62,14 +80,18 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
             let macro_idx = *macro_idx;
             let mapping_idx = *mapping_idx;
             if macro_idx < manifold_core::MACRO_COUNT
-                && mapping_idx < ctx.project.settings.macro_bank.slots[macro_idx].mappings.len() {
-                    ctx.mutate(crate::content_command::touch::EFFECTS_SHAPES, move |p| {
-                        let slot = &mut p.settings.macro_bank.slots[macro_idx];
-                        if mapping_idx < slot.mappings.len() {
-                            slot.mappings.remove(mapping_idx);
-                        }
-                    });
-                }
+                && mapping_idx
+                    < ctx.project.settings.macro_bank.slots[macro_idx]
+                        .mappings
+                        .len()
+            {
+                ctx.mutate(crate::content_command::touch::EFFECTS_SHAPES, move |p| {
+                    let slot = &mut p.settings.macro_bank.slots[macro_idx];
+                    if mapping_idx < slot.mappings.len() {
+                        slot.mappings.remove(mapping_idx);
+                    }
+                });
+            }
             DispatchResult::handled()
         }
         MappingAction::ClearMacroMappings(macro_idx) => {
@@ -90,11 +112,21 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
         // the content command. Mirrors `UnmapParamAbleton` below exactly — the
         // only difference is AbletonMapParam (with address) vs AbletonUnmapParam.
         MappingAction::MapParamToAbleton(gpt, param_id, address) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project)
-                && manifest_holds(&ctx.project, &target, param_id.as_ref())
-                && let Some(mapping_target) =
-                    ableton_mapping_target(&target, effective_tab, active_layer, &ctx.project, param_id)
+            if let Some(target) = resolve_graph_target(
+                gpt,
+                ctx.editor_target,
+                effective_tab,
+                active_layer,
+                ctx.selection,
+                &ctx.project,
+            ) && manifest_holds(&ctx.project, &target, param_id.as_ref())
+                && let Some(mapping_target) = ableton_mapping_target(
+                    &target,
+                    effective_tab,
+                    active_layer,
+                    &ctx.project,
+                    param_id,
+                )
             {
                 ContentCommand::send(
                     ctx.content_tx,
@@ -107,10 +139,15 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
             DispatchResult::handled()
         }
         MappingAction::UnmapParamAbleton(gpt, param_id) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project)
-                && let Some(mapping_target) =
-                    ableton_mapping_target(&target, effective_tab, active_layer, &ctx.project, param_id)
+            if let Some(target) = resolve_graph_target(
+                gpt,
+                ctx.editor_target,
+                effective_tab,
+                active_layer,
+                ctx.selection,
+                &ctx.project,
+            ) && let Some(mapping_target) =
+                ableton_mapping_target(&target, effective_tab, active_layer, &ctx.project, param_id)
             {
                 ContentCommand::send(
                     ctx.content_tx,
@@ -158,15 +195,22 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
         // target. The undo baseline `(min, max)` now lives in `ScrubState.active`
         // (the retired `trim_snapshot` field's last reader).
         MappingAction::AbletonInvertToggle(gpt, param_id) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project)
-                && let Some(mapping_target) =
-                    ableton_mapping_target(&target, effective_tab, active_layer, &ctx.project, param_id)
+            if let Some(target) = resolve_graph_target(
+                gpt,
+                ctx.editor_target,
+                effective_tab,
+                active_layer,
+                ctx.selection,
+                &ctx.project,
+            ) && let Some(mapping_target) =
+                ableton_mapping_target(&target, effective_tab, active_layer, &ctx.project, param_id)
             {
                 let mt = mapping_target.clone();
                 let pid = param_id.clone();
                 ctx.mutate(crate::content_command::touch::MAPPINGS, move |p| {
-                    if let Some(ms) = p.ableton_param_mappings_mut(&mt).and_then(|opt| opt.as_mut())
+                    if let Some(ms) = p
+                        .ableton_param_mappings_mut(&mt)
+                        .and_then(|opt| opt.as_mut())
                         && let Some(m) = ms.iter_mut().find(|m| m.param_id == pid)
                     {
                         m.inverted = !m.inverted;
@@ -187,6 +231,5 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
             });
             DispatchResult::handled()
         }
-
     }
 }

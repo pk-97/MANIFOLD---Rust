@@ -32,9 +32,8 @@
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 /// Which param the `beat_ramp` output port-shadows, one wire added to the
 /// otherwise-identical base scene. `None` renders the fully static scene
@@ -186,13 +185,21 @@ fn render_at_beat(
     let mut enc = h.device.create_encoder("render-scene-shadow-cache-enc");
     {
         let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-        runtime.render(&mut gpu, target, &ctx, &manifold_core::params::ParamManifest::default());
+        runtime.render(
+            &mut gpu,
+            target,
+            &ctx,
+            &manifold_core::params::ParamManifest::default(),
+        );
     }
     enc.commit_and_wait_completed();
     h.readback(target)
 }
 
-fn build_runtime(h: &manifold_node_engine::testkit::gpu_harness::ParityHarness, json: &str) -> PresetRuntime {
+fn build_runtime(
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
+    json: &str,
+) -> PresetRuntime {
     let registry = PrimitiveRegistry::with_builtin();
     PresetRuntime::from_json_str_with_device(
         &manifold_nodes::testkit::scene_objects::bundle_scene_objects(json),
@@ -249,8 +256,7 @@ fn assert_mutation_forces_fresh_equivalent_render(mutation: Mutation, warm_frame
     for frame in 0..warm_frames {
         render_at_beat(h, &mut long_running, &target_a.texture, 0.0, frame);
     }
-    let mutated =
-        render_at_beat(h, &mut long_running, &target_a.texture, 0.3, warm_frames);
+    let mutated = render_at_beat(h, &mut long_running, &target_a.texture, 0.3, warm_frames);
 
     let mut fresh = build_runtime(h, &json);
     let target_b = h.make_target("shadow-cache-mutation-fresh");

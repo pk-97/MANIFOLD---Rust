@@ -17,8 +17,8 @@
 //! so a send row shows a static "Stereo" / routing label rather than a channel
 //! dropdown.
 
-use crate::{AudioSetupAction, LayerAction, RootAction, ScrubPhase, ScrubValue, ValueRef};
 use crate::types::AudioDeviceRef;
+use crate::{AudioSetupAction, LayerAction, RootAction, ScrubPhase, ScrubValue, ValueRef};
 use manifold_foundation::{AudioSendId, LayerId};
 
 use crate::chrome::{ChromeHost, Pad, Sizing, View};
@@ -27,8 +27,8 @@ use crate::input::{Modifiers, UIEvent};
 use crate::node::*;
 use crate::tree::UITree;
 
-use super::{BandDivider, PanelAction};
 use super::scrub::ScrubGesture;
+use super::{BandDivider, PanelAction};
 
 // Stable keys for the host-owned modal chrome (background + title strip).
 const KEY_BG: u64 = 70_001;
@@ -512,7 +512,11 @@ impl AudioSetupPanel {
     ///
     /// [`configure`]: Self::configure
     fn normalize_selection(&mut self) {
-        if !self.sends.iter().any(|s| Some(&s.id) == self.selected_send.as_ref()) {
+        if !self
+            .sends
+            .iter()
+            .any(|s| Some(&s.id) == self.selected_send.as_ref())
+        {
             let first = self.sends.first().map(|s| s.id.clone());
             self.set_selected_send(first);
         }
@@ -660,8 +664,12 @@ impl AudioSetupPanel {
         // panel swallows stray clicks. It fills the full dock height; the body
         // rows below are built into the scroll clip.
         let chrome = self.chrome_view();
-        self.host.build(tree, &chrome, Rect::new(x, y, self.panel_w, panel_h));
-        self.bg_id = self.host.node_id_for_key(KEY_BG).unwrap_or(NodeId::PLACEHOLDER);
+        self.host
+            .build(tree, &chrome, Rect::new(x, y, self.panel_w, panel_h));
+        self.bg_id = self
+            .host
+            .node_id_for_key(KEY_BG)
+            .unwrap_or(NodeId::PLACEHOLDER);
         self.close_id = self
             .host
             .node_id_for_key(KEY_CLOSE)
@@ -687,7 +695,15 @@ impl AudioSetupPanel {
         let mut cy = content_top;
 
         // Device row: [Device]  [ current device            ▼ ]
-        tree.add_label(Some(self.content_parent), inner_x, cy, 70.0, ROW_H, "Device", label_style());
+        tree.add_label(
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            70.0,
+            ROW_H,
+            "Device",
+            label_style(),
+        );
         self.device_dropdown_id = tree.add_button_keyed(
             Some(self.content_parent),
             inner_x + 74.0,
@@ -899,7 +915,10 @@ impl AudioSetupPanel {
                 meter_y,
                 meter_w,
                 meter_h,
-                UIStyle { bg_color: Color32::new(40, 40, 46, 255), ..UIStyle::default() },
+                UIStyle {
+                    bg_color: Color32::new(40, 40, 46, 255),
+                    ..UIStyle::default()
+                },
             );
             let fill = tree.add_panel(
                 Some(self.content_parent),
@@ -907,7 +926,10 @@ impl AudioSetupPanel {
                 meter_y,
                 0.0, // width set per frame by update_meters
                 meter_h,
-                UIStyle { bg_color: super::audio_send_color(&send.id), ..UIStyle::default() },
+                UIStyle {
+                    bg_color: super::audio_send_color(&send.id),
+                    ..UIStyle::default()
+                },
             );
             self.send_ids[i].meter_track = track;
             self.send_ids[i].meter_fill = fill;
@@ -1199,7 +1221,11 @@ impl AudioSetupPanel {
                     py,
                     0.0,
                     0.0,
-                    UIStyle { bg_color: band_color(band), corner_radius: color::HAIRLINE_RADIUS, ..UIStyle::default() },
+                    UIStyle {
+                        bg_color: band_color(band),
+                        corner_radius: color::HAIRLINE_RADIUS,
+                        ..UIStyle::default()
+                    },
                 );
                 *slot = (Some(track), Some(fill), Some(label));
             }
@@ -1254,7 +1280,13 @@ impl AudioSetupPanel {
     /// listening, not routing edits — the layer header's Send dropdown is
     /// the one surviving authoring path (same `SetLayerAudioSend` command,
     /// one owner). Returns the y past the section.
-    fn build_inputs_section(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32) -> f32 {
+    fn build_inputs_section(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+    ) -> f32 {
         let routings: Vec<String> = self
             .selected_send
             .as_ref()
@@ -1320,7 +1352,15 @@ impl AudioSetupPanel {
             } else {
                 (line.clone(), label_style())
             };
-            tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, &row_text, row_style);
+            tree.add_label(
+                Some(self.content_parent),
+                inner_x,
+                cy,
+                inner_w,
+                ROW_H,
+                &row_text,
+                row_style,
+            );
             cy += ROW_H + ROW_GAP;
         }
         cy
@@ -1330,7 +1370,13 @@ impl AudioSetupPanel {
     /// row per consumer (or a dim "no consumers yet" line when there are
     /// none). Click emits [`PanelAction::LayerClicked`] for the owning layer —
     /// navigational only, never editable (D3). Returns the y past the section.
-    fn build_consumers_section(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32) -> f32 {
+    fn build_consumers_section(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+    ) -> f32 {
         self.consumer_row_ids.clear();
         let consumers: Vec<SendConsumerRow> = self
             .selected_send
@@ -1492,9 +1538,10 @@ impl AudioSetupPanel {
     /// pointer hit-test and the hover affordance.
     fn nearest_divider_y(&self, screen_y: f32) -> Option<BandDivider> {
         let mut best: Option<(BandDivider, f32)> = None;
-        for (band, hz) in
-            [(BandDivider::Low, self.scope_low_hz), (BandDivider::Mid, self.scope_mid_hz)]
-        {
+        for (band, hz) in [
+            (BandDivider::Low, self.scope_low_hz),
+            (BandDivider::Mid, self.scope_mid_hz),
+        ] {
             if let Some(ly) = self.scope_line_y(hz) {
                 let d = (screen_y - ly).abs();
                 if d <= Self::DIVIDER_GRAB_PX && best.is_none_or(|(_, bd)| d < bd) {
@@ -1541,7 +1588,11 @@ impl AudioSetupPanel {
     /// Rewrite each send row's gain readout in place (UI_INVALIDATION D22).
     /// `gains` walks the project's sends in this panel's order as
     /// `(send id, gain dB)`; a row whose id differs waits for the rebuild.
-    pub fn sync_send_gains(&mut self, tree: &mut UITree, gains: &mut dyn Iterator<Item = (&AudioSendId, f32)>) {
+    pub fn sync_send_gains(
+        &mut self,
+        tree: &mut UITree,
+        gains: &mut dyn Iterator<Item = (&AudioSendId, f32)>,
+    ) {
         for (i, (send, (id, db))) in self.sends.iter_mut().zip(gains).enumerate() {
             if &send.id != id || send.gain_db == db {
                 continue;
@@ -1653,10 +1704,17 @@ impl AudioSetupPanel {
         let chip_x = rect.x + 4.0;
         let range_valid = self.scope_fmin > 0.0 && self.scope_fmax > self.scope_fmin;
         let mut prev_top = f32::INFINITY;
-        for (i, (&label_id, &chip_id)) in
-            self.scope_lane_label_ids.iter().zip(self.scope_lane_chip_ids.iter()).enumerate()
+        for (i, (&label_id, &chip_id)) in self
+            .scope_lane_label_ids
+            .iter()
+            .zip(self.scope_lane_chip_ids.iter())
+            .enumerate()
         {
-            let name = self.scope_lane_legend.get(i).map(|(n, _)| n.as_str()).unwrap_or("");
+            let name = self
+                .scope_lane_legend
+                .get(i)
+                .map(|(n, _)| n.as_str())
+                .unwrap_or("");
             let divider_y = match name {
                 "Low" => self.scope_line_y(self.scope_low_hz),
                 "Mid" => self.scope_line_y(self.scope_mid_hz),
@@ -1683,7 +1741,9 @@ impl AudioSetupPanel {
     }
 
     pub fn update_band_meters(&self, tree: &mut UITree, amps: Option<[f32; 3]>) {
-        let Some(rect) = self.scope_rect() else { return };
+        let Some(rect) = self.scope_rect() else {
+            return;
+        };
         // Letter label on the left of the margin, bar filling the rest.
         let label_x = rect.x + rect.width + SCOPE_METER_GAP;
         let bar_x = label_x + BAND_METER_LABEL_W;
@@ -1781,8 +1841,14 @@ impl AudioSetupPanel {
         if self.floor_minus_id == Some(id) || self.floor_plus_id == Some(id) {
             self.set_delete_armed(None);
             let send = self.selected_send.clone()?;
-            let delta = if self.floor_plus_id == Some(id) { 6.0 } else { -6.0 };
-            return Some(PanelAction::AudioSetup(AudioSetupAction::AudioSendFloorStep(send, delta)));
+            let delta = if self.floor_plus_id == Some(id) {
+                6.0
+            } else {
+                -6.0
+            };
+            return Some(PanelAction::AudioSetup(
+                AudioSetupAction::AudioSendFloorStep(send, delta),
+            ));
         }
         // Inputs section authoring ("+ Layer" / per-layer ×) deleted —
         // the section is read-only routing display
@@ -1799,7 +1865,10 @@ impl AudioSetupPanel {
                 .map(|s| s.consumers.clone())
                 .unwrap_or_default();
             let layer_id = consumers.get(i)?.layer_id.clone()?;
-            return Some(PanelAction::Layer(LayerAction::LayerClicked(layer_id, Modifiers::NONE)));
+            return Some(PanelAction::Layer(LayerAction::LayerClicked(
+                layer_id,
+                Modifiers::NONE,
+            )));
         }
         // Find which send row + control was hit (clone out so we don't hold a
         // borrow across the delete-arm mutation).
@@ -1833,25 +1902,31 @@ impl AudioSetupPanel {
             }
             RowControl::Label => {
                 self.set_delete_armed(None);
-                Some(PanelAction::Root(RootAction::AudioSendLabelClicked(send_id)))
+                Some(PanelAction::Root(RootAction::AudioSendLabelClicked(
+                    send_id,
+                )))
             }
             RowControl::GainDown => {
                 self.set_delete_armed(None);
-                Some(PanelAction::AudioSetup(AudioSetupAction::AudioSendGainStep(send_id, -1.0)))
+                Some(PanelAction::AudioSetup(
+                    AudioSetupAction::AudioSendGainStep(send_id, -1.0),
+                ))
             }
             RowControl::GainUp => {
                 self.set_delete_armed(None);
-                Some(PanelAction::AudioSetup(AudioSetupAction::AudioSendGainStep(send_id, 1.0)))
+                Some(PanelAction::AudioSetup(
+                    AudioSetupAction::AudioSendGainStep(send_id, 1.0),
+                ))
             }
             RowControl::Delete => {
                 // Confirm before deleting a send that still drives params: the
                 // first click arms (re-render shows the prompt), the second
                 // confirms. A send driving nothing deletes immediately.
-                if self.sends[i].driven_count == 0
-                    || self.delete_armed.as_ref() == Some(&send_id)
-                {
+                if self.sends[i].driven_count == 0 || self.delete_armed.as_ref() == Some(&send_id) {
                     self.set_delete_armed(None);
-                    Some(PanelAction::AudioSetup(AudioSetupAction::AudioRemoveSend(send_id)))
+                    Some(PanelAction::AudioSetup(AudioSetupAction::AudioRemoveSend(
+                        send_id,
+                    )))
                 } else {
                     self.set_delete_armed(Some(send_id));
                     None
@@ -1935,30 +2010,47 @@ impl AudioSetupPanel {
             // gain-row nodes (minus / value / plus) for the row it belongs
             // to. Replays the drag trio at 0.0 so undo == a drag to unity,
             // same as every other `slider_reset` site.
-            UIEvent::RightClick { node_id: Some(id), .. } => {
+            UIEvent::RightClick {
+                node_id: Some(id), ..
+            } => {
                 let id = *id;
                 if let Some((zone, send)) =
-                    self.send_ids.iter().zip(self.sends.iter()).find_map(|(ids, send)| {
-                        if id == ids.gain_minus {
-                            Some((crate::stepper::StepperZone::Minus, send))
-                        } else if id == ids.gain_value {
-                            Some((crate::stepper::StepperZone::Value, send))
-                        } else if id == ids.gain_plus {
-                            Some((crate::stepper::StepperZone::Plus, send))
-                        } else {
-                            None
-                        }
-                    })
+                    self.send_ids
+                        .iter()
+                        .zip(self.sends.iter())
+                        .find_map(|(ids, send)| {
+                            if id == ids.gain_minus {
+                                Some((crate::stepper::StepperZone::Minus, send))
+                            } else if id == ids.gain_value {
+                                Some((crate::stepper::StepperZone::Value, send))
+                            } else if id == ids.gain_plus {
+                                Some((crate::stepper::StepperZone::Plus, send))
+                            } else {
+                                None
+                            }
+                        })
                     && let Some(crate::stepper::StepperIntent::ResetToDefault) =
-                        crate::stepper::Stepper::intent_for(zone, crate::intent::Gesture::RightClick)
+                        crate::stepper::Stepper::intent_for(
+                            zone,
+                            crate::intent::Gesture::RightClick,
+                        )
                 {
                     let send_id = send.id.clone();
                     (
                         true,
                         vec![PanelAction::slider_reset(
-                            PanelAction::Scrub(ValueRef::AudioSendGain(send_id.clone()), ScrubPhase::Begin),
-                            PanelAction::Scrub(ValueRef::AudioSendGain(send_id.clone()), ScrubPhase::Move(ScrubValue::Scalar(0.0))),
-                            PanelAction::Scrub(ValueRef::AudioSendGain(send_id), ScrubPhase::Commit),
+                            PanelAction::Scrub(
+                                ValueRef::AudioSendGain(send_id.clone()),
+                                ScrubPhase::Begin,
+                            ),
+                            PanelAction::Scrub(
+                                ValueRef::AudioSendGain(send_id.clone()),
+                                ScrubPhase::Move(ScrubValue::Scalar(0.0)),
+                            ),
+                            PanelAction::Scrub(
+                                ValueRef::AudioSendGain(send_id),
+                                ScrubPhase::Commit,
+                            ),
                         )],
                     )
                 } else {
@@ -1976,12 +2068,18 @@ impl AudioSetupPanel {
             // type-in registration can't drift apart.
             UIEvent::DoubleClick { node_id, .. } => {
                 if let Some((send, db)) = self.gain_drag_target(*node_id)
-                    && let Some(crate::stepper::StepperIntent::EditValue) = crate::stepper::Stepper::intent_for(
-                        crate::stepper::StepperZone::Value,
-                        crate::intent::Gesture::DoubleClick,
-                    )
+                    && let Some(crate::stepper::StepperIntent::EditValue) =
+                        crate::stepper::Stepper::intent_for(
+                            crate::stepper::StepperZone::Value,
+                            crate::intent::Gesture::DoubleClick,
+                        )
                 {
-                    (true, vec![PanelAction::Root(RootAction::AudioSendGainBeginTextInput(send, db, *node_id))])
+                    (
+                        true,
+                        vec![PanelAction::Root(RootAction::AudioSendGainBeginTextInput(
+                            send, db, *node_id,
+                        ))],
+                    )
                 } else {
                     (false, Vec::new())
                 }
@@ -1993,7 +2091,11 @@ impl AudioSetupPanel {
             // lines are drawn shader-side (hit-test by position); value
             // labels are real nodes (hit-test by node id). (The matrix's
             // sensitivity-value drag arm is deleted with the matrix, P3 D2.)
-            UIEvent::PointerDown { node_id, pos, modifiers } => {
+            UIEvent::PointerDown {
+                node_id,
+                pos,
+                modifiers,
+            } => {
                 if let Some(band) = self.divider_at(*pos) {
                     let action = self.scrub.begin(
                         ValueRef::AudioCrossover(band),
@@ -2038,7 +2140,11 @@ impl AudioSetupPanel {
                 // section 3.4); the host clamps the candidate to the real range.
                 // P4, D8: Shift held at drag-start ("fine") multiplies the
                 // applied per-pixel delta by 0.1.
-                Some(AudioSetupDrag::Calibration(CalibrationDrag::Gain { start_x, start_db, fine })) => {
+                Some(AudioSetupDrag::Calibration(CalibrationDrag::Gain {
+                    start_x,
+                    start_db,
+                    fine,
+                })) => {
                     let db_per_px = if fine { 0.01 } else { 0.1 };
                     let new_db = start_db + (pos.x - start_x) * db_per_px;
                     self.scrub
@@ -2150,12 +2256,20 @@ pub(super) mod tests {
         let mut panel = AudioSetupPanel::new();
         let v0 = panel.view_version();
         panel.close();
-        assert_eq!(panel.view_version(), v0, "closing a closed dock is no change");
+        assert_eq!(
+            panel.view_version(),
+            v0,
+            "closing a closed dock is no change"
+        );
         panel.open();
         let v1 = panel.view_version();
         assert!(v1 > v0);
         panel.open();
-        assert_eq!(panel.view_version(), v1, "opening an open dock is no change");
+        assert_eq!(
+            panel.view_version(),
+            v1,
+            "opening an open dock is no change"
+        );
         panel.toggle();
         assert!(panel.view_version() > v1);
     }
@@ -2212,7 +2326,10 @@ pub(super) mod tests {
         p.build_docked(&mut tree, test_dock_rect());
 
         // Add send.
-        assert!(matches!(p.handle_click(p.add_send_id), Some(PanelAction::AudioSetup(AudioSetupAction::AudioAddSend))));
+        assert!(matches!(
+            p.handle_click(p.add_send_id),
+            Some(PanelAction::AudioSetup(AudioSetupAction::AudioAddSend))
+        ));
 
         // Device trigger opens the device dropdown (app builds the list).
         assert!(matches!(
@@ -2222,7 +2339,12 @@ pub(super) mod tests {
 
         // Delete send 1.
         let del = p.send_ids[0].delete;
-        assert!(matches!(p.handle_click(del), Some(PanelAction::AudioSetup(AudioSetupAction::AudioRemoveSend(_)))));
+        assert!(matches!(
+            p.handle_click(del),
+            Some(PanelAction::AudioSetup(AudioSetupAction::AudioRemoveSend(
+                _
+            )))
+        ));
 
         // Close (×) routes through handle_event and emits the toggle action
         // (the app closes the dock — one path with Escape / header button).
@@ -2232,7 +2354,10 @@ pub(super) mod tests {
             modifiers: Modifiers::default(),
         });
         assert!(consumed);
-        assert!(matches!(acts.as_slice(), [PanelAction::Root(RootAction::OpenAudioSetup)]));
+        assert!(matches!(
+            acts.as_slice(),
+            [PanelAction::Root(RootAction::OpenAudioSetup)]
+        ));
     }
 
     // `trigger_row_clicks_resolve_to_actions` (the matrix row-click test) is
@@ -2288,7 +2413,10 @@ pub(super) mod tests {
             origin: inside,
             modifiers,
         });
-        assert!(!drag_consumed, "handle_event needn't consume the missed-grab case — ownership does");
+        assert!(
+            !drag_consumed,
+            "handle_event needn't consume the missed-grab case — ownership does"
+        );
     }
 
     /// a timeline drag whose origin is outside the dock is
@@ -2353,7 +2481,10 @@ pub(super) mod tests {
             Vec2::ZERO,
         );
         assert!(p.scrub.is_active());
-        assert!(!p.is_dragging_band(), "a calibration drag must not read as a band drag");
+        assert!(
+            !p.is_dragging_band(),
+            "a calibration drag must not read as a band drag"
+        );
 
         p.gesture_ended();
         assert!(!p.scrub.is_active());
@@ -2380,7 +2511,10 @@ pub(super) mod tests {
             }),
             Vec2::ZERO,
         );
-        assert!(!p.is_dragging_band(), "the fresh calibration grab must replace the band drag");
+        assert!(
+            !p.is_dragging_band(),
+            "the fresh calibration grab must replace the band drag"
+        );
     }
 
     #[test]
@@ -2454,9 +2588,17 @@ pub(super) mod tests {
         let del = p.send_ids[0].delete;
         // First click arms — no action, and the confirm notice appears.
         assert!(p.handle_click(del).is_none());
-        assert!(p.active_notice().is_some_and(|n| n.contains("drives 2 params")));
+        assert!(
+            p.active_notice()
+                .is_some_and(|n| n.contains("drives 2 params"))
+        );
         // Second click confirms the delete.
-        assert!(matches!(p.handle_click(del), Some(PanelAction::AudioSetup(AudioSetupAction::AudioRemoveSend(_)))));
+        assert!(matches!(
+            p.handle_click(del),
+            Some(PanelAction::AudioSetup(AudioSetupAction::AudioRemoveSend(
+                _
+            )))
+        ));
         assert!(p.active_notice().is_none(), "arm cleared after confirm");
     }
 
@@ -2471,7 +2613,9 @@ pub(super) mod tests {
         // Clicking another row control clears the arm instead of deleting.
         assert!(matches!(
             p.handle_click(p.send_ids[0].gain_minus),
-            Some(PanelAction::AudioSetup(AudioSetupAction::AudioSendGainStep(..)))
+            Some(PanelAction::AudioSetup(
+                AudioSetupAction::AudioSendGainStep(..)
+            ))
         ));
         assert!(p.active_notice().is_none());
     }
@@ -2525,7 +2669,12 @@ pub(super) mod tests {
             modifiers: Modifiers::NONE,
         });
         match actions.as_slice() {
-            [PanelAction::Scrub(ValueRef::AudioSendGain(id), ScrubPhase::Move(ScrubValue::Scalar(db)))] => {
+            [
+                PanelAction::Scrub(
+                    ValueRef::AudioSendGain(id),
+                    ScrubPhase::Move(ScrubValue::Scalar(db)),
+                ),
+            ] => {
                 assert_eq!(id.as_str(), "s1");
                 assert!((db - 2.0).abs() < 1e-4, "expected +2.0 dB, got {db}");
             }
@@ -2540,7 +2689,10 @@ pub(super) mod tests {
             actions.as_slice(),
             [PanelAction::Scrub(ValueRef::AudioSendGain(id), ScrubPhase::Commit)] if id.as_str() == "s1"
         ));
-        assert!(!p.is_dragging_band(), "gain drag must not arm the crossover drag flag");
+        assert!(
+            !p.is_dragging_band(),
+            "gain drag must not arm the crossover drag flag"
+        );
     }
 
     // `sensitivity_drag_begin_changed_commit_sequence` (the matrix's D7
@@ -2628,10 +2780,16 @@ pub(super) mod tests {
         let unscrolled_y = p.scope_rect().expect("scope present while open").y;
 
         let moved = p.handle_scroll(-40.0);
-        assert!(moved, "scroll delta within scrollable range must move the offset");
+        assert!(
+            moved,
+            "scroll delta within scrollable range must move the offset"
+        );
         p.build_docked(&mut tree, test_dock_rect());
         let offset = p.scroll.scroll_offset();
-        assert!(offset > 0.0, "expected a nonzero scroll offset after handle_scroll");
+        assert!(
+            offset > 0.0,
+            "expected a nonzero scroll offset after handle_scroll"
+        );
         let scrolled_y = p.scope_rect().expect("scope still present after scroll").y;
         assert_eq!(
             scrolled_y,
@@ -2681,7 +2839,6 @@ pub(super) mod tests {
         }
     }
 
-
     // ─── Stable WidgetId across rebuild (the double-click bug) ───
     //
     // The panel consumes `PointerDown` on its own owned nodes to block the
@@ -2714,8 +2871,13 @@ pub(super) mod tests {
         p.sends[0].driven_count = 3;
         let mut tree = UITree::new();
         p.build_docked(&mut tree, test_dock_rect());
-        assert!(p.active_notice().is_none(), "no notice line yet — nothing armed");
-        let floor_minus_1 = p.floor_minus_id.expect("floor stepper built with sends present");
+        assert!(
+            p.active_notice().is_none(),
+            "no notice line yet — nothing armed"
+        );
+        let floor_minus_1 = p
+            .floor_minus_id
+            .expect("floor stepper built with sends present");
         let w1 = tree.widget_of(floor_minus_1);
         assert_ne!(w1, WidgetId::NONE);
 
@@ -2723,10 +2885,16 @@ pub(super) mod tests {
         // rebuild exactly as `ui_root.rs` does when `overlay_dirty` is set
         // after the PointerDown that triggered this exact click was
         // consumed. This is the layout-shifting rebuild.
-        assert!(p.handle_click(p.send_ids[0].delete).is_none(), "first click arms, no action yet");
+        assert!(
+            p.handle_click(p.send_ids[0].delete).is_none(),
+            "first click arms, no action yet"
+        );
         tree.clear();
         p.build_docked(&mut tree, test_dock_rect());
-        assert!(p.active_notice().is_some(), "delete-confirm notice line now present");
+        assert!(
+            p.active_notice().is_some(),
+            "delete-confirm notice line now present"
+        );
         let floor_minus_2 = p.floor_minus_id.expect("floor stepper rebuilt");
         let w2 = tree.widget_of(floor_minus_2);
 
@@ -2788,7 +2956,11 @@ pub(super) mod tests {
         let mut tree = UITree::new();
         p.build_docked(&mut tree, test_dock_rect());
         let ids = &p.send_ids[0];
-        let zones = [("gain minus", ids.gain_minus), ("gain value", ids.gain_value), ("gain plus", ids.gain_plus)];
+        let zones = [
+            ("gain minus", ids.gain_minus),
+            ("gain value", ids.gain_value),
+            ("gain plus", ids.gain_plus),
+        ];
         zones
             .into_iter()
             .map(|(label, id)| {

@@ -8,9 +8,9 @@ use std::sync::{Mutex, OnceLock};
 use crate::runtime::layer_skin::LayerSkinRegistry;
 
 use crate::bindings::{NodeInputs, NodeOutputs};
-use crate::scene::material::MaterialKind;
 use crate::parameters::{ParamDef, ParamValue};
 use crate::ports::{NodeInput, NodeOutput};
+use crate::scene::material::MaterialKind;
 use crate::state_store::{OwnerKey, StateStore};
 
 /// Stable string ID identifying an [`EffectNode`] kind.
@@ -128,37 +128,62 @@ impl SimStep {
     }
 
     pub fn with_preview_budget(self, budget: std::time::Duration) -> Self {
-        Self { preview_budget: budget, ..self }
+        Self {
+            preview_budget: budget,
+            ..self
+        }
     }
 
     pub fn with_live_load(self, load: Option<FrameLoad>) -> Self {
-        Self { live_load: load, ..self }
+        Self {
+            live_load: load,
+            ..self
+        }
     }
 
     pub fn authored_sample(self) -> Self {
-        Self { authored_sample_only: true, ..self }
+        Self {
+            authored_sample_only: true,
+            ..self
+        }
     }
 
     pub fn draining_history(self) -> Self {
-        Self { history_drain: true, ..self }
+        Self {
+            history_drain: true,
+            ..self
+        }
     }
 
     /// A placement's target is also the new [`Self::replay_origin`].
     pub fn with_played_target(self, target: Option<PlayedTime>) -> Self {
-        Self { played_target: target, replay_origin: target.unwrap_or(self.replay_origin), ..self }
+        Self {
+            played_target: target,
+            replay_origin: target.unwrap_or(self.replay_origin),
+            ..self
+        }
     }
 
     pub fn with_replay_origin(self, origin: PlayedTime) -> Self {
-        Self { replay_origin: origin, ..self }
+        Self {
+            replay_origin: origin,
+            ..self
+        }
     }
 
     /// A replay sample at played time `played`.
     pub fn at_played(self, played: PlayedTime) -> Self {
-        Self { played: Some(played), ..self }
+        Self {
+            played: Some(played),
+            ..self
+        }
     }
 
     pub fn with_tempo_shift(self, shift: Seconds) -> Self {
-        Self { tempo_shift: shift, ..self }
+        Self {
+            tempo_shift: shift,
+            ..self
+        }
     }
 
     /// The played time of a frame or sample at transport `seconds`.
@@ -341,7 +366,10 @@ pub struct NodeErrorTap(std::marker::PhantomData<std::rc::Rc<()>>);
 
 #[cfg(feature = "gpu-proofs")]
 impl NodeErrorTap {
-    #[expect(clippy::new_without_default, reason = "arming the tap is a side effect, not a default value")]
+    #[expect(
+        clippy::new_without_default,
+        reason = "arming the tap is a side effect, not a default value"
+    )]
     pub fn new() -> Self {
         NODE_ERROR_TAP.set(Some(Vec::new()));
         Self(std::marker::PhantomData)
@@ -566,7 +594,10 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
         self
     }
 
-    pub fn with_sim_metrics(mut self, sink: crate::exec::sim_metrics::SimMetricsSink<'ctx>) -> Self {
+    pub fn with_sim_metrics(
+        mut self,
+        sink: crate::exec::sim_metrics::SimMetricsSink<'ctx>,
+    ) -> Self {
         self.sim_metrics = sink;
         self
     }
@@ -623,13 +654,13 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
         self.output_storage_retained
     }
 
-manifold_core::testkit_visible! {
-    /// Executor-only builder for the output-storage retention proof.
-    pub(crate) fn with_outputs_retained(mut self, retained: bool) -> Self {
-        self.output_storage_retained = retained;
-        self
+    manifold_core::testkit_visible! {
+        /// Executor-only builder for the output-storage retention proof.
+        pub(crate) fn with_outputs_retained(mut self, retained: bool) -> Self {
+            self.output_storage_retained = retained;
+            self
+        }
     }
-}
 
     /// Declare that this node's outputs this frame are allocated but not
     /// yet valid — async content is still in flight (e.g.
@@ -840,8 +871,12 @@ pub trait AsAny {
 }
 
 impl<T: std::any::Any> AsAny for T {
-    fn as_any(&self) -> &dyn std::any::Any { self }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
 /// One unit of GPU work in the effect graph.
@@ -1057,7 +1092,9 @@ pub trait EffectNode: Send + AsAny {
     /// a scene template inserting it wires the World's sources there, so it
     /// follows World Speed and restarts on World Reset
     /// (`manifold_core::scene_world_controls`). Empty: it follows no World.
-    fn world_control_inputs(&self) -> &'static [manifold_core::scene_world_controls::WorldControlInput] {
+    fn world_control_inputs(
+        &self,
+    ) -> &'static [manifold_core::scene_world_controls::WorldControlInput] {
         &[]
     }
 
@@ -1102,8 +1139,7 @@ pub trait EffectNode: Send + AsAny {
     /// question — "is this a liveness root?" — and every mechanism
     /// declares itself through this single method.
     fn is_liveness_root(&self) -> bool {
-        !self.state_capture_input_ports().is_empty()
-            || !self.aliased_array_io().is_empty()
+        !self.state_capture_input_ports().is_empty() || !self.aliased_array_io().is_empty()
     }
 
     /// Output Array port names whose buffer size must equal the
@@ -1210,11 +1246,16 @@ pub trait EffectNode: Send + AsAny {
 
     /// A boundary whose persistent identity range is exhausted requests a
     /// full restart through its existing clock owner before another tick.
-    fn take_substep_restart_request(&mut self) -> bool { false }
+    fn take_substep_restart_request(&mut self) -> bool {
+        false
+    }
 
     /// The accepted interval, numerical schedule and clock outputs for this
     /// iteration. The executor refreshes the outputs before the body executes.
-    fn substep_clock_interval(&self, _iteration: u32) -> Option<crate::exec::substeps::SubstepClockOutput<'_>> {
+    fn substep_clock_interval(
+        &self,
+        _iteration: u32,
+    ) -> Option<crate::exec::substeps::SubstepClockOutput<'_>> {
         None
     }
 
@@ -1377,12 +1418,16 @@ pub trait EffectNode: Send + AsAny {
     /// Opt into immutable, node-owned textures. Their dedicated slots are held
     /// across frames. Feedback back-edges and host-prebound outputs keep the
     /// ordinary writable contract; the node must support both paths.
-    fn provides_texture_output(&self, _port: &str) -> bool { false }
+    fn provides_texture_output(&self, _port: &str) -> bool {
+        false
+    }
 
     /// A CPU producer may publish a larger array after evaluation. Storage is
     /// dedicated, retained between frames, and installed before consumers run.
     /// Capacity is an allocation hint, not a limit on the produced geometry.
-    fn provides_array_output(&self, _port: &str) -> bool { false }
+    fn provides_array_output(&self, _port: &str) -> bool {
+        false
+    }
 
     fn provided_array_output(&self, _port: &str) -> Option<&manifold_gpu::GpuBuffer> {
         None
@@ -1964,11 +2009,7 @@ pub trait EffectNode: Send + AsAny {
     /// scale hint is ignored — chaining downsamples (`canvas →
     /// canvas/4 → canvas/16`) works correctly because the second
     /// downsample sees a concrete input dim from the first.
-    fn output_canvas_scale(
-        &self,
-        _port: &str,
-        _params: &ParamValues,
-    ) -> Option<(u32, u32)> {
+    fn output_canvas_scale(&self, _port: &str, _params: &ParamValues) -> Option<(u32, u32)> {
         None
     }
 
@@ -2063,9 +2104,7 @@ pub trait EffectNode: Send + AsAny {
         if !is_array_output {
             return None;
         }
-        params
-            .get("max_capacity")
-            .and_then(|v| v.as_u32_clamped(1))
+        params.get("max_capacity").and_then(|v| v.as_u32_clamped(1))
     }
 
     /// Mesh revision rule for the named output port, per design

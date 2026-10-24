@@ -52,7 +52,10 @@ pub enum DetectorError {
     Spec(SpecError),
     BadRate(u32),
     /// The model reads a kick verdict, and the kick it runs with is not the one it was trained with.
-    KickMismatch { want: String, got: String },
+    KickMismatch {
+        want: String,
+        got: String,
+    },
 }
 
 impl std::fmt::Display for DetectorError {
@@ -60,7 +63,10 @@ impl std::fmt::Display for DetectorError {
         match self {
             Self::Spec(e) => write!(f, "{e}"),
             Self::BadRate(r) => write!(f, "detector: input rate {r} Hz"),
-            Self::KickMismatch { want, got } => write!(f, "detector: reads the kick {want}'s verdicts, the kick here is {got}"),
+            Self::KickMismatch { want, got } => write!(
+                f,
+                "detector: reads the kick {want}'s verdicts, the kick here is {got}"
+            ),
         }
     }
 }
@@ -90,7 +96,11 @@ pub(crate) struct FireRule {
 
 impl FireRule {
     pub(crate) fn new(cutoff: f64, refractory_s: f64) -> Self {
-        Self { cutoff, refractory_s, last: None }
+        Self {
+            cutoff,
+            refractory_s,
+            last: None,
+        }
     }
 
     pub(crate) fn decide(&mut self, p: f64, avail_hop: u64) -> bool {
@@ -182,17 +192,30 @@ impl TrainedDetector {
             columns.push(Column { measure, at });
             at += measure.width();
         }
-        let col = |m: Measure| columns.iter().find(|c| c.measure == m).expect("Spec::measures holds every measure").at;
+        let col = |m: Measure| {
+            columns
+                .iter()
+                .find(|c| c.measure == m)
+                .expect("Spec::measures holds every measure")
+                .at
+        };
         let trees = match &spec.trees {
             // Spec::measures starts with the tree measures in column order.
-            Some(ms) => Some((Forest::from_container(c, "trees.")?, ms.iter().map(|m| m.width()).sum())),
+            Some(ms) => Some((
+                Forest::from_container(c, "trees.")?,
+                ms.iter().map(|m| m.width()).sum(),
+            )),
             None => None,
         };
         let (net, frames) = match &spec.net {
             Some(n) => {
                 let net = Net::new(c, n.count)?;
                 if net.channels() != n.channels.len() + 2 {
-                    return Err(SpecError::Mismatch { what: "net channels", detail: format!("weights take {} channels", net.channels()) }.into());
+                    return Err(SpecError::Mismatch {
+                        what: "net channels",
+                        detail: format!("weights take {} channels", net.channels()),
+                    }
+                    .into());
                 }
                 (Some(net), FrameBank::new(c, &n.channels)?)
             }
@@ -201,14 +224,24 @@ impl TrainedDetector {
         let (history, shape_cols, level_col) = match &spec.stage {
             Some(st) => (
                 Some(History::new(c, st, MODEL_HOP, MODEL_RATE)?),
-                st.shape.iter().map(|&m| Column { measure: m, at: col(m) }).collect(),
+                st.shape
+                    .iter()
+                    .map(|&m| Column {
+                        measure: m,
+                        at: col(m),
+                    })
+                    .collect(),
                 st.level.map(|(m, i)| col(m) + i),
             ),
             None => (None, Vec::new(), None),
         };
         let shape_width = spec.stage.as_ref().map_or(0, |s| s.shape_width());
         let kick = if used.contains(&Measure::Kick2) {
-            Some(KickLink { train_id: c.text("kick2.kick_train_id")?.to_owned(), lag: None, settled: None })
+            Some(KickLink {
+                train_id: c.text("kick2.kick_train_id")?.to_owned(),
+                lag: None,
+                settled: None,
+            })
         } else {
             None
         };
@@ -266,7 +299,10 @@ impl TrainedDetector {
     /// The first 48 kHz sample count at which every part can decide this candidate. A model reading kick
     /// verdicts also waits out the kick's own decision lag.
     fn ready(&self, cand: &Candidate) -> u64 {
-        let mut ready = self.finder.ready_sample(cand.avail_hop).max(self.measures.ready_sample(cand));
+        let mut ready = self
+            .finder
+            .ready_sample(cand.avail_hop)
+            .max(self.measures.ready_sample(cand));
         if let Some(n) = &self.net {
             ready = ready.max(n.ready_sample(cand.avail_hop));
         }
@@ -284,9 +320,15 @@ impl TrainedDetector {
     /// Pairs this model with the kick detector that will feed it, refusing any kick but the trained one.
     pub fn link_kick(&mut self, kick: &TrainedDetector) -> Result<(), DetectorError> {
         let lag = kick.decision_lag_samples();
-        let link = self.kick.as_mut().expect("link_kick on a model without kick2");
+        let link = self
+            .kick
+            .as_mut()
+            .expect("link_kick on a model without kick2");
         if link.train_id != kick.train_id() {
-            return Err(DetectorError::KickMismatch { want: link.train_id.clone(), got: kick.train_id().to_owned() });
+            return Err(DetectorError::KickMismatch {
+                want: link.train_id.clone(),
+                got: kick.train_id().to_owned(),
+            });
         }
         link.lag = Some(lag);
         Ok(())
@@ -321,7 +363,11 @@ impl TrainedDetector {
         let deadline = self.finder.deadline();
         let lag = (1000..1000 + 375u64)
             .map(|cand_hop| {
-                let c = Candidate { cand_hop, avail_hop: cand_hop + deadline, f15: [0.0; 15] };
+                let c = Candidate {
+                    cand_hop,
+                    avail_hop: cand_hop + deadline,
+                    f15: [0.0; 15],
+                };
                 self.ready(&c) - self.finder.ready_sample(c.avail_hop)
             })
             .max()
@@ -337,7 +383,9 @@ impl TrainedDetector {
     /// The most fires one push of `samples` input samples can append: one per candidate found in it, plus
     /// every candidate already waiting.
     pub fn max_fires(&self, samples: usize) -> usize {
-        self.finder.max_candidates(self.input.model_samples(samples)) + PENDING
+        self.finder
+            .max_candidates(self.input.model_samples(samples))
+            + PENDING
     }
 
     /// Candidates decided so far (fired or not).
@@ -360,9 +408,16 @@ impl TrainedDetector {
     }
 
     /// Feeds mono input samples; hands every decision (fired or not) to `on_decision` as it is made.
-    pub fn push_traced(&mut self, samples: &[f32], mut on_decision: impl FnMut(&Decision<'_>, Option<Fire>)) {
+    pub fn push_traced(
+        &mut self,
+        samples: &[f32],
+        mut on_decision: impl FnMut(&Decision<'_>, Option<Fire>),
+    ) {
         // Unlinked, a kick2 model would wait for kick verdicts forever and never fire.
-        debug_assert!(self.kick.as_ref().is_none_or(|k| k.lag.is_some()), "a kick2 model runs only fed by its kick (KickFed)");
+        debug_assert!(
+            self.kick.as_ref().is_none_or(|k| k.lag.is_some()),
+            "a kick2 model runs only fed by its kick (KickFed)"
+        );
         for chunk in samples.chunks(ModelInput::STEP) {
             self.input.feed(chunk);
             self.step_block(&mut on_decision);
@@ -377,7 +432,8 @@ impl TrainedDetector {
         if let Some(n) = &mut self.net {
             n.push(block);
         }
-        self.frames.push(block, self.net.as_ref().map(Net::spectrum));
+        self.frames
+            .push(block, self.net.as_ref().map(Net::spectrum));
         self.samples48 += block.len() as u64;
         for i in 0..self.cands.len() {
             let cand = self.cands[i];
@@ -390,8 +446,16 @@ impl TrainedDetector {
             self.len += 1;
         }
         while self.len > 0 {
-            let kick_ok = |p: &Pending| self.kick.as_ref().is_none_or(|k| k.settled.is_some_and(|s| s >= p.cand.avail_hop));
-            let Some(p) = self.pending[self.head].filter(|p| p.ready <= self.samples48 && kick_ok(p)) else { break };
+            let kick_ok = |p: &Pending| {
+                self.kick
+                    .as_ref()
+                    .is_none_or(|k| k.settled.is_some_and(|s| s >= p.cand.avail_hop))
+            };
+            let Some(p) =
+                self.pending[self.head].filter(|p| p.ready <= self.samples48 && kick_ok(p))
+            else {
+                break;
+            };
             self.head = (self.head + 1) % PENDING;
             self.len -= 1;
             self.decide(&p, on_decision);
@@ -401,13 +465,23 @@ impl TrainedDetector {
     /// Section 5.3, per decided candidate: measures, trees and nets, combine, history, gate, fire rule.
     fn decide(&mut self, p: &Pending, on_decision: &mut impl FnMut(&Decision<'_>, Option<Fire>)) {
         let c = &p.cand;
-        debug_assert!(c.avail_hop >= self.last_avail, "decisions out of emission order");
+        debug_assert!(
+            c.avail_hop >= self.last_avail,
+            "decisions out of emission order"
+        );
         self.last_avail = c.avail_hop;
         self.decided += 1;
         for col in &self.columns {
-            self.measures.write(col.measure, c, &mut self.row[col.at..col.at + col.measure.width()]);
+            self.measures.write(
+                col.measure,
+                c,
+                &mut self.row[col.at..col.at + col.measure.width()],
+            );
         }
-        let p_trees = self.trees.as_ref().map_or(f64::NAN, |(f, width)| f.predict_proba(&self.row[..*width]));
+        let p_trees = self
+            .trees
+            .as_ref()
+            .map_or(f64::NAN, |(f, width)| f.predict_proba(&self.row[..*width]));
         let p_net = match &mut self.net {
             Some(net) => {
                 net.logits(c.cand_hop, c.avail_hop, &self.frames, &mut self.logits);
@@ -443,7 +517,11 @@ impl TrainedDetector {
             p_final,
             fire,
         };
-        let f = fire.then(|| Fire { sample: self.input.input_count(p.ready), cand_hop: c.cand_hop, avail_hop: c.avail_hop });
+        let f = fire.then(|| Fire {
+            sample: self.input.input_count(p.ready),
+            cand_hop: c.cand_hop,
+            avail_hop: c.avail_hop,
+        });
         on_decision(&d, f);
     }
 }
@@ -451,7 +529,12 @@ impl TrainedDetector {
 impl crate::detectors::EventDetector for TrainedDetector {
     fn push(&mut self, samples: &[f32], events: &mut Vec<crate::detectors::DetectorEvent>) {
         let kind = self.kind();
-        self.push_with(samples, |f| events.push(crate::detectors::DetectorEvent { kind, sample: f.sample }));
+        self.push_with(samples, |f| {
+            events.push(crate::detectors::DetectorEvent {
+                kind,
+                sample: f.sample,
+            })
+        });
     }
 
     fn max_events(&self, samples: usize) -> usize {

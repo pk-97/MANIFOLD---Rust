@@ -159,4 +159,3 @@ pub(super) fn scene_json() -> &'static str {
     ]}"#
 }
 }
-

@@ -22,9 +22,13 @@ use std::borrow::Cow;
 use std::sync::OnceLock;
 
 use manifold_core::scene_doc::transform::mat4_mul;
-use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
+use manifold_node_engine::exec::effect_node::{
+    EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
+};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use manifold_node_engine::ports::{
+    NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+};
 
 pub const LOOP_CELL_TYPE_ID: &str = "node.loop_cell";
 
@@ -85,11 +89,21 @@ impl LoopCell {
     }
 
     fn rebuild_ports(&mut self, boxes: usize) {
-        let port = |name: Cow<'static, str>, ty| NodePort { name, ty, kind: PortKind::Input, required: false };
-        self.inputs = vec![port(Cow::Borrowed("gap"), PortType::Scalar(ScalarType::F32))];
+        let port = |name: Cow<'static, str>, ty| NodePort {
+            name,
+            ty,
+            kind: PortKind::Input,
+            required: false,
+        };
+        self.inputs = vec![port(
+            Cow::Borrowed("gap"),
+            PortType::Scalar(ScalarType::F32),
+        )];
         for k in 0..boxes.max(1) {
-            self.inputs.push(port(Cow::Owned(format!("box_{k}")), PortType::Transform));
-            self.inputs.push(port(Cow::Owned(format!("within_{k}")), PortType::Transform));
+            self.inputs
+                .push(port(Cow::Owned(format!("box_{k}")), PortType::Transform));
+            self.inputs
+                .push(port(Cow::Owned(format!("within_{k}")), PortType::Transform));
         }
     }
 
@@ -116,7 +130,11 @@ pub fn cell_size(boxes: impl IntoIterator<Item = [[f32; 4]; 4]>, axis: usize, ga
     let mut span: Option<(f32, f32)> = None;
     for m in boxes {
         // A box of no size at all is nothing; a flat one still has a place.
-        let size: f32 = m[..3].iter().flat_map(|column| column[..3].iter()).map(|v| v.abs()).sum();
+        let size: f32 = m[..3]
+            .iter()
+            .flat_map(|column| column[..3].iter())
+            .map(|v| v.abs())
+            .sum();
         // The unit cube's half extent along the axis, through the matrix.
         let reach = 0.5 * (m[0][axis].abs() + m[1][axis].abs() + m[2][axis].abs());
         let centre = m[3][axis];
@@ -164,7 +182,10 @@ impl EffectNode for LoopCell {
     }
 
     fn reconfigure(&mut self, params: &ParamValues) {
-        let boxes = params.get("boxes").and_then(|v| v.as_scalar()).map_or(DEFAULT_BOXES, |f| f.round().max(1.0) as usize);
+        let boxes = params
+            .get("boxes")
+            .and_then(|v| v.as_scalar())
+            .map_or(DEFAULT_BOXES, |f| f.round().max(1.0) as usize);
         if boxes != self.boxes() {
             self.rebuild_ports(boxes);
         }
@@ -177,13 +198,15 @@ impl EffectNode for LoopCell {
         };
         let gap = ctx.scalar_or_param("gap", 0.0);
         let inputs = &ctx.inputs;
-        let boxes = self.inputs[FIXED_INPUTS..].chunks_exact(BOX_PORTS).filter_map(|ports| {
-            let placed = inputs.transform(&ports[0].name)?.world();
-            Some(match inputs.transform(&ports[1].name) {
-                Some(within) => mat4_mul(within.world(), placed),
-                None => placed,
-            })
-        });
+        let boxes = self.inputs[FIXED_INPUTS..]
+            .chunks_exact(BOX_PORTS)
+            .filter_map(|ports| {
+                let placed = inputs.transform(&ports[0].name)?.world();
+                Some(match inputs.transform(&ports[1].name) {
+                    Some(within) => mat4_mul(within.world(), placed),
+                    None => placed,
+                })
+            });
         let cell = cell_size(boxes, axis, gap);
         ctx.outputs.set_scalar("cell_size", ParamValue::Float(cell));
     }
@@ -212,7 +235,10 @@ mod tests {
         params.insert(Cow::Borrowed("boxes"), ParamValue::Float(100.0));
         node.reconfigure(&params);
         assert_eq!(node.boxes(), 100);
-        assert_eq!(node.inputs.last().map(|port| port.name.as_ref()), Some("within_99"));
+        assert_eq!(
+            node.inputs.last().map(|port| port.name.as_ref()),
+            Some("within_99")
+        );
     }
 
     /// The cell is the union's length along the axis plus the gap: a turned
@@ -222,16 +248,39 @@ mod tests {
     fn the_cell_is_the_union_along_the_axis_plus_the_gap() {
         let cube = trs_matrix([0.0; 3], [0.0; 3], [1.0; 3]);
         let far = trs_matrix([0.0, 0.0, 4.0], [0.0; 3], [2.0; 3]);
-        assert_eq!(cell_size([cube, far], 2, 0.5), 5.5 + 0.5, "from -0.5 to 5 along Z, then the gap");
-        assert_eq!(cell_size([cube, far], 0, 0.0), 2.0, "across X the two overlap");
+        assert_eq!(
+            cell_size([cube, far], 2, 0.5),
+            5.5 + 0.5,
+            "from -0.5 to 5 along Z, then the gap"
+        );
+        assert_eq!(
+            cell_size([cube, far], 0, 0.0),
+            2.0,
+            "across X the two overlap"
+        );
         let turned = trs_matrix([0.0; 3], [0.0, std::f32::consts::FRAC_PI_4, 0.0], [1.0; 3]);
-        assert!((cell_size([turned], 2, 0.0) - std::f32::consts::SQRT_2).abs() < 1e-6, "a turned cube reaches its corners");
+        assert!(
+            (cell_size([turned], 2, 0.0) - std::f32::consts::SQRT_2).abs() < 1e-6,
+            "a turned cube reaches its corners"
+        );
         let flat = trs_matrix([0.0, 0.0, 9.0], [0.0; 3], [0.0; 3]);
         let lost = trs_matrix([f32::NAN; 3], [0.0; 3], [1.0; 3]);
-        assert_eq!(cell_size([cube, flat, lost], 2, 0.0), 1.0, "a box of no size or no place measures nothing");
+        assert_eq!(
+            cell_size([cube, flat, lost], 2, 0.0),
+            1.0,
+            "a box of no size or no place measures nothing"
+        );
         let plane = trs_matrix([0.0, 0.0, 3.0], [0.0; 3], [1.0, 1.0, 0.0]);
-        assert_eq!(cell_size([cube, plane], 2, 0.0), 3.5, "a flat box still has a place");
-        assert_eq!(cell_size([], 2, 3.0), 3.0, "nothing measured leaves the gap");
+        assert_eq!(
+            cell_size([cube, plane], 2, 0.0),
+            3.5,
+            "a flat box still has a place"
+        );
+        assert_eq!(
+            cell_size([], 2, 3.0),
+            3.0,
+            "nothing measured leaves the gap"
+        );
         assert_eq!(cell_size([], 2, 0.0), MIN_CELL, "a cell always has length");
     }
 }

@@ -94,7 +94,10 @@ pub fn build(tree: &mut UITree, screen: (f32, f32), rect: Rect, style: &PopupSty
     );
     tree.set_flag(container, UIFlags::CLIPS_CHILDREN);
 
-    PopupShell { backdrop, container }
+    PopupShell {
+        backdrop,
+        container,
+    }
 }
 
 #[cfg(test)]

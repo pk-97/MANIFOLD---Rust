@@ -263,7 +263,11 @@ mod tests {
         let expected = [0.5, 0.25, 0.75, 0.125, 0.625, 0.375, 0.875];
         for (i, &e) in expected.iter().enumerate() {
             let got = halton((i + 1) as u32, 2);
-            assert!((got - e).abs() < 1e-6, "halton({}, 2) = {got}, expected {e}", i + 1);
+            assert!(
+                (got - e).abs() < 1e-6,
+                "halton({}, 2) = {got}, expected {e}",
+                i + 1
+            );
         }
     }
 
@@ -273,7 +277,11 @@ mod tests {
         let expected = [1.0 / 3.0, 2.0 / 3.0, 1.0 / 9.0, 4.0 / 9.0, 7.0 / 9.0];
         for (i, &e) in expected.iter().enumerate() {
             let got = halton((i + 1) as u32, 3);
-            assert!((got - e).abs() < 1e-6, "halton({}, 3) = {got}, expected {e}", i + 1);
+            assert!(
+                (got - e).abs() < 1e-6,
+                "halton({}, 3) = {got}, expected {e}",
+                i + 1
+            );
         }
     }
 

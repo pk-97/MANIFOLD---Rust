@@ -1,12 +1,15 @@
+use super::*;
 use crate::runtime::WaterRuntimeExt;
-use manifold_node_engine::exec::effect_node::FrameTime;
-use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_core::Beats;
 use manifold_core::Seconds;
 use manifold_core::effect_graph_def::EffectGraphDef;
-use super::*;
+use manifold_node_engine::exec::effect_node::FrameTime;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind};
-use manifold_node_engine::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, parameters::ParamDef, scene::transform::Transform};
+use manifold_node_engine::{
+    exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext,
+    exec::effect_node::EffectNodeType, parameters::ParamDef, scene::transform::Transform,
+};
 use std::{borrow::Cow, cell::Cell};
 
 thread_local! {
@@ -54,7 +57,11 @@ impl EffectNode for PoseObserver {
         &[]
     }
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        POSE_READY.set(ctx.inputs.slot("pose").is_some_and(|slot| ctx.inputs.slot_content_ready(slot)));
+        POSE_READY.set(
+            ctx.inputs
+                .slot("pose")
+                .is_some_and(|slot| ctx.inputs.slot_content_ready(slot)),
+        );
         POSE.set(ctx.inputs.transform("pose"));
         PEER_POSE.set(ctx.inputs.transform("peer_pose"));
     }
@@ -280,10 +287,15 @@ fn offline_history_drain_long_gap_matches_native_rigid_frame_sequence() {
     let actual = frame(&mut jumped, 3.0);
     assert!(POSE_READY.get());
     assert!(actual.pos[0] > 10.0, "fixture must have accelerated");
-    for (actual, expected) in [(actual, expected), (PEER_POSE.get().unwrap(), expected_peer)] {
+    for (actual, expected) in [
+        (actual, expected),
+        (PEER_POSE.get().unwrap(), expected_peer),
+    ] {
         for axis in 0..3 {
-            assert!((actual.pos[axis] - expected.pos[axis]).abs() < 1e-4,
-                "offline gap changed the native trajectory: {actual:?} vs {expected:?}");
+            assert!(
+                (actual.pos[axis] - expected.pos[axis]).abs() < 1e-4,
+                "offline gap changed the native trajectory: {actual:?} vs {expected:?}"
+            );
         }
     }
 }
@@ -303,13 +315,18 @@ fn offline_history_drain_keeps_capped_preview_prefix_before_long_gap() {
         jumped.set_sim_step(SimStep::live(tick).with_preview_budget(std::time::Duration::ZERO));
         frame(&mut jumped, 0.0);
         let behind = frame(&mut jumped, 0.9);
-        assert_eq!(behind, expected_prefix, "live accepts exactly two fixed intervals even at zero budget");
+        assert_eq!(
+            behind, expected_prefix,
+            "live accepts exactly two fixed intervals even at zero budget"
+        );
         jumped.set_sim_step(SimStep::default());
     }
     let actual = frame(&mut jumped, 3.0);
     for axis in 0..3 {
-        assert!((actual.pos[axis] - expected.pos[axis]).abs() < 1e-4,
-            "offline drain changed the accepted live prefix: {actual:?} vs {expected:?}");
+        assert!(
+            (actual.pos[axis] - expected.pos[axis]).abs() < 1e-4,
+            "offline drain changed the accepted live prefix: {actual:?} vs {expected:?}"
+        );
     }
 }
 
@@ -320,8 +337,15 @@ fn physics_carry_applies_setup_changes_in_place_and_rejects_output_resize() {
     let fallen = frame(&mut prior, 0.5);
     let mut changed = runtime(8.0, false);
     changed.carry_generator_state_from(&mut prior);
-    assert!(changed.water_ref().water.last_frame_time.is_some(), "the world carries over");
-    assert_eq!(frame(&mut changed, 0.5).pos[1], 8.0, "the edited start pose lands as a teleport");
+    assert!(
+        changed.water_ref().water.last_frame_time.is_some(),
+        "the world carries over"
+    );
+    assert_eq!(
+        frame(&mut changed, 0.5).pos[1],
+        8.0,
+        "the edited start pose lands as a teleport"
+    );
     let mut resized = runtime(5.0, false);
     resized.set_dimensions_for_test(resized.width_for_test() + 1, resized.height_for_test());
     resized.carry_generator_state_from(&mut prior);
@@ -357,11 +381,17 @@ impl EffectNode for MovingControls {
         &[]
     }
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let Some(manifold_node_engine::parameters::ParamValue::Float(clock)) = ctx.inputs.scalar("clock") else {
+        let Some(manifold_node_engine::parameters::ParamValue::Float(clock)) =
+            ctx.inputs.scalar("clock")
+        else {
             panic!("moving controls clock")
         };
-        ctx.outputs.set_scalar("speed", manifold_node_engine::parameters::ParamValue::Float(1.0 + 0.6 * (clock * 5.0).sin()));
-        let field = manifold_physics::FieldValue::uniform([6.0 * (clock * 7.0).sin(), 0.0, 0.0]).expect("finite push");
+        ctx.outputs.set_scalar(
+            "speed",
+            manifold_node_engine::parameters::ParamValue::Float(1.0 + 0.6 * (clock * 5.0).sin()),
+        );
+        let field = manifold_physics::FieldValue::uniform([6.0 * (clock * 7.0).sin(), 0.0, 0.0])
+            .expect("finite push");
         ctx.outputs.set_cpu_value("field", field);
     }
 }
@@ -369,12 +399,25 @@ impl EffectNode for MovingControls {
 fn moving_runtime() -> PresetRuntime {
     let mut registry = PrimitiveRegistry::with_builtin();
     manifold_water_rigid::testkit::physics_fixtures::register(&mut registry);
-    registry.register("test.pose", || Box::new(PoseObserver(EffectNodeType::new("test.pose"))));
+    registry.register("test.pose", || {
+        Box::new(PoseObserver(EffectNodeType::new("test.pose")))
+    });
     registry.register("test.moving_controls", || {
-        let output = |name, ty| NodePort { name: Cow::Borrowed(name), ty, kind: PortKind::Output, required: false };
+        let output = |name, ty| NodePort {
+            name: Cow::Borrowed(name),
+            ty,
+            kind: PortKind::Output,
+            required: false,
+        };
         Box::new(MovingControls(
             EffectNodeType::new("test.moving_controls"),
-            [output("speed", PortType::Scalar(manifold_node_engine::ports::ScalarType::F32)), output("field", PortType::VectorField)],
+            [
+                output(
+                    "speed",
+                    PortType::Scalar(manifold_node_engine::ports::ScalarType::F32),
+                ),
+                output("field", PortType::VectorField),
+            ],
         ))
     });
     let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
@@ -410,7 +453,11 @@ fn moving_pose(fps: u32, offline: bool) -> [u32; 3] {
     use manifold_water_rigid::physics::SimStep;
     let tick = manifold_core::Seconds(manifold_physics::clock::TICK);
     let mut runtime = moving_runtime();
-    runtime.set_sim_step(if offline { SimStep::export(tick) } else { SimStep::live(tick) });
+    runtime.set_sim_step(if offline {
+        SimStep::export(tick)
+    } else {
+        SimStep::live(tick)
+    });
     let mut pose = Transform::default();
     for index in 0..=fps {
         let seconds = f64::from(index) / f64::from(fps);
@@ -418,7 +465,11 @@ fn moving_pose(fps: u32, offline: bool) -> [u32; 3] {
         runtime.execute_frame(FrameTime {
             seconds: Seconds(seconds),
             beats: Beats(seconds * 2.0),
-            delta: Seconds(if index == 0 { 0.0 } else { 1.0 / f64::from(fps) }),
+            delta: Seconds(if index == 0 {
+                0.0
+            } else {
+                1.0 / f64::from(fps)
+            }),
             frame_count: i64::from(index),
         });
         pose = POSE.get().expect("native world publishes pose");
@@ -433,10 +484,17 @@ fn moving_pose(fps: u32, offline: bool) -> [u32; 3] {
 #[test]
 fn rigid_world_moving_speed_and_push_match_at_30_60_120_144_fps_live_and_export() {
     let reference = moving_pose(60, true);
-    assert!(f32::from_bits(reference[0]).abs() > 0.05, "the push must move the body: {reference:?}");
+    assert!(
+        f32::from_bits(reference[0]).abs() > 0.05,
+        "the push must move the body: {reference:?}"
+    );
     for fps in [30, 60, 120, 144] {
         for offline in [false, true] {
-            assert_eq!(moving_pose(fps, offline), reference, "{fps} fps, offline {offline}");
+            assert_eq!(
+                moving_pose(fps, offline),
+                reference,
+                "{fps} fps, offline {offline}"
+            );
         }
     }
 }
@@ -447,7 +505,9 @@ fn rigid_world_moving_speed_and_push_match_at_30_60_120_144_fps_live_and_export(
 fn runtime_with_peer(peer: bool, sized: bool) -> PresetRuntime {
     let mut registry = PrimitiveRegistry::with_builtin();
     manifold_water_rigid::testkit::physics_fixtures::register(&mut registry);
-    registry.register("test.pose", || Box::new(PoseObserver(EffectNodeType::new("test.pose"))));
+    registry.register("test.pose", || {
+        Box::new(PoseObserver(EffectNodeType::new("test.pose")))
+    });
     let mut nodes = vec![
         serde_json::json!({"id":0,"nodeId":"input","typeId":"system.generator_input"}),
         serde_json::json!({"id":1,"nodeId":"start","typeId":"test.physics_transform","params":{"pos_y":{"type":"Float","value":5.0}}}),
@@ -472,8 +532,11 @@ fn runtime_with_peer(peer: bool, sized: bool) -> PresetRuntime {
         nodes.push(serde_json::json!({"id":9,"nodeId":"peer_start","typeId":"test.physics_transform","params":{
             "pos_x":{"type":"Float","value":10.0},"pos_y":{"type":"Float","value":5.0}}}));
         wires.push(serde_json::json!({"fromNode":9,"fromPort":"transform","toNode":8,"toPort":"transform"}));
-        wires.push(serde_json::json!({"fromNode":8,"fromPort":"body","toNode":3,"toPort":"body_1"}));
-        wires.push(serde_json::json!({"fromNode":3,"fromPort":"pose_1","toNode":4,"toPort":"peer_pose"}));
+        wires
+            .push(serde_json::json!({"fromNode":8,"fromPort":"body","toNode":3,"toPort":"body_1"}));
+        wires.push(
+            serde_json::json!({"fromNode":3,"fromPort":"pose_1","toNode":4,"toPort":"peer_pose"}),
+        );
     }
     let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
         "version": 2, "name": "Native physics carry", "nodes": nodes, "wires": wires
@@ -496,10 +559,18 @@ fn physics_carry_survives_a_body_being_added() {
     assert!(paused.pos[1] < 5.0, "fixture must be falling");
     let mut rebuilt = runtime_with_peer(true, false);
     rebuilt.carry_generator_state_from(&mut edited);
-    assert_eq!(frame(&mut rebuilt, 0.24), paused, "adding a body reset or stepped the first one");
+    assert_eq!(
+        frame(&mut rebuilt, 0.24),
+        paused,
+        "adding a body reset or stepped the first one"
+    );
     assert!(PEER_POSE.get().is_some(), "the added body is in the world");
     for time in [0.273, 0.35, 0.5] {
-        assert_eq!(frame(&mut reference, time), frame(&mut rebuilt, time), "trajectory changed at {time}");
+        assert_eq!(
+            frame(&mut reference, time),
+            frame(&mut rebuilt, time),
+            "trajectory changed at {time}"
+        );
     }
 
     // A world with no free port grows one for the new body. The carried world
@@ -512,8 +583,15 @@ fn physics_carry_survives_a_body_being_added() {
     let mut grown = runtime_with_peer(true, true);
     grown.carry_generator_state_from(&mut full);
     frame(&mut grown, 0.24);
-    let joined = PEER_POSE.get().expect("the grown world reads the added body");
+    let joined = PEER_POSE
+        .get()
+        .expect("the grown world reads the added body");
     frame(&mut grown, 0.5);
-    let later = PEER_POSE.get().expect("the grown world reads the added body");
-    assert!(later.pos[1] < joined.pos[1], "the added body hangs: {joined:?} then {later:?}");
+    let later = PEER_POSE
+        .get()
+        .expect("the grown world reads the added body");
+    assert!(
+        later.pos[1] < joined.pos[1],
+        "the added body hangs: {joined:?} then {later:?}"
+    );
 }

@@ -26,7 +26,10 @@ pub(crate) fn browser_mode_to_kind(
     }
 }
 
-pub(crate) fn dispatch_browser(action: &BrowserAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
+pub(crate) fn dispatch_browser(
+    action: &BrowserAction,
+    ctx: &mut super::super::DispatchCtx,
+) -> DispatchResult {
     match action {
         BrowserAction::BrowserCellRightClicked(..) => DispatchResult::handled(),
         BrowserAction::BrowserRenamePresetClicked(mode, type_id, source) => {
@@ -37,13 +40,12 @@ pub(crate) fn dispatch_browser(action: &BrowserAction, ctx: &mut super::super::D
             };
             let id = manifold_core::PresetTypeId::from_string(type_id.clone());
             let initial_name = match source {
-                Source::MyLibrary => {
-                    manifold_core::preset_type_registry::available_of_kind(kind)
-                        .iter()
-                        .find(|r| r.id.as_str() == type_id.as_str())
-                        .map(|r| r.display_name.to_string())
-                }
-                Source::Project => ctx.project
+                Source::MyLibrary => manifold_core::preset_type_registry::available_of_kind(kind)
+                    .iter()
+                    .find(|r| r.id.as_str() == type_id.as_str())
+                    .map(|r| r.display_name.to_string()),
+                Source::Project => ctx
+                    .project
                     .embedded_preset(&id)
                     .and_then(|ep| ep.def.preset_metadata.as_ref())
                     .map(|m| m.display_name.clone()),
@@ -64,7 +66,11 @@ pub(crate) fn dispatch_browser(action: &BrowserAction, ctx: &mut super::super::D
             let id = manifold_core::PresetTypeId::from_string(type_id.clone());
             let lib = crate::user_library::UserLibrary::new();
             match lib.duplicate(kind, &id) {
-                Ok(new_id) => log::info!("[preset] duplicated '{}' as '{}'", id.as_str(), new_id.as_str()),
+                Ok(new_id) => log::info!(
+                    "[preset] duplicated '{}' as '{}'",
+                    id.as_str(),
+                    new_id.as_str()
+                ),
                 Err(e) => log::error!("[preset] duplicate failed: {e}"),
             }
             ctx.ui.browser_popup.close();
@@ -99,7 +105,8 @@ pub(crate) fn dispatch_browser(action: &BrowserAction, ctx: &mut super::super::D
                     DispatchResult::handled()
                 }
                 Source::Project => {
-                    let cmd = manifold_editing::commands::preset::DeleteEmbeddedPresetCommand::new(id);
+                    let cmd =
+                        manifold_editing::commands::preset::DeleteEmbeddedPresetCommand::new(id);
                     let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                     ctx.execute(boxed);
                     ctx.ui.browser_popup.close();

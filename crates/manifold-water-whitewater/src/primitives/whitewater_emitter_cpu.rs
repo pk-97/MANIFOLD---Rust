@@ -14,9 +14,9 @@ pub(super) fn emission_count(
     ticks: f32,
     dt: f32,
 ) -> u32 {
-    let per_tick = influence * energy
-        * (rates[0] * potentials[0] + rates[1] * potentials[1])
-        * dt * 8.0 / points_per_cell;
+    let per_tick =
+        influence * energy * (rates[0] * potentials[0] + rates[1] * potentials[1]) * dt * 8.0
+            / points_per_cell;
     if per_tick > 0.0 {
         (per_tick + 0.5).floor() as u32 * ticks.round().max(0.0) as u32
     } else {
@@ -27,10 +27,19 @@ pub(super) fn emission_count(
 #[test]
 fn turbulence_emission_count_uses_duration_and_rounds_each_tick() {
     // Engine _getNumberOfEmissionParticles: round(175 * dt) at full potential.
-    assert_eq!(emission_count(1.0, [0.0, 1.0], [175.0; 2], 1.0, 8.0, 1.0, 1.0 / 60.0), 3);
-    assert_eq!(emission_count(1.0, [0.0, 1.0], [175.0; 2], 1.0, 8.0, 1.0, 1.0 / 30.0), 6);
+    assert_eq!(
+        emission_count(1.0, [0.0, 1.0], [175.0; 2], 1.0, 8.0, 1.0, 1.0 / 60.0),
+        3
+    );
+    assert_eq!(
+        emission_count(1.0, [0.0, 1.0], [175.0; 2], 1.0, 8.0, 1.0, 1.0 / 30.0),
+        6
+    );
     // Rounding after multiplying the duration by three would give 17.
-    assert_eq!(emission_count(1.0, [0.0, 1.0], [175.0; 2], 1.0, 8.0, 3.0, 1.0 / 30.0), 18);
+    assert_eq!(
+        emission_count(1.0, [0.0, 1.0], [175.0; 2], 1.0, 8.0, 3.0, 1.0 / 30.0),
+        18
+    );
 }
 
 /// A second of full-potential emission keeps the authored per-second rate at
@@ -256,7 +265,13 @@ fn whitewater_inside_emission_counts_match_vendored_engine() {
     let n = 16usize;
     let u = vec![12.0; (n + 1) * n * n];
     let v: Vec<f32> = (0..n * (n + 1) * n)
-        .map(|i| if (i % n).is_multiple_of(2) { 24.0 } else { -24.0 })
+        .map(|i| {
+            if (i % n).is_multiple_of(2) {
+                24.0
+            } else {
+                -24.0
+            }
+        })
         .collect();
     let w = vec![0.0; n * n * (n + 1)];
     let phi = vec![-5.0; n * n * n];
@@ -314,7 +329,16 @@ fn whitewater_inside_emission_counts_match_vendored_engine() {
         let expected = if generation == 0.0 {
             0
         } else {
-            emission_count(1.0, [0.0, 1.0], [0.0, rate as f32], influence as f32, 8.0, 1.0, dt as f32) as usize * markers.len()
+            emission_count(
+                1.0,
+                [0.0, 1.0],
+                [0.0, rate as f32],
+                influence as f32,
+                8.0,
+                1.0,
+                dt as f32,
+            ) as usize
+                * markers.len()
         };
         assert_eq!(
             particles.len(),

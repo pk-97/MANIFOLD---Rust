@@ -10,16 +10,18 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_water_liquid::float_param;
-use manifold_water_liquid::primitives::sort_particles_into_cells::{bin_param};
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_water_liquid::fluid_particles::{CellRange, bin_counts, searched_bins};
 use manifold_node_engine::freeze::classify::FusedOutputCapacity;
-use manifold_water_liquid::bodies::{LiquidBody, LiquidShape, LIQUID_POSE, LIQUID_COLLIDER};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_water_liquid::whitewater::{WHITEWATER_COMMON, WhitewaterParticle, cell_total, particle_grid};
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::fluid_particles::{CellRange, bin_counts, searched_bins};
+use manifold_water_liquid::primitives::sort_particles_into_cells::bin_param;
+use manifold_water_liquid::whitewater::{
+    WHITEWATER_COMMON, WhitewaterParticle, cell_total, particle_grid,
+};
 
 /// FLIP's `_maxDiffuseParticlesPerCell`.
 pub(crate) const MAX_PER_CELL: f32 = 5000.0;
@@ -105,8 +107,20 @@ manifold_node_engine::primitive! {
 }
 
 impl Primitive for KeepWhitewater {
-    fn array_output_capacity(&self, port: &str, _params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
-        (port == "out").then(|| inputs.iter().find(|(name, _)| *name == "pool").map(|&(_, n)| n)).flatten()
+    fn array_output_capacity(
+        &self,
+        port: &str,
+        _params: &ParamValues,
+        inputs: &[(&str, u32)],
+    ) -> Option<u32> {
+        (port == "out")
+            .then(|| {
+                inputs
+                    .iter()
+                    .find(|(name, _)| *name == "pool")
+                    .map(|&(_, n)| n)
+            })
+            .flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -130,10 +144,14 @@ impl Primitive for KeepWhitewater {
             return;
         };
         if cell_total(grid.nodes) * 4 > solid.size {
-            ctx.error(format!("Keep Whitewater: solid holds fewer than the {:?}-node lattice", grid.nodes));
+            ctx.error(format!(
+                "Keep Whitewater: solid holds fewer than the {:?}-node lattice",
+                grid.nodes
+            ));
             return;
         }
-        let count = (pool.size / std::mem::size_of::<WhitewaterParticle>() as u64).min(out.size / 4) as u32;
+        let count =
+            (pool.size / std::mem::size_of::<WhitewaterParticle>() as u64).min(out.size / 4) as u32;
         if count == 0 {
             return;
         }
@@ -145,7 +163,11 @@ impl Primitive for KeepWhitewater {
             Ok([0; 3])
         } else if set == [0.0; 3] && wired.iter().all(|&w| !w) {
             let h = grid.size[0] / (grid.nodes[0] - 1) as f32;
-            searched_bins(bin_counts(grid.size, h).map(|n| n as f32), ranges.size, "Keep Whitewater")
+            searched_bins(
+                bin_counts(grid.size, h).map(|n| n as f32),
+                ranges.size,
+                "Keep Whitewater",
+            )
         } else {
             searched_bins(set, ranges.size, "Keep Whitewater")
         };
@@ -189,21 +211,61 @@ impl Primitive for KeepWhitewater {
                 }
             }
         }
-        let extra = ["regions", "shapes", "atlas"].map(|name| ctx.inputs.array(name).unwrap_or(solid));
+        let extra =
+            ["regions", "shapes", "atlas"].map(|name| ctx.inputs.array(name).unwrap_or(solid));
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: pool, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: binned, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: ranges, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: order, offset: 0 },
-                GpuBinding::Buffer { binding: 5, buffer: solid, offset: 0 },
-                GpuBinding::Buffer { binding: 6, buffer: extra[0], offset: 0 },
-                GpuBinding::Buffer { binding: 7, buffer: extra[1], offset: 0 },
-                GpuBinding::Buffer { binding: 8, buffer: extra[2], offset: 0 },
-                GpuBinding::Buffer { binding: 9, buffer: out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: pool,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: binned,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: ranges,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: order,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: solid,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 6,
+                    buffer: extra[0],
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 7,
+                    buffer: extra[1],
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 8,
+                    buffer: extra[2],
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 9,
+                    buffer: out,
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256), 1, 1],
             "node.keep_whitewater",

@@ -29,12 +29,14 @@
 //! wrap would jump.
 
 use manifold_core::NodeId;
-use manifold_core::effect_graph_def::{EffectGraphDef, ParamSpecDef};
 use manifold_core::effect_graph_def::SerializedParamValue;
+use manifold_core::effect_graph_def::{EffectGraphDef, ParamSpecDef};
 use manifold_core::param_lookup::NodeParamMetadata;
 use manifold_core::scene_doc::{CameraRig, ItemFields, ItemId, param_id};
 use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, SceneTargetSelection};
-use manifold_core::scene_schema::{self, COPIES_ROLE, Exposure, LOOP_CAMERA_ROWS, LOOP_GAP_ROW, PropertyRow, modifier_type};
+use manifold_core::scene_schema::{
+    self, COPIES_ROLE, Exposure, LOOP_CAMERA_ROWS, LOOP_GAP_ROW, PropertyRow, modifier_type,
+};
 
 use super::builder::{Builder, SCENE, card_spec, number, rest_box};
 use super::camera::LOOP_BEATS;
@@ -71,8 +73,14 @@ impl Corridor {
         let bounds = rest_box(b.drawn.iter().map(|drawn| &drawn.rest).chain(swarms));
         let depth = bounds.map(|(lo, hi)| hi[2] - lo[2]);
         match depth.filter(|depth| *depth > 0.0) {
-            Some(depth) => Self { cell: 2.0 * depth, gap: depth },
-            None => Self { cell: UNMEASURED_CELL, gap: UNMEASURED_CELL },
+            Some(depth) => Self {
+                cell: 2.0 * depth,
+                gap: depth,
+            },
+            None => Self {
+                cell: UNMEASURED_CELL,
+                gap: UNMEASURED_CELL,
+            },
         }
     }
 
@@ -108,7 +116,9 @@ pub(crate) fn emit(b: &mut Builder<'_>) -> Result<(), String> {
     // Spacing is the gap the cell adds on top of what it measures.
     let cell = emit_cell(b, item.id.as_str());
     let (property, param) = LOOP_GAP_ROW;
-    let meta = b.param_meta(LOOP_CELL_TYPE_ID, param).ok_or_else(|| format!("{LOOP_CELL_TYPE_ID} has no {param}"))?;
+    let meta = b
+        .param_meta(LOOP_CELL_TYPE_ID, param)
+        .ok_or_else(|| format!("{LOOP_CELL_TYPE_ID} has no {param}"))?;
     let spec = outside_spec(&corridor, &host_id(property), lookup(property), &meta)?;
     b.declare(spec, &meta, &[cell], param);
 
@@ -123,9 +133,18 @@ pub(crate) fn emit(b: &mut Builder<'_>) -> Result<(), String> {
         b.wire(cell, "cell_size", rig, "cell_size");
     }
     for (property, role) in LOOP_CAMERA_ROWS {
-        let targets: Vec<u32> = cameras.iter().map(|&(rig, phase)| if role == "phase" { phase } else { rig }).collect();
-        let type_id = if role == "phase" { "node.beat_ramp" } else { "node.loop_camera" };
-        let meta = b.param_meta(type_id, property).ok_or_else(|| format!("{type_id} has no {property}"))?;
+        let targets: Vec<u32> = cameras
+            .iter()
+            .map(|&(rig, phase)| if role == "phase" { phase } else { rig })
+            .collect();
+        let type_id = if role == "phase" {
+            "node.beat_ramp"
+        } else {
+            "node.loop_camera"
+        };
+        let meta = b
+            .param_meta(type_id, property)
+            .ok_or_else(|| format!("{type_id} has no {property}"))?;
         // A corridor param the cameras share keeps its recipe spec, so one
         // manifest param drives the corridor and every camera.
         let spec = match specs.iter().find(|(_, param)| param == property) {
@@ -163,9 +182,19 @@ fn emit_cell(b: &mut Builder<'_>, owner: &str) -> u32 {
         };
         // The mesh's box under its transform: the unit cube at the box's
         // centre, scaled to its size.
-        let shape = b.add_named(node(owner, &format!("box:{}", drawn.item)), "node.transform_3d");
+        let shape = b.add_named(
+            node(owner, &format!("box:{}", drawn.item)),
+            "node.transform_3d",
+        );
         let (lo, hi) = (drawn.rest.lo, drawn.rest.hi);
-        for (axis, (pos, scale)) in [("pos_x", "scale_x"), ("pos_y", "scale_y"), ("pos_z", "scale_z")].into_iter().enumerate() {
+        for (axis, (pos, scale)) in [
+            ("pos_x", "scale_x"),
+            ("pos_y", "scale_y"),
+            ("pos_z", "scale_z"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
             b.set_number(shape, pos, 0.5 * (lo[axis] + hi[axis]));
             b.set_number(shape, scale, hi[axis] - lo[axis]);
         }
@@ -197,7 +226,10 @@ fn emit_cell(b: &mut Builder<'_>, owner: &str) -> u32 {
     // Each swarm's lattice box, which its stirred cloud fills, in its
     // emitter's frame.
     for swarm in b.swarms.clone() {
-        if let (Some(spread), Some(emitter)) = (b.id(swarm.as_str(), "bounds"), b.id(swarm.as_str(), "transform")) {
+        if let (Some(spread), Some(emitter)) = (
+            b.id(swarm.as_str(), "bounds"),
+            b.id(swarm.as_str(), "transform"),
+        ) {
             boxes.push(((spread, "transform"), Some(emitter)));
         }
     }
@@ -218,10 +250,14 @@ fn emit_cell(b: &mut Builder<'_>, owner: &str) -> u32 {
 /// at its pose rests at its start.
 fn rest_frame(b: &Builder<'_>, object: u32) -> Option<(u32, Option<u32>)> {
     let at_rest = |frame: u32| match b.input(frame, "parent") {
-        Some((body, port)) if port == "pose" => b.input(body, "transform").map_or(frame, |(start, _)| start),
+        Some((body, port)) if port == "pose" => {
+            b.input(body, "transform").map_or(frame, |(start, _)| start)
+        }
         _ => frame,
     };
-    let within = b.input(object, "parent_transform").map(|(frame, _)| at_rest(frame));
+    let within = b
+        .input(object, "parent_transform")
+        .map(|(frame, _)| at_rest(frame));
     match b.input(object, "transform") {
         Some((placed, _)) => Some((placed, within)),
         None => within.map(|start| (start, None)),
@@ -252,14 +288,27 @@ pub(crate) fn emit_copies(b: &mut Builder<'_>) -> Result<(), String> {
 
 /// One instance of `graph` per [`TARGETS_PER_INSTANCE`] objects, driven by
 /// the card's params.
-fn push_instances(b: &mut Builder<'_>, owner: &str, role: &str, objects: &[NodeId], graph: &EffectGraphDef, specs: &[CardParam]) {
+fn push_instances(
+    b: &mut Builder<'_>,
+    owner: &str,
+    role: &str,
+    objects: &[NodeId],
+    graph: &EffectGraphDef,
+    specs: &[CardParam],
+) {
     for (chunk, part) in objects.chunks(TARGETS_PER_INSTANCE).enumerate() {
-        let suffix = if chunk == 0 { role.to_owned() } else { format!("{role}:{chunk}") };
+        let suffix = if chunk == 0 {
+            role.to_owned()
+        } else {
+            format!("{role}:{chunk}")
+        };
         let id = node(owner, &suffix);
         let instance = SceneModifierInstanceDef {
             id: id.clone(),
             scene: node(SCENE, "render"),
-            targets: SceneTargetSelection::Explicit { objects: part.to_vec() },
+            targets: SceneTargetSelection::Explicit {
+                objects: part.to_vec(),
+            },
             mesh_frames: Vec::new(),
             legacy_math_view_carrier: None,
             graph: Box::new(graph.clone()),
@@ -286,7 +335,14 @@ fn outside_spec(
         None if row.property == "bars" => (LOOP_BEATS, (1.0, meta.max)),
         None => (number(&meta.default_value), (meta.min, meta.max)),
     };
-    let mut spec = card_spec(id.to_owned(), row.name.unwrap_or(&meta.label), meta, default, row.section, &facts);
+    let mut spec = card_spec(
+        id.to_owned(),
+        row.name.unwrap_or(&meta.label),
+        meta,
+        default,
+        row.section,
+        &facts,
+    );
     (spec.min, spec.max) = range;
     Ok(spec)
 }
@@ -296,19 +352,33 @@ fn outside_spec(
 /// count. A Water's particle draws (foam, spray, bubbles, Physics View dots)
 /// stay out: tiling a whole particle budget in every cell is not the loop.
 fn tiled_objects(b: &mut Builder<'_>, copies: bool) -> Vec<NodeId> {
-    let objects: Vec<(u32, ItemId)> = b.objects.iter().copied().zip(b.object_items.iter().cloned()).collect();
+    let objects: Vec<(u32, ItemId)> = b
+        .objects
+        .iter()
+        .copied()
+        .zip(b.object_items.iter().cloned())
+        .collect();
     let mut tiled = Vec::with_capacity(objects.len());
     for (object, item) in objects {
-        if b.node_type(object) != Some("node.scene_object") || b.input(object, "instances").is_some() != copies {
+        if b.node_type(object) != Some("node.scene_object")
+            || b.input(object, "instances").is_some() != copies
+        {
             continue;
         }
-        let water = matches!(b.doc.find(&item).map(|item| &item.fields), Some(ItemFields::Water(_)));
+        let water = matches!(
+            b.doc.find(&item).map(|item| &item.fields),
+            Some(ItemFields::Water(_))
+        );
         // Without a live count the stage would nest the whole buffer.
         if copies && (water || b.input(object, "instance_count").is_none()) {
             continue;
         }
         if !copies {
-            b.set(object, "instances_space", SerializedParamValue::Enum { value: WORLD_SPACE });
+            b.set(
+                object,
+                "instances_space",
+                SerializedParamValue::Enum { value: WORLD_SPACE },
+            );
         }
         if let Some(id) = b.node_id_of(object) {
             tiled.push(id);

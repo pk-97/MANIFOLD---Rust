@@ -181,7 +181,14 @@ impl ArtNetOutput {
         // in the shader after the blur, in linear HDR space, before the
         // 8-bit DMX clamp.
         const LED_VERTICAL_BLUR_RADIUS: f32 = 1.5;
-        blit.blit(&mut enc, source, 0.5, 0.5, LED_VERTICAL_BLUR_RADIUS, led_gain);
+        blit.blit(
+            &mut enc,
+            source,
+            0.5,
+            0.5,
+            LED_VERTICAL_BLUR_RADIUS,
+            led_gain,
+        );
 
         // Copy tiny texture to shared-memory readback buffer.
         self.readback.submit(
@@ -303,7 +310,9 @@ impl ArtNetOutput {
 
         // Outside the live app the pipeline runs without a socket: DMX is
         // packed as usual and never reaches the rig.
-        if !manifold_foundation::device_guard::allowed(manifold_foundation::device_guard::RealDevice::ArtNet) {
+        if !manifold_foundation::device_guard::allowed(
+            manifold_foundation::device_guard::RealDevice::ArtNet,
+        ) {
             self.udp_socket = None;
             return true;
         }

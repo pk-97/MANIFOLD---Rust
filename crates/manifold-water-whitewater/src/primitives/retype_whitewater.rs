@@ -8,14 +8,16 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_water_liquid::float_param;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::freeze::classify::FusedOutputCapacity;
-use manifold_water_liquid::grid::{LIQUID_FACES, face_len};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_water_liquid::whitewater::{WHITEWATER_COMMON, WhitewaterParticle, cell_total, face_offset, grid_cells, particle_grid};
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::grid::{LIQUID_FACES, face_len};
+use manifold_water_liquid::whitewater::{
+    WHITEWATER_COMMON, WhitewaterParticle, cell_total, face_offset, grid_cells, particle_grid,
+};
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`,
 /// padded to 16 bytes.
@@ -90,13 +92,27 @@ manifold_node_engine::primitive! {
 }
 
 impl Primitive for RetypeWhitewater {
-    fn array_output_capacity(&self, port: &str, _params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
-        (port == "out").then(|| inputs.iter().find(|(name, _)| *name == "pool").map(|&(_, n)| n)).flatten()
+    fn array_output_capacity(
+        &self,
+        port: &str,
+        _params: &ParamValues,
+        inputs: &[(&str, u32)],
+    ) -> Option<u32> {
+        (port == "out")
+            .then(|| {
+                inputs
+                    .iter()
+                    .find(|(name, _)| *name == "pool")
+                    .map(|&(_, n)| n)
+            })
+            .flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let face_cells = ["face_cells_x", "face_cells_y", "face_cells_z"].map(|name| ctx.scalar_or_param(name, 64.0).round().max(0.0) as u32);
-        let placed = particle_grid(ctx).and_then(|grid| face_offset(grid.nodes, face_cells).map(|_| grid));
+        let face_cells = ["face_cells_x", "face_cells_y", "face_cells_z"]
+            .map(|name| ctx.scalar_or_param(name, 64.0).round().max(0.0) as u32);
+        let placed =
+            particle_grid(ctx).and_then(|grid| face_offset(grid.nodes, face_cells).map(|_| grid));
         let grid = match placed {
             Ok(grid) => grid,
             Err(refusal) => {
@@ -106,12 +122,17 @@ impl Primitive for RetypeWhitewater {
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(pool), Some(distance), Some(cells), Some(out)) =
-            (ctx.inputs.array("pool"), ctx.inputs.array("distance"), ctx.inputs.array("cells"), ctx.outputs.array("out"))
-        else {
+        let (Some(pool), Some(distance), Some(cells), Some(out)) = (
+            ctx.inputs.array("pool"),
+            ctx.inputs.array("distance"),
+            ctx.inputs.array("cells"),
+            ctx.outputs.array("out"),
+        ) else {
             return;
         };
-        let [Some(u), Some(v), Some(w)] = FACE_PORTS.map(|port| ctx.inputs.array(port)) else { return };
+        let [Some(u), Some(v), Some(w)] = FACE_PORTS.map(|port| ctx.inputs.array(port)) else {
+            return;
+        };
         for (axis, buffer) in [u, v, w].into_iter().enumerate() {
             if buffer.size < face_len(face_cells, axis) * 4 {
                 ctx.error(format!(
@@ -124,10 +145,14 @@ impl Primitive for RetypeWhitewater {
         }
         let total = grid_cells(grid.nodes).map_or(0, cell_total);
         if total * 4 > distance.size.min(cells.size) {
-            ctx.error(format!("Retype Whitewater: a {:?}-node grid is larger than its distance or cells", grid.nodes));
+            ctx.error(format!(
+                "Retype Whitewater: a {:?}-node grid is larger than its distance or cells",
+                grid.nodes
+            ));
             return;
         }
-        let count = (pool.size.min(out.size) / std::mem::size_of::<WhitewaterParticle>() as u64) as u32;
+        let count =
+            (pool.size.min(out.size) / std::mem::size_of::<WhitewaterParticle>() as u64) as u32;
         if count == 0 {
             return;
         }
@@ -157,14 +182,45 @@ impl Primitive for RetypeWhitewater {
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: pool, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: distance, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: cells, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: u, offset: 0 },
-                GpuBinding::Buffer { binding: 5, buffer: v, offset: 0 },
-                GpuBinding::Buffer { binding: 6, buffer: w, offset: 0 },
-                GpuBinding::Buffer { binding: 7, buffer: out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: pool,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: distance,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: cells,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: u,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: v,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 6,
+                    buffer: w,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 7,
+                    buffer: out,
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256), 1, 1],
             "node.retype_whitewater",

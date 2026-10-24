@@ -15,12 +15,14 @@ use crate::ports::{ChannelElementType, ChannelSpec, NodeInput, NodeOutput, PortT
 
 use super::fused::{FnBlock, is_param_derived, rename_ident, split_fns};
 use super::types::{
-    buffer_element_type, is_texture_input, is_texture_port, param_wgsl_type, param_word_count,
-    CodegenError, FusionRegion, GeneratedFusion, InputSource,
+    CodegenError, FusionRegion, GeneratedFusion, InputSource, buffer_element_type,
+    is_texture_input, is_texture_port, param_wgsl_type, param_word_count,
 };
 use super::uniforms::{emit_buffer_struct, emit_derived_uniform_markers};
 
-pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, CodegenError> {
+pub(super) fn generate_fused_buffer(
+    region: &FusionRegion<'_>,
+) -> Result<GeneratedFusion, CodegenError> {
     let index_of = |id: NodeInstanceId| region.nodes.iter().position(|n| n.node_id == id);
     let specs_of = |ty: &PortType| -> Option<&'static [ChannelSpec]> {
         match ty {
@@ -64,10 +66,16 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
         // `src_<slot>` the body references directly (`buf_<port>` renamed to
         // `src_<slot>`), never pre-read into a per-element register — a
         // pre-read would run off the end of an input shorter than the output.
-        let arr_in: Vec<&NodeInput> =
-            node.node_inputs.iter().filter(|p| matches!(p.ty, PortType::Array(_))).collect();
-        let tex_in: Vec<&NodeInput> =
-            node.node_inputs.iter().filter(|p| is_texture_input(p)).collect();
+        let arr_in: Vec<&NodeInput> = node
+            .node_inputs
+            .iter()
+            .filter(|p| matches!(p.ty, PortType::Array(_)))
+            .collect();
+        let tex_in: Vec<&NodeInput> = node
+            .node_inputs
+            .iter()
+            .filter(|p| is_texture_input(p))
+            .collect();
         // node.inputs (the finder's resolved sources) must align 1:1 with the
         // member's Array inputs then its texture inputs — else an input is
         // unwired / mis-resolved.
@@ -90,19 +98,32 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
         }
         // Sampled 2D / 3D textures only (`node.wgsl_compute` introspects both;
         // 3D is the volume force-field read the integrator chains need).
-        if tex_in.iter().any(|p| !matches!(p.ty, PortType::Texture2D | PortType::Texture3D)) {
+        if tex_in
+            .iter()
+            .any(|p| !matches!(p.ty, PortType::Texture2D | PortType::Texture3D))
+        {
             return Err(CodegenError::BadInput);
         }
-        let arr_out: Vec<&NodeOutput> =
-            node.node_outputs.iter().filter(|p| matches!(p.ty, PortType::Array(_))).collect();
+        let arr_out: Vec<&NodeOutput> = node
+            .node_outputs
+            .iter()
+            .filter(|p| matches!(p.ty, PortType::Array(_)))
+            .collect();
         if arr_out.len() != 1 || node.node_outputs.iter().any(|o| is_texture_port(&o.ty)) {
             return Err(CodegenError::BadInput); // v1: single Array output per member
         }
-        let in_specs: Vec<&'static [ChannelSpec]> =
-            arr_in.iter().map(|p| specs_of(&p.ty)).collect::<Option<_>>().ok_or(CodegenError::BadInput)?;
+        let in_specs: Vec<&'static [ChannelSpec]> = arr_in
+            .iter()
+            .map(|p| specs_of(&p.ty))
+            .collect::<Option<_>>()
+            .ok_or(CodegenError::BadInput)?;
         let out_specs = specs_of(&arr_out[0].ty).ok_or(CodegenError::BadInput)?;
         let tex_3d: Vec<bool> = tex_in.iter().map(|p| p.ty == PortType::Texture3D).collect();
-        member_io.push(MemberIo { in_specs, out_specs, tex_3d });
+        member_io.push(MemberIo {
+            in_specs,
+            out_specs,
+            tex_3d,
+        });
     }
     // v1: single output region (fan-out buffer regions are a follow-on).
     if region.outputs.len() != 1 {
@@ -156,8 +177,11 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
                     // ports. Dimensionality must agree across consumers of one
                     // external (one producer port, one type) — the PartialEq
                     // mismatch check below fails closed if it doesn't.
-                    let is_3d =
-                        member_io[mi].tex_3d.get(k - arr_count).copied().ok_or(CodegenError::BadInput)?;
+                    let is_3d = member_io[mi]
+                        .tex_3d
+                        .get(k - arr_count)
+                        .copied()
+                        .ok_or(CodegenError::BadInput)?;
                     ExtKind::Texture { is_3d }
                 };
                 match ext_kinds[*e] {
@@ -167,8 +191,10 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
             }
         }
     }
-    let ext_kinds: Vec<ExtKind> =
-        ext_kinds.into_iter().collect::<Option<_>>().ok_or(CodegenError::BadInput)?;
+    let ext_kinds: Vec<ExtKind> = ext_kinds
+        .into_iter()
+        .collect::<Option<_>>()
+        .ok_or(CodegenError::BadInput)?;
 
     // --- element structs (deduped, first-appearance order across all I/O). The
     // fused output is a FRESH write-only `dst` array (not aliased onto an input):
@@ -203,7 +229,12 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
         let mut local: Vec<(&'static [ChannelSpec], String)> = Vec::new();
         let mut renames: Vec<(String, String)> = Vec::new();
         let io = &member_io[i];
-        for specs in io.in_specs.iter().copied().chain(std::iter::once(io.out_specs)) {
+        for specs in io
+            .in_specs
+            .iter()
+            .copied()
+            .chain(std::iter::once(io.out_specs))
+        {
             if specs.len() < 2 {
                 continue; // bare scalar/vector element — no struct, no name
             }
@@ -219,8 +250,11 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
         // to the region's resolved external slot `src_<e>` — no body arg, the
         // same ABI the texture path's BufferIndex uses. Coincident array
         // inputs keep the `e_<e>` register arg (cs_main below).
-        let arr_ports: Vec<&NodeInput> =
-            node.node_inputs.iter().filter(|p| matches!(p.ty, PortType::Array(_))).collect();
+        let arr_ports: Vec<&NodeInput> = node
+            .node_inputs
+            .iter()
+            .filter(|p| matches!(p.ty, PortType::Array(_)))
+            .collect();
         for (arr_idx, port) in arr_ports.iter().enumerate() {
             if node.input_access.get(arr_idx).copied().unwrap_or_default()
                 != InputAccess::BufferGather
@@ -333,7 +367,8 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
         writeln!(struct_body, "    _pad{k}: u32,").unwrap();
     }
     if field_count == 0 {
-        struct_body.push_str("    _pad0: u32,\n    _pad1: u32,\n    _pad2: u32,\n    _pad3: u32,\n");
+        struct_body
+            .push_str("    _pad0: u32,\n    _pad1: u32,\n    _pad2: u32,\n    _pad3: u32,\n");
     }
 
     let mut out = String::new();
@@ -391,7 +426,11 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
     for (e, ty) in ext_tys.iter().enumerate() {
         match ty {
             Some(ty) => {
-                let access = if in_place == Some(e) { "read_write" } else { "read" };
+                let access = if in_place == Some(e) {
+                    "read_write"
+                } else {
+                    "read"
+                };
                 writeln!(
                     out,
                     "@group(0) @binding({binding}) var<storage, {access}> src_{e}: array<{ty}>;"
@@ -416,14 +455,22 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
     // "clamp" emits no marker — byte-identical to the standalone buffer atoms'
     // default sampler; a non-default mode rides the same side-channel marker the
     // texture path uses (`node.wgsl_compute` reads it at sampler creation).
-    if ext_kinds.iter().any(|k| matches!(k, ExtKind::Texture { .. })) {
+    if ext_kinds
+        .iter()
+        .any(|k| matches!(k, ExtKind::Texture { .. }))
+    {
         if region.sampler_address_mode == "clamp" {
             writeln!(out, "@group(0) @binding({binding}) var samp: sampler;").unwrap();
         } else {
-            let marker =
-                Marker::SamplerAddressMode { mode: region.sampler_address_mode.to_string() };
-            writeln!(out, "@group(0) @binding({binding}) var samp: sampler; {}", marker.emit())
-                .unwrap();
+            let marker = Marker::SamplerAddressMode {
+                mode: region.sampler_address_mode.to_string(),
+            };
+            writeln!(
+                out,
+                "@group(0) @binding({binding}) var samp: sampler; {}",
+                marker.emit()
+            )
+            .unwrap();
         }
         binding += 1;
     }
@@ -441,7 +488,12 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
         // emit no marker: byte-identical WGSL, and the default sizing is
         // exactly the legacy min anchor.
         if let Some(expr) = &region.output_capacity {
-            writeln!(out, "{}", Marker::FusedOutputCapacity { expr: expr.clone() }.emit()).unwrap();
+            writeln!(
+                out,
+                "{}",
+                Marker::FusedOutputCapacity { expr: expr.clone() }.emit()
+            )
+            .unwrap();
         }
     }
     // `@dispatch_count_param` — node.wgsl_compute reads this marker and sizes
@@ -449,7 +501,9 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
     // capacity) instead of the array length. cs_main carries the matching
     // in-kernel guard.
     if let Some((mi, pname)) = region.dispatch_count_field {
-        let marker = Marker::DispatchCountParam { field: format!("n{mi}_{pname}") };
+        let marker = Marker::DispatchCountParam {
+            field: format!("n{mi}_{pname}"),
+        };
         writeln!(out, "{}", marker.emit()).unwrap();
     }
     out.push('\n');
@@ -575,8 +629,7 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
                 args.push("samp".to_string());
                 continue;
             }
-            if node.input_access.get(k).copied().unwrap_or_default() == InputAccess::BufferGather
-            {
+            if node.input_access.get(k).copied().unwrap_or_default() == InputAccess::BufferGather {
                 // The body reads the bound `src_<e>` array global directly
                 // (renamed from `buf_<port>` above) — no element arg. Must be
                 // an external: the finder never unions a gather-consumed wire,
@@ -596,23 +649,44 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
                 // small-vector elements zero literally; a multi-channel struct
                 // element is a v1 refusal (no stock atom needs it).
                 InputSource::Unwired => {
-                    let specs = member_io[i]
-                        .in_specs
-                        .get(k)
-                        .ok_or(CodegenError::BadInput)?;
+                    let specs = member_io[i].in_specs.get(k).ok_or(CodegenError::BadInput)?;
                     let zero = match *specs {
-                        [ChannelSpec { ty: ChannelElementType::F32, .. }] => "0.0".to_string(),
-                        [ChannelSpec { ty: ChannelElementType::I32, .. }] => "0".to_string(),
-                        [ChannelSpec { ty: ChannelElementType::U32, .. }] => "0u".to_string(),
-                        [ChannelSpec { ty: ChannelElementType::Vec2F, .. }] => {
-                            "vec2<f32>(0.0)".to_string()
-                        }
-                        [ChannelSpec { ty: ChannelElementType::Vec3F, .. }] => {
-                            "vec3<f32>(0.0)".to_string()
-                        }
-                        [ChannelSpec { ty: ChannelElementType::Vec4F, .. }] => {
-                            "vec4<f32>(0.0)".to_string()
-                        }
+                        [
+                            ChannelSpec {
+                                ty: ChannelElementType::F32,
+                                ..
+                            },
+                        ] => "0.0".to_string(),
+                        [
+                            ChannelSpec {
+                                ty: ChannelElementType::I32,
+                                ..
+                            },
+                        ] => "0".to_string(),
+                        [
+                            ChannelSpec {
+                                ty: ChannelElementType::U32,
+                                ..
+                            },
+                        ] => "0u".to_string(),
+                        [
+                            ChannelSpec {
+                                ty: ChannelElementType::Vec2F,
+                                ..
+                            },
+                        ] => "vec2<f32>(0.0)".to_string(),
+                        [
+                            ChannelSpec {
+                                ty: ChannelElementType::Vec3F,
+                                ..
+                            },
+                        ] => "vec3<f32>(0.0)".to_string(),
+                        [
+                            ChannelSpec {
+                                ty: ChannelElementType::Vec4F,
+                                ..
+                            },
+                        ] => "vec4<f32>(0.0)".to_string(),
                         _ => return Err(CodegenError::BadInput),
                     };
                     args.push(zero);
@@ -674,7 +748,11 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
         // Optional-texture use flags, last (matching the standalone body ABI).
         // Wiring is static in the def and the finder only admits WIRED textures,
         // so each flag folds to the literal `1u` instead of a uniform field.
-        for _ in node.node_inputs.iter().filter(|p| is_texture_input(p) && !p.required) {
+        for _ in node
+            .node_inputs
+            .iter()
+            .filter(|p| is_texture_input(p) && !p.required)
+        {
             args.push("1u".to_string());
         }
         writeln!(out, "    let r{i} = n{i}_body({});", args.join(", ")).unwrap();
@@ -688,5 +766,8 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
     }
     out.push_str("}\n");
 
-    Ok(GeneratedFusion { wgsl: out, param_order })
+    Ok(GeneratedFusion {
+        wgsl: out,
+        param_order,
+    })
 }

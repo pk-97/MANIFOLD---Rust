@@ -24,7 +24,9 @@ use manifold_gpu::GpuSamplerDesc;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::primitives::standalone_pipeline::{
+    dispatch_standalone_2d, standalone_pipeline,
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -143,12 +145,17 @@ mod gpu_tests {
     use manifold_gpu::GpuTextureFormat;
 
     use super::ReinhardToneMap;
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use manifold_node_engine::exec::backend::Backend;
     use manifold_node_engine::bindings::Slot;
+    use manifold_node_engine::exec::backend::Backend;
     use manifold_node_engine::exec::execution_plan::ResourceId;
-    use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, scene::boundary_nodes::Source, exec::execution_plan::compile};
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use manifold_node_engine::gpu::render_target::RenderTarget;
+    use manifold_node_engine::{
+        exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+        exec::execution_plan::ExecutionPlan, exec::execution_plan::compile,
+        exec::metal_backend::MetalBackend, graph::Graph, parameters::ParamValue,
+        scene::boundary_nodes::FinalOutput, scene::boundary_nodes::Source,
+    };
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -183,8 +190,10 @@ mod gpu_tests {
         let src = g.add_node(Box::new(Source::new()));
         let tm = g.add_node(Box::new(ReinhardToneMap::new()));
         let out = g.add_node(Box::new(FinalOutput::new()));
-        g.set_param(tm, "intensity", ParamValue::Float(intensity)).unwrap();
-        g.set_param(tm, "contrast", ParamValue::Float(contrast)).unwrap();
+        g.set_param(tm, "intensity", ParamValue::Float(intensity))
+            .unwrap();
+        g.set_param(tm, "contrast", ParamValue::Float(contrast))
+            .unwrap();
         g.set_param(tm, "curve", ParamValue::Enum(curve)).unwrap();
         g.connect((src, "out"), (tm, "in")).unwrap();
         g.connect((tm, "out"), (out, "in")).unwrap();
@@ -195,7 +204,13 @@ mod gpu_tests {
         let mut native_enc = device.create_encoder("reinhard-test");
         {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
-            gpu.clear_texture(&src_tgt.texture, f64::from(pixel), f64::from(pixel), f64::from(pixel), 1.0);
+            gpu.clear_texture(
+                &src_tgt.texture,
+                f64::from(pixel),
+                f64::from(pixel),
+                f64::from(pixel),
+                1.0,
+            );
         }
 
         let mut backend = MetalBackend::new(device.arc(), w, h, format);
@@ -219,8 +234,11 @@ mod gpu_tests {
         rb_enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
         rb_enc.commit_and_wait_completed();
 
-        let ptr = buf.mapped_ptr().expect("shared buffer should expose mapped pointer");
-        let px: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+        let ptr = buf
+            .mapped_ptr()
+            .expect("shared buffer should expose mapped pointer");
+        let px: &[u16] =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
         [
             f16::from_bits(px[0]).to_f32(),
             f16::from_bits(px[1]).to_f32(),
@@ -240,7 +258,11 @@ mod gpu_tests {
             "{label}: expected {expected}, got {}",
             got[0]
         );
-        assert!((got[3] - 1.0).abs() < TOL, "{label}: alpha must pass through, got {}", got[3]);
+        assert!(
+            (got[3] - 1.0).abs() < TOL,
+            "{label}: alpha must pass through, got {}",
+            got[3]
+        );
     }
 
     #[test]
@@ -273,8 +295,10 @@ mod gpu_tests {
         // than under Extended. (In absolute terms Log sits BELOW
         // Extended at tiny x — the win is relative visibility, not
         // absolute lift.)
-        let log_ratio = run_tone_map_at(1.0, 1.0, 1.0, 2)[0] / run_tone_map_at(64.0, 1.0, 1.0, 2)[0];
-        let ext_ratio = run_tone_map_at(1.0, 1.0, 1.0, 0)[0] / run_tone_map_at(64.0, 1.0, 1.0, 0)[0];
+        let log_ratio =
+            run_tone_map_at(1.0, 1.0, 1.0, 2)[0] / run_tone_map_at(64.0, 1.0, 1.0, 2)[0];
+        let ext_ratio =
+            run_tone_map_at(1.0, 1.0, 1.0, 0)[0] / run_tone_map_at(64.0, 1.0, 1.0, 0)[0];
         assert!(
             log_ratio > ext_ratio * 2.0,
             "log must keep faint density ≥2× more visible relative to hot spots (log ratio {log_ratio}, extended ratio {ext_ratio})"

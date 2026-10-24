@@ -1,9 +1,8 @@
 use crate::command::Command;
-use manifold_core::change::{ChangeSet, Part};
 use crate::commands::effect_target::{EffectTarget, with_effects, with_effects_mut};
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::effects::{
-    ParamConvert, ParamEnvelope, ParamId, ParameterDriver, PresetInstance,
-    UserParamBinding,
+    ParamConvert, ParamEnvelope, ParamId, ParameterDriver, PresetInstance, UserParamBinding,
 };
 use manifold_core::params::Param;
 use manifold_core::project::Project;
@@ -16,18 +15,21 @@ pub(crate) fn masked_groups_contiguous(
     effects: &[PresetInstance],
     groups: &[manifold_core::effects::EffectGroup],
 ) -> bool {
-    groups.iter().filter(|group| group.mask_effect_id.is_some()).all(|group| {
-        let positions: Vec<usize> = effects
-            .iter()
-            .enumerate()
-            .filter(|(_, effect)| effect.group_id.as_ref() == Some(&group.id))
-            .map(|(index, _)| index)
-            .collect();
-        positions.len() <= 1
-            || positions
-                .windows(2)
-                .all(|window| window[1] == window[0] + 1)
-    })
+    groups
+        .iter()
+        .filter(|group| group.mask_effect_id.is_some())
+        .all(|group| {
+            let positions: Vec<usize> = effects
+                .iter()
+                .enumerate()
+                .filter(|(_, effect)| effect.group_id.as_ref() == Some(&group.id))
+                .map(|(index, _)| index)
+                .collect();
+            positions.len() <= 1
+                || positions
+                    .windows(2)
+                    .all(|window| window[1] == window[0] + 1)
+        })
 }
 
 // ── Addressing model ──────────────────────────────────────────────────
@@ -68,7 +70,9 @@ impl AddEffectCommand {
 }
 
 impl Command for AddEffectCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::WHOLE_INSTANCES
+    }
     fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
@@ -148,13 +152,17 @@ impl RemoveEffectCommand {
 }
 
 impl Command for RemoveEffectCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::WHOLE_INSTANCES
+    }
     fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         self.cleared_mask_groups.clear();
         let Some(removed) = with_effects_mut(project, &self.target, |effects, groups| {
-            let index = effects.iter().position(|effect| effect.id == self.effect_id)?;
+            let index = effects
+                .iter()
+                .position(|effect| effect.id == self.effect_id)?;
             self.removed_index = index;
             let removed = effects.remove(index);
             for group in groups.iter_mut() {
@@ -237,7 +245,9 @@ impl ReorderEffectCommand {
 }
 
 impl Command for ReorderEffectCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::WHOLE_INSTANCES
+    }
     fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
@@ -346,7 +356,9 @@ impl ToggleEffectCommand {
 }
 
 impl Command for ToggleEffectCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(effect) = project.find_effect_by_id_mut(&self.effect_id) {
             effect.enabled = self.new_enabled;
@@ -394,7 +406,9 @@ impl ReorderEffectGroupCommand {
 }
 
 impl Command for ReorderEffectGroupCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::WHOLE_INSTANCES
+    }
     fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
@@ -419,15 +433,19 @@ impl Command for ReorderEffectGroupCommand {
                 return;
             }
         }
-        if self
-            .old_effects
-            .iter()
-            .any(|effect| self.new_effects.iter().filter(|candidate| candidate.id == effect.id).count() != 1)
-            || self
-                .new_effects
+        if self.old_effects.iter().any(|effect| {
+            self.new_effects
                 .iter()
-                .any(|effect| self.old_effects.iter().filter(|candidate| candidate.id == effect.id).count() != 1)
-        {
+                .filter(|candidate| candidate.id == effect.id)
+                .count()
+                != 1
+        }) || self.new_effects.iter().any(|effect| {
+            self.old_effects
+                .iter()
+                .filter(|candidate| candidate.id == effect.id)
+                .count()
+                != 1
+        }) {
             self.rejection = Some("effect reorder changed card identities");
             return;
         }
@@ -511,7 +529,13 @@ impl ChangeGraphParamCommand {
     }
 
     fn note_rows(&mut self, project: &Project) {
-        self.rows = crate::command::value_moves_rows(project, &self.target, self.param_id.as_ref(), self.old_value, self.new_value);
+        self.rows = crate::command::value_moves_rows(
+            project,
+            &self.target,
+            self.param_id.as_ref(),
+            self.old_value,
+            self.new_value,
+        );
     }
 }
 
@@ -531,7 +555,11 @@ impl Command for ChangeGraphParamCommand {
         self.note_rows(project);
         if !matches!(self.target, GraphTarget::SceneModifier { .. })
             && let Some(graph) = project.graph_for_target(&self.target, None)
-            && let Some(reason) = manifold_core::scene_modifier_preset::scene_modifier_macro_lock_reason(graph, self.param_id.as_ref())
+            && let Some(reason) =
+                manifold_core::scene_modifier_preset::scene_modifier_macro_lock_reason(
+                    graph,
+                    self.param_id.as_ref(),
+                )
         {
             self.rejection = Some(reason);
             return;
@@ -552,8 +580,12 @@ impl Command for ChangeGraphParamCommand {
         });
     }
 
-    fn was_applied(&self) -> bool { self.rejection.is_none() }
-    fn rejection_reason(&self) -> Option<&str> { self.rejection }
+    fn was_applied(&self) -> bool {
+        self.rejection.is_none()
+    }
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection
+    }
 
     fn description(&self) -> &str {
         "Change Param"
@@ -722,7 +754,9 @@ impl ToggleEffectParamExposeCommand {
 }
 
 impl Command for ToggleEffectParamExposeCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::WHOLE_INSTANCES
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let node_id = self.node_id.clone();
         let node_handle = self.node_handle.clone();
@@ -731,133 +765,134 @@ impl Command for ToggleEffectParamExposeCommand {
         let meta = self.inner_meta.clone();
         // Resolve the instance by id (master / layer / clip). `None` when the
         // id doesn't resolve — leaves `reverse` as `None`, a clean no-op.
-        let reverse_out = project.find_effect_by_id_mut(&self.effect_id).map(|effect| {
-            // Locate any existing binding for this (node_id, inner_param).
-            // User bindings are synthesized from the graph's user-added
-            // metadata — the single binding-storage list.
-            let user_bindings = effect.user_param_bindings();
-            let existing_position = user_bindings
-                .iter()
-                .position(|b| b.node_id == node_id && b.inner_param == inner_param);
+        let reverse_out = project
+            .find_effect_by_id_mut(&self.effect_id)
+            .map(|effect| {
+                // Locate any existing binding for this (node_id, inner_param).
+                // User bindings are synthesized from the graph's user-added
+                // metadata — the single binding-storage list.
+                let user_bindings = effect.user_param_bindings();
+                let existing_position = user_bindings
+                    .iter()
+                    .position(|b| b.node_id == node_id && b.inner_param == inner_param);
 
-            if expose {
-                // Idempotent: if already exposed, no-op.
-                if existing_position.is_some() {
-                    return ReverseState::None;
-                }
-                let existing_ids: Vec<String> =
-                    user_bindings.iter().map(|b| b.id.clone()).collect();
-                let id =
-                    generate_user_param_id(&node_handle, &inner_param, &existing_ids);
-                let binding = UserParamBinding {
-                    id: id.clone(),
-                    label: meta.label.clone(),
-                    node_id: node_id.clone(),
-                    legacy_node_handle: None,
-                    inner_param: inner_param.clone(),
-                    min: meta.min,
-                    max: meta.max,
-                    default_value: meta.default_value,
-                    convert: meta.convert,
-                    is_angle: meta.is_angle,
-                    invert: false,
-                    curve: Default::default(),
-                    scale: 1.0,
-                    offset: 0.0,
-                    value_labels: Vec::new(),
-                    section: None,
-                };
-                effect.append_user_binding(binding);
-                ReverseState::Exposed { user_param_id: id }
-            } else {
-                // Unexpose: remove the binding matching this addressing.
-                let Some(position) = existing_position else {
-                    return ReverseState::None;
-                };
-                let user_param_id = user_bindings[position].id.clone();
-                // Capture the full manifest entry BEFORE removal so undo
-                // reinstates the exact pre-modulation snapshot (value + base +
-                // calibration) in one insert. The entry is guaranteed present
-                // for a live user binding: `append_user_binding` /
-                // `remove_user_binding_by_id` keep the binding and its manifest
-                // entry coupled by id, so there is no positional mismatch to
-                // defend against as there was under the old value-index model.
-                let param = effect
-                    .params
-                    .get(&user_param_id)
-                    .cloned()
-                    .expect("manifest entry present for a live user binding");
-                // Prune effect-local modulation references that targeted
-                // this binding. After the binding goes away its id stops
-                // resolving anywhere, so the driver / Ableton row would
-                // just be an orphan — visible in the project file, never
-                // applied, never editable. Capture pruned entries on
-                // the reverse state so undo restores them verbatim.
-                let removed_drivers = if let Some(ds) = effect.drivers.as_mut() {
-                    let mut taken = Vec::new();
-                    ds.retain(|d| {
-                        let keep = d.param_id != user_param_id;
-                        if !keep {
-                            taken.push(d.clone());
-                        }
-                        keep
-                    });
-                    if ds.is_empty() {
-                        effect.drivers = None;
+                if expose {
+                    // Idempotent: if already exposed, no-op.
+                    if existing_position.is_some() {
+                        return ReverseState::None;
                     }
-                    taken
+                    let existing_ids: Vec<String> =
+                        user_bindings.iter().map(|b| b.id.clone()).collect();
+                    let id = generate_user_param_id(&node_handle, &inner_param, &existing_ids);
+                    let binding = UserParamBinding {
+                        id: id.clone(),
+                        label: meta.label.clone(),
+                        node_id: node_id.clone(),
+                        legacy_node_handle: None,
+                        inner_param: inner_param.clone(),
+                        min: meta.min,
+                        max: meta.max,
+                        default_value: meta.default_value,
+                        convert: meta.convert,
+                        is_angle: meta.is_angle,
+                        invert: false,
+                        curve: Default::default(),
+                        scale: 1.0,
+                        offset: 0.0,
+                        value_labels: Vec::new(),
+                        section: None,
+                    };
+                    effect.append_user_binding(binding);
+                    ReverseState::Exposed { user_param_id: id }
                 } else {
-                    Vec::new()
-                };
-                let removed_ableton_mappings =
-                    if let Some(ms) = effect.ableton_mappings.as_mut() {
+                    // Unexpose: remove the binding matching this addressing.
+                    let Some(position) = existing_position else {
+                        return ReverseState::None;
+                    };
+                    let user_param_id = user_bindings[position].id.clone();
+                    // Capture the full manifest entry BEFORE removal so undo
+                    // reinstates the exact pre-modulation snapshot (value + base +
+                    // calibration) in one insert. The entry is guaranteed present
+                    // for a live user binding: `append_user_binding` /
+                    // `remove_user_binding_by_id` keep the binding and its manifest
+                    // entry coupled by id, so there is no positional mismatch to
+                    // defend against as there was under the old value-index model.
+                    let param = effect
+                        .params
+                        .get(&user_param_id)
+                        .cloned()
+                        .expect("manifest entry present for a live user binding");
+                    // Prune effect-local modulation references that targeted
+                    // this binding. After the binding goes away its id stops
+                    // resolving anywhere, so the driver / Ableton row would
+                    // just be an orphan — visible in the project file, never
+                    // applied, never editable. Capture pruned entries on
+                    // the reverse state so undo restores them verbatim.
+                    let removed_drivers = if let Some(ds) = effect.drivers.as_mut() {
                         let mut taken = Vec::new();
-                        ms.retain(|m| {
-                            let keep = m.param_id != user_param_id;
+                        ds.retain(|d| {
+                            let keep = d.param_id != user_param_id;
                             if !keep {
-                                taken.push(m.clone());
+                                taken.push(d.clone());
                             }
                             keep
                         });
-                        if ms.is_empty() {
-                            effect.ableton_mappings = None;
+                        if ds.is_empty() {
+                            effect.drivers = None;
                         }
                         taken
                     } else {
                         Vec::new()
                     };
-                // Envelope-home unification: envelopes ride on the instance
-                // now, so they prune in the same borrow as drivers / Ableton
-                // mappings (no separate layer pass).
-                let removed_envelopes = if let Some(es) = effect.envelopes.as_mut() {
-                    let mut taken = Vec::new();
-                    es.retain(|e| {
-                        let keep = e.param_id != user_param_id;
-                        if !keep {
-                            taken.push(e.clone());
+                    let removed_ableton_mappings =
+                        if let Some(ms) = effect.ableton_mappings.as_mut() {
+                            let mut taken = Vec::new();
+                            ms.retain(|m| {
+                                let keep = m.param_id != user_param_id;
+                                if !keep {
+                                    taken.push(m.clone());
+                                }
+                                keep
+                            });
+                            if ms.is_empty() {
+                                effect.ableton_mappings = None;
+                            }
+                            taken
+                        } else {
+                            Vec::new()
+                        };
+                    // Envelope-home unification: envelopes ride on the instance
+                    // now, so they prune in the same borrow as drivers / Ableton
+                    // mappings (no separate layer pass).
+                    let removed_envelopes = if let Some(es) = effect.envelopes.as_mut() {
+                        let mut taken = Vec::new();
+                        es.retain(|e| {
+                            let keep = e.param_id != user_param_id;
+                            if !keep {
+                                taken.push(e.clone());
+                            }
+                            keep
+                        });
+                        if es.is_empty() {
+                            effect.envelopes = None;
                         }
-                        keep
-                    });
-                    if es.is_empty() {
-                        effect.envelopes = None;
+                        taken
+                    } else {
+                        Vec::new()
+                    };
+                    let binding = effect
+                        .remove_user_binding_by_id(&user_param_id)
+                        .expect("position checked above");
+                    ReverseState::Unexposed {
+                        binding,
+                        param,
+                        position,
+                        removed_drivers,
+                        removed_ableton_mappings,
+                        removed_envelopes,
                     }
-                    taken
-                } else {
-                    Vec::new()
-                };
-                let binding = effect
-                    .remove_user_binding_by_id(&user_param_id)
-                    .expect("position checked above");
-                ReverseState::Unexposed {
-                    binding,
-                    param,
-                    position,
-                    removed_drivers,
-                    removed_ableton_mappings,
-                    removed_envelopes,
                 }
-            }
-        });
+            });
         self.reverse = reverse_out.unwrap_or_default();
     }
 
@@ -890,7 +925,10 @@ impl Command for ToggleEffectParamExposeCommand {
                     // at the just-reinserted binding's id, so they'll
                     // match again on the next modulation pass.
                     if !removed_drivers.is_empty() {
-                        effect.drivers.get_or_insert_with(Vec::new).extend(removed_drivers);
+                        effect
+                            .drivers
+                            .get_or_insert_with(Vec::new)
+                            .extend(removed_drivers);
                     }
                     if !removed_ableton_mappings.is_empty() {
                         effect
@@ -948,21 +986,25 @@ impl ToggleParamExposeCommand {
 }
 
 impl Command for ToggleParamExposeCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let id = self.param_id.as_ref();
         let new_v = self.new_exposed;
-        self.prev_exposed = project.find_effect_by_id_mut(&self.effect_id).and_then(|effect| {
-            if !effect.params.contains(id) {
-                return None;
-            }
-            let was = effect.is_param_exposed(id);
-            if was == new_v {
-                return None;
-            }
-            effect.set_param_exposed(id, new_v);
-            Some(was)
-        });
+        self.prev_exposed = project
+            .find_effect_by_id_mut(&self.effect_id)
+            .and_then(|effect| {
+                if !effect.params.contains(id) {
+                    return None;
+                }
+                let was = effect.is_param_exposed(id);
+                if was == new_v {
+                    return None;
+                }
+                effect.set_param_exposed(id, new_v);
+                Some(was)
+            });
     }
 
     fn do_undo(&mut self, project: &mut Project) {
@@ -1066,7 +1108,11 @@ impl BindingMappingEdit {
     /// authored control, everything but the range for a described one.
     fn spec_edit(&self, source: manifold_core::params::SpecSource) -> Self {
         if source == manifold_core::params::SpecSource::Lookup {
-            Self { min: None, max: None, ..self.clone() }
+            Self {
+                min: None,
+                max: None,
+                ..self.clone()
+            }
         } else {
             self.clone()
         }
@@ -1239,7 +1285,9 @@ impl EditParamMappingCommand {
     }
 
     fn restore_choices(&self, project: &mut Project) {
-        let Some(prev) = self.prev_choices.clone() else { return };
+        let Some(prev) = self.prev_choices.clone() else {
+            return;
+        };
         let binding_id = &self.binding_id;
         project.with_preset_graph_mut(&self.target, |host| {
             if let Some(p) = host.params.get_mut(binding_id) {
@@ -1343,11 +1391,12 @@ impl Command for EditParamMappingCommand {
                 // with it, except the range, which stays declared. An
                 // authored control saves its spec: its range is the author's.
                 let spec_snap = new.spec_edit(p.source).apply_to_manifest_spec(&mut p.spec);
-                let prev_choices = (p.source == manifold_core::params::SpecSource::Lookup).then(|| {
-                    let prev = p.choices.clone();
-                    new.apply_to_choices(&p.spec, &mut p.choices);
-                    prev
-                });
+                let prev_choices =
+                    (p.source == manifold_core::params::SpecSource::Lookup).then(|| {
+                        let prev = p.choices.clone();
+                        new.apply_to_choices(&p.spec, &mut p.choices);
+                        prev
+                    });
 
                 Some((
                     MappingReverse {
@@ -1376,7 +1425,9 @@ impl Command for EditParamMappingCommand {
             project.with_preset_graph_mut(&self.target, |host| {
                 apply_scale_offset_on_graph(host, &binding_id, &reverse_edit);
                 if let Some(p) = host.params.get_mut(&binding_id) {
-                    reverse_edit.spec_edit(p.source).apply_to_manifest_spec(&mut p.spec);
+                    reverse_edit
+                        .spec_edit(p.source)
+                        .apply_to_manifest_spec(&mut p.spec);
                     if p.source == manifold_core::params::SpecSource::Lookup {
                         reverse_edit.apply_to_choices(&p.spec, &mut p.choices);
                     }
@@ -1444,11 +1495,13 @@ pub(crate) mod tests {
         command.execute(&mut project);
         assert!(command.was_applied());
         assert_eq!(command.rejection_reason(), None);
-        assert!(!project
-            .settings
-            .master_effects
-            .iter()
-            .any(|effect| effect.id == target_effect_id));
+        assert!(
+            !project
+                .settings
+                .master_effects
+                .iter()
+                .any(|effect| effect.id == target_effect_id)
+        );
         command.undo(&mut project);
         assert_eq!(
             project
@@ -1482,7 +1535,10 @@ pub(crate) mod tests {
                 .iter()
                 .map(|effect| effect.id.clone())
                 .collect::<Vec<_>>(),
-            before.iter().map(|effect| effect.id.clone()).collect::<Vec<_>>()
+            before
+                .iter()
+                .map(|effect| effect.id.clone())
+                .collect::<Vec<_>>()
         );
 
         let mut missing_target = RemoveEffectCommand::new(
@@ -1549,7 +1605,9 @@ pub(crate) mod tests {
     /// seed the per-instance graph the reshape command materializes when an
     /// instance is still on the catalog default — the editing crate doesn't
     /// link the renderer, so it stands in for the renderer-resolved catalog def.
-    pub(crate) fn seed_def_with_param(param_id: &str) -> manifold_core::effect_graph_def::EffectGraphDef {
+    pub(crate) fn seed_def_with_param(
+        param_id: &str,
+    ) -> manifold_core::effect_graph_def::EffectGraphDef {
         use manifold_core::effect_graph_def::{
             BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
         };
@@ -1568,7 +1626,7 @@ pub(crate) mod tests {
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
-                    layer_types: None,
+                layer_types: None,
                 params: vec![ParamSpecDef {
                     tooltip: None,
                     id: param_id.to_string(),
@@ -1626,12 +1684,19 @@ pub(crate) mod tests {
     /// save-time-derived shadow now, not a live target) — `scale` is still
     /// live, since it has no manifest home. Use [`manifest_reshape`] to read
     /// the live invert/max after a calibration edit.
-    fn spec_reshape(graph: &Option<manifold_core::effect_graph_def::EffectGraphDef>, id: &str) -> (bool, f32, f32) {
+    fn spec_reshape(
+        graph: &Option<manifold_core::effect_graph_def::EffectGraphDef>,
+        id: &str,
+    ) -> (bool, f32, f32) {
         let meta = graph
             .as_ref()
             .and_then(|g| g.preset_metadata.as_ref())
             .expect("graph carries preset metadata");
-        let spec = meta.params.iter().find(|p| p.id == id).expect("param spec present");
+        let spec = meta
+            .params
+            .iter()
+            .find(|p| p.id == id)
+            .expect("param spec present");
         let scale = meta
             .bindings
             .iter()
@@ -1705,8 +1770,12 @@ pub(crate) mod tests {
             offset: Some(1.5),
             section: None,
         };
-        let mut cmd =
-            EditParamMappingCommand::new(GraphTarget::Effect(effect_id), binding_id.clone(), edit, None);
+        let mut cmd = EditParamMappingCommand::new(
+            GraphTarget::Effect(effect_id),
+            binding_id.clone(),
+            edit,
+            None,
+        );
 
         // ── execute: every touched field changes ──
         cmd.execute(&mut project);
@@ -1762,8 +1831,12 @@ pub(crate) mod tests {
             curve: Some(MacroCurve::Exponential),
             ..Default::default()
         };
-        let mut cmd =
-            EditParamMappingCommand::new(GraphTarget::Effect(effect_id), binding_id.clone(), edit, None);
+        let mut cmd = EditParamMappingCommand::new(
+            GraphTarget::Effect(effect_id),
+            binding_id.clone(),
+            edit,
+            None,
+        );
         cmd.execute(&mut project);
         let b = master_binding(&project, &binding_id);
         assert!(b.invert);
@@ -1804,21 +1877,34 @@ pub(crate) mod tests {
 
         cmd.undo(&mut project);
         let b = master_binding(&project, &binding_id);
-        assert_eq!(b.section, None, "undo restores the pre-edit (absent) section");
+        assert_eq!(
+            b.section, None,
+            "undo restores the pre-edit (absent) section"
+        );
 
         // Clearing back to unsectioned: `Some(None)` is a real edit, distinct
         // from `None` (untouched). Re-set it, then clear it.
         cmd.execute(&mut project);
-        assert_eq!(master_binding(&project, &binding_id).section.as_deref(), Some("Leaf"));
+        assert_eq!(
+            master_binding(&project, &binding_id).section.as_deref(),
+            Some("Leaf")
+        );
         let clear = BindingMappingEdit {
             section: Some(None),
             ..Default::default()
         };
-        let mut clear_cmd =
-            EditParamMappingCommand::new(GraphTarget::Effect(effect_id), binding_id.clone(), clear, None);
+        let mut clear_cmd = EditParamMappingCommand::new(
+            GraphTarget::Effect(effect_id),
+            binding_id.clone(),
+            clear,
+            None,
+        );
         clear_cmd.execute(&mut project);
         let b = master_binding(&project, &binding_id);
-        assert_eq!(b.section, None, "Some(None) clears the section back to unsectioned");
+        assert_eq!(
+            b.section, None,
+            "Some(None) clears the section back to unsectioned"
+        );
     }
 
     #[test]
@@ -1894,7 +1980,10 @@ pub(crate) mod tests {
             "invert/max land on the manifest — the sole live authority",
         );
         let (_, _, scale) = spec_reshape(&project.settings.master_effects[0].graph, "amount");
-        assert_eq!(scale, 2.0, "scale lands on the materialized graph's binding");
+        assert_eq!(
+            scale, 2.0,
+            "scale lands on the materialized graph's binding"
+        );
         assert_ne!(
             project.settings.master_effects[0].graph_version, v0,
             "editing a stock param bumps graph_version",
@@ -1908,7 +1997,10 @@ pub(crate) mod tests {
             "undo restores the seeded manifest spec (invert false, max 1.0)",
         );
         let (_, _, scale) = spec_reshape(&project.settings.master_effects[0].graph, "amount");
-        assert_eq!(scale, 1.0, "undo restores scale to identity on the graph binding");
+        assert_eq!(
+            scale, 1.0,
+            "undo restores scale to identity on the graph binding"
+        );
     }
 
     /// An id that is neither a user binding nor present in the seed def, with
@@ -1931,7 +2023,10 @@ pub(crate) mod tests {
             None,
         );
         cmd.execute(&mut project);
-        assert!(cmd.reverse.is_none(), "unknown id without a seed must be a no-op");
+        assert!(
+            cmd.reverse.is_none(),
+            "unknown id without a seed must be a no-op"
+        );
         assert!(
             project.settings.master_effects[0].graph.is_none(),
             "no per-instance graph materialized for an unknown id without a seed",
@@ -1988,7 +2083,11 @@ pub(crate) mod tests {
         );
         let p = fx.params.get("amount").expect("manifest entry present");
         assert_eq!(p.slider_span(), (0.25, 4.0));
-        assert_eq!((p.spec.min, p.spec.max), (0.0, 1.0), "the declared range never takes the user's span");
+        assert_eq!(
+            (p.spec.min, p.spec.max),
+            (0.0, 1.0),
+            "the declared range never takes the user's span"
+        );
         assert!(p.spec.invert);
         assert_eq!(p.spec.curve, MacroCurve::Exponential);
         assert!(p.choices.calibrated());
@@ -2000,7 +2099,11 @@ pub(crate) mod tests {
         let p = fx.params.get("amount").expect("manifest entry present");
         assert_eq!(p.slider_span(), (0.0, 1.0), "undo restores the seeded span");
         assert!(!p.spec.invert, "undo restores the seeded invert");
-        assert_eq!(p.spec.curve, MacroCurve::Linear, "undo restores the seeded curve");
+        assert_eq!(
+            p.spec.curve,
+            MacroCurve::Linear,
+            "undo restores the seeded curve"
+        );
         assert_ne!(
             fx.graph_version,
             v0 + 1,
@@ -2071,12 +2174,19 @@ pub(crate) mod tests {
 
         cmd.undo(&mut project);
         let layer = &project.timeline.layers[0];
-        assert!(layer.generator_graph().is_none(), "undo must not materialize either");
+        assert!(
+            layer.generator_graph().is_none(),
+            "undo must not materialize either"
+        );
         let p = layer
             .gen_params()
             .and_then(|gp| gp.params.get("complexity"))
             .expect("manifest entry present");
-        assert_eq!(p.spec.curve, MacroCurve::Linear, "undo restores the seeded curve");
+        assert_eq!(
+            p.spec.curve,
+            MacroCurve::Linear,
+            "undo restores the seeded curve"
+        );
     }
 
     /// Run one drawer edit on a lookup control through the gateway, where the
@@ -2232,17 +2342,26 @@ pub(crate) mod tests {
             None,
         );
         cmd.execute(&mut project);
-        assert_eq!(master_binding(&project, &binding_id).scale, 3.0, "commit lands final");
+        assert_eq!(
+            master_binding(&project, &binding_id).scale,
+            3.0,
+            "commit lands final"
+        );
 
         cmd.undo(&mut project);
         assert_eq!(
-            master_binding(&project, &binding_id).scale, 1.0,
+            master_binding(&project, &binding_id).scale,
+            1.0,
             "undo restores the PRE-DRAG value (1.0), not the preview-mutated final (3.0) \
              — the quirk Peter caught",
         );
 
         // redo re-applies the final.
         cmd.execute(&mut project);
-        assert_eq!(master_binding(&project, &binding_id).scale, 3.0, "redo re-lands final");
+        assert_eq!(
+            master_binding(&project, &binding_id).scale,
+            3.0,
+            "redo re-lands final"
+        );
     }
 }

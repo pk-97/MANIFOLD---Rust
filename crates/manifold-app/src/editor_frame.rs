@@ -23,8 +23,8 @@ use manifold_gpu::{GpuDevice, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuT
 use manifold_ui::graph_canvas::mapping_popover::MappingPopover;
 use manifold_ui::graph_canvas::{GraphCanvas, Rect as CanvasRect};
 use manifold_ui::node::{NodeId, TextAlign, UIStyle};
-use manifold_ui::panels::graph_editor::GraphEditorPanel;
 use manifold_ui::panels::Panel;
+use manifold_ui::panels::graph_editor::GraphEditorPanel;
 use manifold_ui::{Dock, MiniClip, MiniLayerLabel, MiniTimeline, Rect as UiRect, UITree};
 use manifold_ui_paint::ui_cache_manager::{PanelCacheInfo, PanelSlot, UICacheManager};
 use manifold_ui_paint::ui_renderer::{Depth, UIRenderer};
@@ -34,12 +34,18 @@ use crate::frame_timer::FrameTimer;
 use crate::text_input::TextInputState;
 use crate::ui_root::UIRoot;
 use crate::workspace::{Workspace, WorkspaceKind};
-use manifold_core::work_count::{record_work, WorkKind};
+use manifold_core::work_count::{WorkKind, record_work};
 
 /// A first open sizes the editor at three quarters of the primary window's
 /// logical size; later opens restore where the user left it.
-pub(crate) fn first_open_logical_size(primary_logical_w: f64, primary_logical_h: f64) -> (u32, u32) {
-    ((primary_logical_w * 0.75) as u32, (primary_logical_h * 0.75) as u32)
+pub(crate) fn first_open_logical_size(
+    primary_logical_w: f64,
+    primary_logical_h: f64,
+) -> (u32, u32) {
+    (
+        (primary_logical_w * 0.75) as u32,
+        (primary_logical_h * 0.75) as u32,
+    )
 }
 
 /// The graph editor's workspace and canvas as a fresh open makes them, with
@@ -134,7 +140,12 @@ impl EditorLayout {
     /// fit above the mini-timeline strip; the pair is centred vertically.
     /// `monitor_aspect` is the content pipeline's output aspect; 16:9 when
     /// there is no pipeline.
-    pub(crate) fn compute(dock: &Dock, logical_w: u32, logical_h: u32, monitor_aspect: Option<f32>) -> Self {
+    pub(crate) fn compute(
+        dock: &Dock,
+        logical_w: u32,
+        logical_h: u32,
+        monitor_aspect: Option<f32>,
+    ) -> Self {
         let monitor_aspect = monitor_aspect.unwrap_or(16.0 / 9.0);
         let area = UiRect::new(0.0, 0.0, logical_w as f32, logical_h as f32);
         let rects = dock.rects(area);
@@ -230,10 +241,19 @@ impl EditorPlan {
     /// rebuilt and every live group pushed.
     fn everything() -> Self {
         let mut live = ProjectionMask::default();
-        for p in [Projection::LiveValues, Projection::LiveShapes, Projection::LiveRanges] {
+        for p in [
+            Projection::LiveValues,
+            Projection::LiveShapes,
+            Projection::LiveRanges,
+        ] {
             live.insert(p);
         }
-        Self { cards: true, column: true, overlays: true, live }
+        Self {
+            cards: true,
+            column: true,
+            overlays: true,
+            live,
+        }
     }
 
     fn any_rebuild(&self) -> bool {
@@ -253,7 +273,9 @@ pub(crate) fn plan_editor_frame(last: &EditorInputs, next: &EditorInputs) -> Edi
     plan.cards = last.inspector_projected != next.inspector_projected
         || last.inspector_view != next.inspector_view
         || last.card_rect != next.card_rect;
-    plan.column = last.column != next.column || last.panel != next.panel || last.show_image != next.show_image;
+    plan.column = last.column != next.column
+        || last.panel != next.panel
+        || last.show_image != next.show_image;
     plan.overlays = last.overlays != next.overlays || last.screen != next.screen;
     crate::frame_plan::plan_live(&last.live, &next.live, &mut plan.live);
     plan
@@ -314,7 +336,14 @@ pub(crate) fn run_editor_frame(
     ui_root.tick_inspector();
     ui_root.update_fire_meters(&frame.content_state.fire_meters, frame.dt);
 
-    let quantize = |r: UiRect| [r.x.to_bits(), r.y.to_bits(), r.width.to_bits(), r.height.to_bits()];
+    let quantize = |r: UiRect| {
+        [
+            r.x.to_bits(),
+            r.y.to_bits(),
+            r.width.to_bits(),
+            r.height.to_bits(),
+        ]
+    };
     let next = EditorInputs {
         live: frame.live,
         inspector_projected: ui_root.inspector_projection_version(),
@@ -329,8 +358,9 @@ pub(crate) fn run_editor_frame(
     let last = state.last.replace(next);
     // A moved or resized panel leaves pixels that belong to no slot; the
     // atlas clears and repaints whole, as the main window's does.
-    if last.is_none_or(|l| l.card_rect != next.card_rect || l.column != next.column || l.screen != next.screen)
-        && let Some(cm) = state.cache.as_mut()
+    if last.is_none_or(|l| {
+        l.card_rect != next.card_rect || l.column != next.column || l.screen != next.screen
+    }) && let Some(cm) = state.cache.as_mut()
     {
         cm.invalidate_all();
     }
@@ -387,7 +417,13 @@ pub(crate) fn run_editor_frame(
             || plan.live.contains(Projection::LiveRanges),
     };
     if live.any() {
-        crate::ui_bridge::push_live(ui_root, frame.project, frame.content_state, frame.active_layer, live);
+        crate::ui_bridge::push_live(
+            ui_root,
+            frame.project,
+            frame.content_state,
+            frame.active_layer,
+            live,
+        );
     }
     ui_root.tick_editor_perf_hud();
 
@@ -413,7 +449,10 @@ pub(crate) fn run_editor_frame(
         // here beside the draw rather than in the main canvas tick.
         redraw |= canvas.tick_wire_magnet(vp);
     }
-    EditorFrameOut { smart_preview_toggle: state.smart_preview_toggle, redraw }
+    EditorFrameOut {
+        smart_preview_toggle: state.smart_preview_toggle,
+        redraw,
+    }
 }
 
 /// What one editor frame hands back to its caller.
@@ -675,7 +714,12 @@ impl LiveSurfaces {
 /// (`EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6, the same keepalive as the main
 /// window's), an unpainted panel node or a dirty overlay. An idle editor
 /// composites nothing and re-presents its last frame.
-pub(crate) fn needs_composite(state: &mut EditorFrameState, ui_root: &UIRoot, dirty: bool, key: CompositeKey) -> bool {
+pub(crate) fn needs_composite(
+    state: &mut EditorFrameState,
+    ui_root: &UIRoot,
+    dirty: bool,
+    key: CompositeKey,
+) -> bool {
     let moved = state.last_composite != Some(key);
     state.last_composite = Some(key);
     dirty
@@ -740,7 +784,12 @@ pub(crate) fn composite_editor_frame(
     viewport: Option<crate::scene_viewport::SceneViewportPaint<'_>>,
 ) {
     let (logical_w, logical_h) = (layout.logical_w, layout.logical_h);
-    let EditorAtlas { cache, pipeline: atlas_pipeline, sampler: atlas_sampler, scale_factor } = atlas;
+    let EditorAtlas {
+        cache,
+        pipeline: atlas_pipeline,
+        sampler: atlas_sampler,
+        scale_factor,
+    } = atlas;
     let Some(ui_renderer) = ui_renderer else {
         let mut encoder = device.create_encoder("Graph Editor Frame");
         encoder.clear_texture(offscreen, 0.10, 0.10, 0.12, 1.0);
@@ -752,7 +801,8 @@ pub(crate) fn composite_editor_frame(
     cache.set_scale_factor(scale_factor);
     cache.ensure_atlas(device, logical_w, logical_h);
     let mut subs = std::mem::take(&mut ui_root.panel_subs_scratch);
-    let mut panels = manifold_core::scratch::recycle_vec(std::mem::take(&mut ui_root.panel_info_scratch));
+    let mut panels =
+        manifold_core::scratch::recycle_vec(std::mem::take(&mut ui_root.panel_info_scratch));
     editor_panel_cache_info(ui_root, layout, &mut subs, &mut panels);
     let (_, painted) = cache.render_dirty_panels(device, ui_renderer, &ui_root.tree, &panels);
     crate::ui_frame::clear_painted_dirt(ui_root, painted);
@@ -774,8 +824,14 @@ pub(crate) fn composite_editor_frame(
             atlas_pipeline,
             offscreen,
             &[
-                manifold_gpu::GpuBinding::Texture { binding: 0, texture: atlas_tex },
-                manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: atlas_sampler },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 0,
+                    texture: atlas_tex,
+                },
+                manifold_gpu::GpuBinding::Sampler {
+                    binding: 1,
+                    sampler: atlas_sampler,
+                },
             ],
             false,
             true,
@@ -784,7 +840,10 @@ pub(crate) fn composite_editor_frame(
     }
 
     ui_renderer.begin_frame();
-    match viewport.as_ref().map(|viewport| (viewport, viewport.outline)) {
+    match viewport
+        .as_ref()
+        .map(|viewport| (viewport, viewport.outline))
+    {
         // The selection outline (D-102) sits over the picture, which already
         // carries the gizmo lines (`gizmo_overlay.rs`).
         Some((viewport, Some((outline, mask)))) => {
@@ -793,7 +852,13 @@ pub(crate) fn composite_editor_frame(
                 ui_renderer.render(&mut encoder, offscreen, GpuLoadAction::Load);
             }
             let (r, sf) = (viewport.rect, scale as f32);
-            outline.draw(&mut encoder, offscreen, mask, (r.x * sf, r.y * sf, r.width * sf, r.height * sf), sf);
+            outline.draw(
+                &mut encoder,
+                offscreen,
+                mask,
+                (r.x * sf, r.y * sf, r.width * sf, r.height * sf),
+                sf,
+            );
             ui_renderer.begin_frame();
         }
         Some((viewport, None)) => viewport.draw_image(ui_renderer),
@@ -854,7 +919,11 @@ mod tests {
     use super::*;
 
     fn base() -> EditorInputs {
-        EditorInputs { card_rect: [1, 2, 3, 4], screen: [800, 600], ..Default::default() }
+        EditorInputs {
+            card_rect: [1, 2, 3, 4],
+            screen: [800, 600],
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -870,11 +939,15 @@ mod tests {
         assert!(plan.live.contains(Projection::LiveValues));
         assert!(!plan.cards && !plan.column && !plan.overlays);
         let mut next = base();
-        next.live.parts.bump(manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Shapes]));
+        next.live.parts.bump(manifold_core::change::ChangeSet::of(&[
+            manifold_core::change::Part::Shapes,
+        ]));
         let plan = plan_editor_frame(&base(), &next);
         assert!(plan.live.contains(Projection::LiveShapes) && !plan.cards);
         let mut next = base();
-        next.live.parts.bump(manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::MappingRanges]));
+        next.live.parts.bump(manifold_core::change::ChangeSet::of(&[
+            manifold_core::change::Part::MappingRanges,
+        ]));
         let plan = plan_editor_frame(&base(), &next);
         assert!(plan.live.contains(Projection::LiveRanges) && !plan.cards);
     }
@@ -909,7 +982,10 @@ mod tests {
 
     #[test]
     fn overlays_rebuild_on_their_version_and_the_window_size() {
-        for change in [|i: &mut EditorInputs| i.overlays += 1, |i: &mut EditorInputs| i.screen[0] += 1] {
+        for change in [
+            |i: &mut EditorInputs| i.overlays += 1,
+            |i: &mut EditorInputs| i.screen[0] += 1,
+        ] {
             let mut next = base();
             change(&mut next);
             let plan = plan_editor_frame(&base(), &next);
@@ -965,15 +1041,37 @@ mod tests {
             let again = needs_composite(state, &ui, false, key);
             (drew, again)
         };
-        assert_eq!(idle(&mut state, key), (true, false), "the first frame draws, an idle one does not");
+        assert_eq!(
+            idle(&mut state, key),
+            (true, false),
+            "the first frame draws, an idle one does not"
+        );
         // A clip or layer edit moves the strip's own cache key.
-        assert_eq!(idle(&mut state, CompositeKey { mini: Some((2, 1, 1)), ..key }), (true, false));
+        assert_eq!(
+            idle(
+                &mut state,
+                CompositeKey {
+                    mini: Some((2, 1, 1)),
+                    ..key
+                }
+            ),
+            (true, false)
+        );
         // Playback draws every frame; the pause draws the stopped strip once.
-        let playing = CompositeKey { playing: true, ..key };
+        let playing = CompositeKey {
+            playing: true,
+            ..key
+        };
         assert_eq!(idle(&mut state, playing), (true, true));
         assert_eq!(idle(&mut state, key), (true, false));
         // The frame after the last node preview leaves draws it gone.
-        let previews = CompositeKey { live: LiveSurfaces { node_previews: true, ..LiveSurfaces::default() }, ..key };
+        let previews = CompositeKey {
+            live: LiveSurfaces {
+                node_previews: true,
+                ..LiveSurfaces::default()
+            },
+            ..key
+        };
         assert_eq!(idle(&mut state, previews), (true, true));
         assert_eq!(idle(&mut state, key), (true, false));
     }
@@ -1000,7 +1098,10 @@ mod tests {
         assert!(frame(&canvas), "the first frame draws");
         assert!(!frame(&canvas), "an idle canvas draws nothing");
         canvas.on_pointer_move(vp, 100.0, 100.0);
-        assert!(frame(&canvas), "the cursor moved: the tooltip and hover follow it");
+        assert!(
+            frame(&canvas),
+            "the cursor moved: the tooltip and hover follow it"
+        );
         canvas.on_pointer_move(vp, 100.0, 100.0);
         assert!(!frame(&canvas), "a move to the same point changes nothing");
         canvas.on_scroll(vp, 120.0);

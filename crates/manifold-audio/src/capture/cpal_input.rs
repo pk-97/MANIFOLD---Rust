@@ -17,8 +17,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Stream, StreamConfig};
 use manifold_core::audio_stream::audio_stream;
 
-use super::{AudioConsumer, CaptureBackend};
 use super::clock::CallbackClock;
+use super::{AudioConsumer, CaptureBackend};
 
 /// Information about an available audio input device.
 #[derive(Clone, Debug)]
@@ -106,12 +106,8 @@ impl AudioCaptureDevice {
         // The shared stream allocates whole interleaved frames. Rounding down
         // keeps its sample allocation within the legacy sample budget.
         let frame_capacity = (sample_capacity / channels as usize).max(1);
-        let (mut producer, consumer) = audio_stream(
-            channels as usize,
-            frame_capacity,
-            2048,
-            sample_rate,
-        );
+        let (mut producer, consumer) =
+            audio_stream(channels as usize, frame_capacity, 2048, sample_rate);
 
         let running = Arc::new(AtomicBool::new(false));
         let running_cb = running.clone();
@@ -132,7 +128,9 @@ impl AudioCaptureDevice {
                     // Preserve CPAL's capture estimate; do not timestamp at the
                     // content/display drain. The backend determines accuracy.
                     let source_time = clock.map(
-                        timestamp.callback, timestamp.capture, std::time::Instant::now(),
+                        timestamp.callback,
+                        timestamp.capture,
+                        std::time::Instant::now(),
                         |later, earlier| later.duration_since(&earlier),
                     );
                     let written = producer.push_interleaved_at(data, source_time);

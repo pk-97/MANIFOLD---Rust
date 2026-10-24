@@ -379,8 +379,8 @@ impl ComponentProjection {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    use manifold_node_engine::testkit::array_harness::read;
     use super::*;
+    use manifold_node_engine::testkit::array_harness::read;
 
     #[derive(serde::Deserialize)]
     struct Fixture {

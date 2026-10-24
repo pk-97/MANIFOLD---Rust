@@ -164,8 +164,12 @@ impl GraphCanvas {
         // `wire_touches_focus`, so it never reaches tiers 1/2 and always
         // draws per-wire — satisfying "hover / endpoint-selected expands to
         // individuals" with no extra state.
-        self.draw_wire_tier(ui, viewport, |w| !self.wire_touches_focus(w) && self.wire_is_control(w));
-        self.draw_wire_tier(ui, viewport, |w| !self.wire_touches_focus(w) && !self.wire_is_control(w));
+        self.draw_wire_tier(ui, viewport, |w| {
+            !self.wire_touches_focus(w) && self.wire_is_control(w)
+        });
+        self.draw_wire_tier(ui, viewport, |w| {
+            !self.wire_touches_focus(w) && !self.wire_is_control(w)
+        });
         for wire in &self.wires {
             if self.wire_touches_focus(wire) {
                 self.draw_wire(ui, viewport, wire);
@@ -245,7 +249,16 @@ impl GraphCanvas {
             // replace it — so the fully-faded-in state matches the original
             // (already-subtle) fill/border alpha exactly, not full opacity.
             let scale = |c: Color32| color::with_alpha(c, (c.a as f32 * alpha).round() as u8);
-            ui.draw_bordered_rect(x, y, w, h, scale(MARQUEE_FILL), 0.0, 1.0, scale(MARQUEE_BORDER));
+            ui.draw_bordered_rect(
+                x,
+                y,
+                w,
+                h,
+                scale(MARQUEE_FILL),
+                0.0,
+                1.0,
+                scale(MARQUEE_BORDER),
+            );
             ui.pop_depth();
         }
 
@@ -313,8 +326,22 @@ impl GraphCanvas {
         let alpha = ((1.0 - p) * 255.0).round() as u8;
         let mark = color::with_alpha(color::RED_BASE, alpha);
         let r = 6.0;
-        ui.draw_line(cx - r + shake_x, cy - r, cx + r + shake_x, cy + r, 2.0, mark);
-        ui.draw_line(cx - r + shake_x, cy + r, cx + r + shake_x, cy - r, 2.0, mark);
+        ui.draw_line(
+            cx - r + shake_x,
+            cy - r,
+            cx + r + shake_x,
+            cy + r,
+            2.0,
+            mark,
+        );
+        ui.draw_line(
+            cx - r + shake_x,
+            cy + r,
+            cx + r + shake_x,
+            cy - r,
+            2.0,
+            mark,
+        );
     }
 
     /// Floating help card near the cursor: a param's help line when the
@@ -389,10 +416,16 @@ impl GraphCanvas {
             format!("scope: {:?}", self.scope),
             format!("crumbs: {:?}", self.scope_titles),
             format!("nodes: {}   wires: {}", self.nodes.len(), self.wires.len()),
-            format!("selected: {:?}   hovered: {:?}", self.selected, self.hovered),
+            format!(
+                "selected: {:?}   hovered: {:?}",
+                self.selected, self.hovered
+            ),
             format!(
                 "drag: {}",
-                self.drag.payload().map(CanvasDrag::debug_label).unwrap_or("none")
+                self.drag
+                    .payload()
+                    .map(CanvasDrag::debug_label)
+                    .unwrap_or("none")
             ),
             format!(
                 "zoom: {:.2}   pan: ({:.0}, {:.0})",
@@ -482,7 +515,17 @@ impl GraphCanvas {
         let span_x = (sx1 - sx0).abs();
         let dx = span_x.max(40.0) * 0.5;
         let (cx0, cy0, cx1, cy1) = (sx0 + dx, sy0, sx1 - dx, sy1);
-        let (px, py) = cubic_bezier(progress.clamp(0.0, 1.0), sx0, sy0, cx0, cy0, cx1, cy1, sx1, sy1);
+        let (px, py) = cubic_bezier(
+            progress.clamp(0.0, 1.0),
+            sx0,
+            sy0,
+            cx0,
+            cy0,
+            cx1,
+            cy1,
+            sx1,
+            sy1,
+        );
         // Fades in the first quarter, holds, fades out the last quarter —
         // a clean pop-and-travel rather than an abrupt appear/disappear.
         let alpha = if progress < 0.25 {
@@ -495,7 +538,13 @@ impl GraphCanvas {
         // Same "rounded square = dot" primitive `draw_port_dot` uses — this
         // file has no separate filled-circle draw call.
         let d = (7.0 * self.zoom).clamp(4.0, 12.0);
-        self.draw_port_dot(ui, px, py, d, CONNECT_OK_COLOR.with_alpha((217.0 * alpha) as u8));
+        self.draw_port_dot(
+            ui,
+            px,
+            py,
+            d,
+            CONNECT_OK_COLOR.with_alpha((217.0 * alpha) as u8),
+        );
     }
 
     /// A sparse reference grid, drawn at `GRID_SPACING * GRID_LINE_EVERY` —
@@ -583,7 +632,11 @@ impl GraphCanvas {
         // Groups read as containers: a teal-washed body + a brighter accent
         // border so the eye picks out the boxes that "open".
         let bg = if node.is_group {
-            if hovered { GROUP_BODY_BG_HOVER } else { GROUP_BODY_BG }
+            if hovered {
+                GROUP_BODY_BG_HOVER
+            } else {
+                GROUP_BODY_BG
+            }
         } else if hovered {
             NODE_BG_HOVER
         } else {
@@ -616,14 +669,7 @@ impl GraphCanvas {
         } else {
             node.header_color
         };
-        ui.draw_rounded_rect(
-            sx,
-            sy,
-            sw,
-            header_h,
-            header_color,
-            NODE_CORNER * self.zoom,
-        );
+        ui.draw_rounded_rect(sx, sy, sw, header_h, header_color, NODE_CORNER * self.zoom);
 
         // All node text scales linearly with zoom — no font-size floor. A
         // floor made the text out-scale its shrinking box on zoom-out and
@@ -662,7 +708,14 @@ impl GraphCanvas {
         // node has something hideable. Geometry via `reveal_chip_rect`, the same
         // source the hit-test reads, so the drawn chip and click target agree.
         if let Some(chip) = self.reveal_chip_rect(viewport, node.id) {
-            ui.draw_rounded_rect(chip.x, chip.y, chip.w, chip.h, REVEAL_CHIP_BG, 3.0 * self.zoom);
+            ui.draw_rounded_rect(
+                chip.x,
+                chip.y,
+                chip.w,
+                chip.h,
+                REVEAL_CHIP_BG,
+                3.0 * self.zoom,
+            );
             let cs = 9.0 * self.zoom;
             let label = if node.revealed {
                 "−".to_string()
@@ -873,7 +926,12 @@ impl GraphCanvas {
                         // an authoring picker of its own.
                         if !node.is_group && !p.preparation_only && kind_is_exposable(p.kind) {
                             self.draw_expose_checkbox(
-                                ui, sx, row_y, row_h, p.exposed, !p.wire_driven,
+                                ui,
+                                sx,
+                                row_y,
+                                row_h,
+                                p.exposed,
+                                !p.wire_driven,
                             );
                         }
                         // Driver hint appended to the label: "← wired" when an
@@ -1051,7 +1109,14 @@ impl GraphCanvas {
         let panel = dd.panel_rect();
         // Backing + frame so the list reads as one floating menu.
         ui.draw_bordered_rect(
-            panel.x, panel.y, panel.w, panel.h, TOOLTIP_BG, 3.0, 1.0, TOOLTIP_BORDER,
+            panel.x,
+            panel.y,
+            panel.w,
+            panel.h,
+            TOOLTIP_BG,
+            3.0,
+            1.0,
+            TOOLTIP_BORDER,
         );
         let text_size = color::FONT_BODY as f32 * self.zoom;
         let pad_x = 8.0 * self.zoom;
@@ -1065,7 +1130,13 @@ impl GraphCanvas {
                 ui.draw_rect(r.x, r.y, r.w, r.h, ENUM_DD_HOVER_BG);
             }
             let text = elide_to_width(label, text_size, (r.w - 2.0 * pad_x).max(0.0));
-            ui.draw_text(r.x + pad_x, r.y + 2.0 * self.zoom, &text, text_size, TEXT_PRIMARY);
+            ui.draw_text(
+                r.x + pad_x,
+                r.y + 2.0 * self.zoom,
+                &text,
+                text_size,
+                TEXT_PRIMARY,
+            );
         }
     }
 
@@ -1095,7 +1166,14 @@ impl GraphCanvas {
         let span = (max - min).max(f32::EPSILON);
         let panel = ed.panel_rect();
         ui.draw_bordered_rect(
-            panel.x, panel.y, panel.w, panel.h, TOOLTIP_BG, 3.0, 1.0, TOOLTIP_BORDER,
+            panel.x,
+            panel.y,
+            panel.w,
+            panel.h,
+            TOOLTIP_BG,
+            3.0,
+            1.0,
+            TOOLTIP_BORDER,
         );
         let text_size = color::FONT_BODY as f32 * self.zoom;
         let pad_x = 8.0 * self.zoom;
@@ -1172,7 +1250,14 @@ impl GraphCanvas {
         };
         let panel = ed.panel_rect();
         ui.draw_bordered_rect(
-            panel.x, panel.y, panel.w, panel.h, TOOLTIP_BG, 3.0, 1.0, TOOLTIP_BORDER,
+            panel.x,
+            panel.y,
+            panel.w,
+            panel.h,
+            TOOLTIP_BG,
+            3.0,
+            1.0,
+            TOOLTIP_BORDER,
         );
         let text_size = color::FONT_BODY as f32 * self.zoom;
         let pad_x = 6.0 * self.zoom;
@@ -1193,7 +1278,11 @@ impl GraphCanvas {
                 if cx >= cell.x && cx <= cell.x + cell.w && cy >= cell.y && cy <= cell.y + cell.h {
                     ui.draw_rect(cell.x, cell.y, cell.w, cell.h, ENUM_DD_HOVER_BG);
                 }
-                let v = rows.get(r).and_then(|row| row.get(c)).copied().unwrap_or(0.0);
+                let v = rows
+                    .get(r)
+                    .and_then(|row| row.get(c))
+                    .copied()
+                    .unwrap_or(0.0);
                 let s = fmt_table_cell(v);
                 let vw = text_width(&s, text_size);
                 ui.draw_text(
@@ -1240,7 +1329,13 @@ impl GraphCanvas {
             );
         } else if exposed {
             ui.draw_rounded_rect(bx, by, bd, bd, PARAM_EXPOSE_ON, r);
-            ui.draw_text(bx + bd * 0.16, by - bd * 0.06, "✓", bd * 0.95, [20, 24, 33, 255]);
+            ui.draw_text(
+                bx + bd * 0.16,
+                by - bd * 0.06,
+                "✓",
+                bd * 0.95,
+                [20, 24, 33, 255],
+            );
         } else {
             // Outer box tint, then a near-black inner fill so it reads as an
             // empty checkbox regardless of the node's hover state.
@@ -1290,7 +1385,12 @@ impl GraphCanvas {
     /// picks the tier (control-fan vs. data) the same way the two unribboned
     /// `for wire in &self.wires` loops used to — this just adds the grouping
     /// pass in front of the per-wire draw.
-    fn draw_wire_tier(&self, ui: &mut dyn Painter, viewport: Rect, filter: impl Fn(&WireView) -> bool) {
+    fn draw_wire_tier(
+        &self,
+        ui: &mut dyn Painter,
+        viewport: Rect,
+        filter: impl Fn(&WireView) -> bool,
+    ) {
         let filtered: Vec<&WireView> = self.wires.iter().filter(|w| filter(w)).collect();
         for (_, members) in group_wires_by_pair(filtered.into_iter()) {
             if members.len() >= 2 {
@@ -1311,9 +1411,10 @@ impl GraphCanvas {
     /// multi-wire loop matters more than decluttering it.
     fn draw_wire_ribbon(&self, ui: &mut dyn Painter, viewport: Rect, members: &[&WireView]) {
         let first = members[0];
-        let (Some(from), Some(to)) =
-            (self.find_node(first.from_node), self.find_node(first.to_node))
-        else {
+        let (Some(from), Some(to)) = (
+            self.find_node(first.from_node),
+            self.find_node(first.to_node),
+        ) else {
             return;
         };
         if to.breaks_dependency_cycle {
@@ -1323,7 +1424,10 @@ impl GraphCanvas {
             return;
         }
 
-        let (gx0, gy0) = (from.pos_graph.0 + NODE_WIDTH, from.pos_graph.1 + from.height() * 0.5);
+        let (gx0, gy0) = (
+            from.pos_graph.0 + NODE_WIDTH,
+            from.pos_graph.1 + from.height() * 0.5,
+        );
         let (gx1, gy1) = (to.pos_graph.0, to.pos_graph.1 + to.height() * 0.5);
         let (sx0, sy0) = self.to_screen(viewport, gx0, gy0);
         let (sx1, sy1) = self.to_screen(viewport, gx1, gy1);
@@ -1332,8 +1436,7 @@ impl GraphCanvas {
         let dx = (span_x.max(40.0) * 0.5 + span_y * 0.35).min(span_x.max(160.0));
         let (cx0, cy0, cx1, cy1) = (sx0 + dx, sy0, sx1 - dx, sy1);
 
-        let approx_len =
-            (span_x + span_y + (cx0 - sx0).abs() + (sx1 - cx1).abs()).max(40.0);
+        let approx_len = (span_x + span_y + (cx0 - sx0).abs() + (sx1 - cx1).abs()).max(40.0);
         let steps = (approx_len / 12.0).clamp(16.0, 80.0) as i32;
         // Bundle colour: the first member's port colour — a ribbon reads as
         // "more than one," not as a new colour identity, so no new palette
@@ -1522,7 +1625,14 @@ impl GraphCanvas {
     /// way it hangs: right of the source's output dot, or left of the
     /// feedback node's input dot, so the two tags always point away from
     /// their own node and toward where the loop actually goes.
-    fn draw_return_tag(&self, ui: &mut dyn Painter, px: f32, py: f32, label: &str, at_source: bool) {
+    fn draw_return_tag(
+        &self,
+        ui: &mut dyn Painter,
+        px: f32,
+        py: f32,
+        label: &str,
+        at_source: bool,
+    ) {
         let font = 9.0 * self.zoom;
         let pad_x = 5.0 * self.zoom;
         let pad_y = 2.0 * self.zoom;
@@ -1530,7 +1640,11 @@ impl GraphCanvas {
         let text_w = text_width(label, font);
         let chip_w = text_w + pad_x * 2.0;
         let chip_h = font + pad_y * 2.0;
-        let chip_x = if at_source { px + gap } else { px - gap - chip_w };
+        let chip_x = if at_source {
+            px + gap
+        } else {
+            px - gap - chip_w
+        };
         let chip_y = py - chip_h * 0.5;
         ui.draw_rounded_rect(chip_x, chip_y, chip_w, chip_h, RETURN_TAG_BG, chip_h * 0.3);
         ui.draw_text(chip_x + pad_x, chip_y + pad_y, label, font, RETURN_TAG_TEXT);

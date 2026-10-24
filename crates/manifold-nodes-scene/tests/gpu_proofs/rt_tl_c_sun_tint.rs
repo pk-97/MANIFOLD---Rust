@@ -40,11 +40,13 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    ensure_normal_sources, GiMaterial, MetalShadowRayTracer, RtObjectGeometry,
-    ShadowRayParams, ShadowRayTracer, SVT_SLOT_NONE,
+    GiMaterial, MetalShadowRayTracer, RtObjectGeometry, SVT_SLOT_NONE, ShadowRayParams,
+    ShadowRayTracer, ensure_normal_sources,
+};
+use manifold_gpu::{
+    GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 use manifold_gpu::{ShadowCaster, upload_shadow_casters};
-use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
 use manifold_nodes_scene::testkit::gpu_harness as harness;
 
@@ -87,8 +89,9 @@ fn upload_texture_f32(
         label,
         mip_levels: 1,
     });
-    let bytes =
-        unsafe { slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels)) };
+    let bytes = unsafe {
+        slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels))
+    };
     device.upload_texture(&texture, bytes);
     texture
 }
@@ -102,12 +105,30 @@ const IDENTITY: [[f32; 4]; 4] = [
 
 fn quad_verts_z(z: f32) -> [PackedVertexUV; 6] {
     [
-        PackedVertexUV { pos: [-1.0, -1.0, z], uv: [0.0, 0.0] },
-        PackedVertexUV { pos: [1.0, -1.0, z], uv: [1.0, 0.0] },
-        PackedVertexUV { pos: [1.0, 1.0, z], uv: [1.0, 1.0] },
-        PackedVertexUV { pos: [-1.0, -1.0, z], uv: [0.0, 0.0] },
-        PackedVertexUV { pos: [1.0, 1.0, z], uv: [1.0, 1.0] },
-        PackedVertexUV { pos: [-1.0, 1.0, z], uv: [0.0, 1.0] },
+        PackedVertexUV {
+            pos: [-1.0, -1.0, z],
+            uv: [0.0, 0.0],
+        },
+        PackedVertexUV {
+            pos: [1.0, -1.0, z],
+            uv: [1.0, 0.0],
+        },
+        PackedVertexUV {
+            pos: [1.0, 1.0, z],
+            uv: [1.0, 1.0],
+        },
+        PackedVertexUV {
+            pos: [-1.0, -1.0, z],
+            uv: [0.0, 0.0],
+        },
+        PackedVertexUV {
+            pos: [1.0, 1.0, z],
+            uv: [1.0, 1.0],
+        },
+        PackedVertexUV {
+            pos: [-1.0, 1.0, z],
+            uv: [0.0, 1.0],
+        },
     ]
 }
 
@@ -127,9 +148,13 @@ fn run_tlc_fixture(
     let tracer = MetalShadowRayTracer::new(device);
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
     // below (built before the trace dispatch on the same command buffer).
-    let plan = tracer.plan_accel(device, None, objects).expect("plan accel");
+    let plan = tracer
+        .plan_accel(device, None, objects)
+        .expect("plan accel");
     let mut accel_slot = None;
-    tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+    tracer
+        .prepare_accel(device, &mut accel_slot, plan)
+        .expect("prepare accel");
     let mut accel = accel_slot.unwrap();
 
     let gi_materials_buffer = write_shared_buffer(device, gi_materials);
@@ -145,7 +170,14 @@ fn run_tlc_fixture(
     let normal_sources_buffer = normal_sources_slot.expect("ensure_normal_sources must allocate");
 
     let depth_px: [f32; 2] = [0.3, 0.3];
-    let depth_tex = upload_texture_f32(device, 2, 1, GpuTextureFormat::Depth32Float, &depth_px, "tlc-depth");
+    let depth_tex = upload_texture_f32(
+        device,
+        2,
+        1,
+        GpuTextureFormat::Depth32Float,
+        &depth_px,
+        "tlc-depth",
+    );
 
     // out_svt at 2x1 so we can read both texels. Rgba32Float for
     // straightforward readback (kernel writes float4; Metal converts to f16
@@ -171,7 +203,9 @@ fn run_tlc_fixture(
         mip_levels: 1,
     });
     let out_irr = device.create_texture(&GpuTextureDesc {
-        width: 2, height: 1, depth: 1,
+        width: 2,
+        height: 1,
+        depth: 1,
         format: GpuTextureFormat::Rgba16Float,
         dimension: GpuTextureDimension::D2,
         usage: GpuTextureUsage::SHADER_WRITE,
@@ -179,7 +213,9 @@ fn run_tlc_fixture(
         mip_levels: 1,
     });
     let out_n = device.create_texture(&GpuTextureDesc {
-        width: 2, height: 1, depth: 1,
+        width: 2,
+        height: 1,
+        depth: 1,
         format: GpuTextureFormat::Rgba16Float,
         dimension: GpuTextureDimension::D2,
         usage: GpuTextureUsage::SHADER_WRITE,
@@ -187,7 +223,9 @@ fn run_tlc_fixture(
         mip_levels: 1,
     });
     let out_refl = device.create_texture(&GpuTextureDesc {
-        width: 2, height: 1, depth: 1,
+        width: 2,
+        height: 1,
+        depth: 1,
         format: GpuTextureFormat::Rgba16Float,
         dimension: GpuTextureDimension::D2,
         usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::SHADER_READ,
@@ -195,7 +233,9 @@ fn run_tlc_fixture(
         mip_levels: 1,
     });
     let prefiltered_env = device.create_texture(&GpuTextureDesc {
-        width: 1, height: 1, depth: 1,
+        width: 1,
+        height: 1,
+        depth: 1,
         format: GpuTextureFormat::Rgba16Float,
         dimension: GpuTextureDimension::D2,
         usage: GpuTextureUsage::SHADER_READ,
@@ -214,7 +254,14 @@ fn run_tlc_fixture(
         if let Some(tex) = base_color_tex {
             vec![tex]
         } else {
-            owned_dummy = upload_texture_f32(device, 1, 1, GpuTextureFormat::Rgba32Float, &[1.0, 1.0, 1.0, 1.0], "tlc-tex-dummy");
+            owned_dummy = upload_texture_f32(
+                device,
+                1,
+                1,
+                GpuTextureFormat::Rgba32Float,
+                &[1.0, 1.0, 1.0, 1.0],
+                "tlc-tex-dummy",
+            );
             vec![&owned_dummy]
         }
     };
@@ -224,33 +271,43 @@ fn run_tlc_fixture(
     let params = ShadowRayParams::new(
         caster_list.len() as u32,
         caster_buffer.gpu_address(),
-        1,       // shadow_spp
-        0,       // frame_index
-        [2, 1],  // trace_size
-        [2, 1],  // gbuffer_size
-        0.0,     // ao_radius
-        0,       // ao_spp
-        0,       // gi_spp
+        1,               // shadow_spp
+        0,               // frame_index
+        [2, 1],          // trace_size
+        [2, 1],          // gbuffer_size
+        0.0,             // ao_radius
+        0,               // ao_spp
+        0,               // gi_spp
         [0.0, 0.0, 0.0], // camera_pos
         IDENTITY,
-        0,       // refl_spp
-        0.6,     // refl_max_roughness
-        0.1,     // refl_rough_band
+        0,   // refl_spp
+        0.6, // refl_max_roughness
+        0.1, // refl_rough_band
         svt_slot,
     );
     let dummy_emissive = harness::dummy_emissive_buffer(device);
     // P4a: the GPU emissive preparation indexes one material row per
     // object — this fixture has no emissive geometry, so zeroed rows
     // (luma 0 → zero stats, the old "no emissive table" behavior).
-    let materials = vec![
-        manifold_gpu::raytrace::GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]);
-        objects.len()
-    ];
+    let materials =
+        vec![
+            manifold_gpu::raytrace::GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]);
+            objects.len()
+        ];
 
     let mut encoder = device.create_encoder("tlc-proof");
     let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
     tracer
-        .encode_accel_update(device, &mut encoder, &mut accel, objects, &changes, &materials, true, true)
+        .encode_accel_update(
+            device,
+            &mut encoder,
+            &mut accel,
+            objects,
+            &changes,
+            &materials,
+            true,
+            true,
+        )
         .expect("encode accel update");
     tracer.dispatch_shadow_rays(
         &mut encoder,
@@ -289,7 +346,8 @@ fn run_tlc_fixture(
     let svt_ptr = svt_readback_buf
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");
-    let svt_bytes: &[u8] = unsafe { slice::from_raw_parts(svt_ptr.cast::<c_void>().cast::<u8>(), 32) };
+    let svt_bytes: &[u8] =
+        unsafe { slice::from_raw_parts(svt_ptr.cast::<c_void>().cast::<u8>(), 32) };
     let svt_floats: &[f32] = unsafe { slice::from_raw_parts(svt_bytes.as_ptr().cast::<f32>(), 8) };
     let svt0: [f32; 3] = [svt_floats[0], svt_floats[1], svt_floats[2]];
     let svt1: [f32; 3] = [svt_floats[4], svt_floats[5], svt_floats[6]];
@@ -327,7 +385,9 @@ fn red_petal_tints_transmitted_pool() {
     let vertex_buffer = write_shared_buffer(device, &verts);
 
     // Red albedo, factor 0.6
-    let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+    let objects = [RtObjectGeometry {
+        instance_inner: RtObjectGeometry::NO_INNER,
+        material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
@@ -360,14 +420,19 @@ fn red_petal_tints_transmitted_pool() {
         tangent_offset: u32::MAX,
     }];
     let gi_materials = [GiMaterial::new(
-        [1.0, 0.1, 0.1], // red albedo
-        [0.0, 0.0, 0.0], // no emissive
+        [1.0, 0.1, 0.1],      // red albedo
+        [0.0, 0.0, 0.0],      // no emissive
         [0.0, 0.0, 0.0, 0.0], // metallic_roughness
         [0.6, 1.0, 0.1, 0.1], // factor 0.6, independent red transmission colour
     )];
 
     // Sun caster (kind=0), svt_slot=0 → this caster's rgb goes to out_svt.
-    let casters = [ShadowCaster::traced([0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 0.0], 0)];
+    let casters = [ShadowCaster::traced(
+        [0.0, 0.0, 1.0],
+        0.0,
+        [0.0, 0.0, 0.0],
+        0,
+    )];
 
     let (svt0, sv0, svt1, sv1) = run_tlc_fixture(&objects, &gi_materials, &casters, 0, None);
 
@@ -377,12 +442,24 @@ fn red_petal_tints_transmitted_pool() {
     // out_svt behind occluder ≈ expected tint.
     let eps = 0.01;
     for texel in [svt0, svt1] {
-        assert!((texel[0] - expected[0]).abs() < eps,
-            "svt r: expected {}, got {}", expected[0], texel[0]);
-        assert!((texel[1] - expected[1]).abs() < eps,
-            "svt g: expected {}, got {}", expected[1], texel[1]);
-        assert!((texel[2] - expected[2]).abs() < eps,
-            "svt b: expected {}, got {}", expected[2], texel[2]);
+        assert!(
+            (texel[0] - expected[0]).abs() < eps,
+            "svt r: expected {}, got {}",
+            expected[0],
+            texel[0]
+        );
+        assert!(
+            (texel[1] - expected[1]).abs() < eps,
+            "svt g: expected {}, got {}",
+            expected[1],
+            texel[1]
+        );
+        assert!(
+            (texel[2] - expected[2]).abs() < eps,
+            "svt b: expected {}, got {}",
+            expected[2],
+            texel[2]
+        );
     }
 
     // RGB ratios: r/g ≈ 10, r/b ≈ 10.
@@ -396,8 +473,12 @@ fn red_petal_tints_transmitted_pool() {
     // out_sv luma channel equals luma(tint) — TL-B consistency.
     let expected_luma = luma(expected);
     for sv in [sv0, sv1] {
-        assert!((sv - expected_luma).abs() < eps,
-            "sv luma: expected {}, got {}", expected_luma, sv);
+        assert!(
+            (sv - expected_luma).abs() < eps,
+            "sv luma: expected {}, got {}",
+            expected_luma,
+            sv
+        );
     }
 }
 
@@ -411,7 +492,9 @@ fn point_caster_control_svt_stays_white() {
     let verts = quad_verts_z(1.0);
     let vertex_buffer = write_shared_buffer(device, &verts);
 
-    let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+    let objects = [RtObjectGeometry {
+        instance_inner: RtObjectGeometry::NO_INNER,
+        material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
@@ -452,25 +535,45 @@ fn point_caster_control_svt_stays_white() {
 
     // Point caster (kind=1), svt_slot = SVT_SLOT_NONE since no Sun caster.
     // Position at (0, 0, 5) — far enough that its occluder at z=1 still blocks.
-    let casters = [ShadowCaster::traced([0.0, 0.0, 5.0], 0.0, [0.0, 0.0, 0.0], 1)];
+    let casters = [ShadowCaster::traced(
+        [0.0, 0.0, 5.0],
+        0.0,
+        [0.0, 0.0, 0.0],
+        1,
+    )];
 
-    let (svt0, sv0, svt1, sv1) = run_tlc_fixture(
-        &objects, &gi_materials, &casters, SVT_SLOT_NONE, None,
-    );
+    let (svt0, sv0, svt1, sv1) =
+        run_tlc_fixture(&objects, &gi_materials, &casters, SVT_SLOT_NONE, None);
 
     // out_svt should be white everywhere — svt_slot NONE means no designated sun.
     let eps = 0.01;
     for texel in [svt0, svt1] {
-        assert!((texel[0] - 1.0).abs() < eps, "svt r: expected 1.0, got {}", texel[0]);
-        assert!((texel[1] - 1.0).abs() < eps, "svt g: expected 1.0, got {}", texel[1]);
-        assert!((texel[2] - 1.0).abs() < eps, "svt b: expected 1.0, got {}", texel[2]);
+        assert!(
+            (texel[0] - 1.0).abs() < eps,
+            "svt r: expected 1.0, got {}",
+            texel[0]
+        );
+        assert!(
+            (texel[1] - 1.0).abs() < eps,
+            "svt g: expected 1.0, got {}",
+            texel[1]
+        );
+        assert!(
+            (texel[2] - 1.0).abs() < eps,
+            "svt b: expected 1.0, got {}",
+            texel[2]
+        );
     }
 
     // out_sv still carries the attenuated luma — point caster occludes.
     let expected_luma = luma([0.6, 0.06, 0.06]);
     for sv in [sv0, sv1] {
-        assert!((sv - expected_luma).abs() < eps,
-            "sv luma should still attenuate: expected {}, got {}", expected_luma, sv);
+        assert!(
+            (sv - expected_luma).abs() < eps,
+            "sv luma should still attenuate: expected {}, got {}",
+            expected_luma,
+            sv
+        );
     }
 }
 
@@ -484,7 +587,9 @@ fn factor_zero_occluder_svt_reads_zero() {
     let verts = quad_verts_z(1.0);
     let vertex_buffer = write_shared_buffer(device, &verts);
 
-    let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+    let objects = [RtObjectGeometry {
+        instance_inner: RtObjectGeometry::NO_INNER,
+        material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
@@ -523,7 +628,12 @@ fn factor_zero_occluder_svt_reads_zero() {
         [0.0, 0.0, 0.0, 0.0], // factor 0 = opaque
     )];
 
-    let casters = [ShadowCaster::traced([0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 0.0], 0)];
+    let casters = [ShadowCaster::traced(
+        [0.0, 0.0, 1.0],
+        0.0,
+        [0.0, 0.0, 0.0],
+        0,
+    )];
 
     let (svt0, sv0, svt1, sv1) = run_tlc_fixture(&objects, &gi_materials, &casters, 0, None);
 
@@ -537,7 +647,11 @@ fn factor_zero_occluder_svt_reads_zero() {
 
     // out_sv reads zero too (fully shadowed).
     for sv in [sv0, sv1] {
-        assert!(sv.abs() < eps, "sv should be 0 (fully shadowed), got {}", sv);
+        assert!(
+            sv.abs() < eps,
+            "sv should be 0 (fully shadowed), got {}",
+            sv
+        );
     }
 }
 
@@ -552,7 +666,9 @@ fn unoccluded_texels_read_white_in_svt() {
     let verts = quad_verts_z(-1.0);
     let vertex_buffer = write_shared_buffer(device, &verts);
 
-    let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+    let objects = [RtObjectGeometry {
+        instance_inner: RtObjectGeometry::NO_INNER,
+        material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
@@ -591,20 +707,41 @@ fn unoccluded_texels_read_white_in_svt() {
         [0.5, 0.0, 0.0, 0.0],
     )];
 
-    let casters = [ShadowCaster::traced([0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 0.0], 0)];
+    let casters = [ShadowCaster::traced(
+        [0.0, 0.0, 1.0],
+        0.0,
+        [0.0, 0.0, 0.0],
+        0,
+    )];
 
     let (svt0, sv0, svt1, sv1) = run_tlc_fixture(&objects, &gi_materials, &casters, 0, None);
 
     // Unoccluded → white (1,1,1) in out_svt.
     let eps = 0.01;
     for texel in [svt0, svt1] {
-        assert!((texel[0] - 1.0).abs() < eps, "unoccluded svt r: expected 1, got {}", texel[0]);
-        assert!((texel[1] - 1.0).abs() < eps, "unoccluded svt g: expected 1, got {}", texel[1]);
-        assert!((texel[2] - 1.0).abs() < eps, "unoccluded svt b: expected 1, got {}", texel[2]);
+        assert!(
+            (texel[0] - 1.0).abs() < eps,
+            "unoccluded svt r: expected 1, got {}",
+            texel[0]
+        );
+        assert!(
+            (texel[1] - 1.0).abs() < eps,
+            "unoccluded svt g: expected 1, got {}",
+            texel[1]
+        );
+        assert!(
+            (texel[2] - 1.0).abs() < eps,
+            "unoccluded svt b: expected 1, got {}",
+            texel[2]
+        );
     }
 
     // out_sv reads fully lit (1.0).
     for sv in [sv0, sv1] {
-        assert!((sv - 1.0).abs() < eps, "unoccluded sv: expected 1, got {}", sv);
+        assert!(
+            (sv - 1.0).abs() < eps,
+            "unoccluded sv: expected 1, got {}",
+            sv
+        );
     }
 }

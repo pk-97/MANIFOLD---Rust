@@ -98,7 +98,8 @@ impl TransportController {
                 }
 
                 let cmd = manifold_editing::commands::settings::ChangeBpmCommand::master(
-                    project, recorded_bpm,
+                    project,
+                    recorded_bpm,
                 );
                 editing.execute(Box::new(cmd), project);
             }
@@ -115,11 +116,17 @@ impl Default for TransportController {
 /// Clock authority is derived from which sync source is live, never a user
 /// choice, so every write is an audited tick write (D24).
 pub fn write_clock_authority(engine: &mut PlaybackEngine, authority: ClockAuthority) {
-    if engine.project().is_some_and(|p| p.settings.clock_authority != authority)
+    if engine
+        .project()
+        .is_some_and(|p| p.settings.clock_authority != authority)
         && let Some(edit) = engine.project_edit()
     {
-        manifold_editing::edit::tick_write(manifold_editing::edit::TickField::ClockAuthority, edit, |p| {
-            p.settings.clock_authority = authority;
-        });
+        manifold_editing::edit::tick_write(
+            manifold_editing::edit::TickField::ClockAuthority,
+            edit,
+            |p| {
+                p.settings.clock_authority = authority;
+            },
+        );
     }
 }

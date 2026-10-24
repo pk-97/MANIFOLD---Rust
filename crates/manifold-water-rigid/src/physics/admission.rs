@@ -32,7 +32,10 @@ pub enum RefusalReason {
     /// The gate refused its pose, scale, contact values or shape. `param`
     /// is the control it concerns: a body param (`mass`, `copy_size_spacing`)
     /// or one of its transform's (`pos_x`, `rot_x`, `scale_x`).
-    Gate { reason: &'static str, param: Option<&'static str> },
+    Gate {
+        reason: &'static str,
+        param: Option<&'static str>,
+    },
     /// Its body node could not make a collision shape from its mesh.
     Shape(Arc<str>),
     /// It left the world's range while moving and was taken out.
@@ -83,10 +86,17 @@ impl Admission {
     /// This frame's admitted bodies and groups, lent out while the world
     /// advances; [`Self::restore_admitted`] hands them back.
     pub(crate) fn take_admitted(&mut self) -> (Vec<Option<RigidBody>>, Vec<Option<RigidBody>>) {
-        (std::mem::take(&mut self.bodies), std::mem::take(&mut self.groups))
+        (
+            std::mem::take(&mut self.bodies),
+            std::mem::take(&mut self.groups),
+        )
     }
 
-    pub(crate) fn restore_admitted(&mut self, bodies: Vec<Option<RigidBody>>, groups: Vec<Option<RigidBody>>) {
+    pub(crate) fn restore_admitted(
+        &mut self,
+        bodies: Vec<Option<RigidBody>>,
+        groups: Vec<Option<RigidBody>>,
+    ) {
         self.bodies = bodies;
         self.groups = groups;
     }
@@ -98,13 +108,17 @@ impl Admission {
     /// Forget the bodies taken out after moving out of range: a rebuilt world
     /// starts them again.
     pub(crate) fn clear_lost(&mut self) {
-        self.refusals.retain(|refusal| refusal.reason != RefusalReason::Lost);
+        self.refusals
+            .retain(|refusal| refusal.reason != RefusalReason::Lost);
     }
 
     /// Record a body the world took out after it moved out of range.
     pub(crate) fn lost(&mut self, member: Member) {
         if !self.refusals.iter().any(|refusal| refusal.member == member) {
-            self.refusals.push(BodyRefusal { member, reason: RefusalReason::Lost });
+            self.refusals.push(BodyRefusal {
+                member,
+                reason: RefusalReason::Lost,
+            });
         }
     }
 
@@ -113,19 +127,29 @@ impl Admission {
     /// dropped; the rest are logged again under their new ports.
     pub(crate) fn move_ports(&mut self, body_from: &[Option<usize>], group_from: &[Option<usize>]) {
         fn moved(old: &mut [Option<RigidBody>], from: &[Option<usize>]) -> Vec<Option<RigidBody>> {
-            from.iter().map(|at| at.and_then(|at| old.get_mut(at).and_then(Option::take))).collect()
+            from.iter()
+                .map(|at| at.and_then(|at| old.get_mut(at).and_then(Option::take)))
+                .collect()
         }
         self.bodies = moved(&mut self.bodies, body_from);
         self.groups = moved(&mut self.groups, group_from);
         self.passed_bodies = moved(&mut self.passed_bodies, body_from);
         self.passed_groups = moved(&mut self.passed_groups, group_from);
         let new_port = |member: Member| match member {
-            Member::Body(at) => body_from.iter().position(|from| *from == Some(at)).map(Member::Body),
-            Member::Copies(at) => group_from.iter().position(|from| *from == Some(at)).map(Member::Copies),
+            Member::Body(at) => body_from
+                .iter()
+                .position(|from| *from == Some(at))
+                .map(Member::Body),
+            Member::Copies(at) => group_from
+                .iter()
+                .position(|from| *from == Some(at))
+                .map(Member::Copies),
         };
         self.refusals = std::mem::take(&mut self.refusals)
             .into_iter()
-            .filter_map(|refusal| new_port(refusal.member).map(|member| BodyRefusal { member, ..refusal }))
+            .filter_map(|refusal| {
+                new_port(refusal.member).map(|member| BodyRefusal { member, ..refusal })
+            })
             .collect();
         self.logged.clear();
     }
@@ -133,10 +157,23 @@ impl Admission {
     /// Admit `bodies` and `groups`: what passes, the stand-ins of what was
     /// refused, and nothing for what never passed.
     pub(crate) fn admit(&mut self, bodies: &[Option<RigidBody>], groups: &[Option<RigidBody>]) {
-        self.refusals.retain(|refusal| refusal.reason == RefusalReason::Lost);
+        self.refusals
+            .retain(|refusal| refusal.reason == RefusalReason::Lost);
         for (input, admitted, passed, member, prototype) in [
-            (bodies, &mut self.bodies, &mut self.passed_bodies, Member::Body as fn(usize) -> Member, false),
-            (groups, &mut self.groups, &mut self.passed_groups, Member::Copies as fn(usize) -> Member, true),
+            (
+                bodies,
+                &mut self.bodies,
+                &mut self.passed_bodies,
+                Member::Body as fn(usize) -> Member,
+                false,
+            ),
+            (
+                groups,
+                &mut self.groups,
+                &mut self.passed_groups,
+                Member::Copies as fn(usize) -> Member,
+                true,
+            ),
         ] {
             admitted.resize(input.len(), None);
             passed.resize(input.len(), None);
@@ -154,15 +191,25 @@ impl Admission {
                     Err(reason) => {
                         admitted[slot].clone_from(&passed[slot]);
                         if let Some(reason) = reason {
-                            self.refusals.push(BodyRefusal { member: member(slot), reason });
+                            self.refusals.push(BodyRefusal {
+                                member: member(slot),
+                                reason,
+                            });
                         }
                     }
                 }
             }
         }
         if self.refusals != self.logged {
-            for refusal in self.refusals.iter().filter(|refusal| !self.logged.contains(refusal)) {
-                eprintln!("[physics] {:?} is out of the world: {}", refusal.member, refusal.reason);
+            for refusal in self
+                .refusals
+                .iter()
+                .filter(|refusal| !self.logged.contains(refusal))
+            {
+                eprintln!(
+                    "[physics] {:?} is out of the world: {}",
+                    refusal.member, refusal.reason
+                );
             }
             self.logged.clone_from(&self.refusals);
         }
@@ -171,11 +218,17 @@ impl Admission {
 
 /// `Err(None)` while the body's shape is still being prepared: not a
 /// refusal, it is just not here yet.
-fn check(body: &RigidBody, passed: Option<&RigidBody>, prototype: bool) -> Result<(), Option<RefusalReason>> {
+fn check(
+    body: &RigidBody,
+    passed: Option<&RigidBody>,
+    prototype: bool,
+) -> Result<(), Option<RefusalReason>> {
     if !body.enabled {
         return Ok(());
     }
-    let refuse = |reason: &'static str, param: Option<&'static str>| Some(RefusalReason::Gate { reason, param });
+    let refuse = |reason: &'static str, param: Option<&'static str>| {
+        Some(RefusalReason::Gate { reason, param })
+    };
     let gate = |param: &'static str| {
         move |error: manifold_physics::PhysicsError| match error {
             manifold_physics::PhysicsError::InvalidInput(reason) => refuse(reason, Some(param)),
@@ -192,7 +245,12 @@ fn check(body: &RigidBody, passed: Option<&RigidBody>, prototype: bool) -> Resul
         return Err(refuse("a body cannot turn to face the camera", None));
     }
     validate_position(body.transform.pos).map_err(gate("pos_x"))?;
-    if body.transform.rot_euler.iter().any(|angle| !angle.is_finite()) {
+    if body
+        .transform
+        .rot_euler
+        .iter()
+        .any(|angle| !angle.is_finite())
+    {
         return Err(refuse("rotation must be finite", Some("rot_x")));
     }
     validate_scale(body.transform.scale).map_err(gate("scale_x"))?;
@@ -200,10 +258,16 @@ fn check(body: &RigidBody, passed: Option<&RigidBody>, prototype: bool) -> Resul
         return Err(refuse("mass must be finite and positive", Some("mass")));
     }
     if !body.friction.is_finite() || body.friction < 0.0 {
-        return Err(refuse("friction must be finite and not negative", Some("friction")));
+        return Err(refuse(
+            "friction must be finite and not negative",
+            Some("friction"),
+        ));
     }
     if !body.bounce.is_finite() || body.bounce < 0.0 {
-        return Err(refuse("bounce must be finite and not negative", Some("bounce")));
+        return Err(refuse(
+            "bounce must be finite and not negative",
+            Some("bounce"),
+        ));
     }
     if prototype {
         validate_spawn(body.spawn).map_err(|(reason, param)| refuse(reason, Some(param)))?;
@@ -212,10 +276,16 @@ fn check(body: &RigidBody, passed: Option<&RigidBody>, prototype: bool) -> Resul
     // shape valid unscaled that fails here was made invalid by the scale.
     let same_shape = passed.is_some_and(|passed| {
         passed.transform.scale == body.transform.scale
-            && passed.collider.as_ref().zip(body.collider.as_ref()).is_some_and(|(a, b)| Arc::ptr_eq(a, b))
+            && passed
+                .collider
+                .as_ref()
+                .zip(body.collider.as_ref())
+                .is_some_and(|(a, b)| Arc::ptr_eq(a, b))
     });
     if !same_shape {
-        solid.validate_at(body.transform.scale).map_err(gate("scale_x"))?;
+        solid
+            .validate_at(body.transform.scale)
+            .map_err(gate("scale_x"))?;
     }
     Ok(())
 }

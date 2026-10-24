@@ -28,9 +28,8 @@ use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 const DISTANCE: f32 = 5.0;
 const FOV_Y: f32 = 0.9;
@@ -220,7 +219,9 @@ fn render_frame_with_enabled_values(
             enc.commit_and_wait_completed();
         });
     }
-    let bytes = manifold_node_engine::testkit::gpu_harness::retry_on_gpu_commit_error(|| h.readback(&target.texture));
+    let bytes = manifold_node_engine::testkit::gpu_harness::retry_on_gpu_commit_error(|| {
+        h.readback(&target.texture)
+    });
     for (i, px) in bytes.chunks_exact(8).enumerate() {
         for c in 0..4 {
             pixels[i * 4 + c] = f16::from_le_bytes([px[c * 2], px[c * 2 + 1]]).to_f32();
@@ -251,9 +252,13 @@ fn diff(a: &[f32], b: &[f32]) -> Diff {
 }
 
 fn fused_scene_json(shutter_angle: f32, enabled: bool) -> String {
-    let def: manifold_core::effect_graph_def::EffectGraphDef =
-        serde_json::from_str(&manifold_nodes::testkit::scene_objects::bundle_scene_objects(&scene_json_with_enabled(shutter_angle, enabled)))
-            .expect("motion blur def parses");
+    let def: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(
+        &manifold_nodes::testkit::scene_objects::bundle_scene_objects(&scene_json_with_enabled(
+            shutter_angle,
+            enabled,
+        )),
+    )
+    .expect("motion blur def parses");
     let fused = manifold_node_engine::freeze::install::fused_generator_view_for(&def)
         .expect("motion blur graph must fuse through its downstream pointwise node");
     assert!(
@@ -268,7 +273,11 @@ fn fused_scene_json(shutter_angle: f32, enabled: bool) -> String {
 /// The measured assertions for one route (raw or fused): blur must be
 /// visible under motion with a 180° shutter, and absent with no motion.
 fn assert_blur_visible_on_route(json_for: &dyn Fn(f32) -> String, route: &str) {
-    let moved_on = render_frame(&json_for(SHUTTER), BEAT_MOVED, &format!("mb-{route}-moved-180"));
+    let moved_on = render_frame(
+        &json_for(SHUTTER),
+        BEAT_MOVED,
+        &format!("mb-{route}-moved-180"),
+    );
     let moved_off = render_frame(&json_for(0.0), BEAT_MOVED, &format!("mb-{route}-moved-0"));
     let d_moved = diff(&moved_on, &moved_off);
     assert!(

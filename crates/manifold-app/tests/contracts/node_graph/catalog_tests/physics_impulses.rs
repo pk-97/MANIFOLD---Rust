@@ -1,26 +1,32 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::scene_modifier_preset::SceneTargetSelection;
 use manifold_core::{NodeId, Seconds};
-use manifold_physics::input::EventStamp;
 use manifold_physics::FieldValue;
+use manifold_physics::input::EventStamp;
 
-use manifold_node_engine::runtime::PresetRuntime;
-use manifold_nodes_water::runtime::WaterRuntimeExt;
-use manifold_node_engine::exec::effect_node::FrameTime;
-use manifold_water_rigid::node;
 use manifold_core::scene_impulse::ImpulseTarget;
+use manifold_node_engine::exec::effect_node::FrameTime;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::{
+    exec::effect_node::ParamValues, parameters::ParamValue, persistence::PrimitiveRegistry,
+    ports::PortType,
+};
+use manifold_nodes_water::runtime::WaterRuntimeExt;
+use manifold_water_rigid::node;
 use manifold_water_rigid::physics_events::ResolvedNodeImpulse;
-use manifold_node_engine::{parameters::ParamValue, exec::effect_node::ParamValues, ports::PortType, persistence::PrimitiveRegistry};
 
-use manifold_nodes_water::runtime::physics_impulses::{CapturedSceneImpulse, PreparedSceneImpulse};
-use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind};
-use manifold_node_engine::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, parameters::ParamDef};
 use manifold_core::Beats;
+use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind};
+use manifold_node_engine::{
+    exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext,
+    exec::effect_node::EffectNodeType, parameters::ParamDef,
+};
+use manifold_nodes_water::runtime::physics_impulses::{CapturedSceneImpulse, PreparedSceneImpulse};
 use manifold_physics::VectorField;
 use std::{borrow::Cow, cell::Cell};
 
-mod source_tests;
 mod scene_routes_tests;
+mod source_tests;
 
 const DT: f64 = 1.0 / 60.0;
 thread_local! { static POSITIONS: Cell<[f32; 2]> = const { Cell::new([0.0; 2]) }; }
@@ -250,7 +256,9 @@ fn scene_impulse_captures_fields_and_targets_before_edits_and_applies_once() {
             [if index == 0 { 2.0 } else { 7.0 }, 0.0, 0.0]
         );
     }
-    runtime.water().drain_scene_impulses(|_, _| panic!("receipts must drain once"));
+    runtime
+        .water()
+        .drain_scene_impulses(|_, _| panic!("receipts must drain once"));
 }
 
 #[test]
@@ -304,17 +312,11 @@ fn scene_impulse_does_not_overwrite_pending_capture_or_reallocate_recipient_stor
             .capture_scene_impulse(&mut binding, &mut hit, time(1.0), 1, |_, t| Ok(t))
             .is_err()
     );
-    assert_eq!(
-        hit.test_field().unwrap().sample([0.0; 3]),
-        [2.0, 0.0, 0.0]
-    );
+    assert_eq!(hit.test_field().unwrap().sample([0.0; 3]), [2.0, 0.0, 0.0]);
     hit.clear();
     capture(&mut runtime, &mut binding, &mut hit, 1);
     assert_eq!(pointer, hit.test_stamp_storage());
-    assert_eq!(
-        hit.test_field().unwrap().sample([0.0; 3]),
-        [9.0, 0.0, 0.0]
-    );
+    assert_eq!(hit.test_field().unwrap().sample([0.0; 3]), [9.0, 0.0, 0.0]);
     assert_eq!(
         hit.test_recipient_count(),
         1,
@@ -377,10 +379,7 @@ fn scene_impulse_invalid_field_never_reuses_previous_value() {
     assert!(runtime.water().deliver_scene_impulse(&mut hit).is_err());
     edit(&mut runtime, "field", "x", 3.0);
     capture(&mut runtime, &mut binding, &mut hit, 1);
-    assert_eq!(
-        hit.test_field().unwrap().sample([0.0; 3]),
-        [3.0, 0.0, 0.0]
-    );
+    assert_eq!(hit.test_field().unwrap().sample([0.0; 3]), [3.0, 0.0, 0.0]);
 }
 
 #[test]
@@ -574,7 +573,8 @@ fn scene_impulse_captures_spatial_shape_before_center_edits() {
         ("radius", 5.0),
         ("falloff", 0.0),
     ] {
-        node.params.insert(name.into(), ParamValue::Float(value).into());
+        node.params
+            .insert(name.into(), ParamValue::Float(value).into());
     }
     let mut runtime = runtime(&def);
     runtime.execute_frame(time(0.0));

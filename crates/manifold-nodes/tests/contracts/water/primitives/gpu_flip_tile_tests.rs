@@ -7,15 +7,18 @@
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
-use manifold_nodes_water::presets::gpu_flip::WaterScene;
 use crate::contracts::water::primitives::gpu_flip_scene_tests::Run;
-use manifold_water_gpu_flip::primitives::gpu_flip_step::{CELL_REACH, ENGINE_CFL, FACE_VALID_LAYERS, StepParams, TILE, band_layers, dispatch_pass, ring_max, set_all_tiles, set_poison, tile_counts, tile_total};
-use manifold_water_liquid::primitives::liquid_stats::with_stats_layout;
+use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::testkit::array_harness::read;
-use manifold_node_engine::particles::{FluidParticle};
-use manifold_water_liquid::fluid_particles::CellRange;
-use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE};
 use manifold_nodes_physics::force_lattice::FORCE_LATTICE;
+use manifold_nodes_water::presets::gpu_flip::WaterScene;
+use manifold_water_gpu_flip::primitives::gpu_flip_step::{
+    CELL_REACH, ENGINE_CFL, FACE_VALID_LAYERS, StepParams, TILE, band_layers, dispatch_pass,
+    ring_max, set_all_tiles, set_poison, tile_counts, tile_total,
+};
+use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE};
+use manifold_water_liquid::fluid_particles::CellRange;
+use manifold_water_liquid::primitives::liquid_stats::with_stats_layout;
 
 fn gather_sources() -> [String; 2] {
     let source = manifold_water_gpu_flip::primitives::gpu_flip_step::STEP_SHADER;
@@ -104,7 +107,8 @@ fn gather_pass(
     buffers: &[(u32, &GpuBuffer)],
 ) -> f64 {
     assert_eq!(
-        p.narrow_band_for_test(), 1,
+        p.narrow_band_for_test(),
+        1,
         "direct dense face indexing, without band masking"
     );
     let mut bindings = vec![GpuBinding::Bytes {
@@ -116,7 +120,11 @@ fn gather_pass(
         buffer,
         offset: 0,
     }));
-    let faces = p.cells_for_test().into_iter().map(|n| n + 1).product::<u32>();
+    let faces = p
+        .cells_for_test()
+        .into_iter()
+        .map(|n| n + 1)
+        .product::<u32>();
     let mut enc = device.create_encoder("gather-unroll-proof");
     enc.dispatch_compute(
         pipeline,
@@ -246,7 +254,8 @@ fn gpu_flip_gather_unrolled_matches_original_every_face_word() {
             }
             range.count += 1;
         }
-        let p = StepParams::default().with_grid_for_test(n, min, h)
+        let p = StepParams::default()
+            .with_grid_for_test(n, min, h)
             .with_gather_for_test(particles.len() as u32, 1, 1.0 / 60.0);
         let ranges = gather_buffer(&device, &ranges);
         let sorted = gather_buffer(&device, &particles);
@@ -337,7 +346,8 @@ fn cell_counts(particles: &[FluidParticle], n: [u32; 3], min: [f32; 3], h: f32) 
     let inv = 1.0 / h;
     for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
         let c: [u32; 3] = std::array::from_fn(|a| {
-            (((p.position_radius[a] - min[a]) * inv).floor() as i64).clamp(0, i64::from(n[a]) - 1) as u32
+            (((p.position_radius[a] - min[a]) * inv).floor() as i64).clamp(0, i64::from(n[a]) - 1)
+                as u32
         });
         counts[(c[0] + n[0] * (c[1] + n[1] * c[2])) as usize] += 1;
     }
@@ -345,7 +355,11 @@ fn cell_counts(particles: &[FluidParticle], n: [u32; 3], min: [f32; 3], h: f32) 
 }
 
 fn unflatten(t: u32, m: [u32; 3]) -> [i64; 3] {
-    [i64::from(t % m[0]), i64::from((t / m[0]) % m[1]), i64::from(t / (m[0] * m[1]))]
+    [
+        i64::from(t % m[0]),
+        i64::from((t / m[0]) % m[1]),
+        i64::from(t / (m[0] * m[1])),
+    ]
 }
 
 fn chebyshev(d: [i64; 3]) -> u32 {
@@ -372,7 +386,8 @@ fn model(counts: &[u32], n: [u32; 3], r: u32, prev_rank: &[u32], all: bool) -> M
             continue;
         }
         let origin = unflatten(t as u32, dims).map(|v| v * i64::from(TILE));
-        let last: [i64; 3] = std::array::from_fn(|a| (origin[a] + i64::from(TILE) - 1).min(i64::from(n[a]) - 1));
+        let last: [i64; 3] =
+            std::array::from_fn(|a| (origin[a] + i64::from(TILE) - 1).min(i64::from(n[a]) - 1));
         let reach = i64::from(CELL_REACH);
         for z in (origin[2] - reach).max(0)..=(last[2] + reach).min(i64::from(n[2]) - 1) {
             for y in (origin[1] - reach).max(0)..=(last[1] + reach).min(i64::from(n[1]) - 1) {
@@ -381,7 +396,8 @@ fn model(counts: &[u32], n: [u32; 3], r: u32, prev_rank: &[u32], all: bool) -> M
                         continue;
                     }
                     let c = [x, y, z];
-                    let d: [i64; 3] = std::array::from_fn(|a| (origin[a] - c[a]).max(c[a] - last[a]).max(0));
+                    let d: [i64; 3] =
+                        std::array::from_fn(|a| (origin[a] - c[a]).max(c[a] - last[a]).max(0));
                     *near = (*near).min(chebyshev(d));
                 }
             }
@@ -413,7 +429,9 @@ fn model(counts: &[u32], n: [u32; 3], r: u32, prev_rank: &[u32], all: bool) -> M
         by_ring.extend((0..total as u32).filter(|&t| ranks[t as usize] == k));
         counts_out.push(by_ring.len() as u32);
     }
-    let retired: Vec<u32> = (0..total as u32).filter(|&t| prev_rank[t as usize] == 0 && ranks[t as usize] != 0).collect();
+    let retired: Vec<u32> = (0..total as u32)
+        .filter(|&t| prev_rank[t as usize] == 0 && ranks[t as usize] != 0)
+        .collect();
     counts_out.push(retired.len() as u32);
     let mut args = Vec::new();
     for &count in &counts_out[..=r as usize] {
@@ -424,7 +442,14 @@ fn model(counts: &[u32], n: [u32; 3], r: u32, prev_rank: &[u32], all: bool) -> M
     args.extend([faces.div_ceil(256), 1, 1]);
     args.resize(argument_words(r as usize) - 2, 0);
     args.extend([0, band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS)]);
-    Model { near, rank: ranks, by_ring, counts: counts_out, args, retired }
+    Model {
+        near,
+        rank: ranks,
+        by_ring,
+        counts: counts_out,
+        args,
+        retired,
+    }
 }
 
 /// The tile buffers on the GPU, shared so the test reads them back.
@@ -468,19 +493,40 @@ impl Table {
         self.step_with_clock(device, params, counts, None);
     }
 
-    fn step_with_clock(&self, device: &manifold_gpu::GpuDevice, params: &StepParams, counts: &[u32], clock: Option<&GpuBuffer>) {
-        let ranges: Vec<CellRange> = counts.iter().map(|&count| CellRange { start: 0, count }).collect();
+    fn step_with_clock(
+        &self,
+        device: &manifold_gpu::GpuDevice,
+        params: &StepParams,
+        counts: &[u32],
+        clock: Option<&GpuBuffer>,
+    ) {
+        let ranges: Vec<CellRange> = counts
+            .iter()
+            .map(|&count| CellRange { start: 0, count })
+            .collect();
         let ptr = self.ranges.mapped_ptr().expect("shared");
         // SAFETY: the buffer holds two words per cell and no GPU work is in flight.
-        unsafe { std::ptr::copy_nonoverlapping(ranges.as_ptr().cast::<u8>(), ptr, ranges.len() * 8) };
+        unsafe {
+            std::ptr::copy_nonoverlapping(ranges.as_ptr().cast::<u8>(), ptr, ranges.len() * 8)
+        };
         let threads = self.total as u64;
         let pass = |entry: &str, buffers: &[(u32, &GpuBuffer)], threads| {
             let mut buffers = buffers.to_vec();
-            if let Some(clock) = clock { buffers.push((46, clock)); }
+            if let Some(clock) = clock {
+                buffers.push((46, clock));
+            }
             dispatch_pass(device, entry, params, &buffers, threads);
         };
-        pass("tiles_classify", &[(1, &self.ranges), (27, &self.near), (30, &self.counts)], threads * 32);
-        pass("tiles_rings", &[(27, &self.near), (28, &self.rank), (30, &self.counts)], threads);
+        pass(
+            "tiles_classify",
+            &[(1, &self.ranges), (27, &self.near), (30, &self.counts)],
+            threads * 32,
+        );
+        pass(
+            "tiles_rings",
+            &[(27, &self.near), (28, &self.rank), (30, &self.counts)],
+            threads,
+        );
         pass(
             "tiles_lists",
             &[
@@ -499,8 +545,18 @@ impl Table {
     /// Every table word, including inactive list tails and the previous rank
     /// half. The input ranges deliberately change during an inactive slot.
     fn words(&self) -> Vec<Vec<u32>> {
-        [&self.near, &self.rank, &self.by_ring, &self.counts, &self.args, &self.retired, &self.capped]
-            .into_iter().map(|buffer| read(buffer, (buffer.size / 4) as usize)).collect()
+        [
+            &self.near,
+            &self.rank,
+            &self.by_ring,
+            &self.counts,
+            &self.args,
+            &self.retired,
+            &self.capped,
+        ]
+        .into_iter()
+        .map(|buffer| read(buffer, (buffer.size / 4) as usize))
+        .collect()
     }
 
     fn parity(&self) -> u32 {
@@ -540,7 +596,13 @@ fn assert_model(gpu: &Model, cpu: &Model, what: &str) {
         ("retired", &gpu.retired, &cpu.retired),
     ] {
         if let Some(i) = (0..g.len().max(c.len())).find(|&i| g.get(i) != c.get(i)) {
-            panic!("{what}: {name} differs first at {i}: gpu {:?} cpu {:?} (lengths {} / {})", g.get(i), c.get(i), g.len(), c.len());
+            panic!(
+                "{what}: {name} differs first at {i}: gpu {:?} cpu {:?} (lengths {} / {})",
+                g.get(i),
+                c.get(i),
+                g.len(),
+                c.len()
+            );
         }
     }
 }
@@ -550,7 +612,13 @@ fn gpu_flip_tiles_parallel_nearness_matches_cpu_on_synthetic_masks() {
     let device = manifold_gpu::testkit::test_device();
     let extension_layers = band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS);
     let r = ring_max(extension_layers);
-    for n in [[1, 1, 1], [7, 9, 5], [17, 10, 25], [64, 64, 64], [128, 128, 128]] {
+    for n in [
+        [1, 1, 1],
+        [7, 9, 5],
+        [17, 10, 25],
+        [64, 64, 64],
+        [128, 128, 128],
+    ] {
         let total = tile_total(n) as usize;
         let cells = n.iter().map(|&v| v as usize).product();
         let table = Table::new(&device, n, r);
@@ -558,9 +626,14 @@ fn gpu_flip_tiles_parallel_nearness_matches_cpu_on_synthetic_masks() {
         let mut previous_rank = vec![0; total];
         let mut parity = 0;
         for (mask, all, inactive) in [
-            (0, false, false), (1, false, false), (2, false, false),
-            (3, false, false), (0, false, false), (0, true, false),
-            (0, false, true), (2, false, false),
+            (0, false, false),
+            (1, false, false),
+            (2, false, false),
+            (3, false, false),
+            (0, false, false),
+            (0, true, false),
+            (0, false, true),
+            (2, false, false),
         ] {
             let mut counts = vec![u32::from(mask == 1); cells];
             let index = |p: [u32; 3]| (p[0] + n[0] * (p[1] + n[1] * p[2])) as usize;
@@ -572,7 +645,9 @@ fn gpu_flip_tiles_parallel_nearness_matches_cpu_on_synthetic_masks() {
                     counts[index(p)] = 7;
                 }
             }
-            let params = StepParams::default().with_grid_for_test(n, [0.0; 3], 0.0).with_tiles_for_test(r, extension_layers, u32::from(all));
+            let params = StepParams::default()
+                .with_grid_for_test(n, [0.0; 3], 0.0)
+                .with_tiles_for_test(r, extension_layers, u32::from(all));
             let mut plan = [0u32; 12];
             plan[11] = 1;
             plan[0] = if inactive { 0.0_f32 } else { 1.0_f32 / 60.0 }.to_bits();
@@ -581,24 +656,48 @@ fn gpu_flip_tiles_parallel_nearness_matches_cpu_on_synthetic_masks() {
             let context = format!("{n:?}, mask {mask}, all_tiles {all}, inactive {inactive}");
             if inactive {
                 let mut expected = table.words();
-                assert!(expected[0].iter().all(|&near| near == 0), "the preceding all_tiles table is populated");
-                assert!(counts.iter().all(|&count| count == 0), "inactive input must differ from the prior table");
+                assert!(
+                    expected[0].iter().all(|&near| near == 0),
+                    "the preceding all_tiles table is populated"
+                );
+                assert!(
+                    counts.iter().all(|&count| count == 0),
+                    "inactive input must differ from the prior table"
+                );
                 // Only execution decisions are cleared; both rank halves,
                 // parity, lists, retired list and diagnostics remain intact.
-                for triple in 0..r as usize + 3 { expected[4][3 * triple] = 0; }
+                for triple in 0..r as usize + 3 {
+                    expected[4][3 * triple] = 0;
+                }
                 *expected[4].last_mut().unwrap() = 0;
                 table.step_with_clock(&device, &params, &counts, Some(&clock));
-                assert_eq!(table.words(), expected, "every inactive table word: {context}");
+                assert_eq!(
+                    table.words(),
+                    expected,
+                    "every inactive table word: {context}"
+                );
             } else {
                 let expected = model(&counts, n, r, &previous_rank, all);
                 table.step_with_clock(&device, &params, &counts, Some(&clock));
                 parity = 1 - parity;
                 assert_model(&table.model(), &expected, &context);
-                assert_eq!(table.parity(), parity, "one parity toggle per active dispatch: {context}");
-                assert_eq!(table.stats_word(), expected.counts[0] as f32 / total as f32, "active fraction: {context}");
+                assert_eq!(
+                    table.parity(),
+                    parity,
+                    "one parity toggle per active dispatch: {context}"
+                );
+                assert_eq!(
+                    table.stats_word(),
+                    expected.counts[0] as f32 / total as f32,
+                    "active fraction: {context}"
+                );
                 previous_rank = expected.rank;
             }
-            assert_eq!(table.parity(), parity, "inactive slots must hold parity: {context}");
+            assert_eq!(
+                table.parity(),
+                parity,
+                "inactive slots must hold parity: {context}"
+            );
         }
     }
 }
@@ -616,11 +715,14 @@ fn gpu_flip_tiles_match_the_cpu_classification() {
     let layout = scene.layout();
     // The step classifies tiles on the native solver grid.
     let grid = manifold_water_liquid::lattice::FlipSolverGrid::from_lattice(
-        manifold_water_liquid::lattice::LiquidLattice::from_layout(&layout));
+        manifold_water_liquid::lattice::LiquidLattice::from_layout(&layout),
+    );
     let (n, min, h) = (grid.cells(), grid.min(), layout.cell_size as f32);
     let r = ring_max(band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS));
     let total = tile_total(n) as usize;
-    let params = StepParams::default().with_grid_for_test(n, min, h).with_tiles_for_test(r, band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS), 0);
+    let params = StepParams::default()
+        .with_grid_for_test(n, min, h)
+        .with_tiles_for_test(r, band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS), 0);
     let table = Table::new(&device, n, r);
     let mut prev = vec![0u32; total];
     let mut frame = 0;
@@ -633,17 +735,34 @@ fn gpu_flip_tiles_match_the_cpu_classification() {
         table.step(&device, &params, &counts);
         let cpu = model(&counts, n, r, &prev, false);
         assert_model(&table.model(), &cpu, &format!("frame {target}"));
-        assert_eq!(table.parity(), (step as u32 + 1) % 2, "parity after step {}", step + 1);
-        assert_eq!(table.stats_word().to_bits(), (cpu.counts[0] as f32 / total as f32).to_bits(), "stats word at frame {target}");
+        assert_eq!(
+            table.parity(),
+            (step as u32 + 1) % 2,
+            "parity after step {}",
+            step + 1
+        );
+        assert_eq!(
+            table.stats_word().to_bits(),
+            (cpu.counts[0] as f32 / total as f32).to_bits(),
+            "stats word at frame {target}"
+        );
         if target == 0 {
             // The standing column on the native grid: 209 of its 729 tiles
             // (160 of 512 on the authored grid, design section 6).
-            assert!((i64::from(cpu.counts[0]) - 209).abs() <= 1, "frame 0 lights {} tiles of {total}", cpu.counts[0]);
+            assert!(
+                (i64::from(cpu.counts[0]) - 209).abs() <= 1,
+                "frame 0 lights {} tiles of {total}",
+                cpu.counts[0]
+            );
             // The step itself classifies the same particles on its next tick.
             run.frame();
             frame += 1;
             let stats = run.liquid_stats().active_tiles;
-            assert_eq!(stats.to_bits(), (cpu.counts[0] as f32 / total as f32).to_bits(), "the step's stats word {stats}");
+            assert_eq!(
+                stats.to_bits(),
+                (cpu.counts[0] as f32 / total as f32).to_bits(),
+                "the step's stats word {stats}"
+            );
         }
         prev = cpu.rank;
     }
@@ -651,14 +770,22 @@ fn gpu_flip_tiles_match_the_cpu_classification() {
     let counts = cell_counts(&run.particles(), n, min, h);
     table.step(&device, &dense, &counts);
     let cpu = model(&counts, n, r, &prev, true);
-    assert!(cpu.near.iter().all(|&v| v == 0) && cpu.rank.iter().all(|&v| v == 0) && cpu.counts[0] == total as u32);
+    assert!(
+        cpu.near.iter().all(|&v| v == 0)
+            && cpu.rank.iter().all(|&v| v == 0)
+            && cpu.counts[0] == total as u32
+    );
     assert_model(&table.model(), &cpu, "all_tiles");
     assert_eq!(table.stats_word(), 1.0);
     // The lever reaches the step: its stats word reads 1.0 on the next tick.
     set_all_tiles(true);
     run.frame();
     set_all_tiles(false);
-    assert_eq!(run.liquid_stats().active_tiles, 1.0, "the step under all_tiles");
+    assert_eq!(
+        run.liquid_stats().active_tiles,
+        1.0,
+        "the step under all_tiles"
+    );
     run.frame();
     assert!(run.liquid_stats().active_tiles < 1.0, "the lever released");
 
@@ -668,18 +795,39 @@ fn gpu_flip_tiles_match_the_cpu_classification() {
     let mut plan = [0u32; 12];
     plan[11] = 1; // live mode, no accepted duration
     // SAFETY: the shared buffer has exactly these 48 bytes and is not in flight.
-    unsafe { std::ptr::copy_nonoverlapping(plan.as_ptr().cast::<u8>(), clock.mapped_ptr().expect("shared"), 48) };
-    dispatch_pass(&device, "tiles_lists", &dense, &[
-        (27, &table.near), (28, &table.rank), (29, &table.by_ring),
-        (30, &table.counts), (31, &table.args), (32, &table.retired),
-        (22, &table.capped), (46, &clock),
-    ], 1);
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            plan.as_ptr().cast::<u8>(),
+            clock.mapped_ptr().expect("shared"),
+            48,
+        )
+    };
+    dispatch_pass(
+        &device,
+        "tiles_lists",
+        &dense,
+        &[
+            (27, &table.near),
+            (28, &table.rank),
+            (29, &table.by_ring),
+            (30, &table.counts),
+            (31, &table.args),
+            (32, &table.retired),
+            (22, &table.capped),
+            (46, &clock),
+        ],
+        1,
+    );
     let mut inactive = cpu;
     for triple in 0..r as usize + 3 {
         inactive.args[3 * triple] = 0;
     }
     *inactive.args.last_mut().expect("extension range length") = 0;
-    assert_model(&table.model(), &inactive, "inactive slot gates triples and replay, preserving the table");
+    assert_model(
+        &table.model(),
+        &inactive,
+        "inactive slot gates triples and replay, preserving the table",
+    );
 }
 
 /// A run of `dam_break(64)` whose every frame, the fill included, goes
@@ -714,7 +862,9 @@ impl Twin {
 /// between the two runs, as none or where and what.
 fn first_difference(a: &Run, b: &Run, faces: bool) -> Option<String> {
     let (pa, pb) = (a.particles(), b.particles());
-    if let Some(i) = (0..pa.len()).find(|&i| bytemuck::bytes_of(&pa[i]) != bytemuck::bytes_of(&pb[i])) {
+    if let Some(i) =
+        (0..pa.len()).find(|&i| bytemuck::bytes_of(&pa[i]) != bytemuck::bytes_of(&pb[i]))
+    {
         return Some(format!("particle {i}: {:?} vs {:?}", pa[i], pb[i]));
     }
     if !faces {
@@ -722,10 +872,15 @@ fn first_difference(a: &Run, b: &Run, faces: bool) -> Option<String> {
     }
     let (fa, fb) = (a.faces(), b.faces());
     let m = a.n() + 1;
-    if let Some(i) = (0..fa.len()).find(|&i| bytemuck::bytes_of(&fa[i]) != bytemuck::bytes_of(&fb[i])) {
+    if let Some(i) =
+        (0..fa.len()).find(|&i| bytemuck::bytes_of(&fa[i]) != bytemuck::bytes_of(&fb[i]))
+    {
         let p = [i % m, (i / m) % m, i / (m * m)];
         let tile = p.map(|v| v / TILE as usize);
-        return Some(format!("face record {i} at {p:?} (tile {tile:?}): {:?} vs {:?}", fa[i], fb[i]));
+        return Some(format!(
+            "face record {i} at {p:?} (tile {tile:?}): {:?} vs {:?}",
+            fa[i], fb[i]
+        ));
     }
     None
 }
@@ -749,11 +904,21 @@ fn gpu_flip_sparse_step_matches_dense_bitwise() {
             panic!("frame {frame} differs: {diff}");
         }
         // The lever reaches the solver's tile lists too: the same iterations.
-        assert_eq!(sparse.run.solver(), dense.run.solver(), "frame {frame}: the solver words differ");
+        assert_eq!(
+            sparse.run.solver(),
+            dense.run.solver(),
+            "frame {frame}: the solver words differ"
+        );
     }
     let mean = active.iter().map(|&a| f64::from(a)).sum::<f64>() / active.len() as f64;
-    assert!(mean > 0.0 && mean < 1.0, "the sparse run lit {mean} of the tiles on average");
-    println!("gpu_flip_sparse_step_matches_dense_bitwise: active tiles {:.3} at frame 1, {mean:.3} mean over 60", active[0]);
+    assert!(
+        mean > 0.0 && mean < 1.0,
+        "the sparse run lit {mean} of the tiles on average"
+    );
+    println!(
+        "gpu_flip_sparse_step_matches_dense_bitwise: active tiles {:.3} at frame 1, {mean:.3} mean over 60",
+        active[0]
+    );
 }
 
 /// NaN in every cell array of the tiles outside rings 0 and 1 after the
@@ -774,7 +939,11 @@ fn gpu_flip_sparse_step_survives_poison() {
         }
         let particles = poisoned.run.particles();
         assert!(
-            particles.iter().all(|p| p.position_radius.iter().chain(&p.velocity).all(|v| v.is_finite())),
+            particles.iter().all(|p| p
+                .position_radius
+                .iter()
+                .chain(&p.velocity)
+                .all(|v| v.is_finite())),
             "frame {frame}: a poisoned particle"
         );
     }
@@ -796,10 +965,18 @@ fn gpu_flip_poison_entry_is_named_only_in_tests() {
             }
         }
     }
-    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("crates/");
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates/");
     let mut hits = Vec::new();
     walk(crates, &mut hits);
-    let stray: Vec<_> = hits.iter().filter(|p| !p.to_string_lossy().ends_with("_tests.rs")).collect();
-    assert!(stray.is_empty(), "{POISON_ENTRY} is named outside the tests: {stray:?}");
+    let stray: Vec<_> = hits
+        .iter()
+        .filter(|p| !p.to_string_lossy().ends_with("_tests.rs"))
+        .collect();
+    assert!(
+        stray.is_empty(),
+        "{POISON_ENTRY} is named outside the tests: {stray:?}"
+    );
     assert!(!hits.is_empty(), "this file names it");
 }

@@ -6,18 +6,22 @@
 use super::advect_whitewater::AdvectWhitewater;
 use super::age_whitewater::AgeWhitewater;
 use super::preserve_foam::PreserveFoam;
-use manifold_water_liquid::primitives::sort_particles_into_cells::SortParticlesIntoCells;
 use super::retype_whitewater::RetypeWhitewater;
-use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use super::whitewater_cpu::Rng;
-use manifold_node_engine::testkit::fused_atoms::run;
 use super::whitewater_pool_cpu::fixture::{FACE_CELLS, NODES, faces, grid, pool, tank};
-use {crate::primitives::whitewater_pool_cpu as cpu, super::whitewater_pool_cpu::Advect, super::whitewater_pool_cpu::Age, super::whitewater_pool_cpu::DEAD, super::whitewater_pool_cpu::Fields, super::whitewater_pool_cpu::Preserve};
 use manifold_node_engine::bindings::Slot;
-use manifold_node_engine::particles::FluidParticle;
-use manifold_water_liquid::fluid_particles::{CellRange, bin_counts};
 use manifold_node_engine::exec::effect_node::ParamValues;
+use manifold_node_engine::particles::FluidParticle;
+use manifold_node_engine::testkit::array_harness::{Harness, params, read};
+use manifold_node_engine::testkit::fused_atoms::run;
+use manifold_water_liquid::fluid_particles::{CellRange, bin_counts};
+use manifold_water_liquid::primitives::sort_particles_into_cells::SortParticlesIntoCells;
 use manifold_water_liquid::whitewater::{WHITEWATER_EMPTY, WhitewaterParticle};
+use {
+    super::whitewater_pool_cpu::Advect, super::whitewater_pool_cpu::Age,
+    super::whitewater_pool_cpu::DEAD, super::whitewater_pool_cpu::Fields,
+    super::whitewater_pool_cpu::Preserve, crate::primitives::whitewater_pool_cpu as cpu,
+};
 
 const SLOTS: usize = 4000;
 
@@ -47,14 +51,25 @@ fn advect_values(s: Advect) -> Vec<(&'static str, f32)> {
         ("spray_drag_variance", s.spray_drag_variance),
         ("spray_restitution", s.spray_restitution),
         ("spray_friction", s.spray_friction),
-        ("substep_count",0.0), ("field_nodes_x",2.0), ("field_nodes_y",2.0), ("field_nodes_z",2.0),
-        ("field_spacing",0.25), ("force_lattices",0.0), ("tick_index",0.0), ("first_tick",0.0),
+        ("substep_count", 0.0),
+        ("field_nodes_x", 2.0),
+        ("field_nodes_y", 2.0),
+        ("field_nodes_z", 2.0),
+        ("field_spacing", 0.25),
+        ("force_lattices", 0.0),
+        ("tick_index", 0.0),
+        ("first_tick", 0.0),
     ]
 }
 
 /// Drag, friction and a sideways gravity on, so every term shows.
 fn settings() -> Advect {
-    Advect { gravity: [0.7, -9.81, -0.4], spray_drag: 0.5, spray_friction: 0.1, ..Advect::flip() }
+    Advect {
+        gravity: [0.7, -9.81, -0.4],
+        spray_drag: 0.5,
+        spray_friction: 0.1,
+        ..Advect::flip()
+    }
 }
 
 fn close(a: f32, b: f32) -> bool {
@@ -78,11 +93,19 @@ impl Fixture {
         let mut rng = Rng(seed);
         let speed = 5.0 * grid().cell_size() * 60.0;
         let faces = faces(&mut rng, speed / 3f32.sqrt());
-        Self { solid: tank(), faces, pool: pool(&mut rng, SLOTS, speed) }
+        Self {
+            solid: tank(),
+            faces,
+            pool: pool(&mut rng, SLOTS, speed),
+        }
     }
 
     fn fields(&self) -> Fields<'_> {
-        Fields { faces: self.faces.each_ref().map(Vec::as_slice), face_cells: FACE_CELLS, solid: &self.solid }
+        Fields {
+            faces: self.faces.each_ref().map(Vec::as_slice),
+            face_cells: FACE_CELLS,
+            solid: &self.solid,
+        }
     }
 
     fn advect(&self, harness: &mut Harness, params: &ParamValues) -> Vec<WhitewaterParticle> {
@@ -92,7 +115,13 @@ impl Fixture {
         run(
             harness,
             &mut AdvectWhitewater::new(),
-            &[("pool", pool.0), ("face_u", faces[0].0), ("face_v", faces[1].0), ("face_w", faces[2].0), ("solid", solid.0)],
+            &[
+                ("pool", pool.0),
+                ("face_u", faces[0].0),
+                ("face_v", faces[1].0),
+                ("face_w", faces[2].0),
+                ("solid", solid.0),
+            ],
             SLOTS,
             params,
         )
@@ -116,19 +145,38 @@ fn advect_whitewater_matches_cpu() {
             continue;
         }
         assert_eq!((got.kind, got.id), (particle.kind, particle.id), "slot {i}");
-        assert_eq!(got.position_lifetime[3], want.position_lifetime[3], "slot {i}: GPU {got:?} CPU {want:?} from {particle:?}");
-        let near = got.position_lifetime[..3].iter().zip(&want.position_lifetime[..3]).all(|(&a, &b)| close(a, b));
-        let moving = got.velocity.iter().zip(&want.velocity).all(|(&a, &b)| velocity_close(a, b));
-        assert!(near && moving, "slot {i}: GPU {got:?} CPU {want:?} from {particle:?}");
+        assert_eq!(
+            got.position_lifetime[3], want.position_lifetime[3],
+            "slot {i}: GPU {got:?} CPU {want:?} from {particle:?}"
+        );
+        let near = got.position_lifetime[..3]
+            .iter()
+            .zip(&want.position_lifetime[..3])
+            .all(|(&a, &b)| close(a, b));
+        let moving = got
+            .velocity
+            .iter()
+            .zip(&want.velocity)
+            .all(|(&a, &b)| velocity_close(a, b));
+        assert!(
+            near && moving,
+            "slot {i}: GPU {got:?} CPU {want:?} from {particle:?}"
+        );
         if particle.kind < 3 {
             checked += 1;
             kinds[particle.kind as usize] += 1;
             killed += usize::from(want.position_lifetime[3] == DEAD);
-            let free: [f32; 3] = std::array::from_fn(|a| particle.position_lifetime[a] + want.velocity[a] * s.dt);
-            bounced += usize::from(particle.kind == 1 && (0..3).any(|a| (free[a] - want.position_lifetime[a]).abs() > 1e-4));
+            let free: [f32; 3] =
+                std::array::from_fn(|a| particle.position_lifetime[a] + want.velocity[a] * s.dt);
+            bounced += usize::from(
+                particle.kind == 1
+                    && (0..3).any(|a| (free[a] - want.position_lifetime[a]).abs() > 1e-4),
+            );
         }
     }
-    println!("{checked} checked {kinds:?}, {edges} on an edge, {killed} killed, {bounced} foam stopped by a solid");
+    println!(
+        "{checked} checked {kinds:?}, {edges} on an edge, {killed} killed, {bounced} foam stopped by a solid"
+    );
     assert!(kinds.iter().all(|&n| n > 500) && edges < SLOTS / 50 && killed > 50 && bounced > 50);
 }
 
@@ -136,10 +184,12 @@ fn advect_whitewater_matches_cpu() {
 /// standalone kernel.
 #[test]
 fn advect_whitewater_fused_matches_unfused() {
-    use manifold_node_engine::exec::effect_node::NodeInstanceId;
-    use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused};
-    use manifold_node_engine::primitive::PrimitiveSpec;
     use manifold_gpu::GpuBinding;
+    use manifold_node_engine::exec::effect_node::NodeInstanceId;
+    use manifold_node_engine::freeze::codegen::{
+        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused,
+    };
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     let fixture = Fixture::new(0xad7e_0002);
     let values = advect_values(settings());
@@ -152,7 +202,10 @@ fn advect_whitewater_fused_matches_unfused() {
             fusion_kind: <AdvectWhitewater as PrimitiveSpec>::FUSION_KIND,
             body: <AdvectWhitewater as PrimitiveSpec>::WGSL_BODY.expect("body"),
             params: <AdvectWhitewater as PrimitiveSpec>::PARAMS,
-            inputs: (0..5).chain(std::iter::repeat_n(4,6)).map(InputSource::External).collect(),
+            inputs: (0..5)
+                .chain(std::iter::repeat_n(4, 6))
+                .map(InputSource::External)
+                .collect(),
             input_access: <AdvectWhitewater as PrimitiveSpec>::INPUT_ACCESS.to_vec(),
             node_inputs: <AdvectWhitewater as PrimitiveSpec>::INPUTS,
             node_outputs: <AdvectWhitewater as PrimitiveSpec>::OUTPUTS,
@@ -175,12 +228,20 @@ fn advect_whitewater_fused_matches_unfused() {
         output_capacity: None,
     };
     let fused = generate_fused(&region).expect("the advect fuses");
-    assert!(naga::front::wgsl::parse_str(&fused.wgsl).is_ok(), "fused WGSL parses:\n{}", fused.wgsl);
+    assert!(
+        naga::front::wgsl::parse_str(&fused.wgsl).is_ok(),
+        "fused WGSL parses:\n{}",
+        fused.wgsl
+    );
     let lookup = |name: &str| values.iter().find(|(n, _)| *n == name).map(|(_, v)| *v);
     let mut words: Vec<u32> = fused
         .param_order
         .iter()
-        .map(|&(member, name)| lookup(name).unwrap_or_else(|| panic!("unexpected fused param {name} on {member:?}")).to_bits())
+        .map(|&(member, name)| {
+            lookup(name)
+                .unwrap_or_else(|| panic!("unexpected fused param {name} on {member:?}"))
+                .to_bits()
+        })
         .collect();
     words.push(SLOTS as u32);
     while !words.len().is_multiple_of(4) {
@@ -190,21 +251,54 @@ fn advect_whitewater_fused_matches_unfused() {
     let faces = fixture.faces.each_ref().map(|f| harness.array(f, f.len()));
     let solid = harness.array(&fixture.solid, fixture.solid.len());
     let dst = harness.array::<WhitewaterParticle>(&[], SLOTS);
-    let pipeline = harness.device.create_compute_pipeline(&fused.wgsl, ENTRY, "advect-whitewater-fused");
+    let pipeline =
+        harness
+            .device
+            .create_compute_pipeline(&fused.wgsl, ENTRY, "advect-whitewater-fused");
     let mut enc = harness.device.create_encoder("advect-whitewater-fused");
     let externals = [&pool.1, &faces[0].1, &faces[1].1, &faces[2].1, &solid.1];
-    let mut bindings = vec![GpuBinding::Bytes { binding: 0, data: bytemuck::cast_slice(&words) }];
+    let mut bindings = vec![GpuBinding::Bytes {
+        binding: 0,
+        data: bytemuck::cast_slice(&words),
+    }];
     for (i, buffer) in externals.iter().enumerate() {
-        bindings.push(GpuBinding::Buffer { binding: i as u32 + 1, buffer, offset: 0 });
+        bindings.push(GpuBinding::Buffer {
+            binding: i as u32 + 1,
+            buffer,
+            offset: 0,
+        });
     }
-    bindings.push(GpuBinding::Buffer { binding: externals.len() as u32 + 1, buffer: &dst.1, offset: 0 });
-    enc.dispatch_compute(&pipeline, &bindings, [(SLOTS as u32).div_ceil(256), 1, 1], "advect-whitewater-fused");
+    bindings.push(GpuBinding::Buffer {
+        binding: externals.len() as u32 + 1,
+        buffer: &dst.1,
+        offset: 0,
+    });
+    enc.dispatch_compute(
+        &pipeline,
+        &bindings,
+        [(SLOTS as u32).div_ceil(256), 1, 1],
+        "advect-whitewater-fused",
+    );
     enc.commit_and_wait_completed();
     let fused_out: Vec<WhitewaterParticle> = read(&dst.1, SLOTS);
     for j in 0..SLOTS {
-        assert_eq!(bytemuck::bytes_of(&fused_out[j]), bytemuck::bytes_of(&unfused[j]), "slot {j}: fused {:?} standalone {:?}", fused_out[j], unfused[j]);
+        assert_eq!(
+            bytemuck::bytes_of(&fused_out[j]),
+            bytemuck::bytes_of(&unfused[j]),
+            "slot {j}: fused {:?} standalone {:?}",
+            fused_out[j],
+            unfused[j]
+        );
     }
-    assert!(unfused.iter().zip(&fixture.pool).filter(|(a, b)| a != b).count() > SLOTS / 2, "the advect moved the pool");
+    assert!(
+        unfused
+            .iter()
+            .zip(&fixture.pool)
+            .filter(|(a, b)| a != b)
+            .count()
+            > SLOTS / 2,
+        "the advect moved the pool"
+    );
 }
 
 fn grid_values() -> Vec<(&'static str, f32)> {
@@ -281,17 +375,39 @@ impl Typing {
         let mut rng = Rng(seed ^ 0x5eed);
         near_surface(&mut rng, &mut base.pool);
         let (distance, cells) = surface(&mut rng);
-        Self { base, distance, cells }
+        Self {
+            base,
+            distance,
+            cells,
+        }
     }
 
-    fn retype(&self, harness: &mut Harness, pool: &[WhitewaterParticle]) -> Vec<WhitewaterParticle> {
+    fn retype(
+        &self,
+        harness: &mut Harness,
+        pool: &[WhitewaterParticle],
+    ) -> Vec<WhitewaterParticle> {
         let pool = harness.array(pool, SLOTS);
-        let faces = self.base.faces.each_ref().map(|f| harness.array(f, f.len()));
-        let (d, c) = (harness.array(&self.distance, self.distance.len()), harness.array(&self.cells, self.cells.len()));
+        let faces = self
+            .base
+            .faces
+            .each_ref()
+            .map(|f| harness.array(f, f.len()));
+        let (d, c) = (
+            harness.array(&self.distance, self.distance.len()),
+            harness.array(&self.cells, self.cells.len()),
+        );
         run(
             harness,
             &mut RetypeWhitewater::new(),
-            &[("pool", pool.0), ("distance", d.0), ("cells", c.0), ("face_u", faces[0].0), ("face_v", faces[1].0), ("face_w", faces[2].0)],
+            &[
+                ("pool", pool.0),
+                ("distance", d.0),
+                ("cells", c.0),
+                ("face_u", faces[0].0),
+                ("face_v", faces[1].0),
+                ("face_w", faces[2].0),
+            ],
             SLOTS,
             &params(&grid_values()),
         )
@@ -315,54 +431,111 @@ fn retype_whitewater_matches_cpu() {
             edges += 1;
             continue;
         }
-        assert_eq!((got.kind, got.id, got.position_lifetime), (want.kind, want.id, want.position_lifetime), "slot {i}: GPU {got:?} CPU {want:?}");
-        assert!(got.velocity.iter().zip(&want.velocity).all(|(&a, &b)| velocity_close(a, b)), "slot {i}: GPU {got:?} CPU {want:?}");
+        assert_eq!(
+            (got.kind, got.id, got.position_lifetime),
+            (want.kind, want.id, want.position_lifetime),
+            "slot {i}: GPU {got:?} CPU {want:?}"
+        );
+        assert!(
+            got.velocity
+                .iter()
+                .zip(&want.velocity)
+                .all(|(&a, &b)| velocity_close(a, b)),
+            "slot {i}: GPU {got:?} CPU {want:?}"
+        );
         if particle.kind < 3 {
             moves[particle.kind as usize][want.kind as usize] += 1;
             picked += usize::from(particle.kind == 0 && want.kind != 0);
             if particle.kind == 1 && want.kind == 1 {
-                let fresh = cpu::retype(WhitewaterParticle { kind: 2, ..*particle }, &fields, &fixture.distance, &fixture.cells, &g).0;
+                let fresh = cpu::retype(
+                    WhitewaterParticle {
+                        kind: 2,
+                        ..*particle
+                    },
+                    &fields,
+                    &fixture.distance,
+                    &fixture.cells,
+                    &g,
+                )
+                .0;
                 buffered += usize::from(fresh.kind == 0);
             }
         }
     }
-    println!("{moves:?} (from row to column), {edges} on an edge, {buffered} kept as foam by the buffer, {picked} bubbles took the liquid velocity");
+    println!(
+        "{moves:?} (from row to column), {edges} on an edge, {buffered} kept as foam by the buffer, {picked} bubbles took the liquid velocity"
+    );
     assert!(edges < SLOTS / 20 && buffered > 20 && picked > 100);
-    assert!(moves.iter().flatten().all(|&n| n > 10), "every type change happens: {moves:?}");
+    assert!(
+        moves.iter().flatten().all(|&n| n > 10),
+        "every type change happens: {moves:?}"
+    );
 }
 
 /// Each type ages at its own rate.
 #[test]
 fn age_whitewater_matches_cpu() {
     let fixture = Fixture::new(0xa9e0_0001);
-    let s = Age { dt: 1.0 / 50.0, bubble: 0.25, foam: 1.5, spray: 3.0 };
+    let s = Age {
+        dt: 1.0 / 50.0,
+        bubble: 0.25,
+        foam: 1.5,
+        spray: 3.0,
+    };
     let mut harness = Harness::new();
     let pool = harness.array(&fixture.pool, SLOTS);
-    let got: Vec<WhitewaterParticle> = run(&mut harness, &mut AgeWhitewater::new(), &[("pool", pool.0)], SLOTS, &params(&age_values(s)));
+    let got: Vec<WhitewaterParticle> = run(
+        &mut harness,
+        &mut AgeWhitewater::new(),
+        &[("pool", pool.0)],
+        SLOTS,
+        &params(&age_values(s)),
+    );
     for (i, (got, particle)) in got.iter().zip(&fixture.pool).enumerate() {
         let want = cpu::age(*particle, s);
-        assert_eq!(bytemuck::bytes_of(got), bytemuck::bytes_of(&want), "slot {i}: GPU {got:?} CPU {want:?}");
+        assert_eq!(
+            bytemuck::bytes_of(got),
+            bytemuck::bytes_of(&want),
+            "slot {i}: GPU {got:?} CPU {want:?}"
+        );
     }
-    assert!(got.iter().zip(&fixture.pool).filter(|(a, b)| a != b).count() > SLOTS / 2, "the age changed the pool");
+    assert!(
+        got.iter()
+            .zip(&fixture.pool)
+            .filter(|(a, b)| a != b)
+            .count()
+            > SLOTS / 2,
+        "the age changed the pool"
+    );
 }
 
 /// Advect, retype and age folded into one kernel by the codegen, bit for
 /// bit the three standalone kernels in a row.
 #[test]
 fn whitewater_tick_fused_matches_unfused() {
-    use manifold_node_engine::exec::effect_node::NodeInstanceId;
-    use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused};
-    use manifold_node_engine::primitive::PrimitiveSpec;
     use manifold_gpu::GpuBinding;
+    use manifold_node_engine::exec::effect_node::NodeInstanceId;
+    use manifold_node_engine::freeze::codegen::{
+        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused,
+    };
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     let fixture = Typing::new(0x71c4_0001);
     let s = settings();
     let a = Age::flip();
     let mut harness = Harness::new();
-    let advected = fixture.base.advect(&mut harness, &params(&advect_values(s)));
+    let advected = fixture
+        .base
+        .advect(&mut harness, &params(&advect_values(s)));
     let retyped = fixture.retype(&mut harness, &advected);
     let pool_in = harness.array(&retyped, SLOTS);
-    let unfused: Vec<WhitewaterParticle> = run(&mut harness, &mut AgeWhitewater::new(), &[("pool", pool_in.0)], SLOTS, &params(&age_values(a)));
+    let unfused: Vec<WhitewaterParticle> = run(
+        &mut harness,
+        &mut AgeWhitewater::new(),
+        &[("pool", pool_in.0)],
+        SLOTS,
+        &params(&age_values(a)),
+    );
 
     macro_rules! member {
         ($n:expr, $atom:ty, $inputs:expr) => {
@@ -389,8 +562,26 @@ fn whitewater_tick_fused_matches_unfused() {
     let node = |n: u32| InputSource::Node(NodeInstanceId(n));
     let region = FusionRegion {
         nodes: vec![
-            member!(0, AdvectWhitewater, (0..5).chain(std::iter::repeat_n(4,6)).map(external).collect()),
-            member!(1, RetypeWhitewater, vec![node(0), external(5), external(6), external(1), external(2), external(3)]),
+            member!(
+                0,
+                AdvectWhitewater,
+                (0..5)
+                    .chain(std::iter::repeat_n(4, 6))
+                    .map(external)
+                    .collect()
+            ),
+            member!(
+                1,
+                RetypeWhitewater,
+                vec![
+                    node(0),
+                    external(5),
+                    external(6),
+                    external(1),
+                    external(2),
+                    external(3)
+                ]
+            ),
             member!(2, AgeWhitewater, vec![node(1)]),
         ],
         num_external_inputs: 7,
@@ -404,41 +595,97 @@ fn whitewater_tick_fused_matches_unfused() {
         output_capacity: None,
     };
     let fused = generate_fused(&region).expect("the tick fuses");
-    assert!(naga::front::wgsl::parse_str(&fused.wgsl).is_ok(), "fused WGSL parses:\n{}", fused.wgsl);
+    assert!(
+        naga::front::wgsl::parse_str(&fused.wgsl).is_ok(),
+        "fused WGSL parses:\n{}",
+        fused.wgsl
+    );
     let (advect_side, age_side) = (advect_values(s), age_values(a));
     let lookup = |member: NodeInstanceId, name: &str| {
-        let side = if member == NodeInstanceId(2) { &age_side } else { &advect_side };
+        let side = if member == NodeInstanceId(2) {
+            &age_side
+        } else {
+            &advect_side
+        };
         side.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)
     };
     let mut words: Vec<u32> = fused
         .param_order
         .iter()
-        .map(|&(member, name)| lookup(member, name).unwrap_or_else(|| panic!("unexpected fused param {name} on {member:?}")).to_bits())
+        .map(|&(member, name)| {
+            lookup(member, name)
+                .unwrap_or_else(|| panic!("unexpected fused param {name} on {member:?}"))
+                .to_bits()
+        })
         .collect();
     words.push(SLOTS as u32);
     while !words.len().is_multiple_of(4) {
         words.push(0);
     }
     let pool = harness.array(&fixture.base.pool, SLOTS);
-    let faces = fixture.base.faces.each_ref().map(|f| harness.array(f, f.len()));
+    let faces = fixture
+        .base
+        .faces
+        .each_ref()
+        .map(|f| harness.array(f, f.len()));
     let solid = harness.array(&fixture.base.solid, fixture.base.solid.len());
-    let (d, c) = (harness.array(&fixture.distance, fixture.distance.len()), harness.array(&fixture.cells, fixture.cells.len()));
+    let (d, c) = (
+        harness.array(&fixture.distance, fixture.distance.len()),
+        harness.array(&fixture.cells, fixture.cells.len()),
+    );
     let dst = harness.array::<WhitewaterParticle>(&[], SLOTS);
-    let pipeline = harness.device.create_compute_pipeline(&fused.wgsl, ENTRY, "whitewater-tick-fused");
+    let pipeline =
+        harness
+            .device
+            .create_compute_pipeline(&fused.wgsl, ENTRY, "whitewater-tick-fused");
     let mut enc = harness.device.create_encoder("whitewater-tick-fused");
-    let externals = [&pool.1, &faces[0].1, &faces[1].1, &faces[2].1, &solid.1, &d.1, &c.1];
-    let mut bindings = vec![GpuBinding::Bytes { binding: 0, data: bytemuck::cast_slice(&words) }];
+    let externals = [
+        &pool.1,
+        &faces[0].1,
+        &faces[1].1,
+        &faces[2].1,
+        &solid.1,
+        &d.1,
+        &c.1,
+    ];
+    let mut bindings = vec![GpuBinding::Bytes {
+        binding: 0,
+        data: bytemuck::cast_slice(&words),
+    }];
     for (i, buffer) in externals.iter().enumerate() {
-        bindings.push(GpuBinding::Buffer { binding: i as u32 + 1, buffer, offset: 0 });
+        bindings.push(GpuBinding::Buffer {
+            binding: i as u32 + 1,
+            buffer,
+            offset: 0,
+        });
     }
-    bindings.push(GpuBinding::Buffer { binding: externals.len() as u32 + 1, buffer: &dst.1, offset: 0 });
-    enc.dispatch_compute(&pipeline, &bindings, [(SLOTS as u32).div_ceil(256), 1, 1], "whitewater-tick-fused");
+    bindings.push(GpuBinding::Buffer {
+        binding: externals.len() as u32 + 1,
+        buffer: &dst.1,
+        offset: 0,
+    });
+    enc.dispatch_compute(
+        &pipeline,
+        &bindings,
+        [(SLOTS as u32).div_ceil(256), 1, 1],
+        "whitewater-tick-fused",
+    );
     enc.commit_and_wait_completed();
     let fused_out: Vec<WhitewaterParticle> = read(&dst.1, SLOTS);
     for j in 0..SLOTS {
-        assert_eq!(bytemuck::bytes_of(&fused_out[j]), bytemuck::bytes_of(&unfused[j]), "slot {j}: fused {:?} standalone {:?}", fused_out[j], unfused[j]);
+        assert_eq!(
+            bytemuck::bytes_of(&fused_out[j]),
+            bytemuck::bytes_of(&unfused[j]),
+            "slot {j}: fused {:?} standalone {:?}",
+            fused_out[j],
+            unfused[j]
+        );
     }
-    let changed = advected.iter().zip(&retyped).filter(|(a, b)| a.kind != b.kind).count();
+    let changed = advected
+        .iter()
+        .zip(&retyped)
+        .filter(|(a, b)| a.kind != b.kind)
+        .count();
     assert!(changed > SLOTS / 20, "{changed} retyped");
 }
 
@@ -451,12 +698,23 @@ fn crowded(rng: &mut Rng) -> Vec<WhitewaterParticle> {
     let h = g.cell_size();
     let origin: [f32; 3] = std::array::from_fn(|a| g.center[a] - 0.5 * g.size[a]);
     let mut pool = Vec::new();
-    let add = |pool: &mut Vec<WhitewaterParticle>, rng: &mut Rng, cell: [u32; 3], kind: u32, lifetime: f32| {
-        let p: [f32; 3] = std::array::from_fn(|a| origin[a] + (cell[a] as f32 + 0.02 + 0.96 * rng.unit()) * h);
-        pool.push(WhitewaterParticle { position_lifetime: [p[0], p[1], p[2], lifetime], kind, id: pool.len() as u32 % 256, ..Default::default() });
+    let add = |pool: &mut Vec<WhitewaterParticle>,
+               rng: &mut Rng,
+               cell: [u32; 3],
+               kind: u32,
+               lifetime: f32| {
+        let p: [f32; 3] =
+            std::array::from_fn(|a| origin[a] + (cell[a] as f32 + 0.02 + 0.96 * rng.unit()) * h);
+        pool.push(WhitewaterParticle {
+            position_lifetime: [p[0], p[1], p[2], lifetime],
+            kind,
+            id: pool.len() as u32 % 256,
+            ..Default::default()
+        });
     };
     for k in 0..70u32 {
-        let cell: [u32; 3] = std::array::from_fn(|a| (rng.unit() * g.cells[a] as f32) as u32 % g.cells[a]);
+        let cell: [u32; 3] =
+            std::array::from_fn(|a| (rng.unit() * g.cells[a] as f32) as u32 % g.cells[a]);
         for n in 0..k {
             let lifetime = if n % 4 == 3 { -0.01 } else { 0.2 + rng.unit() };
             add(&mut pool, rng, cell, 1, lifetime);
@@ -526,12 +784,19 @@ fn sort_bins_whitewater_particles_dead_and_alive() {
         .map(|p| {
             let live = p.kind < 3 && p.position_lifetime[..3].iter().all(|v| v.is_finite());
             let [x, y, z, _] = p.position_lifetime;
-            FluidParticle { position_radius: [x, y, z, if live { 0.02 } else { 0.0 }], velocity: [0.0; 3], id: 1 }
+            FluidParticle {
+                position_radius: [x, y, z, if live { 0.02 } else { 0.0 }],
+                velocity: [0.0; 3],
+                id: 1,
+            }
         })
         .collect();
     let bins = |harness: &mut Harness, sorted: (Slot, Slot, Slot)| {
         let (ranges, order) = (harness.buffer(sorted.1), harness.buffer(sorted.2));
-        (read::<u8>(&ranges, ranges.size as usize), read::<u8>(&order, order.size as usize))
+        (
+            read::<u8>(&ranges, ranges.size as usize),
+            read::<u8>(&order, order.size as usize),
+        )
     };
     let whitewater = {
         let slots = sort_pool(&mut harness, &pool);
@@ -549,18 +814,39 @@ fn sort_bins_whitewater_particles_dead_and_alive() {
     );
     assert!(errors.is_empty(), "{errors:?}");
     let expected = bins(&mut harness, (input.0, ranges, order));
-    let live: u32 = bytemuck::cast_slice::<u8, CellRange>(&expected.0).iter().map(|r| r.count).sum();
-    let dead = pool.iter().filter(|p| p.kind < 3 && p.position_lifetime[3] <= 0.0).count();
-    assert!(dead > 100 && (live as usize) < pool.len() && live > 2000, "live {live}, dead {dead}");
-    assert_eq!(whitewater, expected, "whitewater bins and order exactly as the equivalent liquid particles");
+    let live: u32 = bytemuck::cast_slice::<u8, CellRange>(&expected.0)
+        .iter()
+        .map(|r| r.count)
+        .sum();
+    let dead = pool
+        .iter()
+        .filter(|p| p.kind < 3 && p.position_lifetime[3] <= 0.0)
+        .count();
+    assert!(
+        dead > 100 && (live as usize) < pool.len() && live > 2000,
+        "live {live}, dead {dead}"
+    );
+    assert_eq!(
+        whitewater, expected,
+        "whitewater bins and order exactly as the equivalent liquid particles"
+    );
 }
 
-fn preserve_run(harness: &mut Harness, pool: &[WhitewaterParticle], values: &[(&'static str, f32)]) -> Vec<WhitewaterParticle> {
+fn preserve_run(
+    harness: &mut Harness,
+    pool: &[WhitewaterParticle],
+    values: &[(&'static str, f32)],
+) -> Vec<WhitewaterParticle> {
     let (input, ranges, order) = sort_pool(harness, pool);
     run(
         harness,
         &mut PreserveFoam::new(),
-        &[("pool", input), ("binned", input), ("cell_ranges", ranges), ("order", order)],
+        &[
+            ("pool", input),
+            ("binned", input),
+            ("cell_ranges", ranges),
+            ("order", order),
+        ],
         pool.len(),
         &params(values),
     )
@@ -573,7 +859,12 @@ fn preserve_run(harness: &mut Harness, pool: &[WhitewaterParticle], values: &[(&
 fn preserve_foam_matches_flip() {
     let mut harness = Harness::new();
     let pool = crowded(&mut Rng(0x9e5e_0001));
-    let s = Preserve { dt: 1.0 / 50.0, rate: 0.9, min_density: 15.0, max_density: 50.0 };
+    let s = Preserve {
+        dt: 1.0 / 50.0,
+        rate: 0.9,
+        min_density: 15.0,
+        max_density: 50.0,
+    };
     let got = preserve_run(&mut harness, &pool, &preserve_values(s, true));
     let g = grid();
     let origin: [f32; 3] = std::array::from_fn(|a| g.center[a] - 0.5 * g.size[a]);
@@ -581,33 +872,51 @@ fn preserve_foam_matches_flip() {
     let (mut partial, mut full, mut none, mut revived) = (0, 0, 0, 0);
     for (i, ((got, want), before)) in got.iter().zip(&want).zip(&pool).enumerate() {
         let (mut a, mut b) = (*got, *want);
-        assert!(close(a.position_lifetime[3], b.position_lifetime[3]) || a.position_lifetime[3].is_nan() && b.position_lifetime[3].is_nan(), "slot {i}: GPU {got:?} CPU {want:?}");
+        assert!(
+            close(a.position_lifetime[3], b.position_lifetime[3])
+                || a.position_lifetime[3].is_nan() && b.position_lifetime[3].is_nan(),
+            "slot {i}: GPU {got:?} CPU {want:?}"
+        );
         a.position_lifetime[3] = 0.0;
         b.position_lifetime[3] = 0.0;
-        assert_eq!(bytemuck::bytes_of(&a), bytemuck::bytes_of(&b), "slot {i}: GPU {got:?} CPU {want:?}");
+        assert_eq!(
+            bytemuck::bytes_of(&a),
+            bytemuck::bytes_of(&b),
+            "slot {i}: GPU {got:?} CPU {want:?}"
+        );
         if before.kind == 1 {
             let gain = want.position_lifetime[3] - before.position_lifetime[3];
             full += usize::from((gain - s.rate * s.dt).abs() < 1e-6);
             none += usize::from(gain == 0.0);
             partial += usize::from(gain > 1e-6 && gain < s.rate * s.dt - 1e-6);
-            revived += usize::from(before.position_lifetime[3] <= 0.0 && want.position_lifetime[3] > 0.0);
+            revived +=
+                usize::from(before.position_lifetime[3] <= 0.0 && want.position_lifetime[3] > 0.0);
         }
     }
     println!("{partial} partial gains, {full} saturated, {none} none, {revived} dead foam revived");
-    assert!(partial > 300 && full > 300 && none > 60 && revived > 50, "{partial} {full} {none} {revived}");
+    assert!(
+        partial > 300 && full > 300 && none > 60 && revived > 50,
+        "{partial} {full} {none} {revived}"
+    );
 
     let off = preserve_run(&mut harness, &pool, &preserve_values(s, false));
-    assert_eq!(bytemuck::cast_slice::<_, u8>(&off), bytemuck::cast_slice::<_, u8>(&pool), "off, the pool passes whole");
+    assert_eq!(
+        bytemuck::cast_slice::<_, u8>(&off),
+        bytemuck::cast_slice::<_, u8>(&pool),
+        "off, the pool passes whole"
+    );
 }
 
 /// The preservation folded by the codegen alone in its region, bit for bit
 /// the standalone kernel.
 #[test]
 fn preserve_foam_fused_matches_unfused() {
-    use manifold_node_engine::exec::effect_node::NodeInstanceId;
-    use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused};
-    use manifold_node_engine::primitive::PrimitiveSpec;
     use manifold_gpu::GpuBinding;
+    use manifold_node_engine::exec::effect_node::NodeInstanceId;
+    use manifold_node_engine::freeze::codegen::{
+        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused,
+    };
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     let mut harness = Harness::new();
     let pool = crowded(&mut Rng(0x9e5e_0002));
@@ -642,13 +951,25 @@ fn preserve_foam_fused_matches_unfused() {
         output_capacity: None,
     };
     let fused = generate_fused(&region).expect("the preservation fuses");
-    assert!(naga::front::wgsl::parse_str(&fused.wgsl).is_ok(), "fused WGSL parses:\n{}", fused.wgsl);
+    assert!(
+        naga::front::wgsl::parse_str(&fused.wgsl).is_ok(),
+        "fused WGSL parses:\n{}",
+        fused.wgsl
+    );
     let mut words: Vec<u32> = fused
         .param_order
         .iter()
         .map(|&(member, name)| {
-            let v = values.iter().find(|(n, _)| *n == name).map(|(_, v)| *v).unwrap_or_else(|| panic!("unexpected fused param {name} on {member:?}"));
-            if name.starts_with("bins_") { (v as i32) as u32 } else { v.to_bits() }
+            let v = values
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| *v)
+                .unwrap_or_else(|| panic!("unexpected fused param {name} on {member:?}"));
+            if name.starts_with("bins_") {
+                (v as i32) as u32
+            } else {
+                v.to_bits()
+            }
         })
         .collect();
     words.push(pool.len() as u32);
@@ -656,20 +977,53 @@ fn preserve_foam_fused_matches_unfused() {
         words.push(0);
     }
     let (input, ranges, order) = sort_pool(&mut harness, &pool);
-    let externals = [harness.buffer(input), harness.buffer(input), harness.buffer(ranges), harness.buffer(order)];
+    let externals = [
+        harness.buffer(input),
+        harness.buffer(input),
+        harness.buffer(ranges),
+        harness.buffer(order),
+    ];
     let dst = harness.array::<WhitewaterParticle>(&[], pool.len());
-    let pipeline = harness.device.create_compute_pipeline(&fused.wgsl, ENTRY, "preserve-foam-fused");
+    let pipeline =
+        harness
+            .device
+            .create_compute_pipeline(&fused.wgsl, ENTRY, "preserve-foam-fused");
     let mut enc = harness.device.create_encoder("preserve-foam-fused");
-    let mut bindings = vec![GpuBinding::Bytes { binding: 0, data: bytemuck::cast_slice(&words) }];
+    let mut bindings = vec![GpuBinding::Bytes {
+        binding: 0,
+        data: bytemuck::cast_slice(&words),
+    }];
     for (i, buffer) in externals.iter().enumerate() {
-        bindings.push(GpuBinding::Buffer { binding: i as u32 + 1, buffer, offset: 0 });
+        bindings.push(GpuBinding::Buffer {
+            binding: i as u32 + 1,
+            buffer,
+            offset: 0,
+        });
     }
-    bindings.push(GpuBinding::Buffer { binding: externals.len() as u32 + 1, buffer: &dst.1, offset: 0 });
-    enc.dispatch_compute(&pipeline, &bindings, [(pool.len() as u32).div_ceil(256), 1, 1], "preserve-foam-fused");
+    bindings.push(GpuBinding::Buffer {
+        binding: externals.len() as u32 + 1,
+        buffer: &dst.1,
+        offset: 0,
+    });
+    enc.dispatch_compute(
+        &pipeline,
+        &bindings,
+        [(pool.len() as u32).div_ceil(256), 1, 1],
+        "preserve-foam-fused",
+    );
     enc.commit_and_wait_completed();
     let fused_out: Vec<WhitewaterParticle> = read(&dst.1, pool.len());
     for j in 0..pool.len() {
-        assert_eq!(bytemuck::bytes_of(&fused_out[j]), bytemuck::bytes_of(&unfused[j]), "slot {j}: fused {:?} standalone {:?}", fused_out[j], unfused[j]);
+        assert_eq!(
+            bytemuck::bytes_of(&fused_out[j]),
+            bytemuck::bytes_of(&unfused[j]),
+            "slot {j}: fused {:?} standalone {:?}",
+            fused_out[j],
+            unfused[j]
+        );
     }
-    assert!(unfused.iter().zip(&pool).filter(|(a, b)| a != b).count() > 300, "the preservation changed the pool");
+    assert!(
+        unfused.iter().zip(&pool).filter(|(a, b)| a != b).count() > 300,
+        "the preservation changed the pool"
+    );
 }

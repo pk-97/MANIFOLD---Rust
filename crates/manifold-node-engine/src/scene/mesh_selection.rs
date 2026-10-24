@@ -2,9 +2,9 @@
 use std::path::Path;
 
 use crate::exec::effect_node::EffectNodeContext;
-use manifold_foundation::mesh_partition::{Fragment, partition};
-use crate::parameters::ParamValue;
 use crate::mesh::MeshVertex;
+use crate::parameters::ParamValue;
+use manifold_foundation::mesh_partition::{Fragment, partition};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MeshSelection {
@@ -39,7 +39,8 @@ impl MeshSelection {
             fragment_count: ctx
                 .param_f32("fragment_count", 1.0)
                 .round()
-                .clamp(1.0, manifold_foundation::mesh_partition::MAX_PIECES as f32) as u32,
+                .clamp(1.0, manifold_foundation::mesh_partition::MAX_PIECES as f32)
+                as u32,
             fragment_index: ctx.param_f32("fragment_index", 0.0).round().max(0.0) as u32,
             own_space: matches!(ctx.params.get("own_space"), Some(ParamValue::Bool(true))),
         }
@@ -90,4 +91,3 @@ pub fn select_fragment(
     }
     Ok(selected)
 }
-

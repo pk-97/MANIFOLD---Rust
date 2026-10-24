@@ -1,37 +1,18 @@
 use super::*;
+use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
 use manifold_node_engine::scene::camera::CameraMode;
-use manifold_gpu::GpuTextureFormat;
 
 /// CPU port of the diagram shader's `euler_xyz` + `apply_copy`: rotate (XYZ
 /// Euler), uniform scale, translate. The test oracle — a trail mark for copy
 /// c at slot s must land exactly here.
 fn apply_copy_cpu(p: [f32; 3], inst: InstanceTransform) -> [f32; 3] {
     let [ax, ay, az] = [inst.rot_pad[0], inst.rot_pad[1], inst.rot_pad[2]];
-    let (cx, sx, cy, sy, cz, sz) = (
-        ax.cos(),
-        ax.sin(),
-        ay.cos(),
-        ay.sin(),
-        az.cos(),
-        az.sin(),
-    );
+    let (cx, sx, cy, sy, cz, sz) = (ax.cos(), ax.sin(), ay.cos(), ay.sin(), az.cos(), az.sin());
     // WGSL mat3x3 columns, matching euler_xyz in render_mesh_diagram.wgsl.
-    let rx = [
-        [1.0, 0.0, 0.0],
-        [0.0, cx, sx],
-        [0.0, -sx, cx],
-    ];
-    let ry = [
-        [cy, 0.0, -sy],
-        [0.0, 1.0, 0.0],
-        [sy, 0.0, cy],
-    ];
-    let rz = [
-        [cz, sz, 0.0],
-        [-sz, cz, 0.0],
-        [0.0, 0.0, 1.0],
-    ];
+    let rx = [[1.0, 0.0, 0.0], [0.0, cx, sx], [0.0, -sx, cx]];
+    let ry = [[cy, 0.0, -sy], [0.0, 1.0, 0.0], [sy, 0.0, cy]];
+    let rz = [[cz, sz, 0.0], [-sz, cz, 0.0], [0.0, 0.0, 1.0]];
     let mat_mul = |a: [[f32; 3]; 3], b: [[f32; 3]; 3]| {
         // Arrays are [column][component], matching WGSL mat3x3 literals;
         // column j of a*b is a * (column j of b).
@@ -44,7 +25,11 @@ fn apply_copy_cpu(p: [f32; 3], inst: InstanceTransform) -> [f32; 3] {
         out
     };
     let rot = mat_mul(rz, mat_mul(ry, rx));
-    let scaled = [p[0] * inst.pos_scale[3], p[1] * inst.pos_scale[3], p[2] * inst.pos_scale[3]];
+    let scaled = [
+        p[0] * inst.pos_scale[3],
+        p[1] * inst.pos_scale[3],
+        p[2] * inst.pos_scale[3],
+    ];
     [
         rot[0][0] * scaled[0] + rot[1][0] * scaled[1] + rot[2][0] * scaled[2] + inst.pos_scale[0],
         rot[0][1] * scaled[0] + rot[1][1] * scaled[1] + rot[2][1] * scaled[2] + inst.pos_scale[1],
@@ -56,19 +41,23 @@ fn apply_copy_cpu(p: [f32; 3], inst: InstanceTransform) -> [f32; 3] {
 fn math_view_instance_history_records_per_copy_motion() {
     let guard = manifold_gpu::testkit::test_device();
     let device = guard.arc();
-    let pipeline = device.create_compute_pipeline(CAPTURE_SHADER, "cs_main", "instance-history-proof");
+    let pipeline =
+        device.create_compute_pipeline(CAPTURE_SHADER, "cs_main", "instance-history-proof");
     let history = device.create_buffer_shared(
         HISTORY_SAMPLES as u64 * MAX_VERTICES as u64 * std::mem::size_of::<[f32; 4]>() as u64,
     );
     history.zero_fill();
     let ring = device.create_buffer_shared(
-        HISTORY_SAMPLES as u64 * MAX_COPY_INSTANCES as u64 * std::mem::size_of::<InstanceTransform>() as u64,
+        HISTORY_SAMPLES as u64
+            * MAX_COPY_INSTANCES as u64
+            * std::mem::size_of::<InstanceTransform>() as u64,
     );
     ring.zero_fill();
     let counts = device.create_buffer_shared(HISTORY_SAMPLES as u64 * 4);
     counts.zero_fill();
     let vertex_buffer = device.create_buffer_shared(3 * std::mem::size_of::<MeshVertex>() as u64);
-    let instance_buffer = device.create_buffer_shared(2 * std::mem::size_of::<InstanceTransform>() as u64);
+    let instance_buffer =
+        device.create_buffer_shared(2 * std::mem::size_of::<InstanceTransform>() as u64);
 
     // Per-frame known inputs: one vertex drifts (mixed vertex+instance
     // motion), copy 1 translates and rotates, copy 0 stays identity.
@@ -76,13 +65,25 @@ fn math_view_instance_history_records_per_copy_motion() {
     let vertex_frame = |f: u32| {
         let drift = 0.05 * f as f32;
         [
-            MeshVertex { position: [-0.25 + drift, -0.15, 0.0], ..bytemuck::Zeroable::zeroed() },
-            MeshVertex { position: [0.25, -0.1, 0.0], ..bytemuck::Zeroable::zeroed() },
-            MeshVertex { position: [0.0, 0.3, 0.0], ..bytemuck::Zeroable::zeroed() },
+            MeshVertex {
+                position: [-0.25 + drift, -0.15, 0.0],
+                ..bytemuck::Zeroable::zeroed()
+            },
+            MeshVertex {
+                position: [0.25, -0.1, 0.0],
+                ..bytemuck::Zeroable::zeroed()
+            },
+            MeshVertex {
+                position: [0.0, 0.3, 0.0],
+                ..bytemuck::Zeroable::zeroed()
+            },
         ]
     };
     let instance_frame = |f: u32| {
-        let identity = InstanceTransform { pos_scale: [0.0, 0.0, 0.0, 1.0], rot_pad: [0.0; 4] };
+        let identity = InstanceTransform {
+            pos_scale: [0.0, 0.0, 0.0, 1.0],
+            rot_pad: [0.0; 4],
+        };
         let moving = InstanceTransform {
             pos_scale: [1.4 + 0.12 * f as f32, 0.3, 0.0, 1.0],
             rot_pad: [0.0, 0.0, 0.15 * f as f32, 0.0],
@@ -113,12 +114,35 @@ fn math_view_instance_history_records_per_copy_motion() {
         encoder.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&capture) },
-                GpuBinding::Buffer { binding: 1, buffer: &vertex_buffer, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: &history, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: &instance_buffer, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: &ring, offset: 0 },
-                GpuBinding::Buffer { binding: 5, buffer: &counts, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&capture),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &vertex_buffer,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: &history,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: &instance_buffer,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: &ring,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: &counts,
+                    offset: 0,
+                },
             ],
             [1, 1, 1],
             "instance-history-proof",
@@ -126,16 +150,20 @@ fn math_view_instance_history_records_per_copy_motion() {
         encoder.commit_and_wait_completed();
     }
 
-    let ring_ptr = ring.mapped_ptr().expect("shared ring must expose mapped pointer");
+    let ring_ptr = ring
+        .mapped_ptr()
+        .expect("shared ring must expose mapped pointer");
     let slot_transforms = |slot: u32| -> [[f32; 8]; 2] {
         // SAFETY: slot stays inside the zero-filled 64 x 8 ring.
         let base = unsafe { ring_ptr.add(slot as usize * MAX_COPY_INSTANCES as usize * 32) };
         let bytes = unsafe { std::slice::from_raw_parts(base, 2 * 32) };
-        [*bytemuck::from_bytes(&bytes[0..32]), *bytemuck::from_bytes(&bytes[32..64])]
+        [
+            *bytemuck::from_bytes(&bytes[0..32]),
+            *bytemuck::from_bytes(&bytes[32..64]),
+        ]
     };
-    let as_words = |inst: InstanceTransform| -> [f32; 8] {
-        *bytemuck::from_bytes(bytemuck::bytes_of(&inst))
-    };
+    let as_words =
+        |inst: InstanceTransform| -> [f32; 8] { *bytemuck::from_bytes(bytemuck::bytes_of(&inst)) };
     for (f, instances) in expected_instances.iter().enumerate() {
         assert_eq!(
             slot_transforms(f as u32),
@@ -145,22 +173,29 @@ fn math_view_instance_history_records_per_copy_motion() {
     }
     // Slots the run never reached keep their zero-fill: no phantom copies.
     assert_eq!(slot_transforms(frames), [[0.0; 8]; 2]);
-    let counts_ptr = counts.mapped_ptr().expect("shared counts must expose mapped pointer");
+    let counts_ptr = counts
+        .mapped_ptr()
+        .expect("shared counts must expose mapped pointer");
     for f in 0..HISTORY_SAMPLES {
         let value = unsafe { (counts_ptr as *const u32).add(f as usize).read() };
-        assert_eq!(value, if f < frames { 2 } else { 0 }, "per-slot copy count at slot {f}");
+        assert_eq!(
+            value,
+            if f < frames { 2 } else { 0 },
+            "per-slot copy count at slot {f}"
+        );
     }
 
     // Composed oracle: a copy trail mark at (slot s, copy c, vertex v) is the
     // vertex the GPU ring recorded for slot s transformed by the instance the
     // GPU ring recorded for the same slot. Test 2 asserts the rendered pixels
     // land exactly here.
-    let history_ptr = history.mapped_ptr().expect("shared history must expose mapped pointer");
+    let history_ptr = history
+        .mapped_ptr()
+        .expect("shared history must expose mapped pointer");
     let ring_vertex = |slot: u32, vertex: usize| -> [f32; 3] {
         // SAFETY: slot * MAX_VERTICES + vertex stays inside the zero-filled ring.
-        let base = unsafe {
-            history_ptr.add((slot as usize * MAX_VERTICES as usize + vertex) * 16)
-        };
+        let base =
+            unsafe { history_ptr.add((slot as usize * MAX_VERTICES as usize + vertex) * 16) };
         let bytes = unsafe { std::slice::from_raw_parts(base, 16) };
         let v: [f32; 4] = *bytemuck::from_bytes(bytes);
         [v[0], v[1], v[2]]
@@ -221,30 +256,47 @@ fn math_view_trails_render_recorded_copy_motion() {
     );
     history.zero_fill();
     let ring = device.create_buffer_shared(
-        HISTORY_SAMPLES as u64 * MAX_COPY_INSTANCES as u64 * std::mem::size_of::<InstanceTransform>() as u64,
+        HISTORY_SAMPLES as u64
+            * MAX_COPY_INSTANCES as u64
+            * std::mem::size_of::<InstanceTransform>() as u64,
     );
     ring.zero_fill();
     let counts = device.create_buffer_shared(HISTORY_SAMPLES as u64 * 4);
     counts.zero_fill();
     let vertex_buffer = device.create_buffer_shared(3 * std::mem::size_of::<MeshVertex>() as u64);
-    let instance_buffer = device.create_buffer_shared(2 * std::mem::size_of::<InstanceTransform>() as u64);
+    let instance_buffer =
+        device.create_buffer_shared(2 * std::mem::size_of::<InstanceTransform>() as u64);
 
     let frames = 10u32;
     let vertex_frame = |f: u32| {
         let drift = 0.04 * f as f32;
         [
-            MeshVertex { position: [-0.25 + drift, -0.15, 0.0], ..bytemuck::Zeroable::zeroed() },
-            MeshVertex { position: [0.25, -0.1, 0.0], ..bytemuck::Zeroable::zeroed() },
-            MeshVertex { position: [0.0, 0.3, 0.0], ..bytemuck::Zeroable::zeroed() },
+            MeshVertex {
+                position: [-0.25 + drift, -0.15, 0.0],
+                ..bytemuck::Zeroable::zeroed()
+            },
+            MeshVertex {
+                position: [0.25, -0.1, 0.0],
+                ..bytemuck::Zeroable::zeroed()
+            },
+            MeshVertex {
+                position: [0.0, 0.3, 0.0],
+                ..bytemuck::Zeroable::zeroed()
+            },
         ]
     };
-    let instance_frame = |f: u32| [
-        InstanceTransform { pos_scale: [0.0, 0.0, 0.0, 1.0], rot_pad: [0.0; 4] },
-        InstanceTransform {
-            pos_scale: [1.4 + 0.12 * f as f32, 0.3, 0.0, 1.0],
-            rot_pad: [0.0, 0.0, 0.15 * f as f32, 0.0],
-        },
-    ];
+    let instance_frame = |f: u32| {
+        [
+            InstanceTransform {
+                pos_scale: [0.0, 0.0, 0.0, 1.0],
+                rot_pad: [0.0; 4],
+            },
+            InstanceTransform {
+                pos_scale: [1.4 + 0.12 * f as f32, 0.3, 0.0, 1.0],
+                rot_pad: [0.0, 0.0, 0.15 * f as f32, 0.0],
+            },
+        ]
+    };
     let mut expected_vertices = Vec::new();
     for f in 0..frames {
         let vertices = vertex_frame(f);
@@ -267,12 +319,35 @@ fn math_view_trails_render_recorded_copy_motion() {
         encoder.dispatch_compute(
             &capture_pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&capture) },
-                GpuBinding::Buffer { binding: 1, buffer: &vertex_buffer, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: &history, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: &instance_buffer, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: &ring, offset: 0 },
-                GpuBinding::Buffer { binding: 5, buffer: &counts, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&capture),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &vertex_buffer,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: &history,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: &instance_buffer,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: &ring,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: &counts,
+                    offset: 0,
+                },
             ],
             [1, 1, 1],
             "copy-trails-proof",
@@ -322,14 +397,45 @@ fn math_view_trails_render_recorded_copy_motion() {
             &msaa,
             &target.texture,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&u) },
-                GpuBinding::Buffer { binding: 1, buffer: &vertex_buffer, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: &vertex_buffer, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: &vertex_buffer, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: &history, offset: 0 },
-                GpuBinding::Buffer { binding: 10, buffer: &instance_buffer, offset: 0 },
-                GpuBinding::Buffer { binding: 11, buffer: &ring, offset: 0 },
-                GpuBinding::Buffer { binding: 12, buffer: &counts, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&u),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &vertex_buffer,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: &vertex_buffer,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: &vertex_buffer,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: &history,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 10,
+                    buffer: &instance_buffer,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 11,
+                    buffer: &ring,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 12,
+                    buffer: &counts,
+                    offset: 0,
+                },
             ],
             18,
             instance_count.max(1),
@@ -363,8 +469,17 @@ fn math_view_trails_render_recorded_copy_motion() {
     let b = apply_copy_cpu(expected_vertices[8][0].position, instance_frame(8)[1]);
     let two_copies = render(2, 1);
     if let Ok(path) = std::env::var("MANIFOLD_MATH_TRAILS_PREVIEW") {
-        let rgba = manifold_node_engine::gpu::headless_readback::readback_srgb_rgba8(&device, &target.texture, W, H);
-        std::fs::write(path, manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, W, H)).unwrap();
+        let rgba = manifold_node_engine::gpu::headless_readback::readback_srgb_rgba8(
+            &device,
+            &target.texture,
+            W,
+            H,
+        );
+        std::fs::write(
+            path,
+            manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, W, H),
+        )
+        .unwrap();
     }
     assert!(
         max_alpha_around(&two_copies, a) > 0.05,
@@ -389,7 +504,6 @@ fn math_view_trails_render_recorded_copy_motion() {
         "vertices-only trail output must stay byte-identical"
     );
 }
-
 
 #[test]
 fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
@@ -445,8 +559,7 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
         rot_pad: [0.0; 4],
     };
     let instance_buffer = |copies: &[InstanceTransform]| {
-        let buffer =
-            device.create_buffer_shared(std::mem::size_of_val(copies) as u64);
+        let buffer = device.create_buffer_shared(std::mem::size_of_val(copies) as u64);
         // SAFETY: exact-size fresh shared buffer, no submitted work references it.
         unsafe { buffer.write(0, bytemuck::cast_slice(copies)) };
         buffer
@@ -472,57 +585,80 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
         0.05,
         200.0,
     );
-    let render_scaled = |instances: &manifold_gpu::GpuBuffer, copy_count: u32, wired: u32, inner: [f32; 3]| {
-        let view_proj = camera.view_proj(W as f32 / H as f32);
-        let u = DiagramUniforms {
-            view_proj,
-            model: RenderMeshDiagram::model_matrix(Transform::default(), None, &camera),
-            viewport: [W as f32, H as f32, 0.0, 0.0],
-            radius: 0.2,
-            line_width: 4.0,
-            copy_inner: [inner[0], inner[1], inner[2], 0.0],
-            grid: 0,
-            fragments: 1,
-            ghosts: 1,
-            vectors: 1,
-            axes: 0,
-            tri_count: 1,
-            vertex_count: 3,
-            history_capacity: HISTORY_SAMPLES,
-            history_stride: MAX_VERTICES,
-            copy_count,
-            instances_wired: wired,
-            brightness: [1.0; 4],
-            trails_brightness: 1.0,
-            inv_view_proj: super::super::render_scene::mat4_inverse(view_proj).unwrap(),
-            camera_pos_far: [camera.pos[0], camera.pos[1], camera.pos[2], camera.far],
-            ..bytemuck::Zeroable::zeroed()
+    let render_scaled =
+        |instances: &manifold_gpu::GpuBuffer, copy_count: u32, wired: u32, inner: [f32; 3]| {
+            let view_proj = camera.view_proj(W as f32 / H as f32);
+            let u = DiagramUniforms {
+                view_proj,
+                model: RenderMeshDiagram::model_matrix(Transform::default(), None, &camera),
+                viewport: [W as f32, H as f32, 0.0, 0.0],
+                radius: 0.2,
+                line_width: 4.0,
+                copy_inner: [inner[0], inner[1], inner[2], 0.0],
+                grid: 0,
+                fragments: 1,
+                ghosts: 1,
+                vectors: 1,
+                axes: 0,
+                tri_count: 1,
+                vertex_count: 3,
+                history_capacity: HISTORY_SAMPLES,
+                history_stride: MAX_VERTICES,
+                copy_count,
+                instances_wired: wired,
+                brightness: [1.0; 4],
+                trails_brightness: 1.0,
+                inv_view_proj: super::super::render_scene::mat4_inverse(view_proj).unwrap(),
+                camera_pos_far: [camera.pos[0], camera.pos[1], camera.pos[2], camera.far],
+                ..bytemuck::Zeroable::zeroed()
+            };
+            let mut encoder = device.create_encoder("instance-copies-proof");
+            encoder.draw_instanced_msaa(
+                &pipeline,
+                &msaa,
+                &target.texture,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&u),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: &vertex_buffer,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: &vertex_buffer,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: &vertex_buffer,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 4,
+                        buffer: &vertex_buffer,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 10,
+                        buffer: instances,
+                        offset: 0,
+                    },
+                ],
+                18,
+                (4 * copy_count + 1 + 3 + 3).max(1),
+                GpuLoadAction::Clear,
+                "instance-copies-proof",
+            );
+            encoder.commit_and_wait_completed();
+            readback_raw_halves(&device, &target.texture, W, H)
         };
-        let mut encoder = device.create_encoder("instance-copies-proof");
-        encoder.draw_instanced_msaa(
-            &pipeline,
-            &msaa,
-            &target.texture,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&u),
-                },
-                GpuBinding::Buffer { binding: 1, buffer: &vertex_buffer, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: &vertex_buffer, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: &vertex_buffer, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: &vertex_buffer, offset: 0 },
-                GpuBinding::Buffer { binding: 10, buffer: instances, offset: 0 },
-            ],
-            18,
-            (4 * copy_count + 1 + 3 + 3).max(1),
-            GpuLoadAction::Clear,
-            "instance-copies-proof",
-        );
-        encoder.commit_and_wait_completed();
-        readback_raw_halves(&device, &target.texture, W, H)
+    let render = |instances: &manifold_gpu::GpuBuffer, copy_count: u32, wired: u32| {
+        render_scaled(instances, copy_count, wired, [1.0; 3])
     };
-    let render = |instances: &manifold_gpu::GpuBuffer, copy_count: u32, wired: u32| render_scaled(instances, copy_count, wired, [1.0; 3]);
     let alpha_at = |image: &[u8], point: [f32; 3]| {
         let pixel = camera.project_to_pixel(point, W, H).unwrap();
         let x = pixel.px as usize;
@@ -542,14 +678,26 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
     // The translated copy's top vertex lands far from every base mark; it
     // must be lit in the copies image and clear in the unwired one.
     let echo_point = [1.6, 0.1 + 0.3, 0.0];
-    assert!(alpha_at(&copies, echo_point) > 0.05, "translated copy ghost invisible");
-    assert!(alpha_at(&unwired, echo_point) < 0.01, "unwired diagram shows no copy");
+    assert!(
+        alpha_at(&copies, echo_point) > 0.05,
+        "translated copy ghost invisible"
+    );
+    assert!(
+        alpha_at(&unwired, echo_point) < 0.01,
+        "unwired diagram shows no copy"
+    );
     // A copy group's per-axis scale stretches each copy inside its instance:
     // twice as tall, the translated copy's top vertex rises from 0.3 to 0.6.
     let stretched = render_scaled(&three, 3, 1, [1.0, 2.0, 1.0]);
     let tall_point = [1.6, 0.1 + 0.6, 0.0];
-    assert!(alpha_at(&stretched, tall_point) > 0.05, "a stretched copy reaches its scaled top");
-    assert!(alpha_at(&copies, tall_point) < 0.01, "an unstretched copy stops at its own top");
+    assert!(
+        alpha_at(&stretched, tall_point) > 0.05,
+        "a stretched copy reaches its scaled top"
+    );
+    assert!(
+        alpha_at(&copies, tall_point) < 0.01,
+        "an unstretched copy stops at its own top"
+    );
     // Inactive holes (the all-zero sentinel) are skipped, so a hole-padded
     // buffer draws exactly the same marks as its compact form.
     let hole_padded = render(&with_hole, 4, 1);
@@ -558,7 +706,12 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
         "inactive zero-sentinel copies must not draw"
     );
     if let Ok(path) = std::env::var("MANIFOLD_MATH_COPIES_PREVIEW") {
-        let rgba = manifold_node_engine::gpu::headless_readback::readback_srgb_rgba8(&device, &target.texture, W, H);
+        let rgba = manifold_node_engine::gpu::headless_readback::readback_srgb_rgba8(
+            &device,
+            &target.texture,
+            W,
+            H,
+        );
         std::fs::write(
             path,
             manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, W, H),
@@ -617,7 +770,7 @@ fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
             grid: enabled,
             inv_view_proj: super::super::render_scene::mat4_inverse(view_proj).unwrap(),
             camera_pos_far: [camera.pos[0], camera.pos[1], camera.pos[2], camera.far],
-            brightness: [1.0;4],
+            brightness: [1.0; 4],
             trails_brightness: 1.0,
             copy_inner: [1.0, 1.0, 1.0, 0.0],
             ..bytemuck::Zeroable::zeroed()
@@ -665,17 +818,82 @@ fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
     // before any assertion can stop the test.
     if let Ok(dir) = std::env::var("MANIFOLD_MATH_GRID_PREVIEW") {
         let views = [
-            ("grazing", Camera::look_at([0.0, 1.0, 8.0], [0.0, 1.0, 0.0], [0.0, 1.0, 0.0], 1.0, 0.05, 1000.0)),
+            (
+                "grazing",
+                Camera::look_at(
+                    [0.0, 1.0, 8.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    1.0,
+                    0.05,
+                    1000.0,
+                ),
+            ),
             ("downward", camera),
-            ("stage", Camera::look_at([2.5, 1.6, 4.0], [0.0, 0.4, 0.0], [0.0, 1.0, 0.0], 0.8, 0.05, 1000.0)),
-            ("close", Camera::look_at([0.4, 0.3, 0.6], [0.0; 3], [0.0, 1.0, 0.0], 0.9, 0.01, 1000.0)),
-            ("high", Camera::look_at([30.0, 40.0, 50.0], [0.0; 3], [0.0, 1.0, 0.0], 0.9, 0.05, 1000.0)),
-            ("oblique", Camera::look_at([1.4, 1.1, 0.5], [-0.3, 0.0, -0.4], [0.0, 1.0, 0.0], 0.9, 0.01, 1000.0)),
-            ("yawed", Camera::look_at([6.0, 3.0, 2.0], [0.0; 3], [0.0, 1.0, 0.0], 0.8, 0.05, 1000.0)),
+            (
+                "stage",
+                Camera::look_at(
+                    [2.5, 1.6, 4.0],
+                    [0.0, 0.4, 0.0],
+                    [0.0, 1.0, 0.0],
+                    0.8,
+                    0.05,
+                    1000.0,
+                ),
+            ),
+            (
+                "close",
+                Camera::look_at(
+                    [0.4, 0.3, 0.6],
+                    [0.0; 3],
+                    [0.0, 1.0, 0.0],
+                    0.9,
+                    0.01,
+                    1000.0,
+                ),
+            ),
+            (
+                "high",
+                Camera::look_at(
+                    [30.0, 40.0, 50.0],
+                    [0.0; 3],
+                    [0.0, 1.0, 0.0],
+                    0.9,
+                    0.05,
+                    1000.0,
+                ),
+            ),
+            (
+                "oblique",
+                Camera::look_at(
+                    [1.4, 1.1, 0.5],
+                    [-0.3, 0.0, -0.4],
+                    [0.0, 1.0, 0.0],
+                    0.9,
+                    0.01,
+                    1000.0,
+                ),
+            ),
+            (
+                "yawed",
+                Camera::look_at(
+                    [6.0, 3.0, 2.0],
+                    [0.0; 3],
+                    [0.0, 1.0, 0.0],
+                    0.8,
+                    0.05,
+                    1000.0,
+                ),
+            ),
         ];
         for (name, view) in views {
             render(view, Transform::default(), 1);
-            let rgba = manifold_node_engine::gpu::headless_readback::readback_srgb_rgba8(&device, &target.texture, W, H);
+            let rgba = manifold_node_engine::gpu::headless_readback::readback_srgb_rgba8(
+                &device,
+                &target.texture,
+                W,
+                H,
+            );
             let png = manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, W, H);
             std::fs::write(format!("{dir}/grid-{name}.png"), png).unwrap();
         }

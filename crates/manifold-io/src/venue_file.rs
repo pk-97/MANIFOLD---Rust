@@ -69,7 +69,9 @@ pub fn import_venue(path: &Path) -> Result<StageLayout, VenueFileError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_core::stage::{DisplayIdentity, DisplayPlacement, OutputAdvanced, OutputId, Rotation};
+    use manifold_core::stage::{
+        DisplayIdentity, DisplayPlacement, OutputAdvanced, OutputId, Rotation,
+    };
 
     fn sample_layout() -> StageLayout {
         StageLayout {
@@ -118,8 +120,10 @@ mod tests {
     #[test]
     fn export_to_disk_then_import_reads_it_back() {
         let layout = sample_layout();
-        let path = std::env::temp_dir()
-            .join(format!("manifold-venue-{}.{VENUE_FILE_EXTENSION}", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "manifold-venue-{}.{VENUE_FILE_EXTENSION}",
+            std::process::id()
+        ));
         export_venue(&layout, &path).expect("export to disk");
         let imported = import_venue(&path).expect("import from disk");
         assert_eq!(imported, layout);

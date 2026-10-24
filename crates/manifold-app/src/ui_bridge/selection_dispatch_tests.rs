@@ -24,10 +24,17 @@ impl Rig {
     /// Two layers: clips "a" and "b" on the first, "c" on the second.
     fn new() -> Self {
         let mut project = manifold_core::project::Project::default();
-        for (index, ids) in [["a", "b"].as_slice(), ["c"].as_slice()].into_iter().enumerate() {
-            let mut layer = manifold_core::layer::Layer::new_video(format!("L{index}"), index as i32);
+        for (index, ids) in [["a", "b"].as_slice(), ["c"].as_slice()]
+            .into_iter()
+            .enumerate()
+        {
+            let mut layer =
+                manifold_core::layer::Layer::new_video(format!("L{index}"), index as i32);
             for (n, id) in ids.iter().enumerate() {
-                let mut clip = manifold_core::clip::TimelineClip::new_generator(Beats(4.0 * n as f64), Beats(4.0));
+                let mut clip = manifold_core::clip::TimelineClip::new_generator(
+                    Beats(4.0 * n as f64),
+                    Beats(4.0),
+                );
                 clip.id = ClipId::new(*id);
                 layer.clips.push(clip);
             }
@@ -54,7 +61,11 @@ impl Rig {
 
     fn dispatch(&mut self, action: PanelAction) -> crate::ui_bridge::DispatchResult {
         let mut ctx = crate::ui_bridge::DispatchCtx {
-            project: crate::ui_bridge::ProjectRef::new(&mut self.project, &mut self.edits, &self.content_tx),
+            project: crate::ui_bridge::ProjectRef::new(
+                &mut self.project,
+                &mut self.edits,
+                &self.content_tx,
+            ),
             content_tx: &self.content_tx,
             content_state: &self.content_state,
             ui: &mut self.ui,
@@ -87,7 +98,10 @@ impl Rig {
     /// Dispatch one gesture and plan the frame after it.
     fn frame(&mut self, action: PanelAction) -> crate::frame_plan::FramePlan {
         self.dispatch(action.clone());
-        assert!(self.content_rx.try_recv().is_err(), "{action:?} sends nothing");
+        assert!(
+            self.content_rx.try_recv().is_err(),
+            "{action:?} sends nothing"
+        );
         let next = self.inputs();
         self.planner.plan(next)
     }
@@ -108,13 +122,22 @@ fn clicking_between_clips_is_one_inspector_sync_per_click() {
         assert!(plan.projections.contains(Projection::InspectorSync), "{id}");
         assert!(plan.projections.contains(Projection::SelectionPush), "{id}");
         assert!(plan.rebuild.contains(MainRegion::Inspector), "{id}");
-        assert_eq!(rig.selection.primary_selected_clip_id(), Some(&ClipId::new(id)));
+        assert_eq!(
+            rig.selection.primary_selected_clip_id(),
+            Some(&ClipId::new(id))
+        );
         // The frame after the click has nothing left to do.
         let idle = rig.inputs();
-        assert!(rig.planner.plan(idle).projections == Default::default(), "{id}: settled");
+        assert!(
+            rig.planner.plan(idle).projections == Default::default(),
+            "{id}: settled"
+        );
     }
     let plan = rig.frame(click("a"));
-    assert!(!plan.projections.contains(Projection::InspectorSync), "same clip again");
+    assert!(
+        !plan.projections.contains(Projection::InspectorSync),
+        "same clip again"
+    );
 }
 
 /// A tab click pins the scope: the identity version re-projects the inspector.
@@ -124,10 +147,18 @@ fn inspector_tab_click_is_a_selection_change() {
     rig.frame(click("c"));
     for tab in [InspectorTab::Master, InspectorTab::Layer] {
         let plan = rig.frame(PanelAction::Root(RootAction::SelectInspectorTab(tab)));
-        assert!(plan.projections.contains(Projection::InspectorSync), "{tab:?}");
+        assert!(
+            plan.projections.contains(Projection::InspectorSync),
+            "{tab:?}"
+        );
     }
-    let plan = rig.frame(PanelAction::Root(RootAction::SelectInspectorTab(InspectorTab::Layer)));
-    assert!(!plan.projections.contains(Projection::InspectorSync), "same tab again");
+    let plan = rig.frame(PanelAction::Root(RootAction::SelectInspectorTab(
+        InspectorTab::Layer,
+    )));
+    assert!(
+        !plan.projections.contains(Projection::InspectorSync),
+        "same tab again"
+    );
 }
 
 fn item(id: &str) -> manifold_core::scene_doc::ItemId {
@@ -145,10 +176,25 @@ fn scene_selection_reprojects_only_on_change() {
         (SceneSelection::Item(item("object-4")), false),
         (SceneSelection::Item(item("light-7")), true),
     ] {
-        rig.ui.scene_setup_panel.set_selection(layer.clone(), selection.clone());
-        let plan = rig.frame(PanelAction::Root(RootAction::SceneSetupSelectionChanged(layer.clone())));
-        assert_eq!(plan.rebuild.contains(MainRegion::Inspector), moves, "{selection:?}");
-        assert_eq!(plan.projections.contains(Projection::InspectorSync), moves, "{selection:?}");
-        assert!(!plan.projections.contains(Projection::ProjectSync), "{selection:?}");
+        rig.ui
+            .scene_setup_panel
+            .set_selection(layer.clone(), selection.clone());
+        let plan = rig.frame(PanelAction::Root(RootAction::SceneSetupSelectionChanged(
+            layer.clone(),
+        )));
+        assert_eq!(
+            plan.rebuild.contains(MainRegion::Inspector),
+            moves,
+            "{selection:?}"
+        );
+        assert_eq!(
+            plan.projections.contains(Projection::InspectorSync),
+            moves,
+            "{selection:?}"
+        );
+        assert!(
+            !plan.projections.contains(Projection::ProjectSync),
+            "{selection:?}"
+        );
     }
 }

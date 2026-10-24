@@ -52,12 +52,7 @@ pub fn readback_to_srgb_png_linear(
 /// before encoding (e.g. `render_import`'s convergence check, which measures
 /// non-black fraction on the same frame it will eventually write, without a
 /// second GPU readback or a PNG decode-and-re-check) reach it through here.
-pub fn readback_tonemapped_rgba8(
-    device: &GpuDevice,
-    tex: &GpuTexture,
-    w: u32,
-    h: u32,
-) -> Vec<u8> {
+pub fn readback_tonemapped_rgba8(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<u8> {
     let bytes_per_row = w * 8; // Rgba16Float = 8 bytes/pixel
     let total = u64::from(h * bytes_per_row);
     let buf = device.create_buffer_shared(total);
@@ -65,8 +60,11 @@ pub fn readback_tonemapped_rgba8(
     enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
     enc.commit_and_wait_completed();
 
-    let ptr = buf.mapped_ptr().expect("shared readback buffer must expose mapped pointer");
-    let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+    let ptr = buf
+        .mapped_ptr()
+        .expect("shared readback buffer must expose mapped pointer");
+    let halves: &[u16] =
+        unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
 
     let tonemap = |v: f32| -> u8 {
         let ldr = (v / (1.0 + v)).clamp(0.0, 1.0);
@@ -109,12 +107,7 @@ pub fn linear_to_srgb8(v: f32) -> u8 {
 /// — the BUG-327 sibling of [`readback_tonemapped_rgba8`]: SAME GPU readback and
 /// SAME alpha-composite-over-black, but the tonemap closure is replaced by
 /// [`linear_to_srgb8`] (no Reinhard).
-pub fn readback_srgb_rgba8(
-    device: &GpuDevice,
-    tex: &GpuTexture,
-    w: u32,
-    h: u32,
-) -> Vec<u8> {
+pub fn readback_srgb_rgba8(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<u8> {
     let bytes_per_row = w * 8; // Rgba16Float = 8 bytes/pixel
     let total = u64::from(h * bytes_per_row);
     let buf = device.create_buffer_shared(total);
@@ -122,8 +115,11 @@ pub fn readback_srgb_rgba8(
     enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
     enc.commit_and_wait_completed();
 
-    let ptr = buf.mapped_ptr().expect("shared readback buffer must expose mapped pointer");
-    let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+    let ptr = buf
+        .mapped_ptr()
+        .expect("shared readback buffer must expose mapped pointer");
+    let halves: &[u16] =
+        unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
 
     let mut out = Vec::with_capacity((w * h * 4) as usize);
     for px in halves.chunks_exact(4) {
@@ -153,7 +149,9 @@ pub fn readback_raw_halves(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32)
     let mut enc = device.create_encoder("headless-convergence-readback");
     enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
     enc.commit_and_wait_completed();
-    let ptr = buf.mapped_ptr().expect("shared readback buffer must expose mapped pointer");
+    let ptr = buf
+        .mapped_ptr()
+        .expect("shared readback buffer must expose mapped pointer");
     unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), total as usize) }.to_vec()
 }
 
@@ -281,6 +279,10 @@ mod tests {
         // One of four components differs by 0.5; three are equal:
         // mean abs diff = 0.5 / 4 = 0.125
         let result = mean_abs_half_diff(&buf_a, &buf_b);
-        assert!((result - 0.125).abs() < 1e-6, "expected 0.125, got {}", result);
+        assert!(
+            (result - 0.125).abs() < 1e-6,
+            "expected 0.125, got {}",
+            result
+        );
     }
 }

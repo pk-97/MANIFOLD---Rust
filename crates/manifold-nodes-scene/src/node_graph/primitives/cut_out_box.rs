@@ -6,8 +6,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::{active_elements, standalone_pipeline};
@@ -82,7 +82,9 @@ impl Primitive for CutOutBox {
         _params: &manifold_node_engine::exec::effect_node::ParamValues,
         inputs: &[(&str, u32)],
     ) -> Option<u32> {
-        (port == "out").then(|| inputs.iter().find(|(p, _)| *p == "mesh").map(|&(_, n)| n)).flatten()
+        (port == "out")
+            .then(|| inputs.iter().find(|(p, _)| *p == "mesh").map(|&(_, n)| n))
+            .flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -103,15 +105,29 @@ impl Primitive for CutOutBox {
         if count == 0 {
             return;
         }
-        let uniforms = CutUniforms { dispatch_count: count, ..uniforms };
+        let uniforms = CutUniforms {
+            dispatch_count: count,
+            ..uniforms
+        };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: mesh, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: mesh,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: out,
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256), 1, 1],
             "node.cut_out_box",
@@ -125,7 +141,11 @@ pub(crate) fn reference(v: &MeshVertex, u: &CutUniforms) -> MeshVertex {
     let d = (0..3)
         .map(|a| (v.position[a] - u.center()[a]).abs() - 0.5 * u.size()[a])
         .fold(f32::NEG_INFINITY, f32::max);
-    let keep = if u.feather > 0.0 { (d / u.feather).clamp(0.0, 1.0) } else { f32::from(u8::from(d >= 0.0)) };
+    let keep = if u.feather > 0.0 {
+        (d / u.feather).clamp(0.0, 1.0)
+    } else {
+        f32::from(u8::from(d >= 0.0))
+    };
     let mut out = *v;
     out.color[3] *= keep;
     out
@@ -136,12 +156,26 @@ mod gpu_tests {
     use super::*;
     use manifold_node_engine::exec::effect_node::NodeInstanceId;
     use manifold_node_engine::freeze::classify::CapacityExpr;
-    use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused};
+    use manifold_node_engine::freeze::codegen::{
+        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused,
+    };
     use manifold_node_engine::primitive::PrimitiveSpec;
-    use {crate::node_graph::primitives::ocean_displace, crate::node_graph::primitives::ocean_displace::OceanDisplace};
+    use {
+        crate::node_graph::primitives::ocean_displace,
+        crate::node_graph::primitives::ocean_displace::OceanDisplace,
+    };
 
     fn cut() -> CutUniforms {
-        CutUniforms { center_x: 40.0, center_y: 0.0, center_z: -60.0, size_x: 120.0, size_y: 20.0, size_z: 80.0, feather: 6.0, dispatch_count: 0 }
+        CutUniforms {
+            center_x: 40.0,
+            center_y: 0.0,
+            center_z: -60.0,
+            size_x: 120.0,
+            size_y: 20.0,
+            size_z: 80.0,
+            feather: 6.0,
+            dispatch_count: 0,
+        }
     }
 
     fn upload(device: &manifold_gpu::GpuDevice, bytes: &[u8]) -> manifold_gpu::GpuBuffer {
@@ -159,19 +193,34 @@ mod gpu_tests {
     #[test]
     fn cut_out_box_matches_cpu() {
         let device = manifold_gpu::testkit::test_device();
-        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<CutOutBox>().expect("cut_out_box codegen");
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<CutOutBox>()
+            .expect("cut_out_box codegen");
         let pipeline = device.create_compute_pipeline(&wgsl, ENTRY, "cut-out-box-test");
         let (vertices, _, _) = ocean_displace::gpu_tests::fixture();
-        let u = CutUniforms { dispatch_count: vertices.len() as u32, ..cut() };
+        let u = CutUniforms {
+            dispatch_count: vertices.len() as u32,
+            ..cut()
+        };
         let mesh = upload(&device, bytemuck::cast_slice(&vertices));
         let out = device.create_buffer_shared(std::mem::size_of_val(vertices.as_slice()) as u64);
         let mut enc = device.create_encoder("cut-out-box-test");
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&u) },
-                GpuBinding::Buffer { binding: 1, buffer: &mesh, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: &out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&u),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &mesh,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: &out,
+                    offset: 0,
+                },
             ],
             [(vertices.len() as u32).div_ceil(256), 1, 1],
             "cut-out-box-test",
@@ -181,17 +230,27 @@ mod gpu_tests {
         let (mut hidden, mut kept) = (0, 0);
         for (i, (v, g)) in vertices.iter().zip(&got).enumerate() {
             let want = reference(v, &u);
-            assert!((g.color[3] - want.color[3]).abs() <= 1e-6, "vertex {i}: alpha {} vs {}", g.color[3], want.color[3]);
+            assert!(
+                (g.color[3] - want.color[3]).abs() <= 1e-6,
+                "vertex {i}: alpha {} vs {}",
+                g.color[3],
+                want.color[3]
+            );
             assert_eq!(g.position, v.position);
             hidden += usize::from(want.color[3] == 0.0);
             kept += usize::from(want.color[3] == 1.0);
         }
-        assert!(hidden > 0 && kept > 0, "fixture must exercise inside and outside ({hidden}, {kept})");
+        assert!(
+            hidden > 0 && kept > 0,
+            "fixture must exercise inside and outside ({hidden}, {kept})"
+        );
     }
 
     /// The scalar fields of the generated `struct Params`, in order.
     fn params_fields(wgsl: &str) -> Vec<String> {
-        let start = wgsl.find("struct Params {").expect("fused kernel has a Params struct");
+        let start = wgsl
+            .find("struct Params {")
+            .expect("fused kernel has a Params struct");
         let body = &wgsl[start + "struct Params {".len()..];
         let body = &body[..body.find('}').expect("Params closes")];
         body.split(',')
@@ -207,7 +266,10 @@ mod gpu_tests {
     fn ocean_displace_then_cut_fused_matches_unfused() {
         let device = manifold_gpu::testkit::test_device();
         let (vertices, du, fields) = ocean_displace::gpu_tests::fixture();
-        let cu = CutUniforms { dispatch_count: vertices.len() as u32, ..cut() };
+        let cu = CutUniforms {
+            dispatch_count: vertices.len() as u32,
+            ..cut()
+        };
         let id = NodeInstanceId;
         let region = FusionRegion {
             nodes: vec![
@@ -216,7 +278,12 @@ mod gpu_tests {
                     fusion_kind: OceanDisplace::FUSION_KIND,
                     body: OceanDisplace::WGSL_BODY.unwrap(),
                     params: OceanDisplace::PARAMS,
-                    inputs: vec![InputSource::External(0), InputSource::External(1), InputSource::External(2), InputSource::External(3)],
+                    inputs: vec![
+                        InputSource::External(0),
+                        InputSource::External(1),
+                        InputSource::External(2),
+                        InputSource::External(3),
+                    ],
                     input_access: OceanDisplace::INPUT_ACCESS.to_vec(),
                     node_inputs: OceanDisplace::INPUTS,
                     node_outputs: OceanDisplace::OUTPUTS,
@@ -258,12 +325,17 @@ mod gpu_tests {
         };
         let generated = generate_fused(&region).expect("displace+cut fused codegen");
         let wgsl = generated.wgsl;
-        assert!(wgsl.contains("fn n0_body") && wgsl.contains("fn n1_body"), "both bodies fused:\n{wgsl}");
+        assert!(
+            wgsl.contains("fn n0_body") && wgsl.contains("fn n1_body"),
+            "both bodies fused:\n{wgsl}"
+        );
 
         // Fill the fused Params by field name: n<k>_<param or derived name>.
         let mut values: Vec<(String, u32)> = Vec::new();
         let f = |v: f32| v.to_bits();
-        let push = |values: &mut Vec<(String, u32)>, name: &str, bits: u32| values.push((name.to_string(), bits));
+        let push = |values: &mut Vec<(String, u32)>, name: &str, bits: u32| {
+            values.push((name.to_string(), bits))
+        };
         push(&mut values, "n0_choppiness", f(du.choppiness));
         push(&mut values, "n0_foam_threshold", f(du.foam_threshold));
         push(&mut values, "n0_foam_width", f(du.foam_width));
@@ -304,19 +376,32 @@ mod gpu_tests {
                 .find(|l| l.contains("@binding(") && l.contains(&format!(" {name}:")))
                 .unwrap_or_else(|| panic!("no binding for {name}:\n{wgsl}"));
             let at = line.find("@binding(").unwrap() + "@binding(".len();
-            line[at..].split(')').next().unwrap().trim().parse().unwrap()
+            line[at..]
+                .split(')')
+                .next()
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap()
         };
         let mesh = upload(&device, bytemuck::cast_slice(&vertices));
-        let fb: Vec<_> = fields.iter().map(|v| upload(&device, bytemuck::cast_slice(v))).collect();
+        let fb: Vec<_> = fields
+            .iter()
+            .map(|v| upload(&device, bytemuck::cast_slice(v)))
+            .collect();
         let n = vertices.len();
         let bytes = std::mem::size_of_val(vertices.as_slice()) as u64;
         let groups = [(n as u32).div_ceil(256), 1, 1];
         let fused_out = device.create_buffer_shared(bytes);
         let fused_pipeline = device.create_compute_pipeline(&wgsl, ENTRY, "ocean-fused-test");
         // Unfused: the two standalone kernels, one after the other.
-        let displace_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<OceanDisplace>().expect("displace codegen");
-        let cut_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<CutOutBox>().expect("cut codegen");
-        let displace_pipeline = device.create_compute_pipeline(&displace_wgsl, ENTRY, "ocean-unfused-displace");
+        let displace_wgsl =
+            manifold_node_engine::freeze::codegen::standalone_for_spec::<OceanDisplace>()
+                .expect("displace codegen");
+        let cut_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<CutOutBox>()
+            .expect("cut codegen");
+        let displace_pipeline =
+            device.create_compute_pipeline(&displace_wgsl, ENTRY, "ocean-unfused-displace");
         let cut_pipeline = device.create_compute_pipeline(&cut_wgsl, ENTRY, "ocean-unfused-cut");
         let mid = device.create_buffer_shared(bytes);
         let unfused_out = device.create_buffer_shared(bytes);
@@ -324,12 +409,35 @@ mod gpu_tests {
         enc.dispatch_compute(
             &fused_pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::cast_slice(&words) },
-                GpuBinding::Buffer { binding: binding_of("src_0"), buffer: &mesh, offset: 0 },
-                GpuBinding::Buffer { binding: binding_of("src_1"), buffer: &fb[0], offset: 0 },
-                GpuBinding::Buffer { binding: binding_of("src_2"), buffer: &fb[1], offset: 0 },
-                GpuBinding::Buffer { binding: binding_of("src_3"), buffer: &fb[2], offset: 0 },
-                GpuBinding::Buffer { binding: binding_of("dst"), buffer: &fused_out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::cast_slice(&words),
+                },
+                GpuBinding::Buffer {
+                    binding: binding_of("src_0"),
+                    buffer: &mesh,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: binding_of("src_1"),
+                    buffer: &fb[0],
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: binding_of("src_2"),
+                    buffer: &fb[1],
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: binding_of("src_3"),
+                    buffer: &fb[2],
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: binding_of("dst"),
+                    buffer: &fused_out,
+                    offset: 0,
+                },
             ],
             groups,
             "ocean-fused-test",
@@ -337,12 +445,35 @@ mod gpu_tests {
         enc.dispatch_compute(
             &displace_pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&du) },
-                GpuBinding::Buffer { binding: 1, buffer: &mesh, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: &fb[0], offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: &fb[1], offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: &fb[2], offset: 0 },
-                GpuBinding::Buffer { binding: 5, buffer: &mid, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&du),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &mesh,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: &fb[0],
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: &fb[1],
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: &fb[2],
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: &mid,
+                    offset: 0,
+                },
             ],
             groups,
             "ocean-unfused-displace",
@@ -350,9 +481,20 @@ mod gpu_tests {
         enc.dispatch_compute(
             &cut_pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&cu) },
-                GpuBinding::Buffer { binding: 1, buffer: &mid, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: &unfused_out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&cu),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &mid,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: &unfused_out,
+                    offset: 0,
+                },
             ],
             groups,
             "ocean-unfused-cut",
@@ -361,10 +503,21 @@ mod gpu_tests {
         let (fused, unfused) = (read(&fused_out, n), read(&unfused_out, n));
         let (mut moved, mut hidden) = (0, 0);
         for (i, (a, b)) in fused.iter().zip(&unfused).enumerate() {
-            assert_eq!(bytemuck::bytes_of(a), bytemuck::bytes_of(b), "vertex {i}: fused {:?} {:?} vs unfused {:?} {:?}", a.position, a.color, b.position, b.color);
+            assert_eq!(
+                bytemuck::bytes_of(a),
+                bytemuck::bytes_of(b),
+                "vertex {i}: fused {:?} {:?} vs unfused {:?} {:?}",
+                a.position,
+                a.color,
+                b.position,
+                b.color
+            );
             moved += usize::from(a.position != vertices[i].position);
             hidden += usize::from(a.color[3] == 0.0);
         }
-        assert!(moved > 0 && hidden > 0, "the fixture must move and cut vertices ({moved}, {hidden})");
+        assert!(
+            moved > 0 && hidden > 0,
+            "the fixture must move and cut vertices ({moved}, {hidden})"
+        );
     }
 }

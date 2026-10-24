@@ -1,285 +1,414 @@
-    use manifold_nodes_water::testkit::preset_extents::{check_preset_extents, LiquidPreset};
-use manifold_node_engine::exec::extent::*;
-use manifold_water_liquid::lattice::LiquidLattice;
 use manifold_core::effect_graph_def::EffectGraphDef;
-    use manifold_core::fluid_domain::domain_layout;
+use manifold_core::fluid_domain::domain_layout;
+use manifold_node_engine::exec::extent::*;
+use manifold_nodes_water::testkit::preset_extents::{LiquidPreset, check_preset_extents};
+use manifold_water_liquid::lattice::LiquidLattice;
 
-
-
-
-
-    #[test]
-    fn liquid_mesh_grid_native_dispatch_extents_are_covered() {
-        for (size, resolution) in [(4.0, 64), (1.0, 8), (6.0, 32)] {
-            let layout = domain_layout(None, size, resolution).unwrap();
-            let mesh = LiquidLattice::from_layout(&layout).surface();
-            let solid_nodes = mesh.nodes().map(u64::from);
-            let solid_count = solid_nodes.into_iter().product::<u64>();
-            assert_eq!(mesh.solid_bytes(), solid_count * 4);
-            for scale in [1u64, 2, 3, 4] {
-                let nodes = solid_nodes.map(|n| (n - 1) * scale + 1);
-                let count = nodes.into_iter().product::<u64>();
-                let cells = nodes.map(|n| n - 1);
-                let cell_count = cells.into_iter().product::<u64>();
-                // Node dispatches (splat, smoothing, offsets, redistance,
-                // clamp) use count; MC dispatches use cell_count. The last
-                // MC cell's +1 corner is exactly the last allocated node.
-                let last_corner = cells[0] + nodes[0] * (cells[1] + nodes[1] * cells[2]);
-                assert_eq!(last_corner, count - 1);
-                assert!(count * 4 <= u64::from(u32::MAX));
-                assert!(cell_count * 15 <= u64::from(u32::MAX));
-                assert!(count <= count.div_ceil(256) * 256);
-                assert!(count.div_ceil(256) * 256 - count < 256);
-            }
-        }
-        // Walk actual producers and consumers with extent.rs, including
-        // provided solids, frame rings, sparse schedules and mesh outputs.
-        let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "WaterDamBreakGpuFlip").unwrap();
-        for resolution in [8, 32, 64] {
-            let report = check_preset_extents(def.as_ref(), resolution).unwrap();
-            assert!(report.checked > 20);
+#[test]
+fn liquid_mesh_grid_native_dispatch_extents_are_covered() {
+    for (size, resolution) in [(4.0, 64), (1.0, 8), (6.0, 32)] {
+        let layout = domain_layout(None, size, resolution).unwrap();
+        let mesh = LiquidLattice::from_layout(&layout).surface();
+        let solid_nodes = mesh.nodes().map(u64::from);
+        let solid_count = solid_nodes.into_iter().product::<u64>();
+        assert_eq!(mesh.solid_bytes(), solid_count * 4);
+        for scale in [1u64, 2, 3, 4] {
+            let nodes = solid_nodes.map(|n| (n - 1) * scale + 1);
+            let count = nodes.into_iter().product::<u64>();
+            let cells = nodes.map(|n| n - 1);
+            let cell_count = cells.into_iter().product::<u64>();
+            // Node dispatches (splat, smoothing, offsets, redistance,
+            // clamp) use count; MC dispatches use cell_count. The last
+            // MC cell's +1 corner is exactly the last allocated node.
+            let last_corner = cells[0] + nodes[0] * (cells[1] + nodes[1] * cells[2]);
+            assert_eq!(last_corner, count - 1);
+            assert!(count * 4 <= u64::from(u32::MAX));
+            assert!(cell_count * 15 <= u64::from(u32::MAX));
+            assert!(count <= count.div_ceil(256) * 256);
+            assert!(count.div_ceil(256) * 256 - count < 256);
         }
     }
-
-    /// Every engine scene holding a liquid domain.
-    fn liquid_presets() -> Vec<(String, std::sync::Arc<EffectGraphDef>)> {
-        let holds_liquid = |def: &EffectGraphDef| {
-            let flat = manifold_node_engine::load::expand::flatten_expanded(def, &manifold_node_engine::persistence::PrimitiveRegistry::with_builtin()).expect("flattens");
-            flat.nodes.iter().any(|node| is_liquid_domain(&node.type_id))
-        };
-        manifold_nodes::engine_scenes::all()
-            .filter(|(_, def)| holds_liquid(def.as_ref()))
-            .map(|(id, def)| (id.to_string(), def))
-            .collect()
+    // Walk actual producers and consumers with extent.rs, including
+    // provided solids, frame rings, sparse schedules and mesh outputs.
+    let (_, def) = liquid_presets()
+        .into_iter()
+        .find(|(id, _)| id == "WaterDamBreakGpuFlip")
+        .unwrap();
+    for resolution in [8, 32, 64] {
+        let report = check_preset_extents(def.as_ref(), resolution).unwrap();
+        assert!(report.checked > 20);
     }
+}
 
-    fn particle_blend_preset() -> EffectGraphDef {
-        serde_json::from_str(include_str!("../../../fixtures/presets/WaterDamBreakParticles.json")).unwrap()
-    }
+/// Every engine scene holding a liquid domain.
+fn liquid_presets() -> Vec<(String, std::sync::Arc<EffectGraphDef>)> {
+    let holds_liquid = |def: &EffectGraphDef| {
+        let flat = manifold_node_engine::load::expand::flatten_expanded(
+            def,
+            &manifold_node_engine::persistence::PrimitiveRegistry::with_builtin(),
+        )
+        .expect("flattens");
+        flat.nodes
+            .iter()
+            .any(|node| is_liquid_domain(&node.type_id))
+    };
+    manifold_nodes::engine_scenes::all()
+        .filter(|(_, def)| holds_liquid(def.as_ref()))
+        .map(|(id, def)| (id.to_string(), def))
+        .collect()
+}
 
-    #[test]
-    fn particle_blend_presets_have_complete_extent_rules() {
-        for text in [
-            include_str!("../../../fixtures/presets/WaterDamBreakGpuFlip.json"),
-            include_str!("../../../fixtures/presets/WaterDamBreakParticles.json"),
-        ] {
-            let def = serde_json::from_str(text).unwrap();
-            for resolution in [16, 32] {
-                check_preset_extents(&def, resolution).unwrap();
-            }
+fn particle_blend_preset() -> EffectGraphDef {
+    serde_json::from_str(include_str!(
+        "../../../fixtures/presets/WaterDamBreakParticles.json"
+    ))
+    .unwrap()
+}
+
+#[test]
+fn particle_blend_presets_have_complete_extent_rules() {
+    for text in [
+        include_str!("../../../fixtures/presets/WaterDamBreakGpuFlip.json"),
+        include_str!("../../../fixtures/presets/WaterDamBreakParticles.json"),
+    ] {
+        let def = serde_json::from_str(text).unwrap();
+        for resolution in [16, 32] {
+            check_preset_extents(&def, resolution).unwrap();
         }
     }
+}
 
-    #[test]
-    fn particle_blend_counts_and_solid_storage_are_checked() {
-        use manifold_core::effect_graph_def::SerializedParamValue;
-        for (type_id, port, value) in [
-            ("node.interpolate_particle_frames", "count_a", 16_777_216.0),
-            ("node.interpolate_particle_frames", "count_b", 16_777_216.0),
-            ("node.push_out_of_solid", "nodes_x", 4096.0),
-        ] {
-            // Corrupt the compiled topology, including nodes inside Water.
-            let mut def = manifold_core::flatten::flatten_groups(&particle_blend_preset()).expect("preset flattens");
-            let node = def.nodes.iter_mut().find(|node| node.type_id == type_id).unwrap();
-            let id = node.id;
-            node.params.insert(port.into(), SerializedParamValue::Float { value });
-            def.wires.retain(|wire| !(wire.to_node == id && wire.to_port == port));
-            match check_preset_extents(&def, 16) {
-                Err(ExtentError::Uncovered { node, .. }) => assert!(node.contains(type_id), "{node}"),
-                other => panic!("{type_id}.{port}: expected uncovered storage, got {other:?}"),
-            }
+#[test]
+fn particle_blend_counts_and_solid_storage_are_checked() {
+    use manifold_core::effect_graph_def::SerializedParamValue;
+    for (type_id, port, value) in [
+        ("node.interpolate_particle_frames", "count_a", 16_777_216.0),
+        ("node.interpolate_particle_frames", "count_b", 16_777_216.0),
+        ("node.push_out_of_solid", "nodes_x", 4096.0),
+    ] {
+        // Corrupt the compiled topology, including nodes inside Water.
+        let mut def = manifold_core::flatten::flatten_groups(&particle_blend_preset())
+            .expect("preset flattens");
+        let node = def
+            .nodes
+            .iter_mut()
+            .find(|node| node.type_id == type_id)
+            .unwrap();
+        let id = node.id;
+        node.params
+            .insert(port.into(), SerializedParamValue::Float { value });
+        def.wires
+            .retain(|wire| !(wire.to_node == id && wire.to_port == port));
+        match check_preset_extents(&def, 16) {
+            Err(ExtentError::Uncovered { node, .. }) => assert!(node.contains(type_id), "{node}"),
+            other => panic!("{type_id}.{port}: expected uncovered storage, got {other:?}"),
         }
     }
+}
 
-    #[test]
-    fn particle_blend_mix_refuses_unequal_capacities() {
-        let mut preset = LiquidPreset::build(&particle_blend_preset()).unwrap();
-        let rules: Vec<_> = EXTENT_RULES.iter().map(|rule| {
+#[test]
+fn particle_blend_mix_refuses_unequal_capacities() {
+    let mut preset = LiquidPreset::build(&particle_blend_preset()).unwrap();
+    let rules: Vec<_> = EXTENT_RULES
+        .iter()
+        .map(|rule| {
             if rule.type_id == "node.liquid_frame" {
-                ExtentRule { type_id: rule.type_id, check: manifold_node_engine::exec::extent::testkit::malformed_frame }
-            } else { *rule }
-        }).collect();
-        match manifold_nodes_water::testkit::preset_extents::testkit::check_with_rules(&mut preset, &rules) {
-            Err(ExtentError::Refused { node, reason }) => {
-                assert!(node.contains("node.mix_arrays"), "{node}");
-                assert!(reason.contains("input capacities must match"), "{reason}");
-            }
-            other => panic!("expected unequal arrays to be refused, got {other:?}"),
-        }
-    }
-
-    /// Section 3.7 (Safety rails) rule 1, I9: every liquid preset at every
-    /// resolution its domain admits either refuses by name before any GPU
-    /// work, or every buffer covers every dispatch.
-    #[test]
-    fn narrow_band_preset_small_extent_checked() {
-        let (id, def) = liquid_presets().into_iter().find(|(id, _)| id.contains("WaterDamBreakGpuFlip")).expect("GPU FLIP preset");
-        let mut preset = LiquidPreset::build(def.as_ref()).unwrap_or_else(|error| panic!("{id}: {error}"));
-        for resolution in [8, 16] {
-            let report = preset.check(resolution).unwrap_or_else(|error| panic!("{id} at {resolution}: {error}"));
-            assert!(report.checked > 0);
-        }
-    }
-
-    #[test]
-    fn liquid_blob_bounds_reject_wrong_extent_before_gpu_work() {
-        let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "WaterDamBreakGpuFlip").expect("preset");
-        for consumer in ["node.particle_volume", "node.lattice_bricks"] {
-            let mut flat = manifold_core::flatten::flatten_groups(def.as_ref()).expect("flattens");
-            let id = flat.nodes.iter().find(|n| n.type_id == consumer).expect("consumer").id;
-            // Both ports are Array<f32>, so the graph type check accepts this
-            // deliberately wrong wire. The extent contract must reject it.
-            let solid = flat.wires.iter().find(|w| w.to_node == id && w.to_port == "solid").expect("solid wire").clone();
-            let bound = flat.wires.iter_mut().find(|w| w.to_node == id && w.to_port == "bounds").expect("bounds wire");
-            bound.from_node = solid.from_node;
-            bound.from_port = solid.from_port;
-            match check_preset_extents(&flat, 8) {
-                Err(ExtentError::Uncovered { detail, .. }) => assert!(detail.contains("bounds must contain exactly two"), "{consumer}: {detail}"),
-                other => panic!("{consumer}: expected a malformed bounds refusal, got {other:?}"),
-            }
-        }
-    }
-
-    #[test]
-    fn liquid_mesh_contact_rejects_short_solid_before_gpu_work() {
-        let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "WaterDamBreakGpuFlip").expect("preset");
-        let mut flat = manifold_core::flatten::flatten_groups(def.as_ref()).expect("flattens");
-        let mesh = flat.nodes.iter().find(|n| n.type_id == "node.volume_surface_mesh").expect("mesh").id;
-        let bounds = flat.nodes.iter().find(|n| n.type_id == "node.blob_bounds").expect("two-float source").id;
-        let solid = flat.wires.iter_mut().find(|w| w.to_node == mesh && w.to_port == "solid").expect("solid wire");
-        solid.from_node = bounds;
-        solid.from_port = "bounds".into();
-        match check_preset_extents(&flat, 8) {
-            Err(ExtentError::Uncovered { node, detail }) => {
-                // The early solid refusal leaves owned outputs unsized, so
-                // the walk may report that before its final coverage pass.
-                assert!(node.contains("volume_surface_mesh"), "{node}: {detail}");
-            }
-            other => panic!("expected a short solid lattice refusal, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn liquid_presets_all_extent_checked() {
-        let presets = liquid_presets();
-        assert!(presets.len() >= 7, "liquid presets: {:?}", presets.iter().map(|(id, _)| id).collect::<Vec<_>>());
-        let mut refusals: AHashMap<String, (u32, String)> = AHashMap::default();
-        for (id, def) in &presets {
-            let mut preset = LiquidPreset::build(def.as_ref()).unwrap_or_else(|error| panic!("{id}: {error}"));
-            let resolutions = preset.resolutions();
-            assert_eq!(resolutions, 8..=512, "{id}");
-            let mut largest = None;
-            for resolution in resolutions {
-                match preset.check(resolution) {
-                    Ok(report) => {
-                        assert!(report.checked > 0, "{id} at {resolution}");
-                        largest = Some((resolution, report));
-                    }
-                    Err(ExtentError::Refused { node, reason }) => {
-                        refusals.entry(id.clone()).or_insert((resolution, format!("{node}: {reason}")));
-                    }
-                    Err(error) => panic!("{id} at resolution {resolution}: {error}"),
+                ExtentRule {
+                    type_id: rule.type_id,
+                    check: manifold_node_engine::exec::extent::testkit::malformed_frame,
                 }
+            } else {
+                *rule
             }
-            let (resolution, report) = largest.unwrap_or_else(|| panic!("{id}: no resolution runs"));
-            println!(
-                "{id}: runs to resolution {resolution} ({} nodes checked, {:.2} GB at the top)",
-                report.checked,
-                report.scene_bytes as f64 / 1e9
-            );
+        })
+        .collect();
+    match manifold_nodes_water::testkit::preset_extents::testkit::check_with_rules(
+        &mut preset,
+        &rules,
+    ) {
+        Err(ExtentError::Refused { node, reason }) => {
+            assert!(node.contains("node.mix_arrays"), "{node}");
+            assert!(reason.contains("input capacities must match"), "{reason}");
         }
-        let mut refusals: Vec<_> = refusals.into_iter().collect();
-        refusals.sort();
-        for (id, (resolution, reason)) in &refusals {
-            println!("{id}: first refused at resolution {resolution}: {reason}");
-            assert!(reason.contains("Resolution") || reason.contains("Grid Budget"), "{id}: {reason}");
+        other => panic!("expected unequal arrays to be refused, got {other:?}"),
+    }
+}
+
+/// Section 3.7 (Safety rails) rule 1, I9: every liquid preset at every
+/// resolution its domain admits either refuses by name before any GPU
+/// work, or every buffer covers every dispatch.
+#[test]
+fn narrow_band_preset_small_extent_checked() {
+    let (id, def) = liquid_presets()
+        .into_iter()
+        .find(|(id, _)| id.contains("WaterDamBreakGpuFlip"))
+        .expect("GPU FLIP preset");
+    let mut preset =
+        LiquidPreset::build(def.as_ref()).unwrap_or_else(|error| panic!("{id}: {error}"));
+    for resolution in [8, 16] {
+        let report = preset
+            .check(resolution)
+            .unwrap_or_else(|error| panic!("{id} at {resolution}: {error}"));
+        assert!(report.checked > 0);
+    }
+}
+
+#[test]
+fn liquid_blob_bounds_reject_wrong_extent_before_gpu_work() {
+    let (_, def) = liquid_presets()
+        .into_iter()
+        .find(|(id, _)| id == "WaterDamBreakGpuFlip")
+        .expect("preset");
+    for consumer in ["node.particle_volume", "node.lattice_bricks"] {
+        let mut flat = manifold_core::flatten::flatten_groups(def.as_ref()).expect("flattens");
+        let id = flat
+            .nodes
+            .iter()
+            .find(|n| n.type_id == consumer)
+            .expect("consumer")
+            .id;
+        // Both ports are Array<f32>, so the graph type check accepts this
+        // deliberately wrong wire. The extent contract must reject it.
+        let solid = flat
+            .wires
+            .iter()
+            .find(|w| w.to_node == id && w.to_port == "solid")
+            .expect("solid wire")
+            .clone();
+        let bound = flat
+            .wires
+            .iter_mut()
+            .find(|w| w.to_node == id && w.to_port == "bounds")
+            .expect("bounds wire");
+        bound.from_node = solid.from_node;
+        bound.from_port = solid.from_port;
+        match check_preset_extents(&flat, 8) {
+            Err(ExtentError::Uncovered { detail, .. }) => assert!(
+                detail.contains("bounds must contain exactly two"),
+                "{consumer}: {detail}"
+            ),
+            other => panic!("{consumer}: expected a malformed bounds refusal, got {other:?}"),
         }
     }
+}
+
+#[test]
+fn liquid_mesh_contact_rejects_short_solid_before_gpu_work() {
+    let (_, def) = liquid_presets()
+        .into_iter()
+        .find(|(id, _)| id == "WaterDamBreakGpuFlip")
+        .expect("preset");
+    let mut flat = manifold_core::flatten::flatten_groups(def.as_ref()).expect("flattens");
+    let mesh = flat
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.volume_surface_mesh")
+        .expect("mesh")
+        .id;
+    let bounds = flat
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.blob_bounds")
+        .expect("two-float source")
+        .id;
+    let solid = flat
+        .wires
+        .iter_mut()
+        .find(|w| w.to_node == mesh && w.to_port == "solid")
+        .expect("solid wire");
+    solid.from_node = bounds;
+    solid.from_port = "bounds".into();
+    match check_preset_extents(&flat, 8) {
+        Err(ExtentError::Uncovered { node, detail }) => {
+            // The early solid refusal leaves owned outputs unsized, so
+            // the walk may report that before its final coverage pass.
+            assert!(node.contains("volume_surface_mesh"), "{node}: {detail}");
+        }
+        other => panic!("expected a short solid lattice refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn liquid_presets_all_extent_checked() {
+    let presets = liquid_presets();
+    assert!(
+        presets.len() >= 7,
+        "liquid presets: {:?}",
+        presets.iter().map(|(id, _)| id).collect::<Vec<_>>()
+    );
+    let mut refusals: AHashMap<String, (u32, String)> = AHashMap::default();
+    for (id, def) in &presets {
+        let mut preset =
+            LiquidPreset::build(def.as_ref()).unwrap_or_else(|error| panic!("{id}: {error}"));
+        let resolutions = preset.resolutions();
+        assert_eq!(resolutions, 8..=512, "{id}");
+        let mut largest = None;
+        for resolution in resolutions {
+            match preset.check(resolution) {
+                Ok(report) => {
+                    assert!(report.checked > 0, "{id} at {resolution}");
+                    largest = Some((resolution, report));
+                }
+                Err(ExtentError::Refused { node, reason }) => {
+                    refusals
+                        .entry(id.clone())
+                        .or_insert((resolution, format!("{node}: {reason}")));
+                }
+                Err(error) => panic!("{id} at resolution {resolution}: {error}"),
+            }
+        }
+        let (resolution, report) = largest.unwrap_or_else(|| panic!("{id}: no resolution runs"));
+        println!(
+            "{id}: runs to resolution {resolution} ({} nodes checked, {:.2} GB at the top)",
+            report.checked,
+            report.scene_bytes as f64 / 1e9
+        );
+    }
+    let mut refusals: Vec<_> = refusals.into_iter().collect();
+    refusals.sort();
+    for (id, (resolution, reason)) in &refusals {
+        println!("{id}: first refused at resolution {resolution}: {reason}");
+        assert!(
+            reason.contains("Resolution") || reason.contains("Grid Budget"),
+            "{id}: {reason}"
+        );
+    }
+}
 
 use ahash::AHashMap;
 use manifold_core::liquid_domain::is_liquid_domain;
 
-    /// A graph with a GPU atom no rule knows fails by name.
-    #[test]
-    fn an_atom_without_a_rule_fails_by_name() {
-        let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "WaterDamBreakMatter").expect("preset");
-        let mut preset = LiquidPreset::build(def.as_ref()).expect("builds");
-        let rules: Vec<ExtentRule> =
-            EXTENT_RULES.iter().filter(|rule| rule.type_id != "node.matter_to_grid").copied().collect();
-        match manifold_nodes_water::testkit::preset_extents::testkit::check_with_rules(&mut preset, &rules) {
-            Err(ExtentError::NoRule { type_id, .. }) => assert_eq!(type_id, "node.matter_to_grid"),
-            other => panic!("expected a missing rule, got {other:?}"),
-        }
+/// A graph with a GPU atom no rule knows fails by name.
+#[test]
+fn an_atom_without_a_rule_fails_by_name() {
+    let (_, def) = liquid_presets()
+        .into_iter()
+        .find(|(id, _)| id == "WaterDamBreakMatter")
+        .expect("preset");
+    let mut preset = LiquidPreset::build(def.as_ref()).expect("builds");
+    let rules: Vec<ExtentRule> = EXTENT_RULES
+        .iter()
+        .filter(|rule| rule.type_id != "node.matter_to_grid")
+        .copied()
+        .collect();
+    match manifold_nodes_water::testkit::preset_extents::testkit::check_with_rules(
+        &mut preset,
+        &rules,
+    ) {
+        Err(ExtentError::NoRule { type_id, .. }) => assert_eq!(type_id, "node.matter_to_grid"),
+        other => panic!("expected a missing rule, got {other:?}"),
     }
+}
 
-    /// A mesher told its lattice is larger than the level set it reads is
-    /// caught before the GPU: Dam Break Matter with count_surface_triangles
-    /// unwired from the volume's lattice and set to 4096 nodes per axis.
-    #[test]
-    fn a_lattice_past_its_storage_is_caught() {
-        use manifold_core::effect_graph_def::SerializedParamValue;
-        let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "WaterDamBreakMatter").expect("preset");
-        let mut flat = manifold_core::flatten::flatten_groups(def.as_ref()).expect("flattens");
-        let counter = flat.nodes.iter().find(|node| node.type_id == "node.count_surface_triangles").map(|node| node.id).expect("a counter");
-        let lattice = ["nodes_x", "nodes_y", "nodes_z"];
-        // Exercise the dense level-set bound specifically. With a sparse
-        // schedule wired, its smaller brick bound correctly refuses first.
-        flat.wires.retain(|wire| !(wire.to_node == counter
-            && (lattice.contains(&wire.to_port.as_str()) || wire.to_port == "bricks")));
-        let node = flat.nodes.iter_mut().find(|node| node.id == counter).expect("counter");
-        for port in lattice {
-            node.params.insert(port.into(), SerializedParamValue::Float { value: 4096.0 });
+/// A mesher told its lattice is larger than the level set it reads is
+/// caught before the GPU: Dam Break Matter with count_surface_triangles
+/// unwired from the volume's lattice and set to 4096 nodes per axis.
+#[test]
+fn a_lattice_past_its_storage_is_caught() {
+    use manifold_core::effect_graph_def::SerializedParamValue;
+    let (_, def) = liquid_presets()
+        .into_iter()
+        .find(|(id, _)| id == "WaterDamBreakMatter")
+        .expect("preset");
+    let mut flat = manifold_core::flatten::flatten_groups(def.as_ref()).expect("flattens");
+    let counter = flat
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "node.count_surface_triangles")
+        .map(|node| node.id)
+        .expect("a counter");
+    let lattice = ["nodes_x", "nodes_y", "nodes_z"];
+    // Exercise the dense level-set bound specifically. With a sparse
+    // schedule wired, its smaller brick bound correctly refuses first.
+    flat.wires.retain(|wire| {
+        !(wire.to_node == counter
+            && (lattice.contains(&wire.to_port.as_str()) || wire.to_port == "bricks"))
+    });
+    let node = flat
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == counter)
+        .expect("counter");
+    for port in lattice {
+        node.params
+            .insert(port.into(), SerializedParamValue::Float { value: 4096.0 });
+    }
+    match check_preset_extents(&flat, 64) {
+        Err(ExtentError::Uncovered { node, detail }) => {
+            assert!(
+                node.contains("count_surface_triangles") && detail.starts_with("levelset holds"),
+                "{node}: {detail}"
+            );
         }
-        match check_preset_extents(&flat, 64) {
+        other => panic!("expected the level set to be short, got {other:?}"),
+    }
+}
+
+#[test]
+fn ocean_cliff_authored_extent_checked() {
+    let (_, def) = liquid_presets()
+        .into_iter()
+        .find(|(id, _)| id == "OceanCliff")
+        .expect("preset");
+    let mut preset = LiquidPreset::build(def.as_ref()).unwrap();
+    let report = preset.check_authored().unwrap();
+    println!(
+        "OceanCliff authored {:?}: {} nodes checked, {} array/private bytes",
+        preset.domains(),
+        report.checked,
+        report.scene_bytes
+    );
+}
+
+#[test]
+fn inverse_fft_extent_counts_retained_full_buffers_at_rebind_peak() {
+    let (_, def) = liquid_presets()
+        .into_iter()
+        .find(|(id, _)| id == "OceanCliff")
+        .expect("preset");
+    let preset = LiquidPreset::build(def.as_ref()).unwrap();
+    for padding in [0, 4096] {
+        let (bound, held) =
+            manifold_nodes_water::testkit::preset_extents::testkit::inverse_fft_rebind_bytes(
+                &preset, padding,
+            );
+        // Four cached pairs plus a distinct incoming pair before eviction.
+        assert_eq!(bound + held, 5 * bound);
+    }
+}
+
+#[test]
+fn ocean_gathers_reject_undersized_inputs() {
+    use manifold_core::effect_graph_def::SerializedParamValue;
+    let (_, def) = liquid_presets()
+        .into_iter()
+        .find(|(id, _)| id == "OceanCliff")
+        .expect("preset");
+    for (type_id, param, value, port) in [
+        ("node.inverse_fft_2d", "size", 512.0, "spectrum"),
+        ("node.ocean_displace", "size_0", 512.0, "field_0"),
+        ("node.make_triangles", "src_cols", 4096.0, "in"),
+    ] {
+        let mut flat =
+            manifold_core::flatten::flatten_groups(def.as_ref()).expect("preset flattens");
+        // Keep the producer's capacity unchanged while the consumer's
+        // gather footprint grows; a size-bounded exemption would miss it.
+        let node = flat
+            .nodes
+            .iter_mut()
+            .find(|node| node.type_id == type_id)
+            .expect("consumer");
+        node.params
+            .insert(param.into(), SerializedParamValue::Float { value });
+        match check_preset_extents(&flat, 8) {
             Err(ExtentError::Uncovered { node, detail }) => {
-                assert!(node.contains("count_surface_triangles") && detail.starts_with("levelset holds"), "{node}: {detail}");
+                assert!(node.contains(type_id), "{node}");
+                assert!(detail.starts_with(&format!("{port} holds ")), "{detail}");
             }
-            other => panic!("expected the level set to be short, got {other:?}"),
+            other => panic!("{type_id}.{param}: expected uncovered {port}, got {other:?}"),
         }
     }
-
-    #[test]
-    fn ocean_cliff_authored_extent_checked() {
-        let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "OceanCliff").expect("preset");
-        let mut preset = LiquidPreset::build(def.as_ref()).unwrap();
-        let report = preset.check_authored().unwrap();
-        println!("OceanCliff authored {:?}: {} nodes checked, {} array/private bytes", preset.domains(), report.checked, report.scene_bytes);
-    }
-
-    #[test]
-    fn inverse_fft_extent_counts_retained_full_buffers_at_rebind_peak() {
-        let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "OceanCliff").expect("preset");
-        let preset = LiquidPreset::build(def.as_ref()).unwrap();
-        for padding in [0, 4096] {
-            let (bound, held) = manifold_nodes_water::testkit::preset_extents::testkit::inverse_fft_rebind_bytes(&preset, padding);
-            // Four cached pairs plus a distinct incoming pair before eviction.
-            assert_eq!(bound + held, 5 * bound);
-        }
-    }
-
-    #[test]
-    fn ocean_gathers_reject_undersized_inputs() {
-        use manifold_core::effect_graph_def::SerializedParamValue;
-        let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "OceanCliff").expect("preset");
-        for (type_id, param, value, port) in [
-            ("node.inverse_fft_2d", "size", 512.0, "spectrum"),
-            ("node.ocean_displace", "size_0", 512.0, "field_0"),
-            ("node.make_triangles", "src_cols", 4096.0, "in"),
-        ] {
-            let mut flat = manifold_core::flatten::flatten_groups(def.as_ref()).expect("preset flattens");
-            // Keep the producer's capacity unchanged while the consumer's
-            // gather footprint grows; a size-bounded exemption would miss it.
-            let node = flat.nodes.iter_mut().find(|node| node.type_id == type_id).expect("consumer");
-            node.params.insert(param.into(), SerializedParamValue::Float { value });
-            match check_preset_extents(&flat, 8) {
-                Err(ExtentError::Uncovered { node, detail }) => {
-                    assert!(node.contains(type_id), "{node}");
-                    assert!(detail.starts_with(&format!("{port} holds ")), "{detail}");
-                }
-                other => panic!("{type_id}.{param}: expected uncovered {port}, got {other:?}"),
-            }
-        }
-    }
+}
 
 #[test]
 fn extent_rule_inventory_preserves_the_rule_table() {
@@ -386,7 +515,10 @@ fn extent_rule_inventory_preserves_the_rule_table() {
     expected.sort_unstable();
     let registered: Vec<_> = EXTENT_RULES.iter().map(|rule| rule.type_id).collect();
     assert_eq!(registered, expected);
-    assert!(registered.windows(2).all(|pair| pair[0] < pair[1]), "duplicate extent rule");
+    assert!(
+        registered.windows(2).all(|pair| pair[0] < pair[1]),
+        "duplicate extent rule"
+    );
 }
 
 /// BUG-ju9cb (the water column can't be removed): a preset saved with the
@@ -397,20 +529,56 @@ fn extent_rule_inventory_preserves_the_rule_table() {
 #[test]
 fn an_old_column_inside_a_group_builds_after_the_migration() {
     use manifold_core::effect_graph_def::EffectGraphWire;
-    use manifold_core::initial_fill::{INITIAL_FILL_NAME, INITIAL_VOLUME_PORT, TRANSFORM_3D_TYPE_ID, carries_initial_volume};
+    use manifold_core::initial_fill::{
+        INITIAL_FILL_NAME, INITIAL_VOLUME_PORT, TRANSFORM_3D_TYPE_ID, carries_initial_volume,
+    };
     use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
-    let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "WaterDamBreakGpuFlip").expect("preset");
+    let (_, def) = liquid_presets()
+        .into_iter()
+        .find(|(id, _)| id == "WaterDamBreakGpuFlip")
+        .expect("preset");
     let mut old = (*def).clone();
-    let body = old.nodes.iter_mut().find_map(|node| node.group.as_deref_mut().filter(|_| node.handle.as_deref() == Some("Water"))).expect("the Water group");
-    let at = body.nodes.iter().position(|node| node.handle.as_deref() == Some(INITIAL_FILL_NAME) && node.group.is_some()).expect("the Initial Fill group");
+    let body = old
+        .nodes
+        .iter_mut()
+        .find_map(|node| {
+            node.group
+                .as_deref_mut()
+                .filter(|_| node.handle.as_deref() == Some("Water"))
+        })
+        .expect("the Water group");
+    let at = body
+        .nodes
+        .iter()
+        .position(|node| node.handle.as_deref() == Some(INITIAL_FILL_NAME) && node.group.is_some())
+        .expect("the Initial Fill group");
     let fill = body.nodes.remove(at);
-    let mut column = fill.group.expect("a group").nodes.into_iter().find(|node| node.type_id == TRANSFORM_3D_TYPE_ID).expect("the column");
+    let mut column = fill
+        .group
+        .expect("a group")
+        .nodes
+        .into_iter()
+        .find(|node| node.type_id == TRANSFORM_3D_TYPE_ID)
+        .expect("the column");
     column.id = body.nodes.iter().map(|node| node.id).max().unwrap_or(0) + 1;
-    let domain = body.nodes.iter().find(|node| node.type_id == GPU_FLIP_DOMAIN_TYPE_ID).expect("the domain").id;
+    let domain = body
+        .nodes
+        .iter()
+        .find(|node| node.type_id == GPU_FLIP_DOMAIN_TYPE_ID)
+        .expect("the domain")
+        .id;
     body.wires.retain(|wire| wire.from_node != fill.id);
-    body.wires.push(EffectGraphWire { from_node: column.id, from_port: "transform".into(), to_node: domain, to_port: INITIAL_VOLUME_PORT.into() });
+    body.wires.push(EffectGraphWire {
+        from_node: column.id,
+        from_port: "transform".into(),
+        to_node: domain,
+        to_port: INITIAL_VOLUME_PORT.into(),
+    });
     body.nodes.push(column);
-    assert!(carries_initial_volume(&old), "the preset is back in its old shape");
+    assert!(
+        carries_initial_volume(&old),
+        "the preset is back in its old shape"
+    );
     let mut preset = LiquidPreset::build(&old).unwrap_or_else(|error| panic!("{error}"));
     assert!(preset.check(16).expect("the migrated preset walks").checked > 0);
 }

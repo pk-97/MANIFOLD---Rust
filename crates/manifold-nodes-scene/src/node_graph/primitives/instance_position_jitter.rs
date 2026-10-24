@@ -20,11 +20,11 @@
 //! `simplex3d` from `noise_common.wgsl` (same file the legacy reads
 //! from), so the noise samples agree byte-for-byte.
 
-use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
+use std::borrow::Cow;
 
-use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
@@ -206,4 +206,3 @@ impl Primitive for InstancePositionJitter {
         );
     }
 }
-

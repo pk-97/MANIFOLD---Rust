@@ -81,7 +81,9 @@ pub fn run(args: &[String]) -> ! {
     let parsed = match parse_args(args) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("export-repro: {e}\nusage: export-repro <project> --output <path> --start <beat> --end <beat> --width N --height N --fps N");
+            eprintln!(
+                "export-repro: {e}\nusage: export-repro <project> --output <path> --start <beat> --end <beat> --width N --height N --fps N"
+            );
             std::process::exit(2);
         }
     };
@@ -238,12 +240,26 @@ mod tests {
     #[test]
     fn rejects_non_finite_numeric_flags() {
         let base = vec![
-            "export-repro", "scene.manifold", "--output", "out.mp4", "--start", "1",
-            "--end", "2", "--width", "1", "--height", "1", "--fps", "60",
+            "export-repro",
+            "scene.manifold",
+            "--output",
+            "out.mp4",
+            "--start",
+            "1",
+            "--end",
+            "2",
+            "--width",
+            "1",
+            "--height",
+            "1",
+            "--fps",
+            "60",
         ];
-        for (flag, values) in [("--start", ["NaN", "inf", "-inf"]),
+        for (flag, values) in [
+            ("--start", ["NaN", "inf", "-inf"]),
             ("--end", ["NaN", "inf", "-inf"]),
-            ("--fps", ["NaN", "inf", "-inf"])] {
+            ("--fps", ["NaN", "inf", "-inf"]),
+        ] {
             for value in values {
                 let mut args = base.iter().map(|s| s.to_string()).collect::<Vec<_>>();
                 let index = args.iter().position(|s| s == flag).unwrap() + 1;

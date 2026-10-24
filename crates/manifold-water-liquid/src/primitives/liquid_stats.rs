@@ -10,8 +10,8 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 
 const SHADER_SOURCE: &str = include_str!("shaders/liquid_stats.wgsl");
@@ -171,8 +171,16 @@ impl StatsPipelines {
     fn new(device: &manifold_gpu::GpuDevice) -> Self {
         let shader = with_stats_layout(SHADER_SOURCE);
         Self {
-            particles: device.create_compute_pipeline(&shader, "particles_main", "node.liquid_stats.particles"),
-            finish: device.create_compute_pipeline(&shader, "finish_main", "node.liquid_stats.finish"),
+            particles: device.create_compute_pipeline(
+                &shader,
+                "particles_main",
+                "node.liquid_stats.particles",
+            ),
+            finish: device.create_compute_pipeline(
+                &shader,
+                "finish_main",
+                "node.liquid_stats.finish",
+            ),
         }
     }
 }
@@ -224,7 +232,12 @@ impl Primitive for LiquidStats {
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         (port_name == "stats_out")
-            .then(|| input_capacities.iter().find(|(p, _)| *p == "stats").map(|&(_, n)| n))
+            .then(|| {
+                input_capacities
+                    .iter()
+                    .find(|(p, _)| *p == "stats")
+                    .map(|&(_, n)| n)
+            })
             .flatten()
     }
 
@@ -240,22 +253,38 @@ impl Primitive for LiquidStats {
         let capped = ctx.inputs.array("capped");
         // In place on the stats input.
         ctx.mark_gpu_accessed();
-        let (Some(particles), Some(stats)) = (particles, stats) else { return };
+        let (Some(particles), Some(stats)) = (particles, stats) else {
+            return;
+        };
         if stats.size < u64::from(LIQUID_STATS_WORDS) * 4 {
-            ctx.error(format!("Liquid Stats: the stats array holds fewer than {LIQUID_STATS_WORDS} words"));
+            ctx.error(format!(
+                "Liquid Stats: the stats array holds fewer than {LIQUID_STATS_WORDS} words"
+            ));
             return;
         }
-        let count = requested.min((particles.size / std::mem::size_of::<FluidParticle>() as u64) as u32);
+        let count =
+            requested.min((particles.size / std::mem::size_of::<FluidParticle>() as u64) as u32);
         let partial_bytes = partial_bytes(count);
         let gpu = ctx.gpu_encoder();
-        let pipelines = self.pipelines.as_ref().expect("liquid stats pipelines built by prepare_pipelines at install");
-        if self.partials.as_ref().is_none_or(|b| b.size < partial_bytes) {
+        let pipelines = self
+            .pipelines
+            .as_ref()
+            .expect("liquid stats pipelines built by prepare_pipelines at install");
+        if self
+            .partials
+            .as_ref()
+            .is_none_or(|b| b.size < partial_bytes)
+        {
             self.partials = Some(gpu.device.create_buffer(partial_bytes));
         }
         let partials = self.partials.as_ref().expect("partials prepared");
-        let slots = (particles.size / std::mem::size_of::<FluidParticle>() as u64).min(u64::from(u32::MAX)) as u32;
-        let has_solver = capped.is_some_and(|c| c.size >= (2 * u64::from(slots) + u64::from(SOLVER_WORDS)) * 4);
-        let count = capped.map_or(count, |c| count.min((c.size / 8).min(u64::from(u32::MAX)) as u32));
+        let slots = (particles.size / std::mem::size_of::<FluidParticle>() as u64)
+            .min(u64::from(u32::MAX)) as u32;
+        let has_solver =
+            capped.is_some_and(|c| c.size >= (2 * u64::from(slots) + u64::from(SOLVER_WORDS)) * 4);
+        let count = capped.map_or(count, |c| {
+            count.min((c.size / 8).min(u64::from(u32::MAX)) as u32)
+        });
         let groups = count.div_ceil(BLOCK);
         let params = StatsParams {
             count,
@@ -267,16 +296,45 @@ impl Primitive for LiquidStats {
             _pad: [0; 2],
         };
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
-            GpuBinding::Buffer { binding: 1, buffer: particles, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: partials, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: stats, offset: 0 },
-            GpuBinding::Buffer { binding: 4, buffer: capped.unwrap_or(particles), offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&params),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: particles,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: partials,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: stats,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: capped.unwrap_or(particles),
+                offset: 0,
+            },
         ];
         if groups > 0 {
-            gpu.native_enc.dispatch_compute(&pipelines.particles, &bindings, [groups, 1, 1], "node.liquid_stats.particles");
+            gpu.native_enc.dispatch_compute(
+                &pipelines.particles,
+                &bindings,
+                [groups, 1, 1],
+                "node.liquid_stats.particles",
+            );
         }
-        gpu.native_enc.dispatch_compute(&pipelines.finish, &bindings, [1, 1, 1], "node.liquid_stats.finish");
+        gpu.native_enc.dispatch_compute(
+            &pipelines.finish,
+            &bindings,
+            [1, 1, 1],
+            "node.liquid_stats.finish",
+        );
     }
 }
 
@@ -290,18 +348,53 @@ mod tests {
         assert_eq!(std::mem::size_of::<StatsParams>(), 32);
         assert!(shader.contains("struct StatsParams"));
         assert_eq!(std::mem::size_of::<FluidParticle>(), 32);
-        assert!(!shader.contains("atomic"), "GPU FLIP: the tick statistics use no atomics");
+        assert!(
+            !shader.contains("atomic"),
+            "GPU FLIP: the tick statistics use no atomics"
+        );
         let module = naga::front::wgsl::parse_str(&shader).expect("liquid_stats.wgsl parses");
-        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
-            .validate(&module)
-            .expect("liquid_stats.wgsl validates");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("liquid_stats.wgsl validates");
     }
 
     #[test]
     fn liquid_stats_words_decode() {
         let mut words = [0u32; LIQUID_STATS_WORDS as usize];
-        words[..17].copy_from_slice(&[2, 5, 1.5f32.to_bits(), 0.25f32.to_bits(), 1.0f32.to_bits(), (-2.0f32).to_bits(), 0.0f32.to_bits(), 3.0f32.to_bits(), 4, 1, 40, 12, 1, 2, 0.5f32.to_bits(), 0.125f32.to_bits(), 0.3125f32.to_bits()]);
-        words[17..27].copy_from_slice(&[3, 4, 5, 6, 7, 0.75f32.to_bits(), 3, 0.5f32.to_bits(), 9, 2]);
+        words[..17].copy_from_slice(&[
+            2,
+            5,
+            1.5f32.to_bits(),
+            0.25f32.to_bits(),
+            1.0f32.to_bits(),
+            (-2.0f32).to_bits(),
+            0.0f32.to_bits(),
+            3.0f32.to_bits(),
+            4,
+            1,
+            40,
+            12,
+            1,
+            2,
+            0.5f32.to_bits(),
+            0.125f32.to_bits(),
+            0.3125f32.to_bits(),
+        ]);
+        words[17..27].copy_from_slice(&[
+            3,
+            4,
+            5,
+            6,
+            7,
+            0.75f32.to_bits(),
+            3,
+            0.5f32.to_bits(),
+            9,
+            2,
+        ]);
         words[NARROW_BAND_SHORTAGE_WORD as usize] = 11;
         words[INFLOW_BIRTHS_WORD as usize] = 640;
         words[INFLOW_REFUSED_WORD as usize] = 64;

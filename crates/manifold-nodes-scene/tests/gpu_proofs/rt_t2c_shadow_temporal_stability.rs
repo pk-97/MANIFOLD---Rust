@@ -45,13 +45,13 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    ensure_normal_sources, GiMaterial, MetalShadowRayTracer, RtObjectGeometry,
-    ShadowRayParams, ShadowRayTracer,
+    GiMaterial, MetalShadowRayTracer, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
+    ensure_normal_sources,
 };
-use manifold_gpu::{ShadowCaster, upload_shadow_casters};
 use manifold_gpu::{
     GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
+use manifold_gpu::{ShadowCaster, upload_shadow_casters};
 
 use manifold_nodes_scene::testkit::gpu_harness as harness;
 
@@ -144,12 +144,30 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
     // Occluder quad, x,y in [-4,4] at z = OCCLUDER_Z, u = (x+4)/8.
     let z = OCCLUDER_Z;
     let verts = [
-        PackedVertexUV { pos: [-4.0, -4.0, z], uv: [0.0, 0.0] },
-        PackedVertexUV { pos: [4.0, -4.0, z], uv: [1.0, 0.0] },
-        PackedVertexUV { pos: [4.0, 4.0, z], uv: [1.0, 1.0] },
-        PackedVertexUV { pos: [-4.0, -4.0, z], uv: [0.0, 0.0] },
-        PackedVertexUV { pos: [4.0, 4.0, z], uv: [1.0, 1.0] },
-        PackedVertexUV { pos: [-4.0, 4.0, z], uv: [0.0, 1.0] },
+        PackedVertexUV {
+            pos: [-4.0, -4.0, z],
+            uv: [0.0, 0.0],
+        },
+        PackedVertexUV {
+            pos: [4.0, -4.0, z],
+            uv: [1.0, 0.0],
+        },
+        PackedVertexUV {
+            pos: [4.0, 4.0, z],
+            uv: [1.0, 1.0],
+        },
+        PackedVertexUV {
+            pos: [-4.0, -4.0, z],
+            uv: [0.0, 0.0],
+        },
+        PackedVertexUV {
+            pos: [4.0, 4.0, z],
+            uv: [1.0, 1.0],
+        },
+        PackedVertexUV {
+            pos: [-4.0, 4.0, z],
+            uv: [0.0, 1.0],
+        },
     ];
     let vertex_buffer = write_shared_buffer(device, &verts);
 
@@ -168,7 +186,9 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         "rt-t2c-cutout-stripe",
     );
 
-    let objects = [RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER, material_attributes: Default::default(),
+    let objects = [RtObjectGeometry {
+        instance_inner: RtObjectGeometry::NO_INNER,
+        material_attributes: Default::default(),
         vertex_buffer: &vertex_buffer,
         vertex_stride: std::mem::size_of::<PackedVertexUV>() as u32,
         vertex_offset: 0,
@@ -205,9 +225,13 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
     let tracer = MetalShadowRayTracer::new(device);
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
     // below (built before the trace dispatch on the same command buffer).
-    let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
+    let plan = tracer
+        .plan_accel(device, None, &objects)
+        .expect("plan accel");
     let mut accel_slot = None;
-    tracer.prepare_accel(device, &mut accel_slot, plan).expect("prepare accel");
+    tracer
+        .prepare_accel(device, &mut accel_slot, plan)
+        .expect("prepare accel");
     let mut accel = accel_slot.unwrap();
 
     let mut normal_sources_slot = None;
@@ -218,8 +242,7 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         device,
         &objects,
     );
-    let normal_sources_buffer =
-        normal_sources_slot.expect("ensure_normal_sources must allocate");
+    let normal_sources_buffer = normal_sources_slot.expect("ensure_normal_sources must allocate");
 
     let depth_px = vec![0.3f32; WIDTH as usize];
     let depth_tex = upload_texture_f32(
@@ -243,7 +266,11 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
     });
     let out_irr = write_only_texture(device, GpuTextureFormat::Rgba16Float, "rt-t2c-out_irr-stub");
     let out_n = write_only_texture(device, GpuTextureFormat::Rgba16Float, "rt-t2c-out_n-stub");
-    let out_refl = write_only_texture(device, GpuTextureFormat::Rgba16Float, "rt-t2c-out_refl-stub");
+    let out_refl = write_only_texture(
+        device,
+        GpuTextureFormat::Rgba16Float,
+        "rt-t2c-out_refl-stub",
+    );
     let prefiltered_env = device.create_texture(&GpuTextureDesc {
         width: 1,
         height: 1,
@@ -272,8 +299,8 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         [WIDTH, 1],
         [WIDTH, 1],
         0.0,
-        0, // ao_spp — AO off, this proof is the shadow term only
-        0, // gi_spp
+        0,               // ao_spp — AO off, this proof is the shadow term only
+        0,               // gi_spp
         [0.0, 0.0, 0.0], // camera_pos — unused, ao_spp/gi_spp both 0
         IDENTITY,
         0, // refl_spp
@@ -286,15 +313,21 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
     // P4a: the GPU emissive preparation indexes one material row per
     // object — this fixture has no emissive geometry, so zeroed rows
     // (luma 0 → zero stats, the old "no emissive table" behavior).
-    let materials = vec![
-        GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]);
-        objects.len()
-    ];
+    let materials = vec![GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]); objects.len()];
 
     let mut encoder = device.create_encoder("rt-t2c-shadow-temporal-stability");
     let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
     tracer
-        .encode_accel_update(device, &mut encoder, &mut accel, &objects, &changes, &materials, true, true)
+        .encode_accel_update(
+            device,
+            &mut encoder,
+            &mut accel,
+            &objects,
+            &changes,
+            &materials,
+            true,
+            true,
+        )
         .expect("encode accel update");
     let out_svt = device.create_texture(&GpuTextureDesc {
         width: 1,
@@ -343,12 +376,8 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
     let ptr = readback_buf
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");
-    let floats: &[f32] = unsafe {
-        slice::from_raw_parts(
-            ptr.cast::<c_void>().cast::<f32>(),
-            (WIDTH * 4) as usize,
-        )
-    };
+    let floats: &[f32] =
+        unsafe { slice::from_raw_parts(ptr.cast::<c_void>().cast::<f32>(), (WIDTH * 4) as usize) };
     (0..WIDTH as usize).map(|i| floats[i * 4]).collect()
 }
 

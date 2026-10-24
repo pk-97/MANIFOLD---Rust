@@ -43,7 +43,9 @@ pub fn copy_param_routes(
                 if !copies.is_empty() {
                     let destination_entries = destination.$field.get_or_insert_with(Vec::new);
                     destination_entries.retain(|entry| {
-                        !remaps.iter().any(|(_, destination_id)| entry.param_id.as_ref() == destination_id)
+                        !remaps
+                            .iter()
+                            .any(|(_, destination_id)| entry.param_id.as_ref() == destination_id)
                     });
                     destination_entries.extend(copies);
                 }

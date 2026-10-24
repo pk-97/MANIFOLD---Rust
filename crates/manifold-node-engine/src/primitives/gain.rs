@@ -16,10 +16,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
+use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 use crate::exec::effect_node::EffectNodeContext;
 use crate::parameters::{ParamDef, ParamType, ParamValue};
 use crate::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -129,12 +129,16 @@ mod gpu_tests {
     use manifold_gpu::GpuTextureFormat;
 
     use super::Gain;
-    use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use crate::exec::execution_plan::{ExecutionPlan, ResourceId, compile};
+    use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use crate::gpu::render_target::RenderTarget;
     use crate::graph::Graph;
     use crate::parameters::ParamValue;
-    use crate::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, scene::boundary_nodes::Source};
-    use crate::gpu::render_target::RenderTarget;
+    use crate::{
+        exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+        exec::metal_backend::MetalBackend, scene::boundary_nodes::FinalOutput,
+        scene::boundary_nodes::Source,
+    };
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -167,7 +171,8 @@ mod gpu_tests {
         let src = g.add_node(Box::new(Source::new()));
         let gain_node = g.add_node(Box::new(Gain::new()));
         let out = g.add_node(Box::new(FinalOutput::new()));
-        g.set_param(gain_node, "gain", ParamValue::Float(gain)).unwrap();
+        g.set_param(gain_node, "gain", ParamValue::Float(gain))
+            .unwrap();
         g.connect((src, "out"), (gain_node, "in")).unwrap();
         g.connect((gain_node, "out"), (out, "in")).unwrap();
         let plan = compile(&g).unwrap();
@@ -179,7 +184,12 @@ mod gpu_tests {
         crate::testkit::gpu::clear_texture_committed(
             &device,
             &src_target.texture,
-            [rgba[0] as f64, rgba[1] as f64, rgba[2] as f64, rgba[3] as f64],
+            [
+                rgba[0] as f64,
+                rgba[1] as f64,
+                rgba[2] as f64,
+                rgba[3] as f64,
+            ],
             "gain-src-clear",
         );
 
@@ -222,7 +232,12 @@ mod gpu_tests {
         let src = [0.3_f32, 0.6, 0.2, 1.0];
         let out = run_gain_at(src, 1.0);
         for c in 0..4 {
-            assert!((out[c] - src[c]).abs() < 0.01, "ch {c}: {} != {}", out[c], src[c]);
+            assert!(
+                (out[c] - src[c]).abs() < 0.01,
+                "ch {c}: {} != {}",
+                out[c],
+                src[c]
+            );
         }
     }
 
@@ -241,7 +256,12 @@ mod gpu_tests {
         let src = [0.2_f32, 0.3, 0.4, 1.0];
         let out = run_gain_at(src, 2.0);
         for c in 0..3 {
-            assert!((out[c] - 2.0 * src[c]).abs() < 0.01, "ch {c}: {} != {}", out[c], 2.0 * src[c]);
+            assert!(
+                (out[c] - 2.0 * src[c]).abs() < 0.01,
+                "ch {c}: {} != {}",
+                out[c],
+                2.0 * src[c]
+            );
         }
         assert!((out[3] - src[3]).abs() < 0.01);
     }
@@ -264,7 +284,8 @@ mod gpu_tests {
         let gain_node = g.add_node(Box::new(Gain::new()));
         let out = g.add_node(Box::new(FinalOutput::new()));
         // Param says 2.0 (would double). Wire from Value(0.5) overrides.
-        g.set_param(gain_node, "gain", ParamValue::Float(2.0)).unwrap();
+        g.set_param(gain_node, "gain", ParamValue::Float(2.0))
+            .unwrap();
         g.set_param(val, "value", ParamValue::Float(0.5)).unwrap();
         g.connect((src, "out"), (gain_node, "in")).unwrap();
         g.connect((val, "out"), (gain_node, "gain")).unwrap();
@@ -278,7 +299,12 @@ mod gpu_tests {
         crate::testkit::gpu::clear_texture_committed(
             &device,
             &src_target.texture,
-            [src_rgba[0] as f64, src_rgba[1] as f64, src_rgba[2] as f64, src_rgba[3] as f64],
+            [
+                src_rgba[0] as f64,
+                src_rgba[1] as f64,
+                src_rgba[2] as f64,
+                src_rgba[3] as f64,
+            ],
             "gain-wired-src-clear",
         );
 

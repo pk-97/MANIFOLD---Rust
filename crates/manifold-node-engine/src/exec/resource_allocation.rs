@@ -25,7 +25,8 @@ pub struct ArrayScratch {
 inventory::collect!(ArrayScratch);
 
 pub fn array_scratch(type_id: &str) -> Option<&'static ArrayScratch> {
-    let mut entries = inventory::iter::<ArrayScratch>.into_iter()
+    let mut entries = inventory::iter::<ArrayScratch>
+        .into_iter()
         .filter(|entry| entry.type_id == type_id);
     let entry = entries.next()?;
     assert!(entries.next().is_none(), "duplicate array scratch provider");
@@ -60,18 +61,26 @@ fn capacity_lineage(
     loop {
         let mut changed = false;
         for step in plan.steps() {
-            let Some(node) = graph.get_node(step.node) else { continue; };
+            let Some(node) = graph.get_node(step.node) else {
+                continue;
+            };
             for (port, id) in &step.outputs {
-                if members[id.0 as usize] || !matches!(plan.resource_type(*id), Some(PortType::Array(_))) {
+                if members[id.0 as usize]
+                    || !matches!(plan.resource_type(*id), Some(PortType::Array(_)))
+                {
                     continue;
                 }
-                if seeded(node, port) || capacity_follows(node, port, &step.inputs, plan, &members, &mut probe) {
+                if seeded(node, port)
+                    || capacity_follows(node, port, &step.inputs, plan, &members, &mut probe)
+                {
                     members[id.0 as usize] = true;
                     changed = true;
                 }
             }
         }
-        if !changed { return members; }
+        if !changed {
+            return members;
+        }
     }
 }
 
@@ -96,8 +105,12 @@ fn capacity_follows<'a>(
     }
     let mut answer = |moved: u32| {
         probe.clear();
-        probe.extend(inputs.iter().filter(|(_, id)| matches!(plan.resource_type(*id), Some(PortType::Array(_))))
-            .map(|&(name, id)| (name, if members[id.0 as usize] { moved } else { HELD })));
+        probe.extend(
+            inputs
+                .iter()
+                .filter(|(_, id)| matches!(plan.resource_type(*id), Some(PortType::Array(_))))
+                .map(|&(name, id)| (name, if members[id.0 as usize] { moved } else { HELD })),
+        );
         node.node.array_output_capacity(port, &node.params, probe)
     };
     let first = answer(MOVES[0]);
@@ -110,19 +123,25 @@ fn capacity_follows<'a>(
 pub(crate) fn in_place_classes(graph: &Graph, plan: &ExecutionPlan) -> Vec<ResourceId> {
     fn find(class: &mut [ResourceId], resource: ResourceId) -> ResourceId {
         let mut root = resource;
-        while class[root.0 as usize] != root { root = class[root.0 as usize]; }
+        while class[root.0 as usize] != root {
+            root = class[root.0 as usize];
+        }
         class[resource.0 as usize] = root;
         root
     }
     let mut class: Vec<ResourceId> = (0..plan.resource_count() as u32).map(ResourceId).collect();
     for step in plan.steps() {
-        let Some(node) = graph.get_node(step.node) else { continue };
+        let Some(node) = graph.get_node(step.node) else {
+            continue;
+        };
         for (input_port, output_port) in node.node.aliased_array_io() {
             let input = step.inputs.iter().find(|(name, _)| name == input_port);
             let output = step.outputs.iter().find(|(name, _)| name == output_port);
             if let (Some(&(_, input)), Some(&(_, output))) = (input, output) {
                 let (a, b) = (find(&mut class, input), find(&mut class, output));
-                if a != b { class[b.0 as usize] = a; }
+                if a != b {
+                    class[b.0 as usize] = a;
+                }
             }
         }
     }
@@ -162,7 +181,9 @@ pub fn arrays_overwritten_later(
         overwritten[resource.0 as usize] = writes[at + 1..]
             .iter()
             .take_while(|&&(other, _, _)| other == storage)
-            .any(|&(_, later, other)| later > step && class[other.0 as usize] != class[resource.0 as usize]);
+            .any(|&(_, later, other)| {
+                later > step && class[other.0 as usize] != class[resource.0 as usize]
+            });
     }
     overwritten
 }
@@ -279,9 +300,10 @@ pub fn plan_array_allocations(
         // have started. Its reads/writes therefore do not share the GPU's
         // ordered lifetime model. Keep both sides of CPU/IO boundaries out
         // of scratch reuse; Metal hazard tracking cannot order mapped writes.
-        if matches!(node_inst.node.boundary_reason(),
-            Some(BoundaryReason::NonGpu | BoundaryReason::IoBridge))
-        {
+        if matches!(
+            node_inst.node.boundary_reason(),
+            Some(BoundaryReason::NonGpu | BoundaryReason::IoBridge)
+        ) {
             for (_, resource) in step.inputs.iter().chain(&step.outputs) {
                 if matches!(plan.resource_type(*resource), Some(PortType::Array(_))) {
                     excluded_resources.insert(*resource);
@@ -289,8 +311,7 @@ pub fn plan_array_allocations(
             }
         }
         for (input_port, output_port) in node_inst.node.aliased_array_io() {
-            if let Some((_, resource)) = step.inputs.iter().find(|(name, _)| *name == *input_port)
-            {
+            if let Some((_, resource)) = step.inputs.iter().find(|(name, _)| *name == *input_port) {
                 excluded_resources.insert(*resource);
             }
             if let Some((_, resource)) = step.outputs.iter().find(|(name, _)| *name == *output_port)
@@ -332,7 +353,9 @@ pub fn plan_array_allocations(
     });
     let growing = growing_array_resources(graph, plan);
     for (index, (resized, grows)) in canvas_sized.into_iter().zip(growing).enumerate() {
-        if resized || grows { excluded_resources.insert(ResourceId(index as u32)); }
+        if resized || grows {
+            excluded_resources.insert(ResourceId(index as u32));
+        }
     }
     let mut reusable: ReusableBuckets = AHashMap::default();
 
@@ -526,13 +549,7 @@ pub fn plan_array_allocations(
                         resource: *resource,
                         input: root,
                     });
-                    storage.insert(
-                        *resource,
-                        ArrayStorage {
-                            root,
-                            bytes,
-                        },
-                    );
+                    storage.insert(*resource, ArrayStorage { root, bytes });
                     current_output_roots.insert(root);
                 } else {
                     actions.push(ArrayAllocationAction::Allocate(ArrayAllocation {
@@ -638,7 +655,11 @@ pub mod lifetimes {
             }
         }
         let last = plan.steps().len().saturating_sub(1);
-        for &resource in plan.persistent_resources().iter().chain(plan.held_resources()) {
+        for &resource in plan
+            .persistent_resources()
+            .iter()
+            .chain(plan.held_resources())
+        {
             widen(resource, 0, last);
         }
         live
@@ -657,12 +678,15 @@ pub mod lifetimes {
         let class = in_place_classes(graph, plan);
         let mut ranges: AHashMap<(ResourceId, ResourceId), (usize, usize)> = AHashMap::default();
         for (&resource, storage) in &allocation.storage {
-            let Some(&(lo, hi)) = live.get(&resource) else { continue };
+            let Some(&(lo, hi)) = live.get(&resource) else {
+                continue;
+            };
             let key = (storage.root, class[resource.0 as usize]);
             let range = ranges.entry(key).or_insert((lo, hi));
             *range = (range.0.min(lo), range.1.max(hi));
         }
-        let mut by_root: AHashMap<ResourceId, Vec<(usize, usize, ResourceId)>> = AHashMap::default();
+        let mut by_root: AHashMap<ResourceId, Vec<(usize, usize, ResourceId)>> =
+            AHashMap::default();
         for (&(root, member), &(lo, hi)) in &ranges {
             by_root.entry(root).or_default().push((lo, hi, member));
         }
@@ -676,7 +700,9 @@ pub mod lifetimes {
                     latest < lo,
                     "root {root:?}: {holder:?} lives to step {latest} but {owner:?} takes it at step {lo}"
                 );
-                if hi > latest { (latest, holder) = (hi, owner); }
+                if hi > latest {
+                    (latest, holder) = (hi, owner);
+                }
             }
         }
         reused
@@ -686,12 +712,12 @@ pub mod lifetimes {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exec::execution_plan::compile;
     use crate::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
+    use crate::exec::execution_plan::compile;
     use crate::parameters::ParamDef;
-    use crate::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-
-
+    use crate::ports::{
+        ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+    };
 
     struct FixedArrayNode {
         type_id: EffectNodeType,
@@ -775,9 +801,15 @@ mod tests {
             _: &ParamValues,
             inputs: &[(&str, u32)],
         ) -> Option<u32> {
-            let is_array = self.outputs.iter().any(|output| output.name == port && matches!(output.ty, PortType::Array(_)));
+            let is_array = self
+                .outputs
+                .iter()
+                .any(|output| output.name == port && matches!(output.ty, PortType::Array(_)));
             match self.follows {
-                Some(input) => inputs.iter().find(|(name, _)| *name == input).map(|&(_, n)| n),
+                Some(input) => inputs
+                    .iter()
+                    .find(|(name, _)| *name == input)
+                    .map(|&(_, n)| n),
                 None => is_array.then_some(self.capacity),
             }
         }
@@ -823,13 +855,17 @@ mod tests {
             for index in 0..5 {
                 let mut node = FixedArrayNode::new(
                     "test.array_stage",
-                    if index == 0 { vec![] } else {
+                    if index == 0 {
+                        vec![]
+                    } else {
                         vec![mock_port("in", array, PortKind::Input, true)]
                     },
                     vec![mock_port("out", array, PortKind::Output, false)],
                     4,
                 );
-                if index == 2 { node.boundary = Some(boundary); }
+                if index == 2 {
+                    node.boundary = Some(boundary);
+                }
                 let id = graph.add_node(Box::new(node));
                 if let Some(&previous) = nodes.last() {
                     graph.connect((previous, "out"), (id, "in")).unwrap();
@@ -837,19 +873,33 @@ mod tests {
                 nodes.push(id);
             }
             let plan = compile(&graph).unwrap();
-            let allocated = plan_array_allocations(
-                &graph, &plan, (64, 64), &AHashMap::default(),
-            ).unwrap();
-            let output = |node| plan.steps().iter().find(|step| step.node == node)
-                .unwrap().outputs[0].1;
+            let allocated =
+                plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).unwrap();
+            let output = |node| {
+                plan.steps()
+                    .iter()
+                    .find(|step| step.node == node)
+                    .unwrap()
+                    .outputs[0]
+                    .1
+            };
             for boundary_resource in [output(nodes[1]), output(nodes[2])] {
-                assert_eq!(allocated.storage[&boundary_resource].root, boundary_resource);
-                assert!(allocated.storage.iter().all(|(resource, storage)| {
-                    *resource == boundary_resource || storage.root != boundary_resource
-                }), "CPU/IO input and output storage cannot be overwritten by another step");
+                assert_eq!(
+                    allocated.storage[&boundary_resource].root,
+                    boundary_resource
+                );
+                assert!(
+                    allocated.storage.iter().all(|(resource, storage)| {
+                        *resource == boundary_resource || storage.root != boundary_resource
+                    }),
+                    "CPU/IO input and output storage cannot be overwritten by another step"
+                );
             }
-            assert_eq!(allocated.storage[&output(nodes[3])].root, output(nodes[0]),
-                "ordinary GPU lifetimes remain eligible for reuse");
+            assert_eq!(
+                allocated.storage[&output(nodes[3])].root,
+                output(nodes[0]),
+                "ordinary GPU lifetimes remain eligible for reuse"
+            );
         }
     }
 
@@ -862,10 +912,14 @@ mod tests {
         let array = PortType::Array(ArrayType::of::<u32>());
         for passthrough in [false, true] {
             let mut graph = Graph::new();
-            let stage = |graph: &mut Graph, name: &'static str, input: Option<(NodeInstanceId, &'static str)>| {
+            let stage = |graph: &mut Graph,
+                         name: &'static str,
+                         input: Option<(NodeInstanceId, &'static str)>| {
                 let mut node = FixedArrayNode::new(
                     name,
-                    input.map_or_else(Vec::new, |(_, port)| vec![mock_port(port, array, PortKind::Input, false)]),
+                    input.map_or_else(Vec::new, |(_, port)| {
+                        vec![mock_port(port, array, PortKind::Input, false)]
+                    }),
                     vec![mock_port("out", array, PortKind::Output, false)],
                     4,
                 );
@@ -889,18 +943,34 @@ mod tests {
             )));
             graph.connect((c, "out"), (sink, "in")).unwrap();
             let plan = compile(&graph).unwrap();
-            let allocated = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).unwrap();
-            let output = |node| plan.steps().iter().find(|step| step.node == node).unwrap().outputs[0].1;
+            let allocated =
+                plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).unwrap();
+            let output = |node| {
+                plan.steps()
+                    .iter()
+                    .find(|step| step.node == node)
+                    .unwrap()
+                    .outputs[0]
+                    .1
+            };
             let shared = |resource| {
-                allocated.storage.iter().any(|(other, storage)| *other != resource && storage.root == allocated.storage[&resource].root)
+                allocated.storage.iter().any(|(other, storage)| {
+                    *other != resource && storage.root == allocated.storage[&resource].root
+                })
             };
             if passthrough {
                 for resource in [output(producer), output(switch)] {
                     assert_eq!(allocated.storage[&resource].root, resource);
-                    assert!(!shared(resource), "a switch side was handed to another step");
+                    assert!(
+                        !shared(resource),
+                        "a switch side was handed to another step"
+                    );
                 }
             } else {
-                assert!(shared(output(producer)), "control: a later stage takes the freed producer storage");
+                assert!(
+                    shared(output(producer)),
+                    "control: a later stage takes the freed producer storage"
+                );
             }
         }
     }
@@ -995,35 +1065,17 @@ mod tests {
         );
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     fn output_of(plan: &ExecutionPlan, node: NodeInstanceId) -> ResourceId {
-        let step = plan.steps().iter().find(|step| step.node == node).unwrap_or_else(|| {
-            panic!("{node:?} has no step; plan runs {:?}", plan.steps().iter().map(|s| s.node).collect::<Vec<_>>())
-        });
+        let step = plan
+            .steps()
+            .iter()
+            .find(|step| step.node == node)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{node:?} has no step; plan runs {:?}",
+                    plan.steps().iter().map(|s| s.node).collect::<Vec<_>>()
+                )
+            });
         step.outputs[0].1
     }
 
@@ -1043,30 +1095,69 @@ mod tests {
         follower.follows = Some("in");
         let follower = graph.add_node(Box::new(follower));
         graph.connect((provider, "out"), (follower, "in")).unwrap();
-        let mut grids = vec![graph.add_node(Box::new(FixedArrayNode::new("test.grid", input(), output(), 8)))];
+        let mut grids = vec![graph.add_node(Box::new(FixedArrayNode::new(
+            "test.grid",
+            input(),
+            output(),
+            8,
+        )))];
         graph.connect((provider, "out"), (grids[0], "in")).unwrap();
         for _ in 0..3 {
-            let grid = graph.add_node(Box::new(FixedArrayNode::new("test.grid", input(), output(), 8)));
-            graph.connect((*grids.last().unwrap(), "out"), (grid, "in")).unwrap();
+            let grid = graph.add_node(Box::new(FixedArrayNode::new(
+                "test.grid",
+                input(),
+                output(),
+                8,
+            )));
+            graph
+                .connect((*grids.last().unwrap(), "out"), (grid, "in"))
+                .unwrap();
             grids.push(grid);
         }
         for source in [*grids.last().unwrap(), follower] {
-            let sink = graph.add_node(Box::new(FixedArrayNode::new("test.sink", input(), vec![], 1)));
+            let sink = graph.add_node(Box::new(FixedArrayNode::new(
+                "test.sink",
+                input(),
+                vec![],
+                1,
+            )));
             graph.connect((source, "out"), (sink, "in")).unwrap();
         }
 
         let plan = compile(&graph).unwrap();
         let growing = growing_array_resources(&graph, &plan);
         let grows = |node| growing[output_of(&plan, node).0 as usize];
-        assert!(grows(provider) && grows(follower), "provided storage and its followers grow");
-        assert!(grids.iter().all(|&grid| !grows(grid)), "a grid sized from params never grows");
+        assert!(
+            grows(provider) && grows(follower),
+            "provided storage and its followers grow"
+        );
+        assert!(
+            grids.iter().all(|&grid| !grows(grid)),
+            "a grid sized from params never grows"
+        );
 
-        let planned = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).unwrap();
+        let planned =
+            plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).unwrap();
         let root = |node| planned.storage[&output_of(&plan, node)].root;
-        assert_eq!(root(grids[2]), root(grids[0]), "the third grid takes the first's storage");
-        assert_eq!(root(grids[3]), root(grids[1]), "the fourth grid takes the second's storage");
-        assert_eq!(root(follower), output_of(&plan, follower), "a growing array keeps its own storage");
-        assert_eq!(lifetimes::assert_shared_roots_never_overlap(&graph, &plan, &planned), 2);
+        assert_eq!(
+            root(grids[2]),
+            root(grids[0]),
+            "the third grid takes the first's storage"
+        );
+        assert_eq!(
+            root(grids[3]),
+            root(grids[1]),
+            "the fourth grid takes the second's storage"
+        );
+        assert_eq!(
+            root(follower),
+            output_of(&plan, follower),
+            "a growing array keeps its own storage"
+        );
+        assert_eq!(
+            lifetimes::assert_shared_roots_never_overlap(&graph, &plan, &planned),
+            2
+        );
     }
 
     /// A host reading an array after the frame reads whatever a later array
@@ -1079,10 +1170,22 @@ mod tests {
         let output = || vec![mock_port("out", array, PortKind::Output, false)];
         let first_grid_overwritten = |declared: bool| {
             let mut graph = Graph::new();
-            let mut grids = vec![graph.add_node(Box::new(FixedArrayNode::new("test.grid", vec![], output(), 8)))];
+            let mut grids = vec![graph.add_node(Box::new(FixedArrayNode::new(
+                "test.grid",
+                vec![],
+                output(),
+                8,
+            )))];
             for _ in 0..3 {
-                let grid = graph.add_node(Box::new(FixedArrayNode::new("test.grid", input(), output(), 8)));
-                graph.connect((*grids.last().unwrap(), "out"), (grid, "in")).unwrap();
+                let grid = graph.add_node(Box::new(FixedArrayNode::new(
+                    "test.grid",
+                    input(),
+                    output(),
+                    8,
+                )));
+                graph
+                    .connect((*grids.last().unwrap(), "out"), (grid, "in"))
+                    .unwrap();
                 grids.push(grid);
             }
             let mut sink = FixedArrayNode::new("test.sink", input(), vec![], 1);
@@ -1093,15 +1196,24 @@ mod tests {
                 graph.add_external_output(grids[0], "out").unwrap();
             }
             let plan = compile(&graph).unwrap();
-            let planned = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).unwrap();
+            let planned =
+                plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).unwrap();
             lifetimes::assert_shared_roots_never_overlap(&graph, &plan, &planned);
-            let overwritten = arrays_overwritten_later(&graph, &plan, |r| planned.storage.get(&r).map(|s| s.root.0));
+            let overwritten = arrays_overwritten_later(&graph, &plan, |r| {
+                planned.storage.get(&r).map(|s| s.root.0)
+            });
             let later = |grid: usize| overwritten[output_of(&plan, grids[grid]).0 as usize];
             assert!(!later(3), "nothing follows the last grid");
             later(0)
         };
-        assert!(first_grid_overwritten(false), "undeclared, the third grid takes the first's storage");
-        assert!(!first_grid_overwritten(true), "declared, the first grid keeps its storage");
+        assert!(
+            first_grid_overwritten(false),
+            "undeclared, the third grid takes the first's storage"
+        );
+        assert!(
+            !first_grid_overwritten(true),
+            "declared, the first grid keeps its storage"
+        );
     }
 
     /// A feedback node reads an array produced later in the plan. Growth
@@ -1109,9 +1221,16 @@ mod tests {
     #[test]
     fn growth_crosses_a_feedback_edge() {
         let mut graph = Graph::new();
-        let feedback = graph.add_node(Box::new(crate::testkit::graph::GraphFixture::array_feedback()));
+        let feedback = graph.add_node(Box::new(
+            crate::testkit::graph::GraphFixture::array_feedback(),
+        ));
         let array = graph.get_node(feedback).unwrap().node.outputs()[0].ty;
-        let mut provider = FixedArrayNode::new("test.provider", vec![], vec![mock_port("out", array, PortKind::Output, false)], 4);
+        let mut provider = FixedArrayNode::new(
+            "test.provider",
+            vec![],
+            vec![mock_port("out", array, PortKind::Output, false)],
+            4,
+        );
         provider.provides = true;
         let provider = graph.add_node(Box::new(provider));
         let follower = |graph: &mut Graph| {
@@ -1128,24 +1247,38 @@ mod tests {
         let downstream = follower(&mut graph);
         graph.connect((provider, "out"), (upstream, "in")).unwrap();
         graph.connect((upstream, "out"), (feedback, "in")).unwrap();
-        graph.connect((feedback, "out"), (downstream, "in")).unwrap();
-        let mut sink = FixedArrayNode::new("test.sink", vec![mock_port("in", array, PortKind::Input, true)], vec![], 1);
+        graph
+            .connect((feedback, "out"), (downstream, "in"))
+            .unwrap();
+        let mut sink = FixedArrayNode::new(
+            "test.sink",
+            vec![mock_port("in", array, PortKind::Input, true)],
+            vec![],
+            1,
+        );
         sink.root = true;
         let sink = graph.add_node(Box::new(sink));
         graph.connect((downstream, "out"), (sink, "in")).unwrap();
 
         let plan = compile(&graph).unwrap();
-        let step = |node| plan.steps().iter().position(|step| step.node == node).unwrap();
-        assert!(step(feedback) < step(upstream), "premise: the feedback input is produced later");
+        let step = |node| {
+            plan.steps()
+                .iter()
+                .position(|step| step.node == node)
+                .unwrap()
+        };
+        assert!(
+            step(feedback) < step(upstream),
+            "premise: the feedback input is produced later"
+        );
         let growing = growing_array_resources(&graph, &plan);
         for node in [provider, upstream, feedback, downstream] {
-            assert!(growing[output_of(&plan, node).0 as usize], "{node:?} must grow");
+            assert!(
+                growing[output_of(&plan, node).0 as usize],
+                "{node:?} must grow"
+            );
         }
     }
-
-
-
-
 }
 
 #[cfg(any(test, feature = "testkit"))]

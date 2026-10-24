@@ -5,8 +5,8 @@
 //! is dropped into the recovered slot, byte-identical. Public interface unchanged,
 //! so the inspector composite is untouched.
 
-use crate::ParamsAction;
 use super::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
+use crate::ParamsAction;
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View};
 use crate::color;
 use crate::node::*;
@@ -61,7 +61,13 @@ impl ChainErrorNotice {
         }
         self.wrapped_at = Some(width);
         self.lines = match &self.message {
-            Some(m) => crate::text::wrap_to_width(measurer, m, color::FONT_BODY, FontWeight::Regular, width),
+            Some(m) => crate::text::wrap_to_width(
+                measurer,
+                m,
+                color::FONT_BODY,
+                FontWeight::Regular,
+                width,
+            ),
             None => Vec::new(),
         };
     }
@@ -180,19 +186,23 @@ impl LayerChromePanel {
     // ── View description (chrome only) ───────────────────────────
 
     fn chrome_view(&self) -> View {
-        let chevron = View::button(if self.is_collapsed { "\u{25B6}" } else { "\u{25BC}" })
-            .fixed(CHEVRON_W, CHEVRON_H)
-            .style(UIStyle {
-                bg_color: Color32::TRANSPARENT,
-                hover_bg_color: color::HOVER_OVERLAY,
-                pressed_bg_color: color::PRESS_OVERLAY,
-                text_color: color::CHEVRON_COLOR,
-                font_size: FONT_SIZE,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            })
-            .inert()
-            .key(KEY_CHEVRON);
+        let chevron = View::button(if self.is_collapsed {
+            "\u{25B6}"
+        } else {
+            "\u{25BC}"
+        })
+        .fixed(CHEVRON_W, CHEVRON_H)
+        .style(UIStyle {
+            bg_color: Color32::TRANSPARENT,
+            hover_bg_color: color::HOVER_OVERLAY,
+            pressed_bg_color: color::PRESS_OVERLAY,
+            text_color: color::CHEVRON_COLOR,
+            font_size: FONT_SIZE,
+            text_align: TextAlign::Center,
+            ..UIStyle::default()
+        })
+        .inert()
+        .key(KEY_CHEVRON);
 
         // section 6d — one merged row: the layer name (the meaningful identity; falls
         // back to the type header when unnamed), the collapse chevron, then the
@@ -206,9 +216,17 @@ impl LayerChromePanel {
         };
         // A long name ends in an ellipsis before the chevron and the opacity
         // slider instead of running into them.
-        let opacity_w = if !self.is_collapsed && self.show_opacity { OPACITY_MIN_W + GAP } else { 0.0 };
+        let opacity_w = if !self.is_collapsed && self.show_opacity {
+            OPACITY_MIN_W + GAP
+        } else {
+            0.0
+        };
         let name_budget = self.chrome_rect.width - 2.0 * PAD_H - CHEVRON_W - GAP - opacity_w;
-        let label_text = crate::draw::elide_to_width(label_text, f32::from(color::FONT_HEADING), name_budget.max(0.0));
+        let label_text = crate::draw::elide_to_width(
+            label_text,
+            f32::from(color::FONT_HEADING),
+            name_budget.max(0.0),
+        );
         let mut header = View::row(GAP)
             .fill_w()
             .h(Sizing::Fixed(HEADER_ROW_H))
@@ -234,7 +252,10 @@ impl LayerChromePanel {
                 label_width: OPACITY_LABEL_W,
                 reset: PanelAction::slider_reset(
                     PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Begin),
-                    PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Move(ScrubValue::Scalar(1.0))),
+                    PanelAction::Scrub(
+                        ValueRef::LayerOpacity,
+                        ScrubPhase::Move(ScrubValue::Scalar(1.0)),
+                    ),
                     PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Commit),
                 ),
             };
@@ -248,7 +269,12 @@ impl LayerChromePanel {
 
         let column = View::column(0.0)
             .fill()
-            .pad(Pad { l: PAD_H, t: PAD_V, r: PAD_H, b: PAD_V })
+            .pad(Pad {
+                l: PAD_H,
+                t: PAD_V,
+                r: PAD_H,
+                b: PAD_V,
+            })
             .child(header);
         self.chain_error.add_rows(column)
     }
@@ -316,7 +342,10 @@ impl LayerChromePanel {
         if let Some(val) = self.opacity.try_start_drag(node_id, pos.x) {
             return vec![
                 PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Begin),
-                PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Move(ScrubValue::Scalar(val))),
+                PanelAction::Scrub(
+                    ValueRef::LayerOpacity,
+                    ScrubPhase::Move(ScrubValue::Scalar(val)),
+                ),
             ];
         }
         Vec::new()
@@ -324,14 +353,20 @@ impl LayerChromePanel {
 
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
         if let Some(val) = self.opacity.apply_drag(pos.x, tree, &fmt_opacity) {
-            return vec![PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Move(ScrubValue::Scalar(val)))];
+            return vec![PanelAction::Scrub(
+                ValueRef::LayerOpacity,
+                ScrubPhase::Move(ScrubValue::Scalar(val)),
+            )];
         }
         Vec::new()
     }
 
     pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
         if self.opacity.end_drag() {
-            return vec![PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Commit)];
+            return vec![PanelAction::Scrub(
+                ValueRef::LayerOpacity,
+                ScrubPhase::Commit,
+            )];
         }
         Vec::new()
     }
@@ -364,7 +399,10 @@ pub(super) mod tests {
         panel.build(&mut tree, rect);
 
         let got = tree.get_bounds(panel.host.node_id_for_key(KEY_OPACITY_SLOT).unwrap());
-        assert!((got.y - (rect.y + PAD_V)).abs() < 0.01, "opacity not on header row: {got:?}");
+        assert!(
+            (got.y - (rect.y + PAD_V)).abs() < 0.01,
+            "opacity not on header row: {got:?}"
+        );
         assert!(got.width > 0.0, "opacity slot has no width: {got:?}");
         // Whole chrome is one row (no trailing divider).
         assert!((panel.compute_height() - (PAD_V + HEADER_ROW_H + PAD_V)).abs() < 0.01);
@@ -425,17 +463,27 @@ pub(super) mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 300.0, 200.0));
         let label = (0..tree.count())
             .map(|i| tree.id_at(i))
-            .find(|id| tree.get_node(*id).and_then(|n| n.text.as_deref()).is_some_and(|t| t.starts_with("Physics")))
+            .find(|id| {
+                tree.get_node(*id)
+                    .and_then(|n| n.text.as_deref())
+                    .is_some_and(|t| t.starts_with("Physics"))
+            })
             .expect("the name label");
         let text = tree.get_node(label).and_then(|n| n.text.clone()).unwrap();
         assert!(text.ends_with('…'), "the long name is elided: {text}");
         let name = tree.get_bounds(label);
         let chevron = tree.get_bounds(panel.host.node_id_for_key(KEY_CHEVRON).unwrap());
         let opacity = tree.get_bounds(panel.host.node_id_for_key(KEY_OPACITY_SLOT).unwrap());
-        assert!(name.x + crate::draw::text_width(&text, f32::from(color::FONT_HEADING)) <= chevron.x + 0.01,
-            "name {name:?} runs into the chevron {chevron:?}");
+        assert!(
+            name.x + crate::draw::text_width(&text, f32::from(color::FONT_HEADING))
+                <= chevron.x + 0.01,
+            "name {name:?} runs into the chevron {chevron:?}"
+        );
         assert!(chevron.x + chevron.width <= opacity.x + 0.01);
-        assert!(opacity.width >= OPACITY_MIN_W - 0.01, "the opacity slider keeps its width: {opacity:?}");
+        assert!(
+            opacity.width >= OPACITY_MIN_W - 0.01,
+            "the opacity slider keeps its width: {opacity:?}"
+        );
     }
 
     #[test]
@@ -446,8 +494,14 @@ pub(super) mod tests {
         let message = "The effects could not get their GPU memory, so they are bypassed. The scene needs 900 MB.";
         panel.set_chain_error(Some(message));
         panel.wrap_chain_error(tree.measurer(), 280.0);
-        assert!(panel.compute_height() > base + NOTICE_LINE_H, "a long reason wraps to several rows");
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, panel.compute_height()));
+        assert!(
+            panel.compute_height() > base + NOTICE_LINE_H,
+            "a long reason wraps to several rows"
+        );
+        panel.build(
+            &mut tree,
+            Rect::new(0.0, 0.0, 280.0, panel.compute_height()),
+        );
         let red: Vec<String> = (panel.first_node()..panel.first_node() + panel.node_count())
             .filter_map(|i| tree.get_node(tree.id_at(i)))
             .filter(|n| n.style.text_color == color::STATUS_BAD)
@@ -466,7 +520,11 @@ pub(super) mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
         let mut reg = crate::intent::IntentRegistry::new();
         panel.register_intents(&mut reg);
-        let got = reg.resolve(&tree, panel.opacity.track_id(), crate::intent::Gesture::RightClick);
+        let got = reg.resolve(
+            &tree,
+            panel.opacity.track_id(),
+            crate::intent::Gesture::RightClick,
+        );
         vec![crate::panels::contract_tests::ResetCase {
             label: "opacity".into(),
             got,

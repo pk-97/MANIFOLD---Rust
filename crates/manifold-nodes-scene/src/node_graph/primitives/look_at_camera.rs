@@ -10,12 +10,12 @@
 //! dispatch. A wired `target` Transform aims it at that frame's world
 //! origin, with target_x/y/z as a world offset from it.
 
-use std::borrow::Cow;
-use manifold_node_engine::scene::camera::Camera;
-use manifold_node_engine::scene::transform::transform_point;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::camera::Camera;
+use manifold_node_engine::scene::transform::transform_point;
+use std::borrow::Cow;
 
 manifold_node_engine::primitive! {
     name: LookAtCamera,
@@ -145,8 +145,14 @@ impl Primitive for LookAtCamera {
             // moves with the camera's group.
             Some(target) => {
                 let origin = target.world()[3];
-                let pos = parent.as_ref().map_or(pos, |parent| transform_point(parent, pos));
-                let aim = [origin[0] + offset[0], origin[1] + offset[1], origin[2] + offset[2]];
+                let pos = parent
+                    .as_ref()
+                    .map_or(pos, |parent| transform_point(parent, pos));
+                let aim = [
+                    origin[0] + offset[0],
+                    origin[1] + offset[1],
+                    origin[2] + offset[2],
+                ];
                 Camera::look_at(pos, aim, up, fov_y, near, far)
             }
             // Inside a group, the camera moves and turns with it.

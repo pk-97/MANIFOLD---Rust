@@ -392,11 +392,29 @@ mod srgb_shader_parity_tests {
             "float3 t = min((x - 0.8) / 0.2, float3(10.0));",
             "return select(0.8 + 0.2 * tanh(t), x, x <= float3(0.8));",
         ] {
-            assert!(header.contains(line), "ColorTransferFunctions.h no longer contains {line:?}");
+            assert!(
+                header.contains(line),
+                "ColorTransferFunctions.h no longer contains {line:?}"
+            );
         }
         let samples = [
-            0.0_f32, 0.1, 0.5, 0.79, 0.8, 0.81, 0.9, 1.0, 1.2, 1.5, 2.0, 2.8, 3.0, 5.0, 16.0,
-            1.0e4, f32::INFINITY,
+            0.0_f32,
+            0.1,
+            0.5,
+            0.79,
+            0.8,
+            0.81,
+            0.9,
+            1.0,
+            1.2,
+            1.5,
+            2.0,
+            2.8,
+            3.0,
+            5.0,
+            16.0,
+            1.0e4,
+            f32::INFINITY,
         ];
         for &x in &samples {
             let shader = shader_highlight_rolloff(x);
@@ -405,7 +423,10 @@ mod srgb_shader_parity_tests {
                 (shader - reference).abs() < 1e-6,
                 "rolloff diverges at linear={x}: shader={shader}, reference={reference}"
             );
-            assert!(shader < 1.0 + 1e-6, "rolloff must stay at or below white, got {shader} at {x}");
+            assert!(
+                shader < 1.0 + 1e-6,
+                "rolloff must stay at or below white, got {shader} at {x}"
+            );
         }
     }
 
@@ -425,7 +446,11 @@ mod srgb_shader_parity_tests {
     /// `native/ColorTransferFunctions.h`, in f32 like the shader.
     fn shader_bt709_limited_ycbcr([r, g, b]: [f32; 3]) -> [f32; 3] {
         let y = r * 0.2126 + g * 0.7152 + b * 0.0722;
-        [16.0 + 219.0 * y, 128.0 + 224.0 * (b - y) / 1.8556, 128.0 + 224.0 * (r - y) / 1.5748]
+        [
+            16.0 + 219.0 * y,
+            128.0 + 224.0 * (b - y) / 1.8556,
+            128.0 + 224.0 * (r - y) / 1.5748,
+        ]
     }
 
     #[test]
@@ -437,7 +462,10 @@ mod srgb_shader_parity_tests {
             "128.0 + 224.0 * (rgb.b - y) / 1.8556,",
             "128.0 + 224.0 * (rgb.r - y) / 1.5748);",
         ] {
-            assert!(header.contains(line), "ColorTransferFunctions.h no longer contains {line:?}");
+            assert!(
+                header.contains(line),
+                "ColorTransferFunctions.h no longer contains {line:?}"
+            );
         }
         let round = |v: [f32; 3]| v.map(|c| c.round() as u8);
         // Known 8-bit code values; exact black and white must land on the
@@ -461,7 +489,10 @@ mod srgb_shader_parity_tests {
                             "ycbcr diverges at rgb=({r},{g},{b}) channel {c}: \
                              shader={shader:?}, reference={reference:?}"
                         );
-                        assert!((16.0..=240.0).contains(&shader[c]), "out of limited range: {shader:?}");
+                        assert!(
+                            (16.0..=240.0).contains(&shader[c]),
+                            "out of limited range: {shader:?}"
+                        );
                     }
                 }
             }
@@ -529,10 +560,8 @@ mod fractional_fps_timebase_tests {
             return;
         }
 
-        let dir = std::env::temp_dir().join(format!(
-            "manifold_bug129_fps_smoke_{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("manifold_bug129_fps_smoke_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let output_path = dir.join("bug129_2997fps.mp4");
 
@@ -581,7 +610,8 @@ mod fractional_fps_timebase_tests {
 
         let reported = String::from_utf8_lossy(&output.stdout).trim().to_string();
         assert_eq!(
-            reported, "30000/1001",
+            reported,
+            "30000/1001",
             "exported container must report the exact NTSC rational frame rate, not a rounded 30/1 \
              (ffprobe stderr: {})",
             String::from_utf8_lossy(&output.stderr)

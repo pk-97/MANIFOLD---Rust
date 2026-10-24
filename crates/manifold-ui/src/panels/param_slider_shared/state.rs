@@ -3,7 +3,6 @@
 
 use super::*;
 
-
 // ── Shared node ID structs ──────────────────────────────────────
 
 /// The orange envelope target handle on a parameter's slider track — sets the
@@ -12,7 +11,6 @@ use super::*;
 pub(crate) struct EnvelopeTargetIds {
     pub(crate) target_bar_id: NodeId,
 }
-
 
 /// The envelope drawer — for non-toggle/non-trigger params an Action row,
 /// the Decay slider only in Continuous (Step/Random has no decay to tune),
@@ -30,16 +28,12 @@ pub(crate) struct EnvelopeConfigIds {
     pub(crate) step_reset: Option<PanelAction>,
 }
 
-
 #[derive(Clone, Copy)]
 pub(crate) struct TrimHandleIds {
     pub(crate) fill_id: NodeId,
     pub(crate) min_bar_id: NodeId,
     pub(crate) max_bar_id: NodeId,
 }
-
-
-
 
 /// Display data for an Ableton-mapped parameter.
 /// Constructed in state_sync, consumed by effect_card and gen_param.
@@ -56,7 +50,6 @@ pub struct AbletonMappingDisplay {
     pub status: AbletonMappingStatus,
     pub inverted: bool,
 }
-
 
 // ── Shared modulation state ─────────────────────────────────────
 
@@ -102,7 +95,6 @@ pub struct ParamModState {
     pub audio_sends: Vec<AudioSendChoice>,
 
     // Trigger mode, action, amount, and wrap now live in `audio_rows`.
-
     /// Per-param: the drawer's full Feature×Band matrix is open (the "Custom"
     /// cell trailing the Listen chips). SESSION-ONLY UI state — `sync_audio`
     /// never writes it; it mirrors no model field.
@@ -119,7 +111,6 @@ pub struct ParamModState {
     pub automation_selected: Vec<bool>,
 }
 
-
 /// Map a feature-row button index to its `AudioFeatureKind` (clamped).
 pub(crate) fn audio_kind_from_index(idx: usize) -> crate::types::AudioFeatureKind {
     crate::types::AudioFeatureKind::ALL
@@ -127,7 +118,6 @@ pub(crate) fn audio_kind_from_index(idx: usize) -> crate::types::AudioFeatureKin
         .copied()
         .unwrap_or(crate::types::AudioFeatureKind::Amplitude)
 }
-
 
 /// Map a band-row button index to its `AudioBand` (clamped).
 pub(crate) fn audio_band_from_index(idx: usize) -> crate::types::AudioBand {
@@ -137,14 +127,12 @@ pub(crate) fn audio_band_from_index(idx: usize) -> crate::types::AudioBand {
         .unwrap_or(crate::types::AudioBand::Full)
 }
 
-
 /// Feature-row button labels, in `AudioFeatureKind::ALL` order — derived from
 /// `ALL` so a new kind (P4 added Pitch/Presence) can never leave the drawer
 /// stale.
 pub(crate) fn audio_kind_labels() -> [&'static str; AUDIO_KIND_COUNT] {
     crate::types::AudioFeatureKind::ALL.map(|k| k.label())
 }
-
 
 #[cfg(test)]
 mod audio_row_tests {
@@ -154,11 +142,23 @@ mod audio_row_tests {
     fn selected_send_index_follows_id_when_choices_reorder() {
         let mut state = ParamModState::allocate(1);
         state.audio_rows[0].send_id = Some(manifold_foundation::AudioSendId::new("second"));
-        let first = AudioSendChoice { id: manifold_foundation::AudioSendId::new("first"), label: "First".into() };
-        let second = AudioSendChoice { id: manifold_foundation::AudioSendId::new("second"), label: "Second".into() };
-        state.sync_audio(std::iter::once(state.audio_rows[0].clone()), &[first.clone(), second.clone()]);
+        let first = AudioSendChoice {
+            id: manifold_foundation::AudioSendId::new("first"),
+            label: "First".into(),
+        };
+        let second = AudioSendChoice {
+            id: manifold_foundation::AudioSendId::new("second"),
+            label: "Second".into(),
+        };
+        state.sync_audio(
+            std::iter::once(state.audio_rows[0].clone()),
+            &[first.clone(), second.clone()],
+        );
         assert_eq!(state.audio_send_index(0), 1);
-        state.sync_audio(std::iter::once(state.audio_rows[0].clone()), &[second, first]);
+        state.sync_audio(
+            std::iter::once(state.audio_rows[0].clone()),
+            &[second, first],
+        );
         assert_eq!(state.audio_send_index(0), 0);
         assert_eq!(state.audio_sends[0].id.as_str(), "second");
     }
@@ -183,7 +183,6 @@ mod audio_row_tests {
     }
 }
 
-
 /// Band-row button labels, in `AudioBand::ALL` order.
 pub(crate) fn audio_band_labels() -> [&'static str; 4] {
     [
@@ -193,7 +192,6 @@ pub(crate) fn audio_band_labels() -> [&'static str; 4] {
         crate::types::AudioBand::High.label(),
     ]
 }
-
 
 // ── Curated trigger-source chips (clip-trigger drawer) ─────────────
 //
@@ -229,16 +227,38 @@ pub(crate) struct SourceChip {
     pub active: bool,
 }
 
-
 /// The curated cells, in drawer order (low → high, generic last).
-pub(crate) const TRIGGER_SOURCE_CHIPS: [(&str, crate::types::AudioFeatureKind, crate::types::AudioBand); 5] = [
-    ("Kick", crate::types::AudioFeatureKind::Kick, crate::types::AudioBand::Low),
-    ("Bass", crate::types::AudioFeatureKind::Transients, crate::types::AudioBand::Low),
-    ("Snare", crate::types::AudioFeatureKind::Snare, crate::types::AudioBand::Mid),
-    ("Hats", crate::types::AudioFeatureKind::Transients, crate::types::AudioBand::High),
-    ("Transients", crate::types::AudioFeatureKind::Transients, crate::types::AudioBand::Full),
+pub(crate) const TRIGGER_SOURCE_CHIPS: [(
+    &str,
+    crate::types::AudioFeatureKind,
+    crate::types::AudioBand,
+); 5] = [
+    (
+        "Kick",
+        crate::types::AudioFeatureKind::Kick,
+        crate::types::AudioBand::Low,
+    ),
+    (
+        "Bass",
+        crate::types::AudioFeatureKind::Transients,
+        crate::types::AudioBand::Low,
+    ),
+    (
+        "Snare",
+        crate::types::AudioFeatureKind::Snare,
+        crate::types::AudioBand::Mid,
+    ),
+    (
+        "Hats",
+        crate::types::AudioFeatureKind::Transients,
+        crate::types::AudioBand::High,
+    ),
+    (
+        "Transients",
+        crate::types::AudioFeatureKind::Transients,
+        crate::types::AudioBand::Full,
+    ),
 ];
-
 
 /// The chips a clip-trigger drawer shows for `current`: the curated five with
 /// the active one highlighted — plus, when the current cell isn't one of the
@@ -246,14 +266,19 @@ pub(crate) const TRIGGER_SOURCE_CHIPS: [(&str, crate::types::AudioFeatureKind, c
 /// class surfaced through the param-mod drawer's full matrix), a truthful
 /// trailing chip naming the actual cell, so the drawer never silently
 /// re-points a trigger at a different signal than the one it fires from.
-pub(crate) fn trigger_source_chips(current: crate::types::AudioFeature) -> Vec<SourceChip> {    let mut chips: Vec<SourceChip> = TRIGGER_SOURCE_CHIPS
+pub(crate) fn trigger_source_chips(current: crate::types::AudioFeature) -> Vec<SourceChip> {
+    let mut chips: Vec<SourceChip> = TRIGGER_SOURCE_CHIPS
         .iter()
         .map(|&(label, kind, band)| {
             // `Kick` and `Snare` ignore `band` at evaluation time (always Low / Mid), so
             // a saved Kick or Snare cell matches its chip regardless of the stored band.
             let active = kind == current.kind
                 && (band == current.band
-                    || matches!(kind, crate::types::AudioFeatureKind::Kick | crate::types::AudioFeatureKind::Snare));
+                    || matches!(
+                        kind,
+                        crate::types::AudioFeatureKind::Kick
+                            | crate::types::AudioFeatureKind::Snare
+                    ));
             SourceChip {
                 label: label.to_string(),
                 feature: crate::types::AudioFeature::new(kind, band),
@@ -270,7 +295,6 @@ pub(crate) fn trigger_source_chips(current: crate::types::AudioFeature) -> Vec<S
     }
     chips
 }
-
 
 /// One param row's audio-modulation display state. Collapses the former fifteen parallel
 /// per-param vecs (D3, `docs/WIDGET_TREE_DESIGN.md` P1a) into one struct per
@@ -353,7 +377,6 @@ pub struct AudioSendChoice {
     pub label: String,
 }
 
-
 impl Default for AudioRowState {
     fn default() -> Self {
         Self {
@@ -375,7 +398,6 @@ impl Default for AudioRowState {
         }
     }
 }
-
 
 impl ParamModState {
     pub fn allocate(param_count: usize) -> Self {
@@ -427,7 +449,11 @@ impl ParamModState {
         // since `allocate` never has a dead "Custom" toggle. Never overwritten
         // from the model — it's not a mirrored field.
         let n = rows.len();
-        assert_eq!(n, self.driver_expanded.len(), "audio row count must match allocated parameter state");
+        assert_eq!(
+            n,
+            self.driver_expanded.len(),
+            "audio row count must match allocated parameter state"
+        );
         self.audio_rows.clear();
         self.audio_rows.extend(rows);
         self.audio_sends.clear();
@@ -492,7 +518,6 @@ impl ParamModState {
     }
 }
 
-
 pub fn format_param_value(
     val: f32,
     min: f32,
@@ -502,7 +527,16 @@ pub fn format_param_value(
     unit: Option<manifold_foundation::scene_surface::Unit>,
 ) -> String {
     let mut buf = ParamValueText::default();
-    param_value_text(&mut buf, val, min, whole_numbers, is_angle, value_labels, unit).to_owned()
+    param_value_text(
+        &mut buf,
+        val,
+        min,
+        whole_numbers,
+        is_angle,
+        value_labels,
+        unit,
+    )
+    .to_owned()
 }
 
 /// A formatted number as a param readout shows it: long enough for any `f32`
@@ -523,12 +557,26 @@ pub fn param_value_text<'a>(
     if let Some(labels) = value_labels {
         return &labels[label_index(val, min, labels.len())];
     }
-    write_value(buf, val, whole_numbers, is_angle, unit.map_or("", |unit| unit.suffix()), 2);
+    write_value(
+        buf,
+        val,
+        whole_numbers,
+        is_angle,
+        unit.map_or("", |unit| unit.suffix()),
+        2,
+    );
     buf.as_str()
 }
 
 /// `val` with `decimals` places and the unit text `suffix`.
-fn write_value(buf: &mut ParamValueText, val: f32, whole_numbers: bool, is_angle: bool, suffix: &str, decimals: usize) {
+fn write_value(
+    buf: &mut ParamValueText,
+    val: f32,
+    whole_numbers: bool,
+    is_angle: bool,
+    suffix: &str,
+    decimals: usize,
+) {
     use std::fmt::Write;
     buf.clear();
     let _ = if is_angle {
@@ -555,7 +603,10 @@ thread_local! {
 /// the whole string would miss the cache every frame.
 fn value_text_width(measure: &dyn crate::text::TextMeasure, text: &str, font_size: u16) -> f32 {
     let weight = crate::color::FONT_WEIGHT_DEFAULT;
-    let measurer_key = (font_size, measure as *const dyn crate::text::TextMeasure as *const () as usize);
+    let measurer_key = (
+        font_size,
+        measure as *const dyn crate::text::TextMeasure as *const () as usize,
+    );
     if GLYPHS_WARM.get() != measurer_key {
         // All number glyphs at once, so a drag never meets a new digit.
         let mut glyph = [0u8; 4];
@@ -571,7 +622,9 @@ fn value_text_width(measure: &dyn crate::text::TextMeasure, text: &str, font_siz
     let mut glyph = [0u8; 4];
     let mut width = 0.0;
     for ch in number.chars() {
-        width += measure.measure_text(ch.encode_utf8(&mut glyph), font_size, weight).x;
+        width += measure
+            .measure_text(ch.encode_utf8(&mut glyph), font_size, weight)
+            .x;
     }
     if !tail.is_empty() {
         width += measure.measure_text(tail, font_size, weight).x;
@@ -602,7 +655,11 @@ pub fn param_value_text_fit<'a>(
         return &labels[label_index(val, min, labels.len())];
     }
     let fits = |text: &str| value_text_width(measure, text, font_size) <= max_width;
-    for suffix in [unit.map_or("", |unit| unit.suffix()), unit.map_or("", |unit| unit.short_suffix()), ""] {
+    for suffix in [
+        unit.map_or("", |unit| unit.suffix()),
+        unit.map_or("", |unit| unit.short_suffix()),
+        "",
+    ] {
         write_value(buf, val, whole_numbers, is_angle, suffix, 2);
         if fits(buf.as_str()) {
             return buf.as_str();
@@ -616,7 +673,11 @@ pub fn param_value_text_fit<'a>(
     }
     if !is_angle && val.abs() >= 1000.0 {
         buf.clear();
-        let _ = if val.abs() >= 1.0e6 { write!(buf, "{:.1}M", val / 1.0e6) } else { write!(buf, "{:.1}k", val / 1.0e3) };
+        let _ = if val.abs() >= 1.0e6 {
+            write!(buf, "{:.1}M", val / 1.0e6)
+        } else {
+            write!(buf, "{:.1}k", val / 1.0e3)
+        };
     }
     buf.as_str()
 }
@@ -659,8 +720,15 @@ pub(crate) fn past_slider_end(value: f32, spec: &crate::param_surface::RowSpec) 
 /// Put a row's hover text on `nodes`: its manifest tooltip, then the reason it
 /// does nothing right now (`inactive_reason`), so a disabled row explains
 /// itself without standing text.
-pub(crate) fn set_row_hover(tree: &mut UITree, nodes: impl IntoIterator<Item = NodeId>, info: &ParamRow) {
-    let hover = match (info.spec.tooltip.as_deref(), info.spec.inactive_reason.as_deref()) {
+pub(crate) fn set_row_hover(
+    tree: &mut UITree,
+    nodes: impl IntoIterator<Item = NodeId>,
+    info: &ParamRow,
+) {
+    let hover = match (
+        info.spec.tooltip.as_deref(),
+        info.spec.inactive_reason.as_deref(),
+    ) {
         (Some(tip), Some(reason)) => Some(format!("{tip}\n{reason}")),
         (Some(text), None) | (None, Some(text)) => Some(text.to_owned()),
         (None, None) => None,
@@ -671,7 +739,6 @@ pub(crate) fn set_row_hover(tree: &mut UITree, nodes: impl IntoIterator<Item = N
         }
     }
 }
-
 
 // ── Shared per-parameter slider row ─────────────────────────────────
 
@@ -727,7 +794,6 @@ pub(crate) struct ParamRowIds {
     pub(crate) new_cy: f32,
 }
 
-
 /// A button row's node ids (button + its label) and the kind of button it
 /// was built as, which the click route and the value sync read.
 pub(crate) struct ToggleParamIds {
@@ -735,7 +801,6 @@ pub(crate) struct ToggleParamIds {
     pub(crate) button_id: NodeId,
     pub(crate) kind: crate::param_surface::RowKind,
 }
-
 
 /// Format a one-shot length (beats) compactly for a drawer's Length row.
 /// Common musical divisions read as fractions; whole beats get a "b" suffix.
@@ -754,7 +819,6 @@ pub(crate) fn format_beats(b: f32) -> String {
         format!("{b:.2}")
     }
 }
-
 
 /// Node IDs produced by [`build_button_row`].
 pub(crate) struct ToggleTriggerRowIds {
@@ -786,7 +850,11 @@ pub(crate) struct ToggleTriggerRowIds {
 impl ToggleTriggerRowIds {
     /// The ids the row host keeps for this row.
     pub(crate) fn button_ids(&self) -> ToggleParamIds {
-        ToggleParamIds { label_id: self.label_id, button_id: self.button_id, kind: self.kind }
+        ToggleParamIds {
+            label_id: self.label_id,
+            button_id: self.button_id,
+            kind: self.kind,
+        }
     }
 }
 
@@ -800,9 +868,19 @@ pub(crate) fn label_index(value: f32, min: f32, count: usize) -> usize {
 /// An empty label is a value with nothing to pick (a deleted camera's cut
 /// number): it shows the first choice, which is what that value gives.
 pub(crate) fn choice_label(spec: &crate::param_surface::RowSpec, value: f32) -> Option<&str> {
-    let labels = spec.value_labels.as_deref().filter(|labels| !labels.is_empty())?;
+    let labels = spec
+        .value_labels
+        .as_deref()
+        .filter(|labels| !labels.is_empty())?;
     let label = &labels[label_index(value, spec.min, labels.len())];
-    Some(if label.is_empty() { labels.iter().find(|label| !label.is_empty()).unwrap_or(label) } else { label })
+    Some(if label.is_empty() {
+        labels
+            .iter()
+            .find(|label| !label.is_empty())
+            .unwrap_or(label)
+    } else {
+        label
+    })
 }
 
 /// A switch's button text.
@@ -838,17 +916,44 @@ mod fine_scrub_tests {
         let clamped = fine_scrub_value(0.0, 2000.0, 200.0, (-100.0, 100.0), Slider, true);
         assert!((clamped - 100.0).abs() < 1e-4, "clamped: {clamped}");
         let clamped_neg = fine_scrub_value(0.0, -2000.0, 200.0, (-100.0, 100.0), Slider, true);
-        assert!((clamped_neg + 100.0).abs() < 1e-4, "clamped neg: {clamped_neg}");
+        assert!(
+            (clamped_neg + 100.0).abs() < 1e-4,
+            "clamped neg: {clamped_neg}"
+        );
     }
 
     /// INV-S18: past the slider's end a drag keeps going to the hard limit.
     #[test]
     fn drag_past_slider_end_reaches_limit() {
-        let past = fine_scrub_value(0.0, 400.0, 200.0, (-1.0, 1.0), manifold_foundation::param_range::HardLimit::Between(-5.0, 5.0), false);
+        let past = fine_scrub_value(
+            0.0,
+            400.0,
+            200.0,
+            (-1.0, 1.0),
+            manifold_foundation::param_range::HardLimit::Between(-5.0, 5.0),
+            false,
+        );
         assert!((past - 4.0).abs() < 1e-4, "past the end: {past}");
-        let stopped = fine_scrub_value(0.0, 4000.0, 200.0, (-1.0, 1.0), manifold_foundation::param_range::HardLimit::Between(-5.0, 5.0), false);
-        assert!((stopped - 5.0).abs() < 1e-4, "stops at the limit: {stopped}");
-        let free = fine_scrub_value(0.0, 4000.0, 200.0, (-1.0, 1.0), manifold_foundation::param_range::HardLimit::Unlimited, false);
+        let stopped = fine_scrub_value(
+            0.0,
+            4000.0,
+            200.0,
+            (-1.0, 1.0),
+            manifold_foundation::param_range::HardLimit::Between(-5.0, 5.0),
+            false,
+        );
+        assert!(
+            (stopped - 5.0).abs() < 1e-4,
+            "stops at the limit: {stopped}"
+        );
+        let free = fine_scrub_value(
+            0.0,
+            4000.0,
+            200.0,
+            (-1.0, 1.0),
+            manifold_foundation::param_range::HardLimit::Unlimited,
+            false,
+        );
         assert!((free - 40.0).abs() < 1e-3, "unlimited: {free}");
     }
 
@@ -856,8 +961,14 @@ mod fine_scrub_tests {
     /// value stays at the grab, regardless of the fine flag.
     #[test]
     fn fine_scrub_zero_width_track_is_a_no_op() {
-        assert_eq!(fine_scrub_value(25.0, 40.0, 0.0, (0.0, 100.0), Slider, false), 25.0);
-        assert_eq!(fine_scrub_value(25.0, 40.0, 0.0, (0.0, 100.0), Slider, true), 25.0);
+        assert_eq!(
+            fine_scrub_value(25.0, 40.0, 0.0, (0.0, 100.0), Slider, false),
+            25.0
+        );
+        assert_eq!(
+            fine_scrub_value(25.0, 40.0, 0.0, (0.0, 100.0), Slider, true),
+            25.0
+        );
     }
 }
 
@@ -869,43 +980,78 @@ mod value_fit_tests {
     fn fit(val: f32, whole: bool, unit: Option<Unit>) -> String {
         let tree = crate::tree::UITree::new();
         let mut buf = ParamValueText::default();
-        param_value_text_fit(&mut buf, val, 0.0, whole, false, None, unit, tree.measurer(), FONT_SIZE, CARD_VALUE_TEXT_W).to_owned()
+        param_value_text_fit(
+            &mut buf,
+            val,
+            0.0,
+            whole,
+            false,
+            None,
+            unit,
+            tree.measurer(),
+            FONT_SIZE,
+            CARD_VALUE_TEXT_W,
+        )
+        .to_owned()
     }
 
     /// The unit shortens, then drops, before a digit does: a value shown
     /// with fewer than two decimals, or in compact form, carries no unit.
     #[test]
     fn the_unit_goes_before_the_digits() {
-        assert_eq!(fit(4.0, false, Some(Unit::Metres)), "4.00 m", "a short value keeps everything");
+        assert_eq!(
+            fit(4.0, false, Some(Unit::Metres)),
+            "4.00 m",
+            "a short value keeps everything"
+        );
         assert_eq!(fit(600.0, true, Some(Unit::Kilograms)), "600 kg");
         let mut shortened = false;
         for unit in [Unit::Metres, Unit::MetresPerSecondSquared, Unit::Radius] {
             for val in [1.0, 12.5, 123.45, 1234.5, 12345.5, 123_456.7, 123_456_792.0] {
                 let text = fit(val, false, Some(unit));
                 let digits = text.trim_end_matches(|c: char| !c.is_ascii_digit());
-                let full_precision = digits.split_once('.').is_some_and(|(_, decimals)| decimals.len() == 2);
+                let full_precision = digits
+                    .split_once('.')
+                    .is_some_and(|(_, decimals)| decimals.len() == 2);
                 // A compact "123.5M" is a magnitude, not a unit.
                 let bare = digits == text.trim_end_matches(['k', 'M']);
-                assert!(full_precision || bare, "{val} {unit:?} lost digits but kept its unit: {text:?}");
+                assert!(
+                    full_precision || bare,
+                    "{val} {unit:?} lost digits but kept its unit: {text:?}"
+                );
                 shortened |= text.ends_with(unit.short_suffix()) && !text.ends_with(unit.suffix());
             }
         }
-        assert!(shortened, "some value showed its short unit before dropping it");
+        assert!(
+            shortened,
+            "some value showed its short unit before dropping it"
+        );
     }
 
     /// Only when nothing with the unit fits does the unit go; the leading
     /// digit never does.
     #[test]
     fn a_value_that_cannot_hold_its_unit_drops_it_last() {
-        assert_eq!(fit(100_000_000.0, true, Some(Unit::MillionCells)), "100000000");
+        assert_eq!(
+            fit(100_000_000.0, true, Some(Unit::MillionCells)),
+            "100000000"
+        );
     }
 
     struct Recording(std::cell::RefCell<std::collections::HashSet<String>>);
 
     impl crate::text::TextMeasure for Recording {
-        fn measure_text(&self, text: &str, font_size: u16, _weight: crate::node::FontWeight) -> crate::node::Vec2 {
+        fn measure_text(
+            &self,
+            text: &str,
+            font_size: u16,
+            _weight: crate::node::FontWeight,
+        ) -> crate::node::Vec2 {
             self.0.borrow_mut().insert(text.to_owned());
-            crate::node::Vec2::new(text.chars().count() as f32 * font_size as f32 * 0.6, font_size as f32)
+            crate::node::Vec2::new(
+                text.chars().count() as f32 * font_size as f32 * 0.6,
+                font_size as f32,
+            )
         }
     }
 
@@ -918,10 +1064,28 @@ mod value_fit_tests {
         let mut buf = ParamValueText::default();
         for step in 0..400 {
             let val = step as f32 * 0.37 - 20.0;
-            param_value_text_fit(&mut buf, val, -20.0, false, false, None, Some(Unit::Metres), &measure, FONT_SIZE, CARD_VALUE_TEXT_W);
+            param_value_text_fit(
+                &mut buf,
+                val,
+                -20.0,
+                false,
+                false,
+                None,
+                Some(Unit::Metres),
+                &measure,
+                FONT_SIZE,
+                CARD_VALUE_TEXT_W,
+            );
         }
         let seen = measure.0.borrow();
-        assert!(seen.len() <= 16, "{} distinct strings measured: {seen:?}", seen.len());
-        assert!(seen.iter().all(|text| text.chars().count() <= 2), "{seen:?}");
+        assert!(
+            seen.len() <= 16,
+            "{} distinct strings measured: {seen:?}",
+            seen.len()
+        );
+        assert!(
+            seen.iter().all(|text| text.chars().count() <= 2),
+            "{seen:?}"
+        );
     }
 }

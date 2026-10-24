@@ -1,8 +1,13 @@
 use super::*;
 use crate::chrome::Sizing;
 
-fn rack_group_for_effect<'a>(groups: &'a [RackGroupConfig], effect_id: &EffectId) -> Option<&'a RackGroupConfig> {
-    groups.iter().find(|group| group.member_ids.iter().any(|id| id == effect_id))
+fn rack_group_for_effect<'a>(
+    groups: &'a [RackGroupConfig],
+    effect_id: &EffectId,
+) -> Option<&'a RackGroupConfig> {
+    groups
+        .iter()
+        .find(|group| group.member_ids.iter().any(|id| id == effect_id))
 }
 
 fn rack_group_add_modifier_key(group_id: &EffectGroupId) -> u64 {
@@ -39,7 +44,8 @@ fn rack_group_header_view(group: &RackGroupConfig, address: &crate::panels::Valu
         .cross_align(crate::chrome::Align::Center)
         .child(
             View::button(if group.collapsed { "▸" } else { "▾" })
-                .w(Sizing::Fixed(24.0)).fill_h()
+                .w(Sizing::Fixed(24.0))
+                .fill_h()
                 .style(crate::chrome::components::button_secondary_style())
                 .name("inspector.effect_group.collapse")
                 .key(rack_group_key(&group.id, "collapse"))
@@ -72,9 +78,9 @@ fn rack_group_header_view(group: &RackGroupConfig, address: &crate::panels::Valu
             .w(Sizing::Fixed(104.0))
             .fill_h()
             .style(crate::chrome::components::button_secondary_style())
-            .on_click(PanelAction::Params(ParamsAction::EffectGroupAddModifierClicked(
-                group.id.clone(),
-            )))
+            .on_click(PanelAction::Params(
+                ParamsAction::EffectGroupAddModifierClicked(group.id.clone()),
+            ))
             .name(super::GROUP_ADD_MODIFIER_NAME)
             .key(rack_group_add_modifier_key(&group.id)),
     );
@@ -121,7 +127,8 @@ fn rack_group_span(
     })?;
     let group_id = &groups[group_idx].id;
     let mut end = start;
-    let mut height = InspectorCompositePanel::RACK_HEADER_H + InspectorCompositePanel::RACK_GROUP_BOTTOM_PAD;
+    let mut height =
+        InspectorCompositePanel::RACK_HEADER_H + InspectorCompositePanel::RACK_GROUP_BOTTOM_PAD;
     while end < cards.len() {
         let member_group = rack_group_for_effect(groups, cards[end].effect_id());
         if member_group.is_none_or(|group| group.id != *group_id) {
@@ -131,7 +138,8 @@ fn rack_group_span(
             height += cards[end].compute_height();
         }
         end += 1;
-        if !groups[group_idx].collapsed && end < cards.len()
+        if !groups[group_idx].collapsed
+            && end < cards.len()
             && rack_group_for_effect(groups, cards[end].effect_id())
                 .is_some_and(|group| group.id == *group_id)
         {
@@ -162,12 +170,22 @@ fn build_rack_group_frame(
         &rack_group_header_view(group, address),
         Rect::new(x, y, width, InspectorCompositePanel::RACK_HEADER_H),
     );
-    let node = |part: &str| header_ids.iter().find(|(key, _)| *key == rack_group_key(&group.id, part)).map(|(_, id)| *id);
-    let wet_dry = slider_ids.iter().find(|(key, _)| *key == rack_group_key(&group.id, "wet_dry")).map(|(_, ids)| *ids);
+    let node = |part: &str| {
+        header_ids
+            .iter()
+            .find(|(key, _)| *key == rack_group_key(&group.id, part))
+            .map(|(_, id)| *id)
+    };
+    let wet_dry = slider_ids
+        .iter()
+        .find(|(key, _)| *key == rack_group_key(&group.id, "wet_dry"))
+        .map(|(_, ids)| *ids);
     if let Some(ids) = wet_dry.as_ref() {
         super::rack_controls::name_wet_dry_slider(tree, ids);
     }
-    if let (Some(header), Some(collapse), Some((_, frame))) = (node("header"), node("collapse"), frame_ids.first()) {
+    if let (Some(header), Some(collapse), Some((_, frame))) =
+        (node("header"), node("collapse"), frame_ids.first())
+    {
         group_nodes.push(RackGroupNodes {
             group_id: group.id.clone(),
             frame: *frame,
@@ -187,7 +205,8 @@ fn build_rack_group_frame(
 
 impl InspectorCompositePanel {
     pub(super) const RACK_TITLE_H: f32 = 28.0;
-    pub(super) const RACK_HEADER_H: f32 = Self::RACK_TITLE_H + super::rack_controls::RACK_CONTROLS_H;
+    pub(super) const RACK_HEADER_H: f32 =
+        Self::RACK_TITLE_H + super::rack_controls::RACK_CONTROLS_H;
     pub(super) const RACK_INDENT: f32 = color::SPACE_XL;
     const RACK_GROUP_BOTTOM_PAD: f32 = color::SPACE_M;
 
@@ -256,7 +275,15 @@ impl InspectorCompositePanel {
             // Interactive button (not a label) so clicks hit-test and route —
             // a plain label carries no INTERACTIVE flag and is invisible to the
             // event system, which is why the tabs were unclickable.
-            let id = tree.add_button(None, x, rect.y, tab_w, rect.height, style, Self::tab_label(*tab));
+            let id = tree.add_button(
+                None,
+                x,
+                rect.y,
+                tab_w,
+                rect.height,
+                style,
+                Self::tab_label(*tab),
+            );
             self.tab_node_ids.push((id, *tab));
             x += tab_w;
         }
@@ -475,11 +502,18 @@ impl InspectorCompositePanel {
 
     /// The generator card's layer, when it is a scene card.
     pub fn scene_card_layer(&self) -> Option<&LayerId> {
-        self.gen_params.as_ref().filter(|card| card.is_scene_card())?.owning_layer_id()
+        self.gen_params
+            .as_ref()
+            .filter(|card| card.is_scene_card())?
+            .owning_layer_id()
     }
 
     /// Flash `param`'s row the next time `layer`'s card is shown.
-    pub fn flash_card_row_when_shown(&mut self, layer: LayerId, param: manifold_foundation::ParamId) {
+    pub fn flash_card_row_when_shown(
+        &mut self,
+        layer: LayerId,
+        param: manifold_foundation::ParamId,
+    ) {
         self.pending_card_flash = Some((layer, param));
     }
 
@@ -522,15 +556,18 @@ impl InspectorCompositePanel {
     /// into its per-render `PanelBitmapGpu` (see `ParamCardPanel::
     /// led_band_bitmap_peek`).
     pub fn led_preview_bitmap_peek(&self) -> Option<(&[Color32], usize, usize)> {
-        self.gen_params.as_ref().and_then(|card| card.led_band_bitmap_peek())
+        self.gen_params
+            .as_ref()
+            .and_then(|card| card.led_band_bitmap_peek())
     }
 
     /// Screen-space interior rect the band quad blits into this frame, or
     /// `None` when the band is absent or hidden.
     pub fn led_preview_rect(&self, tree: &UITree) -> Option<Rect> {
-        self.gen_params.as_ref().and_then(|card| card.led_band_rect(tree))
+        self.gen_params
+            .as_ref()
+            .and_then(|card| card.led_band_rect(tree))
     }
-
 
     /// Set the chrome context applied to every card this panel owns —
     /// `CardContext::Author` for the graph-editor window's inspector
@@ -583,20 +620,22 @@ impl InspectorCompositePanel {
         dying.retain(|card| !configs.iter().any(|cfg| card.matches_effect_config(cfg)));
         let reconciled = configs
             .iter()
-            .map(|cfg| match existing.iter().position(|c| c.matches_effect_config(cfg)) {
-                Some(pos) => {
-                    let mut card = existing.remove(pos);
-                    card.configure(cfg);
-                    card
-                }
-                None => {
-                    let mut card = ParamCardPanel::default();
-                    card.set_context(card_context);
-                    card.configure(cfg);
-                    card.fire_spawn_pop();
-                    card
-                }
-            })
+            .map(
+                |cfg| match existing.iter().position(|c| c.matches_effect_config(cfg)) {
+                    Some(pos) => {
+                        let mut card = existing.remove(pos);
+                        card.configure(cfg);
+                        card
+                    }
+                    None => {
+                        let mut card = ParamCardPanel::default();
+                        card.set_context(card_context);
+                        card.configure(cfg);
+                        card.fire_spawn_pop();
+                        card
+                    }
+                },
+            )
             .collect();
         // Whatever's left in `existing` no longer matches any config — it was
         // removed from the model this rebuild. Keep it alive in `dying`
@@ -776,12 +815,22 @@ impl InspectorCompositePanel {
         // Aliases so the per-section build blocks below read unchanged.
         let left_x = col_x;
         let right_x = col_x;
-        let left_content_w = if self.master_visible() { content_w } else { 0.0 };
-        let right_content_w = if self.master_visible() || self.scene_visible() { 0.0 } else { content_w };
+        let left_content_w = if self.master_visible() {
+            content_w
+        } else {
+            0.0
+        };
+        let right_content_w = if self.master_visible() || self.scene_visible() {
+            0.0
+        } else {
+            content_w
+        };
         // The chrome notices wrap to the width they build at, before any
         // column height below reads them.
-        self.master_chrome.wrap_chain_error(tree.measurer(), left_content_w - SECTION_INSET * 2.0);
-        self.layer_chrome.wrap_chain_error(tree.measurer(), right_content_w - SECTION_INSET * 2.0);
+        self.master_chrome
+            .wrap_chain_error(tree.measurer(), left_content_w - SECTION_INSET * 2.0);
+        self.layer_chrome
+            .wrap_chain_error(tree.measurer(), right_content_w - SECTION_INSET * 2.0);
         self.column_split_x = if self.master_visible() {
             rect.x + rect.width
         } else {
@@ -856,7 +905,11 @@ impl InspectorCompositePanel {
                             build_rack_group_frame(
                                 tree,
                                 &groups[group_idx],
-                                &super::rack_controls::rack_address(self.active_tab, &self.inspecting_layer_id, &groups[group_idx].id),
+                                &super::rack_controls::rack_address(
+                                    self.active_tab,
+                                    &self.inspecting_layer_id,
+                                    &groups[group_idx].id,
+                                ),
                                 inner_x,
                                 cy,
                                 inner_w,
@@ -964,7 +1017,6 @@ impl InspectorCompositePanel {
                         cy += gp_h + SECTION_GAP;
                     }
 
-
                     let groups = &self.rack_groups[Self::SCOPE_LAYER];
                     let mut card_idx = 0;
                     while card_idx < self.effects[Self::SCOPE_LAYER].len() {
@@ -974,7 +1026,11 @@ impl InspectorCompositePanel {
                             build_rack_group_frame(
                                 tree,
                                 &groups[group_idx],
-                                &super::rack_controls::rack_address(self.active_tab, &self.inspecting_layer_id, &groups[group_idx].id),
+                                &super::rack_controls::rack_address(
+                                    self.active_tab,
+                                    &self.inspecting_layer_id,
+                                    &groups[group_idx].id,
+                                ),
                                 inner_x,
                                 cy,
                                 inner_w,
@@ -1028,10 +1084,7 @@ impl InspectorCompositePanel {
             if !self.layer_dying.is_empty() {
                 let inner_x = right_x + SECTION_INSET;
                 let inner_w = right_content_w - SECTION_INSET * 2.0;
-                for card in self
-                    .layer_dying
-                    .iter_mut()
-                {
+                for card in self.layer_dying.iter_mut() {
                     let card_h = card.compute_height();
                     card.build(tree, Rect::new(inner_x, cy, inner_w, card_h));
                     cy += card_h + SECTION_GAP;
@@ -1119,7 +1172,10 @@ mod tests {
         let mut host = crate::chrome::ChromeHost::new();
         host.build(
             &mut tree,
-            &rack_group_header_view(&group, &super::super::rack_controls::rack_address(InspectorTab::Master, &None, &group.id)),
+            &rack_group_header_view(
+                &group,
+                &super::super::rack_controls::rack_address(InspectorTab::Master, &None, &group.id),
+            ),
             Rect::new(0.0, 0.0, 400.0, InspectorCompositePanel::RACK_HEADER_H),
         );
         let mask_selector_button = host
@@ -1174,8 +1230,18 @@ mod tests {
         // unrelated exit is still animating.
         panel.configure_master_effects(std::slice::from_ref(&a));
         panel.configure_master_effects(std::slice::from_ref(&c));
-        assert!(panel.master_dying.iter().any(|card| card.matches_effect_config(&a)));
-        assert!(panel.master_dying.iter().any(|card| card.matches_effect_config(&b)));
+        assert!(
+            panel
+                .master_dying
+                .iter()
+                .any(|card| card.matches_effect_config(&a))
+        );
+        assert!(
+            panel
+                .master_dying
+                .iter()
+                .any(|card| card.matches_effect_config(&b))
+        );
 
         // Immediate undo restores A. Building this frame used to create a
         // second A card beside the still-dying A and panic on duplicate ids.
@@ -1198,7 +1264,13 @@ mod tests {
                 .count(),
             1
         );
-        assert_eq!(panel.effects[InspectorCompositePanel::SCOPE_MASTER].len(), 1);
-        assert_eq!(panel.effects[InspectorCompositePanel::SCOPE_MASTER][0].effect_id(), &a.effect_id);
+        assert_eq!(
+            panel.effects[InspectorCompositePanel::SCOPE_MASTER].len(),
+            1
+        );
+        assert_eq!(
+            panel.effects[InspectorCompositePanel::SCOPE_MASTER][0].effect_id(),
+            &a.effect_id
+        );
     }
 }

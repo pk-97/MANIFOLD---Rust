@@ -4,11 +4,11 @@
 //! which is not the engine upwind rule. This atom is a pure stencil sweep;
 //! whitewater owns convergence reduction and calls its generated pipeline.
 use crate::float_param;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_gpu::GpuBinding;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_gpu::GpuBinding;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use std::borrow::Cow;
 
 /// The generated sweep's uniforms, uploaded by this node and by the

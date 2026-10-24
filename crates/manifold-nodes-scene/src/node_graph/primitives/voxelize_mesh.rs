@@ -9,8 +9,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
@@ -132,7 +132,10 @@ impl Primitive for VoxelizeMesh {
         if port_name != "out" {
             return None;
         }
-        input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)
+        input_capacities
+            .iter()
+            .find(|(p, _)| *p == "in")
+            .map(|(_, n)| *n)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -221,7 +224,7 @@ mod gpu_tests {
             tangent: [0.0; 4],
             color: [1.0; 4],
         }
-}
+    }
 
     /// The generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {
@@ -276,7 +279,10 @@ mod gpu_tests {
                 }
                 (b, weights_len_override.unwrap_or(w.len() as u32))
             }
-            None => (device.create_buffer_shared(std::mem::size_of_val(src) as u64), 0),
+            None => (
+                device.create_buffer_shared(std::mem::size_of_val(src) as u64),
+                0,
+            ),
         };
 
         let uniforms = VoxelizeUniforms {
@@ -291,10 +297,25 @@ mod gpu_tests {
         };
 
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: &sbuf, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &wbuf, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &dbuf, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &sbuf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &wbuf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &dbuf,
+                offset: 0,
+            },
         ];
         let mut enc = device.create_encoder("voxelize-mesh-test");
         enc.dispatch_compute(
@@ -322,7 +343,15 @@ mod gpu_tests {
         let amount = 1.0f32;
         let cell_size = 1.0f32;
 
-        let out = dispatch_voxelize(&device, &gen_wgsl, &src, Some(&weights), None, amount, cell_size);
+        let out = dispatch_voxelize(
+            &device,
+            &gen_wgsl,
+            &src,
+            Some(&weights),
+            None,
+            amount,
+            cell_size,
+        );
 
         for i in 0..src.len() {
             let exp = expected_voxelize(src[i].position, amount, cell_size, weights[i]);
@@ -352,8 +381,14 @@ mod gpu_tests {
 
         assert_eq!(out.len(), src.len());
         for i in 0..src.len() {
-            assert_eq!(out[i].position, src[i].position, "amount=0 must be identity pos {i}");
-            assert_eq!(out[i].normal, src[i].normal, "amount=0 must preserve normal {i}");
+            assert_eq!(
+                out[i].position, src[i].position,
+                "amount=0 must be identity pos {i}"
+            );
+            assert_eq!(
+                out[i].normal, src[i].normal,
+                "amount=0 must preserve normal {i}"
+            );
             assert_eq!(out[i].uv, src[i].uv, "amount=0 must preserve uv {i}");
         }
     }
@@ -371,7 +406,15 @@ mod gpu_tests {
         let amount = 1.0f32;
         let cell_size = 1.0f32;
 
-        let out = dispatch_voxelize(&device, &gen_wgsl, &src, Some(&weights), Some(2), amount, cell_size);
+        let out = dispatch_voxelize(
+            &device,
+            &gen_wgsl,
+            &src,
+            Some(&weights),
+            Some(2),
+            amount,
+            cell_size,
+        );
 
         assert!(
             (out[0].position[0] - src[0].position[0]).abs() < 1e-5,

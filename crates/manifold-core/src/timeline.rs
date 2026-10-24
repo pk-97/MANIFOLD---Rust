@@ -84,7 +84,10 @@ impl Timeline {
         if let Some(found) = self.cached_clip_location(clip_id) {
             return Some(found);
         }
-        if self.clip_lookup_dirty || self.clip_lookup.is_empty() || self.clip_lookup.contains_key(clip_id) {
+        if self.clip_lookup_dirty
+            || self.clip_lookup.is_empty()
+            || self.clip_lookup.contains_key(clip_id)
+        {
             self.rebuild_clip_lookup();
             return self.cached_clip_location(clip_id);
         }
@@ -627,9 +630,9 @@ mod enforce_tree_order_tests {
 #[cfg(test)]
 mod clip_window_tests {
     use super::*;
+    use crate::clip::TimelineClip;
     use crate::layer::Layer;
     use crate::types::LayerType;
-    use crate::clip::TimelineClip;
 
     fn clip_layer() -> Layer {
         let mut layer = Layer::new("Clips".into(), LayerType::Video, 0);
@@ -650,7 +653,9 @@ mod clip_window_tests {
     #[test]
     fn beat_window_ref_clears_output_skips_groups_and_preserves_append_indices() {
         let mut timeline = Timeline::default();
-        timeline.layers.push(Layer::new("Group".into(), LayerType::Group, 0));
+        timeline
+            .layers
+            .push(Layer::new("Group".into(), LayerType::Group, 0));
         timeline.layers.push(clip_layer());
         timeline.ensure_layers_sorted();
 
@@ -670,10 +675,11 @@ mod clip_window_tests {
             &mut results,
             &mut active_indices,
         );
-        assert!(results.is_empty(), "equal endpoints use point-query semantics");
+        assert!(
+            results.is_empty(),
+            "equal endpoints use point-query semantics"
+        );
     }
-
-
 }
 
 #[cfg(test)]
@@ -689,7 +695,11 @@ mod add_layer_tests {
     #[test]
     fn add_led_layer_seeds_gen_params_via_change_generator_type() {
         let mut t = Timeline::default();
-        t.add_layer("LED 1", crate::types::LayerType::Dmx, PresetTypeId::new("LED Fill"));
+        t.add_layer(
+            "LED 1",
+            crate::types::LayerType::Dmx,
+            PresetTypeId::new("LED Fill"),
+        );
 
         let layer = &t.layers[0];
         assert_eq!(layer.layer_type, crate::types::LayerType::Dmx);

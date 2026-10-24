@@ -10,7 +10,8 @@ use crate::interaction::VectorField;
 const STRENGTH_NORMALIZE: f32 = 0.6;
 
 /// Offsets that decorrelate the three potentials.
-const POTENTIAL_OFFSETS: [[f32; 3]; 3] = [[0.0; 3], [31.416, -47.853, 12.734], [-73.19, 19.27, 58.61]];
+const POTENTIAL_OFFSETS: [[f32; 3]; 3] =
+    [[0.0; 3], [31.416, -47.853, 12.734], [-73.19, 19.27, 58.61]];
 
 /// The noise repeats every this many cells (`size` metres each) along every
 /// axis, so a drift offset can be wrapped to one period and keep its
@@ -29,10 +30,14 @@ pub struct TurbulenceField {
 impl TurbulenceField {
     pub fn new(size: f32, offset: [f32; 3], seed: u32) -> Result<Self, PhysicsError> {
         if !size.is_finite() || size <= 0.0 {
-            return Err(PhysicsError::InvalidInput("turbulence size must be finite and positive"));
+            return Err(PhysicsError::InvalidInput(
+                "turbulence size must be finite and positive",
+            ));
         }
         if !offset.iter().all(|c| c.is_finite()) {
-            return Err(PhysicsError::InvalidInput("turbulence offset must be finite"));
+            return Err(PhysicsError::InvalidInput(
+                "turbulence offset must be finite",
+            ));
         }
         Ok(Self { size, offset, seed })
     }
@@ -63,10 +68,16 @@ impl VectorField for TurbulenceField {
         if !position.iter().all(|c| c.is_finite()) {
             return [0.0; 3];
         }
-        let p: [f32; 3] = std::array::from_fn(|axis| (position[axis] - self.offset[axis]) / self.size);
+        let p: [f32; 3] =
+            std::array::from_fn(|axis| (position[axis] - self.offset[axis]) / self.size);
         let gradients: [[f32; 3]; 3] = std::array::from_fn(|potential| {
-            let q: [f32; 3] = std::array::from_fn(|axis| p[axis] + POTENTIAL_OFFSETS[potential][axis]);
-            noise_gradient(q, self.seed.wrapping_add((potential as u32).wrapping_mul(0x9e37_79b9)))
+            let q: [f32; 3] =
+                std::array::from_fn(|axis| p[axis] + POTENTIAL_OFFSETS[potential][axis]);
+            noise_gradient(
+                q,
+                self.seed
+                    .wrapping_add((potential as u32).wrapping_mul(0x9e37_79b9)),
+            )
         });
         let [x, y, z] = gradients;
         // curl ψ = (∂ψz/∂y − ∂ψy/∂z, ∂ψx/∂z − ∂ψz/∂x, ∂ψy/∂x − ∂ψx/∂y), in
@@ -107,19 +118,32 @@ impl TurbulenceDrift {
     /// The offset travelled by `played`; `velocity` (m/s) takes effect at
     /// the next point at or after it of the replay grid counting from
     /// `origin`.
-    pub fn advance(&mut self, played: crate::PlayedTime, origin: crate::PlayedTime, velocity: [f64; 3]) -> [f64; 3] {
+    pub fn advance(
+        &mut self,
+        played: crate::PlayedTime,
+        origin: crate::PlayedTime,
+        velocity: [f64; 3],
+    ) -> [f64; 3] {
         let transport = played.seconds();
         let last = match self.last {
             Some(last) if transport >= last - crate::clock::BACKWARD_SEEK => last,
             _ => {
-                *self = Self { last: Some(transport), at: transport, travelled: [0.0; 3], velocity, pending: None };
+                *self = Self {
+                    last: Some(transport),
+                    at: transport,
+                    travelled: [0.0; 3],
+                    velocity,
+                    pending: None,
+                };
                 return [0.0; 3];
             }
         };
         // A step back inside the tolerance holds still.
         let transport = transport.max(last);
         self.last = Some(transport);
-        let next = crate::clock::next_replay_point(crate::PlayedTime::from_played(transport), origin).seconds();
+        let next =
+            crate::clock::next_replay_point(crate::PlayedTime::from_played(transport), origin)
+                .seconds();
         if let Some((at, held)) = self.pending.take_if(|(at, _)| *at < next) {
             self.commit(at, held);
         }
@@ -129,7 +153,9 @@ impl TurbulenceDrift {
         {
             self.commit(at, held);
         }
-        std::array::from_fn(|axis| self.travelled[axis] + self.velocity[axis] * (transport - self.at))
+        std::array::from_fn(|axis| {
+            self.travelled[axis] + self.velocity[axis] * (transport - self.at)
+        })
     }
 
     /// Travel at the held velocity up to `at`, then hold `velocity`.
@@ -149,7 +175,10 @@ impl TurbulenceDrift {
 
 fn hash(x: i32, y: i32, z: i32, seed: u32) -> u32 {
     let [x, y, z] = [x, y, z].map(|c| c.rem_euclid(TURBULENCE_PERIOD_CELLS as i32));
-    let mut h = seed ^ (x as u32).wrapping_mul(0x8da6_b343) ^ (y as u32).wrapping_mul(0xd816_3841) ^ (z as u32).wrapping_mul(0xcb1a_b31f);
+    let mut h = seed
+        ^ (x as u32).wrapping_mul(0x8da6_b343)
+        ^ (y as u32).wrapping_mul(0xd816_3841)
+        ^ (z as u32).wrapping_mul(0xcb1a_b31f);
     h ^= h >> 16;
     h = h.wrapping_mul(0x7feb_352d);
     h ^= h >> 15;
@@ -160,9 +189,18 @@ fn hash(x: i32, y: i32, z: i32, seed: u32) -> u32 {
 /// One of Perlin's twelve cube-edge gradients.
 fn gradient(x: i32, y: i32, z: i32, seed: u32) -> [f32; 3] {
     const EDGES: [[f32; 3]; 12] = [
-        [1.0, 1.0, 0.0], [-1.0, 1.0, 0.0], [1.0, -1.0, 0.0], [-1.0, -1.0, 0.0],
-        [1.0, 0.0, 1.0], [-1.0, 0.0, 1.0], [1.0, 0.0, -1.0], [-1.0, 0.0, -1.0],
-        [0.0, 1.0, 1.0], [0.0, -1.0, 1.0], [0.0, 1.0, -1.0], [0.0, -1.0, -1.0],
+        [1.0, 1.0, 0.0],
+        [-1.0, 1.0, 0.0],
+        [1.0, -1.0, 0.0],
+        [-1.0, -1.0, 0.0],
+        [1.0, 0.0, 1.0],
+        [-1.0, 0.0, 1.0],
+        [1.0, 0.0, -1.0],
+        [-1.0, 0.0, -1.0],
+        [0.0, 1.0, 1.0],
+        [0.0, -1.0, 1.0],
+        [0.0, 1.0, -1.0],
+        [0.0, -1.0, -1.0],
     ];
     EDGES[(hash(x, y, z, seed) % 12) as usize]
 }
@@ -209,9 +247,16 @@ mod tests {
         (0..8)
             .map(|k| {
                 let o = [k & 1, (k >> 1) & 1, (k >> 2) & 1];
-                let g = gradient(cell[0] as i32 + o[0], cell[1] as i32 + o[1], cell[2] as i32 + o[2], seed);
+                let g = gradient(
+                    cell[0] as i32 + o[0],
+                    cell[1] as i32 + o[1],
+                    cell[2] as i32 + o[2],
+                    seed,
+                );
                 let value: f32 = (0..3).map(|a| g[a] * (f[a] - o[a] as f32)).sum();
-                let weight: f32 = (0..3).map(|a| if o[a] == 1 { u[a] } else { 1.0 - u[a] }).product();
+                let weight: f32 = (0..3)
+                    .map(|a| if o[a] == 1 { u[a] } else { 1.0 - u[a] })
+                    .product();
                 weight * value
             })
             .sum()
@@ -220,7 +265,11 @@ mod tests {
     fn sample_points() -> impl Iterator<Item = [f32; 3]> {
         (0..400).map(|i| {
             let t = i as f32;
-            [(t * 0.731).sin() * 7.3, (t * 0.377).cos() * 5.1 + 0.3, (t * 0.913).sin() * 6.7 - 1.1]
+            [
+                (t * 0.731).sin() * 7.3,
+                (t * 0.377).cos() * 5.1 + 0.3,
+                (t * 0.913).sin() * 6.7 - 1.1,
+            ]
         })
     }
 
@@ -235,7 +284,11 @@ mod tests {
                 plus[a] += h;
                 minus[a] -= h;
                 let numeric = (noise_value(plus, 7) - noise_value(minus, 7)) / (2.0 * h);
-                assert!((numeric - grad[a]).abs() < 2.0e-2, "{p:?} axis {a}: {numeric} vs {}", grad[a]);
+                assert!(
+                    (numeric - grad[a]).abs() < 2.0e-2,
+                    "{p:?} axis {a}: {numeric} vs {}",
+                    grad[a]
+                );
             }
         }
     }
@@ -263,9 +316,15 @@ mod tests {
         let rms = (sum_squares / 400.0).sqrt();
         assert!((0.6..1.6).contains(&rms), "rms {rms}");
         let large = TurbulenceField::new(8.0, [0.0; 3], 3).unwrap();
-        assert_eq!(large.sample([8.0, 4.0, -4.0]), field.sample([2.0, 1.0, -1.0]));
+        assert_eq!(
+            large.sample([8.0, 4.0, -4.0]),
+            field.sample([2.0, 1.0, -1.0])
+        );
         let drifted = TurbulenceField::new(2.0, [1.0, 0.0, 0.0], 3).unwrap();
-        assert_eq!(drifted.sample([1.5, 0.2, 0.3]), field.sample([0.5, 0.2, 0.3]));
+        assert_eq!(
+            drifted.sample([1.5, 0.2, 0.3]),
+            field.sample([0.5, 0.2, 0.3])
+        );
         assert!(TurbulenceField::new(0.0, [0.0; 3], 0).is_err());
     }
 
@@ -277,8 +336,14 @@ mod tests {
         let period = TURBULENCE_PERIOD_CELLS as f32 * 2.0;
         // Equal up to the f32 rounding of a coordinate a period out.
         for p in [[1.5, 0.25, -0.75], [-3.0, 7.5, 2.25]] {
-            let (far, near) = (field.sample([p[0] + period, p[1] - period, p[2] + 2.0 * period]), field.sample(p));
-            assert!(far.iter().zip(near).all(|(a, b)| (a - b).abs() < 1e-3), "{far:?} vs {near:?}");
+            let (far, near) = (
+                field.sample([p[0] + period, p[1] - period, p[2] + 2.0 * period]),
+                field.sample(p),
+            );
+            assert!(
+                far.iter().zip(near).all(|(a, b)| (a - b).abs() < 1e-3),
+                "{far:?} vs {near:?}"
+            );
         }
         // An hour at 50 m/s, plus a quarter metre.
         let wrapped = TurbulenceField::wrap_offset(2.0, [180_000.25 + 512.0 * 351.0, -0.75, 0.0]);
@@ -322,13 +387,24 @@ mod tests {
         let speed = |t: f64| if t < 0.5 { 2.0 } else { 6.0 + 4.0 * (t - 0.5) };
         let fly = |fps: f64| {
             let mut drift = TurbulenceDrift::default();
-            drift.advance(crate::PlayedTime::from_played(0.0), crate::PlayedTime::ZERO, [speed(0.0), 0.0, 0.0]);
+            drift.advance(
+                crate::PlayedTime::from_played(0.0),
+                crate::PlayedTime::ZERO,
+                [speed(0.0), 0.0, 0.0],
+            );
             let mut previous = (0.0, 0.0);
             let (mut ticks, mut grid) = (Vec::new(), Vec::new());
             for (t, tick) in evaluations(fps) {
-                let offset = drift.advance(crate::PlayedTime::from_played(t), crate::PlayedTime::ZERO, [speed(t), 0.0, 0.0])[0];
+                let offset = drift.advance(
+                    crate::PlayedTime::from_played(t),
+                    crate::PlayedTime::ZERO,
+                    [speed(t), 0.0, 0.0],
+                )[0];
                 let step = offset - previous.1;
-                assert!((0.0..=8.0 * (t - previous.0) + 1e-12).contains(&step), "no jump at {t}: {step}");
+                assert!(
+                    (0.0..=8.0 * (t - previous.0) + 1e-12).contains(&step),
+                    "no jump at {t}: {step}"
+                );
                 previous = (t, offset);
                 if tick {
                     ticks.push(((t * 90.0).round() as u32, offset.to_bits()));
@@ -344,10 +420,21 @@ mod tests {
             let (ticks, grid) = fly(fps);
             // A tick start on a frame end is read by the closing sample; compare
             // the ones both runs evaluate at the tick start itself.
-            let shared: Vec<_> = ticks.iter().filter(|tick| reference.0.iter().any(|other| other.0 == tick.0)).collect();
-            assert!(shared.len() >= 40, "{fps} fps shares {} tick starts", shared.len());
+            let shared: Vec<_> = ticks
+                .iter()
+                .filter(|tick| reference.0.iter().any(|other| other.0 == tick.0))
+                .collect();
+            assert!(
+                shared.len() >= 40,
+                "{fps} fps shares {} tick starts",
+                shared.len()
+            );
             for tick in shared {
-                assert!(reference.0.contains(tick), "{fps} fps at tick start {}", tick.0);
+                assert!(
+                    reference.0.contains(tick),
+                    "{fps} fps at tick start {}",
+                    tick.0
+                );
             }
             assert_eq!(grid, reference.1, "{fps} fps at the grid points");
         }
@@ -355,12 +442,45 @@ mod tests {
         let half = f64::from_bits(reference.1[119].1);
         assert!((half - 1.0).abs() < 0.01, "{half}");
         let mut drift = TurbulenceDrift::default();
-        drift.advance(crate::PlayedTime::from_played(0.0), crate::PlayedTime::ZERO, [5.0, 0.0, 0.0]);
-        assert_eq!(drift.advance(crate::PlayedTime::from_played(1.0), crate::PlayedTime::ZERO, [5.0, 0.0, 0.0]), [5.0, 0.0, 0.0]);
-        assert_eq!(drift.advance(crate::PlayedTime::from_played(0.25), crate::PlayedTime::ZERO, [5.0, 0.0, 0.0]), [0.0; 3], "a loop back starts again");
+        drift.advance(
+            crate::PlayedTime::from_played(0.0),
+            crate::PlayedTime::ZERO,
+            [5.0, 0.0, 0.0],
+        );
+        assert_eq!(
+            drift.advance(
+                crate::PlayedTime::from_played(1.0),
+                crate::PlayedTime::ZERO,
+                [5.0, 0.0, 0.0]
+            ),
+            [5.0, 0.0, 0.0]
+        );
+        assert_eq!(
+            drift.advance(
+                crate::PlayedTime::from_played(0.25),
+                crate::PlayedTime::ZERO,
+                [5.0, 0.0, 0.0]
+            ),
+            [0.0; 3],
+            "a loop back starts again"
+        );
         // Rounding below the clock's seek tolerance holds, as the clock does.
-        assert_eq!(drift.advance(crate::PlayedTime::from_played(0.25 - 1e-12), crate::PlayedTime::ZERO, [5.0, 0.0, 0.0]), [0.0; 3]);
-        assert_eq!(drift.advance(crate::PlayedTime::from_played(0.75), crate::PlayedTime::ZERO, [5.0, 0.0, 0.0]), [2.5, 0.0, 0.0]);
+        assert_eq!(
+            drift.advance(
+                crate::PlayedTime::from_played(0.25 - 1e-12),
+                crate::PlayedTime::ZERO,
+                [5.0, 0.0, 0.0]
+            ),
+            [0.0; 3]
+        );
+        assert_eq!(
+            drift.advance(
+                crate::PlayedTime::from_played(0.75),
+                crate::PlayedTime::ZERO,
+                [5.0, 0.0, 0.0]
+            ),
+            [2.5, 0.0, 0.0]
+        );
     }
 
     /// The drift's grid counts from the replay origin: a cue played after a
@@ -375,12 +495,19 @@ mod tests {
                 .map(|k| {
                     let since = f64::from(k) * 0.0037;
                     let velocity = if since < 0.05 { 2.0 } else { 6.0 };
-                    drift.advance(crate::PlayedTime::from_played(origin + since), at, [velocity, 0.0, 0.0])[0]
+                    drift.advance(
+                        crate::PlayedTime::from_played(origin + since),
+                        at,
+                        [velocity, 0.0, 0.0],
+                    )[0]
                 })
                 .collect::<Vec<_>>()
         };
         for (k, (fresh, shifted)) in fly(2.0).iter().zip(&fly(2.0 - 0.0123)).enumerate() {
-            assert!((fresh - shifted).abs() < 1e-9, "sample {k}: {fresh} against {shifted}");
+            assert!(
+                (fresh - shifted).abs() < 1e-9,
+                "sample {k}: {fresh} against {shifted}"
+            );
         }
     }
 }

@@ -1,13 +1,15 @@
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
     use manifold_core::NodeId;
     use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
     use manifold_core::liquid_domain::{GPU_FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
+    use std::collections::{BTreeMap, BTreeSet};
 
-    use manifold_node_engine::load::expand::SceneModifierExpandError;
-    use manifold_nodes_water::graph_install::coupling::{prepare_coupled_scenes, CoupledSceneBinding};
-    use manifold_node_engine::persistence::PrimitiveRegistry;
     use manifold_core::scene_impulse::RigidImpulseTargets;
+    use manifold_node_engine::load::expand::SceneModifierExpandError;
+    use manifold_node_engine::persistence::PrimitiveRegistry;
+    use manifold_nodes_water::graph_install::coupling::{
+        CoupledSceneBinding, prepare_coupled_scenes,
+    };
 
     struct GraphBuilder {
         next_id: u32,
@@ -196,7 +198,9 @@ mod tests {
             vec![CoupledSceneBinding {
                 fluid: NodeId::new("fluid"),
                 rigid: NodeId::new("world"),
-                colliders: RigidImpulseTargets::body(0).unwrap().union(RigidImpulseTargets::group(0).unwrap()),
+                colliders: RigidImpulseTargets::body(0)
+                    .unwrap()
+                    .union(RigidImpulseTargets::group(0).unwrap()),
                 observers: Vec::new(),
             }]
         );
@@ -343,5 +347,4 @@ mod tests {
             Err(SceneModifierExpandError::AmbiguousScene { .. })
         ));
     }
-
 }

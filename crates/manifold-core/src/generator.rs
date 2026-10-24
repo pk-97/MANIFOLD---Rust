@@ -83,6 +83,9 @@ mod tests {
         let json = r#"{"generatorType":"__vocab_migration_test_old__"}"#;
         let mut de = serde_json::Deserializer::from_str(json);
         let back = deserialize_generator_instance(&mut de).unwrap();
-        assert_eq!(back.generator_type().as_str(), "__vocab_migration_test_new__");
+        assert_eq!(
+            back.generator_type().as_str(),
+            "__vocab_migration_test_new__"
+        );
     }
 }

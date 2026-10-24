@@ -1,15 +1,13 @@
 use crate::effects::{EffectGroup, PresetInstance};
 use crate::macro_bank::MacroBank;
-use crate::types::{
-    ClockAuthority, OscSyncMode, QuantizeMode, ResolutionPreset, TonemapCurve,
-};
+use crate::types::{ClockAuthority, OscSyncMode, QuantizeMode, ResolutionPreset, TonemapCurve};
 use crate::units::{Beats, Bpm};
 use serde::{Deserialize, Serialize};
 
 // Shared settings types are also available to the UI and physics API.
 pub use manifold_foundation::settings::{
-    PhysicsSettings, SimRate, RtQualityColumn, RtQualitySettings, RtQualityTier, RtRayResolution,
-    RtSpatialDenoise,
+    PhysicsSettings, RtQualityColumn, RtQualitySettings, RtQualityTier, RtRayResolution,
+    RtSpatialDenoise, SimRate,
 };
 
 /// Project-wide settings.
@@ -339,7 +337,12 @@ fn default_true() -> bool {
 }
 
 impl ProjectSettings {
-    pub fn legacy() -> Self { Self { physics: PhysicsSettings::legacy(), ..Self::default() } }
+    pub fn legacy() -> Self {
+        Self {
+            physics: PhysicsSettings::legacy(),
+            ..Self::default()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -368,27 +371,45 @@ mod tests {
         let settings: ProjectSettings = serde_json::from_str(old_json).unwrap();
         let defaults = RtQualitySettings::default();
 
-        assert_eq!(settings.rt_quality.realtime.shadows, defaults.realtime.shadows);
+        assert_eq!(
+            settings.rt_quality.realtime.shadows,
+            defaults.realtime.shadows
+        );
         assert_eq!(settings.rt_quality.realtime.ao, defaults.realtime.ao);
         assert_eq!(settings.rt_quality.realtime.gi, defaults.realtime.gi);
-        assert_eq!(settings.rt_quality.realtime.reflections, defaults.realtime.reflections);
-        assert_eq!(settings.rt_quality.realtime.ray_resolution, defaults.realtime.ray_resolution);
-        assert_eq!(settings.rt_quality.realtime.spatial_denoise, defaults.realtime.spatial_denoise);
+        assert_eq!(
+            settings.rt_quality.realtime.reflections,
+            defaults.realtime.reflections
+        );
+        assert_eq!(
+            settings.rt_quality.realtime.ray_resolution,
+            defaults.realtime.ray_resolution
+        );
+        assert_eq!(
+            settings.rt_quality.realtime.spatial_denoise,
+            defaults.realtime.spatial_denoise
+        );
 
         assert_eq!(settings.rt_quality.export.shadows, defaults.export.shadows);
         assert_eq!(settings.rt_quality.export.ao, defaults.export.ao);
         assert_eq!(settings.rt_quality.export.gi, defaults.export.gi);
-        assert_eq!(settings.rt_quality.export.reflections, defaults.export.reflections);
-        assert_eq!(settings.rt_quality.export.ray_resolution, defaults.export.ray_resolution);
-        assert_eq!(settings.rt_quality.export.spatial_denoise, defaults.export.spatial_denoise);
+        assert_eq!(
+            settings.rt_quality.export.reflections,
+            defaults.export.reflections
+        );
+        assert_eq!(
+            settings.rt_quality.export.ray_resolution,
+            defaults.export.ray_resolution
+        );
+        assert_eq!(
+            settings.rt_quality.export.spatial_denoise,
+            defaults.export.spatial_denoise
+        );
     }
 
     #[test]
     fn tonemap_enabled_missing_defaults_off_and_round_trips_curve() {
-        let legacy: ProjectSettings = serde_json::from_str(
-            r#"{"tonemapCurve":"agx"}"#,
-        )
-        .unwrap();
+        let legacy: ProjectSettings = serde_json::from_str(r#"{"tonemapCurve":"agx"}"#).unwrap();
         assert_eq!(legacy.tonemap_curve, TonemapCurve::Agx);
         assert!(!legacy.tonemap_enabled);
 

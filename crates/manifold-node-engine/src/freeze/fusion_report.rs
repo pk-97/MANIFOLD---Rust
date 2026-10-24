@@ -23,11 +23,11 @@ use ahash::AHashMap;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::flatten::flatten_groups;
 
+use crate::freeze::classify::fusion_kind_str;
+use crate::load::expand::prepare_scene_modifiers;
 use crate::persistence::PrimitiveRegistry;
 use crate::scene::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
-use crate::freeze::classify::fusion_kind_str;
 use {crate::freeze::region, crate::freeze::region::NodeClass, crate::freeze::region::Region};
-use crate::load::expand::prepare_scene_modifiers;
 
 /// One node's fusion classification within a specific (flattened) def.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -232,8 +232,4 @@ mod tests {
         let serialized = serde_json::to_value(&report).expect("report serializes");
         assert!(serialized.get("preparationError").is_some());
     }
-
-
-
-
 }

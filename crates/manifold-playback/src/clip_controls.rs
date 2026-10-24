@@ -133,7 +133,11 @@ impl ClipControlSource {
         if self.live_clips.is_empty() {
             return;
         }
-        for clip in layer.clips.iter().filter(|clip| self.live_clips.contains(&clip.id)) {
+        for clip in layer
+            .clips
+            .iter()
+            .filter(|clip| self.live_clips.contains(&clip.id))
+        {
             self.promoted.push(layer, clip);
         }
         self.promoted.sort();
@@ -244,11 +248,16 @@ impl ClipControlFrame {
         beat: Beats,
         muted: MutedStarts,
     ) -> u32 {
-        let Some(source) = self.source_layer(source, owner).and_then(|id| self.by_source.get(id)) else {
+        let Some(source) = self
+            .source_layer(source, owner)
+            .and_then(|id| self.by_source.get(id))
+        else {
             return 0;
         };
         let until = source.arrangement_until;
-        source.arrangement.through(beat, until, muted)
+        source
+            .arrangement
+            .through(beat, until, muted)
             .saturating_sub(source.promoted.through(beat, until, muted))
     }
 
@@ -258,7 +267,10 @@ impl ClipControlFrame {
         if let Some(source) = self.by_source.get_mut(source) {
             source.arrangement_until = until;
         } else if until.is_some() {
-            self.by_source.entry(source.clone()).or_default().arrangement_until = until;
+            self.by_source
+                .entry(source.clone())
+                .or_default()
+                .arrangement_until = until;
         }
     }
 
@@ -274,7 +286,9 @@ impl ClipControlFrame {
     /// Record an already-scheduled clip start for `source_layer`.
     pub(crate) fn record_start(&mut self, source_layer: LayerId, mut start: ClipControlStart) {
         start.sequence = self.next_sequence;
-        self.next_sequence = self.next_sequence.checked_add(1)
+        self.next_sequence = self
+            .next_sequence
+            .checked_add(1)
             .expect("clip-control event sequence exhausted");
         let source = self.by_source.entry(source_layer).or_default();
         if start.is_live && !source.live_clips.contains(&start.clip_id) {
@@ -395,7 +409,11 @@ mod tests {
         let own_layer = LayerId::new("own");
         let lane_layer = LayerId::new("lane");
         frame.set_layer_scope(own_layer.clone(), LayerType::Video, None);
-        frame.set_layer_scope(lane_layer.clone(), LayerType::Trigger, Some(own_layer.clone()));
+        frame.set_layer_scope(
+            lane_layer.clone(),
+            LayerType::Trigger,
+            Some(own_layer.clone()),
+        );
         frame.record_span(own_layer.clone(), span("own-clip", 1.0, Some(4.0)));
         frame.record_span(lane_layer.clone(), span("lane-clip", 2.0, Some(5.0)));
         frame.finish();
@@ -444,13 +462,18 @@ mod tests {
         let owner = LayerId::new("owner");
         let group = LayerId::new("group");
         let lane = LayerId::new("lane");
-        let selection = ClipTriggerSource::Lane { layer_id: lane.clone() };
+        let selection = ClipTriggerSource::Lane {
+            layer_id: lane.clone(),
+        };
         frame.set_layer_scope(group.clone(), LayerType::Group, None);
         frame.set_layer_scope(owner.clone(), LayerType::Video, Some(group.clone()));
         frame.set_layer_scope(lane.clone(), LayerType::Trigger, Some(group.clone()));
         frame.record_span(lane.clone(), span("clip", 1.0, Some(4.0)));
         frame.record_start(lane.clone(), start("clip", 1.0));
-        assert_eq!(frame.elapsed(&selection, Some(&owner), Beats(2.0)), Some(Beats(1.0)));
+        assert_eq!(
+            frame.elapsed(&selection, Some(&owner), Beats(2.0)),
+            Some(Beats(1.0))
+        );
         assert_eq!(frame.starts(&selection, Some(&owner)).len(), 1);
 
         frame.set_layer_scope(owner.clone(), LayerType::Video, None);
@@ -511,8 +534,13 @@ mod tests {
         frame.record_start(layer.clone(), start("a", 1.0));
         frame.finish();
         let starts = frame.starts(&ClipTriggerSource::default(), Some(&layer));
-        assert_eq!(starts.iter().map(|start| (start.clip_id.as_str(), start.beat.0))
-            .collect::<Vec<_>>(), [("a", 1.0), ("b", 1.0), ("z", 2.0)]);
+        assert_eq!(
+            starts
+                .iter()
+                .map(|start| (start.clip_id.as_str(), start.beat.0))
+                .collect::<Vec<_>>(),
+            [("a", 1.0), ("b", 1.0), ("z", 2.0)]
+        );
     }
 
     #[test]
@@ -537,12 +565,19 @@ mod tests {
     fn arrangement_count_follows_the_timeline_and_skips_recorded_live_takes() {
         use manifold_core::session::SessionGrid;
         let observe = |frame: &mut ClipControlFrame, layer: &Layer| {
-            let digest = manifold_core::project::clip_trigger_pattern_digest(layer, &SessionGrid::default());
-            frame.by_source.get_mut(&layer.layer_id).unwrap().observe_pattern(layer, digest);
+            let digest =
+                manifold_core::project::clip_trigger_pattern_digest(layer, &SessionGrid::default());
+            frame
+                .by_source
+                .get_mut(&layer.layer_id)
+                .unwrap()
+                .observe_pattern(layer, digest);
         };
         let mut layer = Layer::new_generator("L".into(), manifold_core::PresetTypeId::new("T"), 0);
-        layer.clips = [0.0, 1.0, 2.0].into_iter()
-            .map(|beat| TimelineClip::new_generator(Beats(beat), Beats(0.5))).collect();
+        layer.clips = [0.0, 1.0, 2.0]
+            .into_iter()
+            .map(|beat| TimelineClip::new_generator(Beats(beat), Beats(0.5)))
+            .collect();
         layer.clips[1].is_muted = true;
         let id = layer.layer_id.clone();
         let own = ClipTriggerSource::OwnLayer;
@@ -554,7 +589,11 @@ mod tests {
         };
         assert_eq!(count(&frame, 1.5, MutedStarts::Skip), 1);
         assert_eq!(count(&frame, 1.5, MutedStarts::Count), 2);
-        assert_eq!(count(&frame, 2.0, MutedStarts::Skip), 2, "a start at the beat counts");
+        assert_eq!(
+            count(&frame, 2.0, MutedStarts::Skip),
+            2,
+            "a start at the beat counts"
+        );
 
         // A detached layer's arrangement stops counting at the launch.
         frame.set_arrangement_until(&id, Some(Beats(1.0)));
@@ -564,9 +603,16 @@ mod tests {
         // A live start recorded into the arrangement is counted once, live,
         // until a transport reset hands it to the timeline.
         let take = TimelineClip::new_generator(Beats(3.0), Beats(0.5));
-        frame.record_start(id.clone(), ClipControlStart {
-            clip_id: take.id.clone(), beat: Beats(3.0), is_muted: false, is_live: true, sequence: 0,
-        });
+        frame.record_start(
+            id.clone(),
+            ClipControlStart {
+                clip_id: take.id.clone(),
+                beat: Beats(3.0),
+                is_muted: false,
+                is_live: true,
+                sequence: 0,
+            },
+        );
         layer.clips.push(take);
         observe(&mut frame, &layer);
         assert_eq!(count(&frame, 3.5, MutedStarts::Skip), 2);

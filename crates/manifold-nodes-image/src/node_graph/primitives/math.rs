@@ -7,10 +7,10 @@
 //! produce NaN/Inf where a renderer downstream might propagate them
 //! into a shader.
 
-use std::borrow::Cow;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use std::borrow::Cow;
 
 pub const MATH_OPS: &[&str] = &[
     "Add",        // 0
@@ -122,7 +122,8 @@ impl Primitive for Math {
         if op == 14 {
             // sqrt(max(a, 0)) — perceptual slopes (FluidSim3D count→brightness).
             // Unary; b ignored. Negative input clamps to 0, never NaN.
-            ctx.outputs.set_scalar("out", ParamValue::Float(a.max(0.0).sqrt()));
+            ctx.outputs
+                .set_scalar("out", ParamValue::Float(a.max(0.0).sqrt()));
             return;
         }
 
@@ -177,11 +178,13 @@ mod tests {
     use manifold_core::{Beats, Seconds};
 
     use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeType, FrameTime};
+    use manifold_node_engine::exec::execution::Executor;
     use manifold_node_engine::exec::execution_plan::compile;
     use manifold_node_engine::graph::Graph;
-    use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+    use manifold_node_engine::ports::{
+        NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+    };
     use manifold_node_engine::primitives::value::Value;
-    use manifold_node_engine::exec::execution::Executor;
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -197,9 +200,9 @@ mod tests {
         seen: std::sync::Arc<std::sync::Mutex<Option<ParamValue>>>,
     }
     impl EffectNode for Capture {
-    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
-        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
-    }
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+            manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+        }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }

@@ -32,14 +32,14 @@
 //! rects/text rather than through a retained text-field widget — the same
 //! immediate-mode convention every other row here already uses.
 
-use crate::{RootAction};
-use crate::view::UiGraphTarget;
 use crate::MacroCurve;
 use crate::PanelAction;
+use crate::RootAction;
 use crate::apply_card_reshape;
 use crate::draw::Painter;
 use crate::node::Color32;
 use crate::text_edit::{TextEditModel, byte_offset_for_x, x_for_byte_offset};
+use crate::view::UiGraphTarget;
 
 use super::Rect;
 
@@ -372,7 +372,10 @@ impl MappingPopover {
         if x + POPOVER_W > clip.x + clip.w {
             x = anchor.x - POPOVER_W - 6.0;
         }
-        x = x.clamp(clip.x + 2.0, (clip.x + clip.w - POPOVER_W - 2.0).max(clip.x + 2.0));
+        x = x.clamp(
+            clip.x + 2.0,
+            (clip.x + clip.w - POPOVER_W - 2.0).max(clip.x + 2.0),
+        );
         let mut y = anchor.y;
         if y + h > clip.y + clip.h {
             y = (clip.y + clip.h - h - 2.0).max(clip.y + 2.0);
@@ -385,10 +388,11 @@ impl MappingPopover {
 
     pub fn close(&mut self) {
         if self.dragging.take().is_some() {
-            self.pending_actions.push(PanelAction::Root(RootAction::EffectMappingCancel {
-                target: self.target.clone().expect("open mapping popover"),
-                binding_id: self.binding_id.clone(),
-            }));
+            self.pending_actions
+                .push(PanelAction::Root(RootAction::EffectMappingCancel {
+                    target: self.target.clone().expect("open mapping popover"),
+                    binding_id: self.binding_id.clone(),
+                }));
         }
         self.open = false;
         self.edit = None;
@@ -528,12 +532,20 @@ impl MappingPopover {
 
     /// Convert a stored mapping value to the unit shown in the popover.
     fn display_value(&self, value: f32) -> f32 {
-        if self.is_angle { value.to_degrees() } else { value }
+        if self.is_angle {
+            value.to_degrees()
+        } else {
+            value
+        }
     }
 
     /// Convert a value typed in the popover back to storage units.
     fn storage_value(&self, value: f32) -> f32 {
-        if self.is_angle { value.to_radians() } else { value }
+        if self.is_angle {
+            value.to_radians()
+        } else {
+            value
+        }
     }
 
     fn format_mapping_value(&self, value: f32) -> String {
@@ -565,7 +577,9 @@ impl MappingPopover {
             EditField::Min => Some((self.value_field_rect(DragTarget::Min), FONT_SMALL, true)),
             EditField::Max => Some((self.value_field_rect(DragTarget::Max), FONT_SMALL, true)),
             EditField::Scale => Some((self.value_field_rect(DragTarget::Scale), FONT_SMALL, true)),
-            EditField::Offset => Some((self.value_field_rect(DragTarget::Offset), FONT_SMALL, true)),
+            EditField::Offset => {
+                Some((self.value_field_rect(DragTarget::Offset), FONT_SMALL, true))
+            }
         }
     }
 
@@ -639,11 +653,12 @@ impl MappingPopover {
         // INV toggle.
         if Self::point_in(self.invert_btn_rect(), sx, sy) {
             self.invert = !self.invert;
-            self.pending_actions.push(PanelAction::Root(RootAction::EffectMappingInvert {
-                target: self.target.clone().expect("open mapping popover"),
-                binding_id: self.binding_id.clone(),
-                invert: self.invert,
-            }));
+            self.pending_actions
+                .push(PanelAction::Root(RootAction::EffectMappingInvert {
+                    target: self.target.clone().expect("open mapping popover"),
+                    binding_id: self.binding_id.clone(),
+                    invert: self.invert,
+                }));
             return true;
         }
         // Curve cells.
@@ -651,12 +666,13 @@ impl MappingPopover {
             if Self::point_in(self.curve_cell_rect(idx), sx, sy) {
                 if c != self.curve {
                     self.curve = c;
-                    self.pending_actions.push(PanelAction::Root(RootAction::EffectMappingCurve {
-                        target: self.target.clone().expect("open mapping popover"),
-                        binding_id: self.binding_id.clone(),
-                        // `c` is already the UI `MacroCurve` the action carries.
-                        curve: c,
-                    }));
+                    self.pending_actions
+                        .push(PanelAction::Root(RootAction::EffectMappingCurve {
+                            target: self.target.clone().expect("open mapping popover"),
+                            binding_id: self.binding_id.clone(),
+                            // `c` is already the UI `MacroCurve` the action carries.
+                            curve: c,
+                        }));
                 }
                 return true;
             }
@@ -666,11 +682,12 @@ impl MappingPopover {
         // the field's start value.
         for which in [DragTarget::Scale, DragTarget::Offset] {
             if Self::point_in(self.value_field_rect(which), sx, sy) {
-                self.pending_actions
-                    .push(PanelAction::Root(RootAction::EffectMappingAffineSnapshot {
+                self.pending_actions.push(PanelAction::Root(
+                    RootAction::EffectMappingAffineSnapshot {
                         target: self.target.clone().expect("open mapping popover"),
                         binding_id: self.binding_id.clone(),
-                    }));
+                    },
+                ));
                 self.dragging = Some(which);
                 self.drag_moved = false;
                 self.scrub_press_x = sx;
@@ -685,10 +702,11 @@ impl MappingPopover {
         // exposed from. Read-only navigation; emit and close so the canvas is
         // unobstructed when it centres.
         if Self::point_in(self.goto_btn_rect(), sx, sy) {
-            self.pending_actions.push(PanelAction::Root(RootAction::EffectMappingGotoNode {
-                target: self.target.clone().expect("open mapping popover"),
-                binding_id: self.binding_id.clone(),
-            }));
+            self.pending_actions
+                .push(PanelAction::Root(RootAction::EffectMappingGotoNode {
+                    target: self.target.clone().expect("open mapping popover"),
+                    binding_id: self.binding_id.clone(),
+                }));
             self.open = false;
             return true;
         }
@@ -723,10 +741,11 @@ impl MappingPopover {
         if let Some(which) = self.dragging.take() {
             // Even a stationary click began a scrub guard. Close that guard
             // before entering text edit; unchanged values produce no undo.
-            self.pending_actions.push(PanelAction::Root(RootAction::EffectMappingAffineCommit {
-                target: self.target.clone().expect("open mapping popover"),
-                binding_id: self.binding_id.clone(),
-            }));
+            self.pending_actions
+                .push(PanelAction::Root(RootAction::EffectMappingAffineCommit {
+                    target: self.target.clone().expect("open mapping popover"),
+                    binding_id: self.binding_id.clone(),
+                }));
             if !self.drag_moved {
                 self.enter_edit(which.into());
             }
@@ -826,14 +845,19 @@ impl MappingPopover {
         // all; the inner `Option<String>` carries value-vs-clear.
         if field == EditField::Section {
             let trimmed = buffer.trim();
-            let new_section = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
+            let new_section = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            };
             if new_section != self.section {
                 self.section = new_section.clone();
-                self.pending_actions.push(PanelAction::Root(RootAction::EffectMappingSection {
-                    target: self.target.clone().expect("open mapping popover"),
-                    binding_id: id,
-                    section: new_section,
-                }));
+                self.pending_actions
+                    .push(PanelAction::Root(RootAction::EffectMappingSection {
+                        target: self.target.clone().expect("open mapping popover"),
+                        binding_id: id,
+                        section: new_section,
+                    }));
             }
             return;
         }
@@ -845,11 +869,12 @@ impl MappingPopover {
         match field {
             EditField::Min | EditField::Max => {
                 v = self.storage_value(v);
-                self.pending_actions
-                    .push(PanelAction::Root(RootAction::EffectMappingRangeSnapshot {
+                self.pending_actions.push(PanelAction::Root(
+                    RootAction::EffectMappingRangeSnapshot {
                         target: self.target.clone().expect("open mapping popover"),
                         binding_id: id.clone(),
-                    }));
+                    },
+                ));
                 if field == EditField::Min {
                     self.cur_min = v.min(self.cur_max);
                     self.range_lo = self.range_lo.min(self.cur_min);
@@ -857,36 +882,47 @@ impl MappingPopover {
                     self.cur_max = v.max(self.cur_min);
                     self.range_hi = self.range_hi.max(self.cur_max);
                 }
-                self.pending_actions
-                    .push(PanelAction::Root(RootAction::EffectMappingRangeChanged {
+                self.pending_actions.push(PanelAction::Root(
+                    RootAction::EffectMappingRangeChanged {
                         target: self.target.clone().expect("open mapping popover"),
                         binding_id: id.clone(),
                         min: self.cur_min,
                         max: self.cur_max,
-                    }));
-                self.pending_actions
-                    .push(PanelAction::Root(RootAction::EffectMappingRangeCommit { target: self.target.clone().expect("open mapping popover"), binding_id: id }));
+                    },
+                ));
+                self.pending_actions.push(PanelAction::Root(
+                    RootAction::EffectMappingRangeCommit {
+                        target: self.target.clone().expect("open mapping popover"),
+                        binding_id: id,
+                    },
+                ));
             }
             EditField::Scale | EditField::Offset => {
-                self.pending_actions
-                    .push(PanelAction::Root(RootAction::EffectMappingAffineSnapshot {
+                self.pending_actions.push(PanelAction::Root(
+                    RootAction::EffectMappingAffineSnapshot {
                         target: self.target.clone().expect("open mapping popover"),
                         binding_id: id.clone(),
-                    }));
+                    },
+                ));
                 if field == EditField::Scale {
                     self.cur_scale = v;
                 } else {
                     self.cur_offset = v;
                 }
-                self.pending_actions
-                    .push(PanelAction::Root(RootAction::EffectMappingAffineChanged {
+                self.pending_actions.push(PanelAction::Root(
+                    RootAction::EffectMappingAffineChanged {
                         target: self.target.clone().expect("open mapping popover"),
                         binding_id: id.clone(),
                         scale: self.cur_scale,
                         offset: self.cur_offset,
-                    }));
-                self.pending_actions
-                    .push(PanelAction::Root(RootAction::EffectMappingAffineCommit { target: self.target.clone().expect("open mapping popover"), binding_id: id }));
+                    },
+                ));
+                self.pending_actions.push(PanelAction::Root(
+                    RootAction::EffectMappingAffineCommit {
+                        target: self.target.clone().expect("open mapping popover"),
+                        binding_id: id,
+                    },
+                ));
             }
             EditField::Label | EditField::Section => unreachable!("handled above"),
         }
@@ -946,8 +982,22 @@ impl MappingPopover {
         let r = self.preview_rect();
         ui.draw_rounded_rect(r.x, r.y, r.w, r.h, PREVIEW_BG, 3.0);
         // Faint centre cross for orientation.
-        ui.draw_line(r.x + r.w * 0.5, r.y, r.x + r.w * 0.5, r.y + r.h, 1.0, PREVIEW_GRID);
-        ui.draw_line(r.x, r.y + r.h * 0.5, r.x + r.w, r.y + r.h * 0.5, 1.0, PREVIEW_GRID);
+        ui.draw_line(
+            r.x + r.w * 0.5,
+            r.y,
+            r.x + r.w * 0.5,
+            r.y + r.h,
+            1.0,
+            PREVIEW_GRID,
+        );
+        ui.draw_line(
+            r.x,
+            r.y + r.h * 0.5,
+            r.x + r.w,
+            r.y + r.h * 0.5,
+            1.0,
+            PREVIEW_GRID,
+        );
 
         // Sample output across the full input span, tracking the output range
         // so the curve auto-fits the box vertically.
@@ -967,10 +1017,7 @@ impl MappingPopover {
         let plot = |i: usize| -> (f32, f32) {
             let t = i as f32 / PREVIEW_SAMPLES as f32;
             let ny = (outs[i] - out_lo) / out_span;
-            (
-                r.x + t * r.w,
-                r.y + r.h - pad_y - ny * (r.h - 2.0 * pad_y),
-            )
+            (r.x + t * r.w, r.y + r.h - pad_y - ny * (r.h - 2.0 * pad_y))
         };
         for i in 0..PREVIEW_SAMPLES {
             let (x0, y0) = plot(i);
@@ -1005,9 +1052,19 @@ impl MappingPopover {
         let active = self.dragging == Some(which) || editing;
         let bg = if active { CURVE_BG_ACTIVE } else { BTN_BG };
         ui.draw_rounded_rect(r.x, r.y, r.w, r.h, bg, 2.0);
-        let txt = if editing { self.model.text().to_string() } else { value_text };
+        let txt = if editing {
+            self.model.text().to_string()
+        } else {
+            value_text
+        };
         let tw = crate::draw::text_width(&txt, FONT_SMALL);
-        ui.draw_text(r.x + r.w - tw - 5.0, r.y + 3.0, &txt, FONT_SMALL, TEXT_PRIMARY);
+        ui.draw_text(
+            r.x + r.w - tw - 5.0,
+            r.y + 3.0,
+            &txt,
+            FONT_SMALL,
+            TEXT_PRIMARY,
+        );
         if editing {
             self.draw_caret_and_selection(ui, r, FONT_SMALL, true);
         }
@@ -1025,10 +1082,18 @@ impl MappingPopover {
         let txt = if editing {
             self.model.text().to_string()
         } else {
-            self.section.clone().unwrap_or_else(|| "\u{2014}".to_string())
+            self.section
+                .clone()
+                .unwrap_or_else(|| "\u{2014}".to_string())
         };
         let tw = crate::draw::text_width(&txt, FONT_SMALL);
-        ui.draw_text(r.x + r.w - tw - 5.0, r.y + 3.0, &txt, FONT_SMALL, TEXT_PRIMARY);
+        ui.draw_text(
+            r.x + r.w - tw - 5.0,
+            r.y + 3.0,
+            &txt,
+            FONT_SMALL,
+            TEXT_PRIMARY,
+        );
         if editing {
             self.draw_caret_and_selection(ui, r, FONT_SMALL, true);
         }
@@ -1039,7 +1104,13 @@ impl MappingPopover {
     /// the old whole-buffer `"|"` suffix). `rect`/`font`/`right_aligned`
     /// mirror [`Self::active_field_geometry`] / [`Self::byte_at_field_x`]'s
     /// text-origin math, so hit-testing and drawing never disagree.
-    fn draw_caret_and_selection(&self, ui: &mut dyn Painter, rect: Rect, font: f32, right_aligned: bool) {
+    fn draw_caret_and_selection(
+        &self,
+        ui: &mut dyn Painter,
+        rect: Rect,
+        font: f32,
+        right_aligned: bool,
+    ) {
         let text = self.model.text();
         let mut measure = |s: &str| crate::draw::text_width(s, font);
         let text_start_x = if right_aligned {
@@ -1051,10 +1122,22 @@ impl MappingPopover {
             let sel = self.model.selection();
             let hx = text_start_x + x_for_byte_offset(text, sel.start, &mut measure);
             let hend = text_start_x + x_for_byte_offset(text, sel.end, &mut measure);
-            ui.draw_rect(hx, rect.y + 2.0, (hend - hx).max(1.0), rect.h - 4.0, crate::color::TEXT_EDIT_SELECT_BG);
+            ui.draw_rect(
+                hx,
+                rect.y + 2.0,
+                (hend - hx).max(1.0),
+                rect.h - 4.0,
+                crate::color::TEXT_EDIT_SELECT_BG,
+            );
         }
         let cx = text_start_x + x_for_byte_offset(text, self.model.caret(), &mut measure);
-        ui.draw_rect(cx, rect.y + 2.0, 1.0, rect.h - 4.0, crate::color::TEXT_EDIT_CARET);
+        ui.draw_rect(
+            cx,
+            rect.y + 2.0,
+            1.0,
+            rect.h - 4.0,
+            crate::color::TEXT_EDIT_CARET,
+        );
     }
 
     pub fn render(&self, ui: &mut dyn Painter) {
@@ -1083,8 +1166,18 @@ impl MappingPopover {
         if renaming {
             ui.draw_rounded_rect(hr.x - 3.0, hr.y, hr.w, hr.h, CURVE_BG_ACTIVE, 2.0);
         }
-        let header_txt = if renaming { self.model.text().to_string() } else { self.label.clone() };
-        ui.draw_text(panel.x + PAD, panel.y + PAD, &header_txt, FONT, TEXT_PRIMARY);
+        let header_txt = if renaming {
+            self.model.text().to_string()
+        } else {
+            self.label.clone()
+        };
+        ui.draw_text(
+            panel.x + PAD,
+            panel.y + PAD,
+            &header_txt,
+            FONT,
+            TEXT_PRIMARY,
+        );
         if renaming {
             self.draw_caret_and_selection(ui, hr, FONT, false);
         }
@@ -1148,13 +1241,7 @@ impl MappingPopover {
             // Center the (short) label.
             let label = curve_label(c);
             let tw = label.chars().count() as f32 * FONT_SMALL * 0.5;
-            ui.draw_text(
-                r.x + (r.w - tw) * 0.5,
-                r.y + 3.0,
-                label,
-                FONT_SMALL,
-                tc,
-            );
+            ui.draw_text(r.x + (r.w - tw) * 0.5, r.y + 3.0, label, FONT_SMALL, tc);
         }
 
         // ── Scale / Offset affine rows ──
@@ -1179,13 +1266,7 @@ impl MappingPopover {
         ui.draw_rounded_rect(g.x, g.y, g.w, g.h, BTN_BG, 2.0);
         let label = "\u{2192} Go to node";
         let tw = label.chars().count() as f32 * FONT * 0.5;
-        ui.draw_text(
-            g.x + (g.w - tw) * 0.5,
-            g.y + 3.0,
-            label,
-            FONT,
-            TEXT_PRIMARY,
-        );
+        ui.draw_text(g.x + (g.w - tw) * 0.5, g.y + 3.0, label, FONT, TEXT_PRIMARY);
     }
 }
 
@@ -1315,9 +1396,22 @@ mod tests {
         p.on_press(r.x + 2.0, r.y + 2.0);
         p.close();
         let second = UiGraphTarget::Generator(manifold_foundation::LayerId::new("other"));
-        p.open(second.clone(), "user.uv.rotation.1".into(), "Rotation".into(),
-            0.0, 1.0, false, MacroCurve::Linear, 1.0, 0.0, None, false, None,
-            Rect::new(100.0, 300.0, 168.0, 18.0), Rect::new(0.0, 0.0, 1000.0, 800.0));
+        p.open(
+            second.clone(),
+            "user.uv.rotation.1".into(),
+            "Rotation".into(),
+            0.0,
+            1.0,
+            false,
+            MacroCurve::Linear,
+            1.0,
+            0.0,
+            None,
+            false,
+            None,
+            Rect::new(100.0, 300.0, 168.0, 18.0),
+            Rect::new(0.0, 0.0, 1000.0, 800.0),
+        );
         let r = p.invert_btn_rect();
         p.on_press(r.x + 2.0, r.y + 2.0);
         assert!(matches!(p.drain_actions().as_slice(), [
@@ -1330,7 +1424,10 @@ mod tests {
     fn live_value_round_trips_and_preview_uses_shared_math() {
         let mut p = open_popover();
         assert_eq!(p.binding_id(), "user.uv.rotation.1");
-        assert!(p.live_value.is_none(), "no live value until the host feeds one");
+        assert!(
+            p.live_value.is_none(),
+            "no live value until the host feeds one"
+        );
         p.set_live_value(Some(0.5));
         assert_eq!(p.live_value, Some(0.5));
         // Identity mapping (Linear, no invert, scale 1 / offset 0): the preview
@@ -1365,7 +1462,10 @@ mod tests {
         let actions = p.drain_actions();
         assert!(matches!(
             actions.as_slice(),
-            [PanelAction::Root(RootAction::EffectMappingInvert { invert: true, .. })]
+            [PanelAction::Root(RootAction::EffectMappingInvert {
+                invert: true,
+                ..
+            })]
         ));
         assert!(p.invert);
     }
@@ -1388,7 +1488,6 @@ mod tests {
         assert_eq!(p.curve, MacroCurve::Exponential);
     }
 
-
     #[test]
     fn scale_scrub_snapshots_changes_and_commits() {
         let mut p = open_popover(); // cur_scale = 1.0
@@ -1399,16 +1498,24 @@ mod tests {
         let after_press = p.drain_actions();
         assert!(matches!(
             after_press.first(),
-            Some(PanelAction::Root(RootAction::EffectMappingAffineSnapshot { .. }))
+            Some(PanelAction::Root(
+                RootAction::EffectMappingAffineSnapshot { .. }
+            ))
         ));
         // Drag right → scale increases above its 1.0 start.
         p.on_move(r.x + r.w * 0.5 + 80.0, r.y);
         let changed = p.drain_actions();
         assert!(matches!(
             changed.last(),
-            Some(PanelAction::Root(RootAction::EffectMappingAffineChanged { .. }))
+            Some(PanelAction::Root(
+                RootAction::EffectMappingAffineChanged { .. }
+            ))
         ));
-        assert!(p.cur_scale > 1.0, "drag right raises scale, got {}", p.cur_scale);
+        assert!(
+            p.cur_scale > 1.0,
+            "drag right raises scale, got {}",
+            p.cur_scale
+        );
         // Offset untouched by a scale scrub.
         assert_eq!(p.cur_offset, 0.0);
         // Release commits the affine drag as one undo entry.
@@ -1416,7 +1523,9 @@ mod tests {
         let commit = p.drain_actions();
         assert!(matches!(
             commit.as_slice(),
-            [PanelAction::Root(RootAction::EffectMappingAffineCommit { .. })]
+            [PanelAction::Root(
+                RootAction::EffectMappingAffineCommit { .. }
+            )]
         ));
     }
 
@@ -1452,11 +1561,16 @@ mod tests {
         p.commit_edit();
         assert!(!p.is_editing());
         assert_eq!(p.cur_max, 128.0, "typed value past nominal max is accepted");
-        assert!(p.range_hi >= 128.0, "track span widened to keep the handle visible");
+        assert!(
+            p.range_hi >= 128.0,
+            "track span widened to keep the handle visible"
+        );
         let actions = p.drain_actions();
         assert!(matches!(
             actions.first(),
-            Some(PanelAction::Root(RootAction::EffectMappingRangeSnapshot { .. }))
+            Some(PanelAction::Root(
+                RootAction::EffectMappingRangeSnapshot { .. }
+            ))
         ));
         assert!(actions.iter().any(|a| matches!(
             a,
@@ -1464,7 +1578,9 @@ mod tests {
         )));
         assert!(matches!(
             actions.last(),
-            Some(PanelAction::Root(RootAction::EffectMappingRangeCommit { .. }))
+            Some(PanelAction::Root(
+                RootAction::EffectMappingRangeCommit { .. }
+            ))
         ));
     }
 
@@ -1476,10 +1592,16 @@ mod tests {
         assert!(p.on_press(r.x + r.w * 0.5, r.y + r.h * 0.5));
         p.on_release();
         assert!(p.is_editing(), "a no-drag click enters numeric edit");
-        assert!(matches!(p.drain_actions().as_slice(), [
-            PanelAction::Root(RootAction::EffectMappingAffineSnapshot { .. }),
-            PanelAction::Root(RootAction::EffectMappingAffineCommit { .. }),
-        ]), "click must close its scrub guard before text editing");
+        assert!(
+            matches!(
+                p.drain_actions().as_slice(),
+                [
+                    PanelAction::Root(RootAction::EffectMappingAffineSnapshot { .. }),
+                    PanelAction::Root(RootAction::EffectMappingAffineCommit { .. }),
+                ]
+            ),
+            "click must close its scrub guard before text editing"
+        );
         for ch in "2.5".chars() {
             p.on_text_char(ch);
         }
@@ -1492,7 +1614,9 @@ mod tests {
         )));
         assert!(matches!(
             actions.last(),
-            Some(PanelAction::Root(RootAction::EffectMappingAffineCommit { .. }))
+            Some(PanelAction::Root(
+                RootAction::EffectMappingAffineCommit { .. }
+            ))
         ));
     }
 
@@ -1525,8 +1649,14 @@ mod tests {
         p.close();
         p.on_release();
         let actions = p.drain_actions();
-        assert!(matches!(actions.last(), Some(PanelAction::Root(RootAction::EffectMappingCancel { .. }))));
-        assert!(!actions.iter().any(|a| matches!(a, PanelAction::Root(RootAction::EffectMappingAffineCommit { .. }))));
+        assert!(matches!(
+            actions.last(),
+            Some(PanelAction::Root(RootAction::EffectMappingCancel { .. }))
+        ));
+        assert!(!actions.iter().any(|a| matches!(
+            a,
+            PanelAction::Root(RootAction::EffectMappingAffineCommit { .. })
+        )));
     }
 
     #[test]
@@ -1604,7 +1734,10 @@ mod tests {
         let actions = p.drain_actions();
         assert!(matches!(
             actions.as_slice(),
-            [PanelAction::Root(RootAction::EffectMappingSection { section: None, .. })]
+            [PanelAction::Root(RootAction::EffectMappingSection {
+                section: None,
+                ..
+            })]
         ));
     }
 
@@ -1629,9 +1762,16 @@ mod tests {
         );
         p.enter_edit(EditField::Section);
         assert_eq!(p.model.text(), "Old");
-        assert!(p.model.has_selection(), "seeded text starts pre-selected (D16)");
+        assert!(
+            p.model.has_selection(),
+            "seeded text starts pre-selected (D16)"
+        );
         p.on_text_char('N');
-        assert_eq!(p.model.text(), "N", "typing over the selection replaces it, not appends");
+        assert_eq!(
+            p.model.text(),
+            "N",
+            "typing over the selection replaces it, not appends"
+        );
     }
 
     // ── P5c: pointer-driven caret placement + drag-select ─────────────
@@ -1647,9 +1787,19 @@ mod tests {
         // A second press inside the SAME field (not commit-and-reopen)
         // repositions the caret instead of resetting the buffer.
         let r = p.value_field_rect(DragTarget::Offset);
-        assert!(p.on_press(r.x + 1.0, r.y + 2.0), "press inside the active field is consumed");
-        assert!(p.is_editing(), "still editing — not committed by an in-field press");
-        assert_eq!(p.model.text(), "12.5", "buffer untouched by the reposition click");
+        assert!(
+            p.on_press(r.x + 1.0, r.y + 2.0),
+            "press inside the active field is consumed"
+        );
+        assert!(
+            p.is_editing(),
+            "still editing — not committed by an in-field press"
+        );
+        assert_eq!(
+            p.model.text(),
+            "12.5",
+            "buffer untouched by the reposition click"
+        );
     }
 
     #[test]
@@ -1664,7 +1814,10 @@ mod tests {
         assert!(p.on_press(r.x + r.w - 1.0, r.y + 2.0));
         // …then drag toward its left edge — a selection should grow.
         p.on_move(r.x + 1.0, r.y + 2.0);
-        assert!(p.model.has_selection(), "drag inside the field grows a selection");
+        assert!(
+            p.model.has_selection(),
+            "drag inside the field grows a selection"
+        );
         p.on_release();
         // Release ends the drag; the selection (and edit session) persists
         // until commit/cancel.
@@ -1685,7 +1838,14 @@ mod tests {
         assert!(p.on_press(scale_r.x + scale_r.w * 0.5, scale_r.y + scale_r.h * 0.5));
         assert_eq!(p.cur_offset, 5.0, "the offset edit was committed on blur");
         p.on_release();
-        assert!(p.is_editing(), "the Scale click (no drag) enters its own edit");
-        assert_eq!(p.model.text(), "", "the newly-opened Scale field seeds empty");
+        assert!(
+            p.is_editing(),
+            "the Scale click (no drag) enters its own edit"
+        );
+        assert_eq!(
+            p.model.text(),
+            "",
+            "the newly-opened Scale field seeds empty"
+        );
     }
 }

@@ -1,12 +1,12 @@
 use manifold_core::Seconds;
 use manifold_physics::{
-    input::{AppliedEvent, EventQueue, EventStamp},
     FieldInput, FieldValue, TickStamp, VectorField,
+    input::{AppliedEvent, EventQueue, EventStamp},
 };
 
 use manifold_core::scene_impulse::RigidImpulseTargets;
 
-use super::{apply_by_target, RigidSimulation, FIXED_TICK, IMPULSE_CAPACITY};
+use super::{FIXED_TICK, IMPULSE_CAPACITY, RigidSimulation, apply_by_target};
 
 /// A resolved scene-space delta velocity retained by value until its fixed
 /// tick begins. The field is sampled at each recipient's current center of
@@ -82,13 +82,21 @@ impl RigidSimulation {
     /// Capture an impulse timestamp from the observation that was accepted for
     /// this exact played time. Native time is authored time, so paused
     /// observations retain their current clock without extrapolation.
-    pub fn impulse_stamp(&self, played: manifold_core::PlayedTime, sequence: u64) -> Result<EventStamp, String> {
+    pub fn impulse_stamp(
+        &self,
+        played: manifold_core::PlayedTime,
+        sequence: u64,
+    ) -> Result<EventStamp, String> {
         self.impulse_stamp_at(played.seconds(), sequence)
     }
 
     /// [`Self::impulse_stamp`] for a coupled worker, whose accepted
     /// observation is the simulation time its owner accepted.
-    pub fn worker_impulse_stamp(&self, accepted: Seconds, sequence: u64) -> Result<EventStamp, String> {
+    pub fn worker_impulse_stamp(
+        &self,
+        accepted: Seconds,
+        sequence: u64,
+    ) -> Result<EventStamp, String> {
         self.impulse_stamp_at(accepted.0, sequence)
     }
 
@@ -148,15 +156,21 @@ impl RigidSimulation {
                 .expect("initialized world has an impulse queue")
                 .next_tick());
         }
-        let queue = self.impulse_queue.as_mut().expect("initialized world has an impulse queue");
-        let outstanding = queue.len() + self.impulse_receipts.len() + self.impulse_tick_events.len();
+        let queue = self
+            .impulse_queue
+            .as_mut()
+            .expect("initialized world has an impulse queue");
+        let outstanding =
+            queue.len() + self.impulse_receipts.len() + self.impulse_tick_events.len();
         // A burst past the history grows it here, on the hit, so a tick
         // never allocates and the queue's overflow latch is never reached.
         if outstanding >= queue.capacity() {
             let capacity = outstanding * 2;
             queue.grow(capacity);
-            self.impulse_receipts.reserve(capacity - self.impulse_receipts.len());
-            self.impulse_tick_events.reserve(capacity - self.impulse_tick_events.len());
+            self.impulse_receipts
+                .reserve(capacity - self.impulse_receipts.len());
+            self.impulse_tick_events
+                .reserve(capacity - self.impulse_tick_events.len());
         }
         queue
             .enqueue(stamp, payload)
@@ -206,7 +220,6 @@ impl RigidSimulation {
         Ok(())
     }
 
-
     pub(super) fn reset_impulse_runtime(&mut self, epoch: u64) -> Result<(), String> {
         if let Some(queue) = self.impulse_queue.as_mut() {
             queue
@@ -243,7 +256,6 @@ impl RigidSimulation {
         Ok(tick)
     }
 
-
     pub(super) fn apply_impulse_tick(&mut self) -> Result<(), String> {
         if self.impulse_tick_events.is_empty() {
             return Ok(());
@@ -253,7 +265,11 @@ impl RigidSimulation {
         let sum_field = |index: usize| {
             ImpulseSumField::new(
                 events,
-                if index < bodies { ImpulseRecipient::Body(index) } else { ImpulseRecipient::Group(index - bodies) },
+                if index < bodies {
+                    ImpulseRecipient::Body(index)
+                } else {
+                    ImpulseRecipient::Group(index - bodies)
+                },
             )
         };
         let world = self.world.as_mut().expect("world constructed above");
@@ -264,7 +280,13 @@ impl RigidSimulation {
             bodies,
             |target| sum_field(target).has_events(),
             FIXED_TICK,
-            |target, apply| apply(&[FieldInput { field: &sum_field(target), acceleration: 0.0, delta_velocity: 1.0 }]),
+            |target, apply| {
+                apply(&[FieldInput {
+                    field: &sum_field(target),
+                    acceleration: 0.0,
+                    delta_velocity: 1.0,
+                }])
+            },
         );
         if let Err(error) = result {
             self.impulse_failure = Some(error.clone());

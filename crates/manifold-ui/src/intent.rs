@@ -23,7 +23,7 @@
 //! See `docs/NODE_INTENT_DISPATCH.md` for the full design + migration plan.
 
 #[cfg(test)]
-use crate::{TransportAction};
+use crate::TransportAction;
 use crate::node::NodeId;
 use crate::panels::PanelAction;
 use crate::tree::UITree;
@@ -101,7 +101,9 @@ pub struct IntentRegistry<A = PanelAction> {
 // Hand-rolled to avoid a spurious `A: Default` bound.
 impl<A> Default for IntentRegistry<A> {
     fn default() -> Self {
-        Self { entries: ahash::AHashMap::new() }
+        Self {
+            entries: ahash::AHashMap::new(),
+        }
     }
 }
 
@@ -156,7 +158,9 @@ impl<A> IntentRegistry<A> {
     {
         let mut cur = hit;
         while let Some(node) = cur {
-            if !tree.is_live(node) { return None; }
+            if !tree.is_live(node) {
+                return None;
+            }
             if let Some(intent) = self.get(node) {
                 if let Some(action) = intent.action_for(g) {
                     return Some(action.clone());
@@ -191,7 +195,11 @@ mod tests {
 
         let card = tree.add_panel(None, 0.0, 0.0, 200.0, 100.0, style());
         intents.claim_area(card);
-        intents.on(card, Gesture::RightClick, PanelAction::Transport(TransportAction::PlayPause));
+        intents.on(
+            card,
+            Gesture::RightClick,
+            PanelAction::Transport(TransportAction::PlayPause),
+        );
 
         let row = tree.add_panel(Some(card), 0.0, 0.0, 200.0, 30.0, style());
         let fill = tree.add_panel(Some(row), 0.0, 0.0, 100.0, 30.0, style());
@@ -212,14 +220,25 @@ mod tests {
 
         let card = tree.add_panel(None, 0.0, 0.0, 200.0, 100.0, style());
         intents.claim_area(card);
-        intents.on(card, Gesture::RightClick, PanelAction::Transport(TransportAction::PlayPause));
+        intents.on(
+            card,
+            Gesture::RightClick,
+            PanelAction::Transport(TransportAction::PlayPause),
+        );
 
         let track = tree.add_button(Some(card), 0.0, 0.0, 200.0, 30.0, style(), "");
-        intents.on(track, Gesture::RightClick, PanelAction::Transport(TransportAction::Stop));
+        intents.on(
+            track,
+            Gesture::RightClick,
+            PanelAction::Transport(TransportAction::Stop),
+        );
 
         // The track's own intent resolves before the card's.
         let action = intents.resolve(&tree, Some(track), Gesture::RightClick);
-        assert!(matches!(action, Some(PanelAction::Transport(TransportAction::Stop))));
+        assert!(matches!(
+            action,
+            Some(PanelAction::Transport(TransportAction::Stop))
+        ));
     }
 
     #[test]
@@ -229,13 +248,21 @@ mod tests {
 
         // Outer carries a right-click intent.
         let outer = tree.add_panel(None, 0.0, 0.0, 200.0, 100.0, style());
-        intents.on(outer, Gesture::RightClick, PanelAction::Transport(TransportAction::PlayPause));
+        intents.on(
+            outer,
+            Gesture::RightClick,
+            PanelAction::Transport(TransportAction::PlayPause),
+        );
 
         // Inner claims its area but only for Click — right-click is absorbed,
         // not leaked to `outer`.
         let inner = tree.add_panel(Some(outer), 0.0, 0.0, 50.0, 50.0, style());
         intents.claim_area(inner);
-        intents.on(inner, Gesture::Click, PanelAction::Transport(TransportAction::PlayPause));
+        intents.on(
+            inner,
+            Gesture::Click,
+            PanelAction::Transport(TransportAction::PlayPause),
+        );
 
         assert!(
             intents
@@ -255,16 +282,28 @@ mod tests {
         let stale = tree.add_button(None, 0.0, 0.0, 80.0, 30.0, style(), "");
         tree.clear_region(stale.region());
         let live = tree.add_button(None, 0.0, 0.0, 80.0, 30.0, style(), "");
-        assert_eq!((stale.region(), stale.slot()), (live.region(), live.slot()), "slot is reused");
+        assert_eq!(
+            (stale.region(), stale.slot()),
+            (live.region(), live.slot()),
+            "slot is reused"
+        );
         assert_ne!(stale, live);
 
         intents.clear();
-        intents.on(stale, Gesture::Click, PanelAction::Transport(TransportAction::Stop));
+        intents.on(
+            stale,
+            Gesture::Click,
+            PanelAction::Transport(TransportAction::Stop),
+        );
 
         assert!(intents.resolve(&tree, Some(live), Gesture::Click).is_none());
         assert_eq!(intents.dead_entry_count(&tree), 1);
 
-        intents.on(live, Gesture::Click, PanelAction::Transport(TransportAction::PlayPause));
+        intents.on(
+            live,
+            Gesture::Click,
+            PanelAction::Transport(TransportAction::PlayPause),
+        );
         assert!(matches!(
             intents.resolve(&tree, Some(live), Gesture::Click),
             Some(PanelAction::Transport(TransportAction::PlayPause))

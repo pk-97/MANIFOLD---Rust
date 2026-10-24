@@ -5,7 +5,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::{
-    DrawAs, EmitFrom, ForceTargets, Item, ItemFields, ItemId, ItemKind, LightType, ModifierTargets, ModifierType, SceneDoc,
+    DrawAs, EmitFrom, ForceTargets, Item, ItemFields, ItemId, ItemKind, LightType, ModifierTargets,
+    ModifierType, SceneDoc,
 };
 
 /// Why a document edit was refused. The document is untouched.
@@ -14,13 +15,19 @@ pub enum SceneEditError {
     UnknownItem(ItemId),
     DuplicateId(ItemId),
     /// `parent` cannot hold an item of `kind` (None is the top of the tree).
-    CannotHold { parent: Option<ItemKind>, kind: ItemKind },
+    CannotHold {
+        parent: Option<ItemKind>,
+        kind: ItemKind,
+    },
     /// A move would put an item inside itself.
     IntoItself(ItemId),
     /// A scene has one World.
     SecondWorld,
     /// A field set may not change an item's kind.
-    KindChange { from: ItemKind, to: ItemKind },
+    KindChange {
+        from: ItemKind,
+        to: ItemKind,
+    },
     /// A scene holds one card of this modifier type; the text says which.
     SecondOfType(&'static str),
 }
@@ -30,7 +37,10 @@ impl std::fmt::Display for SceneEditError {
         match self {
             SceneEditError::UnknownItem(id) => write!(f, "no item {id} in this scene"),
             SceneEditError::DuplicateId(id) => write!(f, "item id {id} is already used"),
-            SceneEditError::CannotHold { parent: Some(parent), kind } => {
+            SceneEditError::CannotHold {
+                parent: Some(parent),
+                kind,
+            } => {
                 write!(f, "a {parent:?} cannot hold a {kind:?}")
             }
             SceneEditError::CannotHold { parent: None, kind } => {
@@ -39,7 +49,10 @@ impl std::fmt::Display for SceneEditError {
             SceneEditError::IntoItself(id) => write!(f, "item {id} cannot move inside itself"),
             SceneEditError::SecondWorld => f.write_str("a scene has one World"),
             SceneEditError::KindChange { from, to } => {
-                write!(f, "a {from:?} cannot become a {to:?}; remove it and add a {to:?}")
+                write!(
+                    f,
+                    "a {from:?} cannot become a {to:?}; remove it and add a {to:?}"
+                )
             }
             SceneEditError::SecondOfType(reason) => f.write_str(reason),
         }
@@ -87,14 +100,23 @@ pub fn can_hold(parent: Option<ItemKind>, kind: ItemKind) -> bool {
 
 impl Item {
     pub fn new(id: ItemId, name: impl Into<String>, fields: ItemFields) -> Self {
-        Self { id, name: name.into(), fields, children: Vec::new() }
+        Self {
+            id,
+            name: name.into(),
+            fields,
+            children: Vec::new(),
+        }
     }
 
     pub fn kind(&self) -> ItemKind {
         self.fields.kind()
     }
 
-    fn walk<'a>(&'a self, ancestors: &mut Vec<&'a Item>, f: &mut impl FnMut(&'a Item, &[&'a Item])) {
+    fn walk<'a>(
+        &'a self,
+        ancestors: &mut Vec<&'a Item>,
+        f: &mut impl FnMut(&'a Item, &[&'a Item]),
+    ) {
         f(self, ancestors);
         ancestors.push(self);
         for child in &self.children {
@@ -144,7 +166,11 @@ impl Item {
             id: swap(&self.id),
             name: self.name.clone(),
             fields,
-            children: self.children.iter().map(|child| child.remapped(map)).collect(),
+            children: self
+                .children
+                .iter()
+                .map(|child| child.remapped(map))
+                .collect(),
         }
     }
 }
@@ -161,7 +187,13 @@ impl SceneDoc {
 
     pub fn find(&self, id: &ItemId) -> Option<&Item> {
         fn find_in<'a>(items: &'a [Item], id: &ItemId) -> Option<&'a Item> {
-            items.iter().find_map(|item| if &item.id == id { Some(item) } else { find_in(&item.children, id) })
+            items.iter().find_map(|item| {
+                if &item.id == id {
+                    Some(item)
+                } else {
+                    find_in(&item.children, id)
+                }
+            })
         }
         find_in(&self.items, id)
     }
@@ -183,7 +215,11 @@ impl SceneDoc {
 
     /// Where an item sits: its parent (None at the top) and its index there.
     pub fn locate(&self, id: &ItemId) -> Option<(Option<ItemId>, usize)> {
-        fn locate_in(items: &[Item], parent: Option<&ItemId>, id: &ItemId) -> Option<(Option<ItemId>, usize)> {
+        fn locate_in(
+            items: &[Item],
+            parent: Option<&ItemId>,
+            id: &ItemId,
+        ) -> Option<(Option<ItemId>, usize)> {
             for (index, item) in items.iter().enumerate() {
                 if &item.id == id {
                     return Some((parent.cloned(), index));
@@ -208,14 +244,21 @@ impl SceneDoc {
     fn children_mut(&mut self, parent: Option<&ItemId>) -> Result<&mut Vec<Item>, SceneEditError> {
         match parent {
             None => Ok(&mut self.items),
-            Some(id) => Ok(&mut self.find_mut(id).ok_or_else(|| SceneEditError::UnknownItem(id.clone()))?.children),
+            Some(id) => Ok(&mut self
+                .find_mut(id)
+                .ok_or_else(|| SceneEditError::UnknownItem(id.clone()))?
+                .children),
         }
     }
 
     fn parent_kind(&self, parent: Option<&ItemId>) -> Result<Option<ItemKind>, SceneEditError> {
         match parent {
             None => Ok(None),
-            Some(id) => Ok(Some(self.find(id).ok_or_else(|| SceneEditError::UnknownItem(id.clone()))?.kind())),
+            Some(id) => Ok(Some(
+                self.find(id)
+                    .ok_or_else(|| SceneEditError::UnknownItem(id.clone()))?
+                    .kind(),
+            )),
         }
     }
 
@@ -223,7 +266,10 @@ impl SceneDoc {
     fn check_place(&self, parent: Option<&ItemId>, item: &Item) -> Result<(), SceneEditError> {
         let kind = item.kind();
         if !can_hold(self.parent_kind(parent)?, kind) {
-            return Err(SceneEditError::CannotHold { parent: self.parent_kind(parent)?, kind });
+            return Err(SceneEditError::CannotHold {
+                parent: self.parent_kind(parent)?,
+                kind,
+            });
         }
         let mut incoming = Vec::new();
         let (mut worlds, mut environments) = (0, 0);
@@ -248,7 +294,10 @@ impl SceneDoc {
         if environments + existing_environments > 1 {
             return Err(SceneEditError::SecondOfType(ONE_ENVIRONMENT));
         }
-        if is_fill(item) && self.parent_kind(parent)? == Some(ItemKind::Water) && self.fills_under(parent) > 0 {
+        if is_fill(item)
+            && self.parent_kind(parent)? == Some(ItemKind::Water)
+            && self.fills_under(parent) > 0
+        {
             return Err(SceneEditError::SecondOfType(ONE_FILL));
         }
         if let Some(reason) = self.second_of_type(item) {
@@ -260,7 +309,9 @@ impl SceneDoc {
     /// How many Fill sources sit directly under `parent`.
     fn fills_under(&self, parent: Option<&ItemId>) -> usize {
         let children = match parent {
-            Some(id) => self.find(id).map_or(&[][..], |item| item.children.as_slice()),
+            Some(id) => self
+                .find(id)
+                .map_or(&[][..], |item| item.children.as_slice()),
             None => self.items.as_slice(),
         };
         children.iter().filter(|child| is_fill(child)).count()
@@ -270,7 +321,9 @@ impl SceneDoc {
     /// checks this after it writes, as an insert checks before.
     pub fn second_fill(&self, item: &ItemId) -> Option<&'static str> {
         let (parent, _) = self.locate(item)?;
-        let water = self.find(parent.as_ref()?).filter(|water| water.kind() == ItemKind::Water)?;
+        let water = self
+            .find(parent.as_ref()?)
+            .filter(|water| water.kind() == ItemKind::Water)?;
         (water.children.iter().filter(|child| is_fill(child)).count() > 1).then_some(ONE_FILL)
     }
 
@@ -285,25 +338,42 @@ impl SceneDoc {
     /// Why the scene cannot take a card of `modifier` beside the one it
     /// holds, other than `except` (the card being changed). Modifier cards sit
     /// at the top of the scene only.
-    pub fn second_modifier(&self, modifier: ModifierType, except: Option<&ItemId>) -> Option<&'static str> {
+    pub fn second_modifier(
+        &self,
+        modifier: ModifierType,
+        except: Option<&ItemId>,
+    ) -> Option<&'static str> {
         let reason = modifier.once_per_scene()?;
         self.items
             .iter()
-            .any(|other| Some(&other.id) != except && matches!(&other.fields, ItemFields::Modifier(m) if m.modifier == modifier))
+            .any(|other| {
+                Some(&other.id) != except
+                    && matches!(&other.fields, ItemFields::Modifier(m) if m.modifier == modifier)
+            })
             .then_some(reason)
     }
 
     /// Put `item`, new to the scene, under `parent` at `index` (clamped to the
     /// end). Every Camera in it gets a fresh cut number, so a duplicate, a
     /// paste or an import never takes another camera's cuts.
-    pub fn insert(&mut self, parent: Option<&ItemId>, index: usize, mut item: Item) -> Result<(), SceneEditError> {
+    pub fn insert(
+        &mut self,
+        parent: Option<&ItemId>,
+        index: usize,
+        mut item: Item,
+    ) -> Result<(), SceneEditError> {
         self.check_place(parent, &item)?;
         self.number_cameras(&mut item);
         self.place(parent, index, item)
     }
 
     /// Put `item` under `parent` at `index` as it is, once checked.
-    fn place(&mut self, parent: Option<&ItemId>, index: usize, item: Item) -> Result<(), SceneEditError> {
+    fn place(
+        &mut self,
+        parent: Option<&ItemId>,
+        index: usize,
+        item: Item,
+    ) -> Result<(), SceneEditError> {
         let children = self.children_mut(parent)?;
         let index = index.min(children.len());
         children.insert(index, item);
@@ -325,7 +395,9 @@ impl SceneDoc {
                 camera.cut = *next;
                 *next += 1;
             }
-            item.children.iter_mut().for_each(|child| visit(child, next));
+            item.children
+                .iter_mut()
+                .for_each(|child| visit(child, next));
         }
         visit(item, &mut next);
         self.next_cut = next;
@@ -333,10 +405,19 @@ impl SceneDoc {
 
     /// Replace `id`'s structural fields, keeping its kind and, for a Camera,
     /// its cut number.
-    pub fn set_fields(&mut self, id: &ItemId, mut fields: ItemFields) -> Result<(), SceneEditError> {
-        let item = self.find_mut(id).ok_or_else(|| SceneEditError::UnknownItem(id.clone()))?;
+    pub fn set_fields(
+        &mut self,
+        id: &ItemId,
+        mut fields: ItemFields,
+    ) -> Result<(), SceneEditError> {
+        let item = self
+            .find_mut(id)
+            .ok_or_else(|| SceneEditError::UnknownItem(id.clone()))?;
         if item.kind() != fields.kind() {
-            return Err(SceneEditError::KindChange { from: item.kind(), to: fields.kind() });
+            return Err(SceneEditError::KindChange {
+                from: item.kind(),
+                to: fields.kind(),
+            });
         }
         if let (ItemFields::Camera(old), ItemFields::Camera(new)) = (&item.fields, &mut fields) {
             new.cut = old.cut;
@@ -347,7 +428,9 @@ impl SceneDoc {
 
     /// Take an item and its subtree out of the tree, with where it was.
     pub fn take(&mut self, id: &ItemId) -> Result<(Item, Option<ItemId>, usize), SceneEditError> {
-        let (parent, index) = self.locate(id).ok_or_else(|| SceneEditError::UnknownItem(id.clone()))?;
+        let (parent, index) = self
+            .locate(id)
+            .ok_or_else(|| SceneEditError::UnknownItem(id.clone()))?;
         let item = self.children_mut(parent.as_ref())?.remove(index);
         Ok((item, parent, index))
     }
@@ -355,18 +438,31 @@ impl SceneDoc {
     /// Move an item under `parent` at `index`. Also reorders within one
     /// parent. Refused, leaving the document as it was, when the move would
     /// put the item inside itself or under a parent that cannot hold it.
-    pub fn reparent(&mut self, id: &ItemId, parent: Option<&ItemId>, index: usize) -> Result<(), SceneEditError> {
+    pub fn reparent(
+        &mut self,
+        id: &ItemId,
+        parent: Option<&ItemId>,
+        index: usize,
+    ) -> Result<(), SceneEditError> {
         if let Some(parent_id) = parent {
-            let moving = self.find(id).ok_or_else(|| SceneEditError::UnknownItem(id.clone()))?;
+            let moving = self
+                .find(id)
+                .ok_or_else(|| SceneEditError::UnknownItem(id.clone()))?;
             let mut inside = false;
-            moving.walk(&mut Vec::new(), &mut |inner: &Item, _: &[&Item]| inside |= &inner.id == parent_id);
+            moving.walk(&mut Vec::new(), &mut |inner: &Item, _: &[&Item]| {
+                inside |= &inner.id == parent_id
+            });
             if inside {
                 return Err(SceneEditError::IntoItself(id.clone()));
             }
         }
         let (item, old_parent, old_index) = self.take(id)?;
-        if let Err(error) = self.check_place(parent, &item).and_then(|()| self.place(parent, index, item.clone())) {
-            self.children_mut(old_parent.as_ref())?.insert(old_index, item);
+        if let Err(error) = self
+            .check_place(parent, &item)
+            .and_then(|()| self.place(parent, index, item.clone()))
+        {
+            self.children_mut(old_parent.as_ref())?
+                .insert(old_index, item);
             return Err(error);
         }
         Ok(())
@@ -377,7 +473,9 @@ impl SceneDoc {
     pub fn remove(&mut self, id: &ItemId) -> Result<Item, SceneEditError> {
         let (item, _, _) = self.take(id)?;
         let mut removed = Vec::new();
-        item.walk(&mut Vec::new(), &mut |inner: &Item, _: &[&Item]| removed.push(inner.id.clone()));
+        item.walk(&mut Vec::new(), &mut |inner: &Item, _: &[&Item]| {
+            removed.push(inner.id.clone())
+        });
         self.drop_references(&removed);
         Ok(item)
     }
@@ -450,7 +548,9 @@ impl SceneDoc {
         id: &ItemId,
         mut fresh: impl FnMut(&ItemId) -> ItemId,
     ) -> Result<(Item, BTreeMap<ItemId, ItemId>), SceneEditError> {
-        let source = self.find(id).ok_or_else(|| SceneEditError::UnknownItem(id.clone()))?;
+        let source = self
+            .find(id)
+            .ok_or_else(|| SceneEditError::UnknownItem(id.clone()))?;
         let mut map = BTreeMap::new();
         source.walk(&mut Vec::new(), &mut |inner: &Item, _: &[&Item]| {
             map.insert(inner.id.clone(), fresh(&inner.id));
@@ -505,7 +605,10 @@ impl SceneDoc {
             found = std::iter::once(item)
                 .chain(ancestors.iter().rev().copied())
                 .filter_map(|holder| holder.fields.material())
-                .find(|material| self.find(material).is_some_and(|m| m.kind() == ItemKind::Material))
+                .find(|material| {
+                    self.find(material)
+                        .is_some_and(|m| m.kind() == ItemKind::Material)
+                })
                 .cloned();
         });
         found
@@ -513,7 +616,9 @@ impl SceneDoc {
 
     /// The scene's World, if it has one.
     pub fn world(&self) -> Option<&Item> {
-        self.items.iter().find(|item| item.kind() == ItemKind::World)
+        self.items
+            .iter()
+            .find(|item| item.kind() == ItemKind::World)
     }
 
     /// Every Camera, in tree order.
@@ -565,7 +670,8 @@ impl SceneDoc {
 
     /// The param id of the World's Camera row.
     pub fn camera_pick_param(&self) -> Option<String> {
-        self.world().map(|world| super::param_id(&world.id, super::CAMERA_PICK))
+        self.world()
+            .map(|world| super::param_id(&world.id, super::CAMERA_PICK))
     }
 
     /// The camera a Camera row value picks: the camera holding that cut
@@ -573,7 +679,10 @@ impl SceneDoc {
     pub fn picked_camera(&self, pick: f32) -> Option<&ItemId> {
         let cuts = self.cuts();
         let wanted = pick.is_finite().then(|| pick.round().max(0.0) as u32);
-        cuts.iter().find(|&&(cut, _)| Some(cut) == wanted).or(cuts.first()).map(|&(_, id)| id)
+        cuts.iter()
+            .find(|&&(cut, _)| Some(cut) == wanted)
+            .or(cuts.first())
+            .map(|&(_, id)| id)
     }
 
     /// Whether physics moves `id`, an item at or under it: it, something
@@ -582,7 +691,9 @@ impl SceneDoc {
         let mut any = false;
         self.walk(|item, ancestors| {
             let physical = item.fields.physics() != super::PhysicsSetting::None
-                || ancestors.iter().any(|holder| holder.fields.physics() != super::PhysicsSetting::None);
+                || ancestors
+                    .iter()
+                    .any(|holder| holder.fields.physics() != super::PhysicsSetting::None);
             any |= physical && (&item.id == id || ancestors.iter().any(|holder| &holder.id == id));
         });
         any
@@ -615,7 +726,9 @@ impl SceneDoc {
                 }
             }
             ItemFields::Material(material) => {
-                if let TextureSource::Model { file, .. } | TextureSource::File { path: file } = &material.texture {
+                if let TextureSource::Model { file, .. } | TextureSource::File { path: file } =
+                    &material.texture
+                {
                     f(file);
                 }
             }
@@ -645,8 +758,11 @@ impl SceneDoc {
                         }
                     }
                     ItemFields::Light(light) => {
-                        if let LightType::Environment { source: EnvironmentSource::Hdri { file } | EnvironmentSource::SeaHorizon { file } } =
-                            &mut light.light
+                        if let LightType::Environment {
+                            source:
+                                EnvironmentSource::Hdri { file }
+                                | EnvironmentSource::SeaHorizon { file },
+                        } = &mut light.light
                         {
                             f(AssetFamily::Hdri, file);
                         }

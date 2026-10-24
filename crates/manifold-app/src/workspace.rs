@@ -135,7 +135,10 @@ pub struct Workspace {
     pub viewport_outline: Vec<u32>,
     /// The outline slots last sent to the content thread (output, viewport);
     /// main window only.
-    pub outline_sent: (Option<crate::selection_outline::OutlineSlots>, Option<crate::selection_outline::OutlineSlots>),
+    pub outline_sent: (
+        Option<crate::selection_outline::OutlineSlots>,
+        Option<crate::selection_outline::OutlineSlots>,
+    ),
     /// The gizmo overlay last sent to the content thread; main window only.
     pub gizmo_sent: crate::gizmo_overlay::GizmoOverlay,
     /// The graph editor's frame planner state and atlas (P5c); unused by
@@ -153,9 +156,9 @@ impl Workspace {
             // this instance builds (`InspectorCompositePanel::reconcile_cards`
             // / `configure_gen_params`) draws the mapping-drawer chevron
             // instead of the cog/perform chrome.
-            ui_root.inspector.set_card_context(
-                manifold_ui::panels::param_card::CardContext::Author,
-            );
+            ui_root
+                .inspector
+                .set_card_context(manifold_ui::panels::param_card::CardContext::Author);
         }
         Self {
             kind,
@@ -174,7 +177,8 @@ impl Workspace {
             viewport_open: false,
             viewport_rect: None,
             viewport_drag: None,
-            viewport_gizmo_mode: manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode::default(),
+            viewport_gizmo_mode:
+                manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode::default(),
             // The grid, a domain box and the largest handle set fit without
             // a display-frame reallocation.
             preview_gizmo: Default::default(),

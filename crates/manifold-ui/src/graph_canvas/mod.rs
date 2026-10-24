@@ -26,8 +26,8 @@ use crate::node::Color32;
 // Re-exported so sibling submodules see both via `use super::*;`. The canvas
 // emits `GraphEditCommand` (Phase 4.3); `PanelAction` remains for the mapping
 // popover's `EffectMapping*` edits, which are a separate command family.
-pub(crate) use crate::{GraphEditCommand, PanelAction};
 use crate::transform::Axis;
+pub(crate) use crate::{GraphEditCommand, PanelAction};
 // `MappingPopover` is brought into module scope by the `pub use` re-export below,
 // so the `mapping_popover` field can name it without a second import.
 
@@ -75,19 +75,19 @@ mod tests;
 // `crate::graph_canvas::X`) are re-exported. Module-internal helpers stay
 // private to their file; test-only items (`LayeredLayout`, `ports_compatible`,
 // `rects_overlap`) are imported directly by `tests.rs` from their module.
-pub(crate) use hit::marquee_hits;
 pub use hit::GraphCanvasTargets;
+pub(crate) use hit::marquee_hits;
 pub(crate) use interaction::CanvasDrag;
 pub use mapping_popover::MappingPopover;
 // App-facing structural-walk helpers — the editor present path resolves the
 // canvas scope level + preview targets off the same UI snapshot the canvas reads.
-pub use model::{node_preview_target, resolve_card_param_node_id, resolve_level};
 pub(crate) use crate::draw::{elide_to_width, text_width};
 pub(crate) use model::{
-    NodeRow, NodeView, PortHit, WireView, expose_glyph_bounds, find_node_scope,
-    fmt_table_cell, format_color_hex, group_wires_by_pair, kind_is_exposable,
-    param_convert_for_kind, spark_has_variation, vec_channel_labels, wrap_text,
+    NodeRow, NodeView, PortHit, WireView, expose_glyph_bounds, find_node_scope, fmt_table_cell,
+    format_color_hex, group_wires_by_pair, kind_is_exposable, param_convert_for_kind,
+    spark_has_variation, vec_channel_labels, wrap_text,
 };
+pub use model::{node_preview_target, resolve_card_param_node_id, resolve_level};
 
 const HEADER_HEIGHT: f32 = 28.0;
 /// Node body width in graph units. the unified
@@ -404,6 +404,7 @@ const SAVE_BUTTON_H: f32 = RESET_BUTTON_H;
 /// Gap between adjacent header pill buttons.
 const SAVE_BUTTON_GAP: f32 = 8.0;
 
+use color::DOUBLE_CLICK_RADIUS_PX;
 /// Max seconds between two empty-canvas presses for them to count as a
 /// double-click, and the max screen-space distance (px) between them.
 /// Single-sourced at `color.rs` (UI_WIDGET_UNIFICATION P4/I8) — this module
@@ -411,7 +412,6 @@ const SAVE_BUTTON_GAP: f32 = 8.0;
 /// identity via `last_click_node`, interaction.rs) stays canvas-side by
 /// design; only the timing/radius constants unify.
 use color::DOUBLE_CLICK_TIME_SEC as DOUBLE_CLICK_SECONDS;
-use color::DOUBLE_CLICK_RADIUS_PX;
 /// A left-press that moves less than this on release counts as a click, not a
 /// drag — used to tell a pan from a deselecting click, and a marquee from a
 /// stray shift-click.
@@ -716,10 +716,12 @@ impl GraphCanvas {
         {
             let (ox, oy) = (session.start.x, session.start.y);
             let (cx, cy) = self.cursor;
-            self.marquee_last_rect = Some((ox.min(cx), oy.min(cy), (cx - ox).abs(), (cy - oy).abs()));
+            self.marquee_last_rect =
+                Some((ox.min(cx), oy.min(cy), (cx - ox).abs(), (cy - oy).abs()));
         }
         let marquee_live = matches!(self.drag.payload(), Some(CanvasDrag::Marquee));
-        self.marquee_alpha.set_target(if marquee_live { 1.0 } else { 0.0 });
+        self.marquee_alpha
+            .set_target(if marquee_live { 1.0 } else { 0.0 });
         any |= self.marquee_alpha.tick(dt_ms);
 
         any |= self.connect_pop.tick(dt_ms);
@@ -790,7 +792,8 @@ impl GraphCanvas {
     /// anim value from a previous drag), or outside a `WireFrom` drag
     /// entirely.
     pub(crate) fn wire_ghost_endpoint(&self) -> (f32, f32) {
-        if self.wire_magnet_live && matches!(self.drag.payload(), Some(CanvasDrag::WireFrom { .. })) {
+        if self.wire_magnet_live && matches!(self.drag.payload(), Some(CanvasDrag::WireFrom { .. }))
+        {
             (self.wire_magnet_x.value(), self.wire_magnet_y.value())
         } else {
             self.cursor

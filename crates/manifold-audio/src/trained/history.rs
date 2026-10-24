@@ -37,16 +37,28 @@ pub struct History {
 
 impl History {
     /// The stage forest from `stage.*`; `hop` and `sample_rate` give emission times.
-    pub fn new(c: &Container, spec: &StageSpec, hop: u64, sample_rate: u32) -> Result<Self, ContainerError> {
+    pub fn new(
+        c: &Container,
+        spec: &StageSpec,
+        hop: u64,
+        sample_rate: u32,
+    ) -> Result<Self, ContainerError> {
         let forest = Forest::from_container(c, "stage.")?;
         if forest.n_features() != spec.inputs() {
-            return Err(ContainerError::WrongShape { name: "stage.n_features".into(), want: vec![spec.inputs()], got: vec![forest.n_features()] });
+            return Err(ContainerError::WrongShape {
+                name: "stage.n_features".into(),
+                want: vec![spec.inputs()],
+                got: vec![forest.n_features()],
+            });
         }
         let max_w = spec.windows_s.iter().copied().fold(0.0, f64::max);
         let capacity = (max_w * MAX_CANDIDATE_RATE).ceil() as usize + 1;
         let width = spec.shape_width();
         Ok(Self {
-            cut_logits: spec.cuts.filter(|_| spec.gate > 0.0).map(|(d, s)| (logit(d), logit(s))),
+            cut_logits: spec
+                .cuts
+                .filter(|_| spec.gate > 0.0)
+                .map(|(d, s)| (logit(d), logit(s))),
             spec: spec.clone(),
             forest,
             width,
@@ -76,7 +88,13 @@ impl History {
     /// `shape_row` is the hstacked raw shape measures (clipped and normalised here), `level` the named level
     /// column (ignored without one), `emit_hop` the emission hop (`avail_hop + 1`). Calls come in
     /// non-decreasing emission order; the candidate then joins the history.
-    pub fn decide(&mut self, p_combined: f64, shape_row: &[f64], level: f64, emit_hop: u64) -> (&[f64], f64, f64) {
+    pub fn decide(
+        &mut self,
+        p_combined: f64,
+        shape_row: &[f64],
+        level: f64,
+        emit_hop: u64,
+    ) -> (&[f64], f64, f64) {
         debug_assert_eq!(shape_row.len(), self.width);
         let st = &self.spec;
         let emit_s = (emit_hop as i64 * self.hop) as f64 / self.sample_rate;
@@ -97,14 +115,20 @@ impl History {
             // self_features: every earlier candidate with emit >= now - window, summed oldest first over the
             // ring each call; no running sums, so no drift over a long set.
             let from = emit_s - window;
-            let first = (0..self.len).find(|&k| self.emit_s[(self.head + k) % cap] >= from).unwrap_or(self.len);
+            let first = (0..self.len)
+                .find(|&k| self.emit_s[(self.head + k) % cap] >= from)
+                .unwrap_or(self.len);
             let (mut sw, mut sl, mut sv) = (0.0, 0.0, 0.0);
             self.tmpl.fill(0.0);
             for k in first..self.len {
                 let i = (self.head + k) % cap;
                 let w = self.w[i];
                 sw += w;
-                for (t, v) in self.tmpl.iter_mut().zip(&self.desc[i * self.width..][..self.width]) {
+                for (t, v) in self
+                    .tmpl
+                    .iter_mut()
+                    .zip(&self.desc[i * self.width..][..self.width])
+                {
                     *t += w * v;
                 }
                 sl += w * self.lp[i];

@@ -1,14 +1,14 @@
 //! Per-frame state push: `push_state` drains engine/project state into the UI
 //! tree, delegating each domain to its projection module (P-P,
 //! UI_FUNNEL_DECOMPOSITION_DESIGN.md).
+use crate::app::SelectionState;
+use crate::ui_root::UIRoot;
 use manifold_core::Beats;
 use manifold_core::PresetTypeId;
 use manifold_core::project::Project;
 use manifold_ui::color;
 use manifold_ui::node::Color32;
 use manifold_ui::panels::param_slider_shared::AbletonMappingDisplay;
-use crate::app::SelectionState;
-use crate::ui_root::UIRoot;
 
 use crate::ui_bridge::projection::cards::write_macro_mapping;
 use std::fmt::Write as _;
@@ -17,7 +17,10 @@ pub use crate::ui_bridge::projection::cards::sync_card_values;
 pub use crate::ui_bridge::projection::driver_readouts::sync_driver_readouts;
 pub use crate::ui_bridge::projection::inspector::{sync_audio_dock, sync_inspector_data};
 pub use crate::ui_bridge::projection::scene::sync_scene_row_values;
-pub use crate::ui_bridge::projection::timeline::{sync_automation_lane_geometry, sync_clip_positions, sync_markers, sync_project_all, sync_project_data, sync_track_layout, sync_trigger_catalog};
+pub use crate::ui_bridge::projection::timeline::{
+    sync_automation_lane_geometry, sync_clip_positions, sync_markers, sync_project_all,
+    sync_project_data, sync_track_layout, sync_trigger_catalog,
+};
 pub use crate::ui_bridge::projection::transport::{TransportDisplayCache, check_auto_scroll};
 
 // Transport colors for play state.
@@ -108,15 +111,22 @@ impl SceneImpulseToast {
         let (refused, discarded) = self.shown;
         self.message.clear();
         if refused > 0 {
-            let reason = current.last_refusal.as_deref().unwrap_or("Impulse: a hit was refused");
+            let reason = current
+                .last_refusal
+                .as_deref()
+                .unwrap_or("Impulse: a hit was refused");
             self.message.push_str(reason);
             if refused > 1 {
                 let _ = write!(self.message, " ({refused} hits refused)");
             }
         } else if discarded == 1 {
-            self.message.push_str("Impulse discarded: the simulation is paused or at Speed 0");
+            self.message
+                .push_str("Impulse discarded: the simulation is paused or at Speed 0");
         } else {
-            let _ = write!(self.message, "{discarded} impulses discarded: the simulation is paused or at Speed 0");
+            let _ = write!(
+                self.message,
+                "{discarded} impulses discarded: the simulation is paused or at Speed 0"
+            );
         }
         Some((&self.message, refused > 0))
     }
@@ -140,18 +150,39 @@ pub fn push_state(
 ) {
     intake_overlay_state(ui, content_state);
     drain_events(ui, project, content_state);
-    push_chrome(ui, project, content_state, selection, is_dirty, project_path, transport_cache);
+    push_chrome(
+        ui,
+        project,
+        content_state,
+        selection,
+        is_dirty,
+        project_path,
+        transport_cache,
+    );
     push_clock(ui, project, content_state, transport_cache);
     push_zoom_label(ui);
     push_selection(ui, project, active_layer, selection);
     push_frame(ui, project, content_state, active_layer);
-    push_live(ui, project, content_state, active_layer, LiveGroups { values: true, shapes: true });
+    push_live(
+        ui,
+        project,
+        content_state,
+        active_layer,
+        LiveGroups {
+            values: true,
+            shapes: true,
+        },
+    );
 }
 
 /// One-shot events keyed on their own sequences: toasts and content-driven
 /// selections. Runs every frame, after the build, since the selections find
 /// cards this frame's projection made.
-pub fn drain_events(ui: &mut UIRoot, project: &Project, content_state: &crate::content_state::ContentState) {
+pub fn drain_events(
+    ui: &mut UIRoot,
+    project: &Project,
+    content_state: &crate::content_state::ContentState,
+) {
     // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — real command
     // label instead of the generic "Undo"/"Redo" the M::Undo/M::Redo menu
     // handlers used to show directly (`app_render.rs`). Keyed on
@@ -174,13 +205,17 @@ pub fn drain_events(ui: &mut UIRoot, project: &Project, content_state: &crate::c
         ui.last_graph_edit_diagnostic_sequence,
         content_state.graph_edit_diagnostic.as_deref(),
     ) {
-        ui.toast.show_with_accent(message.to_owned(), color::RED_BASE);
+        ui.toast
+            .show_with_accent(message.to_owned(), color::RED_BASE);
         ui.last_graph_edit_diagnostic_sequence = Some(sequence);
     }
 
     // A scene layer's node error or runaway stop: once each, red.
     if content_state.layer_notices.version > ui.layer_notice_shown {
-        let mut fresh = content_state.layer_notices.after(ui.layer_notice_shown).map(|notice| &*notice.message);
+        let mut fresh = content_state
+            .layer_notices
+            .after(ui.layer_notice_shown)
+            .map(|notice| &*notice.message);
         if let Some(first) = fresh.next() {
             let message = fresh.fold(first.to_owned(), |all, next| all + "; " + next);
             ui.toast.show_with_accent(message, color::RED_BASE);
@@ -197,15 +232,23 @@ pub fn drain_events(ui: &mut UIRoot, project: &Project, content_state: &crate::c
 
     // A body the world newly left out: once, red, beside its card warning.
     if !std::sync::Arc::ptr_eq(&ui.refusal_toast_seen, &content_state.setup_fits) {
-        if let Some(message) = crate::setup_check::new_refusal(&ui.refusal_toast_seen, &content_state.setup_fits, project) {
+        if let Some(message) = crate::setup_check::new_refusal(
+            &ui.refusal_toast_seen,
+            &content_state.setup_fits,
+            project,
+        ) {
             ui.toast.show_with_accent(message, color::RED_BASE);
         }
         ui.refusal_toast_seen = content_state.setup_fits.clone();
     }
 
     let slot = ui.scene_impulse_toast.slot(&ui.toast);
-    if let Some((message, refused)) = ui.scene_impulse_toast.update(&content_state.scene_impulses, slot) {
-        ui.toast.refresh(message.to_owned(), refused.then_some(color::RED_BASE));
+    if let Some((message, refused)) = ui
+        .scene_impulse_toast
+        .update(&content_state.scene_impulses, slot)
+    {
+        ui.toast
+            .refresh(message.to_owned(), refused.then_some(color::RED_BASE));
         if slot == ToastSlot::Ours {
             // New text in an open toast: the overlays rebuild it.
             ui.mark_overlay_dirty();
@@ -424,9 +467,11 @@ pub fn push_chrome(
                     TransportSyncStatus::Confirming => {
                         (color::STATUS_DOT_YELLOW, "ABL…", color::TEXT_WHITE_C32)
                     }
-                    TransportSyncStatus::DegradedOscOnly => {
-                        (color::STATUS_DOT_YELLOW, "ABL no CLK", color::TEXT_WHITE_C32)
-                    }
+                    TransportSyncStatus::DegradedOscOnly => (
+                        color::STATUS_DOT_YELLOW,
+                        "ABL no CLK",
+                        color::TEXT_WHITE_C32,
+                    ),
                     TransportSyncStatus::Warning => {
                         (color::STATUS_BAD, "ABL desync", color::TEXT_WHITE_C32)
                     }
@@ -467,7 +512,8 @@ pub fn push_chrome(
         // LANES button (view-only toggle, no content-thread state behind it).
         ui.transport
             .set_automation_mode_visible(selection.automation_mode_visible());
-        ui.transport.set_automation_draw_mode(selection.automation_draw_mode);
+        ui.transport
+            .set_automation_draw_mode(selection.automation_draw_mode);
 
         // Save dirty state is shown by the "•" in the window/header project name
         // (set above); the transport SAVE button moved to the File menu. HDR /
@@ -517,7 +563,8 @@ pub fn push_chrome(
 
         // Settings popup hosts the render config — feed the same state so its
         // segmented controls highlight the active option.
-        ui.settings_popup.sync_sim_rate(tree, project.settings.physics.sim_rate);
+        ui.settings_popup
+            .sync_sim_rate(tree, project.settings.physics.sim_rate);
         ui.settings_popup.set_resolution_text(&res_label);
         ui.settings_popup
             .set_render_scale(project.settings.render_scale);
@@ -530,7 +577,8 @@ pub fn push_chrome(
         ui.settings_popup.set_hdr(project.settings.export_hdr);
         ui.settings_popup
             .set_split_sections(project.settings.split_at_markers);
-        ui.settings_popup.set_export_gizmos(project.settings.export_gizmos);
+        ui.settings_popup
+            .set_export_gizmos(project.settings.export_gizmos);
 
         // RT Quality panel — feed the current settings
         ui.rt_quality_panel.configure(project.settings.rt_quality);
@@ -551,7 +599,8 @@ pub fn push_chrome(
             // routes_to_led (not the raw flag): an LED-type layer always feeds
             // the strips, so its (indicator, non-toggle) L chip stays truthfully
             // on — blit_to_led is inert on LED layers (LED_STRIPS_DESIGN.md D11).
-            ui.layer_headers.set_led_state(tree, i, layer.routes_to_led());
+            ui.layer_headers
+                .set_led_state(tree, i, layer.routes_to_led());
             ui.layer_headers
                 .set_blend_mode_text(tree, i, layer.default_blend_mode.display_name());
 
@@ -699,7 +748,8 @@ pub fn push_selection(
     // A region whose edge layers are gone covers no layer, so it draws no band.
     let band = selection.current_region().and_then(|r| {
         let ui_layers = crate::ui_translate::layers_to_ui(&project.timeline.layers);
-        r.layer_index_range(&ui_layers).map(|(start, end)| (r, start, end))
+        r.layer_index_range(&ui_layers)
+            .map(|(start, end)| (r, start, end))
     });
     if let Some((r, start_layer, end_layer)) = band {
         ui.viewport
@@ -748,7 +798,10 @@ pub fn push_frame(
     ui.viewport.set_playing(content_state.is_playing);
     if let Some(layer) = active_layer.and_then(|i| project.timeline.layers.get(i)) {
         let is_dmx = layer.layer_type == manifold_core::types::LayerType::Dmx;
-        let band = super::projection::inspector::map_led_preview(content_state.led_preview.as_ref(), is_dmx);
+        let band = super::projection::inspector::map_led_preview(
+            content_state.led_preview.as_ref(),
+            is_dmx,
+        );
         ui.inspector.sync_led_preview(&mut ui.tree, band.as_ref());
     }
 }
@@ -863,9 +916,11 @@ fn push_live_values(
         }
         ui.macro_ableton_mapped[i] = slot.ableton_mapping.is_some();
     }
-    ui.inspector
-        .macros_panel_mut()
-        .sync_values(tree, &macro_vals[..shown], &ui.macro_display_labels[..shown]);
+    ui.inspector.macros_panel_mut().sync_values(
+        tree,
+        &macro_vals[..shown],
+        &ui.macro_display_labels[..shown],
+    );
 
     // Active layer opacity and name in the layer chrome.
     if let Some(layer) = active_layer.and_then(|idx| project.timeline.layers.get(idx)) {
@@ -917,14 +972,27 @@ mod tests {
         assert_eq!(toast.update(&counts, Free), None);
         counts.discarded = 1;
         let (message, refused) = toast.update(&counts, Free).unwrap();
-        assert!(!refused && message.starts_with("Impulse discarded"), "{message}");
+        assert!(
+            !refused && message.starts_with("Impulse discarded"),
+            "{message}"
+        );
         assert_eq!(toast.update(&counts, Free), None, "shown once");
         counts.refuse("Physics: 256 hits are already in flight; this hit is refused");
         counts.refuse("Physics: 256 hits are already in flight; this hit is refused");
         let (message, refused) = toast.update(&counts, Free).unwrap();
-        assert!(refused && message.ends_with("(2 hits refused)"), "{message}");
-        assert_eq!(toast.update(&SceneImpulseDiagnostics::default(), Free), None);
-        assert_eq!(toast.update(&counts, Free), None, "a bare notice never re-shows");
+        assert!(
+            refused && message.ends_with("(2 hits refused)"),
+            "{message}"
+        );
+        assert_eq!(
+            toast.update(&SceneImpulseDiagnostics::default(), Free),
+            None
+        );
+        assert_eq!(
+            toast.update(&counts, Free),
+            None,
+            "a bare notice never re-shows"
+        );
     }
 
     /// Audio-rate refusals coalesce into the impulse toast in flight (its
@@ -943,20 +1011,38 @@ mod tests {
         assert_eq!(toast.slot(&panel), Free);
         let (message, _) = toast.update(&counts, Free).unwrap();
         panel.refresh(message.to_owned(), None);
-        assert_eq!(toast.slot(&panel), Ours, "the toast in flight is the impulse toast");
+        assert_eq!(
+            toast.slot(&panel),
+            Ours,
+            "the toast in flight is the impulse toast"
+        );
         counts.refuse(reason);
         counts.refuse(reason);
         let (message, _) = toast.update(&counts, Ours).unwrap();
-        assert!(message.ends_with("(3 hits refused)"), "the count grows in place: {message}");
+        assert!(
+            message.ends_with("(3 hits refused)"),
+            "the count grows in place: {message}"
+        );
         panel.refresh(message.to_owned(), None);
 
         panel.show("Export complete");
         assert_eq!(toast.slot(&panel), Other);
         counts.refuse(reason);
-        assert_eq!(toast.update(&counts, Other), None, "another toast is never buried");
-        assert_eq!(panel.pending().map(|(message, _)| message), Some("Export complete"));
+        assert_eq!(
+            toast.update(&counts, Other),
+            None,
+            "another toast is never buried"
+        );
+        assert_eq!(
+            panel.pending().map(|(message, _)| message),
+            Some("Export complete")
+        );
         let (message, refused) = toast.update(&counts, Free).unwrap();
-        assert_eq!((message, refused), (reason, true), "the waiting refusal shows once the slot is free");
+        assert_eq!(
+            (message, refused),
+            (reason, true),
+            "the waiting refusal shows once the slot is free"
+        );
     }
 
     #[test]
@@ -983,8 +1069,13 @@ mod tests {
 
     #[test]
     fn trigger_delivery_diagnostic_is_shown_once_across_partial_snapshots_and_new_epochs() {
-        use manifold_playback::engine::trigger_delivery::{TriggerDeliveryError, TriggerDeliveryFailure};
-        let failure = TriggerDeliveryFailure { epoch: 4, kind: TriggerDeliveryError::CapacityOverflow };
+        use manifold_playback::engine::trigger_delivery::{
+            TriggerDeliveryError, TriggerDeliveryFailure,
+        };
+        let failure = TriggerDeliveryFailure {
+            epoch: 4,
+            kind: TriggerDeliveryError::CapacityOverflow,
+        };
         let mut last = None;
         let message = super::trigger_delivery_diagnostic_toast(&mut last, Some(failure)).unwrap();
         assert_eq!(message, failure.to_string());
@@ -992,7 +1083,10 @@ mod tests {
         assert!(super::trigger_delivery_diagnostic_toast(&mut last, None).is_none());
         assert_eq!(last, Some(failure));
         assert!(super::trigger_delivery_diagnostic_toast(&mut last, Some(failure)).is_none());
-        let newer = TriggerDeliveryFailure { epoch: 5, ..failure };
+        let newer = TriggerDeliveryFailure {
+            epoch: 5,
+            ..failure
+        };
         assert!(super::trigger_delivery_diagnostic_toast(&mut last, Some(newer)).is_some());
         assert!(super::trigger_delivery_diagnostic_toast(&mut last, Some(newer)).is_none());
     }

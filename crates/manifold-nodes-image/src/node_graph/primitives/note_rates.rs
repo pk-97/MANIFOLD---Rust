@@ -12,5 +12,4 @@ pub const NOTE_RATE_LABELS: &[&str] = &[
 
 /// Cycles-per-beat values indexed by the corresponding entry in
 /// [`NOTE_RATE_LABELS`]. Pure data — kept `pub` for parity tests.
-pub const NOTE_RATE_VALUES: [f32; 10] =
-    [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 16.0];
+pub const NOTE_RATE_VALUES: [f32; 10] = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 16.0];

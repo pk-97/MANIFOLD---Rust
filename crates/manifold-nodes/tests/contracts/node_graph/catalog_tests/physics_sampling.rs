@@ -1,191 +1,214 @@
 #[cfg(feature = "gpu-proofs")]
-use manifold_node_engine::exec::effect_node::FrameTime;
-use manifold_node_engine::runtime::*;
-#[cfg(feature = "gpu-proofs")]
 use manifold_core::{Beats, Seconds};
-    use manifold_node_engine::persistence::PrimitiveRegistry;
+#[cfg(feature = "gpu-proofs")]
+use manifold_node_engine::exec::effect_node::FrameTime;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::*;
 
-
-    #[test]
-    fn matter_liquid_samples_its_field_and_its_world_per_tick() {
-        let runtime = PresetRuntime::from_json_str(
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/presets/WaterFloatingBoxMatter.json")),
-            &PrimitiveRegistry::with_builtin(),
-        )
-        .expect("WaterFloatingBoxMatter loads");
-        let pairs = runtime.plan.node_pairs();
-        assert!(!pairs.is_empty(), "the box and the liquid are one coupled scene");
-        let mask = manifold_nodes_water::runtime::testkit::sampling_mask(&runtime).expect("the liquid samples its field per tick");
-        for pair in pairs {
-            assert!(mask[pair.first_step], "the liquid samples");
-            assert!(mask[pair.second_step], "its owned world's scene samples per tick");
-        }
-    }
-
-    #[test]
-    fn physics_history_mask_includes_nonlinear_lfo_and_excludes_rendering() {
-        let mut def: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/presets/PhysicsSolids.json")))
-        .unwrap();
-        def["nodes"]
-            .as_array_mut()
-            .unwrap()
-            .push(serde_json::json!({
-                "id": 500,
-                "nodeId": "animated_x",
-                "typeId": "node.lfo",
-                "params": {
-                    "rate_mode": { "type": "Enum", "value": 1 },
-                    "angular_rate": { "type": "Float", "value": 12.0 },
-                    "min": { "type": "Float", "value": -2.0 },
-                    "max": { "type": "Float", "value": 2.0 }
-                }
-            }));
-        def["wires"]
-            .as_array_mut()
-            .unwrap()
-            .push(serde_json::json!({
-                "fromNode": 500, "fromPort": "out", "toNode": 100, "toPort": "pos_x"
-            }));
-        let runtime = PresetRuntime::from_json_str(
-            &serde_json::to_string(&def).unwrap(),
-            &PrimitiveRegistry::with_builtin(),
-        )
-        .expect("PhysicsSolids with an LFO-authored body loads");
-        let mask = manifold_nodes_water::runtime::testkit::sampling_mask(&runtime)
-            .expect("physics ancestry");
-        let sampled: Vec<_> = runtime
-            .plan
-            .steps()
-            .iter()
-            .zip(mask)
-            .filter(|(_, enabled)| **enabled)
-            .map(|(step, _)| {
-                runtime
-                    .graph
-                    .get_node(step.node)
-                    .unwrap()
-                    .node
-                    .type_id()
-                    .as_str()
-                    .to_owned()
-            })
-            .collect();
-        assert!(sampled.iter().any(|kind| kind == "node.lfo"));
-        assert!(sampled.iter().any(|kind| kind == "node.physics_world"));
-        assert!(!sampled.iter().any(|kind| kind == "node.render_scene"));
-    }
-
-    #[test]
-    fn rigid_body_source_is_setup_and_excludes_gpu_mesh_ancestors_from_history() {
-        let mut def: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/presets/PhysicsSolids.json")))
-        .unwrap();
-        // Source-driven bodies take shape from the visible mesh. Remove the
-        // legacy body's opposite shape route before wiring that source back.
-        def["wires"]
-            .as_array_mut()
-            .unwrap()
-            .retain(|wire| !(wire["fromNode"] == 101 && wire["toNode"] == 102));
-        def["wires"]
-            .as_array_mut()
-            .unwrap()
-            .push(serde_json::json!({
-                "fromNode": 102,
-                "fromPort": "source",
-                "toNode": 101,
-                "toPort": "source"
-            }));
-        let runtime = PresetRuntime::from_json_str(
-            &serde_json::to_string(&def).unwrap(),
-            &PrimitiveRegistry::with_builtin(),
-        )
-        .expect("rigid body source graph loads");
-        let mask = manifold_nodes_water::runtime::testkit::sampling_mask(&runtime)
-            .expect("physics ancestry");
-        let sampled: Vec<_> = runtime
-            .plan
-            .steps()
-            .iter()
-            .zip(mask)
-            .filter(|(_, enabled)| **enabled)
-            .map(|(step, _)| {
-                runtime
-                    .graph
-                    .get_node(step.node)
-                    .unwrap()
-                    .node
-                    .type_id()
-                    .as_str()
-                    .to_owned()
-            })
-            .collect();
-        assert!(sampled.iter().any(|kind| kind == "node.rigid_body"));
+#[test]
+fn matter_liquid_samples_its_field_and_its_world_per_tick() {
+    let runtime = PresetRuntime::from_json_str(
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/presets/WaterFloatingBoxMatter.json"
+        )),
+        &PrimitiveRegistry::with_builtin(),
+    )
+    .expect("WaterFloatingBoxMatter loads");
+    let pairs = runtime.plan.node_pairs();
+    assert!(
+        !pairs.is_empty(),
+        "the box and the liquid are one coupled scene"
+    );
+    let mask = manifold_nodes_water::runtime::testkit::sampling_mask(&runtime)
+        .expect("the liquid samples its field per tick");
+    for pair in pairs {
+        assert!(mask[pair.first_step], "the liquid samples");
         assert!(
-            !sampled
-                .iter()
-                .any(|kind| kind == "node.platonic_solid_mesh")
+            mask[pair.second_step],
+            "its owned world's scene samples per tick"
         );
     }
+}
 
-    #[cfg(feature = "gpu-proofs")]
-    #[test]
-    fn explicit_reset_clears_physics_history_clock() {
-        let mut runtime = PresetRuntime::from_json_str(
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/presets/PhysicsSolids.json")),
-            &PrimitiveRegistry::with_builtin(),
-        )
-        .expect("PhysicsSolids loads");
-        manifold_nodes_water::runtime::testkit::set_last_physics_frame_time(&mut runtime, Some(FrameTime {
+#[test]
+fn physics_history_mask_includes_nonlinear_lfo_and_excludes_rendering() {
+    let mut def: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/presets/PhysicsSolids.json"
+    )))
+    .unwrap();
+    def["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id": 500,
+            "nodeId": "animated_x",
+            "typeId": "node.lfo",
+            "params": {
+                "rate_mode": { "type": "Enum", "value": 1 },
+                "angular_rate": { "type": "Float", "value": 12.0 },
+                "min": { "type": "Float", "value": -2.0 },
+                "max": { "type": "Float", "value": 2.0 }
+            }
+        }));
+    def["wires"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "fromNode": 500, "fromPort": "out", "toNode": 100, "toPort": "pos_x"
+        }));
+    let runtime = PresetRuntime::from_json_str(
+        &serde_json::to_string(&def).unwrap(),
+        &PrimitiveRegistry::with_builtin(),
+    )
+    .expect("PhysicsSolids with an LFO-authored body loads");
+    let mask =
+        manifold_nodes_water::runtime::testkit::sampling_mask(&runtime).expect("physics ancestry");
+    let sampled: Vec<_> = runtime
+        .plan
+        .steps()
+        .iter()
+        .zip(mask)
+        .filter(|(_, enabled)| **enabled)
+        .map(|(step, _)| {
+            runtime
+                .graph
+                .get_node(step.node)
+                .unwrap()
+                .node
+                .type_id()
+                .as_str()
+                .to_owned()
+        })
+        .collect();
+    assert!(sampled.iter().any(|kind| kind == "node.lfo"));
+    assert!(sampled.iter().any(|kind| kind == "node.physics_world"));
+    assert!(!sampled.iter().any(|kind| kind == "node.render_scene"));
+}
+
+#[test]
+fn rigid_body_source_is_setup_and_excludes_gpu_mesh_ancestors_from_history() {
+    let mut def: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/presets/PhysicsSolids.json"
+    )))
+    .unwrap();
+    // Source-driven bodies take shape from the visible mesh. Remove the
+    // legacy body's opposite shape route before wiring that source back.
+    def["wires"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|wire| !(wire["fromNode"] == 101 && wire["toNode"] == 102));
+    def["wires"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "fromNode": 102,
+            "fromPort": "source",
+            "toNode": 101,
+            "toPort": "source"
+        }));
+    let runtime = PresetRuntime::from_json_str(
+        &serde_json::to_string(&def).unwrap(),
+        &PrimitiveRegistry::with_builtin(),
+    )
+    .expect("rigid body source graph loads");
+    let mask =
+        manifold_nodes_water::runtime::testkit::sampling_mask(&runtime).expect("physics ancestry");
+    let sampled: Vec<_> = runtime
+        .plan
+        .steps()
+        .iter()
+        .zip(mask)
+        .filter(|(_, enabled)| **enabled)
+        .map(|(step, _)| {
+            runtime
+                .graph
+                .get_node(step.node)
+                .unwrap()
+                .node
+                .type_id()
+                .as_str()
+                .to_owned()
+        })
+        .collect();
+    assert!(sampled.iter().any(|kind| kind == "node.rigid_body"));
+    assert!(
+        !sampled
+            .iter()
+            .any(|kind| kind == "node.platonic_solid_mesh")
+    );
+}
+
+#[cfg(feature = "gpu-proofs")]
+#[test]
+fn explicit_reset_clears_physics_history_clock() {
+    let mut runtime = PresetRuntime::from_json_str(
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/presets/PhysicsSolids.json"
+        )),
+        &PrimitiveRegistry::with_builtin(),
+    )
+    .expect("PhysicsSolids loads");
+    manifold_nodes_water::runtime::testkit::set_last_physics_frame_time(
+        &mut runtime,
+        Some(FrameTime {
             beats: Beats(1.0),
             seconds: Seconds(1.0),
             delta: Seconds(1.0),
             frame_count: 1,
+        }),
+    );
+    runtime.reset_state(&manifold_gpu::testkit::test_device());
+    assert!(manifold_nodes_water::runtime::testkit::last_physics_frame_time(&runtime).is_none());
+}
+
+#[test]
+fn physics_history_holds_release_events_without_replaying_trigger_state() {
+    let mut def: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/presets/PhysicsSolids.json"
+    )))
+    .unwrap();
+    def["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id": 500, "nodeId": "release_event", "typeId": "node.trigger_gate"
         }));
-        runtime.reset_state(&manifold_gpu::testkit::test_device());
-        assert!(manifold_nodes_water::runtime::testkit::last_physics_frame_time(&runtime).is_none());
-    }
-
-    #[test]
-    fn physics_history_holds_release_events_without_replaying_trigger_state() {
-        let mut def: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/presets/PhysicsSolids.json")))
+    def["wires"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "fromNode": 500, "fromPort": "out", "toNode": 111, "toPort": "release_count"
+        }));
+    let registry = PrimitiveRegistry::with_builtin();
+    let runtime = PresetRuntime::from_json_str(&def.to_string(), &registry)
+        .expect("release events are not replayed during historical pose sampling");
+    let event = runtime
+        .graph
+        .instance_by_node_id(&manifold_core::NodeId::new("release_event"))
         .unwrap();
-        def["nodes"]
-            .as_array_mut()
-            .unwrap()
-            .push(serde_json::json!({
-                "id": 500, "nodeId": "release_event", "typeId": "node.trigger_gate"
-            }));
-        def["wires"]
-            .as_array_mut()
-            .unwrap()
-            .push(serde_json::json!({
-                "fromNode": 500, "fromPort": "out", "toNode": 111, "toPort": "release_count"
-            }));
-        let registry = PrimitiveRegistry::with_builtin();
-        let runtime = PresetRuntime::from_json_str(&def.to_string(), &registry)
-            .expect("release events are not replayed during historical pose sampling");
-        let event = runtime
-            .graph
-            .instance_by_node_id(&manifold_core::NodeId::new("release_event"))
-            .unwrap();
-        for (step, sampled) in runtime
-            .plan
-            .steps()
-            .iter()
-            .zip(manifold_nodes_water::runtime::testkit::sampling_mask(&runtime).unwrap())
-        {
-            if step.node == event {
-                assert!(!sampled);
-            }
+    for (step, sampled) in runtime
+        .plan
+        .steps()
+        .iter()
+        .zip(manifold_nodes_water::runtime::testkit::sampling_mask(&runtime).unwrap())
+    {
+        if step.node == event {
+            assert!(!sampled);
         }
-        def["wires"]
-            .as_array_mut()
-            .unwrap()
-            .push(serde_json::json!({
-                "fromNode": 500, "fromPort": "out", "toNode": 110, "toPort": "pos_x"
-            }));
-        assert!(
-            PresetRuntime::from_json_str(&def.to_string(), &registry).is_err(),
-            "stateful pose ancestry must still be rejected"
-        );
     }
-
+    def["wires"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "fromNode": 500, "fromPort": "out", "toNode": 110, "toPort": "pos_x"
+        }));
+    assert!(
+        PresetRuntime::from_json_str(&def.to_string(), &registry).is_err(),
+        "stateful pose ancestry must still be rejected"
+    );
+}

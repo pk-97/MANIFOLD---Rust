@@ -20,7 +20,11 @@ fn scene_impulse_source_requires_rebuild_after_output_roots_change() {
             .contains("outputs changed")
     );
     assert_eq!(
-        Seconds(manifold_nodes_water::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds()),
+        Seconds(
+            manifold_nodes_water::runtime::testkit::last_physics_frame_time(&runtime)
+                .unwrap()
+                .seconds()
+        ),
         Seconds::ZERO
     );
     runtime.execute_frame(time(0.1));
@@ -76,7 +80,11 @@ fn scene_impulse_source_maps_speed_edits_and_pause_without_stepping() {
     let started = 8.0 / 60.0;
     let sped = 0.125 + (started - 0.125) + 2.0 * (0.25 - started);
     let near = |stamp: Seconds, expected: f64| (stamp.0 - expected).abs() < 1e-12;
-    assert!(near(hit.test_stamp(0).time, sped), "{:?}", hit.test_stamp(0).time);
+    assert!(
+        near(hit.test_stamp(0).time, sped),
+        "{:?}",
+        hit.test_stamp(0).time
+    );
     runtime.water().deliver_scene_impulse(&mut hit).unwrap();
     hit.clear();
     edit(&mut runtime, "world", "speed", 0.0);
@@ -84,14 +92,22 @@ fn scene_impulse_source_maps_speed_edits_and_pause_without_stepping() {
         .water()
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(10.25), 2)
         .unwrap();
-    assert!(near(hit.test_stamp(0).time, sped), "{:?}", hit.test_stamp(0).time);
+    assert!(
+        near(hit.test_stamp(0).time, sped),
+        "{:?}",
+        hit.test_stamp(0).time
+    );
     runtime.water().deliver_scene_impulse(&mut hit).unwrap();
     hit.clear();
     runtime
         .water()
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(10.5), 3)
         .unwrap();
-    assert!(near(hit.test_stamp(0).time, sped), "{:?}", hit.test_stamp(0).time);
+    assert!(
+        near(hit.test_stamp(0).time, sped),
+        "{:?}",
+        hit.test_stamp(0).time
+    );
     assert_eq!(
         POSITIONS.get(),
         [0.0, 5.0],
@@ -109,17 +125,26 @@ fn scene_impulse_source_maps_speed_edits_and_pause_without_stepping() {
     hit.clear();
     runtime.execute_frame(time(10.6));
     let mut receipts = Vec::new();
-    runtime.water().drain_scene_impulses(|_, receipt| receipts.push(receipt));
+    runtime
+        .water()
+        .drain_scene_impulses(|_, receipt| receipts.push(receipt));
     assert_eq!(receipts.len(), 4);
     // Project-frame identities: Speed scales duration, not the number of ticks.
     assert_eq!(
         receipts.iter().map(|r| r.applied.tick).collect::<Vec<_>>(),
         [7, 15, 15, 15]
     );
-    let world = runtime.graph.instance_by_node_id(&NodeId::new("world")).unwrap();
+    let world = runtime
+        .graph
+        .instance_by_node_id(&NodeId::new("world"))
+        .unwrap();
     let resumed = node::get(runtime.graph.get_node(world).unwrap().node.as_ref())
         .expect("native world fixture")
-        .physics_impulse_stamp(manifold_core::PlayedTime::from_played(10.6), 5, Default::default())
+        .physics_impulse_stamp(
+            manifold_core::PlayedTime::from_played(10.6),
+            5,
+            Default::default(),
+        )
         .unwrap()
         .time;
     assert!(near(resumed, sped + (10.6 - 10.5)), "{resumed:?}");
@@ -144,7 +169,11 @@ fn scene_impulse_source_lands_old_capture_at_the_anchor_and_rejects_pending_capt
             .contains("acknowledge")
     );
     assert_eq!(
-        Seconds(manifold_nodes_water::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds()),
+        Seconds(
+            manifold_nodes_water::runtime::testkit::last_physics_frame_time(&runtime)
+                .unwrap()
+                .seconds()
+        ),
         Seconds(1.1)
     );
     hit.clear();
@@ -156,7 +185,11 @@ fn scene_impulse_source_lands_old_capture_at_the_anchor_and_rejects_pending_capt
         .unwrap();
     assert_eq!(Seconds(hit.source_time().unwrap().seconds()), Seconds(1.1));
     assert_eq!(
-        Seconds(manifold_nodes_water::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds()),
+        Seconds(
+            manifold_nodes_water::runtime::testkit::last_physics_frame_time(&runtime)
+                .unwrap()
+                .seconds()
+        ),
         Seconds(1.1)
     );
     hit.clear();
@@ -240,7 +273,9 @@ fn scene_impulse_source_ticks_match_across_frame_rates_and_display_stall() {
             }
         }
         let mut receipts = Vec::new();
-        runtime.water().drain_scene_impulses(|_, event| receipts.push(event));
+        runtime
+            .water()
+            .drain_scene_impulses(|_, event| receipts.push(event));
         assert_eq!(receipts.len(), 2);
         (stamps, receipts, POSITIONS.get())
     };

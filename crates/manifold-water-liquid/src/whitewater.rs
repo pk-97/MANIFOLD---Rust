@@ -16,7 +16,8 @@ pub const WHITEWATER_COMMON: &str = include_str!("primitives/shaders/whitewater_
 /// The solid lattice's node counts a grid atom runs over: its `nodes_x/y/z`
 /// inputs, else its params.
 pub fn grid_nodes(ctx: &EffectNodeContext<'_, '_>) -> [u32; 3] {
-    ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 71.0).round().max(0.0) as u32)
+    ["nodes_x", "nodes_y", "nodes_z"]
+        .map(|name| ctx.scalar_or_param(name, 71.0).round().max(0.0) as u32)
 }
 
 /// A cell's nearest surface crossing, the surface normal there, and the
@@ -42,10 +43,22 @@ const _: () = assert!(SURFACE_CROSSING_BYTES == 32);
 
 /// Std430: each vec3 + f32 pair shares one 16-byte slot.
 pub const SURFACE_CROSSING_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: well_known::CROSSING, ty: ChannelElementType::Vec3F },
-    ChannelSpec { name: well_known::LEVEL, ty: ChannelElementType::F32 },
-    ChannelSpec { name: well_known::NORMAL, ty: ChannelElementType::Vec3F },
-    ChannelSpec { name: well_known::PAD0, ty: ChannelElementType::F32 },
+    ChannelSpec {
+        name: well_known::CROSSING,
+        ty: ChannelElementType::Vec3F,
+    },
+    ChannelSpec {
+        name: well_known::LEVEL,
+        ty: ChannelElementType::F32,
+    },
+    ChannelSpec {
+        name: well_known::NORMAL,
+        ty: ChannelElementType::Vec3F,
+    },
+    ChannelSpec {
+        name: well_known::PAD0,
+        ty: ChannelElementType::F32,
+    },
 ];
 
 impl KnownItem for SurfaceCrossing {
@@ -64,8 +77,14 @@ pub struct KnownValue {
 const _: () = assert!(std::mem::size_of::<KnownValue>() == 8);
 
 pub const KNOWN_VALUE_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: well_known::VALUE, ty: ChannelElementType::F32 },
-    ChannelSpec { name: well_known::KNOWN, ty: ChannelElementType::F32 },
+    ChannelSpec {
+        name: well_known::VALUE,
+        ty: ChannelElementType::F32,
+    },
+    ChannelSpec {
+        name: well_known::KNOWN,
+        ty: ChannelElementType::F32,
+    },
 ];
 
 impl KnownItem for KnownValue {
@@ -103,13 +122,34 @@ pub const WHITEWATER_ID_LIMIT: u32 = 256;
 /// Std430: position_lifetime Vec4F at 0, velocity Vec3F at 16, kind U32 at
 /// 28, id and padding at 32; stride 48.
 pub const WHITEWATER_PARTICLE_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: well_known::POSITION_LIFETIME, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::VELOCITY, ty: ChannelElementType::Vec3F },
-    ChannelSpec { name: well_known::KIND, ty: ChannelElementType::U32 },
-    ChannelSpec { name: well_known::ID, ty: ChannelElementType::U32 },
-    ChannelSpec { name: well_known::PAD0, ty: ChannelElementType::U32 },
-    ChannelSpec { name: well_known::PAD1, ty: ChannelElementType::U32 },
-    ChannelSpec { name: well_known::PAD2, ty: ChannelElementType::U32 },
+    ChannelSpec {
+        name: well_known::POSITION_LIFETIME,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::VELOCITY,
+        ty: ChannelElementType::Vec3F,
+    },
+    ChannelSpec {
+        name: well_known::KIND,
+        ty: ChannelElementType::U32,
+    },
+    ChannelSpec {
+        name: well_known::ID,
+        ty: ChannelElementType::U32,
+    },
+    ChannelSpec {
+        name: well_known::PAD0,
+        ty: ChannelElementType::U32,
+    },
+    ChannelSpec {
+        name: well_known::PAD1,
+        ty: ChannelElementType::U32,
+    },
+    ChannelSpec {
+        name: well_known::PAD2,
+        ty: ChannelElementType::U32,
+    },
 ];
 
 impl KnownItem for WhitewaterParticle {
@@ -142,7 +182,10 @@ pub const MAX_GRID_NODES: u32 = 4096;
 
 /// Cells per axis of a whitewater grid over a solid lattice of `nodes`.
 pub fn grid_cells(nodes: [u32; 3]) -> Option<[u32; 3]> {
-    nodes.iter().all(|&n| (3..=MAX_GRID_NODES).contains(&n)).then(|| nodes.map(|n| n - 1))
+    nodes
+        .iter()
+        .all(|&n| (3..=MAX_GRID_NODES).contains(&n))
+        .then(|| nodes.map(|n| n - 1))
 }
 
 /// Cells in a grid of `cells`, in u64 so no size wraps.
@@ -153,7 +196,8 @@ pub fn cell_total(cells: [u32; 3]) -> u64 {
 /// Level-set nodes per grid cell: the same whole number s on every axis,
 /// with `level_nodes = cells·s + 1`, or a named refusal.
 pub fn refinement(nodes: [u32; 3], level_nodes: [u32; 3]) -> Result<u32, String> {
-    let cells = grid_cells(nodes).ok_or_else(|| format!("a {nodes:?} solid lattice has too few or too many nodes"))?;
+    let cells = grid_cells(nodes)
+        .ok_or_else(|| format!("a {nodes:?} solid lattice has too few or too many nodes"))?;
     let per_axis: Vec<Option<u32>> = (0..3)
         .map(|a| {
             let spans = level_nodes[a].checked_sub(1)?;
@@ -161,7 +205,9 @@ pub fn refinement(nodes: [u32; 3], level_nodes: [u32; 3]) -> Result<u32, String>
         })
         .collect();
     match per_axis[..] {
-        [Some(s), Some(y), Some(z)] if s == y && s == z && (1..=MAX_REFINEMENT).contains(&s) => Ok(s),
+        [Some(s), Some(y), Some(z)] if s == y && s == z && (1..=MAX_REFINEMENT).contains(&s) => {
+            Ok(s)
+        }
         _ => Err(format!(
             "a {level_nodes:?} level set is not a whole refinement of 1 to {MAX_REFINEMENT} of the {cells:?}-cell grid"
         )),
@@ -172,7 +218,8 @@ pub fn refinement(nodes: [u32; 3], level_nodes: [u32; 3]) -> Result<u32, String>
 /// axis: the face grid sits centred by a whole number of cells, the same on
 /// every axis (section 3.1), or the placement is a named refusal.
 pub fn face_offset(nodes: [u32; 3], face_cells: [u32; 3]) -> Result<[u32; 3], String> {
-    let cells = grid_cells(nodes).ok_or_else(|| format!("a {nodes:?} solid lattice has too few or too many nodes"))?;
+    let cells = grid_cells(nodes)
+        .ok_or_else(|| format!("a {nodes:?} solid lattice has too few or too many nodes"))?;
     let pad: [Option<u32>; 3] = std::array::from_fn(|a| {
         let spare = cells[a].checked_sub(face_cells[a])?;
         (face_cells[a] > 0 && spare % 2 == 0).then_some(spare / 2)
@@ -199,14 +246,24 @@ pub fn require_extended_faces(layers: f32) -> Result<(), String> {
 /// The grid's first node and cell size, from the frame's `grid_bounds` (the
 /// scene box of the solid lattice's nodes) and its node counts. Cells that
 /// aren't cubes are a named refusal.
-pub fn grid_box(bounds: manifold_node_engine::scene::transform::Transform, nodes: [u32; 3]) -> Result<([f32; 3], f32), String> {
-    let cells = grid_cells(nodes).ok_or_else(|| format!("a {nodes:?} solid lattice has too few or too many nodes"))?;
+pub fn grid_box(
+    bounds: manifold_node_engine::scene::transform::Transform,
+    nodes: [u32; 3],
+) -> Result<([f32; 3], f32), String> {
+    let cells = grid_cells(nodes)
+        .ok_or_else(|| format!("a {nodes:?} solid lattice has too few or too many nodes"))?;
     let sizes: [f32; 3] = std::array::from_fn(|a| bounds.scale[a] / cells[a] as f32);
     let size = sizes[0];
     if !(size.is_finite() && size > 0.0) || sizes.iter().any(|s| (s - size).abs() > 1e-4 * size) {
-        return Err(format!("a {:?} m grid box over {nodes:?} nodes does not make cube cells", bounds.scale));
+        return Err(format!(
+            "a {:?} m grid box over {nodes:?} nodes does not make cube cells",
+            bounds.scale
+        ));
     }
-    Ok((std::array::from_fn(|a| bounds.pos[a] - 0.5 * bounds.scale[a]), size))
+    Ok((
+        std::array::from_fn(|a| bounds.pos[a] - 0.5 * bounds.scale[a]),
+        size,
+    ))
 }
 
 /// The whitewater grid a particle atom reads: the box `center` ± `size`/2
@@ -224,9 +281,17 @@ pub fn particle_grid(ctx: &EffectNodeContext<'_, '_>) -> Result<ParticleGrid, St
     let nodes = grid_nodes(ctx);
     let center = ["center_x", "center_y", "center_z"].map(|name| ctx.scalar_or_param(name, 0.0));
     let size = ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.375));
-    let bounds = manifold_node_engine::scene::transform::Transform { pos: center, scale: size, ..Default::default() };
+    let bounds = manifold_node_engine::scene::transform::Transform {
+        pos: center,
+        scale: size,
+        ..Default::default()
+    };
     grid_box(bounds, nodes)?;
-    Ok(ParticleGrid { nodes, center, size })
+    Ok(ParticleGrid {
+        nodes,
+        center,
+        size,
+    })
 }
 
 /// The grid index of cell `c`, x fastest.
@@ -250,10 +315,23 @@ mod tests {
         assert_eq!(grid_cells([71; 3]), Some([70; 3]));
         assert_eq!(refinement([71; 3], [211; 3]), Ok(3));
         assert_eq!(refinement([9, 8, 7], [17, 15, 13]), Ok(2));
-        assert!(refinement([71; 3], [212; 3]).unwrap_err().contains("whole refinement"));
-        assert!(refinement([71; 3], [211, 141, 211]).is_err(), "unequal refinement");
-        assert!(refinement([71; 3], [351; 3]).is_err(), "refinement past {MAX_REFINEMENT}");
-        assert!(refinement([2, 71, 71], [4, 211, 211]).is_err(), "a grid needs three nodes a side");
+        assert!(
+            refinement([71; 3], [212; 3])
+                .unwrap_err()
+                .contains("whole refinement")
+        );
+        assert!(
+            refinement([71; 3], [211, 141, 211]).is_err(),
+            "unequal refinement"
+        );
+        assert!(
+            refinement([71; 3], [351; 3]).is_err(),
+            "refinement past {MAX_REFINEMENT}"
+        );
+        assert!(
+            refinement([2, 71, 71], [4, 211, 211]).is_err(),
+            "a grid needs three nodes a side"
+        );
         let cells = [7, 6, 5];
         for index in [0, 1, 41, 209] {
             assert_eq!(cell_index(cells, cell_coords(cells, index)), index);

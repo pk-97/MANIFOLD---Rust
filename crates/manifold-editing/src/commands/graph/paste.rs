@@ -4,8 +4,8 @@
 //! `graph/mod.rs` and is reached here via `super`.
 
 use manifold_core::GraphTarget;
-use manifold_core::change::ChangeSet;
 use manifold_core::NodeId;
+use manifold_core::change::ChangeSet;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 use manifold_core::project::Project;
 
@@ -70,7 +70,9 @@ impl PasteNodesCommand {
 /// redo reuses the same ones.
 fn rederive_inner_ids(node: &mut EffectGraphNode) {
     let outer = node.node_id.clone();
-    let Some(group) = node.group.as_deref_mut() else { return };
+    let Some(group) = node.group.as_deref_mut() else {
+        return;
+    };
     for inner in &mut group.nodes {
         inner.node_id = NodeId::new(format!("{}.{}", outer.as_str(), inner.node_id.as_str()));
         rederive_inner_ids(inner);
@@ -79,9 +81,15 @@ fn rederive_inner_ids(node: &mut EffectGraphNode) {
 
 impl Command for PasteNodesCommand {
     fn graph_edit_sites(&self, sites: &mut Vec<super::GraphEditSite>) {
-        sites.push(super::GraphEditSite::new(&self.target, &self.scope_path, super::SiteReach::Level));
+        sites.push(super::GraphEditSite::new(
+            &self.target,
+            &self.scope_path,
+            super::SiteReach::Level,
+        ));
     }
-    fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::GRAPH_EDIT
+    }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }

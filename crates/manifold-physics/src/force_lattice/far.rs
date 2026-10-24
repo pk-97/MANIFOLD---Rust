@@ -56,7 +56,11 @@ impl FarForces {
     /// One set of terms per field, in lattice order. A field with no far
     /// form clears the whole set, so the swarm reads the lattice's edge
     /// there as before.
-    pub fn lay<'a>(&mut self, lattice: &ForceLattice, fields: impl Iterator<Item = &'a FieldValue>) {
+    pub fn lay<'a>(
+        &mut self,
+        lattice: &ForceLattice,
+        fields: impl Iterator<Item = &'a FieldValue>,
+    ) {
         self.lay_sums(lattice, fields.map(std::iter::once));
     }
 
@@ -64,7 +68,11 @@ impl FarForces {
     /// slot reads their sum (a tick several hits land on). A slot with no
     /// field reads nothing past the lattice; a field with no far form
     /// clears the whole set, as in [`Self::lay`].
-    pub fn lay_sums<'a, S: Iterator<Item = &'a FieldValue>>(&mut self, lattice: &ForceLattice, slots: impl Iterator<Item = S>) {
+    pub fn lay_sums<'a, S: Iterator<Item = &'a FieldValue>>(
+        &mut self,
+        lattice: &ForceLattice,
+        slots: impl Iterator<Item = S>,
+    ) {
         self.terms.clear();
         self.counts.clear();
         for slot in slots {
@@ -83,10 +91,17 @@ impl FarForces {
         // reads nothing past the lattice rather than the edge.
         self.per_lattice = self.counts.iter().copied().max().unwrap_or(0).max(1);
         self.packed.clear();
-        self.packed.resize(FAR_HEADER + self.counts.len() * self.per_lattice * FAR_TERM, [0.0; 4]);
+        self.packed.resize(
+            FAR_HEADER + self.counts.len() * self.per_lattice * FAR_TERM,
+            [0.0; 4],
+        );
         self.packed[0] = [self.per_lattice as f32, 0.0, 0.0, 0.0];
         let (axes, origin, inverse) = lattice.frame.map_or(
-            ([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], [0.0; 3], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+            (
+                [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                [0.0; 3],
+                [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            ),
             |frame| (frame.axes, frame.origin, frame.inverse),
         );
         for i in 0..3 {
@@ -97,7 +112,10 @@ impl FarForces {
         let mut at = FAR_HEADER;
         let mut terms = self.terms.iter();
         for &count in &self.counts {
-            for (slot, term) in self.packed[at..at + count * FAR_TERM].chunks_exact_mut(FAR_TERM).zip(terms.by_ref().take(count)) {
+            for (slot, term) in self.packed[at..at + count * FAR_TERM]
+                .chunks_exact_mut(FAR_TERM)
+                .zip(terms.by_ref().take(count))
+            {
                 slot.copy_from_slice(&pack(term));
             }
             at += self.per_lattice * FAR_TERM;
@@ -111,7 +129,11 @@ impl FarForces {
 
     /// The header and every lattice's terms; empty when there is no far form.
     pub fn packed(&self) -> &[[f32; 4]] {
-        if self.per_lattice == 0 { &[] } else { &self.packed }
+        if self.per_lattice == 0 {
+            &[]
+        } else {
+            &self.packed
+        }
     }
 
     /// Lattice `slot`'s far force at `local`, a point in the lattice's frame,
@@ -129,11 +151,18 @@ pub fn sample_packed(words: &[[f32; 4]], slot: usize, local: [f32; 3]) -> ForceS
     if per_lattice == 0 {
         return ForceSample::default();
     }
-    let world: [f32; 3] = std::array::from_fn(|d| words[4][d] + (0..3).map(|i| words[1 + i][d] * local[i]).sum::<f32>());
+    let world: [f32; 3] = std::array::from_fn(|d| {
+        words[4][d] + (0..3).map(|i| words[1 + i][d] * local[i]).sum::<f32>()
+    });
     let start = FAR_HEADER + slot * per_lattice * FAR_TERM;
-    let terms: Vec<FarTerm> = words[start..start + per_lattice * FAR_TERM].chunks_exact(FAR_TERM).map(unpack).collect();
+    let terms: Vec<FarTerm> = words[start..start + per_lattice * FAR_TERM]
+        .chunks_exact(FAR_TERM)
+        .map(unpack)
+        .collect();
     let mut s = sample_far(&terms, world);
-    let to_local = |v: [f32; 3]| -> [f32; 3] { std::array::from_fn(|i| (0..3).map(|d| words[5 + i][d] * v[d]).sum::<f32>()) };
+    let to_local = |v: [f32; 3]| -> [f32; 3] {
+        std::array::from_fn(|i| (0..3).map(|d| words[5 + i][d] * v[d]).sum::<f32>())
+    };
     s.push = to_local(s.push);
     s.drag_wind = to_local(s.drag_wind);
     s
@@ -141,7 +170,12 @@ pub fn sample_packed(words: &[[f32; 4]], slot: usize, local: [f32; 3]) -> ForceS
 
 fn pack(term: &FarTerm) -> [[f32; 4]; FAR_TERM] {
     let [p, w] = [term.push, term.drag_wind];
-    let shaped = |kind: f32, curve: FalloffCurve, radius: f32, falloff: f32, center: [f32; 3], axis: [f32; 3]| {
+    let shaped = |kind: f32,
+                  curve: FalloffCurve,
+                  radius: f32,
+                  falloff: f32,
+                  center: [f32; 3],
+                  axis: [f32; 3]| {
         [
             [kind, curve.index() as f32, radius, falloff],
             [center[0], center[1], center[2], p[0]],
@@ -150,9 +184,28 @@ fn pack(term: &FarTerm) -> [[f32; 4]; FAR_TERM] {
         ]
     };
     match term.shape {
-        FarShape::Constant => [[0.0; 4], [p[0], p[1], p[2], 0.0], [w[0], w[1], w[2], term.drag], [0.0; 4]],
-        FarShape::Radial(f) => shaped(1.0, f.curve(), f.radius(), f.falloff(), f.center(), [0.0; 3]),
-        FarShape::Vortex(f) => shaped(2.0, f.curve(), f.radius(), f.falloff(), f.center(), f.axis()),
+        FarShape::Constant => [
+            [0.0; 4],
+            [p[0], p[1], p[2], 0.0],
+            [w[0], w[1], w[2], term.drag],
+            [0.0; 4],
+        ],
+        FarShape::Radial(f) => shaped(
+            1.0,
+            f.curve(),
+            f.radius(),
+            f.falloff(),
+            f.center(),
+            [0.0; 3],
+        ),
+        FarShape::Vortex(f) => shaped(
+            2.0,
+            f.curve(),
+            f.radius(),
+            f.falloff(),
+            f.center(),
+            f.axis(),
+        ),
     }
 }
 
@@ -161,13 +214,27 @@ fn unpack(words: &[[f32; 4]]) -> FarTerm {
     let curve = FalloffCurve::from_index(head[1]);
     let center = [a[0], a[1], a[2]];
     let shape = match head[0].round() as i32 {
-        1 => RadialField::new(center, head[2], head[3]).ok().map(|f| FarShape::Radial(f.with_curve(curve))),
-        2 => VortexField::new(center, [b[0], b[1], b[2]], head[2], head[3]).ok().map(|f| FarShape::Vortex(f.with_curve(curve))),
+        1 => RadialField::new(center, head[2], head[3])
+            .ok()
+            .map(|f| FarShape::Radial(f.with_curve(curve))),
+        2 => VortexField::new(center, [b[0], b[1], b[2]], head[2], head[3])
+            .ok()
+            .map(|f| FarShape::Vortex(f.with_curve(curve))),
         _ => None,
     };
     match shape {
-        Some(shape) => FarTerm { shape, push: [a[3], 0.0, 0.0], drag: b[3], drag_wind: [c[0], 0.0, 0.0] },
-        None => FarTerm { shape: FarShape::Constant, push: [a[0], a[1], a[2]], drag: b[3], drag_wind: [b[0], b[1], b[2]] },
+        Some(shape) => FarTerm {
+            shape,
+            push: [a[3], 0.0, 0.0],
+            drag: b[3],
+            drag_wind: [c[0], 0.0, 0.0],
+        },
+        None => FarTerm {
+            shape: FarShape::Constant,
+            push: [a[0], a[1], a[2]],
+            drag: b[3],
+            drag_wind: [b[0], b[1], b[2]],
+        },
     }
 }
 
@@ -184,11 +251,24 @@ mod tests {
     #[test]
     fn packed_far_terms_read_the_field_in_the_swarm_frame() {
         let (c, s) = (0.6f32, 0.8f32);
-        let frame = LatticeFrame::new([[2.0 * c, 0.0, -2.0 * s], [0.0, 0.5, 0.0], [s, 0.0, c]], [3.0, 1.0, -2.0]).unwrap();
+        let frame = LatticeFrame::new(
+            [[2.0 * c, 0.0, -2.0 * s], [0.0, 0.5, 0.0], [s, 0.0, c]],
+            [3.0, 1.0, -2.0],
+        )
+        .unwrap();
         let lattice = ForceLattice::over_box([-3.0; 3], [6.0; 3], 9).in_frame(frame);
-        let pull = FieldValue::radial_curve([1.0, 2.0, 0.0], 2.5, 1.0, FalloffCurve::Inverse).unwrap().scaled(-20.0).unwrap();
-        let swirl = FieldValue::vortex([0.0; 3], [0.0, 1.0, 0.0], 3.0, 1.0).unwrap().scaled(4.0).unwrap();
-        let wind = FieldValue::uniform([1.0, 0.0, 0.5]).unwrap().air(2.0).unwrap();
+        let pull = FieldValue::radial_curve([1.0, 2.0, 0.0], 2.5, 1.0, FalloffCurve::Inverse)
+            .unwrap()
+            .scaled(-20.0)
+            .unwrap();
+        let swirl = FieldValue::vortex([0.0; 3], [0.0, 1.0, 0.0], 3.0, 1.0)
+            .unwrap()
+            .scaled(4.0)
+            .unwrap();
+        let wind = FieldValue::uniform([1.0, 0.0, 0.5])
+            .unwrap()
+            .air(2.0)
+            .unwrap();
         let first = pull.sum(&swirl).unwrap().sum(&wind).unwrap();
         let second = wind.clone();
         let mut far = FarForces::default();
@@ -205,8 +285,14 @@ mod tests {
                 let read = far.sample(slot, local);
                 assert!(near(read.drag, expected.drag), "{slot} {local:?}");
                 for axis in 0..3 {
-                    assert!(near(read.push[axis], expected.push[axis]), "{slot} {local:?}: {read:?} vs {expected:?}");
-                    assert!(near(read.drag_wind[axis], expected.drag_wind[axis]), "{slot} {local:?}");
+                    assert!(
+                        near(read.push[axis], expected.push[axis]),
+                        "{slot} {local:?}: {read:?} vs {expected:?}"
+                    );
+                    assert!(
+                        near(read.drag_wind[axis], expected.drag_wind[axis]),
+                        "{slot} {local:?}"
+                    );
                 }
             }
         }

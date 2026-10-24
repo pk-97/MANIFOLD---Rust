@@ -100,7 +100,11 @@ impl Primitive for GenerateRange {
         // `max_capacity` as the sample count. Rounded + clamped to
         // [2, max_capacity]; default (unwired) is max_capacity so old
         // graphs (Lissajous) dispatch identically.
-        let count = match ctx.inputs.scalar("active_count").and_then(|v| v.as_scalar()) {
+        let count = match ctx
+            .inputs
+            .scalar("active_count")
+            .and_then(|v| v.as_scalar())
+        {
             Some(n) => (n.round().max(2.0) as u32).min(max_count),
             None => max_count,
         };

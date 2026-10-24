@@ -1,16 +1,14 @@
+use manifold_core::effect_graph_def::EffectGraphDef;
+use manifold_gpu::GpuTextureFormat;
+use manifold_node_engine::exec::execution_plan::compile;
 use manifold_node_engine::freeze::TextureDiff;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::exec::execution_plan::compile;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_node_engine::graph::Graph;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::persistence::{EffectGraphDefExt, PrimitiveRegistry};
-use manifold_node_engine::gpu::render_target::RenderTarget;
-use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_gpu::GpuTextureFormat;
 
 const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
-
-
 
 /// The section 7.4 "out-of-loop ≈ulp" precision-contract tolerance (freeze section 7,
 /// `docs/FREEZE_COMPILER_MAP.md`): the shared per-texel (abs, rel) bound for
@@ -77,7 +75,13 @@ fn coc_from_depth_fuses_with_pointwise_neighbor_and_matches_unfused() {
     let f_stop = 2.8f32;
 
     // ── Unfused: the canonical graph, params set by node id. ──
-    let mut unfused_graph = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused_graph = def
+        .clone()
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("unfused graph");
     let set_by_node_id = |g: &mut Graph, node_id: &str, param: &str, v: f32| {
         let id = g
             .node_id_by_handle(node_id)
@@ -89,10 +93,24 @@ fn coc_from_depth_fuses_with_pointwise_neighbor_and_matches_unfused() {
     set_by_node_id(&mut unfused_graph, "lens", "focus_distance", focus_distance);
     set_by_node_id(&mut unfused_graph, "lens", "f_stop", f_stop);
     let unfused_plan = compile(&unfused_graph).expect("compile unfused");
-    let u_src = resource_for_output(&unfused_plan, find_node(&unfused_graph, "system.source"), "out");
-    let u_out =
-        resource_for_output(&unfused_plan, find_node(&unfused_graph, "node.invert"), "out");
-    let unfused = render_graph(&device.arc(), &mut unfused_graph, &unfused_plan, u_src, &input, u_out);
+    let u_src = resource_for_output(
+        &unfused_plan,
+        find_node(&unfused_graph, "system.source"),
+        "out",
+    );
+    let u_out = resource_for_output(
+        &unfused_plan,
+        find_node(&unfused_graph, "node.invert"),
+        "out",
+    );
+    let unfused = render_graph(
+        &device.arc(),
+        &mut unfused_graph,
+        &unfused_plan,
+        u_src,
+        &input,
+        u_out,
+    );
 
     // ── Fused: coc + invert must collapse into ONE node.wgsl_compute, with
     // `cam`/`lens` surviving as boundaries (a Camera producer never fuses)
@@ -100,15 +118,25 @@ fn coc_from_depth_fuses_with_pointwise_neighbor_and_matches_unfused() {
     // `camera_ext_0`. If BUG-135 were still present, the fused kernel would
     // fail naga parse and `fuse_canonical_def` would return `None` — the
     // `.expect` below is the regression guard. ──
-    let FusedDef { def: fused_def, retarget, .. } =
-        fuse_canonical_def(&def, &registry).expect("coc + invert is one fusable region");
+    let FusedDef {
+        def: fused_def,
+        retarget,
+        ..
+    } = fuse_canonical_def(&def, &registry).expect("coc + invert is one fusable region");
     assert_eq!(
-        fused_def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").count(),
+        fused_def
+            .nodes
+            .iter()
+            .filter(|n| n.type_id == "node.wgsl_compute")
+            .count(),
         1,
         "coc and invert must collapse to exactly one fused node"
     );
     assert!(
-        fused_def.nodes.iter().any(|n| n.type_id == "node.camera_lens"),
+        fused_def
+            .nodes
+            .iter()
+            .any(|n| n.type_id == "node.camera_lens"),
         "the camera/lens producers must survive as boundaries, not fuse away"
     );
     let fused_wgsl = fused_def
@@ -135,7 +163,12 @@ fn coc_from_depth_fuses_with_pointwise_neighbor_and_matches_unfused() {
         fused_wgsl
     );
 
-    let mut fused_graph = fused_def.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused_graph = fused_def
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("fused graph builds");
     set_by_node_id(&mut fused_graph, "lens", "focus_distance", focus_distance);
     set_by_node_id(&mut fused_graph, "lens", "f_stop", f_stop);
     let fused_node = find_node(&fused_graph, "node.wgsl_compute");
@@ -148,12 +181,25 @@ fn coc_from_depth_fuses_with_pointwise_neighbor_and_matches_unfused() {
     let fused_plan = compile(&fused_graph).expect("compile fused");
     let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");
     let f_out = resource_for_output(&fused_plan, fused_node, "dst");
-    let fused = render_graph(&device.arc(), &mut fused_graph, &fused_plan, f_src, &input, f_out);
+    let fused = render_graph(
+        &device.arc(),
+        &mut fused_graph,
+        &fused_plan,
+        f_src,
+        &input,
+        f_out,
+    );
 
     let differ = TextureDiff::new(&device);
     // Out-of-loop texture tier (freeze section 7.4): ≈1 f16 ULP, same tolerance band
     // the ColorGrade / I6 proofs above use.
-    let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
+    let r = differ.compare(
+        &device,
+        &unfused.texture,
+        &fused.texture,
+        OUT_OF_LOOP_ULP_ABS_TOL,
+        OUT_OF_LOOP_ULP_REL_TOL,
+    );
     assert!(
         r.passes(0.005) && r.over_count < 64,
         "coc_from_depth + invert fusion must match unfused within the \
@@ -207,17 +253,38 @@ fn camera_sky_over_fuses_and_matches_unfused() {
         set_by_node_id(g, "cam", "pitch", 0.3);
     };
 
-    let mut unfused_graph = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused_graph = def
+        .clone()
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("unfused graph");
     aim(&mut unfused_graph);
     let unfused_plan = compile(&unfused_graph).expect("compile unfused");
-    let u_src = resource_for_output(&unfused_plan, find_node(&unfused_graph, "system.source"), "out");
+    let u_src = resource_for_output(
+        &unfused_plan,
+        find_node(&unfused_graph, "system.source"),
+        "out",
+    );
     let u_out = resource_for_output(&unfused_plan, find_node(&unfused_graph, "node.over"), "out");
-    let unfused = render_graph(&device.arc(), &mut unfused_graph, &unfused_plan, u_src, &input, u_out);
+    let unfused = render_graph(
+        &device.arc(),
+        &mut unfused_graph,
+        &unfused_plan,
+        u_src,
+        &input,
+        u_out,
+    );
 
     let FusedDef { def: fused_def, .. } =
         fuse_canonical_def(&def, &registry).expect("camera_sky + over is one fusable region");
     assert_eq!(
-        fused_def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").count(),
+        fused_def
+            .nodes
+            .iter()
+            .filter(|n| n.type_id == "node.wgsl_compute")
+            .count(),
         1,
         "camera_sky and over must collapse to exactly one fused node"
     );
@@ -231,16 +298,34 @@ fn camera_sky_over_fuses_and_matches_unfused() {
                 && s.contains("@derived_uniform_member:")),
         "the fused kernel must read the camera through the derived-uniform recompute"
     );
-    let mut fused_graph = fused_def.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused_graph = fused_def
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("fused graph builds");
     aim(&mut fused_graph);
     let fused_node = find_node(&fused_graph, "node.wgsl_compute");
     let fused_plan = compile(&fused_graph).expect("compile fused");
     let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");
     let f_out = resource_for_output(&fused_plan, fused_node, "dst");
-    let fused = render_graph(&device.arc(), &mut fused_graph, &fused_plan, f_src, &input, f_out);
+    let fused = render_graph(
+        &device.arc(),
+        &mut fused_graph,
+        &fused_plan,
+        f_src,
+        &input,
+        f_out,
+    );
 
     let differ = TextureDiff::new(&device);
-    let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
+    let r = differ.compare(
+        &device,
+        &unfused.texture,
+        &fused.texture,
+        OUT_OF_LOOP_ULP_ABS_TOL,
+        OUT_OF_LOOP_ULP_REL_TOL,
+    );
     assert!(
         r.passes(0.005) && r.over_count < 64,
         "camera_sky + over fusion must match unfused within the out-of-loop \
@@ -277,28 +362,71 @@ fn sea_horizon_env_fuses_and_matches_unfused() {
     }"#;
     let def: EffectGraphDef = serde_json::from_str(json).expect("parse fixture graph");
 
-    let mut unfused_graph = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused_graph = def
+        .clone()
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("unfused graph");
     let unfused_plan = compile(&unfused_graph).expect("compile unfused");
-    let u_src = resource_for_output(&unfused_plan, find_node(&unfused_graph, "system.source"), "out");
-    let u_out = resource_for_output(&unfused_plan, find_node(&unfused_graph, "node.invert"), "out");
-    let unfused = render_graph(&device.arc(), &mut unfused_graph, &unfused_plan, u_src, &input, u_out);
+    let u_src = resource_for_output(
+        &unfused_plan,
+        find_node(&unfused_graph, "system.source"),
+        "out",
+    );
+    let u_out = resource_for_output(
+        &unfused_plan,
+        find_node(&unfused_graph, "node.invert"),
+        "out",
+    );
+    let unfused = render_graph(
+        &device.arc(),
+        &mut unfused_graph,
+        &unfused_plan,
+        u_src,
+        &input,
+        u_out,
+    );
 
-    let FusedDef { def: fused_def, .. } =
-        fuse_canonical_def(&def, &registry).expect("sea_horizon_env + invert is one fusable region");
+    let FusedDef { def: fused_def, .. } = fuse_canonical_def(&def, &registry)
+        .expect("sea_horizon_env + invert is one fusable region");
     assert_eq!(
-        fused_def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").count(),
+        fused_def
+            .nodes
+            .iter()
+            .filter(|n| n.type_id == "node.wgsl_compute")
+            .count(),
         1,
         "sea_horizon_env and invert must collapse to exactly one fused node"
     );
-    let mut fused_graph = fused_def.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused_graph = fused_def
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("fused graph builds");
     let fused_node = find_node(&fused_graph, "node.wgsl_compute");
     let fused_plan = compile(&fused_graph).expect("compile fused");
     let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");
     let f_out = resource_for_output(&fused_plan, fused_node, "dst");
-    let fused = render_graph(&device.arc(), &mut fused_graph, &fused_plan, f_src, &input, f_out);
+    let fused = render_graph(
+        &device.arc(),
+        &mut fused_graph,
+        &fused_plan,
+        f_src,
+        &input,
+        f_out,
+    );
 
     let differ = TextureDiff::new(&device);
-    let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
+    let r = differ.compare(
+        &device,
+        &unfused.texture,
+        &fused.texture,
+        OUT_OF_LOOP_ULP_ABS_TOL,
+        OUT_OF_LOOP_ULP_REL_TOL,
+    );
     assert!(
         r.passes(0.005) && r.over_count < 64,
         "sea_horizon_env + invert fusion must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
@@ -351,7 +479,13 @@ fn stencil_checkpoint_diff(
     );
     let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
 
-    let mut unfused = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused = def
+        .clone()
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.gaussian_blur"), "out");
@@ -367,7 +501,12 @@ fn stencil_checkpoint_diff(
         !fdef.nodes.iter().any(|n| n.type_id == "node.gaussian_blur"),
         "the blur folds into the fused kernel"
     );
-    let mut fused = fdef.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused = fdef
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("fused graph builds");
     let f_node = find_node(&fused, "node.wgsl_compute");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
@@ -458,7 +597,13 @@ fn fused_variable_width_blur_matches_unfused() {
     }"#;
     let def: EffectGraphDef = serde_json::from_str(json).unwrap();
 
-    let mut unfused = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused = def
+        .clone()
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
@@ -480,7 +625,12 @@ fn fused_variable_width_blur_matches_unfused() {
         !wgsl.contains("QUALITY_LEVEL") && !wgsl.contains("WEIGHTING_MODE"),
         "specialization tokens must be substituted, not free"
     );
-    let mut fused = fdef.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused = fdef
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("fused graph builds");
     let f_node = find_node(&fused, "node.wgsl_compute");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
@@ -544,10 +694,20 @@ fn stencil_chain_absorbs_gather_warp_with_half_res_flow() {
     // field survives standalone, the blur folds into the fused kernel.
     let regions = manifold_node_engine::freeze::region::partition_regions(&def, &registry);
     assert_eq!(regions.len(), 1, "blur + absorbed warp form one region");
-    assert_eq!(regions[0].virtual_chains.len(), 1, "the warp is a virtual chain");
+    assert_eq!(
+        regions[0].virtual_chains.len(),
+        1,
+        "the warp is a virtual chain"
+    );
     assert_eq!(regions[0].virtual_chains[0].members[0].doc_id, 2);
 
-    let mut unfused = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused = def
+        .clone()
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.gaussian_blur"), "out");
@@ -556,14 +716,24 @@ fn stencil_chain_absorbs_gather_warp_with_half_res_flow() {
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the warp-chain region fuses");
     assert!(
-        !fdef.nodes.iter().any(|n| n.type_id == "node.uv_displace_by_flow"),
+        !fdef
+            .nodes
+            .iter()
+            .any(|n| n.type_id == "node.uv_displace_by_flow"),
         "the warp must be absorbed into the blur's fetch"
     );
     assert!(
-        fdef.nodes.iter().any(|n| n.type_id == "node.flow_field_noise"),
+        fdef.nodes
+            .iter()
+            .any(|n| n.type_id == "node.flow_field_noise"),
         "the half-res flow field survives as the chain's sampled external"
     );
-    let mut fused = fdef.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused = fdef
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("fused graph builds");
     let f_node = find_node(&fused, "node.wgsl_compute");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
@@ -633,14 +803,24 @@ fn linear_blur_pair_matches_legacy_blur_node() {
     }"#;
 
     let l_def: EffectGraphDef = serde_json::from_str(legacy).unwrap();
-    let mut l_graph = l_def.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("legacy graph");
+    let mut l_graph = l_def
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("legacy graph");
     let l_plan = compile(&l_graph).expect("compile legacy");
     let l_src = resource_for_output(&l_plan, find_node(&l_graph, "system.source"), "out");
     let l_out = resource_for_output(&l_plan, find_node(&l_graph, "node.blur"), "out");
     let l_img = render_graph(&device.arc(), &mut l_graph, &l_plan, l_src, &input, l_out);
 
     let p_def: EffectGraphDef = serde_json::from_str(pair).unwrap();
-    let mut p_graph = p_def.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("pair graph");
+    let mut p_graph = p_def
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("pair graph");
     let p_plan = compile(&p_graph).expect("compile pair");
     let p_src = resource_for_output(&p_plan, find_node(&p_graph, "system.source"), "out");
     let p_out = {
@@ -681,8 +861,8 @@ fn linear_blur_pair_matches_legacy_blur_node() {
 fn voronoi_multi_output_fuses_with_pointwise_neighbor_and_matches_unfused() {
     use manifold_node_engine::freeze::install::fuse_generator_view;
     use manifold_node_engine::freeze::region::{NodeClass, classify_node, partition_regions};
-    use manifold_node_engine::runtime::preset_context::PresetContext;
     use manifold_node_engine::runtime::PresetRuntime;
+    use manifold_node_engine::runtime::preset_context::PresetContext;
 
     let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
@@ -716,7 +896,11 @@ fn voronoi_multi_output_fuses_with_pointwise_neighbor_and_matches_unfused() {
     let regions = partition_regions(&canonical, &registry);
     assert_eq!(regions.len(), 1, "cells + hash must union into one region");
     assert_eq!(
-        regions[0].members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+        regions[0]
+            .members
+            .iter()
+            .map(|m| m.doc_id)
+            .collect::<Vec<_>>(),
         vec![1, 2],
         "voronoi (head) + hash_field_by_seed, in topo order"
     );
@@ -746,7 +930,12 @@ fn voronoi_multi_output_fuses_with_pointwise_neighbor_and_matches_unfused() {
         let mut enc = device.create_encoder("voronoi-multi-out");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
-            g.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+            g.render(
+                &mut gpu,
+                &target.texture,
+                &ctx,
+                &manifold_core::params::ParamManifest::default(),
+            );
         }
         enc.commit_and_wait_completed();
         target
@@ -756,7 +945,13 @@ fn voronoi_multi_output_fuses_with_pointwise_neighbor_and_matches_unfused() {
     let fused = render((*fused_view.def).clone());
 
     let differ = TextureDiff::new(&device);
-    let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
+    let r = differ.compare(
+        &device,
+        &unfused.texture,
+        &fused.texture,
+        OUT_OF_LOOP_ULP_ABS_TOL,
+        OUT_OF_LOOP_ULP_REL_TOL,
+    );
     assert!(
         r.passes(0.005) && r.over_count < 64,
         "fused voronoi+hash must match unfused (right BodyOutputs field threaded): max_abs={}, max_rel={}, over={}/{} ({:.4})",
@@ -788,15 +983,20 @@ fn glitch_block_displace_field_multi_output_matches_unfused() {
     let (w, h) = (256u32, 256u32);
     let input = gradient_input(&device, w, h);
 
-    let json =
-        manifold_nodes::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new(
-            "Glitch",
-        ))
-        .expect("Glitch is a bundled preset");
+    let json = manifold_nodes::bundled_presets::bundled_preset_json(
+        &manifold_core::PresetTypeId::new("Glitch"),
+    )
+    .expect("Glitch is a bundled preset");
     let def: EffectGraphDef = serde_json::from_str(&json).expect("parse Glitch.json");
 
     // ── Unfused: the shipped (grouped) preset graph, amount cranked on. ──
-    let mut unfused_graph = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused_graph = def
+        .clone()
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("unfused graph");
     let set_by_handle = |g: &mut Graph, handle: &str, param: &str, v: f32| {
         let id = g
             .node_id_by_handle(handle)
@@ -806,42 +1006,63 @@ fn glitch_block_displace_field_multi_output_matches_unfused() {
     };
     set_by_handle(&mut unfused_graph, "amount_value", "value", 1.0);
     let unfused_plan = compile(&unfused_graph).expect("compile unfused");
-    let u_src = resource_for_output(&unfused_plan, find_node(&unfused_graph, "system.source"), "out");
-    let u_glitch = unfused_graph.node_id_by_handle("glitch").expect("unfused `glitch` mix node");
+    let u_src = resource_for_output(
+        &unfused_plan,
+        find_node(&unfused_graph, "system.source"),
+        "out",
+    );
+    let u_glitch = unfused_graph
+        .node_id_by_handle("glitch")
+        .expect("unfused `glitch` mix node");
     let u_out = resource_for_output(&unfused_plan, u_glitch, "out");
-    let unfused = render_graph(&device.arc(), &mut unfused_graph, &unfused_plan, u_src, &input, u_out);
+    let unfused = render_graph(
+        &device.arc(),
+        &mut unfused_graph,
+        &unfused_plan,
+        u_src,
+        &input,
+        u_out,
+    );
 
     // ── Auto-fused: flatten groups, region-grow (now admits the multi-output
     // block_displace_field member), def-rewrite, run through the executor. ──
-    let FusedDef { def: fused_def, retarget, .. } =
-        fuse_canonical_def(&def, &registry).expect("Glitch is fusable once flattened");
-    let mut fused_graph = fused_def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let FusedDef {
+        def: fused_def,
+        retarget,
+        ..
+    } = fuse_canonical_def(&def, &registry).expect("Glitch is fusable once flattened");
+    let mut fused_graph = fused_def
+        .clone()
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("fused graph builds");
     // `amount_value` fans out to FOUR different consumers (both fields, the
     // invert gain, the final crossfade) that land in DIFFERENT regions once
     // fused — a node can only ever be one region's member, so it survives as
     // its own free-standing node in both graphs rather than being absorbed
     // (retarget only covers params that DID move onto a fused kernel).
     // Resolve it directly, same as the unfused side.
-    let (fused_amount_node, field) = match retarget
-        .get(&("amount_value".to_string(), "value".to_string()))
-    {
-        // retarget maps (unfused handle, unfused param) -> (fused node's
-        // STABLE node_id, field name) — resolve through `instance_by_node_id`
-        // (the stable identity), never `node_id_by_handle` (a fused node's
-        // handle is synthetic, `fused_region_<i>`, and irrelevant here).
-        Some((target_node_id, field)) => (
-            fused_graph
-                .instance_by_node_id(target_node_id)
-                .unwrap_or_else(|| panic!("fused graph missing retargeted amount node")),
-            field.as_str(),
-        ),
-        None => (
-            fused_graph
-                .node_id_by_handle("amount_value")
-                .unwrap_or_else(|| panic!("amount_value must survive if not retargeted")),
-            "value",
-        ),
-    };
+    let (fused_amount_node, field) =
+        match retarget.get(&("amount_value".to_string(), "value".to_string())) {
+            // retarget maps (unfused handle, unfused param) -> (fused node's
+            // STABLE node_id, field name) — resolve through `instance_by_node_id`
+            // (the stable identity), never `node_id_by_handle` (a fused node's
+            // handle is synthetic, `fused_region_<i>`, and irrelevant here).
+            Some((target_node_id, field)) => (
+                fused_graph
+                    .instance_by_node_id(target_node_id)
+                    .unwrap_or_else(|| panic!("fused graph missing retargeted amount node")),
+                field.as_str(),
+            ),
+            None => (
+                fused_graph
+                    .node_id_by_handle("amount_value")
+                    .unwrap_or_else(|| panic!("amount_value must survive if not retargeted")),
+                "value",
+            ),
+        };
     fused_graph
         .set_param(fused_amount_node, field, ParamValue::Float(1.0))
         .unwrap_or_else(|e| panic!("set fused amount: {e:?}"));
@@ -870,10 +1091,23 @@ fn glitch_block_displace_field_multi_output_matches_unfused() {
         .instance_by_node_id(&producer_doc.node_id)
         .unwrap_or_else(|| panic!("fused graph missing producer instance for final_output"));
     let f_out = resource_for_output(&fused_plan, f_out_node, &out_wire.from_port);
-    let fused = render_graph(&device.arc(), &mut fused_graph, &fused_plan, f_src, &input, f_out);
+    let fused = render_graph(
+        &device.arc(),
+        &mut fused_graph,
+        &fused_plan,
+        f_src,
+        &input,
+        f_out,
+    );
 
     let differ = TextureDiff::new(&device);
-    let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
+    let r = differ.compare(
+        &device,
+        &unfused.texture,
+        &fused.texture,
+        OUT_OF_LOOP_ULP_ABS_TOL,
+        OUT_OF_LOOP_ULP_REL_TOL,
+    );
     assert!(
         r.passes(0.005) && r.over_count < 64,
         "auto-fused Glitch (block_displace_field's two outputs threaded to \
@@ -924,23 +1158,58 @@ fn fused_quarter_res_chain_matches_unfused() {
     }"#;
     let def: EffectGraphDef = serde_json::from_str(json).unwrap();
 
-    let mut unfused = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused = def
+        .clone()
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
-    let u_img = render_graph_at(&device.arc(), &mut unfused, &u_plan, u_src, &input, u_out, qw, qh);
+    let u_img = render_graph_at(
+        &device.arc(),
+        &mut unfused,
+        &u_plan,
+        u_src,
+        &input,
+        u_out,
+        qw,
+        qh,
+    );
 
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the quarter-res chain fuses");
-    let mut fused = fdef.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused = fdef
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("fused graph builds");
     let f_node = find_node(&fused, "node.wgsl_compute");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
     let f_out = resource_for_output(&f_plan, f_node, "dst");
-    let f_img = render_graph_at(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out, qw, qh);
+    let f_img = render_graph_at(
+        &device.arc(),
+        &mut fused,
+        &f_plan,
+        f_src,
+        &input,
+        f_out,
+        qw,
+        qh,
+    );
 
     let differ = TextureDiff::new(&device);
-    let r = differ.compare(&device, &u_img.texture, &f_img.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
+    let r = differ.compare(
+        &device,
+        &u_img.texture,
+        &f_img.texture,
+        OUT_OF_LOOP_ULP_ABS_TOL,
+        OUT_OF_LOOP_ULP_REL_TOL,
+    );
     assert!(
         r.passes(0.005) && r.over_count < 16,
         "fused quarter-res chain must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
@@ -986,7 +1255,13 @@ fn fused_control_wired_param_matches_unfused() {
     }"#;
     let def: EffectGraphDef = serde_json::from_str(json).unwrap();
 
-    let mut unfused = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused = def
+        .clone()
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
@@ -994,7 +1269,12 @@ fn fused_control_wired_param_matches_unfused() {
 
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the control-wired region fuses");
-    let mut fused = fdef.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused = fdef
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("fused graph builds");
     let f_node = find_node(&fused, "node.wgsl_compute");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
@@ -1002,7 +1282,13 @@ fn fused_control_wired_param_matches_unfused() {
     let f_img = render_graph(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
-    let r = differ.compare(&device, &u_img.texture, &f_img.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
+    let r = differ.compare(
+        &device,
+        &u_img.texture,
+        &f_img.texture,
+        OUT_OF_LOOP_ULP_ABS_TOL,
+        OUT_OF_LOOP_ULP_REL_TOL,
+    );
     assert!(
         r.passes(0.005) && r.over_count < 16,
         "fused control-wired param must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
@@ -1054,7 +1340,13 @@ fn fused_fanout_region_matches_unfused() {
     }"#;
     let def: EffectGraphDef = serde_json::from_str(json).unwrap();
 
-    let mut unfused = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused = def
+        .clone()
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.mix"), "out");
@@ -1062,14 +1354,25 @@ fn fused_fanout_region_matches_unfused() {
 
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the fan-out region fuses");
-    let mut fused = fdef.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused = fdef
+        .into_graph(
+            &registry,
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("fused graph builds");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
     let f_out = resource_for_output(&f_plan, find_node(&fused, "node.mix"), "out");
     let f_img = render_graph(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
-    let r = differ.compare(&device, &u_img.texture, &f_img.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
+    let r = differ.compare(
+        &device,
+        &u_img.texture,
+        &f_img.texture,
+        OUT_OF_LOOP_ULP_ABS_TOL,
+        OUT_OF_LOOP_ULP_REL_TOL,
+    );
     assert!(
         r.passes(0.02),
         "fused fan-out region must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",

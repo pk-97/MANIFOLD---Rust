@@ -68,7 +68,8 @@ fn assign_global(
             }
         }
     }
-    pairs[..n_pairs].sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    pairs[..n_pairs]
+        .sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let mut taken = [false; MAX_TRACKED];
     for &(_, d, t) in &pairs[..n_pairs] {
         if assignment[d as usize] == UNMATCHED && !taken[t as usize] {
@@ -318,8 +319,16 @@ mod tests {
         // (total dist² 0.0089). Global best-first gives det1→track0,
         // det0→track1 (total dist² 0.0029).
         let tracks = [
-            TrackedItem { x: 0.50, y: 0.0, ..Default::default() },
-            TrackedItem { x: 0.60, y: 0.0, ..Default::default() },
+            TrackedItem {
+                x: 0.50,
+                y: 0.0,
+                ..Default::default()
+            },
+            TrackedItem {
+                x: 0.60,
+                y: 0.0,
+                ..Default::default()
+            },
         ];
         let dets = [[0.55, 0.0], [0.52, 0.0]];
         let mut assignment = [UNMATCHED; 2];
@@ -330,17 +339,28 @@ mod tests {
 
     #[test]
     fn global_matching_respects_match_radius() {
-        let tracks = [TrackedItem { x: 0.5, y: 0.5, ..Default::default() }];
+        let tracks = [TrackedItem {
+            x: 0.5,
+            y: 0.5,
+            ..Default::default()
+        }];
         let dets = [[0.9, 0.9]]; // far outside radius
         let mut assignment = [UNMATCHED; 1];
         assign_global(&dets, &tracks, 0.01, &mut assignment);
-        assert_eq!(assignment[0], UNMATCHED, "distant detection spawns a new track");
+        assert_eq!(
+            assignment[0], UNMATCHED,
+            "distant detection spawns a new track"
+        );
     }
 
     #[test]
     fn global_matching_one_to_one() {
         // Two detections equidistant-close to one track: only one claims it.
-        let tracks = [TrackedItem { x: 0.5, y: 0.5, ..Default::default() }];
+        let tracks = [TrackedItem {
+            x: 0.5,
+            y: 0.5,
+            ..Default::default()
+        }];
         let dets = [[0.51, 0.5], [0.49, 0.5]];
         let mut assignment = [UNMATCHED; 2];
         assign_global(&dets, &tracks, 0.1, &mut assignment);

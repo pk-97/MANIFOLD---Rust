@@ -7,8 +7,8 @@ mod spectrum;
 #[cfg(test)]
 mod tests;
 
-use envelopes::{BandEnvelopes, BODY, FAST, LOW, SLOW, UPPER};
-use spectrum::{np_sum, SpecRow, TrailingSpectrum, BINS, FFT_SIZE, SPLIT_BANDS};
+use envelopes::{BODY, BandEnvelopes, FAST, LOW, SLOW, UPPER};
+use spectrum::{BINS, FFT_SIZE, SPLIT_BANDS, SpecRow, TrailingSpectrum, np_sum};
 
 use super::Candidate;
 use crate::trained::container::{Container, ContainerError};
@@ -61,7 +61,11 @@ pub struct BaseDetector {
 }
 
 fn bad(name: &str, want: u64, got: i64) -> ContainerError {
-    ContainerError::WrongShape { name: name.to_owned(), want: vec![want as usize], got: vec![got.max(0) as usize] }
+    ContainerError::WrongShape {
+        name: name.to_owned(),
+        want: vec![want as usize],
+        got: vec![got.max(0) as usize],
+    }
 }
 
 fn scalar_f64(c: &Container, name: &str) -> Result<f64, ContainerError> {
@@ -164,7 +168,10 @@ impl BaseDetector {
     /// The caller reserves `max_candidates(samples.len())` spare capacity in `out` first, so `push`
     /// never allocates.
     pub fn push(&mut self, samples: &[f64], out: &mut Vec<Candidate>) {
-        debug_assert!(out.capacity() - out.len() >= self.max_candidates(samples.len()), "reserve max_candidates first");
+        debug_assert!(
+            out.capacity() - out.len() >= self.max_candidates(samples.len()),
+            "reserve max_candidates first"
+        );
         for &x in samples {
             self.env.step(x);
             self.spec.push(x);
@@ -189,11 +196,18 @@ impl BaseDetector {
         let upper_fast = np_sum(&UPPER.map(|b| e[b][FAST]));
         let upper_slow = np_sum(&UPPER.map(|b| e[b][SLOW]));
         let low_active = e[LOW][FAST] > p.active_floor && e[LOW][FAST] > p.low_ratio * e[LOW][SLOW];
-        let body_active = e[BODY][FAST] > p.active_floor && e[BODY][FAST] / (e[BODY][SLOW] + p.eps) > p.body_ratio;
-        let rising = UPPER.iter().filter(|&&b| e[b][FAST] / (e[b][SLOW] + p.eps) > p.upper_ratio).count();
+        let body_active = e[BODY][FAST] > p.active_floor
+            && e[BODY][FAST] / (e[BODY][SLOW] + p.eps) > p.body_ratio;
+        let rising = UPPER
+            .iter()
+            .filter(|&&b| e[b][FAST] / (e[b][SLOW] + p.eps) > p.upper_ratio)
+            .count();
         let upper_active = upper_fast > p.active_floor && rising >= p.upper_count;
         let active = [low_active, body_active, upper_active];
-        let edge = active.iter().zip(self.was_active).any(|(&now, was)| now && !was);
+        let edge = active
+            .iter()
+            .zip(self.was_active)
+            .any(|(&now, was)| now && !was);
         self.was_active = active;
 
         let k = self.hop_index;
@@ -216,7 +230,11 @@ impl BaseDetector {
             let cand = self.pending[self.pending_head];
             self.pending_head = (self.pending_head + 1) % HISTORY;
             self.pending_len -= 1;
-            out.push(Candidate { cand_hop: cand, avail_hop: k, f15: self.features(cand, k) });
+            out.push(Candidate {
+                cand_hop: cand,
+                avail_hop: k,
+                f15: self.features(cand, k),
+            });
         }
     }
 
@@ -259,10 +277,20 @@ impl BaseDetector {
         let low_rise = max(whole.clone(), &|r| log_ratio(r.low_fast, r.low_slow));
         let body_rise = max(whole.clone(), &|r| log_ratio(r.body_fast, r.body_slow));
         let upper_rise = max(whole.clone(), &|r| log_ratio(r.upper_fast, r.upper_slow));
-        let centroid_drop = mean(first.clone(), &|r| r.spec.centroid) - mean(last.clone(), &|r| r.spec.centroid);
-        let upper_decay = log_ratio(self.row(deadline).upper_fast, max(first.clone(), &|r| r.upper_fast));
-        let balance = log_ratio(max(whole.clone(), &|r| r.body_fast), max(whole.clone(), &|r| r.low_fast));
-        let evolution = log_ratio(mean(last.clone(), &|r| r.low_fast), mean(first.clone(), &|r| r.low_fast));
+        let centroid_drop =
+            mean(first.clone(), &|r| r.spec.centroid) - mean(last.clone(), &|r| r.spec.centroid);
+        let upper_decay = log_ratio(
+            self.row(deadline).upper_fast,
+            max(first.clone(), &|r| r.upper_fast),
+        );
+        let balance = log_ratio(
+            max(whole.clone(), &|r| r.body_fast),
+            max(whole.clone(), &|r| r.low_fast),
+        );
+        let evolution = log_ratio(
+            mean(last.clone(), &|r| r.low_fast),
+            mean(first.clone(), &|r| r.low_fast),
+        );
         let lag_hops = argmax(&|r| r.low_fast).abs_diff(argmax(&|r| r.upper_fast));
         let peak_lag = (lag_hops * p.hop as u64) as f64 / p.sample_rate as f64 / p.lag_norm_s;
 
@@ -280,7 +308,8 @@ impl BaseDetector {
         ]);
         for b in 0..SPLIT_BANDS {
             f[9 + 2 * b] = max(whole.clone(), &|r| r.spec.band_rel_flux[b]).clamp(0.0, 1.0);
-            let drop = mean(first.clone(), &|r| r.spec.band_centroid[b]) - mean(last.clone(), &|r| r.spec.band_centroid[b]);
+            let drop = mean(first.clone(), &|r| r.spec.band_centroid[b])
+                - mean(last.clone(), &|r| r.spec.band_centroid[b]);
             f[10 + 2 * b] = drop.clamp(-p.log_clip, p.log_clip);
         }
         f

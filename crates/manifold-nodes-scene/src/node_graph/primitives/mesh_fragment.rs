@@ -87,9 +87,17 @@ fn detail(capacity: u64, count: u32) -> u32 {
 impl Primitive for MeshFragment {
     /// The drawn shape's capacity, times four per split: a piece is never
     /// more triangles than the split whole.
-    fn array_output_capacity(&self, port_name: &str, params: &ParamValues, input_capacities: &[(&str, u32)]) -> Option<u32> {
+    fn array_output_capacity(
+        &self,
+        port_name: &str,
+        params: &ParamValues,
+        input_capacities: &[(&str, u32)],
+    ) -> Option<u32> {
         (port_name == "vertices").then(|| {
-            let capacity = input_capacities.iter().find(|(port, _)| *port == "in").map_or(3, |&(_, n)| u64::from(n).max(3));
+            let capacity = input_capacities
+                .iter()
+                .find(|(port, _)| *port == "in")
+                .map_or(3, |&(_, n)| u64::from(n).max(3));
             let grown = capacity << (2 * detail(capacity, int(params, "fragment_count", 2).max(1)));
             grown.min(u64::from(u32::MAX)) as u32
         })
@@ -98,14 +106,24 @@ impl Primitive for MeshFragment {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let count = int(ctx.params, "fragment_count", 2).max(1);
         let index = int(ctx.params, "fragment_index", 0);
-        let (Some(whole), Some(drawn), Some(out)) = (ctx.inputs.mesh_source("shape"), ctx.inputs.array("in"), ctx.outputs.array("vertices"))
-        else {
+        let (Some(whole), Some(drawn), Some(out)) = (
+            ctx.inputs.mesh_source("shape"),
+            ctx.inputs.array("in"),
+            ctx.outputs.array("vertices"),
+        ) else {
             return;
         };
         let destination = out.identity_key();
-        let same = self.written.as_ref().is_some_and(|(source, c, i, at)| *source == whole && *c == count && *i == index && *at == destination);
+        let same = self.written.as_ref().is_some_and(|(source, c, i, at)| {
+            *source == whole && *c == count && *i == index && *at == destination
+        });
         if !same || !ctx.outputs_retained() {
-            let piece = MeshSource::Fragment { of: Arc::new(whole.clone()), count, index, detail: detail(drawn.size / VERTEX_BYTES, count) };
+            let piece = MeshSource::Fragment {
+                of: Arc::new(whole.clone()),
+                count,
+                index,
+                detail: detail(drawn.size / VERTEX_BYTES, count),
+            };
             let vertices = match piece.load_vertices() {
                 Ok(vertices) => vertices,
                 Err(error) => {

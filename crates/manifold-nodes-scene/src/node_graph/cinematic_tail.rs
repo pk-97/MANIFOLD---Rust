@@ -8,8 +8,8 @@
 //! `scene.rs` (god-file ceiling, `godfile_regrowth.rs`).
 
 use manifold_core::effect_graph_def::{
-    EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef,
-    GroupInterface, InterfacePortDef,
+    EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID,
+    GroupDef, GroupInterface, InterfacePortDef,
 };
 
 use crate::node_graph::scene_graph::{bool_val, enum_val, float, plain_node, wire};
@@ -44,27 +44,48 @@ pub(crate) fn build_cinematic_tail(
     let mut dof_nodes: Vec<EffectGraphNode> = Vec::new();
     let mut dof_wires: Vec<EffectGraphWire> = Vec::new();
     let dof_in_id = fresh_id();
-    dof_nodes.push(plain_node(dof_in_id, "dof_in", GROUP_INPUT_TYPE_ID, "input"));
+    dof_nodes.push(plain_node(
+        dof_in_id,
+        "dof_in",
+        GROUP_INPUT_TYPE_ID,
+        "input",
+    ));
     let coc_id = fresh_id();
     let mut coc_node = plain_node(coc_id, "coc", "node.coc_from_depth", "coc");
-    coc_node.params.insert("max_radius".to_string(), float(24.0));
+    coc_node
+        .params
+        .insert("max_radius".to_string(), float(24.0));
     // world_to_mm = 1000 / scene_radius, floored so a tiny/degenerate bbox
     // can't produce an absurd calibration (>100,000 mm/unit). This is the
     // plumbing that makes musical f-stops work at any scene scale.
-    coc_node
-        .params
-        .insert("world_to_mm".to_string(), float((1000.0 / scene_radius).min(100_000.0)));
+    coc_node.params.insert(
+        "world_to_mm".to_string(),
+        float((1000.0 / scene_radius).min(100_000.0)),
+    );
     dof_nodes.push(coc_node);
     let bokeh_id = fresh_id();
     let mut bokeh_node = plain_node(bokeh_id, "bokeh", "node.bokeh_gather", "bokeh");
-    bokeh_node.params.insert("max_radius".to_string(), float(24.0));
-    bokeh_node.params.insert("enabled".to_string(), bool_val(enabled));
-    bokeh_node.params.insert("aperture".to_string(), enum_val(0));
+    bokeh_node
+        .params
+        .insert("max_radius".to_string(), float(24.0));
+    bokeh_node
+        .params
+        .insert("enabled".to_string(), bool_val(enabled));
+    bokeh_node
+        .params
+        .insert("aperture".to_string(), enum_val(0));
     bokeh_node.params.insert("quality".to_string(), enum_val(1));
-    bokeh_node.params.insert("blur_alpha".to_string(), bool_val(true));
+    bokeh_node
+        .params
+        .insert("blur_alpha".to_string(), bool_val(true));
     dof_nodes.push(bokeh_node);
     let dof_out_id = fresh_id();
-    dof_nodes.push(plain_node(dof_out_id, "dof_out", GROUP_OUTPUT_TYPE_ID, "output"));
+    dof_nodes.push(plain_node(
+        dof_out_id,
+        "dof_out",
+        GROUP_OUTPUT_TYPE_ID,
+        "output",
+    ));
     dof_wires.push(wire(dof_in_id, "depth", coc_id, "depth"));
     dof_wires.push(wire(dof_in_id, "camera", coc_id, "camera"));
     dof_wires.push(wire(coc_id, "out", bokeh_id, "width"));
@@ -77,11 +98,23 @@ pub(crate) fn build_cinematic_tail(
     dof_group_node.group = Some(Box::new(GroupDef {
         interface: GroupInterface {
             inputs: vec![
-                InterfacePortDef { name: "depth".to_string(), port_type: "Texture2D".to_string() },
-                InterfacePortDef { name: "camera".to_string(), port_type: "Camera".to_string() },
-                InterfacePortDef { name: "color".to_string(), port_type: "Texture2D".to_string() },
+                InterfacePortDef {
+                    name: "depth".to_string(),
+                    port_type: "Texture2D".to_string(),
+                },
+                InterfacePortDef {
+                    name: "camera".to_string(),
+                    port_type: "Camera".to_string(),
+                },
+                InterfacePortDef {
+                    name: "color".to_string(),
+                    port_type: "Texture2D".to_string(),
+                },
             ],
-            outputs: vec![InterfacePortDef { name: "out".to_string(), port_type: "Texture2D".to_string() }],
+            outputs: vec![InterfacePortDef {
+                name: "out".to_string(),
+                port_type: "Texture2D".to_string(),
+            }],
             params: Vec::new(),
         },
         nodes: dof_nodes,
@@ -92,10 +125,18 @@ pub(crate) fn build_cinematic_tail(
     // One full-res `node.motion_blur` dispatch at the end of the chain,
     // exactly as CinematicScene ships it.
     let motion_blur_id = fresh_id();
-    let mut motion_blur_node =
-        plain_node(motion_blur_id, "motion_blur", "node.motion_blur", "motion_blur");
-    motion_blur_node.params.insert("max_blur_px".to_string(), float(32.0));
-    motion_blur_node.params.insert("enabled".to_string(), bool_val(enabled));
+    let mut motion_blur_node = plain_node(
+        motion_blur_id,
+        "motion_blur",
+        "node.motion_blur",
+        "motion_blur",
+    );
+    motion_blur_node
+        .params
+        .insert("max_blur_px".to_string(), float(32.0));
+    motion_blur_node
+        .params
+        .insert("enabled".to_string(), bool_val(enabled));
 
     CinematicTail {
         nodes: vec![dof_group_node, motion_blur_node],
@@ -104,4 +145,3 @@ pub(crate) fn build_cinematic_tail(
         bokeh_id,
     }
 }
-

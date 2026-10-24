@@ -6,16 +6,16 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
-use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
-use manifold_nodes_physics::force_lattice::{ForceLatticeBinding, FORCE_LATTICE};
-use manifold_water_liquid::lattice::LiquidLattice;
+use super::matter_common::MATTER_WALLS;
 use crate::matter::{MatterGridNode, REACTION_WORDS, momentum_unit_fits};
+use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use super::matter_common::MATTER_WALLS;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_nodes_physics::force_lattice::{FORCE_LATTICE, ForceLatticeBinding};
+use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use manifold_water_liquid::lattice::LiquidLattice;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -134,7 +134,12 @@ impl Primitive for MatterBodyReaction {
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         (port_name == "reaction_out")
-            .then(|| input_capacities.iter().find(|(p, _)| *p == "reaction").map(|&(_, n)| n))
+            .then(|| {
+                input_capacities
+                    .iter()
+                    .find(|(p, _)| *p == "reaction")
+                    .map(|&(_, n)| n)
+            })
             .flatten()
     }
 
@@ -146,7 +151,9 @@ impl Primitive for MatterBodyReaction {
         let Some(lattice) = LiquidLattice::from_wires(ctx, "Matter Body Reaction") else {
             return;
         };
-        let int = |ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32| ctx.scalar_or_param(name, default).round().max(0.0) as i32;
+        let int = |ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32| {
+            ctx.scalar_or_param(name, default).round().max(0.0) as i32
+        };
         let step_dt = ctx.scalar_or_param("step_dt", 4.9e-4);
         let gravity = [
             ctx.scalar_or_param("gravity_x", 0.0),
@@ -161,13 +168,24 @@ impl Primitive for MatterBodyReaction {
         let substeps_per_tick = int(ctx, "substeps_per_tick", 1.0).max(1);
         let dynamic_count = int(ctx, "dynamic_count", 0.0);
         let grid = ctx.inputs.array("grid");
-        let colliders = (ctx.inputs.array("bodies"), ctx.inputs.array("shapes"), ctx.inputs.array("atlas"));
+        let colliders = (
+            ctx.inputs.array("bodies"),
+            ctx.inputs.array("shapes"),
+            ctx.inputs.array("atlas"),
+        );
         let reaction = ctx.outputs.array("reaction_out");
-        let field = ForceLatticeBinding::read(ctx, ctx.inputs.array("forces"), ctx.inputs.array("impulses"), "Matter Body Reaction");
+        let field = ForceLatticeBinding::read(
+            ctx,
+            ctx.inputs.array("forces"),
+            ctx.inputs.array("impulses"),
+            "Matter Body Reaction",
+        );
         // The GPU is touched on every path so the aliased reaction array keeps
         // its place in the frame's hazard order.
         let gpu = ctx.gpu_encoder();
-        let (Some(grid), (Some(bodies), Some(shapes), Some(atlas)), Some(reaction)) = (grid, colliders, reaction) else {
+        let (Some(grid), (Some(bodies), Some(shapes), Some(atlas)), Some(reaction)) =
+            (grid, colliders, reaction)
+        else {
             return;
         };
         if dynamic_count == 0 || body_count == 0 || step_dt <= 0.0 {
@@ -180,7 +198,9 @@ impl Primitive for MatterBodyReaction {
                 return;
             }
         };
-        let nodes = lattice.node_count().min((grid.size / std::mem::size_of::<MatterGridNode>() as u64) as u32);
+        let nodes = lattice
+            .node_count()
+            .min((grid.size / std::mem::size_of::<MatterGridNode>() as u64) as u32);
         let body_rows = (bodies.size / std::mem::size_of::<LiquidBody>() as u64)
             .min(reaction.size / (REACTION_WORDS as u64 * 4)) as i32;
         let body_count = body_count.min(body_rows);
@@ -227,15 +247,50 @@ impl Primitive for MatterBodyReaction {
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: grid, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: bodies, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: shapes, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: atlas, offset: 0 },
-                GpuBinding::Buffer { binding: 5, buffer: reaction, offset: 0 },
-                GpuBinding::Buffer { binding: 6, buffer: field.forces.unwrap_or(grid), offset: 0 },
-                GpuBinding::Buffer { binding: 7, buffer: field.impulses.unwrap_or(grid), offset: 0 },
-                GpuBinding::Buffer { binding: 8, buffer: reaction, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: grid,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: bodies,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: shapes,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: atlas,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: reaction,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 6,
+                    buffer: field.forces.unwrap_or(grid),
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 7,
+                    buffer: field.impulses.unwrap_or(grid),
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 8,
+                    buffer: reaction,
+                    offset: 0,
+                },
             ],
             [nodes.div_ceil(256), 1, 1],
             "node.matter_body_reaction",
@@ -249,17 +304,36 @@ mod tests {
 
     #[test]
     fn matter_body_reaction_generates_an_atomic_node_kernel() {
-        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<MatterBodyReaction>()
-            .expect("matter_body_reaction codegen");
-        let module = naga::front::wgsl::parse_str(&wgsl).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
-        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
-            .validate(&module)
+        let wgsl =
+            manifold_node_engine::freeze::codegen::standalone_for_spec::<MatterBodyReaction>()
+                .expect("matter_body_reaction codegen");
+        let module = naga::front::wgsl::parse_str(&wgsl)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
-        assert!(wgsl.contains("buf_reaction_out: array<atomic<i32>>"), "{wgsl}");
-        assert!(wgsl.contains("    body(idx, params.dispatch_count, e_grid,"), "{wgsl}");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
+        assert!(
+            wgsl.contains("buf_reaction_out: array<atomic<i32>>"),
+            "{wgsl}"
+        );
+        assert!(
+            wgsl.contains("    body(idx, params.dispatch_count, e_grid,"),
+            "{wgsl}"
+        );
         assert_eq!(std::mem::size_of::<BodyReactionUniforms>(), 112);
-        assert!(wgsl.contains("first_tick: i32,\n    dispatch_count: u32,\n    _pad0: u32,\n    _pad1: u32,\n}"), "{wgsl}");
-        assert!(wgsl.contains("buf_forces: array<f32>") && wgsl.contains("buf_impulses: array<f32>"), "{wgsl}");
+        assert!(
+            wgsl.contains(
+                "first_tick: i32,\n    dispatch_count: u32,\n    _pad0: u32,\n    _pad1: u32,\n}"
+            ),
+            "{wgsl}"
+        );
+        assert!(
+            wgsl.contains("buf_forces: array<f32>") && wgsl.contains("buf_impulses: array<f32>"),
+            "{wgsl}"
+        );
     }
 }
 

@@ -5,16 +5,16 @@
 //! arrows, axes, the infinite world grid, and temporal trails share one bounded
 //! instanced pass. The grid uses the scene camera without the object transform.
 
-use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
-use manifold_node_engine::scene::camera::Camera;
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::primitive::{Primitive, PrimitiveSpec};
-use manifold_node_engine::scene::transform::Transform;
 use manifold_gpu::{
     GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuLoadAction, GpuSamplerDesc,
     GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::{Primitive, PrimitiveSpec};
+use manifold_node_engine::scene::camera::Camera;
+use manifold_node_engine::scene::transform::Transform;
 use std::borrow::Cow;
 
 const MSAA_SAMPLE_COUNT: u32 = 4;
@@ -62,7 +62,7 @@ struct DiagramUniforms {
     _depth_pad: u32,
     inv_view_proj: [[f32; 4]; 4],
     camera_pos_far: [f32; 4],
-    brightness: [f32;4],
+    brightness: [f32; 4],
     trails_brightness: f32,
     _brightness_pad0: f32,
     _brightness_pad1: f32,
@@ -186,7 +186,6 @@ inventory::submit! {
     }
 }
 
-
 impl RenderMeshDiagram {
     /// Startup prewarm hook used by the native generator registry.
     pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
@@ -278,7 +277,8 @@ impl RenderMeshDiagram {
             // Bound at the instances slot when the port is unwired so the
             // shared layout stays valid; the shader never reads it in that
             // mode (instances_wired == 0 selects the identity constant).
-            let buffer = device.create_buffer_shared(std::mem::size_of::<InstanceTransform>() as u64);
+            let buffer =
+                device.create_buffer_shared(std::mem::size_of::<InstanceTransform>() as u64);
             let identity = [InstanceTransform {
                 pos_scale: [0.0, 0.0, 0.0, 1.0],
                 rot_pad: [0.0; 4],
@@ -291,10 +291,19 @@ impl RenderMeshDiagram {
     }
 
     fn model_matrix(t: Transform, parent: Option<Transform>, camera: &Camera) -> [[f32; 4]; 4] {
-        let turn = |t: &Transform| if t.billboard { t.billboard_rot_euler(camera.pos) } else { t.rot_euler };
+        let turn = |t: &Transform| {
+            if t.billboard {
+                t.billboard_rot_euler(camera.pos)
+            } else {
+                t.rot_euler
+            }
+        };
         let own = super::render_scene::model_matrix(t.pos, turn(&t), t.scale);
         match parent {
-            Some(parent) => manifold_node_engine::mesh::pipeline::mat4_mul(parent.world_with_rotation(turn(&parent)), own),
+            Some(parent) => manifold_node_engine::mesh::pipeline::mat4_mul(
+                parent.world_with_rotation(turn(&parent)),
+                own,
+            ),
             None => own,
         }
     }
@@ -410,7 +419,10 @@ impl Primitive for RenderMeshDiagram {
         self.topology_warned = topology_mismatch;
         let mode = ctx.scalar_or_param("mode", 0.0).round().clamp(0.0, 2.0) as u32;
         // Depth occlusion applies to Overlay only; Math draws on black.
-        let occlusion = ctx.scalar_or_param("occlusion", 0.0).round().clamp(0.0, 1.0) as u32;
+        let occlusion = ctx
+            .scalar_or_param("occlusion", 0.0)
+            .round()
+            .clamp(0.0, 1.0) as u32;
         // Copies draw at the group's per-axis scale inside each copy, as the
         // scene draws them; without copies the scale is exactly one, so the
         // marks stay byte-identical.
@@ -450,7 +462,13 @@ impl Primitive for RenderMeshDiagram {
             _depth_pad: 0,
             inv_view_proj,
             camera_pos_far: [camera.pos[0], camera.pos[1], camera.pos[2], camera.far],
-            brightness: ["grid_brightness","fragments_brightness","ghosts_brightness","vectors_brightness"].map(|n|ctx.scalar_or_param(n,1.0).max(0.0)),
+            brightness: [
+                "grid_brightness",
+                "fragments_brightness",
+                "ghosts_brightness",
+                "vectors_brightness",
+            ]
+            .map(|n| ctx.scalar_or_param(n, 1.0).max(0.0)),
             trails_brightness: ctx.scalar_or_param("trails_brightness", 1.0).max(0.0),
             _brightness_pad0: 0.0,
             _brightness_pad1: 0.0,
@@ -470,9 +488,15 @@ impl Primitive for RenderMeshDiagram {
             }
         }
         self.ensure_depth_resources(gpu.device);
-        let dummy_depth = self.dummy_depth.as_ref().expect("depth resources initialized");
+        let dummy_depth = self
+            .dummy_depth
+            .as_ref()
+            .expect("depth resources initialized");
         let scene_depth = input_scene_depth.unwrap_or(dummy_depth);
-        let depth_sampler = self.depth_sampler.as_ref().expect("depth sampler initialized");
+        let depth_sampler = self
+            .depth_sampler
+            .as_ref()
+            .expect("depth sampler initialized");
         let instances = input_instances.unwrap_or_else(|| {
             self.identity_instances
                 .as_ref()
@@ -495,10 +519,7 @@ impl Primitive for RenderMeshDiagram {
                 Self::TYPE_ID,
             ));
         }
-        if color_out.is_some()
-            && uniforms.occlusion != 0
-            && self.depth_color_pipeline.is_none()
-        {
+        if color_out.is_some() && uniforms.occlusion != 0 && self.depth_color_pipeline.is_none() {
             self.depth_color_pipeline = Some(gpu.device.create_render_pipeline_msaa(
                 SHADER,
                 "vs_main",
@@ -516,7 +537,9 @@ impl Primitive for RenderMeshDiagram {
                 "math-view-history-capture",
             ));
         }
-        if color_out.is_some() && (self.width != width || self.height != height || self.msaa.is_none()) {
+        if color_out.is_some()
+            && (self.width != width || self.height != height || self.msaa.is_none())
+        {
             self.msaa = Some(gpu.device.create_texture_msaa_memoryless(
                 width,
                 height,
@@ -540,41 +563,122 @@ impl Primitive for RenderMeshDiagram {
         } else {
             0
         };
-        let instance_count = tri_count * 3 * copies + arrow_count + grid_count + axes_count + trail_count;
+        let instance_count =
+            tri_count * 3 * copies + arrow_count + grid_count + axes_count + trail_count;
         if let Some(out) = color_out {
             let history = self.history.as_ref().expect("history allocated");
             let depth_tested = uniforms.occlusion != 0;
             if depth_tested {
                 gpu.native_enc.draw_instanced_msaa(
-                    self.depth_color_pipeline.as_ref().expect("depth colour pipeline initialized"),
-                    self.msaa.as_ref().expect("MSAA initialized"), out,
+                    self.depth_color_pipeline
+                        .as_ref()
+                        .expect("depth colour pipeline initialized"),
+                    self.msaa.as_ref().expect("MSAA initialized"),
+                    out,
                     &[
-                        GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                        GpuBinding::Buffer { binding: 1, buffer: current, offset: 0 },
-                        GpuBinding::Buffer { binding: 2, buffer: reference, offset: 0 },
-                        GpuBinding::Buffer { binding: 3, buffer: incoming, offset: 0 },
-                        GpuBinding::Buffer { binding: 4, buffer: history, offset: 0 },
-                        GpuBinding::Texture { binding: 8, texture: scene_depth },
-                        GpuBinding::Sampler { binding: 9, sampler: depth_sampler },
-                        GpuBinding::Buffer { binding: 10, buffer: instances, offset: 0 },
-                        GpuBinding::Buffer { binding: 11, buffer: instance_ring, offset: 0 },
-                        GpuBinding::Buffer { binding: 12, buffer: instance_ring_counts, offset: 0 },
-                    ], 18, instance_count.max(1), GpuLoadAction::Clear, Self::TYPE_ID,
+                        GpuBinding::Bytes {
+                            binding: 0,
+                            data: bytemuck::bytes_of(&uniforms),
+                        },
+                        GpuBinding::Buffer {
+                            binding: 1,
+                            buffer: current,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 2,
+                            buffer: reference,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 3,
+                            buffer: incoming,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 4,
+                            buffer: history,
+                            offset: 0,
+                        },
+                        GpuBinding::Texture {
+                            binding: 8,
+                            texture: scene_depth,
+                        },
+                        GpuBinding::Sampler {
+                            binding: 9,
+                            sampler: depth_sampler,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 10,
+                            buffer: instances,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 11,
+                            buffer: instance_ring,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 12,
+                            buffer: instance_ring_counts,
+                            offset: 0,
+                        },
+                    ],
+                    18,
+                    instance_count.max(1),
+                    GpuLoadAction::Clear,
+                    Self::TYPE_ID,
                 );
             } else {
                 gpu.native_enc.draw_instanced_msaa(
                     self.render_pipeline.as_ref().expect("pipeline initialized"),
-                    self.msaa.as_ref().expect("MSAA initialized"), out,
+                    self.msaa.as_ref().expect("MSAA initialized"),
+                    out,
                     &[
-                        GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                        GpuBinding::Buffer { binding: 1, buffer: current, offset: 0 },
-                        GpuBinding::Buffer { binding: 2, buffer: reference, offset: 0 },
-                        GpuBinding::Buffer { binding: 3, buffer: incoming, offset: 0 },
-                        GpuBinding::Buffer { binding: 4, buffer: history, offset: 0 },
-                        GpuBinding::Buffer { binding: 10, buffer: instances, offset: 0 },
-                        GpuBinding::Buffer { binding: 11, buffer: instance_ring, offset: 0 },
-                        GpuBinding::Buffer { binding: 12, buffer: instance_ring_counts, offset: 0 },
-                    ], 18, instance_count.max(1), GpuLoadAction::Clear, Self::TYPE_ID,
+                        GpuBinding::Bytes {
+                            binding: 0,
+                            data: bytemuck::bytes_of(&uniforms),
+                        },
+                        GpuBinding::Buffer {
+                            binding: 1,
+                            buffer: current,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 2,
+                            buffer: reference,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 3,
+                            buffer: incoming,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 4,
+                            buffer: history,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 10,
+                            buffer: instances,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 11,
+                            buffer: instance_ring,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 12,
+                            buffer: instance_ring_counts,
+                            offset: 0,
+                        },
+                    ],
+                    18,
+                    instance_count.max(1),
+                    GpuLoadAction::Clear,
+                    Self::TYPE_ID,
                 );
             }
         }
@@ -587,7 +691,10 @@ impl Primitive for RenderMeshDiagram {
         if color_out.is_none() || uniforms.trails == 0 {
             self.history_reset = true;
         } else if vertex_count != 0 {
-            let history = self.history.as_ref().expect("history allocated for colour pass");
+            let history = self
+                .history
+                .as_ref()
+                .expect("history allocated for colour pass");
             let slot = self.history_head;
             // Record the per-copy transforms the wired producer published this
             // frame, next to the vertex sample of the same slot. Unwired:
@@ -697,7 +804,11 @@ mod tests {
         node.history_head = 40;
         node.history_len = 40;
         node.note_copy_count(3);
-        assert_eq!((node.history_head, node.history_len), (40, 40), "steady count keeps history");
+        assert_eq!(
+            (node.history_head, node.history_len),
+            (40, 40),
+            "steady count keeps history"
+        );
         // Grow, shrink, and bypass (wired -> unwired reports 1) all clear the
         // shared rings so no slot outlives its copy-count era.
         for next in [5u32, 2, 1] {
@@ -733,7 +844,9 @@ mod prewarm_source_tests {
         let entries: Vec<_> = inventory::iter::<manifold_node_engine::runtime::plugin_prewarm::PipelinePrewarm>
             .into_iter().filter(|entry| entry.purpose == manifold_node_engine::runtime::plugin_prewarm::PipelinePrewarmPurpose::MathView).collect();
         assert_eq!(entries.len(), 1);
-        assert!(std::ptr::fn_addr_eq(entries[0].run,
-            super::RenderMeshDiagram::prewarm_pipelines as fn(&manifold_gpu::GpuDevice)));
+        assert!(std::ptr::fn_addr_eq(
+            entries[0].run,
+            super::RenderMeshDiagram::prewarm_pipelines as fn(&manifold_gpu::GpuDevice)
+        ));
     }
 }

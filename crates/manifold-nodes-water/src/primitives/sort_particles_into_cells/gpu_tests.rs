@@ -4,17 +4,20 @@
 //! the live total cleared, nothing past the slots the outputs hold, and
 //! nothing at all through a shut clock gate.
 
-use manifold_water_liquid::primitives::sort_particles_into_cells::*;
 use manifold_gpu::{GpuBuffer, GpuDevice};
 use manifold_node_engine::ports::ArrayType;
+use manifold_water_gpu_mpm::matter::MatterPoint;
 use manifold_water_liquid::fluid_particles::{CellRange, bin_total};
 use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
-use manifold_water_gpu_mpm::matter::MatterPoint;
+use manifold_water_liquid::primitives::sort_particles_into_cells::*;
 
 const LABELS: SortLabels = SortLabels {
     clear: "sort proof clear",
     count: "sort proof count",
-    scan: ScanLabels { blocks: "sort proof scan blocks", add: "sort proof scan add" },
+    scan: ScanLabels {
+        blocks: "sort proof scan blocks",
+        add: "sort proof scan add",
+    },
     ranges: "sort proof ranges",
     tail: "sort proof tail",
     scatter: "sort proof scatter",
@@ -80,10 +83,20 @@ impl Writer<'_> {
         match self.read.live_rule {
             LIVE_BY_RADIUS => {
                 self.words[live_word] = if live {
-                    if rng.below(100) == 0 { f32::INFINITY.to_bits() } else { (0.01 + 0.04 * rng.unit()).to_bits() }
+                    if rng.below(100) == 0 {
+                        f32::INFINITY.to_bits()
+                    } else {
+                        (0.01 + 0.04 * rng.unit()).to_bits()
+                    }
                 } else {
-                    [0.0_f32.to_bits(), (-0.0_f32).to_bits(), (-0.01_f32).to_bits(), f32::NAN.to_bits(), 0xffc0_0000, f32::NEG_INFINITY.to_bits()]
-                        [rng.below(6)]
+                    [
+                        0.0_f32.to_bits(),
+                        (-0.0_f32).to_bits(),
+                        (-0.01_f32).to_bits(),
+                        f32::NAN.to_bits(),
+                        0xffc0_0000,
+                        f32::NEG_INFINITY.to_bits(),
+                    ][rng.below(6)]
                 };
                 // A dead record's position is never read.
                 if !live && rng.below(4) == 0 {
@@ -93,14 +106,22 @@ impl Writer<'_> {
             // Dead by the word, or by a non-finite axis with a live word.
             LIVE_BY_ID => {
                 let live_id = live || rng.below(2) == 0;
-                self.words[live_word] = if live_id { 1 + rng.below(u32::MAX as usize - 1) as u32 } else { 0 };
+                self.words[live_word] = if live_id {
+                    1 + rng.below(u32::MAX as usize - 1) as u32
+                } else {
+                    0
+                };
                 if !live && live_id {
                     p[rng.below(3)] = non_finite[rng.below(3)];
                 }
             }
             _ => {
                 let live_kind = live || rng.below(2) == 0;
-                self.words[live_word] = if live_kind { [0, 1, 2, 4][rng.below(4)] } else { [3, 5, 6, u32::MAX][rng.below(4)] };
+                self.words[live_word] = if live_kind {
+                    [0, 1, 2, 4][rng.below(4)]
+                } else {
+                    [3, 5, 6, u32::MAX][rng.below(4)]
+                };
                 if !live && live_kind {
                     p[rng.below(3)] = non_finite[rng.below(3)];
                 }
@@ -121,7 +142,14 @@ impl Input {
     /// corner are binary fractions), records outside the box that clamp into
     /// the border bins, dead records of every kind the layout's rule names,
     /// and the rest uniform.
-    fn build(read: RecordRead, grid: Grid, n: usize, slab: u32, crowded: &[usize], seed: u64) -> Self {
+    fn build(
+        read: RecordRead,
+        grid: Grid,
+        n: usize,
+        slab: u32,
+        crowded: &[usize],
+        seed: u64,
+    ) -> Self {
         let Grid { min, cell, bins } = grid;
         let mut rng = Rng(seed);
         let stride = read.stride_words as usize;
@@ -139,7 +167,11 @@ impl Input {
                 min[2] + rng.unit() * bins[2] as f32 * cell,
             ]
         };
-        let mut writer = Writer { words: &mut words, read, slots: slots.into_iter() };
+        let mut writer = Writer {
+            words: &mut words,
+            read,
+            slots: slots.into_iter(),
+        };
         let mut filled: Vec<(usize, usize)> = Vec::new();
         for &size in crowded {
             let (at, bin) = loop {
@@ -154,7 +186,9 @@ impl Input {
                 }
             };
             for _ in 0..size {
-                let p = std::array::from_fn(|a| min[a] + (at[a] as f32 + 0.05 + 0.9 * rng.unit()) * cell);
+                let p = std::array::from_fn(|a| {
+                    min[a] + (at[a] as f32 + 0.05 + 0.9 * rng.unit()) * cell
+                });
                 writer.put(&mut rng, p, true);
             }
             filled.push((bin, size));
@@ -190,7 +224,12 @@ impl Input {
             let p = low(&mut rng);
             writer.put(&mut rng, p, true);
         }
-        Self { words, read, grid, crowded: filled }
+        Self {
+            words,
+            read,
+            grid,
+            crowded: filled,
+        }
     }
 
     fn records(&self) -> usize {
@@ -210,7 +249,10 @@ impl Input {
     /// sort_particles_into_cells.wgsl `is_live`.
     fn live(&self, i: usize) -> bool {
         let word = self.record(i)[self.read.live_word as usize];
-        let finite = self.position(i).iter().all(|&w| w & 0x7f80_0000 != 0x7f80_0000);
+        let finite = self
+            .position(i)
+            .iter()
+            .all(|&w| w & 0x7f80_0000 != 0x7f80_0000);
         match self.read.live_rule {
             LIVE_BY_RADIUS => f32::from_bits(word) > 0.0,
             LIVE_BY_KIND => (word < 3 || word == 4) && finite,
@@ -236,7 +278,9 @@ impl Input {
     /// index order, each bin in input order. The cell ranges, and each
     /// sorted slot's input index.
     fn cpu_sort(&self, count: usize) -> (Vec<CellRange>, Vec<u32>) {
-        let binned: Vec<Option<usize>> = (0..count).map(|i| self.live(i).then(|| self.bin_of(i))).collect();
+        let binned: Vec<Option<usize>> = (0..count)
+            .map(|i| self.live(i).then(|| self.bin_of(i)))
+            .collect();
         let mut ranges = vec![CellRange::default(); bin_total(self.grid.bins) as usize];
         for &bin in binned.iter().flatten() {
             ranges[bin].count += 1;
@@ -264,7 +308,10 @@ impl Input {
         for &(bin, size) in &self.crowded {
             assert_eq!(ranges[bin].count as usize, size, "crowded bin {bin}");
         }
-        assert!(ranges.iter().any(|range| range.count == 0), "the fixture has no empty bin");
+        assert!(
+            ranges.iter().any(|range| range.count == 0),
+            "the fixture has no empty bin"
+        );
     }
 
     fn upload(&self, device: &GpuDevice) -> GpuBuffer {
@@ -341,7 +388,13 @@ fn assert_words(what: &str, got: &[u32], want: &[u32], per_slot: usize) {
     }
 }
 
-fn sort_and_check(device: &GpuDevice, sorter: &mut ParticleSorter, input: &Input, particles: &GpuBuffer, case: &Case) {
+fn sort_and_check(
+    device: &GpuDevice,
+    sorter: &mut ParticleSorter,
+    input: &Input,
+    particles: &GpuBuffer,
+    case: &Case,
+) {
     let what = format!(
         "{} records (rule {}), count {}, sorted {:?}, order {:?}, gate {:?}",
         input.records(),
@@ -352,10 +405,17 @@ fn sort_and_check(device: &GpuDevice, sorter: &mut ParticleSorter, input: &Input
         case.gate
     );
     let stride = input.read.stride_words as usize;
-    let sorted = case.sorted.map(|slots| untouched_buffer(device, slots * stride));
+    let sorted = case
+        .sorted
+        .map(|slots| untouched_buffer(device, slots * stride));
     let order = case.order.map(|slots| untouched_buffer(device, slots));
-    sorter.reserve_ranges(device, input.grid.bins).expect("the cell ranges");
-    let ranges = sorter.ranges().expect("the cell ranges were reserved").clone();
+    sorter
+        .reserve_ranges(device, input.grid.bins)
+        .expect("the cell ranges");
+    let ranges = sorter
+        .ranges()
+        .expect("the cell ranges were reserved")
+        .clone();
     fill_untouched(&ranges);
     let gate = match case.gate {
         Gate::Unwired => None,
@@ -384,12 +444,18 @@ fn sort_and_check(device: &GpuDevice, sorter: &mut ParticleSorter, input: &Input
         .expect("the sort encodes");
     encoder.commit_and_wait_completed();
 
-    let untouched_words = |buffer: &GpuBuffer| -> Vec<u32> { (0..(buffer.size / 4) as usize).map(untouched).collect() };
+    let untouched_words = |buffer: &GpuBuffer| -> Vec<u32> {
+        (0..(buffer.size / 4) as usize).map(untouched).collect()
+    };
     let mut want_ranges = untouched_words(&ranges);
     let mut want_sorted = sorted.as_ref().map(untouched_words);
     let mut want_order = order.as_ref().map(untouched_words);
     if case.gate != Gate::Shut {
-        let slots = [Some(input.records()), case.sorted, case.order].into_iter().flatten().min().expect("the input's slots");
+        let slots = [Some(input.records()), case.sorted, case.order]
+            .into_iter()
+            .flatten()
+            .min()
+            .expect("the input's slots");
         let (cells, members) = input.cpu_sort(case.count.min(slots));
         want_ranges[..2 * cells.len()].copy_from_slice(bytemuck::cast_slice(&cells));
         if let Some(want) = want_sorted.as_mut() {
@@ -406,9 +472,19 @@ fn sort_and_check(device: &GpuDevice, sorter: &mut ParticleSorter, input: &Input
             }
         }
     }
-    assert_words(&format!("{what}: cell ranges"), &read_words(&ranges), &want_ranges, 2);
+    assert_words(
+        &format!("{what}: cell ranges"),
+        &read_words(&ranges),
+        &want_ranges,
+        2,
+    );
     if let (Some(buffer), Some(want)) = (&sorted, &want_sorted) {
-        assert_words(&format!("{what}: sorted"), &read_words(buffer), want, stride);
+        assert_words(
+            &format!("{what}: sorted"),
+            &read_words(buffer),
+            want,
+            stride,
+        );
     }
     if let (Some(buffer), Some(want)) = (&order, &want_order) {
         assert_words(&format!("{what}: order"), &read_words(buffer), want, 1);
@@ -429,7 +505,11 @@ fn sort_particles_into_cells_matches_the_cpu_sort_at_a_million_records() {
     let device = manifold_gpu::testkit::test_device();
     let mut sorter = prepared_sorter(&device);
     let n = 1 << 20;
-    let grid = Grid { min: [-2.0, -0.5, -1.25], cell: 0.0625, bins: [64, 48, 40] };
+    let grid = Grid {
+        min: [-2.0, -0.5, -1.25],
+        cell: 0.0625,
+        bins: [64, 48, 40],
+    };
     let input = Input::build(LIQUID_PARTICLE_READ, grid, n, 34, &CROWDED, 0x5eed_0001);
     input.check_fixture();
     let particles = input.upload(&device);
@@ -441,7 +521,18 @@ fn sort_particles_into_cells_matches_the_cpu_sort_at_a_million_records() {
         (short, None, Some(n)),
         (short, None, None),
     ] {
-        sort_and_check(&device, &mut sorter, &input, &particles, &Case { count, sorted, order, gate: Gate::Unwired });
+        sort_and_check(
+            &device,
+            &mut sorter,
+            &input,
+            &particles,
+            &Case {
+                count,
+                sorted,
+                order,
+                gate: Gate::Unwired,
+            },
+        );
     }
 }
 
@@ -454,8 +545,19 @@ fn sort_particles_into_cells_matches_the_cpu_sort_where_faces_round() {
     let device = manifold_gpu::testkit::test_device();
     let mut sorter = prepared_sorter(&device);
     let n = 100_000;
-    let grid = Grid { min: [-1.3, 0.1, -0.7], cell: 0.07, bins: [37, 23, 29] };
-    let input = Input::build(LIQUID_PARTICLE_READ, grid, n, 16, &[1, 2, 32, 33, 250, 1000, 1500], 0x5eed_0002);
+    let grid = Grid {
+        min: [-1.3, 0.1, -0.7],
+        cell: 0.07,
+        bins: [37, 23, 29],
+    };
+    let input = Input::build(
+        LIQUID_PARTICLE_READ,
+        grid,
+        n,
+        16,
+        &[1, 2, 32, 33, 250, 1000, 1500],
+        0x5eed_0002,
+    );
     input.check_fixture();
     let particles = input.upload(&device);
     for (count, sorted, order) in [
@@ -463,7 +565,18 @@ fn sort_particles_into_cells_matches_the_cpu_sort_where_faces_round() {
         (n - 123, Some(90_000), Some(n + 100)),
         (n, Some(n + 64), Some(80_000)),
     ] {
-        sort_and_check(&device, &mut sorter, &input, &particles, &Case { count, sorted, order, gate: Gate::Unwired });
+        sort_and_check(
+            &device,
+            &mut sorter,
+            &input,
+            &particles,
+            &Case {
+                count,
+                sorted,
+                order,
+                gate: Gate::Unwired,
+            },
+        );
     }
 }
 
@@ -474,8 +587,19 @@ fn sort_particles_into_cells_writes_nothing_through_a_shut_gate() {
     let device = manifold_gpu::testkit::test_device();
     let mut sorter = prepared_sorter(&device);
     let n = 100_000;
-    let grid = Grid { min: [-1.0, 0.0, -1.0], cell: 0.125, bins: [16, 16, 16] };
-    let input = Input::build(LIQUID_PARTICLE_READ, grid, n, 11, &[1, 33, 250, 1000], 0x5eed_0003);
+    let grid = Grid {
+        min: [-1.0, 0.0, -1.0],
+        cell: 0.125,
+        bins: [16, 16, 16],
+    };
+    let input = Input::build(
+        LIQUID_PARTICLE_READ,
+        grid,
+        n,
+        11,
+        &[1, 33, 250, 1000],
+        0x5eed_0003,
+    );
     input.check_fixture();
     let particles = input.upload(&device);
     for (sorted, order, gate) in [
@@ -486,7 +610,18 @@ fn sort_particles_into_cells_writes_nothing_through_a_shut_gate() {
         (Some(n), Some(n), Gate::Unwired),
         (Some(n), Some(n), Gate::Shut),
     ] {
-        sort_and_check(&device, &mut sorter, &input, &particles, &Case { count: n - 5, sorted, order, gate });
+        sort_and_check(
+            &device,
+            &mut sorter,
+            &input,
+            &particles,
+            &Case {
+                count: n - 5,
+                sorted,
+                order,
+                gate,
+            },
+        );
     }
 }
 
@@ -498,14 +633,33 @@ fn sort_particles_into_cells_matches_the_cpu_sort_for_matter_and_whitewater() {
     let device = manifold_gpu::testkit::test_device();
     let mut sorter = prepared_sorter(&device);
     let n = 100_000;
-    let grid = Grid { min: [-1.0, 0.0, -1.0], cell: 0.125, bins: [16, 16, 16] };
-    let matter = record_read(&ArrayType::of_known::<MatterPoint>()).expect("a matter point has a position and an id");
-    for (read, seed) in [(matter, 0x5eed_0004), (whitewater_record_read(), 0x5eed_0005)] {
+    let grid = Grid {
+        min: [-1.0, 0.0, -1.0],
+        cell: 0.125,
+        bins: [16, 16, 16],
+    };
+    let matter = record_read(&ArrayType::of_known::<MatterPoint>())
+        .expect("a matter point has a position and an id");
+    for (read, seed) in [
+        (matter, 0x5eed_0004),
+        (whitewater_record_read(), 0x5eed_0005),
+    ] {
         let input = Input::build(read, grid, n, 11, &[1, 33, 250, 1000], seed);
         input.check_fixture();
         let particles = input.upload(&device);
         for (count, gate) in [(n, Gate::Unwired), (n - 99, Gate::Open)] {
-            sort_and_check(&device, &mut sorter, &input, &particles, &Case { count, sorted: None, order: Some(n), gate });
+            sort_and_check(
+                &device,
+                &mut sorter,
+                &input,
+                &particles,
+                &Case {
+                    count,
+                    sorted: None,
+                    order: Some(n),
+                    gate,
+                },
+            );
         }
     }
 }

@@ -309,14 +309,12 @@ inventory::submit! {
 // value labels, OSC suffixes, legacyDiscriminant), verified field-for-field
 // against this submission before deletion. Same pattern as BasicShapes above.
 
-
 // ── Oily Fluid ─────────────────────────────────────────────────────────
 
 // Oily Fluid: Rust twin deleted (BUG-eiur) — canonical schema is
 // `assets/generator-presets/OilyFluid.json`'s presetMetadata (params, defaults,
 // value labels, OSC suffixes, legacyDiscriminant), verified field-for-field
 // against this submission before deletion. Same pattern as BasicShapes above.
-
 
 // ── MRI Volume ─────────────────────────────────────────────────────────
 //
@@ -391,7 +389,6 @@ inventory::submit! {
 // value labels, OSC suffixes, legacyDiscriminant), verified field-for-field
 // against this submission before deletion. Same pattern as BasicShapes above.
 
-
 // ── Particle Text ───────────────────────────────────────────────────
 
 inventory::submit! {
@@ -428,7 +425,6 @@ inventory::submit! {
 // value labels, OSC suffixes, legacyDiscriminant), verified field-for-field
 // against this submission before deletion. Same pattern as BasicShapes above.
 
-
 // ── Param aliases ─────────────────────────────────────────────────────
 //
 // Backward-compat for the `snap` / `snap_mode` → `clip_trigger` /
@@ -442,9 +438,7 @@ inventory::submit! {
 // transparent for plain slider state. Only id-keyed wire / mapping
 // targets need the alias.
 
-const SNAP_ALIASES: &[crate::effect_registration::ParamAlias] = &[
-    ("snap", Some("clip_trigger")),
-];
+const SNAP_ALIASES: &[crate::effect_registration::ParamAlias] = &[("snap", Some("clip_trigger"))];
 
 const SNAP_AND_MODE_ALIASES: &[crate::effect_registration::ParamAlias] = &[
     ("snap", Some("clip_trigger")),

@@ -4,7 +4,7 @@
 //! still opens a current-version file, still migrates an older file forward,
 //! and that the archive-container guard (D5 site 2) refuses independently.
 
-use manifold_core::project::{Project, CURRENT_PROJECT_VERSION};
+use manifold_core::project::{CURRENT_PROJECT_VERSION, Project};
 use manifold_io::loader::{self, LoadError};
 use manifold_io::manifest::CURRENT_ARCHIVE_FORMAT_VERSION;
 use std::io::Write as _;
@@ -61,7 +61,10 @@ fn refuses_a_file_newer_than_this_build() {
 
     let message = err.to_string();
     assert!(message.contains("1.99"), "message: {message}");
-    assert!(message.contains(CURRENT_PROJECT_VERSION), "message: {message}");
+    assert!(
+        message.contains(CURRENT_PROJECT_VERSION),
+        "message: {message}"
+    );
     assert!(
         message.contains("Update MANIFOLD to open it"),
         "message: {message}"
@@ -95,7 +98,10 @@ fn refuses_a_file_below_the_format_floor() {
     }
     let message = err.to_string();
     assert!(message.contains("1.10.0"), "message: {message}");
-    assert!(message.contains("legacy/pre-1.11-loader"), "message: {message}");
+    assert!(
+        message.contains("legacy/pre-1.11-loader"),
+        "message: {message}"
+    );
 
     std::fs::remove_file(&path).ok();
 }
@@ -169,8 +175,8 @@ fn write_v2_archive_with_format_version(format_version: i32, path: &std::path::P
 
     let file = std::fs::File::create(path).expect("create archive file");
     let mut zip = zip::ZipWriter::new(file);
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored);
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
     zip.start_file("project.json", options)
         .expect("start project.json");

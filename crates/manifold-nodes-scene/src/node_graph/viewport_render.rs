@@ -30,15 +30,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use manifold_core::NodeId;
-use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue};
+use manifold_core::effect_graph_def::{
+    EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
+};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::gpu::headless_readback::readback_tonemapped_rgba8;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::scene::viewport_camera::ViewportCamera;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::{JsonGeneratorLoadError, PresetRuntime};
+use manifold_node_engine::scene::viewport_camera::ViewportCamera;
 
 /// `type_id` the splice injects — the same primitive `node.free_camera`
 /// (`docs/REALTIME_3D_DESIGN.md` D6) every other free-look camera source
@@ -97,20 +99,58 @@ pub fn override_camera_def(
 
     // Drop whatever was wired into `camera` — the override replaces it
     // entirely, it doesn't blend with it.
-    out.wires.retain(|w| !(w.to_node == target_id && w.to_port == "camera"));
+    out.wires
+        .retain(|w| !(w.to_node == target_id && w.to_port == "camera"));
 
-    let synthetic_id = out.nodes.iter().map(|n| n.id).max().unwrap_or(0).saturating_add(1);
+    let synthetic_id = out
+        .nodes
+        .iter()
+        .map(|n| n.id)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
     let pos = vp_cam.position();
     let mut params = BTreeMap::new();
-    params.insert("pos_x".to_string(), SerializedParamValue::Float { value: pos[0] });
-    params.insert("pos_y".to_string(), SerializedParamValue::Float { value: pos[1] });
-    params.insert("pos_z".to_string(), SerializedParamValue::Float { value: pos[2] });
-    params.insert("yaw".to_string(), SerializedParamValue::Float { value: vp_cam.yaw });
-    params.insert("pitch".to_string(), SerializedParamValue::Float { value: vp_cam.pitch });
-    params.insert("roll".to_string(), SerializedParamValue::Float { value: 0.0 });
-    params.insert("fov_y".to_string(), SerializedParamValue::Float { value: vp_cam.fov_y });
-    params.insert("near".to_string(), SerializedParamValue::Float { value: vp_cam.near });
-    params.insert("far".to_string(), SerializedParamValue::Float { value: vp_cam.far });
+    params.insert(
+        "pos_x".to_string(),
+        SerializedParamValue::Float { value: pos[0] },
+    );
+    params.insert(
+        "pos_y".to_string(),
+        SerializedParamValue::Float { value: pos[1] },
+    );
+    params.insert(
+        "pos_z".to_string(),
+        SerializedParamValue::Float { value: pos[2] },
+    );
+    params.insert(
+        "yaw".to_string(),
+        SerializedParamValue::Float { value: vp_cam.yaw },
+    );
+    params.insert(
+        "pitch".to_string(),
+        SerializedParamValue::Float {
+            value: vp_cam.pitch,
+        },
+    );
+    params.insert(
+        "roll".to_string(),
+        SerializedParamValue::Float { value: 0.0 },
+    );
+    params.insert(
+        "fov_y".to_string(),
+        SerializedParamValue::Float {
+            value: vp_cam.fov_y,
+        },
+    );
+    params.insert(
+        "near".to_string(),
+        SerializedParamValue::Float { value: vp_cam.near },
+    );
+    params.insert(
+        "far".to_string(),
+        SerializedParamValue::Float { value: vp_cam.far },
+    );
 
     out.nodes.push(EffectGraphNode {
         id: synthetic_id,
@@ -164,7 +204,13 @@ pub fn render_viewport_frame(
         None,
     )?;
 
-    let target = manifold_node_engine::gpu::render_target::RenderTarget::new(&device, width, height, format, "viewport-editor-preview");
+    let target = manifold_node_engine::gpu::render_target::RenderTarget::new(
+        &device,
+        width,
+        height,
+        format,
+        "viewport-editor-preview",
+    );
 
     // Two committed frames, same convention `render_scene_shadows.rs` uses:
     // the first frame pays pipeline warm-up, `commit_and_wait_completed`
@@ -176,7 +222,12 @@ pub fn render_viewport_frame(
             let mut gpu = GpuEncoder::new(&mut enc, &device);
             let mut ctx = *frame_ctx;
             ctx.frame_count = frame;
-            runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+            runtime.render(
+                &mut gpu,
+                &target.texture,
+                &ctx,
+                &manifold_core::params::ParamManifest::default(),
+            );
         }
         enc.commit_and_wait_completed();
     }
@@ -235,9 +286,9 @@ mod tests {
 
         // Old wire from the orbit_camera into `camera` must be gone.
         assert!(
-            !out.wires.iter().any(|w| w.to_node == 1
-                && w.to_port == "camera"
-                && w.from_node == 0),
+            !out.wires
+                .iter()
+                .any(|w| w.to_node == 1 && w.to_port == "camera" && w.from_node == 0),
             "old camera wire should be removed"
         );
         // A new free_camera node feeds `camera` on the render_scene node.
@@ -246,11 +297,17 @@ mod tests {
             .iter()
             .find(|w| w.to_node == 1 && w.to_port == "camera")
             .expect("a new camera wire must exist");
-        let src = out.nodes.iter().find(|n| n.id == new_wire.from_node).expect("src node exists");
+        let src = out
+            .nodes
+            .iter()
+            .find(|n| n.id == new_wire.from_node)
+            .expect("src node exists");
         assert_eq!(src.type_id, OVERRIDE_CAMERA_TYPE_ID);
         assert_eq!(
             src.params.get("pos_x"),
-            Some(&SerializedParamValue::Float { value: vp.position()[0] })
+            Some(&SerializedParamValue::Float {
+                value: vp.position()[0]
+            })
         );
 
         // The original def is untouched (splice operates on a clone) — the
@@ -266,6 +323,9 @@ mod tests {
         let def = def_with_render_scene();
         let vp = ViewportCamera::default();
         let err = override_camera_def(&def, &NodeId::new("does_not_exist"), &vp);
-        assert!(matches!(err, Err(ViewportRenderError::RenderSceneNodeNotFound)));
+        assert!(matches!(
+            err,
+            Err(ViewportRenderError::RenderSceneNodeNotFound)
+        ));
     }
 }

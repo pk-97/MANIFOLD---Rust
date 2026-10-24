@@ -219,7 +219,11 @@ fn write_status(writer: &mut RigWriter) -> io::Result<()> {
             "status t={t} dropped={} host_s={host_s:?} pair_err_ns={err_ns}",
             rig_log::dropped()
         ),
-        None => format!("status t={} dropped={}", rig_log::now_ns(), rig_log::dropped()),
+        None => format!(
+            "status t={} dropped={}",
+            rig_log::now_ns(),
+            rig_log::dropped()
+        ),
     };
     writer.text(&line)
 }
@@ -364,7 +368,10 @@ mod display {
     /// Runs `ioreg` once per display change; nothing private is called.
     #[cfg(target_os = "macos")]
     pub fn edid_lines() -> Vec<String> {
-        let out = match std::process::Command::new("/usr/sbin/ioreg").args(["-l", "-w0"]).output() {
+        let out = match std::process::Command::new("/usr/sbin/ioreg")
+            .args(["-l", "-w0"])
+            .output()
+        {
             Ok(out) => out,
             Err(err) => return vec![format!("ioreg_error={err}")],
         };
@@ -373,7 +380,10 @@ mod display {
         if edids.is_empty() {
             return vec!["none_in_ioregistry=1".to_string()];
         }
-        edids.iter().map(|bytes| super::edid::describe(bytes)).collect()
+        edids
+            .iter()
+            .map(|bytes| super::edid::describe(bytes))
+            .collect()
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -558,7 +568,8 @@ impl TickProbe {
         if wake_ns >= self.next_phase_ns {
             self.next_phase_ns = wake_ns + PHASE_EVERY_NS;
             let (clk_beat, clk_bpm) = facts.clk.unwrap_or((f32::NAN, f32::NAN));
-            let (osc_beat, osc_age_s, osc_bpm) = facts.osc.unwrap_or((f32::NAN, f64::NAN, f32::NAN));
+            let (osc_beat, osc_age_s, osc_bpm) =
+                facts.osc.unwrap_or((f32::NAN, f64::NAN, f32::NAN));
             emit(RigRecord::Phase {
                 at_ns: wake_ns,
                 engine_beat: facts.beat,

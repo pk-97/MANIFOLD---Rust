@@ -25,7 +25,10 @@ pub trait TickSampled: Send {
 /// The inputs a tick-sampled simulation's history replay evaluates; the rest
 /// are setup, held as they stand.
 pub fn replays_input(port: &str) -> bool {
-    matches!(port, "acceleration_field" | "speed" | "air_drag" | "air_resistance") || port.starts_with("role_")
+    matches!(
+        port,
+        "acceleration_field" | "speed" | "air_drag" | "air_resistance"
+    ) || port.starts_with("role_")
 }
 
 /// Checked cast for one concrete tick-sampled node type.
@@ -38,20 +41,28 @@ impl TickSampledRegistration {
     pub const fn new<T: EffectNode + TickSampled + 'static>() -> Self {
         Self {
             type_id: TypeId::of::<T>(),
-            get_mut: |node| node.as_any_mut().downcast_mut::<T>().expect("registered tick-sampled node type"),
+            get_mut: |node| {
+                node.as_any_mut()
+                    .downcast_mut::<T>()
+                    .expect("registered tick-sampled node type")
+            },
         }
     }
 }
 
 inventory::collect!(TickSampledRegistration);
 
-static REGISTRATIONS: LazyLock<AHashMap<TypeId, &'static TickSampledRegistration>> = LazyLock::new(|| {
-    let mut registrations = AHashMap::new();
-    for entry in inventory::iter::<TickSampledRegistration> {
-        assert!(registrations.insert(entry.type_id, entry).is_none(), "duplicate tick-sampled registration");
-    }
-    registrations
-});
+static REGISTRATIONS: LazyLock<AHashMap<TypeId, &'static TickSampledRegistration>> =
+    LazyLock::new(|| {
+        let mut registrations = AHashMap::new();
+        for entry in inventory::iter::<TickSampledRegistration> {
+            assert!(
+                registrations.insert(entry.type_id, entry).is_none(),
+                "duplicate tick-sampled registration"
+            );
+        }
+        registrations
+    });
 
 /// Whether `node` reads its forces per tick.
 pub fn is_tick_sampled(node: &dyn EffectNode) -> bool {
@@ -60,5 +71,7 @@ pub fn is_tick_sampled(node: &dyn EffectNode) -> bool {
 
 pub fn get_mut(node: &mut dyn EffectNode) -> Option<&mut dyn TickSampled> {
     let type_id = node.as_any().type_id();
-    REGISTRATIONS.get(&type_id).map(|entry| (entry.get_mut)(node))
+    REGISTRATIONS
+        .get(&type_id)
+        .map(|entry| (entry.get_mut)(node))
 }

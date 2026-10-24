@@ -15,15 +15,15 @@
 //! `node.fluid_simulate_3d`. Takes a `Camera` input (typically from
 //! `node.orbit_camera`) and reads `cam.fwd`.
 
-use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
+use std::borrow::Cow;
 
-use manifold_node_engine::particles::Particle;
-use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::Particle;
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{standalone_pipeline, active_elements};
+use manifold_node_engine::primitives::standalone_pipeline::{active_elements, standalone_pipeline};
+use manifold_node_engine::scene::camera::Camera;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`flatten`
 /// f32, `active_count` Int → i32), then the THREE derived camera-forward fields
@@ -133,9 +133,15 @@ impl Primitive for FlattenToCameraPlane {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let flatten = ctx.scalar_or_param("flatten", 0.0);
-        let active_count = ctx.scalar_or_param("active_count", 100_000.0).round().max(0.0) as u32;
+        let active_count = ctx
+            .scalar_or_param("active_count", 100_000.0)
+            .round()
+            .max(0.0) as u32;
 
-        let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
+        let cam = ctx
+            .inputs
+            .camera("camera")
+            .unwrap_or_else(Camera::default_perspective);
 
         let Some(particles) = ctx.inputs.array("in") else {
             return;
@@ -189,4 +195,3 @@ impl Primitive for FlattenToCameraPlane {
         );
     }
 }
-

@@ -211,7 +211,10 @@ pub(crate) fn group_primary_output_port(outputs: &[PortSnapshot]) -> Option<&str
 /// `manifold_core::flatten::producer_for_output`. `None` if the port is fed by
 /// the group's own input (an unsupported passthrough the flattener also rejects)
 /// or has no producer.
-pub(crate) fn group_output_producer(body: &GroupSnapshot, port: &str) -> Option<manifold_foundation::NodeId> {
+pub(crate) fn group_output_producer(
+    body: &GroupSnapshot,
+    port: &str,
+) -> Option<manifold_foundation::NodeId> {
     let out_boundary = body
         .nodes
         .iter()
@@ -242,9 +245,7 @@ impl NodeView {
             // Expanded: one uniform row per NodeRow — ports live inline, so no
             // separate band. A `wgsl_compute` node adds an "Edit Code…" footer
             // strip below the rows (opens the kernel editor).
-            base + self.rows.len() as f32 * PARAM_ROW_H
-                + self.wgsl_footer_h()
-                + 6.0
+            base + self.rows.len() as f32 * PARAM_ROW_H + self.wgsl_footer_h() + 6.0
         }
     }
 
@@ -264,9 +265,8 @@ impl NodeView {
     /// expanded node carrying a custom WGSL kernel. The single geometry source
     /// the renderer draws and the hit-test clicks, so they can't drift.
     pub(crate) fn wgsl_footer_offset(&self) -> Option<f32> {
-        (self.wgsl_source.is_some() && !self.collapsed).then(|| {
-            NODE_HEADER_HEIGHT + self.preview_h() + self.rows.len() as f32 * PARAM_ROW_H
-        })
+        (self.wgsl_source.is_some() && !self.collapsed)
+            .then(|| NODE_HEADER_HEIGHT + self.preview_h() + self.rows.len() as f32 * PARAM_ROW_H)
     }
 
     /// Height of the output-preview band below the header: the project-aspect
@@ -576,7 +576,9 @@ pub(crate) struct ParamView {
 /// sidebar so both classify a param the same way.
 pub(crate) fn is_path_param(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
-    ["folder", "path", "file", "dir"].iter().any(|k| n.contains(k))
+    ["folder", "path", "file", "dir"]
+        .iter()
+        .any(|k| n.contains(k))
 }
 
 /// Compact display for a `Table` cell — integers without a decimal point,
@@ -742,7 +744,10 @@ pub(crate) fn format_param_for_node(p: &crate::graph_view::ParamSnapshot) -> Par
 fn find_node_by_handle<'a>(
     body: &'a crate::graph_view::GroupSnapshot,
     handle: &str,
-) -> Option<(&'a crate::graph_view::NodeSnapshot, &'a [crate::graph_view::WireSnapshot])> {
+) -> Option<(
+    &'a crate::graph_view::NodeSnapshot,
+    &'a [crate::graph_view::WireSnapshot],
+)> {
     for n in &body.nodes {
         if n.node_handle.as_deref() == Some(handle) {
             return Some((n, &body.wires));
@@ -1048,7 +1053,6 @@ pub(crate) struct PortHit {
 }
 
 impl GraphCanvas {
-
     /// Visible previewable nodes as `(capture node_id, strip_x, strip_y,
     /// strip_w, strip_h)` in screen space — the 16:9 preview-strip region the
     /// present pass blits each node's atlas thumbnail into. The `node_id` is the
@@ -1074,7 +1078,9 @@ impl GraphCanvas {
     pub fn refill_node_preview_src(
         &mut self,
         viewport: Rect,
-        mut src_of: impl FnMut(&manifold_foundation::NodeId) -> Option<(crate::node::TextureHandle, [f32; 4])>,
+        mut src_of: impl FnMut(
+            &manifold_foundation::NodeId,
+        ) -> Option<(crate::node::TextureHandle, [f32; 4])>,
     ) -> bool {
         let mut src = std::mem::take(&mut self.node_preview_src);
         src.clear();
@@ -1107,14 +1113,19 @@ impl GraphCanvas {
         node: &'a NodeView,
         viewport: Rect,
     ) -> Option<(&'a manifold_foundation::NodeId, f32, f32, f32, f32)> {
-        let (Some(capture_id), Some((screen_w, screen_h))) = (node.preview_node_id.as_ref(), node.preview_screen)
+        let (Some(capture_id), Some((screen_w, screen_h))) =
+            (node.preview_node_id.as_ref(), node.preview_screen)
         else {
             return None;
         };
         let (sx, sy) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
         let sw = NODE_WIDTH * self.zoom;
         let sh = node.height() * self.zoom;
-        if sx + sw < viewport.x || sx > viewport.x + viewport.w || sy + sh < viewport.y || sy > viewport.y + viewport.h {
+        if sx + sw < viewport.x
+            || sx > viewport.x + viewport.w
+            || sy + sh < viewport.y
+            || sy > viewport.y + viewport.h
+        {
             return None;
         }
         let strip_w = screen_w * self.zoom;
@@ -1137,7 +1148,6 @@ impl GraphCanvas {
                 .as_deref()
                 .is_some_and(|h| h.to_ascii_lowercase().contains(&self.node_search))
     }
-
 
     /// For a single selected group: its id, current display name, and the
     /// screen-space rect of its header (where the rename field anchors). `None`
@@ -1164,9 +1174,7 @@ impl GraphCanvas {
     /// graph. Call before [`Self::set_snapshot`] so the first layout of a level
     /// already uses the right node heights.
     pub fn set_preview_aspect(&mut self, aspect: f32) {
-        if !(aspect.is_finite() && aspect > 0.0)
-            || (aspect - self.preview_aspect).abs() < 1e-4
-        {
+        if !(aspect.is_finite() && aspect > 0.0) || (aspect - self.preview_aspect).abs() < 1e-4 {
             return;
         }
         self.preview_aspect = aspect;
@@ -1185,7 +1193,10 @@ impl GraphCanvas {
         // longer resolves — the group was deleted, ungrouped, or an undo
         // pulled it out from under us — drop back to the document root.
         if !self.scope.is_empty() && resolve_level(snap, &self.scope).is_none() {
-            group_log!("scope {:?} no longer resolves — returning to root", self.scope);
+            group_log!(
+                "scope {:?} no longer resolves — returning to root",
+                self.scope
+            );
             self.scope.clear();
             self.scope_titles.clear();
         }
@@ -1247,11 +1258,8 @@ impl GraphCanvas {
         // re-run depth-based auto-layout against the new topology,
         // shifting unrelated nodes into different columns — looked
         // like the graph "snapping to weird positions" each time.
-        let prev_positions: ahash::AHashMap<u32, (f32, f32)> = self
-            .nodes
-            .iter()
-            .map(|n| (n.id, n.pos_graph))
-            .collect();
+        let prev_positions: ahash::AHashMap<u32, (f32, f32)> =
+            self.nodes.iter().map(|n| (n.id, n.pos_graph)).collect();
 
         let preview_aspect = self.preview_aspect;
         let new_nodes: Vec<NodeView> = level_nodes
@@ -1276,56 +1284,56 @@ impl GraphCanvas {
                     )
                 };
                 NodeView {
-                id: n.id,
-                node_id: n.node_id.clone(),
-                handle: n.node_handle.clone(),
-                title: n.title.clone(),
-                params,
-                // Filled from inputs/outputs/params once the struct is built
-                // (they aren't in scope as slices inside this literal).
-                rows: Vec::new(),
-                summary,
-                collapsed: self
-                    .collapsed
-                    .get(&n.id)
-                    .copied()
-                    .unwrap_or(self.default_collapsed),
-                // Category + tooltips are baked into the snapshot at translation
-                // time (the renderer's `descriptor_for`/`tooltip_for`), so the
-                // catalog stays renderer-side and the canvas just reads them.
-                header_color: category_header_color(n.category),
-                pos_graph: prev_positions
-                    .get(&n.id)
-                    .copied()
-                    .unwrap_or((f32::NAN, f32::NAN)),
-                inputs: n
-                    .inputs
-                    .iter()
-                    .map(|p| PortView::from_kind(p.name.clone(), &p.kind))
-                    .collect(),
-                outputs: n
-                    .outputs
-                    .iter()
-                    .map(|p| PortView::from_kind(p.name.clone(), &p.kind))
-                    .collect(),
-                breaks_dependency_cycle: n.breaks_dependency_cycle,
-                is_group: n.type_id == GROUP_TYPE_ID,
-                // The def stores a group's tint as a plain sRGB float array; the
-                // canvas works in sRGB `Color32`. Convert at this boundary (no
-                // gamma — `from_f32` is the byte↔float map, not `to_f32`).
-                group_tint: n
-                    .group
-                    .as_ref()
-                    .and_then(|g| g.tint)
-                    .map(|t| Color32::from_f32(t[0], t[1], t[2], t[3])),
-                tooltip: n.tooltip.clone(),
-                preview_node_id: node_preview_target(n),
-                preview_screen: node_preview_target(n)
-                    .map(|_| crate::graph_canvas::preview_screen_size(preview_aspect)),
-                wgsl_source: n.wgsl_source.clone(),
-                // Filled by `rebuild_rows` below (needs the level's wires).
-                hideable_ports: 0,
-                revealed: false,
+                    id: n.id,
+                    node_id: n.node_id.clone(),
+                    handle: n.node_handle.clone(),
+                    title: n.title.clone(),
+                    params,
+                    // Filled from inputs/outputs/params once the struct is built
+                    // (they aren't in scope as slices inside this literal).
+                    rows: Vec::new(),
+                    summary,
+                    collapsed: self
+                        .collapsed
+                        .get(&n.id)
+                        .copied()
+                        .unwrap_or(self.default_collapsed),
+                    // Category + tooltips are baked into the snapshot at translation
+                    // time (the renderer's `descriptor_for`/`tooltip_for`), so the
+                    // catalog stays renderer-side and the canvas just reads them.
+                    header_color: category_header_color(n.category),
+                    pos_graph: prev_positions
+                        .get(&n.id)
+                        .copied()
+                        .unwrap_or((f32::NAN, f32::NAN)),
+                    inputs: n
+                        .inputs
+                        .iter()
+                        .map(|p| PortView::from_kind(p.name.clone(), &p.kind))
+                        .collect(),
+                    outputs: n
+                        .outputs
+                        .iter()
+                        .map(|p| PortView::from_kind(p.name.clone(), &p.kind))
+                        .collect(),
+                    breaks_dependency_cycle: n.breaks_dependency_cycle,
+                    is_group: n.type_id == GROUP_TYPE_ID,
+                    // The def stores a group's tint as a plain sRGB float array; the
+                    // canvas works in sRGB `Color32`. Convert at this boundary (no
+                    // gamma — `from_f32` is the byte↔float map, not `to_f32`).
+                    group_tint: n
+                        .group
+                        .as_ref()
+                        .and_then(|g| g.tint)
+                        .map(|t| Color32::from_f32(t[0], t[1], t[2], t[3])),
+                    tooltip: n.tooltip.clone(),
+                    preview_node_id: node_preview_target(n),
+                    preview_screen: node_preview_target(n)
+                        .map(|_| crate::graph_canvas::preview_screen_size(preview_aspect)),
+                    wgsl_source: n.wgsl_source.clone(),
+                    // Filled by `rebuild_rows` below (needs the level's wires).
+                    hideable_ports: 0,
+                    revealed: false,
                 }
             })
             .collect();
@@ -1451,8 +1459,9 @@ impl GraphCanvas {
             }
             let handle = node.handle.clone();
             for p in &mut node.params {
-                let feeding_wire =
-                    wires.iter().find(|w| w.to_node == node.id && w.to_port == p.name);
+                let feeding_wire = wires
+                    .iter()
+                    .find(|w| w.to_node == node.id && w.to_port == p.name);
                 p.wire_driven = feeding_wire.is_some();
                 p.driven_by = feeding_wire.map(|w| {
                     let src = titles.get(&w.from_node).map(String::as_str).unwrap_or("?");
@@ -1485,7 +1494,11 @@ impl GraphCanvas {
         for node in nodes.iter_mut() {
             let reveal = revealed_ports.get(&node.id).copied().unwrap_or(false);
             let id = node.id;
-            let out_wired = |name: &str| wires.iter().any(|w| w.from_node == id && w.from_port == name);
+            let out_wired = |name: &str| {
+                wires
+                    .iter()
+                    .any(|w| w.from_node == id && w.from_port == name)
+            };
             let in_wired = |name: &str| wires.iter().any(|w| w.to_node == id && w.to_port == name);
             // Hide unwired sockets only once a sibling of the same kind is already
             // wired — you've shown your intent, so the rest is noise (a distributor
@@ -1531,7 +1544,6 @@ impl GraphCanvas {
             node.revealed = reveal;
         }
     }
-
 
     /// Overlay this frame's live (post-modulation) param values onto the node
     /// faces. The structural snapshot ([`Self::set_snapshot`]) only rebuilds on
@@ -1591,14 +1603,16 @@ impl GraphCanvas {
                     continue;
                 }
                 let found = if let Some((src_id, src_name)) = &pv.live_source {
-                    by_id(src_id).and_then(|vals| vals.iter().find(|(name, _)| *name == src_name.as_str()))
+                    by_id(src_id)
+                        .and_then(|vals| vals.iter().find(|(name, _)| *name == src_name.as_str()))
                 } else {
                     node_vals.and_then(|vals| vals.iter().find(|(name, _)| *name == pv.name))
                 };
                 let Some(&(_, value)) = found else {
                     continue;
                 };
-                let Some(fill) = write_numeric_value(&mut pv.value, pv.kind, value, pv.range) else {
+                let Some(fill) = write_numeric_value(&mut pv.value, pv.kind, value, pv.range)
+                else {
                     continue;
                 };
                 pv.fill = fill;
@@ -1710,7 +1724,10 @@ pub fn resolve_card_param_node_id(
 
 /// The stable `NodeId` of the node whose handle is `handle`, searched through
 /// the full nested snapshot. `None` if no such (id-bearing) node exists.
-pub(crate) fn node_id_for_handle(snap: &GraphSnapshot, handle: &str) -> Option<manifold_foundation::NodeId> {
+pub(crate) fn node_id_for_handle(
+    snap: &GraphSnapshot,
+    handle: &str,
+) -> Option<manifold_foundation::NodeId> {
     fn search(nodes: &[NodeSnapshot], handle: &str) -> Option<manifold_foundation::NodeId> {
         for n in nodes {
             if n.node_handle.as_deref() == Some(handle) && !n.node_id.is_empty() {

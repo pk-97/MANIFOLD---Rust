@@ -8,7 +8,9 @@ use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
-use super::switch_mesh::{selected_switch_input, switch_output_capacity, switch_passthrough, ArraySwitch};
+use super::switch_mesh::{
+    ArraySwitch, selected_switch_input, switch_output_capacity, switch_passthrough,
+};
 
 manifold_node_engine::primitive! {
     name: SwitchIndices,
@@ -51,11 +53,19 @@ manifold_node_engine::param_tooltips!("node.switch_indices", {
 });
 
 impl Primitive for SwitchIndices {
-    fn selected_input_branch(&self, params: &ParamValues, wired_inputs: &[&str]) -> Option<&'static str> {
+    fn selected_input_branch(
+        &self,
+        params: &ParamValues,
+        wired_inputs: &[&str],
+    ) -> Option<&'static str> {
         selected_switch_input(params, wired_inputs)
     }
 
-    fn skip_passthrough(&self, params: &ParamValues, wired_inputs: &[&str]) -> Option<(&'static str, &'static str)> {
+    fn skip_passthrough(
+        &self,
+        params: &ParamValues,
+        wired_inputs: &[&str],
+    ) -> Option<(&'static str, &'static str)> {
         switch_passthrough(params, wired_inputs)
     }
 
@@ -73,7 +83,11 @@ impl Primitive for SwitchIndices {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        self.switch.run(ctx, std::mem::size_of::<u32>() as u64, "node.switch_indices");
+        self.switch.run(
+            ctx,
+            std::mem::size_of::<u32>() as u64,
+            "node.switch_indices",
+        );
     }
 }
 
@@ -92,12 +106,22 @@ mod tests {
     fn ports_are_a_param_shadowed_selector_and_two_index_inputs() {
         let node = SwitchIndices::new();
         let indices = PortType::Array(ArrayType::of_known::<u32>());
-        let inputs: Vec<_> = EffectNode::inputs(&node).iter().map(|p| (p.name.as_ref(), p.ty, p.required)).collect();
+        let inputs: Vec<_> = EffectNode::inputs(&node)
+            .iter()
+            .map(|p| (p.name.as_ref(), p.ty, p.required))
+            .collect();
         assert_eq!(
             inputs,
-            [("selector", PortType::Scalar(ScalarType::F32), true), ("in_0", indices, false), ("in_1", indices, false)]
+            [
+                ("selector", PortType::Scalar(ScalarType::F32), true),
+                ("in_0", indices, false),
+                ("in_1", indices, false)
+            ]
         );
-        let outputs: Vec<_> = EffectNode::outputs(&node).iter().map(|p| (p.name.as_ref(), p.ty)).collect();
+        let outputs: Vec<_> = EffectNode::outputs(&node)
+            .iter()
+            .map(|p| (p.name.as_ref(), p.ty))
+            .collect();
         assert_eq!(outputs, [("out", indices)]);
     }
 
@@ -106,15 +130,30 @@ mod tests {
         let node = SwitchIndices::new();
         let mut params = ParamValues::default();
         params.insert(Cow::Borrowed("selector"), ParamValue::Float(1.0));
-        assert_eq!(Primitive::selected_input_branch(&node, &params, &["selector", "in_0", "in_1"]), None);
-        assert_eq!(Primitive::selected_input_branch(&node, &params, &["in_0", "in_1"]), Some("in_1"));
-        assert_eq!(Primitive::array_output_capacity(&node, "out", &params, &[("in_0", 9), ("in_1", 6)]), Some(9));
+        assert_eq!(
+            Primitive::selected_input_branch(&node, &params, &["selector", "in_0", "in_1"]),
+            None
+        );
+        assert_eq!(
+            Primitive::selected_input_branch(&node, &params, &["in_0", "in_1"]),
+            Some("in_1")
+        );
+        assert_eq!(
+            Primitive::array_output_capacity(&node, "out", &params, &[("in_0", 9), ("in_1", 6)]),
+            Some(9)
+        );
     }
 
     #[test]
     fn param_selector_skips_the_producer_of_the_other_input() {
         let indices = PortType::Array(ArrayType::of_known::<u32>());
-        assert_eq!(producers_run(Box::new(SwitchIndices::new()), indices, 1.0), ["b"]);
-        assert_eq!(producers_run(Box::new(SwitchIndices::new()), indices, 0.0), ["a"]);
+        assert_eq!(
+            producers_run(Box::new(SwitchIndices::new()), indices, 1.0),
+            ["b"]
+        );
+        assert_eq!(
+            producers_run(Box::new(SwitchIndices::new()), indices, 0.0),
+            ["a"]
+        );
     }
 }

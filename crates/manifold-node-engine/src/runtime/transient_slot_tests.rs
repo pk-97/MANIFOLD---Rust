@@ -2,9 +2,10 @@
 use super::*;
 use crate::primitives::{gain::Gain, mix::Mix};
 use crate::testkit::graph::GraphFixture;
-use crate::{scene::boundary_nodes::FinalOutput, graph::Graph, scene::boundary_nodes::Source, exec::execution_plan::compile};
-
-
+use crate::{
+    exec::execution_plan::compile, graph::Graph, scene::boundary_nodes::FinalOutput,
+    scene::boundary_nodes::Source,
+};
 
 #[test]
 fn transient_slots_reuse_only_matching_resolved_dimensions() {
@@ -49,11 +50,23 @@ fn transient_slots_reuse_only_matching_resolved_dimensions() {
     let gain_3_res = resource_for(gain_3);
 
     let slot = |res| assignment.resource_to_slot[&res];
-    assert_eq!(assignment.slot_dims[slot(spectrum_res).0 as usize], (512, 256));
+    assert_eq!(
+        assignment.slot_dims[slot(spectrum_res).0 as usize],
+        (512, 256)
+    );
     assert_eq!(assignment.slot_dims[slot(mix_res).0 as usize], (1080, 1920));
-    assert_eq!(assignment.slot_dims[slot(gain_1_res).0 as usize], (1080, 1920));
-    assert_eq!(assignment.slot_dims[slot(gain_2_res).0 as usize], (1080, 1920));
-    assert_eq!(assignment.slot_dims[slot(gain_3_res).0 as usize], (1080, 1920));
+    assert_eq!(
+        assignment.slot_dims[slot(gain_1_res).0 as usize],
+        (1080, 1920)
+    );
+    assert_eq!(
+        assignment.slot_dims[slot(gain_2_res).0 as usize],
+        (1080, 1920)
+    );
+    assert_eq!(
+        assignment.slot_dims[slot(gain_3_res).0 as usize],
+        (1080, 1920)
+    );
     assert_ne!(slot(spectrum_res), slot(gain_1_res));
 
     // The canvas chain still recycles its transient slots once their
@@ -72,11 +85,12 @@ fn source_independent_plan_does_not_allocate_external_source_slot() {
     graph.connect((checker, "out"), (output, "in")).unwrap();
 
     let plan = compile(&graph).expect("source-independent chain compiles");
-    assert!(plan
-        .steps()
-        .iter()
-        .find(|step| step.node == source)
-        .is_none_or(|step| step.outputs.is_empty()));
+    assert!(
+        plan.steps()
+            .iter()
+            .find(|step| step.node == source)
+            .is_none_or(|step| step.outputs.is_empty())
+    );
 
     let assignment = assign_texture2d_slots(&plan, None, (64, 64));
     assert_eq!(assignment.source_slot, None);

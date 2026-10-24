@@ -7,12 +7,12 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::MeshVertex;
-use manifold_node_engine::scene::camera::{Camera, CameraMode};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::scene::camera::{Camera, CameraMode};
 
 /// Codegen uniform layout: params in PARAMS order, the derived camera
 /// fields, then `dispatch_count`, padded to 16 bytes.
@@ -100,7 +100,17 @@ manifold_node_engine::primitive! {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn grid_uniforms(columns: u32, rows: u32, level: f32, max_distance: f32, margin: f32, color: [f32; 3], size: [f32; 2], d: &GridDerived, count: u32) -> GridUniforms {
+fn grid_uniforms(
+    columns: u32,
+    rows: u32,
+    level: f32,
+    max_distance: f32,
+    margin: f32,
+    color: [f32; 3],
+    size: [f32; 2],
+    d: &GridDerived,
+    count: u32,
+) -> GridUniforms {
     GridUniforms {
         columns: columns as i32,
         rows: rows as i32,
@@ -163,7 +173,11 @@ fn y_top(d: &GridDerived, above: f32, range: f32, margin: f32) -> f32 {
         let (mut lo, mut hi) = (-edge, edge);
         for _ in 0..40 {
             let mid = 0.5 * (lo + hi);
-            if reach(d, above, range, sx, mid) < 0.0 { lo = mid } else { hi = mid }
+            if reach(d, above, range, sx, mid) < 0.0 {
+                lo = mid
+            } else {
+                hi = mid
+            }
         }
         best = best.max(lo);
     }
@@ -172,10 +186,26 @@ fn y_top(d: &GridDerived, above: f32, range: f32, margin: f32) -> f32 {
 
 /// Camera basis, half-angle tangents and horizon row for one frame. `None`
 /// for an orthographic camera.
-pub(crate) fn derive(cam: &Camera, aspect: f32, level: f32, range: f32, margin: f32) -> Option<GridDerived> {
-    let CameraMode::Perspective { fov_y } = cam.mode else { return None };
+pub(crate) fn derive(
+    cam: &Camera,
+    aspect: f32,
+    level: f32,
+    range: f32,
+    margin: f32,
+) -> Option<GridDerived> {
+    let CameraMode::Perspective { fov_y } = cam.mode else {
+        return None;
+    };
     let tan_y = (0.5 * fov_y).tan();
-    let mut d = GridDerived { cam: cam.pos, fwd: cam.fwd, right: cam.right, up: cam.up, tan_x: tan_y * aspect, tan_y, y_top: 0.0 };
+    let mut d = GridDerived {
+        cam: cam.pos,
+        fwd: cam.fwd,
+        right: cam.right,
+        up: cam.up,
+        tan_x: tan_y * aspect,
+        tan_y,
+        y_top: 0.0,
+    };
     d.y_top = y_top(&d, cam.pos[1] - level, range, margin);
     Some(d)
 }
@@ -202,33 +232,63 @@ impl Primitive for ProjectedGrid {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
+        let cam = ctx
+            .inputs
+            .camera("camera")
+            .unwrap_or_else(Camera::default_perspective);
         let columns = param(ctx, "columns", 640.0).round().max(2.0) as u32;
         let rows = param(ctx, "rows", 360.0).round().max(2.0) as u32;
         let level = ctx.scalar_or_param("level", 0.0);
         let max_distance = param(ctx, "max_distance", 20000.0).max(1.0);
         let margin = param(ctx, "margin", 0.25).max(0.0);
-        let (width, height) = (ctx.scalar_or_param("width", 1920.0), ctx.scalar_or_param("height", 1080.0));
-        let Some(derived) = derive(&cam, width / height.max(1.0), level, max_distance, margin) else {
+        let (width, height) = (
+            ctx.scalar_or_param("width", 1920.0),
+            ctx.scalar_or_param("height", 1080.0),
+        );
+        let Some(derived) = derive(&cam, width / height.max(1.0), level, max_distance, margin)
+        else {
             ctx.error("Projected Grid: needs a perspective camera");
             return;
         };
         let Some(out) = ctx.outputs.array("vertices") else {
             return;
         };
-        let count = manifold_node_engine::primitives::standalone_pipeline::active_elements::<MeshVertex>(out.size, columns * rows);
+        let count = manifold_node_engine::primitives::standalone_pipeline::active_elements::<
+            MeshVertex,
+        >(out.size, columns * rows);
         if count == 0 {
             return;
         }
-        let color = [param(ctx, "color_r", 1.0), param(ctx, "color_g", 1.0), param(ctx, "color_b", 1.0)];
-        let uniforms = grid_uniforms(columns, rows, level, max_distance, margin, color, [width, height], &derived, count);
+        let color = [
+            param(ctx, "color_r", 1.0),
+            param(ctx, "color_g", 1.0),
+            param(ctx, "color_b", 1.0),
+        ];
+        let uniforms = grid_uniforms(
+            columns,
+            rows,
+            level,
+            max_distance,
+            margin,
+            color,
+            [width, height],
+            &derived,
+            count,
+        );
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: out,
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256), 1, 1],
             "node.projected_grid",
@@ -238,16 +298,34 @@ impl Primitive for ProjectedGrid {
 
 /// CPU reference of the WGSL body, for the proofs.
 #[cfg(test)]
-pub(crate) fn reference_vertex(d: &GridDerived, columns: u32, rows: u32, level: f32, max_distance: f32, margin: f32, idx: u32) -> [f32; 3] {
+pub(crate) fn reference_vertex(
+    d: &GridDerived,
+    columns: u32,
+    rows: u32,
+    level: f32,
+    max_distance: f32,
+    margin: f32,
+    idx: u32,
+) -> [f32; 3] {
     let (col, row) = (idx % columns, idx / columns);
-    let (u, v) = (col as f32 / (columns - 1) as f32, row as f32 / (rows - 1) as f32);
+    let (u, v) = (
+        col as f32 / (columns - 1) as f32,
+        row as f32 / (rows - 1) as f32,
+    );
     let edge = 1.0 + margin;
     let (sx, sy) = ((2.0 * u - 1.0) * edge, d.y_top + (-edge - d.y_top) * v);
     let r = ray(d, sx, sy);
     let above = d.cam[1] - level;
     let horiz = (r[0] * r[0] + r[2] * r[2]).sqrt();
-    let dir = if horiz > 1e-6 { [r[0] / horiz, r[2] / horiz] } else { [1.0, 0.0] };
-    let mut hit = [d.cam[0] + dir[0] * max_distance, d.cam[2] + dir[1] * max_distance];
+    let dir = if horiz > 1e-6 {
+        [r[0] / horiz, r[2] / horiz]
+    } else {
+        [1.0, 0.0]
+    };
+    let mut hit = [
+        d.cam[0] + dir[0] * max_distance,
+        d.cam[2] + dir[1] * max_distance,
+    ];
     if r[1] < 0.0 && above > 0.0 {
         let t = above / -r[1];
         if t * horiz <= max_distance {
@@ -262,10 +340,15 @@ mod tests {
     use super::*;
 
     fn camera(pos: [f32; 3], yaw: f32, pitch: f32, roll: f32) -> Camera {
-        let fwd = [pitch.cos() * yaw.sin(), pitch.sin(), -pitch.cos() * yaw.cos()];
+        let fwd = [
+            pitch.cos() * yaw.sin(),
+            pitch.sin(),
+            -pitch.cos() * yaw.cos(),
+        ];
         let flat_right = [yaw.cos(), 0.0, yaw.sin()];
         let up0 = cross(flat_right, fwd);
-        let right: [f32; 3] = std::array::from_fn(|i| flat_right[i] * roll.cos() + up0[i] * roll.sin());
+        let right: [f32; 3] =
+            std::array::from_fn(|i| flat_right[i] * roll.cos() + up0[i] * roll.sin());
         let up = cross(right, fwd);
         let mut cam = Camera::default_perspective();
         cam.pos = pos;
@@ -277,7 +360,11 @@ mod tests {
     }
 
     fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-        [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
     }
 
     fn horizontal(cam: [f32; 3], p: [f32; 3]) -> f32 {
@@ -299,18 +386,43 @@ mod tests {
         for roll in [0.0f32, 20f32.to_radians()] {
             let cam = camera([0.0, 3.0, 0.0], 0.4, -0.05, roll);
             let (d, left, right) = top_edges(&cam);
-            assert!(d.y_top < 1.25, "roll {roll}: horizon should be inside the frame");
+            assert!(
+                d.y_top < 1.25,
+                "roll {roll}: horizon should be inside the frame"
+            );
             let far = left.max(right);
-            assert!((far - range).abs() <= 0.01 * range, "roll {roll}: top row reaches {left}, {right}");
-            let bottom = reference_vertex(&d, cols, rows, 0.0, range, margin, (rows - 1) * cols + cols / 2);
-            assert!(horizontal(cam.pos, bottom) < 50.0, "roll {roll}: bottom row starts near the camera");
+            assert!(
+                (far - range).abs() <= 0.01 * range,
+                "roll {roll}: top row reaches {left}, {right}"
+            );
+            let bottom = reference_vertex(
+                &d,
+                cols,
+                rows,
+                0.0,
+                range,
+                margin,
+                (rows - 1) * cols + cols / 2,
+            );
+            assert!(
+                horizontal(cam.pos, bottom) < 50.0,
+                "roll {roll}: bottom row starts near the camera"
+            );
         }
         let down = camera([0.0, 30.0, 0.0], 0.0, -1.2, 0.0);
-        assert_eq!(top_edges(&down).0.y_top, 1.25, "looking down: whole frame is water");
+        assert_eq!(
+            top_edges(&down).0.y_top,
+            1.25,
+            "looking down: whole frame is water"
+        );
         let up = camera([0.0, 3.0, 0.0], 0.0, 1.2, 0.0);
         assert_eq!(top_edges(&up).0.y_top, -1.25, "looking up: grid collapses");
         let under = camera([0.0, -1.0, 0.0], 0.0, -0.3, 0.0);
-        assert_eq!(top_edges(&under).0.y_top, -1.25, "below the water: grid collapses");
+        assert_eq!(
+            top_edges(&under).0.y_top,
+            -1.25,
+            "below the water: grid collapses"
+        );
     }
 
     /// Row 0 is farther than the last row, so make_triangles' normals face up.
@@ -321,7 +433,8 @@ mod tests {
         let (cols, rows) = (16, 16);
         for col in [0, 7, 15] {
             let far = reference_vertex(&d, cols, rows, 0.0, 20000.0, 0.25, col);
-            let near = reference_vertex(&d, cols, rows, 0.0, 20000.0, 0.25, (rows - 1) * cols + col);
+            let near =
+                reference_vertex(&d, cols, rows, 0.0, 20000.0, 0.25, (rows - 1) * cols + col);
             assert!(horizontal(cam.pos, far) > horizontal(cam.pos, near));
         }
         // dy (row +1) × dx (col +1) points up, as tg_compute_normal takes it.
@@ -342,20 +455,43 @@ mod gpu_tests {
     #[test]
     fn projected_grid_matches_cpu() {
         let device = manifold_gpu::testkit::test_device();
-        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<ProjectedGrid>().expect("projected_grid codegen");
-        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "projected-grid-test");
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<ProjectedGrid>()
+            .expect("projected_grid codegen");
+        let pipeline = device.create_compute_pipeline(
+            &wgsl,
+            manifold_node_engine::freeze::codegen::ENTRY,
+            "projected-grid-test",
+        );
         let (cols, rows, level, range, margin) = (48u32, 27u32, 0.5f32, 20000.0f32, 0.25f32);
         let cam = test_camera();
         let derived = derive(&cam, 16.0 / 9.0, level, range, margin).unwrap();
         let count = cols * rows;
-        let out = device.create_buffer_shared(u64::from(count) * std::mem::size_of::<MeshVertex>() as u64);
-        let uniforms = grid_uniforms(cols, rows, level, range, margin, [0.1, 0.2, 0.3], [1920.0, 1080.0], &derived, count);
+        let out = device
+            .create_buffer_shared(u64::from(count) * std::mem::size_of::<MeshVertex>() as u64);
+        let uniforms = grid_uniforms(
+            cols,
+            rows,
+            level,
+            range,
+            margin,
+            [0.1, 0.2, 0.3],
+            [1920.0, 1080.0],
+            &derived,
+            count,
+        );
         let mut enc = device.create_encoder("projected-grid-test");
         enc.dispatch_compute(
             &pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: &out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &out,
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256), 1, 1],
             "projected-grid-test",
@@ -365,12 +501,20 @@ mod gpu_tests {
         let got = unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, count as usize) };
         for (i, v) in got.iter().enumerate() {
             let want = reference_vertex(&derived, cols, rows, level, range, margin, i as u32);
-            let dist = ((want[0] - derived.cam[0]).powi(2) + (want[2] - derived.cam[2]).powi(2)).sqrt();
+            let dist =
+                ((want[0] - derived.cam[0]).powi(2) + (want[2] - derived.cam[2]).powi(2)).sqrt();
             let tol = 1e-4 * dist.max(1.0);
             for (a, (have, want)) in v.position.iter().zip(want).enumerate() {
-                assert!((have - want).abs() <= tol, "vertex {i} axis {a}: {have} vs {want}");
+                assert!(
+                    (have - want).abs() <= tol,
+                    "vertex {i} axis {a}: {have} vs {want}"
+                );
             }
-            assert_eq!(v.uv, [v.position[0], v.position[2]], "vertex {i}: uv is the rest xz");
+            assert_eq!(
+                v.uv,
+                [v.position[0], v.position[2]],
+                "vertex {i}: uv is the rest xz"
+            );
             assert_eq!(v.color, [0.1, 0.2, 0.3, 1.0]);
             assert_eq!(v.normal, [0.0, 1.0, 0.0]);
         }
@@ -385,10 +529,18 @@ mod tests_support {
         let mut cam = Camera::default_perspective();
         let (yaw, pitch) = (0.3f32, -0.08f32);
         cam.pos = [2.0, 3.5, 1.0];
-        cam.fwd = [pitch.cos() * yaw.sin(), pitch.sin(), -pitch.cos() * yaw.cos()];
+        cam.fwd = [
+            pitch.cos() * yaw.sin(),
+            pitch.sin(),
+            -pitch.cos() * yaw.cos(),
+        ];
         cam.right = [yaw.cos(), 0.0, yaw.sin()];
         let (f, r) = (cam.fwd, cam.right);
-        cam.up = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]];
+        cam.up = [
+            r[1] * f[2] - r[2] * f[1],
+            r[2] * f[0] - r[0] * f[2],
+            r[0] * f[1] - r[1] * f[0],
+        ];
         cam.mode = CameraMode::Perspective { fov_y: 0.55 };
         cam
     }

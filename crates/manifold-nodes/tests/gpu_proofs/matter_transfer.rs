@@ -6,15 +6,30 @@
 
 use std::borrow::Cow;
 
+use manifold_core::fluid_domain::domain_layout;
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_core::fluid_domain::domain_layout;
+use manifold_node_engine::{
+    exec::backend::Backend, exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext,
+    exec::effect_node::EffectNodeType, exec::effect_node::FrameTime,
+    exec::effect_node::NodeInstanceId, exec::execution::Executor,
+    exec::execution_plan::ExecutionPlan, exec::execution_plan::ResourceId,
+    exec::execution_plan::compile, exec::metal_backend::MetalBackend, graph::Graph,
+    load::graph_loader::pre_allocate_resources, parameters::ParamDef, parameters::ParamType,
+    parameters::ParamValue, persistence::PrimitiveRegistry, ports::ArrayType, ports::KnownItem,
+    ports::NodeInput, ports::NodeOutput, ports::NodePort, ports::PortKind, ports::PortType,
+    state_store::StateStore,
+};
+use manifold_water_gpu_mpm::matter::{
+    MASS_SCALE, MOMENTUM_SCALE, MatterGridNode, MatterPoint, block_sort_box, lattice_blocks,
+    mass_unit, momentum_unit, rounding_hash, water_lambda,
+};
 use manifold_water_liquid::lattice::LiquidLattice;
-use {manifold_water_gpu_mpm::matter::reference, manifold_water_gpu_mpm::matter::reference::Params, manifold_water_gpu_mpm::matter::reference::Point};
-use manifold_water_gpu_mpm::matter::{MASS_SCALE, MOMENTUM_SCALE, MatterGridNode, MatterPoint, block_sort_box, lattice_blocks, mass_unit, momentum_unit, rounding_hash, water_lambda};
-use manifold_node_engine::{ports::ArrayType, exec::backend::Backend, exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, ports::KnownItem, exec::metal_backend::MetalBackend, ports::NodeInput, exec::effect_node::NodeInstanceId, ports::NodeOutput, ports::NodePort, parameters::ParamDef, parameters::ParamType, parameters::ParamValue, ports::PortKind, ports::PortType, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
-
+use {
+    manifold_water_gpu_mpm::matter::reference, manifold_water_gpu_mpm::matter::reference::Params,
+    manifold_water_gpu_mpm::matter::reference::Point,
+};
 
 /// An array the test fills after pre-allocation, sized by `max_capacity`.
 pub(crate) struct HostArray {
@@ -122,12 +137,19 @@ impl Chain {
             let sort = add(&mut graph, "node.sort_particles_into_cells");
             graph.connect((src, "out"), (sort, "particles")).unwrap();
             graph.connect((sort, "order"), (p2g, "order")).unwrap();
-            graph.connect((sort, "cell_ranges"), (p2g, "ranges")).unwrap();
+            graph
+                .connect((sort, "cell_ranges"), (p2g, "ranges"))
+                .unwrap();
             let (centre, size, bin) = block_sort_box(lat);
             for (axis, name) in ["x", "y", "z"].iter().enumerate() {
                 set(&mut graph, sort, &format!("center_{name}"), centre[axis]);
                 set(&mut graph, sort, &format!("size_{name}"), size[axis]);
-                set(&mut graph, p2g, &format!("blocks_{name}"), lattice_blocks(lat)[axis] as f32);
+                set(
+                    &mut graph,
+                    p2g,
+                    &format!("blocks_{name}"),
+                    lattice_blocks(lat)[axis] as f32,
+                );
             }
             set(&mut graph, sort, "cell_size", bin);
             (src, sort)
@@ -135,7 +157,9 @@ impl Chain {
         graph.connect((acc, "out"), (zero, "in")).unwrap();
         graph.connect((pts, "out"), (p2g, "points")).unwrap();
         graph.connect((zero, "out"), (p2g, "accum")).unwrap();
-        graph.connect((p2g, "accum_out"), (update, "accum")).unwrap();
+        graph
+            .connect((p2g, "accum_out"), (update, "accum"))
+            .unwrap();
         graph.connect((grd, "out"), (update, "grid")).unwrap();
         graph.connect((pts, "out"), (g2p, "points")).unwrap();
         graph.connect((update, "grid_out"), (g2p, "grid")).unwrap();
@@ -162,7 +186,11 @@ impl Chain {
         set(&mut graph, update, "gravity_x", p.gravity[0] as f32);
         set(&mut graph, update, "gravity", p.gravity[1] as f32);
         set(&mut graph, update, "gravity_z", p.gravity[2] as f32);
-        let faces = p.closed.iter().enumerate().fold(0u32, |m, (i, &c)| m | (u32::from(c) << i));
+        let faces = p
+            .closed
+            .iter()
+            .enumerate()
+            .fold(0u32, |m, (i, &c)| m | (u32::from(c) << i));
         set(&mut graph, update, "closed_faces", faces as f32);
         set(&mut graph, g2p, "liveliness", p.liveliness as f32);
         set(&mut graph, g2p, "cohesion", p.cohesion as f32);
@@ -184,7 +212,12 @@ impl Chain {
         if let (Some((src, _)), Some(source)) = (src_sort, sort_source) {
             fill(output_of(&plan, src, "out"), source);
         }
-        let sorted = src_sort.map(|(_, sort)| (output_of(&plan, sort, "order"), output_of(&plan, sort, "cell_ranges")));
+        let sorted = src_sort.map(|(_, sort)| {
+            (
+                output_of(&plan, sort, "order"),
+                output_of(&plan, sort, "cell_ranges"),
+            )
+        });
         Self {
             graph,
             plan,
@@ -200,7 +233,8 @@ impl Chain {
 
     /// The sort's (order, ranges as start/count pairs), on the block path.
     fn sorted(&self) -> Option<(Vec<u32>, Vec<u32>)> {
-        self.sorted.map(|(order, ranges)| (self.read(order), self.read(ranges)))
+        self.sorted
+            .map(|(order, ranges)| (self.read(order), self.read(ranges)))
     }
 
     /// One substep; frame k rounds with tick k, substep 0 (the oracle's
@@ -217,8 +251,14 @@ impl Chain {
         let mut enc = device.create_encoder("matter-transfer");
         {
             let mut gpu = GpuEncoder::new(&mut enc, device);
-            self.executor
-                .execute_frame_with_state(&mut self.graph, &self.plan, time, &mut gpu, &mut self.state, 0);
+            self.executor.execute_frame_with_state(
+                &mut self.graph,
+                &self.plan,
+                time,
+                &mut gpu,
+                &mut self.state,
+                0,
+            );
         }
         enc.commit_and_wait_completed();
         self.frame += 1;
@@ -261,13 +301,18 @@ fn fixture(lat: &LiquidLattice) -> Vec<MatterPoint> {
     let mut out = Vec::with_capacity(512);
     for n in 0..512u32 {
         let (i, j, k) = (n % 8, (n / 8) % 8, n / 64);
-        let jitter = |s: u32| ((n.wrapping_mul(2654435761).wrapping_add(s) >> 8) % 1000) as f32 / 1000.0;
+        let jitter =
+            |s: u32| ((n.wrapping_mul(2654435761).wrapping_add(s) >> 8) % 1000) as f32 / 1000.0;
         let position = [
             centre_x + (i as f32 - 4.0 + 0.25 + 0.5 * jitter(1)) * 0.5 * dx,
             floor + (j as f32 + 0.25 + 0.5 * jitter(2)) * 0.5 * dx,
             centre_z + (k as f32 - 4.0 + 0.25 + 0.5 * jitter(3)) * 0.5 * dx,
         ];
-        let rel = [position[0] - centre_x, position[1] - floor, position[2] - centre_z];
+        let rel = [
+            position[0] - centre_x,
+            position[1] - floor,
+            position[2] - centre_z,
+        ];
         out.push(MatterPoint {
             position,
             id: n + 1,
@@ -322,13 +367,26 @@ fn matter_transfer_matches_reference() {
     let (dx, dv) = max_errors(&gpu, &cpu);
     eprintln!("matter_transfer_matches_reference: max |Δx| = {dx:.3e} m, max |Δv| = {dv:.3e} m/s");
     let mut fixed: Vec<Point> = points.iter().map(Point::from).collect();
-    reference::substep(&mut fixed, &lat, &Params { fixed_point: true, ..p });
+    reference::substep(
+        &mut fixed,
+        &lat,
+        &Params {
+            fixed_point: true,
+            ..p
+        },
+    );
     let (fdx, fdv) = max_errors(&gpu, &fixed);
     eprintln!("  vs the fixed-point oracle: max |Δx| = {fdx:.3e} m, max |Δv| = {fdv:.3e} m/s");
     // Section 12's tolerances hold against the oracle that rounds each grid
     // contribution to Q = 2^20 exactly as the GPU does (D5).
-    assert!(fdx <= 1.0e-5, "positions differ from the fixed-point oracle by {fdx:.3e} m");
-    assert!(fdv <= 2.0e-5, "velocities differ from the fixed-point oracle by {fdv:.3e} m/s");
+    assert!(
+        fdx <= 1.0e-5,
+        "positions differ from the fixed-point oracle by {fdx:.3e} m"
+    );
+    assert!(
+        fdv <= 2.0e-5,
+        "velocities differ from the fixed-point oracle by {fdv:.3e} m/s"
+    );
     // Against continuous f64 the positions still hold; velocities carry the
     // Q = 2^20 momentum quantization, largest at low-mass surface nodes
     // (1.05e-4 m/s measured at dt = 1 ms; one LSB is dx/dt/2^20 = 6e-5 m/s
@@ -347,7 +405,10 @@ fn matter_grid_mass_matches_particle_mass() {
     let accum = chain.accum();
     let unit = f64::from(mass_unit(lat.cell_size())) / f64::from(MASS_SCALE);
     let grid: f64 = accum.chunks_exact(4).map(|w| f64::from(w[3]) * unit).sum();
-    let particles: f64 = points.iter().map(|pt| f64::from(pt.affine_y[3]) * p.density).sum();
+    let particles: f64 = points
+        .iter()
+        .map(|pt| f64::from(pt.affine_y[3]) * p.density)
+        .sum();
     let rel = (grid - particles).abs() / particles;
     eprintln!("matter_grid_mass_matches_particle_mass: relative error {rel:.3e}");
     assert!(rel <= 1.0e-5, "grid {grid} vs particles {particles}");
@@ -366,10 +427,18 @@ fn matter_accumulator_words_match_fixed_point_oracle() {
     chain.step();
     let gpu = chain.accum();
     let mut fixed: Vec<Point> = points.iter().map(Point::from).collect();
-    let grid = reference::substep(&mut fixed, &lat, &Params { fixed_point: true, ..p });
+    let grid = reference::substep(
+        &mut fixed,
+        &lat,
+        &Params {
+            fixed_point: true,
+            ..p
+        },
+    );
     let m_unit = f64::from(mass_unit(lat.cell_size()));
     let to_mass = f64::from(MASS_SCALE) / m_unit;
-    let to_momentum = f64::from(MOMENTUM_SCALE) / m_unit / f64::from(momentum_unit(lat.cell_size(), p.dt));
+    let to_momentum =
+        f64::from(MOMENTUM_SCALE) / m_unit / f64::from(momentum_unit(lat.cell_size(), p.dt));
     // Large words sum f32 contributions of up to 1e8 that partly cancel, so
     // they differ from the f64 oracle by f32 precision: tens of LSB, about
     // 1e-10·dx/dt of velocity at a full node.
@@ -392,10 +461,18 @@ fn matter_accumulator_words_match_fixed_point_oracle() {
         }
     }
     let rate = exact as f64 / small as f64;
-    eprintln!("matter_accumulator_words_match_fixed_point_oracle: {exact}/{small} small words exact ({rate:.4}), large words within {worst_large} LSB");
-    assert!(small > 1000, "the fixture exercises few small words: {small}");
+    eprintln!(
+        "matter_accumulator_words_match_fixed_point_oracle: {exact}/{small} small words exact ({rate:.4}), large words within {worst_large} LSB"
+    );
+    assert!(
+        small > 1000,
+        "the fixture exercises few small words: {small}"
+    );
     assert!(rate >= 0.95, "small words match only {rate:.4}");
-    assert!(worst_large <= 256.0, "large words differ by {worst_large} LSB");
+    assert!(
+        worst_large <= 256.0,
+        "large words differ by {worst_large} LSB"
+    );
 }
 
 /// D6: block-local P2G adds the same integers as one thread per point, for
@@ -412,7 +489,10 @@ fn matter_block_p2g_bit_identical() {
         let mut chain = Chain::build(&lat, &points, &p, source);
         chain.step();
         let (ranked, covered) = chain.sorted().map_or((0, 0), |(order, ranges)| {
-            (order.iter().filter(|&&i| i != u32::MAX).count(), ranges.chunks_exact(2).map(|r| r[1]).sum::<u32>())
+            (
+                order.iter().filter(|&&i| i != u32::MAX).count(),
+                ranges.chunks_exact(2).map(|r| r[1]).sum::<u32>(),
+            )
         });
         (chain.accum(), chain.points(), ranked, covered)
     };
@@ -426,7 +506,8 @@ fn matter_block_p2g_bit_identical() {
         let mut tally = [0usize; 2];
         for (point, from) in points.iter().zip(source) {
             let (sorted, now) = (base(from.position), base(point.position));
-            let in_tile = (0..3).all(|axis| (0..=3).contains(&(now[axis] - sorted[axis].div_euclid(4) * 4)));
+            let in_tile =
+                (0..3).all(|axis| (0..=3).contains(&(now[axis] - sorted[axis].div_euclid(4) * 4)));
             tally[usize::from(!in_tile)] += 1;
         }
         tally
@@ -442,12 +523,21 @@ fn matter_block_p2g_bit_identical() {
     };
     let drifted = shift(&|_, axis| [1.5, 0.75, 0.0][axis]);
     let jittered = shift(&|id, axis| {
-        (rounding_hash(id.wrapping_mul(3).wrapping_add(axis as u32)) >> 8) as f32 / 16_777_216.0 * 2.4 - 1.2
+        (rounding_hash(id.wrapping_mul(3).wrapping_add(axis as u32)) >> 8) as f32 / 16_777_216.0
+            * 2.4
+            - 1.2
     });
     let nonzero = plain.iter().filter(|&&w| w != 0).count();
-    eprintln!("matter_block_p2g_bit_identical: {nonzero} nonzero words over {} blocks", lattice_blocks(&lat).iter().product::<u32>());
+    eprintln!(
+        "matter_block_p2g_bit_identical: {nonzero} nonzero words over {} blocks",
+        lattice_blocks(&lat).iter().product::<u32>()
+    );
     assert!(nonzero > 1000, "the fixture touches few nodes: {nonzero}");
-    for (name, source) in [("sorted", &points), ("drifted", &drifted), ("jittered", &jittered)] {
+    for (name, source) in [
+        ("sorted", &points),
+        ("drifted", &drifted),
+        ("jittered", &jittered),
+    ] {
         let tally = paths(source);
         let (words, moved, ranked, covered) = step(Some(source));
         let differ = plain.iter().zip(&words).filter(|(a, b)| a != b).count();
@@ -460,11 +550,24 @@ fn matter_block_p2g_bit_identical() {
             "  {name}: sort ranked {ranked}, ranges cover {covered}; points in tile {}, global {}; {differ} words and {points_differ} points differ",
             tally[0], tally[1]
         );
-        assert_eq!(covered as usize, points.len(), "{name}: the sort covered every point");
-        assert_eq!(differ, 0, "{name}: block P2G differs from the per-point path");
-        assert_eq!(points_differ, 0, "{name}: the points after the step differ from the per-point path");
+        assert_eq!(
+            covered as usize,
+            points.len(),
+            "{name}: the sort covered every point"
+        );
+        assert_eq!(
+            differ, 0,
+            "{name}: block P2G differs from the per-point path"
+        );
+        assert_eq!(
+            points_differ, 0,
+            "{name}: the points after the step differ from the per-point path"
+        );
         if name == "jittered" {
-            assert!(tally.iter().all(|&n| n >= 20), "{name} exercises every path: {tally:?}");
+            assert!(
+                tally.iter().all(|&n| n >= 20),
+                "{name} exercises every path: {tally:?}"
+            );
         }
     }
 }
@@ -480,15 +583,31 @@ fn matter_hundred_substeps_match_reference() {
     for step in 0..100 {
         chain.step();
         reference::substep(&mut cpu, &lat, &p);
-        reference::substep(&mut fixed, &lat, &Params { fixed_point: true, tick_index: step, ..p });
+        reference::substep(
+            &mut fixed,
+            &lat,
+            &Params {
+                fixed_point: true,
+                tick_index: step,
+                ..p
+            },
+        );
     }
     let (dx, dv) = max_errors(&chain.points(), &cpu);
-    eprintln!("matter_hundred_substeps_match_reference: max |Δx| = {dx:.3e} m, max |Δv| = {dv:.3e} m/s");
+    eprintln!(
+        "matter_hundred_substeps_match_reference: max |Δx| = {dx:.3e} m, max |Δv| = {dv:.3e} m/s"
+    );
     let (fdx, fdv) = max_errors(&chain.points(), &fixed);
     eprintln!("  vs the fixed-point oracle: max |Δx| = {fdx:.3e} m, max |Δv| = {fdv:.3e} m/s");
     // f32 against f64 over 100 substeps (4.7e-6 m, 8.4e-5 m/s measured).
-    assert!(fdx <= 1.0e-5, "positions differ from the fixed-point oracle by {fdx:.3e} m");
-    assert!(fdv <= 2.0e-4, "velocities differ from the fixed-point oracle by {fdv:.3e} m/s");
+    assert!(
+        fdx <= 1.0e-5,
+        "positions differ from the fixed-point oracle by {fdx:.3e} m"
+    );
+    assert!(
+        fdv <= 2.0e-4,
+        "velocities differ from the fixed-point oracle by {fdv:.3e} m/s"
+    );
     // Plus the accumulated Q = 2^20 quantization (9.6e-5 m, 1.4e-3 m/s
     // measured): a fraction of a millimetre against a 62.5 mm cell.
     assert!(dx <= 2.0e-4, "positions differ by {dx:.3e} m");

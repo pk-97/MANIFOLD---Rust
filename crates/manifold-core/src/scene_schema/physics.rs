@@ -36,32 +36,149 @@ fn body(fields: &ItemFields) -> bool {
 }
 
 pub static PHYSICS_ROWS: [PropertyRow; 26] = [
-    row("mass", BODY, ControlGroup::Body, setup()).unit(Unit::Kilograms).when(body),
+    row("mass", BODY, ControlGroup::Body, setup())
+        .unit(Unit::Kilograms)
+        .when(body),
     row("bounce", BODY, ControlGroup::Body, setup()).when(any_physics),
     row("friction", BODY, ControlGroup::Body, setup()).when(any_physics),
-    row("motion", BODY, ControlGroup::Body, Exposure::Automatic("the Physics setting: Collider is Fixed, Body is Moving")),
-    row("enabled", BODY, ControlGroup::Body, Exposure::Internal("an item with physics is always in the world")),
-    row("release_count", BODY, ControlGroup::Body, Exposure::Internal("breaking apart is not a scene setting")),
-    row("fragment_parent", BODY, ControlGroup::Body, Exposure::Internal("breaking apart is not a scene setting")),
-    row("path", BODY, ControlGroup::Body, Exposure::Internal(FROM_MESH)),
-    row("mesh_index", BODY, ControlGroup::Body, Exposure::Internal(FROM_MESH)),
-    row("primitive_index", BODY, ControlGroup::Body, Exposure::Internal(FROM_MESH)),
-    row("material_index", BODY, ControlGroup::Body, Exposure::Internal(FROM_MESH)),
-    row("fit", BODY, ControlGroup::Body, Exposure::Internal(FROM_MESH)),
-    row("recenter", BODY, ControlGroup::Body, Exposure::Internal(FROM_MESH)),
-    row("translate_x", BODY, ControlGroup::Body, Exposure::Internal(FROM_MESH)),
-    row("translate_y", BODY, ControlGroup::Body, Exposure::Internal(FROM_MESH)),
-    row("translate_z", BODY, ControlGroup::Body, Exposure::Internal(FROM_MESH)),
-    row("fragment_count", BODY, ControlGroup::Body, Exposure::Internal(FROM_MESH)),
-    row("fragment_index", BODY, ControlGroup::Body, Exposure::Internal(FROM_MESH)),
-    row("copy_count", BODY, ControlGroup::Body, Exposure::Internal(COPIES)),
-    row("copy_size_spacing", BODY, ControlGroup::Body, Exposure::Internal(COPIES)),
-    row("copy_columns", BODY, ControlGroup::Body, Exposure::Internal(COPIES)),
-    row("copy_layout", BODY, ControlGroup::Body, Exposure::Internal(COPIES)),
-    row("copy_turn_x", BODY, ControlGroup::Body, Exposure::Internal(COPIES)),
-    row("copy_turn_y", BODY, ControlGroup::Body, Exposure::Internal(COPIES)),
-    row("copy_turn_z", BODY, ControlGroup::Body, Exposure::Internal(COPIES)),
-    row("parts", BODY, ControlGroup::Body, Exposure::Automatic("the objects inside a group body")),
+    row(
+        "motion",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Automatic("the Physics setting: Collider is Fixed, Body is Moving"),
+    ),
+    row(
+        "enabled",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal("an item with physics is always in the world"),
+    ),
+    row(
+        "release_count",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal("breaking apart is not a scene setting"),
+    ),
+    row(
+        "fragment_parent",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal("breaking apart is not a scene setting"),
+    ),
+    row(
+        "path",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal(FROM_MESH),
+    ),
+    row(
+        "mesh_index",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal(FROM_MESH),
+    ),
+    row(
+        "primitive_index",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal(FROM_MESH),
+    ),
+    row(
+        "material_index",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal(FROM_MESH),
+    ),
+    row(
+        "fit",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal(FROM_MESH),
+    ),
+    row(
+        "recenter",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal(FROM_MESH),
+    ),
+    row(
+        "translate_x",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal(FROM_MESH),
+    ),
+    row(
+        "translate_y",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal(FROM_MESH),
+    ),
+    row(
+        "translate_z",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal(FROM_MESH),
+    ),
+    row(
+        "fragment_count",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal(FROM_MESH),
+    ),
+    row(
+        "fragment_index",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal(FROM_MESH),
+    ),
+    row(
+        "copy_count",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal(COPIES),
+    ),
+    row(
+        "copy_size_spacing",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal(COPIES),
+    ),
+    row(
+        "copy_columns",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal(COPIES),
+    ),
+    row(
+        "copy_layout",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal(COPIES),
+    ),
+    row(
+        "copy_turn_x",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal(COPIES),
+    ),
+    row(
+        "copy_turn_y",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal(COPIES),
+    ),
+    row(
+        "copy_turn_z",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Internal(COPIES),
+    ),
+    row(
+        "parts",
+        BODY,
+        ControlGroup::Body,
+        Exposure::Automatic("the objects inside a group body"),
+    ),
 ];
 
 /// What one item is to physics.
@@ -166,21 +283,41 @@ fn takes_group_body(item: &Item, setting: PhysicsSetting) -> bool {
     count > 0
 }
 
-fn classify(items: &[Item], within: &Within, local: Option<&ItemId>, parts: &mut HashMap<ItemId, PhysicsPart>) {
+fn classify(
+    items: &[Item],
+    within: &Within,
+    local: Option<&ItemId>,
+    parts: &mut HashMap<ItemId, PhysicsPart>,
+) {
     for item in items {
         let setting = item.fields.physics();
-        let member = |root: &ItemId| PhysicsPart::Member { root: root.clone(), local: local.cloned() };
+        let member = |root: &ItemId| PhysicsPart::Member {
+            root: root.clone(),
+            local: local.cloned(),
+        };
         match &item.fields {
             ItemFields::Group(_) => {
                 let (part, inner, inner_local) = match within {
                     Within::Copies => (PhysicsPart::Off, Within::Copies, None),
                     _ if copies(&item.fields) => (PhysicsPart::Off, Within::Copies, None),
-                    Within::Body(root) => (member(root), Within::Body(root.clone()), Some(&item.id)),
-                    Within::Collider(_) if setting == PhysicsSetting::Body && takes_group_body(item, setting) => {
-                        (PhysicsPart::Group(setting), Within::Body(item.id.clone()), None)
+                    Within::Body(root) => {
+                        (member(root), Within::Body(root.clone()), Some(&item.id))
                     }
-                    Within::Collider(root) => (member(root), Within::Collider(root.clone()), Some(&item.id)),
-                    Within::Free if setting != PhysicsSetting::None && takes_group_body(item, setting) => {
+                    Within::Collider(_)
+                        if setting == PhysicsSetting::Body && takes_group_body(item, setting) =>
+                    {
+                        (
+                            PhysicsPart::Group(setting),
+                            Within::Body(item.id.clone()),
+                            None,
+                        )
+                    }
+                    Within::Collider(root) => {
+                        (member(root), Within::Collider(root.clone()), Some(&item.id))
+                    }
+                    Within::Free
+                        if setting != PhysicsSetting::None && takes_group_body(item, setting) =>
+                    {
                         let inner = if setting == PhysicsSetting::Body {
                             Within::Body(item.id.clone())
                         } else {
@@ -198,7 +335,9 @@ fn classify(items: &[Item], within: &Within, local: Option<&ItemId>, parts: &mut
                     _ if !solid(&object.shape) => PhysicsPart::Off,
                     Within::Copies => PhysicsPart::Off,
                     _ if object.copies => PhysicsPart::Off,
-                    Within::Collider(_) if setting == PhysicsSetting::Body => PhysicsPart::Solo(setting),
+                    Within::Collider(_) if setting == PhysicsSetting::Body => {
+                        PhysicsPart::Solo(setting)
+                    }
                     Within::Body(root) | Within::Collider(root) => member(root),
                     Within::Free if setting != PhysicsSetting::None => PhysicsPart::Solo(setting),
                     Within::Free => PhysicsPart::Off,

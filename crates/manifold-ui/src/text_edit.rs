@@ -49,7 +49,11 @@ impl TextEditModel {
     /// everything" convention call [`Self::select_all`] right after (P5b).
     pub fn new(text: &str) -> Self {
         let len = text.len();
-        Self { text: text.to_string(), caret: len, anchor: len }
+        Self {
+            text: text.to_string(),
+            caret: len,
+            anchor: len,
+        }
     }
 
     pub fn text(&self) -> &str {
@@ -118,7 +122,11 @@ impl TextEditModel {
         // Skip whitespace immediately to the left, then the word run.
         while i > 0 {
             let p = self.prev_boundary(i);
-            if self.text[p..i].chars().next().is_some_and(char::is_whitespace) {
+            if self.text[p..i]
+                .chars()
+                .next()
+                .is_some_and(char::is_whitespace)
+            {
                 i = p;
             } else {
                 break;
@@ -157,7 +165,11 @@ impl TextEditModel {
         }
         while j < len {
             let n = self.next_boundary(j);
-            if self.text[j..n].chars().next().is_some_and(char::is_whitespace) {
+            if self.text[j..n]
+                .chars()
+                .next()
+                .is_some_and(char::is_whitespace)
+            {
                 j = n;
             } else {
                 break;
@@ -245,7 +257,11 @@ impl TextEditModel {
             self.anchor = start;
             return;
         }
-        let target = if word { self.word_left(self.caret) } else { self.prev_boundary(self.caret) };
+        let target = if word {
+            self.word_left(self.caret)
+        } else {
+            self.prev_boundary(self.caret)
+        };
         self.caret = target;
         if !select {
             self.anchor = self.caret;
@@ -259,7 +275,11 @@ impl TextEditModel {
             self.anchor = end;
             return;
         }
-        let target = if word { self.word_right(self.caret) } else { self.next_boundary(self.caret) };
+        let target = if word {
+            self.word_right(self.caret)
+        } else {
+            self.next_boundary(self.caret)
+        };
         self.caret = target;
         if !select {
             self.anchor = self.caret;
@@ -291,11 +311,12 @@ impl TextEditModel {
     /// no word to select.
     pub fn select_word_at(&mut self, byte: usize) {
         let byte = byte.min(self.text.len());
-        let byte = if self.text.is_char_boundary(byte) { byte } else { self.prev_boundary(byte + 1) };
-        let on_word_char = self.text[byte..]
-            .chars()
-            .next()
-            .is_some_and(is_word_char);
+        let byte = if self.text.is_char_boundary(byte) {
+            byte
+        } else {
+            self.prev_boundary(byte + 1)
+        };
+        let on_word_char = self.text[byte..].chars().next().is_some_and(is_word_char);
         if !on_word_char {
             self.caret = byte;
             self.anchor = byte;
@@ -329,7 +350,11 @@ impl TextEditModel {
     /// fresh caret (plain click) — the anchor moves to `byte` too.
     pub fn caret_to(&mut self, byte: usize, extend: bool) {
         let byte = byte.min(self.text.len());
-        let byte = if self.text.is_char_boundary(byte) { byte } else { self.prev_boundary(byte + 1) };
+        let byte = if self.text.is_char_boundary(byte) {
+            byte
+        } else {
+            self.prev_boundary(byte + 1)
+        };
         self.caret = byte;
         if !extend {
             self.anchor = byte;
@@ -341,7 +366,11 @@ impl TextEditModel {
     /// to `caret_to`'s single-shot click/shift-click.
     pub fn drag_to(&mut self, byte: usize) {
         let byte = byte.min(self.text.len());
-        let byte = if self.text.is_char_boundary(byte) { byte } else { self.prev_boundary(byte + 1) };
+        let byte = if self.text.is_char_boundary(byte) {
+            byte
+        } else {
+            self.prev_boundary(byte + 1)
+        };
         self.caret = byte;
     }
 }
@@ -456,7 +485,10 @@ pub fn line_caret_end(text: &str, lines: &[Range<usize>], i: usize) -> usize {
     let l = &lines[i];
     let soft = lines.get(i + 1).is_some_and(|n| n.start == l.end);
     if soft && l.end > l.start {
-        text[..l.end].char_indices().next_back().map_or(l.start, |(p, _)| p)
+        text[..l.end]
+            .char_indices()
+            .next_back()
+            .map_or(l.start, |(p, _)| p)
     } else {
         l.end
     }
@@ -634,7 +666,11 @@ mod tests {
         assert_eq!(m.text().len(), 6);
         m.caret_to(5, false); // right after the emoji, before 'b'
         m.backspace();
-        assert_eq!(m.text(), "ab", "backspace removed the whole emoji, not a byte of it");
+        assert_eq!(
+            m.text(),
+            "ab",
+            "backspace removed the whole emoji, not a byte of it"
+        );
     }
 
     #[test]
@@ -656,7 +692,11 @@ mod tests {
         m.move_right(false, true);
         assert_eq!(m.caret(), 5, "end of 'hello'");
         m.move_right(false, true);
-        assert_eq!(m.caret(), 11, "end of 'world' (skips the space, then the word)");
+        assert_eq!(
+            m.caret(),
+            11,
+            "end of 'world' (skips the space, then the word)"
+        );
     }
 
     #[test]
@@ -769,7 +809,11 @@ mod tests {
         m.drag_to(8);
         assert_eq!(m.selection(), 2..8);
         m.drag_to(0);
-        assert_eq!(m.selection(), 0..2, "dragging back past the anchor flips the range");
+        assert_eq!(
+            m.selection(),
+            0..2,
+            "dragging back past the anchor flips the range"
+        );
     }
 
     // ── take_text ────────────────────────────────────────────────────
@@ -807,10 +851,26 @@ mod tests {
     fn byte_offset_for_x_rounds_to_the_nearer_glyph_edge() {
         let mut measure = monospace;
         // "hi": h occupies [0,10), i occupies [10,20).
-        assert_eq!(byte_offset_for_x("hi", 4.0, &mut measure), 0, "before h's midpoint (5) -> before h");
-        assert_eq!(byte_offset_for_x("hi", 6.0, &mut measure), 1, "past h's midpoint -> after h");
-        assert_eq!(byte_offset_for_x("hi", 14.0, &mut measure), 1, "before i's midpoint (15) -> before i");
-        assert_eq!(byte_offset_for_x("hi", 16.0, &mut measure), 2, "past i's midpoint -> after i");
+        assert_eq!(
+            byte_offset_for_x("hi", 4.0, &mut measure),
+            0,
+            "before h's midpoint (5) -> before h"
+        );
+        assert_eq!(
+            byte_offset_for_x("hi", 6.0, &mut measure),
+            1,
+            "past h's midpoint -> after h"
+        );
+        assert_eq!(
+            byte_offset_for_x("hi", 14.0, &mut measure),
+            1,
+            "before i's midpoint (15) -> before i"
+        );
+        assert_eq!(
+            byte_offset_for_x("hi", 16.0, &mut measure),
+            2,
+            "past i's midpoint -> after i"
+        );
     }
 
     #[test]
@@ -857,7 +917,11 @@ mod tests {
         let text = "hello world";
         let l = lines(text, Some(60.0));
         assert_eq!(line_of(&l, 6), 1);
-        assert_eq!(line_caret_end(text, &l, 0), 5, "stops before the trailing space");
+        assert_eq!(
+            line_caret_end(text, &l, 0),
+            5,
+            "stops before the trailing space"
+        );
         assert_eq!(line_caret_end(text, &l, 1), 11);
     }
 
@@ -866,17 +930,28 @@ mod tests {
         let text = "ab\ncdef";
         let l = lines(text, None);
         assert_eq!(byte_on_line(text, &l, 1, 21.0, &mut monospace), 5);
-        assert_eq!(byte_on_line(text, &l, 0, 500.0, &mut monospace), 2, "clamps to line end");
+        assert_eq!(
+            byte_on_line(text, &l, 0, 500.0, &mut monospace),
+            2,
+            "clamps to line end"
+        );
     }
 
     #[test]
     fn up_and_down_keep_x_and_fall_off_to_text_ends() {
         let text = "abcd\nef\nghij";
         let l = lines(text, None);
-        assert_eq!(vertical_target(text, &l, 3, true, &mut monospace), 7, "x=30 clamps to end of 'ef'");
+        assert_eq!(
+            vertical_target(text, &l, 3, true, &mut monospace),
+            7,
+            "x=30 clamps to end of 'ef'"
+        );
         assert_eq!(vertical_target(text, &l, 6, true, &mut monospace), 9);
         assert_eq!(vertical_target(text, &l, 9, false, &mut monospace), 6);
         assert_eq!(vertical_target(text, &l, 2, false, &mut monospace), 0);
-        assert_eq!(vertical_target(text, &l, 9, true, &mut monospace), text.len());
+        assert_eq!(
+            vertical_target(text, &l, 9, true, &mut monospace),
+            text.len()
+        );
     }
 }

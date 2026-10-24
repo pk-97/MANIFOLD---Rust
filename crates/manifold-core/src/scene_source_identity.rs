@@ -12,10 +12,10 @@ use std::{
 
 use sha2::{Digest, Sha256};
 
+use crate::NodeId;
 use crate::effect_graph_def::{
     BindingTarget, EffectGraphDef, EffectGraphNode, GroupDef, SerializedParamValue, leaf_scope,
 };
-use crate::NodeId;
 
 /// Failure while deriving a source definition identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -217,10 +217,7 @@ pub fn relocate_scene_source_asset(
         let leaf = resolve_relocation_reference(&owner.nodes, reference)?;
         let Some(flat_node) = flat_by_id.get(leaf.node_id.as_str()) else {
             return Err(SceneSourceRelocationError::InvalidGraph {
-                detail: format!(
-                    "source reference '{}' has no flattened leaf",
-                    reference
-                ),
+                detail: format!("source reference '{}' has no flattened leaf", reference),
             });
         };
         let before_params = effective_source_params(owner, flat_node)
@@ -473,7 +470,8 @@ fn relocate_source_path(
     }
     let leaf = matches.into_iter().next().expect("unique leaf checked");
     if let Some(SerializedParamValue::String { value }) = leaf.params.get_mut("path")
-        && value == old {
+        && value == old
+    {
         *value = new.to_string();
     }
     Ok(())
@@ -498,7 +496,8 @@ fn update_group_routes(
         .collect();
     for (name, _) in routes {
         if let Some(SerializedParamValue::String { value }) = group_params.get_mut(&name)
-            && value == old {
+            && value == old
+        {
             *value = new.to_string();
         }
         if let Some(param) = group
@@ -507,7 +506,8 @@ fn update_group_routes(
             .iter_mut()
             .find(|param| param.name == name)
             && let Some(SerializedParamValue::String { value }) = param.default.as_mut()
-            && value == old {
+            && value == old
+        {
             *value = new.to_string();
         }
     }

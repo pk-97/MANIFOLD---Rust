@@ -415,7 +415,11 @@ mod tests {
         // Retarget while mid-flight: the new tween must start from wherever
         // we are right now, not snap back to the original `from` (0.0).
         a.set_target(20.0);
-        assert_eq!(a.value(), mid_value, "retarget must not jump on the same frame");
+        assert_eq!(
+            a.value(),
+            mid_value,
+            "retarget must not jump on the same frame"
+        );
         assert!(a.is_animating());
 
         // One more full duration later it settles at the NEW target, and the
@@ -466,7 +470,10 @@ mod tests {
         for _ in 0..20 {
             a.tick(5.0);
             let v = a.value();
-            assert!((-0.001..=1.001).contains(&v), "ease must stay within [0,1]: {v}");
+            assert!(
+                (-0.001..=1.001).contains(&v),
+                "ease must stay within [0,1]: {v}"
+            );
             assert!(v >= last - 1e-4, "ease must be monotonic");
             last = v;
         }
@@ -523,16 +530,26 @@ mod tests {
     fn flip_offsets_start_at_the_pre_reorder_delta_and_ease_to_zero() {
         let _g = lock();
         let mut flip = FlipList::default();
-        let before = vec![Rect::new(0.0, 0.0, 10.0, 10.0), Rect::new(0.0, 50.0, 10.0, 10.0)];
+        let before = vec![
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            Rect::new(0.0, 50.0, 10.0, 10.0),
+        ];
         flip.capture(&before);
 
         // Item 0 moved from y=0 to y=100; item 1 stayed put.
-        let after = vec![Rect::new(0.0, 100.0, 10.0, 10.0), Rect::new(0.0, 50.0, 10.0, 10.0)];
+        let after = vec![
+            Rect::new(0.0, 100.0, 10.0, 10.0),
+            Rect::new(0.0, 50.0, 10.0, 10.0),
+        ];
         let offsets = flip.play(&after, 100.0);
         assert_eq!(offsets.len(), 2);
         // Pre-reorder offset for item 0: before.y - after.y = 0 - 100 = -100.
         assert_eq!(offsets[0].1.value(), -100.0);
-        assert_eq!(offsets[1].1.value(), 0.0, "item that didn't move has zero offset");
+        assert_eq!(
+            offsets[1].1.value(),
+            0.0,
+            "item that didn't move has zero offset"
+        );
 
         assert!(flip.tick(50.0));
         let mid = flip.offsets()[0].1.value();
@@ -548,7 +565,10 @@ mod tests {
         let _g = lock();
         let mut flip = FlipList::default();
         flip.capture(&[Rect::new(0.0, 0.0, 10.0, 10.0)]);
-        let after = vec![Rect::new(0.0, 0.0, 10.0, 10.0), Rect::new(0.0, 20.0, 10.0, 10.0)];
+        let after = vec![
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            Rect::new(0.0, 20.0, 10.0, 10.0),
+        ];
         let offsets = flip.play(&after, 100.0);
         assert_eq!(offsets[1].0.value(), 0.0);
         assert_eq!(offsets[1].1.value(), 0.0);

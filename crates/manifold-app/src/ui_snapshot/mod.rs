@@ -24,7 +24,7 @@ mod thumbs;
 
 use std::path::{Path, PathBuf};
 
-use crate::ui_bridge::{push_state, sync_inspector_data, sync_project_all, TransportDisplayCache};
+use crate::ui_bridge::{TransportDisplayCache, push_state, sync_inspector_data, sync_project_all};
 use crate::ui_root::UIRoot;
 
 // Logical UI size = texture size (rendered 1:1; `UIRenderer::prepare`'s scale is
@@ -44,7 +44,16 @@ fn out_dir(scene: &str) -> PathBuf {
 /// already a bare identifier, so this is a no-op for them and their output
 /// paths stay byte-identical.
 fn sanitize_scene_name(scene: &str) -> String {
-    scene.chars().map(|c| if c == '/' || c == ':' || c == ' ' { '_' } else { c }).collect()
+    scene
+        .chars()
+        .map(|c| {
+            if c == '/' || c == ':' || c == ' ' {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 /// Entry dispatched from `main()` when `argv[1] == "ui-snap"`. `args` is the
@@ -65,7 +74,9 @@ pub fn run(args: &[String]) {
     }
     if scene == "probe" {
         let (Some(png), Some(coords)) = (args.get(2), arg_value(args, "--probe")) else {
-            eprintln!("ui-snap probe: usage: cargo xtask ui-snap probe <file.png> --probe x,y[;x,y...]");
+            eprintln!(
+                "ui-snap probe: usage: cargo xtask ui-snap probe <file.png> --probe x,y[;x,y...]"
+            );
             std::process::exit(2);
         };
         readback::cmd_probe(png, &coords);
@@ -79,11 +90,15 @@ pub fn run(args: &[String]) {
     if scene == "batch" {
         let pairs: Vec<&String> = args[2..].iter().filter(|a| *a != "--record-work").collect();
         if pairs.is_empty() || !pairs.len().is_multiple_of(2) {
-            eprintln!("ui-snap batch: usage: ui-snap batch [--record-work] <scene> <script.json> [<scene> <script.json> ...]");
+            eprintln!(
+                "ui-snap batch: usage: ui-snap batch [--record-work] <scene> <script.json> [<scene> <script.json> ...]"
+            );
             std::process::exit(2);
         }
-        let flows: Vec<(String, String)> =
-            pairs.chunks(2).map(|p| (p[0].clone(), p[1].clone())).collect();
+        let flows: Vec<(String, String)> = pairs
+            .chunks(2)
+            .map(|p| (p[0].clone(), p[1].clone()))
+            .collect();
         script::run_batch(&flows, record_work);
         return;
     }
@@ -137,10 +152,14 @@ pub fn run(args: &[String]) {
     let probe_spec = arg_value(args, "--probe");
     let crop_spec = arg_value(args, "--crop");
     if probe_spec.is_some() || crop_spec.is_some() {
-        let unsupported = script_path.is_some()
-            || matches!(scene, "all" | "graph" | "editor" | "transform");
+        let unsupported =
+            script_path.is_some() || matches!(scene, "all" | "graph" | "editor" | "transform");
         if unsupported {
-            let target = if script_path.is_some() { "--script runs" } else { scene };
+            let target = if script_path.is_some() {
+                "--script runs"
+            } else {
+                scene
+            };
             eprintln!(
                 "ui-snap: --probe/--crop don't apply to {target}; use the standalone form on a \
                  specific file: cargo xtask ui-snap probe <file.png> --probe x,y[;x,y...]  |  \
@@ -165,7 +184,17 @@ pub fn run(args: &[String]) {
         // `--probe`/`--crop` were rejected above (exit 2) — which of the five
         // PNGs this sweep writes would "the" target be is ambiguous by design.
         for s in ["timeline", "states", "inspector"] {
-            render_ui_scene(s, want_dump, false, false, want_thumbs, None, None, None, None);
+            render_ui_scene(
+                s,
+                want_dump,
+                false,
+                false,
+                want_thumbs,
+                None,
+                None,
+                None,
+                None,
+            );
         }
         run_graph_preset("Mirror");
         run_editor_preset("FluidSim2D", want_dump, false, false);
@@ -347,7 +376,10 @@ fn render_ui_scene(
     if let Some(y) = scroll_seed {
         let x = ui.viewport.scroll_x_beats().as_f32();
         ui.viewport.set_scroll(x, y);
-        println!("ui-snap: scroll-seed y={y} (viewport clamped to {})", ui.viewport.scroll_y_px());
+        println!(
+            "ui-snap: scroll-seed y={y} (viewport clamped to {})",
+            ui.viewport.scroll_y_px()
+        );
         sync_build(&mut ui, &data, zoom_ppb);
     }
 
@@ -363,7 +395,8 @@ fn render_ui_scene(
     // calls). `Some(0.9)` unconditionally so it lights up every open
     // meter without needing to reproduce each row's `fire_meter_key`.
     if scene == "inspector" {
-        ui.inspector.update_fire_meters(&mut ui.tree, &|_key| Some(0.9), 1.0 / 60.0);
+        ui.inspector
+            .update_fire_meters(&mut ui.tree, &|_key| Some(0.9), 1.0 / 60.0);
     }
 
     render_and_dump(
@@ -387,8 +420,11 @@ fn render_ui_scene(
         let surfaces = ui.inspector.catalog(&ui.tree);
         let json = dump::catalog_json("inspector", &surfaces);
         let json_path = dir.join(format!("{scene}.catalog.json"));
-        std::fs::write(&json_path, serde_json::to_string_pretty(&json).expect("serialize catalog"))
-            .expect("write catalog json");
+        std::fs::write(
+            &json_path,
+            serde_json::to_string_pretty(&json).expect("serialize catalog"),
+        )
+        .expect("write catalog json");
         println!("ui-snap: wrote {}", json_path.display());
         print!("{}", dump::terse_catalog("inspector", &surfaces));
     }
@@ -455,15 +491,19 @@ fn render_ui_scene(
 fn run_graph_preset(preset: &str) {
     let pid = manifold_core::PresetTypeId::from_string(preset.to_string());
 
-    let Some(view) = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&pid) else {
+    let Some(view) = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&pid)
+    else {
         eprintln!(
             "ui-snap graph: no graph view for preset '{preset}' \
              (needs a JSON preset carrying presetMetadata)"
         );
         std::process::exit(2);
     };
-    let Some(rg_snap) = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(&view) else {
-        eprintln!("ui-snap graph: snapshot_for_view failed for '{preset}' (def failed to materialize)");
+    let Some(rg_snap) = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(&view)
+    else {
+        eprintln!(
+            "ui-snap graph: snapshot_for_view failed for '{preset}' (def failed to materialize)"
+        );
         std::process::exit(2);
     };
     let gv_snap = crate::ui_translate::graph_snapshot_to_ui(&rg_snap);
@@ -490,22 +530,21 @@ fn run_graph_preset(preset: &str) {
 /// for one generator preset. Builds a one-layer fixture `Project` carrying the
 /// preset (`fixtures::generator_editor_fixture`) so the right lane's card is the
 /// real `ParamSurface`, not synthesized — see `render::render_graph_editor_to_png`.
-fn run_editor_preset(
-    preset: &str,
-    want_dump: bool,
-    open_node_picker: bool,
-    open_perf_hud: bool,
-) {
+fn run_editor_preset(preset: &str, want_dump: bool, open_node_picker: bool, open_perf_hud: bool) {
     let pid = manifold_core::PresetTypeId::from_string(preset.to_string());
-    let Some(view) = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&pid) else {
+    let Some(view) = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&pid)
+    else {
         eprintln!(
             "ui-snap editor: no graph view for preset '{preset}' \
              (needs a JSON preset carrying presetMetadata)"
         );
         std::process::exit(2);
     };
-    let Some(rg_snap) = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(&view) else {
-        eprintln!("ui-snap editor: snapshot_for_view failed for '{preset}' (def failed to materialize)");
+    let Some(rg_snap) = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(&view)
+    else {
+        eprintln!(
+            "ui-snap editor: snapshot_for_view failed for '{preset}' (def failed to materialize)"
+        );
         std::process::exit(2);
     };
     let Some((project, target, selection)) = fixtures::generator_editor_fixture(preset) else {
@@ -545,18 +584,25 @@ fn run_editor_preset(
 /// why this can't reuse `run_editor_preset`/`generator_editor_fixture`).
 fn run_gltf_editor(want_dump: bool) {
     let data = fixtures::gltf_scene();
-    let layer = data.project.timeline.layers.first().expect("gltf_scene inserts one layer");
+    let layer = data
+        .project
+        .timeline
+        .layers
+        .first()
+        .expect("gltf_scene inserts one layer");
     let target = manifold_core::GraphTarget::Generator(layer.layer_id.clone());
     let pid = layer.generator_type().clone();
 
-    let Some(view) = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&pid) else {
+    let Some(view) = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&pid)
+    else {
         eprintln!(
             "ui-snap gltfeditor: no graph view for the imported preset id '{pid:?}' — \
              the embedded-overlay install in fixtures::gltf_scene() didn't take"
         );
         std::process::exit(2);
     };
-    let Some(rg_snap) = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(&view) else {
+    let Some(rg_snap) = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(&view)
+    else {
         eprintln!("ui-snap gltfeditor: snapshot_for_view failed for the imported def");
         std::process::exit(2);
     };
@@ -581,7 +627,10 @@ fn run_gltf_editor(want_dump: bool) {
                 n.node_handle,
                 n.type_id,
                 n.group.is_some(),
-                n.parameters.iter().map(|p| p.name.clone()).collect::<Vec<_>>()
+                n.parameters
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect::<Vec<_>>()
             );
             if let Some(g) = n.group.as_deref() {
                 for c in &g.nodes {
@@ -609,14 +658,15 @@ fn run_gltf_editor(want_dump: bool) {
         tex_h,
         SCALE,
         png.to_str().expect("utf-8 path"),
-        want_dump.then(|| dir.join("gltfeditor.tree.json")).as_deref(),
+        want_dump
+            .then(|| dir.join("gltfeditor.tree.json"))
+            .as_deref(),
         &[],
         false,
         false,
     );
     println!("ui-snap: wrote {}", png.display());
 }
-
 
 /// Build the D6 proof fixture: a group ("Leaf", handle `leaf_group`)
 /// containing `node.pbr_material` (handle `leaf_mat`) with Metallic/
@@ -630,7 +680,10 @@ fn group_demo_snapshot() -> manifold_ui::graph_view::GraphSnapshot {
         ParamSnapshot, ParamSnapshotKind, PortKindSnapshot, PortSnapshot, WireSnapshot,
     };
     fn port(name: &str) -> PortSnapshot {
-        PortSnapshot { name: name.to_string(), kind: PortKindSnapshot::Texture2D }
+        PortSnapshot {
+            name: name.to_string(),
+            kind: PortKindSnapshot::Texture2D,
+        }
     }
     fn param(name: &str, label: &str, current: f32) -> ParamSnapshot {
         ParamSnapshot {
@@ -753,7 +806,8 @@ fn group_demo_snapshot() -> manifold_ui::graph_view::GraphSnapshot {
 }
 
 fn run_group_demo(want_dump: bool) {
-    let Some((project, target, selection)) = fixtures::generator_editor_fixture("FluidSim2D") else {
+    let Some((project, target, selection)) = fixtures::generator_editor_fixture("FluidSim2D")
+    else {
         eprintln!("ui-snap groupdemo: 'FluidSim2D' isn't registered as a generator preset");
         std::process::exit(2);
     };
@@ -761,8 +815,9 @@ fn run_group_demo(want_dump: bool) {
     // harness anyway, per the "rendering structure only" log line) — any
     // loaded view supplies a well-formed `EffectGraphDef` for the type slot.
     let placeholder_pid = manifold_core::PresetTypeId::from_string("FluidSim2D".to_string());
-    let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&placeholder_pid)
-        .expect("FluidSim2D preset view");
+    let view =
+        manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&placeholder_pid)
+            .expect("FluidSim2D preset view");
     let gv_snap = group_demo_snapshot();
 
     let dir = out_dir("groupdemo");
@@ -781,7 +836,9 @@ fn run_group_demo(want_dump: bool) {
         tex_h,
         SCALE,
         expanded_png.to_str().expect("utf-8 path"),
-        want_dump.then(|| dir.join("groupdemo-expanded.tree.json")).as_deref(),
+        want_dump
+            .then(|| dir.join("groupdemo-expanded.tree.json"))
+            .as_deref(),
         &[],
         false,
         false,
@@ -802,7 +859,9 @@ fn run_group_demo(want_dump: bool) {
         tex_h,
         SCALE,
         collapsed_png.to_str().expect("utf-8 path"),
-        want_dump.then(|| dir.join("groupdemo-collapsed.tree.json")).as_deref(),
+        want_dump
+            .then(|| dir.join("groupdemo-collapsed.tree.json"))
+            .as_deref(),
         &[10],
         false,
         false,
@@ -841,7 +900,8 @@ fn sync_data(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
     // The live app's per-frame `push_state` feeds the RT Quality panel; the
     // harness has no per-frame push, so mirror it here — a tier click's label
     // repaint proves command → project → sync round-tripped.
-    ui.rt_quality_panel.configure(data.project.settings.rt_quality);
+    ui.rt_quality_panel
+        .configure(data.project.settings.rt_quality);
 }
 
 /// The push-state/reconcile tail half of `sync_build` (P2 split) — pushes
@@ -857,7 +917,16 @@ fn sync_data(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
 /// the `automation` scene (P4a) deliberately diverged (armed + a latch).
 fn reconcile_state(ui: &mut UIRoot, data: &fixtures::SceneData) {
     let mut tcache = TransportDisplayCache::new();
-    push_state(ui, &data.project, &data.content, data.active, &data.selection, false, None, &mut tcache);
+    push_state(
+        ui,
+        &data.project,
+        &data.content,
+        data.active,
+        &data.selection,
+        false,
+        None,
+        &mut tcache,
+    );
     ui.update();
 }
 
@@ -908,14 +977,18 @@ fn render_and_dump(
         ui.viewport.visible_clip_rects(&mut clip_rects);
         let clip_targets = manifold_ui::clip_hit_tester::ClipHitTargets(&clip_rects);
         let automation_lanes = ui.viewport.automation_lane_screens();
-        let automation_targets = manifold_ui::automation_hit_tester::AutomationHitTargets(automation_lanes);
+        let automation_targets =
+            manifold_ui::automation_hit_tester::AutomationHitTargets(automation_lanes);
         let surfaces: Vec<&dyn manifold_ui::hit_targets::HitTargets> =
             vec![&clip_targets, &automation_targets];
 
         let json = dump::dump_tree_ex(&ui.tree, &surfaces);
         let json_path = dir.join(format!("{scene}{suffix}.tree.json"));
-        std::fs::write(&json_path, serde_json::to_string_pretty(&json).expect("serialize dump"))
-            .expect("write tree json");
+        std::fs::write(
+            &json_path,
+            serde_json::to_string_pretty(&json).expect("serialize dump"),
+        )
+        .expect("write tree json");
         println!("ui-snap: wrote {}", json_path.display());
         print!("{}", dump::terse(&ui.tree));
     }
@@ -923,7 +996,10 @@ fn render_and_dump(
 
 /// Value following `flag` in `args`, if present (`--interact <value>`).
 fn arg_value(args: &[String], flag: &str) -> Option<String> {
-    args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned()
+    args.iter()
+        .position(|a| a == flag)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
 }
 
 #[cfg(test)]
@@ -937,10 +1013,10 @@ mod footer_leak_probe {
     //! node range the way the cache manager does and reports every node whose
     //! visible (clipped) paint reaches BELOW the footer's top edge.
     use super::*;
-    use manifold_ui_paint::ui_cache_manager::PanelSlot;
+    use manifold_ui::UIFlags;
     use manifold_ui::node::Rect;
     use manifold_ui::tree::TraversalEvent;
-    use manifold_ui::UIFlags;
+    use manifold_ui_paint::ui_cache_manager::PanelSlot;
 
     fn intersect(a: Rect, b: Rect) -> Rect {
         let x0 = a.x.max(b.x);
@@ -963,7 +1039,10 @@ mod footer_leak_probe {
         let insp = ui.layout.inspector();
         let cursor_x = insp.x + insp.width * 0.5;
         let scrolled = ui.try_inspector_scroll(1_000_000.0, cursor_x);
-        assert!(scrolled, "sanity: inspector must report a live scroll container");
+        assert!(
+            scrolled,
+            "sanity: inspector must report a live scroll container"
+        );
 
         let footer_top = ui.layout.footer().y;
         assert!(footer_top > 0.0);
@@ -1004,40 +1083,41 @@ mod footer_leak_probe {
         // whose clipped paint crosses below the footer's top edge.
         let mut clip_stack: Vec<Rect> = Vec::new();
         let mut leaks: Vec<(usize, Rect, Option<Rect>, String)> = Vec::new();
-        ui.tree.traverse_flat_range(region, start, end, false, |ev| match ev {
-            TraversalEvent::PushClip(r) => {
-                let clipped = clip_stack.last().map(|c| intersect(*c, r)).unwrap_or(r);
-                clip_stack.push(clipped);
-            }
-            TraversalEvent::PopClip => {
-                clip_stack.pop();
-            }
-            TraversalEvent::Node(n) => {
-                let b = n.bounds;
-                if !n.flags.contains(UIFlags::VISIBLE) || b.width <= 0.0 || b.height <= 0.0 {
-                    return;
+        ui.tree
+            .traverse_flat_range(region, start, end, false, |ev| match ev {
+                TraversalEvent::PushClip(r) => {
+                    let clipped = clip_stack.last().map(|c| intersect(*c, r)).unwrap_or(r);
+                    clip_stack.push(clipped);
                 }
-                // The GPU cull (`draw_node`) discards a node fully outside the
-                // clip; replicate it so we don't count nodes that never paint.
-                if let Some(c) = clip_stack.last()
-                    && (b.x >= c.x_max()
-                        || b.x_max() <= c.x
-                        || b.y >= c.y_max()
-                        || b.y_max() <= c.y)
-                {
-                    return;
+                TraversalEvent::PopClip => {
+                    clip_stack.pop();
                 }
-                // Effective painted bottom = clipped bottom (or raw if unclipped).
-                let painted_bottom = match clip_stack.last() {
-                    Some(c) => b.y_max().min(c.y_max()),
-                    None => b.y_max(),
-                };
-                if painted_bottom > footer_top + eps {
-                    let text = n.text.clone().unwrap_or_default();
-                    leaks.push((n.id.slot(), b, clip_stack.last().copied(), text));
+                TraversalEvent::Node(n) => {
+                    let b = n.bounds;
+                    if !n.flags.contains(UIFlags::VISIBLE) || b.width <= 0.0 || b.height <= 0.0 {
+                        return;
+                    }
+                    // The GPU cull (`draw_node`) discards a node fully outside the
+                    // clip; replicate it so we don't count nodes that never paint.
+                    if let Some(c) = clip_stack.last()
+                        && (b.x >= c.x_max()
+                            || b.x_max() <= c.x
+                            || b.y >= c.y_max()
+                            || b.y_max() <= c.y)
+                    {
+                        return;
+                    }
+                    // Effective painted bottom = clipped bottom (or raw if unclipped).
+                    let painted_bottom = match clip_stack.last() {
+                        Some(c) => b.y_max().min(c.y_max()),
+                        None => b.y_max(),
+                    };
+                    if painted_bottom > footer_top + eps {
+                        let text = n.text.clone().unwrap_or_default();
+                        leaks.push((n.id.slot(), b, clip_stack.last().copied(), text));
+                    }
                 }
-            }
-        });
+            });
 
         if !leaks.is_empty() {
             eprintln!(
@@ -1047,7 +1127,13 @@ mod footer_leak_probe {
             for (idx, b, clip, text) in &leaks {
                 eprintln!(
                     "  node[{idx}] bounds=({:.1},{:.1} {:.1}x{:.1}) y_max={:.1}  clip={:?}  text={:?}",
-                    b.x, b.y, b.width, b.height, b.y_max(), clip, text
+                    b.x,
+                    b.y,
+                    b.width,
+                    b.height,
+                    b.y_max(),
+                    clip,
+                    text
                 );
             }
             eprintln!("=== end leak report ===\n");
@@ -1082,7 +1168,10 @@ mod bug068_clip_panel_overlap {
         let inspector_left = ui.layout.inspector().x;
         let mut clip_rects = Vec::new();
         ui.viewport.visible_clip_rects(&mut clip_rects);
-        assert!(!clip_rects.is_empty(), "sanity: scene must have visible clips");
+        assert!(
+            !clip_rects.is_empty(),
+            "sanity: scene must have visible clips"
+        );
 
         let overlapping: Vec<_> = clip_rects
             .iter()
@@ -1092,7 +1181,10 @@ mod bug068_clip_panel_overlap {
             overlapping.is_empty(),
             "{} clip(s) bleed past the inspector's left edge ({inspector_left}): {:?}",
             overlapping.len(),
-            overlapping.iter().map(|c| (&c.name, c.rect)).collect::<Vec<_>>()
+            overlapping
+                .iter()
+                .map(|c| (&c.name, c.rect))
+                .collect::<Vec<_>>()
         );
     }
 }
@@ -1131,16 +1223,16 @@ mod cache_path_full_render {
 
     use manifold_core::LayerId;
     use manifold_gpu::GpuDevice;
-    use manifold_ui_paint::ui_cache_manager::UICacheManager;
-    use manifold_ui_paint::ui_renderer::UIRenderer;
     use manifold_ui::automation::{self, AutomationTarget, SelectorQuery};
     use manifold_ui::input::PointerAction;
     use manifold_ui::node::Vec2;
+    use manifold_ui_paint::ui_cache_manager::UICacheManager;
+    use manifold_ui_paint::ui_renderer::UIRenderer;
 
+    use super::composite_resources::{CompositeResources, composite_frame as seam_composite_frame};
     use super::*;
-    use super::composite_resources::{composite_frame as seam_composite_frame, CompositeResources};
     use crate::content_state::ContentState;
-    use crate::ui_frame::{apply_ui_frame_invalidations, UiFrameSignals};
+    use crate::ui_frame::{UiFrameSignals, apply_ui_frame_invalidations};
     use crate::user_prefs::UserPrefs;
 
     /// P1 (D3): the invalidation decision and the atlas/offscreen composite
@@ -1196,7 +1288,10 @@ mod cache_path_full_render {
         let bpp = manifold_compositor::presentation::UI_FORMAT.bytes_per_pixel() as usize;
         let first = &linear[0..bpp];
         let all_same = linear.chunks_exact(bpp).all(|px| px == first);
-        assert!(!all_same, "{label}: readback is a uniform single colour — drew nothing");
+        assert!(
+            !all_same,
+            "{label}: readback is a uniform single colour — drew nothing"
+        );
     }
 
     /// Resolve `text` (exact node-text match, `type: "Button"`) to its
@@ -1208,9 +1303,12 @@ mod cache_path_full_render {
             node_type: Some("Button".to_string()),
             ..Default::default()
         });
-        automation::resolve(&ui.tree, &[], &target)
-            .ok()
-            .map(|r| Vec2::new(r.rect.x + r.rect.width * 0.5, r.rect.y + r.rect.height * 0.5))
+        automation::resolve(&ui.tree, &[], &target).ok().map(|r| {
+            Vec2::new(
+                r.rect.x + r.rect.width * 0.5,
+                r.rect.y + r.rect.height * 0.5,
+            )
+        })
     }
 
     /// Click through the REAL input path (`pointer_event` -> `process_events`
@@ -1237,7 +1335,11 @@ mod cache_path_full_render {
         let mut scrub = crate::ui_bridge::ScrubState::default();
         for action in &actions {
             let mut dctx = crate::ui_bridge::DispatchCtx {
-                project: crate::ui_bridge::ProjectRef::new(&mut data.project, &mut frame.edits, content_tx),
+                project: crate::ui_bridge::ProjectRef::new(
+                    &mut data.project,
+                    &mut frame.edits,
+                    content_tx,
+                ),
                 content_tx,
                 content_state,
                 ui: &mut *ui,
@@ -1298,7 +1400,8 @@ mod cache_path_full_render {
         sync_build(&mut ui, &data, 24.0);
 
         let device = GpuDevice::new_queued("ui-snap");
-        let mut ui_renderer = UIRenderer::new(&device, manifold_compositor::presentation::UI_FORMAT);
+        let mut ui_renderer =
+            UIRenderer::new(&device, manifold_compositor::presentation::UI_FORMAT);
         // D8: scale factor 1.0 always, at the fixture's logical size — layout
         // is a function of logical size, never shrink the window for speed.
         let mut cache = UICacheManager::new(manifold_compositor::presentation::UI_FORMAT, 1.0);
@@ -1348,9 +1451,19 @@ mod cache_path_full_render {
         // tween it starts is polled below exactly as app_render.rs:2942-2944
         // does. The click's own post-composite frame opens the filmstrip. ──
         let cog_text = manifold_ui::icons::Icon::Cog.text();
-        let cog_pos =
-            resolve_button_center(&ui, &cog_text).expect("compact-toggle (cog) button must resolve");
-        signals.rebuild = click(&mut ui, &mut data, cog_pos, clock, &mut active_layer, &content_tx, &content_state, &mut user_prefs, &mut frame);
+        let cog_pos = resolve_button_center(&ui, &cog_text)
+            .expect("compact-toggle (cog) button must resolve");
+        signals.rebuild = click(
+            &mut ui,
+            &mut data,
+            cog_pos,
+            clock,
+            &mut active_layer,
+            &content_tx,
+            &content_state,
+            &mut user_prefs,
+            &mut frame,
+        );
         apply_decision(&mut ui, &mut cache, &mut signals);
         composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui, &res);
         filmstrip.push(full_frame_bytes(&device, &res, atlas_w, atlas_h));
@@ -1387,7 +1500,17 @@ mod cache_path_full_render {
         for tab_text in ["Master", "Layer"] {
             match resolve_button_center(&ui, tab_text) {
                 Some(pos) => {
-                    signals.rebuild = click(&mut ui, &mut data, pos, clock, &mut active_layer, &content_tx, &content_state, &mut user_prefs, &mut frame);
+                    signals.rebuild = click(
+                        &mut ui,
+                        &mut data,
+                        pos,
+                        clock,
+                        &mut active_layer,
+                        &content_tx,
+                        &content_state,
+                        &mut user_prefs,
+                        &mut frame,
+                    );
                 }
                 None => {
                     tab_swap_fallback_used = true;
@@ -1397,7 +1520,10 @@ mod cache_path_full_render {
                         manifold_ui::InspectorTab::Layer
                     };
                     ui.inspector.configure_tabs(
-                        &[manifold_ui::InspectorTab::Layer, manifold_ui::InspectorTab::Master],
+                        &[
+                            manifold_ui::InspectorTab::Layer,
+                            manifold_ui::InspectorTab::Master,
+                        ],
                         tab,
                     );
                     signals.rebuild = frame.rebuilds(&ui, &mut data, &active_layer, &content_state);
@@ -1463,15 +1589,15 @@ mod editor_window_harness {
 
     use manifold_gpu::{GpuDevice, GpuTextureFormat};
     use manifold_node_engine::gpu::render_target::RenderTarget;
-    use manifold_ui_paint::ui_renderer::UIRenderer;
     use manifold_ui::graph_canvas::{GraphCanvas, GraphCanvasTargets};
     use manifold_ui::hit_targets::HitTargets;
     use manifold_ui::panels::graph_editor::GraphEditorPanel;
+    use manifold_ui_paint::ui_renderer::UIRenderer;
 
     use super::*;
     use crate::editor_frame::{
-        build_editor_preview_column, composite_editor_frame, EditorAtlas, EditorLayout, EditorMiniTimelineInputs,
-        EditorRegion,
+        EditorAtlas, EditorLayout, EditorMiniTimelineInputs, EditorRegion,
+        build_editor_preview_column, composite_editor_frame,
     };
 
     const FORMAT: GpuTextureFormat = manifold_compositor::presentation::UI_FORMAT;
@@ -1484,8 +1610,8 @@ mod editor_window_harness {
             .expect("FluidSim2D preset must be loadable");
         let rg_snap = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(&view)
             .expect("FluidSim2D snapshot must materialize");
-        let (project, target, selection) = fixtures::generator_editor_fixture(preset)
-            .expect("FluidSim2D is a generator preset");
+        let (project, target, selection) =
+            fixtures::generator_editor_fixture(preset).expect("FluidSim2D is a generator preset");
         let gv_snap = crate::ui_translate::graph_snapshot_to_ui(&rg_snap);
 
         let tex_w = LOGICAL_W as u32;
@@ -1506,9 +1632,11 @@ mod editor_window_harness {
         // `render_graph_editor_to_png` both build.
         let mut ui_root = UIRoot::new();
         let active_idx = match target.host_target() {
-            Some(manifold_core::GraphTarget::Generator(lid)) => {
-                project.timeline.layers.iter().position(|l| &l.layer_id == lid)
-            }
+            Some(manifold_core::GraphTarget::Generator(lid)) => project
+                .timeline
+                .layers
+                .iter()
+                .position(|l| &l.layer_id == lid),
             _ => None,
         };
         sync_project_all(&mut ui_root, &project, &selection);
@@ -1541,7 +1669,10 @@ mod editor_window_harness {
         // uses (`custom_surfaces` / `"graph_canvas"`), read BEFORE the render
         // call so this assertion is against the canvas's own declared
         // geometry, not a value derived from the pixels it's checking.
-        let targets_surface = GraphCanvasTargets { canvas: &canvas, viewport };
+        let targets_surface = GraphCanvasTargets {
+            canvas: &canvas,
+            viewport,
+        };
         let mut entries = Vec::new();
         targets_surface.enumerate(&mut entries);
         let node_entry = entries
@@ -1580,7 +1711,12 @@ mod editor_window_harness {
             &layout,
             &dock,
             Some(&canvas),
-            EditorAtlas { cache: &mut cache, pipeline: &res.atlas_pipeline, sampler: &res.atlas_sampler, scale_factor: 1.0 },
+            EditorAtlas {
+                cache: &mut cache,
+                pipeline: &res.atlas_pipeline,
+                sampler: &res.atlas_sampler,
+                scale_factor: 1.0,
+            },
             EditorMiniTimelineInputs {
                 bottom_rect: layout.bottom,
                 show_bottom: dock.show_bottom,
@@ -1628,7 +1764,9 @@ mod editor_window_harness {
         let mut distinct: std::collections::HashSet<[u8; 8]> = std::collections::HashSet::new();
         for y in y0..y1 {
             for x in x0..x1 {
-                let idx = ((y * tex_w + x) * manifold_compositor::presentation::UI_FORMAT.bytes_per_pixel()) as usize;
+                let idx = ((y * tex_w + x)
+                    * manifold_compositor::presentation::UI_FORMAT.bytes_per_pixel())
+                    as usize;
                 distinct.insert(bytes[idx..idx + 8].try_into().expect("RGBA16Float pixel"));
             }
         }
@@ -1675,10 +1813,10 @@ mod overlay_fidelity_proof {
     use manifold_ui_paint::ui_cache_manager::UICacheManager;
     use manifold_ui_paint::ui_renderer::UIRenderer;
 
-    use super::composite_resources::{composite_frame, CompositeResources};
+    use super::composite_resources::{CompositeResources, composite_frame};
     use super::render::readback;
     use super::{fixtures, sync_build};
-    use crate::ui_frame::{render_main_ui_passes, MainUiPassInputs};
+    use crate::ui_frame::{MainUiPassInputs, render_main_ui_passes};
     use crate::ui_root::UIRoot;
 
     /// The minimal `MainUiPassInputs` a headless overlay-only frame needs —
@@ -1735,11 +1873,17 @@ mod overlay_fidelity_proof {
         );
         let (start, end) = ui.overlay_draw[0];
         let overlays = crate::frame_plan::MainRegion::Overlays.id();
-        assert!(end > start, "overlay range must be non-empty ({start}..{end})");
+        assert!(
+            end > start,
+            "overlay range must be non-empty ({start}..{end})"
+        );
         // The mechanism under test: the region root is at `start - 1`, outside
         // the recorded range. If this ever stops holding, the whole premise of
         // BUG-097 is gone and this test should be revisited, not silently pass.
-        assert!(start >= 1, "overlay range must exclude its region root at start-1");
+        assert!(
+            start >= 1,
+            "overlay range must exclude its region root at start-1"
+        );
 
         let device = GpuDevice::new_queued("ui-snap");
         let mut renderer = UIRenderer::new(&device, manifold_compositor::presentation::UI_FORMAT);
@@ -1753,9 +1897,9 @@ mod overlay_fidelity_proof {
         // Comparing before/after the SAME offscreen keeps the assertion immune
         // to the font/GPU nondeterminism a second composite would introduce.
         let paint_range = |renderer: &mut UIRenderer,
-                               cache: &mut UICacheManager,
-                               ui: &mut UIRoot,
-                               sub_region: bool|
+                           cache: &mut UICacheManager,
+                           ui: &mut UIRoot,
+                           sub_region: bool|
          -> (Vec<u8>, Vec<u8>) {
             cache.invalidate_all();
             composite_frame(&device, renderer, cache, ui, &res, 1.0);

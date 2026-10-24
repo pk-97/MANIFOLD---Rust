@@ -1,4 +1,7 @@
-use crate::collect::{collect_asset_paths, re_point_scene_file, re_point_scene_modifier_asset, re_point_string_param, AssetTarget};
+use crate::collect::{
+    AssetTarget, collect_asset_paths, re_point_scene_file, re_point_scene_modifier_asset,
+    re_point_string_param,
+};
 use manifold_core::file_loader::NodeFileLoad;
 use manifold_core::id::{ClipId, LayerId};
 use manifold_core::project::Project;
@@ -54,7 +57,13 @@ impl PathResolver {
         for asset in refs {
             match asset.target {
                 AssetTarget::VideoClip { clip_id } => {
-                    Self::resolve_video_clip(project, &clip_id, &project_dir, &search_dirs, &mut result);
+                    Self::resolve_video_clip(
+                        project,
+                        &clip_id,
+                        &project_dir,
+                        &search_dirs,
+                        &mut result,
+                    );
                 }
                 AssetTarget::LayerVideoFolder { layer_id } => {
                     Self::resolve_video_folder(
@@ -85,7 +94,11 @@ impl PathResolver {
                         &mut result,
                     );
                 }
-                AssetTarget::StringParam { layer_id, key, load } => {
+                AssetTarget::StringParam {
+                    layer_id,
+                    key,
+                    load,
+                } => {
                     Self::resolve_string_param(
                         project,
                         &layer_id,
@@ -108,8 +121,14 @@ impl PathResolver {
                     );
                 }
                 AssetTarget::SceneFile { layer_id } => {
-                    if Self::resolve_scene_file(project, &layer_id, &asset.path, &project_dir, &search_dirs, &mut result)
-                        && !relinked_scenes.contains(&layer_id)
+                    if Self::resolve_scene_file(
+                        project,
+                        &layer_id,
+                        &asset.path,
+                        &project_dir,
+                        &search_dirs,
+                        &mut result,
+                    ) && !relinked_scenes.contains(&layer_id)
                     {
                         relinked_scenes.push(layer_id);
                     }
@@ -119,11 +138,16 @@ impl PathResolver {
         // The load compiled each scene before its files were found: compile
         // a re-linked one again so it reads them.
         for layer_id in relinked_scenes {
-            if let Some(inst) = project.timeline.find_layer_by_id_mut(layer_id.as_str()).and_then(|(_, layer)| layer.gen_params_mut())
+            if let Some(inst) = project
+                .timeline
+                .find_layer_by_id_mut(layer_id.as_str())
+                .and_then(|(_, layer)| layer.gen_params_mut())
                 && let Some(doc) = inst.scene.clone()
                 && let Err(error) = inst.install_scene_document(doc)
             {
-                log::warn!("[PathResolver] scene on {layer_id} did not compile after re-linking its files: {error}");
+                log::warn!(
+                    "[PathResolver] scene on {layer_id} did not compile after re-linking its files: {error}"
+                );
             }
         }
 
@@ -156,26 +180,33 @@ impl PathResolver {
             let relative = Self::make_relative(&asset.path.to_string_lossy(), project_dir);
             match asset.target {
                 AssetTarget::VideoClip { clip_id } => {
-                    if let Some(clip) = project.video_library.clips.iter_mut().find(|c| c.id == clip_id)
+                    if let Some(clip) = project
+                        .video_library
+                        .clips
+                        .iter_mut()
+                        .find(|c| c.id == clip_id)
                     {
                         clip.relative_file_path = relative;
                     }
                 }
                 AssetTarget::LayerVideoFolder { layer_id } => {
-                    if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
+                    if let Some((_, layer)) =
+                        project.timeline.find_layer_by_id_mut(layer_id.as_str())
                     {
                         layer.relative_video_folder_path = relative;
                     }
                 }
                 AssetTarget::AudioClip { layer_id, clip_id } => {
-                    if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
+                    if let Some((_, layer)) =
+                        project.timeline.find_layer_by_id_mut(layer_id.as_str())
                         && let Some(clip) = layer.clips.iter_mut().find(|c| c.id == clip_id)
                     {
                         clip.relative_audio_file_path = relative;
                     }
                 }
                 AssetTarget::ImageClip { layer_id, clip_id } => {
-                    if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
+                    if let Some((_, layer)) =
+                        project.timeline.find_layer_by_id_mut(layer_id.as_str())
                         && let Some(clip) = layer.clips.iter_mut().find(|c| c.id == *clip_id)
                     {
                         clip.relative_image_path = relative;
@@ -195,7 +226,12 @@ impl PathResolver {
         search_dirs: &HashSet<String>,
         result: &mut PathResolutionResult,
     ) {
-        let Some(clip) = project.video_library.clips.iter_mut().find(|c| c.id == clip_id) else {
+        let Some(clip) = project
+            .video_library
+            .clips
+            .iter_mut()
+            .find(|c| c.id == clip_id)
+        else {
             return;
         };
         if clip.file_path.is_empty() {
@@ -385,7 +421,9 @@ impl PathResolver {
         }
 
         let resolved = match load {
-            NodeFileLoad::File(_) => Self::try_resolve(&path_str, Some(&path_str), -1, project_dir, search_dirs),
+            NodeFileLoad::File(_) => {
+                Self::try_resolve(&path_str, Some(&path_str), -1, project_dir, search_dirs)
+            }
             NodeFileLoad::Folder(_) => {
                 Self::try_resolve_directory(&path_str, Some(&path_str), project_dir, search_dirs)
             }
@@ -434,7 +472,6 @@ impl PathResolver {
         }
     }
 
-
     fn resolve_scene_modifier_string_param(
         project: &mut Project,
         target: &AssetTarget,
@@ -450,10 +487,12 @@ impl PathResolver {
         if path_str.is_empty() {
             return;
         }
-        if path.is_absolute() && match load {
-            NodeFileLoad::File(_) => path.is_file(),
-            NodeFileLoad::Folder(_) => path.is_dir(),
-        } {
+        if path.is_absolute()
+            && match load {
+                NodeFileLoad::File(_) => path.is_file(),
+                NodeFileLoad::Folder(_) => path.is_dir(),
+            }
+        {
             result.already_valid_count += 1;
             return;
         }
@@ -461,12 +500,9 @@ impl PathResolver {
             NodeFileLoad::File(_) => {
                 Self::try_resolve(&path_str, Some(&path_str), -1, project_dir, search_dirs)
             }
-            NodeFileLoad::Folder(_) => Self::try_resolve_directory(
-                &path_str,
-                Some(&path_str),
-                project_dir,
-                search_dirs,
-            ),
+            NodeFileLoad::Folder(_) => {
+                Self::try_resolve_directory(&path_str, Some(&path_str), project_dir, search_dirs)
+            }
         };
         let Some(resolved_path) = resolved else {
             result.unresolved_count += 1;

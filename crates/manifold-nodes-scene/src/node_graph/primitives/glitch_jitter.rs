@@ -11,8 +11,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
@@ -126,7 +126,10 @@ impl Primitive for GlitchJitter {
         if port_name != "out" {
             return None;
         }
-        input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)
+        input_capacities
+            .iter()
+            .find(|(p, _)| *p == "in")
+            .map(|(_, n)| *n)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -221,7 +224,7 @@ mod gpu_tests {
             tangent: [0.0; 4],
             color: [1.0; 4],
         }
-}
+    }
 
     /// The generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {
@@ -262,7 +265,10 @@ mod gpu_tests {
                 }
                 (b, weights_len_override.unwrap_or(w.len() as u32))
             }
-            None => (device.create_buffer_shared(std::mem::size_of_val(src) as u64), 0),
+            None => (
+                device.create_buffer_shared(std::mem::size_of_val(src) as u64),
+                0,
+            ),
         };
 
         let uniforms = GlitchJitterUniforms {
@@ -277,10 +283,25 @@ mod gpu_tests {
         };
 
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: &sbuf, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &wbuf, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: &dbuf, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &sbuf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &wbuf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &dbuf,
+                offset: 0,
+            },
         ];
         let mut enc = device.create_encoder("glitch-jitter-test");
         enc.dispatch_compute(
@@ -309,8 +330,14 @@ mod gpu_tests {
 
         assert_eq!(out.len(), src.len());
         for i in 0..src.len() {
-            assert_eq!(out[i].position, src[i].position, "amount=0 must be identity pos {i}");
-            assert_eq!(out[i].normal, src[i].normal, "amount=0 must preserve normal {i}");
+            assert_eq!(
+                out[i].position, src[i].position,
+                "amount=0 must be identity pos {i}"
+            );
+            assert_eq!(
+                out[i].normal, src[i].normal,
+                "amount=0 must preserve normal {i}"
+            );
             assert_eq!(out[i].uv, src[i].uv, "amount=0 must preserve uv {i}");
         }
     }
@@ -320,7 +347,13 @@ mod gpu_tests {
         let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let src: Vec<MeshVertex> = (0..64)
-            .map(|i| mk_vertex([(i % 8) as f32 * 0.25, (i / 8) as f32 * 0.25, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0]))
+            .map(|i| {
+                mk_vertex(
+                    [(i % 8) as f32 * 0.25, (i / 8) as f32 * 0.25, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0],
+                )
+            })
             .collect();
 
         let out = dispatch_glitch_jitter(&device, &gen_wgsl, &src, None, None, 1.0, 10.0, 0.0, 1.0);
@@ -346,7 +379,13 @@ mod gpu_tests {
         let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let src: Vec<MeshVertex> = (0..32)
-            .map(|i| mk_vertex([(i % 8) as f32 * 0.25, (i / 8) as f32 * 0.25, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0]))
+            .map(|i| {
+                mk_vertex(
+                    [(i % 8) as f32 * 0.25, (i / 8) as f32 * 0.25, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0],
+                )
+            })
             .collect();
 
         let t0 = dispatch_glitch_jitter(&device, &gen_wgsl, &src, None, None, 1.0, 1.0, 0.0, 0.0);
@@ -357,7 +396,10 @@ mod gpu_tests {
         assert_eq!(t0.len(), src.len());
         assert_eq!(t1.len(), src.len());
         for i in 0..src.len() {
-            assert_eq!(t0[i].position, t1[i].position, "same step must produce identical output {i}");
+            assert_eq!(
+                t0[i].position, t1[i].position,
+                "same step must produce identical output {i}"
+            );
         }
 
         // Across a step boundary the pattern should differ for at least some vertices.
@@ -375,7 +417,15 @@ mod gpu_tests {
         let weights = [0.0f32, 0.0];
 
         let out = dispatch_glitch_jitter(
-            &device, &gen_wgsl, &src, Some(&weights), Some(2), 1.0, 10.0, 0.0, 1.0,
+            &device,
+            &gen_wgsl,
+            &src,
+            Some(&weights),
+            Some(2),
+            1.0,
+            10.0,
+            0.0,
+            1.0,
         );
 
         assert!(
@@ -388,9 +438,14 @@ mod gpu_tests {
         );
         // Past weights_len the effective weight is 1.0, so at least some
         // vertices should have moved relative to the input.
-        let tail_moved = out.iter().skip(2).enumerate().any(|(i, v)| {
-            (v.position[0] - src[i + 2].position[0]).abs() > 1e-5
-        });
-        assert!(tail_moved, "tail past weights_len should degrade to w=1.0 and displace");
+        let tail_moved = out
+            .iter()
+            .skip(2)
+            .enumerate()
+            .any(|(i, v)| (v.position[0] - src[i + 2].position[0]).abs() > 1e-5);
+        assert!(
+            tail_moved,
+            "tail past weights_len should degrade to w=1.0 and displace"
+        );
     }
 }

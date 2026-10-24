@@ -57,15 +57,23 @@ impl<F: VectorField + Clone + 'static> FillWorkers<F> {
                         for job in inbox {
                             // SAFETY: see `Share`: this share is ours alone
                             // until the answer below is received.
-                            let values = unsafe { std::slice::from_raw_parts_mut(job.share.values, job.share.len) };
-                            let answer = job.lattice.fill_forces_from(job.first, values, &|x| job.field.sample_force(x));
+                            let values = unsafe {
+                                std::slice::from_raw_parts_mut(job.share.values, job.share.len)
+                            };
+                            let answer = job.lattice.fill_forces_from(job.first, values, &|x| {
+                                job.field.sample_force(x)
+                            });
                             if outbox.send(answer).is_err() {
                                 return;
                             }
                         }
                     })
                     .expect("spawn a force fill thread");
-                Helper { jobs: Some(jobs), answers, thread: Some(thread) }
+                Helper {
+                    jobs: Some(jobs),
+                    answers,
+                    thread: Some(thread),
+                }
             })
             .collect();
         Self { helpers }
@@ -78,19 +86,36 @@ impl<F: VectorField + Clone + 'static> FillWorkers<F> {
 
     /// [`ForceLattice::fill_forces`] of `field`, split across the threads.
     /// A helper that panics makes the fill panic; it never hangs.
-    pub fn fill(&mut self, lattice: ForceLattice, values: &mut [[f32; 4]], field: &F) -> Result<(), NotFinite> {
+    pub fn fill(
+        &mut self,
+        lattice: ForceLattice,
+        values: &mut [[f32; 4]],
+        field: &F,
+    ) -> Result<(), NotFinite> {
         let nodes = values.len() / 2;
         let per_share = nodes.div_ceil(self.threads()).max(1);
         let (own, rest) = values.split_at_mut((2 * per_share).min(values.len()));
-        let mut answers = Answers { helpers: &self.helpers, sent: 0, received: 0 };
+        let mut answers = Answers {
+            helpers: &self.helpers,
+            sent: 0,
+            received: 0,
+        };
         for (index, share) in rest.chunks_mut(2 * per_share).enumerate() {
             let job = Job {
                 lattice,
                 first: (index + 1) * per_share,
-                share: Share { values: share.as_mut_ptr(), len: share.len() },
+                share: Share {
+                    values: share.as_mut_ptr(),
+                    len: share.len(),
+                },
                 field: field.clone(),
             };
-            answers.helpers[index].jobs.as_ref().expect("running").send(job).expect("force fill thread stopped");
+            answers.helpers[index]
+                .jobs
+                .as_ref()
+                .expect("running")
+                .send(job)
+                .expect("force fill thread stopped");
             answers.sent += 1;
         }
         let mine = lattice.fill_forces_from(0, own, &|x| field.sample_force(x));
@@ -153,19 +178,43 @@ mod tests {
         let lattice = ForceLattice::over_box([-2.0, 0.0, -2.0], [4.0, 3.0, 4.0], 41);
         let mut workers = FillWorkers::start(3);
         for travel in [0.0f32, 0.37, 12.5] {
-            let gusts = FieldValue::turbulence(1.3, [travel, 0.0, -travel], 5).unwrap().scaled(2.0).unwrap();
-            let field = FieldValue::uniform([4.0, 0.0, 1.0]).unwrap().sum(&gusts).unwrap().air(0.8).unwrap()
-                .sum(&FieldValue::vortex([0.0, 1.0, 0.0], [0.0, 1.0, 0.0], 2.0, 1.0).unwrap()).unwrap();
+            let gusts = FieldValue::turbulence(1.3, [travel, 0.0, -travel], 5)
+                .unwrap()
+                .scaled(2.0)
+                .unwrap();
+            let field = FieldValue::uniform([4.0, 0.0, 1.0])
+                .unwrap()
+                .sum(&gusts)
+                .unwrap()
+                .air(0.8)
+                .unwrap()
+                .sum(&FieldValue::vortex([0.0, 1.0, 0.0], [0.0, 1.0, 0.0], 2.0, 1.0).unwrap())
+                .unwrap();
             let mut single = vec![[0.0f32; 4]; 2 * lattice.node_count()];
             let mut threaded = vec![[1.0f32; 4]; 2 * lattice.node_count()];
-            lattice.fill_forces(&mut single, |x| field.sample_force(x)).unwrap();
+            lattice
+                .fill_forces(&mut single, |x| field.sample_force(x))
+                .unwrap();
             workers.fill(lattice, &mut threaded, &field).unwrap();
-            let bits = |values: &[[f32; 4]]| values.iter().flatten().map(|v| v.to_bits()).collect::<Vec<_>>();
+            let bits = |values: &[[f32; 4]]| {
+                values
+                    .iter()
+                    .flatten()
+                    .map(|v| v.to_bits())
+                    .collect::<Vec<_>>()
+            };
             assert_eq!(bits(&threaded), bits(&single), "travel {travel}");
         }
-        let overflow = FieldValue::uniform([f32::MAX, 0.0, 0.0]).unwrap().scaled(f32::MAX).unwrap();
+        let overflow = FieldValue::uniform([f32::MAX, 0.0, 0.0])
+            .unwrap()
+            .scaled(f32::MAX)
+            .unwrap();
         let mut values = vec![[0.0f32; 4]; 2 * lattice.node_count()];
-        assert!(lattice.fill_forces(&mut values, |x| overflow.sample_force(x)).is_err());
+        assert!(
+            lattice
+                .fill_forces(&mut values, |x| overflow.sample_force(x))
+                .is_err()
+        );
         assert!(workers.fill(lattice, &mut values, &overflow).is_err());
     }
 
@@ -175,7 +224,12 @@ mod tests {
 
     impl VectorField for PanicsOn {
         fn sample(&self, _: [f32; 3]) -> [f32; 3] {
-            assert_ne!(std::thread::current().name(), Some(self.0), "field panics on {}", self.0);
+            assert_ne!(
+                std::thread::current().name(),
+                Some(self.0),
+                "field panics on {}",
+                self.0
+            );
             [0.0, 1.0, 0.0]
         }
     }
@@ -199,7 +253,9 @@ mod tests {
                     done.send(fill.is_err()).unwrap();
                 })
                 .unwrap();
-            let panicked = finished.recv_timeout(std::time::Duration::from_secs(30)).unwrap_or_else(|_| panic!("the fill hung when {victim} panicked"));
+            let panicked = finished
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .unwrap_or_else(|_| panic!("the fill hung when {victim} panicked"));
             assert!(panicked, "the fill panics when {victim} does");
         }
     }

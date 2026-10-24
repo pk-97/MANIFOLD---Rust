@@ -1,16 +1,21 @@
-use manifold_node_engine::runtime::chain_dispatch::{ChainSlot, clear_chain_state, dispatch_chain, dispatch_chain_with_scene_viewport};
 use crate::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
-use manifold_node_engine::runtime::effect::PostProcessEffect;
-use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_node_engine::runtime::preset_context::PresetContext;
-use manifold_node_engine::gpu::render_target::RenderTarget;
 use crate::tonemap::TonemapPipeline;
 use ahash::AHashMap;
 use manifold_core::effects::{EffectContainer, EffectGroup, PresetInstance};
-use manifold_core::{BlendMode, EffectId, LayerId, NodeId, PresetTypeId, WarmupCap, WarmupOutcome, WarmupPass, WarmupRun};
+use manifold_core::{
+    BlendMode, EffectId, LayerId, NodeId, PresetTypeId, WarmupCap, WarmupOutcome, WarmupPass,
+    WarmupRun,
+};
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_node_engine::runtime::chain_dispatch::{
+    ChainSlot, clear_chain_state, dispatch_chain, dispatch_chain_with_scene_viewport,
+};
+use manifold_node_engine::runtime::effect::PostProcessEffect;
+use manifold_node_engine::runtime::preset_context::PresetContext;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::time::Instant;
@@ -115,7 +120,6 @@ impl BlendResources {
         target_texture: &GpuTexture,
         uniforms: &BlendUniforms,
     ) {
-
         let pipeline = self
             .pipelines
             .get(&uniforms.blend_mode)
@@ -168,8 +172,20 @@ struct PingPong {
 impl PingPong {
     fn try_new(device: &GpuDevice, width: u32, height: u32) -> Result<Self, String> {
         Ok(Self {
-            ping: RenderTarget::try_new(device, width, height, GpuTextureFormat::Rgba16Float, "resize-ping")?,
-            pong: RenderTarget::try_new(device, width, height, GpuTextureFormat::Rgba16Float, "resize-pong")?,
+            ping: RenderTarget::try_new(
+                device,
+                width,
+                height,
+                GpuTextureFormat::Rgba16Float,
+                "resize-ping",
+            )?,
+            pong: RenderTarget::try_new(
+                device,
+                width,
+                height,
+                GpuTextureFormat::Rgba16Float,
+                "resize-pong",
+            )?,
             use_ping_as_source: true,
         })
     }
@@ -452,8 +468,14 @@ pub struct PreparedCompositorResize {
     layers: AHashMap<LayerId, PingPong>,
     groups: AHashMap<LayerId, PingPong>,
     tonemap: RenderTarget,
-    layer_chains: Vec<(LayerId, manifold_node_engine::runtime::PreparedRuntimeResize)>,
-    group_chains: Vec<(LayerId, manifold_node_engine::runtime::PreparedRuntimeResize)>,
+    layer_chains: Vec<(
+        LayerId,
+        manifold_node_engine::runtime::PreparedRuntimeResize,
+    )>,
+    group_chains: Vec<(
+        LayerId,
+        manifold_node_engine::runtime::PreparedRuntimeResize,
+    )>,
     master_chain: Option<manifold_node_engine::runtime::PreparedRuntimeResize>,
 }
 
@@ -637,7 +659,8 @@ pub struct LayerCompositor {
         NodeId,
         manifold_node_engine::scene::scene_viewport::SceneViewportConfig,
     )>,
-    scene_viewport_error: Option<manifold_node_engine::scene::scene_viewport::SceneViewportHostError>,
+    scene_viewport_error:
+        Option<manifold_node_engine::scene::scene_viewport::SceneViewportHostError>,
     /// RT_QUALITY_SETTINGS_DESIGN.md D5 — per-frame RT quality values from the
     /// active column (realtime vs export). Set per frame via [`set_rt_quality`];
     /// forwarded to every chain's executor through dispatch_chain. Default = live
@@ -1082,11 +1105,9 @@ impl LayerCompositor {
                 .effect_chains
                 .get(&group_id)
                 .is_some_and(|chain| chain.is_some());
-            if let Some(next) = run.pending_outcome(
-                pending,
-                warmup_frame_status.presentable(),
-                installed,
-            ) {
+            if let Some(next) =
+                run.pending_outcome(pending, warmup_frame_status.presentable(), installed)
+            {
                 outcome = next;
                 break;
             }
@@ -1246,14 +1267,13 @@ impl LayerCompositor {
                 if outcome != WarmupOutcome::Quiescent {
                     break;
                 }
-                let had_pending =
-                    manifold_node_engine::runtime::prewarm_worker_pending_count() > 0;
+                let had_pending = manifold_node_engine::runtime::prewarm_worker_pending_count() > 0;
                 if !had_pending {
                     break;
                 }
-                if let Some(exhausted) = Self::drain_fusion_warmup(
-                    pass.layer(&t.layer_id, Instant::now()),
-                ) {
+                if let Some(exhausted) =
+                    Self::drain_fusion_warmup(pass.layer(&t.layer_id, Instant::now()))
+                {
                     outcome = exhausted;
                     break;
                 }
@@ -1386,11 +1406,9 @@ impl LayerCompositor {
 
             let pending = chain.as_ref().is_some_and(|cg| cg.warmup_pending());
             let installed = chain.is_some();
-            if let Some(next) = run.pending_outcome(
-                pending,
-                warmup_frame_status.presentable(),
-                installed,
-            ) {
+            if let Some(next) =
+                run.pending_outcome(pending, warmup_frame_status.presentable(), installed)
+            {
                 outcome = next;
                 break;
             }
@@ -1431,7 +1449,11 @@ impl LayerCompositor {
         if let Some(outcome) = run.exhausted(Instant::now(), 0) {
             return outcome;
         }
-        let groups = project.settings.master_effect_groups.as_deref().unwrap_or(&[]);
+        let groups = project
+            .settings
+            .master_effect_groups
+            .as_deref()
+            .unwrap_or(&[]);
 
         let width = self.main.width();
         let height = self.main.height();
@@ -1490,7 +1512,11 @@ impl LayerCompositor {
             return outcome;
         }
         let (led_w, led_h) = (led_grid_size.0.max(1), led_grid_size.1.max(1));
-        if self.led_main.as_ref().is_none_or(|l| l.width() != led_w || l.height() != led_h) {
+        if self
+            .led_main
+            .as_ref()
+            .is_none_or(|l| l.width() != led_w || l.height() != led_h)
+        {
             self.led_main = Some(PingPong::new(device, pool, led_w, led_h, "LED Composite"));
         }
         if self.led_master_ec.is_none() {
@@ -1624,9 +1650,9 @@ impl LayerCompositor {
                 if manifold_node_engine::runtime::prewarm_worker_pending_count() == 0 {
                     break;
                 }
-                if let Some(exhausted) = Self::drain_fusion_warmup(
-                    pass.layer(&group.layer_id, Instant::now()),
-                ) {
+                if let Some(exhausted) =
+                    Self::drain_fusion_warmup(pass.layer(&group.layer_id, Instant::now()))
+                {
                     outcome = exhausted;
                     break;
                 }
@@ -1683,7 +1709,8 @@ impl LayerCompositor {
                 let Some(led_group_buf) = self.led_group_bufs.get_mut(&group.layer_id) else {
                     break;
                 };
-                let Some(led_group_chain) = self.led_group_effect_chains.get_mut(&group.layer_id) else {
+                let Some(led_group_chain) = self.led_group_effect_chains.get_mut(&group.layer_id)
+                else {
                     break;
                 };
                 led_outcome = Self::pump_chain_warmup(
@@ -1703,9 +1730,9 @@ impl LayerCompositor {
                 if manifold_node_engine::runtime::prewarm_worker_pending_count() == 0 {
                     break;
                 }
-                if let Some(exhausted) = Self::drain_fusion_warmup(
-                    pass.layer(&group.layer_id, Instant::now()),
-                ) {
+                if let Some(exhausted) =
+                    Self::drain_fusion_warmup(pass.layer(&group.layer_id, Instant::now()))
+                {
                     led_outcome = exhausted;
                     break;
                 }
@@ -1744,7 +1771,11 @@ impl LayerCompositor {
         }
 
         let (led_w, led_h) = (led_grid_size.0.max(1), led_grid_size.1.max(1));
-        if self.led_main.as_ref().is_none_or(|l| l.width() != led_w || l.height() != led_h) {
+        if self
+            .led_main
+            .as_ref()
+            .is_none_or(|l| l.width() != led_w || l.height() != led_h)
+        {
             self.led_main = Some(PingPong::new(device, pool, led_w, led_h, "LED Composite"));
         }
 
@@ -2468,9 +2499,7 @@ impl LayerCompositor {
         layer_outputs: &[LayerOutput],
         frame: &CompositorFrame,
     ) {
-        let any_led = layer_outputs
-            .iter()
-            .any(|o| o.led_route != LedRoute::None);
+        let any_led = layer_outputs.iter().any(|o| o.led_route != LedRoute::None);
         if !any_led {
             // No LED routing this frame — release resources.
             self.led_main = None;
@@ -2966,7 +2995,8 @@ impl LayerCompositor {
             if let Some(desc) = frame.find_layer(*layer_index)
                 && self.layer_skin_registry.was_read(desc.layer_id)
             {
-                self.layer_skin_registry.publish_snapshot(gpu, desc.layer_id, texture);
+                self.layer_skin_registry
+                    .publish_snapshot(gpu, desc.layer_id, texture);
             }
         }
         for output in &self.layer_outputs_scratch {
@@ -2974,7 +3004,8 @@ impl LayerCompositor {
                 continue;
             };
             if desc.is_group && self.layer_skin_registry.was_read(desc.layer_id) {
-                self.layer_skin_registry.publish_snapshot(gpu, desc.layer_id, output.texture());
+                self.layer_skin_registry
+                    .publish_snapshot(gpu, desc.layer_id, output.texture());
             }
         }
         self.layer_skin_registry.finish_snapshots();
@@ -2997,7 +3028,9 @@ impl LayerCompositor {
 
         self.source_outputs_scratch.clear();
         self.source_outputs_scratch.extend(
-            self.layer_outputs_scratch.iter().map(|output| (output.layer_index, output.texture().clone())),
+            self.layer_outputs_scratch
+                .iter()
+                .map(|output| (output.layer_index, output.texture().clone())),
         );
         self.fold_groups(gpu, frame);
         gpu.checkpoint();
@@ -3014,7 +3047,11 @@ impl LayerCompositor {
 
 impl Compositor for LayerCompositor {
     fn visit_chain_failures(&self, visit: &mut dyn FnMut(Option<&LayerId>, &std::sync::Arc<str>)) {
-        for (id, slot) in self.effect_chains.iter().chain(self.group_effect_chains.iter()) {
+        for (id, slot) in self
+            .effect_chains
+            .iter()
+            .chain(self.group_effect_chains.iter())
+        {
             if let Some(failure) = slot.failure() {
                 visit(Some(id), failure.message());
             }
@@ -3063,13 +3100,11 @@ impl Compositor for LayerCompositor {
         let chains = std::iter::once(&self.master_effect_chain)
             .chain(self.effect_chains.values())
             .chain(self.group_effect_chains.values());
-        chains
-            .filter_map(|chain| chain.as_ref())
-            .find_map(|chain| {
-                chain
-                    .scene_viewport_status()
-                    .and_then(|_| chain.scene_viewport_texture())
-            })
+        chains.filter_map(|chain| chain.as_ref()).find_map(|chain| {
+            chain
+                .scene_viewport_status()
+                .and_then(|_| chain.scene_viewport_texture())
+        })
     }
 
     fn scene_viewport_status(
@@ -3082,7 +3117,9 @@ impl Compositor for LayerCompositor {
             return Err(error);
         }
         let Some((_effect_id, _, _)) = self.scene_viewport_request.as_ref() else {
-            return Err(manifold_node_engine::scene::scene_viewport::SceneViewportHostError::MissingRuntime);
+            return Err(
+                manifold_node_engine::scene::scene_viewport::SceneViewportHostError::MissingRuntime,
+            );
         };
         let chains = std::iter::once(&self.master_effect_chain)
             .chain(self.effect_chains.values())
@@ -3097,10 +3134,7 @@ impl Compositor for LayerCompositor {
 
     fn write_scene_viewport_fluid_domains(
         &self,
-        output: &mut Vec<(
-            NodeId,
-            manifold_core::fluid_domain::FluidDomainSnapshot,
-        )>,
+        output: &mut Vec<(NodeId, manifold_core::fluid_domain::FluidDomainSnapshot)>,
     ) {
         if self.scene_viewport_error.is_some() {
             return;
@@ -3267,13 +3301,25 @@ impl Compositor for LayerCompositor {
 
     fn take_step_profiles(&mut self) -> Vec<manifold_node_engine::exec::execution::StepProfile> {
         let mut out = Vec::new();
-        for chain in self.effect_chains.values_mut().filter_map(ChainSlot::as_mut) {
+        for chain in self
+            .effect_chains
+            .values_mut()
+            .filter_map(ChainSlot::as_mut)
+        {
             out.extend(chain.take_step_profiles());
         }
-        for chain in self.group_effect_chains.values_mut().filter_map(ChainSlot::as_mut) {
+        for chain in self
+            .group_effect_chains
+            .values_mut()
+            .filter_map(ChainSlot::as_mut)
+        {
             out.extend(chain.take_step_profiles());
         }
-        for chain in self.led_group_effect_chains.values_mut().filter_map(ChainSlot::as_mut) {
+        for chain in self
+            .led_group_effect_chains
+            .values_mut()
+            .filter_map(ChainSlot::as_mut)
+        {
             out.extend(chain.take_step_profiles());
         }
         if let Some(cg) = self.master_effect_chain.as_mut() {
@@ -3576,12 +3622,7 @@ impl Compositor for LayerCompositor {
                 &self.layer_skin_registry,
                 frame.project_tempo,
             ) {
-                gpu.copy_texture_to_texture(
-                    processed,
-                    unsafe { &*led_src_tex_ptr },
-                    width,
-                    height,
-                );
+                gpu.copy_texture_to_texture(processed, unsafe { &*led_src_tex_ptr }, width, height);
             }
         } else if self.led_main.is_none() {
             // No LED layers active at all — release the LED master-FX state.
@@ -3616,50 +3657,90 @@ impl Compositor for LayerCompositor {
         &self.tonemap.output.texture
     }
 
-    fn prepare_resize(&self, device: &GpuDevice, width: u32, height: u32) -> Result<PreparedCompositorResize, String> {
+    fn prepare_resize(
+        &self,
+        device: &GpuDevice,
+        width: u32,
+        height: u32,
+    ) -> Result<PreparedCompositorResize, String> {
         // Legacy plugin processors have no fallible preparation contract. Refuse
         // rather than publishing half a resize if one is installed in the future.
         if !self.plugin_warmups.is_empty() {
-            return Err("Resize is unavailable while a legacy plugin processor is installed".into());
+            return Err(
+                "Resize is unavailable while a legacy plugin processor is installed".into(),
+            );
         }
         let main = PingPong::try_new(device, width, height)?;
-        let layers = self.layer_bufs.keys().map(|id| Ok((id.clone(), PingPong::try_new(device, width, height)?)))
+        let layers = self
+            .layer_bufs
+            .keys()
+            .map(|id| Ok((id.clone(), PingPong::try_new(device, width, height)?)))
             .collect::<Result<_, String>>()?;
-        let groups = self.group_bufs.keys().map(|id| Ok((id.clone(), PingPong::try_new(device, width, height)?)))
+        let groups = self
+            .group_bufs
+            .keys()
+            .map(|id| Ok((id.clone(), PingPong::try_new(device, width, height)?)))
             .collect::<Result<_, String>>()?;
-        let tonemap = RenderTarget::try_new(device, width, height, self.tonemap.output.format, "resize-tonemap")?;
+        let tonemap = RenderTarget::try_new(
+            device,
+            width,
+            height,
+            self.tonemap.output.format,
+            "resize-tonemap",
+        )?;
         let prepare_chains = |chains: &AHashMap<LayerId, ChainSlot>| {
-            chains.iter().filter_map(|(id, chain)| chain.as_ref().map(|chain| (id, chain)))
-                .map(|(id, chain)| chain.prepare_resize(device, width, height)
-                    .map(|prepared| (id.clone(), prepared)).map_err(|error| error.to_string()))
+            chains
+                .iter()
+                .filter_map(|(id, chain)| chain.as_ref().map(|chain| (id, chain)))
+                .map(|(id, chain)| {
+                    chain
+                        .prepare_resize(device, width, height)
+                        .map(|prepared| (id.clone(), prepared))
+                        .map_err(|error| error.to_string())
+                })
                 .collect::<Result<Vec<_>, String>>()
         };
         Ok(PreparedCompositorResize {
-            main, layers, groups, tonemap,
+            main,
+            layers,
+            groups,
+            tonemap,
             layer_chains: prepare_chains(&self.effect_chains)?,
             group_chains: prepare_chains(&self.group_effect_chains)?,
-            master_chain: self.master_effect_chain.as_ref()
+            master_chain: self
+                .master_effect_chain
+                .as_ref()
                 .map(|chain| chain.prepare_resize(device, width, height))
-                .transpose().map_err(|error| error.to_string())?,
+                .transpose()
+                .map_err(|error| error.to_string())?,
         })
     }
 
     fn commit_resize(&mut self, prepared: PreparedCompositorResize) {
-        self.blend.resize(prepared.main.width(), prepared.main.height());
+        self.blend
+            .resize(prepared.main.width(), prepared.main.height());
         self.main = prepared.main;
         self.layer_bufs = prepared.layers;
         self.group_bufs = prepared.groups;
         self.tonemap.output = prepared.tonemap;
         for (id, candidate) in prepared.layer_chains {
-            self.effect_chains.get_mut(&id).and_then(ChainSlot::as_mut)
-                .expect("resize chain owner unchanged").commit_resize(candidate);
+            self.effect_chains
+                .get_mut(&id)
+                .and_then(ChainSlot::as_mut)
+                .expect("resize chain owner unchanged")
+                .commit_resize(candidate);
         }
         for (id, candidate) in prepared.group_chains {
-            self.group_effect_chains.get_mut(&id).and_then(ChainSlot::as_mut)
-                .expect("resize chain owner unchanged").commit_resize(candidate);
+            self.group_effect_chains
+                .get_mut(&id)
+                .and_then(ChainSlot::as_mut)
+                .expect("resize chain owner unchanged")
+                .commit_resize(candidate);
         }
         if let Some(candidate) = prepared.master_chain {
-            self.master_effect_chain.as_mut().expect("resize chain owner unchanged")
+            self.master_effect_chain
+                .as_mut()
+                .expect("resize chain owner unchanged")
                 .commit_resize(candidate);
         }
         self.layer_outputs_scratch.clear();
@@ -3724,7 +3805,9 @@ impl Compositor for LayerCompositor {
         self.led_main.as_ref().map(|l| l.source_texture())
     }
 
-    fn layer_skin_registry(&self) -> Option<&manifold_node_engine::runtime::layer_skin::LayerSkinRegistry> {
+    fn layer_skin_registry(
+        &self,
+    ) -> Option<&manifold_node_engine::runtime::layer_skin::LayerSkinRegistry> {
         Some(&self.layer_skin_registry)
     }
 
@@ -3790,28 +3873,25 @@ impl Compositor for LayerCompositor {
     }
 }
 
-
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod led_warmup_tests {
     //! P2b LED tap warmup: resources that build on the first LED-enabled frame
     //! should be pre-created at load when the project routes layers to LEDs.
 
     use super::*;
+    use manifold_core::Beats;
     use manifold_core::clip::TimelineClip;
     use manifold_core::layer::Layer;
     use manifold_core::project::Project;
     use manifold_core::types::LayerType;
-    use manifold_core::Beats;
 
     fn led_project() -> Project {
         let mut project = Project::default();
         let mut layer = Layer::new("LED layer".to_string(), LayerType::Generator, 0);
         layer.blit_to_led = true;
-        layer.clips.push(TimelineClip::new_generator(
-            Beats(0.0),
-            Beats(4.0),
-        ));
+        layer
+            .clips
+            .push(TimelineClip::new_generator(Beats(0.0), Beats(4.0)));
         project.timeline.layers.push(layer);
         project
     }
@@ -3835,10 +3915,6 @@ mod led_warmup_tests {
     }
 }
 
-
-
-
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod led_composite_pixel_tests {
     //! BUG-2ptv (LED revival P1): value-level proof that the LED composite
@@ -3851,8 +3927,8 @@ mod led_composite_pixel_tests {
 
     use super::*;
     use crate::compositor::CompositeLayerDescriptor;
-    use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
     use half::f16;
+    use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
 
     const LED_W: u32 = 8;
     const LED_H: u32 = 120;
@@ -3868,7 +3944,10 @@ mod led_composite_pixel_tests {
     const GREEN: (f32, f32, f32) = (0.15, 0.85, 0.3);
     const TOL: f32 = 0.02;
 
-    fn solid_clip_texture(device: &manifold_gpu::testkit::TestDevice, color: (f32, f32, f32)) -> GpuTexture {
+    fn solid_clip_texture(
+        device: &manifold_gpu::testkit::TestDevice,
+        color: (f32, f32, f32),
+    ) -> GpuTexture {
         let tex = device.create_texture(&GpuTextureDesc {
             width: COMP_W,
             height: COMP_H,
@@ -4079,10 +4158,15 @@ mod led_composite_pixel_tests {
         let child = LayerId::from("child");
         // No consumer read anything: unreferenced layers are never
         // snapshotted and serve the transparent-black fallback.
-        render_layers(&mut comp, &device, &[
-            group_spec("parent", 0),
-            mirror_spec("child", 1, Some(parent.clone()), SRC),
-        ], &[]);
+        render_layers(
+            &mut comp,
+            &device,
+            &[
+                group_spec("parent", 0),
+                mirror_spec("child", 1, Some(parent.clone()), SRC),
+            ],
+            &[],
+        );
         for id in [&parent, &child] {
             let texture = comp.layer_skin_registry.get(id);
             assert_eq!(texture.width, 1, "{id}: unreferenced layer was snapshotted");
@@ -4092,10 +4176,15 @@ mod led_composite_pixel_tests {
         // snapshot both the group and its folded child.
         comp.layer_skin_registry.get(&parent);
         comp.layer_skin_registry.get(&child);
-        render_layers(&mut comp, &device, &[
-            group_spec("parent", 0),
-            mirror_spec("child", 1, Some(parent.clone()), SRC),
-        ], &[]);
+        render_layers(
+            &mut comp,
+            &device,
+            &[
+                group_spec("parent", 0),
+                mirror_spec("child", 1, Some(parent.clone()), SRC),
+            ],
+            &[],
+        );
         for id in [&parent, &child] {
             let texture = comp.layer_skin_registry.get(id);
             assert_eq!(texture.width, COMP_W, "{id}: source lost during folding");
@@ -4111,12 +4200,8 @@ mod led_composite_pixel_tests {
         let device = manifold_gpu::testkit::test_device();
         let mut comp = LayerCompositor::new(&device, COMP_W, COMP_H);
 
-        let (led, screen) = render_layers(
-            &mut comp,
-            &device,
-            &[mirror_spec("L0", 0, None, SRC)],
-            &[],
-        );
+        let (led, screen) =
+            render_layers(&mut comp, &device, &[mirror_spec("L0", 0, None, SRC)], &[]);
 
         // (a) the LED composite exists at the native LED grid size.
         let led = led.expect("an LED-routed layer must produce an LED composite texture");
@@ -4185,7 +4270,8 @@ mod led_composite_pixel_tests {
 
         // The LED composite carries the LED layer's content (D9: rendered at
         // main res, blended down to the native grid).
-        let led_px = decode_halves(&led.expect("an active LED-type layer must produce an LED composite"));
+        let led_px =
+            decode_halves(&led.expect("an active LED-type layer must produce an LED composite"));
         assert_solid(&led_px, "LED composite");
 
         // D14: the screen composite is pixel-identical to a frame where the
@@ -4229,7 +4315,8 @@ mod led_composite_pixel_tests {
             &[1],
         );
 
-        let led_px = decode_halves(&led.expect("an active LED-type layer must produce an LED composite"));
+        let led_px =
+            decode_halves(&led.expect("an active LED-type layer must produce an LED composite"));
         assert_solid(&led_px, "LED composite under the direct route");
         let worst_green = led_px
             .iter()
@@ -4271,14 +4358,12 @@ mod led_composite_pixel_tests {
         let (led_b, _) = render_layers(
             &mut comp_b,
             &device,
-            &[
-                led_spec("led", 1, Some(group_id())),
-                group_spec("grp", 2),
-            ],
+            &[led_spec("led", 1, Some(group_id())), group_spec("grp", 2)],
             &[1],
         );
 
-        let led_a = led_a.expect("a direct route through a mixed group must produce an LED composite");
+        let led_a =
+            led_a.expect("a direct route through a mixed group must produce an LED composite");
         let led_b = led_b.expect("a direct route through a group must produce an LED composite");
         assert_eq!(
             led_a, led_b,

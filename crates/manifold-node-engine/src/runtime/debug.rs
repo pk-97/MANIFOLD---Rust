@@ -43,7 +43,9 @@ impl PresetRuntime {
         let mut step_outputs = Vec::new();
         for (idx, step) in self.plan.steps().iter().enumerate() {
             for (port_name, res_id) in &step.outputs {
-                let tex = backend.slot_for(*res_id).and_then(|s| backend.texture_2d(s));
+                let tex = backend
+                    .slot_for(*res_id)
+                    .and_then(|s| backend.texture_2d(s));
                 step_outputs.push(StepDebugInfo {
                     step_idx: idx,
                     port_name,

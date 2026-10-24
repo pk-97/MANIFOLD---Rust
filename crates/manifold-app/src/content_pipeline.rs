@@ -1,10 +1,13 @@
-mod trigger_targets;
-mod scene_viewport_capture;
-mod editing_chrome;
 mod clip_atlas;
+mod editing_chrome;
+mod scene_viewport_capture;
+mod trigger_targets;
 use clip_atlas::retain_thumbnail_requests;
 #[cfg(target_os = "macos")]
-use clip_atlas::{fill_clip_atlas, find_parked_generator_clip, find_parked_video_clip, restore_clip_atlas, thumb_source_shader_readable};
+use clip_atlas::{
+    fill_clip_atlas, find_parked_generator_clip, find_parked_video_clip, restore_clip_atlas,
+    thumb_source_shader_readable,
+};
 #[cfg(all(test, target_os = "macos"))]
 mod trigger_lane_force_tests;
 
@@ -12,19 +15,22 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 
 use ahash::AHashMap;
+use manifold_compositor::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
+use manifold_compositor::generator_renderer::GeneratorRenderer;
+use manifold_compositor::layer_compositor::CompositeClipDescriptor;
+use manifold_compositor::presentation::{
+    DisplayCapabilities, DisplayDestination, DisplayPlan, DisplayPresentationState,
+    LinearPresentationTarget, LinearSceneFrame, PresentationPipeline,
+};
+use manifold_compositor::tonemap::{TonemapMode, TonemapSettings};
 use manifold_core::effects::{EffectGroup, PresetInstance};
 use manifold_core::types::BlendMode;
 use manifold_core::{ClipId, EffectId, LayerId, NodeId};
 #[cfg(target_os = "macos")]
 use manifold_media::video_renderer::VideoRenderer;
-use manifold_playback::engine::{PlaybackEngine, TickResult};
-use manifold_compositor::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
-use manifold_node_engine::runtime::preset_context::ProjectTempo;
-use manifold_compositor::generator_renderer::GeneratorRenderer;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_compositor::layer_compositor::CompositeClipDescriptor;
-use manifold_compositor::tonemap::{TonemapSettings, TonemapMode};
-use manifold_compositor::presentation::{DisplayCapabilities, DisplayDestination, DisplayPlan, DisplayPresentationState, LinearPresentationTarget, LinearSceneFrame, PresentationPipeline};
+use manifold_node_engine::runtime::preset_context::ProjectTempo;
+use manifold_playback::engine::{PlaybackEngine, TickResult};
 
 /// Thread-safe shared output dimensions. The content thread writes new
 /// dimensions after resize; the UI thread reads them for aspect ratio.
@@ -53,10 +59,7 @@ impl SharedOutputView {
 /// Compute a per-layer-index `hidden` bitmap from the core predicate.
 /// `out` is resized to `layers.len()` and filled; `layers` must be in tree
 /// order (parent indices < child indices) so `find_parent_layer` scans safely.
-fn compute_hidden_by_index(
-    layers: &[manifold_core::layer::Layer],
-    out: &mut Vec<bool>,
-) {
+fn compute_hidden_by_index(layers: &[manifold_core::layer::Layer], out: &mut Vec<bool>) {
     out.clear();
     out.resize(layers.len(), false);
     let any_solo_video = manifold_core::layer::Layer::any_solo_video(layers);
@@ -177,9 +180,10 @@ fn compute_render_skip_indices(
     for &idx in occluded {
         // Skip only a plain top-level leaf that isn't feeding LED. Any layer
         // we can't positively classify as safe stays on the render path.
-        let safe = layers.iter().find(|l| l.index == idx).is_some_and(|l| {
-            !l.is_group() && l.parent_layer_id.is_none() && !l.routes_to_led()
-        });
+        let safe = layers
+            .iter()
+            .find(|l| l.index == idx)
+            .is_some_and(|l| !l.is_group() && l.parent_layer_id.is_none() && !l.routes_to_led());
         if safe {
             out.push(idx);
         }
@@ -188,9 +192,10 @@ fn compute_render_skip_indices(
         // Hidden layers inherit the same safety filter as occluded layers:
         // plain top-level leaf, not LED-routed, no preview. Grouped/LED
         // layers stay on the blend-skip-only path.
-        let safe = layers.iter().find(|l| l.index == idx).is_some_and(|l| {
-            !l.is_group() && l.parent_layer_id.is_none() && !l.routes_to_led()
-        });
+        let safe = layers
+            .iter()
+            .find(|l| l.index == idx)
+            .is_some_and(|l| !l.is_group() && l.parent_layer_id.is_none() && !l.routes_to_led());
         if safe && !out.contains(&idx) {
             out.push(idx);
         }
@@ -277,7 +282,10 @@ mod atlas_cell_uv_tests {
         let uv1 = atlas_cell_uv(ATLAS_GRID, cell_aspect);
         let inv = 1.0 / ATLAS_GRID as f32;
         assert!((uv0[0] - uv1[0]).abs() < 1e-6, "same column -> same u0");
-        assert!((uv1[1] - (uv0[1] + inv)).abs() < 1e-6, "one row down -> v0 + inv");
+        assert!(
+            (uv1[1] - (uv0[1] + inv)).abs() < 1e-6,
+            "one row down -> v0 + inv"
+        );
     }
 
     #[test]
@@ -298,7 +306,10 @@ mod atlas_cell_uv_tests {
         let top_margin = uv[1] - half_ty;
         let bottom_margin = (inv - half_ty) - uv[3];
         assert!(top_margin > 1e-6, "must actually letterbox, not fill v");
-        assert!((top_margin - bottom_margin).abs() < 1e-6, "must be centered");
+        assert!(
+            (top_margin - bottom_margin).abs() < 1e-6,
+            "must be centered"
+        );
     }
 }
 
@@ -326,7 +337,10 @@ pub const CLIP_ATLAS_CELLS: usize = (CLIP_ATLAS_COLS * CLIP_ATLAS_ROWS) as usize
 
 /// Snapshot of `(published layout, clip→content-hash)` captured when a save
 /// readback is submitted, consumed when it returns (section 24 5c-2 P4).
-type ClipAtlasPersistSnapshot = (Vec<(manifold_core::ClipId, u32, u32)>, AHashMap<String, u64>);
+type ClipAtlasPersistSnapshot = (
+    Vec<(manifold_core::ClipId, u32, u32)>,
+    AHashMap<String, u64>,
+);
 
 /// `(built layout, GPU signal value the pixels land on)` — see
 /// `ContentPipeline::clip_atlas_pending_layout` and `CLIP_ATLAS_LAYOUT_UNSTAMPED`.
@@ -342,9 +356,11 @@ const CLIP_ATLAS_LAYOUT_UNSTAMPED: u64 = u64::MAX;
 
 use manifold_core::change::{ChangeSet, Part};
 /// `render_all`'s structure key: layer index, string params, eviction (section 4).
-const GENERATOR_STRUCTURE_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Clips, Part::Effects]);
+const GENERATOR_STRUCTURE_PARTS: ChangeSet =
+    ChangeSet::of(&[Part::Layers, Part::Clips, Part::Effects]);
 /// Trigger targets resolve owners from layers and instances (section 4).
-const TRIGGER_TARGET_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Effects, Part::AudioSetup]);
+const TRIGGER_TARGET_PARTS: ChangeSet =
+    ChangeSet::of(&[Part::Layers, Part::Effects, Part::AudioSetup]);
 
 /// Aspect-fit viewport `(x, y, w, h)` for atlas cell `i`, letterboxing a source
 /// of `src_w`×`src_h` inside its 16:9 cell so the thumbnail keeps the source's
@@ -883,7 +899,8 @@ impl ContentPipeline {
             last_render_work_ms: 0.0,
             #[cfg(test)]
             last_render_dt: 0.0,
-            last_frame_status: manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete,
+            last_frame_status:
+                manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete,
             last_rt_updates: Default::default(),
             last_rt_dispatches: 0,
             last_rt_history_resets: 0,
@@ -1001,7 +1018,10 @@ impl ContentPipeline {
     /// completion handler. Buffers complete in submission order, so the
     /// receiver groups them into plain frames by order.
     #[cfg(all(target_os = "macos", feature = "perf-soak"))]
-    pub fn set_gpu_time_tap(&mut self, tap: Option<crossbeam_channel::Sender<(&'static str, f64, f64)>>) {
+    pub fn set_gpu_time_tap(
+        &mut self,
+        tap: Option<crossbeam_channel::Sender<(&'static str, f64, f64)>>,
+    ) {
         self.gpu_time_tap = tap;
     }
 
@@ -1027,7 +1047,9 @@ impl ContentPipeline {
     /// `engine.renderers_mut()` + `as_any_mut().downcast_mut::<GeneratorRenderer>()`
     /// and combines both lists.
     #[cfg(feature = "perf-soak")]
-    pub fn take_step_profiles(&mut self) -> Vec<manifold_node_engine::exec::execution::StepProfile> {
+    pub fn take_step_profiles(
+        &mut self,
+    ) -> Vec<manifold_node_engine::exec::execution::StepProfile> {
         self.compositor.take_step_profiles()
     }
 
@@ -1117,13 +1139,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // section 24 5c-2 P5: box-filter downsample for clip-thumbnail capture (anti-alias
         // the big full-res→cell downscale). Reusable helper (unit-tested in
         // manifold-nodes).
-        self.clip_downsample_pipeline =
-            Some(manifold_ui_paint::clip_thumb_gpu::create_box_downsample_pipeline(
+        self.clip_downsample_pipeline = Some(
+            manifold_ui_paint::clip_thumb_gpu::create_box_downsample_pipeline(
                 &device,
                 manifold_gpu::GpuTextureFormat::Rgba16Float,
                 CLIP_ATLAS_CELL_W,
                 CLIP_ATLAS_CELL_H,
-            ));
+            ),
+        );
 
         // Node-preview semantic encodings. Both share the fullscreen-triangle
         // vertex stage above and use NO per-frame statistics, so they're stable
@@ -1344,7 +1367,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// so replaced warmup images do not remain alive until the first play frame.
     /// Only call at a loading boundary with no outstanding unsubmitted encoder.
     #[cfg(target_os = "macos")]
-    pub(crate) fn finish_warmup_gpu_resources(&mut self) -> Option<manifold_gpu::GpuResidencyStats> {
+    pub(crate) fn finish_warmup_gpu_resources(
+        &mut self,
+    ) -> Option<manifold_gpu::GpuResidencyStats> {
         if let (Some(device), Some(event)) = (&self.native_device, &self.native_event) {
             let mut encoder = device.create_encoder("Warmup retirement checkpoint");
             encoder.signal_event(event);
@@ -1384,13 +1409,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// SCENE_MODIFIER_RT_DESIGN.md section 5.4 (P5): the merged validity of
     /// the last `render_content` frame. Export rejects anything except
     /// `Complete`; warmup treats `PendingGeometry` as incomplete preparation.
-    pub fn frame_render_status(&self) -> manifold_node_engine::runtime::frame_status::FrameRenderStatus {
+    pub fn frame_render_status(
+        &self,
+    ) -> manifold_node_engine::runtime::frame_status::FrameRenderStatus {
         self.last_frame_status
     }
 
     #[cfg(any(feature = "perf-soak", all(test, feature = "journey-proofs")))]
     pub(crate) fn frame_rt_observation(&self) -> (manifold_gpu::raytrace::RtAccelUpdate, u32, u32) {
-        (self.last_rt_updates, self.last_rt_dispatches, self.last_rt_history_resets)
+        (
+            self.last_rt_updates,
+            self.last_rt_dispatches,
+            self.last_rt_history_resets,
+        )
     }
 
     // ── Surface readiness (GPU fence notification) ──────────────────────
@@ -1436,7 +1467,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             b.as_ref()
                 .is_none_or(|b| b.is_reusable_ephemeral(slot, frame))
         };
-        preview_ok && editor_ok(&self.node_preview_bridge) && editor_ok(&self.node_atlas_bridge)
+        preview_ok
+            && editor_ok(&self.node_preview_bridge)
+            && editor_ok(&self.node_atlas_bridge)
             && editor_ok(&self.scene_viewport.bridge)
     }
 
@@ -1514,15 +1547,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // and the real blocker is a UI-side bridge read fence — name it, or
         // the next reader misdiagnoses this as a content-queue hang (clearing
         // the signal below is then a no-op and the wait re-trips every 5s).
-        let bridge_state = |name: &str, b: &Option<Arc<crate::shared_texture::SharedTextureBridge>>| {
-            b.as_ref().map_or_else(
-                || format!("{name}=none"),
-                |b| {
-                    let (front, published, reads) = b.debug_slot_state(idx);
-                    format!("{name}(front={front} published={published} reads_in_flight={reads})")
-                },
-            )
-        };
+        let bridge_state =
+            |name: &str, b: &Option<Arc<crate::shared_texture::SharedTextureBridge>>| {
+                b.as_ref().map_or_else(
+                    || format!("{name}=none"),
+                    |b| {
+                        let (front, published, reads) = b.debug_slot_state(idx);
+                        format!(
+                            "{name}(front={front} published={published} reads_in_flight={reads})"
+                        )
+                    },
+                )
+            };
         log::error!(
             "[ContentPipeline]   slot {} bridges: {} {} {}",
             idx,
@@ -1825,8 +1861,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             } else {
                 project.settings.rt_quality.realtime
             };
-            self.compositor
-                .set_rt_quality(manifold_node_engine::exec::effect_node::RtQuality::from_column(&column));
+            self.compositor.set_rt_quality(
+                manifold_node_engine::exec::effect_node::RtQuality::from_column(&column),
+            );
             // Same column to every clip renderer — generators render
             // `render_scene` through their own PresetRuntimes, which the
             // compositor fan-out never reaches (the split-brain behind the
@@ -1864,14 +1901,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // Whether the previous frame was late decides if live physics may run
         // a second interval this frame.
         let load = manifold_node_engine::exec::effect_node::FrameLoad {
-            previous: manifold_core::Seconds((self.last_render_work_ms + self.last_fence_wait_ms) / 1000.0),
+            previous: manifold_core::Seconds(
+                (self.last_render_work_ms + self.last_fence_wait_ms) / 1000.0,
+            ),
             budget: manifold_core::Seconds(1.0 / f64::from(fps.max(1.0))),
         };
         let interval = manifold_core::Seconds(physics.sim_rate.interval());
         let sim_step = if export_mode {
             manifold_node_engine::exec::effect_node::SimStep::export(interval)
         } else {
-            manifold_node_engine::exec::effect_node::SimStep::live(interval).with_live_load(Some(load))
+            manifold_node_engine::exec::effect_node::SimStep::live(interval)
+                .with_live_load(Some(load))
         }
         .with_replay_origin(engine.replay_origin())
         .with_played_target(engine.take_played_target())
@@ -1881,7 +1921,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 
         // §5.4: one reset per frame; the generator and compositor wrappers
         // merge into this before their respective drops below.
-        self.last_frame_status = manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete;
+        self.last_frame_status =
+            manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete;
         self.last_rt_updates = Default::default();
         self.last_rt_dispatches = 0;
         self.last_rt_history_resets = 0;
@@ -1902,10 +1943,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             let layer_skins = self.compositor.layer_skin_registry();
             let (renderers, _) = engine.split_renderer_project();
             for renderer in renderers.iter_mut() {
-                if let Some(generator) = renderer
-                    .as_any_mut()
-                    .downcast_mut::<GeneratorRenderer>()
-                {
+                if let Some(generator) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
                     generator.set_layer_skin_registry(layer_skins);
                 }
             }
@@ -2044,20 +2082,31 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // the content snapshot exposes the failure and export rejects it.
         engine.with_trigger_pulses(|pulses, renderers, project| {
             if let Some(first) = pulses.first() {
-                self.trigger_targets.refresh(project, stamps.key(TRIGGER_TARGET_PARTS), first.epoch);
+                self.trigger_targets.refresh(
+                    project,
+                    stamps.key(TRIGGER_TARGET_PARTS),
+                    first.epoch,
+                );
             }
-            Self::apply_trigger_pulses(&mut self.master_trigger_count, &self.trigger_targets, pulses, renderers, project);
+            Self::apply_trigger_pulses(
+                &mut self.master_trigger_count,
+                &self.trigger_targets,
+                pulses,
+                renderers,
+                project,
+            );
         });
 
         // Split borrow: get renderers + project from engine simultaneously.
         // The tempo map is sorted at write time, so the render reads it shared.
         let (renderers, project) = engine.split_renderer_project();
         self.sdr_curve = project.and_then(|p| {
-            p.settings.tonemap_enabled.then_some(p.settings.tonemap_curve)
+            p.settings
+                .tonemap_enabled
+                .then_some(p.settings.tonemap_curve)
         });
         let layers = project.map(|p| p.timeline.layers.as_slice()).unwrap_or(&[]);
-        let project_tempo = project
-            .map(|p| ProjectTempo::new(&p.tempo_map, p.settings.bpm));
+        let project_tempo = project.map(|p| ProjectTempo::new(&p.tempo_map, p.settings.bpm));
 
         // ── Generators (separate CB, committed first) ─────────────────
         // Generators must commit before the compositor because the parallel
@@ -2121,15 +2170,27 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             // sources until dependency tracking can narrow the render set.
             self.occlusion_render_skip_enabled
                 && !layers.iter().any(|layer| {
-                    layer.effect_groups.as_deref().unwrap_or(&[]).iter()
+                    layer
+                        .effect_groups
+                        .as_deref()
+                        .unwrap_or(&[])
+                        .iter()
                         .any(|group| group.mask_effect_id.is_some())
                         || layer.clips.iter().any(|clip| {
-                            clip.effect_groups.as_deref().unwrap_or(&[]).iter()
+                            clip.effect_groups
+                                .as_deref()
+                                .unwrap_or(&[])
+                                .iter()
                                 .any(|group| group.mask_effect_id.is_some())
                         })
                 })
                 && !project.is_some_and(|project| {
-                    project.settings.master_effect_groups.as_deref().unwrap_or(&[]).iter()
+                    project
+                        .settings
+                        .master_effect_groups
+                        .as_deref()
+                        .unwrap_or(&[])
+                        .iter()
                         .any(|group| group.mask_effect_id.is_some())
                 }),
             preview_active,
@@ -2179,32 +2240,56 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                         match &self.node_preview_generator {
                             Some((layer_id, node_id)) => {
                                 if self.modifier_editor_watched {
-                                    modifier_preview_error = gen_renderer.set_modifier_preview_node(
-                                        layer_id, self.node_preview_modifier.as_deref(), node_id.as_ref());
-                                    gen_renderer.set_modifier_dump_visible(layer_id,
-                                        self.node_preview_modifier.as_deref(), &self.node_atlas_visible);
+                                    modifier_preview_error = gen_renderer
+                                        .set_modifier_preview_node(
+                                            layer_id,
+                                            self.node_preview_modifier.as_deref(),
+                                            node_id.as_ref(),
+                                        );
+                                    gen_renderer.set_modifier_dump_visible(
+                                        layer_id,
+                                        self.node_preview_modifier.as_deref(),
+                                        &self.node_atlas_visible,
+                                    );
                                 } else {
                                     gen_renderer.set_preview_node(layer_id, node_id.as_ref());
-                                    gen_renderer.set_dump_visible(layer_id, &self.node_atlas_visible);
+                                    gen_renderer
+                                        .set_dump_visible(layer_id, &self.node_atlas_visible);
                                 }
                             }
                             None => gen_renderer.clear_preview(),
                         }
 
-                        let scene_request = self.scene_viewport.request.as_ref().and_then(|request| {
-                            match request.target.host_target() {
-                                Some(manifold_core::GraphTarget::Generator(layer)) =>
-                                    Some((layer.clone(), request.node.clone(), request.config)),
-                                _ => None,
-                            }
-                        });
-                        gen_renderer.set_scene_viewport_request(scene_request,
-                            self.scene_viewport.request.as_ref().and_then(|request| request.modifier.clone()));
+                        let scene_request =
+                            self.scene_viewport
+                                .request
+                                .as_ref()
+                                .and_then(|request| match request.target.host_target() {
+                                    Some(manifold_core::GraphTarget::Generator(layer)) => {
+                                        Some((layer.clone(), request.node.clone(), request.config))
+                                    }
+                                    _ => None,
+                                });
+                        gen_renderer.set_scene_viewport_request(
+                            scene_request,
+                            self.scene_viewport
+                                .request
+                                .as_ref()
+                                .and_then(|request| request.modifier.clone()),
+                        );
                         self.scene_picks.send(gen_renderer);
                         #[cfg(target_os = "macos")]
-                        self.outline.apply(gen_renderer, self.physics_overlay.layer(), self.scene_viewport.generator_layer());
+                        self.outline.apply(
+                            gen_renderer,
+                            self.physics_overlay.layer(),
+                            self.scene_viewport.generator_layer(),
+                        );
                         #[cfg(target_os = "macos")]
-                        self.gizmos.apply(gen_renderer, self.physics_overlay.layer(), self.scene_viewport.generator_layer());
+                        self.gizmos.apply(
+                            gen_renderer,
+                            self.physics_overlay.layer(),
+                            self.scene_viewport.generator_layer(),
+                        );
                         gen_renderer.render_all(
                             &mut gpu_gen,
                             time_f64,
@@ -2228,21 +2313,49 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 self.last_rt_dispatches = gpu_gen.rt_dispatches;
                 self.last_rt_history_resets = gpu_gen.rt_history_resets;
             }
-            let generators = renderers.iter().find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>());
-            self.physics_overlay.record(self.write_surface_index, frame_count, |layer, domains, lights, gizmos| {
-                generators?.write_physics_overlay(layer, domains, lights, gizmos)
-            });
+            let generators = renderers
+                .iter()
+                .find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>());
+            self.physics_overlay.record(
+                self.write_surface_index,
+                frame_count,
+                |layer, domains, lights, gizmos| {
+                    generators?.write_physics_overlay(layer, domains, lights, gizmos)
+                },
+            );
             #[cfg(target_os = "macos")]
-            self.gizmos.take_frame_depth(generators, self.physics_overlay.layer());
+            self.gizmos
+                .take_frame_depth(generators, self.physics_overlay.layer());
             #[cfg(target_os = "macos")]
-            self.gizmos.compose_output(project, &stamps, self.physics_overlay.frames[self.write_surface_index].as_ref(), (self.output_w, self.output_h));
-            self.setup_fits.record(project, stamps, |domains, not_made, refused, each| generators.into_iter().for_each(|g| g.each_rendered_setup(domains, not_made, refused, &mut *each)));
+            self.gizmos.compose_output(
+                project,
+                &stamps,
+                self.physics_overlay.frames[self.write_surface_index].as_ref(),
+                (self.output_w, self.output_h),
+            );
+            self.setup_fits
+                .record(project, stamps, |domains, not_made, refused, each| {
+                    generators
+                        .into_iter()
+                        .for_each(|g| g.each_rendered_setup(domains, not_made, refused, &mut *each))
+                });
             // Selection masks and a generator viewport frame, beside the pictures (D9).
             #[cfg(target_os = "macos")]
-            if let Some(copy) = self.outline.capture_generator(native_device, &mut gen_enc, self.write_surface_index, frame_count,
-                generators, &mut self.physics_overlay, &mut self.scene_viewport)
-            {
-                copy.compose_gizmos(&mut self.gizmos, project, &stamps, self.physics_overlay.frames[self.write_surface_index].as_ref());
+            if let Some(copy) = self.outline.capture_generator(
+                native_device,
+                &mut gen_enc,
+                self.write_surface_index,
+                frame_count,
+                generators,
+                &mut self.physics_overlay,
+                &mut self.scene_viewport,
+            ) {
+                copy.compose_gizmos(
+                    &mut self.gizmos,
+                    project,
+                    &stamps,
+                    self.physics_overlay.frames[self.write_surface_index].as_ref(),
+                );
                 self.copy_scene_viewport(&mut gen_enc, copy);
             }
             // Capture: downscale the watched generator's node output into the
@@ -2316,10 +2429,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                             dump.iter().enumerate().take(ATLAS_CELLS)
                         {
                             let authored_id = if self.modifier_editor_watched {
-                                let Some(context) = self.node_preview_modifier.as_deref() else { continue; };
-                                let Some(local) = gr.modifier_preview_local_node(&layer_id, context, name) else { continue; };
+                                let Some(context) = self.node_preview_modifier.as_deref() else {
+                                    continue;
+                                };
+                                let Some(local) =
+                                    gr.modifier_preview_local_node(&layer_id, context, name)
+                                else {
+                                    continue;
+                                };
                                 local.clone()
-                            } else { NodeId::new(name.as_str()) };
+                            } else {
+                                NodeId::new(name.as_str())
+                            };
                             // A render-target-only node output can't be sampled —
                             // binding it crashes AGX. Skip its cell.
                             if !thumb_source_shader_readable(name.as_str(), tex) {
@@ -2376,8 +2497,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             self.last_live_node_params = gen_r.live_node_params(&layer_id);
             if self.modifier_editor_watched {
                 self.last_live_node_params.retain_mut(|(node, _)| {
-                    let Some(context) = self.node_preview_modifier.as_deref() else { return false; };
-                    let Some(local) = gen_r.modifier_preview_local_node(&layer_id, context, node.as_str()) else { return false; };
+                    let Some(context) = self.node_preview_modifier.as_deref() else {
+                        return false;
+                    };
+                    let Some(local) =
+                        gen_r.modifier_preview_local_node(&layer_id, context, node.as_str())
+                    else {
+                        return false;
+                    };
                     *node = local.clone();
                     true
                 });
@@ -2463,25 +2590,28 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 
         let mut layer_descs: Vec<CompositeLayerDescriptor> =
             manifold_core::scratch::recycle_vec(std::mem::take(&mut self.layer_desc_scratch));
-        layer_descs.extend(layers
-            .iter()
-            // Audio and trigger lanes never contribute visual content.
-            .filter(|layer| !layer.is_audio() && !layer.is_trigger())
-            .map(|layer| CompositeLayerDescriptor {
-                layer_index: layer.index,
-                layer_id: &layer.layer_id,
-                blend_mode: layer.default_blend_mode,
-                opacity: layer.opacity,
-                hidden: self.hidden_layers_scratch[layer.index as usize],
-                blit_to_led: layer.blit_to_led,
-                layer_type: layer.layer_type,
-                effects: layer.effects.as_deref().unwrap_or(empty_effects),
-                effect_groups: layer.effect_groups.as_deref().unwrap_or(empty_groups),
-                parent_layer_id: layer.parent_layer_id.as_ref(),
-                is_group: layer.is_group(),
-                trigger_count: gen_renderer_for_frame
-                    .map_or(0, |gr| gr.effective_trigger_count_for_layer(&layer.layer_id)),
-            }));
+        layer_descs.extend(
+            layers
+                .iter()
+                // Audio and trigger lanes never contribute visual content.
+                .filter(|layer| !layer.is_audio() && !layer.is_trigger())
+                .map(|layer| CompositeLayerDescriptor {
+                    layer_index: layer.index,
+                    layer_id: &layer.layer_id,
+                    blend_mode: layer.default_blend_mode,
+                    opacity: layer.opacity,
+                    hidden: self.hidden_layers_scratch[layer.index as usize],
+                    blit_to_led: layer.blit_to_led,
+                    layer_type: layer.layer_type,
+                    effects: layer.effects.as_deref().unwrap_or(empty_effects),
+                    effect_groups: layer.effect_groups.as_deref().unwrap_or(empty_groups),
+                    parent_layer_id: layer.parent_layer_id.as_ref(),
+                    is_group: layer.is_group(),
+                    trigger_count: gen_renderer_for_frame.map_or(0, |gr| {
+                        gr.effective_trigger_count_for_layer(&layer.layer_id)
+                    }),
+                }),
+        );
 
         let master_effects = project.map_or(empty_effects, |p| &p.settings.master_effects);
         let master_effect_groups = project
@@ -2540,18 +2670,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             // output this frame. Cheap clone; `None` clears (no preview).
             self.compositor
                 .set_preview_request(self.node_preview_request.clone());
-            self.compositor.set_scene_viewport_request(self.scene_viewport.request.as_ref().and_then(|request| {
-                match &request.target {
-                    manifold_core::GraphTarget::Effect(effect) => Some((effect.clone(), request.node.clone(), request.config)),
-                    _ => None,
-                }
-            }));
+            self.compositor.set_scene_viewport_request(
+                self.scene_viewport
+                    .request
+                    .as_ref()
+                    .and_then(|request| match &request.target {
+                        manifold_core::GraphTarget::Effect(effect) => {
+                            Some((effect.clone(), request.node.clone(), request.config))
+                        }
+                        _ => None,
+                    }),
+            );
             // Enable a dump on the watched effect's chain this frame. The Cmd+D
             // one-shot dumps the whole graph; the thumbnail atlas dumps only the
             // canvas's visible nodes. Cmd+D takes precedence when both are
             // pending (both read the same captured per-node textures).
             let dump_request = if let Some((eid, _)) = pending_dump.as_ref() {
-                Some(manifold_compositor::compositor::DumpRequest::All(eid.clone()))
+                Some(manifold_compositor::compositor::DumpRequest::All(
+                    eid.clone(),
+                ))
             } else if !self.node_atlas_visible.is_empty() {
                 self.node_preview_request.as_ref().map(|(e, _)| {
                     manifold_compositor::compositor::DumpRequest::Visible(
@@ -2633,8 +2770,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             let mut clip_meta: AHashMap<&str, (f64, f64, f64)> =
                 AHashMap::with_capacity(visible_set.len());
             // Per-clip content hash for the disk cache (key for save/restore).
-            let mut clip_hashes: AHashMap<String, u64> =
-                AHashMap::with_capacity(visible_set.len());
+            let mut clip_hashes: AHashMap<String, u64> = AHashMap::with_capacity(visible_set.len());
             for layer in layers {
                 for clip in &layer.clips {
                     let id = clip.id.as_str();
@@ -2738,7 +2874,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                         };
                         // First request: compute per-bar source times and open.
                         if !vid_r.has_poster(cid_str) {
-                            let Some(video_clip_id) = find_parked_video_clip(layers, cid_str) else {
+                            let Some(video_clip_id) = find_parked_video_clip(layers, cid_str)
+                            else {
                                 continue;
                             };
                             let count = crate::clip_filmstrip::cell_count(
@@ -3057,13 +3194,27 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                     manifold_gpu::GpuLoadAction::Clear,
                 );
                 // Editing chrome on the preview only, never in the output.
-                self.gizmos.draw_output(native_device, &mut native_enc, target, self.physics_overlay.frames[self.write_surface_index].as_ref());
+                self.gizmos.draw_output(
+                    native_device,
+                    &mut native_enc,
+                    target,
+                    self.physics_overlay.frames[self.write_surface_index].as_ref(),
+                );
             }
 
             // An effect scene's viewport frame goes to the viewport bridge
             // (D7a), beside the output, never into it (D9).
-            if let Some(copy) = self.scene_viewport.observe_effect(&*self.compositor, self.write_surface_index, frame_count) {
-                copy.compose_gizmos(&mut self.gizmos, project, &stamps, self.physics_overlay.frames[self.write_surface_index].as_ref());
+            if let Some(copy) = self.scene_viewport.observe_effect(
+                &*self.compositor,
+                self.write_surface_index,
+                frame_count,
+            ) {
+                copy.compose_gizmos(
+                    &mut self.gizmos,
+                    project,
+                    &stamps,
+                    self.physics_overlay.frames[self.write_surface_index].as_ref(),
+                );
                 self.copy_scene_viewport(&mut native_enc, copy);
             }
 
@@ -3176,7 +3327,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                     self.last_node_atlas_layout = l;
                 }
             }
-
         }
 
         // ── Live recording capture ──────────────────────────────────
@@ -3196,21 +3346,37 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                     };
                     // Recording is an SDR destination, independent of either
                     // monitor. Keep the shared HDR frame intact for displays.
-                    if self.sdr_output.as_ref().is_none_or(|t| t.width != src.width || t.height != src.height) {
-                        self.sdr_output = Some(manifold_node_engine::gpu::render_target::RenderTarget::new(
-                            native_device, src.width, src.height,
-                            manifold_compositor::presentation::UI_FORMAT, "SDR recording output",
-                        ));
+                    if self
+                        .sdr_output
+                        .as_ref()
+                        .is_none_or(|t| t.width != src.width || t.height != src.height)
+                    {
+                        self.sdr_output =
+                            Some(manifold_node_engine::gpu::render_target::RenderTarget::new(
+                                native_device,
+                                src.width,
+                                src.height,
+                                manifold_compositor::presentation::UI_FORMAT,
+                                "SDR recording output",
+                            ));
                     }
-                    let mapped = &self.sdr_output.as_ref().expect("SDR target allocated").texture;
-                    self.presentation_pipeline.as_ref().expect("presentation initialized").encode(
-                        &mut native_enc,
-                        LinearSceneFrame::new(src).expect("recording source is linear float"),
-                        LinearPresentationTarget::new(mapped).expect("SDR mapped target is float"),
-                        sdr_recording_plan,
-                        (0.0, 0.0, src.width as f32, src.height as f32),
-                        manifold_gpu::GpuLoadAction::Clear,
-                    );
+                    let mapped = &self
+                        .sdr_output
+                        .as_ref()
+                        .expect("SDR target allocated")
+                        .texture;
+                    self.presentation_pipeline
+                        .as_ref()
+                        .expect("presentation initialized")
+                        .encode(
+                            &mut native_enc,
+                            LinearSceneFrame::new(src).expect("recording source is linear float"),
+                            LinearPresentationTarget::new(mapped)
+                                .expect("SDR mapped target is float"),
+                            sdr_recording_plan,
+                            (0.0, 0.0, src.width as f32, src.height as f32),
+                            manifold_gpu::GpuLoadAction::Clear,
+                        );
                     let dst = session.pool_texture(tex_idx);
                     // Compute dispatch: Rgba16Float → sRGB Bgra8Unorm.
                     // Uses the native GpuEncoder directly (same command buffer).
@@ -3245,7 +3411,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 };
             // The viewport bridge publishes every frame a request is live: each
             // such frame wrote or cleared its surface above.
-            let scene_viewport = self.scene_viewport.request.as_ref().and_then(|_| self.scene_viewport.bridge.clone());
+            let scene_viewport = self
+                .scene_viewport
+                .request
+                .as_ref()
+                .and_then(|_| self.scene_viewport.bridge.clone());
             // Publish the thumbnail atlas only on frames a capture block actually
             // wrote it — never on an enabled-but-empty frame, which would flip the
             // UI to a freshly-cleared (all-transparent) surface and strobe black.
@@ -3318,12 +3488,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 .compositor
                 .dump_textures()
                 .into_iter()
-                .map(|(name, port, type_id, texture)| crate::graph_dump::DumpTexture {
-                    name,
-                    port,
-                    type_id,
-                    texture,
-                })
+                .map(
+                    |(name, port, type_id, texture)| crate::graph_dump::DumpTexture {
+                        name,
+                        port,
+                        type_id,
+                        texture,
+                    },
+                )
                 .collect();
             if let Err(e) = crate::graph_dump::write_graph_dump(native_device, &textures, dir) {
                 log::warn!("[graph-dump] write failed: {e}");
@@ -3408,7 +3580,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     ///   - 0.75 / 0.5 → render at 75% / 50%, MetalFX Spatial upscales back to output
     ///     (FSR 1.0 used as fallback if MetalFX is unavailable).
     pub fn resize(
-        &mut self, engine: &mut PlaybackEngine, width: u32, height: u32, render_scale: f32,
+        &mut self,
+        engine: &mut PlaybackEngine,
+        width: u32,
+        height: u32,
+        render_scale: f32,
     ) -> Result<(), String> {
         self.resize_renderers(engine.renderers_mut(), width, height, render_scale)
     }
@@ -3428,23 +3604,36 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         let scale = render_scale.clamp(0.25, 1.0);
         let render_w = ((width as f32) * scale).round().max(1.0) as u32;
         let render_h = ((height as f32) * scale).round().max(1.0) as u32;
-        if width == self.output_w && height == self.output_h
-            && self.compositor.dimensions() == (render_w, render_h) {
+        if width == self.output_w
+            && height == self.output_h
+            && self.compositor.dimensions() == (render_w, render_h)
+        {
             return Ok(());
         }
-        let device = self.native_device.as_ref().ok_or("GPU device unavailable for resize")?;
+        let device = self
+            .native_device
+            .as_ref()
+            .ok_or("GPU device unavailable for resize")?;
         let compositor = self.compositor.prepare_resize(device, render_w, render_h)?;
-        let (metalfx, fsr1) = if scale < 1.0 {
-            if manifold_compositor::metalfx_upscaler::MetalFxFullFrameUpscaler::is_available(device) {
-                (Some(manifold_compositor::metalfx_upscaler::MetalFxFullFrameUpscaler::try_new(
+        let (metalfx, fsr1) =
+            if scale < 1.0 {
+                if manifold_compositor::metalfx_upscaler::MetalFxFullFrameUpscaler::is_available(
+                    device,
+                ) {
+                    (Some(manifold_compositor::metalfx_upscaler::MetalFxFullFrameUpscaler::try_new(
                     device, render_w, render_h, width, height,
                 )?), None)
+                } else {
+                    (
+                        None,
+                        Some(manifold_compositor::fsr1::Fsr1Upscaler::try_new(
+                            device, render_w, render_h, width, height,
+                        )?),
+                    )
+                }
             } else {
-                (None, Some(manifold_compositor::fsr1::Fsr1Upscaler::try_new(
-                    device, render_w, render_h, width, height,
-                )?))
-            }
-        } else { (None, None) };
+                (None, None)
+            };
         let mut generators = Vec::new();
         for (index, renderer) in renderers.iter().enumerate() {
             if let Some(generator) = renderer.as_any().downcast_ref::<GeneratorRenderer>() {
@@ -3454,13 +3643,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // The snapshot includes every prepared candidate and all retained old
         // resources, including driver-owned scaler storage and pending GPU work.
         manifold_node_engine::load::expand::admit_candidate_bytes(
-            device.modifier_memory_snapshot(), 0,
-        ).map_err(|error| error.to_string())?;
+            device.modifier_memory_snapshot(),
+            0,
+        )
+        .map_err(|error| error.to_string())?;
 
         self.compositor.commit_resize(compositor);
         for (index, prepared) in generators {
-            renderers[index].as_any_mut().downcast_mut::<GeneratorRenderer>()
-                .expect("resize renderer owner unchanged").commit_resize_gpu(prepared);
+            renderers[index]
+                .as_any_mut()
+                .downcast_mut::<GeneratorRenderer>()
+                .expect("resize renderer owner unchanged")
+                .commit_resize_gpu(prepared);
         }
         self.metalfx = metalfx;
         self.fsr1 = fsr1;
@@ -3469,8 +3663,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // Image resizing schedules a CPU re-fit; its old texture stays visible
         // until the asynchronous replacement is ready.
         for renderer in renderers {
-            if let Some(image) = renderer.as_any_mut()
-                .downcast_mut::<manifold_media::image_renderer::ImageRenderer>() {
+            if let Some(image) = renderer
+                .as_any_mut()
+                .downcast_mut::<manifold_media::image_renderer::ImageRenderer>()
+            {
                 use manifold_playback::renderer::ClipRenderer as _;
                 image.resize(render_w as i32, render_h as i32);
             }
@@ -3489,7 +3685,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     pub fn resize_renderers(
         &mut self,
         _renderers: &mut [Box<dyn manifold_playback::renderer::ClipRenderer>],
-        _width: u32, _height: u32, _render_scale: f32,
+        _width: u32,
+        _height: u32,
+        _render_scale: f32,
     ) -> Result<(), String> {
         Err("Transactional GPU resize is unavailable on this backend".into())
     }
@@ -3641,7 +3839,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         {
             presentation.encode(
                 enc,
-                LinearSceneFrame::from_color_texture(source).expect("colour node output has a colour format"),
+                LinearSceneFrame::from_color_texture(source)
+                    .expect("colour node output has a colour format"),
                 LinearPresentationTarget::new(target).expect("node preview bridge is float"),
                 plan,
                 (0.0, 0.0, target.width as f32, target.height as f32),
@@ -3732,8 +3931,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             .native_device
             .as_ref()
             .expect("native device required for LED warmup");
-        self.compositor
-            .prewarm_led_resources(device, self.texture_pool.as_ref(), self.led_grid_size, project)
+        self.compositor.prewarm_led_resources(
+            device,
+            self.texture_pool.as_ref(),
+            self.led_grid_size,
+            project,
+        )
     }
 
     /// Warm up the master/global effect chain so the first frame with master FX
@@ -3815,8 +4018,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 
     /// Export must never encode an unfinished or GPU-failed render target.
     #[cfg(target_os = "macos")]
-    pub fn wait_for_export_complete(&self, since: &manifold_gpu::gpu_fault::FaultMark) -> Result<(), crate::content_export::ExportGpuFailure> {
-        let event = self.native_event.as_ref().ok_or_else(|| crate::content_export::ExportGpuFailure { message: "Export GPU completion event missing".into(), kinds: Default::default() })?;
+    pub fn wait_for_export_complete(
+        &self,
+        since: &manifold_gpu::gpu_fault::FaultMark,
+    ) -> Result<(), crate::content_export::ExportGpuFailure> {
+        let event =
+            self.native_event
+                .as_ref()
+                .ok_or_else(|| crate::content_export::ExportGpuFailure {
+                    message: "Export GPU completion event missing".into(),
+                    kinds: Default::default(),
+                })?;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             if let Some(result) = crate::content_export::export_gpu_completion(
@@ -3872,21 +4084,36 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     pub fn sdr_export_output_texture(&mut self) -> &manifold_gpu::GpuTexture {
         let device = self.native_device.as_ref().expect("native export device");
         let source = self.compositor.output_texture();
-        if self.sdr_output.as_ref().is_none_or(|t| t.width != source.width || t.height != source.height) {
+        if self
+            .sdr_output
+            .as_ref()
+            .is_none_or(|t| t.width != source.width || t.height != source.height)
+        {
             self.sdr_output = Some(manifold_node_engine::gpu::render_target::RenderTarget::new(
-                device, source.width, source.height, manifold_compositor::presentation::UI_FORMAT, "SDR export output",
+                device,
+                source.width,
+                source.height,
+                manifold_compositor::presentation::UI_FORMAT,
+                "SDR export output",
             ));
         }
-        let target = &self.sdr_output.as_ref().expect("SDR target allocated").texture;
+        let target = &self
+            .sdr_output
+            .as_ref()
+            .expect("SDR target allocated")
+            .texture;
         let mut enc = device.create_encoder("SDR Export Mapping");
-        self.presentation_pipeline.as_ref().expect("presentation pipeline initialized").encode(
-            &mut enc,
-            LinearSceneFrame::new(source).expect("content output is linear float"),
-            LinearPresentationTarget::new(target).expect("SDR mapped output is float"),
-            self.sdr_presentation_plan(),
-            (0.0, 0.0, source.width as f32, source.height as f32),
-            manifold_gpu::GpuLoadAction::Clear,
-        );
+        self.presentation_pipeline
+            .as_ref()
+            .expect("presentation pipeline initialized")
+            .encode(
+                &mut enc,
+                LinearSceneFrame::new(source).expect("content output is linear float"),
+                LinearPresentationTarget::new(target).expect("SDR mapped output is float"),
+                self.sdr_presentation_plan(),
+                (0.0, 0.0, source.width as f32, source.height as f32),
+                manifold_gpu::GpuLoadAction::Clear,
+            );
         if let Some(event) = &self.native_event {
             enc.signal_event(event);
             self.native_signal_value = event.current_value();
@@ -4039,25 +4266,35 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 #[cfg(test)]
 mod thumbnail_admission_tests {
     use super::retain_thumbnail_requests;
-    use manifold_core::{Beats, LayerType};
     use manifold_core::clip::TimelineClip;
     use manifold_core::layer::Layer;
     use manifold_core::project::Project;
+    use manifold_core::{Beats, LayerType};
 
     #[test]
     fn thumbnail_requests_use_container_capability_and_reject_stale_ids() {
         let mut project = Project::default();
         let mut requests = Vec::new();
         let mut expected = Vec::new();
-        for (index, kind) in [LayerType::Video, LayerType::Generator, LayerType::Dmx,
-            LayerType::Audio, LayerType::Group, LayerType::Trigger].into_iter().enumerate()
+        for (index, kind) in [
+            LayerType::Video,
+            LayerType::Generator,
+            LayerType::Dmx,
+            LayerType::Audio,
+            LayerType::Group,
+            LayerType::Trigger,
+        ]
+        .into_iter()
+        .enumerate()
         {
             let mut layer = Layer::new("Lane".into(), kind, index as i32);
             // Resource fields must not turn a non-visual container into media.
             let mut clip = TimelineClip::new_trigger(Beats::ZERO, Beats(1.0));
             clip.video_clip_id = "media".into();
             requests.push(clip.id.clone());
-            if index < 3 { expected.push(clip.id.clone()); }
+            if index < 3 {
+                expected.push(clip.id.clone());
+            }
             layer.clips.push(clip);
             project.timeline.layers.push(layer);
         }
@@ -4081,20 +4318,26 @@ mod trigger_delivery_tests {
         let mut instance = manifold_core::effects::PresetInstance::new(PresetTypeId::BLOOM);
         instance.params.push(manifold_core::params::Param::bundled(
             manifold_core::effect_graph_def::ParamSpecDef {
-                id: "gate".into(), is_trigger_gate: true, ..Default::default()
-            }
+                id: "gate".into(),
+                is_trigger_gate: true,
+                ..Default::default()
+            },
         ));
         instance.params.push(manifold_core::params::Param::bundled(
             manifold_core::effect_graph_def::ParamSpecDef {
-                id: "fire".into(), is_trigger: true, ..Default::default()
-            }
+                id: "fire".into(),
+                is_trigger: true,
+                ..Default::default()
+            },
         ));
         let owner_id = instance.id.clone();
         project.settings.master_effects.push(instance);
         let mut targets = super::trigger_targets::TriggerTargets::default();
         targets.refresh(Some(&project), 1, 3);
-        let mut pulses: Vec<_> = [0.25, 0.125, 0.25].into_iter().enumerate().map(|(index, time)| {
-            CapturedTriggerPulse {
+        let mut pulses: Vec<_> = [0.25, 0.125, 0.25]
+            .into_iter()
+            .enumerate()
+            .map(|(index, time)| CapturedTriggerPulse {
                 pulse: TriggerPulse {
                     kind: manifold_playback::modulation::TriggerPulseKind::Gate,
                     layer_id: None,
@@ -4115,11 +4358,12 @@ mod trigger_delivery_tests {
                 sequence: index as u64,
                 accepted_time: Seconds(1.0),
                 accepted_beat: Beats(2.0),
-            }
-        }).collect();
+            })
+            .collect();
         let mut parameter_event = pulses[0].clone();
         parameter_event.pulse.kind = manifold_playback::modulation::TriggerPulseKind::Parameter;
-        parameter_event.pulse.param_key = manifold_core::audio_trigger::fire_meter_key_for_param("", "fire");
+        parameter_event.pulse.param_key =
+            manifold_core::audio_trigger::fire_meter_key_for_param("", "fire");
         assert!(targets.accepts(&parameter_event.pulse));
         pulses.insert(1, parameter_event);
         let mut count = 10;
@@ -4193,16 +4437,25 @@ mod occlusion_tests {
     fn no_cull_when_opaque_is_faded_or_clipless_or_hidden() {
         let mut out = Vec::new();
         // Partial opacity: a fade is in progress, everything below shows.
-        let faded = vec![layer(0, BlendMode::Opaque, 0.99), layer(1, BlendMode::Normal, 1.0)];
+        let faded = vec![
+            layer(0, BlendMode::Opaque, 0.99),
+            layer(1, BlendMode::Normal, 1.0),
+        ];
         compute_occluded_layer_indices(&faded, &[clip(0), clip(1)], &hidden(&faded), &mut out);
         assert!(out.is_empty(), "fading opaque layer must not occlude");
         // Hidden opaque layer doesn't block (mute/solo are presentational, fed via hidden set).
-        let mut muted = vec![layer(0, BlendMode::Opaque, 1.0), layer(1, BlendMode::Normal, 1.0)];
+        let mut muted = vec![
+            layer(0, BlendMode::Opaque, 1.0),
+            layer(1, BlendMode::Normal, 1.0),
+        ];
         muted[0].is_muted = true;
         compute_occluded_layer_indices(&muted, &[clip(0), clip(1)], &hidden(&muted), &mut out);
         assert!(out.is_empty(), "hidden opaque layer must not occlude");
         // Opaque layer with no ready clip this frame doesn't block.
-        let idle = vec![layer(0, BlendMode::Opaque, 1.0), layer(1, BlendMode::Normal, 1.0)];
+        let idle = vec![
+            layer(0, BlendMode::Opaque, 1.0),
+            layer(1, BlendMode::Normal, 1.0),
+        ];
         compute_occluded_layer_indices(&idle, &[clip(1)], &hidden(&idle), &mut out);
         assert!(out.is_empty(), "clipless opaque layer must not occlude");
     }
@@ -4211,10 +4464,16 @@ mod occlusion_tests {
     fn solo_overrides_opaque_and_children_follow_their_group() {
         let mut out = Vec::new();
         // Solo elsewhere hides the opaque layer entirely (via the hidden set).
-        let mut soloed = vec![layer(0, BlendMode::Opaque, 1.0), layer(1, BlendMode::Normal, 1.0)];
+        let mut soloed = vec![
+            layer(0, BlendMode::Opaque, 1.0),
+            layer(1, BlendMode::Normal, 1.0),
+        ];
         soloed[1].is_solo = true;
         compute_occluded_layer_indices(&soloed, &[clip(0), clip(1)], &hidden(&soloed), &mut out);
-        assert!(out.is_empty(), "solo on another layer suppresses the occluder");
+        assert!(
+            out.is_empty(),
+            "solo on another layer suppresses the occluder"
+        );
         // Parent-chain rule: a child whose group header sits ABOVE the
         // cutoff still renders into that group's composite; a plain layer
         // below the cutoff is culled.
@@ -4248,7 +4507,10 @@ mod occlusion_tests {
         let clips = vec![clip(0), clip(1)];
         let mut out = Vec::new();
         compute_occluded_layer_indices(&layers, &clips, &hidden(&layers), &mut out);
-        assert!(out.is_empty(), "a hidden (muted) layer must not occlude below");
+        assert!(
+            out.is_empty(),
+            "a hidden (muted) layer must not occlude below"
+        );
     }
 
     #[test]
@@ -4265,17 +4527,26 @@ mod occlusion_tests {
         let clips = vec![muted_top.clone(), clip(1)];
         let mut out = Vec::new();
         compute_occluded_layer_indices(&layers, &clips, &hidden(&layers), &mut out);
-        assert!(out.is_empty(), "a muted clip must not make its layer an occluder");
+        assert!(
+            out.is_empty(),
+            "a muted clip must not make its layer an occluder"
+        );
         // Mixed: one muted, one visible — the layer still occludes.
         let clips = vec![muted_top, clip(0), clip(1)];
         compute_occluded_layer_indices(&layers, &clips, &hidden(&layers), &mut out);
-        assert_eq!(out, vec![1], "a visible clip on the opaque layer still occludes");
+        assert_eq!(
+            out,
+            vec![1],
+            "a visible clip on the opaque layer still occludes"
+        );
     }
 }
 
 #[cfg(test)]
 mod render_skip_tests {
-    use super::{compute_hidden_by_index, compute_occluded_layer_indices, compute_render_skip_indices};
+    use super::{
+        compute_hidden_by_index, compute_occluded_layer_indices, compute_render_skip_indices,
+    };
     use manifold_core::layer::Layer;
     use manifold_core::{BlendMode, LayerType};
     use manifold_playback::scheduler::ActiveClipRef;

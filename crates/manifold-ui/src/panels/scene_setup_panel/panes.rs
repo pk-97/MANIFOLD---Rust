@@ -103,13 +103,28 @@ impl ScenePanel {
             settings_top = self.build_split_strip(tree, outer, body);
             selected = Some(sel);
         }
-        let viewport = Rect::new(body.x, settings_top, body.width, (body.y + body.height - settings_top).max(0.0));
+        let viewport = Rect::new(
+            body.x,
+            settings_top,
+            body.width,
+            (body.y + body.height - settings_top).max(0.0),
+        );
         let start = self.begin_pane(tree, Pane::Settings, viewport);
-        let top = if self.panes.two { settings_top + ROW_GAP } else { settings_top };
+        let top = if self.panes.two {
+            settings_top + ROW_GAP
+        } else {
+            settings_top
+        };
         let end = match (&state, selected) {
-            (SceneSetupState::NoSelection(sentence), _) => self.build_sentence(tree, inner_x, inner_w, top, sentence),
-            (SceneSetupState::NoScene { .. }, _) => self.build_no_scene(tree, inner_x, inner_w, top),
-            (SceneSetupState::Live(vm), Some(sel)) => self.build_properties(tree, inner_x, inner_w, top, vm, sel),
+            (SceneSetupState::NoSelection(sentence), _) => {
+                self.build_sentence(tree, inner_x, inner_w, top, sentence)
+            }
+            (SceneSetupState::NoScene { .. }, _) => {
+                self.build_no_scene(tree, inner_x, inner_w, top)
+            }
+            (SceneSetupState::Live(vm), Some(sel)) => {
+                self.build_properties(tree, inner_x, inner_w, top, vm, sel)
+            }
             (SceneSetupState::Live(_), None) => top,
         };
         self.end_pane(tree, Pane::Settings, start, end - settings_top + PAD);
@@ -129,20 +144,38 @@ impl ScenePanel {
         let buttons = 2 + usize::from(render_mode.is_some());
         let w = (inner_w - GAP * (buttons - 1) as f32) / buttons as f32;
         let show = tree.add_button_keyed(
-            Some(self.content_parent), inner_x, cy, w, ROW_H,
-            toggle_btn_style(self.show_gizmos), "Show gizmos", KEY_SHOW_GIZMOS,
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            w,
+            ROW_H,
+            toggle_btn_style(self.show_gizmos),
+            "Show gizmos",
+            KEY_SHOW_GIZMOS,
         );
         self.show_gizmos_id = Some(show);
         let mode = tree.add_button_keyed(
-            Some(self.content_parent), inner_x + (w + GAP), cy, w, ROW_H,
-            btn_style(), &format!("Gizmos: {}", self.gizmo_draw_mode.label()), KEY_GIZMO_MODE,
+            Some(self.content_parent),
+            inner_x + (w + GAP),
+            cy,
+            w,
+            ROW_H,
+            btn_style(),
+            &format!("Gizmos: {}", self.gizmo_draw_mode.label()),
+            KEY_GIZMO_MODE,
         );
         tree.set_name(mode, "scene_setup.gizmo_mode");
         self.gizmo_mode_id = Some(mode);
         if let Some(label) = render_mode {
             let render = tree.add_button_keyed(
-                Some(self.content_parent), inner_x + (w + GAP) * 2.0, cy, w, ROW_H,
-                btn_style(), &label, KEY_RENDER_MODE,
+                Some(self.content_parent),
+                inner_x + (w + GAP) * 2.0,
+                cy,
+                w,
+                ROW_H,
+                btn_style(),
+                &label,
+                KEY_RENDER_MODE,
             );
             tree.set_name(render, "scene_setup.render_mode");
             self.render_mode_id = Some(render);
@@ -150,8 +183,14 @@ impl ScenePanel {
         let mut next_y = cy + ROW_H + ROW_GAP;
         if self.preview_navigating {
             let reset = tree.add_button_keyed(
-                Some(self.content_parent), inner_x, next_y, inner_w, ROW_H,
-                toggle_btn_style(true), "Back to Camera (Esc)", crate::param_surface::stable_key("scene.reset_preview_view"),
+                Some(self.content_parent),
+                inner_x,
+                next_y,
+                inner_w,
+                ROW_H,
+                toggle_btn_style(true),
+                "Back to Camera (Esc)",
+                crate::param_surface::stable_key("scene.reset_preview_view"),
             );
             tree.set_name(reset, "scene_setup.reset_preview_view");
             self.reset_view_id = Some(reset);
@@ -165,10 +204,23 @@ impl ScenePanel {
     pub(super) fn render_mode_pick_list(&self, button: NodeId) -> Option<PanelAction> {
         let row = self.render_mode_row()?;
         let target = GraphParamTarget::GeneratorOf(self.live_layer_id()?.clone());
-        crate::panels::param_slider_shared::pick_list_action(target, row.id.clone(), &row.spec, row.value.base, button)
+        crate::panels::param_slider_shared::pick_list_action(
+            target,
+            row.id.clone(),
+            &row.spec,
+            row.value.base,
+            button,
+        )
     }
 
-    fn build_tree_pane(&mut self, tree: &mut UITree, body: Rect, top: f32, vm: &SceneSetupVm, selected: &SceneSelection) {
+    fn build_tree_pane(
+        &mut self,
+        tree: &mut UITree,
+        body: Rect,
+        top: f32,
+        vm: &SceneSetupVm,
+        selected: &SceneSelection,
+    ) {
         self.panes.room = body.y + body.height - top - SPLIT_H - MIN_SETTINGS_H;
         self.panes.tree_top = top;
         self.panes.body_h = body.height;
@@ -177,14 +229,26 @@ impl ScenePanel {
         let start = self.begin_pane(tree, Pane::Tree, Rect::new(body.x, top, body.width, cap));
         // Every selected row highlights; the active one's card shows below.
         let highlighted = self.selected_of(&vm.layer_id).to_vec();
-        let end = self.build_outliner(tree, body.x + PAD, body.width - PAD * 2.0, top, vm, &highlighted);
+        let end = self.build_outliner(
+            tree,
+            body.x + PAD,
+            body.width - PAD * 2.0,
+            top,
+            vm,
+            &highlighted,
+        );
         let content_h = end - top + ROW_GAP;
         self.panes.tree_content_h = content_h;
-        self.panes.tree.set_viewport_height(tree, content_h.min(cap));
+        self.panes
+            .tree
+            .set_viewport_height(tree, content_h.min(cap));
         self.end_pane(tree, Pane::Tree, start, content_h);
         // An outside pick (a viewport click) scrolls its row into view.
         if self.reveal_properties
-            && let Some(&(row, _)) = self.outliner_row_ids.iter().find(|(_, sel)| sel == selected)
+            && let Some(&(row, _)) = self
+                .outliner_row_ids
+                .iter()
+                .find(|(_, sel)| sel == selected)
         {
             let bounds = tree.get_bounds(row);
             self.panes.tree.reveal_rect(tree, bounds);
@@ -198,16 +262,39 @@ impl ScenePanel {
         let tree_vp = self.panes.tree.viewport();
         let y = tree_vp.y + tree_vp.height;
         self.panes.strip = Rect::new(body.x, y, body.width, SPLIT_H);
-        let line = UIStyle { bg_color: color::MODAL_BORDER, ..UIStyle::default() };
-        tree.add_panel(Some(outer), body.x + PAD, y + (SPLIT_H - 1.0) * 0.5, body.width - PAD * 2.0, 1.0, line);
+        let line = UIStyle {
+            bg_color: color::MODAL_BORDER,
+            ..UIStyle::default()
+        };
+        tree.add_panel(
+            Some(outer),
+            body.x + PAD,
+            y + (SPLIT_H - 1.0) * 0.5,
+            body.width - PAD * 2.0,
+            1.0,
+            line,
+        );
         let held = self.panes.drag.is_some_and(|(_, moved)| moved);
         let style = UIStyle {
-            bg_color: if held { color::RESIZE_HANDLE_DRAG } else { color::RESIZE_HANDLE_IDLE },
+            bg_color: if held {
+                color::RESIZE_HANDLE_DRAG
+            } else {
+                color::RESIZE_HANDLE_IDLE
+            },
             hover_bg_color: color::RESIZE_HANDLE_HOVER,
             pressed_bg_color: color::RESIZE_HANDLE_DRAG,
             ..UIStyle::default()
         };
-        let id = tree.add_button_keyed(Some(outer), body.x, y, body.width, SPLIT_H, style, "", KEY_SPLIT);
+        let id = tree.add_button_keyed(
+            Some(outer),
+            body.x,
+            y,
+            body.width,
+            SPLIT_H,
+            style,
+            "",
+            KEY_SPLIT,
+        );
         tree.set_name(id, "scene_setup.split");
         self.panes.strip_id = Some(id);
         y + SPLIT_H
@@ -222,10 +309,13 @@ impl ScenePanel {
 
     fn begin_pane(&mut self, tree: &mut UITree, pane: Pane, viewport: Rect) -> usize {
         let clip = self.pane(pane).begin(tree, viewport);
-        tree.set_name(clip, match pane {
-            Pane::Tree => "scene_setup.tree_pane",
-            Pane::Settings => "scene_setup.settings_pane",
-        });
+        tree.set_name(
+            clip,
+            match pane {
+                Pane::Tree => "scene_setup.tree_pane",
+                Pane::Settings => "scene_setup.settings_pane",
+            },
+        );
         self.content_parent = clip;
         tree.count()
     }
@@ -245,7 +335,10 @@ impl ScenePanel {
     /// The split's press, drag, release and double-click reset, and the
     /// mouse wheel routed to the pane under the pointer. `None` leaves the
     /// event to the rest of the panel.
-    pub(super) fn handle_pane_event(&mut self, event: &UIEvent) -> Option<(bool, Vec<PanelAction>)> {
+    pub(super) fn handle_pane_event(
+        &mut self,
+        event: &UIEvent,
+    ) -> Option<(bool, Vec<PanelAction>)> {
         let strip = self.panes.strip_id;
         let on_strip = |node: NodeId| strip == Some(node);
         match event {
@@ -258,7 +351,9 @@ impl ScenePanel {
             }
             UIEvent::DragBegin { .. } if self.panes.drag.is_some() => {}
             UIEvent::Drag { pos, .. } if self.panes.drag.is_some() => self.drag_split_to(pos.y),
-            UIEvent::DragEnd { pos, .. } | UIEvent::PointerUp { pos, .. } if self.panes.drag.is_some() => {
+            UIEvent::DragEnd { pos, .. } | UIEvent::PointerUp { pos, .. }
+                if self.panes.drag.is_some() =>
+            {
                 // The split lands where the button came up, and the strip
                 // drops its held colour.
                 if self.panes.drag.is_some_and(|(_, moved)| moved) {
@@ -276,7 +371,9 @@ impl ScenePanel {
     }
 
     fn drag_split_to(&mut self, y: f32) {
-        let Some((grab, moved)) = self.panes.drag else { return };
+        let Some((grab, moved)) = self.panes.drag else {
+            return;
+        };
         self.panes.drag = Some((grab, true));
         if !moved {
             // The first move repaints the strip in its held colour.
@@ -342,6 +439,8 @@ impl ScenePanel {
     /// cursor over whatever is drawn there now.
     pub fn split_cursor(&self, pos: Vec2, shown: Rect) -> bool {
         let visible = self.open && self.panes.two && shown.width > 0.0 && shown.height > 0.0;
-        visible && (self.panes.drag.is_some() || (self.panes.strip.contains(pos) && shown.contains(pos)))
+        visible
+            && (self.panes.drag.is_some()
+                || (self.panes.strip.contains(pos) && shown.contains(pos)))
     }
 }

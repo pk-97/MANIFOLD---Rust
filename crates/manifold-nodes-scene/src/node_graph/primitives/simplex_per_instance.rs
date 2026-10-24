@@ -12,8 +12,8 @@
 //! prepended at pipeline-creation time. Bit-exact parity with any
 //! legacy generator that calls `simplex3d(...)` from that file.
 
-use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
+use std::borrow::Cow;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
@@ -178,4 +178,3 @@ impl Primitive for SimplexPerInstance {
         );
     }
 }
-

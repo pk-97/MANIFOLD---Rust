@@ -18,10 +18,10 @@
 
 use half::f16;
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureUsage};
-use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_nodes_scene::metalfx_temporal_upscaler::MetalFxTemporalUpscaler;
 use manifold_node_engine::exec::effect_node::FrameTime;
 use manifold_node_engine::exec::temporal_reset::TemporalResetDetector;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_nodes_scene::metalfx_temporal_upscaler::MetalFxTemporalUpscaler;
 
 use manifold_node_engine::testkit::gpu_harness::shared;
 
@@ -74,14 +74,23 @@ fn zero_motion_f16(w: u32, h: u32) -> Vec<f16> {
     vec![f16::from_f32(0.0); (w * h * 2) as usize]
 }
 
-fn upload_input(device: &GpuDevice, w: u32, h: u32, fmt: manifold_gpu::GpuTextureFormat, bytes: &[u8], label: &str) -> GpuTexture {
+fn upload_input(
+    device: &GpuDevice,
+    w: u32,
+    h: u32,
+    fmt: manifold_gpu::GpuTextureFormat,
+    bytes: &[u8],
+    label: &str,
+) -> GpuTexture {
     let texture = device.create_texture(&GpuTextureDesc {
         width: w,
         height: h,
         depth: 1,
         format: fmt,
         dimension: GpuTextureDimension::D2,
-        usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_SRC,
+        usage: GpuTextureUsage::CPU_UPLOAD
+            | GpuTextureUsage::SHADER_READ
+            | GpuTextureUsage::COPY_SRC,
         label,
         mip_levels: 1,
     });
@@ -105,9 +114,8 @@ fn readback_rgba_f32(texture: &GpuTexture, w: u32, h: u32) -> Vec<f32> {
     let ptr = buf
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");
-    let f16s: &[f16] = unsafe {
-        std::slice::from_raw_parts(ptr.cast::<f16>(), (w * h * 4) as usize)
-    };
+    let f16s: &[f16] =
+        unsafe { std::slice::from_raw_parts(ptr.cast::<f16>(), (w * h * 4) as usize) };
     f16s.iter().map(|v| v.to_f32()).collect()
 }
 
@@ -160,7 +168,11 @@ fn build_scene(device: &GpuDevice, depth_value: f32, label: &str) -> SceneFixtur
         as_bytes(&zero_motion_f16(SRC_W, SRC_H)),
         &format!("{label}-motion"),
     );
-    SceneFixture { color, depth, motion }
+    SceneFixture {
+        color,
+        depth,
+        motion,
+    }
 }
 
 #[test]
@@ -170,8 +182,14 @@ fn temporal_scaler_produces_exact_target_resolution() {
         eprintln!("[SKIP] MetalFX Temporal not available on this device/OS");
         return;
     };
-    assert_eq!(upscaler.output.width, DST_W, "output texture width must be the exact target resolution");
-    assert_eq!(upscaler.output.height, DST_H, "output texture height must be the exact target resolution");
+    assert_eq!(
+        upscaler.output.width, DST_W,
+        "output texture width must be the exact target resolution"
+    );
+    assert_eq!(
+        upscaler.output.height, DST_H,
+        "output texture height must be the exact target resolution"
+    );
     assert_eq!(upscaler.dst_w, DST_W);
     assert_eq!(upscaler.dst_h, DST_H);
 }
@@ -189,7 +207,15 @@ fn upscaled_output_approximates_native_within_coarse_epsilon() {
     {
         let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
         // First-ever frame on a fresh scaler: reset=true (no history).
-        upscaler.upscale(&mut gpu, &scene.color, &scene.depth, &scene.motion, 0.0, 0.0, true);
+        upscaler.upscale(
+            &mut gpu,
+            &scene.color,
+            &scene.depth,
+            &scene.motion,
+            0.0,
+            0.0,
+            true,
+        );
     }
     enc.commit_and_wait_completed();
 
@@ -234,11 +260,23 @@ fn cut_plus_one_matches_cold_start_within_epsilon() {
             frame_count: i64::from(i),
         };
         let reset = resets.detect_reset(1, &frame);
-        assert_eq!(reset, i == 0, "only frame 0 (cold start) should reset within scene A");
+        assert_eq!(
+            reset,
+            i == 0,
+            "only frame 0 (cold start) should reset within scene A"
+        );
         let mut enc = h.device.create_encoder("p4-warm-scene-a");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-            warmed.upscale(&mut gpu, &scene_a.color, &scene_a.depth, &scene_a.motion, 0.0, 0.0, reset);
+            warmed.upscale(
+                &mut gpu,
+                &scene_a.color,
+                &scene_a.depth,
+                &scene_a.motion,
+                0.0,
+                0.0,
+                reset,
+            );
         }
         enc.commit_and_wait_completed();
     }
@@ -253,12 +291,23 @@ fn cut_plus_one_matches_cold_start_within_epsilon() {
         frame_count: 8,
     };
     let reset_at_cut = resets.detect_reset(2, &cut_frame);
-    assert!(reset_at_cut, "owner_key change (the cut) must trip the shared reset detector");
+    assert!(
+        reset_at_cut,
+        "owner_key change (the cut) must trip the shared reset detector"
+    );
 
     let mut enc = h.device.create_encoder("p4-cut-plus-one");
     {
         let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-        warmed.upscale(&mut gpu, &scene_b.color, &scene_b.depth, &scene_b.motion, 0.0, 0.0, reset_at_cut);
+        warmed.upscale(
+            &mut gpu,
+            &scene_b.color,
+            &scene_b.depth,
+            &scene_b.motion,
+            0.0,
+            0.0,
+            reset_at_cut,
+        );
     }
     enc.commit_and_wait_completed();
     let cut_plus_one = readback_rgba_f32(&warmed.output.texture, DST_W, DST_H);
@@ -267,7 +316,15 @@ fn cut_plus_one_matches_cold_start_within_epsilon() {
     let mut enc = h.device.create_encoder("p4-cold-start");
     {
         let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-        cold.upscale(&mut gpu, &scene_b.color, &scene_b.depth, &scene_b.motion, 0.0, 0.0, true);
+        cold.upscale(
+            &mut gpu,
+            &scene_b.color,
+            &scene_b.depth,
+            &scene_b.motion,
+            0.0,
+            0.0,
+            true,
+        );
     }
     enc.commit_and_wait_completed();
     let cold_start = readback_rgba_f32(&cold.output.texture, DST_W, DST_H);

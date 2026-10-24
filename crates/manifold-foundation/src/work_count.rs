@@ -282,7 +282,10 @@ pub struct WorkTrace {
 
 impl WorkTrace {
     pub fn new() -> Self {
-        Self { last: thread_work_snapshot(), frame: 0 }
+        Self {
+            last: thread_work_snapshot(),
+            frame: 0,
+        }
     }
 
     /// Call once per frame on the owning thread. No-op unless tracing is on.
@@ -336,7 +339,12 @@ mod tests {
         .join()
         .unwrap();
         assert_eq!(other.get(WorkKind::ProjectClone), 1);
-        assert_eq!(thread_work_snapshot().since(&before).get(WorkKind::ProjectClone), 0);
+        assert_eq!(
+            thread_work_snapshot()
+                .since(&before)
+                .get(WorkKind::ProjectClone),
+            0
+        );
     }
 
     #[test]

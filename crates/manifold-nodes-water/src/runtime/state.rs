@@ -2,11 +2,13 @@
 
 use std::sync::Arc;
 
+use manifold_core::{Beats, PlayedTime};
 use manifold_node_engine::exec::{effect_node::FrameTime, execution_plan::ExecutionPlan};
 use manifold_node_engine::graph::Graph;
-use manifold_node_engine::runtime::extensions::{RuntimeContext, RuntimeExtension, RuntimeRegistration};
+use manifold_node_engine::runtime::extensions::{
+    RuntimeContext, RuntimeExtension, RuntimeRegistration,
+};
 use manifold_node_engine::runtime::preset_context::ProjectTempo;
-use manifold_core::{Beats, PlayedTime};
 
 use super::physics_sampling::{PhysicsInputSnapshot, physics_sample_steps};
 use super::scene_impulses::SceneImpulses;
@@ -37,7 +39,10 @@ impl RuntimeExtension for WaterRuntimeState {
         &self,
         graph: &Graph,
         slot: manifold_node_engine::runtime::extensions::RuntimeSlot<'_>,
-        output: &mut Vec<(manifold_core::NodeId, manifold_core::fluid_domain::FluidDomainSnapshot)>,
+        output: &mut Vec<(
+            manifold_core::NodeId,
+            manifold_core::fluid_domain::FluidDomainSnapshot,
+        )>,
     ) {
         let first = output.len();
         for (node_id, instance) in slot.node_map {
@@ -52,13 +57,24 @@ impl RuntimeExtension for WaterRuntimeState {
         // A full pool is seen by the liquid's state, downstream of its
         // domain; it joins the snapshot of the domain whose clock feeds it.
         for (_, instance) in slot.node_map {
-            let held_back = graph.get_node(*instance).is_some_and(|node| manifold_water_gpu_flip::primitives::inflow_held_back(node.node.as_ref()));
+            let held_back = graph.get_node(*instance).is_some_and(|node| {
+                manifold_water_gpu_flip::primitives::inflow_held_back(node.node.as_ref())
+            });
             if !held_back {
                 continue;
             }
-            let Some(domain) = graph.wires_into(*instance).find(|wire| wire.to.1 == "ticks").map(|wire| wire.from.0) else { continue };
-            let Some((domain_id, _)) = slot.node_map.iter().find(|(_, id)| *id == domain) else { continue };
-            if let Some((_, snapshot)) = output[first..].iter_mut().find(|(id, _)| id == domain_id) {
+            let Some(domain) = graph
+                .wires_into(*instance)
+                .find(|wire| wire.to.1 == "ticks")
+                .map(|wire| wire.from.0)
+            else {
+                continue;
+            };
+            let Some((domain_id, _)) = slot.node_map.iter().find(|(_, id)| *id == domain) else {
+                continue;
+            };
+            if let Some((_, snapshot)) = output[first..].iter_mut().find(|(id, _)| id == domain_id)
+            {
                 snapshot.fit.pool_full = true;
             }
         }
@@ -71,7 +87,10 @@ impl RuntimeExtension for WaterRuntimeState {
         output: &mut Vec<manifold_core::physics_gizmo::PhysicsGizmo>,
     ) {
         for (_, instance) in slot.node_map {
-            if let Some(node) = graph.get_node(*instance).and_then(|node| manifold_water_rigid::node::get(node.node.as_ref())) {
+            if let Some(node) = graph
+                .get_node(*instance)
+                .and_then(|node| manifold_water_rigid::node::get(node.node.as_ref()))
+            {
                 node.write_physics_gizmos(output);
             }
         }
@@ -98,13 +117,23 @@ impl RuntimeExtension for WaterRuntimeState {
         &self,
         graph: &Graph,
         slot: manifold_node_engine::runtime::extensions::RuntimeSlot<'_>,
-        output: &mut Vec<(manifold_core::NodeId, manifold_core::physics_members::BodyRefusalRow)>,
+        output: &mut Vec<(
+            manifold_core::NodeId,
+            manifold_core::physics_members::BodyRefusalRow,
+        )>,
     ) {
         for (node_id, instance) in slot.node_map {
-            let Some(node) = graph.get_node(*instance).and_then(|node| manifold_water_rigid::node::get(node.node.as_ref())) else {
+            let Some(node) = graph
+                .get_node(*instance)
+                .and_then(|node| manifold_water_rigid::node::get(node.node.as_ref()))
+            else {
                 continue;
             };
-            output.extend(node.body_refusals().iter().map(|row| (node_id.clone(), row.clone())));
+            output.extend(
+                node.body_refusals()
+                    .iter()
+                    .map(|row| (node_id.clone(), row.clone())),
+            );
         }
     }
 
@@ -120,7 +149,12 @@ impl RuntimeExtension for WaterRuntimeState {
         beats: Beats,
         next_sequence: &mut u64,
     ) -> Result<manifold_core::scene_impulse::ImpulseFire, String> {
-        super::WaterRuntime::borrow(self, runtime).fire_scene_impulse(param, source, beats, next_sequence)
+        super::WaterRuntime::borrow(self, runtime).fire_scene_impulse(
+            param,
+            source,
+            beats,
+            next_sequence,
+        )
     }
 
     fn drain_scene_impulse_diagnostics(
@@ -204,10 +238,7 @@ inventory::submit! {
 }
 
 impl WaterRuntimeState {
-    pub(crate) fn new(
-        graph: &Graph,
-        plan: &ExecutionPlan,
-    ) -> Result<Self, String> {
+    pub(crate) fn new(graph: &Graph, plan: &ExecutionPlan) -> Result<Self, String> {
         let sample_steps = physics_sample_steps(graph, plan)?;
         let input_snapshot = sample_steps
             .as_ref()
@@ -224,7 +255,11 @@ impl WaterRuntimeState {
     }
 
     pub(crate) fn after_frame(&mut self, graph: &Graph, time: FrameTime, played: PlayedTime) {
-        self.last_frame_time = Some(HeldFrame { played, beats: time.beats, frame_count: time.frame_count });
+        self.last_frame_time = Some(HeldFrame {
+            played,
+            beats: time.beats,
+            frame_count: time.frame_count,
+        });
         self.observe_impulse_setup(graph);
     }
 
@@ -253,12 +288,32 @@ mod tests {
         let registry = PrimitiveRegistry::with_builtin();
         let state_with = |refused: u32| {
             let mut graph = Graph::new();
-            let domain = graph.add_node(registry.construct(manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID).expect("domain"));
-            let liquid = graph.add_node(registry.construct("node.liquid_state").expect("liquid state"));
-            graph.connect((domain, "ticks"), (liquid, "ticks")).expect("the domain clocks the liquid");
-            let stats = LiquidTickStats { inflow_births: 3, inflow_refused: refused, ..LiquidTickStats::default() };
-            manifold_water_gpu_flip::primitives::retire_stats_for_test(graph.get_node_mut(liquid).expect("liquid").node.as_mut(), stats);
-            let node_map = [(NodeId::new("water"), domain), (NodeId::new("liquid"), liquid)];
+            let domain = graph.add_node(
+                registry
+                    .construct(manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID)
+                    .expect("domain"),
+            );
+            let liquid = graph.add_node(
+                registry
+                    .construct("node.liquid_state")
+                    .expect("liquid state"),
+            );
+            graph
+                .connect((domain, "ticks"), (liquid, "ticks"))
+                .expect("the domain clocks the liquid");
+            let stats = LiquidTickStats {
+                inflow_births: 3,
+                inflow_refused: refused,
+                ..LiquidTickStats::default()
+            };
+            manifold_water_gpu_flip::primitives::retire_stats_for_test(
+                graph.get_node_mut(liquid).expect("liquid").node.as_mut(),
+                stats,
+            );
+            let node_map = [
+                (NodeId::new("water"), domain),
+                (NodeId::new("liquid"), liquid),
+            ];
             let runtime = WaterRuntimeState {
                 impulse_identity: Arc::new(()),
                 scene_impulses: SceneImpulses::default(),
@@ -269,7 +324,14 @@ mod tests {
                 project_tempo: None,
             };
             let effect = EffectId::new("water_effect");
-            let slot = RuntimeSlot { effect_id: &effect, legacy_index: 0, node_map: &node_map, card_prefix: "", def_content_key: 0, bindings: &[] };
+            let slot = RuntimeSlot {
+                effect_id: &effect,
+                legacy_index: 0,
+                node_map: &node_map,
+                card_prefix: "",
+                def_content_key: 0,
+                bindings: &[],
+            };
             let mut output = Vec::new();
             runtime.write_fluid_domains(&graph, slot, &mut output);
             assert_eq!(output.len(), 1, "one domain snapshot");

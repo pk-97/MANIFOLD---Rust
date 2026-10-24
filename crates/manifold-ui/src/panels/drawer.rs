@@ -94,7 +94,13 @@ enum DrawerClick {
 
 impl DrawerButton {
     pub fn new(label: impl Into<String>, active: bool, action: PanelAction) -> Self {
-        Self { label: label.into(), active, accent: None, accent_text_only: false, click: DrawerClick::Action(action) }
+        Self {
+            label: label.into(),
+            active,
+            accent: None,
+            accent_text_only: false,
+            click: DrawerClick::Action(action),
+        }
     }
 
     pub fn new_with_bounds(
@@ -102,8 +108,13 @@ impl DrawerButton {
         active: bool,
         action: impl Fn(Rect) -> PanelAction + 'static,
     ) -> Self {
-        Self { label: label.into(), active, accent: None, accent_text_only: false,
-            click: DrawerClick::WithBounds(Box::new(action)) }
+        Self {
+            label: label.into(),
+            active,
+            accent: None,
+            accent_text_only: false,
+            click: DrawerClick::WithBounds(Box::new(action)),
+        }
     }
 
     /// Give the button an identity tint. See [`DrawerButton::accent`].
@@ -207,7 +218,9 @@ impl DrawerRow {
     fn height(&self) -> f32 {
         match self {
             DrawerRow::Status(s) => s.height,
-            DrawerRow::Slider { show_meter: true, .. } => ROW_H + METER_STRIP_H,
+            DrawerRow::Slider {
+                show_meter: true, ..
+            } => ROW_H + METER_STRIP_H,
             _ => ROW_H,
         }
     }
@@ -321,11 +334,22 @@ impl MeterIds {
         let track_rect = tree.get_bounds(self.track);
         tree.set_bounds(
             self.fill,
-            Rect::new(track_rect.x, track_rect.y, track_rect.width * held, track_rect.height),
+            Rect::new(
+                track_rect.x,
+                track_rect.y,
+                track_rect.width * held,
+                track_rect.height,
+            ),
         );
         let firing = held >= 0.5;
         let fill_color = if firing { accent } else { dim(accent, 0.55) };
-        tree.set_style(self.fill, UIStyle { bg_color: fill_color, ..UIStyle::default() });
+        tree.set_style(
+            self.fill,
+            UIStyle {
+                bg_color: fill_color,
+                ..UIStyle::default()
+            },
+        );
     }
 }
 
@@ -366,7 +390,9 @@ pub struct DrawerIds {
 
 impl DrawerIds {
     pub fn resolve_action(&self, id: NodeId) -> Option<&PanelAction> {
-        self.button_hosts.iter().find_map(|host| host.click_action(id))
+        self.button_hosts
+            .iter()
+            .find_map(|host| host.click_action(id))
     }
 
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
@@ -395,7 +421,10 @@ impl DrawerIds {
 /// so fraction labels get room and integer labels give it back. Returns the
 /// per-button widths summing to `content_w`.
 fn proportional_widths(labels: &[&str], content_w: f32) -> Vec<f32> {
-    let weights: Vec<f32> = labels.iter().map(|l| l.chars().count() as f32 + 1.0).collect();
+    let weights: Vec<f32> = labels
+        .iter()
+        .map(|l| l.chars().count() as f32 + 1.0)
+        .collect();
     let total: f32 = weights.iter().sum::<f32>().max(1.0);
     weights.iter().map(|w| content_w * w / total).collect()
 }
@@ -455,7 +484,11 @@ pub fn build(
 
     for row in &spec.rows {
         match row {
-            DrawerRow::Buttons { buttons, width, label } => {
+            DrawerRow::Buttons {
+                buttons,
+                width,
+                label,
+            } => {
                 // Optional leading label column, aligned with the slider labels.
                 let label_w = if label.is_some() { ROW_LABEL_W } else { 0.0 };
                 if let Some(text) = label {
@@ -470,8 +503,7 @@ pub fn build(
                     );
                 }
                 let labels: Vec<&str> = buttons.iter().map(|b| b.label.as_str()).collect();
-                let content_w =
-                    avail_w - label_w - BTN_GAP * (buttons.len().max(1) as f32 - 1.0);
+                let content_w = avail_w - label_w - BTN_GAP * (buttons.len().max(1) as f32 - 1.0);
                 let widths = match width {
                     ButtonWidth::Proportional => proportional_widths(&labels, content_w),
                     ButtonWidth::Uniform => uniform_widths(buttons.len(), content_w),
@@ -500,7 +532,10 @@ pub fn build(
                         DrawerClick::Action(action) => action.clone(),
                         DrawerClick::WithBounds(make) => make(rect),
                     };
-                    let view = View::button(b.label.clone()).style(style).fixed(*bw, ROW_H).on_click(action);
+                    let view = View::button(b.label.clone())
+                        .style(style)
+                        .fixed(*bw, ROW_H)
+                        .on_click(action);
                     let mut host = ChromeHost::new();
                     let start = tree.count();
                     host.build_under(tree, &view, rect, Some(container));
@@ -555,7 +590,10 @@ pub fn build(
                         meter_y,
                         meter_w,
                         METER_BAR_H,
-                        UIStyle { bg_color: METER_TRACK_COLOR, ..UIStyle::default() },
+                        UIStyle {
+                            bg_color: METER_TRACK_COLOR,
+                            ..UIStyle::default()
+                        },
                     );
                     let fill = tree.add_panel(
                         Some(container),
@@ -563,7 +601,10 @@ pub fn build(
                         meter_y,
                         0.0, // live level set per UI tick by MeterIds::update
                         METER_BAR_H,
-                        UIStyle { bg_color: dim(sc.fill, 0.55), ..UIStyle::default() },
+                        UIStyle {
+                            bg_color: dim(sc.fill, 0.55),
+                            ..UIStyle::default()
+                        },
                     );
                     let tick_x = meter_x + 0.5 * meter_w;
                     tree.add_panel(
@@ -572,7 +613,10 @@ pub fn build(
                         meter_y - 2.0,
                         1.5,
                         METER_BAR_H + 4.0,
-                        UIStyle { bg_color: METER_TICK_COLOR, ..UIStyle::default() },
+                        UIStyle {
+                            bg_color: METER_TICK_COLOR,
+                            ..UIStyle::default()
+                        },
                     );
                     meters.push(Some(MeterIds {
                         track,
@@ -669,7 +713,10 @@ mod tests {
 
     fn buttons(labels: &[(&str, bool)]) -> DrawerRow {
         DrawerRow::Buttons {
-            buttons: labels.iter().map(|(l, a)| DrawerButton::new(*l, *a, test_action())).collect(),
+            buttons: labels
+                .iter()
+                .map(|(l, a)| DrawerButton::new(*l, *a, test_action()))
+                .collect(),
             width: ButtonWidth::Proportional,
             label: None,
         }
@@ -677,7 +724,10 @@ mod tests {
 
     fn uniform_buttons(labels: &[(&str, bool)]) -> DrawerRow {
         DrawerRow::Buttons {
-            buttons: labels.iter().map(|(l, a)| DrawerButton::new(*l, *a, test_action())).collect(),
+            buttons: labels
+                .iter()
+                .map(|(l, a)| DrawerButton::new(*l, *a, test_action()))
+                .collect(),
             width: ButtonWidth::Uniform,
             label: None,
         }
@@ -690,13 +740,27 @@ mod tests {
         let spec = DrawerSpec {
             rows: vec![
                 buttons(&[
-                    ("1/32", false), ("1/16", false), ("1/8", false), ("1/4", true),
-                    ("1/2", false), ("1", false), ("2", false), ("4", false),
-                    ("8", false), ("16", false), ("32", false),
+                    ("1/32", false),
+                    ("1/16", false),
+                    ("1/8", false),
+                    ("1/4", true),
+                    ("1/2", false),
+                    ("1", false),
+                    ("2", false),
+                    ("4", false),
+                    ("8", false),
+                    ("16", false),
+                    ("32", false),
                 ]),
                 buttons(&[
-                    (".", false), ("T", false), ("Sin", true), ("Tri", false),
-                    ("Saw", false), ("Sqr", false), ("Rnd", false), ("Rev", false),
+                    (".", false),
+                    ("T", false),
+                    ("Sin", true),
+                    ("Tri", false),
+                    ("Saw", false),
+                    ("Sqr", false),
+                    ("Rnd", false),
+                    ("Rev", false),
                 ]),
             ],
             btn_font_size: 10,
@@ -723,7 +787,10 @@ mod tests {
     fn placeholder_reset() -> PanelAction {
         PanelAction::slider_reset(
             PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Begin),
-            PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Move(ScrubValue::Scalar(1.0))),
+            PanelAction::Scrub(
+                ValueRef::MasterOpacity,
+                ScrubPhase::Move(ScrubValue::Scalar(1.0)),
+            ),
             PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Commit),
         )
     }
@@ -781,7 +848,9 @@ mod tests {
         let mut tree = UITree::new();
         let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
         let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec, None);
-        let meter = ids.meters[0].as_ref().expect("show_meter=true builds a MeterIds");
+        let meter = ids.meters[0]
+            .as_ref()
+            .expect("show_meter=true builds a MeterIds");
 
         // Simulate `ScrollContainer::offset_content`: shift every node's
         // absolute bounds by delta_y in place, exactly as the real cheap
@@ -846,7 +915,10 @@ mod tests {
         let spec = DrawerSpec {
             rows: vec![DrawerRow::Status(StatusStrip {
                 height: 16.0,
-                dot: Some(StatusDot { size: 6.0, color: Color32::WHITE }),
+                dot: Some(StatusDot {
+                    size: 6.0,
+                    color: Color32::WHITE,
+                }),
                 label: "Macro 1  ·  Track > Device".into(),
                 label_color: Color32::WHITE,
                 label_font: 9,
@@ -890,11 +962,23 @@ mod tests {
         ids.register_intents(&mut registry);
 
         let button = ids.button_ids[0];
-        assert!(matches!(ids.resolve_action(button), Some(PanelAction::Transport(TransportAction::Stop))));
-        assert!(matches!(registry.resolve(&tree, Some(button), Gesture::Click), Some(PanelAction::Transport(TransportAction::Stop))));
+        assert!(matches!(
+            ids.resolve_action(button),
+            Some(PanelAction::Transport(TransportAction::Stop))
+        ));
+        assert!(matches!(
+            registry.resolve(&tree, Some(button), Gesture::Click),
+            Some(PanelAction::Transport(TransportAction::Stop))
+        ));
         let bounds = tree.get_bounds(button);
         assert_eq!(bounds.width, 240.0 - PAD_H * 2.0);
-        assert_eq!(tree.hit_test(Vec2::new(bounds.x + bounds.width / 2.0, bounds.y + bounds.height / 2.0)), Some(button));
+        assert_eq!(
+            tree.hit_test(Vec2::new(
+                bounds.x + bounds.width / 2.0,
+                bounds.y + bounds.height / 2.0
+            )),
+            Some(button)
+        );
     }
 
     #[test]
@@ -924,7 +1008,10 @@ mod tests {
         let button = ids.button_ids[0];
         let rect = tree.get_bounds(button);
         assert_eq!((rect.width, rect.height), (28.0, 16.0));
-        assert!(matches!(ids.resolve_action(button), Some(PanelAction::Transport(TransportAction::Stop))));
+        assert!(matches!(
+            ids.resolve_action(button),
+            Some(PanelAction::Transport(TransportAction::Stop))
+        ));
     }
 
     #[test]
@@ -943,8 +1030,12 @@ mod tests {
         };
         assert!(two.height() > one.height());
         // Empty spec is zero height.
-        let empty =
-            DrawerSpec { rows: vec![], btn_font_size: 10, slider_font_size: 11, theme: Theme::INSPECTOR };
+        let empty = DrawerSpec {
+            rows: vec![],
+            btn_font_size: 10,
+            slider_font_size: 11,
+            theme: Theme::INSPECTOR,
+        };
         assert_eq!(empty.height(), 0.0);
     }
 }

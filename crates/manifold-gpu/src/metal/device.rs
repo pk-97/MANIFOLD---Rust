@@ -11,12 +11,12 @@ use objc2::runtime::ProtocolObject;
 use objc2::{Encoding, RefEncode};
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBinaryArchive, MTLBuffer, MTLCommandBuffer, MTLCommandQueue, MTLCompileOptions,
-    MTLCommandBufferDescriptor, MTLCommandBufferErrorOption,
-    MTLComputePipelineDescriptor, MTLDepthStencilDescriptor, MTLDevice,
-    MTLLanguageVersion, MTLLibrary, MTLPipelineOption, MTLRenderPipelineDescriptor, MTLResource,
-    MTLResourceOptions, MTLSamplerDescriptor, MTLStorageMode, MTLTexture, MTLTextureDescriptor,
-    MTLTextureType, MTLTextureUsage, MTLVertexDescriptor, MTLVertexStepFunction,
+    MTLBinaryArchive, MTLBuffer, MTLCommandBuffer, MTLCommandBufferDescriptor,
+    MTLCommandBufferErrorOption, MTLCommandQueue, MTLCompileOptions, MTLComputePipelineDescriptor,
+    MTLDepthStencilDescriptor, MTLDevice, MTLLanguageVersion, MTLLibrary, MTLPipelineOption,
+    MTLRenderPipelineDescriptor, MTLResource, MTLResourceOptions, MTLSamplerDescriptor,
+    MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage,
+    MTLVertexDescriptor, MTLVertexStepFunction,
 };
 
 use super::encoder::{EncoderState, RenderBindCache};
@@ -447,7 +447,10 @@ impl GpuDevice {
 
     fn record_allocation(&self, kind: usize) {
         THREAD_ALLOCATIONS.with_borrow_mut(|counts| {
-            match counts.iter_mut().find(|(scope, _)| *scope == self.resource_scope_id) {
+            match counts
+                .iter_mut()
+                .find(|(scope, _)| *scope == self.resource_scope_id)
+            {
                 Some((_, count)) => count[kind] += 1,
                 None => {
                     let mut count = [0; 3];
@@ -464,7 +467,8 @@ impl GpuDevice {
 
     /// Create a GPU texture via device allocation (kernel call per texture).
     /// Prefer `TexturePool::acquire()` for transient textures.
-    pub fn create_texture(&self, desc: &GpuTextureDesc) -> GpuTexture {        if alloc_log_enabled() {
+    pub fn create_texture(&self, desc: &GpuTextureDesc) -> GpuTexture {
+        if alloc_log_enabled() {
             eprintln!(
                 "[gpu-alloc] tex {} {}x{}x{} {:?} mips={}",
                 desc.label, desc.width, desc.height, desc.depth, desc.format, desc.mip_levels
@@ -784,12 +788,17 @@ impl GpuDevice {
         }
         let mut archive_guard = self.archive.lock().unwrap();
         if let Some(ref arch) = *archive_guard {
-            let archives = objc2_foundation::NSArray::from_retained_slice(&[arch.raw_archive().clone()]);
+            let archives =
+                objc2_foundation::NSArray::from_retained_slice(&[arch.raw_archive().clone()]);
             unsafe { desc.setBinaryArchives(Some(&archives)) };
         }
         let create = |desc: &MTLComputePipelineDescriptor| unsafe {
             self.device
-                .newComputePipelineStateWithDescriptor_options_reflection_error(desc, MTLPipelineOption::None, None)
+                .newComputePipelineStateWithDescriptor_options_reflection_error(
+                    desc,
+                    MTLPipelineOption::None,
+                    None,
+                )
         };
         let state = match create(&desc) {
             Ok(state) => state,
@@ -803,17 +812,30 @@ impl GpuDevice {
                 );
                 supports_replay = false;
                 unsafe { desc.setSupportIndirectCommandBuffers(false) };
-                create(&desc)
-                    .unwrap_or_else(|e| panic!("{label}: MTL compute PSO error: {}", e.localizedDescription()))
+                create(&desc).unwrap_or_else(|e| {
+                    panic!(
+                        "{label}: MTL compute PSO error: {}",
+                        e.localizedDescription()
+                    )
+                })
             }
-            Err(e) => panic!("{label}: MTL compute PSO error: {}", e.localizedDescription()),
+            Err(e) => panic!(
+                "{label}: MTL compute PSO error: {}",
+                e.localizedDescription()
+            ),
         };
         if let Some(ref mut arch) = *archive_guard
             && !arch.was_added(hash)
         {
-            match unsafe { arch.raw_archive().addComputePipelineFunctionsWithDescriptor_error(&desc) } {
+            match unsafe {
+                arch.raw_archive()
+                    .addComputePipelineFunctionsWithDescriptor_error(&desc)
+            } {
                 Ok(()) => arch.mark_added(hash),
-                Err(e) => log::warn!("{label}: failed to add to binary archive: {}", e.localizedDescription()),
+                Err(e) => log::warn!(
+                    "{label}: failed to add to binary archive: {}",
+                    e.localizedDescription()
+                ),
             }
         }
         drop(archive_guard);
@@ -940,7 +962,8 @@ impl GpuDevice {
             alpha_to_coverage: false,
             aux_color_formats: &[],
             vertex_layout: None,
-        }.hash();
+        }
+        .hash();
         if let Some(cached) = self.render_cache.lock().unwrap().get(&hash) {
             return cached.clone();
         }
@@ -961,7 +984,8 @@ impl GpuDevice {
                 }
                 drop(msl_guard);
 
-                let result = compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, None, label);
+                let result =
+                    compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, None, label);
 
                 if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
                     cache.put_render(base_hash, &result.0, &result.1, &result.2);
@@ -1124,7 +1148,8 @@ impl GpuDevice {
             alpha_to_coverage: false,
             aux_color_formats: &[],
             vertex_layout: Some(vertex_layout),
-        }.hash();
+        }
+        .hash();
         if let Some(cached) = self.render_cache.lock().unwrap().get(&hash) {
             return cached.clone();
         }
@@ -1145,7 +1170,8 @@ impl GpuDevice {
                 }
                 drop(msl_guard);
 
-                let result = compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, None, label);
+                let result =
+                    compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, None, label);
 
                 if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
                     cache.put_render(base_hash, &result.0, &result.1, &result.2);
@@ -1322,7 +1348,11 @@ impl GpuDevice {
     /// The replay word-copy kernel, compiled on first use.
     pub(super) fn replay_copy_kernel(&self) -> &std::sync::Arc<GpuComputePipeline> {
         self.replay_copy_kernel.get_or_init(|| {
-            std::sync::Arc::new(self.create_compute_pipeline(super::replay::COPY_KERNEL_WGSL, "cs_main", "replay copy"))
+            std::sync::Arc::new(self.create_compute_pipeline(
+                super::replay::COPY_KERNEL_WGSL,
+                "cs_main",
+                "replay copy",
+            ))
         })
     }
 
@@ -1368,7 +1398,10 @@ impl GpuDevice {
     /// Create a fresh command buffer from the same queue. Used by
     /// [`GpuEncoder::commit_and_continue`] to keep encoding across submits
     /// without blocking (UI_RESPONSIVENESS_UNDER_LOAD D2/D6).
-    pub(crate) fn new_command_buffer(&self, label: &str) -> Retained<ProtocolObject<dyn MTLCommandBuffer>> {
+    pub(crate) fn new_command_buffer(
+        &self,
+        label: &str,
+    ) -> Retained<ProtocolObject<dyn MTLCommandBuffer>> {
         let descriptor = unsafe { MTLCommandBufferDescriptor::new() };
         unsafe {
             descriptor.setRetainedReferences(true);
@@ -1378,8 +1411,12 @@ impl GpuDevice {
             .expect("Failed to acquire command buffer");
         unsafe { cmd_buf.setLabel(Some(&NSString::from_str(label))) };
         if super::gpu_fault::diagnostics_enabled() {
-            log::info!("[GPU-DIAG] device={:?} queue={:p} allocated_bytes={} buffer={label}",
-                self.raw_device().name(), &*self.queue, self.raw_device().currentAllocatedSize());
+            log::info!(
+                "[GPU-DIAG] device={:?} queue={:p} allocated_bytes={} buffer={label}",
+                self.raw_device().name(),
+                &*self.queue,
+                self.raw_device().currentAllocatedSize()
+            );
             super::gpu_fault::trace_buffer(&cmd_buf);
         }
         cmd_buf
@@ -1594,7 +1631,8 @@ impl GpuDevice {
         point_size_location: Option<u32>,
         label: &str,
     ) -> GpuRenderPipeline {
-        let base_hash = archive::render_shader_hash(wgsl_source, vs_entry, fs_entry, point_size_location);
+        let base_hash =
+            archive::render_shader_hash(wgsl_source, vs_entry, fs_entry, point_size_location);
         let hash = archive::RenderPipelineKey {
             shader: base_hash,
             color_format: Some(color_format),
@@ -1604,7 +1642,8 @@ impl GpuDevice {
             alpha_to_coverage,
             aux_color_formats,
             vertex_layout: None,
-        }.hash();
+        }
+        .hash();
         if let Some(cached) = self.render_cache.lock().unwrap().get(&hash) {
             return cached.clone();
         }
@@ -1718,8 +1757,7 @@ impl GpuDevice {
         // today's single-color-attachment pipeline. No blending — aux MRT
         // outputs write raw values, not a compositing blend.
         for (i, aux_fmt) in aux_color_formats.iter().enumerate() {
-            let aux_attach =
-                unsafe { desc.colorAttachments().objectAtIndexedSubscript(i + 1) };
+            let aux_attach = unsafe { desc.colorAttachments().objectAtIndexedSubscript(i + 1) };
             unsafe {
                 aux_attach.setPixelFormat(to_mtl_pixel_format(*aux_fmt));
             }
@@ -1814,7 +1852,8 @@ impl GpuDevice {
             alpha_to_coverage: false,
             aux_color_formats: &[],
             vertex_layout: None,
-        }.hash();
+        }
+        .hash();
         if let Some(cached) = self.render_cache.lock().unwrap().get(&hash) {
             return cached.clone();
         }
@@ -1834,7 +1873,8 @@ impl GpuDevice {
                     cache.record_miss();
                 }
                 drop(msl_guard);
-                let result = compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, None, label);
+                let result =
+                    compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, None, label);
                 if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
                     cache.put_render(base_hash, &result.0, &result.1, &result.2);
                 }
@@ -1908,7 +1948,10 @@ impl GpuDevice {
                     .newRenderPipelineStateWithDescriptor_error(&desc)
             }
             .unwrap_or_else(|e| {
-                panic!("{label}: MTL depth-only PSO error: {}", e.localizedDescription())
+                panic!(
+                    "{label}: MTL depth-only PSO error: {}",
+                    e.localizedDescription()
+                )
             });
             if !arch.was_added(hash) {
                 match unsafe {
@@ -1929,7 +1972,10 @@ impl GpuDevice {
                     .newRenderPipelineStateWithDescriptor_error(&desc)
             }
             .unwrap_or_else(|e| {
-                panic!("{label}: MTL depth-only PSO error: {}", e.localizedDescription())
+                panic!(
+                    "{label}: MTL depth-only PSO error: {}",
+                    e.localizedDescription()
+                )
             })
         };
         drop(archive_guard);
@@ -2324,12 +2370,14 @@ pub(crate) fn retire_on_queue<T: 'static>(
     // retain/release is thread-safe) or plain data.
     unsafe impl<T> Send for Pin<T> {}
     let pin = Pin(obj);
-    let block = block2::RcBlock::new(move |_buf: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
-        // Held by reference: the object drops when the block is released
-        // after firing — the RcBlock closure is Fn, not FnOnce, same
-        // pattern as raytrace.rs's completion pins.
-        let _hold = &pin;
-    });
+    let block = block2::RcBlock::new(
+        move |_buf: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+            // Held by reference: the object drops when the block is released
+            // after firing — the RcBlock closure is Fn, not FnOnce, same
+            // pattern as raytrace.rs's completion pins.
+            let _hold = &pin;
+        },
+    );
     unsafe {
         cb.addCompletedHandler(block2::RcBlock::as_ptr(&block));
     }

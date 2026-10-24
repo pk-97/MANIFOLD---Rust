@@ -24,9 +24,15 @@ pub struct FieldOptionVm {
 #[derive(Clone, Debug, PartialEq)]
 pub enum FieldControlVm {
     /// Pick from `options`; `current` is the text on the row's button.
-    Pick { current: String, options: Vec<FieldOptionVm> },
+    Pick {
+        current: String,
+        options: Vec<FieldOptionVm>,
+    },
     /// A file picker; `path` is the file now, empty for none.
-    File { path: String, extensions: Vec<String> },
+    File {
+        path: String,
+        extensions: Vec<String>,
+    },
     /// On or off, drawn as a switch; a click sends `toggle`.
     Switch { on: bool, toggle: FieldPick },
 }

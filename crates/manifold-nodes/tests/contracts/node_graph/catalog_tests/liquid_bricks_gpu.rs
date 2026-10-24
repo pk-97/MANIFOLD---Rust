@@ -1,17 +1,21 @@
 //! Sparse field proofs against independent dense gathers. The field oracle
 //! follows native ParticleMesher support and production solid/border semantics.
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
+use manifold_node_engine::bindings::Slot;
+use manifold_node_engine::freeze::codegen::ENTRY;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::primitive::PrimitiveSpec;
+use manifold_node_engine::testkit::shader_source::dense_source;
 use manifold_water_gpu_flip::primitives::testkit::gpu_flip as gpu_flip_nodes;
+use manifold_water_liquid::fluid_particles::{CellRange, FluidBlob, bin_counts};
 use manifold_water_liquid::primitives::testkit::liquid as liquid_nodes;
 use manifold_water_surface::primitives::testkit::surface as surface_nodes;
-use manifold_node_engine::testkit::shader_source::dense_source;
-use manifold_node_engine::mesh::MeshVertex;
-use manifold_node_engine::bindings::Slot;
-use manifold_water_liquid::fluid_particles::{CellRange, FluidBlob, bin_counts};
-use manifold_node_engine::freeze::codegen::ENTRY;
-use manifold_node_engine::primitive::PrimitiveSpec;
-use manifold_water_surface::primitives::{lattice_bricks::LatticeBricks, lattice_bricks::brick_layout, lattice_bricks::compact_brick_words, lattice_bricks::conservative_brick_mask, particle_volume::ParticleVolume};
 use manifold_water_surface::primitives::volume_surface_mesh::VolumeSurfaceMesh;
-use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
+use manifold_water_surface::primitives::{
+    lattice_bricks::LatticeBricks, lattice_bricks::brick_layout,
+    lattice_bricks::compact_brick_words, lattice_bricks::conservative_brick_mask,
+    particle_volume::ParticleVolume,
+};
 
 fn oracle<P: PrimitiveSpec>(h: &Harness, source: &str) -> GpuComputePipeline {
     h.device.create_compute_pipeline(
@@ -116,17 +120,36 @@ fn fixture(resolution: u32) {
         &h,
         manifold_water_surface::primitives::particle_volume::DENSE_REFERENCE,
     ));
-    let mut smoothing: [[_; 3]; 2] = std::array::from_fn(|lane| std::array::from_fn(|_| {
-        liquid_nodes::smooth_lattice((lane == 1).then(|| liquid_nodes::dense_pipeline("smooth_lattice", &h.device,
-            manifold_water_liquid::primitives::smooth_lattice::DENSE_REFERENCE)))
-    }));
+    let mut smoothing: [[_; 3]; 2] = std::array::from_fn(|lane| {
+        std::array::from_fn(|_| {
+            liquid_nodes::smooth_lattice((lane == 1).then(|| {
+                liquid_nodes::dense_pipeline(
+                    "smooth_lattice",
+                    &h.device,
+                    manifold_water_liquid::primitives::smooth_lattice::DENSE_REFERENCE,
+                )
+            }))
+        })
+    });
     let smooth_slots: [[(Slot, GpuBuffer); 3]; 2] =
         std::array::from_fn(|_| std::array::from_fn(|_| h.array::<f32>(&[], total)));
-    let mut clamp = [gpu_flip_nodes::clamp_liquid_to_solids(None), gpu_flip_nodes::clamp_liquid_to_solids(Some(gpu_flip_nodes::dense_pipeline("clamp_liquid_to_solids", &h.device,
-        manifold_water_gpu_flip::primitives::clamp_liquid_to_solids::DENSE_REFERENCE)))];
+    let mut clamp = [
+        gpu_flip_nodes::clamp_liquid_to_solids(None),
+        gpu_flip_nodes::clamp_liquid_to_solids(Some(gpu_flip_nodes::dense_pipeline(
+            "clamp_liquid_to_solids",
+            &h.device,
+            manifold_water_gpu_flip::primitives::clamp_liquid_to_solids::DENSE_REFERENCE,
+        ))),
+    ];
     let clamp_slots: [(Slot, GpuBuffer); 2] = std::array::from_fn(|_| h.array::<f32>(&[], total));
-    let mut counters = [surface_nodes::count_surface_triangles(None), surface_nodes::count_surface_triangles(Some(surface_nodes::dense_pipeline("count_surface_triangles", &h.device,
-        manifold_water_surface::primitives::count_surface_triangles::DENSE_REFERENCE)))];
+    let mut counters = [
+        surface_nodes::count_surface_triangles(None),
+        surface_nodes::count_surface_triangles(Some(surface_nodes::dense_pipeline(
+            "count_surface_triangles",
+            &h.device,
+            manifold_water_surface::primitives::count_surface_triangles::DENSE_REFERENCE,
+        ))),
+    ];
     let count_slots: [(Slot, GpuBuffer); 2] = std::array::from_fn(|_| h.array::<u32>(&[], total));
     let mut builder = LatticeBricks::new();
     let (bounds_slot, _) = h.array::<f32>(&[], 2);
@@ -146,7 +169,8 @@ fn fixture(resolution: u32) {
         &h,
         manifold_water_surface::primitives::volume_surface_mesh::DENSE_REFERENCE,
     );
-    let relax_oracle = surface_nodes::dense_pipeline("relax_surface_mesh",
+    let relax_oracle = surface_nodes::dense_pipeline(
+        "relax_surface_mesh",
         &h.device,
         manifold_water_surface::primitives::relax_surface_mesh::DENSE_REFERENCE,
     );
@@ -221,7 +245,12 @@ fn fixture(resolution: u32) {
             blob_buffer.write(0, bytemuck::cast_slice(&blobs));
             range_buffer.write(0, bytemuck::cast_slice(&ranges));
         }
-        let (_, errors) = h.run(&mut bounder, &[("blobs", blob_slot)], &[("bounds", bounds_slot)], &params(&[]));
+        let (_, errors) = h.run(
+            &mut bounder,
+            &[("blobs", blob_slot)],
+            &[("bounds", bounds_slot)],
+            &params(&[]),
+        );
         assert!(errors.is_empty(), "{errors:?}");
         let (_, errors) = h.run(
             &mut builder,
@@ -767,13 +796,19 @@ fn scatter_fixture(
     let mut particles = Vec::new();
     let mut push = |p: [f32; 3]| {
         let id = particles.len() as u32 + 1;
-        particles.push(FluidParticle { position_radius: [p[0], p[1], p[2], marker], velocity: [0.0; 3], id });
+        particles.push(FluidParticle {
+            position_radius: [p[0], p[1], p[2], marker],
+            velocity: [0.0; 3],
+            id,
+        });
     };
     for z in 0..(resolution * 2 / 5) * 2 {
         for y in 0..(resolution * 2 / 5) * 2 {
             for x in 0..(resolution / 4) * 2 {
                 let at = [x, y, z].map(|i| (i as f32 + 0.5) * 0.5 * lattice.cell);
-                push(std::array::from_fn(|a| min[a] + at[a] + (next() - 0.5) * 0.2 * lattice.cell));
+                push(std::array::from_fn(|a| {
+                    min[a] + at[a] + (next() - 0.5) * 0.2 * lattice.cell
+                }));
             }
         }
     }
@@ -790,7 +825,9 @@ fn scatter_fixture(
     }
     // Few enough that empty bricks remain between them at Surface Detail 0.
     for _ in 0..60 {
-        push(std::array::from_fn(|a| min[a] + unit * 0.05 + next() * (lattice.size[a] - unit * 0.1)));
+        push(std::array::from_fn(|a| {
+            min[a] + unit * 0.05 + next() * (lattice.size[a] - unit * 0.1)
+        }));
     }
     particles
 }
@@ -804,8 +841,8 @@ fn scatter_fixture(
 /// coordinates round coarsely against the node spacing.
 #[test]
 fn fluid_bricks_scatter_mask_is_the_gather_mask() {
+    use crate::contracts::node_graph::catalog_tests::liquid_surface::blob_bounds;
     use manifold_water_surface::testkit::liquid_surface::{Lattice, sort_and_shape};
-use crate::contracts::node_graph::catalog_tests::liquid_surface::blob_bounds;
 
     let mut h = Harness::new();
     let resolution = 64u32;
@@ -815,17 +852,34 @@ use crate::contracts::node_graph::catalog_tests::liquid_surface::blob_bounds;
         "liquid.bricks.gather_reference",
     );
     let lattices = [
-        Lattice { center: [0.0, 0.5, 0.0], size: [4.0, 4.0, 4.0], cell: 4.0 / resolution as f32 },
-        Lattice { center: [1000.0, -1000.0, 1000.0], size: [0.25, 0.25, 0.25], cell: 0.25 / resolution as f32 },
+        Lattice {
+            center: [0.0, 0.5, 0.0],
+            size: [4.0, 4.0, 4.0],
+            cell: 4.0 / resolution as f32,
+        },
+        Lattice {
+            center: [1000.0, -1000.0, 1000.0],
+            size: [0.25, 0.25, 0.25],
+            cell: 0.25 / resolution as f32,
+        },
     ];
     for lattice in &lattices {
         let marker = 0.310_175_25 * lattice.cell;
-        let frames: Vec<_> = [true, false].iter().map(|&spray| {
-            let particles = scatter_fixture(lattice, resolution, spray, 0x9e37_79b9_7f4a_7c15);
-            let count = particles.len();
-            let (_, _, _, (_, ranges_slot, blobs_slot)) = sort_and_shape(&mut h, lattice, &particles, count, &[("particle_scale", 3.0)]);
-            (ranges_slot, blobs_slot, blob_bounds(&mut h, blobs_slot))
-        }).collect();
+        let frames: Vec<_> = [true, false]
+            .iter()
+            .map(|&spray| {
+                let particles = scatter_fixture(lattice, resolution, spray, 0x9e37_79b9_7f4a_7c15);
+                let count = particles.len();
+                let (_, _, _, (_, ranges_slot, blobs_slot)) = sort_and_shape(
+                    &mut h,
+                    lattice,
+                    &particles,
+                    count,
+                    &[("particle_scale", 3.0)],
+                );
+                (ranges_slot, blobs_slot, blob_bounds(&mut h, blobs_slot))
+            })
+            .collect();
         let solid_nodes = [resolution + 4; 3];
         let (solid_slot, _) = h.array::<f32>(&[], solid_nodes.iter().product::<u32>() as usize);
         let bins = bin_counts(lattice.size, lattice.cell);
@@ -839,7 +893,12 @@ use crate::contracts::node_graph::catalog_tests::liquid_surface::blob_bounds;
                     let (brick_slot, _) = h.array::<u32>(&[], 1);
                     let (_, errors) = h.run(
                         &mut builder,
-                        &[("blobs", blobs_slot), ("bounds", bounds_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot)],
+                        &[
+                            ("blobs", blobs_slot),
+                            ("bounds", bounds_slot),
+                            ("cell_ranges", ranges_slot),
+                            ("solid", solid_slot),
+                        ],
                         &[("bricks", brick_slot)],
                         &lattice.params(&[
                             ("nodes_x", solid_nodes[0] as f32),
@@ -855,14 +914,30 @@ use crate::contracts::node_graph::catalog_tests::liquid_surface::blob_bounds;
                     // The gather reads the same uniform layout; its last word was padding.
                     let f = f32::to_bits;
                     let uniforms: Vec<u32> = vec![
-                        f(lattice.center[0]), f(lattice.center[1]), f(lattice.center[2]),
-                        f(lattice.size[0]), f(lattice.size[1]), f(lattice.size[2]), f(lattice.cell),
-                        layout.nodes[0], layout.nodes[1], layout.nodes[2], scale,
-                        bins[0], bins[1], bins[2],
-                        layout.bricks[0], layout.bricks[1], layout.bricks[2], layout.count,
-                        f(band), 0,
+                        f(lattice.center[0]),
+                        f(lattice.center[1]),
+                        f(lattice.center[2]),
+                        f(lattice.size[0]),
+                        f(lattice.size[1]),
+                        f(lattice.size[2]),
+                        f(lattice.cell),
+                        layout.nodes[0],
+                        layout.nodes[1],
+                        layout.nodes[2],
+                        scale,
+                        bins[0],
+                        bins[1],
+                        bins[2],
+                        layout.bricks[0],
+                        layout.bricks[1],
+                        layout.bricks[2],
+                        layout.count,
+                        f(band),
+                        0,
                     ];
-                    let prefix = h.device.create_buffer_shared(u64::from(layout.count.max(4)) * 4);
+                    let prefix = h
+                        .device
+                        .create_buffer_shared(u64::from(layout.count.max(4)) * 4);
                     let gathered = h.device.create_buffer_shared(u64::from(layout.words) * 4);
                     let blobs = h.buffer(blobs_slot);
                     let ranges = h.buffer(ranges_slot);
@@ -871,12 +946,35 @@ use crate::contracts::node_graph::catalog_tests::liquid_surface::blob_bounds;
                     encoder.dispatch_compute(
                         &gather,
                         &[
-                            GpuBinding::Bytes { binding: 0, data: bytemuck::cast_slice(&uniforms) },
-                            GpuBinding::Buffer { binding: 1, buffer: &blobs, offset: 0 },
-                            GpuBinding::Buffer { binding: 2, buffer: &ranges, offset: 0 },
-                            GpuBinding::Buffer { binding: 3, buffer: &prefix, offset: 0 },
-                            GpuBinding::Buffer { binding: 4, buffer: &gathered, offset: 0 },
-                            GpuBinding::Buffer { binding: 5, buffer: &bounds, offset: 0 },
+                            GpuBinding::Bytes {
+                                binding: 0,
+                                data: bytemuck::cast_slice(&uniforms),
+                            },
+                            GpuBinding::Buffer {
+                                binding: 1,
+                                buffer: &blobs,
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 2,
+                                buffer: &ranges,
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 3,
+                                buffer: &prefix,
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 4,
+                                buffer: &gathered,
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 5,
+                                buffer: &bounds,
+                                offset: 0,
+                            },
                         ],
                         [layout.count.div_ceil(256), 1, 1],
                         "gather oracle mark",
@@ -885,26 +983,53 @@ use crate::contracts::node_graph::catalog_tests::liquid_surface::blob_bounds;
                     let gathered = read::<u32>(&gathered, layout.words as usize);
                     let mask = 8..8 + layout.count as usize;
                     let interior = |id: u32| {
-                        let b = [id % layout.bricks[0], (id / layout.bricks[0]) % layout.bricks[1], id / (layout.bricks[0] * layout.bricks[1])];
+                        let b = [
+                            id % layout.bricks[0],
+                            (id / layout.bricks[0]) % layout.bricks[1],
+                            id / (layout.bricks[0] * layout.bricks[1]),
+                        ];
                         (0..3).all(|a| b[a] > 0 && b[a] + 1 < layout.bricks[a])
                     };
-                    let active = |words: &[u32]| (0..layout.count).filter(|&id| words[8 + id as usize] == 1).count();
+                    let active = |words: &[u32]| {
+                        (0..layout.count)
+                            .filter(|&id| words[8 + id as usize] == 1)
+                            .count()
+                    };
                     assert_eq!(
-                        scattered[mask.clone()].iter().zip(&gathered[mask.clone()]).position(|(a, b)| a != b),
+                        scattered[mask.clone()]
+                            .iter()
+                            .zip(&gathered[mask.clone()])
+                            .position(|(a, b)| a != b),
                         None,
                         "{label} frame {frame}: first brick where the scatter ({} active) and the gather ({} active) disagree, of {}",
-                        active(&scattered), active(&gathered), layout.count
+                        active(&scattered),
+                        active(&gathered),
+                        layout.count
                     );
-                    let interior_active = (0..layout.count).filter(|&id| interior(id) && scattered[8 + id as usize] == 1).count();
-                    assert!(interior_active > 0, "{label} frame {frame}: the fixture must activate interior bricks");
-                    assert!(scattered[mask.clone()].contains(&0), "{label} frame {frame}: the fixture must leave bricks inactive");
+                    let interior_active = (0..layout.count)
+                        .filter(|&id| interior(id) && scattered[8 + id as usize] == 1)
+                        .count();
+                    assert!(
+                        interior_active > 0,
+                        "{label} frame {frame}: the fixture must activate interior bricks"
+                    );
+                    assert!(
+                        scattered[mask.clone()].contains(&0),
+                        "{label} frame {frame}: the fixture must leave bricks inactive"
+                    );
                     if let Some(previous) = &previous {
                         assert!(
-                            (0..layout.count).any(|id| interior(id) && previous[8 + id as usize] == 1 && scattered[8 + id as usize] == 0),
+                            (0..layout.count).any(|id| interior(id)
+                                && previous[8 + id as usize] == 1
+                                && scattered[8 + id as usize] == 0),
                             "{label}: the second frame must retire bricks the first one marked"
                         );
                     }
-                    assert_eq!(scattered, compact_brick_words(&scattered[mask], layout.bricks), "{label} frame {frame}: header and compact list");
+                    assert_eq!(
+                        scattered,
+                        compact_brick_words(&scattered[mask], layout.bricks),
+                        "{label} frame {frame}: header and compact list"
+                    );
                     previous = Some(scattered);
                 }
             }

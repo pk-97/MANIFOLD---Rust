@@ -10,10 +10,10 @@
 
 use std::borrow::Cow;
 
-use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::camera::Camera;
 
 manifold_node_engine::primitive! {
     name: FreeCamera,

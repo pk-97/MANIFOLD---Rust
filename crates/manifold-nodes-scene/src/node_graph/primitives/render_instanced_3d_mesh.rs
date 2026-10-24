@@ -11,11 +11,11 @@
 
 use std::borrow::Cow;
 
-use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
 use manifold_node_engine::exec::effect_node::{ConditionalRequirement, EffectNodeContext};
-use manifold_node_engine::scene::material::MaterialKind;
+use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::material::MaterialKind;
 
 const CONDITIONAL_RULES: &[ConditionalRequirement] = &[
     ConditionalRequirement {
@@ -189,7 +189,8 @@ impl Primitive for RenderInstanced3DMesh {
 
         // The shared scene evaluator owns the color pass and consumes the
         // same identity or authored instance buffer through its object adapter.
-        self.scene_renderer.render_single_mesh(ctx, Some(instance_count as f32));
+        self.scene_renderer
+            .render_single_mesh(ctx, Some(instance_count as f32));
     }
 }
 

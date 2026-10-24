@@ -30,7 +30,10 @@ pub struct SnareCands {
 fn positive(c: &Container, name: &str) -> Result<u64, ContainerError> {
     let v = c.i64s(name, &[])?[0];
     if v <= 0 {
-        return Err(ContainerError::WrongType { name: name.into(), want: "positive integer" });
+        return Err(ContainerError::WrongType {
+            name: name.into(),
+            want: "positive integer",
+        });
     }
     Ok(v as u64)
 }
@@ -43,7 +46,10 @@ impl SnareCands {
         let window = positive(c, "cand.window")?;
         let lookback = positive(c, "cand.lookback")?;
         if window > hop || lookback as usize >= DB_HISTORY {
-            return Err(ContainerError::WrongType { name: "cand.window/cand.lookback".into(), want: "window <= hop, short lookback" });
+            return Err(ContainerError::WrongType {
+                name: "cand.window/cand.lookback".into(),
+                want: "window <= hop, short lookback",
+            });
         }
         Ok(Self {
             sos: Sos::new(sos),
@@ -70,7 +76,8 @@ impl SnareCands {
 
     /// Hop `h`'s band energy in dB (`band_hops`), while it is in the history.
     pub fn db(&self, h: u64) -> Option<f64> {
-        (h < self.hops && self.hops - h <= DB_HISTORY as u64).then(|| self.db[(h % DB_HISTORY as u64) as usize])
+        (h < self.hops && self.hops - h <= DB_HISTORY as u64)
+            .then(|| self.db[(h % DB_HISTORY as u64) as usize])
     }
 
     /// The most candidates one push of `samples` samples can append: one per completed hop.
@@ -96,7 +103,11 @@ impl SnareCands {
                 let old = self.cum[((self.samples - self.window) % ring) as usize];
                 let e = 10.0 * ((self.sum - old) / self.window as f64 + 1e-12).log10();
                 if let Some((cand_hop, avail_hop)) = self.hop_done(e) {
-                    out.push(Candidate { cand_hop, avail_hop, f15: [0.0; super::F15] });
+                    out.push(Candidate {
+                        cand_hop,
+                        avail_hop,
+                        f15: [0.0; super::F15],
+                    });
                 }
             }
         }
@@ -109,7 +120,9 @@ impl SnareCands {
         if h < self.lookback {
             return None;
         }
-        let min = (h - self.lookback..h).map(|i| self.db[(i % DB_HISTORY as u64) as usize]).fold(f64::INFINITY, f64::min);
+        let min = (h - self.lookback..h)
+            .map(|i| self.db[(i % DB_HISTORY as u64) as usize])
+            .fold(f64::INFINITY, f64::min);
         let r = e - min;
         if r < self.rise_db / 2.0 {
             self.armed = true;

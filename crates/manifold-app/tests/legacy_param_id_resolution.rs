@@ -61,8 +61,14 @@ fn macro_drives_the_exact_effect_among_two_of_the_same_type() {
 
     MacroBank::apply_macro(&mut project, 0, 1.0);
 
-    let after_a = project.find_effect_by_id(&id_a).unwrap().get_base_param(&pid);
-    let after_b = project.find_effect_by_id(&id_b).unwrap().get_base_param(&pid);
+    let after_a = project
+        .find_effect_by_id(&id_a)
+        .unwrap()
+        .get_base_param(&pid);
+    let after_b = project
+        .find_effect_by_id(&id_b)
+        .unwrap()
+        .get_base_param(&pid);
     assert!(
         (after_a - 0.25).abs() < 1e-6,
         "the OTHER same-type effect must be untouched, got {after_a}"

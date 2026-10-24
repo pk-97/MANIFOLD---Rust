@@ -1,10 +1,10 @@
 //! Shared dispatch and stasis for mesh and weight cut-map resampling.
 use manifold_gpu::{GpuBinding, GpuComputePipeline};
 
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::content_revision::ContentVersion;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 pub(super) fn run<P: Primitive>(
     ctx: &mut EffectNodeContext<'_, '_>,
@@ -12,7 +12,10 @@ pub(super) fn run<P: Primitive>(
     last_key: &mut Option<[u64; 5]>,
     output_stride: u64,
 ) {
-    if ["in", "map"].iter().any(|port| ctx.inputs.slot(port).is_none()) {
+    if ["in", "map"]
+        .iter()
+        .any(|port| ctx.inputs.slot(port).is_none())
+    {
         ctx.mark_outputs_pending();
         return;
     }
@@ -40,7 +43,8 @@ pub(super) fn run<P: Primitive>(
     let map_wired = ctx.inputs.slot("map").is_some();
     let in_content = ctx.inputs.content_version("in");
     let map_content = ctx.inputs.content_version("map");
-    let content_known = (!in_wired || in_content.is_some()) && (!map_wired || map_content.is_some());
+    let content_known =
+        (!in_wired || in_content.is_some()) && (!map_wired || map_content.is_some());
     let key = [
         ctx.rebuild_epoch,
         hash_content(in_content),
@@ -48,10 +52,11 @@ pub(super) fn run<P: Primitive>(
         output.identity_key() as u64,
         count,
     ];
-    let content_unchanged = content_known && last_key.is_some_and(|mut previous| {
-        previous[3] = key[3]; // Destination identity affects copying, not content.
-        previous == key
-    });
+    let content_unchanged = content_known
+        && last_key.is_some_and(|mut previous| {
+            previous[3] = key[3]; // Destination identity affects copying, not content.
+            previous == key
+        });
     if content_unchanged && *last_key == Some(key) && ctx.outputs_retained() {
         ctx.mark_outputs_unchanged();
         return;
@@ -88,27 +93,35 @@ pub(super) fn run<P: Primitive>(
         );
     }
     *last_key = Some(key);
-    if content_unchanged { ctx.mark_output_content_unchanged(); }
+    if content_unchanged {
+        ctx.mark_output_content_unchanged();
+    }
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::super::taper_mesh::TaperMesh;
-    use manifold_gpu::testkit::TestDevice;
-    use manifold_node_engine::mesh::{MeshVertex, Vec4Vertex};
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use manifold_node_engine::exec::backend::Backend;
-    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
-    use manifold_node_engine::content_revision::ContentVersion;
-    use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-    use manifold_node_engine::exec::execution_plan::ResourceId;
-    use manifold_node_engine::freeze::classify::CapacityExpr;
-    use manifold_node_engine::freeze::codegen::{FusionRegion, InputSource, RegionNode, generate_fused, standalone_for_spec};
-    use manifold_node_engine::primitive::{Primitive, PrimitiveSpec};
-    use crate::node_graph::primitives::{remap_cut_weights::RemapCutWeights, remap_mesh_cut::RemapMeshCut};
-    use manifold_node_engine::exec::{effect_node::FrameTime, metal_backend::MetalBackend, effect_node::NodeInstanceId};
+    use crate::node_graph::primitives::{
+        remap_cut_weights::RemapCutWeights, remap_mesh_cut::RemapMeshCut,
+    };
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuBinding;
+    use manifold_gpu::testkit::TestDevice;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::content_revision::ContentVersion;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::exec::{
+        effect_node::FrameTime, effect_node::NodeInstanceId, metal_backend::MetalBackend,
+    };
+    use manifold_node_engine::freeze::classify::CapacityExpr;
+    use manifold_node_engine::freeze::codegen::{
+        FusionRegion, InputSource, RegionNode, generate_fused, standalone_for_spec,
+    };
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::mesh::{MeshVertex, Vec4Vertex};
+    use manifold_node_engine::primitive::{Primitive, PrimitiveSpec};
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -130,7 +143,7 @@ mod gpu_tests {
             tangent,
             color: [1.0; 4],
         }
-}
+    }
 
     fn map(bary: [f32; 3], triangle: f32) -> Vec4Vertex {
         Vec4Vertex {
@@ -452,14 +465,12 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "fused-cut-remap-test",
         );
-        let source_buf = device.create_buffer_shared(
-            (source.len() * std::mem::size_of::<MeshVertex>()) as u64,
-        );
+        let source_buf =
+            device.create_buffer_shared((source.len() * std::mem::size_of::<MeshVertex>()) as u64);
         let map_buf = device.create_buffer_shared((maps.len() * 16) as u64);
         let weights_buf = device.create_buffer_shared((weights.len() * 4) as u64);
-        let output_buf = device.create_buffer_shared(
-            (maps.len() * std::mem::size_of::<MeshVertex>()) as u64,
-        );
+        let output_buf =
+            device.create_buffer_shared((maps.len() * std::mem::size_of::<MeshVertex>()) as u64);
         unsafe {
             source_buf.write(0, bytemuck::cast_slice(&source));
             map_buf.write(0, bytemuck::cast_slice(&maps));
@@ -553,10 +564,7 @@ mod gpu_tests {
             .unwrap_or(0);
         let mut content_versions = vec![None; max_slot + 1];
         for (_, slot) in input_bindings {
-            let revision = generations
-                .get(slot.0 as usize)
-                .copied()
-                .unwrap_or(0) + 1;
+            let revision = generations.get(slot.0 as usize).copied().unwrap_or(0) + 1;
             content_versions[slot.0 as usize] =
                 Some(ContentVersion::new(1, ResourceId(slot.0), revision));
         }
@@ -599,13 +607,9 @@ mod gpu_tests {
             1,
             manifold_gpu::GpuTextureFormat::Rgba8Unorm,
         );
-        let source = device.create_buffer_shared(
-            std::mem::size_of::<MeshVertex>() as u64 * 3,
-        );
+        let source = device.create_buffer_shared(std::mem::size_of::<MeshVertex>() as u64 * 3);
         let maps = device.create_buffer_shared(16 * 2);
-        let output = device.create_buffer_shared(
-            std::mem::size_of::<MeshVertex>() as u64 * 2,
-        );
+        let output = device.create_buffer_shared(std::mem::size_of::<MeshVertex>() as u64 * 2);
         let source_slot = backend.pre_bind_array(ResourceId(0), source);
         let map_slot = backend.pre_bind_array(ResourceId(1), maps);
         let output_slot = backend.pre_bind_array(ResourceId(2), output);

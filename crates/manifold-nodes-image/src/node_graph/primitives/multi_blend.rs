@@ -12,11 +12,13 @@
 //! a 2-input blend and an 8-input blend each compile a tight kernel with no
 //! dead taps.
 
-use std::borrow::Cow;
 use ahash::AHashMap;
 use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc};
+use std::borrow::Cow;
 
-use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
+use manifold_node_engine::exec::effect_node::{
+    EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
+};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 
@@ -243,8 +245,11 @@ impl EffectNode for MultiBlend {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipelines.entry(k).or_insert_with(|| {
-            gpu.device
-                .create_compute_pipeline(&MultiBlend::shader_for(k), "cs_main", "node.multi_blend")
+            gpu.device.create_compute_pipeline(
+                &MultiBlend::shader_for(k),
+                "cs_main",
+                "node.multi_blend",
+            )
         });
         let sampler = self
             .sampler
@@ -317,7 +322,10 @@ mod tests {
 
     fn params_with(num_inputs: f32) -> ParamValues {
         let mut p = ParamValues::default();
-        p.insert(std::borrow::Cow::Borrowed("num_inputs"), ParamValue::Float(num_inputs));
+        p.insert(
+            std::borrow::Cow::Borrowed("num_inputs"),
+            ParamValue::Float(num_inputs),
+        );
         p
     }
 

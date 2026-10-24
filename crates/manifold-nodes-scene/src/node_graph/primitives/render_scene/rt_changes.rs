@@ -1,5 +1,5 @@
-use manifold_node_engine::{content_revision::ContentVersion, scene::mesh_change::MeshRevision};
 use manifold_gpu::raytrace::RtGeometryChange;
+use manifold_node_engine::{content_revision::ContentVersion, scene::mesh_change::MeshRevision};
 
 /// Classify the per-object acceleration-structure update for one evaluated
 /// frame. Connectivity changes rebuild; position-only changes refit the
@@ -68,9 +68,15 @@ pub(super) struct SceneChanges {
 }
 
 impl SceneChanges {
-    pub(super) fn reset_history(self) -> bool { self.geometry || self.appearance }
-    pub(super) fn refresh_emissive(self) -> bool { self.geometry || self.appearance }
-    pub(super) fn update_instances(self) -> bool { self.instances }
+    pub(super) fn reset_history(self) -> bool {
+        self.geometry || self.appearance
+    }
+    pub(super) fn refresh_emissive(self) -> bool {
+        self.geometry || self.appearance
+    }
+    pub(super) fn update_instances(self) -> bool {
+        self.instances
+    }
 }
 
 #[cfg(test)]
@@ -78,18 +84,30 @@ mod tests {
     use super::*;
 
     fn revision(topology: u64, positions: u64, content: u64) -> MeshRevision {
-        MeshRevision { topology, positions, content }
+        MeshRevision {
+            topology,
+            positions,
+            content,
+        }
     }
 
     fn slot_hint(slot: u32, generation: u64) -> Option<ContentVersion> {
-        Some(ContentVersion::new(1, manifold_node_engine::exec::execution_plan::ResourceId(slot), generation))
+        Some(ContentVersion::new(
+            1,
+            manifold_node_engine::exec::execution_plan::ResourceId(slot),
+            generation,
+        ))
     }
 
     #[test]
     fn appearance_tracks_content_identity_and_lifetime() {
         let key = |epoch, resource, revision| {
             let mut key = AppearanceKeyBuilder::default();
-            key.content(Some(ContentVersion::new(epoch, manifold_node_engine::exec::execution_plan::ResourceId(resource), revision)));
+            key.content(Some(ContentVersion::new(
+                epoch,
+                manifold_node_engine::exec::execution_plan::ResourceId(resource),
+                revision,
+            )));
             key.parameter_bytes(&1.0_f32.to_bits().to_ne_bytes());
             key.finish()
         };
@@ -105,7 +123,11 @@ mod tests {
         for geometry in [false, true] {
             for appearance in [false, true] {
                 for instances in [false, true] {
-                    let changes = SceneChanges { geometry, appearance, instances };
+                    let changes = SceneChanges {
+                        geometry,
+                        appearance,
+                        instances,
+                    };
                     assert_eq!(changes.reset_history(), geometry || appearance);
                     assert_eq!(changes.refresh_emissive(), geometry || appearance);
                     assert_eq!(changes.update_instances(), instances);
@@ -140,12 +162,7 @@ mod tests {
         let hint = slot_hint(2, 7);
         let previous = revision(1, 1, 1);
         assert_eq!(
-            classify_mesh_change(
-                Some((previous, hint)),
-                Some(revision(2, 1, 1)),
-                hint,
-                false,
-            ),
+            classify_mesh_change(Some((previous, hint)), Some(revision(2, 1, 1)), hint, false,),
             RtGeometryChange::Rebuild
         );
         assert_eq!(
@@ -163,12 +180,7 @@ mod tests {
     fn position_change_refits_with_stable_topology() {
         let previous = revision(1, 1, 1);
         assert_eq!(
-            classify_mesh_change(
-                Some((previous, None)),
-                Some(revision(1, 2, 1)),
-                None,
-                false,
-            ),
+            classify_mesh_change(Some((previous, None)), Some(revision(1, 2, 1)), None, false,),
             RtGeometryChange::Refit
         );
     }
@@ -177,12 +189,7 @@ mod tests {
     fn content_only_change_refreshes_attributes() {
         let previous = revision(1, 1, 1);
         assert_eq!(
-            classify_mesh_change(
-                Some((previous, None)),
-                Some(revision(1, 1, 2)),
-                None,
-                false,
-            ),
+            classify_mesh_change(Some((previous, None)), Some(revision(1, 1, 2)), None, false,),
             RtGeometryChange::Attributes
         );
     }

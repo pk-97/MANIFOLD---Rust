@@ -20,13 +20,13 @@
 //! its luma, which is sometimes useful (gating on a single colour
 //! channel).
 
-use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
+use std::borrow::Cow;
 
+use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 use crate::exec::effect_node::EffectNodeContext;
 use crate::parameters::{ParamDef, ParamType, ParamValue};
 use crate::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 crate::primitive! {
     name: MaskedMix,
@@ -129,12 +129,18 @@ mod gpu_tests {
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
-    use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::exec::backend::Backend;
     use crate::bindings::Slot;
+    use crate::exec::backend::Backend;
     use crate::exec::execution_plan::ResourceId;
-    use crate::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, scene::boundary_nodes::Source, exec::execution_plan::compile, primitives::masked_mix::MaskedMix};
+    use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use crate::gpu::render_target::RenderTarget;
+    use crate::{
+        exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
+        exec::execution_plan::ExecutionPlan, exec::execution_plan::compile,
+        exec::metal_backend::MetalBackend, graph::Graph, parameters::ParamValue,
+        primitives::masked_mix::MaskedMix, scene::boundary_nodes::FinalOutput,
+        scene::boundary_nodes::Source,
+    };
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -177,7 +183,8 @@ mod gpu_tests {
         let src_m = g.add_node(Box::new(Source::new()));
         let mm = g.add_node(Box::new(MaskedMix::new()));
         let out = g.add_node(Box::new(FinalOutput::new()));
-        g.set_param(mm, "amount", ParamValue::Float(amount)).unwrap();
+        g.set_param(mm, "amount", ParamValue::Float(amount))
+            .unwrap();
         g.connect((src_a, "out"), (mm, "a")).unwrap();
         g.connect((src_b, "out"), (mm, "b")).unwrap();
         g.connect((src_m, "out"), (mm, "mask")).unwrap();

@@ -12,12 +12,12 @@
 //! atoms already deposited). Pair downstream of
 //! `node.sample_volume_at_particles`.
 
-use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
+use std::borrow::Cow;
 
-use manifold_node_engine::particles::Particle;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::Particle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
@@ -230,4 +230,3 @@ impl Primitive for SimplexNoiseForce3DAtParticles {
         );
     }
 }
-

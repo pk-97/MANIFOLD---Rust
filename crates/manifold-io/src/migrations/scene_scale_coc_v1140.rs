@@ -50,8 +50,16 @@ fn scene_radius_from_meta(meta: &Value) -> Option<f32> {
     let bounds = meta.get(SCENE_BOUNDS)?;
     let min = bounds.get(0)?.as_array()?;
     let max = bounds.get(1)?.as_array()?;
-    let min = [min.first()?.as_f64()? as f32, min.get(1)?.as_f64()? as f32, min.get(2)?.as_f64()? as f32];
-    let max = [max.first()?.as_f64()? as f32, max.get(1)?.as_f64()? as f32, max.get(2)?.as_f64()? as f32];
+    let min = [
+        min.first()?.as_f64()? as f32,
+        min.get(1)?.as_f64()? as f32,
+        min.get(2)?.as_f64()? as f32,
+    ];
+    let max = [
+        max.first()?.as_f64()? as f32,
+        max.get(1)?.as_f64()? as f32,
+        max.get(2)?.as_f64()? as f32,
+    ];
     let dims = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
     let radius =
         ((dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5).max(0.01);
@@ -66,7 +74,10 @@ fn flatten_nodes(nodes: &[Value]) -> Vec<&Value> {
     fn walk<'a>(nodes: &'a [Value], out: &mut Vec<&'a Value>) {
         for n in nodes {
             out.push(n);
-            if let Some(group) = n.get("group").and_then(|g| g.get("nodes")).and_then(|ns| ns.as_array())
+            if let Some(group) = n
+                .get("group")
+                .and_then(|g| g.get("nodes"))
+                .and_then(|ns| ns.as_array())
             {
                 walk(group, out);
             }
@@ -97,14 +108,10 @@ fn for_each_node_mut(nodes: &mut [Value], f: &mut impl FnMut(&mut Value)) {
 /// hand-customized graphs (a graph that already has the param is either
 /// migrated or hand-authored; never touch it).
 fn graph_has_world_to_mm(nodes: &[Value]) -> bool {
-    flatten_nodes(nodes)
-        .iter()
-        .any(|n| {
-            n.get("typeId").and_then(|t| t.as_str()) == Some(COC)
-                && n.get("params")
-                    .and_then(|p| p.get("world_to_mm"))
-                    .is_some()
-        })
+    flatten_nodes(nodes).iter().any(|n| {
+        n.get("typeId").and_then(|t| t.as_str()) == Some(COC)
+            && n.get("params").and_then(|p| p.get("world_to_mm")).is_some()
+    })
 }
 
 /// Entry point wired into `crate::migrate::migrate_if_needed`'s 1.14.0 rung.
@@ -116,7 +123,10 @@ pub(crate) fn migrate(root: &mut Value) {
             migrated += usize::from(migrate_graph_value(graph));
         }
     });
-    if let Some(presets) = root.get_mut("embeddedPresets").and_then(|v| v.as_array_mut()) {
+    if let Some(presets) = root
+        .get_mut("embeddedPresets")
+        .and_then(|v| v.as_array_mut())
+    {
         for preset in presets.iter_mut() {
             if let Some(def) = preset.get_mut("def") {
                 migrated += usize::from(migrate_graph_value(def));
@@ -132,12 +142,17 @@ pub(crate) fn migrate(root: &mut Value) {
 
 /// Migrate one graph-shaped value. Returns true when it was modified.
 fn migrate_graph_value(graph: &mut Value) -> bool {
-    let Value::Object(map) = graph else { return false };
+    let Value::Object(map) = graph else {
+        return false;
+    };
     let Some(nodes) = map.get("nodes").and_then(|n| n.as_array()) else {
         return false;
     };
     // No coc_from_depth node → nothing to calibrate; byte-identical.
-    if !flatten_nodes(nodes).iter().any(|n| n.get("typeId").and_then(|t| t.as_str()) == Some(COC)) {
+    if !flatten_nodes(nodes)
+        .iter()
+        .any(|n| n.get("typeId").and_then(|t| t.as_str()) == Some(COC))
+    {
         return false;
     }
     // Already migrated / hand-customized → skip (idempotent).
@@ -153,7 +168,9 @@ fn migrate_graph_value(graph: &mut Value) -> bool {
         return false;
     };
 
-    let Value::Object(map) = graph else { return false };
+    let Value::Object(map) = graph else {
+        return false;
+    };
     let Some(nodes) = map.get_mut("nodes").and_then(|n| n.as_array_mut()) else {
         return false;
     };
@@ -164,7 +181,9 @@ fn migrate_graph_value(graph: &mut Value) -> bool {
     // the graph stores it (camera_lens node params, and any f_stop
     // port-shadow param on another node).
     for_each_node_mut(nodes, &mut |node| {
-        let Some(Value::Object(params)) = node.get_mut("params") else { return };
+        let Some(Value::Object(params)) = node.get_mut("params") else {
+            return;
+        };
         for (name, pv) in params.iter_mut() {
             if name != "f_stop" || pv.get("type").and_then(|t| t.as_str()) != Some("Float") {
                 continue;
@@ -248,13 +267,19 @@ mod tests {
         let r = radius_of_bounds();
         let w2m = coc_node_of(migrated)["params"]["world_to_mm"].clone();
         assert_eq!(w2m["type"].as_str(), Some("Float"));
-        assert!((w2m["value"].as_f64().unwrap() - 1000.0 / r as f64).abs() < 1e-3,
-            "world_to_mm must be 1000/radius, got {}", w2m["value"]);
+        assert!(
+            (w2m["value"].as_f64().unwrap() - 1000.0 / r as f64).abs() < 1e-3,
+            "world_to_mm must be 1000/radius, got {}",
+            w2m["value"]
+        );
 
         // f_stop scaled by R (look-preserving).
         let lens = &migrated["nodes"][1];
         let stored = lens["params"]["f_stop"]["value"].as_f64().unwrap();
-        assert!((stored - 2.8 * r as f64).abs() < 1e-3, "f_stop must be ×R, got {stored}");
+        assert!(
+            (stored - 2.8 * r as f64).abs() < 1e-3,
+            "f_stop must be ×R, got {stored}"
+        );
     }
 
     #[test]
@@ -290,7 +315,8 @@ mod tests {
             "projectVersion": "1.13.0",
             "timeline": {"layers": [{"genParams": {"graph": scene_graph(true, 2.8)}}]}
         });
-        let out = crate::migrate::migrate_if_needed(&serde_json::to_string(&root).unwrap()).unwrap();
+        let out =
+            crate::migrate::migrate_if_needed(&serde_json::to_string(&root).unwrap()).unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(
             v["projectVersion"].as_str(),
@@ -327,7 +353,10 @@ mod tests {
         migrate(&mut root);
         let def = &root["embeddedPresets"][0]["def"];
         let coc = &def["nodes"][2];
-        assert!(coc["params"]["world_to_mm"].is_object(), "top-level coc must be stamped");
+        assert!(
+            coc["params"]["world_to_mm"].is_object(),
+            "top-level coc must be stamped"
+        );
         let r = radius_of_bounds();
         let lens = &def["nodes"][1];
         assert!(

@@ -15,15 +15,13 @@
 //! into shared MTLBuffer for downstream CPU consumption by
 //! `node.draw_lines`.
 
-use std::borrow::Cow;
-use manifold_node_engine::mesh::EdgePair;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::EdgePair;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use std::borrow::Cow;
 
-pub use crate::node_graph::primitives::generate_grid_uv::{
-    GRID_UV_DEFAULT_SIZE, GRID_UV_MAX_SIZE,
-};
+pub use crate::node_graph::primitives::generate_grid_uv::{GRID_UV_DEFAULT_SIZE, GRID_UV_MAX_SIZE};
 
 manifold_node_engine::primitive! {
     name: EdgesFromGridUv,
@@ -172,7 +170,10 @@ mod tests {
         );
 
         let mut custom = ParamValues::default();
-        custom.insert(std::borrow::Cow::Borrowed("grid_size"), ParamValue::Float(16.0));
+        custom.insert(
+            std::borrow::Cow::Borrowed("grid_size"),
+            ParamValue::Float(16.0),
+        );
         assert_eq!(
             Primitive::array_output_capacity(&prim, "edges", &custom, &[]),
             Some(16 * 16 * 2),

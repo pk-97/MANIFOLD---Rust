@@ -426,7 +426,11 @@ mod tests {
             clip_id: "never-opened".to_string(),
         });
         let results = sched.recv_results_timeout(Duration::from_secs(5));
-        assert_eq!(results.len(), 1, "expected exactly one reply, got none (hang)");
+        assert_eq!(
+            results.len(),
+            1,
+            "expected exactly one reply, got none (hang)"
+        );
         assert!(
             matches!(results[0].status, DecodeResultStatus::Error(_)),
             "expected an Error status for a job with no handle"
@@ -442,7 +446,11 @@ mod tests {
             target_time: 0.0,
         });
         let results = sched.recv_results_timeout(Duration::from_secs(5));
-        assert_eq!(results.len(), 1, "expected exactly one reply, got none (hang)");
+        assert_eq!(
+            results.len(),
+            1,
+            "expected exactly one reply, got none (hang)"
+        );
         assert!(matches!(results[0].status, DecodeResultStatus::Error(_)));
     }
 
@@ -453,7 +461,11 @@ mod tests {
             clip_id: "never-opened".to_string(),
         });
         let results = sched.recv_results_timeout(Duration::from_secs(5));
-        assert_eq!(results.len(), 1, "expected exactly one reply, got none (hang)");
+        assert_eq!(
+            results.len(),
+            1,
+            "expected exactly one reply, got none (hang)"
+        );
         assert!(matches!(results[0].status, DecodeResultStatus::Error(_)));
     }
 

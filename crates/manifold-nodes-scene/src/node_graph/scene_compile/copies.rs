@@ -19,8 +19,8 @@
 //! them (its Count drives the scatter's). Physics does not move copies on a
 //! surface, so their body stays disabled.
 
-use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::copies_body::MAX_COPIES;
+use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::scene_doc::{Item, PhysicsSetting};
 use manifold_core::scene_schema::{BODY_ROLE, COPIES_ROLE, COPIES_ROWS, Reach, SURFACE_ROLE};
 
@@ -33,12 +33,26 @@ const FIXED: u32 = 0;
 const MOVING: u32 = 1;
 
 fn add_body(b: &mut Builder<'_>, item: &Item, transform: u32, physics: PhysicsSetting) -> u32 {
-    let physics = if item.fields.copies_surface().is_some() { PhysicsSetting::None } else { physics };
+    let physics = if item.fields.copies_surface().is_some() {
+        PhysicsSetting::None
+    } else {
+        physics
+    };
     let owner = item.id.as_str();
     let body = b.add(owner, COPIES_ROLE, "node.rigid_body");
     b.wire(transform, "transform", body, "transform");
-    b.set(body, "enabled", SerializedParamValue::Bool { value: physics != PhysicsSetting::None });
-    let motion = if physics == PhysicsSetting::Collider { FIXED } else { MOVING };
+    b.set(
+        body,
+        "enabled",
+        SerializedParamValue::Bool {
+            value: physics != PhysicsSetting::None,
+        },
+    );
+    let motion = if physics == PhysicsSetting::Collider {
+        FIXED
+    } else {
+        MOVING
+    };
     b.set(body, "motion", SerializedParamValue::Enum { value: motion });
     // The Physics section's rows (Mass, Bounce, Friction) set every copy.
     b.adopt(owner, BODY_ROLE, body);
@@ -67,7 +81,12 @@ pub(crate) fn emit_object(
 /// inside is one part of its shape ([`add_part`]), so the group's bounds size
 /// one copy's spacing, and the group's draws read the body's instances in
 /// Group space.
-pub(crate) fn emit_group(b: &mut Builder<'_>, item: &Item, transform: u32, physics: PhysicsSetting) -> u32 {
+pub(crate) fn emit_group(
+    b: &mut Builder<'_>,
+    item: &Item,
+    transform: u32,
+    physics: PhysicsSetting,
+) -> u32 {
     add_body(b, item, transform, physics)
 }
 
@@ -86,7 +105,10 @@ pub(crate) fn add_part(b: &mut Builder<'_>, body: u32, mesh: u32, transform: u32
     if b.swarm_frames.contains_key(&body) {
         return;
     }
-    b.copy_parts.entry(body).or_default().push((mesh, transform));
+    b.copy_parts
+        .entry(body)
+        .or_default()
+        .push((mesh, transform));
 }
 
 /// Make `object` draw `body`'s copies.
@@ -106,7 +128,11 @@ pub(crate) fn draw_instances(b: &mut Builder<'_>, body: u32, object: u32, group_
         b.wire(body, "active_count", object, "instance_count");
     }
     if group_space {
-        b.set(object, "instances_space", SerializedParamValue::Enum { value: GROUP_SPACE });
+        b.set(
+            object,
+            "instances_space",
+            SerializedParamValue::Enum { value: GROUP_SPACE },
+        );
     }
 }
 
@@ -125,7 +151,13 @@ pub(crate) fn join_world(b: &mut Builder<'_>) {
         .or_else(|| b.id(SCENE, "physics"))
         .unwrap_or_else(|| b.add(SCENE, "physics", "node.physics_world"));
     for (body, parts) in std::mem::take(&mut b.copy_parts) {
-        b.set(body, "parts", SerializedParamValue::Int { value: parts.len() as i32 });
+        b.set(
+            body,
+            "parts",
+            SerializedParamValue::Int {
+                value: parts.len() as i32,
+            },
+        );
         for (k, (mesh, transform)) in parts.into_iter().enumerate() {
             b.wire(mesh, "source", body, &format!("mesh_{k}"));
             b.wire(transform, "transform", body, &format!("part_{k}"));
@@ -148,10 +180,16 @@ fn scale_copies(b: &mut Builder<'_>) {
     let mut copied = Vec::new();
     doc.walk(|item, _| copied.push(item));
     for item in copied {
-        let Some(body) = b.id(item.id.as_str(), COPIES_ROLE) else { continue };
+        let Some(body) = b.id(item.id.as_str(), COPIES_ROLE) else {
+            continue;
+        };
         for object in draws_of(b, item, body) {
             b.wire(body, "copy_scale", object, "copy_scale");
-            b.set(object, "instances_space", SerializedParamValue::Enum { value: GROUP_SPACE });
+            b.set(
+                object,
+                "instances_space",
+                SerializedParamValue::Enum { value: GROUP_SPACE },
+            );
         }
     }
 }
@@ -184,13 +222,22 @@ fn place_on_surfaces(b: &mut Builder<'_>) {
         b.wire(mesh.0, mesh.1, scatter, "vertices");
         b.set_number(scatter, "max_capacity", MAX_COPIES as f32);
         b.follow(body, "copy_count", scatter, "count");
-        b.apply_rows(item, COPIES_ROWS.iter().filter(|row| row.reach == Reach::Own(SURFACE_ROLE) && (row.applies)(&item.fields)));
+        b.apply_rows(
+            item,
+            COPIES_ROWS
+                .iter()
+                .filter(|row| row.reach == Reach::Own(SURFACE_ROLE) && (row.applies)(&item.fields)),
+        );
         b.splice(body, "instances", scatter, "instances");
         // Each copy is the surface's frame, then its point on the surface,
         // then the copied item's own transform.
         let own = b.id(owner, "transform");
         for object in draws {
-            b.set(object, "instances_space", SerializedParamValue::Enum { value: GROUP_SPACE });
+            b.set(
+                object,
+                "instances_space",
+                SerializedParamValue::Enum { value: GROUP_SPACE },
+            );
             b.wire(frame, "transform", object, "parent_transform");
             match b.input(object, "transform") {
                 // A part inside a copied group: the group's transform leads
@@ -222,7 +269,8 @@ fn draws_of(b: &Builder<'_>, item: &Item, body: u32) -> Vec<u32> {
     let mut visit = vec![item];
     while let Some(next) = visit.pop() {
         if let Some(object) = b.id(next.id.as_str(), "object")
-            && b.input(object, "instances").is_some_and(|(from, port)| from == body && port == "instances")
+            && b.input(object, "instances")
+                .is_some_and(|(from, port)| from == body && port == "instances")
         {
             draws.push(object);
         }

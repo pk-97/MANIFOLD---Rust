@@ -1,14 +1,16 @@
 //! Renderer-owned catalog contracts for freeze installation.
 
-use std::sync::Arc;
 use ahash::AHashSet;
-use manifold_core::{NodeId, PresetTypeId};
 use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
+use manifold_core::{NodeId, PresetTypeId};
 use manifold_node_engine::freeze::install::*;
-use manifold_node_engine::freeze::install::{def_content_key, effect_def_content_key, resolve_node_id};
+use manifold_node_engine::freeze::install::{
+    def_content_key, effect_def_content_key, resolve_node_id,
+};
 use manifold_node_engine::param_binding::ParamTarget;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::persistence::PrimitiveRegistry;
+use std::sync::Arc;
 
 fn registry() -> PrimitiveRegistry {
     PrimitiveRegistry::with_builtin()
@@ -23,8 +25,10 @@ mod tests {
         // own content key and never clobber the canonical one; a non-fusable def
         // must cache `None` rather than recompile each call. Uses ColorGrade,
         // whose canonical shape fuses.
-        let base = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&PresetTypeId::new("ColorGrade"))
-            .expect("ColorGrade canonical view");
+        let base = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(
+            &PresetTypeId::new("ColorGrade"),
+        )
+        .expect("ColorGrade canonical view");
 
         // Canonical content key fuses and is stable across calls (cache hit).
         let canon_a = fused_view_for(&base.canonical_def, &base);
@@ -64,8 +68,10 @@ mod tests {
     /// keep bindings in the def, so they retargeted; effects didn't).
     #[test]
     fn fused_view_carries_retarget_map_for_user_bindings() {
-        let base = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&PresetTypeId::new("ColorGrade"))
-            .expect("ColorGrade canonical view");
+        let base = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(
+            &PresetTypeId::new("ColorGrade"),
+        )
+        .expect("ColorGrade canonical view");
         // Plain JSON-loaded view: no fusion, so nothing to retarget.
         assert!(
             base.fused_retarget.is_empty(),
@@ -87,7 +93,11 @@ mod tests {
         );
         // The map is total over fused-away inner params (every param of every
         // collapsed node), so a user binding can never strand under fusion.
-        assert_eq!(fused.fused_retarget.len(), 14, "all 7 ColorGrade atoms' params");
+        assert_eq!(
+            fused.fused_retarget.len(),
+            14,
+            "all 7 ColorGrade atoms' params"
+        );
     }
 
     /// P5/D4: a Vec3 param (`node.brightness`'s `weights`) and a Vec4 param
@@ -154,8 +164,7 @@ mod tests {
         // seeded field name must be a real reparsed WgslCompute param.
         let mut wc = WgslCompute::new();
         wc.set_wgsl_source(node.wgsl_source.as_deref().unwrap());
-        let param_names: AHashSet<&str> =
-            wc.parameters().iter().map(|p| p.name.as_ref()).collect();
+        let param_names: AHashSet<&str> = wc.parameters().iter().map(|p| p.name.as_ref()).collect();
         for field in node.params.keys() {
             assert!(
                 param_names.contains(field.as_str()),
@@ -202,8 +211,8 @@ mod tests {
     /// member 1), so the generator's modulation surface keeps driving the kernel.
     #[test]
     fn generator_binding_def_retargets_onto_fused() {
-        use manifold_node_engine::persistence::EffectGraphDefExt;
         use manifold_core::effect_graph_def::BindingTarget;
+        use manifold_node_engine::persistence::EffectGraphDefExt;
         let json = r#"{
             "version": 1, "name": "FuseGen",
             "presetMetadata": {
@@ -232,25 +241,61 @@ mod tests {
         let cached = fused_generator_view_for(&def).expect("cached view");
         assert!(Arc::ptr_eq(&view, &cached));
         let fused = view.def.clone();
-        let (target, field) = view.retarget.get(&("gain".into(), "gain".into()))
+        let (target, field) = view
+            .retarget
+            .get(&("gain".into(), "gain".into()))
             .expect("value edit route survives caching");
         let fused_id = NodeId::new("fused_region_0");
-        assert_eq!(view.node_retarget.get(&NodeId::new("gain")), Some(&fused_id));
-        assert_eq!(view.node_retarget.get(&NodeId::new("atomless")), Some(&fused_id));
-        assert_eq!(view.node_retarget, cached.node_retarget, "cache retains member attribution");
+        assert_eq!(
+            view.node_retarget.get(&NodeId::new("gain")),
+            Some(&fused_id)
+        );
+        assert_eq!(
+            view.node_retarget.get(&NodeId::new("atomless")),
+            Some(&fused_id)
+        );
+        assert_eq!(
+            view.node_retarget, cached.node_retarget,
+            "cache retains member attribution"
+        );
         assert!(view.node_retarget.values().all(|id| {
-            view.def.nodes.iter().any(|node| resolve_node_id(node) == *id)
+            view.def
+                .nodes
+                .iter()
+                .any(|node| resolve_node_id(node) == *id)
         }));
-        let mut graph = (*fused).clone().into_graph(&registry(), &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).unwrap();
+        let mut graph = (*fused)
+            .clone()
+            .into_graph(
+                &registry(),
+                &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+            )
+            .unwrap();
         let runtime_id = graph.instance_by_node_id(target).unwrap();
-        graph.set_param(runtime_id, field, ParamValue::Float(0.375)).unwrap();
-        assert_eq!(graph.get_node(runtime_id).unwrap().params.get(field.as_str()), Some(&ParamValue::Float(0.375)));
+        graph
+            .set_param(runtime_id, field, ParamValue::Float(0.375))
+            .unwrap();
+        assert_eq!(
+            graph
+                .get_node(runtime_id)
+                .unwrap()
+                .params
+                .get(field.as_str()),
+            Some(&ParamValue::Float(0.375))
+        );
         let meta = fused.preset_metadata.as_ref().expect("metadata preserved");
         assert_eq!(meta.bindings.len(), 1);
         match &meta.bindings[0].target {
             BindingTarget::Node { node_id, param } => {
-                assert_eq!(node_id.as_str(), "fused_region_0", "binding re-anchored to the fused node");
-                assert_eq!(param, "n1_gain", "gain is member 1, so its field is n1_gain");
+                assert_eq!(
+                    node_id.as_str(),
+                    "fused_region_0",
+                    "binding re-anchored to the fused node"
+                );
+                assert_eq!(
+                    param, "n1_gain",
+                    "gain is member 1, so its field is n1_gain"
+                );
             }
             other => panic!("binding not retargeted to a node: {other:?}"),
         }
@@ -317,7 +362,10 @@ mod tests {
         use manifold_node_engine::persistence::EffectGraphDefExt;
         (**fused)
             .clone()
-            .into_graph(&reg, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
+            .into_graph(
+                &reg,
+                &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
+            )
             .expect("fused def with retargeted enum binding must load");
     }
 
@@ -327,8 +375,10 @@ mod tests {
     /// chain-build test relies on.
     #[test]
     fn fused_effect_view_for_compiles_inline_in_tests() {
-        let base = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&PresetTypeId::new("ColorGrade"))
-            .expect("ColorGrade canonical view");
+        let base = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(
+            &PresetTypeId::new("ColorGrade"),
+        )
+        .expect("ColorGrade canonical view");
         match fused_effect_view_for(&base.canonical_def, &base) {
             FusedEffectLookup::Ready(view) => {
                 assert!(
@@ -352,18 +402,21 @@ mod tests {
         // must produce the same effect content key AND byte-identical fused WGSL.
         // These fields never reach the generated shader — codegen only reads binding
         // targets via `param_is_binding_target` (region.rs:2178).
-        let base = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&PresetTypeId::new("ColorGrade"))
-            .expect("ColorGrade canonical view");
+        let base = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(
+            &PresetTypeId::new("ColorGrade"),
+        )
+        .expect("ColorGrade canonical view");
 
         // Clone the base def and modify a binding's cosmetic fields
         let mut def_with_metadata = (*base.canonical_def).clone();
         if let Some(meta) = def_with_metadata.preset_metadata.as_mut()
-            && let Some(binding) = meta.bindings.first_mut() {
-                binding.label = "DIFFERENT_LABEL".to_string();
-                binding.default_value = 999.0;
-                binding.scale = 2.0;
-                binding.offset = 1.0;
-            }
+            && let Some(binding) = meta.bindings.first_mut()
+        {
+            binding.label = "DIFFERENT_LABEL".to_string();
+            binding.default_value = 999.0;
+            binding.scale = 2.0;
+            binding.offset = 1.0;
+        }
 
         // Effect content key must be identical (metadata doesn't affect codegen)
         assert_eq!(
@@ -386,18 +439,23 @@ mod tests {
         // Two effect defs differing in a binding's target must produce different
         // effect keys — retargeting changes which params the codegen treats as
         // binding-exposed, producing different WGSL.
-        let base = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&PresetTypeId::new("ColorGrade"))
-            .expect("ColorGrade canonical view");
+        let base = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(
+            &PresetTypeId::new("ColorGrade"),
+        )
+        .expect("ColorGrade canonical view");
 
         // Clone and modify a binding's target
         let mut def_with_different_target = (*base.canonical_def).clone();
         if let Some(meta) = def_with_different_target.preset_metadata.as_mut()
-            && let Some(binding) = meta.bindings.first_mut() {
-                // Change target to point to a different param — this MUST change the key
-                if let manifold_core::effect_graph_def::BindingTarget::Node { param, .. } = &mut binding.target {
-                    *param = "different_param".to_string();
-                }
+            && let Some(binding) = meta.bindings.first_mut()
+        {
+            // Change target to point to a different param — this MUST change the key
+            if let manifold_core::effect_graph_def::BindingTarget::Node { param, .. } =
+                &mut binding.target
+            {
+                *param = "different_param".to_string();
             }
+        }
 
         assert_ne!(
             effect_def_content_key(&base.canonical_def),
@@ -410,14 +468,17 @@ mod tests {
     fn generator_key_still_distinguishes_scale_offset() {
         // Generator key must distinguish scale/offset changes because the generator
         // runtime reads these from the cached fused def (registry.rs:253-268).
-        let base = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&PresetTypeId::new("Plasma"))
-            .expect("Plasma canonical view");
+        let base = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(
+            &PresetTypeId::new("Plasma"),
+        )
+        .expect("Plasma canonical view");
 
         let mut def_with_scale = (*base.canonical_def).clone();
         if let Some(meta) = def_with_scale.preset_metadata.as_mut()
-            && let Some(binding) = meta.bindings.first_mut() {
-                binding.scale = 2.0;
-            }
+            && let Some(binding) = meta.bindings.first_mut()
+        {
+            binding.scale = 2.0;
+        }
 
         assert_ne!(
             def_content_key(&base.canonical_def),
@@ -431,18 +492,21 @@ mod tests {
         // Two effect defs differing only in binding metadata must produce
         // byte-identical fused WGSL. This proves that key equality isn't
         // circular — the actual codegen output is the same, not just the hash.
-        let base = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&PresetTypeId::new("ColorGrade"))
-            .expect("ColorGrade canonical view");
+        let base = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(
+            &PresetTypeId::new("ColorGrade"),
+        )
+        .expect("ColorGrade canonical view");
 
         // Clone and modify binding metadata
         let mut def_with_metadata = (*base.canonical_def).clone();
         if let Some(meta) = def_with_metadata.preset_metadata.as_mut()
-            && let Some(binding) = meta.bindings.first_mut() {
-                binding.label = "DIFFERENT_LABEL".to_string();
-                binding.default_value = 999.0;
-                binding.scale = 2.0;
-                binding.offset = 1.0;
-            }
+            && let Some(binding) = meta.bindings.first_mut()
+        {
+            binding.label = "DIFFERENT_LABEL".to_string();
+            binding.default_value = 999.0;
+            binding.scale = 2.0;
+            binding.offset = 1.0;
+        }
 
         // Fuse both defs and extract WGSL
         let registry = PrimitiveRegistry::with_builtin();
@@ -452,13 +516,19 @@ mod tests {
             .expect("metadata-modified ColorGrade must fuse");
 
         // Extract WGSL from fused nodes
-        let wgsl_a: String = fused_a.def.nodes.iter()
+        let wgsl_a: String = fused_a
+            .def
+            .nodes
+            .iter()
             .filter(|n| n.type_id == "node.wgsl_compute")
             .filter_map(|n| n.wgsl_source.as_deref())
             .collect::<Vec<_>>()
             .join("\n");
 
-        let wgsl_b: String = fused_b.def.nodes.iter()
+        let wgsl_b: String = fused_b
+            .def
+            .nodes
+            .iter()
             .filter(|n| n.type_id == "node.wgsl_compute")
             .filter_map(|n| n.wgsl_source.as_deref())
             .collect::<Vec<_>>()

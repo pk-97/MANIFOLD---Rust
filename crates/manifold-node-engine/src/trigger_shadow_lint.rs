@@ -144,7 +144,13 @@ impl<'a> Ctx<'a> {
                 }
             }
         }
-        Self { nodes, wires, bindings, continuous_param, trigger_param }
+        Self {
+            nodes,
+            wires,
+            bindings,
+            continuous_param,
+            trigger_param,
+        }
     }
 
     fn node_id_str(&self, id: u32) -> Option<&'a str> {
@@ -173,7 +179,9 @@ impl<'a> Ctx<'a> {
         let Some((from_node, from_port)) = self.wires.get(&(node_id, port)).copied() else {
             return false;
         };
-        let Some(fn_node) = self.nodes.get(&from_node) else { return false };
+        let Some(fn_node) = self.nodes.get(&from_node) else {
+            return false;
+        };
         let type_id = fn_node.type_id.as_str();
         if type_id == "system.generator_input" || type_id == "system.source" {
             return from_port == "trigger_count"
@@ -204,7 +212,13 @@ impl<'a> Ctx<'a> {
 
         if let Some(nid) = self.node_id_str(from_node) {
             for ((bnid, bparam), outer_id) in &self.bindings {
-                if *bnid == nid && self.continuous_param.get(outer_id).copied().unwrap_or(false) {
+                if *bnid == nid
+                    && self
+                        .continuous_param
+                        .get(outer_id)
+                        .copied()
+                        .unwrap_or(false)
+                {
                     return Some(format!("{nid}.{bparam} (feeds {port} via {type_id})"));
                 }
             }

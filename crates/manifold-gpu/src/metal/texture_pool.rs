@@ -172,7 +172,12 @@ impl TexturePool {
         };
         if let Some(idx) = idx {
             inner.stats_recycled += 1;
-            let mut texture = inner.available.get_mut(&key).unwrap().swap_remove(idx).texture;
+            let mut texture = inner
+                .available
+                .get_mut(&key)
+                .unwrap()
+                .swap_remove(idx)
+                .texture;
             texture.retire = inner.retire.clone();
             return texture;
         }
@@ -194,9 +199,10 @@ impl TexturePool {
             .device
             .newTextureWithDescriptor(&mtl_desc)
             .expect("Metal: TexturePool allocation failed — GPU memory exhausted");
-        let residency = inner.residency_sender.as_ref().map(|sender| {
-            super::residency::lease_for_texture(sender, &raw)
-        });
+        let residency = inner
+            .residency_sender
+            .as_ref()
+            .map(|sender| super::residency::lease_for_texture(sender, &raw));
         GpuTexture {
             raw,
             width,
@@ -332,7 +338,8 @@ impl TexturePool {
                 continue;
             }
             let (w, h, fmt) = **key;
-            let bytes = (w as u64) * (h as u64) * (fmt.bytes_per_pixel() as u64) * entries.len() as u64;
+            let bytes =
+                (w as u64) * (h as u64) * (fmt.bytes_per_pixel() as u64) * entries.len() as u64;
             total_bytes += bytes;
             total_count += entries.len();
             let oldest = entries
@@ -451,7 +458,11 @@ mod tests {
             pool.begin_frame();
         }
         let t3 = pool.acquire(64, 64, FORMAT, USAGE, "c");
-        assert_eq!(pool.stats(), (2, 1), "fallback recycles after frames_in_flight");
+        assert_eq!(
+            pool.stats(),
+            (2, 1),
+            "fallback recycles after frames_in_flight"
+        );
         pool.release(t3);
     }
 
@@ -478,7 +489,11 @@ mod tests {
             pool.begin_frame();
         }
         let t3 = pool.acquire(64, 64, FORMAT, USAGE, "c");
-        assert_eq!(pool.stats(), (2, 1), "pre-attach entry retires by frame age");
+        assert_eq!(
+            pool.stats(),
+            (2, 1),
+            "pre-attach entry retires by frame age"
+        );
         pool.release(t3);
     }
 }

@@ -63,7 +63,11 @@ mod imp {
         }
 
         pub fn try_new(
-            device: &manifold_gpu::GpuDevice, src_w: u32, src_h: u32, dst_w: u32, dst_h: u32,
+            device: &manifold_gpu::GpuDevice,
+            src_w: u32,
+            src_h: u32,
+            dst_w: u32,
+            dst_h: u32,
         ) -> Result<Self, String> {
             let fmt = manifold_gpu::GpuTextureFormat::Rgba16Float;
             let scaler = manifold_gpu::metalfx::MetalFxSpatialScaler::new(
@@ -73,7 +77,8 @@ mod imp {
                 dst_w,
                 dst_h,
                 fmt,
-            ).ok_or_else(|| "MetalFX scaler creation failed".to_string())?;
+            )
+            .ok_or_else(|| "MetalFX scaler creation failed".to_string())?;
             let rcas_pipeline = device.create_compute_pipeline(
                 include_str!("effects/shaders/fsr1_rcas_compute.wgsl"),
                 "cs_main",

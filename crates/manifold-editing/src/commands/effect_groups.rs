@@ -1,6 +1,6 @@
 use crate::command::Command;
-use manifold_core::change::{ChangeSet, Part};
 use crate::commands::effect_target::{EffectTarget, with_effects, with_effects_mut};
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::effects::{EffectGroup, PresetInstance};
 use manifold_core::project::Project;
 use manifold_core::{EffectGroupId, EffectId};
@@ -55,7 +55,9 @@ impl GroupEffectsCommand {
 }
 
 impl Command for GroupEffectsCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::WHOLE_INSTANCES
+    }
     fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
@@ -216,7 +218,9 @@ impl UngroupEffectsCommand {
 }
 
 impl Command for UngroupEffectsCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::WHOLE_INSTANCES
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let gid = self.group_id.clone();
 
@@ -310,7 +314,9 @@ impl AddGroupMaskCommand {
 }
 
 impl Command for AddGroupMaskCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::WHOLE_INSTANCES
+    }
     fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
@@ -500,7 +506,9 @@ impl RemoveGroupMaskCommand {
 }
 
 impl Command for RemoveGroupMaskCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::WHOLE_INSTANCES
+    }
     fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
@@ -589,7 +597,9 @@ impl ToggleGroupCommand {
 }
 
 impl Command for ToggleGroupCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let gid = self.group_id.clone();
         let val = self.new_enabled;
@@ -640,7 +650,9 @@ impl SetGroupCollapsedCommand {
 }
 
 impl Command for SetGroupCollapsedCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
@@ -719,7 +731,9 @@ impl RenameGroupCommand {
 }
 
 impl Command for RenameGroupCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let gid = self.group_id.clone();
         let name = self.new_name.clone();
@@ -771,7 +785,9 @@ impl ChangeGroupWetDryCommand {
 }
 
 impl Command for ChangeGroupWetDryCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let gid = self.group_id.clone();
         let val = self.new_wet_dry;
@@ -820,7 +836,9 @@ impl ReorderRackCommand {
 }
 
 impl Command for ReorderRackCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::WHOLE_INSTANCES
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let gid = self.group_id.clone();
         let target_idx = self.target_insert_index;
@@ -938,7 +956,9 @@ impl MoveEffectsToGroupCommand {
 }
 
 impl Command for MoveEffectsToGroupCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::WHOLE_INSTANCES
+    }
     fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
@@ -1155,7 +1175,9 @@ impl PasteEffectsCommand {
 }
 
 impl Command for PasteEffectsCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::WHOLE_INSTANCES
+    }
     fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
@@ -1411,12 +1433,7 @@ mod tests {
 
         command.undo(&mut project);
         assert_eq!(project.settings.master_effects.len(), 1);
-        assert!(
-            project
-                .settings
-                .master_effect_groups
-                .is_none()
-        );
+        assert!(project.settings.master_effect_groups.is_none());
 
         command.execute(&mut project);
         let redo_group = project.settings.master_effect_groups.as_ref().unwrap()[0].clone();
@@ -1463,12 +1480,7 @@ mod tests {
         let group_id = group.id.clone();
 
         command.undo(&mut project);
-        assert!(
-            project
-                .settings
-                .master_effect_groups
-                .is_none()
-        );
+        assert!(project.settings.master_effect_groups.is_none());
         command.execute(&mut project);
         let redo_group = project.settings.master_effect_groups.as_ref().unwrap()[0].clone();
         assert_eq!(redo_group.id, group_id);
@@ -1538,12 +1550,7 @@ mod tests {
         assert!(!command.was_applied());
         assert_eq!(project.settings.master_effects.len(), 1);
         assert!(project.settings.master_effects[0].group_id.is_none());
-        assert!(
-            project
-                .settings
-                .master_effect_groups
-                .is_none()
-        );
+        assert!(project.settings.master_effect_groups.is_none());
     }
 
     #[test]
@@ -1818,12 +1825,7 @@ mod tests {
                 .iter()
                 .all(|effect| effect.id != mask_id)
         );
-        assert!(
-            project
-                .settings
-                .master_effect_groups
-                .is_none()
-        );
+        assert!(project.settings.master_effect_groups.is_none());
         ungroup.undo(&mut project);
         assert_eq!(
             project
@@ -1955,7 +1957,11 @@ mod tests {
         assert_eq!(project.settings.master_effects[1].id, second_id);
         assert_eq!(
             project.settings.master_effect_groups.as_ref().unwrap()[0].mask_effect_id,
-            project.settings.master_effects.first().map(|effect| effect.id.clone())
+            project
+                .settings
+                .master_effects
+                .first()
+                .map(|effect| effect.id.clone())
         );
         reorder.undo(&mut project);
         assert_eq!(
@@ -2015,18 +2021,22 @@ mod tests {
             .chain(project.settings.master_effects[3..5].iter())
             .map(|effect| effect.id.clone())
             .collect();
-        let mut move_groups = MoveEffectsToGroupCommand::new(
-            master_target(),
-            selected,
-            Some(tail_id),
-            None,
-            true,
-        );
+        let mut move_groups =
+            MoveEffectsToGroupCommand::new(master_target(), selected, Some(tail_id), None, true);
         move_groups.execute(&mut project);
         assert!(move_groups.was_applied());
-        assert_eq!(project.settings.master_effects[0].effect_type(), &PresetTypeId::new("Middle"));
-        assert_eq!(project.settings.master_effects[1].group_id, Some(group_a_id));
-        assert_eq!(project.settings.master_effects[3].group_id, Some(group_b_id));
+        assert_eq!(
+            project.settings.master_effects[0].effect_type(),
+            &PresetTypeId::new("Middle")
+        );
+        assert_eq!(
+            project.settings.master_effects[1].group_id,
+            Some(group_a_id)
+        );
+        assert_eq!(
+            project.settings.master_effects[3].group_id,
+            Some(group_b_id)
+        );
         move_groups.undo(&mut project);
         assert_eq!(
             project

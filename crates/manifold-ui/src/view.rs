@@ -214,7 +214,11 @@ impl UiSegmentShape {
             Self::CurvedRange { bend, start, end } => {
                 let lo = automation_segment_bend(start, bend);
                 let hi = automation_segment_bend(end, bend);
-                if (hi - lo).abs() <= f32::EPSILON { t } else { (automation_segment_bend(start + t * (end - start), bend) - lo) / (hi - lo) }
+                if (hi - lo).abs() <= f32::EPSILON {
+                    t
+                } else {
+                    (automation_segment_bend(start + t * (end - start), bend) - lo) / (hi - lo)
+                }
             }
         }
     }
@@ -222,7 +226,15 @@ impl UiSegmentShape {
         match self {
             Self::Linear | Self::Hold => self,
             Self::Curved(bend) => Self::CurvedRange { bend, start, end },
-            Self::CurvedRange { bend, start: a, end: b } => Self::CurvedRange { bend, start: a + start * (b - a), end: a + end * (b - a) },
+            Self::CurvedRange {
+                bend,
+                start: a,
+                end: b,
+            } => Self::CurvedRange {
+                bend,
+                start: a + start * (b - a),
+                end: a + end * (b - a),
+            },
         }
     }
 }
@@ -417,7 +429,9 @@ impl UiAutomationLane {
                 if beat.0 >= last.beat.0 {
                     return last.value_norm;
                 }
-                let idx = points.partition_point(|p| p.beat.0 <= beat.0).saturating_sub(1);
+                let idx = points
+                    .partition_point(|p| p.beat.0 <= beat.0)
+                    .saturating_sub(1);
                 let a = &points[idx];
                 let b = &points[idx + 1];
                 let span = (b.beat.0 - a.beat.0) as f32;
@@ -471,7 +485,12 @@ mod automation_lane_tests {
     }
 
     fn pt(beat: f64, value_norm: f32, shape: UiSegmentShape) -> UiAutomationPoint {
-        UiAutomationPoint { beat: Beats(beat), value_norm, shape, past_end: false }
+        UiAutomationPoint {
+            beat: Beats(beat),
+            value_norm,
+            shape,
+            past_end: false,
+        }
     }
 
     #[test]

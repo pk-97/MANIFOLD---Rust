@@ -8,14 +8,13 @@
 //! any subsequent preset-param edit ride the normal undo stack.
 
 use manifold_core::GraphTarget;
-use manifold_core::change::{ChangeSet, Part};
 use manifold_core::PresetTypeId;
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::preset_def::PresetKind;
 use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset, Project};
 
 use crate::command::Command;
-
 
 /// Fork the preset behind the instance at `target`: register `source_def` as a
 /// new project-embedded preset (id minted from its current id) and retarget the
@@ -189,7 +188,11 @@ impl SaveToProjectCommand {
     /// stamps the user-typed name onto `source_def` before constructing this
     /// command, so the minted id/display_name reflect what the user typed.
     pub fn new(kind: PresetKind, source_def: EffectGraphDef) -> Self {
-        Self { kind, source_def, saved: None }
+        Self {
+            kind,
+            source_def,
+            saved: None,
+        }
     }
 
     /// The minted id, available after `execute`.
@@ -199,7 +202,9 @@ impl SaveToProjectCommand {
 }
 
 impl Command for SaveToProjectCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::EmbeddedPresets]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::EmbeddedPresets])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if self.saved.is_none() {
             let base = self
@@ -208,7 +213,12 @@ impl Command for SaveToProjectCommand {
                 .as_ref()
                 .map(|m| m.display_name.clone())
                 .filter(|s| !s.is_empty())
-                .or_else(|| self.source_def.preset_metadata.as_ref().map(|m| m.id.as_str().to_string()))
+                .or_else(|| {
+                    self.source_def
+                        .preset_metadata
+                        .as_ref()
+                        .map(|m| m.id.as_str().to_string())
+                })
                 .unwrap_or_else(|| "Preset".to_string());
             let new_id = mint_project_preset_name(project, &base);
             let mut def = self.source_def.clone();
@@ -366,12 +376,18 @@ pub struct RenameEmbeddedPresetCommand {
 
 impl RenameEmbeddedPresetCommand {
     pub fn new(id: PresetTypeId, new_name: String) -> Self {
-        Self { id, new_name, old_name: None }
+        Self {
+            id,
+            new_name,
+            old_name: None,
+        }
     }
 }
 
 impl Command for RenameEmbeddedPresetCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::EmbeddedPresets]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::EmbeddedPresets])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let Some(mut ep) = project.embedded_preset(&self.id).cloned() else {
             return;
@@ -432,7 +448,9 @@ impl DeleteEmbeddedPresetCommand {
 }
 
 impl Command for DeleteEmbeddedPresetCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::EmbeddedPresets]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::EmbeddedPresets])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let removed = project.remove_embedded_preset(&self.id);
         if self.removed.is_none() {
@@ -490,31 +508,32 @@ mod tests {
     use manifold_core::macro_bank::MacroCurve;
 
     fn slot(id: &str, value: f32, exposed: bool) -> manifold_core::params::Param {
-        let mut p = manifold_core::params::Param::bundled(manifold_core::effect_graph_def::ParamSpecDef {
-            tooltip: None,
-            id: id.into(),
-            name: id.into(),
-            min: 0.0,
-            max: 1.0,
-            default_value: value,
-            whole_numbers: false,
-            is_toggle: false,
-            is_trigger: false,
-            value_labels: vec![],
-            format_string: None,
-            osc_suffix: String::new(),
-            curve: Default::default(),
-            invert: false,
-            is_angle: false,
-            is_trigger_gate: false,
-            wraps: false,
-            section: None,
-            card_visible: true,
-            material_role: None,
-            limit: Default::default(),
-            unit: None,
-            scene: None,
-        });
+        let mut p =
+            manifold_core::params::Param::bundled(manifold_core::effect_graph_def::ParamSpecDef {
+                tooltip: None,
+                id: id.into(),
+                name: id.into(),
+                min: 0.0,
+                max: 1.0,
+                default_value: value,
+                whole_numbers: false,
+                is_toggle: false,
+                is_trigger: false,
+                value_labels: vec![],
+                format_string: None,
+                osc_suffix: String::new(),
+                curve: Default::default(),
+                invert: false,
+                is_angle: false,
+                is_trigger_gate: false,
+                wraps: false,
+                section: None,
+                card_visible: true,
+                material_role: None,
+                limit: Default::default(),
+                unit: None,
+                scene: None,
+            });
         p.value = value;
         p.base = value;
         p.exposed = exposed;
@@ -537,7 +556,7 @@ mod tests {
                 scene_bounds: None,
                 available: true,
                 is_line_based: false,
-                    layer_types: None,
+                layer_types: None,
                 params: vec![ParamSpecDef {
                     tooltip: None,
                     id: param.to_string(),
@@ -593,7 +612,9 @@ mod tests {
         let new_id = cmd.forked_id().cloned().expect("forked id");
         assert_eq!(new_id.as_str(), "OilyFluid 2");
         assert_eq!(project.instance_preset_id(&target).as_ref(), Some(&new_id));
-        let forked = project.embedded_preset(&new_id).expect("forked preset registered");
+        let forked = project
+            .embedded_preset(&new_id)
+            .expect("forked preset registered");
         assert_eq!(
             forked.def.preset_metadata.as_ref().unwrap().display_name,
             "OilyFluid 2",
@@ -619,7 +640,8 @@ mod tests {
         // Prior card state: one value the user had dialed in. The imported
         // preset has a *different* saved default, so a correct import must
         // replace this, not keep it (the source of the black-render bug).
-        fx.params = manifold_core::params::ParamManifest::from_params(vec![slot("speed", 0.9, true)]);
+        fx.params =
+            manifold_core::params::ParamManifest::from_params(vec![slot("speed", 0.9, true)]);
         let fx_id = fx.id.clone();
         project.settings.master_effects.push(fx);
         let target = GraphTarget::Effect(fx_id.clone());
@@ -664,12 +686,21 @@ mod tests {
         cmd.execute(&mut project);
 
         let id = cmd.saved_id().cloned().expect("saved id");
-        assert_eq!(id.as_str(), "Sunset Glow", "a fresh name with no collision saves verbatim");
+        assert_eq!(
+            id.as_str(),
+            "Sunset Glow",
+            "a fresh name with no collision saves verbatim"
+        );
 
-        let saved = project.embedded_preset(&id).expect("preset upserted into the project");
+        let saved = project
+            .embedded_preset(&id)
+            .expect("preset upserted into the project");
         assert_eq!(saved.kind, PresetKind::Effect);
         assert_eq!(saved.origin, EmbeddedOrigin::Saved);
-        assert_eq!(saved.def.preset_metadata.as_ref().unwrap().display_name, "Sunset Glow");
+        assert_eq!(
+            saved.def.preset_metadata.as_ref().unwrap().display_name,
+            "Sunset Glow"
+        );
 
         // Round-trip: re-import the (de)serialized def and confirm nothing
         // is lost (the calibration — the widened `intensity` range — is the
@@ -717,8 +748,16 @@ mod tests {
         cmd.execute(&mut project);
 
         let id = cmd.saved_id().cloned().expect("saved id");
-        assert_eq!(id.as_str(), "Look 2", "a name collision must disambiguate to 'Name 2'");
-        assert!(project.embedded_preset(&PresetTypeId::from_string("Look".to_string())).is_some());
+        assert_eq!(
+            id.as_str(),
+            "Look 2",
+            "a name collision must disambiguate to 'Name 2'"
+        );
+        assert!(
+            project
+                .embedded_preset(&PresetTypeId::from_string("Look".to_string()))
+                .is_some()
+        );
         assert!(project.embedded_preset(&id).is_some());
 
         cmd.undo(&mut project);
@@ -727,7 +766,9 @@ mod tests {
             "undo must remove only the newly-saved entry"
         );
         assert!(
-            project.embedded_preset(&PresetTypeId::from_string("Look".to_string())).is_some(),
+            project
+                .embedded_preset(&PresetTypeId::from_string("Look".to_string()))
+                .is_some(),
             "undo must not touch the pre-existing entry it disambiguated against"
         );
     }
@@ -806,10 +847,15 @@ mod tests {
         let mut cmd = RenameEmbeddedPresetCommand::new(id.clone(), "Dusk Glow".to_string());
         cmd.execute(&mut project);
         let renamed = project.embedded_preset(&id).expect("id must not change");
-        assert_eq!(renamed.def.preset_metadata.as_ref().unwrap().display_name, "Dusk Glow");
+        assert_eq!(
+            renamed.def.preset_metadata.as_ref().unwrap().display_name,
+            "Dusk Glow"
+        );
 
         cmd.undo(&mut project);
-        let restored = project.embedded_preset(&id).expect("still present after undo");
+        let restored = project
+            .embedded_preset(&id)
+            .expect("still present after undo");
         assert_eq!(
             restored.def.preset_metadata.as_ref().unwrap().display_name,
             "Sunset Glow",
@@ -819,7 +865,14 @@ mod tests {
         // Redo reapplies the same rename.
         cmd.execute(&mut project);
         assert_eq!(
-            project.embedded_preset(&id).unwrap().def.preset_metadata.as_ref().unwrap().display_name,
+            project
+                .embedded_preset(&id)
+                .unwrap()
+                .def
+                .preset_metadata
+                .as_ref()
+                .unwrap()
+                .display_name,
             "Dusk Glow"
         );
     }
@@ -830,7 +883,10 @@ mod tests {
         let missing = PresetTypeId::from_string("Nonexistent".to_string());
         let mut cmd = RenameEmbeddedPresetCommand::new(missing.clone(), "New Name".to_string());
         cmd.execute(&mut project);
-        assert!(project.embedded_preset(&missing).is_none(), "must not fabricate an entry");
+        assert!(
+            project.embedded_preset(&missing).is_none(),
+            "must not fabricate an entry"
+        );
         cmd.undo(&mut project);
         assert!(project.embedded_preset(&missing).is_none());
     }
@@ -850,12 +906,20 @@ mod tests {
 
         let mut cmd = DeleteEmbeddedPresetCommand::new(id.clone());
         cmd.execute(&mut project);
-        assert!(project.embedded_preset(&id).is_none(), "execute must remove the entry");
+        assert!(
+            project.embedded_preset(&id).is_none(),
+            "execute must remove the entry"
+        );
 
         cmd.undo(&mut project);
-        let restored = project.embedded_preset(&id).expect("undo must reinsert the SAME entry");
+        let restored = project
+            .embedded_preset(&id)
+            .expect("undo must reinsert the SAME entry");
         assert_eq!(restored.kind, PresetKind::Generator);
-        assert_eq!(restored.def.preset_metadata.as_ref().unwrap().display_name, "Throwaway");
+        assert_eq!(
+            restored.def.preset_metadata.as_ref().unwrap().display_name,
+            "Throwaway"
+        );
 
         // Redo removes it again.
         cmd.execute(&mut project);
@@ -869,6 +933,9 @@ mod tests {
         let mut cmd = DeleteEmbeddedPresetCommand::new(missing.clone());
         cmd.execute(&mut project);
         cmd.undo(&mut project);
-        assert!(project.embedded_preset(&missing).is_none(), "undo must not fabricate an entry from nothing");
+        assert!(
+            project.embedded_preset(&missing).is_none(),
+            "undo must not fabricate an entry from nothing"
+        );
     }
 }

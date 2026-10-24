@@ -64,7 +64,10 @@ pub struct Resolved {
 }
 
 impl Resolved {
-    pub const ZERO: Self = Self { beat_delta: 0.0, norm_delta: 0.0 };
+    pub const ZERO: Self = Self {
+        beat_delta: 0.0,
+        norm_delta: 0.0,
+    };
 }
 
 impl DragResolver {
@@ -100,7 +103,8 @@ impl DragResolver {
             self.started = true;
         }
         let fine = if input.shift { FINE_SCALE } else { 1.0 };
-        self.norm_delta += (self.last_y - input.pos.y) / input.curve_height.max(f32::EPSILON) * fine;
+        self.norm_delta +=
+            (self.last_y - input.pos.y) / input.curve_height.max(f32::EPSILON) * fine;
         self.last_y = input.pos.y;
         // Horizontal travel under the threshold is wobble, not a time move,
         // however fine the grid cell is.
@@ -115,7 +119,10 @@ impl DragResolver {
                 (travel / step).round() * step
             }
         };
-        Resolved { beat_delta, norm_delta: self.norm_delta }
+        Resolved {
+            beat_delta,
+            norm_delta: self.norm_delta,
+        }
     }
 }
 
@@ -241,7 +248,10 @@ mod tests {
         // One fast flick: a single first move 20 px up and two beats right.
         let mut r = pressed(false);
         let moved = r.resolve(&input(120.0, 80.0, 12.0));
-        assert_eq!(moved.beat_delta, 2.0, "the beat travel counts from the press");
+        assert_eq!(
+            moved.beat_delta, 2.0,
+            "the beat travel counts from the press"
+        );
         assert_eq!(moved.norm_delta, 0.2, "exactly 20 px of a 100 px lane");
         // A fine first move is scaled by the Shift state at that resolve.
         let mut fine = input(100.0, 80.0, 10.0);
@@ -285,12 +295,20 @@ mod tests {
         let mut r = started(false);
         // 6 px already travelled; 44 more at full speed: 0.5 of the range.
         let first = r.resolve(&input(100.0, 50.0, 10.0));
-        assert!((first.norm_delta - 0.5).abs() < 1e-6, "{}", first.norm_delta);
+        assert!(
+            (first.norm_delta - 0.5).abs() < 1e-6,
+            "{}",
+            first.norm_delta
+        );
         // 20 more px with Shift held: 0.2 * 0.25.
         let mut fine = input(100.0, 30.0, 10.0);
         fine.shift = true;
         let second = r.resolve(&fine);
-        assert!((second.norm_delta - 0.55).abs() < 1e-6, "{}", second.norm_delta);
+        assert!(
+            (second.norm_delta - 0.55).abs() < 1e-6,
+            "{}",
+            second.norm_delta
+        );
         // Releasing Shift never rescales what is already travelled.
         let third = r.resolve(&input(100.0, 30.0, 10.0));
         assert!((third.norm_delta - 0.55).abs() < 1e-6);
@@ -310,7 +328,10 @@ mod tests {
         assert_eq!(r.resolve(&input(300.0, 94.0, 40.0)).beat_delta, 0.0);
         assert!(!r.moves_in_time(Vec2::new(300.0, 94.0)));
         assert!(started(false).moves_in_time(Vec2::new(110.0, 94.0)));
-        assert!(!started(false).moves_in_time(Vec2::new(101.0, 20.0)), "a vertical drag never scrolls");
+        assert!(
+            !started(false).moves_in_time(Vec2::new(101.0, 20.0)),
+            "a vertical drag never scrolls"
+        );
     }
 
     #[test]
@@ -320,7 +341,10 @@ mod tests {
         assert_eq!(clamp_single_beat(Beats(9.0), prev, next), Beats(8.0));
         assert_eq!(clamp_single_beat(Beats(4.0), prev, next), Beats(4.0));
         assert_eq!(clamp_single_beat(Beats(1.0), prev, next), Beats(4.0));
-        assert_eq!(clamp_single_beat(Beats(-3.0), Beats::ZERO, None), Beats::ZERO);
+        assert_eq!(
+            clamp_single_beat(Beats(-3.0), Beats::ZERO, None),
+            Beats::ZERO
+        );
     }
 
     #[test]
@@ -338,9 +362,16 @@ mod tests {
             left = left.min(l);
             right = right.min(r);
         }
-        assert_eq!(right, 1.0, "point 1 has one beat before the unselected point at 2");
+        assert_eq!(
+            right, 1.0,
+            "point 1 has one beat before the unselected point at 2"
+        );
         assert_eq!(clamp_group_beat_delta(3.0, 0.0, left, right), 1.0);
-        assert_eq!(clamp_group_beat_delta(-3.0, 0.0, left, right), 0.0, "stops at beat zero");
+        assert_eq!(
+            clamp_group_beat_delta(-3.0, 0.0, left, right),
+            0.0,
+            "stops at beat zero"
+        );
         assert_eq!(clamp_group_beat_delta(0.5, 0.0, left, right), 0.5);
     }
 

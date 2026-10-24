@@ -662,7 +662,12 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
             let mut copies = 0;
             for line in msl.lines().filter(|l| l.trim_start().starts_with(call)) {
                 let args = &line.trim_start()[call.len()..];
-                let src = args.split(',').nth(1).unwrap().trim().trim_end_matches(");");
+                let src = args
+                    .split(',')
+                    .nth(1)
+                    .unwrap()
+                    .trim()
+                    .trim_end_matches(");");
                 let is_buffer_member = src.contains('.');
                 assert!(
                     is_buffer_member || constant_globals.contains(&src),
@@ -670,7 +675,10 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
                 );
                 copies += 1;
             }
-            assert!(copies >= min_copies, "{label}: expected a constant copy\n{msl}");
+            assert!(
+                copies >= min_copies,
+                "{label}: expected a constant copy\n{msl}"
+            );
         }
     }
 }

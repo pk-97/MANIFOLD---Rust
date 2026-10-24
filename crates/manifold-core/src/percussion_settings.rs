@@ -3,10 +3,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::preset_type_id::PresetTypeId;
 use crate::percussion_analysis::{
     PercussionClipBinding, PercussionImportOptions, PercussionTriggerType,
 };
+use crate::preset_type_id::PresetTypeId;
 use crate::project::Project;
 use crate::settings::ProjectSettings;
 use crate::types::QuantizeMode;

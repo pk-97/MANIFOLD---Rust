@@ -1,5 +1,5 @@
 mod tests {
-use manifold_node_engine::freeze::classify::FusionKind;
+    use manifold_node_engine::freeze::classify::FusionKind;
     /// Every registered (non-fixture) primitive is either fusable or names
     /// its `BoundaryReason` — the enforcement half of D4/D5
     /// (docs/GRAPH_TOOLING_DESIGN.md). `node.__*` fixtures only register
@@ -100,7 +100,10 @@ use manifold_node_engine::freeze::classify::FusionKind;
                 ));
             }
         }
-        assert!(atomic_atoms > 0, "no registered atom declares atomic outputs — the sweep is vacuous");
+        assert!(
+            atomic_atoms > 0,
+            "no registered atom declares atomic outputs — the sweep is vacuous"
+        );
         assert!(
             violations.is_empty(),
             "atoms with atomic outputs must declare fusion_kind: Boundary:\n  {}",
@@ -324,14 +327,18 @@ use manifold_node_engine::freeze::classify::FusionKind;
         use manifold_node_engine::persistence::PrimitiveRegistry;
         let registry = PrimitiveRegistry::with_builtin();
 
-        let dither = registry.construct("node.dither").expect("registry missing node.dither");
+        let dither = registry
+            .construct("node.dither")
+            .expect("registry missing node.dither");
         assert_eq!(
             dither.input_access(),
             &[InputAccess::CoincidentTexel, InputAccess::CoincidentTexel],
             "dither's in + pattern are both exact-texel"
         );
 
-        let gain = registry.construct("node.exposure").expect("registry missing node.exposure");
+        let gain = registry
+            .construct("node.exposure")
+            .expect("registry missing node.exposure");
         assert!(
             gain.input_access().is_empty(),
             "a color atom leaves INPUT_ACCESS empty (= all Coincident by default)"
@@ -352,8 +359,12 @@ use manifold_node_engine::freeze::classify::FusionKind;
         let registry = PrimitiveRegistry::with_builtin();
         let mut violations: Vec<String> = Vec::new();
         manifold_nodes::testkit::source_roots::verify_wgsl_roots().expect("WGSL crate inventory");
-        let roots = manifold_nodes::testkit::source_roots::primitive_source_roots().expect("primitive source roots");
-        for entry in roots.iter().flat_map(|dir| read_dir(dir).expect("read primitives dir")) {
+        let roots = manifold_nodes::testkit::source_roots::primitive_source_roots()
+            .expect("primitive source roots");
+        for entry in roots
+            .iter()
+            .flat_map(|dir| read_dir(dir).expect("read primitives dir"))
+        {
             let path = entry.expect("dir entry").path();
             if path.extension().and_then(|s| s.to_str()) != Some("rs") {
                 continue;

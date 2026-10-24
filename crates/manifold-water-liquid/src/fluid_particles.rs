@@ -3,9 +3,9 @@
 //! `Array(FluidParticle)` frames; the surface atoms read them unchanged.
 
 use manifold_node_engine::channel_names::well_known;
-use manifold_node_engine::particles::FluidParticle;
 #[cfg(test)]
 use manifold_node_engine::particles::FLUID_PARTICLE_SPECS;
+use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::ports::{ChannelElementType, ChannelSpec, KnownItem};
 
 const _: () = {
@@ -13,7 +13,9 @@ const _: () = {
     use manifold_fluids::ParticleRecord;
     assert!(size_of::<FluidParticle>() == 32);
     assert!(size_of::<FluidParticle>() == size_of::<ParticleRecord>());
-    assert!(offset_of!(FluidParticle, position_radius) == offset_of!(ParticleRecord, position_radius));
+    assert!(
+        offset_of!(FluidParticle, position_radius) == offset_of!(ParticleRecord, position_radius)
+    );
     assert!(offset_of!(FluidParticle, velocity) == offset_of!(ParticleRecord, velocity));
     assert!(offset_of!(FluidParticle, id) == offset_of!(ParticleRecord, id));
 };
@@ -35,9 +37,18 @@ pub struct FluidBlob {
 const _: () = assert!(std::mem::size_of::<FluidBlob>() == 48);
 
 pub const FLUID_BLOB_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: well_known::CENTER_RADIUS, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::SHAPE_DIAG, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::SHAPE_OFF, ty: ChannelElementType::Vec4F },
+    ChannelSpec {
+        name: well_known::CENTER_RADIUS,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::SHAPE_DIAG,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::SHAPE_OFF,
+        ty: ChannelElementType::Vec4F,
+    },
 ];
 
 impl KnownItem for FluidBlob {
@@ -53,8 +64,14 @@ pub struct CellRange {
 }
 
 pub const CELL_RANGE_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: well_known::START, ty: ChannelElementType::U32 },
-    ChannelSpec { name: well_known::COUNT, ty: ChannelElementType::U32 },
+    ChannelSpec {
+        name: well_known::START,
+        ty: ChannelElementType::U32,
+    },
+    ChannelSpec {
+        name: well_known::COUNT,
+        ty: ChannelElementType::U32,
+    },
 ];
 
 impl KnownItem for CellRange {
@@ -80,8 +97,14 @@ pub struct FaceSample {
 const _: () = assert!(std::mem::size_of::<FaceSample>() == 32);
 
 pub const FACE_SAMPLE_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: well_known::FACE_VELOCITY, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::FACE_WEIGHT, ty: ChannelElementType::Vec4F },
+    ChannelSpec {
+        name: well_known::FACE_VELOCITY,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::FACE_WEIGHT,
+        ty: ChannelElementType::Vec4F,
+    },
 ];
 
 impl KnownItem for FaceSample {
@@ -106,7 +129,10 @@ const _: () = {
     assert!(size_of::<WhitewaterSpawn>() == 32);
     assert!(size_of::<WhitewaterSpawn>() == size_of::<NativeSpawn>());
     assert!(align_of::<WhitewaterSpawn>() == align_of::<NativeSpawn>());
-    assert!(offset_of!(WhitewaterSpawn, position_lifetime) == offset_of!(NativeSpawn, position_lifetime));
+    assert!(
+        offset_of!(WhitewaterSpawn, position_lifetime)
+            == offset_of!(NativeSpawn, position_lifetime)
+    );
     assert!(offset_of!(WhitewaterSpawn, velocity) == offset_of!(NativeSpawn, velocity));
     assert!(offset_of!(WhitewaterSpawn, kind) == offset_of!(NativeSpawn, kind));
 };
@@ -114,9 +140,18 @@ const _: () = {
 /// Std430: position_lifetime Vec4F at 0, velocity Vec3F at 16, kind U32 at
 /// 28; stride 32 (GPU_WHITEWATER_DESIGN.md section 3.4).
 pub const WHITEWATER_SPAWN_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: well_known::POSITION_LIFETIME, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::VELOCITY, ty: ChannelElementType::Vec3F },
-    ChannelSpec { name: well_known::KIND, ty: ChannelElementType::U32 },
+    ChannelSpec {
+        name: well_known::POSITION_LIFETIME,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::VELOCITY,
+        ty: ChannelElementType::Vec3F,
+    },
+    ChannelSpec {
+        name: well_known::KIND,
+        ty: ChannelElementType::U32,
+    },
 ];
 
 impl KnownItem for WhitewaterSpawn {
@@ -145,7 +180,10 @@ pub const MAX_BINS: u64 = i32::MAX as u64;
 /// against the `cell_ranges` storage it indexes: every axis whole and at least
 /// 1, and one range per bin. Nothing may read the ranges past this.
 pub fn searched_bins(bins: [f32; 3], range_bytes: u64, atom: &str) -> Result<[u32; 3], String> {
-    if bins.iter().any(|b| !(b.is_finite() && *b >= 1.0 && b.fract() == 0.0 && *b <= MAX_BINS as f32)) {
+    if bins
+        .iter()
+        .any(|b| !(b.is_finite() && *b >= 1.0 && b.fract() == 0.0 && *b <= MAX_BINS as f32))
+    {
         return Err(format!(
             "{atom}: bins_x/y/z must be whole and at least 1; wire them from the node.sort_particles_into_cells that wrote cell_ranges"
         ));
@@ -173,9 +211,21 @@ mod tests {
             std430_stride(FLUID_PARTICLE_SPECS) as usize,
             std::mem::size_of::<FluidParticle>()
         );
-        assert_eq!(std430_stride(FLUID_BLOB_SPECS) as usize, std::mem::size_of::<FluidBlob>());
-        assert_eq!(std430_stride(CELL_RANGE_SPECS) as usize, std::mem::size_of::<CellRange>());
-        assert_eq!(std430_stride(FACE_SAMPLE_SPECS) as usize, std::mem::size_of::<FaceSample>());
-        assert_eq!(std430_stride(WHITEWATER_SPAWN_SPECS) as usize, std::mem::size_of::<WhitewaterSpawn>());
+        assert_eq!(
+            std430_stride(FLUID_BLOB_SPECS) as usize,
+            std::mem::size_of::<FluidBlob>()
+        );
+        assert_eq!(
+            std430_stride(CELL_RANGE_SPECS) as usize,
+            std::mem::size_of::<CellRange>()
+        );
+        assert_eq!(
+            std430_stride(FACE_SAMPLE_SPECS) as usize,
+            std::mem::size_of::<FaceSample>()
+        );
+        assert_eq!(
+            std430_stride(WHITEWATER_SPAWN_SPECS) as usize,
+            std::mem::size_of::<WhitewaterSpawn>()
+        );
     }
 }

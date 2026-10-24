@@ -19,7 +19,7 @@ use manifold_playback::external_sync::LinkTempoGuard;
 use manifold_playback::frame_grid::FrameGrid;
 use manifold_playback::midi_clock_sync::tick_filter::{ClockKind, ClockTracker};
 use manifold_playback::renderer::StubRenderer;
-use manifold_playback::sync_calibration::{difference_seconds, CalibratedSource, SyncCalibration};
+use manifold_playback::sync_calibration::{CalibratedSource, SyncCalibration, difference_seconds};
 use manifold_playback::sync_projection::{map_sample, song_time_beat_at, timecode_seconds_at};
 
 pub const FPS: f32 = 60.0;
@@ -54,7 +54,9 @@ pub struct Tempo {
 
 impl Tempo {
     pub fn constant(bpm: f64) -> Self {
-        Self { pts: vec![(0.0, bpm)] }
+        Self {
+            pts: vec![(0.0, bpm)],
+        }
     }
     fn last(&self) -> f64 {
         self.pts.last().map_or(120.0, |p| p.1)
@@ -78,7 +80,11 @@ impl Tempo {
             if t < t0 {
                 break;
             }
-            bpm = if t >= t1 || t1 == t0 { b1 } else { b0 + (b1 - b0) * (t - t0) / (t1 - t0) };
+            bpm = if t >= t1 || t1 == t0 {
+                b1
+            } else {
+                b0 + (b1 - b0) * (t - t0) / (t1 - t0)
+            };
         }
         bpm
     }
@@ -120,7 +126,11 @@ impl Tempo {
         }
         for _ in 0..80 {
             let mid = 0.5 * (lo + hi);
-            if self.beat_at(mid) < beat { lo = mid } else { hi = mid }
+            if self.beat_at(mid) < beat {
+                lo = mid
+            } else {
+                hi = mid
+            }
         }
         hi
     }
@@ -140,7 +150,12 @@ pub struct Live {
 
 impl Live {
     pub fn new(tempo: Tempo) -> Self {
-        Self { tempo, gap: 80e-6, start: 0.0, jumps: Vec::new() }
+        Self {
+            tempo,
+            gap: 80e-6,
+            start: 0.0,
+            jumps: Vec::new(),
+        }
     }
     /// Relocate by `secs` of song time at the current tempo, at wall time `at`.
     pub fn relocate(mut self, at: f64, secs: f64) -> Self {
@@ -201,7 +216,10 @@ pub struct LinkReader {
 impl LinkReader {
     pub fn new(live: Live, seed: u64) -> Self {
         let mut rng = Rng(seed | 1);
-        Self { live, steps: (0..400).map(|_| rng.range(-0.0002, 0.0002)).collect() }
+        Self {
+            live,
+            steps: (0..400).map(|_| rng.range(-0.0002, 0.0002)).collect(),
+        }
     }
     pub fn beat_at(&self, r: f64) -> f64 {
         let step = self.steps[((r.max(0.0) / 30.0) as usize).min(self.steps.len() - 1)];
@@ -218,7 +236,12 @@ impl Reader for LinkReader {
         Kind::Link
     }
     fn read(&mut self, r: f64, _now: f64) -> Option<Sample> {
-        Some(Sample { beat: self.beat_at(r), bpm: self.tempo_at(r), fresh: true, exact: true })
+        Some(Sample {
+            beat: self.beat_at(r),
+            bpm: self.tempo_at(r),
+            fresh: true,
+            exact: true,
+        })
     }
 }
 
@@ -234,7 +257,13 @@ pub enum ClockMsg {
 /// MIDI clock arrivals from Live: 24 per beat from the true timeline, with
 /// ±1 ms uniform plus 0.3 ms Gaussian jitter, 0.5% of ticks 4 ms late, and
 /// optional delivery stalls released as a burst stamped on arrival.
-pub fn clock_arrivals(live: &Live, until: f64, seed: u64, stalls: &[(f64, f64)], late_by: f64) -> Vec<(f64, ClockMsg)> {
+pub fn clock_arrivals(
+    live: &Live,
+    until: f64,
+    seed: u64,
+    stalls: &[(f64, f64)],
+    late_by: f64,
+) -> Vec<(f64, ClockMsg)> {
     let mut rng = Rng(seed | 1);
     let mut out = vec![(live.start - 0.001 + late_by, ClockMsg::Start)];
     let mut k = 0u64;
@@ -267,7 +296,13 @@ pub fn continue_arrivals(live: &Live, until: f64, seed: u64, beat: f64) -> Vec<(
     let mut rng = Rng(seed | 1);
     let first = (beat * 24.0).round() as u64;
     let sent = live.wall_of_beat(beat);
-    let mut out = vec![(sent - 0.002, ClockMsg::Position((beat * 4.0).round() as u16)), (sent - 0.001, ClockMsg::Continue)];
+    let mut out = vec![
+        (
+            sent - 0.002,
+            ClockMsg::Position((beat * 4.0).round() as u16),
+        ),
+        (sent - 0.001, ClockMsg::Continue),
+    ];
     for k in first.. {
         let sent = live.wall_of_beat(k as f64 / 24.0);
         if sent > until {
@@ -297,7 +332,14 @@ pub struct ClkReader {
 
 impl ClkReader {
     pub fn new(arrivals: Vec<(f64, ClockMsg)>) -> Self {
-        Self { arrivals, next: 0, tracker: ClockTracker::new(), link: None, link_gap: None, guard: LinkTempoGuard::new() }
+        Self {
+            arrivals,
+            next: 0,
+            tracker: ClockTracker::new(),
+            link: None,
+            link_gap: None,
+            guard: LinkTempoGuard::new(),
+        }
     }
     pub fn with_link(mut self, link: LinkReader) -> Self {
         self.link = Some(link);
@@ -309,7 +351,9 @@ impl ClkReader {
     }
     /// Link as the content thread sees it at `t`: absent inside the gap.
     fn link_live(&self, t: f64) -> Option<&LinkReader> {
-        self.link.as_ref().filter(|_| !self.link_gap.is_some_and(|(a, b)| t >= a && t < b))
+        self.link
+            .as_ref()
+            .filter(|_| !self.link_gap.is_some_and(|(a, b)| t >= a && t < b))
     }
 }
 
@@ -333,7 +377,10 @@ impl Reader for ClkReader {
                 // No Link session: the guard lets go at once (D21).
                 self.guard.release();
             }
-            let latched = self.link_live(at).filter(|_| self.guard.latched()).map(|l| l.tempo_at(at));
+            let latched = self
+                .link_live(at)
+                .filter(|_| self.guard.latched())
+                .map(|l| l.tempo_at(at));
             self.tracker.set_link_tempo(latched);
             // The map every proof plays over is at 120 BPM.
             self.tracker.event(kind, at, 120.0);
@@ -342,8 +389,16 @@ impl Reader for ClkReader {
             }
             self.next += 1;
         }
-        let latched = self.link_live(r).filter(|_| self.guard.latched()).map(|l| l.tempo_at(r));
-        self.tracker.sample_at(r).map(|s| Sample { beat: s.beat, bpm: latched.unwrap_or(s.bpm), fresh: true, exact: false })
+        let latched = self
+            .link_live(r)
+            .filter(|_| self.guard.latched())
+            .map(|l| l.tempo_at(r));
+        self.tracker.sample_at(r).map(|s| Sample {
+            beat: s.beat,
+            bpm: latched.unwrap_or(s.bpm),
+            fresh: true,
+            exact: false,
+        })
     }
 }
 
@@ -362,7 +417,10 @@ pub fn osc_arrivals(live: &Live, until: f64, seed: u64, lag: f64) -> OscArrivals
     let mut t = live.start + 0.05;
     while t < until {
         let skew = rng.range(-0.010, 0.010);
-        song.push((t + rtt / 2.0 + rng.range(-0.001, 0.001), live.beat(t + skew)));
+        song.push((
+            t + rtt / 2.0 + rng.range(-0.001, 0.001),
+            live.beat(t + skew),
+        ));
         t += 0.1 + rng.range(-0.020, 0.020);
     }
     let mut tempo = vec![(live.start, live.bpm(live.start))];
@@ -397,7 +455,15 @@ pub struct OscReader {
 
 impl OscReader {
     pub fn new(arrivals: OscArrivals) -> Self {
-        Self { arrivals, next_song: 0, next_tempo: 0, last: None, bpm: 120.0, before: 120.0, changed_at: f64::NEG_INFINITY }
+        Self {
+            arrivals,
+            next_song: 0,
+            next_tempo: 0,
+            last: None,
+            bpm: 120.0,
+            before: 120.0,
+            changed_at: f64::NEG_INFINITY,
+        }
     }
 }
 
@@ -406,7 +472,9 @@ impl Reader for OscReader {
         Kind::Osc
     }
     fn read(&mut self, r: f64, now: f64) -> Option<Sample> {
-        while self.next_tempo < self.arrivals.tempo.len() && self.arrivals.tempo[self.next_tempo].0 <= now {
+        while self.next_tempo < self.arrivals.tempo.len()
+            && self.arrivals.tempo[self.next_tempo].0 <= now
+        {
             let (at, bpm) = self.arrivals.tempo[self.next_tempo];
             if bpm != self.bpm {
                 (self.before, self.changed_at) = (self.bpm, at);
@@ -414,13 +482,20 @@ impl Reader for OscReader {
             self.bpm = bpm;
             self.next_tempo += 1;
         }
-        while self.next_song < self.arrivals.song.len() && self.arrivals.song[self.next_song].0 <= now {
+        while self.next_song < self.arrivals.song.len()
+            && self.arrivals.song[self.next_song].0 <= now
+        {
             self.last = Some(self.arrivals.song[self.next_song]);
             self.next_song += 1;
         }
         let (at, beat) = self.last?;
         let beat = song_time_beat_at(beat, r - at, self.before, self.bpm, r - self.changed_at);
-        Some(Sample { beat, bpm: self.bpm, fresh: true, exact: false })
+        Some(Sample {
+            beat,
+            bpm: self.bpm,
+            fresh: true,
+            exact: false,
+        })
     }
 }
 
@@ -433,17 +508,31 @@ pub struct TimecodeArrivals {
     pub frame: Option<f64>,
 }
 
-pub fn timecode_arrivals(live: &Live, until: f64, seed: u64, metro: f64, phase: f64, labels: bool) -> TimecodeArrivals {
+pub fn timecode_arrivals(
+    live: &Live,
+    until: f64,
+    seed: u64,
+    metro: f64,
+    phase: f64,
+    labels: bool,
+) -> TimecodeArrivals {
     let mut rng = Rng(seed | 1);
     let mut messages = Vec::new();
     let mut t = live.start + phase;
     while t < until {
         let song = live.live_time(t);
-        let song = if labels { (song * 25.0).floor() / 25.0 } else { song };
+        let song = if labels {
+            (song * 25.0).floor() / 25.0
+        } else {
+            song
+        };
         messages.push((t + rng.range(0.0, 0.001), song));
         t += metro;
     }
-    TimecodeArrivals { messages, frame: labels.then_some(1.0 / 25.0) }
+    TimecodeArrivals {
+        messages,
+        frame: labels.then_some(1.0 / 25.0),
+    }
 }
 
 /// Timecode as the content thread reads it: the last message's seconds
@@ -460,7 +549,12 @@ pub struct TimecodeReader {
 
 impl TimecodeReader {
     pub fn new(arrivals: TimecodeArrivals, map_bpm: f64) -> Self {
-        Self { arrivals, next: 0, last: None, map_bpm }
+        Self {
+            arrivals,
+            next: 0,
+            last: None,
+            map_bpm,
+        }
     }
 }
 
@@ -478,7 +572,12 @@ impl Reader for TimecodeReader {
         let s = timecode_seconds_at(seconds, r - at, self.arrivals.frame);
         let map_bpm = self.map_bpm;
         let (beat, bpm) = map_sample(s, STEP, |s| s * map_bpm / 60.0);
-        Some(Sample { beat, bpm, fresh: true, exact: false })
+        Some(Sample {
+            beat,
+            bpm,
+            fresh: true,
+            exact: false,
+        })
     }
 }
 
@@ -504,9 +603,16 @@ pub fn feed(engine: &mut PlaybackEngine, sample: Sample) {
 pub fn engine_with_map(bpm: f64, project: Option<Project>) -> PlaybackEngine {
     let mut project = project.unwrap_or_default();
     project.settings.bpm = Bpm(bpm as f32);
-    project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(bpm as f32), TempoPointSource::Unknown, 0.001);
-    let mut engine =
-        PlaybackEngine::new(vec![Box::new(StubRenderer::new_generator()), Box::new(StubRenderer::new_video())]);
+    project.tempo_map.add_or_replace_point(
+        Beats::ZERO,
+        Bpm(bpm as f32),
+        TempoPointSource::Unknown,
+        0.001,
+    );
+    let mut engine = PlaybackEngine::new(vec![
+        Box::new(StubRenderer::new_generator()),
+        Box::new(StubRenderer::new_video()),
+    ]);
     engine.initialize(project);
     engine
 }
@@ -552,7 +658,20 @@ pub struct Driver {
 impl Driver {
     pub fn new(engine: PlaybackEngine, seed: u64) -> Self {
         let anchor = Instant::now();
-        Self { engine, grid: FrameGrid::new(FPS, anchor), anchor, rng: Rng(seed | 1), tick: 0, frame_count: 0, read_delay: 0.0, screen_delay: 0.0, present_jitter: 0.0, extra_delay: 0.0, calibration: SyncCalibration::new(), present_rng: Rng(seed.rotate_left(17) | 1) }
+        Self {
+            engine,
+            grid: FrameGrid::new(FPS, anchor),
+            anchor,
+            rng: Rng(seed | 1),
+            tick: 0,
+            frame_count: 0,
+            read_delay: 0.0,
+            screen_delay: 0.0,
+            present_jitter: 0.0,
+            extra_delay: 0.0,
+            calibration: SyncCalibration::new(),
+            present_rng: Rng(seed.rotate_left(17) | 1),
+        }
     }
 
     pub fn wall(&self) -> f64 {
@@ -566,9 +685,18 @@ impl Driver {
         let wake = self.tick as f64 * STEP + self.rng.range(0.0, 0.4) * STEP;
         let now = self.anchor + Duration::from_secs_f64(wake);
         let frames = self.grid.consume_at(now);
-        let deadline = self.grid.consumed_deadline().saturating_duration_since(self.anchor).as_secs_f64();
+        let deadline = self
+            .grid
+            .consumed_deadline()
+            .saturating_duration_since(self.anchor)
+            .as_secs_f64();
         let calibrated = self.screen_delay > 0.0;
-        let r = deadline + if calibrated { self.calibration.read_delay() } else { self.read_delay };
+        let r = deadline
+            + if calibrated {
+                self.calibration.read_delay()
+            } else {
+                self.read_delay
+            };
         if let Some(reader) = reader {
             let source = match reader.kind() {
                 Kind::Link => None,
@@ -576,11 +704,22 @@ impl Driver {
                 Kind::Osc => Some(CalibratedSource::AbletonOsc),
                 Kind::Timecode => Some(CalibratedSource::Timecode),
             };
-            let offset = source.filter(|_| calibrated).map_or(0.0, |s| self.calibration.offset(s));
+            let offset = source
+                .filter(|_| calibrated)
+                .map_or(0.0, |s| self.calibration.offset(s));
             if let Some(sample) = reader.read(r + offset, wake) {
-                if let (true, Some(source), Some((link_beat, bpm))) = (calibrated && self.engine.is_playing(), source, reader.link_at(r)) {
+                if let (true, Some(source), Some((link_beat, bpm))) = (
+                    calibrated && self.engine.is_playing(),
+                    source,
+                    reader.link_at(r),
+                ) {
                     let steady = !self.engine.follower().catch_up_open();
-                    self.calibration.observe_offset(source, wake, difference_seconds(link_beat, sample.beat, bpm, 4.0), steady);
+                    self.calibration.observe_offset(
+                        source,
+                        wake,
+                        difference_seconds(link_beat, sample.beat, bpm, 4.0),
+                        steady,
+                    );
                 }
                 feed(&mut self.engine, sample);
             }
@@ -596,8 +735,11 @@ impl Driver {
         self.engine.reclaim_tick_result(result);
         self.frame_count += 1;
         if self.screen_delay > 0.0 {
-            let jitter = self.present_rng.range(-self.present_jitter, self.present_jitter);
-            self.calibration.presented(self.screen_delay - self.extra_delay + jitter, wake);
+            let jitter = self
+                .present_rng
+                .range(-self.present_jitter, self.present_jitter);
+            self.calibration
+                .presented(self.screen_delay - self.extra_delay + jitter, wake);
         }
         let index = self.engine.transport_frame();
         Shown {
@@ -605,7 +747,8 @@ impl Driver {
             frames,
             time: self.engine.current_time().0,
             beat: self.engine.frame_beat().0,
-            jumped: playing && (index - before != i64::from(frames) || self.engine.transport_epoch() != epoch),
+            jumped: playing
+                && (index - before != i64::from(frames) || self.engine.transport_epoch() != epoch),
             seeded: self.engine.follow_event() == FollowEvent::Seeded,
             epoch: self.engine.transport_epoch(),
         }
@@ -642,15 +785,25 @@ impl Meter {
                 self.backward += 1;
             }
             let music = truth - prev_truth;
-            let speed = if music > 0.0 { (shown.beat - prev.beat) / music - 1.0 } else { 0.0 };
+            let speed = if music > 0.0 {
+                (shown.beat - prev.beat) / music - 1.0
+            } else {
+                0.0
+            };
             if warm {
-                self.max_phase_ms = self.max_phase_ms.max(((truth - shown.beat) * 60.0 / bpm * 1000.0).abs());
+                self.max_phase_ms = self
+                    .max_phase_ms
+                    .max(((truth - shown.beat) * 60.0 / bpm * 1000.0).abs());
                 if shown.frames == 1 && prev_speed.is_finite() {
                     self.max_speed = self.max_speed.max(speed.abs());
                     self.max_speed_change = self.max_speed_change.max((speed - prev_speed).abs());
                 }
             }
-            self.prev = Some((shown, truth, if shown.frames == 1 { speed } else { f64::NAN }));
+            self.prev = Some((
+                shown,
+                truth,
+                if shown.frames == 1 { speed } else { f64::NAN },
+            ));
         } else {
             self.prev = Some((shown, truth, f64::NAN));
         }
@@ -676,7 +829,14 @@ impl Meter {
 
 /// Play `secs` of wall time from the source with Live's timeline as the
 /// truth, measured after `warm_up` seconds. Play is pressed on the first tick.
-pub fn follow(engine: PlaybackEngine, reader: &mut dyn Reader, live: &Live, secs: f64, warm_up: f64, seed: u64) -> (Meter, Driver) {
+pub fn follow(
+    engine: PlaybackEngine,
+    reader: &mut dyn Reader,
+    live: &Live,
+    secs: f64,
+    warm_up: f64,
+    seed: u64,
+) -> (Meter, Driver) {
     let mut driver = Driver::new(engine, seed);
     set_authority(&mut driver.engine, Some(reader.kind()));
     driver.engine.play();

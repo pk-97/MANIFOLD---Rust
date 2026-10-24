@@ -45,8 +45,14 @@ use super::types::GpuEvent;
 
 /// A dropped GPU resource waiting for its stamp to signal.
 enum RetireResource {
-    Tex(SendTexture, Option<std::sync::Arc<super::residency::GpuResidencyLease>>),
-    Buf(SendBuffer, Option<std::sync::Arc<super::residency::GpuResidencyLease>>),
+    Tex(
+        SendTexture,
+        Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
+    ),
+    Buf(
+        SendBuffer,
+        Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
+    ),
 }
 
 /// One resource drop waiting for its stamp to signal on the GPU timeline.
@@ -162,14 +168,18 @@ pub struct FrameClock {
 
 impl Clone for FrameClock {
     fn clone(&self) -> Self {
-        Self { event: self.event.second_handle() }
+        Self {
+            event: self.event.second_handle(),
+        }
     }
 }
 
 impl FrameClock {
     /// Observe `event` without owning the encoder's handle.
     pub fn new(event: &GpuEvent) -> Self {
-        Self { event: event.second_handle() }
+        Self {
+            event: event.second_handle(),
+        }
     }
 
     /// The signal value the frame now being encoded will reach at commit.
@@ -313,8 +323,8 @@ impl Drop for RetireQueue {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::GpuTexture;
+    use super::*;
     use crate::GpuDevice;
 
     const FORMAT: crate::GpuTextureFormat = crate::GpuTextureFormat::Rgba8Unorm;
@@ -406,7 +416,10 @@ mod tests {
         // allocations rather than freeing a consumed vector every frame.
         for _ in 0..3 {
             queue.drain();
-            assert_eq!(queue.pending.capacity() + queue.keep.capacity(), warm_capacity);
+            assert_eq!(
+                queue.pending.capacity() + queue.keep.capacity(),
+                warm_capacity
+            );
         }
 
         // Commit (signaled = 1), then entry B drops → stamp 2.

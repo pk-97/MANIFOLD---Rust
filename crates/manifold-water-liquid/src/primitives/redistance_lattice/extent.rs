@@ -1,7 +1,7 @@
 //! Buffer extent rule owned by this node.
-use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use crate::extent::nodes_total;
 use crate::primitives::offset_lattice::extent::offset_lattice;
+use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn redistance_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let nodes = x.nodes(["nodes_x", "nodes_y", "nodes_z"]);

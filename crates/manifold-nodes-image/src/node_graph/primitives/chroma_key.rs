@@ -21,7 +21,9 @@ use manifold_gpu::GpuSamplerDesc;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::primitives::standalone_pipeline::{
+    dispatch_standalone_2d, standalone_pipeline,
+};
 
 /// Display labels for [`ChromaKey`]'s `mode` enum.
 ///   - `Select` (0, default): output 1 where the pixel matches the
@@ -170,12 +172,23 @@ mod gpu_tests {
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
-    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use manifold_node_engine::exec::backend::Backend;
     use manifold_node_engine::bindings::Slot;
+    use manifold_node_engine::exec::backend::Backend;
     use manifold_node_engine::exec::execution_plan::ResourceId;
-    use {manifold_node_engine::exec::execution_plan::ExecutionPlan, manifold_node_engine::exec::execution::Executor, manifold_node_engine::scene::boundary_nodes::FinalOutput, manifold_node_engine::exec::effect_node::FrameTime, manifold_node_engine::graph::Graph, manifold_node_engine::exec::metal_backend::MetalBackend, manifold_node_engine::exec::effect_node::NodeInstanceId, manifold_node_engine::parameters::ParamValue, manifold_node_engine::scene::boundary_nodes::Source, manifold_node_engine::exec::execution_plan::compile, crate::node_graph::primitives::chroma_key::ChromaKey};
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use manifold_node_engine::gpu::render_target::RenderTarget;
+    use {
+        crate::node_graph::primitives::chroma_key::ChromaKey,
+        manifold_node_engine::exec::effect_node::FrameTime,
+        manifold_node_engine::exec::effect_node::NodeInstanceId,
+        manifold_node_engine::exec::execution::Executor,
+        manifold_node_engine::exec::execution_plan::ExecutionPlan,
+        manifold_node_engine::exec::execution_plan::compile,
+        manifold_node_engine::exec::metal_backend::MetalBackend,
+        manifold_node_engine::graph::Graph, manifold_node_engine::parameters::ParamValue,
+        manifold_node_engine::scene::boundary_nodes::FinalOutput,
+        manifold_node_engine::scene::boundary_nodes::Source,
+    };
 
     fn frame_time() -> FrameTime {
         FrameTime {

@@ -6,7 +6,9 @@
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Feature, Gate, Unit};
 
-use super::fields::{Choice, FieldControl, FieldRow, FieldValue, always, enabled, is_object_or_group, wrong_value};
+use super::fields::{
+    Choice, FieldControl, FieldRow, FieldValue, always, enabled, is_object_or_group, wrong_value,
+};
 use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, perform, row, setup};
 use crate::scene_doc::{CameraRig, ItemFields};
 
@@ -54,7 +56,9 @@ fn loop_rig(fields: &ItemFields) -> bool {
 }
 
 const fn metres(property: &'static str, order: u8) -> PropertyRow {
-    row(property, RIG, Camera, perform(CardBand::Camera, order)).unit(Unit::Metres).limit(HardLimit::Unlimited)
+    row(property, RIG, Camera, perform(CardBand::Camera, order))
+        .unit(Unit::Metres)
+        .limit(HardLimit::Unlimited)
 }
 
 /// Near and Far each stay above 0: a plane at the lens divides the projection
@@ -69,41 +73,68 @@ pub const CLIP_PLANE: HardLimit = HardLimit::AtLeast(1e-6);
 const HORIZON_FAR: f32 = 10_000.0;
 
 const fn clip(property: &'static str) -> PropertyRow {
-    row(property, RIG, Camera, setup()).unit(Unit::Metres).limit(CLIP_PLANE)
+    row(property, RIG, Camera, setup())
+        .unit(Unit::Metres)
+        .limit(CLIP_PLANE)
 }
 
 const fn place(property: &'static str) -> PropertyRow {
-    row(property, RIG, Camera, setup()).unit(Unit::Metres).limit(HardLimit::Unlimited)
+    row(property, RIG, Camera, setup())
+        .unit(Unit::Metres)
+        .limit(HardLimit::Unlimited)
 }
 
 pub static CAMERA_ROWS: [PropertyRow; 66] = [
     // Orbit: a three-quarter view of the origin through a 50 mm lens, framed
     // as the old base scene framed its cube.
-    row("orbit", RIG, Camera, perform(CardBand::Camera, 0)).limit(HardLimit::Unlimited).default(0.7).when(orbit),
-    row("tilt", RIG, Camera, perform(CardBand::Camera, 1)).default(0.35).when(orbit),
+    row("orbit", RIG, Camera, perform(CardBand::Camera, 0))
+        .limit(HardLimit::Unlimited)
+        .default(0.7)
+        .when(orbit),
+    row("tilt", RIG, Camera, perform(CardBand::Camera, 1))
+        .default(0.35)
+        .when(orbit),
     row("distance", RIG, Camera, perform(CardBand::Camera, 2))
         .unit(Unit::Metres)
         .range(ORBIT_CLOSEST, 100.0)
         .limit(HardLimit::AtLeast(ORBIT_CLOSEST))
         .default(10.0)
         .when(orbit),
-    row("look_y", RIG, Camera, perform(CardBand::Camera, 3)).unit(Unit::Metres).limit(HardLimit::Unlimited).when(orbit),
-    row("fov_y", RIG, Camera, perform(CardBand::Camera, 4)).limit(FIELD_OF_VIEW).default(FIFTY_MM).when(orbit),
-    row("roll", RIG, Camera, setup()).limit(HardLimit::Unlimited).when(orbit),
+    row("look_y", RIG, Camera, perform(CardBand::Camera, 3))
+        .unit(Unit::Metres)
+        .limit(HardLimit::Unlimited)
+        .when(orbit),
+    row("fov_y", RIG, Camera, perform(CardBand::Camera, 4))
+        .limit(FIELD_OF_VIEW)
+        .default(FIFTY_MM)
+        .when(orbit),
+    row("roll", RIG, Camera, setup())
+        .limit(HardLimit::Unlimited)
+        .when(orbit),
     clip("near").when(orbit),
     clip("far").default(HORIZON_FAR).when(orbit),
     // Free.
-    row("yaw", RIG, Camera, perform(CardBand::Camera, 0)).limit(HardLimit::Unlimited).when(free),
+    row("yaw", RIG, Camera, perform(CardBand::Camera, 0))
+        .limit(HardLimit::Unlimited)
+        .when(free),
     row("pitch", RIG, Camera, perform(CardBand::Camera, 1)).when(free),
     metres("pos_x", 2).when(free),
     metres("pos_y", 3).when(free),
     metres("pos_z", 4).when(free),
-    row("fov_y", RIG, Camera, perform(CardBand::Camera, 5)).limit(FIELD_OF_VIEW).default(FIFTY_MM).when(free),
-    row("roll", RIG, Camera, setup()).limit(HardLimit::Unlimited).when(free),
+    row("fov_y", RIG, Camera, perform(CardBand::Camera, 5))
+        .limit(FIELD_OF_VIEW)
+        .default(FIFTY_MM)
+        .when(free),
+    row("roll", RIG, Camera, setup())
+        .limit(HardLimit::Unlimited)
+        .when(free),
     clip("near").when(free),
     clip("far").default(HORIZON_FAR).when(free),
     // Look At. With a Target item picked, Target X/Y/Z offset from its origin.
-    row("fov_y", RIG, Camera, perform(CardBand::Camera, 0)).limit(FIELD_OF_VIEW).default(FIFTY_MM).when(look_at),
+    row("fov_y", RIG, Camera, perform(CardBand::Camera, 0))
+        .limit(FIELD_OF_VIEW)
+        .default(FIFTY_MM)
+        .when(look_at),
     place("pos_x").when(look_at),
     place("pos_y").when(look_at),
     place("pos_z").when(look_at),
@@ -113,24 +144,44 @@ pub static CAMERA_ROWS: [PropertyRow; 66] = [
     clip("near").when(look_at),
     clip("far").default(HORIZON_FAR).when(look_at),
     // Lens.
-    row("focus_distance", LENS, DepthOfField, perform(CardBand::Look, 1))
-        .gate(Gate::Dim(Feature::DepthOfField))
-        .unit(Unit::Metres)
-        .range(NEAREST_FOCUS, 100.0)
-        .limit(HardLimit::AtLeast(NEAREST_FOCUS))
-        .default(10.0),
+    row(
+        "focus_distance",
+        LENS,
+        DepthOfField,
+        perform(CardBand::Look, 1),
+    )
+    .gate(Gate::Dim(Feature::DepthOfField))
+    .unit(Unit::Metres)
+    .range(NEAREST_FOCUS, 100.0)
+    .limit(HardLimit::AtLeast(NEAREST_FOCUS))
+    .default(10.0),
     row("f_stop", LENS, DepthOfField, perform(CardBand::Look, 2))
         .gate(Gate::Fold(Feature::DepthOfField))
         .limit(HardLimit::AtLeast(0.5)),
-    row("shutter_angle", LENS, MotionBlur, perform(CardBand::Look, 11))
-        .gate(Gate::Fold(Feature::MotionBlur))
-        .limit(HardLimit::Between(0.0, 360.0)),
-    row("exposure_ev", LENS, Camera, Exposure::Automatic("the Environment's Exposure")),
+    row(
+        "shutter_angle",
+        LENS,
+        MotionBlur,
+        perform(CardBand::Look, 11),
+    )
+    .gate(Gate::Fold(Feature::MotionBlur))
+    .limit(HardLimit::Between(0.0, 360.0)),
+    row(
+        "exposure_ev",
+        LENS,
+        Camera,
+        Exposure::Automatic("the Environment's Exposure"),
+    ),
     // Depth of field and motion blur, both off in a new scene.
-    row("dof_enabled", BOKEH, DepthOfField, perform(CardBand::Look, 0))
-        .param("enabled")
-        .switch(Feature::DepthOfField)
-        .default(0.0),
+    row(
+        "dof_enabled",
+        BOKEH,
+        DepthOfField,
+        perform(CardBand::Look, 0),
+    )
+    .param("enabled")
+    .switch(Feature::DepthOfField)
+    .default(0.0),
     row("max_blur", BOKEH, DepthOfField, perform(CardBand::Look, 3))
         .param("max_radius")
         .gate(Gate::Fold(Feature::DepthOfField))
@@ -138,114 +189,252 @@ pub static CAMERA_ROWS: [PropertyRow; 66] = [
         .limit(AT_LEAST_ZERO),
     row("aperture", BOKEH, DepthOfField, setup()),
     row("quality", BOKEH, DepthOfField, setup()),
-    row("blur_alpha", BOKEH, DepthOfField, Exposure::Automatic("on, so transparent edges blur with the scene")),
-    row("coc_radius", COC, DepthOfField, Exposure::Automatic("matches the bokeh's largest blur")).param("max_radius"),
-    row("world_to_mm", COC, DepthOfField, Exposure::Automatic("one scene unit is one metre")),
-    row("motion_blur_enabled", BLUR, MotionBlur, perform(CardBand::Look, 10))
-        .param("enabled")
-        .switch(Feature::MotionBlur)
-        .default(0.0),
+    row(
+        "blur_alpha",
+        BOKEH,
+        DepthOfField,
+        Exposure::Automatic("on, so transparent edges blur with the scene"),
+    ),
+    row(
+        "coc_radius",
+        COC,
+        DepthOfField,
+        Exposure::Automatic("matches the bokeh's largest blur"),
+    )
+    .param("max_radius"),
+    row(
+        "world_to_mm",
+        COC,
+        DepthOfField,
+        Exposure::Automatic("one scene unit is one metre"),
+    ),
+    row(
+        "motion_blur_enabled",
+        BLUR,
+        MotionBlur,
+        perform(CardBand::Look, 10),
+    )
+    .param("enabled")
+    .switch(Feature::MotionBlur)
+    .default(0.0),
     row("max_blur_px", BLUR, MotionBlur, perform(CardBand::Look, 12))
         .gate(Gate::Fold(Feature::MotionBlur))
         .unit(Unit::Pixels)
         .limit(AT_LEAST_ZERO),
     // Shake: nothing moves on its own, Amount 0 leaves the camera still.
-    row("shake_amount", SHAKE, Shake, perform(CardBand::Camera, 20)).param("amount").default(0.0),
-    row("shake_speed", SHAKE, Shake, perform(CardBand::Camera, 21)).param("frequency").name("Speed").default(1.0),
-    row("shake_position", SHAKE, Shake, perform(CardBand::Camera, 22)).param("position_strength").default(0.25),
-    row("shake_rotation", SHAKE, Shake, perform(CardBand::Camera, 23)).param("rotation_strength").default(1.0),
-    row("shake_time", SHAKE, Shake, Exposure::Automatic("the playback clock")).param("time"),
+    row("shake_amount", SHAKE, Shake, perform(CardBand::Camera, 20))
+        .param("amount")
+        .default(0.0),
+    row("shake_speed", SHAKE, Shake, perform(CardBand::Camera, 21))
+        .param("frequency")
+        .name("Speed")
+        .default(1.0),
+    row(
+        "shake_position",
+        SHAKE,
+        Shake,
+        perform(CardBand::Camera, 22),
+    )
+    .param("position_strength")
+    .default(0.25),
+    row(
+        "shake_rotation",
+        SHAKE,
+        Shake,
+        perform(CardBand::Camera, 23),
+    )
+    .param("rotation_strength")
+    .default(1.0),
+    row(
+        "shake_time",
+        SHAKE,
+        Shake,
+        Exposure::Automatic("the playback clock"),
+    )
+    .param("time"),
     // Loop: the flight through the corridor; the corridor itself (its
     // spacing, pattern, stride, start and clipping) and the loop length are
     // the Scene Loop card's.
-    row("height", RIG, Camera, perform(CardBand::Camera, 0)).unit(Unit::Metres).limit(HardLimit::Unlimited).default(0.0).tip("Camera height inside the tunnel").when(loop_rig),
-    row("lateral", RIG, Camera, perform(CardBand::Camera, 1)).unit(Unit::Metres).limit(HardLimit::Unlimited).tip("Camera lateral offset inside the tunnel").when(loop_rig),
-    row("fov_y", RIG, Camera, perform(CardBand::Camera, 2)).limit(FIELD_OF_VIEW).tip("Vertical field of view").when(loop_rig),
-    row("yaw", RIG, Camera, perform(CardBand::Camera, 3)).tip("Camera yaw").when(loop_rig),
-    row("pitch", RIG, Camera, perform(CardBand::Camera, 4)).tip("Camera pitch").when(loop_rig),
-    row("roll", RIG, Camera, perform(CardBand::Camera, 5)).tip("Camera roll angle inside the tunnel").when(loop_rig),
-    row("flow", RIG, Camera, perform(CardBand::Camera, 6)).tip("Ease camera speed within each loop").when(loop_rig),
-    row("sway_amp", RIG, Camera, perform(CardBand::Camera, 7)).name("Sway").tip("Camera drift across the tunnel cross-section").when(loop_rig),
-    row("sway_cycles", RIG, Camera, perform(CardBand::Camera, 8)).name("Sway Rate").tip("Sway cycles per loop").when(loop_rig),
-    row("look_sweep_amp", RIG, Camera, perform(CardBand::Camera, 9)).name("Look Sway").tip("Side-to-side camera aim sweep").when(loop_rig),
-    row("zoom_pulse_amp", RIG, Camera, perform(CardBand::Camera, 10)).name("Zoom Pulse").tip("Field-of-view pulse per loop").when(loop_rig),
-    row("look_sweep_cycles", RIG, Camera, Exposure::Internal("the look sway turns once a loop")).when(loop_rig),
-    row("axis", RIG, Camera, Exposure::Internal("the corridor runs along Z")).when(loop_rig),
+    row("height", RIG, Camera, perform(CardBand::Camera, 0))
+        .unit(Unit::Metres)
+        .limit(HardLimit::Unlimited)
+        .default(0.0)
+        .tip("Camera height inside the tunnel")
+        .when(loop_rig),
+    row("lateral", RIG, Camera, perform(CardBand::Camera, 1))
+        .unit(Unit::Metres)
+        .limit(HardLimit::Unlimited)
+        .tip("Camera lateral offset inside the tunnel")
+        .when(loop_rig),
+    row("fov_y", RIG, Camera, perform(CardBand::Camera, 2))
+        .limit(FIELD_OF_VIEW)
+        .tip("Vertical field of view")
+        .when(loop_rig),
+    row("yaw", RIG, Camera, perform(CardBand::Camera, 3))
+        .tip("Camera yaw")
+        .when(loop_rig),
+    row("pitch", RIG, Camera, perform(CardBand::Camera, 4))
+        .tip("Camera pitch")
+        .when(loop_rig),
+    row("roll", RIG, Camera, perform(CardBand::Camera, 5))
+        .tip("Camera roll angle inside the tunnel")
+        .when(loop_rig),
+    row("flow", RIG, Camera, perform(CardBand::Camera, 6))
+        .tip("Ease camera speed within each loop")
+        .when(loop_rig),
+    row("sway_amp", RIG, Camera, perform(CardBand::Camera, 7))
+        .name("Sway")
+        .tip("Camera drift across the tunnel cross-section")
+        .when(loop_rig),
+    row("sway_cycles", RIG, Camera, perform(CardBand::Camera, 8))
+        .name("Sway Rate")
+        .tip("Sway cycles per loop")
+        .when(loop_rig),
+    row("look_sweep_amp", RIG, Camera, perform(CardBand::Camera, 9))
+        .name("Look Sway")
+        .tip("Side-to-side camera aim sweep")
+        .when(loop_rig),
+    row("zoom_pulse_amp", RIG, Camera, perform(CardBand::Camera, 10))
+        .name("Zoom Pulse")
+        .tip("Field-of-view pulse per loop")
+        .when(loop_rig),
+    row(
+        "look_sweep_cycles",
+        RIG,
+        Camera,
+        Exposure::Internal("the look sway turns once a loop"),
+    )
+    .when(loop_rig),
+    row(
+        "axis",
+        RIG,
+        Camera,
+        Exposure::Internal("the corridor runs along Z"),
+    )
+    .when(loop_rig),
     row("cell_size", RIG, Camera, Exposure::Automatic(FROM_LOOP)).when(loop_rig),
-    row("pattern_length", RIG, Camera, Exposure::Automatic(FROM_LOOP)).when(loop_rig),
-    row("patterns_per_loop", RIG, Camera, Exposure::Automatic(FROM_LOOP)).when(loop_rig),
+    row(
+        "pattern_length",
+        RIG,
+        Camera,
+        Exposure::Automatic(FROM_LOOP),
+    )
+    .when(loop_rig),
+    row(
+        "patterns_per_loop",
+        RIG,
+        Camera,
+        Exposure::Automatic(FROM_LOOP),
+    )
+    .when(loop_rig),
     row("home", RIG, Camera, Exposure::Automatic(FROM_LOOP)).when(loop_rig),
     clip("near").when(loop_rig),
     clip("far").default(HORIZON_FAR).when(loop_rig),
     // The loop's clock: one even ramp from 0 to 1 per loop of Beats.
     row("bars", PHASE, Camera, Exposure::Automatic(FROM_LOOP)).when(loop_rig),
-    row("rate", PHASE, Camera, Exposure::Internal("Beats sets the loop's rate")).when(loop_rig),
-    row("attack", PHASE, Camera, Exposure::Internal("one even ramp per loop")).default(1.0).when(loop_rig),
+    row(
+        "rate",
+        PHASE,
+        Camera,
+        Exposure::Internal("Beats sets the loop's rate"),
+    )
+    .when(loop_rig),
+    row(
+        "attack",
+        PHASE,
+        Camera,
+        Exposure::Internal("one even ramp per loop"),
+    )
+    .default(1.0)
+    .when(loop_rig),
 ];
 
 const RIGS: &[Choice] = &[
-    Choice { key: "orbit", label: "Orbit" },
-    Choice { key: "free", label: "Free" },
-    Choice { key: "look_at", label: "Look At" },
-    Choice { key: "loop", label: "Loop" },
+    Choice {
+        key: "orbit",
+        label: "Orbit",
+    },
+    Choice {
+        key: "free",
+        label: "Free",
+    },
+    Choice {
+        key: "look_at",
+        label: "Look At",
+    },
+    Choice {
+        key: "loop",
+        label: "Loop",
+    },
 ];
 
-pub static CAMERA_FIELDS: [FieldRow; 2] = [FieldRow {
-    id: "rig",
-    label: "Rig",
-    section: ControlGroup::Camera,
-    control: FieldControl::Closed(RIGS),
-    applies: always,
-    disabled: enabled,
-    read: |fields| match fields {
-        ItemFields::Camera(c) => FieldValue::Choice(
-            match c.rig {
-                CameraRig::Orbit => "orbit",
-                CameraRig::Free => "free",
-                CameraRig::LookAt => "look_at",
-                CameraRig::Loop => "loop",
-            }
-            .to_owned(),
-        ),
-        _ => FieldValue::Choice(String::new()),
-    },
-    write: |fields, value| {
-        let (ItemFields::Camera(c), FieldValue::Choice(key)) = (fields, value) else {
-            return Err(wrong_value("rig", value));
-        };
-        c.rig = match key.as_str() {
-            "orbit" => CameraRig::Orbit,
-            "free" => CameraRig::Free,
-            "look_at" => CameraRig::LookAt,
-            "loop" => CameraRig::Loop,
-            _ => return Err(wrong_value("rig", value)),
-        };
-        Ok(())
-    },
-}, FieldRow {
-    id: "target",
-    label: "Target",
-    section: ControlGroup::Camera,
-    control: FieldControl::Item { items: is_object_or_group, none: "Point" },
-    applies: look_at,
-    disabled: enabled,
-    read: |fields| match fields {
-        ItemFields::Camera(c) => FieldValue::Item(c.target.clone()),
-        _ => FieldValue::Item(None),
-    },
-    write: |fields, value| match (fields, value) {
-        (ItemFields::Camera(c), FieldValue::Item(target)) => {
-            c.target = target.clone();
+pub static CAMERA_FIELDS: [FieldRow; 2] = [
+    FieldRow {
+        id: "rig",
+        label: "Rig",
+        section: ControlGroup::Camera,
+        control: FieldControl::Closed(RIGS),
+        applies: always,
+        disabled: enabled,
+        read: |fields| match fields {
+            ItemFields::Camera(c) => FieldValue::Choice(
+                match c.rig {
+                    CameraRig::Orbit => "orbit",
+                    CameraRig::Free => "free",
+                    CameraRig::LookAt => "look_at",
+                    CameraRig::Loop => "loop",
+                }
+                .to_owned(),
+            ),
+            _ => FieldValue::Choice(String::new()),
+        },
+        write: |fields, value| {
+            let (ItemFields::Camera(c), FieldValue::Choice(key)) = (fields, value) else {
+                return Err(wrong_value("rig", value));
+            };
+            c.rig = match key.as_str() {
+                "orbit" => CameraRig::Orbit,
+                "free" => CameraRig::Free,
+                "look_at" => CameraRig::LookAt,
+                "loop" => CameraRig::Loop,
+                _ => return Err(wrong_value("rig", value)),
+            };
             Ok(())
-        }
-        _ => Err(wrong_value("target", value)),
+        },
     },
-}];
+    FieldRow {
+        id: "target",
+        label: "Target",
+        section: ControlGroup::Camera,
+        control: FieldControl::Item {
+            items: is_object_or_group,
+            none: "Point",
+        },
+        applies: look_at,
+        disabled: enabled,
+        read: |fields| match fields {
+            ItemFields::Camera(c) => FieldValue::Item(c.target.clone()),
+            _ => FieldValue::Item(None),
+        },
+        write: |fields, value| match (fields, value) {
+            (ItemFields::Camera(c), FieldValue::Item(target)) => {
+                c.target = target.clone();
+                Ok(())
+            }
+            _ => Err(wrong_value("target", value)),
+        },
+    },
+];
 
 /// Why the camera's `field` cannot take `key` right now: the Loop rig rides
 /// the scene's Scene Loop, so it waits for one.
-pub(super) fn choice_unavailable(doc: &crate::scene_doc::SceneDoc, field: &str, key: &str) -> Option<&'static str> {
-    (field == "rig" && key == "loop" && super::scene_loop(doc).is_none()).then_some(super::NO_SCENE_LOOP)
+pub(super) fn choice_unavailable(
+    doc: &crate::scene_doc::SceneDoc,
+    field: &str,
+    key: &str,
+) -> Option<&'static str> {
+    (field == "rig" && key == "loop" && super::scene_loop(doc).is_none())
+        .then_some(super::NO_SCENE_LOOP)
 }
 
 #[cfg(test)]
@@ -272,7 +461,11 @@ mod tests {
             assert!(limit.clamp(0.0, (0.0, 0.0)) > 0.0);
         }
         let clips: Vec<HardLimit> = limits("near").into_iter().chain(limits("far")).collect();
-        assert_eq!(clips.len(), 8, "Near and Far on the Orbit, Free, Look At and Loop rigs");
+        assert_eq!(
+            clips.len(),
+            8,
+            "Near and Far on the Orbit, Free, Look At and Loop rigs"
+        );
         for limit in clips {
             for metres in [0.01, 6.0, 30.0, 50_000.0] {
                 assert_eq!(limit.clamp(metres, (0.0, 0.0)), metres);

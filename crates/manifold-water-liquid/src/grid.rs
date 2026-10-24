@@ -7,11 +7,13 @@
 //! The cell-centred narrow-band distance and its disabled positive sentinel
 //! follow the reseeding seam described by Ferstl et al. (2016).
 
-use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 use crate::fluid_particles::FaceSample;
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
+use crate::primitives::liquid_stats::{
+    LIQUID_STATS_WORDS, NARROW_BAND_SHORTAGE_WORD, with_stats_layout,
+};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use crate::primitives::liquid_stats::{with_stats_layout, LIQUID_STATS_WORDS, NARROW_BAND_SHORTAGE_WORD};
 
 const PUBLISH_SHADER_SOURCE: &str = include_str!("primitives/shaders/liquid_frame_faces.wgsl");
 
@@ -26,8 +28,15 @@ struct FaceParams {
 
 /// The frame ports that carry the grid: one array per axis, the cells per
 /// axis, and how many face layers past the liquid carry velocity.
-pub const FACE_GRID_PORTS: [&str; 7] =
-    ["face_u", "face_v", "face_w", "face_cells_x", "face_cells_y", "face_cells_z", "face_valid_layers"];
+pub const FACE_GRID_PORTS: [&str; 7] = [
+    "face_u",
+    "face_v",
+    "face_w",
+    "face_cells_x",
+    "face_cells_y",
+    "face_cells_z",
+    "face_valid_layers",
+];
 
 /// FLIP's MAC trilinear on the face arrays, for bodies that sample velocity
 /// at a point.
@@ -47,7 +56,10 @@ pub fn face_dims(cells: [u32; 3], axis: usize) -> [u32; 3] {
 
 /// Records in `axis`'s array, in u64 so no size wraps.
 pub fn face_len(cells: [u32; 3], axis: usize) -> u64 {
-    face_dims(cells, axis).iter().map(|&n| u64::from(n)).product()
+    face_dims(cells, axis)
+        .iter()
+        .map(|&n| u64::from(n))
+        .product()
 }
 
 manifold_core::testkit_visible! {
@@ -121,35 +133,58 @@ impl InteriorOps {
     }
 
     fn prepare_clear_with_shader(&mut self, device: &manifold_gpu::GpuDevice, shader: &str) {
-        self.clear_pipeline = Some(device.create_compute_pipeline(shader, "interior_clear", "liquid.clear_interior"));
+        self.clear_pipeline =
+            Some(device.create_compute_pipeline(shader, "interior_clear", "liquid.clear_interior"));
     }
 
     fn prepare_copy(&mut self, device: &manifold_gpu::GpuDevice, shader: &str) {
         if self.copy_pipeline.is_none() {
-            self.copy_pipeline = Some(device.create_compute_pipeline(shader, "cs_main", "liquid.publish_faces"));
+            self.copy_pipeline =
+                Some(device.create_compute_pipeline(shader, "cs_main", "liquid.publish_faces"));
         }
     }
 
     pub fn clear(&self, gpu: &mut GpuEncoder<'_>, target: &GpuBuffer) -> Result<(), String> {
         if target.size == 0 || !target.size.is_multiple_of(4) {
-            return Err(format!("interior distance buffer has invalid extent {} bytes", target.size));
+            return Err(format!(
+                "interior distance buffer has invalid extent {} bytes",
+                target.size
+            ));
         }
-        let len = u32::try_from(target.size / 4)
-            .map_err(|_| format!("interior distance buffer has {} records, past 32-bit GPU indexing", target.size / 4))?;
-        let pipeline = self.clear_pipeline.as_ref().expect("liquid interior pipeline prepared at install");
-        let params = FaceParams { len, _pad0: 0, _pad1: 0, has_shortage: 0 };
+        let len = u32::try_from(target.size / 4).map_err(|_| {
+            format!(
+                "interior distance buffer has {} records, past 32-bit GPU indexing",
+                target.size / 4
+            )
+        })?;
+        let pipeline = self
+            .clear_pipeline
+            .as_ref()
+            .expect("liquid interior pipeline prepared at install");
+        let params = FaceParams {
+            len,
+            _pad0: 0,
+            _pad1: 0,
+            has_shortage: 0,
+        };
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
-                GpuBinding::Buffer { binding: 3, buffer: target, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&params),
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: target,
+                    offset: 0,
+                },
             ],
             [len.div_ceil(256), 1, 1],
             "liquid.clear_interior",
         );
         Ok(())
     }
-
 }
 
 /// A frame node's published face grid, frame B's only: storage per wired
@@ -166,7 +201,12 @@ pub struct PublishedFaces {
 /// A tick cannot be published when its particle reduction found non-finite
 /// records or when narrow-band reseeding ran out of particle slots.
 pub fn stats_failed(stats: &[u32]) -> bool {
-    stats.first().copied().unwrap_or(1) != 0 || stats.get(NARROW_BAND_SHORTAGE_WORD as usize).copied().unwrap_or(1) != 0
+    stats.first().copied().unwrap_or(1) != 0
+        || stats
+            .get(NARROW_BAND_SHORTAGE_WORD as usize)
+            .copied()
+            .unwrap_or(1)
+            != 0
 }
 
 impl PublishedFaces {
@@ -181,7 +221,10 @@ impl PublishedFaces {
 
     /// The array published on `port`.
     pub fn buffer(&self, port: &str) -> Option<&GpuBuffer> {
-        FACE_GRID_PORTS[..3].iter().position(|&p| p == port).and_then(|axis| self.faces[axis].as_ref())
+        FACE_GRID_PORTS[..3]
+            .iter()
+            .position(|&p| p == port)
+            .and_then(|axis| self.faces[axis].as_ref())
     }
 
     /// Every axis has storage.
@@ -231,28 +274,59 @@ impl PublishedFaces {
                     }
                 }
             }
-            let (Some(stats), Some(target)) = (stats.filter(|stats| stats.size >= 4), self.faces[axis].as_ref()) else { continue };
+            let (Some(stats), Some(target)) = (
+                stats.filter(|stats| stats.size >= 4),
+                self.faces[axis].as_ref(),
+            ) else {
+                continue;
+            };
             if !(ticked || fresh) {
                 continue;
             }
             let len = bytes.min(input.size).min(target.size) / 4;
             let Ok(len) = u32::try_from(len) else {
-                refused = Some(format!("{node}: a face array of {len} faces is past 32-bit GPU indexing. Lower Resolution."));
+                refused = Some(format!(
+                    "{node}: a face array of {len} faces is past 32-bit GPU indexing. Lower Resolution."
+                ));
                 continue;
             };
             if len == 0 {
                 continue;
             }
-            let pipeline = self.ops.copy_pipeline.as_ref().expect("liquid face pipeline prepared at install");
+            let pipeline = self
+                .ops
+                .copy_pipeline
+                .as_ref()
+                .expect("liquid face pipeline prepared at install");
             let has_shortage = u32::from(stats_has_shortage(stats.size));
-            let params = FaceParams { len, _pad0: 0, _pad1: 0, has_shortage };
+            let params = FaceParams {
+                len,
+                _pad0: 0,
+                _pad1: 0,
+                has_shortage,
+            };
             gpu.native_enc.dispatch_compute(
                 pipeline,
                 &[
-                    GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
-                    GpuBinding::Buffer { binding: 1, buffer: input, offset: 0 },
-                    GpuBinding::Buffer { binding: 2, buffer: stats, offset: 0 },
-                    GpuBinding::Buffer { binding: 3, buffer: target, offset: 0 },
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&params),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: input,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: stats,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: target,
+                        offset: 0,
+                    },
                 ],
                 [len.div_ceil(256), 1, 1],
                 "liquid.publish_faces",
@@ -272,9 +346,12 @@ mod tests {
         let shader = with_stats_layout(PUBLISH_SHADER_SOURCE);
         assert!(shader.contains("struct FaceParams"));
         let module = naga::front::wgsl::parse_str(&shader).expect("liquid_frame_faces.wgsl parses");
-        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
-            .validate(&module)
-            .expect("liquid_frame_faces.wgsl validates");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("liquid_frame_faces.wgsl validates");
     }
 
     /// The seam table's lengths and index rules, on unequal sides so a
@@ -282,7 +359,10 @@ mod tests {
     #[test]
     fn face_grid_layout_matches_the_seam_table() {
         let n = [6, 5, 4];
-        assert_eq!([0, 1, 2].map(|a| face_len(n, a)), [7 * 5 * 4, 6 * 6 * 4, 6 * 5 * 5]);
+        assert_eq!(
+            [0, 1, 2].map(|a| face_len(n, a)),
+            [7 * 5 * 4, 6 * 6 * 4, 6 * 5 * 5]
+        );
         assert_eq!(face_index(n, 0, [2, 3, 1]), 2 + 7 * (3 + 5));
         assert_eq!(face_index(n, 1, [2, 3, 1]), 2 + 6 * (3 + 6));
         assert_eq!(face_index(n, 2, [2, 3, 1]), 2 + 6 * (3 + 5));
@@ -291,7 +371,10 @@ mod tests {
                 assert_eq!(face_index(n, a, face_coords(n, a, i)), i);
             }
         }
-        assert_eq!(face_position([-2.0, 0.0, 1.0], 0.5, 1, [1, 2, 3]), [-1.25, 1.0, 2.75]);
+        assert_eq!(
+            face_position([-2.0, 0.0, 1.0], 0.5, 1, [1, 2, 3]),
+            [-1.25, 1.0, 2.75]
+        );
         assert_eq!(interior_len(n), 6 * 5 * 4);
         assert_eq!(interior_bytes(n), 6 * 5 * 4 * 4);
     }

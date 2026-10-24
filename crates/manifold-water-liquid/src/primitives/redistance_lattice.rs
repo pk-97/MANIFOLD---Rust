@@ -1,9 +1,9 @@
 //! Single-dispatch scalar lattice operation; see GPU_FLUID_SURFACE_DESIGN.md, Fill Pits.
 use crate::float_param;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 use manifold_gpu::GpuBinding;
 use std::borrow::Cow;

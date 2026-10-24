@@ -24,8 +24,16 @@ fn every_generator_param_surface_is_well_formed() {
         for pd in &def.param_defs {
             let s = &pd.spec;
             assert!(!s.id.is_empty(), "{type_id:?}: param with empty id");
-            assert!(ids.insert(s.id.as_str()), "{type_id:?}: duplicate param id {:?}", s.id);
-            assert!(!s.name.trim().is_empty(), "{type_id:?}.{}: empty name", s.id);
+            assert!(
+                ids.insert(s.id.as_str()),
+                "{type_id:?}: duplicate param id {:?}",
+                s.id
+            );
+            assert!(
+                !s.name.trim().is_empty(),
+                "{type_id:?}.{}: empty name",
+                s.id
+            );
             assert!(
                 s.min <= s.default_value && s.default_value <= s.max,
                 "{type_id:?}.{}: default {} outside [{}, {}]",
@@ -35,9 +43,15 @@ fn every_generator_param_surface_is_well_formed() {
                 s.max
             );
             if let Some(addr) = preset_definition_registry::get_osc_address_by_id(type_id, &s.id) {
-                assert!(osc_addresses.insert(addr.clone()), "duplicate OSC address {addr}");
+                assert!(
+                    osc_addresses.insert(addr.clone()),
+                    "duplicate OSC address {addr}"
+                );
             }
         }
     }
-    assert!(!osc_addresses.is_empty(), "no generator exposes an OSC prefix; uniqueness went unchecked");
+    assert!(
+        !osc_addresses.is_empty(),
+        "no generator exposes an OSC prefix; uniqueness went unchecked"
+    );
 }

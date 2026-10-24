@@ -87,15 +87,23 @@ impl Primitive for SubdivideMesh {
         if port_name != "out" {
             return None;
         }
-        let input = input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)?;
+        let input = input_capacities
+            .iter()
+            .find(|(p, _)| *p == "in")
+            .map(|(_, n)| *n)?;
         Some((input / 3 * 3).saturating_mul(1 << (2 * level_of(params))))
     }
 
     /// The split is fixed by the source triangles and `level`, a setup value
     /// whose change rebuilds the graph: topology tracks the input topology
     /// and positions track the input positions.
-    fn mesh_output_rule(&self, port: &str) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
-        use manifold_node_engine::scene::mesh_change::{MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule};
+    fn mesh_output_rule(
+        &self,
+        port: &str,
+    ) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
+        use manifold_node_engine::scene::mesh_change::{
+            MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule,
+        };
         if port == "out" {
             return MeshOutputRule {
                 topology: MeshRevisionRule::Dependencies(&[MeshDependency {
@@ -124,7 +132,8 @@ impl Primitive for SubdivideMesh {
         };
         let vertex_size = std::mem::size_of::<MeshVertex>() as u64;
         let in_len = (src.size / vertex_size) as u32;
-        let out_count = ((dst.size / vertex_size) as u32).min((in_len / 3 * 3).saturating_mul(1 << (2 * level)));
+        let out_count = ((dst.size / vertex_size) as u32)
+            .min((in_len / 3 * 3).saturating_mul(1 << (2 * level)));
         if out_count == 0 {
             return;
         }
@@ -183,22 +192,47 @@ mod gpu_tests {
         let device = manifold_gpu::testkit::test_device();
         let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SubdivideMesh>()
             .expect("subdivide_mesh buffer codegen");
-        let pipeline =
-            device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "subdivide-mesh-test");
+        let pipeline = device.create_compute_pipeline(
+            &wgsl,
+            manifold_node_engine::freeze::codegen::ENTRY,
+            "subdivide-mesh-test",
+        );
         let out_count = (src.len() as u32 / 3 * 3) << (2 * level);
         let sbuf = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
         unsafe {
             sbuf.write(0, bytemuck::cast_slice(src));
         }
-        let dbuf = device.create_buffer_shared(u64::from(out_count) * std::mem::size_of::<MeshVertex>() as u64);
-        let uniforms = SubdivideUniforms { level: level as i32, in_len: src.len() as u32, dispatch_count: out_count, _pad0: 0 };
+        let dbuf = device
+            .create_buffer_shared(u64::from(out_count) * std::mem::size_of::<MeshVertex>() as u64);
+        let uniforms = SubdivideUniforms {
+            level: level as i32,
+            in_len: src.len() as u32,
+            dispatch_count: out_count,
+            _pad0: 0,
+        };
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: &sbuf, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &dbuf, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &sbuf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &dbuf,
+                offset: 0,
+            },
         ];
         let mut enc = device.create_encoder("subdivide-mesh-test");
-        enc.dispatch_compute(&pipeline, &bindings, [out_count.div_ceil(256), 1, 1], "subdivide-mesh-test");
+        enc.dispatch_compute(
+            &pipeline,
+            &bindings,
+            [out_count.div_ceil(256), 1, 1],
+            "subdivide-mesh-test",
+        );
         enc.commit_and_wait_completed();
         let ptr = dbuf.mapped_ptr().expect("shared dst buffer");
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, out_count as usize) }.to_vec()
@@ -214,7 +248,11 @@ mod gpu_tests {
     /// with uv following position.
     #[test]
     fn level_two_tiles_the_source_triangle() {
-        let src = [vertex([0.0, 0.0, 0.0], [0.0, 0.0]), vertex([4.0, 0.0, 0.0], [1.0, 0.0]), vertex([0.0, 4.0, 0.0], [0.0, 1.0])];
+        let src = [
+            vertex([0.0, 0.0, 0.0], [0.0, 0.0]),
+            vertex([4.0, 0.0, 0.0], [1.0, 0.0]),
+            vertex([0.0, 4.0, 0.0], [0.0, 1.0]),
+        ];
         let out = dispatch(&src, 2);
         assert_eq!(out.len(), 48);
         let whole = signed_area(&src);
@@ -225,7 +263,10 @@ mod gpu_tests {
             sum += area;
             for v in t {
                 assert_eq!(v.position[2], 0.0);
-                assert!((v.uv[0] - v.position[0] / 4.0).abs() < 1e-6 && (v.uv[1] - v.position[1] / 4.0).abs() < 1e-6);
+                assert!(
+                    (v.uv[0] - v.position[0] / 4.0).abs() < 1e-6
+                        && (v.uv[1] - v.position[1] / 4.0).abs() < 1e-6
+                );
                 assert!((v.normal[2] - 1.0).abs() < 1e-6);
             }
         }

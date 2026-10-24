@@ -16,7 +16,9 @@ struct Ceilings {
 }
 
 fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, usize)>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -24,8 +26,14 @@ fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, usize)>) {
                 walk(&path, root, out);
             }
         } else if path.extension().is_some_and(|e| e == "rs") {
-            let Ok(bytes) = std::fs::read(&path) else { continue };
-            let rel = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            let rel = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
             out.push((rel, bytes.iter().filter(|b| **b == b'\n').count()));
         }
     }
@@ -47,7 +55,9 @@ fn no_file_regrows_past_its_ceiling() {
     }
     for rel in table.ceilings.keys() {
         if !files.iter().any(|(f, _)| f == rel) {
-            violations.push(format!("{rel}: listed in godfile_ceilings.json but missing; delete the entry"));
+            violations.push(format!(
+                "{rel}: listed in godfile_ceilings.json but missing; delete the entry"
+            ));
         }
     }
     assert!(

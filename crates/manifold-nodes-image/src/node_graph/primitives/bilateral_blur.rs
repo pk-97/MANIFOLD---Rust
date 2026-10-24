@@ -28,11 +28,13 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::primitives::standalone_pipeline::{
+    dispatch_standalone_2d, standalone_pipeline,
+};
+use manifold_node_engine::scene::camera::Camera;
 
 const DEPTH_COMMON: &str = include_str!("../../generators/shaders/depth_common.wgsl");
 
@@ -141,7 +143,10 @@ impl Primitive for BilateralBlur {
             _ => 0.1,
         };
 
-        let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
+        let cam = ctx
+            .inputs
+            .camera("camera")
+            .unwrap_or_else(Camera::default_perspective);
         let [near, far] = derive_depth_scalars(&cam);
 
         let Some(in_tex) = ctx.inputs.texture_2d("in") else {
@@ -203,15 +208,24 @@ mod tests {
     /// rows and left horizontal streaks.
     #[test]
     fn receding_ground_blurs_across_rows() {
-        use super::cpu_reference::{bilateral_texel, Fixture};
+        use super::cpu_reference::{Fixture, bilateral_texel};
         const K9: [f32; 5] = [0.16501, 0.15019, 0.11325, 0.07076, 0.03664];
         let (w, h) = (3i32, 32i32);
-        let depth: Vec<f32> = (0..w * h).map(|i| 0.0025 - (i / w) as f32 * 1.9e-5).collect();
-        let color: Vec<[f32; 4]> = (0..w * h).map(|i| {
-            let v = if (i / w) % 3 == 0 { 0.3 } else { 0.9 };
-            [v, v, v, 1.0]
-        }).collect();
-        let fx = Fixture { w, h, depth: &depth, color: &color };
+        let depth: Vec<f32> = (0..w * h)
+            .map(|i| 0.0025 - (i / w) as f32 * 1.9e-5)
+            .collect();
+        let color: Vec<[f32; 4]> = (0..w * h)
+            .map(|i| {
+                let v = if (i / w) % 3 == 0 { 0.3 } else { 0.9 };
+                [v, v, v, 1.0]
+            })
+            .collect();
+        let fx = Fixture {
+            w,
+            h,
+            depth: &depth,
+            color: &color,
+        };
         let (near, far) = (0.05, 200.0);
         for y in 8..h - 8 {
             let got = bilateral_texel(&fx, 1, y, 1, 0.1, near, far)[0];
@@ -222,7 +236,10 @@ mod tests {
                 wsum += k;
             }
             let gaussian = sum / wsum;
-            assert!((got - gaussian).abs() < 1e-3, "row {y}: {got} vs plain gaussian {gaussian}");
+            assert!(
+                (got - gaussian).abs() < 1e-3,
+                "row {y}: {got} vs plain gaussian {gaussian}"
+            );
         }
     }
 }
@@ -282,7 +299,11 @@ pub(crate) mod cpu_reference {
         let raw_center = fx.depth_at(cx, cy);
         let ahead = fx.depth_at(cx + dxi, cy + dyi) - raw_center;
         let behind = raw_center - fx.depth_at(cx - dxi, cy - dyi);
-        let raw_slope = if ahead.abs() < behind.abs() { ahead } else { behind };
+        let raw_slope = if ahead.abs() < behind.abs() {
+            ahead
+        } else {
+            behind
+        };
         let center = fx.color_at(cx, cy);
 
         let mut acc = [center[0] * K9[0], center[1] * K9[0], center[2] * K9[0]];
@@ -295,7 +316,8 @@ pub(crate) mod cpu_reference {
                 let cxx = cx + dxi * off;
                 let cyy = cy + dyi * off;
                 let zj = linearize_depth(fx.depth_at(cxx, cyy), near, far);
-                let z_surface = linearize_depth((raw_center + raw_slope * off as f32).max(0.0), near, far);
+                let z_surface =
+                    linearize_depth((raw_center + raw_slope * off as f32).max(0.0), near, far);
                 let dz = (zj - z_surface) * inv_sigma;
                 let w = kj * (-(dz * dz)).exp();
                 let c = fx.color_at(cxx, cyy);
@@ -328,7 +350,7 @@ mod gpu_tests {
         GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
     };
 
-    use super::cpu_reference::{bilateral_texel, Fixture};
+    use super::cpu_reference::{Fixture, bilateral_texel};
     use super::{BilateralBlur, BilateralBlurUniforms};
     use manifold_node_engine::gpu::render_target::RenderTarget;
 
@@ -413,11 +435,26 @@ mod gpu_tests {
         enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: uniform_bytes },
-                GpuBinding::Texture { binding: 1, texture: in_tex },
-                GpuBinding::Texture { binding: 2, texture: depth_tex },
-                GpuBinding::Sampler { binding: 3, sampler },
-                GpuBinding::Texture { binding: 4, texture: &out.texture },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: uniform_bytes,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: in_tex,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: depth_tex,
+                },
+                GpuBinding::Sampler {
+                    binding: 3,
+                    sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 4,
+                    texture: &out.texture,
+                },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "bilateral-dispatch",
@@ -465,12 +502,24 @@ mod gpu_tests {
 
         let (near, far) = (0.1f32, 100.0f32);
         for axis in 0u32..=1 {
-            let uniforms = BilateralBlurUniforms { axis, depth_sigma: 0.1, near, far };
+            let uniforms = BilateralBlurUniforms {
+                axis,
+                depth_sigma: 0.1,
+                near,
+                far,
+            };
             let bytes = bytemuck::bytes_of(&uniforms);
             let pipeline = generated_pipeline(&device, "bilateral-uniform");
-            let gpu_out = dispatch(&device, &pipeline, &color_tex, &depth_tex, &sampler, w, h, bytes);
+            let gpu_out = dispatch(
+                &device, &pipeline, &color_tex, &depth_tex, &sampler, w, h, bytes,
+            );
 
-            let fx = Fixture { w: w as i32, h: h as i32, depth: &raw_depth, color: &color };
+            let fx = Fixture {
+                w: w as i32,
+                h: h as i32,
+                depth: &raw_depth,
+                color: &color,
+            };
             for y in 0..h as i32 {
                 for x in 0..w as i32 {
                     let cpu = bilateral_texel(&fx, x, y, axis, 0.1, near, far);
@@ -571,10 +620,17 @@ mod gpu_tests {
         let depth_tex = upload_depth(&device, wu, hu, &raw_depth);
         let color_tex = upload_color(&device, wu, hu, &color);
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
-        let uniforms = BilateralBlurUniforms { axis: 0, depth_sigma, near, far };
+        let uniforms = BilateralBlurUniforms {
+            axis: 0,
+            depth_sigma,
+            near,
+            far,
+        };
         let bytes = bytemuck::bytes_of(&uniforms);
         let pipeline = generated_pipeline(&device, "bilateral-edge");
-        let gpu_out = dispatch(&device, &pipeline, &color_tex, &depth_tex, &sampler, wu, hu, bytes);
+        let gpu_out = dispatch(
+            &device, &pipeline, &color_tex, &depth_tex, &sampler, wu, hu, bytes,
+        );
         let idx = (cy as u32 * wu + cx as u32) as usize;
         assert!(
             gpu_out[idx][0] < 0.01,
@@ -607,12 +663,24 @@ mod gpu_tests {
         let (near, far, depth_sigma) = (0.1f32, 100.0f32, 0.3f32);
 
         for axis in 0u32..=1 {
-            let uniforms = BilateralBlurUniforms { axis, depth_sigma, near, far };
+            let uniforms = BilateralBlurUniforms {
+                axis,
+                depth_sigma,
+                near,
+                far,
+            };
             let bytes = bytemuck::bytes_of(&uniforms);
             let pipeline = generated_pipeline(&device, "bilateral-cpu-parity");
-            let gpu_out = dispatch(&device, &pipeline, &color_tex, &depth_tex, &sampler, w, h, bytes);
+            let gpu_out = dispatch(
+                &device, &pipeline, &color_tex, &depth_tex, &sampler, w, h, bytes,
+            );
 
-            let fixture = Fixture { w: w as i32, h: h as i32, depth: &raw_depth, color: &color };
+            let fixture = Fixture {
+                w: w as i32,
+                h: h as i32,
+                depth: &raw_depth,
+                color: &color,
+            };
             for y in 0..h as i32 {
                 for x in 0..w as i32 {
                     let cpu = bilateral_texel(&fixture, x, y, axis, depth_sigma, near, far);
@@ -629,5 +697,4 @@ mod gpu_tests {
             }
         }
     }
-
 }

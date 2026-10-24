@@ -33,7 +33,11 @@ pub struct LayerNotices {
 
 impl LayerNotices {
     /// This list with `news` folded in, oldest first; `toast` words each.
-    pub fn with_news(&self, news: impl IntoIterator<Item = LayerNews>, toast: impl Fn(&LayerNews) -> String) -> Self {
+    pub fn with_news(
+        &self,
+        news: impl IntoIterator<Item = LayerNews>,
+        toast: impl Fn(&LayerNews) -> String,
+    ) -> Self {
         let mut next = self.clone();
         for news in news {
             next.version += 1;
@@ -50,8 +54,16 @@ impl LayerNotices {
                     continue;
                 }
             };
-            let notice = LayerNotice { sequence: next.version, layer_id: layer_id.clone(), message: Arc::from(toast(&news)) };
-            match next.notices.iter_mut().find(|old| old.layer_id == notice.layer_id) {
+            let notice = LayerNotice {
+                sequence: next.version,
+                layer_id: layer_id.clone(),
+                message: Arc::from(toast(&news)),
+            };
+            match next
+                .notices
+                .iter_mut()
+                .find(|old| old.layer_id == notice.layer_id)
+            {
                 Some(old) => *old = notice,
                 None => next.notices.push(notice),
             }
@@ -61,7 +73,9 @@ impl LayerNotices {
 
     /// Notices the UI has not shown yet.
     pub fn after(&self, shown: u64) -> impl Iterator<Item = &LayerNotice> {
-        self.notices.iter().filter(move |notice| notice.sequence > shown)
+        self.notices
+            .iter()
+            .filter(move |notice| notice.sequence > shown)
     }
 
     #[allow(dead_code)]
@@ -86,12 +100,14 @@ fn toast(layer: &str, item: Option<&str>, news: &LayerNews) -> String {
 /// object it names, else the item its node id is scoped to (`<item id>:<role>`).
 fn failing_item<'a>(doc: &'a SceneDoc, news: &NodeErrorNews) -> Option<&'a str> {
     let id = match news.object {
-        Some(object) => {
-            manifold_nodes_scene::node_graph::scene_compile::drawn_items(doc).into_iter().nth(object as usize)?
-        }
+        Some(object) => manifold_nodes_scene::node_graph::scene_compile::drawn_items(doc)
+            .into_iter()
+            .nth(object as usize)?,
         None => ItemId::new(news.node.as_str().rsplit_once(':')?.0),
     };
-    doc.find(&id).map(|item| item.name.as_str()).filter(|name| !name.is_empty())
+    doc.find(&id)
+        .map(|item| item.name.as_str())
+        .filter(|name| !name.is_empty())
 }
 
 /// The content thread's side: the published list, and the renderer's news
@@ -116,9 +132,13 @@ impl LayerNoticeFeed {
             return;
         }
         let words = |news: &LayerNews| {
-            let (LayerNews::NodeError(id, _) | LayerNews::Stopped(id) | LayerNews::Restored(id)) = news;
+            let (LayerNews::NodeError(id, _) | LayerNews::Stopped(id) | LayerNews::Restored(id)) =
+                news;
             let layer = layers.iter().find(|layer| &layer.layer_id == id);
-            let name = layer.map(|layer| layer.name.as_str()).filter(|name| !name.is_empty()).unwrap_or("Layer");
+            let name = layer
+                .map(|layer| layer.name.as_str())
+                .filter(|name| !name.is_empty())
+                .unwrap_or("Layer");
             let item = match news {
                 LayerNews::NodeError(_, failing) => layer
                     .and_then(|layer| layer.gen_params()?.scene.as_ref())
@@ -141,7 +161,10 @@ mod tests {
     }
 
     fn failing(node: &str) -> NodeErrorNews {
-        NodeErrorNews { node: NodeId::new(node), object: None }
+        NodeErrorNews {
+            node: NodeId::new(node),
+            object: None,
+        }
     }
 
     fn words(news: &LayerNews) -> String {
@@ -153,14 +176,21 @@ mod tests {
     fn notices_fold_newest_per_layer_and_stops_come_and_go() {
         let a = layer("a");
         let b = layer("b");
-        let notices = LayerNotices::default().with_news([
-            LayerNews::NodeError(a.clone(), failing("scene:render")),
-            LayerNews::NodeError(b.clone(), failing("scene:render")),
-            LayerNews::NodeError(a.clone(), failing("rock:object")),
-        ], words);
+        let notices = LayerNotices::default().with_news(
+            [
+                LayerNews::NodeError(a.clone(), failing("scene:render")),
+                LayerNews::NodeError(b.clone(), failing("scene:render")),
+                LayerNews::NodeError(a.clone(), failing("rock:object")),
+            ],
+            words,
+        );
         assert_eq!(notices.notices.len(), 2);
         let shown: Vec<&str> = notices.after(0).map(|notice| &*notice.message).collect();
-        assert_eq!(shown, ["Cliff: Rock can't be drawn.", "Cliff can't be drawn."], "each layer keeps its newest notice");
+        assert_eq!(
+            shown,
+            ["Cliff: Rock can't be drawn.", "Cliff can't be drawn."],
+            "each layer keeps its newest notice"
+        );
         assert_eq!(notices.after(notices.version).count(), 0);
 
         let stopped = notices.with_news([LayerNews::Stopped(a.clone())], words);
@@ -174,6 +204,10 @@ mod tests {
         let restored = stopped.with_news([LayerNews::Restored(a.clone())], words);
         assert!(!restored.is_stopped(&a));
         assert!(restored.version > stopped.version);
-        assert_eq!(restored.after(stopped.version).count(), 0, "drawing again is no toast");
+        assert_eq!(
+            restored.after(stopped.version).count(),
+            0,
+            "drawing again is no toast"
+        );
     }
 }

@@ -64,7 +64,10 @@ pub(crate) fn render_tree_overlay_passes(
     logical_h: u32,
     inputs: TreeOverlayInputs<'_>,
 ) {
-    let TreeOverlayInputs { text_input, frame_timer } = inputs;
+    let TreeOverlayInputs {
+        text_input,
+        frame_timer,
+    } = inputs;
 
     // Browser popup thumbnails (PRESET_LIBRARY_DESIGN P6, D7): decode +
     // register every open item's PNG ONCE per distinct path (checked via
@@ -113,18 +116,29 @@ pub(crate) fn render_tree_overlay_passes(
     // Effect card drag ghost + text input — TOOLTIP depth, above every
     // overlay.
     ui_renderer.push_depth(Depth::TOOLTIP);
-    if text_input.is_none() && ui_root.input.pressed_widget().is_none()
-        && let Some(node) = ui_root.input.hovered_node(&ui_root.tree)
+    if text_input.is_none()
+        && ui_root.input.pressed_widget().is_none()
+        && let Some(node) = ui_root
+            .input
+            .hovered_node(&ui_root.tree)
             .and_then(|id| ui_root.tree.get_node(id))
         && let Some(help) = node.tooltip.as_deref()
     {
-        let size = ui_root.tree.measure_text(help, 11, manifold_ui::node::FontWeight::Medium);
+        let size = ui_root
+            .tree
+            .measure_text(help, 11, manifold_ui::node::FontWeight::Medium);
         let width = size.x + 14.0;
         let height = size.y + 14.0;
         let x = node.bounds.x.min((logical_w as f32 - width).max(0.0));
         let y = (node.bounds.y_max() + 4.0).min((logical_h as f32 - height).max(0.0));
-        ui_renderer.draw_rounded_rect(x, y, width, height,
-            manifold_ui::node::Color32::new(28, 28, 32, 250), 4.0);
+        ui_renderer.draw_rounded_rect(
+            x,
+            y,
+            width,
+            height,
+            manifold_ui::node::Color32::new(28, 28, 32, 250),
+            4.0,
+        );
         ui_renderer.draw_text(x + 7.0, y + 7.0, help, 11.0, [235, 235, 240, 255]);
     }
     if let Some(root) = ui_root.inspector.card_drag_ghost_root() {
@@ -135,7 +149,12 @@ pub(crate) fn render_tree_overlay_passes(
     // `.active` check that used to gate this lives inside that resolution,
     // not here.
     if let Some(text_input) = text_input {
-        crate::app_render::render_text_input_overlay(text_input, frame_timer, ui_renderer, ui_root.tree.measurer());
+        crate::app_render::render_text_input_overlay(
+            text_input,
+            frame_timer,
+            ui_renderer,
+            ui_root.tree.measurer(),
+        );
     }
     ui_renderer.pop_depth();
 
@@ -145,7 +164,10 @@ pub(crate) fn render_tree_overlay_passes(
     // idle fast path (main window) or just accumulate uselessly (editor,
     // which has no cache to defeat — D5). See module doc deviation 1 for why
     // this runs here rather than after the caller's flush/commit.
-    for region in [crate::frame_plan::MainRegion::Overlays, crate::frame_plan::MainRegion::Ghosts] {
+    for region in [
+        crate::frame_plan::MainRegion::Overlays,
+        crate::frame_plan::MainRegion::Ghosts,
+    ] {
         ui_root.tree.clear_dirty_range(region.id(), 0, usize::MAX);
     }
 }

@@ -1,8 +1,8 @@
 //! Buffer extent rule owned by this node.
-use std::mem::size_of;
-use manifold_water_liquid::fluid_particles::FluidBlob;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use manifold_water_liquid::extent::searched;
+use manifold_water_liquid::fluid_particles::FluidBlob;
+use std::mem::size_of;
 
 fn shape_particle_blobs(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     searched(x)?;

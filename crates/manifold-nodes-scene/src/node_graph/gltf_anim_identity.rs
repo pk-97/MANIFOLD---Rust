@@ -12,7 +12,6 @@ inventory::submit! {
     }
 }
 
-
 pub(super) fn identity(set: &GltfAnimSet) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(b"manifold.loaded-gltf-animation.v1");
@@ -89,9 +88,16 @@ fn floats(hash: &mut Sha256, values: &[f32]) {
 mod source_identity_tests {
     #[test]
     fn physics_source_identity_registration_matches_family_build() {
-        let entries: Vec<_> = inventory::iter::<manifold_node_engine::scene::source_asset::SourceImplementationIdentity>
-            .into_iter().filter(|entry| entry.name == "gltf_animation").collect();
+        let entries: Vec<_> = inventory::iter::<
+            manifold_node_engine::scene::source_asset::SourceImplementationIdentity,
+        >
+            .into_iter()
+            .filter(|entry| entry.name == "gltf_animation")
+            .collect();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].identity, env!("MANIFOLD_PHYSICS_FAMILY_IDENTITY"));
+        assert_eq!(
+            entries[0].identity,
+            env!("MANIFOLD_PHYSICS_FAMILY_IDENTITY")
+        );
     }
 }

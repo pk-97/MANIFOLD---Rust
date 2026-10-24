@@ -96,17 +96,17 @@ pub(crate) fn param_word_count(p: &ParamDef) -> Result<usize, CodegenError> {
 /// `Err` for Vec3/Vec4/Color — its callers (e.g. the `dispatch_count_field`
 /// zero-literal) need a single scalar WGSL type name, not a vector.
 pub(crate) fn param_is_fusable(p: &ParamDef) -> bool {
-    matches!(p.ty, ParamType::Vec3 | ParamType::Vec4 | ParamType::Color) || param_wgsl_type(p).is_ok()
+    matches!(p.ty, ParamType::Vec3 | ParamType::Vec4 | ParamType::Color)
+        || param_wgsl_type(p).is_ok()
 }
 
 pub(crate) fn wgsl_safe_field(name: &str) -> std::borrow::Cow<'_, str> {
     // WGSL keywords a short param name could realistically collide with.
     const RESERVED: &[&str] = &[
-        "type", "var", "let", "const", "fn", "struct", "return", "if", "else",
-        "for", "while", "loop", "switch", "case", "default", "break", "continue",
-        "true", "false", "bool", "i32", "u32", "f32", "f16", "array", "atomic",
-        "ptr", "sampler", "texture", "override", "enable", "discard", "vec2",
-        "vec3", "vec4", "mat2x2", "mat3x3", "mat4x4",
+        "type", "var", "let", "const", "fn", "struct", "return", "if", "else", "for", "while",
+        "loop", "switch", "case", "default", "break", "continue", "true", "false", "bool", "i32",
+        "u32", "f32", "f16", "array", "atomic", "ptr", "sampler", "texture", "override", "enable",
+        "discard", "vec2", "vec3", "vec4", "mat2x2", "mat3x3", "mat4x4",
         // WGSL reserved-for-future word a short param name realistically hits
         // (generate_instance_transforms has a `layout` Enum param). Add others
         // only when an atom actually collides — adding a word here changes the
@@ -209,7 +209,6 @@ pub(super) fn dim_forms(dim: TexDim) -> DimForms {
     }
 }
 
-
 // ===========================================================================
 // Buffer-domain standalone codegen: wrap a buffer atom's `wgsl_body` in the
 // storage-array iteration boilerplate (element structs synthesized from the
@@ -271,7 +270,6 @@ pub(super) fn buffer_element_type(
     structs.push((specs, name.clone()));
     name
 }
-
 
 // ===========================================================================
 // Fused multi-atom codegen (build step 3): chain a region of atom bodies into

@@ -21,9 +21,8 @@ use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 fn render_def(def: &EffectGraphDef) -> (Vec<u8>, u32, u32) {
     let json = serde_json::to_string(def).expect("def must serialize");
@@ -57,10 +56,17 @@ fn render_def(def: &EffectGraphDef) -> (Vec<u8>, u32, u32) {
             anim_progress: 0.0,
             trigger_count: 0,
         };
-        let mut enc = h.device.create_encoder("bug237-light-camera-commit-render-proof-enc");
+        let mut enc = h
+            .device
+            .create_encoder("bug237-light-camera-commit-render-proof-enc");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-            runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+            runtime.render(
+                &mut gpu,
+                &target.texture,
+                &ctx,
+                &manifold_core::params::ParamManifest::default(),
+            );
         }
         enc.commit_and_wait_completed();
     }
@@ -106,13 +112,31 @@ fn scene_probe_def() -> EffectGraphDef {
     // barely changes silhouette on a quarter-turn. Disable environment light
     // so the Sun mutation measures direct illumination without IBL masking it.
     let camera = def.nodes.iter_mut().find(|node| node.id == 1).unwrap();
-    camera.params.insert("distance".into(), SerializedParamValue::Float { value: 3.0 });
+    camera.params.insert(
+        "distance".into(),
+        SerializedParamValue::Float { value: 3.0 },
+    );
     let environment = def.nodes.iter_mut().find(|node| node.id == 3).unwrap();
-    environment.params.insert("intensity".into(), SerializedParamValue::Float { value: 0.0 });
-    let group = def.nodes.iter_mut().find(|node| node.id == 10).unwrap().group.as_mut().unwrap();
+    environment.params.insert(
+        "intensity".into(),
+        SerializedParamValue::Float { value: 0.0 },
+    );
+    let group = def
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == 10)
+        .unwrap()
+        .group
+        .as_mut()
+        .unwrap();
     let transform = group.nodes.iter_mut().find(|node| node.id == 13).unwrap();
-    transform.params.insert("scale_x".into(), SerializedParamValue::Float { value: 1.8 });
-    transform.params.insert("scale_z".into(), SerializedParamValue::Float { value: 0.65 });
+    transform
+        .params
+        .insert("scale_x".into(), SerializedParamValue::Float { value: 1.8 });
+    transform.params.insert(
+        "scale_z".into(),
+        SerializedParamValue::Float { value: 0.65 },
+    );
     def
 }
 
@@ -125,9 +149,16 @@ fn scene_probe_def() -> EffectGraphDef {
 fn sun_intensity_commit_visibly_changes_the_render() {
     let baseline = scene_probe_def();
     let mut bright = baseline.clone();
-    let light = bright.nodes.iter_mut().find(|n| n.id == 4).expect("Scene node 4 must be the Sun light");
+    let light = bright
+        .nodes
+        .iter_mut()
+        .find(|n| n.id == 4)
+        .expect("Scene node 4 must be the Sun light");
     assert_eq!(light.type_id, "node.light", "node 4 must be a light");
-    light.params.insert("intensity".to_string(), SerializedParamValue::Float { value: 8.0 });
+    light.params.insert(
+        "intensity".to_string(),
+        SerializedParamValue::Float { value: 8.0 },
+    );
 
     let (before, w, h) = render_def(&baseline);
     let (after, w2, h2) = render_def(&bright);
@@ -154,15 +185,24 @@ fn sun_intensity_commit_visibly_changes_the_render() {
 fn camera_orbit_commit_visibly_changes_the_framing() {
     let baseline = scene_probe_def();
     let mut orbited = baseline.clone();
-    let cam = orbited.nodes.iter_mut().find(|n| n.id == 1).expect("Scene node 1 must be the orbit camera");
-    assert_eq!(cam.type_id, "node.orbit_camera", "node 1 must be the orbit camera");
+    let cam = orbited
+        .nodes
+        .iter_mut()
+        .find(|n| n.id == 1)
+        .expect("Scene node 1 must be the orbit camera");
+    assert_eq!(
+        cam.type_id, "node.orbit_camera",
+        "node 1 must be the orbit camera"
+    );
     let base_orbit = match cam.params.get("orbit") {
         Some(SerializedParamValue::Float { value }) => *value,
         other => panic!("expected a Float orbit param, got {other:?}"),
     };
     cam.params.insert(
         "orbit".to_string(),
-        SerializedParamValue::Float { value: base_orbit + std::f32::consts::FRAC_PI_2 },
+        SerializedParamValue::Float {
+            value: base_orbit + std::f32::consts::FRAC_PI_2,
+        },
     );
 
     let (before, w, h) = render_def(&baseline);

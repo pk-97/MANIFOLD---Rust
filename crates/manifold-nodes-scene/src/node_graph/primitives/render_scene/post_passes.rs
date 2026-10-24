@@ -9,7 +9,10 @@ impl RenderScene {
     /// the method is one branch. Binds its own caster table and shadow
     /// maps (the ensure block guarantees them). Consumes the shaft-light
     /// table the RT block appended its emissive pseudo-lights to.
-    #[allow(clippy::too_many_arguments, reason = "BUG-trh7 stage 2 pass method: args are the evaluate() locals the inline block used — destructuring at call sites is the approved shape")]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "BUG-trh7 stage 2 pass method: args are the evaluate() locals the inline block used — destructuring at call sites is the approved shape"
+    )]
     pub(super) fn shafts_pass<'ctx, 'gpu>(
         &mut self,
         ctx: &mut EffectNodeContext<'ctx, 'gpu>,
@@ -20,12 +23,23 @@ impl RenderScene {
         shaft_light_count: u32,
         rt_ready: bool,
     ) {
-        let FramePrelude { cam, atmosphere, aspect, rt_enabled, wants_shafts_now, .. } = *pre;
-        let shadow_maps = self.shadow_maps.as_ref().map(|maps| &maps.texture)
+        let FramePrelude {
+            cam,
+            atmosphere,
+            aspect,
+            rt_enabled,
+            wants_shafts_now,
+            ..
+        } = *pre;
+        let shadow_maps = self
+            .shadow_maps
+            .as_ref()
+            .map(|maps| &maps.texture)
             .unwrap_or_else(|| self.dummy_depth_array.as_ref().expect("stubs ensured"));
         let light_buffer = &self.light_buffers[self.light_frame];
         let shadow_sampler = self.shadow_sampler.as_ref().expect("stubs ensured");
-        let rt_mask_tex = self.rt_sv_history[self.rt_history_ping].as_ref()
+        let rt_mask_tex = self.rt_sv_history[self.rt_history_ping]
+            .as_ref()
             .unwrap_or_else(|| self.dummy_mask_array.as_ref().expect("stubs ensured"));
 
         // depth-aware bilateral upsample + additive composite. Runs ONLY
@@ -39,17 +53,29 @@ impl RenderScene {
             let full_depth = depth_resolve_target.expect("ensured above: wants_shafts_now => Some");
             let half_depth = self.shaft_depth_half.as_ref().expect("ensured above");
             let inscatter = self.shaft_inscatter.as_ref().expect("ensured above");
-            let downsample_pipeline = self.shaft_downsample_pipeline.as_ref().expect("ensured above");
+            let downsample_pipeline = self
+                .shaft_downsample_pipeline
+                .as_ref()
+                .expect("ensured above");
             let march_pipeline = self.shaft_march_pipeline.as_ref().expect("ensured above");
-            let composite_pipeline = self.shaft_composite_pipeline.as_ref().expect("ensured above");
+            let composite_pipeline = self
+                .shaft_composite_pipeline
+                .as_ref()
+                .expect("ensured above");
 
             {
                 let gpu = ctx.gpu_encoder();
                 gpu.native_enc.dispatch_compute(
                     downsample_pipeline,
                     &[
-                        GpuBinding::Texture { binding: 0, texture: full_depth },
-                        GpuBinding::Texture { binding: 1, texture: half_depth },
+                        GpuBinding::Texture {
+                            binding: 0,
+                            texture: full_depth,
+                        },
+                        GpuBinding::Texture {
+                            binding: 1,
+                            texture: half_depth,
+                        },
                     ],
                     [half_w.div_ceil(16), half_h.div_ceil(16), 1],
                     "node.render_scene shaft downsample",
@@ -104,14 +130,39 @@ impl RenderScene {
                 gpu.native_enc.dispatch_compute(
                     march_pipeline,
                     &[
-                        GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&march_uniforms) },
-                        GpuBinding::Texture { binding: 1, texture: half_depth },
-                        GpuBinding::Bytes { binding: 2, data: shaft_light_bytes },
-                        GpuBinding::Buffer { binding: 3, buffer: light_buffer, offset: self.caster_offset },
-                        GpuBinding::Texture { binding: 4, texture: shadow_maps },
-                        GpuBinding::Sampler { binding: 8, sampler: shadow_sampler },
-                        GpuBinding::Texture { binding: 9, texture: inscatter },
-                        GpuBinding::Texture { binding: 10, texture: rt_mask_tex },
+                        GpuBinding::Bytes {
+                            binding: 0,
+                            data: bytemuck::bytes_of(&march_uniforms),
+                        },
+                        GpuBinding::Texture {
+                            binding: 1,
+                            texture: half_depth,
+                        },
+                        GpuBinding::Bytes {
+                            binding: 2,
+                            data: shaft_light_bytes,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 3,
+                            buffer: light_buffer,
+                            offset: self.caster_offset,
+                        },
+                        GpuBinding::Texture {
+                            binding: 4,
+                            texture: shadow_maps,
+                        },
+                        GpuBinding::Sampler {
+                            binding: 8,
+                            sampler: shadow_sampler,
+                        },
+                        GpuBinding::Texture {
+                            binding: 9,
+                            texture: inscatter,
+                        },
+                        GpuBinding::Texture {
+                            binding: 10,
+                            texture: rt_mask_tex,
+                        },
                     ],
                     [half_w.div_ceil(16), half_h.div_ceil(16), 1],
                     "node.render_scene shaft march",
@@ -130,16 +181,27 @@ impl RenderScene {
                         binding: 0,
                         data: bytemuck::bytes_of(&composite_uniforms),
                     },
-                    GpuBinding::Texture { binding: 1, texture: inscatter },
-                    GpuBinding::Texture { binding: 2, texture: half_depth },
-                    GpuBinding::Texture { binding: 3, texture: full_depth },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: inscatter,
+                    },
+                    GpuBinding::Texture {
+                        binding: 2,
+                        texture: half_depth,
+                    },
+                    GpuBinding::Texture {
+                        binding: 3,
+                        texture: full_depth,
+                    },
                 ],
-                manifold_gpu::DrawCount::Direct { vertices: 3, instances: 1 },
+                manifold_gpu::DrawCount::Direct {
+                    vertices: 3,
+                    instances: 1,
+                },
                 manifold_gpu::GpuLoadAction::Load,
                 "node.render_scene shaft composite",
             );
         }
-
     }
 
     /// BUG-trh7 stage 2, pass 10: the firefly clamp on the fully
@@ -157,7 +219,12 @@ impl RenderScene {
         rt_rendered_this_frame: bool,
         denoise_active: bool,
     ) {
-        let FramePrelude { width, height, rt_firefly_clamp_enabled, .. } = *pre;
+        let FramePrelude {
+            width,
+            height,
+            rt_firefly_clamp_enabled,
+            ..
+        } = *pre;
         // RT-Stage-3 P1 (BUG-mkgh): the firefly clamp runs on the fully
         // composited `resolve_target` (Pass A + transmissive Pass B + shafts)
         // and writes `target`, so the upscale/denoise tail below reads the
@@ -169,9 +236,8 @@ impl RenderScene {
         // unwired. `opaque_depth_snapshot` is ensured whenever `rt_enabled`,
         // so it is resident on every frame `rt_rendered_this_frame` can be
         // true.
-        let firefly_clamp_active = rt_rendered_this_frame
-            && rt_firefly_clamp_enabled
-            && !denoise_active;
+        let firefly_clamp_active =
+            rt_rendered_this_frame && rt_firefly_clamp_enabled && !denoise_active;
         if firefly_clamp_active {
             let tracer = self
                 .rt_tracer
@@ -213,9 +279,7 @@ impl RenderScene {
                 "node.render_scene RT firefly_clamp",
             );
         }
-
     }
-
 
     /// BUG-trh7 stage 2, pass 11: the MetalFX Temporal upscale tail —
     /// upscales the render-res scratch to native res with this frame's
@@ -234,8 +298,13 @@ impl RenderScene {
         velocity_resolve_target: Option<&manifold_gpu::GpuTexture>,
     ) -> bool {
         let FramePrelude {
-            reset_decision, upscale_just_resumed, temporal_upscale: _,
-            jitter_px, native_width, native_height, ..
+            reset_decision,
+            upscale_just_resumed,
+            temporal_upscale: _,
+            jitter_px,
+            native_width,
+            native_height,
+            ..
         } = *pre;
         // shafts) has now resolved into `target` — the render-res color
         // scratch when `temporal_upscale_active`. MetalFX Temporal upscales
@@ -284,7 +353,15 @@ impl RenderScene {
             // leaves `output` holding last frame's upscale — the copy below
             // then presents that stale frame (one-frame freeze), the same
             // degradation the denoiser's MTL4 skip path documents.
-            upscaler.upscale(gpu, target, depth_src, velocity_src, jitter_px.0, jitter_px.1, reset);
+            upscaler.upscale(
+                gpu,
+                target,
+                depth_src,
+                velocity_src,
+                jitter_px.0,
+                jitter_px.1,
+                reset,
+            );
             // BUG-om0v: MetalFX Temporal does not preserve the source's alpha
             // channel — it writes an opaque (or otherwise undefined) alpha into
             // `upscaler.output`, so blitting it straight into `native_color`
@@ -305,17 +382,30 @@ impl RenderScene {
                     "node.render_scene upscale_alpha_combine",
                 ));
             }
-            let combine_pipeline = self.upscale_alpha_combine_pipeline
+            let combine_pipeline = self
+                .upscale_alpha_combine_pipeline
                 .as_ref()
                 .expect("just created or prewarmed");
             let combine_sampler = gpu.device.linear_sampler();
             gpu.native_enc.dispatch_compute(
                 combine_pipeline,
                 &[
-                    GpuBinding::Texture { binding: 0, texture: &upscaler.output.texture },
-                    GpuBinding::Texture { binding: 1, texture: target },
-                    GpuBinding::Sampler { binding: 2, sampler: combine_sampler },
-                    GpuBinding::Texture { binding: 3, texture: native_color },
+                    GpuBinding::Texture {
+                        binding: 0,
+                        texture: &upscaler.output.texture,
+                    },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: target,
+                    },
+                    GpuBinding::Sampler {
+                        binding: 2,
+                        sampler: combine_sampler,
+                    },
+                    GpuBinding::Texture {
+                        binding: 3,
+                        texture: native_color,
+                    },
                 ],
                 [native_width.div_ceil(16), native_height.div_ceil(16), 1],
                 "node.render_scene upscale alpha combine",
@@ -331,7 +421,10 @@ impl RenderScene {
     /// || denoiser_gesture_active — the three sources, strobes do NOT
     /// reset). The MTL4-saturated fallback copy is unchanged. Returns
     /// false only for the BUG-317-class plan-missing abort.
-    #[allow(clippy::too_many_arguments, reason = "BUG-trh7 stage 2 pass method: args are the evaluate() locals the inline block used — destructuring at call sites is the approved shape")]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "BUG-trh7 stage 2 pass method: args are the evaluate() locals the inline block used — destructuring at call sites is the approved shape"
+    )]
     pub(super) fn denoise_tail<'ctx, 'gpu>(
         &mut self,
         ctx: &mut EffectNodeContext<'ctx, 'gpu>,
@@ -343,11 +436,18 @@ impl RenderScene {
         velocity_resolve_target: Option<&manifold_gpu::GpuTexture>,
     ) -> bool {
         let FramePrelude {
-            reset_decision, temporal_upscale, jitter_px,
-            native_width, native_height,
-            spec_hit_dist_out, normals_resolve_target, roughness_resolve_target,
-            diffuse_albedo_resolve_target, specular_albedo_resolve_target,
-            reactive_resolve_target, ..
+            reset_decision,
+            temporal_upscale,
+            jitter_px,
+            native_width,
+            native_height,
+            spec_hit_dist_out,
+            normals_resolve_target,
+            roughness_resolve_target,
+            diffuse_albedo_resolve_target,
+            specular_albedo_resolve_target,
+            reactive_resolve_target,
+            ..
         } = *pre;
         let native_color = ctx
             .outputs
@@ -367,9 +467,16 @@ impl RenderScene {
             // denoiser feeds in the plan's consumed set whenever
             // `denoise_feed` is on — same BUG-317 class guard as the
             // temporal path.
-            let (Some(depth_src), Some(velocity_src), Some(normal_src),
-                 Some(roughness_src), Some(diffuse_src), Some(specular_src),
-                 Some(hit_dist_src), Some(reactive_src)) = (
+            let (
+                Some(depth_src),
+                Some(velocity_src),
+                Some(normal_src),
+                Some(roughness_src),
+                Some(diffuse_src),
+                Some(specular_src),
+                Some(hit_dist_src),
+                Some(reactive_src),
+            ) = (
                 depth_resolve_target,
                 velocity_resolve_target,
                 normals_resolve_target,
@@ -378,7 +485,8 @@ impl RenderScene {
                 specular_albedo_resolve_target,
                 spec_hit_dist_out,
                 reactive_resolve_target,
-            ) else {
+            )
+            else {
                 if !self.denoiser_unavailable_logged {
                     self.denoiser_unavailable_logged = true;
                     log::error!(

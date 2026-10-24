@@ -1,8 +1,8 @@
 use crate::command::Command;
-use manifold_core::change::{ChangeSet, Part};
-use manifold_core::PresetTypeId;
-use manifold_core::LayerId;
 use manifold_core::LayerClipTrigger;
+use manifold_core::LayerId;
+use manifold_core::PresetTypeId;
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::session::SessionSlot;
@@ -21,12 +21,19 @@ const GROUP_SELECTION_MISSING: &str = "group selection contains a missing layer"
 
 fn validate_parent_in_layers(layers: &[Layer], layer: &Layer) -> Result<(), &'static str> {
     let Some(parent_id) = layer.parent_layer_id.as_ref() else {
-        return if layer.is_trigger() { Err(TRIGGER_PARENT_REQUIRED) } else { Ok(()) };
+        return if layer.is_trigger() {
+            Err(TRIGGER_PARENT_REQUIRED)
+        } else {
+            Ok(())
+        };
     };
     if parent_id == &layer.layer_id {
         return Err(LAYER_PARENT_SELF);
     }
-    let Some(parent) = layers.iter().find(|candidate| &candidate.layer_id == parent_id) else {
+    let Some(parent) = layers
+        .iter()
+        .find(|candidate| &candidate.layer_id == parent_id)
+    else {
         return Err(LAYER_PARENT_MISSING);
     };
     if !parent.layer_type.accepts_child(layer.layer_type) {
@@ -34,14 +41,22 @@ fn validate_parent_in_layers(layers: &[Layer], layer: &Layer) -> Result<(), &'st
     }
     let mut ancestor = Some(parent_id);
     for _ in 0..layers.len() {
-        let Some(id) = ancestor else { return Ok(()); };
+        let Some(id) = ancestor else {
+            return Ok(());
+        };
         if id == &layer.layer_id {
             return Err(LAYER_PARENT_CYCLE);
         }
-        ancestor = layers.iter().find(|candidate| &candidate.layer_id == id)
+        ancestor = layers
+            .iter()
+            .find(|candidate| &candidate.layer_id == id)
             .and_then(|candidate| candidate.parent_layer_id.as_ref());
     }
-    if ancestor.is_some() { Err(LAYER_PARENT_CYCLE) } else { Ok(()) }
+    if ancestor.is_some() {
+        Err(LAYER_PARENT_CYCLE)
+    } else {
+        Ok(())
+    }
 }
 
 /// Add a new layer to the timeline.
@@ -141,8 +156,7 @@ impl Command for AddLayerCommand {
                 // clip workflow plays the LED preset out of the box.
                 // `Layer::new_generator` hardcodes `LayerType::Generator` and
                 // `gen_params` has no public setter, so the type is flipped here.
-                let mut layer =
-                    Layer::new_generator(self.name.clone(), self.gen_type.clone(), 0);
+                let mut layer = Layer::new_generator(self.name.clone(), self.gen_type.clone(), 0);
                 layer.layer_type = LayerType::Dmx;
                 layer
             } else {
@@ -154,8 +168,7 @@ impl Command for AddLayerCommand {
             // so passing 0 here gave every added layer index-0's hue (the uniform
             // timeline colour). Seed from the current layer count so each new
             // layer steps to the next maximally-separated golden-ratio hue.
-            new_layer.layer_color =
-                Layer::generate_layer_color(project.timeline.layers.len());
+            new_layer.layer_color = Layer::generate_layer_color(project.timeline.layers.len());
             new_layer
         };
         self.layer = Some(layer.clone());
@@ -177,7 +190,9 @@ impl Command for AddLayerCommand {
         if !self.applied {
             return;
         }
-        if self.route_to_sole_send && let Some(layer) = &self.layer {
+        if self.route_to_sole_send
+            && let Some(layer) = &self.layer
+        {
             project.audio_setup.unbind_layer(&layer.layer_id);
         }
         // Find the layer we inserted by ID
@@ -230,7 +245,15 @@ impl ImportModelLayerCommand {
         insert_index: usize,
         parent_group_id: Option<LayerId>,
     ) -> Self {
-        Self { layer: None, name, doc, values, insert_index, parent_group_id, rejection: None }
+        Self {
+            layer: None,
+            name,
+            doc,
+            values,
+            insert_index,
+            parent_group_id,
+            rejection: None,
+        }
     }
 
     /// The `LayerId` of the inserted layer, available after [`Command::execute`]
@@ -243,14 +266,20 @@ impl ImportModelLayerCommand {
 }
 
 impl Command for ImportModelLayerCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::WHOLE_LAYERS
+    }
     fn do_execute(&mut self, project: &mut Project) {
         let layer = if let Some(existing) = self.layer.take() {
             existing
         } else {
             // `new_generator` (not `new`) stamps `kind: Generator` so the
             // instance serializes through the generator path.
-            let mut new_layer = Layer::new_generator(self.name.clone(), PresetTypeId::from_string("Scene".to_owned()), 0);
+            let mut new_layer = Layer::new_generator(
+                self.name.clone(),
+                PresetTypeId::from_string("Scene".to_owned()),
+                0,
+            );
             new_layer.parent_layer_id = self.parent_group_id.clone();
             new_layer.layer_color = Layer::generate_layer_color(project.timeline.layers.len());
             let Some(instance) = new_layer.gen_params_mut() else {
@@ -339,7 +368,9 @@ impl DeleteLayerCommand {
 }
 
 impl Command for DeleteLayerCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS.union(ChangeSet::of(&[Part::Session])) }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::WHOLE_LAYERS.union(ChangeSet::of(&[Part::Session]))
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(idx) = project.timeline.find_layer_index_by_id(&self.layer_id) {
             self.deleted_at_index = idx;
@@ -359,8 +390,7 @@ impl Command for DeleteLayerCommand {
                 .collect();
             for trigger_index in trigger_indices.into_iter().rev() {
                 let trigger = project.timeline.layers.remove(trigger_index);
-                self.removed_trigger_children
-                    .push((trigger_index, trigger));
+                self.removed_trigger_children.push((trigger_index, trigger));
             }
             self.removed_trigger_children
                 .sort_by_key(|(index, _)| *index);
@@ -373,9 +403,7 @@ impl Command for DeleteLayerCommand {
                     .detach_child_ids
                     .as_ref()
                     .is_none_or(|ids| ids.contains(&layer.layer_id));
-                if should_detach
-                    && layer.parent_layer_id.as_ref() == Some(&self.layer_id)
-                {
+                if should_detach && layer.parent_layer_id.as_ref() == Some(&self.layer_id) {
                     self.orphaned_children
                         .push((layer.layer_id.clone(), layer.parent_layer_id.clone()));
                     layer.parent_layer_id = None;
@@ -445,11 +473,10 @@ impl Command for DeleteLayerCommand {
         }
 
         debug_assert!(
-            project
-                .session
-                .slots
-                .iter()
-                .all(|s| project.timeline.find_layer_index_by_id(&s.layer_id).is_some()),
+            project.session.slots.iter().all(|s| project
+                .timeline
+                .find_layer_index_by_id(&s.layer_id)
+                .is_some()),
             "session slot references a LayerId that no longer resolves"
         );
     }
@@ -487,7 +514,10 @@ impl ReorderLayerCommand {
         }
     }
 
-    fn validate_membership(current_order: &[Layer], new_order: &[LayerId]) -> Result<(), &'static str> {
+    fn validate_membership(
+        current_order: &[Layer],
+        new_order: &[LayerId],
+    ) -> Result<(), &'static str> {
         let current_ids: HashSet<_> = current_order.iter().map(|layer| &layer.layer_id).collect();
         let new_ids: HashSet<_> = new_order.iter().collect();
         if current_ids.len() != current_order.len()
@@ -501,7 +531,9 @@ impl ReorderLayerCommand {
 
     fn validate_changed_parents(layers: &[Layer], original: &[Layer]) -> Result<(), &'static str> {
         for layer in layers.iter().filter(|layer| !layer.is_trigger()) {
-            let old_parent = original.iter().find(|old| old.layer_id == layer.layer_id)
+            let old_parent = original
+                .iter()
+                .find(|old| old.layer_id == layer.layer_id)
                 .and_then(|old| old.parent_layer_id.as_ref());
             if old_parent == layer.parent_layer_id.as_ref() {
                 continue;
@@ -536,7 +568,9 @@ impl ReorderLayerCommand {
 }
 
 impl Command for ReorderLayerCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::WHOLE_LAYERS
+    }
     fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
@@ -544,7 +578,9 @@ impl Command for ReorderLayerCommand {
             self.rejection = Some(reason);
             return;
         }
-        let Some(new_order) = Self::resolve_live_order(project, &self.new_order, &self.new_parent_ids) else {
+        let Some(new_order) =
+            Self::resolve_live_order(project, &self.new_order, &self.new_parent_ids)
+        else {
             self.rejection = Some(LAYER_REORDER_MEMBERSHIP);
             return;
         };
@@ -565,7 +601,9 @@ impl Command for ReorderLayerCommand {
             self.rejection = Some(reason);
             return;
         }
-        let Some(old_order) = Self::resolve_live_order(project, &self.old_order, &self.old_parent_ids) else {
+        let Some(old_order) =
+            Self::resolve_live_order(project, &self.old_order, &self.old_parent_ids)
+        else {
             self.rejection = Some(LAYER_REORDER_MEMBERSHIP);
             return;
         };
@@ -616,13 +654,19 @@ impl GroupLayersCommand {
 }
 
 impl Command for GroupLayersCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::WHOLE_LAYERS
+    }
     fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         if self.selected_layer_ids.is_empty()
             || self.selected_layer_ids.iter().any(|id| {
-                !project.timeline.layers.iter().any(|layer| &layer.layer_id == id)
+                !project
+                    .timeline
+                    .layers
+                    .iter()
+                    .any(|layer| &layer.layer_id == id)
             })
         {
             self.rejection = Some(if self.selected_layer_ids.is_empty() {
@@ -641,7 +685,9 @@ impl Command for GroupLayersCommand {
             .filter(|layer| {
                 let mut parent = layer.parent_layer_id.as_ref();
                 for _ in 0..project.timeline.layers.len() {
-                    let Some(parent_id) = parent else { break; };
+                    let Some(parent_id) = parent else {
+                        break;
+                    };
                     if selected.contains(parent_id) {
                         return false;
                     }
@@ -737,7 +783,9 @@ impl RenameLayerCommand {
 }
 
 impl Command for RenameLayerCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Layers]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Layers])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.name = self.new_name.clone();
@@ -780,7 +828,9 @@ impl UngroupLayersCommand {
 }
 
 impl Command for UngroupLayersCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS.union(ChangeSet::of(&[Part::Session])) }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::WHOLE_LAYERS.union(ChangeSet::of(&[Part::Session]))
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(group) = &self.group_layer {
             if self.delete_command.is_none() {
@@ -800,7 +850,9 @@ impl Command for UngroupLayersCommand {
             delete.undo(project);
         }
         // Restore original order (includes group and all owned trigger lanes).
-        project.timeline.replace_layer_order(self.original_order.clone());
+        project
+            .timeline
+            .replace_layer_order(self.original_order.clone());
     }
 
     fn description(&self) -> &str {
@@ -828,7 +880,9 @@ impl DuplicateLayersCommand {
 }
 
 impl Command for DuplicateLayersCommand {
-    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS }
+    fn touches(&self) -> ChangeSet {
+        crate::commands::WHOLE_LAYERS
+    }
     fn do_execute(&mut self, project: &mut Project) {
         for (i, layer) in self.new_layers.iter().cloned().enumerate() {
             project
@@ -862,7 +916,11 @@ pub struct SetLayerAudioGainCommand {
 
 impl SetLayerAudioGainCommand {
     pub fn new(layer_id: LayerId, old_db: f32, new_db: f32) -> Self {
-        Self { layer_id, old_db, new_db }
+        Self {
+            layer_id,
+            old_db,
+            new_db,
+        }
     }
 }
 
@@ -910,12 +968,18 @@ pub struct SetLayerAnalysisOnlyCommand {
 
 impl SetLayerAnalysisOnlyCommand {
     pub fn new(layer_id: LayerId, new_value: bool) -> Self {
-        Self { layer_id, old_value: false, new_value }
+        Self {
+            layer_id,
+            old_value: false,
+            new_value,
+        }
     }
 }
 
 impl Command for SetLayerAnalysisOnlyCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Layers]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Layers])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some(layer) = project
             .timeline
@@ -971,12 +1035,18 @@ pub struct AddLayerClipTriggerCommand {
 
 impl AddLayerClipTriggerCommand {
     pub fn new(layer_id: LayerId, trigger: LayerClipTrigger) -> Self {
-        Self { layer_id, trigger, len_before: 0 }
+        Self {
+            layer_id,
+            trigger,
+            len_before: 0,
+        }
     }
 }
 
 impl Command for AddLayerClipTriggerCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects, Part::Shapes])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             self.len_before = layer.clip_triggers.len();
@@ -1006,12 +1076,18 @@ pub struct RemoveLayerClipTriggerCommand {
 
 impl RemoveLayerClipTriggerCommand {
     pub fn new(layer_id: LayerId, index: usize) -> Self {
-        Self { layer_id, index, removed: None }
+        Self {
+            layer_id,
+            index,
+            removed: None,
+        }
     }
 }
 
 impl Command for RemoveLayerClipTriggerCommand {
-    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Effects, Part::Shapes])
+    }
     fn do_execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id)
             && self.index < layer.clip_triggers.len()
@@ -1046,8 +1122,18 @@ pub struct SetLayerClipTriggerCommand {
 }
 
 impl SetLayerClipTriggerCommand {
-    pub fn new(layer_id: LayerId, index: usize, old: LayerClipTrigger, new: LayerClipTrigger) -> Self {
-        Self { layer_id, index, old, new }
+    pub fn new(
+        layer_id: LayerId,
+        index: usize,
+        old: LayerClipTrigger,
+        new: LayerClipTrigger,
+    ) -> Self {
+        Self {
+            layer_id,
+            index,
+            old,
+            new,
+        }
     }
 }
 
@@ -1211,15 +1297,33 @@ mod tests {
     fn audio_layer_routing(sends: usize) -> (Project, Option<manifold_core::AudioSendId>) {
         let mut project = Project::default();
         for i in 0..sends {
-            project.audio_setup.sends.push(manifold_core::audio_setup::AudioSend::new(format!("S{i}")));
+            project
+                .audio_setup
+                .sends
+                .push(manifold_core::audio_setup::AudioSend::new(format!("S{i}")));
         }
-        let mut cmd = AddLayerCommand::new("Audio".into(), LayerType::Audio, PresetTypeId::NONE, 0, None)
-            .routing_to_sole_send();
+        let mut cmd = AddLayerCommand::new(
+            "Audio".into(),
+            LayerType::Audio,
+            PresetTypeId::NONE,
+            0,
+            None,
+        )
+        .routing_to_sole_send();
         cmd.execute(&mut project);
         let id = project.timeline.layers[0].layer_id.clone();
-        let routed = project.audio_setup.send_for_layer(&id).map(|s| s.id.clone());
+        let routed = project
+            .audio_setup
+            .send_for_layer(&id)
+            .map(|s| s.id.clone());
         cmd.undo(&mut project);
-        assert!(project.audio_setup.sends.iter().all(|s| s.source.layers.is_empty()));
+        assert!(
+            project
+                .audio_setup
+                .sends
+                .iter()
+                .all(|s| s.source.layers.is_empty())
+        );
         (project, routed)
     }
 
@@ -1360,11 +1464,19 @@ mod tests {
 
         cmd.undo(&mut project);
 
-        let restored_ids: Vec<LayerId> =
-            project.timeline.layers.iter().map(|l| l.layer_id.clone()).collect();
+        let restored_ids: Vec<LayerId> = project
+            .timeline
+            .layers
+            .iter()
+            .map(|l| l.layer_id.clone())
+            .collect();
         assert_eq!(restored_ids, original_ids, "undo must restore exact order");
         assert!(
-            project.timeline.layers.iter().all(|l| l.parent_layer_id.is_none()),
+            project
+                .timeline
+                .layers
+                .iter()
+                .all(|l| l.parent_layer_id.is_none()),
             "undo must clear all reparenting"
         );
     }

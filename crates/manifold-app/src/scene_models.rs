@@ -11,10 +11,10 @@
 //! it looks only when a layer or an instance's structure moved.
 
 use ahash::{AHashMap, AHashSet};
+use manifold_core::LayerId;
 use manifold_core::change::{ChangeSet, Part, PartStamps};
 use manifold_core::project::Project;
 use manifold_core::scene_doc::ModelFacts;
-use manifold_core::LayerId;
 
 /// What moves when a document can come to name a new file.
 const NAMES_MOVE: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Shapes]);
@@ -85,13 +85,22 @@ impl ModelStore {
 /// layer's document even before it names the file, so an import about to
 /// add it compiles once.
 /// Both threads run it, as one project write.
-pub(crate) fn attach(project: &mut Project, layer: Option<&LayerId>, path: &str, facts: &ModelFacts) {
+pub(crate) fn attach(
+    project: &mut Project,
+    layer: Option<&LayerId>,
+    path: &str,
+    facts: &ModelFacts,
+) {
     for host in &mut project.timeline.layers {
         let target = layer == Some(&host.layer_id);
         let Some(inst) = host.gen_params_mut() else {
             continue;
         };
-        let Some(doc) = inst.scene.as_ref().filter(|doc| doc.models.get(path) != Some(facts)) else {
+        let Some(doc) = inst
+            .scene
+            .as_ref()
+            .filter(|doc| doc.models.get(path) != Some(facts))
+        else {
             continue;
         };
         let mut names = false;
@@ -105,21 +114,33 @@ pub(crate) fn attach(project: &mut Project, layer: Option<&LayerId>, path: &str,
             // Nothing reads the file yet: no recompile.
             inst.scene = Some(doc);
         } else if let Err(error) = inst.install_scene_document(doc) {
-            log::warn!("[scene] {path}: its layer did not recompile with the file's facts: {error}");
+            log::warn!(
+                "[scene] {path}: its layer did not recompile with the file's facts: {error}"
+            );
         }
     }
 }
 
 /// Read each file's facts on a worker thread, one event per file.
-pub(crate) fn read_on_worker(paths: Vec<String>, tx: crossbeam_channel::Sender<crate::import_worker::ImportProgress>) {
-    let spawned = std::thread::Builder::new().name("manifold-model-facts".into()).spawn(move || {
-        for path in paths {
-            let read = manifold_nodes_scene::node_graph::gltf_import::read_file_facts(std::path::Path::new(&path));
-            if tx.send(crate::import_worker::ImportProgress::Facts { path, read }).is_err() {
-                return;
+pub(crate) fn read_on_worker(
+    paths: Vec<String>,
+    tx: crossbeam_channel::Sender<crate::import_worker::ImportProgress>,
+) {
+    let spawned = std::thread::Builder::new()
+        .name("manifold-model-facts".into())
+        .spawn(move || {
+            for path in paths {
+                let read = manifold_nodes_scene::node_graph::gltf_import::read_file_facts(
+                    std::path::Path::new(&path),
+                );
+                if tx
+                    .send(crate::import_worker::ImportProgress::Facts { path, read })
+                    .is_err()
+                {
+                    return;
+                }
             }
-        }
-    });
+        });
     if let Err(error) = spawned {
         log::warn!("[scene] could not start the model facts reader: {error}");
     }
@@ -128,25 +149,45 @@ pub(crate) fn read_on_worker(paths: Vec<String>, tx: crossbeam_channel::Sender<c
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::PresetTypeId;
     use manifold_core::scene_doc::{Item, ItemFields, ItemId, MeshPrimitives, ObjectFields, Shape};
     use manifold_core::types::LayerType;
-    use manifold_core::PresetTypeId;
 
     /// A scene layer whose document draws `file`, without its facts.
     fn naming(file: &str) -> (Project, LayerId) {
         let mut project = Project::default();
-        let index = project.timeline.add_layer("Scene", LayerType::Generator, PresetTypeId::SCENE);
+        let index = project
+            .timeline
+            .add_layer("Scene", LayerType::Generator, PresetTypeId::SCENE);
         let layer = project.timeline.layers[index].layer_id.clone();
-        let inst = project.timeline.layers[index].gen_params_mut().expect("a scene layer");
+        let inst = project.timeline.layers[index]
+            .gen_params_mut()
+            .expect("a scene layer");
         let mut doc = inst.scene.clone().expect("a scene document");
-        let shape = Shape::Mesh { file: file.into(), node_path: "part".into(), vertex_count: 3, primitives: MeshPrimitives::All };
-        doc.items.push(Item::new(ItemId::new("part"), "Part", ItemFields::Object(ObjectFields { shape, ..ObjectFields::default() })));
-        inst.install_scene_document(doc).expect("the scene compiles");
+        let shape = Shape::Mesh {
+            file: file.into(),
+            node_path: "part".into(),
+            vertex_count: 3,
+            primitives: MeshPrimitives::All,
+        };
+        doc.items.push(Item::new(
+            ItemId::new("part"),
+            "Part",
+            ItemFields::Object(ObjectFields {
+                shape,
+                ..ObjectFields::default()
+            }),
+        ));
+        inst.install_scene_document(doc)
+            .expect("the scene compiles");
         (project, layer)
     }
 
     fn doc_has(project: &Project, file: &str) -> bool {
-        project.timeline.layers[0].gen_params().and_then(|inst| inst.scene.as_ref()).is_some_and(|doc| doc.models.contains(file))
+        project.timeline.layers[0]
+            .gen_params()
+            .and_then(|inst| inst.scene.as_ref())
+            .is_some_and(|doc| doc.models.contains(file))
     }
 
     /// A file a document names without facts is read once; once read, every
@@ -160,7 +201,10 @@ mod tests {
         assert_eq!(sweep.read, ["a.glb"]);
         assert!(store.sweep(&project, &stamps).is_none(), "nothing moved");
         stamps.bump(ChangeSet::ALL);
-        assert!(store.sweep(&project, &stamps).is_none(), "a file is asked for once");
+        assert!(
+            store.sweep(&project, &stamps).is_none(),
+            "a file is asked for once"
+        );
 
         let facts = ModelFacts::new(());
         store.arrived("a.glb".into(), facts.clone());
@@ -173,7 +217,10 @@ mod tests {
         // A re-import reads the file again, and that read replaces the old.
         let fresh = ModelFacts::new(());
         attach(&mut project, None, "a.glb", &fresh);
-        let doc = project.timeline.layers[0].gen_params().and_then(|inst| inst.scene.as_ref()).expect("a scene");
+        let doc = project.timeline.layers[0]
+            .gen_params()
+            .and_then(|inst| inst.scene.as_ref())
+            .expect("a scene");
         assert_eq!(doc.models.get("a.glb"), Some(&fresh), "the fresh read wins");
     }
 
@@ -185,6 +232,9 @@ mod tests {
         attach(&mut project, Some(&layer), "b.glb", &ModelFacts::new(()));
         assert!(doc_has(&project, "b.glb"));
         attach(&mut project, None, "c.glb", &ModelFacts::new(()));
-        assert!(!doc_has(&project, "c.glb"), "a document that names no such file takes nothing");
+        assert!(
+            !doc_has(&project, "c.glb"),
+            "a document that names no such file takes nothing"
+        );
     }
 }

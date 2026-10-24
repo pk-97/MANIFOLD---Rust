@@ -2,10 +2,10 @@
 //! `SegmentShape`) plus the shared per-instance automation prune/take
 //! helpers and `RemovedAutomation`. Extracted from effects.rs (P2-E, D4).
 
-use serde::{Deserialize, Serialize};
-use crate::units::Beats;
 use super::ParamId;
 use super::{ParamEnvelope, ParameterDriver};
+use crate::units::Beats;
+use serde::{Deserialize, Serialize};
 
 // ─── Automation lanes ───
 //
@@ -62,7 +62,11 @@ pub enum SegmentShape {
     /// linear. Values outside `-1..1` are clamped at evaluation time.
     Curved(f32),
     /// A power curve clipped to a subrange of its original segment.
-    CurvedRange { bend: f32, start: f32, end: f32 },
+    CurvedRange {
+        bend: f32,
+        start: f32,
+        end: f32,
+    },
 }
 
 impl SegmentShape {
@@ -76,7 +80,11 @@ impl SegmentShape {
                 let lo = segment_bend(start, bend);
                 let hi = segment_bend(end, bend);
                 let denom = hi - lo;
-                if denom.abs() <= f32::EPSILON { t } else { (segment_bend(start + t * (end - start), bend) - lo) / denom }
+                if denom.abs() <= f32::EPSILON {
+                    t
+                } else {
+                    (segment_bend(start + t * (end - start), bend) - lo) / denom
+                }
             }
         }
     }
@@ -85,8 +93,14 @@ impl SegmentShape {
         match self {
             Self::Linear | Self::Hold => self,
             Self::Curved(bend) => Self::CurvedRange { bend, start, end },
-            Self::CurvedRange { bend, start: a, end: b } => Self::CurvedRange {
-                bend, start: a + start * (b - a), end: a + end * (b - a)
+            Self::CurvedRange {
+                bend,
+                start: a,
+                end: b,
+            } => Self::CurvedRange {
+                bend,
+                start: a + start * (b - a),
+                end: a + end * (b - a),
             },
         }
     }
@@ -145,11 +159,17 @@ impl AutomationLane {
 /// The base `param`'s automation lane gives it at `beat`, when that lane
 /// drives it now ([`crate::params::Param::automated`]); None otherwise.
 /// Simulations ticking between frames read it at their own sample times.
-pub fn automated_base(param: &crate::params::Param, lanes: &[AutomationLane], beat: Beats) -> Option<f32> {
+pub fn automated_base(
+    param: &crate::params::Param,
+    lanes: &[AutomationLane],
+    beat: Beats,
+) -> Option<f32> {
     if !param.automated {
         return None;
     }
-    let lane = lanes.iter().find(|lane| lane.enabled && lane.param_id.as_ref() == param.id())?;
+    let lane = lanes
+        .iter()
+        .find(|lane| lane.enabled && lane.param_id.as_ref() == param.id())?;
     Some(param.driven_value(lane.value_at(beat)))
 }
 
@@ -228,8 +248,8 @@ pub struct RemovedAutomation {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::test_support::*;
+    use super::*;
     use crate::units::Beats;
 
     #[test]
@@ -329,7 +349,11 @@ mod tests {
         };
         assert_eq!(lane.value_at(Beats(0.0)), 0.0);
         assert_eq!(lane.value_at(Beats(3.9)), 0.0, "holds through the segment");
-        assert_eq!(lane.value_at(Beats(4.0)), 1.0, "steps exactly at the next point");
+        assert_eq!(
+            lane.value_at(Beats(4.0)),
+            1.0,
+            "steps exactly at the next point"
+        );
         assert_eq!(lane.value_at(Beats(7.9)), 1.0);
     }
 
@@ -360,7 +384,10 @@ mod tests {
         let mid_convex = convex.value_at(Beats(2.0));
         let mid_concave = concave.value_at(Beats(2.0));
         assert!(mid_convex < mid_linear, "convex bend lags at the midpoint");
-        assert!(mid_concave > mid_linear, "concave bend leads at the midpoint");
+        assert!(
+            mid_concave > mid_linear,
+            "concave bend leads at the midpoint"
+        );
     }
 
     #[test]
@@ -413,5 +440,4 @@ mod tests {
         let decoded: SegmentShape = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, nested);
     }
-
 }

@@ -11,7 +11,6 @@ use crate::node::Color32;
 // (`manifold_nodes::clip_draw`). Region highlight and the insert cursor are
 // painted with `fill_rect` from `panels/viewport/render.rs`.
 
-
 /// Scale a logical pixel value to texture pixels, minimum 1.
 /// Unity: `private static int S(int logicalPx, float renderScale)
 ///   => Mathf.Max(1, Mathf.RoundToInt(logicalPx * renderScale));`
@@ -110,7 +109,6 @@ pub fn draw_border(
         color,
     );
 }
-
 
 /// Get the background color for a clip based on its visual state.
 /// Uses the exact layer color. Selected/hovered lighten, locked dims.

@@ -16,11 +16,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
-use manifold_node_engine::particles::Particle;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::Particle;
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{standalone_pipeline, active_elements};
+use manifold_node_engine::primitives::standalone_pipeline::{active_elements, standalone_pipeline};
 
 /// Generated-codegen uniform layout: the `active_count` param (Int → i32) then
 /// the codegen-injected `dispatch_count`, padded to 16 bytes.
@@ -91,7 +91,10 @@ impl Primitive for SampleTexture3DAtParticles {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let active_count = ctx.scalar_or_param("active_count", 100_000.0).round().max(0.0) as u32;
+        let active_count = ctx
+            .scalar_or_param("active_count", 100_000.0)
+            .round()
+            .max(0.0) as u32;
 
         let Some(particles) = ctx.inputs.array("particles") else {
             return;
@@ -152,4 +155,3 @@ impl Primitive for SampleTexture3DAtParticles {
         );
     }
 }
-

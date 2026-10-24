@@ -11,7 +11,9 @@ pub enum ViewCopyCamera {
     Free,
     /// A Look At camera; `tracked` is the world origin of the item it aims
     /// at (zero without one), which its Target X/Y/Z offset from.
-    LookAt { tracked: [f32; 3] },
+    LookAt {
+        tracked: [f32; 3],
+    },
 }
 
 /// `node.orbit_camera`'s pose params (`camera_orbit.rs`).
@@ -127,7 +129,12 @@ mod tests {
         for orbit in [-3.0, -1.2, 0.0, 0.7, 2.5, 3.1] {
             for tilt in [-1.4, -0.5, 0.0, 0.3, 1.2] {
                 for (distance, look_y) in [(0.5, 0.0), (4.0, 1.5), (40.0, -3.0)] {
-                    let p = OrbitParams { orbit, tilt, distance, look_y };
+                    let p = OrbitParams {
+                        orbit,
+                        tilt,
+                        distance,
+                        look_y,
+                    };
                     let cam = orbit_eye(p);
                     assert_close(orbit_from_view(cam.pos, cam.fwd, 99.0), p);
                 }
@@ -144,17 +151,33 @@ mod tests {
 
     #[test]
     fn orbit_copy_reproduces_the_viewport_view() {
-        let mut view = ViewportCamera { target: [0.0, 1.0, 0.0], ..Default::default() };
+        let mut view = ViewportCamera {
+            target: [0.0, 1.0, 0.0],
+            ..Default::default()
+        };
         view.orbit(120.0, -40.0, 0.006);
         let writes = camera_writes_from_view(ViewCopyCamera::Orbit, &view, 0.0);
         let get = |name: &str| writes.iter().find(|(p, _)| *p == name).unwrap().1;
         let copied = Camera::orbit_perspective(
-            get("orbit"), get("tilt"), get("distance"), get("fov_y"), get("look_y"), get("roll"), 0.05, 200.0,
+            get("orbit"),
+            get("tilt"),
+            get("distance"),
+            get("fov_y"),
+            get("look_y"),
+            get("roll"),
+            0.05,
+            200.0,
         );
         let want = view.to_camera();
         for axis in 0..3 {
-            assert!((copied.pos[axis] - want.pos[axis]).abs() < 1e-4, "pos {axis}");
-            assert!((copied.fwd[axis] - want.fwd[axis]).abs() < 1e-4, "fwd {axis}");
+            assert!(
+                (copied.pos[axis] - want.pos[axis]).abs() < 1e-4,
+                "pos {axis}"
+            );
+            assert!(
+                (copied.fwd[axis] - want.fwd[axis]).abs() < 1e-4,
+                "fwd {axis}"
+            );
             assert!((copied.up[axis] - want.up[axis]).abs() < 1e-4, "up {axis}");
         }
         assert_eq!(get("fov_y"), view.fov_y);
@@ -162,7 +185,10 @@ mod tests {
 
     #[test]
     fn free_copy_is_exact() {
-        let mut view = ViewportCamera { target: [1.5, -0.25, 3.0], ..Default::default() };
+        let mut view = ViewportCamera {
+            target: [1.5, -0.25, 3.0],
+            ..Default::default()
+        };
         view.orbit(-75.0, 30.0, 0.006);
         view.dolly(1.0, 0.08);
         let writes = camera_writes_from_view(ViewCopyCamera::Free, &view, 0.0);
@@ -181,8 +207,13 @@ mod tests {
         );
         let get = |name: &str| writes.iter().find(|(p, _)| *p == name).unwrap().1;
         let copied = Camera::from_pos_euler(
-            [get("pos_x"), get("pos_y"), get("pos_z")], get("yaw"), get("pitch"), get("roll"), get("fov_y"),
-            view.near, view.far,
+            [get("pos_x"), get("pos_y"), get("pos_z")],
+            get("yaw"),
+            get("pitch"),
+            get("roll"),
+            get("fov_y"),
+            view.near,
+            view.far,
         );
         assert_eq!(copied.pos, view.to_camera().pos);
         assert_eq!(copied.fwd, view.to_camera().fwd);
@@ -190,10 +221,15 @@ mod tests {
 
     #[test]
     fn free_copy_wraps_a_wound_up_yaw_to_the_same_direction() {
-        let view = ViewportCamera { yaw: 0.6 + 3.0 * std::f32::consts::TAU, ..Default::default() };
+        let view = ViewportCamera {
+            yaw: 0.6 + 3.0 * std::f32::consts::TAU,
+            ..Default::default()
+        };
         let writes = camera_writes_from_view(ViewCopyCamera::Free, &view, 0.0);
         let yaw = writes.iter().find(|(p, _)| *p == "yaw").unwrap().1;
         assert!(yaw.abs() <= std::f32::consts::PI);
-        assert!((yaw.sin() - view.yaw.sin()).abs() < 1e-4 && (yaw.cos() - view.yaw.cos()).abs() < 1e-4);
+        assert!(
+            (yaw.sin() - view.yaw.sin()).abs() < 1e-4 && (yaw.cos() - view.yaw.cos()).abs() < 1e-4
+        );
     }
 }

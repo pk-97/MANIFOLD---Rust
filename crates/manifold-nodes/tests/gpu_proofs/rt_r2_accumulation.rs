@@ -42,11 +42,10 @@ use half::f16;
 use manifold_core::params::ParamManifest;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::scene::camera::Camera;
 
 const ORBIT: f32 = 0.7;
 const TILT: f32 = 0.95;
@@ -235,12 +234,7 @@ fn render_sequence(
         let mut enc = h.device.create_encoder("rt-r2-accum-gate-warmup");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-            runtime.render(
-                &mut gpu,
-                &target.texture,
-                &ctx,
-                &ParamManifest::default(),
-            );
+            runtime.render(&mut gpu, &target.texture, &ctx, &ParamManifest::default());
         }
         enc.commit_and_wait_completed();
     }
@@ -266,12 +260,7 @@ fn render_sequence(
         let mut enc = h.device.create_encoder("rt-r2-accum-gate-baseline");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-            runtime.render(
-                &mut gpu,
-                &target.texture,
-                &ctx,
-                &ParamManifest::default(),
-            );
+            runtime.render(&mut gpu, &target.texture, &ctx, &ParamManifest::default());
         }
         enc.commit_and_wait_completed();
     }
@@ -301,12 +290,7 @@ fn render_sequence(
         let mut enc = h.device.create_encoder("rt-r2-accum-gate-step");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-            runtime.render(
-                &mut gpu,
-                &target.texture,
-                &ctx,
-                &ParamManifest::default(),
-            );
+            runtime.render(&mut gpu, &target.texture, &ctx, &ParamManifest::default());
         }
         enc.commit_and_wait_completed();
     }
@@ -334,7 +318,10 @@ fn region_luma(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> f
             let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
             let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
             let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-            assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+            assert!(
+                r.is_finite() && g.is_finite() && b.is_finite(),
+                "non-finite pixel"
+            );
             sum += (0.2126 * r + 0.7152 * g + 0.0722 * b) as f64;
             n += 1;
         }
@@ -410,9 +397,7 @@ fn specular_history_blends_without_cut_and_resets_on_cut() {
     eprintln!("  B={b:.6}  A_nc={a_nc:.6}  A_c={a_c:.6}");
     eprintln!("  a_nc/B={ratio_nc:.6}  a_c/B={ratio_c:.6}");
     eprintln!("  neighbor={neighbor:.6}  B/neighbor={:.4}", b / neighbor);
-    eprintln!(
-        "  mirror_pixel=({px:.0},{py:.0})  w={w} h={hh}"
-    );
+    eprintln!("  mirror_pixel=({px:.0},{py:.0})  w={w} h={hh}");
 
     // Sanity: emitter reflection is visible over the background.
     assert!(

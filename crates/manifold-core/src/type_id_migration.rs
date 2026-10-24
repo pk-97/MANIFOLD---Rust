@@ -131,7 +131,10 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
     ("node.heightmap_to_normal", "node.surface_bumps"),
     // --- VOCAB P2 7/8: Particles (2D + 3D) (docs/NODE_VOCABULARY_AUDIT.md section 4) ---
     ("node.apply_radial_burst_to_particles", "node.add_burst"),
-    ("node.apply_radial_burst_3d_to_particles", "node.add_burst_3d"),
+    (
+        "node.apply_radial_burst_3d_to_particles",
+        "node.add_burst_3d",
+    ),
     ("node.array_diffuse_particles", "node.spread_out"),
     ("node.diffuse_force_3d_at_particles", "node.spread_out_3d"),
     ("node.euler_step_particles", "node.move_particles"),
@@ -140,9 +143,15 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
     ("node.seed_particles_from_texture", "node.spawn_from_image"),
     ("node.scatter_particles", "node.draw_particles"),
     ("node.scatter_particles_3d", "node.draw_particles_3d"),
-    ("node.scatter_particles_camera", "node.draw_particles_camera"),
+    (
+        "node.scatter_particles_camera",
+        "node.draw_particles_camera",
+    ),
     ("node.simplex_noise_force_at_particles", "node.turbulence"),
-    ("node.simplex_noise_force_3d_at_particles", "node.turbulence_3d"),
+    (
+        "node.simplex_noise_force_3d_at_particles",
+        "node.turbulence_3d",
+    ),
     ("node.curl_slope_force_3d", "node.swirl_force_3d"),
     ("node.container_bounds_3d", "node.keep_in_box_3d"),
     ("node.container_repel_force_3d", "node.push_from_walls_3d"),
@@ -153,8 +162,14 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
     ("node.instance_position_jitter", "node.position_jitter"),
     ("node.instance_rotation_jitter", "node.rotation_jitter"),
     ("node.lerp_instance_fields", "node.blend_copies"),
-    ("node.sample_texture_at_particles", "node.sample_image_at_particles"),
-    ("node.sample_texture_3d_at_particles", "node.sample_volume_at_particles"),
+    (
+        "node.sample_texture_at_particles",
+        "node.sample_image_at_particles",
+    ),
+    (
+        "node.sample_texture_3d_at_particles",
+        "node.sample_volume_at_particles",
+    ),
     // --- VOCAB P2 8/8: Detection / Routing (docs/NODE_VOCABULARY_AUDIT.md section 4) ---
     ("node.blob_detect_ffi", "node.blob_tracker"),
     ("node.blob_overlay_render", "node.blob_overlay"),
@@ -180,7 +195,10 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
     ("node.rotate_vec2_90", "node.rotate_vector"),
     // node.fluid_project_scatter_2d -> node.draw_particles_camera:
     // port-identical (verified section 7.2), plain rename, no param seed needed.
-    ("node.fluid_project_scatter_2d", "node.draw_particles_camera"),
+    (
+        "node.fluid_project_scatter_2d",
+        "node.draw_particles_camera",
+    ),
     // --- CINEMATIC_POST D9 (docs/CINEMATIC_POST_DESIGN.md P5): GTAO replaces
     // SSAO --- node.ssao_gtao is a deleted-not-paralleled replacement, not a
     // label-only rename: `radius`/`intensity` carry over unchanged (same
@@ -198,7 +216,11 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
 /// write onto the successor node so it reproduces the retired node's fixed
 /// behavior (e.g. `angle = 90` for `node.rotate_vec2_90` folding into
 /// `node.rotate_vector`).
-pub type ParamSeedMigration = (&'static str, &'static str, &'static [(&'static str, SerializedParamValue)]);
+pub type ParamSeedMigration = (
+    &'static str,
+    &'static str,
+    &'static [(&'static str, SerializedParamValue)],
+);
 
 /// Param-seeding table for section 7 legacy folds: a retired node (`old_id`) with no
 /// direct id-for-id equivalent folds into a parameterized successor
@@ -213,7 +235,12 @@ pub static PARAM_SEED_MIGRATIONS: &[ParamSeedMigration] = &[(
     // technically redundant with the successor's default but pins the
     // value explicitly per docs/NODE_VOCABULARY_AUDIT.md section 7.1 rather than
     // relying on the coincidence.
-    &[("angle", SerializedParamValue::Float { value: std::f32::consts::FRAC_PI_2 })],
+    &[(
+        "angle",
+        SerializedParamValue::Float {
+            value: std::f32::consts::FRAC_PI_2,
+        },
+    )],
 )];
 
 /// Map an old `type_id`/[`crate::PresetTypeId`] string to its current name.
@@ -263,7 +290,10 @@ pub fn retires_params(type_id: &str) -> bool {
 
 /// The retired params of `type_id`.
 pub fn retired_params(type_id: &str) -> impl Iterator<Item = &'static str> + '_ {
-    RETIRED_PARAMS.iter().filter(move |(t, _)| *t == type_id).map(|(_, p)| *p)
+    RETIRED_PARAMS
+        .iter()
+        .filter(move |(t, _)| *t == type_id)
+        .map(|(_, p)| *p)
 }
 
 #[cfg(test)]
@@ -281,7 +311,10 @@ mod tests {
 
     #[test]
     fn matter_solid_distance_migrates_to_liquid() {
-        assert_eq!(migrate_type_id("node.matter_solid_distance"), "node.liquid_solid_distance");
+        assert_eq!(
+            migrate_type_id("node.matter_solid_distance"),
+            "node.liquid_solid_distance"
+        );
     }
 
     #[test]

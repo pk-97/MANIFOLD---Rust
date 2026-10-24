@@ -3,9 +3,9 @@
 //! `apply_card_reshape`/`invert_card_reshape`, `RemovedExposure`). Extracted
 //! from effects.rs (P2-E, design D4).
 
-use serde::{Deserialize, Serialize};
-use crate::id::NodeId;
 use super::{ParamEnvelope, ParameterDriver};
+use crate::id::NodeId;
+use serde::{Deserialize, Serialize};
 
 // ─── User-Exposed Parameters ───
 
@@ -301,7 +301,10 @@ pub fn binding_id_for_node_param_in(
     }
     let node = find_node(&def.nodes, node_doc_id)?;
     let identity = if node.node_id.is_empty() {
-        let handle = node.handle.clone().unwrap_or_else(|| format!("node{node_doc_id}"));
+        let handle = node
+            .handle
+            .clone()
+            .unwrap_or_else(|| format!("node{node_doc_id}"));
         crate::NodeId::new(handle.as_str())
     } else {
         node.node_id.clone()
@@ -488,25 +491,47 @@ pub struct RemovedExposure {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::test_support::*;
+    use super::*;
 
     #[test]
     fn card_reshape_identity_and_stages() {
         use crate::macro_bank::MacroCurve;
         // Identity: passes through untouched.
-        assert!((apply_card_reshape(2.5, 0.0, 10.0, false, MacroCurve::Linear, 1.0, 0.0) - 2.5).abs() < 1e-4);
+        assert!(
+            (apply_card_reshape(2.5, 0.0, 10.0, false, MacroCurve::Linear, 1.0, 0.0) - 2.5).abs()
+                < 1e-4
+        );
         // Invert: 25% of the range becomes 75%.
-        assert!((apply_card_reshape(2.5, 0.0, 10.0, true, MacroCurve::Linear, 1.0, 0.0) - 7.5).abs() < 1e-4);
+        assert!(
+            (apply_card_reshape(2.5, 0.0, 10.0, true, MacroCurve::Linear, 1.0, 0.0) - 7.5).abs()
+                < 1e-4
+        );
         // SCurve (Hermite 3t^2-2t^3): n=0.25 -> 0.15625 -> *10 = 1.5625.
-        assert!((apply_card_reshape(2.5, 0.0, 10.0, false, MacroCurve::SCurve, 1.0, 0.0) - 1.5625).abs() < 1e-3);
+        assert!(
+            (apply_card_reshape(2.5, 0.0, 10.0, false, MacroCurve::SCurve, 1.0, 0.0) - 1.5625)
+                .abs()
+                < 1e-3
+        );
         // Degenerate range: passthrough, no divide-by-zero.
-        assert!((apply_card_reshape(42.0, 5.0, 5.0, false, MacroCurve::Exponential, 1.0, 0.0) - 42.0).abs() < 1e-6);
+        assert!(
+            (apply_card_reshape(42.0, 5.0, 5.0, false, MacroCurve::Exponential, 1.0, 0.0) - 42.0)
+                .abs()
+                < 1e-6
+        );
         // Folded affine (deg->rad): no invert/curve, so scale/offset apply to the
         // RAW value, unclamped — a past-max 400° must NOT pin to the slider max.
         let k = std::f32::consts::PI / 180.0;
-        assert!((apply_card_reshape(85.0, 0.0, 360.0, false, MacroCurve::Linear, k, 0.0) - 85.0 * k).abs() < 1e-5);
-        assert!((apply_card_reshape(400.0, 0.0, 360.0, false, MacroCurve::Linear, k, 0.0) - 400.0 * k).abs() < 1e-4);
+        assert!(
+            (apply_card_reshape(85.0, 0.0, 360.0, false, MacroCurve::Linear, k, 0.0) - 85.0 * k)
+                .abs()
+                < 1e-5
+        );
+        assert!(
+            (apply_card_reshape(400.0, 0.0, 360.0, false, MacroCurve::Linear, k, 0.0) - 400.0 * k)
+                .abs()
+                < 1e-4
+        );
     }
 
     /// `PARAM_TWO_WAY_BINDING_DESIGN.md` invariant: forward and inverse
@@ -531,9 +556,11 @@ mod tests {
                         let mut x = min;
                         let step = (max - min) / 10.0;
                         while x <= max {
-                            let target = apply_card_reshape(x, min, max, invert, curve, scale, offset);
-                            let back = invert_card_reshape(target, min, max, invert, curve, scale, offset)
-                                .expect("non-degenerate scale");
+                            let target =
+                                apply_card_reshape(x, min, max, invert, curve, scale, offset);
+                            let back =
+                                invert_card_reshape(target, min, max, invert, curve, scale, offset)
+                                    .expect("non-degenerate scale");
                             assert!(
                                 (back - x).abs() < 1e-3,
                                 "{curve:?} invert={invert} range=({min},{max}) affine=({scale},{offset}): \
@@ -584,5 +611,4 @@ mod tests {
         assert_eq!(ub.legacy_node_handle.as_deref(), Some("x"));
         assert!(ub.node_id.is_empty());
     }
-
 }

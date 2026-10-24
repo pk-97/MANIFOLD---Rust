@@ -25,7 +25,12 @@ pub(crate) fn layout_median(vals: &mut [f32]) -> f32 {
 /// column back so its mean matches the mean of the requested positions. The
 /// shift keeps the column centred where alignment wanted it instead of
 /// drifting downward each pass. `desired[i]` pairs with `col[i]`.
-pub(crate) fn layout_resolve_overlaps(col: &[usize], height: &[f32], desired: &mut [f32], gap: f32) {
+pub(crate) fn layout_resolve_overlaps(
+    col: &[usize],
+    height: &[f32],
+    desired: &mut [f32],
+    gap: f32,
+) {
     let len = col.len();
     if len == 0 {
         return;
@@ -281,8 +286,7 @@ impl GraphCanvas {
         }
         let mut fwd: Vec<FwdEdge> = Vec::with_capacity(self.wires.len());
         for w in &self.wires {
-            let (Some(&from), Some(&to)) =
-                (id_to_idx.get(&w.from_node), id_to_idx.get(&w.to_node))
+            let (Some(&from), Some(&to)) = (id_to_idx.get(&w.from_node), id_to_idx.get(&w.to_node))
             else {
                 continue;
             };
@@ -398,11 +402,15 @@ impl GraphCanvas {
                 // its initial stack is already compact; leave it.
                 continue;
             }
-            let mut disc: Vec<usize> =
-                (0..n).filter(|&v| layout.column[v] == c && is_disconnected(v)).collect();
+            let mut disc: Vec<usize> = (0..n)
+                .filter(|&v| layout.column[v] == c && is_disconnected(v))
+                .collect();
             // Keep their relative order (topmost stays topmost), then stack the
             // block upward from just above the connected nodes.
-            disc.sort_by(|&a, &b| y[a].partial_cmp(&y[b]).unwrap_or(core::cmp::Ordering::Equal));
+            disc.sort_by(|&a, &b| {
+                y[a].partial_cmp(&y[b])
+                    .unwrap_or(core::cmp::Ordering::Equal)
+            });
             let mut cursor = conn_top;
             for &v in disc.iter().rev() {
                 cursor -= LAYOUT_VGAP + layout.height[v];

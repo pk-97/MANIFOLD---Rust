@@ -22,11 +22,12 @@
 
 use std::borrow::Cow;
 
-
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::primitives::standalone_pipeline::{
+    dispatch_standalone_2d, standalone_pipeline,
+};
 
 /// Maximum number of gradient stops packed into the uniform. Covers every
 /// legacy Infrared palette (max 6 explicit stops) with headroom for

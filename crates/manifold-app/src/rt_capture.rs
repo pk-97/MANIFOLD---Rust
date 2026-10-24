@@ -33,10 +33,12 @@
 
 use std::path::PathBuf;
 
-use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, linear_to_srgb8};
-use manifold_nodes_scene::node_graph::primitives::render_scene::{arm_rt_capture, take_rt_captures, RtCaptureSlot};
 use crate::content_command::ContentCommand;
 use crate::headless_harness::headless_content_thread;
+use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, linear_to_srgb8};
+use manifold_nodes_scene::node_graph::primitives::render_scene::{
+    RtCaptureSlot, arm_rt_capture, take_rt_captures,
+};
 
 /// BUG-fh95: format-aware raw readback + f16 decode. The mask channels
 /// (`rt_mask_half`/`rt_mask_full`) are `Rg16Float` (4 B/px: R=vis, G=ao),
@@ -104,28 +106,37 @@ pub(crate) fn decode_capture_pixels(
 /// Stats over already-decoded pixels. Returns (hit_frac, mean_luma, stddev).
 pub(crate) fn channel_stats(label: &str, pixels: &[[f32; 4]]) -> (f64, f64, f64) {
     let mut n_hits = 0usize;
-    let mut sum_luma = 0.0f64; let mut sum_luma_sq = 0.0f64;
+    let mut sum_luma = 0.0f64;
+    let mut sum_luma_sq = 0.0f64;
     let is_composite = label == "composite";
     for [r, g, b, a] in pixels.iter().copied() {
         if is_composite {
-            if r > 0.03 || g > 0.03 || b > 0.03 { n_hits += 1; }
+            if r > 0.03 || g > 0.03 || b > 0.03 {
+                n_hits += 1;
+            }
         } else if a > 0.0 && a < 1e6 && !a.is_nan() {
             n_hits += 1;
         }
         let luma = 0.2126 * r.max(0.0) + 0.7152 * g.max(0.0) + 0.0722 * b.max(0.0);
-        sum_luma += luma as f64; sum_luma_sq += (luma*luma) as f64;
+        sum_luma += luma as f64;
+        sum_luma_sq += (luma * luma) as f64;
     }
-    if pixels.is_empty() { return (0.0, 0.0, 0.0); }
+    if pixels.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
     let n = pixels.len() as f64;
     let hit_frac = n_hits as f64 / n;
     let mn = sum_luma / n;
-    let vr = (sum_luma_sq / n) - mn*mn;
+    let vr = (sum_luma_sq / n) - mn * mn;
     (hit_frac, mn, vr.sqrt())
 }
 
 /// Shared stats computation — reused by headless harness and live capture.
 /// Decodes the texture; callers that already hold pixels use `channel_stats`.
-pub(crate) fn compute_rt_channel_stats(cap: &RtCaptureSlot, device: &manifold_gpu::GpuDevice) -> (f64, f64, f64) {
+pub(crate) fn compute_rt_channel_stats(
+    cap: &RtCaptureSlot,
+    device: &manifold_gpu::GpuDevice,
+) -> (f64, f64, f64) {
     channel_stats(&cap.label, &decode_capture_pixels(cap, device))
 }
 
@@ -133,7 +144,12 @@ pub(crate) fn compute_rt_channel_stats(cap: &RtCaptureSlot, device: &manifold_gp
 /// A 4K channel decode is a full-texture readback plus an 8M-pixel f32 vec —
 /// re-decoding per consumer was a measurable share of the capture cost
 /// (BUG-olp9).
-fn write_capture_png(cap: &RtCaptureSlot, pixels: &[[f32; 4]], stats: (f64, f64, f64), out_dir: &std::path::Path) {
+fn write_capture_png(
+    cap: &RtCaptureSlot,
+    pixels: &[[f32; 4]],
+    stats: (f64, f64, f64),
+    out_dir: &std::path::Path,
+) {
     if pixels.is_empty() {
         return;
     }
@@ -148,10 +164,14 @@ fn write_capture_png(cap: &RtCaptureSlot, pixels: &[[f32; 4]], stats: (f64, f64,
     let (cw0, cw1) = (cap.w * 2 / 5, cap.w * 3 / 5);
     let (ch0, ch1) = (cap.h * 2 / 5, cap.h * 3 / 5);
     for (i, px) in pixels.iter().enumerate() {
-        for c in 0..4 { sum[c] += f64::from(px[c]); }
+        for c in 0..4 {
+            sum[c] += f64::from(px[c]);
+        }
         let (x, y) = (i as u32 % cap.w, i as u32 / cap.w);
         if x >= cw0 && x < cw1 && y >= ch0 && y < ch1 {
-            for c in 0..4 { csum[c] += f64::from(px[c]); }
+            for c in 0..4 {
+                csum[c] += f64::from(px[c]);
+            }
             cn += 1;
         }
     }
@@ -166,16 +186,32 @@ fn write_capture_png(cap: &RtCaptureSlot, pixels: &[[f32; 4]], stats: (f64, f64,
         rgba8.push(linear_to_srgb8(r.max(0.0)));
         rgba8.push(linear_to_srgb8(g.max(0.0)));
         rgba8.push(linear_to_srgb8(b.max(0.0)));
-        rgba8.push(if is_rg { 255 } else { (a.clamp(0.0, 1.0) * 255.0) as u8 });
+        rgba8.push(if is_rg {
+            255
+        } else {
+            (a.clamp(0.0, 1.0) * 255.0) as u8
+        });
     }
     let png_path = out_dir.join(format!("{}_{:04}.png", cap.label, cap.frame));
     std::fs::write(&png_path, encode_rgba8_png(&rgba8, cap.w, cap.h))
         .unwrap_or_else(|e| eprintln!("[rt-capture] write {}: {e}", png_path.display()));
     eprintln!(
         "[rt-capture] {} f={:04} dim={}x{} hit={:.6} luma={:.6} sd={:.6} mean=[{:.4},{:.4},{:.4},{:.4}] center=[{:.4},{:.4},{:.4},{:.4}] {}",
-        cap.label, cap.frame, cap.w, cap.h, hit_frac, mn, sd,
-        sum[0]/n, sum[1]/n, sum[2]/n, sum[3]/n,
-        csum[0]/cd, csum[1]/cd, csum[2]/cd, csum[3]/cd,
+        cap.label,
+        cap.frame,
+        cap.w,
+        cap.h,
+        hit_frac,
+        mn,
+        sd,
+        sum[0] / n,
+        sum[1] / n,
+        sum[2] / n,
+        sum[3] / n,
+        csum[0] / cd,
+        csum[1] / cd,
+        csum[2] / cd,
+        csum[3] / cd,
         png_path.display(),
     );
 }
@@ -186,7 +222,9 @@ pub(crate) fn drain_capture_stats(
     device: &manifold_gpu::GpuDevice,
 ) -> std::collections::BTreeMap<String, (f64, f64, f64)> {
     let caps = take_rt_captures();
-    if caps.is_empty() { return Default::default(); }
+    if caps.is_empty() {
+        return Default::default();
+    }
     let mut map = std::collections::BTreeMap::new();
     for c in &caps {
         let stats = compute_rt_channel_stats(c, device);
@@ -212,7 +250,9 @@ fn resolve_param_id(project: &manifold_core::project::Project, param_id: &str) -
             gen_params.set_param(param_id, test_val);
             let after = gen_params.get_param(param_id);
             if (before - after).abs() > 0.01 {
-                eprintln!("[rt-capture] Found param '{param_id}' on layer[{layer_idx}] (exact match, verified {before:.2}→{after:.2})");
+                eprintln!(
+                    "[rt-capture] Found param '{param_id}' on layer[{layer_idx}] (exact match, verified {before:.2}→{after:.2})"
+                );
                 return (layer_idx, param_id.to_string());
             }
         }
@@ -228,7 +268,9 @@ fn resolve_param_id(project: &manifold_core::project::Project, param_id: &str) -
                 gen_params.set_param(&candidate, test_val);
                 let after = gen_params.get_param(&candidate);
                 if (before - after).abs() > 0.01 {
-                    eprintln!("[rt-capture] Found param '{candidate}' on layer[{layer_idx}] (suffix match, prefix={prefix}, verified {before:.2}→{after:.2})");
+                    eprintln!(
+                        "[rt-capture] Found param '{candidate}' on layer[{layer_idx}] (suffix match, prefix={prefix}, verified {before:.2}→{after:.2})"
+                    );
                     return (layer_idx, candidate);
                 }
             }
@@ -236,7 +278,9 @@ fn resolve_param_id(project: &manifold_core::project::Project, param_id: &str) -
     }
 
     // Not found: print diagnostic and exit.
-    eprintln!("[rt-capture] Param '{param_id}' not found (exact or prefixed form) — no layer param mutation took effect.");
+    eprintln!(
+        "[rt-capture] Param '{param_id}' not found (exact or prefixed form) — no layer param mutation took effect."
+    );
     eprintln!("[rt-capture] Layer inventory:");
     for (layer_idx, layer) in project.timeline.layers.iter().enumerate() {
         if let Some(_gen_params) = layer.gen_params() {
@@ -258,8 +302,12 @@ fn drain_captures(
     last_stats: &mut std::collections::BTreeMap<String, (f64, f64, f64)>,
 ) {
     let mut caps = take_rt_captures();
-    for c in &mut caps { c.frame = frame; }
-    if caps.is_empty() { return; }
+    for c in &mut caps {
+        c.frame = frame;
+    }
+    if caps.is_empty() {
+        return;
+    }
     // Overridable because the default is a FIXED shared path: two captures
     // running at once interleave their PNGs into one pile, and a run that
     // clears the directory first silently destroys the other's frames. That
@@ -293,12 +341,18 @@ fn tick_frame_cpu_ms(
     start.map(|start| start.elapsed().as_secs_f64() * 1000.0)
 }
 
-fn report_cpu_frame(ct: &mut crate::content_thread::ContentThread, frame: u32, tick_ms: Option<f64>) {
+fn report_cpu_frame(
+    ct: &mut crate::content_thread::ContentThread,
+    frame: u32,
+    tick_ms: Option<f64>,
+) {
     let Some(tick_ms) = tick_ms else { return };
     let mut per_type = std::collections::BTreeMap::<String, f64>::new();
     for renderer in ct.engine.renderers_mut() {
-        if let Some(generator) = renderer.as_any_mut()
-            .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>() {
+        if let Some(generator) = renderer
+            .as_any_mut()
+            .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>(
+        ) {
             for step in generator.take_step_profiles() {
                 *per_type.entry(step.type_id).or_default() += step.cpu_nanos as f64 / 1_000_000.0;
             }
@@ -306,7 +360,9 @@ fn report_cpu_frame(ct: &mut crate::content_thread::ContentThread, frame: u32, t
     }
     eprintln!("[CPU_FRAME_MS] frame={frame} ms={tick_ms:.3} scope=tick_frame_wall");
     for (type_id, ms) in per_type {
-        eprintln!("[CPU_NODE_MS] frame={frame} type={type_id} ms={ms:.3} scope=generator_preparation");
+        eprintln!(
+            "[CPU_NODE_MS] frame={frame} type={type_id} ms={ms:.3} scope=generator_preparation"
+        );
     }
 }
 
@@ -332,7 +388,10 @@ pub fn run(args: &[String]) -> ! {
     let sets: Vec<(String, f32)> = args
         .windows(2)
         .filter(|w| w[0] == "--set")
-        .filter_map(|w| w[1].split_once('=').map(|(k, v)| (k.to_string(), v.parse::<f32>().ok())))
+        .filter_map(|w| {
+            w[1].split_once('=')
+                .map(|(k, v)| (k.to_string(), v.parse::<f32>().ok()))
+        })
         .filter_map(|(k, v)| v.map(|v| (k, v)))
         .collect();
     // `--set-at N param=value` (repeatable): one-shot MutateProject write at
@@ -393,27 +452,47 @@ pub fn run(args: &[String]) -> ! {
     // Resolve project path: skip the subcommand name (args[0]), then first
     // non-flag arg that isn't a flag VALUE (--set-at and --animate take two).
     let mut skip_next = 0u8;
-    let project_path = args.iter().skip(1)
+    let project_path = args
+        .iter()
+        .skip(1)
         .find(|a| {
             if skip_next > 0 {
                 skip_next -= 1;
                 return false;
             }
             match a.as_str() {
-                "--set-at" | "--animate" => { skip_next = 2; false }
-                "--frames" | "--width" | "--height" | "--capture-every"
-                | "--capture-from" | "--live-flip" | "--disable-driver-at"
-                | "--fps" => { skip_next = 1; false }
+                "--set-at" | "--animate" => {
+                    skip_next = 2;
+                    false
+                }
+                "--frames"
+                | "--width"
+                | "--height"
+                | "--capture-every"
+                | "--capture-from"
+                | "--live-flip"
+                | "--disable-driver-at"
+                | "--fps" => {
+                    skip_next = 1;
+                    false
+                }
                 f if f.starts_with("--") => false,
-                _ => true
+                _ => true,
             }
         })
         .map(PathBuf::from)
-        .unwrap_or_else(|| { eprintln!("usage: manifold rt-capture [--paused] <project.manifold> [--frames N]"); std::process::exit(2); });
-    if !project_path.exists() { eprintln!("not found: {}", project_path.display()); std::process::exit(1); }
+        .unwrap_or_else(|| {
+            eprintln!("usage: manifold rt-capture [--paused] <project.manifold> [--frames N]");
+            std::process::exit(2);
+        });
+    if !project_path.exists() {
+        eprintln!("not found: {}", project_path.display());
+        std::process::exit(1);
+    }
 
     // Parse optional --frames flag; default 360.
-    let total_frames: u32 = args.windows(2)
+    let total_frames: u32 = args
+        .windows(2)
         .find(|w| w[0] == "--frames")
         .and_then(|w| w[1].parse().ok())
         .unwrap_or(360);
@@ -423,18 +502,29 @@ pub fn run(args: &[String]) -> ! {
     // project before LoadProject so the content pipeline's own resize lands
     // on the override (LoadProject re-resizes to settings — see
     // content_commands.rs); the project file on disk is untouched.
-    let override_w: Option<u32> = args.windows(2)
+    let override_w: Option<u32> = args
+        .windows(2)
         .find(|w| w[0] == "--width")
         .and_then(|w| w[1].parse().ok());
-    let override_h: Option<u32> = args.windows(2)
+    let override_h: Option<u32> = args
+        .windows(2)
         .find(|w| w[0] == "--height")
         .and_then(|w| w[1].parse().ok());
 
-    println!("=== RT CAPTURE {}", if paused_mode { "(PAUSED MODE)" } else { "" });
+    println!(
+        "=== RT CAPTURE {}",
+        if paused_mode { "(PAUSED MODE)" } else { "" }
+    );
     println!("path: {} frames={}", project_path.display(), total_frames);
 
-    let mut real_project = manifold_io::loader::load_project_with(&project_path, crate::project_io::install_embedded_presets)
-        .unwrap_or_else(|e| { eprintln!("FAILED: {e}"); std::process::exit(1); });
+    let mut real_project = manifold_io::loader::load_project_with(
+        &project_path,
+        crate::project_io::install_embedded_presets,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("FAILED: {e}");
+        std::process::exit(1);
+    });
     if let Some(w) = override_w {
         real_project.settings.output_width = w as i32;
     }
@@ -493,16 +583,22 @@ pub fn run(args: &[String]) -> ! {
 
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
     let load = ct.load_project_and_warmup(Box::new(real_project), &cmd_rx, &state_tx);
-    eprintln!("[rt-capture] warmup pass took {:.1}ms (completed={})",
-        load.warmup.elapsed_ms, load.warmup.completed);
+    eprintln!(
+        "[rt-capture] warmup pass took {:.1}ms (completed={})",
+        load.warmup.elapsed_ms, load.warmup.completed
+    );
     if profile_cpu {
         for renderer in ct.engine.renderers_mut() {
-            if let Some(generator) = renderer.as_any_mut()
-                .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>() {
+            if let Some(generator) = renderer
+                .as_any_mut()
+                .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>(
+            ) {
                 generator.set_profiling(true);
             }
         }
-        eprintln!("[rt-capture] CPU profiling: generator node preparation, including existing node waits; CPU_FRAME_MS is tick_frame wall time");
+        eprintln!(
+            "[rt-capture] CPU profiling: generator node preparation, including existing node waits; CPU_FRAME_MS is tick_frame wall time"
+        );
     }
 
     // Phase 1: Play N frames (rotation, beat advancing).
@@ -511,14 +607,24 @@ pub fn run(args: &[String]) -> ! {
 
     // One-shot --set writes, using resolved layer indices and param IDs.
     for (layer_idx, param, value) in resolved_sets {
-        ct.handle_command(ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |project| {
-            if let Some(g) = project.timeline.layers.get_mut(layer_idx).and_then(|l| l.gen_params_mut()) {
-                let old = g.get_param(&param);
-                g.set_param(&param, value);
-                let new = g.get_param(&param);
-                eprintln!("[rt-capture] --set: layer[{layer_idx}] param '{param}' {old:.2} → {new:.2}");
-            }
-        })));
+        ct.handle_command(ContentCommand::mutate(
+            crate::content_command::touch::VALUES,
+            Box::new(move |project| {
+                if let Some(g) = project
+                    .timeline
+                    .layers
+                    .get_mut(layer_idx)
+                    .and_then(|l| l.gen_params_mut())
+                {
+                    let old = g.get_param(&param);
+                    g.set_param(&param, value);
+                    let new = g.get_param(&param);
+                    eprintln!(
+                        "[rt-capture] --set: layer[{layer_idx}] param '{param}' {old:.2} → {new:.2}"
+                    );
+                }
+            }),
+        ));
     }
     // Base value for --animate, read from the loaded project before frame 0.
     let mut animate_base: Option<f32> = None;
@@ -538,8 +644,7 @@ pub fn run(args: &[String]) -> ! {
     };
 
     // Track stats before/after live flip for verdict reporting.
-    let mut last_stats: std::collections::BTreeMap<String, (f64, f64, f64)> =
-        Default::default();
+    let mut last_stats: std::collections::BTreeMap<String, (f64, f64, f64)> = Default::default();
     let mut stats_before_flip: Option<std::collections::BTreeMap<String, (f64, f64, f64)>> = None;
     let mut stats_after_flip: Option<std::collections::BTreeMap<String, (f64, f64, f64)>> = None;
     let mut live_flip_sent = false;
@@ -559,15 +664,18 @@ pub fn run(args: &[String]) -> ! {
             }
         }
         if disable_driver_at == Some(frame) {
-            ct.handle_command(ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new(move |project| {
-                if let Some(g) = project.timeline.layers[0].gen_params_mut()
-                    && let Some(drivers) = g.drivers.as_mut()
-                {
-                    for d in drivers.iter_mut() {
-                        d.enabled = false;
+            ct.handle_command(ContentCommand::mutate(
+                crate::content_command::touch::SHAPES,
+                Box::new(move |project| {
+                    if let Some(g) = project.timeline.layers[0].gen_params_mut()
+                        && let Some(drivers) = g.drivers.as_mut()
+                    {
+                        for d in drivers.iter_mut() {
+                            d.enabled = false;
+                        }
                     }
-                }
-            })));
+                }),
+            ));
             println!("=== DRIVERS DISABLED at frame {frame} (transport keeps playing) ===");
         }
         if let Some((layer_idx, param, delta)) = &animate {
@@ -580,11 +688,14 @@ pub fn run(args: &[String]) -> ! {
                     .unwrap_or(0.0)
             });
             let (param, value) = (param.clone(), base + frame as f32 * delta);
-            ct.handle_command(ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |project| {
-                if let Some(g) = project.timeline.layers[layer_idx].gen_params_mut() {
-                    g.set_param(&param, value);
-                }
-            })));
+            ct.handle_command(ContentCommand::mutate(
+                crate::content_command::touch::VALUES,
+                Box::new(move |project| {
+                    if let Some(g) = project.timeline.layers[layer_idx].gen_params_mut() {
+                        g.set_param(&param, value);
+                    }
+                }),
+            ));
         }
         if capture_at(frame, total_frames) {
             arm_capture();
@@ -601,7 +712,9 @@ pub fn run(args: &[String]) -> ! {
             );
         }
         report_cpu_frame(&mut ct, frame, cpu_ms);
-        if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, frame, &mut last_stats); }
+        if let Some(dev) = ct.content_pipeline.native_device() {
+            drain_captures(dev, frame, &mut last_stats);
+        }
     }
 
     // Capture stats before live flip (at end of phase 1).
@@ -624,7 +737,9 @@ pub fn run(args: &[String]) -> ! {
             }
         })));
         live_flip_sent = true;
-        println!("=== LIVE FLIP: toggled param '{resolved_flip_param}' on layer[{resolved_flip_layer}] ===");
+        println!(
+            "=== LIVE FLIP: toggled param '{resolved_flip_param}' on layer[{resolved_flip_layer}] ==="
+        );
     }
 
     // Phase 2: play additional frames after flip.
@@ -637,7 +752,9 @@ pub fn run(args: &[String]) -> ! {
             ct.timer.wait_for_deadline();
             let cpu_ms = tick_frame_cpu_ms(&mut ct, &state_tx, profile_cpu);
             report_cpu_frame(&mut ct, frame, cpu_ms);
-            if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, frame, &mut last_stats); }
+            if let Some(dev) = ct.content_pipeline.native_device() {
+                drain_captures(dev, frame, &mut last_stats);
+            }
         }
         stats_after_flip = Some(last_stats.clone());
     }
@@ -659,63 +776,68 @@ pub fn run(args: &[String]) -> ! {
             ct.timer.wait_for_deadline();
             let cpu_ms = tick_frame_cpu_ms(&mut ct, &state_tx, profile_cpu);
             report_cpu_frame(&mut ct, host, cpu_ms);
-            if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, host, &mut last_stats); }
+            if let Some(dev) = ct.content_pipeline.native_device() {
+                drain_captures(dev, host, &mut last_stats);
+            }
         }
     }
 
     // Final flush.
-    if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, total_frames, &mut last_stats); }
-    drop(state_tx); drain.join().expect("drain join");
+    if let Some(dev) = ct.content_pipeline.native_device() {
+        drain_captures(dev, total_frames, &mut last_stats);
+    }
+    drop(state_tx);
+    drain.join().expect("drain join");
 
     // Report live-flip verdict.
-    if live_flip_sent
-        && let (Some(before), Some(after)) = (stats_before_flip, stats_after_flip)
-    {
-            let mut changed = false;
-            // Union of labels: an RT channel that only APPEARS after the
-            // flip (rt off→on) or vanishes (on→off) is the strongest
-            // possible evidence of an effective toggle — a before-keys-only
-            // walk silently missed exactly that case.
-            let labels: std::collections::BTreeSet<&String> =
-                before.keys().chain(after.keys()).collect();
-            for label in labels {
-                let b = before.get(label);
-                let a = after.get(label);
-                match (b, a) {
-                    (Some((hb, lb, _)), Some((ha, la, _))) => {
-                        if (hb - ha).abs() > 0.01 || (lb - la).abs() > 0.01 {
-                            changed = true;
-                            eprintln!(
-                                "[rt-capture] {label} stats changed: hit {hb:.6} → {ha:.6}, luma {lb:.6} → {la:.6}"
-                            );
-                        }
-                    }
-                    (None, Some((ha, la, _))) => {
+    if live_flip_sent && let (Some(before), Some(after)) = (stats_before_flip, stats_after_flip) {
+        let mut changed = false;
+        // Union of labels: an RT channel that only APPEARS after the
+        // flip (rt off→on) or vanishes (on→off) is the strongest
+        // possible evidence of an effective toggle — a before-keys-only
+        // walk silently missed exactly that case.
+        let labels: std::collections::BTreeSet<&String> =
+            before.keys().chain(after.keys()).collect();
+        for label in labels {
+            let b = before.get(label);
+            let a = after.get(label);
+            match (b, a) {
+                (Some((hb, lb, _)), Some((ha, la, _))) => {
+                    if (hb - ha).abs() > 0.01 || (lb - la).abs() > 0.01 {
                         changed = true;
                         eprintln!(
-                            "[rt-capture] {label} APPEARED after flip: hit {ha:.6}, luma {la:.6}"
+                            "[rt-capture] {label} stats changed: hit {hb:.6} → {ha:.6}, luma {lb:.6} → {la:.6}"
                         );
                     }
-                    (Some((hb, lb, _)), None) => {
-                        changed = true;
-                        eprintln!(
-                            "[rt-capture] {label} VANISHED after flip (was hit {hb:.6}, luma {lb:.6})"
-                        );
-                    }
-                    (None, None) => unreachable!(),
                 }
+                (None, Some((ha, la, _))) => {
+                    changed = true;
+                    eprintln!(
+                        "[rt-capture] {label} APPEARED after flip: hit {ha:.6}, luma {la:.6}"
+                    );
+                }
+                (Some((hb, lb, _)), None) => {
+                    changed = true;
+                    eprintln!(
+                        "[rt-capture] {label} VANISHED after flip (was hit {hb:.6}, luma {lb:.6})"
+                    );
+                }
+                (None, None) => unreachable!(),
             }
-            let verdict = if changed { "LIVE-FLIP EFFECTIVE" } else { "LIVE-FLIP INERT" };
-            println!("{verdict}");
-            eprintln!("{verdict}");
+        }
+        let verdict = if changed {
+            "LIVE-FLIP EFFECTIVE"
+        } else {
+            "LIVE-FLIP INERT"
+        };
+        println!("{verdict}");
+        eprintln!("{verdict}");
     }
 
     // Warmup verification surface: any cold touch recorded after the warmup
     // pass's reset means a lazy path fired late (WARMUP_DESIGN.md INV1).
     {
-        use manifold_core::cold_touch::{
-            ColdTouchKind, cold_touch_count, total_cold_touches,
-        };
+        use manifold_core::cold_touch::{ColdTouchKind, cold_touch_count, total_cold_touches};
         eprintln!(
             "[rt-capture] cold touches during playback: {}",
             total_cold_touches()

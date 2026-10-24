@@ -4,9 +4,9 @@
 // Mechanical 1:1 port of Unity UIState.cs.
 // Replaces the former app::SelectionState + app::ClipDragState.
 
+use crate::automation_hit_tester::AutomationFeedback;
 use crate::panels::InspectorTab;
 use crate::view::{SelectionRegion, UiAutomationPointRef, UiGraphTarget, UiSegmentShape};
-use crate::automation_hit_tester::AutomationFeedback;
 use manifold_foundation::{Beats, ClipId, LayerId, MarkerId, ParamId};
 use std::collections::{HashMap, HashSet};
 
@@ -264,7 +264,13 @@ impl UIState {
         self.automation_paste_context = None;
     }
 
-    pub fn automation_point_selected(&self, target: &UiGraphTarget, param_id: &ParamId, beat: Beats, value_norm: f32) -> bool {
+    pub fn automation_point_selected(
+        &self,
+        target: &UiGraphTarget,
+        param_id: &ParamId,
+        beat: Beats,
+        value_norm: f32,
+    ) -> bool {
         let matches = |point: &UiAutomationPointRef| {
             point.target == *target
                 && point.param_id == *param_id
@@ -319,9 +325,19 @@ impl UIState {
             .unwrap_or(crate::color::AUTOMATION_LANE_STRIP_HEIGHT)
     }
 
-    pub fn set_automation_lane_height(&mut self, target: UiGraphTarget, param_id: ParamId, height: f32) {
-        let height = height.clamp(crate::color::AUTOMATION_LANE_MIN_HEIGHT, crate::color::AUTOMATION_LANE_MAX_HEIGHT);
-        let previous = self.automation_lane_heights.insert((target, param_id), height);
+    pub fn set_automation_lane_height(
+        &mut self,
+        target: UiGraphTarget,
+        param_id: ParamId,
+        height: f32,
+    ) {
+        let height = height.clamp(
+            crate::color::AUTOMATION_LANE_MIN_HEIGHT,
+            crate::color::AUTOMATION_LANE_MAX_HEIGHT,
+        );
+        let previous = self
+            .automation_lane_heights
+            .insert((target, param_id), height);
         if previous != Some(height) && self.automation_mode_visible {
             self.lane_heights_view += 1;
         }
@@ -381,7 +397,8 @@ impl UIState {
     /// was removed).
     pub fn unchoose_automation_lane(&mut self, target: &UiGraphTarget, param_id: &ParamId) {
         let before = self.chosen_automation_params.len();
-        self.chosen_automation_params.retain(|_, (t, p)| t != target || p != param_id);
+        self.chosen_automation_params
+            .retain(|_, (t, p)| t != target || p != param_id);
         if self.chosen_automation_params.len() != before {
             self.note_lane_view_change();
         }
@@ -450,7 +467,12 @@ impl UIState {
     }
 
     /// Record `layer_id`'s chosen lane without moving the lane order.
-    pub fn choose_automation_param(&mut self, layer_id: LayerId, target: UiGraphTarget, param_id: ParamId) {
+    pub fn choose_automation_param(
+        &mut self,
+        layer_id: LayerId,
+        target: UiGraphTarget,
+        param_id: ParamId,
+    ) {
         let chosen = (target, param_id);
         if self.chosen_automation_params.get(&layer_id) != Some(&chosen) {
             self.chosen_automation_params.insert(layer_id, chosen);
@@ -465,12 +487,16 @@ impl UIState {
     }
 
     pub fn automation_lane_is_hidden(&self, target: &UiGraphTarget, param_id: &ParamId) -> bool {
-        self.hidden_automation_lanes.contains(&(target.clone(), param_id.clone()))
-            && !self.pinned_automation_lanes.contains(&(target.clone(), param_id.clone()))
+        self.hidden_automation_lanes
+            .contains(&(target.clone(), param_id.clone()))
+            && !self
+                .pinned_automation_lanes
+                .contains(&(target.clone(), param_id.clone()))
     }
 
     pub fn automation_lane_is_pinned(&self, target: &UiGraphTarget, param_id: &ParamId) -> bool {
-        self.pinned_automation_lanes.contains(&(target.clone(), param_id.clone()))
+        self.pinned_automation_lanes
+            .contains(&(target.clone(), param_id.clone()))
     }
 
     pub fn hide_automation_lane(&mut self, target: UiGraphTarget, param_id: ParamId) {
@@ -479,12 +505,13 @@ impl UIState {
             if self.hidden_automation_lanes.insert(key.clone()) {
                 self.note_lane_view_change();
             }
-            self.selected_automation_points.retain(|point| {
-                (point.target.clone(), point.param_id.clone()) != key
-            });
-            if self.selected_automation_point.as_ref().is_some_and(|point| {
-                (point.target.clone(), point.param_id.clone()) == key
-            }) {
+            self.selected_automation_points
+                .retain(|point| (point.target.clone(), point.param_id.clone()) != key);
+            if self
+                .selected_automation_point
+                .as_ref()
+                .is_some_and(|point| (point.target.clone(), point.param_id.clone()) == key)
+            {
                 self.selected_automation_point = None;
             }
             if self.automation_paste_context.as_ref() == Some(&key) {
@@ -503,7 +530,11 @@ impl UIState {
     pub fn toggle_automation_lane_pin(&mut self, target: UiGraphTarget, param_id: ParamId) -> bool {
         let key = (target, param_id);
         self.note_lane_view_change();
-        if let Some(index) = self.pinned_automation_lanes.iter().position(|candidate| candidate == &key) {
+        if let Some(index) = self
+            .pinned_automation_lanes
+            .iter()
+            .position(|candidate| candidate == &key)
+        {
             self.pinned_automation_lanes.remove(index);
             false
         } else {
@@ -521,12 +552,21 @@ impl UIState {
     }
 
     /// Move a lane by one slot in the stable order.
-    pub fn move_automation_lane(&mut self, target: UiGraphTarget, param_id: ParamId, direction: i32) -> bool {
+    pub fn move_automation_lane(
+        &mut self,
+        target: UiGraphTarget,
+        param_id: ParamId,
+        direction: i32,
+    ) -> bool {
         let key = (target, param_id);
         if !self.automation_lane_order.contains(&key) {
             self.automation_lane_order.push(key.clone());
         }
-        let Some(index) = self.automation_lane_order.iter().position(|candidate| candidate == &key) else {
+        let Some(index) = self
+            .automation_lane_order
+            .iter()
+            .position(|candidate| candidate == &key)
+        else {
             return false;
         };
         let step = direction.signum();
@@ -545,8 +585,10 @@ impl UIState {
     /// Projection bookkeeping (drops keys of lanes that no longer exist, which
     /// nothing draws), so it moves no version.
     pub fn prune_automation_lane_view(&mut self, live: &HashSet<AutomationLaneKey>) {
-        self.hidden_automation_lanes.retain(|key| live.contains(key));
-        self.pinned_automation_lanes.retain(|key| live.contains(key));
+        self.hidden_automation_lanes
+            .retain(|key| live.contains(key));
+        self.pinned_automation_lanes
+            .retain(|key| live.contains(key));
         self.automation_lane_order.retain(|key| live.contains(key));
     }
 
@@ -1034,11 +1076,7 @@ impl UIState {
 
     /// Select a range of layers from primary to target (Shift+Click).
     /// Unity UIState.cs SelectLayerRange (lines 297-333).
-    pub fn select_layer_range(
-        &mut self,
-        target_layer_id: &str,
-        layers: &[crate::view::UiLayer],
-    ) {
+    pub fn select_layer_range(&mut self, target_layer_id: &str, layers: &[crate::view::UiLayer]) {
         self.clear_automation_selection();
         self.selection = TimelineSelection::None; // clears clips + region
         self.primary_selected_clip_id = None;

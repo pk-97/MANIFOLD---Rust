@@ -1,13 +1,19 @@
 //! Host parameter events backed by authored scene-space field graphs.
 use ahash::{AHashMap, AHashSet};
-use manifold_core::{Beats, NodeId, PlayedTime};
-use manifold_core::scene_impulse::ImpulseFire;
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
+use manifold_core::scene_impulse::ImpulseFire;
+use manifold_core::{Beats, NodeId, PlayedTime};
 
 use super::{WaterRuntime, WaterRuntimeState};
-use {crate::runtime::physics_impulses::CapturedSceneImpulse, crate::runtime::physics_impulses::PreparedSceneImpulse};
 use manifold_node_engine::load::expand::{SceneModifierExpandError, SceneModifierImpulseRoute};
-use manifold_node_engine::{exec::effect_node::NodeInstanceId, exec::effect_node::ParamValues, persistence::PrimitiveRegistry};
+use manifold_node_engine::{
+    exec::effect_node::NodeInstanceId, exec::effect_node::ParamValues,
+    persistence::PrimitiveRegistry,
+};
+use {
+    crate::runtime::physics_impulses::CapturedSceneImpulse,
+    crate::runtime::physics_impulses::PreparedSceneImpulse,
+};
 
 struct Route {
     prepared: PreparedSceneImpulse,
@@ -118,7 +124,6 @@ impl WaterRuntime<'_> {
         self.water.scene_impulses = state;
         Ok(())
     }
-
 }
 
 impl WaterRuntimeState {
@@ -195,7 +200,6 @@ impl WaterRuntime<'_> {
         self.water.scene_impulses = state;
         result
     }
-
 }
 
 impl super::WaterRuntimeState {

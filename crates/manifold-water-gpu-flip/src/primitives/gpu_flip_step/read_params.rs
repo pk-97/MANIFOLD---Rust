@@ -7,7 +7,9 @@ use super::super::gpu_flip_pressure::{MAX_ITERATIONS, Stop, level_refusal};
 /// never clamped, so a level the lattice lacks is a named error.
 pub(crate) fn read_solve_level(value: f32, lattice: [u32; 3]) -> Result<usize, String> {
     if !(value.is_finite() && value >= 0.0 && value.fract() == 0.0) {
-        return Err(format!("Coarse Solve must be a whole number from 0, not {value}"));
+        return Err(format!(
+            "Coarse Solve must be a whole number from 0, not {value}"
+        ));
     }
     let level = value as usize;
     match level_refusal(lattice, level) {
@@ -21,7 +23,9 @@ pub(crate) fn read_closed_faces(value: f32) -> Result<u32, String> {
     if value.fract() == 0.0 && (0.0..=63.0).contains(&value) {
         Ok(value as u32)
     } else {
-        Err(format!("Closed Faces must be a whole number from 0 to 63, not {value}"))
+        Err(format!(
+            "Closed Faces must be a whole number from 0 to 63, not {value}"
+        ))
     }
 }
 
@@ -51,7 +55,9 @@ pub(super) fn read_epoch(value: f32) -> Result<u32, String> {
     if value.is_finite() && value >= 0.0 && value.fract() == 0.0 && value <= u32::MAX as f32 {
         Ok(value as u32)
     } else {
-        Err(format!("Epoch must be a finite nonnegative whole number, not {value}"))
+        Err(format!(
+            "Epoch must be a finite nonnegative whole number, not {value}"
+        ))
     }
 }
 
@@ -62,7 +68,9 @@ pub(crate) fn read_max_iterations(value: f32) -> Result<u32, String> {
     if value.is_finite() && (1.0..=MAX_ITERATIONS as f32).contains(&v) {
         Ok(v as u32)
     } else {
-        Err(format!("Max Iterations must be 1 to {MAX_ITERATIONS}, not {value}"))
+        Err(format!(
+            "Max Iterations must be 1 to {MAX_ITERATIONS}, not {value}"
+        ))
     }
 }
 
@@ -75,7 +83,9 @@ pub(super) fn read_iterations(value: f32, max_iterations: u32) -> Result<Stop, S
     }
     match value.round() {
         v if v <= 0.0 => Ok(Stop::Converged(max_iterations)),
-        v if v > MAX_ITERATIONS as f32 => Err(format!("Iterations {v} is past the solver's {MAX_ITERATIONS}")),
+        v if v > MAX_ITERATIONS as f32 => Err(format!(
+            "Iterations {v} is past the solver's {MAX_ITERATIONS}"
+        )),
         v => Ok(Stop::Fixed(v as u32)),
     }
 }

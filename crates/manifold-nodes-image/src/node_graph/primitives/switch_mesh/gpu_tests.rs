@@ -11,7 +11,9 @@ use std::sync::{Arc, Mutex};
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuBuffer, GpuTextureFormat};
 
-use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, FrameTime};
+use manifold_node_engine::exec::effect_node::{
+    EffectNode, EffectNodeContext, EffectNodeType, FrameTime,
+};
 use manifold_node_engine::exec::execution::Executor;
 use manifold_node_engine::exec::execution_plan::{ExecutionPlan, ResourceId, compile};
 use manifold_node_engine::exec::metal_backend::MetalBackend;
@@ -19,7 +21,9 @@ use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::graph::Graph;
 use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
 use manifold_node_engine::parameters::{ParamDef, ParamValue};
-use manifold_node_engine::ports::{ArrayType, KnownItem, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use manifold_node_engine::ports::{
+    ArrayType, KnownItem, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+};
 use manifold_node_engine::scene::live_extent::LiveExtent;
 
 use super::SwitchMesh;
@@ -39,8 +43,16 @@ struct Input<T> {
 
 impl<T: KnownItem> Input<T> {
     fn new(make: fn(usize) -> T, live: usize, bound: u32, capacity: usize, per_item: u32) -> Self {
-        let items = (0..capacity).map(|i| if i < live { make(i) } else { T::zeroed() }).collect();
-        Self { items, live, bound, per_item, extent: true }
+        let items = (0..capacity)
+            .map(|i| if i < live { make(i) } else { T::zeroed() })
+            .collect();
+        Self {
+            items,
+            live,
+            bound,
+            per_item,
+            extent: true,
+        }
     }
 
     fn without_extent(mut self) -> Self {
@@ -81,15 +93,20 @@ impl EffectNode for GpuWriter {
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let out = ctx.outputs.array("out").expect("writer output pre-bound");
         let gpu = ctx.gpu_encoder();
-        gpu.native_enc.copy_buffer_to_buffer(&self.staged, out, self.staged.size);
-        gpu.native_enc.copy_buffer_to_buffer(&self.staged_count, &self.counts, 4);
+        gpu.native_enc
+            .copy_buffer_to_buffer(&self.staged, out, self.staged.size);
+        gpu.native_enc
+            .copy_buffer_to_buffer(&self.staged_count, &self.counts, 4);
         if self.extent {
-            ctx.outputs.set_live_extent("out", LiveExtent {
-                counts: self.counts.clone(),
-                offset: 0,
-                per_item: self.per_item,
-                bound: self.bound,
-            });
+            ctx.outputs.set_live_extent(
+                "out",
+                LiveExtent {
+                    counts: self.counts.clone(),
+                    offset: 0,
+                    per_item: self.per_item,
+                    bound: self.bound,
+                },
+            );
         }
     }
 }
@@ -119,7 +136,8 @@ impl EffectNode for SelectorWire {
         &[]
     }
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        ctx.outputs.set_scalar("out", ParamValue::Float(*self.value.lock().unwrap()));
+        ctx.outputs
+            .set_scalar("out", ParamValue::Float(*self.value.lock().unwrap()));
     }
 }
 
@@ -157,7 +175,10 @@ impl EffectNode for Sink {
     }
 }
 
-fn output_resource(plan: &ExecutionPlan, node: manifold_node_engine::exec::effect_node::NodeInstanceId) -> ResourceId {
+fn output_resource(
+    plan: &ExecutionPlan,
+    node: manifold_node_engine::exec::effect_node::NodeInstanceId,
+) -> ResourceId {
     plan.steps()
         .iter()
         .find(|step| step.node == node)
@@ -212,14 +233,22 @@ fn run<T: KnownItem>(
     let mut graph = Graph::new();
     let switch = graph.add_node(switch);
     let mut writers = Vec::new();
-    let mut keys = Keys { inputs: [None, None], switch: 0 };
+    let mut keys = Keys {
+        inputs: [None, None],
+        switch: 0,
+    };
     for (slot, (input, port)) in [(a, "in_0"), (b, "in_1")].into_iter().enumerate() {
         let Some(input) = input else { continue };
         let counts = shared(&device, &[u32::MAX], 0xAB);
         let counts_key = counts.identity_key();
         let writer = graph.add_node(Box::new(GpuWriter {
             type_id: EffectNodeType::new(port),
-            outputs: vec![NodePort { name: Cow::Borrowed("out"), ty, kind: PortKind::Output, required: false }],
+            outputs: vec![NodePort {
+                name: Cow::Borrowed("out"),
+                ty,
+                kind: PortKind::Output,
+                required: false,
+            }],
             staged: shared(&device, &input.items, 0),
             staged_count: shared(&device, &[(input.live as u32) / input.per_item], 0),
             counts,
@@ -232,7 +261,12 @@ fn run<T: KnownItem>(
     }
     let seen: Seen = Arc::new(Mutex::new(None));
     let sink = graph.add_node(Box::new(Sink {
-        inputs: vec![NodePort { name: Cow::Borrowed("in"), ty, kind: PortKind::Input, required: true }],
+        inputs: vec![NodePort {
+            name: Cow::Borrowed("in"),
+            ty,
+            kind: PortKind::Input,
+            required: true,
+        }],
         seen: seen.clone(),
     }));
     graph.connect((switch, "out"), (sink, "in")).unwrap();
@@ -240,10 +274,17 @@ fn run<T: KnownItem>(
     if wired {
         let scalar = PortType::Scalar(ScalarType::F32);
         let selector = graph.add_node(Box::new(SelectorWire {
-            outputs: vec![NodePort { name: Cow::Borrowed("out"), ty: scalar, kind: PortKind::Output, required: false }],
+            outputs: vec![NodePort {
+                name: Cow::Borrowed("out"),
+                ty: scalar,
+                kind: PortKind::Output,
+                required: false,
+            }],
             value: wire.clone(),
         }));
-        graph.connect((selector, "out"), (switch, "selector")).unwrap();
+        graph
+            .connect((selector, "out"), (switch, "selector"))
+            .unwrap();
     }
     let plan = compile(&graph).unwrap();
 
@@ -262,7 +303,9 @@ fn run<T: KnownItem>(
 
     let mut frames = Vec::new();
     for (frame_count, &selector) in selectors.iter().enumerate() {
-        graph.set_param(switch, "selector", ParamValue::Float(selector)).unwrap();
+        graph
+            .set_param(switch, "selector", ParamValue::Float(selector))
+            .unwrap();
         *wire.lock().unwrap() = selector;
         let mut native = device.create_encoder("switch gpu proof");
         {
@@ -282,9 +325,15 @@ fn run<T: KnownItem>(
             // SAFETY: shared buffer holding `offset + len` bytes; GPU work done.
             unsafe { std::slice::from_raw_parts(ptr.add(offset as usize), len) }.to_vec()
         };
-        let counts = extent.as_ref().map(|e| e.counts.identity_key()).filter(|key| {
-            keys.inputs.iter().flatten().any(|&(_, counts)| counts == *key)
-        });
+        let counts = extent
+            .as_ref()
+            .map(|e| e.counts.identity_key())
+            .filter(|key| {
+                keys.inputs
+                    .iter()
+                    .flatten()
+                    .any(|&(_, counts)| counts == *key)
+            });
         frames.push(Frame {
             buffer: buffer.identity_key(),
             out: read(&buffer, 0, buffer.size as usize),
@@ -301,18 +350,42 @@ fn run<T: KnownItem>(
 /// What the consumer should see when `in_{port}` is chosen. A wired choice is
 /// the input's own buffer and extent, untouched; an unwired one is the
 /// switch's own buffer, zeroed, with an extent of zero.
-fn expected<T: KnownItem>(input: Option<&Input<T>>, port: usize, keys: &Keys, capacity: usize) -> Frame {
+fn expected<T: KnownItem>(
+    input: Option<&Input<T>>,
+    port: usize,
+    keys: &Keys,
+    capacity: usize,
+) -> Frame {
     let Some(input) = input else {
         let out = vec![0u8; capacity * std::mem::size_of::<T>()];
-        return Frame { buffer: keys.switch, out, extent: Some((0, 1, 0)), counts: None };
+        return Frame {
+            buffer: keys.switch,
+            out,
+            extent: Some((0, 1, 0)),
+            counts: None,
+        };
     };
     let (buffer, counts) = keys.inputs[port].expect("a wired input is pre-bound");
     let out = bytemuck::cast_slice(&input.items).to_vec();
     if input.extent {
-        let extent = Some((input.live as u32 / input.per_item, input.per_item, input.bound));
-        Frame { buffer, out, extent, counts: Some(counts) }
+        let extent = Some((
+            input.live as u32 / input.per_item,
+            input.per_item,
+            input.bound,
+        ));
+        Frame {
+            buffer,
+            out,
+            extent,
+            counts: Some(counts),
+        }
     } else {
-        Frame { buffer, out, extent: None, counts: None }
+        Frame {
+            buffer,
+            out,
+            extent: None,
+            counts: None,
+        }
     }
 }
 
@@ -324,7 +397,16 @@ fn copied<T: KnownItem>(input: &Input<T>, port: usize, keys: &Keys, capacity: us
     let live: &[u8] = bytemuck::cast_slice(&input.items[..input.live]);
     out[..live.len()].copy_from_slice(live);
     let counts = keys.inputs[port].map(|(_, counts)| counts);
-    Frame { buffer: keys.switch, out, extent: Some((input.live as u32 / input.per_item, input.per_item, input.bound)), counts }
+    Frame {
+        buffer: keys.switch,
+        out,
+        extent: Some((
+            input.live as u32 / input.per_item,
+            input.per_item,
+            input.bound,
+        )),
+        counts,
+    }
 }
 
 fn vertex(i: usize) -> MeshVertex {
@@ -386,12 +468,20 @@ fn index_switch() -> Box<dyn EffectNode> {
 
 #[test]
 fn switch_mesh_routes_the_chosen_gpu_written_vertices_and_their_live_extent() {
-    assert_routes(mesh_switch, Input::new(vertex, 3, 4, 6, 1), Input::new(vertex, 5, 7, 9, 1));
+    assert_routes(
+        mesh_switch,
+        Input::new(vertex, 3, 4, 6, 1),
+        Input::new(vertex, 5, 7, 9, 1),
+    );
 }
 
 #[test]
 fn switch_indices_routes_the_chosen_gpu_written_indices_and_their_live_extent() {
-    assert_routes(index_switch, Input::new(index, 6, 9, 12, 3), Input::new(index, 9, 12, 15, 3));
+    assert_routes(
+        index_switch,
+        Input::new(index, 6, 9, 12, 3),
+        Input::new(index, 9, 12, 15, 3),
+    );
 }
 
 #[test]
@@ -422,7 +512,11 @@ fn switch_mesh_wired_selector_copies_the_chosen_live_vertices() {
     let a = Input::new(vertex, 3, 4, 6, 1);
     let b = Input::new(vertex, 5, 7, 9, 1);
     let (frames, keys) = run(mesh_switch(), Some(&a), Some(&b), &[1.0, 0.0, 1.0], true);
-    let want = [copied(&b, 1, &keys, 9), copied(&a, 0, &keys, 9), copied(&b, 1, &keys, 9)];
+    let want = [
+        copied(&b, 1, &keys, 9),
+        copied(&a, 0, &keys, 9),
+        copied(&b, 1, &keys, 9),
+    ];
     for (i, (got, want)) in frames.iter().zip(&want).enumerate() {
         assert_eq!(got, want, "frame {i}");
     }
@@ -430,7 +524,10 @@ fn switch_mesh_wired_selector_copies_the_chosen_live_vertices() {
 
 fn instance(i: usize) -> InstanceTransform {
     let f = i as f32 + 1.0;
-    InstanceTransform { pos_scale: [f, -f, 0.5 * f, 0.01 * f], rot_pad: [0.1 * f, 0.2 * f, 0.3 * f, 0.0] }
+    InstanceTransform {
+        pos_scale: [f, -f, 0.5 * f, 0.01 * f],
+        rot_pad: [0.1 * f, 0.2 * f, 0.3 * f, 0.0],
+    }
 }
 
 fn instance_switch() -> Box<dyn EffectNode> {
@@ -439,7 +536,11 @@ fn instance_switch() -> Box<dyn EffectNode> {
 
 #[test]
 fn switch_instances_routes_the_chosen_gpu_written_instances_and_their_live_extent() {
-    assert_routes(instance_switch, Input::new(instance, 3, 4, 6, 1), Input::new(instance, 5, 7, 9, 1));
+    assert_routes(
+        instance_switch,
+        Input::new(instance, 3, 4, 6, 1),
+        Input::new(instance, 5, 7, 9, 1),
+    );
 }
 
 /// Physics View's shape: copies on in_1 only; the off choice is empty.

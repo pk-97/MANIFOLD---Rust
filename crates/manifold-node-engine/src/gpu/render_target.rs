@@ -14,7 +14,10 @@ thread_local! {
 pub(crate) fn allocation_checkpoint() -> Result<(), String> {
     FAIL_ALLOCATION_AFTER.with(|remaining| match remaining.get() {
         Some(0) => Err("injected GPU allocation failure".into()),
-        Some(n) => { remaining.set(Some(n - 1)); Ok(()) }
+        Some(n) => {
+            remaining.set(Some(n - 1));
+            Ok(())
+        }
         None => Ok(()),
     })
 }
@@ -23,7 +26,9 @@ pub(crate) fn allocation_checkpoint() -> Result<(), String> {
 pub struct AllocationFailureGuard(Option<usize>);
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 impl Drop for AllocationFailureGuard {
-    fn drop(&mut self) { FAIL_ALLOCATION_AFTER.with(|value| value.set(self.0)); }
+    fn drop(&mut self) {
+        FAIL_ALLOCATION_AFTER.with(|value| value.set(self.0));
+    }
 }
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub fn fail_allocation_after(count: usize) -> AllocationFailureGuard {
@@ -94,11 +99,8 @@ impl RenderTarget {
             .checked_mul(u64::from(height))
             .and_then(|pixels| pixels.checked_mul(u64::from(format.bytes_per_pixel())))
             .ok_or_else(|| "render target byte size overflows u64".to_string())?;
-        crate::load::expand::admit_candidate_bytes(
-            device.modifier_memory_snapshot(),
-            bytes,
-        )
-        .map_err(|error| error.to_string())?;
+        crate::load::expand::admit_candidate_bytes(device.modifier_memory_snapshot(), bytes)
+            .map_err(|error| error.to_string())?;
         #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         allocation_checkpoint()?;
         let texture = device.try_create_texture(&GpuTextureDesc {
@@ -167,11 +169,8 @@ impl RenderTarget {
             .checked_mul(u64::from(height))
             .and_then(|pixels| pixels.checked_mul(u64::from(format.bytes_per_pixel())))
             .ok_or_else(|| "render target byte size overflows u64".to_string())?;
-        crate::load::expand::admit_candidate_bytes(
-            device.modifier_memory_snapshot(),
-            bytes,
-        )
-        .map_err(|error| error.to_string())?;
+        crate::load::expand::admit_candidate_bytes(device.modifier_memory_snapshot(), bytes)
+            .map_err(|error| error.to_string())?;
         #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         allocation_checkpoint()?;
         let texture = device.try_create_texture(&GpuTextureDesc {

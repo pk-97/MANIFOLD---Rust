@@ -1,12 +1,12 @@
 //! CPU graph proofs for physical recipients of force recipes.
 
-use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
-use manifold_node_engine::load::expand::{SceneModifierExpandError, prepare_scene_modifiers};
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
-use manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier;
 use manifold_core::scene_modifier_preset::SceneTargetSelection;
+use manifold_node_engine::load::expand::{SceneModifierExpandError, prepare_scene_modifiers};
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier;
+use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
 use std::collections::{BTreeMap, BTreeSet};
 
 const PHYSICS_SOLIDS: &str = include_str!(concat!(
@@ -66,8 +66,7 @@ fn attach(owner: &EffectGraphDef, id: &str, targets: SceneTargetSelection) -> Ef
     let instance =
         prepare_new_scene_modifier(owner, &recipe(), NodeId::new(id), scene(owner), targets)
             .unwrap();
-    attach_scene_modifier(owner, instance)
-        .unwrap()
+    attach_scene_modifier(owner, instance).unwrap()
 }
 fn prepared(owner: &EffectGraphDef) -> EffectGraphDef {
     prepare_scene_modifiers(owner, &PrimitiveRegistry::with_builtin())
@@ -147,7 +146,13 @@ fn force_body_targets_only_selected_world_slot() {
         },
     ));
     assert_eq!(target_wires(&expanded, "physics_demo_101").len(), 1);
-    for body in ["physics_demo_111", "physics_demo_121", "physics_demo_131", "physics_demo_141", "physics_demo_151"] {
+    for body in [
+        "physics_demo_111",
+        "physics_demo_121",
+        "physics_demo_131",
+        "physics_demo_141",
+        "physics_demo_151",
+    ] {
         assert!(target_wires(&expanded, body).is_empty(), "{body}");
     }
 }
@@ -169,8 +174,20 @@ fn force_copies_target_uses_world_instances_input() {
         "physics_demo_104",
         "instances",
     );
-    remove_wire(&mut owner, "physics_demo_101", "body", "physics_demo_40", "body_0");
-    wire(&mut owner, "physics_demo_101", "body", "physics_demo_40", "copies_0");
+    remove_wire(
+        &mut owner,
+        "physics_demo_101",
+        "body",
+        "physics_demo_40",
+        "body_0",
+    );
+    wire(
+        &mut owner,
+        "physics_demo_101",
+        "body",
+        "physics_demo_40",
+        "copies_0",
+    );
     let expanded = prepared(&attach(
         &owner,
         "copies_force",
@@ -178,7 +195,11 @@ fn force_copies_target_uses_world_instances_input() {
             objects: vec![reference(&owner, "node.scene_object", "physics_demo_104")],
         },
     ));
-    assert_eq!(target_wires(&expanded, "physics_demo_101").len(), 1, "the copy group's force enters on its body");
+    assert_eq!(
+        target_wires(&expanded, "physics_demo_101").len(),
+        1,
+        "the copy group's force enters on its body"
+    );
     assert!(target_wires(&expanded, "physics_demo_111").is_empty());
 }
 
@@ -320,10 +341,7 @@ fn grouped_parts_sharing_world_slot_emit_one_force_clone() {
         .handle = Some("Renamed scan".into());
     let saved: EffectGraphDef =
         serde_json::from_slice(&serde_json::to_vec(&attached).unwrap()).unwrap();
-    assert_eq!(
-        target_wires(&prepared(&saved), "physics_demo_101").len(),
-        1
-    );
+    assert_eq!(target_wires(&prepared(&saved), "physics_demo_101").len(), 1);
 }
 
 #[test]
@@ -387,10 +405,7 @@ fn all_objects_force_picks_up_body_added_after_attachment() {
             "objects".into(),
             manifold_core::effect_graph_def::SerializedParamValue::Float { value: 7.0 },
         );
-    assert_eq!(
-        target_wires(&prepared(&later), "future_body").len(),
-        1
-    );
+    assert_eq!(target_wires(&prepared(&later), "future_body").len(), 1);
 }
 
 #[test]
@@ -441,8 +456,16 @@ fn empty_and_nonphysical_force_targets_keep_shared_controls() {
         "scene",
         "object_6",
     );
-    nonphysical.nodes.iter_mut().find(|node| node.node_id.as_str() == "scene").unwrap()
-        .params.insert("objects".into(), manifold_core::effect_graph_def::SerializedParamValue::Float { value: 7.0 });
+    nonphysical
+        .nodes
+        .iter_mut()
+        .find(|node| node.node_id.as_str() == "scene")
+        .unwrap()
+        .params
+        .insert(
+            "objects".into(),
+            manifold_core::effect_graph_def::SerializedParamValue::Float { value: 7.0 },
+        );
     let expanded = prepared(&attach(
         &nonphysical,
         "nonphysical_force",

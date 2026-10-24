@@ -8,6 +8,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use super::accel::ProbeBlas;
 use arrayvec::ArrayVec;
 use objc2::AnyThread;
 use objc2::rc::Retained;
@@ -15,20 +16,23 @@ use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
     MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder, MTLCommandQueue,
-    MTLCompileOptions, MTLComputeCommandEncoder, MTLComputePipelineState, MTLDataType,
-    MTLDevice, MTLFunctionConstantValues, MTLLanguageVersion, MTLLibrary, MTLSize,
+    MTLCompileOptions, MTLComputeCommandEncoder, MTLComputePipelineState, MTLDataType, MTLDevice,
+    MTLFunctionConstantValues, MTLLanguageVersion, MTLLibrary, MTLSize,
 };
-use super::accel::ProbeBlas;
 
 use manifold_foundation::cold_touch::{ColdTouchKind, record_cold_touch};
 
 use super::super::device::GpuDevice;
 use super::super::types::{GpuBuffer, GpuComputePipeline, GpuTexture};
 use super::super::{GpuEncoder, Slot, SlotKind, SlotMap};
-use super::*;
-use crate::types::{GpuBinding, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
-use crate::trace_planner::{TraceRegion, TraceWorkLimits, estimate_trace_query_units_per_pixel, plan_trace_regions};
 use super::trace_timing::{TraceTiming, TraceTimingReport};
+use super::*;
+use crate::trace_planner::{
+    TraceRegion, TraceWorkLimits, estimate_trace_query_units_per_pixel, plan_trace_regions,
+};
+use crate::types::{
+    GpuBinding, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+};
 
 /// Candidates one ray's walk may test before it stops (BUG-k1n2w). Mirrors
 /// the MSL `RT_WALK_MAX_CANDIDATES` default; a unit test pins the two.
@@ -152,9 +156,18 @@ fn compile_pipeline_with_constants(
             .newComputePipelineStateWithFunction_error(&func)
             .unwrap_or_else(|e| panic!("{entry}: compute PSO error: {}", e.localizedDescription()))
     };
-    let workgroup_product = SHADOW_WORKGROUP[0] as usize * SHADOW_WORKGROUP[1] as usize * SHADOW_WORKGROUP[2] as usize;
-    assert!(workgroup_product <= state.maxTotalThreadsPerThreadgroup(), "RT pipeline {entry} workgroup exceeds device limit");
-    log::info!("[RT] pipeline {entry}: workgroup={SHADOW_WORKGROUP:?} max_threads={} execution_width={} static_threadgroup_memory={}", state.maxTotalThreadsPerThreadgroup(), state.threadExecutionWidth(), state.staticThreadgroupMemoryLength());
+    let workgroup_product =
+        SHADOW_WORKGROUP[0] as usize * SHADOW_WORKGROUP[1] as usize * SHADOW_WORKGROUP[2] as usize;
+    assert!(
+        workgroup_product <= state.maxTotalThreadsPerThreadgroup(),
+        "RT pipeline {entry} workgroup exceeds device limit"
+    );
+    log::info!(
+        "[RT] pipeline {entry}: workgroup={SHADOW_WORKGROUP:?} max_threads={} execution_width={} static_threadgroup_memory={}",
+        state.maxTotalThreadsPerThreadgroup(),
+        state.threadExecutionWidth(),
+        state.staticThreadgroupMemoryLength()
+    );
     GpuComputePipeline {
         state,
         slot_map,
@@ -176,16 +189,20 @@ fn compile_reflecting_writes(
     use objc2_metal::{MTLBinding, MTLBindingAccess, MTLBindingType, MTLPipelineOption};
     let mut reflection = None;
     let state = unsafe {
-        device.raw_device().newComputePipelineStateWithFunction_options_reflection_error(
-            func,
-            MTLPipelineOption::BindingInfo,
-            Some(&mut reflection),
-        )
+        device
+            .raw_device()
+            .newComputePipelineStateWithFunction_options_reflection_error(
+                func,
+                MTLPipelineOption::BindingInfo,
+                Some(&mut reflection),
+            )
     }
     .unwrap_or_else(|e| panic!("{entry}: compute PSO error: {}", e.localizedDescription()));
     if let Some(reflection) = reflection {
         for binding in reflection.bindings().iter() {
-            if binding.r#type() != MTLBindingType::Texture || binding.access() == MTLBindingAccess::ReadOnly {
+            if binding.r#type() != MTLBindingType::Texture
+                || binding.access() == MTLBindingAccess::ReadOnly
+            {
                 continue;
             }
             let index = binding.index() as u32;
@@ -193,7 +210,13 @@ fn compile_reflecting_writes(
                 && slot.kind == SlotKind::Texture
                 && slot.metal_index == index
             {
-                slot_map.insert(index, Slot { writes: true, ..slot });
+                slot_map.insert(
+                    index,
+                    Slot {
+                        writes: true,
+                        ..slot
+                    },
+                );
             }
         }
     }
@@ -545,7 +568,13 @@ enum TraceKind {
 /// Identity of a trace's cost shape: kind, scene acceleration structure,
 /// size and quality. A new shape starts from small tiles; a structural
 /// scene change replaces the TLAS and so the shape too.
-fn trace_shape_key(kind: TraceKind, accel: &RtAccel, size: [u32; 2], query_units: u64, quality: &[u32]) -> u64 {
+fn trace_shape_key(
+    kind: TraceKind,
+    accel: &RtAccel,
+    size: [u32; 2],
+    query_units: u64,
+    quality: &[u32],
+) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     kind.hash(&mut hasher);
     (Retained::as_ptr(&accel.structure) as usize).hash(&mut hasher);
@@ -787,7 +816,10 @@ impl RtPipelines {
         // the WGSL path's pinned older version — matches the prototype's
         // `Gpu::compile_library`.
         opts.setLanguageVersion(MTLLanguageVersion::Version3_1);
-        let source = format!("{}{prelude}{SHADOW_RAYS_MSL}\n{SUBSURFACE_MSL}", crate::ShadowCaster::MSL);
+        let source = format!(
+            "{}{prelude}{SHADOW_RAYS_MSL}\n{SUBSURFACE_MSL}",
+            crate::ShadowCaster::MSL
+        );
         let src_ns = NSString::from_str(&source);
         let library = device
             .raw_device()
@@ -822,7 +854,8 @@ impl RtPipelines {
         ];
         // material_textures[MAX_RT_MATERIAL_TEXTURES], MSL [[texture(4)]] —
         // occupies MAX_RT_MATERIAL_TEXTURES consecutive slots starting at 4.
-        trace_slots.extend((4..4 + MAX_RT_MATERIAL_TEXTURES as u32).map(|i| (i, SlotKind::Texture)));
+        trace_slots
+            .extend((4..4 + MAX_RT_MATERIAL_TEXTURES as u32).map(|i| (i, SlotKind::Texture)));
         // RT-R1 (section 9.3): out_refl, MSL [[texture(68)]]. MISSED by the
         // T3 plumbing (slot maps weren't extended with the kernel
         // signatures) — the reflection block's writes went nowhere
@@ -841,31 +874,48 @@ impl RtPipelines {
         // Three trace passes crossed with binary/translucent ray semantics.
         // Both constants are supplied before compilation; SPP is unchanged.
         let trace_slot_map = identity_slot_map(&trace_slots);
-        let trace_pipelines = TracePass::ALL.map(|pass| [false, true].map(|translucent| {
-            let cv = unsafe { MTLFunctionConstantValues::init(MTLFunctionConstantValues::alloc()) };
-            let has: u8 = u8::from(translucent);
-            let value = pass as u32;
-            unsafe {
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&has).cast(), MTLDataType::Bool, TRACE_TRANSLUCENCY_CONSTANT_INDEX);
-                cv.setConstantValue_type_atIndex(core::ptr::NonNull::from(&value).cast(), MTLDataType::UInt, TRACE_PASS_CONSTANT_INDEX);
-            }
-            let mut pipeline = compile_pipeline_with_constants(device, &library, "trace_shadow_rays", trace_slot_map.clone(), Some(&cv));
-            pipeline.label = pass.pipeline_label(translucent).into();
-            pipeline
-        }));
+        let trace_pipelines = TracePass::ALL.map(|pass| {
+            [false, true].map(|translucent| {
+                let cv =
+                    unsafe { MTLFunctionConstantValues::init(MTLFunctionConstantValues::alloc()) };
+                let has: u8 = u8::from(translucent);
+                let value = pass as u32;
+                unsafe {
+                    cv.setConstantValue_type_atIndex(
+                        core::ptr::NonNull::from(&has).cast(),
+                        MTLDataType::Bool,
+                        TRACE_TRANSLUCENCY_CONSTANT_INDEX,
+                    );
+                    cv.setConstantValue_type_atIndex(
+                        core::ptr::NonNull::from(&value).cast(),
+                        MTLDataType::UInt,
+                        TRACE_PASS_CONSTANT_INDEX,
+                    );
+                }
+                let mut pipeline = compile_pipeline_with_constants(
+                    device,
+                    &library,
+                    "trace_shadow_rays",
+                    trace_slot_map.clone(),
+                    Some(&cv),
+                );
+                pipeline.label = pass.pipeline_label(translucent).into();
+                pipeline
+            })
+        });
 
         // Subsurface transport shares the helper functions and acceleration
         // bindings from the shadow-ray library, but has its own fixed ABI.
         // Keep this PSO in the device-global set so no frame can compile a
         // kernel while dispatching.
         let mut subsurface_slots: Vec<(u32, SlotKind)> = vec![
-            (0, SlotKind::Buffer), // accel
-            (1, SlotKind::Buffer), // params
-            (2, SlotKind::Buffer), // normal sources
-            (3, SlotKind::Buffer), // scattering materials
-            (4, SlotKind::Buffer), // lights
-            (5, SlotKind::Buffer), // canonical GI materials
-            (6, SlotKind::Buffer), // tile region inline bytes
+            (0, SlotKind::Buffer),  // accel
+            (1, SlotKind::Buffer),  // params
+            (2, SlotKind::Buffer),  // normal sources
+            (3, SlotKind::Buffer),  // scattering materials
+            (4, SlotKind::Buffer),  // lights
+            (5, SlotKind::Buffer),  // canonical GI materials
+            (6, SlotKind::Buffer),  // tile region inline bytes
             (0, SlotKind::Texture), // camera depth
             (1, SlotKind::Texture), // environment
             (2, SlotKind::Texture), // output
@@ -976,7 +1026,7 @@ impl RtPipelines {
                 (6, SlotKind::Texture), // RT-T1-C: depth_history_write
                 (7, SlotKind::Texture), // RT-T1-C: normal_history_read
                 (8, SlotKind::Texture), // RT-T1-C: normal_history_write
-                (9, SlotKind::Texture),  // RT-T1-D: moments_read
+                (9, SlotKind::Texture), // RT-T1-D: moments_read
                 (10, SlotKind::Texture), // RT-T1-D: moments_write
                 // RT-R2 (RD6): hi_refl / refl history pair / gi_materials —
                 // the R1 slot-map incident class; signatures and slot maps
@@ -1112,10 +1162,7 @@ impl RtPipelines {
             device,
             &library,
             "build_instance_descriptors",
-            identity_slot_map(&[
-                (0, SlotKind::Buffer),
-                (1, SlotKind::Buffer),
-            ]),
+            identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer)]),
         );
 
         // P4a (§5.1): emissive-preparation kernels — all 1D buffer-only
@@ -1132,20 +1179,65 @@ impl RtPipelines {
             p
         };
         let emissive = EmissivePipelines {
-            enumerate: emissive_1d("emissive_enumerate",
-                &[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer)]),
-            hist: emissive_1d("emissive_hist",
-                &[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer), (3, SlotKind::Buffer)]),
-            scan: emissive_1d("emissive_scan",
-                &[(0, SlotKind::Buffer), (1, SlotKind::Buffer)]),
-            scatter: emissive_1d("emissive_scatter",
-                &[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer), (3, SlotKind::Buffer), (4, SlotKind::Buffer)]),
-            gather: emissive_1d("emissive_gather",
-                &[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer), (3, SlotKind::Buffer), (4, SlotKind::Buffer), (5, SlotKind::Buffer)]),
-            stats: emissive_1d("emissive_stats",
-                &[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer)]),
-            alias: emissive_1d("emissive_alias",
-                &[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer), (3, SlotKind::Buffer)]),
+            enumerate: emissive_1d(
+                "emissive_enumerate",
+                &[
+                    (0, SlotKind::Buffer),
+                    (1, SlotKind::Buffer),
+                    (2, SlotKind::Buffer),
+                ],
+            ),
+            hist: emissive_1d(
+                "emissive_hist",
+                &[
+                    (0, SlotKind::Buffer),
+                    (1, SlotKind::Buffer),
+                    (2, SlotKind::Buffer),
+                    (3, SlotKind::Buffer),
+                ],
+            ),
+            scan: emissive_1d(
+                "emissive_scan",
+                &[(0, SlotKind::Buffer), (1, SlotKind::Buffer)],
+            ),
+            scatter: emissive_1d(
+                "emissive_scatter",
+                &[
+                    (0, SlotKind::Buffer),
+                    (1, SlotKind::Buffer),
+                    (2, SlotKind::Buffer),
+                    (3, SlotKind::Buffer),
+                    (4, SlotKind::Buffer),
+                ],
+            ),
+            gather: emissive_1d(
+                "emissive_gather",
+                &[
+                    (0, SlotKind::Buffer),
+                    (1, SlotKind::Buffer),
+                    (2, SlotKind::Buffer),
+                    (3, SlotKind::Buffer),
+                    (4, SlotKind::Buffer),
+                    (5, SlotKind::Buffer),
+                ],
+            ),
+            stats: emissive_1d(
+                "emissive_stats",
+                &[
+                    (0, SlotKind::Buffer),
+                    (1, SlotKind::Buffer),
+                    (2, SlotKind::Buffer),
+                ],
+            ),
+            alias: emissive_1d(
+                "emissive_alias",
+                &[
+                    (0, SlotKind::Buffer),
+                    (1, SlotKind::Buffer),
+                    (2, SlotKind::Buffer),
+                    (3, SlotKind::Buffer),
+                ],
+            ),
         };
 
         // §4.3 (P5): the inline-copy kernel — scalar grid index, so force a
@@ -1155,7 +1247,11 @@ impl RtPipelines {
             device,
             &library,
             "rt_copy_inline",
-            identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer), (2, SlotKind::Buffer)]),
+            identity_slot_map(&[
+                (0, SlotKind::Buffer),
+                (1, SlotKind::Buffer),
+                (2, SlotKind::Buffer),
+            ]),
         );
         copy_inline_pipeline.workgroup_size = [64, 1, 1];
 
@@ -1223,10 +1319,13 @@ impl MetalShadowRayTracer {
         let dummy_alpha_tex = create_dummy_alpha_texture(device);
         let enabled = super::super::gpu_fault::diagnostics_enabled();
         if enabled {
-            log::info!("[RT-DIAG] stages:0=primary,1=shadow/sun,2=AO,3=GI,4=emissive-shadow,5=reflection; invalid rays replaced only in diagnostic mode; records retain first incident per fixed slot");
+            log::info!(
+                "[RT-DIAG] stages:0=primary,1=shadow/sun,2=AO,3=GI,4=emissive-shadow,5=reflection; invalid rays replaced only in diagnostic mode; records retain first incident per fixed slot"
+            );
         }
         let make_record = |enabled: bool| {
-            let buffer = device.create_buffer_shared(std::mem::size_of::<RtTraceDiagnostics>() as u64);
+            let buffer =
+                device.create_buffer_shared(std::mem::size_of::<RtTraceDiagnostics>() as u64);
             let ptr = buffer.mapped_ptr().expect("shared RT diagnostics");
             unsafe {
                 std::ptr::write_bytes(ptr, 0, std::mem::size_of::<RtTraceDiagnostics>());
@@ -1394,7 +1493,13 @@ impl MetalShadowRayTracer {
         // tile is the shader's binding(6) inline snapshot; each tile commits
         // as its own command buffer.
         let query_units = u64::from(params.query_units_per_pixel.max(1));
-        let shape = trace_shape_key(TraceKind::Subsurface, accel, params.render_size, query_units, &[]);
+        let shape = trace_shape_key(
+            TraceKind::Subsurface,
+            accel,
+            params.render_size,
+            query_units,
+            &[],
+        );
         let (timing_slot, limits) = self.trace_timing.borrow_mut().begin(shape);
         let limits = floor_to_workgroup(limits, SHADOW_WORKGROUP);
         let regions = plan_trace_regions(
@@ -1426,7 +1531,10 @@ impl MetalShadowRayTracer {
                 "trace_subsurface",
             );
             self.trace_timing.borrow_mut().record(
-                timing_slot, &encoder.cmd_buf, region_pixels(&region), limits.max_pixels_per_tile,
+                timing_slot,
+                &encoder.cmd_buf,
+                region_pixels(&region),
+                limits.max_pixels_per_tile,
             );
             encoder.commit_and_continue(device);
         }
@@ -1446,18 +1554,54 @@ impl MetalShadowRayTracer {
         encoder.dispatch_compute(
             &self.subsurface_reconstruct_pipeline,
             &[
-                GpuBinding::Bytes { binding: 1, data: subsurface_reconstruction_params_bytes(&reconstruction) },
-                GpuBinding::Texture { binding: 0, texture: raw_output },
-                GpuBinding::Texture { binding: 1, texture: guide },
-                GpuBinding::Texture { binding: 2, texture: history_read },
-                GpuBinding::Texture { binding: 3, texture: history_write },
-                GpuBinding::Texture { binding: 4, texture: count_read },
-                GpuBinding::Texture { binding: 5, texture: count_write },
-                GpuBinding::Texture { binding: 6, texture: output },
-                GpuBinding::Texture { binding: 7, texture: depth },
-                GpuBinding::Texture { binding: 8, texture: guide_read },
-                GpuBinding::Texture { binding: 9, texture: depth_read },
-                GpuBinding::Texture { binding: 10, texture: depth_write },
+                GpuBinding::Bytes {
+                    binding: 1,
+                    data: subsurface_reconstruction_params_bytes(&reconstruction),
+                },
+                GpuBinding::Texture {
+                    binding: 0,
+                    texture: raw_output,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: guide,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: history_read,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: history_write,
+                },
+                GpuBinding::Texture {
+                    binding: 4,
+                    texture: count_read,
+                },
+                GpuBinding::Texture {
+                    binding: 5,
+                    texture: count_write,
+                },
+                GpuBinding::Texture {
+                    binding: 6,
+                    texture: output,
+                },
+                GpuBinding::Texture {
+                    binding: 7,
+                    texture: depth,
+                },
+                GpuBinding::Texture {
+                    binding: 8,
+                    texture: guide_read,
+                },
+                GpuBinding::Texture {
+                    binding: 9,
+                    texture: depth_read,
+                },
+                GpuBinding::Texture {
+                    binding: 10,
+                    texture: depth_write,
+                },
             ],
             dispatch_groups_2d(params.render_size, SHADOW_WORKGROUP),
             "node.render_scene subsurface reconstruct",
@@ -1467,11 +1611,26 @@ impl MetalShadowRayTracer {
         encoder.dispatch_compute(
             &self.subsurface_filter_pipeline,
             &[
-                GpuBinding::Bytes { binding: 1, data: subsurface_reconstruction_params_bytes(&filter_params) },
-                GpuBinding::Texture { binding: 0, texture: depth },
-                GpuBinding::Texture { binding: 1, texture: guide },
-                GpuBinding::Texture { binding: 2, texture: output },
-                GpuBinding::Texture { binding: 3, texture: filter_scratch },
+                GpuBinding::Bytes {
+                    binding: 1,
+                    data: subsurface_reconstruction_params_bytes(&filter_params),
+                },
+                GpuBinding::Texture {
+                    binding: 0,
+                    texture: depth,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: guide,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: output,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: filter_scratch,
+                },
             ],
             dispatch_groups_2d(params.render_size, SHADOW_WORKGROUP),
             "node.render_scene subsurface filter step1",
@@ -1480,11 +1639,26 @@ impl MetalShadowRayTracer {
         encoder.dispatch_compute(
             &self.subsurface_filter_pipeline,
             &[
-                GpuBinding::Bytes { binding: 1, data: subsurface_reconstruction_params_bytes(&filter_params) },
-                GpuBinding::Texture { binding: 0, texture: depth },
-                GpuBinding::Texture { binding: 1, texture: guide },
-                GpuBinding::Texture { binding: 2, texture: filter_scratch },
-                GpuBinding::Texture { binding: 3, texture: output },
+                GpuBinding::Bytes {
+                    binding: 1,
+                    data: subsurface_reconstruction_params_bytes(&filter_params),
+                },
+                GpuBinding::Texture {
+                    binding: 0,
+                    texture: depth,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: guide,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: filter_scratch,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: output,
+                },
             ],
             dispatch_groups_2d(params.render_size, SHADOW_WORKGROUP),
             "node.render_scene subsurface filter step2",
@@ -1525,7 +1699,8 @@ impl MetalShadowRayTracer {
             bary,
             slot_row_base,
         };
-        let params_buffer = device.create_buffer_shared(std::mem::size_of::<DebugFetchNormalParams>() as u64);
+        let params_buffer =
+            device.create_buffer_shared(std::mem::size_of::<DebugFetchNormalParams>() as u64);
         let params_ptr = params_buffer
             .mapped_ptr()
             .expect("debug params buffer must be CPU-mapped");
@@ -1549,8 +1724,16 @@ impl MetalShadowRayTracer {
             enc.setBuffer_offset_atIndex(Some(params_buffer.raw()), 0, 1);
             enc.setBuffer_offset_atIndex(Some(out_buffer.raw()), 0, 2);
             enc.dispatchThreadgroups_threadsPerThreadgroup(
-                MTLSize { width: 1, height: 1, depth: 1 },
-                MTLSize { width: 1, height: 1, depth: 1 },
+                MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
+                MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
             );
         }
         enc.endEncoding();
@@ -1596,16 +1779,19 @@ impl MetalShadowRayTracer {
         seed_base: u32,
     ) -> GpuBuffer {
         assert!(!rays.is_empty(), "debug_ray_query: at least one ray");
-        let rays_buffer =
-            device.create_buffer_shared(std::mem::size_of_val(rays) as u64);
+        let rays_buffer = device.create_buffer_shared(std::mem::size_of_val(rays) as u64);
         let rays_ptr = rays_buffer
             .mapped_ptr()
             .expect("debug ray buffer must be CPU-mapped");
         unsafe {
-            std::ptr::copy_nonoverlapping(rays.as_ptr(), rays_ptr as *mut DebugRayQueryRay, rays.len());
+            std::ptr::copy_nonoverlapping(
+                rays.as_ptr(),
+                rays_ptr as *mut DebugRayQueryRay,
+                rays.len(),
+            );
         }
-        let hits_buffer =
-            device.create_buffer_shared((rays.len() * std::mem::size_of::<DebugRayQueryHit>()) as u64);
+        let hits_buffer = device
+            .create_buffer_shared((rays.len() * std::mem::size_of::<DebugRayQueryHit>()) as u64);
         hits_buffer.zero_fill();
 
         #[repr(C)]
@@ -1629,16 +1815,31 @@ impl MetalShadowRayTracer {
         let params_bytes: [u8; 16] = unsafe { std::mem::transmute(params) };
 
         let mut bindings = vec![
-            GpuBinding::Buffer { binding: 1, buffer: &rays_buffer, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: &hits_buffer, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: normal_sources, offset: 0 },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: &rays_buffer,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &hits_buffer,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: normal_sources,
+                offset: 0,
+            },
         ];
         let supplied: &[&GpuTexture] = material_textures.unwrap_or(&[]);
         for (i, tex) in (0..MAX_RT_MATERIAL_TEXTURES)
             .map(|i| supplied.get(i).copied().unwrap_or(&self.dummy_alpha_tex))
             .enumerate()
         {
-            bindings.push(GpuBinding::Texture { binding: i as u32, texture: tex });
+            bindings.push(GpuBinding::Texture {
+                binding: i as u32,
+                texture: tex,
+            });
         }
         encoder.dispatch_compute_with_accel(
             &self.debug_ray_query_pipeline,
@@ -1695,7 +1896,11 @@ impl MetalShadowRayTracer {
             .raw_queue()
             .commandBuffer()
             .expect("Failed to acquire command buffer for BUG-dx6w debug dispatch");
-        unsafe { cb.setLabel(Some(&NSString::from_str("BUG-dx6w debug clamp refl history"))) };
+        unsafe {
+            cb.setLabel(Some(&NSString::from_str(
+                "BUG-dx6w debug clamp refl history",
+            )))
+        };
         let enc: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> = cb
             .computeCommandEncoder()
             .expect("computeCommandEncoder failed");
@@ -1705,8 +1910,16 @@ impl MetalShadowRayTracer {
             enc.setBuffer_offset_atIndex(Some(history_buffer.raw()), 0, 0);
             enc.setBuffer_offset_atIndex(Some(out_buffer.raw()), 0, 1);
             enc.dispatchThreadgroups_threadsPerThreadgroup(
-                MTLSize { width: 1, height: 1, depth: 1 },
-                MTLSize { width: 1, height: 1, depth: 1 },
+                MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
+                MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
             );
         }
         enc.endEncoding();
@@ -1819,8 +2032,16 @@ impl MetalShadowRayTracer {
             enc.setBuffer_offset_atIndex(Some(out_buffer.raw()), 0, 1);
             enc.setBuffer_offset_atIndex(Some(stats_buffer.raw()), 0, 2);
             enc.dispatchThreadgroups_threadsPerThreadgroup(
-                MTLSize { width: 1, height: 1, depth: 1 },
-                MTLSize { width: 1, height: 1, depth: 1 },
+                MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
+                MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
             );
         }
         enc.endEncoding();
@@ -1948,8 +2169,16 @@ impl MetalShadowRayTracer {
             enc.setTexture_atIndex(Some(&src_tex.raw), 3);
             enc.setBuffer_offset_atIndex(Some(out_buffer.raw()), 0, 1);
             enc.dispatchThreadgroups_threadsPerThreadgroup(
-                MTLSize { width: 1, height: 1, depth: 1 },
-                MTLSize { width: 1, height: 1, depth: 1 },
+                MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
+                MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
             );
         }
         enc.endEncoding();
@@ -2012,8 +2241,14 @@ impl ShadowRayTracer for MetalShadowRayTracer {
     ) -> Result<RtAccelUpdate, RtAccelError> {
         super::emissive::validate_emissive_inputs(accel, objects, materials)?;
         let mut update = encode_accel_update(
-            device, encoder, accel, objects, changes, materials,
-            instance_data_changed, emissive_data_changed,
+            device,
+            encoder,
+            accel,
+            objects,
+            changes,
+            materials,
+            instance_data_changed,
+            emissive_data_changed,
         )?;
         // P4a (§5.1): GPU emissive preparation on the SAME command buffer,
         // right after the AS encoder — refresh tiers: a BLAS build or a
@@ -2076,38 +2311,68 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             validate_instance_source_address(
                 object.instances_addr,
                 object.instances_buffer.map(GpuBuffer::gpu_address),
-            ).unwrap_or_else(|message| panic!("{message}"));
+            )
+            .unwrap_or_else(|message| panic!("{message}"));
         }
-        assert!(params.refl_spp <= MAX_RT_REFLECTION_SPP,
-            "reflection spp exceeds the supported quality ladder maximum");
+        assert!(
+            params.refl_spp <= MAX_RT_REFLECTION_SPP,
+            "reflection spp exceeds the supported quality ladder maximum"
+        );
         let diagnostic_slot = if super::super::gpu_fault::diagnostics_enabled() {
-            self.rt_diagnostics.busy.iter().position(|busy|
-                busy.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_ok())
-        } else { None };
+            self.rt_diagnostics.busy.iter().position(|busy| {
+                busy.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+                    .is_ok()
+            })
+        } else {
+            None
+        };
         let diagnostic_callback = if let Some(slot) = diagnostic_slot {
             let pool = Arc::clone(&self.rt_diagnostics);
             let frame = params.frame_index;
-            log::info!("[RT-DIAG] trace frame={frame} size={:?} shadow_spp={} ao_spp={} gi_spp={} reflection_spp={}",
-                params.trace_size, params.shadow_spp, params.ao_spp, params.gi_spp, params.refl_spp);
-            let block = block2::RcBlock::new(move |cb: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
-                let cb = unsafe { cb.as_ref() };
-                if unsafe { cb.status() } == MTLCommandBufferStatus::Completed {
-                    // This slot cannot be submitted again until we release it.
-                    // Metal completion makes all writes visible, including
-                    // relaxed-atomic publication within this completed buffer.
-                    let ptr = pool.buffers[slot].mapped_ptr().expect("shared diagnostic slot");
-                    let d = unsafe { ptr.cast::<RtTraceDiagnostics>().read_unaligned() };
-                    if d.state == 2 {
-                        log::error!("[RT-DIAG] frame={frame} slot={slot} first_invalid_in_slot stage={} pixel={} origin={:?} direction={:?} min={} max={} diagnostic_ray_replaced=true", d.first_stage, d.first_pixel, d.raw_origin, d.raw_direction, d.raw_min_distance, d.raw_max_distance);
+            log::info!(
+                "[RT-DIAG] trace frame={frame} size={:?} shadow_spp={} ao_spp={} gi_spp={} reflection_spp={}",
+                params.trace_size,
+                params.shadow_spp,
+                params.ao_spp,
+                params.gi_spp,
+                params.refl_spp
+            );
+            let block = block2::RcBlock::new(
+                move |cb: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+                    let cb = unsafe { cb.as_ref() };
+                    if unsafe { cb.status() } == MTLCommandBufferStatus::Completed {
+                        // This slot cannot be submitted again until we release it.
+                        // Metal completion makes all writes visible, including
+                        // relaxed-atomic publication within this completed buffer.
+                        let ptr = pool.buffers[slot]
+                            .mapped_ptr()
+                            .expect("shared diagnostic slot");
+                        let d = unsafe { ptr.cast::<RtTraceDiagnostics>().read_unaligned() };
+                        if d.state == 2 {
+                            log::error!(
+                                "[RT-DIAG] frame={frame} slot={slot} first_invalid_in_slot stage={} pixel={} origin={:?} direction={:?} min={} max={} diagnostic_ray_replaced=true",
+                                d.first_stage,
+                                d.first_pixel,
+                                d.raw_origin,
+                                d.raw_direction,
+                                d.raw_min_distance,
+                                d.raw_max_distance
+                            );
+                        } else {
+                            log::info!(
+                                "[RT-DIAG] frame={frame} slot={slot} record_state={} (0=no invalid recorded,1=incomplete)",
+                                d.state
+                            );
+                        }
                     } else {
-                        log::info!("[RT-DIAG] frame={frame} slot={slot} record_state={} (0=no invalid recorded,1=incomplete)", d.state);
+                        log::error!(
+                            "[RT-DIAG] frame={frame} slot={slot} validation=unavailable command did not complete"
+                        );
                     }
-                } else {
-                    log::error!("[RT-DIAG] frame={frame} slot={slot} validation=unavailable command did not complete");
-                }
-                pool.busy[slot].store(false, Ordering::Release);
-                super::super::gpu_fault::complete_submission();
-            });
+                    pool.busy[slot].store(false, Ordering::Release);
+                    super::super::gpu_fault::complete_submission();
+                },
+            );
             Some(block)
         } else {
             if super::super::gpu_fault::diagnostics_enabled() {
@@ -2115,7 +2380,8 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             }
             None
         };
-        let diagnostic_buffer = diagnostic_slot.map(|slot| &self.rt_diagnostics.buffers[slot])
+        let diagnostic_buffer = diagnostic_slot
+            .map(|slot| &self.rt_diagnostics.buffers[slot])
             .unwrap_or(&self.rt_diagnostics.disabled);
         let mut bindings = vec![
             GpuBinding::Bytes {
@@ -2183,7 +2449,10 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         // for the rest (Metal requires every slot a compiled kernel references
         // bound to a valid resource).
         for i in 0..MAX_RT_MATERIAL_TEXTURES {
-            let tex = alpha_textures.get(i).copied().unwrap_or(&self.dummy_alpha_tex);
+            let tex = alpha_textures
+                .get(i)
+                .copied()
+                .unwrap_or(&self.dummy_alpha_tex);
             bindings.push(GpuBinding::Texture {
                 binding: 4 + i as u32,
                 texture: tex,
@@ -2196,7 +2465,11 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             binding: 4 + MAX_RT_MATERIAL_TEXTURES as u32,
             texture: out_refl,
         });
-        bindings.push(GpuBinding::Buffer { binding: 7, buffer: diagnostic_buffer, offset: 0 });
+        bindings.push(GpuBinding::Buffer {
+            binding: 7,
+            buffer: diagnostic_buffer,
+            offset: 0,
+        });
         // RT-R1 (section 9.3 RD4): prefiltered env chain at [[texture(69)]] — the
         // reflection miss branch's radiance source.
         bindings.push(GpuBinding::Texture {
@@ -2215,7 +2488,10 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         });
         bindings.push(GpuBinding::Texture {
             binding: 8 + MAX_RT_MATERIAL_TEXTURES as u32,
-            texture: self.secondary_irradiance.as_ref().unwrap_or(prefiltered_env),
+            texture: self
+                .secondary_irradiance
+                .as_ref()
+                .unwrap_or(prefiltered_env),
         });
         bindings.push(GpuBinding::Texture {
             binding: 9 + MAX_RT_MATERIAL_TEXTURES as u32,
@@ -2223,13 +2499,21 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         });
         bindings.push(GpuBinding::Texture {
             binding: 10 + MAX_RT_MATERIAL_TEXTURES as u32,
-            texture: self.secondary_prefiltered_sheen.as_ref().unwrap_or(prefiltered_env),
+            texture: self
+                .secondary_prefiltered_sheen
+                .as_ref()
+                .unwrap_or(prefiltered_env),
         });
         let caster_count = params.caster_count;
-        let table_bytes = u64::from(caster_count) * std::mem::size_of::<crate::ShadowCaster>() as u64;
-        assert!(caster_count == 0 || (params.caster_data_addr >= casters.gpu_address()
-            && params.caster_data_addr + table_bytes <= casters.gpu_address() + casters.size),
-            "RT caster table lies outside the buffer passed with it");
+        let table_bytes =
+            u64::from(caster_count) * std::mem::size_of::<crate::ShadowCaster>() as u64;
+        assert!(
+            caster_count == 0
+                || (params.caster_data_addr >= casters.gpu_address()
+                    && params.caster_data_addr + table_bytes
+                        <= casters.gpu_address() + casters.size),
+            "RT caster table lies outside the buffer passed with it"
+        );
         // P4a: the sampler-active heuristic reads the GPU stats buffer's
         // count (CPU params no longer carry it). A frame-stale value is
         // fine for a cost estimate; an unmappable buffer reads as inactive.
@@ -2245,20 +2529,43 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             caster_count
         };
         let query_units = estimate_trace_query_units_per_pixel(
-            caster_count, diffuse_light_count, params.shadow_spp, params.ao_spp,
-            params.gi_spp, params.refl_spp, emissive_active,
-        ).expect("validated RT quality must have a finite query estimate");
-        let shape = trace_shape_key(TraceKind::Lighting, accel, params.trace_size, query_units, &[
-            params.shadow_spp, params.ao_spp, params.gi_spp, params.refl_spp,
-            caster_count, diffuse_light_count, u32::from(emissive_active), u32::from(has_translucency),
-        ]);
+            caster_count,
+            diffuse_light_count,
+            params.shadow_spp,
+            params.ao_spp,
+            params.gi_spp,
+            params.refl_spp,
+            emissive_active,
+        )
+        .expect("validated RT quality must have a finite query estimate");
+        let shape = trace_shape_key(
+            TraceKind::Lighting,
+            accel,
+            params.trace_size,
+            query_units,
+            &[
+                params.shadow_spp,
+                params.ao_spp,
+                params.gi_spp,
+                params.refl_spp,
+                caster_count,
+                diffuse_light_count,
+                u32::from(emissive_active),
+                u32::from(has_translucency),
+            ],
+        );
         let (timing_slot, limits) = self.trace_timing.borrow_mut().begin(shape);
         let limits = floor_to_workgroup(limits, SHADOW_WORKGROUP);
         let mut regions = plan_trace_regions(
-            params.trace_size[0], params.trace_size[1],
-            SHADOW_WORKGROUP[0], SHADOW_WORKGROUP[1], query_units,
+            params.trace_size[0],
+            params.trace_size[1],
+            SHADOW_WORKGROUP[0],
+            SHADOW_WORKGROUP[1],
+            query_units,
             limits,
-        ).expect("validated RT trace dimensions must produce a tile plan").peekable();
+        )
+        .expect("validated RT trace dimensions must produce a tile plan")
+        .peekable();
         // Every tile runs in a command buffer of its own: its measured GPU
         // time is the trace's alone, and no earlier work shares its
         // watchdog window.
@@ -2266,18 +2573,33 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         let mut diagnostic_callback = diagnostic_callback;
         while let Some(region) = regions.next() {
             for pass in TracePass::ALL {
-                if !pass.enabled(params) { continue; }
+                if !pass.enabled(params) {
+                    continue;
+                }
                 let pipeline = &self.trace_pipelines[pass as usize][usize::from(has_translucency)];
-                let diagnostic_label = super::super::gpu_fault::diagnostics_enabled().then(|| format!(
-                    "{label} {} tile origin={},{} extent={}x{}", pipeline.label,
-                    region.origin[0], region.origin[1], region.extent[0], region.extent[1],
-                ));
+                let diagnostic_label = super::super::gpu_fault::diagnostics_enabled().then(|| {
+                    format!(
+                        "{label} {} tile origin={},{} extent={}x{}",
+                        pipeline.label,
+                        region.origin[0],
+                        region.origin[1],
+                        region.extent[0],
+                        region.extent[1],
+                    )
+                });
                 encoder.dispatch_compute_with_accel(
-                    pipeline, 0, accel, &bindings,
-                    current_objects.iter()
+                    pipeline,
+                    0,
+                    accel,
+                    &bindings,
+                    current_objects
+                        .iter()
                         .filter(|object| object.instances_addr != 0)
-                        .map(|object| object.instances_buffer
-                            .expect("validated RT wired instance source buffer"))
+                        .map(|object| {
+                            object
+                                .instances_buffer
+                                .expect("validated RT wired instance source buffer")
+                        })
                         .chain(std::iter::once(casters)),
                     Some((8, trace_region_bytes(&region))),
                     dispatch_groups_2d(region.extent, SHADOW_WORKGROUP),
@@ -2291,10 +2613,17 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 && let Some(block) = diagnostic_callback.take()
             {
                 super::super::gpu_fault::begin_submission();
-                unsafe { encoder.cmd_buf.addCompletedHandler(block2::RcBlock::as_ptr(&block)); }
+                unsafe {
+                    encoder
+                        .cmd_buf
+                        .addCompletedHandler(block2::RcBlock::as_ptr(&block));
+                }
             }
             self.trace_timing.borrow_mut().record(
-                timing_slot, &encoder.cmd_buf, region_pixels(&region), limits.max_pixels_per_tile,
+                timing_slot,
+                &encoder.cmd_buf,
+                region_pixels(&region),
+                limits.max_pixels_per_tile,
             );
             encoder.commit_and_continue(device);
         }
@@ -2779,30 +3108,60 @@ mod tests {
 
     #[cfg(feature = "gpu-proofs")]
     fn test_rgba_texture(device: &GpuDevice, label: &str, values: &[[f32; 4]; 81]) -> GpuTexture {
-        let tex = device.create_texture(&GpuTextureDesc { width: 9, height: 9, depth: 1,
-            format: GpuTextureFormat::Rgba32Float, dimension: GpuTextureDimension::D2,
-            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
-            label, mip_levels: 1 });
-        let bytes: Vec<u8> = values.iter().flat_map(|v| v.iter().flat_map(|x| x.to_le_bytes())).collect();
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: 9,
+            height: 9,
+            depth: 1,
+            format: GpuTextureFormat::Rgba32Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD
+                | GpuTextureUsage::SHADER_READ
+                | GpuTextureUsage::SHADER_WRITE
+                | GpuTextureUsage::COPY_SRC,
+            label,
+            mip_levels: 1,
+        });
+        let bytes: Vec<u8> = values
+            .iter()
+            .flat_map(|v| v.iter().flat_map(|x| x.to_le_bytes()))
+            .collect();
         device.upload_texture(&tex, &bytes);
         tex
     }
 
     #[cfg(feature = "gpu-proofs")]
     fn test_sv_array(device: &GpuDevice, label: &str) -> GpuTexture {
-        device.create_texture(&GpuTextureDesc { width: 9, height: 9, depth: 1,
-            format: GpuTextureFormat::Rgba32Float, dimension: GpuTextureDimension::D2Array,
+        device.create_texture(&GpuTextureDesc {
+            width: 9,
+            height: 9,
+            depth: 1,
+            format: GpuTextureFormat::Rgba32Float,
+            dimension: GpuTextureDimension::D2Array,
             usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE,
-            label, mip_levels: 1 })
+            label,
+            mip_levels: 1,
+        })
     }
 
     #[cfg(feature = "gpu-proofs")]
     fn test_depth_texture(device: &GpuDevice) -> GpuTexture {
-        let tex = device.create_texture(&GpuTextureDesc { width: 9, height: 9, depth: 1,
-            format: GpuTextureFormat::R32Float, dimension: GpuTextureDimension::D2,
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: 9,
+            height: 9,
+            depth: 1,
+            format: GpuTextureFormat::R32Float,
+            dimension: GpuTextureDimension::D2,
             usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
-            label: "f7f1-depth", mip_levels: 1 });
-        device.upload_texture(&tex, &vec![0.5f32.to_le_bytes(); 81].into_iter().flatten().collect::<Vec<_>>());
+            label: "f7f1-depth",
+            mip_levels: 1,
+        });
+        device.upload_texture(
+            &tex,
+            &vec![0.5f32.to_le_bytes(); 81]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>(),
+        );
         tex
     }
 
@@ -2820,7 +3179,11 @@ mod tests {
         let src = std::array::from_fn(|i| {
             let x = i % 9;
             let y = i / 9;
-            let v = if (3..=5).contains(&x) && (3..=5).contains(&y) && i != 40 { 1.0 } else { 0.0 };
+            let v = if (3..=5).contains(&x) && (3..=5).contains(&y) && i != 40 {
+                1.0
+            } else {
+                0.0
+            };
             [v, v, v, 1.0]
         });
         let src_tex = test_rgba_texture(&device, "f7f1-src", &src);
@@ -2832,47 +3195,87 @@ mod tests {
             let buf = device.create_buffer_shared(9 * 9 * 16);
             let mut rb = device.create_encoder("f7f1-readback");
             rb.copy_texture_to_buffer(tex, &buf, 9, 9, 9 * 16);
-            rb.try_commit_and_wait_completed().expect("denoiser readback");
-            unsafe { buf.mapped_ptr().unwrap().cast::<[f32; 4]>().add(40).read_unaligned() }
+            rb.try_commit_and_wait_completed()
+                .expect("denoiser readback");
+            unsafe {
+                buf.mapped_ptr()
+                    .unwrap()
+                    .cast::<[f32; 4]>()
+                    .add(40)
+                    .read_unaligned()
+            }
         };
         for post in [false, true] {
             // Two batched outputs, then the same two passes submitted one at
             // a time as references. Each regular pass needs five output
             // textures; index 1 is unused.
             let outputs: [[GpuTexture; 6]; 4] = std::array::from_fn(|_| {
-                std::array::from_fn(|i| if i == 0 {
-                    test_sv_array(&device, "f7f1-output-sv")
-                } else {
-                    test_rgba_texture(&device, "f7f1-output", &[[0.0; 4]; 81])
+                std::array::from_fn(|i| {
+                    if i == 0 {
+                        test_sv_array(&device, "f7f1-output-sv")
+                    } else {
+                        test_rgba_texture(&device, "f7f1-output", &[[0.0; 4]; 81])
+                    }
                 })
             });
             let dispatch = |enc: &mut GpuEncoder, step: u32, out: &[GpuTexture; 6]| {
                 if post {
-                    tracer.atrous_post_pass(enc, &AtrousPostParams::new([9, 9], step, 1.0),
-                        &params_buffer, &depth, &normal, &moments, &src_tex, &out[2], "f7f1-post");
+                    tracer.atrous_post_pass(
+                        enc,
+                        &AtrousPostParams::new([9, 9], step, 1.0),
+                        &params_buffer,
+                        &depth,
+                        &normal,
+                        &moments,
+                        &src_tex,
+                        &out[2],
+                        "f7f1-post",
+                    );
                 } else {
-                    tracer.atrous_pass(enc, &AtrousParams::new([9, 9], step, true, 0),
-                        &params_buffer, &materials, &depth, &moments,
-                        &src_sv, &out[0], &src_tex, &out[2],
-                        &normal, &out[3], &src_tex, &out[4], &src_tex, &out[5], "f7f1-atrous");
+                    tracer.atrous_pass(
+                        enc,
+                        &AtrousParams::new([9, 9], step, true, 0),
+                        &params_buffer,
+                        &materials,
+                        &depth,
+                        &moments,
+                        &src_sv,
+                        &out[0],
+                        &src_tex,
+                        &out[2],
+                        &normal,
+                        &out[3],
+                        &src_tex,
+                        &out[4],
+                        &src_tex,
+                        &out[5],
+                        "f7f1-atrous",
+                    );
                 }
             };
             let mut enc = device.create_encoder("f7f1-batched");
             dispatch(&mut enc, 1, &outputs[0]);
             dispatch(&mut enc, 4, &outputs[1]);
-            enc.try_commit_and_wait_completed().expect("batched denoiser passes");
+            enc.try_commit_and_wait_completed()
+                .expect("batched denoiser passes");
             for (i, step) in [1, 4].into_iter().enumerate() {
                 let mut enc = device.create_encoder("f7f1-individual-reference");
                 dispatch(&mut enc, step, &outputs[i + 2]);
-                enc.try_commit_and_wait_completed().expect("reference denoiser pass");
+                enc.try_commit_and_wait_completed()
+                    .expect("reference denoiser pass");
             }
             let values: [[f32; 4]; 4] = std::array::from_fn(|i| read(&outputs[i][2]));
-            assert!((values[2][0] - values[3][0]).abs() > 0.05, "fixture does not distinguish steps: post={post} {values:?}");
+            assert!(
+                (values[2][0] - values[3][0]).abs() > 0.05,
+                "fixture does not distinguish steps: post={post} {values:?}"
+            );
             for i in 0..2 {
                 for c in 0..4 {
                     assert!(values[i][c].is_finite());
-                    assert!((values[i][c] - values[i + 2][c]).abs() < 1e-5,
-                        "batched parameters changed: post={post} pass={i} channel={c} {values:?}");
+                    assert!(
+                        (values[i][c] - values[i + 2][c]).abs() < 1e-5,
+                        "batched parameters changed: post={post} pass={i} channel={c} {values:?}"
+                    );
                 }
             }
         }
@@ -2883,15 +3286,25 @@ mod tests {
     #[test]
     fn walk_cap_mirror_and_every_candidate_walk_is_bounded() {
         let define = format!("#define RT_WALK_MAX_CANDIDATES {RT_WALK_MAX_CANDIDATES}u");
-        assert!(SHADOW_RAYS_MSL.contains(&define), "MSL default must read: {define}");
+        assert!(
+            SHADOW_RAYS_MSL.contains(&define),
+            "MSL default must read: {define}"
+        );
         for (name, source, bounded) in [
             ("shadow_rays.msl", SHADOW_RAYS_MSL, "rt_walk_exhausted(q, "),
-            ("subsurface.msl", SUBSURFACE_MSL, ">= RT_WALK_MAX_CANDIDATES"),
+            (
+                "subsurface.msl",
+                SUBSURFACE_MSL,
+                ">= RT_WALK_MAX_CANDIDATES",
+            ),
         ] {
             let walks = source.matches(".next())").count();
             assert!(walks > 0, "{name}: no candidate walk found");
-            assert_eq!(source.matches(bounded).count(), walks,
-                "{name}: every ray-query `.next()` walk must test the candidate cap");
+            assert_eq!(
+                source.matches(bounded).count(),
+                walks,
+                "{name}: every ray-query `.next()` walk must test the candidate cap"
+            );
         }
     }
 
@@ -2899,10 +3312,14 @@ mod tests {
     fn wired_instance_source_address_contract() {
         assert!(validate_instance_source_address(0, None).is_ok());
         assert!(validate_instance_source_address(0, Some(7)).is_ok());
-        assert_eq!(validate_instance_source_address(7, None),
-            Err("RT wired instance source buffer is missing"));
-        assert_eq!(validate_instance_source_address(7, Some(8)),
-            Err("RT instance address does not match its current source buffer"));
+        assert_eq!(
+            validate_instance_source_address(7, None),
+            Err("RT wired instance source buffer is missing")
+        );
+        assert_eq!(
+            validate_instance_source_address(7, Some(8)),
+            Err("RT instance address does not match its current source buffer")
+        );
         assert!(validate_instance_source_address(7, Some(7)).is_ok());
 
         // Equal-capacity replacement is valid only when the current source's
@@ -2929,12 +3346,18 @@ mod tests {
             params.gi_spp = if mask & 4 != 0 { 16 } else { 0 };
             params.refl_spp = if mask & 8 != 0 { 32 } else { 0 };
             let before = bytemuck_bytes(&params).to_vec();
-            let actual: Vec<_> = TracePass::ALL.into_iter().filter(|p| p.enabled(&params)).collect();
+            let actual: Vec<_> = TracePass::ALL
+                .into_iter()
+                .filter(|p| p.enabled(&params))
+                .collect();
             let expected: Vec<_> = [
                 (mask & 1 != 0).then_some(TracePass::Shadow),
                 (mask & 6 != 0).then_some(TracePass::Diffuse),
                 (mask & 8 != 0).then_some(TracePass::Reflection),
-            ].into_iter().flatten().collect();
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
             assert_eq!(actual, expected);
             assert_eq!(bytemuck_bytes(&params), before);
         }
@@ -2948,11 +3371,19 @@ mod tests {
         let mut labels = std::collections::HashSet::new();
         for (index, pass) in TracePass::ALL.into_iter().enumerate() {
             assert_eq!(pass as usize, index);
-            for translucent in [false, true] { assert!(labels.insert(pass.pipeline_label(translucent))); }
+            for translucent in [false, true] {
+                assert!(labels.insert(pass.pipeline_label(translucent)));
+            }
         }
         assert_eq!(labels.len(), 6);
-        let region = TraceRegion { origin: [3, 5], extent: [7, 11] };
-        let expected: Vec<_> = [3u32, 5, 7, 11].into_iter().flat_map(u32::to_ne_bytes).collect();
+        let region = TraceRegion {
+            origin: [3, 5],
+            extent: [7, 11],
+        };
+        let expected: Vec<_> = [3u32, 5, 7, 11]
+            .into_iter()
+            .flat_map(u32::to_ne_bytes)
+            .collect();
         assert_eq!(trace_region_bytes(&region), expected);
         assert_eq!(std::mem::offset_of!(TraceRegion, extent), 8);
     }
@@ -2967,7 +3398,11 @@ mod tests {
     fn normal_map_degenerate_frame_stays_finite() {
         use super::*;
         let device = GpuDevice::new();
-        let source = format!("{}{}\n{}", crate::ShadowCaster::MSL, SHADOW_RAYS_MSL, r#"
+        let source = format!(
+            "{}{}\n{}",
+            crate::ShadowCaster::MSL,
+            SHADOW_RAYS_MSL,
+            r#"
         kernel void normal_guard_probe(device const float4* input [[buffer(0)]],
             device float4* output [[buffer(1)]], uint2 tid [[thread_position_in_grid]]) {
             if (tid.y != 0 || tid.x >= 8) return;
@@ -2975,14 +3410,20 @@ mod tests {
             output[tid.x] = float4(rt_perturb_frame(input[base].xyz,
                 input[base+1].xyz, input[base+2].xyz, input[base+3].xyz), 1);
         }
-        "#);
+        "#
+        );
         let opts = MTLCompileOptions::init(MTLCompileOptions::alloc());
         opts.setLanguageVersion(MTLLanguageVersion::Version3_1);
-        let library = device.raw_device()
+        let library = device
+            .raw_device()
             .newLibraryWithSource_options_error(&NSString::from_str(&source), Some(&opts))
             .expect("normal guard MSL compile");
-        let pipeline = compile_pipeline(&device, &library, "normal_guard_probe",
-            identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer)]));
+        let pipeline = compile_pipeline(
+            &device,
+            &library,
+            "normal_guard_probe",
+            identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer)]),
+        );
         let n = [0.0_f32, 0.0, 1.0, 0.0];
         let t = [1.0, 0.0, 0.0, 0.0];
         let b = [0.0, 1.0, 0.0, 0.0];
@@ -3000,23 +3441,53 @@ mod tests {
         let input = device.create_buffer_shared(std::mem::size_of_val(&cases) as u64);
         let output = device.create_buffer_shared((cases.len() * 16) as u64);
         unsafe {
-            std::ptr::copy_nonoverlapping(cases.as_ptr().cast::<u8>(),
-                input.mapped_ptr().expect("shared input"), std::mem::size_of_val(&cases));
+            std::ptr::copy_nonoverlapping(
+                cases.as_ptr().cast::<u8>(),
+                input.mapped_ptr().expect("shared input"),
+                std::mem::size_of_val(&cases),
+            );
         }
         let mut enc = device.create_encoder("normal guard regression");
-        enc.dispatch_compute(&pipeline, &[
-            GpuBinding::Buffer { binding: 0, buffer: &input, offset: 0 },
-            GpuBinding::Buffer { binding: 1, buffer: &output, offset: 0 },
-        ], [1, 1, 1], "normal guard regression");
-        enc.try_commit_and_wait_completed().expect("normal guard dispatch");
-        let actual = unsafe { std::slice::from_raw_parts(
-            output.mapped_ptr().expect("shared output").cast::<[f32; 4]>(), cases.len()) };
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Buffer {
+                    binding: 0,
+                    buffer: &input,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &output,
+                    offset: 0,
+                },
+            ],
+            [1, 1, 1],
+            "normal guard regression",
+        );
+        enc.try_commit_and_wait_completed()
+            .expect("normal guard dispatch");
+        let actual = unsafe {
+            std::slice::from_raw_parts(
+                output
+                    .mapped_ptr()
+                    .expect("shared output")
+                    .cast::<[f32; 4]>(),
+                cases.len(),
+            )
+        };
         for (i, result) in actual.iter().enumerate() {
-            let expected = if i == 0 { [1.0 / 3.0_f32.sqrt(); 3] } else { [0.0, 0.0, 1.0] };
+            let expected = if i == 0 {
+                [1.0 / 3.0_f32.sqrt(); 3]
+            } else {
+                [0.0, 0.0, 1.0]
+            };
             for channel in 0..3 {
                 assert!(result[channel].is_finite(), "case {i}: {result:?}");
-                assert!((result[channel] - expected[channel]).abs() < 1e-5,
-                    "case {i}: {result:?}, expected {expected:?}");
+                assert!(
+                    (result[channel] - expected[channel]).abs() < 1e-5,
+                    "case {i}: {result:?}, expected {expected:?}"
+                );
             }
         }
     }
@@ -3026,7 +3497,11 @@ mod tests {
     fn trace_diagnostics_records_invalid_ray() {
         use super::*;
         let device = GpuDevice::new();
-        let source = format!("{}{}\n{}", crate::ShadowCaster::MSL, SHADOW_RAYS_MSL, r#"
+        let source = format!(
+            "{}{}\n{}",
+            crate::ShadowCaster::MSL,
+            SHADOW_RAYS_MSL,
+            r#"
         kernel void diag_probe(device RtTraceDiagnostics* d [[buffer(0)]],
             device float4* out [[buffer(1)]], uint2 tid [[thread_position_in_grid]]) {
             if (tid.x != 0 || tid.y != 0) return;
@@ -3040,14 +3515,20 @@ mod tests {
             r.min_distance=-1;
             rt_sanitize_ray(r, 5, uint2(99), d);
         }
-        "#);
+        "#
+        );
         let opts = MTLCompileOptions::init(MTLCompileOptions::alloc());
         opts.setLanguageVersion(MTLLanguageVersion::Version3_1);
-        let library = device.raw_device()
+        let library = device
+            .raw_device()
             .newLibraryWithSource_options_error(&NSString::from_str(&source), Some(&opts))
             .expect("trace diagnostics MSL compile");
-        let pipeline = compile_pipeline(&device, &library, "diag_probe",
-            identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer)]));
+        let pipeline = compile_pipeline(
+            &device,
+            &library,
+            "diag_probe",
+            identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer)]),
+        );
         let record = device.create_buffer_shared(std::mem::size_of::<RtTraceDiagnostics>() as u64);
         let ptr = record.mapped_ptr().unwrap();
         unsafe {
@@ -3056,18 +3537,37 @@ mod tests {
         }
         let out = device.create_buffer_shared(16);
         let mut enc = device.create_encoder("trace diagnostics regression");
-        enc.dispatch_compute(&pipeline, &[
-            GpuBinding::Buffer { binding: 0, buffer: &record, offset: 0 },
-            GpuBinding::Buffer { binding: 1, buffer: &out, offset: 0 },
-        ], [1,1,1], "trace diagnostics regression");
-        enc.try_commit_and_wait_completed().expect("trace diagnostic dispatch");
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Buffer {
+                    binding: 0,
+                    buffer: &record,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &out,
+                    offset: 0,
+                },
+            ],
+            [1, 1, 1],
+            "trace diagnostics regression",
+        );
+        enc.try_commit_and_wait_completed()
+            .expect("trace diagnostic dispatch");
         let d = unsafe { ptr.cast::<RtTraceDiagnostics>().read_unaligned() };
         assert_eq!(d.state, 2);
         assert_eq!(d.first_stage, 3);
         assert_eq!(d.first_pixel, 29 * 65536 + 17);
         assert!(d.raw_direction[0].is_nan());
-        let result = unsafe { out.mapped_ptr().unwrap().cast::<[f32;4]>().read_unaligned() };
-        assert_eq!(result, [0.0,1.0,0.0,1.0]);
+        let result = unsafe {
+            out.mapped_ptr()
+                .unwrap()
+                .cast::<[f32; 4]>()
+                .read_unaligned()
+        };
+        assert_eq!(result, [0.0, 1.0, 0.0, 1.0]);
     }
 
     /// I-TL6 (RAYTRACING_DESIGN.md section 16.5) + SCENE_MODIFIER_RT_DESIGN.md
@@ -3080,13 +3580,19 @@ mod tests {
     fn blas_opacity_tracks_nonopaque_property() {
         let device = GpuDevice::new();
         let verts = device.create_buffer(3 * 12);
-        let base = RtObjectGeometry { instance_inner: RtObjectGeometry::NO_INNER,
+        let base = RtObjectGeometry {
+            instance_inner: RtObjectGeometry::NO_INNER,
             vertex_buffer: &verts,
             vertex_stride: 12,
             vertex_offset: 0,
             index_buffer: None,
             triangle_count: 1,
-            transform: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
+            transform: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
             normal_offset: 0,
             uv_offset: 0,
             alpha_mask: false,
@@ -3113,13 +3619,34 @@ mod tests {
             tangent_offset: u32::MAX,
             material_attributes: Default::default(),
         };
-        assert!(!blas_geometry_nonopaque(&base), "plain object keeps the hardware fast path");
-        assert!(blas_geometry_nonopaque(&RtObjectGeometry { alpha_mask: true, ..base }));
-        assert!(blas_geometry_nonopaque(&RtObjectGeometry { translucent: true, ..base }));
-        assert!(blas_geometry_nonopaque(&RtObjectGeometry { appearance_weights: Some(&verts), ..base }));
-        assert!(blas_geometry_nonopaque(&RtObjectGeometry { appearance_gain: 0.5, ..base }));
-        assert!(blas_geometry_nonopaque(&RtObjectGeometry { appearance_gain: 2.0, ..base }));
-        assert!(!blas_geometry_nonopaque(&RtObjectGeometry { appearance_gain: 1.0, ..base }));
+        assert!(
+            !blas_geometry_nonopaque(&base),
+            "plain object keeps the hardware fast path"
+        );
+        assert!(blas_geometry_nonopaque(&RtObjectGeometry {
+            alpha_mask: true,
+            ..base
+        }));
+        assert!(blas_geometry_nonopaque(&RtObjectGeometry {
+            translucent: true,
+            ..base
+        }));
+        assert!(blas_geometry_nonopaque(&RtObjectGeometry {
+            appearance_weights: Some(&verts),
+            ..base
+        }));
+        assert!(blas_geometry_nonopaque(&RtObjectGeometry {
+            appearance_gain: 0.5,
+            ..base
+        }));
+        assert!(blas_geometry_nonopaque(&RtObjectGeometry {
+            appearance_gain: 2.0,
+            ..base
+        }));
+        assert!(!blas_geometry_nonopaque(&RtObjectGeometry {
+            appearance_gain: 1.0,
+            ..base
+        }));
     }
 
     /// COMPILE_CONTRACT_DESIGN INV2: code is device-global — a second tracer

@@ -1,12 +1,6 @@
 //! Host audio modulation reaches a GPU liquid's force once per liquid tick,
 //! whatever the display rate (BUG-2jx6 (host-fed modulation sampled per
 //! liquid tick)). Drives real playback modulation into a Uniform Force chain.
-use manifold_node_engine::exec::effect_node::FrameTime;
-use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::*;
-use manifold_core::{Beats, PlayedTime, Seconds, PresetTypeId};
-use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
-use manifold_node_engine::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, parameters::ParamDef};
 use manifold_core::audio_features::{
     AudioFeatureHop, AudioFeatureSnapshot, AudioHopBatch, AudioHopStamp, SendFeatures,
 };
@@ -17,6 +11,15 @@ use manifold_core::effect_graph_def::ParamSpecDef;
 use manifold_core::layer::Layer;
 use manifold_core::params::Param;
 use manifold_core::project::Project;
+use manifold_core::{Beats, PlayedTime, PresetTypeId, Seconds};
+use manifold_node_engine::exec::effect_node::FrameTime;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
+use manifold_node_engine::runtime::*;
+use manifold_node_engine::{
+    exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext,
+    exec::effect_node::EffectNodeType, parameters::ParamDef,
+};
 use manifold_physics::{FieldValue, VectorField};
 use std::{borrow::Cow, cell::RefCell};
 
@@ -80,7 +83,12 @@ impl EffectNode for TickedLiquid {
 impl manifold_nodes_physics::tick_sampled::TickSampled for TickedLiquid {
     /// Like the liquid's field history: request each tick start in
     /// `(from, until]`; the first sample at or after it records that tick.
-    fn request_physics_samples(&mut self, from: PlayedTime, until: PlayedTime, out: &mut Vec<PlayedTime>) {
+    fn request_physics_samples(
+        &mut self,
+        from: PlayedTime,
+        until: PlayedTime,
+        out: &mut Vec<PlayedTime>,
+    ) {
         let (from, until) = (from.seconds(), until.seconds());
         let mut tick = (from * TICK_RATE + 1e-9).floor() + 1.0;
         while tick / TICK_RATE <= until + 1e-12 {
@@ -106,7 +114,11 @@ fn registry() -> PrimitiveRegistry {
             kind: PortKind::Output,
             required: false,
         };
-        Box::new(TickedLiquid(EffectNodeType::new(LIQUID), Vec::new(), [cell_size]))
+        Box::new(TickedLiquid(
+            EffectNodeType::new(LIQUID),
+            Vec::new(),
+            [cell_size],
+        ))
     });
     registry
 }
@@ -142,7 +154,10 @@ fn generator() -> (PresetRuntime, &'static str) {
             {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in"}
         ]
     });
-    (PresetRuntime::from_json_str(&def.to_string(), &registry()).unwrap(), "strength")
+    (
+        PresetRuntime::from_json_str(&def.to_string(), &registry()).unwrap(),
+        "strength",
+    )
 }
 
 /// A Uniform Force card on a scene whose water is the liquid; the card's
@@ -179,16 +194,21 @@ fn modifier_card() -> (PresetRuntime, String) {
     )))
     .unwrap();
     let top = |node: &str| manifold_core::NodeId::new(node);
-    let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
-        &owner,
-        &recipe,
-        manifold_core::NodeId::new("kick"),
-        top("scene"),
-        SceneTargetSelection::Explicit { objects: vec![top("water_object")] },
+    let instance =
+        manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+            &owner,
+            &recipe,
+            manifold_core::NodeId::new("kick"),
+            top("scene"),
+            SceneTargetSelection::Explicit {
+                objects: vec![top("water_object")],
+            },
+        )
+        .unwrap();
+    let def = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(
+        &owner, instance,
     )
     .unwrap();
-    let def = manifold_nodes_scene::node_graph::scene_modifier_authoring::attach_scene_modifier(&owner, instance)
-        .unwrap();
     let strength = def
         .preset_metadata
         .as_ref()
@@ -203,7 +223,10 @@ fn modifier_card() -> (PresetRuntime, String) {
         .id
         .clone();
     let json = serde_json::to_string(&def).unwrap();
-    (PresetRuntime::from_json_str(&json, &registry()).unwrap(), strength)
+    (
+        PresetRuntime::from_json_str(&json, &registry()).unwrap(),
+        strength,
+    )
 }
 
 fn project(strength_id: &str) -> Project {
@@ -307,7 +330,11 @@ fn run<S: AsRef<str>>(
         runtime.execute_frame(FrameTime {
             seconds: Seconds(seconds),
             beats: Beats(seconds * 2.0),
-            delta: Seconds(if frame == 0 { 0.0 } else { 1.0 / f64::from(fps) }),
+            delta: Seconds(if frame == 0 {
+                0.0
+            } else {
+                1.0 / f64::from(fps)
+            }),
             frame_count: i64::from(frame),
         });
     }
@@ -326,7 +353,8 @@ fn modifier_card_kick_forces_per_tick_match_across_frame_rates() {
 
 fn assert_identical_across_frame_rates<S: AsRef<str>>(build: fn() -> (PresetRuntime, S)) {
     let run = |fps, offline| run(build, fps, offline);
-    let baseline = run(60, true);    assert_eq!(baseline.len(), TICK_RATE as usize, "one force per tick");
+    let baseline = run(60, true);
+    assert_eq!(baseline.len(), TICK_RATE as usize, "one force per tick");
     let kick: Vec<f32> = baseline
         .iter()
         .filter(|(time, _)| (0.5..0.7).contains(time))
@@ -341,7 +369,10 @@ fn assert_identical_across_frame_rates<S: AsRef<str>>(build: fn() -> (PresetRunt
             let ticks = run(fps, offline);
             let pairs = ticks.iter().zip(&baseline);
             for (&(time, force), &(base_time, base_force)) in pairs {
-                assert!((time - base_time).abs() < 1e-9, "{fps} fps offline={offline}");
+                assert!(
+                    (time - base_time).abs() < 1e-9,
+                    "{fps} fps offline={offline}"
+                );
                 assert_eq!(force, base_force, "{fps} fps offline={offline} at {time}");
             }
             assert_eq!(ticks.len(), baseline.len(), "{fps} fps offline={offline}");
@@ -377,13 +408,21 @@ fn modifier_card_kick_is_sampled_at_each_tick_inside_one_frame() {
             &mut FireMeterCapture::default(),
         );
         let generator = project.timeline.layers[0].gen_params().unwrap();
-        hops.extend_from_slice(&generator.audio_mods.as_deref().unwrap()[0].hop_timeline.values);
+        hops.extend_from_slice(
+            &generator.audio_mods.as_deref().unwrap()[0]
+                .hop_timeline
+                .values,
+        );
         runtime.set_source_instance(Some(generator));
         runtime.apply_param_values(&generator.params);
         runtime.execute_frame(FrameTime {
             seconds: Seconds(seconds),
             beats: Beats(seconds * 2.0),
-            delta: Seconds(if frame == 0 { 0.0 } else { 1.0 / f64::from(fps) }),
+            delta: Seconds(if frame == 0 {
+                0.0
+            } else {
+                1.0 / f64::from(fps)
+            }),
             frame_count: i64::from(frame),
         });
     }
@@ -398,17 +437,30 @@ fn modifier_card_kick_is_sampled_at_each_tick_inside_one_frame() {
     assert!(gain.abs() > 0.0);
     for &(time, force) in &ticks {
         let expected = gain * strength_at(time);
-        assert!((force - expected).abs() <= 1e-5 * expected.abs().max(1.0), "tick {time}: {force} vs {expected}");
+        assert!(
+            (force - expected).abs() <= 1e-5 * expected.abs().max(1.0),
+            "tick {time}: {force} vs {expected}"
+        );
     }
     let distinct_frame = (0..fps).any(|frame| {
-        let (start, end) = (f64::from(frame) / f64::from(fps), f64::from(frame + 1) / f64::from(fps));
-        let inside: Vec<f32> = ticks.iter()
+        let (start, end) = (
+            f64::from(frame) / f64::from(fps),
+            f64::from(frame + 1) / f64::from(fps),
+        );
+        let inside: Vec<f32> = ticks
+            .iter()
             .filter(|(time, _)| *time > start + 1e-9 && *time <= end + 1e-9)
             .map(|&(_, force)| force)
             .collect();
-        inside.len() == 3 && inside[0] != inside[1] && inside[1] != inside[2] && inside[0] != inside[2]
+        inside.len() == 3
+            && inside[0] != inside[1]
+            && inside[1] != inside[2]
+            && inside[0] != inside[2]
     });
-    assert!(distinct_frame, "some frame's three ticks must each see a different kick value: {ticks:?}");
+    assert!(
+        distinct_frame,
+        "some frame's three ticks must each see a different kick value: {ticks:?}"
+    );
 }
 
 use manifold_core::params::ParamManifest;

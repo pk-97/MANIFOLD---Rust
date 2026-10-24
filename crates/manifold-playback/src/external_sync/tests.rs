@@ -14,7 +14,12 @@ impl Jitter {
 
 /// Ticks at Live's tempo with ±1 ms of arrival jitter, and Link's beat at
 /// each arrival integrated at Link's tempo. Returns (time, latched) per tick.
-fn run_clock(guard: &mut LinkTempoGuard, until: f64, live_bpm: impl Fn(f64) -> f64, link_bpm: impl Fn(f64) -> f64) -> Vec<(f64, bool)> {
+fn run_clock(
+    guard: &mut LinkTempoGuard,
+    until: f64,
+    live_bpm: impl Fn(f64) -> f64,
+    link_bpm: impl Fn(f64) -> f64,
+) -> Vec<(f64, bool)> {
     let mut jitter = Jitter(0x9E37_79B9);
     let (mut t, mut link_beat, mut k) = (0.0, 0.0, 0i64);
     let mut out = Vec::new();
@@ -40,22 +45,43 @@ fn guard_latches_and_holds_through_tempo_changes() {
     let trace = run_clock(&mut guard, 40.0, tempo, tempo);
     let first = trace.iter().find(|(_, l)| *l).expect("latches").0;
     assert!(first <= GUARD_WINDOW + 0.1, "latched only at {first:.2} s");
-    assert!(trace.iter().filter(|(t, _)| *t > first).all(|(_, l)| *l), "the 128 -> 174 jump kept the latch");
+    assert!(
+        trace.iter().filter(|(t, _)| *t > first).all(|(_, l)| *l),
+        "the 128 -> 174 jump kept the latch"
+    );
 }
 
 #[test]
 fn guard_rejects_a_foreign_link_session() {
     let mut guard = LinkTempoGuard::new();
     let trace = run_clock(&mut guard, 30.0, |_| 128.0, |_| 127.0);
-    assert!(trace.iter().all(|(_, l)| !*l), "a session at 127 against Live at 128 never latches");
+    assert!(
+        trace.iter().all(|(_, l)| !*l),
+        "a session at 127 against Live at 128 never latches"
+    );
 
     // Latched with Live on Link, then Link's session moves away: released
     // only once the disagreement has lasted 2 s.
     let mut guard = LinkTempoGuard::new();
-    let trace = run_clock(&mut guard, 30.0, |_| 128.0, |t| if t < 15.0 { 128.0 } else { 126.0 });
-    let released = trace.iter().find(|(t, l)| *t > 15.0 && !*l).expect("released").0;
-    assert!(released > 15.0 + GUARD_UNLATCH_HOLD, "released at {released:.2} s, before the hold");
-    assert!(released < 15.0 + GUARD_WINDOW + GUARD_UNLATCH_HOLD, "released late, at {released:.2} s");
+    let trace = run_clock(
+        &mut guard,
+        30.0,
+        |_| 128.0,
+        |t| if t < 15.0 { 128.0 } else { 126.0 },
+    );
+    let released = trace
+        .iter()
+        .find(|(t, l)| *t > 15.0 && !*l)
+        .expect("released")
+        .0;
+    assert!(
+        released > 15.0 + GUARD_UNLATCH_HOLD,
+        "released at {released:.2} s, before the hold"
+    );
+    assert!(
+        released < 15.0 + GUARD_WINDOW + GUARD_UNLATCH_HOLD,
+        "released late, at {released:.2} s"
+    );
 }
 
 #[test]
@@ -99,26 +125,59 @@ fn link_start_rounds_the_offset_to_the_quantum() {
     offset.request(OffsetTake::Quantum);
     assert_eq!(offset.take(37.3, 10.0, 4.0), Some(28.0));
     let beat = offset.beat(37.3).expect("taken");
-    assert!(((37.3 - beat) % 4.0).abs() < 1e-9 && (beat - 10.0).abs() <= 2.0, "bar aligned, moved under half a quantum: {beat}");
+    assert!(
+        ((37.3 - beat) % 4.0).abs() < 1e-9 && (beat - 10.0).abs() <= 2.0,
+        "bar aligned, moved under half a quantum: {beat}"
+    );
 
     offset.request(OffsetTake::Exact);
     offset.take(41.0, 12.5, 4.0);
-    assert_eq!(offset.beat(41.0), Some(12.5), "MANIFOLD's own start keeps its beat");
+    assert_eq!(
+        offset.beat(41.0),
+        Some(12.5),
+        "MANIFOLD's own start keeps its beat"
+    );
     offset.link_became_authority();
-    assert!(!offset.is_due(), "Link returning after a dropout keeps the offset (D15)");
+    assert!(
+        !offset.is_due(),
+        "Link returning after a dropout keeps the offset (D15)"
+    );
     offset.clear();
     assert_eq!((offset.get(), offset.is_due()), (None, false));
     offset.link_became_authority();
-    assert!(offset.is_due(), "Link becoming the authority with no offset takes the exact one");
+    assert!(
+        offset.is_due(),
+        "Link becoming the authority with no offset takes the exact one"
+    );
 }
 
 #[test]
 fn live_tempo_follows_the_authority_and_the_guard() {
     let clk = Some((127.9, TempoPointSource::MidiClock));
-    assert_eq!(live_tempo(ClockAuthority::Link, Some(128.0), None, false), Some((128.0, TempoPointSource::Link)));
-    assert_eq!(live_tempo(ClockAuthority::MidiClock, Some(128.0), clk, false), clk);
-    assert_eq!(live_tempo(ClockAuthority::MidiClock, Some(128.0), clk, true), Some((128.0, TempoPointSource::Link)));
-    assert_eq!(live_tempo(ClockAuthority::MidiClock, None, clk, true), clk, "Link gone: CLK's own tempo, never the map's");
-    assert_eq!(live_tempo(ClockAuthority::Osc, None, None, false), None, "timecode reports the map's");
-    assert_eq!(live_tempo(ClockAuthority::Internal, Some(128.0), clk, true), None);
+    assert_eq!(
+        live_tempo(ClockAuthority::Link, Some(128.0), None, false),
+        Some((128.0, TempoPointSource::Link))
+    );
+    assert_eq!(
+        live_tempo(ClockAuthority::MidiClock, Some(128.0), clk, false),
+        clk
+    );
+    assert_eq!(
+        live_tempo(ClockAuthority::MidiClock, Some(128.0), clk, true),
+        Some((128.0, TempoPointSource::Link))
+    );
+    assert_eq!(
+        live_tempo(ClockAuthority::MidiClock, None, clk, true),
+        clk,
+        "Link gone: CLK's own tempo, never the map's"
+    );
+    assert_eq!(
+        live_tempo(ClockAuthority::Osc, None, None, false),
+        None,
+        "timecode reports the map's"
+    );
+    assert_eq!(
+        live_tempo(ClockAuthority::Internal, Some(128.0), clk, true),
+        None
+    );
 }

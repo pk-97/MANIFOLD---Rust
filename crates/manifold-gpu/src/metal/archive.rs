@@ -173,7 +173,9 @@ impl RenderPipelineKey<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{GpuBlendFactor as Factor, GpuBlendOp as Op, GpuBlendState, GpuTextureFormat as Format};
+    use crate::{
+        GpuBlendFactor as Factor, GpuBlendOp as Op, GpuBlendState, GpuTextureFormat as Format,
+    };
 
     fn key() -> RenderPipelineKey<'static> {
         RenderPipelineKey {
@@ -213,51 +215,111 @@ mod tests {
         variants.push(changed.hash());
         variants.push(original);
         let count = variants.len();
-        assert_eq!(variants.into_iter().collect::<std::collections::HashSet<_>>().len(), count);
+        assert_eq!(
+            variants
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            count
+        );
     }
 
     #[test]
     fn render_identity_includes_every_blend_component() {
         let blend = GpuBlendState {
-            src_factor: Factor::One, dst_factor: Factor::Zero, operation: Op::Add,
-            src_alpha_factor: Factor::One, dst_alpha_factor: Factor::Zero, alpha_operation: Op::Add,
+            src_factor: Factor::One,
+            dst_factor: Factor::Zero,
+            operation: Op::Add,
+            src_alpha_factor: Factor::One,
+            dst_alpha_factor: Factor::Zero,
+            alpha_operation: Op::Add,
         };
         let mut variants = vec![key().hash()];
         for b in [
             blend,
-            GpuBlendState { src_factor: Factor::SrcAlpha, ..blend },
-            GpuBlendState { dst_factor: Factor::One, ..blend },
-            GpuBlendState { operation: Op::Max, ..blend },
-            GpuBlendState { src_alpha_factor: Factor::SrcAlpha, ..blend },
-            GpuBlendState { dst_alpha_factor: Factor::One, ..blend },
-            GpuBlendState { alpha_operation: Op::Max, ..blend },
+            GpuBlendState {
+                src_factor: Factor::SrcAlpha,
+                ..blend
+            },
+            GpuBlendState {
+                dst_factor: Factor::One,
+                ..blend
+            },
+            GpuBlendState {
+                operation: Op::Max,
+                ..blend
+            },
+            GpuBlendState {
+                src_alpha_factor: Factor::SrcAlpha,
+                ..blend
+            },
+            GpuBlendState {
+                dst_alpha_factor: Factor::One,
+                ..blend
+            },
+            GpuBlendState {
+                alpha_operation: Op::Max,
+                ..blend
+            },
         ] {
             let mut changed = key();
             changed.blend = Some(b);
             variants.push(changed.hash());
         }
         let count = variants.len();
-        assert_eq!(variants.into_iter().collect::<std::collections::HashSet<_>>().len(), count);
+        assert_eq!(
+            variants
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            count
+        );
     }
 
     #[test]
     fn render_identity_includes_complete_vertex_layout() {
         use crate::{GpuVertexAttribute, GpuVertexFormat, GpuVertexLayout};
-        let attr = GpuVertexAttribute { format: GpuVertexFormat::Float32x2, offset: 0, shader_location: 0 };
+        let attr = GpuVertexAttribute {
+            format: GpuVertexFormat::Float32x2,
+            offset: 0,
+            shader_location: 0,
+        };
         let mut variants = vec![key().hash()];
         for (stride, attribute) in [
-            (16, attr), (24, attr),
+            (16, attr),
+            (24, attr),
             (16, GpuVertexAttribute { offset: 8, ..attr }),
-            (16, GpuVertexAttribute { shader_location: 1, ..attr }),
-            (16, GpuVertexAttribute { format: GpuVertexFormat::Float32x3, ..attr }),
+            (
+                16,
+                GpuVertexAttribute {
+                    shader_location: 1,
+                    ..attr
+                },
+            ),
+            (
+                16,
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x3,
+                    ..attr
+                },
+            ),
         ] {
-            let layout = GpuVertexLayout { stride, attributes: vec![attribute] };
+            let layout = GpuVertexLayout {
+                stride,
+                attributes: vec![attribute],
+            };
             let mut changed = key();
             changed.vertex_layout = Some(&layout);
             variants.push(changed.hash());
         }
         let count = variants.len();
-        assert_eq!(variants.into_iter().collect::<std::collections::HashSet<_>>().len(), count);
+        assert_eq!(
+            variants
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            count
+        );
     }
 
     #[test]
@@ -270,6 +332,12 @@ mod tests {
             render_shader_hash("shader", "vs", "other_fs", None),
             render_shader_hash("other_shader", "vs", "fs", None),
         ];
-        assert_eq!(hashes.into_iter().collect::<std::collections::HashSet<_>>().len(), hashes.len());
+        assert_eq!(
+            hashes
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            hashes.len()
+        );
     }
 }

@@ -1,9 +1,15 @@
 //! Fused-versus-unfused GPU proofs for buffer atoms: a region member from
 //! an atom's spec, one fused dispatch of a region, and one standalone run.
 
+use crate::freeze::{
+    classify::CapacityExpr, codegen::FusionRegion, codegen::InputSource, codegen::RegionNode,
+    codegen::generate_fused,
+};
 use crate::testkit::array_harness::{Harness, read};
-use crate::{exec::effect_node::NodeInstanceId, exec::effect_node::ParamValues, primitive::Primitive, primitive::PrimitiveSpec, parameters::ParamValue, ports::KnownItem};
-use crate::freeze::{classify::CapacityExpr, codegen::FusionRegion, codegen::InputSource, codegen::RegionNode, codegen::generate_fused};
+use crate::{
+    exec::effect_node::NodeInstanceId, exec::effect_node::ParamValues, parameters::ParamValue,
+    ports::KnownItem, primitive::Primitive, primitive::PrimitiveSpec,
+};
 use manifold_gpu::{GpuBinding, GpuBuffer};
 pub fn member<P: PrimitiveSpec>(id: u32, inputs: Vec<InputSource>) -> RegionNode<'static> {
     RegionNode {

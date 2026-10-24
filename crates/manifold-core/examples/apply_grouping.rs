@@ -119,7 +119,10 @@ fn main() {
                     Err(_) => failed.push(label),
                 }
             }
-            eprintln!("batch: {applied} applied, {} failed {failed:?}", failed.len());
+            eprintln!(
+                "batch: {applied} applied, {} failed {failed:?}",
+                failed.len()
+            );
         }
         // Single: <baseline.json> <spec.json> <out.json>
         _ => {
@@ -131,17 +134,18 @@ fn main() {
                 std::process::exit(2);
             }
             let (baseline_path, spec_path, out_path) = (&args[1], &args[2], &args[3]);
-            let def: EffectGraphDef = serde_json::from_str(
-                &fs::read_to_string(baseline_path).expect("read baseline"),
-            )
-            .expect("parse baseline");
-            let spec: Spec = serde_json::from_str(
-                &fs::read_to_string(spec_path).expect("read spec"),
-            )
-            .expect("parse spec");
+            let def: EffectGraphDef =
+                serde_json::from_str(&fs::read_to_string(baseline_path).expect("read baseline"))
+                    .expect("parse baseline");
+            let spec: Spec =
+                serde_json::from_str(&fs::read_to_string(spec_path).expect("read spec"))
+                    .expect("parse spec");
             let grouped = group_one(def, &spec);
-            fs::write(out_path, serde_json::to_string_pretty(&grouped).unwrap() + "\n")
-                .expect("write out");
+            fs::write(
+                out_path,
+                serde_json::to_string_pretty(&grouped).unwrap() + "\n",
+            )
+            .expect("write out");
             eprintln!("wrote {out_path}");
         }
     }
@@ -287,8 +291,16 @@ fn apply_port_renames(
 ) {
     let gid = gnode.id;
     let gd = gnode.group.as_mut().expect("group body");
-    let gi = gd.nodes.iter().find(|n| n.type_id == GROUP_INPUT_TYPE_ID).map(|n| n.id);
-    let go = gd.nodes.iter().find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID).map(|n| n.id);
+    let gi = gd
+        .nodes
+        .iter()
+        .find(|n| n.type_id == GROUP_INPUT_TYPE_ID)
+        .map(|n| n.id);
+    let go = gd
+        .nodes
+        .iter()
+        .find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)
+        .map(|n| n.id);
     let body_node_id: BTreeMap<u32, String> = gd
         .nodes
         .iter()
@@ -319,9 +331,16 @@ fn apply_port_renames(
     // need each NEW name to stay unique against the other renames and any port we
     // are leaving at its inferred name.
     for side in [true, false] {
-        let iface = if side { &gd.interface.inputs } else { &gd.interface.outputs };
-        let renamed_olds: BTreeSet<&str> =
-            ops.iter().filter(|o| o.0 == side).map(|o| o.1.as_str()).collect();
+        let iface = if side {
+            &gd.interface.inputs
+        } else {
+            &gd.interface.outputs
+        };
+        let renamed_olds: BTreeSet<&str> = ops
+            .iter()
+            .filter(|o| o.0 == side)
+            .map(|o| o.1.as_str())
+            .collect();
         let mut used: BTreeSet<String> = iface
             .iter()
             .map(|p| p.name.clone())

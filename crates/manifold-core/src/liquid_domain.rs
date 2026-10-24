@@ -18,7 +18,11 @@ pub const MATTER_DOMAIN_TYPE_ID: &str = "node.matter_domain";
 pub const GPU_FLIP_DOMAIN_TYPE_ID: &str = "node.gpu_flip_domain";
 
 /// Every liquid domain type.
-pub const LIQUID_DOMAIN_TYPE_IDS: &[&str] = &[FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID];
+pub const LIQUID_DOMAIN_TYPE_IDS: &[&str] = &[
+    FLIP_DOMAIN_TYPE_ID,
+    MATTER_DOMAIN_TYPE_ID,
+    GPU_FLIP_DOMAIN_TYPE_ID,
+];
 
 pub fn is_liquid_domain(type_id: &str) -> bool {
     LIQUID_DOMAIN_TYPE_IDS.contains(&type_id)
@@ -39,7 +43,10 @@ pub fn liquid_domains_in(nodes: &[EffectGraphNode]) -> Vec<NestedLiquidDomain> {
     fn walk(nodes: &[EffectGraphNode], groups: &mut Vec<u32>, out: &mut Vec<NestedLiquidDomain>) {
         for node in nodes {
             if is_liquid_domain(&node.type_id) {
-                out.push(NestedLiquidDomain { groups: groups.clone(), node: node.id });
+                out.push(NestedLiquidDomain {
+                    groups: groups.clone(),
+                    node: node.id,
+                });
             }
             if node.type_id == GROUP_TYPE_ID
                 && let Some(body) = node.group.as_deref()
@@ -63,24 +70,47 @@ pub const LIQUID_DIAL_PARAMS: &[(&str, &[&str])] = &[
     (
         MATTER_DOMAIN_TYPE_ID,
         &[
-            "seed", "domain_size", "fill_height",
-            "gravity_x", "gravity", "gravity_z", "air_drag",
-            "speed", "reset",
-            "resolution", "grid_budget_mcells",
-            "closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y",
-            "closed_neg_z", "closed_pos_z",
-            "points_per_cell", "stiffness", "cohesion", "liveliness",
+            "seed",
+            "domain_size",
+            "fill_height",
+            "gravity_x",
+            "gravity",
+            "gravity_z",
+            "air_drag",
+            "speed",
+            "reset",
+            "resolution",
+            "grid_budget_mcells",
+            "closed_neg_x",
+            "closed_pos_x",
+            "closed_neg_y",
+            "closed_pos_y",
+            "closed_neg_z",
+            "closed_pos_z",
+            "points_per_cell",
+            "stiffness",
+            "cohesion",
+            "liveliness",
         ],
     ),
     (
         GPU_FLIP_DOMAIN_TYPE_ID,
         &[
-            "domain_size", "fill_height",
-            "gravity_x", "gravity", "gravity_z", "air_drag",
-            "speed", "reset",
+            "domain_size",
+            "fill_height",
+            "gravity_x",
+            "gravity",
+            "gravity_z",
+            "air_drag",
+            "speed",
+            "reset",
             "resolution",
-            "closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y",
-            "closed_neg_z", "closed_pos_z",
+            "closed_neg_x",
+            "closed_pos_x",
+            "closed_neg_y",
+            "closed_pos_y",
+            "closed_neg_z",
+            "closed_pos_z",
         ],
     ),
 ];
@@ -164,25 +194,43 @@ mod tests {
     fn liquid_domains_in_finds_nested_gpu_domain() {
         use crate::effect_graph_def::{GroupDef, GroupInterface};
         let node = |id: u32, type_id: &str| -> EffectGraphNode {
-            serde_json::from_value(serde_json::json!({"id": id, "nodeId": format!("n{id}"), "typeId": type_id}))
-                .expect("node parses")
+            serde_json::from_value(
+                serde_json::json!({"id": id, "nodeId": format!("n{id}"), "typeId": type_id}),
+            )
+            .expect("node parses")
         };
         let group = |id: u32, nodes: Vec<EffectGraphNode>| {
             let mut group = node(id, GROUP_TYPE_ID);
             group.group = Some(Box::new(GroupDef {
-                interface: GroupInterface { inputs: vec![], outputs: vec![], params: vec![] },
+                interface: GroupInterface {
+                    inputs: vec![],
+                    outputs: vec![],
+                    params: vec![],
+                },
                 nodes,
                 wires: vec![],
                 tint: None,
             }));
             group
         };
-        let fluid_group = group(1, vec![group(2, vec![node(3, MATTER_DOMAIN_TYPE_ID)]), node(4, "node.value")]);
+        let fluid_group = group(
+            1,
+            vec![
+                group(2, vec![node(3, MATTER_DOMAIN_TYPE_ID)]),
+                node(4, "node.value"),
+            ],
+        );
         assert_eq!(
             liquid_domains_in(&[fluid_group, node(5, FLIP_DOMAIN_TYPE_ID)]),
             vec![
-                NestedLiquidDomain { groups: vec![1, 2], node: 3 },
-                NestedLiquidDomain { groups: vec![], node: 5 },
+                NestedLiquidDomain {
+                    groups: vec![1, 2],
+                    node: 3
+                },
+                NestedLiquidDomain {
+                    groups: vec![],
+                    node: 5
+                },
             ]
         );
     }
@@ -197,7 +245,10 @@ mod tests {
         }
         assert!(liquid_dial_params(FLIP_DOMAIN_TYPE_ID).is_none());
         for (type_id, _) in LIQUID_DIAL_PARAMS {
-            assert!(is_liquid_domain(type_id), "{type_id} has dials but is not a liquid domain");
+            assert!(
+                is_liquid_domain(type_id),
+                "{type_id} has dials but is not a liquid domain"
+            );
         }
     }
 
@@ -242,7 +293,10 @@ mod tests {
                 }
                 let text = std::fs::read_to_string(&path).expect("readable source");
                 for (number, line) in text.lines().enumerate() {
-                    if patterns.iter().any(|pattern| line.contains(pattern.as_str())) {
+                    if patterns
+                        .iter()
+                        .any(|pattern| line.contains(pattern.as_str()))
+                    {
                         offenders.push(format!("{relative}:{}", number + 1));
                     }
                 }

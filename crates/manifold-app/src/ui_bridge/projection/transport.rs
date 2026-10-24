@@ -186,7 +186,10 @@ mod bug159_auto_scroll_yield_tests {
         // Push the playhead far enough right to cross the right-edge margin.
         let state = playing_state(500.0);
         let moved = check_auto_scroll(&mut ui, &state);
-        assert!(moved, "auto-scroll must engage with no competing user gesture");
+        assert!(
+            moved,
+            "auto-scroll must engage with no competing user gesture"
+        );
     }
 
     #[test]

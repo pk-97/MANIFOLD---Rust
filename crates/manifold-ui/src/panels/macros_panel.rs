@@ -9,13 +9,12 @@
 //! sub-widgets — the next blocks to typify. Public interface unchanged, so the
 //! inspector composite is untouched.
 
-use crate::{MappingAction, ParamsAction, RootAction};
-use super::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::{
-    ABL_CONFIG_HEIGHT, AbletonMappingDisplay, TrimHandleIds,
-    build_ableton_config, build_trim_handles_explicit, reposition_trim_bars,
+    ABL_CONFIG_HEIGHT, AbletonMappingDisplay, TrimHandleIds, build_ableton_config,
+    build_trim_handles_explicit, reposition_trim_bars,
 };
+use super::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View};
 use crate::color;
 use crate::drag::DragController;
@@ -23,6 +22,7 @@ use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderDragState, TrackSpan};
 use crate::tree::UITree;
 use crate::types::MACRO_COUNT;
+use crate::{MappingAction, ParamsAction, RootAction};
 
 // ── Layout constants ───────────────────────────────────────────────
 
@@ -181,7 +181,9 @@ impl MacrosPanel {
                 continue;
             }
             self.ableton_ranges[i] = range;
-            if let (Some((lo, hi)), Some(trim), Some(ids)) = (range, &self.ableton_trim_ids[i], self.sliders[i].ids()) {
+            if let (Some((lo, hi)), Some(trim), Some(ids)) =
+                (range, &self.ableton_trim_ids[i], self.sliders[i].ids())
+            {
                 let track = tree.get_bounds(ids.track);
                 reposition_trim_bars(tree, track, trim, lo, hi);
             }
@@ -202,7 +204,9 @@ impl MacrosPanel {
         use std::fmt::Write;
         let flash = self.copied_flash.label_id();
         let copied = flash.and_then(|label_id| {
-            self.sliders.iter().position(|s| s.ids().is_some_and(|ids| ids.label == Some(label_id)))
+            self.sliders
+                .iter()
+                .position(|s| s.ids().is_some_and(|ids| ids.label == Some(label_id)))
         });
         let mut name = MacroName::default();
         let copied_label = copied.map_or("", |i| Self::display_label(labels, i, &mut name));
@@ -227,19 +231,23 @@ impl MacrosPanel {
     // ── View description (chrome + slider/config slots) ──────────────
 
     fn chrome_view(&self) -> View {
-        let chevron = View::button(if self.is_collapsed { "\u{25B6}" } else { "\u{25BC}" })
-            .fixed(CHEVRON_W, CHEVRON_H)
-            .style(UIStyle {
-                bg_color: Color32::TRANSPARENT,
-                hover_bg_color: color::HOVER_OVERLAY,
-                pressed_bg_color: color::PRESS_OVERLAY,
-                text_color: color::CHEVRON_COLOR,
-                font_size: FONT_SIZE,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            })
-            .inert()
-            .key(KEY_CHEVRON);
+        let chevron = View::button(if self.is_collapsed {
+            "\u{25B6}"
+        } else {
+            "\u{25BC}"
+        })
+        .fixed(CHEVRON_W, CHEVRON_H)
+        .style(UIStyle {
+            bg_color: Color32::TRANSPARENT,
+            hover_bg_color: color::HOVER_OVERLAY,
+            pressed_bg_color: color::PRESS_OVERLAY,
+            text_color: color::CHEVRON_COLOR,
+            font_size: FONT_SIZE,
+            text_align: TextAlign::Center,
+            ..UIStyle::default()
+        })
+        .inert()
+        .key(KEY_CHEVRON);
 
         let header = View::row(GAP)
             .fill_w()
@@ -283,7 +291,10 @@ impl MacrosPanel {
                     label_width: LABEL_WIDTH,
                     reset: PanelAction::slider_reset(
                         PanelAction::Scrub(ValueRef::Macro(i), ScrubPhase::Begin),
-                        PanelAction::Scrub(ValueRef::Macro(i), ScrubPhase::Move(ScrubValue::Scalar(0.0))),
+                        PanelAction::Scrub(
+                            ValueRef::Macro(i),
+                            ScrubPhase::Move(ScrubValue::Scalar(0.0)),
+                        ),
                         PanelAction::Scrub(ValueRef::Macro(i), ScrubPhase::Commit),
                     ),
                 };
@@ -354,9 +365,16 @@ impl MacrosPanel {
                     .node_id_for_key(KEY_CONFIG_BASE + i as u64)
                     .map(|id| tree.get_bounds(id))
                 {
-                    self.ableton_config_ids[i] =
-                        Some(build_ableton_config(tree, None, slot.x, slot.y, slot.width, &display,
-                            PanelAction::Mapping(MappingAction::AbletonMacroInvertToggle(i)), None));
+                    self.ableton_config_ids[i] = Some(build_ableton_config(
+                        tree,
+                        None,
+                        slot.x,
+                        slot.y,
+                        slot.width,
+                        &display,
+                        PanelAction::Mapping(MappingAction::AbletonMacroInvertToggle(i)),
+                        None,
+                    ));
                 } else {
                     self.ableton_config_ids[i] = None;
                 }
@@ -375,14 +393,30 @@ impl MacrosPanel {
         for (i, trim) in self.ableton_trim_ids.iter().enumerate() {
             if let Some(t) = trim {
                 if node_id == t.min_bar_id {
-                    self.ableton_trim_drag
-                        .start(AbletonTrimDrag { index: i, is_min: true }, Vec2::new(pos_x, 0.0));
-                    return vec![PanelAction::Scrub(ValueRef::AbletonMacroTrim(i), ScrubPhase::Begin)];
+                    self.ableton_trim_drag.start(
+                        AbletonTrimDrag {
+                            index: i,
+                            is_min: true,
+                        },
+                        Vec2::new(pos_x, 0.0),
+                    );
+                    return vec![PanelAction::Scrub(
+                        ValueRef::AbletonMacroTrim(i),
+                        ScrubPhase::Begin,
+                    )];
                 }
                 if node_id == t.max_bar_id {
-                    self.ableton_trim_drag
-                        .start(AbletonTrimDrag { index: i, is_min: false }, Vec2::new(pos_x, 0.0));
-                    return vec![PanelAction::Scrub(ValueRef::AbletonMacroTrim(i), ScrubPhase::Begin)];
+                    self.ableton_trim_drag.start(
+                        AbletonTrimDrag {
+                            index: i,
+                            is_min: false,
+                        },
+                        Vec2::new(pos_x, 0.0),
+                    );
+                    return vec![PanelAction::Scrub(
+                        ValueRef::AbletonMacroTrim(i),
+                        ScrubPhase::Begin,
+                    )];
                 }
             }
         }
@@ -391,7 +425,10 @@ impl MacrosPanel {
             if let Some(val) = s.try_start_drag(node_id, pos_x) {
                 return vec![
                     PanelAction::Scrub(ValueRef::Macro(i), ScrubPhase::Begin),
-                    PanelAction::Scrub(ValueRef::Macro(i), ScrubPhase::Move(ScrubValue::Scalar(val))),
+                    PanelAction::Scrub(
+                        ValueRef::Macro(i),
+                        ScrubPhase::Move(ScrubValue::Scalar(val)),
+                    ),
                 ];
             }
         }
@@ -428,7 +465,10 @@ impl MacrosPanel {
         // Slider drag
         for (i, s) in self.sliders.iter_mut().enumerate() {
             if let Some(val) = s.apply_drag(pos_x, tree, &fmt_macro) {
-                return vec![PanelAction::Scrub(ValueRef::Macro(i), ScrubPhase::Move(ScrubValue::Scalar(val)))];
+                return vec![PanelAction::Scrub(
+                    ValueRef::Macro(i),
+                    ScrubPhase::Move(ScrubValue::Scalar(val)),
+                )];
             }
         }
         Vec::new()
@@ -437,7 +477,10 @@ impl MacrosPanel {
     /// Handle pointer up — commit the drag.
     pub fn handle_release(&mut self) -> Vec<PanelAction> {
         if let Some(AbletonTrimDrag { index: i, .. }) = self.ableton_trim_drag.release() {
-            return vec![PanelAction::Scrub(ValueRef::AbletonMacroTrim(i), ScrubPhase::Commit)];
+            return vec![PanelAction::Scrub(
+                ValueRef::AbletonMacroTrim(i),
+                ScrubPhase::Commit,
+            )];
         }
         for (i, s) in self.sliders.iter_mut().enumerate() {
             if s.end_drag() {
@@ -482,14 +525,19 @@ impl MacrosPanel {
         }
         for (i, s) in self.sliders.iter().enumerate() {
             if let Some(ids) = s.ids() {
-                BitmapSlider::register_label_mapping(ids, &PanelAction::Mapping(MappingAction::MacroLabelRightClick(i)), intents);
+                BitmapSlider::register_label_mapping(
+                    ids,
+                    &PanelAction::Mapping(MappingAction::MacroLabelRightClick(i)),
+                    intents,
+                );
             }
         }
     }
 
     /// Whether `node_id` is one of the nodes this panel's latest live build made.
     pub fn owns_node(&self, tree: &UITree, node_id: NodeId) -> bool {
-        self.first_node.is_some_and(|first| tree.range_owns(first, self.node_count, node_id))
+        self.first_node
+            .is_some_and(|first| tree.range_owns(first, self.node_count, node_id))
     }
 
     pub fn label_rect(&self, tree: &UITree, index: usize) -> Option<Rect> {
@@ -564,7 +612,10 @@ pub(super) mod tests {
         let names: Vec<String> = (1..=MACRO_COUNT).map(|i| format!("macro {i}")).collect();
         let cells: Vec<(&str, Rect)> = (0..MACRO_COUNT)
             .map(|i| {
-                let id = panel.host.node_id_for_key(KEY_SLIDER_BASE + i as u64).unwrap();
+                let id = panel
+                    .host
+                    .node_id_for_key(KEY_SLIDER_BASE + i as u64)
+                    .unwrap();
                 (names[i].as_str(), tree.get_bounds(id))
             })
             .collect();
@@ -603,12 +654,19 @@ pub(super) mod tests {
         panel.set_ableton_ranges(&ranges);
         panel.build(&mut tree, rect());
 
-        let trim = panel.ableton_trim_ids[0].expect("macro 0 has an ableton range, trim handles built");
+        let trim =
+            panel.ableton_trim_ids[0].expect("macro 0 has an ableton range, trim handles built");
 
         // Press the MIN bar on macro 0.
         let press = panel.handle_press(trim.min_bar_id, 0.3);
         assert!(
-            matches!(press.as_slice(), [PanelAction::Scrub(ValueRef::AbletonMacroTrim(0), ScrubPhase::Begin)]),
+            matches!(
+                press.as_slice(),
+                [PanelAction::Scrub(
+                    ValueRef::AbletonMacroTrim(0),
+                    ScrubPhase::Begin
+                )]
+            ),
             "press min bar: {press:?}"
         );
 
@@ -616,12 +674,24 @@ pub(super) mod tests {
         // x_to_normalized helper the production path uses, clamped to cur_max.
         let track_rect = tree.get_bounds(panel.sliders[0].track_id().unwrap());
         let pos_x = track_rect.x + track_rect.width * 0.35;
-        let expected_norm = BitmapSlider::x_to_normalized(TrackSpan::of(track_rect), pos_x).clamp(0.0, 0.8);
+        let expected_norm =
+            BitmapSlider::x_to_normalized(TrackSpan::of(track_rect), pos_x).clamp(0.0, 0.8);
         let drag = panel.handle_drag(pos_x, &mut tree);
         match drag.as_slice() {
-            [PanelAction::Scrub(ValueRef::AbletonMacroTrim(0), ScrubPhase::Move(ScrubValue::Range(new_min, new_max)))] => {
-                assert!((new_min - expected_norm).abs() < 1e-6, "new_min={new_min} expected={expected_norm}");
-                assert!((new_max - 0.8).abs() < 1e-6, "new_max={new_max} should hold at cur_max");
+            [
+                PanelAction::Scrub(
+                    ValueRef::AbletonMacroTrim(0),
+                    ScrubPhase::Move(ScrubValue::Range(new_min, new_max)),
+                ),
+            ] => {
+                assert!(
+                    (new_min - expected_norm).abs() < 1e-6,
+                    "new_min={new_min} expected={expected_norm}"
+                );
+                assert!(
+                    (new_max - 0.8).abs() < 1e-6,
+                    "new_max={new_max} should hold at cur_max"
+                );
             }
             other => panic!("expected AbletonMacroTrim scrub move, got {other:?}"),
         }
@@ -629,7 +699,13 @@ pub(super) mod tests {
         // Release commits macro 0.
         let release = panel.handle_release();
         assert!(
-            matches!(release.as_slice(), [PanelAction::Scrub(ValueRef::AbletonMacroTrim(0), ScrubPhase::Commit)]),
+            matches!(
+                release.as_slice(),
+                [PanelAction::Scrub(
+                    ValueRef::AbletonMacroTrim(0),
+                    ScrubPhase::Commit
+                )]
+            ),
             "release: {release:?}"
         );
 
@@ -640,23 +716,41 @@ pub(super) mod tests {
         // Press the MAX bar on macro 0 to exercise the other arm.
         let press_max = panel.handle_press(trim.max_bar_id, 0.9);
         assert!(
-            matches!(press_max.as_slice(), [PanelAction::Scrub(ValueRef::AbletonMacroTrim(0), ScrubPhase::Begin)]),
+            matches!(
+                press_max.as_slice(),
+                [PanelAction::Scrub(
+                    ValueRef::AbletonMacroTrim(0),
+                    ScrubPhase::Begin
+                )]
+            ),
             "press max bar: {press_max:?}"
         );
         let pos_x_max = track_rect.x + track_rect.width * 0.95;
         // cur_min is whatever the previous drag committed it to (expected_norm),
         // since ableton_ranges was mutated in place during the first drag.
-        let expected_max = BitmapSlider::x_to_normalized(TrackSpan::of(track_rect), pos_x_max).clamp(expected_norm, 1.0);
+        let expected_max = BitmapSlider::x_to_normalized(TrackSpan::of(track_rect), pos_x_max)
+            .clamp(expected_norm, 1.0);
         let drag_max = panel.handle_drag(pos_x_max, &mut tree);
         match drag_max.as_slice() {
-            [PanelAction::Scrub(ValueRef::AbletonMacroTrim(0), ScrubPhase::Move(ScrubValue::Range(new_min, new_max)))] => {
+            [
+                PanelAction::Scrub(
+                    ValueRef::AbletonMacroTrim(0),
+                    ScrubPhase::Move(ScrubValue::Range(new_min, new_max)),
+                ),
+            ] => {
                 assert!((new_min - expected_norm).abs() < 1e-6);
                 assert!((new_max - expected_max).abs() < 1e-6);
             }
             other => panic!("expected AbletonMacroTrim scrub move, got {other:?}"),
         }
         let release_max = panel.handle_release();
-        assert!(matches!(release_max.as_slice(), [PanelAction::Scrub(ValueRef::AbletonMacroTrim(0), ScrubPhase::Commit)]));
+        assert!(matches!(
+            release_max.as_slice(),
+            [PanelAction::Scrub(
+                ValueRef::AbletonMacroTrim(0),
+                ScrubPhase::Commit
+            )]
+        ));
     }
 
     /// after an in-place scroll (every
@@ -687,11 +781,21 @@ pub(super) mod tests {
         let live = tree.get_bounds(track);
         let drag = panel.handle_drag(live.x + live.width * 0.5, &mut tree);
         assert!(
-            matches!(drag.as_slice(), [PanelAction::Scrub(ValueRef::AbletonMacroTrim(0), ScrubPhase::Move(ScrubValue::Range(..)))]),
+            matches!(
+                drag.as_slice(),
+                [PanelAction::Scrub(
+                    ValueRef::AbletonMacroTrim(0),
+                    ScrubPhase::Move(ScrubValue::Range(..))
+                )]
+            ),
             "trim drag still routes after scroll: {drag:?}"
         );
 
-        for (name, id) in [("min_bar", trim.min_bar_id), ("max_bar", trim.max_bar_id), ("fill", trim.fill_id)] {
+        for (name, id) in [
+            ("min_bar", trim.min_bar_id),
+            ("max_bar", trim.max_bar_id),
+            ("fill", trim.fill_id),
+        ] {
             let y = tree.get_bounds(id).y;
             assert!(
                 (y - live.y).abs() <= 4.0,
@@ -708,7 +812,11 @@ pub(super) mod tests {
         panel.build(&mut tree, rect());
         let mut reg = crate::intent::IntentRegistry::new();
         panel.register_intents(&mut reg);
-        let got = reg.resolve(&tree, panel.sliders[0].track_id(), crate::intent::Gesture::RightClick);
+        let got = reg.resolve(
+            &tree,
+            panel.sliders[0].track_id(),
+            crate::intent::Gesture::RightClick,
+        );
         vec![crate::panels::contract_tests::ResetCase {
             label: "macro 1".into(),
             got,

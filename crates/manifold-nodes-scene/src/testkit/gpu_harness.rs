@@ -1,9 +1,9 @@
 //! Scene import and ray-tracing helpers for GPU proofs.
 
-use std::slice;
 use half::f16;
-use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_gpu::raytrace::{EmissiveAliasEntry, EmissiveTriangleGpu};
+use manifold_gpu::{GpuDevice, GpuTextureFormat};
+use std::slice;
 
 /// Allocate a valid empty emissive-table argument for RT fixtures. Metal
 /// validates the declared argument length even when the table has no entries.
@@ -38,14 +38,27 @@ pub fn import_rt_manifest(
         .preset_metadata
         .as_ref()
         .expect("an imported def always carries card metadata");
-    let mut manifest =
-        ParamManifest::from_params(metadata.params.iter().cloned().map(Param::bundled).collect());
+    let mut manifest = ParamManifest::from_params(
+        metadata
+            .params
+            .iter()
+            .cloned()
+            .map(Param::bundled)
+            .collect(),
+    );
     // A scene document names a card param `<item>.<property>`; an older
     // graph prefixed its node handle with `_`.
-    for (name, on) in [("rt_enabled", rt_enabled), ("rt_reflections", rt_reflections)] {
+    for (name, on) in [
+        ("rt_enabled", rt_enabled),
+        ("rt_reflections", rt_reflections),
+    ] {
         let id = manifest
             .iter()
-            .find(|p| p.id().strip_suffix(name).is_some_and(|head| head.ends_with(['.', '_'])))
+            .find(|p| {
+                p.id()
+                    .strip_suffix(name)
+                    .is_some_and(|head| head.ends_with(['.', '_']))
+            })
             .map(|p| p.id().to_string())
             .unwrap_or_else(|| panic!("imported def exposes no card param for `{name}`"));
         manifest
@@ -66,7 +79,9 @@ pub fn import_rt_manifest(
 pub fn capture_rt_channels(
     render_one_armed_frame: impl FnOnce(),
 ) -> Vec<crate::node_graph::primitives::render_scene::RtCaptureSlot> {
-    use crate::node_graph::primitives::render_scene::{arm_rt_capture, disarm_rt_capture, take_rt_captures};
+    use crate::node_graph::primitives::render_scene::{
+        arm_rt_capture, disarm_rt_capture, take_rt_captures,
+    };
     take_rt_captures();
     arm_rt_capture(false);
     render_one_armed_frame();
@@ -105,7 +120,9 @@ pub fn read_rt_channel(
     let mut enc = device.create_encoder("rt-channel-readback");
     enc.copy_texture_to_buffer(&cap.tex, &buf, cap.w, cap.h, bytes_per_row);
     enc.commit_and_wait_completed();
-    let ptr = buf.mapped_ptr().expect("shared readback buffer must expose mapped pointer");
+    let ptr = buf
+        .mapped_ptr()
+        .expect("shared readback buffer must expose mapped pointer");
     let raw: &[u8] = unsafe { slice::from_raw_parts(ptr, total as usize) };
     let mut out = vec![0.0f32; (cap.w * cap.h * 4) as usize];
     for i in 0..(cap.w * cap.h) as usize {
@@ -117,7 +134,10 @@ pub fn read_rt_channel(
     out
 }
 
-pub fn readback_rgba_f32(device: &manifold_gpu::GpuDevice, texture: &manifold_gpu::GpuTexture) -> Vec<f32> {
+pub fn readback_rgba_f32(
+    device: &manifold_gpu::GpuDevice,
+    texture: &manifold_gpu::GpuTexture,
+) -> Vec<f32> {
     use half::f16;
     let bytes_per_row = texture.width * 8; // Rgba16Float = 8 bytes/px
     let total_bytes = u64::from(texture.height * bytes_per_row);
@@ -125,8 +145,14 @@ pub fn readback_rgba_f32(device: &manifold_gpu::GpuDevice, texture: &manifold_gp
     let mut enc = device.create_encoder("rt-t2b-readback");
     enc.copy_texture_to_buffer(texture, &buf, texture.width, texture.height, bytes_per_row);
     enc.commit_and_wait_completed();
-    let ptr = buf.mapped_ptr().expect("shared readback buffer must expose mapped pointer");
-    let f16s: &[f16] =
-        unsafe { std::slice::from_raw_parts(ptr.cast::<f16>(), (texture.width * texture.height * 4) as usize) };
+    let ptr = buf
+        .mapped_ptr()
+        .expect("shared readback buffer must expose mapped pointer");
+    let f16s: &[f16] = unsafe {
+        std::slice::from_raw_parts(
+            ptr.cast::<f16>(),
+            (texture.width * texture.height * 4) as usize,
+        )
+    };
     f16s.iter().map(|v| v.to_f32()).collect()
 }

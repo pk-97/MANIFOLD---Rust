@@ -47,7 +47,9 @@ impl RunawayWatch {
             Some((gathered, _)) if gathered != frame => self.close(),
             _ => false,
         };
-        let longest = self.gathering.map_or(seconds, |(_, longest)| longest.max(seconds));
+        let longest = self
+            .gathering
+            .map_or(seconds, |(_, longest)| longest.max(seconds));
         self.gathering = Some((frame, longest));
         stopped
     }
@@ -63,7 +65,9 @@ impl RunawayWatch {
     }
 
     fn close(&mut self) -> bool {
-        self.gathering.take().is_some_and(|(_, longest)| self.observe(longest))
+        self.gathering
+            .take()
+            .is_some_and(|(_, longest)| self.observe(longest))
     }
 
     /// Fold one whole frame: `seconds` is its longest command buffer.
@@ -108,7 +112,10 @@ pub(super) struct LayerWatch {
 
 impl LayerWatch {
     pub(super) fn new() -> Self {
-        Self { live: true, ..Self::default() }
+        Self {
+            live: true,
+            ..Self::default()
+        }
     }
 
     pub(super) fn next_key(&mut self) -> u64 {
@@ -142,7 +149,9 @@ impl LayerWatch {
 
 /// Whether the cut watches this layer: scene layers only.
 pub(super) fn watched(layer: &manifold_core::layer::Layer) -> bool {
-    layer.gen_params().is_some_and(|instance| instance.scene.is_some())
+    layer
+        .gen_params()
+        .is_some_and(|instance| instance.scene.is_some())
 }
 
 impl GeneratorRenderer {
@@ -183,7 +192,8 @@ impl GeneratorRenderer {
             news.push(LayerNews::Stopped(layer_id.clone()));
         };
         timer.poll(|key, frame, seconds| {
-            if let Some((layer_id, state)) = states.iter_mut().find(|(_, state)| state.span_key == key)
+            if let Some((layer_id, state)) =
+                states.iter_mut().find(|(_, state)| state.span_key == key)
                 && state.runaway.span(frame, seconds)
             {
                 stop(layer_id);
@@ -216,7 +226,11 @@ impl GeneratorRenderer {
     }
 
     /// Queue the layer's node errors that are news.
-    pub(super) fn note_node_errors(watch: &mut LayerWatch, layer_id: &LayerId, errors: &mut NodeErrors) {
+    pub(super) fn note_node_errors(
+        watch: &mut LayerWatch,
+        layer_id: &LayerId,
+        errors: &mut NodeErrors,
+    ) {
         errors.take_news(|news| watch.push(LayerNews::NodeError(layer_id.clone(), news)));
     }
 }
@@ -248,16 +262,27 @@ mod tests {
         // and the timer reports its longest tile.
         let tiled = [0.1; 20];
         assert!(tiled.iter().sum::<f64>() > RUNAWAY_LAYER_FRAME_SECONDS);
-        assert_eq!(frames(&mut watch, 0, &[0.05; 10]), [false; 10], "a slow tiled frame renders slowly, never stops");
+        assert_eq!(
+            frames(&mut watch, 0, &[0.05; 10]),
+            [false; 10],
+            "a slow tiled frame renders slowly, never stops"
+        );
         // One huge instanced draw in a single buffer, five frames in a row.
-        assert_eq!(frames(&mut watch, 10, &[SLOW; 5]), [false, false, false, false, true], "the fifth long frame stops it");
+        assert_eq!(
+            frames(&mut watch, 10, &[SLOW; 5]),
+            [false, false, false, false, true],
+            "the fifth long frame stops it"
+        );
         assert!(watch.stopped());
     }
 
     #[test]
     fn a_buffer_killed_by_the_gpu_counts_as_over_the_limit() {
         let mut watch = RunawayWatch::default();
-        assert_eq!(frames(&mut watch, 0, &[f64::INFINITY; 5]), [false, false, false, false, true]);
+        assert_eq!(
+            frames(&mut watch, 0, &[f64::INFINITY; 5]),
+            [false, false, false, false, true]
+        );
     }
 
     #[test]
@@ -265,23 +290,43 @@ mod tests {
         assert_eq!(RUNAWAY_LAYER_FRAMES, 5);
         let mut watch = RunawayWatch::default();
         // A fast frame between slow ones starts the count again: 4 slow, fast, 4 slow never stop.
-        assert_eq!(frames(&mut watch, 0, &[SLOW, SLOW, SLOW, SLOW, FAST, SLOW, SLOW, SLOW, SLOW]), [false; 9]);
+        assert_eq!(
+            frames(
+                &mut watch,
+                0,
+                &[SLOW, SLOW, SLOW, SLOW, FAST, SLOW, SLOW, SLOW, SLOW]
+            ),
+            [false; 9]
+        );
         assert!(!watch.stopped());
         // The 5th slow frame in a row stops the layer.
-        assert_eq!(frames(&mut watch, 9, &[SLOW]), [true], "the fifth slow frame stops it");
+        assert_eq!(
+            frames(&mut watch, 9, &[SLOW]),
+            [true],
+            "the fifth slow frame stops it"
+        );
         // Frames still in flight when it stopped report no second stop.
-        assert_eq!(frames(&mut watch, 10, &[SLOW, FAST, SLOW, SLOW, SLOW, SLOW]), [false; 6]);
+        assert_eq!(
+            frames(&mut watch, 10, &[SLOW, FAST, SLOW, SLOW, SLOW, SLOW]),
+            [false; 6]
+        );
         assert!(watch.stopped());
         // A frame exactly at the limit is not runaway.
         assert!(watch.restore());
-        assert_eq!(frames(&mut watch, 16, &[RUNAWAY_LAYER_FRAME_SECONDS; 10]), [false; 10]);
+        assert_eq!(
+            frames(&mut watch, 16, &[RUNAWAY_LAYER_FRAME_SECONDS; 10]),
+            [false; 10]
+        );
         // Heavy scene buffers under the 1.0s ceiling never stop the layer.
         assert_eq!(frames(&mut watch, 26, &[0.5; 10]), [false; 10]);
         // Draw Again restores from a clean count.
         frames(&mut watch, 36, &[SLOW; 5]);
         assert!(watch.restore());
         assert_eq!(frames(&mut watch, 41, &[SLOW; 4]), [false; 4]);
-        assert!(!watch.restore(), "four slow frames after Draw Again do not stop it");
+        assert!(
+            !watch.restore(),
+            "four slow frames after Draw Again do not stop it"
+        );
     }
 
     #[test]
@@ -297,6 +342,9 @@ mod tests {
         // Four slow frames so far, however many spans they had.
         assert!(!watch.settle(None));
         assert!(!watch.stopped());
-        assert!(watch.span(4, FAST) | watch.span(4, SLOW) | watch.settle(None), "the fifth slow frame stops it");
+        assert!(
+            watch.span(4, FAST) | watch.span(4, SLOW) | watch.settle(None),
+            "the fifth slow frame stops it"
+        );
     }
 }

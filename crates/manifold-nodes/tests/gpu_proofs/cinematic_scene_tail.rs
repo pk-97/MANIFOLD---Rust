@@ -16,11 +16,10 @@
 use manifold_core::flatten::flatten_groups;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
 
 fn ctx(frame_count: i64) -> PresetContext {
     PresetContext {
@@ -31,7 +30,8 @@ fn ctx(frame_count: i64) -> PresetContext {
         height: manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT,
         output_width: manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH,
         output_height: manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT,
-        aspect: manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH as f32 / manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT as f32,
+        aspect: manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH as f32
+            / manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT as f32,
         owner_key: 0,
         is_clip_level: false,
         frame_count,
@@ -52,7 +52,9 @@ fn build_variant(
 
     let mut flat = flatten_groups(&def).expect("flatten_groups must succeed");
     debug_assert!(
-        flat.nodes.iter().any(|n| n.type_id == "node.coc_from_depth"),
+        flat.nodes
+            .iter()
+            .any(|n| n.type_id == "node.coc_from_depth"),
         "assembled import graph must carry the dof group's coc atom"
     );
 
@@ -74,9 +76,8 @@ fn build_variant(
             .map(|n| n.id)
             .collect();
         flat.nodes.retain(|n| keep_nodes.contains(&n.id));
-        flat.wires.retain(|w| {
-            keep_nodes.contains(&w.from_node) && keep_nodes.contains(&w.to_node)
-        });
+        flat.wires
+            .retain(|w| keep_nodes.contains(&w.from_node) && keep_nodes.contains(&w.to_node));
         // Rebuild the spine without the tail: the contact-shadow masked mix
         // (`ao_mask`, the pre-P1 SSAO spine) straight to final.
         let ao_id = flat
@@ -91,12 +92,13 @@ fn build_variant(
             .find(|n| n.type_id == "system.final_output")
             .expect("final output node")
             .id;
-        flat.wires.push(manifold_core::effect_graph_def::EffectGraphWire {
-            from_node: ao_id,
-            from_port: "out".to_string(),
-            to_node: final_id,
-            to_port: "in".to_string(),
-        });
+        flat.wires
+            .push(manifold_core::effect_graph_def::EffectGraphWire {
+                from_node: ao_id,
+                from_port: "out".to_string(),
+                to_node: final_id,
+                to_port: "in".to_string(),
+            });
     }
 
     let registry = PrimitiveRegistry::with_builtin();
@@ -161,10 +163,17 @@ fn import_tail_is_byte_clean_passthrough_at_neutral_lens() {
     // byte-stable across two pairs.
     const SETTLED_PAIR_BUDGET: u32 = 64;
     let wait = manifold_node_engine::testkit::gpu_harness::BackgroundWait::new("cinematic-tail-I1");
-    let visible = |bytes: &[u8]| bytes.chunks_exact(8).any(|px| {
-        half::f16::from_bits(u16::from_le_bytes([px[0], px[1]])).to_f32() > 0.03
-    });
-    let changed = |x: &[u8], y: &[u8]| x.chunks_exact(8).zip(y.chunks_exact(8)).filter(|(p, q)| p != q).count();
+    let visible = |bytes: &[u8]| {
+        bytes
+            .chunks_exact(8)
+            .any(|px| half::f16::from_bits(u16::from_le_bytes([px[0], px[1]])).to_f32() > 0.03)
+    };
+    let changed = |x: &[u8], y: &[u8]| {
+        x.chunks_exact(8)
+            .zip(y.chunks_exact(8))
+            .filter(|(p, q)| p != q)
+            .count()
+    };
     let mut previous: Option<(Vec<u8>, Vec<u8>)> = None;
     let mut settled_pairs = 0;
     let (a, b) = loop {
@@ -174,17 +183,25 @@ fn import_tail_is_byte_clean_passthrough_at_neutral_lens() {
             previous = None;
             continue;
         }
-        if visible(&a) && visible(&b)
-            && previous.as_ref().is_some_and(|(pa, pb)| *pa == a && *pb == b)
+        if visible(&a)
+            && visible(&b)
+            && previous
+                .as_ref()
+                .is_some_and(|(pa, pb)| *pa == a && *pb == b)
         {
             break (a, b);
         }
         settled_pairs += 1;
-        assert!(settled_pairs < SETTLED_PAIR_BUDGET,
+        assert!(
+            settled_pairs < SETTLED_PAIR_BUDGET,
             "import variants settled but did not converge in {settled_pairs} pairs: visible={}/{}, \
              pixels changed since the last pair={:?}",
-            visible(&a), visible(&b),
-            previous.as_ref().map(|(pa, pb)| (changed(pa, &a), changed(pb, &b))));
+            visible(&a),
+            visible(&b),
+            previous
+                .as_ref()
+                .map(|(pa, pb)| (changed(pa, &a), changed(pb, &b)))
+        );
         previous = Some((a, b));
     };
 
@@ -208,8 +225,7 @@ fn import_tail_is_byte_clean_passthrough_at_neutral_lens() {
     );
     let differing = a.iter().zip(b.iter()).filter(|(x, y)| x != y).count();
     assert_eq!(
-        differing,
-        0,
+        differing, 0,
         "import tail is NOT a bit-clean pass-through at default lens: {differing} bytes differ \
          between the with-tail and stripped spines (neutral camera DoF must preserve focused \
          pixels and coverage; the static scene's zero velocity must collapse every motion-blur tap even \

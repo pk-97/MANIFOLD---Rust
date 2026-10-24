@@ -10,13 +10,15 @@
 //! can be derived through scalar `node.math` chains driven from
 //! `system.generator_input.time`.
 
-use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
+use std::borrow::Cow;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::primitives::standalone_pipeline::{
+    dispatch_standalone_2d, standalone_pipeline,
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -97,12 +99,7 @@ impl Primitive for FieldCombine {
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
 
-        let uniforms = FieldCombineUniforms {
-            a,
-            b,
-            c,
-            _pad: 0.0,
-        };
+        let uniforms = FieldCombineUniforms { a, b, c, _pad: 0.0 };
 
         dispatch_standalone_2d(
             gpu,

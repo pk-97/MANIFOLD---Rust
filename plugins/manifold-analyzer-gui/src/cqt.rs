@@ -35,7 +35,7 @@
 //! terms than their spectral support. Both paths reuse preallocated storage.
 
 use manifold_analyzer_dsp::blackman_harris_window;
-use rustfft::{Fft, FftPlanner, num_complex::Complex};
+use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use std::sync::Arc;
 
 pub use rustfft::num_complex::Complex as CqtComplex;
@@ -221,10 +221,7 @@ impl CqtTransform {
             }
 
             // Sparsify: threshold relative to the row's peak magnitude.
-            let max_abs = kernel_buf
-                .iter()
-                .map(|c| c.norm())
-                .fold(0.0f32, f32::max);
+            let max_abs = kernel_buf.iter().map(|c| c.norm()).fold(0.0f32, f32::max);
             let cutoff = max_abs * threshold_rel;
             for (m, &entry) in kernel_buf.iter().enumerate() {
                 if entry.norm() >= cutoff {
@@ -313,9 +310,9 @@ impl CqtTransform {
             .process_with_scratch(&mut self.fft_buffer, &mut self.fft_scratch);
 
         for (k, out) in output.iter_mut().enumerate().take(self.num_bins) {
-            let direct = &self.direct_coef[self.direct_offsets[k]..self.direct_offsets[k+1]];
+            let direct = &self.direct_coef[self.direct_offsets[k]..self.direct_offsets[k + 1]];
             if !direct.is_empty() {
-                let samples = &audio[audio.len()-direct.len()..];
+                let samples = &audio[audio.len() - direct.len()..];
                 let mut re = 0.0;
                 let mut im = 0.0;
                 for (&sample, coefficient) in samples.iter().zip(direct) {
@@ -461,33 +458,54 @@ mod tests {
     fn hybrid_transform_matches_independent_time_domain_convolution() {
         for rate in [44100.0, 48000.0, 96000.0] {
             let params = crate::spectrum_gpu::cqt_build_params(rate);
-            let mut cqt = CqtTransform::new(rate,params.n_fft,params.fmin,params.fmax,
-                params.bpo,params.gamma_lo,params.gamma_hi,params.gamma_transition,
-                params.causal,params.threshold_rel);
+            let mut cqt = CqtTransform::new(
+                rate,
+                params.n_fft,
+                params.fmin,
+                params.fmax,
+                params.bpo,
+                params.gamma_lo,
+                params.gamma_hi,
+                params.gamma_transition,
+                params.causal,
+                params.threshold_rel,
+            );
             assert!(!cqt.direct_coef.is_empty() && !cqt.coef.is_empty());
-            let audio: Vec<f32> = (0..params.n_fft).map(|i| {
-                [50.0,1000.0,18000.0].iter().map(|f|
-                    0.08*(std::f64::consts::TAU*f*i as f64/rate as f64).cos()).sum::<f64>() as f32
-            }).collect();
-            let mut output = vec![Complex::new(0.0,0.0);cqt.num_bins()];
-            cqt.process_complex(&audio,&mut output);
-            for (&frequency,actual) in cqt.center_freqs().iter().zip(output) {
-                let f=frequency as f64;
-                let bandwidth=(2.0_f64.powf(1.0/24.0)-1.0)*f+10.0+10.0*(f/200.0).min(1.0);
-                let n=(rate as f64/bandwidth).ceil() as usize;
-                let mut real=0.0;let mut imag=0.0;let mut weight=0.0;
-                for (i,&sample) in audio[audio.len()-n..].iter().enumerate() {
-                    let phase=std::f64::consts::TAU*i as f64/(n-1) as f64;
-                    let w=0.35875-0.48829*phase.cos()+0.14128*(2.0*phase).cos()-0.01168*(3.0*phase).cos();
-                    let angle=std::f64::consts::TAU*f*i as f64/rate as f64;
-                    real+=sample as f64*w*angle.cos();
-                    imag-=sample as f64*w*angle.sin();weight+=w;
+            let audio: Vec<f32> = (0..params.n_fft)
+                .map(|i| {
+                    [50.0, 1000.0, 18000.0]
+                        .iter()
+                        .map(|f| 0.08 * (std::f64::consts::TAU * f * i as f64 / rate as f64).cos())
+                        .sum::<f64>() as f32
+                })
+                .collect();
+            let mut output = vec![Complex::new(0.0, 0.0); cqt.num_bins()];
+            cqt.process_complex(&audio, &mut output);
+            for (&frequency, actual) in cqt.center_freqs().iter().zip(output) {
+                let f = frequency as f64;
+                let bandwidth =
+                    (2.0_f64.powf(1.0 / 24.0) - 1.0) * f + 10.0 + 10.0 * (f / 200.0).min(1.0);
+                let n = (rate as f64 / bandwidth).ceil() as usize;
+                let mut real = 0.0;
+                let mut imag = 0.0;
+                let mut weight = 0.0;
+                for (i, &sample) in audio[audio.len() - n..].iter().enumerate() {
+                    let phase = std::f64::consts::TAU * i as f64 / (n - 1) as f64;
+                    let w = 0.35875 - 0.48829 * phase.cos() + 0.14128 * (2.0 * phase).cos()
+                        - 0.01168 * (3.0 * phase).cos();
+                    let angle = std::f64::consts::TAU * f * i as f64 / rate as f64;
+                    real += sample as f64 * w * angle.cos();
+                    imag -= sample as f64 * w * angle.sin();
+                    weight += w;
                 }
-                let error=((actual.re as f64-real*2.0/weight).powi(2)
-                    +(actual.im as f64-imag*2.0/weight).powi(2)).sqrt();
-                assert!(error<3e-6,"{rate}Hz, {frequency}Hz: complex error {error}");
+                let error = ((actual.re as f64 - real * 2.0 / weight).powi(2)
+                    + (actual.im as f64 - imag * 2.0 / weight).powi(2))
+                .sqrt();
+                assert!(
+                    error < 3e-6,
+                    "{rate}Hz, {frequency}Hz: complex error {error}"
+                );
             }
         }
     }
-
 }

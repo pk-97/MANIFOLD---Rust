@@ -27,11 +27,10 @@ pub struct DragHoverTracker {
 
 impl DragHoverTracker {
     pub fn on_hovered_file(&mut self, path: PathBuf) {
-        if self.hovered_files.is_empty()
-            && crate::project_io::is_supported_audio_extension(&path)
-        {
-            self.first_hovered_audio_seconds =
-                Some(crate::project_io::audio_source_duration(&path.to_string_lossy()));
+        if self.hovered_files.is_empty() && crate::project_io::is_supported_audio_extension(&path) {
+            self.first_hovered_audio_seconds = Some(crate::project_io::audio_source_duration(
+                &path.to_string_lossy(),
+            ));
         }
         self.hovered_files.push(path);
     }
